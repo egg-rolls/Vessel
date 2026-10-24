@@ -5,6 +5,7 @@
  * 数量有上限，避免 recent 列表把面板撑爆。
  */
 import type { DurableRunSummary, McpServerStatus, RunStatus, TenantInfo } from '../gateway/types';
+import { t } from '../i18n';
 import type { PaletteItem } from './palette';
 import { isCancellableRun, isResumableRun } from './runs';
 
@@ -36,14 +37,14 @@ export function buildRunPaletteActions({
     items.push({
       id: `run-cancel-${run.run_id}`,
       group: 'action',
-      label: `取消运行 ${shortId(run.run_id)}`,
+      label: t('palette.action.cancelRun', { id: shortId(run.run_id) }),
       keywords: ['cancel', 'run', run.session_id],
-      hint: '取消',
+      hint: t('palette.hint.cancel'),
       danger: true,
       confirm: {
-        title: '取消运行？',
-        body: '运行中的工具调用会被取消，已产生的输出仍会保留。',
-        confirmLabel: '取消运行',
+        title: t('palette.confirm.cancelRunTitle'),
+        body: t('palette.confirm.cancelRunBody'),
+        confirmLabel: t('palette.action.cancelRunLabel'),
       },
       run: () => cancel(run.run_id),
     });
@@ -52,9 +53,9 @@ export function buildRunPaletteActions({
     items.push({
       id: `run-resume-${run.run_id}`,
       group: 'action',
-      label: `恢复运行 ${shortId(run.run_id)}`,
+      label: t('palette.action.resumeRunNamed', { id: shortId(run.run_id) }),
       keywords: ['resume', 'durable', 'interrupted', run.session_id],
-      hint: '恢复',
+      hint: t('palette.hint.resume'),
       run: () => resume(run.run_id),
     });
   }
@@ -65,9 +66,9 @@ export function buildRunPaletteActions({
     items.push({
       id: `run-open-live-${run.run_id}`,
       group: 'action',
-      label: `打开运行 ${shortId(run.run_id)}`,
+      label: t('palette.action.openRun', { id: shortId(run.run_id) }),
       keywords: ['open', 'run', 'detail', run.session_id],
-      hint: '运行',
+      hint: t('palette.hint.run'),
       run: () => openRun(run.run_id, 'live', run.session_id),
     });
   }
@@ -77,9 +78,9 @@ export function buildRunPaletteActions({
     items.push({
       id: `run-open-durable-${run.run_id}`,
       group: 'action',
-      label: `打开可恢复运行 ${shortId(run.run_id)}`,
+      label: t('palette.action.openDurableRun', { id: shortId(run.run_id) }),
       keywords: ['open', 'durable', 'run', run.session_id],
-      hint: '运行',
+      hint: t('palette.hint.run'),
       run: () => openRun(run.run_id, 'durable', run.session_id),
     });
   }
@@ -100,7 +101,7 @@ export function buildMcpPaletteActions({
     .map((server) => ({
       id: `mcp-reconnect-${server.name}`,
       group: 'action' as const,
-      label: `重连 MCP ${server.name}`,
+      label: t('palette.action.reconnectMcp', { name: server.name }),
       keywords: ['mcp', 'reconnect', 'failed', server.name],
       hint: 'MCP',
       run: () => reconnect(server.name),
@@ -123,9 +124,11 @@ export function buildTenantPaletteActions({
     .map((tenant) => ({
       id: `tenant-switch-${tenant.tenant_id}`,
       group: 'action' as const,
-      label: `切换到租户 ${tenant.name?.trim() || tenant.tenant_id}`,
+      label: t('palette.action.switchTenantNamed', {
+        name: tenant.name?.trim() || tenant.tenant_id,
+      }),
       keywords: ['tenant', 'switch', tenant.tenant_id],
-      hint: '租户',
+      hint: t('palette.hint.tenant'),
       run: () => switchTenant(tenant.tenant_id),
     }));
 }

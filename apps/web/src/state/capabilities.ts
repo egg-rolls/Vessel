@@ -1,12 +1,13 @@
 /** Settings → Capabilities 的纯选择器：三个 tab、搜索与计数。 */
 import type { CapabilityManifest } from '../gateway/types';
+import { t } from '../i18n';
 
 export type CapabilityTab = 'methods' | 'tools' | 'plugins';
 
-export const CAPABILITY_TABS: readonly { id: CapabilityTab; label: string }[] = [
-  { id: 'methods', label: '方法' },
-  { id: 'tools', label: '工具' },
-  { id: 'plugins', label: '插件' },
+export const CAPABILITY_TABS: readonly { id: CapabilityTab; labelKey: string }[] = [
+  { id: 'methods', labelKey: 'capabilities.tab.methods' },
+  { id: 'tools', labelKey: 'capabilities.tab.tools' },
+  { id: 'plugins', labelKey: 'capabilities.tab.plugins' },
 ];
 
 export interface CapabilityCounts {
@@ -94,7 +95,10 @@ export function groupMethodsByPermission(
 
 /** tab 上的计数文本（例如 `方法 · 42`）。 */
 export function capabilityTabLabel(tab: CapabilityTab, counts: CapabilityCounts): string {
-  if (tab === 'methods') return `方法 · ${counts.methods}`;
-  if (tab === 'tools') return `工具 · ${counts.tools}`;
-  return `插件 · ${counts.enabledPlugins}/${counts.plugins}`;
+  if (tab === 'methods') return t('capabilities.tab.methodsCount', { count: counts.methods });
+  if (tab === 'tools') return t('capabilities.tab.toolsCount', { count: counts.tools });
+  return t('capabilities.tab.pluginsCount', {
+    enabled: counts.enabledPlugins,
+    total: counts.plugins,
+  });
 }

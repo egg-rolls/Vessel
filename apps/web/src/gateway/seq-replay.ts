@@ -9,6 +9,8 @@
  * 与 TUI `src/rpc/http-client.ts` 的 seq 回退状态机语义一致。
  */
 
+import { t } from '../i18n';
+
 export interface HelloSeqPlan {
   /** true = 必须断开当前连接并以 `since=0` 重连重放 */
   replay: boolean;
@@ -27,7 +29,7 @@ export function planHelloSeq(latestSeq: number, currentSeq: number): HelloSeqPla
       replay: true,
       since: 0,
       resetTo: 0,
-      notice: 'gateway 已重启，事件序号已回退，正在从头重放',
+      notice: t('gateway.notice.seqReplay'),
     };
   }
   return { replay: false, since: currentSeq, resetTo: null, notice: null };

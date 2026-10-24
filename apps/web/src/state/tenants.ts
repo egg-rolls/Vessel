@@ -3,6 +3,7 @@
  * quota 是 4 个非负整数字段（`TenantQuota`）。
  */
 import type { TenantInfo } from '../gateway/types';
+import { t } from '../i18n';
 
 /** 与 packages/core/src/types/tenant.ts 的 TENANT_ID_PATTERN 一致。 */
 export const TENANT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -36,9 +37,13 @@ export function parseQuotaValue(
 ): { ok: true; value?: number } | { ok: false; error: string } {
   const trimmed = raw.trim();
   if (!trimmed) return { ok: true };
-  if (!/^\d+$/.test(trimmed)) return { ok: false, error: '必须是非负整数' };
+  if (!/^\d+$/.test(trimmed)) {
+    return { ok: false, error: t('settings.tenants.validation.nonNegativeInteger') };
+  }
   const value = Number.parseInt(trimmed, 10);
-  if (!Number.isSafeInteger(value)) return { ok: false, error: '数值过大' };
+  if (!Number.isSafeInteger(value)) {
+    return { ok: false, error: t('settings.tenants.validation.tooLarge') };
+  }
   return { ok: true, value };
 }
 
@@ -91,10 +96,10 @@ export function validateCreateTenant(form: CreateTenantForm): CreateTenantValida
   const errors: TenantFormErrors = {};
   const tenantId = validateTenantId(form.tenantId);
   if (!tenantId) {
-    errors.tenantId = '租户 id 只允许小写字母、数字、下划线和连字符，且必须以字母/数字开头';
+    errors.tenantId = t('settings.tenants.validation.tenantId');
   }
   const name = form.name.trim();
-  if (name.length > 128) errors.name = '名称不能超过 128 个字符';
+  if (name.length > 128) errors.name = t('settings.tenants.validation.nameTooLong');
   const quota = parseQuotaFields(form.quota);
   Object.assign(errors, quota.errors);
   if (Object.keys(errors).length > 0) return { ok: false, errors };
@@ -119,9 +124,9 @@ export type UpdateTenantValidation =
 export function validateUpdateTenant(form: UpdateTenantForm): UpdateTenantValidation {
   const errors: TenantFormErrors = {};
   const name = form.name.trim();
-  if (name.length > 128) errors.name = '名称不能超过 128 个字符';
+  if (name.length > 128) errors.name = t('settings.tenants.validation.nameTooLong');
   if (form.status !== 'active' && form.status !== 'disabled') {
-    errors.name = '状态必须是 active 或 disabled';
+    errors.name = t('settings.tenants.validation.statusInvalid');
   }
   const quota = parseQuotaFields(form.quota);
   Object.assign(errors, quota.errors);

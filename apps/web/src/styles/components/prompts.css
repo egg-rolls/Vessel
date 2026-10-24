@@ -186,7 +186,7 @@
 }
 
 .more-sheet {
-  width: min(420px, 100%);
+  width: min(var(--modal-w-sm), 100%);
   align-self: center;
   margin-top: auto;
   margin-bottom: 0;

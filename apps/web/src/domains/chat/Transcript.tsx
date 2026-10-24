@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Markdown } from '../../components/Markdown';
 import { formatClock, localDayKey, localDayLabel } from '../../format';
 import type { Message } from '../../gateway/types';
+import { t } from '../../i18n';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -48,7 +49,7 @@ function TranscriptMessage({ message }: { message: Message }) {
   return (
     <div className="msg msg-assistant">
       <div className="msg-meta">
-        <div className="msg-role">助手</div>
+        <div className="msg-role">{t('chat.role.assistant')}</div>
         <MessageTime message={message} />
       </div>
       {message.content && <Markdown className="msg-text" text={message.content} />}
@@ -104,7 +105,7 @@ export function Transcript({
     <div className="transcript">
       {hiddenCount > 0 && (
         <button type="button" className="load-earlier" onClick={onLoadEarlier}>
-          加载更早（还有 {hiddenCount} 条）
+          {t('chat.loadEarlier', { count: hiddenCount })}
         </button>
       )}
       {withDayGroups(messages, startIndex)}

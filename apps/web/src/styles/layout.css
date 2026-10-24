@@ -213,7 +213,7 @@
   bottom: 0;
   left: 0;
   z-index: var(--z-drawer);
-  width: min(86vw, 320px);
+  width: min(86vw, var(--drawer-w));
   box-shadow: var(--elev-3);
   visibility: hidden;
   transform: translateX(-100%);
@@ -773,7 +773,7 @@
     bottom: 0;
     left: 0;
     z-index: var(--z-drawer);
-    width: min(86vw, 320px);
+    width: min(86vw, var(--drawer-w));
     max-height: none;
     box-shadow: var(--elev-3);
     visibility: hidden;

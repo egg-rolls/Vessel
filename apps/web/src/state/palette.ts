@@ -1,4 +1,5 @@
 /** 命令面板的纯数据模型：过滤、排序、分组与索引移动（可单测）。 */
+import { t } from '../i18n';
 
 export type PaletteGroup = 'navigation' | 'entity' | 'action' | 'help';
 
@@ -9,11 +10,11 @@ export const PALETTE_GROUP_ORDER: readonly PaletteGroup[] = [
   'help',
 ];
 
-export const PALETTE_GROUP_LABELS: Record<PaletteGroup, string> = {
-  navigation: '导航',
-  entity: '实体',
-  action: '动作',
-  help: '帮助',
+export const PALETTE_GROUP_LABEL_KEYS: Record<PaletteGroup, string> = {
+  navigation: 'palette.group.navigation',
+  entity: 'palette.group.entity',
+  action: 'palette.group.action',
+  help: 'palette.group.help',
 };
 
 /** 破坏性动作的二次确认（由 AppShell 渲染 ConfirmDialog）。 */
@@ -108,7 +109,7 @@ export interface PaletteSection {
 export function groupPaletteItems(items: readonly PaletteItem[]): PaletteSection[] {
   return PALETTE_GROUP_ORDER.map((group) => ({
     group,
-    label: PALETTE_GROUP_LABELS[group],
+    label: t(PALETTE_GROUP_LABEL_KEYS[group]),
     items: items.filter((item) => item.group === group),
   })).filter((section) => section.items.length > 0);
 }

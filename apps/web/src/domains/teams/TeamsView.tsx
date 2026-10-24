@@ -9,13 +9,14 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import type { Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
-import { Button } from '../../components/ui';
+import { Button, SearchInput } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import { fetchAllNodeTeams, type NodeTeams } from '../../gateway/team-roster';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
+import { useNodeNames } from '../nodes/useNodeNames';
 import { TeamDetailRoute } from './TeamDetailRoute';
 import { TeamFormDialog } from './TeamFormDialog';
 import { filterTeamResults } from './team-search';
@@ -39,6 +40,7 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
   useLocale();
   const { epoch, tenantEpoch, tenantId } = useConnection();
   const { nodes, teamControl, hasTokenFor } = useNodes();
+  const nodeNames = useNodeNames();
   const [query, setQuery] = useState('');
   const [nodeFilter, setNodeFilter] = useState(
     () => teamNodeFilterFromHash(window.location.hash) ?? '',
@@ -174,10 +176,12 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
             <section
               className="teams-node-group"
               key={nodeKeyOf(result.node)}
-              aria-label={result.node.name}
+              aria-label={nodeNames.get(nodeKeyOf(result.node)) ?? '—'}
             >
               <header className="teams-node-head">
-                <span className="teams-node-name">{result.node.name}</span>
+                <span className="teams-node-name">
+                  {nodeNames.get(nodeKeyOf(result.node)) ?? '—'}
+                </span>
                 {result.node.current && (
                   <span className="teams-node-current">{t('observe.attention.currentNode')}</span>
                 )}
@@ -239,14 +243,11 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
       <PageHeader title={t('teams.title')} tenantId={tenantId} actions={createButton} />
       <div className="domain-content">
         <div className="filter-bar net-toolbar">
-          <input
-            className="input search-input"
-            type="search"
+          <SearchInput
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={setQuery}
             placeholder={t('team.list.search')}
-            aria-label={t('team.list.search')}
-            spellCheck={false}
+            ariaLabel={t('team.list.search')}
           />
           <select
             className="input net-select"
@@ -257,7 +258,7 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
             <option value="">{t('teams.filter.all')}</option>
             {nodes.map((node) => (
               <option key={nodeKeyOf(node)} value={nodeKeyOf(node)}>
-                {node.name}
+                {nodeNames.get(nodeKeyOf(node)) ?? '—'}
               </option>
             ))}
           </select>

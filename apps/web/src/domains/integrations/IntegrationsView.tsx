@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useId, useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
 import { JsonView } from '../../components/JsonView';
@@ -11,20 +11,22 @@ import {
   NotEnabledState,
   StaleNotice,
 } from '../../components/States';
-import { StatusChip } from '../../components/StatusChip';
+import { StatusChip, statusLabel } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
+import { SearchInput } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { t, useLocale } from '../../i18n';
 import { buildMcpPaletteActions } from '../../state/palette-actions';
 import { resourceData, useResource } from '../../state/useResource';
 
 type IntegrationsRoute = Extract<Route, { domain: 'integrations' }>;
 type Tab = IntegrationsRoute['tab'];
 
-const TABS: readonly { id: Tab; label: string }[] = [
-  { id: 'tools', label: '工具' },
-  { id: 'mcp', label: 'MCP 服务' },
-  { id: 'channels', label: '渠道' },
+const TABS: readonly { id: Tab; labelKey: string }[] = [
+  { id: 'tools', labelKey: 'integrations.tab.tools' },
+  { id: 'mcp', labelKey: 'integrations.tab.mcp' },
+  { id: 'channels', labelKey: 'integrations.tab.channels' },
 ];
 
 function errorMessage(error: unknown): string {
@@ -47,22 +49,28 @@ export function IntegrationsView({
   route: IntegrationsRoute;
   navigate: (route: Route) => void;
 }) {
+  useLocale();
   const { tenantId } = useConnection();
   return (
     <div className="domain-view">
       <PageHeader
-        title="能力"
-        description="这个 gateway 实际能做什么：工具、MCP 服务与渠道。"
+        title={t('integrations.title')}
+        description={t('integrations.description')}
         tenantId={tenantId}
       />
       <SegmentedTabs
-        label="能力分区"
-        tabs={TABS}
+        label={t('integrations.tabsLabel')}
+        tabs={TABS.map((tab) => ({ id: tab.id, label: t(tab.labelKey) }))}
         value={route.tab}
         onChange={(tab) => navigate({ domain: 'integrations', tab })}
         panelId="integrations-panel"
       />
-      <div className="domain-content" id="integrations-panel" role="tabpanel" aria-label="能力内容">
+      <div
+        className="domain-content"
+        id="integrations-panel"
+        role="tabpanel"
+        aria-label={t('integrations.panelLabel')}
+      >
         {route.tab === 'tools' && <ToolsPanel />}
         {route.tab === 'mcp' && <McpPanel />}
         {route.tab === 'channels' && <ChannelsPanel />}
@@ -76,6 +84,17 @@ function ToolsPanel() {
   const connected = hasToken && connectionState === 'open';
   const [query, setQuery] = useState('');
   const [onlyConfirm, setOnlyConfirm] = useState(false);
+  /** 只影响展示；搜索 / 过滤始终基于 name + description。 */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const panelBaseId = useId();
+  const toggleTool = (name: string) => {
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
   const resource = useResource({
     load: () => client.listTools(),
     enabled: hasToken,
@@ -100,7 +119,12 @@ function ToolsPanel() {
   const error = resource.state.status === 'error' ? resource.state.error : null;
 
   if (!hasToken) {
-    return <NotEnabledState title="未连接 gateway" reason="连接后才能读取工具目录。" />;
+    return (
+      <NotEnabledState
+        title={t('common.notConnected')}
+        reason={t('integrations.tools.noTokenReason')}
+      />
+    );
   }
   if (error && tools.length === 0) {
     return <ErrorState message={error} onRetry={resource.reload} />;
@@ -109,25 +133,23 @@ function ToolsPanel() {
     resource.state.status === 'idle' ||
     (resource.state.status === 'loading' && tools.length === 0)
   ) {
-    return <LoadingState label="正在读取工具…" />;
+    return <LoadingState label={t('integrations.tools.loading')} />;
   }
 
   return (
     <div className="settings-section">
       {!connected && tools.length > 0 && (
-        <StaleNotice message="连接已断开；显示最近一次读取的工具目录。" onRetry={resource.reload} />
+        <StaleNotice message={t('integrations.tools.stale')} onRetry={resource.reload} />
       )}
       {error && tools.length > 0 && (
-        <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={resource.reload} />
+        <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
       )}
       <div className="filter-bar">
-        <input
-          className="input search-input"
+        <SearchInput
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索工具名称或描述"
-          type="search"
-          aria-label="搜索工具"
+          onChange={setQuery}
+          placeholder={t('integrations.tools.searchPlaceholder')}
+          ariaLabel={t('integrations.tools.searchLabel')}
         />
         <button
           type="button"
@@ -135,17 +157,17 @@ function ToolsPanel() {
           aria-pressed={onlyConfirm}
           onClick={() => setOnlyConfirm((value) => !value)}
         >
-          仅需确认（{confirmCount}）
+          {t('integrations.tools.onlyConfirm', { count: confirmCount })}
         </button>
         <span className="count-pill">
           {filtered.length}/{tools.length}
         </span>
       </div>
       {tools.length === 0 ? (
-        <EmptyState title="gateway 没有注册工具。" />
+        <EmptyState title={t('integrations.tools.empty')} />
       ) : filtered.length === 0 ? (
         <EmptyState
-          title="没有匹配的工具。"
+          title={t('integrations.tools.noMatch')}
           action={
             <button
               type="button"
@@ -155,30 +177,56 @@ function ToolsPanel() {
                 setOnlyConfirm(false);
               }}
             >
-              清除过滤
+              {t('common.clearFilters')}
             </button>
           }
         />
       ) : (
         <div className="card-grid">
-          {filtered.map((tool) => {
+          {filtered.map((tool, index) => {
             const server = mcpServerOf(tool.name);
+            const open = expanded.has(tool.name);
+            const panelId = `${panelBaseId}-tool-${index}`;
             return (
-              <article className="card" key={tool.name}>
-                <div className="card-header">
-                  <h3 className="card-title mono">{tool.name}</h3>
+              <article className="card tool-catalog-card" key={tool.name}>
+                <button
+                  type="button"
+                  className="card-header tool-catalog-summary"
+                  aria-expanded={open}
+                  aria-controls={open ? panelId : undefined}
+                  onClick={() => toggleTool(tool.name)}
+                >
+                  <span className="card-title mono">{tool.name}</span>
                   {tool.has_permission_check && (
-                    <span className="perm-badge perm-warn" title="调用前需要确认">
-                      需确认
+                    <span
+                      className="perm-badge perm-warn"
+                      title={t('integrations.tools.needsConfirm')}
+                    >
+                      {t('integrations.tools.badgeConfirm')}
                     </span>
                   )}
                   {server && <span className="perm-badge">MCP · {server}</span>}
-                </div>
-                {tool.description && <p className="card-desc">{tool.description}</p>}
-                <details className="tool-schema">
-                  <summary>input schema</summary>
-                  <JsonView value={tool.input_schema} label="JSON Schema" maxHeight={320} open />
-                </details>
+                  <span className="tool-catalog-toggle" aria-hidden="true">
+                    {open ? '▾' : '▸'}
+                  </span>
+                  <span className="sr-only">
+                    {open
+                      ? t('integrations.tools.collapse', { name: tool.name })
+                      : t('integrations.tools.expand', { name: tool.name })}
+                  </span>
+                </button>
+                {open && (
+                  <div className="tool-catalog-detail" id={panelId}>
+                    <h4 className="tool-catalog-detail-title">{t('integrations.tools.details')}</h4>
+                    {tool.description && <p className="card-desc">{tool.description}</p>}
+                    <JsonView
+                      value={tool.input_schema}
+                      label={t('integrations.tools.schema')}
+                      maxHeight={320}
+                      open
+                    />
+                  </div>
+                )}
               </article>
             );
           })}
@@ -209,16 +257,16 @@ function McpPanel() {
   const reconnect = useCallback(
     async (name: string) => {
       if (!connected) {
-        toast.error('连接断开，无法重连 MCP');
+        toast.error(t('integrations.mcp.reconnectDisconnected'));
         return;
       }
       setBusy((prev) => new Set(prev).add(name));
       try {
         await client.reconnectMcp(name);
-        toast.success(`已重连 ${name}`);
+        toast.success(t('integrations.mcp.reconnectSuccess', { name }));
         resource.reload();
       } catch (error) {
-        toast.error(`重连 ${name} 失败：${errorMessage(error)}`);
+        toast.error(t('integrations.mcp.reconnectFailed', { name, detail: errorMessage(error) }));
       } finally {
         setBusy((prev) => {
           const next = new Set(prev);
@@ -252,9 +300,18 @@ function McpPanel() {
     }
     setReconnectingAll(false);
     resource.reload();
-    if (failures.length === 0) toast.success(`已重连 ${succeeded} 个 MCP 服务`);
-    else if (succeeded === 0) toast.error(`重连失败：${failures.join('；')}`);
-    else toast.error(`已重连 ${succeeded} 个；失败：${failures.join('；')}`);
+    if (failures.length === 0) {
+      toast.success(t('integrations.mcp.reconnectAllSuccess', { count: succeeded }));
+    } else if (succeeded === 0) {
+      toast.error(t('integrations.mcp.reconnectAllFailed', { detail: failures.join('; ') }));
+    } else {
+      toast.error(
+        t('integrations.mcp.reconnectPartial', {
+          count: succeeded,
+          detail: failures.join('; '),
+        }),
+      );
+    }
   }, [client, connected, failed, resource.reload, toast]);
 
   const paletteActions = useMemo(
@@ -268,14 +325,19 @@ function McpPanel() {
   usePaletteEntities('integrations-mcp', paletteActions);
 
   if (!hasToken) {
-    return <NotEnabledState title="未连接 gateway" reason="连接后才能读取 MCP 状态。" />;
+    return (
+      <NotEnabledState
+        title={t('common.notConnected')}
+        reason={t('integrations.mcp.noTokenReason')}
+      />
+    );
   }
   if (!features.includes('mcp-status')) {
     return (
       <NotEnabledState
-        title="MCP 未启用"
-        reason="该 gateway 没有注入 MCP 控制面。"
-        hint="未配置 MCP server 时属正常；需要时在 mcp_servers 配置后重启 gateway。"
+        title={t('integrations.mcp.disabledTitle')}
+        reason={t('integrations.mcp.disabledReason')}
+        hint={t('integrations.mcp.disabledHint')}
       />
     );
   }
@@ -285,30 +347,35 @@ function McpPanel() {
   return (
     <div className="settings-section">
       <p className="section-desc">
-        MCP 控制面为 gateway 全局状态（default tenant），不随租户切换。
-        {tenantId && tenantId !== 'default' ? ` 当前租户：${tenantId}。` : ''}
+        {t('integrations.mcp.globalDesc')}
+        {tenantId && tenantId !== 'default'
+          ? t('integrations.mcp.currentTenant', { tenant: tenantId })
+          : ''}
       </p>
-      {!connected && servers.length > 0 && (
-        <StaleNotice message="连接已断开；显示最近一次读取的 MCP 状态。写操作已禁用。" />
-      )}
+      {!connected && servers.length > 0 && <StaleNotice message={t('integrations.mcp.stale')} />}
       {error && servers.length > 0 && (
-        <StaleNotice message={`MCP 状态更新失败：${error}`} onRetry={resource.reload} />
+        <StaleNotice
+          message={t('integrations.mcp.staleDetail', { detail: error })}
+          onRetry={resource.reload}
+        />
       )}
       <div className="filter-bar">
         <span className="count-pill">
-          {servers.length} 个服务 · {failed.length} 个失败
+          {t('integrations.mcp.counts', { total: servers.length, failed: failed.length })}
         </span>
         <button
           type="button"
           className="btn btn-small"
           disabled={!connected || failed.length === 0 || reconnectingAll}
-          title={!connected ? '连接断开，写操作已禁用' : undefined}
+          title={!connected ? t('common.writesDisabled') : undefined}
           onClick={() => void reconnectAllFailed()}
         >
-          {reconnectingAll ? '重连中…' : `重连全部失败（${failed.length}）`}
+          {reconnectingAll
+            ? t('integrations.mcp.reconnectAllBusy')
+            : t('integrations.mcp.reconnectAll', { count: failed.length })}
         </button>
         <button type="button" className="btn btn-small" onClick={resource.reload}>
-          刷新
+          {t('common.refresh')}
         </button>
       </div>
 
@@ -316,11 +383,11 @@ function McpPanel() {
         <ErrorState message={error} onRetry={resource.reload} />
       ) : resource.state.status === 'idle' ||
         (resource.state.status === 'loading' && servers.length === 0) ? (
-        <LoadingState label="正在读取 MCP 服务…" />
+        <LoadingState label={t('integrations.mcp.loading')} />
       ) : servers.length === 0 ? (
         <EmptyState
-          title="未配置 MCP server。"
-          description="在配置中启用 mcp_servers 后重启 gateway。"
+          title={t('integrations.mcp.emptyTitle')}
+          description={t('integrations.mcp.emptyDesc')}
         />
       ) : (
         <div className="card-grid">
@@ -330,7 +397,9 @@ function McpPanel() {
                 <h3 className="card-title mono">{server.name}</h3>
                 <StatusChip status={server.status} />
               </div>
-              <p className="card-desc">{server.tools.length} 个工具</p>
+              <p className="card-desc">
+                {t('integrations.mcp.toolsCount', { count: server.tools.length })}
+              </p>
               {server.tools.length > 0 && (
                 <div className="chip-row">
                   {server.tools.map((tool) => (
@@ -350,10 +419,12 @@ function McpPanel() {
                   type="button"
                   className="btn btn-small"
                   disabled={!connected || busy.has(server.name)}
-                  title={!connected ? '连接断开，写操作已禁用' : undefined}
+                  title={!connected ? t('common.writesDisabled') : undefined}
                   onClick={() => void reconnect(server.name)}
                 >
-                  {busy.has(server.name) ? '重连中…' : '重连'}
+                  {busy.has(server.name)
+                    ? t('integrations.mcp.reconnecting')
+                    : t('integrations.mcp.reconnect')}
                 </button>
               )}
             </article>
@@ -378,14 +449,19 @@ function ChannelsPanel() {
   const channel = resourceData(resource.state);
 
   if (!hasToken) {
-    return <NotEnabledState title="未连接 gateway" reason="连接后才能读取渠道状态。" />;
+    return (
+      <NotEnabledState
+        title={t('common.notConnected')}
+        reason={t('integrations.channels.noTokenReason')}
+      />
+    );
   }
   if (!features.includes('feishu')) {
     return (
       <NotEnabledState
-        title="飞书渠道未启用"
-        reason="该 gateway 没有注入 feishu 渠道。"
-        hint="需要启用 feishu 插件并配置凭据后重启 gateway。"
+        title={t('integrations.channels.disabledTitle')}
+        reason={t('integrations.channels.disabledReason')}
+        hint={t('integrations.channels.disabledHint')}
       />
     );
   }
@@ -394,37 +470,37 @@ function ChannelsPanel() {
     return <ErrorState message={error} onRetry={resource.reload} />;
   }
   if (resource.state.status === 'idle' || (resource.state.status === 'loading' && !channel)) {
-    return <LoadingState label="正在读取飞书状态…" />;
+    return <LoadingState label={t('integrations.channels.loading')} />;
   }
   if (!channel) {
-    return <EmptyState title="没有渠道数据。" />;
+    return <EmptyState title={t('integrations.channels.empty')} />;
   }
 
   return (
     <div className="settings-section">
-      <p className="section-desc">该控制面为 gateway 全局状态（default tenant），只读。</p>
+      <p className="section-desc">{t('integrations.channels.globalDesc')}</p>
       {!connected && (
-        <StaleNotice message="连接已断开；显示最近一次读取的渠道状态。" onRetry={resource.reload} />
+        <StaleNotice message={t('integrations.channels.stale')} onRetry={resource.reload} />
       )}
       {error && (
-        <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={resource.reload} />
+        <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
       )}
       <section className="panel">
         <div className="panel-header">
-          <h2 className="section-title">飞书</h2>
+          <h2 className="section-title">{t('integrations.channels.title')}</h2>
           <StatusChip
             status={channel.connected ? 'connected' : 'disconnected'}
-            label={channel.connected ? '已连接' : '未连接'}
+            label={statusLabel(channel.connected ? 'connected' : 'disconnected')}
           />
         </div>
         <dl className="diag-list">
           <dt>App ID</dt>
           <dd className="mono">{channel.appIdMasked || '—'}</dd>
-          <dt>活跃会话</dt>
+          <dt>{t('integrations.channels.activeChats')}</dt>
           <dd className="mono">{channel.active_chats}</dd>
-          <dt>排队消息</dt>
+          <dt>{t('integrations.channels.queuedMessages')}</dt>
           <dd className="mono">{channel.queued_messages}</dd>
-          <dt>最近错误</dt>
+          <dt>{t('integrations.channels.lastError')}</dt>
           <dd className={channel.last_error ? 'err' : 'dim'}>{channel.last_error ?? '—'}</dd>
         </dl>
         {channel.last_error && (
@@ -432,7 +508,7 @@ function ChannelsPanel() {
             {channel.last_error}
           </p>
         )}
-        <p className="section-desc">渠道没有启停接口，因此此处不提供伪造的开关。</p>
+        <p className="section-desc">{t('integrations.channels.noToggle')}</p>
       </section>
     </div>
   );

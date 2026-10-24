@@ -7,6 +7,7 @@ import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { TenantInfo } from '../../gateway/types';
+import { t, useLocale } from '../../i18n';
 import { buildTenantPaletteActions } from '../../state/palette-actions';
 import {
   EMPTY_QUOTA_FIELDS,
@@ -38,13 +39,6 @@ function formatQuota(quota: Record<string, number> | undefined): string {
   return parts.length > 0 ? parts.join(' · ') : '—';
 }
 
-const QUOTA_LABELS: Record<(typeof TENANT_QUOTA_KEYS)[number], string> = {
-  max_sessions: '最大会话数',
-  max_runs_per_day: '每日 run 上限',
-  max_concurrent_runs: '并发 run 上限',
-  max_storage_bytes: '存储字节上限',
-};
-
 function QuotaFields({
   fields,
   errors,
@@ -61,14 +55,14 @@ function QuotaFields({
       {TENANT_QUOTA_KEYS.map((key) => (
         <label className="field" key={key}>
           <span className="field-label">
-            {QUOTA_LABELS[key]} <span className="mono">({key})</span>
+            {t(`settings.tenants.quota.${key}`)} <span className="mono">({key})</span>
           </span>
           <input
             className={`input mono ${errors[key] ? 'invalid' : ''}`.trim()}
             inputMode="numeric"
             value={fields[key]}
             onChange={(event) => onChange({ ...fields, [key]: event.target.value })}
-            placeholder="留空 = 不限制"
+            placeholder={t('settings.tenants.quotaHint')}
             disabled={disabled}
             aria-invalid={errors[key] ? true : undefined}
           />
@@ -114,12 +108,12 @@ function TenantCreateDialog({
         ...(validation.name ? { name: validation.name } : {}),
         ...(validation.quota ? { quota: validation.quota } : {}),
       });
-      toast.success(`已创建租户 ${tenant.tenant_id}`);
+      toast.success(t('settings.tenants.created', { tenant: tenant.tenant_id }));
       onCreated();
     } catch (error) {
       setSubmitError(
         isForbidden(errorCode(error), errorMessage(error))
-          ? '需要 admin token 才能创建租户。'
+          ? t('settings.tenants.adminCreate')
           : errorMessage(error),
       );
     } finally {
@@ -128,10 +122,14 @@ function TenantCreateDialog({
   };
 
   return (
-    <ModalShell label="创建租户" onClose={onClose} className="tenant-dialog">
-      <h2 className="modal-title">创建租户</h2>
+    <ModalShell
+      label={t('settings.tenants.createTitle')}
+      onClose={onClose}
+      className="tenant-dialog"
+    >
+      <h2 className="modal-title">{t('settings.tenants.createTitle')}</h2>
       <label className="field">
-        <span className="field-label">租户 ID</span>
+        <span className="field-label">{t('settings.tenants.tenantId')}</span>
         <input
           className={`input mono ${errors.tenantId ? 'invalid' : ''}`.trim()}
           value={tenantId}
@@ -139,7 +137,7 @@ function TenantCreateDialog({
             setTenantId(event.target.value);
             setErrors((prev) => ({ ...prev, tenantId: undefined }));
           }}
-          placeholder="例如 team-alpha"
+          placeholder={t('settings.tenants.tenantIdPlaceholder')}
           spellCheck={false}
           autoComplete="off"
           data-autofocus
@@ -151,7 +149,7 @@ function TenantCreateDialog({
             }
           }}
         />
-        <span className="field-hint mono">小写字母/数字/下划线/连字符，≤64</span>
+        <span className="field-hint mono">{t('settings.tenants.tenantIdHint')}</span>
         {errors.tenantId && (
           <span className="field-error" role="alert">
             {errors.tenantId}
@@ -159,7 +157,7 @@ function TenantCreateDialog({
         )}
       </label>
       <label className="field">
-        <span className="field-label">名称（可选）</span>
+        <span className="field-label">{t('settings.tenants.nameOptional')}</span>
         <input
           className={`input ${errors.name ? 'invalid' : ''}`.trim()}
           value={name}
@@ -167,7 +165,7 @@ function TenantCreateDialog({
             setName(event.target.value);
             setErrors((prev) => ({ ...prev, name: undefined }));
           }}
-          placeholder="显示名称"
+          placeholder={t('settings.tenants.namePlaceholder')}
         />
         {errors.name && (
           <span className="field-error" role="alert">
@@ -175,7 +173,7 @@ function TenantCreateDialog({
           </span>
         )}
       </label>
-      <h3 className="section-title">配额（可选）</h3>
+      <h3 className="section-title">{t('settings.tenants.quota')}</h3>
       <QuotaFields fields={quota} errors={errors} onChange={setQuota} disabled={busy} />
       {submitError && (
         <p className="form-error" role="alert">
@@ -184,7 +182,7 @@ function TenantCreateDialog({
       )}
       <div className="modal-actions">
         <button type="button" className="btn" onClick={onClose} disabled={busy}>
-          取消
+          {t('settings.tenants.cancel')}
         </button>
         <button
           type="button"
@@ -192,7 +190,7 @@ function TenantCreateDialog({
           disabled={busy || !tenantId.trim()}
           onClick={() => void submit()}
         >
-          {busy ? '创建中…' : '创建租户'}
+          {busy ? t('settings.tenants.creating') : t('settings.tenants.createTitle')}
         </button>
       </div>
     </ModalShell>
@@ -233,12 +231,12 @@ function TenantEditDialog({
         status: validation.status,
         ...(validation.quota ? { quota: validation.quota } : {}),
       });
-      toast.success(`已更新租户 ${updated.tenant_id}`);
+      toast.success(t('settings.tenants.updated', { tenant: updated.tenant_id }));
       onUpdated();
     } catch (error) {
       setSubmitError(
         isForbidden(errorCode(error), errorMessage(error))
-          ? '需要 admin token 才能更新租户。'
+          ? t('settings.tenants.adminUpdate')
           : errorMessage(error),
       );
     } finally {
@@ -247,11 +245,11 @@ function TenantEditDialog({
   };
 
   return (
-    <ModalShell label="编辑租户" onClose={onClose} className="tenant-dialog">
-      <h2 className="modal-title">编辑租户</h2>
+    <ModalShell label={t('settings.tenants.editTitle')} onClose={onClose} className="tenant-dialog">
+      <h2 className="modal-title">{t('settings.tenants.editTitle')}</h2>
       <p className="section-desc mono">{tenant.tenant_id}</p>
       <label className="field">
-        <span className="field-label">名称</span>
+        <span className="field-label">{t('settings.tenants.name')}</span>
         <input
           className={`input ${errors.name ? 'invalid' : ''}`.trim()}
           value={name}
@@ -259,7 +257,7 @@ function TenantEditDialog({
             setName(event.target.value);
             setErrors((prev) => ({ ...prev, name: undefined }));
           }}
-          placeholder="显示名称"
+          placeholder={t('settings.tenants.namePlaceholder')}
           data-autofocus
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
@@ -275,7 +273,7 @@ function TenantEditDialog({
         )}
       </label>
       <label className="field">
-        <span className="field-label">状态</span>
+        <span className="field-label">{t('settings.tenants.col.status')}</span>
         <select
           className="input"
           value={status}
@@ -285,7 +283,7 @@ function TenantEditDialog({
           <option value="disabled">disabled</option>
         </select>
       </label>
-      <h3 className="section-title">配额</h3>
+      <h3 className="section-title">{t('settings.tenants.quotaRequired')}</h3>
       <QuotaFields fields={quota} errors={errors} onChange={setQuota} disabled={busy} />
       {submitError && (
         <p className="form-error" role="alert">
@@ -294,7 +292,7 @@ function TenantEditDialog({
       )}
       <div className="modal-actions">
         <button type="button" className="btn" onClick={onClose} disabled={busy}>
-          取消
+          {t('settings.tenants.cancel')}
         </button>
         <button
           type="button"
@@ -302,7 +300,7 @@ function TenantEditDialog({
           disabled={busy}
           onClick={() => void submit()}
         >
-          {busy ? '保存中…' : '保存'}
+          {busy ? t('settings.tenants.saving') : t('settings.tenants.save')}
         </button>
       </div>
     </ModalShell>
@@ -322,6 +320,7 @@ export function TenantsView() {
     token,
     connect,
   } = useConnection();
+  useLocale();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
   const available = hasToken && features.includes('tenants');
@@ -344,7 +343,9 @@ export function TenantsView() {
             currentTenantId: tenantId,
             switchTenant: (nextTenantId) => {
               const ok = connect({ gatewayUrl, token, tenantId: nextTenantId });
-              if (ok) toast.info(`正在切换到租户 ${nextTenantId}…`);
+              if (ok) {
+                toast.info(t('settings.tenants.switching', { tenant: nextTenantId }));
+              }
             },
           })
         : [],
@@ -353,33 +354,40 @@ export function TenantsView() {
   usePaletteEntities('settings-tenants', paletteActions);
 
   if (!hasToken) {
-    return <NotEnabledState title="未连接 gateway" reason="连接后才能查看租户。" />;
+    return (
+      <NotEnabledState
+        title={t('common.notConnected')}
+        reason={t('settings.tenants.noTokenReason')}
+      />
+    );
   }
   if (!features.includes('tenants')) {
     return (
       <NotEnabledState
-        title="租户管理未启用"
-        reason="该 gateway 没有注入 tenant registry。"
-        hint="需要在配置中启用 tenants 后重启 gateway。"
+        title={t('settings.tenants.disabledTitle')}
+        reason={t('settings.tenants.disabledReason')}
+        hint={t('settings.tenants.disabledHint')}
       />
     );
   }
   if (resource.state.status === 'error' && isForbidden(resource.state.code, resource.state.error)) {
     return (
       <NotEnabledState
-        title="需要 admin token 才能管理租户。"
-        reason="当前 token 只能查看本租户数据。"
-        hint={`当前租户：${tenantId ?? '—'}`}
+        title={t('settings.tenants.adminTitle')}
+        reason={t('settings.tenants.adminReason')}
+        hint={t('settings.tenants.currentTenant', { tenant: tenantId ?? '—' })}
       />
     );
   }
   if (resource.state.status === 'idle' || (resource.state.status === 'loading' && !tenants)) {
-    return <LoadingState label="正在读取租户…" />;
+    return <LoadingState label={t('settings.tenants.loading')} />;
   }
   if (!tenants) {
     return (
       <ErrorState
-        message={resource.state.status === 'error' ? resource.state.error : '没有租户数据'}
+        message={
+          resource.state.status === 'error' ? resource.state.error : t('settings.tenants.noData')
+        }
         onRetry={resource.reload}
       />
     );
@@ -388,15 +396,15 @@ export function TenantsView() {
   const switchTenant = (tenant: TenantInfo) => {
     if (tenant.tenant_id === tenantId) return;
     if (!connected) {
-      toast.error('连接断开，无法切换租户');
+      toast.error(t('settings.tenants.switchDisconnected'));
       return;
     }
     if (tenant.status !== 'active') {
-      toast.error('该租户已停用，不能切换');
+      toast.error(t('settings.tenants.switchDisabled'));
       return;
     }
     const ok = connect({ gatewayUrl, token, tenantId: tenant.tenant_id });
-    if (ok) toast.info(`正在切换到租户 ${tenant.tenant_id}…`);
+    if (ok) toast.info(t('settings.tenants.switching', { tenant: tenant.tenant_id }));
   };
 
   const error = resource.state.status === 'error' ? resource.state.error : null;
@@ -404,50 +412,44 @@ export function TenantsView() {
   return (
     <div className="settings-section">
       {!connected && (
-        <StaleNotice
-          message="连接已断开；显示最近一次读取的租户列表，管理动作已禁用。"
-          onRetry={resource.reload}
-        />
+        <StaleNotice message={t('settings.tenants.disconnected')} onRetry={resource.reload} />
       )}
       {error && (
-        <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={resource.reload} />
+        <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
       )}
       <section className="panel">
         <div className="panel-header">
-          <h2 className="section-title">租户</h2>
+          <h2 className="section-title">{t('settings.tenants.title')}</h2>
           <button
             type="button"
             className="btn btn-small btn-primary"
             disabled={!connected}
-            title={!connected ? '连接断开，写操作已禁用' : undefined}
+            title={!connected ? t('common.writesDisabled') : undefined}
             onClick={() => setCreateOpen(true)}
           >
-            新建租户
+            {t('settings.tenants.new')}
           </button>
           <button type="button" className="btn btn-small" onClick={resource.reload}>
-            刷新
+            {t('common.refresh')}
           </button>
         </div>
-        <p className="section-desc">
-          切换租户会重连 gateway 并清空当前会话选择与事件缓冲；数据不会跨租户混用。 新建/更新需要
-          admin token。
-        </p>
+        <p className="section-desc">{t('settings.tenants.description')}</p>
         <table className="data-table">
           <thead>
             <tr>
-              <th scope="col">租户</th>
-              <th scope="col">名称</th>
-              <th scope="col">状态</th>
+              <th scope="col">{t('settings.tenants.col.tenant')}</th>
+              <th scope="col">{t('settings.tenants.col.name')}</th>
+              <th scope="col">{t('settings.tenants.col.status')}</th>
               <th scope="col" className="col-optional">
-                创建时间
+                {t('settings.tenants.col.created')}
               </th>
               <th scope="col" className="col-optional">
-                配额
+                {t('settings.tenants.col.quota')}
               </th>
               <th scope="col" className="col-optional">
-                用量
+                {t('settings.tenants.col.usage')}
               </th>
-              <th scope="col">操作</th>
+              <th scope="col">{t('settings.tenants.col.actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -457,13 +459,17 @@ export function TenantsView() {
                 <tr key={tenant.tenant_id} className={active ? 'row-active' : undefined}>
                   <td className="mono">
                     {tenant.tenant_id}
-                    {active && <span className="count-pill">当前</span>}
+                    {active && <span className="count-pill">{t('settings.tenants.current')}</span>}
                   </td>
                   <td>{tenant.name ?? '—'}</td>
                   <td>
                     <StatusChip
                       status={tenant.status === 'active' ? 'running' : 'disabled'}
-                      label={tenant.status === 'active' ? '启用' : '停用'}
+                      label={t(
+                        tenant.status === 'active'
+                          ? 'settings.tenants.enabled'
+                          : 'settings.tenants.disabled',
+                      )}
                     />
                   </td>
                   <td className="mono col-optional">
@@ -476,10 +482,12 @@ export function TenantsView() {
                       type="button"
                       className="btn btn-small"
                       disabled={!connected || tenant.status !== 'active' || active}
-                      title={!connected ? '连接断开，写操作已禁用' : undefined}
+                      title={!connected ? t('common.writesDisabled') : undefined}
                       onClick={() => switchTenant(tenant)}
                     >
-                      {active ? '当前租户' : '切换'}
+                      {active
+                        ? t('settings.tenants.currentTenantAction')
+                        : t('settings.tenants.switch')}
                     </button>
                     <button
                       type="button"
@@ -487,7 +495,7 @@ export function TenantsView() {
                       disabled={!connected}
                       onClick={() => setEditing(tenant)}
                     >
-                      编辑
+                      {t('common.edit')}
                     </button>
                   </td>
                 </tr>

@@ -70,10 +70,26 @@
   --nav-w-rail: 64px;
   --sessions-w: 280px;
   --team-list-w: 280px;
+  --team-list-w-compact: 240px;
   --team-members-w: 272px;
+  --team-members-w-compact: 240px;
   --team-avatar: 28px;
   --team-notice-max: 720px;
+  --team-list-max-w: 960px;
+  --team-member-max-w: 900px;
+  --message-max-w: 640px;
   --content-max: 1440px;
+
+  /* 覆盖层 / 面板的语义宽度与高度 */
+  --drawer-w: 320px;
+  --palette-w: 680px;
+  --modal-w-sm: 420px;
+  --modal-w-md: 620px;
+  --modal-w-lg: 760px;
+  --modal-max-h: 780px;
+  --panel-max-h: 420px;
+  --search-max-w: 420px;
+  --select-min-w: 128px;
 
   --row-h-session: 56px;
   --row-h-tool: 36px;

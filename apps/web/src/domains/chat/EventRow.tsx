@@ -1,5 +1,6 @@
 import { formatTimestamp } from '../../format';
 import type { RunEvent } from '../../gateway/types';
+import { t } from '../../i18n';
 import { errorMetaOf, formatErrorMeta } from '../../state/error-visibility';
 import { eventTag } from '../../state/events';
 
@@ -56,8 +57,8 @@ function renderEventBody(event: RunEvent) {
           {args !== undefined && (
             <>
               <span className="dim">{truncate(payloadText(args), 160)}</span>
-              <ToolPayload label="参数" value={args} />
-              {d.truncated === true && <span className="dim">（已截断）</span>}
+              <ToolPayload label={t('chat.event.args')} value={args} />
+              {d.truncated === true && <span className="dim">{t('chat.event.truncated')}</span>}
             </>
           )}
         </>
@@ -77,8 +78,8 @@ function renderEventBody(event: RunEvent) {
           {d.result !== undefined && (
             <>
               <span className="dim">{truncate(payloadText(d.result), 160)}</span>
-              <ToolPayload label="结果" value={d.result} />
-              {d.truncated === true && <span className="dim">（已截断）</span>}
+              <ToolPayload label={t('chat.event.result')} value={d.result} />
+              {d.truncated === true && <span className="dim">{t('chat.event.truncated')}</span>}
             </>
           )}
         </>
@@ -91,7 +92,7 @@ function renderEventBody(event: RunEvent) {
         <>
           <span className="mono">{d.tool_name ?? 'tool'}</span>
           {meta && <span className="error-meta mono">{meta}</span>}
-          <ToolPayload label="错误（已展开）" value={d.error ?? 'error'} open />
+          <ToolPayload label={t('chat.event.errorExpanded')} value={d.error ?? 'error'} open />
         </>
       );
     }

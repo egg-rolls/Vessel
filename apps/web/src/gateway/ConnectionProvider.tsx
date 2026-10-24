@@ -12,6 +12,7 @@ import {
 } from 'react';
 import { extractTokenFromHash } from '../app/router';
 import { useToast } from '../components/ToastProvider';
+import { t } from '../i18n';
 import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
 import { resolveConnectionSeed } from './dev-auth';
@@ -143,7 +144,7 @@ function initialGatewayUrl(): { url: string; error: string | null } {
   );
   return resolved.ok
     ? { url: resolved.value, error: null }
-    : { url: '', error: resolved.error ?? '无效的 gateway 地址' };
+    : { url: '', error: resolved.error ?? t('gateway.connection.invalidUrl') };
 }
 
 const initialTokenValue = consumeInitialToken();
@@ -259,7 +260,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       // 避免 UI 一直停在「正在连接」。
       setConnectionState('error');
       if (client.closedWithCode === 4401) {
-        setTokenError('鉴权失败：token 错误或已失效');
+        setTokenError(t('gateway.connection.authFailed'));
         return;
       }
       if (error instanceof GatewayHttpError) {
@@ -268,21 +269,15 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           error.code === 'forbidden_origin' ||
           error.code === 'invalid_host'
         ) {
-          setLastError(
-            `gateway 拒绝该 Origin/Host：${error.message}。` +
-              '跨 Origin 部署需把本站加入 serve.allowed_origins。',
-          );
+          setLastError(t('gateway.connection.originRejected', { detail: error.message }));
           return;
         }
         if (error.status === 401 || error.code === 'unauthorized') {
-          setTokenError('鉴权失败：token 错误或已失效');
+          setTokenError(t('gateway.connection.authFailed'));
           return;
         }
         if (error.code === 'network') {
-          setLastError(
-            `无法连接 gateway（检查地址/TLS/网络）：${error.message}。` +
-              '跨 Origin 时还需配置 serve.allowed_origins。',
-          );
+          setLastError(t('gateway.connection.unreachable', { detail: error.message }));
           return;
         }
         setLastError(error.message);
@@ -416,7 +411,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
     const offGap = client.onGap((gap) => {
       eventStore.reset(gap.to_seq);
-      setGapNotice(`历史事件已截断（${gap.from_seq}–${gap.to_seq}），已重新同步`);
+      setGapNotice(t('gateway.connection.gap', { from: gap.from_seq, to: gap.to_seq }));
     });
 
     const offState = client.onState((state) => {
@@ -426,9 +421,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const offClose = client.onClose((code) => {
       if (disposed) return;
       if (code === 4400 || code === 4401 || code === 4403) {
-        if (code === 4401) setTokenError('鉴权失败：token 错误或已失效');
-        else if (code === 4403) setLastError('无权访问该 tenant（需要 admin token）');
-        else setLastError('协议版本不兼容（需要 vessel.gateway/1）');
+        if (code === 4401) setTokenError(t('gateway.connection.authFailed'));
+        else if (code === 4403) {
+          setLastError(t('gateway.connection.forbiddenTenant'));
+        } else setLastError(t('gateway.connection.protocolMismatch'));
         return;
       }
       // 1s 起指数退避，上限 30s，带 jitter。
@@ -483,12 +479,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     (options: ConnectionOptions): boolean => {
       const urlCheck = checkGatewayUrl(options.gatewayUrl, window.location.protocol);
       if (!urlCheck.ok) {
-        setGatewayError(urlCheck.error ?? '无效的 gateway 地址');
+        setGatewayError(urlCheck.error ?? t('gateway.connection.invalidUrl'));
         return false;
       }
       const nextToken = options.token.trim();
       if (!nextToken) {
-        setTokenError('请输入 gateway token');
+        setTokenError(t('gateway.connection.tokenRequired'));
         return false;
       }
       setGatewayError(null);

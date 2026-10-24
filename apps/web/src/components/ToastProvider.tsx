@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { t } from '../i18n';
 
 export type ToastKind = 'success' | 'error' | 'info';
 
@@ -91,7 +92,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             <button
               type="button"
               className="toast-close"
-              aria-label="关闭提示"
+              aria-label={t('common.closeNotice')}
               onClick={() => dismiss(item.id)}
             >
               ×

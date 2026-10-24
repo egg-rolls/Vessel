@@ -11,6 +11,7 @@ import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { TeamCreateInput, TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
+import { useNodeNames } from '../nodes/useNodeNames';
 import { parsePolicyText, trimmedOrUndefined } from './team-form';
 
 export interface TeamFormDialogProps {
@@ -24,6 +25,7 @@ export function TeamFormDialog({ nodes, initialNodeKey, onClose, onSaved }: Team
   useLocale();
   const toast = useToast();
   const { teamControl } = useNodes();
+  const nodeNames = useNodeNames();
   const preferredKey =
     initialNodeKey !== undefined && nodes.some((item) => nodeKeyOf(item) === initialNodeKey)
       ? initialNodeKey
@@ -109,7 +111,7 @@ export function TeamFormDialog({ nodes, initialNodeKey, onClose, onSaved }: Team
             >
               {nodes.map((item) => (
                 <option key={nodeKeyOf(item)} value={nodeKeyOf(item)}>
-                  {item.name}
+                  {nodeNames.get(nodeKeyOf(item)) ?? '—'}
                 </option>
               ))}
             </select>

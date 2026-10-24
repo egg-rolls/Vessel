@@ -16,7 +16,7 @@ import { nodeKeyOf } from '../../gateway/nodes';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
 import { teamsForNodeHash } from '../teams/team-url';
-import { baseNodeDisplayName } from './display-names';
+import { useNodeNames } from './useNodeNames';
 
 export function NodeDetailView({
   nodeKey,
@@ -38,6 +38,11 @@ export function NodeDetailView({
     pollMs: 15_000,
     deps: [epoch, nodeKey],
   });
+  const healthData = resourceData(health.state);
+  const providedNames = new Map(
+    healthData?.node.name ? [[nodeKey, healthData.node.name] as const] : [],
+  );
+  const displayNames = useNodeNames(providedNames);
 
   if (!node) {
     return (
@@ -58,16 +63,7 @@ export function NodeDetailView({
     );
   }
 
-  const healthData = resourceData(health.state);
-  const displayName = baseNodeDisplayName(
-    {
-      name: node.name,
-      url: node.url,
-      ...(node.nodeId ? { nodeId: node.nodeId } : {}),
-      ...(healthData?.node.name ? { healthName: healthData.node.name } : {}),
-    },
-    typeof window === 'undefined' ? '' : window.location.origin,
-  );
+  const displayName = displayNames.get(nodeKey) ?? '—';
   const status = healthData
     ? 'connected'
     : health.state.status === 'error'

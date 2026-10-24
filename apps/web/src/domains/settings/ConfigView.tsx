@@ -3,11 +3,14 @@ import { useRefreshSignal } from '../../app/refresh';
 import { CopyButton } from '../../components/CopyButton';
 import { JsonView } from '../../components/JsonView';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
+import { SearchInput } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { t, useLocale } from '../../i18n';
 import { filterConfigEntries, flattenConfig } from '../../state/config';
 import { resourceData, useResource } from '../../state/useResource';
 
 export function ConfigView() {
+  useLocale();
   const { client, connectionState, hasToken, features, epoch, tenantId } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const available = hasToken && features.includes('config');
@@ -27,14 +30,14 @@ export function ConfigView() {
   const filteredEntries = useMemo(() => filterConfigEntries(entries, query), [entries, query]);
 
   if (!hasToken) {
-    return <NotEnabledState title="未连接 gateway" reason="连接后才能读取配置。" />;
+    return <NotEnabledState title={t('common.notConnected')} reason={t('config.noTokenReason')} />;
   }
   if (!features.includes('config')) {
     return (
       <NotEnabledState
-        title="配置接口未启用"
-        reason="该 gateway 没有注入 config 控制面。"
-        hint="需要 gateway 启用 config 控制面后重启。"
+        title={t('config.disabledTitle')}
+        reason={t('config.disabledReason')}
+        hint={t('config.disabledHint')}
       />
     );
   }
@@ -42,7 +45,7 @@ export function ConfigView() {
     return resource.state.status === 'error' ? (
       <ErrorState message={resource.state.error} onRetry={resource.reload} />
     ) : (
-      <LoadingState label="正在读取配置…" />
+      <LoadingState label={t('config.loading')} />
     );
   }
   const sourceEntries = Object.entries(data.sources.sources);
@@ -50,75 +53,69 @@ export function ConfigView() {
 
   return (
     <div className="settings-section">
-      {!connected && (
-        <StaleNotice message="连接已断开；显示最近一次读取的配置快照。" onRetry={resource.reload} />
-      )}
+      {!connected && <StaleNotice message={t('config.stale')} onRetry={resource.reload} />}
       {error && (
-        <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={resource.reload} />
+        <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
       )}
       <section className="panel">
         <div className="panel-header">
-          <h2 className="section-title">配置快照</h2>
+          <h2 className="section-title">{t('config.title')}</h2>
           <CopyButton
             text={JSON.stringify(data.config.config, null, 2)}
-            label="复制 JSON"
-            toast="已复制配置 JSON"
+            label={t('config.copyJson')}
+            toast={t('config.copiedJson')}
           />
           <button type="button" className="btn btn-small" onClick={resource.reload}>
-            刷新
+            {t('common.refresh')}
           </button>
         </div>
         <dl className="diag-list">
-          <dt>schema 版本</dt>
+          <dt>{t('config.schemaVersion')}</dt>
           <dd className="mono">{data.config.schema_version}</dd>
-          <dt>租户</dt>
+          <dt>{t('config.tenant')}</dt>
           <dd className="mono">{data.config.tenant_id || tenantId || '—'}</dd>
-          <dt>用户配置路径</dt>
+          <dt>{t('config.userPath')}</dt>
           <dd className="mono">{data.config.paths.user || '—'}</dd>
-          <dt>项目配置路径</dt>
+          <dt>{t('config.projectPath')}</dt>
           <dd className="mono">{data.config.paths.project || '—'}</dd>
-          <dt>租户覆盖键</dt>
+          <dt>{t('config.overlayKeys')}</dt>
           <dd className="mono">
             {data.config.tenant_overlay_keys?.length
               ? data.config.tenant_overlay_keys.join(', ')
               : '—'}
           </dd>
         </dl>
-        <JsonView value={data.config.config} label="脱敏配置 JSON（服务端已完成脱敏）" />
+        <JsonView value={data.config.config} label={t('config.redactedJson')} />
       </section>
 
       <section className="panel">
         <div className="panel-header">
-          <h2 className="section-title">配置项</h2>
+          <h2 className="section-title">{t('config.itemsTitle')}</h2>
           <span className="count-pill">
             {filteredEntries.length}/{entries.length}
           </span>
         </div>
-        <p className="section-desc">
-          展平后的只读视图；密钥字段由服务端在返回前脱敏（前端不猜测、不展示密钥）。
-        </p>
+        <p className="section-desc">{t('config.itemsDesc')}</p>
         <div className="filter-bar">
-          <input
-            className="input search-input"
+          <SearchInput
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索路径或值"
-            type="search"
-            aria-label="搜索配置项"
+            onChange={setQuery}
+            placeholder={t('config.searchPlaceholder')}
+            ariaLabel={t('config.searchLabel')}
           />
         </div>
         {entries.length === 0 ? (
-          <p className="section-desc">配置为空。</p>
+          <p className="section-desc">{t('config.empty')}</p>
         ) : filteredEntries.length === 0 ? (
-          <p className="section-desc">没有匹配“{query.trim()}”的配置项。</p>
+          <p className="section-desc">{t('config.noMatch', { query: query.trim() })}</p>
         ) : (
           <table className="data-table">
             <thead>
               <tr>
-                <th scope="col">路径</th>
-                <th scope="col">值</th>
+                <th scope="col">{t('config.col.path')}</th>
+                <th scope="col">{t('config.col.value')}</th>
                 <th scope="col" className="col-optional">
-                  类型
+                  {t('config.col.type')}
                 </th>
               </tr>
             </thead>
@@ -136,15 +133,15 @@ export function ConfigView() {
       </section>
 
       <section className="panel">
-        <h2 className="section-title">配置来源</h2>
+        <h2 className="section-title">{t('config.sourcesTitle')}</h2>
         {sourceEntries.length === 0 ? (
-          <p className="section-desc">无来源信息。</p>
+          <p className="section-desc">{t('config.noSources')}</p>
         ) : (
           <table className="data-table">
             <thead>
               <tr>
-                <th scope="col">键</th>
-                <th scope="col">来源</th>
+                <th scope="col">{t('config.col.key')}</th>
+                <th scope="col">{t('config.col.source')}</th>
               </tr>
             </thead>
             <tbody>

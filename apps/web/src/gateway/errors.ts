@@ -5,31 +5,34 @@
  * 原始错误仍原样展示（可展开），不吞掉服务端细节。
  */
 
+import { t } from '../i18n';
+
 const DESCRIPTIONS: Readonly<Record<string, string>> = {
-  unauthorized: 'token 无效或已过期，请在连接设置中重新输入。',
-  forbidden: '当前 token 没有执行该操作的权限。',
-  forbidden_origin: '请求来源不在 serve.allowed_origins 中。',
-  invalid_host: 'Host 头不被 gateway 允许。',
-  not_found: '目标不存在或已被删除。',
-  invalid_params: '请求参数不合法。',
-  invalid_request: '请求格式不合法。',
-  conflict: '操作与当前状态冲突，请刷新后重试。',
-  quota_exceeded: '已超出 tenant 配额。',
-  tenant_locked: '该 tenant 正被其他进程写入，请稍后重试。',
-  rate_limited: '请求过于频繁，请稍后重试。',
-  timeout: '请求超时，请重试。',
-  unsupported_protocol: 'gateway 协议版本不兼容，请升级客户端或服务端。',
-  internal: 'gateway 内部错误，请查看服务端日志。',
-  no_runtime: 'gateway 未配置运行 runtime。',
-  durable_disabled: 'durable run 未启用。',
-  mcp_disabled: 'MCP 未启用。',
-  evals_disabled: 'evals 未启用。',
+  unauthorized: 'gateway.error.unauthorized',
+  forbidden: 'gateway.error.forbidden',
+  forbidden_origin: 'gateway.error.forbidden_origin',
+  invalid_host: 'gateway.error.invalid_host',
+  not_found: 'gateway.error.not_found',
+  invalid_params: 'gateway.error.invalid_params',
+  invalid_request: 'gateway.error.invalid_request',
+  conflict: 'gateway.error.conflict',
+  quota_exceeded: 'gateway.error.quota_exceeded',
+  tenant_locked: 'gateway.error.tenant_locked',
+  rate_limited: 'gateway.error.rate_limited',
+  timeout: 'gateway.error.timeout',
+  unsupported_protocol: 'gateway.error.unsupported_protocol',
+  internal: 'gateway.error.internal',
+  no_runtime: 'gateway.error.no_runtime',
+  durable_disabled: 'gateway.error.durable_disabled',
+  mcp_disabled: 'gateway.error.mcp_disabled',
+  evals_disabled: 'gateway.error.evals_disabled',
 };
 
-/** 已知错误码的中文说明；未知 code 返回 null（不编造文案）。 */
+/** 已知错误码的可执行说明；未知 code 返回 null（不编造文案）。 */
 export function describeGatewayError(code: string | null | undefined): string | null {
   if (!code) return null;
-  return DESCRIPTIONS[code] ?? null;
+  const key = DESCRIPTIONS[code];
+  return key ? t(key) : null;
 }
 
 /** 从 `code: message` 文本里取稳定错误码前缀；没有则返回 null。 */

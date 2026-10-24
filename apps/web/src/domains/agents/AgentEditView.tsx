@@ -10,8 +10,10 @@ import { useToast } from '../../components/ToastProvider';
 import { Button } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
+import { nodeKeyOf } from '../../gateway/nodes';
 import type { RosterAgent } from '../../gateway/team-roster';
 import { t, useLocale } from '../../i18n';
+import { useNodeNames } from '../nodes/useNodeNames';
 import { agentErrorText } from './agent-errors';
 import { type AgentDraft, buildAgentUpdateInput } from './agent-form';
 import { agentDisplayName } from './agent-search';
@@ -31,6 +33,7 @@ export function AgentEditView({
   const toast = useToast();
   const { tenantId } = useConnection();
   const { teamControl } = useNodes();
+  const nodeNames = useNodeNames();
   const member = agent.member;
   const displayName = agentDisplayName(member);
   const [draft, setDraft] = useState<AgentDraft>({
@@ -87,7 +90,8 @@ export function AgentEditView({
       <div className="domain-content">
         <section className="panel">
           <p className="section-desc">
-            {node.name} · {agent.team.name || agent.team.team_id} · {displayName}
+            {nodeNames.get(nodeKeyOf(node)) ?? '—'} · {agent.team.name || agent.team.team_id} ·{' '}
+            {displayName}
           </p>
           <form className="team-form" onSubmit={submit}>
             <div className="form-grid">

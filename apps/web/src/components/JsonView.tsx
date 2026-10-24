@@ -1,7 +1,9 @@
+import { t } from '../i18n';
+
 /** 原始 JSON：默认折叠，避免诊断信息占据主视线。 */
 export function JsonView({
   value,
-  label = '原始数据',
+  label = t('common.rawData'),
   open = false,
   maxHeight = 360,
 }: {

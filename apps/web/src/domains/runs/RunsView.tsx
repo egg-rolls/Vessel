@@ -13,9 +13,11 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
+import { SearchInput } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { DurableRunSummary, RunStatus } from '../../gateway/types';
+import { t, useLocale } from '../../i18n';
 import { buildRunPaletteActions } from '../../state/palette-actions';
 import {
   filterDurableRuns,
@@ -33,22 +35,22 @@ import { RunDetail } from './RunDetail';
 
 type RunsRoute = Extract<Route, { domain: 'runs' }>;
 
-const LIVE_FILTERS: readonly { id: RunStatusFilter; label: string }[] = [
-  { id: 'all', label: '全部' },
-  { id: 'queued', label: '排队' },
-  { id: 'running', label: '运行中' },
-  { id: 'completed', label: '已完成' },
-  { id: 'failed', label: '失败' },
-  { id: 'cancelled', label: '已取消' },
+const LIVE_FILTERS: readonly { id: RunStatusFilter; labelKey: string }[] = [
+  { id: 'all', labelKey: 'runs.filter.all' },
+  { id: 'queued', labelKey: 'runs.filter.queued' },
+  { id: 'running', labelKey: 'runs.filter.running' },
+  { id: 'completed', labelKey: 'runs.filter.completed' },
+  { id: 'failed', labelKey: 'runs.filter.failed' },
+  { id: 'cancelled', labelKey: 'runs.filter.cancelled' },
 ];
 
-const DURABLE_FILTERS: readonly { id: RunStatusFilter; label: string }[] = [
-  { id: 'all', label: '全部' },
-  { id: 'interrupted', label: '已中断' },
-  { id: 'running', label: '运行中' },
-  { id: 'completed', label: '已完成' },
-  { id: 'failed', label: '失败' },
-  { id: 'cancelled', label: '已取消' },
+const DURABLE_FILTERS: readonly { id: RunStatusFilter; labelKey: string }[] = [
+  { id: 'all', labelKey: 'runs.filter.all' },
+  { id: 'interrupted', labelKey: 'runs.filter.interrupted' },
+  { id: 'running', labelKey: 'runs.filter.running' },
+  { id: 'completed', labelKey: 'runs.filter.completed' },
+  { id: 'failed', labelKey: 'runs.filter.failed' },
+  { id: 'cancelled', labelKey: 'runs.filter.cancelled' },
 ];
 
 function errorMessage(error: unknown): string {
@@ -68,6 +70,7 @@ export function RunsView({
   route: RunsRoute;
   navigate: (route: Route) => void;
 }) {
+  useLocale();
   const { client, connectionState, hasToken, features, epoch, tenantId, eventStore } =
     useConnection();
   const toast = useToast();
@@ -209,18 +212,18 @@ export function RunsView({
   const cancel = useCallback(
     (runId: string) => {
       if (!connected) {
-        toast.error('连接断开，无法取消运行');
+        toast.error(t('runs.toast.disconnectedCancel'));
         return;
       }
       void withBusy(runId, async () => {
         try {
           const result = await client.cancelRun(runId);
           if (result.cancelled) {
-            toast.success('已请求取消 run');
+            toast.success(t('runs.toast.cancelRequested'));
             liveResource.reload();
             if (route.runId === runId) detailResource.reload();
           } else {
-            toast.error('取消请求未被受理，run 可能已开始执行');
+            toast.error(t('runs.toast.cancelNotAccepted'));
           }
         } catch (error) {
           toast.error(errorMessage(error));
@@ -233,17 +236,17 @@ export function RunsView({
   const resume = useCallback(
     (runId: string) => {
       if (!connected) {
-        toast.error('连接断开，无法恢复运行');
+        toast.error(t('runs.toast.disconnectedResume'));
         return;
       }
       void withBusy(runId, async () => {
         try {
           await client.resumeRun(runId);
-          toast.success('已排队恢复运行');
+          toast.success(t('runs.toast.resumed'));
           durableResource.reload();
         } catch (error) {
           if (isAlreadyResumedError(error)) {
-            toast.info('该运行已在恢复中');
+            toast.info(t('runs.toast.resuming'));
             durableResource.reload();
           } else {
             toast.error(errorMessage(error));
@@ -262,18 +265,18 @@ export function RunsView({
       ...liveRuns.map((run) => ({
         id: `run-${run.run_id}`,
         group: 'entity' as const,
-        label: `运行 ${run.run_id.slice(0, 14)}`,
+        label: t('runs.palette.live', { id: run.run_id.slice(0, 14) }),
         keywords: [run.session_id, run.status],
-        hint: '运行',
+        hint: t('palette.hint.run'),
         run: () =>
           navigate({ domain: 'runs', tab: 'live', runId: run.run_id, sessionId: run.session_id }),
       })),
       ...durableRuns.map((run) => ({
         id: `durable-${run.run_id}`,
         group: 'entity' as const,
-        label: `可恢复 ${run.run_id.slice(0, 14)}`,
+        label: t('runs.palette.durable', { id: run.run_id.slice(0, 14) }),
         keywords: [run.session_id, run.status, run.agent_id ?? ''],
-        hint: '运行',
+        hint: t('palette.hint.run'),
         run: () =>
           navigate({
             domain: 'runs',
@@ -324,16 +327,12 @@ export function RunsView({
 
   return (
     <div className={`domain-view ${route.runId ? 'detail-open' : ''}`.trim()}>
-      <PageHeader
-        title="运行"
-        description="Live 是当前 gateway 进程内的执行（内存，最多约 200 条）；可恢复来自持久运行记录。"
-        tenantId={tenantId}
-      />
+      <PageHeader title={t('runs.title')} description={t('runs.description')} tenantId={tenantId} />
       <SegmentedTabs
-        label="运行来源"
+        label={t('runs.sourceLabel')}
         tabs={[
-          { id: 'live', label: 'Live（进程内）' },
-          { id: 'durable', label: '可恢复' },
+          { id: 'live', label: t('runs.source.live') },
+          { id: 'durable', label: t('runs.source.durable') },
         ]}
         value={route.tab}
         onChange={(tab) => navigate({ domain: 'runs', tab })}
@@ -341,16 +340,14 @@ export function RunsView({
       />
 
       <div className="filter-bar">
-        <input
-          className="input search-input"
+        <SearchInput
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索 run id / session / 输出 / 错误"
-          type="search"
-          aria-label="搜索运行"
+          onChange={setQuery}
+          placeholder={t('runs.searchPlaceholder')}
+          ariaLabel={t('runs.searchLabel')}
         />
         <fieldset className="filter-chips">
-          <legend className="sr-only">按状态过滤运行</legend>
+          <legend className="sr-only">{t('runs.statusLegend')}</legend>
           {filterList.map((filter) => (
             <button
               key={filter.id}
@@ -359,7 +356,7 @@ export function RunsView({
               aria-pressed={filter.id === status}
               onClick={() => setStatus(filter.id)}
             >
-              {filter.label}
+              {t(filter.labelKey)}
             </button>
           ))}
         </fieldset>
@@ -368,64 +365,58 @@ export function RunsView({
             type="button"
             className="filter-chip active"
             onClick={() => navigateRoute({ sessionId: undefined, runId: undefined })}
-            title="清除会话过滤"
+            title={t('runs.clearSessionFilter')}
           >
-            会话 {route.sessionId.slice(0, 12)} ×
+            {t('runs.sessionChip', { session: route.sessionId.slice(0, 12) })} ×
           </button>
         )}
         <button type="button" className="btn btn-small" onClick={reloadAll} disabled={!hasToken}>
-          刷新
+          {t('common.refresh')}
         </button>
       </div>
 
-      <div className="domain-content" id="runs-panel" role="tabpanel" aria-label="运行内容">
+      <div className="domain-content" id="runs-panel" role="tabpanel" aria-label={t('runs.title')}>
         {!hasToken ? (
           <EmptyState
-            title="连接 gateway 后显示运行。"
+            title={t('runs.noTokenTitle')}
             action={
               <button
                 type="button"
                 className="btn"
                 onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
               >
-                配置连接
+                {t('common.configureConnection')}
               </button>
             }
           />
         ) : route.tab === 'durable' && !durableAvailable ? (
           <NotEnabledState
-            title="可恢复运行未启用"
-            reason="此 gateway 没有启用持久运行恢复。"
-            hint="需要启用 checkpoint 存储与 resume 后重启 gateway。"
+            title={t('runs.durableDisabledTitle')}
+            reason={t('runs.durableDisabledReason')}
+            hint={t('runs.durableDisabledHint')}
           />
         ) : (
           <>
             {!connected && current.length > 0 && (
-              <StaleNotice
-                message="连接已断开；显示最近一次读取的运行列表，写操作已禁用。"
-                onRetry={reloadAll}
-              />
+              <StaleNotice message={t('runs.disconnected')} onRetry={reloadAll} />
             )}
             {resourceError && current.length > 0 && (
-              <StaleNotice message={`更新失败，显示旧数据：${resourceError}`} onRetry={reloadAll} />
+              <StaleNotice
+                message={t('common.staleData', { detail: resourceError })}
+                onRetry={reloadAll}
+              />
             )}
 
             {resourceError && current.length === 0 ? (
               <ErrorState message={resourceError} onRetry={resource.reload} />
             ) : loading ? (
-              <LoadingState label="正在加载运行…" />
+              <LoadingState label={t('runs.loading')} />
             ) : current.length === 0 ? (
               <EmptyState
-                title={
-                  route.tab === 'live'
-                    ? '当前 gateway 进程还没有运行记录。'
-                    : '没有匹配的可恢复运行。'
-                }
-                description={
-                  route.tab === 'live'
-                    ? '在会话中发送一条 prompt 后，运行会出现在这里。'
-                    : '调整状态过滤或清除会话过滤后重试。'
-                }
+                title={t(route.tab === 'live' ? 'runs.emptyLiveTitle' : 'runs.emptyDurableTitle')}
+                description={t(
+                  route.tab === 'live' ? 'runs.emptyLiveDesc' : 'runs.emptyDurableDesc',
+                )}
                 action={
                   route.tab === 'live' ? (
                     <button
@@ -433,15 +424,15 @@ export function RunsView({
                       className="btn btn-primary"
                       onClick={() => navigate({ domain: 'chat', sessionId: 'new' })}
                     >
-                      新建会话
+                      {t('common.newSession')}
                     </button>
                   ) : undefined
                 }
               />
             ) : filtered.length === 0 ? (
               <EmptyState
-                title="没有匹配的运行。"
-                description="清除搜索、状态或会话过滤后重试。"
+                title={t('runs.noMatchTitle')}
+                description={t('runs.noMatchDesc')}
                 action={
                   <button
                     type="button"
@@ -452,7 +443,7 @@ export function RunsView({
                       navigateRoute({ sessionId: undefined });
                     }}
                   >
-                    清除过滤
+                    {t('common.clearFilters')}
                   </button>
                 }
               />
@@ -460,19 +451,19 @@ export function RunsView({
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th scope="col">状态</th>
-                    <th scope="col">运行 ID</th>
+                    <th scope="col">{t('runs.col.state')}</th>
+                    <th scope="col">{t('runs.col.runId')}</th>
                     <th scope="col" className="col-session">
-                      会话
+                      {t('runs.col.session')}
                     </th>
-                    <th scope="col">开始</th>
+                    <th scope="col">{t('runs.col.started')}</th>
                     <th scope="col" className="col-meta">
-                      耗时
+                      {t('runs.col.duration')}
                     </th>
                     <th scope="col" className="col-optional">
                       Tokens
                     </th>
-                    <th scope="col">操作</th>
+                    <th scope="col">{t('runs.col.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -488,7 +479,9 @@ export function RunsView({
                             status={run.status}
                             label={
                               run.status === 'queued' && run.queue_position !== undefined
-                                ? `排队 · 第 ${run.queue_position} 位`
+                                ? t('chat.run.queuedPosition', {
+                                    position: run.queue_position,
+                                  })
                                 : undefined
                             }
                           />
@@ -524,10 +517,10 @@ export function RunsView({
                               type="button"
                               className="btn btn-small btn-danger-ghost"
                               disabled={!connected || busy.has(run.run_id)}
-                              title={!connected ? '连接断开，写操作已禁用' : undefined}
+                              title={!connected ? t('common.writesDisabled') : undefined}
                               onClick={() => cancel(run.run_id)}
                             >
-                              {busy.has(run.run_id) ? '取消中…' : '取消'}
+                              {busy.has(run.run_id) ? t('runs.cancelling') : t('runs.cancel')}
                             </button>
                           ) : (
                             <span className="dim">—</span>
@@ -542,19 +535,19 @@ export function RunsView({
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th scope="col">状态</th>
-                    <th scope="col">运行 ID</th>
+                    <th scope="col">{t('runs.col.state')}</th>
+                    <th scope="col">{t('runs.col.runId')}</th>
                     <th scope="col" className="col-session">
-                      会话
+                      {t('runs.col.session')}
                     </th>
                     <th scope="col" className="col-optional">
-                      Agent
+                      {t('runs.col.agent')}
                     </th>
                     <th scope="col" className="col-meta">
-                      Iter
+                      {t('runs.col.iter')}
                     </th>
-                    <th scope="col">更新</th>
-                    <th scope="col">操作</th>
+                    <th scope="col">{t('runs.col.updated')}</th>
+                    <th scope="col">{t('runs.col.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -597,10 +590,10 @@ export function RunsView({
                               type="button"
                               className="btn btn-small"
                               disabled={!connected || busy.has(run.run_id)}
-                              title={!connected ? '连接断开，写操作已禁用' : undefined}
+                              title={!connected ? t('common.writesDisabled') : undefined}
                               onClick={() => resume(run.run_id)}
                             >
-                              {busy.has(run.run_id) ? '恢复中…' : '恢复运行'}
+                              {busy.has(run.run_id) ? t('runs.resuming') : t('runs.resume')}
                             </button>
                           ) : (
                             <span className="dim">—</span>
@@ -619,7 +612,7 @@ export function RunsView({
                 className="load-more"
                 onClick={() => setLimit((value) => value + 100)}
               >
-                显示更多（还有 {windowed.hiddenCount} 条）
+                {t('common.showMore', { count: windowed.hiddenCount })}
               </button>
             )}
           </>
@@ -629,12 +622,14 @@ export function RunsView({
           (detailMissing ? (
             <ErrorState
               message={
-                detailResource.state.status === 'error' ? detailResource.state.error : '运行不存在'
+                detailResource.state.status === 'error'
+                  ? detailResource.state.error
+                  : t('runs.notFound')
               }
               onRetry={detailResource.reload}
             />
           ) : detailLoading ? (
-            <LoadingState label="正在加载运行详情…" />
+            <LoadingState label={t('runs.detailLoading')} />
           ) : detailRun || knownDurable ? (
             <RunDetail
               runId={route.runId}

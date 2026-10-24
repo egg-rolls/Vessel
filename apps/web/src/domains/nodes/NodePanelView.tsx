@@ -11,7 +11,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Button } from '../../components/ui';
+import { Button, SearchInput } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
@@ -21,8 +21,9 @@ import { displayGatewayUrl } from '../../gateway/url';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
 import { AddNodeDialog } from './AddNodeDialog';
-import { matchesNodeQuery, nodeDisplayNames } from './display-names';
+import { matchesNodeQuery } from './display-names';
 import { NodeDetailView } from './NodeDetailView';
+import { useNodeNames } from './useNodeNames';
 
 type NodesRoute = Extract<Route, { domain: 'nodes' }>;
 
@@ -101,35 +102,22 @@ function NodesList({
     () => new Map(entries.map((entry) => [nodeKeyOf(entry.node), entry])),
     [entries],
   );
-  const displayNames = useMemo(
+  const healthNames = useMemo(
     () =>
-      nodeDisplayNames(
-        nodes.map((node) => {
-          const entry = entryByKey.get(nodeKeyOf(node));
-          const healthName = entry?.health?.node.name;
-          return {
-            key: nodeKeyOf(node),
-            name: node.name,
-            url: node.url,
-            ...(node.nodeId ? { nodeId: node.nodeId } : {}),
-            ...(healthName ? { healthName } : {}),
-          };
-        }),
-        pageOrigin(),
+      new Map(
+        entries.flatMap((entry) =>
+          entry.health?.node.name ? [[nodeKeyOf(entry.node), entry.health.node.name]] : [],
+        ),
       ),
-    [nodes, entryByKey],
+    [entries],
   );
+  const displayNames = useNodeNames(healthNames);
 
   const visible = useMemo(
     () =>
       nodes.filter((node) => {
         const key = nodeKeyOf(node);
-        return matchesNodeQuery(
-          displayNames.get(key) ?? node.name,
-          node.nodeId ?? key,
-          node.name,
-          query,
-        );
+        return matchesNodeQuery(displayNames.get(key) ?? '—', node.nodeId ?? key, node.name, query);
       }),
     [nodes, displayNames, query],
   );
@@ -174,7 +162,7 @@ function NodesList({
           <NodeRow
             key={nodeKeyOf(node)}
             node={node}
-            displayName={displayNames.get(nodeKeyOf(node)) ?? node.name}
+            displayName={displayNames.get(nodeKeyOf(node)) ?? '—'}
             entry={entryByKey.get(nodeKeyOf(node))}
             onOpen={() => openNode(node)}
             {...(node.current ? {} : { onRemove: () => setRemoveTarget(node) })}
@@ -198,14 +186,11 @@ function NodesList({
       <div className="domain-content">
         {nodes.length > 0 && (
           <div className="filter-bar net-toolbar">
-            <input
-              className="input search-input"
-              type="search"
+            <SearchInput
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={setQuery}
               placeholder={t('nodes.search')}
-              aria-label={t('nodes.search')}
-              spellCheck={false}
+              ariaLabel={t('nodes.search')}
             />
           </div>
         )}

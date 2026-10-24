@@ -1,5 +1,6 @@
 /** 统一状态展示：字形 + 文本 + 颜色（颜色只是增强）。 */
 import type { StatusKind } from '../gateway/types';
+import { t } from '../i18n';
 import { Tooltip } from './Tooltip';
 
 export interface StatusMeta {
@@ -8,22 +9,41 @@ export interface StatusMeta {
   tone: 'muted' | 'info' | 'warn' | 'ok' | 'danger';
 }
 
-export const STATUS_META: Record<StatusKind, StatusMeta> = {
-  queued: { glyph: '○', label: '排队', tone: 'muted' },
-  running: { glyph: '◐', label: '运行中', tone: 'info' },
-  waiting: { glyph: '!', label: '等待确认', tone: 'warn' },
-  cancelling: { glyph: '◑', label: '取消中', tone: 'warn' },
-  interrupted: { glyph: '‖', label: '已中断', tone: 'warn' },
-  completed: { glyph: '✓', label: '已完成', tone: 'ok' },
-  failed: { glyph: '✗', label: '失败', tone: 'danger' },
-  cancelled: { glyph: '–', label: '已取消', tone: 'muted' },
-  skipped: { glyph: '·', label: '已跳过', tone: 'muted' },
-  pending: { glyph: '·', label: '待执行', tone: 'muted' },
-  connected: { glyph: '✓', label: '已连接', tone: 'ok' },
-  disconnected: { glyph: '✗', label: '未连接', tone: 'danger' },
-  unreachable: { glyph: '!', label: '不可达', tone: 'danger' },
-  disabled: { glyph: '–', label: '已停用', tone: 'muted' },
-  unavailable: { glyph: '?', label: '不可用', tone: 'muted' },
+const STATUS_LABEL_KEYS: Record<StatusKind, string> = {
+  queued: 'status.queued',
+  running: 'status.running',
+  waiting: 'status.waiting',
+  cancelling: 'status.cancelling',
+  interrupted: 'status.interrupted',
+  completed: 'status.completed',
+  failed: 'status.failed',
+  cancelled: 'status.cancelled',
+  skipped: 'status.skipped',
+  pending: 'status.pending',
+  connected: 'status.connected',
+  disconnected: 'status.disconnected',
+  unreachable: 'status.unreachable',
+  disabled: 'status.disabled',
+  unavailable: 'status.unavailable',
+};
+
+/** 字形与语义色不随语言变化；文案由 statusLabel() 从 catalog 读取。 */
+export const STATUS_META: Record<StatusKind, Omit<StatusMeta, 'label'>> = {
+  queued: { glyph: '○', tone: 'muted' },
+  running: { glyph: '◐', tone: 'info' },
+  waiting: { glyph: '!', tone: 'warn' },
+  cancelling: { glyph: '◑', tone: 'warn' },
+  interrupted: { glyph: '‖', tone: 'warn' },
+  completed: { glyph: '✓', tone: 'ok' },
+  failed: { glyph: '✗', tone: 'danger' },
+  cancelled: { glyph: '–', tone: 'muted' },
+  skipped: { glyph: '·', tone: 'muted' },
+  pending: { glyph: '·', tone: 'muted' },
+  connected: { glyph: '✓', tone: 'ok' },
+  disconnected: { glyph: '✗', tone: 'danger' },
+  unreachable: { glyph: '!', tone: 'danger' },
+  disabled: { glyph: '–', tone: 'muted' },
+  unavailable: { glyph: '?', tone: 'muted' },
 };
 
 const ALIASES: Record<string, StatusKind> = {
@@ -50,13 +70,13 @@ export function normalizeStatus(raw: string | undefined): StatusKind {
 }
 
 export function statusMeta(raw: string | undefined): StatusMeta {
-  return STATUS_META[normalizeStatus(raw)];
+  return { ...STATUS_META[normalizeStatus(raw)], label: statusLabel(raw) };
 }
 
 export function statusLabel(raw: string | undefined): string {
-  if (!raw) return STATUS_META.pending.label;
-  if (KNOWN.has(raw)) return STATUS_META[raw as StatusKind].label;
-  return ALIASES[raw] ? STATUS_META[ALIASES[raw]].label : raw;
+  if (!raw) return t(STATUS_LABEL_KEYS.pending);
+  if (KNOWN.has(raw)) return t(STATUS_LABEL_KEYS[raw as StatusKind]);
+  return ALIASES[raw] ? t(STATUS_LABEL_KEYS[ALIASES[raw]]) : raw;
 }
 
 /**

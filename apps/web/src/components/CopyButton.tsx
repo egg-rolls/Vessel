@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { t } from '../i18n';
 import { useToast } from './ToastProvider';
 import { Tooltip } from './Tooltip';
 
@@ -21,8 +22,8 @@ async function copyText(text: string): Promise<void> {
 
 export function CopyButton({
   text,
-  label = '复制',
-  toast: toastLabel = '已复制',
+  label = t('common.copy'),
+  toast: toastLabel = t('common.copied'),
   className = 'link-btn',
 }: {
   text: string;
@@ -51,7 +52,7 @@ export function CopyButton({
             });
         }}
       >
-        {copied ? '已复制' : label}
+        {copied ? t('common.copied') : label}
       </button>
     </Tooltip>
   );
