@@ -63,6 +63,48 @@ export interface AgentCreateLikeInput {
   /** team_id 解析出的 workspace；缺省 = AgentService 的默认 workspace 规则。 */
   workspace?: string;
   visibility?: AgentVisibilityLike;
+  /**
+   * 发送者 / 所有者身份。只由合成 owner principal 填入（root owner id）；
+   * gateway 不传，沿用 AgentService 的 `DEFAULT_OWNER`。
+   */
+  owner?: string;
+  /** 同 `owner`，合成 owner 创建的成员与 owner 建立父子关系。 */
+  parent_id?: string;
+}
+
+/** `agents.list` 的过滤条件；viewer 用于 private 可见性。 */
+export interface AgentListLikeInput {
+  viewer?: string;
+  visibility?: AgentVisibilityLike;
+  state?: AgentStateLike | readonly AgentStateLike[];
+  parent_id?: string;
+}
+
+/** `agents.send` 的单个条目（strict send：不 resume）。 */
+export interface AgentSendLikeInput {
+  to: string;
+  content: string;
+  conversation_id?: string;
+  /** 合成 owner principal 的 agent id；缺省由 app 适配器使用 DEFAULT_OWNER。 */
+  from?: string;
+}
+
+/** `agents.dispatch` 的单个条目。 */
+export interface AgentDispatchLikeInput {
+  to: string;
+  content: string;
+  conversation_id?: string;
+  allow_fork?: boolean;
+  from?: string;
+}
+
+/** `agents.rotate` 的单个条目。 */
+export interface AgentRotateLikeInput {
+  to: string;
+  startup_prompt: string;
+  handoff_path?: string;
+  from_session_id?: string;
+  from?: string;
 }
 
 /** `agents.update` 的单个条目。 */
@@ -109,6 +151,52 @@ export interface AgentCloseBatchResultLike {
   results: AgentCloseItemLike[];
 }
 
+/** `agents.send` 成功条目：strict send 已入队。 */
+export interface AgentSendOkLike {
+  ok: true;
+  queued: true;
+  message_id: string;
+  state: AgentStateLike;
+}
+
+export type AgentSendItemLike = AgentSendOkLike | AgentLifecycleFailLike;
+
+export interface AgentSendBatchResultLike {
+  results: AgentSendItemLike[];
+}
+
+/** `agents.dispatch` 成功条目：统一 dispatch 的结果（resolution 为 live/resumed/rotating/forked）。 */
+export interface AgentDispatchOkLike {
+  ok: true;
+  status: 'queued';
+  message_id: string;
+  resolved_to: string;
+  resolution: 'live' | 'resumed' | 'rotating' | 'forked';
+  conversation_id?: string;
+}
+
+export type AgentDispatchItemLike = AgentDispatchOkLike | AgentLifecycleFailLike;
+
+export interface AgentDispatchBatchResultLike {
+  results: AgentDispatchItemLike[];
+}
+
+/** `agents.rotate` 成功条目：Body 已切换。 */
+export interface AgentRotateOkLike {
+  ok: true;
+  status: 'rotated';
+  agent_id: string;
+  from_session_id: string;
+  to_session_id: string;
+  epoch: number;
+}
+
+export type AgentRotateItemLike = AgentRotateOkLike | AgentLifecycleFailLike;
+
+export interface AgentRotateBatchResultLike {
+  results: AgentRotateItemLike[];
+}
+
 /**
  * 注入的 Agent 生命周期控制面；`tenantId` 决定 canonical RPC 的 tenant 作用域。
  * 未注入 / tenant 不匹配时 `agents.create|update|close` 返回 `not_found`。
@@ -123,4 +211,17 @@ export interface AgentControlLike {
   close(agentIds: string[]): Promise<AgentCloseBatchResultLike>;
   /** 按成员 id / 当前 Body session 查找（忽略可见性）；未知返回 undefined。 */
   get(agentId: string): Promise<AgentStatusLike | undefined>;
+  /** 成员列表；viewer 决定 private 可见性。 */
+  list(input?: AgentListLikeInput): Promise<AgentStatusLike[]>;
+  /**
+   * 按 dispatch 的寻址规则（id / 当前 Body session / 唯一 present name）解析目标。
+   * 未知或同名歧义返回 undefined；只用于 team-scoped token 的作用域校验。
+   */
+  resolve(target: string): Promise<AgentStatusLike | undefined>;
+  /** 批量 strict send（不 resume）；条目并行，结果与输入同序。 */
+  send(inputs: AgentSendLikeInput[]): Promise<AgentSendBatchResultLike>;
+  /** 批量 dispatch；条目并行，结果与输入同序。 */
+  dispatch(inputs: AgentDispatchLikeInput[]): Promise<AgentDispatchBatchResultLike>;
+  /** 批量 rotate；条目并行，结果与输入同序。 */
+  rotate(inputs: AgentRotateLikeInput[]): Promise<AgentRotateBatchResultLike>;
 }

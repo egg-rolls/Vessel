@@ -97,6 +97,13 @@ export interface RpcMethodContext {
     token_id?: string;
     /** S5：token 绑定的 hub */
     hub_id?: string;
+    /**
+     * 合成传输（loopback owner）携带的 agent 身份。
+     *
+     * 缺省（gateway / team token）表示人类调用者，handler 以 `human` 作为
+     * from / viewer；owner 传输填 root owner id，恢复 private 可见性与回复路径。
+     */
+    agent_id?: string;
   };
   /** 本次请求实际作用的目标 tenant（admin 可显式指定） */
   tenantId: string;
@@ -232,6 +239,11 @@ const CONTROL_SCOPE_METHODS: ReadonlySet<string> = new Set([
   // S10.3：team-scoped token 只能更新 / 归档自己的 team；create 不在白名单。
   'teams.update',
   'teams.archive',
+  // 0.26：team-scoped token 只能对同 team 成员 send / dispatch / rotate
+  // （handler 逐条校验 team_id；create 仍不在白名单）。
+  'agents.send',
+  'agents.dispatch',
+  'agents.rotate',
   'events.subscribe',
   'interactions.list',
   'permission.respond',

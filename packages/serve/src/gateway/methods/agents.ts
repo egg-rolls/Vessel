@@ -13,7 +13,12 @@
 import type {
   AgentControlLike,
   AgentCreateLikeInput,
+  AgentDispatchLikeInput,
   AgentLifecycleFailLike,
+  AgentRotateLikeInput,
+  AgentSendLikeInput,
+  AgentStateLike,
+  AgentStatusLike,
   AgentUpdateLikeInput,
   AgentVisibilityLike,
 } from '../../agent-control.js';
@@ -108,6 +113,30 @@ function publicAgent(entry: AgentRegistryEntry): Record<string, unknown> {
   };
 }
 
+/**
+ * owner viewer 的 `agents.list` 条目：agentInfoSchema 的超集（additive）。
+ * `depth` 是注册表字段，成员没有嵌套深度，统一为 0。
+ */
+function publicMember(entry: AgentStatusLike): Record<string, unknown> {
+  return {
+    id: entry.id,
+    depth: 0,
+    state: entry.state,
+    session_id: entry.session_id,
+    ...(entry.name !== undefined ? { name: entry.name } : {}),
+    ...(entry.parent_id !== undefined ? { parent_id: entry.parent_id } : {}),
+    ...(entry.current_tool !== undefined ? { current_tool: entry.current_tool } : {}),
+    ...(entry.usage !== undefined ? { usage: entry.usage } : {}),
+    ...(entry.owner !== undefined ? { owner: entry.owner } : {}),
+    ...(entry.visibility !== undefined ? { visibility: entry.visibility } : {}),
+    ...(entry.presence !== undefined ? { presence: entry.presence } : {}),
+    ...(entry.membership !== undefined ? { membership: entry.membership } : {}),
+    ...(entry.team_id !== undefined ? { team_id: entry.team_id } : {}),
+    ...(entry.epoch !== undefined ? { epoch: entry.epoch } : {}),
+    ...(entry.last_seen !== undefined ? { last_seen: entry.last_seen } : {}),
+  };
+}
+
 /** `agents.tree`：AgentCard + children_ids（0.15 E5）。 */
 function publicAgentCard(
   entry: AgentRegistryEntry,
@@ -169,21 +198,54 @@ function fail(code: string, error: string): AgentLifecycleFailLike {
   return { ok: false, code, error };
 }
 
+/** 批量数组必须是对象数组；结构错误整体拒绝（类型错误不是业务失败）。 */
+function requireObjectEntries(
+  params: Record<string, unknown>,
+  key: string,
+  method: string,
+): Array<Record<string, unknown>> {
+  const value = params[key];
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new RpcError('invalid_params', `${method}: ${key} must be a non-empty array`);
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new RpcError('invalid_params', `${method}: ${key}[${index}] must be an object`);
+    }
+    return entry as Record<string, unknown>;
+  });
+}
+
 /** `agents` 数组必须是对象数组；结构错误整体拒绝（类型错误不是业务失败）。 */
 function requireAgentEntries(
   params: Record<string, unknown>,
   method: string,
 ): Array<Record<string, unknown>> {
-  const value = params.agents;
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new RpcError('invalid_params', `${method}: agents must be a non-empty array`);
-  }
-  return value.map((entry, index) => {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      throw new RpcError('invalid_params', `${method}: agents[${index}] must be an object`);
-    }
-    return entry as Record<string, unknown>;
-  });
+  return requireObjectEntries(params, 'agents', method);
+}
+
+/**
+ * 发送者 / viewer 身份：合成 owner principal 用 owner agent id；gateway / team
+ * token 没有 agent_id，按人类 `human` 处理（与 canonical Web 行为一致）。
+ */
+function actorOf(ctx: RpcMethodContext): string {
+  return ctx.principal.agent_id ?? 'human';
+}
+
+/**
+ * team-scoped control token 的目标作用域校验：只允许操作 `team_id` 相同的成员。
+ * 非 scoped token 不做额外解析（沿用服务自身的寻址与错误语义）。
+ * `byName` 打开时按 dispatch 的寻址规则解析（dispatch / rotate 接受唯一名字）。
+ */
+async function targetInTeamScope(
+  control: AgentControlLike,
+  scope: string | undefined,
+  target: string,
+  byName: boolean,
+): Promise<boolean> {
+  if (scope === undefined) return true;
+  const status = byName ? await control.resolve(target) : await control.get(target);
+  return status !== undefined && status.team_id === scope;
 }
 
 /** 可选非空字符串；缺省 undefined，存在但非法 → invalid_params。 */
@@ -262,6 +324,120 @@ const agentLifecycleResultSchema = {
   },
 };
 
+const agentStateEnum = [
+  'created',
+  'idle',
+  'running',
+  'waiting_permission',
+  'completed',
+  'failed',
+  'cancelled',
+  'closed',
+  'stale',
+];
+
+const agentActionFailProperties = {
+  code: { type: 'string' },
+  error: { type: 'string' },
+};
+
+const agentSendResultSchema = {
+  type: 'object',
+  required: ['results'],
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['ok'],
+        properties: {
+          ok: { type: 'boolean' },
+          queued: { type: 'boolean' },
+          message_id: { type: 'string' },
+          state: { type: 'string', enum: agentStateEnum },
+          ...agentActionFailProperties,
+        },
+      },
+    },
+  },
+};
+
+const agentDispatchResultSchema = {
+  type: 'object',
+  required: ['results'],
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['ok'],
+        properties: {
+          ok: { type: 'boolean' },
+          status: { type: 'string', enum: ['queued'] },
+          message_id: { type: 'string' },
+          resolved_to: { type: 'string' },
+          resolution: { type: 'string', enum: ['live', 'resumed', 'rotating', 'forked'] },
+          conversation_id: { type: 'string' },
+          ...agentActionFailProperties,
+        },
+      },
+    },
+  },
+};
+
+const agentRotateResultSchema = {
+  type: 'object',
+  required: ['results'],
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['ok'],
+        properties: {
+          ok: { type: 'boolean' },
+          status: { type: 'string', enum: ['rotated'] },
+          agent_id: { type: 'string' },
+          from_session_id: { type: 'string' },
+          to_session_id: { type: 'string' },
+          epoch: { type: 'integer', minimum: 0 },
+          ...agentActionFailProperties,
+        },
+      },
+    },
+  },
+};
+
+const agentSendEntrySchema = {
+  type: 'object',
+  required: ['to', 'content'],
+  properties: {
+    to: { type: 'string', minLength: 1 },
+    content: { type: 'string', minLength: 1 },
+    conversation_id: { type: 'string', minLength: 1 },
+  },
+};
+
+const agentDispatchEntrySchema = {
+  type: 'object',
+  required: ['to', 'content'],
+  properties: {
+    ...agentSendEntrySchema.properties,
+    allow_fork: { type: 'boolean' },
+  },
+};
+
+const agentRotateEntrySchema = {
+  type: 'object',
+  required: ['to', 'startup_prompt'],
+  properties: {
+    to: { type: 'string', minLength: 1 },
+    startup_prompt: { type: 'string', minLength: 1 },
+    handoff_path: { type: 'string', minLength: 1 },
+    from_session_id: { type: 'string', minLength: 1 },
+  },
+};
+
 export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[] {
   return [
     {
@@ -272,6 +448,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         properties: {
           session_id: { type: 'string' },
           state: { type: 'string' },
+          // 0.26：owner 传输用 viewer 列出成员时可按可见性过滤。
+          visibility: { type: 'string', enum: ['private', 'team', 'tenant'] },
         },
       },
       result_schema: {
@@ -281,9 +459,33 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           agents: { type: 'array', items: agentInfoSchema },
         },
       },
-      handler: (params, ctx) => {
+      handler: async (params, ctx) => {
         const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
         const state = typeof params.state === 'string' ? params.state : undefined;
+        const visibility =
+          params.visibility === 'private' ||
+          params.visibility === 'team' ||
+          params.visibility === 'tenant'
+            ? params.visibility
+            : undefined;
+        // 合成 owner principal 携带 agent id：按 viewer 从 AgentService 列出成员，
+        // private 可见性与 CLI `vessel agent list` 的语义保持不变。
+        const viewer = ctx.principal.agent_id;
+        if (
+          viewer !== undefined &&
+          deps.agent !== undefined &&
+          deps.agent.tenantId === ctx.tenantId
+        ) {
+          const members = await deps.agent.list({
+            viewer,
+            ...(state !== undefined ? { state: state as AgentStateLike } : {}),
+            ...(visibility !== undefined ? { visibility } : {}),
+          });
+          const agents = members
+            .filter((entry) => sessionId === undefined || entry.session_id === sessionId)
+            .map(publicMember);
+          return { agents };
+        }
         const agents = [...collectAgents(deps, ctx.tenantId).values()]
           .filter((entry) => sessionId === undefined || entry.session_id === sessionId)
           .filter((entry) => state === undefined || entry.state === state)
@@ -438,6 +640,9 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 model: { type: 'string', minLength: 1 },
                 system_prompt: { type: 'string' },
                 team_id: { type: 'string', minLength: 1 },
+                // 只有合成 owner principal（CLI）能直接传 workspace；
+                // gateway / Web 走 team_id（只绑定已存在的 Team）。
+                workspace: { type: 'string', minLength: 1 },
                 visibility: {
                   type: 'string',
                   enum: ['private', 'team', 'tenant'],
@@ -452,6 +657,9 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         const control = requireAgentControl(deps.agent, ctx);
         const entries = requireAgentEntries(params, 'agents.create');
         const scope = teamScopeOf(ctx);
+        // 合成 owner principal：新成员归属 / 父子关系沿用 owner 语义。
+        const ownerId = ctx.principal.agent_id;
+        const identity = ownerId !== undefined ? { owner: ownerId, parent_id: ownerId } : {};
         if (scope !== undefined) {
           return {
             results: entries.map(() => fail('forbidden', 'team-scoped token cannot create agents')),
@@ -479,6 +687,33 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
 
         const prepared = await Promise.all(
           entries.map(async (entry): Promise<Prepared<AgentCreateLikeInput>> => {
+            // CLI 的 `--workspace` 是 owner 传输特权：保留显式 workspace 绑定的语义，
+            // 但 gateway / Web 不能伪造主机路径（逐条拒绝）。
+            const rawWorkspace = optionalEntryString(entry, 'workspace', 'agents.create');
+            if (rawWorkspace !== undefined) {
+              if (ownerId === undefined) {
+                return {
+                  failure: fail(
+                    'invalid_params',
+                    'workspace is only allowed for the owner transport',
+                  ),
+                };
+              }
+              const name = optionalEntryString(entry, 'name', 'agents.create');
+              const model = optionalEntryString(entry, 'model', 'agents.create');
+              const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
+              const visibility = optionalVisibility(entry, 'agents.create');
+              return {
+                input: {
+                  ...(name !== undefined ? { name } : {}),
+                  workspace: rawWorkspace,
+                  ...(model !== undefined ? { model } : {}),
+                  ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
+                  ...(visibility !== undefined ? { visibility } : {}),
+                  ...identity,
+                },
+              };
+            }
             const teamId = optionalEntryString(entry, 'team_id', 'agents.create');
             if (teamId !== undefined) {
               const workspace = await resolveWorkspace(teamId, deps.teams);
@@ -501,6 +736,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   ...(model !== undefined ? { model } : {}),
                   ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                   ...(visibility !== undefined ? { visibility } : {}),
+                  ...identity,
                 },
               };
             }
@@ -514,6 +750,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 ...(model !== undefined ? { model } : {}),
                 ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                 ...(visibility !== undefined ? { visibility } : {}),
+                ...identity,
               },
             };
           }),
@@ -661,6 +898,177 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           .map((entry) => entry.input);
         if (ids.length === 0) return mergeBatchResults(prepared, []);
         const batch = await control.close(ids);
+        return mergeBatchResults(prepared, batch.results);
+      },
+    },
+    {
+      /**
+       * `agents.send`（0.26，write）：批量 strict send（不 resume）。
+       *
+       * 发送者来自 principal：合成 owner principal 用 owner agent id，
+       * gateway / team token 用 `human`。team-scoped token 只能发送给同 team 成员。
+       */
+      name: 'agents.send',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['messages'],
+        properties: {
+          messages: { type: 'array', items: agentSendEntrySchema },
+        },
+      },
+      result_schema: agentSendResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireAgentControl(deps.agent, ctx);
+        const entries = requireObjectEntries(params, 'messages', 'agents.send');
+        const scope = teamScopeOf(ctx);
+        const from = actorOf(ctx);
+
+        const prepared = await Promise.all(
+          entries.map(async (entry): Promise<Prepared<AgentSendLikeInput>> => {
+            const to = optionalEntryString(entry, 'to', 'agents.send');
+            const content = optionalEntryString(entry, 'content', 'agents.send');
+            if (to === undefined || content === undefined) {
+              return {
+                failure: fail('invalid_params', 'to and content must be non-empty strings'),
+              };
+            }
+            if (!(await targetInTeamScope(control, scope, to, false))) {
+              return { failure: fail('not_found', `agent not found: ${to}`) };
+            }
+            const conversationId = optionalEntryString(entry, 'conversation_id', 'agents.send');
+            return {
+              input: {
+                to,
+                content,
+                from,
+                ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+              },
+            };
+          }),
+        );
+
+        const inputs = prepared
+          .filter((entry): entry is { input: AgentSendLikeInput } => 'input' in entry)
+          .map((entry) => entry.input);
+        if (inputs.length === 0) return mergeBatchResults(prepared, []);
+        const batch = await control.send(inputs);
+        return mergeBatchResults(prepared, batch.results);
+      },
+    },
+    {
+      /**
+       * `agents.dispatch`（0.26，write）：批量统一投递（gone 先 resume，可 fork）。
+       *
+       * 业务拒绝（agent_left / resume_failed / not_visible / budget_* …）是逐条
+       * `{ ok: false, code, error }`，不拖垮同批其它条目。
+       */
+      name: 'agents.dispatch',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['messages'],
+        properties: {
+          messages: { type: 'array', items: agentDispatchEntrySchema },
+        },
+      },
+      result_schema: agentDispatchResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireAgentControl(deps.agent, ctx);
+        const entries = requireObjectEntries(params, 'messages', 'agents.dispatch');
+        const scope = teamScopeOf(ctx);
+        const from = actorOf(ctx);
+
+        const prepared = await Promise.all(
+          entries.map(async (entry): Promise<Prepared<AgentDispatchLikeInput>> => {
+            const to = optionalEntryString(entry, 'to', 'agents.dispatch');
+            const content = optionalEntryString(entry, 'content', 'agents.dispatch');
+            if (to === undefined || content === undefined) {
+              return {
+                failure: fail('invalid_params', 'to and content must be non-empty strings'),
+              };
+            }
+            if (entry.allow_fork !== undefined && typeof entry.allow_fork !== 'boolean') {
+              return { failure: fail('invalid_params', 'allow_fork must be a boolean') };
+            }
+            if (!(await targetInTeamScope(control, scope, to, true))) {
+              return { failure: fail('not_found', `agent not found: ${to}`) };
+            }
+            const conversationId = optionalEntryString(entry, 'conversation_id', 'agents.dispatch');
+            return {
+              input: {
+                to,
+                content,
+                from,
+                ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+                ...(entry.allow_fork !== undefined ? { allow_fork: entry.allow_fork } : {}),
+              },
+            };
+          }),
+        );
+
+        const inputs = prepared
+          .filter((entry): entry is { input: AgentDispatchLikeInput } => 'input' in entry)
+          .map((entry) => entry.input);
+        if (inputs.length === 0) return mergeBatchResults(prepared, []);
+        const batch = await control.dispatch(inputs);
+        return mergeBatchResults(prepared, batch.results);
+      },
+    },
+    {
+      /**
+       * `agents.rotate`（0.26，write）：批量换 Body。
+       *
+       * 人类路径（owner / gateway）不传 `from_session_id`，可 rotate 任意可见成员；
+       * 成员工具路径仍由 AgentService 以 `from_session_id` 收紧为只能 rotate 自己。
+       */
+      name: 'agents.rotate',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['agents'],
+        properties: {
+          agents: { type: 'array', items: agentRotateEntrySchema },
+        },
+      },
+      result_schema: agentRotateResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireAgentControl(deps.agent, ctx);
+        const entries = requireObjectEntries(params, 'agents', 'agents.rotate');
+        const scope = teamScopeOf(ctx);
+        const from = actorOf(ctx);
+
+        const prepared = await Promise.all(
+          entries.map(async (entry): Promise<Prepared<AgentRotateLikeInput>> => {
+            const to = optionalEntryString(entry, 'to', 'agents.rotate');
+            const startupPrompt = optionalEntryString(entry, 'startup_prompt', 'agents.rotate');
+            if (to === undefined || startupPrompt === undefined) {
+              return {
+                failure: fail('invalid_params', 'to and startup_prompt must be non-empty strings'),
+              };
+            }
+            if (!(await targetInTeamScope(control, scope, to, true))) {
+              return { failure: fail('not_found', `agent not found: ${to}`) };
+            }
+            const handoffPath = optionalEntryString(entry, 'handoff_path', 'agents.rotate');
+            const fromSessionId = optionalEntryString(entry, 'from_session_id', 'agents.rotate');
+            return {
+              input: {
+                to,
+                startup_prompt: startupPrompt,
+                from,
+                ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
+                ...(fromSessionId !== undefined ? { from_session_id: fromSessionId } : {}),
+              },
+            };
+          }),
+        );
+
+        const inputs = prepared
+          .filter((entry): entry is { input: AgentRotateLikeInput } => 'input' in entry)
+          .map((entry) => entry.input);
+        if (inputs.length === 0) return mergeBatchResults(prepared, []);
+        const batch = await control.rotate(inputs);
         return mergeBatchResults(prepared, batch.results);
       },
     },

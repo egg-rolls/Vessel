@@ -138,11 +138,34 @@ export const agentInfoSchema = {
     depth: { type: 'integer', minimum: 0 },
     state: {
       type: 'string',
-      enum: ['idle', 'queued', 'running', 'completed', 'failed', 'cancelled', 'error', 'closed'],
+      enum: [
+        // 注册表派生状态
+        'idle',
+        'queued',
+        'running',
+        'completed',
+        'failed',
+        'cancelled',
+        'error',
+        'closed',
+        // 0.26：AgentService 成员状态（owner viewer）
+        'created',
+        'waiting_permission',
+        'stale',
+      ],
     },
     current_tool: { type: 'string' },
     session_id: { type: 'string' },
     usage: usageSchema,
+    // 0.26 additive：owner viewer 从 AgentService 列出的成员字段。
+    name: { type: 'string' },
+    owner: { type: 'string' },
+    visibility: { type: 'string', enum: ['private', 'team', 'tenant'] },
+    presence: { type: 'string', enum: ['live', 'gone'] },
+    membership: { type: 'string', enum: ['present', 'left'] },
+    team_id: { type: 'string' },
+    epoch: { type: 'integer', minimum: 0 },
+    last_seen: { type: 'number' },
   },
 };
 
