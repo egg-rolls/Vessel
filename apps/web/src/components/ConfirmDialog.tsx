@@ -37,7 +37,6 @@ export function ConfirmDialog({
       onClose={onCancel}
       closeOnBackdrop={!busy}
       size="sm"
-      className="confirm-dialog"
     >
       <h2 className="modal-title">{title}</h2>
       <div id={bodyId} className="modal-body">

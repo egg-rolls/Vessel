@@ -55,7 +55,9 @@
   background: var(--surface-2);
 }
 
-.attention-request {
+.attention-request,
+.attention-kind,
+.attention-cell {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

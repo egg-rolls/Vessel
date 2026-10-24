@@ -63,6 +63,16 @@
   color: var(--ink);
 }
 
+/* 每行是 dl 网格里的一个整体：display: contents 让 dt / dd 重新落到父网格的两列。 */
+.diag-list > .display-setting-row {
+  display: contents;
+}
+
+/* 错误列表是一串整行条目，不能沿用 diag-list 的两列网格（否则会左右交错）。 */
+.diag-list.diag-errors {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .plain-list {
   display: flex;
   flex-direction: column;
