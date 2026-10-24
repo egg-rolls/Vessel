@@ -628,11 +628,17 @@ export class DefaultTeamService implements AgentTeamService {
     return generateConversationId(this.newId);
   }
 
+  /**
+   * 唯一 roster 排序来源（DECISION-038 §2.3）：返回**已排序**的完整 present roster。
+   * `get` 的窗口、`roster`、`listForCaller` 与 federation team-info 都复用此顺序，
+   * 不得在别处再排序。
+   */
   private async rosterFor(teamId: string, viewer?: string): Promise<TeamMemberSummary[]> {
     const statuses = await this.listVisible(viewer);
     return statuses
       .filter((status) => status.team_id === teamId && status.membership === 'present')
-      .map(toMemberSummary);
+      .map(toMemberSummary)
+      .sort(compareRoster);
   }
 
   /**
@@ -943,7 +949,10 @@ function normalizeMembersLimit(value: number | undefined): number {
   return Math.min(value, MAX_MEMBERS_LIMIT);
 }
 
-/** live 优先 → last_seen 降序（缺失最后）→ name 字典序（缺失最后，同缺失保持稳定） */
+/**
+ * TeamService 唯一 roster 顺序（DECISION-038 §2.3）：
+ * live 优先 → last_seen 降序（缺失最后）→ name 字典序（缺失最后，同缺失保持稳定）。
+ */
 function compareRoster(left: TeamMemberSummary, right: TeamMemberSummary): number {
   const leftLive = left.presence === 'live';
   const rightLive = right.presence === 'live';
@@ -963,11 +972,12 @@ function compareRoster(left: TeamMemberSummary, right: TeamMemberSummary): numbe
   return 0;
 }
 
+/** 只截断，不再排序：顺序唯一来源是 `rosterFor`（DECISION-038 §2.3）。 */
 function windowRoster(
   members: readonly TeamMemberSummary[],
   limit: number | undefined,
 ): TeamMemberSummary[] {
-  return [...members].sort(compareRoster).slice(0, normalizeMembersLimit(limit));
+  return members.slice(0, normalizeMembersLimit(limit));
 }
 
 /** dispatch 前置抬头（只进投递正文，不进 Team 日志） */

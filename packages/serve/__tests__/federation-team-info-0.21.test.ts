@@ -223,14 +223,13 @@ describe('federation team-info', () => {
     expect(teams.reads).toBe(0);
   });
 
-  it('defaults to 20 members, live first, then last_seen desc, then name', async () => {
+  it('preserves the roster order (no second sort) and only applies the window', async () => {
     const teams = new FakeTeams();
     const members: TeamMemberLike[] = [];
-    // gone 成员 last_seen 更大，仍排在 live 之后。
-    members.push(member('zeta', { presence: 'live', last_seen: 10 }));
-    members.push(member('alpha', { presence: 'gone', last_seen: 9_999 }));
+    // 故意用非规范顺序（gone 且 last_seen 最大在前）：若这里再排序就会变红。
+    members.push(member('zeta', { presence: 'gone', last_seen: 9_999 }));
+    members.push(member('alpha', { presence: 'live', last_seen: 10 }));
     for (let i = 0; i < 22; i += 1) {
-      // 偶数 live / 奇数 gone；last_seen 随 index 递减。
       members.push(
         member(`m${String(i).padStart(2, '0')}`, {
           presence: i % 2 === 0 ? 'live' : 'gone',
@@ -238,7 +237,10 @@ describe('federation team-info', () => {
         }),
       );
     }
-    teams.team = detail(members);
+    // 真实 TeamService.get 缺省只返回窗口；team-info 与窗口同序（保序过滤后）。
+    const window = members.slice(0, 20);
+    teams.team = detail(window);
+    teams.rosterMembers = members;
     const response = await teamInfo(routeFor(teams, { allowDirectory: true }), request());
     const body = (await response.json()) as {
       member_count: number;
@@ -247,15 +249,35 @@ describe('federation team-info', () => {
     };
     expect(body.member_count).toBe(24);
     expect(body.members).toHaveLength(20);
-    // live 段内 last_seen 降序：m00 (1000) > m02 (998) > ... > zeta (10)。
-    expect(body.members[0]).toMatchObject({ name: 'm00', presence: 'live' });
-    expect(body.members[1]).toMatchObject({ name: 'm02', presence: 'live' });
-    expect(body.members[1]?.last_seen).toBe(998);
-    expect(body.members[11]).toMatchObject({ name: 'zeta', presence: 'live' });
-    // 即使 gone 的 last_seen 更大，也排在 live 之后。
-    expect(body.members[12]).toMatchObject({ name: 'alpha', presence: 'gone' });
-    // 截断后不包含最旧的 gone 成员。
+    expect(body.members.map((entry) => entry.name)).toEqual(
+      window.map((entry) => entry.name ?? ''),
+    );
+    // 输入顺序原样保留：gone 的 zeta 仍在最前。
+    expect(body.members[0]).toMatchObject({ name: 'zeta', presence: 'gone', last_seen: 9_999 });
     expect(body.members.some((entry) => entry.name === 'm21')).toBe(false);
+  });
+
+  it('keeps the input order after dropping private / left / unnamed members', async () => {
+    const teams = new FakeTeams();
+    teams.rosterMembers = [
+      member('zeta', { presence: 'gone', last_seen: 9_999 }),
+      member('hidden', { visibility: 'private', presence: 'live', last_seen: 500 }),
+      member('alpha', { presence: 'live', last_seen: 20 }),
+      member(undefined),
+      member('left', { membership: 'left', last_seen: 400 }),
+      member('gamma', { presence: 'live', last_seen: 10 }),
+    ];
+    teams.team = detail([]);
+    const response = await teamInfo(routeFor(teams, { allowDirectory: true }), request());
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      member_count: number;
+      online_count: number;
+      members: Array<{ name: string }>;
+    };
+    expect(body.member_count).toBe(3);
+    expect(body.online_count).toBe(2);
+    expect(body.members.map((entry) => entry.name)).toEqual(['zeta', 'alpha', 'gamma']);
   });
 
   it('counts the full roster even when get returns a windowed member list', async () => {

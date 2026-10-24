@@ -181,6 +181,14 @@ describe('teams.get member window (0.21)', () => {
       'gone-999',
       'gone-none',
     ]);
+
+    // roster 是唯一排序来源：完整 roster 与 get 的窗口同序，窗口只是前缀。
+    const roster = await service.roster('alpha');
+    const fullIds = full?.members.map((member) => member.agent_id) ?? [];
+    expect(roster.map((member) => member.agent_id)).toEqual(fullIds);
+    expect(windowed?.members.map((member) => member.agent_id)).toEqual(
+      roster.slice(0, 3).map((member) => member.agent_id),
+    );
   });
 });
 

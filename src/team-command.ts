@@ -140,7 +140,9 @@ function formatTeamGet(result: unknown): string {
     ui.kv('members', String(team.member_count ?? members.length)),
     ui.kv('online', String(team.online_count ?? 0)),
   ];
-  lines.push('', ui.section(`Members (${members.length}):`));
+  // 窗口大小 N 与完整 roster 总数 M 分开显示；缺失 member_count 时回退 N。
+  const totalMembers = asNumber(team.member_count) ?? members.length;
+  lines.push('', ui.section(`Members (${members.length} of ${totalMembers}):`));
   if (members.length === 0) {
     lines.push(`  ${ui.dim('No members.')}`);
   } else {

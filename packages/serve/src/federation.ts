@@ -197,23 +197,12 @@ function parseTeamInfoRequest(record: Record<string, unknown>): TeamInfoParseRes
 
 type NamedTeamMember = TeamMemberLike & { name: string };
 
-/** live 优先 → last_seen 降序（缺失最后）→ name 字典序。 */
-function compareDirectoryMembers(a: NamedTeamMember, b: NamedTeamMember): number {
-  const liveDelta = Number(b.presence === 'live') - Number(a.presence === 'live');
-  if (liveDelta !== 0) return liveDelta;
-  const aSeen =
-    typeof a.last_seen === 'number' && Number.isFinite(a.last_seen) ? a.last_seen : undefined;
-  const bSeen =
-    typeof b.last_seen === 'number' && Number.isFinite(b.last_seen) ? b.last_seen : undefined;
-  if (aSeen !== undefined && bSeen !== undefined && aSeen !== bSeen) return bSeen - aSeen;
-  if (aSeen === undefined && bSeen !== undefined) return 1;
-  if (aSeen !== undefined && bSeen === undefined) return -1;
-  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
-}
-
 /**
  * 只统计 present、非 private 且有名字的成员；计数与列表用同一集合，
  * 避免通过 `member_count` 泄漏 private 成员存在性。`members_limit` 只截断列表。
+ *
+ * 顺序唯一来源是 `TeamService.rosterFor`：这里只做保序过滤 + 截断，**不得再排序**，
+ * 否则会出现第二套顺序（DECISION-038 §2.3）。
  *
  * `members` 必须是**完整** roster（不能用 `get` 的窗口结果），否则计数会少报。
  */
@@ -231,16 +220,13 @@ function buildTeamInfo(
       member.name !== '',
   );
   const names = new Set(eligible.map((member) => member.name));
-  const members: FederationTeamInfoMember[] = [...eligible]
-    .sort(compareDirectoryMembers)
-    .slice(0, limit)
-    .map((member) => {
-      const entry: FederationTeamInfoMember = { name: member.name, presence: member.presence };
-      if (typeof member.last_seen === 'number' && Number.isFinite(member.last_seen)) {
-        entry.last_seen = member.last_seen;
-      }
-      return entry;
-    });
+  const members: FederationTeamInfoMember[] = eligible.slice(0, limit).map((member) => {
+    const entry: FederationTeamInfoMember = { name: member.name, presence: member.presence };
+    if (typeof member.last_seen === 'number' && Number.isFinite(member.last_seen)) {
+      entry.last_seen = member.last_seen;
+    }
+    return entry;
+  });
 
   const info: FederationTeamInfo = {
     protocol: FEDERATION_PROTOCOL,
