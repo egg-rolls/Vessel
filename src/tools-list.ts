@@ -1,8 +1,8 @@
 /**
  * `--tools` 的工具清单——不构造 AgentRuntime、不需要 API Key。
  *
- * 输出口径固定为 headless 口径：默认 3 个（bash / edit / read）；
- * `agent.enabled: true` 时额外列出 canonical `agent`（0.17）。
+ * 输出口径固定为 headless 口径：默认 4 个（bash / edit / read / agent）；
+ * 显式 `agent.enabled: false` 时只列出 3 个能力工具。
  * `ask_user` 仅在交互 REPL（TTY）或 gateway / serve 下注册（见 cli.ts / bootstrap.ts），
  * 因此一次性命令里不列出，由调用方在末尾注明。
  */
@@ -65,9 +65,9 @@ export async function listTools(): Promise<ToolsListing> {
     }
   }
 
-  // `--tools` 是一次性只读命令：按 headless 口径；只有显式 agent.enabled 才列出
-  // canonical agent。
-  const agentEnabled = config.agent?.enabled === true;
+  // `--tools` 是一次性只读命令：按 headless 口径；agent 缺省开启，
+  // 显式 `agent.enabled: false` 才隐藏 canonical agent。
+  const agentEnabled = config.agent?.enabled !== false;
 
   const pluginNamesWithFactories = [...pluginNames];
   if (agentEnabled) {

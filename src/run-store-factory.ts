@@ -1,7 +1,7 @@
 /**
  * Durable RunStore 装配（0.3 A1）。
  *
- * - 只有 `durable.enabled: true` 才创建 store；默认关闭时与 0.2 完全一致。
+ * - 只有 `durable.enabled !== false` 才创建 store；缺省开启，显式 false 时不创建。
  * - file 后端目录支持 `~` 展开；目录创建由 core 的 FileRunStore 负责。
  * - 生命周期由 bootstrap.shutdown() 在最后关闭（checkpoint 写入先完成）。
  */
@@ -36,7 +36,7 @@ export function resolveDurableOptions(
 ): ResolvedDurableOptions {
   const durable = config.durable;
   return {
-    enabled: durable?.enabled === true,
+    enabled: durable?.enabled !== false,
     backend: durable?.backend ?? DEFAULT_DURABLE_OPTIONS.backend,
     path: durable?.path ?? opts.tenantRunsDir ?? DEFAULT_DURABLE_OPTIONS.path,
     checkpointEvery: 'iteration',

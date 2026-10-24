@@ -193,25 +193,25 @@ it('--version 打印根 package.json 版本，exit 0', async () => {
   expect(stdout.trim()).toBe(rootVersion);
 });
 
-it('--tools 列出 headless 口径的 3 个能力工具且不需要 Key', async () => {
+it('--tools 默认列出 headless 口径的 4 个工具且不需要 Key', async () => {
   const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' });
   expect(exitCode).toBe(0);
-  expect(stdout).toContain('Tools (3):');
-  for (const name of ['bash', 'read', 'edit']) {
+  expect(stdout).toContain('Tools (4):');
+  for (const name of ['bash', 'read', 'edit', 'agent']) {
     expect(stdout).toContain(`- ${name}:`);
   }
   expect(stdout).not.toContain('- delegate_task:');
   expect(stdout).toContain('ask_user (interactive REPL / gateway only)');
 });
 
-it('--tools 在 agent.enabled 时列出 agent', async () => {
+it('--tools 在显式 agent.enabled: false 时只列出 3 个能力工具', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-agent-only-'));
   try {
-    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'agent:\n  enabled: true\n');
+    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'agent:\n  enabled: false\n');
     const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' }, '', tmpDir);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('Tools (4):');
-    expect(stdout).toContain('- agent:');
+    expect(stdout).toContain('Tools (3):');
+    expect(stdout).not.toContain('- agent:');
     expect(stdout).not.toContain('- delegate_task:');
     expect(stdout).not.toContain('- team_spawn:');
   } finally {

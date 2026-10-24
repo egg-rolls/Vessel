@@ -78,7 +78,10 @@ describe('runResumeList', () => {
   it('durable 关闭：明确提示，exit 0', async () => {
     const dir = tmpDir();
     try {
-      const paths = writeConfig(dir, 'provider:\n  name: openai\n  model: gpt-4\n');
+      const paths = writeConfig(
+        dir,
+        'provider:\n  name: openai\n  model: gpt-4\ndurable:\n  enabled: false\n',
+      );
       const result = await capture(() => runResumeList(paths));
       expect(result.code).toBe(0);
       expect(result.out).toContain('not enabled');

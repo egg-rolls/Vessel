@@ -50,7 +50,7 @@ function pathsOf(config: VesselConfig) {
   return errorsOf(config).map((e) => e.path);
 }
 
-describe('0.3 默认值（保持 0.2 行为）', () => {
+describe('0.3 默认值', () => {
   it('DEFAULT_CONFIG 不注入 mcpServers/durable/serve', () => {
     expect(DEFAULT_CONFIG.mcpServers).toBeUndefined();
     expect(DEFAULT_CONFIG.durable).toBeUndefined();
@@ -65,7 +65,7 @@ describe('0.3 默认值（保持 0.2 行为）', () => {
       toolPrefix: true,
     });
     expect(DEFAULT_DURABLE_OPTIONS).toEqual({
-      enabled: false,
+      enabled: true,
       backend: 'file',
       path: '~/.vessel/runs',
       checkpointEvery: 'iteration',

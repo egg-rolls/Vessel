@@ -2,6 +2,7 @@
  * Eval harness 接线（0.4 A2）。
  *
  * - `@vessel-agent/evals` 是库 + runner，不向 PluginHost 注册工具；
+ * - 缺省开启；显式 `evals.enabled: false` 才关闭；
  * - 默认离线 mock；真实 provider 必须 `config.evals.allowNetwork === true`
  *   且 CLI `--allow-network` 同时成立（Addendum C §12.1.3 / Addendum D §13.4）；
  * - 报告命名 / 写盘 / latest 查找由 ext 的 report.ts 负责；asm 只传 outDir/--out
@@ -33,7 +34,7 @@ export function resolveEvalsOptions(
   opts: TenantPathOptions = {},
 ): ResolvedEvalsOptions {
   return {
-    enabled: config.evals?.enabled === true,
+    enabled: config.evals?.enabled !== false,
     dir: resolveEvalsDir(config),
     outDir: resolveEvalsOutDir(config, opts),
     allowNetwork: config.evals?.allowNetwork ?? DEFAULT_EVALS_OPTIONS.allowNetwork,
@@ -65,10 +66,10 @@ export interface EvalsRunnerOptions {
 
 /**
  * 构造 eval runner。
- * @throws error.code=eval_invalid `evals.enabled !== true` 或模块缺失
+ * @throws error.code=eval_invalid `evals.enabled === false` 或模块缺失
  */
 export async function createEvalsRunner(options: EvalsRunnerOptions): Promise<EvalRunnerLike> {
-  if (options.config.evals?.enabled !== true) {
+  if (options.config.evals?.enabled === false) {
     const error = evalError('eval_invalid', 'evals.enabled is false (disabled)');
     throw error;
   }
@@ -116,7 +117,7 @@ export interface ExecuteEvalResult {
  * 退出码：0 全部 passed/skipped；1 存在 failed/error。
  */
 export async function executeEvalSuite(options: ExecuteEvalOptions): Promise<ExecuteEvalResult> {
-  if (options.config.evals?.enabled !== true) {
+  if (options.config.evals?.enabled === false) {
     throw evalError('eval_invalid', 'evals.enabled is false (disabled)');
   }
 
@@ -162,7 +163,7 @@ export async function latestEvalReport(
   options: EvalsRunnerOptions,
   suite: string,
 ): Promise<EvalReport | null> {
-  if (options.config.evals?.enabled !== true) return null;
+  if (options.config.evals?.enabled === false) return null;
   if (!isSafeSuiteName(suite)) return null;
 
   try {

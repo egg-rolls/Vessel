@@ -1,20 +1,27 @@
 /**
  * 0.17 A4 agent 装配决策。
  *
- * 故障形态：未显式启用也注册 agent（默认工具面漂移），或成员设置仍从
- * 已删除的 delegate / team 块读取。
+ * 故障形态：显式禁用仍然注册 agent，或成员设置仍从已删除的 delegate /
+ * team 块读取。
  */
 
 import { describe, expect, it } from 'bun:test';
 import { resolveAgentWiring } from '../agent-wiring';
 
 describe('resolveAgentWiring', () => {
-  it('keeps agent disabled unless agent.enabled is true', () => {
-    expect(resolveAgentWiring({}, { headless: true }).agentEnabled).toBe(false);
-    expect(resolveAgentWiring({}, { headless: false }).agentEnabled).toBe(false);
+  it('enables agent by default and only disables on explicit false', () => {
+    expect(resolveAgentWiring({}, { headless: true }).agentEnabled).toBe(true);
+    expect(resolveAgentWiring({}, { headless: false }).agentEnabled).toBe(true);
+    expect(resolveAgentWiring({ agent: {} }, { headless: true }).agentEnabled).toBe(true);
     expect(resolveAgentWiring({ agent: { enabled: true } }, { headless: true }).agentEnabled).toBe(
       true,
     );
+    expect(resolveAgentWiring({ agent: { enabled: false } }, { headless: true }).agentEnabled).toBe(
+      false,
+    );
+    expect(
+      resolveAgentWiring({ agent: { enabled: false } }, { headless: false }).agentEnabled,
+    ).toBe(false);
   });
 
   it('defaults visibility to private and followReplies to false', () => {

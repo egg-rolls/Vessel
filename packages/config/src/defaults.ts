@@ -63,12 +63,12 @@ export const DEFAULT_MCP_SERVER_OPTIONS: Required<
 
 /**
  * 0.3 durable 默认值。
- * 不写入 DEFAULT_CONFIG：默认关闭，关闭时不创建 RunStore、0.2 行为不变。
+ * 不写入 DEFAULT_CONFIG：默认开启；显式 `durable.enabled: false` 时不创建 RunStore。
  */
 export const DEFAULT_DURABLE_OPTIONS: Required<
   Pick<DurableConfig, 'enabled' | 'backend' | 'path' | 'checkpointEvery'>
 > = {
-  enabled: false,
+  enabled: true,
   backend: 'file',
   path: '~/.vessel/runs',
   checkpointEvery: 'iteration',
@@ -88,10 +88,10 @@ export const DEFAULT_SERVE_OPTIONS: Required<
 
 /**
  * 0.4 evals 默认值。
- * 不写入 DEFAULT_CONFIG：默认关闭且完全离线。
+ * 不写入 DEFAULT_CONFIG：默认开启，但仍完全离线（allowNetwork 默认 false）。
  */
 export const DEFAULT_EVALS_OPTIONS: Required<EvalsConfig> = {
-  enabled: false,
+  enabled: true,
   dir: './evals',
   outDir: '~/.vessel/evals',
   allowNetwork: false,

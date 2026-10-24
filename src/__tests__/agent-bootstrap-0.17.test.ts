@@ -66,20 +66,32 @@ async function boot(options: {
 }
 
 describe('agent bootstrap 0.17', () => {
-  it('interactive default: bash/read/edit/ask_user without the agent service', async () => {
+  it('interactive default: agent service and agent tool are on (0.24)', async () => {
     const { result } = await boot({ headless: false, interactive: true });
 
-    expect(result.agent).toBeUndefined();
+    expect(result.agent).toBeDefined();
     const tools = toolNames(result);
-    for (const name of ['bash', 'read', 'edit', 'ask_user']) {
+    for (const name of ['bash', 'read', 'edit', 'ask_user', 'agent']) {
       expect(tools).toContain(name);
     }
-    expect(tools).not.toContain('agent');
     expect(tools.filter((name) => name.startsWith('team_'))).toEqual([]);
     expect(tools).not.toContain('delegate_task');
     const pluginNames = result.bundle?.plugins.map((plugin) => plugin.name) ?? [];
     expect(pluginNames).not.toContain('team');
     expect(pluginNames).not.toContain('delegate-task');
+  });
+
+  it('explicit agent.enabled=false keeps the service and agent tool off', async () => {
+    const { result } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: false\n',
+    });
+
+    expect(result.agent).toBeUndefined();
+    const tools = toolNames(result);
+    expect(tools).toContain('ask_user');
+    expect(tools).not.toContain('agent');
   });
 
   it('interactive with agent.enabled exposes agent and a live owner endpoint', async () => {
@@ -196,11 +208,11 @@ describe('agent bootstrap 0.17', () => {
     expect(seen).toContain('agent.closed');
   });
 
-  it('headless default: no agent service and no legacy lifecycle tools', async () => {
+  it('headless default: agent service is on and no legacy lifecycle tools', async () => {
     const { result } = await boot({ headless: true, interactive: false });
-    expect(result.agent).toBeUndefined();
+    expect(result.agent).toBeDefined();
     const tools = toolNames(result);
-    expect(tools).not.toContain('agent');
+    expect(tools).toContain('agent');
     expect(tools).not.toContain('delegate_task');
     expect(tools.filter((name) => name.startsWith('team_'))).toEqual([]);
   });

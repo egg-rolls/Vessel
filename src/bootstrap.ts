@@ -1122,10 +1122,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(team.policy !== undefined ? { policy: team.policy } : {}),
     }));
     const defaultWorkspace = resolveDefaultTeamWorkspace(config, teamDeclarations, logger);
-    // 0.21 S8.2：只在 federation 启用时注入端口；未启用行为不变。
+    // 0.21 S8.2：federation 缺省启用；显式 `federation.enabled: false` 才不注入。
     const federation =
-      config.federation?.enabled === true
-        ? createFederationSendPort({ federation: config.federation, nodeId })
+      config.federation?.enabled !== false
+        ? createFederationSendPort({ federation: config.federation ?? {}, nodeId })
         : undefined;
     const wiring = await createAgentServiceWiring({
       tenantId,

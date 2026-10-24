@@ -36,13 +36,14 @@ async function storeWith(...checkpoints: RunCheckpoint[]): Promise<MemoryRunStor
 }
 
 describe('durable options', () => {
-  it('默认关闭，默认值来自 DEFAULT_DURABLE_OPTIONS', () => {
+  it('默认开启，默认值来自 DEFAULT_DURABLE_OPTIONS', () => {
     expect(resolveDurableOptions({})).toEqual({
-      enabled: false,
+      enabled: true,
       backend: 'file',
       path: '~/.vessel/runs',
       checkpointEvery: 'iteration',
     });
+    expect(resolveDurableOptions({ durable: { enabled: false } }).enabled).toBe(false);
   });
 
   it('enabled / backend / path 覆盖', () => {
@@ -65,9 +66,12 @@ describe('durable options', () => {
     expect(resolveRunStorePath('/abs/runs')).toBe('/abs/runs');
   });
 
-  it('durable 关闭不创建 store；memory/file 选择正确', () => {
-    expect(createRunStore({})).toBeUndefined();
+  it('显式 durable 关闭不创建 store；memory/file 选择正确', () => {
+    expect(createRunStore({ durable: { enabled: false } })).toBeUndefined();
     expect(createRunStore({ durable: { enabled: false, backend: 'memory' } })).toBeUndefined();
+
+    // 缺省开启：用 memory 后端验证，避免测试写用户 home。
+    expect(createRunStore({ durable: { backend: 'memory' } })).toBeInstanceOf(MemoryRunStore);
 
     expect(createRunStore({ durable: { enabled: true, backend: 'memory' } })).toBeInstanceOf(
       MemoryRunStore,

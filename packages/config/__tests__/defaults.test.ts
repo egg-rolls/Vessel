@@ -69,6 +69,31 @@ describe('DEFAULT_CONFIG', () => {
   });
 });
 
+describe('0.24 default-on switches', () => {
+  it('hub.auto_start maps to autoStart and can be disabled; absent stays undefined (default on)', async () => {
+    const disabled = await loadConfig({
+      configPath: tmpYaml('hub:\n  auto_start: false\n'),
+      userConfigPath: missingPath(),
+    });
+    expect(disabled.validation.errors).toEqual([]);
+    expect(disabled.config.hub?.autoStart).toBe(false);
+
+    const absent = await loadConfig({
+      configPath: missingPath(),
+      userConfigPath: missingPath(),
+    });
+    expect(absent.config.hub?.autoStart).toBeUndefined();
+  });
+
+  it('agent.enabled stays undefined unless explicitly disabled', async () => {
+    const disabled = await loadConfig({
+      configPath: tmpYaml('agent:\n  enabled: false\n'),
+      userConfigPath: missingPath(),
+    });
+    expect(disabled.config.agent?.enabled).toBe(false);
+  });
+});
+
 describe('provider-aware 默认 model', () => {
   it('openai 缺 model 时补 gpt-4', async () => {
     const { config } = await loadConfig({
