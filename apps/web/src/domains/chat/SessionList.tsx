@@ -4,6 +4,7 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
+import { SearchInput } from '../../components/ui';
 import { relativeTime } from '../../format';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -106,19 +107,19 @@ export function SessionList({
     if (committing.current) return;
     const title = normalizeSessionTitle(draft);
     if (!title) {
-      setRenameError('标题不能为空，且不超过 512 个字符');
+      setRenameError(t('chat.sessionList.renameEmpty'));
       return;
     }
     committing.current = true;
     const ok = await onRename(sessionId, title);
     committing.current = false;
     if (ok) cancelRename();
-    else setRenameError('重命名失败，请重试');
+    else setRenameError(t('chat.sessionList.renameFailed'));
   };
 
   const copyId = (sessionId: string) => {
     if (!navigator.clipboard?.writeText) {
-      toast.error('当前环境不支持剪贴板');
+      toast.error(t('common.clipboardUnsupported'));
       return;
     }
     void navigator.clipboard
@@ -132,9 +133,9 @@ export function SessionList({
   return (
     <div className="session-column">
       <div className="column-header">
-        <h2 className="column-title">会话</h2>
+        <h2 className="column-title">{t('chat.sessionList.title')}</h2>
         <button type="button" className="btn btn-small btn-primary" onClick={onNew}>
-          ＋ 新建
+          {t('chat.sessionList.new')}
         </button>
         {compact && (
           <IconButton label={t('nav.closeSessions')} onClick={onCloseDrawer}>
@@ -144,50 +145,47 @@ export function SessionList({
       </div>
 
       <div className="session-controls">
-        <input
-          className="input search-input"
+        <SearchInput
           value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="搜索会话"
-          type="search"
-          aria-label="搜索会话"
-          spellCheck={false}
+          onChange={onQueryChange}
+          placeholder={t('chat.sessionList.search')}
+          ariaLabel={t('chat.sessionList.search')}
         />
       </div>
 
       <div className="session-scroll">
         {error && sessions.length > 0 && (
-          <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={onRetry} />
+          <StaleNotice message={t('common.staleData', { detail: error })} onRetry={onRetry} />
         )}
         {error && sessions.length === 0 ? (
           <ErrorState message={error} onRetry={onRetry} />
         ) : !hasToken ? (
           <EmptyState
-            title="连接 gateway 后显示会话"
+            title={t('chat.sessionList.noConnection')}
             action={
               <button type="button" className="btn" onClick={onOpenConnection}>
-                配置连接
+                {t('common.configureConnection')}
               </button>
             }
           />
         ) : loading && sessions.length === 0 ? (
-          <LoadingState label="正在加载会话…" />
+          <LoadingState label={t('chat.sessionList.loading')} />
         ) : sessions.length === 0 ? (
           query.trim() ? (
             <EmptyState
-              title={`没有匹配“${query.trim()}”的会话。`}
+              title={t('chat.sessionList.noMatch', { query: query.trim() })}
               action={
                 <button type="button" className="btn" onClick={() => onQueryChange('')}>
-                  清除搜索
+                  {t('common.clearSearch')}
                 </button>
               }
             />
           ) : (
             <EmptyState
-              title="还没有会话。"
+              title={t('chat.sessionList.empty')}
               action={
                 <button type="button" className="btn btn-primary" onClick={onNew}>
-                  新建会话
+                  {t('common.newSession')}
                 </button>
               }
             />
@@ -197,8 +195,8 @@ export function SessionList({
             {draftActive && (
               <div className="session-row draft active">
                 <div className="session-main">
-                  <span className="session-title">新会话</span>
-                  <span className="session-preview">发送第一条消息后创建</span>
+                  <span className="session-title">{t('chat.draft.title')}</span>
+                  <span className="session-preview">{t('chat.draft.meta')}</span>
                 </div>
               </div>
             )}
@@ -232,7 +230,7 @@ export function SessionList({
                             ref={renameRef}
                             className="input"
                             value={draft}
-                            aria-label="会话标题"
+                            aria-label={t('chat.sessionList.idLabel')}
                             onFocus={(event) => event.currentTarget.select()}
                             onChange={(event) => {
                               setDraft(event.target.value);
@@ -302,11 +300,11 @@ export function SessionList({
                             )}
                           </button>
                           <ActionMenu
-                            label={`会话 ${title} 的操作`}
+                            label={t('chat.sessionList.actions', { title })}
                             items={[
                               {
                                 id: 'rename',
-                                label: '重命名',
+                                label: t('chat.sessionList.rename'),
                                 disabled: writesDisabled,
                                 onSelect: () => startRename(session),
                               },
@@ -317,12 +315,12 @@ export function SessionList({
                               },
                               {
                                 id: 'runs',
-                                label: '查看运行',
+                                label: t('chat.sessionList.viewRuns'),
                                 onSelect: () => onViewRuns(session.session_id),
                               },
                               {
                                 id: 'delete',
-                                label: '删除会话',
+                                label: t('chat.sessionList.delete'),
                                 danger: true,
                                 disabled: writesDisabled,
                                 onSelect: () => onDelete(session),
@@ -338,7 +336,7 @@ export function SessionList({
             ))}
             {hiddenCount > 0 && (
               <button type="button" className="load-more" onClick={onShowMore}>
-                显示更多（还有 {hiddenCount} 个）
+                {t('chat.sessionList.showMore', { count: hiddenCount })}
               </button>
             )}
           </>

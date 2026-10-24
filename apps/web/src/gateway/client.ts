@@ -10,6 +10,7 @@
  * （见 gatewayUrl.ts）。跨 Origin 时 gateway 必须配置 `serve.allowed_origins`。
  */
 
+import { t } from '../i18n';
 import { unwrapAgentResult } from './agent-result';
 import type { ListedInteraction, ListedInteractionPage } from './interaction-hydration';
 import { permissionRespondParams } from './interactions';
@@ -197,7 +198,7 @@ export class GatewayClient {
     } catch (error) {
       if (error instanceof GatewayHttpError) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new GatewayHttpError('network', '连接 gateway 超时');
+        throw new GatewayHttpError('network', t('gateway.client.timeout'));
       }
       throw new GatewayHttpError('network', error instanceof Error ? error.message : String(error));
     } finally {
@@ -211,7 +212,7 @@ export class GatewayClient {
    */
   connect(token: string, since = 0, tenantId?: string): Promise<void> {
     const tk = token.trim();
-    if (!tk) return Promise.reject(new Error('token 不能为空'));
+    if (!tk) return Promise.reject(new Error(t('gateway.client.tokenRequired')));
     if (this.state === 'open') return Promise.resolve();
     if (this.state === 'connecting' && this.connectResolve) {
       return new Promise<void>((resolve, reject) => {
@@ -266,14 +267,14 @@ export class GatewayClient {
 
       ws.addEventListener('error', () => {
         // close 事件会带 code；这里只保证 connect 不会永远挂起。
-        if (this.state === 'connecting') this.failConnect('WebSocket 连接失败');
+        if (this.state === 'connecting') this.failConnect(t('gateway.client.wsFailed'));
       });
 
       ws.addEventListener('close', (event) => {
         if (this.ws !== ws) return;
         this.ws = null;
         this.lastCloseCode = event.code;
-        this.rejectPending(new Error(`连接已关闭（${event.code}）`));
+        this.rejectPending(new Error(t('gateway.client.closedWithCode', { code: event.code })));
         const message = closeMessage(event.code);
         if (this.state === 'connecting') {
           this.failConnect(message);
@@ -373,13 +374,13 @@ export class GatewayClient {
   request<T>(method: string, params?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN || !this.helloInfo) {
-      return Promise.reject(new Error('gateway 尚未连接'));
+      return Promise.reject(new Error(t('gateway.client.notConnected')));
     }
     const id = crypto.randomUUID();
     return new Promise<T>((resolve, reject) => {
       const timer = window.setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`请求超时：${method}`));
+        reject(new Error(t('gateway.client.requestTimeout', { method })));
       }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
@@ -395,7 +396,7 @@ export class GatewayClient {
     this.ws = null;
     this.token = null;
     this.helloInfo = null;
-    this.rejectPending(new Error('连接已关闭'));
+    this.rejectPending(new Error(t('gateway.client.closed')));
     if (ws) {
       ws.close();
     }
@@ -853,7 +854,9 @@ export class GatewayClient {
 
   private async httpJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const token = this.token;
-    if (!token) throw new GatewayHttpError('unauthorized', '缺少 gateway token');
+    if (!token) {
+      throw new GatewayHttpError('unauthorized', t('gateway.client.tokenRequiredHttp'));
+    }
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
 
@@ -980,16 +983,16 @@ function normalizeMessages(raw: unknown): Message[] {
 function closeMessage(code: number): string {
   switch (code) {
     case 4400:
-      return '协议版本不兼容（需要 vessel.gateway/1）';
+      return t('gateway.connection.protocolMismatch');
     case 4401:
-      return '鉴权失败（token 错误或已失效）';
+      return t('gateway.connection.authFailed');
     case 4403:
-      return '无权访问该 tenant';
+      return t('gateway.connection.forbiddenTenant');
     case 1001:
-      return 'gateway 已停止';
+      return t('gateway.client.stopped');
     case 1006:
-      return '无法连接 gateway（未启动或地址错误）';
+      return t('gateway.client.unreachable');
     default:
-      return `连接已关闭（${code}）`;
+      return t('gateway.client.closedWithCode', { code });
   }
 }

@@ -6,6 +6,8 @@
  * 非回环必须 https；HTTPS 页面拒绝 http（mixed content）。
  */
 
+import { t } from '../i18n';
+
 export const GATEWAY_URL_KEY = 'vessel.gateway-url';
 
 export interface GatewayUrlCheck {
@@ -29,25 +31,25 @@ export function checkGatewayUrl(raw: string, pageProtocol = 'http:'): GatewayUrl
   const trimmed = raw.trim();
   if (trimmed === '') return { ok: true, value: '' };
   if (trimmed === '*') {
-    return { ok: false, value: '', error: '不支持通配符 gateway 地址' };
+    return { ok: false, value: '', error: t('gateway.url.wildcard') };
   }
 
   let url: URL;
   try {
     url = new URL(trimmed);
   } catch {
-    return { ok: false, value: '', error: '请输入完整的 gateway 地址（如 https://host:8642）' };
+    return { ok: false, value: '', error: t('gateway.url.incomplete') };
   }
 
   const scheme = url.protocol.toLowerCase();
   if (scheme !== 'http:' && scheme !== 'https:' && scheme !== 'ws:' && scheme !== 'wss:') {
-    return { ok: false, value: '', error: 'gateway 地址只支持 http(s)/ws(s)' };
+    return { ok: false, value: '', error: t('gateway.url.scheme') };
   }
   if (url.username !== '' || url.password !== '') {
-    return { ok: false, value: '', error: 'gateway 地址不能包含用户名或密码' };
+    return { ok: false, value: '', error: t('gateway.url.credentials') };
   }
   if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
-    return { ok: false, value: '', error: '只填写 scheme://host[:port]，不要带路径或参数' };
+    return { ok: false, value: '', error: t('gateway.url.path') };
   }
 
   const httpScheme = scheme === 'ws:' ? 'http:' : scheme === 'wss:' ? 'https:' : scheme;
@@ -57,14 +59,14 @@ export function checkGatewayUrl(raw: string, pageProtocol = 'http:'): GatewayUrl
     return {
       ok: false,
       value: '',
-      error: '非回环 gateway 必须使用 HTTPS（wss）',
+      error: t('gateway.url.https'),
     };
   }
   if (pageProtocol === 'https:' && httpScheme === 'http:') {
     return {
       ok: false,
       value: '',
-      error: 'HTTPS 页面不能连接 http:// gateway（mixed content）',
+      error: t('gateway.url.mixed'),
     };
   }
 

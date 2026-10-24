@@ -63,10 +63,10 @@ export function Composer({
   }, [submitting, hasToken, connected, disabled]);
 
   const placeholder = !hasToken
-    ? '请先在设置 → 连接中配置 gateway token'
+    ? t('chat.composer.placeholderNoToken')
     : !connected
-      ? '连接断开，重连后可继续发送'
-      : '输入 prompt';
+      ? t('chat.composer.placeholderDisconnected')
+      : t('chat.composer.placeholder');
 
   return (
     <ChatDock>
@@ -86,7 +86,7 @@ export function Composer({
                 {stopping ? t('chat.run.stopping') : t('chat.run.stop')}
               </button>
             )}
-            <span className="composer-hint dim">Enter 发送 · Shift+Enter 换行</span>
+            <span className="composer-hint dim">{t('chat.composer.hint')}</span>
           </span>
         </div>
         <div className="composer-row">
@@ -115,11 +115,11 @@ export function Composer({
           />
           {!hasToken || !connected ? (
             <Button variant="primary" onClick={onOpenConnection}>
-              配置连接
+              {t('common.configureConnection')}
             </Button>
           ) : (
             <Button variant="primary" onClick={onSubmit} disabled={!canSend}>
-              {submitting ? '发送中' : '发送'}
+              {submitting ? t('chat.composer.sending') : t('chat.composer.send')}
             </Button>
           )}
         </div>

@@ -1,17 +1,28 @@
 import { useState } from 'react';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { useNodes } from '../../gateway/NodeProvider';
+import { nodeKeyOf } from '../../gateway/nodes';
 import { displayGatewayUrl } from '../../gateway/url';
 import { t, useLocale } from '../../i18n';
+import { useNodeNames } from '../nodes/useNodeNames';
 
-const STATE_LABELS: Record<string, string> = {
-  idle: '未连接',
-  connecting: '连接中…',
-  open: 'online',
-  reconnecting: '重连中…',
-  closed: '已断开',
-  error: '连接失败',
-};
+function stateLabel(state: string): string {
+  switch (state) {
+    case 'connecting':
+      return t('nav.conn.connecting');
+    case 'open':
+      return t('status.connected');
+    case 'reconnecting':
+      return t('nav.conn.reconnecting');
+    case 'closed':
+      return t('nav.conn.closed');
+    case 'error':
+      return t('nav.conn.error');
+    default:
+      return t('nav.conn.idle');
+  }
+}
 
 /** Settings → Connection：gateway URL / token 唯一入口（顶栏不再放表单）。 */
 export function ConnectionForm() {
@@ -33,6 +44,8 @@ export function ConnectionForm() {
     retry,
     clearTokenError,
   } = useConnection();
+  const { current } = useNodes();
+  const nodeNames = useNodeNames();
   const toast = useToast();
   const [urlDraft, setUrlDraft] = useState(gatewayUrl);
   const [tokenDraft, setTokenDraft] = useState(token);
@@ -47,22 +60,20 @@ export function ConnectionForm() {
       tokenDraft.trim() === token
     ) {
       retry();
-      toast.info('正在重新连接 gateway…');
+      toast.info(t('connection.reconnecting'));
       return;
     }
     if (connect({ gatewayUrl: urlDraft, token: tokenDraft })) {
-      toast.info('正在连接 gateway…');
+      toast.info(t('connection.connecting'));
     }
   };
 
   return (
     <div className="settings-section">
       <section className="panel">
-        <h2 className="section-title">连接 gateway</h2>
+        <h2 className="section-title">{t('connection.title')}</h2>
         <p className="section-desc">
-          {devProxyAuth
-            ? t('settings.connection.devProxyNotice')
-            : 'token 只保存在 sessionStorage；URL 保存在 localStorage。非回环地址必须使用 HTTPS。'}
+          {devProxyAuth ? t('settings.connection.devProxyNotice') : t('connection.description')}
         </p>
         <div className="form-grid">
           <label className="field">
@@ -78,7 +89,7 @@ export function ConnectionForm() {
                 clearTokenError();
               }}
               readOnly={devProxyAuth}
-              placeholder="留空 = 同源（推荐）"
+              placeholder={t('connection.urlPlaceholder')}
               spellCheck={false}
               autoComplete="off"
               aria-invalid={!devProxyAuth && urlError ? true : undefined}
@@ -96,7 +107,9 @@ export function ConnectionForm() {
               </span>
             )}
             <span className="field-hint mono">
-              当前：{displayGatewayUrl(gatewayUrl, window.location.origin)}
+              {t('connection.current', {
+                url: displayGatewayUrl(gatewayUrl, window.location.origin),
+              })}
             </span>
           </label>
 
@@ -111,7 +124,7 @@ export function ConnectionForm() {
                   setTokenDraft(event.target.value);
                   clearTokenError();
                 }}
-                placeholder="gateway token（或通过 #token=… 打开）"
+                placeholder={t('connection.tokenPlaceholder')}
                 spellCheck={false}
                 autoComplete="off"
                 aria-invalid={tokenError ? true : undefined}
@@ -135,7 +148,7 @@ export function ConnectionForm() {
         <div className="form-actions">
           {!devProxyAuth && (
             <button type="button" className="btn btn-primary" onClick={submit}>
-              {connectionState === 'open' ? '重新连接' : '连接'}
+              {connectionState === 'open' ? t('connection.reconnect') : t('connection.connect')}
             </button>
           )}
           <button
@@ -144,7 +157,7 @@ export function ConnectionForm() {
             onClick={retry}
             disabled={!token.trim() || connectionState === 'open'}
           >
-            立即重试
+            {t('connection.retryNow')}
           </button>
           {!devProxyAuth && (
             <button
@@ -153,11 +166,11 @@ export function ConnectionForm() {
               onClick={() => {
                 disconnect();
                 setTokenDraft('');
-                toast.info('已断开并清除 token');
+                toast.info(t('connection.disconnected'));
               }}
               disabled={!token.trim()}
             >
-              断开并清除 token
+              {t('connection.disconnect')}
             </button>
           )}
         </div>
@@ -170,50 +183,47 @@ export function ConnectionForm() {
       </section>
 
       <section className="panel">
-        <h2 className="section-title">诊断</h2>
+        <h2 className="section-title">{t('connection.diagnostics')}</h2>
         <dl className="diag-list">
-          <dt>连接状态</dt>
-          <dd>{STATE_LABELS[connectionState] ?? connectionState}</dd>
+          <dt>{t('connection.state')}</dt>
+          <dd>{stateLabel(connectionState)}</dd>
           <dt>Gateway</dt>
           <dd className="mono">{displayGatewayUrl(gatewayUrl, window.location.origin)}</dd>
-          <dt>协议版本</dt>
+          <dt>{t('connection.protocol')}</dt>
           <dd className="mono">
             {hello ? `v${hello.protocol.version}` : '—'}
             {hello?.protocol.features.includes('tls') ? ' · TLS' : ''}
           </dd>
-          <dt>节点</dt>
-          <dd className="mono">{hello ? hello.node.node_id : '—'}</dd>
-          <dt>租户</dt>
+          <dt>{t('connection.node')}</dt>
+          <dd className="mono">{current ? (nodeNames.get(nodeKeyOf(current)) ?? '—') : '—'}</dd>
+          <dt>{t('connection.tenant')}</dt>
           <dd className="mono">{tenantId ?? '—'}</dd>
-          <dt>最新 seq</dt>
+          <dt>{t('connection.latestSeq')}</dt>
           <dd className="mono">{hello ? hello.latest_seq : '—'}</dd>
-          <dt>Feature 数</dt>
+          <dt>{t('connection.featureCount')}</dt>
           <dd className="mono">
             {hello?.protocol.features.length ?? '—'}
-            {hello ? `（${hello.protocol.features.join(', ')}）` : ''}
+            {hello
+              ? t('connection.featureList', { features: hello.protocol.features.join(', ') })
+              : ''}
           </dd>
           <dt>Close code</dt>
           <dd className="mono">
             {closeCode === null ? '—' : closeCode}
             {closeCode === 4401
-              ? ' · token 无效'
+              ? t('connection.closeCodeToken')
               : closeCode === 4403
-                ? ' · 无权访问该租户'
+                ? t('connection.closeCodeForbidden')
                 : closeCode === 4400
-                  ? ' · 协议不兼容'
+                  ? t('connection.closeCodeProtocol')
                   : ''}
           </dd>
         </dl>
-        {!hello && (
-          <p className="section-desc">
-            连接失败时请依次检查：地址是否可达、Origin 是否在 serve.allowed_origins、 token
-            是否有效、非回环是否使用 HTTPS。
-          </p>
-        )}
+        {!hello && <p className="section-desc">{t('connection.failureHint')}</p>}
       </section>
 
       <p className="sr-only" aria-live="polite">
-        {epoch > 0 && connectionState === 'open' ? '已连接 gateway' : ''}
+        {epoch > 0 && connectionState === 'open' ? t('connection.connected') : ''}
       </p>
     </div>
   );

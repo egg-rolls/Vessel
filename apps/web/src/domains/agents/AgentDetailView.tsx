@@ -12,8 +12,10 @@ import { useToast } from '../../components/ToastProvider';
 import { Button } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
+import { nodeKeyOf } from '../../gateway/nodes';
 import type { RosterAgent } from '../../gateway/team-roster';
 import { t, useLocale } from '../../i18n';
+import { useNodeNames } from '../nodes/useNodeNames';
 import { agentErrorText } from './agent-errors';
 import { agentDisplayName } from './agent-search';
 
@@ -38,6 +40,7 @@ export function AgentDetailView({
   const toast = useToast();
   const { tenantId } = useConnection();
   const { teamControl } = useNodes();
+  const nodeNames = useNodeNames();
   const [closeOpen, setCloseOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
@@ -95,7 +98,7 @@ export function AgentDetailView({
           </div>
           <dl className="diag-list">
             <dt>{t('agents.filter.node')}</dt>
-            <dd>{node.name}</dd>
+            <dd>{nodeNames.get(nodeKeyOf(node)) ?? '—'}</dd>
             <dt>{t('agents.filter.team')}</dt>
             <dd>
               <button type="button" className="link-btn" onClick={onOpenTeam}>

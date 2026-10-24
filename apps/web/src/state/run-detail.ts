@@ -8,13 +8,13 @@ import { INTERNAL_EVENT_TYPES } from './events';
 
 export type RunEventFilter = 'all' | 'llm' | 'tools' | 'errors' | 'internal' | 'other';
 
-export const RUN_EVENT_FILTERS: readonly { id: RunEventFilter; label: string }[] = [
-  { id: 'all', label: '全部' },
-  { id: 'llm', label: 'LLM' },
-  { id: 'tools', label: '工具' },
-  { id: 'errors', label: '错误' },
-  { id: 'internal', label: '内部' },
-  { id: 'other', label: '其它' },
+export const RUN_EVENT_FILTERS: readonly { id: RunEventFilter; labelKey: string }[] = [
+  { id: 'all', labelKey: 'runs.detail.filter.all' },
+  { id: 'llm', labelKey: 'runs.detail.filter.llm' },
+  { id: 'tools', labelKey: 'runs.detail.filter.tools' },
+  { id: 'errors', labelKey: 'runs.detail.filter.errors' },
+  { id: 'internal', labelKey: 'runs.detail.filter.internal' },
+  { id: 'other', labelKey: 'runs.detail.filter.other' },
 ];
 
 /** 默认隐藏的内部事件（含子 agent 的执行细节）。 */

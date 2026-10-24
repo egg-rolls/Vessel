@@ -175,7 +175,7 @@ export function AppShell() {
     // 旧租户的实体（会话/run/MCP）不能留在命令面板里。
     if (plan.clearPaletteEntities) setEntityMap(new Map());
     navigate(plan.route);
-    toast.info('已切换租户；当前选择与事件缓冲已清空');
+    toast.info(t('palette.toast.tenantSwitched'));
   }, [tenantEpoch, navigate, toast]);
 
   // 无显式偏好时，跨 1200 边界自动切换默认展开/折叠。
@@ -220,13 +220,13 @@ export function AppShell() {
             event.type === 'run.cancelled',
         );
       if (!terminal) return;
-      const label =
+      const status =
         terminal.event.type === 'run.completed'
-          ? '已完成'
+          ? t('status.completed')
           : terminal.event.type === 'run.failed'
-            ? '失败'
-            : '已取消';
-      setAnnouncement(`运行 ${terminal.event.run_id.slice(0, 12)} ${label}`);
+            ? t('status.failed')
+            : t('status.cancelled');
+      setAnnouncement(t('app.announce.run', { id: terminal.event.run_id.slice(0, 12), status }));
     });
   }, [eventStore]);
 
@@ -279,9 +279,9 @@ export function AppShell() {
       {
         id: 'action-new-session',
         group: 'action',
-        label: '新建会话',
+        label: t('palette.action.newSession'),
         keywords: ['new', 'session', 'chat'],
-        hint: '动作',
+        hint: t('palette.hint.action'),
         run: () => {
           // 先回到 Chat 再进入 new，确保已在 new 时也会生成新的草稿 id。
           navigate({ domain: 'chat' });
@@ -291,60 +291,60 @@ export function AppShell() {
       {
         id: 'action-resume-run',
         group: 'action',
-        label: '恢复可恢复运行',
+        label: t('palette.action.resumeRun'),
         keywords: ['resume', 'durable', 'interrupted', '恢复'],
-        hint: '动作',
+        hint: t('palette.hint.action'),
         run: () => navigate({ domain: 'runs', tab: 'durable' }),
       },
       {
         id: 'action-tenant',
         group: 'action',
-        label: '切换租户',
+        label: t('palette.action.switchTenant'),
         keywords: ['tenant', 'switch', '租户'],
-        hint: '动作',
+        hint: t('palette.hint.action'),
         run: () => navigate({ domain: 'settings', tab: 'tenants' }),
       },
       {
         id: 'action-connection',
         group: 'action',
-        label: '连接设置',
+        label: t('palette.action.connectionSettings'),
         keywords: ['gateway', 'token', 'url', 'connect'],
-        hint: '动作',
+        hint: t('palette.hint.action'),
         run: () => navigate({ domain: 'settings', tab: 'connection' }),
       },
       {
         id: 'action-config',
         group: 'action',
-        label: '查看配置',
+        label: t('palette.action.viewConfig'),
         keywords: ['config', 'sources'],
-        hint: '动作',
+        hint: t('palette.hint.action'),
         run: () => navigate({ domain: 'settings', tab: 'config' }),
       },
       {
         id: 'action-capabilities',
         group: 'action',
-        label: '查看能力清单',
+        label: t('palette.action.viewCapabilities'),
         keywords: ['capabilities', 'methods'],
-        hint: '动作',
+        hint: t('palette.hint.action'),
         run: () => navigate({ domain: 'settings', tab: 'capabilities' }),
       },
       {
         id: 'action-refresh',
         group: 'action',
-        label: '刷新当前视图',
+        label: t('palette.action.refresh'),
         keywords: ['refresh', 'reload'],
-        hint: '动作',
+        hint: t('palette.hint.action'),
         run: () => {
           requestRefresh();
-          toast.info('已请求刷新当前视图');
+          toast.info(t('palette.toast.refreshed'));
         },
       },
       {
         id: 'help-shortcuts',
         group: 'help',
-        label: '键盘快捷键',
+        label: t('palette.action.shortcuts'),
         keywords: ['help', 'keyboard', 'shortcut'],
-        hint: '帮助',
+        hint: t('palette.hint.help'),
         run: () => setHelpOpen(true),
       },
     ];
@@ -352,12 +352,15 @@ export function AppShell() {
       items.push({
         id: 'action-retry',
         group: 'action',
-        label: connectionState === 'open' ? '检查连接' : '重新连接',
+        label:
+          connectionState === 'open'
+            ? t('palette.action.checkConnection')
+            : t('palette.action.reconnect'),
         keywords: ['reconnect', 'retry'],
-        hint: '动作',
+        hint: t('palette.hint.action'),
         run: () => {
           retry();
-          toast.info('正在重新连接 gateway');
+          toast.info(t('palette.toast.reconnecting'));
         },
       });
     }
@@ -376,9 +379,9 @@ export function AppShell() {
           : {
               ...item,
               confirm: {
-                title: `执行「${item.label}」？`,
-                body: '该操作可能无法撤销。',
-                confirmLabel: '确认执行',
+                title: t('palette.confirm.executeTitle', { label: item.label }),
+                body: t('palette.confirm.executeBody'),
+                confirmLabel: t('palette.confirm.execute'),
               },
             },
       );
@@ -444,7 +447,7 @@ export function AppShell() {
                 <button
                   type="button"
                   className="banner-close"
-                  aria-label="关闭错误提示"
+                  aria-label={t('app.closeError')}
                   onClick={dismissError}
                 >
                   ×
@@ -459,7 +462,7 @@ export function AppShell() {
                   className="link-btn"
                   onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
                 >
-                  打开连接设置
+                  {t('app.openConnection')}
                 </button>
               </div>
             )}
@@ -469,7 +472,7 @@ export function AppShell() {
                 <button
                   type="button"
                   className="banner-close"
-                  aria-label="关闭提示"
+                  aria-label={t('common.closeNotice')}
                   onClick={dismissGap}
                 >
                   ×
@@ -480,18 +483,18 @@ export function AppShell() {
               <div className="banner banner-stale" role="status">
                 <span>
                   {connectionState === 'reconnecting'
-                    ? `连接已断开，正在重连（第 ${Math.max(1, reconnectAttempt)} 次）…`
-                    : '连接已断开；当前显示的数据可能已过期。'}
+                    ? t('app.reconnecting', { count: Math.max(1, reconnectAttempt) })
+                    : t('app.stale')}
                 </span>
                 <button type="button" className="link-btn" onClick={retry}>
-                  立即重试
+                  {t('app.retryNow')}
                 </button>
                 <button
                   type="button"
                   className="link-btn"
                   onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
                 >
-                  连接设置
+                  {t('app.connectionSettings')}
                 </button>
               </div>
             )}
@@ -555,7 +558,7 @@ export function AppShell() {
           <button
             type="button"
             className="drawer-backdrop"
-            aria-label="关闭导航"
+            aria-label={t('nav.closeNav')}
             onClick={() => setNavDrawerOpen(false)}
           />
         )}
@@ -577,29 +580,33 @@ export function AppShell() {
         )}
 
         {helpOpen && (
-          <ModalShell label="键盘快捷键" onClose={() => setHelpOpen(false)} className="help-dialog">
-            <h2 className="modal-title">键盘快捷键</h2>
+          <ModalShell
+            label={t('app.help.title')}
+            onClose={() => setHelpOpen(false)}
+            className="help-dialog"
+          >
+            <h2 className="modal-title">{t('app.help.title')}</h2>
             <dl className="shortcut-list">
               <dt>
                 <kbd className="kbd">Ctrl/Cmd</kbd> + <kbd className="kbd">K</kbd>
               </dt>
-              <dd>打开/关闭命令面板</dd>
+              <dd>{t('app.help.openClose')}</dd>
               <dt>
                 <kbd className="kbd">/</kbd>
               </dt>
-              <dd>在非输入框中打开动作模式</dd>
+              <dd>{t('app.help.actionMode')}</dd>
               <dt>
                 <kbd className="kbd">↑</kbd> / <kbd className="kbd">↓</kbd>
               </dt>
-              <dd>移动命令面板结果</dd>
+              <dd>{t('app.help.move')}</dd>
               <dt>
                 <kbd className="kbd">Enter</kbd>
               </dt>
-              <dd>执行选中命令 / 发送消息</dd>
+              <dd>{t('app.help.execute')}</dd>
               <dt>
                 <kbd className="kbd">Esc</kbd>
               </dt>
-              <dd>关闭面板、抽屉或对话框</dd>
+              <dd>{t('app.help.close')}</dd>
             </dl>
             <div className="modal-actions">
               <button
@@ -608,7 +615,7 @@ export function AppShell() {
                 data-autofocus
                 onClick={() => setHelpOpen(false)}
               >
-                关闭
+                {t('common.close')}
               </button>
             </div>
           </ModalShell>

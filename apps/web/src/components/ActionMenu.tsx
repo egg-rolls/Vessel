@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { t } from '../i18n';
 import { Tooltip } from './Tooltip';
 
 export interface ActionMenuItem {
@@ -14,7 +15,7 @@ export interface ActionMenuItem {
  * Esc/点击外部关闭并把焦点还给触发按钮。
  */
 export function ActionMenu({
-  label = '更多操作',
+  label = t('common.moreActions'),
   items,
   disabled = false,
 }: {

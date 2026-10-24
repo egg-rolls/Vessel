@@ -14,6 +14,7 @@ import { useToast } from '../../components/ToastProvider';
 import { formatTimestamp } from '../../format';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import type { DurableRunSummary, RunEvent, RunStatus } from '../../gateway/types';
+import { t, useLocale } from '../../i18n';
 import {
   filterRunEvents,
   groupRunEvents,
@@ -32,10 +33,10 @@ const EVENT_PAGE_SIZE = 500;
 
 type DetailTab = 'timeline' | 'output' | 'raw';
 
-const DETAIL_TABS: readonly { id: DetailTab; label: string }[] = [
-  { id: 'timeline', label: '时间线' },
-  { id: 'output', label: '输出' },
-  { id: 'raw', label: 'Raw JSON' },
+const DETAIL_TABS: readonly { id: DetailTab; labelKey: string }[] = [
+  { id: 'timeline', labelKey: 'runs.detail.tab.timeline' },
+  { id: 'output', labelKey: 'runs.detail.tab.output' },
+  { id: 'raw', labelKey: 'runs.detail.tab.raw' },
 ];
 
 function pretty(value: unknown): string {
@@ -69,7 +70,11 @@ function ToolCallRow({ group }: { group: ToolCallGroup }) {
   const chip =
     group.status === 'failed' ? 'failed' : group.status === 'completed' ? 'completed' : 'running';
   const label =
-    group.status === 'failed' ? '失败' : group.status === 'completed' ? '完成' : '调用中';
+    group.status === 'failed'
+      ? t('runs.detail.tool.failed')
+      : group.status === 'completed'
+        ? t('runs.detail.tool.completed')
+        : t('runs.detail.tool.running');
   return (
     <div className={`tool-call ${group.status}`}>
       <button
@@ -106,7 +111,7 @@ function ToolCallRow({ group }: { group: ToolCallGroup }) {
             </div>
           )}
           {group.arguments === undefined && group.result === undefined && !group.error && (
-            <p className="section-desc">没有可展开的参数或结果。</p>
+            <p className="section-desc">{t('runs.detail.noToolDetails')}</p>
           )}
         </div>
       )}
@@ -138,6 +143,7 @@ export function RunDetail({
   onClose: () => void;
   busy?: boolean;
 }) {
+  useLocale();
   const { client, hasToken, connectionState } = useConnection();
   const toast = useToast();
   const snapshot = useEventSnapshot();
@@ -250,7 +256,11 @@ export function RunDetail({
       setHasMore(next.length >= EVENT_PAGE_SIZE);
     } catch (error) {
       if (generation === traceGeneration.current) {
-        toast.error(`加载更多事件失败：${error instanceof Error ? error.message : String(error)}`);
+        toast.error(
+          t('runs.detail.loadMoreFailed', {
+            detail: error instanceof Error ? error.message : String(error),
+          }),
+        );
       }
     } finally {
       if (generation === traceGeneration.current) setLoadingMore(false);
@@ -271,24 +281,33 @@ export function RunDetail({
   const resumable = tab === 'durable' && status !== undefined && isResumableRun(status);
 
   return (
-    <section ref={sectionRef} className="panel run-detail" aria-label="运行详情">
+    <section ref={sectionRef} className="panel run-detail" aria-label={t('runs.detail.label')}>
       <div className="panel-header">
-        <h2 className="section-title">运行详情</h2>
+        <h2 className="section-title">{t('runs.detail.title')}</h2>
         <StatusChip status={status} />
         <span className="mono dim run-detail-id" title={runId}>
           {runId}
         </span>
-        <CopyButton text={runId} label="复制运行 ID" toast="已复制运行 ID" />
+        <CopyButton
+          text={runId}
+          label={t('runs.detail.copyId')}
+          toast={t('runs.detail.copiedId')}
+        />
         <button type="button" className="btn btn-small" onClick={() => exportJson(raw, runId)}>
-          导出 JSON
+          {t('runs.detail.exportJson')}
         </button>
-        <button type="button" className="icon-btn" aria-label="关闭运行详情" onClick={onClose}>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label={t('runs.detail.close')}
+          onClick={onClose}
+        >
           ×
         </button>
       </div>
 
       <dl className="diag-list">
-        <dt>会话</dt>
+        <dt>{t('runs.detail.session')}</dt>
         <dd className="mono">
           {sessionId ? (
             <a className="link-btn mono" href={`#/chat/${encodeURIComponent(sessionId)}`}>
@@ -298,11 +317,11 @@ export function RunDetail({
             '—'
           )}
         </dd>
-        <dt>开始</dt>
+        <dt>{t('runs.detail.started')}</dt>
         <dd className="mono">{formatTimestamp(startedAt)}</dd>
-        <dt>结束</dt>
+        <dt>{t('runs.detail.ended')}</dt>
         <dd className="mono">{formatTimestamp(completedAt)}</dd>
-        <dt>耗时</dt>
+        <dt>{t('runs.detail.duration')}</dt>
         <dd className="mono">{durationLabel(startedAt, completedAt)}</dd>
         {(run?.iteration !== undefined || durable?.iteration !== undefined) && (
           <>
@@ -333,10 +352,10 @@ export function RunDetail({
             type="button"
             className="btn btn-small btn-danger-ghost"
             disabled={!canWrite || busy}
-            title={!canWrite ? '连接断开，写操作已禁用' : undefined}
+            title={!canWrite ? t('common.writesDisabled') : undefined}
             onClick={() => onCancel(runId)}
           >
-            {busy ? '取消中…' : '取消 run'}
+            {busy ? t('runs.detail.cancelling') : t('runs.detail.cancel')}
           </button>
         )}
         {resumable && (
@@ -344,31 +363,31 @@ export function RunDetail({
             type="button"
             className="btn btn-small"
             disabled={!canWrite || busy}
-            title={!canWrite ? '连接断开，写操作已禁用' : undefined}
+            title={!canWrite ? t('common.writesDisabled') : undefined}
             onClick={() => onResume(runId)}
           >
-            {busy ? '恢复中…' : '恢复运行'}
+            {busy ? t('runs.detail.resuming') : t('runs.detail.resume')}
           </button>
         )}
       </div>
 
       {!connected && (
-        <StaleNotice message="连接已断开；以下数据为最近一次读取的结果。" onRetry={loadFirstPage} />
+        <StaleNotice message={t('runs.detail.disconnected')} onRetry={loadFirstPage} />
       )}
 
       <SegmentedTabs
-        label="运行详情视图"
-        tabs={DETAIL_TABS}
+        label={t('runs.detail.tabsLabel')}
+        tabs={DETAIL_TABS.map((tab) => ({ id: tab.id, label: t(tab.labelKey) }))}
         value={view}
         onChange={setView}
         panelId="run-detail-panel"
       />
 
       {view === 'timeline' && (
-        <div id="run-detail-panel" role="tabpanel" aria-label="事件时间线">
+        <div id="run-detail-panel" role="tabpanel" aria-label={t('runs.detail.timelineLabel')}>
           <div className="filter-bar">
             <fieldset className="filter-chips">
-              <legend className="sr-only">按事件类别过滤</legend>
+              <legend className="sr-only">{t('runs.detail.filtersLabel')}</legend>
               {RUN_EVENT_FILTERS.map((item) => (
                 <button
                   key={item.id}
@@ -377,7 +396,7 @@ export function RunDetail({
                   aria-pressed={filter === item.id}
                   onClick={() => setFilter(item.id)}
                 >
-                  {item.label}
+                  {t(item.labelKey)}
                 </button>
               ))}
             </fieldset>
@@ -385,8 +404,8 @@ export function RunDetail({
               className="input input-compact mono"
               value={typePrefix}
               onChange={(event) => setTypePrefix(event.target.value)}
-              placeholder="类型前缀，如 tool.call."
-              aria-label="按事件类型前缀过滤"
+              placeholder={t('runs.detail.typePrefix')}
+              aria-label={t('runs.detail.typePrefixLabel')}
               spellCheck={false}
             />
             <button
@@ -395,10 +414,10 @@ export function RunDetail({
               aria-pressed={showInternal}
               onClick={() => setShowInternal((value) => !value)}
             >
-              内部事件
+              {t('runs.detail.showInternal')}
             </button>
             <button type="button" className="btn btn-small" onClick={() => void loadFirstPage()}>
-              刷新事件
+              {t('runs.detail.refreshEvents')}
             </button>
             <span className="count-pill">
               {filtered.length}/{events.length}
@@ -408,9 +427,9 @@ export function RunDetail({
           {traceError && events.length === 0 ? (
             isTraceUnavailable(traceError) ? (
               <NotEnabledState
-                title="事件记录未启用或无记录。"
+                title={t('runs.detail.traceDisabledTitle')}
                 reason={traceError.message}
-                hint="run 摘要与输出仍可用；在 gateway 配置中启用事件记录后重启即可查看完整时间线。"
+                hint={t('runs.detail.traceDisabledHint')}
               />
             ) : (
               <ErrorState message={traceError.message} onRetry={() => void loadFirstPage()} />
@@ -419,25 +438,25 @@ export function RunDetail({
             <>
               {traceError && (
                 <StaleNotice
-                  message={`事件记录不可用；仅显示实时缓冲中的 ${liveEvents.length} 条事件。`}
+                  message={t('runs.detail.traceStale', { count: liveEvents.length })}
                   onRetry={() => void loadFirstPage()}
                 />
               )}
               {traceLoading && events.length === 0 ? (
-                <LoadingState label="正在读取事件记录…" />
+                <LoadingState label={t('runs.detail.loadingTrace')} />
               ) : events.length === 0 ? (
                 <EmptyState
-                  title="没有事件记录。"
+                  title={t('runs.detail.emptyTraceTitle')}
                   description={
                     tab === 'live' && !coreRunId
-                      ? '该运行尚未映射到核心运行（可能仍在排队），暂时没有事件记录。'
-                      : '事件记录中没有该 run 的事件；输出与 Raw JSON 仍可查看。'
+                      ? t('runs.detail.emptyTraceQueued')
+                      : t('runs.detail.emptyTraceDesc')
                   }
                 />
               ) : filtered.length === 0 ? (
                 <EmptyState
-                  title="没有匹配的事件。"
-                  description="调整类别、内部事件开关或类型前缀。"
+                  title={t('runs.detail.noMatchTitle')}
+                  description={t('runs.detail.noMatchDesc')}
                 />
               ) : (
                 <div className="event-list">
@@ -459,10 +478,12 @@ export function RunDetail({
                     disabled={loadingMore || sinceSeq === undefined}
                     onClick={() => void loadMore()}
                   >
-                    {loadingMore ? '加载中…' : `加载更多事件（已显示 ${trace.length} 条）`}
+                    {loadingMore
+                      ? t('runs.detail.loadingMore')
+                      : t('runs.detail.loadMore', { count: trace.length })}
                   </button>
                   {sinceSeq === undefined && (
-                    <span className="dim">事件缺少 seq，无法继续分页；可刷新重新读取。</span>
+                    <span className="dim">{t('runs.detail.missingSeq')}</span>
                   )}
                 </div>
               )}
@@ -472,43 +493,46 @@ export function RunDetail({
       )}
 
       {view === 'output' && (
-        <div id="run-detail-panel" role="tabpanel" aria-label="运行输出">
+        <div id="run-detail-panel" role="tabpanel" aria-label={t('runs.detail.outputLabel')}>
           {run?.error && (
             <>
-              <h3 className="section-title">错误</h3>
+              <h3 className="section-title">{t('runs.detail.errorTitle')}</h3>
               <pre className="run-output err">{run.error}</pre>
             </>
           )}
           {run?.output ? (
             <>
-              <h3 className="section-title">输出</h3>
+              <h3 className="section-title">{t('runs.detail.outputTitle')}</h3>
               <pre className="run-output">{run.output}</pre>
             </>
           ) : durable?.preview ? (
             <>
-              <h3 className="section-title">最后一条消息（checkpoint 预览）</h3>
+              <h3 className="section-title">{t('runs.detail.checkpointPreview')}</h3>
               <pre className="run-output">{durable.preview}</pre>
             </>
           ) : lastCheckpointMessage ? (
             <>
-              <h3 className="section-title">最后一条消息（checkpoint）</h3>
+              <h3 className="section-title">{t('runs.detail.checkpoint')}</h3>
               <pre className="run-output">{lastCheckpointMessage}</pre>
             </>
           ) : (
-            <EmptyState title="没有可显示的输出。" description="运行可能仍在进行或已取消。" />
+            <EmptyState
+              title={t('runs.detail.emptyOutputTitle')}
+              description={t('runs.detail.emptyOutputDesc')}
+            />
           )}
         </div>
       )}
 
       {view === 'raw' && (
-        <div id="run-detail-panel" role="tabpanel" aria-label="原始 JSON">
+        <div id="run-detail-panel" role="tabpanel" aria-label={t('runs.detail.rawLabel')}>
           {raw ? (
             <>
               <div className="form-actions">
                 <CopyButton
                   text={pretty(raw)}
-                  label="复制 JSON"
-                  toast="已复制运行 JSON"
+                  label={t('runs.detail.copyJson')}
+                  toast={t('runs.detail.copiedJson')}
                   className="btn btn-small"
                 />
                 <button
@@ -516,13 +540,13 @@ export function RunDetail({
                   className="btn btn-small"
                   onClick={() => exportJson(raw, runId)}
                 >
-                  导出 JSON
+                  {t('runs.detail.exportJson')}
                 </button>
               </div>
-              <JsonView value={raw} label="Run JSON（原始字段）" open maxHeight={520} />
+              <JsonView value={raw} label={t('runs.detail.rawJsonLabel')} open maxHeight={520} />
             </>
           ) : (
-            <LoadingState label="正在读取运行详情…" />
+            <LoadingState label={t('runs.detailLoading')} />
           )}
         </div>
       )}

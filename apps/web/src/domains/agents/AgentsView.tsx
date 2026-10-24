@@ -11,7 +11,7 @@ import { formatRoute, type Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Button } from '../../components/ui';
+import { Button, SearchInput } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -26,6 +26,7 @@ import {
 import type { TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
+import { useNodeNames } from '../nodes/useNodeNames';
 import { AgentCreateDialog } from './AgentCreateDialog';
 import { AgentDetailView } from './AgentDetailView';
 import { AgentEditView } from './AgentEditView';
@@ -81,6 +82,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   useLocale();
   const { epoch, tenantEpoch, tenantId } = useConnection();
   const { nodes, teamControl, hasTokenFor } = useNodes();
+  const nodeNames = useNodeNames();
   const [query, setQuery] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [target, setTarget] = useState<AgentHashTarget | undefined>(() =>
@@ -286,7 +288,8 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
               <div className="net-row-main">
                 <span className="net-row-title">{name}</span>
                 <span className="net-row-sub">
-                  {agent.node.name} · {agent.team.name || agent.team.team_id}
+                  {nodeNames.get(nodeKeyOf(agent.node)) ?? '—'} ·{' '}
+                  {agent.team.name || agent.team.team_id}
                 </span>
               </div>
               <StatusChip status={agent.member.state} />
@@ -326,14 +329,11 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
       />
       <div className="domain-content">
         <div className="filter-bar net-toolbar">
-          <input
-            className="input search-input"
-            type="search"
+          <SearchInput
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={setQuery}
             placeholder={t('agents.search')}
-            aria-label={t('agents.search')}
-            spellCheck={false}
+            ariaLabel={t('agents.search')}
           />
           <select
             className="input net-select"
@@ -401,7 +401,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
           <div className="agents-notices">
             {failed.map((roster) => (
               <p className="agents-node-error" role="alert" key={nodeKeyOf(roster.node)}>
-                <span className="agents-node-error-name mono">{roster.node.name}</span>
+                <span className="agents-node-error-name mono">
+                  {nodeNames.get(nodeKeyOf(roster.node)) ?? '—'}
+                </span>
                 <span>{nodeErrorText(roster)}</span>
               </p>
             ))}

@@ -1,3 +1,5 @@
+import { t } from './i18n';
+
 /** Zero-pad a non-negative integer to the given width. */
 function pad(value: number, width: number): string {
   return String(value).padStart(width, '0');
@@ -26,8 +28,8 @@ export function localDayLabel(ts: number, now: number = Date.now()): string {
   const today = new Date(now);
   const yesterday = new Date(now);
   yesterday.setDate(today.getDate() - 1);
-  if (key === localDayKey(now)) return '今天';
-  if (key === localDayKey(yesterday.getTime())) return '昨天';
+  if (key === localDayKey(now)) return t('time.today');
+  if (key === localDayKey(yesterday.getTime())) return t('time.yesterday');
   return key;
 }
 

@@ -23,6 +23,7 @@ import { nodeKeyOf } from '../../gateway/nodes';
 import { displayGatewayUrl } from '../../gateway/url';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
+import { useNodeNames } from '../nodes/useNodeNames';
 import { ATTENTION_PAGE_SIZE, appendInteractions, isAttentionAuthError } from './attention';
 
 type AttentionStatus = 'pending' | 'orphaned';
@@ -292,11 +293,13 @@ function SingleNodeAttention({ navigate }: { navigate: (route: Route) => void })
 /** 多节点聚合中的一个节点分组：独立分页、独立失败、独立只读提示。 */
 function NodeAttentionGroup({
   node,
+  displayName,
   status,
   refreshSeq,
   navigate,
 }: {
   node: NodeView;
+  displayName: string;
   status: AttentionStatus;
   refreshSeq: number;
   navigate: (route: Route) => void;
@@ -392,9 +395,9 @@ function NodeAttentionGroup({
       (resource.state.status === 'loading' || resource.state.status === 'idle'));
 
   return (
-    <section className="attention-node" aria-label={node.name}>
+    <section className="attention-node" aria-label={displayName}>
       <div className="attention-node-head">
-        <span className="attention-node-name">{node.name}</span>
+        <span className="attention-node-name">{displayName}</span>
         {node.current && (
           <span className="attention-node-badge">{t('observe.attention.currentNode')}</span>
         )}
@@ -481,6 +484,7 @@ function MultiNodeAttention({ navigate }: { navigate: (route: Route) => void }) 
   useLocale();
   const { hasToken } = useConnection();
   const { nodes } = useNodes();
+  const nodeNames = useNodeNames();
   const [status, setStatus] = useState<AttentionStatus>('pending');
   const [refreshSeq, setRefreshSeq] = useState(0);
 
@@ -526,6 +530,7 @@ function MultiNodeAttention({ navigate }: { navigate: (route: Route) => void }) 
           <NodeAttentionGroup
             key={`${node.current ? 'current' : 'extra'}:${node.name}`}
             node={node}
+            displayName={nodeNames.get(nodeKeyOf(node)) ?? '—'}
             status={status}
             refreshSeq={refreshSeq}
             navigate={navigate}

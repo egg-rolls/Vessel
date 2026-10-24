@@ -117,12 +117,6 @@ function AgentTreeRow({
                 <dd>{formatTimestamp(node.lastSeen)}</dd>
               </>
             )}
-            {node.nodeId && (
-              <>
-                <dt>node</dt>
-                <dd className="mono">{node.nodeId}</dd>
-              </>
-            )}
             {node.lastError && (
               <>
                 <dt>error</dt>
@@ -187,7 +181,7 @@ export function SessionHeader({
 
   const copySessionId = () => {
     if (!navigator.clipboard?.writeText) {
-      toast.error('当前环境不支持剪贴板');
+      toast.error(t('common.clipboardUnsupported'));
       return;
     }
     void navigator.clipboard

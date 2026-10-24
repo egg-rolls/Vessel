@@ -2,7 +2,8 @@
  * Gateway 状态页（0.25）：连接、端点、节点显示名、版本、启动时间 / 运行时长。
  *
  * 版本读取 `config.get` 的 additive `version`；旧 gateway 缺失时显示 `—`。
- * `health.get.node.name` 同为 additive，缺失时回退 node_id。
+ * 节点展示名统一走 `useNodeNames`（health.get.node.name + sessionStorage 缓存），
+ * 不在状态页展示原始 node_id。
  */
 import { connectionLabel } from '../../app/connection-label';
 import { useRefreshSignal } from '../../app/refresh';
@@ -11,10 +12,13 @@ import { NotEnabledState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { useNodes } from '../../gateway/NodeProvider';
+import { nodeKeyOf } from '../../gateway/nodes';
 import { displayGatewayUrl } from '../../gateway/url';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
-import { gatewayNodeName, uptimeParts } from './gateway-state';
+import { useNodeNames } from '../nodes/useNodeNames';
+import { uptimeParts } from './gateway-state';
 
 function pageOrigin(): string {
   return typeof window === 'undefined' ? '' : window.location.origin;
@@ -23,6 +27,7 @@ function pageOrigin(): string {
 export function GatewayView() {
   useLocale();
   const { client, connectionState, hasToken, epoch, tenantId, gatewayUrl } = useConnection();
+  const { current } = useNodes();
 
   const config = useResource({
     load: () => client.getConfig(),
@@ -42,6 +47,13 @@ export function GatewayView() {
 
   const configData = resourceData(config.state);
   const healthData = resourceData(health.state);
+  const providedNames = new Map(
+    current && healthData?.node.name ? [[nodeKeyOf(current), healthData.node.name] as const] : [],
+  );
+  const nodeNames = useNodeNames(providedNames);
+  const nodeName = current
+    ? (nodeNames.get(nodeKeyOf(current)) ?? healthData?.node.name?.trim() ?? '—')
+    : healthData?.node.name?.trim() || '—';
   const healthFailed = health.state.status === 'error' && !healthData;
   const status = healthFailed ? 'unreachable' : healthData ? 'connected' : 'pending';
   const statusLabel = healthFailed
@@ -73,7 +85,7 @@ export function GatewayView() {
                   {healthData?.node.endpoint || displayGatewayUrl(gatewayUrl, pageOrigin())}
                 </dd>
                 <dt>{t('gateway.field.node')}</dt>
-                <dd>{gatewayNodeName(healthData?.node)}</dd>
+                <dd>{nodeName}</dd>
                 <dt>{t('gateway.field.version')}</dt>
                 <dd className="mono">{version ? `v${version}` : '—'}</dd>
                 <dt>{t('gateway.field.startedAt')}</dt>

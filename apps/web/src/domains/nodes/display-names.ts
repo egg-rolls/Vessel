@@ -37,15 +37,24 @@ export function dedupeDisplayNames(names: readonly string[]): string[] {
   });
 }
 
+/** 节点键本身 / IP / IPv6 / UUID 都不是可展示的人类名。 */
+export function isOpaqueNodeName(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed === '') return true;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(trimmed)) return true;
+  if (trimmed.includes(':')) return true;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
+}
+
 /** 单个节点的基础展示名；不在此处去重。 */
 export function baseNodeDisplayName(
   input: Pick<NodeDisplayInput, 'name' | 'nodeId' | 'url' | 'healthName'>,
   pageOrigin = '',
 ): string {
   const raw = input.healthName?.trim() || input.name?.trim() || '';
-  if (raw !== '' && raw !== input.nodeId) return raw;
+  if (raw !== '' && raw !== input.nodeId && !isOpaqueNodeName(raw)) return raw;
   if (input.url !== undefined) return displayGatewayUrl(input.url, pageOrigin);
-  return input.nodeId ?? raw;
+  return input.nodeId ?? (isOpaqueNodeName(raw) ? '—' : raw);
 }
 
 /** 按输入顺序生成 `key → 去重后的展示名`。 */

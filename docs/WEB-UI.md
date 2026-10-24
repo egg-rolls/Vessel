@@ -17,10 +17,14 @@
 | `CopyButton` | `src/components/CopyButton.tsx` | 复制文本 | 通过 Toast 反馈；标签走 i18n |
 | `SegmentedTabs`（Tabs） | `src/components/Tabs.tsx` | 域内一级 tab | `role=tablist`；左右方向键切换 |
 | `AutoGrowTextarea` | `src/components/ui/AutoGrowTextarea.tsx` | 自增高输入框 | 从 `components/ui` 导出 |
+| `SearchInput` | `src/components/ui/SearchInput.tsx` | 列表 / 过滤栏搜索框 | `value` + `onChange(value)` + `placeholder` + `ariaLabel`；复用 `.input.search-input` |
 
-`SearchInput` 尚未抽成共享组件。列表搜索统一使用
-`<input className="input search-input" type="search">`；若后续抽出，放在
-`src/components/ui/` 并从 `index.ts` 导出，同时更新本表。
+列表搜索统一使用 `SearchInput`，不要在各域重复写
+`<input className="input search-input" type="search">`。
+
+节点展示名统一由 `domains/nodes/useNodeNames.ts` 解析：优先
+`health.get.node.name`，按 nodeKey 缓存到 sessionStorage；健康检查失败时沿用缓存，
+从未拿到名字时才回退 URL（不展示原始 node_id / UUID）。
 
 ## 间距与尺度
 

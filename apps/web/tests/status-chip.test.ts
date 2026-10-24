@@ -10,7 +10,10 @@ describe('StatusChip', () => {
   test('maps waiting_permission to the waiting chip', () => {
     expect(normalizeStatus('waiting_permission')).toBe('waiting');
     expect(statusLabel('waiting_permission')).toBe('等待确认');
-    expect(statusMeta('waiting_permission')).toEqual(STATUS_META.waiting);
+    expect(statusMeta('waiting_permission')).toEqual({
+      ...STATUS_META.waiting,
+      label: '等待确认',
+    });
   });
 
   test('keeps known statuses and their labels unchanged', () => {

@@ -56,7 +56,8 @@ import { Transcript } from './Transcript';
 
 const TRANSCRIPT_WINDOW = 50;
 const QUEUE_POLL_MS = 2000;
-const NOT_FOUND_MESSAGE = '会话不存在或已删除';
+/** 内部哨兵；展示时再翻译，避免英文界面泄漏中文错误文案。 */
+const NOT_FOUND_MESSAGE = 'chat.notFound';
 /** 单会话实时组上限：超出时只渲染最近这些 run，并提供运行详情入口。 */
 const MAX_LIVE_GROUPS = 200;
 const SCROLL_FOLLOW_MS = 100;
@@ -646,7 +647,7 @@ export function ChatView({
         group: 'entity' as const,
         label: sessionTitle(session),
         keywords: [session.session_id, session.preview ?? ''],
-        hint: '会话',
+        hint: t('palette.hint.session'),
         run: () => navigate({ domain: 'chat', sessionId: session.session_id }),
       })),
     [sessions, navigate],
@@ -663,17 +664,17 @@ export function ChatView({
       {
         id: 'action-rename-session',
         group: 'action',
-        label: `重命名会话“${title}”`,
+        label: t('chat.palette.rename', { title }),
         keywords: ['rename', 'title', selected.session_id],
-        hint: '会话',
+        hint: t('palette.hint.session'),
         run: () => setRenameSignal((value) => value + 1),
       },
       {
         id: 'action-delete-session',
         group: 'action',
-        label: `删除会话“${title}”（需确认）`,
+        label: t('chat.palette.delete', { title }),
         keywords: ['delete', 'remove', selected.session_id],
-        hint: '需确认',
+        hint: t('palette.hint.confirm'),
         // 打开标准确认框（带消息数/关联 run 计数），不在面板内直接删除。
         run: () => {
           setDeleteError(null);
@@ -822,7 +823,7 @@ export function ChatView({
             cancelled: false,
           },
         ]);
-        toast.info('已排队');
+        toast.info(t('chat.toast.queued'));
       }
       sessionsResource.reload();
     } catch (error) {
@@ -842,7 +843,7 @@ export function ChatView({
         const result = await client.cancelRun(jobId);
         if (result.cancelled) {
           setCancelledJobs((prev) => new Set(prev).add(jobId));
-          toast.success('已请求取消 run');
+          toast.success(t('chat.toast.cancelRequested'));
         }
       } catch (error) {
         toast.error(errorMessage(error));
@@ -883,7 +884,7 @@ export function ChatView({
             item.runId === runId ? { ...item, cancelling: false, cancelled: true } : item,
           ),
         );
-        toast.success('已取消排队');
+        toast.success(t('chat.toast.queueCancelled'));
         window.setTimeout(() => {
           setQueuedRuns((prev) => prev.filter((item) => item.runId !== runId));
         }, 4000);
@@ -891,7 +892,7 @@ export function ChatView({
         setQueuedRuns((prev) =>
           prev.map((item) => (item.runId === runId ? { ...item, cancelling: false } : item)),
         );
-        toast.error('取消请求未被受理，run 可能已经开始执行');
+        toast.error(t('chat.toast.cancelNotAccepted'));
       }
     } catch (error) {
       setQueuedRuns((prev) =>
@@ -903,7 +904,7 @@ export function ChatView({
 
   const handleRename = async (sessionId: string, title: string): Promise<boolean> => {
     if (!connected) {
-      toast.error('连接断开，暂时无法重命名会话');
+      toast.error(t('chat.toast.disconnectedRename'));
       return false;
     }
     const previous = sessions;
@@ -914,7 +915,7 @@ export function ChatView({
       return true;
     } catch (error) {
       setSessions(previous);
-      toast.error(`重命名失败：${errorMessage(error)}`);
+      toast.error(t('chat.toast.renameFailed', { detail: errorMessage(error) }));
       return false;
     }
   };
@@ -922,11 +923,11 @@ export function ChatView({
   const handleDelete = async () => {
     if (!deleteTarget) return;
     if (!connected) {
-      setDeleteError('连接断开，暂时无法删除会话');
+      setDeleteError(t('chat.toast.disconnectedDelete'));
       return;
     }
     if ((deleteCounts?.active ?? 0) > 0) {
-      setDeleteError('该会话仍有运行中或中断的 run，暂时无法删除。');
+      setDeleteError(t('chat.toast.activeRuns'));
       return;
     }
     setDeleteBusy(true);
@@ -943,21 +944,26 @@ export function ChatView({
       if (next.selectedId === null && next.draftId === null) {
         navigate({ domain: 'chat', sessionId: 'new' });
       }
-      toast.success(`已删除会话（runs: ${result.runs_deleted}, events: ${result.events_deleted}）`);
+      toast.success(
+        t('chat.toast.deleted', {
+          runs: result.runs_deleted,
+          events: result.events_deleted,
+        }),
+      );
       sessionsResource.reload();
     } catch (error) {
       const code = (error as { code?: string }).code;
-      setDeleteError(
-        code === 'conflict' ? '该会话仍有运行中或中断的 run，暂时无法删除。' : errorMessage(error),
-      );
+      setDeleteError(code === 'conflict' ? t('chat.toast.activeRuns') : errorMessage(error));
     } finally {
       setDeleteBusy(false);
     }
   };
 
   const targetLabel = selectedId
-    ? `→ ${selectedSession ? sessionTitle(selectedSession) : selectedId}`
-    : '＋ 新会话';
+    ? t('chat.target.session', {
+        title: selectedSession ? sessionTitle(selectedSession) : selectedId,
+      })
+    : t('chat.target.new');
 
   const drawerA11y = compact ? { role: 'dialog' as const, 'aria-modal': sessionsOpen } : {};
 
@@ -968,7 +974,7 @@ export function ChatView({
         ref={drawerRef}
         id="chat-sessions"
         className={`chat-session-column ${sessionsOpen ? 'open' : ''}`.trim()}
-        aria-label="会话列表"
+        aria-label={t('chat.main.sessionsLabel')}
         inert={compact && !sessionsOpen ? true : undefined}
         aria-hidden={compact && !sessionsOpen ? true : undefined}
       >
@@ -1014,17 +1020,17 @@ export function ChatView({
         <button
           type="button"
           className="drawer-backdrop"
-          aria-label="关闭会话列表"
+          aria-label={t('nav.closeSessions')}
           onClick={onCloseSessions}
         />
       )}
 
       <section
         className="conversation"
-        aria-label="对话"
+        aria-label={t('chat.main.conversationLabel')}
         inert={compact && sessionsOpen ? true : undefined}
       >
-        <h1 className="sr-only">会话</h1>
+        <h1 className="sr-only">{t('chat.main.heading')}</h1>
         {!panes.disabled('chat') && (
           <ResizeHandle
             pane="chat"
@@ -1066,15 +1072,15 @@ export function ChatView({
         <div className="conversation-scroll" ref={scrollRef} onScroll={handleScroll}>
           {!hasToken ? (
             <EmptyState
-              title="连接 gateway 后开始。"
-              description="gateway URL 与 token 已移入设置；连接后可新建会话并发送第一条消息。"
+              title={t('chat.empty.noConnectionTitle')}
+              description={t('chat.empty.noConnectionDesc')}
               action={
                 <button
                   type="button"
                   className="btn btn-primary"
                   onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
                 >
-                  配置连接
+                  {t('common.configureConnection')}
                 </button>
               }
             />
@@ -1082,7 +1088,7 @@ export function ChatView({
             <>
               {hydrateError ? (
                 <ErrorState
-                  message={hydrateError}
+                  message={hydrateError === NOT_FOUND_MESSAGE ? t('chat.notFound') : hydrateError}
                   onRetry={detailResource.reload}
                   action={
                     hydrateError === NOT_FOUND_MESSAGE ? (
@@ -1091,33 +1097,31 @@ export function ChatView({
                         className="btn"
                         onClick={() => navigate({ domain: 'chat' })}
                       >
-                        返回会话
+                        {t('breadcrumb.chat')}
                       </button>
                     ) : undefined
                   }
                 />
               ) : hydrating && !hasTranscript ? (
-                <LoadingState label="正在加载会话历史…" />
+                <LoadingState label={t('chat.loadingHistory')} />
               ) : !hasTranscript &&
                 visibleGroups.length === 0 &&
                 visibleQueued.length === 0 &&
                 !activeAgent ? (
                 <EmptyState
-                  title="该会话暂无对话记录。"
-                  description="在下方输入 prompt 继续这个会话。"
+                  title={t('chat.empty.noHistoryTitle')}
+                  description={t('chat.empty.noHistoryDesc')}
                 />
               ) : null}
 
               {hydrateStale && (
                 <StaleNotice
-                  message={`历史刷新失败，显示已加载的记录：${hydrateStale}`}
+                  message={t('chat.staleHistory', { detail: hydrateStale })}
                   onRetry={detailResource.reload}
                 />
               )}
 
-              {truncated && (
-                <StaleNotice message="部分更早的事件已从内存缓冲截断；完整记录请查看运行详情。" />
-              )}
+              {truncated && <StaleNotice message={t('chat.truncated')} />}
 
               {!activeAgent && hiddenLiveGroups > 0 && (
                 <StaleNotice
@@ -1180,7 +1184,7 @@ export function ChatView({
           <div ref={bottomRef} />
           {!nearBottom && (
             <button type="button" className="to-bottom" onClick={scrollToBottom}>
-              回到底部 ↓
+              {t('chat.toBottom')}
             </button>
           )}
         </div>
@@ -1236,27 +1240,32 @@ export function ChatView({
 
       {deleteTarget && (
         <ConfirmDialog
-          title={`删除会话“${sessionTitle(deleteTarget)}”？`}
+          title={t('chat.delete.title', { title: sessionTitle(deleteTarget) })}
           body={
             <>
-              <p>将同时删除该会话的持久历史、关联 runs 与事件，无法撤销。</p>
+              <p>{t('chat.delete.body')}</p>
               <p className="dim">
-                该会话有 {deleteTarget.message_count} 条消息
+                {t('chat.delete.counts', { messages: deleteTarget.message_count })}
                 {deleteCounts && !deleteCounts.loading
-                  ? `、${deleteCounts.live + deleteCounts.durable} 个关联运行记录`
+                  ? t('chat.delete.runsCount', {
+                      count: deleteCounts.live + deleteCounts.durable,
+                    })
                   : deleteCounts?.loading
-                    ? '；正在统计关联运行…'
+                    ? t('chat.delete.counting')
                     : ''}
-                。
               </p>
               {deleteCounts && deleteCounts.active > 0 && (
                 <p className="err" role="alert">
-                  当前有 {deleteCounts.active} 个运行中/中断的 run，需先结束或恢复后再删除。
+                  {t('chat.delete.activeRuns', { count: deleteCounts.active })}
                 </p>
               )}
-              {deleteCounts?.error && <p className="dim">关联运行统计失败：{deleteCounts.error}</p>}
-              <p className="dim">存在运行中或中断的 run 时服务端会拒绝删除。</p>
-              {!connected && <p className="err">连接已断开，写操作已禁用。</p>}
+              {deleteCounts?.error && (
+                <p className="dim">
+                  {t('chat.delete.statsFailed', { detail: deleteCounts.error })}
+                </p>
+              )}
+              <p className="dim">{t('chat.delete.serverReject')}</p>
+              {!connected && <p className="err">{t('chat.delete.disconnected')}</p>}
               {deleteError && (
                 <p className="err" role="alert">
                   {deleteError}
@@ -1264,7 +1273,7 @@ export function ChatView({
               )}
             </>
           }
-          confirmLabel="删除会话"
+          confirmLabel={t('chat.delete.confirm')}
           danger
           busy={deleteBusy}
           confirmDisabled={
@@ -1283,7 +1292,7 @@ export function ChatView({
                   navigate({ domain: 'runs', tab: 'durable', sessionId: id });
                 }}
               >
-                查看该会话的运行
+                {t('chat.delete.viewRuns')}
               </button>
             ) : undefined
           }

@@ -434,7 +434,7 @@
 
 .filter-bar .search-input {
   flex: 1 1 240px;
-  max-width: 420px;
+  max-width: var(--search-max-w);
 }
 
 .filter-chips {

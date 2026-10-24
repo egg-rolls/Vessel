@@ -57,7 +57,7 @@ export function CommandPalette({
 
   return (
     <ModalShell
-      label="命令面板"
+      label={t('palette.label')}
       onClose={onClose}
       closeLabel={t('common.close')}
       className="palette"
@@ -71,13 +71,13 @@ export function CommandPalette({
           className="palette-input"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索导航、会话、运行或输入 > 执行动作"
+          placeholder={t('palette.searchPlaceholder')}
           role="combobox"
           aria-expanded="true"
           aria-controls={listId}
           aria-autocomplete="list"
           aria-activedescendant={activeItem ? `palette-${activeItem.id}` : undefined}
-          aria-label="命令面板搜索"
+          aria-label={t('palette.searchLabel')}
           spellCheck={false}
           autoComplete="off"
           data-autofocus
@@ -102,7 +102,12 @@ export function CommandPalette({
         />
       </div>
 
-      <div className="palette-results" id={listId} role="listbox" aria-label="命令结果">
+      <div
+        className="palette-results"
+        id={listId}
+        role="listbox"
+        aria-label={t('palette.resultsLabel')}
+      >
         {sections.map((section) => (
           <div
             className="palette-group"
@@ -128,20 +133,24 @@ export function CommandPalette({
                   onClick={() => execute(item)}
                 >
                   <span className="palette-label">{item.label}</span>
-                  {item.danger && <span className="palette-danger">需确认</span>}
+                  {item.danger && (
+                    <span className="palette-danger">{t('palette.needConfirm')}</span>
+                  )}
                   {item.hint && <span className="palette-hint">{item.hint}</span>}
                 </button>
               );
             })}
           </div>
         ))}
-        {flat.length === 0 && <p className="palette-empty">没有匹配“{query.trim()}”的结果。</p>}
+        {flat.length === 0 && (
+          <p className="palette-empty">{t('palette.empty', { query: query.trim() })}</p>
+        )}
       </div>
 
       <div className="palette-footer">
-        <span>↑↓ 选择 · Enter 执行 · Esc 关闭</span>
+        <span>{t('palette.footer')}</span>
         <span aria-live="polite" className="palette-count">
-          {flat.length} 项结果
+          {t('palette.count', { count: flat.length })}
         </span>
       </div>
     </ModalShell>

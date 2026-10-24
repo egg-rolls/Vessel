@@ -53,6 +53,25 @@ describe('nodeDisplayNames', () => {
       baseNodeDisplayName({ name: 'node-1', nodeId: 'node-1', url: '' }, 'http://127.0.0.1:8642'),
     ).toBe('http://127.0.0.1:8642');
   });
+
+  test('health hostname wins over an IP-shaped provider label', () => {
+    expect(
+      baseNodeDisplayName({
+        name: '192.168.1.4',
+        nodeId: 'node-1',
+        url: 'https://192.168.1.4:8642',
+        healthName: 'SoulKiller',
+      }),
+    ).toBe('SoulKiller');
+
+    expect(
+      baseNodeDisplayName({
+        name: '192.168.1.4',
+        nodeId: 'node-1',
+        url: 'https://gw.example.com:8642',
+      }),
+    ).toBe('https://gw.example.com:8642');
+  });
 });
 
 describe('matchesNodeQuery', () => {
