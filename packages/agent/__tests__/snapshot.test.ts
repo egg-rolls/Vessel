@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Logger } from '@vessel-agent/core';
@@ -325,6 +325,32 @@ describe('Agent snapshot', () => {
     expect(record?.body_history).toHaveLength(MAX_BODY_HISTORY);
     expect(record?.body_history?.[0]?.session_id).toBe('body-5');
     expect(record?.body_history?.at(-1)?.session_id).toBe(`body-${MAX_BODY_HISTORY + 4}`);
+  });
+
+  it('quarantines a corrupt snapshot instead of letting the next state write overwrite it', async () => {
+    const dataDir = await tempDir();
+    const path = snapshotPath(dataDir, 'default');
+    await mkdir(dirname(path), { recursive: true });
+    const corrupt =
+      '{"version":2,"tenant_id":"default","members":[{"id":"alpha","session_id":"s1"}';
+    await writeFile(path, corrupt);
+    const capture = recordingLogger();
+    const store = new AgentSnapshotStore(path, 'default', { logger: capture.logger });
+
+    expect(await store.load()).toEqual([]);
+    const quarantined = (await readdir(dirname(path))).filter((name) =>
+      name.startsWith('default.json.corrupt-'),
+    );
+    expect(quarantined).toHaveLength(1);
+    const quarantinePath = join(dirname(path), quarantined[0] as string);
+    expect(await readFile(quarantinePath, 'utf8')).toBe(corrupt);
+
+    // 下一次状态写只能落新文件，不能覆盖唯一恢复副本。
+    expect(await store.write([baseRecord()])).toBe(true);
+    expect(await readFile(quarantinePath, 'utf8')).toBe(corrupt);
+    const fresh = JSON.parse(await readFile(path, 'utf8')) as { members: unknown[] };
+    expect(fresh.members).toHaveLength(1);
+    expect(capture.errors).toContain('agent.snapshot.corrupt_quarantined');
   });
 
   it('flush with no pending write returns true', async () => {
