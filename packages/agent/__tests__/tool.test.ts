@@ -12,6 +12,7 @@ import {
   type TeamAgentSendInput,
   type TeamAgentSendResult,
   type TeamMemberSummary,
+  TeamMetadataCorruptError,
   type TeamPostInput,
   type TeamPostResult,
 } from '../src/index.js';
@@ -287,6 +288,22 @@ describe('agent tool', () => {
     expect(parse(await call(tool, { action: 'list', visibility: 'team' }))).toEqual([
       expect.objectContaining({ id: child.id, visibility: 'team' }),
     ]);
+  });
+
+  it('corrupt team metadata surfaces as team_metadata_corrupt instead of invalid_input', async () => {
+    const made = makeService();
+    const corrupt = new TeamMetadataCorruptError('/data/teams/default/alpha/team.json');
+    const service = Object.create(made.service) as AgentService & {
+      new: () => Promise<never>;
+    };
+    service.new = async () => {
+      throw corrupt;
+    };
+    const tool = createAgentTool(service, {});
+
+    expect(await call(tool, { action: 'new', name: 'alpha' })).toBe(
+      'Error: team_metadata_corrupt: /data/teams/default/alpha/team.json',
+    );
   });
 
   it('mixing single fields with a batch is rejected as invalid_input and creates nothing', async () => {

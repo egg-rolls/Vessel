@@ -30,6 +30,8 @@ import {
 import { AgentSnapshotStore, snapshotPath } from './snapshot.js';
 import {
   type AgentBodyPointer,
+  type AgentDrainOptions,
+  type AgentDrainOutcome,
   AgentError,
   type AgentEvent,
   type AgentEventListener,
@@ -187,6 +189,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly logger: Logger;
   private readonly snapshot: AgentSnapshotStore | undefined;
   private readonly queues = new Map<string, MemberQueue>();
+  /** drain 之后不再从队列起新轮（关闭窗口内排队的消息随进程退出丢弃） */
+  private draining = false;
   /** gone 成员的 single-flight resume；同一 id 并发 dispatch 只 spawn 一次 */
   private readonly resuming = new Map<string, Promise<void>>();
   /** 同一源成员的 single-flight fork；并发只 spawn 一个新 Agent */
@@ -1613,6 +1617,48 @@ export class AgentServiceImpl implements AgentService {
     }
   }
 
+  /**
+   * 关闭前中断并等待成员轮收口：此后不再从队列起新轮，只在跑轮结束（或超时）。
+   * 不改 registry 状态 / membership；队列里的后续消息随进程退出丢弃。
+   */
+  async drain(options: AgentDrainOptions = {}): Promise<AgentDrainOutcome> {
+    await this.ready;
+    this.draining = true;
+    const active = (): boolean => {
+      for (const queue of this.queues.values()) {
+        if (queue.turnActive) return true;
+      }
+      return false;
+    };
+    if (!active()) return 'idle';
+
+    for (const record of this.registry.all()) {
+      const member = toRuntimeMember(record);
+      try {
+        this.runtime.cancel(member);
+      } catch (error) {
+        this.logger.warn('agent.drain.cancel_failed', {
+          member_id: record.id,
+          error: errorText(error),
+        });
+      }
+    }
+
+    const timeoutMs = options.timeoutMs ?? 5000;
+    const sleep =
+      options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const now = options.now ?? Date.now;
+    const deadline = now() + timeoutMs;
+    while (active() && now() < deadline) {
+      await sleep(25);
+    }
+    if (active()) {
+      this.logger.warn('agent.drain.timeout', { tenant_id: this.tenantId });
+      return 'timeout';
+    }
+    return 'interrupted';
+  }
+
   async flushSnapshot(): Promise<boolean> {
     await this.ready;
     if (!this.snapshot) return true;
@@ -1736,6 +1782,7 @@ export class AgentServiceImpl implements AgentService {
    * external owner 的消息只入队，由 REPL 通过 takeMessages 消费，不在这里起轮。
    */
   private pump(memberId: string): void {
+    if (this.draining) return;
     const member = this.registry.get(memberId);
     if (!member) return;
     // gone（需 resume）或 rotating（S2 轮换中）都不推进队列

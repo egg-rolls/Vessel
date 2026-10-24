@@ -52,6 +52,7 @@ export {
 export {
   FileTeamStore,
   type FileTeamStoreOptions,
+  TeamMetadataCorruptError,
   teamDirPath,
   teamLogPath,
   teamMetadataPath,
@@ -61,6 +62,8 @@ export { type AgentToolOptions, createAgentTool } from './tool.js';
 export {
   type AgentBodyHistoryEntry,
   type AgentBodyPointer,
+  type AgentDrainOptions,
+  type AgentDrainOutcome,
   AgentError,
   type AgentErrorCode,
   type AgentEvent,

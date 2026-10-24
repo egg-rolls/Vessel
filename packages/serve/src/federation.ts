@@ -425,7 +425,7 @@ function bearerToken(req: Request): string | undefined {
 
 /**
  * 线性遍历全部 peer 做定长比较（不提前返回），命中且长度一致才算匹配。
- * 未知 token 不会因比较提前退出而泄漏命中位置。
+ * 未知 token 不会因比较提前退出而泄漏命中位置；同一 token 命中多个 peer 时拒绝。
  */
 function matchPeer(
   candidate: string,
@@ -433,15 +433,20 @@ function matchPeer(
 ): FederationGatewayPeer | undefined {
   const candidateBytes = Buffer.from(candidate, 'utf8');
   let matched: FederationGatewayPeer | undefined;
+  let matches = 0;
   for (const peer of peers) {
     const expectedBytes = Buffer.from(peer.token, 'utf8');
     if (expectedBytes.length === 0) continue;
     const sameLength = expectedBytes.length === candidateBytes.length;
     const compared = sameLength ? candidateBytes : Buffer.alloc(expectedBytes.length);
     const equal = timingSafeEqual(expectedBytes, compared);
-    if (equal && sameLength) matched = peer;
+    if (equal && sameLength) {
+      matched = peer;
+      matches += 1;
+    }
   }
-  return matched;
+  // 配置层已丢弃重复 token；这里是纵深防御：歧义一律 401，不静默 last-wins。
+  return matches === 1 ? matched : undefined;
 }
 
 type BodyResult = { ok: true; value: unknown } | { ok: false };

@@ -2,12 +2,13 @@
  * 成员快照：`<dataDir>/agents/<tenant>.json`（0600 原子写）。
  *
  * 快照只含成员状态，不含消息队列（重启后未处理消息丢失）。
- * 加载失败不抛错：返回空列表并记录，避免损坏文件阻塞服务启动。
+ * 文件损坏时先隔离为 `<path>.corrupt-<timestamp>` 再按空列表加载：
+ * 不阻塞启动，也不让下一次状态写覆盖唯一恢复副本。
  *
  * @module @vessel-agent/agent
  */
 
-import { access, copyFile, mkdir, readFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { atomicWrite, type Logger, noopLogger } from '@vessel-agent/core';
 import {
@@ -169,6 +170,8 @@ export class AgentSnapshotStore {
   private chain: Promise<boolean> = Promise.resolve(true);
   /** 读到 v1 且尚未成功备份时置位；write 前必须补做，否则放弃写入（避免无回滚） */
   private backupPending = false;
+  /** 损坏文件隔离失败时置位：write 直接放弃，避免覆盖唯一恢复副本 */
+  private writeBlocked = false;
 
   constructor(
     private readonly filePath: string,
@@ -190,17 +193,19 @@ export class AgentSnapshotStore {
     return this.filePath;
   }
 
-  /** 读取；缺失 / 损坏 / 版本不符都返回空列表；v1 可读并在首次写 v2 前备份 */
+  /** 读取；缺失返回空列表；损坏 / 版本不符先隔离再返回空列表；v1 可读并在首次写 v2 前备份 */
   async load(): Promise<PersistedAgentRecord[]> {
     let raw: string;
     try {
       raw = await readFile(this.filePath, 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        const detail = error instanceof Error ? error.message : String(error);
         this.logger.error('agent.snapshot.load_failed', {
           path: this.filePath,
-          error: error instanceof Error ? error.message : String(error),
+          error: detail,
         });
+        await this.quarantine(detail);
       }
       return [];
     }
@@ -209,18 +214,22 @@ export class AgentSnapshotStore {
     try {
       parsed = JSON.parse(raw);
     } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
       this.logger.error('agent.snapshot.load_failed', {
         path: this.filePath,
-        error: error instanceof Error ? error.message : String(error),
+        error: detail,
       });
+      await this.quarantine(detail);
       return [];
     }
 
     if (!isRecord(parsed) || (parsed.version !== 1 && parsed.version !== AGENT_SNAPSHOT_VERSION)) {
+      const detail = `unsupported snapshot version: ${String(isRecord(parsed) ? parsed.version : 'n/a')}`;
       this.logger.error('agent.snapshot.load_failed', {
         path: this.filePath,
-        error: `unsupported snapshot version: ${String(isRecord(parsed) ? parsed.version : 'n/a')}`,
+        error: detail,
       });
+      await this.quarantine(detail);
       return [];
     }
 
@@ -229,6 +238,7 @@ export class AgentSnapshotStore {
         path: this.filePath,
         error: 'members is not an array',
       });
+      await this.quarantine('members is not an array');
       return [];
     }
 
@@ -252,6 +262,36 @@ export class AgentSnapshotStore {
       this.logger.warn('agent.snapshot.members_skipped', { path: this.filePath, count: skipped });
     }
     return members;
+  }
+
+  /**
+   * 把损坏文件移到 `<path>.corrupt-<timestamp>`；隔离失败时禁止后续写入。
+   * 隔离是保留唯一恢复副本的手段，不是修复：不删除、不改写原字节。
+   */
+  private async quarantine(reason: string): Promise<void> {
+    const base = `${this.filePath}.corrupt-${this.now()}`;
+    let target = base;
+    let suffix = 1;
+    while (await fileExists(target)) {
+      target = `${base}-${suffix}`;
+      suffix += 1;
+    }
+    try {
+      await rename(this.filePath, target);
+      this.logger.error('agent.snapshot.corrupt_quarantined', {
+        path: this.filePath,
+        quarantine_path: target,
+        error: reason,
+      });
+    } catch (error) {
+      // 已被其它进程移走：恢复副本仍在，允许后续写入新文件。
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+      this.writeBlocked = true;
+      this.logger.error('agent.snapshot.corrupt_quarantine_failed', {
+        path: this.filePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -279,6 +319,14 @@ export class AgentSnapshotStore {
 
   /** 原子写；任何失败返回 false，不向上抛 */
   async write(members: PersistedAgentRecord[]): Promise<boolean> {
+    // 损坏文件没能隔离：写入会覆盖唯一恢复副本，放弃本次写并记录失败。
+    if (this.writeBlocked) {
+      this.logger.error('agent.snapshot.write_failed', {
+        path: this.filePath,
+        error: 'quarantine_failed',
+      });
+      return false;
+    }
     // 读到 v1 但备份失败过：写入会失去回滚点，放弃本次写。
     if (!(await this.ensureV1Backup())) return false;
     const file: AgentSnapshotFile = {
