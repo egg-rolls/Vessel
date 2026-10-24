@@ -10,10 +10,15 @@
  * （见 gatewayUrl.ts）。跨 Origin 时 gateway 必须配置 `serve.allowed_origins`。
  */
 
+import { unwrapAgentResult } from './agent-result';
 import type { ListedInteraction, ListedInteractionPage } from './interaction-hydration';
 import { permissionRespondParams } from './interactions';
 import type {
+  AgentBatchResponse,
+  AgentCreateInput,
+  AgentSummary,
   AgentsTreeResponse,
+  AgentUpdateInput,
   AskUserAnswer,
   CapabilityManifest,
   ConfigResponse,
@@ -821,6 +826,27 @@ export class GatewayClient {
 
   archiveTeam(teamId: string): Promise<TeamSummary> {
     return this.rpc<TeamSummary>('teams.archive', { team_id: teamId });
+  }
+
+  // ── Agent CRUD（0.25；canonical `agents.create|update|close`）──
+  // update 的 model / system_prompt 从下一个 Body 生效，name 立即生效。
+
+  async createAgent(input: AgentCreateInput): Promise<AgentSummary> {
+    return unwrapAgentResult(
+      await this.rpc<AgentBatchResponse>('agents.create', { agents: [input] }),
+    );
+  }
+
+  async updateAgent(input: AgentUpdateInput): Promise<AgentSummary> {
+    return unwrapAgentResult(
+      await this.rpc<AgentBatchResponse>('agents.update', { agents: [input] }),
+    );
+  }
+
+  async closeAgent(agentId: string): Promise<AgentSummary> {
+    return unwrapAgentResult(
+      await this.rpc<AgentBatchResponse>('agents.close', { agents: [{ agent_id: agentId }] }),
+    );
   }
 
   // ── 0.3 REST（durable / MCP）──────────────────
