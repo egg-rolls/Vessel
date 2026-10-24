@@ -3,9 +3,10 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
-## [Unreleased]
+## [0.23.0] - 2026-10-24
 
-> 0.23.0（S9.4 多节点 attention；未发布，manifest 仍为 0.22.0）。
+> 0.23.0（基于 `main` 0.22.1，未发布）：S9.4 多节点 attention + Q-swarm attention 修复。
+> 未 tag、未 `npm publish`。
 
 ### Added
 
