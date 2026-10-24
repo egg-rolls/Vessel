@@ -34,6 +34,8 @@ class FakeTeams implements TeamControlLike {
   readonly posts: Array<Parameters<TeamControlLike['post']>[0]> = [];
   rosterMembers: TeamMemberLike[] = [];
   policy?: Record<string, unknown>;
+  /** 模拟 TeamService.get 的展示窗口；roster() 始终返回完整列表。 */
+  getWindow?: number;
   /** 模拟 TeamService 的 dispatch 结果；缺省 = 每个 mention 都 queued。 */
   deliveredOverride?: TeamDeliveryLike[];
 
@@ -53,7 +55,7 @@ class FakeTeams implements TeamControlLike {
         created_at: 0,
         ...(this.policy !== undefined ? { policy: this.policy } : {}),
       },
-      members: this.rosterMembers,
+      members: this.rosterMembers.slice(0, this.getWindow ?? this.rosterMembers.length),
       messages: [],
     };
   }
@@ -289,6 +291,45 @@ describe('federation inbound addressing (S8.1)', () => {
       principal: 'owner',
       delivered: 0,
     });
+  });
+
+  it('resolves a principal outside the 20-member display window', async () => {
+    const teams = new FakeTeams();
+    teams.policy = { federation: { accept: 'principal' } };
+    // get 只返回前 20 名（模拟 TeamService 缺省窗口）；roster() 返回完整 25 名。
+    teams.getWindow = 20;
+    teams.rosterMembers = Array.from({ length: 25 }, (_, index) =>
+      member(`m${String(index).padStart(2, '0')}`, { presence: 'live' }),
+    );
+    const { route, events } = createRoute(teams);
+
+    const response = await send(
+      route,
+      envelope('msg-25', {
+        to: { node_id: LOCAL_NODE, team_id: TEAM, principal: 'm24' },
+      }),
+    );
+    expect(response.status).toBe(202);
+    expect(teams.posts).toHaveLength(1);
+    expect(teams.posts[0]?.mentions).toEqual(['agent-m24']);
+    expect(received(events)[0]?.data).toMatchObject({
+      resolution: 'principal',
+      principal: 'm24',
+      delivered: 1,
+    });
+  });
+
+  it('unknown accept values fall back to log and never dispatch', async () => {
+    const teams = new FakeTeams();
+    teams.policy = { federation: { accept: 'all' } };
+    teams.rosterMembers = [member('bob', { presence: 'live' })];
+    const { route, events } = createRoute(teams);
+
+    const response = await send(route, envelope('msg-unknown-accept'));
+    expect(response.status).toBe(202);
+    expect(teams.posts).toHaveLength(1);
+    expect(teams.posts[0]?.mentions).toEqual([]);
+    expect(received(events)[0]?.data).toMatchObject({ resolution: 'log', delivered: 0 });
   });
 
   it("V8: accept:'log' is log-only; a runtime 'members' value fails explicitly", async () => {

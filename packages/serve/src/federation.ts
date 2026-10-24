@@ -497,17 +497,23 @@ type AcceptModeResult =
   | { ok: false; code: 'members_not_supported' };
 
 /**
- * 接收侧同意策略（S8）：只接受 `'principal' | 'log'`，缺省 `'principal'`。
- * 手改 team.json 的 `'members'` 必须明确失败（DECISION-037 §5.1），
- * 不得 salvage 成 principal 后静默继续；配置层另由 validator 报错。
+ * 接收侧同意策略（S8）：显式 `'principal'` 才唤醒成员；`'log'` 或任何未知值
+ * 一律只写日志（0 run）。手改 team.json 的 `'members'` 必须明确失败
+ * （DECISION-037 §5.1），不得 salvage 成 principal；配置层另由 validator 报错。
+ * 字段缺省（没有 policy / federation / accept）沿用 DECISION 的默认 `'principal'`。
  */
 function acceptModeOf(team: TeamDetailLike): AcceptModeResult {
   const policy = team.team.policy;
   if (!isRecord(policy)) return { ok: true, mode: 'principal' };
   const federation = policy.federation;
-  if (!isRecord(federation)) return { ok: true, mode: 'principal' };
+  if (federation === undefined) return { ok: true, mode: 'principal' };
+  // 存在但形状非法：fail safe 到 log，绝不据此唤醒成员。
+  if (!isRecord(federation)) return { ok: true, mode: 'log' };
   if (federation.accept === 'members') return { ok: false, code: 'members_not_supported' };
-  return { ok: true, mode: federation.accept === 'log' ? 'log' : 'principal' };
+  if (federation.accept === undefined || federation.accept === 'principal') {
+    return { ok: true, mode: 'principal' };
+  }
+  return { ok: true, mode: 'log' };
 }
 
 /**
@@ -866,7 +872,20 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
       } else if (mode === 'log') {
         resolution = 'log';
       } else {
-        const member = resolvePrincipalMember(team.members, message.to.principal);
+        // principal 解析必须用完整 roster；get 的默认窗口只用于展示，
+        // 否则第 21..N 名成员会被误判为 unknown_principal。
+        let roster: readonly TeamMemberLike[];
+        try {
+          roster = await teams.roster(localTeamId);
+        } catch {
+          publish('federation.rejected', {
+            direction: 'in',
+            code: 'internal',
+            ...peerDetail,
+          });
+          return errorJson('internal', 'Failed to read the team roster', 500, extra);
+        }
+        const member = resolvePrincipalMember(roster, message.to.principal);
         if (!member) {
           // private / left / closed / 不存在 / 重名：统一 404，不写日志、不 dispatch。
           publish('federation.rejected', {
