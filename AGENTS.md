@@ -64,6 +64,8 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - **0.22.1 状态**：维护清理（分支 `0.22.1-maint`，未随版本发布）：删除 legacy 跨节点 Agent 传输面 —— gateway `/v1/team/*`、`packages/serve/src/team.ts`、`LoopbackTransport` / `PeerRegistry`、`src/remote-transport.ts`、`src/node-registry.ts`、`DeferredTransport`；`transport.kind` 只剩 `in-process`（`loopback` / `remote` 与 `transport.nodes[]` 是显式 validation error）；`health.get` 去掉 `team` 字段。canonical 仍 **48**。
 
+- **0.25.0 Web 状态（易用性重做，分支 `0.25-web-shell` / `0.25-web-domains`，未随版本发布）**：编排组顺序固定 Agents → Teams → Nodes；底部 Status 组放 Hub（面板核心）与 Gateway（网关），各显示状态点与版本；新增 `#/gateway` 状态页，Hub 页只保留自身状态。Nodes 承担添加节点（终端配对 / join 命令 + 浏览器连接与 token）与移除；Teams 承担创建（弹窗）/ 编辑（页面）/ 归档（警示）；Agents 承担 create（弹窗）/ edit（页面）/ close（警示）并复用 canonical `agents.*`。列表统一支持按名字 / ID 搜索；节点显示名由 `health.get.node.name` 提供，UI 不展示 UUID，同名显示去重为 `-1` / `-2`。i18n：Agents=智能体、Teams=团队、Nodes=节点、Hub=面板核心、Gateway=网关；顶栏搜索框左侧有语言切换。共享组件与间距见 `docs/WEB-UI.md`。
+
 - **0.25.0 状态（节点显示名，分支 `0.25-node-name`，未随版本发布）**：`<dataDir>/node.json` additive 增加 `name`（展示名；`node_id` 仍是唯一寻址 / 去重键）；首次创建用 sanitized `os.hostname()`（trim / 去控制字符 / 折叠空白 / 上限 64，空回退 `node`），旧文件缺 `name` 只在读取时派生、不回写；新增可选 `host.node_name`（优先级 config > node.json > hostname，配置优先只比较告警、不改写），`name` 缺失或非法只回退 hostname（不触发 `node_identity_corrupt`）；`health.get` 的 `node.name` 为必需字符串（未注入时回退 `node_id`），hub 目录 / snapshot 帧 additive 携带 `name`。canonical 仍 **51**，hub 协议版本不变。
 
 ## 代码风格与硬规矩

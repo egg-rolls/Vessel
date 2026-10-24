@@ -252,9 +252,10 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
       params_schema: tenantParamSchema,
       result_schema: {
         type: 'object',
-        required: ['schema_version', 'config', 'paths', 'tenant_id'],
+        required: ['schema_version', 'config', 'paths', 'tenant_id', 'version'],
         properties: {
           schema_version: { type: 'integer' },
+          version: { type: 'string' },
           config: { type: 'object' },
           paths: {
             type: 'object',
@@ -272,6 +273,8 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
         const snapshot = await configControl().snapshot(ctx.tenantId);
         return {
           schema_version: snapshot.schema_version,
+          // Web 的 Hub / Gateway 状态位需要版本号；与 capabilities.list 同源。
+          version: version ?? '0.0.0',
           // DECISION-020 §R1.1：防御性二次脱敏（asm snapshot 已先脱敏）；
           // 复用 @vessel-agent/config#redactConfig，不在 serve 维护副本。
           config: redactConfig(snapshot.config as VesselConfig),
