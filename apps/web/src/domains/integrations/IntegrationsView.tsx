@@ -14,7 +14,7 @@ import {
 import { StatusChip, statusLabel } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
-import { SearchInput } from '../../components/ui';
+import { Badge, Button, SearchInput } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import { buildMcpPaletteActions } from '../../state/palette-actions';
@@ -137,29 +137,30 @@ function ToolsPanel() {
   }
 
   return (
-    <div className="settings-section">
+    <div className="flex flex-col gap-6">
       {!connected && tools.length > 0 && (
         <StaleNotice message={t('integrations.tools.stale')} onRetry={resource.reload} />
       )}
       {error && tools.length > 0 && (
         <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
       )}
-      <div className="filter-bar">
+      <div className="flex flex-wrap items-center gap-2">
         <SearchInput
           value={query}
           onChange={setQuery}
           placeholder={t('integrations.tools.searchPlaceholder')}
           ariaLabel={t('integrations.tools.searchLabel')}
+          className="grow basis-60 max-w-search"
         />
-        <button
-          type="button"
-          className={`filter-chip ${onlyConfirm ? 'active' : ''}`.trim()}
+        <Button
+          variant="chip"
+          size="small"
           aria-pressed={onlyConfirm}
           onClick={() => setOnlyConfirm((value) => !value)}
         >
           {t('integrations.tools.onlyConfirm', { count: confirmCount })}
-        </button>
-        <span className="count-pill">
+        </Button>
+        <span className="ml-1.5 inline-block rounded-full bg-sunken px-1.5 py-0.5 font-mono text-xs text-muted">
           {filtered.length}/{tools.length}
         </span>
       </div>
@@ -169,44 +170,47 @@ function ToolsPanel() {
         <EmptyState
           title={t('integrations.tools.noMatch')}
           action={
-            <button
-              type="button"
-              className="btn"
+            <Button
               onClick={() => {
                 setQuery('');
                 setOnlyConfirm(false);
               }}
             >
               {t('common.clearFilters')}
-            </button>
+            </Button>
           }
         />
       ) : (
-        <div className="card-grid">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {filtered.map((tool, index) => {
             const server = mcpServerOf(tool.name);
             const open = expanded.has(tool.name);
             const panelId = `${panelBaseId}-tool-${index}`;
             return (
-              <article className="card tool-catalog-card" key={tool.name}>
+              <article
+                className="flex flex-col overflow-visible rounded-md bg-raised shadow-elev-1"
+                key={tool.name}
+              >
                 <button
                   type="button"
-                  className="card-header tool-catalog-summary"
+                  className="flex min-h-control w-full items-center gap-2 rounded-md px-3 py-2 text-left text-muted hover:bg-hover pointer-coarse:min-h-touch"
                   aria-expanded={open}
                   aria-controls={open ? panelId : undefined}
                   onClick={() => toggleTool(tool.name)}
                 >
-                  <span className="card-title mono">{tool.name}</span>
+                  <span className="min-w-0 break-words font-mono text-sm font-medium text-ink">
+                    {tool.name}
+                  </span>
                   {tool.has_permission_check && (
-                    <span
-                      className="perm-badge perm-warn"
-                      title={t('integrations.tools.needsConfirm')}
-                    >
+                    <Badge tone="warn" title={t('integrations.tools.needsConfirm')}>
                       {t('integrations.tools.badgeConfirm')}
-                    </span>
+                    </Badge>
                   )}
-                  {server && <span className="perm-badge">MCP · {server}</span>}
-                  <span className="tool-catalog-toggle" aria-hidden="true">
+                  {server && <Badge>MCP · {server}</Badge>}
+                  <span
+                    className="ml-auto flex-none font-mono text-sm leading-none text-faint"
+                    aria-hidden="true"
+                  >
                     {open ? '▾' : '▸'}
                   </span>
                   <span className="sr-only">
@@ -216,9 +220,13 @@ function ToolsPanel() {
                   </span>
                 </button>
                 {open && (
-                  <div className="tool-catalog-detail" id={panelId}>
-                    <h4 className="tool-catalog-detail-title">{t('integrations.tools.details')}</h4>
-                    {tool.description && <p className="card-desc">{tool.description}</p>}
+                  <div className="flex min-w-0 flex-col gap-2 px-3 pb-3" id={panelId}>
+                    <h4 className="m-0 font-mono text-xs font-medium uppercase tracking-wide text-faint">
+                      {t('integrations.tools.details')}
+                    </h4>
+                    {tool.description && (
+                      <p className="text-sm leading-normal text-muted">{tool.description}</p>
+                    )}
                     <JsonView
                       value={tool.input_schema}
                       label={t('integrations.tools.schema')}
