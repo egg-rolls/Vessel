@@ -46,13 +46,19 @@ export interface InteractionMethodsDeps {
     remember: boolean,
     tenantId?: string,
     scope?: PermissionScope,
-    actor?: { answered_by: 'human' | 'policy'; answered_via?: 'tui' | 'rpc' | 'policy' },
+    actor?: {
+      answered_by: 'human' | 'policy';
+      answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
+    },
   ): PermissionRespondResult;
   respondAsk(
     requestId: string,
     answers: unknown[],
     tenantId?: string,
-    actor?: { answered_by: 'human' | 'policy'; answered_via?: 'tui' | 'rpc' | 'policy' },
+    actor?: {
+      answered_by: 'human' | 'policy';
+      answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
+    },
   ): unknown;
   interactions: InteractionSources;
   /**
@@ -117,7 +123,7 @@ const interactionItemSchema = {
         answers: { type: 'array' },
         answered_at: { type: 'number' },
         answered_by: { type: 'string', enum: ['human', 'policy'] },
-        answered_via: { type: 'string', enum: ['tui', 'rpc', 'policy'] },
+        answered_via: { type: 'string', enum: ['tui', 'rpc', 'cli', 'policy'] },
         policy: { type: 'string', enum: ['deny_after', 'auto_allow'] },
         latency_ms: { type: 'number' },
       },
@@ -185,6 +191,56 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
     });
   }
   return [...merged.values()];
+}
+
+type ListOrder = 'oldest' | 'newest';
+
+interface ListCursor {
+  order: ListOrder;
+  createdAt: number;
+  requestId: string;
+}
+
+function parseListOrder(value: unknown): ListOrder {
+  if (value === undefined) return 'newest';
+  if (value === 'oldest' || value === 'newest') return value;
+  throw new RpcError('invalid_params', "order must be 'oldest' or 'newest'");
+}
+
+function encodeListCursor(cursor: ListCursor): string {
+  return Buffer.from(
+    JSON.stringify({ o: cursor.order, t: cursor.createdAt, r: cursor.requestId }),
+    'utf8',
+  ).toString('base64url');
+}
+
+function parseListCursor(value: unknown): ListCursor {
+  if (typeof value !== 'string') throw new RpcError('invalid_params', 'invalid cursor');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+  } catch {
+    throw new RpcError('invalid_params', 'invalid cursor');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new RpcError('invalid_params', 'invalid cursor');
+  }
+  const { o, t, r } = parsed as Record<string, unknown>;
+  if (
+    (o !== 'oldest' && o !== 'newest') ||
+    typeof t !== 'number' ||
+    !Number.isFinite(t) ||
+    typeof r !== 'string'
+  ) {
+    throw new RpcError('invalid_params', 'invalid cursor');
+  }
+  return { order: o, createdAt: t, requestId: r };
+}
+
+function compareListItems(order: ListOrder, a: ListedInteraction, b: ListedInteraction): number {
+  const byRequestId = a.request_id < b.request_id ? -1 : a.request_id > b.request_id ? 1 : 0;
+  if (a.created_at === b.created_at) return byRequestId;
+  return order === 'newest' ? b.created_at - a.created_at : a.created_at - b.created_at;
 }
 
 function parseListLimit(value: unknown): number {
@@ -257,6 +313,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           decision: { type: 'string', enum: ['allow', 'deny'] },
           remember: { type: 'boolean' },
           scope: { type: 'string', enum: ['once', 'session', 'always'] },
+          answered_via: { type: 'string', enum: ['rpc', 'cli'] },
           tenant_id: { type: 'string' },
         },
       },
@@ -269,7 +326,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           scope: { type: 'string', enum: ['once', 'session', 'always'] },
           duplicate: { type: 'boolean' },
           answered_by: { type: 'string', enum: ['human', 'policy'] },
-          answered_via: { type: 'string', enum: ['tui', 'rpc', 'policy'] },
+          answered_via: { type: 'string', enum: ['tui', 'rpc', 'cli', 'policy'] },
           latency_ms: { type: 'number' },
           team_id: { type: 'string' },
         },
@@ -294,7 +351,10 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           params.remember === true,
           ctx.tenantId,
           rawScope as PermissionScope | undefined,
-          { answered_by: 'human', answered_via: 'rpc' },
+          {
+            answered_by: 'human',
+            answered_via: params.answered_via === 'cli' ? 'cli' : 'rpc',
+          },
         );
       },
     },
@@ -307,6 +367,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         properties: {
           request_id: { type: 'string', minLength: 1 },
           answers: { type: 'array' },
+          answered_via: { type: 'string', enum: ['rpc', 'cli'] },
           tenant_id: { type: 'string' },
         },
       },
@@ -317,7 +378,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           ok: { type: 'boolean' },
           duplicate: { type: 'boolean' },
           answered_by: { type: 'string', enum: ['human', 'policy'] },
-          answered_via: { type: 'string', enum: ['tui', 'rpc', 'policy'] },
+          answered_via: { type: 'string', enum: ['tui', 'rpc', 'cli', 'policy'] },
           latency_ms: { type: 'number' },
           team_id: { type: 'string' },
         },
@@ -331,7 +392,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         assertTeamAccess(requestId, ctx.principal);
         return respondAsk(requestId, answers, ctx.tenantId, {
           answered_by: 'human',
-          answered_via: 'rpc',
+          answered_via: params.answered_via === 'cli' ? 'cli' : 'rpc',
         });
       },
     },
@@ -346,6 +407,8 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           team_id: { type: 'string' },
           status: { type: 'string', enum: ['pending', 'answered', 'orphaned'] },
           limit: { type: 'integer', minimum: 1, maximum: MAX_LIST_LIMIT },
+          order: { type: 'string', enum: ['oldest', 'newest'] },
+          cursor: { type: 'string' },
           tenant_id: { type: 'string' },
         },
       },
@@ -354,6 +417,8 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         required: ['interactions'],
         properties: {
           interactions: { type: 'array', items: interactionItemSchema },
+          total: { type: 'integer' },
+          next_cursor: { type: 'string' },
         },
       },
       handler: (params, ctx) => {
@@ -374,6 +439,12 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         const runId =
           typeof params.run_id === 'string' && params.run_id.length > 0 ? params.run_id : undefined;
         const limit = parseListLimit(params.limit);
+        const order = parseListOrder(params.order);
+        const cursor = params.cursor === undefined ? undefined : parseListCursor(params.cursor);
+        // 换序后沿用旧 cursor 会静默错页；直接拒绝。
+        if (cursor !== undefined && cursor.order !== order) {
+          throw new RpcError('invalid_params', 'invalid cursor');
+        }
         let items = collectInteractions(interactions, ctx.tenantId).filter(
           (item) =>
             (rawStatus === undefined || item.status === rawStatus) &&
@@ -392,17 +463,37 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         if (teamFilter !== undefined) {
           items = items.filter((item) => itemTeamId(item) === teamFilter);
         }
-        // 最新在前；同时间戳按 request_id 稳定排序。
-        items.sort((a, b) =>
-          a.created_at === b.created_at
-            ? a.request_id < b.request_id
-              ? -1
-              : a.request_id > b.request_id
-                ? 1
-                : 0
-            : b.created_at - a.created_at,
-        );
-        return { interactions: items.slice(0, limit) };
+        // 同时间戳一律按 request_id 升序，保证翻页边界稳定。
+        items.sort((a, b) => compareListItems(order, a, b));
+        // total 是过滤后的总条数，不受 limit / cursor 影响。
+        const total = items.length;
+        if (cursor !== undefined) {
+          items = items.filter((item) => {
+            const afterCursor =
+              order === 'newest'
+                ? item.created_at < cursor.createdAt
+                : item.created_at > cursor.createdAt;
+            return (
+              afterCursor ||
+              (item.created_at === cursor.createdAt && item.request_id > cursor.requestId)
+            );
+          });
+        }
+        const page = items.slice(0, limit);
+        const last = page[page.length - 1];
+        return {
+          interactions: page,
+          total,
+          ...(items.length > limit && last !== undefined
+            ? {
+                next_cursor: encodeListCursor({
+                  order,
+                  createdAt: last.created_at,
+                  requestId: last.request_id,
+                }),
+              }
+            : {}),
+        };
       },
     },
   ];

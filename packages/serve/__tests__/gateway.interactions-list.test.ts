@@ -523,4 +523,207 @@ describe('interactions.list', () => {
       },
     });
   });
+
+  it('cursor paging drops or duplicates rows when created_at ties', async () => {
+    const dir = tempDir();
+    seedRecords(dir, 'default', [
+      seedRecord({ requestId: 'req-a', created_at: 1000 }),
+      seedRecord({ requestId: 'req-b', created_at: 2000 }),
+      seedRecord({ requestId: 'req-c', created_at: 2000 }),
+      seedRecord({ requestId: 'req-f', created_at: 2000 }),
+      seedRecord({ requestId: 'req-d', created_at: 3000 }),
+      seedRecord({ requestId: 'req-e', created_at: 3000 }),
+    ]);
+
+    const gw = startGateway({ events: new MemoryEventStream(), port: 0, interactionsDir: dir });
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    const walk = async (order: 'oldest' | 'newest') => {
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 10; page += 1) {
+        const result = (await client.request('interactions.list', {
+          order,
+          limit: 2,
+          ...(cursor !== undefined ? { cursor } : {}),
+        })) as {
+          interactions: ListedInteraction[];
+          total: number;
+          next_cursor?: string;
+        };
+        expect(result.total).toBe(6);
+        seen.push(...result.interactions.map((item) => item.request_id));
+        if (result.next_cursor === undefined) return seen;
+        expect(result.interactions).toHaveLength(2);
+        cursor = result.next_cursor;
+      }
+      throw new Error('pagination did not terminate');
+    };
+
+    // 同 created_at 的条目按 request_id 升序，翻页边界不得重复或跳过。
+    expect(await walk('newest')).toEqual(['req-d', 'req-e', 'req-b', 'req-c', 'req-f', 'req-a']);
+    expect(await walk('oldest')).toEqual(['req-a', 'req-b', 'req-c', 'req-f', 'req-d', 'req-e']);
+  });
+
+  it('total shrinks to the page size when limit or cursor is applied', async () => {
+    const dir = tempDir();
+    seedRecords(dir, 'default', [
+      seedRecord({ requestId: 'req-1', created_at: 1000 }),
+      seedRecord({ requestId: 'req-2', created_at: 2000 }),
+      seedRecord({
+        requestId: 'req-3',
+        created_at: 3000,
+        status: 'answered',
+        answer: { decision: 'deny', scope: 'once', answered_at: 3500 },
+      }),
+    ]);
+
+    const gw = startGateway({ events: new MemoryEventStream(), port: 0, interactionsDir: dir });
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    const first = (await client.request('interactions.list', {
+      status: 'orphaned',
+      limit: 1,
+    })) as { interactions: ListedInteraction[]; total: number; next_cursor?: string };
+    // total 是过滤后的总数（两条 pending 启动时转 orphaned），不随 limit 缩小。
+    expect(first.total).toBe(2);
+    expect(first.interactions).toHaveLength(1);
+    if (first.next_cursor === undefined) throw new Error('expected a next_cursor');
+
+    const second = (await client.request('interactions.list', {
+      status: 'orphaned',
+      limit: 1,
+      cursor: first.next_cursor,
+    })) as { interactions: ListedInteraction[]; total: number; next_cursor?: string };
+    expect(second.total).toBe(2);
+    expect(second.interactions).toHaveLength(1);
+    expect(second.next_cursor).toBeUndefined();
+
+    const answered = (await client.request('interactions.list', {
+      status: 'answered',
+      limit: 1,
+    })) as { interactions: ListedInteraction[]; total: number; next_cursor?: string };
+    expect(answered.total).toBe(1);
+    expect(answered.next_cursor).toBeUndefined();
+  });
+
+  it('a cursor from another order or a malformed cursor is rejected', async () => {
+    const dir = tempDir();
+    seedRecords(dir, 'default', [
+      seedRecord({ requestId: 'req-1', created_at: 1000 }),
+      seedRecord({ requestId: 'req-2', created_at: 2000 }),
+    ]);
+
+    const gw = startGateway({ events: new MemoryEventStream(), port: 0, interactionsDir: dir });
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    const newest = (await client.request('interactions.list', {
+      order: 'newest',
+      limit: 1,
+    })) as { next_cursor?: string };
+    if (newest.next_cursor === undefined) throw new Error('expected a next_cursor');
+
+    const errorFor = async (params: Record<string, unknown>): Promise<string> => {
+      try {
+        await client.request('interactions.list', params);
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+      return '';
+    };
+
+    // 换序后沿用旧 cursor 必须报错，不能静默返回另一页。
+    const switched = await errorFor({ order: 'oldest', cursor: newest.next_cursor });
+    expect(switched).toContain('invalid_params');
+    expect(switched).toContain('invalid cursor');
+
+    const garbage = await errorFor({ cursor: 'not-a-cursor' });
+    expect(garbage).toContain('invalid_params');
+    expect(garbage).toContain('invalid cursor');
+
+    const wrongShape = await errorFor({
+      cursor: Buffer.from(JSON.stringify({ o: 'newest', t: 'x', r: 'req-1' }), 'utf8').toString(
+        'base64url',
+      ),
+    });
+    expect(wrongShape).toContain('invalid_params');
+    expect(wrongShape).toContain('invalid cursor');
+  });
+
+  it('a cli attribution persisted on disk is dropped after restart', async () => {
+    const dir = tempDir();
+    seedRecords(dir, 'default', [
+      seedRecord({
+        requestId: 'req-cli',
+        status: 'answered',
+        answer: {
+          decision: 'allow',
+          scope: 'once',
+          answered_at: 1500,
+          answered_by: 'human',
+          answered_via: 'cli',
+        },
+      }),
+    ]);
+
+    const gw = startGateway({ events: new MemoryEventStream(), port: 0, interactionsDir: dir });
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    const listed = (await client.request('interactions.list', {})) as {
+      interactions: ListedInteraction[];
+    };
+    expect(listed.interactions[0]?.answer).toMatchObject({ answered_via: 'cli' });
+  });
+
+  it('cli answers are written back as rpc when answered_via is dropped', async () => {
+    const dir = tempDir();
+    const { gw } = await makePermissionGateway(dir);
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    await submit(gw, 'please run');
+    const cliRequest = await client.nextEvent('tool.permission.request');
+    const cliId = cliRequest.requestId as string;
+    const cliResult = (await client.request('permission.respond', {
+      request_id: cliId,
+      decision: 'allow',
+      answered_via: 'cli',
+    })) as Record<string, unknown>;
+    expect(cliResult).toMatchObject({ answered_by: 'human', answered_via: 'cli' });
+    await client.nextEvent('run.completed');
+
+    await submit(gw, 'please run again');
+    const rpcRequest = await client.nextEvent('tool.permission.request');
+    const rpcId = rpcRequest.requestId as string;
+    const rpcResult = (await client.request('permission.respond', {
+      request_id: rpcId,
+      decision: 'deny',
+    })) as Record<string, unknown>;
+    expect(rpcResult).toMatchObject({ answered_by: 'human', answered_via: 'rpc' });
+    await client.nextEvent('run.completed');
+
+    const listed = (await client.request('interactions.list', {})) as {
+      interactions: ListedInteraction[];
+    };
+    const listedById = new Map(listed.interactions.map((item) => [item.request_id, item]));
+    expect(listedById.get(cliId)?.answer).toMatchObject({ answered_via: 'cli' });
+    expect(listedById.get(rpcId)?.answer).toMatchObject({ answered_via: 'rpc' });
+
+    const path = join(dir, 'interactions-default.json');
+    await waitUntil(() => {
+      if (!existsSync(path)) return false;
+      const raw = readFileSync(path, 'utf8');
+      return raw.includes('"answered_via": "cli"') && raw.includes('"answered_via": "rpc"');
+    });
+    const persisted = JSON.parse(readFileSync(path, 'utf8')) as {
+      interactions: Array<{ requestId: string; answer?: { answered_via?: string } }>;
+    };
+    const persistedById = new Map(persisted.interactions.map((item) => [item.requestId, item]));
+    expect(persistedById.get(cliId)?.answer?.answered_via).toBe('cli');
+    expect(persistedById.get(rpcId)?.answer?.answered_via).toBe('rpc');
+  });
 });

@@ -65,7 +65,7 @@ export interface PendingPermission {
 /** 应答者归属；agent 不是合法值（only-human）。 */
 export interface InteractionActor {
   answered_by: 'human' | 'policy';
-  answered_via?: 'tui' | 'rpc' | 'policy';
+  answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
 }
 
 /** `permission.respond` 的结果（additive）。 */
@@ -76,7 +76,7 @@ export interface PermissionRespondResult {
   /** 重复应答：沿用第一次的结果，不再发布事件。 */
   duplicate?: true;
   answered_by?: 'human' | 'policy';
-  answered_via?: 'tui' | 'rpc' | 'policy';
+  answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
   latency_ms?: number;
   team_id?: string;
 }
@@ -86,7 +86,7 @@ export interface AskRespondResult {
   ok: true;
   duplicate?: true;
   answered_by: 'human' | 'policy';
-  answered_via?: 'tui' | 'rpc' | 'policy';
+  answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
   latency_ms?: number;
   team_id?: string;
 }
@@ -537,7 +537,10 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     const scope: PermissionScope =
       rawScope === 'once' || rawScope === 'session' || rawScope === 'always' ? rawScope : 'once';
     const answeredVia =
-      data.answered_via === 'tui' || data.answered_via === 'rpc' || data.answered_via === 'policy'
+      data.answered_via === 'tui' ||
+      data.answered_via === 'rpc' ||
+      data.answered_via === 'cli' ||
+      data.answered_via === 'policy'
         ? data.answered_via
         : undefined;
     const policy =
