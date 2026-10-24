@@ -8,7 +8,6 @@
  * - 只复用既有 canonical RPC（interactions.list / health.get / teams.list），不新增方法。
  */
 import type { ListedInteraction, ListedInteractionPage } from './interaction-hydration';
-import type { TeamSummary } from './types';
 import { checkGatewayUrl } from './url';
 
 export const NODES_STORAGE_KEY = 'vessel.nodes';
@@ -314,8 +313,7 @@ export async function fetchAllNodeAttention(
   );
 }
 
-/** 只读 Team 列表：用该节点的人类 token 调 `teams.list`（不用 federation team-info）。 */
-export async function fetchNodeTeams(node: NodeConfig, token?: string): Promise<TeamSummary[]> {
-  const body = await fetchNodeRpc<{ teams?: TeamSummary[] }>(node, 'teams.list', {}, token);
-  return Array.isArray(body?.teams) ? body.teams : [];
+/** 路由 / 展示用的节点键：node_id 优先，缺失回退用户命名。 */
+export function nodeKeyOf(node: Pick<NodeConfig, 'name' | 'nodeId'>): string {
+  return node.nodeId ?? node.name;
 }

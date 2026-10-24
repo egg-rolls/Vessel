@@ -9,10 +9,13 @@ export interface DomainDef {
   id: Domain;
 }
 
-/** 5 个主领域；Settings 固定在底部（D1）。label 走 i18n，随 locale 变化。 */
+/** 主领域；Settings 固定在底部（D1）。label 走 i18n，随 locale 变化。 */
 export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'chat' },
-  { id: 'team' },
+  { id: 'hub' },
+  { id: 'nodes' },
+  { id: 'teams' },
+  { id: 'agents' },
   { id: 'runs' },
   { id: 'integrations' },
   { id: 'observe' },
@@ -23,7 +26,8 @@ export const NAV_GROUPS: readonly {
   id: string;
   domains: readonly PrimaryDomain[];
 }[] = [
-  { id: 'chat', domains: ['chat', 'team'] },
+  { id: 'chat', domains: ['chat'] },
+  { id: 'network', domains: ['hub', 'nodes', 'teams', 'agents'] },
   { id: 'observe', domains: ['runs', 'observe'] },
   { id: 'integrations', domains: ['integrations'] },
 ];
@@ -56,13 +60,19 @@ export function routeBreadcrumb(route: Route): string {
         ? t('breadcrumb.runs.detailRun', { tab })
         : t('breadcrumb.runs.detail', { tab });
     }
-    case 'team': {
-      const teamId = 'teamId' in route ? route.teamId : undefined;
-      if (!teamId) return t('breadcrumb.team');
-      return 'memberId' in route && route.memberId
-        ? t('breadcrumb.team.member')
-        : t('breadcrumb.team.chat');
-    }
+    case 'hub':
+      return t('breadcrumb.hub');
+    case 'nodes':
+      return route.nodeKey
+        ? t('breadcrumb.nodes.detail', { node: route.nodeKey })
+        : t('breadcrumb.nodes');
+    case 'teams':
+      if (!('teamId' in route)) return t('breadcrumb.teams');
+      return route.agentId
+        ? t('breadcrumb.teams.agent')
+        : t('breadcrumb.teams.detail', { team: route.teamId });
+    case 'agents':
+      return t('breadcrumb.agents');
     case 'integrations':
       return t(`breadcrumb.integrations.${route.tab}`);
     case 'observe':

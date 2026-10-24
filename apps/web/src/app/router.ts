@@ -13,18 +13,14 @@ export type Route =
       tab: 'tools' | 'mcp' | 'channels';
     }
   | { domain: 'observe'; tab: 'metrics' | 'evals' | 'diagnostics' | 'tasks' | 'attention' }
-  | { domain: 'team' }
-  | { domain: 'team'; teamId: string; memberId?: string; bodyId?: string }
+  | { domain: 'hub' }
+  | { domain: 'nodes'; nodeKey?: string }
+  | { domain: 'teams' }
+  | { domain: 'teams'; nodeKey: string; teamId: string; agentId?: string; bodyId?: string }
+  | { domain: 'agents'; nodeKey?: string; teamId?: string; state?: string; presence?: string }
   | {
       domain: 'settings';
-      tab:
-        | 'connection'
-        | 'nodes'
-        | 'config'
-        | 'capabilities'
-        | 'tenants'
-        | 'appearance'
-        | 'display';
+      tab: 'connection' | 'config' | 'capabilities' | 'tenants' | 'appearance' | 'display';
     };
 
 export type Domain = Route['domain'];
@@ -36,7 +32,6 @@ const INTEGRATION_TABS = new Set(['tools', 'mcp', 'channels']);
 const OBSERVE_TABS = new Set(['metrics', 'evals', 'diagnostics', 'tasks', 'attention']);
 const SETTINGS_TABS = new Set([
   'connection',
-  'nodes',
   'config',
   'capabilities',
   'tenants',
@@ -51,6 +46,13 @@ function decodeSegment(value: string): string {
   } catch {
     return value;
   }
+}
+
+/** 查询参数的非空解码值；缺失 / 空串返回 undefined。 */
+function queryText(query: URLSearchParams, key: string): string | undefined {
+  const value = query.get(key);
+  if (value === null || value === '') return undefined;
+  return decodeSegment(value);
 }
 
 function pick<T extends string>(
@@ -111,28 +113,48 @@ export function parseRoute(hash: string): Route {
       );
       return { domain: 'observe', tab };
     }
-    case 'team': {
-      // `#/team//members/x` 的空 teamId 段不能被 filter(Boolean) 吞掉，
-      // 否则会误解析成 teamId='members' 并请求不存在的 Team。
-      if (rawSegments[1] === '') return { domain: 'team' };
-      const teamId = segments[1] !== undefined ? decodeSegment(segments[1]) : undefined;
-      if (!teamId) return { domain: 'team' };
-      const memberId =
-        segments[2] === 'members' && segments[3] !== undefined
-          ? decodeSegment(segments[3])
+    case 'hub':
+      return { domain: 'hub' };
+    case 'nodes': {
+      const nodeKey = segments[1] !== undefined ? decodeSegment(segments[1]) : undefined;
+      return nodeKey ? { domain: 'nodes', nodeKey } : { domain: 'nodes' };
+    }
+    case 'teams': {
+      // `#/teams//...` 的空 nodeKey 段不能被 filter(Boolean) 吞掉。
+      if (rawSegments[1] === '') return { domain: 'teams' };
+      const nodeKey = segments[1] !== undefined ? decodeSegment(segments[1]) : undefined;
+      const teamId = segments[2] !== undefined ? decodeSegment(segments[2]) : undefined;
+      if (!nodeKey || !teamId) return { domain: 'teams' };
+      const agentId =
+        segments[3] === 'agents' && segments[4] !== undefined
+          ? decodeSegment(segments[4])
           : undefined;
       const bodyId =
-        memberId && query.get('body') !== null ? decodeSegment(query.get('body') ?? '') : undefined;
+        agentId && query.get('body') !== null ? decodeSegment(query.get('body') ?? '') : undefined;
       return {
-        domain: 'team',
+        domain: 'teams',
+        nodeKey,
         teamId,
-        ...(memberId ? { memberId } : {}),
+        ...(agentId ? { agentId } : {}),
         ...(bodyId ? { bodyId } : {}),
+      };
+    }
+    case 'agents': {
+      const nodeKey = queryText(query, 'node');
+      const teamId = queryText(query, 'team');
+      const state = queryText(query, 'state');
+      const presence = queryText(query, 'presence');
+      return {
+        domain: 'agents',
+        ...(nodeKey ? { nodeKey } : {}),
+        ...(teamId ? { teamId } : {}),
+        ...(state ? { state } : {}),
+        ...(presence ? { presence } : {}),
       };
     }
     case 'settings': {
       const tab = pick<
-        'connection' | 'nodes' | 'config' | 'capabilities' | 'tenants' | 'appearance' | 'display'
+        'connection' | 'config' | 'capabilities' | 'tenants' | 'appearance' | 'display'
       >(segments[1] ?? query.get('tab'), SETTINGS_TABS, 'connection');
       return { domain: 'settings', tab };
     }
@@ -161,13 +183,26 @@ export function formatRoute(route: Route): string {
       return `#/integrations/${route.tab}`;
     case 'observe':
       return `#/observe/${route.tab}`;
-    case 'team': {
-      if (!('teamId' in route) || !route.teamId) return '#/team';
-      const base = `#/team/${encodeURIComponent(route.teamId)}`;
-      if (!('memberId' in route) || !route.memberId) return base;
-      const memberBase = `${base}/members/${encodeURIComponent(route.memberId)}`;
-      if (!('bodyId' in route) || !route.bodyId) return memberBase;
-      return `${memberBase}?${new URLSearchParams({ body: route.bodyId }).toString()}`;
+    case 'hub':
+      return '#/hub';
+    case 'nodes':
+      return route.nodeKey ? `#/nodes/${encodeURIComponent(route.nodeKey)}` : '#/nodes';
+    case 'teams': {
+      if (!('teamId' in route)) return '#/teams';
+      const base = `#/teams/${encodeURIComponent(route.nodeKey)}/${encodeURIComponent(route.teamId)}`;
+      if (!route.agentId) return base;
+      const agentBase = `${base}/agents/${encodeURIComponent(route.agentId)}`;
+      if (!route.bodyId) return agentBase;
+      return `${agentBase}?${new URLSearchParams({ body: route.bodyId }).toString()}`;
+    }
+    case 'agents': {
+      const query = new URLSearchParams();
+      if (route.nodeKey) query.set('node', route.nodeKey);
+      if (route.teamId) query.set('team', route.teamId);
+      if (route.state) query.set('state', route.state);
+      if (route.presence) query.set('presence', route.presence);
+      const suffix = query.toString();
+      return suffix ? `#/agents?${suffix}` : '#/agents';
     }
     case 'settings':
       return `#/settings/${route.tab}`;

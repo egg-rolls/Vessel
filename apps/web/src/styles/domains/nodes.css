@@ -1,0 +1,229 @@
+/* ─────────────────────────────────────────────────────────────
+   Nodes 域（0.24 Web IA）：节点选择 + 单节点健康 / Team / Agent。
+   全部 .nodes- / .team-form 前缀；面板与表格复用既有 .panel / .diag-list / .field。
+   ───────────────────────────────────────────────────────────── */
+
+.nodes-picker {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.nodes-picker-item + .nodes-picker-item {
+  border-top: 1px solid var(--line);
+}
+
+.nodes-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nodes-picker-row:hover {
+  background: var(--surface-sunken);
+}
+
+.nodes-picker-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.nodes-picker-id {
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nodes-current-badge {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.nodes-derived {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.nodes-panel-header {
+  justify-content: space-between;
+}
+
+.nodes-token-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.nodes-token-warning strong {
+  font-size: 12px;
+}
+
+.nodes-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.nodes-list:first-child {
+  margin-top: 0;
+}
+
+.nodes-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.nodes-row + .nodes-row {
+  border-top: 1px solid var(--line);
+}
+
+.nodes-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.nodes-row-title {
+  color: var(--ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.nodes-row-sub {
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.nodes-row-metric {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.nodes-row-actions {
+  display: inline-flex;
+  margin-left: auto;
+}
+
+.nodes-badge {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-deep);
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.nodes-agent-group + .nodes-agent-group {
+  margin-top: 14px;
+}
+
+.nodes-agent-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nodes-agent-row .status-chip {
+  margin-left: auto;
+}
+
+.nodes-presence {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-deep);
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.nodes-presence-live {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.nodes-presence-gone {
+  background: var(--surface-deep);
+  color: var(--faint);
+}
+
+.nodes-note {
+  margin: 0 0 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ── Team 表单弹窗 ─────────────────────────────────────────── */
+
+.team-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.team-form .form-grid {
+  margin-top: 4px;
+}
+
+.team-form textarea.input {
+  min-height: 64px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.team-form .input[readonly] {
+  background: var(--surface-deep);
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .nodes-row {
+    flex-wrap: wrap;
+  }
+
+  .nodes-row-metric {
+    margin-left: auto;
+  }
+}

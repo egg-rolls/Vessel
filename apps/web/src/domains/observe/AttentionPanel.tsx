@@ -19,6 +19,7 @@ import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { ListedInteraction } from '../../gateway/interaction-hydration';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
+import { nodeKeyOf } from '../../gateway/nodes';
 import { displayGatewayUrl } from '../../gateway/url';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
@@ -30,10 +31,12 @@ function pageOrigin(): string {
   return typeof window === 'undefined' ? '' : window.location.origin;
 }
 
-/** 有 session 去会话；否则有 team 去 Team；都没有则不跳转。 */
-function interactionRoute(item: ListedInteraction): Route | null {
+/** 有 session 去会话；否则有 team 去该节点的 Team；都没有则不跳转。 */
+function interactionRoute(item: ListedInteraction, node: NodeView): Route | null {
   if (item.session_id) return { domain: 'chat', sessionId: item.session_id };
-  if (item.team_id) return { domain: 'team', teamId: item.team_id };
+  if (item.team_id) {
+    return { domain: 'teams', nodeKey: nodeKeyOf(node), teamId: item.team_id };
+  }
   return null;
 }
 
@@ -255,7 +258,7 @@ function SingleNodeAttention({ navigate }: { navigate: (route: Route) => void })
                 </div>
                 <ul className="attention-items">
                   {items.map((item) => {
-                    const target = interactionRoute(item);
+                    const target = node ? interactionRoute(item, node) : null;
                     return (
                       <AttentionRow
                         key={item.request_id}
@@ -442,7 +445,7 @@ function NodeAttentionGroup({
               <ul className="attention-items">
                 {items.map((item) => {
                   // 只有当前节点的会话可以跳转；其它节点行只读。
-                  const target = node.current ? interactionRoute(item) : null;
+                  const target = node.current ? interactionRoute(item, node) : null;
                   return (
                     <AttentionRow
                       key={item.request_id}
