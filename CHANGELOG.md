@@ -3,6 +3,33 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [Unreleased]
+
+> 0.23.0（S9.4 多节点 attention；未发布，manifest 仍为 0.22.0）。
+
+### Added
+
+- **`attention.nodes[]` 配置**：每节点 `name` / `url` / `tokenEnv` / `nodeId?` / `caFile?`；
+  不接受内联 token，凭据只从该节点的 `tokenEnv` 读取，不回退其它配置或
+  `VESSEL_CONNECT_TOKEN`。
+- **`vessel attention --node <name>`**：使用配置节点及其独立人类 token；输出形状与
+  `--connect` 单节点一致。
+- **`vessel attention --all-nodes`**：逐节点并发列 pending / orphaned；JSON 输出
+  `{ nodes: [...] }`（单节点形状不变），人类输出按节点分组；某节点 401 / 网络失败 /
+  token_env 缺失只影响自己的分组，任一失败 exit 1。仅列表，不能与 respond /
+  `--node` / `--connect` / `--to` / `--cursor` / `--interactive` 组合。
+- **`--to` 节点选择**：未显式 `--connect` 时按配置节点 `nodeId` / `name` 选中唯一节点；
+  多匹配要求 `--node`；`nodeId` 配置后每次用 `health.get` 校验。
+- **Web 多节点只读聚合**：当前连接节点 + sessionStorage 额外节点；每节点 token 独立
+  存 sessionStorage（不落 localStorage / URL / 日志）；Attention 按节点分组、独立分页 /
+  失败，仅当前节点可跳转；Settings → Connection 提供添加 / 移除、`health.get` 状态与
+  按需 `teams.list`（人类 token，不用 federation team-info）。
+
+### Changed
+
+- hub 目录只用于发现；Web 不消费 hub 数据面，也不经 hub 代理正文。
+- canonical 仍 **48**；不新增远程 agent 生命周期。
+
 ## [0.22.0] - 2026-10-24
 
 > 0.22.0（基于 `main` 0.21.0，未发布）：远程 attention、interactions 分页与操作面统一。
