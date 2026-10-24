@@ -9,32 +9,32 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
-## [0.26.0] - 2026-10-24
+## [0.26.1] - 2026-10-24
 
-> 0.26.0（基于 0.25.0，未发布）：owner 端点收敛到 canonical RPC；CI 升 Bun 1.4.4。
-> 未 tag、未 publish。
-
-### Added
-
-- **canonical `agents.send` / `agents.dispatch` / `agents.rotate`**（54 → **57**）：
-  批量契约，与输入同序、单条失败隔离；team-scoped token 逐条校验目标 team。
-  `agents.create|update|close` 与它们的 handler 与传输无关，gateway 与 owner 端点共用。
-- **principal additive `agent_id`**：owner transport 用合成 principal
-  （`scope: admin` + owner agent id）表示发送者；gateway / team token 仍按 `human`。
-
-### Changed
-
-- **owner 端点只做 loopback transport**：按 canonical 方法表分发，删除自己的动作清单与
-  结果映射；wire 方法名迁移为 `agents.*` / `teams.*`（pre-1.0，无别名），CLI 语法不变。
-- **CI / release 的 Bun 升到 1.4.4**（B-011 mitigation）：两次 `workflow_dispatch`
-  全矩阵 + 首次 main push 连续通过，含 Windows。
-- CLI 的 mention 解析改用 `agents.list` + team 过滤（`team.roster` 不单独提升为方法）；
-  `teams.budget` override 的 `via` 由 `cli` 改为 `api`（审计语义不变）。
+> 0.26.1（基于 0.26.0，未发布）：Web UI 结构收敛与完整本地化。未 tag、未 publish。
 
 ### Fixed
 
-- B-011 降为 mitigated（Bun 1.4.4；继续观察 main push 后关闭）。
+- **弹窗**：`ModalShell` / `ConfirmDialog` 改为 portal 到 `body`；遮罩覆盖完整视觉视口
+  （`100vw` + `100dvh`、安全区 padding），打开时锁定背景滚动；尺寸改
+  `sm | md | lg` tokens，不再写死 620px。
+- **尺寸**：palette / drawer / modal / search / select / team 的语义宽度改为 tokens；
+  去掉相关魔法数。
+- **裁切**：修正弹窗关闭按钮 / focus ring、`.net-*` / `.teams-*` 卡片的误裁切。
+- **中文化**：壳层、共享组件、chat / runs / observe / integrations / settings /
+  gateway 连接层里的硬编码中文全部走 `t()`；两份 catalog 同步；zh 里仍是英文的
+  UI 标签改为中文（技术词 / 错误码不译）。
+- **节点显示名**：新增 `useNodeNames`，所有展示位优先 `health.get.node.name`，
+  按 nodeKey 缓存；不再把 UUID / IP 形状的标签当展示名，原始 node_id 只在
+  节点详情的高级信息出现。
+- **工具目录**：每个工具收敛为一张紧凑卡片（名称 + 需确认 + MCP 徽标），
+  点击展开描述与 input schema。
+
+### Changed
+
+- 新增共享 `SearchInput` 组件，替换 Nodes / Teams / Agents / Runs / Sessions /
+  Integrations / Capabilities / Config 的重复搜索框；`docs/WEB-UI.md` 同步。
 
 ### Not building
 
-- rotate 的 Web UI；远程 agent 生命周期（spawn / close / rotate 的跨节点策略）。
+- 不做视觉重设计；不改业务逻辑 / RPC 契约。
