@@ -1182,14 +1182,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
     nodeTokens = hubRuntime.nodeTokens;
 
+    // owner 端点与 gateway 共用同一 canonical 控制面适配器。
+    const agentControlLike = createAgentControl(wiring.service, tenantId);
     let ownerServer: AgentOwnerServer | undefined;
     // owner 端点只服务交互 REPL / serve 的 CLI attach；headless（`--run` / 管道）
     // 是一次性进程，不监听端口。AgentService / Team 仍在进程内可用。
     if (!headless) {
       try {
         ownerServer = await startAgentOwnerServer({
-          service: wiring.service,
-          team: wiring.team,
+          control: agentControlLike,
+          teams: wiring.team,
+          ownerId: wiring.ownerId,
           dataDir,
           tenantId,
           logger,
@@ -1214,7 +1217,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       hubControl: hubRuntime.hubControl,
       teamScope: hubRuntime.teamScope,
       nodeTokens: hubRuntime.nodeTokens,
-      control: createAgentControl(wiring.service, tenantId),
+      control: agentControlLike,
       dispose: async () => {
         // 先停注入，避免关闭过程中父 turn 再排空 owner 队列。
         wiring.injector.dispose();

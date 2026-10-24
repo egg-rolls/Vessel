@@ -99,10 +99,17 @@ describe('vessel team command', () => {
       options(
         dir,
         fakeFetch((body) =>
-          body.method === 'team.roster'
+          body.method === 'agents.list'
             ? {
-                team_id: 'alpha',
-                members: [{ agent_id: 'a', name: 'alice', session_id: 's1' }],
+                agents: [
+                  {
+                    id: 'a',
+                    name: 'alice',
+                    session_id: 's1',
+                    team_id: 'alpha',
+                    membership: 'present',
+                  },
+                ],
               }
             : {
                 message_id: 'm1',
@@ -127,10 +134,17 @@ describe('vessel team command', () => {
         dir,
         fakeFetch((body) => {
           calls.push(body);
-          if (body.method === 'team.roster') {
+          if (body.method === 'agents.list') {
             return {
-              team_id: 'alpha',
-              members: [{ agent_id: 'a', name: 'alice', session_id: 's1' }],
+              agents: [
+                {
+                  id: 'a',
+                  name: 'alice',
+                  session_id: 's1',
+                  team_id: 'alpha',
+                  membership: 'present',
+                },
+              ],
             };
           }
           return {
@@ -145,7 +159,7 @@ describe('vessel team command', () => {
       ),
     );
     expect(result.exitCode).toBe(0);
-    const post = calls.find((call) => call.method === 'team.post');
+    const post = calls.find((call) => call.method === 'teams.post');
     expect(post?.params.mentions).toEqual(['a']);
   });
 
@@ -153,9 +167,11 @@ describe('vessel team command', () => {
     const dir = await setup();
     const calls: RpcBody[] = [];
     const roster = Array.from({ length: 25 }, (_, index) => ({
-      agent_id: `a-${index + 1}`,
+      id: `a-${index + 1}`,
       name: `agent${index + 1}`,
       session_id: `s-${index + 1}`,
+      team_id: 'alpha',
+      membership: 'present',
     }));
     const result = await runTeamCommand(
       { kind: 'post', teamId: 'alpha', content: 'hi', mentions: ['agent25'], json: true },
@@ -163,8 +179,8 @@ describe('vessel team command', () => {
         dir,
         fakeFetch((body) => {
           calls.push(body);
-          if (body.method === 'team.roster') {
-            return { team_id: 'alpha', members: roster };
+          if (body.method === 'agents.list') {
+            return { agents: roster };
           }
           return {
             message_id: 'm1',
@@ -178,10 +194,10 @@ describe('vessel team command', () => {
       ),
     );
     expect(result.exitCode).toBe(0);
-    const rosterCall = calls.find((call) => call.method === 'team.roster');
+    const rosterCall = calls.find((call) => call.method === 'agents.list');
     expect(rosterCall).toBeDefined();
-    expect(calls.some((call) => call.method === 'team.get')).toBe(false);
-    const post = calls.find((call) => call.method === 'team.post');
+    expect(calls.some((call) => call.method === 'teams.get')).toBe(false);
+    const post = calls.find((call) => call.method === 'teams.post');
     expect(post?.params.mentions).toEqual(['a-25']);
   });
 
@@ -194,17 +210,13 @@ describe('vessel team command', () => {
         dir,
         fakeFetch((body) => {
           calls.push(body);
-          return {
-            team: { team_id: 'alpha', name: 'alpha', member_count: 0 },
-            members: [],
-            messages: [],
-          };
+          return { agents: [] };
         }),
       ),
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('unknown team member');
-    expect(calls.some((call) => call.method === 'team.post')).toBe(false);
+    expect(calls.some((call) => call.method === 'teams.post')).toBe(false);
   });
 
   it('maps list/get/members commands to team methods', async () => {
@@ -212,10 +224,10 @@ describe('vessel team command', () => {
     const calls: RpcBody[] = [];
     const fetchImpl = fakeFetch((body) => {
       calls.push(body);
-      if (body.method === 'team.list') {
+      if (body.method === 'teams.list') {
         return { teams: [] };
       }
-      if (body.method === 'team.get') {
+      if (body.method === 'teams.get') {
         return {
           team: { team_id: 'alpha', name: 'alpha', member_count: 0 },
           members: [],
@@ -234,7 +246,7 @@ describe('vessel team command', () => {
       const result = await runTeamCommand(command, options(dir, fetchImpl));
       expect(result.exitCode).toBe(0);
     }
-    expect(calls.map((call) => call.method)).toEqual(['team.list', 'team.get', 'team.members']);
+    expect(calls.map((call) => call.method)).toEqual(['teams.list', 'teams.get', 'teams.members']);
   });
 
   it('shows the member window size against the full roster count', async () => {
@@ -293,7 +305,7 @@ describe('vessel team command', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(calls[0]).toEqual({
-      method: 'team.budget',
+      method: 'teams.budget',
       params: { team_id: 'alpha', action: 'status', conversation_id: 'conv_1' },
     });
     expect(result.stdout).toContain('conv_1');
@@ -335,7 +347,7 @@ describe('vessel team command', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(calls[0]).toEqual({
-      method: 'team.budget',
+      method: 'teams.budget',
       params: {
         team_id: 'alpha',
         action: 'override',
@@ -392,7 +404,7 @@ describe('vessel team command', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(calls[0]).toEqual({
-      method: 'team.create',
+      method: 'teams.create',
       params: {
         workspace: '/ws/alpha',
         name: 'Alpha',
@@ -437,7 +449,7 @@ describe('vessel team command', () => {
       options(dir, fetchImpl),
     );
 
-    expect(calls.map((call) => call.method)).toEqual(['team.create', 'team.update']);
+    expect(calls.map((call) => call.method)).toEqual(['teams.create', 'teams.update']);
     expect(calls[0]?.params.policy).toEqual({ allowFork: false });
     expect(calls[1]?.params.policy).toEqual({
       allowFork: true,
@@ -458,7 +470,7 @@ describe('vessel team command', () => {
         member_count: 0,
         online_count: 0,
         created_at: 1,
-        ...(body.method === 'team.archive' ? { archived_at: 2 } : {}),
+        ...(body.method === 'teams.archive' ? { archived_at: 2 } : {}),
       };
     });
 
@@ -471,7 +483,7 @@ describe('vessel team command', () => {
       options(dir, fetchImpl),
     );
 
-    expect(calls.map((call) => call.method)).toEqual(['team.update', 'team.archive']);
+    expect(calls.map((call) => call.method)).toEqual(['teams.update', 'teams.archive']);
     expect(calls[0]?.params).toEqual({ team_id: 'alpha', description: null });
     expect(calls[1]?.params).toEqual({ team_id: 'alpha' });
     expect(archived.exitCode).toBe(0);
