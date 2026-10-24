@@ -128,9 +128,10 @@ describe('agent bootstrap 0.17', () => {
     expect(record).not.toBeNull();
     if (!record) throw new Error('owner record missing');
 
-    const listed = await callAgentOwner(record, 'agent.list');
-    expect(Array.isArray(listed)).toBe(true);
-    expect((listed as Array<{ id: string }>).map((member) => member.id)).toContain('main');
+    const listed = (await callAgentOwner(record, 'agents.list')) as {
+      agents: Array<{ id: string }>;
+    };
+    expect(listed.agents.map((member) => member.id)).toContain('main');
   });
 
   it('wires the real TeamService into the hub snapshot', async () => {
@@ -262,7 +263,7 @@ describe('agent bootstrap 0.17', () => {
     expect(fs.existsSync(agentOwnerPath(dataDir))).toBe(false);
     expect(await readAgentOwnerRecord(dataDir)).toBeNull();
     if (record) {
-      await expect(callAgentOwner(record, 'agent.list')).rejects.toBeDefined();
+      await expect(callAgentOwner(record, 'agents.list')).rejects.toBeDefined();
     }
   });
 });

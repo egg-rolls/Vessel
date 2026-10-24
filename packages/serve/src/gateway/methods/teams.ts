@@ -50,6 +50,14 @@ function teamScopeOf(ctx: RpcMethodContext): string | undefined {
 }
 
 /**
+ * 发送者 / viewer 身份：合成 owner principal 用 owner agent id（恢复 private
+ * 可见性与回复路径）；gateway / team token 没有 agent_id，按 `human` 处理。
+ */
+function actorOf(ctx: RpcMethodContext): string {
+  return ctx.principal.agent_id ?? 'human';
+}
+
+/**
  * 请求的 team_id 必须落在 token 的 team 作用域内。
  * 在调用 `control.get/post/members` 之前执行：不泄漏跨 team 存在性，也不产生副作用。
  */
@@ -279,8 +287,9 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       handler: async (_params, ctx) => {
         try {
           const control = requireTeamControl(teams, ctx);
-          // canonical RPC 无 viewer：private 成员不可见（由 TeamService 过滤）。
-          const listed = await control.list();
+          // owner 传输带 viewer（private 可见）；gateway 无 viewer，沿用 TeamService 过滤。
+          const viewer = ctx.principal.agent_id;
+          const listed = await control.list(viewer !== undefined ? { viewer } : undefined);
           const scope = teamScopeOf(ctx);
           if (scope === undefined) return { teams: listed };
           return {
@@ -316,15 +325,16 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           const limit = typeof params.limit === 'number' ? params.limit : undefined;
           const membersLimit =
             typeof params.members_limit === 'number' ? params.members_limit : undefined;
-          const detail = await control.get(
-            teamId,
-            limit === undefined && membersLimit === undefined
+          const viewer = ctx.principal.agent_id;
+          const options =
+            viewer === undefined && limit === undefined && membersLimit === undefined
               ? undefined
               : {
+                  ...(viewer !== undefined ? { viewer } : {}),
                   ...(limit !== undefined ? { limit } : {}),
                   ...(membersLimit !== undefined ? { members_limit: membersLimit } : {}),
-                },
-          );
+                };
+          const detail = await control.get(teamId, options);
           if (!detail) throw new RpcError('not_found', `Team not found: ${teamId}`);
           if (scope === undefined) return detail;
           return { ...detail, team: redactTeamSummary(detail.team) };
@@ -363,12 +373,11 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           const mentions = Array.isArray(params.mentions)
             ? params.mentions.filter((item): item is string => typeof item === 'string')
             : undefined;
-          // canonical RPC 的发送者固定为 'human'；无 viewer（private 不可见）。
           return await control.post({
             team_id: teamId,
             content,
             mentions,
-            from: 'human',
+            from: actorOf(ctx),
             ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
           });
         } catch (error) {
@@ -404,7 +413,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
             team_id: teamId,
             action,
             member,
-            from: 'human',
+            from: actorOf(ctx),
           });
           if (!result) throw new RpcError('not_found', `Team not found: ${teamId}`);
           return result;

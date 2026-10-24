@@ -56,7 +56,11 @@ function rotatedBody() {
   };
 }
 
-async function mockOwner(rotateResult: unknown = rotatedBody()): Promise<{
+function rotatedItem() {
+  return { ok: true, ...rotatedBody() };
+}
+
+async function mockOwner(rotateItem: unknown = rotatedItem()): Promise<{
   dataDir: string;
   calls: RecordedCall[];
 }> {
@@ -76,35 +80,52 @@ async function mockOwner(rotateResult: unknown = rotatedBody()): Promise<{
         params: body.params ?? {},
         token: authorization.replace(/^Bearer\s+/i, ''),
       });
-      if (body.method === 'agent.new') return Response.json({ ok: true, result: statusBody('m1') });
-      if (body.method === 'agent.send') {
+      if (body.method === 'agents.create') {
         return Response.json({
           ok: true,
-          result: { queued: true, message_id: 'msg1', state: 'idle' },
+          result: { results: [{ ok: true, agent: statusBody('m1') }] },
         });
       }
-      if (body.method === 'agent.close') {
-        return Response.json({ ok: true, result: { state: 'closed' } });
-      }
-      if (body.method === 'agent.list') {
-        return Response.json({ ok: true, result: [statusBody('m1')] });
-      }
-      if (body.method === 'agent.rotate') {
-        return Response.json({ ok: true, result: rotateResult });
-      }
-      if (body.method === 'agent.dispatch') {
+      if (body.method === 'agents.send') {
         return Response.json({
           ok: true,
           result: {
-            status: 'queued',
-            message_id: 'msg1',
-            resolved_to: 'm2',
-            resolution: 'forked',
+            results: [{ ok: true, queued: true, message_id: 'msg1', state: 'idle' }],
+          },
+        });
+      }
+      if (body.method === 'agents.close') {
+        return Response.json({
+          ok: true,
+          result: {
+            results: [{ ok: true, agent: statusBody('m1'), agent_id: 'm1', closed: true }],
+          },
+        });
+      }
+      if (body.method === 'agents.list') {
+        return Response.json({ ok: true, result: { agents: [statusBody('m1')] } });
+      }
+      if (body.method === 'agents.rotate') {
+        return Response.json({ ok: true, result: { results: [rotateItem] } });
+      }
+      if (body.method === 'agents.dispatch') {
+        return Response.json({
+          ok: true,
+          result: {
+            results: [
+              {
+                ok: true,
+                status: 'queued',
+                message_id: 'msg1',
+                resolved_to: 'm2',
+                resolution: 'forked',
+              },
+            ],
           },
         });
       }
       return Response.json(
-        { ok: false, error: { code: 'agent_owner_unknown_method', message: 'unknown' } },
+        { ok: false, error: { code: 'not_found', message: 'unknown' } },
         { status: 404 },
       );
     },
@@ -149,13 +170,19 @@ describe('vessel agent CLI', () => {
     );
 
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ id: 'm1', state: 'idle' });
-    expect(calls[0]?.method).toBe('agent.new');
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      results: [{ ok: true, agent: { id: 'm1', state: 'idle' } }],
+    });
+    expect(calls[0]?.method).toBe('agents.create');
     expect(calls[0]?.params).toEqual({
-      name: 'worker',
-      model: 'm',
-      visibility: 'private',
-      system_prompt: 'be brief',
+      agents: [
+        {
+          name: 'worker',
+          model: 'm',
+          visibility: 'private',
+          system_prompt: 'be brief',
+        },
+      ],
     });
     expect(calls[0]?.token).toBe('owner-token');
   });
@@ -170,7 +197,8 @@ describe('vessel agent CLI', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('m1');
     expect(result.stdout).toContain('msg1');
-    expect(calls[0]?.params).toEqual({ to: 'm1', content: 'hello agent world' });
+    expect(calls[0]?.method).toBe('agents.send');
+    expect(calls[0]?.params).toEqual({ messages: [{ to: 'm1', content: 'hello agent world' }] });
   });
 
   it('dispatch --allow-fork forwards allow_fork (a dropped override silently disables manual fork)', async () => {
@@ -183,8 +211,10 @@ describe('vessel agent CLI', () => {
     );
 
     expect(result.exitCode).toBe(0);
-    expect(calls[0]?.method).toBe('agent.dispatch');
-    expect(calls[0]?.params).toEqual({ to: 'm1', content: 'hello', allow_fork: true });
+    expect(calls[0]?.method).toBe('agents.dispatch');
+    expect(calls[0]?.params).toEqual({
+      messages: [{ to: 'm1', content: 'hello', allow_fork: true }],
+    });
   });
 
   it('close --json prints the batch result', async () => {
@@ -194,8 +224,9 @@ describe('vessel agent CLI', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ state: 'closed' });
-    expect(calls[0]?.params).toEqual({ members: ['m1', 'm2'] });
+    expect(JSON.parse(result.stdout)).toMatchObject({ results: [{ ok: true, closed: true }] });
+    expect(calls[0]?.method).toBe('agents.close');
+    expect(calls[0]?.params).toEqual({ agents: [{ agent_id: 'm1' }, { agent_id: 'm2' }] });
   });
 
   it('list filters and renders human rows', async () => {
@@ -208,6 +239,7 @@ describe('vessel agent CLI', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Agents (1)');
     expect(result.stdout).toContain('m1');
+    expect(calls[0]?.method).toBe('agents.list');
     expect(calls[0]?.params).toEqual({ visibility: 'private', state: 'idle' });
   });
 
@@ -215,7 +247,7 @@ describe('vessel agent CLI', () => {
     const { dataDir } = await mockOwner();
     const result = await runAgentCommand(parse(['agent', 'list', '--json']), { dataDir });
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual([statusBody('m1')]);
+    expect(JSON.parse(result.stdout)).toEqual({ agents: [statusBody('m1')] });
   });
 
   it('reports agent_owner_unavailable when no owner record exists', async () => {
@@ -254,11 +286,9 @@ describe('vessel agent CLI', () => {
     );
 
     expect(result.exitCode).toBe(0);
-    expect(calls[0]?.method).toBe('agent.rotate');
+    expect(calls[0]?.method).toBe('agents.rotate');
     expect(calls[0]?.params).toEqual({
-      to: 'worker',
-      startup_prompt: 'go',
-      handoff_path: 'h.md',
+      agents: [{ to: 'worker', startup_prompt: 'go', handoff_path: 'h.md' }],
     });
     expect(result.stdout).toContain('rotated');
     expect(result.stdout).toContain('epoch 1');
@@ -266,11 +296,7 @@ describe('vessel agent CLI', () => {
   });
 
   it('rotate failure exits 1 and prints the code', async () => {
-    const { dataDir } = await mockOwner({
-      status: 'failed',
-      code: 'rotate_failed',
-      reason: 'x',
-    });
+    const { dataDir } = await mockOwner({ ok: false, code: 'rotate_failed', error: 'x' });
     const result = await runAgentCommand(
       { kind: 'rotate', json: false, to: 'worker', startupPrompt: 'go' },
       { dataDir },
@@ -287,18 +313,20 @@ describe('vessel agent CLI', () => {
       { dataDir: ok.dataDir },
     );
     expect(rotated.exitCode).toBe(0);
-    expect(JSON.parse(rotated.stdout)).toEqual(rotatedBody());
+    expect(JSON.parse(rotated.stdout)).toEqual({ results: [rotatedItem()] });
     // 无 --handoff 时 params 不带 handoff_path
-    expect(ok.calls[0]?.params).toEqual({ to: 'worker', startup_prompt: 'go' });
+    expect(ok.calls[0]?.params).toEqual({
+      agents: [{ to: 'worker', startup_prompt: 'go' }],
+    });
 
-    const failedBody = { status: 'failed', code: 'rotate_failed', reason: 'x' };
-    const failed = await mockOwner(failedBody);
+    const failedItem = { ok: false, code: 'rotate_failed', error: 'x' };
+    const failed = await mockOwner(failedItem);
     const rejected = await runAgentCommand(
       { kind: 'rotate', json: true, to: 'worker', startupPrompt: 'go' },
       { dataDir: failed.dataDir },
     );
     expect(rejected.exitCode).toBe(1);
-    expect(JSON.parse(rejected.stdout)).toEqual(failedBody);
+    expect(JSON.parse(rejected.stdout)).toEqual({ results: [failedItem] });
     expect(rejected.stderr).toBe('');
   });
 

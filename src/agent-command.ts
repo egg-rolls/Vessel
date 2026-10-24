@@ -89,44 +89,62 @@ function methodParams(command: AgentCommand): {
 } {
   if (command.kind === 'new') {
     return {
-      method: 'agent.new',
+      method: 'agents.create',
       params: {
-        ...(command.name !== undefined ? { name: command.name } : {}),
-        ...(command.model !== undefined ? { model: command.model } : {}),
-        ...(command.visibility !== undefined ? { visibility: command.visibility } : {}),
-        ...(command.systemPrompt !== undefined ? { system_prompt: command.systemPrompt } : {}),
-        ...(command.workspace !== undefined ? { workspace: command.workspace } : {}),
+        agents: [
+          {
+            ...(command.name !== undefined ? { name: command.name } : {}),
+            ...(command.model !== undefined ? { model: command.model } : {}),
+            ...(command.visibility !== undefined ? { visibility: command.visibility } : {}),
+            ...(command.systemPrompt !== undefined ? { system_prompt: command.systemPrompt } : {}),
+            ...(command.workspace !== undefined ? { workspace: command.workspace } : {}),
+          },
+        ],
       },
     };
   }
   if (command.kind === 'send') {
-    return { method: 'agent.send', params: { to: command.member, content: command.content } };
+    return {
+      method: 'agents.send',
+      params: { messages: [{ to: command.member, content: command.content }] },
+    };
   }
   if (command.kind === 'dispatch') {
     return {
-      method: 'agent.dispatch',
+      method: 'agents.dispatch',
       params: {
-        to: command.to,
-        content: command.content,
-        ...(command.allowFork !== undefined ? { allow_fork: command.allowFork } : {}),
+        messages: [
+          {
+            to: command.to,
+            content: command.content,
+            ...(command.allowFork !== undefined ? { allow_fork: command.allowFork } : {}),
+          },
+        ],
       },
     };
   }
   if (command.kind === 'rotate') {
     return {
-      method: 'agent.rotate',
+      method: 'agents.rotate',
       params: {
-        to: command.to,
-        startup_prompt: command.startupPrompt,
-        ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
+        agents: [
+          {
+            to: command.to,
+            startup_prompt: command.startupPrompt,
+            ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
+          },
+        ],
       },
     };
   }
   if (command.kind === 'close') {
-    return { method: 'agent.close', params: { members: command.members } };
+    return {
+      method: 'agents.close',
+      params: { agents: command.members.map((agent_id) => ({ agent_id })) },
+    };
   }
   return {
-    method: 'agent.list',
+    method: 'agents.list',
     params: {
       ...(command.visibility !== undefined ? { visibility: command.visibility } : {}),
       ...(command.state !== undefined ? { state: command.state } : {}),
@@ -134,39 +152,65 @@ function methodParams(command: AgentCommand): {
   };
 }
 
+/** canonical 批量结果的第一条（CLI 单条调用 = 单元素数组）。 */
+function firstResult(result: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(result) || !Array.isArray(result.results)) return undefined;
+  const first = result.results[0];
+  return isRecord(first) ? first : undefined;
+}
+
+function firstResultStatus(result: unknown): MemberStatus | undefined {
+  const item = firstResult(result);
+  return item !== undefined ? statusView(item.agent) : undefined;
+}
+
+/** 失败条目的人类输出：`code: error`。 */
+function failureLine(item: Record<string, unknown>): string {
+  const code = typeof item.code === 'string' ? item.code : 'failed';
+  const error = typeof item.error === 'string' ? item.error : code;
+  return `${code}: ${error}`;
+}
+
+function agentList(result: unknown): MemberStatus[] | undefined {
+  if (isRecord(result) && Array.isArray(result.agents)) {
+    return result.agents as MemberStatus[];
+  }
+  return Array.isArray(result) ? (result as MemberStatus[]) : undefined;
+}
+
 function humanOutput(command: AgentCommand, result: unknown): string {
   if (command.kind === 'new') {
-    const status = statusView(result);
-    return status ? formatStatus(status) : JSON.stringify(result, null, 2);
+    const item = firstResult(result);
+    if (item !== undefined && item.ok === true) {
+      const status = firstResultStatus(result);
+      return status ? formatStatus(status) : JSON.stringify(result, null, 2);
+    }
+    return item !== undefined ? failureLine(item) : JSON.stringify(result, null, 2);
   }
   if (command.kind === 'send') {
-    if (isRecord(result) && typeof result.message_id === 'string') {
-      return `${ui.symbol('ok')} queued ${result.message_id} → ${command.member} (${String(result.state ?? '')})`;
+    const item = firstResult(result);
+    if (item !== undefined && item.ok === true && typeof item.message_id === 'string') {
+      return `${ui.symbol('ok')} queued ${item.message_id} → ${command.member} (${String(item.state ?? '')})`;
     }
-    return JSON.stringify(result, null, 2);
+    return item !== undefined ? failureLine(item) : JSON.stringify(result, null, 2);
   }
   if (command.kind === 'dispatch') {
-    if (isRecord(result) && result.status === 'queued' && typeof result.message_id === 'string') {
-      return `queued ${result.message_id} -> ${String(result.resolved_to)} (${String(result.resolution)})`;
+    const item = firstResult(result);
+    if (item !== undefined && item.ok === true && typeof item.message_id === 'string') {
+      return `queued ${item.message_id} -> ${String(item.resolved_to)} (${String(item.resolution)})`;
     }
-    if (isRecord(result) && result.status === 'rejected') {
-      return `${String(result.code)}: ${String(result.reason)}`;
-    }
-    return JSON.stringify(result, null, 2);
+    return item !== undefined ? failureLine(item) : JSON.stringify(result, null, 2);
   }
   if (command.kind === 'rotate') {
-    if (isRecord(result) && result.status === 'rotated') {
-      return `rotated ${String(result.agent_id)} epoch ${String(result.epoch)} ${String(result.from_session_id)} -> ${String(result.to_session_id)}`;
+    const item = firstResult(result);
+    if (item !== undefined && item.ok === true) {
+      return `rotated ${String(item.agent_id)} epoch ${String(item.epoch)} ${String(item.from_session_id)} -> ${String(item.to_session_id)}`;
     }
-    if (isRecord(result) && result.status === 'failed') {
-      return `${String(result.code)}: ${String(result.reason)}`;
-    }
-    return JSON.stringify(result, null, 2);
+    return item !== undefined ? failureLine(item) : JSON.stringify(result, null, 2);
   }
   if (command.kind === 'close') return formatCloseResult(result);
-  return Array.isArray(result)
-    ? formatList(result as MemberStatus[])
-    : JSON.stringify(result, null, 2);
+  const statuses = agentList(result);
+  return statuses !== undefined ? formatList(statuses) : JSON.stringify(result, null, 2);
 }
 
 /** 执行一个 agent 子命令；不抛错，错误转 exitCode / stderr */
@@ -197,9 +241,14 @@ export async function runAgentCommand(
       ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     });
     const stdout = command.json ? JSON.stringify(result, null, 2) : humanOutput(command, result);
-    const rejected =
-      (command.kind === 'dispatch' && isRecord(result) && result.status === 'rejected') ||
-      (command.kind === 'rotate' && isRecord(result) && result.status === 'failed');
+    // 单条 send / dispatch / rotate / new 的逐条失败 → exit 1（close 保持批量汇总语义）。
+    const single =
+      command.kind === 'new' ||
+      command.kind === 'send' ||
+      command.kind === 'dispatch' ||
+      command.kind === 'rotate';
+    const item = single ? firstResult(result) : undefined;
+    const rejected = item !== undefined && item.ok === false;
     return { exitCode: rejected ? 1 : 0, stdout, stderr: '' };
   } catch (error) {
     return failure(error);

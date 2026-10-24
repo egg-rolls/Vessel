@@ -9,27 +9,32 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
-## [0.25.0] - 2026-10-24
+## [0.26.0] - 2026-10-24
 
-> 0.25.0（基于 0.24.1，未发布）：Web 易用性重做与单一 RPC 契约。未 tag、未 publish。
+> 0.26.0（基于 0.25.0，未发布）：owner 端点收敛到 canonical RPC；CI 升 Bun 1.4.4。
+> 未 tag、未 publish。
 
 ### Added
 
-- **canonical `agents.create|update|close`**（51 → **54**）：批量契约
-  `{ agents: [...] }` → `{ results: [...] }`，与输入同序、单条失败隔离；
-  `create` 拒绝 team-scoped token，`team_id` 只绑定已存在 Team；
-  `update` 改名立即生效，`model` / `system_prompt` 从下一具 Body 生效。
-- **节点显示名**：`node.json` 增加 `name`（首次取主机名，`host.node_name` 可覆盖），
-  `health.get.node.name` additive 暴露，hub 目录透传；`node_id` 仍是唯一寻址键。
-- **Web 对象页 CRUD**：Nodes（搜索 / 添加弹窗含终端命令 / 浏览器连接 / 移除警示）、
-  Teams（创建弹窗 / 编辑页 / 归档警示 / 搜索）、Agents（创建 / 编辑 / 关闭 / 搜索）。
-- **导航与状态**：编排组顺序 Agents → Teams → Nodes；底部 Status 组（Hub、Gateway）
-  带状态点与版本；新增 Gateway 状态页；顶栏搜索框左侧语言切换。
-- **共享组件文档** `docs/WEB-UI.md` 与统一的列表 / 卡片 / 搜索 / 状态样式。
+- **canonical `agents.send` / `agents.dispatch` / `agents.rotate`**（54 → **57**）：
+  批量契约，与输入同序、单条失败隔离；team-scoped token 逐条校验目标 team。
+  `agents.create|update|close` 与它们的 handler 与传输无关，gateway 与 owner 端点共用。
+- **principal additive `agent_id`**：owner transport 用合成 principal
+  （`scope: admin` + owner agent id）表示发送者；gateway / team token 仍按 `human`。
 
 ### Changed
 
-- Hub 页只保留 hub 自身状态与版本；配对 / join 命令与 Web 连接管理移入 Nodes。
-- i18n：Agents=智能体、Teams=团队、Nodes=节点、Hub=面板核心、Gateway=网关。
-- 节点列表不再展示 UUID（详情最多一处），同名节点显示去重为 `-1` / `-2`。
-- Settings 的额外节点连接管理移除（主 gateway 连接仍在 Settings）。
+- **owner 端点只做 loopback transport**：按 canonical 方法表分发，删除自己的动作清单与
+  结果映射；wire 方法名迁移为 `agents.*` / `teams.*`（pre-1.0，无别名），CLI 语法不变。
+- **CI / release 的 Bun 升到 1.4.4**（B-011 mitigation）：两次 `workflow_dispatch`
+  全矩阵 + 首次 main push 连续通过，含 Windows。
+- CLI 的 mention 解析改用 `agents.list` + team 过滤（`team.roster` 不单独提升为方法）；
+  `teams.budget` override 的 `via` 由 `cli` 改为 `api`（审计语义不变）。
+
+### Fixed
+
+- B-011 降为 mitigated（Bun 1.4.4；继续观察 main push 后关闭）。
+
+### Not building
+
+- rotate 的 Web UI；远程 agent 生命周期（spawn / close / rotate 的跨节点策略）。

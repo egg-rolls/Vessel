@@ -108,6 +108,23 @@ function teamMembers(result: unknown): TeamMemberView[] {
     .map((entry) => entry as unknown as TeamMemberView);
 }
 
+/** canonical `agents.list` → 某 Team 的完整 roster（只取 present，忽略 left）。 */
+function rosterFromAgents(result: unknown, teamId: string): TeamMemberView[] {
+  if (!isRecord(result) || !Array.isArray(result.agents)) return [];
+  return result.agents
+    .filter(isRecord)
+    .filter((entry) => entry.team_id === teamId && entry.membership !== 'left')
+    .filter((entry) => typeof entry.id === 'string')
+    .map((entry) => ({
+      agent_id: entry.id as string,
+      ...(typeof entry.name === 'string' ? { name: entry.name } : {}),
+      ...(typeof entry.session_id === 'string' ? { session_id: entry.session_id } : {}),
+      ...(typeof entry.membership === 'string' ? { membership: entry.membership } : {}),
+      ...(typeof entry.presence === 'string' ? { presence: entry.presence } : {}),
+      ...(typeof entry.visibility === 'string' ? { visibility: entry.visibility } : {}),
+    }));
+}
+
 function teamMessages(result: unknown): TeamMessageView[] {
   if (!isRecord(result) || !Array.isArray(result.messages)) return [];
   return result.messages.filter(isRecord).map((entry) => entry as TeamMessageView);
@@ -411,7 +428,7 @@ async function execute(
   const fetchOptions = options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {};
 
   if (command.kind === 'list') {
-    const value = await callAgentOwner(record, 'team.list', {}, fetchOptions);
+    const value = await callAgentOwner(record, 'teams.list', {}, fetchOptions);
     return { ok: true, value, text: formatTeamList(value) };
   }
 
@@ -420,7 +437,7 @@ async function execute(
     if (!policy.ok) return { ok: false, error: policy.error };
     const value = await callAgentOwner(
       record,
-      'team.create',
+      'teams.create',
       {
         workspace: command.workspace,
         ...(command.name !== undefined ? { name: command.name } : {}),
@@ -441,7 +458,7 @@ async function execute(
     if (!policy.ok) return { ok: false, error: policy.error };
     const value = await callAgentOwner(
       record,
-      'team.update',
+      'teams.update',
       {
         team_id: command.teamId,
         ...(command.name !== undefined ? { name: command.name } : {}),
@@ -460,7 +477,7 @@ async function execute(
   if (command.kind === 'archive') {
     const value = await callAgentOwner(
       record,
-      'team.archive',
+      'teams.archive',
       { team_id: command.teamId },
       fetchOptions,
     );
@@ -470,7 +487,7 @@ async function execute(
   if (command.kind === 'get') {
     const value = await callAgentOwner(
       record,
-      'team.get',
+      'teams.get',
       {
         team_id: command.teamId,
         ...(command.limit !== undefined ? { limit: command.limit } : {}),
@@ -484,7 +501,7 @@ async function execute(
   if (command.kind === 'members') {
     const value = await callAgentOwner(
       record,
-      'team.members',
+      'teams.members',
       { team_id: command.teamId, action: command.action, member: command.member },
       fetchOptions,
     );
@@ -494,7 +511,7 @@ async function execute(
   if (command.kind === 'budget-status') {
     const value = await callAgentOwner(
       record,
-      'team.budget',
+      'teams.budget',
       {
         team_id: command.teamId,
         action: 'status',
@@ -510,7 +527,7 @@ async function execute(
   if (command.kind === 'budget-override') {
     const value = await callAgentOwner(
       record,
-      'team.budget',
+      'teams.budget',
       {
         team_id: command.teamId,
         action: 'override',
@@ -523,23 +540,19 @@ async function execute(
     return { ok: true, value, text: formatBudgetOverride(value) };
   }
 
-  // post：有 --mention 时用完整 roster 解析为 agent id（不受展示窗口 20 / 100 限制）。
+  // post：有 --mention 时用完整成员视图解析为 agent id（不受展示窗口 20 / 100 限制）。
+  // canonical `agents.list` 在 owner principal 下按 viewer 返回全部成员，含 team_id。
   let mentionIds: string[] = [];
   if (command.mentions.length > 0) {
-    const detail = await callAgentOwner(
-      record,
-      'team.roster',
-      { team_id: command.teamId },
-      fetchOptions,
-    );
-    const resolved = resolveMentions(teamMembers(detail), command.mentions);
+    const listed = await callAgentOwner(record, 'agents.list', {}, fetchOptions);
+    const resolved = resolveMentions(rosterFromAgents(listed, command.teamId), command.mentions);
     if (!resolved.ok) return { ok: false, error: resolved.error };
     mentionIds = resolved.ids;
   }
 
   const value = await callAgentOwner(
     record,
-    'team.post',
+    'teams.post',
     {
       team_id: command.teamId,
       content: command.content,

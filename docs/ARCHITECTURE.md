@@ -982,7 +982,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 ### 13.7 统一 RPC 方法表（0.5）
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources` / `config.set`（0.15，write）；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）/ `agents.tree`（0.15，read）/ `agents.create|update|close`（0.25，write，批量）；`tasks.list|get`（0.15，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`interactions.list`（0.18，read）；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）；`teams.list|get|post|members|budget`（S3 / S4）/ `teams.create|update|archive`（0.24 S10.3）；`auth.exchange` / `auth.revoke` / `auth.tokens`（S5 hub 控制面）。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources` / `config.set`（0.15，write）；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）/ `agents.tree`（0.15，read）/ `agents.create|update|close`（0.25，write，批量）/ `agents.send|dispatch|rotate`（0.26，write，批量）；`tasks.list|get`（0.15，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`interactions.list`（0.18，read）；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）；`teams.list|get|post|members|budget`（S3 / S4）/ `teams.create|update|archive`（0.24 S10.3）；`auth.exchange` / `auth.revoke` / `auth.tokens`（S5 hub 控制面）。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -1008,6 +1008,9 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `agents.create` | write |
 | `agents.update` | write |
 | `agents.close` | write |
+| `agents.send` | write |
+| `agents.dispatch` | write |
+| `agents.rotate` | write |
 | `tasks.list` | read |
 | `tasks.get` | read |
 | `events.list` | read |
@@ -1042,6 +1045,8 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `auth.revoke` | admin |
 | `auth.tokens` | admin |
 <!-- rpc-methods:end -->
+
+0.26 新增 `agents.send` / `agents.dispatch` / `agents.rotate`（`write`，批量），canonical 方法总数 **57**（56 个 domain 方法 + `events.subscribe`）：三者与 `agents.create|update|close` 同形（`{ messages: [...] }` / `{ agents: [...] }` → `{ results: [...] }`，输入同序、逐条隔离）。发送者 / viewer 来自 principal：合成 owner principal 带 owner agent id，gateway / team token 无 `agent_id`，按 `human` 处理。team-scoped control token 可调用三者，但只能操作 `team_id` 与作用域相同的成员（否则逐条 `not_found`）；`agents.create` 仍禁止 team-scoped token。loopback owner 端点不再是第二套 action 表，而是用合成 owner principal 分发同一 canonical 方法表；`agent.*` / `team.*` wire 名已删除（pre-1.0 不保留别名）。
 
 0.25 新增 `agents.create` / `agents.update` / `agents.close`（`write`，批量；单条调用 = 单元素数组），canonical 方法总数 **54**（53 个 domain 方法 + `events.subscribe`）：三者都由结构化 `AgentControlLike` 注入，未注入 / tenant 不匹配返回 `not_found`；`agents.create` 不允许 team-scoped control token（逐条 `forbidden`），`team_id` 只绑定已存在的 Team（经 `TeamControlLike.get` 解析 workspace，不隐式创建）；`agents.update` / `agents.close` 的 team-scoped token 只能操作 `team_id` 与作用域相同的成员（否则逐条 `not_found`）。结果统一为 `{ results: [...] }`，与输入同序、单条失败不影响其它条目；update 成功条目在 model / system_prompt 实际变化时带 `applies_to: 'next_body'`（不重建当前 Body）。service 发 `agent.updated` 只带变化字段名，不带 prompt 正文。
 
@@ -1689,7 +1694,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 28.2 协议 result schema
 
-- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.15 增加 `agents.tree` / `tasks.list` / `tasks.get` / `config.set` 后为 44 个；0.18 增加 `interactions.list` 后为 45 个；2026-10-22 移除 workflow 的 5 个方法后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.19 S3 增加 `teams.list` / `teams.get` / `teams.post` / `teams.members`、S5 增加 `auth.exchange` / `auth.revoke` / `auth.tokens`、S4 增加 `teams.budget` 后为 48 个；0.24 S10.3 增加 `teams.create` / `teams.update` / `teams.archive` 后为 51 个；0.25 增加 `agents.create` / `agents.update` / `agents.close` 后为 **54** 个 = 53 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval 片段）。
+- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.15 增加 `agents.tree` / `tasks.list` / `tasks.get` / `config.set` 后为 44 个；0.18 增加 `interactions.list` 后为 45 个；2026-10-22 移除 workflow 的 5 个方法后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.19 S3 增加 `teams.list` / `teams.get` / `teams.post` / `teams.members`、S5 增加 `auth.exchange` / `auth.revoke` / `auth.tokens`、S4 增加 `teams.budget` 后为 48 个；0.24 S10.3 增加 `teams.create` / `teams.update` / `teams.archive` 后为 51 个；0.25 增加 `agents.create` / `agents.update` / `agents.close` 后为 **54** 个 = 53 个 domain 方法 + `events.subscribe`；0.26 增加 `agents.send` / `agents.dispatch` / `agents.rotate` 后为 **57** 个 = 56 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval 片段）。
 - **支持子集**：`object` / `array` / `string` / `number` / `integer` / `boolean` + `required` / `properties` / `items` / `enum` / `minLength` / `maxLength` / `minimum` / `maximum`；不使用 `oneOf` / `$ref` / `additionalProperties`，不新增依赖。
 - **校验**：仅当 `VESSEL_VALIDATE_RESULTS=1` 时在 RPC 分发层校验；违反返回 `internal`（details 仅 `method` / `path`）并发布 `rpc.result_invalid`。默认关闭，生产热路径不变。
 - **版本单源**：`PROTOCOL_VERSION`（`packages/serve/src/protocol.ts`）是唯一常量，`RPC_VERSION` 为兼容别名；HTTP / WS / `hello` / team / transport 不再硬编码 `1`。
@@ -2436,7 +2441,7 @@ interface LimitBlock {
 - `teams.members action=add` 调用 `AgentService.reinstate`：`left` / `closed` → `present + idle + gone`，保留 `current_body` / `body_history` / 原 session，不 spawn；下一次 dispatch 才 resume。`action=remove` 复用 `close`：dispose 当前 Body、保留 session 与历史（归档不删）。
 - private 成员 fail-closed：`onAgentEvent` 只接受 `visibility === 'team' | 'tenant'`；private 成员的 id / 名字 / 回复不写日志、不可被 `@`（owner 路径 `team_private_member`，canonical 路径 `unknown_member`）。根 owner（`owner === id`）例外。
 - canonical `teams.list` / `teams.get`（read）与 `teams.post` / `teams.members`（write）由 `TeamControlLike` 结构化注入；`packages/serve` 不依赖 `@vessel-agent/agent`。未注入 / tenant 不匹配返回 `not_found`；0.19 S3 只有 default tenant 的 AgentService 注入 `teams.*`，其他 tenant 返回 `not_found`。canonical 是复数 `teams.*`；legacy `/v1/team/*`（单数前缀）已于 0.22.1 删除。
-- `vessel team list|get|post|members [--json]` 经 owner 端点；owner 端点是 `from = ownerId`、`viewer = ownerId`（private 可见），canonical 为 `from = 'human'`、无 viewer。
+- `vessel team ...` 经 owner 端点；owner 传输用合成 principal `{ scope: 'admin', tenant_id, agent_id: ownerId }` 分发 canonical `teams.*`，handler 以 principal 的 `agent_id` 作为 `from` / `viewer`（private 可见）；gateway / team token 没有 `agent_id`，按 `from = 'human'`、无 viewer 处理。
 
 ## 42. 0.19.0 Hub 控制面（S5 / S5.1，已实现）
 
@@ -2573,8 +2578,9 @@ interface LimitBlock {
 
 - 0.20 新增 fork 与 federation 传输面，但**不新增 canonical 方法**；0.24 S10.3 增加
   `teams.create` / `teams.update` / `teams.archive` 后方法表为 51；0.25 增加
-  `agents.create` / `agents.update` / `agents.close` 后为 **54**
-  （50 个 domain 方法 + `events.subscribe`）。
+  `agents.create` / `agents.update` / `agents.close` 后为 54；0.26 增加
+  `agents.send` / `agents.dispatch` / `agents.rotate` 后为 **57**
+  （56 个 domain 方法 + `events.subscribe`）。
 - `packages/serve` 仍不依赖 `@vessel-agent/agent`；`packages/core` 不出现 Team / federation 概念。
 
 ## 46. 0.21.0 跨节点成员寻址（S8，已实现）
@@ -2824,3 +2830,49 @@ interface LimitBlock {
   `{ kind: 'owner', tenant_id, scope: 'admin' }` 复用。
 - owner 端点收口（follow-up）：把 `agent.new|update|close` 委托到同一 RPC handler /
   `AgentControlLike`，删除 owner 端点自己的参数映射与批量分支；本切片不改 owner 传输。
+
+## 52. 0.26 canonical owner 传输（已实现，未发布）
+
+> 决策：canonical RPC 是唯一契约；loopback owner 端点只是同一方法表的传输。
+
+### 52.1 canonical 方法（54 → 57）
+
+- `agents.send`：`{ messages: [{ to, content, conversation_id? }] }` → `{ results: [...] }`；
+  strict send（不 resume），成功条目 `{ ok: true, queued: true, message_id, state }`。
+- `agents.dispatch`：`{ messages: [{ to, content, conversation_id?, allow_fork? }] }` →
+  `{ results: [...] }`；成功条目 `{ ok: true, status: 'queued', message_id, resolved_to,
+  resolution, conversation_id? }`，业务拒绝（`agent_left` / `resume_failed` /
+  `not_visible` / `budget_*` / `conversation_team_mismatch`）为逐条
+  `{ ok: false, code, error }`。
+- `agents.rotate`：`{ agents: [{ to, startup_prompt, handoff_path?, from_session_id? }] }` →
+  `{ results: [...] }`；成功条目 `{ ok: true, status: 'rotated', agent_id,
+  from_session_id, to_session_id, epoch }`，失败为逐条 `{ ok: false, code, error }`。
+- 三者 permission 都是 `write`，结构错误整体 `invalid_params`，条目失败隔离且结果与输入同序。
+  team-scoped control token 在白名单内，但逐条校验目标 `team_id`；不匹配返回 `not_found`。
+
+### 52.2 principal 与可见性（additive）
+
+- `RpcMethodContext.principal.agent_id?`：只有合成 owner 传输填 root owner id。
+- handler 取 `ctx.principal.agent_id ?? 'human'` 作为 `from` / `viewer`：
+  `agents.send|dispatch|rotate` 的 sender、`agents.list` 的 viewer、`teams.post|members`
+  的 from、`teams.list|get` 的 viewer。gateway / team token 行为不变。
+- `agents.list` 在有 `agent_id` 且注入 `AgentControlLike` 时从 AgentService 列成员
+  （private 按 viewer 过滤，条目 additive 带 `name` / `owner` / `visibility` / `presence` /
+  `membership` / `team_id` / `epoch` / `last_seen`）；否则保持注册表派生视图。
+- `agents.create` 的 owner / parent 由合成 principal 填入；`workspace` 字段只对合成 owner
+  传输开放（gateway / Web 仍走 `team_id`，只绑定已存在的 Team）。
+
+### 52.3 owner 端点 = 传输
+
+- `src/agent-owner-server.ts` 用 `defineMethods([...createAgentMethods, ...createTeamMethods])`
+  构造与 gateway 同源的方法表，`createRpcDispatcher` 以合成 owner principal
+  `{ tenant_id, role: 'admin', scope: 'admin', agent_id: ownerId }` 分发。
+- wire 方法名即 canonical：`agents.create|send|dispatch|close|list|rotate` 与
+  `teams.list|get|post|members|budget|create|update|archive`；`agent.*` / `team.*`
+  legacy 名删除，pre-1.0 不保留别名。端点不复制参数校验 / 批量合并 / 错误映射。
+- HTTP 状态由 canonical 错误码映射：`invalid_params` 400、`forbidden` 403、
+  `not_found` 404、`conflict` 409、`internal` 500。
+- `vessel agent` / `vessel team` 用户语法不变；CLI 只消费 `{ agents }` / `{ results }`
+  canonical 结果。mention 名字解析改走 `agents.list`（按 `team_id` 过滤完整成员视图），
+  不使用展示窗口。
+- loopback token / Host 校验与浏览器不可达边界不变。

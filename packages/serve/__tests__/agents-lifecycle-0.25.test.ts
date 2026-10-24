@@ -123,6 +123,45 @@ function fakeAgentControl(options: { tenantId?: string; members?: AgentStatusLik
       calls.get.push(id);
       return members.get(id);
     },
+    async list() {
+      return [...members.values()];
+    },
+    async resolve(target) {
+      return members.get(target);
+    },
+    async send(inputs) {
+      return {
+        results: inputs.map(() => ({
+          ok: true as const,
+          queued: true as const,
+          message_id: 'msg',
+          state: 'idle' as const,
+        })),
+      };
+    },
+    async dispatch(inputs) {
+      return {
+        results: inputs.map((input) => ({
+          ok: true as const,
+          status: 'queued' as const,
+          message_id: 'msg',
+          resolved_to: input.to,
+          resolution: 'live' as const,
+        })),
+      };
+    },
+    async rotate(inputs) {
+      return {
+        results: inputs.map((input) => ({
+          ok: true as const,
+          status: 'rotated' as const,
+          agent_id: input.to,
+          from_session_id: 'old',
+          to_session_id: 'new',
+          epoch: 1,
+        })),
+      };
+    },
   };
   return { control, calls, members };
 }
@@ -390,12 +429,12 @@ describe('agent lifecycle contract', () => {
     }
   });
 
-  it('keeps canonical count at 54 with the control plane absent', () => {
+  it('keeps canonical count at 57 with the control plane absent', () => {
     const dispatcher = createLocalRpcDispatcher({ hub: createGatewayEventHub() });
     try {
       const methods = dispatcher.manifest().methods;
-      expect(methods).toHaveLength(54);
-      expect(methods.filter((method) => method.name.startsWith('agents.'))).toHaveLength(6);
+      expect(methods).toHaveLength(57);
+      expect(methods.filter((method) => method.name.startsWith('agents.'))).toHaveLength(9);
     } finally {
       dispatcher.dispose();
     }

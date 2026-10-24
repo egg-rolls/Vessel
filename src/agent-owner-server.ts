@@ -1,11 +1,11 @@
 /**
- * REPL owner 的最小 loopback 控制端点（0.17 Phase A）。
+ * REPL owner 的最小 loopback 控制端点（0.17 Phase A；0.26 收口为 canonical 传输）。
  *
  * - 文件：`<dataDir>/agent-owner.json`，JSON
  *   `{pid, host, port, token, started_at, tenant_id}`，原子写 0600；
  * - 只监听 127.0.0.1（缺省 :0），校验 Host 防 DNS rebinding；
- * - 端点只是传输：`agent.new/send/close/list/dispatch/rotate` 委托 AgentService，
- *   `team.list/get/roster/post/members/budget` 委托 TeamService（0.19 S3 / S4）。
+ * - 端点只是传输：用合成 owner principal 分发 canonical `agents.*` / `teams.*`
+ *   方法表，不复制第二套 action 列表或结果形状（ADR-091 Addendum 0.26）。
  *
  * @module vessel/agent-owner-server
  */
@@ -14,19 +14,17 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import type {
-  AgentService,
-  AgentTeamService,
-  BudgetDimension,
-  DispatchInput,
-  NewBatchInput,
-  NewMemberInput,
-  RotateInput,
-  SendInput,
-  TeamMembersInput,
-  TeamPostInput,
-} from '@vessel-agent/agent';
 import type { Logger } from '@vessel-agent/core';
+import {
+  type AgentControlLike,
+  createAgentMethods,
+  createAgentRegistry,
+  createRpcDispatcher,
+  createTeamMethods,
+  defineMethods,
+  type RpcMethodContext,
+  type TeamControlLike,
+} from '../packages/serve/src/index';
 import { isProcessAlive } from './gateway/pid';
 
 /** owner 记录文件名（dataDir 根） */
@@ -35,23 +33,24 @@ export const AGENT_OWNER_FILE = 'agent-owner.json';
 /** 请求体上限；成员单条消息 64 KiB，批量留余量 */
 export const AGENT_OWNER_MAX_BODY_BYTES = 1024 * 1024;
 
-/** 端点方法名（冻结形状） */
+/**
+ * 端点方法名 = canonical 方法名（pre-1.0，不保留 `agent.*` / `team.*` legacy 别名）。
+ */
 export type AgentOwnerMethod =
-  | 'agent.new'
-  | 'agent.send'
-  | 'agent.close'
-  | 'agent.list'
-  | 'agent.dispatch'
-  | 'agent.rotate'
-  | 'team.list'
-  | 'team.get'
-  | 'team.roster'
-  | 'team.post'
-  | 'team.members'
-  | 'team.budget'
-  | 'team.create'
-  | 'team.update'
-  | 'team.archive';
+  | 'agents.create'
+  | 'agents.send'
+  | 'agents.close'
+  | 'agents.list'
+  | 'agents.dispatch'
+  | 'agents.rotate'
+  | 'teams.list'
+  | 'teams.get'
+  | 'teams.post'
+  | 'teams.members'
+  | 'teams.budget'
+  | 'teams.create'
+  | 'teams.update'
+  | 'teams.archive';
 
 /** owner 记录（E3 冻结字段） */
 export interface AgentOwnerRecord {
@@ -182,11 +181,14 @@ export interface AgentOwnerServer {
 }
 
 export interface StartAgentOwnerServerOptions {
-  service: AgentService;
-  /** 0.19 S3：CLI `vessel team ...` 的私有端点 */
-  team: AgentTeamService;
+  /** canonical `agents.*` 控制面（app 侧 AgentService 适配器）。 */
+  control: AgentControlLike;
+  /** canonical `teams.*` 控制面；缺省时方法仍在表内，返回 `not_found`。 */
+  teams?: TeamControlLike;
   dataDir: string;
   tenantId: string;
+  /** 合成 principal 的 sender / viewer；缺省 `main`（root owner）。 */
+  ownerId?: string;
   /** 缺省 127.0.0.1 */
   host?: string;
   /** 缺省 0（系统分配） */
@@ -227,375 +229,87 @@ function headerToken(request: Request): string | undefined {
   return match?.[1];
 }
 
-/** snake_case 字段 → AgentService 入参；owner/parent 固定为 root owner */
-function mapNewEntry(entry: Record<string, unknown>, ownerId: string): Record<string, unknown> {
-  const input: Record<string, unknown> = { owner: ownerId, parentId: ownerId };
-  if (entry.name !== undefined) input.name = entry.name;
-  if (entry.model !== undefined) input.model = entry.model;
-  if (entry.system_prompt !== undefined) input.systemPrompt = entry.system_prompt;
-  if (entry.visibility !== undefined) input.visibility = entry.visibility;
-  // 0.19 S3：CLI `agent new --workspace` 显式绑定 Team。
-  if (entry.workspace !== undefined) input.workspace = entry.workspace;
-  return input;
+/** owner 传输的合成 principal：admin 作用域 + owner agent id 作为 sender/viewer。 */
+function ownerPrincipal(tenantId: string, ownerId: string): RpcMethodContext['principal'] {
+  return { tenant_id: tenantId, role: 'admin', scope: 'admin', agent_id: ownerId };
 }
 
-function invalidInput(method: string, message: string): AgentOwnerError {
-  return new AgentOwnerError('invalid_input', `${method}: ${message}`, 400);
-}
-
-/** 最小参数校验：非空字符串 */
-function requireString(method: string, params: Record<string, unknown>, key: string): string {
-  const value = params[key];
-  if (typeof value !== 'string' || value === '') {
-    throw invalidInput(method, `${key} must be a non-empty string`);
-  }
-  return value;
-}
-
-/** 可选非空字符串；缺省返回 undefined */
-function optionalString(
-  method: string,
-  params: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = params[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || value === '') {
-    throw invalidInput(method, `${key} must be a non-empty string`);
-  }
-  return value;
-}
-
-const BUDGET_DIMENSIONS = new Set<string>(['hops', 'turns', 'tokens', 'wall_clock', 'cycle']);
-
-function readMentions(method: string, params: Record<string, unknown>): string[] | undefined {
-  const mentions = params.mentions;
-  if (mentions === undefined) return undefined;
-  if (!Array.isArray(mentions) || !mentions.every((mention) => typeof mention === 'string')) {
-    throw invalidInput(method, 'mentions must be an array of strings');
-  }
-  return mentions as string[];
-}
-
-/** 可选可空字符串：缺省 undefined；`null` = 清空；其它必须是非空 string。 */
-function optionalNullableString(
-  method: string,
-  params: Record<string, unknown>,
-  key: string,
-): string | null | undefined {
-  if (!Object.hasOwn(params, key)) return undefined;
-  const value = params[key];
-  if (value === null) return null;
-  if (typeof value !== 'string' || value === '') {
-    throw invalidInput(method, `${key} must be a non-empty string or null`);
-  }
-  return value;
-}
-
-/** 可选 policy：必须是普通对象（整体替换，不做 merge）。 */
-function readPolicy(
-  method: string,
-  params: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  if (!Object.hasOwn(params, 'policy')) return undefined;
-  const value = params.policy;
-  if (!isRecord(value)) throw invalidInput(method, 'policy must be an object');
-  return value;
-}
-
-function readLimit(method: string, params: Record<string, unknown>): number | undefined {
-  const limit = params.limit;
-  if (limit === undefined) return undefined;
-  if (typeof limit !== 'number' || !Number.isFinite(limit)) {
-    throw invalidInput(method, 'limit must be a number');
-  }
-  return limit;
-}
-
-/** `team.*` 私有方法 → TeamService；unknown team 统一 404 */
-async function dispatchTeam(
-  team: AgentTeamService,
-  ownerId: string,
-  method: string,
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  switch (method) {
-    case 'team.list':
-      return team.list({ viewer: ownerId });
-    case 'team.get': {
-      const teamId = requireString(method, params, 'team_id');
-      const limit = readLimit(method, params);
-      const membersLimit = params.members_limit;
-      if (membersLimit !== undefined) {
-        if (
-          typeof membersLimit !== 'number' ||
-          !Number.isInteger(membersLimit) ||
-          membersLimit < 1 ||
-          membersLimit > 100
-        ) {
-          throw invalidInput(method, 'members_limit must be an integer between 1 and 100');
-        }
-      }
-      const detail = await team.get(teamId, {
-        viewer: ownerId,
-        ...(limit !== undefined ? { limit } : {}),
-        ...(membersLimit !== undefined ? { members_limit: membersLimit as number } : {}),
-      });
-      if (detail === undefined) {
-        throw new AgentOwnerError('team_not_found', `team_not_found: ${teamId}`, 404);
-      }
-      return detail;
-    }
-    case 'team.roster': {
-      // 名字解析等内部路径要完整 roster；不用 get 的展示窗口（缺省 20 / 上限 100）。
-      const teamId = requireString(method, params, 'team_id');
-      const detail = await team.get(teamId, {
-        viewer: ownerId,
-        limit: 0,
-        members_limit: 1,
-      });
-      if (detail === undefined) {
-        throw new AgentOwnerError('team_not_found', `team_not_found: ${teamId}`, 404);
-      }
-      return {
-        team_id: teamId,
-        members: await team.roster(teamId, { viewer: ownerId }),
-      };
-    }
-    case 'team.post': {
-      const teamId = requireString(method, params, 'team_id');
-      const content = requireString(method, params, 'content');
-      const mentions = readMentions(method, params);
-      const conversationId = optionalString(method, params, 'conversation_id');
-      return team.post({
-        team_id: teamId,
-        content,
-        ...(mentions !== undefined ? { mentions } : {}),
-        ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
-        from: ownerId,
-      } satisfies TeamPostInput);
-    }
-    case 'team.members': {
-      const teamId = requireString(method, params, 'team_id');
-      const action = params.action;
-      if (action !== 'add' && action !== 'remove') {
-        throw invalidInput(method, 'action must be add or remove');
-      }
-      const member = requireString(method, params, 'member');
-      const result = await team.members({
-        team_id: teamId,
-        action,
-        member,
-        from: ownerId,
-      } satisfies TeamMembersInput);
-      if (result === undefined) {
-        throw new AgentOwnerError('team_not_found', `team_not_found: ${teamId}`, 404);
-      }
-      return result;
-    }
-    case 'team.budget': {
-      if (typeof team.budget !== 'function') {
-        throw new AgentOwnerError('team_not_found', 'budget unavailable', 404);
-      }
-      const teamId = requireString(method, params, 'team_id');
-      const action = params.action;
-      if (action !== 'status' && action !== 'override') {
-        throw invalidInput(method, 'action must be status or override');
-      }
-      const conversationId = optionalString(method, params, 'conversation_id');
-      if (action === 'status') {
-        return team.budget({
-          team_id: teamId,
-          ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
-        });
-      }
-      if (conversationId === undefined) {
-        throw invalidInput(method, 'conversation_id is required for override');
-      }
-      const dimension = params.dimension;
-      if (typeof dimension !== 'string' || !BUDGET_DIMENSIONS.has(dimension)) {
-        throw invalidInput(method, 'dimension must be hops, turns, tokens, wall_clock or cycle');
-      }
-      if (!Object.hasOwn(params, 'max')) {
-        throw invalidInput(method, 'max is required for override');
-      }
-      const max = params.max;
-      if (max !== null && (typeof max !== 'number' || !Number.isInteger(max) || max < 0)) {
-        throw invalidInput(method, 'max must be a non-negative integer or null');
-      }
-      return team.budget({
-        team_id: teamId,
-        conversation_id: conversationId,
-        dimension: dimension as BudgetDimension,
-        max: max as number | null,
-        via: 'cli',
-      });
-    }
-    case 'team.create': {
-      const workspace = requireString(method, params, 'workspace');
-      const name = optionalString(method, params, 'name');
-      const description = optionalString(method, params, 'description');
-      const defaultPrincipal = optionalString(method, params, 'default_principal');
-      const handoffPath = optionalString(method, params, 'handoff_path');
-      const policy = readPolicy(method, params);
-      return team.create({
-        workspace,
-        ...(name !== undefined ? { name } : {}),
-        ...(description !== undefined ? { description } : {}),
-        ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
-        ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
-        ...(policy !== undefined ? { policy } : {}),
-      });
-    }
-    case 'team.update': {
-      const teamId = requireString(method, params, 'team_id');
-      const name = optionalString(method, params, 'name');
-      const description = optionalNullableString(method, params, 'description');
-      const defaultPrincipal = optionalNullableString(method, params, 'default_principal');
-      const handoffPath = optionalNullableString(method, params, 'handoff_path');
-      const policy = readPolicy(method, params);
-      return team.update({
-        team_id: teamId,
-        ...(name !== undefined ? { name } : {}),
-        ...(description !== undefined ? { description } : {}),
-        ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
-        ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
-        ...(policy !== undefined ? { policy } : {}),
-      });
-    }
-    case 'team.archive': {
-      const teamId = requireString(method, params, 'team_id');
-      return team.archive({ team_id: teamId });
-    }
+/** canonical 错误码 → HTTP 状态（保持 owner 端点此前的业务语义）。 */
+export function statusForRpcCode(code: string): number {
+  switch (code) {
+    case 'unauthorized':
+      return 401;
+    case 'forbidden':
+      return 403;
+    case 'not_found':
+      return 404;
+    case 'invalid_params':
+      return 400;
+    case 'conflict':
+    case 'tenant_locked':
+    case 'run_ended':
+      return 409;
+    case 'quota_exceeded':
+      return 429;
+    case 'expired':
+      return 410;
+    case 'not_supported':
+      return 501;
     default:
-      throw new AgentOwnerError(
-        'agent_owner_unknown_method',
-        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate|team.list|team.get|team.roster|team.post|team.members|team.budget|team.create|team.update|team.archive)`,
-        404,
-      );
+      return 500;
   }
 }
 
-function mapNewBatch(params: Record<string, unknown>, ownerId: string): NewBatchInput {
-  const members = params.members;
-  if (!Array.isArray(members)) {
-    throw new AgentOwnerError('invalid_input', 'agent.new: members must be an array', 400);
-  }
-  return {
-    members: members.map((entry) =>
-      isRecord(entry) ? mapNewEntry(entry, ownerId) : entry,
-    ) as unknown as NewMemberInput[],
-  };
+interface OwnerRpc {
+  dispatch(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<{ ok: true; result: unknown } | { ok: false; code: string; message: string }>;
 }
 
-function mapSendBatch(params: Record<string, unknown>, ownerId: string): SendInput {
-  const messages = params.messages;
-  if (!Array.isArray(messages)) {
-    throw new AgentOwnerError('invalid_input', 'agent.send: messages must be an array', 400);
-  }
-  return {
-    messages: messages.map((entry) => {
-      if (!isRecord(entry)) return entry;
-      return {
-        ...(entry.to !== undefined ? { to: entry.to } : {}),
-        ...(entry.content !== undefined ? { content: entry.content } : {}),
-        ...(entry.conversation_id !== undefined ? { conversation_id: entry.conversation_id } : {}),
-        from: ownerId,
-      };
+/**
+ * 与 gateway 同源的 canonical 方法表：`createAgentMethods` + `createTeamMethods`。
+ * 只多一个合成 principal（owner agent id），不复制校验 / 错误映射。
+ */
+function createOwnerRpc(options: {
+  control: AgentControlLike;
+  teams?: TeamControlLike;
+  tenantId: string;
+  ownerId: string;
+}): OwnerRpc {
+  const table = defineMethods([
+    ...createAgentMethods({
+      registry: createAgentRegistry(),
+      runs: new Map(),
+      defaultTenantId: options.tenantId,
+      agent: options.control,
+      ...(options.teams !== undefined ? { teams: options.teams } : {}),
     }),
-  } as unknown as SendInput;
-}
+    ...createTeamMethods({ teams: options.teams }),
+  ]);
+  const principal = ownerPrincipal(options.tenantId, options.ownerId);
+  const dispatcher = createRpcDispatcher({
+    table,
+    localPrincipal: principal,
+    makeContext: (_method, _params, resolved) => ({
+      principal: resolved,
+      tenantId: resolved.tenant_id,
+      isAdmin: true,
+      allTenants: false,
+      connection: 'local',
+    }),
+  });
 
-/** 端点方法 → AgentService；错误在 handler 外层统一映射 */
-async function dispatch(
-  service: AgentService,
-  team: AgentTeamService,
-  ownerId: string,
-  method: string,
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  if (method.startsWith('team.')) {
-    return dispatchTeam(team, ownerId, method, params);
-  }
-  switch (method) {
-    case 'agent.new':
-      if (params.members !== undefined) return service.new(mapNewBatch(params, ownerId));
-      return service.new(mapNewEntry(params, ownerId) as unknown as NewMemberInput);
-    case 'agent.send':
-      if (params.messages !== undefined) return service.send(mapSendBatch(params, ownerId));
-      return service.send({
-        ...(params.to !== undefined ? { to: params.to } : {}),
-        ...(params.content !== undefined ? { content: params.content } : {}),
-        ...(params.conversation_id !== undefined
-          ? { conversation_id: params.conversation_id }
-          : {}),
-        from: ownerId,
-      } as unknown as SendInput);
-    case 'agent.close':
-      if (params.members !== undefined)
-        return service.close({ members: params.members as string[] });
-      return service.close({
-        ...(params.member !== undefined ? { member: params.member } : {}),
-        ...(params.to !== undefined ? { to: params.to } : {}),
-      } as { member?: string; to?: string });
-    case 'agent.list': {
-      const filter: Record<string, unknown> = { viewer: ownerId };
-      if (params.visibility !== undefined) filter.visibility = params.visibility;
-      if (params.state !== undefined) filter.state = params.state;
-      if (params.parent_id !== undefined) filter.parentId = params.parent_id;
-      return service.list(filter as Parameters<AgentService['list']>[0]);
-    }
-    case 'agent.dispatch':
-      return service.dispatch({
-        ...(params.to !== undefined ? { to: params.to } : {}),
-        ...(params.content !== undefined ? { content: params.content } : {}),
-        ...(params.conversation_id !== undefined
-          ? { conversation_id: params.conversation_id }
-          : {}),
-        ...(params.allow_fork !== undefined ? { allow_fork: params.allow_fork } : {}),
-        from: ownerId,
-      } as DispatchInput);
-    case 'agent.rotate':
-      // 人类路径不带 from_session_id：CLI / owner 端点可换任意可见 Agent。
-      return service.rotate({
-        ...(params.to !== undefined ? { to: params.to } : {}),
-        ...(params.startup_prompt !== undefined ? { startup_prompt: params.startup_prompt } : {}),
-        ...(params.handoff_path !== undefined ? { handoff_path: params.handoff_path } : {}),
-        from: ownerId,
-      } as RotateInput);
-    default:
-      throw new AgentOwnerError(
-        'agent_owner_unknown_method',
-        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate)`,
-        404,
-      );
-  }
-}
-
-function errorStatus(error: unknown): { code: string; message: string; status: number } {
-  if (error instanceof AgentOwnerError) {
-    return { code: error.code, message: error.message, status: error.status };
-  }
-  if (isRecord(error) && typeof error.code === 'string') {
-    // AgentService / TeamService 的稳定错误码；Team 层按业务语义映射 HTTP。
-    const status =
-      error.code === 'team_not_found'
-        ? 404
-        : error.code === 'team_not_empty' ||
-            error.code === 'team_archived' ||
-            error.code === 'team_already_in_team'
-          ? 409
-          : 400;
-    return {
-      code: error.code,
-      message: error instanceof Error ? error.message : String(error),
-      status,
-    };
-  }
   return {
-    code: 'agent_owner_error',
-    message: error instanceof Error ? error.message : String(error),
-    status: 500,
+    async dispatch(method, params) {
+      const response = await dispatcher.dispatchFor(
+        { v: 1, id: 'agent-owner', method, params },
+        principal,
+        'local',
+      );
+      if (response.ok) return { ok: true, result: response.result };
+      return { ok: false, code: response.error.code, message: response.error.message };
+    },
   };
 }
 
@@ -612,9 +326,15 @@ export async function startAgentOwnerServer(
     );
   }
 
-  const ownerId = 'main';
+  const ownerId = options.ownerId ?? 'main';
   const token = randomBytes(32).toString('hex');
   const host = options.host ?? '127.0.0.1';
+  const rpc = createOwnerRpc({
+    control: options.control,
+    ...(options.teams !== undefined ? { teams: options.teams } : {}),
+    tenantId: options.tenantId,
+    ownerId,
+  });
 
   let server: ReturnType<typeof Bun.serve>;
   try {
@@ -670,21 +390,22 @@ export async function startAgentOwnerServer(
         const params = isRecord(body.params) ? body.params : {};
 
         try {
-          const result = await dispatch(
-            options.service,
-            options.team,
-            ownerId,
-            body.method,
-            params,
-          );
-          return jsonResponse(200, { ok: true, result });
+          const result = await rpc.dispatch(body.method, params);
+          if (!result.ok) {
+            options.logger?.warn('agent.owner.request_failed', {
+              method: body.method,
+              code: result.code,
+            });
+            return errorResponse(result.code, result.message, statusForRpcCode(result.code));
+          }
+          return jsonResponse(200, { ok: true, result: result.result });
         } catch (error) {
-          const mapped = errorStatus(error);
+          const message = error instanceof Error ? error.message : String(error);
           options.logger?.warn('agent.owner.request_failed', {
             method: body.method,
-            code: mapped.code,
+            code: 'agent_owner_error',
           });
-          return errorResponse(mapped.code, mapped.message, mapped.status);
+          return errorResponse('agent_owner_error', message, 500);
         }
       },
     });

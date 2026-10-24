@@ -45,6 +45,10 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'agents.create': 'write',
   'agents.update': 'write',
   'agents.close': 'write',
+  // 0.26：批量投递 / 换 Body；team-scoped token 只能操作同 team 成员。
+  'agents.send': 'write',
+  'agents.dispatch': 'write',
+  'agents.rotate': 'write',
   // 0.15（DECISION-030 E5）：canonical agent 树与只读任务板。
   'agents.tree': 'read',
   'tasks.list': 'read',

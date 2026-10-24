@@ -12,15 +12,34 @@ export type {
   AgentCloseOkLike,
   AgentControlLike,
   AgentCreateLikeInput,
+  AgentDispatchBatchResultLike,
+  AgentDispatchItemLike,
+  AgentDispatchLikeInput,
+  AgentDispatchOkLike,
   AgentLifecycleBatchResultLike,
   AgentLifecycleFailLike,
   AgentLifecycleItemLike,
   AgentLifecycleOkLike,
+  AgentListLikeInput,
+  AgentRotateBatchResultLike,
+  AgentRotateItemLike,
+  AgentRotateLikeInput,
+  AgentRotateOkLike,
+  AgentSendBatchResultLike,
+  AgentSendItemLike,
+  AgentSendLikeInput,
+  AgentSendOkLike,
   AgentStateLike,
   AgentStatusLike,
   AgentUpdateLikeInput,
   AgentVisibilityLike,
 } from './agent-control.js';
+export {
+  type AgentRegistry,
+  type AgentRegistryEntry,
+  type AgentTaskEntry,
+  createAgentRegistry,
+} from './agents-registry.js';
 export {
   type BackpressureThresholds,
   ClientBackpressure,
@@ -87,6 +106,11 @@ export {
   RELOAD_SCOPES,
   type ReloadScope,
 } from './gateway/methods/admin.js';
+export {
+  type AgentMethodsDeps,
+  createAgentMethods,
+} from './gateway/methods/agents.js';
+export { createTeamMethods, type TeamMethodsDeps } from './gateway/methods/teams.js';
 export type { Gateway, GatewayOptions, GatewayReconfigureOptions } from './gateway.js';
 export { isLoopbackHostname, startGateway } from './gateway.js';
 export {
