@@ -60,14 +60,14 @@ describe('team directory persistence (0.21)', () => {
     const created = await first.ensureForWorkspace({
       workspace,
       description: 'handoff mailbox',
-      default_principal: 'owner',
+      default_principal: 'human',
     });
 
     const reopened = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
     await reopened.ready();
     expect(reopened.get(created.team_id)).toMatchObject({
       description: 'handoff mailbox',
-      default_principal: 'owner',
+      default_principal: 'human',
     });
   });
 
@@ -233,17 +233,17 @@ describe('TeamService.post federation metadata (0.21)', () => {
     const result = await service.post({
       team_id: 'alpha',
       content: 'handoff',
-      to: ['owner'],
+      to: ['human'],
       conversation_id: 'conv_fed',
-      federation: { ...federation, to_addr: 'owner@node-b:lab' },
+      federation: { ...federation, to_addr: 'human@node-b:lab' },
     });
 
     expect(result.kind).toBe('post');
     expect(store.logs[0]).toMatchObject({
       content: 'handoff',
-      to: ['owner'],
+      to: ['human'],
       mentions: [],
-      federation: { ...federation, to_addr: 'owner@node-b:lab' },
+      federation: { ...federation, to_addr: 'human@node-b:lab' },
     });
     expect(agent.dispatches).toHaveLength(0);
   });

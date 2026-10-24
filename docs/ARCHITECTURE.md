@@ -2579,7 +2579,7 @@ interface LimitBlock {
 ### 46.1 地址与 wire
 
 - 地址 `<principal>@<node_id>:<team_id>`；`principal` 是目标 Team 的 present 成员名，
-  或保留字 `owner`。三段字符集互斥，按最后一个 `@` 与其中唯一 `:` 解析。
+  或保留字 `human`。三段字符集互斥，按最后一个 `@` 与其中唯一 `:` 解析。
 - wire 的 `from` / `to` 为 `{ node_id, team_id, principal }`；principal 是名字，不是 agent id。
 - `vessel federation post --to <addr> --from <addr> <content>`；不再有 `--from-team`。
 - `agent` 工具的 `send` 接受同一地址形状；运行时按调用者填
@@ -2587,7 +2587,7 @@ interface LimitBlock {
 
 ### 46.2 接收与策略
 
-- 入站按 `to.principal` 单点解析：`owner` → 日志 + owner，0 run；其他名字 →
+- 入站按 `to.principal` 单点解析：`human` → 日志 + owner，0 run；其他名字 →
   present 非 private 成员，先写 mention 日志再 dispatch 给**一个人**。
 - 解析使用**完整 roster**（不是 `teams.get` 的展示窗口）；private / left / closed /
   不存在 / 重名 → 404，零写入。

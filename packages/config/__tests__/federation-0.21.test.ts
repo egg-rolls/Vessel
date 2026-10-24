@@ -68,7 +68,7 @@ describe('0.21 team description / defaultPrincipal', () => {
 
   it('accepts a non-empty description and a shaped default principal', () => {
     expect(paths(team({ description: 'lab team', defaultPrincipal: 'alice' }))).toEqual([]);
-    expect(paths(team({ defaultPrincipal: 'owner' }))).toEqual([]);
+    expect(paths(team({ defaultPrincipal: 'human' }))).toEqual([]);
   });
 
   it('rejects an empty description or a default principal outside the address alphabet', () => {

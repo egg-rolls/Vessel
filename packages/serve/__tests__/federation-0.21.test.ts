@@ -273,7 +273,7 @@ describe('federation inbound addressing (S8.1)', () => {
     const response = await send(
       route,
       envelope('msg-owner', {
-        to: { node_id: LOCAL_NODE, team_id: TEAM, principal: 'owner' },
+        to: { node_id: LOCAL_NODE, team_id: TEAM, principal: 'human' },
       }),
     );
     expect(response.status).toBe(202);
@@ -281,14 +281,14 @@ describe('federation inbound addressing (S8.1)', () => {
     expect(teams.posts).toHaveLength(1);
     expect(teams.posts[0]).toMatchObject({
       mentions: [],
-      to: ['owner'],
+      to: ['human'],
       content: 'hello',
       from: `federation:alice@${REMOTE_NODE}:${TEAM}`,
-      federation: { to_addr: `owner@${LOCAL_NODE}:${TEAM}` },
+      federation: { to_addr: `human@${LOCAL_NODE}:${TEAM}` },
     });
     expect(received(events)[0]?.data).toMatchObject({
-      resolution: 'owner',
-      principal: 'owner',
+      resolution: 'human',
+      principal: 'human',
       delivered: 0,
     });
   });

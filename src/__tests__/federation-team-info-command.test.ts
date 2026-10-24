@@ -107,14 +107,14 @@ describe('federation team-info args', () => {
       'federation',
       'team-info',
       '--to',
-      'owner@node-b:beta',
+      'human@node-b:beta',
       '--members',
       '5',
       '--json',
     ]);
     expect(args.federationCommand).toEqual({
       kind: 'team-info',
-      to: 'owner@node-b:beta',
+      to: 'human@node-b:beta',
       members: 5,
       json: true,
     });
@@ -127,7 +127,7 @@ describe('federation team-info args', () => {
         'federation',
         'team-info',
         '--to',
-        'owner@node-b:beta',
+        'human@node-b:beta',
         '--members',
         value,
       ]);
@@ -145,7 +145,7 @@ describe('runFederationCommand team-info', () => {
   it('posts the directory request and renders the sanitized result', async () => {
     const mock = fakeFetch(directoryResponse);
     const result = await runFederationCommand(
-      { kind: 'team-info', to: 'owner@node-b:beta', members: 5, json: false },
+      { kind: 'team-info', to: 'human@node-b:beta', members: 5, json: false },
       {
         dataDir: await makeDataDir(),
         config: config(),
@@ -176,7 +176,7 @@ describe('runFederationCommand team-info', () => {
   it('emits the raw result as JSON', async () => {
     const mock = fakeFetch(directoryResponse);
     const result = await runFederationCommand(
-      { kind: 'team-info', to: 'owner@node-b:beta', json: true },
+      { kind: 'team-info', to: 'human@node-b:beta', json: true },
       {
         dataDir: await makeDataDir(),
         config: config(),
@@ -217,7 +217,7 @@ describe('runFederationCommand team-info', () => {
       ),
     );
     const result = await runFederationCommand(
-      { kind: 'team-info', to: 'owner@node-b:beta', json: true },
+      { kind: 'team-info', to: 'human@node-b:beta', json: true },
       {
         dataDir: await makeDataDir(),
         config: config(),
@@ -236,7 +236,7 @@ describe('runFederationCommand team-info', () => {
   it('rejects before any request when the target is not allowlisted', async () => {
     const mock = fakeFetch(directoryResponse);
     const result = await runFederationCommand(
-      { kind: 'team-info', to: 'owner@node-x:beta', json: true },
+      { kind: 'team-info', to: 'human@node-x:beta', json: true },
       {
         dataDir: await makeDataDir(),
         config: config(),

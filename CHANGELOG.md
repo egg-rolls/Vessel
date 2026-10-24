@@ -10,10 +10,10 @@
 
 ### Added
 
-- **地址 `<principal>@<node_id>:<team_id>`**：principal 是目标 Team 的 present 成员名，或保留字 `owner`。
+- **地址 `<principal>@<node_id>:<team_id>`**：principal 是目标 Team 的 present 成员名，或保留字 `human`。
   `vessel federation post --to <addr> --from <addr> <content>`；`agent` 工具的 `send`
   接受同一地址形状，运行时按调用者填 `from`，模型不能伪造。
-- **单点投递**：入站按 principal 解析到**一个** present 非 private 成员；`owner` 只写日志；
+- **单点投递**：入站按 principal 解析到**一个** present 非 private 成员；`human` 只写日志；
   `accept:'log'` 显式邮箱模式。解析使用完整 roster，不受展示窗口影响。
 - **Team 信息**：`description?` / `default_principal?`；`teams.get` 的 `members_limit`
   （缺省 20，最大 100，live 优先、`last_seen` 降序）；`TeamMemberSummary.last_seen?`。
@@ -28,7 +28,7 @@
 
 - wire 的 `from` / `to` 增加 `principal`（名字，不是 agent id）；严格解析不变。
 - fork 与 federation 都不新增 canonical RPC，方法表仍 **48**。
-- Team 日志 `to` 在 owner 模式使用保留标记；`mentions` 仍只放 agent id。
+- Team 日志 `to` 在 `human` 模式使用保留标记；`mentions` 仍只放 agent id。
 
 ### Removed
 
@@ -45,7 +45,7 @@
 ### Known limitations
 
 - root owner 不是 Team 成员，`agent` 工具的地址形式返回 `no_team`；人类 owner 走
-  `vessel federation post --from owner@<node>:<team>`。
+  `vessel federation post --from human@<node>:<team>`。
 - peer token 认证节点，不认证 principal；恶意 peer 可冒充自己节点内的任意名字。
 - v1 固定 default tenant；无中继 / 离线队列 / 跨重启 exactly-once；未做 mTLS。
 - Web 不展示新增的 desc / 默认接头人 / team-info（本版本只做 CLI + agent 工具）。

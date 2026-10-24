@@ -4,7 +4,7 @@
  * - 独立 peer bearer：gateway 用户 token 与 peer token 命名空间不交叉；
  * - 严格解析 wire envelope：`principal` 受 `[A-Za-z0-9_-]{1,64}` 约束；未知 / 缺失
  *   字段一律 `federation_invalid`，缺 `to.principal` 单独返回 `federation_principal_required`；
- * - 单点投递：`owner` 只写日志；`accept:'log'` 只写日志；`accept:'principal'` 在目标 Team
+ * - 单点投递：`human` 只写日志；`accept:'log'` 只写日志；`accept:'principal'` 在目标 Team
  *   的 present 非 private 成员中按名字精确匹配唯一一人（最多 1 个 run）；
  * - **没有广播 / `accept:'members'`**；非法 accept 值按 `'principal'` fail-safe，绝不 fan-out；
  * - 每 peer 入站限流（60s 固定窗口，读 body 之前判定；超限 429、零写入）；
@@ -56,7 +56,7 @@ export const FEDERATION_DEFAULT_RATE_LIMIT = 60;
 const RATE_WINDOW_MS = 60_000;
 
 /** 入站落点解析结果（`federation.received` payload）。 */
-export type FederationResolution = 'owner' | 'principal' | 'log';
+export type FederationResolution = 'human' | 'principal' | 'log';
 
 const TOP_LEVEL_KEYS = new Set([
   'protocol',
@@ -254,7 +254,7 @@ function buildTeamInfo(
   if (typeof description === 'string' && description !== '') info.description = description;
   const defaultPrincipal = team.default_principal;
   if (
-    defaultPrincipal === 'owner' ||
+    defaultPrincipal === 'human' ||
     (typeof defaultPrincipal === 'string' && names.has(defaultPrincipal))
   ) {
     info.default_principal = defaultPrincipal;
@@ -861,14 +861,14 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         );
       }
 
-      // 11. 投递解析（DECISION-037 §5）：owner 优先 → accept:'log' → 单成员。
+      // 11. 投递解析（DECISION-037 §5）：human 优先 → accept:'log' → 单成员。
       const mode = accept.mode;
       let resolution: FederationResolution;
       let mentions: string[] = [];
       let to: string[] | undefined;
-      if (message.to.principal === 'owner') {
-        resolution = 'owner';
-        to = ['owner'];
+      if (message.to.principal === 'human') {
+        resolution = 'human';
+        to = ['human'];
       } else if (mode === 'log') {
         resolution = 'log';
       } else {

@@ -358,7 +358,7 @@ describe('agent tool send with federated addresses', () => {
     expect(result.results[0]).toEqual({
       ok: false,
       error:
-        'no_team: owner has no local team; use vessel federation post --from owner@<node>:<team>',
+        'no_team: owner has no local team; use vessel federation post --from human@<node>:<team>',
     });
     expect(result.results[1]?.ok).toBe(true);
     expect(sendCalls).toHaveLength(0);

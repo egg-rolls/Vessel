@@ -30,7 +30,7 @@ import type {
 /** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
 const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-/** principal 名字形状（DECISION-037 §2；`owner` 也在字符集内） */
+/** principal 名字形状（DECISION-037 §2；`human` 也在字符集内） */
 const PRINCIPAL_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** tenant id 字符集（DECISION-010 §2.5） */

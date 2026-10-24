@@ -409,8 +409,8 @@ async function postCommand(
     );
   }
 
-  // 4. `--from.principal` 必须是该 Team 的 present 非 private 成员，或 `owner`。
-  if (from.principal !== 'owner') {
+  // 4. `--from.principal` 必须是该 Team 的 present 非 private 成员，或 `human`。
+  if (from.principal !== 'human') {
     const snapshot = await readLocalMemberNames(options.dataDir, from.team_id);
     if (!snapshot.ok) {
       return failure(

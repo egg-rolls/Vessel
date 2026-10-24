@@ -24,8 +24,8 @@ function expectInvalid(raw: string) {
 
 describe('parseFederationAddress', () => {
   it('parses principal@node:team including the reserved owner principal', () => {
-    expect(okAddress('owner@node-b:lab')).toEqual({
-      principal: 'owner',
+    expect(okAddress('human@node-b:lab')).toEqual({
+      principal: 'human',
       node_id: 'node-b',
       team_id: 'lab',
     });
@@ -102,6 +102,6 @@ describe('formatFederationAddress / isFederationAddress', () => {
 
   it('reports malformed input as not an address', () => {
     expect(isFederationAddress('eggrolls@node-b')).toBe(false);
-    expect(isFederationAddress('owner@node-b:lab:extra')).toBe(false);
+    expect(isFederationAddress('human@node-b:lab:extra')).toBe(false);
   });
 });

@@ -2,14 +2,14 @@
  * 跨节点地址 `<principal>@<node_id>:<team_id>`（DECISION-037 §2）。
  *
  * - 按**最后一个** `@` 切分，再按 `node:team` 的**恰好一个** `:` 切分。
- * - 三段字符集互斥，解析无歧义；`owner` 是 principal 的保留值（形状相同，
+ * - 三段字符集互斥，解析无歧义；`human` 是 principal 的保留值（形状相同，
  *   是否存在由接收侧 / 本地 roster 判定）。
  * - 纯函数，无 I/O；错误消息不回显原文（避免超长 / 控制字符进入 stderr）。
  *
  * @module vessel/federation-address
  */
 
-/** principal：present 成员名或 `owner`；1..64 位字母 / 数字 / `_` / `-` */
+/** principal：present 成员名或 `human`；1..64 位字母 / 数字 / `_` / `-` */
 export const FEDERATION_PRINCIPAL_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** node_id：与 `resolveNodeId()` 的形状一致 */

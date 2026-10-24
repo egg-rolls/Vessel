@@ -297,7 +297,7 @@ describe('runFederationCommand', () => {
   it('accepts owner as the local principal without roster lookup', async () => {
     const mock = startServer(success);
     const dataDir = await makeDataDir();
-    const result = await runFederationCommand(postCommand({ from: 'owner@node-a:demo' }), {
+    const result = await runFederationCommand(postCommand({ from: 'human@node-a:demo' }), {
       dataDir,
       config: config({
         peers: [

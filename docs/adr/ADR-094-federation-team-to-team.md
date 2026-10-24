@@ -82,16 +82,16 @@ tags: [federation, cross-node, team, allowlist, hop, tls, token]
 > 上面“wire 不出现 agent 标识 / worker 不可跨节点寻址”的不变量由本节取代。
 
 - **地址**：`<principal>@<node_id>:<team_id>`；`principal` 是目标 Team 的 present 成员名，
-  或保留字 `owner`。三段字符集互斥；principal 是名字，不是 agent id。
+  或保留字 `human`。三段字符集互斥；principal 是名字，不是 agent id。
 - **wire**：`from` / `to` 为 `{ node_id, team_id, principal }`；严格解析不变，
   缺 `to.principal` 返回 `federation_principal_required`。
-- **单点投递**：入站最多 1 个 run。`owner` 只写日志；其他名字必须命中唯一
+- **单点投递**：入站最多 1 个 run。`human` 只写日志；其他名字必须命中唯一
   present 非 private 成员，否则 404 且零写入；private / left / closed / 重名同样 404。
   解析使用完整 roster，不受 `teams.get` 的展示窗口影响。
 - **删除 fan-out**：`accept` 只有 `'principal'`（缺省）与 `'log'`；
   `'members'` 在配置、team.json 与运行时都是显式错误；未知值 fail-safe 为 `log`，绝不唤醒成员。
 - **回复**：`agent` 工具的 `send` 接受地址形状，运行时填 `from`（模型不能伪造）；
-  人类 owner 走 `vessel federation post --from owner@<node>:<team>`。
+  人类 owner 走 `vessel federation post --from human@<node>:<team>`。
 - **Team 信息**：`description?` / `default_principal?`；`teams.get` 的 `members_limit`
   （缺省 20，最大 100，活跃优先）；opt-in `POST /v1/federation/team-info`
   （peer `allowDirectory`，缺省 false），只返回名字 / presence / `last_seen` / desc，
