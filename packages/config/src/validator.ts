@@ -5,7 +5,6 @@
 
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { DEFAULT_TRANSPORT_OPTIONS } from './defaults.js';
 import { validateTeamPolicy } from './team-policy.js';
 import type {
   ConfigValidationError,
@@ -43,7 +42,6 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** 允许的 loopback 主机名 */
-const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
 /** 是否为纯对象（非数组、非 null） */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -854,11 +852,6 @@ function absoluteBaseUrlError(value: string, label: string): string | null {
   return null;
 }
 
-/** 0.6：校验节点 URL（与 HttpRpcClient 的 baseUrl 规则一致）。 */
-function nodeUrlError(value: string): string | null {
-  return absoluteBaseUrlError(value, 'nodes');
-}
-
 /** S7：federation peer URL；与节点 URL 同规则。 */
 function federationUrlError(value: string): string | null {
   return absoluteBaseUrlError(value, 'federation peers');
@@ -1422,19 +1415,6 @@ export function findExplicitSecretPaths(config: Record<string, unknown>, prefix 
   if (isPlainObject(config.serve) && isPlainObject(config.serve.tokens)) {
     if (Object.keys(config.serve.tokens).length > 0) found.push(at('serve.tokens'));
   }
-  if (isPlainObject(config.transport) && Array.isArray(config.transport.nodes)) {
-    config.transport.nodes.forEach((node, index) => {
-      if (
-        isPlainObject(node) &&
-        node.token !== undefined &&
-        node.token !== null &&
-        node.token !== ''
-      ) {
-        found.push(at(`transport.nodes[${index}].token`));
-      }
-    });
-  }
-
   return found;
 }
 
@@ -2126,78 +2106,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 transport（0.2；默认 in-process）
+  // 校验 transport（0.2；0.22.1 只剩 in-process）
   if (config.transport) {
-    const { kind, hostname, token, peersDir, heartbeatMs, peerTtlMs, nodes } = config.transport;
+    const { kind, token } = config.transport;
 
-    if (kind !== undefined && kind !== 'in-process' && kind !== 'loopback' && kind !== 'remote') {
+    if (kind !== undefined && kind !== 'in-process') {
       errors.push({
         path: 'transport.kind',
-        message: 'transport.kind must be "in-process", "loopback", or "remote"',
+        message: 'transport.kind must be "in-process"; remote and loopback transports were removed',
         value: kind,
-      });
-    }
-    if (kind === 'remote' && nodes === undefined) {
-      errors.push({
-        path: 'transport.nodes',
-        message: 'transport.kind "remote" requires transport.nodes',
-      });
-    }
-    if (nodes !== undefined) {
-      if (!Array.isArray(nodes)) {
-        errors.push({ path: 'transport.nodes', message: 'transport.nodes must be an array' });
-      } else {
-        const seen = new Set<string>();
-        nodes.forEach((raw, index) => {
-          const base = `transport.nodes[${index}]`;
-          if (!isPlainObject(raw)) {
-            errors.push({ path: base, message: `${base} must be an object` });
-            return;
-          }
-          const node = raw as Record<string, unknown>;
-          if (typeof node.id !== 'string' || !NODE_ID_RE.test(node.id)) {
-            errors.push({
-              path: `${base}.id`,
-              message: `${base}.id must match ${NODE_ID_RE.source}`,
-            });
-          } else if (seen.has(node.id)) {
-            errors.push({ path: `${base}.id`, message: `${base}.id must be unique` });
-          } else {
-            seen.add(node.id);
-          }
-          if (typeof node.url !== 'string' || node.url.trim() === '') {
-            errors.push({ path: `${base}.url`, message: `${base}.url must be a non-empty string` });
-          } else {
-            const message = nodeUrlError(node.url);
-            if (message !== null) {
-              errors.push({ path: `${base}.url`, message: `${base}.url ${message}` });
-            }
-          }
-          if (node.token !== undefined && (typeof node.token !== 'string' || node.token === '')) {
-            // 不把 token 值放进 error
-            errors.push({
-              path: `${base}.token`,
-              message: `${base}.token must be a non-empty string`,
-            });
-          }
-          validateEnvName(`${base}.tokenEnv`, node.tokenEnv, errors);
-          if (
-            node.caFile !== undefined &&
-            (typeof node.caFile !== 'string' || node.caFile.trim() === '')
-          ) {
-            errors.push({
-              path: `${base}.caFile`,
-              message: `${base}.caFile must be a non-empty string`,
-            });
-          }
-        });
-      }
-    }
-    if (hostname !== undefined && !LOOPBACK_HOSTNAMES.has(hostname)) {
-      errors.push({
-        path: 'transport.hostname',
-        message: 'transport.hostname must be a loopback address (127.0.0.1, localhost, ::1)',
-        value: hostname,
       });
     }
     if (token !== undefined && (typeof token !== 'string' || token.trim() === '')) {
@@ -2206,47 +2123,6 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         message: 'transport.token must be a non-empty string',
         value: token,
       });
-    }
-    if (peersDir !== undefined && (typeof peersDir !== 'string' || peersDir.trim() === '')) {
-      errors.push({
-        path: 'transport.peersDir',
-        message: 'transport.peersDir must be a non-empty string',
-        value: peersDir,
-      });
-    }
-
-    const heartbeatValid =
-      heartbeatMs === undefined ||
-      (typeof heartbeatMs === 'number' && Number.isInteger(heartbeatMs) && heartbeatMs > 0);
-    if (!heartbeatValid) {
-      errors.push({
-        path: 'transport.heartbeatMs',
-        message: 'transport.heartbeatMs must be a positive integer',
-        value: heartbeatMs,
-      });
-    }
-    const ttlValid =
-      peerTtlMs === undefined ||
-      (typeof peerTtlMs === 'number' && Number.isInteger(peerTtlMs) && peerTtlMs > 0);
-    if (!ttlValid) {
-      errors.push({
-        path: 'transport.peerTtlMs',
-        message: 'transport.peerTtlMs must be a positive integer',
-        value: peerTtlMs,
-      });
-    }
-
-    // DECISION-006 R6：peerTtlMs > heartbeatMs > 0，在 config 层早失败。
-    if (heartbeatValid && ttlValid) {
-      const effectiveHeartbeat = heartbeatMs ?? DEFAULT_TRANSPORT_OPTIONS.heartbeatMs ?? 0;
-      const effectiveTtl = peerTtlMs ?? DEFAULT_TRANSPORT_OPTIONS.peerTtlMs ?? 0;
-      if (effectiveTtl <= effectiveHeartbeat) {
-        errors.push({
-          path: 'transport.peerTtlMs',
-          message: 'transport.peerTtlMs must be greater than transport.heartbeatMs',
-          value: peerTtlMs,
-        });
-      }
     }
   }
 
@@ -2444,7 +2320,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   update: ['autoCheck', 'channel', 'source'],
   host: ['enabled', 'nodeId', 'limits'],
   scheduler: ['maxConcurrency', 'maxQueueSize', 'perAgentSerial'],
-  transport: ['kind', 'hostname', 'token', 'peersDir', 'heartbeatMs', 'peerTtlMs', 'nodes'],
+  transport: ['kind', 'token'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
   serve: [
     'hostname',

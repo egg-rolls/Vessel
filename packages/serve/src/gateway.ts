@@ -10,12 +10,10 @@
  * - 浏览器 WS 必须在首帧 `{kind:'auth',token,since}` 鉴权，token 不接受 URL/query；
  * - 事件在传输层分配单调 seq，支持 since 回放与 gap 信号，不改 core 类型；
  * - 单 runtime / 单 ContextManager：运行串行执行；会话切换时 clear 上下文（G2）；
- * - `/v1/team/*` 是跨节点 team 控制面（默认关闭，见 team.ts）。
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import type {
-  AgentMessage,
   ContextManager,
   PluginHost,
   RunEvent,
@@ -57,7 +55,6 @@ import {
   helloFrame as buildHelloFrame,
   errorFrame,
   resultFrame,
-  eventSourceNodeId as sourceNodeId,
 } from './gateway/frames.js';
 import { createHubControlRoute, type HubControlConnectionState } from './gateway/hub-control.js';
 import { createHubPairingRoute } from './gateway/hub-pairing.js';
@@ -127,21 +124,6 @@ import {
   type RpcResponse,
 } from './rpc.js';
 import { createRunEngine, type RunRecord } from './run-engine.js';
-import {
-  fromWireMessage,
-  isRemoteAddress,
-  isTeamEvent,
-  normalizeLocalAddress,
-  type PeerInfoWithIncarnation,
-  parseAddress,
-  type TeamGatewayOptions,
-  TeamProtocolError,
-  toWireAgentStatus,
-  toWireEvent,
-  toWireMessage,
-  toWirePeer,
-  type WireAgentStatus,
-} from './team.js';
 import type { TeamControlLike } from './team-control.js';
 import {
   type ConfigGatewayOptionsLike,
@@ -202,7 +184,7 @@ export interface GatewayOptions {
   token?: string;
   /** 节点名（可选，展示用） */
   nodeName?: string;
-  /** 节点 id；缺省 team.nodeId 或随机。team/transport 必须使用同一个值（U3） */
+  /** 节点 id；缺省随机。federation / hub 必须使用同一个值（U3） */
   nodeId?: string;
   /** 静态 web 目录（可选，托管 apps/web/dist） */
   staticDir?: string;
@@ -226,8 +208,6 @@ export interface GatewayOptions {
    * 事件流是长连接，不能用 Bun 的 10s 默认值；SSE 心跳 `: ping` 仍用于穿透代理。
    */
   idleTimeout?: number;
-  /** R3 team 端点配置；缺省 = team 关闭（`/v1/team/*` 返回 404） */
-  team?: TeamGatewayOptions;
   /**
    * 显式允许非回环监听（默认 false）。
    * 非回环 hostname 必须同时给出 allowRemote=true、TLS 证书对与显式非空 token。
@@ -349,11 +329,6 @@ export interface Gateway {
   /** 是否启用了 TLS */
   tls: boolean;
   /**
-   * 启动 gateway 后再接入 team（asm 需先拿到实际端口构造 LoopbackTransport）。
-   * 只设置一次；重复调用会替换 team 配置。
-   */
-  attachTeam(team: TeamGatewayOptions): void;
-  /**
    * 0.12 热重载 `allowed_origins`：下一次请求起生效（CORS / Origin 校验 / CSP）。
    * 不重建 SSE / WS 连接，也不改变已有连接的鉴权状态；非法列表抛错且保留旧值。
    */
@@ -375,11 +350,6 @@ export interface Gateway {
    * 然后关闭连接。幂等；重复调用返回同一个 promise。
    */
   stop(): Promise<void>;
-}
-
-/** team SSE 连接状态 */
-interface TeamClientState extends SseClientState {
-  agentId?: string;
 }
 
 /** WS 连接自定义数据 */
@@ -660,7 +630,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   };
   const scheme = tlsMaterial ? 'https' : 'http';
 
-  const nodeId = opts.nodeId ?? opts.team?.nodeId ?? randomUUID();
+  const nodeId = opts.nodeId ?? randomUUID();
   /** 0.9 事务代际：进程启动时生成一次，随 hello / peer 记录传播（重启即变化）。 */
   const incarnation = randomUUID().replace(/-/g, '').slice(0, 12);
   /**
@@ -750,17 +720,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
    */
   const resumedRuns = new Set<string>();
 
-  /** R3 team 状态（默认关闭） */
-  let team: TeamGatewayOptions | undefined = opts.team;
-  const teamClients = new Map<SseController, TeamClientState>();
-  let teamPollTimer: ReturnType<typeof setInterval> | undefined;
-  let knownPeers = new Set<string>();
-  let inboundCursor = 0;
-  /** 入站去重（transport.deliver 之外的兜底，防止注入 deliver 时绕过） */
-  const seenInbound = new Map<string, true>();
-  /** spawn 幂等：request_id → 在途/已完成结果；LRU 上限 1000 */
-  const spawnRequests = new Map<string, Promise<WireAgentStatus>>();
-
   const pluginHost = (): PluginHost | undefined => opts.pluginHost ?? runtime?.pluginHost;
 
   /**
@@ -818,14 +777,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   };
 
   // ── 事件广播：分配 seq → 扇出 ──────────────────
-
-  /**
-   * 事件来源节点：跨节点扇出的事件带 `node_id` 时优先使用它，
-   * 否则回落到本 gateway nodeId（顶层 node_id 字段保持兼容）。
-   */
-  function eventSourceNodeId(event: RunEvent): string {
-    return sourceNodeId(event, nodeId);
-  }
 
   function eventFrame(item: SeqEvent): ServerFrame {
     return buildEventFrame({
@@ -970,138 +921,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   /**
-   * 订阅 hub 的脱敏 / 裁剪后事件（0.18）：agent registry → 广播 / team fan-out。
+   * 订阅 hub 的脱敏 / 裁剪后事件（0.18）：agent registry → 广播。
    * 序号由 hub 分配，回放与实时读同一份副本。
    */
   const unsubscribe = hub.subscribeSequenced((item) => {
-    const { event: safeEvent, seq } = item;
+    const { event: safeEvent } = item;
     agentRegistry.ingest(safeEvent);
     broadcastEvent(item);
-
-    // R3：team 事件流（agent.* / team.*），可选按 agent_id 过滤
-    if (isTeamEvent(safeEvent) && teamClients.size > 0) {
-      const wire = toWireEvent(safeEvent);
-      const frame = `data: ${JSON.stringify({
-        protocol: PROTOCOL_VERSION,
-        node_id: eventSourceNodeId(safeEvent),
-        seq,
-        kind: 'team.event',
-        event: wire,
-      })}\n\n`;
-      for (const [ctrl, state] of [...teamClients]) {
-        if (state.replay) continue;
-        const agentId = (wire.data as Record<string, unknown>).agent_id;
-        if (state.agentId !== undefined && agentId !== state.agentId) continue;
-        sendGatedSse(ctrl, state, seq, frame);
-      }
-    }
   });
 
   // ── 运行队列 ───────────────────────────────────
 
-  /** 0.15 E6：health.get 的 runtime 快照；Host 快照优先，否则由 run 引擎派生。 */
-  function schedulerRunOf(
-    raw: unknown,
-    defaultStatus: 'queued' | 'running',
-  ): Record<string, unknown> | undefined {
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
-    const source = raw as Record<string, unknown>;
-    const runId = source.runId ?? source.run_id;
-    if (typeof runId !== 'string' || runId.length === 0) return undefined;
-    const agentId = source.agentId ?? source.agent_id;
-    const sessionId = source.sessionId ?? source.session_id;
-    const status = source.state ?? source.status;
-    const queuePosition = source.queuePosition ?? source.queue_position;
-    const queuedAt = source.queuedAt ?? source.queued_at;
-    const startedAt = source.startedAt ?? source.started_at;
-    const waitReason = source.waitReason ?? source.wait_reason;
-    return {
-      run_id: runId,
-      status: typeof status === 'string' && status.length > 0 ? status : defaultStatus,
-      ...(typeof agentId === 'string' ? { agent_id: agentId } : {}),
-      ...(typeof sessionId === 'string' ? { session_id: sessionId } : {}),
-      ...(typeof queuePosition === 'number' && Number.isFinite(queuePosition)
-        ? { queue_position: Math.floor(queuePosition) }
-        : {}),
-      ...(typeof queuedAt === 'number' && Number.isFinite(queuedAt) ? { queued_at: queuedAt } : {}),
-      ...(typeof startedAt === 'number' && Number.isFinite(startedAt)
-        ? { started_at: startedAt }
-        : {}),
-      ...(typeof waitReason === 'string' && waitReason.length > 0
-        ? { wait_reason: waitReason }
-        : {}),
-    };
-  }
-
-  function countOf(value: unknown): number {
-    return typeof value === 'number' && Number.isFinite(value) && value >= 0
-      ? Math.floor(value)
-      : 0;
-  }
-
-  function normalizeScheduler(raw: unknown): Record<string, unknown> {
-    const source =
-      typeof raw === 'object' && raw !== null && !Array.isArray(raw)
-        ? (raw as Record<string, unknown>)
-        : {};
-    const stats =
-      typeof source.stats === 'object' && source.stats !== null
-        ? (source.stats as Record<string, unknown>)
-        : {};
-    return {
-      as_of: typeof source.asOf === 'number' ? source.asOf : Date.now(),
-      queued: Array.isArray(source.queued)
-        ? source.queued
-            .map((item) => schedulerRunOf(item, 'queued'))
-            .filter((item): item is Record<string, unknown> => item !== undefined)
-        : [],
-      running: Array.isArray(source.running)
-        ? source.running
-            .map((item) => schedulerRunOf(item, 'running'))
-            .filter((item): item is Record<string, unknown> => item !== undefined)
-        : [],
-      stats: {
-        queued: countOf(stats.queued),
-        running: countOf(stats.running),
-        completed: countOf(stats.completed),
-        failed: countOf(stats.failed),
-        cancelled: countOf(stats.cancelled),
-      },
-    };
-  }
-
   function runtimeSnapshot(tenantId: string): Record<string, unknown> {
-    const isDefault = tenantId === defaultTenantId;
-    let hostScheduler: unknown;
-    let hostActiveRunId: string | undefined;
-    try {
-      const snapshot = isDefault ? team?.host?.snapshot?.() : undefined;
-      if (typeof snapshot === 'object' && snapshot !== null) {
-        const record = snapshot as Record<string, unknown>;
-        hostScheduler = record.scheduler;
-        if (Array.isArray(record.runs)) {
-          const running = record.runs.find(
-            (run) =>
-              typeof run === 'object' &&
-              run !== null &&
-              (run as Record<string, unknown>).state === 'running',
-          );
-          const runId = running ? (running as Record<string, unknown>).runId : undefined;
-          if (typeof runId === 'string') hostActiveRunId = runId;
-        }
-      }
-    } catch {
-      hostScheduler = undefined;
-    }
-
-    if (hostScheduler !== undefined) {
-      const scheduler = normalizeScheduler(hostScheduler);
-      return {
-        ...(hostActiveRunId !== undefined ? { active_run_id: hostActiveRunId } : {}),
-        scheduler,
-      };
-    }
-
     const tenantRuns = [...runs.values()].filter((record) => record.tenant_id === tenantId);
     const queued = queue
       .map((record, index) => ({ record, index }))
@@ -1156,7 +987,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     protocolInfo,
     nodeInfo,
     startedAt,
-    getTeam: () => team,
   };
   const observabilityMethodsDeps = {
     defaultTenantId,
@@ -1249,7 +1079,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 0.14 P0：agents 注册表（additive，排在表尾）。
     ...createAgentMethods({
       registry: agentRegistry,
-      host: () => team?.host,
       runs,
       queue: () => queue,
       defaultTenantId,
@@ -1632,7 +1461,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return resolved;
   }
 
-  // ── R3 team 端点 ───────────────────────────────
+  // ── federation 入站与诊断事件 ──────────────────
 
   /**
    * 诊断事件（0.18）：投 <default tenant> 流，保持既有“只有 default 可见”的行为。
@@ -1648,522 +1477,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  /** 发布 team/agent 事件（core 内部 camelCase；gateway 边界统一转 snake_case） */
-  function publishTeamEvent(type: string, data: Record<string, unknown>): void {
-    publishDiagnostic(type, 'team', data);
+  /** 发布 federation 事件（core 内部 camelCase；gateway 边界统一转 snake_case） */
+  function publishFederationEvent(type: string, data: Record<string, unknown>): void {
+    publishDiagnostic(type, 'federation', data);
   }
 
-  function publishTeamError(error: unknown): void {
-    publishTeamEvent('team.transport.error', {
-      code: (error as { code?: string }).code ?? 'internal',
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  /**
-   * S7：federation 入站路由。独立 peer bearer，必须在 `principalForRequest`
-   * 之前处理——gateway 用户 token 不得通过 federation 鉴权。
-   */
   const federationRoute = createFederationRoute({
     ...(opts.federation !== undefined ? { federation: opts.federation } : {}),
     ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
-    publish: publishTeamEvent,
+    publish: publishFederationEvent,
   });
-
-  /** TeamProtocolError / PeerTransportError → HTTP */
-  function teamErrorResponse(error: unknown, extra: Record<string, string>): Response {
-    if (error instanceof TeamProtocolError) {
-      const status = error.code === 'not_found' || error.code === 'agent_not_found' ? 404 : 400;
-      return errorJson(error.code as ProtocolError['code'], error.message, status, extra);
-    }
-    const code = (error as { code?: string }).code;
-    if (code) {
-      const status =
-        code === 'unauthorized'
-          ? 401
-          : code === 'unsupported_protocol'
-            ? 426
-            : code === 'peer_not_found'
-              ? 404
-              : code === 'transport_closed'
-                ? 409
-                : code === 'timeout'
-                  ? 504
-                  : code === 'peer_unreachable' || code === 'peer_error'
-                    ? 502
-                    : 400;
-      return errorJson(
-        code as ProtocolError['code'],
-        error instanceof Error ? error.message : String(error),
-        status,
-        extra,
-      );
-    }
-    return errorJson(
-      'internal',
-      error instanceof Error ? error.message : String(error),
-      500,
-      extra,
-    );
-  }
 
   /** 去重键里的 tenant：admin 通配 principal 落到 default（与 gateway 其余作用域一致）。 */
   function effectiveTenantId(principal: TenantPrincipal): string {
     return principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
-  }
-
-  /** 消息去重键：`${tenant_id}:${from}:${message.id}`（DECISION-019 §C）。 */
-  function inboundKey(tenantId: string, message: AgentMessage): string {
-    return `${tenantId}:${message.from}:${message.id}`;
-  }
-
-  /** 记录键；已存在返回 false（LRU 上限 1000）。 */
-  function beginInbound(key: string): boolean {
-    if (seenInbound.has(key)) return false;
-    seenInbound.set(key, true);
-    while (seenInbound.size > 1000) {
-      const first = seenInbound.keys().next();
-      if (first.done) break;
-      seenInbound.delete(first.value);
-    }
-    return true;
-  }
-
-  /** 投递失败时回滚键，允许发送方用同一 id 重试。 */
-  function forgetInbound(key: string): void {
-    seenInbound.delete(key);
-  }
-
-  /** 入站投递：deliver 注入优先 → transport.deliver → host.send */
-  async function deliverInbound(message: AgentMessage, tenantId: string): Promise<boolean> {
-    const t = team;
-    if (!t) throw new TeamProtocolError('team_disabled', 'Team is not enabled');
-    if (isRemoteAddress(message.to, t.nodeId)) {
-      throw new TeamProtocolError('agent_not_found', `Cannot relay to another node: ${message.to}`);
-    }
-    const key = inboundKey(tenantId, message);
-    if (!beginInbound(key)) return false;
-    try {
-      const local = normalizeLocalAddress(message, t.nodeId);
-      if (t.deliver) {
-        await t.deliver(local);
-        return true;
-      }
-      const withDeliver = t.transport as unknown as {
-        deliver?: (msg: AgentMessage) => boolean | Promise<boolean>;
-      };
-      if (typeof withDeliver?.deliver === 'function') {
-        const result = await withDeliver.deliver(local);
-        return result !== false;
-      }
-      if (t.host?.send) {
-        await t.host.send(local);
-        return true;
-      }
-      throw new TeamProtocolError('no_host', 'No team delivery handler configured');
-    } catch (error) {
-      forgetInbound(key);
-      throw error;
-    }
-  }
-
-  /** team 事件 SSE */
-  function openTeamStream(url: URL, extra: Record<string, string>): Response {
-    const agentId = url.searchParams.get('agent_id') ?? undefined;
-    const since = parseSince(url.searchParams.get('since'));
-    let controller: SseController | undefined;
-    let state: TeamClientState | undefined;
-    const stream = new ReadableStream<unknown>(
-      {
-        start(ctrl) {
-          controller = ctrl;
-          const clientState: TeamClientState = {
-            ...(agentId !== undefined ? { agentId } : {}),
-            backpressure: new ClientBackpressure({
-              high: SSE_HIGH_WATER_FRAMES,
-              low: SSE_LOW_WATER_FRAMES,
-            }),
-            unacked: 0,
-            encodeGap: (gap) =>
-              `data: ${JSON.stringify({
-                protocol: PROTOCOL_VERSION,
-                node_id: nodeId,
-                kind: 'gap',
-                from_seq: gap.from_seq,
-                to_seq: gap.to_seq,
-              })}\n\n`,
-            onClose: () => teamClients.delete(ctrl),
-          };
-          state = clientState;
-          teamClients.set(ctrl, clientState);
-          writeSse(ctrl, clientState, 'retry: 3000\n\n');
-          const latest = hub.latestSeq;
-          writeSse(
-            ctrl,
-            clientState,
-            `data: ${JSON.stringify({
-              protocol: PROTOCOL_VERSION,
-              node_id: nodeId,
-              kind: 'team.hello',
-              from_seq: latest === 0 ? 0 : Math.max(since + 1, hub.oldestSeq),
-              latest_seq: latest,
-            })}\n\n`,
-          );
-          const gap = hub.gapFor(since);
-          if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
-          clientState.replay = {
-            cursor: Math.max(since + 1, hub.oldestSeq),
-            batch: SSE_REPLAY_BATCH,
-            accepts: (event) => {
-              if (!isTeamEvent(event)) return false;
-              if (agentId === undefined) return true;
-              const wire = toWireEvent(event);
-              return (wire.data as Record<string, unknown>).agent_id === agentId;
-            },
-            encode: (item) => {
-              const wire = toWireEvent(item.event);
-              return `data: ${JSON.stringify({
-                protocol: PROTOCOL_VERSION,
-                node_id: eventSourceNodeId(item.event),
-                seq: item.seq,
-                kind: 'team.event',
-                event: wire,
-              })}\n\n`;
-            },
-          };
-          if (clientState.replay.cursor > hub.latestSeq) clientState.replay = undefined;
-        },
-        pull() {
-          if (!controller || !state) return;
-          state.unacked = 0;
-          pumpSseReplay(controller, state, hub);
-          flushSseGap(controller, state);
-        },
-        cancel() {
-          if (controller) teamClients.delete(controller);
-        },
-      },
-      { highWaterMark: SSE_HIGH_WATER_FRAMES },
-    );
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-        ...extra,
-      },
-    });
-  }
-
-  /** `/v1/team/*` 路由；未启用 team 返回 404 */
-  async function handleTeam(
-    req: Request,
-    url: URL,
-    path: string,
-    extra: Record<string, string>,
-    principal: TenantPrincipal,
-  ): Promise<Response | null> {
-    if (path !== '/v1/team' && !path.startsWith('/v1/team/')) return null;
-    const t = team;
-    if (!t) return errorJson('not_found', `Not found: ${path}`, 404, extra);
-    // team 控制面是 gateway 全局状态：仅 default tenant 或 admin 可访问。
-    if (principal.role !== 'admin' && principal.tenant_id !== defaultTenantId) {
-      return errorJson(
-        'forbidden',
-        'Team control plane is only available to the default tenant or an admin token',
-        403,
-        extra,
-      );
-    }
-    // P1：GET 允许 read；所有变更操作要求 write/admin（与 RPC 方法表同一 ROLE_RANK）。
-    const requiredRole = req.method === 'GET' ? 'read' : 'write';
-    if (!hasPermission(principal.role, requiredRole)) {
-      return errorJson(
-        'forbidden',
-        `Team ${req.method} requires ${requiredRole} permission`,
-        403,
-        extra,
-      );
-    }
-
-    if (path === '/v1/team/peers' && req.method === 'GET') {
-      let peers: PeerInfoWithIncarnation[] = t.transport
-        ? await t.transport.peers().catch(() => [])
-        : [];
-      if (peers.length === 0) {
-        peers = [
-          {
-            nodeId: t.nodeId,
-            agents: t.host?.list() ?? [],
-            protocol: PROTOCOL_VERSION,
-            // 自身也是 peer；透出本进程代际，形状与 transport.peers() 一致。
-            incarnation,
-          },
-        ];
-      }
-      return json(
-        { protocol: PROTOCOL_VERSION, node_id: t.nodeId, peers: peers.map(toWirePeer) },
-        200,
-        extra,
-      );
-    }
-
-    if (path === '/v1/team/messages' && req.method === 'POST') {
-      const body = await readJsonBody(req, maxBodyBytes, extra);
-      if (body instanceof Response) return body;
-      if (body.protocol !== PROTOCOL_VERSION) {
-        return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
-      }
-      let message: AgentMessage;
-      try {
-        message = fromWireMessage(body.message);
-      } catch (error) {
-        return teamErrorResponse(error, extra);
-      }
-      // F9：入站 HTTP 不接受跨节点广播；本地 /v1/team/send 的 '*' 仍然允许。
-      if (message.to === '*') {
-        return errorJson(
-          'broadcast_not_supported',
-          'Inbound broadcast is not supported; use a concrete recipient',
-          400,
-          extra,
-        );
-      }
-      // F11：有 node 前缀的 from 必须与 envelope node_id 一致（防伪）；本机简写放行。
-      const fromNode = parseAddress(message.from).nodeId;
-      if (fromNode !== undefined && body.node_id !== fromNode) {
-        return errorJson('invalid_request', 'body.node_id must match message.from', 400, extra);
-      }
-      try {
-        const accepted = await deliverInbound(message, effectiveTenantId(principal));
-        const target = message.to === '*' ? undefined : parseAddress(message.to).agentId;
-        publishTeamEvent('team.message.received', {
-          messageId: message.id,
-          from: message.from,
-          to: message.to,
-          kind: message.kind,
-          ...(target ? { agentId: target } : {}),
-        });
-        return json(
-          {
-            protocol: PROTOCOL_VERSION,
-            ok: true,
-            message_id: message.id,
-            ...(accepted ? {} : { deduplicated: true }),
-            cursor: String(++inboundCursor),
-          },
-          accepted ? 202 : 200,
-          extra,
-        );
-      } catch (error) {
-        return teamErrorResponse(error, extra);
-      }
-    }
-
-    if (path === '/v1/team/send' && req.method === 'POST') {
-      if (!t.transport) {
-        return errorJson('team_disabled', 'No loopback transport configured', 404, extra);
-      }
-      const body = await readJsonBody(req, maxBodyBytes, extra);
-      if (body instanceof Response) return body;
-      if (body.protocol !== PROTOCOL_VERSION) {
-        return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
-      }
-      let message: AgentMessage;
-      try {
-        message = fromWireMessage(body.message);
-      } catch (error) {
-        return teamErrorResponse(error, extra);
-      }
-      // 与跨节点接收共用同一去重集合（DECISION-019 §C）；失败回滚，允许重试。
-      const sendKey = inboundKey(effectiveTenantId(principal), message);
-      if (!beginInbound(sendKey)) {
-        return json(
-          { protocol: PROTOCOL_VERSION, ok: true, message_id: message.id, deduplicated: true },
-          200,
-          extra,
-        );
-      }
-      try {
-        await t.transport.send(message);
-        publishTeamEvent('team.message.sent', {
-          messageId: message.id,
-          from: message.from,
-          to: message.to,
-          kind: message.kind,
-        });
-        return json({ protocol: PROTOCOL_VERSION, ok: true, message_id: message.id }, 202, extra);
-      } catch (error) {
-        forgetInbound(sendKey);
-        publishTeamError(error);
-        return teamErrorResponse(error, extra);
-      }
-    }
-
-    if (path === '/v1/team/inbox' && req.method === 'GET') {
-      if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
-      const agentId = url.searchParams.get('agent_id');
-      if (!agentId || agentId.includes(':')) {
-        return errorJson('invalid_request', 'agent_id must be a local agent id', 400, extra);
-      }
-      const cursor = url.searchParams.get('cursor') ?? undefined;
-      try {
-        const page = await t.host.inbox(agentId, cursor);
-        return json(
-          {
-            protocol: PROTOCOL_VERSION,
-            agent_id: agentId,
-            messages: page.messages.map(toWireMessage),
-            cursor: page.cursor,
-          },
-          200,
-          extra,
-        );
-      } catch (error) {
-        return teamErrorResponse(error, extra);
-      }
-    }
-
-    if (path === '/v1/team/stream' && req.method === 'GET') {
-      return openTeamStream(url, extra);
-    }
-
-    if (path === '/v1/team/agents') {
-      if (req.method === 'GET') {
-        if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
-        return json(
-          { protocol: PROTOCOL_VERSION, agents: t.host.list().map(toWireAgentStatus) },
-          200,
-          extra,
-        );
-      }
-      if (req.method === 'POST') {
-        const spawn = t.spawn;
-        if (!spawn) return errorJson('no_spawn', 'No spawn handler configured', 400, extra);
-        const body = await readJsonBody(req, maxBodyBytes, extra);
-        if (body instanceof Response) return body;
-        const name = body.name;
-        const model = body.model;
-        const systemPrompt = body.system_prompt;
-        const requestIdRaw = body.request_id;
-        if (name !== undefined && typeof name !== 'string') {
-          return errorJson('invalid_request', 'name must be a string', 400, extra);
-        }
-        if (model !== undefined && typeof model !== 'string') {
-          return errorJson('invalid_request', 'model must be a string', 400, extra);
-        }
-        if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
-          return errorJson('invalid_request', 'system_prompt must be a string', 400, extra);
-        }
-        if (
-          requestIdRaw !== undefined &&
-          (typeof requestIdRaw !== 'string' ||
-            requestIdRaw.length === 0 ||
-            requestIdRaw.length > 128)
-        ) {
-          return errorJson(
-            'invalid_request',
-            'request_id must be a non-empty string (<=128)',
-            400,
-            extra,
-          );
-        }
-        const requestId = typeof requestIdRaw === 'string' ? requestIdRaw : undefined;
-        // 幂等键含 tenant：不同 tenant 的同名 request_id 互不影响（DECISION-019 §C）。
-        const spawnKey =
-          requestId !== undefined ? `${effectiveTenantId(principal)}:${requestId}` : undefined;
-
-        // 幂等：同一 tenant+request_id 返回第一次 spawn 的结果（含在途请求）。
-        if (spawnKey !== undefined) {
-          const existing = spawnRequests.get(spawnKey);
-          if (existing) {
-            try {
-              return json(
-                { protocol: PROTOCOL_VERSION, agent: await existing, deduplicated: true },
-                200,
-                extra,
-              );
-            } catch (error) {
-              return teamErrorResponse(error, extra);
-            }
-          }
-        }
-
-        const pending = (async () =>
-          toWireAgentStatus(
-            await spawn({
-              ...(name !== undefined ? { name } : {}),
-              ...(model !== undefined ? { model } : {}),
-              ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-            }),
-          ))();
-        if (spawnKey !== undefined) {
-          spawnRequests.set(spawnKey, pending);
-          while (spawnRequests.size > 1000) {
-            const first = spawnRequests.keys().next();
-            if (first.done) break;
-            spawnRequests.delete(first.value);
-          }
-        }
-        try {
-          const agent = await pending;
-          return json({ protocol: PROTOCOL_VERSION, agent }, 201, extra);
-        } catch (error) {
-          if (spawnKey !== undefined) spawnRequests.delete(spawnKey);
-          return teamErrorResponse(error, extra);
-        }
-      }
-    }
-
-    const agentMatch = path.match(/^\/v1\/team\/agents\/([^/]+)(?:\/(cancel|close))?$/);
-    if (agentMatch) {
-      const id = decodeURIComponent(agentMatch[1] ?? '');
-      const action = agentMatch[2];
-      if (id.includes(':')) {
-        if (action === 'cancel') {
-          return errorJson(
-            'remote_cancel_not_supported',
-            'Remote agents are addressed by messages; HTTP endpoints are local-only',
-            400,
-            extra,
-          );
-        }
-        return errorJson('agent_not_found', `Remote agent is not local: ${id}`, 404, extra);
-      }
-      if (action === 'cancel' && req.method === 'POST') {
-        if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
-        // F10：未知 agent 返回 404，不让 host.cancel 抛成 500。
-        if (!t.host.get(id)) {
-          return errorJson('agent_not_found', `Unknown agent: ${id}`, 404, extra);
-        }
-        try {
-          t.host.cancel(id);
-        } catch (error) {
-          return errorJson(
-            'agent_not_found',
-            error instanceof Error ? error.message : `Unknown agent: ${id}`,
-            404,
-            extra,
-          );
-        }
-        return json({ protocol: PROTOCOL_VERSION, cancelled: true }, 200, extra);
-      }
-      if (action === 'close' && req.method === 'POST') {
-        const handle = t.host?.get(id);
-        if (!handle) return errorJson('agent_not_found', `Unknown agent: ${id}`, 404, extra);
-        await handle.close();
-        return json({ protocol: PROTOCOL_VERSION, closed: true }, 200, extra);
-      }
-      if (!action && req.method === 'GET') {
-        if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
-        const status = t.host.get(id)?.status() ?? t.host.list().find((item) => item.id === id);
-        if (!status) return errorJson('agent_not_found', `Unknown agent: ${id}`, 404, extra);
-        return json({ protocol: PROTOCOL_VERSION, agent: toWireAgentStatus(status) }, 200, extra);
-      }
-    }
-
-    return errorJson('not_found', `Not found: ${path}`, 404, extra);
   }
 
   // ── 0.3 durable / MCP 端点 ─────────────────────
@@ -2623,48 +1950,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return json(response, 200, extra);
   }
 
-  function startTeamPolling(): void {
-    if (teamPollTimer) clearInterval(teamPollTimer);
-    teamPollTimer = undefined;
-    if (!team?.transport) return;
-    const poll = async (): Promise<void> => {
-      const t = team;
-      if (!t?.transport) return;
-      try {
-        const peers = await t.transport.peers();
-        const current = new Set(peers.map((peer) => peer.nodeId));
-        for (const id of current) {
-          if (id !== nodeId && !knownPeers.has(id)) {
-            publishTeamEvent('team.peer.joined', { nodeId: id });
-          }
-        }
-        for (const id of knownPeers) {
-          if (id !== nodeId && !current.has(id)) {
-            publishTeamEvent('team.peer.left', { nodeId: id });
-          }
-        }
-        knownPeers = current;
-      } catch (error) {
-        publishTeamError(error);
-      }
-    };
-    void poll();
-    teamPollTimer = setInterval(() => {
-      void poll();
-    }, team?.peerPollMs ?? 5_000);
-    (teamPollTimer as { unref?: () => void }).unref?.();
-  }
-
-  /** 启动后接入 team（asm 先拿端口构造 transport） */
-  function attachTeam(next: TeamGatewayOptions): void {
-    if (next.nodeId !== nodeId) {
-      throw new Error(`team.nodeId "${next.nodeId}" must match gateway nodeId "${nodeId}"`);
-    }
-    team = next;
-    knownPeers = new Set();
-    startTeamPolling();
-  }
-
   function reconfigure(next: GatewayReconfigureOptions): void {
     // 先归一化再赋值：非法输入抛错时保留旧 allowlist（不做半更新）。
     if (next.allowedOrigins !== undefined) {
@@ -2720,13 +2005,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
           latest_seq: hub.latestSeq,
         };
         if (path === '/health') return json(base, 200, extra);
-        const teamInfo = team
-          ? {
-              enabled: true,
-              node_id: team.nodeId,
-              transport: team.transport?.kind ?? 'in-process',
-            }
-          : { enabled: false };
         // 健康响应的 node 字段按该请求的 principal 作用域过滤；无凭据时为
         // 匿名请求，不暴露任何 tenant 的运行态与工具面。
         const principal = headerPrincipal(req);
@@ -2736,7 +2014,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
             protocol: protocolInfo,
             node: nodeInfo(principal ? effectiveTenantId(principal) : undefined),
             started_at: startedAt,
-            team: teamInfo,
           },
           200,
           extra,
@@ -2837,10 +2114,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
         if (req.method !== 'POST') return methodNotAllowed(extra);
         return handleRpc(req, principal, extra);
       }
-
-      // R3：team 端点（默认关闭 → 404）
-      const teamResponse = await handleTeam(req, url, path, extra, principal);
-      if (teamResponse) return teamResponse;
 
       // 0.3：durable / MCP（未注入 → 503 *_disabled）
       const durableResponse = await handleDurable(req, url, path, extra, principal);
@@ -3146,8 +2419,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const actualPort = server?.port ?? (localOnly ? 0 : (opts.port ?? DEFAULT_PORT));
 
-  if (team && !localOnly) startTeamPolling();
-
   // 心跳：WS 发 ping（客户端回 pong 或 {kind:'pong'}），SSE 发注释行。
   // 本地 dispatcher 无连接，不启动心跳。
   const heartbeat = localOnly
@@ -3165,10 +2436,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
           flushWsGap(ws);
         }
         for (const [ctrl, state] of [...sseClients]) {
-          if (!flushSseGap(ctrl, state)) continue;
-          writeSse(ctrl, state, ': ping\n\n');
-        }
-        for (const [ctrl, state] of [...teamClients]) {
           if (!flushSseGap(ctrl, state)) continue;
           writeSse(ctrl, state, ': ping\n\n');
         }
@@ -3245,9 +2512,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   async function shutdown(): Promise<void> {
     if (heartbeat !== undefined) clearInterval(heartbeat);
-    if (teamPollTimer) clearInterval(teamPollTimer);
-    teamPollTimer = undefined;
-
     // 先清队列：active run 收尾时 pump() 不得再启动新 run。
     for (const record of queue.splice(0)) {
       record.status = 'cancelled';
@@ -3283,8 +2547,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     closeWsClients();
     hubControlRoute.stop();
     closeSseClients(sseClients);
-    closeSseClients(teamClients);
-    knownPeers.clear();
 
     if (server) {
       try {
@@ -3304,7 +2566,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     nodeId,
     protocol: protocolInfo,
     tls: tlsMaterial !== undefined,
-    attachTeam,
     reconfigure,
     closeByTokenId,
     rpc: dispatcher.dispatch,

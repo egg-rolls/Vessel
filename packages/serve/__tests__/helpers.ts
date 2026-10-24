@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AgentRuntime,
-  type AgentStatus,
   type ChatRequest,
   type ContextManager,
   type EventStream,
@@ -23,9 +22,7 @@ import {
 } from '@vessel-agent/core';
 import { type Gateway, type GatewayOptions, startGateway } from '../src/gateway';
 import type { ServerFrame } from '../src/protocol';
-import type { TeamGatewayOptions } from '../src/team';
 import { createGatewayEventHub, type TenantEventHub } from '../src/tenant-event-hub';
-import { createLoopbackTransport, type LoopbackTransport } from '../src/transport/index';
 
 /** 创建一个 echo 式 runtime（MemoryLLMProvider 回显输入） */
 export async function createRuntime(opts: {
@@ -315,49 +312,4 @@ export function makeTempDir(prefix = 'vessel-serve-test-'): Promise<string> {
 /** 清理临时目录 */
 export function removeTempDir(path: string): Promise<void> {
   return rm(path, { recursive: true, force: true });
-}
-
-export interface TeamNodeOptions {
-  nodeId: string;
-  peersDir: string;
-  token?: string;
-  heartbeatMs?: number;
-  peerTtlMs?: number;
-  host?: TeamGatewayOptions['host'];
-  spawn?: TeamGatewayOptions['spawn'];
-  deliver?: TeamGatewayOptions['deliver'];
-  /** 本节点成员快照（写入注册表） */
-  agents?: () => AgentStatus[];
-}
-
-/** 启动一个带 LoopbackTransport 的 gateway 节点 */
-export async function createTeamNode(options: TeamNodeOptions): Promise<{
-  gateway: Gateway;
-  transport: LoopbackTransport;
-  events: MemoryEventStream;
-}> {
-  const events = new MemoryEventStream();
-  const gateway = startTestGateway({
-    events,
-    port: 0,
-    nodeId: options.nodeId,
-    ...(options.token ? { token: options.token } : {}),
-  });
-  const transport = await createLoopbackTransport({
-    nodeId: options.nodeId,
-    endpoint: gateway.url,
-    token: gateway.token,
-    peersDir: options.peersDir,
-    heartbeatMs: options.heartbeatMs ?? 100,
-    peerTtlMs: options.peerTtlMs ?? 500,
-    ...(options.agents ? { agents: options.agents } : {}),
-  });
-  gateway.attachTeam({
-    nodeId: options.nodeId,
-    transport,
-    ...(options.host ? { host: options.host } : {}),
-    ...(options.spawn ? { spawn: options.spawn } : {}),
-    ...(options.deliver ? { deliver: options.deliver } : {}),
-  });
-  return { gateway, transport, events };
 }

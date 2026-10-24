@@ -2,7 +2,7 @@
  * Gateway 协议 v1（vessel.gateway/1）
  *
  * 0.1.0 只实现单节点控制面：事件、运行、会话、工具、权限、静态托管。
- * `/v1/team/*` 与任务协议是 0.2 草案，仅保留类型定义，不在 0.1.0 提供服务端实现。
+ * legacy team 任务协议已于 0.22.1 删除，只剩 `team.*` 方法的 method_not_allowed 守卫。
  *
  * @module @vessel-agent/serve/protocol
  */

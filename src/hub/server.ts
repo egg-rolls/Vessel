@@ -31,13 +31,13 @@ import {
   normalizeAllowedOrigins,
   originAllowed,
 } from '@vessel-agent/serve';
-import { normalizeNodeUrl } from '../node-registry.js';
 import type { HubClientHelloFrame, HubDirectoryFrame } from './client-protocol.js';
 import {
   createHubNodeInbound,
   type HubNodeInbound,
   type HubNodeInboundConnection,
 } from './inbound-control.js';
+import { normalizeNodeUrl } from './node-url.js';
 import type { HubRegistry } from './registry.js';
 import {
   type HubNodeInboundDeps,

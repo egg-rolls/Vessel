@@ -51,9 +51,7 @@ import type {
   TaskEntry,
   TaskResponse,
   TasksResponse,
-  TeamAgentsResponse,
   TeamDetail,
-  TeamPeersResponse,
   TeamPostResult,
   TeamSummary,
   TenantInfo,
@@ -786,17 +784,8 @@ export class GatewayClient {
     return this.rpc<EvalRunResponse>('evals.run', { suite }).then((body) => body.report);
   }
 
-  /** team 只有 REST 控制面；不要调用已废弃的 team.* RPC。 */
-  listTeamPeers(): Promise<TeamPeersResponse> {
-    return this.httpJson<TeamPeersResponse>('/v1/team/peers');
-  }
-
-  listTeamAgents(): Promise<TeamAgentsResponse> {
-    return this.httpJson<TeamAgentsResponse>('/v1/team/agents');
-  }
-
   // ── Team（0.19 S6，node-local；canonical `teams.*`）──
-  // 只走 HTTP rpc()，不做 legacy `/v1/team/*` 回退；`teams.*` 不依赖 WS 在线。
+  // 只走 HTTP rpc()；`teams.*` 不依赖 WS 在线。
 
   async listTeams(): Promise<TeamSummary[]> {
     const body = await this.rpc<{ teams?: TeamSummary[] }>('teams.list');
