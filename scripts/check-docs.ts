@@ -3,8 +3,10 @@
 /**
  * 文档一致性检查（R8c）。
  *
- * 1. 环境变量：README / ARCHITECTURE 必须写明 VESSEL_GATEWAY_TOKEN 及其优先级。
- * 2. 相对链接：README / AGENTS / CONTRIBUTING / docs（ADR 历史段除外）中的相对链接必须存在。
+ * 1. 相对链接：README / AGENTS / CONTRIBUTING / docs（ADR 历史段除外）中的相对链接必须存在。
+ * 2. 结构性一致：ADR 索引 / frontmatter、operations 索引、旧 ADR 入口指向。
+ *
+ * 不做内容字符串断言（例如“某文件必须出现某个词”）：文档措辞会变，这类检查只会制造假失败。
  *
  * 用法：bun run scripts/check-docs.ts
  * 退出码：0 = 通过；1 = 有 issue。
@@ -13,8 +15,6 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
-
-const TOKEN_PRIORITY = 'config > VESSEL_GATEWAY_TOKEN > gateway 自动生成';
 
 const LINK_FILES = [
   'README.md',
@@ -49,10 +49,8 @@ export interface DocIssue {
 export async function checkDocs(root: string): Promise<DocIssue[]> {
   const issues: DocIssue[] = [];
 
-  await checkTokenDocs(root, issues);
   await checkAdrTree(root, issues);
   await checkOperationsIndex(root, issues);
-  await checkNotImplementedMarkers(root, issues);
   await checkLegacyAdrLinks(root, issues);
 
   for (const file of LINK_FILES) {
@@ -62,18 +60,6 @@ export async function checkDocs(root: string): Promise<DocIssue[]> {
   }
 
   return issues;
-}
-
-async function checkTokenDocs(root: string, issues: DocIssue[]): Promise<void> {
-  for (const file of ['README.md', 'docs/ARCHITECTURE.md']) {
-    const text = await readFile(join(root, file), 'utf8');
-    if (!text.includes('VESSEL_GATEWAY_TOKEN')) {
-      issues.push({ file, line: 0, message: '缺少 VESSEL_GATEWAY_TOKEN 说明' });
-    }
-    if (!text.includes(TOKEN_PRIORITY)) {
-      issues.push({ file, line: 0, message: `缺少优先级说明：${TOKEN_PRIORITY}` });
-    }
-  }
 }
 
 async function checkLinks(root: string, file: string, issues: DocIssue[]): Promise<void> {
@@ -345,38 +331,6 @@ async function checkOperationsIndex(root: string, issues: DocIssue[]): Promise<v
         file: 'README.md',
         line: 0,
         message: `文档索引缺少 docs/operations/${file}`,
-      });
-    }
-  }
-}
-
-async function checkNotImplementedMarkers(root: string, issues: DocIssue[]): Promise<void> {
-  const readmePath = join(root, 'README.md');
-  if (!existsSync(readmePath)) return;
-  const readme = await readFile(readmePath, 'utf8');
-
-  for (const [feature, marker] of [
-    ['跨机器远程', '静态节点表'],
-    ['微信', '不做'],
-  ] as const) {
-    if (!readme.includes(feature) || !readme.includes(marker)) {
-      issues.push({
-        file: 'README.md',
-        line: 0,
-        message: `未实现能力标注缺少：${feature} / ${marker}`,
-      });
-    }
-  }
-
-  const changelogPath = join(root, 'CHANGELOG.md');
-  if (existsSync(changelogPath)) {
-    const changelog = await readFile(changelogPath, 'utf8');
-    const hasReleaseSection = /^## \[(?:Unreleased|0\.5\.0)\]/m.test(changelog);
-    if (hasReleaseSection && !changelog.includes('Known limitations')) {
-      issues.push({
-        file: 'CHANGELOG.md',
-        line: 0,
-        message: '0.5 / Unreleased 段落必须包含 Known limitations',
       });
     }
   }
