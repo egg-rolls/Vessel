@@ -289,6 +289,37 @@ export const en: Record<MessageKey, string> = {
   'federation.teamInfo.empty': 'No members.',
   'federation.teamInfo.rejected': 'team-info rejected: {code}: {reason}',
 
+  // ── attention (0.22 S9.1) ──
+  'help.cmd.attention':
+    'list pending/orphaned interactions (--to principal is not a filter; use --team/--agent)',
+  'help.cmd.attentionRespond':
+    'respond to one / --select (current page) / --all (needs --yes); --answers only with a request_id',
+  'attention.empty': 'No {status} interactions.',
+  'attention.header': '{total} {status} · showing {showing}',
+  'attention.interactive.select': 'Select [1,3 / a=all / n=next / q=quit]: ',
+  'attention.interactive.decision': 'a=allow|d=deny|q: ',
+  'attention.interactive.emptySelection': 'Enter a selection (1,3), a, n, or q.',
+  'attention.interactive.invalid': 'Invalid selection.',
+  'attention.interactive.noMore': 'No more pages.',
+  'attention.interactive.askSkipped':
+    "Skipped ask {request}; answer with: vessel attention respond {request} --answers '<json>'",
+  'attention.confirm': 'Respond {request} with {decision}? [y/N]',
+  'attention.needsTty': '`vessel attention --interactive` requires a TTY.',
+  'attention.needsYes': 'Cannot confirm in a non-interactive environment; re-run with --yes.',
+  'attention.summary': 'Answered {ok}, failed {failed}, skipped {skipped}.',
+  'attention.allTruncated': 'Reached the 200 interaction limit; only the first 200 were processed.',
+  'attention.error.humanToken':
+    'attention requires a human control token (gateway or team token); federation peer tokens are rejected',
+  'attention.error.federationMismatch':
+    'federation_target_mismatch: --to node "{node}" does not match this node "{local}"',
+  'attention.error.unknownAgent': 'unknown_agent: no agent matches "{agent}"',
+  'attention.error.notFound': 'not_found: interaction {request} was not found',
+  'attention.error.askRequiresAnswers': 'ask {request} requires --answers <json>',
+  'attention.error.permissionNoAnswers':
+    'permission {request} does not accept --answers; use --allow or --deny',
+  'attention.error.askInBatch': 'ask {request} requires --answers <json>',
+  'attention.error.selectOutOfRange': '--select index {index} is out of range (page has {count})',
+
   // ── completion (0.18) ──
   'completion.usage': 'Usage: vessel completion <bash|zsh|fish|powershell>',
   'completion.unknownShell': 'Unknown shell "{shell}".',

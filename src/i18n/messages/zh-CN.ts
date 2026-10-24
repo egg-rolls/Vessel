@@ -278,6 +278,37 @@ export const zhCN = {
   'federation.teamInfo.empty': '没有成员。',
   'federation.teamInfo.rejected': 'team-info 被拒绝：{code}：{reason}',
 
+  // ── attention（0.22 S9.1）──
+  'help.cmd.attention':
+    '列出 pending/orphaned 交互（--to 的 principal 不参与过滤；用 --team/--agent）',
+  'help.cmd.attentionRespond':
+    '应答：单条 / --select（当前页）/ --all（需 --yes）；--answers 只配 request_id',
+  'attention.empty': '没有 {status} 交互。',
+  'attention.header': '{total} {status} · showing {showing}',
+  'attention.interactive.select': 'Select [1,3 / a=all / n=next / q=quit]: ',
+  'attention.interactive.decision': 'a=allow|d=deny|q: ',
+  'attention.interactive.emptySelection': '请输入选择（1,3）、a、n 或 q。',
+  'attention.interactive.invalid': '选择无效。',
+  'attention.interactive.noMore': '没有更多页。',
+  'attention.interactive.askSkipped':
+    "已跳过 ask {request}；请用：vessel attention respond {request} --answers '<json>'",
+  'attention.confirm': 'Respond {request} with {decision}? [y/N]',
+  'attention.needsTty': '`vessel attention --interactive` 需要 TTY。',
+  'attention.needsYes': '非交互环境无法确认；请加 --yes 重试。',
+  'attention.summary': '已应答 {ok}，失败 {failed}，跳过 {skipped}。',
+  'attention.allTruncated': '已达到 200 条交互上限；只处理前 200 条。',
+  'attention.error.humanToken':
+    'attention requires a human control token (gateway or team token); federation peer tokens are rejected',
+  'attention.error.federationMismatch':
+    'federation_target_mismatch: --to 的节点 "{node}" 与本机节点 "{local}" 不一致',
+  'attention.error.unknownAgent': 'unknown_agent: 没有匹配 "{agent}" 的 agent',
+  'attention.error.notFound': 'not_found: 找不到交互 {request}',
+  'attention.error.askRequiresAnswers': 'ask {request} 需要 --answers <json>',
+  'attention.error.permissionNoAnswers':
+    'permission {request} 不接受 --answers；请用 --allow 或 --deny',
+  'attention.error.askInBatch': 'ask {request} 需要 --answers <json>',
+  'attention.error.selectOutOfRange': '--select 索引 {index} 越界（本页 {count} 条）',
+
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',
   'completion.unknownShell': '未知 shell "{shell}"。',

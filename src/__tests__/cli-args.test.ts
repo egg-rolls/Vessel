@@ -59,6 +59,7 @@ describe('parseArgs - 默认与 REPL', () => {
       teamCommand: null,
       errorsCommand: null,
       completionCommand: null,
+      attentionCommand: null,
     });
   });
 });
@@ -711,5 +712,141 @@ describe('0.15 multi-instance flags', () => {
     expect(err(['logs'])).toContain('Usage: vessel logs tail');
     expect(err(['logs', 'tail', '--lines', '0'])).toContain('Invalid --lines');
     expect(err(['logs', 'tail', '--bogus'])).toContain('Unknown argument');
+  });
+});
+
+describe('parseArgs - attention (0.22 S9.1)', () => {
+  it('list defaults to pending, limit 20, and accepts connection flags', () => {
+    const args = ok(['attention']);
+    expect(args.attentionCommand).toEqual({
+      kind: 'list',
+      status: 'pending',
+      limit: 20,
+      json: false,
+      interactive: false,
+      all: false,
+      remember: false,
+      yes: false,
+    });
+
+    const remote = ok([
+      'attention',
+      '--connect',
+      'https://node.example',
+      '--connect-token',
+      't',
+      '--ca',
+      'ca.pem',
+      '--tenant',
+      'alpha',
+      '--team',
+      'alpha',
+      '--agent',
+      'worker',
+      '--status',
+      'orphaned',
+      '--order',
+      'oldest',
+      '--limit',
+      '500',
+      '--cursor',
+      'c1',
+      '--json',
+    ]);
+    expect(remote.attentionCommand).toMatchObject({
+      kind: 'list',
+      connectUrl: 'https://node.example',
+      connectToken: 't',
+      caFile: 'ca.pem',
+      tenantId: 'alpha',
+      teamId: 'alpha',
+      agent: 'worker',
+      status: 'orphaned',
+      order: 'oldest',
+      limit: 500,
+      cursor: 'c1',
+      json: true,
+    });
+  });
+
+  it('--to is validated at parse time', () => {
+    const parsed = ok(['attention', '--to', 'human@node-1:alpha']);
+    expect(parsed.attentionCommand?.to).toBe('human@node-1:alpha');
+    expect(err(['attention', '--to', 'not-an-address'])).toContain('Invalid --to');
+  });
+
+  it('--connect-token / --ca require --connect', () => {
+    expect(err(['attention', '--connect-token', 't'])).toContain('requires --connect');
+    expect(err(['attention', '--ca', 'ca.pem'])).toContain('requires --connect');
+  });
+
+  it('--limit / --order / --status / --cursor enums', () => {
+    expect(err(['attention', '--limit', '0'])).toContain('Invalid --limit');
+    expect(err(['attention', '--limit', '501'])).toContain('Invalid --limit');
+    expect(err(['attention', '--order', 'random'])).toContain('--order');
+    expect(err(['attention', '--status', 'answered'])).toContain('--status');
+    expect(err(['attention', '--cursor'])).toContain('Missing value for --cursor');
+  });
+
+  it('--all requires --yes', () => {
+    expect(err(['attention', 'respond', '--all', '--allow'])).toContain('--yes');
+    expect(
+      ok(['attention', 'respond', '--all', '--allow', '--yes']).attentionCommand,
+    ).toMatchObject({
+      kind: 'respond',
+      all: true,
+      decision: 'allow',
+      yes: true,
+    });
+  });
+
+  it('respond requires exactly one target and validates combinations', () => {
+    expect(err(['attention', 'respond'])).toContain('exactly one');
+    expect(err(['attention', 'respond', '--select', '1', '--all', '--allow', '--yes'])).toContain(
+      'exactly one',
+    );
+    expect(
+      ok(['attention', 'respond', '--select', '1,2', '--allow']).attentionCommand,
+    ).toMatchObject({ select: [1, 2], decision: 'allow' });
+  });
+
+  it('--select parses, dedupes, and rejects empty / zero / non-numeric entries', () => {
+    const parsed = ok(['attention', 'respond', '--select', '1,3,3', '--deny', '--yes']);
+    expect(parsed.attentionCommand?.select).toEqual([1, 3]);
+    expect(err(['attention', 'respond', '--select'])).toContain('Missing value for --select');
+    for (const raw of ['0', 'a', '1,,2', ',']) {
+      expect(err(['attention', 'respond', '--select', raw, '--allow', '--yes'])).toContain(
+        'Invalid --select',
+      );
+    }
+  });
+
+  it('--answers only with a positional request_id and never with --allow/--deny', () => {
+    const parsed = ok(['attention', 'respond', 'r1', '--answers', '[{"q":"x","answer":"y"}]']);
+    expect(parsed.attentionCommand).toMatchObject({
+      kind: 'respond',
+      requestId: 'r1',
+      answers: [{ q: 'x', answer: 'y' }],
+    });
+    expect(err(['attention', 'respond', '--all', '--answers', '[]', '--yes'])).toContain(
+      'positional',
+    );
+    expect(err(['attention', 'respond', 'r1', '--answers', '[]', '--allow'])).toContain(
+      'cannot be combined',
+    );
+    expect(err(['attention', 'respond', 'r1', '--answers', 'not-json'])).toContain('valid JSON');
+    expect(err(['attention', 'respond', 'r1', '--answers', '{}'])).toContain('JSON array');
+  });
+
+  it('--allow and --deny are mutually exclusive; respond needs one (answers excepted)', () => {
+    expect(err(['attention', 'respond', 'r1'])).toContain('requires --allow or --deny');
+    expect(err(['attention', 'respond', 'r1', '--allow', '--deny'])).toContain(
+      'mutually exclusive',
+    );
+  });
+
+  it('--interactive is list-only', () => {
+    expect(ok(['attention', '--interactive']).attentionCommand?.interactive).toBe(true);
+    expect(err(['attention', 'respond', 'r1', '--allow', '--interactive'])).toContain('only valid');
   });
 });
