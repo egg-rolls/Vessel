@@ -6,26 +6,29 @@
       "name": "vessel-agent",
       "dependencies": {
         "@promptctl/rich-js": "^0.10.0",
-        "@vessel-agent/agent": "0.18.0",
-        "@vessel-agent/config": "0.18.0",
-        "@vessel-agent/core": "0.18.0",
-        "@vessel-agent/permission": "0.18.0",
-        "@vessel-agent/serve": "0.18.0",
-        "@vessel-agent/tui": "0.18.0",
+        "@vessel-agent/agent": "0.24.0",
+        "@vessel-agent/config": "0.24.0",
+        "@vessel-agent/core": "0.24.0",
+        "@vessel-agent/permission": "0.24.0",
+        "@vessel-agent/serve": "0.24.0",
+        "@vessel-agent/tui": "0.24.0",
         "yaml": "^2.9.0",
       },
       "devDependencies": {
         "@biomejs/biome": "^2.5.6",
         "@types/bun": "^1.3.14",
+        "react": "^19.1.0",
+        "react-dom": "^19.1.0",
         "tsx": "^4.23.1",
         "typescript": "^7.0.2",
       },
     },
     "packages/agent": {
       "name": "@vessel-agent/agent",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
-        "@vessel-agent/core": "0.16.0",
+        "@vessel-agent/config": "0.24.0",
+        "@vessel-agent/core": "0.24.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
@@ -33,9 +36,9 @@
     },
     "packages/config": {
       "name": "@vessel-agent/config",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
-        "@vessel-agent/core": "0.10.0",
+        "@vessel-agent/core": "0.24.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
@@ -43,14 +46,14 @@
     },
     "packages/core": {
       "name": "@vessel-agent/core",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "packages/permission": {
       "name": "@vessel-agent/permission",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -60,7 +63,7 @@
     },
     "packages/serve": {
       "name": "@vessel-agent/serve",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/config": "0.10.0",
         "@vessel-agent/core": "0.10.0",
@@ -71,7 +74,7 @@
     },
     "packages/tui": {
       "name": "@vessel-agent/tui",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@types/react": "^19.2.17",
         "@vessel-agent/config": "0.10.0",
@@ -90,7 +93,7 @@
     },
     "plugins/evals/harness": {
       "name": "@vessel-agent/evals",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
         "yaml": "^2.9.0",
@@ -101,7 +104,7 @@
     },
     "plugins/im/feishu": {
       "name": "@vessel-agent/feishu",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@larksuiteoapi/node-sdk": "^1.76.0",
         "@vessel-agent/core": "0.10.0",
@@ -112,7 +115,7 @@
     },
     "plugins/mcp/client": {
       "name": "@vessel-agent/mcp-client",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -122,7 +125,7 @@
     },
     "plugins/observability/hook-logging": {
       "name": "@vessel-agent/hook-logging",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -132,7 +135,7 @@
     },
     "plugins/provider/anthropic": {
       "name": "@vessel-agent/provider-anthropic",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -142,7 +145,7 @@
     },
     "plugins/provider/openai": {
       "name": "@vessel-agent/provider-openai",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -152,7 +155,7 @@
     },
     "plugins/security/guardrail-pii": {
       "name": "@vessel-agent/guardrail-pii",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -162,7 +165,7 @@
     },
     "plugins/security/redact-secrets": {
       "name": "@vessel-agent/redact-secrets",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -172,7 +175,7 @@
     },
     "plugins/security/tool-policy": {
       "name": "@vessel-agent/tool-policy",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -182,7 +185,7 @@
     },
     "plugins/tools/basic-tools": {
       "name": "@vessel-agent/basic-tools",
-      "version": "0.18.0",
+      "version": "0.24.0",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
         "@vessel-agent/permission": "0.10.0",
@@ -549,13 +552,15 @@
 
     "react-devtools-core": ["react-devtools-core@8.0.0", "", { "dependencies": { "shell-quote": "^1.6.1", "ws": "^7" } }, "sha512-DGXJX+sCn2zC3ZalHoJhmZJsvP4QTpERlmCQAOgExc4Vp74ywB9ZnO8992cKw5ZcOS5u8GtpchTUPbjTiu5zaw=="],
 
+    "react-dom": ["react-dom@19.3.1", "", { "dependencies": { "scheduler": "^0.28.0" }, "peerDependencies": { "react": "^19.3.1" } }, "sha512-Y0bARz53lhEC1NMCASs0/j+faB/zqt3R8hpvg1e8+61ZVJ4UL0UdC4cBbXfZMcIuhrfgeILTLe+ZeBCavQPtKQ=="],
+
     "react-reconciler": ["react-reconciler@0.33.0", "", { "dependencies": { "scheduler": "^0.27.0" }, "peerDependencies": { "react": "^19.2.0" } }, "sha512-KetWRytFv1epdpJc3J4G75I4WrplZE5jOL7Yq0p34+OVOKF4Se7WrdIdVC45XsSSmUTlht2FM/fM1FZb1mfQeA=="],
 
     "require-directory": ["require-directory@2.1.1", "", {}, "sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q=="],
 
     "restore-cursor": ["restore-cursor@4.0.0", "", { "dependencies": { "onetime": "^5.1.0", "signal-exit": "^3.0.2" } }, "sha512-I9fPXU9geO9bHOt9pHHOhOkYerIMsmVaWB0rA2AI9ERh/+x/i7MV5HKBNrg+ljO5eoPVgCcnFuRjJ9uH6I/3eg=="],
 
-    "scheduler": ["scheduler@0.27.0", "", {}, "sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q=="],
+    "scheduler": ["scheduler@0.28.0", "", {}, "sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw=="],
 
     "shell-quote": ["shell-quote@1.12.0", "", {}, "sha512-PcByqNyT/38F2kDNi006HAMRJaULuBzq/FOsw3qdZvX/GA9W/jamDaRskgHjubHiftXK5sIFxLNkvrXUwcof6Q=="],
 
@@ -633,6 +638,8 @@
 
     "cliui/wrap-ansi": ["wrap-ansi@7.0.0", "", { "dependencies": { "ansi-styles": "^4.0.0", "string-width": "^4.1.0", "strip-ansi": "^6.0.0" } }, "sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q=="],
 
+    "ink/scheduler": ["scheduler@0.27.0", "", {}, "sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q=="],
+
     "ink-text-input/type-fest": ["type-fest@4.41.0", "", {}, "sha512-TeTSQ6H5YHvpqVwBRcnLDCBnDOHWYu7IvGbHT6N8AOymcr9PJGjc1GTtiWZTYg0NCgYwvnYWEkVChQAr9bjfwA=="],
 
     "marked-terminal/ansi-escapes": ["ansi-escapes@6.2.1", "", {}, "sha512-4nJ3yixlEthEJ9Rk4vPcdBRkZvQZlYyu8j4/Mqz5sgIkddmEnH2Yj2ZrnP9S3tQOvSNRUIgVNF/1yPpRAGNRig=="],
@@ -640,6 +647,8 @@
     "parse5-htmlparser2-tree-adapter/parse5": ["parse5@6.0.1", "", {}, "sha512-Ofn/CTFzRGTTxwpNEs9PP93gXShHcTq255nzRYSKe8AkVpZY7e1fpmTfOyoIvjP5HG7Z2ZM7VS9PPhQGW2pOpw=="],
 
     "react-devtools-core/ws": ["ws@7.5.13", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": "^5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-rsKI6xDBFVf4r/x8XyChGK04QR/XHroxs/jUcoWvtEZM8TPU/X/uIY9B1CsSzYws9ZJb/6bbBu7dPhFW00CAoA=="],
+
+    "react-reconciler/scheduler": ["scheduler@0.27.0", "", {}, "sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q=="],
 
     "supports-color/has-flag": ["has-flag@3.0.0", "", {}, "sha512-sKJf1+ceQBr4SMkvQnBDNDtf4TXpVhVGateu0t918bl30FnbE2m4vNLX+VWe/dpjlb+HugGYzW7uQXH98HPEYw=="],
 

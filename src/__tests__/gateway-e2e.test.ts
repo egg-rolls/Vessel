@@ -62,12 +62,13 @@ async function stopGateway(dir: string): Promise<void> {
   await runCli(dir, ['gateway', 'stop', '--timeout', '5s']).catch(() => undefined);
 }
 
+// 每个 dir 的 stop 自身可等 5s；默认 5s 钩子超时在负载下会先到期，把清理判成失败。
 afterAll(async () => {
   for (const dir of dirs) {
     await stopGateway(dir);
     fs.rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 describe('vessel gateway lifecycle', () => {
   it('未运行时 status 返回 1 且 JSON 可解析', async () => {

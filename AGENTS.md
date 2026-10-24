@@ -196,6 +196,8 @@ bun run scripts/version.ts --check              # 版本一致性 + CHANGELOG �
 bun run scripts/release-dry-run.ts              # 发布干跑（不 tag / 不 publish）
 ```
 
+根 `devDependencies` 的 `react` / `react-dom` 只为让根 `bun test` 在未安装 `apps/web` 依赖时也能跑 Web 测试；Web 构建仍用 `apps/web` 自己的 `npm ci`，不要把 `apps/web` 加进根 workspaces。
+
 改完代码，这三个必须过：`bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .`。
 收口还要求 `check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run`。
 CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[docs/operations/RELEASE.md](docs/operations/RELEASE.md)。发布由 tag `v*` 触发，只有 1 打 tag；N 不发布、不合并。
