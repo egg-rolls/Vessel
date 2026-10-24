@@ -423,13 +423,14 @@ async function execute(
     return { ok: true, value, text: formatBudgetOverride(value) };
   }
 
-  // post：有 --mention 时先用 team.get 的 roster 解析为 agent id。
+  // post：有 --mention 时先用 team.get 的完整 roster 解析为 agent id。
+  // 显式放大 members_limit，避免缺省 20 人窗口漏掉第 21+ 名成员。
   let mentionIds: string[] = [];
   if (command.mentions.length > 0) {
     const detail = await callAgentOwner(
       record,
       'team.get',
-      { team_id: command.teamId, limit: 1 },
+      { team_id: command.teamId, limit: 1, members_limit: 100 },
       fetchOptions,
     );
     const resolved = resolveMentions(teamMembers(detail), command.mentions);
