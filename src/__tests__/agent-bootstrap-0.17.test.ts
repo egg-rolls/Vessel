@@ -208,22 +208,28 @@ describe('agent bootstrap 0.17', () => {
     expect(seen).toContain('agent.closed');
   });
 
-  it('headless default: agent service is on and no legacy lifecycle tools', async () => {
-    const { result } = await boot({ headless: true, interactive: false });
+  it('headless default: agent/team are on but no owner endpoint is served', async () => {
+    const { result, dataDir } = await boot({ headless: true, interactive: false });
     expect(result.agent).toBeDefined();
+    expect(await result.agent?.team.list()).toEqual([]);
+    // 一次性进程不监听 owner HTTP 端口，也不写 agent-owner.json。
+    expect(result.agent?.ownerServer).toBeUndefined();
+    expect(await readAgentOwnerRecord(dataDir)).toBeNull();
     const tools = toolNames(result);
     expect(tools).toContain('agent');
     expect(tools).not.toContain('delegate_task');
     expect(tools.filter((name) => name.startsWith('team_'))).toEqual([]);
   });
 
-  it('headless with agent.enabled=true starts the agent service', async () => {
-    const { result } = await boot({
+  it('headless with agent.enabled=true keeps the service without an owner endpoint', async () => {
+    const { result, dataDir } = await boot({
       headless: true,
       interactive: false,
       config: 'agent:\n  enabled: true\n',
     });
     expect(result.agent).toBeDefined();
+    expect(result.agent?.ownerServer).toBeUndefined();
+    expect(await readAgentOwnerRecord(dataDir)).toBeNull();
     expect(toolNames(result)).toContain('agent');
   });
 

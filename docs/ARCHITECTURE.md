@@ -2713,7 +2713,9 @@ interface LimitBlock {
 
 - `hub.autoStart`（默认 true）：gateway（`--serve` / `gateway start`）启动时在
   `hub.dataDir`（缺省 `<dataDir>/hub`）启动同进程 hub，**只监听 `127.0.0.1`**，
-  端口取 `hub.listen.port` 否则 0。`hub.direction: 'node'` 时跳过（该节点加入远程 hub）。
+  端口取 `hub.listen.port` 否则 0。standalone `vessel hub start` 使用同一默认目录，
+  gateway 会复用已运行的 hub；只有显式 `--data-dir` / `hub.dataDir` 才分叉。
+  `hub.direction: 'node'` 时跳过（该节点加入远程 hub）。
 - 单实例：`<hubDataDir>/hub.lock` 独占锁（0600，`{pid,started_at,url?}`）；活进程持锁
   返回 `hub_already_running`，陈旧锁回收；`stop()` 幂等释放。gateway 捕获该错误后按
   `reused` 处理，不重复启动。
@@ -2736,3 +2738,7 @@ interface LimitBlock {
   **hard delete 不实现（Later），archive 不是 delete 的别名。**
 - 入口：canonical RPC、owner 端点（`team.create|update|archive`）、CLI
   `vessel team create|update|archive`；全部走同一 `TeamService`，不做第二套逻辑。
+  CLI 的 `create` / `update` 支持 `--policy <json>` 或 `--policy-file <path>`
+  （互斥；policy 整体替换），与 canonical / Web 能力对齐。
+- owner 端点只由交互 REPL / serve 监听；`--run` / headless 不监听端口、
+  不写 `agent-owner.json`，但 AgentService / TeamService 仍可用。

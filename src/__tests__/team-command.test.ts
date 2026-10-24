@@ -403,6 +403,48 @@ describe('vessel team command', () => {
     expect(JSON.parse(result.stdout).team_id).toBe('alpha');
   });
 
+  it('forwards inline policy and reads --policy-file from disk', async () => {
+    const dir = await setup();
+    const policyPath = join(dir, 'policy.json');
+    await writeFile(
+      policyPath,
+      JSON.stringify({ allowFork: true, permission: { unattended: 'hold' } }),
+    );
+    const calls: RpcBody[] = [];
+    const fetchImpl = fakeFetch((body) => {
+      calls.push(body);
+      return {
+        team_id: body.params.team_id ?? 'alpha',
+        name: 'Alpha',
+        tenant_id: 'default',
+        workspace: '/ws/alpha',
+        member_count: 0,
+        online_count: 0,
+        created_at: 1,
+      };
+    });
+
+    await runTeamCommand(
+      { kind: 'create', workspace: '/ws/alpha', policy: { allowFork: false }, json: false },
+      options(dir, fetchImpl),
+    );
+    await runTeamCommand(
+      { kind: 'update', teamId: 'alpha', policyFile: policyPath, json: false },
+      options(dir, fetchImpl),
+    );
+    await runTeamCommand(
+      { kind: 'update', teamId: 'alpha', policyFile: join(dir, 'missing.json'), json: false },
+      options(dir, fetchImpl),
+    );
+
+    expect(calls.map((call) => call.method)).toEqual(['team.create', 'team.update']);
+    expect(calls[0]?.params.policy).toEqual({ allowFork: false });
+    expect(calls[1]?.params.policy).toEqual({
+      allowFork: true,
+      permission: { unattended: 'hold' },
+    });
+  });
+
   it('maps team update null clears and team archive', async () => {
     const dir = await setup();
     const calls: RpcBody[] = [];

@@ -292,6 +292,17 @@ function optionalNullableString(
   return value;
 }
 
+/** 可选 policy：必须是普通对象（整体替换，不做 merge）。 */
+function readPolicy(
+  method: string,
+  params: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!Object.hasOwn(params, 'policy')) return undefined;
+  const value = params.policy;
+  if (!isRecord(value)) throw invalidInput(method, 'policy must be an object');
+  return value;
+}
+
 function readLimit(method: string, params: Record<string, unknown>): number | undefined {
   const limit = params.limit;
   if (limit === undefined) return undefined;
@@ -426,12 +437,14 @@ async function dispatchTeam(
       const description = optionalString(method, params, 'description');
       const defaultPrincipal = optionalString(method, params, 'default_principal');
       const handoffPath = optionalString(method, params, 'handoff_path');
+      const policy = readPolicy(method, params);
       return team.create({
         workspace,
         ...(name !== undefined ? { name } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
         ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
+        ...(policy !== undefined ? { policy } : {}),
       });
     }
     case 'team.update': {
@@ -440,12 +453,14 @@ async function dispatchTeam(
       const description = optionalNullableString(method, params, 'description');
       const defaultPrincipal = optionalNullableString(method, params, 'default_principal');
       const handoffPath = optionalNullableString(method, params, 'handoff_path');
+      const policy = readPolicy(method, params);
       return team.update({
         team_id: teamId,
         ...(name !== undefined ? { name } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
         ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
+        ...(policy !== undefined ? { policy } : {}),
       });
     }
     case 'team.archive': {

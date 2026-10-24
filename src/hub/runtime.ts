@@ -63,8 +63,15 @@ import {
   type SecretStore,
 } from './types';
 
-/** 缺省 hub data dir（相对 home）。 */
-export const DEFAULT_HUB_DATA_DIR = '~/.vessel/hub';
+/**
+ * 缺省 hub data dir：`<gatewayDataDir>/hub`。
+ *
+ * standalone `vessel hub start` 与 gateway 自动 hub 共用同一目录，
+ * 避免同一台机器出现两个目录；只有显式 `--data-dir` / `hub.dataDir` 才分叉。
+ */
+export function defaultHubDataDir(config: VesselConfig): string {
+  return path.join(path.resolve(expandHome(resolveDataDir(config))), 'hub');
+}
 
 /** 单实例独占锁文件名（S10.2，位于 hub data dir 根）。 */
 export const HUB_LOCK_FILE = 'hub.lock';
@@ -262,10 +269,10 @@ async function acquireHubLock(
 }
 
 function resolveHubDataDir(config: VesselConfig, explicit?: string): string {
-  const configured = explicit ?? config.hub?.dataDir ?? DEFAULT_HUB_DATA_DIR;
-  const expanded = expandHome(configured);
-  const resolved = path.resolve(expanded);
   const gatewayDataDir = path.resolve(expandHome(resolveDataDir(config)));
+  const configured = explicit ?? config.hub?.dataDir;
+  const resolved =
+    configured === undefined ? defaultHubDataDir(config) : path.resolve(expandHome(configured));
   const left = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
   const right = process.platform === 'win32' ? gatewayDataDir.toLowerCase() : gatewayDataDir;
   if (left === right) {

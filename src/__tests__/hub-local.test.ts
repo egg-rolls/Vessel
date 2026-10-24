@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { HubControlChange, HubControlLike, HubNodeSnapshotInput } from '@vessel-agent/serve';
 import type { HubConfig, VesselConfig } from '../../packages/config/src/index';
 import { createHubRegistry, type HubRegistry } from '../hub/registry';
-import type { HubRuntimeFactories } from '../hub/runtime';
+import { type HubRuntimeFactories, startHubRuntime } from '../hub/runtime';
 import type { CreateHubServerOptions, HubServer, HubServerPointerInput } from '../hub/server';
 import type {
   HubJoinStoreLike,
@@ -359,6 +359,40 @@ describe('startLocalHub', () => {
     } finally {
       await handle.stop();
     }
+  });
+
+  it('reuses the standalone hub default data dir after vessel hub start', async () => {
+    const gatewayDir = await tempDataDir();
+    const standaloneHarness = createHarness();
+    // 等价于 standalone `vessel hub start`（不带 --data-dir）。
+    const standalone = await startHubRuntime({
+      config: makeConfig(gatewayDir),
+      factories: standaloneHarness.factories,
+    });
+
+    try {
+      expect(standalone.dataDir).toBe(join(gatewayDir, 'hub'));
+
+      const gatewayHarness = createHarness();
+      const reused = await startLocalHub({
+        config: makeConfig(gatewayDir),
+        gatewayDataDir: gatewayDir,
+        nodeId: 'node-a',
+        tenantId: 'tenant-a',
+        hubControl: createHubControl(snapshotInput({ teams: 0, agents: 0, liveAgents: 0 })).control,
+        factories: gatewayHarness.factories,
+      });
+
+      expect(reused.status).toBe('reused');
+      expect(reused.reason).toBe('hub_already_running');
+      // 没有第二个 hub 目录 / 监听端口。
+      expect(gatewayHarness.servers).toHaveLength(0);
+      expect(standaloneHarness.servers).toHaveLength(1);
+    } finally {
+      await standalone.stop();
+    }
+
+    expect(existsSync(join(gatewayDir, 'hub', 'hub.lock'))).toBe(false);
   });
 
   it('reclaims a stale lock left by a dead process', async () => {

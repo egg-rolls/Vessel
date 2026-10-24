@@ -238,8 +238,8 @@ export interface BootstrapResult {
   /** 0.5 A-6：本地 tenant 的执行面；connect 模式为 undefined */
   bundle?: TenantRuntimeBundle;
   /**
-   * 0.17 Phase A：交互入口的 AgentService（含 loopback owner 端点）。
-   * headless 默认不启动；显式 `agent.enabled: true` 时存在。
+   * 0.17 Phase A：AgentService / TeamService（默认开启）。
+   * loopback owner 端点只在交互 REPL / serve 启动；headless 不监听端口。
    */
   agent?: {
     service: AgentService;
@@ -1169,22 +1169,26 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     nodeTokens = hubRuntime.nodeTokens;
 
     let ownerServer: AgentOwnerServer | undefined;
-    try {
-      ownerServer = await startAgentOwnerServer({
-        service: wiring.service,
-        team: wiring.team,
-        dataDir,
-        tenantId,
-        logger,
-      });
-    } catch (error) {
-      // 同一 dataDir 已有 owner 时第二个 REPL 仍可用进程内工具；
-      // CLI attach 保持在原 owner 上。
-      console.warn(
-        `⚠ agent owner endpoint unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+    // owner 端点只服务交互 REPL / serve 的 CLI attach；headless（`--run` / 管道）
+    // 是一次性进程，不监听端口。AgentService / Team 仍在进程内可用。
+    if (!headless) {
+      try {
+        ownerServer = await startAgentOwnerServer({
+          service: wiring.service,
+          team: wiring.team,
+          dataDir,
+          tenantId,
+          logger,
+        });
+      } catch (error) {
+        // 同一 dataDir 已有 owner 时第二个 REPL 仍可用进程内工具；
+        // CLI attach 保持在原 owner 上。
+        console.warn(
+          `⚠ agent owner endpoint unavailable: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
 
     agentControl = {

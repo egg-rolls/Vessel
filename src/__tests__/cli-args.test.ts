@@ -548,6 +548,33 @@ describe('parseArgs - team (0.19 S3)', () => {
     expect(err(['team', 'create'])).toContain('requires <workspace>');
   });
 
+  it('team create/update accept --policy JSON or --policy-file', () => {
+    expect(ok(['team', 'create', '/ws/a', '--policy', '{"allowFork":true}']).teamCommand).toEqual({
+      kind: 'create',
+      workspace: '/ws/a',
+      policy: { allowFork: true },
+      json: false,
+    });
+    expect(ok(['team', 'create', '/ws/a', '--policy-file', 'p.json']).teamCommand).toEqual({
+      kind: 'create',
+      workspace: '/ws/a',
+      policyFile: 'p.json',
+      json: false,
+    });
+    expect(ok(['team', 'update', 'alpha', '--policy', '{"x":1}']).teamCommand).toEqual({
+      kind: 'update',
+      teamId: 'alpha',
+      policy: { x: 1 },
+      json: false,
+    });
+
+    expect(err(['team', 'create', '/ws/a', '--policy', '[1]'])).toContain('JSON object');
+    expect(err(['team', 'create', '/ws/a', '--policy', '{bad'])).toContain('JSON object');
+    expect(err(['team', 'create', '/ws/a', '--policy', '{}', '--policy-file', 'p.json'])).toContain(
+      'only one of --policy / --policy-file',
+    );
+  });
+
   it('team update <team_id> maps --clear-* to null', () => {
     expect(
       ok(['team', 'update', 'alpha', '--name', 'A', '--clear-description']).teamCommand,
