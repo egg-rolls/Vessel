@@ -621,6 +621,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ) {
       throw new Error('federation must provide enabled, nodeId, maxHops, and peers.');
     }
+    if (
+      federation.rateLimitPerMinute !== undefined &&
+      (!Number.isInteger(federation.rateLimitPerMinute) || federation.rateLimitPerMinute < 0)
+    ) {
+      throw new Error('federation.rateLimitPerMinute must be a non-negative integer.');
+    }
     for (const peer of federation.peers) {
       if (
         typeof peer.nodeId !== 'string' ||
@@ -628,6 +634,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
         typeof peer.token !== 'string'
       ) {
         throw new Error('federation peers must provide nodeId, teamId, and token.');
+      }
+      if (peer.allowDirectory !== undefined && typeof peer.allowDirectory !== 'boolean') {
+        throw new Error('federation peers allowDirectory must be a boolean.');
       }
     }
   }

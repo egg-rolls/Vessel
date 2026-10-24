@@ -16,6 +16,10 @@ export interface TeamSummaryLike {
   /** team-scoped control token 不含此字段（白名单脱敏）。 */
   workspace?: string;
   handoff_path?: string;
+  /** 0.21 additive：自由文本描述 */
+  description?: string;
+  /** 0.21 additive：缺省接头人 */
+  default_principal?: string;
   /** team-scoped control token 不含此字段（白名单脱敏）。 */
   policy?: Record<string, unknown>;
   member_count: number;
@@ -43,6 +47,8 @@ export interface TeamMemberLike {
   visibility: 'private' | 'team' | 'tenant';
   state: string;
   epoch: number;
+  /** 0.21 additive：epoch ms */
+  last_seen?: number;
   /** 已退役 Body 历史（可选；旧数据缺失不报错） */
   body_history?: AgentBodyHistoryEntryLike[];
 }
@@ -60,6 +66,15 @@ export interface TeamMessageLike {
   system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override' | 'fork';
   /** 0.19 S4 会话分组；旧日志缺省 */
   conversation_id?: string;
+  /** 0.21：跨节点回信地址（additive） */
+  federation?: TeamLogFederationLike;
+}
+
+export interface TeamLogFederationLike {
+  from_addr: string;
+  to_addr: string;
+  conversation_id: string;
+  hop: number;
 }
 
 /** teams.get 的完整视图。 */
@@ -144,14 +159,23 @@ export interface TeamControlLike {
   list(options?: { viewer?: string }): Promise<TeamSummaryLike[]>;
   get(
     teamId: string,
-    options?: { viewer?: string; limit?: number },
+    options?: { viewer?: string; limit?: number; members_limit?: number },
   ): Promise<TeamDetailLike | undefined>;
+  /**
+   * 完整 roster（不受 `members_limit` 窗口影响），team-info 计数用。
+   * 可选：未注入时退化为 `get(..., {members_limit: 100})`。
+   */
+  roster?(teamId: string, options?: { viewer?: string }): Promise<TeamMemberLike[]>;
   post(input: {
     team_id: string;
     content: string;
     mentions?: string[];
+    /** 只写进日志的收件人标记（0.21 federation owner） */
+    to?: string[];
     from?: string;
     conversation_id?: string;
+    /** 0.21：跨节点报文元数据 */
+    federation?: TeamLogFederationLike;
   }): Promise<TeamPostResultLike>;
   members(input: {
     team_id: string;

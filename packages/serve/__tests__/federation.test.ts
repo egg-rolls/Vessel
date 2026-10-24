@@ -1,8 +1,9 @@
 /**
- * S7.1 federation 入站路由契约测试。
+ * federation 入站路由契约测试（S7.1 基础面 + S8 地址字段）。
  *
  * 只覆盖高价值边界：peer bearer 命名空间、方向 / 身份、严格解析、hop / 环、
- * 重放去重、唯一一次写日志与写失败。
+ * 重放去重、唯一一次写日志与写失败。单点投递 / owner / accept / 限流见
+ * `federation-0.21.test.ts`。
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
@@ -30,7 +31,7 @@ class FakeTeams implements TeamControlLike {
   failPost = false;
   readonly known = new Set([TEAM]);
   /** S7.2：可配置 roster 与 Team policy（`team.team.policy`）。 */
-  roster: TeamMemberLike[] = [];
+  rosterMembers: TeamMemberLike[] = [];
   policy?: Record<string, unknown>;
 
   constructor(tenantId = 'default') {
@@ -48,12 +49,12 @@ class FakeTeams implements TeamControlLike {
         team_id: teamId,
         name: teamId,
         tenant_id: this.tenantId,
-        member_count: this.roster.length,
+        member_count: this.rosterMembers.length,
         online_count: 0,
         created_at: 0,
         ...(this.policy !== undefined ? { policy: this.policy } : {}),
       },
-      members: this.roster,
+      members: this.rosterMembers,
       messages: [],
     };
   }
@@ -120,8 +121,8 @@ function envelope(overrides: Record<string, unknown> = {}): Record<string, unkno
     protocol: 'vessel.federation/1',
     message_id: 'msg-1',
     conversation_id: 'conv-1',
-    from: { node_id: REMOTE_NODE, team_id: TEAM },
-    to: { node_id: LOCAL_NODE, team_id: TEAM },
+    from: { node_id: REMOTE_NODE, team_id: TEAM, principal: 'alice' },
+    to: { node_id: LOCAL_NODE, team_id: TEAM, principal: 'bob' },
     content: 'hello',
     ts: 1_700_000_000_000,
     hop: 1,
@@ -198,12 +199,18 @@ describe('federation inbound route (S7.1)', () => {
     const { gateway } = start({ federation: federationOptions(), teams });
 
     await expectError(
-      await post(gateway, envelope({ from: { node_id: 'node-x', team_id: TEAM } })),
+      await post(
+        gateway,
+        envelope({ from: { node_id: 'node-x', team_id: TEAM, principal: 'alice' } }),
+      ),
       403,
       'federation_not_allowed',
     );
     await expectError(
-      await post(gateway, envelope({ from: { node_id: REMOTE_NODE, team_id: 'other' } })),
+      await post(
+        gateway,
+        envelope({ from: { node_id: REMOTE_NODE, team_id: 'other', principal: 'alice' } }),
+      ),
       403,
       'federation_not_allowed',
     );
@@ -218,6 +225,13 @@ describe('federation inbound route (S7.1)', () => {
       envelope({ mentions: ['agent-1'] }),
       envelope({ answered_by: 'agent' }),
       envelope({ from: { node_id: REMOTE_NODE, team_id: TEAM, agent_id: 'a' } }),
+      // 旧 S7 报文缺 from.principal → federation_invalid（v1 未发布，不保留旧形状）。
+      envelope({ from: { node_id: REMOTE_NODE, team_id: TEAM } }),
+      envelope({
+        from: { node_id: REMOTE_NODE, team_id: TEAM, principal: 'a@b' },
+      }),
+      envelope({ to: { node_id: LOCAL_NODE, team_id: TEAM, principal: 'b c' } }),
+      envelope({ to: { node_id: 'bad node', team_id: TEAM, principal: 'bob' } }),
       envelope({ message_id: 'bad id' }),
       envelope({ conversation_id: '' }),
       envelope({ ts: '1700000000000' }),
@@ -230,6 +244,18 @@ describe('federation inbound route (S7.1)', () => {
     for (const body of cases) {
       await expectError(await post(gateway, body), 400, 'federation_invalid');
     }
+    expect(teams.posts).toHaveLength(0);
+  });
+
+  it('returns the dedicated principal_required code only for a missing to.principal', async () => {
+    const teams = new FakeTeams();
+    const { gateway } = start({ federation: federationOptions(), teams });
+
+    await expectError(
+      await post(gateway, envelope({ to: { node_id: LOCAL_NODE, team_id: TEAM } })),
+      400,
+      'federation_principal_required',
+    );
     expect(teams.posts).toHaveLength(0);
   });
 
@@ -249,7 +275,10 @@ describe('federation inbound route (S7.1)', () => {
     const { gateway } = start({ federation, teams });
 
     await expectError(
-      await post(gateway, envelope({ from: { node_id: LOCAL_NODE, team_id: TEAM } })),
+      await post(
+        gateway,
+        envelope({ from: { node_id: LOCAL_NODE, team_id: TEAM, principal: 'alice' } }),
+      ),
       409,
       'federation_cycle_detected',
     );
@@ -275,6 +304,7 @@ describe('federation inbound route (S7.1)', () => {
 
   it('writes one log entry and emits received without content or token', async () => {
     const teams = new FakeTeams();
+    teams.policy = { federation: { accept: 'log' } };
     const { gateway, hub } = start({ federation: federationOptions(), teams });
 
     const response = await post(gateway, envelope());
@@ -291,9 +321,15 @@ describe('federation inbound route (S7.1)', () => {
       {
         team_id: TEAM,
         content: 'hello',
-        from: `federation:${REMOTE_NODE}:${TEAM}`,
+        from: `federation:alice@${REMOTE_NODE}:${TEAM}`,
         mentions: [],
         conversation_id: 'conv-1',
+        federation: {
+          from_addr: `alice@${REMOTE_NODE}:${TEAM}`,
+          to_addr: `bob@${LOCAL_NODE}:${TEAM}`,
+          conversation_id: 'conv-1',
+          hop: 1,
+        },
       },
     ]);
 
@@ -306,7 +342,8 @@ describe('federation inbound route (S7.1)', () => {
       from_team: TEAM,
       team_id: TEAM,
       hop: 1,
-      mode: 'log',
+      resolution: 'log',
+      principal: 'bob',
       delivered: 0,
     });
     const serialized = JSON.stringify(received);
@@ -317,6 +354,7 @@ describe('federation inbound route (S7.1)', () => {
   it('uses the peer-configured localTeamId and rejects any other target', async () => {
     const teams = new FakeTeams();
     teams.known.add('lab');
+    teams.policy = { federation: { accept: 'log' } };
     // peer 的远端 identity 是 research；本机落点由 localTeamId 决定。
     const federation = federationOptions({
       peers: [
@@ -330,12 +368,15 @@ describe('federation inbound route (S7.1)', () => {
       ],
     });
     const { gateway, hub } = start({ federation, teams });
-    const from = { node_id: REMOTE_NODE, team_id: 'research' };
+    const from = { node_id: REMOTE_NODE, team_id: 'research', principal: 'alice' };
 
     // to.team_id 必须等于 peer 配置的落点，不能由报文自选其它本机 Team。
     for (const target of ['research', 'other']) {
       await expectError(
-        await post(gateway, envelope({ from, to: { node_id: LOCAL_NODE, team_id: target } })),
+        await post(
+          gateway,
+          envelope({ from, to: { node_id: LOCAL_NODE, team_id: target, principal: 'bob' } }),
+        ),
         403,
         'federation_not_allowed',
       );
@@ -344,7 +385,7 @@ describe('federation inbound route (S7.1)', () => {
 
     const response = await post(
       gateway,
-      envelope({ from, to: { node_id: LOCAL_NODE, team_id: 'lab' } }),
+      envelope({ from, to: { node_id: LOCAL_NODE, team_id: 'lab', principal: 'bob' } }),
     );
     expect(response.status).toBe(202);
     expect(teams.posts).toHaveLength(1);
@@ -354,6 +395,7 @@ describe('federation inbound route (S7.1)', () => {
 
   it('deduplicates replays and keeps the first local id and cursor', async () => {
     const teams = new FakeTeams();
+    teams.policy = { federation: { accept: 'log' } };
     const { gateway } = start({ federation: federationOptions(), teams });
 
     const first = (await (await post(gateway, envelope())).json()) as Record<string, unknown>;
@@ -372,6 +414,7 @@ describe('federation inbound route (S7.1)', () => {
 
   it('returns 500 and does not cache when the team log write fails', async () => {
     const teams = new FakeTeams();
+    teams.policy = { federation: { accept: 'log' } };
     teams.failPost = true;
     const { gateway, hub } = start({ federation: federationOptions(), teams });
 
@@ -385,83 +428,6 @@ describe('federation inbound route (S7.1)', () => {
       code: 'team_log_write_failed',
       peer_node: REMOTE_NODE,
       peer_team: TEAM,
-    });
-  });
-});
-
-describe('federation inbound route (S7.2 accept policy)', () => {
-  function member(agentId: string, overrides: Partial<TeamMemberLike> = {}): TeamMemberLike {
-    return {
-      agent_id: agentId,
-      session_id: `${agentId}-session`,
-      membership: 'present',
-      presence: 'gone',
-      visibility: 'team',
-      state: 'idle',
-      epoch: 0,
-      ...overrides,
-    };
-  }
-
-  it('fans out once to present non-private members when accept is "members"', async () => {
-    const teams = new FakeTeams();
-    teams.policy = { federation: { accept: 'members' } };
-    teams.roster = [
-      member('agent-a'),
-      member('agent-private', { visibility: 'private' }),
-      member('agent-left', { membership: 'left' }),
-      member('agent-b', { visibility: 'tenant' }),
-      member('agent-a'),
-    ];
-    const { gateway, hub } = start({ federation: federationOptions(), teams });
-
-    const response = await post(gateway, envelope());
-    expect(response.status).toBe(202);
-    expect(teams.posts).toHaveLength(1);
-    expect(teams.posts[0]).toMatchObject({
-      team_id: TEAM,
-      from: `federation:${REMOTE_NODE}:${TEAM}`,
-      mentions: ['agent-a', 'agent-b'],
-    });
-
-    const received = eventsOf(hub, 'federation.received');
-    expect(received).toHaveLength(1);
-    expect(received[0]?.data).toMatchObject({ mode: 'members', delivered: 2 });
-    const serialized = JSON.stringify(received);
-    expect(serialized).not.toContain('hello');
-    expect(serialized).not.toContain(PEER_TOKEN);
-  });
-
-  it('falls back to log for an invalid accept value (fail safe)', async () => {
-    const teams = new FakeTeams();
-    teams.policy = { federation: { accept: 'all' } };
-    teams.roster = [member('agent-a')];
-    const { gateway, hub } = start({ federation: federationOptions(), teams });
-
-    expect((await post(gateway, envelope())).status).toBe(202);
-    expect(teams.posts).toHaveLength(1);
-    expect(teams.posts[0]?.mentions).toEqual([]);
-    expect(eventsOf(hub, 'federation.received')[0]?.data).toMatchObject({
-      mode: 'log',
-      delivered: 0,
-    });
-  });
-
-  it('sends an empty mentions list when the roster has no eligible members', async () => {
-    const teams = new FakeTeams();
-    teams.policy = { federation: { accept: 'members' } };
-    teams.roster = [
-      member('agent-private', { visibility: 'private' }),
-      member('agent-left', { membership: 'left' }),
-    ];
-    const { gateway, hub } = start({ federation: federationOptions(), teams });
-
-    expect((await post(gateway, envelope())).status).toBe(202);
-    expect(teams.posts).toHaveLength(1);
-    expect(teams.posts[0]?.mentions).toEqual([]);
-    expect(eventsOf(hub, 'federation.received')[0]?.data).toMatchObject({
-      mode: 'members',
-      delivered: 0,
     });
   });
 });

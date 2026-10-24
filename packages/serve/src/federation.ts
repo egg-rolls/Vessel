@@ -1,10 +1,13 @@
 /**
- * S7 federation 入站路由（node ↔ node，DECISION-036）。
+ * S8 federation 入站路由（node ↔ node，DECISION-037）。
  *
  * - 独立 peer bearer：gateway 用户 token 与 peer token 命名空间不交叉；
- * - 严格解析 wire envelope：未知 / 缺失字段一律 `federation_invalid`；
- * - 默认只写接收侧 Team 日志；接收 Team 显式 `federation.accept: 'members'` 时
- *   按 present 非 private 成员 fan-out（S7.2，opt-in；缺省 / 非法值一律 log）；
+ * - 严格解析 wire envelope：`principal` 受 `[A-Za-z0-9_-]{1,64}` 约束；未知 / 缺失
+ *   字段一律 `federation_invalid`，缺 `to.principal` 单独返回 `federation_principal_required`；
+ * - 单点投递：`owner` 只写日志；`accept:'log'` 只写日志；`accept:'principal'` 在目标 Team
+ *   的 present 非 private 成员中按名字精确匹配唯一一人（最多 1 个 run）；
+ * - **没有广播 / `accept:'members'`**；非法 accept 值按 `'principal'` fail-safe，绝不 fan-out；
+ * - 每 peer 入站限流（60s 固定窗口，读 body 之前判定；超限 429、零写入）；
  * - 拒绝无副作用：不写日志、不 dispatch、只发一次 `federation.rejected`。
  *
  * 路由必须在 gateway `principalForRequest` 之前处理（同 hub 路由位置）。
@@ -18,10 +21,18 @@ import type {
   TeamDetailLike,
   TeamMemberLike,
   TeamPostResultLike,
+  TeamSummaryLike,
 } from './team-control.js';
 
 export const FEDERATION_PROTOCOL = 'vessel.federation/1';
 export const FEDERATION_MESSAGES_PATH = '/v1/federation/messages';
+/** 0.21：opt-in 只读成员目录（DECISION-037 §7.2）。 */
+export const FEDERATION_TEAM_INFO_PATH = '/v1/federation/team-info';
+
+/** team-info 缺省返回的成员条数。 */
+export const FEDERATION_DEFAULT_MEMBERS_LIMIT = 20;
+/** team-info `members_limit` 上界。 */
+export const FEDERATION_MEMBERS_LIMIT_MAX = 100;
 
 /** 接收侧固定 tenant（v1 不做多 tenant federation）。 */
 const FEDERATION_TENANT = 'default';
@@ -34,8 +45,18 @@ const MAX_ENVELOPE_BYTES = 128 * 1024;
 const MAX_CONTENT_BYTES = 65_536;
 
 const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const PRINCIPAL_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const TEAM_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MESSAGE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/** 每 peer 入站速率：缺省每分钟 60；`0` = 不限制。 */
+export const FEDERATION_DEFAULT_RATE_LIMIT = 60;
+
+/** 固定窗口长度；不做跨重启持久化。 */
+const RATE_WINDOW_MS = 60_000;
+
+/** 入站落点解析结果（`federation.received` payload）。 */
+export type FederationResolution = 'owner' | 'principal' | 'log';
 
 const TOP_LEVEL_KEYS = new Set([
   'protocol',
@@ -48,7 +69,7 @@ const TOP_LEVEL_KEYS = new Set([
   'hop',
   'request_id',
 ]);
-const IDENTITY_KEYS = new Set(['node_id', 'team_id']);
+const IDENTITY_KEYS = new Set(['node_id', 'team_id', 'principal']);
 
 export type FederationDirection = 'in' | 'out' | 'both';
 
@@ -59,6 +80,8 @@ export interface FederationGatewayPeer {
   direction: FederationDirection;
   /** 入站落点（本机 Team id）；缺省 = `teamId`。 */
   localTeamId?: string;
+  /** 0.21：允许该 peer 查询本机 Team 目录；缺省 false（404）。 */
+  allowDirectory?: boolean;
   /** 内存 token：只用于定长比较，不序列化 / 不打印。 */
   token: string;
 }
@@ -68,6 +91,8 @@ export interface FederationGatewayOptions {
   enabled: boolean;
   nodeId: string;
   maxHops: number;
+  /** 每 peer 入站速率上限（60s 固定窗口）；缺省 60，`0` = 不限制。 */
+  rateLimitPerMinute?: number;
   peers: FederationGatewayPeer[];
 }
 
@@ -85,9 +110,13 @@ export interface FederationRoute {
   handle(req: Request, extra?: Record<string, string>): Promise<Response | null>;
 }
 
-interface EnvelopeIdentity {
+interface NodeTeamIdentity {
   node_id: string;
   team_id: string;
+}
+
+interface EnvelopeIdentity extends NodeTeamIdentity {
+  principal: string;
 }
 
 interface FederationMessage {
@@ -103,6 +132,134 @@ interface FederationMessage {
 interface DedupeEntry {
   message_id: string;
   cursor: string;
+}
+
+/** 解析失败的错误码：缺 `to.principal` 与其它非法形状区分开（DECISION-037 §10）。 */
+type ParseFailureCode = 'federation_invalid' | 'federation_principal_required';
+
+type ParseResult = { ok: true; message: FederationMessage } | { ok: false; code: ParseFailureCode };
+
+interface RateWindow {
+  windowStart: number;
+  count: number;
+}
+
+/** team-info 的成员条目：只有名字与活跃度（无 agent_id / workspace / policy）。 */
+export interface FederationTeamInfoMember {
+  name: string;
+  presence: 'live' | 'gone';
+  last_seen?: number;
+}
+
+/** team-info 响应（DECISION-037 §7.2）。 */
+export interface FederationTeamInfo {
+  protocol: typeof FEDERATION_PROTOCOL;
+  team_id: string;
+  name: string;
+  description?: string;
+  default_principal?: string;
+  member_count: number;
+  online_count: number;
+  members: FederationTeamInfoMember[];
+}
+
+interface TeamInfoRequest {
+  team_id: string;
+  members_limit?: number;
+}
+
+type TeamInfoParseResult = { ok: true; request: TeamInfoRequest } | { ok: false };
+
+const TEAM_INFO_KEYS = new Set(['protocol', 'team_id', 'members_limit']);
+
+/** 严格解析 team-info 请求：未知 / 缺失 / 类型错误都按 `federation_invalid`。 */
+function parseTeamInfoRequest(record: Record<string, unknown>): TeamInfoParseResult {
+  for (const key of Object.keys(record)) if (!TEAM_INFO_KEYS.has(key)) return { ok: false };
+  if (record.protocol !== FEDERATION_PROTOCOL) return { ok: false };
+  if (typeof record.team_id !== 'string' || !TEAM_ID_RE.test(record.team_id)) {
+    return { ok: false };
+  }
+  const request: TeamInfoRequest = { team_id: record.team_id };
+  if (hasOwn(record, 'members_limit')) {
+    const limit = record.members_limit;
+    if (
+      typeof limit !== 'number' ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > FEDERATION_MEMBERS_LIMIT_MAX
+    ) {
+      return { ok: false };
+    }
+    request.members_limit = limit;
+  }
+  return { ok: true, request };
+}
+
+type NamedTeamMember = TeamMemberLike & { name: string };
+
+/** live 优先 → last_seen 降序（缺失最后）→ name 字典序。 */
+function compareDirectoryMembers(a: NamedTeamMember, b: NamedTeamMember): number {
+  const liveDelta = Number(b.presence === 'live') - Number(a.presence === 'live');
+  if (liveDelta !== 0) return liveDelta;
+  const aSeen =
+    typeof a.last_seen === 'number' && Number.isFinite(a.last_seen) ? a.last_seen : undefined;
+  const bSeen =
+    typeof b.last_seen === 'number' && Number.isFinite(b.last_seen) ? b.last_seen : undefined;
+  if (aSeen !== undefined && bSeen !== undefined && aSeen !== bSeen) return bSeen - aSeen;
+  if (aSeen === undefined && bSeen !== undefined) return 1;
+  if (aSeen !== undefined && bSeen === undefined) return -1;
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
+
+/**
+ * 只统计 present、非 private 且有名字的成员；计数与列表用同一集合，
+ * 避免通过 `member_count` 泄漏 private 成员存在性。`members_limit` 只截断列表。
+ *
+ * `members` 必须是**完整** roster（不能用 `get` 的窗口结果），否则计数会少报。
+ */
+function buildTeamInfo(
+  team: TeamSummaryLike,
+  roster: readonly TeamMemberLike[],
+  teamId: string,
+  limit: number,
+): FederationTeamInfo {
+  const eligible = roster.filter(
+    (member): member is NamedTeamMember =>
+      member.membership === 'present' &&
+      member.visibility !== 'private' &&
+      typeof member.name === 'string' &&
+      member.name !== '',
+  );
+  const names = new Set(eligible.map((member) => member.name));
+  const members: FederationTeamInfoMember[] = [...eligible]
+    .sort(compareDirectoryMembers)
+    .slice(0, limit)
+    .map((member) => {
+      const entry: FederationTeamInfoMember = { name: member.name, presence: member.presence };
+      if (typeof member.last_seen === 'number' && Number.isFinite(member.last_seen)) {
+        entry.last_seen = member.last_seen;
+      }
+      return entry;
+    });
+
+  const info: FederationTeamInfo = {
+    protocol: FEDERATION_PROTOCOL,
+    team_id: teamId,
+    name: team.name,
+    member_count: eligible.length,
+    online_count: eligible.filter((member) => member.presence === 'live').length,
+    members,
+  };
+  const description = team.description;
+  if (typeof description === 'string' && description !== '') info.description = description;
+  const defaultPrincipal = team.default_principal;
+  if (
+    defaultPrincipal === 'owner' ||
+    (typeof defaultPrincipal === 'string' && names.has(defaultPrincipal))
+  ) {
+    info.default_principal = defaultPrincipal;
+  }
+  return info;
 }
 
 /** 进程内 LRU：命中即刷新，超过上限淘汰最旧。 */
@@ -159,14 +316,15 @@ function hasOwn(record: Record<string, unknown>, key: string): boolean {
   return Object.hasOwn(record, key);
 }
 
-/** 只读取身份字段；字段缺失 / 类型错误返回 undefined（由调用方决定错误码）。 */
-function identityOf(value: unknown): EnvelopeIdentity | undefined {
+/** 只读取 `(node_id, team_id)`；用于 peer 身份比对（principal 不参与）。 */
+function nodeTeamOf(value: unknown): NodeTeamIdentity | undefined {
   if (!isRecord(value)) return undefined;
   if (typeof value.node_id !== 'string' || typeof value.team_id !== 'string') return undefined;
   return { node_id: value.node_id, team_id: value.team_id };
 }
 
-function identityShapeValid(value: unknown): boolean {
+/** 严格键集合（未知 / 缺失键都算非法）。 */
+function identityShapeValid(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) return false;
   if (Object.keys(value).length !== IDENTITY_KEYS.size) return false;
   for (const key of Object.keys(value)) if (!IDENTITY_KEYS.has(key)) return false;
@@ -174,14 +332,15 @@ function identityShapeValid(value: unknown): boolean {
 }
 
 /**
- * 严格解析 envelope；任何未知 / 缺失字段、错误类型、非法 pattern 都返回 undefined。
- * 调用方在 `from` 身份比对之后调用。
+ * 严格解析 envelope；任何未知 / 缺失字段、错误类型、非法 pattern 都失败。
+ * 缺 `to.principal` 单独返回 `federation_principal_required`（旧 S7 报文缺 `from.principal`
+ * 仍按 `federation_invalid`）。
+ *
+ * `to.node_id` 的本机比对由调用方在解析之后执行（DECISION-037 §5 顺序）。
  */
-function parseEnvelope(
-  record: Record<string, unknown>,
-  localNodeId: string,
-): FederationMessage | undefined {
-  for (const key of Object.keys(record)) if (!TOP_LEVEL_KEYS.has(key)) return undefined;
+function parseEnvelope(record: Record<string, unknown>): ParseResult {
+  const invalid: ParseResult = { ok: false, code: 'federation_invalid' };
+  for (const key of Object.keys(record)) if (!TOP_LEVEL_KEYS.has(key)) return invalid;
 
   const required = [
     'protocol',
@@ -193,49 +352,80 @@ function parseEnvelope(
     'ts',
     'hop',
   ] as const;
-  for (const key of required) if (!hasOwn(record, key)) return undefined;
+  for (const key of required) if (!hasOwn(record, key)) return invalid;
 
-  if (record.protocol !== FEDERATION_PROTOCOL) return undefined;
+  if (record.protocol !== FEDERATION_PROTOCOL) return invalid;
   if (typeof record.message_id !== 'string' || !MESSAGE_ID_RE.test(record.message_id)) {
-    return undefined;
+    return invalid;
   }
   if (typeof record.conversation_id !== 'string' || !MESSAGE_ID_RE.test(record.conversation_id)) {
-    return undefined;
+    return invalid;
   }
 
-  if (!identityShapeValid(record.from) || !identityShapeValid(record.to)) return undefined;
-  const from = identityOf(record.from);
-  const to = identityOf(record.to);
-  if (!from || !to) return undefined;
-  if (!NODE_ID_RE.test(from.node_id) || !TEAM_ID_RE.test(from.team_id)) return undefined;
-  if (!NODE_ID_RE.test(to.node_id) || !TEAM_ID_RE.test(to.team_id)) return undefined;
-  if (to.node_id !== localNodeId) return undefined;
+  // from：三段都必须存在且合法（缺 principal 是 federation_invalid）。
+  if (!identityShapeValid(record.from)) return invalid;
+  const from = record.from;
+  if (
+    typeof from.node_id !== 'string' ||
+    typeof from.team_id !== 'string' ||
+    typeof from.principal !== 'string' ||
+    !NODE_ID_RE.test(from.node_id) ||
+    !TEAM_ID_RE.test(from.team_id) ||
+    !PRINCIPAL_RE.test(from.principal)
+  ) {
+    return invalid;
+  }
 
-  if (typeof record.content !== 'string') return undefined;
+  // to：缺 principal 有专用错误码；其余形状问题仍是 invalid。
+  if (!isRecord(record.to)) return invalid;
+  const to = record.to;
+  for (const key of Object.keys(to)) if (!IDENTITY_KEYS.has(key)) return invalid;
+  if (typeof to.node_id !== 'string' || typeof to.team_id !== 'string') return invalid;
+  if (!NODE_ID_RE.test(to.node_id) || !TEAM_ID_RE.test(to.team_id)) return invalid;
+  if (!hasOwn(to, 'principal')) return { ok: false, code: 'federation_principal_required' };
+  if (typeof to.principal !== 'string' || !PRINCIPAL_RE.test(to.principal)) return invalid;
+
+  if (typeof record.content !== 'string') return invalid;
   const contentBytes = Buffer.byteLength(record.content, 'utf8');
-  if (contentBytes < 1 || contentBytes > MAX_CONTENT_BYTES) return undefined;
+  if (contentBytes < 1 || contentBytes > MAX_CONTENT_BYTES) return invalid;
 
-  if (typeof record.ts !== 'number' || !Number.isFinite(record.ts)) return undefined;
+  if (typeof record.ts !== 'number' || !Number.isFinite(record.ts)) return invalid;
   if (typeof record.hop !== 'number' || !Number.isInteger(record.hop) || record.hop < 1) {
-    return undefined;
+    return invalid;
   }
 
   if (hasOwn(record, 'request_id')) {
     const requestId = record.request_id;
     if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 128) {
-      return undefined;
+      return invalid;
     }
   }
 
   return {
-    message_id: record.message_id,
-    conversation_id: record.conversation_id,
-    from,
-    to,
-    content: record.content,
-    ts: record.ts,
-    hop: record.hop,
+    ok: true,
+    message: {
+      message_id: record.message_id,
+      conversation_id: record.conversation_id,
+      from: {
+        node_id: from.node_id,
+        team_id: from.team_id,
+        principal: from.principal,
+      },
+      to: {
+        node_id: to.node_id,
+        team_id: to.team_id,
+        principal: to.principal,
+      },
+      content: record.content,
+      ts: record.ts,
+      hop: record.hop,
+    },
   };
+}
+
+/** 人类可读的回信地址：`<principal>@<node_id>:<team_id>`。 */
+function addressOf(identity: EnvelopeIdentity): string {
+  return `${identity.principal}@${identity.node_id}:${identity.team_id}`;
 }
 
 /** 从 Authorization: Bearer 中解析 token；缺失 / 非 Bearer 返回 undefined。 */
@@ -300,34 +490,62 @@ function errorCode(error: unknown): unknown {
   return isRecord(error) ? error.code : undefined;
 }
 
-type FederationAcceptMode = 'log' | 'members';
+type FederationAcceptMode = 'principal' | 'log';
 
 /**
- * 接收侧同意策略（S7.2）：只有 `federation.accept === 'members'` 才 fan-out；
- * 缺失 / 非法 / policy 被脱敏一律回退 `log`（fail safe，不唤醒成员）。
+ * 接收侧同意策略（S8）：只接受 `'principal' | 'log'`，缺省 `'principal'`。
+ * 运行时遇到 `'members'` / 其它非法值按 `'principal'` fail-safe——**绝不恢复 fan-out**；
+ * 配置层由 validator 明确报错（DECISION-037 §5.1）。
  */
 function acceptModeOf(team: TeamDetailLike): FederationAcceptMode {
   const policy = team.team.policy;
-  if (!isRecord(policy)) return 'log';
+  if (!isRecord(policy)) return 'principal';
   const federation = policy.federation;
-  if (!isRecord(federation)) return 'log';
-  return federation.accept === 'members' ? 'members' : 'log';
+  if (!isRecord(federation)) return 'principal';
+  return federation.accept === 'log' ? 'log' : 'principal';
 }
 
-/** present 且非 private 的成员 id；按首次出现去重，保持 roster 顺序。 */
-function presentMemberIds(members: readonly TeamMemberLike[]): string[] {
-  const ids = new Set<string>();
-  for (const member of members) {
-    if (member.membership !== 'present') continue;
-    if (member.visibility === 'private') continue;
-    ids.add(member.agent_id);
+/**
+ * 在 present 且非 private、未 closed 的成员中按 `name` 精确匹配唯一一人。
+ * 无命中 / 重名一律 undefined（调用方返回 404，不泄漏存在性）。
+ */
+function resolvePrincipalMember(
+  members: readonly TeamMemberLike[],
+  principal: string,
+): TeamMemberLike | undefined {
+  const matches = members.filter(
+    (member) =>
+      member.membership === 'present' &&
+      member.visibility !== 'private' &&
+      member.state !== 'closed' &&
+      member.name === principal,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** 每 peer 固定 60s 窗口；`limit <= 0` = 不限制。 */
+function consumeRateLimit(
+  windows: Map<string, RateWindow>,
+  peer: FederationGatewayPeer,
+  limit: number,
+  now: number,
+): boolean {
+  if (limit <= 0) return true;
+  const key = `${peer.nodeId}\u0000${peer.teamId}`;
+  const window = windows.get(key);
+  if (!window || now - window.windowStart >= RATE_WINDOW_MS) {
+    windows.set(key, { windowStart: now, count: 1 });
+    return true;
   }
-  return [...ids];
+  if (window.count >= limit) return false;
+  window.count += 1;
+  return true;
 }
 
 /** 创建入站路由；gateway 在 `principalForRequest` 之前调用 `handle()`。 */
 export function createFederationRoute(options: FederationRouteOptions): FederationRoute {
   const dedupe = new ReceivedCache(DEDUPE_LIMIT);
+  const rateWindows = new Map<string, RateWindow>();
   let cursor = 0;
 
   function publish(type: string, data: Record<string, unknown>): void {
@@ -341,7 +559,9 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
   return {
     async handle(req, extra = {}) {
       const url = new URL(req.url);
-      if (url.pathname !== FEDERATION_MESSAGES_PATH) return null;
+      const isMessages = url.pathname === FEDERATION_MESSAGES_PATH;
+      const isTeamInfo = url.pathname === FEDERATION_TEAM_INFO_PATH;
+      if (!isMessages && !isTeamInfo) return null;
       if (req.method !== 'POST') {
         return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
       }
@@ -380,7 +600,81 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         );
       }
 
-      // 3. body 读取失败仍按报文非法处理（不回显正文）。
+      // 3. team-info（0.21）：opt-in、只读；未开 allowDirectory 统一 404 不泄漏存在性。
+      if (isTeamInfo) {
+        if (peer.allowDirectory !== true) {
+          return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
+        }
+        const teamInfoLimit = federation.rateLimitPerMinute ?? FEDERATION_DEFAULT_RATE_LIMIT;
+        if (!consumeRateLimit(rateWindows, peer, teamInfoLimit, Date.now())) {
+          return errorJson('federation_rate_limited', 'Federation rate limit exceeded', 429, extra);
+        }
+        const teamInfoBody = await readBody(req);
+        if (!teamInfoBody.ok || !isRecord(teamInfoBody.value)) {
+          return errorJson(
+            'federation_invalid',
+            'Invalid federation team-info request',
+            400,
+            extra,
+          );
+        }
+        const teamInfo = parseTeamInfoRequest(teamInfoBody.value);
+        if (!teamInfo.ok) {
+          return errorJson(
+            'federation_invalid',
+            'Invalid federation team-info request',
+            400,
+            extra,
+          );
+        }
+        const localTeamId = peer.localTeamId ?? peer.teamId;
+        if (teamInfo.request.team_id !== localTeamId) {
+          return errorJson('federation_unknown_team', 'Team not found', 404, extra);
+        }
+        const teamInfoControl = options.teams;
+        if (!teamInfoControl || teamInfoControl.tenantId !== FEDERATION_TENANT) {
+          return errorJson('federation_unknown_team', 'Team not found', 404, extra);
+        }
+        let directoryTeam: TeamDetailLike | undefined;
+        try {
+          // 取元数据；窗口用最大值，完整计数另走 roster（见下）。
+          directoryTeam = await teamInfoControl.get(localTeamId, {
+            members_limit: FEDERATION_MEMBERS_LIMIT_MAX,
+          });
+        } catch {
+          directoryTeam = undefined;
+        }
+        if (!directoryTeam) {
+          return errorJson('federation_unknown_team', 'Team not found', 404, extra);
+        }
+        // 计数必须用完整 roster；未注入 roster 时退化为 get 的最大窗口。
+        let fullRoster: readonly TeamMemberLike[] = directoryTeam.members;
+        if (teamInfoControl.roster !== undefined) {
+          try {
+            fullRoster = await teamInfoControl.roster(localTeamId);
+          } catch {
+            fullRoster = directoryTeam.members;
+          }
+        }
+        return json(
+          buildTeamInfo(
+            directoryTeam.team,
+            fullRoster,
+            localTeamId,
+            teamInfo.request.members_limit ?? FEDERATION_DEFAULT_MEMBERS_LIMIT,
+          ),
+          200,
+          extra,
+        );
+      }
+
+      // 4. 每 peer 限流：在认证 + 方向之后、读 body 之前判定；超限零写入。
+      const rateLimit = federation.rateLimitPerMinute ?? FEDERATION_DEFAULT_RATE_LIMIT;
+      if (!consumeRateLimit(rateWindows, peer, rateLimit, Date.now())) {
+        return errorJson('federation_rate_limited', 'Federation rate limit exceeded', 429, extra);
+      }
+
+      // 4. body 读取失败仍按报文非法处理（不回显正文）。
       const body = await readBody(req);
       if (!body.ok || !isRecord(body.value)) {
         publish('federation.rejected', {
@@ -392,8 +686,8 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         return errorJson('federation_invalid', 'Invalid federation message', 400, extra);
       }
 
-      // 4. `from` 身份必须等于该 peer（在完整解析之前比对）。
-      const claimedFrom = identityOf(body.value.from);
+      // 5. `from` 身份必须等于该 peer（只比 node+team；principal 不参与）。
+      const claimedFrom = nodeTeamOf(body.value.from);
       if (!claimedFrom) {
         publish('federation.rejected', {
           direction: 'in',
@@ -418,9 +712,29 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         );
       }
 
-      // 5. 严格解析。
-      const message = parseEnvelope(body.value, federation.nodeId);
-      if (!message) {
+      // 6. 严格解析（缺 to.principal 有专用错误码；from.principal 缺失仍是 invalid）。
+      const parsed = parseEnvelope(body.value);
+      if (!parsed.ok) {
+        publish('federation.rejected', {
+          direction: 'in',
+          code: parsed.code,
+          peer_node: peer.nodeId,
+          peer_team: peer.teamId,
+        });
+        if (parsed.code === 'federation_principal_required') {
+          return errorJson(
+            'federation_principal_required',
+            'Federation message requires to.principal',
+            400,
+            extra,
+          );
+        }
+        return errorJson('federation_invalid', 'Invalid federation message', 400, extra);
+      }
+      const message = parsed.message;
+
+      // 7. 报文必须投给本机（peer 身份之后、Team 落点之前）。
+      if (message.to.node_id !== federation.nodeId) {
         publish('federation.rejected', {
           direction: 'in',
           code: 'federation_invalid',
@@ -436,7 +750,7 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         hop: message.hop,
       };
 
-      // 6. 落点由 peer 配置决定（DECISION-036 §3.1/§3.3）；报文不得指定任意本机 Team。
+      // 8. 落点由 peer 配置决定（DECISION-036 §3.1/§3.3）；报文不得指定任意本机 Team。
       const localTeamId = peer.localTeamId ?? peer.teamId;
       if (message.to.team_id !== localTeamId) {
         publish('federation.rejected', {
@@ -452,7 +766,7 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         );
       }
 
-      // 7. hop 上界与自指环（防御性；v1 无自动中继）。
+      // 9. hop 上界与自指环（防御性；v1 无自动中继）。
       if (message.hop > federation.maxHops) {
         publish('federation.rejected', {
           direction: 'in',
@@ -480,7 +794,7 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         );
       }
 
-      // 8. 目标 Team：v1 固定 default tenant；未注入 / 不存在 → 404。
+      // 10. 目标 Team：v1 固定 default tenant；未注入 / 不存在 → 404。
       const teams = options.teams;
       if (!teams || teams.tenantId !== FEDERATION_TENANT) {
         publish('federation.rejected', {
@@ -505,11 +819,7 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         return errorJson('team_not_found', 'Team not found', 404, extra);
       }
 
-      // 9. S7.2：接收 Team 显式 opt-in 才 fan-out；其它一律只写日志。
-      const mode = acceptModeOf(team);
-      const mentions = mode === 'members' ? presentMemberIds(team.members) : [];
-
-      // 10. 去重：重复不写日志，返回首次本地 id / cursor。
+      // 12. 去重：重复不写日志，返回首次本地 id / cursor。
       const key = dedupeKey(message);
       const seen = dedupe.get(key);
       if (seen) {
@@ -526,16 +836,55 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         );
       }
 
-      // 11. 唯一写入点：Team 日志（members 模式下 TeamService 逐人 dispatch）。
+      // 11. 投递解析（DECISION-037 §5）：owner 优先 → accept:'log' → 单成员。
+      const mode = acceptModeOf(team);
+      let resolution: FederationResolution;
+      let mentions: string[] = [];
+      let to: string[] | undefined;
+      if (message.to.principal === 'owner') {
+        resolution = 'owner';
+        to = ['owner'];
+      } else if (mode === 'log') {
+        resolution = 'log';
+      } else {
+        const member = resolvePrincipalMember(team.members, message.to.principal);
+        if (!member) {
+          // private / left / closed / 不存在 / 重名：统一 404，不写日志、不 dispatch。
+          publish('federation.rejected', {
+            direction: 'in',
+            code: 'federation_unknown_principal',
+            ...peerDetail,
+          });
+          return errorJson(
+            'federation_unknown_principal',
+            'Unknown federation principal',
+            404,
+            extra,
+          );
+        }
+        resolution = 'principal';
+        mentions = [member.agent_id];
+      }
+
+      // 13. 唯一写入点：Team 日志（principal 模式由 TeamService 先写 mention 再 dispatch）。
       // 失败不返回 202，不重试。
+      const fromAddr = addressOf(message.from);
+      const toAddr = addressOf(message.to);
       let written: TeamPostResultLike;
       try {
         written = await teams.post({
           team_id: localTeamId,
           content: message.content,
-          from: `federation:${message.from.node_id}:${message.from.team_id}`,
+          from: `federation:${fromAddr}`,
           mentions,
+          ...(to !== undefined ? { to } : {}),
           conversation_id: message.conversation_id,
+          federation: {
+            from_addr: fromAddr,
+            to_addr: toAddr,
+            conversation_id: message.conversation_id,
+            hop: message.hop,
+          },
         });
       } catch (error) {
         const code = errorCode(error);
@@ -564,7 +913,8 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         from_team: message.from.team_id,
         team_id: localTeamId,
         hop: message.hop,
-        mode,
+        resolution,
+        principal: message.to.principal,
         delivered: written.delivered.filter((entry) => entry.status === 'queued').length,
       });
       return json(
