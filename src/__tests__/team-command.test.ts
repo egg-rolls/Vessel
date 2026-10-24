@@ -99,11 +99,10 @@ describe('vessel team command', () => {
       options(
         dir,
         fakeFetch((body) =>
-          body.method === 'team.get'
+          body.method === 'team.roster'
             ? {
-                team: { team_id: 'alpha', name: 'alpha', member_count: 1 },
+                team_id: 'alpha',
                 members: [{ agent_id: 'a', name: 'alice', session_id: 's1' }],
-                messages: [],
               }
             : {
                 message_id: 'm1',
@@ -128,11 +127,10 @@ describe('vessel team command', () => {
         dir,
         fakeFetch((body) => {
           calls.push(body);
-          if (body.method === 'team.get') {
+          if (body.method === 'team.roster') {
             return {
-              team: { team_id: 'alpha', name: 'alpha', member_count: 1 },
+              team_id: 'alpha',
               members: [{ agent_id: 'a', name: 'alice', session_id: 's1' }],
-              messages: [],
             };
           }
           return {
@@ -165,14 +163,8 @@ describe('vessel team command', () => {
         dir,
         fakeFetch((body) => {
           calls.push(body);
-          if (body.method === 'team.get') {
-            const limit =
-              typeof body.params.members_limit === 'number' ? body.params.members_limit : 20;
-            return {
-              team: { team_id: 'alpha', name: 'alpha', member_count: roster.length },
-              members: roster.slice(0, limit),
-              messages: [],
-            };
+          if (body.method === 'team.roster') {
+            return { team_id: 'alpha', members: roster };
           }
           return {
             message_id: 'm1',
@@ -186,8 +178,9 @@ describe('vessel team command', () => {
       ),
     );
     expect(result.exitCode).toBe(0);
-    const get = calls.find((call) => call.method === 'team.get');
-    expect(get?.params.members_limit).toBeGreaterThanOrEqual(25);
+    const rosterCall = calls.find((call) => call.method === 'team.roster');
+    expect(rosterCall).toBeDefined();
+    expect(calls.some((call) => call.method === 'team.get')).toBe(false);
     const post = calls.find((call) => call.method === 'team.post');
     expect(post?.params.mentions).toEqual(['a-25']);
   });

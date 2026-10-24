@@ -5,7 +5,7 @@
  *   `{pid, host, port, token, started_at, tenant_id}`，原子写 0600；
  * - 只监听 127.0.0.1（缺省 :0），校验 Host 防 DNS rebinding；
  * - 端点只是传输：`agent.new/send/close/list/dispatch/rotate` 委托 AgentService，
- *   `team.list/get/post/members/budget` 委托 TeamService（0.19 S3 / S4）。
+ *   `team.list/get/roster/post/members/budget` 委托 TeamService（0.19 S3 / S4）。
  *
  * @module vessel/agent-owner-server
  */
@@ -45,6 +45,7 @@ export type AgentOwnerMethod =
   | 'agent.rotate'
   | 'team.list'
   | 'team.get'
+  | 'team.roster'
   | 'team.post'
   | 'team.members'
   | 'team.budget';
@@ -316,6 +317,22 @@ async function dispatchTeam(
       }
       return detail;
     }
+    case 'team.roster': {
+      // 名字解析等内部路径要完整 roster；不用 get 的展示窗口（缺省 20 / 上限 100）。
+      const teamId = requireString(method, params, 'team_id');
+      const detail = await team.get(teamId, {
+        viewer: ownerId,
+        limit: 0,
+        members_limit: 1,
+      });
+      if (detail === undefined) {
+        throw new AgentOwnerError('team_not_found', `team_not_found: ${teamId}`, 404);
+      }
+      return {
+        team_id: teamId,
+        members: await team.roster(teamId, { viewer: ownerId }),
+      };
+    }
     case 'team.post': {
       const teamId = requireString(method, params, 'team_id');
       const content = requireString(method, params, 'content');
@@ -388,7 +405,7 @@ async function dispatchTeam(
     default:
       throw new AgentOwnerError(
         'agent_owner_unknown_method',
-        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate|team.list|team.get|team.post|team.members|team.budget)`,
+        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate|team.list|team.get|team.roster|team.post|team.members|team.budget)`,
         404,
       );
   }

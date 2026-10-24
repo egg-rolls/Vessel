@@ -2330,7 +2330,7 @@ interface LimitBlock {
 ### 39.4 owner、外部队列与 CLI
 
 - REPL 启动 AgentService 后监听 `127.0.0.1:0` 的最小 HTTP 控制端点；记录原子写入 `<dataDir>/agent-owner.json`（`0600`）：`{pid, host, port, token, started_at, tenant_id}`。
-- 端点只接受 loopback Host（防 DNS rebinding）与 Bearer token；方法固定 `agent.new` / `agent.send` / `agent.dispatch` / `agent.rotate` / `agent.close` / `agent.list`，全部委托同一 AgentService。端点只是传输，不是第二套实现。
+- 端点只接受 loopback Host（防 DNS rebinding）与 Bearer token；方法固定 `agent.new` / `agent.send` / `agent.dispatch` / `agent.rotate` / `agent.close` / `agent.list`，全部委托同一 AgentService。Team 侧方法 `team.list` / `team.get` / `team.roster` / `team.post` / `team.members` / `team.budget` 委托 TeamService；`team.roster` 返回完整 roster（不受 `team.get` 的 20 / 100 展示窗口影响），供 `team post --mention` 解析名字。端点只是传输，不是第二套实现。
 - 同一 `dataDir` 已有 owner 时，第二个 REPL 仍可用进程内工具；CLI attach 保持原 owner。owner 记录按 pid / token 清理，避免误删后继 owner。
 - `vessel agent new|send|dispatch|close|list|rotate [--json]` 读取 owner 记录并连接；无 owner 返回 `agent_owner_unavailable`，tenant 不一致返回 `agent_owner_tenant_mismatch`。`dispatch <to> <content...>` 输出 `DispatchResult`，`queued` 退出 0、`rejected` 退出 1；`rotate <to> --startup <text> [--handoff <path>]` 输出 `RotateResult`，`rotated` 退出 0、`failed` 退出 1。
 - REPL 主 agent 通过 `attachOwner` 注册为 **external owner**：它的队列只由父 turn 的 `BeforeLlm` 调 `takeMessages(ownerId)` 排空，`pump` 永不执行 owner 队列；成员 runtime 也不得消费。注入消息固定 `role: 'user'`、`name: 'agent:<id>'`、`timestamp` 取原消息时间，内容原样。

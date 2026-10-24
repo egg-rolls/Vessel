@@ -50,6 +50,7 @@ interface Calls {
   dispatch: unknown[];
   teamList: unknown[];
   teamGet: unknown[];
+  teamRoster: unknown[];
   teamPost: unknown[];
   teamMembers: unknown[];
   teamBudget: unknown[];
@@ -117,7 +118,10 @@ function fakeTeam(calls: Calls, overrides: Record<string, unknown> = {}): AgentT
       calls.teamGet.push([teamId, options]);
       return { team: { team_id: teamId }, members: [], messages: [] };
     },
-    roster: async () => [],
+    roster: async (teamId: string, options: unknown) => {
+      calls.teamRoster.push([teamId, options]);
+      return [];
+    },
     post: async (input: unknown) => {
       calls.teamPost.push(input);
       return {
@@ -168,6 +172,7 @@ function emptyCalls(): Calls {
     dispatch: [],
     teamList: [],
     teamGet: [],
+    teamRoster: [],
     teamPost: [],
     teamMembers: [],
     teamBudget: [],
@@ -378,6 +383,37 @@ describe('agent owner server', () => {
     });
   });
 
+  it('serves the complete roster for mention resolution', async () => {
+    const calls = emptyCalls();
+    const roster = Array.from({ length: 25 }, (_, index) => ({
+      agent_id: `m${index + 1}`,
+      name: `agent${index + 1}`,
+    }));
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      team: fakeTeam(calls, {
+        roster: async (teamId: string, options: unknown) => {
+          calls.teamRoster.push([teamId, options]);
+          return roster;
+        },
+      }),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    const response = await post(server, {
+      method: 'team.roster',
+      params: { team_id: 'alpha' },
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      result: { team_id: 'alpha', members: roster },
+    });
+    expect(calls.teamRoster[0]).toEqual(['alpha', { viewer: 'main' }]);
+  });
+
   it('returns 404 for an unknown team', async () => {
     const calls = emptyCalls();
     const server = await startAgentOwnerServer({
@@ -401,6 +437,13 @@ describe('agent owner server', () => {
     });
     expect(members.status).toBe(404);
     expect(members.body).toMatchObject({ ok: false, error: { code: 'team_not_found' } });
+
+    const roster = await post(server, {
+      method: 'team.roster',
+      params: { team_id: 'missing' },
+    });
+    expect(roster.status).toBe(404);
+    expect(roster.body).toMatchObject({ ok: false, error: { code: 'team_not_found' } });
   });
 
   it('rejects invalid team parameters with 400', async () => {
