@@ -3,6 +3,38 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.22.0] - 2026-10-24
+
+> 0.22.0（基于 `main` 0.21.0，未发布）：远程 attention、interactions 分页与操作面统一。
+> 未 tag、未 `npm publish`。
+
+### Added
+
+- **`vessel attention`**：列 pending / orphaned、分页、单条 / 交互式 / 批量应答。
+  直连运行 agent 的节点，使用 **gateway / team token**；peer token 被拒绝。
+  `--select` 只作用于当前页；`--all` 所有可见页（上限 200）且必须 `--yes`。
+- **`interactions.list` additive**：`order`（`oldest|newest`）、`agent_id`、`cursor`、
+  `next_cursor`、`total`； cursor 编码 `(order, created_at, request_id)`，换序拒绝旧 cursor；
+  `agent_id` 在服务端过滤，`total` / 翻页在过滤后的集合上计算。
+- **`answered_via: 'cli'`**：审计提示（不是身份认证）；`answered_by` 仍只 `human | policy`。
+- **Web**：attention 收件箱（单节点、跨 team）、Team `description` / `default_principal`、
+  `showing N of M` / 加载更多（最多 100）、`interactions.list` 分页。
+- **认证词表**：ARCHITECTURE §47 固定 gateway / team / owner / peer / hub 五类 token。
+
+### Changed
+
+- roster 排序单一来源：`live` → `last_seen` 降序 → name；`teams.get`、team-info、
+  CLI、Web 不得重排；`member_count` 是 present 总数，`members` 是窗口。
+- attention 默认 `--status=pending`；orphaned 需显式切换。
+- canonical 方法表仍 **48**；`interactions.list` 只加参数 / 结果字段。
+
+### Known limitations
+
+- **Web 多节点连接（S9.4）未实现**：当前 Web 只连一个节点；每节点显式人类 token 的方案待做。
+- 远程 agent 生命周期（spawn / close / rotate）仍未开放；attention 只处理权限 / ask。
+- 权限不跨节点转发；无人类 token 时无法远程应答。
+- `team.attention.required` 不实现；attention 以 `interactions.list` 为准。
+
 ## [0.21.0] - 2026-10-24
 
 > 0.21.0（基于 `main` 0.20.0，未发布）：跨节点按成员寻址，删除全员 fan-out。
