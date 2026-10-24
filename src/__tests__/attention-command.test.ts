@@ -100,16 +100,14 @@ describe('vessel attention --to', () => {
 });
 
 describe('vessel attention --agent', () => {
-  it('resolves a present member name through teams.get and recomputes total', async () => {
+  it('sends the resolved name as agent_id and keeps the server page total', async () => {
     const target = fakeTarget((method) => {
       if (method === 'interactions.list') {
-        return page(
-          [
-            interaction({ request_id: 'r1', agent_id: 'agent-1' }),
-            interaction({ request_id: 'r2', agent_id: 'agent-2' }),
-          ],
-          2,
-        );
+        return {
+          interactions: [interaction({ request_id: 'r2', agent_id: 'agent-2' })],
+          total: 2,
+          next_cursor: 'cursor-2',
+        };
       }
       if (method === 'teams.get') {
         return { members: [{ agent_id: 'agent-2', name: 'worker', membership: 'present' }] };
@@ -126,15 +124,21 @@ describe('vessel attention --agent', () => {
     const payload = JSON.parse(result.stdout) as {
       interactions: Array<{ request_id: string }>;
       total: number;
+      next_cursor?: string;
     };
     expect(payload.interactions.map((entry) => entry.request_id)).toEqual(['r2']);
-    expect(payload.total).toBe(1);
+    // total / next_cursor 由服务端过滤后给出，客户端不得按本页重算。
+    expect(payload.total).toBe(2);
+    expect(payload.next_cursor).toBe('cursor-2');
+    const listCall = target.calls.find((call) => call.method === 'interactions.list');
+    expect((listCall?.params as { agent_id?: string } | undefined)?.agent_id).toBe('agent-2');
   });
 
-  it('rejects an unknown agent name when a team is given', async () => {
+  it('passes an unresolved name through as the agent id', async () => {
     const target = fakeTarget((method) => {
-      if (method === 'interactions.list') return page([interaction({ agent_id: 'agent-1' })], 1);
+      if (method === 'interactions.list') return page([], 0);
       if (method === 'teams.get') return { members: [] };
+      if (method === 'agents.list') return { agents: [] };
       throw new Error(`unexpected ${method}`);
     });
 
@@ -143,9 +147,46 @@ describe('vessel attention --agent', () => {
       options(target),
     );
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('unknown_agent');
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      interactions: Array<{ request_id: string }>;
+      total: number;
+    };
+    expect(payload.interactions).toEqual([]);
+    expect(payload.total).toBe(0);
+    const listCall = target.calls.find((call) => call.method === 'interactions.list');
+    expect((listCall?.params as { agent_id?: string } | undefined)?.agent_id).toBe('nobody');
+  });
+
+  it('selects indexes on the server-filtered page', async () => {
+    const target = fakeTarget((method) => {
+      if (method === 'interactions.list') {
+        return page([interaction({ request_id: 'r2', agent_id: 'agent-2' })], 1);
+      }
+      if (method === 'teams.get') {
+        return { members: [{ agent_id: 'agent-2', name: 'worker', membership: 'present' }] };
+      }
+      if (method === 'permission.respond') return { ok: true };
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await attentionCommand(
+      command({
+        kind: 'respond',
+        select: [1],
+        decision: 'allow',
+        yes: true,
+        agent: 'worker',
+        teamId: 'alpha',
+        json: false,
+      }),
+      options(target),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('OK r2 allow');
+    const listCall = target.calls.find((call) => call.method === 'interactions.list');
+    expect((listCall?.params as { agent_id?: string } | undefined)?.agent_id).toBe('agent-2');
   });
 });
 

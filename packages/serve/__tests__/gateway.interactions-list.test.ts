@@ -348,6 +348,49 @@ describe('interactions.list', () => {
     expect(invalid).toContain('limit');
   });
 
+  it('agent filter applied after paging yields empty pages and a page-sized total', async () => {
+    const dir = tempDir();
+    seedRecords(dir, 'default', [
+      seedRecord({ requestId: 'req-a2', agent_id: 'agent-2', created_at: 3000 }),
+      seedRecord({ requestId: 'req-a1a', agent_id: 'agent-1', created_at: 2000 }),
+      seedRecord({ requestId: 'req-a1b', agent_id: 'agent-1', created_at: 1000 }),
+    ]);
+
+    const events = new MemoryEventStream();
+    const gw = startGateway({ events, port: 0, interactionsDir: dir });
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    const page = async (params: Record<string, unknown>) =>
+      (await client.request('interactions.list', params)) as {
+        interactions: ListedInteraction[];
+        total: number;
+        next_cursor?: string;
+      };
+
+    // Seeded pending records become orphaned at startup (no live run); no status filter here.
+    const first = await page({ agent_id: 'agent-1', limit: 1 });
+    expect(first.interactions.map((item) => item.request_id)).toEqual(['req-a1a']);
+    expect(first.total).toBe(2);
+    expect(first.next_cursor).toBeDefined();
+
+    const second = await page({
+      agent_id: 'agent-1',
+      limit: 1,
+      cursor: first.next_cursor,
+    });
+    expect(second.interactions.map((item) => item.request_id)).toEqual(['req-a1b']);
+    expect(second.total).toBe(2);
+    expect(second.next_cursor).toBeUndefined();
+
+    const oldest = await page({ agent_id: 'agent-1', order: 'oldest', limit: 1 });
+    expect(oldest.interactions.map((item) => item.request_id)).toEqual(['req-a1b']);
+
+    const missing = await page({ agent_id: 'agent-9' });
+    expect(missing.interactions).toEqual([]);
+    expect(missing.total).toBe(0);
+  });
+
   it('exposes parent_session_id from persisted records and omits it for legacy records', async () => {
     const dir = tempDir();
     seedRecords(dir, 'default', [

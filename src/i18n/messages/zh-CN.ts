@@ -301,7 +301,6 @@ export const zhCN = {
     'attention requires a human control token (gateway or team token); federation peer tokens are rejected',
   'attention.error.federationMismatch':
     'federation_target_mismatch: --to 的节点 "{node}" 与本机节点 "{local}" 不一致',
-  'attention.error.unknownAgent': 'unknown_agent: 没有匹配 "{agent}" 的 agent',
   'attention.error.notFound': 'not_found: 找不到交互 {request}',
   'attention.error.askRequiresAnswers': 'ask {request} 需要 --answers <json>',
   'attention.error.permissionNoAnswers':

@@ -113,35 +113,17 @@ function pagePayload(page: AttentionPage): string {
   );
 }
 
-/** agent 过滤在客户端做；过滤后重算 total，不泄漏未过滤条数。 */
-function filterByAgent(page: AttentionPage, agentId: string | undefined): AttentionPage {
-  if (agentId === undefined) return page;
-  const interactions = page.interactions.filter((item) => item.agent_id === agentId);
-  return {
-    interactions,
-    total: interactions.length,
-    ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
-  };
-}
-
-function observedAgentIds(page: AttentionPage): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const item of page.interactions) {
-    if (item.agent_id !== undefined) ids.add(item.agent_id);
-  }
-  return ids;
-}
-
 function pageParams(
   command: AttentionCommandArgs,
   teamId: string | undefined,
-  input: { status: 'pending' | 'orphaned'; limit: number; cursor?: string },
+  input: { status: 'pending' | 'orphaned'; limit: number; cursor?: string; agentId?: string },
 ) {
   return {
     status: input.status,
     limit: input.limit,
     ...(teamId !== undefined ? { teamId } : {}),
     ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
+    ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
     ...(command.order !== undefined ? { order: command.order } : {}),
     ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
   };
@@ -254,15 +236,7 @@ async function respondOne(
       target,
       agent: command.agent,
       ...(teamId !== undefined ? { teamId } : {}),
-      observedAgentIds: new Set(item.agent_id !== undefined ? [item.agent_id] : []),
     });
-    if (agentId === undefined) {
-      return {
-        exitCode: 1,
-        stdout: '',
-        stderr: t('attention.error.unknownAgent', { agent: command.agent }),
-      };
-    }
     if (item.agent_id !== agentId) {
       return {
         exitCode: 1,
@@ -312,43 +286,35 @@ async function respondSelect(
   teamId: string | undefined,
 ): Promise<CommandResult> {
   const indexes = command.select ?? [];
-  const page = await listInteractions(
-    target,
-    pageParams(command, teamId, {
-      status: 'pending',
-      limit: command.limit,
-      ...(command.cursor !== undefined ? { cursor: command.cursor } : {}),
-    }),
-  );
   let agentId: string | undefined;
   if (command.agent !== undefined) {
     agentId = await resolveAgentFilter({
       target,
       agent: command.agent,
       ...(teamId !== undefined ? { teamId } : {}),
-      observedAgentIds: observedAgentIds(page),
     });
-    if (agentId === undefined) {
-      return {
-        exitCode: 1,
-        stdout: '',
-        stderr: t('attention.error.unknownAgent', { agent: command.agent }),
-      };
-    }
   }
-  const view = filterByAgent(page, agentId);
-  const invalid = indexes.find((index) => index > view.interactions.length);
+  const page = await listInteractions(
+    target,
+    pageParams(command, teamId, {
+      status: 'pending',
+      limit: command.limit,
+      ...(agentId !== undefined ? { agentId } : {}),
+      ...(command.cursor !== undefined ? { cursor: command.cursor } : {}),
+    }),
+  );
+  const invalid = indexes.find((index) => index > page.interactions.length);
   if (invalid !== undefined) {
     return {
       exitCode: 1,
       stdout: '',
       stderr: t('attention.error.selectOutOfRange', {
         index: invalid,
-        count: view.interactions.length,
+        count: page.interactions.length,
       }),
     };
   }
-  return respondBatch(target, command, view.interactions, indexes);
+  return respondBatch(target, command, page.interactions, indexes);
 }
 
 async function respondAll(
@@ -363,13 +329,6 @@ async function respondAll(
       agent: command.agent,
       ...(teamId !== undefined ? { teamId } : {}),
     });
-    if (agentId === undefined) {
-      return {
-        exitCode: 1,
-        stdout: '',
-        stderr: t('attention.error.unknownAgent', { agent: command.agent }),
-      };
-    }
   }
 
   const collected: AttentionInteraction[] = [];
@@ -382,12 +341,12 @@ async function respondAll(
       pageParams(command, teamId, {
         status: 'pending',
         limit: ALL_PAGE_SIZE,
+        ...(agentId !== undefined ? { agentId } : {}),
         ...(cursor !== undefined ? { cursor } : {}),
       }),
     );
     fetched += page.interactions.length;
     for (const item of page.interactions) {
-      if (agentId !== undefined && item.agent_id !== agentId) continue;
       if (collected.length >= ALL_MAX) break;
       collected.push(item);
     }
@@ -478,16 +437,14 @@ async function runInteractive(
           continue;
         }
         cursor = page.nextCursor;
-        page = filterByAgent(
-          await listInteractions(
-            target,
-            pageParams(command, teamId, {
-              status: command.status,
-              limit: command.limit,
-              cursor,
-            }),
-          ),
-          agentId,
+        page = await listInteractions(
+          target,
+          pageParams(command, teamId, {
+            status: command.status,
+            limit: command.limit,
+            ...(agentId !== undefined ? { agentId } : {}),
+            cursor,
+          }),
         );
         continue;
       }
@@ -543,40 +500,31 @@ async function runList(
   teamId: string | undefined,
   options: AttentionCommandOptions,
 ): Promise<CommandResult> {
-  const page = await listInteractions(
-    target,
-    pageParams(command, teamId, {
-      status: command.status,
-      limit: command.limit,
-      ...(command.cursor !== undefined ? { cursor: command.cursor } : {}),
-    }),
-  );
-
   let agentId: string | undefined;
   if (command.agent !== undefined) {
     agentId = await resolveAgentFilter({
       target,
       agent: command.agent,
       ...(teamId !== undefined ? { teamId } : {}),
-      observedAgentIds: observedAgentIds(page),
     });
-    if (agentId === undefined) {
-      return {
-        exitCode: 1,
-        stdout: '',
-        stderr: t('attention.error.unknownAgent', { agent: command.agent }),
-      };
-    }
   }
-  const view = filterByAgent(page, agentId);
+  const page = await listInteractions(
+    target,
+    pageParams(command, teamId, {
+      status: command.status,
+      limit: command.limit,
+      ...(agentId !== undefined ? { agentId } : {}),
+      ...(command.cursor !== undefined ? { cursor: command.cursor } : {}),
+    }),
+  );
 
   if (command.interactive) {
-    return runInteractive(target, command, teamId, view, agentId, options);
+    return runInteractive(target, command, teamId, page, agentId, options);
   }
-  if (command.json) return { exitCode: 0, stdout: pagePayload(view), stderr: '' };
+  if (command.json) return { exitCode: 0, stdout: pagePayload(page), stderr: '' };
   return {
     exitCode: 0,
-    stdout: renderPage(view, command.status, command.cursor !== undefined).join('\n'),
+    stdout: renderPage(page, command.status, command.cursor !== undefined).join('\n'),
     stderr: '',
   };
 }

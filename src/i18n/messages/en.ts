@@ -312,7 +312,6 @@ export const en: Record<MessageKey, string> = {
     'attention requires a human control token (gateway or team token); federation peer tokens are rejected',
   'attention.error.federationMismatch':
     'federation_target_mismatch: --to node "{node}" does not match this node "{local}"',
-  'attention.error.unknownAgent': 'unknown_agent: no agent matches "{agent}"',
   'attention.error.notFound': 'not_found: interaction {request} was not found',
   'attention.error.askRequiresAnswers': 'ask {request} requires --answers <json>',
   'attention.error.permissionNoAnswers':

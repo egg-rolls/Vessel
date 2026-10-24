@@ -405,6 +405,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           session_id: { type: 'string' },
           run_id: { type: 'string' },
           team_id: { type: 'string' },
+          agent_id: { type: 'string' },
           status: { type: 'string', enum: ['pending', 'answered', 'orphaned'] },
           limit: { type: 'integer', minimum: 1, maximum: MAX_LIST_LIMIT },
           order: { type: 'string', enum: ['oldest', 'newest'] },
@@ -438,6 +439,10 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
             : undefined;
         const runId =
           typeof params.run_id === 'string' && params.run_id.length > 0 ? params.run_id : undefined;
+        const agentId =
+          typeof params.agent_id === 'string' && params.agent_id.length > 0
+            ? params.agent_id
+            : undefined;
         const limit = parseListLimit(params.limit);
         const order = parseListOrder(params.order);
         const cursor = params.cursor === undefined ? undefined : parseListCursor(params.cursor);
@@ -462,6 +467,9 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           : requestedTeam;
         if (teamFilter !== undefined) {
           items = items.filter((item) => itemTeamId(item) === teamFilter);
+        }
+        if (agentId !== undefined) {
+          items = items.filter((item) => item.agent_id === agentId);
         }
         // 同时间戳一律按 request_id 升序，保证翻页边界稳定。
         items.sort((a, b) => compareListItems(order, a, b));

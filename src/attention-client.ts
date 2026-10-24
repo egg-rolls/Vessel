@@ -34,6 +34,8 @@ export interface ListInteractionsParams {
   limit: number;
   teamId?: string;
   tenantId?: string;
+  /** 服务端过滤（在 team/session/run 之后、total/cursor/limit 之前）。 */
+  agentId?: string;
   order?: 'oldest' | 'newest';
   cursor?: string;
 }
@@ -107,6 +109,7 @@ export async function listInteractions(
     limit: params.limit,
     ...(params.teamId !== undefined ? { team_id: params.teamId } : {}),
     ...(params.tenantId !== undefined ? { tenant_id: params.tenantId } : {}),
+    ...(params.agentId !== undefined ? { agent_id: params.agentId } : {}),
     ...(params.order !== undefined ? { order: params.order } : {}),
     ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
   });
@@ -120,50 +123,58 @@ export async function healthNodeId(target: ControlPlaneTarget): Promise<string |
   return optionalString(result.node, 'node_id');
 }
 
+function isAuthRpcError(error: unknown): boolean {
+  return (
+    error instanceof RpcClientError &&
+    (error.httpStatus === 401 ||
+      error.httpStatus === 403 ||
+      error.code === 'unauthorized' ||
+      error.code === 'forbidden')
+  );
+}
+
 /**
  * `--agent <id|name>` → agent_id。
  *
- * agent_id 精确匹配优先（观察到的 interaction + team roster）；team 存在时
- * 再用 present 成员 name 解析。无 team 且未观察到时按 agent_id 原样使用。
+ * team roster 的 present 成员可把 name 解析成 id；否则用 `agents.list` 确认 id；
+ * 都解析不到时按输入原样当 id（服务端过滤对未知 id 返回空集）。认证失败必须上抛。
  */
 export async function resolveAgentFilter(input: {
   target: ControlPlaneTarget;
   agent: string;
   teamId?: string;
-  observedAgentIds?: ReadonlySet<string>;
-}): Promise<string | undefined> {
-  if (input.observedAgentIds?.has(input.agent) === true) return input.agent;
-  if (input.teamId === undefined) return input.agent;
-
-  let members: unknown[] = [];
-  try {
-    const result = await input.target.request('teams.get', {
-      team_id: input.teamId,
-      members_limit: 100,
-    });
-    members = isRecord(result) && Array.isArray(result.members) ? result.members : [];
-  } catch (error) {
-    if (
-      error instanceof RpcClientError &&
-      (error.httpStatus === 401 ||
-        error.httpStatus === 403 ||
-        error.code === 'unauthorized' ||
-        error.code === 'forbidden')
-    ) {
-      throw error;
+}): Promise<string> {
+  if (input.teamId !== undefined) {
+    try {
+      const result = await input.target.request('teams.get', {
+        team_id: input.teamId,
+        members_limit: 100,
+      });
+      const members = isRecord(result) && Array.isArray(result.members) ? result.members : [];
+      let byName: string | undefined;
+      for (const member of members) {
+        if (!isRecord(member) || member.membership !== 'present') continue;
+        const id = optionalString(member, 'agent_id');
+        if (id === undefined) continue;
+        if (id === input.agent) return id;
+        if (byName === undefined && optionalString(member, 'name') === input.agent) byName = id;
+      }
+      if (byName !== undefined) return byName;
+    } catch (error) {
+      if (isAuthRpcError(error)) throw error;
     }
-    return undefined;
   }
 
-  let byName: string | undefined;
-  for (const member of members) {
-    if (!isRecord(member) || member.membership !== 'present') continue;
-    const id = optionalString(member, 'agent_id');
-    if (id === undefined) continue;
-    if (id === input.agent) return id;
-    if (byName === undefined && optionalString(member, 'name') === input.agent) byName = id;
+  try {
+    const result = await input.target.request('agents.list', {});
+    const agents = isRecord(result) && Array.isArray(result.agents) ? result.agents : [];
+    for (const agent of agents) {
+      if (isRecord(agent) && agent.id === input.agent) return input.agent;
+    }
+  } catch (error) {
+    if (isAuthRpcError(error)) throw error;
   }
-  return byName;
+  return input.agent;
 }
 
 /** `permission.respond`；`answered_via` 固定 `cli`，`answered_by` 由服务端固定 human。 */
