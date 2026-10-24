@@ -294,6 +294,8 @@ export const en: Record<MessageKey, string> = {
     'list pending/orphaned interactions (--to principal is not a filter; use --team/--agent)',
   'help.cmd.attentionRespond':
     'respond to one / --select (current page) / --all (needs --yes); --answers only with a request_id',
+  'help.cmd.attentionNodes':
+    'list configured nodes with their own human token_env (--node <name>) or aggregate all (--all-nodes)',
   'attention.empty': 'No {status} interactions.',
   'attention.header': '{total} {status} · showing {showing}',
   'attention.interactive.select': 'Select [1,3 / a=all / n=next / q=quit]: ',
@@ -318,6 +320,11 @@ export const en: Record<MessageKey, string> = {
     'permission {request} does not accept --answers; use --allow or --deny',
   'attention.error.askInBatch': 'ask {request} requires --answers <json>',
   'attention.error.selectOutOfRange': '--select index {index} is out of range (page has {count})',
+  'attention.error.nodeMismatch':
+    'attention node "{name}" reports node_id "{actual}", expected "{expected}"',
+  'attention.nodeHeader': '{name} · {url} · {total} {status}',
+  'attention.nodeFailed': '{name}: FAILED {error}',
+  'attention.nodesSummary': 'Nodes: {ok} ok, {failed} failed.',
 
   // ── completion (0.18) ──
   'completion.usage': 'Usage: vessel completion <bash|zsh|fish|powershell>',

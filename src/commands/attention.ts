@@ -10,6 +10,11 @@
 
 import { createInterface } from 'node:readline/promises';
 import {
+  type AttentionNodeConfig,
+  loadConfig,
+  type VesselConfig,
+} from '../../packages/config/src/index';
+import {
   type AttentionInteraction,
   type AttentionPage,
   healthNodeId,
@@ -18,6 +23,14 @@ import {
   respondAsk,
   respondPermission,
 } from '../attention-client';
+import {
+  type AttentionNodeToken,
+  configuredAttentionNodes,
+  createAttentionNodeTarget,
+  findAttentionNodeByAddress,
+  resolveNodeToken,
+  selectAttentionNodes,
+} from '../attention-nodes';
 import type { AttentionCommandArgs } from '../cli-args';
 import {
   type ControlPlaneTarget,
@@ -38,6 +51,11 @@ export interface CommandResult {
 export interface AttentionCommandOptions extends ControlPlaneTargetOptions {
   /** 覆盖 TTY 检测（交互 / 逐条确认）。 */
   isTTY?: boolean;
+  /** 测试注入：按配置节点构造目标；生产走 `createAttentionNodeTarget`。 */
+  nodeTargetFactory?: (
+    node: AttentionNodeConfig,
+    token: string,
+  ) => Promise<ControlPlaneTarget> | ControlPlaneTarget;
 }
 
 /** `--all` 每页条数 / 累计上限（DECISION-038 §2.2）。 */
@@ -494,21 +512,26 @@ async function runInteractive(
   return { exitCode: 0, stdout: output.join('\n'), stderr: '' };
 }
 
-async function runList(
+async function resolveAttentionAgent(
   target: ControlPlaneTarget,
   command: AttentionCommandArgs,
   teamId: string | undefined,
-  options: AttentionCommandOptions,
-): Promise<CommandResult> {
-  let agentId: string | undefined;
-  if (command.agent !== undefined) {
-    agentId = await resolveAgentFilter({
-      target,
-      agent: command.agent,
-      ...(teamId !== undefined ? { teamId } : {}),
-    });
-  }
-  const page = await listInteractions(
+): Promise<string | undefined> {
+  if (command.agent === undefined) return undefined;
+  return resolveAgentFilter({
+    target,
+    agent: command.agent,
+    ...(teamId !== undefined ? { teamId } : {}),
+  });
+}
+
+async function fetchListPage(
+  target: ControlPlaneTarget,
+  command: AttentionCommandArgs,
+  teamId: string | undefined,
+  agentId: string | undefined,
+): Promise<AttentionPage> {
+  return listInteractions(
     target,
     pageParams(command, teamId, {
       status: command.status,
@@ -517,6 +540,16 @@ async function runList(
       ...(command.cursor !== undefined ? { cursor: command.cursor } : {}),
     }),
   );
+}
+
+async function runList(
+  target: ControlPlaneTarget,
+  command: AttentionCommandArgs,
+  teamId: string | undefined,
+  options: AttentionCommandOptions,
+): Promise<CommandResult> {
+  const agentId = await resolveAttentionAgent(target, command, teamId);
+  const page = await fetchListPage(target, command, teamId, agentId);
 
   if (command.interactive) {
     return runInteractive(target, command, teamId, page, agentId, options);
@@ -527,6 +560,173 @@ async function runList(
     stdout: renderPage(page, command.status, command.cursor !== undefined).join('\n'),
     stderr: '',
   };
+}
+
+async function createNodeTarget(
+  node: AttentionNodeConfig,
+  token: string,
+  options: AttentionCommandOptions,
+  config: VesselConfig,
+): Promise<ControlPlaneTarget> {
+  if (options.nodeTargetFactory !== undefined) {
+    return options.nodeTargetFactory(node, token);
+  }
+  const caFile = node.caFile ?? config.connect?.caFile;
+  return createAttentionNodeTarget(node, token, {
+    ...(caFile !== undefined ? { caFile } : {}),
+    ...(options.requestTimeoutMs !== undefined
+      ? { requestTimeoutMs: options.requestTimeoutMs }
+      : {}),
+  });
+}
+
+async function verifyConfiguredNode(
+  target: ControlPlaneTarget,
+  node: AttentionNodeConfig,
+): Promise<string | null> {
+  if (node.nodeId === undefined) return null;
+  const actual = await healthNodeId(target);
+  if (actual === node.nodeId) return null;
+  return t('attention.error.nodeMismatch', {
+    name: node.name,
+    expected: node.nodeId,
+    actual: actual ?? '-',
+  });
+}
+
+/** `--node <name>`：单节点，保持 0.22 的输出形状。 */
+async function runConfiguredNode(
+  node: AttentionNodeConfig,
+  command: AttentionCommandArgs,
+  options: AttentionCommandOptions,
+  config: VesselConfig,
+): Promise<CommandResult> {
+  const resolvedToken: AttentionNodeToken = resolveNodeToken(node, options.env ?? process.env);
+  if (!resolvedToken.ok) {
+    return { exitCode: 1, stdout: '', stderr: resolvedToken.error };
+  }
+  let target: ControlPlaneTarget | undefined;
+  try {
+    target = await createNodeTarget(node, resolvedToken.token, options, config);
+    const mismatch = await verifyConfiguredNode(target, node);
+    if (mismatch !== null) return { exitCode: 1, stdout: '', stderr: mismatch };
+    return await runAttention(target, command, options);
+  } catch (error) {
+    return rpcFailure(error);
+  } finally {
+    await target?.close().catch(() => undefined);
+  }
+}
+
+interface NodeListOutcome {
+  node: AttentionNodeConfig;
+  ok: boolean;
+  page?: AttentionPage;
+  error?: string;
+}
+
+/** 一个节点的列表结果；token / URL / 认证失败都只属于该节点。 */
+async function listNodeOutcome(
+  node: AttentionNodeConfig,
+  command: AttentionCommandArgs,
+  options: AttentionCommandOptions,
+  config: VesselConfig,
+): Promise<NodeListOutcome> {
+  const resolvedToken: AttentionNodeToken = resolveNodeToken(node, options.env ?? process.env);
+  if (!resolvedToken.ok) return { node, ok: false, error: resolvedToken.error };
+
+  let target: ControlPlaneTarget | undefined;
+  try {
+    target = await createNodeTarget(node, resolvedToken.token, options, config);
+    const mismatch = await verifyConfiguredNode(target, node);
+    if (mismatch !== null) return { node, ok: false, error: mismatch };
+    const agentId = await resolveAttentionAgent(target, command, command.teamId);
+    const page = await fetchListPage(target, command, command.teamId, agentId);
+    return { node, ok: true, page };
+  } catch (error) {
+    return { node, ok: false, error: describeError(error) };
+  } finally {
+    await target?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * `--all-nodes`：逐节点并发拉取；单节点失败不影响其它节点。
+ * JSON 输出 `{ nodes: [...] }`（additive；单节点形状不变）。
+ */
+async function runAllNodes(
+  nodes: readonly AttentionNodeConfig[],
+  command: AttentionCommandArgs,
+  options: AttentionCommandOptions,
+  config: VesselConfig,
+): Promise<CommandResult> {
+  const outcomes = await Promise.all(
+    nodes.map((node) => listNodeOutcome(node, command, options, config)),
+  );
+  const failed = outcomes.filter((outcome) => !outcome.ok).length;
+
+  if (command.json) {
+    return {
+      exitCode: failed > 0 ? 1 : 0,
+      stdout: JSON.stringify(
+        {
+          nodes: outcomes.map((outcome) => ({
+            name: outcome.node.name,
+            url: outcome.node.url,
+            ...(outcome.node.nodeId !== undefined ? { node_id: outcome.node.nodeId } : {}),
+            ok: outcome.ok,
+            ...(outcome.ok && outcome.page !== undefined
+              ? {
+                  interactions: outcome.page.interactions,
+                  total: outcome.page.total,
+                  ...(outcome.page.nextCursor !== undefined
+                    ? { next_cursor: outcome.page.nextCursor }
+                    : {}),
+                }
+              : {}),
+            ...(!outcome.ok ? { error: outcome.error ?? 'unknown error' } : {}),
+          })),
+        },
+        null,
+        2,
+      ),
+      stderr: '',
+    };
+  }
+
+  const lines: string[] = [];
+  for (const outcome of outcomes) {
+    if (!outcome.ok || outcome.page === undefined) {
+      lines.push(
+        t('attention.nodeFailed', {
+          name: outcome.node.name,
+          error: outcome.error ?? 'unknown error',
+        }),
+      );
+      continue;
+    }
+    const page = outcome.page;
+    lines.push(
+      ui.section(
+        t('attention.nodeHeader', {
+          name: outcome.node.name,
+          url: outcome.node.url,
+          total: page.total,
+          status: command.status,
+        }),
+      ),
+    );
+    if (page.interactions.length === 0) {
+      lines.push(t('attention.empty', { status: command.status }));
+      continue;
+    }
+    for (let index = 0; index < page.interactions.length; index++) {
+      const item = page.interactions[index];
+      if (item !== undefined) lines.push(formatRow(index + 1, item));
+    }
+  }
+  lines.push(t('attention.nodesSummary', { ok: outcomes.length - failed, failed }));
+  return { exitCode: failed > 0 ? 1 : 0, stdout: lines.join('\n'), stderr: '' };
 }
 
 async function runAttention(
@@ -564,20 +764,64 @@ export async function attentionCommand(
   command: AttentionCommandArgs,
   options: AttentionCommandOptions = {},
 ): Promise<CommandResult> {
-  const resolved = await resolveControlPlaneTarget({
-    ...options,
-    ...(command.connectUrl !== undefined ? { connectUrl: command.connectUrl } : {}),
-    ...(command.connectToken !== undefined ? { connectToken: command.connectToken } : {}),
-    ...(command.caFile !== undefined ? { caFile: command.caFile } : {}),
-    ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
-  });
-  if (!resolved.ok) return { exitCode: 1, stdout: '', stderr: resolved.error };
-
   try {
-    return await runAttention(resolved.target, command, options);
+    const config = options.config ?? (await loadConfig({ env: options.env ?? process.env })).config;
+    const configured = configuredAttentionNodes(config);
+
+    if (command.allNodes) {
+      const selection = selectAttentionNodes(configured, { all: true });
+      if (!selection.ok) return { exitCode: 1, stdout: '', stderr: selection.error };
+      return await runAllNodes(selection.nodes, command, options, config);
+    }
+
+    if (command.node !== undefined) {
+      const selection = selectAttentionNodes(configured, { name: command.node });
+      if (!selection.ok) return { exitCode: 1, stdout: '', stderr: selection.error };
+      const node = selection.nodes[0];
+      if (node === undefined) {
+        return { exitCode: 1, stdout: '', stderr: `Unknown attention node "${command.node}".` };
+      }
+      return await runConfiguredNode(node, command, options, config);
+    }
+
+    // `--to` 未显式指定连接：优先匹配配置节点的 nodeId / name；无匹配时回退本机。
+    if (command.to !== undefined && command.connectUrl === undefined) {
+      const parsed = parseFederationAddress(command.to);
+      if (parsed.ok) {
+        const match = findAttentionNodeByAddress(configured, parsed.address.node_id);
+        if (match.kind === 'unique') {
+          return await runConfiguredNode(match.node, command, options, config);
+        }
+        if (match.kind === 'ambiguous') {
+          return {
+            exitCode: 1,
+            stdout: '',
+            stderr: `Multiple attention nodes match "${parsed.address.node_id}": ${match.names.join(
+              ', ',
+            )}; use --node.`,
+          };
+        }
+      }
+    }
+
+    const resolved = await resolveControlPlaneTarget({
+      ...options,
+      config,
+      ...(command.connectUrl !== undefined ? { connectUrl: command.connectUrl } : {}),
+      ...(command.connectToken !== undefined ? { connectToken: command.connectToken } : {}),
+      ...(command.caFile !== undefined ? { caFile: command.caFile } : {}),
+      ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
+    });
+    if (!resolved.ok) return { exitCode: 1, stdout: '', stderr: resolved.error };
+
+    try {
+      return await runAttention(resolved.target, command, options);
+    } catch (error) {
+      return rpcFailure(error);
+    } finally {
+      await resolved.target.close().catch(() => undefined);
+    }
   } catch (error) {
     return rpcFailure(error);
-  } finally {
-    await resolved.target.close().catch(() => undefined);
   }
 }

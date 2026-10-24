@@ -283,6 +283,8 @@ export const zhCN = {
     '列出 pending/orphaned 交互（--to 的 principal 不参与过滤；用 --team/--agent）',
   'help.cmd.attentionRespond':
     '应答：单条 / --select（当前页）/ --all（需 --yes）；--answers 只配 request_id',
+  'help.cmd.attentionNodes':
+    '列出配置节点（各自 token_env，--node <name>）或聚合全部（--all-nodes）',
   'attention.empty': '没有 {status} 交互。',
   'attention.header': '{total} {status} · showing {showing}',
   'attention.interactive.select': 'Select [1,3 / a=all / n=next / q=quit]: ',
@@ -307,6 +309,11 @@ export const zhCN = {
     'permission {request} 不接受 --answers；请用 --allow 或 --deny',
   'attention.error.askInBatch': 'ask {request} 需要 --answers <json>',
   'attention.error.selectOutOfRange': '--select 索引 {index} 越界（本页 {count} 条）',
+  'attention.error.nodeMismatch':
+    'attention 节点 "{name}" 报告的 node_id 是 "{actual}"，期望 "{expected}"',
+  'attention.nodeHeader': '{name} · {url} · {total} {status}',
+  'attention.nodeFailed': '{name}: 失败 {error}',
+  'attention.nodesSummary': '节点：{ok} 成功，{failed} 失败。',
 
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',

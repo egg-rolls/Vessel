@@ -129,6 +129,7 @@ function printHelp(): void {
     ['vessel status [--json]', t('help.cmd.status')],
     ['vessel agents [--json]', t('help.cmd.agents')],
     ['vessel attention [--connect <url>] [--json] [--interactive]', t('help.cmd.attention')],
+    ['vessel attention [--node <name>|--all-nodes] [--json]', t('help.cmd.attentionNodes')],
     [
       'vessel attention respond <id> --allow|--deny|--answers <json>',
       t('help.cmd.attentionRespond'),

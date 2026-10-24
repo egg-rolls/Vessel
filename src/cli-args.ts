@@ -283,6 +283,10 @@ export interface AttentionCommandArgs {
   connectToken?: string;
   caFile?: string;
   tenantId?: string;
+  /** S9.4：配置中的节点名（`--node`）；与 `--connect` 互斥。 */
+  node?: string;
+  /** S9.4：聚合所有配置节点（`--all-nodes`）；仅列表。缺省 false。 */
+  allNodes?: boolean;
   /** 已通过 `parseFederationAddress` 校验；只用于定位节点与缺省 team。 */
   to?: string;
   teamId?: string;
@@ -1909,6 +1913,8 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
   let connectToken: string | undefined;
   let caFile: string | undefined;
   let tenantId: string | undefined;
+  let node: string | undefined;
+  let allNodes = false;
   let to: string | undefined;
   let teamId: string | undefined;
   let agent: string | undefined;
@@ -1943,6 +1949,17 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
         return { ok: false, error: '--interactive is only valid for `vessel attention` (list)' };
       }
       interactive = true;
+      continue;
+    }
+    if (a === '--all-nodes') {
+      allNodes = true;
+      continue;
+    }
+    if (a === '--node') {
+      const value = readFlagValue(tail, i, '--node');
+      if (!value.ok) return value;
+      node = value.value;
+      i = value.next;
       continue;
     }
     if (a === '--all' || a === '--select' || a === '--allow' || a === '--deny') {
@@ -2074,6 +2091,37 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
 
   if (args.help) return { ok: true, args };
 
+  if (allNodes && isRespond) {
+    return { ok: false, error: '--all-nodes is only valid for `vessel attention` (list)' };
+  }
+  if (allNodes && interactive) {
+    return { ok: false, error: '--all-nodes cannot be combined with --interactive' };
+  }
+  if (allNodes && node !== undefined) {
+    return { ok: false, error: '--all-nodes cannot be combined with --node' };
+  }
+  if (allNodes && connectUrl !== undefined) {
+    return { ok: false, error: '--all-nodes cannot be combined with --connect' };
+  }
+  if (allNodes && to !== undefined) {
+    return { ok: false, error: '--all-nodes cannot be combined with --to' };
+  }
+  if (allNodes && cursor !== undefined) {
+    return { ok: false, error: '--all-nodes cannot be combined with --cursor' };
+  }
+  if (allNodes && (connectToken !== undefined || caFile !== undefined)) {
+    return { ok: false, error: '--all-nodes uses each node token_env; drop --connect-token/--ca' };
+  }
+  if (node !== undefined && connectUrl !== undefined) {
+    return { ok: false, error: '--node cannot be combined with --connect' };
+  }
+  if (node !== undefined && (connectToken !== undefined || caFile !== undefined)) {
+    return {
+      ok: false,
+      error: '--node uses its configured token_env/ca_file; drop --connect-token/--ca',
+    };
+  }
+
   if (
     (connectToken !== undefined || caFile !== undefined) &&
     connectUrl === undefined &&
@@ -2125,6 +2173,8 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
     ...(connectToken !== undefined ? { connectToken } : {}),
     ...(caFile !== undefined ? { caFile } : {}),
     ...(tenantId !== undefined ? { tenantId } : {}),
+    ...(node !== undefined ? { node } : {}),
+    allNodes,
     ...(to !== undefined ? { to } : {}),
     ...(teamId !== undefined ? { teamId } : {}),
     ...(agent !== undefined ? { agent } : {}),

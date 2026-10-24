@@ -725,6 +725,7 @@ describe('parseArgs - attention (0.22 S9.1)', () => {
       json: false,
       interactive: false,
       all: false,
+      allNodes: false,
       remember: false,
       yes: false,
     });
@@ -778,6 +779,36 @@ describe('parseArgs - attention (0.22 S9.1)', () => {
   it('--connect-token / --ca require --connect', () => {
     expect(err(['attention', '--connect-token', 't'])).toContain('requires --connect');
     expect(err(['attention', '--ca', 'ca.pem'])).toContain('requires --connect');
+  });
+
+  it('--node / --all-nodes select configured nodes and cannot cross connection flags', () => {
+    expect(ok(['attention', '--node', 'alpha', '--json']).attentionCommand).toMatchObject({
+      kind: 'list',
+      node: 'alpha',
+      allNodes: false,
+      json: true,
+    });
+    expect(ok(['attention', '--all-nodes']).attentionCommand).toMatchObject({ allNodes: true });
+
+    expect(err(['attention', 'respond', '--all-nodes', '--allow'])).toContain(
+      '--all-nodes is only valid',
+    );
+    expect(err(['attention', '--all-nodes', '--node', 'alpha'])).toContain(
+      'cannot be combined with --node',
+    );
+    expect(err(['attention', '--all-nodes', '--connect', 'https://a.example'])).toContain(
+      'cannot be combined with --connect',
+    );
+    expect(err(['attention', '--all-nodes', '--to', 'human@node-a:alpha'])).toContain(
+      'cannot be combined with --to',
+    );
+    expect(err(['attention', '--all-nodes', '--interactive'])).toContain(
+      'cannot be combined with --interactive',
+    );
+    expect(err(['attention', '--node', 'alpha', '--connect', 'https://a.example'])).toContain(
+      '--node cannot be combined with --connect',
+    );
+    expect(err(['attention', '--node', 'alpha', '--connect-token', 't'])).toContain('token_env');
   });
 
   it('--limit / --order / --status / --cursor enums', () => {

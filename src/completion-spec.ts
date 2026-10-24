@@ -325,6 +325,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
           '--order',
           '--limit',
           '--cursor',
+          '--node',
         ],
         flagValues: ATTENTION_FLAG_VALUES,
       },
@@ -332,6 +333,8 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     flags: [
       '--json',
       '--interactive',
+      '--node',
+      '--all-nodes',
       '--to',
       '--team',
       '--agent',
