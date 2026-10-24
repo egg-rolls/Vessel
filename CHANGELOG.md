@@ -23,10 +23,31 @@
 - hub 的节点 URL 归一化移到 `src/hub/node-url.ts`；行为不变。
 - canonical 方法表仍 **48**；federation 平面不受影响。
 
+### Fixed
+
+- **B-013 P1**：agents v2 快照损坏时先隔离为 `<path>.corrupt-<timestamp>` 保留原字节，
+  隔离失败则禁止后续写入，避免空 registry 覆盖唯一恢复副本。
+- **B-016 P2**：interactions 文件损坏 / 非法记录先隔离，不再静默丢弃后覆盖 audit / orphaned 数据。
+- **B-017 P2**：`team.json` 损坏时禁止 `ensureForWorkspace` / `seed` 同路径重建，
+  新增 `team_metadata_corrupt`（owner 端点 / `agent` 工具原样透出）。
+- **B-018 P2**：federation peer 重复 token（同值 / 同 `tokenEnv`）在归一化阶段拒绝；
+  `matchPeer` 不再 last-wins。
+- **B-015 P2**：`team post --mention` 用完整 roster（owner 私有 `team.roster`），不再受 20 窗口限制。
+- **B-021 P2**：tenant shutdown 先 drain 成员 run 再关 eventLog，避免 `session_event_log_closed`
+  丢尾部事件（5s 上限，超时 warn）。
+- **B-012 P1**（随 0.23.0 合入）：`attention respond --select/--all` 不再忽略 `--status`；
+  orphaned 不可应答，索引只来自同过滤的 pending 列表。
+- **B-014 / B-019 / B-020**（随 0.23.0 合入）：attention `--agent` 纯 id 不再调 `agents.list`；
+  Web Refresh 清 more 页 / cursor；`--interactive --json` 显式报错。
+- **E3**：basic-tools 新增 `${HOME}` 拼写与符号链接 denylist 守卫（2 条定向测试）。
+
 ### Known limitations
 
 - 跨节点投递只有 federation（team ↔ team）；worker / agent 跨节点寻址仍不提供。
 - Web 多节点连接（S9.4）仍未实现。
+- >100 人 Team 的 `--mention` 仍受 owner 端点上限约束（与 B-003 同类）。
+- 新 CLI 对旧 owner 进程（无 `team.roster`）得到显式 404；升级时先重启 REPL / owner。
+- drain 用 `user` 取消成员轮，成员无 runStore、不产 interrupted checkpoint。
 
 ## [0.22.0] - 2026-10-24
 

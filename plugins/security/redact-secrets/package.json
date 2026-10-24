@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/redact-secrets",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vessel-agent/core": "0.22.0"
+    "@vessel-agent/core": "0.22.1"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
