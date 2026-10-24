@@ -38,6 +38,10 @@ import {
   type AgentMessage,
   type AgentService,
   type AgentServiceOptions,
+  type AgentUpdateBatchInput,
+  type AgentUpdateField,
+  type AgentUpdateInput,
+  type AgentUpdateResult,
   type AttachOwnerInput,
   type BatchItemResult,
   type BatchResult,
@@ -124,15 +128,27 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
 
+/** 稳定错误码：只取错误对象自带的 string `code`，不猜测 / 不解析消息 */
+function errorCode(error: unknown): string | undefined {
+  return typeof error === 'object' &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : undefined;
+}
+
 /** 按输入顺序把 allSettled 转成逐条结果；单条失败不影响其它条目 */
 function settleBatch<T>(settled: PromiseSettledResult<T>[]): BatchResult<T> {
   return {
-    results: settled.map(
-      (item): BatchItemResult<T> =>
-        item.status === 'fulfilled'
-          ? { ok: true, status: item.value }
-          : { ok: false, error: errorText(item.reason) },
-    ),
+    results: settled.map((item): BatchItemResult<T> => {
+      if (item.status === 'fulfilled') return { ok: true, status: item.value };
+      const code = errorCode(item.reason);
+      return {
+        ok: false,
+        error: errorText(item.reason),
+        ...(code !== undefined ? { code } : {}),
+      };
+    }),
   };
 }
 
@@ -1252,6 +1268,127 @@ export class AgentServiceImpl implements AgentService {
     return { state: 'closed' };
   }
 
+  async update(input: AgentUpdateInput): Promise<AgentUpdateResult>;
+  async update(input: AgentUpdateBatchInput): Promise<BatchResult<AgentUpdateResult>>;
+  async update(
+    input: AgentUpdateInput | AgentUpdateBatchInput,
+  ): Promise<AgentUpdateResult | BatchResult<AgentUpdateResult>> {
+    await this.ready;
+    const record = input as unknown as Record<string, unknown>;
+    if ('updates' in record) {
+      if (record.id !== undefined || record.to !== undefined) {
+        throw new AgentError('invalid_input', 'pass either update fields or updates, not both');
+      }
+      const updates = record.updates;
+      if (!Array.isArray(updates)) {
+        throw new AgentError('invalid_input', 'updates must be an array');
+      }
+      if (updates.length === 0) {
+        throw new AgentError('invalid_input', 'updates must not be empty');
+      }
+      // 与 new / close 一致：条目并行，失败隔离，结果保持输入顺序。
+      const settled = await Promise.allSettled(
+        updates.map((entry) =>
+          isRecord(entry)
+            ? this.updateOne(entry)
+            : Promise.reject(new AgentError('invalid_input', 'updates entries must be objects')),
+        ),
+      );
+      return settleBatch(settled);
+    }
+    return this.updateOne(record);
+  }
+
+  /**
+   * 单条更新。
+   *
+   * - `name` 立即改并保持同 Team（unbound 为 tenant）内 present 成员唯一；
+   * - `model` / `systemPrompt` 只写入记录，已有 Body 不重建——下一次 spawn 才生效；
+   * - 事件 `agent.updated` 只带变化字段名，不带 prompt 正文。
+   */
+  private async updateOne(record: Record<string, unknown>): Promise<AgentUpdateResult> {
+    const ref = nonEmpty(record.id) ? record.id : nonEmpty(record.to) ? record.to : undefined;
+    if (ref === undefined) {
+      throw new AgentError('invalid_input', 'update requires id or to');
+    }
+    const target = this.resolveUpdateTarget(ref);
+    if (target.membership === 'left' || target.state === 'closed') {
+      throw new AgentError('member_closed', `member_closed: ${ref}`);
+    }
+
+    const name = readUpdateString(record, 'name');
+    const model = readUpdateString(record, 'model');
+    const systemPrompt = readUpdateString(record, 'systemPrompt');
+    if (name === undefined && model === undefined && systemPrompt === undefined) {
+      throw new AgentError('invalid_input', 'update requires name, model or systemPrompt');
+    }
+
+    const changed: AgentUpdateField[] = [];
+    if (name !== undefined && name !== target.name) {
+      this.assertNameAvailable(target, name);
+      target.name = name;
+      changed.push('name');
+    }
+    if (model !== undefined && model !== target.model) {
+      target.model = model;
+      changed.push('model');
+    }
+    if (systemPrompt !== undefined && systemPrompt !== target.systemPrompt) {
+      target.systemPrompt = systemPrompt;
+      changed.push('system_prompt');
+    }
+
+    this.registry.touch(target.id);
+    this.scheduleSnapshot();
+    if (changed.length > 0) {
+      // 只发字段名；prompt 正文永不进事件。
+      this.emit('agent.updated', target, { changed });
+    }
+    const affectsNextBody = changed.includes('model') || changed.includes('system_prompt');
+    return {
+      agent: toMemberStatus(target),
+      changed,
+      ...(affectsNextBody ? { applies_to: 'next_body' as const } : {}),
+    };
+  }
+
+  /** update 选择器：id / 当前 Body session 直取；否则唯一当前名字。 */
+  private resolveUpdateTarget(ref: string): MemberRecord {
+    const direct = this.registry.resolve(ref);
+    if (direct !== undefined) return direct;
+    const matches = this.registry.findByName(ref);
+    if (matches.length === 0) {
+      throw new AgentError('unknown_member', `unknown_member: ${ref}`);
+    }
+    // present 优先；只剩 left 时选中它，由 updateOne 返回 member_closed。
+    const present = matches.filter((record) => record.membership === 'present');
+    const pool = present.length > 0 ? present : matches;
+    if (pool.length > 1) {
+      const candidates = pool.map((record) => record.id).join(', ');
+      throw new AgentError('invalid_input', `ambiguous name: ${ref} candidates: ${candidates}`);
+    }
+    const [only] = pool;
+    if (only === undefined) {
+      throw new AgentError('unknown_member', `unknown_member: ${ref}`);
+    }
+    return only;
+  }
+
+  /** 与创建一致：present 成员在 Team 内唯一；unbound 成员在整个 tenant 内唯一。 */
+  private assertNameAvailable(target: MemberRecord, name: string): void {
+    const duplicate = this.registry
+      .findByName(name)
+      .some(
+        (record) =>
+          record.id !== target.id &&
+          record.membership === 'present' &&
+          (target.teamId === undefined || record.teamId === target.teamId),
+      );
+    if (duplicate) {
+      throw new AgentError('invalid_input', `duplicate member name: ${name}`);
+    }
+  }
+
   /**
    * roster add：绑定 Team 并把 `left` / `closed` 恢复为 `present`。
    *
@@ -2131,6 +2268,12 @@ function readRequiredString(record: Record<string, unknown>, key: string): strin
     throw new AgentError('invalid_input', `${key} must be a non-empty string`);
   }
   return value;
+}
+
+/** 缺省 → undefined；存在但为空 / 非字符串 → invalid_input（不静默忽略）。 */
+function readUpdateString(record: Record<string, unknown>, key: string): string | undefined {
+  if (!Object.hasOwn(record, key) || record[key] === undefined) return undefined;
+  return readRequiredString(record, key);
 }
 
 /** 消息体：非空且不超过上限 */

@@ -35,6 +35,8 @@ import { createNodeTokenControl } from './node-token-control';
 const AGENT_STATE_EVENTS = new Set([
   'agent.spawned',
   'agent.resumed',
+  // 0.25：改名会改变 roster / 目录展示名；meta 刷新只读 service.list。
+  'agent.updated',
   'agent.closed',
   'agent.rotated',
   'agent.rejoined',

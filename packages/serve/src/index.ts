@@ -6,6 +6,21 @@
  * 是 EventStream 的消费者（与 TUI 的 StreamRenderer 同构），不经过 PluginHost、不修改 core。
  */
 
+export type {
+  AgentCloseBatchResultLike,
+  AgentCloseItemLike,
+  AgentCloseOkLike,
+  AgentControlLike,
+  AgentCreateLikeInput,
+  AgentLifecycleBatchResultLike,
+  AgentLifecycleFailLike,
+  AgentLifecycleItemLike,
+  AgentLifecycleOkLike,
+  AgentStateLike,
+  AgentStatusLike,
+  AgentUpdateLikeInput,
+  AgentVisibilityLike,
+} from './agent-control.js';
 export {
   type BackpressureThresholds,
   ClientBackpressure,

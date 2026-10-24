@@ -644,3 +644,44 @@ export const teamDetailSchema = {
     messages: { type: 'array', items: teamMessageSchema },
   },
 };
+
+// ── 0.25：canonical agent 生命周期（agents.create|update|close） ──
+
+/**
+ * 成员对外状态（MemberStatus）。只声明对外字段；
+ * model / system_prompt 不进入 DTO（只落快照，由下一次 spawn 使用）。
+ */
+export const agentStatusSchema = {
+  type: 'object',
+  required: ['id', 'session_id', 'owner', 'visibility', 'state'],
+  properties: {
+    id: { type: 'string' },
+    session_id: { type: 'string' },
+    name: { type: 'string' },
+    parent_id: { type: 'string' },
+    owner: { type: 'string' },
+    visibility: { type: 'string', enum: ['private', 'team', 'tenant'] },
+    state: {
+      type: 'string',
+      enum: [
+        'created',
+        'idle',
+        'running',
+        'waiting_permission',
+        'completed',
+        'failed',
+        'cancelled',
+        'closed',
+        'stale',
+      ],
+    },
+    presence: { type: 'string', enum: ['live', 'gone'] },
+    membership: { type: 'string', enum: ['present', 'left'] },
+    team_id: { type: 'string' },
+    epoch: { type: 'integer', minimum: 0 },
+    current_tool: { type: 'string' },
+    last_seen: { type: 'number' },
+    usage: usageSchema,
+    body_history: { type: 'array', items: agentBodyHistoryEntrySchema },
+  },
+};

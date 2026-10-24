@@ -8,6 +8,7 @@
 import type { Logger } from '@vessel-agent/core';
 import type { VesselConfig } from '../packages/config/src/index';
 import type {
+  AgentControlLike,
   FederationGatewayOptions,
   HubControlLike,
   HubTeamScopeLike,
@@ -33,6 +34,11 @@ export interface GatewayControlPlaneOptions {
    * 未提供时方法仍在 manifest 中，handler 返回 not_found。
    */
   teams?: TeamControlLike;
+  /**
+   * 0.25：canonical agent 生命周期注入面（bootstrap 的 AgentService 适配器）。
+   * 未提供时方法仍在 manifest 中，handler 返回 not_found。
+   */
+  agentControl?: AgentControlLike;
   /**
    * 0.5.4 P2-1：按请求 tenant 解析控制面。
    * 仅返回已构造 bundle 的 tenant；未配置 / 未启用时返回 undefined。
@@ -76,6 +82,8 @@ export function buildGatewayControlPlane(
 
   // 0.19 S3：只透传 canonical `teams.*` 的 TeamControlLike。
   if (options.teams) controlPlane.teams = options.teams;
+  // 0.25：canonical `agents.create|update|close`（生产装配始终存在，除 agent 关闭）。
+  if (options.agentControl) controlPlane.agent = options.agentControl;
 
   if (options.feishuFor) controlPlane.feishuFor = options.feishuFor;
 

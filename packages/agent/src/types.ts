@@ -343,6 +343,41 @@ export interface NewBatchInput {
   members: NewMemberInput[];
 }
 
+/** update 可修改的配置字段（事件里只出现这些名字，绝不带 prompt 正文） */
+export type AgentUpdateField = 'name' | 'model' | 'system_prompt';
+
+/**
+ * 更新成员（0.25）。
+ *
+ * 选择器 `id` / `to` 接受成员 id、当前 Body session 或唯一当前名字（与其它入口一致）。
+ * `name` 是**新名字**，不是选择器；改名立即生效。
+ * `model` / `systemPrompt` 只写入记录，由**下一次 spawn 的 Body** 使用；
+ * 当前已存在的 Body 不会因 update 而重建。
+ */
+export interface AgentUpdateInput {
+  /** 选择器：成员 id / 当前 Body session / 唯一当前名字 */
+  id?: string;
+  /** 选择器别名（与 close 的 `to` 一致） */
+  to?: string;
+  /** 新名字 */
+  name?: string;
+  model?: string;
+  systemPrompt?: string;
+}
+
+/** 批量更新（条目并行，逐条结果；与 new / close 同语义） */
+export interface AgentUpdateBatchInput {
+  updates: AgentUpdateInput[];
+}
+
+/** 更新结果：`applies_to: 'next_body'` 只在 model / systemPrompt 实际变化时出现 */
+export interface AgentUpdateResult {
+  agent: MemberStatus;
+  /** 实际变化的字段名（顺序：name → model → system_prompt） */
+  changed: AgentUpdateField[];
+  applies_to?: 'next_body';
+}
+
 /**
  * 注册 root owner（REPL 主 agent）。不调用 runtime.spawn。
  * 重复 attach 幂等；stale 记录恢复为 idle。
@@ -503,8 +538,14 @@ export interface CloseResult {
   state: 'closed';
 }
 
-/** 批量逐条结果；成功条目放在 status */
-export type BatchItemResult<T> = { ok: true; status: T } | { ok: false; error: string };
+/**
+ * 批量逐条结果；成功条目放在 status。
+ * 0.25：失败条目可选带稳定 `code`（AgentError.code / 其它错误对象的 code），
+ * 供 canonical RPC / owner 端点共用的逐条结果使用。
+ */
+export type BatchItemResult<T> =
+  | { ok: true; status: T }
+  | { ok: false; error: string; code?: string };
 
 /** 批量结果（与输入顺序一致；单条失败不影响其它条目） */
 export interface BatchResult<T> {
@@ -632,6 +673,13 @@ export interface AgentService {
   'new'(input: NewBatchInput): Promise<BatchResult<MemberStatus>>;
   /** 注册 root owner；不 spawn，重复调用幂等 */
   attachOwner(input: AttachOwnerInput): Promise<MemberStatus>;
+  /**
+   * 更新名字 / model / systemPrompt；名字立即生效且保持同 Team（unbound 为 tenant）
+   * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 Body。
+   */
+  update(input: AgentUpdateInput): Promise<AgentUpdateResult>;
+  /** 批量更新：条目并行，按输入顺序返回逐条结果 */
+  update(input: AgentUpdateBatchInput): Promise<BatchResult<AgentUpdateResult>>;
   send(input: SendInput): Promise<SendResult>;
   send(input: SendBatchInput): Promise<BatchResult<SendResult>>;
   /**
