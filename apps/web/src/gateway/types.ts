@@ -253,6 +253,28 @@ export interface TeamSummary {
   handoff_path?: string;
   policy?: Record<string, unknown>;
   created_at: number;
+  /** 0.24 additive：归档时间；缺失 = active（DECISION-040）。 */
+  archived_at?: number;
+}
+
+/** `teams.create` 参数（DECISION-040 §2.1）。 */
+export interface TeamCreateInput {
+  workspace: string;
+  name?: string;
+  description?: string;
+  default_principal?: string;
+  handoff_path?: string;
+  policy?: Record<string, unknown>;
+}
+
+/** `teams.update` 参数（DECISION-040 §2.2）；null = 清空该字段。 */
+export interface TeamUpdateInput {
+  team_id: string;
+  name?: string;
+  description?: string | null;
+  default_principal?: string | null;
+  handoff_path?: string | null;
+  policy?: Record<string, unknown>;
 }
 
 /** teams.get.members 元素。 */
@@ -585,6 +607,8 @@ export interface HelloInfo {
   latest_seq: number;
   /** 0.5：token 解析出的 tenant（additive） */
   tenant_id?: string;
+  /** 0.24 additive：进程 incarnation；仅当前 WS 节点可读。 */
+  incarnation?: string;
 }
 
 /** RPC 响应信封（0.5） */

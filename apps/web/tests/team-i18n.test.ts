@@ -4,8 +4,7 @@ import { messages as en } from '../src/i18n/messages/en';
 import { messages as zhCN } from '../src/i18n/messages/zh-CN';
 
 const TEAM_KEYS = Object.keys(zhCN).filter(
-  (key) =>
-    key.startsWith('team.') || key === 'nav.domain.team' || key.startsWith('breadcrumb.team'),
+  (key) => key.startsWith('team.') || key.startsWith('breadcrumb.team'),
 );
 
 const ERROR_CODES = [
@@ -22,8 +21,7 @@ afterEach(() => setLocale('zh-CN'));
 describe('Team i18n catalog', () => {
   test('zh-CN and en expose the same Team key set', () => {
     const enTeamKeys = Object.keys(en).filter(
-      (key) =>
-        key.startsWith('team.') || key === 'nav.domain.team' || key.startsWith('breadcrumb.team'),
+      (key) => key.startsWith('team.') || key.startsWith('breadcrumb.team'),
     );
     expect(TEAM_KEYS.length).toBeGreaterThan(0);
     expect(enTeamKeys.sort()).toEqual([...TEAM_KEYS].sort());

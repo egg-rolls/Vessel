@@ -154,6 +154,8 @@ export function TeamChat({
   const team = detail?.team;
   const members = useMemo(() => detail?.members ?? [], [detail]);
   const connected = hasToken && connectionState === 'open';
+  // 归档 Team 只读：日志仍可轮询查看，但不接受新消息。
+  const archived = team?.archived_at !== undefined;
 
   useEffect(() => {
     const update = () => setNarrow(window.innerWidth <= NARROW_MAX_WIDTH);
@@ -224,7 +226,7 @@ export function TeamChat({
 
   const handleSend = async () => {
     const content = draft.trim();
-    if (!content || sending || !hasToken || connectionState !== 'open') return;
+    if (!content || sending || !hasToken || connectionState !== 'open' || archived) return;
     const mentions = mentionIds(chips);
     const localId = `local:${crypto.randomUUID()}`;
     const ts = Date.now();
@@ -318,6 +320,12 @@ export function TeamChat({
             <span className="team-chat-principal mono">
               {t('team.chat.defaultPrincipalLabel')}: {team?.default_principal || '—'}
             </span>
+            {archived && (
+              <span className="team-chat-archived">
+                {t('teams.chat.archived')}
+                <span className="team-chat-archived-hint"> {t('teams.chat.archivedHint')}</span>
+              </span>
+            )}
             <span>
               {t('team.chat.memberWindow', { shown: members.length, total: memberTotal })}
             </span>
@@ -424,7 +432,8 @@ export function TeamChat({
               onSend={() => void handleSend()}
               sending={sending}
               hasToken={hasToken}
-              connected={connected}
+              connected={connected && !archived}
+              disabled={archived}
               members={members}
               targetLabel={team?.name ?? teamId}
               retryHint={retryHint}

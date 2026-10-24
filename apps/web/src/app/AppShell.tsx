@@ -5,17 +5,20 @@ import { ModalShell } from '../components/Modal';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
 import { useToast } from '../components/ToastProvider';
+import { AgentsView } from '../domains/agents/AgentsView';
 import { ChatView } from '../domains/chat/ChatView';
 import {
   orphanedDismissIds,
   pendingPermissionsOutsideView,
 } from '../domains/chat/pending-permissions';
 import { browserSessionStorage, clearLastSession } from '../domains/chat/session-selection';
+import { HubView } from '../domains/hub/HubView';
 import { IntegrationsView } from '../domains/integrations/IntegrationsView';
+import { NodePanelView } from '../domains/nodes/NodePanelView';
 import { ObserveView } from '../domains/observe/ObserveView';
 import { RunsView } from '../domains/runs/RunsView';
 import { SettingsView } from '../domains/settings/SettingsView';
-import { TeamView } from '../domains/team/TeamView';
+import { TeamsView } from '../domains/teams/TeamsView';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
@@ -55,7 +58,6 @@ function writeNavPreference(collapsed: boolean): void {
 
 const SETTINGS_NAV: readonly { tab: SettingsTab; keywords: string[] }[] = [
   { tab: 'connection', keywords: ['gateway', 'token', 'url', 'connect'] },
-  { tab: 'nodes', keywords: ['team', 'peers', 'agents', 'nodes'] },
   { tab: 'config', keywords: ['config', 'sources', 'paths'] },
   { tab: 'capabilities', keywords: ['capabilities', 'methods', 'plugins'] },
   { tab: 'tenants', keywords: ['tenant', 'quota', 'admin'] },
@@ -534,7 +536,10 @@ export function AppShell() {
                 panes={panes}
               />
             )}
-            {route.domain === 'team' && <TeamView route={route} navigate={navigate} />}
+            {route.domain === 'hub' && <HubView route={route} navigate={navigate} />}
+            {route.domain === 'nodes' && <NodePanelView route={route} navigate={navigate} />}
+            {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} />}
+            {route.domain === 'agents' && <AgentsView route={route} navigate={navigate} />}
             {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
             {route.domain === 'integrations' && (
               <IntegrationsView route={route} navigate={navigate} />

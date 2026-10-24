@@ -1,0 +1,112 @@
+/* ─────────────────────────────────────────────────────────────
+   Hub（0.24 Web IA）：hub 三态 + node 卡片 + Add node 命令。
+   全部 .hub- / .hub-node- 前缀；卡片沿用 panel / diag-list。
+   ───────────────────────────────────────────────────────────── */
+
+.hub-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.hub-status .diag-list {
+  margin-top: var(--space-3);
+}
+
+.hub-node-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.hub-node-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.hub-node-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.hub-node-name {
+  font-weight: 600;
+}
+
+.hub-node-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.hub-node-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.hub-node-meta .dim {
+  color: var(--faint);
+}
+
+.hub-node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.hub-add-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.hub-add-row {
+  display: grid;
+  grid-template-columns: minmax(140px, max-content) minmax(0, 1fr) max-content;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.hub-add-label {
+  color: var(--faint);
+  font-size: var(--text-sm);
+}
+
+.hub-add-command {
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+.hub-add-connection {
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 680px) {
+  .hub-add-row {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+
+  .hub-add-label {
+    grid-column: 1 / -1;
+  }
+}

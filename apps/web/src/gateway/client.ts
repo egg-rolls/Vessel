@@ -51,9 +51,11 @@ import type {
   TaskEntry,
   TaskResponse,
   TasksResponse,
+  TeamCreateInput,
   TeamDetail,
   TeamPostResult,
   TeamSummary,
+  TeamUpdateInput,
   TenantInfo,
   TenantResponse,
   ToolInfo,
@@ -806,6 +808,19 @@ export class GatewayClient {
     mentions?: string[];
   }): Promise<TeamPostResult> {
     return this.rpc<TeamPostResult>('teams.post', input);
+  }
+
+  /** DECISION-040：结果形状为 TeamSummary。 */
+  createTeam(input: TeamCreateInput): Promise<TeamSummary> {
+    return this.rpc<TeamSummary>('teams.create', input);
+  }
+
+  updateTeam(input: TeamUpdateInput): Promise<TeamSummary> {
+    return this.rpc<TeamSummary>('teams.update', input);
+  }
+
+  archiveTeam(teamId: string): Promise<TeamSummary> {
+    return this.rpc<TeamSummary>('teams.archive', { team_id: teamId });
   }
 
   // ── 0.3 REST（durable / MCP）──────────────────

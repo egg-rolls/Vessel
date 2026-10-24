@@ -20,3 +20,7 @@
 @import "./styles/prompt-dock.css";
 @import "./styles/team.css";
 @import "./styles/domains/attention.css";
+@import "./styles/domains/hub.css";
+@import "./styles/domains/nodes.css";
+@import "./styles/domains/teams.css";
+@import "./styles/domains/agents.css";
