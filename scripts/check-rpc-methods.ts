@@ -73,6 +73,11 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'teams.get': 'read',
   'teams.post': 'write',
   'teams.members': 'write',
+  // 0.24 S10.3：Team CRUD（create 仅 human / admin；update / archive 可在
+  // team-scoped control 白名单内，但只能操作自己的 team）。
+  'teams.create': 'write',
+  'teams.update': 'write',
+  'teams.archive': 'write',
   // 0.19 S4：人工预算 status / override（不进 control scope 白名单）。
   'teams.budget': 'write',
   // 0.19 S5：hub 控制面。exchange 换短期 control token；revoke / list 只允许 admin。

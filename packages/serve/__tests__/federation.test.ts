@@ -38,6 +38,18 @@ class FakeTeams implements TeamControlLike {
     this.tenantId = tenantId;
   }
 
+  async create(): Promise<never> {
+    throw new Error('create is not used by federation tests');
+  }
+
+  async update(): Promise<never> {
+    throw new Error('update is not used by federation tests');
+  }
+
+  async archive(): Promise<never> {
+    throw new Error('archive is not used by federation tests');
+  }
+
   async list(): Promise<TeamSummaryLike[]> {
     return [];
   }

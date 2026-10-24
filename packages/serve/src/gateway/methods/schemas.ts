@@ -427,6 +427,18 @@ export const teamSummarySchema = {
     member_count: { type: 'integer', minimum: 0 },
     online_count: { type: 'integer', minimum: 0 },
     created_at: { type: 'number' },
+    // S10.3：归档时间（additive）；缺省 = active。
+    archived_at: { type: 'number' },
+  },
+};
+
+/** teams.create 结果（S10.3）。 */
+export const teamCreateResultSchema = {
+  type: 'object',
+  required: ['team', 'deduplicated'],
+  properties: {
+    team: teamSummarySchema,
+    deduplicated: { type: 'boolean' },
   },
 };
 

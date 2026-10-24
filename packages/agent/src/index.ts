@@ -128,7 +128,10 @@ export {
   type SendResult,
   type TeamAgentSendInput,
   type TeamAgentSendResult,
+  type TeamArchiveInput,
   type TeamBinder,
+  type TeamCreateInput,
+  type TeamCreateResult,
   type TeamDeclaration,
   type TeamDelivery,
   type TeamDetail,
@@ -148,5 +151,7 @@ export {
   type TeamStore,
   type TeamSummary,
   type TeamSystemEvent,
+  type TeamUpdateInput,
+  type TeamUpdatePatch,
   type TurnOutcome,
 } from './types.js';

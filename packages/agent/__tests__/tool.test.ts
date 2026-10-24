@@ -33,6 +33,15 @@ function makeTeam(roster: TeamMemberSummary[] = []): {
   const calls: TeamRecorder = { identify: [], listForCaller: [], post: [], send: [] };
   const team: AgentTeamService = {
     tenantId: 'default',
+    async create() {
+      throw new Error('not used');
+    },
+    async update() {
+      throw new Error('not used');
+    },
+    async archive() {
+      throw new Error('not used');
+    },
     async list() {
       return [];
     },

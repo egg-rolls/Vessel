@@ -325,6 +325,15 @@ describe('createHubControl with a real TeamService', () => {
         return record;
       },
       async seed() {},
+      async create() {
+        return { record, deduplicated: true };
+      },
+      async update() {
+        return record;
+      },
+      async archive() {
+        return record;
+      },
       get(teamId: string) {
         return teamId === 'alpha' ? record : undefined;
       },

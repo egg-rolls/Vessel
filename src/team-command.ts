@@ -1,5 +1,5 @@
 /**
- * `vessel team list|get|post|members|budget`（0.19 S3 / S4）。
+ * `vessel team list|get|post|members|budget|create|update|archive`（0.19 S3 / S4；S10.3）。
  *
  * 只做参数映射、roster 名字解析、渲染与 exit code；
  * Team 数据与投递全部在 REPL owner 的 TeamService。
@@ -201,6 +201,25 @@ function formatPostResult(result: unknown): { text: string; failed: boolean } {
   return { text: lines.join('\n'), failed };
 }
 
+/** create / update / archive 的 TeamSummary 输出（create 带 deduplicated）。 */
+function formatTeamWrite(result: unknown): string {
+  if (!isRecord(result)) return JSON.stringify(result, null, 2);
+  const team = isRecord(result.team) ? result.team : result;
+  const deduplicated = result.deduplicated === true;
+  const lines = [
+    `${ui.symbol('ok')} ${deduplicated ? 'team exists' : 'team saved'} ${asString(team.team_id)}`,
+    ui.kv('name', asString(team.name)),
+    ui.kv('description', asString(team.description, '')),
+    ui.kv('default_principal', asString(team.default_principal, '')),
+    ui.kv('workspace', asString(team.workspace)),
+    ui.kv('members', String(team.member_count ?? 0)),
+    ui.kv('online', String(team.online_count ?? 0)),
+  ];
+  if (team.archived_at !== undefined) lines.push(ui.kv('archived_at', String(team.archived_at)));
+  if (isRecord(result.team)) lines.push(ui.kv('deduplicated', String(deduplicated)));
+  return lines.join('\n');
+}
+
 function formatMembersResult(result: unknown): string {
   if (!isRecord(result)) return JSON.stringify(result, null, 2);
   return [
@@ -365,6 +384,52 @@ async function execute(
   if (command.kind === 'list') {
     const value = await callAgentOwner(record, 'team.list', {}, fetchOptions);
     return { ok: true, value, text: formatTeamList(value) };
+  }
+
+  if (command.kind === 'create') {
+    const value = await callAgentOwner(
+      record,
+      'team.create',
+      {
+        workspace: command.workspace,
+        ...(command.name !== undefined ? { name: command.name } : {}),
+        ...(command.description !== undefined ? { description: command.description } : {}),
+        ...(command.defaultPrincipal !== undefined
+          ? { default_principal: command.defaultPrincipal }
+          : {}),
+        ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
+  }
+
+  if (command.kind === 'update') {
+    const value = await callAgentOwner(
+      record,
+      'team.update',
+      {
+        team_id: command.teamId,
+        ...(command.name !== undefined ? { name: command.name } : {}),
+        ...(command.description !== undefined ? { description: command.description } : {}),
+        ...(command.defaultPrincipal !== undefined
+          ? { default_principal: command.defaultPrincipal }
+          : {}),
+        ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
+  }
+
+  if (command.kind === 'archive') {
+    const value = await callAgentOwner(
+      record,
+      'team.archive',
+      { team_id: command.teamId },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
   }
 
   if (command.kind === 'get') {

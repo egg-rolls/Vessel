@@ -3,6 +3,34 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.24.0] - 2026-10-24
+
+> 0.24.0（基于 `0.23-multinode`，未发布；manifest bump 由收口执行）：
+> S10 默认全开 + 本地 hub + Team CRUD。未 tag、未 `npm publish`。
+
+### Added
+
+- **Team CRUD**：canonical `teams.create` / `teams.update` / `teams.archive`
+  （write，48 → **51**）；`TeamRecord` / `TeamSummary` additive `archived_at?`。
+  create 按 workspace 幂等去重，仅 human / admin；update 支持 `null` 清空与
+  policy 整体替换；archive 拒绝 present 成员（`team_not_empty`），归档后
+  post / members / budget override 返回 `conflict`（`team_archived`），
+  日志 / session / agent 历史保留。CLI 增加 `vessel team create|update|archive`；
+  owner 端点增加 `team.create|update|archive`。hard delete 未实现（Later）。
+- **本地 hub 自动启动**：`hub.autoStart`（默认 true）让 gateway 在
+  `hub.dataDir`（缺省 `<dataDir>/hub`）启动同进程 hub，只监听 `127.0.0.1`，
+  `<hubDataDir>/hub.lock` 单实例；本机 node 自动登记目录，不自动 join / 配对。
+  `hub.autoStart: false` 与 standalone `vessel hub start` 保留。
+
+### Changed
+
+- **默认开启**：`agent.enabled`（注册 `agent` 工具并启动 AgentService /
+  TeamService / owner）、`durable.enabled`、`evals.enabled`（`allowNetwork`
+  仍 false）、`federation.enabled`（空 peers 仍 fail closed）默认 true；
+  `feishu.enabled` / `serve.allowRemote` 保持 false。每项均可显式关闭。
+- 工具面：默认 4（`bash` / `read` / `edit` / `agent`）；交互 REPL / gateway
+  默认 5（+`ask_user`）。
+
 ## [0.23.0] - 2026-10-24
 
 > 0.23.0（基于 `main` 0.22.1，未发布）：S9.4 多节点 attention + Q-swarm attention 修复。

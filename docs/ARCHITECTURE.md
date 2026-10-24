@@ -656,17 +656,17 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `trace.enabled` / `level` / `retention_days` / `max_runs` / `max_bytes` | 缺省 true / `full` / 30 / 1000 / 1 GiB；`level` 为 `full`\|`metadata`\|`off`；`max_bytes: 0` = 不限 |
 | `session.backend` | `file`（0.5 默认）/ `sqlite`（0.4 默认，仍可用）/ `memory`；`storagePath` 对应 sqlite 文件或 file 目录 |
 | `update.autoCheck` / `channel` / `source` | 交互启动后台检查（默认 true）、`latest` / `beta`、自定义清单源 |
-| `agent.enabled` / `ownerId` / `model` / `limits` / `termination` | AgentService 与内置 `agent` 工具；默认 false（0.17） |
+| `agent.enabled` / `ownerId` / `model` / `limits` / `termination` | AgentService 与内置 `agent` 工具；默认 true（0.24；显式 false 关闭） |
 | `agent.defaultVisibility` / `permissionMode` / `readOnlyTools` | 成员可见性与权限模式：`bridge`（交互默认）/ `allow`（headless 默认）/ `deny`（保留 `readOnlyTools`，默认 `["read"]`）；0.17 |
 | `agent.followReplies` / `cwd` / `systemPrompt` | 回复注入策略（不自动续跑父 turn）/ 默认工作目录 / 主 agent systemPrompt |
 | `mcp_servers.<name>.*` | MCP server：`transport`（stdio/http）、`command`/`args`/`env`、`url`/`headers`、`enabled`、`connect_timeout_ms`、`tool_timeout_ms`、`tool_prefix`、`auto_approve_tools` |
-| `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 false；`backend: file \| memory`；0.5 起 `path` 默认 `<data_dir>/tenants/<tenant_id>/runs`，显式配置优先但可逃出 tenant（启动 warn）；0.3 只接受 `checkpoint_every: iteration` |
+| `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 true（0.24；显式 false 关闭）；`backend: file \| memory`；0.5 起 `path` 默认 `<data_dir>/tenants/<tenant_id>/runs`，显式配置优先但可逃出 tenant（启动 warn）；0.3 只接受 `checkpoint_every: iteration` |
 | `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true`、token 非空**且 TLS cert/key 成对**（0.6 起强制） |
 | `serve.allowed_origins` | 独立前端 Origin allowlist；绝对 http(s) origin，禁止 `*` / path / query；非回环必须 https；HTTP 与 WS 共用（0.6） |
 | `connect.token` / `token_env` / `ca_file` | `--connect` 客户端 token 与 CA；token 优先级 CLI > env（`VESSEL_CONNECT_TOKEN`，缺失时回退 `VESSEL_GATEWAY_TOKEN`；`token_env` 由 loader 在 env 层解析）> config（0.6；0.8.1 统一经 loader，`--ca` 对应 `VESSEL_CONNECT_CA`） |
 | `transport.kind` / `transport.token` | 只剩 `in-process`；`transport.token` 是 gateway token 的末位回退。`loopback` / `remote` / `transport.nodes[]` 已于 0.22.1 删除 |
 | `serve.token` / `serve.token_env` / `serve.tokens` / `serve.admin_token` | 0.5：`serve.token` 为 default/admin 兼容单 token；`serve.tokens` 为 token → `{tenant_id, role}`；`serve.admin_token` 为 `*`/admin；解析顺序见 ADR-050 |
-| `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 false / `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
+| `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 true（0.24；显式 false 关闭）/ `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
 | `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
 
@@ -792,15 +792,15 @@ serve:
 
 ## 11. 工具集：三个能力工具，为什么这么少
 
-默认运行期 **3 个**工具：`plugins/tools/basic-tools` 提供 **`bash` / `read` / `edit`** 三个**能力工具**。`agent` 内置在 `packages/agent`，由 `agent.enabled: true` 注册（0.17）；`team_*` / `delegate_task` 已删除。
+默认运行期 **4 个**工具：`plugins/tools/basic-tools` 提供 **`bash` / `read` / `edit`** 三个**能力工具**，`packages/agent` 提供内置 `agent`（0.24 起默认注册；显式 `agent.enabled: false` 关闭）；`team_*` / `delegate_task` 已删除。
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
-| `agent` | `agent.enabled: true`；owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，`new` / `close` 只给 owner）；权限模式与成员配置见 `agent.*`（0.17；rotate 见 0.19 S2；Team 动作见 0.19 S3） |
+| `agent` | 默认注册（0.24）；显式 `agent.enabled: false` 关闭。owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，`new` / `close` 只给 owner）；权限模式与成员配置见 `agent.*`（0.17；rotate 见 0.19 S2；Team 动作见 0.19 S3） |
 | `ask_user` | 交互 REPL（stdin 是 TTY）或 `gateway start` / `--serve`；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭（0.14.1） |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：**默认 3 / `agent.enabled: true` 4 / 交互 REPL 或 gateway-serve 4（+`ask_user`）/ 交互 + agent 5**；配置 MCP 后为 **3 + N 个 MCP 工具**（N 由 server 提供）。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
+口径：**默认 4 / 显式 `agent.enabled: false` 3 / 交互 REPL 或 gateway-serve 5（+`ask_user`）/ 交互且关闭 agent 4**；配置 MCP 后在基础上加 **N 个 MCP 工具**（N 由 server 提供）。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -982,7 +982,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 ### 13.7 统一 RPC 方法表（0.5）
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources` / `config.set`（0.15，write）；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）/ `agents.tree`（0.15，read）；`tasks.list|get`（0.15，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`interactions.list`（0.18，read）；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）；`teams.list|get|post|members|budget`（S3 / S4）；`auth.exchange` / `auth.revoke` / `auth.tokens`（S5 hub 控制面）。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources` / `config.set`（0.15，write）；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）/ `agents.tree`（0.15，read）；`tasks.list|get`（0.15，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`interactions.list`（0.18，read）；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）；`teams.list|get|post|members|budget`（S3 / S4）/ `teams.create|update|archive`（0.24 S10.3）；`auth.exchange` / `auth.revoke` / `auth.tokens`（S5 hub 控制面）。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -1032,12 +1032,15 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `teams.post` | write |
 | `teams.members` | write |
 | `teams.budget` | write |
+| `teams.create` | write |
+| `teams.update` | write |
+| `teams.archive` | write |
 | `auth.exchange` | write |
 | `auth.revoke` | admin |
 | `auth.tokens` | admin |
 <!-- rpc-methods:end -->
 
-0.19 S3 + S5 + S4 起 canonical 方法总数 **48**（47 个 domain 方法 + `events.subscribe`）；0.20 的 fork 与跨节点 federation 不新增 canonical，仍为 **48**。0.19 S3 新增 `teams.list` / `teams.get`（`read`）与 `teams.post` / `teams.members`（`write`，`add|remove`），由结构化 `TeamControlLike` 注入，未注入时返回 `not_found`；canonical 是复数 `teams.*`，与 legacy `team.*`（单数前缀）无关。0.19 S4 新增 `teams.budget`（`write`，`status|override`），同样由 `TeamControlLike` 注入；它**不在** team-scoped control token 白名单，未注入时返回 `not_found`。0.19 S5 新增 `auth.exchange`（`write`）、`auth.revoke` / `auth.tokens`（`admin`），用于 hub 控制面的短期 token 交换与吊销。0.18 移除 workflow 的 5 个方法（`workflow.list|start|get|resume|cancel`，ADR-090），并新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与 ask；0.19 S4 起 ask 也持久化）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
+0.24 S10.3 新增 `teams.create` / `teams.update` / `teams.archive`（`write`），canonical 方法总数 **51**（50 个 domain 方法 + `events.subscribe`）：create 只允许 human / admin，team-scoped token 返回 `forbidden`；update / archive 在 team-scoped control 白名单内，只能操作自己的 team；archive 有 present 成员时返回 `conflict`（`team_not_empty`），归档后 post / members / budget override 返回 `conflict`（`team_archived`），日志与会话历史保留。0.19 S3 + S5 + S4 起 canonical 方法总数为 48（0.24 起 51）；0.20 的 fork 与跨节点 federation 不新增 canonical，仍为 **48**。0.19 S3 新增 `teams.list` / `teams.get`（`read`）与 `teams.post` / `teams.members`（`write`，`add|remove`），由结构化 `TeamControlLike` 注入，未注入时返回 `not_found`；canonical 是复数 `teams.*`，与 legacy `team.*`（单数前缀）无关。0.19 S4 新增 `teams.budget`（`write`，`status|override`），同样由 `TeamControlLike` 注入；它**不在** team-scoped control token 白名单，未注入时返回 `not_found`。0.19 S5 新增 `auth.exchange`（`write`）、`auth.revoke` / `auth.tokens`（`admin`），用于 hub 控制面的短期 token 交换与吊销。0.18 移除 workflow 的 5 个方法（`workflow.list|start|get|resume|cancel`，ADR-090），并新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与 ask；0.19 S4 起 ask 也持久化）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
 
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
@@ -1681,7 +1684,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 28.2 协议 result schema
 
-- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.15 增加 `agents.tree` / `tasks.list` / `tasks.get` / `config.set` 后为 44 个；0.18 增加 `interactions.list` 后为 45 个；2026-10-22 移除 workflow 的 5 个方法后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.19 S3 增加 `teams.list` / `teams.get` / `teams.post` / `teams.members`、S5 增加 `auth.exchange` / `auth.revoke` / `auth.tokens`、S4 增加 `teams.budget` 后为 **48** 个 = 47 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval 片段）。
+- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.15 增加 `agents.tree` / `tasks.list` / `tasks.get` / `config.set` 后为 44 个；0.18 增加 `interactions.list` 后为 45 个；2026-10-22 移除 workflow 的 5 个方法后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.19 S3 增加 `teams.list` / `teams.get` / `teams.post` / `teams.members`、S5 增加 `auth.exchange` / `auth.revoke` / `auth.tokens`、S4 增加 `teams.budget` 后为 48 个；0.24 S10.3 增加 `teams.create` / `teams.update` / `teams.archive` 后为 **51** 个 = 50 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval 片段）。
 - **支持子集**：`object` / `array` / `string` / `number` / `integer` / `boolean` + `required` / `properties` / `items` / `enum` / `minLength` / `maxLength` / `minimum` / `maximum`；不使用 `oneOf` / `$ref` / `additionalProperties`，不新增依赖。
 - **校验**：仅当 `VESSEL_VALIDATE_RESULTS=1` 时在 RPC 分发层校验；违反返回 `internal`（details 仅 `method` / `path`）并发布 `rpc.result_invalid`。默认关闭，生产热路径不变。
 - **版本单源**：`PROTOCOL_VERSION`（`packages/serve/src/protocol.ts`）是唯一常量，`RPC_VERSION` 为兼容别名；HTTP / WS / `hello` / team / transport 不再硬编码 `1`。
@@ -2561,8 +2564,9 @@ interface LimitBlock {
 
 ### 45.3 canonical 与边界
 
-- 0.20 新增 fork 与 federation 传输面，但**不新增 canonical 方法**，方法表仍 **48**
-  （47 个 domain 方法 + `events.subscribe`）。
+- 0.20 新增 fork 与 federation 传输面，但**不新增 canonical 方法**；0.24 S10.3 增加
+  `teams.create` / `teams.update` / `teams.archive` 后方法表为 **51**
+  （50 个 domain 方法 + `events.subscribe`）。
 - `packages/serve` 仍不依赖 `@vessel-agent/agent`；`packages/core` 不出现 Team / federation 概念。
 
 ## 46. 0.21.0 跨节点成员寻址（S8，已实现）
@@ -2692,3 +2696,43 @@ interface LimitBlock {
   按需 `teams.list`（人类 token；不用 federation team-info）。
 - hub 目录只用于发现；Web 不消费 hub 数据面，也不经 hub 代理正文。
 - canonical 仍 **48**；不新增远程 agent 生命周期。
+
+## 49. 0.24.0 默认全开、本地 hub、Team CRUD（S10，已实现，未发布）
+
+### 49.1 默认开启
+
+- `agent.enabled` / `durable.enabled` / `evals.enabled` / `federation.enabled` /
+  `hub.autoStart` 缺省 **true**；每一项都可用显式 `false` 关闭。`feishu.enabled` /
+  `serve.allowRemote` 保持 false（外部凭据 / 网络暴露面）。
+- `federation.enabled` 默认开启不代表放行：`peers` 为空时仍 fail closed，
+  不生成凭据、不投递。
+- 工具面：默认 4（`bash` / `read` / `edit` / `agent`）；交互 REPL / gateway 另加
+  `ask_user`。`evals.allowNetwork` 仍默认 false，真实网络需配置 + CLI 双门控。
+
+### 49.2 本地 hub
+
+- `hub.autoStart`（默认 true）：gateway（`--serve` / `gateway start`）启动时在
+  `hub.dataDir`（缺省 `<dataDir>/hub`）启动同进程 hub，**只监听 `127.0.0.1`**，
+  端口取 `hub.listen.port` 否则 0。`hub.direction: 'node'` 时跳过（该节点加入远程 hub）。
+- 单实例：`<hubDataDir>/hub.lock` 独占锁（0600，`{pid,started_at,url?}`）；活进程持锁
+  返回 `hub_already_running`，陈旧锁回收；`stop()` 幂等释放。gateway 捕获该错误后按
+  `reused` 处理，不重复启动。
+- 本机 node 自动登记为目录记录（`pairing_id = node_id:tenant_id`，`direction: 'node'`），
+  只写 counts / teams / agents 白名单元数据；目录变化经 debounce 刷新，指针事件转发。
+  **不自动配对、不自动 join 远端、不自动接收远端 node、不代理正文。**
+
+### 49.3 Team CRUD
+
+- canonical 新增 `teams.create` / `teams.update` / `teams.archive`（write），总数 **51**。
+  create 只允许 human / admin（team-scoped token 返回 `forbidden`）；update / archive
+  允许 team-scoped token 但只能操作自己的 team（不匹配 `not_found`）。
+- `team.json` additive `archived_at?: number`；缺省 = active。create 以 workspace 幂等
+  去重（`deduplicated: true`），不覆盖既有 name / policy，不 spawn 成员。
+- update：`team_id` / `workspace` 不可变；`null` 清空可选项，`policy` 整体替换；
+  先原子落盘再改内存，失败不改内存。
+- archive：有 present 成员返回 `conflict`（`team_not_empty`）；归档后 post /
+  members / budget override 返回 `conflict`（`team_archived`），`get` / `roster` /
+  `readLog` 仍可读；保留 `team.json`、`log.ndjson`、session / agent 历史。
+  **hard delete 不实现（Later），archive 不是 delete 的别名。**
+- 入口：canonical RPC、owner 端点（`team.create|update|archive`）、CLI
+  `vessel team create|update|archive`；全部走同一 `TeamService`，不做第二套逻辑。

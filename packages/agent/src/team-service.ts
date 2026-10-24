@@ -28,6 +28,9 @@ import {
   type MemberStatus,
   type TeamAgentSendInput,
   type TeamAgentSendResult,
+  type TeamArchiveInput,
+  type TeamCreateInput,
+  type TeamCreateResult,
   type TeamDelivery,
   type TeamDetail,
   TeamError,
@@ -45,6 +48,7 @@ import {
   type TeamStore,
   type TeamSummary,
   type TeamSystemEvent,
+  type TeamUpdateInput,
 } from './types.js';
 
 /** DefaultTeamService 构造参数（app 装配按此名称接线） */
@@ -168,10 +172,39 @@ export class DefaultTeamService implements AgentTeamService {
     return status === undefined ? undefined : toMemberSummary(status);
   }
 
+  async create(input: TeamCreateInput): Promise<TeamCreateResult> {
+    const { record, deduplicated } = await this.store.create(input);
+    const team = await this.summarize(record);
+    this.emit({ team_id: record.team_id, kind: 'roster' });
+    return { team, deduplicated };
+  }
+
+  async update(input: TeamUpdateInput): Promise<TeamSummary> {
+    const { team_id, ...patch } = input;
+    const record = await this.store.update(team_id, patch);
+    const team = await this.summarize(record);
+    this.emit({ team_id: record.team_id, kind: 'roster' });
+    return team;
+  }
+
+  async archive(input: TeamArchiveInput): Promise<TeamSummary> {
+    // Store 不知道 roster：present（含 live / gone）成员一律拒绝归档。
+    const members = await this.rosterFor(input.team_id);
+    if (members.length > 0) {
+      throw new TeamError('team_not_empty', `team_not_empty: ${input.team_id}`);
+    }
+    const record = await this.store.archive(input.team_id);
+    this.emit({ team_id: record.team_id, kind: 'roster' });
+    return toTeamSummary(record, 0, 0);
+  }
+
   async budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview> {
-    if (this.store.get(input.team_id) === undefined) {
+    const record = this.store.get(input.team_id);
+    if (record === undefined) {
       throw new TeamError('team_not_found', `team_not_found: ${input.team_id}`);
     }
+    // 归档 Team 只读：status 仍可读，人工 override 拒绝。
+    if ('dimension' in input) assertTeamNotArchived(record, input.team_id);
     if (!this.agent.budget) {
       throw new TeamError('team_not_found', 'budget unavailable');
     }
@@ -212,9 +245,11 @@ export class DefaultTeamService implements AgentTeamService {
   }
 
   async post(input: TeamPostInput): Promise<TeamPostResult> {
-    if (this.store.get(input.team_id) === undefined) {
+    const record = this.store.get(input.team_id);
+    if (record === undefined) {
       throw new TeamError('team_not_found', `team_not_found: ${input.team_id}`);
     }
+    assertTeamNotArchived(record, input.team_id);
     const content = readContent(input.content);
     const from = input.from ?? DEFAULT_OWNER;
     const mentions = dedupe(input.mentions ?? []);
@@ -366,7 +401,10 @@ export class DefaultTeamService implements AgentTeamService {
   }
 
   async members(input: TeamMembersInput): Promise<TeamMembersResult | undefined> {
-    if (this.store.get(input.team_id) === undefined) return undefined;
+    const record = this.store.get(input.team_id);
+    if (record === undefined) return undefined;
+    // 归档 Team 只读：add / remove 都拒绝。
+    assertTeamNotArchived(record, input.team_id);
     const from = input.from ?? DEFAULT_OWNER;
     const visible = await this.listVisible(from);
     const target = resolveMember(input.member, visible);
@@ -609,6 +647,16 @@ export class DefaultTeamService implements AgentTeamService {
 
   private async listVisible(viewer?: string): Promise<MemberStatus[]> {
     return viewer === undefined ? this.agent.list() : this.agent.list({ viewer });
+  }
+
+  /** S10.3：create / update 的摘要计数从 roster 派生（新 Team = 0 / 0）。 */
+  private async summarize(record: TeamRecord): Promise<TeamSummary> {
+    const members = await this.rosterFor(record.team_id);
+    return toTeamSummary(
+      record,
+      members.length,
+      members.filter((member) => member.presence === 'live').length,
+    );
   }
 
   /**
@@ -917,7 +965,15 @@ function toTeamSummary(record: TeamRecord, memberCount: number, onlineCount: num
     member_count: memberCount,
     online_count: onlineCount,
     created_at: record.created_at,
+    ...(record.archived_at !== undefined ? { archived_at: record.archived_at } : {}),
   };
+}
+
+/** 归档 Team 只读；`post` / `members` / `budget override` 统一抛 team_archived。 */
+function assertTeamNotArchived(record: TeamRecord, teamId: string): void {
+  if (record.archived_at !== undefined) {
+    throw new TeamError('team_archived', `team_archived: ${teamId}`);
+  }
 }
 
 function toMemberSummary(status: MemberStatus): TeamMemberSummary {

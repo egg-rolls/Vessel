@@ -26,6 +26,8 @@ export interface TeamSummaryLike {
   /** present && presence === 'live'；从 roster 派生，不持久化 */
   online_count: number;
   created_at: number;
+  /** S10.3 additive：归档时间（epoch ms）；存在即只读。 */
+  archived_at?: number;
 }
 
 /** 已退役 Body（0.19 S6 additive）。 */
@@ -150,12 +152,44 @@ export interface TeamMembersResultLike {
   membership: 'present' | 'left';
 }
 
+/** teams.create 参数（S10.3）：workspace 已有 Team 时幂等复用。 */
+export interface TeamCreateLikeInput {
+  workspace: string;
+  name?: string;
+  description?: string;
+  default_principal?: string;
+  handoff_path?: string;
+  policy?: Record<string, unknown>;
+}
+
+/** teams.update 参数（S10.3）：`null` 清空可选项，policy 整体替换。 */
+export interface TeamUpdateLikeInput {
+  team_id: string;
+  name?: string;
+  description?: string | null;
+  default_principal?: string | null;
+  handoff_path?: string | null;
+  policy?: Record<string, unknown>;
+}
+
+/** teams.create 结果。 */
+export interface TeamCreateResultLike {
+  team: TeamSummaryLike;
+  deduplicated: boolean;
+}
+
 /**
  * 注入的 Team 控制面；`tenantId` 决定 canonical RPC 的 tenant 作用域。
  * 未注入 / tenant 不匹配时 `teams.*` 返回 `not_found`。
  */
 export interface TeamControlLike {
   readonly tenantId: string;
+  /** S10.3：只允许 human / admin；team-scoped token 不能 create。 */
+  create(input: TeamCreateLikeInput): Promise<TeamCreateResultLike>;
+  /** S10.3：team-scoped token 只能更新自己的 team。 */
+  update(input: TeamUpdateLikeInput): Promise<TeamSummaryLike>;
+  /** S10.3：有 present 成员时拒绝（`team_not_empty`）；不删数据。 */
+  archive(input: { team_id: string }): Promise<TeamSummaryLike>;
   list(options?: { viewer?: string }): Promise<TeamSummaryLike[]>;
   get(
     teamId: string,

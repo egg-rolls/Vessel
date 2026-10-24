@@ -19,6 +19,7 @@ import { stringParam } from './common.js';
 import {
   stringListSchema,
   teamBudgetResultSchema,
+  teamCreateResultSchema,
   teamDetailSchema,
   teamMembersResultSchema,
   teamPostResultSchema,
@@ -75,6 +76,7 @@ function redactTeamSummary(team: TeamSummaryLike): TeamSummaryLike {
     // 0.21：描述与默认接头人是展示字段，不随主机路径一起脱敏。
     ...(team.description !== undefined ? { description: team.description } : {}),
     ...(team.default_principal !== undefined ? { default_principal: team.default_principal } : {}),
+    ...(team.archived_at !== undefined ? { archived_at: team.archived_at } : {}),
   };
 }
 
@@ -94,6 +96,37 @@ function optionalString(params: Record<string, unknown>, key: string): string | 
     throw new RpcError('invalid_params', `${key} must be a non-empty string`);
   }
   return value;
+}
+
+/**
+ * 可空可选字符串：缺省 undefined；存在时 `null` 表示清空，非空 string 表示设置。
+ * 校验器子集没有 union / nullable，因此这些字段在 params_schema 里声明为 `{}`，
+ * 由这里做唯一判定。
+ */
+function optionalNullableString(
+  params: Record<string, unknown>,
+  key: string,
+): string | null | undefined {
+  if (!Object.hasOwn(params, key)) return undefined;
+  const value = params[key];
+  if (value === null) return null;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new RpcError('invalid_params', `${key} must be a non-empty string or null`);
+  }
+  return value;
+}
+
+/** policy 必须是普通对象（整体替换，不做 merge）。 */
+function optionalPolicy(
+  params: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  if (!Object.hasOwn(params, key)) return undefined;
+  const value = params[key];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RpcError('invalid_params', `${key} must be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 /**
@@ -117,6 +150,10 @@ function mapTeamError(error: unknown): never {
   ) {
     throw new RpcError('not_found', message);
   }
+  // S10.3：archive 的前置条件与只读状态是业务冲突，不是参数错误。
+  if (code === 'team_not_empty' || code === 'team_archived') {
+    throw new RpcError('conflict', message, { team_code: code });
+  }
   if (code === 'team_log_write_failed') throw new RpcError('internal', message);
   throw new RpcError('invalid_params', message, { team_code: code });
 }
@@ -125,6 +162,110 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
   const { teams } = deps;
 
   return [
+    {
+      name: 'teams.create',
+      // S10.3：只允许 human / admin；team-scoped control token 不能凭空造 Team。
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['workspace'],
+        properties: {
+          workspace: { type: 'string', minLength: 1 },
+          name: { type: 'string', minLength: 1 },
+          description: { type: 'string' },
+          default_principal: { type: 'string', minLength: 1 },
+          handoff_path: { type: 'string' },
+          policy: { type: 'object' },
+        },
+      },
+      result_schema: teamCreateResultSchema,
+      handler: async (params, ctx) => {
+        try {
+          const control = requireTeamControl(teams, ctx);
+          if (teamScopeOf(ctx) !== undefined) {
+            throw new RpcError('forbidden', 'team-scoped token cannot create teams');
+          }
+          const workspace = stringParam(params, 'workspace');
+          const name = optionalString(params, 'name');
+          const description = optionalString(params, 'description');
+          const defaultPrincipal = optionalString(params, 'default_principal');
+          const handoffPath = optionalString(params, 'handoff_path');
+          const policy = optionalPolicy(params, 'policy');
+          return await control.create({
+            workspace,
+            ...(name !== undefined ? { name } : {}),
+            ...(description !== undefined ? { description } : {}),
+            ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
+            ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
+            ...(policy !== undefined ? { policy } : {}),
+          });
+        } catch (error) {
+          return mapTeamError(error);
+        }
+      },
+    },
+    {
+      name: 'teams.update',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['team_id'],
+        properties: {
+          team_id: { type: 'string', minLength: 1 },
+          name: { type: 'string', minLength: 1 },
+          // nullable 字段：由 handler 判定 string | null。
+          description: {},
+          default_principal: {},
+          handoff_path: {},
+          policy: { type: 'object' },
+        },
+      },
+      result_schema: teamSummarySchema,
+      handler: async (params, ctx) => {
+        try {
+          const control = requireTeamControl(teams, ctx);
+          const teamId = stringParam(params, 'team_id');
+          assertTeamScope(teamScopeOf(ctx), teamId);
+          const name = optionalString(params, 'name');
+          const description = optionalNullableString(params, 'description');
+          const defaultPrincipal = optionalNullableString(params, 'default_principal');
+          const handoffPath = optionalNullableString(params, 'handoff_path');
+          const policy = optionalPolicy(params, 'policy');
+          return await control.update({
+            team_id: teamId,
+            ...(name !== undefined ? { name } : {}),
+            ...(description !== undefined ? { description } : {}),
+            ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
+            ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
+            ...(policy !== undefined ? { policy } : {}),
+          });
+        } catch (error) {
+          return mapTeamError(error);
+        }
+      },
+    },
+    {
+      name: 'teams.archive',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['team_id'],
+        properties: {
+          team_id: { type: 'string', minLength: 1 },
+        },
+      },
+      result_schema: teamSummarySchema,
+      handler: async (params, ctx) => {
+        try {
+          const control = requireTeamControl(teams, ctx);
+          const teamId = stringParam(params, 'team_id');
+          assertTeamScope(teamScopeOf(ctx), teamId);
+          return await control.archive({ team_id: teamId });
+        } catch (error) {
+          return mapTeamError(error);
+        }
+      },
+    },
     {
       name: 'teams.list',
       permission: 'read',

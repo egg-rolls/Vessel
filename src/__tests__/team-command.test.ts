@@ -362,6 +362,83 @@ describe('vessel team command', () => {
     expect(result.stderr).toContain('team_not_found');
   });
 
+  it('maps team create to snake_case owner params', async () => {
+    const dir = await setup();
+    const calls: RpcBody[] = [];
+    const result = await runTeamCommand(
+      {
+        kind: 'create',
+        workspace: '/ws/alpha',
+        name: 'Alpha',
+        defaultPrincipal: 'main',
+        handoffPath: '/ws/alpha/HANDOFF.md',
+        json: true,
+      },
+      options(
+        dir,
+        fakeFetch((body) => {
+          calls.push(body);
+          return {
+            team: {
+              team_id: 'alpha',
+              name: 'Alpha',
+              tenant_id: 'default',
+              workspace: '/ws/alpha',
+              member_count: 0,
+              online_count: 0,
+              created_at: 1,
+            },
+            deduplicated: false,
+          };
+        }),
+      ),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(calls[0]).toEqual({
+      method: 'team.create',
+      params: {
+        workspace: '/ws/alpha',
+        name: 'Alpha',
+        default_principal: 'main',
+        handoff_path: '/ws/alpha/HANDOFF.md',
+      },
+    });
+    expect(JSON.parse(result.stdout).deduplicated).toBe(false);
+  });
+
+  it('maps team update null clears and team archive', async () => {
+    const dir = await setup();
+    const calls: RpcBody[] = [];
+    const fetchImpl = fakeFetch((body) => {
+      calls.push(body);
+      return {
+        team_id: body.params.team_id,
+        name: 'Alpha',
+        tenant_id: 'default',
+        workspace: '/ws/alpha',
+        member_count: 0,
+        online_count: 0,
+        created_at: 1,
+        ...(body.method === 'team.archive' ? { archived_at: 2 } : {}),
+      };
+    });
+
+    await runTeamCommand(
+      { kind: 'update', teamId: 'alpha', description: null, json: false },
+      options(dir, fetchImpl),
+    );
+    const archived = await runTeamCommand(
+      { kind: 'archive', teamId: 'alpha', json: true },
+      options(dir, fetchImpl),
+    );
+
+    expect(calls.map((call) => call.method)).toEqual(['team.update', 'team.archive']);
+    expect(calls[0]?.params).toEqual({ team_id: 'alpha', description: null });
+    expect(calls[1]?.params).toEqual({ team_id: 'alpha' });
+    expect(archived.exitCode).toBe(0);
+    expect(JSON.parse(archived.stdout).archived_at).toBe(2);
+  });
+
   it('keeps exit 1 with --json when a delivery failed', async () => {
     const dir = await setup();
     const result = await runTeamCommand(
