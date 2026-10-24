@@ -168,8 +168,6 @@ kbd,
 
 @media (forced-colors: active) {
   .card,
-  .modal,
-  .menu,
   .palette,
   .ask-card,
   .composer,
@@ -186,8 +184,7 @@ kbd,
   .tool-card,
   .event-list,
   .btn,
-  .input,
-  .status-chip {
+  .input {
     border: 1px solid CanvasText;
   }
 

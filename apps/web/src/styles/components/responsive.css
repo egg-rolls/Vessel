@@ -16,14 +16,6 @@
     padding: 7px 6px;
   }
 
-  .modal-backdrop {
-    padding: 12px;
-  }
-
-  .modal {
-    padding: 18px;
-  }
-
   .toast-region {
     right: 12px;
     bottom: calc(70px + env(safe-area-inset-bottom));
@@ -37,7 +29,6 @@
   .btn,
   .icon-btn,
   .input,
-  .segment,
   .filter-chip,
   .palette-option {
     min-height: var(--touch-target);

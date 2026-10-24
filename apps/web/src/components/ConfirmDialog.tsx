@@ -1,6 +1,7 @@
 import { type ReactNode, useId } from 'react';
 import { t } from '../i18n';
 import { ModalShell } from './Modal';
+import { Button } from './ui';
 
 /** 破坏性动作确认：初始焦点在「取消」，Enter 不会误触发危险动作。 */
 export function ConfirmDialog({
@@ -38,23 +39,22 @@ export function ConfirmDialog({
       closeOnBackdrop={!busy}
       size="sm"
     >
-      <h2 className="modal-title">{title}</h2>
-      <div id={bodyId} className="modal-body">
+      <h2 className="font-serif text-xl font-semibold leading-tight text-ink">{title}</h2>
+      <div id={bodyId} className="flex flex-col gap-3 text-md leading-relaxed text-muted">
         {body}
       </div>
       {extra}
-      <div className="modal-actions">
-        <button type="button" className="btn" onClick={onCancel} disabled={busy} data-autofocus>
+      <div className="mt-1 flex flex-wrap justify-end gap-3">
+        <Button onClick={onCancel} disabled={busy} data-autofocus>
           {resolvedCancel}
-        </button>
-        <button
-          type="button"
-          className={danger ? 'btn btn-danger' : 'btn btn-primary'}
+        </Button>
+        <Button
+          variant={danger ? 'danger' : 'primary'}
           onClick={onConfirm}
           disabled={busy || confirmDisabled}
         >
           {busy ? t('common.processing') : resolvedConfirm}
-        </button>
+        </Button>
       </div>
     </ModalShell>
   );

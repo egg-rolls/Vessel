@@ -14,6 +14,7 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { cn } from './ui/cn';
 
 const SHOW_DELAY = 300;
 const GAP = 8;
@@ -195,12 +196,15 @@ export function Tooltip({
               ref={tipRef}
               id={id}
               role="tooltip"
-              className="tooltip"
+              className="tooltip-fade pointer-events-none fixed z-tooltip max-w-60 rounded-sm bg-raised px-2 py-1 text-xs leading-relaxed text-ink shadow-elev-2"
               data-placement={position?.side ?? placement}
               style={tipStyle}
             >
               <span
-                className="tooltip-arrow"
+                className={cn(
+                  'absolute size-2 -translate-x-1/2 rotate-45 rounded-xs bg-raised',
+                  (position?.side ?? placement) === 'top' ? '-bottom-1' : '-top-1',
+                )}
                 aria-hidden="true"
                 style={{ left: position?.arrow ?? 0 }}
               />
@@ -224,7 +228,11 @@ export function IconButton({
     <Tooltip label={label}>
       <button
         type="button"
-        className={`icon-btn ${className ?? ''}`.trim()}
+        className={cn(
+          // marker：`.session-row .icon-btn` 等未迁移上下文仍用它做 hover 显隐。
+          'icon-btn inline-flex size-8 flex-none items-center justify-center rounded-full bg-transparent text-lg leading-none text-faint transition-colors hover:bg-hover hover:text-ink disabled:opacity-45 disabled:cursor-not-allowed',
+          className,
+        )}
         aria-label={label}
         {...rest}
       >

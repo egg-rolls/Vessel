@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { IconButton } from './Tooltip';
+import { cn } from './ui/cn';
 
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -84,6 +85,12 @@ export function useModalA11y(onClose: () => void) {
 
 export type ModalSize = 'sm' | 'md' | 'lg';
 
+const MODAL_WIDTH: Record<ModalSize, string> = {
+  sm: 'max-w-modal-sm',
+  md: 'max-w-modal-md',
+  lg: 'max-w-modal-lg',
+};
+
 export function ModalShell({
   label,
   describedBy,
@@ -111,22 +118,27 @@ export function ModalShell({
   const dialog = (
     // biome-ignore lint/a11y/noStaticElementInteractions: backdrop mousedown closes the modal
     <div
-      className="modal-backdrop"
+      className="modal-fade fixed inset-0 z-modal flex h-dvh w-screen items-center justify-center overflow-y-auto overscroll-contain bg-scrim modal-pad"
       onMouseDown={(event) => {
         if (closeOnBackdrop && event.target === event.currentTarget) onClose();
       }}
     >
       <div
         ref={dialogRef}
-        className={`modal modal-${size} ${className}`.trim()}
+        className={cn(
+          'modal-rise relative flex max-h-[min(86dvh,var(--modal-max-h))] w-full flex-col gap-2 overflow-hidden rounded-xl bg-raised p-5 shadow-elev-4 max-compact:p-4',
+          MODAL_WIDTH[size],
+          className,
+        )}
         role="dialog"
         aria-modal="true"
         aria-label={label}
         aria-describedby={describedBy}
       >
+        {/* 保留 marker：CommandPalette 需要 `.palette .modal-body-scroll` 改滚动结构。 */}
         <div className="modal-body-scroll">{children}</div>
         {closeLabel ? (
-          <IconButton className="modal-close" label={closeLabel} onClick={onClose}>
+          <IconButton className="absolute right-2 top-2" label={closeLabel} onClick={onClose}>
             ×
           </IconButton>
         ) : null}

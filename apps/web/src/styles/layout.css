@@ -435,60 +435,7 @@
   margin-inline: auto;
 }
 
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.page-heading {
-  min-width: 0;
-}
-
-.page-title {
-  font-family: var(--font-sans);
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.35;
-  letter-spacing: 0.01em;
-  overflow-wrap: anywhere;
-}
-
-.page-desc {
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.page-scope {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.scope-chip {
-  padding: 2px 8px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-sunken);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
-.scope-chip.muted {
-  color: var(--faint);
-}
-
-.page-actions {
-  flex: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: flex-start;
-}
+/* PageHeader 已迁移到 Tailwind（components/PageHeader.tsx）。 */
 
 .domain-content {
   display: flex;
@@ -907,16 +854,7 @@
     padding: 8px 12px calc(var(--dock-gap) + var(--dock-safe-bottom));
   }
 
-  .page-header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
   .panel {
     padding: 16px;
-  }
-
-  .page-actions {
-    width: 100%;
   }
 }

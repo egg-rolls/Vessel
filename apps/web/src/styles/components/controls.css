@@ -160,12 +160,6 @@
   color: var(--danger);
 }
 
-.search-input {
-  height: var(--control-h);
-  padding-block: 0;
-  background: var(--surface-sunken);
-}
-
 .field {
   display: flex;
   flex-direction: column;
@@ -256,95 +250,7 @@
   font-size: 12px;
 }
 
-/* ── 状态 chip（字形 + 文本 + 颜色） ─────────────────── */
-
-.status-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 1px 8px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--surface-sunken);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.03em;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.status-glyph {
-  font-size: 10px;
-}
-
-.status-chip[data-status="running"] .status-glyph {
-  animation: pulse 1.6s ease-in-out infinite;
-}
-
-.status-chip.tone-ok {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-.status-chip.tone-info {
-  background: var(--info-soft);
-  color: var(--info);
-}
-
-.status-chip.tone-warn {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
-.status-chip.tone-danger {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.status-chip.tone-muted {
-  background: var(--surface-sunken);
-  color: var(--faint);
-}
-
-/* icon-only 状态：文字只走 aria-label / title，不占行宽。 */
-.status-glyph-only {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-sunken);
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1;
-}
-
-.status-glyph-only.tone-ok {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-.status-glyph-only.tone-info {
-  background: var(--info-soft);
-  color: var(--info);
-}
-
-.status-glyph-only.tone-warn {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
-.status-glyph-only.tone-danger {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.status-glyph-only[data-status="running"] {
-  animation: pulse 1.6s ease-in-out infinite;
-}
+/* ── 状态 chip（L2 已迁移到 StatusChip.tsx） ─────────── */
 
 .count-pill {
   display: inline-block;
@@ -390,39 +296,7 @@
   color: var(--warn);
 }
 
-/* ── Segmented / 过滤 ─────────────────────────────────── */
-
-.segmented {
-  display: inline-flex;
-  gap: 2px;
-  max-width: 100%;
-  margin-top: 14px;
-  padding: 5px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--surface-sunken);
-  overflow-x: auto;
-}
-
-.segment {
-  padding: 6px 12px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.segment:hover {
-  color: var(--ink);
-  background: var(--hover-tint);
-}
-
-.segment.active {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
+/* ── 过滤栏 ───────────────────────────────────────────── */
 
 .filter-bar {
   display: flex;

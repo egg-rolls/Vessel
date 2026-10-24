@@ -23,7 +23,11 @@ export function SegmentedTabs<T extends string>({
   const refs = useRef(new Map<T, HTMLButtonElement>());
 
   return (
-    <div className="segmented" role="tablist" aria-label={label}>
+    <div
+      className="mt-3.5 inline-flex max-w-full gap-0.5 overflow-x-auto rounded-full bg-sunken p-1"
+      role="tablist"
+      aria-label={label}
+    >
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -37,7 +41,7 @@ export function SegmentedTabs<T extends string>({
           aria-controls={panelId}
           aria-selected={tab.id === value}
           tabIndex={tab.id === value ? 0 : -1}
-          className={`segment ${tab.id === value ? 'active' : ''}`.trim()}
+          className="whitespace-nowrap rounded-full bg-transparent px-3 py-1.5 text-sm text-muted transition-colors hover:bg-hover hover:text-ink aria-selected:bg-accent-soft aria-selected:text-accent-ink pointer-coarse:min-h-touch"
           onClick={() => onChange(tab.id)}
           onKeyDown={(event) => {
             const index = tabs.findIndex((item) => item.id === tab.id);

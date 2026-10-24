@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { t } from '../i18n';
 import { useToast } from './ToastProvider';
 import { Tooltip } from './Tooltip';
+import { Button } from './ui';
 
 async function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -36,8 +37,8 @@ export function CopyButton({
 
   return (
     <Tooltip label={label}>
-      <button
-        type="button"
+      <Button
+        variant="link"
         className={className}
         aria-label={label}
         onClick={() => {
@@ -53,7 +54,7 @@ export function CopyButton({
         }}
       >
         {copied ? t('common.copied') : label}
-      </button>
+      </Button>
     </Tooltip>
   );
 }

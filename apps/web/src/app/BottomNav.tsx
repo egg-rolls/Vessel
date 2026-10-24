@@ -69,7 +69,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
         <ModalShell
           label={t('nav.moreSheet')}
           onClose={() => setMoreOpen(false)}
-          className="more-sheet"
+          className="more-sheet mt-auto mb-0 max-w-modal-sm self-center rounded-t-lg rounded-b-sm max-compact:sheet-bottom-pad"
         >
           <h2 className="modal-title">{t('nav.more')}</h2>
           <div className="more-list">

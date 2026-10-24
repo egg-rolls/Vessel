@@ -143,46 +143,12 @@
   accent-color: var(--accent);
 }
 
+/* ActionMenu 已迁移；marker 供未迁移的 `.session-row` / `.team-list-item`
+ * 上下文控制 hover 显隐。 */
 .action-menu {
   position: relative;
   flex: none;
   display: inline-flex;
-}
-
-.menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  min-width: 160px;
-  padding: var(--space-1);
-  border-radius: var(--radius-lg);
-  background: var(--surface-raised);
-  box-shadow: var(--elev-3);
-}
-
-.menu-item {
-  padding: 7px 10px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--ink);
-  font-size: 12px;
-  text-align: left;
-}
-
-.menu-item:hover:not(:disabled) {
-  background: var(--hover-tint);
-}
-
-.menu-item.danger {
-  color: var(--danger);
-}
-
-.menu-item.danger:hover:not(:disabled) {
-  background: var(--danger-soft);
 }
 
 .more-sheet {

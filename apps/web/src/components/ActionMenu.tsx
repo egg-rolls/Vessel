@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { t } from '../i18n';
 import { Tooltip } from './Tooltip';
+import { cn } from './ui';
 
 export interface ActionMenuItem {
   id: string;
@@ -92,12 +93,21 @@ export function ActionMenu({
         </button>
       </Tooltip>
       {open && (
-        <div ref={menuRef} id={menuId} className="menu" role="menu" aria-label={label}>
+        <div
+          ref={menuRef}
+          id={menuId}
+          className="absolute right-0 top-full z-20 mt-1 flex min-w-40 flex-col rounded-lg bg-raised p-1 shadow-elev-3"
+          role="menu"
+          aria-label={label}
+        >
           {items.map((item) => (
             <button
               key={item.id}
               type="button"
-              className={`menu-item ${item.danger ? 'danger' : ''}`.trim()}
+              className={cn(
+                'rounded-md bg-transparent px-2.5 py-2 text-left text-sm text-ink transition-colors hover:bg-hover disabled:opacity-45',
+                item.danger && 'text-danger hover:bg-danger-soft',
+              )}
               role="menuitem"
               disabled={item.disabled}
               onClick={() => {

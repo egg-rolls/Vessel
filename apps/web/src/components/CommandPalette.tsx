@@ -60,7 +60,7 @@ export function CommandPalette({
       label={t('palette.label')}
       onClose={onClose}
       closeLabel={t('common.close')}
-      className="palette"
+      className="palette mt-16 max-w-palette self-start gap-0 overflow-hidden p-0 z-palette"
     >
       <div className="palette-input-row">
         <span className="palette-prefix" aria-hidden="true">
