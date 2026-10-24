@@ -191,6 +191,7 @@ export function ToolCard({ tone, className, ...props }: ToolCardProps) {
 2. 删除**仅被该组件使用**的 legacy 规则。
 3. 保留仍被未迁移页面使用的规则（例如 `.btn` / `.input` / `.panel` / `.card` /
    `.modal-title`），以及未迁移容器依赖的 marker class：
+   `btn`（`.card .btn` / `.multi-node-head .btn` 等上下文外边距）、
    `search-input`（filter-bar flex 布局）、`icon-btn`（session-row hover 显隐）、
    `action-menu`（行级菜单显隐）、`modal-body-scroll`（命令面板滚动结构）、
    `state-empty` 等状态 marker（测试与 forced-colors）。
