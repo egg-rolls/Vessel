@@ -319,8 +319,14 @@ export class AgentSnapshotStore {
 
   /** 原子写；任何失败返回 false，不向上抛 */
   async write(members: PersistedAgentRecord[]): Promise<boolean> {
-    // 损坏文件没能隔离：写入会覆盖唯一恢复副本，放弃本次写。
-    if (this.writeBlocked) return false;
+    // 损坏文件没能隔离：写入会覆盖唯一恢复副本，放弃本次写并记录失败。
+    if (this.writeBlocked) {
+      this.logger.error('agent.snapshot.write_failed', {
+        path: this.filePath,
+        error: 'quarantine_failed',
+      });
+      return false;
+    }
     // 读到 v1 但备份失败过：写入会失去回滚点，放弃本次写。
     if (!(await this.ensureV1Backup())) return false;
     const file: AgentSnapshotFile = {
