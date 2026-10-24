@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import type { AgentStatus, InboxPage } from '@vessel-agent/core';
 import { MemoryEventStream } from '@vessel-agent/core';
 import type { DurableCheckpointLike, DurableStoreLike } from '../src/durable';
 import type { Gateway } from '../src/gateway';
-import type { TeamHostLike, TeamSpawnRequest } from '../src/team';
 import type { GatewayAuthLike } from '../src/tenant';
 import { startTestGateway as startGateway } from './helpers';
 
@@ -217,129 +215,5 @@ describe('durable endpoint tenant and role enforcement', () => {
 
     const resumeWrite = await rpc('writer', 'runs.resume', { run_id: 'run-a' });
     expect(resumeWrite.ok).toBe(true);
-  });
-});
-
-function makeTeamHost() {
-  const statuses = new Map<string, AgentStatus>();
-  const host: TeamHostLike = {
-    list: () => [...statuses.values()],
-    get: (id) => {
-      const status = statuses.get(id);
-      if (!status) return undefined;
-      return {
-        status: () => status,
-        close: async () => {
-          statuses.delete(id);
-        },
-      };
-    },
-    inbox: async (): Promise<InboxPage> => ({ messages: [], cursor: '0' }),
-    cancel: (id) => {
-      const status = statuses.get(id);
-      if (status) statuses.set(id, { ...status, state: 'cancelled' });
-    },
-  };
-  const spawn = async (request: TeamSpawnRequest): Promise<AgentStatus> => {
-    const status: AgentStatus = {
-      id: 'worker',
-      ...(request.name !== undefined ? { name: request.name } : {}),
-      state: 'idle',
-      toolNames: ['read'],
-    };
-    statuses.set('worker', status);
-    return status;
-  };
-  return { host, spawn };
-}
-
-describe('team REST role enforcement', () => {
-  function startTeam() {
-    const { host, spawn } = makeTeamHost();
-    const gateway = startGateway({
-      events: new MemoryEventStream(),
-      port: 0,
-      token: 'legacy',
-      auth: auth(),
-      nodeId: 'A',
-      team: { nodeId: 'A', host, spawn },
-    });
-    gateways.push(gateway);
-    return gateway;
-  }
-
-  it('allows GET for read tokens and rejects mutations', async () => {
-    const gateway = startTeam();
-
-    const list = await fetch(`${gateway.url}/v1/team/agents`, {
-      headers: authHeader('reader'),
-    });
-    expect(list.status).toBe(200);
-
-    const spawn = await fetch(`${gateway.url}/v1/team/agents`, {
-      method: 'POST',
-      headers: { ...authHeader('reader'), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Worker' }),
-    });
-    expect(spawn.status).toBe(403);
-    expect(((await spawn.json()) as { error: { code: string } }).error.code).toBe('forbidden');
-
-    const cancel = await fetch(`${gateway.url}/v1/team/agents/worker/cancel`, {
-      method: 'POST',
-      headers: authHeader('reader'),
-    });
-    expect(cancel.status).toBe(403);
-
-    const close = await fetch(`${gateway.url}/v1/team/agents/worker/close`, {
-      method: 'POST',
-      headers: authHeader('reader'),
-    });
-    expect(close.status).toBe(403);
-  });
-
-  it('allows write tokens to spawn/cancel/close', async () => {
-    const gateway = startTeam();
-
-    const spawn = await fetch(`${gateway.url}/v1/team/agents`, {
-      method: 'POST',
-      headers: { ...authHeader('writer'), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Worker' }),
-    });
-    expect(spawn.status).toBe(201);
-
-    const cancel = await fetch(`${gateway.url}/v1/team/agents/worker/cancel`, {
-      method: 'POST',
-      headers: authHeader('writer'),
-    });
-    expect(cancel.status).toBe(200);
-
-    const close = await fetch(`${gateway.url}/v1/team/agents/worker/close`, {
-      method: 'POST',
-      headers: authHeader('writer'),
-    });
-    expect(close.status).toBe(200);
-  });
-
-  it('keeps the default-tenant/admin boundary', async () => {
-    const gateway = startTeam();
-
-    for (const token of ['b-reader', 'b-writer']) {
-      const res = await fetch(`${gateway.url}/v1/team/agents`, {
-        headers: authHeader(token),
-      });
-      expect(res.status).toBe(403);
-    }
-
-    const adminGet = await fetch(`${gateway.url}/v1/team/agents`, {
-      headers: authHeader('admin'),
-    });
-    expect(adminGet.status).toBe(200);
-
-    const adminSpawn = await fetch(`${gateway.url}/v1/team/agents`, {
-      method: 'POST',
-      headers: { ...authHeader('admin'), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'AdminWorker' }),
-    });
-    expect(adminSpawn.status).toBe(201);
   });
 });

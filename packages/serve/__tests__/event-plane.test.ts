@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { MemoryEventStream, type RunEvent, type Transport } from '@vessel-agent/core';
+import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import { startGateway } from '../src/gateway';
 import { createLocalRpcDispatcher, type LocalRpcDispatcher } from '../src/local';
@@ -82,43 +82,6 @@ describe('tenant event plane (0.18)', () => {
     expect(projection.getHistory().some((event) => event.type === 'tool.permission.response')).toBe(
       false,
     );
-  });
-
-  it('publishes team diagnostics to the default tenant stream', async () => {
-    const tenant = new MemoryEventStream();
-    const hub = createGatewayEventHub({
-      streams: [{ tenantId: 'default', stream: tenant }],
-    });
-    const transport: Transport = {
-      kind: 'in-process',
-      send: async () => undefined,
-      receive: () => () => undefined,
-      peers: async () => [],
-      close: async () => undefined,
-    };
-    const gateway = startGateway({ hub, port: 0, nodeId: 'A', team: { nodeId: 'A', transport } });
-    gateways.push(gateway);
-
-    const res = await fetch(`${gateway.url}/v1/team/send`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${gateway.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        protocol: 1,
-        message: {
-          id: 'msg-1',
-          from: 'A:owner',
-          to: 'B:worker',
-          kind: 'task',
-          content: 'hello',
-          ts: Date.now(),
-        },
-      }),
-    });
-    expect(res.status).toBe(202);
-
-    const diagnostic = hub.since(0).find((item) => item.event.type === 'team.message.sent');
-    expect(diagnostic?.event.tenant_id).toBe('default');
-    expect(diagnostic?.event.data).toMatchObject({ messageId: 'msg-1' });
   });
 
   it('does not close the injected hub when the gateway stops', async () => {

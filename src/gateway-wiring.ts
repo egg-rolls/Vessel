@@ -71,7 +71,7 @@ export function buildGatewayControlPlane(
     controlPlane.feishu = { status: () => feishu.status() };
   }
 
-  // 0.19 S3：`teams.*` 与 legacy `/v1/team/*` 无关；只透传 TeamControlLike。
+  // 0.19 S3：只透传 canonical `teams.*` 的 TeamControlLike。
   if (options.teams) controlPlane.teams = options.teams;
 
   if (options.feishuFor) controlPlane.feishuFor = options.feishuFor;

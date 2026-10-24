@@ -14,7 +14,33 @@ import {
   protocolError,
   type ServerFrame,
 } from '../protocol.js';
-import { toWireEvent } from '../team.js';
+
+/** camelCase key → snake_case */
+function toSnakeKey(key: string): string {
+  return key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+}
+
+/** 浅层递归映射对象/数组的 key（仅用于 agent.* / team.* 事件） */
+function toSnakeValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(toSnakeValue);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      out[toSnakeKey(key)] = toSnakeValue(item);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** gateway 事件边界：agent.* / team.* 的 data 映射为 snake_case；其它事件原样 */
+function toWireEvent(event: RunEvent): RunEvent {
+  if (!event.type.startsWith('agent.') && !event.type.startsWith('team.')) return event;
+  return {
+    ...event,
+    data: toSnakeValue(event.data) as RunEvent['data'],
+  };
+}
 
 /** 事件来源节点：跨节点事件带 `node_id` 时优先，否则回落到本 gateway nodeId。 */
 export function eventSourceNodeId(event: RunEvent, fallbackNodeId: string): string {

@@ -31,69 +31,22 @@ describe('0.6 serve.allowed_origins', () => {
   });
 });
 
-describe('0.6 transport.nodes / connect', () => {
-  it('accepts remote nodes and validates ids/urls', () => {
-    const valid: VesselConfig = {
-      transport: {
-        kind: 'remote',
-        nodes: [
-          { id: 'node-b', url: 'https://b.example.com:8642', tokenEnv: 'NODE_B_TOKEN' },
-          { id: 'node-c', url: 'http://127.0.0.1:8643', caFile: './ca.pem' },
-        ],
-      },
-      connect: { tokenEnv: 'CONNECT_TOKEN', caFile: './ca.pem' },
-    };
-    expect(pathsOf(valid)).toHaveLength(0);
-
-    const invalid: VesselConfig = {
-      transport: {
-        kind: 'remote',
-        nodes: [
-          { id: 'bad id', url: 'http://b.example.com:8642' },
-          { id: 'dup', url: 'https://c.example.com' },
-          { id: 'dup', url: 'https://d.example.com' },
-        ],
-      },
-    };
-    const paths = pathsOf(invalid);
-    expect(paths).toContain('transport.nodes[0].id');
-    expect(paths).toContain('transport.nodes[0].url');
-    expect(paths).toContain('transport.nodes[2].id');
-  });
-
-  it('requires nodes for kind=remote', () => {
-    const config: VesselConfig = { transport: { kind: 'remote' } };
-    expect(pathsOf(config)).toContain('transport.nodes');
-  });
-
-  it('maps snake_case keys and resolves token_env for connect/nodes', () => {
+describe('0.6 connect token', () => {
+  it('maps snake_case keys and resolves token_env', () => {
     const mapped = snakeToCamel({
-      serve: { allowed_origins: ['https://console.example.com'] },
       connect: { token_env: 'CONNECT_TOKEN', ca_file: './ca.pem' },
-      transport: { nodes: [{ id: 'b', url: 'https://b.example.com', token_env: 'NODE_B' }] },
     }) as VesselConfig;
-    expect(mapped.serve?.allowedOrigins).toEqual(['https://console.example.com']);
     expect(mapped.connect?.caFile).toBe('./ca.pem');
-    expect(mapped.transport?.nodes?.[0]?.url).toBe('https://b.example.com');
 
-    const resolved = resolveEnvRefsInLayer(mapped, {
-      CONNECT_TOKEN: 'connect-secret',
-      NODE_B: 'node-secret',
-    });
+    const resolved = resolveEnvRefsInLayer(mapped, { CONNECT_TOKEN: 'connect-secret' });
     expect(resolved.errors).toHaveLength(0);
-    const layer = resolved.layer as VesselConfig;
-    expect(layer.connect?.token).toBe('connect-secret');
-    expect(layer.transport?.nodes?.[0]?.token).toBe('node-secret');
+    expect((resolved.layer as VesselConfig).connect?.token).toBe('connect-secret');
   });
 
-  it('redacts connect.token and transport.nodes[].token', () => {
-    const redacted = redactConfig({
-      connect: { token: 'connect-secret' },
-      transport: { nodes: [{ id: 'b', url: 'https://b.example.com', token: 'node-secret' }] },
-    });
+  it('redacts connect.token', () => {
+    const redacted = redactConfig({ connect: { token: 'connect-secret' } });
     const text = JSON.stringify(redacted);
     expect(text).not.toContain('connect-secret');
-    expect(text).not.toContain('node-secret');
     expect(text).toContain('<set>');
   });
 });

@@ -55,6 +55,8 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - **0.22.0 状态**：远程 attention 与操作面统一（S9）：`vessel attention` 列 / 分页 / 单条 / 批量 / 交互式应答；权限 / ask 永远在运行 agent 的节点本地处理，人用 **gateway / team token** 连过去，**peer token 被拒绝**；`interactions.list` additive `order` / `agent_id` / `cursor` / `next_cursor` / `total`；`answered_via` 增加 `cli`（审计提示，不是身份认证）；roster 排序单一来源（live → `last_seen` desc → name），Web 显示 `showing N of M`；Web attention 收件箱 / Team desc / 默认接头人已适配；**Web 多节点连接（S9.4）未实现**。canonical 仍 **48**。
 
+- **0.22.1 状态**：维护清理（分支 `0.22.1-maint`，未随版本发布）：删除 legacy 跨节点 Agent 传输面 —— gateway `/v1/team/*`、`packages/serve/src/team.ts`、`LoopbackTransport` / `PeerRegistry`、`src/remote-transport.ts`、`src/node-registry.ts`、`DeferredTransport`；`transport.kind` 只剩 `in-process`（`loopback` / `remote` 与 `transport.nodes[]` 是显式 validation error）；`health.get` 去掉 `team` 字段。canonical 仍 **48**。
+
 ## 代码风格与硬规矩
 
 - 不引入 LangChain / LangGraph。
@@ -234,7 +236,7 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别给模型再加一个能干的、能与 bash 等价的事的工具。
 - 别给模型加 `wait` / `inbox` / `status` / `cancel`；也别把成员回复做成需要轮询的收件箱。等待就是结束这一轮，回复作为新 turn 到达。
 - 别写 harness 层面的 skills 扫描 / 解析 / 注入通道——skills 就是文件，经消息进来。
-- 别把 MCP / evals / feishu 塞进 core（它们都是插件）；workflow 已移除，不得恢复；durable 只做 core 的 `RunStore` port；多租户已进 core（`tenant` 解析/隔离原语），0.6 的跨机器远程 / 跨节点 transport 已在装配层实现（core 只加可选字段）；team / delegate 模型工具与插件已在 0.17 删除，`/v1/team/*` 传输协议文件保留但无生产装配。
+- 别把 MCP / evals / feishu 塞进 core（它们都是插件）；workflow 已移除，不得恢复；durable 只做 core 的 `RunStore` port；多租户已进 core（`tenant` 解析/隔离原语），0.6 的跨机器远程 / 跨节点 transport 已在装配层实现（core 只加可选字段）；team / delegate 模型工具与插件已在 0.17 删除；legacy `/v1/team/*` / `RemoteTransport` / `NodeRegistry` / `LoopbackTransport` 已于 0.22.1 删除，不得恢复。
 - 0.5 默认 `session.backend: file`；不要删除 sqlite 后端，也不要在检测到 legacy 数据时自动迁移——只提示 `vessel migrate`。
 - 别把 tenant overlay 写成能覆盖 CLI/env；优先级固定 `CLI > env > tenant overlay > project > user > default`。
 - 别绕开 RPC 方法表直接调内部实现；新增 canonical 方法必须发 addendum。

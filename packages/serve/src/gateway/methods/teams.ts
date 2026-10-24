@@ -3,7 +3,7 @@
  *
  * 未注入 `TeamControlLike`（含 local dispatcher）时方法仍进 manifest，
  * handler 返回 `not_found`；tenant 不匹配同样返回 `not_found`，不泄漏跨 tenant 存在性。
- * 与 legacy `/v1/team/*` / `team.*`（单数前缀）无关，不接线。
+ * 与旧版单数前缀 `team.*` / `/v1/team/*`（0.22.1 已删除）无关，不接线。
  *
  * @module @vessel-agent/serve
  */

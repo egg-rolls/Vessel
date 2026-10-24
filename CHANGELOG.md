@@ -3,6 +3,31 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.22.1] - 2026-10-24
+
+> 0.22.1（基于 `main` 0.22.0，未发布）：维护清理。未 tag、未 `npm publish`。
+
+### Removed
+
+- **legacy 跨节点 Agent 传输面**：gateway `/v1/team/*`（peers / messages / send / inbox /
+  stream / agents）、`packages/serve/src/team.ts`、`LoopbackTransport` / `PeerRegistry`、
+  `src/remote-transport.ts`、`src/node-registry.ts`、`DeferredTransport` 及其测试。
+  这些路径自 0.17 起没有生产装配。
+- **配置**：`transport.kind` 只剩 `in-process`；`loopback` / `remote` 与
+  `transport.nodes[]`、`hostname` / `peersDir` / `heartbeatMs` / `peerTtlMs` 已删除，
+  旧值现在是显式 validation error（不静默降级）。
+- **`health.get`**：结果去掉 `team` 字段（always `enabled:false` 的占位）。
+
+### Changed
+
+- hub 的节点 URL 归一化移到 `src/hub/node-url.ts`；行为不变。
+- canonical 方法表仍 **48**；federation 平面不受影响。
+
+### Known limitations
+
+- 跨节点投递只有 federation（team ↔ team）；worker / agent 跨节点寻址仍不提供。
+- Web 多节点连接（S9.4）仍未实现。
+
 ## [0.22.0] - 2026-10-24
 
 > 0.22.0（基于 `main` 0.21.0，未发布）：远程 attention、interactions 分页与操作面统一。
