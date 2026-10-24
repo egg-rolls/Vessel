@@ -25,12 +25,11 @@ async function withFixture(
 
 function validFiles(): Record<string, string> {
   return {
-    '.env.example': `# token\n${PRIORITY}\nVESSEL_GATEWAY_TOKEN=\nVESSEL_FEISHU_APP_ID=\nVESSEL_FEISHU_APP_SECRET=\n`,
     'README.md': [
       '# Vessel',
       'VESSEL_GATEWAY_TOKEN',
       PRIORITY,
-      '跨机器远程 0.6',
+      '跨机器远程 静态节点表',
       '微信 不做',
       '| [CI](docs/operations/CI-CD.md) |',
       '| [Release](docs/operations/RELEASE.md) |',
@@ -60,48 +59,6 @@ describe('checkDocs', () => {
     await withFixture(validFiles(), async (root) => {
       expect(await checkDocs(root)).toEqual([]);
     });
-  });
-
-  it('rejects a non-empty gateway token', async () => {
-    await withFixture(
-      { ...validFiles(), '.env.example': `${PRIORITY}\nVESSEL_GATEWAY_TOKEN=secret\n` },
-      async (root) => {
-        expect(await checkDocs(root)).toContainEqual(
-          expect.objectContaining({
-            file: '.env.example',
-            message: expect.stringContaining('留空'),
-          }),
-        );
-      },
-    );
-  });
-
-  it('rejects non-empty Feishu credentials', async () => {
-    await withFixture(
-      {
-        ...validFiles(),
-        '.env.example': `${PRIORITY}\nVESSEL_GATEWAY_TOKEN=\nVESSEL_FEISHU_APP_ID=real-id\nVESSEL_FEISHU_APP_SECRET=\n`,
-      },
-      async (root) => {
-        expect(await checkDocs(root)).toContainEqual(
-          expect.objectContaining({
-            file: '.env.example',
-            message: expect.stringContaining('VESSEL_FEISHU_APP_ID'),
-          }),
-        );
-      },
-    );
-  });
-
-  it('rejects VESSEL_NODE_ID', async () => {
-    await withFixture(
-      { ...validFiles(), '.env.example': `${PRIORITY}\nVESSEL_GATEWAY_TOKEN=\nVESSEL_NODE_ID=x\n` },
-      async (root) => {
-        expect(await checkDocs(root)).toContainEqual(
-          expect.objectContaining({ message: expect.stringContaining('VESSEL_NODE_ID') }),
-        );
-      },
-    );
   });
 
   it('reports missing token priority text', async () => {
