@@ -4,7 +4,7 @@
  * 单节点时保持原体验；配置了额外节点后按节点只读聚合（S9.4）：
  * 每个节点独立分页 / 独立失败，只有当前节点的会话可以跳转。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
 import {
@@ -114,11 +114,13 @@ function SingleNodeAttention({ navigate }: { navigate: (route: Route) => void })
     enabled: hasToken && node !== null,
     deps: [epoch, tenantEpoch, tenantId, status, node?.name ?? ''],
   });
-  useRefreshSignal(() => {
+  // 手动 Refresh 与全局刷新都丢掉追加页 / cursor，避免已答行残留在 more 里。
+  const refreshAll = useCallback(() => {
     setMore(null);
     setMoreError(null);
     resource.reload();
-  });
+  }, [resource.reload]);
+  useRefreshSignal(refreshAll);
 
   // 状态 / tenant / epoch 变化：丢掉上一轮追加的页，从第一页重新开始。
   // biome-ignore lint/correctness/useExhaustiveDependencies: 这些键就是分页身份
@@ -214,7 +216,7 @@ function SingleNodeAttention({ navigate }: { navigate: (route: Route) => void })
         <button
           type="button"
           className="btn btn-small"
-          onClick={resource.reload}
+          onClick={refreshAll}
           disabled={resource.refreshing}
         >
           {resource.refreshing ? t('observe.attention.refreshing') : t('observe.attention.refresh')}
