@@ -309,6 +309,8 @@ export const zhCN = {
     'permission {request} 不接受 --answers；请用 --allow 或 --deny',
   'attention.error.askInBatch': 'ask {request} 需要 --answers <json>',
   'attention.error.selectOutOfRange': '--select 索引 {index} 越界（本页 {count} 条）',
+  'attention.error.respondStatus':
+    'attention respond 只支持 --status pending；orphaned 交互不可应答（收到 {status}）',
   'attention.error.nodeMismatch':
     'attention 节点 "{name}" 报告的 node_id 是 "{actual}"，期望 "{expected}"',
   'attention.nodeHeader': '{name} · {url} · {total} {status}',

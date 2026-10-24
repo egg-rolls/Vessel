@@ -190,6 +190,93 @@ describe('vessel attention --agent', () => {
   });
 });
 
+describe('vessel attention respond status', () => {
+  it('refuses orphaned status instead of answering a pending row by index', async () => {
+    const target = fakeTarget((method) => {
+      if (method === 'interactions.list') return page([interaction({ request_id: 'p1' })]);
+      if (method === 'permission.respond') return { ok: true };
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await attentionCommand(
+      command({
+        kind: 'respond',
+        status: 'orphaned',
+        select: [1],
+        decision: 'allow',
+        yes: true,
+        json: false,
+      }),
+      options(target),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('pending');
+    // 不得发任何 RPC：否则 orphaned 列表的第 1 条会批准另一条 pending。
+    expect(target.calls).toEqual([]);
+  });
+});
+
+describe('vessel attention agent resolution', () => {
+  it('never calls agents.list for a pure id under a team token', async () => {
+    const target = fakeTarget((method) => {
+      if (method === 'teams.get') {
+        return { members: [{ agent_id: 'agent-1', name: 'worker', membership: 'present' }] };
+      }
+      if (method === 'interactions.list') return page([], 0);
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await attentionCommand(
+      command({ agent: 'agent-1', teamId: 'alpha', json: true }),
+      options(target),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(target.calls.some((call) => call.method === 'agents.list')).toBe(false);
+    const listCall = target.calls.find((call) => call.method === 'interactions.list');
+    expect((listCall?.params as { agent_id?: string } | undefined)?.agent_id).toBe('agent-1');
+  });
+
+  it('a 403 roster lookup falls back to the pure id instead of a token error', async () => {
+    const target = fakeTarget((method) => {
+      if (method === 'teams.get') {
+        throw new RpcClientError('forbidden', 'insufficient scope', { httpStatus: 403 });
+      }
+      if (method === 'interactions.list') return page([], 0);
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await attentionCommand(
+      command({ agent: 'agent-1', teamId: 'alpha', json: true }),
+      options(target),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    const listCall = target.calls.find((call) => call.method === 'interactions.list');
+    expect((listCall?.params as { agent_id?: string } | undefined)?.agent_id).toBe('agent-1');
+  });
+
+  it('a 401 roster lookup still stops as an auth failure', async () => {
+    const target = fakeTarget((method) => {
+      if (method === 'teams.get') {
+        throw new RpcClientError('unauthorized', 'bad token', { httpStatus: 401 });
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await attentionCommand(
+      command({ agent: 'agent-1', teamId: 'alpha', json: true }),
+      options(target),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('human control token');
+    expect(target.calls.some((call) => call.method === 'interactions.list')).toBe(false);
+  });
+});
+
 describe('vessel attention respond', () => {
   it('continues after a failing item and exits 1 when any item fails', async () => {
     const target = fakeTarget((method, params) => {

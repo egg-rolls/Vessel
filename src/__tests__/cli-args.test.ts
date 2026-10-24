@@ -819,6 +819,22 @@ describe('parseArgs - attention (0.22 S9.1)', () => {
     expect(err(['attention', '--cursor'])).toContain('Missing value for --cursor');
   });
 
+  it('--interactive --json is rejected instead of silently ignoring --json', () => {
+    expect(err(['attention', '--interactive', '--json'])).toContain(
+      '--interactive cannot be combined with --json',
+    );
+  });
+
+  it('respond rejects --status orphaned so indexes cannot come from a different list', () => {
+    expect(
+      err(['attention', 'respond', '--select', '1', '--allow', '--yes', '--status', 'orphaned']),
+    ).toContain('only supports --status pending');
+    expect(
+      ok(['attention', 'respond', '--select', '1', '--allow', '--yes', '--status', 'pending'])
+        .attentionCommand,
+    ).toMatchObject({ status: 'pending' });
+  });
+
   it('--all requires --yes', () => {
     expect(err(['attention', 'respond', '--all', '--allow'])).toContain('--yes');
     expect(

@@ -390,6 +390,14 @@ async function runRespond(
   command: AttentionCommandArgs,
   teamId: string | undefined,
 ): Promise<CommandResult> {
+  // Q-001：orphaned 不可应答；索引必须只来自 pending 列表，否则会批准未看到的另一条。
+  if (command.status !== 'pending') {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: t('attention.error.respondStatus', { status: command.status }),
+    };
+  }
   if (command.all) return respondAll(target, command, teamId);
   if (command.select !== undefined) return respondSelect(target, command, teamId);
   return respondOne(target, command, teamId);

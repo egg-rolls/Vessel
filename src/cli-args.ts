@@ -1919,6 +1919,7 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
   let teamId: string | undefined;
   let agent: string | undefined;
   let status: 'pending' | 'orphaned' = 'pending';
+  let statusExplicit = false;
   let order: 'oldest' | 'newest' | undefined;
   let limit = ATTENTION_DEFAULT_LIMIT;
   let cursor: string | undefined;
@@ -2031,6 +2032,7 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
         return { ok: false, error: '--status must be pending or orphaned' };
       }
       status = value.value;
+      statusExplicit = true;
       i = value.next;
       continue;
     }
@@ -2091,6 +2093,16 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
 
   if (args.help) return { ok: true, args };
 
+  if (interactive && json) {
+    return { ok: false, error: '--interactive cannot be combined with --json' };
+  }
+  if (isRespond && statusExplicit && status !== 'pending') {
+    return {
+      ok: false,
+      error:
+        'attention respond only supports --status pending; orphaned interactions cannot be answered',
+    };
+  }
   if (allNodes && isRespond) {
     return { ok: false, error: '--all-nodes is only valid for `vessel attention` (list)' };
   }

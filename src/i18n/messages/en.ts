@@ -320,6 +320,8 @@ export const en: Record<MessageKey, string> = {
     'permission {request} does not accept --answers; use --allow or --deny',
   'attention.error.askInBatch': 'ask {request} requires --answers <json>',
   'attention.error.selectOutOfRange': '--select index {index} is out of range (page has {count})',
+  'attention.error.respondStatus':
+    'attention respond only supports --status pending; orphaned interactions cannot be answered (got {status})',
   'attention.error.nodeMismatch':
     'attention node "{name}" reports node_id "{actual}", expected "{expected}"',
   'attention.nodeHeader': '{name} · {url} · {total} {status}',
