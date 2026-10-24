@@ -121,6 +121,13 @@ function parseTeamRecord(raw: string, dirName: string, tenantId: string): TeamRe
       created_at: parsed.created_at,
     };
     if (typeof parsed.handoff_path === 'string') record.handoff_path = parsed.handoff_path;
+    // 0.21 additive：可选字段只接受非空 string；手改非法值忽略该字段，不让整个 Team 失效。
+    if (typeof parsed.description === 'string' && parsed.description !== '') {
+      record.description = parsed.description;
+    }
+    if (typeof parsed.default_principal === 'string' && parsed.default_principal !== '') {
+      record.default_principal = parsed.default_principal;
+    }
     return record;
   } catch {
     return null;
@@ -220,6 +227,8 @@ export class FileTeamStore implements TeamStore {
           workspace,
           name: declaration.name,
           handoff_path: declaration.handoff_path,
+          description: declaration.description,
+          default_principal: declaration.default_principal,
           policy: declaration.policy,
         });
         await this.persist(record);
@@ -367,6 +376,12 @@ export class FileTeamStore implements TeamStore {
     };
     if (input.handoff_path !== undefined && input.handoff_path !== '') {
       record.handoff_path = input.handoff_path;
+    }
+    if (input.description !== undefined && input.description !== '') {
+      record.description = input.description;
+    }
+    if (input.default_principal !== undefined && input.default_principal !== '') {
+      record.default_principal = input.default_principal;
     }
     return record;
   }

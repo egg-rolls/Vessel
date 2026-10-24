@@ -295,9 +295,21 @@ async function dispatchTeam(
     case 'team.get': {
       const teamId = requireString(method, params, 'team_id');
       const limit = readLimit(method, params);
+      const membersLimit = params.members_limit;
+      if (membersLimit !== undefined) {
+        if (
+          typeof membersLimit !== 'number' ||
+          !Number.isInteger(membersLimit) ||
+          membersLimit < 1 ||
+          membersLimit > 100
+        ) {
+          throw invalidInput(method, 'members_limit must be an integer between 1 and 100');
+        }
+      }
       const detail = await team.get(teamId, {
         viewer: ownerId,
         ...(limit !== undefined ? { limit } : {}),
+        ...(membersLimit !== undefined ? { members_limit: membersLimit as number } : {}),
       });
       if (detail === undefined) {
         throw new AgentOwnerError('team_not_found', `team_not_found: ${teamId}`, 404);

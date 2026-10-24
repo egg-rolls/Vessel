@@ -72,6 +72,9 @@ function redactTeamSummary(team: TeamSummaryLike): TeamSummaryLike {
     member_count: team.member_count,
     online_count: team.online_count,
     created_at: team.created_at,
+    // 0.21：描述与默认接头人是展示字段，不随主机路径一起脱敏。
+    ...(team.description !== undefined ? { description: team.description } : {}),
+    ...(team.default_principal !== undefined ? { default_principal: team.default_principal } : {}),
   };
 }
 
@@ -159,6 +162,8 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
         properties: {
           team_id: { type: 'string', minLength: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 1000 },
+          // 0.21：roster 窗口（缺省 20，最大 100）；由 Team 控制面排序 / 截断。
+          members_limit: { type: 'integer', minimum: 1, maximum: 100 },
         },
       },
       result_schema: teamDetailSchema,
@@ -169,7 +174,17 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           const scope = teamScopeOf(ctx);
           assertTeamScope(scope, teamId);
           const limit = typeof params.limit === 'number' ? params.limit : undefined;
-          const detail = await control.get(teamId, limit === undefined ? undefined : { limit });
+          const membersLimit =
+            typeof params.members_limit === 'number' ? params.members_limit : undefined;
+          const detail = await control.get(
+            teamId,
+            limit === undefined && membersLimit === undefined
+              ? undefined
+              : {
+                  ...(limit !== undefined ? { limit } : {}),
+                  ...(membersLimit !== undefined ? { members_limit: membersLimit } : {}),
+                },
+          );
           if (!detail) throw new RpcError('not_found', `Team not found: ${teamId}`);
           if (scope === undefined) return detail;
           return { ...detail, team: redactTeamSummary(detail.team) };
