@@ -623,9 +623,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
     if (
       federation.rateLimitPerMinute !== undefined &&
-      (!Number.isInteger(federation.rateLimitPerMinute) || federation.rateLimitPerMinute < 0)
+      (!Number.isInteger(federation.rateLimitPerMinute) ||
+        federation.rateLimitPerMinute < 1 ||
+        federation.rateLimitPerMinute > 600)
     ) {
-      throw new Error('federation.rateLimitPerMinute must be a non-negative integer.');
+      throw new Error('federation.rateLimitPerMinute must be an integer between 1 and 600.');
     }
     for (const peer of federation.peers) {
       if (

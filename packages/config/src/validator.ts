@@ -303,12 +303,12 @@ function validateFederation(
     rateLimitPerMinute !== undefined &&
     (typeof rateLimitPerMinute !== 'number' ||
       !Number.isInteger(rateLimitPerMinute) ||
-      rateLimitPerMinute < 0 ||
+      rateLimitPerMinute < 1 ||
       rateLimitPerMinute > 600)
   ) {
     errors.push({
       path: 'federation.rateLimitPerMinute',
-      message: 'federation.rateLimitPerMinute must be an integer between 0 and 600',
+      message: 'federation.rateLimitPerMinute must be an integer between 1 and 600',
       value: rateLimitPerMinute,
     });
   }

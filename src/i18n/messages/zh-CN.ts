@@ -266,7 +266,6 @@ export const zhCN = {
   'federation.peers.enabled': '已启用',
   'federation.peers.disabled': '已关闭',
   'federation.peers.empty': '没有配置 peer。',
-  'federation.peers.rateLimitDisabled': 'federation.rateLimitPerMinute 为 0：入站限流已关闭',
   'federation.peers.row':
     '  {node}  {team}  direction={direction}  allow_directory={allowDir}  ' +
     'token_env={tokenEnv}  token={token}',

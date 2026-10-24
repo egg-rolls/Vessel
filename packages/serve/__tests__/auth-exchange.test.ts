@@ -110,6 +110,9 @@ function makeTeams(
       if (!known.has(teamId)) return undefined;
       return { team: { ...defaultTeam, team_id: teamId }, members: [], messages: [] };
     },
+    async roster() {
+      return [];
+    },
     async post() {
       throw new Error('post is not used by auth methods');
     },

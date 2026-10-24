@@ -91,7 +91,7 @@ export interface FederationGatewayOptions {
   enabled: boolean;
   nodeId: string;
   maxHops: number;
-  /** 每 peer 入站速率上限（60s 固定窗口）；缺省 60，`0` = 不限制。 */
+  /** 每 peer 入站速率上限（60s 固定窗口）；缺省 60，合法范围 1..600。 */
   rateLimitPerMinute?: number;
   peers: FederationGatewayPeer[];
 }
@@ -492,17 +492,22 @@ function errorCode(error: unknown): unknown {
 
 type FederationAcceptMode = 'principal' | 'log';
 
+type AcceptModeResult =
+  | { ok: true; mode: FederationAcceptMode }
+  | { ok: false; code: 'members_not_supported' };
+
 /**
  * 接收侧同意策略（S8）：只接受 `'principal' | 'log'`，缺省 `'principal'`。
- * 运行时遇到 `'members'` / 其它非法值按 `'principal'` fail-safe——**绝不恢复 fan-out**；
- * 配置层由 validator 明确报错（DECISION-037 §5.1）。
+ * 手改 team.json 的 `'members'` 必须明确失败（DECISION-037 §5.1），
+ * 不得 salvage 成 principal 后静默继续；配置层另由 validator 报错。
  */
-function acceptModeOf(team: TeamDetailLike): FederationAcceptMode {
+function acceptModeOf(team: TeamDetailLike): AcceptModeResult {
   const policy = team.team.policy;
-  if (!isRecord(policy)) return 'principal';
+  if (!isRecord(policy)) return { ok: true, mode: 'principal' };
   const federation = policy.federation;
-  if (!isRecord(federation)) return 'principal';
-  return federation.accept === 'log' ? 'log' : 'principal';
+  if (!isRecord(federation)) return { ok: true, mode: 'principal' };
+  if (federation.accept === 'members') return { ok: false, code: 'members_not_supported' };
+  return { ok: true, mode: federation.accept === 'log' ? 'log' : 'principal' };
 }
 
 /**
@@ -523,14 +528,14 @@ function resolvePrincipalMember(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-/** 每 peer 固定 60s 窗口；`limit <= 0` = 不限制。 */
+/** 每 peer 固定 60s 窗口；合法上限 1..600，非法值 fail closed（0 不再表示不限制）。 */
 function consumeRateLimit(
   windows: Map<string, RateWindow>,
   peer: FederationGatewayPeer,
   limit: number,
   now: number,
 ): boolean {
-  if (limit <= 0) return true;
+  if (!Number.isInteger(limit) || limit < 1) return false;
   const key = `${peer.nodeId}\u0000${peer.teamId}`;
   const window = windows.get(key);
   if (!window || now - window.windowStart >= RATE_WINDOW_MS) {
@@ -647,14 +652,12 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         if (!directoryTeam) {
           return errorJson('federation_unknown_team', 'Team not found', 404, extra);
         }
-        // 计数必须用完整 roster；未注入 roster 时退化为 get 的最大窗口。
-        let fullRoster: readonly TeamMemberLike[] = directoryTeam.members;
-        if (teamInfoControl.roster !== undefined) {
-          try {
-            fullRoster = await teamInfoControl.roster(localTeamId);
-          } catch {
-            fullRoster = directoryTeam.members;
-          }
+        // 计数必须用完整 roster；读取失败时明确 500，不用窗口结果少报计数。
+        let fullRoster: readonly TeamMemberLike[];
+        try {
+          fullRoster = await teamInfoControl.roster(localTeamId);
+        } catch {
+          return errorJson('internal', 'Failed to read the team roster', 500, extra);
         }
         return json(
           buildTeamInfo(
@@ -819,6 +822,22 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         return errorJson('team_not_found', 'Team not found', 404, extra);
       }
 
+      // 删除的全员 fan-out 语义必须显式失败；不静默改成 principal。
+      const accept = acceptModeOf(team);
+      if (!accept.ok) {
+        publish('federation.rejected', {
+          direction: 'in',
+          code: accept.code,
+          ...peerDetail,
+        });
+        return errorJson(
+          'members_not_supported',
+          'policy.federation.accept "members" was removed in 0.21; use "principal" or "log"',
+          500,
+          extra,
+        );
+      }
+
       // 12. 去重：重复不写日志，返回首次本地 id / cursor。
       const key = dedupeKey(message);
       const seen = dedupe.get(key);
@@ -837,7 +856,7 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
       }
 
       // 11. 投递解析（DECISION-037 §5）：owner 优先 → accept:'log' → 单成员。
-      const mode = acceptModeOf(team);
+      const mode = accept.mode;
       let resolution: FederationResolution;
       let mentions: string[] = [];
       let to: string[] | undefined;

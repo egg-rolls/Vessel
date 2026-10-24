@@ -43,25 +43,15 @@ describe('resolveFederationOptions', () => {
     ]);
   });
 
-  it('treats rateLimitPerMinute=0 as unlimited and reports a warning issue', () => {
-    const { options, issues } = resolveFederationOptions({
-      federation: config({ rateLimitPerMinute: 0 }),
-      nodeId: 'node-a',
-      env,
-    });
-    expect(options.rateLimitPerMinute).toBe(0);
-    expect(issues).toContainEqual({ reason: 'rate_limit_disabled' });
-  });
-
-  it('falls back to 60 for an illegal rateLimitPerMinute instead of disabling limiting', () => {
-    for (const value of [601, -1, 1.5, Number.NaN]) {
+  it('falls back to 60 for 0 / illegal rateLimitPerMinute; there is no unlimited value', () => {
+    for (const value of [0, 601, -1, 1.5, Number.NaN]) {
       const { options, issues } = resolveFederationOptions({
         federation: config({ rateLimitPerMinute: value }),
         nodeId: 'node-a',
         env,
       });
       expect(options.rateLimitPerMinute).toBe(60);
-      expect(issues).not.toContainEqual({ reason: 'rate_limit_disabled' });
+      expect(issues).toEqual([]);
     }
   });
 

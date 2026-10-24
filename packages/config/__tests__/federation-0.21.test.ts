@@ -27,10 +27,12 @@ function withFederation(
 }
 
 describe('0.21 federation rateLimitPerMinute', () => {
-  it('accepts 0 as unlimited and 600 as the upper bound', () => {
-    expect(paths(withFederation({ rateLimitPerMinute: 0 }))).toEqual([]);
+  it('accepts 1..600 and rejects 0 (no unlimited value)', () => {
     expect(paths(withFederation({ rateLimitPerMinute: 600 }))).toEqual([]);
     expect(paths(withFederation({ rateLimitPerMinute: 1 }))).toEqual([]);
+    expect(paths(withFederation({ rateLimitPerMinute: 0 }))).toContain(
+      'federation.rateLimitPerMinute',
+    );
   });
 
   it('rejects out-of-range, fractional, and non-numeric values', () => {

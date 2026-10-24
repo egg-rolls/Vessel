@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { TeamPolicyError } from '@vessel-agent/config';
 import { FileTeamStore, type MemberStatus, teamsDirPath } from '../src/index.js';
 import { makeMember, makeTeamHarness } from './helpers.js';
 
@@ -68,6 +69,37 @@ describe('team directory persistence (0.21)', () => {
       description: 'handoff mailbox',
       default_principal: 'owner',
     });
+  });
+
+  it('rejects a hand-edited members accept instead of salvaging it to principal', async () => {
+    const dataDir = await tempDir();
+    const tenantDir = teamsDirPath(dataDir, 'default');
+    const workspace = join(dataDir, 'members-policy');
+    await mkdir(join(tenantDir, 'members-policy'), { recursive: true });
+    await writeFile(
+      join(tenantDir, 'members-policy', 'team.json'),
+      JSON.stringify({
+        v: 1,
+        team_id: 'members-policy',
+        name: 'Members Policy',
+        tenant_id: 'default',
+        workspace,
+        policy: { federation: { accept: 'members' } },
+        created_at: 1,
+      }),
+    );
+    const store = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    await store.ready();
+
+    let caught: unknown;
+    try {
+      store.policy('members-policy');
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(TeamPolicyError);
+    expect((caught as TeamPolicyError).code).toBe('members_not_supported');
+    expect((caught as Error).message).toContain('use "principal" or "log"');
   });
 
   it('ignores invalid optional fields but still loads the team', async () => {

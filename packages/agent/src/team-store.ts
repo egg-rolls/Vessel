@@ -19,7 +19,7 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { parseTeamPolicy, type TeamPolicy } from '@vessel-agent/config';
+import { parseTeamPolicy, type TeamPolicy, TeamPolicyError } from '@vessel-agent/config';
 import { atomicWrite, type Logger, noopLogger } from '@vessel-agent/core';
 import { TeamLogWriter } from './team-log.js';
 import { normalizeWorkspace, teamIdForWorkspace, workspaceKey } from './team-slug.js';
@@ -87,6 +87,21 @@ function isNotFound(error: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 0.21 已删除全员 fan-out；手改 team.json 的 `'members'` 必须明确失败，
+ * 不能 salvage 成 principal 后静默继续（DECISION-037 §5.1）。
+ */
+function assertSupportedFederationPolicy(record: TeamRecord): void {
+  const federation = record.policy.federation;
+  if (typeof federation !== 'object' || federation === null || Array.isArray(federation)) return;
+  if ((federation as Record<string, unknown>).accept !== 'members') return;
+  throw new TeamPolicyError(
+    'members_not_supported: policy.federation.accept "members" was removed in 0.21; use "principal" or "log"',
+    'federation.accept',
+    'members_not_supported',
+  );
 }
 
 function cloneRecord(record: TeamRecord): TeamRecord {
@@ -270,6 +285,8 @@ export class FileTeamStore implements TeamStore {
   policy(teamId: string): TeamPolicy | undefined {
     const record = this.teams.get(teamId);
     if (!record) return undefined;
+    // 删除的语义不是“可选坏子树”：必须让读取方看到确定错误。
+    assertSupportedFederationPolicy(record);
     try {
       return parseTeamPolicy(record.policy);
     } catch (error) {

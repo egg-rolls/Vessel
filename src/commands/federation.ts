@@ -280,9 +280,7 @@ async function peersCommand(
   const peers = configuredPeers(options.config, env);
 
   for (const issue of issues) {
-    if (issue.reason === 'rate_limit_disabled') {
-      console.error(ui.warn(t('federation.peers.rateLimitDisabled')));
-    } else if (issue.reason === 'missing_token') {
+    if (issue.reason === 'missing_token') {
       console.error(ui.warn(`federation peer ${issue.peer}: token env is not set`));
     } else if (issue.reason === 'self_peer') {
       console.error(ui.warn(`federation peer ${issue.peer}: node id equals this node (skipped)`));

@@ -24,11 +24,14 @@ export interface TeamPolicyIssue {
 /** 非法 Team policy；调用方对 `team.json` 是 catch 后 warning + 忽略。 */
 export class TeamPolicyError extends Error {
   readonly field?: string;
+  /** 稳定错误码（如 `members_not_supported`）；配置校验错误缺省。 */
+  readonly code?: string;
 
-  constructor(message: string, field?: string) {
+  constructor(message: string, field?: string, code?: string) {
     super(message);
     this.name = 'TeamPolicyError';
     if (field !== undefined) this.field = field;
+    if (code !== undefined) this.code = code;
   }
 }
 

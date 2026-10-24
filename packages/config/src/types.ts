@@ -410,7 +410,7 @@ export interface FederationConfig {
   maxHops?: number;
   /**
    * 每 peer 入站速率上限（0.21 additive）。
-   * 缺省 60；1..600；0 = 不限制（记录 warning）。
+   * 缺省 60；合法范围 1..600（无“不限制”值）。
    */
   rateLimitPerMinute?: number;
   peers?: FederationPeerConfig[];

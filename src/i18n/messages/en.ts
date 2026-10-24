@@ -277,8 +277,6 @@ export const en: Record<MessageKey, string> = {
   'federation.peers.enabled': 'enabled',
   'federation.peers.disabled': 'disabled',
   'federation.peers.empty': 'No peers configured.',
-  'federation.peers.rateLimitDisabled':
-    'federation.rateLimitPerMinute is 0: inbound rate limiting is disabled',
   'federation.peers.row':
     '  {node}  {team}  direction={direction}  allow_directory={allowDir}  ' +
     'token_env={tokenEnv}  token={token}',

@@ -59,6 +59,10 @@ class FakeTeams implements TeamControlLike {
     };
   }
 
+  async roster(): Promise<TeamMemberLike[]> {
+    return this.rosterMembers;
+  }
+
   async post(input: Parameters<TeamControlLike['post']>[0]): Promise<TeamPostResultLike> {
     if (this.failPost) {
       throw Object.assign(new Error('disk full'), { code: 'io_error' });

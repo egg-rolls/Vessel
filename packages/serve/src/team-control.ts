@@ -163,9 +163,9 @@ export interface TeamControlLike {
   ): Promise<TeamDetailLike | undefined>;
   /**
    * 完整 roster（不受 `members_limit` 窗口影响），team-info 计数用。
-   * 可选：未注入时退化为 `get(..., {members_limit: 100})`。
+   * 真实装配注入的 AgentTeamService 始终提供；缺失会让 team-info 失败而不是少报计数。
    */
-  roster?(teamId: string, options?: { viewer?: string }): Promise<TeamMemberLike[]>;
+  roster(teamId: string, options?: { viewer?: string }): Promise<TeamMemberLike[]>;
   post(input: {
     team_id: string;
     content: string;

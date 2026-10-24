@@ -58,6 +58,10 @@ class FakeTeams implements TeamControlLike {
     };
   }
 
+  async roster(): Promise<TeamMemberLike[]> {
+    return this.rosterMembers;
+  }
+
   async post(input: Parameters<TeamControlLike['post']>[0]): Promise<TeamPostResultLike> {
     this.posts.push(input);
     const mentions = input.mentions ?? [];
@@ -287,7 +291,7 @@ describe('federation inbound addressing (S8.1)', () => {
     });
   });
 
-  it("V8: accept:'log' is log-only; a runtime 'members' value never fans out", async () => {
+  it("V8: accept:'log' is log-only; a runtime 'members' value fails explicitly", async () => {
     const logTeams = new FakeTeams();
     logTeams.rosterMembers = [member('bob', { presence: 'live' })];
     logTeams.policy = { federation: { accept: 'log' } };
@@ -302,7 +306,7 @@ describe('federation inbound addressing (S8.1)', () => {
       delivered: 0,
     });
 
-    // 非法值（运行时）按 'principal' fail-safe：只命中 bob，不广播给 carol。
+    // 删除的 'members' 语义必须明确失败，不能 salvage 成 principal 后静默投递。
     const invalidTeams = new FakeTeams();
     invalidTeams.rosterMembers = [
       member('bob', { presence: 'live' }),
@@ -311,16 +315,19 @@ describe('federation inbound addressing (S8.1)', () => {
     invalidTeams.policy = { federation: { accept: 'members' } };
     const invalidRoute = createRoute(invalidTeams);
 
-    expect((await send(invalidRoute.route, envelope('msg-members'))).status).toBe(202);
-    expect(invalidTeams.posts).toHaveLength(1);
-    expect(invalidTeams.posts[0]?.mentions).toEqual(['agent-bob']);
-    expect(received(invalidRoute.events)[0]?.data).toMatchObject({
-      resolution: 'principal',
-      delivered: 1,
+    const invalid = await send(invalidRoute.route, envelope('msg-members'));
+    expect(invalid.status).toBe(500);
+    expect(await invalid.json()).toMatchObject({
+      error: {
+        code: 'members_not_supported',
+        message: expect.stringContaining('use "principal" or "log"'),
+      },
     });
+    expect(invalidTeams.posts).toHaveLength(0);
+    expect(received(invalidRoute.events)).toHaveLength(0);
   });
 
-  it('V11: rate limit is per peer, rejects before body read, and 0 disables it', async () => {
+  it('V11: rate limit is per peer, rejects before body read, and 0 is not unlimited', async () => {
     const teams = new FakeTeams();
     teams.policy = { federation: { accept: 'log' } };
     const { route, events } = createRoute(teams, { rateLimitPerMinute: 1 });
@@ -345,12 +352,12 @@ describe('federation inbound addressing (S8.1)', () => {
     const garbageResponse = await route.handle(garbage);
     expect(garbageResponse?.status).toBe(429);
 
-    const unlimitedTeams = new FakeTeams();
-    unlimitedTeams.policy = { federation: { accept: 'log' } };
-    const unlimited = createRoute(unlimitedTeams, { rateLimitPerMinute: 0 });
-    expect((await send(unlimited.route, envelope('msg-a'))).status).toBe(202);
-    expect((await send(unlimited.route, envelope('msg-b'))).status).toBe(202);
-    expect(unlimitedTeams.posts).toHaveLength(2);
+    // 0 不是“不限制”：配置层已拒绝；运行时按 fail closed 处理。
+    const zeroTeams = new FakeTeams();
+    zeroTeams.policy = { federation: { accept: 'log' } };
+    const zero = createRoute(zeroTeams, { rateLimitPerMinute: 0 });
+    expect((await send(zero.route, envelope('msg-a'))).status).toBe(429);
+    expect(zeroTeams.posts).toHaveLength(0);
   });
 });
 
