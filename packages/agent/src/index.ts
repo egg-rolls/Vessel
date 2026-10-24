@@ -52,6 +52,7 @@ export {
 export {
   FileTeamStore,
   type FileTeamStoreOptions,
+  TeamMetadataCorruptError,
   teamDirPath,
   teamLogPath,
   teamMetadataPath,

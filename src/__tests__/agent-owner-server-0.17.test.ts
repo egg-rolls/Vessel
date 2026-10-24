@@ -10,7 +10,12 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { AgentService, AgentTeamService, MemberStatus } from '@vessel-agent/agent';
+import {
+  type AgentService,
+  type AgentTeamService,
+  type MemberStatus,
+  TeamMetadataCorruptError,
+} from '@vessel-agent/agent';
 import {
   AGENT_OWNER_MAX_BODY_BYTES,
   type AgentOwnerServer,
@@ -326,6 +331,29 @@ describe('agent owner server', () => {
     expect(response.body).toMatchObject({
       ok: false,
       error: { code: 'unknown_member' },
+    });
+  });
+
+  it('maps corrupt team metadata to team_metadata_corrupt instead of a generic internal error', async () => {
+    const service = {
+      ...fakeService(emptyCalls()),
+      new: async () => {
+        throw new TeamMetadataCorruptError('/data/teams/default/alpha/team.json');
+      },
+    } as unknown as AgentService;
+    const server = await startAgentOwnerServer({
+      service,
+      team: fakeTeam(emptyCalls()),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    const response = await post(server, { method: 'agent.new', params: { name: 'alpha' } });
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'team_metadata_corrupt' },
     });
   });
 
