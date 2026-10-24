@@ -23,6 +23,9 @@ const LINK_FILES = [
   'CONTRIBUTING.md',
   'docs/ARCHITECTURE.md',
   'docs/FILE-MANAGEMENT.md',
+  'docs/DOC-MANAGEMENT.md',
+  'docs/versions/CURRENT.md',
+  'docs/versions/INDEX.md',
   'docs/ADR.md',
   'docs/adr/README.md',
   'docs/operations/CI-CD.md',
@@ -398,7 +401,7 @@ async function checkNotImplementedMarkers(root: string, issues: DocIssue[]): Pro
   const readme = await readFile(readmePath, 'utf8');
 
   for (const [feature, marker] of [
-    ['跨机器远程', '0.6'],
+    ['跨机器远程', '静态节点表'],
     ['微信', '不做'],
   ] as const) {
     if (!readme.includes(feature) || !readme.includes(marker)) {
