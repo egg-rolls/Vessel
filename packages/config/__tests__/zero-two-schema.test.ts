@@ -96,6 +96,13 @@ describe('host', () => {
     expect(errorsOf({ host: { nodeId: 'node_1-A' } })).toHaveLength(0);
   });
 
+  it('nodeName 必须是非空字符串', () => {
+    expect(errorsOf({ host: { nodeName: 'Lab Node' } })).toHaveLength(0);
+    for (const nodeName of ['', '   ', 1 as unknown as string]) {
+      expect(errorsOf({ host: { nodeName } }).map((e) => e.path)).toContain('host.nodeName');
+    }
+  });
+
   it('host.limits 非负', () => {
     expect(errorsOf({ host: { limits: { requestLimit: -1 } } }).map((e) => e.path)).toContain(
       'host.limits.requestLimit',

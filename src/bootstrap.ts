@@ -78,7 +78,7 @@ import { t } from './i18n';
 import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
-import { resolveNodeId } from './node-identity';
+import { resolveNodeIdentity } from './node-identity';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
 import { resolveAgentCwd } from './path-resolution';
 import {
@@ -262,8 +262,10 @@ export interface BootstrapResult {
   sessionControl?: SessionControl;
   /** host.enabled=true 且构造成功时存在 */
   host?: RuntimeHost;
-  /** nodeId 唯一来源：config.host.nodeId，缺省进程内生成 */
+  /** nodeId 唯一来源：config.host.nodeId > node.json > 首次生成 */
   nodeId: string;
+  /** 节点展示名：config.host.nodeName > node.json > hostname 派生 */
+  nodeName: string;
   /** 0.3：MCP 控制面（未配置 mcp_servers 时为 undefined） */
   mcp?: McpControl;
   /** 0.3 durable：checkpoint store（durable 关闭时为 undefined） */
@@ -381,6 +383,7 @@ function resumeRpcError(error: unknown, runId: string): Error {
 async function bootstrapConnect(input: {
   config: VesselConfig;
   nodeId: string;
+  nodeName: string;
   tenantId: string;
   tenantPaths: TenantPaths;
   url: string;
@@ -766,6 +769,7 @@ async function bootstrapConnect(input: {
     ...(remote !== undefined ? { remote } : {}),
     tenantPaths: input.tenantPaths,
     nodeId: input.nodeId,
+    nodeName: input.nodeName,
     resumeRun: async (runId, opts) => {
       const outcome = await waitForConnectedResumeTerminal({
         events,
@@ -904,12 +908,16 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     : resolvedDataDir;
   const tenantPaths = resolveTenantPaths(dataDir, tenantId);
 
-  // nodeId 唯一来源（U3）：host.node_id > <dataDir>/node.json > 首次生成；transport / PeerInfo 共用。
-  const nodeId = await resolveNodeId({
+  // 节点身份（0.25）：node_id 唯一来源（U3）：host.node_id > <dataDir>/node.json > 首次生成；
+  // 展示名：host.node_name > 文件 name > hostname 派生。transport / PeerInfo 共用 nodeId。
+  const nodeIdentity = await resolveNodeIdentity({
     ...(config.host?.nodeId !== undefined ? { configNodeId: config.host.nodeId } : {}),
+    ...(config.host?.nodeName !== undefined ? { configNodeName: config.host.nodeName } : {}),
     dataDir,
     logger,
   });
+  const nodeId = nodeIdentity.nodeId;
+  const nodeName = nodeIdentity.name;
   const connectUrl = options.connect ?? process.env.VESSEL_CONNECT;
   const connectMode = typeof connectUrl === 'string' && connectUrl.trim() !== '';
 
@@ -921,6 +929,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     return bootstrapConnect({
       config,
       nodeId,
+      nodeName,
       tenantId,
       tenantPaths,
       url: connectUrl,
@@ -1164,6 +1173,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       dataDir,
       tenantId,
       nodeId,
+      nodeName,
       logger,
     });
     nodeTokens = hubRuntime.nodeTokens;
@@ -1377,6 +1387,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(localAuth.ok ? { auth: localAuth.auth } : {}),
     version: readPackageVersion(),
     nodeId,
+    nodeName,
     defaultTenantId: tenantId,
     config: {
       snapshot: async (requestedTenant: string): Promise<ConfigSnapshotLike> => {
@@ -1704,6 +1715,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     sessionControl,
     host,
     nodeId,
+    nodeName,
     mcp: mcpControl,
     runStore,
     runs,

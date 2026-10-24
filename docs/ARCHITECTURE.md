@@ -2361,9 +2361,11 @@ interface LimitBlock {
 
 ### 40.1 节点身份
 
-- `<dataDir>/node.json` 固定 `{node_id, created_at}`，0600 原子写；`src/node-identity.ts` 的 `resolveNodeId()` 是唯一入口。
-- 优先级：`config.host.nodeId` > 文件 > 首次生成 `randomUUID()` 并写回。配置优先时只比较并在不一致时告警，不改写文件。
-- 文件损坏 / 字段非法抛 `node_identity_corrupt`，不静默换身份；首次写后重读，磁盘值优先（并发首启）。
+- `<dataDir>/node.json` 为 `{node_id, name, created_at}`，0600 原子写；`src/node-identity.ts` 的 `resolveNodeIdentity()` 是唯一入口（`resolveNodeId()` 是只取 id 的兼容入口）。`name` 是 0.25 additive 的展示名，寻址 / 去重仍只用 `node_id`。
+- `node_id` 优先级：`config.host.nodeId` > 文件 > 首次生成 `randomUUID()` 并写回。配置优先时只比较并在不一致时告警，不改写文件。
+- `name` 优先级：`config.host.nodeName` > 文件 `name` > sanitized `os.hostname()`（trim / 去控制字符 / 折叠空白 / 上限 64，空回退 `node`）。旧文件缺 `name` 时读取时派生、不回写；配置优先时同样只比较告警。`name` 缺失 / 非法只回退 hostname，不影响身份。
+- 文件损坏（JSON / `node_id` / `created_at`）抛 `node_identity_corrupt`，不静默换身份；首次写后重读，磁盘值优先（并发首启）。
+- `health.get` 的 `node.name` 是必需字符串（gateway 未注入时回退 `node_id`）；hub 目录记录与 `vessel.hub/1` snapshot 帧 additive 携带 `name`，协议版本不变。
 - `incarnation` 仍每进程独立，只用于事件去重（ADR-067）；同一 `dataDir` 的多个 `--instance` 共用 `node_id`。
 
 ### 40.2 Agent 记录与快照 v2

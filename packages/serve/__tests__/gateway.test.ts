@@ -57,6 +57,26 @@ describe('gateway core', () => {
     expect(body.node.capabilities.max_concurrency).toBe(1);
   });
 
+  it('exposes the node display name in health.get', async () => {
+    const gw = track(createGateway({ events: new MemoryEventStream(), nodeName: 'Lab Node' }));
+
+    const response = await gw.rpc({ v: 1, id: 'node-name', method: 'health.get' });
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error(response.error.message);
+    expect((response.result as { node: { name: string } }).node.name).toBe('Lab Node');
+  });
+
+  it('falls back to node_id as the display name', async () => {
+    const gw = track(createGateway({ events: new MemoryEventStream() }));
+
+    const response = await gw.rpc({ v: 1, id: 'node-name-fallback', method: 'health.get' });
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error(response.error.message);
+    expect((response.result as { node: { name: string } }).node.name).toBe(gw.nodeId);
+  });
+
   it('keeps legacy /health shape', async () => {
     const gw = track(createGateway({ events: new MemoryEventStream() }));
     const body = (await (await fetch(`${gw.url}/health`)).json()) as { status: string };

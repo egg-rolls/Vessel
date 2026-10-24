@@ -2146,7 +2146,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 host（0.2；默认关闭）
   if (config.host) {
-    const { enabled, nodeId, limits } = config.host;
+    const { enabled, nodeId, nodeName, limits } = config.host;
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       errors.push({
         path: 'host.enabled',
@@ -2159,6 +2159,13 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         path: 'host.nodeId',
         message: 'host.nodeId must be 1-64 chars of [A-Za-z0-9_-]',
         value: nodeId,
+      });
+    }
+    if (nodeName !== undefined && (typeof nodeName !== 'string' || nodeName.trim() === '')) {
+      errors.push({
+        path: 'host.nodeName',
+        message: 'host.nodeName must be a non-empty string',
+        value: nodeName,
       });
     }
     if (limits) validateLimits('host.limits', limits, errors);
@@ -2414,7 +2421,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   session: ['backend', 'storagePath', 'maxHistory'],
   permission: ['autoApprove'],
   update: ['autoCheck', 'channel', 'source'],
-  host: ['enabled', 'nodeId', 'limits'],
+  host: ['enabled', 'nodeId', 'nodeName', 'limits'],
   scheduler: ['maxConcurrency', 'maxQueueSize', 'perAgentSerial'],
   transport: ['kind', 'token'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],

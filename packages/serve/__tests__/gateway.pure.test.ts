@@ -19,6 +19,7 @@ const PROTOCOL: ProtocolInfo = {
 
 const NODE: NodeInfo = {
   node_id: 'node-1',
+  name: 'node-1',
   pid: 1,
   started_at: 0,
   endpoint: 'http://127.0.0.1:8642',

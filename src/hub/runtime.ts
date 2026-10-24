@@ -355,6 +355,7 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   function onSnapshot(pairingId: string, snapshot: HubControlSnapshot): void {
     patchRecord(pairingId, {
       status: 'healthy',
+      name: snapshot.name,
       last_seen: snapshot.observed_at,
       incarnation: snapshot.incarnation,
       revision: snapshot.revision,
@@ -406,6 +407,7 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     }
     patchRecord(pairingId, {
       status: 'healthy',
+      name: snapshot.name,
       last_seen: snapshot.observed_at,
       incarnation: snapshot.incarnation,
       revision: snapshot.revision,
@@ -632,6 +634,7 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
       pairing_id: pairingIdFor(localNode.nodeId, localNode.tenantId),
       node_id: localNode.nodeId,
       tenant_id: localNode.tenantId,
+      ...(typeof input.name === 'string' && input.name !== '' ? { name: input.name } : {}),
       direction: 'node',
       status: 'healthy',
       last_seen: clock(),
