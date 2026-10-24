@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { type AgentStatus, MemoryEventStream, type RunEvent } from '@vessel-agent/core';
+import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import { createLocalRpcDispatcher, type LocalRpcDispatcher } from '../src/local';
-import type { TeamHostLike } from '../src/team';
-import type { GatewayAuthLike } from '../src/tenant';
 import { createGatewayEventHub } from '../src/tenant-event-hub';
-import { createGateway, createRuntime, SlowProvider } from './helpers';
+import { createRuntime, SlowProvider } from './helpers';
 import { runDispatcher } from './rpc-test-utils';
 
 const dispatchers: LocalRpcDispatcher[] = [];
@@ -33,57 +31,6 @@ function event(
     data,
     ts,
     ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
-  };
-}
-
-function makeHost(): TeamHostLike {
-  const status: AgentStatus = {
-    id: 'worker',
-    name: 'Worker',
-    state: 'idle',
-    toolNames: ['read'],
-  };
-  return {
-    list: () => [status],
-    get: (id) =>
-      id === 'worker' ? { status: () => status, close: async () => undefined } : undefined,
-    inbox: async (_id, cursor = '0') => ({ messages: [], cursor }),
-    cancel: () => undefined,
-  };
-}
-
-function authFor(): GatewayAuthLike {
-  return {
-    configured: true,
-    authenticate: (token) => {
-      if (token === 'd') return { tenant_id: 'default', role: 'write' };
-      if (token === 'b') return { tenant_id: 'b', role: 'write' };
-      if (token === 'admin') return { tenant_id: '*', role: 'admin' };
-      return null;
-    },
-  };
-}
-
-async function postRpc(
-  url: string,
-  token: string,
-  method: string,
-  params?: unknown,
-): Promise<{ ok: boolean; result?: unknown; error?: { code: string } }> {
-  const response = await fetch(`${url}/v1/rpc`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      v: 1,
-      id: crypto.randomUUID(),
-      method,
-      ...(params !== undefined ? { params } : {}),
-    }),
-  });
-  return (await response.json()) as {
-    ok: boolean;
-    result?: unknown;
-    error?: { code: string };
   };
 }
 
@@ -131,72 +78,6 @@ describe('agents RPC', () => {
     });
     expect(missing.ok).toBe(false);
     if (!missing.ok) expect(missing.error.code).toBe('not_found');
-  });
-
-  it('prefers host member state and keeps derived depth/parent', async () => {
-    const events = new MemoryEventStream();
-    const dispatcher = createLocalRpcDispatcher({
-      hub: hubFor(events),
-      team: { nodeId: 'A', host: makeHost() },
-    });
-    dispatchers.push(dispatcher);
-
-    events.publish(
-      event('subagent.delegate.started', 'root', {
-        delegateId: 'worker',
-        depth: 2,
-        task: 'nested',
-      }),
-    );
-    const listed = (await runDispatcher(dispatcher.dispatch, 'agents.list')) as {
-      agents: Array<Record<string, unknown>>;
-    };
-    expect(listed.agents).toHaveLength(1);
-    expect(listed.agents[0]).toMatchObject({
-      id: 'worker',
-      role: 'Worker',
-      depth: 2,
-      state: 'idle',
-    });
-  });
-
-  it('does not expose host entries to non-default tenants', async () => {
-    const events = new MemoryEventStream();
-    const gateway = createGateway({
-      events,
-      auth: authFor(),
-      team: { nodeId: 'A', host: makeHost() },
-    });
-    gateways.push(gateway);
-
-    const asDefault = await postRpc(gateway.url, 'd', 'agents.list');
-    expect(asDefault.ok).toBe(true);
-    expect((asDefault.result as { agents: unknown[] }).agents).toHaveLength(1);
-
-    const asTenantB = await postRpc(gateway.url, 'b', 'agents.list');
-    expect(asTenantB.ok).toBe(true);
-    expect((asTenantB.result as { agents: unknown[] }).agents).toEqual([]);
-
-    // tenant b 自己的派生条目只看得到自己的。
-    events.publish(
-      event(
-        'subagent.delegate.started',
-        'root-b',
-        { delegateId: 'b-child', depth: 0, task: 'b' },
-        2000,
-        'b',
-      ),
-    );
-    const bAfter = (await postRpc(gateway.url, 'b', 'agents.list')) as {
-      ok: boolean;
-      result: { agents: Array<{ id: string }> };
-    };
-    expect(bAfter.result.agents.map((agent) => agent.id)).toEqual(['b-child']);
-    const defaultAfter = (await postRpc(gateway.url, 'd', 'agents.list')) as {
-      ok: boolean;
-      result: { agents: Array<{ id: string }> };
-    };
-    expect(defaultAfter.result.agents.map((agent) => agent.id)).toEqual(['worker']);
   });
 
   it('includes active runs when no host is configured', async () => {

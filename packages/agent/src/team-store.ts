@@ -7,8 +7,10 @@
  *     log.ndjson   # 只追加日志，0600
  *
  * 纪律：
- * - `ready()` 加载全部 `team.json`，缺失目录 = 空；损坏 / 非法 / v!==1 只 warning 后跳过，
+ * - `ready()` 加载全部 `team.json`，缺失目录 = 空；损坏 / 非法 / v!==1 记 error 并移出可用集合，
  *   启动永不抛错；
+ * - 损坏的 `team_id` 不得被 `seed()` / `ensureForWorkspace()` 在同路径重建（会丢 policy /
+ *   default_principal / handoff）：抛 `TeamMetadataCorruptError` 或跳过，原文件保持不动；
  * - `seed()` 只补写缺失的 `team.json`，冲突只 warning，永不覆盖既有 name / policy；
  * - `ensureForWorkspace()` 全局串行 + 同 workspace 单飞，幂等：两次并发只会建一个目录；
  * - 不建第二个 roster 真相源；roster 由 Agent 记录派生（不在本文件）。
@@ -89,6 +91,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** `team.json` 损坏：拒绝在原路径重建（否则会静默丢掉 policy / default_principal / handoff）。 */
+export class TeamMetadataCorruptError extends Error {
+  readonly code = 'team_metadata_corrupt';
+
+  constructor(readonly path: string) {
+    super(`team_metadata_corrupt: ${path}`);
+    this.name = 'TeamMetadataCorruptError';
+  }
+}
+
 /**
  * 0.21 已删除全员 fan-out；手改 team.json 的 `'members'` 必须明确失败，
  * 不能 salvage 成 principal 后静默继续（DECISION-037 §5.1）。
@@ -163,6 +175,8 @@ export class FileTeamStore implements TeamStore {
   private readonly durable: boolean;
   /** team_id -> 元数据 */
   private readonly teams = new Map<string, TeamRecord>();
+  /** 加载时判定损坏的 team_id；禁止 ensure / seed 覆盖同路径 */
+  private readonly corruptTeamIds = new Set<string>();
   /** workspaceKey -> team_id */
   private readonly workspaceIndex = new Map<string, string>();
   /** team_id -> 日志写者（懒创建） */
@@ -228,6 +242,14 @@ export class FileTeamStore implements TeamStore {
         }
 
         const teamId = teamIdForWorkspace(workspace, (id) => this.teams.get(id)?.workspace);
+        if (this.corruptTeamIds.has(teamId)) {
+          // 声明对应的 team.json 已损坏：补写会覆盖原文件并丢掉 policy / handoff。
+          this.logger.error('team.metadata.corrupt', {
+            path: teamMetadataPath(this.dataDir, this.tenantId, teamId),
+            action: 'seed_skipped',
+          });
+          continue;
+        }
         const occupant = this.teams.get(teamId);
         if (occupant) {
           if (workspaceKey(occupant.workspace) !== key) {
@@ -342,12 +364,12 @@ export class FileTeamStore implements TeamStore {
         raw = await readFile(path, 'utf8');
       } catch (error) {
         if (isNotFound(error)) continue;
-        this.logger.warn('team.metadata.corrupt', { path, error: errorMessage(error) });
+        this.markCorrupt(entry.name, path, errorMessage(error));
         continue;
       }
       const record = parseTeamRecord(raw, entry.name, this.tenantId);
       if (!record) {
-        this.logger.warn('team.metadata.corrupt', { path });
+        this.markCorrupt(entry.name, path);
         continue;
       }
       this.register(record);
@@ -364,6 +386,9 @@ export class FileTeamStore implements TeamStore {
 
     const workspace = normalizeWorkspace(input.workspace);
     const teamId = teamIdForWorkspace(workspace, (id) => this.teams.get(id)?.workspace);
+    if (this.corruptTeamIds.has(teamId)) {
+      throw new TeamMetadataCorruptError(teamMetadataPath(this.dataDir, this.tenantId, teamId));
+    }
     const occupant = this.teams.get(teamId);
     if (occupant) {
       // 同一 id 但 workspace 不同：绝不合并（正常由哈希后缀避免）。
@@ -413,6 +438,15 @@ export class FileTeamStore implements TeamStore {
       `${JSON.stringify(record, null, 2)}\n`,
       { mode: 0o600, durable: this.durable },
     );
+  }
+
+  /** 损坏的 Team 只移出可用集合；原文件保持不动，ensure / seed 不得重建。 */
+  private markCorrupt(teamId: string, path: string, error?: string): void {
+    this.corruptTeamIds.add(teamId);
+    this.logger.error('team.metadata.corrupt', {
+      path,
+      ...(error !== undefined ? { error } : {}),
+    });
   }
 
   private register(record: TeamRecord): void {

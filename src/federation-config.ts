@@ -4,6 +4,7 @@
  * validator 只做 schema 校验；这里把 YAML 形状变成运行时形状：
  * - `tokenEnv` 只在此处解析为内存 token，绝不落盘 / 打印；
  * - 缺 token 的 peer 直接丢弃（fail closed），不生成空凭据；
+ * - 同一 token 命中多个 peer 时全部丢弃（入站匹配无法确定落点，不能静默择一）；
  * - URL 去尾斜杠；direction 缺省 both；maxHops 缺省 4。
  *
  * @module vessel/federation-config
@@ -40,6 +41,7 @@ export interface FederationRuntimeOptions {
 export type FederationResolutionIssue =
   | { peer: string; reason: 'missing_token' }
   | { peer: string; reason: 'self_peer' }
+  | { peer: string; reason: 'duplicate_token' }
   | { peer: string; reason: 'invalid_config' };
 
 const DEFAULT_MAX_HOPS = 4;
@@ -143,13 +145,29 @@ export function resolveFederationOptions(input: {
 
   const rateLimitPerMinute = resolveRateLimit(federation?.rateLimitPerMinute);
 
+  // 同一 token 只能认证一个 peer：否则入站无法确定落点（matchPeer 不得静默择一）。
+  const byToken = new Map<string, FederationRuntimePeer[]>();
+  for (const peer of peers) {
+    const group = byToken.get(peer.token);
+    if (group === undefined) byToken.set(peer.token, [peer]);
+    else group.push(peer);
+  }
+  const ambiguous = new Set<FederationRuntimePeer>();
+  for (const group of byToken.values()) {
+    if (group.length < 2) continue;
+    for (const peer of group) {
+      ambiguous.add(peer);
+      issues.push({ peer: `${peer.nodeId}:${peer.teamId}`, reason: 'duplicate_token' });
+    }
+  }
+
   return {
     options: {
       enabled: federation?.enabled === true,
       nodeId: input.nodeId,
       maxHops,
       rateLimitPerMinute,
-      peers,
+      peers: peers.filter((peer) => !ambiguous.has(peer)),
     },
     issues,
   };

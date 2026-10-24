@@ -516,13 +516,6 @@ export interface EventsResponse {
   events: RunEvent[];
 }
 
-/** health.get 的 team 探测结果 */
-export interface HealthTeamStatus {
-  enabled: boolean;
-  node_id?: string;
-  transport?: string;
-}
-
 export interface HealthResponse {
   status: string;
   clients: number;
@@ -531,7 +524,6 @@ export interface HealthResponse {
   node: NodeInfo;
   started_at: number;
   tenant_id: string;
-  team: HealthTeamStatus;
   /** 0.15 E6：旧 gateway 可能缺省。 */
   runtime?: RuntimeHealth;
 }
@@ -542,35 +534,6 @@ export interface ConfigResponse {
   paths: { user: string; project: string };
   tenant_id: string;
   tenant_overlay_keys?: string[];
-}
-
-export type TeamAgentState = 'idle' | 'running' | 'cancelled' | 'error' | 'closed';
-
-export interface TeamAgentStatus {
-  id: string;
-  name?: string;
-  state: TeamAgentState | string;
-  current_run_id?: string;
-  tool_names: string[];
-  last_error?: string;
-}
-
-export interface TeamPeerInfo {
-  node_id: string;
-  endpoint?: string;
-  agents: TeamAgentStatus[];
-  protocol: number;
-}
-
-export interface TeamPeersResponse {
-  protocol: number;
-  node_id: string;
-  peers: TeamPeerInfo[];
-}
-
-export interface TeamAgentsResponse {
-  protocol: number;
-  agents: TeamAgentStatus[];
 }
 
 export interface EvalRunResponse {

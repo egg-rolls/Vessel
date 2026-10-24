@@ -3,7 +3,6 @@
  * @module @vessel-agent/serve
  *
  * 把 runtime 的 EventStream 暴露为 WS + SSE 广播，并提供 /v1 控制端点。
- * R3 增加：LoopbackTransport + peer 注册表 + /v1/team/*。
  * 是 EventStream 的消费者（与 TUI 的 StreamRenderer 同构），不经过 PluginHost、不修改 core。
  */
 
@@ -199,23 +198,6 @@ export {
   type SessionSearchHit,
   searchSessions,
 } from './session-search.js';
-export {
-  fromWireMessage,
-  isTeamEvent,
-  parseAddress,
-  TEAM_MESSAGE_KINDS,
-  type TeamGatewayOptions,
-  type TeamHostLike,
-  TeamProtocolError,
-  type TeamSpawnRequest,
-  toWireAgentStatus,
-  toWireEvent,
-  toWireMessage,
-  toWirePeer,
-  type WireAgentMessage,
-  type WireAgentStatus,
-  type WirePeerInfo,
-} from './team.js';
 export type {
   BudgetDimensionLike,
   ConversationBudgetStatusLike,
@@ -261,15 +243,3 @@ export {
   type TenantEventSource,
 } from './tenant-event-hub.js';
 export { capToolEvent, capToolPayload, TOOL_EVENT_PAYLOAD_LIMIT } from './tool-events.js';
-export {
-  createLoopbackTransport,
-  ensurePeersDir,
-  isLoopbackEndpoint,
-  LoopbackTransport,
-  type LoopbackTransportOptions,
-  type PeerFileRecord,
-  PeerRegistry,
-  type PeerRegistryOptions,
-  PeerTransportError,
-  type PeerTransportErrorCode,
-} from './transport/index.js';

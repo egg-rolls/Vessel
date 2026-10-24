@@ -3,7 +3,6 @@ import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import { normalizeDurableRun } from '../src/gateway/methods/runs';
 import { createLocalRpcDispatcher, type LocalRpcDispatcher } from '../src/local';
-import type { TeamHostLike } from '../src/team';
 import type { ConfigSnapshotLike, GatewayAuthLike } from '../src/tenant';
 import { createGatewayEventHub } from '../src/tenant-event-hub';
 import { createRuntime, SlowProvider, startTestGateway as startGateway } from './helpers';
@@ -140,54 +139,6 @@ describe('agents.tree / tasks.* (0.15 E5)', () => {
     await expect(
       runDispatcher(dispatcher.dispatch, 'tasks.get', { task_id: 'missing' }),
     ).rejects.toThrow('not_found');
-  });
-
-  it('merges E3 host snapshot fields', async () => {
-    const events = new MemoryEventStream();
-    const host: TeamHostLike = {
-      list: () => [{ id: 'worker', state: 'running', toolNames: [] }],
-      get: () => undefined,
-      inbox: async (_id, cursor = '0') => ({ messages: [], cursor }),
-      cancel: () => undefined,
-      snapshot: () => ({
-        agents: [
-          {
-            id: 'worker',
-            state: 'running',
-            sessionId: 's1',
-            queuePosition: 2,
-            waitReason: 'capacity',
-            contextUsed: 10,
-            contextMax: 100,
-            task: { id: 't1', title: 'index' },
-            nodeId: 'A',
-            lastSeen: 123,
-          },
-        ],
-      }),
-    };
-    const dispatcher = createLocalRpcDispatcher({
-      hub: hubFor(events),
-      team: { nodeId: 'A', host },
-    });
-    dispatchers.push(dispatcher);
-
-    const tree = (await runDispatcher(dispatcher.dispatch, 'agents.tree')) as {
-      nodes: Array<Record<string, unknown>>;
-    };
-    expect(tree.nodes[0]).toMatchObject({
-      id: 'worker',
-      role: 'agent',
-      state: 'running',
-      session_id: 's1',
-      queue_position: 2,
-      wait_reason: 'capacity',
-      context_used: 10,
-      context_max: 100,
-      task: 'index',
-      node_id: 'A',
-      last_seen: 123,
-    });
   });
 
   it('hides other tenants tasks', async () => {

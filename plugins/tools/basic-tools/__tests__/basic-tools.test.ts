@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import {
   existsSync,
   mkdirSync,
@@ -932,5 +932,67 @@ describe('自定义 deny_paths 参与 bash 命令文本匹配（0.15 E8）', () 
     );
     expect(result).not.toContain('path_denied');
     expect(result).toContain('退出码: 0');
+  });
+});
+
+describe('内置凭据 denylist 隔离（合成 HOME）', () => {
+  /** 只放合成 canary，不写任何真实密钥格式 */
+  const canary = 'canary=denylist-probe';
+  const homeBackup = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  let fakeHome = '';
+
+  beforeAll(() => {
+    fakeHome = mkdtempSync(path.join(tmpdir(), 'vessel-home-'));
+    mkdirSync(path.join(fakeHome, '.vessel'), { recursive: true });
+    writeFileSync(path.join(fakeHome, '.vessel', 'config.yaml'), canary, 'utf-8');
+    // 内置 denylist 与命令写法在工具构造时展开 HOME，必须先换环境再建工具
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+  });
+
+  afterAll(() => {
+    // 无条件恢复，避免污染同文件其它用例
+    if (homeBackup.HOME === undefined) delete process.env.HOME;
+    else process.env.HOME = homeBackup.HOME;
+    if (homeBackup.USERPROFILE === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = homeBackup.USERPROFILE;
+    if (fakeHome !== '') rmSync(fakeHome, { recursive: true, force: true });
+  });
+
+  it(`\${HOME} 写法的内置凭据路径未被拒绝时合成 config.yaml 会被读出`, async () => {
+    const tool = configuredTool('bash', {});
+    expect(
+      await tool.checkPermission?.(
+        { command: `cat \${HOME}/.vessel/config.yaml` },
+        makeAllowContext(),
+      ),
+    ).toBe('deny');
+
+    const result = await tool.handler(
+      { command: `cat \${HOME}/.vessel/config.yaml` },
+      makeContext(),
+    );
+    expect(result).toContain('path_denied');
+    expect(result).not.toContain(canary);
+  });
+
+  it('符号链接指向 deny 根时 read 绕过边界读取敏感文件', async () => {
+    const secretDir = path.join(workDir, 'deny-root-secret');
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(path.join(secretDir, 'token.txt'), canary, 'utf-8');
+    const link = path.join(workDir, 'deny-root-link');
+    // Windows 目录符号链接需要特权，用 junction 表达同一语义
+    symlinkSync(secretDir, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const tool = configuredTool('read', { denyPaths: [secretDir] });
+
+    const existing = path.join(link, 'token.txt');
+    expect(await tool.checkPermission?.({ path: existing }, makeContext())).toBe('deny');
+    const result = await tool.handler({ path: existing }, makeContext());
+    expect(result).toContain('敏感路径拒绝列表');
+    expect(result).not.toContain(canary);
+
+    // 文件不存在：必须按“最近已存在祖先”解析后仍判定 deny
+    const missing = path.join(link, 'missing.txt');
+    expect(await tool.checkPermission?.({ path: missing }, makeContext())).toBe('deny');
   });
 });

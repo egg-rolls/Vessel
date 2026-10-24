@@ -13,7 +13,6 @@ import {
   type RpcMethodDefinition,
   type RpcMethodTable,
 } from '../../rpc.js';
-import type { TeamGatewayOptions } from '../../team.js';
 import type { ConfigGatewayOptionsLike } from '../../tenant.js';
 import { stringParam, tenantParamSchema } from './common.js';
 import { runtimeSnapshotSchema, stringListSchema } from './schemas.js';
@@ -84,7 +83,6 @@ export interface ConfigMethodsDeps {
   protocolInfo: ProtocolInfo;
   nodeInfo(tenantId?: string): NodeInfo;
   startedAt: number;
-  getTeam(): TeamGatewayOptions | undefined;
 }
 
 /** health.get / capabilities.list / config.get / config.sources */
@@ -100,7 +98,6 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
     protocolInfo,
     nodeInfo,
     startedAt,
-    getTeam,
     runtimeSnapshot,
   } = deps;
 
@@ -124,7 +121,6 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           'node',
           'started_at',
           'tenant_id',
-          'team',
           'runtime',
         ],
         properties: {
@@ -177,21 +173,11 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           },
           started_at: { type: 'number' },
           tenant_id: { type: 'string' },
-          team: {
-            type: 'object',
-            required: ['enabled'],
-            properties: {
-              enabled: { type: 'boolean' },
-              node_id: { type: 'string' },
-              transport: { type: 'string' },
-            },
-          },
           /** 0.15 E6：active run 与 scheduler 快照。 */
           runtime: runtimeSnapshotSchema,
         },
       },
       handler: (_params, ctx) => {
-        const team = getTeam();
         return {
           status: 'ok',
           clients: clientCount(),
@@ -201,13 +187,6 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           started_at: startedAt,
           tenant_id: ctx.tenantId,
           runtime: runtimeSnapshot(ctx.tenantId),
-          team: team
-            ? {
-                enabled: true,
-                node_id: team.nodeId,
-                transport: team.transport?.kind ?? 'in-process',
-              }
-            : { enabled: false },
         };
       },
     },

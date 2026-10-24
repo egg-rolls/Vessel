@@ -59,13 +59,7 @@ describe('0.2 默认值（保持 0.1 行为）', () => {
       maxQueueSize: 100,
       perAgentSerial: true,
     });
-    expect(DEFAULT_TRANSPORT_OPTIONS).toEqual({
-      kind: 'in-process',
-      hostname: '127.0.0.1',
-      peersDir: '~/.vessel/peers',
-      heartbeatMs: 5000,
-      peerTtlMs: 15000,
-    });
+    expect(DEFAULT_TRANSPORT_OPTIONS).toEqual({ kind: 'in-process' });
   });
 
   it('全缺省加载：新键为 undefined，校验无 error', async () => {
@@ -130,66 +124,31 @@ describe('scheduler', () => {
 });
 
 describe('transport', () => {
-  it('合法 loopback 配置', () => {
-    expect(
-      errorsOf({
-        transport: {
-          kind: 'loopback',
-          hostname: '127.0.0.1',
-          token: 'shared-token',
-          peersDir: '/tmp/peers',
-          heartbeatMs: 1000,
-          peerTtlMs: 3000,
-        },
-      }),
-    ).toHaveLength(0);
-  });
-
-  it('kind 非枚举报错', () => {
-    expect(
-      errorsOf({ transport: { kind: 'unix' as unknown as 'in-process' } }).map((e) => e.path),
-    ).toContain('transport.kind');
-  });
-
-  it('只允许回环地址', () => {
-    for (const hostname of ['0.0.0.0', '192.168.1.10', 'example.com']) {
-      expect(errorsOf({ transport: { hostname } }).map((e) => e.path)).toContain(
-        'transport.hostname',
-      );
-    }
-    for (const hostname of ['127.0.0.1', 'localhost', '::1']) {
-      expect(errorsOf({ transport: { hostname } })).toHaveLength(0);
+  it('只接受 in-process', () => {
+    expect(errorsOf({ transport: { kind: 'in-process' } })).toHaveLength(0);
+    for (const kind of ['loopback', 'remote', 'unix']) {
+      expect(
+        errorsOf({ transport: { kind: kind as unknown as 'in-process' } }).map((e) => e.path),
+      ).toContain('transport.kind');
     }
   });
 
-  it('token / peersDir 必须非空', () => {
+  it('rejects removed loopback / remote keys', () => {
+    const removed: Record<string, unknown> = {
+      nodes: [],
+      hostname: '127.0.0.1',
+      peersDir: '/tmp/peers',
+      heartbeatMs: 1000,
+      peerTtlMs: 3000,
+    };
+    for (const [key, value] of Object.entries(removed)) {
+      const config = { transport: { [key]: value } } as unknown as VesselConfig;
+      expect(errorsOf(config).map((e) => e.path)).toContain(`transport.${key}`);
+    }
+  });
+
+  it('token 必须非空', () => {
     expect(errorsOf({ transport: { token: ' ' } }).map((e) => e.path)).toContain('transport.token');
-    expect(errorsOf({ transport: { peersDir: '' } }).map((e) => e.path)).toContain(
-      'transport.peersDir',
-    );
-  });
-
-  it('heartbeat / ttl 必须为正整数', () => {
-    expect(errorsOf({ transport: { heartbeatMs: 0 } }).map((e) => e.path)).toContain(
-      'transport.heartbeatMs',
-    );
-    expect(errorsOf({ transport: { peerTtlMs: -1 } }).map((e) => e.path)).toContain(
-      'transport.peerTtlMs',
-    );
-  });
-
-  it('peerTtlMs > heartbeatMs（含默认值补齐）', () => {
-    expect(
-      errorsOf({ transport: { heartbeatMs: 15000, peerTtlMs: 15000 } }).map((e) => e.path),
-    ).toContain('transport.peerTtlMs');
-
-    // 只写 heartbeat=20000，默认 ttl=15000 -> 交叉校验失败
-    expect(errorsOf({ transport: { heartbeatMs: 20000 } }).map((e) => e.path)).toContain(
-      'transport.peerTtlMs',
-    );
-
-    // 只写 heartbeat=1000，默认 ttl=15000 -> 合法
-    expect(errorsOf({ transport: { heartbeatMs: 1000 } })).toHaveLength(0);
   });
 });
 
@@ -204,11 +163,7 @@ scheduler:
   max_queue_size: 50
   per_agent_serial: false
 transport:
-  kind: loopback
-  hostname: 127.0.0.1
-  peers_dir: /tmp/peers
-  heartbeat_ms: 1000
-  peer_ttl_ms: 3000
+  kind: in-process
 `);
     const { config, validation } = await loadConfig({
       configPath,
@@ -221,13 +176,7 @@ transport:
       maxQueueSize: 50,
       perAgentSerial: false,
     });
-    expect(config.transport).toEqual({
-      kind: 'loopback',
-      hostname: '127.0.0.1',
-      peersDir: '/tmp/peers',
-      heartbeatMs: 1000,
-      peerTtlMs: 3000,
-    });
+    expect(config.transport).toEqual({ kind: 'in-process' });
   });
 
   it('未知顶层键报错并给建议', async () => {

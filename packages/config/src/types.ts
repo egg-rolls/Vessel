@@ -318,35 +318,11 @@ export interface ServeConfig {
   tls?: ServeTlsConfig;
 }
 
-/** 远程节点（0.6；静态注册，无自动发现） */
-export interface TransportNodeConfig {
-  /** 节点 id；唯一，匹配 ^[A-Za-z0-9_-]{1,64}$ */
-  id: string;
-  /** 节点 gateway URL；非回环必须 https */
-  url: string;
-  /** 节点 token；建议改用 tokenEnv */
-  token?: string;
-  /** 从该环境变量读取 token */
-  tokenEnv?: string;
-  /** 节点自签/私有 CA 文件（PEM） */
-  caFile?: string;
-}
-
-/** Transport 配置（0.2；0.6 增加 remote） */
+/** Transport 配置（0.2；0.22.1 只剩 in-process） */
 export interface TransportConfig {
-  kind?: 'in-process' | 'loopback' | 'remote';
-  /** 仅 loopback；只允许回环地址 */
-  hostname?: string;
+  kind?: 'in-process';
   /** 缺省复用 VESSEL_GATEWAY_TOKEN / gateway token */
   token?: string;
-  /** loopback 注册表目录（默认 ~/.vessel/peers） */
-  peersDir?: string;
-  /** 注册表心跳毫秒（默认 5000） */
-  heartbeatMs?: number;
-  /** peer 失效毫秒（默认 15000；必须 > heartbeatMs） */
-  peerTtlMs?: number;
-  /** 0.6 remote：静态节点列表 */
-  nodes?: TransportNodeConfig[];
 }
 
 /** 0.6：`--connect` 客户端配置（token/CA；URL 仍走 CLI/env） */

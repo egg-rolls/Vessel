@@ -664,7 +664,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true`、token 非空**且 TLS cert/key 成对**（0.6 起强制） |
 | `serve.allowed_origins` | 独立前端 Origin allowlist；绝对 http(s) origin，禁止 `*` / path / query；非回环必须 https；HTTP 与 WS 共用（0.6） |
 | `connect.token` / `token_env` / `ca_file` | `--connect` 客户端 token 与 CA；token 优先级 CLI > env（`VESSEL_CONNECT_TOKEN`，缺失时回退 `VESSEL_GATEWAY_TOKEN`；`token_env` 由 loader 在 env 层解析）> config（0.6；0.8.1 统一经 loader，`--ca` 对应 `VESSEL_CONNECT_CA`） |
-| `transport.kind` / `transport.nodes[]` | `in-process` / `loopback` / `remote`；`remote` 时静态节点 `{ id, url, token?, token_env?, ca_file? }`，无自动发现（0.6） |
+| `transport.kind` / `transport.token` | 只剩 `in-process`；`transport.token` 是 gateway token 的末位回退。`loopback` / `remote` / `transport.nodes[]` 已于 0.22.1 删除 |
 | `serve.token` / `serve.token_env` / `serve.tokens` / `serve.admin_token` | 0.5：`serve.token` 为 default/admin 兼容单 token；`serve.tokens` 为 token → `{tenant_id, role}`；`serve.admin_token` 为 `*`/admin；解析顺序见 ADR-050 |
 | `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 false / `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
@@ -852,9 +852,8 @@ serve:
 | `src/mcp-wiring.ts` | 读取 `mcp_servers` → `createMcpPlugin`；构造 TUI / gateway 需要的状态适配器 |
 | `src/serve-config.ts` | `serve.*` 默认值补全、远程/TLS 校验、证书文件检查；0.8.1 起不再接收 argv，CLI 层已由 loader 合并 |
 | `src/rpc/http-client.ts` | `HttpRpcClient`：`POST /v1/rpc`、Bearer、可选 CA、WS 首帧 auth 与 `since` / `pong` / `gap` / 重连 |
-| `src/node-registry.ts` | 0.6 静态节点表：URL / token / CA 解析、心跳与 `healthy` / `unreachable` 状态 |
-| `src/remote-transport.ts` | 0.6 `kind:'remote'`：`send` / `request` / `peers`、远端事件订阅与 `(node_id, seq)` 去重 |
-| `src/transport-factory.ts` | 按配置构造 in-process / loopback / remote transport；remote 节点与事件回灌接线（0.17 起不再有 team 生产装配） |
+| `src/transport-factory.ts` | gateway / connect token 解析；0.22.1 删除 loopback / remote transport 装配 |
+| `src/hub/node-url.ts` | hub 节点 URL 归一化（非回环必须 https） |
 | `src/resume-command.ts` | `--resume-run` 无参：列出 interrupted run（只读，不需要 Key）。0.8：解析 tenant 后读 `<data_dir>/tenants/<id>/runs`（与执行面一致），并透传 `tenantId` |
 | `src/tools-list.ts` | `--tools` 的工具清单（不构造 runtime、不需要 Key） |
 | `src/headless-runner.ts` | headless 运行器 |
@@ -924,13 +923,9 @@ vessel --feishu
 | `GET /v1/metrics` | `{metrics: MetricsSnapshot}`；未注入 → `metrics_disabled`（0.4） |
 | `GET /v1/channels/feishu` | `{channel: FeishuStatus}`；未注入 → `channel_disabled`（0.4） |
 | `GET /v1/evals/latest?suite=` | `{report: EvalReport}`；无报告 → 404 `eval_not_found`（0.4） |
-| `POST /v1/team/agents` | 跨节点 spawn；`request_id` 幂等去重（进程内 LRU 1000）；缺 spawn 注入 → `no_spawn`（0.6） |
-| `GET /v1/team/agents` / `GET /v1/team/agents/:id` | 节点成员列表 / 单成员状态（0.6） |
-| `GET /v1/team/inbox` | 成员 inbox（cursor 分页）（0.6） |
-| `POST /v1/team/messages` | 跨节点消息投递；`node_id` 标识来源，按消息 `id` 入站去重（0.6） |
 | `POST /run` | 0.1.0 兼容的阻塞式入口 |
 
-WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.list` / `permission.respond` / `ask.respond`。`team.*` 在 0.1.0 返回 `method_not_allowed`（0.2 草案见 `protocol.ts`）。0.6 的跨节点 team 控制协议走 `Transport.request` → `/v1/team/*`，不进入 canonical RPC manifest。
+WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.list` / `permission.respond` / `ask.respond`。`team.*` 返回 `method_not_allowed`（legacy 0.2 草案保留在 `protocol.ts`）；跨节点 team 平面已于 0.22.1 删除。
 
 0.3 新增稳定错误码：`run_not_found` / `run_not_resumable` / `run_already_running` / `durable_disabled` / `mcp_disabled`；`hello.features` 按实际启用增加 `durable-resume` / `mcp-status` / `tls`。
 
@@ -1064,23 +1059,15 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - `health.get` 返回远端 `tenant_id` / `node_id`；CLI 在 stderr（headless）或 TUI 状态行展示；TUI 不污染 stdout。
 - connect 模式不获取本地 tenant 写锁、不写本地 store / trace；交互回路由事件流转为 `permission.respond` / `ask.respond` RPC。
 
-**0.6.1 的安全收紧**：durable 端点按 principal 的 tenant 过滤并校验 `write`；team REST 复用 `ROLE_RANK`；事件回灌丢弃本机来源帧；远端 spawn 复用 `buildChildHost`。见 §18.2 / §18.7。
+**0.6.1 的安全收紧**：durable 端点按 principal 的 tenant 过滤并校验 `write`；事件回灌丢弃本机来源帧。见 §18.2 / §18.7。
 
-**节点注册与远程 Transport（asm）**
+**跨节点 Agent 传输（0.6，0.22.1 删除）**
 
-- `transport.kind: remote` + 静态 `transport.nodes[]`（`id` / `url` / `token` / `token_env` / `ca_file`）；不做 mDNS / 自动发现。
-- `src/node-registry.ts`：节点 URL 归一化（非回环必须 https），token 显式值 > env，CA 读取为 PEM；心跳 `GET /v1/team/agents`（失败回退 `/health`），状态 `healthy` / `unreachable`，默认心跳 5s、展示 TTL 15s。
-- `src/remote-transport.ts`：`kind: 'remote'`；`send` 走 `POST /v1/team/messages`（Bearer + 可选 CA），`request` 走团队控制协议；错误统一 `RemoteTransportError`，冻结码 `transport_closed` / `peer_not_found` / `peer_unreachable` / `timeout` / `unauthorized` / `unsupported_protocol` / `invalid_request` / `agent_not_found` / `no_spawn`。
-- **事件扇出**：按节点订阅 `ws(s)://<node>/v1/events`，按 `(node_id, wire seq)` 去重（LRU 上限 10000）后回灌，补 `RunEvent.node_id`；断线指数退避 + `since` 续放；`seq` 按 `(node_id, run_id)` 解释，无全局序。
-- **投递语义**：入站消息按 `id` 去重（LRU 10000）；`spawn` 带 `request_id` 去重（gateway 进程内 Map，上限 1000），不自动重试；`status` / `inbox` 超时或不可达最多重试一次并复用 `request_id`；结果回投失败只发 `team.transport.error`。
-- **tenant**：远端 tenant 由 token principal 派生，不从 `AgentMessage` 取；跨节点 team 控制面 default/admin-only（非 default tenant → 403）。
-
-**已知限制（0.6）**
-
-- 无全局事件序、无分布式锁、无跨机 durable、无 mTLS、无节点自动发现。
-- `request_id` 去重不跨重启；同 key 不同参数返回首次结果。
-- 远端事件缺 `tenant_id` 时回灌按 default 归属，需 gateway 保证租户字段。
-- 自签证书 SAN 必须匹配目标 host/IP；浏览器无法按连接指定 CA。
+- 删除 `src/node-registry.ts`、`src/remote-transport.ts`、`src/deferred-transport.ts`。
+- 现状：`transport.kind` 只接受 `in-process`；`loopback` / `remote` 与
+  `transport.nodes[]` 都是显式 validation error。
+- 现状：跨节点能力只有 federation 平面（`POST /v1/federation/messages`，§45）；
+  `--connect` 客户端连远端 gateway 的能力不变。
 
 ### 13.9 Gateway 拆分第一阶段（0.8.1）
 
@@ -1157,7 +1144,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | MCP client | `plugins/mcp/client/`（`@vessel-agent/mcp-client`） | 插件，不是 core 模块；stdio + HTTP；默认 ask（ADR-039） |
 | 远程 / TLS | `packages/serve/src/gateway.ts` + `src/serve-config.ts` | 显式 opt-in；非回环必须 token；HTTP/1.1（ADR-041） |
 | 控制面 | `packages/serve/src/{durable,mcp}.ts`；TUI `/mcp` `/runs`；CLI `--resume-run` | 0.3 新增端点见 §13.2；命令见 §12 |
-| 跨机器远程 / 跨节点 | `packages/serve/src/gateway.ts`；`src/rpc/http-client.ts`；`src/remote-transport.ts` / `src/node-registry.ts` | 显式 opt-in；非回环 TLS + token；静态节点表；ADR-051 / 052 / 053；见 §13.8 |
+| 跨机器远程 | `packages/serve/src/gateway.ts`；`src/rpc/http-client.ts` | `--connect` 客户端；非回环 TLS + token；跨节点 agent transport 已于 0.22.1 删除；见 §45 的 federation |
 
 ## 15. 0.4 能力层（release/0.4，未发布）
 
@@ -1737,7 +1724,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - **overflow 重试**：provider 返回 400 且命中 context-overflow 模式时，强制压缩一次并重试一次；压缩失败不覆盖 provider 原始错误。
 - **interrupt 原因**：`AgentRuntime.interrupt(reason?: 'shutdown' | 'timeout' | 'user')`，与 `RunOptions.signal` 合并为同一取消信号；`shutdown` / `timeout` 落 `interrupted` checkpoint 并可 `--resume-run`，`user` 保持 `cancelled`。
 - **网关关闭**：`gateway.stop()` 幂等；先 `interrupt('shutdown')`，最多 5s 等 active run，再关 WS / HTTP。
-- **关闭顺序**：`await gateway.stop() → 取消共享流订阅 / 关闭 transport → beforeClose → closeAll → shutdown`；后两步传 `{ drain: false }`，serve 路径不重复 drain。顺序抽为 `shutdownServeStack()`（`src/shutdown-sequence.ts`）；无 gateway 的 headless / REPL 由 bundle 自己 drain。
+- **关闭顺序**：`await gateway.stop() → 取消共享流订阅 / 关闭 transport → beforeClose → closeAll → shutdown`；后两步传 `{ drain: false }`，serve 路径不重复 drain。顺序抽为 `shutdownServeStack()`（`src/shutdown-sequence.ts`）；无 gateway 的 headless / REPL 由 bundle 自己 drain。AgentService 在 `agentControl.dispose()` 里先 `drain({ timeoutMs: 5000 })`（中断并等待成员轮，含成员 Body 共用 tenant `eventLog` 的写入），再关 tenant eventLog；否则成员尾部 `tool.call.*` / `llm.response` / `run.completed` 会因 `session_event_log_closed` 落盘失败。drain 之后不再从成员队列起新轮。
 
 ### 29.3 日志与可观测
 
@@ -1891,7 +1878,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - **默认不超时**：core `PermissionPolicy` 只有显式正数 `RuntimePermissionConfig.timeoutMs` 才计时；应用层不设置，因此 REPL / gateway 权限等待一直持续到应答、取消或 abort。只有显式超时才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。
 - **取消语义**：等待绑定 `ctx.signal`；abort 抛 `PermissionAbortedError`（`permission_cancelled`，`name: AbortError`），优先于超时判定，不误报 `permission_timeout`。
 - **请求字段**：`tool.permission.request.data` 增加 `session_id` / `tool_call_id` / `deadline_at` / `source`（additive）；默认等待不写 `deadline_at`。
-- **持久化**：`packages/serve/src/interactions-store.ts` 按 tenant 写 `<dataDir>/interactions-<tenant>.json`，记录 `pending` / `answered` / `orphaned`，`atomicWrite` + `0600`。gateway 启动时 `loadAllSync()`；本进程没有对应 run 的 `pending` 转 `orphaned`。文件损坏 / 不可读向 stderr 报错并按空集处理，不删除原文件；tenant 名只接受 `[A-Za-z0-9._-]`。
+- **持久化**：`packages/serve/src/interactions-store.ts` 按 tenant 写 `<dataDir>/interactions-<tenant>.json`，记录 `pending` / `answered` / `orphaned`，`atomicWrite` + `0600`。gateway 启动时 `loadAllSync()`；本进程没有对应 run 的 `pending` 转 `orphaned`。文件损坏 / 不可读先隔离为 `<path>.corrupt-<timestamp>`（保留原始字节），同文件合法记录照常加载；隔离失败时禁止后续 `save` 覆盖原文件；tenant 名只接受 `[A-Za-z0-9._-]`。
 - **不按 TTL sweep**：pending 只由应答、run 终态或进程退出清理。run 的 `completed` / `failed` / `cancelled` 会把同 run 的 pending 持久化为 `orphaned`；迟到应答返回 `run_ended`。
 - **幂等与冲突**：重复应答返回首次结果（`duplicate: true`）；不同决定重答返回 `conflict`；记录不存在返回 `not_found`；`orphaned` 返回 `run_ended`。有界记录（`MAX_RECORDS`）只淘汰最旧的 `answered` / `orphaned`，pending 不淘汰。
 - **错误码**：RPC 新增 `expired` / `run_ended`；canonical 方法总数仍为 38（不新增 `interactions.pending`）。
@@ -2323,14 +2310,14 @@ interface LimitBlock {
 | `stale` | 仅旧数据只读兼容，0.19 起不再写入；只允许 `stale → closed` |
 
 - 消息队列只在内存；状态变化经节流合并原子写入 `<dataDir>/agents/<tenant>.json`（`0600`，0.19 起写 `version: 2`）。
-- 快照形状（v2）`{version: 2, tenant_id, updated_at, members: PersistedAgentRecord[]}`；持久化 `membership` / `model` / `system_prompt` / `current_body` / `body_history`（≤20，只记已退役 Body）/ `forked_from`，不存 `presence` / `rotation` / 消息队列。读取兼容 v1，首次写 v2 前备份 `<tenant>.json.v1.bak`，备份失败则放弃写。未知版本 / 损坏 / 单条非法不阻塞启动，非法条目跳过并记录。
+- 快照形状（v2）`{version: 2, tenant_id, updated_at, members: PersistedAgentRecord[]}`；持久化 `membership` / `model` / `system_prompt` / `current_body` / `body_history`（≤20，只记已退役 Body）/ `forked_from`，不存 `presence` / `rotation` / 消息队列。读取兼容 v1，首次写 v2 前备份 `<tenant>.json.v1.bak`，备份失败则放弃写。未知版本 / 损坏不阻塞启动：原文件先隔离为 `<path>.corrupt-<timestamp>`（保留唯一恢复副本），隔离失败则禁止后续写入；单条非法条目跳过并记录。
 - 重启后非 `left` 成员统一 `state='idle'` + `presence='gone'`；`left` / `closed` 成员保持 `closed + left + gone`。未处理消息丢失。
 - 成员事件为开放字符串：`agent.spawned`、`agent.resumed`、`agent.message.queued`、`agent.turn.started` / `completed` / `failed` / `cancelled`、`agent.permission.requested` / `responded`、`agent.closed`、`agent.rotating` / `agent.rotated` / `agent.rotate.failed`、`agent.retired`、`agent.reply.stale`；`agent.stale` 仅作兼容事件（payload `{state:'idle', presence:'gone'}`）。事件 `agent_id` 为成员 id。rotate 后的旧 Body 终态是配对的 `agent.turn.*`，带 `stale: true`，不写 Agent state / usage，也不投递父队列。
 
 ### 39.4 owner、外部队列与 CLI
 
 - REPL 启动 AgentService 后监听 `127.0.0.1:0` 的最小 HTTP 控制端点；记录原子写入 `<dataDir>/agent-owner.json`（`0600`）：`{pid, host, port, token, started_at, tenant_id}`。
-- 端点只接受 loopback Host（防 DNS rebinding）与 Bearer token；方法固定 `agent.new` / `agent.send` / `agent.dispatch` / `agent.rotate` / `agent.close` / `agent.list`，全部委托同一 AgentService。端点只是传输，不是第二套实现。
+- 端点只接受 loopback Host（防 DNS rebinding）与 Bearer token；方法固定 `agent.new` / `agent.send` / `agent.dispatch` / `agent.rotate` / `agent.close` / `agent.list`，全部委托同一 AgentService。Team 侧方法 `team.list` / `team.get` / `team.roster` / `team.post` / `team.members` / `team.budget` 委托 TeamService；`team.roster` 返回完整 roster（不受 `team.get` 的 20 / 100 展示窗口影响），供 `team post --mention` 解析名字。端点只是传输，不是第二套实现。
 - 同一 `dataDir` 已有 owner 时，第二个 REPL 仍可用进程内工具；CLI attach 保持原 owner。owner 记录按 pid / token 清理，避免误删后继 owner。
 - `vessel agent new|send|dispatch|close|list|rotate [--json]` 读取 owner 记录并连接；无 owner 返回 `agent_owner_unavailable`，tenant 不一致返回 `agent_owner_tenant_mismatch`。`dispatch <to> <content...>` 输出 `DispatchResult`，`queued` 退出 0、`rejected` 退出 1；`rotate <to> --startup <text> [--handoff <path>]` 输出 `RotateResult`，`rotated` 退出 0、`failed` 退出 1。
 - REPL 主 agent 通过 `attachOwner` 注册为 **external owner**：它的队列只由父 turn 的 `BeforeLlm` 调 `takeMessages(ownerId)` 排空，`pump` 永不执行 owner 队列；成员 runtime 也不得消费。注入消息固定 `role: 'user'`、`name: 'agent:<id>'`、`timestamp` 取原消息时间，内容原样。
@@ -2355,7 +2342,7 @@ interface LimitBlock {
 - 删除 `plugins/tools/team`、`plugins/tools/delegate-task` 及 `team_*`（spawn / send / inbox / status / cancel）与 `delegate_task` 模型工具。
 - 删除 `TeamConfig` / `DelegateConfig`、`team.*` / `delegate.*` 配置键、team / delegate 装配、`team-wiring` 与 `team.legacyTools` 兼容开关；tenant overlay 不再接受 `team` / `delegate` 块。
 - 删除旧 owner inbox 轮询路径；owner 回复统一经 `takeMessages` + `BeforeLlm` 注入。
-- `/v1/team/*` 传输协议文件与 gateway 方法保留，但 0.17 没有生产装配，也没有模型工具入口；Phase B 可复用。
+- `/v1/team/*` 传输协议与 gateway 方法保留到 0.22.1；0.22.1 起已删除（legacy 跨节点 Agent 面不再存在）。
 - canonical RPC 仍为 **44**，本版本不新增方法；owner 端点是本地控制传输，不进入 RPC 方法表。
 
 ### 39.8 配置与限制
@@ -2422,7 +2409,7 @@ interface LimitBlock {
 ### 41.1 存储与数据模型
 
 - 实现位于 `packages/agent`：`team-store.ts`（元数据）、`team-log.ts`（只追加日志）、`team-slug.ts`（workspace 归一化 / slug）、`team-service.ts`（编排）。
-- `<dataDir>/teams/<tenant>/<team_id>/team.json`：`{v:1, team_id, name, tenant_id, workspace, handoff_path?, policy, created_at}`，`atomicWrite` 0600。`team_id` 由 workspace 目录名生成 slug，创建后不可变；同 slug 不同 workspace 追加 hash 后缀。
+- `<dataDir>/teams/<tenant>/<team_id>/team.json`：`{v:1, team_id, name, tenant_id, workspace, handoff_path?, policy, created_at}`，`atomicWrite` 0600。`team_id` 由 workspace 目录名生成 slug，创建后不可变；同 slug 不同 workspace 追加 hash 后缀。加载时损坏的 `team.json` 记 error 并移出可用集合；`ensureForWorkspace` 对同一 `team_id` 抛 `team_metadata_corrupt`、`seed` 跳过该声明，绝不在原路径重建（丢 policy / default_principal / handoff 视为故障）。
 - `<dataDir>/teams/<tenant>/<team_id>/log.ndjson`：每行一条 `TeamLogEntry`（`message_id` / `team_id` / `from` / `to[]` / `mentions[]` / `content` / `ts` / `kind` / `system_event?`），串行只追加、有界读（尾部窗口）、坏行跳过；**不是消息队列**。
 - `team_id` 在 Agent 记录上 additive 持久化；roster 不单独落盘，由 `team_id + membership === 'present'` 从 Agent 记录派生。`online_count` 由 `present && presence === 'live'` 派生；`body_history` 直接透传 Agent 记录（≤20）。
 - 绑定：显式 `--workspace` 或配置 `teams:` 声明（归一化后精确匹配）才会绑定；默认绑定只对带 `name` 的 Agent 生效。绑定后未显式指定时 visibility 缺省 `team`；unbound 保持 `private`。Agent 不支持跨 Team 迁移。
@@ -2438,7 +2425,7 @@ interface LimitBlock {
 
 - `teams.members action=add` 调用 `AgentService.reinstate`：`left` / `closed` → `present + idle + gone`，保留 `current_body` / `body_history` / 原 session，不 spawn；下一次 dispatch 才 resume。`action=remove` 复用 `close`：dispose 当前 Body、保留 session 与历史（归档不删）。
 - private 成员 fail-closed：`onAgentEvent` 只接受 `visibility === 'team' | 'tenant'`；private 成员的 id / 名字 / 回复不写日志、不可被 `@`（owner 路径 `team_private_member`，canonical 路径 `unknown_member`）。根 owner（`owner === id`）例外。
-- canonical `teams.list` / `teams.get`（read）与 `teams.post` / `teams.members`（write）由 `TeamControlLike` 结构化注入；`packages/serve` 不依赖 `@vessel-agent/agent`。未注入 / tenant 不匹配返回 `not_found`；0.19 S3 只有 default tenant 的 AgentService 注入 `teams.*`，其他 tenant 返回 `not_found`。canonical 是复数 `teams.*`，与 legacy `/v1/team/*`（单数前缀）无关。
+- canonical `teams.list` / `teams.get`（read）与 `teams.post` / `teams.members`（write）由 `TeamControlLike` 结构化注入；`packages/serve` 不依赖 `@vessel-agent/agent`。未注入 / tenant 不匹配返回 `not_found`；0.19 S3 只有 default tenant 的 AgentService 注入 `teams.*`，其他 tenant 返回 `not_found`。canonical 是复数 `teams.*`；legacy `/v1/team/*`（单数前缀）已于 0.22.1 删除。
 - `vessel team list|get|post|members [--json]` 经 owner 端点；owner 端点是 `from = ownerId`、`viewer = ownerId`（private 可见），canonical 为 `from = 'human'`、无 viewer。
 
 ## 42. 0.19.0 Hub 控制面（S5 / S5.1，已实现）
@@ -2562,11 +2549,15 @@ interface LimitBlock {
   入站 `POST /v1/federation/messages`，出站 `vessel federation post|peers`；
   hub 不在数据面。详见 [ADR-094](adr/ADR-094-federation-team-to-team.md)。
 - 严格解析、peer bearer（`tokenEnv`）、非回环 https、hop 上界、自指环拒绝、进程内去重。
+  同一 token 解析到多个 peer 时全部丢弃（`duplicate_token`）；`matchPeer` 命中多个 peer 一律 401，不静默 last-wins。
 - **0.21 起改为按成员寻址**（见 §46）：wire 的 `from/to` 带 `principal`；
   入站按名字单点投递，最多 1 个 run；`teams[].policy.federation.accept = 'members'`
   是 validation error，不再有全员 fan-out。
+- **0.22.1 删除 legacy 跨节点 Agent 面**：`/v1/team/*`、`RemoteTransport`、
+  `NodeRegistry`、`LoopbackTransport` / `PeerRegistry`、`DeferredTransport`；
+  `transport.kind` 只剩 `in-process`。
 - v1 固定 default tenant；不新增 canonical RPC；legacy `/v1/team/*` / `RemoteTransport` /
-  `NodeRegistry` 冻结，禁止新增调用方。
+  `NodeRegistry` / `LoopbackTransport` 已于 0.22.1 删除，不得恢复。
 
 ### 45.3 canonical 与边界
 
