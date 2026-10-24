@@ -131,7 +131,6 @@ export {
   type TeamArchiveInput,
   type TeamBinder,
   type TeamCreateInput,
-  type TeamCreateResult,
   type TeamDeclaration,
   type TeamDelivery,
   type TeamDetail,

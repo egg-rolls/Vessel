@@ -379,16 +379,13 @@ describe('vessel team command', () => {
         fakeFetch((body) => {
           calls.push(body);
           return {
-            team: {
-              team_id: 'alpha',
-              name: 'Alpha',
-              tenant_id: 'default',
-              workspace: '/ws/alpha',
-              member_count: 0,
-              online_count: 0,
-              created_at: 1,
-            },
-            deduplicated: false,
+            team_id: 'alpha',
+            name: 'Alpha',
+            tenant_id: 'default',
+            workspace: '/ws/alpha',
+            member_count: 0,
+            online_count: 0,
+            created_at: 1,
           };
         }),
       ),
@@ -403,7 +400,7 @@ describe('vessel team command', () => {
         handoff_path: '/ws/alpha/HANDOFF.md',
       },
     });
-    expect(JSON.parse(result.stdout).deduplicated).toBe(false);
+    expect(JSON.parse(result.stdout).team_id).toBe('alpha');
   });
 
   it('maps team update null clears and team archive', async () => {

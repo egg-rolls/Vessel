@@ -107,11 +107,10 @@ describe('FileTeamStore.create (S10.3)', () => {
       name: 'Again',
       policy: { mode: 'gamma' },
     });
-    expect(viaService.deduplicated).toBe(true);
-    expect(viaService.team.name).toBe('Alpha');
-    expect(viaService.team.policy).toEqual({ mode: 'alpha' });
-    expect(viaService.team.member_count).toBe(0);
-    expect(viaService.team.online_count).toBe(0);
+    expect(viaService.name).toBe('Alpha');
+    expect(viaService.policy).toEqual({ mode: 'alpha' });
+    expect(viaService.member_count).toBe(0);
+    expect(viaService.online_count).toBe(0);
   });
 
   it('keeps same-basename workspaces as distinct teams with the hash suffix', async () => {
@@ -137,9 +136,9 @@ describe('TeamService.archive (S10.3)', () => {
     const { dataDir, store, service } = await makeHarness([member]);
 
     const created = await service.create({ workspace: join(dataDir, 'alpha') });
-    expect(created.team.team_id).toBe('alpha');
-    expect(created.team.member_count).toBe(1);
-    expect(created.team.online_count).toBe(0);
+    expect(created.team_id).toBe('alpha');
+    expect(created.member_count).toBe(1);
+    expect(created.online_count).toBe(0);
 
     expect(await failureCode(service.archive({ team_id: 'alpha' }))).toBe('team_not_empty');
     expect(store.get('alpha')?.archived_at).toBeUndefined();

@@ -2727,7 +2727,7 @@ interface LimitBlock {
   create 只允许 human / admin（team-scoped token 返回 `forbidden`）；update / archive
   允许 team-scoped token 但只能操作自己的 team（不匹配 `not_found`）。
 - `team.json` additive `archived_at?: number`；缺省 = active。create 以 workspace 幂等
-  去重（`deduplicated: true`），不覆盖既有 name / policy，不 spawn 成员。
+  复用并直接返回 `TeamSummary`，不覆盖既有 name / policy，不 spawn 成员。
 - update：`team_id` / `workspace` 不可变；`null` 清空可选项，`policy` 整体替换；
   先原子落盘再改内存，失败不改内存。
 - archive：有 present 成员返回 `conflict`（`team_not_empty`）；归档后 post /

@@ -42,7 +42,7 @@ function fakeTeams(options: { tenantId?: string; archiveError?: Error } = {}): {
     tenantId: options.tenantId ?? 'default',
     async create(input) {
       calls.create.push(input);
-      return { team: summary(input.workspace.split('/').pop() ?? 'team'), deduplicated: false };
+      return summary(input.workspace.split('/').pop() ?? 'team');
     },
     async update(input) {
       calls.update.push(input);
@@ -110,8 +110,9 @@ describe('teams.create', () => {
     const result = (await methodOf(control, 'teams.create').handler(
       { workspace: '/ws/alpha', name: 'Alpha', description: 'desc' },
       context(),
-    )) as { deduplicated: boolean };
-    expect(result.deduplicated).toBe(false);
+    )) as { team_id: string; name: string };
+    expect(result.team_id).toBe('alpha');
+    expect(result.name).toBe('alpha');
     expect(calls.create).toEqual([{ workspace: '/ws/alpha', name: 'Alpha', description: 'desc' }]);
   });
 

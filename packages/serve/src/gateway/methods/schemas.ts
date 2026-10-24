@@ -432,16 +432,6 @@ export const teamSummarySchema = {
   },
 };
 
-/** teams.create 结果（S10.3）。 */
-export const teamCreateResultSchema = {
-  type: 'object',
-  required: ['team', 'deduplicated'],
-  properties: {
-    team: teamSummarySchema,
-    deduplicated: { type: 'boolean' },
-  },
-};
-
 /** 已退役 Body（0.19 S6 additive）。 */
 export const agentBodyHistoryEntrySchema = {
   type: 'object',

@@ -719,8 +719,8 @@ export interface TeamRecord {
 /**
  * 创建 Team（S10.3）。
  *
- * workspace 已属于某个 Team 时幂等返回该 Team（`deduplicated: true`），
- * 绝不覆盖既有 name / policy；不 spawn 成员，空 Team 合法。
+ * workspace 已属于某个 Team 时幂等返回既有 Team，绝不覆盖 name / policy；
+ * 不 spawn 成员，空 Team 合法。
  */
 export interface TeamCreateInput {
   workspace: string;
@@ -729,11 +729,6 @@ export interface TeamCreateInput {
   default_principal?: string;
   handoff_path?: string;
   policy?: Record<string, unknown>;
-}
-
-export interface TeamCreateResult {
-  team: TeamSummary;
-  deduplicated: boolean;
 }
 
 /** 更新补丁：缺省（undefined）保留字段，`null` 清除可选项，policy 整体替换 */
@@ -993,8 +988,8 @@ export interface TeamServiceEvent {
 /** Team 能力层（AgentService 之上的 roster / 日志 / 定向投递） */
 export interface AgentTeamService {
   readonly tenantId: string;
-  /** S10.3：创建 Team（workspace 已有 Team 时幂等复用） */
-  create(input: TeamCreateInput): Promise<TeamCreateResult>;
+  /** S10.3：创建 Team（workspace 已有 Team 时幂等复用，返回同一个 TeamSummary） */
+  create(input: TeamCreateInput): Promise<TeamSummary>;
   /** S10.3：更新 Team 元数据；归档 Team 抛 team_archived */
   update(input: TeamUpdateInput): Promise<TeamSummary>;
   /** S10.3：归档空 Team；仍有 present 成员时抛 team_not_empty */

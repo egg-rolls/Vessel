@@ -30,7 +30,6 @@ import {
   type TeamAgentSendResult,
   type TeamArchiveInput,
   type TeamCreateInput,
-  type TeamCreateResult,
   type TeamDelivery,
   type TeamDetail,
   TeamError,
@@ -172,11 +171,12 @@ export class DefaultTeamService implements AgentTeamService {
     return status === undefined ? undefined : toMemberSummary(status);
   }
 
-  async create(input: TeamCreateInput): Promise<TeamCreateResult> {
-    const { record, deduplicated } = await this.store.create(input);
+  async create(input: TeamCreateInput): Promise<TeamSummary> {
+    // Store 负责 workspace 幂等去重；canonical / CLI / Web 都只消费 TeamSummary。
+    const { record } = await this.store.create(input);
     const team = await this.summarize(record);
     this.emit({ team_id: record.team_id, kind: 'roster' });
-    return { team, deduplicated };
+    return team;
   }
 
   async update(input: TeamUpdateInput): Promise<TeamSummary> {

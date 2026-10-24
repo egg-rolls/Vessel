@@ -172,20 +172,14 @@ export interface TeamUpdateLikeInput {
   policy?: Record<string, unknown>;
 }
 
-/** teams.create 结果。 */
-export interface TeamCreateResultLike {
-  team: TeamSummaryLike;
-  deduplicated: boolean;
-}
-
 /**
  * 注入的 Team 控制面；`tenantId` 决定 canonical RPC 的 tenant 作用域。
  * 未注入 / tenant 不匹配时 `teams.*` 返回 `not_found`。
  */
 export interface TeamControlLike {
   readonly tenantId: string;
-  /** S10.3：只允许 human / admin；team-scoped token 不能 create。 */
-  create(input: TeamCreateLikeInput): Promise<TeamCreateResultLike>;
+  /** S10.3：只允许 human / admin；team-scoped token 不能 create。返回 TeamSummary。 */
+  create(input: TeamCreateLikeInput): Promise<TeamSummaryLike>;
   /** S10.3：team-scoped token 只能更新自己的 team。 */
   update(input: TeamUpdateLikeInput): Promise<TeamSummaryLike>;
   /** S10.3：有 present 成员时拒绝（`team_not_empty`）；不删数据。 */

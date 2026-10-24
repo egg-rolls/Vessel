@@ -201,22 +201,21 @@ function formatPostResult(result: unknown): { text: string; failed: boolean } {
   return { text: lines.join('\n'), failed };
 }
 
-/** create / update / archive 的 TeamSummary 输出（create 带 deduplicated）。 */
+/** create / update / archive 的 TeamSummary 输出（直接返回 TeamSummary）。 */
 function formatTeamWrite(result: unknown): string {
   if (!isRecord(result)) return JSON.stringify(result, null, 2);
-  const team = isRecord(result.team) ? result.team : result;
-  const deduplicated = result.deduplicated === true;
   const lines = [
-    `${ui.symbol('ok')} ${deduplicated ? 'team exists' : 'team saved'} ${asString(team.team_id)}`,
-    ui.kv('name', asString(team.name)),
-    ui.kv('description', asString(team.description, '')),
-    ui.kv('default_principal', asString(team.default_principal, '')),
-    ui.kv('workspace', asString(team.workspace)),
-    ui.kv('members', String(team.member_count ?? 0)),
-    ui.kv('online', String(team.online_count ?? 0)),
+    `${ui.symbol('ok')} team saved ${asString(result.team_id)}`,
+    ui.kv('name', asString(result.name)),
+    ui.kv('description', asString(result.description, '')),
+    ui.kv('default_principal', asString(result.default_principal, '')),
+    ui.kv('workspace', asString(result.workspace)),
+    ui.kv('members', String(result.member_count ?? 0)),
+    ui.kv('online', String(result.online_count ?? 0)),
   ];
-  if (team.archived_at !== undefined) lines.push(ui.kv('archived_at', String(team.archived_at)));
-  if (isRecord(result.team)) lines.push(ui.kv('deduplicated', String(deduplicated)));
+  if (result.archived_at !== undefined) {
+    lines.push(ui.kv('archived_at', String(result.archived_at)));
+  }
   return lines.join('\n');
 }
 

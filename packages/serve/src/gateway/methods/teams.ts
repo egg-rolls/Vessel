@@ -19,7 +19,6 @@ import { stringParam } from './common.js';
 import {
   stringListSchema,
   teamBudgetResultSchema,
-  teamCreateResultSchema,
   teamDetailSchema,
   teamMembersResultSchema,
   teamPostResultSchema,
@@ -178,7 +177,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           policy: { type: 'object' },
         },
       },
-      result_schema: teamCreateResultSchema,
+      result_schema: teamSummarySchema,
       handler: async (params, ctx) => {
         try {
           const control = requireTeamControl(teams, ctx);
