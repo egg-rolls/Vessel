@@ -86,7 +86,7 @@
 }
 
 .team-list-item:hover {
-  background: var(--surface-2);
+  background: var(--hover-tint);
 }
 
 .team-list-item.selected {
@@ -128,7 +128,7 @@
 
 .team-list-name {
   min-width: 0;
-  font-size: var(--text-list);
+  font-size: var(--text-sm);
   font-weight: 550;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -321,7 +321,7 @@
   align-items: center;
   gap: 4px;
   padding: 1px 4px 1px 8px;
-  border: 1px solid var(--accent-line);
+  border: 1px solid var(--line-strong);
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent-ink);
@@ -341,9 +341,9 @@
 .team-mention-popover {
   margin-bottom: 6px;
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--elev-2);
   overflow: hidden;
 }
 
@@ -379,7 +379,7 @@
 
 .team-mention-option.active,
 .team-mention-option:hover {
-  background: var(--surface-2);
+  background: var(--hover-tint);
 }
 
 .team-mention-name {
@@ -388,7 +388,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-list);
+  font-size: var(--text-sm);
 }
 
 .team-mention-empty {
@@ -466,13 +466,13 @@
 .team-message-bubble {
   max-width: min(78%, var(--message-max-w));
   padding: 8px 12px;
-  border-radius: var(--radius);
-  background: var(--surface-2);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
 }
 
 .team-message-self .team-message-bubble {
   background: var(--accent-soft);
-  border: 1px solid var(--accent-line);
+  border: 1px solid var(--line-strong);
 }
 
 .team-message-agent .team-message-bubble {
@@ -531,7 +531,7 @@
   padding: 5px 12px;
   border-left: 2px solid var(--line-strong);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--surface-2);
+  background: var(--surface-sunken);
   color: var(--muted);
   font-size: 11.5px;
   text-align: center;
@@ -608,7 +608,7 @@
 }
 
 .team-member-row:hover {
-  background: var(--surface-2);
+  background: var(--hover-tint);
 }
 
 .team-member-row.selected {
@@ -626,7 +626,7 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: var(--surface-3);
+  background: var(--surface-sunken);
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -659,7 +659,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-list);
+  font-size: var(--text-sm);
 }
 
 .team-member-sub {
@@ -723,7 +723,7 @@
 .team-body-card {
   padding: 16px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   background: var(--surface);
 }
 
@@ -803,7 +803,7 @@
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--surface-sunken);
   font-family: var(--font-mono);
   font-size: 11px;
   white-space: pre-wrap;

@@ -5,7 +5,7 @@
 
 ## 版本
 
-**0.26.1（2026-10-24）** — 开发中，未 tag、未 publish。版本号以根 `package.json` 为唯一来源。
+**0.26.2（2026-10-24）** — 开发中，未 tag、未 publish。版本号以根 `package.json` 为唯一来源。
 
 ## 已合入
 
@@ -15,7 +15,8 @@
 - **Web 易用性**：Agents → Teams → Nodes 编排顺序、Hub / Gateway 状态页、
   对象页 CRUD、列表搜索与语言切换。
 - **UI 结构收敛**：弹窗 portal + 全视口遮罩 + `sm/md/lg` 尺寸 tokens；共享
-  `SearchInput`；工具目录紧凑卡片；完整中英文 catalog。
+  `SearchInput`；工具目录紧凑卡片；完整中英文 catalog；select 浮层与失效
+  CSS tokens 已修正。
 - **节点显示名**：`node.json` 的 `name` additive 暴露；所有展示位优先主机名并缓存；
   `node_id` 仍是唯一寻址键，只出现在详情高级信息。
 - **默认能力开启**：`agent` / `durable` / `evals` / `federation` / `hub.autoStart`
