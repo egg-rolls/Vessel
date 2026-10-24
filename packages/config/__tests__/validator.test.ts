@@ -348,3 +348,62 @@ describe('S5 hub config', () => {
     expect(paths).toContain('hub.pairingTtlSeconds');
   });
 });
+
+describe('0.23 S9.4 attention nodes', () => {
+  it('accepts per-node url / token_env / node_id / ca_file', () => {
+    const config: VesselConfig = {
+      attention: {
+        nodes: [
+          { name: 'alpha', url: 'https://alpha.example', tokenEnv: 'ALPHA_TOKEN' },
+          {
+            name: 'beta',
+            url: 'http://127.0.0.1:8642',
+            tokenEnv: 'BETA_TOKEN',
+            nodeId: 'node-b',
+            caFile: 'ca.pem',
+          },
+        ],
+      },
+    };
+    expect(validateConfig(config).errors).toEqual([]);
+  });
+
+  it('rejects an inline token instead of accepting a secret in YAML', () => {
+    const config = {
+      attention: {
+        nodes: [
+          {
+            name: 'alpha',
+            url: 'https://alpha.example',
+            tokenEnv: 'ALPHA_TOKEN',
+            token: 'secret-token',
+          },
+        ],
+      },
+    } as unknown as VesselConfig;
+    expect(pathsOf(config)).toContain('attention.nodes[0].token');
+  });
+
+  it('rejects duplicate names because --node would be ambiguous', () => {
+    const config: VesselConfig = {
+      attention: {
+        nodes: [
+          { name: 'alpha', url: 'https://alpha.example', tokenEnv: 'A_TOKEN' },
+          { name: 'alpha', url: 'https://beta.example', tokenEnv: 'B_TOKEN' },
+        ],
+      },
+    };
+    expect(pathsOf(config)).toContain('attention.nodes[1].name');
+  });
+
+  it('requires token_env and https for non-loopback nodes', () => {
+    const config: VesselConfig = {
+      attention: {
+        nodes: [{ name: 'alpha', url: 'http://alpha.example' }],
+      },
+    };
+    const paths = pathsOf(config);
+    expect(paths).toContain('attention.nodes[0].tokenEnv');
+    expect(paths).toContain('attention.nodes[0].url');
+  });
+});

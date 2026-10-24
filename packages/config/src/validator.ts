@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { DEFAULT_TRANSPORT_OPTIONS } from './defaults.js';
 import { validateTeamPolicy } from './team-policy.js';
 import type {
+  AttentionConfig,
   ConfigValidationError,
   ConfigValidationResult,
   ConfigValidationWarning,
@@ -1396,6 +1397,7 @@ export const TENANT_OVERLAY_FORBIDDEN_KEYS: readonly string[] = [
   'serve',
   'hub',
   'connect',
+  'attention',
   'tenant',
   'update',
   // 0.19 S3：Team 声明是全局配置，tenant overlay 不开放。
@@ -1671,6 +1673,82 @@ function validateMcpEnvRefs(
       }
     }
   }
+}
+
+/** 多节点 attention 的允许键；`token` 不在其中（凭据只从 `tokenEnv` 读取）。 */
+const ATTENTION_NODE_KEYS = ['name', 'url', 'tokenEnv', 'nodeId', 'caFile'] as const;
+
+/**
+ * 校验 attention 块（S9.4）。
+ *
+ * 每节点必须有唯一 name、绝对 http(s) URL 与 `tokenEnv`；
+ * 内联 `token` 是未知键，直接报错，避免密钥落 YAML。
+ */
+export function validateAttentionSettings(
+  attention: AttentionConfig,
+  errors: ConfigValidationError[] = [],
+): ConfigValidationError[] {
+  const nodes = attention.nodes;
+  if (nodes === undefined) return errors;
+  if (!Array.isArray(nodes)) {
+    errors.push({ path: 'attention.nodes', message: 'attention.nodes must be an array' });
+    return errors;
+  }
+  const seen = new Set<string>();
+  nodes.forEach((node, index) => {
+    const base = `attention.nodes[${index}]`;
+    if (!isPlainObject(node)) {
+      errors.push({ path: base, message: 'attention node must be an object' });
+      return;
+    }
+    for (const key of Object.keys(node)) {
+      if (!(ATTENTION_NODE_KEYS as readonly string[]).includes(key)) {
+        errors.push({
+          path: `${base}.${key}`,
+          message: `Unknown attention node key "${key}"; tokens must come from tokenEnv`,
+        });
+      }
+    }
+
+    const { name, url, tokenEnv, nodeId, caFile } = node;
+    if (typeof name !== 'string' || !NODE_ID_RE.test(name)) {
+      errors.push({
+        path: `${base}.name`,
+        message: `${base}.name must match ${NODE_ID_RE.source}`,
+      });
+    } else if (seen.has(name)) {
+      errors.push({ path: `${base}.name`, message: `duplicate attention node "${name}"` });
+    } else {
+      seen.add(name);
+    }
+
+    if (typeof url !== 'string' || url.trim() === '') {
+      errors.push({ path: `${base}.url`, message: `${base}.url must be a non-empty string` });
+    } else {
+      const message = absoluteBaseUrlError(url, 'attention nodes');
+      if (message !== null) errors.push({ path: `${base}.url`, message: `${base}.url ${message}` });
+    }
+
+    if (typeof tokenEnv !== 'string' || tokenEnv === '') {
+      errors.push({
+        path: `${base}.tokenEnv`,
+        message: `${base}.token_env is required (human gateway/team token)`,
+      });
+    } else {
+      validateEnvName(`${base}.tokenEnv`, tokenEnv, errors);
+    }
+
+    if (nodeId !== undefined && (typeof nodeId !== 'string' || !NODE_ID_RE.test(nodeId))) {
+      errors.push({
+        path: `${base}.nodeId`,
+        message: `${base}.node_id must match ${NODE_ID_RE.source}`,
+      });
+    }
+    if (caFile !== undefined && (typeof caFile !== 'string' || caFile.trim() === '')) {
+      errors.push({ path: `${base}.caFile`, message: `${base}.caFile must be a non-empty string` });
+    }
+  });
+  return errors;
 }
 
 /**
@@ -2333,6 +2411,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
+  // 校验 attention（S9.4；多节点连接与凭据只从 env 读取）
+  if (config.attention !== undefined) {
+    if (!isPlainObject(config.attention)) {
+      errors.push({ path: 'attention', message: 'attention must be an object' });
+    } else {
+      validateAttentionSettings(config.attention as AttentionConfig, errors);
+    }
+  }
+
   // 校验 0.5 tenant / trace
   if (config.tenant !== undefined) {
     if (!isPlainObject(config.tenant)) {
@@ -2459,6 +2546,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'adminTokenEnv',
   ],
   connect: ['token', 'tokenEnv', 'caFile'],
+  attention: ['nodes'],
   hub: [
     'dataDir',
     'direction',
@@ -2595,6 +2683,7 @@ export const KNOWN_CONFIG_KEYS = [
   'scheduler',
   'transport',
   'connect',
+  'attention',
   'mcpServers',
   'durable',
   'serve',
