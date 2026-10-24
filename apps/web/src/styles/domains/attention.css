@@ -1,0 +1,79 @@
+/* ─────────────────────────────────────────────────────────────
+   Observe → Attention（0.22）：单节点跨 Team 的待处理收件箱。
+   全部 .attention- 前缀；复用 settings-section / filter-bar / load-more。
+   ───────────────────────────────────────────────────────────── */
+
+.attention-list {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.attention-head,
+.attention-row {
+  display: grid;
+  grid-template-columns:
+    72px minmax(160px, 1.4fr) minmax(80px, 1fr)
+    minmax(90px, 1fr) minmax(90px, 1fr) 148px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 11.5px;
+}
+
+.attention-head {
+  color: var(--faint);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.attention-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attention-item + .attention-item {
+  border-top: 1px solid var(--line);
+}
+
+.attention-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.attention-row-open {
+  cursor: pointer;
+}
+
+.attention-row-open:hover {
+  background: var(--surface-2);
+}
+
+.attention-request {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .attention-head > :nth-child(n + 4),
+  .attention-row > :nth-child(n + 4) {
+    display: none;
+  }
+
+  .attention-head,
+  .attention-row {
+    grid-template-columns: 64px minmax(140px, 1fr) minmax(70px, 0.8fr);
+  }
+}

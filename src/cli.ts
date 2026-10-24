@@ -128,6 +128,11 @@ function printHelp(): void {
   const gateway: Array<[string, string]> = [
     ['vessel status [--json]', t('help.cmd.status')],
     ['vessel agents [--json]', t('help.cmd.agents')],
+    ['vessel attention [--connect <url>] [--json] [--interactive]', t('help.cmd.attention')],
+    [
+      'vessel attention respond <id> --allow|--deny|--answers <json>',
+      t('help.cmd.attentionRespond'),
+    ],
     ['vessel team list [--json]', t('help.cmd.teamList')],
     ['vessel team get <team_id> [--limit N]', t('help.cmd.teamGet')],
     ['vessel team post <team_id> <content...> [--mention <name|id>]', t('help.cmd.teamPost')],

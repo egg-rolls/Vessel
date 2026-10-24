@@ -40,6 +40,7 @@ import {
 import { listTools } from '../tools-list';
 import { tracePruneCommand } from '../trace-command';
 import { ui } from '../ui-style';
+import { attentionCommand } from './attention';
 import { runFederationCommand } from './federation';
 
 export interface CliCommandContext {
@@ -294,6 +295,15 @@ export const cliCommands: readonly CliCommand[] = [
           tenantId: args.tenantArg,
         }),
       );
+    },
+  },
+  {
+    name: 'attention',
+    match: (args) => args.attentionCommand !== null,
+    run: async (args) => {
+      const command = args.attentionCommand;
+      if (command === null) return 1;
+      return printCommandResult(await attentionCommand(command));
     },
   },
   {

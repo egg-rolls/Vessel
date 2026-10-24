@@ -203,6 +203,31 @@ describe('vessel team command', () => {
     expect(calls.map((call) => call.method)).toEqual(['team.list', 'team.get', 'team.members']);
   });
 
+  it('shows the member window size against the full roster count', async () => {
+    const dir = await setup();
+    const members = Array.from({ length: 20 }, (_, index) => ({
+      agent_id: `m-${index}`,
+      name: `n-${index}`,
+      session_id: `s-${index}`,
+      membership: 'present',
+      presence: 'live',
+      visibility: 'team',
+    }));
+    const result = await runTeamCommand(
+      { kind: 'get', teamId: 'alpha', json: false },
+      options(
+        dir,
+        fakeFetch(() => ({
+          team: { team_id: 'alpha', name: 'alpha', member_count: 57, online_count: 20 },
+          members,
+          messages: [],
+        })),
+      ),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Members (20 of 57):');
+  });
+
   it('maps team budget status and renders counters', async () => {
     const dir = await setup();
     const calls: RpcBody[] = [];

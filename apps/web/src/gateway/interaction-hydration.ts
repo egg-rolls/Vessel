@@ -18,6 +18,9 @@ export interface ListedInteraction {
   kind: 'permission' | 'ask';
   request_id: string;
   run_id: string;
+  /** 0.19 S4 additive：请求所属成员 / Team；缺失时 Web 不反查。 */
+  agent_id?: string;
+  team_id?: string;
   session_id?: string;
   parent_session_id?: string;
   tool_call_id?: string;
@@ -27,6 +30,15 @@ export interface ListedInteraction {
   created_at: number;
   status: 'pending' | 'answered' | 'orphaned';
   answer?: ListedInteractionAnswer;
+}
+
+/** `interactions.list` 分页结果（DECISION-038 §2.2：cursor additive）。 */
+export interface ListedInteractionPage {
+  interactions: ListedInteraction[];
+  /** 过滤后的总条数，不受 limit / cursor 影响。 */
+  total: number;
+  /** 还有下一页时返回；否则缺失。 */
+  next_cursor?: string;
 }
 
 /** 只用于失效提示，不构造可应答卡片。 */

@@ -2606,3 +2606,58 @@ interface LimitBlock {
 - 入站日志 `from` 为 `federation:<principal>@<node>:<team>`；`TeamLogEntry.federation?`
   带结构化的 from / to / conversation_id / hop。派发给成员的正文前置回信抬头。
 - 不新增 canonical RPC（仍 48）；详见 [ADR-094 Addendum](adr/ADR-094-federation-team-to-team.md)。
+
+## 47. 0.22.0 远程 attention 与操作面统一（S9，已实现）
+
+### 47.1 权限仍在节点本地
+
+- permission / ask 永远由**运行 agent 的节点**处理；人必须连到该节点，用**人类控制 token**
+  （gateway / team-scoped control token）应答。
+- 不通过 federation 转发 permission / ask；hub 不存 pending、不代答、不代理正文。
+- federation peer token 只认证节点，**不能**用于 `interactions.list` / `permission.respond`
+  / `ask.respond`；错误消息明确提示使用人类 token。
+- `answered_by` 仍只接受 `human | policy`；`answered_via` 增加 `cli`（审计提示，不是身份认证）。
+
+### 47.2 `vessel attention`
+
+- 列表 / 分页 / 单条 / 批量 / 交互式；走 canonical `interactions.list` +
+  `permission.respond` / `ask.respond`。
+- `interactions.list` additive：`order`（`oldest|newest`，缺省 newest）、`agent_id`、
+  `cursor`、`next_cursor`、`total`；cursor 编码 `(order, created_at, request_id)`，
+  换序沿用旧 cursor 直接拒绝。过滤顺序：status / session / run / team scope / agent_id，
+  然后 total、cursor、limit。
+- `--to <principal>@<node>:<team>` 只用于定位：连接后 `health.get` 校验 node_id，
+  不一致返回 `federation_target_mismatch`，零应答；principal 不参与列表过滤。
+- 批量：默认逐条确认；`--select` 只作用于当前页；`--all` 处理所有可见页（上限 200）
+  且必须 `--yes`；逐条输出成功 / 失败，部分失败不中止。
+- 无 token / 无 scope → 401/403，不显示列表内容；`not_found` / `run_ended` / `conflict`
+  原样透传；不自动重试。
+
+### 47.3 Roster 单一排序
+
+- `TeamService` 定义唯一排序：`presence === 'live'` 优先 → `last_seen` 降序 → `name`。
+- `teams.get` 的 `members` 是窗口（缺省 20、最大 100）；`member_count` 是 present 总数；
+  `packages/serve`、CLI、Web **不得重新排序**。
+- `federation team-info` 复用同一顺序，只去掉内部字段。
+- Web 成员侧栏 / 群聊显示 `showing N of M`，可加载到 100。
+
+### 47.4 凭据词表
+
+| 词 | 认证谁 | 用途 |
+|---|---|---|
+| `gateway token` | 用户 / 管理员 | canonical RPC / WS |
+| `team token`（team-scoped control） | 限定 team 的用户 | 只能操作自己的 team |
+| `owner token` | 本机 REPL owner | 本机 owner 端点，loopback |
+| `peer token` | **节点** | `/v1/federation/*`，不能答权限 |
+| `hub token` | hub / node | hub 目录 / 控制面 |
+
+- 文档 / CLI help / 错误消息不再使用裸 “token”。
+- 地址保留字是 `human`；root agent 的 `owner` 只用于成员模型。
+
+### 47.5 Web 与多节点
+
+- Web 已实现：attention 收件箱（单节点、跨 team）、Team `description` /
+  `default_principal`、`showing N of M` / 加载更多、`interactions.list` 分页。
+- **未实现（S9.4 延期）**：Web 多节点连接管理（每节点显式人类 token）；
+  hub 只提供目录，不代答、不代理正文。
+- 不新增 canonical 方法（仍 48）；不引入 `vessel rpc` 泛化命令。

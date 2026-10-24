@@ -243,6 +243,10 @@ export interface TeamSummary {
   tenant_id: string;
   /** 旧 gateway / 缺失 workspace 的 Team 不返回该字段；UI 显示 —。 */
   workspace?: string;
+  /** 0.21 additive：展示字段；缺失时 UI 显示 —。 */
+  description?: string;
+  /** 0.21 additive：默认接头人（地址保留字 human / principal）；缺失时 UI 显示 —。 */
+  default_principal?: string;
   member_count: number;
   /** S3 R1：present && live；缺失时显示 —。 */
   online_count?: number;
@@ -276,6 +280,18 @@ export interface TeamMessage {
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
   system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'fork';
+  /** 0.21 additive：federation 入站日志的回信地址；本地日志缺失。 */
+  federation?: TeamMessageFederation;
+}
+
+/** 跨节点报文在 Team 日志上的结构化回信地址。 */
+export interface TeamMessageFederation {
+  /** `<principal>@<node_id>:<team_id>` */
+  from_addr: string;
+  /** `<principal>@<node_id>:<team_id>` */
+  to_addr?: string;
+  conversation_id?: string;
+  hop?: number;
 }
 
 /** teams.post 的逐条投递结果。 */

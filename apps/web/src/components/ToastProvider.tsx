@@ -108,3 +108,11 @@ export function useToast(): ToastApi {
   if (!value) throw new Error('useToast must be used inside <ToastProvider>');
   return value;
 }
+
+/**
+ * 可选 toast：没有 Provider（SSR / 组件级静态渲染测试）时返回 null。
+ * 只用于“提示不是关键路径”的叶子组件，避免为测试包一层 Provider。
+ */
+export function useOptionalToast(): ToastApi | null {
+  return useContext(ToastContext);
+}

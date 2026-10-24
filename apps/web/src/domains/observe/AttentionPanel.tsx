@@ -1,0 +1,266 @@
+/**
+ * Observe → Attention：单节点跨 Team 的待处理收件箱（DECISION-038 §2.4）。
+ *
+ * 只读列表；应答仍在请求所属会话卡片里完成。分页用服务端 cursor，
+ * “加载更多”只追加、按 request_id 去重；切换状态 / tenant / epoch 时重置。
+ */
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
+import type { Route } from '../../app/router';
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  NotEnabledState,
+  StaleNotice,
+} from '../../components/States';
+import { SegmentedTabs } from '../../components/Tabs';
+import { formatTimestamp } from '../../format';
+import { useConnection } from '../../gateway/ConnectionProvider';
+import type { ListedInteraction } from '../../gateway/interaction-hydration';
+import { t, useLocale } from '../../i18n';
+import { resourceData, useResource } from '../../state/useResource';
+import { ATTENTION_PAGE_SIZE, appendInteractions, isAttentionAuthError } from './attention';
+
+type AttentionStatus = 'pending' | 'orphaned';
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** 有 session 去会话；否则有 team 去 Team；都没有则不跳转。 */
+function interactionRoute(item: ListedInteraction): Route | null {
+  if (item.session_id) return { domain: 'chat', sessionId: item.session_id };
+  if (item.team_id) return { domain: 'team', teamId: item.team_id };
+  return null;
+}
+
+function AttentionRow({ item, onOpen }: { item: ListedInteraction; onOpen?: () => void }) {
+  const createdAt = new Date(item.created_at);
+  const iso = Number.isNaN(createdAt.getTime()) ? undefined : createdAt.toISOString();
+  const cells = (
+    <>
+      <span className="attention-kind mono">{item.kind}</span>
+      <span className="attention-request mono" title={item.request_id}>
+        {item.request_id}
+      </span>
+      <span className="attention-cell mono">{item.tool ?? '—'}</span>
+      <span className="attention-cell mono">{item.agent_id ?? '—'}</span>
+      <span className="attention-cell mono">{item.team_id ?? '—'}</span>
+      <time className="attention-time mono" {...(iso ? { dateTime: iso } : {})}>
+        {formatTimestamp(item.created_at) || '—'}
+      </time>
+    </>
+  );
+
+  return (
+    <li className="attention-item">
+      {onOpen ? (
+        <button type="button" className="attention-row attention-row-open" onClick={onOpen}>
+          {cells}
+        </button>
+      ) : (
+        <div className="attention-row">{cells}</div>
+      )}
+    </li>
+  );
+}
+
+export function AttentionPanel({ navigate }: { navigate: (route: Route) => void }) {
+  useLocale();
+  const { client, hasToken, epoch, tenantEpoch, tenantId } = useConnection();
+  const [status, setStatus] = useState<AttentionStatus>('pending');
+  /** 加载更多得到的后续页（只存追加部分）。 */
+  const [more, setMore] = useState<{
+    items: ListedInteraction[];
+    nextCursor?: string;
+  } | null>(null);
+  const [moreError, setMoreError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+  /** 分页身份：切状态 / tenant / epoch 后，旧的在途“加载更多”不得落地。 */
+  const pageKey = `${epoch}:${tenantEpoch}:${tenantId ?? ''}:${status}`;
+  const pageKeyRef = useRef(pageKey);
+  pageKeyRef.current = pageKey;
+
+  const tenantParam = tenantId ? { tenant_id: tenantId } : {};
+  const resource = useResource({
+    load: () =>
+      client.listInteractionsPage({
+        status,
+        limit: ATTENTION_PAGE_SIZE,
+        order: 'newest',
+        ...tenantParam,
+      }),
+    enabled: hasToken,
+    deps: [epoch, tenantEpoch, tenantId, status],
+  });
+  useRefreshSignal(() => {
+    setMore(null);
+    setMoreError(null);
+    resource.reload();
+  });
+
+  // 状态 / tenant / epoch 变化：丢掉上一轮追加的页，从第一页重新开始。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 这些键就是分页身份
+  useEffect(() => {
+    setMore(null);
+    setMoreError(null);
+  }, [epoch, tenantEpoch, tenantId, status]);
+
+  // 分页身份变化后，旧请求的数据在 effect 落地前必须先隐藏，避免串状态。
+  const [settledKey, setSettledKey] = useState(pageKey);
+  useEffect(() => {
+    if (resource.state.status === 'success' || resource.state.status === 'error') {
+      setSettledKey(pageKey);
+    }
+  }, [resource.state, pageKey]);
+  const current = settledKey === pageKey;
+
+  const firstPage = current ? resourceData(resource.state) : undefined;
+  const items = useMemo(
+    () => (current ? appendInteractions(firstPage?.interactions ?? [], more?.items ?? []) : []),
+    [current, firstPage, more],
+  );
+  // 一旦加载过后续页，就由后续页的 cursor 决定是否还有更多。
+  const nextCursor = more ? more.nextCursor : firstPage?.next_cursor;
+  const total = firstPage?.total ?? items.length;
+  const firstError = current && resource.state.status === 'error' ? resource.state : undefined;
+  const authError =
+    firstError !== undefined && isAttentionAuthError(firstError.code, firstError.error);
+
+  const loadMore = async () => {
+    if (!nextCursor || loadingMoreRef.current) return;
+    const keyAtStart = pageKeyRef.current;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setMoreError(null);
+    try {
+      const page = await client.listInteractionsPage({
+        status,
+        limit: ATTENTION_PAGE_SIZE,
+        order: 'newest',
+        cursor: nextCursor,
+        ...tenantParam,
+      });
+      if (pageKeyRef.current !== keyAtStart) return;
+      setMore((prev) => ({
+        items: appendInteractions(prev?.items ?? [], page.interactions),
+        ...(page.next_cursor !== undefined ? { nextCursor: page.next_cursor } : {}),
+      }));
+    } catch (error) {
+      setMoreError(errorMessage(error));
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  };
+
+  if (!hasToken) {
+    return (
+      <NotEnabledState
+        title={t('observe.attention.noToken')}
+        reason={t('observe.attention.noTokenReason')}
+      />
+    );
+  }
+  if (authError) {
+    return (
+      <NotEnabledState
+        title={t('observe.attention.forbidden')}
+        reason={t('observe.attention.forbiddenReason')}
+      />
+    );
+  }
+
+  const firstLoading =
+    !current ||
+    (items.length === 0 &&
+      (resource.state.status === 'loading' || resource.state.status === 'idle'));
+
+  return (
+    <div className="settings-section">
+      <p className="section-desc">{t('observe.attention.hint')}</p>
+      <div className="filter-bar">
+        <SegmentedTabs<AttentionStatus>
+          label={t('observe.attention.statusLabel')}
+          tabs={[
+            { id: 'pending', label: t('observe.attention.status.pending') },
+            { id: 'orphaned', label: t('observe.attention.status.orphaned') },
+          ]}
+          value={status}
+          onChange={setStatus}
+          panelId="attention-panel"
+        />
+        <button
+          type="button"
+          className="btn btn-small"
+          onClick={resource.reload}
+          disabled={resource.refreshing}
+        >
+          {resource.refreshing ? t('observe.attention.refreshing') : t('observe.attention.refresh')}
+        </button>
+        <span className="dim">{t('observe.attention.total', { count: total })}</span>
+      </div>
+
+      <div id="attention-panel" role="tabpanel" aria-label={t('observe.attention.panelLabel')}>
+        {firstLoading ? (
+          <LoadingState label={t('observe.attention.loading')} />
+        ) : firstError && items.length === 0 ? (
+          <ErrorState message={firstError.error} onRetry={resource.reload} />
+        ) : (
+          <>
+            {firstError && (
+              <StaleNotice message={t('observe.attention.stale')} onRetry={resource.reload} />
+            )}
+            {items.length === 0 ? (
+              <EmptyState
+                title={
+                  status === 'pending'
+                    ? t('observe.attention.empty.pending')
+                    : t('observe.attention.empty.orphaned')
+                }
+                description={t('observe.attention.emptyHint')}
+              />
+            ) : (
+              <div className="attention-list">
+                <div className="attention-head" aria-hidden="true">
+                  <span>{t('observe.attention.col.kind')}</span>
+                  <span>{t('observe.attention.col.request')}</span>
+                  <span>{t('observe.attention.col.tool')}</span>
+                  <span>{t('observe.attention.col.agent')}</span>
+                  <span>{t('observe.attention.col.team')}</span>
+                  <span>{t('observe.attention.col.time')}</span>
+                </div>
+                <ul className="attention-items">
+                  {items.map((item) => {
+                    const target = interactionRoute(item);
+                    return (
+                      <AttentionRow
+                        key={item.request_id}
+                        item={item}
+                        {...(target ? { onOpen: () => navigate(target) } : {})}
+                      />
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {nextCursor && (
+              <button
+                type="button"
+                className="load-more"
+                onClick={() => void loadMore()}
+                disabled={loadingMore}
+              >
+                {loadingMore ? t('observe.attention.loadingMore') : t('observe.attention.loadMore')}
+              </button>
+            )}
+            {moreError && <ErrorState message={moreError} onRetry={() => void loadMore()} />}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

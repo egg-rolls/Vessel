@@ -143,6 +143,10 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--conversation',
   '--dimension',
   '--max',
+  '--agent',
+  '--cursor',
+  '--select',
+  '--answers',
 ];
 
 /** 预算维度（teams.budget / `vessel team budget`） */
@@ -172,6 +176,11 @@ const AGENT_STATES: readonly string[] = [
 ];
 
 const AGENT_VISIBILITIES: readonly string[] = ['private', 'team', 'tenant'];
+
+const ATTENTION_FLAG_VALUES: Readonly<Record<string, readonly string[]>> = {
+  '--status': ['pending', 'orphaned'],
+  '--order': ['oldest', 'newest'],
+};
 
 /**
  * 顶层命令与二级结构。顺序即补全展示顺序：
@@ -294,6 +303,45 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     ],
   },
   { token: 'status', registryName: 'status', flags: ['--json'] },
+  {
+    token: 'attention',
+    registryName: 'attention',
+    subcommands: [
+      {
+        name: 'respond',
+        flags: [
+          '--json',
+          '--select',
+          '--all',
+          '--allow',
+          '--deny',
+          '--remember',
+          '--answers',
+          '--yes',
+          '--to',
+          '--team',
+          '--agent',
+          '--status',
+          '--order',
+          '--limit',
+          '--cursor',
+        ],
+        flagValues: ATTENTION_FLAG_VALUES,
+      },
+    ],
+    flags: [
+      '--json',
+      '--interactive',
+      '--to',
+      '--team',
+      '--agent',
+      '--status',
+      '--order',
+      '--limit',
+      '--cursor',
+    ],
+    flagValues: ATTENTION_FLAG_VALUES,
+  },
   { token: 'agents', registryName: 'agents', flags: ['--json'] },
   {
     token: 'agent',

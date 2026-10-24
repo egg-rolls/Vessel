@@ -12,7 +12,7 @@ export type Route =
       domain: 'integrations';
       tab: 'tools' | 'mcp' | 'channels';
     }
-  | { domain: 'observe'; tab: 'metrics' | 'evals' | 'diagnostics' | 'tasks' }
+  | { domain: 'observe'; tab: 'metrics' | 'evals' | 'diagnostics' | 'tasks' | 'attention' }
   | { domain: 'team' }
   | { domain: 'team'; teamId: string; memberId?: string; bodyId?: string }
   | {
@@ -33,7 +33,7 @@ export const DEFAULT_ROUTE: Route = { domain: 'chat' };
 
 const RUN_TABS = new Set(['live', 'durable']);
 const INTEGRATION_TABS = new Set(['tools', 'mcp', 'channels']);
-const OBSERVE_TABS = new Set(['metrics', 'evals', 'diagnostics', 'tasks']);
+const OBSERVE_TABS = new Set(['metrics', 'evals', 'diagnostics', 'tasks', 'attention']);
 const SETTINGS_TABS = new Set([
   'connection',
   'nodes',
@@ -104,7 +104,7 @@ export function parseRoute(hash: string): Route {
       return { domain: 'integrations', tab };
     }
     case 'observe': {
-      const tab = pick<'metrics' | 'evals' | 'diagnostics' | 'tasks'>(
+      const tab = pick<'metrics' | 'evals' | 'diagnostics' | 'tasks' | 'attention'>(
         segments[1] ?? query.get('tab'),
         OBSERVE_TABS,
         'metrics',

@@ -28,7 +28,7 @@ export interface StoredInteractionAnswer {
   answers?: unknown[];
   answered_at: number;
   answered_by?: 'human' | 'policy';
-  answered_via?: 'tui' | 'rpc' | 'policy';
+  answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
   /** policy 专用：deny_after | auto_allow */
   policy?: 'deny_after' | 'auto_allow';
   latency_ms?: number;
@@ -78,6 +78,7 @@ function parseAnswer(value: unknown): StoredInteractionAnswer | undefined {
   if (
     value.answered_via === 'tui' ||
     value.answered_via === 'rpc' ||
+    value.answered_via === 'cli' ||
     value.answered_via === 'policy'
   ) {
     answer.answered_via = value.answered_via;

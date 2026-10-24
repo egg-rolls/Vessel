@@ -450,6 +450,19 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 0.21：federation 入站日志的回信地址（只展示，不在 Web 直接发送）。 */
+.team-message-federation {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.team-message-reply-address {
+  align-self: flex-start;
+}
+
 .team-message-bubble {
   max-width: min(78%, 640px);
   padding: 8px 12px;
@@ -567,6 +580,10 @@
 
 .team-members-head .icon-btn {
   margin-left: auto;
+}
+
+.team-members-load-more {
+  margin: 8px 12px 12px;
 }
 
 .team-members-scroll {

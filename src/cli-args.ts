@@ -7,6 +7,7 @@
 
 import { allowedOriginError } from '../packages/config/src/index';
 import { type CompletionCommandArgs, isCompletionShell } from './completion-spec';
+import { parseFederationAddress } from './federation-address';
 
 /** `--serve` 省略端口时的默认值 */
 export const DEFAULT_SERVE_PORT = 8642;
@@ -269,6 +270,40 @@ export type HubCommand =
       ttl?: number;
     };
 
+/**
+ * `vessel attention ...`（0.22 S9.1）。
+ *
+ * `kind: 'list'` 只允许列表参数；`kind: 'respond'` 必须恰好一个目标来源
+ * （positional requestId / `--select` / `--all`），且 `--all` 必须带 `--yes`。
+ * 连接参数由本命令自行解析（top-level parser 在 i===0 提前返回）。
+ */
+export interface AttentionCommandArgs {
+  kind: 'list' | 'respond';
+  connectUrl?: string;
+  connectToken?: string;
+  caFile?: string;
+  tenantId?: string;
+  /** 已通过 `parseFederationAddress` 校验；只用于定位节点与缺省 team。 */
+  to?: string;
+  teamId?: string;
+  agent?: string;
+  /** 缺省 `pending`（运行时按 pending 请求）。 */
+  status: 'pending' | 'orphaned';
+  /** 缺省不传，由服务端保持 `newest`。 */
+  order?: 'oldest' | 'newest';
+  limit: number;
+  cursor?: string;
+  json: boolean;
+  interactive: boolean;
+  requestId?: string;
+  select?: number[];
+  all: boolean;
+  decision?: 'allow' | 'deny';
+  answers?: unknown[];
+  remember: boolean;
+  yes: boolean;
+}
+
 export interface CliArgs {
   /** `vessel demo`：无 Key 交互演示（mock + tools 场景） */
   demo: boolean;
@@ -346,6 +381,8 @@ export interface CliArgs {
   errorsCommand: { json: boolean; limit?: number } | null;
   /** 0.18：`vessel completion <bash|zsh|fish|powershell>` */
   completionCommand: CompletionCommandArgs | null;
+  /** 0.22 S9.1：`vessel attention [respond]` */
+  attentionCommand: AttentionCommandArgs | null;
 }
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -408,6 +445,7 @@ export function parseArgs(argv: string[]): ParseResult {
     teamCommand: null,
     errorsCommand: null,
     completionCommand: null,
+    attentionCommand: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -450,6 +488,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'agents' && i === 0) {
       return parseAgentsArgs(argv.slice(1), args);
+    }
+    if (a === 'attention' && i === 0) {
+      return parseAttentionArgs(argv.slice(1), args);
     }
     if (a === 'agent' && i === 0) {
       return parseAgentArgs(argv.slice(1), args);
@@ -1825,6 +1866,282 @@ function parseAgentsArgs(rest: string[], args: CliArgs): ParseResult {
   }
   if (args.help) return { ok: true, args };
   args.agentsCommand = { json };
+  return { ok: true, args };
+}
+
+/** attention 分页上限（与 `interactions.list` 的 limit 上界一致）。 */
+const ATTENTION_MAX_LIMIT = 500;
+const ATTENTION_DEFAULT_LIMIT = 20;
+
+function parseAttentionLimit(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) return null;
+  const value = Number.parseInt(raw, 10);
+  return value >= 1 && value <= ATTENTION_MAX_LIMIT ? value : null;
+}
+
+/** 逗号分隔正整数；去重；空 / 0 / 非数字 → null。 */
+function parseAttentionSelect(raw: string): number[] | null {
+  const parts = raw.split(',');
+  const seen = new Set<number>();
+  const selected: number[] = [];
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return null;
+    const value = Number.parseInt(part, 10);
+    if (value < 1) return null;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    selected.push(value);
+  }
+  return selected;
+}
+
+/**
+ * `attention [respond] ...`。
+ *
+ * 连接参数在这里自行接受：顶层 parser 对 `attention` 在 i===0 提前返回，
+ * 不会进入全局 `--connect` switch。
+ */
+function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
+  const isRespond = rest[0] === 'respond';
+  const tail = isRespond ? rest.slice(1) : rest;
+
+  let connectUrl: string | undefined;
+  let connectToken: string | undefined;
+  let caFile: string | undefined;
+  let tenantId: string | undefined;
+  let to: string | undefined;
+  let teamId: string | undefined;
+  let agent: string | undefined;
+  let status: 'pending' | 'orphaned' = 'pending';
+  let order: 'oldest' | 'newest' | undefined;
+  let limit = ATTENTION_DEFAULT_LIMIT;
+  let cursor: string | undefined;
+  let json = false;
+  let interactive = false;
+  let requestId: string | undefined;
+  let select: number[] | undefined;
+  let all = false;
+  let decision: 'allow' | 'deny' | undefined;
+  let answers: unknown[] | undefined;
+  let remember = false;
+  let yes = false;
+  const positionals: string[] = [];
+
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      if (isRespond) return { ok: false, error: 'Unknown argument for attention respond: --json' };
+      json = true;
+      continue;
+    }
+    if (a === '--interactive') {
+      if (isRespond) {
+        return { ok: false, error: '--interactive is only valid for `vessel attention` (list)' };
+      }
+      interactive = true;
+      continue;
+    }
+    if (a === '--all' || a === '--select' || a === '--allow' || a === '--deny') {
+      if (!isRespond) return { ok: false, error: `${a} is only valid for attention respond` };
+      if (a === '--all') {
+        all = true;
+        continue;
+      }
+      if (a === '--select') {
+        const value = readFlagValue(tail, i, '--select');
+        if (!value.ok) return value;
+        const parsed = parseAttentionSelect(value.value);
+        if (parsed === null) {
+          return { ok: false, error: `Invalid --select: ${value.value} (expected 1,3,...)` };
+        }
+        select = parsed;
+        i = value.next;
+        continue;
+      }
+      const next: 'allow' | 'deny' = a === '--allow' ? 'allow' : 'deny';
+      if (decision !== undefined && decision !== next) {
+        return { ok: false, error: '--allow and --deny are mutually exclusive' };
+      }
+      decision = next;
+      continue;
+    }
+    if (a === '--remember' || a === '--yes') {
+      if (!isRespond) return { ok: false, error: `${a} is only valid for attention respond` };
+      if (a === '--remember') remember = true;
+      else yes = true;
+      continue;
+    }
+    if (a === '--answers') {
+      if (!isRespond) return { ok: false, error: '--answers is only valid for attention respond' };
+      const value = readFlagValue(tail, i, '--answers');
+      if (!value.ok) return value;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(value.value);
+      } catch {
+        return { ok: false, error: '--answers must be valid JSON' };
+      }
+      if (!Array.isArray(parsed)) return { ok: false, error: '--answers must be a JSON array' };
+      answers = parsed;
+      i = value.next;
+      continue;
+    }
+    if (a === '--to') {
+      const value = readFlagValue(tail, i, '--to');
+      if (!value.ok) return value;
+      const parsed = parseFederationAddress(value.value);
+      if (!parsed.ok) return { ok: false, error: `Invalid --to: ${parsed.message}` };
+      to = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--team' || a === '--agent') {
+      const value = readFlagValue(tail, i, a);
+      if (!value.ok) return value;
+      if (a === '--team') teamId = value.value;
+      else agent = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--status') {
+      const value = readFlagValue(tail, i, '--status');
+      if (!value.ok) return value;
+      if (value.value !== 'pending' && value.value !== 'orphaned') {
+        return { ok: false, error: '--status must be pending or orphaned' };
+      }
+      status = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--order') {
+      const value = readFlagValue(tail, i, '--order');
+      if (!value.ok) return value;
+      if (value.value !== 'oldest' && value.value !== 'newest') {
+        return { ok: false, error: '--order must be oldest or newest' };
+      }
+      order = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--limit') {
+      const value = readFlagValue(tail, i, '--limit');
+      if (!value.ok) return value;
+      const parsed = parseAttentionLimit(value.value);
+      if (parsed === null) {
+        return {
+          ok: false,
+          error: `Invalid --limit: ${value.value} (expected 1..${ATTENTION_MAX_LIMIT})`,
+        };
+      }
+      limit = parsed;
+      i = value.next;
+      continue;
+    }
+    if (a === '--cursor') {
+      const value = readFlagValue(tail, i, '--cursor');
+      if (!value.ok) return value;
+      cursor = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--connect-token') {
+      // token 可能以 `-` 开头：与全局 parser 一样只要求非空。
+      const next = tail[i + 1];
+      if (next === undefined || next.trim() === '') {
+        return { ok: false, error: 'Missing value for --connect-token' };
+      }
+      connectToken = next;
+      i++;
+      continue;
+    }
+    if (a === '--connect' || a === '--ca' || a === '--tenant') {
+      const value = readFlagValue(tail, i, a);
+      if (!value.ok) return value;
+      if (a === '--connect') connectUrl = value.value;
+      else if (a === '--ca') caFile = value.value;
+      else tenantId = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) return { ok: false, error: `Unknown argument for attention: ${a}` };
+    if (!isRespond) return { ok: false, error: `Unknown argument for attention: ${a}` };
+    positionals.push(a);
+  }
+
+  if (args.help) return { ok: true, args };
+
+  if (
+    (connectToken !== undefined || caFile !== undefined) &&
+    connectUrl === undefined &&
+    (process.env.VESSEL_CONNECT ?? '').trim() === ''
+  ) {
+    return {
+      ok: false,
+      error: `${connectToken !== undefined ? '--connect-token' : '--ca'} requires --connect`,
+    };
+  }
+
+  if (isRespond) {
+    if (positionals.length > 1) {
+      return { ok: false, error: 'attention respond accepts at most one <request_id>' };
+    }
+    requestId = positionals[0];
+    const targets =
+      (requestId !== undefined ? 1 : 0) + (select !== undefined ? 1 : 0) + (all ? 1 : 0);
+    if (targets !== 1) {
+      return {
+        ok: false,
+        error: 'attention respond requires exactly one of <request_id>, --select, or --all',
+      };
+    }
+    if (all && !yes) return { ok: false, error: 'attention respond --all requires --yes' };
+    if (select !== undefined && decision === undefined) {
+      return { ok: false, error: 'attention respond --select requires --allow or --deny' };
+    }
+    if (answers !== undefined && requestId === undefined) {
+      return { ok: false, error: '--answers requires a positional <request_id>' };
+    }
+    if (answers !== undefined && decision !== undefined) {
+      return { ok: false, error: '--answers cannot be combined with --allow/--deny' };
+    }
+    if (answers === undefined && decision === undefined) {
+      return {
+        ok: false,
+        error: 'attention respond requires --allow or --deny (or --answers with a request_id)',
+      };
+    }
+    if (remember && answers !== undefined) {
+      return { ok: false, error: '--remember requires --allow or --deny' };
+    }
+  }
+
+  args.attentionCommand = {
+    kind: isRespond ? 'respond' : 'list',
+    ...(connectUrl !== undefined ? { connectUrl } : {}),
+    ...(connectToken !== undefined ? { connectToken } : {}),
+    ...(caFile !== undefined ? { caFile } : {}),
+    ...(tenantId !== undefined ? { tenantId } : {}),
+    ...(to !== undefined ? { to } : {}),
+    ...(teamId !== undefined ? { teamId } : {}),
+    ...(agent !== undefined ? { agent } : {}),
+    status,
+    ...(order !== undefined ? { order } : {}),
+    limit,
+    ...(cursor !== undefined ? { cursor } : {}),
+    json,
+    interactive,
+    ...(requestId !== undefined ? { requestId } : {}),
+    ...(select !== undefined ? { select } : {}),
+    all,
+    ...(decision !== undefined ? { decision } : {}),
+    ...(answers !== undefined ? { answers } : {}),
+    remember,
+    yes,
+  };
   return { ok: true, args };
 }
 

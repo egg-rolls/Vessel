@@ -41,7 +41,14 @@ import { TeamComposer } from './TeamComposer';
 import { TeamMemberSidebar } from './TeamMemberSidebar';
 import { TeamTranscript } from './TeamTranscript';
 import { buildTeamRows, type LocalSend, matchWrittenMessage, shouldFetchTeam } from './team-send';
-import { DEFAULT_LIMIT, nextLimitFor, teamWindowFlags } from './team-window';
+import {
+  DEFAULT_LIMIT,
+  DEFAULT_MEMBERS_LIMIT,
+  memberWindowFlags,
+  nextLimitFor,
+  nextMembersLimitFor,
+  teamWindowFlags,
+} from './team-window';
 
 const TEAM_POLL_MS = 4_000;
 /** 与 app/layout 的 RAIL_MAX_WIDTH 一致；不直接 import 以免在 SSR 里访问 window。 */
@@ -49,7 +56,7 @@ const NARROW_MAX_WIDTH = 1023;
 const ROSTER_RELOAD_COOLDOWN_MS = 2_000;
 
 export interface TeamChatClient {
-  getTeam(teamId: string, opts?: { limit?: number }): Promise<TeamDetail>;
+  getTeam(teamId: string, opts?: { limit?: number; members_limit?: number }): Promise<TeamDetail>;
   postTeam(input: {
     team_id: string;
     content: string;
@@ -98,6 +105,7 @@ export function TeamChat({
   initialError,
 }: TeamChatProps) {
   const [limit, setLimit] = useState(initialLimit);
+  const [membersLimit, setMembersLimit] = useState(DEFAULT_MEMBERS_LIMIT);
   const [draft, setDraft] = useState('');
   const [chips, setChips] = useState<MentionChip[]>([]);
   const [sends, setSends] = useState<LocalSend[]>([]);
@@ -130,11 +138,11 @@ export function TeamChat({
       if (!shouldFetchTeam(sendingRef.current, cached !== undefined) && cached) {
         return Promise.resolve(cached);
       }
-      return client.getTeam(teamId, { limit });
+      return client.getTeam(teamId, { limit, members_limit: membersLimit });
     },
     enabled: hasToken,
     pollMs: TEAM_POLL_MS,
-    deps: [epoch, tenantEpoch, teamId, limit],
+    deps: [epoch, tenantEpoch, teamId, limit, membersLimit],
     ...(initialDetail !== undefined ? { initialData: initialDetail } : {}),
   });
   const reloadRef = useRef(resource.reload);
@@ -209,7 +217,10 @@ export function TeamChat({
 
   const rows = useMemo(() => buildTeamRows(messages, sends, teamId), [messages, sends, teamId]);
 
-  const onlineCount = members.filter(isOnlineMember).length;
+  const memberTotal = team?.member_count ?? members.length;
+  const memberWindow = memberWindowFlags(members.length, memberTotal, membersLimit);
+  // 窗口只含前 N 个成员；在线总数用服务端完整计数，缺失才回退窗口内计数。
+  const onlineCount = team?.online_count ?? members.filter(isOnlineMember).length;
 
   const handleSend = async () => {
     const content = draft.trim();
@@ -247,7 +258,7 @@ export function TeamChat({
       // 响应可能丢失：重新拉一次，按 content + mentions + ts 对账。
       let written: TeamMessage | undefined;
       try {
-        const fresh = await client.getTeam(teamId, { limit });
+        const fresh = await client.getTeam(teamId, { limit, members_limit: membersLimit });
         setMessages((prev) => mergeMessages(prev, fresh.messages));
         written = matchWrittenMessage(fresh.messages, content, mentions, ts);
       } catch {
@@ -301,8 +312,14 @@ export function TeamChat({
                 {team.workspace}
               </span>
             )}
+            <span className="team-chat-description">
+              {t('team.chat.descriptionLabel')}: {team?.description || '—'}
+            </span>
+            <span className="team-chat-principal mono">
+              {t('team.chat.defaultPrincipalLabel')}: {team?.default_principal || '—'}
+            </span>
             <span>
-              {t('team.chat.memberCount', { count: members.length || team?.member_count || 0 })}
+              {t('team.chat.memberWindow', { shown: members.length, total: memberTotal })}
             </span>
             <span>{t('team.chat.onlineCount', { count: onlineCount })}</span>
           </div>
@@ -426,12 +443,27 @@ export function TeamChat({
         >
           <TeamMemberSidebar
             members={members}
+            total={memberTotal}
             permissions={permissions}
             asks={asks}
             onOpenMember={openMember}
             onOpenSession={onOpenSession}
             onClose={narrow ? () => setMembersOpen(false) : undefined}
           />
+          {memberWindow.canLoadMore && (
+            <button
+              type="button"
+              className="load-more team-members-load-more"
+              onClick={() => setMembersLimit(nextMembersLimitFor(membersLimit))}
+            >
+              {t('team.chat.loadMoreMembers')}
+            </button>
+          )}
+          {memberWindow.capped && (
+            <p className="team-history-note" role="status">
+              {t('team.chat.membersCapped', { shown: members.length, total: memberTotal })}
+            </p>
+          )}
         </aside>
 
         {narrow && membersOpen && (

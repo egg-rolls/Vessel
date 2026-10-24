@@ -99,6 +99,28 @@ describe('permission audit attribution', () => {
     });
   });
 
+  it('drops a cli attribution that arrives only in the response event', () => {
+    const { engine } = setup();
+    requestPermission(engine);
+    engine.handleEvent({
+      type: 'tool.permission.response',
+      run_id: 'run-1',
+      ts: 1_200,
+      data: {
+        requestId: 'perm-1',
+        decision: 'allow',
+        scope: 'once',
+        answered_by: 'human',
+        answered_via: 'cli',
+      },
+    });
+
+    expect(engine.interactionRecords.get('perm-1')?.answer).toMatchObject({
+      answered_by: 'human',
+      answered_via: 'cli',
+    });
+  });
+
   it('records RPC answers as human via rpc', () => {
     const { engine } = setup();
     requestPermission(engine);
@@ -127,6 +149,44 @@ function context(teamId: string): RpcMethodContext {
     connection: 'http',
   };
 }
+
+function plainWriteContext(): RpcMethodContext {
+  return {
+    principal: { tenant_id: 'default', role: 'write', scope: 'control' },
+    tenantId: 'default',
+    isAdmin: false,
+    allTenants: false,
+    connection: 'http',
+  };
+}
+
+describe('answered_via on respond params', () => {
+  it('ask.respond forwards cli as rpc and defaults to rpc', () => {
+    const actors: Array<{ answered_by: string; answered_via?: string }> = [];
+    const methods = createInteractionMethods({
+      respondPermission: () => {
+        throw new Error('unexpected permission respond');
+      },
+      respondAsk: (_requestId, _answers, _tenantId, actor) => {
+        actors.push(actor ?? { answered_by: 'human' });
+        return { ok: true };
+      },
+      interactions: {
+        interactionRecords: new Map(),
+        pendingPermissions: new Map(),
+        pendingAsks: new Map(),
+      },
+    });
+    const respond = methods.find((method) => method.name === 'ask.respond');
+    if (!respond) throw new Error('expected ask.respond');
+    respond.handler({ request_id: 'ask-1', answers: [], answered_via: 'cli' }, plainWriteContext());
+    respond.handler({ request_id: 'ask-2', answers: [] }, plainWriteContext());
+    expect(actors).toEqual([
+      { answered_by: 'human', answered_via: 'cli' },
+      { answered_by: 'human', answered_via: 'rpc' },
+    ]);
+  });
+});
 
 describe('team access uses record.team_id before session mapping', () => {
   it('allows the record team even when the session mapping is unavailable', () => {

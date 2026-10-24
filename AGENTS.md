@@ -53,6 +53,8 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - **0.21.0 状态**：跨节点成员寻址（S8）：地址 `principal@node:team`；wire 的 `from/to` 带 `principal`；入站按名字单点投递（`human` / `principal` / `log`），最多 1 个 run；**删除** `teams[].policy.federation.accept = 'members'` 与全员 fan-out（现在写 `'members'` 是显式错误）；`agent` 工具的 `send` 接受地址形状回信（运行时填 `from`）；`teams.get` 的 `members_limit` 缺省 20 / 最大 100、活跃优先、`last_seen`；opt-in `POST /v1/federation/team-info`（peer `allowDirectory`）；`federation.rateLimitPerMinute` 1..600。canonical 仍 **48**。决策见 [ADR-094 Addendum](docs/adr/ADR-094-federation-team-to-team.md)。
 
+- **0.22.0 状态**：远程 attention 与操作面统一（S9）：`vessel attention` 列 / 分页 / 单条 / 批量 / 交互式应答；权限 / ask 永远在运行 agent 的节点本地处理，人用 **gateway / team token** 连过去，**peer token 被拒绝**；`interactions.list` additive `order` / `agent_id` / `cursor` / `next_cursor` / `total`；`answered_via` 增加 `cli`（审计提示，不是身份认证）；roster 排序单一来源（live → `last_seen` desc → name），Web 显示 `showing N of M`；Web attention 收件箱 / Team desc / 默认接头人已适配；**Web 多节点连接（S9.4）未实现**。canonical 仍 **48**。
+
 ## 代码风格与硬规矩
 
 - 不引入 LangChain / LangGraph。
@@ -132,6 +134,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **Team 可见性 fail closed**（0.19 S3）：Team 日志对 team 可见，private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；`onAgentEvent` 只接受 `visibility === 'team' | 'tenant'`。private mention 在 owner 路径返回 `team_private_member`、canonical 路径返回 `unknown_member`，两种都不入日志。`reinstate` 是 roster add 专用的人力 `left → present` 路径（与 `attachOwner` 并列），不 spawn、不新建 session。
 - **team-scoped token 在节点侧收窄**（0.19 S5，ADR-093）：`control` token 只能访问 token 自己的 `team_id`，不匹配一律 `not_found`（不泄漏存在性）；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `handoff_path` / `policy`。scope 白名单在 `rpc.ts` 单点执行，不新增 role 字符串；`auth.exchange` 只签 `control`，`exchange` / `control` / `view` 不能互签。
 - **federation 按成员寻址，不做广播**（0.21，ADR-094 Addendum）：wire 的 `principal` 是名字不是 agent id；入站最多 1 个 run；`accept:'members'` 在配置 / team.json / 运行时都必须显式报错，未知值 fail-safe 为 `log`；principal 解析必须用完整 roster，不能受 `teams.get` 展示窗口影响；`team-info` 必须 opt-in 且不返回 agent id / workspace / policy / private；peer token 只认证节点，不构成用户级身份证明。
+- **远程 attention 不跨节点转发权限**（0.22，DECISION-038）：permission / ask 必须在运行 agent 的节点本地应答；`vessel attention` 用 gateway / team token 直连，**peer token 不能用于 attention**；`interactions.list` 的 cursor 用 `(order, created_at, request_id)`，`agent_id` 过滤必须在服务端、`total` 之前；`answered_via: cli` 只是审计提示，不是身份认证；`answered_by` 仍只 `human | policy`；roster 排序只由 `TeamService` 产生，serve / Web 不得重排；hub 不存 pending、不代答。
 - **hub 不代理正文**（0.19 S5，ADR-093）：hub 只持有目录与指针（`{node_id, team_id, request_id?, reason, ts}`），不得转发或持久化消息 / 事件 / 工具结果 / 权限正文；`TeamService.subscribe` 只带 `team_id` / `kind` / `message_id`，供 hub 投影指针，绝不带正文。S5 实现 hub → node 拨号、S5.1 实现 node → hub 出站；跨节点 A2A（S7）仍未实现，不得写进当前态。
 - **BeforeLlm 注入只增不改**（0.16，ADR-087）：`HookContext.messages` 是 additive 注入位；runtime 只写入一次，按 `name` / `timestamp` 稳定键或对象引用去重，每个 run 重置；未写时不改变请求形状。`agent.followReplies` 目前只作为配置 / 事件字段，不得实现成阻塞等待或隐藏的 `wait`。
 - **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。成员接线测试必须可独立运行。
