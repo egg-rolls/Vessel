@@ -27,17 +27,21 @@ afterEach(async () => {
   }
 });
 
-function captureLogger(): { logger: Logger; warnings: string[] } {
+function captureLogger(): { logger: Logger; warnings: string[]; errors: string[] } {
   const warnings: string[] = [];
+  const errors: string[] = [];
   return {
     warnings,
+    errors,
     logger: {
       debug: () => {},
       info: () => {},
       warn: (message: string) => {
         warnings.push(message);
       },
-      error: () => {},
+      error: (message: string) => {
+        errors.push(message);
+      },
     },
   };
 }
@@ -248,12 +252,44 @@ describe('FileTeamStore.ready', () => {
     await store.ready();
 
     expect(store.list()).toEqual([]);
-    expect(capture.warnings.filter((message) => message === 'team.metadata.corrupt').length).toBe(
-      2,
-    );
+    expect(capture.errors.filter((message) => message === 'team.metadata.corrupt').length).toBe(2);
 
     const team = await store.ensureForWorkspace({ workspace: join(dataDir, 'fresh') });
     expect(store.get(team.team_id)?.team_id).toBe(team.team_id);
+  });
+
+  it('does not rebuild a corrupt team.json in place', async () => {
+    const dataDir = await tempDir();
+    const workspace = join(dataDir, 'rebuild', 'alpha');
+    const first = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    const created = await first.ensureForWorkspace({
+      workspace,
+      name: 'Alpha',
+      policy: { mode: 'strict' },
+      default_principal: 'alice',
+    });
+    const path = teamMetadataPath(dataDir, 'default', created.team_id);
+    const corrupt = '{"v":1,"team_id":';
+    await writeFile(path, corrupt);
+
+    const capture = captureLogger();
+    const second = new FileTeamStore({
+      dataDir,
+      tenantId: 'default',
+      durable: false,
+      logger: capture.logger,
+    });
+    await second.ready();
+    expect(second.list()).toEqual([]);
+
+    const error = await second
+      .ensureForWorkspace({ workspace, name: 'Omega' })
+      .catch((reason) => reason);
+    expect((error as { code?: string }).code).toBe('team_metadata_corrupt');
+
+    await second.seed([{ workspace, name: 'Omega' }]);
+    expect(await readFile(path, 'utf8')).toBe(corrupt);
+    expect(capture.errors).toContain('team.metadata.corrupt');
   });
 });
 
