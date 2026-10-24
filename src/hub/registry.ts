@@ -235,6 +235,10 @@ function parseNodeRecord(value: unknown): HubNodeRecord | undefined {
     if (!isNonEmptyString(value.node_token_id)) return undefined;
     record.node_token_id = value.node_token_id;
   }
+  if (value.name !== undefined) {
+    if (!isNonEmptyString(value.name)) return undefined;
+    record.name = value.name;
+  }
   if (value.alias !== undefined) {
     if (!isNonEmptyString(value.alias)) return undefined;
     record.alias = value.alias;

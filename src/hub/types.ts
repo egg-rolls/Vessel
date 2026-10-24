@@ -38,6 +38,8 @@ export interface HubNodeRecord {
   pairing_id: string;
   node_id: string;
   tenant_id: string;
+  /** 节点展示名（0.25 additive）；旧记录可缺省。 */
+  name?: string;
   alias?: string;
   /** node-dial 且没有 public_url 时省略。 */
   url?: string;
@@ -218,6 +220,8 @@ export interface HubNodeState {
 /** 入站 receiver 接受的 snapshot（与 `HubControlSnapshot` 同形）。 */
 export interface HubNodeSnapshot {
   node_id: string;
+  /** 节点展示名（0.25 additive）；旧节点可缺省。 */
+  name?: string;
   hub_id: string;
   incarnation: string;
   revision: number;

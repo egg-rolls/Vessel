@@ -63,6 +63,8 @@ export interface HubTeamSourceLike {
 export interface CreateHubControlOptions {
   service: AgentService;
   teamSource?: HubTeamSourceLike;
+  /** 节点展示名（0.25 additive）；随 snapshot 目录投影下发。 */
+  nodeName?: string;
   logger?: Logger;
   /** 可注入时钟（测试用）；缺省 `Date.now`。 */
   now?: () => number;
@@ -180,7 +182,7 @@ function memberSessionIds(member: MemberStatus): string[] {
  * 本模块内存的 pointer ts 维护，不读日志。
  */
 export function createHubControl(options: CreateHubControlOptions): HubControlLike {
-  const { service, teamSource, logger } = options;
+  const { service, teamSource, nodeName, logger } = options;
   const clock = options.now ?? Date.now;
   const viewer = options.ownerId ?? DEFAULT_OWNER;
   /** team_id -> 最近一次指针 ts（只本进程内）。 */
@@ -222,6 +224,7 @@ export function createHubControl(options: CreateHubControlOptions): HubControlLi
       return online === undefined ? team : { ...team, online_count: online };
     });
     return {
+      ...(nodeName !== undefined && nodeName !== '' ? { name: nodeName } : {}),
       counts: { teams: teams.length, agents: agents.length, live_agents: liveAgents },
       teams: teamsWithOnline.slice(0, HUB_MAX_TEAMS),
       agents: agents.slice(0, HUB_MAX_AGENTS),

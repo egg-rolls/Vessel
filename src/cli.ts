@@ -855,6 +855,7 @@ async function runWithConfig(result: BootstrapResult) {
       pluginHost: ctx.pluginHost,
       staticDir: resolveStaticDir(),
       nodeId: result.nodeId,
+      nodeName: result.nodeName,
       auth: authResult.auth,
       token: resolveGatewayToken(config),
       hostname: resolved.options.hostname,

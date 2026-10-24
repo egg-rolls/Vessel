@@ -760,7 +760,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     return {
       node_id: nodeId,
-      ...(opts.nodeName ? { name: opts.nodeName } : {}),
+      // 展示名总是字符串；未注入时回退 node_id（不改变寻址键）。
+      name: opts.nodeName !== undefined && opts.nodeName !== '' ? opts.nodeName : nodeId,
       pid: process.pid,
       started_at: startedAt,
       endpoint: `${scheme}://${hostname}:${actualPort}`,

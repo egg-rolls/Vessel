@@ -141,6 +141,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
             type: 'object',
             required: [
               'node_id',
+              'name',
               'pid',
               'started_at',
               'endpoint',
