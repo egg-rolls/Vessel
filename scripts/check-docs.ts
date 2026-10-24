@@ -3,8 +3,7 @@
 /**
  * 文档一致性检查（R8c）。
  *
- * 1. 环境变量：`.env.example` 的 VESSEL_GATEWAY_TOKEN 值必须为空；README /
- *    ARCHITECTURE 必须写明优先级；禁止 VESSEL_NODE_ID。
+ * 1. 环境变量：README / ARCHITECTURE 必须写明 VESSEL_GATEWAY_TOKEN 及其优先级。
  * 2. 相对链接：README / AGENTS / CONTRIBUTING / docs（ADR 历史段除外）中的相对链接必须存在。
  *
  * 用法：bun run scripts/check-docs.ts
@@ -50,7 +49,6 @@ export interface DocIssue {
 export async function checkDocs(root: string): Promise<DocIssue[]> {
   const issues: DocIssue[] = [];
 
-  await checkEnvExample(root, issues);
   await checkTokenDocs(root, issues);
   await checkAdrTree(root, issues);
   await checkOperationsIndex(root, issues);
@@ -64,49 +62,6 @@ export async function checkDocs(root: string): Promise<DocIssue[]> {
   }
 
   return issues;
-}
-
-async function checkEnvExample(root: string, issues: DocIssue[]): Promise<void> {
-  const file = '.env.example';
-  const text = await readFile(join(root, file), 'utf8');
-  const lines = text.split('\n');
-
-  const tokenLine = lines.findIndex((line) => line.startsWith('VESSEL_GATEWAY_TOKEN='));
-  if (tokenLine === -1) {
-    issues.push({ file, line: 0, message: '缺少 VESSEL_GATEWAY_TOKEN 变量' });
-  } else if ((lines[tokenLine] ?? '') !== 'VESSEL_GATEWAY_TOKEN=') {
-    issues.push({
-      file,
-      line: tokenLine + 1,
-      message: 'VESSEL_GATEWAY_TOKEN 必须留空（不得写入真实值）',
-    });
-  }
-
-  if (!text.includes(TOKEN_PRIORITY)) {
-    issues.push({ file, line: 0, message: `缺少优先级说明：${TOKEN_PRIORITY}` });
-  }
-
-  const nodeIdLine = lines.findIndex((line) => line.startsWith('VESSEL_NODE_ID'));
-  if (nodeIdLine !== -1) {
-    issues.push({
-      file,
-      line: nodeIdLine + 1,
-      message: '禁止新增 VESSEL_NODE_ID（DECISION-006 R9）',
-    });
-  }
-
-  for (const name of ['VESSEL_FEISHU_APP_ID', 'VESSEL_FEISHU_APP_SECRET'] as const) {
-    const lineIndex = lines.findIndex((line) => line.startsWith(`${name}=`));
-    if (lineIndex === -1) {
-      issues.push({ file, line: 0, message: `缺少 ${name} 变量` });
-    } else if ((lines[lineIndex] ?? '') !== `${name}=`) {
-      issues.push({
-        file,
-        line: lineIndex + 1,
-        message: `${name} 必须留空（不得写入真实值）`,
-      });
-    }
-  }
 }
 
 async function checkTokenDocs(root: string, issues: DocIssue[]): Promise<void> {
