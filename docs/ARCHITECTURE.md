@@ -1891,7 +1891,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - **默认不超时**：core `PermissionPolicy` 只有显式正数 `RuntimePermissionConfig.timeoutMs` 才计时；应用层不设置，因此 REPL / gateway 权限等待一直持续到应答、取消或 abort。只有显式超时才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。
 - **取消语义**：等待绑定 `ctx.signal`；abort 抛 `PermissionAbortedError`（`permission_cancelled`，`name: AbortError`），优先于超时判定，不误报 `permission_timeout`。
 - **请求字段**：`tool.permission.request.data` 增加 `session_id` / `tool_call_id` / `deadline_at` / `source`（additive）；默认等待不写 `deadline_at`。
-- **持久化**：`packages/serve/src/interactions-store.ts` 按 tenant 写 `<dataDir>/interactions-<tenant>.json`，记录 `pending` / `answered` / `orphaned`，`atomicWrite` + `0600`。gateway 启动时 `loadAllSync()`；本进程没有对应 run 的 `pending` 转 `orphaned`。文件损坏 / 不可读向 stderr 报错并按空集处理，不删除原文件；tenant 名只接受 `[A-Za-z0-9._-]`。
+- **持久化**：`packages/serve/src/interactions-store.ts` 按 tenant 写 `<dataDir>/interactions-<tenant>.json`，记录 `pending` / `answered` / `orphaned`，`atomicWrite` + `0600`。gateway 启动时 `loadAllSync()`；本进程没有对应 run 的 `pending` 转 `orphaned`。文件损坏 / 不可读先隔离为 `<path>.corrupt-<timestamp>`（保留原始字节），同文件合法记录照常加载；隔离失败时禁止后续 `save` 覆盖原文件；tenant 名只接受 `[A-Za-z0-9._-]`。
 - **不按 TTL sweep**：pending 只由应答、run 终态或进程退出清理。run 的 `completed` / `failed` / `cancelled` 会把同 run 的 pending 持久化为 `orphaned`；迟到应答返回 `run_ended`。
 - **幂等与冲突**：重复应答返回首次结果（`duplicate: true`）；不同决定重答返回 `conflict`；记录不存在返回 `not_found`；`orphaned` 返回 `run_ended`。有界记录（`MAX_RECORDS`）只淘汰最旧的 `answered` / `orphaned`，pending 不淘汰。
 - **错误码**：RPC 新增 `expired` / `run_ended`；canonical 方法总数仍为 38（不新增 `interactions.pending`）。
@@ -2323,7 +2323,7 @@ interface LimitBlock {
 | `stale` | 仅旧数据只读兼容，0.19 起不再写入；只允许 `stale → closed` |
 
 - 消息队列只在内存；状态变化经节流合并原子写入 `<dataDir>/agents/<tenant>.json`（`0600`，0.19 起写 `version: 2`）。
-- 快照形状（v2）`{version: 2, tenant_id, updated_at, members: PersistedAgentRecord[]}`；持久化 `membership` / `model` / `system_prompt` / `current_body` / `body_history`（≤20，只记已退役 Body）/ `forked_from`，不存 `presence` / `rotation` / 消息队列。读取兼容 v1，首次写 v2 前备份 `<tenant>.json.v1.bak`，备份失败则放弃写。未知版本 / 损坏 / 单条非法不阻塞启动，非法条目跳过并记录。
+- 快照形状（v2）`{version: 2, tenant_id, updated_at, members: PersistedAgentRecord[]}`；持久化 `membership` / `model` / `system_prompt` / `current_body` / `body_history`（≤20，只记已退役 Body）/ `forked_from`，不存 `presence` / `rotation` / 消息队列。读取兼容 v1，首次写 v2 前备份 `<tenant>.json.v1.bak`，备份失败则放弃写。未知版本 / 损坏不阻塞启动：原文件先隔离为 `<path>.corrupt-<timestamp>`（保留唯一恢复副本），隔离失败则禁止后续写入；单条非法条目跳过并记录。
 - 重启后非 `left` 成员统一 `state='idle'` + `presence='gone'`；`left` / `closed` 成员保持 `closed + left + gone`。未处理消息丢失。
 - 成员事件为开放字符串：`agent.spawned`、`agent.resumed`、`agent.message.queued`、`agent.turn.started` / `completed` / `failed` / `cancelled`、`agent.permission.requested` / `responded`、`agent.closed`、`agent.rotating` / `agent.rotated` / `agent.rotate.failed`、`agent.retired`、`agent.reply.stale`；`agent.stale` 仅作兼容事件（payload `{state:'idle', presence:'gone'}`）。事件 `agent_id` 为成员 id。rotate 后的旧 Body 终态是配对的 `agent.turn.*`，带 `stale: true`，不写 Agent state / usage，也不投递父队列。
 
@@ -2422,7 +2422,7 @@ interface LimitBlock {
 ### 41.1 存储与数据模型
 
 - 实现位于 `packages/agent`：`team-store.ts`（元数据）、`team-log.ts`（只追加日志）、`team-slug.ts`（workspace 归一化 / slug）、`team-service.ts`（编排）。
-- `<dataDir>/teams/<tenant>/<team_id>/team.json`：`{v:1, team_id, name, tenant_id, workspace, handoff_path?, policy, created_at}`，`atomicWrite` 0600。`team_id` 由 workspace 目录名生成 slug，创建后不可变；同 slug 不同 workspace 追加 hash 后缀。
+- `<dataDir>/teams/<tenant>/<team_id>/team.json`：`{v:1, team_id, name, tenant_id, workspace, handoff_path?, policy, created_at}`，`atomicWrite` 0600。`team_id` 由 workspace 目录名生成 slug，创建后不可变；同 slug 不同 workspace 追加 hash 后缀。加载时损坏的 `team.json` 记 error 并移出可用集合；`ensureForWorkspace` 对同一 `team_id` 抛 `team_metadata_corrupt`、`seed` 跳过该声明，绝不在原路径重建（丢 policy / default_principal / handoff 视为故障）。
 - `<dataDir>/teams/<tenant>/<team_id>/log.ndjson`：每行一条 `TeamLogEntry`（`message_id` / `team_id` / `from` / `to[]` / `mentions[]` / `content` / `ts` / `kind` / `system_event?`），串行只追加、有界读（尾部窗口）、坏行跳过；**不是消息队列**。
 - `team_id` 在 Agent 记录上 additive 持久化；roster 不单独落盘，由 `team_id + membership === 'present'` 从 Agent 记录派生。`online_count` 由 `present && presence === 'live'` 派生；`body_history` 直接透传 Agent 记录（≤20）。
 - 绑定：显式 `--workspace` 或配置 `teams:` 声明（归一化后精确匹配）才会绑定；默认绑定只对带 `name` 的 Agent 生效。绑定后未显式指定时 visibility 缺省 `team`；unbound 保持 `private`。Agent 不支持跨 Team 迁移。
@@ -2562,6 +2562,7 @@ interface LimitBlock {
   入站 `POST /v1/federation/messages`，出站 `vessel federation post|peers`；
   hub 不在数据面。详见 [ADR-094](adr/ADR-094-federation-team-to-team.md)。
 - 严格解析、peer bearer（`tokenEnv`）、非回环 https、hop 上界、自指环拒绝、进程内去重。
+  同一 token 解析到多个 peer 时全部丢弃（`duplicate_token`）；`matchPeer` 命中多个 peer 一律 401，不静默 last-wins。
 - **0.21 起改为按成员寻址**（见 §46）：wire 的 `from/to` 带 `principal`；
   入站按名字单点投递，最多 1 个 run；`teams[].policy.federation.accept = 'members'`
   是 validation error，不再有全员 fan-out。
