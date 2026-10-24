@@ -101,6 +101,15 @@ function makeTeams(
   const known = options.known ?? new Set(['team-1']);
   const teams: TeamControlLike = {
     tenantId: options.tenantId ?? 'tenant-a',
+    async create() {
+      throw new Error('create is not used by auth methods');
+    },
+    async update() {
+      throw new Error('update is not used by auth methods');
+    },
+    async archive() {
+      throw new Error('archive is not used by auth methods');
+    },
     async list() {
       return [];
     },

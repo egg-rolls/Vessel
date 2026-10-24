@@ -9,7 +9,6 @@ import { CapabilitiesView } from './CapabilitiesView';
 import { ConfigView } from './ConfigView';
 import { ConnectionForm } from './ConnectionForm';
 import { DisplaySettingsView } from './DisplaySettingsView';
-import { NodesPanel } from './NodesPanel';
 import { TenantsView } from './TenantsView';
 
 type SettingsRoute = Extract<Route, { domain: 'settings' }>;
@@ -17,7 +16,6 @@ type SettingsTab = SettingsRoute['tab'];
 
 const TAB_IDS: readonly SettingsTab[] = [
   'connection',
-  'nodes',
   'config',
   'capabilities',
   'tenants',
@@ -60,7 +58,6 @@ export function SettingsView({
         aria-label={t('settings.panelLabel')}
       >
         {route.tab === 'connection' && <ConnectionForm />}
-        {route.tab === 'nodes' && <NodesPanel />}
         {route.tab === 'config' && <ConfigView />}
         {route.tab === 'capabilities' && <CapabilitiesView />}
         {route.tab === 'tenants' && <TenantsView />}

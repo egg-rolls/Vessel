@@ -64,6 +64,9 @@ const SCOPE_TABLE = defineMethods([
   method('teams.list', 'read'),
   method('teams.get', 'read'),
   method('teams.post', 'write'),
+  method('teams.create', 'write'),
+  method('teams.update', 'write'),
+  method('teams.archive', 'write'),
   method('events.subscribe', 'read'),
   method('interactions.list', 'read'),
   method('permission.respond', 'write'),
@@ -130,6 +133,8 @@ describe('central scope allowlist', () => {
       'teams.list',
       'teams.get',
       'teams.post',
+      'teams.update',
+      'teams.archive',
       'events.subscribe',
       'interactions.list',
       'permission.respond',
@@ -137,6 +142,8 @@ describe('central scope allowlist', () => {
     ]) {
       await expectAllowed(name, control);
     }
+    // 0.24 S10.3：team-scoped token 不能 create；只能 update / archive 自己的 team。
+    await expectForbidden('teams.create', control);
     await expectForbidden('sessions.list', control);
     await expectForbidden('auth.exchange', control);
     await expectForbidden('gateway.reload', control);

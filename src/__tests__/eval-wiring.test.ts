@@ -99,7 +99,8 @@ async function codeOf(promise: Promise<unknown>): Promise<string | undefined> {
 describe('resolveEvalsOptions', () => {
   it('applies defaults and resolves paths', () => {
     const options = resolveEvalsOptions({});
-    expect(options.enabled).toBe(false);
+    expect(options.enabled).toBe(true);
+    expect(resolveEvalsOptions({ evals: { enabled: false } }).enabled).toBe(false);
     expect(options.allowNetwork).toBe(false);
     expect(options.dir).toBe(path.resolve('./evals'));
     expect(options.outDir).toBe(path.join(os.homedir(), '.vessel/evals'));
@@ -111,7 +112,7 @@ describe('createEvalsRunner', () => {
     let loaded = 0;
     const error = await codeOf(
       createEvalsRunner({
-        config: {},
+        config: { evals: { enabled: false } },
         loadModule: async () => {
           loaded++;
           return null;
@@ -353,7 +354,10 @@ describe('latestEvalReport', () => {
   it('returns null for disabled / unsafe suite / missing module', async () => {
     const { mod } = fakeRunner();
     await expect(
-      latestEvalReport({ config: {}, loadModule: async () => mod }, 'smoke'),
+      latestEvalReport(
+        { config: { evals: { enabled: false } }, loadModule: async () => mod },
+        'smoke',
+      ),
     ).resolves.toBeNull();
     await expect(
       latestEvalReport({ config: config(), loadModule: async () => mod }, '../smoke'),

@@ -175,6 +175,35 @@ export type TeamBudgetDimension = 'hops' | 'turns' | 'tokens' | 'wall_clock' | '
 /** `vessel team ...` 子命令（0.19 S3；S4 增加 budget） */
 export type TeamCommand =
   | { kind: 'list'; json: boolean }
+  | {
+      /** S10.3：创建空 Team；workspace 已有 Team 时幂等复用。 */
+      kind: 'create';
+      workspace: string;
+      name?: string;
+      description?: string;
+      defaultPrincipal?: string;
+      handoffPath?: string;
+      /** 内联 JSON 对象；与 policyFile 互斥。 */
+      policy?: Record<string, unknown>;
+      /** 从文件读取 JSON 对象；与 policy 互斥。优先用于复杂策略。 */
+      policyFile?: string;
+      json: boolean;
+    }
+  | {
+      /** S10.3：只改显示信息；`null` 清空可选项。 */
+      kind: 'update';
+      teamId: string;
+      name?: string;
+      description?: string | null;
+      defaultPrincipal?: string | null;
+      handoffPath?: string | null;
+      /** 内联 JSON 对象；与 policyFile 互斥。整体替换。 */
+      policy?: Record<string, unknown>;
+      /** 从文件读取 JSON 对象；与 policy 互斥。整体替换。 */
+      policyFile?: string;
+      json: boolean;
+    }
+  | { kind: 'archive'; teamId: string; json: boolean }
   | { kind: 'get'; teamId: string; limit?: number; members?: number; json: boolean }
   | { kind: 'post'; teamId: string; content: string; mentions: string[]; json: boolean }
   | {
@@ -375,7 +404,7 @@ export interface CliArgs {
   agentsCommand: { json: boolean } | null;
   /** 0.17：`vessel agent new|send|close|list|dispatch|rotate` */
   agentCommand: AgentCommand | null;
-  /** 0.19 S3：`vessel team list|get|post|members` */
+  /** 0.19 S3：`vessel team list|get|post|members`；0.24：create|update|archive */
   teamCommand: TeamCommand | null;
   /** S7.1：`vessel federation post|peers` */
   federationCommand?: FederationCommand | null;
@@ -2584,7 +2613,7 @@ function parseTeamBudget(tail: string[], args: CliArgs): ParseResult {
 }
 
 /**
- * `team list|get|post|members|budget`（0.19 S3 / S4）。
+ * `team list|get|post|members|budget|create|update|archive`（0.19 S3 / S4；0.24）。
  * 只做语法；workspace / roster 解析在 `src/team-command.ts`。
  */
 function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
@@ -2610,6 +2639,221 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
     }
     if (args.help) return { ok: true, args };
     args.teamCommand = { kind: 'list', json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'create') {
+    let json = false;
+    let name: string | undefined;
+    let description: string | undefined;
+    let defaultPrincipal: string | undefined;
+    let handoffPath: string | undefined;
+    let policy: Record<string, unknown> | undefined;
+    let policyFile: string | undefined;
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (
+        a === '--name' ||
+        a === '--description' ||
+        a === '--default-principal' ||
+        a === '--handoff'
+      ) {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        if (value.value === '') return { ok: false, error: `Invalid ${a}: empty value` };
+        if (a === '--name') name = value.value;
+        else if (a === '--description') description = value.value;
+        else if (a === '--default-principal') defaultPrincipal = value.value;
+        else handoffPath = value.value;
+        i = value.next;
+        continue;
+      }
+      if (a === '--policy' || a === '--policy-file') {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        if (value.value === '') return { ok: false, error: `Invalid ${a}: empty value` };
+        if (a === '--policy-file') {
+          policyFile = value.value;
+        } else {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(value.value);
+          } catch {
+            return { ok: false, error: 'Invalid --policy: expected a JSON object' };
+          }
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            return { ok: false, error: 'Invalid --policy: expected a JSON object' };
+          }
+          policy = parsed as Record<string, unknown>;
+        }
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) return { ok: false, error: `Unknown argument for team create: ${a}` };
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    if (policy !== undefined && policyFile !== undefined) {
+      return { ok: false, error: 'Use only one of --policy / --policy-file' };
+    }
+    const [workspace, extra] = positional;
+    if (workspace === undefined || workspace === '') {
+      return { ok: false, error: 'team create requires <workspace>' };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for team create: ${extra}` };
+    }
+    args.teamCommand = {
+      kind: 'create',
+      workspace,
+      ...(name !== undefined ? { name } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(defaultPrincipal !== undefined ? { defaultPrincipal } : {}),
+      ...(handoffPath !== undefined ? { handoffPath } : {}),
+      ...(policy !== undefined ? { policy } : {}),
+      ...(policyFile !== undefined ? { policyFile } : {}),
+      json,
+    };
+    return { ok: true, args };
+  }
+
+  if (sub === 'update') {
+    let json = false;
+    let name: string | undefined;
+    let description: string | null | undefined;
+    let defaultPrincipal: string | null | undefined;
+    let handoffPath: string | null | undefined;
+    let policy: Record<string, unknown> | undefined;
+    let policyFile: string | undefined;
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (
+        a === '--clear-description' ||
+        a === '--clear-default-principal' ||
+        a === '--clear-handoff'
+      ) {
+        if (a === '--clear-description') description = null;
+        else if (a === '--clear-default-principal') defaultPrincipal = null;
+        else handoffPath = null;
+        continue;
+      }
+      if (
+        a === '--name' ||
+        a === '--description' ||
+        a === '--default-principal' ||
+        a === '--handoff'
+      ) {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        if (value.value === '') return { ok: false, error: `Invalid ${a}: empty value` };
+        if (a === '--name') name = value.value;
+        else if (a === '--description') description = value.value;
+        else if (a === '--default-principal') defaultPrincipal = value.value;
+        else handoffPath = value.value;
+        i = value.next;
+        continue;
+      }
+      if (a === '--policy' || a === '--policy-file') {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        if (value.value === '') return { ok: false, error: `Invalid ${a}: empty value` };
+        if (a === '--policy-file') {
+          policyFile = value.value;
+        } else {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(value.value);
+          } catch {
+            return { ok: false, error: 'Invalid --policy: expected a JSON object' };
+          }
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            return { ok: false, error: 'Invalid --policy: expected a JSON object' };
+          }
+          policy = parsed as Record<string, unknown>;
+        }
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) return { ok: false, error: `Unknown argument for team update: ${a}` };
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    if (policy !== undefined && policyFile !== undefined) {
+      return { ok: false, error: 'Use only one of --policy / --policy-file' };
+    }
+    const [teamId, extra] = positional;
+    if (teamId === undefined || teamId === '') {
+      return { ok: false, error: 'team update requires <team_id>' };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for team update: ${extra}` };
+    }
+    if (
+      name === undefined &&
+      description === undefined &&
+      defaultPrincipal === undefined &&
+      handoffPath === undefined &&
+      policy === undefined &&
+      policyFile === undefined
+    ) {
+      return { ok: false, error: 'team update requires at least one field flag' };
+    }
+    args.teamCommand = {
+      kind: 'update',
+      teamId,
+      ...(name !== undefined ? { name } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(defaultPrincipal !== undefined ? { defaultPrincipal } : {}),
+      ...(handoffPath !== undefined ? { handoffPath } : {}),
+      ...(policy !== undefined ? { policy } : {}),
+      ...(policyFile !== undefined ? { policyFile } : {}),
+      json,
+    };
+    return { ok: true, args };
+  }
+
+  if (sub === 'archive') {
+    let json = false;
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) return { ok: false, error: `Unknown argument for team archive: ${a}` };
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [teamId, extra] = positional;
+    if (teamId === undefined || teamId === '') {
+      return { ok: false, error: 'team archive requires <team_id>' };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for team archive: ${extra}` };
+    }
+    args.teamCommand = { kind: 'archive', teamId, json };
     return { ok: true, args };
   }
 

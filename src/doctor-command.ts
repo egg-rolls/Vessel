@@ -318,9 +318,9 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
   // 可选能力开关（信息项）
   const capability = [
     config.host?.enabled === true ? 'host' : null,
-    config.agent?.enabled === true ? 'agent' : null,
-    config.durable?.enabled === true ? 'durable' : null,
-    config.evals?.enabled === true ? 'evals' : null,
+    config.agent?.enabled !== false ? 'agent' : null,
+    config.durable?.enabled !== false ? 'durable' : null,
+    config.evals?.enabled !== false ? 'evals' : null,
     config.feishu?.enabled === true ? 'feishu' : null,
   ].filter((value): value is string => value !== null);
   checks.push({

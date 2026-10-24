@@ -66,6 +66,15 @@ function makeRecordingTeam(): { team: AgentTeamService; sendCalls: TeamAgentSend
   const roster: TeamMemberSummary[] = [];
   const team: AgentTeamService = {
     tenantId: 'default',
+    async create() {
+      throw new Error('not used');
+    },
+    async update() {
+      throw new Error('not used');
+    },
+    async archive() {
+      throw new Error('not used');
+    },
     async list() {
       return [];
     },

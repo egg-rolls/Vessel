@@ -47,8 +47,8 @@ function report(): EvalReport {
 }
 
 describe('buildGatewayControlPlane', () => {
-  it('returns an empty object when nothing is enabled', () => {
-    expect(buildGatewayControlPlane({ config: {} })).toEqual({});
+  it('returns an empty object when optional capabilities are explicitly disabled', () => {
+    expect(buildGatewayControlPlane({ config: { evals: { enabled: false } } })).toEqual({});
   });
 
   it('injects metrics / feishu with frozen shapes', () => {
@@ -82,7 +82,7 @@ describe('buildGatewayControlPlane', () => {
   });
 
   it('injects evals.latest only when enabled', async () => {
-    const disabled = buildGatewayControlPlane({ config: {} });
+    const disabled = buildGatewayControlPlane({ config: { evals: { enabled: false } } });
     expect(disabled.evals).toBeUndefined();
 
     const mod = {

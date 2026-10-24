@@ -515,6 +515,89 @@ describe('parseArgs - team (0.19 S3)', () => {
     });
   });
 
+  it('team create <workspace> [--name/--description/--default-principal/--handoff]', () => {
+    expect(ok(['team', 'create', '/ws/alpha']).teamCommand).toEqual({
+      kind: 'create',
+      workspace: '/ws/alpha',
+      json: false,
+    });
+    expect(
+      ok([
+        'team',
+        'create',
+        '/ws/alpha',
+        '--name',
+        'Alpha',
+        '--description',
+        'desc',
+        '--default-principal',
+        'main',
+        '--handoff',
+        '/ws/alpha/HANDOFF.md',
+        '--json',
+      ]).teamCommand,
+    ).toEqual({
+      kind: 'create',
+      workspace: '/ws/alpha',
+      name: 'Alpha',
+      description: 'desc',
+      defaultPrincipal: 'main',
+      handoffPath: '/ws/alpha/HANDOFF.md',
+      json: true,
+    });
+    expect(err(['team', 'create'])).toContain('requires <workspace>');
+  });
+
+  it('team create/update accept --policy JSON or --policy-file', () => {
+    expect(ok(['team', 'create', '/ws/a', '--policy', '{"allowFork":true}']).teamCommand).toEqual({
+      kind: 'create',
+      workspace: '/ws/a',
+      policy: { allowFork: true },
+      json: false,
+    });
+    expect(ok(['team', 'create', '/ws/a', '--policy-file', 'p.json']).teamCommand).toEqual({
+      kind: 'create',
+      workspace: '/ws/a',
+      policyFile: 'p.json',
+      json: false,
+    });
+    expect(ok(['team', 'update', 'alpha', '--policy', '{"x":1}']).teamCommand).toEqual({
+      kind: 'update',
+      teamId: 'alpha',
+      policy: { x: 1 },
+      json: false,
+    });
+
+    expect(err(['team', 'create', '/ws/a', '--policy', '[1]'])).toContain('JSON object');
+    expect(err(['team', 'create', '/ws/a', '--policy', '{bad'])).toContain('JSON object');
+    expect(err(['team', 'create', '/ws/a', '--policy', '{}', '--policy-file', 'p.json'])).toContain(
+      'only one of --policy / --policy-file',
+    );
+  });
+
+  it('team update <team_id> maps --clear-* to null', () => {
+    expect(
+      ok(['team', 'update', 'alpha', '--name', 'A', '--clear-description']).teamCommand,
+    ).toEqual({
+      kind: 'update',
+      teamId: 'alpha',
+      name: 'A',
+      description: null,
+      json: false,
+    });
+    expect(err(['team', 'update', 'alpha'])).toContain('at least one field flag');
+    expect(err(['team', 'update'])).toContain('requires <team_id>');
+  });
+
+  it('team archive <team_id>', () => {
+    expect(ok(['team', 'archive', 'alpha', '--json']).teamCommand).toEqual({
+      kind: 'archive',
+      teamId: 'alpha',
+      json: true,
+    });
+    expect(err(['team', 'archive'])).toContain('requires <team_id>');
+  });
+
   it('team 非法参数报错', () => {
     expect(err(['team', 'bogus'])).toContain('Unknown team subcommand');
     expect(err(['team', 'list', '--bogus'])).toContain('Unknown argument');

@@ -76,7 +76,7 @@ export async function runEvalCommand(
     return 2;
   }
 
-  if (config.evals?.enabled !== true) {
+  if (config.evals?.enabled === false) {
     console.error('eval_invalid: evals.enabled is false (disabled)');
     return 2;
   }

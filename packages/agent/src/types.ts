@@ -712,6 +712,40 @@ export interface TeamRecord {
   /** S3 只存不执行 */
   policy: Record<string, unknown>;
   created_at: number;
+  /** S10.3 additive：归档时间（epoch ms）；存在即只读，无删除路径 */
+  archived_at?: number;
+}
+
+/**
+ * 创建 Team（S10.3）。
+ *
+ * workspace 已属于某个 Team 时幂等返回既有 Team，绝不覆盖 name / policy；
+ * 不 spawn 成员，空 Team 合法。
+ */
+export interface TeamCreateInput {
+  workspace: string;
+  name?: string;
+  description?: string;
+  default_principal?: string;
+  handoff_path?: string;
+  policy?: Record<string, unknown>;
+}
+
+/** 更新补丁：缺省（undefined）保留字段，`null` 清除可选项，policy 整体替换 */
+export type TeamUpdatePatch = {
+  name?: string;
+  description?: string | null;
+  default_principal?: string | null;
+  handoff_path?: string | null;
+  policy?: Record<string, unknown>;
+};
+
+export interface TeamUpdateInput extends TeamUpdatePatch {
+  team_id: string;
+}
+
+export interface TeamArchiveInput {
+  team_id: string;
 }
 
 /** 配置声明（全局配置；tenant overlay 不开放） */
@@ -789,6 +823,8 @@ export interface TeamSummary {
   /** present && presence === 'live' 的成员数；从 roster 派生，不持久化 */
   online_count: number;
   created_at: number;
+  /** S10.3 additive：归档时间（epoch ms）；存在即只读 */
+  archived_at?: number;
 }
 
 export interface TeamDetail {
@@ -923,6 +959,12 @@ export interface TeamBinder {
 export interface TeamStore extends TeamBinder {
   /** 配置声明：只补写缺失的 team.json，不创建 Agent、不覆盖已有字段 */
   seed(declarations: readonly TeamDeclaration[]): Promise<void>;
+  /** S10.3：创建 / 幂等复用 workspace 已有的 Team；不 spawn 成员 */
+  create(input: TeamCreateInput): Promise<{ record: TeamRecord; deduplicated: boolean }>;
+  /** S10.3：更新可变字段；归档 Team 拒绝；先落盘再改内存 */
+  update(teamId: string, patch: TeamUpdatePatch): Promise<TeamRecord>;
+  /** S10.3：归档（幂等）；先落盘再改内存；roster 检查在 TeamService */
+  archive(teamId: string): Promise<TeamRecord>;
   get(teamId: string): TeamRecord | undefined;
   /** 解析后的 policy；手改非法预算 warning + 忽略，返回 undefined / 去掉非法子结构 */
   policy(teamId: string): TeamPolicy | undefined;
@@ -946,6 +988,12 @@ export interface TeamServiceEvent {
 /** Team 能力层（AgentService 之上的 roster / 日志 / 定向投递） */
 export interface AgentTeamService {
   readonly tenantId: string;
+  /** S10.3：创建 Team（workspace 已有 Team 时幂等复用，返回同一个 TeamSummary） */
+  create(input: TeamCreateInput): Promise<TeamSummary>;
+  /** S10.3：更新 Team 元数据；归档 Team 抛 team_archived */
+  update(input: TeamUpdateInput): Promise<TeamSummary>;
+  /** S10.3：归档空 Team；仍有 present 成员时抛 team_not_empty */
+  archive(input: TeamArchiveInput): Promise<TeamSummary>;
   list(options?: TeamListOptions): Promise<TeamSummary[]>;
   get(teamId: string, options?: TeamGetOptions): Promise<TeamDetail | undefined>;
   roster(teamId: string, options?: TeamRosterOptions): Promise<TeamMemberSummary[]>;
@@ -977,6 +1025,8 @@ export type TeamErrorCode =
   | 'team_no_team'
   | 'team_self_mention'
   | 'team_owner_not_rosterable'
+  | 'team_not_empty'
+  | 'team_archived'
   | 'unknown_member'
   | 'invalid_input'
   | 'not_visible';

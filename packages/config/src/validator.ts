@@ -1106,6 +1106,7 @@ export function validateHubSettings(
   const {
     dataDir,
     direction,
+    autoStart,
     url,
     caFile,
     joinCodeEnv,
@@ -1143,6 +1144,14 @@ export function validateHubSettings(
       path: 'hub.direction',
       message: 'hub.direction must be "hub" or "node"',
       value: direction,
+    });
+  }
+
+  if (autoStart !== undefined && typeof autoStart !== 'boolean') {
+    errors.push({
+      path: 'hub.autoStart',
+      message: 'hub.autoStart must be a boolean',
+      value: autoStart,
     });
   }
 
@@ -2424,6 +2433,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   connect: ['token', 'tokenEnv', 'caFile'],
   attention: ['nodes'],
   hub: [
+    'autoStart',
     'dataDir',
     'direction',
     'url',

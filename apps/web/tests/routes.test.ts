@@ -12,10 +12,21 @@ const ROUTES: Route[] = [
   { domain: 'chat', sessionId: 'new' },
   { domain: 'chat', sessionId: 'session-1' },
   { domain: 'chat', sessionId: 'session-1', agent: 'delegate-1' },
-  { domain: 'team' },
-  { domain: 'team', teamId: 'team-1' },
-  { domain: 'team', teamId: 'team-1', memberId: 'agent-1' },
-  { domain: 'team', teamId: 'team-1', memberId: 'agent-1', bodyId: 'session-1' },
+  { domain: 'hub' },
+  { domain: 'nodes' },
+  { domain: 'nodes', nodeKey: 'node-1' },
+  { domain: 'teams' },
+  { domain: 'teams', nodeKey: 'node-1', teamId: 'team-1' },
+  { domain: 'teams', nodeKey: 'node-1', teamId: 'team-1', agentId: 'agent-1' },
+  {
+    domain: 'teams',
+    nodeKey: 'node-1',
+    teamId: 'team-1',
+    agentId: 'agent-1',
+    bodyId: 'session-1',
+  },
+  { domain: 'agents' },
+  { domain: 'agents', nodeKey: 'node-1', teamId: 'team-1', state: 'running', presence: 'live' },
   { domain: 'runs', tab: 'live' },
   { domain: 'runs', tab: 'durable', runId: 'run 1', sessionId: 's/2' },
   { domain: 'integrations', tab: 'tools' },
@@ -26,7 +37,6 @@ const ROUTES: Route[] = [
   { domain: 'observe', tab: 'tasks' },
   { domain: 'observe', tab: 'attention' },
   { domain: 'settings', tab: 'connection' },
-  { domain: 'settings', tab: 'nodes' },
   { domain: 'settings', tab: 'config' },
   { domain: 'settings', tab: 'capabilities' },
   { domain: 'settings', tab: 'tenants' },
@@ -89,21 +99,38 @@ describe('parseRoute / formatRoute', () => {
     expect(parseRoute('#/chat/%E0%A4%A')).toEqual({ domain: 'chat', sessionId: '%E0%A4%A' });
   });
 
-  test('drops member / body segments that cannot attach to a team', () => {
-    // 空 teamId 段不能被 filter(Boolean) 吞掉，否则会误解析成 teamId='members'。
-    expect(parseRoute('#/team//members/x')).toEqual({ domain: 'team' });
-    expect(parseRoute('#/team')).toEqual({ domain: 'team' });
-    // ?body= 没有 memberId 时被丢弃。
-    expect(parseRoute('#/team/team-1?body=session-1')).toEqual({
-      domain: 'team',
+  test('drops team segments that cannot attach to a node', () => {
+    // 空 nodeKey / 缺 teamId 时回落到 Teams 列表，而不是造出半截深链。
+    expect(parseRoute('#/teams//team-1')).toEqual({ domain: 'teams' });
+    expect(parseRoute('#/teams/node-1')).toEqual({ domain: 'teams' });
+    expect(parseRoute('#/teams')).toEqual({ domain: 'teams' });
+    // ?body= 没有 agentId 时被丢弃。
+    expect(parseRoute('#/teams/node-1/team-1?body=session-1')).toEqual({
+      domain: 'teams',
+      nodeKey: 'node-1',
       teamId: 'team-1',
     });
-    // 有 memberId 时才保留 ?body=。
-    expect(parseRoute('#/team/team-1/members/agent-1?body=session-1')).toEqual({
-      domain: 'team',
+    // 有 agentId 时才保留 ?body=。
+    expect(parseRoute('#/teams/node-1/team-1/agents/agent-1?body=session-1')).toEqual({
+      domain: 'teams',
+      nodeKey: 'node-1',
       teamId: 'team-1',
-      memberId: 'agent-1',
+      agentId: 'agent-1',
       bodyId: 'session-1',
+    });
+  });
+
+  test('the retired #/team domain falls back to chat', () => {
+    expect(parseRoute('#/team')).toEqual({ domain: 'chat' });
+    expect(parseRoute('#/team/team-1')).toEqual({ domain: 'chat' });
+  });
+
+  test('drops empty agent filters and keeps node keys intact', () => {
+    expect(parseRoute('#/agents?node=&team=&state=&presence=')).toEqual({ domain: 'agents' });
+    expect(parseRoute('#/agents?node=a%2Fb&state=running')).toEqual({
+      domain: 'agents',
+      nodeKey: 'a/b',
+      state: 'running',
     });
   });
 

@@ -34,7 +34,7 @@ export async function runResumeList(options: ConfigLoadOptions = {}): Promise<nu
     return 1;
   }
 
-  if (config.durable?.enabled !== true) {
+  if (config.durable?.enabled === false) {
     console.log('Durable runs are not enabled (durable.enabled: false).');
     return 0;
   }

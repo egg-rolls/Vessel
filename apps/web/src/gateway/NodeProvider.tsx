@@ -20,7 +20,6 @@ import {
   fetchAllNodeAttention,
   fetchNodeAttention,
   fetchNodeRpc,
-  fetchNodeTeams,
   type NodeAttentionParams,
   type NodeAttentionResult,
   type NodeConfig,
@@ -34,6 +33,7 @@ import {
   validateNodeDraft,
   writeStoredNodes,
 } from './nodes';
+import { createRemoteTeamControl, type TeamControl } from './team-control';
 import type { HealthResponse, TeamSummary } from './types';
 import { displayGatewayUrl } from './url';
 
@@ -61,6 +61,10 @@ export interface NodeContextValue {
   fetchAllAttention: (params?: NodeAttentionParams) => Promise<NodeAttentionResult[]>;
   fetchHealth: (node: NodeView) => Promise<HealthResponse>;
   fetchTeams: (node: NodeView) => Promise<TeamSummary[]>;
+  /** 该节点的 Team 读写控制面；当前节点复用 GatewayClient。 */
+  teamControl: (node: NodeView) => TeamControl;
+  /** 该节点是否已有可用人类 token（写操作前置）。 */
+  hasTokenFor: (node: NodeView) => boolean;
 }
 
 const NodeContext = createContext<NodeContextValue | null>(null);
@@ -74,7 +78,7 @@ function pageProtocol(): string {
 }
 
 export function NodeProvider({ children }: { children: ReactNode }) {
-  const { token, gatewayUrl, hello, hasToken } = useConnection();
+  const { client, token, gatewayUrl, hello, hasToken } = useConnection();
   const tokenRef = useRef(token);
   tokenRef.current = token;
 
@@ -153,10 +157,20 @@ export function NodeProvider({ children }: { children: ReactNode }) {
     [tokenFor],
   );
 
-  const fetchTeams = useCallback(
-    (node: NodeView) => fetchNodeTeams(node, tokenFor(node)),
-    [tokenFor],
+  const teamControl = useCallback(
+    (node: NodeView): TeamControl => {
+      if (node.current) return client;
+      return createRemoteTeamControl(node, () => readNodeToken(node.name) ?? undefined);
+    },
+    [client],
   );
+
+  const hasTokenFor = useCallback(
+    (node: NodeView): boolean => (node.current ? hasToken : readNodeToken(node.name) !== null),
+    [hasToken],
+  );
+
+  const fetchTeams = useCallback((node: NodeView) => teamControl(node).listTeams(), [teamControl]);
 
   const value = useMemo<NodeContextValue>(
     () => ({
@@ -170,6 +184,8 @@ export function NodeProvider({ children }: { children: ReactNode }) {
       fetchAllAttention,
       fetchHealth,
       fetchTeams,
+      teamControl,
+      hasTokenFor,
     }),
     [
       nodes,
@@ -182,6 +198,8 @@ export function NodeProvider({ children }: { children: ReactNode }) {
       fetchAllAttention,
       fetchHealth,
       fetchTeams,
+      teamControl,
+      hasTokenFor,
     ],
   );
 

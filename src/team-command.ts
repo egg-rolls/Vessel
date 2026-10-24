@@ -1,5 +1,5 @@
 /**
- * `vessel team list|get|post|members|budget`（0.19 S3 / S4）。
+ * `vessel team list|get|post|members|budget|create|update|archive`（0.19 S3 / S4；S10.3）。
  *
  * 只做参数映射、roster 名字解析、渲染与 exit code；
  * Team 数据与投递全部在 REPL owner 的 TeamService。
@@ -8,6 +8,7 @@
  * @module vessel/team-command
  */
 
+import { readFile } from 'node:fs/promises';
 import type { CommandResult } from './agent-command';
 import {
   AgentOwnerRequestError,
@@ -201,6 +202,53 @@ function formatPostResult(result: unknown): { text: string; failed: boolean } {
   return { text: lines.join('\n'), failed };
 }
 
+/** create / update / archive 的 TeamSummary 输出（直接返回 TeamSummary）。 */
+function formatTeamWrite(result: unknown): string {
+  if (!isRecord(result)) return JSON.stringify(result, null, 2);
+  const lines = [
+    `${ui.symbol('ok')} team saved ${asString(result.team_id)}`,
+    ui.kv('name', asString(result.name)),
+    ui.kv('description', asString(result.description, '')),
+    ui.kv('default_principal', asString(result.default_principal, '')),
+    ui.kv('workspace', asString(result.workspace)),
+    ui.kv('members', String(result.member_count ?? 0)),
+    ui.kv('online', String(result.online_count ?? 0)),
+  ];
+  if (result.archived_at !== undefined) {
+    lines.push(ui.kv('archived_at', String(result.archived_at)));
+  }
+  return lines.join('\n');
+}
+
+/**
+ * create / update 的 policy：内联对象或 JSON 文件。
+ * 文件优先语义由 CLI 解析层保证互斥；这里只负责读取与形状校验。
+ */
+async function resolvePolicy(command: {
+  policy?: Record<string, unknown>;
+  policyFile?: string;
+}): Promise<{ ok: true; policy?: Record<string, unknown> } | { ok: false; error: string }> {
+  if (command.policy !== undefined) return { ok: true, policy: command.policy };
+  if (command.policyFile === undefined) return { ok: true };
+  try {
+    const parsed = JSON.parse(await readFile(command.policyFile, 'utf8')) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return {
+        ok: false,
+        error: `Invalid --policy-file ${command.policyFile}: expected a JSON object`,
+      };
+    }
+    return { ok: true, policy: parsed as Record<string, unknown> };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Failed to read --policy-file ${command.policyFile}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
 function formatMembersResult(result: unknown): string {
   if (!isRecord(result)) return JSON.stringify(result, null, 2);
   return [
@@ -365,6 +413,58 @@ async function execute(
   if (command.kind === 'list') {
     const value = await callAgentOwner(record, 'team.list', {}, fetchOptions);
     return { ok: true, value, text: formatTeamList(value) };
+  }
+
+  if (command.kind === 'create') {
+    const policy = await resolvePolicy(command);
+    if (!policy.ok) return { ok: false, error: policy.error };
+    const value = await callAgentOwner(
+      record,
+      'team.create',
+      {
+        workspace: command.workspace,
+        ...(command.name !== undefined ? { name: command.name } : {}),
+        ...(command.description !== undefined ? { description: command.description } : {}),
+        ...(command.defaultPrincipal !== undefined
+          ? { default_principal: command.defaultPrincipal }
+          : {}),
+        ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
+        ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
+  }
+
+  if (command.kind === 'update') {
+    const policy = await resolvePolicy(command);
+    if (!policy.ok) return { ok: false, error: policy.error };
+    const value = await callAgentOwner(
+      record,
+      'team.update',
+      {
+        team_id: command.teamId,
+        ...(command.name !== undefined ? { name: command.name } : {}),
+        ...(command.description !== undefined ? { description: command.description } : {}),
+        ...(command.defaultPrincipal !== undefined
+          ? { default_principal: command.defaultPrincipal }
+          : {}),
+        ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
+        ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
+  }
+
+  if (command.kind === 'archive') {
+    const value = await callAgentOwner(
+      record,
+      'team.archive',
+      { team_id: command.teamId },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
   }
 
   if (command.kind === 'get') {

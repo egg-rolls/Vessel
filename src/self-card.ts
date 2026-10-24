@@ -16,7 +16,7 @@ export function knownOwnerToolNames(
   options: { askUser?: boolean } = {},
 ): string[] {
   const names = ['bash', 'read', 'edit'];
-  if (config.agent?.enabled === true) names.push('agent');
+  if (config.agent?.enabled !== false) names.push('agent');
   if (options.askUser === true && config.ui?.askUser !== false) names.push('ask_user');
   return names;
 }

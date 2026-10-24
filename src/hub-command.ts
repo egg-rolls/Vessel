@@ -21,7 +21,7 @@ import {
 } from './hub/node-state';
 import { hubNodeTokenSecretKey } from './hub/outbound-wiring';
 import {
-  DEFAULT_HUB_DATA_DIR,
+  defaultHubDataDir,
   type HubRuntime,
   type StartHubRuntimeOptions,
   startHubRuntime,
@@ -592,10 +592,12 @@ async function pairCommand(
   return 0;
 }
 
-/** hub 侧 data dir：显式 `--data-dir` > `config.hub.dataDir` > `~/.vessel/hub`。 */
+/** hub 侧 data dir：显式 `--data-dir` > `config.hub.dataDir` > `<dataDir>/hub`。 */
 function hubJoinCodeDataDir(config: VesselConfig, explicit?: string): string {
-  const configured = explicit ?? config.hub?.dataDir ?? DEFAULT_HUB_DATA_DIR;
-  return path.resolve(expandHome(configured));
+  const configured = explicit ?? config.hub?.dataDir;
+  return configured === undefined
+    ? defaultHubDataDir(config)
+    : path.resolve(expandHome(configured));
 }
 
 async function joinCodeCommand(

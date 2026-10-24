@@ -229,6 +229,9 @@ const CONTROL_SCOPE_METHODS: ReadonlySet<string> = new Set([
   'teams.list',
   'teams.get',
   'teams.post',
+  // S10.3：team-scoped token 只能更新 / 归档自己的 team；create 不在白名单。
+  'teams.update',
+  'teams.archive',
   'events.subscribe',
   'interactions.list',
   'permission.respond',

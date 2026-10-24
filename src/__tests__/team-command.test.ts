@@ -362,6 +362,122 @@ describe('vessel team command', () => {
     expect(result.stderr).toContain('team_not_found');
   });
 
+  it('maps team create to snake_case owner params', async () => {
+    const dir = await setup();
+    const calls: RpcBody[] = [];
+    const result = await runTeamCommand(
+      {
+        kind: 'create',
+        workspace: '/ws/alpha',
+        name: 'Alpha',
+        defaultPrincipal: 'main',
+        handoffPath: '/ws/alpha/HANDOFF.md',
+        json: true,
+      },
+      options(
+        dir,
+        fakeFetch((body) => {
+          calls.push(body);
+          return {
+            team_id: 'alpha',
+            name: 'Alpha',
+            tenant_id: 'default',
+            workspace: '/ws/alpha',
+            member_count: 0,
+            online_count: 0,
+            created_at: 1,
+          };
+        }),
+      ),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(calls[0]).toEqual({
+      method: 'team.create',
+      params: {
+        workspace: '/ws/alpha',
+        name: 'Alpha',
+        default_principal: 'main',
+        handoff_path: '/ws/alpha/HANDOFF.md',
+      },
+    });
+    expect(JSON.parse(result.stdout).team_id).toBe('alpha');
+  });
+
+  it('forwards inline policy and reads --policy-file from disk', async () => {
+    const dir = await setup();
+    const policyPath = join(dir, 'policy.json');
+    await writeFile(
+      policyPath,
+      JSON.stringify({ allowFork: true, permission: { unattended: 'hold' } }),
+    );
+    const calls: RpcBody[] = [];
+    const fetchImpl = fakeFetch((body) => {
+      calls.push(body);
+      return {
+        team_id: body.params.team_id ?? 'alpha',
+        name: 'Alpha',
+        tenant_id: 'default',
+        workspace: '/ws/alpha',
+        member_count: 0,
+        online_count: 0,
+        created_at: 1,
+      };
+    });
+
+    await runTeamCommand(
+      { kind: 'create', workspace: '/ws/alpha', policy: { allowFork: false }, json: false },
+      options(dir, fetchImpl),
+    );
+    await runTeamCommand(
+      { kind: 'update', teamId: 'alpha', policyFile: policyPath, json: false },
+      options(dir, fetchImpl),
+    );
+    await runTeamCommand(
+      { kind: 'update', teamId: 'alpha', policyFile: join(dir, 'missing.json'), json: false },
+      options(dir, fetchImpl),
+    );
+
+    expect(calls.map((call) => call.method)).toEqual(['team.create', 'team.update']);
+    expect(calls[0]?.params.policy).toEqual({ allowFork: false });
+    expect(calls[1]?.params.policy).toEqual({
+      allowFork: true,
+      permission: { unattended: 'hold' },
+    });
+  });
+
+  it('maps team update null clears and team archive', async () => {
+    const dir = await setup();
+    const calls: RpcBody[] = [];
+    const fetchImpl = fakeFetch((body) => {
+      calls.push(body);
+      return {
+        team_id: body.params.team_id,
+        name: 'Alpha',
+        tenant_id: 'default',
+        workspace: '/ws/alpha',
+        member_count: 0,
+        online_count: 0,
+        created_at: 1,
+        ...(body.method === 'team.archive' ? { archived_at: 2 } : {}),
+      };
+    });
+
+    await runTeamCommand(
+      { kind: 'update', teamId: 'alpha', description: null, json: false },
+      options(dir, fetchImpl),
+    );
+    const archived = await runTeamCommand(
+      { kind: 'archive', teamId: 'alpha', json: true },
+      options(dir, fetchImpl),
+    );
+
+    expect(calls.map((call) => call.method)).toEqual(['team.update', 'team.archive']);
+    expect(calls[0]?.params).toEqual({ team_id: 'alpha', description: null });
+    expect(calls[1]?.params).toEqual({ team_id: 'alpha' });
+    expect(archived.exitCode).toBe(0);
+    expect(JSON.parse(archived.stdout).archived_at).toBe(2);
+  });
+
   it('keeps exit 1 with --json when a delivery failed', async () => {
     const dir = await setup();
     const result = await runTeamCommand(

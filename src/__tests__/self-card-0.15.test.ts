@@ -19,7 +19,7 @@ import { knownOwnerToolNames, ownerSelfCard } from '../self-card';
 describe('owner self card', () => {
   it('lists only tools that the default owner runtime registers', () => {
     const config: VesselConfig = {};
-    expect(knownOwnerToolNames(config)).toEqual(['bash', 'read', 'edit']);
+    expect(knownOwnerToolNames(config)).toEqual(['bash', 'read', 'edit', 'agent']);
     expect(knownOwnerToolNames({ ...config, agent: { enabled: true } })).toEqual([
       'bash',
       'read',

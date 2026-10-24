@@ -129,7 +129,7 @@ it('durable 关闭时恢复：exit 1 + durable_disabled', async () => {
   try {
     fs.writeFileSync(
       path.join(tmpDir, 'vessel.yaml'),
-      'provider:\n  name: openai\n  model: gpt-4\n',
+      'provider:\n  name: openai\n  model: gpt-4\ndurable:\n  enabled: false\n',
     );
     const { stderr, exitCode } = await runCli(['--resume-run', 'x'], tmpDir);
     expect(exitCode).toBe(1);

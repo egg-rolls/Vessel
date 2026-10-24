@@ -49,7 +49,10 @@ describe('bootstrap 0.3 durable', () => {
     const dir = tmpDir();
     try {
       const paths = pathsFor(dir);
-      fs.writeFileSync(paths.configPath, 'provider:\n  name: openai\n  model: gpt-4\n');
+      fs.writeFileSync(
+        paths.configPath,
+        'provider:\n  name: openai\n  model: gpt-4\ndurable:\n  enabled: false\n',
+      );
 
       const result = await bootstrap({ useMock: true, headless: true, ...paths });
       try {

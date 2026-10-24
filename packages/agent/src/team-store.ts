@@ -25,7 +25,16 @@ import { parseTeamPolicy, type TeamPolicy, TeamPolicyError } from '@vessel-agent
 import { atomicWrite, type Logger, noopLogger } from '@vessel-agent/core';
 import { TeamLogWriter } from './team-log.js';
 import { normalizeWorkspace, teamIdForWorkspace, workspaceKey } from './team-slug.js';
-import type { TeamBinder, TeamDeclaration, TeamLogEntry, TeamRecord, TeamStore } from './types.js';
+import {
+  type TeamBinder,
+  type TeamCreateInput,
+  type TeamDeclaration,
+  TeamError,
+  type TeamLogEntry,
+  type TeamRecord,
+  type TeamStore,
+  type TeamUpdatePatch,
+} from './types.js';
 
 /** `ensureForWorkspace` 入参（与 TeamBinder 端口一致） */
 export type EnsureWorkspaceInput = Parameters<TeamBinder['ensureForWorkspace']>[0];
@@ -120,6 +129,29 @@ function cloneRecord(record: TeamRecord): TeamRecord {
   return { ...record, policy: { ...record.policy } };
 }
 
+/**
+ * S10.3：只应用可变字段。`undefined` 保留，`null` 清除可选项，policy 整体替换（克隆）。
+ * v / team_id / tenant_id / workspace / created_at 不接受补丁。
+ */
+function applyTeamUpdate(record: TeamRecord, patch: TeamUpdatePatch): TeamRecord {
+  const next = cloneRecord(record);
+  if (patch.name !== undefined) next.name = patch.name;
+  if (patch.description !== undefined) {
+    if (patch.description === null) delete next.description;
+    else next.description = patch.description;
+  }
+  if (patch.default_principal !== undefined) {
+    if (patch.default_principal === null) delete next.default_principal;
+    else next.default_principal = patch.default_principal;
+  }
+  if (patch.handoff_path !== undefined) {
+    if (patch.handoff_path === null) delete next.handoff_path;
+    else next.handoff_path = patch.handoff_path;
+  }
+  if (patch.policy !== undefined) next.policy = { ...patch.policy };
+  return next;
+}
+
 /** 严格校验一份 `team.json`；非法返回 null（调用方 warning 后跳过） */
 function parseTeamRecord(raw: string, dirName: string, tenantId: string): TeamRecord | null {
   try {
@@ -154,6 +186,10 @@ function parseTeamRecord(raw: string, dirName: string, tenantId: string): TeamRe
     }
     if (typeof parsed.default_principal === 'string' && parsed.default_principal !== '') {
       record.default_principal = parsed.default_principal;
+    }
+    // S10.3 additive：非法值忽略该字段，不让整个 Team 失效。
+    if (typeof parsed.archived_at === 'number' && Number.isFinite(parsed.archived_at)) {
+      record.archived_at = parsed.archived_at;
     }
     return record;
   } catch {
@@ -271,6 +307,83 @@ export class FileTeamStore implements TeamStore {
         await this.persist(record);
         this.register(record);
       }
+    });
+  }
+
+  /**
+   * S10.3：创建 Team；workspace 已有 Team 时幂等返回（`deduplicated: true`），
+   * 绝不覆盖既有 name / policy。slug 属于其它 workspace 时沿用哈希后缀规则。
+   * 写入串行、先落盘再注册内存；不 spawn 成员。
+   */
+  async create(input: TeamCreateInput): Promise<{ record: TeamRecord; deduplicated: boolean }> {
+    await this.ready();
+    const key = workspaceKey(input.workspace);
+    return this.enqueue(async () => {
+      const existingId = this.workspaceIndex.get(key);
+      if (existingId !== undefined) {
+        const existing = this.teams.get(existingId);
+        if (existing) return { record: cloneRecord(existing), deduplicated: true };
+        this.workspaceIndex.delete(key);
+      }
+
+      const workspace = normalizeWorkspace(input.workspace);
+      const teamId = teamIdForWorkspace(workspace, (id) => this.teams.get(id)?.workspace);
+      if (this.corruptTeamIds.has(teamId)) {
+        throw new TeamMetadataCorruptError(teamMetadataPath(this.dataDir, this.tenantId, teamId));
+      }
+      const occupant = this.teams.get(teamId);
+      if (occupant) {
+        if (workspaceKey(occupant.workspace) !== key) {
+          throw new Error(`team_id_collision: ${teamId}`);
+        }
+        return { record: cloneRecord(occupant), deduplicated: true };
+      }
+
+      const record = this.buildRecord(teamId, workspace, input);
+      await this.persist(record);
+      this.register(record);
+      return { record: cloneRecord(record), deduplicated: false };
+    });
+  }
+
+  /**
+   * S10.3：更新元数据。归档 Team 拒绝（`team_archived`）；
+   * 先原子落盘再改内存，写失败时内存保持原记录。
+   */
+  async update(teamId: string, patch: TeamUpdatePatch): Promise<TeamRecord> {
+    await this.ready();
+    return this.enqueue(async () => {
+      const current = this.teams.get(teamId);
+      if (current === undefined) {
+        throw new TeamError('team_not_found', `team_not_found: ${teamId}`);
+      }
+      if (current.archived_at !== undefined) {
+        throw new TeamError('team_archived', `team_archived: ${teamId}`);
+      }
+      const next = applyTeamUpdate(current, patch);
+      await this.persist(next);
+      this.teams.set(teamId, next);
+      return cloneRecord(next);
+    });
+  }
+
+  /**
+   * S10.3：归档（幂等）。Store 不知道 roster；present 成员检查在 TeamService。
+   * 先原子落盘再改内存。
+   */
+  async archive(teamId: string): Promise<TeamRecord> {
+    await this.ready();
+    return this.enqueue(async () => {
+      const current = this.teams.get(teamId);
+      if (current === undefined) {
+        throw new TeamError('team_not_found', `team_not_found: ${teamId}`);
+      }
+      if (current.archived_at !== undefined) return cloneRecord(current);
+      const next = cloneRecord(current);
+      next.archived_at = this.nowFn();
+      await this.persist(next);
+      this.teams.set(teamId, next);
+      return cloneRecord(next);
     });
   }
 

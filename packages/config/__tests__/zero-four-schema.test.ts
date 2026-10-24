@@ -51,7 +51,7 @@ function pathsOf(config: VesselConfig): string[] {
 describe('0.4 defaults', () => {
   it('exports the frozen default values', () => {
     expect(DEFAULT_EVALS_OPTIONS).toEqual({
-      enabled: false,
+      enabled: true,
       dir: './evals',
       outDir: '~/.vessel/evals',
       allowNetwork: false,

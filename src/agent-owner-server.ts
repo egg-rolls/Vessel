@@ -48,7 +48,10 @@ export type AgentOwnerMethod =
   | 'team.roster'
   | 'team.post'
   | 'team.members'
-  | 'team.budget';
+  | 'team.budget'
+  | 'team.create'
+  | 'team.update'
+  | 'team.archive';
 
 /** owner 记录（E3 冻结字段） */
 export interface AgentOwnerRecord {
@@ -274,6 +277,32 @@ function readMentions(method: string, params: Record<string, unknown>): string[]
   return mentions as string[];
 }
 
+/** 可选可空字符串：缺省 undefined；`null` = 清空；其它必须是非空 string。 */
+function optionalNullableString(
+  method: string,
+  params: Record<string, unknown>,
+  key: string,
+): string | null | undefined {
+  if (!Object.hasOwn(params, key)) return undefined;
+  const value = params[key];
+  if (value === null) return null;
+  if (typeof value !== 'string' || value === '') {
+    throw invalidInput(method, `${key} must be a non-empty string or null`);
+  }
+  return value;
+}
+
+/** 可选 policy：必须是普通对象（整体替换，不做 merge）。 */
+function readPolicy(
+  method: string,
+  params: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!Object.hasOwn(params, 'policy')) return undefined;
+  const value = params.policy;
+  if (!isRecord(value)) throw invalidInput(method, 'policy must be an object');
+  return value;
+}
+
 function readLimit(method: string, params: Record<string, unknown>): number | undefined {
   const limit = params.limit;
   if (limit === undefined) return undefined;
@@ -402,10 +431,46 @@ async function dispatchTeam(
         via: 'cli',
       });
     }
+    case 'team.create': {
+      const workspace = requireString(method, params, 'workspace');
+      const name = optionalString(method, params, 'name');
+      const description = optionalString(method, params, 'description');
+      const defaultPrincipal = optionalString(method, params, 'default_principal');
+      const handoffPath = optionalString(method, params, 'handoff_path');
+      const policy = readPolicy(method, params);
+      return team.create({
+        workspace,
+        ...(name !== undefined ? { name } : {}),
+        ...(description !== undefined ? { description } : {}),
+        ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
+        ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
+        ...(policy !== undefined ? { policy } : {}),
+      });
+    }
+    case 'team.update': {
+      const teamId = requireString(method, params, 'team_id');
+      const name = optionalString(method, params, 'name');
+      const description = optionalNullableString(method, params, 'description');
+      const defaultPrincipal = optionalNullableString(method, params, 'default_principal');
+      const handoffPath = optionalNullableString(method, params, 'handoff_path');
+      const policy = readPolicy(method, params);
+      return team.update({
+        team_id: teamId,
+        ...(name !== undefined ? { name } : {}),
+        ...(description !== undefined ? { description } : {}),
+        ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
+        ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
+        ...(policy !== undefined ? { policy } : {}),
+      });
+    }
+    case 'team.archive': {
+      const teamId = requireString(method, params, 'team_id');
+      return team.archive({ team_id: teamId });
+    }
     default:
       throw new AgentOwnerError(
         'agent_owner_unknown_method',
-        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate|team.list|team.get|team.roster|team.post|team.members|team.budget)`,
+        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate|team.list|team.get|team.roster|team.post|team.members|team.budget|team.create|team.update|team.archive)`,
         404,
       );
   }
@@ -512,11 +577,19 @@ function errorStatus(error: unknown): { code: string; message: string; status: n
     return { code: error.code, message: error.message, status: error.status };
   }
   if (isRecord(error) && typeof error.code === 'string') {
-    // AgentService 的稳定错误码（invalid_input / unknown_member / ...）
+    // AgentService / TeamService 的稳定错误码；Team 层按业务语义映射 HTTP。
+    const status =
+      error.code === 'team_not_found'
+        ? 404
+        : error.code === 'team_not_empty' ||
+            error.code === 'team_archived' ||
+            error.code === 'team_already_in_team'
+          ? 409
+          : 400;
     return {
       code: error.code,
       message: error instanceof Error ? error.message : String(error),
-      status: 400,
+      status,
     };
   }
   return {

@@ -19,10 +19,12 @@ import {
   type MemberStatus,
   type MemberTurnResult,
   type ReinstateInput,
+  type TeamCreateInput,
   type TeamDeclaration,
   type TeamLogEntry,
   type TeamRecord,
   type TeamStore,
+  type TeamUpdatePatch,
 } from '../src/index.js';
 import { createTeamService, type DefaultTeamService } from '../src/team-service.js';
 
@@ -269,6 +271,58 @@ export class MemoryTeamStore implements TeamStore {
   }
 
   async seed(_declarations: readonly TeamDeclaration[]): Promise<void> {}
+
+  async create(input: TeamCreateInput): Promise<{ record: TeamRecord; deduplicated: boolean }> {
+    const existing = this.records.find((record) => record.workspace === input.workspace);
+    if (existing !== undefined) return { record: existing, deduplicated: true };
+    const teamId = input.workspace.split('/').pop() ?? 'workspace';
+    const record = makeTeam(teamId, {
+      workspace: input.workspace,
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.default_principal !== undefined
+        ? { default_principal: input.default_principal }
+        : {}),
+      ...(input.handoff_path !== undefined ? { handoff_path: input.handoff_path } : {}),
+      ...(input.policy !== undefined ? { policy: input.policy } : {}),
+    });
+    this.records.push(record);
+    return { record, deduplicated: false };
+  }
+
+  async update(teamId: string, patch: TeamUpdatePatch): Promise<TeamRecord> {
+    const index = this.records.findIndex((record) => record.team_id === teamId);
+    const current = this.records[index];
+    if (current === undefined) throw new Error(`team_not_found: ${teamId}`);
+    if (current.archived_at !== undefined) throw new Error(`team_archived: ${teamId}`);
+    const next: TeamRecord = { ...current, policy: { ...current.policy } };
+    if (patch.name !== undefined) next.name = patch.name;
+    if (patch.description !== undefined) {
+      if (patch.description === null) delete next.description;
+      else next.description = patch.description;
+    }
+    if (patch.default_principal !== undefined) {
+      if (patch.default_principal === null) delete next.default_principal;
+      else next.default_principal = patch.default_principal;
+    }
+    if (patch.handoff_path !== undefined) {
+      if (patch.handoff_path === null) delete next.handoff_path;
+      else next.handoff_path = patch.handoff_path;
+    }
+    if (patch.policy !== undefined) next.policy = { ...patch.policy };
+    this.records[index] = next;
+    return next;
+  }
+
+  async archive(teamId: string): Promise<TeamRecord> {
+    const index = this.records.findIndex((record) => record.team_id === teamId);
+    const current = this.records[index];
+    if (current === undefined) throw new Error(`team_not_found: ${teamId}`);
+    if (current.archived_at !== undefined) return current;
+    const next = { ...current, archived_at: 1 };
+    this.records[index] = next;
+    return next;
+  }
 
   get(teamId: string): TeamRecord | undefined {
     return this.records.find((record) => record.team_id === teamId);

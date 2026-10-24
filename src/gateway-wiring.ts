@@ -38,7 +38,7 @@ export interface GatewayControlPlaneOptions {
    * 仅返回已构造 bundle 的 tenant；未配置 / 未启用时返回 undefined。
    */
   feishuFor?: (tenantId: string) => FeishuControlPlaneLike | undefined;
-  /** 默认取 config.evals.enabled */
+  /** 默认取 config.evals.enabled（缺省开启） */
   evalsEnabled?: boolean;
   /** 测试注入口 */
   loader?: PluginLoader;
@@ -50,7 +50,7 @@ export interface GatewayControlPlaneOptions {
   teamScope?: HubTeamScopeLike;
   /**
    * S7：节点身份（`resolveNodeId()` 的结果）。
-   * 仅当 `config.federation.enabled === true` 且本字段存在时注入 federation。
+   * 仅当 `config.federation.enabled !== false`（缺省开启）且本字段存在时注入 federation。
    */
   nodeId?: string;
   /** 丢弃 federation peer（缺 token / 自指 / token 重复）时记录原因。 */
@@ -84,9 +84,9 @@ export function buildGatewayControlPlane(
   if (options.nodeTokens) controlPlane.nodeTokens = options.nodeTokens;
   if (options.teamScope) controlPlane.hubTeamScope = options.teamScope;
 
-  // S7：仅在显式启用且已知节点身份时注入。缺 token 的 peer 由 resolver 丢弃
-  // （fail closed）；这里不打印 token / env，也不因缺失 token 报错。
-  if (options.config.federation?.enabled === true && options.nodeId !== undefined) {
+  // S7：缺省开启；显式 `federation.enabled: false` 才不注入。缺 token 的 peer
+  // 由 resolver 丢弃（fail closed）；这里不打印 token / env，也不因缺失 token 报错。
+  if (options.config.federation?.enabled !== false && options.nodeId !== undefined) {
     const resolved = resolveFederationOptions({
       federation: options.config.federation,
       nodeId: options.nodeId,
@@ -101,7 +101,7 @@ export function buildGatewayControlPlane(
     controlPlane.federation = federation;
   }
 
-  const evalsEnabled = options.evalsEnabled ?? options.config.evals?.enabled === true;
+  const evalsEnabled = options.evalsEnabled ?? options.config.evals?.enabled !== false;
   if (evalsEnabled) {
     const loader = options.loader ?? new PluginLoader();
     controlPlane.evals = {

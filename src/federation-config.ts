@@ -2,6 +2,7 @@
  * S7 federation 配置归一化（asm 层）。
  *
  * validator 只做 schema 校验；这里把 YAML 形状变成运行时形状：
+ * - enabled 缺省 true；显式 `federation.enabled: false` 才关闭；
  * - `tokenEnv` 只在此处解析为内存 token，绝不落盘 / 打印；
  * - 缺 token 的 peer 直接丢弃（fail closed），不生成空凭据；
  * - 同一 token 命中多个 peer 时全部丢弃（入站匹配无法确定落点，不能静默择一）；
@@ -163,7 +164,7 @@ export function resolveFederationOptions(input: {
 
   return {
     options: {
-      enabled: federation?.enabled === true,
+      enabled: federation?.enabled !== false,
       nodeId: input.nodeId,
       maxHops,
       rateLimitPerMinute,

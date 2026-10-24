@@ -427,6 +427,8 @@ export const teamSummarySchema = {
     member_count: { type: 'integer', minimum: 0 },
     online_count: { type: 'integer', minimum: 0 },
     created_at: { type: 'number' },
+    // S10.3：归档时间（additive）；缺省 = active。
+    archived_at: { type: 'number' },
   },
 };
 

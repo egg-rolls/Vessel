@@ -259,7 +259,7 @@ termination:
 
 ```yaml
 agent:
-  enabled: false             # 默认 false；交互与 headless 一致
+  enabled: true              # 0.24 默认 true；显式 false 关闭（交互与 headless 一致）
   owner_id: main             # root owner 成员 id
   default_visibility: private   # private | team | tenant
   follow_replies: false      # 目前只作为配置 / 事件字段，不自动续跑父 turn
@@ -269,17 +269,17 @@ agent:
   # limits / termination 缺省继承顶层；cwd 见 §2.4
 ```
 
-- **`agent.enabled`**（默认 `false`）：唯一开关。启用后注册内置 `agent` 工具（owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`，支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，`new` / `close` 只给 owner），启动 AgentService，并在交互 REPL 中尝试启动 loopback owner 端点。
+- **`agent.enabled`**（0.24 起默认 `true`；显式 `false` 关闭）：唯一开关。启用后注册内置 `agent` 工具（owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`，支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，`new` / `close` 只给 owner），启动 AgentService / TeamService，并尝试启动 loopback owner 端点。
 - **`agent.owner_id`**（默认 `main`）：root owner（REPL 主 agent）的成员 id；owner 队列由父 turn 的 `BeforeLlm` 排空，不再另起 pump。
 - **`agent.default_visibility`**（默认 `private`）：`new` 未显式传 `visibility` 时的成员可见性。绑定 Team 且未显式指定时缺省为 `team`（0.19 S3），unbound 保持 `private`；`private` 仅 owner 可寻址，且不写 Team 日志；`team` / `tenant` 在本机同一 tenant 内等价，跨 tenant 不可寻址。
 - **`agent.permission_mode`**（缺省交互 `bridge`、headless `allow`）：`bridge` 把成员权限 / ask 弹到父窗口；`allow` 对成员复制到的工具一律放行；`deny` 只复制 `agent.read_only_tools`（默认 `['read']`）。无父事件流时 bridge 退化为 deny，不死等。0.19 S4 起有非空 `team_id` 的成员强制 bridge（忽略全局 `allow`），`deny` 保持只读工具不放宽。
 - **`agent.follow_replies`**（默认 `false`）：回复在下一次 `BeforeLlm` 注入父会话；不会自动开启新的父 turn。
 - **`agent.model` / `agent.limits` / `agent.termination`**：成员默认模型与限额；`limits` / `termination` 缺省继承顶层，不放大。
 - **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
-- **工具数（实测）**：默认 3（`bash` / `read` / `edit`）；`agent.enabled: true` 4（+`agent`）；真交互 REPL（TTY）或 gateway/serve 默认 4（+`ask_user`）；交互 + `agent.enabled: true` 5。
-- **owner 端点**：交互 REPL 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`vessel agent new|send|dispatch|close|list|rotate [--json]` 经该记录 attach。
+- **工具数（实测）**：默认 4（`bash` / `read` / `edit` / `agent`）；显式 `agent.enabled: false` 为 3；真交互 REPL（TTY）或 gateway/serve 默认 5（+`ask_user`）；交互且关闭 agent 为 4。
+- **owner 端点**：只由交互 REPL / serve 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`--run` / headless / 管道不监听 owner 端口、不写记录，但 AgentService / TeamService 仍在进程内可用。`vessel agent new|send|dispatch|close|list|rotate [--json]` 经该记录 attach。
 - **rotate（0.19，ADR-092）**：成员可调用 `agent.rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 owner 端点 `agent.rotate` 或 `vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]`。`--startup` 必填且非空；`rotated` 退出 0、`failed` 退出 1。失败保持旧身体，不自动 fork / 重试；`rotating` 期间消息排队。
-- **已知限制**：消息队列只在内存，重启丢失未处理消息；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **48**（见 §2.13）。
+- **已知限制**：消息队列只在内存，重启丢失未处理消息；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **51**（见 §2.13）。
 
 ### 2.12 Team 声明（0.19 S3，ADR-091；S4 增加 policy.permission / policy.budget）
 
@@ -314,13 +314,16 @@ teams:
 - 绑定后默认 visibility `team`；unbound 保持 `private`。Team 只是 roster / 只写日志 / 定向寻址的分组，**不是 cwd 或安全边界**（成员仍共享父工具 cwd）。
 - roster 由 Agent 记录的 `team_id + membership` 派生，不单独持久化；`online_count = present && presence === 'live'`；`body_history` 透传（≤20）。
 - 无 `@` 的 post / reply / system **只写日志、不产生 run**；`@` 用结构化 agent id，先写日志再 dispatch。private 成员不写日志、不可被 `@`。
-- canonical：`teams.list` / `teams.get`（read）、`teams.post` / `teams.members` / `teams.budget`（write；`teams.budget` 走 `status | override`，不在 control scope 白名单）；未注入或 tenant 不匹配返回 `not_found`。0.19 起 canonical 总数 48。
+- canonical：`teams.list` / `teams.get`（read）、`teams.post` / `teams.members` / `teams.budget` / `teams.create` / `teams.update` / `teams.archive`（write；`teams.budget` 走 `status | override`，不在 control scope 白名单）；未注入或 tenant 不匹配返回 `not_found`。0.24 S10.3 起 canonical 总数 **51**。
+- Team CRUD（0.24）：`teams.create` 只允许 human / admin（team-scoped token 返回 `forbidden`），按 workspace 幂等复用并直接返回 `TeamSummary`；`teams.update` / `teams.archive` 允许 team-scoped token 操作自己的 team。`archive` 有 present 成员返回 `conflict`（`team_not_empty`）；归档后 post / members / budget override 返回 `conflict`（`team_archived`），日志 / session / agent 历史保留；hard delete 未实现。CLI：`vessel team create|update|archive`；`create` / `update` 支持 `--policy <json>` 或 `--policy-file <path>`（互斥，文件优先用于复杂策略，整体替换）。
 
 ### 2.13 Hub 控制面（0.19 S5，ADR-093）
 
 ```yaml
 hub:
-  data_dir: ~/.vessel/hub        # hub 进程使用；必须与全局 data_dir 不同
+  auto_start: true               # 0.24：gateway 启动时同 dataDir 拉起本机 hub（回环、单实例）
+  # data_dir 缺省 <data_dir>/hub；standalone hub 与 gateway 自动 hub 共用同一目录
+  # data_dir: /srv/vessel-hub    # 显式指定；必须与全局 data_dir 不同
   direction: hub                 # hub | node；node 为 gateway 主动出站加入远端 hub（S5.1）
   url: https://hub.example:8643  # node 角色：hub 基址（join 缺省 URL；运行时 state 优先）
   ca_file: /etc/vessel/hub-ca.pem      # node 角色：hub TLS CA（可选）
@@ -335,6 +338,7 @@ hub:
 ```
 
 - `hub` 是 **全局块**；tenant overlay 不允许。`hub.data_dir` 与全局 `data_dir` 相同 → validation error `hub_data_dir_conflict`。
+- `hub.auto_start`（0.24，默认 `true`）：gateway（`--serve` / `gateway start`）启动时在 `hub.data_dir`（缺省 `<data_dir>/hub`）启动同进程 hub，**只监听 `127.0.0.1`**，端口取 `listen.port` 否则 0；`hub.direction: node` 时跳过。standalone `vessel hub start` 使用同一默认目录，因此 gateway 会复用已运行的 hub；只有显式 `--data-dir` / `hub.data_dir` 才分叉。`<hubDataDir>/hub.lock` 保证同一 data dir 单实例，已有实例时复用；不自动 join 远端、不自动配对、不代理正文。显式 `false` 关闭。
 - `direction: hub`（默认）= hub 进程主动拨号节点；`direction: node` = gateway 出站加入远端 hub（S5.1），节点无需开放入站端口。hub 进程本身仍拒绝 `direction: node`。
 - `url` / `ca_file` / `join_code_env` 只在 node 角色使用：`url` 必须是绝对 `http(s)`、无 userinfo / path / query / hash，非回环必须 `https`；`join_code_env` 只在 `vessel hub join` 缺 `--code` 时读取。node token 明文**只走 SecretStore**。
 - `hub.data_dir` 冲突检查只适用于 **hub 进程**；node 侧状态在 gateway 的 `data_dir`（`hub-node.json` / `hub-node-status.json`），不写 `hub.data_dir`。
@@ -342,7 +346,7 @@ hub:
 - `hub` 不接受明文 `token`，只允许 `token_env`（hub 自己的读 token）。节点 control token **只走 SecretStore**，不写 YAML / `registry.json`。
 - `allow_file_secrets`（默认 `false`）：平台 SecretStore（DPAPI / Keychain / libsecret）不可用时，只有显式 `true` 才退到 AES-256-GCM 文件；否则 fail-closed。
 - `pairing_ttl_seconds`（默认 300，范围 60–3600）：一次性配对码有效期；码只存 hash、先烧后用。
-- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后为 40，S3 + S5 + S4 合并后总数为 **48**（47 个 domain 方法 + `events.subscribe`）；S5.1 不新增 canonical。
+- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后为 40，S3 + S5 + S4 合并后为 48；0.24 S10.3 增加 `teams.create|update|archive` 后总数为 **51**（50 个 domain 方法 + `events.subscribe`）。
 - **team-scoped control token**：只能访问自己的 `team_id`，不匹配返回 `not_found`；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `handoff_path` / `policy`。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**。
 - **NAT 数据面**：`direction: node` 只保证元数据 / 指针可达；没有浏览器可达地址的节点（NAT / 家庭网络）需要用户提供隧道 / 反向代理，并可用可选 `public_url` 声明节点 origin。目录的 `data_plane: direct|unreachable` 由 `public_url ?? url` 派生，只表示正文可达性；hub 不做正文中继。
 - **已知限制**：S5.1 已实现 node → hub 出站；跨节点 A2A（S7）、多 hub 联邦、hub daemon / 系统服务注册仍未实现。一个 node 进程 / data dir 只加入一个 hub。Web 当前不消费 hub 目录 / data token。
@@ -394,6 +398,9 @@ vessel agent close <member...> [--json]
 vessel agent list [--state <state>] [--visibility private|team|tenant] [--json]
 vessel team list [--json]
 vessel team get <team_id> [--limit N] [--json]
+vessel team create <workspace> [--name N] [--description D] [--default-principal P] [--handoff PATH] [--policy JSON | --policy-file FILE] [--json]
+vessel team update <team_id> [--name N] [--description D | --clear-description] [--default-principal P | --clear-default-principal] [--handoff PATH | --clear-handoff] [--policy JSON | --policy-file FILE] [--json]
+vessel team archive <team_id> [--json]
 vessel team post <team_id> <content...> [--mention <name|id>]... [--json]
 vessel team members <team_id> add|remove <member> [--json]
 vessel hub start [--host <h>] [--port <p>] [--data-dir <hubDir>] [--allow-remote]
@@ -412,6 +419,7 @@ vessel hub data-token <pairing_id> --team <team_id> [--json]
 ```
 
 - `vessel team ...` 经 owner 端点（`from = ownerId`、viewer 可见 private）；`team post` 的 `--mention` 先在同 Team roster 内解析为 agent id，日志写成功但任一投递失败时退出 1。
+- `team create|update` 的 `--policy` / `--policy-file` 互斥；文件内容必须是 JSON 对象，整体替换 policy（不做 merge）。`team archive` 有 present 成员时退出 1（`team_not_empty`）。
 - `vessel hub ...` 管理与探针命令直连 hub / 节点；`hub pair` 在节点侧生成一次性码、`hub node add` 在 hub 侧纳入节点（hub → node）；S5.1 的 `hub join-code` 在 hub 侧生成一次性码、`hub join` 在节点侧消费（node → hub）。token 明文只在 `token exchange` / `hub join` 的响中出现一次，不写日志。
 
 - `vessel agent ...` 经 `<dataDir>/agent-owner.json` attach 到交互 REPL 的 owner；没有 owner 时 `agent_owner_unavailable`，`--tenant` 与 owner 不一致时 `agent_owner_tenant_mismatch`。命令只做参数映射，生命周期全在 owner。

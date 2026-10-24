@@ -147,7 +147,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 ## 工具集
 
-默认运行期 **3 个**工具：三个来自 `plugins/tools/basic-tools` 的**能力工具**。`agent.enabled: true` 时由 `packages/agent` 注册内置 `agent`（4 个）；`ask_user` 在交互 REPL（TTY）或 gateway/serve 注册，`--run` / headless / 管道不注册（`ui.askUser: false` 可关闭）。`team_*` / `delegate_task` 已在 0.17 删除。
+默认运行期 **4 个**工具：三个来自 `plugins/tools/basic-tools` 的**能力工具**，加上 `packages/agent` 的内置 `agent`（0.24 起默认注册；显式 `agent.enabled: false` 关闭）。`ask_user` 在交互 REPL（TTY）或 gateway/serve 注册，`--run` / headless / 管道不注册（`ui.askUser: false` 可关闭）。`team_*` / `delegate_task` 已在 0.17 删除。
 
 **能力工具（3）—— 模型干活就靠这三个：**
 

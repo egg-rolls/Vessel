@@ -21,7 +21,7 @@ export interface AgentWiringInput {
 }
 
 export interface AgentWiringPlan {
-  /** `agent.enabled: true` 时注册 `agent` 工具并启动 AgentService */
+  /** 缺省注册 `agent` 工具并启动 AgentService；显式 `agent.enabled: false` 才关闭 */
   agentEnabled: boolean;
   defaultVisibility: AgentVisibility;
   followReplies: boolean;
@@ -36,7 +36,7 @@ export interface AgentWiringPlan {
 export function resolveAgentWiring(config: VesselConfig, input: AgentWiringInput): AgentWiringPlan {
   const agent = config.agent;
   return {
-    agentEnabled: agent?.enabled === true,
+    agentEnabled: agent?.enabled !== false,
     defaultVisibility: agent?.defaultVisibility ?? 'private',
     followReplies: agent?.followReplies === true,
     permissionMode: agent?.permissionMode ?? (input.headless ? 'allow' : 'bridge'),

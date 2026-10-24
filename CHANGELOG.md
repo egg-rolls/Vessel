@@ -3,6 +3,62 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.24.0] - 2026-10-24
+
+> 0.24.0（基于 0.23.0，未发布）：S10 默认开启 / 本地 hub / Team CRUD / Web IA。
+> 未 tag、未 publish。
+
+### Added
+
+- **默认全开（S10.1）**：`agent.enabled` / `durable.enabled` / `evals.enabled` /
+  `federation.enabled` / `hub.autoStart` 缺省 **true**，均可用显式 `false` 关闭；
+  `feishu.enabled` / `serve.allowRemote` 因外部凭据 / 网络暴露保持 false。
+  `agent` 工具默认注册，工具面 4（bash / read / edit / agent）；`evals.allowNetwork`
+  仍 false。
+- **本地 hub（S10.2）**：gateway 启动时在 `<dataDir>/hub` 启动同进程 hub，只监听
+  `127.0.0.1`、端口缺省 0；`hub.lock` 单实例，standalone `vessel hub start` 复用同一
+  默认目录；本机 node 自动登记，不自动 join / 配对；`hub.direction: 'node'` 跳过。
+- **Team CRUD（S10.3）**：`teams.create` / `teams.update` / `teams.archive`（write），
+  canonical 48 → **51**；`team.json` 增加 `archived_at`；archive 拒绝 present 成员
+  （`team_not_empty`），归档后只读且保留日志 / session / agent 历史；create 仅
+  human / admin，team-scoped token 只能 update/archive 自己的 team；CLI
+  `vessel team create|update|archive`，create/update 支持 `--policy` / `--policy-file`。
+- **Web IA（S10.4）**：顶级区域 `Hub`（`#/hub`）、`Nodes`（`#/nodes/:nodeKey`）、
+  `Teams`（`#/teams/:nodeKey/:teamId`）、`Agents`（`#/agents`）；Chat / Runs / Observe /
+  Integrations / Settings 保留。
+- **Hub 页**：`config.get.hub` 推导未配置 / 本地 / 已加入三态；节点卡片（node_id、
+  health、team / agent / online 计数、心跳）；移除 Web 节点链接；Add node 展示
+  `vessel hub pair` / `hub node add` / `hub join-code` / `hub join` 可复制命令。
+- **Node 面板**：health / gateway 实例 / `incarnation`（仅当前 WS 节点）/ 推导的
+  `data_plane`；该节点 Teams 列表与 Agents 分组。
+- **Team CRUD UI**：Node 面板 Create / Edit / Archive 走 canonical
+  `teams.create` / `teams.update` / `teams.archive`；archive 二次确认、archived 徽标与只读
+  群聊、无 token 禁用写操作并说明原因。
+- **Teams 页**：跨节点 Team 卡片（node 徽标、archived、member / online、desc、
+  default_principal）；群聊与成员详情复用 `TeamChat` / `MemberDetail`，额外节点独立凭据。
+- **Agents 页**：各节点 roster 只读聚合，按 node / team / state / presence 过滤
+  （过滤状态只在 URL）；节点级失败与部分 Team 失败分别提示。
+
+### Changed
+
+- Team 群聊从 `#/team/*` 迁移到 `#/teams/:nodeKey/:teamId[/agents/:agentId]`；
+  路由中的节点键是 `node_id ?? 配置名`。
+- Web 多节点凭据规则不变：每节点人类 token 只存 sessionStorage，不进 URL / 日志。
+- headless（`--run` / 管道）仍启动 AgentService / TeamService，但不监听 owner HTTP
+  端点、不写 `agent-owner.json`；owner 端点只在交互 REPL / serve 启动。
+
+### Known limitations
+
+- Team hard delete 未实现（Later）；archive 不是 delete。
+- 本地 hub 只做目录 / 指针，不代理正文、不自动 join 远端。
+- 远程 agent 生命周期（spawn / close / rotate）未开放。
+- `feishu.enabled` / `serve.allowRemote` 仍默认 false（凭据 / 网络暴露前置）。
+
+### Removed
+
+- 旧 Web `#/team/*` 路由域与 `Settings → Nodes` tab（分别由顶级 Teams / Nodes 取代）；
+  pre-1.0 不提供兼容跳转。
+
 ## [0.23.0] - 2026-10-24
 
 > 0.23.0（基于 `main` 0.22.1，未发布）：S9.4 多节点 attention + Q-swarm attention 修复。
