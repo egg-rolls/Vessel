@@ -343,6 +343,60 @@ export interface TeamDetail {
   messages: TeamMessage[];
 }
 
+/**
+ * 0.25 Agent CRUD（canonical `agents.create|update|close`）。
+ *
+ * 字段全部 optional：不同 gateway 版本可能只返回部分字段，UI 必须容错。
+ * `agents.update` 的 model / system_prompt 从下一个 Body 生效，名称立即生效。
+ */
+export interface AgentSummary {
+  agent_id?: string;
+  id?: string;
+  name?: string;
+  team_id?: string;
+  visibility?: 'private' | 'team' | 'tenant';
+  membership?: 'present' | 'left';
+  presence?: 'live' | 'gone';
+  state?: string;
+  model?: string;
+  system_prompt?: string;
+  session_id?: string;
+}
+
+export interface AgentCreateInput {
+  name?: string;
+  model?: string;
+  system_prompt?: string;
+  /** 缺省 = unbound（不加入 Team）。 */
+  team_id?: string;
+  visibility?: 'private' | 'team' | 'tenant';
+}
+
+export interface AgentUpdateInput {
+  agent_id: string;
+  name?: string;
+  model?: string;
+  system_prompt?: string;
+}
+
+/** canonical `agents.create|update|close` 是批量形状；Web 每次只发一条。 */
+export interface AgentBatchSuccess {
+  ok: true;
+  agent: AgentSummary;
+}
+
+export interface AgentBatchFailure {
+  ok: false;
+  code?: string;
+  error?: string;
+}
+
+export type AgentBatchEntry = AgentBatchSuccess | AgentBatchFailure;
+
+export interface AgentBatchResponse {
+  results?: AgentBatchEntry[];
+}
+
 /** tasks.list / tasks.get 条目（只读派生）。 */
 export interface TaskEntry {
   id: string;

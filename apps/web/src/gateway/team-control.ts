@@ -5,8 +5,13 @@
  * HTTP 适配器。token 每次调用时解析，只进 Authorization 头，不进返回值 / 日志。
  * 写操作（create / update / archive）落在节点自己，必须人类 token。
  */
+import { unwrapAgentResult } from './agent-result';
 import { fetchNodeRpc, type NodeConfig } from './nodes';
 import type {
+  AgentBatchResponse,
+  AgentCreateInput,
+  AgentSummary,
+  AgentUpdateInput,
   SessionDetail,
   TeamCreateInput,
   TeamDetail,
@@ -27,6 +32,10 @@ export interface TeamControl {
   updateTeam(input: TeamUpdateInput): Promise<TeamSummary>;
   archiveTeam(teamId: string): Promise<TeamSummary>;
   getSession(sessionId: string): Promise<SessionDetail>;
+  /** 0.25：Agent CRUD（与 Teams 共用同一节点的控制面）。 */
+  createAgent(input: AgentCreateInput): Promise<AgentSummary>;
+  updateAgent(input: AgentUpdateInput): Promise<AgentSummary>;
+  closeAgent(agentId: string): Promise<AgentSummary>;
 }
 
 /** 额外节点的适配器；`resolveToken` 在每次请求时读取该节点自己的凭据。 */
@@ -67,6 +76,21 @@ export function createRemoteTeamControl(
       });
       if (!body?.session) throw new Error(`Session not found: ${sessionId}`);
       return body.session;
+    },
+    async createAgent(input) {
+      return unwrapAgentResult(
+        await call<AgentBatchResponse>('agents.create', { agents: [input] }),
+      );
+    },
+    async updateAgent(input) {
+      return unwrapAgentResult(
+        await call<AgentBatchResponse>('agents.update', { agents: [input] }),
+      );
+    },
+    async closeAgent(agentId) {
+      return unwrapAgentResult(
+        await call<AgentBatchResponse>('agents.close', { agents: [{ agent_id: agentId }] }),
+      );
     },
   };
 }
