@@ -855,6 +855,7 @@ async function runWithConfig(result: BootstrapResult) {
       pluginHost: ctx.pluginHost,
       staticDir: resolveStaticDir(),
       nodeId: result.nodeId,
+      nodeName: result.nodeName,
       auth: authResult.auth,
       token: resolveGatewayToken(config),
       hostname: resolved.options.hostname,
@@ -973,6 +974,8 @@ async function runWithConfig(result: BootstrapResult) {
       ...(result.feishu ? { feishu: result.feishu } : {}),
       // 0.19 S3：canonical teams.* 只在默认 tenant 的 AgentService 存在时注入。
       ...(result.agent?.team ? { teams: result.agent.team } : {}),
+      // 0.25：canonical agents.create|update|close（同一 AgentService 适配器）。
+      ...(result.agent?.control ? { agentControl: result.agent.control } : {}),
       // S5：hub 目录投影 / 动态 token / session→team 归属。
       ...(result.agent?.hubControl ? { hubControl: result.agent.hubControl } : {}),
       ...(result.agent?.nodeTokens ? { nodeTokens: result.agent.nodeTokens } : {}),

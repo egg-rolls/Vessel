@@ -12,24 +12,29 @@ export interface DomainDef {
 /** 主领域；Settings 固定在底部（D1）。label 走 i18n，随 locale 变化。 */
 export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'chat' },
-  { id: 'hub' },
-  { id: 'nodes' },
-  { id: 'teams' },
   { id: 'agents' },
+  { id: 'teams' },
+  { id: 'nodes' },
   { id: 'runs' },
-  { id: 'integrations' },
   { id: 'observe' },
+  { id: 'integrations' },
+  { id: 'hub' },
+  { id: 'gateway' },
 ];
 
-/** 桌面侧栏分组；只影响导航展示，不改变路由。 */
+/**
+ * 桌面侧栏分组；只影响导航展示，不改变路由。
+ * 编排组顺序固定 Agents → Teams → Nodes；Status 组固定在 Settings 之前。
+ */
 export const NAV_GROUPS: readonly {
   id: string;
   domains: readonly PrimaryDomain[];
 }[] = [
   { id: 'chat', domains: ['chat'] },
-  { id: 'network', domains: ['hub', 'nodes', 'teams', 'agents'] },
+  { id: 'network', domains: ['agents', 'teams', 'nodes'] },
   { id: 'observe', domains: ['runs', 'observe'] },
   { id: 'integrations', domains: ['integrations'] },
+  { id: 'status', domains: ['hub', 'gateway'] },
 ];
 
 export function domainLabel(domain: Domain): string {
@@ -62,6 +67,8 @@ export function routeBreadcrumb(route: Route): string {
     }
     case 'hub':
       return t('breadcrumb.hub');
+    case 'gateway':
+      return t('breadcrumb.gateway');
     case 'nodes':
       return route.nodeKey
         ? t('breadcrumb.nodes.detail', { node: route.nodeKey })

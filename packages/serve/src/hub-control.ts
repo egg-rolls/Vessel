@@ -46,6 +46,8 @@ export interface HubAgentMeta {
 
 /** provider 返回的投影；revision / observed_at 由 gateway 补。 */
 export interface HubNodeSnapshotInput {
+  /** 节点展示名（0.25 additive）；旧节点可缺省。 */
+  name?: string;
   counts: { teams: number; agents: number; live_agents: number };
   teams: HubTeamMeta[];
   agents: HubAgentMeta[];

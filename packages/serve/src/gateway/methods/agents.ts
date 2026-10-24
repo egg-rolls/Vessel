@@ -10,11 +10,30 @@
  * @module @vessel-agent/serve
  */
 
+import type {
+  AgentControlLike,
+  AgentCreateLikeInput,
+  AgentLifecycleFailLike,
+  AgentUpdateLikeInput,
+  AgentVisibilityLike,
+} from '../../agent-control.js';
 import type { AgentRegistry, AgentRegistryEntry, AgentTaskEntry } from '../../agents-registry.js';
-import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
+import {
+  isTeamScopedPrincipal,
+  RpcError,
+  type RpcMethodContext,
+  type RpcMethodDefinition,
+} from '../../rpc.js';
 import type { RunRecord } from '../../run-engine.js';
+import type { TeamControlLike } from '../../team-control.js';
 import { stringParam } from './common.js';
-import { agentCardSchema, agentInfoSchema, taskEntrySchema } from './schemas.js';
+import {
+  agentCardSchema,
+  agentInfoSchema,
+  agentStatusSchema,
+  stringListSchema,
+  taskEntrySchema,
+} from './schemas.js';
 
 export interface AgentMethodsDeps {
   registry: AgentRegistry;
@@ -22,6 +41,13 @@ export interface AgentMethodsDeps {
   /** FIFO 队列（按入队顺序）；用于根 agent 的 queue_position。 */
   queue?: () => readonly RunRecord[];
   defaultTenantId: string;
+  /**
+   * 0.25：agent 生命周期控制面（app 注入 AgentService 适配器）。
+   * 缺省 = `agents.create|update|close` 仍进 manifest，但 handler 返回 `not_found`。
+   */
+  agent?: AgentControlLike;
+  /** 0.25：`agents.create` 用 team_id 解析 workspace；未注入时按 not_found 处理。 */
+  teams?: TeamControlLike;
 }
 
 function isDefaultTenant(tenantId: string, defaultTenantId: string): boolean {
@@ -120,6 +146,121 @@ function publicTask(task: AgentTaskEntry): Record<string, unknown> {
     ...(task.parent_task !== undefined ? { parent_task: task.parent_task } : {}),
   };
 }
+
+// ── 0.25：canonical agent 生命周期（批量契约） ──
+
+/** 未注入 / tenant 不匹配都按 `not_found` 处理（不泄漏跨 tenant 存在性）。 */
+function requireAgentControl(
+  agent: AgentControlLike | undefined,
+  ctx: RpcMethodContext,
+): AgentControlLike {
+  if (!agent || agent.tenantId !== ctx.tenantId) {
+    throw new RpcError('not_found', 'Agent control is not available');
+  }
+  return agent;
+}
+
+/** team-scoped control token 的 team 作用域；非 team-scoped 返回 undefined。 */
+function teamScopeOf(ctx: RpcMethodContext): string | undefined {
+  return isTeamScopedPrincipal(ctx.principal) ? ctx.principal.team_id : undefined;
+}
+
+function fail(code: string, error: string): AgentLifecycleFailLike {
+  return { ok: false, code, error };
+}
+
+/** `agents` 数组必须是对象数组；结构错误整体拒绝（类型错误不是业务失败）。 */
+function requireAgentEntries(
+  params: Record<string, unknown>,
+  method: string,
+): Array<Record<string, unknown>> {
+  const value = params.agents;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new RpcError('invalid_params', `${method}: agents must be a non-empty array`);
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new RpcError('invalid_params', `${method}: agents[${index}] must be an object`);
+    }
+    return entry as Record<string, unknown>;
+  });
+}
+
+/** 可选非空字符串；缺省 undefined，存在但非法 → invalid_params。 */
+function optionalEntryString(
+  entry: Record<string, unknown>,
+  key: string,
+  method: string,
+): string | undefined {
+  const value = entry[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new RpcError('invalid_params', `${method}: ${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalVisibility(
+  entry: Record<string, unknown>,
+  method: string,
+): AgentVisibilityLike | undefined {
+  const value = entry.visibility;
+  if (value === undefined) return undefined;
+  if (value !== 'private' && value !== 'team' && value !== 'tenant') {
+    throw new RpcError('invalid_params', `${method}: visibility must be private, team or tenant`);
+  }
+  return value;
+}
+
+type Prepared<T> = { input: T } | { failure: AgentLifecycleFailLike };
+
+/**
+ * 把成功条目与批量结果按原索引合并；结构失败（如跨 team 作用域）不调用服务。
+ * `cursor` 只前进到实际提交给服务的条目，保证结果与输入同序。
+ */
+function mergeBatchResults<T>(
+  prepared: Prepared<T>[],
+  results: ReadonlyArray<unknown>,
+): { results: unknown[] } {
+  const merged: unknown[] = [];
+  let cursor = 0;
+  for (const entry of prepared) {
+    if ('failure' in entry) {
+      merged.push(entry.failure);
+      continue;
+    }
+    const result = results[cursor];
+    cursor += 1;
+    merged.push(result ?? fail('internal', 'agent control returned no result for this entry'));
+  }
+  return { results: merged };
+}
+
+const agentLifecycleItemSchema = {
+  type: 'object',
+  required: ['ok'],
+  properties: {
+    ok: { type: 'boolean' },
+    // create / update 成功条目
+    agent: agentStatusSchema,
+    changed: stringListSchema,
+    applies_to: { type: 'string', enum: ['next_body'] },
+    // close 成功条目
+    agent_id: { type: 'string' },
+    closed: { type: 'boolean' },
+    // 失败条目
+    code: { type: 'string' },
+    error: { type: 'string' },
+  },
+};
+
+const agentLifecycleResultSchema = {
+  type: 'object',
+  required: ['results'],
+  properties: {
+    results: { type: 'array', items: agentLifecycleItemSchema },
+  },
+};
 
 export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[] {
   return [
@@ -269,6 +410,258 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           throw new RpcError('not_found', `task not found: ${taskId}`, { task_id: taskId });
         }
         return { task: publicTask(task) };
+      },
+    },
+    {
+      /**
+       * `agents.create`（0.25，write）：批量创建成员。
+       *
+       * - team-scoped control token 不能创建 agent（逐条 `forbidden`，与 `teams.create` 一致）；
+       * - `team_id` 经注入的 `TeamControlLike.get` 解析 workspace 后传给 AgentService，
+       *   只绑定**已存在**的 Team，不隐式创建；绑定需要 `name`；
+       * - 缺省 `team_id` 时走 AgentService 的默认 workspace 规则。
+       *
+       * 结果与输入同序；单条失败不影响其它条目。
+       */
+      name: 'agents.create',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['agents'],
+        properties: {
+          agents: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', minLength: 1 },
+                model: { type: 'string', minLength: 1 },
+                system_prompt: { type: 'string' },
+                team_id: { type: 'string', minLength: 1 },
+                visibility: {
+                  type: 'string',
+                  enum: ['private', 'team', 'tenant'],
+                },
+              },
+            },
+          },
+        },
+      },
+      result_schema: agentLifecycleResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireAgentControl(deps.agent, ctx);
+        const entries = requireAgentEntries(params, 'agents.create');
+        const scope = teamScopeOf(ctx);
+        if (scope !== undefined) {
+          return {
+            results: entries.map(() => fail('forbidden', 'team-scoped token cannot create agents')),
+          };
+        }
+
+        // 同一请求内同一个 team_id 只解析一次；workspace 缺失按 not_found（不泄漏）。
+        const teamWorkspaces = new Map<string, Promise<string | undefined>>();
+        const resolveWorkspace = (
+          teamId: string,
+          teamControl: TeamControlLike | undefined,
+        ): Promise<string | undefined> => {
+          if (!teamControl || teamControl.tenantId !== ctx.tenantId) {
+            return Promise.resolve(undefined);
+          }
+          const cached = teamWorkspaces.get(teamId);
+          if (cached !== undefined) return cached;
+          const pending = teamControl
+            .get(teamId)
+            .then((detail) => detail?.team.workspace)
+            .catch(() => undefined);
+          teamWorkspaces.set(teamId, pending);
+          return pending;
+        };
+
+        const prepared = await Promise.all(
+          entries.map(async (entry): Promise<Prepared<AgentCreateLikeInput>> => {
+            const teamId = optionalEntryString(entry, 'team_id', 'agents.create');
+            if (teamId !== undefined) {
+              const workspace = await resolveWorkspace(teamId, deps.teams);
+              if (workspace === undefined) {
+                return { failure: fail('not_found', `Team not found: ${teamId}`) };
+              }
+              const name = optionalEntryString(entry, 'name', 'agents.create');
+              if (name === undefined) {
+                return {
+                  failure: fail('invalid_input', 'team_id requires name to bind a member'),
+                };
+              }
+              const model = optionalEntryString(entry, 'model', 'agents.create');
+              const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
+              const visibility = optionalVisibility(entry, 'agents.create');
+              return {
+                input: {
+                  name,
+                  workspace,
+                  ...(model !== undefined ? { model } : {}),
+                  ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
+                  ...(visibility !== undefined ? { visibility } : {}),
+                },
+              };
+            }
+            const name = optionalEntryString(entry, 'name', 'agents.create');
+            const model = optionalEntryString(entry, 'model', 'agents.create');
+            const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
+            const visibility = optionalVisibility(entry, 'agents.create');
+            return {
+              input: {
+                ...(name !== undefined ? { name } : {}),
+                ...(model !== undefined ? { model } : {}),
+                ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
+                ...(visibility !== undefined ? { visibility } : {}),
+              },
+            };
+          }),
+        );
+
+        const inputs = prepared
+          .filter((entry): entry is { input: AgentCreateLikeInput } => 'input' in entry)
+          .map((entry) => entry.input);
+        if (inputs.length === 0) return mergeBatchResults(prepared, []);
+        const batch = await control.create(inputs);
+        return mergeBatchResults(prepared, batch.results);
+      },
+    },
+    {
+      /**
+       * `agents.update`（0.25，write）：批量更新 name / model / system_prompt。
+       *
+       * - 每个条目至少给一个字段；条目并行，结果与输入同序；
+       * - team-scoped token 只能更新 `team_id` 与自身作用域相同的 agent（否则 `not_found`）；
+       * - 改名立即生效，唯一性与创建一致（同 Team present 唯一；unbound 为 tenant 唯一），
+       *   冲突返回稳定 `invalid_input`；
+       * - model / system_prompt 只写入成员记录，**下一次 spawn 的 Body** 才使用；
+       *   实际变化时成功条目带 `applies_to: 'next_body'`；
+       * - 服务发布 `agent.updated`，只带变化字段名，不带 prompt 正文。
+       */
+      name: 'agents.update',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['agents'],
+        properties: {
+          agents: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['agent_id'],
+              properties: {
+                agent_id: { type: 'string', minLength: 1 },
+                name: { type: 'string', minLength: 1 },
+                model: { type: 'string', minLength: 1 },
+                system_prompt: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      result_schema: agentLifecycleResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireAgentControl(deps.agent, ctx);
+        const entries = requireAgentEntries(params, 'agents.update');
+        const scope = teamScopeOf(ctx);
+
+        const prepared = await Promise.all(
+          entries.map(async (entry): Promise<Prepared<AgentUpdateLikeInput>> => {
+            const agentId = optionalEntryString(entry, 'agent_id', 'agents.update');
+            if (agentId === undefined) {
+              return { failure: fail('invalid_params', 'agent_id must be a non-empty string') };
+            }
+            const name = optionalEntryString(entry, 'name', 'agents.update');
+            const model = optionalEntryString(entry, 'model', 'agents.update');
+            const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.update');
+            if (name === undefined && model === undefined && systemPrompt === undefined) {
+              return {
+                failure: fail(
+                  'invalid_params',
+                  'at least one of name, model or system_prompt is required',
+                ),
+              };
+            }
+            if (scope !== undefined) {
+              const target = await control.get(agentId);
+              if (!target || target.team_id !== scope) {
+                return { failure: fail('not_found', `agent not found: ${agentId}`) };
+              }
+            }
+            return {
+              input: {
+                agent_id: agentId,
+                ...(name !== undefined ? { name } : {}),
+                ...(model !== undefined ? { model } : {}),
+                ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
+              },
+            };
+          }),
+        );
+
+        const inputs = prepared
+          .filter((entry): entry is { input: AgentUpdateLikeInput } => 'input' in entry)
+          .map((entry) => entry.input);
+        if (inputs.length === 0) return mergeBatchResults(prepared, []);
+        const batch = await control.update(inputs);
+        return mergeBatchResults(prepared, batch.results);
+      },
+    },
+    {
+      /**
+       * `agents.close`（0.25，write）：批量关闭成员。
+       *
+       * - team-scoped token 只能关闭 `team_id` 与自身作用域相同的 agent（否则 `not_found`）；
+       * - 成功条目 `{ ok: true, agent_id, closed: true }`，与输入同序；
+       * - 与 AgentService.close 批量语义一致：重复 close 幂等，单条失败不影响其它条目。
+       */
+      name: 'agents.close',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['agents'],
+        properties: {
+          agents: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['agent_id'],
+              properties: {
+                agent_id: { type: 'string', minLength: 1 },
+              },
+            },
+          },
+        },
+      },
+      result_schema: agentLifecycleResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireAgentControl(deps.agent, ctx);
+        const entries = requireAgentEntries(params, 'agents.close');
+        const scope = teamScopeOf(ctx);
+
+        const prepared = await Promise.all(
+          entries.map(async (entry): Promise<Prepared<string>> => {
+            const agentId = optionalEntryString(entry, 'agent_id', 'agents.close');
+            if (agentId === undefined) {
+              return { failure: fail('invalid_params', 'agent_id must be a non-empty string') };
+            }
+            if (scope !== undefined) {
+              const target = await control.get(agentId);
+              if (!target || target.team_id !== scope) {
+                return { failure: fail('not_found', `agent not found: ${agentId}`) };
+              }
+            }
+            return { input: agentId };
+          }),
+        );
+
+        const ids = prepared
+          .filter((entry): entry is { input: string } => 'input' in entry)
+          .map((entry) => entry.input);
+        if (ids.length === 0) return mergeBatchResults(prepared, []);
+        const batch = await control.close(ids);
+        return mergeBatchResults(prepared, batch.results);
       },
     },
   ];

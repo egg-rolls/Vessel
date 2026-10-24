@@ -41,6 +41,10 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   // 0.14 P0（DECISION-025 §1.4）：agents 注册表。
   'agents.list': 'read',
   'agents.get': 'read',
+  // 0.25：canonical agent 生命周期（批量；team-scoped token 不能 create）。
+  'agents.create': 'write',
+  'agents.update': 'write',
+  'agents.close': 'write',
   // 0.15（DECISION-030 E5）：canonical agent 树与只读任务板。
   'agents.tree': 'read',
   'tasks.list': 'read',

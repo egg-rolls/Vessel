@@ -25,7 +25,8 @@ export interface ProtocolInfo {
 /** 本进程节点的公开信息 */
 export interface NodeInfo {
   node_id: string;
-  name?: string;
+  /** 人类可读展示名（0.25）；缺省回退 `node_id`。 */
+  name: string;
   pid: number;
   started_at: number;
   endpoint: string;

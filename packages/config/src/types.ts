@@ -122,6 +122,11 @@ export interface HostConfig {
   enabled?: boolean;
   /** nodeId 唯一来源；缺省进程内生成 */
   nodeId?: string;
+  /**
+   * 节点展示名（0.25）；缺省按 hostname 派生。
+   * 只影响展示，寻址 / 去重仍用 `nodeId`。
+   */
+  nodeName?: string;
   /** Host 全局预算；缺省关闭 */
   limits?: UsageLimitsConfig;
 }

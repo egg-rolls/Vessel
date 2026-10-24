@@ -66,6 +66,8 @@ export interface HubSnapshotFrame {
   protocol: typeof HUB_PROTOCOL;
   dialer: HubDialer;
   node_id: string;
+  /** 节点展示名（0.25 additive；旧节点可缺省）。 */
+  name?: string;
   hub_id: string;
   incarnation: string;
   /** 单节点、单次进程内单调；重启由 incarnation 区分。 */

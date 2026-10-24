@@ -37,6 +37,8 @@ export type HubControlStatus = Extract<
 /** 已接受的 snapshot（元数据；与 `HubSnapshotFrame` 字段对齐）。 */
 export interface HubControlSnapshot {
   node_id: string;
+  /** 节点展示名（0.25 additive）。 */
+  name?: string;
   hub_id: string;
   incarnation: string;
   revision: number;
@@ -310,6 +312,7 @@ export function createHubControlClient(options: HubControlClientOptions): HubCon
 
     const snapshot: HubControlSnapshot = {
       node_id: frame.node_id,
+      ...(typeof frame.name === 'string' && frame.name !== '' ? { name: frame.name } : {}),
       hub_id: frame.hub_id,
       incarnation,
       revision: Math.floor(revision),

@@ -139,3 +139,28 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
   （不回滚、不关闭新 Agent）。
 - **兼容**：快照仍 v2，无迁移；`DispatchResult.resolution` 增加 `'forked'`，
   rejected code 增加 `'fork_failed'`；`TeamSystemEvent` 增加 `'fork'`（开放字符串值）。
+
+## Addendum（0.25 canonical agent 生命周期）
+
+> 本节只追加当前事实，不改写上面 S1 ~ S4 / fork 当时的结论。
+
+- **canonical 51 → 54**：新增 `agents.create` / `agents.update` / `agents.close`
+  （permission `write`）。三者都是批量契约，单条调用 = 单元素数组；参数为
+  `{ agents: [...] }`，结果为 `{ results: [...] }`，与输入同序、单条失败互不影响
+  （与 `AgentService.new` / `close` 的批量语义一致）。
+- **create**：team-scoped control token 逐条 `forbidden`（与 `teams.create` 一致）。
+  `team_id` 只解析**已存在** Team 的 workspace（经 `TeamControlLike.get`），再连同
+  `name` 传给 `AgentService.new`；不隐式创建 Team，绑定需要 `name`。缺省 `team_id`
+  走 service 的默认 workspace 规则。
+- **update**：新增 `AgentService.update`（单条 + `{ updates: [...] }` 批量）。改名立即生效，
+  唯一性与创建一致（同 Team present 唯一；unbound 为 tenant 唯一），冲突为稳定
+  `invalid_input`。`model` / `systemPrompt` 只写入记录，由**下一次 spawn 的 Body** 使用，
+  不重建当前 Body；实际变化时结果带 `applies_to: 'next_body'`。service 发布
+  `agent.updated`，payload 只带变化字段名，绝不带 prompt 正文。
+- **close**：team-scoped token 只能关闭 `team_id` 与作用域相同的成员（否则逐条
+  `not_found`）；成功条目 `{ ok: true, agent, agent_id, closed: true }`（`agent` 为关闭后的状态）。
+- **注入面**：`packages/serve` 只依赖结构化 `AgentControlLike`
+  （`create` / `update` / `close` / `get`），app 侧适配 `AgentService`。handler 不依赖
+  WS 连接 / `ctx.reply`，后续 loopback owner 端点可用合成 principal
+  `{ kind: 'owner', tenant_id, scope: 'admin' }` 复用同一套 handler。
+- **未实现**：owner 端点收口（本切片不建新传输）；Web UI 的创建 / 编辑 / 关闭入口。

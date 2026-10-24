@@ -1,12 +1,13 @@
 /**
- * Agents 域（0.24 Web IA）：跨节点 Team roster 的全局只读视图。
+ * Agents 域：跨节点 roster + 详情 / 编辑 / Create / Close。
  *
- * - 数据只来自每节点的 `teams.list` + `teams.get`（经 `fetchNodeRoster`）；
- * - 过滤状态只存在 URL query 中，组件不另存副本；
- * - 节点级失败独立展示，不阻断其它节点。
+ * - 列表数据来自每节点的 `teams.list` + `teams.get`（经 `fetchNodeRoster`）；
+ * - CRUD 走 canonical `agents.create|update|close`（单条批量形状，失败严格上报）；
+ * - 详情 / 编辑是 `#/agents/<nodeKey>/<agentId>[/edit]`，查询串保留列表过滤；
+ * - 名称优先，缺失回退短 id；原始 agent_id 只在 Advanced details 出现。
  */
-import { type ReactNode, useMemo } from 'react';
-import type { Route } from '../../app/router';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { formatRoute, type Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
@@ -20,9 +21,22 @@ import {
   filterRosterAgents,
   flattenRoster,
   type NodeRoster,
+  type RosterAgent,
 } from '../../gateway/team-roster';
-import { t } from '../../i18n';
+import type { TeamSummary } from '../../gateway/types';
+import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
+import { AgentCreateDialog } from './AgentCreateDialog';
+import { AgentDetailView } from './AgentDetailView';
+import { AgentEditView } from './AgentEditView';
+import { agentDisplayName, filterAgentsByQuery } from './agent-search';
+import {
+  type AgentHashTarget,
+  agentDetailHash,
+  agentEditHash,
+  agentHashTarget,
+  withQuery,
+} from './agent-url';
 
 export interface AgentsViewProps {
   route: Extract<Route, { domain: 'agents' }>;
@@ -57,11 +71,31 @@ function withFilter(route: AgentRoute, key: FilterKey, value: string): AgentRout
   return next;
 }
 
+/** 当前列表过滤的 query 串（不含 `?`），用于详情深链往返。 */
+function filterQueryOf(route: AgentRoute): string {
+  const [, query = ''] = formatRoute(route).split('?', 2);
+  return query;
+}
+
 export function AgentsView({ route, navigate }: AgentsViewProps) {
+  useLocale();
   const { epoch, tenantEpoch, tenantId } = useConnection();
   const { nodes, teamControl, hasTokenFor } = useNodes();
+  const [query, setQuery] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [target, setTarget] = useState<AgentHashTarget | undefined>(() =>
+    agentHashTarget(window.location.hash),
+  );
   // 额外节点各自带凭据；当前连接无 token 时不应屏蔽其它节点。
   const anyNodeToken = nodes.some((node) => hasTokenFor(node));
+  const writableNodes = nodes.filter((node) => hasTokenFor(node));
+  const filterQuery = filterQueryOf(route);
+
+  useEffect(() => {
+    const sync = () => setTarget(agentHashTarget(window.location.hash));
+    window.addEventListener('hashchange', sync);
+    return () => window.removeEventListener('hashchange', sync);
+  }, []);
 
   const nodeKeys = nodes.map((node) => nodeKeyOf(node)).join(',');
   const resource = useResource({
@@ -74,35 +108,143 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   const loadedRosters = resourceData(resource.state);
   const loaded = loadedRosters !== undefined;
   const rosters = loadedRosters ?? [];
+  const rostersByNode = useMemo(
+    () => new Map(rosters.map((roster) => [nodeKeyOf(roster.node), roster])),
+    [rosters],
+  );
   const agents = useMemo(() => flattenRoster(rosters), [rosters]);
   const options = useMemo(() => agentFilterOptions(agents), [agents]);
-  const filtered = useMemo(() => filterRosterAgents(agents, route), [agents, route]);
+  const filtered = useMemo(
+    () => filterAgentsByQuery(filterRosterAgents(agents, route), query),
+    [agents, route, query],
+  );
   const failed = rosters.filter((roster) => !roster.ok);
   const allFailed = rosters.length > 0 && failed.length === rosters.length;
   const partialErrors = rosters.reduce((sum, roster) => sum + roster.partialErrors, 0);
-  const hasFilters = Boolean(route.nodeKey || route.teamId || route.state || route.presence);
-
-  const header = (
-    <PageHeader
-      title={t('agents.title')}
-      description={t('agents.description')}
-      tenantId={tenantId}
-    />
+  const hasFilters = Boolean(
+    route.nodeKey || route.teamId || route.state || route.presence || query.trim(),
   );
+
+  // 归档 Team 只读，不能再绑定新 Agent。
+  const teamsForNode = (nodeKey: string): readonly TeamSummary[] =>
+    rostersByNode.get(nodeKey)?.teams.filter((team) => team.archived_at === undefined) ?? [];
+
+  const openAgent = (nodeKey: string, agentId: string) => {
+    window.location.hash = withQuery(agentDetailHash(nodeKey, agentId), filterQuery);
+  };
+  const openEdit = (nodeKey: string, agentId: string) => {
+    window.location.hash = withQuery(agentEditHash(nodeKey, agentId), filterQuery);
+  };
+  const backToList = () => {
+    window.location.hash = filterQuery ? `#/agents?${filterQuery}` : '#/agents';
+  };
+
+  const clearFilters = () => {
+    setQuery('');
+    navigate({ domain: 'agents' });
+  };
 
   if (!anyNodeToken) {
     return (
-      <div className="agents-view">
+      <div className="domain-view">
         <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
       </div>
     );
   }
 
+  // ── Agent 详情 / 编辑 ───────────────────────────────
+  if (target) {
+    const targetNode = nodes.find((node) => nodeKeyOf(node) === target.nodeKey);
+    if (!targetNode) {
+      return (
+        <div className="domain-view">
+          <PageHeader title={t('agents.title')} tenantId={tenantId} />
+          <div className="domain-content">
+            <NotEnabledState
+              title={t('agents.error.nodeMissing')}
+              action={<Button onClick={backToList}>{t('agents.back')}</Button>}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    const roster = rostersByNode.get(target.nodeKey);
+    const targetAgent: RosterAgent | undefined = roster
+      ? flattenRoster([roster]).find((item) => item.member.agent_id === target.agentId)
+      : undefined;
+
+    if (!loaded) {
+      return (
+        <div className="domain-view">
+          <PageHeader title={t('agents.title')} tenantId={tenantId} />
+          <div className="domain-content">
+            <LoadingState label={t('agents.loadingRosters')} rows={2} />
+          </div>
+        </div>
+      );
+    }
+
+    if (!targetAgent) {
+      return (
+        <div className="domain-view">
+          <PageHeader title={t('agents.title')} tenantId={tenantId} />
+          <div className="domain-content">
+            {roster && !roster.ok ? (
+              <NotEnabledState title={t('teams.error.notEnabled')} reason={nodeErrorText(roster)} />
+            ) : (
+              <NotEnabledState
+                title={t('agents.error.notFound')}
+                action={<Button onClick={backToList}>{t('agents.back')}</Button>}
+              />
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (target.mode === 'edit') {
+      return (
+        <AgentEditView
+          node={targetNode}
+          agent={targetAgent}
+          onBack={() => openAgent(target.nodeKey, target.agentId)}
+          onSaved={() => resource.reload()}
+        />
+      );
+    }
+
+    return (
+      <AgentDetailView
+        node={targetNode}
+        agent={targetAgent}
+        onBack={backToList}
+        onEdit={() => openEdit(target.nodeKey, target.agentId)}
+        onSaved={() => resource.reload()}
+        onOpenTeam={() =>
+          navigate({
+            domain: 'teams',
+            nodeKey: target.nodeKey,
+            teamId: targetAgent.team.team_id,
+            agentId: target.agentId,
+          })
+        }
+        onOpenSession={() => {
+          const sessionId = targetAgent.member.session_id;
+          if (sessionId) navigate({ domain: 'chat', sessionId });
+        }}
+      />
+    );
+  }
+
+  // ── 列表 ────────────────────────────────────────────
   if (nodes.length === 0) {
     return (
-      <div className="agents-view">
-        {header}
-        <EmptyState title={t('agents.empty')} description={t('agents.emptyHint')} />
+      <div className="domain-view">
+        <PageHeader title={t('agents.title')} tenantId={tenantId} />
+        <div className="domain-content">
+          <EmptyState title={t('agents.empty')} />
+        </div>
       </div>
     );
   }
@@ -119,80 +261,82 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
       />
     );
   } else if (allFailed) {
-    // 全部节点失败：上面的节点级错误已给出原因，不再叠一个误导性的空态。
     body = null;
   } else if (agents.length === 0) {
-    body = <EmptyState title={t('agents.empty')} description={t('agents.emptyHint')} />;
+    body = <EmptyState title={t('agents.empty')} />;
   } else if (filtered.length === 0) {
     body = (
       <EmptyState
         title={t('agents.empty')}
-        description={t('agents.emptyHint')}
-        action={
-          <Button onClick={() => navigate({ domain: 'agents' })}>{t('agents.filter.clear')}</Button>
-        }
+        action={<Button onClick={clearFilters}>{t('agents.filter.clear')}</Button>}
       />
     );
   } else {
     body = (
-      <div className="agents-table">
-        <div className="agents-head" aria-hidden="true">
-          <span>{t('agents.column.agent')}</span>
-          <span>{t('agents.column.node')}</span>
-          <span>{t('agents.column.team')}</span>
-          <span>{t('agents.column.state')}</span>
-          <span>{t('agents.column.presence')}</span>
-        </div>
-        <ul className="agents-list">
-          {filtered.map((agent) => {
-            const rowKey = `${nodeKeyOf(agent.node)}:${agent.team.team_id}:${agent.member.agent_id}`;
-            const name = agent.member.name?.trim() || agent.member.agent_id;
-            const presence =
-              agent.member.presence === 'live'
-                ? t('agents.presence.live')
-                : t('agents.presence.gone');
-            return (
-              <li className="agents-item" key={rowKey}>
-                <button
-                  type="button"
-                  className="agents-row"
-                  title={t('agents.open')}
-                  onClick={() =>
-                    navigate({
-                      domain: 'teams',
-                      nodeKey: nodeKeyOf(agent.node),
-                      teamId: agent.team.team_id,
-                      agentId: agent.member.agent_id,
-                    })
-                  }
+      <ul className="net-list">
+        {filtered.map((agent) => {
+          const rowKey = `${nodeKeyOf(agent.node)}:${agent.team.team_id}:${agent.member.agent_id}`;
+          const name = agentDisplayName(agent.member);
+          const presence =
+            agent.member.presence === 'live'
+              ? t('agents.presence.live')
+              : t('agents.presence.gone');
+          return (
+            <li className="net-row" key={rowKey}>
+              <div className="net-row-main">
+                <span className="net-row-title">{name}</span>
+                <span className="net-row-sub">
+                  {agent.node.name} · {agent.team.name || agent.team.team_id}
+                </span>
+              </div>
+              <StatusChip status={agent.member.state} />
+              <span className={`net-presence agents-presence-${agent.member.presence}`}>
+                <span className="net-presence-dot" aria-hidden="true" />
+                {presence}
+              </span>
+              <div className="net-row-actions">
+                <Button
+                  size="small"
+                  onClick={() => openAgent(nodeKeyOf(agent.node), agent.member.agent_id)}
                 >
-                  <span className="agents-agent">{name}</span>
-                  <span className="agents-node">{agent.node.name}</span>
-                  <span className="agents-team">{agent.team.name || agent.team.team_id}</span>
-                  <span className="agents-state">
-                    <StatusChip status={agent.member.state} />
-                  </span>
-                  <span className={`agents-presence agents-presence-${agent.member.presence}`}>
-                    <span className="agents-presence-dot" aria-hidden="true" />
-                    {presence}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
+                  {t('agents.open')}
+                </Button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     );
   }
 
   return (
-    <div className="agents-view">
-      {header}
-      <div className="agents-toolbar">
-        <label className="agents-filter">
-          <span>{t('agents.filter.node')}</span>
+    <div className="domain-view">
+      <PageHeader
+        title={t('agents.title')}
+        tenantId={tenantId}
+        actions={
+          <Button
+            variant="primary"
+            disabled={writableNodes.length === 0}
+            onClick={() => setCreateOpen(true)}
+          >
+            {t('agents.create')}
+          </Button>
+        }
+      />
+      <div className="domain-content">
+        <div className="filter-bar net-toolbar">
+          <input
+            className="input search-input"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t('agents.search')}
+            aria-label={t('agents.search')}
+            spellCheck={false}
+          />
           <select
-            className="input"
+            className="input net-select"
             value={route.nodeKey ?? ''}
             aria-label={t('agents.filter.node')}
             onChange={(event) => navigate(withFilter(route, 'nodeKey', event.target.value))}
@@ -204,11 +348,8 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
               </option>
             ))}
           </select>
-        </label>
-        <label className="agents-filter">
-          <span>{t('agents.filter.team')}</span>
           <select
-            className="input"
+            className="input net-select"
             value={route.teamId ?? ''}
             aria-label={t('agents.filter.team')}
             onChange={(event) => navigate(withFilter(route, 'teamId', event.target.value))}
@@ -220,11 +361,8 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
               </option>
             ))}
           </select>
-        </label>
-        <label className="agents-filter">
-          <span>{t('agents.filter.state')}</span>
           <select
-            className="input"
+            className="input net-select"
             value={route.state ?? ''}
             aria-label={t('agents.filter.state')}
             onChange={(event) => navigate(withFilter(route, 'state', event.target.value))}
@@ -236,11 +374,8 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
               </option>
             ))}
           </select>
-        </label>
-        <label className="agents-filter">
-          <span>{t('agents.filter.presence')}</span>
           <select
-            className="input"
+            className="input net-select"
             value={route.presence ?? ''}
             aria-label={t('agents.filter.presence')}
             onChange={(event) => navigate(withFilter(route, 'presence', event.target.value))}
@@ -252,34 +387,44 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
               </option>
             ))}
           </select>
-        </label>
-        <span className="agents-count dim">
-          {t('agents.count', { shown: filtered.length, total: agents.length })}
-        </span>
-        {hasFilters && filtered.length > 0 && (
-          <Button size="small" onClick={() => navigate({ domain: 'agents' })}>
-            {t('agents.filter.clear')}
-          </Button>
-        )}
-      </div>
-
-      {(failed.length > 0 || partialErrors > 0) && (
-        <div className="agents-notices">
-          {failed.map((roster) => (
-            <p className="agents-node-error" role="alert" key={nodeKeyOf(roster.node)}>
-              <span className="agents-node-error-name mono">{roster.node.name}</span>
-              <span>{nodeErrorText(roster)}</span>
-            </p>
-          ))}
-          {partialErrors > 0 && (
-            <p className="agents-partial" role="status">
-              {t('agents.partialErrors', { count: partialErrors })}
-            </p>
+          <span className="net-count dim">
+            {t('agents.count', { shown: filtered.length, total: agents.length })}
+          </span>
+          {hasFilters && (
+            <Button size="small" onClick={clearFilters}>
+              {t('agents.filter.clear')}
+            </Button>
           )}
         </div>
-      )}
 
-      {body}
+        {(failed.length > 0 || partialErrors > 0) && (
+          <div className="agents-notices">
+            {failed.map((roster) => (
+              <p className="agents-node-error" role="alert" key={nodeKeyOf(roster.node)}>
+                <span className="agents-node-error-name mono">{roster.node.name}</span>
+                <span>{nodeErrorText(roster)}</span>
+              </p>
+            ))}
+            {partialErrors > 0 && (
+              <p className="agents-partial" role="status">
+                {t('agents.partialErrors', { count: partialErrors })}
+              </p>
+            )}
+          </div>
+        )}
+
+        {body}
+      </div>
+
+      {createOpen && (
+        <AgentCreateDialog
+          nodes={writableNodes}
+          teamsForNode={teamsForNode}
+          {...(route.nodeKey ? { initialNodeKey: route.nodeKey } : {})}
+          onClose={() => setCreateOpen(false)}
+          onSaved={() => resource.reload()}
+        />
+      )}
     </div>
   );
 }

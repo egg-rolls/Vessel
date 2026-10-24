@@ -1,471 +1,313 @@
 /**
- * Nodes → 单节点面板（0.24 Web IA）。
+ * Nodes：列表（搜索 / Add node / 移除额外节点）+ 单节点详情。
  *
- * 一个节点上的健康 / 实例信息 / Team 增删改 / Agent roster。
- * 数据只走 canonical RPC：`health.get`、`teams.list`、`teams.get`；
- * 写操作经 `TeamControl`，不在这里复制 Team 逻辑，也不新增 RPC。
+ * 列表按节点独立拉 `health.get`（状态 / 心跳 / 展示名）与 `teams.list`
+ * （Team / Agent / 在线计数）；一个节点失败不影响其它节点。
+ * 详情只读：健康与实例信息 + Teams / Agents 跳转，不再承载 Team CRUD。
  */
 import { type ReactNode, useMemo, useState } from 'react';
 import type { Route } from '../../app/router';
-import { ActionMenu } from '../../components/ActionMenu';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { PageHeader } from '../../components/PageHeader';
-import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
+import { EmptyState, ErrorState, LoadingState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { useToast } from '../../components/ToastProvider';
 import { Button } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
-import { fetchNodeRoster } from '../../gateway/team-roster';
-import type { TeamSummary } from '../../gateway/types';
+import type { HealthResponse } from '../../gateway/types';
+import { displayGatewayUrl } from '../../gateway/url';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
-import { TeamFormDialog } from './TeamFormDialog';
+import { AddNodeDialog } from './AddNodeDialog';
+import { matchesNodeQuery, nodeDisplayNames } from './display-names';
+import { NodeDetailView } from './NodeDetailView';
 
 type NodesRoute = Extract<Route, { domain: 'nodes' }>;
-type NodeForm = { mode: 'create' } | { mode: 'edit'; team: TeamSummary };
 
 export interface NodePanelViewProps {
   route: NodesRoute;
   navigate: (route: Route) => void;
 }
 
-/** `health.node.status` → StatusChip 的语义色。 */
-function statusOfNode(raw: string): string {
-  if (raw === 'busy') return 'running';
-  if (raw === 'draining') return 'cancelling';
-  return 'pending';
+interface NodeHealthEntry {
+  node: NodeView;
+  health?: HealthResponse;
+  error?: string;
+  updatedAt?: number;
 }
 
-/**
- * Team 列表 / roster 的失败映射：节点不暴露 teams.*（not_found / method_not_allowed）
- * 与无权限（forbidden）用 NotEnabledState，其它错误保留重试。
- */
-function ResourceFailure({
-  code,
-  message,
-  onRetry,
-}: {
-  code?: string;
-  message: string;
-  onRetry: () => void;
-}) {
-  if (code === 'not_found' || code === 'method_not_allowed' || code === 'not_enabled') {
-    return <NotEnabledState title={t('nodes.error.notEnabled')} reason={message} />;
-  }
-  if (code === 'forbidden') {
-    return <NotEnabledState title={t('nodes.error.forbidden')} reason={message} />;
-  }
-  return <ErrorState message={message} onRetry={onRetry} />;
+function pageOrigin(): string {
+  return typeof window === 'undefined' ? '' : window.location.origin;
 }
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+const NODES_POLL_MS = 15_000;
+const NODE_TEAMS_POLL_MS = 20_000;
 
 export function NodePanelView({ route, navigate }: NodePanelViewProps) {
   useLocale();
-  const { nodes } = useNodes();
   const { tenantId } = useConnection();
-  const nodeKey = route.nodeKey;
-  const node =
-    nodeKey === undefined ? undefined : nodes.find((item) => nodeKeyOf(item) === nodeKey);
+  const { nodes } = useNodes();
 
-  if (nodeKey === undefined) {
-    return (
-      <div className="settings-section">
-        <PageHeader
-          title={t('nodes.title')}
-          description={t('nodes.description')}
-          tenantId={tenantId}
-        />
-        {nodes.length === 0 ? (
-          <NotEnabledState title={t('nodes.empty')} reason={t('nodes.emptyHint')} />
-        ) : (
-          <section className="panel">
-            <h2 className="section-title">{t('nodes.picker.title')}</h2>
-            <ul className="nodes-picker">
-              {nodes.map((item) => (
-                <li className="nodes-picker-item" key={nodeKeyOf(item)}>
-                  <button
-                    type="button"
-                    className="nodes-picker-row"
-                    onClick={() => navigate({ domain: 'nodes', nodeKey: nodeKeyOf(item) })}
-                  >
-                    <span className="nodes-picker-name">{item.name}</span>
-                    {item.current && (
-                      <span className="nodes-current-badge">{t('nodes.current')}</span>
-                    )}
-                    <span className="nodes-picker-id mono dim">{item.nodeId ?? '—'}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-      </div>
-    );
+  if (route.nodeKey !== undefined) {
+    return <NodeDetailView nodeKey={route.nodeKey} navigate={navigate} />;
   }
 
-  if (!node) {
-    return (
-      <div className="settings-section">
-        <PageHeader
-          title={t('nodes.title')}
-          description={t('nodes.description')}
-          tenantId={tenantId}
-        />
-        <NotEnabledState
-          title={t('nodes.notFound')}
-          reason={t('nodes.notFoundHint')}
-          action={
-            <Button variant="primary" onClick={() => navigate({ domain: 'nodes' })}>
-              {t('nodes.back')}
-            </Button>
-          }
-        />
-      </div>
-    );
-  }
-
-  return <NodeDetail node={node} navigate={navigate} />;
+  return <NodesList nodes={nodes} tenantId={tenantId} navigate={navigate} />;
 }
 
-function NodeDetail({ node, navigate }: { node: NodeView; navigate: (route: Route) => void }) {
+function NodesList({
+  nodes,
+  tenantId,
+  navigate,
+}: {
+  nodes: readonly NodeView[];
+  tenantId: string | null;
+  navigate: (route: Route) => void;
+}) {
   useLocale();
-  const toast = useToast();
-  const { fetchHealth, teamControl, hasTokenFor } = useNodes();
-  const { epoch, tenantEpoch, tenantId, hello } = useConnection();
-  const nodeKey = nodeKeyOf(node);
-  const control = useMemo(() => teamControl(node), [teamControl, node]);
-  const hasToken = hasTokenFor(node);
+  const { epoch } = useConnection();
+  const { fetchHealth, removeNode } = useNodes();
+  const [query, setQuery] = useState('');
+  const [addOpen, setAddOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<NodeView | null>(null);
 
-  const [form, setForm] = useState<NodeForm | null>(null);
-  const [archiveTarget, setArchiveTarget] = useState<TeamSummary | null>(null);
-  const [archiving, setArchiving] = useState(false);
-  const [archiveError, setArchiveError] = useState<string | null>(null);
-
-  const health = useResource({
-    load: () => fetchHealth(node),
-    pollMs: 15_000,
-    deps: [epoch, nodeKey],
-  });
-  const teams = useResource({
-    load: () => control.listTeams(),
-    pollMs: 15_000,
-    deps: [epoch, tenantEpoch, nodeKey],
-  });
-  const roster = useResource({
-    load: () => fetchNodeRoster(node, control),
-    pollMs: 20_000,
-    deps: [epoch, tenantEpoch, nodeKey],
+  const nodeKeys = nodes.map((node) => nodeKeyOf(node)).join(',');
+  const healthResource = useResource({
+    // 逐节点 try/catch：一个节点不可达不拒绝整个列表。
+    load: () =>
+      Promise.all(
+        nodes.map(async (node): Promise<NodeHealthEntry> => {
+          try {
+            const health = await fetchHealth(node);
+            return { node, health, updatedAt: Date.now() };
+          } catch (error) {
+            return { node, error: messageOf(error) };
+          }
+        }),
+      ),
+    enabled: nodes.length > 0,
+    pollMs: NODES_POLL_MS,
+    deps: [epoch, nodeKeys],
   });
 
-  const healthData = resourceData(health.state);
-  const teamsData = resourceData(teams.state);
-  const rosterData = resourceData(roster.state);
+  const entries = resourceData(healthResource.state) ?? [];
+  const entryByKey = useMemo(
+    () => new Map(entries.map((entry) => [nodeKeyOf(entry.node), entry])),
+    [entries],
+  );
+  const displayNames = useMemo(
+    () =>
+      nodeDisplayNames(
+        nodes.map((node) => {
+          const entry = entryByKey.get(nodeKeyOf(node));
+          const healthName = entry?.health?.node.name;
+          return {
+            key: nodeKeyOf(node),
+            name: node.name,
+            url: node.url,
+            ...(node.nodeId ? { nodeId: node.nodeId } : {}),
+            ...(healthName ? { healthName } : {}),
+          };
+        }),
+        pageOrigin(),
+      ),
+    [nodes, entryByKey],
+  );
 
-  const healthFailed = health.state.status === 'error';
-  const healthLoading = !healthData && !healthFailed;
-  const healthStatus = healthFailed ? 'unreachable' : healthData ? 'connected' : 'pending';
-  const healthLabel = healthFailed
-    ? t('nodes.health.error')
-    : healthData
-      ? t('nodes.health.ok')
-      : t('nodes.health.loading');
-  const dataPlane = healthFailed
-    ? t('nodes.dataPlane.unreachable')
-    : healthData
-      ? t('nodes.dataPlane.direct')
-      : t('nodes.health.loading');
+  const visible = useMemo(
+    () =>
+      nodes.filter((node) => {
+        const key = nodeKeyOf(node);
+        return matchesNodeQuery(
+          displayNames.get(key) ?? node.name,
+          node.nodeId ?? key,
+          node.name,
+          query,
+        );
+      }),
+    [nodes, displayNames, query],
+  );
 
-  const teamsFailure =
-    teams.state.status === 'error' ? { code: teams.state.code, message: teams.state.error } : null;
-  const rosterFailure =
-    roster.state.status === 'error'
-      ? { code: roster.state.code, message: roster.state.error }
-      : rosterData && !rosterData.ok
-        ? { code: rosterData.code, message: rosterData.error ?? t('common.loadFailed') }
-        : null;
-  const rosters = rosterData?.ok ? rosterData.rosters : [];
-  const agentCount = rosters.reduce((total, entry) => total + entry.members.length, 0);
+  const openNode = (node: NodeView) => navigate({ domain: 'nodes', nodeKey: nodeKeyOf(node) });
 
-  const confirmArchive = async () => {
-    if (!archiveTarget) return;
-    setArchiving(true);
-    setArchiveError(null);
-    try {
-      await control.archiveTeam(archiveTarget.team_id);
-      toast.success(`${archiveTarget.name || archiveTarget.team_id}: ${t('nodes.teams.archived')}`);
-      setArchiveTarget(null);
-      teams.reload();
-      roster.reload();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setArchiveError(message);
-      toast.error(message);
-    } finally {
-      setArchiving(false);
-    }
-  };
-
-  let teamsBody: ReactNode;
-  if (teamsFailure) {
-    teamsBody = (
-      <ResourceFailure
-        code={teamsFailure.code}
-        message={teamsFailure.message}
-        onRetry={teams.reload}
+  let body: ReactNode;
+  if (nodes.length === 0) {
+    body = (
+      <EmptyState
+        title={t('nodes.empty')}
+        action={
+          <Button variant="primary" onClick={() => setAddOpen(true)}>
+            {t('hub.add.title')}
+          </Button>
+        }
       />
     );
-  } else if (!teamsData) {
-    teamsBody = <LoadingState label={t('common.loading')} rows={2} />;
-  } else if (teamsData.length === 0) {
-    teamsBody = (
-      <EmptyState title={t('nodes.teams.empty')} description={t('nodes.teams.emptyHint')} />
+  } else if (healthResource.state.status === 'error' && entries.length === 0) {
+    body = <ErrorState message={healthResource.state.error} onRetry={healthResource.reload} />;
+  } else if (entries.length === 0) {
+    body = <LoadingState label={t('common.loading')} rows={2} />;
+  } else if (visible.length === 0) {
+    body = (
+      <EmptyState
+        title={t('nodes.emptyFiltered', { query: query.trim() })}
+        action={
+          <Button
+            onClick={() => {
+              setQuery('');
+            }}
+          >
+            {t('team.list.clearSearch')}
+          </Button>
+        }
+      />
     );
   } else {
-    teamsBody = (
-      <ul className="nodes-list">
-        {teamsData.map((team) => (
-          <li className="nodes-row" key={team.team_id}>
-            <div className="nodes-row-main">
-              <span className="nodes-row-title">{team.name || team.team_id}</span>
-              <span className="nodes-row-sub mono dim">{team.team_id}</span>
-            </div>
-            <span
-              className="nodes-row-metric mono"
-              title={`${t('nodes.field.online')} / ${t('nodes.field.teams')}`}
-            >
-              {team.online_count ?? '—'}/{team.member_count}
-            </span>
-            {team.archived_at !== undefined && (
-              <span className="nodes-badge">{t('nodes.teams.archived')}</span>
-            )}
-            <span
-              className="nodes-row-actions"
-              title={!hasToken ? t('nodes.error.noTokenReason') : undefined}
-            >
-              <ActionMenu
-                label={team.name || team.team_id}
-                disabled={!hasToken}
-                items={[
-                  {
-                    id: 'edit',
-                    label: t('nodes.teams.edit'),
-                    disabled: !hasToken,
-                    onSelect: () => setForm({ mode: 'edit', team }),
-                  },
-                  {
-                    id: 'archive',
-                    label: t('nodes.teams.archive'),
-                    danger: true,
-                    disabled: !hasToken,
-                    onSelect: () => {
-                      setArchiveError(null);
-                      setArchiveTarget(team);
-                    },
-                  },
-                ]}
-              />
-            </span>
-          </li>
+    body = (
+      <ul className="net-list">
+        {visible.map((node) => (
+          <NodeRow
+            key={nodeKeyOf(node)}
+            node={node}
+            displayName={displayNames.get(nodeKeyOf(node)) ?? node.name}
+            entry={entryByKey.get(nodeKeyOf(node))}
+            onOpen={() => openNode(node)}
+            {...(node.current ? {} : { onRemove: () => setRemoveTarget(node) })}
+          />
         ))}
       </ul>
     );
   }
 
-  let agentsBody: ReactNode;
-  if (rosterFailure) {
-    agentsBody = (
-      <ResourceFailure
-        code={rosterFailure.code}
-        message={rosterFailure.message}
-        onRetry={roster.reload}
-      />
-    );
-  } else if (!rosterData) {
-    agentsBody = <LoadingState label={t('common.loading')} rows={2} />;
-  } else if (agentCount === 0) {
-    agentsBody = <EmptyState title={t('nodes.agents.empty')} />;
-  } else {
-    agentsBody = (
-      <>
-        {rosterData.partialErrors > 0 && (
-          <p className="nodes-note" role="status">
-            {t('agents.partialErrors', { count: rosterData.partialErrors })}
-          </p>
-        )}
-        {rosters.map((entry) => (
-          <div className="nodes-agent-group" key={entry.team.team_id}>
-            <h3 className="nodes-agent-group-title">
-              <span>{entry.team.name || entry.team.team_id}</span>
-              <span className="dim">
-                {t('nodes.agents.groupCount', { count: entry.members.length })}
-              </span>
-            </h3>
-            <ul className="nodes-list">
-              {entry.members.map((member) => (
-                <li
-                  className="nodes-row nodes-agent-row"
-                  key={`${entry.team.team_id}:${member.agent_id}`}
-                >
-                  <span className="nodes-row-title">{member.name ?? member.agent_id}</span>
-                  <span className="nodes-row-sub mono dim">{member.agent_id}</span>
-                  {member.state ? (
-                    <StatusChip status={member.state} />
-                  ) : (
-                    <span className="dim">—</span>
-                  )}
-                  <span className={`nodes-presence nodes-presence-${member.presence}`}>
-                    {t(`agents.presence.${member.presence}`)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </>
-    );
-  }
-
   return (
-    <div className="settings-section">
+    <div className="domain-view">
       <PageHeader
-        title={node.name}
-        description={t('nodes.description')}
+        title={t('nodes.title')}
         tenantId={tenantId}
-        actions={<Button onClick={() => navigate({ domain: 'nodes' })}>{t('nodes.back')}</Button>}
-      />
-
-      <section className="panel">
-        <h2 className="section-title">{t('nodes.section.health')}</h2>
-        <dl className="diag-list">
-          <dt>{t('nodes.field.status')}</dt>
-          <dd>
-            <StatusChip status={healthStatus} label={healthLabel} />
-          </dd>
-          <dt>{t('nodes.section.dataPlane')}</dt>
-          <dd>{dataPlane}</dd>
-        </dl>
-        <p className="nodes-derived dim">{t('nodes.dataPlane.derived')}</p>
-        {health.state.status === 'error' && (
-          <p className="field-error" role="alert">
-            {health.state.error}
-          </p>
-        )}
-      </section>
-
-      <section className="panel">
-        <h2 className="section-title">{t('nodes.section.instance')}</h2>
-        {healthData ? (
-          <dl className="diag-list">
-            <dt>{t('nodes.field.nodeId')}</dt>
-            <dd className="mono">{healthData.node.node_id || node.nodeId || '—'}</dd>
-            <dt>{t('nodes.field.status')}</dt>
-            <dd>
-              <StatusChip
-                status={statusOfNode(healthData.node.status)}
-                label={healthData.node.status}
-              />
-            </dd>
-            <dt>{t('nodes.field.pid')}</dt>
-            <dd className="mono">{healthData.node.pid}</dd>
-            <dt>{t('nodes.field.startedAt')}</dt>
-            <dd className="mono">{formatTimestamp(healthData.node.started_at) || '—'}</dd>
-            <dt>{t('nodes.field.endpoint')}</dt>
-            <dd className="mono">{healthData.node.endpoint}</dd>
-            <dt>{t('nodes.field.role')}</dt>
-            <dd className="mono">{healthData.node.role}</dd>
-            <dt>{t('nodes.field.protocol')}</dt>
-            <dd className="mono">
-              {healthData.protocol.name} v{healthData.protocol.version}
-            </dd>
-            <dt>{t('nodes.field.incarnation')}</dt>
-            <dd className="mono">
-              {node.current ? (
-                (hello?.incarnation ?? (
-                  <span className="dim">{t('nodes.incarnation.missing')}</span>
-                ))
-              ) : (
-                <span className="dim">{t('nodes.incarnation.missing')}</span>
-              )}
-            </dd>
-          </dl>
-        ) : healthLoading ? (
-          <LoadingState label={t('nodes.health.loading')} rows={2} />
-        ) : (
-          <p className="dim">—</p>
-        )}
-      </section>
-
-      <section className="panel">
-        <div className="panel-header nodes-panel-header">
-          <h2 className="section-title">{t('nodes.teams.title')}</h2>
-          <Button
-            variant="primary"
-            size="small"
-            onClick={() => setForm({ mode: 'create' })}
-            disabled={!hasToken}
-            title={!hasToken ? t('nodes.error.noTokenReason') : undefined}
-          >
-            {t('nodes.teams.create')}
+        actions={
+          <Button variant="primary" onClick={() => setAddOpen(true)}>
+            {t('hub.add.title')}
           </Button>
-        </div>
-        {!hasToken && (
-          <div className="nodes-token-warning" title={t('nodes.error.noToken')}>
-            <strong>{t('nodes.error.noToken')}</strong>
-            <span>{t('nodes.error.noTokenReason')}</span>
+        }
+      />
+      <div className="domain-content">
+        {nodes.length > 0 && (
+          <div className="filter-bar net-toolbar">
+            <input
+              className="input search-input"
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t('nodes.search')}
+              aria-label={t('nodes.search')}
+              spellCheck={false}
+            />
           </div>
         )}
-        {teamsBody}
-      </section>
+        {body}
+      </div>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="section-title">{t('nodes.agents.title')}</h2>
-        </div>
-        {agentsBody}
-      </section>
+      {addOpen && <AddNodeDialog onClose={() => setAddOpen(false)} />}
 
-      {form && (
-        <TeamFormDialog
-          mode={form.mode}
-          team={form.mode === 'edit' ? form.team : undefined}
-          control={control}
-          hasToken={hasToken}
-          onClose={() => setForm(null)}
-          onSaved={() => {
-            teams.reload();
-            roster.reload();
-          }}
-        />
-      )}
-
-      {archiveTarget && (
+      {removeTarget && (
         <ConfirmDialog
-          title={t('nodes.teams.archiveTitle')}
-          body={
-            <>
-              <p>{t('nodes.teams.archiveBody')}</p>
-              {archiveError && (
-                <p className="field-error" role="alert">
-                  {archiveError}
-                </p>
-              )}
-            </>
-          }
-          confirmLabel={t('common.archive')}
+          title={t('hub.remove.title')}
+          body={<p>{t('hub.remove.body')}</p>}
+          confirmLabel={t('common.remove')}
           danger
-          busy={archiving}
           onConfirm={() => {
-            void confirmArchive();
+            removeNode(removeTarget.name);
+            setRemoveTarget(null);
           }}
-          onCancel={() => {
-            if (archiving) return;
-            setArchiveTarget(null);
-            setArchiveError(null);
-          }}
+          onCancel={() => setRemoveTarget(null)}
         />
       )}
     </div>
+  );
+}
+
+function NodeRow({
+  node,
+  displayName,
+  entry,
+  onOpen,
+  onRemove,
+}: {
+  node: NodeView;
+  displayName: string;
+  entry: NodeHealthEntry | undefined;
+  onOpen: () => void;
+  onRemove?: () => void;
+}) {
+  useLocale();
+  const { epoch } = useConnection();
+  const { fetchTeams } = useNodes();
+  const key = nodeKeyOf(node);
+  const teamsResource = useResource({
+    load: () => fetchTeams(node),
+    pollMs: NODE_TEAMS_POLL_MS,
+    deps: [epoch, key],
+  });
+  const teams = resourceData(teamsResource.state);
+  const summary = teams
+    ? {
+        teams: teams.length,
+        agents: teams.reduce((sum, team) => sum + team.member_count, 0),
+        online: teams.reduce((sum, team) => sum + (team.online_count ?? 0), 0),
+      }
+    : null;
+
+  const status = entry?.health ? 'connected' : entry?.error ? 'unreachable' : 'pending';
+  const statusLabelValue = entry?.health
+    ? t('nodes.health.ok')
+    : entry?.error
+      ? t('nodes.health.error')
+      : t('nodes.health.loading');
+  const heartbeat = entry?.health
+    ? t('hub.nodes.heartbeat', {
+        time: formatTimestamp(entry.updatedAt) || t('nodes.health.loading'),
+      })
+    : entry?.error
+      ? t('nodes.health.error')
+      : t('nodes.health.loading');
+
+  return (
+    <li className="net-row net-node-row">
+      <div className="net-row-main">
+        <span className="net-row-title">
+          {displayName}
+          {node.current && <span className="net-badge">{t('nodes.current')}</span>}
+        </span>
+        <span className="net-row-sub mono">{displayGatewayUrl(node.url, pageOrigin())}</span>
+      </div>
+      <StatusChip status={status} label={statusLabelValue} />
+      <div className="net-row-meta">
+        <span>
+          <strong>{summary ? summary.teams : '—'}</strong> {t('nodes.field.teams')}
+        </span>
+        <span>
+          <strong>{summary ? summary.agents : '—'}</strong> {t('nodes.field.agents')}
+        </span>
+        <span>
+          <strong>{summary ? summary.online : '—'}</strong> {t('nodes.field.online')}
+        </span>
+        <span className="net-row-sub">{heartbeat}</span>
+      </div>
+      <div className="net-row-actions">
+        <Button size="small" onClick={onOpen}>
+          {t('hub.nodes.open')}
+        </Button>
+        {onRemove && (
+          <Button size="small" variant="dangerGhost" onClick={onRemove}>
+            {t('common.remove')}
+          </Button>
+        )}
+      </div>
+    </li>
   );
 }

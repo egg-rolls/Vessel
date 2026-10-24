@@ -30,6 +30,13 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <circle cx="10" cy="10" r="8" />
         </svg>
       );
+    case 'gateway':
+      return (
+        <svg {...common}>
+          <circle cx="10" cy="10" r="3" />
+          <path d="M10 2.5v4.5M10 13v4.5M2.5 10H7M13 10h4.5" />
+        </svg>
+      );
     case 'nodes':
       return (
         <svg {...common}>

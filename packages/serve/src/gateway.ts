@@ -66,6 +66,7 @@ import type { NodeTokenControlLike } from './node-token-control.js';
 
 export type { GatewayReloadResult } from './gateway/methods/admin.js';
 
+import type { AgentControlLike } from './agent-control.js';
 import { checkpointBelongsToTenant } from './gateway/methods/common.js';
 import {
   createConfigMethods,
@@ -251,6 +252,11 @@ export interface GatewayOptions {
    * 缺省 = `teams.*` 仍进 manifest，但 handler 返回 `not_found`。
    */
   teams?: TeamControlLike;
+  /**
+   * 0.25：canonical agent 生命周期控制面（app 注入 AgentService 适配器）。
+   * 缺省 = `agents.create|update|close` 仍进 manifest，但 handler 返回 `not_found`。
+   */
+  agent?: AgentControlLike;
   /**
    * S7：跨节点 federation 入站面（asm 归一化后注入，含已解析 peer token）。
    * 缺省 / `enabled: false` = `/v1/federation/messages` 返回 404。
@@ -760,7 +766,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     return {
       node_id: nodeId,
-      ...(opts.nodeName ? { name: opts.nodeName } : {}),
+      // 展示名总是字符串；未注入时回退 node_id（不改变寻址键）。
+      name: opts.nodeName !== undefined && opts.nodeName !== '' ? opts.nodeName : nodeId,
       pid: process.pid,
       started_at: startedAt,
       endpoint: `${scheme}://${hostname}:${actualPort}`,
@@ -1082,6 +1089,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       runs,
       queue: () => queue,
       defaultTenantId,
+      ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
+      ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
     }),
     // 0.19 S3：本地 Team 控制面（canonical teams.*；additive，排在表尾）。
     ...createTeamMethods({ teams: opts.teams }),
