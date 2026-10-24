@@ -433,3 +433,80 @@ describe('AgentService owner inbox', () => {
     expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('completed');
   });
 });
+
+describe('AgentService update (0.25)', () => {
+  it('renames immediately, keeps names unique and emits field names only', async () => {
+    const { service } = makeService();
+    const events: AgentEvent[] = [];
+    service.subscribe((event) => events.push(event));
+    const first = await service.new({ name: 'alpha' });
+    await service.new({ name: 'beta' });
+
+    const duplicate = await service
+      .update({ id: first.id, name: 'beta' })
+      .catch((error: unknown) => error);
+    expect(duplicate).toBeInstanceOf(AgentError);
+    expect((duplicate as AgentError).code).toBe('invalid_input');
+
+    const updated = await service.update({
+      id: first.id,
+      name: 'gamma',
+      model: 'model-2',
+      systemPrompt: 'prompt-secret',
+    });
+    expect(updated.agent.name).toBe('gamma');
+    expect(updated.changed).toEqual(['name', 'model', 'system_prompt']);
+    expect(updated.applies_to).toBe('next_body');
+
+    const event = events.find((entry) => entry.type === 'agent.updated');
+    expect(event).toMatchObject({
+      agent_id: first.id,
+      changed: ['name', 'model', 'system_prompt'],
+    });
+    expect(JSON.stringify(event)).not.toContain('prompt-secret');
+  });
+
+  it('does not touch the running body; new model applies to the next spawned Body', async () => {
+    const { service, runtime } = makeService();
+    const member = await service.new({ model: 'model-old', systemPrompt: 'prompt-old' });
+    expect(runtime.spawned[0]?.model).toBe('model-old');
+
+    const updated = await service.update({
+      id: member.id,
+      model: 'model-new',
+      systemPrompt: 'prompt-new',
+    });
+    expect(updated.applies_to).toBe('next_body');
+    expect(runtime.spawned).toHaveLength(1);
+    expect(runtime.spawned[0]?.model).toBe('model-old');
+    expect(runtime.spawned[0]?.system_prompt).toBe('prompt-old');
+
+    const rotated = await service.rotate({ to: member.id, startup_prompt: 'hello' });
+    expect(rotated.status).toBe('rotated');
+    expect(runtime.spawned).toHaveLength(2);
+    expect(runtime.spawned[1]?.model).toBe('model-new');
+    expect(runtime.spawned[1]?.system_prompt).toBe('prompt-new');
+  });
+
+  it('batch update keeps input order and applies successful entries', async () => {
+    const { service } = makeService();
+    const first = await service.new({ name: 'first' });
+    const second = await service.new({ name: 'second' });
+
+    const result = await service.update({
+      updates: [
+        { id: first.id, name: 'first-renamed' },
+        { id: 'missing', name: 'nope' },
+        { id: second.id, model: 'model-2' },
+      ],
+    });
+
+    expect(result.results.map((entry) => entry.ok)).toEqual([true, false, true]);
+    const failed = result.results[1];
+    expect(failed?.ok === false ? failed.code : undefined).toBe('unknown_member');
+    const renamed = result.results[0];
+    expect(renamed?.ok ? renamed.status.agent.name : undefined).toBe('first-renamed');
+    const statuses = await service.list({ viewer: 'main' });
+    expect(statuses.find((entry) => entry.id === first.id)?.name).toBe('first-renamed');
+  });
+});

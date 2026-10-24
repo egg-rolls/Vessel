@@ -41,6 +41,7 @@ import {
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
+import type { AgentControlLike } from '../packages/serve/src/index';
 import {
   type ConfigSnapshotLike,
   createGatewayEventHub,
@@ -51,6 +52,7 @@ import {
   type NodeTokenControlLike,
 } from '../packages/serve/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
+import { createAgentControl } from './agent-control';
 import { type AgentOwnerServer, startAgentOwnerServer } from './agent-owner-server';
 import { createAgentServiceWiring } from './agent-service-wiring';
 import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
@@ -254,6 +256,8 @@ export interface BootstrapResult {
     teamScope?: HubTeamScopeLike;
     /** S5：节点 token 控制面（同时供 resolveGatewayAuth 使用）。 */
     nodeTokens?: NodeTokenControlLike;
+    /** 0.25：canonical `agents.create|update|close` 注入面（gateway / 未来 owner 端点共用）。 */
+    control: AgentControlLike;
     dispose: () => Promise<void>;
   };
   /** 0.5：trace 控制面（disabled/off 或 connect 模式为 undefined） */
@@ -1200,6 +1204,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       hubControl: hubRuntime.hubControl,
       teamScope: hubRuntime.teamScope,
       nodeTokens: hubRuntime.nodeTokens,
+      control: createAgentControl(wiring.service, tenantId),
       dispose: async () => {
         // 先停注入，避免关闭过程中父 turn 再排空 owner 队列。
         wiring.injector.dispose();
