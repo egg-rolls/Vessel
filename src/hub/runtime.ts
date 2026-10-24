@@ -14,8 +14,10 @@
  * @module vessel/hub/runtime
  */
 
+import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Logger } from '@vessel-agent/core';
+import type { HubControlChange, HubNodeSnapshotInput } from '@vessel-agent/serve';
 import type { HubConfig, VesselConfig } from '../../packages/config/src/index';
 import { expandHome, resolveDataDir } from '../data-paths';
 import { resolveNodeId } from '../node-identity';
@@ -56,12 +58,26 @@ import {
   type HubNodeSnapshot,
   type HubNodeStatus,
   type HubTokenBrokerLike,
+  pairingIdFor,
   pairingSecretKey,
   type SecretStore,
 } from './types';
 
 /** 缺省 hub data dir（相对 home）。 */
 export const DEFAULT_HUB_DATA_DIR = '~/.vessel/hub';
+
+/** 单实例独占锁文件名（S10.2，位于 hub data dir 根）。 */
+export const HUB_LOCK_FILE = 'hub.lock';
+
+/** 本机节点目录刷新合并窗口。 */
+const LOCAL_NODE_REFRESH_MS = 250;
+
+/** `<hubDataDir>/hub.lock` 的内容；仅用于判定实例存活。 */
+export interface HubLockFile {
+  pid: number;
+  started_at: number;
+  url?: string;
+}
 
 /** 进程装配依赖；测试可注入 fake 实现，不启动真实网络。 */
 export interface HubRuntimeFactories {
@@ -77,6 +93,19 @@ export interface HubRuntimeFactories {
   createNodeCredentials?: () => Promise<HubNodeCredentialStoreLike>;
 }
 
+/**
+ * 同进程本机节点投影（S10.2）。
+ *
+ * gateway 与 hub 同进程时用它把自身目录写进 registry；只存白名单元数据，
+ * 不携带消息正文。
+ */
+export interface HubLocalNodeInput {
+  nodeId: string;
+  tenantId: string;
+  snapshot(): Promise<HubNodeSnapshotInput>;
+  subscribe?(listener: (change: HubControlChange) => void): () => void;
+}
+
 export interface StartHubRuntimeOptions {
   config: VesselConfig;
   /** CLI `--data-dir`；优先于 `config.hub.dataDir`。 */
@@ -86,6 +115,10 @@ export interface StartHubRuntimeOptions {
   logger?: Logger;
   now?: () => number;
   factories?: HubRuntimeFactories;
+  /** 提供时注册本机节点目录记录并跟随变化刷新。 */
+  localNode?: HubLocalNodeInput;
+  /** hub data dir 独占锁；默认 true（测试可显式关闭）。 */
+  singleInstance?: boolean;
 }
 
 export interface HubRuntime {
@@ -109,6 +142,123 @@ export class HubRuntimeError extends Error {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function errnoCode(error: unknown): unknown {
+  return typeof error === 'object' && error !== null
+    ? (error as { code?: unknown }).code
+    : undefined;
+}
+
+/** `process.kill(pid, 0)`：EPERM 表示进程存在但不可发信号，仍视为存活。 */
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errnoCode(error) === 'EPERM';
+  }
+}
+
+async function readHubLock(lockPath: string): Promise<HubLockFile | undefined> {
+  try {
+    const raw = await readFile(lockPath, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    const info = parsed as Partial<HubLockFile>;
+    if (typeof info.pid !== 'number') return undefined;
+    return {
+      pid: info.pid,
+      started_at: typeof info.started_at === 'number' ? info.started_at : 0,
+      ...(typeof info.url === 'string' ? { url: info.url } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+interface HubLockHandle {
+  release(): Promise<void>;
+  /** 服务绑定端口后补写 url（仅诊断；不影响单实例判定）。 */
+  setUrl(url: string): Promise<void>;
+}
+
+async function releaseHubLock(lockPath: string): Promise<void> {
+  const existing = await readHubLock(lockPath);
+  if (existing === undefined || existing.pid !== process.pid) return;
+  try {
+    await unlink(lockPath);
+  } catch (error) {
+    if (errnoCode(error) !== 'ENOENT') throw error;
+  }
+}
+
+/**
+ * 获取 `<hubDataDir>/hub.lock` 独占锁。
+ *
+ * 存活进程持锁 → `hub_already_running`；死进程 / 损坏锁视为陈旧并回收。
+ * 文件以 0600 创建，内容为 `{pid, started_at, url?}`。
+ */
+async function acquireHubLock(
+  dataDir: string,
+  url: string,
+  now: () => number,
+  logger: Logger | undefined,
+): Promise<HubLockHandle> {
+  const lockPath = path.join(dataDir, HUB_LOCK_FILE);
+  await mkdir(dataDir, { recursive: true });
+  const startedAt = now();
+  const body: HubLockFile = { pid: process.pid, started_at: startedAt };
+  if (url !== '') body.url = url;
+  const payload = `${JSON.stringify(body)}\n`;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await open(lockPath, 'wx', 0o600);
+      try {
+        await handle.writeFile(payload, 'utf8');
+      } finally {
+        await handle.close();
+      }
+      return {
+        release: () => releaseHubLock(lockPath),
+        async setUrl(nextUrl: string): Promise<void> {
+          const next: HubLockFile = { pid: process.pid, started_at: startedAt, url: nextUrl };
+          try {
+            const file = await open(lockPath, 'w', 0o600);
+            try {
+              await file.writeFile(`${JSON.stringify(next)}\n`, 'utf8');
+            } finally {
+              await file.close();
+            }
+          } catch {
+            // 诊断字段写入失败不影响运行。
+          }
+        },
+      };
+    } catch (error) {
+      if (errnoCode(error) !== 'EEXIST') throw error;
+      const existing = await readHubLock(lockPath);
+      if (existing !== undefined && isProcessAlive(existing.pid)) {
+        throw new HubRuntimeError(
+          'hub_already_running',
+          `hub data dir is already in use by pid ${existing.pid}: ${dataDir}`,
+        );
+      }
+      logger?.warn('hub.runtime.stale_lock_reclaimed', {
+        data_dir: dataDir,
+        pid: existing?.pid ?? null,
+      });
+      try {
+        await unlink(lockPath);
+      } catch (unlinkError) {
+        if (errnoCode(unlinkError) !== 'ENOENT') throw unlinkError;
+      }
+    }
+  }
+  throw new HubRuntimeError('hub_already_running', `hub data dir is already in use: ${dataDir}`);
 }
 
 function resolveHubDataDir(config: VesselConfig, explicit?: string): string {
@@ -175,8 +325,12 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   const createClient = factories.createControlClient ?? createHubControlClient;
   const clients = new Map<string, HubControlClient>();
   let server: HubServer | undefined;
+  let lock: HubLockHandle | undefined;
   let stopped = false;
   let unsubscribeRegistry: (() => void) | undefined;
+  let unsubscribeLocalNode: (() => void) | undefined;
+  let localNodeTimer: ReturnType<typeof setTimeout> | undefined;
+  let localNodeChain: Promise<void> = Promise.resolve();
 
   /** registry.patch 会忽略 undefined；这里补上“清空 last_error”。 */
   function patchRecord(pairingId: string, patch: HubNodePatch): HubNodeRecord | undefined {
@@ -398,7 +552,22 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     now: clock,
     nodeControl,
   };
-  server = createServer(serverOptions);
+  // S10.2：同一 hub data dir 只允许一个活实例。锁先于监听端口获取，
+  // 这样固定端口被既存实例占用时也能稳定返回 `hub_already_running`。
+  // url 在服务起来后补写；锁只用于存活判定，不承载协议状态。
+  if (options.singleInstance !== false) {
+    lock = await acquireHubLock(dataDir, '', clock, logger);
+  }
+
+  try {
+    server = createServer(serverOptions);
+    await lock?.setUrl(server.url);
+  } catch (error) {
+    const held = lock;
+    lock = undefined;
+    await held?.release();
+    throw error;
+  }
 
   // 启动恢复：上次的 healthy 不可信，先全部标 unreachable；再逐条读 view token。
   // node 拨号的记录不读 secret、不拨号，等待节点重连。
@@ -446,6 +615,77 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   }
   if (directoryChanged) server.publishDirectory();
 
+  // S10.2：同进程本机节点目录记录。只写白名单元数据（counts / teams / agents），
+  // 不落消息正文；没有 localNode 时行为不变。
+  const localNode = options.localNode;
+
+  function applyLocalNodeSnapshot(input: HubNodeSnapshotInput): void {
+    if (localNode === undefined) return;
+    registry.upsert({
+      pairing_id: pairingIdFor(localNode.nodeId, localNode.tenantId),
+      node_id: localNode.nodeId,
+      tenant_id: localNode.tenantId,
+      direction: 'node',
+      status: 'healthy',
+      last_seen: clock(),
+      truncated: input.truncated,
+      counts: input.counts,
+      teams: input.teams,
+      agents: input.agents,
+    });
+    server?.publishDirectory();
+  }
+
+  function refreshLocalNode(): Promise<void> {
+    if (localNode === undefined) return Promise.resolve();
+    localNodeChain = localNodeChain
+      .then(async () => {
+        if (stopped) return;
+        let input: HubNodeSnapshotInput;
+        try {
+          input = await localNode.snapshot();
+        } catch (error) {
+          logger?.warn('hub.runtime.local_snapshot_failed', { error: errorMessage(error) });
+          return;
+        }
+        if (stopped) return;
+        applyLocalNodeSnapshot(input);
+      })
+      .catch(() => undefined);
+    return localNodeChain;
+  }
+
+  function scheduleLocalRefresh(): void {
+    if (localNodeTimer !== undefined) return;
+    localNodeTimer = setTimeout(() => {
+      localNodeTimer = undefined;
+      void refreshLocalNode();
+    }, LOCAL_NODE_REFRESH_MS);
+    (localNodeTimer as { unref?: () => void }).unref?.();
+  }
+
+  if (localNode !== undefined) {
+    try {
+      unsubscribeLocalNode = localNode.subscribe?.((change) => {
+        if (stopped) return;
+        if (change.directoryChanged === true) scheduleLocalRefresh();
+        for (const pointer of change.pointers ?? []) {
+          server?.publishPointer({
+            node_id: localNode.nodeId,
+            team_id: pointer.team_id,
+            reason: pointer.reason,
+            ...(pointer.request_id !== undefined ? { request_id: pointer.request_id } : {}),
+            ts: pointer.ts,
+          });
+        }
+      });
+    } catch (error) {
+      logger?.warn('hub.runtime.local_subscribe_failed', { error: errorMessage(error) });
+    }
+    // 先订阅再取首次快照，避免两者之间的目录变化被漏掉。
+    await refreshLocalNode();
+  }
+
   unsubscribeRegistry = registry.subscribe((event) => {
     if (event.type !== 'remove') return;
     closeClient(event.pairing_id);
@@ -458,6 +698,12 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
+      if (localNodeTimer !== undefined) {
+        clearTimeout(localNodeTimer);
+        localNodeTimer = undefined;
+      }
+      unsubscribeLocalNode?.();
+      unsubscribeLocalNode = undefined;
       unsubscribeRegistry?.();
       unsubscribeRegistry = undefined;
       for (const client of clients.values()) client.close();
@@ -465,7 +711,12 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
       try {
         await server?.stop();
       } finally {
-        await registry.flush();
+        try {
+          await registry.flush();
+        } finally {
+          await lock?.release();
+          lock = undefined;
+        }
       }
     },
   };

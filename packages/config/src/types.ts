@@ -485,6 +485,8 @@ export interface HubListenConfig {
 export interface HubConfig {
   dataDir?: string;
   direction?: 'hub' | 'node';
+  /** gateway 启动时在同一 data dir 拉起本机 hub（回环）；缺省 true。 */
+  autoStart?: boolean;
   /** node → hub 出站：hub 基址（join 的缺省 URL）。 */
   url?: string;
   /** node → hub 出站：hub TLS CA 路径。 */

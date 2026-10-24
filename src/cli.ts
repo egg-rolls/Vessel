@@ -72,6 +72,7 @@ import { createGatewayReload, type GatewayReconfigureTarget } from './gateway-re
 import { buildGatewayControlPlane } from './gateway-wiring';
 import { installHeadlessPermissionAutoAllow, runHeadless } from './headless-runner';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
+import { type LocalHubHandle, startLocalHub } from './hub-local';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { ensureInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
@@ -675,6 +676,8 @@ async function runWithConfig(result: BootstrapResult) {
   let gateway: Gateway | null = null;
   /** S5.1：node → hub 出站；仅在 `hub.direction: node` 时启动。 */
   let hubNodeOutbound: StartedHubNodeOutbound | undefined;
+  /** S10.2：gateway 同进程本地 hub（回环）；`hub.autoStart !== false` 时启动。 */
+  let localHub: LocalHubHandle | undefined;
   /** A-6：--serve 时除 bootstrap 默认 tenant 外的执行面 */
   let tenantFactory: TenantRuntimeFactory | undefined;
   /** 0.18：tenant 事件流的唯一扇入面（shared 流已删除）。 */
@@ -1052,6 +1055,34 @@ async function runWithConfig(result: BootstrapResult) {
         }
       }
     }
+
+    // S10.2：gateway 同进程本地 hub。失败只告警，gateway 继续运行。
+    if (result.agent?.hubControl !== undefined) {
+      try {
+        localHub = await startLocalHub({
+          config,
+          gatewayDataDir: dataDir,
+          nodeId: result.nodeId,
+          tenantId: result.tenantId,
+          hubControl: result.agent.hubControl,
+          logger,
+        });
+        if (localHub.status === 'started') {
+          logger.info('hub.local.started', { url: localHub.url });
+        } else if (localHub.status === 'reused') {
+          logger.info('hub.local.reused', { reason: localHub.reason ?? 'hub_already_running' });
+        } else {
+          logger.info('hub.local.skipped', { reason: localHub.reason ?? 'unknown' });
+        }
+      } catch (error) {
+        logger.warn('hub.local.start_failed', {
+          node_id: result.nodeId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else if (config.hub?.autoStart !== false && config.hub?.direction !== 'node') {
+      logger.warn('hub.local.no_agent_projection', { node_id: result.nodeId });
+    }
   }
 
   if (gateway) {
@@ -1061,9 +1092,11 @@ async function runWithConfig(result: BootstrapResult) {
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
   // gateway.stop() 自带 interrupt('shutdown') + 5s drain，后续关闭传 drain:false。
   activeCleanup = async () => {
-    // 先停出站，避免 gateway drain 期间继续重连。
+    // 先停出站 / 本地 hub，避免 gateway drain 期间继续重连或刷新目录。
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
+    await localHub?.stop();
+    localHub = undefined;
     await shutdownServeStack({
       gateway,
       closeTenants: async (options) => {
@@ -1125,9 +1158,11 @@ async function runWithConfig(result: BootstrapResult) {
   // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）
   // → closeAll → shutdown；后两步 drain:false，避免重复限时等待。
   const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
-    // 先停出站，避免 gateway drain 期间继续重连。
+    // 先停出站 / 本地 hub，避免 gateway drain 期间继续重连或刷新目录。
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
+    await localHub?.stop();
+    localHub = undefined;
     await shutdownServeStack({
       gateway,
       closeTransport: async () => {},
