@@ -77,3 +77,121 @@
     grid-template-columns: 64px minmax(140px, 1fr) minmax(70px, 0.8fr);
   }
 }
+
+/* ─────────────────────────────────────────────────────────────
+   S9.4 多节点只读聚合：每个节点一个分组，独立失败 / 独立分页。
+   ───────────────────────────────────────────────────────────── */
+
+.attention-nodes {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.attention-node {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attention-node-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.attention-node-name {
+  font-weight: 600;
+}
+
+.attention-node-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.attention-node-total {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.attention-node-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-readonly {
+  margin: 0;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+/* Settings → Connection 的多节点只读区块（复用 attention.css 承载 S9.4 样式）。 */
+.multi-node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.multi-node-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.multi-node-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.multi-node-name {
+  font-weight: 600;
+}
+
+.multi-node-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.multi-node-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-node-head .btn {
+  margin-left: auto;
+}
+
+.multi-node-status {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.multi-node-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.multi-node-teams {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11.5px;
+}
