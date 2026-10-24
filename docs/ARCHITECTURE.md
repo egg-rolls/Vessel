@@ -2692,3 +2692,41 @@ interface LimitBlock {
   按需 `teams.list`（人类 token；不用 federation team-info）。
 - hub 目录只用于发现；Web 不消费 hub 数据面，也不经 hub 代理正文。
 - canonical 仍 **48**；不新增远程 agent 生命周期。
+
+## 49. 0.24.0 Web IA：Hub / Nodes / Teams / Agents（S10.4，已实现，未发布）
+
+### 49.1 路由与导航
+
+- 顶级区域：`#/hub`、`#/nodes[/:nodeKey]`、`#/teams[/:nodeKey/:teamId[/agents/:agentId]]`、
+  `#/agents[?node=&team=&state=&presence=]`；Chat / Runs / Observe / Integrations / Settings 保留。
+- `nodeKey = node.node_id ?? 配置名`；节点由 `NodeProvider` 统一派生，路由不携带 token。
+- 旧 `#/team/*` 域与 Settings → Nodes tab 删除（与顶级 Teams / Nodes 重复）；
+  pre-1.0 不提供兼容跳转。
+- 移动端底部仍 3 项 + More sheet；Network 四域进入 More。
+
+### 49.2 数据来源与凭据
+
+- Hub 状态来自 `config.get` 的 `hub` 段（`autoStart` 缺省 true、`direction`、`url`、`listen`），
+  **不新增 hub 健康 RPC**；配对 / join 只展示可复制的 CLI 命令，Web 不代管 hub token。
+- 每个节点用自己的人类 token 调 `health.get` / `teams.list` / `teams.get`；额外节点的
+  token 只在 sessionStorage，按调用时刻解析，不进入路由 / 日志 / 返回值。
+- `incarnation` 只从当前 WS `hello` 读取；额外节点显示不可读。
+- `data_plane` 在 Web 由 `health.get` 可达性推导（`direct` / `unreachable`），UI 明示是推导值。
+
+### 49.3 Team CRUD（Web）
+
+- Node 面板的 Create / Edit / Archive 走 canonical `teams.create` / `teams.update` /
+  `teams.archive`（DECISION-040），经单节点 `TeamControl`；当前节点复用 `GatewayClient`，
+  额外节点用同形状 HTTP 适配器，不复制 Team 逻辑。
+- `teams.update` 的空值语义：用户清空 nullable 字段发送 `null`，未改动字段省略；
+  workspace / team_id 不可改。
+- Archive 二次确认；有 present 成员时服务端拒绝，错误原文展示；
+  archived Team 在列表与群聊显示徽标，群聊输入禁用。
+- 无 token 时写操作全部禁用并显示原因；`forbidden` 单独提示。
+
+### 49.4 Agents
+
+- Agents 页是各节点 `teams.list` → `teams.get(members_limit=100)` 的只读聚合，
+  按 node / team / state / presence 过滤；过滤状态只存 URL。
+- 单节点失败只影响自己的分组；部分 Team 详情失败计数提示，不伪装成空 Team。
+- 不消费 federation `team-info`，不经 hub 代理，不引入远程 agent 生命周期。

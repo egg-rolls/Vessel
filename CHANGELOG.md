@@ -3,6 +3,40 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.24.0] - 2026-10-24
+
+> 0.24.0（基于 0.23.0，未发布）：S10 默认开启 / 本地 hub / Team CRUD / Web IA。
+> 未 tag、未 publish。
+
+### Added
+
+- **Web IA（S10.4）**：顶级区域 `Hub`（`#/hub`）、`Nodes`（`#/nodes/:nodeKey`）、
+  `Teams`（`#/teams/:nodeKey/:teamId`）、`Agents`（`#/agents`）；Chat / Runs / Observe /
+  Integrations / Settings 保留。
+- **Hub 页**：`config.get.hub` 推导未配置 / 本地 / 已加入三态；节点卡片（node_id、
+  health、team / agent / online 计数、心跳）；移除 Web 节点链接；Add node 展示
+  `vessel hub pair` / `hub node add` / `hub join-code` / `hub join` 可复制命令。
+- **Node 面板**：health / gateway 实例 / `incarnation`（仅当前 WS 节点）/ 推导的
+  `data_plane`；该节点 Teams 列表与 Agents 分组。
+- **Team CRUD UI**：Node 面板 Create / Edit / Archive 走 canonical
+  `teams.create` / `teams.update` / `teams.archive`；archive 二次确认、archived 徽标与只读
+  群聊、无 token 禁用写操作并说明原因。
+- **Teams 页**：跨节点 Team 卡片（node 徽标、archived、member / online、desc、
+  default_principal）；群聊与成员详情复用 `TeamChat` / `MemberDetail`，额外节点独立凭据。
+- **Agents 页**：各节点 roster 只读聚合，按 node / team / state / presence 过滤
+  （过滤状态只在 URL）；节点级失败与部分 Team 失败分别提示。
+
+### Changed
+
+- Team 群聊从 `#/team/*` 迁移到 `#/teams/:nodeKey/:teamId[/agents/:agentId]`；
+  路由中的节点键是 `node_id ?? 配置名`。
+- Web 多节点凭据规则不变：每节点人类 token 只存 sessionStorage，不进 URL / 日志。
+
+### Removed
+
+- 旧 Web `#/team/*` 路由域与 `Settings → Nodes` tab（分别由顶级 Teams / Nodes 取代）；
+  pre-1.0 不提供兼容跳转。
+
 ## [0.23.0] - 2026-10-24
 
 > 0.23.0（基于 `main` 0.22.1，未发布）：S9.4 多节点 attention + Q-swarm attention 修复。
