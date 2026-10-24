@@ -114,7 +114,7 @@ Vessel\                                    # 共享侧（git）
 
 ### 3.1 根目录
 
-只允许以下文件：`README.md`、`AGENTS.md`、`CLAUDE.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`CHANGELOG.md`、`LICENSE`、`.gitignore`、`.env.example`、构建/工具配置（`package.json`、`bun.lock`、`tsconfig.json`、`biome.json`）。
+只允许以下文件：`README.md`、`AGENTS.md`、`CLAUDE.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`CHANGELOG.md`、`LICENSE`、`.gitignore`、构建/工具配置（`package.json`、`bun.lock`、`tsconfig.json`、`biome.json`）。
 
 **禁止**：`HANDOFF-*.md`、`PLAN-*.md`、`REPORT-*.md`、`TODO.md`、`NOTES.md`、草稿文件、个人目录。
 
@@ -170,7 +170,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | `asm`   | D3 装配与配置                       | `src/**`、`packages/config/**`、`packages/permission/**`、`scripts/build.ts`、`examples/**`、根 `package.json`                                |
 | `tui`   | D4 终端产品                         | `packages/tui/**`                                                                                                                             |
 | `web`   | D5 远程控制面                       | `packages/serve/**`、`apps/web/**`                                                                                                            |
-| `gov`   | D6 工程治理                         | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`build.ts` 除外）、`.gitignore`、`.env.example` |
+| `gov`   | D6 工程治理                         | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`build.ts` 除外）、`.gitignore` |
 | `qa`    | 质量与交叉验证（staff，不是事业部） | 无独占写路径；只读审查、跑测试、写个人侧报告                                                                                                  |
 
 ### 4.2 版本、分支、worktree
@@ -210,7 +210,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | `asm`  | `src/**`、`packages/config/**`、`packages/permission/**`、`scripts/build.ts`、`examples/**`、根 `package.json`                                        | 所有上游包的公开导出                          |
 | `tui`  | `packages/tui/**`                                                                                                                                     | `packages/core`、`packages/config` 的公开接口 |
 | `web`  | `packages/serve/**`、`apps/web/**`                                                                                                                    | `packages/core` 的公开接口                    |
-| `gov`  | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`scripts/build.ts` 除外）、`.gitignore`、`.env.example` | 全部（只读审查，不改业务代码）                |
+| `gov`  | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`scripts/build.ts` 除外）、`.gitignore` | 全部（只读审查，不改业务代码）                |
 | `qa`   | 无（只读）                                                                                                                                            | 全部；输出到个人侧 reports / decisions        |
 
 规则：
