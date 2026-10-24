@@ -20,6 +20,7 @@ import {
   createInProcessMemberRuntime,
   createTeamService,
   DEFAULT_OWNER,
+  type FederationSendPort,
   FileTeamStore,
   type InProcessMemberRuntimeOptions,
   type MemberPermissionState,
@@ -91,6 +92,8 @@ export interface AgentServiceWiringOptions {
    * 仅当声明与 `agent.cwd` 归一化后精确相等时提供。
    */
   defaultWorkspace?: string;
+  /** 0.21：跨节点发送端口；只在 federation 启用时由 bootstrap 注入 */
+  federation?: FederationSendPort;
 }
 
 export interface AgentServiceWiring {
@@ -253,6 +256,7 @@ export async function createAgentServiceWiring(
     agent: service,
     store: teamStore,
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
+    ...(options.federation !== undefined ? { federation: options.federation } : {}),
   });
 
   // 成员 runtime 复制父 PluginHost 的 hooks；只有父 turn 才能排空 owner 队列。
@@ -273,7 +277,11 @@ export async function createAgentServiceWiring(
 
   return {
     service,
-    tool: createAgentTool(service, { ownerId, ownerSessionId: options.sessionId, team }),
+    tool: createAgentTool(service, {
+      ownerId,
+      ownerSessionId: options.sessionId,
+      team,
+    }),
     owner,
     ownerId,
     team,

@@ -189,7 +189,12 @@ export function createAgentTool(
       'Batch: new/close accept `members` and send accepts `messages`; entries run in ' +
       'parallel and return {results:[...]} in input order, each entry either its result ' +
       'or an error. ' +
-      'A failed entry does not abort the others; do not mix single fields with a batch.',
+      'A failed entry does not abort the others; do not mix single fields with a batch. ' +
+      'Cross-node replies: when a federated message arrives from <principal>@<node>:<team>, ' +
+      'reply with action=send and set to to that address; the runtime fills from with your ' +
+      'own <name>@<local node>:<team>, so a from field is neither accepted nor needed. ' +
+      'A member without a team cannot send to an address (no_team); the owner cannot either ' +
+      '(use the vessel federation post CLI).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -211,7 +216,13 @@ export function createAgentTool(
           description:
             'new: [{name?, model?, system_prompt?, visibility?}]; close: [member id or session id]',
         },
-        to: { type: 'string', description: 'send: member id or session id; rotate: target agent' },
+        to: {
+          type: 'string',
+          description:
+            'send: member id or session id, or a federated address ' +
+            '<principal>@<node_id>:<team_id> (any value containing @ is treated as an address); ' +
+            'rotate: target agent',
+        },
         content: { type: 'string', description: 'send/post: message text' },
         messages: { type: 'array', description: 'send: [{to, content}]' },
         member: { type: 'string', description: 'close: member id or session id' },
@@ -302,6 +313,17 @@ export function createAgentTool(
                 to,
                 content,
               });
+            }
+            // owner 没有本地 Team，无法构造 `<name>@<local node>:<team>`；
+            // 地址形式明确拒绝，绝不回落到 dispatch 或跨节点端口。
+            if (typeof to === 'string' && to.includes('@')) {
+              return {
+                status: 'rejected',
+                code: 'no_team',
+                reason:
+                  'owner has no local team; use vessel federation post --from owner@<node>:<team>',
+                logged: false,
+              };
             }
             return service.dispatch({ to, content, from: ownerId });
           };

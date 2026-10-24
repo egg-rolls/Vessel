@@ -23,6 +23,7 @@ import {
   type BudgetOverview,
   type BudgetStatusInput,
   DEFAULT_OWNER,
+  type FederationSendPort,
   MAX_MESSAGE_BYTES,
   type MemberStatus,
   type TeamAgentSendInput,
@@ -54,6 +55,8 @@ export interface TeamServiceOptions {
   now?: () => number;
   newId?: () => string;
   logger?: Logger;
+  /** 0.21：跨节点发送端口；缺失时地址形式返回 federation_unavailable */
+  federation?: FederationSendPort;
 }
 
 /** 系统消息固定英文文案（不含正文） */
@@ -101,6 +104,7 @@ export class DefaultTeamService implements AgentTeamService {
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly logger: Logger;
+  private readonly federation: FederationSendPort | undefined;
   private readonly unsubscribe: () => void;
   /** 指针事件监听者；绝不含正文（Web hub 用） */
   private readonly listeners = new Set<(event: TeamServiceEvent) => void>();
@@ -115,6 +119,7 @@ export class DefaultTeamService implements AgentTeamService {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
     this.logger = options.logger ?? NOOP_LOGGER;
+    this.federation = options.federation;
     this.unsubscribe = this.agent.subscribe((event) => this.onAgentEvent(event));
   }
 
@@ -143,12 +148,13 @@ export class DefaultTeamService implements AgentTeamService {
         ? await this.store.readLog(teamId)
         : await this.store.readLog(teamId, { limit: options.limit });
     return {
+      // 计数用完整 roster；窗口只裁剪返回的 members（DECISION-037 §7.1）。
       team: toTeamSummary(
         record,
         members.length,
         members.filter((member) => member.presence === 'live').length,
       ),
-      members,
+      members: windowRoster(members, options.members_limit),
       messages,
     };
   }
@@ -299,19 +305,22 @@ export class DefaultTeamService implements AgentTeamService {
     }
 
     // 2. 先写日志；失败直接抛错，绝不 dispatch。
+    // 日志 `to` 优先用解析出的 agent id；owner 日志标记（input.to）只进日志、绝不 dispatch。
     const messageId = this.newId();
     const ts = this.now();
     const kind: TeamPostResult['kind'] = mentions.length > 0 ? 'mention' : 'post';
+    const to = resolved.length > 0 ? [...resolved] : [...(input.to ?? [])];
     const entry: TeamLogEntry = {
       message_id: messageId,
       team_id: input.team_id,
       from,
-      to: [...resolved],
+      to,
       mentions: [...resolved],
       content,
       ts,
       kind,
       conversation_id: conversationId,
+      ...(input.federation !== undefined ? { federation: input.federation } : {}),
     };
     try {
       await this.store.appendLog(entry);
@@ -321,11 +330,22 @@ export class DefaultTeamService implements AgentTeamService {
     this.emit({ team_id: input.team_id, kind, message_id: messageId });
 
     // 3. 日志已落盘后再并行投递；单条失败不影响其它条目。
+    // 跨节点报文只给 dispatch 前置回信抬头；日志 content 保持原文（DECISION-037 §8）。
+    const dispatchContent =
+      input.federation === undefined
+        ? content
+        : federationDispatchContent(input.federation.from_addr, content);
     const dispatched = await Promise.all(
       slots.map((slot) =>
         slot.targetId === undefined
           ? Promise.resolve(undefined)
-          : this.dispatchMention(slot.targetId, content, from, conversationId, input.team_id),
+          : this.dispatchMention(
+              slot.targetId,
+              dispatchContent,
+              from,
+              conversationId,
+              input.team_id,
+            ),
       ),
     );
     const delivered: TeamDelivery[] = [];
@@ -445,6 +465,11 @@ export class DefaultTeamService implements AgentTeamService {
         reason: errorText(error),
         logged: false,
       };
+    }
+
+    // 0.21：地址形式优先于 id / session / name 解析；不写本地 Team 日志。
+    if (typeof input.to === 'string' && input.to.includes('@')) {
+      return this.sendFederation(caller, input.to, content, conversationId);
     }
 
     const visible = await this.listVisible(caller.id);
@@ -608,6 +633,80 @@ export class DefaultTeamService implements AgentTeamService {
     return statuses
       .filter((status) => status.team_id === teamId && status.membership === 'present')
       .map(toMemberSummary);
+  }
+
+  /**
+   * 地址形式 `<principal>@<node>:<team>`（0.21）。
+   *
+   * 前置失败一律不发请求；`from` 由运行时按调用者身份构造，模型不能伪造。
+   * 跨节点发送不写本地 Team 日志（`logged:false`），对端负责落日志。
+   */
+  private async sendFederation(
+    caller: MemberStatus,
+    to: string,
+    content: string,
+    conversationId: string,
+  ): Promise<TeamAgentSendResult> {
+    if (caller.membership === 'left') {
+      return {
+        status: 'error',
+        code: 'member_left',
+        reason: `member_left: ${caller.id}`,
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+    if (caller.team_id === undefined) {
+      return {
+        status: 'error',
+        code: 'no_team',
+        reason: 'no_team',
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+    if (caller.name === undefined) {
+      return {
+        status: 'error',
+        code: 'no_name',
+        reason: 'no_name',
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+    const federation = this.federation;
+    if (federation === undefined) {
+      return {
+        status: 'error',
+        code: 'federation_unavailable',
+        reason: 'federation_unavailable',
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+
+    const result = await federation.send({
+      from: `${caller.name}@${federation.nodeId}:${caller.team_id}`,
+      to,
+      content,
+      conversation_id: conversationId,
+    });
+    if (result.status === 'queued') {
+      return {
+        status: 'queued',
+        resolved_to: to,
+        message_id: result.message_id,
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+    return {
+      status: result.status,
+      code: result.code,
+      reason: result.reason,
+      logged: false,
+      conversation_id: conversationId,
+    };
   }
 
   /** send 的 to 解析：id / 当前 session 精确匹配优先，其次按调用者可见范围解析 name */
@@ -804,6 +903,10 @@ function toTeamSummary(record: TeamRecord, memberCount: number, onlineCount: num
     tenant_id: record.tenant_id,
     workspace: record.workspace,
     ...(record.handoff_path !== undefined ? { handoff_path: record.handoff_path } : {}),
+    ...(record.description !== undefined ? { description: record.description } : {}),
+    ...(record.default_principal !== undefined
+      ? { default_principal: record.default_principal }
+      : {}),
     policy: record.policy,
     member_count: memberCount,
     online_count: onlineCount,
@@ -822,10 +925,54 @@ function toMemberSummary(status: MemberStatus): TeamMemberSummary {
     visibility: status.visibility,
     state: status.state,
     epoch: status.epoch ?? 0,
+    ...(status.last_seen !== undefined ? { last_seen: status.last_seen } : {}),
     ...(status.body_history !== undefined && status.body_history.length > 0
       ? { body_history: status.body_history }
       : {}),
   };
+}
+
+/** `members_limit`：缺省 20；非整数 / <1 回退 20；上限 100（DECISION-037 §7.1）。 */
+const DEFAULT_MEMBERS_LIMIT = 20;
+const MAX_MEMBERS_LIMIT = 100;
+
+function normalizeMembersLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isInteger(value) || value < 1) {
+    return DEFAULT_MEMBERS_LIMIT;
+  }
+  return Math.min(value, MAX_MEMBERS_LIMIT);
+}
+
+/** live 优先 → last_seen 降序（缺失最后）→ name 字典序（缺失最后，同缺失保持稳定） */
+function compareRoster(left: TeamMemberSummary, right: TeamMemberSummary): number {
+  const leftLive = left.presence === 'live';
+  const rightLive = right.presence === 'live';
+  if (leftLive !== rightLive) return leftLive ? -1 : 1;
+
+  if (left.last_seen !== undefined || right.last_seen !== undefined) {
+    if (left.last_seen === undefined) return 1;
+    if (right.last_seen === undefined) return -1;
+    if (left.last_seen !== right.last_seen) return right.last_seen - left.last_seen;
+  }
+
+  if (left.name !== undefined || right.name !== undefined) {
+    if (left.name === undefined) return 1;
+    if (right.name === undefined) return -1;
+    return left.name.localeCompare(right.name);
+  }
+  return 0;
+}
+
+function windowRoster(
+  members: readonly TeamMemberSummary[],
+  limit: number | undefined,
+): TeamMemberSummary[] {
+  return [...members].sort(compareRoster).slice(0, normalizeMembersLimit(limit));
+}
+
+/** dispatch 前置抬头（只进投递正文，不进 Team 日志） */
+function federationDispatchContent(fromAddr: string, content: string): string {
+  return `[federation] from ${fromAddr}\nreply with: agent(send, to="${fromAddr}", content="...")\n\n${content}`;
 }
 
 /** Team 回复日志上限：与 AgentService 一致，超限截断并加标记 */

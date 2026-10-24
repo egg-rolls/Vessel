@@ -690,6 +690,10 @@ export interface TeamRecord {
   /** 归一化绝对路径；Team 的唯一 workspace 来源 */
   workspace: string;
   handoff_path?: string;
+  /** 自由文本：这个 Team 是什么、找谁、怎么用（0.21 additive） */
+  description?: string;
+  /** 缺省接头人：present 成员名或 `owner`（0.21 additive；只展示） */
+  default_principal?: string;
   /** S3 只存不执行 */
   policy: Record<string, unknown>;
   created_at: number;
@@ -700,6 +704,8 @@ export interface TeamDeclaration {
   name?: string;
   workspace: string;
   handoff_path?: string;
+  description?: string;
+  default_principal?: string;
   policy?: Record<string, unknown>;
 }
 
@@ -721,6 +727,18 @@ export interface TeamLogEntry {
   system_event?: TeamSystemEvent;
   /** 会话分组（0.19 S4；系统消息缺省） */
   conversation_id?: string;
+  /** 跨节点来源 / 目标地址（0.21 additive；只在 federation 入站日志出现） */
+  federation?: TeamLogFederation;
+}
+
+/** 跨节点报文在 Team 日志上的结构化回信地址。 */
+export interface TeamLogFederation {
+  /** `<principal>@<node_id>:<team_id>` */
+  from_addr: string;
+  /** `<principal>@<node_id>:<team_id>` */
+  to_addr: string;
+  conversation_id: string;
+  hop: number;
 }
 
 /** roster 条目（由 Agent 记录派生，不单独持久化） */
@@ -735,6 +753,8 @@ export interface TeamMemberSummary {
   visibility: MemberVisibility;
   state: MemberState;
   epoch: number;
+  /** 最后活跃时间（0.21 additive；epoch ms） */
+  last_seen?: number;
   /** 已退役 Body 历史（0.19 S6 additive；可选，旧数据缺失不报错） */
   body_history?: AgentBodyHistoryEntry[];
 }
@@ -745,6 +765,10 @@ export interface TeamSummary {
   tenant_id: string;
   workspace: string;
   handoff_path?: string;
+  /** 0.21 additive */
+  description?: string;
+  /** 0.21 additive */
+  default_principal?: string;
   policy: Record<string, unknown>;
   member_count: number;
   /** present && presence === 'live' 的成员数；从 roster 派生，不持久化 */
@@ -772,9 +796,13 @@ export interface TeamPostInput {
   content: string;
   /** 结构化 agent id；不从正文解析 */
   mentions?: string[];
+  /** 只写进日志的收件人标记（不 dispatch；0.21 federation owner） */
+  to?: string[];
   from?: string;
   /** 会话分组；缺省生成，所有 mention 共用（0.19 S4） */
   conversation_id?: string;
+  /** 跨节点报文元数据（0.21 additive；日志保留原文，dispatch 前置回信抬头） */
+  federation?: TeamLogFederation;
 }
 
 export interface TeamPostResult {
@@ -810,6 +838,8 @@ export interface TeamGetOptions {
   viewer?: string;
   /** 最近消息条数；缺省 100，最大 1000 */
   limit?: number;
+  /** roster 条数窗口（0.21）；缺省 20，最大 100；live 优先、last_seen 降序 */
+  members_limit?: number;
 }
 
 export interface TeamRosterOptions {
@@ -838,12 +868,37 @@ export interface TeamAgentSendResult {
   conversation_id?: string;
 }
 
+/**
+ * 跨节点发送端口（0.21）。由 app 层注入：`packages/agent` 不依赖 federation
+ * client / 配置 / HTTP，只负责判断地址形式、填 `from` 与映射结果。
+ */
+export interface FederationSendPort {
+  /** 本机节点 id；`from` 由 agent 层用 `<caller>@<nodeId>:<team>` 构造。 */
+  readonly nodeId: string;
+  send(input: FederationSendRequest): Promise<FederationSendResult>;
+}
+
+export interface FederationSendRequest {
+  /** 完整地址 `<principal>@<node_id>:<team_id>`，由运行时填写，模型不能伪造 */
+  from: string;
+  /** 完整地址；模型原样给出，由 app 层解析 */
+  to: string;
+  content: string;
+  conversation_id?: string;
+}
+
+export type FederationSendResult =
+  | { status: 'queued'; message_id: string }
+  | { status: 'rejected' | 'error'; code: string; reason: string };
+
 /** Team 元数据 + 只追加日志的存储端口（文件实现见 team-store.ts） */
 export interface TeamBinder {
   ensureForWorkspace(input: {
     workspace: string;
     name?: string;
     handoff_path?: string;
+    description?: string;
+    default_principal?: string;
     policy?: Record<string, unknown>;
   }): Promise<TeamRecord>;
   /** 0.20 fork：只读 TeamRecord（workspace / handoff_path）；不存在返回 undefined */

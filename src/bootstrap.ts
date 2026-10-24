@@ -72,6 +72,7 @@ import {
   resumeError,
   routeResume,
 } from './durable-wiring';
+import { createFederationSendPort } from './federation-send-port';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
 import { createCliLogger } from './logging';
@@ -1121,6 +1122,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(team.policy !== undefined ? { policy: team.policy } : {}),
     }));
     const defaultWorkspace = resolveDefaultTeamWorkspace(config, teamDeclarations, logger);
+    // 0.21 S8.2：只在 federation 启用时注入端口；未启用行为不变。
+    const federation =
+      config.federation?.enabled === true
+        ? createFederationSendPort({ federation: config.federation, nodeId })
+        : undefined;
     const wiring = await createAgentServiceWiring({
       tenantId,
       dataDir,
@@ -1146,6 +1152,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(eventLog !== undefined ? { eventLog } : {}),
       teamDeclarations,
       ...(defaultWorkspace !== undefined ? { defaultWorkspace } : {}),
+      ...(federation !== undefined ? { federation } : {}),
     });
     finalPluginHost.registerTool(wiring.tool);
 
