@@ -99,11 +99,10 @@ describe('vessel team command', () => {
       options(
         dir,
         fakeFetch((body) =>
-          body.method === 'team.get'
+          body.method === 'team.roster'
             ? {
-                team: { team_id: 'alpha', name: 'alpha', member_count: 1 },
+                team_id: 'alpha',
                 members: [{ agent_id: 'a', name: 'alice', session_id: 's1' }],
-                messages: [],
               }
             : {
                 message_id: 'm1',
@@ -128,11 +127,10 @@ describe('vessel team command', () => {
         dir,
         fakeFetch((body) => {
           calls.push(body);
-          if (body.method === 'team.get') {
+          if (body.method === 'team.roster') {
             return {
-              team: { team_id: 'alpha', name: 'alpha', member_count: 1 },
+              team_id: 'alpha',
               members: [{ agent_id: 'a', name: 'alice', session_id: 's1' }],
-              messages: [],
             };
           }
           return {
@@ -149,6 +147,42 @@ describe('vessel team command', () => {
     expect(result.exitCode).toBe(0);
     const post = calls.find((call) => call.method === 'team.post');
     expect(post?.params.mentions).toEqual(['a']);
+  });
+
+  it('team post --mention cannot resolve a member beyond the default 20-member window', async () => {
+    const dir = await setup();
+    const calls: RpcBody[] = [];
+    const roster = Array.from({ length: 25 }, (_, index) => ({
+      agent_id: `a-${index + 1}`,
+      name: `agent${index + 1}`,
+      session_id: `s-${index + 1}`,
+    }));
+    const result = await runTeamCommand(
+      { kind: 'post', teamId: 'alpha', content: 'hi', mentions: ['agent25'], json: true },
+      options(
+        dir,
+        fakeFetch((body) => {
+          calls.push(body);
+          if (body.method === 'team.roster') {
+            return { team_id: 'alpha', members: roster };
+          }
+          return {
+            message_id: 'm1',
+            team_id: 'alpha',
+            kind: 'mention',
+            mentions: ['a-25'],
+            delivered: [{ agent_id: 'a-25', status: 'queued' }],
+            ts: 1,
+          };
+        }),
+      ),
+    );
+    expect(result.exitCode).toBe(0);
+    const rosterCall = calls.find((call) => call.method === 'team.roster');
+    expect(rosterCall).toBeDefined();
+    expect(calls.some((call) => call.method === 'team.get')).toBe(false);
+    const post = calls.find((call) => call.method === 'team.post');
+    expect(post?.params.mentions).toEqual(['a-25']);
   });
 
   it('rejects an unknown mention before calling team.post', async () => {

@@ -439,6 +439,22 @@ describe('federation wire principal (S8.1)', () => {
     expect(teams.posts).toHaveLength(0);
   });
 
+  it('rejects a duplicated peer token instead of routing to the last peer', async () => {
+    const teams = new FakeTeams();
+    teams.rosterMembers = [member('bob')];
+    const { route, events } = createRoute(teams, {
+      peers: [
+        { nodeId: REMOTE_NODE, teamId: TEAM, direction: 'both', token: PEER_TOKEN },
+        { nodeId: 'node-c', teamId: TEAM, direction: 'both', token: PEER_TOKEN },
+      ],
+    });
+
+    const response = await send(route, envelope('msg-dup-token'));
+    expect(response.status).toBe(401);
+    expect(teams.posts).toHaveLength(0);
+    expect(received(events)).toHaveLength(0);
+  });
+
   it('does not compare from.principal with the peer identity (node-level trust)', async () => {
     const teams = new FakeTeams();
     teams.policy = { federation: { accept: 'log' } };

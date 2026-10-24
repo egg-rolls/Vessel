@@ -5,6 +5,7 @@
  * 附加字段，由 cli 用 Object.assign 注入；合并后可直接写进类型。
  */
 
+import type { Logger } from '@vessel-agent/core';
 import type { VesselConfig } from '../packages/config/src/index';
 import type {
   FederationGatewayOptions,
@@ -52,6 +53,8 @@ export interface GatewayControlPlaneOptions {
    * 仅当 `config.federation.enabled === true` 且本字段存在时注入 federation。
    */
   nodeId?: string;
+  /** 丢弃 federation peer（缺 token / 自指 / token 重复）时记录原因。 */
+  logger?: Logger;
 }
 
 /** 只包含实际启用的控制面；未启用时不出现在对象里 */
@@ -88,6 +91,12 @@ export function buildGatewayControlPlane(
       federation: options.config.federation,
       nodeId: options.nodeId,
     });
+    for (const issue of resolved.issues) {
+      options.logger?.warn('federation.peer.skipped', {
+        peer: issue.peer,
+        reason: issue.reason,
+      });
+    }
     const federation: FederationGatewayOptions = resolved.options;
     controlPlane.federation = federation;
   }

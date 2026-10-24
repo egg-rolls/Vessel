@@ -3,12 +3,13 @@
  *
  * `<interactionsDir>/interactions-<tenant>.json`，0600 原子写。只保存权限请求：
  * pending（进程存活期间）与已应答/孤儿记录（幂等与准确的 `run_ended`）。
- * 文件损坏 / 不可读不阻断 gateway 启动：记录 stderr 后按空集处理。
+ * 文件损坏 / 不可读不阻断 gateway 启动：记录 stderr；损坏文件先改名隔离保留原始字节，
+ * 其余合法记录照常加载。
  *
  * @module @vessel-agent/serve/interactions-store
  */
 
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWrite } from '@vessel-agent/core';
 
@@ -150,6 +151,8 @@ function parseRecord(value: unknown): StoredInteraction | null {
 /** 交互记录文件存储（按 tenant 分文件）。 */
 export class InteractionsStore {
   readonly dir: string;
+  /** 隔离失败的文件路径；后续 save 不得覆盖，否则会毁掉唯一恢复窗口。 */
+  private readonly unquarantinable = new Set<string>();
 
   constructor(dir: string) {
     this.dir = dir;
@@ -183,19 +186,60 @@ export class InteractionsStore {
     for (const name of names) {
       if (!name.startsWith(FILE_PREFIX) || !name.endsWith(FILE_SUFFIX)) continue;
       const path = join(this.dir, name);
+      let raw: string;
       try {
-        const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-        const list = isRecord(raw) && Array.isArray(raw.interactions) ? raw.interactions : raw;
-        if (!Array.isArray(list)) continue;
-        for (const item of list) {
-          const record = parseRecord(item);
-          if (record !== null) records.push(record);
-        }
+        raw = readFileSync(path, 'utf8');
       } catch (error) {
         reportLoadError(path, error);
+        this.quarantine(path, 'unreadable file');
+        continue;
       }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw) as unknown;
+      } catch (error) {
+        reportLoadError(path, error);
+        this.quarantine(path, 'unparseable JSON');
+        continue;
+      }
+      let list: unknown[];
+      if (Array.isArray(parsed)) {
+        list = parsed;
+      } else if (isRecord(parsed) && Array.isArray(parsed.interactions)) {
+        list = parsed.interactions;
+      } else {
+        this.quarantine(path, 'invalid top-level shape');
+        continue;
+      }
+      let sawInvalid = false;
+      for (const item of list) {
+        const record = parseRecord(item);
+        if (record === null) {
+          sawInvalid = true;
+          continue;
+        }
+        records.push(record);
+      }
+      if (sawInvalid) this.quarantine(path, 'invalid record');
     }
     return records;
+  }
+
+  /**
+   * 把损坏文件改名隔离，保留原始字节。
+   * 改名失败只报 stderr，并禁止后续 save 覆盖原文件。
+   */
+  private quarantine(path: string, reason: string): void {
+    const target = `${path}.corrupt-${Date.now()}`;
+    try {
+      renameSync(path, target);
+      this.unquarantinable.delete(path);
+      console.error(`[vessel] interactions: quarantined ${path} (${reason}) -> ${target}`);
+    } catch (error) {
+      this.unquarantinable.add(path);
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[vessel] interactions: failed to quarantine ${path} (${reason}): ${detail}`);
+    }
   }
 
   /** 原子重写某个 tenant 的记录；失败只报 stderr，不影响 RPC。 */
@@ -203,6 +247,12 @@ export class InteractionsStore {
     const path = this.pathFor(tenantId);
     if (path === null) {
       console.error(`[vessel] interactions: skip persistence for unsafe tenant "${tenantId}"`);
+      return;
+    }
+    if (this.unquarantinable.has(path)) {
+      console.error(
+        `[vessel] interactions: skip persistence for ${path}; corrupt file could not be quarantined`,
+      );
       return;
     }
     const payload = `${JSON.stringify({ version: 1, interactions: records }, null, 2)}\n`;

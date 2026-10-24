@@ -1200,6 +1200,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         // 先停注入，避免关闭过程中父 turn 再排空 owner 队列。
         wiring.injector.dispose();
         await ownerServer?.stop();
+        // 成员轮必须在 tenant eventLog 关闭前收口：否则尾部事件 append 会被
+        // `session_event_log_closed` 拒绝，子会话审计缺尾。
+        await wiring.service.drain({ timeoutMs: 5000 });
         // Team 退订后再 flush 日志写链，避免关闭期间又追加系统消息。
         wiring.team.dispose();
         await wiring.teamStore.flush();

@@ -8,6 +8,7 @@
  */
 
 import type { ToolDefinition } from '@vessel-agent/core';
+import { TeamMetadataCorruptError } from './team-store.js';
 import {
   AgentError,
   type AgentService,
@@ -60,9 +61,18 @@ function invalid(message: string): AgentError {
   return new AgentError('invalid_input', message);
 }
 
+/** 带稳定 code 的错误：AgentError / TeamError / Team 元数据损坏 */
+function isCodedError(error: unknown): error is Error & { code: string } {
+  return (
+    error instanceof AgentError ||
+    error instanceof TeamError ||
+    error instanceof TeamMetadataCorruptError
+  );
+}
+
 /** 错误串形状固定；message 已带 code 前缀时去重 */
 function errorResult(error: unknown): string {
-  if (!(error instanceof AgentError) && !(error instanceof TeamError)) {
+  if (!isCodedError(error)) {
     return `Error: invalid_input: ${errorText(error)}`;
   }
   const prefix = `${error.code}: `;
@@ -74,7 +84,7 @@ function errorResult(error: unknown): string {
 
 /** 逐条失败串：稳定 code 在前，异常消息不带前缀时补上 */
 function batchErrorText(error: unknown): string {
-  if (error instanceof AgentError || error instanceof TeamError) {
+  if (isCodedError(error)) {
     const prefix = `${error.code}: `;
     return error.message.startsWith(prefix) ? error.message : `${prefix}${error.message}`;
   }
