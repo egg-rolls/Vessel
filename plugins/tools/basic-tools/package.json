@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/basic-tools",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -24,8 +24,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vessel-agent/core": "0.25.0",
-    "@vessel-agent/permission": "0.25.0"
+    "@vessel-agent/core": "0.26.0",
+    "@vessel-agent/permission": "0.26.0"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
