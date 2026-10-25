@@ -23,6 +23,6 @@ paths: [docs/agents/**]
 
 ## 主题入口
 
-- **core / runtime / host / scheduler** → [core](core.md) · [architecture/runtime-lifecycle](../architecture/runtime-lifecycle.md) · [architecture/state](../architecture/state.md)
-- **member / team / agent / body** → [agent](agent.md) · [architecture/gateway-rpc](../architecture/gateway-rpc.md#agent-lifecycle) · [CONFIG.md](../operations/CONFIG.md)
-- **federation / hub / attention / 远程** → [serve](serve.md) · [architecture/gateway](../architecture/gateway.md#remote) · [REMOTE.md](../operations/REMOTE.md)
+- **core / runtime / host / scheduler** → [core](core.md) · [architecture/host](../architecture/host.md) · [architecture/runtime-lifecycle](../architecture/runtime-lifecycle.md)
+- **member / team / agent / body** → [agent](agent.md) · [architecture/member-team](../architecture/member-team.md) · [architecture/gateway-rpc](../architecture/gateway-rpc.md#agent-lifecycle)
+- **federation / hub / attention / 远程** → [serve](serve.md) · [architecture/federation-hub](../architecture/federation-hub.md) · [REMOTE.md](../operations/REMOTE.md)
