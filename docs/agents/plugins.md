@@ -37,8 +37,8 @@ applies_to: [N, M]
 
 ## MCP / evals / skills
 
-- MCP 工具默认不 `allow`；只按 `auto_approve_tools` 的原始工具名精确放行（ADR-039）。
-- evals 默认离线；真实 provider 需 `config.evals.allowNetwork` + CLI `--allow-network` 双门控。
+- MCP 的默认 deny 与放行规则见 AGENTS 硬规则；实现按原始工具名精确匹配（ADR-039）。
+- evals 的离线双门控见 AGENTS 硬规则；运行器与报告见 ADR-043。
 - skills 就是文件，经消息进来；不写 harness 层的扫描 / 解析 / 注入通道。
 - `team_*` / `delegate_task` 已删除；evals / feishu / MCP 只做插件，不进 core（ADR-043/044/090）。
 

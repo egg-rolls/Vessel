@@ -24,7 +24,7 @@ applies_to: [N, M]
 
 ## 远程安全
 
-- 不默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环必须 TLS；`serve.allowed_origins` 只接受显式 http(s) origin，禁止 `*` / path / query。
+- 远程 opt-in / TLS / Origin 的规则见 AGENTS 硬安全规则；实现上 `serve.allowed_origins` 归一化为 `URL.origin`，HTTP 与 WS upgrade 共用同一判定。
 - token 不进 WS URL / query；首帧 `auth` 5s 内未合法即关闭 4401；非 admin 指定其它 tenant → 4403。
 - 完整证书 / Origin / 客户端步骤见 [REMOTE.md](../operations/REMOTE.md)；契约见 [gateway.md](../architecture/gateway.md#protocol)。
 
