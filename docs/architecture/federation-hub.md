@@ -57,7 +57,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 - 入站 `POST /v1/federation/messages` 注册在 gateway `principalForRequest` 之前；出站由 `vessel federation post|peers` 一次性进程发起。不复用 legacy `/v1/team/*`、`RemoteTransport` 或 hub 控制面。
 - envelope 为 `vessel.federation/1`，字段固定 `protocol / message_id / conversation_id / from / to / content / ts / hop / request_id?`；`from` / `to` 为 `{node_id, team_id, principal}`，严格解析，缺字段即 `federation_invalid`。
 - 地址 `<principal>@<node_id>:<team_id>`：`principal` 是目标 Team 的 present 成员名或保留字 `human`；它是名字，不是 agent id。
-- 默认开启（`federation.enabled` 缺省 true，显式 false 关闭），但没有 peer 就没有对端。`federation.peers[]` 显式声明 `(nodeId, teamId)` / `url` / `tokenEnv` / `direction` / `caFile?` / `localTeamId?`；无通配、无自动发现，明文 `token` 被 validator 拒绝。
+- `federation.peers[]` 显式声明 `(nodeId, teamId)` / `url` / `tokenEnv` / `direction` / `caFile?` / `localTeamId?`；无通配、无自动发现，明文 `token` 被 validator 拒绝。
 - 每个 peer 一份 bearer token，内存定长比较；gateway 用户 token / hub node token / peer token 三套命名空间不交叉。非回环 `url` 必须 https。
 
 <a id="federation-guards"></a>
@@ -74,7 +74,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 
 - hub 不做消息正文 / 事件 / 工具结果代理，不存 transcript，不做 mTLS、多 hub 联邦或节点自动发现。
 - federation 不做 worker / agent 跨节点寻址、远程 spawn / close / rotate / resume / fork、自动中继 / mesh、离线队列 / 重试、跨重启 exactly-once、多 tenant、权限审批人。
-- federation 是传输面，不新增 canonical RPC 方法；跨节点 attention 由运行 agent 的节点本地应答。
+- federation 是传输面，不新增 canonical RPC 方法。
 
 ## 指针
 

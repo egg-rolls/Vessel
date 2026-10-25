@@ -17,10 +17,10 @@ pre-MVP 阶段仅支持最新分支。
 
 Vessel 是 Agent Harness，会执行工具（文件 / shell / 代码）。使用与开发时注意：
 
-- 危险工具默认走权限判定（`ask`），由 human 经 TUI / Web / 网关应答；没有 agent 审批人，也不提供 `allow-after`（ADR-058 / ADR-079 / ADR-091）。
+- 危险工具须经权限判定（默认 `ask`），由 human 经 TUI / Web / 网关应答；没有 agent 审批人，也不提供 `allow-after`（ADR-058 / ADR-079 / ADR-091）。
 - 用 UsageLimits / TerminationPolicy 限制运行预算（请求/工具调用/token/成本/时长）。
-- 不向 core 提交任何厂商 API Key / 价格；Key 永远用户自备（ADR-050）。
-- 沙箱类能力只能在受限用户 / 容器 / 外层隔离中运行；本仓库不提供内置沙箱。
+- 不向 core 提交任何厂商 API Key / 价格；Key 永远用户自备（ADR-005）。
+- 沙箱类能力不进 core 默认；需要隔离时在受限用户 / 容器或外部沙箱中运行。
 - Guardrail（PII / 密钥脱敏 / 工具 allowlist）作为插件按需启用。
 
 ## 工具路径边界（ADR-055）
@@ -31,7 +31,7 @@ Vessel 是 Agent Harness，会执行工具（文件 / shell / 代码）。使用
 - **`allowed_roots`（插件 `basic-tools` 配置）**：配置后 `read` / `edit` / `bash cwd` 越界走 `ask`；默认空 = 不限制根，只保留内置 denylist。
 - **`deny_paths`**：追加到内置 denylist（不能移除内置项）；同时参与 `bash` 命令文本匹配。
 - **真实路径判定**：比较前做 `realpath`；不存在的路径对最近已存在祖先做 `realpath` 再拼回剩余段。`..` 与符号链接不能绕过。
-- **这不是沙箱**：`bash` 只校验 `cwd`，命令本身仍可访问其它路径，命令文本检查是 best-effort 字符串匹配。需要真正隔离时使用沙箱类插件，并在受限用户/容器中运行。
+- **这不是沙箱**：`bash` 只校验 `cwd`，命令本身仍可访问其它路径，命令文本检查是 best-effort 字符串匹配。需要真正隔离时使用外部沙箱，并在受限用户/容器中运行。
 
 ## 统一工具执行（ADR-058）
 
