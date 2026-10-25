@@ -358,6 +358,64 @@ describe('FileTeamStore.policy', () => {
   });
 });
 
+describe('FileTeamStore spawn_frozen', () => {
+  it('persists true, survives reload, and removes the field on false', async () => {
+    const dataDir = await tempDir();
+    const workspace = join(dataDir, 'freeze', 'alpha');
+    const store = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    const team = await store.ensureForWorkspace({ workspace });
+
+    const frozen = await store.setSpawnFrozen(team.team_id, true);
+    expect(frozen.spawn_frozen).toBe(true);
+    const path = teamMetadataPath(dataDir, 'default', team.team_id);
+    expect(
+      (JSON.parse(await readFile(path, 'utf8')) as { spawn_frozen?: boolean }).spawn_frozen,
+    ).toBe(true);
+
+    const reopened = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    await reopened.ready();
+    expect(reopened.get(team.team_id)?.spawn_frozen).toBe(true);
+
+    const thawed = await reopened.setSpawnFrozen(team.team_id, false);
+    expect(thawed.spawn_frozen).toBeUndefined();
+    const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    expect(Object.hasOwn(raw, 'spawn_frozen')).toBe(false);
+
+    const again = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    await again.ready();
+    expect(again.get(team.team_id)?.spawn_frozen).toBeUndefined();
+  });
+
+  it('keeps spawn_frozen across update and rejects archived teams', async () => {
+    const dataDir = await tempDir();
+    const store = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    const team = await store.ensureForWorkspace({ workspace: join(dataDir, 'freeze', 'beta') });
+    await store.setSpawnFrozen(team.team_id, true);
+
+    const updated = await store.update(team.team_id, { name: 'Beta' });
+    expect(updated.spawn_frozen).toBe(true);
+    expect(store.get(team.team_id)?.spawn_frozen).toBe(true);
+
+    await store.archive(team.team_id);
+    await expect(store.setSpawnFrozen(team.team_id, false)).rejects.toThrow('team_archived');
+    await expect(store.setSpawnFrozen('missing', true)).rejects.toThrow('team_not_found');
+  });
+
+  it('ignores a non-boolean spawn_frozen instead of invalidating the team', async () => {
+    const dataDir = await tempDir();
+    const store = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    const team = await store.ensureForWorkspace({ workspace: join(dataDir, 'freeze', 'gamma') });
+    const path = teamMetadataPath(dataDir, 'default', team.team_id);
+    const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    raw.spawn_frozen = 'yes';
+    await writeFile(path, `${JSON.stringify(raw)}\n`);
+
+    const reopened = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    await reopened.ready();
+    expect(reopened.get(team.team_id)?.spawn_frozen).toBeUndefined();
+  });
+});
+
 describe('FileTeamStore log', () => {
   it('preserves append order, skips bad and truncated lines, and bounds the limit', async () => {
     const dataDir = await tempDir();

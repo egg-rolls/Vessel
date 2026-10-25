@@ -47,6 +47,10 @@ class FakeTeams implements TeamControlLike {
     throw new Error('team-info must not write');
   }
 
+  async setSpawnFrozen(): Promise<never> {
+    throw new Error('team-info must not write');
+  }
+
   async list(): Promise<TeamSummaryLike[]> {
     return [];
   }

@@ -55,7 +55,11 @@ export interface MemberStatus {
   session_id: string;
   name?: string;
   parent_id?: string;
-  owner: string;
+  /**
+   * 归属 / private 可见性 principal；缺省表示 peer（无 owner）。
+   * root owner 的 `owner === id`。
+   */
+  owner?: string;
   visibility: MemberVisibility;
   state: MemberState;
   current_tool?: string;
@@ -85,7 +89,8 @@ export interface PersistedAgentRecord {
   session_id: string;
   name?: string;
   parent_id?: string;
-  owner: string;
+  /** 归属 principal；缺省 = peer（旧数据总有该字段） */
+  owner?: string;
   visibility: MemberVisibility;
   /** 最后已知 engine 状态（重启后按 membership 重置） */
   state: MemberState;
@@ -122,7 +127,8 @@ export interface MemberRuntimeMember {
   session_id: string;
   name?: string;
   parent_id?: string;
-  owner: string;
+  /** 归属 principal；peer 缺省 */
+  owner?: string;
   visibility: MemberVisibility;
   /** 所属 Team（0.19 S4：权限策略 / bridge 归属） */
   team_id?: string;
@@ -324,13 +330,23 @@ export interface ConversationBudgetPort {
 }
 
 /** 成员创建参数 */
-export interface NewMemberInput {
+export interface CreateMemberInput {
   name?: string;
   model?: string;
   systemPrompt?: string;
   visibility?: MemberVisibility;
   parentId?: string;
-  owner?: string;
+  /**
+   * 归属 principal：string = contractor；null = 显式无 owner（peer）；
+   * 缺省 = DEFAULT_OWNER（legacy 行为）。
+   */
+  owner?: string | null;
+  /** 输入判别（不持久化）：peer 无 owner 且必须有 Team；contractor 有 owner */
+  kind?: 'peer' | 'contractor';
+  /** 按已存在 Team 绑定（成员派生路径）；不存在 → invalid_input */
+  teamId?: string;
+  /** 调用者 id（审计用，不持久化；仅写入 agent.spawned 事件） */
+  spawnedBy?: string;
   /**
    * 0.19 S3：显式 workspace（只有 CLI 能传；模型工具不能伪造）。
    * 首个绑定该 workspace 的 Agent 隐式创建 Team；无 name 时拒绝绑定。
@@ -339,8 +355,8 @@ export interface NewMemberInput {
 }
 
 /** 批量创建（条目并行，逐条结果） */
-export interface NewBatchInput {
-  members: NewMemberInput[];
+export interface CreateBatchInput {
+  members: CreateMemberInput[];
 }
 
 /** update 可修改的配置字段（事件里只出现这些名字，绝不带 prompt 正文） */
@@ -365,7 +381,7 @@ export interface AgentUpdateInput {
   systemPrompt?: string;
 }
 
-/** 批量更新（条目并行，逐条结果；与 new / close 同语义） */
+/** 批量更新（条目并行，逐条结果；与 create / close 同语义） */
 export interface AgentUpdateBatchInput {
   updates: AgentUpdateInput[];
 }
@@ -442,6 +458,8 @@ export type DispatchResult =
         | 'agent_left'
         | 'resume_failed'
         | 'fork_failed'
+        | 'team_full'
+        | 'team_frozen'
         | 'not_visible'
         | 'budget_exceeded'
         | 'budget_unavailable'
@@ -574,6 +592,8 @@ export interface AgentEvent {
   name?: string;
   /** 所属 Team（0.19 S3；unbound / system 事件可能缺省） */
   team_id?: string;
+  /** 调用者 id（仅 `agent.spawned`；不持久化） */
+  spawned_by?: string;
   /** 会话分组（0.19 S4；system 事件可能缺省） */
   conversation_id?: string;
   /** 本轮 usage（turn.completed 有则带） */
@@ -625,11 +645,11 @@ export interface AgentServiceOptions {
   /** 创建成员未显式指定 model 时使用的“有效 model”（落库，供 resume 使用） */
   defaultModel?: string;
   /**
-   * 0.19 S3：`new` 未显式传 workspace 时的默认 workspace。
+   * 0.19 S3：`create` 未显式传 workspace 时的默认 workspace。
    * 仅由“配置声明命中 agent.cwd”提供；无声明时为 undefined（保持 unbound）。
    */
   defaultWorkspace?: string;
-  /** 0.19 S3：Team 绑定端口；缺失时 `new` 永远 unbound */
+  /** 0.19 S3：Team 绑定端口；缺失时 `create` 永远 unbound */
   teamBinder?: TeamBinder;
   /** 0.19 S4：按 team_id 读取解析后的 policy；缺失 = 无 team policy */
   teamPolicy?: (teamId: string) => TeamPolicy | undefined;
@@ -646,6 +666,8 @@ export type AgentErrorCode =
   | 'member_not_visible'
   | 'no_parent'
   | 'spawn_failed'
+  | 'team_full'
+  | 'team_frozen'
   | 'invalid_state_transition'
   | 'budget_exceeded'
   | 'budget_unavailable'
@@ -664,9 +686,9 @@ export class AgentError extends Error {
 
 /** Agent 能力层唯一契约 */
 export interface AgentService {
-  // 接口里裸写 `new(...)` 会被解析为构造签名，必须加引号
-  'new'(input: NewMemberInput): Promise<MemberStatus>;
-  'new'(input: NewBatchInput): Promise<BatchResult<MemberStatus>>;
+  // create 是普通方法名，不会与构造签名冲突
+  create(input: CreateMemberInput): Promise<MemberStatus>;
+  create(input: CreateBatchInput): Promise<BatchResult<MemberStatus>>;
   /** 注册 root owner；不 spawn，重复调用幂等 */
   attachOwner(input: AttachOwnerInput): Promise<MemberStatus>;
   /**
@@ -755,6 +777,8 @@ export interface TeamRecord {
   created_at: number;
   /** S10.3 additive：归档时间（epoch ms）；存在即只读，无删除路径 */
   archived_at?: number;
+  /** 0.27 additive：冻结期间拒绝该 Team 的所有创建 / fork / reinstate */
+  spawn_frozen?: boolean;
 }
 
 /**
@@ -834,6 +858,8 @@ export interface TeamMemberSummary {
   team_id?: string;
   membership: MemberMembership;
   presence: MemberPresence;
+  /** 归属 principal；peer 缺省（Web 用于标记 peer / contractor） */
+  owner?: string;
   visibility: MemberVisibility;
   state: MemberState;
   epoch: number;
@@ -857,6 +883,8 @@ export interface TeamSummary {
   created_at: number;
   /** S10.3 additive：归档时间（epoch ms）；存在即只读 */
   archived_at?: number;
+  /** 0.27 additive：Team 冻结状态（只读回显） */
+  spawn_frozen?: boolean;
 }
 
 export interface TeamDetail {
@@ -995,6 +1023,8 @@ export interface TeamStore extends TeamBinder {
   update(teamId: string, patch: TeamUpdatePatch): Promise<TeamRecord>;
   /** S10.3：归档（幂等）；先落盘再改内存；roster 检查在 TeamService */
   archive(teamId: string): Promise<TeamRecord>;
+  /** 0.27：写 spawn_frozen（true 写入，false 删除字段）；先落盘再改内存 */
+  setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamRecord>;
   get(teamId: string): TeamRecord | undefined;
   /** 解析后的 policy；手改非法预算 warning + 忽略，返回 undefined / 去掉非法子结构 */
   policy(teamId: string): TeamPolicy | undefined;
@@ -1009,10 +1039,12 @@ export interface TeamStore extends TeamBinder {
 /** TeamService 事件（指针用途）：绝不含正文。 */
 export interface TeamServiceEvent {
   team_id: string;
-  /** 日志写入类别，或 roster 变更 */
-  kind: 'post' | 'mention' | 'reply' | 'system' | 'roster';
+  /** 日志写入类别，或 roster / spawn 冻结变更 */
+  kind: 'post' | 'mention' | 'reply' | 'system' | 'roster' | 'spawn';
   /** 日志写入成功后的 message_id；roster 事件缺省 */
   message_id?: string;
+  /** kind === 'spawn' 时的冻结状态 */
+  frozen?: boolean;
 }
 
 /** Team 能力层（AgentService 之上的 roster / 日志 / 定向投递） */
@@ -1024,6 +1056,10 @@ export interface AgentTeamService {
   update(input: TeamUpdateInput): Promise<TeamSummary>;
   /** S10.3：归档空 Team；仍有 present 成员时抛 team_not_empty */
   archive(input: TeamArchiveInput): Promise<TeamSummary>;
+  /** 0.27：冻结 / 解冻 Team 的 spawn 闸门；返回最新摘要 */
+  setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamSummary>;
+  /** 0.27：同步读取冻结状态；Team 不存在视为未冻结 */
+  isSpawnFrozen(teamId: string): boolean;
   list(options?: TeamListOptions): Promise<TeamSummary[]>;
   get(teamId: string, options?: TeamGetOptions): Promise<TeamDetail | undefined>;
   roster(teamId: string, options?: TeamRosterOptions): Promise<TeamMemberSummary[]>;

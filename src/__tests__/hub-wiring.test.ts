@@ -334,6 +334,9 @@ describe('createHubControl with a real TeamService', () => {
       async archive() {
         return record;
       },
+      async setSpawnFrozen() {
+        return record;
+      },
       get(teamId: string) {
         return teamId === 'alpha' ? record : undefined;
       },

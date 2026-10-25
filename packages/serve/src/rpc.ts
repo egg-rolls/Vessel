@@ -239,6 +239,8 @@ const CONTROL_SCOPE_METHODS: ReadonlySet<string> = new Set([
   // S10.3：team-scoped token 只能更新 / 归档自己的 team；create 不在白名单。
   'teams.update',
   'teams.archive',
+  // 0.27：team-scoped token 只能冻结 / 解冻自己的 team（handler 再校验 team_id）。
+  'teams.spawnFrozen',
   // 0.26：team-scoped token 只能对同 team 成员 send / dispatch / rotate
   // （handler 逐条校验 team_id；create 仍不在白名单）。
   'agents.send',

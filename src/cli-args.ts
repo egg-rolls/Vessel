@@ -148,7 +148,7 @@ export type AgentStateArg =
 /** `vessel agent ...` 子命令（0.17 Phase A） */
 export type AgentCommand =
   | {
-      kind: 'new';
+      kind: 'create';
       json: boolean;
       name?: string;
       model?: string;
@@ -199,6 +199,9 @@ export type TeamCommand =
       json: boolean;
     }
   | { kind: 'archive'; teamId: string; json: boolean }
+  /** 0.27：冻结 / 解冻 Team 的 spawn（仍受成员上限约束）。 */
+  | { kind: 'freeze'; teamId: string; json: boolean }
+  | { kind: 'unfreeze'; teamId: string; json: boolean }
   | { kind: 'get'; teamId: string; limit?: number; members?: number; json: boolean }
   | { kind: 'post'; teamId: string; content: string; mentions: string[]; json: boolean }
   | {
@@ -397,7 +400,7 @@ export interface CliArgs {
   statusCommand: { json: boolean } | null;
   /** 0.14：`vessel agents [--json]` */
   agentsCommand: { json: boolean } | null;
-  /** 0.17：`vessel agent new|send|close|list|dispatch|rotate` */
+  /** 0.17：`vessel agent create|send|close|list|dispatch|rotate` */
   agentCommand: AgentCommand | null;
   /** 0.19 S3：`vessel team list|get|post|members`；0.24：create|update|archive */
   teamCommand: TeamCommand | null;
@@ -2231,7 +2234,7 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `agent new|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate） */
+/** `agent create|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate） */
 function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
   if (sub === undefined || sub === '--help' || sub === '-h') {
@@ -2240,7 +2243,7 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   }
   const tail = rest.slice(1);
 
-  if (sub === 'new') {
+  if (sub === 'create') {
     let json = false;
     let name: string | undefined;
     let model: string | undefined;
@@ -2283,11 +2286,11 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
         i = value.next;
         continue;
       }
-      return { ok: false, error: `Unknown argument for agent new: ${a}` };
+      return { ok: false, error: `Unknown argument for agent create: ${a}` };
     }
     if (args.help) return { ok: true, args };
     args.agentCommand = {
-      kind: 'new',
+      kind: 'create',
       json,
       ...(name !== undefined ? { name } : {}),
       ...(model !== undefined ? { model } : {}),
@@ -2605,7 +2608,8 @@ function parseTeamBudget(tail: string[], args: CliArgs): ParseResult {
 }
 
 /**
- * `team list|get|post|members|budget|create|update|archive`（0.19 S3 / S4；0.24）。
+ * `team list|get|post|members|budget|create|update|archive|freeze|unfreeze`
+ * （0.19 S3 / S4；0.24；0.27）。
  * 只做语法；workspace / roster 解析在 `src/team-command.ts`。
  */
 function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
@@ -2816,6 +2820,33 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
       return { ok: false, error: `Unknown argument for team archive: ${extra}` };
     }
     args.teamCommand = { kind: 'archive', teamId, json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'freeze' || sub === 'unfreeze') {
+    let json = false;
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) return { ok: false, error: `Unknown argument for team ${sub}: ${a}` };
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [teamId, extra] = positional;
+    if (teamId === undefined || teamId === '') {
+      return { ok: false, error: `team ${sub} requires <team_id>` };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for team ${sub}: ${extra}` };
+    }
+    args.teamCommand = { kind: sub, teamId, json };
     return { ok: true, args };
   }
 

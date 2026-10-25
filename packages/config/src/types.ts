@@ -535,6 +535,12 @@ export interface PermissionConfig {
    * 重启后继续生效。`ask_user` 由运行时始终免确认。
    */
   autoApprove?: string[];
+  /**
+   * 自动放行的例外键（0.27）：工具名或 `tool.action`。命中时即使工具在
+   * `autoApprove` / 默认放行中也必须确认。YAML 别名 `never_auto_approve`
+   * 由 loader 的 snake_case → camelCase 映射自动转换。
+   */
+  neverAutoApprove?: string[];
 }
 
 /** 状态栏位置（0.13）：top / bottom / both / none */

@@ -111,7 +111,10 @@ function parseBodyHistory(value: unknown): AgentBodyHistoryEntry[] | undefined {
 function parseMember(value: unknown): PersistedAgentRecord | undefined {
   if (!isRecord(value)) return undefined;
   if (!nonEmptyString(value.id) || !nonEmptyString(value.session_id)) return undefined;
-  if (!nonEmptyString(value.owner) || !nonEmptyString(value.visibility)) return undefined;
+  // owner 可选（peer 缺省）；显式给出则必须是非空字符串。
+  const owner = optionalString(value.owner);
+  if (value.owner !== undefined && owner === undefined) return undefined;
+  if (!nonEmptyString(value.visibility)) return undefined;
   if (!nonEmptyString(value.state)) return undefined;
   if (!VISIBILITIES.includes(value.visibility as MemberVisibility)) return undefined;
   if (!MEMBER_STATES.includes(value.state as MemberState)) return undefined;
@@ -127,7 +130,7 @@ function parseMember(value: unknown): PersistedAgentRecord | undefined {
   const record: PersistedAgentRecord = {
     id: value.id,
     session_id: value.session_id,
-    owner: value.owner,
+    ...(owner !== undefined ? { owner } : {}),
     visibility: value.visibility as MemberVisibility,
     state,
     membership,

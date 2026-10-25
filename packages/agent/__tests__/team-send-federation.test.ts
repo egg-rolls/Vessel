@@ -75,6 +75,12 @@ function makeRecordingTeam(): { team: AgentTeamService; sendCalls: TeamAgentSend
     async archive() {
       throw new Error('not used');
     },
+    async setSpawnFrozen() {
+      throw new Error('not used');
+    },
+    isSpawnFrozen() {
+      return false;
+    },
     async list() {
       return [];
     },
@@ -343,7 +349,7 @@ describe('agent tool send with federated addresses', () => {
     const made = makeService();
     const { team, sendCalls } = makeRecordingTeam();
     const port = new FakeFederationPort();
-    const created = await made.service.new({ name: 'worker' });
+    const created = await made.service.create({ name: 'worker' });
     const tool = createAgentTool(made.service, {
       ownerId: 'main',
       ownerSessionId: 'owner-session',

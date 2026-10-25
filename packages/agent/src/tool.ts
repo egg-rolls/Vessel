@@ -7,7 +7,7 @@
  * @module @vessel-agent/agent
  */
 
-import type { ToolDefinition } from '@vessel-agent/core';
+import type { ToolContext, ToolDefinition } from '@vessel-agent/core';
 import { TeamMetadataCorruptError } from './team-store.js';
 import {
   AgentError,
@@ -15,21 +15,33 @@ import {
   type AgentTeamService,
   type BatchItemResult,
   type CloseInput,
+  type CreateMemberInput,
   DEFAULT_OWNER,
   type DispatchResult,
   type ListFilter,
   type MemberState,
+  type MemberStatus,
   type MemberVisibility,
-  type NewMemberInput,
   type TeamAgentSendResult,
   TeamError,
   type TeamMemberSummary,
 } from './types.js';
 
-const ACTIONS = ['new', 'send', 'close', 'list', 'rotate', 'post'] as const;
+const ACTIONS = ['create', 'hire', 'send', 'close', 'list', 'rotate', 'post'] as const;
+
+/** root owner 可见的动作：root 没有 Team，不暴露 create（派 peer 需要 Team） */
+const OWNER_ACTIONS = ['hire', 'send', 'close', 'list', 'rotate', 'post'] as const;
 
 /** 成员 Body 可用的动作；rotate 在动作闸门之前单独处理 */
-const BODY_ACTIONS: readonly string[] = ['rotate', 'post', 'send', 'list'];
+const BODY_ACTIONS: readonly string[] = [
+  'create',
+  'hire',
+  'close',
+  'rotate',
+  'post',
+  'send',
+  'list',
+];
 
 /** TeamService 的 identify 契约注释承诺带 team_id，但 TeamMemberSummary 尚未声明；按可选读取 */
 type TeamCaller = TeamMemberSummary & { team_id?: string };
@@ -125,21 +137,26 @@ function readBatch(record: Record<string, unknown>, key: string, action: string)
 }
 
 /**
- * 只拷已知键并转 camelCase；owner / parent 固定为工具的 owner，模型不能伪造。
+ * 成员派生入口（create / hire）的字段映射：只拷模型可指定的键；
+ * kind / owner / parentId / teamId / spawnedBy 由 handler 固定，模型不能伪造。
  * 值不做类型校验：batch 要由 AgentService 逐条拒绝，不能在映射阶段整批抛错。
  */
-function mapNew(record: Record<string, unknown>, ownerId: string): Record<string, unknown> {
-  const input: Record<string, unknown> = { owner: ownerId, parentId: ownerId };
+function mapDerived(
+  record: Record<string, unknown>,
+  fixed: Record<string, unknown>,
+): Record<string, unknown> {
+  const input: Record<string, unknown> = { ...fixed };
   if (record.name !== undefined) input.name = record.name;
   if (record.model !== undefined) input.model = record.model;
   if (record.system_prompt !== undefined) input.systemPrompt = record.system_prompt;
+  // create 的 visibility 由 service 强制 team；传了非 team 值时由 service 逐条拒绝。
   if (record.visibility !== undefined) input.visibility = record.visibility;
   return input;
 }
 
 /** 非对象条目原样交给 service，由它逐条拒绝 */
-function mapNewEntry(entry: unknown, ownerId: string): unknown {
-  return isRecord(entry) ? mapNew(entry, ownerId) : entry;
+function mapDerivedEntry(entry: unknown, fixed: Record<string, unknown>): unknown {
+  return isRecord(entry) ? mapDerived(entry, fixed) : entry;
 }
 
 /** `from` 不暴露：工具调用者恒为 owner，模型不能伪造发送者 */
@@ -185,7 +202,10 @@ export function createAgentTool(
     name: 'agent',
     description:
       'Long-lived member lifecycle tool for this agent. ' +
-      'action=new creates member(s) that keep their own session and returns the created member; ' +
+      'action=create creates peer member(s) in the caller team (team members only; ' +
+      'the root owner has no team and must use hire); ' +
+      'action=hire creates contractor member(s) owned by the caller (root-owned and ' +
+      'unbound for the root owner) and returns the created member; ' +
       'action=send delivers a message to a member through the unified dispatch path ' +
       '(live members queue immediately, gone members resume first, rotating members are ' +
       'queued for the new body) and returns immediately; ' +
@@ -195,8 +215,10 @@ export function createAgentTool(
       'action=rotate moves an agent into a fresh body (new session, epoch + 1) with ' +
       'startup_prompt as the first message. ' +
       'A body may only rotate itself; startup_prompt is required. ' +
-      'Agent bodies may use rotate, post, send and list; new and close are owner-only. ' +
-      'Batch: new/close accept `members` and send accepts `messages`; entries run in ' +
+      'Agent bodies may use create, hire, close, rotate, post, send and list. ' +
+      'Closing a peer requires human approval; closing your own contractor or yourself ' +
+      'needs no approval. ' +
+      'Batch: create/hire/close accept `members` and send accepts `messages`; entries run in ' +
       'parallel and return {results:[...]} in input order, each entry either its result ' +
       'or an error. ' +
       'A failed entry does not abort the others; do not mix single fields with a batch. ' +
@@ -210,21 +232,24 @@ export function createAgentTool(
       properties: {
         action: {
           type: 'string',
-          enum: [...ACTIONS],
-          description: 'new | send | close | list | rotate | post',
+          enum: [...OWNER_ACTIONS],
+          description: 'hire | send | close | list | rotate | post',
         },
-        name: { type: 'string', description: 'new: display name' },
-        model: { type: 'string', description: 'new: model override' },
-        system_prompt: { type: 'string', description: 'new: optional system prompt' },
+        name: { type: 'string', description: 'create/hire: display name' },
+        model: { type: 'string', description: 'create/hire: model override' },
+        system_prompt: { type: 'string', description: 'create/hire: optional system prompt' },
         visibility: {
           type: 'string',
           enum: [...VISIBILITIES],
-          description: 'new: visibility (default private); list: filter by visibility',
+          description:
+            'create: team only; hire: visibility (default private for unbound, team with a team); ' +
+            'list: filter by visibility',
         },
         members: {
           type: 'array',
           description:
-            'new: [{name?, model?, system_prompt?, visibility?}]; close: [member id or session id]',
+            'create/hire: [{name?, model?, system_prompt?, visibility?}]; ' +
+            'close: [member id or session id]',
         },
         to: {
           type: 'string',
@@ -249,6 +274,59 @@ export function createAgentTool(
       },
       required: ['action'],
     },
+    /**
+     * close 的审批在权限层完成（批准后 handler 照常执行 service.close）。
+     * - owner 调用 / 非 close 动作：放行；
+     * - self-close：放行；
+     * - contractor：owner 或同 Team 成员放行，其它拒绝；
+     * - peer：需要人类审批（ask）；
+     * - root owner 记录：拒绝。
+     * 批量 close 中只要含 peer 就整体 ask 一次。
+     */
+    checkPermission: async (args: unknown, ctx: ToolContext): Promise<'allow' | 'deny' | 'ask'> => {
+      const record = isRecord(args) ? args : {};
+      if (record.action !== 'close') return 'allow';
+      const callerSession = ctx.session_id;
+      if (
+        callerSession === undefined ||
+        options.ownerSessionId === undefined ||
+        callerSession === options.ownerSessionId
+      ) {
+        return 'allow';
+      }
+
+      const refs: string[] = [];
+      if (Array.isArray(record.members)) {
+        for (const entry of record.members) {
+          if (typeof entry === 'string' && entry !== '') refs.push(entry);
+        }
+      }
+      if (typeof record.member === 'string' && record.member !== '') refs.push(record.member);
+      // 无目标时交给 handler 报参数错，权限层不额外拦截。
+      if (refs.length === 0) return 'allow';
+
+      const caller = await service.identify(callerSession);
+      if (caller === undefined) return 'deny';
+
+      let needAsk = false;
+      for (const ref of refs) {
+        const target = await service.identify(ref);
+        // 无法解析的目标由 handler 报 unknown_member。
+        if (target === undefined) continue;
+        if (target.id === caller.id) continue;
+        // root owner 记录不可被成员关闭。
+        if (target.owner === target.id) return 'deny';
+        if (target.owner === undefined) {
+          needAsk = true;
+          continue;
+        }
+        // contractor：自己的、或同 Team 的可直接关闭。
+        if (target.owner === caller.id) continue;
+        if (target.team_id !== undefined && target.team_id === caller.team_id) continue;
+        return 'deny';
+      }
+      return needAsk ? 'ask' : 'allow';
+    },
     handler: async (args: unknown, ctx): Promise<string> => {
       try {
         const record = isRecord(args) ? args : {};
@@ -259,6 +337,18 @@ export function createAgentTool(
           callerSession === undefined ||
           options.ownerSessionId === undefined ||
           callerSession === options.ownerSessionId;
+
+        /** 成员派生入口的调用者：session 必须能解析出所属 Team，否则 no_team */
+        const requireTeamCaller = async (): Promise<MemberStatus & { team_id: string }> => {
+          if (callerSession === undefined) {
+            throw invalid('no_team: create/hire requires a member session');
+          }
+          const caller = await service.identify(callerSession);
+          if (caller === undefined || caller.team_id === undefined) {
+            throw invalid('no_team: create/hire requires a member with a team');
+          }
+          return caller as MemberStatus & { team_id: string };
+        };
 
         if (action === 'rotate') {
           if (callerSession === undefined) {
@@ -276,27 +366,53 @@ export function createAgentTool(
         }
 
         if (!isOwnerCaller && !BODY_ACTIONS.includes(action as string)) {
-          throw invalid('agent bodies may only use rotate|post|send|list');
+          throw invalid('agent bodies may only use create|hire|close|rotate|post|send|list');
         }
 
-        if (action === 'new') {
+        if (action === 'create' || action === 'hire') {
+          // create 只给成员（peer 必须绑定调用者 Team）；root 没有 Team，只能用 hire。
+          if (action === 'create' && isOwnerCaller) {
+            throw invalid('create requires a team member caller; owner should use hire');
+          }
+          let fixed: Record<string, unknown>;
+          if (action === 'create') {
+            const caller = await requireTeamCaller();
+            fixed = {
+              kind: 'peer',
+              teamId: caller.team_id,
+              spawnedBy: caller.id,
+            };
+          } else if (isOwnerCaller) {
+            // root owner：unbound contractor，沿用旧 new 的 owner/parent 语义。
+            fixed = {
+              kind: 'contractor',
+              owner: ownerId,
+              parentId: ownerId,
+              spawnedBy: ownerId,
+            };
+          } else {
+            const caller = await requireTeamCaller();
+            fixed = {
+              kind: 'contractor',
+              owner: caller.id,
+              parentId: caller.id,
+              teamId: caller.team_id,
+              spawnedBy: caller.id,
+            };
+          }
+          const singles = ['name', 'model', 'system_prompt', 'visibility'];
           if (record.members !== undefined) {
-            assertExclusive(
-              record,
-              ['name', 'model', 'system_prompt', 'visibility'],
-              'members',
-              'new',
+            assertExclusive(record, singles, 'members', action);
+            const entries = readBatch(record, 'members', action).map((entry) =>
+              mapDerivedEntry(entry, fixed),
             );
-            const entries = readBatch(record, 'members', 'new').map((entry) =>
-              mapNewEntry(entry, ownerId),
-            );
-            const result = await service.new({
-              members: entries as unknown as NewMemberInput[],
+            const result = await service.create({
+              members: entries as unknown as CreateMemberInput[],
             });
             return JSON.stringify(result);
           }
           return JSON.stringify(
-            await service.new(mapNew(record, ownerId) as unknown as NewMemberInput),
+            await service.create(mapDerived(record, fixed) as unknown as CreateMemberInput),
           );
         }
 

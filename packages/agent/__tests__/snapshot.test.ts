@@ -41,6 +41,13 @@ function baseRecord(overrides: Partial<PersistedAgentRecord> = {}): PersistedAge
   };
 }
 
+/** owner 缺省的持久化记录（peer）；用于验证可选 owner 往返 */
+function ownerlessRecord(overrides: Partial<PersistedAgentRecord> = {}): PersistedAgentRecord {
+  const value = baseRecord(overrides);
+  delete value.owner;
+  return value;
+}
+
 function recordingLogger(): { logger: Logger; errors: string[] } {
   const errors: string[] = [];
   return {
@@ -61,13 +68,13 @@ describe('Agent snapshot', () => {
     const dataDir = await tempDir();
     const first = makeService({ dataDir });
 
-    const completed = await first.service.new({ visibility: 'team', model: 'test-model' });
+    const completed = await first.service.create({ visibility: 'team', model: 'test-model' });
     await first.service.send({ to: completed.id, content: 'done' });
     await settle();
 
     const gate = deferred<MemberTurnResult>();
     first.runtime.handler = () => gate.promise;
-    const running = await first.service.new({ visibility: 'team' });
+    const running = await first.service.create({ visibility: 'team' });
     await first.service.send({ to: running.id, content: 'in-flight' });
     await first.service.send({ to: running.id, content: 'queued-not-persisted' });
     await first.service.flushSnapshot();
@@ -190,7 +197,7 @@ describe('Agent snapshot', () => {
     const { logger, errors } = recordingLogger();
     const { service } = makeService({ dataDir: join(blocker, 'nested'), logger });
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.flushSnapshot();
     const closed = await service.close({ member: member.id });
 
@@ -203,7 +210,7 @@ describe('Agent snapshot', () => {
     const first = makeService({ dataDir });
     const gate = deferred<MemberTurnResult>();
     first.runtime.handler = () => gate.promise;
-    const running = await first.service.new({ visibility: 'team' });
+    const running = await first.service.create({ visibility: 'team' });
     await first.service.send({ to: running.id, content: 'x' });
     await first.service.flushSnapshot();
 
@@ -263,6 +270,34 @@ describe('Agent snapshot', () => {
     const byId = new Map(loaded.map((record) => [record.id, record]));
     expect(byId.get('member')?.team_id).toBe('team-alpha');
     expect(byId.get('unbound')?.team_id).toBeUndefined();
+  });
+
+  it('round-trips an owner-less member without writing the owner key and keeps version 2', async () => {
+    const dataDir = await tempDir();
+    const path = snapshotPath(dataDir, 'default');
+    const store = new AgentSnapshotStore(path, 'default');
+
+    const written = await store.write([
+      ownerlessRecord(),
+      baseRecord({ id: 'owned', session_id: 'owned', owner: 'main' }),
+    ]);
+    expect(written).toBe(true);
+
+    const file = JSON.parse(await readFile(path, 'utf8')) as {
+      version: number;
+      members: Record<string, unknown>[];
+    };
+    expect(file.version).toBe(AGENT_SNAPSHOT_VERSION);
+    expect(file.version).toBe(2);
+    const ownerless = file.members.find((member) => member.id === 'member');
+    expect(ownerless).toBeDefined();
+    expect('owner' in (ownerless as Record<string, unknown>)).toBe(false);
+    expect(file.members.find((member) => member.id === 'owned')?.owner).toBe('main');
+
+    const loaded = await store.load();
+    const byId = new Map(loaded.map((record) => [record.id, record]));
+    expect(byId.get('member')?.owner).toBeUndefined();
+    expect(byId.get('owned')?.owner).toBe('main');
   });
 
   it('skips invalid body_history entries individually and keeps the valid ones', async () => {

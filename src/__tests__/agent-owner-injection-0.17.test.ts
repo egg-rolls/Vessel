@@ -294,7 +294,11 @@ describe('agent owner injection 0.17', () => {
     const memberEvents: string[] = [];
     const built = buildMemberRuntimeOptions(
       wiringOptions(pluginHost, '/tmp/unused', {
-        permission: { default: 'ask', autoApprove: ['read', 'agent'] },
+        permission: {
+          default: 'ask',
+          autoApprove: ['read', 'agent'],
+          neverAutoApprove: ['agent.close'],
+        },
       }),
       undefined,
       (memberId, sessionId, event) => {
@@ -302,6 +306,7 @@ describe('agent owner injection 0.17', () => {
       },
     );
     expect(built.permission?.autoApprove).toEqual(['read', 'agent']);
+    expect(built.permission?.neverAutoApprove).toEqual(['agent.close']);
     built.onMemberEvent?.('m1', 'm1', {
       type: 'agent.limit.warning',
       run_id: 'r1',
@@ -343,7 +348,7 @@ describe('agent owner injection 0.17', () => {
           ),
         }),
       );
-      const member = await wiring.service.new({ name: 'worker', parentId: 'main' });
+      const member = await wiring.service.create({ name: 'worker', parentId: 'main' });
       await wiring.service.send({ to: member.id, content: 'hello' });
       await waitForState(wiring.service, member.id, 'completed');
 
@@ -388,8 +393,8 @@ describe('agent owner injection 0.17', () => {
         }),
       );
       // 默认 visibility 是 private：旧实现用无 viewer 的 list() 会把它们全过滤掉。
-      const first = await wiring.service.new({ name: 'a', parentId: 'main' });
-      const second = await wiring.service.new({ name: 'b', parentId: 'main' });
+      const first = await wiring.service.create({ name: 'a', parentId: 'main' });
+      const second = await wiring.service.create({ name: 'b', parentId: 'main' });
       await wiring.service.send({ to: first.id, content: 'first' });
       await wiring.service.send({ to: second.id, content: 'second' });
       await waitForState(wiring.service, first.id, 'completed');
@@ -463,7 +468,7 @@ describe('agent owner injection 0.17', () => {
           runtimeFactory,
         }),
       );
-      const member = await wiring.service.new({ name: 'worker', parentId: 'main' });
+      const member = await wiring.service.create({ name: 'worker', parentId: 'main' });
       await wiring.service.send({ to: member.id, content: 'run' });
       await waitForState(wiring.service, member.id, 'completed');
 

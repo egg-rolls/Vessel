@@ -1,5 +1,6 @@
 /**
- * `vessel team list|get|post|members|budget|create|update|archive`（0.19 S3 / S4；S10.3）。
+ * `vessel team list|get|post|members|budget|create|update|archive|freeze|unfreeze`
+ * （0.19 S3 / S4；S10.3；0.27）。
  *
  * 只做参数映射、roster 名字解析、渲染与 exit code；
  * Team 数据与投递全部在 REPL owner 的 TeamService。
@@ -468,6 +469,16 @@ async function execute(
       record,
       'teams.archive',
       { team_id: command.teamId },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
+  }
+
+  if (command.kind === 'freeze' || command.kind === 'unfreeze') {
+    const value = await callAgentOwner(
+      record,
+      'teams.spawnFrozen',
+      { team_id: command.teamId, frozen: command.kind === 'freeze' },
       fetchOptions,
     );
     return { ok: true, value, text: formatTeamWrite(value) };

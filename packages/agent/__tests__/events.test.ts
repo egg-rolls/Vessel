@@ -29,7 +29,7 @@ describe('AgentService events', () => {
     const seen: AgentEvent[] = [];
     service.subscribe((event) => seen.push(event));
 
-    const member = await service.new({ name: 'worker', visibility: 'team' });
+    const member = await service.create({ name: 'worker', visibility: 'team' });
     await service.send({ to: member.id, content: 'hi' });
     await settle();
 
@@ -62,15 +62,15 @@ describe('AgentService events', () => {
     const seen: AgentEvent[] = [];
     service.subscribe((event) => seen.push(event));
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.send({ to: member.id, content: 'hi' });
     await settle();
 
     const completed = seen.find((event) => event.type === 'agent.turn.completed');
     expect(completed).toBeDefined();
     expect('usage' in (completed as AgentEvent)).toBe(false);
-    // 未命名成员不伪造 name
-    expect('name' in (completed as AgentEvent)).toBe(false);
+    // 0.27：未显式命名的成员由 create 自动生成 name（agent-2）
+    expect(completed?.name).toBe(member.name);
   });
 
   it('a failing turn emits agent.turn.failed with the reason', async () => {
@@ -81,7 +81,7 @@ describe('AgentService events', () => {
       throw new Error('provider exploded');
     };
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.send({ to: member.id, content: 'hi' });
     await settle();
 
@@ -97,7 +97,7 @@ describe('AgentService events', () => {
     service.subscribe((event) => seen.push(event));
     const gate = deferred<MemberTurnResult>();
     runtime.handler = () => gate.promise;
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.send({ to: member.id, content: 'work' });
 
     await service.close({ member: member.id });
@@ -115,7 +115,7 @@ describe('AgentService events', () => {
       throw new Error('listener exploded');
     });
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.send({ to: member.id, content: 'hi' });
     await settle();
 
@@ -130,10 +130,10 @@ describe('AgentService events', () => {
       if (event.type === 'agent.spawned') spawned += 1;
     });
 
-    await service.new({ visibility: 'team' });
+    await service.create({ visibility: 'team' });
     off();
     off();
-    await service.new({ visibility: 'team' });
+    await service.create({ visibility: 'team' });
 
     expect(spawned).toBe(1);
   });
@@ -141,7 +141,7 @@ describe('AgentService events', () => {
   it('events option receives RunEvent with member id as run_id and snake_case data', async () => {
     const stream = new MemoryEventStream();
     const { service } = makeService({ events: stream });
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.send({ to: member.id, content: 'hi' });
     await settle();
 

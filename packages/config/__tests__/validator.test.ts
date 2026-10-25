@@ -407,3 +407,21 @@ describe('0.23 S9.4 attention nodes', () => {
     expect(paths).toContain('attention.nodes[0].url');
   });
 });
+
+describe('0.27 permission.neverAutoApprove', () => {
+  it('accepts an array of non-empty strings', () => {
+    const result = validateConfig({
+      permission: { neverAutoApprove: ['agent.close', 'bash'] },
+    });
+    expect(result.errors).toEqual([]);
+  });
+
+  it('rejects non-array / non-string / empty values', () => {
+    for (const value of ['agent.close', [''], ['  '], [1]]) {
+      const config = {
+        permission: { neverAutoApprove: value },
+      } as unknown as VesselConfig;
+      expect(pathsOf(config)).toContain('permission.neverAutoApprove');
+    }
+  });
+});

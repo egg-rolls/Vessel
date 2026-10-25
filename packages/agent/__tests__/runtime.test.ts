@@ -294,7 +294,7 @@ describe('InProcessMemberRuntime', () => {
     expect(denyNames).toEqual(['read']);
   });
 
-  it('exposes the agent tool to members with rotate/post/send/list and keeps other schemas', async () => {
+  it('exposes the agent tool to members with create/hire/close/rotate/post/send/list', async () => {
     const readSchema = {
       type: 'object',
       properties: { path: { type: 'string' } },
@@ -306,7 +306,7 @@ describe('InProcessMemberRuntime', () => {
       inputSchema: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['new', 'send', 'close', 'list', 'rotate'] },
+          action: { type: 'string', enum: ['create', 'send', 'close', 'list', 'rotate'] },
           to: { type: 'string', description: 'send / rotate target' },
           startup_prompt: { type: 'string' },
           name: { type: 'string' },
@@ -345,14 +345,26 @@ describe('InProcessMemberRuntime', () => {
         properties: Record<string, { enum?: string[] }>;
         required: string[];
       };
-      expect(schema.properties.action?.enum).toEqual(['rotate', 'post', 'send', 'list']);
+      expect(schema.properties.action?.enum).toEqual([
+        'create',
+        'hire',
+        'close',
+        'rotate',
+        'post',
+        'send',
+        'list',
+      ]);
       expect(schema.required).toEqual(['action']);
       expect(Object.keys(schema.properties).sort()).toEqual([
         'action',
         'content',
+        'members',
         'messages',
+        'model',
+        'name',
         'startup_prompt',
         'state',
+        'system_prompt',
         'to',
         'visibility',
       ]);

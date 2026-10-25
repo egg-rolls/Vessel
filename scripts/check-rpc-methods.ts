@@ -88,6 +88,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'teams.archive': 'write',
   // 0.19 S4：人工预算 status / override（不进 control scope 白名单）。
   'teams.budget': 'write',
+  // 0.27：冻结 / 解冻 spawn（team-scoped token 只能操作自己的 team）。
+  'teams.spawnFrozen': 'write',
   // 0.19 S5：hub 控制面。exchange 换短期 control token；revoke / list 只允许 admin。
   'auth.exchange': 'write',
   'auth.revoke': 'admin',
@@ -119,7 +121,10 @@ export function parseDocMethodTable(text: string): Record<string, Permission> | 
   const block = text.slice(begin + BEGIN_MARKER.length, end);
   const rows: Record<string, Permission> = {};
   for (const line of block.split('\n')) {
-    const match = /^\|\s*`?([a-z][a-z0-9_.]*)`?\s*\|\s*(read|write|admin)\s*\|/.exec(line.trim());
+    // 方法名允许 camelCase（如 `teams.spawnFrozen`）。
+    const match = /^\|\s*`?([A-Za-z][A-Za-z0-9_.]*)`?\s*\|\s*(read|write|admin)\s*\|/.exec(
+      line.trim(),
+    );
     if (!match) continue;
     const method = match[1] ?? '';
     const permission = match[2] as Permission;

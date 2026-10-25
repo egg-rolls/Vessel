@@ -9,8 +9,12 @@
 
 ## 已合入
 
+- **0.27 蜂群增长**：成员可 `create` 同 Team peer / `hire` contractor；成员关闭 peer 经人类审批，
+  owner close 级联 private contractor；每 Team present ≤ 20（`team_full`），
+  `teams.spawnFrozen` / `vessel team freeze|unfreeze` 停止增长（`team_frozen`）；
+  `agents.create` 条目支持 `kind`，owner 可选。
 - **单一 RPC 契约**：canonical `agents.create|update|close|send|dispatch|rotate` 与
-  `teams.*` 统一为批量契约，方法表 **57**；loopback owner 端点只做 transport，
+  `teams.*` 统一为批量契约，方法表 **58**；loopback owner 端点只做 transport，
   用合成 principal 分发同一方法表，`agent.*` / `team.*` wire 名已删除，CLI 语法不变。
 - **Web 易用性**：Agents → Teams → Nodes 编排顺序、Hub / Gateway 状态页、
   对象页 CRUD、列表搜索与语言切换。

@@ -23,7 +23,7 @@ describe('AgentService.dispatch', () => {
   it('single-flights resume when a gone member receives concurrent dispatches', async () => {
     const dataDir = await tempDir();
     const first = makeService({ dataDir });
-    const member = await first.service.new({ visibility: 'team' });
+    const member = await first.service.create({ visibility: 'team' });
     await first.service.flushSnapshot();
 
     // 重启：engine 不在，成员应为 gone
@@ -52,7 +52,7 @@ describe('AgentService.dispatch', () => {
 
   it('rejects dispatch to a left member with agent_left', async () => {
     const { service } = makeService();
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.close({ member: member.id });
 
     const result = await service.dispatch({ to: member.id, content: 'x' });
@@ -65,10 +65,10 @@ describe('AgentService.dispatch', () => {
 
   it('allows reusing the name of a left member and resolves the present one', async () => {
     const { service } = makeService();
-    const first = await service.new({ name: 'reuse', visibility: 'team' });
+    const first = await service.create({ name: 'reuse', visibility: 'team' });
     await service.close({ member: first.id });
 
-    const again = await service.new({ name: 'reuse', visibility: 'team' });
+    const again = await service.create({ name: 'reuse', visibility: 'team' });
     expect(again.name).toBe('reuse');
 
     const result = await service.dispatch({ to: 'reuse', content: 'x' });
@@ -78,7 +78,7 @@ describe('AgentService.dispatch', () => {
 
   it('does not report queued when close races dispatch', async () => {
     const { service } = makeService();
-    const member = await service.new({ name: 'closing', visibility: 'team' });
+    const member = await service.create({ name: 'closing', visibility: 'team' });
 
     const closing = service.close({ member: member.id });
     const result = await service.dispatch({ to: member.id, content: 'x' });
@@ -140,7 +140,7 @@ describe('AgentService team binding', () => {
     const events: AgentEvent[] = [];
     service.subscribe((event) => events.push(event));
 
-    const member = await service.new({ name: 'alpha-1', workspace: '/work/alpha' });
+    const member = await service.create({ name: 'alpha-1', workspace: '/work/alpha' });
 
     expect(member.team_id).toBe('team-alpha');
     expect(member.visibility).toBe('team');
@@ -153,13 +153,13 @@ describe('AgentService team binding', () => {
     const binder = new FakeTeamBinder();
     const { service } = makeService({ teamBinder: binder });
 
-    const alpha = await service.new({ name: 'dup', workspace: '/work/alpha' });
+    const alpha = await service.create({ name: 'dup', workspace: '/work/alpha' });
     expect(alpha.team_id).toBe('team-alpha');
-    await expect(service.new({ name: 'dup', workspace: '/work/alpha' })).rejects.toMatchObject({
+    await expect(service.create({ name: 'dup', workspace: '/work/alpha' })).rejects.toMatchObject({
       code: 'invalid_input',
     });
 
-    const beta = await service.new({ name: 'dup', workspace: '/work/beta' });
+    const beta = await service.create({ name: 'dup', workspace: '/work/beta' });
     expect(beta.team_id).toBe('team-beta');
   });
 
@@ -167,19 +167,19 @@ describe('AgentService team binding', () => {
     const binder = new FakeTeamBinder();
     const explicit = makeService({ teamBinder: binder });
 
-    await expect(explicit.service.new({ workspace: '/work/alpha' })).rejects.toMatchObject({
+    await expect(explicit.service.create({ workspace: '/work/alpha' })).rejects.toMatchObject({
       code: 'invalid_input',
     });
     expect(binder.ensured).toHaveLength(0);
     expect(explicit.runtime.spawned).toHaveLength(0);
 
     const defaults = makeService({ teamBinder: binder, defaultWorkspace: '/work/alpha' });
-    const unnamed = await defaults.service.new({});
+    const unnamed = await defaults.service.create({});
     expect(unnamed.team_id).toBeUndefined();
     expect(unnamed.visibility).toBe('private');
     expect(binder.ensured).toHaveLength(0);
 
-    const named = await defaults.service.new({ name: 'alpha-2' });
+    const named = await defaults.service.create({ name: 'alpha-2' });
     expect(named.team_id).toBe('team-alpha');
     expect(named.visibility).toBe('team');
   });
@@ -190,7 +190,7 @@ describe('AgentService team binding', () => {
     const events: AgentEvent[] = [];
     service.subscribe((event) => events.push(event));
 
-    const member = await service.new({ name: 'revive', visibility: 'team' });
+    const member = await service.create({ name: 'revive', visibility: 'team' });
     const rotated = await service.rotate({ to: member.id, startup_prompt: 'next body' });
     expect(rotated.status).toBe('rotated');
     await settle();
@@ -234,7 +234,7 @@ describe('AgentService team binding', () => {
 
   it('identify resolves only the current body and ignores retired sessions', async () => {
     const { service } = makeService();
-    const member = await service.new({ name: 'identify-me', visibility: 'team' });
+    const member = await service.create({ name: 'identify-me', visibility: 'team' });
 
     expect((await service.identify(member.session_id))?.id).toBe(member.id);
 
@@ -264,7 +264,7 @@ describe('AgentService team binding', () => {
     const events: AgentEvent[] = [];
     service.subscribe((event) => events.push(event));
 
-    const member = await service.new({ name: 'replier' });
+    const member = await service.create({ name: 'replier' });
     runtime.handler = async () => ({ content: 'final answer', outcome: 'completed' });
 
     await service.dispatch({ to: member.id, content: 'go' });
@@ -293,7 +293,7 @@ describe('AgentService team binding', () => {
     const events: AgentEvent[] = [];
     service.subscribe((event) => events.push(event));
 
-    const member = await service.new({ name: 'big-replier' });
+    const member = await service.create({ name: 'big-replier' });
     runtime.handler = async () => ({
       content: 'x'.repeat(70 * 1024),
       outcome: 'completed',

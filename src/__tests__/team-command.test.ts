@@ -486,6 +486,41 @@ describe('vessel team command', () => {
     expect(JSON.parse(archived.stdout).archived_at).toBe(2);
   });
 
+  it('maps team freeze / unfreeze to teams.spawnFrozen', async () => {
+    const dir = await setup();
+    const calls: RpcBody[] = [];
+    const fetchImpl = fakeFetch((body) => {
+      calls.push(body);
+      return {
+        team_id: body.params.team_id,
+        name: 'Alpha',
+        tenant_id: 'default',
+        member_count: 0,
+        online_count: 0,
+        created_at: 1,
+        ...(body.params.frozen === true ? { spawn_frozen: true } : {}),
+      };
+    });
+
+    const frozen = await runTeamCommand(
+      { kind: 'freeze', teamId: 'alpha', json: false },
+      options(dir, fetchImpl),
+    );
+    const thawed = await runTeamCommand(
+      { kind: 'unfreeze', teamId: 'alpha', json: true },
+      options(dir, fetchImpl),
+    );
+
+    expect(calls.map((call) => call.method)).toEqual(['teams.spawnFrozen', 'teams.spawnFrozen']);
+    expect(calls[0]?.params).toEqual({ team_id: 'alpha', frozen: true });
+    expect(calls[1]?.params).toEqual({ team_id: 'alpha', frozen: false });
+    expect(frozen.exitCode).toBe(0);
+    expect(frozen.stdout).toContain('team saved alpha');
+    expect(thawed.exitCode).toBe(0);
+    expect(JSON.parse(thawed.stdout)).toMatchObject({ team_id: 'alpha' });
+    expect(JSON.parse(thawed.stdout).spawn_frozen).toBeUndefined();
+  });
+
   it('keeps exit 1 with --json when a delivery failed', async () => {
     const dir = await setup();
     const result = await runTeamCommand(

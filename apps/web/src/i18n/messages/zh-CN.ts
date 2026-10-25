@@ -470,6 +470,8 @@ export const messages = {
   'team.member.visibility': '可见性 {visibility}',
   'team.member.observedOnly': '本次页面会话观察到的历史；刷新后仅显示当前 Body。',
   'team.member.currentSession': '查看当前会话',
+  'team.member.peer': '同伴',
+  'team.member.contractor': '外包',
 
   'team.error.notFound': 'Team 不存在',
   'team.error.notEnabled': 'Team 未启用',
@@ -631,6 +633,10 @@ export const messages = {
   'teams.error.noToken': '该节点没有可用 token',
   'teams.chat.archived': '已归档',
   'teams.chat.archivedHint': '归档 Team 只读；日志仍可查看。',
+  'teams.freeze': '冻结创建成员',
+  'teams.unfreeze': '解冻创建成员',
+  'teams.frozen': '已冻结',
+  'teams.unfrozen': '已解冻',
   'teams.nodeMissing': '路由中的节点不在本页节点列表中',
 
   // Agents（全局）

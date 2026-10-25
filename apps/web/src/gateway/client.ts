@@ -829,6 +829,11 @@ export class GatewayClient {
     return this.rpc<TeamSummary>('teams.archive', { team_id: teamId });
   }
 
+  /** 0.27：冻结 / 解冻 Team 的成员创建闸门。 */
+  setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamSummary> {
+    return this.rpc<TeamSummary>('teams.spawnFrozen', { team_id: teamId, frozen });
+  }
+
   // ── Agent CRUD（0.25；canonical `agents.create|update|close`）──
   // update 的 model / system_prompt 从下一个 Body 生效，name 立即生效。
 

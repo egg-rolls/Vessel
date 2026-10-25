@@ -33,7 +33,7 @@ describe('root owner', () => {
 
   it('automatic reply is dropped when the parent owner has not been attached', async () => {
     const { service, runtime } = makeService();
-    const child = await service.new({ parentId: 'main', visibility: 'team' });
+    const child = await service.create({ parentId: 'main', visibility: 'team' });
     runtime.handler = async (member) => (member.id === child.id ? { content: 'auto' } : {});
 
     await service.send({ to: child.id, content: 'work' });
@@ -45,7 +45,7 @@ describe('root owner', () => {
   it('attached owner queues the automatic reply until takeMessages drains it', async () => {
     const { service, runtime } = makeService();
     await service.attachOwner({ id: 'main', visibility: 'team' });
-    const child = await service.new({ parentId: 'main', visibility: 'team' });
+    const child = await service.create({ parentId: 'main', visibility: 'team' });
     runtime.handler = async (member) => (member.id === child.id ? { content: 'auto' } : {});
 
     await service.send({ to: child.id, content: 'work' });
@@ -78,7 +78,7 @@ describe('root owner', () => {
 
   it('attach rejects an id owned by a spawned member', async () => {
     const { service } = makeService();
-    const child = await service.new({ visibility: 'team' });
+    const child = await service.create({ visibility: 'team' });
 
     const error = await service.attachOwner({ id: child.id }).catch((reason) => reason);
 

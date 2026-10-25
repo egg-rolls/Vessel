@@ -15,6 +15,7 @@ import type {
 } from '../src/agent-control';
 import { createAgentRegistry } from '../src/agents-registry';
 import { type AgentMethodsDeps, createAgentMethods } from '../src/gateway/methods/agents';
+import { agentStatusSchema } from '../src/gateway/methods/schemas';
 import { createLocalRpcDispatcher } from '../src/local';
 import { RpcError, type RpcMethodContext } from '../src/rpc';
 import type { TeamControlLike, TeamDetailLike, TeamSummaryLike } from '../src/team-control';
@@ -200,6 +201,9 @@ function fakeTeams(workspaces: Record<string, string | undefined> = {}): TeamCon
     async archive() {
       throw new Error('not used');
     },
+    async setSpawnFrozen() {
+      throw new Error('not used');
+    },
     async list() {
       return [];
     },
@@ -267,6 +271,110 @@ describe('agents.create', () => {
     expect(calls.create).toEqual([{ name: 'bob', workspace: '/ws/alpha', visibility: 'team' }]);
     expect(result.results[0]?.ok).toBe(true);
     expect(result.results[0]?.agent?.team_id).toBe('alpha');
+  });
+
+  it('maps kind=peer to an ownerless team member with the caller as spawnedBy', async () => {
+    const { control, calls } = fakeAgentControl();
+    const teams = fakeTeams({ alpha: '/ws/alpha' });
+
+    const result = (await methodOf(deps({ agent: control, teams }), 'agents.create').handler(
+      { agents: [{ kind: 'peer', team_id: 'alpha', name: 'bob' }] },
+      context({ agent_id: 'owner-1' }),
+    )) as { results: Array<Record<string, unknown>> };
+
+    expect(calls.create).toEqual([
+      { kind: 'peer', team_id: 'alpha', name: 'bob', spawnedBy: 'owner-1' },
+    ]);
+    expect(result.results[0]?.ok).toBe(true);
+  });
+
+  it('rejects peer without team_id and peer with workspace per entry', async () => {
+    const { control, calls } = fakeAgentControl();
+    const teams = fakeTeams({ alpha: '/ws/alpha' });
+
+    const result = (await methodOf(deps({ agent: control, teams }), 'agents.create').handler(
+      {
+        agents: [
+          { kind: 'peer', name: 'no-team' },
+          { kind: 'peer', team_id: 'alpha', workspace: '/ws/alpha' },
+          { kind: 'peer', team_id: 'missing' },
+          { kind: 'peer', team_id: 'alpha', name: 'ok' },
+        ],
+      },
+      context({ agent_id: 'owner-1' }),
+    )) as { results: Array<Record<string, unknown>> };
+
+    expect(result.results.map((entry) => entry.ok)).toEqual([false, false, false, true]);
+    expect(result.results[0]).toMatchObject({ code: 'invalid_params' });
+    expect(result.results[1]).toMatchObject({ code: 'invalid_params' });
+    expect(result.results[2]).toMatchObject({ code: 'not_found' });
+    expect(calls.create).toEqual([
+      { kind: 'peer', team_id: 'alpha', name: 'ok', spawnedBy: 'owner-1' },
+    ]);
+  });
+
+  it('maps kind=contractor to the caller owner/parent (team optional)', async () => {
+    const { control, calls } = fakeAgentControl();
+    const teams = fakeTeams({ alpha: '/ws/alpha' });
+
+    await methodOf(deps({ agent: control, teams }), 'agents.create').handler(
+      {
+        agents: [
+          { kind: 'contractor', team_id: 'alpha', name: 'with-team' },
+          { kind: 'contractor', name: 'unbound' },
+        ],
+      },
+      context({ agent_id: 'owner-1' }),
+    );
+
+    expect(calls.create).toEqual([
+      {
+        kind: 'contractor',
+        team_id: 'alpha',
+        name: 'with-team',
+        owner: 'owner-1',
+        parent_id: 'owner-1',
+        spawnedBy: 'owner-1',
+      },
+      {
+        kind: 'contractor',
+        name: 'unbound',
+        owner: 'owner-1',
+        parent_id: 'owner-1',
+        spawnedBy: 'owner-1',
+      },
+    ]);
+  });
+
+  it('contractor without a principal agent id leaves owner/parent to the service', async () => {
+    const { control, calls } = fakeAgentControl();
+    const teams = fakeTeams({ alpha: '/ws/alpha' });
+
+    await methodOf(deps({ agent: control, teams }), 'agents.create').handler(
+      { agents: [{ kind: 'contractor', team_id: 'alpha' }] },
+      context(),
+    );
+
+    expect(calls.create).toEqual([{ kind: 'contractor', team_id: 'alpha', spawnedBy: 'human' }]);
+  });
+
+  it('kind absent keeps the workspace + identity path', async () => {
+    const { control, calls } = fakeAgentControl();
+    const teams = fakeTeams({ alpha: '/ws/alpha' });
+
+    await methodOf(deps({ agent: control, teams }), 'agents.create').handler(
+      { agents: [{ team_id: 'alpha', name: 'legacy' }] },
+      context({ agent_id: 'owner-1' }),
+    );
+
+    expect(calls.create).toEqual([
+      {
+        name: 'legacy',
+        workspace: '/ws/alpha',
+        owner: 'owner-1',
+        parent_id: 'owner-1',
+      },
+    ]);
   });
 
   it('returns per-entry not_found when the team_id cannot be resolved', async () => {
@@ -429,11 +537,17 @@ describe('agent lifecycle contract', () => {
     }
   });
 
-  it('keeps canonical count at 57 with the control plane absent', () => {
+  it('agent result schema keeps owner optional for peer members', () => {
+    const required = agentStatusSchema.required as string[];
+    expect(required).not.toContain('owner');
+    expect(agentStatusSchema.properties.owner).toBeDefined();
+  });
+
+  it('keeps canonical count at 58 with the control plane absent', () => {
     const dispatcher = createLocalRpcDispatcher({ hub: createGatewayEventHub() });
     try {
       const methods = dispatcher.manifest().methods;
-      expect(methods).toHaveLength(57);
+      expect(methods).toHaveLength(58);
       expect(methods.filter((method) => method.name.startsWith('agents.'))).toHaveLength(9);
     } finally {
       dispatcher.dispose();

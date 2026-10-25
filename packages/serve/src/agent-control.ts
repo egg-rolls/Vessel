@@ -32,7 +32,8 @@ export interface AgentStatusLike {
   session_id: string;
   name?: string;
   parent_id?: string;
-  owner: string;
+  /** 归属 principal；缺省 = peer（无 owner） */
+  owner?: string;
   visibility: AgentVisibilityLike;
   state: AgentStateLike;
   presence?: 'live' | 'gone';
@@ -57,6 +58,10 @@ export interface AgentStatusLike {
 
 /** `agents.create` 的单个条目（workspace 由 handler 从 team_id 解析后填入）。 */
 export interface AgentCreateLikeInput {
+  /** 输入判别（不落盘）：peer 无 owner 且绑定 team；contractor 归属调用者。缺省 = 旧行为。 */
+  kind?: 'peer' | 'contractor';
+  /** peer / 成员派生路径：按已存在 Team 绑定；peer 必填。 */
+  team_id?: string;
   name?: string;
   model?: string;
   system_prompt?: string;
@@ -68,6 +73,8 @@ export interface AgentCreateLikeInput {
    * gateway 不传，沿用 AgentService 的 `DEFAULT_OWNER`。
    */
   owner?: string;
+  /** 审计用调用者 id（只写入 `agent.spawned` 事件，不持久化）。 */
+  spawnedBy?: string;
   /** 同 `owner`，合成 owner 创建的成员与 owner 建立父子关系。 */
   parent_id?: string;
 }

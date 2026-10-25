@@ -150,12 +150,12 @@ function parse(argv: string[]) {
 }
 
 describe('vessel agent CLI', () => {
-  it('new --json prints the raw member status', async () => {
+  it('create --json prints the raw member status', async () => {
     const { dataDir, calls } = await mockOwner();
     const result = await runAgentCommand(
       parse([
         'agent',
-        'new',
+        'create',
         '--name',
         'worker',
         '--model',

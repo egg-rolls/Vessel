@@ -351,7 +351,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     registryName: 'agent',
     subcommands: [
       {
-        name: 'new',
+        name: 'create',
         flags: ['--json', '--name', '--model', '--visibility', '--system-prompt', '--workspace'],
         flagValues: { '--visibility': AGENT_VISIBILITIES },
       },
@@ -374,6 +374,8 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       { name: 'get', flags: ['--json', '--limit', '--members', '--help'] },
       { name: 'post', flags: ['--json', '--mention', '--help'] },
       { name: 'members', flags: ['--json', '--help'] },
+      { name: 'freeze', flags: ['--json', '--help'] },
+      { name: 'unfreeze', flags: ['--json', '--help'] },
       {
         name: 'budget',
         flags: ['--json', '--conversation', '--dimension', '--max', '--help'],

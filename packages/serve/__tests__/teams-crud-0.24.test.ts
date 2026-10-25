@@ -32,13 +32,14 @@ interface Calls {
   create: TeamCreateLikeInput[];
   update: TeamUpdateLikeInput[];
   archive: Array<{ team_id: string }>;
+  spawnFrozen: Array<{ teamId: string; frozen: boolean }>;
 }
 
 function fakeTeams(options: { tenantId?: string; archiveError?: Error } = {}): {
   control: TeamControlLike;
   calls: Calls;
 } {
-  const calls: Calls = { create: [], update: [], archive: [] };
+  const calls: Calls = { create: [], update: [], archive: [], spawnFrozen: [] };
   const control: TeamControlLike = {
     tenantId: options.tenantId ?? 'default',
     async create(input) {
@@ -54,6 +55,10 @@ function fakeTeams(options: { tenantId?: string; archiveError?: Error } = {}): {
       calls.archive.push(input);
       if (options.archiveError !== undefined) throw options.archiveError;
       return summary(input.team_id, { archived_at: 2 });
+    },
+    async setSpawnFrozen(teamId, frozen) {
+      calls.spawnFrozen.push({ teamId, frozen });
+      return summary(teamId, frozen ? { spawn_frozen: true } : {});
     },
     async list() {
       return [];
@@ -140,6 +145,70 @@ describe('teams.create', () => {
     for (const name of ['teams.create', 'teams.update', 'teams.archive']) {
       expect(methodOf(control, name).result_schema).toBeDefined();
     }
+  });
+});
+
+describe('teams.spawnFrozen', () => {
+  it('declares the method with a boolean frozen param and a team summary result', () => {
+    const { control } = fakeTeams();
+    const method = methodOf(control, 'teams.spawnFrozen');
+    expect(method.permission).toBe('write');
+    expect(method.result_schema).toBe(teamSummarySchema);
+    const schema = method.params_schema as {
+      required?: string[];
+      properties?: Record<string, unknown>;
+    };
+    expect(schema.required).toEqual(['team_id', 'frozen']);
+    expect(schema.properties?.frozen).toEqual({ type: 'boolean' });
+  });
+
+  it('forwards freeze / unfreeze and returns spawn_frozen', async () => {
+    const { control, calls } = fakeTeams();
+    const frozen = (await methodOf(control, 'teams.spawnFrozen').handler(
+      { team_id: 'alpha', frozen: true },
+      context(),
+    )) as TeamSummaryLike;
+    const thawed = (await methodOf(control, 'teams.spawnFrozen').handler(
+      { team_id: 'alpha', frozen: false },
+      context(),
+    )) as TeamSummaryLike;
+    expect(calls.spawnFrozen).toEqual([
+      { teamId: 'alpha', frozen: true },
+      { teamId: 'alpha', frozen: false },
+    ]);
+    expect(frozen.spawn_frozen).toBe(true);
+    expect(thawed.spawn_frozen).toBeUndefined();
+  });
+
+  it('lets a team-scoped token freeze its own team only', async () => {
+    const { control, calls } = fakeTeams();
+    await methodOf(control, 'teams.spawnFrozen').handler(
+      { team_id: 'alpha', frozen: true },
+      context({ scope: 'control', team_id: 'alpha' }),
+    );
+    expect(calls.spawnFrozen).toEqual([{ teamId: 'alpha', frozen: true }]);
+
+    await expectRpcError(
+      async () =>
+        await methodOf(control, 'teams.spawnFrozen').handler(
+          { team_id: 'beta', frozen: true },
+          context({ scope: 'control', team_id: 'alpha' }),
+        ),
+      'not_found',
+    );
+    expect(calls.spawnFrozen).toEqual([{ teamId: 'alpha', frozen: true }]);
+  });
+
+  it('rejects a non-boolean frozen value', async () => {
+    const { control } = fakeTeams();
+    await expectRpcError(
+      async () =>
+        await methodOf(control, 'teams.spawnFrozen').handler(
+          { team_id: 'alpha', frozen: 'yes' },
+          context(),
+        ),
+      'invalid_params',
+    );
   });
 });
 

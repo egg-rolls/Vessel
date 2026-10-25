@@ -59,7 +59,7 @@ alice@node-a:lab  ── federation ──▶  carol@node-b:ops
 ## 4. 一个任务如何流动
 
 1. 人在 `node-a` 的 `lab` 目录启动 Vessel；`lab` 是已声明的 Team（`workspace` 匹配当前目录）。
-2. 主 Agent 用 `agent(new)` 创建 `alice`、`bob`；每个成员有独立 Body 和会话。
+2. 人类用 `agents.create`（`kind: peer|contractor` + `team_id`）把 `alice`、`bob` 招进 Team；root owner 也可用 `agent(hire)` 招自己的 contractor。每个成员有独立 Body 和会话。
 3. 成员用 `read` / `bash` / `edit` 读取环境信息素：文档、代码、系统状态、命令输出。
 4. 成员用 `agent(send)` 定向同步；`agent(post)` 只写 Team 日志，不唤醒任何人。
 5. 需要 `node-b` 的 `carol` 时，`alice` 发 `carol@node-b:ops`；接收侧只唤醒 `carol` 一个，不广播。
@@ -134,12 +134,12 @@ Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把�
 
 | 能力 | 状态 |
 | --- | --- |
-| 单节点 Agent 生命周期（`new` / `send` / `close` / `list` / `rotate` / `post`） | 已实现 |
+| 单节点 Agent 生命周期（`create` / `hire` / `send` / `close` / `list` / `rotate` / `post`） | 已实现 |
 | Team 声明后按工作目录匹配，带 roster / 日志 / 预算 / 可见性 | 已实现 |
 | Hub 配对、目录、在线状态、指针 | 已实现 |
 | 跨节点按地址投递与回复（静态 peer） | 已实现 |
 | Agent 主动发现远端节点 / Team / 成员 | 部分：CLI `federation team-info`（opt-in）、Hub 目录或 `bash`；无专用发现工具 |
-| 成员 Agent 再派生 Agent（蜂群增长） | 未实现：当前只有 owner 能 `new` / `close` |
+| 成员 Agent 再派生 Agent（蜂群增长） | 已实现：peer / contractor 两条路径、close 人类审批、每 Team present ≤20、Team 冻结；无 TTL / spawn 预算 / 跨 Team 派生 |
 | 跨节点 spawn / close / rotate / resume | 未实现 |
 | 扩散信息素订阅（文件 / 目录 / 事件 diff） | 未实现（方向） |
 | 自动发现 / mesh / 中继 / 离线队列 / 跨重启 exactly-once | 未实现（暂不承诺） |

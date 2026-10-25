@@ -198,6 +198,17 @@ export class DefaultTeamService implements AgentTeamService {
     return toTeamSummary(record, 0, 0);
   }
 
+  async setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamSummary> {
+    const record = await this.store.setSpawnFrozen(teamId, frozen);
+    const team = await this.summarize(record);
+    this.emit({ team_id: record.team_id, kind: 'spawn', frozen });
+    return team;
+  }
+
+  isSpawnFrozen(teamId: string): boolean {
+    return this.store.get(teamId)?.spawn_frozen === true;
+  }
+
   async budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview> {
     const record = this.store.get(input.team_id);
     if (record === undefined) {
@@ -902,10 +913,17 @@ export class DefaultTeamService implements AgentTeamService {
 
     const systemEvent = this.systemEventFor(event);
     if (systemEvent === undefined) return;
+    // join 的 from 记录“谁招的”：agent.spawned 带 spawned_by 时用它，否则保持 system。
+    const from =
+      event.type === 'agent.spawned' &&
+      typeof event.spawned_by === 'string' &&
+      event.spawned_by.length > 0
+        ? event.spawned_by
+        : 'system';
     const entry: TeamLogEntry = {
       message_id: this.newId(),
       team_id: teamId,
-      from: 'system',
+      from,
       to: [event.agent_id],
       mentions: [],
       content: SYSTEM_CONTENT[systemEvent],
@@ -962,6 +980,7 @@ function toTeamSummary(record: TeamRecord, memberCount: number, onlineCount: num
     online_count: onlineCount,
     created_at: record.created_at,
     ...(record.archived_at !== undefined ? { archived_at: record.archived_at } : {}),
+    ...(record.spawn_frozen !== undefined ? { spawn_frozen: record.spawn_frozen } : {}),
   };
 }
 
@@ -980,6 +999,7 @@ function toMemberSummary(status: MemberStatus): TeamMemberSummary {
     ...(status.team_id !== undefined ? { team_id: status.team_id } : {}),
     membership: status.membership ?? 'present',
     presence: status.presence ?? 'gone',
+    ...(status.owner !== undefined ? { owner: status.owner } : {}),
     visibility: status.visibility,
     state: status.state,
     epoch: status.epoch ?? 0,
@@ -1055,6 +1075,7 @@ function truncateReplyContent(content: string): string {
 
 /**
  * private roster 成员判定：`owner === id` 是根 owner（人类），不属 roster，保持放行。
+ * 没有 owner 的 private 仍是 roster 成员（fail-closed）。
  * Team 日志对 team 可见，这类成员不得作为 actor / mention / send 目标，也不写日志。
  */
 function isPrivateRosterMember(status: MemberStatus): boolean {

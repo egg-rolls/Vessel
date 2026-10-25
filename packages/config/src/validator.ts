@@ -1998,7 +1998,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     if (!isPlainObject(config.permission)) {
       errors.push({ path: 'permission', message: 'permission must be an object' });
     } else {
-      const { autoApprove } = config.permission;
+      const { autoApprove, neverAutoApprove } = config.permission;
       if (autoApprove !== undefined) {
         if (
           !Array.isArray(autoApprove) ||
@@ -2008,6 +2008,18 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
             path: 'permission.autoApprove',
             message: 'permission.autoApprove must be an array of non-empty strings',
             value: autoApprove,
+          });
+        }
+      }
+      if (neverAutoApprove !== undefined) {
+        if (
+          !Array.isArray(neverAutoApprove) ||
+          neverAutoApprove.some((name) => typeof name !== 'string' || name.trim() === '')
+        ) {
+          errors.push({
+            path: 'permission.neverAutoApprove',
+            message: 'permission.neverAutoApprove must be an array of non-empty strings',
+            value: neverAutoApprove,
           });
         }
       }
@@ -2397,7 +2409,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'ownerId',
   ],
   session: ['backend', 'storagePath', 'maxHistory'],
-  permission: ['autoApprove'],
+  permission: ['autoApprove', 'neverAutoApprove'],
   update: ['autoCheck', 'channel', 'source'],
   host: ['enabled', 'nodeId', 'nodeName', 'limits'],
   scheduler: ['maxConcurrency', 'maxQueueSize', 'perAgentSerial'],

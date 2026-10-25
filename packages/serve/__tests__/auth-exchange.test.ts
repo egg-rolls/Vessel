@@ -110,6 +110,9 @@ function makeTeams(
     async archive() {
       throw new Error('archive is not used by auth methods');
     },
+    async setSpawnFrozen() {
+      throw new Error('spawnFrozen is not used by auth methods');
+    },
     async list() {
       return [];
     },

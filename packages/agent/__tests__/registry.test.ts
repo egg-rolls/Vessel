@@ -24,6 +24,13 @@ function record(overrides: Partial<MemberRecord> = {}): MemberRecord {
   };
 }
 
+/** owner 缺省的记录（peer）；用于验证可选 owner 语义 */
+function ownerlessRecord(overrides: Partial<MemberRecord> = {}): MemberRecord {
+  const value = record(overrides);
+  delete value.owner;
+  return value;
+}
+
 describe('MemberRegistry state machine', () => {
   it('rejects an illegal transition out of closed', () => {
     const registry = new MemberRegistry(() => 1);
@@ -88,5 +95,40 @@ describe('MemberRegistry team fields', () => {
     registry.setMembership('missing', 'present');
     expect(registry.size).toBe(1);
     expect(registry.get('m1')?.membership).toBe('left');
+  });
+});
+
+describe('MemberRegistry optional owner', () => {
+  it('omits owner from status / persisted / runtime when absent', () => {
+    const registry = new MemberRegistry(() => 1);
+    const member = ownerlessRecord();
+    registry.add(member);
+
+    expect(toMemberStatus(member).owner).toBeUndefined();
+    expect('owner' in toMemberStatus(member)).toBe(false);
+    expect('owner' in toPersistedRecord(member)).toBe(false);
+    expect('owner' in toRuntimeMember(member)).toBe(false);
+  });
+
+  it('hides ownerless private members from every viewer', () => {
+    const registry = new MemberRegistry(() => 1);
+    const member = ownerlessRecord({ visibility: 'private' });
+    registry.add(member);
+
+    expect(registry.canView(member, 'main')).toBe(false);
+    expect(registry.canView(member)).toBe(false);
+    expect(registry.list({ viewer: 'main' })).toEqual([]);
+    expect(registry.list()).toEqual([]);
+  });
+
+  it('keeps owned private members visible only to their owner', () => {
+    const registry = new MemberRegistry(() => 1);
+    const member = record({ owner: 'main', visibility: 'private' });
+    registry.add(member);
+
+    expect(registry.canView(member, 'main')).toBe(true);
+    expect(registry.canView(member, 'bob')).toBe(false);
+    expect(registry.list({ viewer: 'main' }).map((entry) => entry.id)).toEqual(['m1']);
+    expect(registry.list({ viewer: 'bob' })).toEqual([]);
   });
 });

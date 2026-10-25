@@ -31,6 +31,8 @@ export interface TeamControl {
   createTeam(input: TeamCreateInput): Promise<TeamSummary>;
   updateTeam(input: TeamUpdateInput): Promise<TeamSummary>;
   archiveTeam(teamId: string): Promise<TeamSummary>;
+  /** 0.27：冻结 / 解冻成员创建闸门。 */
+  setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamSummary>;
   getSession(sessionId: string): Promise<SessionDetail>;
   /** 0.25：Agent CRUD（与 Teams 共用同一节点的控制面）。 */
   createAgent(input: AgentCreateInput): Promise<AgentSummary>;
@@ -69,6 +71,9 @@ export function createRemoteTeamControl(
     },
     archiveTeam(teamId) {
       return call<TeamSummary>('teams.archive', { team_id: teamId });
+    },
+    setSpawnFrozen(teamId, frozen) {
+      return call<TeamSummary>('teams.spawnFrozen', { team_id: teamId, frozen });
     },
     async getSession(sessionId) {
       const body = await call<{ session?: SessionDetail }>('sessions.get', {

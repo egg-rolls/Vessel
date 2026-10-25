@@ -1,5 +1,5 @@
 /**
- * `vessel agent new|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate）。
+ * `vessel agent create|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate）。
  *
  * 只做参数映射与渲染；生命周期全部在 REPL owner 的 AgentService。
  * `--json` 原样输出端点结果，人类输出走 ui-style，错误码进 stderr。
@@ -51,7 +51,7 @@ function formatStatus(status: MemberStatus): string {
   lines.push(ui.kv('session', status.session_id));
   if (status.name !== undefined) lines.push(ui.kv('name', status.name));
   lines.push(ui.kv('visibility', status.visibility));
-  lines.push(ui.kv('owner', status.owner));
+  if (status.owner !== undefined) lines.push(ui.kv('owner', status.owner));
   if (status.parent_id !== undefined) lines.push(ui.kv('parent', status.parent_id));
   return lines.join('\n');
 }
@@ -87,7 +87,7 @@ function methodParams(command: AgentCommand): {
   method: AgentOwnerMethod;
   params: Record<string, unknown>;
 } {
-  if (command.kind === 'new') {
+  if (command.kind === 'create') {
     return {
       method: 'agents.create',
       params: {
@@ -178,7 +178,7 @@ function agentList(result: unknown): MemberStatus[] | undefined {
 }
 
 function humanOutput(command: AgentCommand, result: unknown): string {
-  if (command.kind === 'new') {
+  if (command.kind === 'create') {
     const item = firstResult(result);
     if (item !== undefined && item.ok === true) {
       const status = firstResultStatus(result);
@@ -240,9 +240,9 @@ export async function runAgentCommand(
       ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     });
     const stdout = command.json ? JSON.stringify(result, null, 2) : humanOutput(command, result);
-    // 单条 send / dispatch / rotate / new 的逐条失败 → exit 1（close 保持批量汇总语义）。
+    // 单条 send / dispatch / rotate / create 的逐条失败 → exit 1（close 保持批量汇总语义）。
     const single =
-      command.kind === 'new' ||
+      command.kind === 'create' ||
       command.kind === 'send' ||
       command.kind === 'dispatch' ||
       command.kind === 'rotate';

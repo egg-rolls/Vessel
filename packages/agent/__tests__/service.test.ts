@@ -2,15 +2,15 @@ import { describe, expect, it } from 'bun:test';
 import {
   AgentError,
   type AgentEvent,
+  type CreateMemberInput,
   type MemberTurnResult,
-  type NewMemberInput,
 } from '../src/index.js';
 import { type Deferred, deferred, makeService, settle } from './helpers.js';
 
 describe('AgentService lifecycle', () => {
-  it('new registers an idle member and spawns the runtime once', async () => {
+  it('create registers an idle member and spawns the runtime once', async () => {
     const { service, runtime } = makeService();
-    const member = await service.new({ name: 'worker' });
+    const member = await service.create({ name: 'worker' });
 
     expect(member.state).toBe('idle');
     expect(member.session_id).toBe(member.id);
@@ -21,7 +21,7 @@ describe('AgentService lifecycle', () => {
     const { service, runtime } = makeService();
     const gate = deferred<MemberTurnResult>();
     runtime.handler = () => gate.promise;
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
 
     const sent = await service.send({ to: member.id, content: 'hi' });
 
@@ -40,7 +40,7 @@ describe('AgentService lifecycle', () => {
     const { service, runtime } = makeService();
     const gate = deferred<MemberTurnResult>();
     runtime.handler = () => gate.promise;
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
 
     await service.send({ to: member.id, content: 'first' });
     await service.send({ to: member.id, content: 'second' });
@@ -59,7 +59,7 @@ describe('AgentService lifecycle', () => {
       gates.push(gate);
       return gate.promise;
     };
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
 
     await service.send({ to: member.id, content: 'a' });
     await service.send({ to: member.id, content: 'b' });
@@ -75,11 +75,11 @@ describe('AgentService lifecycle', () => {
     expect(runtime.turns.map((entry) => entry.message.content)).toEqual(['a', 'b', 'c']);
   });
 
-  it('batch new returns per-entry results in order and keeps successful members', async () => {
+  it('batch create returns per-entry results in order and keeps successful members', async () => {
     const { service, runtime } = makeService();
-    const bad = { visibility: 'bogus' } as unknown as NewMemberInput;
+    const bad = { visibility: 'bogus' } as unknown as CreateMemberInput;
 
-    const result = await service.new({ members: [{ name: 'ok' }, bad, { name: 'ok-2' }] });
+    const result = await service.create({ members: [{ name: 'ok' }, bad, { name: 'ok-2' }] });
 
     expect(result.results.map((entry) => entry.ok)).toEqual([true, false, true]);
     expect(runtime.spawned).toHaveLength(2);
@@ -89,7 +89,7 @@ describe('AgentService lifecycle', () => {
     const { service, runtime } = makeService();
     const gate = deferred<MemberTurnResult>();
     runtime.handler = () => gate.promise;
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
 
     const result = await service.send({
       messages: [
@@ -112,7 +112,7 @@ describe('AgentService close', () => {
     const { service, runtime } = makeService();
     const gate = deferred<MemberTurnResult>();
     runtime.handler = () => gate.promise;
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.send({ to: member.id, content: 'work' });
 
     await service.close({ member: member.id });
@@ -129,7 +129,7 @@ describe('AgentService close', () => {
 
   it('send after close rejects with member_closed', async () => {
     const { service } = makeService();
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.close({ member: member.id });
 
     const error = await service.send({ to: member.id, content: 'x' }).catch((reason) => reason);
@@ -140,8 +140,8 @@ describe('AgentService close', () => {
 
   it('batch close returns per-entry results and does not close twice', async () => {
     const { service, runtime } = makeService();
-    const first = await service.new({ visibility: 'team' });
-    const second = await service.new({ visibility: 'team' });
+    const first = await service.create({ visibility: 'team' });
+    const second = await service.create({ visibility: 'team' });
 
     const result = await service.close({ members: [first.id, 'missing', second.id] });
 
@@ -153,7 +153,7 @@ describe('AgentService close', () => {
 describe('AgentService visibility', () => {
   it('private member is hidden from a non-owner list and cannot be addressed by another sender', async () => {
     const { service } = makeService();
-    const member = await service.new({ owner: 'alice' });
+    const member = await service.create({ owner: 'alice' });
 
     expect(await service.list({ viewer: 'bob' })).toEqual([]);
     expect(await service.list()).toEqual([]);
@@ -167,8 +167,8 @@ describe('AgentService visibility', () => {
 
   it('team and tenant members are visible to any viewer, and visibility filters narrow the list', async () => {
     const { service } = makeService();
-    await service.new({ owner: 'alice', visibility: 'team' });
-    await service.new({ owner: 'alice', visibility: 'tenant' });
+    await service.create({ owner: 'alice', visibility: 'team' });
+    await service.create({ owner: 'alice', visibility: 'tenant' });
 
     expect((await service.list({ viewer: 'bob' })).map((entry) => entry.visibility)).toEqual([
       'team',
@@ -183,9 +183,9 @@ describe('AgentService visibility', () => {
 
   it('list state / parent filters exclude non-matching members', async () => {
     const { service } = makeService();
-    const parent = await service.new({ visibility: 'team' });
-    const child = await service.new({ visibility: 'team', parentId: parent.id });
-    const other = await service.new({ visibility: 'team' });
+    const parent = await service.create({ visibility: 'team' });
+    const child = await service.create({ visibility: 'team', parentId: parent.id });
+    const other = await service.create({ visibility: 'team' });
 
     const children = await service.list({ viewer: 'main', parentId: parent.id, state: 'idle' });
     expect(children.map((entry) => entry.id)).toEqual([child.id]);
@@ -196,8 +196,8 @@ describe('AgentService visibility', () => {
 describe('AgentService replies', () => {
   it('explicit reply suppresses the automatic final text', async () => {
     const { service, runtime } = makeService();
-    const parent = await service.new({ visibility: 'team' });
-    const child = await service.new({ visibility: 'team', parentId: parent.id });
+    const parent = await service.create({ visibility: 'team' });
+    const child = await service.create({ visibility: 'team', parentId: parent.id });
 
     runtime.handler = async (member) => {
       if (member.id === child.id) {
@@ -216,8 +216,8 @@ describe('AgentService replies', () => {
 
   it('automatic final text reaches the parent queue when the child does not reply', async () => {
     const { service, runtime } = makeService();
-    const parent = await service.new({ visibility: 'team' });
-    const child = await service.new({ visibility: 'team', parentId: parent.id });
+    const parent = await service.create({ visibility: 'team' });
+    const child = await service.create({ visibility: 'team', parentId: parent.id });
 
     runtime.handler = async (member) => (member.id === child.id ? { content: 'auto' } : {});
 
@@ -230,7 +230,7 @@ describe('AgentService replies', () => {
 
   it('member without a parent cannot reply', async () => {
     const { service } = makeService();
-    const orphan = await service.new({ visibility: 'team' });
+    const orphan = await service.create({ visibility: 'team' });
 
     const error = await service.reply(orphan.id, 'hello').catch((reason) => reason);
 
@@ -243,7 +243,7 @@ describe('AgentService conversation propagation', () => {
     const { service, runtime } = makeService();
     const events: AgentEvent[] = [];
     service.subscribe((event) => events.push(event));
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
 
     const dispatched = await service.dispatch({ to: member.id, content: 'hi' });
     expect(dispatched.status).toBe('queued');
@@ -261,7 +261,7 @@ describe('AgentService conversation propagation', () => {
 
   it('rejects an invalid explicit conversation id', async () => {
     const { service } = makeService();
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
 
     await expect(
       service.send({ to: member.id, content: 'x', conversation_id: 'bad id' }),
@@ -270,8 +270,8 @@ describe('AgentService conversation propagation', () => {
 
   it('reply inherits the running turn conversation', async () => {
     const { service, runtime } = makeService();
-    const parent = await service.new({ visibility: 'team' });
-    const child = await service.new({ visibility: 'team', parentId: parent.id });
+    const parent = await service.create({ visibility: 'team' });
+    const child = await service.create({ visibility: 'team', parentId: parent.id });
     runtime.handler = async (current) => {
       if (current.id === child.id) {
         await service.reply(child.id, 'explicit');
@@ -293,7 +293,7 @@ describe('AgentService conversation propagation', () => {
 
   it('rotate startup inherits the triggering turn conversation', async () => {
     const { service, runtime } = makeService();
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     let rotated = false;
     runtime.handler = async (current) => {
       if (current.id === member.id && !rotated) {
@@ -325,7 +325,7 @@ describe('AgentService owner inbox', () => {
     const { service, runtime } = makeService();
     const gate = deferred<MemberTurnResult>();
     runtime.handler = () => gate.promise;
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
 
     await service.send({ to: member.id, content: 'first' });
     await service.send({ to: member.id, content: 'second' });
@@ -347,7 +347,7 @@ describe('AgentService owner inbox', () => {
 
   it('takeMessages validates limit and rejects closed / unknown members', async () => {
     const { service } = makeService();
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
 
     await expect(service.takeMessages(member.id, 0)).rejects.toMatchObject({
       code: 'invalid_input',
@@ -367,7 +367,7 @@ describe('AgentService owner inbox', () => {
     const events: AgentEvent[] = [];
     service.subscribe((event) => events.push(event));
     const owner = await service.attachOwner({ id: 'main' });
-    const member = await service.new({ visibility: 'team', parentId: owner.id });
+    const member = await service.create({ visibility: 'team', parentId: owner.id });
     runtime.handler = async (target) =>
       target.id === member.id ? { content: 'auto' } : { content: 'owner-should-not-run' };
 
@@ -404,7 +404,7 @@ describe('AgentService owner inbox', () => {
 
   it('hasMember is true for private member sessions and false for the external owner session', async () => {
     const { service } = makeService();
-    const member = await service.new({ visibility: 'private' });
+    const member = await service.create({ visibility: 'private' });
 
     expect(await service.hasMember(member.session_id)).toBe(true);
 
@@ -418,7 +418,7 @@ describe('AgentService owner inbox', () => {
     const { service, runtime } = makeService();
     const gate = deferred<MemberTurnResult>();
     runtime.handler = () => gate.promise;
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.send({ to: member.id, content: 'work' });
 
     service.notePermissionState(member.id, member.session_id, 'waiting');
@@ -439,8 +439,8 @@ describe('AgentService update (0.25)', () => {
     const { service } = makeService();
     const events: AgentEvent[] = [];
     service.subscribe((event) => events.push(event));
-    const first = await service.new({ name: 'alpha' });
-    await service.new({ name: 'beta' });
+    const first = await service.create({ name: 'alpha' });
+    await service.create({ name: 'beta' });
 
     const duplicate = await service
       .update({ id: first.id, name: 'beta' })
@@ -468,7 +468,7 @@ describe('AgentService update (0.25)', () => {
 
   it('does not touch the running body; new model applies to the next spawned Body', async () => {
     const { service, runtime } = makeService();
-    const member = await service.new({ model: 'model-old', systemPrompt: 'prompt-old' });
+    const member = await service.create({ model: 'model-old', systemPrompt: 'prompt-old' });
     expect(runtime.spawned[0]?.model).toBe('model-old');
 
     const updated = await service.update({
@@ -490,8 +490,8 @@ describe('AgentService update (0.25)', () => {
 
   it('batch update keeps input order and applies successful entries', async () => {
     const { service } = makeService();
-    const first = await service.new({ name: 'first' });
-    const second = await service.new({ name: 'second' });
+    const first = await service.create({ name: 'first' });
+    const second = await service.create({ name: 'second' });
 
     const result = await service.update({
       updates: [

@@ -602,6 +602,27 @@ describe('parseArgs - team (0.19 S3)', () => {
     expect(err(['team', 'archive'])).toContain('requires <team_id>');
   });
 
+  it('team freeze / unfreeze <team_id>', () => {
+    expect(ok(['team', 'freeze', 'alpha']).teamCommand).toEqual({
+      kind: 'freeze',
+      teamId: 'alpha',
+      json: false,
+    });
+    expect(ok(['team', 'unfreeze', 'alpha', '--json']).teamCommand).toEqual({
+      kind: 'unfreeze',
+      teamId: 'alpha',
+      json: true,
+    });
+    expect(err(['team', 'freeze'])).toContain('team freeze requires <team_id>');
+    expect(err(['team', 'unfreeze'])).toContain('team unfreeze requires <team_id>');
+    expect(err(['team', 'freeze', 'alpha', 'extra'])).toContain(
+      'Unknown argument for team freeze: extra',
+    );
+    expect(err(['team', 'unfreeze', 'alpha', '--bogus'])).toContain(
+      'Unknown argument for team unfreeze: --bogus',
+    );
+  });
+
   it('team 非法参数报错', () => {
     expect(err(['team', 'bogus'])).toContain('Unknown team subcommand');
     expect(err(['team', 'list', '--bogus'])).toContain('Unknown argument');
@@ -737,17 +758,17 @@ describe('parseArgs - team budget (0.19 S4)', () => {
   });
 });
 
-describe('parseArgs - agent new workspace (0.19 S3)', () => {
-  it('--workspace 进入 new 变体', () => {
-    expect(ok(['agent', 'new', '--workspace', '/tmp/alpha']).agentCommand).toEqual({
-      kind: 'new',
+describe('parseArgs - agent create workspace (0.19 S3)', () => {
+  it('--workspace 进入 create 变体', () => {
+    expect(ok(['agent', 'create', '--workspace', '/tmp/alpha']).agentCommand).toEqual({
+      kind: 'create',
       json: false,
       workspace: '/tmp/alpha',
     });
     expect(
-      ok(['agent', 'new', '--name', 'a1', '--workspace', '/tmp/alpha', '--json']).agentCommand,
+      ok(['agent', 'create', '--name', 'a1', '--workspace', '/tmp/alpha', '--json']).agentCommand,
     ).toEqual({
-      kind: 'new',
+      kind: 'create',
       json: true,
       name: 'a1',
       workspace: '/tmp/alpha',
@@ -755,7 +776,7 @@ describe('parseArgs - agent new workspace (0.19 S3)', () => {
   });
 
   it('--workspace 缺值报错', () => {
-    expect(err(['agent', 'new', '--workspace'])).toContain('Missing value for --workspace');
+    expect(err(['agent', 'create', '--workspace'])).toContain('Missing value for --workspace');
   });
 });
 

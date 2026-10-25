@@ -1,7 +1,7 @@
 ---
 title: AgentService、Body 与 Team
 kind: current
-triggers: [agent, member, team, body, session, dispatch, send, rotate, fork, presence, membership, visibility, roster, budget, conversation]
+triggers: [agent, member, team, body, session, dispatch, send, rotate, fork, spawn, peer, contractor, owner, freeze, presence, membership, visibility, roster, budget, conversation]
 paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ---
 
@@ -57,11 +57,22 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 - 旧轮按 epoch fencing：当前 Body 已变化时，发带 `stale: true` 的配对终态与 `agent.reply.stale`，不写 state / usage、不 `deliverToParent`。
 - 事件：`agent.rotating` / `agent.rotated` / `agent.rotate.failed` / `agent.retired` / `agent.reply.stale`；payload 不带启动嘱托正文。
 
+<a id="spawn"></a>
+
+## 派生：peer / contractor 与冻结
+
+- `AgentService.create` 接受 `CreateMemberInput`：`kind?: 'peer' | 'contractor'` / `owner?: string | null` / `teamId?` / `spawnedBy?`。`kind` 不持久化，只决定 owner / parent / visibility 与校验。
+- **peer**：无 owner / parent，必须绑定 Team，visibility 强制 `team`。**contractor**：owner / parent 缺省为 owner（工具路径填调用者，service 缺省是 root owner）；有 Team 时 visibility 缺省 `team`，unbound 时缺省 `private`。`owner` 省略由入口 / service 补齐，`null` 是显式无 owner。
+- 每 Team present 成员 ≤ 20（peer + contractor 都计入）；`create` / `hire` / `fork` / `reinstate` 增长前检查，超限 `team_full`。同 Team 的幂等 reinstate 不增长，不被冻结 / 上限拦。
+- **冻结**：`TeamRecord.spawn_frozen?` 持久化，`TeamSummary.spawn_frozen?` 回显；canonical `teams.spawnFrozen` 是唯一写路径，`teams.update` 不改。冻结期间 `create` / `hire` / 人类 `agents.create` / `fork` / `reinstate` 全部 `team_frozen`；只有 `frozen: false` 解冻。CLI 为 `vessel team freeze|unfreeze <team_id>`，team-scoped token 只能操作自己的 team。
+- **close 审批与级联**：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接 allow；成员关闭 peer 经权限 bridge 交人类审批；root owner 记录与跨 Team contractor 拒绝；无 bridge 时 ask fail closed。owner close 按 registry 原始记录级联关闭自己的 private contractor，team 可见 contractor 保持 present。
+- **审计**：`agent.spawned` payload 带 `spawned_by`；Team join system 日志的 `from` 取 `spawned_by`。private 成员按既有规则不写 Team 日志。
+
 <a id="team"></a>
 
 ## Team、可见性与预算
 
-- roster 是派生视图：`team_id + membership = present`，不单独持久化。Team 记录与日志在 `<dataDir>/teams/<tenant>/<team_id>/`；`TeamService` 是日志唯一写入点。
+- roster 是派生视图：`team_id + membership = present`，不单独持久化。Team 记录与日志在 `<dataDir>/teams/<tenant>/<team_id>/`；`TeamService` 是日志唯一写入点。`TeamMemberSummary.owner?` 标识归属：peer 缺省，contractor 指向 owner。
 - **Team 日志不是队列**：无 `@` 的 post / reply / system 记录只追加，不 dispatch、不产生 run；`@` 必须先写日志再逐条 dispatch。
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；Team 成员强制权限 bridge，只有 human / policy 能应答。
 - conversation 预算挂 `teams[].policy.budget`，状态写 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、损坏 fail-closed）；override 只能由人抬高或清除。
@@ -75,4 +86,4 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ## 指针
 
 - [gateway-rpc.md](gateway-rpc.md#agent-lifecycle) · [assembly.md](assembly.md#assembly) · [config.md](config.md#config-model) · [docs/agents/agent.md](../agents/agent.md)
-- 决策：[ADR-088](../adr/ADR-088-agent-service-package.md) · [ADR-091](../adr/ADR-091-agent-body-and-presence.md) · [ADR-092](../adr/ADR-092-agent-rotate-and-epoch-fencing.md) · [ADR-087](../adr/ADR-087-unified-agent-tool-phase-a.md)
+- 决策：[ADR-088](../adr/ADR-088-agent-service-package.md) · [ADR-091](../adr/ADR-091-agent-body-and-presence.md) · [ADR-092](../adr/ADR-092-agent-rotate-and-epoch-fencing.md) · [ADR-095](../adr/ADR-095-agent-spawn-and-contractors.md) · [ADR-087](../adr/ADR-087-unified-agent-tool-phase-a.md)

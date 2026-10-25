@@ -83,6 +83,8 @@ function redactTeamSummary(team: TeamSummaryLike): TeamSummaryLike {
     // 0.21：描述是展示字段，不随主机路径一起脱敏。
     ...(team.description !== undefined ? { description: team.description } : {}),
     ...(team.archived_at !== undefined ? { archived_at: team.archived_at } : {}),
+    // 0.27：冻结状态属于展示字段，不随主机路径一起脱敏。
+    ...(team.spawn_frozen !== undefined ? { spawn_frozen: team.spawn_frozen } : {}),
   };
 }
 
@@ -255,6 +257,32 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           const teamId = stringParam(params, 'team_id');
           assertTeamScope(teamScopeOf(ctx), teamId);
           return await control.archive({ team_id: teamId });
+        } catch (error) {
+          return mapTeamError(error);
+        }
+      },
+    },
+    {
+      name: 'teams.spawnFrozen',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['team_id', 'frozen'],
+        properties: {
+          team_id: { type: 'string', minLength: 1 },
+          frozen: { type: 'boolean' },
+        },
+      },
+      result_schema: teamSummarySchema,
+      handler: async (params, ctx) => {
+        try {
+          const control = requireTeamControl(teams, ctx);
+          const teamId = stringParam(params, 'team_id');
+          assertTeamScope(teamScopeOf(ctx), teamId);
+          if (typeof params.frozen !== 'boolean') {
+            throw new RpcError('invalid_params', 'frozen must be a boolean');
+          }
+          return await control.setSpawnFrozen(teamId, params.frozen);
         } catch (error) {
           return mapTeamError(error);
         }

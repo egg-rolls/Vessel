@@ -252,6 +252,8 @@ export interface TeamSummary {
   created_at: number;
   /** 0.24 additive：归档时间；缺失 = active（DECISION-040）。 */
   archived_at?: number;
+  /** 0.27 additive：冻结后禁止创建成员；缺失 = 未冻结。 */
+  spawn_frozen?: boolean;
 }
 
 /** `teams.create` 参数（DECISION-040 §2.1）。 */
@@ -282,6 +284,8 @@ export interface TeamMember {
   epoch?: number;
   /** S3 R1：已退役 Body，≤20；缺失时回退到事件累积。 */
   body_history?: TeamBodyHistoryEntry[];
+  /** 0.27 additive：owner 存在 = contractor，缺失 = peer。 */
+  owner?: string;
 }
 
 /** Team 日志条目；kind:'reply' 由 S3 R1 新增。 */
@@ -354,6 +358,8 @@ export interface AgentSummary {
   model?: string;
   system_prompt?: string;
   session_id?: string;
+  /** 0.27 additive：owner 存在 = contractor，缺失 = peer。 */
+  owner?: string;
 }
 
 export interface AgentCreateInput {
@@ -363,6 +369,8 @@ export interface AgentCreateInput {
   /** 缺省 = unbound（不加入 Team）。 */
   team_id?: string;
   visibility?: 'private' | 'team' | 'tenant';
+  /** 0.27 additive：创建判别；缺省保持现有语义。 */
+  kind?: 'peer' | 'contractor';
 }
 
 export interface AgentUpdateInput {

@@ -483,6 +483,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.member.observedOnly':
     'Observed during this page session; after a refresh only the current Body is shown.',
   'team.member.currentSession': 'View current session',
+  'team.member.peer': 'peer',
+  'team.member.contractor': 'contractor',
 
   'team.error.notFound': 'Team not found',
   'team.error.notEnabled': 'Team is not enabled',
@@ -646,6 +648,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'teams.error.noToken': 'That node has no token',
   'teams.chat.archived': 'Archived',
   'teams.chat.archivedHint': 'Archived Team is read-only; logs stay readable.',
+  'teams.freeze': 'Freeze spawning',
+  'teams.unfreeze': 'Unfreeze spawning',
+  'teams.frozen': 'Frozen',
+  'teams.unfrozen': 'Unfrozen',
   'teams.nodeMissing': 'The node in this link is not in the page’s node list',
 
   // Agents (global)

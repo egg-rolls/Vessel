@@ -143,7 +143,7 @@ describe('agent bootstrap 0.17', () => {
     const agent = result.agent;
     if (!agent) throw new Error('agent control missing');
 
-    const created = await agent.service.new({
+    const created = await agent.service.create({
       name: 'a1',
       workspace: path.join(dataDir, 'alpha'),
     });
@@ -163,7 +163,7 @@ describe('agent bootstrap 0.17', () => {
     const service = result.agent?.service;
     if (!service) throw new Error('agent service missing');
 
-    const created = await service.new({ owner: 'main', parentId: 'main', name: 'worker' });
+    const created = await service.create({ owner: 'main', parentId: 'main', name: 'worker' });
     await service.send({ to: created.id, content: 'hi' });
 
     const deadline = Date.now() + 5000;
@@ -192,7 +192,7 @@ describe('agent bootstrap 0.17', () => {
       if (event.type.startsWith('agent.')) seen.push(event.type);
     });
 
-    const created = await service.new({ owner: 'main', parentId: 'main', name: 'worker' });
+    const created = await service.create({ owner: 'main', parentId: 'main', name: 'worker' });
     await service.send({ to: created.id, content: 'hi' });
 
     const deadline = Date.now() + 5000;

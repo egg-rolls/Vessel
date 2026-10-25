@@ -635,6 +635,9 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             items: {
               type: 'object',
               properties: {
+                // 输入判别（不落盘）：peer = 无 owner 且必须绑定 team；
+                // contractor = 归属调用者；缺省保持 0.25 行为。
+                kind: { type: 'string', enum: ['peer', 'contractor'] },
                 name: { type: 'string', minLength: 1 },
                 model: { type: 'string', minLength: 1 },
                 system_prompt: { type: 'string' },
@@ -684,11 +687,77 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           return pending;
         };
 
+        // kind 路径只校验 Team 存在（不解析 workspace）；同一请求内去重。
+        const teamChecks = new Map<string, Promise<boolean>>();
+        const teamExists = (teamId: string): Promise<boolean> => {
+          const cached = teamChecks.get(teamId);
+          if (cached !== undefined) return cached;
+          const teamControl = deps.teams;
+          const pending =
+            !teamControl || teamControl.tenantId !== ctx.tenantId
+              ? Promise.resolve(false)
+              : teamControl
+                  .get(teamId)
+                  .then((detail) => detail !== undefined)
+                  .catch(() => false);
+          teamChecks.set(teamId, pending);
+          return pending;
+        };
+
         const prepared = await Promise.all(
           entries.map(async (entry): Promise<Prepared<AgentCreateLikeInput>> => {
+            const rawKind = entry.kind;
+            if (rawKind !== undefined && rawKind !== 'peer' && rawKind !== 'contractor') {
+              return { failure: fail('invalid_params', 'kind must be peer or contractor') };
+            }
             // CLI 的 `--workspace` 是 owner 传输特权：保留显式 workspace 绑定的语义，
             // 但 gateway / Web 不能伪造主机路径（逐条拒绝）。
             const rawWorkspace = optionalEntryString(entry, 'workspace', 'agents.create');
+            // peer / contractor 不允许 workspace（Team 绑定走 team_id）。
+            if (rawKind !== undefined && rawWorkspace !== undefined) {
+              return {
+                failure: fail('invalid_params', `workspace is not allowed for kind=${rawKind}`),
+              };
+            }
+            if (rawKind !== undefined) {
+              const name = optionalEntryString(entry, 'name', 'agents.create');
+              const model = optionalEntryString(entry, 'model', 'agents.create');
+              const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
+              const visibility = optionalVisibility(entry, 'agents.create');
+              const teamId = optionalEntryString(entry, 'team_id', 'agents.create');
+              if (teamId !== undefined && !(await teamExists(teamId))) {
+                return { failure: fail('not_found', `Team not found: ${teamId}`) };
+              }
+              if (rawKind === 'peer') {
+                if (teamId === undefined) {
+                  return { failure: fail('invalid_params', 'peer requires team_id') };
+                }
+                return {
+                  input: {
+                    kind: 'peer',
+                    team_id: teamId,
+                    ...(name !== undefined ? { name } : {}),
+                    ...(model !== undefined ? { model } : {}),
+                    ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
+                    ...(visibility !== undefined ? { visibility } : {}),
+                    spawnedBy: ownerId ?? 'human',
+                  },
+                };
+              }
+              // contractor：owner/parent 缺省由 service 用 DEFAULT_OWNER 补齐。
+              return {
+                input: {
+                  kind: 'contractor',
+                  ...(teamId !== undefined ? { team_id: teamId } : {}),
+                  ...(name !== undefined ? { name } : {}),
+                  ...(model !== undefined ? { model } : {}),
+                  ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
+                  ...(visibility !== undefined ? { visibility } : {}),
+                  ...identity,
+                  spawnedBy: ownerId ?? 'human',
+                },
+              };
+            }
             if (rawWorkspace !== undefined) {
               if (ownerId === undefined) {
                 return {

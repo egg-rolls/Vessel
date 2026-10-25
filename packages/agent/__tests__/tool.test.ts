@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { MemoryEventStream, type ToolContext, type ToolDefinition } from '@vessel-agent/core';
 import {
+  type AgentEvent,
   type AgentService,
   type AgentTeamService,
   type AgentToolOptions,
@@ -11,12 +12,26 @@ import {
   type MemberStatus,
   type TeamAgentSendInput,
   type TeamAgentSendResult,
+  type TeamBinder,
   type TeamMemberSummary,
   TeamMetadataCorruptError,
   type TeamPostInput,
   type TeamPostResult,
+  type TeamRecord,
 } from '../src/index.js';
-import { makeService, settle } from './helpers.js';
+import { makeService, makeTeam as makeTeamRecord, settle } from './helpers.js';
+
+const TEAM_ID = 'alpha';
+
+/** 固定 Team 的绑定端口；本文件只做显式 teamId 绑定 */
+function makeBinder(...teams: TeamRecord[]): TeamBinder {
+  return {
+    ensureForWorkspace: async () => {
+      throw new Error('unexpected ensureForWorkspace');
+    },
+    get: (teamId: string) => teams.find((team) => team.team_id === teamId),
+  };
+}
 
 interface TeamRecorder {
   identify: string[];
@@ -41,6 +56,12 @@ function makeTeam(roster: TeamMemberSummary[] = []): {
     },
     async archive() {
       throw new Error('not used');
+    },
+    async setSpawnFrozen() {
+      throw new Error('not used');
+    },
+    isSpawnFrozen() {
+      return false;
     },
     async list() {
       return [];
@@ -134,28 +155,27 @@ function setup(options: AgentToolOptions = {}) {
 }
 
 describe('agent tool', () => {
-  it('single new returns parseable MemberStatus JSON with snake_case fields', async () => {
+  it('single hire returns parseable MemberStatus JSON with snake_case fields', async () => {
     const { service, tool } = setup();
 
     const status = parse<MemberStatus>(
       await call(tool, {
-        action: 'new',
+        action: 'hire',
         name: 'worker',
         model: 'm',
-        visibility: 'team',
       }),
     );
 
     expect(status.id).toBe('id-1');
     expect(status.session_id).toBe(status.id);
     expect(status.name).toBe('worker');
-    expect(status.visibility).toBe('team');
+    expect(status.visibility).toBe('private');
     expect(status.owner).toBe('main');
     expect(status.state).toBe('idle');
     expect((await service.list({ viewer: 'main' })).map((entry) => entry.id)).toEqual([status.id]);
   });
 
-  it('batch new preserves input order and reports a per-entry failure without dropping the rest', async () => {
+  it('batch hire preserves input order and reports a per-entry failure without dropping the rest', async () => {
     const { runtime, tool } = (() => {
       const made = makeService();
       return { runtime: made.runtime, tool: createAgentTool(made.service) };
@@ -163,7 +183,7 @@ describe('agent tool', () => {
 
     const { results } = parse<{ results: BatchItemResult<MemberStatus>[] }>(
       await call(tool, {
-        action: 'new',
+        action: 'hire',
         members: [{ name: 'first' }, { visibility: 'bogus' }, { name: 'third' }],
       }),
     );
@@ -180,7 +200,7 @@ describe('agent tool', () => {
   it('member final text is delivered to the owner queue', async () => {
     const { service, runtime, tool } = setup();
     await service.attachOwner({ id: 'main', visibility: 'team' });
-    const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
+    const created = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'worker' }));
     expect(created.parent_id).toBe('main');
     runtime.handler = async (member) => (member.id === created.id ? { content: 'done' } : {});
 
@@ -193,9 +213,9 @@ describe('agent tool', () => {
     expect(queued[0]?.from).toBe(created.id);
   });
 
-  it('custom ownerId scopes new owner/parent and list visibility', async () => {
+  it('custom ownerId scopes hire owner/parent and list visibility', async () => {
     const { service, tool } = setup({ ownerId: 'boss' });
-    const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
+    const created = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'worker' }));
 
     expect(created.owner).toBe('boss');
     expect(created.parent_id).toBe('boss');
@@ -208,7 +228,7 @@ describe('agent tool', () => {
 
   it('single send dispatches and returns queued/message_id without waiting for the turn', async () => {
     const { runtime, tool } = setup();
-    const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
+    const created = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'worker' }));
 
     const result = parse<DispatchResult>(
       await call(tool, { action: 'send', to: created.id, content: 'do work' }),
@@ -224,8 +244,8 @@ describe('agent tool', () => {
 
   it('batch send preserves order and reports an unknown target per entry', async () => {
     const { runtime, tool } = setup();
-    const first = parse<MemberStatus>(await call(tool, { action: 'new', name: 'a' }));
-    const second = parse<MemberStatus>(await call(tool, { action: 'new', name: 'b' }));
+    const first = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'a' }));
+    const second = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'b' }));
 
     const { results } = parse<{ results: BatchItemResult<DispatchResult>[] }>(
       await call(tool, {
@@ -246,7 +266,7 @@ describe('agent tool', () => {
 
   it('single close returns closed, is idempotent, and list keeps the closed state', async () => {
     const { tool } = setup();
-    const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
+    const created = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'worker' }));
 
     expect(parse(await call(tool, { action: 'close', member: created.id }))).toEqual({
       state: 'closed',
@@ -261,8 +281,8 @@ describe('agent tool', () => {
 
   it('batch close isolates an unknown member', async () => {
     const { tool } = setup();
-    const first = parse<MemberStatus>(await call(tool, { action: 'new', name: 'a' }));
-    const second = parse<MemberStatus>(await call(tool, { action: 'new', name: 'b' }));
+    const first = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'a' }));
+    const second = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'b' }));
 
     const { results } = parse<{ results: BatchItemResult<{ state: string }>[] }>(
       await call(tool, {
@@ -280,8 +300,12 @@ describe('agent tool', () => {
   it('list maps parent_id to the service filter instead of ignoring it', async () => {
     const made = makeService();
     const tool = createAgentTool(made.service);
-    const member = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
-    const child = await made.service.new({ name: 'child', parentId: 'grand', visibility: 'team' });
+    const member = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'worker' }));
+    const child = await made.service.create({
+      name: 'child',
+      parentId: 'grand',
+      visibility: 'team',
+    });
 
     const all = parse<MemberStatus[]>(await call(tool, { action: 'list' }));
     expect(all.map((entry) => entry.id).sort()).toEqual([member.id, child.id].sort());
@@ -303,14 +327,14 @@ describe('agent tool', () => {
     const made = makeService();
     const corrupt = new TeamMetadataCorruptError('/data/teams/default/alpha/team.json');
     const service = Object.create(made.service) as AgentService & {
-      new: () => Promise<never>;
+      create: () => Promise<never>;
     };
-    service.new = async () => {
+    service.create = async () => {
       throw corrupt;
     };
     const tool = createAgentTool(service, {});
 
-    expect(await call(tool, { action: 'new', name: 'alpha' })).toBe(
+    expect(await call(tool, { action: 'hire', name: 'alpha' })).toBe(
       'Error: team_metadata_corrupt: /data/teams/default/alpha/team.json',
     );
   });
@@ -320,7 +344,7 @@ describe('agent tool', () => {
     const tool = createAgentTool(made.service);
 
     for (const args of [
-      { action: 'new', name: 'x', members: [{}] },
+      { action: 'hire', name: 'x', members: [{}] },
       { action: 'send', to: 'x', content: 'y', messages: [{ to: 'x', content: 'y' }] },
       { action: 'close', member: 'x', members: ['x'] },
     ]) {
@@ -364,8 +388,9 @@ describe('agent tool', () => {
 
     expect(tool.name).toBe('agent');
     expect(schema.required).toEqual(['action']);
+    // root owner 没有 Team，不暴露 create。
     expect((schema.properties.action as { enum: string[] }).enum).toEqual([
-      'new',
+      'hire',
       'send',
       'close',
       'list',
@@ -394,43 +419,116 @@ describe('agent tool', () => {
     );
   });
 
-  it('member body callers can rotate but cannot use new or close', async () => {
-    const made = makeService();
-    await made.service.attachOwner({ id: 'main', sessionId: 'owner-session' });
+  it('member body callers can create peers in their team; close is governed by checkPermission', async () => {
+    const made = makeService({ teamBinder: makeBinder(makeTeamRecord(TEAM_ID)) });
     const tool = createAgentTool(made.service, {
       ownerId: 'main',
       ownerSessionId: 'owner-session',
     });
+    const caller = await made.service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+    const events: AgentEvent[] = [];
+    made.service.subscribe((event) => events.push(event));
 
-    const member = parse<MemberStatus>(
-      await callAs(tool, { action: 'new', name: 'worker' }, 'owner-session'),
+    const created = parse<MemberStatus>(
+      await callAs(tool, { action: 'create', name: 'worker' }, caller.session_id),
     );
+    expect(created.owner).toBeUndefined();
+    expect(created.parent_id).toBeUndefined();
+    expect(created.team_id).toBe(TEAM_ID);
+    expect(created.visibility).toBe('team');
+    expect(
+      events.find((event) => event.type === 'agent.spawned' && event.agent_id === created.id)
+        ?.spawned_by,
+    ).toBe(caller.id);
+
+    const hired = parse<MemberStatus>(
+      await callAs(tool, { action: 'hire', name: 'sub' }, caller.session_id),
+    );
+    expect(hired.owner).toBe(caller.id);
+    expect(hired.parent_id).toBe(caller.id);
+    expect(hired.team_id).toBe(TEAM_ID);
+    expect(hired.visibility).toBe('team');
 
     const rotated = await callAs(
       tool,
       { action: 'rotate', startup_prompt: 'continue' },
-      member.session_id,
+      caller.session_id,
     );
     expect(rotated).toContain('"status":"rotated"');
     expect(rotated).toContain('rotation committed; finish the current turn');
     expect(rotated).not.toContain('continue"');
 
-    for (const args of [
-      { action: 'new', name: 'nope' },
-      { action: 'close', member: member.id },
-    ]) {
-      expect(await callAs(tool, args, member.session_id)).toBe(
-        'Error: invalid_input: agent bodies may only use rotate|post|send|list',
-      );
-    }
+    // close 已开放给成员；关闭 peer 时权限层要求人类审批（handler 本身不拦截）。
+    expect(
+      await tool.checkPermission?.(
+        { action: 'close', member: created.id },
+        makeContext(caller.session_id),
+      ),
+    ).toBe('ask');
 
     // 没有注入 team 时，成员侧的 send / list 明确报错而不是回落到 owner 路径。
-    expect(await callAs(tool, { action: 'send', to: member.id, content: 'x' }, 'body-2')).toBe(
+    expect(await callAs(tool, { action: 'send', to: created.id, content: 'x' }, 'body-2')).toBe(
       'Error: invalid_input: send requires a team service',
     );
     expect(await callAs(tool, { action: 'list' }, 'body-2')).toBe(
       'Error: invalid_input: list requires a team service',
     );
+  });
+
+  it('member without a team gets no_team for create and hire', async () => {
+    const made = makeService();
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+    });
+    // root hire 默认 unbound（没有 Team）。
+    const member = parse<MemberStatus>(
+      await callAs(tool, { action: 'hire', name: 'loner' }, 'owner-session'),
+    );
+
+    expect(await callAs(tool, { action: 'create', name: 'x' }, member.session_id)).toMatch(
+      /^Error: invalid_input: no_team: /,
+    );
+    expect(await callAs(tool, { action: 'hire', name: 'y' }, member.session_id)).toMatch(
+      /^Error: invalid_input: no_team: /,
+    );
+    expect(made.runtime.spawned.map((entry) => entry.name)).toEqual(['loner']);
+  });
+
+  it('batch create isolates a per-entry failure for a team member', async () => {
+    const made = makeService({ teamBinder: makeBinder(makeTeamRecord(TEAM_ID)) });
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+    });
+    const caller = await made.service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+
+    const { results } = parse<{ results: BatchItemResult<MemberStatus>[] }>(
+      await callAs(
+        tool,
+        {
+          action: 'create',
+          members: [{ name: 'first' }, { visibility: 'private' }, { name: 'third' }],
+        },
+        caller.session_id,
+      ),
+    );
+
+    expect(results.map((entry) => entry.ok)).toEqual([true, false, true]);
+    expect(failureText(results[1])).toContain('team visibility');
+    expect(results[0]?.ok ? results[0].status.name : undefined).toBe('first');
+    expect(results[2]?.ok ? results[2].status.name : undefined).toBe('third');
+    expect(results[0]?.ok ? results[0].status.team_id : undefined).toBe(TEAM_ID);
   });
 
   it('owner send uses the unified dispatch path instead of strict send', async () => {
@@ -448,7 +546,7 @@ describe('agent tool', () => {
     }) as unknown as AgentService['send'];
 
     const tool = createAgentTool(made.service);
-    const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
+    const created = parse<MemberStatus>(await call(tool, { action: 'hire', name: 'worker' }));
 
     const result = parse<DispatchResult>(
       await call(tool, { action: 'send', to: created.id, content: 'go' }),
@@ -578,7 +676,7 @@ describe('agent tool', () => {
     expect(order).toEqual(['a', 'bad', 'c']);
   });
 
-  it('owner keeps new/send/close/list', async () => {
+  it('owner keeps hire/send/close/list but cannot create', async () => {
     const made = makeService();
     await made.service.attachOwner({ id: 'main', sessionId: 'owner-session' });
     const tool = createAgentTool(made.service, {
@@ -586,8 +684,11 @@ describe('agent tool', () => {
       ownerSessionId: 'owner-session',
     });
 
+    expect(await callAs(tool, { action: 'create', name: 'peer' }, 'owner-session')).toBe(
+      'Error: invalid_input: create requires a team member caller; owner should use hire',
+    );
     const created = parse<MemberStatus>(
-      await callAs(tool, { action: 'new', name: 'plain' }, 'owner-session'),
+      await callAs(tool, { action: 'hire', name: 'plain' }, 'owner-session'),
     );
     expect(created.owner).toBe('main');
     expect(
@@ -603,5 +704,179 @@ describe('agent tool', () => {
         (entry) => entry.id,
       ),
     ).toContain(created.id);
+  });
+});
+
+describe('agent tool close permission', () => {
+  function setupTeams() {
+    const made = makeService({
+      teamBinder: makeBinder(makeTeamRecord(TEAM_ID), makeTeamRecord('beta')),
+    });
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+    });
+    return { service: made.service, tool };
+  }
+
+  async function decide(
+    tool: ToolDefinition,
+    args: unknown,
+    sessionId: string,
+  ): Promise<'allow' | 'deny' | 'ask' | undefined> {
+    return tool.checkPermission?.(args, makeContext(sessionId));
+  }
+
+  it('asks when a member closes a peer', async () => {
+    const { service, tool } = setupTeams();
+    const caller = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+    const peer = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'peer',
+      spawnedBy: caller.id,
+    });
+
+    expect(await decide(tool, { action: 'close', member: peer.id }, caller.session_id)).toBe('ask');
+  });
+
+  it('allows a member to close its own contractor', async () => {
+    const { service, tool } = setupTeams();
+    const caller = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+    const contractor = await service.create({
+      kind: 'contractor',
+      owner: caller.id,
+      teamId: TEAM_ID,
+      name: 'sub',
+      spawnedBy: caller.id,
+    });
+
+    expect(await decide(tool, { action: 'close', member: contractor.id }, caller.session_id)).toBe(
+      'allow',
+    );
+  });
+
+  it('allows a member to self-close', async () => {
+    const { service, tool } = setupTeams();
+    const caller = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+
+    expect(await decide(tool, { action: 'close', member: caller.id }, caller.session_id)).toBe(
+      'allow',
+    );
+  });
+
+  it('denies a member closing a contractor from another team', async () => {
+    const { service, tool } = setupTeams();
+    const caller = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+    const foreign = await service.create({
+      kind: 'contractor',
+      owner: 'other-lead',
+      teamId: 'beta',
+      name: 'foreign',
+      spawnedBy: 'other-lead',
+    });
+
+    expect(await decide(tool, { action: 'close', member: foreign.id }, caller.session_id)).toBe(
+      'deny',
+    );
+  });
+
+  it('denies a member closing the root owner record', async () => {
+    const { service, tool } = setupTeams();
+    await service.attachOwner({ id: 'main', sessionId: 'owner-session' });
+    const caller = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+
+    expect(await decide(tool, { action: 'close', member: 'main' }, caller.session_id)).toBe('deny');
+  });
+
+  it('allows the owner invocation without member lookups', async () => {
+    const { service, tool } = setupTeams();
+    const contractor = await service.create({
+      kind: 'contractor',
+      owner: 'main',
+      name: 'sub',
+      spawnedBy: 'main',
+    });
+
+    expect(
+      await tool.checkPermission?.(
+        { action: 'close', member: contractor.id },
+        makeContext('owner-session'),
+      ),
+    ).toBe('allow');
+    expect(
+      await tool.checkPermission?.({ action: 'close', member: contractor.id }, makeContext()),
+    ).toBe('allow');
+  });
+
+  it('asks once for a batch that mixes a peer with a contractor', async () => {
+    const { service, tool } = setupTeams();
+    const caller = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+    const contractor = await service.create({
+      kind: 'contractor',
+      owner: caller.id,
+      teamId: TEAM_ID,
+      name: 'sub',
+      spawnedBy: caller.id,
+    });
+    const peer = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'peer',
+      spawnedBy: caller.id,
+    });
+
+    expect(
+      await decide(tool, { action: 'close', members: [contractor.id, peer.id] }, caller.session_id),
+    ).toBe('ask');
+  });
+
+  it('keeps peer close at ask so autoApprove cannot lift it', async () => {
+    const { service, tool } = setupTeams();
+    const caller = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+    const peer = await service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'peer',
+      spawnedBy: caller.id,
+    });
+
+    // The explicit tool ask is preserved regardless of autoApprove config.
+    expect(await decide(tool, { action: 'close', member: peer.id }, caller.session_id)).toBe('ask');
   });
 });

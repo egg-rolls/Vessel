@@ -29,7 +29,7 @@ paths: [docs/architecture/**]
 | [gateway-rpc](gateway-rpc.md) | 统一 RPC 方法表与 canonical agent 生命周期契约 | rpc, method, canonical, envelope, agents.create, agents.rotate | `packages/serve/src/gateway/methods/**` |
 | [gateway-web](gateway-web.md) | 权限/ask 桥、会话切换与 Web 控制台 | web, apps/web, permission bridge, ask_user, session switch | `apps/web/**`, `packages/serve/src/gateway/**` |
 | [host](host.md) | RuntimeHost / Scheduler、per-run session、resume 排队与快照 | host, scheduler, concurrency, resume, snapshot, checkpoint, cancel | `packages/core/src/kernel/**`, `packages/core/src/runtime/**` |
-| [member-team](member-team.md) | AgentService、Agent/Body、dispatch/rotate、Team 与预算 | agent, member, team, body, dispatch, rotate, presence, roster, budget | `packages/agent/**`, `src/agent-service-wiring.ts` |
+| [member-team](member-team.md) | AgentService、Agent/Body、dispatch/rotate、peer/contractor、Team 与预算 | agent, member, team, body, dispatch, rotate, spawn, peer, contractor, freeze, presence, roster, budget | `packages/agent/**`, `src/agent-service-wiring.ts` |
 | [federation-hub](federation-hub.md) | hub 目录控制面与跨节点 federation 数据面 | hub, federation, peer, pairing, directory, allowlist, hop | `src/hub/**`, `src/federation-*.ts`, `packages/serve/src/gateway/**` |
 
 ## 主题入口

@@ -144,6 +144,8 @@ function printHelp(): void {
       'vessel team budget override <team_id> --conversation <id> --dimension <d> --max <n|unlimited>',
       t('help.cmd.teamBudgetOverride'),
     ],
+    ['vessel team freeze <team_id> [--json]', t('help.cmd.teamFreeze')],
+    ['vessel team unfreeze <team_id> [--json]', t('help.cmd.teamUnfreeze')],
     [
       'vessel federation post --to <principal@node:team> --from <principal@node:team> <content...>',
       t('help.cmd.federationPost'),

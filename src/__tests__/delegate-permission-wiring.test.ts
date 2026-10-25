@@ -17,6 +17,7 @@ describe('resolveRuntimePermission', () => {
     expect(resolveRuntimePermission(config, false)).toEqual({
       default: 'ask',
       autoApprove: ['configured_tool', 'ask_user'],
+      neverAutoApprove: ['agent.close'],
     });
   });
 
@@ -24,7 +25,18 @@ describe('resolveRuntimePermission', () => {
     expect(resolveRuntimePermission(config, true)).toEqual({
       default: 'allow',
       autoApprove: ['configured_tool', 'ask_user'],
+      neverAutoApprove: ['agent.close'],
     });
+  });
+
+  it('explicit neverAutoApprove wins over the default (no merge)', () => {
+    expect(
+      resolveRuntimePermission({ permission: { neverAutoApprove: ['agent.close', 'bash'] } }, false)
+        .neverAutoApprove,
+    ).toEqual(['agent.close', 'bash']);
+    expect(
+      resolveRuntimePermission({ permission: { neverAutoApprove: [] } }, false).neverAutoApprove,
+    ).toEqual([]);
   });
 
   it('does not duplicate an explicitly configured ask_user', () => {

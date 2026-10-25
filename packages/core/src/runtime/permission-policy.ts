@@ -53,6 +53,8 @@ export class PermissionAbortedError extends Error {
 export class PermissionPolicy {
   private defaultDecision: 'allow' | 'ask';
   private autoApprove: Set<string>;
+  /** 自动放行的例外键（工具名或 `${tool.name}.${action}`）；只改写 auto 来源的 allow */
+  private neverAutoApprove: Set<string>;
   private approved: Set<string>;
   /** 显式正数超时；undefined = 无限等待（Addendum A） */
   private readonly timeoutMs?: number;
@@ -68,6 +70,7 @@ export class PermissionPolicy {
     this.emit = emit ?? ((event) => this.events.publish(event));
     this.defaultDecision = config?.default ?? 'allow';
     this.autoApprove = new Set(config?.autoApprove ?? []);
+    this.neverAutoApprove = new Set(config?.neverAutoApprove ?? []);
     this.approved = new Set();
     const timeoutMs = config?.timeoutMs;
     this.timeoutMs =
@@ -84,15 +87,26 @@ export class PermissionPolicy {
    */
   async authorize(tool: ToolDefinition, args: unknown, ctx: ToolContext): Promise<void> {
     let decision: 'allow' | 'deny' | 'ask';
+    // 判定来源：'tool' = 工具 checkPermission 的显式判定；'auto' = autoApprove / default / remember。
+    let source: 'tool' | 'auto';
     if (tool.checkPermission) {
       decision = await tool.checkPermission(args, ctx);
+      source = 'tool';
     } else if (
       this.defaultDecision === 'allow' ||
       this.autoApprove.has(tool.name) ||
       this.approved.has(tool.name)
     ) {
       decision = 'allow';
+      source = 'auto';
     } else {
+      decision = 'ask';
+      source = 'auto';
+    }
+
+    // 0.27：自动放行的例外键只把 auto 来源的 allow 降级为 ask；
+    // 工具 checkPermission 的显式 allow / ask / deny 一律保持原判。
+    if (decision === 'allow' && source === 'auto' && this.hitsNeverAutoApprove(tool, args)) {
       decision = 'ask';
     }
 
@@ -131,6 +145,22 @@ export class PermissionPolicy {
         this.approved.add(tool.name);
       }
     }
+  }
+
+  /**
+   * neverAutoApprove 命中判定：工具名，或 args 为对象且 `action` 为字符串时的
+   * `${tool.name}.${action}`。未配置时零开销。
+   */
+  private hitsNeverAutoApprove(tool: ToolDefinition, args: unknown): boolean {
+    if (this.neverAutoApprove.size === 0) return false;
+    if (this.neverAutoApprove.has(tool.name)) return true;
+    if (typeof args === 'object' && args !== null && !Array.isArray(args)) {
+      const action = (args as Record<string, unknown>).action;
+      if (typeof action === 'string') {
+        return this.neverAutoApprove.has(`${tool.name}.${action}`);
+      }
+    }
+    return false;
   }
 
   /**

@@ -23,6 +23,7 @@ import {
   createAgentMethods,
   createAgentRegistry,
   createRpcDispatcher,
+  createTeamMethods,
   defineMethods,
 } from '../../packages/serve/src/index';
 import {
@@ -83,6 +84,7 @@ interface Calls {
   teamPost: unknown[];
   teamMembers: unknown[];
   teamBudget: unknown[];
+  teamSpawnFrozen: Array<{ teamId: string; frozen: boolean }>;
 }
 
 function emptyCalls(): Calls {
@@ -100,6 +102,7 @@ function emptyCalls(): Calls {
     teamPost: [],
     teamMembers: [],
     teamBudget: [],
+    teamSpawnFrozen: [],
   };
 }
 
@@ -230,6 +233,10 @@ function fakeTeam(calls: Calls): TeamControlLike {
     },
     async archive() {
       throw new Error('not used');
+    },
+    async setSpawnFrozen(teamId, frozen) {
+      calls.teamSpawnFrozen.push({ teamId, frozen });
+      return { team_id: teamId, spawn_frozen: frozen } as never;
     },
     async list(options) {
       calls.teamList.push(options);
@@ -611,6 +618,47 @@ describe('agent owner server', () => {
       dimension: 'turns',
       max: 5,
     });
+  });
+
+  it('dispatches teams.spawnFrozen through owner and the shared handler', async () => {
+    const calls = emptyCalls();
+    const server = await start(calls);
+
+    const response = await post(server, {
+      method: 'teams.spawnFrozen',
+      params: { team_id: 'alpha', frozen: true },
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      result: { team_id: 'alpha', spawn_frozen: true },
+    });
+    expect(calls.teamSpawnFrozen).toEqual([{ teamId: 'alpha', frozen: true }]);
+
+    const localCalls = emptyCalls();
+    const dispatcher = createRpcDispatcher({
+      table: defineMethods([...createTeamMethods({ teams: fakeTeam(localCalls) })]),
+      localPrincipal: { tenant_id: 'default', role: 'admin', scope: 'admin', agent_id: 'main' },
+      makeContext: (_method, _params, principal) => ({
+        principal,
+        tenantId: principal.tenant_id,
+        isAdmin: true,
+        allTenants: false,
+        connection: 'local',
+      }),
+    });
+    const local = await dispatcher.dispatchFor(
+      {
+        v: 1,
+        id: 'freeze',
+        method: 'teams.spawnFrozen',
+        params: { team_id: 'alpha', frozen: false },
+      },
+      { tenant_id: 'default', role: 'admin', scope: 'admin', agent_id: 'main' },
+      'local',
+    );
+    expect(local.ok).toBe(true);
+    expect(localCalls.teamSpawnFrozen).toEqual([{ teamId: 'alpha', frozen: false }]);
   });
 
   it('passes conversation_id through send, dispatch and teams.post', async () => {

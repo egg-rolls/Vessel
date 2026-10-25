@@ -444,6 +444,8 @@ export function resolveRuntimePermission(
     default: headless ? 'allow' : 'ask',
     // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
     autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
+    // 0.27：配置级保险；用户显式配置时以其值为准（与 autoApprove 语义一致，不合并默认）。
+    neverAutoApprove: config.permission?.neverAutoApprove ?? ['agent.close'],
   };
 }
 

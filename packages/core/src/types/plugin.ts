@@ -70,6 +70,12 @@ export interface RuntimePermissionConfig {
   /** 免确认工具名列表 */
   autoApprove?: string[];
   /**
+   * 自动放行的例外键（0.27）：命中时把来自 autoApprove / default 的 `allow`
+   * 降级为 `ask`；工具 `checkPermission` 的显式判定不受影响。
+   * 键可以是工具名，或 args 为对象且 `action` 为字符串时的 `${tool.name}.${action}`。
+   */
+  neverAutoApprove?: string[];
+  /**
    * 0.13（DECISION-024 Addendum A）：等待 `tool.permission.response` 的显式超时（毫秒）。
    * 缺省 / `<= 0` = 无限期等待，直到应答或取消；只有正数才产生
    * `PermissionTimeoutError` 并在请求事件里带 `deadline_at`。

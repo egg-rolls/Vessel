@@ -33,7 +33,8 @@ export interface MemberRecord {
   bodyHistory: AgentBodyHistoryEntry[];
   name?: string;
   parentId?: string;
-  owner: string;
+  /** 归属 principal；缺省 = peer */
+  owner?: string;
   visibility: MemberVisibility;
   model?: string;
   systemPrompt?: string;
@@ -84,7 +85,7 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
     session_id: currentBodySession(record),
     ...(record.name !== undefined ? { name: record.name } : {}),
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
-    owner: record.owner,
+    ...(record.owner !== undefined ? { owner: record.owner } : {}),
     visibility: record.visibility,
     state: record.state,
     presence: record.presence,
@@ -103,7 +104,7 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
   return {
     id: record.id,
     session_id: record.sessionId,
-    owner: record.owner,
+    ...(record.owner !== undefined ? { owner: record.owner } : {}),
     visibility: record.visibility,
     state: record.state,
     membership: record.membership,
@@ -130,7 +131,7 @@ export function toRuntimeMember(record: MemberRecord): MemberRuntimeMember {
     session_id: record.currentBody?.session_id ?? record.sessionId,
     ...(record.name !== undefined ? { name: record.name } : {}),
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
-    owner: record.owner,
+    ...(record.owner !== undefined ? { owner: record.owner } : {}),
     visibility: record.visibility,
     ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
     ...(record.model !== undefined ? { model: record.model } : {}),
@@ -300,9 +301,11 @@ export class MemberRegistry {
     return matches;
   }
 
-  /** private 仅 owner；team / tenant 对同 tenant 的任何查看者可见 */
+  /** private 仅 owner；没有 owner 的 private 一律不可见（fail-closed）；team / tenant 对同 tenant 的任何查看者可见 */
   canView(record: MemberRecord, viewer?: string): boolean {
-    if (record.visibility === 'private') return viewer !== undefined && viewer === record.owner;
+    if (record.visibility === 'private') {
+      return record.owner !== undefined && viewer === record.owner;
+    }
     return true;
   }
 

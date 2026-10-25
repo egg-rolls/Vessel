@@ -450,6 +450,8 @@ export const teamSummarySchema = {
     created_at: { type: 'number' },
     // S10.3：归档时间（additive）；缺省 = active。
     archived_at: { type: 'number' },
+    // 0.27：冻结 spawn（additive）；缺省 = 未冻结。
+    spawn_frozen: { type: 'boolean' },
   },
 };
 
@@ -474,6 +476,8 @@ export const teamMemberSchema = {
     name: { type: 'string' },
     session_id: { type: 'string' },
     team_id: { type: 'string' },
+    // peer 缺省 owner；contractor / root 有值。
+    owner: { type: 'string' },
     membership: { type: 'string', enum: ['present', 'left'] },
     presence: { type: 'string', enum: ['live', 'gone'] },
     visibility: { type: 'string', enum: ['private', 'team', 'tenant'] },
@@ -674,7 +678,8 @@ export const teamDetailSchema = {
  */
 export const agentStatusSchema = {
   type: 'object',
-  required: ['id', 'session_id', 'owner', 'visibility', 'state'],
+  // owner 可选：缺省表示 peer（无 owner）。
+  required: ['id', 'session_id', 'visibility', 'state'],
   properties: {
     id: { type: 'string' },
     session_id: { type: 'string' },

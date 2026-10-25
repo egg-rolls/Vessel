@@ -83,7 +83,7 @@ function makeBudgetHarness(policy: TeamPolicy | undefined): BudgetHarness {
 }
 
 async function createWorker(harness: BudgetHarness, name = 'worker') {
-  return harness.service.new({ name, workspace: '/w/alpha' });
+  return harness.service.create({ name, workspace: '/w/alpha' });
 }
 
 describe('conversation budget: sender side', () => {
@@ -380,7 +380,7 @@ describe('conversation budget: warnings and fail-closed', () => {
       runtime,
       budget,
     });
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
 
     const dispatched = await service.dispatch({
       to: member.id,

@@ -109,6 +109,7 @@
 | 092 | 0.19.0 Agent rotate 与 epoch fencing（S2） | accepted | 2026-10-23 | agent, body, rotate, epoch, fencing, snapshot, session, permission, cli | [ADR-092-agent-rotate-and-epoch-fencing.md](ADR-092-agent-rotate-and-epoch-fencing.md) |
 | 093 | Hub 控制面（S5） | accepted | 2026-10-23 | hub, control-plane, directory, pairing, scoped-token, secret-store | [ADR-093-hub-control-plane.md](ADR-093-hub-control-plane.md) |
 | 094 | 跨节点 federation（team ↔ team） | accepted | 2026-10-23 | federation, cross-node, team, allowlist, hop, tls, token | [ADR-094-federation-team-to-team.md](ADR-094-federation-team-to-team.md) |
+| 095 | 0.27 成员再派生：peer / contractor、冻结与 close 审批 | accepted | 2026-10-25 | agent, spawn, peer, contractor, team, owner, freeze, permission, rpc, audit | [ADR-095-agent-spawn-and-contractors.md](ADR-095-agent-spawn-and-contractors.md) |
 
 ## 编写约定
 

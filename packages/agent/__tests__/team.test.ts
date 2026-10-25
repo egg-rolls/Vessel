@@ -268,6 +268,50 @@ describe('TeamService system messages', () => {
     expect(system.every((log) => log.to.length === 1)).toBe(true);
     expect(store.logs.every((log) => log.team_id === 'alpha')).toBe(true);
   });
+
+  it('join records the spawner as from when spawned_by is set', async () => {
+    const { agent, store } = makeTeamHarness();
+
+    agent.emit({
+      type: 'agent.spawned',
+      agent_id: 'peer',
+      team_id: 'alpha',
+      visibility: 'team',
+      spawned_by: 'lead',
+      ts: 1,
+    });
+    // 没有 spawned_by 的旧路径保持 system。
+    agent.emit({
+      type: 'agent.spawned',
+      agent_id: 'legacy',
+      team_id: 'alpha',
+      visibility: 'team',
+      ts: 2,
+    });
+    // private 不写 Team 日志；unbound 没有 team_id 也不写。
+    agent.emit({
+      type: 'agent.spawned',
+      agent_id: 'private',
+      team_id: 'alpha',
+      visibility: 'private',
+      spawned_by: 'lead',
+      ts: 3,
+    });
+    agent.emit({
+      type: 'agent.spawned',
+      agent_id: 'unbound',
+      visibility: 'team',
+      spawned_by: 'lead',
+      ts: 4,
+    });
+    await settle();
+
+    const joins = store.logs.filter((log) => log.system_event === 'join');
+    expect(joins.map((log) => `${log.from}->${log.to[0]}`)).toEqual([
+      'lead->peer',
+      'system->legacy',
+    ]);
+  });
 });
 
 describe('TeamService.send / listForCaller', () => {
@@ -847,5 +891,45 @@ describe('TeamService private members', () => {
     expect(store.logs).toHaveLength(1);
     expect(store.logs[0]?.from).toBe('main');
     expect(store.logs[0]?.team_id).toBe('alpha');
+  });
+});
+
+describe('TeamService spawn freeze', () => {
+  it('freezes / unfreezes, echoes the summary, emits spawn events and keeps the flag on update', async () => {
+    const { service, store } = makeTeamHarness();
+    const events: TeamServiceEvent[] = [];
+    service.subscribe((event) => events.push(event));
+
+    const frozen = await service.setSpawnFrozen('alpha', true);
+    expect(frozen.spawn_frozen).toBe(true);
+    expect(service.isSpawnFrozen('alpha')).toBe(true);
+    expect(store.get('alpha')?.spawn_frozen).toBe(true);
+    expect(events).toEqual([{ team_id: 'alpha', kind: 'spawn', frozen: true }]);
+
+    const updated = await service.update({ team_id: 'alpha', name: 'Alpha' });
+    expect(updated.spawn_frozen).toBe(true);
+    expect(service.isSpawnFrozen('alpha')).toBe(true);
+
+    const thawed = await service.setSpawnFrozen('alpha', false);
+    expect(thawed.spawn_frozen).toBeUndefined();
+    expect(service.isSpawnFrozen('alpha')).toBe(false);
+    expect(events.at(-1)).toEqual({ team_id: 'alpha', kind: 'spawn', frozen: false });
+  });
+
+  it('rejects an archived team and an unknown team', async () => {
+    const { service } = makeTeamHarness();
+    await service.archive({ team_id: 'beta' });
+
+    let archived: unknown;
+    try {
+      await service.setSpawnFrozen('beta', true);
+    } catch (error) {
+      archived = error;
+    }
+    expect(archived).toBeInstanceOf(TeamError);
+    expect((archived as TeamError).code).toBe('team_archived');
+    expect(service.isSpawnFrozen('beta')).toBe(false);
+
+    await expect(service.setSpawnFrozen('missing', true)).rejects.toThrow('team_not_found');
   });
 });

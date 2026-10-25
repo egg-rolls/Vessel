@@ -51,6 +51,10 @@ class FakeTeams implements TeamControlLike {
     throw new Error('archive is not used by federation tests');
   }
 
+  async setSpawnFrozen(): Promise<never> {
+    throw new Error('spawnFrozen is not used by federation tests');
+  }
+
   async list(): Promise<TeamSummaryLike[]> {
     return [];
   }

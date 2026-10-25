@@ -8,6 +8,7 @@
 import { ActionMenu } from '../../components/ActionMenu';
 import { StatusChip } from '../../components/StatusChip';
 import { iconButtonClass } from '../../components/Tooltip';
+import { Badge } from '../../components/ui';
 import type { AskUserRequest, PermissionRequest, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import { memberStatus } from './member-status';
@@ -103,6 +104,11 @@ export function TeamMemberSidebar({
               >
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="min-w-0 truncate text-sm">{name}</span>
+                  <Badge className="flex-none">
+                    {member.owner !== undefined
+                      ? t('team.member.contractor')
+                      : t('team.member.peer')}
+                  </Badge>
                   <span
                     role="img"
                     className={`size-1.5 flex-none rounded-full ${

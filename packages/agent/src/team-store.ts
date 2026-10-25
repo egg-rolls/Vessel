@@ -179,6 +179,10 @@ function parseTeamRecord(raw: string, dirName: string, tenantId: string): TeamRe
     if (typeof parsed.archived_at === 'number' && Number.isFinite(parsed.archived_at)) {
       record.archived_at = parsed.archived_at;
     }
+    // 0.27 additive：非 boolean 忽略该字段，不让整个 Team 失效。
+    if (typeof parsed.spawn_frozen === 'boolean') {
+      record.spawn_frozen = parsed.spawn_frozen;
+    }
     return record;
   } catch {
     return null;
@@ -347,6 +351,29 @@ export class FileTeamStore implements TeamStore {
         throw new TeamError('team_archived', `team_archived: ${teamId}`);
       }
       const next = applyTeamUpdate(current, patch);
+      await this.persist(next);
+      this.teams.set(teamId, next);
+      return cloneRecord(next);
+    });
+  }
+
+  /**
+   * 0.27：写 spawn_frozen。true 写入字段，false 删除字段；
+   * 归档 Team 拒绝（`team_archived`）；先原子落盘再改内存。
+   */
+  async setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamRecord> {
+    await this.ready();
+    return this.enqueue(async () => {
+      const current = this.teams.get(teamId);
+      if (current === undefined) {
+        throw new TeamError('team_not_found', `team_not_found: ${teamId}`);
+      }
+      if (current.archived_at !== undefined) {
+        throw new TeamError('team_archived', `team_archived: ${teamId}`);
+      }
+      const next = cloneRecord(current);
+      if (frozen) next.spawn_frozen = true;
+      else delete next.spawn_frozen;
       await this.persist(next);
       this.teams.set(teamId, next);
       return cloneRecord(next);

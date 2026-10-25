@@ -53,6 +53,8 @@ import {
   type CloseInput,
   type CloseResult,
   type ConversationBudgetPort,
+  type CreateBatchInput,
+  type CreateMemberInput,
   DEFAULT_OWNER,
   type DispatchInput,
   type DispatchResult,
@@ -64,8 +66,6 @@ import {
   type MemberStatus,
   type MemberTurnResult,
   type MemberVisibility,
-  type NewBatchInput,
-  type NewMemberInput,
   type PersistedAgentRecord,
   type ReinstateInput,
   type ReplyResult,
@@ -78,6 +78,9 @@ import {
 } from './types.js';
 
 const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
+
+/** Team 内 present 成员上限（peer + contractor 都计入；后续可配置） */
+const TEAM_MEMBER_LIMIT = 20;
 
 /** 单成员运行态（不落 snapshot）；队列 per-agent，不 per-body */
 interface MemberQueue {
@@ -113,7 +116,11 @@ interface RotationState {
 /** 0.20 fork 结果：成功带新记录；失败带稳定 code 与 `code: reason` 文本 */
 type ForkOutcome =
   | { ok: true; member: MemberRecord }
-  | { ok: false; code: 'fork_not_allowed' | 'fork_failed' | 'agent_left'; reason: string };
+  | {
+      ok: false;
+      code: 'fork_not_allowed' | 'fork_failed' | 'agent_left' | 'team_full' | 'team_frozen';
+      reason: string;
+    };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -177,7 +184,7 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     sessionId: status.session_id,
     ...(status.name !== undefined ? { name: status.name } : {}),
     ...(status.parent_id !== undefined ? { parentId: status.parent_id } : {}),
-    owner: status.owner,
+    ...(status.owner !== undefined ? { owner: status.owner } : {}),
     visibility: status.visibility,
     state,
     presence: 'gone',
@@ -313,10 +320,10 @@ export class AgentServiceImpl implements AgentService {
     if (restored > 0) this.scheduleSnapshot();
   }
 
-  async 'new'(input: NewMemberInput): Promise<MemberStatus>;
-  async 'new'(input: NewBatchInput): Promise<BatchResult<MemberStatus>>;
-  async 'new'(
-    input: NewMemberInput | NewBatchInput,
+  async create(input: CreateMemberInput): Promise<MemberStatus>;
+  async create(input: CreateBatchInput): Promise<BatchResult<MemberStatus>>;
+  async create(
+    input: CreateMemberInput | CreateBatchInput,
   ): Promise<MemberStatus | BatchResult<MemberStatus>> {
     await this.ready;
     const record = input as unknown as Record<string, unknown>;
@@ -328,6 +335,9 @@ export class AgentServiceImpl implements AgentService {
         record.visibility !== undefined ||
         record.parentId !== undefined ||
         record.owner !== undefined ||
+        record.kind !== undefined ||
+        record.teamId !== undefined ||
+        record.spawnedBy !== undefined ||
         record.workspace !== undefined
       ) {
         throw new AgentError(
@@ -415,53 +425,120 @@ export class AgentServiceImpl implements AgentService {
   }
 
   private async createOne(input: Record<string, unknown>): Promise<MemberStatus> {
-    const owner = input.owner === undefined ? DEFAULT_OWNER : readRequiredString(input, 'owner');
+    const kind = input.kind;
+    if (kind !== undefined && kind !== 'peer' && kind !== 'contractor') {
+      throw new AgentError('invalid_input', 'kind must be peer or contractor');
+    }
+    const rawOwner = input.owner;
+    if (rawOwner !== undefined && rawOwner !== null && !nonEmpty(rawOwner)) {
+      throw new AgentError('invalid_input', 'owner must be a non-empty string or null');
+    }
+    // owner === null 与 peer 等价（即使 kind 缺省）；contractor 不能显式无 owner。
+    if (kind === 'contractor' && rawOwner === null) {
+      throw new AgentError('invalid_input', 'contractor requires an owner');
+    }
+    const peer = kind === 'peer' || rawOwner === null;
+    if (peer && typeof rawOwner === 'string') {
+      throw new AgentError('invalid_input', 'peer must not specify an owner');
+    }
+    const owner = peer ? undefined : ((rawOwner as string | undefined) ?? DEFAULT_OWNER);
+
     const id = this.newId();
     if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
 
     const name = optionalString(input.name);
+    const spawnedBy = optionalString(input.spawnedBy);
     // 显式 workspace 只由 CLI 传入；默认 workspace 来自配置声明。
     const explicitWorkspace =
       input.workspace === undefined ? undefined : readRequiredString(input, 'workspace');
-    const workspace = explicitWorkspace ?? this.defaultWorkspace;
-    let teamId: string | undefined;
-    if (workspace !== undefined && name !== undefined) {
-      if (this.teamBinder === undefined) {
-        throw new AgentError('invalid_input', 'team binding is not configured');
-      }
-      // Team ensure 必须在名字检查 / registry.add 之前完成（F7：之后不得有 await）。
-      const team = await this.teamBinder.ensureForWorkspace({ workspace, name });
-      teamId = team.team_id;
-    } else if (explicitWorkspace !== undefined) {
-      // 默认 workspace 无名字时保持 unbound；显式 workspace 无名字则拒绝绑定。
-      throw new AgentError('invalid_input', 'team binding requires a name');
+    const explicitTeamId =
+      input.teamId === undefined ? undefined : readRequiredString(input, 'teamId');
+    if (explicitTeamId !== undefined && explicitWorkspace !== undefined) {
+      throw new AgentError('invalid_input', 'pass either teamId or workspace, not both');
     }
 
-    // 绑定 Team 且调用方未显式指定 visibility 时缺省 team；否则沿用 private。
-    const visibility =
-      teamId !== undefined && input.visibility === undefined
-        ? 'team'
-        : resolveVisibility(input.visibility, 'private');
+    let teamId: string | undefined;
+    if (explicitTeamId !== undefined) {
+      if (this.teamBinder === undefined || this.teamBinder.get(explicitTeamId) === undefined) {
+        throw new AgentError('invalid_input', `team_not_found: ${explicitTeamId}`);
+      }
+      teamId = explicitTeamId;
+    } else {
+      const workspace = explicitWorkspace ?? this.defaultWorkspace;
+      if (workspace !== undefined && name !== undefined) {
+        if (this.teamBinder === undefined) {
+          throw new AgentError('invalid_input', 'team binding is not configured');
+        }
+        // Team ensure 必须在名字检查 / registry.add 之前完成（F7：之后不得有 await）。
+        const team = await this.teamBinder.ensureForWorkspace({ workspace, name });
+        teamId = team.team_id;
+      } else if (explicitWorkspace !== undefined) {
+        // 默认 workspace 无名字时保持 unbound；显式 workspace 无名字则拒绝绑定。
+        throw new AgentError('invalid_input', 'team binding requires a name');
+      }
+    }
 
+    if (peer && teamId === undefined) {
+      throw new AgentError('invalid_input', 'peer members require a team');
+    }
+
+    let parentId: string | undefined;
+    if (peer) {
+      if (input.parentId !== undefined) {
+        throw new AgentError('invalid_input', 'peer members must not have a parent');
+      }
+    } else {
+      parentId = optionalString(input.parentId);
+      // contractor 缺省以 owner 为 parent；kind 缺省保持旧行为。
+      if (kind === 'contractor' && parentId === undefined) parentId = owner;
+    }
+
+    // peer 强制 team 可见；contractor 缺省 team（有 Team）或 private（unbound）；
+    // kind 缺省沿用旧语义。
+    let visibility: MemberVisibility;
+    if (peer) {
+      if (input.visibility !== undefined && input.visibility !== 'team') {
+        throw new AgentError('invalid_input', 'peer members must use team visibility');
+      }
+      visibility = 'team';
+    } else if (kind === 'contractor') {
+      visibility =
+        input.visibility === undefined
+          ? teamId !== undefined
+            ? 'team'
+            : 'private'
+          : resolveVisibility(input.visibility, 'private');
+    } else {
+      // 绑定 Team 且调用方未显式指定 visibility 时缺省 team；否则沿用 private。
+      visibility =
+        teamId !== undefined && input.visibility === undefined
+          ? 'team'
+          : resolveVisibility(input.visibility, 'private');
+    }
+
+    // 冻结 / 上限 / 名称检查 / registry.add 之间不得有 await（F7）。
+    if (teamId !== undefined && this.teamBinder?.get(teamId)?.spawn_frozen === true) {
+      throw new AgentError('team_frozen', `team_frozen: ${teamId}`);
+    }
+    if (teamId !== undefined && this.presentTeamCount(teamId) >= TEAM_MEMBER_LIMIT) {
+      throw new AgentError('team_full', `team_full: ${teamId}`);
+    }
     // 名称只由 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫。
-    // 检查与 add 之间不得有 await。
-    if (
-      name !== undefined &&
-      this.registry
-        .findByName(name)
-        .some(
-          (record) =>
-            record.membership === 'present' && (teamId === undefined || record.teamId === teamId),
-        )
-    ) {
-      throw new AgentError('invalid_input', `duplicate member name: ${name}`);
+    let resolvedName: string;
+    if (name !== undefined) {
+      if (this.nameOccupied(name, teamId)) {
+        throw new AgentError('invalid_input', `duplicate member name: ${name}`);
+      }
+      resolvedName = name;
+    } else {
+      resolvedName = this.autoNameFor(spawnedBy, teamId);
     }
 
     const record: MemberRecord = {
       id,
       // session 即成员：两者同值，消息可用任一寻址
       sessionId: id,
-      owner,
+      ...(owner !== undefined ? { owner } : {}),
       visibility,
       state: 'created',
       presence: 'gone',
@@ -470,9 +547,8 @@ export class AgentServiceImpl implements AgentService {
       currentBody: { session_id: id, epoch: 0, started_at: this.now() },
       bodyHistory: [],
     };
-    if (name !== undefined) record.name = name;
+    record.name = resolvedName;
     if (teamId !== undefined) record.teamId = teamId;
-    const parentId = optionalString(input.parentId);
     if (parentId !== undefined) record.parentId = parentId;
     // 落“有效 model”：未显式指定时用 wiring 默认值，resume 才不会回流到空
     const model = optionalString(input.model) ?? this.defaultModel;
@@ -485,8 +561,44 @@ export class AgentServiceImpl implements AgentService {
     } catch (error) {
       throw new AgentError('spawn_failed', `spawn_failed: ${errorText(error)}`);
     }
-    this.emit('agent.spawned', record, { state: 'idle', presence: 'live' });
+    this.emit('agent.spawned', record, {
+      state: 'idle',
+      presence: 'live',
+      ...(spawnedBy !== undefined ? { spawned_by: spawnedBy } : {}),
+    });
     return toMemberStatus(record);
+  }
+
+  /** 同 Team 的 present 成员数（上限闸门；与 name 检查同在无 await 窗口） */
+  private presentTeamCount(teamId: string): number {
+    let count = 0;
+    for (const record of this.registry.all()) {
+      if (record.membership === 'present' && record.teamId === teamId) count += 1;
+    }
+    return count;
+  }
+
+  /** name 是否被 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫 */
+  private nameOccupied(name: string, teamId: string | undefined): boolean {
+    return this.registry
+      .findByName(name)
+      .some(
+        (record) =>
+          record.membership === 'present' && (teamId === undefined || record.teamId === teamId),
+      );
+  }
+
+  /** 缺省名：`${base}-2..${base}-101`；100 次仍冲突则 name_exhausted */
+  private autoNameFor(spawnedBy: string | undefined, teamId: string | undefined): string {
+    const base =
+      (spawnedBy !== undefined ? this.registry.resolve(spawnedBy)?.name : undefined) ??
+      spawnedBy ??
+      'agent';
+    for (let index = 2; index <= 101; index += 1) {
+      const candidate = `${base}-${index}`;
+      if (!this.nameOccupied(candidate, teamId)) return candidate;
+    }
+    throw new AgentError('invalid_input', `name_exhausted: ${base}`);
   }
 
   /**
@@ -545,8 +657,16 @@ export class AgentServiceImpl implements AgentService {
     if (teamId === undefined || this.teamBinder === undefined) {
       return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: no_team' };
     }
-    if (this.teamBinder.get(teamId) === undefined) {
+    const team = this.teamBinder.get(teamId);
+    if (team === undefined) {
       return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: no_team' };
+    }
+    // 冻结 / 上限先于 existingFork / name：命中时不得产生任何写入。
+    if (team.spawn_frozen === true) {
+      return { ok: false, code: 'team_frozen', reason: `team_frozen: ${teamId}` };
+    }
+    if (this.presentTeamCount(teamId) >= TEAM_MEMBER_LIMIT) {
+      return { ok: false, code: 'team_full', reason: `team_full: ${teamId}` };
     }
 
     // 用现有 forked_from 自描述去重，不新增源侧指针、不写源记录。
@@ -575,7 +695,7 @@ export class AgentServiceImpl implements AgentService {
       id,
       sessionId: id,
       name,
-      owner: source.owner,
+      ...(source.owner !== undefined ? { owner: source.owner } : {}),
       visibility: source.visibility,
       state: 'created',
       presence: 'gone',
@@ -806,8 +926,12 @@ export class AgentServiceImpl implements AgentService {
         if (fork.code === 'agent_left') {
           return { status: 'rejected', code: 'agent_left', reason: fork.reason };
         }
-        if (fork.code === 'fork_failed') {
-          return { status: 'rejected', code: 'fork_failed', reason: fork.reason };
+        if (
+          fork.code === 'fork_failed' ||
+          fork.code === 'team_full' ||
+          fork.code === 'team_frozen'
+        ) {
+          return { status: 'rejected', code: fork.code, reason: fork.reason };
         }
         // fork_not_allowed：没有发生 fork，仍按 resume 失败显式拒绝。
         return { status: 'rejected', code: 'resume_failed', reason: fork.reason };
@@ -1247,6 +1371,30 @@ export class AgentServiceImpl implements AgentService {
     }
     queue.activeBodySession = undefined;
 
+    // owner close 后 private contractor 会对所有人不可见：按 registry 原始记录级联关闭。
+    // team 可见的 contractor 保持 present（队友仍可收）；递归天然覆盖链式 private。
+    const privateChildren = this.registry
+      .all()
+      .filter(
+        (record) =>
+          record.membership === 'present' &&
+          record.visibility === 'private' &&
+          record.owner === member.id &&
+          record.id !== member.id,
+      );
+    for (const child of privateChildren) {
+      try {
+        await this.closeOne(child.id);
+      } catch (error) {
+        // 单个子成员失败不阻断 owner close。
+        this.logger.warn('agent.cascade_close.failed', {
+          owner_id: member.id,
+          agent_id: child.id,
+          error: errorText(error),
+        });
+      }
+    }
+
     await this.flushSnapshot();
     return { state: 'closed' };
   }
@@ -1400,8 +1548,17 @@ export class AgentServiceImpl implements AgentService {
     }
 
     const stillPresent = target.membership === 'present' && target.state !== 'closed';
+    // 已在同一 Team 的幂等 reinstate 不是增长，不该被冻结/上限拦住。
     if (stillPresent && target.teamId === teamId) {
       return toMemberStatus(target);
+    }
+
+    const team = this.teamBinder?.get(teamId);
+    if (team?.spawn_frozen === true) {
+      throw new AgentError('team_frozen', `team_frozen: ${teamId}`);
+    }
+    if (team !== undefined && this.presentTeamCount(teamId) >= TEAM_MEMBER_LIMIT) {
+      throw new AgentError('team_full', `team_full: ${teamId}`);
     }
 
     if (stillPresent) {

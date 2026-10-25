@@ -15,7 +15,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**，也是一个**分布�
 
 多个节点之间，它不把 Agent 当成孤立的聊天机器人：每个 Vessel 进程是一个**节点（蜂巢）**，节点内按工作目录组织 **Team（蜂群）**，Team 里的 **Agent（个体蜂）** 可以创建 / 关闭成员、定向通信、轮换身体；节点通过 **Hub** 交换目录与指针，通过地址 `<principal>@<node_id>:<team_id>` 直接投递消息。
 
-> **当前边界**：单节点蜂群、Hub 目录、静态 peer 的跨节点定向投递已实现；自动发现、成员再派生、扩散信息素订阅、跨节点 Agent 生命周期仍在路上。完整拆分见 [能力边界](#能力边界) 与 [产品设计](docs/PRODUCT.md)。
+> **当前边界**：单节点蜂群、成员再派生（peer / contractor）、Hub 目录、静态 peer 的跨节点定向投递已实现；自动发现、扩散信息素订阅、跨节点 Agent 生命周期仍在路上。完整拆分见 [能力边界](#能力边界) 与 [产品设计](docs/PRODUCT.md)。
 
 |                  | 单体 Agent 工具            | 多 Agent 编排框架      | Vessel                                              |
 | ---------------- | -------------------------- | ---------------------- | --------------------------------------------------- |
@@ -35,7 +35,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**，也是一个**分布�
 | **节点 Node** | 一次 Vessel 进程，`node.json` 的 `node_id` + 数据目录 | 独立执行、授权、持久化；是唯一权威 |
 | **Hub** | `vessel hub` 目录服务 | 配对、登记节点 / Team / 成员 / 在线状态、推送指针；不代理正文、不替节点授权 |
 | **Team** | `workspace` + `team_id` + roster + 日志 + policy | 一个工作目录一个 Team（声明后按 `workspace` 匹配当前目录）；共享日志、预算、可见性 |
-| **Agent** | 持久身份 + 可替换 Body | 主 Agent 可 `new` / `close` 成员；成员可 `send` / `post` / `list` / `rotate` 自己 |
+| **Agent** | 持久身份 + 可替换 Body | 主 Agent 可 `hire` / `close` 成员；成员可 `create` / `hire` / `close` / `send` / `post` / `list` / `rotate` 自己（close peer 需人类审批） |
 | **地址** | `<principal>@<node_id>:<team_id>` | 跨节点定向投递；`principal` 是名字，不是 agent id |
 
 Hub 让其他节点「被看见」；真正的操作仍直连节点——这是刻意的权限边界。Hub 同步目录快照与 `{node_id, team_id, request_id?, reason, ts}` 指针，不代理正文；浏览器和 CLI 要操作时仍然连节点自己的 gateway。Hub 不自动发现节点：节点用配对码加入，或由 hub 用 `vessel hub node add` 纳入；自动发现仍是未实现项。
@@ -194,7 +194,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 | 工具                    | 何时注册                                                                                      | 干什么                                                                                                                                                                                                                                                        |
 | ----------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                 | 默认注册；`agent.enabled: false` 关闭                                                         | 成员生命周期：owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，不能 `new` / `close`）；`send` 走统一 dispatch，入队即返回，不等待结果，`to` 也接受跨节点地址 `<principal>@<node_id>:<team_id>`；`post` 只写 Team 日志，不通知任何 Agent |
+| `agent`                 | 默认注册；`agent.enabled: false` 关闭                                                         | 成员生命周期：root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`（root 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`。`create` 建同 Team peer，`hire` 建调用者拥有的 contractor；成员关 peer 需人类审批；`send` 走统一 dispatch，入队即返回，不等待结果，`to` 也接受跨节点地址 `<principal>@<node_id>:<team_id>`；`post` 只写 Team 日志，不通知任何 Agent |
 | `ask_user`              | 交互 REPL（TTY）或 gateway/serve；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭 | 向用户提问，经事件流暂停等待回答                                                                                                                                                                                                                              |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功                                                         | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化                                                                                                                                                                                                     |
 
@@ -433,7 +433,8 @@ transport:
 
 ### 已实现
 
-- **单节点 Agent 生命周期**：`new` / `send` / `close` / `list` / `rotate` / `post`。主 Agent 可创建、关闭成员；成员 Body 可发送、写 Team 日志、轮换自己。
+- **单节点 Agent 生命周期**：`create` / `hire` / `send` / `close` / `list` / `rotate` / `post`。主 Agent 可 hire contractor、关闭成员；成员 Body 可发送、写 Team 日志、轮换自己。
+- **蜂群增长**：peer（同 Team 平级）与 contractor（调用者拥有）两条派生路径；成员关闭 peer 经人类审批，owner close 级联 private contractor；每 Team present ≤ 20；`teams.spawnFrozen` / `vessel team freeze|unfreeze` 可停止增长。
 - **Team**：声明后按工作目录匹配，一个工作目录一个 Team；roster、共享日志、预算、可见性、`@` 投递。
 - **Hub 目录**：配对、节点 / Team / 成员 / 在线状态、指针；支持 hub → node 拨号与 node → hub 出站（NAT）。
 - **跨节点定向投递**：静态 peer allowlist + `<principal>@<node_id>:<team_id>` 地址 + 回复；每 peer 限流、去重、hop 上界。
@@ -446,7 +447,7 @@ transport:
 
 ### 未实现（方向）
 
-- 成员 Agent 再派生 Agent（当前只有 owner 能 `new` / `close`）；跨节点 spawn / close / rotate / resume。
+- 跨节点 spawn / close / rotate / resume；TTL / 自动回收、spawn 预算与跨 Team 派生。
 - 扩散信息素订阅：文件 / 目录 / 事件 diff 在下一个 run 前注入。
 
 ### 未实现（暂不承诺）

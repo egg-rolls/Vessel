@@ -194,19 +194,36 @@ function isExcludedTool(name: string): boolean {
   return EXCLUDED_TOOL_NAMES.has(name) || name.startsWith('team_');
 }
 
-/** 成员侧 agent 工具可用的动作（new / close 只给 owner） */
-const MEMBER_AGENT_ACTIONS: readonly string[] = ['rotate', 'post', 'send', 'list'];
+/** 成员侧 agent 工具可用的动作（close 的审批在 checkPermission；create 需要成员自己所属 Team） */
+const MEMBER_AGENT_ACTIONS: readonly string[] = [
+  'create',
+  'hire',
+  'close',
+  'rotate',
+  'post',
+  'send',
+  'list',
+];
 
 /** 成员侧 agent 工具的可见参数；父级 schema 有同名字段时沿用父级定义 */
 const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>> = {
   action: {
     type: 'string',
     enum: [...MEMBER_AGENT_ACTIONS],
-    description: 'rotate | post | send | list',
+    description: 'create | hire | close | rotate | post | send | list',
   },
+  name: { type: 'string', description: 'create/hire: display name' },
+  model: { type: 'string', description: 'create/hire: model override' },
+  system_prompt: { type: 'string', description: 'create/hire: optional system prompt' },
   to: { type: 'string', description: 'send: member id or session id; rotate: target agent' },
   content: { type: 'string', description: 'send/post: message text' },
   messages: { type: 'array', description: 'send: [{to, content}]' },
+  members: {
+    type: 'array',
+    description:
+      'create/hire: [{name?, model?, system_prompt?, visibility?}]; ' +
+      'close: [member id or session id]',
+  },
   startup_prompt: {
     type: 'string',
     description: 'rotate: required first message for the new body',
@@ -215,7 +232,9 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   visibility: {
     type: 'string',
     enum: ['private', 'team', 'tenant'],
-    description: 'list: filter by visibility',
+    description:
+      'create: team only; hire: visibility (default private for unbound, team with a team); ' +
+      'list: filter by visibility',
   },
 };
 
@@ -223,7 +242,7 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
 function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
   const schema = isRecord(tool.inputSchema) ? tool.inputSchema : {};
   const source = isRecord(schema.properties) ? schema.properties : {};
-  // 无论父级 schema 有几种 action，成员侧只暴露 rotate/post/send/list
+  // 无论父级 schema 有几种 action，成员侧只暴露 create/hire/rotate/post/send/list
   const properties: Record<string, unknown> = {
     action: isRecord(source.action)
       ? { ...source.action, enum: [...MEMBER_AGENT_ACTIONS] }
@@ -235,10 +254,13 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
   return {
     ...tool,
     description:
-      'Member actions: rotate (rotate your own body; startup_prompt is required), ' +
+      'Member actions: create (create peer member(s) in your team), ' +
+      'hire (create contractor member(s) owned by you), ' +
+      'close (release member(s); closing a peer requires human approval, while closing ' +
+      'your own contractor or yourself needs no approval), ' +
+      'rotate (rotate your own body; startup_prompt is required), ' +
       'post (append to your team log only; nobody is notified), ' +
-      'send (dispatch a message to a member), list (list the caller-visible roster). ' +
-      'new and close are owner-only.',
+      'send (dispatch a message to a member), list (list the caller-visible roster).',
     inputSchema: {
       ...schema,
       properties,

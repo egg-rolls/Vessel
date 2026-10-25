@@ -50,7 +50,8 @@ export type AgentOwnerMethod =
   | 'teams.budget'
   | 'teams.create'
   | 'teams.update'
-  | 'teams.archive';
+  | 'teams.archive'
+  | 'teams.spawnFrozen';
 
 /** owner 记录（E3 冻结字段） */
 export interface AgentOwnerRecord {

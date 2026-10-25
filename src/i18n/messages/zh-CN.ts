@@ -80,6 +80,8 @@ export const zhCN = {
   'help.cmd.teamMembers': '添加 / 移除 Team 成员',
   'help.cmd.teamBudget': '查看 conversation 预算与阻塞状态',
   'help.cmd.teamBudgetOverride': '人工抬高 / 清除某条 conversation 的预算上限',
+  'help.cmd.teamFreeze': '冻结 Team 的 spawn（不再派生新成员）',
+  'help.cmd.teamUnfreeze': '解冻 Team 的 spawn',
   'help.cmd.federationPost': '向已 allowlist 的对端成员地址投递一条消息（principal@node:team）',
   'help.cmd.federationPeers': '列出 federation peer 与 token 是否已设置',
   'help.cmd.federationTeamInfo': '查询已 allowlist 的对端 Team 目录（需对端开启 allowDirectory）',

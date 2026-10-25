@@ -78,7 +78,7 @@ describe('AgentService.drain', () => {
       runtime,
       newId: () => 'm1',
     });
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     await service.dispatch({ to: member.id, content: 'one' });
     await service.dispatch({ to: member.id, content: 'two' });
     await started.promise;
@@ -117,7 +117,7 @@ describe('AgentService.drain', () => {
       logger,
     });
     const service = createAgentService({ tenantId: 'default', runtime, logger });
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     const dispatched = service.dispatch({ to: member.id, content: 'hello' });
     await started.promise;
 

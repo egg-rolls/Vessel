@@ -21,6 +21,7 @@ import {
   type ReinstateInput,
   type TeamCreateInput,
   type TeamDeclaration,
+  TeamError,
   type TeamLogEntry,
   type TeamRecord,
   type TeamStore,
@@ -307,6 +308,20 @@ export class MemoryTeamStore implements TeamStore {
     if (current === undefined) throw new Error(`team_not_found: ${teamId}`);
     if (current.archived_at !== undefined) return current;
     const next = { ...current, archived_at: 1 };
+    this.records[index] = next;
+    return next;
+  }
+
+  async setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamRecord> {
+    const index = this.records.findIndex((record) => record.team_id === teamId);
+    const current = this.records[index];
+    if (current === undefined) throw new TeamError('team_not_found', `team_not_found: ${teamId}`);
+    if (current.archived_at !== undefined) {
+      throw new TeamError('team_archived', `team_archived: ${teamId}`);
+    }
+    const next: TeamRecord = { ...current, policy: { ...current.policy } };
+    if (frozen) next.spawn_frozen = true;
+    else delete next.spawn_frozen;
     this.records[index] = next;
     return next;
   }

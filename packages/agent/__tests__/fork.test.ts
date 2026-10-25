@@ -3,9 +3,9 @@ import {
   type AgentEvent,
   type AgentMessage,
   type AgentService,
+  type CreateMemberInput,
   createTeamService,
   type MemberRecord,
-  type NewMemberInput,
   type TeamBinder,
   type TeamRecord,
 } from '../src/index.js';
@@ -16,7 +16,11 @@ const TEAM_WORKSPACE = '/workspace/alpha';
 
 type ForkOutcome =
   | { ok: true; member: MemberRecord }
-  | { ok: false; code: 'fork_not_allowed' | 'fork_failed' | 'agent_left'; reason: string };
+  | {
+      ok: false;
+      code: 'fork_not_allowed' | 'fork_failed' | 'agent_left' | 'team_full' | 'team_frozen';
+      reason: string;
+    };
 
 /** 只用于测试的私有接缝：fork 是 F2 才公开的 dispatch 分支，这里直接断言核心语义。 */
 interface ServiceSeam {
@@ -42,6 +46,18 @@ function makeBinder(): TeamBinder {
   };
 }
 
+/** 可变 Team：测试可在创建源成员后翻转 spawn_frozen */
+function makeMutableBinder(): { binder: TeamBinder; team: TeamRecord } {
+  const team = makeTeam(TEAM_ID, { workspace: TEAM_WORKSPACE });
+  return {
+    team,
+    binder: {
+      ensureForWorkspace: async (input) => ({ ...team, name: input.name ?? team.name }),
+      get: (teamId: string): TeamRecord | undefined => (teamId === TEAM_ID ? team : undefined),
+    },
+  };
+}
+
 /** 重启后的等价状态：engine 不在，presence=gone（不持久化，只能经 registry 设置） */
 function markGone(service: AgentService, id: string): void {
   seam(service).registry.setPresence(id, 'gone');
@@ -62,9 +78,9 @@ function pendingCount(service: AgentService, id: string): number {
 
 async function createSource(
   service: AgentService,
-  overrides: Partial<NewMemberInput> = {},
+  overrides: Partial<CreateMemberInput> = {},
 ): Promise<MemberRecord> {
-  const status = await service.new({
+  const status = await service.create({
     name: 'src',
     workspace: TEAM_WORKSPACE,
     model: 'model-src',
@@ -363,7 +379,7 @@ describe('AgentService fork', () => {
 
   it('drops a fork reply with agent.reply.dropped when the parent is gone, without enqueueing', async () => {
     const { service, runtime } = makeService({ teamBinder: makeBinder() });
-    const parent = await service.new({ name: 'parent', workspace: TEAM_WORKSPACE });
+    const parent = await service.create({ name: 'parent', workspace: TEAM_WORKSPACE });
     const source = await createSource(service, { parentId: parent.id });
     markGone(service, source.id);
     markGone(service, parent.id);
@@ -389,5 +405,75 @@ describe('AgentService fork', () => {
     // 不入队、不重试：父队列为空且父从未起轮
     expect(pendingCount(service, parent.id)).toBe(0);
     expect(runtime.turns.filter((turn) => turn.member.id === parent.id)).toHaveLength(0);
+  });
+});
+
+describe('AgentService fork gates', () => {
+  it('rejects fork when the team is frozen and does not spawn', async () => {
+    const { binder, team } = makeMutableBinder();
+    const { service, runtime } = makeService({ teamBinder: binder });
+    const source = await createSource(service);
+    markGone(service, source.id);
+    const spawnedBefore = runtime.spawned.length;
+    team.spawn_frozen = true;
+
+    const outcome = await seam(service).ensureForked(source.id);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('team_frozen');
+      expect(outcome.reason).toBe(`team_frozen: ${TEAM_ID}`);
+    }
+    expect(runtime.spawned.length).toBe(spawnedBefore);
+  });
+
+  it('rejects fork when the team already has 20 present members', async () => {
+    const { binder, team } = makeMutableBinder();
+    const { service } = makeService({ teamBinder: binder });
+    const source = await createSource(service);
+    markGone(service, source.id);
+    for (let index = 0; index < 19; index += 1) {
+      await service.create({ kind: 'contractor', owner: 'owner', teamId: TEAM_ID });
+    }
+    expect(team.spawn_frozen).toBeUndefined();
+
+    const outcome = await seam(service).ensureForked(source.id);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('team_full');
+      expect(outcome.reason).toBe(`team_full: ${TEAM_ID}`);
+    }
+  });
+
+  it('propagates team_frozen and team_full through the dispatch fork fallback', async () => {
+    const { binder, team } = makeMutableBinder();
+    const { service, runtime } = makeService({ teamBinder: binder });
+    const source = await createSource(service);
+    markGone(service, source.id);
+    failResumeOnly(runtime, source.id);
+    team.spawn_frozen = true;
+
+    const frozen = await service.dispatch({
+      to: source.id,
+      content: 'frozen',
+      allow_fork: true,
+    });
+    expect(frozen.status).toBe('rejected');
+    if (frozen.status === 'rejected') {
+      expect(frozen.code).toBe('team_frozen');
+      expect(frozen.reason).toBe(`team_frozen: ${TEAM_ID}`);
+    }
+
+    team.spawn_frozen = false;
+    for (let index = 0; index < 19; index += 1) {
+      await service.create({ kind: 'contractor', owner: 'owner', teamId: TEAM_ID });
+    }
+    const full = await service.dispatch({ to: source.id, content: 'full', allow_fork: true });
+    expect(full.status).toBe('rejected');
+    if (full.status === 'rejected') {
+      expect(full.code).toBe('team_full');
+      expect(full.reason).toBe(`team_full: ${TEAM_ID}`);
+    }
   });
 });

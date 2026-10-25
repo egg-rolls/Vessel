@@ -25,6 +25,8 @@ export interface TeamSummaryLike {
   created_at: number;
   /** S10.3 additive：归档时间（epoch ms）；存在即只读。 */
   archived_at?: number;
+  /** 0.27 additive：冻结 spawn；`teams.update` 不修改该字段。 */
+  spawn_frozen?: boolean;
 }
 
 /** 已退役 Body（0.19 S6 additive）。 */
@@ -43,6 +45,8 @@ export interface TeamMemberLike {
   team_id?: string;
   membership: 'present' | 'left';
   presence: 'live' | 'gone';
+  /** 归属 principal；peer 缺省（Web 用于标记 peer / contractor） */
+  owner?: string;
   visibility: 'private' | 'team' | 'tenant';
   state: string;
   epoch: number;
@@ -177,6 +181,8 @@ export interface TeamControlLike {
   update(input: TeamUpdateLikeInput): Promise<TeamSummaryLike>;
   /** S10.3：有 present 成员时拒绝（`team_not_empty`）；不删数据。 */
   archive(input: { team_id: string }): Promise<TeamSummaryLike>;
+  /** 0.27：冻结 / 解冻 spawn；team-scoped token 只能操作自己的 team。 */
+  setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamSummaryLike>;
   list(options?: { viewer?: string }): Promise<TeamSummaryLike[]>;
   get(
     teamId: string,

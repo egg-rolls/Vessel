@@ -191,3 +191,36 @@ plugins:
     ]);
   });
 });
+
+describe('loadConfig - 0.27 permission.never_auto_approve', () => {
+  it('maps never_auto_approve to neverAutoApprove', async () => {
+    const userConfigPath = tmpYaml(`
+permission:
+  never_auto_approve:
+    - agent.close
+    - bash
+`);
+    const { config, validation } = await loadConfig({
+      userConfigPath,
+      configPath: missingPath(),
+      env: {},
+    });
+
+    expect(config.permission?.neverAutoApprove).toEqual(['agent.close', 'bash']);
+    expect(validation.errors).toEqual([]);
+  });
+
+  it('rejects invalid never_auto_approve values', async () => {
+    const userConfigPath = tmpYaml(`
+permission:
+  never_auto_approve: agent.close
+`);
+    const { validation } = await loadConfig({
+      userConfigPath,
+      configPath: missingPath(),
+      env: {},
+    });
+
+    expect(validation.errors.some((e) => e.path === 'permission.neverAutoApprove')).toBe(true);
+  });
+});

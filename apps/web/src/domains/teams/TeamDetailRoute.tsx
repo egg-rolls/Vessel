@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import { formatRoute, type Route } from '../../app/router';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/ToastProvider';
-import { Button } from '../../components/ui';
+import { Badge, Button } from '../../components/ui';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -44,6 +44,7 @@ export function TeamDetailRoute({
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [freezing, setFreezing] = useState(false);
   const [revision, setRevision] = useState(0);
 
   const teamDetail = useResource({
@@ -105,6 +106,21 @@ export function TeamDetailRoute({
     }
   };
 
+  const toggleFreeze = async () => {
+    if (!summary || freezing) return;
+    const next = summary.spawn_frozen !== true;
+    setFreezing(true);
+    try {
+      await control.setSpawnFrozen(route.teamId, next);
+      toast.success(next ? t('teams.frozen') : t('teams.unfrozen'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setFreezing(false);
+      teamDetail.reload();
+    }
+  };
+
   if (route.agentId) {
     return (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
@@ -148,9 +164,19 @@ export function TeamDetailRoute({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
       <div className="teams-detail-head">
         <TeamNodeBadge node={node} />
+        {summary?.spawn_frozen === true && <Badge tone="warn">{t('teams.frozen')}</Badge>}
         <div className="inline-flex flex-wrap gap-2">
           <Button size="small" disabled={!hasToken || archived} onClick={openEdit}>
             {t('common.edit')}
+          </Button>
+          <Button
+            size="small"
+            disabled={!hasToken || archived || !summary || freezing}
+            onClick={() => {
+              void toggleFreeze();
+            }}
+          >
+            {summary?.spawn_frozen === true ? t('teams.unfreeze') : t('teams.freeze')}
           </Button>
           <Button
             size="small"

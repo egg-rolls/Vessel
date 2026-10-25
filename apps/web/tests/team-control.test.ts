@@ -106,6 +106,19 @@ describe('remote Team control contract', () => {
     expect(calls.every((call) => call.authorization === 'Bearer token-alpha')).toBe(true);
   });
 
+  test('setSpawnFrozen uses teams.spawnFrozen with the frozen flag', async () => {
+    installFetch([]);
+    const control = createRemoteTeamControl(node, () => 'token-alpha');
+
+    await control.setSpawnFrozen('core', true);
+    await control.setSpawnFrozen('core', false);
+
+    expect(calls.map((call) => call.method)).toEqual(['teams.spawnFrozen', 'teams.spawnFrozen']);
+    expect(calls[0]?.params).toEqual({ team_id: 'core', frozen: true });
+    expect(calls[1]?.params).toEqual({ team_id: 'core', frozen: false });
+    expect(calls.every((call) => call.authorization === 'Bearer token-alpha')).toBe(true);
+  });
+
   test('one failing team detail is counted, not silently dropped as empty', async () => {
     installFetch([summary('ok'), summary('broken')], 'broken');
     const control = createRemoteTeamControl(node, () => 'token-alpha');

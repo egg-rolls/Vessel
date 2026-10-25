@@ -84,6 +84,8 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.teamMembers': 'add or remove a team member',
   'help.cmd.teamBudget': 'show conversation budget and blocked state',
   'help.cmd.teamBudgetOverride': 'raise or clear the budget limit of one conversation',
+  'help.cmd.teamFreeze': 'freeze spawning new members in a team',
+  'help.cmd.teamUnfreeze': 'allow spawning new members in a team again',
   'help.cmd.federationPost':
     'deliver a message to one member address on an allowlisted peer (principal@node:team)',
   'help.cmd.federationPeers': 'list federation peers and whether their tokens are set',

@@ -24,7 +24,7 @@ describe('AgentService rotate', () => {
     const gate = deferred<MemberTurnResult>();
     runtime.handler = async (_member, message) => (message.content === 'work' ? gate.promise : {});
 
-    const member = await service.new({ visibility: 'team', parentId: 'main' });
+    const member = await service.create({ visibility: 'team', parentId: 'main' });
     const oldSession = member.session_id;
     await service.send({ to: member.id, content: 'work' });
 
@@ -67,7 +67,7 @@ describe('AgentService rotate', () => {
     const gate = deferred<MemberTurnResult>();
     runtime.handler = async (_member, message) => (message.content === 'work' ? gate.promise : {});
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     const oldSession = member.session_id;
     await service.send({ to: member.id, content: 'work' });
     await service.send({ to: member.id, content: 'queued' });
@@ -111,7 +111,7 @@ describe('AgentService rotate', () => {
       const events: AgentEvent[] = [];
       service.subscribe((event) => events.push(event));
 
-      const member = await service.new({ visibility: 'team' });
+      const member = await service.create({ visibility: 'team' });
       const oldSession = member.session_id;
       const failed = await service.rotate({ to: member.id, startup_prompt: 'next' });
 
@@ -146,7 +146,7 @@ describe('AgentService rotate', () => {
 
   it('new body session is addressable and retired session is not', async () => {
     const { service, runtime } = makeService();
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     const firstSession = member.session_id;
 
     // 第一次 rotate 的旧 session 与 agent id 同值（按 id 仍可寻址）；
@@ -185,7 +185,7 @@ describe('AgentService rotate', () => {
     const gate: Deferred<MemberTurnResult> = deferred<MemberTurnResult>();
     runtime.handler = async (_member, message) => (message.content === 'work' ? gate.promise : {});
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     const oldSession = member.session_id;
     await service.send({ to: member.id, content: 'work' });
 
@@ -222,7 +222,7 @@ describe('AgentService rotate', () => {
       return {};
     };
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     const oldSession = member.session_id;
     await service.send({ to: member.id, content: 'work' });
 
@@ -256,7 +256,7 @@ describe('AgentService rotate', () => {
     const gate = deferred<MemberTurnResult>();
     runtime.handler = async (_member, message) => (message.content === 'work' ? gate.promise : {});
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     const oldSession = member.session_id;
     await service.send({ to: member.id, content: 'work' });
     service.notePermissionState(member.id, oldSession, 'waiting');
@@ -284,7 +284,7 @@ describe('AgentService rotate', () => {
     const gate = deferred<MemberTurnResult>();
     runtime.handler = async (_member, message) => (message.content === 'work' ? gate.promise : {});
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.create({ visibility: 'team' });
     const oldSession = member.session_id;
     await service.send({ to: member.id, content: 'work' });
     service.noteMemberEvent(member.id, oldSession, warning('input_tokens'));
