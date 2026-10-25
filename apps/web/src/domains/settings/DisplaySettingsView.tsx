@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
+import { Button, KeyValueList, Section, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import {
@@ -101,51 +102,52 @@ export function DisplaySettingsView() {
   };
 
   return (
-    <div className="settings-section">
+    <div className="flex flex-col gap-6">
       {!connected && (
         <StaleNotice message={t('settings.display.disconnected')} onRetry={resource.reload} />
       )}
-      {readOnly && <p className="dim">{t('settings.display.writeUnavailable')}</p>}
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="section-title">{t('settings.display.title')}</h2>
-          <button type="button" className="btn btn-small" onClick={resource.reload}>
+      {readOnly && <p className="text-muted">{t('settings.display.writeUnavailable')}</p>}
+      <Section
+        title={t('settings.display.title')}
+        description={t('settings.display.description')}
+        actions={
+          <Button size="small" onClick={resource.reload}>
             {t('settings.display.refresh')}
-          </button>
-        </div>
-        <p className="dim">{t('settings.display.description')}</p>
-        <dl className="diag-list">
-          {DISPLAY_SETTINGS.map((setting) => {
+          </Button>
+        }
+      >
+        <KeyValueList
+          items={DISPLAY_SETTINGS.map((setting) => {
             const current = values[setting.key] ?? '';
             const options =
               setting.type === 'boolean' ? ['true', 'false'] : (setting.options ?? []);
-            return (
-              <div key={setting.key} className="display-setting-row">
-                <dt>
-                  <span className="mono">{setting.key}</span>
-                  <div className="dim">{t(`settings.display.field.${setting.id}`)}</div>
-                </dt>
-                <dd>
-                  <select
-                    className="input"
-                    aria-label={setting.key}
-                    value={options.includes(current) ? current : ''}
-                    disabled={!connected || saving === setting.key || readOnly}
-                    onChange={(event) => void change(setting, event.target.value)}
-                  >
-                    {!options.includes(current) && <option value="">—</option>}
-                    {options.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </dd>
-              </div>
-            );
+            return {
+              key: setting.key,
+              label: (
+                <>
+                  <span className="font-mono">{setting.key}</span>
+                  <div className="text-muted">{t(`settings.display.field.${setting.id}`)}</div>
+                </>
+              ),
+              value: (
+                <Select
+                  aria-label={setting.key}
+                  value={options.includes(current) ? current : ''}
+                  disabled={!connected || saving === setting.key || readOnly}
+                  onChange={(event) => void change(setting, event.target.value)}
+                >
+                  {!options.includes(current) && <option value="">—</option>}
+                  {options.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </Select>
+              ),
+            };
           })}
-        </dl>
-      </section>
+        />
+      </Section>
     </div>
   );
 }

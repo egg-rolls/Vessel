@@ -5,6 +5,7 @@ import { usePaletteEntities } from '../../components/PaletteEntities';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
+import { Badge, Button, Field, Input, Section, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { TenantInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -53,25 +54,27 @@ function QuotaFields({
   return (
     <div className="form-grid">
       {TENANT_QUOTA_KEYS.map((key) => (
-        <label className="field" key={key}>
-          <span className="field-label">
-            {t(`settings.tenants.quota.${key}`)} <span className="mono">({key})</span>
-          </span>
-          <input
-            className={`input mono ${errors[key] ? 'invalid' : ''}`.trim()}
+        <Field
+          key={key}
+          label={
+            <>
+              {t(`settings.tenants.quota.${key}`)} <span className="font-mono">({key})</span>
+            </>
+          }
+          htmlFor={`tenant-quota-${key}`}
+          error={errors[key]}
+        >
+          <Input
+            id={`tenant-quota-${key}`}
+            className="font-mono"
             inputMode="numeric"
             value={fields[key]}
             onChange={(event) => onChange({ ...fields, [key]: event.target.value })}
             placeholder={t('settings.tenants.quotaHint')}
             disabled={disabled}
-            aria-invalid={errors[key] ? true : undefined}
+            invalid={Boolean(errors[key])}
           />
-          {errors[key] && (
-            <span className="field-error" role="alert">
-              {errors[key]}
-            </span>
-          )}
-        </label>
+        </Field>
       ))}
     </div>
   );
@@ -124,10 +127,15 @@ function TenantCreateDialog({
   return (
     <ModalShell label={t('settings.tenants.createTitle')} onClose={onClose}>
       <h2 className="modal-title">{t('settings.tenants.createTitle')}</h2>
-      <label className="field">
-        <span className="field-label">{t('settings.tenants.tenantId')}</span>
-        <input
-          className={`input mono ${errors.tenantId ? 'invalid' : ''}`.trim()}
+      <Field
+        label={t('settings.tenants.tenantId')}
+        htmlFor="tenant-create-id"
+        hint={<span className="font-mono">{t('settings.tenants.tenantIdHint')}</span>}
+        error={errors.tenantId}
+      >
+        <Input
+          id="tenant-create-id"
+          className="font-mono"
           value={tenantId}
           onChange={(event) => {
             setTenantId(event.target.value);
@@ -137,7 +145,7 @@ function TenantCreateDialog({
           spellCheck={false}
           autoComplete="off"
           data-autofocus
-          aria-invalid={errors.tenantId ? true : undefined}
+          invalid={Boolean(errors.tenantId)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -145,31 +153,24 @@ function TenantCreateDialog({
             }
           }}
         />
-        <span className="field-hint mono">{t('settings.tenants.tenantIdHint')}</span>
-        {errors.tenantId && (
-          <span className="field-error" role="alert">
-            {errors.tenantId}
-          </span>
-        )}
-      </label>
-      <label className="field">
-        <span className="field-label">{t('settings.tenants.nameOptional')}</span>
-        <input
-          className={`input ${errors.name ? 'invalid' : ''}`.trim()}
+      </Field>
+      <Field
+        label={t('settings.tenants.nameOptional')}
+        htmlFor="tenant-create-name"
+        error={errors.name}
+      >
+        <Input
+          id="tenant-create-name"
           value={name}
           onChange={(event) => {
             setName(event.target.value);
             setErrors((prev) => ({ ...prev, name: undefined }));
           }}
           placeholder={t('settings.tenants.namePlaceholder')}
+          invalid={Boolean(errors.name)}
         />
-        {errors.name && (
-          <span className="field-error" role="alert">
-            {errors.name}
-          </span>
-        )}
-      </label>
-      <h3 className="section-title">{t('settings.tenants.quota')}</h3>
+      </Field>
+      <h3 className="text-md font-semibold text-ink">{t('settings.tenants.quota')}</h3>
       <QuotaFields fields={quota} errors={errors} onChange={setQuota} disabled={busy} />
       {submitError && (
         <p className="form-error" role="alert">
@@ -177,17 +178,12 @@ function TenantCreateDialog({
         </p>
       )}
       <div className="modal-actions">
-        <button type="button" className="btn" onClick={onClose} disabled={busy}>
+        <Button onClick={onClose} disabled={busy}>
           {t('settings.tenants.cancel')}
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={busy || !tenantId.trim()}
-          onClick={() => void submit()}
-        >
+        </Button>
+        <Button variant="primary" disabled={busy || !tenantId.trim()} onClick={() => void submit()}>
           {busy ? t('settings.tenants.creating') : t('settings.tenants.createTitle')}
-        </button>
+        </Button>
       </div>
     </ModalShell>
   );
@@ -243,11 +239,10 @@ function TenantEditDialog({
   return (
     <ModalShell label={t('settings.tenants.editTitle')} onClose={onClose}>
       <h2 className="modal-title">{t('settings.tenants.editTitle')}</h2>
-      <p className="section-desc mono">{tenant.tenant_id}</p>
-      <label className="field">
-        <span className="field-label">{t('settings.tenants.name')}</span>
-        <input
-          className={`input ${errors.name ? 'invalid' : ''}`.trim()}
+      <p className="mt-1.5 font-mono text-md text-muted">{tenant.tenant_id}</p>
+      <Field label={t('settings.tenants.name')} htmlFor="tenant-edit-name" error={errors.name}>
+        <Input
+          id="tenant-edit-name"
           value={name}
           onChange={(event) => {
             setName(event.target.value);
@@ -255,6 +250,7 @@ function TenantEditDialog({
           }}
           placeholder={t('settings.tenants.namePlaceholder')}
           data-autofocus
+          invalid={Boolean(errors.name)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -262,24 +258,18 @@ function TenantEditDialog({
             }
           }}
         />
-        {errors.name && (
-          <span className="field-error" role="alert">
-            {errors.name}
-          </span>
-        )}
-      </label>
-      <label className="field">
-        <span className="field-label">{t('settings.tenants.col.status')}</span>
-        <select
-          className="input"
+      </Field>
+      <Field label={t('settings.tenants.col.status')} htmlFor="tenant-edit-status">
+        <Select
+          id="tenant-edit-status"
           value={status}
           onChange={(event) => setStatus(event.target.value as TenantInfo['status'])}
         >
           <option value="active">active</option>
           <option value="disabled">disabled</option>
-        </select>
-      </label>
-      <h3 className="section-title">{t('settings.tenants.quotaRequired')}</h3>
+        </Select>
+      </Field>
+      <h3 className="text-md font-semibold text-ink">{t('settings.tenants.quotaRequired')}</h3>
       <QuotaFields fields={quota} errors={errors} onChange={setQuota} disabled={busy} />
       {submitError && (
         <p className="form-error" role="alert">
@@ -287,17 +277,12 @@ function TenantEditDialog({
         </p>
       )}
       <div className="modal-actions">
-        <button type="button" className="btn" onClick={onClose} disabled={busy}>
+        <Button onClick={onClose} disabled={busy}>
           {t('settings.tenants.cancel')}
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={busy}
-          onClick={() => void submit()}
-        >
+        </Button>
+        <Button variant="primary" disabled={busy} onClick={() => void submit()}>
           {busy ? t('settings.tenants.saving') : t('settings.tenants.save')}
-        </button>
+        </Button>
       </div>
     </ModalShell>
   );
@@ -406,30 +391,33 @@ export function TenantsView() {
   const error = resource.state.status === 'error' ? resource.state.error : null;
 
   return (
-    <div className="settings-section">
+    <div className="flex flex-col gap-6">
       {!connected && (
         <StaleNotice message={t('settings.tenants.disconnected')} onRetry={resource.reload} />
       )}
       {error && (
         <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
       )}
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="section-title">{t('settings.tenants.title')}</h2>
-          <button
-            type="button"
-            className="btn btn-small btn-primary"
-            disabled={!connected}
-            title={!connected ? t('common.writesDisabled') : undefined}
-            onClick={() => setCreateOpen(true)}
-          >
-            {t('settings.tenants.new')}
-          </button>
-          <button type="button" className="btn btn-small" onClick={resource.reload}>
-            {t('common.refresh')}
-          </button>
-        </div>
-        <p className="section-desc">{t('settings.tenants.description')}</p>
+      <Section
+        title={t('settings.tenants.title')}
+        description={t('settings.tenants.description')}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="primary"
+              size="small"
+              disabled={!connected}
+              title={!connected ? t('common.writesDisabled') : undefined}
+              onClick={() => setCreateOpen(true)}
+            >
+              {t('settings.tenants.new')}
+            </Button>
+            <Button size="small" onClick={resource.reload}>
+              {t('common.refresh')}
+            </Button>
+          </div>
+        }
+      >
         <table className="data-table">
           <thead>
             <tr>
@@ -453,9 +441,9 @@ export function TenantsView() {
               const active = tenant.tenant_id === tenantId;
               return (
                 <tr key={tenant.tenant_id} className={active ? 'row-active' : undefined}>
-                  <td className="mono">
+                  <td className="font-mono">
                     {tenant.tenant_id}
-                    {active && <span className="count-pill">{t('settings.tenants.current')}</span>}
+                    {active && <Badge className="ml-1.5">{t('settings.tenants.current')}</Badge>}
                   </td>
                   <td>{tenant.name ?? '—'}</td>
                   <td>
@@ -468,15 +456,14 @@ export function TenantsView() {
                       )}
                     />
                   </td>
-                  <td className="mono col-optional">
+                  <td className="font-mono col-optional">
                     {tenant.created_at ? new Date(tenant.created_at).toLocaleString() : '—'}
                   </td>
-                  <td className="mono dim col-optional">{formatQuota(tenant.quota)}</td>
-                  <td className="mono dim col-optional">{formatQuota(tenant.usage)}</td>
+                  <td className="font-mono text-muted col-optional">{formatQuota(tenant.quota)}</td>
+                  <td className="font-mono text-muted col-optional">{formatQuota(tenant.usage)}</td>
                   <td>
-                    <button
-                      type="button"
-                      className="btn btn-small"
+                    <Button
+                      size="small"
                       disabled={!connected || tenant.status !== 'active' || active}
                       title={!connected ? t('common.writesDisabled') : undefined}
                       onClick={() => switchTenant(tenant)}
@@ -484,22 +471,17 @@ export function TenantsView() {
                       {active
                         ? t('settings.tenants.currentTenantAction')
                         : t('settings.tenants.switch')}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-small"
-                      disabled={!connected}
-                      onClick={() => setEditing(tenant)}
-                    >
+                    </Button>
+                    <Button size="small" disabled={!connected} onClick={() => setEditing(tenant)}>
                       {t('common.edit')}
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-      </section>
+      </Section>
 
       {createOpen && (
         <TenantCreateDialog

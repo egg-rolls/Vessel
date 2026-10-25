@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { SegmentedTabs } from '../../components/Tabs';
+import { Section } from '../../components/ui';
 import { SUPPORTED_LOCALES, setLocale, t, useLocale } from '../../i18n';
 import { applyTheme, readStoredTheme, storeTheme, THEMES, type Theme } from '../../state/theme';
 
@@ -20,31 +21,24 @@ export function AppearanceView() {
   }));
 
   return (
-    <div className="settings-section">
-      <section className="panel">
-        <h2 className="section-title">{t('appearance.theme.title')}</h2>
-        <p className="section-desc">{t('appearance.theme.desc')}</p>
+    <div className="flex flex-col gap-6">
+      <Section title={t('appearance.theme.title')} description={t('appearance.theme.desc')}>
         <SegmentedTabs
           label={t('appearance.theme.title')}
           tabs={themeTabs}
           value={theme}
           onChange={setTheme}
         />
-      </section>
-      <section className="panel">
-        <h2 className="section-title">{t('appearance.language.title')}</h2>
-        <p className="section-desc">{t('appearance.language.desc')}</p>
+      </Section>
+      <Section title={t('appearance.language.title')} description={t('appearance.language.desc')}>
         <SegmentedTabs
           label={t('appearance.language.title')}
           tabs={languageTabs}
           value={locale}
           onChange={setLocale}
         />
-      </section>
-      <section className="panel">
-        <h2 className="section-title">{t('appearance.motion.title')}</h2>
-        <p className="section-desc">{t('appearance.motion.desc')}</p>
-      </section>
+      </Section>
+      <Section title={t('appearance.motion.title')} description={t('appearance.motion.desc')} />
     </div>
   );
 }
