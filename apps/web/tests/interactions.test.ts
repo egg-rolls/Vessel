@@ -1,13 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  addDismissedId,
   buildHydrationSnapshot,
-  DISMISSED_KEY_PREFIX,
-  type DismissedStorage,
   emptyInteractionState,
   interactionReducer,
   type ListedInteraction,
-  readDismissedIds,
 } from '../src/gateway/interaction-hydration';
 import {
   askFromEvent,
@@ -312,16 +308,6 @@ function listedPermission(overrides: Partial<ListedInteraction> = {}): ListedInt
   };
 }
 
-function memoryStorage(): DismissedStorage {
-  const data = new Map<string, string>();
-  return {
-    getItem: (key) => data.get(key) ?? null,
-    setItem: (key, value) => {
-      data.set(key, value);
-    },
-  };
-}
-
 describe('interaction hydration', () => {
   test('hydrated permission keeps session_id and created_at', () => {
     const snapshot = buildHydrationSnapshot({
@@ -427,7 +413,7 @@ describe('interaction hydration', () => {
     expect(state.permissions[0]).toBe(fromEvent);
   });
 
-  test('orphaned status removes the stale pending card', () => {
+  test('orphaned status removes the stale pending card and is exposed as terminal', () => {
     const request: PermissionRequest = {
       requestId: 'perm-1',
       tool: 'bash',
@@ -445,27 +431,20 @@ describe('interaction hydration', () => {
       orphaned: [listedPermission({ status: 'orphaned', created_at: 100 })],
     });
 
+    expect(snapshot.terminalIds).toEqual(['perm-1']);
     state = interactionReducer(state, { type: 'hydrate', snapshot });
 
     expect(state.permissions).toHaveLength(0);
-    expect(state.orphaned).toHaveLength(1);
-    expect(state.orphaned[0]?.requestId).toBe('perm-1');
+    expect(state).not.toHaveProperty('orphaned');
   });
 
-  test('dismissed orphaned id is filtered on the next hydration', () => {
-    const storage = memoryStorage();
-    addDismissedId(storage, 'tenant-a', 'perm-1');
-
-    expect(storage.getItem(`${DISMISSED_KEY_PREFIX}tenant-a`)).toBe('["perm-1"]');
-    const dismissed = readDismissedIds(storage, 'tenant-a');
+  test('an orphaned pending id is never hydrated as an answerable card', () => {
     const snapshot = buildHydrationSnapshot({
-      pending: [],
+      pending: [listedPermission({ status: 'pending' })],
       orphaned: [listedPermission({ status: 'orphaned' })],
-      dismissed,
     });
 
-    expect(snapshot.orphaned).toHaveLength(0);
-    // dismiss 按 tenant 隔离：另一个 tenant 仍会看到该提示。
-    expect(readDismissedIds(storage, 'tenant-b').has('perm-1')).toBe(false);
+    expect(snapshot.permissions).toHaveLength(0);
+    expect(snapshot.terminalIds).toEqual(['perm-1']);
   });
 });

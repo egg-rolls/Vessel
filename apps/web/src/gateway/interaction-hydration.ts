@@ -41,43 +41,27 @@ export interface ListedInteractionPage {
   next_cursor?: string;
 }
 
-/** 只用于失效提示，不构造可应答卡片。 */
-export interface OrphanedInteraction {
-  kind: 'permission' | 'ask';
-  requestId: string;
-  runId: string;
-  sessionId?: string;
-  parentSessionId?: string;
-  tool?: string;
-  createdAt: number;
-}
-
 export interface InteractionState {
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
-  orphaned: readonly OrphanedInteraction[];
 }
 
 export const emptyInteractionState: InteractionState = {
   permissions: [],
   asks: [],
-  orphaned: [],
 };
-
-/** 服务端拉 100，状态里最多保留 20。 */
-export const ORPHANED_LIMIT = 20;
 
 export interface HydrationSnapshot {
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
-  orphaned: readonly OrphanedInteraction[];
+  /** orphaned / answered 的终态 id：只用于移除旧卡片，不再渲染本地失效列表。 */
+  terminalIds: readonly string[];
 }
 
 export interface HydrationSources {
   pending: readonly ListedInteraction[];
   orphaned: readonly ListedInteraction[];
   settled?: ReadonlySet<string>;
-  dismissed?: ReadonlySet<string>;
 }
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
@@ -97,41 +81,28 @@ function listedQuestions(value: unknown): AskUserQuestion[] | null {
   return questions.length > 0 ? questions : null;
 }
 
-/** `interactions.list` 必须自带 session_id（上游保证）；缺失保持 undefined。 */
-function toOrphaned(item: ListedInteraction): OrphanedInteraction {
-  return {
-    kind: item.kind,
-    requestId: item.request_id,
-    runId: item.run_id,
-    createdAt: item.created_at,
-    ...(item.session_id ? { sessionId: item.session_id } : {}),
-    ...(item.parent_session_id ? { parentSessionId: item.parent_session_id } : {}),
-    ...(item.tool !== undefined ? { tool: item.tool } : {}),
-  };
-}
-
 /**
  * 把两次 list 的结果映射成可合并快照。
  *
- * `orphaned` 同时充当终态集合：同一 id 即使在 pending 结果里也按 orphaned 处理。
+ * `orphaned` 只充当终态集合：同一 id 即使在 pending 结果里也不复活；
+ * 终态 id 交给 reducer 移除旧卡片，本地不再渲染 orphaned 列表。
  * 卡片归属只读 list 的 `session_id`；缺失保持 undefined，不做反查 / join。
  */
 export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnapshot {
   const settled = sources.settled ?? EMPTY_IDS;
-  const dismissed = sources.dismissed ?? EMPTY_IDS;
   const permissions: PermissionRequest[] = [];
   const asks: AskUserRequest[] = [];
-  const orphaned: OrphanedInteraction[] = [];
-  const seen = new Set<string>();
+  const terminalIds: string[] = [];
+  const terminal = new Set<string>();
 
   for (const item of sources.orphaned) {
     if (item.status !== 'orphaned' || !item.request_id) continue;
-    if (seen.has(item.request_id)) continue;
-    if (settled.has(item.request_id) || dismissed.has(item.request_id)) continue;
-    seen.add(item.request_id);
-    if (orphaned.length < ORPHANED_LIMIT) orphaned.push(toOrphaned(item));
+    if (terminal.has(item.request_id)) continue;
+    terminal.add(item.request_id);
+    if (!settled.has(item.request_id)) terminalIds.push(item.request_id);
   }
 
+  const seen = new Set<string>(terminal);
   for (const item of sources.pending) {
     if (item.status !== 'pending' || !item.request_id) continue;
     // 同 id 已在 orphaned 终态集合里：pending 不覆盖终态。
@@ -168,7 +139,7 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
     });
   }
 
-  return { permissions, asks, orphaned };
+  return { permissions, asks, terminalIds };
 }
 
 export type InteractionAction =
@@ -177,7 +148,6 @@ export type InteractionAction =
   | { type: 'settle'; requestId: string }
   | { type: 'run-finished'; runId: string }
   | { type: 'hydrate'; snapshot: HydrationSnapshot; settled?: ReadonlySet<string> }
-  | { type: 'dismiss-orphaned'; requestId: string }
   | { type: 'reset' };
 
 function removeById<T extends { requestId: string }>(
@@ -192,8 +162,7 @@ function removeById<T extends { requestId: string }>(
 function hasId(state: InteractionState, requestId: string): boolean {
   return (
     state.permissions.some((item) => item.requestId === requestId) ||
-    state.asks.some((item) => item.requestId === requestId) ||
-    state.orphaned.some((item) => item.requestId === requestId)
+    state.asks.some((item) => item.requestId === requestId)
   );
 }
 
@@ -214,11 +183,8 @@ export function interactionReducer(
     case 'settle': {
       const permissions = removeById(state.permissions, action.requestId);
       const asks = removeById(state.asks, action.requestId);
-      const orphaned = removeById(state.orphaned, action.requestId);
-      if (permissions === state.permissions && asks === state.asks && orphaned === state.orphaned) {
-        return state;
-      }
-      return { permissions, asks, orphaned };
+      if (permissions === state.permissions && asks === state.asks) return state;
+      return { permissions, asks };
     }
     case 'run-finished': {
       const permissions = state.permissions.filter((item) => item.runId !== action.runId);
@@ -228,19 +194,14 @@ export function interactionReducer(
       }
       return { ...state, permissions, asks };
     }
-    case 'dismiss-orphaned': {
-      const orphaned = removeById(state.orphaned, action.requestId);
-      return orphaned === state.orphaned ? state : { ...state, orphaned };
-    }
     case 'reset':
       return emptyInteractionState;
     case 'hydrate': {
       // 终态在应用时才判定：快照生成后本端结算的 id 也不能复活。
       const settled = action.settled ?? EMPTY_IDS;
-      const incomingOrphaned = action.snapshot.orphaned.filter(
-        (item) => !settled.has(item.requestId),
+      const terminal = new Set(
+        action.snapshot.terminalIds.filter((requestId) => !settled.has(requestId)),
       );
-      const terminal = new Set(incomingOrphaned.map((item) => item.requestId));
 
       const permissions = state.permissions.filter(
         (item) => !settled.has(item.requestId) && !terminal.has(item.requestId),
@@ -249,17 +210,9 @@ export function interactionReducer(
         (item) => !settled.has(item.requestId) && !terminal.has(item.requestId),
       );
 
-      // 新列表在前（服务端 created_at 倒序）；快照缺席的旧条目保留，最多 20 条。
-      const incomingIds = new Set(incomingOrphaned.map((item) => item.requestId));
-      const retainedOrphaned = state.orphaned.filter(
-        (item) => !settled.has(item.requestId) && !incomingIds.has(item.requestId),
-      );
-      const orphaned = [...incomingOrphaned, ...retainedOrphaned].slice(0, ORPHANED_LIMIT);
-
       const taken = new Set<string>();
       for (const item of permissions) taken.add(item.requestId);
       for (const item of asks) taken.add(item.requestId);
-      for (const item of orphaned) taken.add(item.requestId);
 
       const nextPermissions = [...permissions];
       for (const request of action.snapshot.permissions) {
@@ -275,61 +228,9 @@ export function interactionReducer(
         nextAsks.push(request);
       }
 
-      return { permissions: nextPermissions, asks: nextAsks, orphaned };
+      return { permissions: nextPermissions, asks: nextAsks };
     }
     default:
       return state;
-  }
-}
-
-// ── dismissed（按 tenant 持久化，刷新后不再弹出）────────────
-
-export const DISMISSED_KEY_PREFIX = 'vessel.interactions.dismissed.v1.';
-const DISMISSED_LIMIT = 200;
-
-/** 只依赖 getItem / setItem，便于测试注入；`window.localStorage` 直接满足。 */
-export interface DismissedStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
-
-function dismissedKey(tenantId: string): string {
-  return `${DISMISSED_KEY_PREFIX}${tenantId}`;
-}
-
-/** JSON 数组；损坏 / 非数组 / 读失败一律按空集。 */
-export function readDismissedIds(
-  storage: DismissedStorage | null | undefined,
-  tenantId: string,
-): Set<string> {
-  if (!storage) return new Set();
-  try {
-    const raw = storage.getItem(dismissedKey(tenantId));
-    if (!raw) return new Set();
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set();
-    const ids = parsed.filter(
-      (item): item is string => typeof item === 'string' && item.length > 0,
-    );
-    return new Set(ids.slice(-DISMISSED_LIMIT));
-  } catch {
-    return new Set();
-  }
-}
-
-/** 追加到该 tenant 的关闭列表；写失败（配额 / 隐私模式）不影响内存里的移除。 */
-export function addDismissedId(
-  storage: DismissedStorage | null | undefined,
-  tenantId: string,
-  requestId: string,
-): void {
-  if (!storage || !requestId) return;
-  try {
-    const ids = readDismissedIds(storage, tenantId);
-    if (ids.has(requestId)) return;
-    ids.add(requestId);
-    storage.setItem(dismissedKey(tenantId), JSON.stringify([...ids].slice(-DISMISSED_LIMIT)));
-  } catch {
-    // localStorage 不可写时只保留本会话的 dismiss。
   }
 }

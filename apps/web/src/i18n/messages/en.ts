@@ -206,13 +206,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'resize.nav': 'Resize navigation',
   'resize.sessions': 'Resize session list',
   'resize.chat': 'Resize conversation',
-  // 0.18 H2: no-longer-valid interactions are notice + dismiss only, never answerable.
-  'interaction.orphaned': 'No longer valid (run ended / process restarted)',
-  'interaction.orphaned.label': '{count} no longer valid',
+  // 0.18 H2 / 0.27: expired interactions only keep a one-shot toast; details live in Observe.
   'interaction.orphaned.toast': '{count} earlier requests are no longer valid',
-  'interaction.orphaned.listLabel': 'No-longer-valid interactions',
-  'interaction.orphaned.metaTool': 'tool {tool}',
-  'interaction.orphaned.metaAsk': 'ask',
   'chat.reasoning.summary': 'Thinking',
   // 0.17: placeholder while a run is running but has no visible content
   'chat.run.waiting': 'Generating…',
@@ -660,6 +655,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // Agents (global)
   'agents.title': 'Agents',
   'agents.description': 'Global view of every node’s Team roster.',
+  'agents.staleNode': 'Showing last successful data',
   'agents.empty': 'No Agent yet',
   'agents.emptyHint': 'Agents come only from each node’s present Team roster.',
   'agents.filter.node': 'Node',
