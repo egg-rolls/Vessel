@@ -2,7 +2,7 @@
 
 > 适用版本：0.5+。维护者：`gov`。
 > 迁移命令默认 dry-run；源只读；`--apply` 才写。检测到 legacy 数据时只提示，
-> **不自动迁移**。架构事实见 [ARCHITECTURE §17](../ARCHITECTURE.md) 与
+> **不自动迁移**。架构事实见 [0.5.0](../versions/0.5.0.md) 与
 > [ADR-046](../adr/ADR-046-file-first-storage.md)。
 
 ## 1. 支持的方向

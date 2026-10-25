@@ -125,6 +125,8 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 - `/settings language <zh-CN|en>` 切换界面语言并写回用户配置 `ui.language`，立即重渲染；`VESSEL_LANG` 显式设置时仍以环境变量为准。
 - `/reload` 重新加载配置文件并刷新 provider 信息；**不重扫插件目录**，新增插件需重启进程。
 - 输入里的 `@路径` 会在发送前展开为注入消息，界面上以引用块显示，用户原文保持不变。
+- `/details [hidden|collapsed|expanded]` 控制工具轨迹详细程度（默认 `collapsed`）；只影响当前进程，不写配置。
+- 启动头显示 `VESSEL · vX`；版本由装配层注入 `ReplContext.version`，缺失时显示 `VESSEL`。
 - 进入 REPL 前默认清屏（仅 TTY）；想保留终端历史时在配置里设 `ui.clearOnStart: false`。
 - 状态栏：上栏显示状态、模型、context、时长与路径 + branch；运行态下栏显示权限档位、bash / 子 agent 计数、session 入口、tenant 与 queue。`Ctrl+T` 切换上栏、`Ctrl+G` 切换下栏、`Ctrl+R` 打开 `/resume`。显隐写回用户配置 `ui.statusBars`（YAML `status_bars: top|bottom|both|none`）；`VESSEL_STATUS_BARS` 只作启动初值。终端 `<40` 列不渲染下栏，`<18` 行默认隐藏。
 - 权限确认默认一直等待应答或取消，不按时间自动失败；`Esc` / `Ctrl+C` 取消本轮并 abort。等待中的请求在 gateway 重启后视为已结束（`run_ended`）。
@@ -133,11 +135,11 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 **语言空间是唯一的执行面。** Vessel 做两件事：把世界折成语言（system prompt + 消息 + 工具 schema），把语言折回世界（解析 tool_calls → 执行 → 结果折回消息）。
 
-> Kernel / Modules 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14；本小节只描述**当前已实现**的单 agent 行为。
+> Kernel / Modules 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md) 与 [docs/architecture/overview.md](docs/architecture/overview.md#layering)；本小节只描述**当前已实现**的单 agent 行为。
 - **9 个接口 + 1 个循环 + 2 个插槽**：`LLMProvider` / `ContextManager` / `EventStream` / `ToolDefinition` / `SessionBackend` / `LimitChecker` / `Guardrail` / `Hook` / `Plugin` + `PluginHost`。两个插槽是**工具**（`PluginHost` 是唯一的工具注册表）与**知识**（`ContextManager`）。
 - **core 不认识业务概念**：不认 skills、不认记忆、不认资产。任何要进语言空间的文本都经 `RunOptions.messages` 注入，core 只负责按序放进消息数组。
 
-细节见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+细节见 [docs/architecture/INDEX.md](docs/architecture/INDEX.md)。
 
 ## 工具集
 
@@ -331,7 +333,7 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 - 功能：运行提交/取消、事件时间线、会话列表、工具列表、run 内联权限卡片、ask_user 表单、Team 列表 / 群聊 / 成员侧栏 / `@` 补全 / Body 历史；按 `hello.features` 显示 MCP server / interrupted run / metrics / 飞书面板。
 - 权限卡片内联在所属 run 卡片中，跨 session 的待处理请求由顶部条提示；其他端应答 / 过期 / run 结束会自动收起。权限等待默认不超时，应答返回 `expired` 表示已过期，`run_ended` 表示 run 已结束；`not_found` 仅表示请求从未存在。`ask_user` 内联在所属 run 卡片中，默认无限等待，由应答 / abort / run 终态收口；跨 session 的待处理条同时汇总权限与提问。工具卡与思考气泡按 Codex 式分区展示，`ui.verbosity: minimal|normal|debug` 控制信息层级（默认 `normal`）。`ui.showReasoning: true` 时思考过程折叠显示（默认关闭）。
 - 助手文本 Markdown 渲染（代码块 / 列表 / 表格 / 链接）；`sessions.search` 服务端全文检索（返回 snippet，前端 150ms 防抖并保留本地过滤兜底）；`tool.call.started` 带 `args`、`tool.call.completed` 带 `result`（上限 8 KiB，超出截断标记），事件卡可折叠、失败默认展开。
-- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`、`/v1/metrics`、`/v1/channels/feishu`、`/v1/evals/latest`、`/v1/hub/*`（hub 控制面）。canonical RPC 见 §13.7，Team / Hub / Web Team 见 §41–§43。
+- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`、`/v1/metrics`、`/v1/channels/feishu`、`/v1/evals/latest`、`/v1/hub/*`（hub 控制面）。canonical RPC 见 [gateway-rpc](docs/architecture/gateway-rpc.md#rpc-methods)，Team / Hub / Web Team 见 [0.19.0](docs/versions/0.19.0.md)、[REMOTE](docs/operations/REMOTE.md) 与 [WEB-UI](docs/WEB-UI.md)。
 - 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
 - 远程 / TLS（显式 opt-in）：`--serve-host` + `--allow-remote` + `--tls-cert`/`--tls-key`，或 `serve.*` 配置；**非回环必须 token + HTTPS/WSS**，cert/key 必须成对。只做 HTTP/1.1。
 - 独立前端：页面运行时可切换 gateway 地址，优先级 `localStorage['vessel.gateway-url']` > `VITE_GATEWAY_URL` > 同源；只接受 http(s)/ws(s) origin，非回环必须 https，HTTPS 页面拒绝 http（mixed content）。跨 Origin 部署需在服务端配置 `serve.allowed_origins`（或重复使用 `--allowed-origin`），且浏览器必须信任证书。详见 [REMOTE.md](docs/operations/REMOTE.md)。
@@ -407,7 +409,7 @@ transport:
 | 文档                                                         | 作用                                                             | 给谁看          |
 | ------------------------------------------------------------ | ---------------------------------------------------------------- | --------------- |
 | [README.md](README.md)                                       | 是什么 / 怎么跑 / 延后项                                         | 所有人，先看    |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 技术架构：分层、循环、两个插槽、扩展模型、接口签名、事件名       | 开发者 / AI     |
+| [docs/architecture/INDEX.md](docs/architecture/INDEX.md)     | 技术架构：模块索引（分层、循环、接口、扩展、事件、Gateway）      | 开发者 / AI     |
 | [docs/adr/README.md](docs/adr/README.md)                     | 架构决策记录索引：每个关键选择的「为什么」（一条一文件，只追加） | 开发者 / AI     |
 | [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)           | 文件放哪里、路径归属、分支与发布规则                             | 贡献者 / AI     |
 | [docs/operations/RELEASE.md](docs/operations/RELEASE.md)     | 怎么发版                                                         | 维护者          |

@@ -20,6 +20,6 @@ tags: [plugins, lifecycle, dispose, runtime]
 
 - **备选**：(a) 让 `install()` 继续兼任初始化——无法表达“全部安装完成之后”，且跨插件依赖仍是隐式的；(b) 只加 `dispose()` 不加 `init()`——回收有了，但初始化时序问题未解；(c) 初始化失败也 fail-fast——一个可选插件的初始化失败会拖垮整个 runtime，与 ADR-054 的插件异常隔离原则冲突；(d) 安装失败不回滚、由调用方重建 host——registry 是共享对象，半注册状态会污染同进程的后续 runtime。均不取。
 
-- **后果**：插件 API 纯增量（两个可选方法 + 一个可选 host 能力），现有插件不改也能运行；新增插件若在 `install()` 中创建不可回收资源，必须实现 `dispose()`，否则长驻进程会泄漏。`init()` 的调用顺序等于安装顺序，插件不得假设“后续插件已安装”；需要全局视图时应订阅 `plugin.loaded` 或在 `init` 中读取 host 的最终注册表（此时全部安装已完成）。直接使用 `PluginHost` 的 host 模式绕过 `AgentRuntime` 的生命周期编排，是已知限制（见 ARCHITECTURE §28.4）。
+- **后果**：插件 API 纯增量（两个可选方法 + 一个可选 host 能力），现有插件不改也能运行；新增插件若在 `install()` 中创建不可回收资源，必须实现 `dispose()`，否则长驻进程会泄漏。`init()` 的调用顺序等于安装顺序，插件不得假设“后续插件已安装”；需要全局视图时应订阅 `plugin.loaded` 或在 `init` 中读取 host 的最终注册表（此时全部安装已完成）。直接使用 `PluginHost` 的 host 模式绕过 `AgentRuntime` 的生命周期编排，是已知限制（见 `docs/versions/0.9.0.md`）。
 
 - **关联**：ADR-004（Plugin + PluginHost 扩展机制）、ADR-033（依赖倒置与编排外推）、ADR-054（RunExecution 与插件异常隔离）；`packages/core/src/types/plugin.ts`、`packages/core/src/runtime/plugin-host.ts`、`packages/core/src/runtime/agent-runtime.ts`、`src/bootstrap.ts`、`src/factory-plugins.ts`、`plugins/mcp/client`、`plugins/workflow/engine`。

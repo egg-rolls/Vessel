@@ -2,7 +2,7 @@
 
 > 适用版本：0.5+。维护者：`gov`；配置语义归 `asm`。
 > 本文描述固定位置、优先级、tenant overlay 与密钥解析。架构事实见
-> [ARCHITECTURE §9](../ARCHITECTURE.md) 与 [ADR-050](../adr/ADR-050-yaml-first-config-and-secrets.md)。
+> [architecture/config.md](../architecture/config.md#config-model) 与 [ADR-050](../adr/ADR-050-yaml-first-config-and-secrets.md)。
 
 ## 1. 配置位置
 
@@ -250,6 +250,7 @@ termination:
   - `exclusive`（sqlite 后端、显式 `--exclusive`、migrate / tenant / trace prune）：`tenants/<t>/.lock`，整租户单写者，冲突返回 `tenant_locked`。
   - stale 规则：死 pid、不可解析超过 5s、跨主机超过 24h 自动回收；回收持 `<lock>.reclaim` 守卫（守卫超过 10s 可清理）。
 - **session / run 写锁**：`tenants/<t>/.locks/sessions/<sha16(session_id)>.lock` 与 `.locks/runs/<sha16(run_id)>.lock`（`0600`，内容含 `pid` / `started_at` / `host`）。同一 session 的第二个写者得到 `conflict`，消息前缀 `session_locked:`；run resume 冲突前缀 `run_locked:`。同进程重复获取用引用计数消化。
+- **tenant_id**：匹配 `^[a-z0-9][a-z0-9_-]{0,63}$`，缺省 `default`，拒绝路径穿越；缺失时按 `default` 处理。
 - **`--data-dir <path>`**：全局覆盖 `data_dir`，优先级 `CLI > env > config`。一次性命令（doctor / logs / gateway status 等）同样按该根目录解析。`VESSEL_DATA_DIR` 仍是 env 层写法，不要写进项目 YAML。
 - **interactions 按实例隔离**：default 实例仍写 `<dataDir>/interactions-<tenant>.json`；命名实例写 `<dataDir>/instances/<instance>/interactions-<tenant>.json`，同一 dataDir 的多实例不再互相覆盖。
 - **端口占用**：`gateway start` 捕获 `EADDRINUSE` 后以 `port_in_use` 退出 1，不写 PID 文件。换 `--port` 或 `--instance`，或先停掉占用端口的进程。
@@ -316,6 +317,7 @@ teams:
 - 无 `@` 的 post / reply / system **只写日志、不产生 run**；`@` 用结构化 agent id，先写日志再 dispatch。private 成员不写日志、不可被 `@`。
 - canonical：`teams.list` / `teams.get`（read）、`teams.post` / `teams.members` / `teams.budget` / `teams.create` / `teams.update` / `teams.archive`（write；`teams.budget` 走 `status | override`，不在 control scope 白名单）；未注入或 tenant 不匹配返回 `not_found`。0.24 S10.3 起 canonical 总数 **51**。
 - Team CRUD（0.24）：`teams.create` 只允许 human / admin（team-scoped token 返回 `forbidden`），按 workspace 幂等复用并直接返回 `TeamSummary`；`teams.update` / `teams.archive` 允许 team-scoped token 操作自己的 team。`archive` 有 present 成员返回 `conflict`（`team_not_empty`）；归档后 post / members / budget override 返回 `conflict`（`team_archived`），日志 / session / agent 历史保留；hard delete 未实现。CLI：`vessel team create|update|archive`；`create` / `update` 支持 `--policy <json>` 或 `--policy-file <path>`（互斥，文件优先用于复杂策略，整体替换）。
+- **预算运行态**：唯一写者是 `AgentService` 的 `ConversationBudget`；状态写 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、1000 条按 `last_activity` 有界淘汰、损坏 fail-closed、重启不清零）。发送侧入队前与接收侧 turn 开始各查一次，被接收侧挡下的消息留在队列。人工 override 经 `teams.budget` / owner 端点 / CLI，只能抬高或清除；`teams.budget` 不在 control scope。事件 `team.budget.warning` / `team.budget.blocked` / `team.budget.override` 必带 `team_id`。
 
 ### 2.13 Hub 控制面（0.19 S5，ADR-093）
 
@@ -350,6 +352,29 @@ hub:
 - **team-scoped control token**：只能访问自己的 `team_id`，不匹配返回 `not_found`；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `handoff_path` / `policy`。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**。
 - **NAT 数据面**：`direction: node` 只保证元数据 / 指针可达；没有浏览器可达地址的节点（NAT / 家庭网络）需要用户提供隧道 / 反向代理，并可用可选 `public_url` 声明节点 origin。目录的 `data_plane: direct|unreachable` 由 `public_url ?? url` 派生，只表示正文可达性；hub 不做正文中继。
 - **已知限制**：S5.1 已实现 node → hub 出站；跨节点 A2A（S7）、多 hub 联邦、hub daemon / 系统服务注册仍未实现。一个 node 进程 / data dir 只加入一个 hub。Web 当前不消费 hub 目录 / data token。
+
+### 2.14 TUI 指示器（`VESSEL_INDICATOR`，0.7）
+
+- 取值 `unicode | ascii | emoji | kaomoji`，缺省 `unicode`；无效值 / 空值回退 `unicode`。
+- 只影响 thinking / tool 态的前缀帧；`idle` 固定 `○ idle`。帧间隔：unicode 80ms、ascii 100ms、emoji 600ms、kaomoji 2500ms。
+- 纯函数 `resolveIndicatorStyle`，消费者 `SpinnerWithVerb`；组件挂载时读取一次，运行中修改需重启 REPL。
+
+### 2.15 多节点 attention（`attention.nodes[]`，0.23）
+
+```yaml
+attention:
+  nodes:
+    - name: node-b
+      url: https://node-b.example.com:8642
+      tokenEnv: NODE_B_ATTENTION_TOKEN
+      nodeId: node-b-...      # 可选
+      caFile: ./ca.pem        # 可选
+```
+
+- `name` 唯一；`url` 走绝对 http(s) / 非回环 HTTPS 规则；配置 `nodeId` 后每次使用前用 `health.get` 校验。
+- **不接受内联 `token`**（未知键直接报错）；token 只从该节点的 `tokenEnv` 读取，不回退 `connect.token` / `serve.token` / `VESSEL_CONNECT_TOKEN`。
+- `vessel attention --node <name>` 使用该节点；`--all-nodes` 逐节点并发、只用于列表，单节点失败不影响其它节点（任一失败 exit 1）；`--to` 多匹配必须显式 `--node`。
+- 应答必须落到单个节点；不跨节点批量应答。
 
 ## 3. 密钥与 `_env`
 
@@ -483,7 +508,7 @@ config（tenant overlay）/ provider / session backend / run store / context /
 plugin host + plugins / trace recorder / metrics collector / redactor / sessionControl
 ```
 
-- 每个 tenant 独立 `EventStream`；runtime 事件先进入该流，再桥接到 gateway 共享流（事件带 `tenant_id`）。
+- 每个 tenant 独立运行时事件流；事件只进入该 tenant 的 `TenantEventHub` 流，不再桥接共享流（ADR-089）。
 - 每个 active tenant 持有自己的租约：file / memory 后端为 shared `.members/` 租约（多进程共存），sqlite / `--exclusive` 为 exclusive `.lock`。启动失败必须回滚已获取的锁，shutdown 全部释放；exclusive 冲突返回 `tenant_locked`，session / run 写冲突返回 `conflict` + `session_locked` / `run_locked`。
 - `disabled` / 未配置 tenant → `forbidden`，不得创建半成品。
 - 本地 REPL / headless 仍一次只跑一个 tenant（`--tenant` 选择）；`--connect` 由远端 gateway 决定 tenant。

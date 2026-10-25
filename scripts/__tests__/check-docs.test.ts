@@ -21,6 +21,23 @@ async function withFixture(
   }
 }
 
+function moduleDoc(
+  fields: { title: string; kind: string; triggers: string; paths: string; appliesTo?: string },
+  body: string,
+): string {
+  return [
+    '---',
+    `title: ${fields.title}`,
+    `kind: ${fields.kind}`,
+    `triggers: ${fields.triggers}`,
+    `paths: ${fields.paths}`,
+    ...(fields.appliesTo ? [`applies_to: ${fields.appliesTo}`] : []),
+    '---',
+    '',
+    body,
+  ].join('\n');
+}
+
 function validFiles(): Record<string, string> {
   return {
     'README.md': [
@@ -33,7 +50,34 @@ function validFiles(): Record<string, string> {
       '| [Migration](docs/operations/MIGRATION.md) |',
       '| [Trace](docs/operations/TRACE.md) |',
     ].join('\n'),
-    'docs/ARCHITECTURE.md': '# Arch\n',
+    'docs/ARCHITECTURE.md': '# Arch\n[modules](architecture/INDEX.md)\n',
+    'docs/architecture/INDEX.md': moduleDoc(
+      {
+        title: 'Architecture',
+        kind: 'current',
+        triggers: '[architecture]',
+        paths: '[docs/architecture/**]',
+      },
+      '# Index\n\n| [overview](overview.md) | x |\n',
+    ),
+    'docs/architecture/overview.md': moduleDoc(
+      { title: 'Overview', kind: 'current', triggers: '[overview]', paths: '[packages/core/**]' },
+      '# Overview\n[back](INDEX.md)\n',
+    ),
+    'docs/agents/INDEX.md': moduleDoc(
+      { title: 'Agents', kind: 'current', triggers: '[agents]', paths: '[docs/agents/**]' },
+      '# Agents\n\n| [core](core.md) | x |\n',
+    ),
+    'docs/agents/core.md': moduleDoc(
+      {
+        title: 'Core',
+        kind: 'advisory',
+        triggers: '[core]',
+        paths: '[packages/core/**]',
+        appliesTo: '[N, M]',
+      },
+      '# Core\n[back](INDEX.md)\n',
+    ),
     'AGENTS.md': '# Agents\n[ARCHITECTURE](docs/ARCHITECTURE.md)\n',
     'docs/operations/CI-CD.md': '# CI\n[back](../FILE-MANAGEMENT.md)\n',
     'docs/operations/RELEASE.md': '# Release\n[back](../FILE-MANAGEMENT.md)\n',
@@ -151,6 +195,302 @@ describe('checkDocs', () => {
       },
       async (root) => {
         expect(await checkDocs(root)).toEqual([]);
+      },
+    );
+  });
+
+  it('reports broken links inside architecture modules', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/architecture/overview.md': moduleDoc(
+          {
+            title: 'Overview',
+            kind: 'current',
+            triggers: '[overview]',
+            paths: '[packages/core/**]',
+          },
+          '# Overview\n[bad](missing.md)\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({
+            file: 'docs/architecture/overview.md',
+            message: expect.stringContaining('不存在'),
+          }),
+        );
+      },
+    );
+  });
+
+  it('skips architecture directory when absent', async () => {
+    const files = validFiles();
+    delete files['docs/architecture/INDEX.md'];
+    delete files['docs/architecture/overview.md'];
+    files['docs/ARCHITECTURE.md'] = '# Arch\n';
+    await withFixture(files, async (root) => {
+      expect(await checkDocs(root)).toEqual([]);
+    });
+  });
+
+  it('reports broken links inside agent advisories', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/agents/core.md': moduleDoc(
+          {
+            title: 'Core',
+            kind: 'advisory',
+            triggers: '[core]',
+            paths: '[packages/core/**]',
+            appliesTo: '[N, M]',
+          },
+          '# Core\n[bad](missing.md)\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({
+            file: 'docs/agents/core.md',
+            message: expect.stringContaining('不存在'),
+          }),
+        );
+      },
+    );
+  });
+
+  it('skips agents directory when absent', async () => {
+    const files = validFiles();
+    delete files['docs/agents/INDEX.md'];
+    delete files['docs/agents/core.md'];
+    await withFixture(files, async (root) => {
+      expect(await checkDocs(root)).toEqual([]);
+    });
+  });
+
+  it('reports a module without frontmatter', async () => {
+    await withFixture({ ...validFiles(), 'docs/agents/core.md': '# Core\n' }, async (root) => {
+      expect(await checkDocs(root)).toContainEqual(
+        expect.objectContaining({
+          file: 'docs/agents/core.md',
+          message: expect.stringContaining('frontmatter'),
+        }),
+      );
+    });
+  });
+
+  it('reports an invalid module kind', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/agents/core.md': moduleDoc(
+          {
+            title: 'Core',
+            kind: 'history',
+            triggers: '[core]',
+            paths: '[packages/core/**]',
+            appliesTo: '[N, M]',
+          },
+          '# Core\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('kind') }),
+        );
+      },
+    );
+  });
+
+  it('reports an advisory without applies_to', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/agents/core.md': moduleDoc(
+          { title: 'Core', kind: 'advisory', triggers: '[core]', paths: '[packages/core/**]' },
+          '# Core\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('applies_to') }),
+        );
+      },
+    );
+  });
+
+  it('reports applies_to on a current module', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/architecture/overview.md': moduleDoc(
+          {
+            title: 'Overview',
+            kind: 'current',
+            triggers: '[overview]',
+            paths: '[packages/core/**]',
+            appliesTo: '[N, M]',
+          },
+          '# Overview\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('applies_to') }),
+        );
+      },
+    );
+  });
+
+  it('reports non-array triggers', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/architecture/overview.md': moduleDoc(
+          { title: 'Overview', kind: 'current', triggers: 'gateway', paths: '[packages/core/**]' },
+          '# Overview\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('数组') }),
+        );
+      },
+    );
+  });
+
+  it('reports an INDEX that misses a module', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/agents/extra.md': moduleDoc(
+          {
+            title: 'Extra',
+            kind: 'advisory',
+            triggers: '[extra]',
+            paths: '[packages/core/**]',
+            appliesTo: '[N, M]',
+          },
+          '# Extra\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('INDEX 缺少模块 extra.md') }),
+        );
+      },
+    );
+  });
+
+  it('reports module line overflow', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/architecture/overview.md': moduleDoc(
+          {
+            title: 'Overview',
+            kind: 'current',
+            triggers: '[overview]',
+            paths: '[packages/core/**]',
+          },
+          `# Overview\n\n${'x\n'.repeat(100)}`,
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('行数超过上限') }),
+        );
+      },
+    );
+  });
+
+  it('reports a bare version heading', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/architecture/overview.md': moduleDoc(
+          {
+            title: 'Overview',
+            kind: 'current',
+            triggers: '[overview]',
+            paths: '[packages/core/**]',
+          },
+          '# Overview\n\n## 0.26\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('版本叙事') }),
+        );
+      },
+    );
+  });
+
+  it('reports duplicate and nonexistent INDEX links', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/agents/INDEX.md': moduleDoc(
+          { title: 'Agents', kind: 'current', triggers: '[agents]', paths: '[docs/agents/**]' },
+          '# Agents\n\n| [core](core.md) | x |\n| [core](core.md) | y |\n| [missing](missing.md) | z |\n',
+        ),
+      },
+      async (root) => {
+        const issues = await checkDocs(root);
+        expect(issues).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('INDEX 重复链接 core.md') }),
+        );
+        expect(issues).toContainEqual(
+          expect.objectContaining({
+            message: expect.stringContaining('INDEX 指向不存在的模块 missing.md'),
+          }),
+        );
+      },
+    );
+  });
+
+  it('reports advisory line overflow', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/agents/core.md': moduleDoc(
+          {
+            title: 'Core',
+            kind: 'advisory',
+            triggers: '[core]',
+            paths: '[packages/core/**]',
+            appliesTo: '[N, M]',
+          },
+          `# Core\n\n${'x\n'.repeat(60)}`,
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('行数超过上限 60') }),
+        );
+      },
+    );
+  });
+
+  it('reports version narrative in current headings', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/architecture/overview.md': moduleDoc(
+          {
+            title: 'Overview',
+            kind: 'current',
+            triggers: '[overview]',
+            paths: '[packages/core/**]',
+          },
+          '# Overview\n\n## 0.26 旧架构\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('版本叙事') }),
+        );
       },
     );
   });
