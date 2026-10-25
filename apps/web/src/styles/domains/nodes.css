@@ -1,7 +1,10 @@
 /* ─────────────────────────────────────────────────────────────
    Nodes / Teams / Agents 共用网络域原语 + Nodes 专属样式。
 
-   `.net-*` 是三个域共享的行 / 卡片 / 工具栏 / 徽标骨架；
+   行 / 徽标 / 高级详情 / Add node 表单已迁到 L3 utilities；
+   这里只保留 720px 媒体仍依赖的 `.net-toolbar` / `.net-select`、命令块
+   `.net-command*`，以及待 S7 删除的 `.net-card` / `.net-row-sub` /
+   `.field-wide` / `.team-policy-input`。
    页面外边距统一由 `.domain-view` + `.domain-content` 提供，
    间距只使用 tokens.css 的 `--space-*`。
    ───────────────────────────────────────────────────────────── */
@@ -26,95 +29,11 @@
   padding-block: 0;
 }
 
-.net-count {
-  margin-left: auto;
-  font-size: var(--text-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.net-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.net-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-  min-width: 0;
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-}
-
-.net-row-main {
-  display: flex;
-  flex: 1 1 220px;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.net-row-title {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
 .net-row-sub {
   min-width: 0;
   color: var(--faint);
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
-}
-
-.net-row-meta {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-  color: var(--muted);
-  font-size: var(--text-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.net-row-meta strong {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.net-row-actions {
-  display: inline-flex;
-  flex: none;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: center;
-  margin-left: auto;
-}
-
-.net-badge {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: var(--radius-pill);
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 500;
-  white-space: nowrap;
 }
 
 .net-card {
@@ -140,76 +59,6 @@
   border-color: var(--line-strong);
   background: var(--surface-raised);
   box-shadow: var(--elev-1);
-}
-
-.net-presence {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--muted);
-  font-size: var(--text-sm);
-  white-space: nowrap;
-}
-
-.net-presence-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--faint);
-}
-
-.agents-presence-live .net-presence-dot {
-  background: var(--ok);
-}
-
-.agents-presence-gone .net-presence-dot {
-  background: var(--faint);
-}
-
-.net-advanced {
-  margin-top: var(--space-3);
-  border-top: 1px solid var(--line);
-  padding-top: var(--space-2);
-}
-
-.net-advanced > summary {
-  color: var(--faint);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.net-advanced .diag-list {
-  margin-top: var(--space-2);
-}
-
-/* Add node 弹窗：命令块 + 浏览器连接表单 */
-.add-node-dialog .section-desc {
-  margin-top: var(--space-2);
-}
-
-.add-node-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-5);
-}
-
-.add-node-section-title {
-  margin: 0;
-  color: var(--ink);
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-
-.add-node-section .form-grid {
-  margin-top: 0;
-}
-
-.add-node-actions {
-  grid-column: 1 / -1;
-  justify-content: flex-end;
-  margin-top: 0;
 }
 
 .net-commands {
@@ -260,10 +109,6 @@
   .net-select {
     flex: 1 1 100%;
     max-width: none;
-  }
-
-  .net-row-actions {
-    margin-left: 0;
   }
 
   .net-command {

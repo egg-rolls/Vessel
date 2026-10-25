@@ -8,6 +8,7 @@ import { type FormEvent, useState } from 'react';
 import { CopyButton } from '../../components/CopyButton';
 import { ModalShell } from '../../components/Modal';
 import { useToast } from '../../components/ToastProvider';
+import { Button, Field, Input } from '../../components/ui';
 import { useNodes } from '../../gateway/NodeProvider';
 import type { NodeDraftError } from '../../gateway/nodes';
 import { t, useLocale } from '../../i18n';
@@ -41,22 +42,19 @@ export function AddNodeDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <ModalShell
-      label={t('hub.add.title')}
-      onClose={onClose}
-      closeLabel={t('common.close')}
-      className="add-node-dialog"
-    >
+    <ModalShell label={t('hub.add.title')} onClose={onClose} closeLabel={t('common.close')}>
       <h2 className="modal-title">{t('hub.add.title')}</h2>
-      <p className="section-desc">{t('hub.add.description')}</p>
+      <p className="mt-2 max-w-prose text-md leading-relaxed text-muted">
+        {t('hub.add.description')}
+      </p>
 
-      <section className="add-node-section" aria-label={t('nodes.add.commands')}>
-        <h3 className="add-node-section-title">{t('nodes.add.commands')}</h3>
+      <section className="mt-5 flex flex-col gap-2" aria-label={t('nodes.add.commands')}>
+        <h3 className="m-0 text-sm font-semibold text-ink">{t('nodes.add.commands')}</h3>
         <ul className="net-commands">
           {ADD_COMMANDS.map((row) => (
             <li className="net-command" key={row.id}>
               <span className="net-command-label">{row.label ? t(row.label) : ''}</span>
-              <code className="net-command-text mono">{t(row.command)}</code>
+              <code className="net-command-text font-mono">{t(row.command)}</code>
               <CopyButton
                 text={t(row.command)}
                 label={t('common.copy')}
@@ -67,15 +65,13 @@ export function AddNodeDialog({ onClose }: { onClose: () => void }) {
         </ul>
       </section>
 
-      <section className="add-node-section" aria-label={t('nodes.add.connect')}>
-        <h3 className="add-node-section-title">{t('nodes.add.connect')}</h3>
-        <form className="form-grid" onSubmit={submit}>
-          <label className="field">
-            <span className="field-label">{t('settings.multinode.name')}</span>
-            <input
-              className={`input ${
-                error === 'name_required' || error === 'name_duplicate' ? 'invalid' : ''
-              }`.trim()}
+      <section className="mt-5 flex flex-col gap-2" aria-label={t('nodes.add.connect')}>
+        <h3 className="m-0 text-sm font-semibold text-ink">{t('nodes.add.connect')}</h3>
+        <form className="form-grid mt-0" onSubmit={submit}>
+          <Field label={t('settings.multinode.name')} htmlFor="add-node-name">
+            <Input
+              id="add-node-name"
+              invalid={error === 'name_required' || error === 'name_duplicate'}
               value={name}
               onChange={(event) => {
                 setName(event.target.value);
@@ -85,11 +81,11 @@ export function AddNodeDialog({ onClose }: { onClose: () => void }) {
               spellCheck={false}
               autoComplete="off"
             />
-          </label>
-          <label className="field">
-            <span className="field-label">{t('settings.multinode.url')}</span>
-            <input
-              className={`input ${error === 'url_invalid' ? 'invalid' : ''}`.trim()}
+          </Field>
+          <Field label={t('settings.multinode.url')} htmlFor="add-node-url">
+            <Input
+              id="add-node-url"
+              invalid={error === 'url_invalid'}
               value={url}
               onChange={(event) => {
                 setUrl(event.target.value);
@@ -99,11 +95,15 @@ export function AddNodeDialog({ onClose }: { onClose: () => void }) {
               spellCheck={false}
               autoComplete="off"
             />
-          </label>
-          <label className="field">
-            <span className="field-label">{t('settings.multinode.token')}</span>
-            <input
-              className={`input ${error === 'token_required' ? 'invalid' : ''}`.trim()}
+          </Field>
+          <Field
+            label={t('settings.multinode.token')}
+            htmlFor="add-node-token"
+            hint={t('settings.multinode.storageHint')}
+          >
+            <Input
+              id="add-node-token"
+              invalid={error === 'token_required'}
               type="password"
               value={token}
               onChange={(event) => {
@@ -114,23 +114,16 @@ export function AddNodeDialog({ onClose }: { onClose: () => void }) {
               spellCheck={false}
               autoComplete="new-password"
             />
-            <span className="field-hint">{t('settings.multinode.storageHint')}</span>
-          </label>
-          <div className="form-actions add-node-actions">
-            <button type="button" className="btn" onClick={onClose}>
-              {t('common.cancel')}
-            </button>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={!name.trim() || !token.trim()}
-            >
+          </Field>
+          <div className="form-actions col-span-full justify-end mt-0">
+            <Button onClick={onClose}>{t('common.cancel')}</Button>
+            <Button type="submit" variant="primary" disabled={!name.trim() || !token.trim()}>
               {t('settings.multinode.add')}
-            </button>
+            </Button>
           </div>
         </form>
         {error && (
-          <p className="field-error" role="alert">
+          <p className="text-xs text-danger leading-snug" role="alert">
             {t(`settings.multinode.error.${error}`)}
           </p>
         )}
