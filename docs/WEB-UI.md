@@ -80,6 +80,11 @@ Linen 视觉的 body、标题、表单默认样式仍由 `src/styles/base.css` �
 | `SegmentedTabs`                                                                  | `components/Tabs.tsx`                | `role=tablist`；左右方向键切换                                                                                                            |
 | `Tooltip` / `IconButton`                                                         | `components/Tooltip.tsx`             | 300ms 延迟、portal 定位、Esc 关闭；`IconButton` 必须带 `aria-label`                                                                       |
 | `AutoGrowTextarea`                                                               | `components/ui/AutoGrowTextarea.tsx` | 自增高输入框                                                                                                                              |
+| `Section`                                                                        | `components/ui/Section.tsx`          | 结构面板（等价旧 `.panel`）；`title` / `description` / `actions`；`titleAs`: `h2` / `h3`；`as`: `section` / `div`                          |
+| `Field`                                                                          | `components/ui/Field.tsx`            | 表单字段容器；`label` / `htmlFor` / `hint` / `error` / `required`；error 带 `role=alert`                                                  |
+| `Input` / `Select` / `Textarea`                                                  | `components/ui/Field.tsx`            | 原生控件 + `invalid`；视觉等价旧 `.input`（sunken + inset + focus ring）；forwardRef                                                  |
+| `KeyValueList`                                                                   | `components/ui/KeyValueList.tsx`     | 两列 `dl` 网格（等价旧 `.diag-list`）；`items: { label, value }[]`，value 自动断行                                                      |
+| `Stat`                                                                           | `components/ui/Stat.tsx`             | 指标块（等价旧 `.stat`）；`label` / `value` / `hint`                                                                                       |
 
 `StatusChip` 的 tone 只取 `muted` / `info` / `warn` / `ok` / `danger`；新增状态先加
 `STATUS_META` 与 i18n key，不要在业务页手写颜色。
