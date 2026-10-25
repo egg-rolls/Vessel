@@ -337,14 +337,14 @@ export function TeamChat({
         <div className="flex flex-none flex-wrap justify-end gap-1.5">
           <Button
             id="team-members-toggle"
-            className="team-chat-members-toggle"
+            className="team-chat-members-toggle hidden max-wide:inline-flex"
             aria-expanded={membersOpen}
             aria-controls="team-members"
             onClick={() => setMembersOpen((value) => !value)}
           >
             {membersOpen ? t('team.a11y.closeMembers') : t('team.chat.members')}
           </Button>
-          <Button className="team-chat-back" onClick={onBackToList}>
+          <Button className="team-chat-back hidden max-wide:inline-flex" onClick={onBackToList}>
             {t('team.chat.backToList')}
           </Button>
           <Button onClick={resource.reload} disabled={!hasToken || resource.refreshing}>

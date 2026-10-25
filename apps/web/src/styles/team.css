@@ -63,11 +63,6 @@
   border-bottom: 1px solid var(--line);
 }
 
-.team-chat-members-toggle,
-.team-chat-back {
-  display: none;
-}
-
 .team-chat-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -240,11 +235,6 @@
 
   .team-chat-main {
     height: 100%;
-  }
-
-  .team-chat-members-toggle,
-  .team-chat-back {
-    display: inline-flex;
   }
 
   .team-members-column {

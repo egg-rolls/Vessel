@@ -117,8 +117,9 @@
   --shadow-elev-inset: var(--elev-inset);
   --shadow-focus: var(--focus-ring);
 
-  /* 断点：与 legacy 的 680px 小屏断点对齐。 */
+  /* 断点：与 legacy 的 680px 小屏 / 1023px 宽屏断点对齐。 */
   --breakpoint-compact: 680px;
+  --breakpoint-wide: 1023px;
 
   /* 语义宽度 */
   --container-search: var(--search-max-w);

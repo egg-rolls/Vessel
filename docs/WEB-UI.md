@@ -56,7 +56,7 @@ Linen 视觉的 body、标题、表单默认样式仍由 `src/styles/base.css` �
 | 字号        | `text-2xs` 10 / `text-xs` 10.5 / `text-sm` 11.5 / `text-md` 12.5 / `text-base` 14 / `text-lg` 16 / `text-xl` 19 / `text-2xl` 22；语义别名 `text-body`（14）/ `text-title`（22） |
 | 字体        | `font-sans` / `font-serif` / `font-mono`                                                                                                                                        |
 | 阴影        | `shadow-elev-1` … `shadow-elev-4`、`shadow-elev-inset`、`shadow-focus`                                                                                                          |
-| 小屏        | `max-compact:`（680px 以下）                                                                                                                                                    |
+| 小屏 / 宽屏 | `max-compact:`（680px 以下）、`max-wide:`（1023px 以下）                                                                                                                        |
 | 宽度        | `max-w-search`、`max-w-modal-sm/md/lg`、`max-w-palette`、`max-w-prose`                                                                                                          |
 
 状态用变体表达：`hover:`、`focus-visible:`、`disabled:`、`aria-expanded:`、
