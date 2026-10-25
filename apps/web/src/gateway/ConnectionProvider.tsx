@@ -187,6 +187,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const settledRef = useRef(new Map<string, number>());
   /** hydration 世代：只有最新一次请求能落地。 */
   const hydrationGenerationRef = useRef(0);
+  /** 每个 tenant 已提示过的 orphaned request id；重连 / 忽略后不重复弹。 */
+  const orphanToastIdsRef = useRef(new Map<string, Set<string>>());
 
   const client = useMemo(() => new GatewayClient(gatewayUrl), [gatewayUrl]);
   const tenantIdRef = useRef<string | null>(null);
@@ -252,7 +254,20 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       snapshot,
       settled: new Set(settledRef.current.keys()),
     });
-  }, [client]);
+
+    // 失效交互只提示一次：同一 tenant 下已提示过的 request id 在重连 / 刷新 /
+    // 忽略后不重复弹；后续 hydration 只有出现新 id 才再提示。
+    if (snapshot.orphaned.length > 0) {
+      const tenantKey = tenantAtStart ?? 'default';
+      const seen = orphanToastIdsRef.current.get(tenantKey) ?? new Set<string>();
+      const fresh = snapshot.orphaned.some((item) => !seen.has(item.requestId));
+      if (fresh) {
+        for (const item of snapshot.orphaned) seen.add(item.requestId);
+        orphanToastIdsRef.current.set(tenantKey, seen);
+        toast.info(t('interaction.orphaned.toast', { count: snapshot.orphaned.length }));
+      }
+    }
+  }, [client, toast]);
 
   const reportConnectError = useCallback(
     (error: unknown) => {

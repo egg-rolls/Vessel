@@ -1,7 +1,8 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
 import { useId, useState } from 'react';
 import { CopyButton } from '../../components/CopyButton';
-import { Button } from '../../components/ui';
+import { ModalShell } from '../../components/Modal';
+import { Badge, Button } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
@@ -15,11 +16,24 @@ import {
   type ToolCardView,
   toolSummary,
 } from './tool-cards';
+import { useToolDescription } from './tool-catalog';
 
 const STATUS_GLYPH: Record<ToolCardView['status'], string> = {
   running: '●',
   done: '✓',
   error: '✗',
+};
+
+const STATUS_LABEL: Record<ToolCardView['status'], string> = {
+  running: 'chat.tool.status.running',
+  done: 'chat.tool.status.done',
+  error: 'chat.tool.status.error',
+};
+
+const STATUS_BADGE_TONE: Record<ToolCardView['status'], 'info' | 'success' | 'danger'> = {
+  running: 'info',
+  done: 'success',
+  error: 'danger',
 };
 
 const STATUS_TONE: Record<ToolCardView['status'], string> = {
@@ -151,7 +165,7 @@ function DiffSection({ lines, path }: { lines: DiffLine[]; path?: string }) {
   );
 }
 
-/** 工具卡：Codex 式单行 header + 默认折叠的输入/输出/diff/错误分区。 */
+/** 工具卡：Codex 式单行 header；点击打开详情弹窗（描述 + 输入，其余分区折叠）。 */
 export function ToolCard({
   card,
   verbosity = 'normal',
@@ -159,8 +173,8 @@ export function ToolCard({
   card: ToolCardView;
   verbosity?: Verbosity;
 }) {
-  const [manual, setManual] = useState<boolean | null>(null);
-  const expanded = manual ?? card.status === 'error';
+  const [open, setOpen] = useState(false);
+  const description = useToolDescription(card.name);
   const summary = toolSummary(card.name, card.args);
   const diff = card.name === 'edit' ? editDiffOf(card.args) : null;
   const errorText = card.error !== undefined ? valueText(card.error) : '';
@@ -170,14 +184,14 @@ export function ToolCard({
     <div className="tool-card" data-status={card.status}>
       <button
         type="button"
-        className="flex min-h-9 w-full items-center gap-2 rounded-t-md bg-transparent px-2.5 text-left text-muted last:rounded-md hover:bg-hover"
-        aria-expanded={expanded}
-        onClick={() => setManual(!expanded)}
+        className="flex min-h-9 w-full items-center gap-2 rounded-md bg-transparent px-2.5 text-left text-muted hover:bg-hover"
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
       >
         <span
           className={`tool-card-glyph ${STATUS_TONE[card.status]}`}
           role="img"
-          aria-label={card.status}
+          aria-label={t(STATUS_LABEL[card.status])}
         >
           {STATUS_GLYPH[card.status]}
         </span>
@@ -191,13 +205,49 @@ export function ToolCard({
           </span>
         )}
         <span className="flex-none text-2xs text-faint" aria-hidden="true">
-          {expanded ? '▾' : '▸'}
+          ›
         </span>
       </button>
 
-      {expanded && (
-        <div className="flex flex-col gap-1.5 rounded-b-md px-2.5 pb-2.5">
-          <PayloadSection label={t('chat.tool.input')} value={card.args} verbosity={verbosity} />
+      {/* 失败不能静默：卡片收起时也保留错误摘要（完整内容在详情弹窗）。 */}
+      {card.status === 'error' && errorText && (
+        <p className="m-0 line-clamp-3 whitespace-pre-wrap break-words px-2.5 pb-2 font-mono text-xs text-danger">
+          {errorText}
+        </p>
+      )}
+
+      {open && (
+        <ModalShell
+          label={t('chat.tool.dialogLabel', { name: card.name })}
+          onClose={() => setOpen(false)}
+          closeLabel={t('common.close')}
+          size="md"
+        >
+          <div className="flex flex-wrap items-center gap-2 pr-8">
+            <h2 className="font-serif text-xl font-semibold text-ink">{card.name}</h2>
+            <Badge tone={STATUS_BADGE_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
+            {card.durationMs != null && (
+              <span className="font-mono text-xs tabular-nums text-faint">
+                {formatDuration(card.durationMs)}
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="font-mono text-xs uppercase tracking-wide text-faint">
+              {t('chat.tool.description')}
+            </span>
+            <p className="m-0 text-md leading-relaxed text-muted">
+              {description ?? t('chat.tool.descriptionUnavailable')}
+            </p>
+          </div>
+
+          <PayloadSection
+            label={t('chat.tool.input')}
+            value={card.args}
+            defaultOpen
+            verbosity={verbosity}
+          />
           <PayloadSection label={t('chat.tool.output')} value={card.result} verbosity={verbosity} />
           {diff && <DiffSection lines={diff.lines} path={diff.path} />}
           <PayloadSection
@@ -234,7 +284,7 @@ export function ToolCard({
               </dl>
             </section>
           )}
-        </div>
+        </ModalShell>
       )}
     </div>
   );
