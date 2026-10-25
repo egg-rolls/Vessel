@@ -207,7 +207,6 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
             to: input.to,
             startup_prompt: input.startup_prompt,
             ...(input.from !== undefined ? { from: input.from } : {}),
-            ...(input.handoff_path !== undefined ? { handoff_path: input.handoff_path } : {}),
             ...(input.from_session_id !== undefined
               ? { from_session_id: input.from_session_id }
               : {}),

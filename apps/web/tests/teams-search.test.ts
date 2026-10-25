@@ -1,10 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import {
-  nullableChange,
-  parsePolicyText,
-  policyText,
-  trimmedOrUndefined,
-} from '../src/domains/teams/team-form';
+import { nullableChange, trimmedOrUndefined } from '../src/domains/teams/team-form';
 import { filterTeamResults, matchesTeamQuery } from '../src/domains/teams/team-search';
 import {
   isTeamEditHash,
@@ -92,25 +87,6 @@ describe('team URL helpers', () => {
 });
 
 describe('team form helpers', () => {
-  test('parses policy JSON objects and rejects other JSON shapes', () => {
-    expect(parsePolicyText('')).toEqual({ ok: true });
-    expect(parsePolicyText('  { "allowFork": true }  ')).toEqual({
-      ok: true,
-      value: { allowFork: true },
-    });
-
-    // 反向验证：数组 / null / 标量 / 坏 JSON 都不能当成 policy。
-    expect(parsePolicyText('[]').ok).toBe(false);
-    expect(parsePolicyText('null').ok).toBe(false);
-    expect(parsePolicyText('42').ok).toBe(false);
-    expect(parsePolicyText('{broken').ok).toBe(false);
-  });
-
-  test('formats a missing policy as an empty object', () => {
-    expect(policyText(undefined)).toBe('{}');
-    expect(JSON.parse(policyText({ budget: { turns: 3 } }))).toEqual({ budget: { turns: 3 } });
-  });
-
   test('only reports nullable fields that actually changed', () => {
     expect(nullableChange('  human ', 'human')).toEqual({ changed: false, value: null });
     expect(nullableChange('', 'human')).toEqual({ changed: true, value: null });

@@ -319,9 +319,6 @@ export function TeamChat({
             <span>
               {t('team.chat.descriptionLabel')}: {team?.description || '—'}
             </span>
-            <span className="font-mono">
-              {t('team.chat.defaultPrincipalLabel')}: {team?.default_principal || '—'}
-            </span>
             {archived && (
               <span className="rounded-full bg-warn-soft px-2 py-0.5 text-xs text-warn">
                 {t('teams.chat.archived')}

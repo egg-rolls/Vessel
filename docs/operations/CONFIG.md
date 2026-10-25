@@ -279,7 +279,7 @@ agent:
 - **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
 - **工具数（实测）**：默认 4（`bash` / `read` / `edit` / `agent`）；显式 `agent.enabled: false` 为 3；真交互 REPL（TTY）或 gateway/serve 默认 5（+`ask_user`）；交互且关闭 agent 为 4。
 - **owner 端点**：只由交互 REPL / serve 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`--run` / headless / 管道不监听 owner 端口、不写记录，但 AgentService / TeamService 仍在进程内可用。`vessel agent new|send|dispatch|close|list|rotate [--json]` 经该记录 attach。
-- **rotate（0.19，ADR-092）**：成员可调用 `agent.rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 owner 端点 `agent.rotate` 或 `vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]`。`--startup` 必填且非空；`rotated` 退出 0、`failed` 退出 1。失败保持旧身体，不自动 fork / 重试；`rotating` 期间消息排队。
+- **rotate（0.19，ADR-092）**：成员可调用 `agent.rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 owner 端点 `agent.rotate` 或 `vessel agent rotate <to> --startup <text> [--json]`。`--startup` 必填且非空；`rotated` 退出 0、`failed` 退出 1。失败保持旧身体，不自动 fork / 重试；`rotating` 期间消息排队。
 - **已知限制**：消息队列只在内存，重启丢失未处理消息；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **51**（见 §2.13）。
 
 ### 2.12 Team 声明（0.19 S3，ADR-091；S4 增加 policy.permission / policy.budget）
@@ -288,7 +288,6 @@ agent:
 teams:
   - name: alpha                  # 可选；缺省由装配层决定
     workspace: ~/work/alpha      # 必填；归一化后精确匹配
-    handoff_path: ~/work/alpha/HANDOFF.md   # 可选；只存，S3 不消费
     policy:
       permission:
         unattended: deny-after   # hold（默认）| deny-after
@@ -305,7 +304,7 @@ teams:
 ```
 
 - **全局配置**；tenant overlay **不允许** `teams`（validator 拒绝，loader 丢弃）。
-- 校验：必须是数组；每项对象；`workspace` 非空；归一化（展开 `~`、`path.resolve`，Windows 忽略大小写）后重复声明 → validation error；`name` / `handoff_path` 非空；`policy` 为普通对象。
+- 校验：必须是数组；每项对象；`workspace` 非空；归一化（展开 `~`、`path.resolve`，Windows 忽略大小写）后重复声明 → validation error；`name` 非空；`policy` 为普通对象。
 - **拼写**：规范拼写是 camelCase（`denyAfterSeconds` / `maxHops` / `maxWallClockSeconds` 等），config 对象、手改 `team.json` 与运行时都用 camelCase；YAML 可写 snake_case，loader 递归转换。手改 `team.json` 写 snake_case 不会被转换。
 - **严格校验**：`policy.permission` / `policy.budget` 内部是白名单；`allow_after` / `allowAfter` 报错（`allow-after is not supported; use hold or deny-after`），`max_cost` / `maxCost` 报错（`policy.budget.maxCost is not supported`，`Usage` 没有 cost 字段），未知键报错。`policy` 顶层其它键仍允许（S3 兼容）。
 - **默认与边界**：`permission.unattended` 缺省 `hold`；`deny_after_seconds` 只在 `deny-after` 时允许且必填；没有全局 TTL。预算挂在 team policy，**不复用** `limits.*`；未配置的维度不限，环检测默认开启（`max_repeats: 2` / `cooldown_seconds: 60`）。
@@ -349,7 +348,7 @@ hub:
 - `allow_file_secrets`（默认 `false`）：平台 SecretStore（DPAPI / Keychain / libsecret）不可用时，只有显式 `true` 才退到 AES-256-GCM 文件；否则 fail-closed。
 - `pairing_ttl_seconds`（默认 300，范围 60–3600）：一次性配对码有效期；码只存 hash、先烧后用。
 - canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后为 40，S3 + S5 + S4 合并后为 48；0.24 S10.3 增加 `teams.create|update|archive` 后总数为 **51**（50 个 domain 方法 + `events.subscribe`）。
-- **team-scoped control token**：只能访问自己的 `team_id`，不匹配返回 `not_found`；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `handoff_path` / `policy`。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**。
+- **team-scoped control token**：只能访问自己的 `team_id`，不匹配返回 `not_found`；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `policy`。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**。
 - **NAT 数据面**：`direction: node` 只保证元数据 / 指针可达；没有浏览器可达地址的节点（NAT / 家庭网络）需要用户提供隧道 / 反向代理，并可用可选 `public_url` 声明节点 origin。目录的 `data_plane: direct|unreachable` 由 `public_url ?? url` 派生，只表示正文可达性；hub 不做正文中继。
 - **已知限制**：S5.1 已实现 node → hub 出站；跨节点 A2A（S7）、多 hub 联邦、hub daemon / 系统服务注册仍未实现。一个 node 进程 / data dir 只加入一个 hub。Web 当前不消费 hub 目录 / data token。
 
@@ -418,13 +417,13 @@ vessel logs tail [--json] [--lines N] [--instance <name>]
 vessel agent new [--name <n>] [--model <m>] [--visibility private|team|tenant] [--system-prompt <s>] [--json]
 vessel agent send <member> <content...> [--json]
 vessel agent dispatch <to> <content...> [--json]
-vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]
+vessel agent rotate <to> --startup <text> [--json]
 vessel agent close <member...> [--json]
 vessel agent list [--state <state>] [--visibility private|team|tenant] [--json]
 vessel team list [--json]
 vessel team get <team_id> [--limit N] [--json]
-vessel team create <workspace> [--name N] [--description D] [--default-principal P] [--handoff PATH] [--policy JSON | --policy-file FILE] [--json]
-vessel team update <team_id> [--name N] [--description D | --clear-description] [--default-principal P | --clear-default-principal] [--handoff PATH | --clear-handoff] [--policy JSON | --policy-file FILE] [--json]
+vessel team create <workspace> [--name N] [--description D] [--policy JSON | --policy-file FILE] [--json]
+vessel team update <team_id> [--name N] [--description D | --clear-description] [--policy JSON | --policy-file FILE] [--json]
 vessel team archive <team_id> [--json]
 vessel team post <team_id> <content...> [--mention <name|id>]... [--json]
 vessel team members <team_id> add|remove <member> [--json]

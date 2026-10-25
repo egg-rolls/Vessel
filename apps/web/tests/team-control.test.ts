@@ -87,7 +87,6 @@ describe('remote Team control contract', () => {
     await control.createTeam({
       workspace: '/work/core',
       name: 'Core',
-      default_principal: 'human',
     });
     await control.updateTeam({ team_id: 'core', description: null, name: 'Core 2' });
     await control.archiveTeam('core');
@@ -100,7 +99,6 @@ describe('remote Team control contract', () => {
     expect(calls[0]?.params).toEqual({
       workspace: '/work/core',
       name: 'Core',
-      default_principal: 'human',
     });
     // null 表示清空，必须原样送到服务端，不能省略。
     expect(calls[1]?.params).toEqual({ team_id: 'core', name: 'Core 2', description: null });

@@ -382,8 +382,6 @@ describe('vessel team command', () => {
         kind: 'create',
         workspace: '/ws/alpha',
         name: 'Alpha',
-        defaultPrincipal: 'main',
-        handoffPath: '/ws/alpha/HANDOFF.md',
         json: true,
       },
       options(
@@ -408,8 +406,6 @@ describe('vessel team command', () => {
       params: {
         workspace: '/ws/alpha',
         name: 'Alpha',
-        default_principal: 'main',
-        handoff_path: '/ws/alpha/HANDOFF.md',
       },
     });
     expect(JSON.parse(result.stdout).team_id).toBe('alpha');

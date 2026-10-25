@@ -211,10 +211,6 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
     type: 'string',
     description: 'rotate: required first message for the new body',
   },
-  handoff_path: {
-    type: 'string',
-    description: 'rotate: optional handoff path appended to the first message',
-  },
   state: { type: 'string', description: 'list: filter by member state' },
   visibility: {
     type: 'string',
@@ -239,8 +235,8 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
   return {
     ...tool,
     description:
-      'Member actions: rotate (rotate your own body; startup_prompt is required and ' +
-      'handoff_path is optional), post (append to your team log only; nobody is notified), ' +
+      'Member actions: rotate (rotate your own body; startup_prompt is required), ' +
+      'post (append to your team log only; nobody is notified), ' +
       'send (dispatch a message to a member), list (list the caller-visible roster). ' +
       'new and close are owner-only.',
     inputSchema: {

@@ -956,11 +956,7 @@ function toTeamSummary(record: TeamRecord, memberCount: number, onlineCount: num
     name: record.name,
     tenant_id: record.tenant_id,
     workspace: record.workspace,
-    ...(record.handoff_path !== undefined ? { handoff_path: record.handoff_path } : {}),
     ...(record.description !== undefined ? { description: record.description } : {}),
-    ...(record.default_principal !== undefined
-      ? { default_principal: record.default_principal }
-      : {}),
     policy: record.policy,
     member_count: memberCount,
     online_count: onlineCount,

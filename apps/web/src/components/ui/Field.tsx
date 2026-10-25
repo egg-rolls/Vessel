@@ -10,7 +10,7 @@ import { cn } from './cn';
 
 /** 输入控件：sunken 底 + inset 阴影 + focus ring。 */
 const CONTROL_CLASS =
-  'w-full min-w-0 rounded-sm bg-sunken px-2.75 py-2 text-md text-ink shadow-elev-inset transition-colors placeholder:text-faint focus:outline-none focus:shadow-focus pointer-coarse:min-h-touch disabled:cursor-not-allowed disabled:opacity-45 forced-colors:border';
+  'w-full min-w-0 rounded-sm border-0 bg-sunken px-2.75 py-2 text-md text-ink shadow-elev-inset transition-colors placeholder:text-faint focus:outline-none focus:shadow-focus pointer-coarse:min-h-touch disabled:cursor-not-allowed disabled:opacity-45 forced-colors:border';
 
 const INVALID_CLASS = 'bg-danger-soft text-danger';
 
@@ -90,7 +90,12 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
       {...props}
       ref={ref}
       aria-invalid={invalid ? true : ariaInvalid}
-      className={cn(CONTROL_CLASS, invalid && INVALID_CLASS, className)}
+      className={cn(
+        CONTROL_CLASS,
+        invalid && INVALID_CLASS,
+        '[&>option]:bg-raised [&>option]:text-ink',
+        className,
+      )}
     />
   );
 });

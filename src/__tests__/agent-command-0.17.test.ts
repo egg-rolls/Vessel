@@ -280,7 +280,6 @@ describe('vessel agent CLI', () => {
         json: false,
         to: 'worker',
         startupPrompt: 'go',
-        handoffPath: 'h.md',
       },
       { dataDir },
     );
@@ -288,7 +287,7 @@ describe('vessel agent CLI', () => {
     expect(result.exitCode).toBe(0);
     expect(calls[0]?.method).toBe('agents.rotate');
     expect(calls[0]?.params).toEqual({
-      agents: [{ to: 'worker', startup_prompt: 'go', handoff_path: 'h.md' }],
+      agents: [{ to: 'worker', startup_prompt: 'go' }],
     });
     expect(result.stdout).toContain('rotated');
     expect(result.stdout).toContain('epoch 1');
@@ -314,7 +313,6 @@ describe('vessel agent CLI', () => {
     );
     expect(rotated.exitCode).toBe(0);
     expect(JSON.parse(rotated.stdout)).toEqual({ results: [rotatedItem()] });
-    // 无 --handoff 时 params 不带 handoff_path
     expect(ok.calls[0]?.params).toEqual({
       agents: [{ to: 'worker', startup_prompt: 'go' }],
     });

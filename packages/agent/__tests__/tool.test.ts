@@ -375,7 +375,6 @@ describe('agent tool', () => {
     expect(Object.keys(schema.properties).sort()).toEqual([
       'action',
       'content',
-      'handoff_path',
       'member',
       'members',
       'messages',
@@ -388,6 +387,8 @@ describe('agent tool', () => {
       'to',
       'visibility',
     ]);
+    expect('handoff_path' in schema.properties).toBe(false);
+    expect(tool.description).not.toContain('handoff_path');
     expect(`${tool.description} ${JSON.stringify(schema)}`).not.toMatch(
       /\b(wait|inbox|status|cancel)\b/i,
     );

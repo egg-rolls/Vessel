@@ -268,7 +268,6 @@ describe('FileTeamStore.ready', () => {
       workspace,
       name: 'Alpha',
       policy: { mode: 'strict' },
-      default_principal: 'alice',
     });
     const path = teamMetadataPath(dataDir, 'default', created.team_id);
     const corrupt = '{"v":1,"team_id":';

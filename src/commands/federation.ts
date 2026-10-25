@@ -152,14 +152,13 @@ function formatPostResult(result: FederationPostResult, to: FederationAddress): 
   );
 }
 
-/** 人类可读目录：名字 / 描述 / 默认接头人 / 在线数 / 成员活跃度。 */
+/** 人类可读目录：名字 / 描述 / 在线数 / 成员活跃度。 */
 function formatTeamInfo(result: Extract<FederationTeamInfoResult, { status: 'ok' }>): string {
   const team = result.team;
   const lines: string[] = [
     ui.section(t('federation.teamInfo.title', { teamId: team.team_id })),
     ui.kv('name', team.name),
     ui.kv('description', team.description ?? ''),
-    ui.kv('default_principal', team.default_principal ?? ''),
     ui.kv(
       'members',
       `${team.member_count} (${t('federation.teamInfo.online', {

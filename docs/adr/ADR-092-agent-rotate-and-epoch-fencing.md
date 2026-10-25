@@ -64,3 +64,12 @@ tags: [agent, body, rotate, epoch, fencing, snapshot, session, permission, cli]
 - **关联**：[ADR-088](ADR-088-agent-service-package.md)（AgentService 分层与唯一 schema）、[ADR-091](ADR-091-agent-body-and-presence.md)（Agent / Body 内核、快照 v2、dispatch）、[ADR-093](ADR-093-hub-control-plane.md)（S5 hub 控制面）。方向裁决见个人侧决策记录（不在本仓库）。
 
 - **后续切片**：S3 Team 在 [ADR-091](ADR-091-agent-body-and-presence.md) 追加 S3 Addendum；S5 Hub 见 [ADR-093](ADR-093-hub-control-plane.md)。rotate 的入口、epoch fencing 与快照契约不变。
+
+## Errata（0.27 删除 rotate handoff）
+
+> 2026-10-25，只追加。上文正文保留当时结论；以下为当前事实。
+
+- `RotateInput.handoff_path`、owner 端点 / CLI `--handoff` / `agent` 工具 / `agents.rotate` 的
+  `handoff_path` 参数、`agent.rotating` payload 的 `handoff`、启动消息末尾的 `[handoff: …]`
+  均已删除。
+- `startup_prompt` 仍是必填自由文本，原样作为新 Body 的第一条消息；平台不解析、不插入路径。

@@ -367,7 +367,7 @@ describe('agent owner server', () => {
     expect(result.agents.map((entry) => entry.id)).toContain('m1');
   });
 
-  it('maps agents.rotate to owner-scoped service.rotate without from_session_id', async () => {
+  it('drops removed handoff_path and maps agents.rotate to owner-scoped service.rotate', async () => {
     const calls = emptyCalls();
     const server = await start(calls);
 
@@ -383,7 +383,6 @@ describe('agent owner server', () => {
     expect(calls.rotate[0]).toEqual({
       to: 'worker',
       startup_prompt: 'go',
-      handoff_path: 'h.md',
       from: 'main',
     });
     expect(calls.rotate[0]).not.toHaveProperty('from_session_id');

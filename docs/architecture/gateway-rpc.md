@@ -95,6 +95,6 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 - 统一结果 `{ results: [...] }`，与输入同序；单条失败 `{ ok: false, code, error }`，不影响其它条目。team-scoped control token 不能 create（逐条 `forbidden`）；update / close 只能操作同 `team_id` 成员，否则逐条 `not_found`。
 - `agents.send`：`{ messages: [{ to, content, conversation_id? }] }` → 成功 `{ ok: true, queued: true, message_id, state }`（strict send，不 resume）。
 - `agents.dispatch`：`{ messages: [{ to, content, conversation_id?, allow_fork? }] }` → 成功 `{ ok: true, status: 'queued', message_id, resolved_to, resolution, conversation_id? }`；业务拒绝逐条 `{ ok: false, code, error }`（`agent_left` / `resume_failed` / `not_visible` / `budget_*` / `conversation_team_mismatch`）。
-- `agents.rotate`：`{ agents: [{ to, startup_prompt, handoff_path?, from_session_id? }] }` → 成功 `{ ok: true, status: 'rotated', agent_id, from_session_id, to_session_id, epoch }`。
+- `agents.rotate`：`{ agents: [{ to, startup_prompt, from_session_id? }] }` → 成功 `{ ok: true, status: 'rotated', agent_id, from_session_id, to_session_id, epoch }`。
 - 三者 permission 都是 `write`；结构错误整体 `invalid_params`；team-scoped token 逐条校验 `team_id`。`principal.agent_id` 只由合成 owner 传输填 root owner id；handler 以 `ctx.principal.agent_id ?? 'human'` 作为 `from` / `viewer`。
 - owner 端点只做传输：用 `defineMethods([...createAgentMethods, ...createTeamMethods])` 组装与 gateway 同源的方法表，wire 名即 canonical；HTTP 状态映射 `invalid_params` 400、`forbidden` 403、`not_found` 404、`conflict` 409、`internal` 500。

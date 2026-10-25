@@ -193,7 +193,7 @@ export function createAgentTool(
       'any member; ' +
       'action=close releases member(s) (idempotent); action=list returns the roster; ' +
       'action=rotate moves an agent into a fresh body (new session, epoch + 1) with ' +
-      'startup_prompt as the first message and optional handoff_path appended to it. ' +
+      'startup_prompt as the first message. ' +
       'A body may only rotate itself; startup_prompt is required. ' +
       'Agent bodies may use rotate, post, send and list; new and close are owner-only. ' +
       'Batch: new/close accept `members` and send accepts `messages`; entries run in ' +
@@ -240,10 +240,6 @@ export function createAgentTool(
           type: 'string',
           description: 'rotate: required first message for the new body',
         },
-        handoff_path: {
-          type: 'string',
-          description: 'rotate: optional handoff path appended to the first message',
-        },
         state: {
           type: 'string',
           enum: [...MEMBER_STATES],
@@ -271,9 +267,6 @@ export function createAgentTool(
           const result = await service.rotate({
             to: (record.to ?? callerSession) as string,
             startup_prompt: record.startup_prompt as string,
-            ...(record.handoff_path !== undefined
-              ? { handoff_path: record.handoff_path as string }
-              : {}),
             from_session_id: callerSession,
             from: ownerId,
           });

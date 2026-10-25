@@ -166,6 +166,7 @@ describe('runFederationCommand team-info', () => {
     expect(result.stdout).toContain('Beta Lab');
     expect(result.stdout).toContain('Where beta works');
     expect(result.stdout).toContain('alice');
+    expect(result.stdout).not.toContain('default_principal');
     expect(result.stdout).toContain('online 1 / 2');
     expect(result.stdout).toContain('live');
     // token / 内部 id 绝不进入输出。

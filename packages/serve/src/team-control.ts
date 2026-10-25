@@ -15,11 +15,8 @@ export interface TeamSummaryLike {
   tenant_id: string;
   /** team-scoped control token 不含此字段（白名单脱敏）。 */
   workspace?: string;
-  handoff_path?: string;
   /** 0.21 additive：自由文本描述 */
   description?: string;
-  /** 0.21 additive：缺省接头人 */
-  default_principal?: string;
   /** team-scoped control token 不含此字段（白名单脱敏）。 */
   policy?: Record<string, unknown>;
   member_count: number;
@@ -157,8 +154,6 @@ export interface TeamCreateLikeInput {
   workspace: string;
   name?: string;
   description?: string;
-  default_principal?: string;
-  handoff_path?: string;
   policy?: Record<string, unknown>;
 }
 
@@ -167,8 +162,6 @@ export interface TeamUpdateLikeInput {
   team_id: string;
   name?: string;
   description?: string | null;
-  default_principal?: string | null;
-  handoff_path?: string | null;
   policy?: Record<string, unknown>;
 }
 

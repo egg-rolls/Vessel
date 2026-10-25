@@ -30,9 +30,6 @@ import type {
 /** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
 const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-/** principal 名字形状（DECISION-037 §2；`human` 也在字符集内） */
-const PRINCIPAL_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
 /** tenant id 字符集（DECISION-010 §2.5） */
 const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -201,16 +198,6 @@ function validateTeams(teams: unknown, errors: ConfigValidationError[]): void {
       });
     }
     if (
-      team.handoffPath !== undefined &&
-      (typeof team.handoffPath !== 'string' || team.handoffPath.trim() === '')
-    ) {
-      errors.push({
-        path: `${prefix}.handoffPath`,
-        message: 'team handoffPath must be a non-empty string',
-        value: team.handoffPath,
-      });
-    }
-    if (
       team.description !== undefined &&
       (typeof team.description !== 'string' || team.description.trim() === '')
     ) {
@@ -219,15 +206,6 @@ function validateTeams(teams: unknown, errors: ConfigValidationError[]): void {
         message: 'team description must be a non-empty string',
         value: team.description,
       });
-    }
-    if (team.defaultPrincipal !== undefined) {
-      if (typeof team.defaultPrincipal !== 'string' || !PRINCIPAL_RE.test(team.defaultPrincipal)) {
-        errors.push({
-          path: `${prefix}.defaultPrincipal`,
-          message: `team defaultPrincipal must match ${PRINCIPAL_RE.source}`,
-          value: team.defaultPrincipal,
-        });
-      }
     }
     if (team.policy !== undefined) {
       if (!isPlainObject(team.policy)) {

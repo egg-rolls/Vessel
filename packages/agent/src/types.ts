@@ -451,14 +451,12 @@ export type DispatchResult =
 
 /**
  * rotate：Agent 换一具新 Body；id / name / owner / 配置不变。
- * startup_prompt 必填，作为新 Body 的第一条消息；handoff_path 可选。
+ * startup_prompt 必填，作为新 Body 的第一条消息。
  */
 export interface RotateInput {
   /** agent id | 当前 Body 的 session_id | 唯一 name */
   to: string;
   startup_prompt: string;
-  /** 追加到第一条消息末尾，并进 rotate 事件 payload */
-  handoff_path?: string;
   /** 调用者当前 Body 的 session；agent 工具路径必填，CLI / owner 路径缺省 */
   from_session_id?: string;
   /** 可见性判定；缺省 DEFAULT_OWNER */
@@ -592,8 +590,6 @@ export interface AgentEvent {
   to_session_id?: string;
   /** 事件所属 Body（旧轮终态 / retired / reply.stale） */
   body_id?: string;
-  /** rotate 的 handoff 路径 */
-  handoff?: string;
   /** 旧 Body 轮末终态标记 */
   stale?: boolean;
   message_id?: string;
@@ -752,11 +748,8 @@ export interface TeamRecord {
   tenant_id: string;
   /** 归一化绝对路径；Team 的唯一 workspace 来源 */
   workspace: string;
-  handoff_path?: string;
   /** 自由文本：这个 Team 是什么、找谁、怎么用（0.21 additive） */
   description?: string;
-  /** 缺省接头人：present 成员名或 `owner`（0.21 additive；只展示） */
-  default_principal?: string;
   /** S3 只存不执行 */
   policy: Record<string, unknown>;
   created_at: number;
@@ -774,8 +767,6 @@ export interface TeamCreateInput {
   workspace: string;
   name?: string;
   description?: string;
-  default_principal?: string;
-  handoff_path?: string;
   policy?: Record<string, unknown>;
 }
 
@@ -783,8 +774,6 @@ export interface TeamCreateInput {
 export type TeamUpdatePatch = {
   name?: string;
   description?: string | null;
-  default_principal?: string | null;
-  handoff_path?: string | null;
   policy?: Record<string, unknown>;
 };
 
@@ -800,9 +789,7 @@ export interface TeamArchiveInput {
 export interface TeamDeclaration {
   name?: string;
   workspace: string;
-  handoff_path?: string;
   description?: string;
-  default_principal?: string;
   policy?: Record<string, unknown>;
 }
 
@@ -861,11 +848,8 @@ export interface TeamSummary {
   name: string;
   tenant_id: string;
   workspace: string;
-  handoff_path?: string;
   /** 0.21 additive */
   description?: string;
-  /** 0.21 additive */
-  default_principal?: string;
   policy: Record<string, unknown>;
   member_count: number;
   /** present && presence === 'live' 的成员数；从 roster 派生，不持久化 */
@@ -995,12 +979,10 @@ export interface TeamBinder {
   ensureForWorkspace(input: {
     workspace: string;
     name?: string;
-    handoff_path?: string;
     description?: string;
-    default_principal?: string;
     policy?: Record<string, unknown>;
   }): Promise<TeamRecord>;
-  /** 0.20 fork：只读 TeamRecord（workspace / handoff_path）；不存在返回 undefined */
+  /** 0.20 fork：只读 TeamRecord（workspace）；不存在返回 undefined */
   get(teamId: string): TeamRecord | undefined;
 }
 

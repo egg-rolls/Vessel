@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TeamPolicyError } from '@vessel-agent/config';
@@ -25,7 +25,7 @@ function withSeen(member: MemberStatus, lastSeen: number): MemberStatus {
 }
 
 describe('team directory persistence (0.21)', () => {
-  it('persists seeded description / default_principal across reload', async () => {
+  it('persists seeded description across reload', async () => {
     const dataDir = await tempDir();
     const workspace = join(dataDir, 'seed', 'proj');
     const store = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
@@ -35,24 +35,21 @@ describe('team directory persistence (0.21)', () => {
         workspace,
         name: 'Alpha',
         description: 'find alice for releases',
-        default_principal: 'alice',
       },
     ]);
     const seeded = store.list()[0];
     if (seeded === undefined) throw new Error('expected seeded team');
     expect(seeded.description).toBe('find alice for releases');
-    expect(seeded.default_principal).toBe('alice');
 
     const reopened = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
     await reopened.ready();
     expect(reopened.get(seeded.team_id)).toMatchObject({
       name: 'Alpha',
       description: 'find alice for releases',
-      default_principal: 'alice',
     });
   });
 
-  it('copies ensureForWorkspace description / default_principal into team.json', async () => {
+  it('copies ensureForWorkspace description into team.json', async () => {
     const dataDir = await tempDir();
     const workspace = join(dataDir, 'ensure', 'proj');
     const first = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
@@ -60,15 +57,50 @@ describe('team directory persistence (0.21)', () => {
     const created = await first.ensureForWorkspace({
       workspace,
       description: 'handoff mailbox',
-      default_principal: 'human',
     });
 
     const reopened = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
     await reopened.ready();
     expect(reopened.get(created.team_id)).toMatchObject({
       description: 'handoff mailbox',
-      default_principal: 'human',
     });
+  });
+
+  it('ignores removed keys in a hand-written team.json and drops them on persist', async () => {
+    const dataDir = await tempDir();
+    const tenantDir = teamsDirPath(dataDir, 'default');
+    const workspace = join(dataDir, 'legacy-keys');
+    await mkdir(join(tenantDir, 'legacy-keys'), { recursive: true });
+    const path = join(tenantDir, 'legacy-keys', 'team.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        v: 1,
+        team_id: 'legacy-keys',
+        name: 'Legacy Keys',
+        tenant_id: 'default',
+        workspace,
+        policy: {},
+        created_at: 1,
+        description: 'kept',
+        default_principal: 'alice',
+        handoff_path: 'HANDOFF.md',
+      }),
+    );
+
+    const store = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    await store.ready();
+    const record = store.get('legacy-keys');
+    expect(record?.description).toBe('kept');
+    expect(record !== undefined && 'default_principal' in record).toBe(false);
+    expect(record !== undefined && 'handoff_path' in record).toBe(false);
+
+    await store.update('legacy-keys', { name: 'Renamed' });
+    const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    expect(raw.name).toBe('Renamed');
+    expect(raw.description).toBe('kept');
+    expect('default_principal' in raw).toBe(false);
+    expect('handoff_path' in raw).toBe(false);
   });
 
   it('rejects a hand-edited members accept instead of salvaging it to principal', async () => {
@@ -118,7 +150,6 @@ describe('team directory persistence (0.21)', () => {
         policy: {},
         created_at: 1,
         description: 123,
-        default_principal: '',
       }),
     );
 
@@ -128,7 +159,6 @@ describe('team directory persistence (0.21)', () => {
     const record = store.get('bad-optional');
     expect(record?.name).toBe('Bad Optional');
     expect(record?.description).toBeUndefined();
-    expect(record?.default_principal).toBeUndefined();
   });
 });
 

@@ -111,3 +111,11 @@ tags: [federation, cross-node, team, allowlist, hop, tls, token]
   validator 只校验布尔值类型，不改变缺省。
 - `federation.peers[]` 仍是显式 allowlist；没有 peer 就没有对端，也不会自动发现。
 - 0.21 Addendum 的 principal 寻址与 `accept` 语义不变。
+
+## Errata（0.27 删除 team-info `default_principal`）
+
+> 2026-10-25，只追加。上文正文保留当时结论。
+
+- federation team-info 响应不再返回 `default_principal`；`description` / 成员列表 / 计数 /
+  `last_seen` 不变。
+- 不新增协议版本号；旧 peer 多返回该键会被客户端忽略。

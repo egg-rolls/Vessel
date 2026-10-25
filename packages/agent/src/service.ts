@@ -11,7 +11,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { isAbsolute, join, normalize } from 'node:path';
 import {
   assertTenantId,
   type EventStream,
@@ -546,13 +545,8 @@ export class AgentServiceImpl implements AgentService {
     if (teamId === undefined || this.teamBinder === undefined) {
       return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: no_team' };
     }
-    const team = this.teamBinder.get(teamId);
-    if (team === undefined) {
+    if (this.teamBinder.get(teamId) === undefined) {
       return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: no_team' };
-    }
-    const handoffPath = team.handoff_path;
-    if (!nonEmpty(handoffPath)) {
-      return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: no_handoff' };
     }
 
     // 用现有 forked_from 自描述去重，不新增源侧指针、不写源记录。
@@ -577,15 +571,6 @@ export class AgentServiceImpl implements AgentService {
       return { ok: false, code: 'fork_failed', reason: 'fork_failed: session_id_collision' };
     }
 
-    // workspace 的真相源是 TeamRecord；成员 runtime 无 cwd，handoff 必须是绝对路径。
-    const handoff = isAbsolute(handoffPath)
-      ? normalize(handoffPath)
-      : normalize(join(team.workspace, handoffPath));
-    const basePrompt = source.systemPrompt?.trimEnd();
-    const systemPrompt = nonEmpty(basePrompt)
-      ? `${basePrompt}\n\nHandoff: ${handoff}`
-      : `Handoff: ${handoff}`;
-
     const record: MemberRecord = {
       id,
       sessionId: id,
@@ -600,8 +585,8 @@ export class AgentServiceImpl implements AgentService {
       currentBody: { session_id: id, epoch: 0, started_at: this.now() },
       bodyHistory: [],
       forkedFrom: source.id,
-      systemPrompt,
     };
+    if (source.systemPrompt !== undefined) record.systemPrompt = source.systemPrompt;
     if (source.parentId !== undefined) record.parentId = source.parentId;
     if (source.model !== undefined) record.model = source.model;
     else if (this.defaultModel !== undefined) record.model = this.defaultModel;
@@ -1017,7 +1002,6 @@ export class AgentServiceImpl implements AgentService {
     }
 
     const startupPrompt = readContent(raw, 'startup_prompt');
-    const handoffPath = optionalString(input.handoff_path);
 
     // 指针切换前捕获旧 Body 身份与可回滚状态。
     const oldPointer: AgentBodyPointer = target.currentBody ?? {
@@ -1058,7 +1042,6 @@ export class AgentServiceImpl implements AgentService {
       from_session_id: fromSessionId,
       to_session_id: toSessionId,
       epoch: toEpoch,
-      ...(handoffPath !== undefined ? { handoff: handoffPath } : {}),
     });
 
     try {
@@ -1142,7 +1125,7 @@ export class AgentServiceImpl implements AgentService {
         id: this.newId(),
         from: 'system',
         to: target.id,
-        content: startupPrompt + (handoffPath !== undefined ? `\n\n[handoff: ${handoffPath}]` : ''),
+        content: startupPrompt,
         ts: this.now(),
         conversation_id: startupConversationId,
       });
@@ -1596,7 +1579,7 @@ export class AgentServiceImpl implements AgentService {
     const text =
       `[system] Context/usage limit warning: ${key} is at ${current}/${max} (>= ${threshold}). ` +
       'If your context is nearly full, write a handoff and call agent.rotate with ' +
-      'startup_prompt (and handoff_path if you wrote one) to continue in a fresh body.';
+      'startup_prompt to continue in a fresh body.';
     // 系统提示继承当前 turn 的会话；事件迟到时也不能丢分组。
     const conversationId = queue.activeConversationId ?? generateConversationId(this.newId);
     this.enqueueMessage(record, text, 'system', conversationId, 'limit_warning');

@@ -383,7 +383,6 @@ describe('0.19 S3 teams 校验', () => {
           {
             name: 'alpha',
             workspace: './alpha',
-            handoffPath: './alpha/handoff.md',
             policy: { visibility: 'team' },
           },
           { workspace: '/tmp/beta' },
@@ -411,12 +410,19 @@ describe('0.19 S3 teams 校验', () => {
     expect(paths).toContain('teams[2].workspace');
   });
 
-  it('name / handoffPath 可选，但存在时必须是非空字符串', () => {
+  it('name 可选，但存在时必须是非空字符串', () => {
     const paths = pathsOf({
-      teams: [{ workspace: './x', name: '', handoffPath: '  ' }],
+      teams: [{ workspace: './x', name: '' }],
     });
     expect(paths).toContain('teams[0].name');
-    expect(paths).toContain('teams[0].handoffPath');
+  });
+
+  it('旧的 handoffPath / defaultPrincipal 键静默忽略，不再校验', () => {
+    expect(
+      pathsOf({
+        teams: [{ workspace: './x', handoffPath: '  ', defaultPrincipal: 'not a principal' }],
+      } as unknown as VesselConfig),
+    ).toEqual([]);
   });
 
   it('policy 必须是对象', () => {
@@ -445,13 +451,14 @@ describe('0.19 S3 teams 校验', () => {
     expect(errorsOf({ teams: [{ workspace: './a' }, { workspace: './b' }] })).toEqual([]);
   });
 
-  it('YAML snake_case 映射到 handoffPath', async () => {
+  it('YAML snake_case 映射已知字段；旧 handoff_path 键被忽略', async () => {
     const file = tmpYaml(
       [
         'teams:',
         '  - name: alpha',
         '    workspace: ./alpha',
         '    handoff_path: ./alpha/handoff.md',
+        '    default_principal: alice',
         '    policy:',
         '      max_members: 4',
       ].join('\n'),
@@ -461,11 +468,10 @@ describe('0.19 S3 teams 校验', () => {
       userConfigPath: missingPath(),
     });
     expect(validation.errors).toEqual([]);
-    expect(config.teams).toEqual([
+    expect(config.teams).toMatchObject([
       {
         name: 'alpha',
         workspace: './alpha',
-        handoffPath: './alpha/handoff.md',
         policy: { maxMembers: 4 },
       },
     ]);

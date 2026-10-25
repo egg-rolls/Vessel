@@ -378,12 +378,8 @@ export interface TeamConfigInput {
    * `~` 展开由装配层负责。
    */
   workspace: string;
-  /** 启动嘱托 / handoff 文件路径（可选） */
-  handoffPath?: string;
   /** 自由文本：这个 Team 是什么、找谁、怎么用（0.21 additive） */
   description?: string;
-  /** 缺省接头人：present 成员名或 `owner`（0.21 additive；只展示，不自动改投） */
-  defaultPrincipal?: string;
   /** Team 策略；顶层键开放，`permission` / `budget` 由 `parseTeamPolicy` 校验 */
   policy?: Record<string, unknown>;
 }

@@ -164,7 +164,6 @@ export type AgentCommand =
       json: boolean;
       to: string;
       startupPrompt: string;
-      handoffPath?: string;
     }
   | { kind: 'close'; json: boolean; members: string[] }
   | { kind: 'list'; json: boolean; visibility?: AgentVisibilityArg; state?: AgentStateArg };
@@ -181,8 +180,6 @@ export type TeamCommand =
       workspace: string;
       name?: string;
       description?: string;
-      defaultPrincipal?: string;
-      handoffPath?: string;
       /** 内联 JSON 对象；与 policyFile 互斥。 */
       policy?: Record<string, unknown>;
       /** 从文件读取 JSON 对象；与 policy 互斥。优先用于复杂策略。 */
@@ -195,8 +192,6 @@ export type TeamCommand =
       teamId: string;
       name?: string;
       description?: string | null;
-      defaultPrincipal?: string | null;
-      handoffPath?: string | null;
       /** 内联 JSON 对象；与 policyFile 互斥。整体替换。 */
       policy?: Record<string, unknown>;
       /** 从文件读取 JSON 对象；与 policy 互斥。整体替换。 */
@@ -2371,7 +2366,6 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   if (sub === 'rotate') {
     let json = false;
     let startupPrompt: string | undefined;
-    let handoffPath: string | undefined;
     const positional: string[] = [];
     for (let i = 0; i < tail.length; i++) {
       const a = tail[i] ?? '';
@@ -2383,11 +2377,10 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
         json = true;
         continue;
       }
-      if (a === '--startup' || a === '--handoff') {
+      if (a === '--startup') {
         const value = readFlagValue(tail, i, a);
         if (!value.ok) return value;
-        if (a === '--startup') startupPrompt = value.value;
-        else handoffPath = value.value;
+        startupPrompt = value.value;
         i = value.next;
         continue;
       }
@@ -2412,7 +2405,6 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       json,
       to,
       startupPrompt,
-      ...(handoffPath !== undefined ? { handoffPath } : {}),
     };
     return { ok: true, args };
   }
@@ -2646,8 +2638,6 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
     let json = false;
     let name: string | undefined;
     let description: string | undefined;
-    let defaultPrincipal: string | undefined;
-    let handoffPath: string | undefined;
     let policy: Record<string, unknown> | undefined;
     let policyFile: string | undefined;
     const positional: string[] = [];
@@ -2661,19 +2651,12 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
         json = true;
         continue;
       }
-      if (
-        a === '--name' ||
-        a === '--description' ||
-        a === '--default-principal' ||
-        a === '--handoff'
-      ) {
+      if (a === '--name' || a === '--description') {
         const value = readFlagValue(tail, i, a);
         if (!value.ok) return value;
         if (value.value === '') return { ok: false, error: `Invalid ${a}: empty value` };
         if (a === '--name') name = value.value;
-        else if (a === '--description') description = value.value;
-        else if (a === '--default-principal') defaultPrincipal = value.value;
-        else handoffPath = value.value;
+        else description = value.value;
         i = value.next;
         continue;
       }
@@ -2717,8 +2700,6 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
       workspace,
       ...(name !== undefined ? { name } : {}),
       ...(description !== undefined ? { description } : {}),
-      ...(defaultPrincipal !== undefined ? { defaultPrincipal } : {}),
-      ...(handoffPath !== undefined ? { handoffPath } : {}),
       ...(policy !== undefined ? { policy } : {}),
       ...(policyFile !== undefined ? { policyFile } : {}),
       json,
@@ -2730,8 +2711,6 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
     let json = false;
     let name: string | undefined;
     let description: string | null | undefined;
-    let defaultPrincipal: string | null | undefined;
-    let handoffPath: string | null | undefined;
     let policy: Record<string, unknown> | undefined;
     let policyFile: string | undefined;
     const positional: string[] = [];
@@ -2745,29 +2724,16 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
         json = true;
         continue;
       }
-      if (
-        a === '--clear-description' ||
-        a === '--clear-default-principal' ||
-        a === '--clear-handoff'
-      ) {
-        if (a === '--clear-description') description = null;
-        else if (a === '--clear-default-principal') defaultPrincipal = null;
-        else handoffPath = null;
+      if (a === '--clear-description') {
+        description = null;
         continue;
       }
-      if (
-        a === '--name' ||
-        a === '--description' ||
-        a === '--default-principal' ||
-        a === '--handoff'
-      ) {
+      if (a === '--name' || a === '--description') {
         const value = readFlagValue(tail, i, a);
         if (!value.ok) return value;
         if (value.value === '') return { ok: false, error: `Invalid ${a}: empty value` };
         if (a === '--name') name = value.value;
-        else if (a === '--description') description = value.value;
-        else if (a === '--default-principal') defaultPrincipal = value.value;
-        else handoffPath = value.value;
+        else description = value.value;
         i = value.next;
         continue;
       }
@@ -2809,8 +2775,6 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
     if (
       name === undefined &&
       description === undefined &&
-      defaultPrincipal === undefined &&
-      handoffPath === undefined &&
       policy === undefined &&
       policyFile === undefined
     ) {
@@ -2821,8 +2785,6 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
       teamId,
       ...(name !== undefined ? { name } : {}),
       ...(description !== undefined ? { description } : {}),
-      ...(defaultPrincipal !== undefined ? { defaultPrincipal } : {}),
-      ...(handoffPath !== undefined ? { handoffPath } : {}),
       ...(policy !== undefined ? { policy } : {}),
       ...(policyFile !== undefined ? { policyFile } : {}),
       json,

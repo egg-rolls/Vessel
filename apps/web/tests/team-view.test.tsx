@@ -257,6 +257,13 @@ describe('TeamChat', () => {
     expect(markup).toContain(t('team.composer.noMention'));
   });
 
+  test('does not render the removed default-principal label', () => {
+    const markup = renderChat();
+    expect(markup).not.toContain('默认接头人');
+    expect(markup).not.toContain('Default principal');
+    expect(markup).not.toContain('defaultPrincipal');
+  });
+
   test('renders the empty chat state', () => {
     const markup = renderChat({ initialDetail: emptyDetail });
     expect(markup).toContain('state-empty');

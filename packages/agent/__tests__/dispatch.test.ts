@@ -113,7 +113,6 @@ class FakeTeamBinder implements TeamBinder {
   async ensureForWorkspace(input: {
     workspace: string;
     name?: string;
-    handoff_path?: string;
     policy?: Record<string, unknown>;
   }): Promise<TeamRecord> {
     this.ensured.push({ workspace: input.workspace, name: input.name });

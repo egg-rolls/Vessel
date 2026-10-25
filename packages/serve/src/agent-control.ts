@@ -102,7 +102,6 @@ export interface AgentDispatchLikeInput {
 export interface AgentRotateLikeInput {
   to: string;
   startup_prompt: string;
-  handoff_path?: string;
   from_session_id?: string;
   from?: string;
 }

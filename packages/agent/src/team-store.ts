@@ -10,7 +10,7 @@
  * - `ready()` 加载全部 `team.json`，缺失目录 = 空；损坏 / 非法 / v!==1 记 error 并移出可用集合，
  *   启动永不抛错；
  * - 损坏的 `team_id` 不得被 `seed()` / `ensureForWorkspace()` 在同路径重建（会丢 policy /
- *   default_principal / handoff）：抛 `TeamMetadataCorruptError` 或跳过，原文件保持不动；
+ *   description）：抛 `TeamMetadataCorruptError` 或跳过，原文件保持不动；
  * - `seed()` 只补写缺失的 `team.json`，冲突只 warning，永不覆盖既有 name / policy；
  * - `ensureForWorkspace()` 全局串行 + 同 workspace 单飞，幂等：两次并发只会建一个目录；
  * - 不建第二个 roster 真相源；roster 由 Agent 记录派生（不在本文件）。
@@ -100,7 +100,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** `team.json` 损坏：拒绝在原路径重建（否则会静默丢掉 policy / default_principal / handoff）。 */
+/** `team.json` 损坏：拒绝在原路径重建（否则会静默丢掉 policy / description）。 */
 export class TeamMetadataCorruptError extends Error {
   readonly code = 'team_metadata_corrupt';
 
@@ -140,14 +140,6 @@ function applyTeamUpdate(record: TeamRecord, patch: TeamUpdatePatch): TeamRecord
     if (patch.description === null) delete next.description;
     else next.description = patch.description;
   }
-  if (patch.default_principal !== undefined) {
-    if (patch.default_principal === null) delete next.default_principal;
-    else next.default_principal = patch.default_principal;
-  }
-  if (patch.handoff_path !== undefined) {
-    if (patch.handoff_path === null) delete next.handoff_path;
-    else next.handoff_path = patch.handoff_path;
-  }
   if (patch.policy !== undefined) next.policy = { ...patch.policy };
   return next;
 }
@@ -179,13 +171,9 @@ function parseTeamRecord(raw: string, dirName: string, tenantId: string): TeamRe
       policy: parsed.policy as Record<string, unknown>,
       created_at: parsed.created_at,
     };
-    if (typeof parsed.handoff_path === 'string') record.handoff_path = parsed.handoff_path;
     // 0.21 additive：可选字段只接受非空 string；手改非法值忽略该字段，不让整个 Team 失效。
     if (typeof parsed.description === 'string' && parsed.description !== '') {
       record.description = parsed.description;
-    }
-    if (typeof parsed.default_principal === 'string' && parsed.default_principal !== '') {
-      record.default_principal = parsed.default_principal;
     }
     // S10.3 additive：非法值忽略该字段，不让整个 Team 失效。
     if (typeof parsed.archived_at === 'number' && Number.isFinite(parsed.archived_at)) {
@@ -279,7 +267,7 @@ export class FileTeamStore implements TeamStore {
 
         const teamId = teamIdForWorkspace(workspace, (id) => this.teams.get(id)?.workspace);
         if (this.corruptTeamIds.has(teamId)) {
-          // 声明对应的 team.json 已损坏：补写会覆盖原文件并丢掉 policy / handoff。
+          // 声明对应的 team.json 已损坏：补写会覆盖原文件并丢掉 policy / description。
           this.logger.error('team.metadata.corrupt', {
             path: teamMetadataPath(this.dataDir, this.tenantId, teamId),
             action: 'seed_skipped',
@@ -299,9 +287,7 @@ export class FileTeamStore implements TeamStore {
         const record = this.buildRecord(teamId, workspace, {
           workspace,
           name: declaration.name,
-          handoff_path: declaration.handoff_path,
           description: declaration.description,
-          default_principal: declaration.default_principal,
           policy: declaration.policy,
         });
         await this.persist(record);
@@ -529,14 +515,8 @@ export class FileTeamStore implements TeamStore {
       policy: { ...(input.policy ?? {}) },
       created_at: this.nowFn(),
     };
-    if (input.handoff_path !== undefined && input.handoff_path !== '') {
-      record.handoff_path = input.handoff_path;
-    }
     if (input.description !== undefined && input.description !== '') {
       record.description = input.description;
-    }
-    if (input.default_principal !== undefined && input.default_principal !== '') {
-      record.default_principal = input.default_principal;
     }
     return record;
   }

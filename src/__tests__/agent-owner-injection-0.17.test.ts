@@ -604,24 +604,14 @@ describe('agent rotate CLI parsing 0.19', () => {
     return result.error;
   }
 
-  it('parses <to>, --startup, optional --handoff and --json', () => {
+  it('parses <to>, --startup and --json', () => {
     expect(
-      parsed([
-        'agent',
-        'rotate',
-        'worker',
-        '--startup',
-        'take over',
-        '--handoff',
-        'handoff.md',
-        '--json',
-      ]).agentCommand,
+      parsed(['agent', 'rotate', 'worker', '--startup', 'take over', '--json']).agentCommand,
     ).toEqual({
       kind: 'rotate',
       json: true,
       to: 'worker',
       startupPrompt: 'take over',
-      handoffPath: 'handoff.md',
     });
   });
 
@@ -630,6 +620,9 @@ describe('agent rotate CLI parsing 0.19', () => {
     expect(error(['agent', 'rotate', 'worker'])).toContain('--startup');
     expect(error(['agent', 'rotate', 'worker', '--startup', ''])).toContain('--startup');
     expect(error(['agent', 'rotate', 'worker', '--startup', 'x', '--bogus'])).toContain(
+      'Unknown argument',
+    );
+    expect(error(['agent', 'rotate', 'worker', '--startup', 'x', '--handoff', 'h.md'])).toContain(
       'Unknown argument',
     );
   });

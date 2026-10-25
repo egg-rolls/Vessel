@@ -69,7 +69,7 @@ function assertTeamScope(scope: string | undefined, teamId: string): void {
 
 /**
  * team-scoped token 的元数据白名单：去掉主机路径与策略
- * （`workspace` / `handoff_path` / `policy`）。
+ * （`workspace` / `policy`）。
  * 只用于 `teams.list` / `teams.get.team`；`members` / `messages` 属于 data plane，不脱敏。
  */
 function redactTeamSummary(team: TeamSummaryLike): TeamSummaryLike {
@@ -80,9 +80,8 @@ function redactTeamSummary(team: TeamSummaryLike): TeamSummaryLike {
     member_count: team.member_count,
     online_count: team.online_count,
     created_at: team.created_at,
-    // 0.21：描述与默认接头人是展示字段，不随主机路径一起脱敏。
+    // 0.21：描述是展示字段，不随主机路径一起脱敏。
     ...(team.description !== undefined ? { description: team.description } : {}),
-    ...(team.default_principal !== undefined ? { default_principal: team.default_principal } : {}),
     ...(team.archived_at !== undefined ? { archived_at: team.archived_at } : {}),
   };
 }
@@ -180,8 +179,6 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           workspace: { type: 'string', minLength: 1 },
           name: { type: 'string', minLength: 1 },
           description: { type: 'string' },
-          default_principal: { type: 'string', minLength: 1 },
-          handoff_path: { type: 'string' },
           policy: { type: 'object' },
         },
       },
@@ -195,15 +192,11 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           const workspace = stringParam(params, 'workspace');
           const name = optionalString(params, 'name');
           const description = optionalString(params, 'description');
-          const defaultPrincipal = optionalString(params, 'default_principal');
-          const handoffPath = optionalString(params, 'handoff_path');
           const policy = optionalPolicy(params, 'policy');
           return await control.create({
             workspace,
             ...(name !== undefined ? { name } : {}),
             ...(description !== undefined ? { description } : {}),
-            ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
-            ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
             ...(policy !== undefined ? { policy } : {}),
           });
         } catch (error) {
@@ -222,8 +215,6 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           name: { type: 'string', minLength: 1 },
           // nullable 字段：由 handler 判定 string | null。
           description: {},
-          default_principal: {},
-          handoff_path: {},
           policy: { type: 'object' },
         },
       },
@@ -235,15 +226,11 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           assertTeamScope(teamScopeOf(ctx), teamId);
           const name = optionalString(params, 'name');
           const description = optionalNullableString(params, 'description');
-          const defaultPrincipal = optionalNullableString(params, 'default_principal');
-          const handoffPath = optionalNullableString(params, 'handoff_path');
           const policy = optionalPolicy(params, 'policy');
           return await control.update({
             team_id: teamId,
             ...(name !== undefined ? { name } : {}),
             ...(description !== undefined ? { description } : {}),
-            ...(defaultPrincipal !== undefined ? { default_principal: defaultPrincipal } : {}),
-            ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
             ...(policy !== undefined ? { policy } : {}),
           });
         } catch (error) {

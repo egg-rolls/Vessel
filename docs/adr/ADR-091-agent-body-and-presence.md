@@ -235,3 +235,14 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
 - 仓库内可读的相邻决策见 [ADR-088](ADR-088-agent-service-package.md)（AgentService 分层）、
   [ADR-092](ADR-092-agent-rotate-and-epoch-fencing.md)（rotate / epoch fencing）与
   [ADR-093](ADR-093-hub-control-plane.md)（hub 控制面）。
+
+## Errata（0.27 删除 Team handoff / 默认接头人）
+
+> 2026-10-25，只追加。0.27 删除 `default_principal` 与 `handoff_path`；上文正文保留当时结论。
+
+- `TeamRecord.handoff_path` / `TeamRecord.default_principal` 已删除；`team.json` 旧键读取时忽略，
+  下一次写盘自然丢弃，无迁移。
+- 0.20 fork Addendum 的 `Handoff:` system prompt 注入与 `no_handoff` 拒绝已删除；fork 不再依赖
+  Team handoff，其余闸门（private / no_team / already_forked / single-flight）不变。
+- S2 Addendum 的 CLI `vessel agent rotate … --handoff` 同样删除，详见 ADR-092 Errata。
+- Team 不再有默认接头人；无 `@` 的 post 仍只写日志。

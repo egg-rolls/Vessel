@@ -6,8 +6,9 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { teamSummarySchema } from '../src/gateway/methods/schemas';
 import { createTeamMethods } from '../src/gateway/methods/teams';
-import { RpcError, type RpcMethodContext } from '../src/rpc';
+import { RpcError, type RpcMethodContext, type RpcMethodDefinition } from '../src/rpc';
 import type {
   TeamControlLike,
   TeamCreateLikeInput,
@@ -83,10 +84,15 @@ function context(overrides: Partial<RpcMethodContext['principal']> = {}): RpcMet
   };
 }
 
-function methodOf(control: TeamControlLike, name: string) {
+function methodOf(control: TeamControlLike, name: string): RpcMethodDefinition {
   const method = createTeamMethods({ teams: control }).find((entry) => entry.name === name);
   if (method === undefined) throw new Error(`missing method: ${name}`);
   return method;
+}
+
+function paramsProperties(method: RpcMethodDefinition): Record<string, unknown> {
+  const schema = method.params_schema as { properties?: Record<string, unknown> } | undefined;
+  return schema?.properties ?? {};
 }
 
 async function expectRpcError(
@@ -137,16 +143,49 @@ describe('teams.create', () => {
   });
 });
 
+describe('retired default_principal / handoff_path', () => {
+  it('does not declare either key in params or team summary schemas', () => {
+    const { control } = fakeTeams();
+    for (const name of ['teams.create', 'teams.update']) {
+      const properties = paramsProperties(methodOf(control, name));
+      expect(properties).not.toHaveProperty('default_principal');
+      expect(properties).not.toHaveProperty('handoff_path');
+    }
+    expect(teamSummarySchema.properties).not.toHaveProperty('default_principal');
+    expect(teamSummarySchema.properties).not.toHaveProperty('handoff_path');
+  });
+
+  it('silently ignores the legacy params from old clients', async () => {
+    const { control, calls } = fakeTeams();
+    await methodOf(control, 'teams.create').handler(
+      {
+        workspace: '/ws/alpha',
+        default_principal: 'alice',
+        handoff_path: '/ws/alpha/HANDOFF.md',
+      },
+      context(),
+    );
+    await methodOf(control, 'teams.update').handler(
+      { team_id: 'alpha', default_principal: null, handoff_path: null },
+      context(),
+    );
+    expect(calls.create).toEqual([{ workspace: '/ws/alpha' }]);
+    expect(calls.update).toEqual([{ team_id: 'alpha' }]);
+    for (const forwarded of [...calls.create, ...calls.update]) {
+      expect('default_principal' in forwarded).toBe(false);
+      expect('handoff_path' in forwarded).toBe(false);
+    }
+  });
+});
+
 describe('teams.update / teams.archive', () => {
   it('lets a team-scoped token update its own team and forwards null clears', async () => {
     const { control, calls } = fakeTeams();
     await methodOf(control, 'teams.update').handler(
-      { team_id: 'alpha', description: null, default_principal: 'main' },
+      { team_id: 'alpha', description: null },
       context({ scope: 'control', team_id: 'alpha' }),
     );
-    expect(calls.update).toEqual([
-      { team_id: 'alpha', description: null, default_principal: 'main' },
-    ]);
+    expect(calls.update).toEqual([{ team_id: 'alpha', description: null }]);
   });
 
   it('does not leak another team to a team-scoped token', async () => {

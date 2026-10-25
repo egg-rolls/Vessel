@@ -131,7 +131,6 @@ function methodParams(command: AgentCommand): {
           {
             to: command.to,
             startup_prompt: command.startupPrompt,
-            ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
           },
         ],
       },

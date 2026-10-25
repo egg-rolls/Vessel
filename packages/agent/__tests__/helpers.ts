@@ -260,7 +260,6 @@ export class MemoryTeamStore implements TeamStore {
   async ensureForWorkspace(input: {
     workspace: string;
     name?: string;
-    handoff_path?: string;
     policy?: Record<string, unknown>;
   }): Promise<TeamRecord> {
     const existing = this.records.find((record) => record.workspace === input.workspace);
@@ -280,10 +279,6 @@ export class MemoryTeamStore implements TeamStore {
       workspace: input.workspace,
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
-      ...(input.default_principal !== undefined
-        ? { default_principal: input.default_principal }
-        : {}),
-      ...(input.handoff_path !== undefined ? { handoff_path: input.handoff_path } : {}),
       ...(input.policy !== undefined ? { policy: input.policy } : {}),
     });
     this.records.push(record);
@@ -300,14 +295,6 @@ export class MemoryTeamStore implements TeamStore {
     if (patch.description !== undefined) {
       if (patch.description === null) delete next.description;
       else next.description = patch.description;
-    }
-    if (patch.default_principal !== undefined) {
-      if (patch.default_principal === null) delete next.default_principal;
-      else next.default_principal = patch.default_principal;
-    }
-    if (patch.handoff_path !== undefined) {
-      if (patch.handoff_path === null) delete next.handoff_path;
-      else next.handoff_path = patch.handoff_path;
     }
     if (patch.policy !== undefined) next.policy = { ...patch.policy };
     this.records[index] = next;

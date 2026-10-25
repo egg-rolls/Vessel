@@ -1131,7 +1131,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     const teamDeclarations: TeamDeclaration[] = (config.teams ?? []).map((team) => ({
       ...(team.name !== undefined ? { name: team.name } : {}),
       workspace: team.workspace,
-      ...(team.handoffPath !== undefined ? { handoff_path: team.handoffPath } : {}),
       ...(team.policy !== undefined ? { policy: team.policy } : {}),
     }));
     const defaultWorkspace = resolveDefaultTeamWorkspace(config, teamDeclarations, logger);

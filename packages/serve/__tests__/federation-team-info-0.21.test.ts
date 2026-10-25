@@ -97,7 +97,6 @@ function detail(
       workspace: '/secret/workspace',
       policy: { federation: { accept: 'principal' } },
       description: 'Where the lab meets',
-      default_principal: 'alice',
       member_count: members.length,
       online_count: 0,
       created_at: 0,
@@ -184,7 +183,6 @@ describe('federation team-info', () => {
       team_id: TEAM,
       name: 'Lab',
       description: 'Where the lab meets',
-      default_principal: 'alice',
       member_count: 2,
       online_count: 1,
       members: [
@@ -200,13 +198,16 @@ describe('federation team-info', () => {
     expect(serialized).not.toContain('hidden');
   });
 
-  it('omits default_principal when it is neither owner nor a visible member', async () => {
+  it('never emits default_principal even when the underlying team carries it', async () => {
     const teams = new FakeTeams();
-    teams.team = detail([member('alice')], { default_principal: 'ghost' });
+    const legacy = detail([member('alice', { presence: 'live' })]);
+    // 旧数据 / 旧 peer 可能仍在运行时对象上带这个已删除的键。
+    Object.assign(legacy.team, { default_principal: 'ghost' });
+    teams.team = legacy;
     const response = await teamInfo(routeFor(teams, { allowDirectory: true }), request());
     expect(response.status).toBe(200);
     const body = (await response.json()) as Record<string, unknown>;
-    expect(body.default_principal).toBeUndefined();
+    expect(body).not.toHaveProperty('default_principal');
   });
 
   it('returns 404 for a non-configured team or a missing local Team', async () => {

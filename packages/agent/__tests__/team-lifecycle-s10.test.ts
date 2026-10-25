@@ -196,31 +196,18 @@ describe('TeamService.archive (S10.3)', () => {
 });
 
 describe('FileTeamStore.update (S10.3)', () => {
-  it('null clears optional fields, undefined leaves them, and policy is replaced', async () => {
+  it('null clears description, undefined leaves it, and policy is replaced', async () => {
     const { dataDir, store } = await makeHarness();
     const created = await store.create({
       workspace: join(dataDir, 'ws', 'alpha'),
       name: 'Alpha',
       description: 'desc',
-      default_principal: 'alice',
-      handoff_path: '/h',
       policy: { a: 1 },
     });
     const id = created.record.team_id;
 
-    const cleared = await store.update(id, { default_principal: null });
-    expect('default_principal' in cleared).toBe(false);
-    expect(cleared.description).toBe('desc');
-    expect(cleared.handoff_path).toBe('/h');
-    expect(cleared.policy).toEqual({ a: 1 });
-
-    const kept = await store.update(id, {
-      description: undefined,
-      handoff_path: null,
-      policy: { b: 2 },
-    });
+    const kept = await store.update(id, { description: undefined, policy: { b: 2 } });
     expect(kept.description).toBe('desc');
-    expect('handoff_path' in kept).toBe(false);
     expect(kept.policy).toEqual({ b: 2 });
     // Immutable fields never move.
     expect(kept.v).toBe(1);
@@ -229,17 +216,41 @@ describe('FileTeamStore.update (S10.3)', () => {
     expect(kept.workspace).toBe(created.record.workspace);
     expect(kept.created_at).toBe(created.record.created_at);
 
+    const cleared = await store.update(id, { description: null });
+    expect('description' in cleared).toBe(false);
+    expect(cleared.policy).toEqual({ b: 2 });
+
     const raw = JSON.parse(
       await readFile(teamMetadataPath(dataDir, 'default', id), 'utf8'),
     ) as Record<string, unknown>;
     expect(raw.policy).toEqual({ b: 2 });
-    expect(raw.description).toBe('desc');
-    expect('handoff_path' in raw).toBe(false);
-    expect('default_principal' in raw).toBe(false);
+    expect('description' in raw).toBe(false);
 
     const reopened = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
     await reopened.ready();
-    expect(reopened.get(id)).toEqual(kept);
+    expect(reopened.get(id)).toEqual(cleared);
+  });
+
+  it('never writes the removed default_principal / handoff_path keys', async () => {
+    const { dataDir, store } = await makeHarness();
+    const created = await store.create({
+      workspace: join(dataDir, 'ws', 'alpha'),
+      name: 'Alpha',
+      description: 'desc',
+    });
+    const id = created.record.team_id;
+    expect('default_principal' in created.record).toBe(false);
+    expect('handoff_path' in created.record).toBe(false);
+
+    const updated = await store.update(id, { name: 'Beta' });
+    expect('default_principal' in updated).toBe(false);
+    expect('handoff_path' in updated).toBe(false);
+
+    const raw = JSON.parse(
+      await readFile(teamMetadataPath(dataDir, 'default', id), 'utf8'),
+    ) as Record<string, unknown>;
+    expect('default_principal' in raw).toBe(false);
+    expect('handoff_path' in raw).toBe(false);
   });
 
   it('does not mutate memory when the metadata write fails', async () => {

@@ -431,7 +431,7 @@ export const evalReportSchema = {
 };
 
 // ── 0.19 S3：本地 Team 控制面（canonical teams.*） ──
-// 未列入 required 的字段（name / team_id / handoff_path / system_event）都是可选的。
+// 未列入 required 的字段（name / team_id / system_event）都是可选的。
 
 /** teams.list / teams.get 的 `team`（TeamSummary）。 */
 export const teamSummarySchema = {
@@ -442,11 +442,9 @@ export const teamSummarySchema = {
     name: { type: 'string' },
     tenant_id: { type: 'string' },
     workspace: { type: 'string' },
-    handoff_path: { type: 'string' },
     policy: { type: 'object' },
-    // 0.21：Team 描述与默认接头人（additive）。
+    // 0.21：Team 描述（additive）。
     description: { type: 'string' },
-    default_principal: { type: 'string' },
     member_count: { type: 'integer', minimum: 0 },
     online_count: { type: 'integer', minimum: 0 },
     created_at: { type: 'number' },

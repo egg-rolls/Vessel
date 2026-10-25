@@ -14,7 +14,16 @@ import { nodeKeyOf } from '../../gateway/nodes';
 import type { TeamDetail, TeamSummary, TeamUpdateInput } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
-import { nullableChange, parsePolicyText, policyText, trimmedOrUndefined } from './team-form';
+import { TeamPolicyFields } from './TeamPolicyFields';
+import { nullableChange, trimmedOrUndefined } from './team-form';
+import {
+  buildPolicy,
+  type PolicyErrorField,
+  type PolicyErrors,
+  type PolicyFormState,
+  policyChanged,
+  policyToForm,
+} from './team-policy-form';
 
 export interface TeamEditViewProps {
   node: NodeView;
@@ -90,41 +99,41 @@ function TeamEditForm({
   const initial = useRef({
     name: team.name ?? '',
     description: team.description ?? '',
-    defaultPrincipal: team.default_principal ?? '',
-    handoffPath: team.handoff_path ?? '',
-    policyText: policyText(team.policy),
   });
   const [name, setName] = useState(initial.current.name);
   const [description, setDescription] = useState(initial.current.description);
-  const [defaultPrincipal, setDefaultPrincipal] = useState(initial.current.defaultPrincipal);
-  const [handoffPath, setHandoffPath] = useState(initial.current.handoffPath);
-  const [policy, setPolicy] = useState(initial.current.policyText);
+  const [policyForm, setPolicyForm] = useState<PolicyFormState>(() => policyToForm(team.policy));
+  const [policyErrors, setPolicyErrors] = useState<PolicyErrors>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const updatePolicy = (patch: Partial<PolicyFormState>) => {
+    setPolicyForm((current) => ({ ...current, ...patch }));
+    setPolicyErrors((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(patch)) delete next[key as PolicyErrorField];
+      return next;
+    });
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy) return;
     setError(null);
 
-    const parsedPolicy = parsePolicyText(policy);
-    if (!parsedPolicy.ok) {
-      setError(t('teams.form.policyInvalid'));
+    const builtPolicy = buildPolicy(team.policy, policyForm);
+    if (!builtPolicy.ok) {
+      setPolicyErrors(builtPolicy.errors);
       return;
     }
+    setPolicyErrors({});
 
     const input: TeamUpdateInput = { team_id: team.team_id };
     const nextName = trimmedOrUndefined(name);
     if (nextName !== undefined && nextName !== initial.current.name.trim()) input.name = nextName;
     const descriptionChange = nullableChange(description, initial.current.description);
     if (descriptionChange.changed) input.description = descriptionChange.value;
-    const principalChange = nullableChange(defaultPrincipal, initial.current.defaultPrincipal);
-    if (principalChange.changed) input.default_principal = principalChange.value;
-    const handoffChange = nullableChange(handoffPath, initial.current.handoffPath);
-    if (handoffChange.changed) input.handoff_path = handoffChange.value;
-    if (policy.trim() !== initial.current.policyText.trim() && parsedPolicy.value !== undefined) {
-      input.policy = parsedPolicy.value;
-    }
+    if (policyChanged(team.policy, builtPolicy.policy)) input.policy = builtPolicy.policy;
 
     setBusy(true);
     try {
@@ -184,45 +193,12 @@ function TeamEditForm({
             />
           </Field>
 
-          <Field
-            label={t('team.form.defaultPrincipal')}
-            htmlFor="team-edit-principal"
-            hint={t('team.form.defaultPrincipalHint')}
-          >
-            <Input
-              id="team-edit-principal"
-              value={defaultPrincipal}
-              onChange={(event) => setDefaultPrincipal(event.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </Field>
-
-          <Field label={t('team.form.handoffPath')} htmlFor="team-edit-handoff">
-            <Input
-              id="team-edit-handoff"
-              value={handoffPath}
-              onChange={(event) => setHandoffPath(event.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </Field>
-
-          <Field
-            className="col-span-full"
-            label={t('teams.form.policy')}
-            htmlFor="team-edit-policy"
-            hint={t('teams.form.policyHint')}
-          >
-            <Textarea
-              id="team-edit-policy"
-              className="min-h-24 resize-y text-sm leading-normal font-mono"
-              value={policy}
-              onChange={(event) => setPolicy(event.target.value)}
-              rows={6}
-              spellCheck={false}
-            />
-          </Field>
+          <TeamPolicyFields
+            idPrefix="team-edit"
+            form={policyForm}
+            errors={policyErrors}
+            onChange={updatePolicy}
+          />
         </div>
 
         {error && (

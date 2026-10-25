@@ -157,7 +157,6 @@ export interface FederationTeamInfo {
   team_id: string;
   name: string;
   description?: string;
-  default_principal?: string;
   member_count: number;
   online_count: number;
   members: FederationTeamInfoMember[];
@@ -219,7 +218,6 @@ function buildTeamInfo(
       typeof member.name === 'string' &&
       member.name !== '',
   );
-  const names = new Set(eligible.map((member) => member.name));
   const members: FederationTeamInfoMember[] = eligible.slice(0, limit).map((member) => {
     const entry: FederationTeamInfoMember = { name: member.name, presence: member.presence };
     if (typeof member.last_seen === 'number' && Number.isFinite(member.last_seen)) {
@@ -238,13 +236,6 @@ function buildTeamInfo(
   };
   const description = team.description;
   if (typeof description === 'string' && description !== '') info.description = description;
-  const defaultPrincipal = team.default_principal;
-  if (
-    defaultPrincipal === 'human' ||
-    (typeof defaultPrincipal === 'string' && names.has(defaultPrincipal))
-  ) {
-    info.default_principal = defaultPrincipal;
-  }
   return info;
 }
 

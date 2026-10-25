@@ -309,7 +309,6 @@ describe('InProcessMemberRuntime', () => {
           action: { type: 'string', enum: ['new', 'send', 'close', 'list', 'rotate'] },
           to: { type: 'string', description: 'send / rotate target' },
           startup_prompt: { type: 'string' },
-          handoff_path: { type: 'string' },
           name: { type: 'string' },
         },
         required: ['action'],
@@ -351,13 +350,14 @@ describe('InProcessMemberRuntime', () => {
       expect(Object.keys(schema.properties).sort()).toEqual([
         'action',
         'content',
-        'handoff_path',
         'messages',
         'startup_prompt',
         'state',
         'to',
         'visibility',
       ]);
+      expect('handoff_path' in schema.properties).toBe(false);
+      expect(selectedAgent?.description).not.toContain('handoff_path');
       expect(tools.find((tool) => tool.name === 'read')?.inputSchema).toBe(readSchema);
     }
   });

@@ -58,7 +58,6 @@ interface TeamSummaryView {
   online_count?: number;
   workspace?: string;
   description?: string;
-  default_principal?: string;
 }
 
 /** post 返回的逐条投递结果（只读子集） */
@@ -153,7 +152,6 @@ function formatTeamGet(result: unknown): string {
     ui.section(`Team ${asString(team.team_id)}`),
     ui.kv('name', asString(team.name)),
     ui.kv('description', asString(team.description, '')),
-    ui.kv('default_principal', asString(team.default_principal, '')),
     ui.kv('workspace', asString(team.workspace)),
     ui.kv('members', String(team.member_count ?? members.length)),
     ui.kv('online', String(team.online_count ?? 0)),
@@ -226,7 +224,6 @@ function formatTeamWrite(result: unknown): string {
     `${ui.symbol('ok')} team saved ${asString(result.team_id)}`,
     ui.kv('name', asString(result.name)),
     ui.kv('description', asString(result.description, '')),
-    ui.kv('default_principal', asString(result.default_principal, '')),
     ui.kv('workspace', asString(result.workspace)),
     ui.kv('members', String(result.member_count ?? 0)),
     ui.kv('online', String(result.online_count ?? 0)),
@@ -442,10 +439,6 @@ async function execute(
         workspace: command.workspace,
         ...(command.name !== undefined ? { name: command.name } : {}),
         ...(command.description !== undefined ? { description: command.description } : {}),
-        ...(command.defaultPrincipal !== undefined
-          ? { default_principal: command.defaultPrincipal }
-          : {}),
-        ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
         ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
       },
       fetchOptions,
@@ -463,10 +456,6 @@ async function execute(
         team_id: command.teamId,
         ...(command.name !== undefined ? { name: command.name } : {}),
         ...(command.description !== undefined ? { description: command.description } : {}),
-        ...(command.defaultPrincipal !== undefined
-          ? { default_principal: command.defaultPrincipal }
-          : {}),
-        ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
         ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
       },
       fetchOptions,

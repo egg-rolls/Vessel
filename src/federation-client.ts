@@ -92,7 +92,6 @@ export interface FederationTeamInfo {
   team_id: string;
   name: string;
   description?: string;
-  default_principal?: string;
   member_count: number;
   online_count: number;
   members: FederationTeamInfoMember[];
@@ -401,10 +400,6 @@ function parseTeamInfoBody(body: unknown): FederationTeamInfo | undefined {
   if (body.description !== undefined) {
     if (typeof body.description !== 'string') return undefined;
     team.description = body.description;
-  }
-  if (body.default_principal !== undefined) {
-    if (typeof body.default_principal !== 'string') return undefined;
-    team.default_principal = body.default_principal;
   }
   return team;
 }

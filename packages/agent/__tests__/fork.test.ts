@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'bun:test';
-import { join, normalize } from 'node:path';
 import {
   type AgentEvent,
   type AgentMessage,
@@ -34,12 +33,9 @@ function seam(service: AgentService): ServiceSeam {
   return service as unknown as ServiceSeam;
 }
 
-/** 固定 Team 的假绑定端口：get 返回带 handoff_path 的 TeamRecord */
-function makeBinder(handoffPath?: string): TeamBinder {
-  const team = makeTeam(TEAM_ID, {
-    workspace: TEAM_WORKSPACE,
-    ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
-  });
+/** 固定 Team 的假绑定端口：get 返回固定 TeamRecord */
+function makeBinder(): TeamBinder {
+  const team = makeTeam(TEAM_ID, { workspace: TEAM_WORKSPACE });
   return {
     ensureForWorkspace: async (input) => ({ ...team, name: input.name ?? team.name }),
     get: (teamId: string): TeamRecord | undefined => (teamId === TEAM_ID ? team : undefined),
@@ -82,7 +78,7 @@ async function createSource(
 
 describe('AgentService fork', () => {
   it('concurrent ensureForked spawns only one Agent (a second fork would duplicate the source)', async () => {
-    const { service, runtime } = makeService({ teamBinder: makeBinder('HANDOFF.md') });
+    const { service, runtime } = makeService({ teamBinder: makeBinder() });
     const source = await createSource(service);
     markGone(service, source.id);
     const spawnedBefore = runtime.spawned.length;
@@ -106,7 +102,7 @@ describe('AgentService fork', () => {
   });
 
   it('fork inherits model/prompt/team but starts a fresh session with epoch 0 and no body history', async () => {
-    const { service, runtime } = makeService({ teamBinder: makeBinder('HANDOFF.md') });
+    const { service, runtime } = makeService({ teamBinder: makeBinder() });
     const source = await createSource(service);
     markGone(service, source.id);
     const sourceBefore = structuredClone(source);
@@ -115,7 +111,6 @@ describe('AgentService fork', () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     const fork = outcome.member;
-    const handoff = normalize(join(TEAM_WORKSPACE, 'HANDOFF.md'));
 
     expect(fork).toMatchObject({
       sessionId: fork.id,
@@ -123,7 +118,7 @@ describe('AgentService fork', () => {
       visibility: 'team',
       teamId: TEAM_ID,
       model: 'model-src',
-      systemPrompt: `You are src.\n\nBe brief.\n\nHandoff: ${handoff}`,
+      systemPrompt: 'You are src.\n\nBe brief.  \n',
       forkedFrom: source.id,
       state: 'idle',
       presence: 'live',
@@ -141,7 +136,8 @@ describe('AgentService fork', () => {
     const spawned = runtime.spawned[runtime.spawned.length - 1];
     expect(spawned?.session_id).toBe(fork.id);
     expect(spawned?.model).toBe('model-src');
-    expect(spawned?.system_prompt).toContain(`Handoff: ${handoff}`);
+    expect(spawned?.system_prompt).toBe(source.systemPrompt);
+    expect(spawned?.system_prompt).not.toContain('Handoff:');
 
     // 源记录零写入：仍 present + gone，指针 / 历史 / 状态不变
     expect(seam(service).registry.get(source.id)).toEqual(sourceBefore);
@@ -149,8 +145,24 @@ describe('AgentService fork', () => {
     expect(sourceBefore.membership).toBe('present');
   });
 
+  it('forks a Team without a handoff and never appends Handoff: to the prompt', async () => {
+    const { service, runtime } = makeService({ teamBinder: makeBinder() });
+    const source = await createSource(service);
+    markGone(service, source.id);
+
+    const outcome = await seam(service).ensureForked(source.id);
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.member.systemPrompt).toBe(source.systemPrompt);
+    const spawned = runtime.spawned[runtime.spawned.length - 1];
+    expect(spawned?.session_id).toBe(outcome.member.id);
+    expect(spawned?.system_prompt).toBe(source.systemPrompt);
+    expect(spawned?.system_prompt).not.toContain('Handoff:');
+  });
+
   it('fork spawn failure returns fork_failed and leaves neither a record nor an event', async () => {
-    const { service, runtime } = makeService({ teamBinder: makeBinder('HANDOFF.md') });
+    const { service, runtime } = makeService({ teamBinder: makeBinder() });
     const source = await createSource(service);
     markGone(service, source.id);
     const sourceBefore = structuredClone(source);
@@ -182,7 +194,7 @@ describe('AgentService fork', () => {
     expect(runtime.spawned).toHaveLength(1);
   });
 
-  it('rejects a source without a Team without spawning (no team_id, no handoff source)', async () => {
+  it('rejects a source without a Team without spawning (no team_id)', async () => {
     const { service, runtime } = makeService();
     const source = await createSource(service, { workspace: undefined, visibility: 'team' });
     expect(source.teamId).toBeUndefined();
@@ -197,23 +209,8 @@ describe('AgentService fork', () => {
     expect(runtime.spawned).toHaveLength(1);
   });
 
-  it('rejects a Team without handoff_path without spawning (fork prompt would have no handoff)', async () => {
-    const { service, runtime } = makeService({ teamBinder: makeBinder(undefined) });
-    const source = await createSource(service);
-    markGone(service, source.id);
-
-    const outcome = await seam(service).ensureForked(source.id);
-
-    expect(outcome).toMatchObject({
-      ok: false,
-      code: 'fork_not_allowed',
-      reason: 'fork_not_allowed: no_handoff',
-    });
-    expect(runtime.spawned).toHaveLength(1);
-  });
-
   it('rejects a second fork while a present fork exists (already_forked) and does not spawn', async () => {
-    const { service, runtime } = makeService({ teamBinder: makeBinder('HANDOFF.md') });
+    const { service, runtime } = makeService({ teamBinder: makeBinder() });
     const source = await createSource(service);
     markGone(service, source.id);
 
@@ -232,10 +229,8 @@ describe('AgentService fork', () => {
   });
 
   it('writes exactly one system_event fork log when TeamService observes a fork', async () => {
-    const { service } = makeService({ teamBinder: makeBinder('HANDOFF.md') });
-    const store = new MemoryTeamStore([
-      makeTeam(TEAM_ID, { workspace: TEAM_WORKSPACE, handoff_path: 'HANDOFF.md' }),
-    ]);
+    const { service } = makeService({ teamBinder: makeBinder() });
+    const store = new MemoryTeamStore([makeTeam(TEAM_ID, { workspace: TEAM_WORKSPACE })]);
     let counter = 0;
     const teamService = createTeamService({
       tenantId: 'default',
@@ -262,8 +257,8 @@ describe('AgentService fork', () => {
     if (outcome.ok) expect(forkLogs[0]?.to).toEqual([outcome.member.id]);
   });
 
-  it('dispatch rejects with resume_failed when fork is off (default), even with a handoff', async () => {
-    const { service, runtime } = makeService({ teamBinder: makeBinder('HANDOFF.md') });
+  it('dispatch rejects with resume_failed when fork is off (default), even with a team', async () => {
+    const { service, runtime } = makeService({ teamBinder: makeBinder() });
     const source = await createSource(service);
     markGone(service, source.id);
     const events: AgentEvent[] = [];
@@ -285,7 +280,7 @@ describe('AgentService fork', () => {
 
   it('dispatch forks when team policy allowFork is true and the fork can take new work', async () => {
     const { service, runtime } = makeService({
-      teamBinder: makeBinder('HANDOFF.md'),
+      teamBinder: makeBinder(),
       teamPolicy: (teamId) => (teamId === TEAM_ID ? { allowFork: true } : undefined),
     });
     const source = await createSource(service);
@@ -319,7 +314,7 @@ describe('AgentService fork', () => {
   });
 
   it('explicit allow_fork overrides a team policy that leaves fork off', async () => {
-    const { service, runtime } = makeService({ teamBinder: makeBinder('HANDOFF.md') });
+    const { service, runtime } = makeService({ teamBinder: makeBinder() });
     const source = await createSource(service);
     markGone(service, source.id);
     failResumeOnly(runtime, source.id);
@@ -339,7 +334,7 @@ describe('AgentService fork', () => {
 
   it('a repeated dispatch does not fork the same source twice (already_forked)', async () => {
     const { service, runtime } = makeService({
-      teamBinder: makeBinder('HANDOFF.md'),
+      teamBinder: makeBinder(),
       teamPolicy: (teamId) => (teamId === TEAM_ID ? { allowFork: true } : undefined),
     });
     const source = await createSource(service);
@@ -367,7 +362,7 @@ describe('AgentService fork', () => {
   });
 
   it('drops a fork reply with agent.reply.dropped when the parent is gone, without enqueueing', async () => {
-    const { service, runtime } = makeService({ teamBinder: makeBinder('HANDOFF.md') });
+    const { service, runtime } = makeService({ teamBinder: makeBinder() });
     const parent = await service.new({ name: 'parent', workspace: TEAM_WORKSPACE });
     const source = await createSource(service, { parentId: parent.id });
     markGone(service, source.id);

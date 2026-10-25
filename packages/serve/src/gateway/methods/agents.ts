@@ -433,7 +433,6 @@ const agentRotateEntrySchema = {
   properties: {
     to: { type: 'string', minLength: 1 },
     startup_prompt: { type: 'string', minLength: 1 },
-    handoff_path: { type: 'string', minLength: 1 },
     from_session_id: { type: 'string', minLength: 1 },
   },
 };
@@ -1050,14 +1049,12 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             if (!(await targetInTeamScope(control, scope, to, true))) {
               return { failure: fail('not_found', `agent not found: ${to}`) };
             }
-            const handoffPath = optionalEntryString(entry, 'handoff_path', 'agents.rotate');
             const fromSessionId = optionalEntryString(entry, 'from_session_id', 'agents.rotate');
             return {
               input: {
                 to,
                 startup_prompt: startupPrompt,
                 from,
-                ...(handoffPath !== undefined ? { handoff_path: handoffPath } : {}),
                 ...(fromSessionId !== undefined ? { from_session_id: fromSessionId } : {}),
               },
             };

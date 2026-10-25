@@ -59,22 +59,24 @@ describe('0.21 federation peer allowDirectory', () => {
   });
 });
 
-describe('0.21 team description / defaultPrincipal', () => {
+describe('0.21 team description', () => {
   function team(entry: Record<string, unknown>): VesselConfig {
     return {
       teams: [{ workspace: '/tmp/vessel-team-0-21', ...entry }] as VesselConfig['teams'],
     };
   }
 
-  it('accepts a non-empty description and a shaped default principal', () => {
-    expect(paths(team({ description: 'lab team', defaultPrincipal: 'alice' }))).toEqual([]);
-    expect(paths(team({ defaultPrincipal: 'human' }))).toEqual([]);
+  it('accepts a non-empty description', () => {
+    expect(paths(team({ description: 'lab team' }))).toEqual([]);
   });
 
-  it('rejects an empty description or a default principal outside the address alphabet', () => {
+  it('rejects an empty description', () => {
     expect(paths(team({ description: '   ' }))).toContain('teams[0].description');
-    for (const value of ['alice b', 'alice.b', 'a'.repeat(65), '', 1]) {
-      expect(paths(team({ defaultPrincipal: value }))).toContain('teams[0].defaultPrincipal');
+  });
+
+  it('ignores the removed defaultPrincipal key', () => {
+    for (const value of ['alice', 'human', 'alice b', '', 1]) {
+      expect(paths(team({ defaultPrincipal: value }))).toEqual([]);
     }
   });
 });

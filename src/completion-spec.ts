@@ -357,7 +357,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       },
       { name: 'send', flags: ['--json'] },
       { name: 'dispatch', flags: ['--json'] },
-      { name: 'rotate', flags: ['--json', '--startup', '--handoff'] },
+      { name: 'rotate', flags: ['--json', '--startup'] },
       { name: 'close', flags: ['--json'] },
       {
         name: 'list',

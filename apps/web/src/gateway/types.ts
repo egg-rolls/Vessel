@@ -245,12 +245,9 @@ export interface TeamSummary {
   workspace?: string;
   /** 0.21 additive：展示字段；缺失时 UI 显示 —。 */
   description?: string;
-  /** 0.21 additive：默认接头人（地址保留字 human / principal）；缺失时 UI 显示 —。 */
-  default_principal?: string;
   member_count: number;
   /** S3 R1：present && live；缺失时显示 —。 */
   online_count?: number;
-  handoff_path?: string;
   policy?: Record<string, unknown>;
   created_at: number;
   /** 0.24 additive：归档时间；缺失 = active（DECISION-040）。 */
@@ -262,8 +259,6 @@ export interface TeamCreateInput {
   workspace: string;
   name?: string;
   description?: string;
-  default_principal?: string;
-  handoff_path?: string;
   policy?: Record<string, unknown>;
 }
 
@@ -272,8 +267,6 @@ export interface TeamUpdateInput {
   team_id: string;
   name?: string;
   description?: string | null;
-  default_principal?: string | null;
-  handoff_path?: string | null;
   policy?: Record<string, unknown>;
 }
 

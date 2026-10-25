@@ -515,37 +515,41 @@ describe('parseArgs - team (0.19 S3)', () => {
     });
   });
 
-  it('team create <workspace> [--name/--description/--default-principal/--handoff]', () => {
+  it('team create <workspace> [--name/--description]', () => {
     expect(ok(['team', 'create', '/ws/alpha']).teamCommand).toEqual({
       kind: 'create',
       workspace: '/ws/alpha',
       json: false,
     });
     expect(
-      ok([
-        'team',
-        'create',
-        '/ws/alpha',
-        '--name',
-        'Alpha',
-        '--description',
-        'desc',
-        '--default-principal',
-        'main',
-        '--handoff',
-        '/ws/alpha/HANDOFF.md',
-        '--json',
-      ]).teamCommand,
+      ok(['team', 'create', '/ws/alpha', '--name', 'Alpha', '--description', 'desc', '--json'])
+        .teamCommand,
     ).toEqual({
       kind: 'create',
       workspace: '/ws/alpha',
       name: 'Alpha',
       description: 'desc',
-      defaultPrincipal: 'main',
-      handoffPath: '/ws/alpha/HANDOFF.md',
       json: true,
     });
     expect(err(['team', 'create'])).toContain('requires <workspace>');
+  });
+
+  it('rejects removed field flags', () => {
+    expect(err(['team', 'create', '/ws/alpha', '--default-principal', 'main'])).toContain(
+      'Unknown argument for team create: --default-principal',
+    );
+    expect(err(['team', 'create', '/ws/alpha', '--handoff', 'HANDOFF.md'])).toContain(
+      'Unknown argument for team create: --handoff',
+    );
+    expect(err(['team', 'update', 'alpha', '--clear-default-principal'])).toContain(
+      'Unknown argument for team update: --clear-default-principal',
+    );
+    expect(err(['team', 'update', 'alpha', '--clear-handoff'])).toContain(
+      'Unknown argument for team update: --clear-handoff',
+    );
+    expect(err(['agent', 'rotate', 'worker', '--startup', 'go', '--handoff', 'h.md'])).toContain(
+      'Unknown argument for agent rotate: --handoff',
+    );
   });
 
   it('team create/update accept --policy JSON or --policy-file', () => {
