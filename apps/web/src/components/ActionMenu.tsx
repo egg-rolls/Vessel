@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { t } from '../i18n';
-import { Tooltip } from './Tooltip';
+import { iconButtonClass, Tooltip } from './Tooltip';
 import { cn } from './ui';
 
 export interface ActionMenuItem {
@@ -19,10 +19,13 @@ export function ActionMenu({
   label = t('common.moreActions'),
   items,
   disabled = false,
+  className,
 }: {
   label?: string;
   items: readonly ActionMenuItem[];
   disabled?: boolean;
+  /** 追加到触发器容器的布局 / 显隐类（如列表 hover 显隐）。 */
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -76,12 +79,12 @@ export function ActionMenu({
   }, [open]);
 
   return (
-    <span className="action-menu">
+    <span className={cn('relative inline-flex flex-none', className)}>
       <Tooltip label={label}>
         <button
           ref={buttonRef}
           type="button"
-          className="icon-btn"
+          className={iconButtonClass}
           aria-label={label}
           aria-haspopup="menu"
           aria-expanded={open}

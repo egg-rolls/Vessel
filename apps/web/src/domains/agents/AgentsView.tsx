@@ -148,7 +148,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
 
   if (!anyNodeToken) {
     return (
-      <div className="domain-view">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
         <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
       </div>
     );
@@ -159,9 +159,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     const targetNode = nodes.find((node) => nodeKeyOf(node) === target.nodeKey);
     if (!targetNode) {
       return (
-        <div className="domain-view">
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
           <PageHeader title={t('agents.title')} tenantId={tenantId} />
-          <div className="domain-content">
+          <div className="mt-5 flex flex-col gap-4">
             <NotEnabledState
               title={t('agents.error.nodeMissing')}
               action={<Button onClick={backToList}>{t('agents.back')}</Button>}
@@ -178,9 +178,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
 
     if (!loaded) {
       return (
-        <div className="domain-view">
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
           <PageHeader title={t('agents.title')} tenantId={tenantId} />
-          <div className="domain-content">
+          <div className="mt-5 flex flex-col gap-4">
             <LoadingState label={t('agents.loadingRosters')} rows={2} />
           </div>
         </div>
@@ -189,9 +189,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
 
     if (!targetAgent) {
       return (
-        <div className="domain-view">
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
           <PageHeader title={t('agents.title')} tenantId={tenantId} />
-          <div className="domain-content">
+          <div className="mt-5 flex flex-col gap-4">
             {roster && !roster.ok ? (
               <NotEnabledState title={t('teams.error.notEnabled')} reason={nodeErrorText(roster)} />
             ) : (
@@ -242,9 +242,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   // ── 列表 ────────────────────────────────────────────
   if (nodes.length === 0) {
     return (
-      <div className="domain-view">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
         <PageHeader title={t('agents.title')} tenantId={tenantId} />
-        <div className="domain-content">
+        <div className="mt-5 flex flex-col gap-4">
           <EmptyState title={t('agents.empty')} />
         </div>
       </div>
@@ -323,7 +323,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   }
 
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={t('agents.title')}
         tenantId={tenantId}
@@ -337,7 +337,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
           </Button>
         }
       />
-      <div className="domain-content">
+      <div className="mt-5 flex flex-col gap-4">
         <div className="net-toolbar mt-3.5">
           <SearchInput
             value={query}

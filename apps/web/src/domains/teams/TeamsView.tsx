@@ -94,7 +94,7 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
 
   if (!anyNodeToken) {
     return (
-      <div className="domain-view">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
         <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
       </div>
     );
@@ -104,7 +104,7 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
     const node = nodes.find((item) => nodeKeyOf(item) === route.nodeKey);
     if (!node) {
       return (
-        <div className="domain-view">
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
           <NotEnabledState
             title={t('teams.nodeMissing')}
             action={
@@ -255,9 +255,9 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
   }
 
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader title={t('teams.title')} tenantId={tenantId} actions={createButton} />
-      <div className="domain-content">
+      <div className="mt-5 flex flex-col gap-4">
         <div className="net-toolbar mt-3.5">
           <SearchInput
             value={query}

@@ -143,7 +143,7 @@ export function TeamList({
               {filtered.map((team) => (
                 <li
                   key={team.team_id}
-                  className={`team-list-item flex items-center gap-1 rounded-sm px-1 py-0.5 hover:bg-hover${
+                  className={`team-list-item group flex items-center gap-1 rounded-sm px-1 py-0.5 hover:bg-hover${
                     selectedTeamId === team.team_id ? ' bg-accent-soft' : ''
                   }`}
                 >
@@ -173,6 +173,7 @@ export function TeamList({
                     </span>
                   </button>
                   <ActionMenu
+                    className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                     label={t('team.list.open')}
                     items={[
                       {

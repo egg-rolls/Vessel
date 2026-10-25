@@ -60,9 +60,3 @@
     padding: 8px 16px calc(var(--dock-gap) + var(--dock-safe-bottom));
   }
 }
-
-@media (pointer: coarse) {
-  .composer-row .btn {
-    min-height: var(--touch-target);
-  }
-}

@@ -1,70 +1,4 @@
-/* ── 按钮 ─────────────────────────────────────────────── */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 7px 13px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  color: var(--ink);
-  font-size: 12px;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  transition:
-    color 0.16s var(--ease),
-    background 0.16s var(--ease);
-}
-
-.btn:hover:not(:disabled) {
-  background-image: linear-gradient(var(--hover-tint), var(--hover-tint));
-}
-
-.btn:active:not(:disabled) {
-  background-image: linear-gradient(var(--press-tint), var(--press-tint));
-  box-shadow: var(--elev-inset);
-}
-
-.btn:disabled {
-  opacity: 0.45;
-}
-
-.btn-primary {
-  color: var(--surface);
-  background: var(--accent);
-}
-
-.btn-primary:hover:not(:disabled) {
-  color: var(--surface);
-  background: var(--accent-ink);
-}
-
-.btn-primary:active:not(:disabled) {
-  background-color: var(--accent-ink);
-  background-image: linear-gradient(var(--press-tint), var(--press-tint));
-}
-
-.icon-btn {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--faint);
-  font-size: 15px;
-  line-height: 1;
-}
-
-.icon-btn:hover:not(:disabled) {
-  background: var(--hover-tint);
-  color: var(--ink);
-}
+/* ── 文本链接按钮 ─────────────────────────────────────── */
 
 .link-btn {
   padding: 0;
@@ -161,19 +95,4 @@
 .perm-warn {
   background: var(--warn-soft);
   color: var(--warn);
-}
-
-/* ── 过滤栏 ───────────────────────────────────────────── */
-
-.filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.filter-bar .search-input {
-  flex: 1 1 240px;
-  max-width: var(--search-max-w);
 }

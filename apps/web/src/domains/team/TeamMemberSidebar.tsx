@@ -7,6 +7,7 @@
  */
 import { ActionMenu } from '../../components/ActionMenu';
 import { StatusChip } from '../../components/StatusChip';
+import { iconButtonClass } from '../../components/Tooltip';
 import type { AskUserRequest, PermissionRequest, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import { memberStatus } from './member-status';
@@ -62,7 +63,7 @@ export function TeamMemberSidebar({
         {onClose && (
           <button
             type="button"
-            className="icon-btn"
+            className={`${iconButtonClass} ml-auto`}
             aria-label={t('team.a11y.closeMembers')}
             onClick={onClose}
           >

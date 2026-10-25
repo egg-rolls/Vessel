@@ -46,9 +46,9 @@ export function NodeDetailView({
 
   if (!node) {
     return (
-      <div className="domain-view">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
         <PageHeader title={t('nodes.title')} tenantId={tenantId} />
-        <div className="domain-content">
+        <div className="mt-5 flex flex-col gap-4">
           <NotEnabledState
             title={t('nodes.notFound')}
             reason={t('nodes.notFoundHint')}
@@ -89,7 +89,7 @@ export function NodeDetailView({
   const incarnation = node.current ? (hello?.incarnation ?? '—') : '—';
 
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={displayName}
         tenantId={tenantId}
@@ -109,7 +109,7 @@ export function NodeDetailView({
           </>
         }
       />
-      <div className="domain-content">
+      <div className="mt-5 flex flex-col gap-4">
         <Section title={t('nodes.section.health')}>
           <KeyValueList
             items={[

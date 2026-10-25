@@ -2,11 +2,10 @@
    Team（0.19 S6）：团队工作区的响应式布局与列表 / 消息状态 marker。
    视觉与排版已迁到 L3 utilities；这里只保留：
    - 1199 / 1023 / 680 断点依赖（无 L1 断点 token）；
-   - 共享子组件的嵌套 marker（`.action-menu` / `.icon-btn` / bubble）；
    - 现有测试断言依赖的类名（member-row / delivery / notice）。
    ───────────────────────────────────────────────────────────── */
 
-/* ── 列表：响应式滚动容器 + action-menu 显隐 ──────────── */
+/* ── 列表：响应式滚动容器 ─────────────────────────────── */
 
 .team-list-standalone {
   height: auto;
@@ -32,16 +31,6 @@
   flex: 0 0 auto;
   overflow: visible;
   padding: 0;
-}
-
-/* 菜单只在 hover / 键盘焦点时出现；隐藏时仍可被键盘发现。 */
-.team-list-item .action-menu {
-  opacity: 0;
-}
-
-.team-list-item:hover .action-menu,
-.team-list-item:focus-within .action-menu {
-  opacity: 1;
 }
 
 /* ── 群聊：1023 抽屉布局依赖 ──────────────────────────── */
@@ -155,7 +144,7 @@
   font-size: 11px;
 }
 
-/* ── 成员侧栏：1023 抽屉与 icon-btn 对齐依赖 ──────────── */
+/* ── 成员侧栏：1023 抽屉布局依赖 ──────────────────────── */
 
 .team-members-column {
   min-height: 0;
@@ -167,10 +156,6 @@
 
 .team-members-head {
   padding-bottom: 8px;
-}
-
-.team-members-head .icon-btn {
-  margin-left: auto;
 }
 
 /* 测试断言依赖 `team-member-row`；状态视觉由 utilities 提供。 */

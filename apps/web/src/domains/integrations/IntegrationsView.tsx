@@ -52,7 +52,7 @@ export function IntegrationsView({
   useLocale();
   const { tenantId } = useConnection();
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={t('integrations.title')}
         description={t('integrations.description')}
@@ -66,7 +66,7 @@ export function IntegrationsView({
         panelId="integrations-panel"
       />
       <div
-        className="domain-content"
+        className="mt-5 flex flex-col gap-4"
         id="integrations-panel"
         role="tabpanel"
         aria-label={t('integrations.panelLabel')}

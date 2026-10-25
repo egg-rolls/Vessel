@@ -64,13 +64,13 @@ export function TeamEditView({ node, teamId, onBack, onSaved }: TeamEditViewProp
   }
 
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={detail?.team.name || teamId}
         tenantId={tenantId}
         actions={<Button onClick={onBack}>{t('teams.edit.back')}</Button>}
       />
-      <div className="domain-content">{body}</div>
+      <div className="mt-5 flex flex-col gap-4">{body}</div>
     </div>
   );
 }

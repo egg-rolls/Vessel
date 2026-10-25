@@ -134,7 +134,7 @@ export function SessionList({
     <div className="session-column">
       <div className="column-header">
         <h2 className="column-title">{t('chat.sessionList.title')}</h2>
-        <Button type="button" size="small" variant="primary" onClick={onNew}>
+        <Button type="button" size="small" variant="primary" className="ml-auto" onClick={onNew}>
           {t('chat.sessionList.new')}
         </Button>
         {compact && (
@@ -221,7 +221,7 @@ export function SessionList({
                     (session.preview && session.preview !== session.title ? session.preview : '');
                   return (
                     <div
-                      className={`session-row ${active ? 'active' : ''}`.trim()}
+                      className={`session-row group ${active ? 'active' : ''}`.trim()}
                       key={session.session_id}
                     >
                       {editing ? (
@@ -299,6 +299,7 @@ export function SessionList({
                             )}
                           </button>
                           <ActionMenu
+                            className="items-center pr-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-compact:opacity-100"
                             label={t('chat.sessionList.actions', { title })}
                             items={[
                               {

@@ -102,20 +102,6 @@
   line-height: 1;
 }
 
-.session-row .action-menu {
-  align-items: center;
-  padding-right: 4px;
-}
-
-.session-row .icon-btn {
-  opacity: 0;
-}
-
-.session-row:hover .icon-btn,
-.session-row:focus-within .icon-btn {
-  opacity: 1;
-}
-
 .session-rename {
   flex: 1;
   min-width: 0;

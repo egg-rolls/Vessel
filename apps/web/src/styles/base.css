@@ -147,10 +147,6 @@ fieldset {
   transform: none;
 }
 
-.main-content:focus {
-  outline: none;
-}
-
 kbd,
 .kbd {
   display: inline-block;
@@ -176,9 +172,7 @@ kbd,
   .toast,
   .prompt-slot,
   .pending-permissions-bar,
-  .bottom-nav,
-  .tool-card,
-  .btn {
+  .tool-card {
     border: 1px solid CanvasText;
   }
 

@@ -289,12 +289,7 @@ export function AskQuestionCard({
             {t('ask.previous')}
           </Button>
         )}
-        <Button
-          variant="primary"
-          className="btn-primary"
-          disabled={!canAdvance || disabled}
-          onClick={onNext}
-        >
+        <Button variant="primary" disabled={!canAdvance || disabled} onClick={onNext}>
           {busy ? t('permission.busy') : isLast ? t('ask.submit') : t('ask.next')}
         </Button>
       </div>

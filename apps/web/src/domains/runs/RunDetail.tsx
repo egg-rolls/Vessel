@@ -11,6 +11,7 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
+import { iconButtonClass } from '../../components/Tooltip';
 import { Badge, Button, Input, KeyValueList, Section } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
@@ -292,7 +293,7 @@ export function RunDetail({
   return (
     <Section
       ref={sectionRef}
-      className="run-detail mt-1"
+      className="mt-1"
       aria-label={t('runs.detail.label')}
       title={t('runs.detail.title')}
       actions={
@@ -312,7 +313,7 @@ export function RunDetail({
           </Button>
           <button
             type="button"
-            className="icon-btn"
+            className={iconButtonClass}
             aria-label={t('runs.detail.close')}
             onClick={onClose}
           >

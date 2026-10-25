@@ -78,13 +78,6 @@
 
 /* 断线提示（卡上方）。 */
 
-@media (pointer: coarse) {
-  .prompt-slot .btn,
-  .prompt-slot .link-btn {
-    min-height: var(--touch-target);
-  }
-}
-
 /* ── 已失效交互（0.18 H2） ────────────────────────────────
    非阻塞提示：不进 Composer 串行槽位、不计入待处理数量；
    只占一条轻量行，宽度跟随 dock。 */

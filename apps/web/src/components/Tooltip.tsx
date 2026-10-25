@@ -217,6 +217,10 @@ export function Tooltip({
   );
 }
 
+/** icon-only 按钮的共享视觉：圆形、透明底、hover 变亮、触控目标 ≥44px。 */
+export const iconButtonClass =
+  'inline-flex size-control flex-none items-center justify-center rounded-full bg-transparent text-lg leading-none text-faint transition-colors hover:bg-hover hover:text-ink pointer-coarse:min-h-touch pointer-coarse:min-w-touch forced-colors:border disabled:opacity-45 disabled:cursor-not-allowed';
+
 /** icon-only 按钮：始终带 aria-label + tooltip。 */
 export function IconButton({
   label,
@@ -226,16 +230,7 @@ export function IconButton({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
   return (
     <Tooltip label={label}>
-      <button
-        type="button"
-        className={cn(
-          // marker：`.session-row .icon-btn` 等未迁移上下文仍用它做 hover 显隐。
-          'icon-btn inline-flex size-8 flex-none items-center justify-center rounded-full bg-transparent text-lg leading-none text-faint transition-colors hover:bg-hover hover:text-ink disabled:opacity-45 disabled:cursor-not-allowed',
-          className,
-        )}
-        aria-label={label}
-        {...rest}
-      >
+      <button type="button" className={cn(iconButtonClass, className)} aria-label={label} {...rest}>
         {children}
       </button>
     </Tooltip>

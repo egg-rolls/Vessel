@@ -79,15 +79,6 @@
   padding-right: 4px;
 }
 
-/* ActionMenu 已迁移；marker 供未迁移的 `.session-row` / `.team-list-item`
- * 上下文控制 hover 显隐。 */
-
-.action-menu {
-  position: relative;
-  flex: none;
-  display: inline-flex;
-}
-
 .more-sheet {
   width: min(var(--modal-w-sm), 100%);
   align-self: center;

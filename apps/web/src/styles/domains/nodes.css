@@ -3,7 +3,7 @@
 
    行 / 徽标 / 高级详情 / Add node 表单已迁到 L3 utilities；
    这里只保留 720px 媒体仍依赖的 `.net-toolbar` / `.net-select` 与命令块
-   `.net-command*`。页面外边距统一由 `.domain-view` + `.domain-content` 提供，
+   `.net-command*`。页面外边距与搜索框宽度由各 View 的 utilities 提供，
    间距只使用 tokens.css 的 `--space-*`。
    ───────────────────────────────────────────────────────────── */
 
@@ -13,11 +13,6 @@
   align-items: center;
   gap: var(--space-2);
   margin: 0;
-}
-
-.net-toolbar .search-input {
-  flex: 1 1 240px;
-  max-width: var(--search-max-w);
 }
 
 .net-select {
@@ -61,7 +56,6 @@
 /* 跨列字段（policy JSON） */
 
 @media (max-width: 720px) {
-  .net-toolbar .search-input,
   .net-select {
     flex: 1 1 100%;
     max-width: none;
