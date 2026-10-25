@@ -11,11 +11,13 @@
 }
 
 /* 程序化聚焦卡容器时必须可见；槽位自身 box-shadow 会覆盖全局 focus ring。 */
+
 .prompt-slot:focus {
   box-shadow: var(--elev-2), var(--focus-ring);
 }
 
 /* 单层表面：卡牌不再自带第二层边框 / 内距 / 背景。 */
+
 .prompt-slot .permission-card,
 .prompt-slot .ask-card {
   margin: 0;
@@ -25,6 +27,7 @@
 }
 
 /* head 吸顶、actions 吸底，背景与槽位一致，避免透出滚动内容。 */
+
 .prompt-slot .prompt-slot-head {
   position: sticky;
   top: 0;
@@ -33,6 +36,7 @@
 }
 
 /* 权限 / 提问共用标题区：accent 圆点标识，不画分隔线。 */
+
 .prompt-slot .prompt-slot-head::before {
   content: "";
   flex: none;
@@ -52,6 +56,7 @@
 }
 
 /* 长内容只由槽位滚动，取消卡内第二层滚动。 */
+
 .prompt-slot .permission-input {
   max-height: none;
   overflow: visible;
@@ -63,51 +68,18 @@
 }
 
 /* 队列摘要：活动卡之后的最多 3 项。 */
-.prompt-queue {
-  display: flex;
-  flex-basis: 100%;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.prompt-queue-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 10px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-sunken);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  line-height: 1.6;
-}
 
 /* 卡头的停止入口：与 Composer 的 stop 同一回调。 */
+
 .prompt-slot-stop {
   align-self: center;
   font-size: var(--text-xs);
 }
 
 /* 断线提示（卡上方）。 */
-.prompt-slot .prompt-slot-hint.err {
-  margin-left: 0;
-  color: var(--danger);
-  font-size: var(--text-xs);
-}
-
-/* 长权限参数的折叠 / 截断标记。 */
-.prompt-slot .permission-expand,
-.prompt-slot .permission-truncated {
-  align-self: flex-start;
-  font-size: var(--text-xs);
-}
-
-.prompt-slot .permission-truncated {
-  color: var(--muted);
-}
 
 @media (pointer: coarse) {
   .prompt-slot .btn,
-  .prompt-slot .ask-option,
   .prompt-slot .link-btn {
     min-height: var(--touch-target);
   }
@@ -116,14 +88,6 @@
 /* ── 已失效交互（0.18 H2） ────────────────────────────────
    非阻塞提示：不进 Composer 串行槽位、不计入待处理数量；
    只占一条轻量行，宽度跟随 dock。 */
-.orphan-notices {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  width: 100%;
-  max-width: var(--dock-width);
-  margin: 0 auto var(--space-2);
-}
 
 .orphan-notice {
   display: flex;
@@ -135,23 +99,4 @@
   background: var(--surface-sunken);
   color: var(--muted);
   font-size: var(--text-sm);
-}
-
-.orphan-notice-text {
-  color: var(--faint);
-}
-
-.orphan-notice-meta {
-  font-size: var(--text-xs);
-  color: var(--faint);
-}
-
-.orphan-notice-close {
-  margin-left: auto;
-}
-
-@media (pointer: coarse) {
-  .orphan-notice-close {
-    min-height: var(--touch-target);
-  }
 }

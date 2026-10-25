@@ -74,19 +74,6 @@
   font-size: 12px;
 }
 
-.btn-link {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent-ink);
-  font: inherit;
-  cursor: pointer;
-}
-
-.btn-link.active {
-  font-weight: 600;
-}
-
 .subagent-transcript {
   display: flex;
   flex-direction: column;

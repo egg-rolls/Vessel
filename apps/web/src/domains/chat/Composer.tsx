@@ -70,23 +70,26 @@ export function Composer({
 
   return (
     <ChatDock>
-      <div className="composer">
-        <div className="composer-meta">
+      <div className="w-full max-w-[var(--dock-width)] mx-auto px-3.5 pt-2.25 pb-3 rounded-lg bg-raised shadow-elev-2 focus-within:shadow-[var(--elev-2),var(--focus-ring)]">
+        <div className="flex items-center justify-between gap-3 mb-1.5 text-xs text-faint">
           <Tooltip label={targetLabel}>
             <span className="composer-target">{targetLabel}</span>
           </Tooltip>
-          <span className="composer-meta-right">
+          <span className="flex-none flex items-center gap-2.5">
             {onStop && (
-              <button
+              <Button
                 type="button"
-                className="link-btn composer-stop"
+                variant="link"
+                className="text-danger hover:text-danger disabled:opacity-60"
                 onClick={onStop}
                 disabled={stopping}
               >
                 {stopping ? t('chat.run.stopping') : t('chat.run.stop')}
-              </button>
+              </Button>
             )}
-            <span className="composer-hint dim">{t('chat.composer.hint')}</span>
+            <span className="flex-none font-mono text-xs text-muted">
+              {t('chat.composer.hint')}
+            </span>
           </span>
         </div>
         <div className="composer-row">

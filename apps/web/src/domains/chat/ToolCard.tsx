@@ -1,5 +1,7 @@
+// biome-ignore-all lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
 import { useId, useState } from 'react';
 import { CopyButton } from '../../components/CopyButton';
+import { Button } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
@@ -92,24 +94,24 @@ function PayloadSection({ label, value, defaultOpen = false, tone, verbosity }: 
         {shown}
       </pre>
       {hasMore && (
-        <button
-          type="button"
-          className="link-btn tool-section-more"
+        <Button
+          variant="link"
+          className="tool-section-more"
           onClick={() => setLoadedBytes((value) => value + PAYLOAD_CHUNK_BYTES)}
         >
           {t('chat.tool.loadMore', {
             loaded: Math.round(loadedBytes / 1024),
             total: Math.round(text.length / 1024),
           })}
-        </button>
+        </Button>
       )}
       {!open && preview.truncated && (
-        <button type="button" className="link-btn tool-section-more" onClick={() => setOpen(true)}>
+        <Button variant="link" className="tool-section-more" onClick={() => setOpen(true)}>
           {t('chat.tool.showAll', { total: preview.totalLines })}
-        </button>
+        </Button>
       )}
       {verbosity === 'debug' && (
-        <div className="tool-section-debug mono">
+        <div className="tool-section-debug font-mono tabular-nums">
           {preview.totalLines} lines · {preview.totalBytes} bytes
         </div>
       )}
@@ -127,10 +129,18 @@ function DiffSection({ lines, path }: { lines: DiffLine[]; path?: string }) {
           {path ? ` · ${path}` : ''}
         </span>
       </div>
-      <pre className="tool-section-body tool-diff">
+      <pre className="tool-section-body whitespace-pre wrap-normal">
         {lines.map((line, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
-          <span className={`diff-line diff-${line.kind}`} key={index}>
+          <span
+            key={index}
+            className={`block ${
+              line.kind === 'add'
+                ? 'text-success'
+                : line.kind === 'remove'
+                  ? 'text-danger'
+                  : 'text-faint'
+            }`}
+          >
             {line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' '}
             {line.text}
             {'\n'}
@@ -160,7 +170,7 @@ export function ToolCard({
     <div className="tool-card" data-status={card.status}>
       <button
         type="button"
-        className="tool-card-header"
+        className="flex min-h-9 w-full items-center gap-2 rounded-t-md bg-transparent px-2.5 text-left text-muted last:rounded-md hover:bg-hover"
         aria-expanded={expanded}
         onClick={() => setManual(!expanded)}
       >
@@ -171,18 +181,22 @@ export function ToolCard({
         >
           {STATUS_GLYPH[card.status]}
         </span>
-        <span className="tool-card-name">{card.name}</span>
-        {summary && <span className="tool-card-args">{summary}</span>}
-        {card.durationMs != null && (
-          <span className="tool-card-duration">{formatDuration(card.durationMs)}</span>
+        <span className="flex-none font-mono text-sm text-ink">{card.name}</span>
+        {summary && (
+          <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint">{summary}</span>
         )}
-        <span className="tool-card-chevron" aria-hidden="true">
+        {card.durationMs != null && (
+          <span className="ml-auto flex-none font-mono text-xs tabular-nums text-faint">
+            {formatDuration(card.durationMs)}
+          </span>
+        )}
+        <span className="flex-none text-2xs text-faint" aria-hidden="true">
           {expanded ? '▾' : '▸'}
         </span>
       </button>
 
       {expanded && (
-        <div className="tool-card-body">
+        <div className="flex flex-col gap-1.5 rounded-b-md px-2.5 pb-2.5">
           <PayloadSection label={t('chat.tool.input')} value={card.args} verbosity={verbosity} />
           <PayloadSection label={t('chat.tool.output')} value={card.result} verbosity={verbosity} />
           {diff && <DiffSection lines={diff.lines} path={diff.path} />}
@@ -194,19 +208,19 @@ export function ToolCard({
             verbosity={verbosity}
           />
           {meta && (
-            <p className="error-meta mono">
+            <p className="error-meta font-mono tabular-nums">
               {meta}
               {card.errorMeta?.retryable === true ? ` · ${t('chat.tool.retryable')}` : ''}
             </p>
           )}
           {card.errorMeta?.httpStatus !== undefined && (
-            <p className="error-meta mono">HTTP {card.errorMeta.httpStatus}</p>
+            <p className="error-meta font-mono tabular-nums">HTTP {card.errorMeta.httpStatus}</p>
           )}
-          {card.truncated && <p className="tool-card-note">{t('chat.tool.truncated')}</p>}
+          {card.truncated && <p className="text-xs text-warn">{t('chat.tool.truncated')}</p>}
           {verbosity === 'debug' && (
-            <section className="tool-section tool-meta">
+            <section className="tool-section">
               <div className="tool-section-label">{t('chat.tool.meta')}</div>
-              <dl className="tool-meta-list mono">
+              <dl className="tool-meta-list font-mono tabular-nums">
                 {card.callId && (
                   <>
                     <dt>call</dt>

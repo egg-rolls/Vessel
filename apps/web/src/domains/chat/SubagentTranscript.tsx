@@ -59,33 +59,36 @@ export function SubagentTranscript({
   );
 
   return (
-    <section className="subagent-transcript" aria-label={t('chat.subagents.title')}>
+    <section
+      className="subagent-transcript my-2.5 ml-3 flex flex-col gap-2"
+      aria-label={t('chat.subagents.title')}
+    >
       <div className="subagent-summary">
         <StatusChip status={agent.state} />
         <strong className="subagent-summary-task">{agent.task?.trim() || agent.id}</strong>
-        {agent.currentTool && <span className="dim mono">{agent.currentTool}</span>}
+        {agent.currentTool && <span className="font-mono text-muted">{agent.currentTool}</span>}
         {agent.queuePosition !== undefined && (
-          <span className="dim">
+          <span className="text-muted tabular-nums">
             {t('chat.subagents.queuePosition', { position: agent.queuePosition })}
           </span>
         )}
-        {agent.waitReason && <span className="dim">{agent.waitReason}</span>}
+        {agent.waitReason && <span className="text-muted">{agent.waitReason}</span>}
         {agent.contextUsed !== undefined && agent.contextMax !== undefined && (
-          <span className="dim">
+          <span className="text-muted tabular-nums">
             {t('chat.subagents.context', { used: agent.contextUsed, max: agent.contextMax })}
           </span>
         )}
         {agent.usage?.total_tokens !== undefined && (
-          <span className="dim">{agent.usage.total_tokens} tok</span>
+          <span className="text-muted tabular-nums">{agent.usage.total_tokens} tok</span>
         )}
         <Tooltip label={agent.id}>
-          <span className="mono dim subagent-summary-id">{agent.id}</span>
+          <span className="subagent-summary-id font-mono text-muted">{agent.id}</span>
         </Tooltip>
       </div>
       {group ? (
         <RunItems group={group} verbosity={verbosity} />
       ) : (
-        <p className="dim subagent-empty">{t('chat.subagents.emptyRun')}</p>
+        <p className="subagent-empty text-muted">{t('chat.subagents.emptyRun')}</p>
       )}
     </section>
   );

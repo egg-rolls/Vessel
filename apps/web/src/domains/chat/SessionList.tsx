@@ -4,7 +4,7 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
-import { SearchInput } from '../../components/ui';
+import { Button, Input, SearchInput } from '../../components/ui';
 import { relativeTime } from '../../format';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -134,9 +134,9 @@ export function SessionList({
     <div className="session-column">
       <div className="column-header">
         <h2 className="column-title">{t('chat.sessionList.title')}</h2>
-        <button type="button" className="btn btn-small btn-primary" onClick={onNew}>
+        <Button type="button" size="small" variant="primary" onClick={onNew}>
           {t('chat.sessionList.new')}
-        </button>
+        </Button>
         {compact && (
           <IconButton label={t('nav.closeSessions')} onClick={onCloseDrawer}>
             ×
@@ -163,9 +163,9 @@ export function SessionList({
           <EmptyState
             title={t('chat.sessionList.noConnection')}
             action={
-              <button type="button" className="btn" onClick={onOpenConnection}>
+              <Button type="button" onClick={onOpenConnection}>
                 {t('common.configureConnection')}
-              </button>
+              </Button>
             }
           />
         ) : loading && sessions.length === 0 ? (
@@ -175,18 +175,18 @@ export function SessionList({
             <EmptyState
               title={t('chat.sessionList.noMatch', { query: query.trim() })}
               action={
-                <button type="button" className="btn" onClick={() => onQueryChange('')}>
+                <Button type="button" onClick={() => onQueryChange('')}>
                   {t('common.clearSearch')}
-                </button>
+                </Button>
               }
             />
           ) : (
             <EmptyState
               title={t('chat.sessionList.empty')}
               action={
-                <button type="button" className="btn btn-primary" onClick={onNew}>
+                <Button type="button" variant="primary" onClick={onNew}>
                   {t('common.newSession')}
-                </button>
+                </Button>
               }
             />
           )
@@ -226,9 +226,8 @@ export function SessionList({
                     >
                       {editing ? (
                         <div className="session-rename">
-                          <input
+                          <Input
                             ref={renameRef}
-                            className="input"
                             value={draft}
                             aria-label={t('chat.sessionList.idLabel')}
                             onFocus={(event) => event.currentTarget.select()}
@@ -248,7 +247,7 @@ export function SessionList({
                             onBlur={() => void commitRename(session.session_id)}
                           />
                           {renameError && (
-                            <span className="field-error" role="alert">
+                            <span className="text-xs text-danger leading-snug" role="alert">
                               {renameError}
                             </span>
                           )}

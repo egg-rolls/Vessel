@@ -1,6 +1,7 @@
 /* ── 会话列表 ─────────────────────────────────────────── */
 
 /* 行间分组只靠父容器 gap，不再用分隔线。 */
+
 .session-scroll {
   gap: var(--space-2);
   padding-top: var(--space-1);
@@ -84,6 +85,7 @@
 }
 
 /* 0.18：其他会话的 pending 只在列表上计数，不渲染完整卡片。 */
+
 .session-pending-badge {
   flex: none;
   display: inline-flex;
@@ -124,29 +126,7 @@
   font-size: 12.5px;
 }
 
-.header-rename {
-  min-width: min(420px, 60vw);
-  padding: 0;
-}
-
-.conversation-title-input {
-  font-family: var(--font-serif);
-  font-size: 20px;
-  padding: 4px 8px;
-}
-
-.session-id {
-  overflow-wrap: anywhere;
-}
-
 /* ── 对话 / 历史消息 ──────────────────────────────────── */
-
-.transcript {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 6px 0 10px;
-}
 
 .load-earlier {
   align-self: flex-start;
@@ -160,20 +140,6 @@
 .load-earlier:hover {
   background: var(--hover-tint);
   color: var(--ink);
-}
-
-.msg {
-  max-width: 100%;
-}
-
-.msg-role {
-  display: block;
-  margin-bottom: 6px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--faint);
 }
 
 .msg-user {
@@ -196,6 +162,7 @@
 }
 
 /* 角色切换比同角色消息多一档间距（16 + 8）。 */
+
 .msg-user + .msg-assistant,
 .msg-assistant + .msg-user {
   margin-top: var(--space-2);
@@ -207,47 +174,10 @@
   overflow-wrap: anywhere;
 }
 
-.msg-toolcall {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 7px 11px;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-  font-size: 11.5px;
-}
-
-.msg-tool {
-  margin-left: 2px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-}
-
-.msg-tool .msg-role {
-  margin-bottom: 4px;
-  color: var(--muted);
-  letter-spacing: 0.04em;
-  text-transform: none;
-}
-
-.msg-tool-result {
-  margin: 0;
-  max-height: 220px;
-  overflow: auto;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 /* ── 实时内容直接铺进会话流（0.18） ───────────────────── */
 
 /* 失败 / 取消 / 排队：流里的一条轻量 notice，没有 run 容器或分割线。 */
+
 .stream-notice {
   display: flex;
   flex-wrap: wrap;
@@ -262,6 +192,7 @@
 }
 
 /* 状态圆点只是辅助，语义仍由文本与 StatusChip 承担。 */
+
 .stream-notice::before {
   content: "";
   flex: none;
@@ -305,6 +236,7 @@
 }
 
 /* 运行中但还没有任何可见内容时的低干扰占位（0.17）。 */
+
 .run-waiting {
   display: flex;
   align-items: center;
@@ -313,39 +245,9 @@
   color: var(--muted);
 }
 
-.run-waiting-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  animation: pulse 1.6s ease-in-out infinite;
-}
-
 .tool-card {
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
-}
-
-.tool-card-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: var(--row-h-tool);
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  background: transparent;
-  color: var(--muted);
-  text-align: left;
-}
-
-.tool-card-header:last-child {
-  border-radius: var(--radius-md);
-}
-
-.tool-card-header:hover {
-  background: var(--hover-tint);
 }
 
 .tool-card-glyph {
@@ -361,61 +263,12 @@
   color: var(--ok);
 }
 
-.tool-card-glyph.tone-warn {
-  color: var(--warn);
-}
-
 .tool-card-glyph.tone-danger {
   color: var(--danger);
 }
 
-.tool-card-glyph.tone-muted {
-  color: var(--faint);
-}
-
 .tool-card[data-status="running"] .tool-card-glyph {
   animation: pulse 1.6s ease-in-out infinite;
-}
-
-.tool-card-name {
-  flex: none;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--ink);
-}
-
-.tool-card-args {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--faint);
-}
-
-.tool-card-duration {
-  flex: none;
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--faint);
-}
-
-.tool-card-chevron {
-  flex: none;
-  color: var(--faint);
-  font-size: 10px;
-}
-
-.tool-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0 10px 10px;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
 .tool-section {
@@ -502,27 +355,6 @@
   color: var(--faint);
 }
 
-.tool-diff {
-  white-space: pre;
-  overflow-wrap: normal;
-}
-
-.diff-line {
-  display: block;
-}
-
-.diff-add {
-  color: var(--ok);
-}
-
-.diff-remove {
-  color: var(--danger);
-}
-
-.diff-context {
-  color: var(--faint);
-}
-
 .tool-meta-list {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -541,46 +373,18 @@
   overflow-wrap: anywhere;
 }
 
-.tool-card-note {
-  font-size: 10.5px;
-  color: var(--warn);
-}
-
 /* 思考流：弱化、可折叠，与正文分开渲染。 */
+
 .reasoning-block {
   color: var(--muted);
-}
-
-.reasoning-summary {
-  padding: 6px 10px;
-  color: var(--faint);
-  font-size: 11.5px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.reasoning-summary:hover {
-  color: var(--muted);
-}
-
-.reasoning-text {
-  padding: 6px 10px 8px;
-  font-size: 12px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .reasoning-live {
   color: var(--info);
 }
 
-.reasoning-more {
-  margin: 0 10px 8px;
-  font-size: 10.5px;
-}
-
 /* ask_user：与 permission-card 一样渲染在 Composer 槽位。 */
+
 .ask-card {
   margin: 0;
   padding: 10px;
@@ -605,11 +409,6 @@
   font-size: 10px;
 }
 
-.ask-answer-required {
-  margin-top: var(--space-2);
-  font-size: var(--text-sm);
-}
-
 .ask-card-actions {
   display: flex;
   justify-content: flex-end;
@@ -617,79 +416,8 @@
   margin-top: 8px;
 }
 
-.row {
-  display: grid;
-  grid-template-columns: max-content max-content minmax(0, 1fr);
-  align-items: baseline;
-  gap: 9px;
-  padding: 3px 0;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--muted);
-}
-
-.event-body {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.row .ts {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: var(--faint);
-}
-
-.type-tag {
-  padding: 0 6px;
-  border-radius: var(--radius-xs);
-  background: var(--surface-sunken);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 17px;
-  letter-spacing: 0.02em;
-  color: var(--faint);
-  white-space: nowrap;
-}
-
-.type-tag.tag-tool-start {
-  background: var(--info-soft);
-  color: var(--info);
-}
-
-.type-tag.tag-tool-done {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-.type-tag.tag-tool-fail,
-.type-tag.tag-error {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.type-tag.tag-guard {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
-.type-tag.tag-llm {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.type-tag.tag-raw {
-  color: var(--muted);
-}
-
-.row.tag-tool-start,
-.row.tag-tool-done,
-.row.tag-tool-fail {
-  margin-left: 10px;
-  padding-left: 12px;
-}
-
 /* 失败 run：摘要保留 240 字截断，展开后显示完整错误（保留换行）。 */
+
 .run-error {
   flex: 1 1 100%;
   min-width: 0;
@@ -743,11 +471,6 @@
   color: var(--muted);
 }
 
-.run-detail-link {
-  margin-left: auto;
-  text-decoration: none;
-}
-
 .run-output {
   width: 100%;
   margin: 8px 0 0;
@@ -799,16 +522,6 @@
   box-shadow: var(--elev-2), var(--focus-ring);
 }
 
-.composer-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
 .composer-target {
   min-width: 0;
   font-family: var(--font-mono);
@@ -817,29 +530,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.composer-meta-right {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* 0.18：停止入口在 Composer 区域，不再挂在 run 头部。 */
-.composer-stop {
-  font-size: 11px;
-  color: var(--danger);
-}
-
-.composer-stop:disabled {
-  opacity: 0.6;
-}
-
-.composer-hint {
-  flex: none;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
 }
 
 .composer-row {
@@ -877,6 +567,7 @@
 }
 
 /* 0.18：pending 时用同尺寸提示卡替换 Composer；权限/提问共用同一外壳。 */
+
 .prompt-slot {
   width: 100%;
   max-width: var(--chat-content-w, 860px);
@@ -915,6 +606,7 @@
 }
 
 /* 固定高度下长内容可滚动，但允许/拒绝/提交入口始终留在视野内。 */
+
 .prompt-slot .permission-card-actions,
 .prompt-slot .ask-card-actions {
   position: sticky;

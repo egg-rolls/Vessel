@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { Button } from '../../components/ui';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -58,31 +59,34 @@ function PromptShell({
   }, [focusKey]);
 
   return (
-    <footer className="composer-area prompt-area">
+    <footer className="composer-area">
       <section
         ref={sectionRef}
         tabIndex={-1}
-        className="prompt-slot"
+        className="prompt-slot mx-auto flex w-full max-w-[var(--chat-content-w,860px)] flex-col gap-2 overflow-y-auto overscroll-contain rounded-lg bg-raised px-3.5 py-3"
         aria-label={t('chat.prompt.label')}
       >
-        <div className="prompt-slot-head">
-          <span className="prompt-slot-kind">{label}</span>
-          {more > 0 && <span className="dim">{t('chat.prompt.more', { count: more })}</span>}
-          <span className="dim prompt-slot-hint">{t('chat.prompt.blocking')}</span>
+        <div className="prompt-slot-head sticky top-0 z-1 flex flex-wrap items-baseline gap-2.5 bg-raised py-0.5 text-sm">
+          <span className="prompt-slot-kind text-md text-ink">{label}</span>
+          {more > 0 && <span className="text-muted">{t('chat.prompt.more', { count: more })}</span>}
+          <span className="prompt-slot-hint text-muted">{t('chat.prompt.blocking')}</span>
           {onStop && (
-            <button
-              type="button"
-              className="link-btn prompt-slot-stop"
+            <Button
+              variant="link"
+              className="prompt-slot-stop"
               onClick={onStop}
               disabled={stopping}
             >
               {stopping ? t('chat.run.stopping') : t('chat.run.stop')}
-            </button>
+            </Button>
           )}
           {queue && queue.length > 0 && (
-            <div className="prompt-queue">
+            <div className="flex basis-full flex-wrap gap-2">
               {queue.slice(0, 3).map((item) => (
-                <span className="prompt-queue-chip" key={item.key}>
+                <span
+                  className="inline-flex items-center rounded-full bg-sunken px-2.5 py-0.5 text-2xs leading-relaxed text-muted"
+                  key={item.key}
+                >
                   {item.label}
                 </span>
               ))}
@@ -94,7 +98,7 @@ function PromptShell({
           </span>
         </div>
         {connected === false && (
-          <p className="prompt-slot-hint err" role="status">
+          <p className="prompt-slot-hint ml-0 text-danger" role="status">
             {t('chat.prompt.disconnected')}
           </p>
         )}

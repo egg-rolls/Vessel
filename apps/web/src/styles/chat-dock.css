@@ -3,6 +3,7 @@
 
 /* ── Draft 欢迎页（0.18） ────────────────────────────────
    背景式居中 hero：无边框 / 背景 / 阴影 / 圆角，只在消息流内占据剩余高度。 */
+
 .chat-welcome {
   flex: 1 0 auto;
   display: grid;
@@ -47,6 +48,7 @@
 }
 
 /* 焦点环只由 .composer:focus-within 承担，避免输入框与容器双层。 */
+
 .composer-input:focus,
 .composer-input:focus-visible {
   box-shadow: none;
@@ -60,13 +62,7 @@
 }
 
 @media (pointer: coarse) {
-  .composer-row .btn,
-  .composer-stop {
+  .composer-row .btn {
     min-height: var(--touch-target);
-  }
-
-  .composer-stop {
-    display: inline-flex;
-    align-items: center;
   }
 }

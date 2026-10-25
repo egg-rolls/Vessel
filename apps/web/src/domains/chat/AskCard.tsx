@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button, Input } from '../../components/ui';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequest } from '../../gateway/types';
 import { t } from '../../i18n';
 
@@ -78,27 +79,41 @@ export function AskCard({
     <fieldset className="ask-card" aria-labelledby={titleId} data-request-id={request.requestId}>
       <div className="ask-card-head" id={titleId}>
         <span className="ask-card-title">{t('ask.title')}</span>
-        <span className="ask-card-meta dim mono">run {truncate(request.runId, 16)}</span>
+        <span className="ask-card-meta font-mono text-muted tabular-nums">
+          run {truncate(request.runId, 16)}
+        </span>
         {pendingCount > 1 && (
-          <span className="dim">{t('ask.pendingMore', { count: pendingCount - 1 })}</span>
+          <span className="text-muted">{t('ask.pendingMore', { count: pendingCount - 1 })}</span>
         )}
       </div>
 
-      <div className="ask-list">
+      <div className="ask-list flex flex-col gap-3 pr-1">
         {request.questions.map((question, index) => (
           <div
-            className="ask-question"
+            className="flex flex-col gap-2 rounded-md bg-sunken p-3.5"
             key={`${request.requestId}-${question.header}-${question.question}`}
           >
-            <div className="ask-header">{question.header}</div>
-            <div className="ask-text">{question.question}</div>
+            <div className="font-mono text-2xs font-semibold uppercase tracking-widest text-accent-ink">
+              {question.header}
+            </div>
+            <div className="leading-relaxed whitespace-pre-wrap wrap-anywhere">
+              {question.question}
+            </div>
             {question.options && question.options.length > 0 && (
-              <div className="ask-options">
+              <div className="flex flex-wrap gap-2">
                 {question.options.map((option) => {
                   const picked = (selected[index] ?? []).includes(option);
                   return (
-                    <label className={`ask-option ${picked ? 'picked' : ''}`.trim()} key={option}>
+                    <label
+                      className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-md pointer-coarse:min-h-touch ${
+                        picked
+                          ? 'bg-accent-soft text-accent-ink'
+                          : 'bg-raised text-ink hover:bg-hover'
+                      }`}
+                      key={option}
+                    >
                       <input
+                        className="accent-accent"
                         type={question.multi_select ? 'checkbox' : 'radio'}
                         name={`ask-${request.requestId}-${index}`}
                         checked={picked}
@@ -111,8 +126,7 @@ export function AskCard({
                 })}
               </div>
             )}
-            <input
-              className="input"
+            <Input
               value={custom[index] ?? ''}
               disabled={busy}
               onChange={(event) =>
@@ -132,18 +146,13 @@ export function AskCard({
         ))}
       </div>
 
-      <div className="ask-card-actions">
-        <button type="button" className="btn btn-danger-ghost" disabled={busy} onClick={onCancel}>
+      <div className="ask-card-actions mt-2 flex justify-end gap-2">
+        <Button variant="dangerGhost" disabled={busy} onClick={onCancel}>
           {t('common.cancel')}
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={!complete || busy}
-          onClick={() => onSubmit(answers)}
-        >
+        </Button>
+        <Button variant="primary" disabled={!complete || busy} onClick={() => onSubmit(answers)}>
           {busy ? t('permission.busy') : t('ask.submit')}
-        </button>
+        </Button>
       </div>
     </fieldset>
   );
@@ -198,9 +207,11 @@ export function AskQuestionCard({
     >
       <div className="ask-card-head" id={titleId}>
         <span className="ask-card-title">{t('ask.title')}</span>
-        <span className="ask-card-meta dim mono">run {truncate(request.runId, 16)}</span>
+        <span className="ask-card-meta font-mono text-muted tabular-nums">
+          run {truncate(request.runId, 16)}
+        </span>
         {request.questions.length > 0 && (
-          <span className="ask-card-meta dim">
+          <span className="ask-card-meta text-muted tabular-nums">
             {t('ask.progress', {
               current: questionIndex + 1,
               total: request.questions.length,
@@ -210,17 +221,32 @@ export function AskQuestionCard({
       </div>
 
       {question && (
-        <div className="ask-list">
-          <div className="ask-question" key={`${request.requestId}-${questionIndex}`}>
-            <div className="ask-header">{question.header}</div>
-            <div className="ask-text">{question.question}</div>
+        <div className="ask-list flex flex-col gap-3 pr-1">
+          <div
+            className="flex flex-col gap-2 rounded-md bg-sunken p-3.5"
+            key={`${request.requestId}-${questionIndex}`}
+          >
+            <div className="font-mono text-2xs font-semibold uppercase tracking-widest text-accent-ink">
+              {question.header}
+            </div>
+            <div className="leading-relaxed whitespace-pre-wrap wrap-anywhere">
+              {question.question}
+            </div>
             {question.options && question.options.length > 0 && (
-              <div className="ask-options">
+              <div className="flex flex-wrap gap-2">
                 {question.options.map((option) => {
                   const picked = selected.includes(option);
                   return (
-                    <label className={`ask-option ${picked ? 'picked' : ''}`.trim()} key={option}>
+                    <label
+                      className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-md pointer-coarse:min-h-touch ${
+                        picked
+                          ? 'bg-accent-soft text-accent-ink'
+                          : 'bg-raised text-ink hover:bg-hover'
+                      }`}
+                      key={option}
+                    >
                       <input
+                        className="accent-accent"
                         type={question.multi_select ? 'checkbox' : 'radio'}
                         name={`${request.requestId}-${questionIndex}`}
                         checked={picked}
@@ -233,8 +259,7 @@ export function AskQuestionCard({
                 })}
               </div>
             )}
-            <input
-              className="input"
+            <Input
               value={custom}
               disabled={disabled}
               onChange={(event) => onCustom(event.target.value)}
@@ -250,33 +275,28 @@ export function AskQuestionCard({
       )}
 
       {!answered && (
-        <p className="dim ask-answer-required" role="status">
+        <p className="mt-2 text-sm text-muted" role="status">
           {t('ask.answerRequired')}
         </p>
       )}
 
-      <div className="ask-card-actions">
-        <button
-          type="button"
-          className="btn btn-danger-ghost"
-          disabled={disabled}
-          onClick={onCancel}
-        >
+      <div className="ask-card-actions mt-2 flex justify-end gap-2">
+        <Button variant="dangerGhost" disabled={disabled} onClick={onCancel}>
           {t('common.cancel')}
-        </button>
+        </Button>
         {onPrev && (
-          <button type="button" className="btn" disabled={disabled} onClick={onPrev}>
+          <Button disabled={disabled} onClick={onPrev}>
             {t('ask.previous')}
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          className="btn btn-primary"
+        <Button
+          variant="primary"
+          className="btn-primary"
           disabled={!canAdvance || disabled}
           onClick={onNext}
         >
           {busy ? t('permission.busy') : isLast ? t('ask.submit') : t('ask.next')}
-        </button>
+        </Button>
       </div>
     </fieldset>
   );

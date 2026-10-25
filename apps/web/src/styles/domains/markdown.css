@@ -72,55 +72,6 @@
   color: var(--ink);
 }
 
-.msg-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.msg-time {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: var(--faint);
-}
-
-.msg-bubble .msg-time {
-  display: block;
-  margin-top: 4px;
-  text-align: right;
-}
-
-.event-details {
-  display: inline-block;
-  margin-left: 8px;
-  vertical-align: top;
-}
-
-.event-summary {
-  display: inline;
-  font-size: 11px;
-  color: var(--accent);
-  cursor: pointer;
-}
-
-.event-payload {
-  max-width: min(100%, 720px);
-  max-height: 280px;
-  margin: 6px 0 0;
-  padding: 8px 10px;
-  overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--surface-deep);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .day-divider {
   display: flex;
   align-items: center;
