@@ -169,6 +169,7 @@ export function RunDetail({
   const [hasMore, setHasMore] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const previousActive = useRef(active);
+  const sectionRef = useRef<HTMLElement | null>(null);
   /** trace 请求代次：切换 run 后旧响应不得覆盖新 run。 */
   const traceGeneration = useRef(0);
 
@@ -235,7 +236,7 @@ export function RunDetail({
   // biome-ignore lint/correctness/useExhaustiveDependencies: runId 变化是滚动触发条件
   useEffect(() => {
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    document.querySelector<HTMLElement>('.run-detail')?.scrollIntoView({
+    sectionRef.current?.scrollIntoView({
       block: 'start',
       behavior: reduced ? 'auto' : 'smooth',
     });
@@ -290,6 +291,7 @@ export function RunDetail({
 
   return (
     <Section
+      ref={sectionRef}
       className="run-detail"
       aria-label={t('runs.detail.label')}
       title={t('runs.detail.title')}
