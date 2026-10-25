@@ -4,8 +4,8 @@ import { cn } from './cn';
 
 const button = cva(
   // L2 基础：形状、排版、focus 与 disabled 只在这里定义一次。
-  // `btn` 是 marker：未迁移的 `.card .btn` / `.multi-node-head .btn` 等上下文规则
-  // 仍依赖它做外边距与触控尺寸；视觉属性由下面的 utilities 覆盖。
+  // `btn` 是 marker：`.data-table td:last-child .btn + .btn` 等上下文规则
+  // 仍依赖它做外边距；视觉属性由下面的 utilities 覆盖。
   'btn inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm px-3 py-2 text-sm tracking-wide transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface pointer-coarse:min-h-touch disabled:opacity-45 disabled:cursor-not-allowed',
   {
     variants: {
