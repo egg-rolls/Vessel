@@ -225,6 +225,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly tenantId: string;
   private readonly eventStream: EventStream | undefined;
   private readonly defaultModel: string | undefined;
+  /** `create` 未显式指定 owner 时的默认 owner；不持久化 */
+  private readonly defaultOwner: string;
   /** `new` 未显式传 workspace 时的默认 workspace；无配置声明时为 undefined */
   private readonly defaultWorkspace: string | undefined;
   private readonly teamBinder: TeamBinder | undefined;
@@ -251,6 +253,7 @@ export class AgentServiceImpl implements AgentService {
     this.tenantId = options.tenantId;
     this.eventStream = options.events;
     this.defaultModel = options.defaultModel;
+    this.defaultOwner = options.ownerId ?? DEFAULT_OWNER;
     this.defaultWorkspace = nonEmpty(options.defaultWorkspace)
       ? options.defaultWorkspace
       : undefined;
@@ -441,7 +444,7 @@ export class AgentServiceImpl implements AgentService {
     if (peer && typeof rawOwner === 'string') {
       throw new AgentError('invalid_input', 'peer must not specify an owner');
     }
-    const owner = peer ? undefined : ((rawOwner as string | undefined) ?? DEFAULT_OWNER);
+    const owner = peer ? undefined : ((rawOwner as string | undefined) ?? this.defaultOwner);
 
     const id = this.newId();
     if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');

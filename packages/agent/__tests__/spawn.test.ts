@@ -140,6 +140,37 @@ describe('AgentService.create peer / contractor', () => {
     expect(peer.parent_id).toBeUndefined();
     expect(peer.visibility).toBe('team');
   });
+
+  it('defaults owner to the configured ownerId for contractor and legacy create', async () => {
+    const { service } = makeService({ ownerId: 'boss' });
+
+    const contractor = await service.create({ kind: 'contractor' });
+    const legacy = await service.create({});
+
+    expect(contractor.owner).toBe('boss');
+    expect(contractor.parent_id).toBe('boss');
+    expect(legacy.owner).toBe('boss');
+  });
+
+  it('keeps peer ownerless and honors an explicit owner when ownerId is configured', async () => {
+    const { service } = makeService({
+      ownerId: 'boss',
+      teamBinder: makeBinder(makeTeam(TEAM_ID)),
+    });
+
+    const peer = await service.create({ kind: 'peer', teamId: TEAM_ID });
+    const explicit = await service.create({ kind: 'contractor', owner: 'worker-1' });
+
+    expect(peer.owner).toBeUndefined();
+    expect(explicit.owner).toBe('worker-1');
+  });
+
+  it('falls back to main when ownerId is not configured', async () => {
+    const { service } = makeService();
+
+    expect((await service.create({ kind: 'contractor' })).owner).toBe('main');
+    expect((await service.create({})).owner).toBe('main');
+  });
 });
 
 describe('AgentService.create auto name', () => {

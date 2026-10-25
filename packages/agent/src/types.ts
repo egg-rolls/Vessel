@@ -644,6 +644,8 @@ export interface AgentServiceOptions {
   events?: EventStream;
   /** 创建成员未显式指定 model 时使用的“有效 model”（落库，供 resume 使用） */
   defaultModel?: string;
+  /** 创建成员未显式指定 owner 时的默认 owner；不持久化 */
+  ownerId?: string;
   /**
    * 0.19 S3：`create` 未显式传 workspace 时的默认 workspace。
    * 仅由“配置声明命中 agent.cwd”提供；无声明时为 undefined（保持 unbound）。

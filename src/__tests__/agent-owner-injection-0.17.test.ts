@@ -337,6 +337,30 @@ describe('agent owner injection 0.17', () => {
     }
   });
 
+  it('wires ownerId into the service default owner', async () => {
+    const pluginHost = new MemoryPluginHost();
+    const owneredDir = tmpDir();
+    const defaultDir = tmpDir();
+    try {
+      const ownered = await createAgentServiceWiring(
+        wiringOptions(pluginHost, owneredDir, { ownerId: 'boss' }),
+      );
+      const contractor = await ownered.service.create({ kind: 'contractor' });
+      const legacy = await ownered.service.create({});
+      expect(contractor.owner).toBe('boss');
+      expect(legacy.owner).toBe('boss');
+      expect(ownered.owner.id).toBe('boss');
+      ownered.injector.dispose();
+
+      const defaults = await createAgentServiceWiring(wiringOptions(pluginHost, defaultDir));
+      expect((await defaults.service.create({})).owner).toBe('main');
+      defaults.injector.dispose();
+    } finally {
+      cleanup(owneredDir);
+      cleanup(defaultDir);
+    }
+  });
+
   it('end-to-end: member final text queues to owner and injects once', async () => {
     const pluginHost = new MemoryPluginHost();
     const dataDir = tmpDir();

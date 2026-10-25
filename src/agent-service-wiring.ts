@@ -238,6 +238,7 @@ export async function createAgentServiceWiring(
     dataDir: options.dataDir,
     runtime,
     defaultModel: options.model,
+    ownerId,
     // 成员生命周期事件与父入口同源；缺省时只有 subscribe，不进入父流。
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
