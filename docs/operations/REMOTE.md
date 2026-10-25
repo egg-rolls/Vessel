@@ -136,7 +136,7 @@ bun run src/cli.ts --connect https://node-b.example.com:8642 \
 0.6 的 `transport.kind: loopback|remote`、`transport.nodes[]`、`LoopbackTransport`、
 `RemoteTransport`、`NodeRegistry` 与 gateway `/v1/team/*` 已于 0.22.1 删除；
 `transport.kind` 现在只接受 `in-process`。跨节点投递使用 federation
-（`POST /v1/federation/messages`，见 `docs/ARCHITECTURE.md` §45），
+（`POST /v1/federation/messages`，见 `docs/versions/0.20.0.md` 与 [ADR-094](../adr/ADR-094-federation-team-to-team.md)），
 远程客户端 / `--connect` 的用法不变。
 
 ### 3.3.1 Federation 与成员寻址（0.21）
@@ -288,7 +288,7 @@ VESSEL_CONNECT_TOKEN='<token>' bun run src/cli.ts \
   --connect https://node-b.example.com:8642 \
   --ca /etc/vessel/ca.pem --run "hello"
 
-# 3. 跨节点 agent 传输已于 0.22.1 删除；验证 federation 见 ARCHITECTURE §45
+# 3. 跨节点 agent 传输已于 0.22.1 删除；验证 federation 见 docs/versions/0.20.0.md 与 ADR-094
 
 # 4. 离线门禁
 bun test src/__tests__/connect-e2e-0.6.test.ts

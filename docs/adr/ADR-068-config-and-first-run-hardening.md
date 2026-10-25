@@ -18,7 +18,7 @@ tags: [config, provider, first-run, validation, security]
   4. **YAML 错误显式化**。解析失败、重复键、根节点类型错误转为带文件路径（YAML 错误还带行号）的 validation error；只有文件不存在 / 空文档才视为缺省。不得把损坏配置静默降级为默认配置。
   5. **首启模板可启动**。`config init` 生成的模板可直接启动并打印下一步提示；`--json` 下错误是结构化对象；CLI 统一错误 formatter，退出码区分参数错误（2）与运行失败（1）。
   6. **来源脱敏**。`config show --sources` 对 `serve.tokens.<token>.*` 的 token 段与值输出 `<set>` / `<set#N>`，对 `*.apiKey` / `*.token` 的来源值输出 `<set>`；任何路径都不输出解析后的密钥。
-  7. **配置默认值对齐运行时**。`context.maxMessages` 不再提供默认值；缺省时由 core 按 `context.maxTokens` 推导安全条数上限（见 ADR-069 的运行时部分与 ARCHITECTURE §29）。显式配置仍优先。
+  7. **配置默认值对齐运行时**。`context.maxMessages` 不再提供默认值；缺省时由 core 按 `context.maxTokens` 推导安全条数上限（见 ADR-069 的运行时部分与 `docs/versions/0.10.0.md`）。显式配置仍优先。
 
 - **备选**：(a) 继续兼容两套 provider 写法且不告警——行为差异会长期存在；(b) legacy 直接报错——破坏已有配置，且 0.x 阶段没有必要；(c) 未知 provider 回退到 openai 默认端点——会把配置错误伪装成网络错误；(d) YAML 解析失败回落默认配置——首启更难诊断，且可能覆盖用户意图；(e) 保留 `context.maxMessages` 默认值——与 1M 上下文预算冲突，条数上限会绕过 token 预算。均不取。
 

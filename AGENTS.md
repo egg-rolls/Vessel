@@ -57,7 +57,7 @@
 - **远程**：不默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环必须 TLS；`serve.allowed_origins` 只接受显式 http(s) origin，禁止 `*` / path / query（[ADR-041](docs/adr/ADR-041-remote-listen-and-tls.md) / [ADR-053](docs/adr/ADR-053-remote-security-baseline.md)）。
 - MCP 工具默认不 `allow`；除非在 `auto_approve_tools` 里按原始工具名精确列出（[ADR-039](docs/adr/ADR-039-mcp-client-as-plugin.md)）。
 - `node_id` 唯一来源是 `resolveNodeId()`：`config.host.nodeId` > `<dataDir>/node.json` > 首次生成并 `0600` 原子写；不得由 hostname / IP 派生；文件损坏抛 `node_identity_corrupt`，不得静默换身份（[ADR-091](docs/adr/ADR-091-agent-body-and-presence.md)）。
-- conversation 预算挂在 `teams[].policy.budget`，不复用 `limits.*`；状态唯一写在 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、损坏 fail-closed）；override 只能由人经 `teams.budget` / owner 端点 / CLI 抬高或清除（[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §44.4）。
+- conversation 预算挂在 `teams[].policy.budget`，不复用 `limits.*`；状态唯一写在 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、损坏 fail-closed）；override 只能由人经 `teams.budget` / owner 端点 / CLI 抬高或清除（[docs/operations/CONFIG.md](docs/operations/CONFIG.md) §2.12）。
 
 ### 权限、事件与团队
 
@@ -69,11 +69,11 @@
 - **session 即成员**：`new` 创建的成员初始 `session_id === id`；`rotate` 换活 Body，旧 Body 进 `body_history`；成员状态机取 `created|idle|running|waiting_permission|completed|failed|cancelled|closed`，`stale` 只读兼容、不得再写入；重启后非 `left` 成员为 `idle + presence='gone'`（ADR-091 / [ADR-092](docs/adr/ADR-092-agent-rotate-and-epoch-fencing.md)）。
 - **dispatch 是统一投递入口**：需要“确保成员能干活”的调用方一律走 `AgentService.dispatch`，不得在每个入口重写状态检查或并发 spawn。fork 只在 `gone + resume` 失败后按 policy / 显式 `allow_fork` 发生；rotate 失败保持旧身体，不自动重试（[ADR-094](docs/adr/ADR-094-federation-team-to-team.md) Addendum / ADR-091）。
 - **Team 日志不是队列**：无 `@` 的 post / reply / system 绝不产生 run；`@` 必须先写日志再 dispatch；`TeamService` 是唯一写入点。可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；team-scoped token 只能访问自己的 `team_id`，不匹配一律 `not_found`。`teams.create` 仅 human / admin；`archive` 拒绝 present 成员（`team_not_empty`），不提供隐式 hard delete（ADR-091 / ADR-093）。
-- **远程 attention**：permission / ask 必须在运行 agent 的节点本地应答；`vessel attention` 用 gateway / team token 直连，peer token 不能用于 attention；`answered_by` 仍只 `human | policy`；roster 排序只由 `TeamService` 产生（[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §47）。
+- **远程 attention**：permission / ask 必须在运行 agent 的节点本地应答；`vessel attention` 用 gateway / team token 直连，peer token 不能用于 attention；`answered_by` 仍只 `human | policy`；roster 排序只由 `TeamService` 产生（[docs/operations/REMOTE.md](docs/operations/REMOTE.md) 的「人类控制 token 词表」与「Federation 与成员寻址」）。
 
 ### 协议、配置与发布
 
-- 新 RPC 方法进 `packages/serve/src/gateway/methods/<domain>.ts` 并导出 `createXxxMethods`，由 `gateway.ts` 展开；不要把方法表回灌 `gateway.ts`。方法清单与冻结项见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §45.3；新增 canonical 方法必须发 addendum，并同时写 `result_schema`（[ADR-059](docs/adr/ADR-059-gateway-method-modules.md) / [ADR-066](docs/adr/ADR-066-rpc-result-schemas.md)）。
+- 新 RPC 方法进 `packages/serve/src/gateway/methods/<domain>.ts` 并导出 `createXxxMethods`，由 `gateway.ts` 展开；不要把方法表回灌 `gateway.ts`。方法清单与冻结项见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13.7；新增 canonical 方法必须发 addendum，并同时写 `result_schema`（[ADR-059](docs/adr/ADR-059-gateway-method-modules.md) / [ADR-066](docs/adr/ADR-066-rpc-result-schemas.md)）。
 - 新一次性 CLI 子命令进 `src/commands/registry.ts` 的 `cliCommands`，不要在 `cli.ts` 加 `if` 链（[ADR-060](docs/adr/ADR-060-cli-command-registry.md)）。
 - **配置层序固定** `CLI > env > tenant overlay > project > user > default`，只在 `loadConfig()` 合并；CLI flag 必须经 `buildCliConfigOverrides()`；serve / connect 不得自行读 argv 或 `process.env`；tenant overlay 不得覆盖 CLI / env（[ADR-057](docs/adr/ADR-057-config-single-resolver.md)）。
 - **legacy 配置只读**：新版 `provider:` 优先，legacy 并存发 deprecation warning；未注册 provider 且无 `provider.base_url` 必须抛 `ProviderConfigError`；YAML 解析失败 / 重复键必须是 validation error；API Key 一律经 `resolveEffectiveApiKey()`（[ADR-068](docs/adr/ADR-068-config-and-first-run-hardening.md)）。

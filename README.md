@@ -135,7 +135,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 **语言空间是唯一的执行面。** Vessel 做两件事：把世界折成语言（system prompt + 消息 + 工具 schema），把语言折回世界（解析 tool_calls → 执行 → 结果折回消息）。
 
-> Kernel / Modules 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14；本小节只描述**当前已实现**的单 agent 行为。
+> Kernel / Modules 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md) 与 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §1；本小节只描述**当前已实现**的单 agent 行为。
 - **9 个接口 + 1 个循环 + 2 个插槽**：`LLMProvider` / `ContextManager` / `EventStream` / `ToolDefinition` / `SessionBackend` / `LimitChecker` / `Guardrail` / `Hook` / `Plugin` + `PluginHost`。两个插槽是**工具**（`PluginHost` 是唯一的工具注册表）与**知识**（`ContextManager`）。
 - **core 不认识业务概念**：不认 skills、不认记忆、不认资产。任何要进语言空间的文本都经 `RunOptions.messages` 注入，core 只负责按序放进消息数组。
 
@@ -333,7 +333,7 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 - 功能：运行提交/取消、事件时间线、会话列表、工具列表、run 内联权限卡片、ask_user 表单、Team 列表 / 群聊 / 成员侧栏 / `@` 补全 / Body 历史；按 `hello.features` 显示 MCP server / interrupted run / metrics / 飞书面板。
 - 权限卡片内联在所属 run 卡片中，跨 session 的待处理请求由顶部条提示；其他端应答 / 过期 / run 结束会自动收起。权限等待默认不超时，应答返回 `expired` 表示已过期，`run_ended` 表示 run 已结束；`not_found` 仅表示请求从未存在。`ask_user` 内联在所属 run 卡片中，默认无限等待，由应答 / abort / run 终态收口；跨 session 的待处理条同时汇总权限与提问。工具卡与思考气泡按 Codex 式分区展示，`ui.verbosity: minimal|normal|debug` 控制信息层级（默认 `normal`）。`ui.showReasoning: true` 时思考过程折叠显示（默认关闭）。
 - 助手文本 Markdown 渲染（代码块 / 列表 / 表格 / 链接）；`sessions.search` 服务端全文检索（返回 snippet，前端 150ms 防抖并保留本地过滤兜底）；`tool.call.started` 带 `args`、`tool.call.completed` 带 `result`（上限 8 KiB，超出截断标记），事件卡可折叠、失败默认展开。
-- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`、`/v1/metrics`、`/v1/channels/feishu`、`/v1/evals/latest`、`/v1/hub/*`（hub 控制面）。canonical RPC 见 §13.7，Team / Hub / Web Team 见 §41–§43。
+- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`、`/v1/metrics`、`/v1/channels/feishu`、`/v1/evals/latest`、`/v1/hub/*`（hub 控制面）。canonical RPC 见 §13.7，Team / Hub / Web Team 见 [0.19.0](docs/versions/0.19.0.md)、[REMOTE](docs/operations/REMOTE.md) 与 [WEB-UI](docs/WEB-UI.md)。
 - 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
 - 远程 / TLS（显式 opt-in）：`--serve-host` + `--allow-remote` + `--tls-cert`/`--tls-key`，或 `serve.*` 配置；**非回环必须 token + HTTPS/WSS**，cert/key 必须成对。只做 HTTP/1.1。
 - 独立前端：页面运行时可切换 gateway 地址，优先级 `localStorage['vessel.gateway-url']` > `VITE_GATEWAY_URL` > 同源；只接受 http(s)/ws(s) origin，非回环必须 https，HTTPS 页面拒绝 http（mixed content）。跨 Origin 部署需在服务端配置 `serve.allowed_origins`（或重复使用 `--allowed-origin`），且浏览器必须信任证书。详见 [REMOTE.md](docs/operations/REMOTE.md)。
