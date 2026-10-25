@@ -63,3 +63,13 @@ tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
 - **单 hub 限制**：一个 node 进程 / data dir 只加入一个 hub（单份 `hub-node.json`）；多 hub 需要多个 data dir / 进程。S5.1 不做自动发现、多 hub 联邦、token 自动刷新或 mTLS。
 - **收口**：canonical 仍为 **47**，不新增 RPC 方法、不改任何 manifest、版本线仍 0.19；既有 hub → node（`vessel hub pair` / `vessel hub node add` / `/v1/hub/control`）行为不变。
 - **上文 S5 Addendum 的“node → hub 出站仍为 S5.1、运行时拒绝 `direction: node`”已被本节取代**：`vessel hub start` 仍只接受 `direction: hub`（hub 进程不扮演 node），而 gateway 的 `hub.direction: node` 现在启动节点出站。该历史句子只描述 S5 当时的状态。
+
+## Errata（DECISION-035 可达性）
+
+> 2026-10-25，只追加。上文与关联段引用的 `DECISION-035` 是个人侧裁决记录，不在本仓库，
+> 共享侧读者无法打开；正文保留原文，不改写当时结论。
+
+- 仓库内可读的方向见 [ADR-091](ADR-091-agent-body-and-presence.md)（Agent / Body / Team 内核）
+  与 [ADR-036](ADR-036-gateway-protocol-v1.md)（gateway 控制面）。
+- hub 只做目录 / 指针、不代理正文、授权权威在节点：以上文决策 1 / 2 / 8 / 10 为准；
+  跨节点投递见 [ADR-094](ADR-094-federation-team-to-team.md)。

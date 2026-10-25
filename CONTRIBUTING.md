@@ -7,6 +7,6 @@
 5. 合并用 **squash merge**，不直接 push `main`。
 6. 发布只由维护者通过 tag `v*` 触发；贡献者不打 tag、不执行 `version.ts` 写模式。流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
 
-写代码前先读 [AGENTS.md](AGENTS.md)（红线与分层准入）、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)（架构事实）与 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)（路径与文件归属）。
+写代码前先读 [AGENTS.md](AGENTS.md)（红线与分层准入）、[docs/architecture/INDEX.md](docs/architecture/INDEX.md)（架构事实）与 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)（路径与文件归属）。
 
 发现安全漏洞见 [SECURITY.md](SECURITY.md)，勿开公开 issue。

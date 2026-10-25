@@ -35,6 +35,13 @@ const LINK_FILES = [
   'docs/operations/REMOTE.md',
 ];
 
+const ARCH_DIR = 'docs/architecture';
+const AGENTS_DIR = 'docs/agents';
+const DOC_KINDS = new Set(['current', 'advisory']);
+const APPLIES_TO = new Set(['N', 'M']);
+const ARCH_MODULE_LINE_LIMIT = 100;
+const ADVISORY_LINE_LIMIT = 60;
+const DOC_INDEX_LINE_LIMIT = 60;
 const ADR_DIR = 'docs/adr';
 const ADR_FILE_PATTERN = /^ADR-(\d{3})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
 const ADR_STATUS = new Set(['proposed', 'accepted', 'superseded']);
@@ -59,7 +66,182 @@ export async function checkDocs(root: string): Promise<DocIssue[]> {
     await checkLinks(root, file, issues);
   }
 
+  for (const file of await listMarkdownFiles(root, ARCH_DIR)) {
+    await checkLinks(root, `${ARCH_DIR}/${file}`, issues);
+  }
+
+  for (const file of await listMarkdownFiles(root, AGENTS_DIR)) {
+    await checkLinks(root, `${AGENTS_DIR}/${file}`, issues);
+  }
+
+  await checkDocTree(root, ARCH_DIR, 'current', ARCH_MODULE_LINE_LIMIT, issues);
+  await checkDocTree(root, AGENTS_DIR, 'advisory', ADVISORY_LINE_LIMIT, issues);
+  await checkDocIndex(root, ARCH_DIR, issues);
+  await checkDocIndex(root, AGENTS_DIR, issues);
+  await checkCurrentVersionNarrative(root, ARCH_DIR, issues);
+  await checkCurrentVersionNarrative(root, AGENTS_DIR, issues);
+
   return issues;
+}
+
+function countLines(text: string): number {
+  return text.endsWith('\n') ? text.split('\n').length - 1 : text.split('\n').length;
+}
+
+async function checkDocTree(
+  root: string,
+  dir: string,
+  expectedKind: string,
+  lineLimit: number,
+  issues: DocIssue[],
+): Promise<void> {
+  if (!existsSync(join(root, dir))) return;
+  for (const file of await listMarkdownFiles(root, dir)) {
+    if (file === 'INDEX.md') continue;
+    const relative = `${dir}/${file}`;
+    const text = await readFile(join(root, relative), 'utf8');
+    const frontmatter = parseFrontmatter(text);
+    if (!frontmatter) {
+      issues.push({ file: relative, line: 0, message: '缺少合法的 YAML frontmatter' });
+      continue;
+    }
+    if (!frontmatter.title?.trim()) {
+      issues.push({ file: relative, line: 0, message: 'frontmatter.title 不能为空' });
+    }
+    if (!DOC_KINDS.has(frontmatter.kind ?? '')) {
+      issues.push({ file: relative, line: 0, message: 'frontmatter.kind 必须是 current|advisory' });
+    } else if (frontmatter.kind !== expectedKind) {
+      issues.push({ file: relative, line: 0, message: `frontmatter.kind 必须是 ${expectedKind}` });
+    }
+    const triggers =
+      frontmatter.triggers === undefined ? null : parseStringArray(frontmatter.triggers);
+    if (!triggers || triggers.length === 0) {
+      issues.push({ file: relative, line: 0, message: 'frontmatter.triggers 必须是非空数组' });
+    }
+    const paths = frontmatter.paths === undefined ? null : parseStringArray(frontmatter.paths);
+    if (!paths || paths.length === 0) {
+      issues.push({ file: relative, line: 0, message: 'frontmatter.paths 必须是非空数组' });
+    }
+    if (expectedKind === 'advisory') {
+      const appliesTo =
+        frontmatter.applies_to === undefined ? null : parseStringArray(frontmatter.applies_to);
+      if (!appliesTo || appliesTo.length === 0) {
+        issues.push({ file: relative, line: 0, message: 'advisory 必须有 applies_to' });
+      } else if (appliesTo.some((value) => !APPLIES_TO.has(value))) {
+        issues.push({ file: relative, line: 0, message: 'applies_to 只能包含 N|M' });
+      }
+    } else if (frontmatter.applies_to !== undefined) {
+      issues.push({ file: relative, line: 0, message: 'current 文档不能有 applies_to' });
+    }
+    if (countLines(text) > lineLimit) {
+      issues.push({ file: relative, line: 0, message: `文档行数超过上限 ${lineLimit}` });
+    }
+  }
+}
+
+async function checkDocIndex(root: string, dir: string, issues: DocIssue[]): Promise<void> {
+  if (!existsSync(join(root, dir))) return;
+  const relative = `${dir}/INDEX.md`;
+  const full = join(root, relative);
+  if (!existsSync(full)) {
+    issues.push({ file: relative, line: 0, message: '缺少 INDEX.md' });
+    return;
+  }
+  const text = await readFile(full, 'utf8');
+  const frontmatter = parseFrontmatter(text);
+  if (!frontmatter) {
+    issues.push({ file: relative, line: 0, message: '缺少合法的 YAML frontmatter' });
+  } else {
+    if (!frontmatter.title?.trim()) {
+      issues.push({ file: relative, line: 0, message: 'frontmatter.title 不能为空' });
+    }
+    if (frontmatter.kind !== 'current') {
+      issues.push({ file: relative, line: 0, message: 'INDEX.md 的 kind 必须是 current' });
+    }
+    const triggers =
+      frontmatter.triggers === undefined ? null : parseStringArray(frontmatter.triggers);
+    if (!triggers || triggers.length === 0) {
+      issues.push({ file: relative, line: 0, message: 'frontmatter.triggers 必须是非空数组' });
+    }
+    const paths = frontmatter.paths === undefined ? null : parseStringArray(frontmatter.paths);
+    if (!paths || paths.length === 0) {
+      issues.push({ file: relative, line: 0, message: 'frontmatter.paths 必须是非空数组' });
+    }
+  }
+  if (countLines(text) > DOC_INDEX_LINE_LIMIT) {
+    issues.push({
+      file: relative,
+      line: 0,
+      message: `INDEX.md 行数超过上限 ${DOC_INDEX_LINE_LIMIT}`,
+    });
+  }
+
+  const linked = new Map<string, number>();
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('|')) continue;
+    for (const match of line.matchAll(/\]\(([^)]+\.md)\)/g)) {
+      const target = match[1] ?? '';
+      if (target.includes('..') || target.startsWith('/')) {
+        issues.push({
+          file: relative,
+          line: 0,
+          message: `INDEX 链接必须是同目录相对路径：${target}`,
+        });
+        continue;
+      }
+      const name = target.split('#')[0] ?? '';
+      if (!name || name === 'INDEX.md') continue;
+      linked.set(name, (linked.get(name) ?? 0) + 1);
+    }
+  }
+
+  const modules = (await listMarkdownFiles(root, dir)).filter((file) => file !== 'INDEX.md');
+  for (const module of modules) {
+    if (!linked.has(module)) {
+      issues.push({ file: relative, line: 0, message: `INDEX 缺少模块 ${module}` });
+    }
+  }
+  for (const [name, count] of linked) {
+    if (count > 1) {
+      issues.push({ file: relative, line: 0, message: `INDEX 重复链接 ${name}` });
+    }
+    if (!modules.includes(name)) {
+      issues.push({ file: relative, line: 0, message: `INDEX 指向不存在的模块 ${name}` });
+    }
+  }
+}
+
+async function checkCurrentVersionNarrative(
+  root: string,
+  dir: string,
+  issues: DocIssue[],
+): Promise<void> {
+  if (!existsSync(join(root, dir))) return;
+  for (const file of await listMarkdownFiles(root, dir)) {
+    const relative = `${dir}/${file}`;
+    const text = await readFile(join(root, relative), 'utf8');
+    const frontmatter = parseFrontmatter(text);
+    if (frontmatter?.kind !== 'current') continue;
+    let inFence = false;
+    const lines = text.split('\n');
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index] ?? '';
+      if (/^\s*```/.test(line)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence) continue;
+      if (/^#{1,6}\s+0\.\d+(\.\d+)?(\s|$)/.test(line) || /自\s*0\.\d+(\.\d+)?\s*起/.test(line)) {
+        issues.push({ file: relative, line: index + 1, message: 'current 文档标题不得带版本叙事' });
+      }
+    }
+  }
+}
+
+async function listMarkdownFiles(root: string, dir: string): Promise<string[]> {
+  const full = join(root, dir);
+  if (!existsSync(full)) return [];
+  return (await readdir(full)).filter((file) => file.endsWith('.md')).sort();
 }
 
 async function checkLinks(root: string, file: string, issues: DocIssue[]): Promise<void> {
@@ -101,7 +283,7 @@ interface AdrEntry {
   frontmatter: Record<string, string>;
 }
 
-function parseFrontmatter(text: string): Record<string, string> | null {
+export function parseFrontmatter(text: string): Record<string, string> | null {
   const lines = text.split('\n');
   if ((lines[0] ?? '').trim() !== '---') return null;
 
@@ -140,7 +322,7 @@ function parseIntegerArray(value: string): number[] | null {
   return items.map(Number);
 }
 
-function parseStringArray(value: string): string[] | null {
+export function parseStringArray(value: string): string[] | null {
   const match = /^\[(.*)\]$/.exec(value);
   if (!match) return null;
   const inner = (match[1] ?? '').trim();

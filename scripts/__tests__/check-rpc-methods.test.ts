@@ -31,7 +31,7 @@ describe('check-rpc-methods', () => {
       { 'health.get': 'read', 'runs.start': 'write' },
     );
     expect(issues.some((issue) => issue.message.includes('manifest 缺少'))).toBe(true);
-    expect(issues.some((issue) => issue.message.includes('ARCHITECTURE 出现未冻结'))).toBe(true);
+    expect(issues.some((issue) => issue.message.includes('gateway-rpc 出现未冻结'))).toBe(true);
   });
 
   it('reports permission mismatch and legacy leakage', () => {

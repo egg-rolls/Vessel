@@ -4,7 +4,7 @@
  * RPC 方法表 v1.1 一致性检查（0.5）。
  *
  * 事实源：`@vessel-agent/serve` 的 local dispatcher manifest（与 gateway 同一方法表）。
- * 对照：`docs/ARCHITECTURE.md` 的 `rpc-methods` 标记表格 + DECISION-010 A-3/A-4
+ * 对照：`docs/architecture/gateway-rpc.md` 的 `rpc-methods` 标记表格 + DECISION-010 A-3/A-4
  * 冻结的 canonical 集合。
  *
  * 同时断言 legacy-only 方法不进入 manifest：team.* / durable.* /
@@ -99,7 +99,7 @@ const LEGACY_EXACT = new Set(['run.submit', 'run.get', 'run.cancel', 'metrics.re
 
 const BEGIN_MARKER = '<!-- rpc-methods:begin -->';
 const END_MARKER = '<!-- rpc-methods:end -->';
-const DOC_PATH = 'docs/ARCHITECTURE.md';
+const DOC_PATH = 'docs/architecture/gateway-rpc.md';
 
 export interface MethodTableIssue {
   method?: string;
@@ -110,7 +110,7 @@ function isLegacy(method: string): boolean {
   return LEGACY_EXACT.has(method) || LEGACY_PREFIXES.some((prefix) => method.startsWith(prefix));
 }
 
-/** 解析 ARCHITECTURE 中标记表格的 `方法 | permission` 行。 */
+/** 解析 gateway-rpc 中标记表格的 `方法 | permission` 行。 */
 export function parseDocMethodTable(text: string): Record<string, Permission> | null {
   const begin = text.indexOf(BEGIN_MARKER);
   const end = text.indexOf(END_MARKER);
@@ -145,11 +145,11 @@ export function compareMethodTables(
       });
     }
     if (documented[method] === undefined) {
-      issues.push({ method, message: `ARCHITECTURE 方法表缺少 ${method}` });
+      issues.push({ method, message: `gateway-rpc 方法表缺少 ${method}` });
     } else if (documented[method] !== permission) {
       issues.push({
         method,
-        message: `ARCHITECTURE permission 不一致：${method} 期望 ${permission}，实际 ${documented[method]}`,
+        message: `gateway-rpc permission 不一致：${method} 期望 ${permission}，实际 ${documented[method]}`,
       });
     }
   }
@@ -165,7 +165,7 @@ export function compareMethodTables(
 
   for (const method of Object.keys(documented)) {
     if (expected[method] === undefined) {
-      issues.push({ method, message: `ARCHITECTURE 出现未冻结方法 ${method}` });
+      issues.push({ method, message: `gateway-rpc 出现未冻结方法 ${method}` });
     }
     if (isLegacy(method)) {
       issues.push({ method, message: `legacy-only 方法不得出现在 canonical 表：${method}` });

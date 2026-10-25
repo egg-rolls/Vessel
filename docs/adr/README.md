@@ -1,12 +1,12 @@
 # 架构决策记录（ADR）
 
-> 记录 Vessel 的关键决策与**为什么**。架构事实见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
+> 记录 Vessel 的关键决策与**为什么**。架构事实见 [architecture/INDEX.md](../architecture/INDEX.md)。
 >
 > **本文档是历史存档：只追加、不修改。** ADR-001 ~ ADR-033 写于当时的架构，其中引用的
 > `SPEC.md` / `PLUGINS.md` / `ROADMAP.md` / `PRD.md` / `GLOSSARY.md` / `DOC-STANDARD.md` /
 > `GIT-WORKFLOW.md` / `legacy/LESSONS.md` / `docs/api/*` / `docs/role/*` 等文件，已在
 > [ADR-034](ADR-034-minimal-refactor-unfreeze-core.md) 的重构中删除，这些链接不再有效。
-> 保留原文以存真——**其中的架构描述不代表当前实现**，以代码与 ARCHITECTURE.md 为准。
+> 保留原文以存真——**其中的架构描述不代表当前实现**，以代码与 architecture/INDEX.md 为准。
 > ADR 一经决策不轻易推翻；如需变更，新增 ADR 标注 supersede 旧者。
 
 > **已迁移为多文件：** 每条 ADR 独立成文，文件位于本目录；下表为完整索引。
@@ -51,8 +51,8 @@
 | 034 | 极简化重构——解冻 core、三工具集、skills 即消息、拆治理 | accepted | - | - | [ADR-034-minimal-refactor-unfreeze-core.md](ADR-034-minimal-refactor-unfreeze-core.md) |
 | 035 | 0.1.0 core loop 级正确性修复 | accepted | - | - | [ADR-035-core-loop-correctness-fixes.md](ADR-035-core-loop-correctness-fixes.md) |
 | 036 | Gateway 协议 v1——事件流之上的本地控制面 | accepted | - | - | [ADR-036-gateway-protocol-v1.md](ADR-036-gateway-protocol-v1.md) |
-| 038 | thinking 模式 `reasoning_content` 回传 | accepted | - | - | [ADR-038-thinking-reasoning-content.md](ADR-038-thinking-reasoning-content.md) |
 | 037 | Vessel as a modular agent runtime | accepted | - | - | [ADR-037-modular-agent-runtime.md](ADR-037-modular-agent-runtime.md) |
+| 038 | thinking 模式 `reasoning_content` 回传 | accepted | - | - | [ADR-038-thinking-reasoning-content.md](ADR-038-thinking-reasoning-content.md) |
 | 039 | MCP client 作为插件接入 | accepted | - | - | [ADR-039-mcp-client-as-plugin.md](ADR-039-mcp-client-as-plugin.md) |
 | 040 | Durable run——RunStore port、checkpoint 与 resume | accepted | - | - | [ADR-040-durable-run-store-checkpoint-resume.md](ADR-040-durable-run-store-checkpoint-resume.md) |
 | 041 | 远程监听与 TLS（显式 opt-in） | accepted | - | - | [ADR-041-remote-listen-and-tls.md](ADR-041-remote-listen-and-tls.md) |

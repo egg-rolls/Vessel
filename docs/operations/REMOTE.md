@@ -4,7 +4,7 @@
 > 决策边界见 [ADR-051](../adr/ADR-051-remote-control-plane.md) /
 > [ADR-052](../adr/ADR-052-cross-node-transport.md) /
 > [ADR-053](../adr/ADR-053-remote-security-baseline.md)。
-> 架构细节见 [ARCHITECTURE.md §13.1 / §13.5.1 / §13.8](../ARCHITECTURE.md)。
+> 架构细节见 [gateway.md](../architecture/gateway.md#protocol)（协议）、[#tls](../architecture/gateway.md#tls) 与 [#remote](../architecture/gateway.md#remote)。
 
 本文覆盖：证书与 CA、两机配置、独立前端部署、故障排查与安全边界。
 默认行为不变：gateway 只绑 `127.0.0.1:8642`、明文；远程与跨节点都必须显式 opt-in。
@@ -136,8 +136,17 @@ bun run src/cli.ts --connect https://node-b.example.com:8642 \
 0.6 的 `transport.kind: loopback|remote`、`transport.nodes[]`、`LoopbackTransport`、
 `RemoteTransport`、`NodeRegistry` 与 gateway `/v1/team/*` 已于 0.22.1 删除；
 `transport.kind` 现在只接受 `in-process`。跨节点投递使用 federation
-（`POST /v1/federation/messages`，见 `docs/ARCHITECTURE.md` §45），
+（`POST /v1/federation/messages`，见 `docs/versions/0.20.0.md` 与 [ADR-094](../adr/ADR-094-federation-team-to-team.md)），
 远程客户端 / `--connect` 的用法不变。
+
+### 3.3.1 Federation 与成员寻址（0.21）
+
+- 地址 `<principal>@<node_id>:<team_id>`；`principal` 是目标 Team 的 present 成员名或保留字 `human`。三段字符集互斥，按最后一个 `@` 与其中唯一 `:` 解析。
+- wire 的 `from` / `to` 为 `{ node_id, team_id, principal }`；principal 是名字，不是 agent id。
+- 入站按 `to.principal` 单点投递：`human` → 日志 + owner，0 run；成员 → 先写 mention 日志再 dispatch 给一个人。解析用完整 roster，private / left / closed / 不存在 / 重名 → 404，零写入。
+- `accept` 只接受 `'principal'`（缺省）与 `'log'`；`'members'` 是显式错误，非法值 fail-safe 为 `log`。每 peer 限流 `federation.rateLimitPerMinute`（1..600，缺省 60，超限 429）。
+- hop = 1、无中继、无离线队列、无跨重启 exactly-once。
+
 ### 3.4 节点常驻、服务注册与热重载（0.12）
 
 远程节点通常需要长期运行 gateway；0.12 起不再依赖 `nohup` / 自建守护脚本：
@@ -162,6 +171,19 @@ vessel gateway install-service       # systemd user / LaunchAgent / Windows 登�
 - **持久化**：gateway 在 `<dataDir>/interactions-<tenant>.json` 记录 `pending` / `answered` / `orphaned`（`0600` 原子写）。重启后旧 `pending` 转 `orphaned`，迟到应答返回 `run_ended`；重复应答幂等，不同决定返回 `conflict`。多端连接同一 gateway 时共享这份状态。
 - **独立前端**：权限卡片内联在所属 run，跨 session 的待处理请求在顶部条提示；其他端应答 / 过期 / run 终态会自动收起卡片。`ask_user` 同样内联在所属 run，默认无限等待，由应答 / abort / run 终态收口。
 - **TUI 状态栏**：`Ctrl+T` / `Ctrl+G` 切换上 / 下栏，`Ctrl+R` 打开 `/resume`；显隐写回用户配置 `ui.statusBars`（YAML `status_bars`）。`VESSEL_STATUS_BARS` 只作启动初值，不随远程连接或手动切换改变。终端 `<40` 列不渲染下栏，`<18` 行默认隐藏。
+
+### 3.5.1 人类控制 token 词表（0.22）
+
+| 词 | 认证谁 | 用途 |
+|---|---|---|
+| `gateway token` | 用户 / 管理员 | canonical RPC / WS |
+| `team token`（team-scoped control） | 限定 team 的用户 | 只能操作自己的 team |
+| `owner token` | 本机 REPL owner | 本机 owner 端点，loopback |
+| `peer token` | 节点 | `/v1/federation/*`，不能答权限 |
+| `hub token` | hub / node | hub 目录 / 控制面 |
+
+- 文档 / CLI help / 错误消息不再使用裸 “token”。
+- permission / ask 只在运行 agent 的节点本地应答；peer token 不能用于 `interactions.list` / `permission.respond` / `ask.respond`；`answered_by` 只接受 `human | policy`，`answered_via: 'cli'` 只是审计提示。
 
 ### 3.6 Hub 控制面（0.19 S5）
 
@@ -266,7 +288,7 @@ VESSEL_CONNECT_TOKEN='<token>' bun run src/cli.ts \
   --connect https://node-b.example.com:8642 \
   --ca /etc/vessel/ca.pem --run "hello"
 
-# 3. 跨节点 agent 传输已于 0.22.1 删除；验证 federation 见 ARCHITECTURE §45
+# 3. 跨节点 agent 传输已于 0.22.1 删除；验证 federation 见 docs/versions/0.20.0.md 与 ADR-094
 
 # 4. 离线门禁
 bun test src/__tests__/connect-e2e-0.6.test.ts

@@ -74,7 +74,7 @@ Vessel\                                    # 共享侧（git）
 ├── CHANGELOG.md                           # 当前版本变更（历史在 docs/versions/）
 ├── LICENSE
 ├── docs\
-│   ├── ARCHITECTURE.md                    # 架构：怎么做的
+│   ├── architecture/                      # 架构模块 + INDEX.md
 │   ├── ADR.md                             # 兼容 stub：指向 adr/README.md
 │   ├── adr\                               # 决策记录：一条 ADR 一个文件
 │   │   ├── README.md                      # 索引 + 编写约定
@@ -124,7 +124,7 @@ Vessel\                                    # 共享侧（git）
 
 | 目录/文件                 | 回答的问题                             | 维护者               |
 | ------------------------- | -------------------------------------- | -------------------- |
-| `ARCHITECTURE.md`         | 系统怎么工作                           | core 主笔，各 N 补充 |
+| `architecture/INDEX.md` + `architecture/*.md` | 系统怎么工作                | core 主笔，各 N 补充 |
 | `DOC-MANAGEMENT.md`       | 文档分类、生命周期、索引与注释规则     | gov                  |
 | `adr/README.md`           | ADR 索引与编写约定                     | gov                  |
 | `adr/ADR-<NNN>-<slug>.md` | 为什么做这个选择（只追加，一条一文件） | gov                  |
@@ -193,7 +193,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 
 ### 4.3 文件命名
 
-- 共享侧顶层文档：`UPPER-KEBAB.md`（如 `ARCHITECTURE.md`）。
+- 共享侧顶层文档：`UPPER-KEBAB.md`（如 `DOC-MANAGEMENT.md`）。
 - 共享侧子目录文档：`UPPER-KEBAB.md` 或 `kebab-case.md`，同一目录内保持一致。
 - 个人侧 handoff：`HANDOFF-<role>.md`。
 - 个人侧计划：`PLAN-<version>-<role>.md`。
@@ -216,7 +216,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 规则：
 - **跨路径改动只能提 PR 或消息协商，不能直接改。**
 - `scripts/version.ts` 的写模式**只在发布收口由 1 执行**，机械改写各包 `package.json`；不属于日常跨路径改动，N 不运行写模式。
-- `packages/core/src/types/**` 的接口主权归 `core`；任何接口变更必须同步 `docs/ARCHITECTURE.md` + 对应的 `docs/adr/ADR-*.md`（或新增 ADR），并通知全部 N。
+- `packages/core/src/types/**` 的接口主权归 `core`；任何接口变更必须同步 `docs/architecture/**` + 对应的 `docs/adr/ADR-*.md`（或新增 ADR），并通知全部 N。
 - 依赖方向单向：`core` ← 其它。`core` 的 `dependencies` 永远为空。
 - 并行开发必须 worktree 隔离，禁止共享工作目录。
 
