@@ -21,6 +21,10 @@ import {
 const repoRoot = path.resolve(import.meta.dir, '..', '..');
 const cliPath = path.join(repoRoot, 'src', 'cli.ts');
 
+// 每个用例都要冷启动一个完整 CLI 进程；Windows CI 在全量并发下单次 spawn
+// 可超过默认 5s（B-011），15s 留足余量。超时时 bun test 会 kill 子进程。
+const CLI_TEST_TIMEOUT_MS = 15_000;
+
 function count(text: string, char: string): number {
   return [...text].filter((value) => value === char).length;
 }
@@ -304,31 +308,47 @@ describe('argv 解析', () => {
 });
 
 describe('CLI 退出码', () => {
-  it('completion bash 输出脚本并退出 0', async () => {
-    const result = await runCli(['completion', 'bash']);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('_vessel()');
-    expect(result.stderr).toBe('');
-  });
+  it(
+    'completion bash 输出脚本并退出 0',
+    async () => {
+      const result = await runCli(['completion', 'bash']);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('_vessel()');
+      expect(result.stderr).toBe('');
+    },
+    CLI_TEST_TIMEOUT_MS,
+  );
 
-  it('completion 无参数：用法写 stderr，退出 1', async () => {
-    const result = await runCli(['completion']);
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('vessel completion <bash|zsh|fish|powershell>');
-  });
+  it(
+    'completion 无参数：用法写 stderr，退出 1',
+    async () => {
+      const result = await runCli(['completion']);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('vessel completion <bash|zsh|fish|powershell>');
+    },
+    CLI_TEST_TIMEOUT_MS,
+  );
 
-  it('completion 未知 shell：退出 1 并指出输入', async () => {
-    const result = await runCli(['completion', 'tcsh']);
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('Unknown shell "tcsh"');
-    expect(result.stderr).toContain('vessel completion <bash|zsh|fish|powershell>');
-  });
+  it(
+    'completion 未知 shell：退出 1 并指出输入',
+    async () => {
+      const result = await runCli(['completion', 'tcsh']);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('Unknown shell "tcsh"');
+      expect(result.stderr).toContain('vessel completion <bash|zsh|fish|powershell>');
+    },
+    CLI_TEST_TIMEOUT_MS,
+  );
 
-  it('--help 列出 completion', async () => {
-    const result = await runCli(['--help']);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('vessel completion <shell>');
-  });
+  it(
+    '--help 列出 completion',
+    async () => {
+      const result = await runCli(['--help']);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('vessel completion <shell>');
+    },
+    CLI_TEST_TIMEOUT_MS,
+  );
 });
