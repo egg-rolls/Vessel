@@ -2,7 +2,7 @@
 
 > 适用版本：0.5+。维护者：`gov`。
 > 本文描述事件落盘、级别、留存、脱敏与重放。架构事实见
-> [ARCHITECTURE §10.5](../ARCHITECTURE.md) / [0.5.0](../versions/0.5.0.md) 与
+> [architecture/events.md](../architecture/events.md#trace) / [0.5.0](../versions/0.5.0.md) 与
 > [ADR-047](../adr/ADR-047-trace-first-observability.md)。
 
 ## 1. 位置与格式

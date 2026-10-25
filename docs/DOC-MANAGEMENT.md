@@ -148,7 +148,7 @@ docs/
 1. `README.md`
 2. `AGENTS.md` — **硬安全规则只来自这里**
 3. `docs/versions/CURRENT.md`
-4. `docs/architecture/INDEX.md` → 命中的模块；未拆分前读 `docs/ARCHITECTURE.md` 的对应小节，不整读
+4. `docs/architecture/INDEX.md` → 命中的模块；不整读 >300 行的 current 文档
 
 **按目标检索：** 先写目标 + 目标路径，再按 INDEX 的 `triggers` / `paths` 命中模块；不整读 >300 行的 `current` 文档。无命中时回落 `AGENTS.md`，不把“没搜到”当成“没规则”。
 

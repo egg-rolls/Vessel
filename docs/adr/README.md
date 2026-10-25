@@ -1,12 +1,12 @@
 # 架构决策记录（ADR）
 
-> 记录 Vessel 的关键决策与**为什么**。架构事实见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
+> 记录 Vessel 的关键决策与**为什么**。架构事实见 [architecture/INDEX.md](../architecture/INDEX.md)。
 >
 > **本文档是历史存档：只追加、不修改。** ADR-001 ~ ADR-033 写于当时的架构，其中引用的
 > `SPEC.md` / `PLUGINS.md` / `ROADMAP.md` / `PRD.md` / `GLOSSARY.md` / `DOC-STANDARD.md` /
 > `GIT-WORKFLOW.md` / `legacy/LESSONS.md` / `docs/api/*` / `docs/role/*` 等文件，已在
 > [ADR-034](ADR-034-minimal-refactor-unfreeze-core.md) 的重构中删除，这些链接不再有效。
-> 保留原文以存真——**其中的架构描述不代表当前实现**，以代码与 ARCHITECTURE.md 为准。
+> 保留原文以存真——**其中的架构描述不代表当前实现**，以代码与 architecture/INDEX.md 为准。
 > ADR 一经决策不轻易推翻；如需变更，新增 ADR 标注 supersede 旧者。
 
 > **已迁移为多文件：** 每条 ADR 独立成文，文件位于本目录；下表为完整索引。

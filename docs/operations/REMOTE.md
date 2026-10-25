@@ -4,7 +4,7 @@
 > 决策边界见 [ADR-051](../adr/ADR-051-remote-control-plane.md) /
 > [ADR-052](../adr/ADR-052-cross-node-transport.md) /
 > [ADR-053](../adr/ADR-053-remote-security-baseline.md)。
-> 架构细节见 [ARCHITECTURE.md §13.1 / §13.5.1 / §13.8](../ARCHITECTURE.md)。
+> 架构细节见 [gateway.md](../architecture/gateway.md#protocol)（协议）、[#tls](../architecture/gateway.md#tls) 与 [#remote](../architecture/gateway.md#remote)。
 
 本文覆盖：证书与 CA、两机配置、独立前端部署、故障排查与安全边界。
 默认行为不变：gateway 只绑 `127.0.0.1:8642`、明文；远程与跨节点都必须显式 opt-in。

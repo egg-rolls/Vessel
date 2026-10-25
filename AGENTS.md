@@ -4,7 +4,7 @@
 
 ## 上下文纪律
 
-- 先读本文件与任务相关的 `docs/ARCHITECTURE.md` 小节；契约查 `docs/adr/` 的具体编号，不要整读全部 ADR。
+- 先读本文件与任务相关的 `docs/architecture/` 模块（从 INDEX 命中）；契约查 `docs/adr/` 的具体编号，不要整读全部 ADR。
 - 历史决策查 ADR，当前版本查 `docs/versions/CURRENT.md`；实现事实以代码为准，文档冲突时顺手改文档。
 - 读代码先 grep 定位再读片段，不整读超过 300 行的文件；一次只加载当前任务需要的文档。
 - 过程产物（计划、报告、临时脚本）不进本仓库；文档只写已实现的能力。
@@ -13,7 +13,7 @@
 
 - **可嵌入的多 agent 平台 runtime**：极简核心（稳定接口 + 1 个通用 tool-calling loop + 扩展插槽）、Provider 无关；TUI / CLI / Web / Gateway 是参考 harness 外壳。
 - TypeScript + Bun；bun workspaces monorepo：`packages/{core,agent,config,permission,tui,serve}` + `plugins/` + `apps/web`。`@vessel-agent/core` 是零 UI 依赖的库，`@vessel-agent/agent` 是成员能力层，TUI / serve / web 是应用层外壳。
-- **能力工具只有 `bash` / `read` / `edit` 三个**，别急着加第四个（不提供 `grep` / 文件操作 / meta-tools）。内置 `agent` 与 `ask_user` 是接缝工具，MCP 工具经插件注册；工具口径与动作表见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §11。
+- **能力工具只有 `bash` / `read` / `edit` 三个**，别急着加第四个（不提供 `grep` / 文件操作 / meta-tools）。内置 `agent` 与 `ask_user` 是接缝工具，MCP 工具经插件注册；工具口径与动作表见 [docs/architecture/tools.md](docs/architecture/tools.md#tools)。
 - 状态：alpha，pre-MVP。未实现的能力一律标注，不写进正文。
 
 ## 代码风格与硬规矩
@@ -73,7 +73,7 @@
 
 ### 协议、配置与发布
 
-- 新 RPC 方法进 `packages/serve/src/gateway/methods/<domain>.ts` 并导出 `createXxxMethods`，由 `gateway.ts` 展开；不要把方法表回灌 `gateway.ts`。方法清单与冻结项见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13.7；新增 canonical 方法必须发 addendum，并同时写 `result_schema`（[ADR-059](docs/adr/ADR-059-gateway-method-modules.md) / [ADR-066](docs/adr/ADR-066-rpc-result-schemas.md)）。
+- 新 RPC 方法进 `packages/serve/src/gateway/methods/<domain>.ts` 并导出 `createXxxMethods`，由 `gateway.ts` 展开；不要把方法表回灌 `gateway.ts`。方法清单与冻结项见 [docs/architecture/gateway-rpc.md](docs/architecture/gateway-rpc.md#rpc-methods)；新增 canonical 方法必须发 addendum，并同时写 `result_schema`（[ADR-059](docs/adr/ADR-059-gateway-method-modules.md) / [ADR-066](docs/adr/ADR-066-rpc-result-schemas.md)）。
 - 新一次性 CLI 子命令进 `src/commands/registry.ts` 的 `cliCommands`，不要在 `cli.ts` 加 `if` 链（[ADR-060](docs/adr/ADR-060-cli-command-registry.md)）。
 - **配置层序固定** `CLI > env > tenant overlay > project > user > default`，只在 `loadConfig()` 合并；CLI flag 必须经 `buildCliConfigOverrides()`；serve / connect 不得自行读 argv 或 `process.env`；tenant overlay 不得覆盖 CLI / env（[ADR-057](docs/adr/ADR-057-config-single-resolver.md)）。
 - **legacy 配置只读**：新版 `provider:` 优先，legacy 并存发 deprecation warning；未注册 provider 且无 `provider.base_url` 必须抛 `ProviderConfigError`；YAML 解析失败 / 重复键必须是 validation error；API Key 一律经 `resolveEffectiveApiKey()`（[ADR-068](docs/adr/ADR-068-config-and-first-run-hardening.md)）。
@@ -124,7 +124,7 @@ CI 与发布见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[docs/ope
 
 ## 插件发现与信任边界
 
-插件是唯一运行期扩展机制。默认发现顺序（同名时先出现者胜出）：`repo`（仓库 `plugins/`）→ `project`（`./.vessel/plugins`）→ `user`（`~/.vessel/plugins`）→ `node_modules`（仓库根与 cwd）。发现与信任细节见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §8。
+插件是唯一运行期扩展机制。默认发现顺序（同名时先出现者胜出）：`repo`（仓库 `plugins/`）→ `project`（`./.vessel/plugins`）→ `user`（`~/.vessel/plugins`）→ `node_modules`（仓库根与 cwd）。发现与信任细节见 [docs/architecture/extensions.md](docs/architecture/extensions.md#discovery)。
 
 - 配置未写 `plugins` 时，默认集加载**全部**可用插件，包括 project / user / node_modules 来源的外部插件；工厂式插件仍按各自开关构造。
 - 启动时（`bootstrap` / `--tools` / `doctor`）向 **stderr** 打印一次外部插件告警，列出数量、来源与名称；告警不进入 stdout / JSON。
