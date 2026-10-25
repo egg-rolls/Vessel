@@ -113,7 +113,8 @@ async function checkDocTree(
     } else if (frontmatter.kind !== expectedKind) {
       issues.push({ file: relative, line: 0, message: `frontmatter.kind 必须是 ${expectedKind}` });
     }
-    const triggers = frontmatter.triggers === undefined ? null : parseStringArray(frontmatter.triggers);
+    const triggers =
+      frontmatter.triggers === undefined ? null : parseStringArray(frontmatter.triggers);
     if (!triggers || triggers.length === 0) {
       issues.push({ file: relative, line: 0, message: 'frontmatter.triggers 必须是非空数组' });
     }
@@ -122,7 +123,8 @@ async function checkDocTree(
       issues.push({ file: relative, line: 0, message: 'frontmatter.paths 必须是非空数组' });
     }
     if (expectedKind === 'advisory') {
-      const appliesTo = frontmatter.applies_to === undefined ? null : parseStringArray(frontmatter.applies_to);
+      const appliesTo =
+        frontmatter.applies_to === undefined ? null : parseStringArray(frontmatter.applies_to);
       if (!appliesTo || appliesTo.length === 0) {
         issues.push({ file: relative, line: 0, message: 'advisory 必须有 applies_to' });
       } else if (appliesTo.some((value) => !APPLIES_TO.has(value))) {
@@ -156,7 +158,8 @@ async function checkDocIndex(root: string, dir: string, issues: DocIssue[]): Pro
     if (frontmatter.kind !== 'current') {
       issues.push({ file: relative, line: 0, message: 'INDEX.md 的 kind 必须是 current' });
     }
-    const triggers = frontmatter.triggers === undefined ? null : parseStringArray(frontmatter.triggers);
+    const triggers =
+      frontmatter.triggers === undefined ? null : parseStringArray(frontmatter.triggers);
     if (!triggers || triggers.length === 0) {
       issues.push({ file: relative, line: 0, message: 'frontmatter.triggers 必须是非空数组' });
     }
@@ -166,7 +169,11 @@ async function checkDocIndex(root: string, dir: string, issues: DocIssue[]): Pro
     }
   }
   if (countLines(text) > DOC_INDEX_LINE_LIMIT) {
-    issues.push({ file: relative, line: 0, message: `INDEX.md 行数超过上限 ${DOC_INDEX_LINE_LIMIT}` });
+    issues.push({
+      file: relative,
+      line: 0,
+      message: `INDEX.md 行数超过上限 ${DOC_INDEX_LINE_LIMIT}`,
+    });
   }
 
   const linked = new Map<string, number>();
@@ -175,7 +182,11 @@ async function checkDocIndex(root: string, dir: string, issues: DocIssue[]): Pro
     for (const match of line.matchAll(/\]\(([^)]+\.md)\)/g)) {
       const target = match[1] ?? '';
       if (target.includes('..') || target.startsWith('/')) {
-        issues.push({ file: relative, line: 0, message: `INDEX 链接必须是同目录相对路径：${target}` });
+        issues.push({
+          file: relative,
+          line: 0,
+          message: `INDEX 链接必须是同目录相对路径：${target}`,
+        });
         continue;
       }
       const name = target.split('#')[0] ?? '';
@@ -200,13 +211,17 @@ async function checkDocIndex(root: string, dir: string, issues: DocIssue[]): Pro
   }
 }
 
-async function checkCurrentVersionNarrative(root: string, dir: string, issues: DocIssue[]): Promise<void> {
+async function checkCurrentVersionNarrative(
+  root: string,
+  dir: string,
+  issues: DocIssue[],
+): Promise<void> {
   if (!existsSync(join(root, dir))) return;
   for (const file of await listMarkdownFiles(root, dir)) {
     const relative = `${dir}/${file}`;
     const text = await readFile(join(root, relative), 'utf8');
     const frontmatter = parseFrontmatter(text);
-    if (!frontmatter || frontmatter.kind !== 'current') continue;
+    if (frontmatter?.kind !== 'current') continue;
     let inFence = false;
     const lines = text.split('\n');
     for (let index = 0; index < lines.length; index += 1) {
@@ -226,9 +241,7 @@ async function checkCurrentVersionNarrative(root: string, dir: string, issues: D
 async function listMarkdownFiles(root: string, dir: string): Promise<string[]> {
   const full = join(root, dir);
   if (!existsSync(full)) return [];
-  return (await readdir(full))
-    .filter((file) => file.endsWith('.md'))
-    .sort();
+  return (await readdir(full)).filter((file) => file.endsWith('.md')).sort();
 }
 
 async function checkLinks(root: string, file: string, issues: DocIssue[]): Promise<void> {

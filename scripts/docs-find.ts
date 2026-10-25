@@ -102,18 +102,14 @@ function tokenize(text: string): string[] {
 }
 
 function normalizePath(value: string): string {
-  return value
-    .replace(/\\/g, '/')
-    .replace(/^\.\//, '')
-    .replace(/^\/+/, '')
-    .replace(/\/+$/, '');
+  return value.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '').replace(/\/+$/, '');
 }
 
 function matchTrigger(trigger: string, goalLower: string, tokens: Set<string>): boolean {
   const value = trigger.toLowerCase();
   if (!value) return false;
   if (value.includes(' ')) return goalLower.includes(value);
-  if (/[_.\/-]/.test(value)) return goalLower.includes(value) || tokens.has(value);
+  if (/[_./-]/.test(value)) return goalLower.includes(value) || tokens.has(value);
   return tokens.has(value);
 }
 
@@ -171,7 +167,9 @@ async function loadModules(root: string): Promise<LoadResult> {
   for (const dir of DOC_DIRS) {
     const full = join(root, dir);
     if (!existsSync(full)) continue;
-    const files = (await readdir(full)).filter((file) => file.endsWith('.md') && file !== 'INDEX.md').sort();
+    const files = (await readdir(full))
+      .filter((file) => file.endsWith('.md') && file !== 'INDEX.md')
+      .sort();
     for (const file of files) {
       const relative = `${dir}/${file}`;
       const text = await readFile(join(root, relative), 'utf8');
@@ -199,7 +197,12 @@ async function loadModules(root: string): Promise<LoadResult> {
   return { modules, warnings };
 }
 
-function scoreModule(module: ModuleDoc, options: DocsFindOptions, tokens: Set<string>, goalLower: string): DocsFindResult {
+function scoreModule(
+  module: ModuleDoc,
+  options: DocsFindOptions,
+  tokens: Set<string>,
+  goalLower: string,
+): DocsFindResult {
   const why: string[] = [];
   const triggerHits = new Set<string>();
   for (const trigger of module.triggers) {
@@ -210,14 +213,12 @@ function scoreModule(module: ModuleDoc, options: DocsFindOptions, tokens: Set<st
     if (module.triggers.some((item) => item.toLowerCase() === value)) triggerHits.add(value);
   }
 
-  let pathHits = 0;
   const matchedGlobs = new Set<string>();
   for (const queryPath of options.paths) {
     for (const glob of module.paths) {
       try {
         const matcher = new Bun.Glob(glob);
         if (matcher.match(queryPath) || matcher.match(`${queryPath}/__probe__`)) {
-          pathHits += 1;
           matchedGlobs.add(glob);
           break;
         }
@@ -272,7 +273,9 @@ function formatHuman(results: DocsFindResult[], fallback: boolean): string {
   }
   const lines: string[] = [];
   for (const result of results) {
-    lines.push(`${result.score}  ${result.kind}  ${result.path}  ${result.title}  ~${result.estTokens} tok`);
+    lines.push(
+      `${result.score}  ${result.kind}  ${result.path}  ${result.title}  ~${result.estTokens} tok`,
+    );
     if (result.why.length > 0) lines.push(`  why: ${result.why.join(', ')}`);
     if (result.anchors.length > 0) {
       const anchors = result.anchors
@@ -345,13 +348,21 @@ export async function runDocsFind(argv: string[], defaultRoot = process.cwd()): 
   }
 
   if (goals.length === 0 && paths.length === 0 && triggers.length === 0) {
-    return { exitCode: 2, stdout: '', stderr: `至少给 --goal / --paths / --trigger 之一\n\n${USAGE}` };
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: `至少给 --goal / --paths / --trigger 之一\n\n${USAGE}`,
+    };
   }
 
   const { modules, warnings } = await loadModules(root);
   const stderr = warnings.length > 0 ? `${warnings.join('\n')}\n` : '';
   if (modules.length === 0) {
-    return { exitCode: 2, stdout: '', stderr: `${stderr}没有可解析的模块（检查 ${DOC_DIRS.join(' / ')}）\n` };
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: `${stderr}没有可解析的模块（检查 ${DOC_DIRS.join(' / ')}）\n`,
+    };
   }
 
   const goalLower = goals.join(' ').toLowerCase();

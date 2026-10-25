@@ -90,7 +90,10 @@ async function withDocs(
   }
 }
 
-async function jsonRun(argv: string[], root: string): Promise<{ exitCode: number; payload: unknown }> {
+async function jsonRun(
+  argv: string[],
+  root: string,
+): Promise<{ exitCode: number; payload: unknown }> {
   const result = await runDocsFind([...argv, '--json'], root);
   return { exitCode: result.exitCode, payload: JSON.parse(result.stdout) as unknown };
 }
@@ -98,10 +101,7 @@ async function jsonRun(argv: string[], root: string): Promise<{ exitCode: number
 describe('docs-find', () => {
   it('matches paths globs and ranks the exact module first', async () => {
     await withDocs(validDocs(), async (root) => {
-      const result = await runDocsFind(
-        ['--paths', 'packages/serve/src/gateway/methods'],
-        root,
-      );
+      const result = await runDocsFind(['--paths', 'packages/serve/src/gateway/methods'], root);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('docs/architecture/gateway-rpc.md');
       expect(result.stdout.split('\n')[0]).toContain('gateway-rpc.md');
@@ -121,7 +121,8 @@ describe('docs-find', () => {
   it('adds title bonus once', async () => {
     await withDocs(validDocs(), async (root) => {
       const { payload } = await jsonRun(['--goal', '统一 RPC'], root);
-      const first = (payload as { results: { path: string; score: number; why: string[] }[] }).results[0];
+      const first = (payload as { results: { path: string; score: number; why: string[] }[] })
+        .results[0];
       expect(first?.path).toBe('docs/architecture/gateway-rpc.md');
       expect(first?.why).toContain('title');
       expect(first?.score).toBeGreaterThanOrEqual(2);
@@ -142,7 +143,15 @@ describe('docs-find', () => {
       const { payload } = await jsonRun(['--goal', 'permission'], root);
       const body = payload as {
         query: { goal: string; paths: string[]; triggers: string[] };
-        results: { title: string; path: string; kind: string; score: number; why: string[]; estTokens: number; anchors: unknown[] }[];
+        results: {
+          title: string;
+          path: string;
+          kind: string;
+          score: number;
+          why: string[];
+          estTokens: number;
+          anchors: unknown[];
+        }[];
         count: number;
         fallback: boolean;
       };
@@ -181,14 +190,11 @@ describe('docs-find', () => {
   });
 
   it('warns and skips a module with broken frontmatter', async () => {
-    await withDocs(
-      { ...validDocs(), 'docs/agents/broken.md': '# Broken\n' },
-      async (root) => {
-        const result = await runDocsFind(['--goal', 'permission'], root);
-        expect(result.exitCode).toBe(0);
-        expect(result.stderr).toContain('docs/agents/broken.md');
-      },
-    );
+    await withDocs({ ...validDocs(), 'docs/agents/broken.md': '# Broken\n' }, async (root) => {
+      const result = await runDocsFind(['--goal', 'permission'], root);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain('docs/agents/broken.md');
+    });
   });
 
   it('honors --limit', async () => {

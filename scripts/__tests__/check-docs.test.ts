@@ -52,7 +52,12 @@ function validFiles(): Record<string, string> {
     ].join('\n'),
     'docs/ARCHITECTURE.md': '# Arch\n[modules](architecture/INDEX.md)\n',
     'docs/architecture/INDEX.md': moduleDoc(
-      { title: 'Architecture', kind: 'current', triggers: '[architecture]', paths: '[docs/architecture/**]' },
+      {
+        title: 'Architecture',
+        kind: 'current',
+        triggers: '[architecture]',
+        paths: '[docs/architecture/**]',
+      },
       '# Index\n\n| [overview](overview.md) | x |\n',
     ),
     'docs/architecture/overview.md': moduleDoc(
@@ -64,7 +69,13 @@ function validFiles(): Record<string, string> {
       '# Agents\n\n| [core](core.md) | x |\n',
     ),
     'docs/agents/core.md': moduleDoc(
-      { title: 'Core', kind: 'advisory', triggers: '[core]', paths: '[packages/core/**]', appliesTo: '[N, M]' },
+      {
+        title: 'Core',
+        kind: 'advisory',
+        triggers: '[core]',
+        paths: '[packages/core/**]',
+        appliesTo: '[N, M]',
+      },
       '# Core\n[back](INDEX.md)\n',
     ),
     'AGENTS.md': '# Agents\n[ARCHITECTURE](docs/ARCHITECTURE.md)\n',
@@ -193,7 +204,12 @@ describe('checkDocs', () => {
       {
         ...validFiles(),
         'docs/architecture/overview.md': moduleDoc(
-          { title: 'Overview', kind: 'current', triggers: '[overview]', paths: '[packages/core/**]' },
+          {
+            title: 'Overview',
+            kind: 'current',
+            triggers: '[overview]',
+            paths: '[packages/core/**]',
+          },
           '# Overview\n[bad](missing.md)\n',
         ),
       },
@@ -223,7 +239,13 @@ describe('checkDocs', () => {
       {
         ...validFiles(),
         'docs/agents/core.md': moduleDoc(
-          { title: 'Core', kind: 'advisory', triggers: '[core]', paths: '[packages/core/**]', appliesTo: '[N, M]' },
+          {
+            title: 'Core',
+            kind: 'advisory',
+            triggers: '[core]',
+            paths: '[packages/core/**]',
+            appliesTo: '[N, M]',
+          },
           '# Core\n[bad](missing.md)\n',
         ),
       },
@@ -263,7 +285,13 @@ describe('checkDocs', () => {
       {
         ...validFiles(),
         'docs/agents/core.md': moduleDoc(
-          { title: 'Core', kind: 'history', triggers: '[core]', paths: '[packages/core/**]', appliesTo: '[N, M]' },
+          {
+            title: 'Core',
+            kind: 'history',
+            triggers: '[core]',
+            paths: '[packages/core/**]',
+            appliesTo: '[N, M]',
+          },
           '# Core\n',
         ),
       },
@@ -337,7 +365,13 @@ describe('checkDocs', () => {
       {
         ...validFiles(),
         'docs/agents/extra.md': moduleDoc(
-          { title: 'Extra', kind: 'advisory', triggers: '[extra]', paths: '[packages/core/**]', appliesTo: '[N, M]' },
+          {
+            title: 'Extra',
+            kind: 'advisory',
+            triggers: '[extra]',
+            paths: '[packages/core/**]',
+            appliesTo: '[N, M]',
+          },
           '# Extra\n',
         ),
       },
@@ -354,7 +388,12 @@ describe('checkDocs', () => {
       {
         ...validFiles(),
         'docs/architecture/overview.md': moduleDoc(
-          { title: 'Overview', kind: 'current', triggers: '[overview]', paths: '[packages/core/**]' },
+          {
+            title: 'Overview',
+            kind: 'current',
+            triggers: '[overview]',
+            paths: '[packages/core/**]',
+          },
           `# Overview\n\n${'x\n'.repeat(100)}`,
         ),
       },
@@ -371,7 +410,12 @@ describe('checkDocs', () => {
       {
         ...validFiles(),
         'docs/architecture/overview.md': moduleDoc(
-          { title: 'Overview', kind: 'current', triggers: '[overview]', paths: '[packages/core/**]' },
+          {
+            title: 'Overview',
+            kind: 'current',
+            triggers: '[overview]',
+            paths: '[packages/core/**]',
+          },
           '# Overview\n\n## 0.26\n',
         ),
       },
@@ -398,7 +442,9 @@ describe('checkDocs', () => {
           expect.objectContaining({ message: expect.stringContaining('INDEX 重复链接 core.md') }),
         );
         expect(issues).toContainEqual(
-          expect.objectContaining({ message: expect.stringContaining('INDEX 指向不存在的模块 missing.md') }),
+          expect.objectContaining({
+            message: expect.stringContaining('INDEX 指向不存在的模块 missing.md'),
+          }),
         );
       },
     );
@@ -409,7 +455,13 @@ describe('checkDocs', () => {
       {
         ...validFiles(),
         'docs/agents/core.md': moduleDoc(
-          { title: 'Core', kind: 'advisory', triggers: '[core]', paths: '[packages/core/**]', appliesTo: '[N, M]' },
+          {
+            title: 'Core',
+            kind: 'advisory',
+            triggers: '[core]',
+            paths: '[packages/core/**]',
+            appliesTo: '[N, M]',
+          },
           `# Core\n\n${'x\n'.repeat(60)}`,
         ),
       },
@@ -426,7 +478,12 @@ describe('checkDocs', () => {
       {
         ...validFiles(),
         'docs/architecture/overview.md': moduleDoc(
-          { title: 'Overview', kind: 'current', triggers: '[overview]', paths: '[packages/core/**]' },
+          {
+            title: 'Overview',
+            kind: 'current',
+            triggers: '[overview]',
+            paths: '[packages/core/**]',
+          },
           '# Overview\n\n## 0.26 旧架构\n',
         ),
       },
