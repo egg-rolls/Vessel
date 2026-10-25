@@ -33,7 +33,9 @@ function validFiles(): Record<string, string> {
       '| [Migration](docs/operations/MIGRATION.md) |',
       '| [Trace](docs/operations/TRACE.md) |',
     ].join('\n'),
-    'docs/ARCHITECTURE.md': '# Arch\n',
+    'docs/ARCHITECTURE.md': '# Arch\n[modules](architecture/INDEX.md)\n',
+    'docs/architecture/INDEX.md': '# Index\n[overview](overview.md)\n',
+    'docs/architecture/overview.md': '# Overview\n[back](INDEX.md)\n',
     'AGENTS.md': '# Agents\n[ARCHITECTURE](docs/ARCHITECTURE.md)\n',
     'docs/operations/CI-CD.md': '# CI\n[back](../FILE-MANAGEMENT.md)\n',
     'docs/operations/RELEASE.md': '# Release\n[back](../FILE-MANAGEMENT.md)\n',
@@ -153,6 +155,33 @@ describe('checkDocs', () => {
         expect(await checkDocs(root)).toEqual([]);
       },
     );
+  });
+
+  it('reports broken links inside architecture modules', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/architecture/overview.md': '# Overview\n[bad](missing.md)\n',
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({
+            file: 'docs/architecture/overview.md',
+            message: expect.stringContaining('不存在'),
+          }),
+        );
+      },
+    );
+  });
+
+  it('skips architecture directory when absent', async () => {
+    const files = validFiles();
+    delete files['docs/architecture/INDEX.md'];
+    delete files['docs/architecture/overview.md'];
+    files['docs/ARCHITECTURE.md'] = '# Arch\n';
+    await withFixture(files, async (root) => {
+      expect(await checkDocs(root)).toEqual([]);
+    });
   });
 
   it('reports operations docs missing from README index', async () => {

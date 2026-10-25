@@ -49,7 +49,7 @@
 | Job | 新增覆盖 |
 |---|---|
 | `quality` | 全量 `bun test` 已覆盖新增回归；三件套任一红禁止合并 |
-| `architecture` | `check-rpc-methods` 必须与 `docs/ARCHITECTURE.md` 的 `sessions.search` 同步 |
+| `architecture` | `check-rpc-methods` 必须与 `docs/architecture/gateway-rpc.md` 的 `sessions.search` 同步 |
 | `offline-integration` | 会话租户隔离（`src/__tests__/session-factory.test.ts`、`packages/core/__tests__/session-backend.test.ts`）、durable tenant/role（`packages/serve/__tests__/gateway.durable.test.ts`）、team REST 角色（`packages/serve/__tests__/team.auth.test.ts`）、CLI flags（`src/__tests__/cli-args.test.ts`）、插件目录/配置（`src/__tests__/plugin-loader.test.ts`、`src/__tests__/plugin-selection.test.ts`）、上下文与取消（`packages/core/__tests__/context-manager.test.ts`、`packages/core/__tests__/guardrail-replacement.test.ts`） |
 | `multi-node` | 双向 / 网状节点的事件回声抑制 |
 | `web` | Web Markdown、`sessions.search` 与工具卡事件（`apps/web/tests`） |

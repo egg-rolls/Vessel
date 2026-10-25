@@ -35,6 +35,7 @@ const LINK_FILES = [
   'docs/operations/REMOTE.md',
 ];
 
+const ARCH_DIR = 'docs/architecture';
 const ADR_DIR = 'docs/adr';
 const ADR_FILE_PATTERN = /^ADR-(\d{3})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
 const ADR_STATUS = new Set(['proposed', 'accepted', 'superseded']);
@@ -59,7 +60,19 @@ export async function checkDocs(root: string): Promise<DocIssue[]> {
     await checkLinks(root, file, issues);
   }
 
+  for (const file of await listMarkdownFiles(root, ARCH_DIR)) {
+    await checkLinks(root, `${ARCH_DIR}/${file}`, issues);
+  }
+
   return issues;
+}
+
+async function listMarkdownFiles(root: string, dir: string): Promise<string[]> {
+  const full = join(root, dir);
+  if (!existsSync(full)) return [];
+  return (await readdir(full))
+    .filter((file) => file.endsWith('.md'))
+    .sort();
 }
 
 async function checkLinks(root: string, file: string, issues: DocIssue[]): Promise<void> {
