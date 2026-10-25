@@ -1,6 +1,7 @@
 /**
  * `bun run dev:web`：Web 开发回路的一条命令入口（DX1/DX2，PLAN-0.18-dev-dx）。
  *
+ * 0. preflight：`apps/web` 依赖缺失或 package-lock 更新时先自动 `npm ci`；
  * 1. 确保 gateway 在配置端口可用（复用外部进程，或 daemon 启动并记录 ownership）；
  * 2. 起一个只绑 127.0.0.1 的 dev relay：REST 注入 Authorization、WS 首帧替换 token；
  * 3. 起 Vite（5173），通过环境变量把 relay 地址 / secret 交给 Vite，token 不进入 Vite；
@@ -12,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_SERVE_OPTIONS, loadConfig } from '../packages/config/src/index';
 import { resolveDataDir } from '../src/data-paths';
@@ -41,6 +42,51 @@ const HOP_BY_HOP_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
 ]);
+
+/**
+ * `apps/web` 依赖是否过期：Vite bin 或 Tailwind 插件缺失，或 `package-lock.json`
+ * 比 npm 写下的 `node_modules/.package-lock.json` 新。只做文件判定，不执行安装。
+ */
+export function webDepsNeedInstall(webDir: string): boolean {
+  const nodeModules = path.join(webDir, 'node_modules');
+  if (!existsSync(path.join(nodeModules, 'vite', 'bin', 'vite.js'))) return true;
+  if (!existsSync(path.join(nodeModules, '@tailwindcss', 'vite', 'package.json'))) return true;
+
+  const lockPath = path.join(webDir, 'package-lock.json');
+  const installedLockPath = path.join(nodeModules, '.package-lock.json');
+  // 没有 npm 的已安装锁文件就无法判断增量；按过期处理，一次 npm ci 后即恢复。
+  if (!existsSync(installedLockPath)) return true;
+  try {
+    return statSync(lockPath).mtimeMs > statSync(installedLockPath).mtimeMs;
+  } catch {
+    return true;
+  }
+}
+
+/** 在 `apps/web` 跑 `npm ci`（stdio 继承）；返回是否成功。 */
+async function installWebDeps(webDir: string): Promise<boolean> {
+  console.log('[dev-web] apps/web dependencies are stale; running npm ci...');
+  const command = process.platform === 'win32' ? ['cmd', '/c', 'npm', 'ci'] : ['npm', 'ci'];
+  try {
+    const child = Bun.spawn(command, {
+      cwd: webDir,
+      stdin: 'inherit',
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
+    const code = await child.exited;
+    if (code === 0) return true;
+    console.error(`[dev-web] npm ci failed in ${webDir} (exit code ${code})`);
+  } catch (error) {
+    console.error(
+      `[dev-web] failed to run npm ci in ${webDir}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  console.error(
+    '[dev-web] install Node.js/npm, or install apps/web dependencies manually: cd apps/web && npm ci',
+  );
+  return false;
+}
 
 interface RelaySocketData {
   /** 浏览器 WS URL 里的 since（为空表示从 0 开始） */
@@ -342,6 +388,13 @@ async function main(): Promise<void> {
   });
 
   try {
+    // 0. apps/web 依赖 preflight：先于 gateway / relay / Vite，失败不启动任何服务。
+    const webDir = path.join(repoRoot, 'apps/web');
+    if (webDepsNeedInstall(webDir)) {
+      const installed = await installWebDeps(webDir);
+      if (!installed) await cleanup(1);
+    }
+
     // 1. gateway：复用健康的外部进程，否则启动 daemon。
     let gatewayPort = configPort;
     const existing = await runningGateway(dataDir, configPort);
@@ -454,11 +507,14 @@ async function main(): Promise<void> {
   }
 }
 
-// 必须 top-level await：无其他活动 handle 时，未 await 的 main() 可能在
-// loadConfig() 的异步读取完成前让 Bun 正常退出（小配置下可复现）。
-try {
-  await main();
-} catch (error) {
-  console.error(`[dev-web] ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
+// 只作为脚本入口运行；测试导入本模块时不启动 gateway / Vite。
+if (import.meta.main) {
+  // 必须 top-level await：无其他活动 handle 时，未 await 的 main() 可能在
+  // loadConfig() 的异步读取完成前让 Bun 正常退出（小配置下可复现）。
+  try {
+    await main();
+  } catch (error) {
+    console.error(`[dev-web] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }
