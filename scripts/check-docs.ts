@@ -119,7 +119,7 @@ interface AdrEntry {
   frontmatter: Record<string, string>;
 }
 
-function parseFrontmatter(text: string): Record<string, string> | null {
+export function parseFrontmatter(text: string): Record<string, string> | null {
   const lines = text.split('\n');
   if ((lines[0] ?? '').trim() !== '---') return null;
 
@@ -158,7 +158,7 @@ function parseIntegerArray(value: string): number[] | null {
   return items.map(Number);
 }
 
-function parseStringArray(value: string): string[] | null {
+export function parseStringArray(value: string): string[] | null {
   const match = /^\[(.*)\]$/.exec(value);
   if (!match) return null;
   const inner = (match[1] ?? '').trim();
