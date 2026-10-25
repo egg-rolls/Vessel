@@ -7,7 +7,7 @@ import { type FormEvent, type ReactNode, useRef, useState } from 'react';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
-import { Button } from '../../components/ui';
+import { Button, Field, Input, Section, Textarea } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -147,70 +147,82 @@ function TeamEditForm({
   };
 
   return (
-    <section className="panel">
-      <form className="team-form" onSubmit={submit}>
-        <div className="form-grid">
-          <label className="field">
-            <span className="field-label">{t('team.form.workspace')}</span>
-            <input className="input" value={team.workspace ?? ''} readOnly placeholder="—" />
-            <span className="field-hint">{t('team.form.workspaceHint')}</span>
-          </label>
+    <Section>
+      <form className="flex flex-col gap-2" onSubmit={submit}>
+        <div className="form-grid mt-1">
+          <Field
+            label={t('team.form.workspace')}
+            htmlFor="team-edit-workspace"
+            hint={t('team.form.workspaceHint')}
+          >
+            <Input
+              id="team-edit-workspace"
+              className="bg-deep text-muted"
+              value={team.workspace ?? ''}
+              readOnly
+              placeholder="—"
+            />
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.name')}</span>
-            <input
-              className="input"
+          <Field label={t('team.form.name')} htmlFor="team-edit-name">
+            <Input
+              id="team-edit-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               spellCheck={false}
               autoComplete="off"
             />
-          </label>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.description')}</span>
-            <textarea
-              className="input"
+          <Field label={t('team.form.description')} htmlFor="team-edit-description">
+            <Textarea
+              id="team-edit-description"
+              className="min-h-16 resize-y font-sans"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               rows={3}
             />
-          </label>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.defaultPrincipal')}</span>
-            <input
-              className="input"
+          <Field
+            label={t('team.form.defaultPrincipal')}
+            htmlFor="team-edit-principal"
+            hint={t('team.form.defaultPrincipalHint')}
+          >
+            <Input
+              id="team-edit-principal"
               value={defaultPrincipal}
               onChange={(event) => setDefaultPrincipal(event.target.value)}
               spellCheck={false}
               autoComplete="off"
             />
-            <span className="field-hint">{t('team.form.defaultPrincipalHint')}</span>
-          </label>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.handoffPath')}</span>
-            <input
-              className="input"
+          <Field label={t('team.form.handoffPath')} htmlFor="team-edit-handoff">
+            <Input
+              id="team-edit-handoff"
               value={handoffPath}
               onChange={(event) => setHandoffPath(event.target.value)}
               spellCheck={false}
               autoComplete="off"
             />
-          </label>
+          </Field>
 
-          <label className="field field-wide">
-            <span className="field-label">{t('teams.form.policy')}</span>
-            <textarea
-              className="input mono team-policy-input"
+          <Field
+            className="col-span-full"
+            label={t('teams.form.policy')}
+            htmlFor="team-edit-policy"
+            hint={t('teams.form.policyHint')}
+          >
+            <Textarea
+              id="team-edit-policy"
+              className="min-h-24 resize-y text-sm leading-normal font-mono"
               value={policy}
               onChange={(event) => setPolicy(event.target.value)}
               rows={6}
               spellCheck={false}
             />
-            <span className="field-hint">{t('teams.form.policyHint')}</span>
-          </label>
+          </Field>
         </div>
 
         {error && (
@@ -220,14 +232,14 @@ function TeamEditForm({
         )}
 
         <div className="form-actions">
-          <button type="button" className="btn" onClick={onBack} disabled={busy}>
+          <Button type="button" onClick={onBack} disabled={busy}>
             {t('common.cancel')}
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+          </Button>
+          <Button type="submit" variant="primary" disabled={busy}>
             {busy ? t('common.processing') : t('team.form.submitEdit')}
-          </button>
+          </Button>
         </div>
       </form>
-    </section>
+    </Section>
   );
 }

@@ -7,6 +7,7 @@
 import { type FormEvent, useState } from 'react';
 import { ModalShell } from '../../components/Modal';
 import { useToast } from '../../components/ToastProvider';
+import { Button, Field, Input, Select, Textarea } from '../../components/ui';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { TeamCreateInput, TeamSummary } from '../../gateway/types';
@@ -99,12 +100,11 @@ export function TeamFormDialog({ nodes, initialNodeKey, onClose, onSaved }: Team
       closeLabel={t('common.close')}
     >
       <h2 className="modal-title">{title}</h2>
-      <form className="team-form" onSubmit={submit}>
-        <div className="form-grid">
-          <label className="field">
-            <span className="field-label">{t('teams.filter.node')}</span>
-            <select
-              className="input"
+      <form className="flex flex-col gap-2" onSubmit={submit}>
+        <div className="form-grid mt-1">
+          <Field label={t('teams.filter.node')} htmlFor="team-create-node">
+            <Select
+              id="team-create-node"
               value={nodeKey}
               onChange={(event) => setNodeKey(event.target.value)}
               aria-label={t('teams.filter.node')}
@@ -114,79 +114,85 @@ export function TeamFormDialog({ nodes, initialNodeKey, onClose, onSaved }: Team
                   {nodeNames.get(nodeKeyOf(item)) ?? '—'}
                 </option>
               ))}
-            </select>
-          </label>
+            </Select>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.workspace')}</span>
-            <input
-              className={`input ${error === t('team.form.required') ? 'invalid' : ''}`.trim()}
+          <Field
+            label={t('team.form.workspace')}
+            htmlFor="team-create-workspace"
+            hint={t('team.form.workspaceHint')}
+          >
+            <Input
+              id="team-create-workspace"
+              invalid={error === t('team.form.required')}
               value={workspace}
               onChange={(event) => setWorkspace(event.target.value)}
               placeholder="/absolute/workspace"
               spellCheck={false}
               autoComplete="off"
               required
-              aria-invalid={error === t('team.form.required') ? true : undefined}
             />
-            <span className="field-hint">{t('team.form.workspaceHint')}</span>
-          </label>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.name')}</span>
-            <input
-              className="input"
+          <Field label={t('team.form.name')} htmlFor="team-create-name">
+            <Input
+              id="team-create-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               spellCheck={false}
               autoComplete="off"
             />
-          </label>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.description')}</span>
-            <textarea
-              className="input"
+          <Field label={t('team.form.description')} htmlFor="team-create-description">
+            <Textarea
+              id="team-create-description"
+              className="min-h-16 resize-y font-sans"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               rows={2}
             />
-          </label>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.defaultPrincipal')}</span>
-            <input
-              className="input"
+          <Field
+            label={t('team.form.defaultPrincipal')}
+            htmlFor="team-create-principal"
+            hint={t('team.form.defaultPrincipalHint')}
+          >
+            <Input
+              id="team-create-principal"
               value={defaultPrincipal}
               onChange={(event) => setDefaultPrincipal(event.target.value)}
               spellCheck={false}
               autoComplete="off"
             />
-            <span className="field-hint">{t('team.form.defaultPrincipalHint')}</span>
-          </label>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.handoffPath')}</span>
-            <input
-              className="input"
+          <Field label={t('team.form.handoffPath')} htmlFor="team-create-handoff">
+            <Input
+              id="team-create-handoff"
               value={handoffPath}
               onChange={(event) => setHandoffPath(event.target.value)}
               spellCheck={false}
               autoComplete="off"
             />
-          </label>
+          </Field>
 
-          <label className="field field-wide">
-            <span className="field-label">{t('teams.form.policy')}</span>
-            <textarea
-              className="input mono team-policy-input"
+          <Field
+            className="col-span-full"
+            label={t('teams.form.policy')}
+            htmlFor="team-create-policy"
+            hint={t('teams.form.policyHint')}
+          >
+            <Textarea
+              id="team-create-policy"
+              className="min-h-24 resize-y text-sm leading-normal font-mono"
               value={policy}
               onChange={(event) => setPolicy(event.target.value)}
               rows={4}
               spellCheck={false}
             />
-            <span className="field-hint">{t('teams.form.policyHint')}</span>
-          </label>
+          </Field>
         </div>
 
         {error && (
@@ -196,12 +202,12 @@ export function TeamFormDialog({ nodes, initialNodeKey, onClose, onSaved }: Team
         )}
 
         <div className="modal-actions">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>
+          <Button type="button" onClick={onClose} disabled={busy}>
             {t('common.cancel')}
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={busy || !node}>
+          </Button>
+          <Button type="submit" variant="primary" disabled={busy || !node}>
             {busy ? t('common.processing') : t('team.form.submitCreate')}
-          </button>
+          </Button>
         </div>
       </form>
     </ModalShell>

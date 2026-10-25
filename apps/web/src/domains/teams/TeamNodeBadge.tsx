@@ -8,10 +8,14 @@ export function TeamNodeBadge({ node }: { node: NodeView }) {
   useLocale();
   const nodeNames = useNodeNames();
   return (
-    <div className="teams-detail-node">
-      <span className="teams-node-badge">{nodeNames.get(nodeKeyOf(node)) ?? '—'}</span>
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="whitespace-nowrap rounded-full bg-sunken px-2 py-0.5 text-xs text-muted">
+        {nodeNames.get(nodeKeyOf(node)) ?? '—'}
+      </span>
       {node.current && (
-        <span className="teams-node-current">{t('observe.attention.currentNode')}</span>
+        <span className="whitespace-nowrap rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent-ink">
+          {t('observe.attention.currentNode')}
+        </span>
       )}
     </div>
   );

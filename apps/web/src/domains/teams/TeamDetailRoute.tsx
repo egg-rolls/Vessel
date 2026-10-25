@@ -107,7 +107,7 @@ export function TeamDetailRoute({
 
   if (route.agentId) {
     return (
-      <div className="teams-view teams-detail">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
         <div className="teams-detail-head">
           <TeamNodeBadge node={node} />
         </div>
@@ -145,10 +145,10 @@ export function TeamDetailRoute({
   }
 
   return (
-    <div className="teams-view teams-detail">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
       <div className="teams-detail-head">
         <TeamNodeBadge node={node} />
-        <div className="teams-detail-actions">
+        <div className="inline-flex flex-wrap gap-2">
           <Button size="small" disabled={!hasToken || archived} onClick={openEdit}>
             {t('common.edit')}
           </Button>
@@ -194,9 +194,9 @@ export function TeamDetailRoute({
           body={
             <>
               <p>{t('nodes.teams.archiveBody')}</p>
-              <p className="mono">{summary.name || summary.team_id}</p>
+              <p className="font-mono">{summary.name || summary.team_id}</p>
               {archiveError && (
-                <p className="field-error" role="alert">
+                <p className="text-xs text-danger leading-snug" role="alert">
                   {archiveError}
                 </p>
               )}
