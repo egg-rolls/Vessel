@@ -15,6 +15,7 @@ import {
   StaleNotice,
 } from '../../components/States';
 import { SegmentedTabs } from '../../components/Tabs';
+import { Button } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { ListedInteraction } from '../../gateway/interaction-hydration';
@@ -204,9 +205,11 @@ function SingleNodeAttention({ navigate }: { navigate: (route: Route) => void })
       (resource.state.status === 'loading' || resource.state.status === 'idle'));
 
   return (
-    <div className="settings-section">
-      <p className="section-desc">{t('observe.attention.hint')}</p>
-      <div className="filter-bar">
+    <div className="flex flex-col gap-6">
+      <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
+        {t('observe.attention.hint')}
+      </p>
+      <div className="mt-3.5 flex flex-wrap items-center gap-2">
         <SegmentedTabs<AttentionStatus>
           label={t('observe.attention.statusLabel')}
           tabs={[
@@ -217,15 +220,10 @@ function SingleNodeAttention({ navigate }: { navigate: (route: Route) => void })
           onChange={setStatus}
           panelId="attention-panel"
         />
-        <button
-          type="button"
-          className="btn btn-small"
-          onClick={refreshAll}
-          disabled={resource.refreshing}
-        >
+        <Button size="small" onClick={refreshAll} disabled={resource.refreshing}>
           {resource.refreshing ? t('observe.attention.refreshing') : t('observe.attention.refresh')}
-        </button>
-        <span className="dim">{t('observe.attention.total', { count: total })}</span>
+        </Button>
+        <span className="text-muted">{t('observe.attention.total', { count: total })}</span>
       </div>
 
       <div id="attention-panel" role="tabpanel" aria-label={t('observe.attention.panelLabel')}>
@@ -273,14 +271,14 @@ function SingleNodeAttention({ navigate }: { navigate: (route: Route) => void })
             )}
 
             {nextCursor && (
-              <button
-                type="button"
-                className="load-more"
+              <Button
+                variant="plain"
+                className="mx-auto mt-2 rounded-full px-3.5 py-2 text-xs text-muted"
                 onClick={() => void loadMore()}
                 disabled={loadingMore}
               >
                 {loadingMore ? t('observe.attention.loadingMore') : t('observe.attention.loadMore')}
-              </button>
+              </Button>
             )}
             {moreError && <ErrorState message={moreError} onRetry={() => void loadMore()} />}
           </>
@@ -395,21 +393,23 @@ function NodeAttentionGroup({
       (resource.state.status === 'loading' || resource.state.status === 'idle'));
 
   return (
-    <section className="attention-node" aria-label={displayName}>
-      <div className="attention-node-head">
-        <span className="attention-node-name">{displayName}</span>
+    <section className="flex flex-col gap-2" aria-label={displayName}>
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="font-semibold">{displayName}</span>
         {node.current && (
-          <span className="attention-node-badge">{t('observe.attention.currentNode')}</span>
+          <span className="rounded-full border border-line px-1.5 py-px text-xs uppercase tracking-wider text-muted">
+            {t('observe.attention.currentNode')}
+          </span>
         )}
-        <span className="mono dim attention-node-url">
+        <span className="truncate font-mono text-muted">
           {displayGatewayUrl(node.url, pageOrigin())}
         </span>
-        <span className="dim attention-node-total">
+        <span className="ml-auto tabular-nums text-muted">
           {t('observe.attention.total', { count: total })}
         </span>
       </div>
       {!node.current && (
-        <p className="attention-readonly">{t('observe.attention.remoteReadonly')}</p>
+        <p className="m-0 text-sm text-faint">{t('observe.attention.remoteReadonly')}</p>
       )}
 
       {firstLoading ? (
@@ -463,14 +463,14 @@ function NodeAttentionGroup({
           )}
 
           {nextCursor && (
-            <button
-              type="button"
-              className="load-more"
+            <Button
+              variant="plain"
+              className="mx-auto mt-2 rounded-full px-3.5 py-2 text-xs text-muted"
               onClick={() => void loadMore()}
               disabled={loadingMore}
             >
               {loadingMore ? t('observe.attention.loadingMore') : t('observe.attention.loadMore')}
-            </button>
+            </Button>
           )}
           {moreError && <ErrorState message={moreError} onRetry={() => void loadMore()} />}
         </>
@@ -498,9 +498,11 @@ function MultiNodeAttention({ navigate }: { navigate: (route: Route) => void }) 
   }
 
   return (
-    <div className="settings-section">
-      <p className="section-desc">{t('observe.attention.nodesHint')}</p>
-      <div className="filter-bar">
+    <div className="flex flex-col gap-6">
+      <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
+        {t('observe.attention.nodesHint')}
+      </p>
+      <div className="mt-3.5 flex flex-wrap items-center gap-2">
         <SegmentedTabs<AttentionStatus>
           label={t('observe.attention.statusLabel')}
           tabs={[
@@ -511,20 +513,16 @@ function MultiNodeAttention({ navigate }: { navigate: (route: Route) => void }) 
           onChange={setStatus}
           panelId="attention-panel"
         />
-        <button
-          type="button"
-          className="btn btn-small"
-          onClick={() => setRefreshSeq((value) => value + 1)}
-        >
+        <Button size="small" onClick={() => setRefreshSeq((value) => value + 1)}>
           {t('observe.attention.refresh')}
-        </button>
+        </Button>
       </div>
 
       <div
         id="attention-panel"
         role="tabpanel"
         aria-label={t('observe.attention.panelLabel')}
-        className="attention-nodes"
+        className="flex flex-col gap-4.5"
       >
         {nodes.map((node) => (
           <NodeAttentionGroup

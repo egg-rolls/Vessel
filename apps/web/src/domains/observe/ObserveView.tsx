@@ -13,6 +13,7 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
+import { Badge, Button, Input, Section, Stat } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { EvalReport } from '../../gateway/types';
@@ -130,9 +131,7 @@ function MetricsPanel() {
         reason={resource.state.error}
         hint={t('observe.metrics.traceDisabledHint')}
         action={
-          <button type="button" className="btn" onClick={() => setSource('live')}>
-            {t('observe.metrics.switchLive')}
-          </button>
+          <Button onClick={() => setSource('live')}>{t('observe.metrics.switchLive')}</Button>
         }
       />
     );
@@ -159,8 +158,8 @@ function MetricsPanel() {
   const error = resource.state.status === 'error' ? resource.state.error : null;
 
   return (
-    <div className="settings-section">
-      <div className="filter-bar">
+    <div className="flex flex-col gap-6">
+      <div className="mt-3.5 flex flex-wrap items-center gap-2">
         <SegmentedTabs
           label={t('observe.metrics.sourceLabel')}
           tabs={[
@@ -171,18 +170,18 @@ function MetricsPanel() {
           onChange={setSource}
           panelId="metrics-source-panel"
         />
-        <button type="button" className="btn btn-small" onClick={resource.reload}>
+        <Button size="small" onClick={resource.reload}>
           {t('observe.metrics.refresh')}
-        </button>
-        <button
-          type="button"
-          className="btn btn-small btn-danger-ghost"
+        </Button>
+        <Button
+          size="small"
+          variant="dangerGhost"
           onClick={() => setConfirmReset(true)}
           disabled={!connected || !metrics}
           title={!connected ? t('common.writesDisabled') : undefined}
         >
           {t('observe.metrics.reset')}
-        </button>
+        </Button>
       </div>
 
       <div id="metrics-source-panel" role="tabpanel" aria-label={t('observe.metrics.panelLabel')}>
@@ -203,52 +202,54 @@ function MetricsPanel() {
           )
         ) : (
           <>
-            <div className="stats-grid">
-              <div className="stat">
-                <span className="stat-value">{metrics.runs.started}</span>
-                <span className="stat-label">{t('observe.metrics.stat.runsStarted')}</span>
-              </div>
-              <div className="stat">
-                <span className="stat-value">{metrics.runs.completed}</span>
-                <span className="stat-label">{t('observe.metrics.stat.completed')}</span>
-              </div>
-              <div className="stat">
-                <span className="stat-value">{metrics.runs.failed}</span>
-                <span className="stat-label">{t('observe.metrics.stat.failed')}</span>
-              </div>
-              <div className="stat">
-                <span className="stat-value">{metrics.runs.cancelled}</span>
-                <span className="stat-label">{t('observe.metrics.stat.cancelled')}</span>
-              </div>
-              <div className="stat">
-                <span className="stat-value">{metrics.tool_calls.total}</span>
-                <span className="stat-label">
-                  {t('observe.metrics.stat.toolCalls', { failed: metrics.tool_calls.failed })}
-                </span>
-              </div>
-              <div className="stat">
-                <span className="stat-value">{metrics.llm.total_tokens}</span>
-                <span className="stat-label">
-                  {t('observe.metrics.stat.tokens', {
-                    prompt: metrics.llm.prompt_tokens,
-                    completion: metrics.llm.completion_tokens,
-                  })}
-                </span>
-              </div>
-              <div className="stat">
-                <span className="stat-value">{Math.round(metrics.duration_ms.avg)}ms</span>
-                <span className="stat-label">
-                  {t('observe.metrics.stat.avgDuration', {
-                    max: Math.round(metrics.duration_ms.max),
-                  })}
-                </span>
-              </div>
-              <div className="stat">
-                <span className="stat-value">{formatTimestamp(metrics.updated_at)}</span>
-                <span className="stat-label">{t('observe.metrics.stat.updatedAt')}</span>
-              </div>
+            <div className="my-3 flex flex-wrap gap-2.5">
+              <Stat
+                className="min-w-40 flex-1"
+                value={metrics.runs.started}
+                label={t('observe.metrics.stat.runsStarted')}
+              />
+              <Stat
+                className="min-w-40 flex-1"
+                value={metrics.runs.completed}
+                label={t('observe.metrics.stat.completed')}
+              />
+              <Stat
+                className="min-w-40 flex-1"
+                value={metrics.runs.failed}
+                label={t('observe.metrics.stat.failed')}
+              />
+              <Stat
+                className="min-w-40 flex-1"
+                value={metrics.runs.cancelled}
+                label={t('observe.metrics.stat.cancelled')}
+              />
+              <Stat
+                className="min-w-40 flex-1"
+                value={metrics.tool_calls.total}
+                label={t('observe.metrics.stat.toolCalls', { failed: metrics.tool_calls.failed })}
+              />
+              <Stat
+                className="min-w-40 flex-1"
+                value={metrics.llm.total_tokens}
+                label={t('observe.metrics.stat.tokens', {
+                  prompt: metrics.llm.prompt_tokens,
+                  completion: metrics.llm.completion_tokens,
+                })}
+              />
+              <Stat
+                className="min-w-40 flex-1"
+                value={`${Math.round(metrics.duration_ms.avg)}ms`}
+                label={t('observe.metrics.stat.avgDuration', {
+                  max: Math.round(metrics.duration_ms.max),
+                })}
+              />
+              <Stat
+                className="min-w-40 flex-1"
+                value={formatTimestamp(metrics.updated_at)}
+                label={t('observe.metrics.stat.updatedAt')}
+              />
             </div>
-            <p className="section-desc">
+            <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
               {t('observe.metrics.sourceDesc', {
                 source:
                   data?.source === 'trace'
@@ -266,7 +267,7 @@ function MetricsPanel() {
           body={
             <>
               <p>{t('observe.metrics.resetBody')}</p>
-              <p className="dim">{t('observe.metrics.resetBodyHint')}</p>
+              <p className="text-muted">{t('observe.metrics.resetBodyHint')}</p>
             </>
           }
           confirmLabel={t('observe.metrics.resetConfirm')}
@@ -385,11 +386,13 @@ function EvalsPanel() {
   const latestError = latest.state.status === 'error' ? latest.state.error : null;
 
   return (
-    <div className="settings-section">
-      <p className="section-desc">{t('observe.evals.intro')}</p>
-      <div className="filter-bar">
-        <input
-          className="input"
+    <div className="flex flex-col gap-6">
+      <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
+        {t('observe.evals.intro')}
+      </p>
+      <div className="mt-3.5 flex flex-wrap items-center gap-2">
+        <Input
+          className="grow basis-60 max-w-search"
           value={suite}
           onChange={(event) => setSuite(event.target.value)}
           placeholder={t('observe.evals.suitePlaceholder')}
@@ -402,37 +405,36 @@ function EvalsPanel() {
             <option key={item} value={item} />
           ))}
         </datalist>
-        <button
-          type="button"
-          className="btn btn-small"
+        <Button
+          size="small"
           onClick={loadLatest}
           disabled={!suite.trim() || latest.state.status === 'loading'}
         >
           {t('observe.evals.loadLatest')}
-        </button>
-        <button
-          type="button"
-          className="btn btn-small btn-primary"
+        </Button>
+        <Button
+          size="small"
+          variant="primary"
           onClick={() => void run()}
           disabled={!connected || !suite.trim() || runBusy}
           title={!connected ? t('common.writesDisabled') : undefined}
         >
           {runBusy ? t('observe.evals.running') : t('observe.evals.run')}
-        </button>
+        </Button>
       </div>
       {suites.length > 0 && (
-        <div className="chip-row">
-          <span className="dim">{t('observe.evals.recent')}</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-muted">{t('observe.evals.recent')}</span>
           {suites.map((item) => (
-            <button
+            <Button
               key={item}
-              type="button"
-              className={`filter-chip ${item === suite ? 'active' : ''}`.trim()}
+              variant="chip"
+              size="small"
               aria-pressed={item === suite}
               onClick={() => setSuite(item)}
             >
               {item}
-            </button>
+            </Button>
           ))}
         </div>
       )}
@@ -501,58 +503,68 @@ function EvalReportView({
 
   return (
     <>
-      <div className="stats-grid">
-        <div className="stat">
-          <span className="stat-value">{report.total}</span>
-          <span className="stat-label">{t('observe.evals.stat.total')}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-value">{report.passed}</span>
-          <span className="stat-label">{t('observe.evals.stat.passed')}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-value">{report.failed}</span>
-          <span className="stat-label">{t('observe.evals.stat.failed')}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-value">{report.errors}</span>
-          <span className="stat-label">{t('observe.evals.stat.errors')}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-value">{report.skipped}</span>
-          <span className="stat-label">{t('observe.evals.stat.skipped')}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-value">{report.duration_ms}ms</span>
-          <span className="stat-label">{t('observe.evals.stat.duration')}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-value">{report.network ? 'on' : 'off'}</span>
-          <span className="stat-label">{t('observe.evals.stat.network')}</span>
-        </div>
+      <div className="my-3 flex flex-wrap gap-2.5">
+        <Stat
+          className="min-w-40 flex-1"
+          value={report.total}
+          label={t('observe.evals.stat.total')}
+        />
+        <Stat
+          className="min-w-40 flex-1"
+          value={report.passed}
+          label={t('observe.evals.stat.passed')}
+        />
+        <Stat
+          className="min-w-40 flex-1"
+          value={report.failed}
+          label={t('observe.evals.stat.failed')}
+        />
+        <Stat
+          className="min-w-40 flex-1"
+          value={report.errors}
+          label={t('observe.evals.stat.errors')}
+        />
+        <Stat
+          className="min-w-40 flex-1"
+          value={report.skipped}
+          label={t('observe.evals.stat.skipped')}
+        />
+        <Stat
+          className="min-w-40 flex-1"
+          value={`${report.duration_ms}ms`}
+          label={t('observe.evals.stat.duration')}
+        />
+        <Stat
+          className="min-w-40 flex-1"
+          value={report.network ? 'on' : 'off'}
+          label={t('observe.evals.stat.network')}
+        />
       </div>
-      <p className="section-desc">
+      <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
         {t('observe.evals.generatedAt', {
           time: formatTimestamp(report.finished_at),
           network: report.network ? t('observe.evals.networkOn') : t('observe.evals.offline'),
         })}
       </p>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="section-title">{t('observe.evals.casesTitle')}</h2>
-          <button
-            type="button"
-            className={`filter-chip ${caseFilter === 'failed' ? 'active' : ''}`.trim()}
-            aria-pressed={caseFilter === 'failed'}
-            onClick={() => onCaseFilter(caseFilter === 'failed' ? 'all' : 'failed')}
-          >
-            {t('observe.evals.failedOnly')}
-          </button>
-          <span className="count-pill">
-            {filteredCases.length}/{report.cases.length}
-          </span>
-        </div>
+      <Section
+        title={t('observe.evals.casesTitle')}
+        actions={
+          <>
+            <Button
+              variant="chip"
+              size="small"
+              aria-pressed={caseFilter === 'failed'}
+              onClick={() => onCaseFilter(caseFilter === 'failed' ? 'all' : 'failed')}
+            >
+              {t('observe.evals.failedOnly')}
+            </Button>
+            <Badge>
+              {filteredCases.length}/{report.cases.length}
+            </Badge>
+          </>
+        }
+      >
         {filteredCases.length === 0 ? (
           <EmptyState
             title={t(
@@ -580,30 +592,32 @@ function EvalReportView({
                   <td>
                     <StatusChip status={item.status} />
                   </td>
-                  <td className="mono">{item.id}</td>
-                  <td className="mono col-optional">{item.duration_ms}ms</td>
-                  <td className="mono col-optional">
+                  <td className="font-mono">{item.id}</td>
+                  <td className="font-mono tabular-nums col-optional">{item.duration_ms}ms</td>
+                  <td className="font-mono tabular-nums col-optional">
                     {item.assertions.filter((assertion) => assertion.ok).length}/
                     {item.assertions.length}
                   </td>
                   <td>
                     {item.error ? (
-                      <span className="err">{item.error}</span>
+                      <span className="text-danger">{item.error}</span>
                     ) : (
-                      <span className="dim">{item.output ?? '—'}</span>
+                      <span className="text-muted">{item.output ?? '—'}</span>
                     )}
                     {item.assertions.length > 0 && (
-                      <details className="case-assertions" open={item.status === 'failed'}>
-                        <summary>{t('observe.evals.assertions')}</summary>
+                      <details className="mt-1" open={item.status === 'failed'}>
+                        <summary className="cursor-pointer font-mono text-xs text-muted">
+                          {t('observe.evals.assertions')}
+                        </summary>
                         <ul className="plain-list">
                           {item.assertions.map((assertion, index) => (
                             // biome-ignore lint/suspicious/noArrayIndexKey: 断言顺序稳定
                             <li key={`${assertion.type}-${index}`}>
-                              <span className={assertion.ok ? 'ok' : 'err'}>
+                              <span className={assertion.ok ? 'text-success' : 'text-danger'}>
                                 {assertion.ok ? '✓' : '✗'} {assertion.type}
                               </span>
                               {assertion.detail && (
-                                <span className="dim"> — {assertion.detail}</span>
+                                <span className="text-muted"> — {assertion.detail}</span>
                               )}
                             </li>
                           ))}
@@ -617,11 +631,15 @@ function EvalReportView({
           </table>
         )}
         {cases.length < filteredCases.length && (
-          <button type="button" className="load-more" onClick={onShowMore}>
+          <Button
+            variant="plain"
+            className="mx-auto mt-2 rounded-full px-3.5 py-2 text-xs text-muted"
+            onClick={onShowMore}
+          >
             {t('observe.evals.showMore', { count: filteredCases.length - cases.length })}
-          </button>
+          </Button>
         )}
-      </section>
+      </Section>
     </>
   );
 }
