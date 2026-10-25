@@ -36,6 +36,7 @@ const LINK_FILES = [
 ];
 
 const ARCH_DIR = 'docs/architecture';
+const AGENTS_DIR = 'docs/agents';
 const ADR_DIR = 'docs/adr';
 const ADR_FILE_PATTERN = /^ADR-(\d{3})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
 const ADR_STATUS = new Set(['proposed', 'accepted', 'superseded']);
@@ -62,6 +63,10 @@ export async function checkDocs(root: string): Promise<DocIssue[]> {
 
   for (const file of await listMarkdownFiles(root, ARCH_DIR)) {
     await checkLinks(root, `${ARCH_DIR}/${file}`, issues);
+  }
+
+  for (const file of await listMarkdownFiles(root, AGENTS_DIR)) {
+    await checkLinks(root, `${AGENTS_DIR}/${file}`, issues);
   }
 
   return issues;

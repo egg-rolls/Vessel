@@ -36,6 +36,8 @@ function validFiles(): Record<string, string> {
     'docs/ARCHITECTURE.md': '# Arch\n[modules](architecture/INDEX.md)\n',
     'docs/architecture/INDEX.md': '# Index\n[overview](overview.md)\n',
     'docs/architecture/overview.md': '# Overview\n[back](INDEX.md)\n',
+    'docs/agents/INDEX.md': '# Agents\n[core](core.md)\n',
+    'docs/agents/core.md': '# Core\n[back](INDEX.md)\n',
     'AGENTS.md': '# Agents\n[ARCHITECTURE](docs/ARCHITECTURE.md)\n',
     'docs/operations/CI-CD.md': '# CI\n[back](../FILE-MANAGEMENT.md)\n',
     'docs/operations/RELEASE.md': '# Release\n[back](../FILE-MANAGEMENT.md)\n',
@@ -179,6 +181,32 @@ describe('checkDocs', () => {
     delete files['docs/architecture/INDEX.md'];
     delete files['docs/architecture/overview.md'];
     files['docs/ARCHITECTURE.md'] = '# Arch\n';
+    await withFixture(files, async (root) => {
+      expect(await checkDocs(root)).toEqual([]);
+    });
+  });
+
+  it('reports broken links inside agent advisories', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/agents/core.md': '# Core\n[bad](missing.md)\n',
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({
+            file: 'docs/agents/core.md',
+            message: expect.stringContaining('不存在'),
+          }),
+        );
+      },
+    );
+  });
+
+  it('skips agents directory when absent', async () => {
+    const files = validFiles();
+    delete files['docs/agents/INDEX.md'];
+    delete files['docs/agents/core.md'];
     await withFixture(files, async (root) => {
       expect(await checkDocs(root)).toEqual([]);
     });
