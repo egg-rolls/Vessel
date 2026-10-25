@@ -24,25 +24,9 @@ body {
 
 button,
 input,
-textarea,
-select {
+textarea {
   font-family: inherit;
   color: inherit;
-}
-
-/*
- * `option` 由系统弹层渲染，不继承输入框的 background / color；必须显式取 token。
- * `color-scheme` 是可继承属性，:root 的 light / dark 会带到原生下拉弹层。
- * 保留原生箭头，不设 appearance: none。
- */
-
-select option {
-  background: var(--surface-raised);
-  color: var(--ink);
-}
-
-select option:disabled {
-  color: var(--faint);
 }
 
 button {
