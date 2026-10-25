@@ -1,32 +1,69 @@
 # Vessel
 
-> 可嵌入的多 agent 平台 runtime + 参考 harness 外壳。极简核心。两个插槽。一个通用循环。填 Key 即跑。
+> 分布式蜂巢智能体框架：节点是蜂巢，Hub 让蜂巢彼此可见，Team 是按工作目录形成的蜂群，
+> Agent 是个体蜂，三类信息素决定它们看到什么、对谁说话。
+> 同时是一个可嵌入的 runtime + 参考 harness：极简核心，两个插槽，一个通用循环，填 Key 即跑。
 
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#状态)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](#许可证)
 
 ## 这是什么
 
-Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（单 agent loop + 9 接口 + 2 插槽），TUI / CLI / Web / Gateway 是参考 harness 外壳。它不是给你 50 个工具的 Agent，而是一个**只给最必要工具、其余能力由模型自己组合出来**的 Agent。
+Vessel 是一个**可嵌入的多 agent 平台 runtime**，也是一个**分布式蜂巢智能体框架**。
 
-|                | 传统 Agent 工具        | Vessel                                                      |
-| -------------- | ---------------------- | ----------------------------------------------------------- |
-| **能力从哪来** | 给你 50 个工具，自己挑 | 给最必要的三个能力工具，剩下的由模型用它们组合              |
-| **绑谁**       | 绑一个 LLM 厂商        | 填 Key 即跑，Provider 无关，高频迭代切便宜模型              |
-| **范式**       | 做一个场景             | 一个 while 循环兜住 Harness / Loop Engineering              |
-| **核心**       | 框架式大 core          | 9 个接口、2 个插槽、1 个循环。MIT 开源，core 可嵌入任何应用 |
+单个节点内，它保持极简：单 agent loop + 9 个接口 + 2 个插槽，能力工具只有 `bash` / `read` / `edit`，其余能力由模型自己组合。TUI / CLI / Web / Gateway 是参考 harness 外壳。
 
-三层架构：`@vessel-agent/core`（运行时，可独立嵌入）+ `@vessel-agent/config`（声明式配置）+ `@vessel-agent/tui`（Claude-Code 式终端）。形态上参考 Claude Code，但 Provider 无关、范式无关、开源。
+多个节点之间，它不把 Agent 当成孤立的聊天机器人：每个 Vessel 进程是一个**节点（蜂巢）**，节点内按工作目录组织 **Team（蜂群）**，Team 里的 **Agent（个体蜂）** 可以创建 / 关闭成员、定向通信、轮换身体；节点通过 **Hub** 交换目录与指针，通过地址 `<principal>@<node_id>:<team_id>` 直接投递消息。
+
+> **当前边界**：单节点蜂群、Hub 目录、静态 peer 的跨节点定向投递已实现；自动发现、成员再派生、扩散信息素订阅、跨节点 Agent 生命周期仍在路上。完整拆分见 [能力边界](#能力边界) 与 [产品设计](docs/PRODUCT.md)。
+
+|                  | 单体 Agent 工具            | 多 Agent 编排框架      | Vessel                                              |
+| ---------------- | -------------------------- | ---------------------- | --------------------------------------------------- |
+| **能力从哪来**   | 给你 50 个工具，自己挑     | 预定义节点与边         | 三个能力工具，其余由模型组合                        |
+| **绑谁**         | 绑一个 LLM 厂商            | 绑平台 / 框架          | 填 Key 即跑，Provider 无关，高频迭代切便宜模型      |
+| **组织单位**     | 一个 Agent                 | 一张图 / 一条流程      | 节点 → Team → Agent，按工作目录形成                 |
+| **通信**         | 内部消息                   | 框架内状态传递         | 定向 `send` / Team 日志 / 跨节点地址                |
+| **跨机器**       | 外挂                       | 依赖平台               | Hub 目录 + 点对点 federation                        |
+| **核心**         | 框架式大 core              | 编排式大 core          | 9 个接口、2 个插槽、1 个循环。MIT 开源，core 可嵌入 |
+
+分层：`@vessel-agent/core`（运行时，可独立嵌入）+ `@vessel-agent/agent`（成员与 Team 能力）+ `@vessel-agent/config` / `@vessel-agent/permission` + `@vessel-agent/tui` / `@vessel-agent/serve` / `apps/web`（外壳）。形态上参考 Claude Code，但 Provider 无关、范式无关、开源。
+
+## 蜂巢模型
+
+| 概念 | 代码里的东西 | 现在能做什么 |
+| --- | --- | --- |
+| **节点 Node** | 一次 Vessel 进程，`node.json` 的 `node_id` + 数据目录 | 独立执行、授权、持久化；是唯一权威 |
+| **Hub** | `vessel hub` 目录服务 | 配对、登记节点 / Team / 成员 / 在线状态、推送指针；不代理正文、不替节点授权 |
+| **Team** | `workspace` + `team_id` + roster + 日志 + policy | 一个工作目录一个 Team（声明后按 `workspace` 匹配当前目录）；共享日志、预算、可见性 |
+| **Agent** | 持久身份 + 可替换 Body | 主 Agent 可 `new` / `close` 成员；成员可 `send` / `post` / `list` / `rotate` 自己 |
+| **地址** | `<principal>@<node_id>:<team_id>` | 跨节点定向投递；`principal` 是名字，不是 agent id |
+
+Hub 让其他节点「被看见」；真正的操作仍直连节点——这是刻意的权限边界。Hub 同步目录快照与 `{node_id, team_id, request_id?, reason, ts}` 指针，不代理正文；浏览器和 CLI 要操作时仍然连节点自己的 gateway。Hub 不自动发现节点：节点用配对码加入，或由 hub 用 `vessel hub node add` 纳入；自动发现仍是未实现项。
+
+当前蜂群的增长与分工是**显式派发**：谁做什么由主 Agent 或人决定。这里的「自组织」来自这些原语的组合，不是内建的自治规划器或任务市场。
+
+## 三层信息素
+
+Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把三类信号折进语言空间：
+
+| 层 | 是什么 | 现在怎么流动 | 状态 |
+| --- | --- | --- | --- |
+| **环境信息素** | 文档、代码、系统状态、命令输出 | `read` / `bash` / `edit`、`@路径` 引用、skills、`AGENTS.md` | 已实现 |
+| **定向信息素** | 用户对话、工具调用、指名消息 | 当前 run 的 messages、`agent(send/post)`、Team 日志、federation 地址 | 已实现 |
+| **扩散信息素** | 微小状态变化：成员加入/离开、run/工具事件；文件变化尚未观察 | 事件流、presence、Hub 目录、Web 时间线 | 部分：可观测，Agent 还不能订阅 |
+
+**下一步是订阅。** 目标是让 Agent 用工具订阅文件 / 目录 / 事件；变化在下一个 run 开始前以 diff 注入上下文，只带上次看过之后的改动，避免同一文件被反复整读。当前没有订阅 API，Agent 只能按需重新读取。设计边界见 [产品设计](docs/PRODUCT.md)。
 
 ## 为谁
 
-- **无基础用户** — 只用 TUI，填 Key 即跑。
-- **弱基础用户** — 改 YAML 定义 provider 与 agent。
+- **个人** — 只用 TUI，填 Key 即跑；一个目录就是一个 Team。
+- **小团队** — 同一 Team 共享 roster、日志、预算；成员可以并行干活。
+- **多机 / 多团队** — Hub 目录登记节点，按地址跨节点找人。
 - **开发者** — 写 TypeScript 插件扩展能力，或把 `@vessel-agent/core` 嵌入 Slack bot / CI / 桌面 app。
 
 ## 状态
 
-**alpha。** 1.0 前不发布：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。当前版本、已合入能力与下一步见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)，历史版本索引见 [docs/versions/INDEX.md](docs/versions/INDEX.md)。本文只写已合入当前分支的行为。
+**alpha。** 1.0 前不发布：没有 tag、没有 `npm publish`、没有独立二进制；代码在 `main` 上滚动，发布决定由维护者做。当前版本、已合入能力与下一步见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)，历史版本索引见 [docs/versions/INDEX.md](docs/versions/INDEX.md)。本文的技术行为写已合入当前分支的能力；未实现项集中列在 [能力边界](#能力边界)。
 
 **包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/agent`（AgentService 成员能力层）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`），文档不维护副本。
 
@@ -157,7 +194,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 | 工具                    | 何时注册                                                                                      | 干什么                                                                                                                                                                                                                                                        |
 | ----------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                 | 默认注册；`agent.enabled: false` 关闭                                                         | 成员生命周期：owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，不能 `new` / `close`）；`send` 走统一 dispatch，入队即返回，不等待结果；`post` 只写 Team 日志，不通知任何 Agent |
+| `agent`                 | 默认注册；`agent.enabled: false` 关闭                                                         | 成员生命周期：owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，不能 `new` / `close`）；`send` 走统一 dispatch，入队即返回，不等待结果，`to` 也接受跨节点地址 `<principal>@<node_id>:<team_id>`；`post` 只写 Team 日志，不通知任何 Agent |
 | `ask_user`              | 交互 REPL（TTY）或 gateway/serve；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭 | 向用户提问，经事件流暂停等待回答                                                                                                                                                                                                                              |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功                                                         | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化                                                                                                                                                                                                     |
 
@@ -341,9 +378,9 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 - 生产同源托管：CLI 会自动传 `staticDir`（`VESSEL_STATIC_DIR` 优先，否则 `apps/web/dist` 存在时使用）；开发时用 Vite proxy。
 - 限制：单 runtime / 单 context，并发 1；运行与事件历史在内存，重启丢失。gateway 事件缓冲缺省 10000，慢客户端丢事件并标记 `gap`，不无界增长。
 
-## 远程访问与跨节点 team
+## 节点、Hub 与跨节点 Team
 
-远程控制面与跨节点 transport 已实现；**默认仍是本机回环**，远程与跨节点都要显式配置。
+一个 Vessel 进程 = 一个节点。Hub 只做目录与指针；真正的消息走节点到节点的 federation。远程控制面与跨节点 transport 已实现；**默认仍是本机回环**，远程与跨节点都要显式配置。
 
 ```yaml
 # node-b（服务端）：非回环必须 token + TLS
@@ -375,7 +412,7 @@ transport:
 - **CA**：私有 CA / 自签证书用 `--ca <pem>` 或 `connect.ca_file` 显式提供；未提供时用运行时默认信任库。浏览器不能按连接指定 CA，必须把 CA 装进系统 / 浏览器信任库。
 - **服务端**：`serve.allowed_origins` 或重复 `--allowed-origin` 配置独立前端 Origin；只接受显式 http(s) origin，禁止 `*`、path、query。allowlist 命中时返回对应 CORS 头并带 `Vary: Origin`；CSP 的 `connect-src` 由 Host 与 allowlist 动态生成。
 - **跨节点 team**：legacy `/v1/team/*` / `RemoteTransport` / `NodeRegistry` / `LoopbackTransport` 已删除；跨节点投递只走 federation（`POST /v1/federation/messages`）。canonical `teams.*` 是本地 Team。
-- **Hub 目录**：`vessel hub start` 启动独立前台目录进程；节点用 `vessel hub pair` 生成一次性配对码，hub 用 `vessel hub node add <url> --code <CODE>` 纳入。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**；浏览器仍需直连节点。支持 hub → node 拨号与 node → hub 出站（NAT）：hub `vessel hub join-code`、节点 `vessel hub join <hub-url> --code`。跨节点 A2A 未实现。配置见 [CONFIG.md](docs/operations/CONFIG.md) §2.13。
+- **Hub 目录**：`vessel hub start` 启动独立前台目录进程；节点用 `vessel hub pair` 生成一次性配对码，hub 用 `vessel hub node add <url> --code <CODE>` 纳入。hub 同步目录快照与 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**；浏览器仍需直连节点。支持 hub → node 拨号与 node → hub 出站（NAT）：hub `vessel hub join-code`、节点 `vessel hub join <hub-url> --code`。跨节点 A2A 未实现。配置见 [CONFIG.md](docs/operations/CONFIG.md) §2.13。
 - **tenant 边界**：远端 tenant 由 token principal 派生；admin 可用 `--tenant` 覆盖，非 admin 指定其它 tenant 返回 `forbidden` / WS 4403。
 - **安全收紧**：durable 端点按 principal 的 tenant 过滤并校验角色。
 - **已知限制**：跨节点 agent transport 已删除，跨节点投递只有 federation；没有 mDNS / 服务网格 / 自动发现 / mTLS / 全局 durable。
@@ -383,8 +420,8 @@ transport:
 
 ## 发布与更新
 
-- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。1.0 前不发布：当前所有版本都只在分支上收口。
-- 当前版本只做发布干跑：`bun run scripts/release-dry-run.ts`，并跑安装解析 smoke：`bun run scripts/smoke-install.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**。
+- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。1.0 前不发布：当前版本只在 `main` 上滚动，不 tag、不 publish。
+- 当前版本只做发布干跑：`bun run scripts/release-dry-run.ts`，并跑安装解析 smoke：`bun run scripts/smoke-install.ts`。**不 tag、不 push tag、不 `npm publish`**。
 - npm 分发名为 **`vessel-agent`**（bin 仍是 `vessel`），16 个可发布子包使用 **`@vessel-agent/*`** scope；**尚未发布**，因此 `npm i -g vessel-agent`、`npx vessel`、`npx vessel-agent` 当前都不可用。发布前请用 `bun link`（见快速开始）。子包带 `files: ["src"]` 与 `license` / `repository` / `engines`，根包排除 `node_modules` 并包含 `apps/web/dist`；tarball 安装 smoke 按 `@vessel-agent/*` 覆盖安装（POSIX / Node 22，Windows 跳过）。
 - **不提供独立二进制**（ADR-006）。
 - `vessel update --check` 读取 Release 的 `latest.json`，只提示版本与安装命令；当前仓库不生成 `latest.json`。
@@ -392,23 +429,51 @@ transport:
 - 后台检查：交互 REPL 启动时每天最多一次；`update.autoCheck: false` 或 `VESSEL_NO_UPDATE_CHECK=1` 可关闭，失败静默。
 - 通道：稳定版 `latest`，预发布 `beta`（`--channel` 或 `VESSEL_CHANNEL`）。
 
-## 延后项
+## 能力边界
 
-以下能力**尚未实现**，明确不在本期范围：
-- **远程 mesh / 节点自动发现 / mTLS** —— 未实现；只支持静态节点表 + Bearer token + TLS，不做 mDNS / 服务网格 / 客户端证书。
-- **飞书富媒体 / 卡片 / 多机器人 / OAuth** —— 未实现；只做文本、单 chat 单 session。
-- **微信（公众号 / 企业微信）** —— **不做**；个人微信无官方 API。
-- **per-tenant 跨节点 team** —— 未实现；跨节点 team 控制面为 default/admin-only。
-- **npm 分发** —— 根包名 `vessel-agent`，子包 scope `@vessel-agent/*`，尚未 publish；未发布前 `npx vessel` / `npm i -g vessel-agent` 不可用。打包与安装 smoke 已按新 scope 验证，但发布决定在 1。
-- **独立二进制 / 二进制自替换更新** —— 不做（ADR-006 继续有效）；`vessel update` 只对 npm / bun 全局安装执行包级更新，不下载或替换二进制，也不改源码工作区。
-- **Web 全量本地化** —— Web 壳层（导航 / 面包屑 / Settings / Appearance / 通用按钮）已支持 zh-CN / en；功能页未覆盖文案回退中文，命令数据输出保持英文，不能宣称全量本地化。
-- **版本发布** —— 所有版本均未发布；发布决定在 1。
+### 已实现
+
+- **单节点 Agent 生命周期**：`new` / `send` / `close` / `list` / `rotate` / `post`。主 Agent 可创建、关闭成员；成员 Body 可发送、写 Team 日志、轮换自己。
+- **Team**：声明后按工作目录匹配，一个工作目录一个 Team；roster、共享日志、预算、可见性、`@` 投递。
+- **Hub 目录**：配对、节点 / Team / 成员 / 在线状态、指针；支持 hub → node 拨号与 node → hub 出站（NAT）。
+- **跨节点定向投递**：静态 peer allowlist + `<principal>@<node_id>:<team_id>` 地址 + 回复；每 peer 限流、去重、hop 上界。
+- **远程控制面**：`--connect`、Web 控制台、TLS / token、独立前端。
+
+### 部分实现
+
+- **发现**：本机 roster 用 `agent(list)`；跨节点用 `vessel federation team-info`（opt-in）或 Hub 目录，也可以经 `bash` 调 CLI。没有一等公民的 Agent 发现工具。
+- **扩散信息素**：事件流与 Web 可看；Agent 侧没有订阅接口。
+
+### 未实现（方向）
+
+- 成员 Agent 再派生 Agent（当前只有 owner 能 `new` / `close`）；跨节点 spawn / close / rotate / resume。
+- 扩散信息素订阅：文件 / 目录 / 事件 diff 在下一个 run 前注入。
+
+### 未实现（暂不承诺）
+
+- 自动发现 / mesh / 中继 / 离线队列 / 跨重启 exactly-once。
+- A2A 协议兼容。
+- 多 tenant federation：当前跨节点 Team 控制面为 default / admin-only。
+- 自治调度：自动分工、任务市场。
+
+### 明确不做
+
+- mDNS / 服务网格 / mTLS / 客户端证书等自动网络发现与强身份。
+- 飞书富媒体 / 卡片 / 多机器人 / OAuth；微信（个人微信无官方 API）。
+- 独立二进制 / 二进制自替换更新（ADR-006 继续有效）；`vessel update` 只对 npm / bun 全局安装执行包级更新。
+- Web 全量本地化：壳层已支持 zh-CN / en，功能页未覆盖文案回退中文，不能宣称全量本地化。
+- 1.0 前不 tag、不 publish；发布决定由维护者做。
+
+### 分发
+
+根包名 `vessel-agent`，子包 scope `@vessel-agent/*`，**尚未 publish**；未发布前 `npx vessel` / `npm i -g vessel-agent` 不可用。打包与安装 smoke 已按新 scope 验证，发布决定由维护者做。
 
 ## 文档索引
 
 | 文档                                                         | 作用                                                             | 给谁看          |
 | ------------------------------------------------------------ | ---------------------------------------------------------------- | --------------- |
-| [README.md](README.md)                                       | 是什么 / 怎么跑 / 延后项                                         | 所有人，先看    |
+| [README.md](README.md)                                       | 是什么 / 怎么跑 / 能力边界                                       | 所有人，先看    |
+| [docs/PRODUCT.md](docs/PRODUCT.md)                           | 产品概念模型：蜂巢、三层信息素、现状与方向                       | 所有人          |
 | [docs/architecture/INDEX.md](docs/architecture/INDEX.md)     | 技术架构：模块索引（分层、循环、接口、扩展、事件、Gateway）      | 开发者 / AI     |
 | [docs/adr/README.md](docs/adr/README.md)                     | 架构决策记录索引：每个关键选择的「为什么」（一条一文件，只追加） | 开发者 / AI     |
 | [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)           | 文件放哪里、路径归属、分支与发布规则                             | 贡献者 / AI     |
