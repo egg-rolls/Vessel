@@ -82,9 +82,9 @@ Linen 视觉的 body、标题、表单默认样式仍由 `src/styles/base.css` �
 | `AutoGrowTextarea`                                                               | `components/ui/AutoGrowTextarea.tsx` | 自增高输入框                                                                                                                              |
 | `Section`                                                                        | `components/ui/Section.tsx`          | 结构面板（等价旧 `.panel`）；`title` / `description` / `actions`；`titleAs`: `h2` / `h3`；forwardRef 到 `section`                          |
 | `Field`                                                                          | `components/ui/Field.tsx`            | 表单字段容器；`label` / `htmlFor` / `hint` / `error` / `required`；error 带 `role=alert`                                                  |
-| `Input` / `Select` / `Textarea`                                                  | `components/ui/Field.tsx`            | 原生控件 + `invalid`；视觉等价旧 `.input`（sunken + inset + focus ring）；forwardRef                                                  |
+| `Input` / `Select` / `Textarea`                                                  | `components/ui/Field.tsx`            | 原生控件 + `invalid`；sunken + inset + focus ring；forwardRef                                                                                                                                              |
 | `KeyValueList`                                                                   | `components/ui/KeyValueList.tsx`     | 两列 `dl` 网格（等价旧 `.diag-list`）；`items: { label, value }[]`，value 自动断行                                                      |
-| `Stat`                                                                           | `components/ui/Stat.tsx`             | 指标块（等价旧 `.stat`）；`label` / `value` / `hint`                                                                                       |
+| `Stat`                                                                           | `components/ui/Stat.tsx`             | 指标块；`label` / `value` / `hint`                                                                                                                                                                        |
 
 `StatusChip` 的 tone 只取 `muted` / `info` / `warn` / `ok` / `danger`；新增状态先加
 `STATUS_META` 与 i18n key，不要在业务页手写颜色。
@@ -189,19 +189,44 @@ export function ToolCard({ tone, className, ...props }: ToolCardProps) {
 
 运行 `bun run check:web-styles`（CI Architecture job 也会跑）检查第 1、2 条。
 
-## legacy CSS 迁移
+## legacy CSS 状态（P2 收口后）
 
-`src/styles/**` 仍是未迁移域的来源；迁移一个组件时：
+P2 已迁移 Settings / Integrations / Runs / Observe / Nodes / Agents / Teams / Team / Chat
+与 Markdown 渲染器；`domains/{agents,runs}.css`、全部 `md-*` 类、`input` / `field` /
+`filter-chip` / `count-pill` / `card*` / `stat*` / `table` 以外的旧视觉规则已删除。
+`src/styles/**` 现在只剩：
+
+1. **app shell 与 P3 范围**：`layout.css`（侧栏 / 顶栏 / 抽屉 / chat-workspace /
+   conversation / 1023 媒体）、`palette.css`、`overlays.css`、`components/prompts.css`
+   的弹窗与 more/shortcut 规则。
+2. **未迁移域**：`hub.css`、Gateway 的 `.panel` / `.diag-list`、`team.css` 的响应式
+   marker、`attention.css`、`tools.css`、`runs-detail.css`。
+3. **基础层**：`tokens.css`（唯一值来源）、`base.css`（body / 控件 / `.mono` / `.dim` /
+   forced-colors）、`components/responsive.css`（680 表格降列与 pointer-coarse）。
+4. **仍需保留的 marker**（移除条件）：
+   - `btn` / `btn-primary`：`Button` 与 AppShell 未迁移按钮；表格按钮间距迁 utilities 后移除。
+   - `search-input`：`filter-bar` / `net-toolbar` flex 布局；SessionList 补
+     `grow basis-60 max-w-search` 后移除。
+   - `icon-btn`：ActionMenu / Tooltip / 详情页关闭；上下文规则迁 utilities 后移除。
+   - `action-menu`：`.session-row` / `.team-list-item` 的 hover 显隐；改 group utilities 后移除。
+   - `modal-body-scroll`：CommandPalette 滚动结构；命令面板迁移后移除。
+   - `state-*`：States 组件、测试与 forced-colors；不计划移除。
+   - `filter-bar` / `domain-view` / `domain-content` / `data-table` / `col-*` / `row-active`：
+     未迁移域与 680/1023 响应式表格；P3 或表格组件化后评估。
+5. **断点**：新代码用 `max-compact:`（680）与 `max-wide:`（1023）；`720`（nodes 命令块 /
+   teams grid）、`900`（attention grid）、`1199`（team chat body）继续使用 legacy 媒体查询。
+
+迁移新组件时：
 1. 组件改用 Tailwind + CVA，保持 public API 与行为。
-2. 删除**仅被该组件使用**的 legacy 规则。
-3. 保留仍被未迁移页面使用的规则（例如 `.btn` / `.input` / `.panel` / `.card` /
-   `.modal-title`），以及未迁移容器依赖的 marker class：
-   `btn`（`.card .btn` / `.multi-node-head .btn` 等上下文外边距）、
-   `search-input`（filter-bar flex 布局）、`icon-btn`（session-row hover 显隐）、
-   `action-menu`（行级菜单显隐）、`modal-body-scroll`（命令面板滚动结构）、
-   `state-empty` 等状态 marker（测试与 forced-colors）。
+2. 删除**仅被该组件使用**的 legacy 规则；删前 grep `src` 的 ts/tsx/css 与 `tests`。
+3. 动态拼接类（`conn-*` / `nav-*` / `tone-*` / `toast-*` / `perm-*` / `active` / `open`）
+   不得按字面量判死。
 4. `styles/tokens.css` 始终是值来源；新增 token 用 `--shape-*` / `--size-*` 原值
    加别名，避免 `@theme inline` 自引用。
 
 `Integrations → Tools`（`domains/integrations/IntegrationsView.tsx` 的 `ToolsPanel`）
 是 L3 参考实现：搜索 + `Button variant="chip"` + `Badge` + Tailwind 卡片网格。
+
+P2 接受的视觉差异（记录，不逐一回改）：Section 标题 13→12.5、Stat 18→19、
+Button 默认 12→11.5、部分 tracking / 行高取最近 token、Markdown 标题段距
+0.7em→0.55em、Tool 结果最大高 220→224px。
