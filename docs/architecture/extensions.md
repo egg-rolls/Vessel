@@ -60,8 +60,6 @@ interface PluginHost {
 ```
 plugins/
 ├── tools/basic-tools/       package.json + src/index.ts   → bash / read / edit
-├── tools/delegate-task/     → delegate_task（工厂式）
-├── tools/team/              → team_* 5 个（工厂式；默认不加载，team.enabled 才构造）
 ├── mcp/client/              → MCP client（工厂式；配置 mcp_servers 才构造）
 ├── evals/harness/           → @vessel-agent/evals（工厂式；asm 直接调用库，不注册工具）
 ├── im/feishu/               → @vessel-agent/feishu（工厂式；--feishu 才启动）
@@ -72,7 +70,7 @@ plugins/
 └── provider/{openai,anthropic}/
 ```
 
-共 **12 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task`、`team`、`mcp-client`、`evals` 与 `feishu`。`team` 还要求 `team.enabled: true` 显式 opt-in；MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。装配层给 delegate 注入父级 resolved 权限（ADR-058）。
+共 **10 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `mcp-client`、`evals` 与 `feishu`。MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。
 
 `PluginLoader` 的接口：
 
@@ -87,7 +85,7 @@ class PluginLoader {
 
 **扫描只在进程启动时发生一次。** `PluginLoader` 把扫描结果缓存在实例上（插件目录在进程生命周期内视为不变），**这不是热加载**：新增或改动插件需要**重启进程**才生效，`/reload` 只重载配置、不重扫插件目录。用户 / 项目插件目录与 `plugins[].config` 注入见 `docs/versions/0.6.1.md`。
 
-**来源与优先级**：默认扫描根为 `repo`（仓库 `plugins/`）→ `project`（`./.vessel/plugins`）→ `user`（`~/.vessel/plugins`）→ `node_modules`（仓库根与 cwd 的 `node_modules/@vessel`）。同名插件**先出现者胜出**，因此仓库覆盖项目、项目覆盖用户。
+**来源与优先级**：默认扫描根为 `repo`（仓库 `plugins/`）→ `project`（`./.vessel/plugins`）→ `user`（`~/.vessel/plugins`）→ `node_modules`（仓库根与 cwd 的 `node_modules/@vessel-agent/*`，跳过非插件库包）。同名插件**先出现者胜出**，因此仓库覆盖项目、项目覆盖用户。
 
 **默认集与信任边界**：`plugins` 配置缺省时，默认集加载全部可用插件——包括 project / user / node_modules 来源的外部插件。启动时由 `bootstrap` / `--tools` / `doctor` 向 **stderr** 打印一次外部插件告警（数量、名称、来源），告警不进入 stdout / JSON。设置 `VESSEL_NO_EXTERNAL_PLUGINS=1`（或 `true`）后，默认集只加载 `source === 'repo'` 的插件；显式 `plugins:` 列表仍可加载指定外部插件（显式即信任）。外部插件以完整进程权限运行，且早于任何工具权限判定，因此 **P0-3 只做到缓解（MITIGATED），不是已关闭的信任边界**；不可信仓库应使用 opt-out。
 

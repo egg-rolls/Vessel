@@ -51,8 +51,8 @@
 | 034 | 极简化重构——解冻 core、三工具集、skills 即消息、拆治理 | accepted | - | - | [ADR-034-minimal-refactor-unfreeze-core.md](ADR-034-minimal-refactor-unfreeze-core.md) |
 | 035 | 0.1.0 core loop 级正确性修复 | accepted | - | - | [ADR-035-core-loop-correctness-fixes.md](ADR-035-core-loop-correctness-fixes.md) |
 | 036 | Gateway 协议 v1——事件流之上的本地控制面 | accepted | - | - | [ADR-036-gateway-protocol-v1.md](ADR-036-gateway-protocol-v1.md) |
-| 038 | thinking 模式 `reasoning_content` 回传 | accepted | - | - | [ADR-038-thinking-reasoning-content.md](ADR-038-thinking-reasoning-content.md) |
 | 037 | Vessel as a modular agent runtime | accepted | - | - | [ADR-037-modular-agent-runtime.md](ADR-037-modular-agent-runtime.md) |
+| 038 | thinking 模式 `reasoning_content` 回传 | accepted | - | - | [ADR-038-thinking-reasoning-content.md](ADR-038-thinking-reasoning-content.md) |
 | 039 | MCP client 作为插件接入 | accepted | - | - | [ADR-039-mcp-client-as-plugin.md](ADR-039-mcp-client-as-plugin.md) |
 | 040 | Durable run——RunStore port、checkpoint 与 resume | accepted | - | - | [ADR-040-durable-run-store-checkpoint-resume.md](ADR-040-durable-run-store-checkpoint-resume.md) |
 | 041 | 远程监听与 TLS（显式 opt-in） | accepted | - | - | [ADR-041-remote-listen-and-tls.md](ADR-041-remote-listen-and-tls.md) |
