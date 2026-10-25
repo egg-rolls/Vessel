@@ -32,7 +32,7 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
   - 删除 bootstrap 进程内 `nodeId` 生成，改由 `resolveNodeId()` 提供。
 
 - **非目标**：
-  - **未实现**：rotate / 启动嘱托 / epoch fencing（S2）；fork（S2 之后）；Team / roster / `teams.*` RPC / `@` 定向投递（S3）；budget / `conversation_id`（S4）；hub 控制面 / 节点目录（S5）；Web 群聊 / body 历史 UI（S6）；跨节点 team ↔ team（S7）。方向裁决见个人侧 DECISION-035，不属本 ADR 的实现范围。
+  - **未实现**：rotate / 启动嘱托 / epoch fencing（S2）；fork（S2 之后）；Team / roster / `teams.*` RPC / `@` 定向投递（S3）；budget / `conversation_id`（S4）；hub 控制面 / 节点目录（S5）；Web 群聊 / body 历史 UI（S6）；跨节点 team ↔ team（S7）。方向裁决见个人侧决策记录（不在本仓库），不属本 ADR 的实现范围；仓库内可查的相邻决策见 ADR-088 / ADR-092。
   - 不新增持久化消息队列；队列仍只在内存，重启丢失未处理消息。`dispatch` 负责按需重新物化 Body。
   - 不做 `request_id` 去重、唤醒风暴限流、`AgentSessionScope`；需要时 additive。
   - 不恢复 `wait` / `inbox` / `status` / `cancel` 模型工具；`agent` 工具动作仍只有 `new` / `send` / `close` / `list`。
@@ -69,7 +69,7 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
 
 ## Addendum（0.19 S3，Team 基础）
 
-> 0.19 S3 实现了 Team。以下只说明 S3 之后的当前事实；方向裁决见个人侧 DECISION-035。
+> 0.19 S3 实现了 Team。以下只说明 S3 之后的当前事实；方向裁决见个人侧决策记录（不在本仓库）。
 
 - **canonical RPC 45 → 49**：新增 `teams.list` / `teams.get`（read）与 `teams.post` / `teams.members`（write，`action: add|remove`）。serve 通过结构化 `TeamControlLike` 注入，不依赖 `@vessel-agent/agent`；未注入时 4 个方法仍在 manifest，handler 返回 `not_found`。tenant 作用域沿用 `resolveTenantScope`。
 - **Team 存储**：`<dataDir>/teams/<tenant>/<team_id>/team.json`（`atomicWrite` 0600）与 `log.ndjson`（串行只追加、有界读、坏行跳过；不是队列）。`team_id` = workspace 目录名 slug，创建后不可变；同 slug 不同 workspace 追加 hash 后缀。

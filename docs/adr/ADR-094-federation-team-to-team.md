@@ -101,3 +101,13 @@ tags: [federation, cross-node, team, allowlist, hop, tls, token]
 - **限流**：`federation.rateLimitPerMinute` 1..600（缺省 60），超限 429，零写入。
 - **不变**：hub 不参与数据面；hop = 1；无中继 / 离线队列 / 跨重启 exactly-once；
   canonical 仍 48；v1 固定 default tenant。
+
+## Errata（`federation.enabled` 缺省值）
+
+> 2026-10-25，只追加。上文决策 3 写 `federation.enabled` 缺省 false；当前运行实现为缺省
+> true，只有显式 `false` 关闭。正文保留当时结论，配置缺省以本条为准。
+
+- 归一化位置：`src/federation-config.ts`（`enabled: federation?.enabled !== false`）；
+  validator 只校验布尔值类型，不改变缺省。
+- `federation.peers[]` 仍是显式 allowlist；没有 peer 就没有对端，也不会自动发现。
+- 0.21 Addendum 的 principal 寻址与 `accept` 语义不变。

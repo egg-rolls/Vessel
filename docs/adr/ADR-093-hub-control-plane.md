@@ -9,7 +9,7 @@ tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
 
 ## ADR-093：Hub 控制面（S5）
 
-- **上下文**：DECISION-035 §6 把多节点协作拆成 **control plane**（hub ↔ node 常驻 WSS，只传目录与指针元数据）与 **data plane**（浏览器 ↔ node 直连，传消息、事件、工具调用与权限请求）。hub 是**目录**，不是内容代理：它只回答“哪个节点、哪个 team、有多少成员、现在健康与否”，不转发正文，也不替节点做授权。S5 在 S3 Team 契约之上落地 hub 进程、节点目录、一次性配对与 scoped token；跨节点 A2A 仍留到 S7。本条 ADR 记录 **S5 已实现** 的边界与不变量。
+- **上下文**：历史方向裁决（个人侧决策记录，不在本仓库）把多节点协作拆成 **control plane**（hub ↔ node 常驻 WSS，只传目录与指针元数据）与 **data plane**（浏览器 ↔ node 直连，传消息、事件、工具调用与权限请求）。hub 是**目录**，不是内容代理：它只回答“哪个节点、哪个 team、有多少成员、现在健康与否”，不转发正文，也不替节点做授权。S5 在 S3 Team 契约之上落地 hub 进程、节点目录、一次性配对与 scoped token；跨节点 A2A 仍留到 S7。本条 ADR 记录 **S5 已实现** 的边界与不变量。
 
 - **决策**：
   1. **hub 是 app 层独立前台进程**：实现位于 `src/hub/`（registry / control-client / server / secret-store / token-broker / wiring），不新增可发布 package，也不塞进 `packages/serve`、`packages/agent` 或 `packages/core`。serve 只提供节点侧的 `/v1/hub/control` 与 `/v1/hub/pair`；hub 通过 app 层装配启动，进程生命周期独立于单个节点。
@@ -36,7 +36,7 @@ tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
 
 - **后果**：hub 可以横向扩展为纯目录服务，节点断连不影响本机与浏览器直连；代价是客户端必须自行向节点拉取渲染数据，且指针只是提示而非可靠队列。配对与 token 生命周期独立于节点重启；吊销与 `hub_id` 绑定把“token 被另一个 hub 复用”变成显式失败。
 
-- **关联**：[ADR-036](ADR-036-gateway-protocol-v1.md)（gateway 控制面）、[ADR-049](ADR-049-multi-tenant-isolation.md)（tenant principal）、[ADR-050](ADR-050-yaml-first-config-and-secrets.md)（密钥分层）、[ADR-051](ADR-051-remote-control-plane.md)（远程控制面）、[ADR-052](ADR-052-cross-node-transport.md)（跨节点 transport）、[ADR-053](ADR-053-remote-security-baseline.md)（远程安全基线）、[ADR-067](ADR-067-cross-node-dedup-keys.md)（去重范围维度）、[ADR-091](ADR-091-agent-body-and-presence.md)（节点身份 / Team / Body）、[ADR-092](ADR-092-agent-rotate-and-epoch-fencing.md)（rotate 与 epoch fencing）。方向裁决见个人侧 DECISION-035 §6 / §13（S5）。
+- **关联**：[ADR-036](ADR-036-gateway-protocol-v1.md)（gateway 控制面）、[ADR-049](ADR-049-multi-tenant-isolation.md)（tenant principal）、[ADR-050](ADR-050-yaml-first-config-and-secrets.md)（密钥分层）、[ADR-051](ADR-051-remote-control-plane.md)（远程控制面）、[ADR-052](ADR-052-cross-node-transport.md)（跨节点 transport）、[ADR-053](ADR-053-remote-security-baseline.md)（远程安全基线）、[ADR-067](ADR-067-cross-node-dedup-keys.md)（去重范围维度）、[ADR-091](ADR-091-agent-body-and-presence.md)（节点身份 / Team / Body）、[ADR-092](ADR-092-agent-rotate-and-epoch-fencing.md)（rotate 与 epoch fencing）。方向裁决见个人侧决策记录（不在本仓库）；仓库内相邻决策见 ADR-091 / ADR-092。
 
 ## Addendum（0.19 收口）
 
