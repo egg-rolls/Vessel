@@ -1,28 +1,5 @@
 /* ── run 详情 / 评测 ──────────────────────────────────── */
 
-.event-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  max-height: 420px;
-  overflow-y: auto;
-  margin-top: var(--space-2);
-  padding: 6px 10px;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-}
-
-.case-assertions {
-  margin-top: 4px;
-}
-
-.case-assertions summary {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--muted);
-  cursor: pointer;
-}
-
 @media (max-width: 1023px) {
   /* 平板/手机：选中 run 后详情作为整页，列表隐藏（× 返回列表）。 */
   .domain-view.detail-open > .filter-bar,

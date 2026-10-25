@@ -3,23 +3,3 @@
 .run-detail {
   margin-top: 4px;
 }
-
-.run-detail-id {
-  overflow-wrap: anywhere;
-}
-
-.run-detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.load-more-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  font-size: 11.5px;
-}

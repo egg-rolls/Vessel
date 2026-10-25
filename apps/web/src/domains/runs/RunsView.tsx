@@ -13,7 +13,7 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
-import { SearchInput } from '../../components/ui';
+import { Button, SearchInput } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { DurableRunSummary, RunStatus } from '../../gateway/types';
@@ -345,34 +345,36 @@ export function RunsView({
           onChange={setQuery}
           placeholder={t('runs.searchPlaceholder')}
           ariaLabel={t('runs.searchLabel')}
+          className="grow basis-60 max-w-search"
         />
-        <fieldset className="filter-chips">
+        <fieldset className="flex flex-wrap gap-1">
           <legend className="sr-only">{t('runs.statusLegend')}</legend>
           {filterList.map((filter) => (
-            <button
+            <Button
               key={filter.id}
-              type="button"
-              className={`filter-chip ${filter.id === status ? 'active' : ''}`.trim()}
+              variant="chip"
+              size="small"
               aria-pressed={filter.id === status}
               onClick={() => setStatus(filter.id)}
             >
               {t(filter.labelKey)}
-            </button>
+            </Button>
           ))}
         </fieldset>
         {route.sessionId && (
-          <button
-            type="button"
-            className="filter-chip active"
+          <Button
+            variant="chip"
+            size="small"
+            className="bg-accent-soft text-accent-ink"
             onClick={() => navigateRoute({ sessionId: undefined, runId: undefined })}
             title={t('runs.clearSessionFilter')}
           >
             {t('runs.sessionChip', { session: route.sessionId.slice(0, 12) })} ×
-          </button>
+          </Button>
         )}
-        <button type="button" className="btn btn-small" onClick={reloadAll} disabled={!hasToken}>
+        <Button size="small" onClick={reloadAll} disabled={!hasToken}>
           {t('common.refresh')}
-        </button>
+        </Button>
       </div>
 
       <div className="domain-content" id="runs-panel" role="tabpanel" aria-label={t('runs.title')}>
@@ -380,13 +382,9 @@ export function RunsView({
           <EmptyState
             title={t('runs.noTokenTitle')}
             action={
-              <button
-                type="button"
-                className="btn"
-                onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
-              >
+              <Button onClick={() => navigate({ domain: 'settings', tab: 'connection' })}>
                 {t('common.configureConnection')}
-              </button>
+              </Button>
             }
           />
         ) : route.tab === 'durable' && !durableAvailable ? (
@@ -419,13 +417,12 @@ export function RunsView({
                 )}
                 action={
                   route.tab === 'live' ? (
-                    <button
-                      type="button"
-                      className="btn btn-primary"
+                    <Button
+                      variant="primary"
                       onClick={() => navigate({ domain: 'chat', sessionId: 'new' })}
                     >
                       {t('common.newSession')}
-                    </button>
+                    </Button>
                   ) : undefined
                 }
               />
@@ -434,9 +431,7 @@ export function RunsView({
                 title={t('runs.noMatchTitle')}
                 description={t('runs.noMatchDesc')}
                 action={
-                  <button
-                    type="button"
-                    className="btn"
+                  <Button
                     onClick={() => {
                       setQuery('');
                       setStatus('all');
@@ -444,7 +439,7 @@ export function RunsView({
                     }}
                   >
                     {t('common.clearFilters')}
-                  </button>
+                  </Button>
                 }
               />
             ) : route.tab === 'live' ? (
@@ -487,43 +482,47 @@ export function RunsView({
                           />
                         </td>
                         <td>
-                          <button
-                            type="button"
-                            className="link-btn mono"
+                          <Button
+                            variant="link"
+                            className="font-mono"
                             onClick={() =>
                               navigateRoute({ runId: run.run_id, sessionId: run.session_id })
                             }
                           >
                             {run.run_id.slice(0, 16)}
-                          </button>
+                          </Button>
                         </td>
-                        <td className="col-session mono">
-                          <button
-                            type="button"
-                            className="link-btn mono"
+                        <td className="col-session font-mono">
+                          <Button
+                            variant="link"
+                            className="font-mono"
                             onClick={() => navigate({ domain: 'chat', sessionId: run.session_id })}
                           >
                             {run.session_id.slice(0, 12)}
-                          </button>
+                          </Button>
                         </td>
-                        <td className="mono">{formatTimestamp(run.started_at)}</td>
-                        <td className="mono col-meta">
+                        <td className="font-mono tabular-nums">
+                          {formatTimestamp(run.started_at)}
+                        </td>
+                        <td className="col-meta font-mono tabular-nums">
                           {durationLabel(run.started_at, run.completed_at)}
                         </td>
-                        <td className="mono col-optional">{run.usage?.total_tokens ?? '—'}</td>
+                        <td className="col-optional font-mono tabular-nums">
+                          {run.usage?.total_tokens ?? '—'}
+                        </td>
                         <td>
                           {isCancellableRun(run.status) ? (
-                            <button
-                              type="button"
-                              className="btn btn-small btn-danger-ghost"
+                            <Button
+                              size="small"
+                              variant="dangerGhost"
                               disabled={!connected || busy.has(run.run_id)}
                               title={!connected ? t('common.writesDisabled') : undefined}
                               onClick={() => cancel(run.run_id)}
                             >
                               {busy.has(run.run_id) ? t('runs.cancelling') : t('runs.cancel')}
-                            </button>
+                            </Button>
                           ) : (
-                            <span className="dim">—</span>
+                            <span className="text-muted">—</span>
                           )}
                         </td>
                       </tr>
@@ -562,41 +561,42 @@ export function RunsView({
                           <StatusChip status={run.status} />
                         </td>
                         <td>
-                          <button
-                            type="button"
-                            className="link-btn mono"
+                          <Button
+                            variant="link"
+                            className="font-mono"
                             onClick={() =>
                               navigateRoute({ runId: run.run_id, sessionId: run.session_id })
                             }
                           >
                             {run.run_id.slice(0, 16)}
-                          </button>
+                          </Button>
                         </td>
-                        <td className="col-session mono">
-                          <button
-                            type="button"
-                            className="link-btn mono"
+                        <td className="col-session font-mono">
+                          <Button
+                            variant="link"
+                            className="font-mono"
                             onClick={() => navigate({ domain: 'chat', sessionId: run.session_id })}
                           >
                             {run.session_id.slice(0, 12)}
-                          </button>
+                          </Button>
                         </td>
-                        <td className="mono col-optional">{run.agent_id ?? '—'}</td>
-                        <td className="mono col-meta">{run.iteration ?? '—'}</td>
-                        <td className="mono">{formatTimestamp(run.updated_at)}</td>
+                        <td className="col-optional font-mono">{run.agent_id ?? '—'}</td>
+                        <td className="col-meta font-mono tabular-nums">{run.iteration ?? '—'}</td>
+                        <td className="font-mono tabular-nums">
+                          {formatTimestamp(run.updated_at)}
+                        </td>
                         <td>
                           {isResumableRun(run.status) ? (
-                            <button
-                              type="button"
-                              className="btn btn-small"
+                            <Button
+                              size="small"
                               disabled={!connected || busy.has(run.run_id)}
                               title={!connected ? t('common.writesDisabled') : undefined}
                               onClick={() => resume(run.run_id)}
                             >
                               {busy.has(run.run_id) ? t('runs.resuming') : t('runs.resume')}
-                            </button>
+                            </Button>
                           ) : (
-                            <span className="dim">—</span>
+                            <span className="text-muted">—</span>
                           )}
                         </td>
                       </tr>
@@ -607,13 +607,13 @@ export function RunsView({
             )}
 
             {windowed.hiddenCount > 0 && (
-              <button
-                type="button"
-                className="load-more"
+              <Button
+                variant="plain"
+                className="mx-auto mt-2 rounded-full px-3.5 py-2 text-xs text-muted"
                 onClick={() => setLimit((value) => value + 100)}
               >
                 {t('common.showMore', { count: windowed.hiddenCount })}
-              </button>
+              </Button>
             )}
           </>
         )}

@@ -11,6 +11,7 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
+import { Badge, Button, Input, KeyValueList, Section } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import type { DurableRunSummary, RunEvent, RunStatus } from '../../gateway/types';
@@ -84,9 +85,11 @@ function ToolCallRow({ group }: { group: ToolCallGroup }) {
         onClick={() => setOpen((value) => !value)}
       >
         <StatusChip status={chip} label={label} />
-        <span className="mono tool-call-name">{group.name}</span>
-        {group.durationMs !== undefined && <span className="dim mono">{group.durationMs}ms</span>}
-        <span className="dim tool-call-toggle" aria-hidden="true">
+        <span className="font-mono tool-call-name">{group.name}</span>
+        {group.durationMs !== undefined && (
+          <span className="font-mono text-muted">{group.durationMs}ms</span>
+        )}
+        <span className="text-muted tool-call-toggle" aria-hidden="true">
           {open ? '▾' : '▸'}
         </span>
       </button>
@@ -94,24 +97,30 @@ function ToolCallRow({ group }: { group: ToolCallGroup }) {
         <div className="tool-call-body">
           {group.arguments !== undefined && (
             <div className="tool-call-field">
-              <span className="field-label">arguments</span>
+              <span className="font-mono text-2xs uppercase tracking-widest text-faint">
+                arguments
+              </span>
               <pre className="json-body">{pretty(group.arguments)}</pre>
             </div>
           )}
           {group.result !== undefined && (
             <div className="tool-call-field">
-              <span className="field-label">result</span>
+              <span className="font-mono text-2xs uppercase tracking-widest text-faint">
+                result
+              </span>
               <pre className="json-body">{pretty(group.result)}</pre>
             </div>
           )}
           {group.error && (
             <div className="tool-call-field">
-              <span className="field-label">error</span>
-              <pre className="json-body err">{group.error}</pre>
+              <span className="font-mono text-2xs uppercase tracking-widest text-faint">error</span>
+              <pre className="json-body text-danger">{group.error}</pre>
             </div>
           )}
           {group.arguments === undefined && group.result === undefined && !group.error && (
-            <p className="section-desc">{t('runs.detail.noToolDetails')}</p>
+            <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
+              {t('runs.detail.noToolDetails')}
+            </p>
           )}
         </div>
       )}
@@ -160,7 +169,6 @@ export function RunDetail({
   const [hasMore, setHasMore] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const previousActive = useRef(active);
-  const sectionRef = useRef<HTMLElement | null>(null);
   /** trace 请求代次：切换 run 后旧响应不得覆盖新 run。 */
   const traceGeneration = useRef(0);
 
@@ -227,7 +235,7 @@ export function RunDetail({
   // biome-ignore lint/correctness/useExhaustiveDependencies: runId 变化是滚动触发条件
   useEffect(() => {
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    sectionRef.current?.scrollIntoView({
+    document.querySelector<HTMLElement>('.run-detail')?.scrollIntoView({
       block: 'start',
       behavior: reduced ? 'auto' : 'smooth',
     });
@@ -281,93 +289,131 @@ export function RunDetail({
   const resumable = tab === 'durable' && status !== undefined && isResumableRun(status);
 
   return (
-    <section ref={sectionRef} className="panel run-detail" aria-label={t('runs.detail.label')}>
-      <div className="panel-header">
-        <h2 className="section-title">{t('runs.detail.title')}</h2>
-        <StatusChip status={status} />
-        <span className="mono dim run-detail-id" title={runId}>
-          {runId}
-        </span>
-        <CopyButton
-          text={runId}
-          label={t('runs.detail.copyId')}
-          toast={t('runs.detail.copiedId')}
-        />
-        <button type="button" className="btn btn-small" onClick={() => exportJson(raw, runId)}>
-          {t('runs.detail.exportJson')}
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          aria-label={t('runs.detail.close')}
-          onClick={onClose}
-        >
-          ×
-        </button>
-      </div>
-
-      <dl className="diag-list">
-        <dt>{t('runs.detail.session')}</dt>
-        <dd className="mono">
-          {sessionId ? (
-            <a className="link-btn mono" href={`#/chat/${encodeURIComponent(sessionId)}`}>
-              {sessionId}
-            </a>
-          ) : (
-            '—'
-          )}
-        </dd>
-        <dt>{t('runs.detail.started')}</dt>
-        <dd className="mono">{formatTimestamp(startedAt)}</dd>
-        <dt>{t('runs.detail.ended')}</dt>
-        <dd className="mono">{formatTimestamp(completedAt)}</dd>
-        <dt>{t('runs.detail.duration')}</dt>
-        <dd className="mono">{durationLabel(startedAt, completedAt)}</dd>
-        {(run?.iteration !== undefined || durable?.iteration !== undefined) && (
-          <>
-            <dt>Iteration</dt>
-            <dd className="mono">{run?.iteration ?? durable?.iteration}</dd>
-          </>
-        )}
-        {(run?.agent_id || durable?.agent_id) && (
-          <>
-            <dt>Agent</dt>
-            <dd className="mono">{run?.agent_id ?? durable?.agent_id}</dd>
-          </>
-        )}
-        {usage && (
-          <>
-            <dt>Tokens</dt>
-            <dd className="mono">
-              {usage.prompt_tokens ?? 0} + {usage.completion_tokens ?? 0} ={' '}
-              {usage.total_tokens ?? 0}
-            </dd>
-          </>
-        )}
-      </dl>
-
-      <div className="run-detail-actions">
-        {cancellable && (
+    <Section
+      className="run-detail"
+      aria-label={t('runs.detail.label')}
+      title={t('runs.detail.title')}
+      actions={
+        <>
+          <StatusChip status={status} />
+          <span className="min-w-0 wrap-anywhere font-mono text-muted" title={runId}>
+            {runId}
+          </span>
+          <CopyButton
+            text={runId}
+            label={t('runs.detail.copyId')}
+            toast={t('runs.detail.copiedId')}
+            className="ml-auto"
+          />
+          <Button size="small" onClick={() => exportJson(raw, runId)}>
+            {t('runs.detail.exportJson')}
+          </Button>
           <button
             type="button"
-            className="btn btn-small btn-danger-ghost"
+            className="icon-btn"
+            aria-label={t('runs.detail.close')}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </>
+      }
+    >
+      <KeyValueList
+        items={[
+          {
+            key: 'session',
+            label: t('runs.detail.session'),
+            value: sessionId ? (
+              <a
+                className="font-mono text-accent underline underline-offset-2 hover:text-accent-ink"
+                href={`#/chat/${encodeURIComponent(sessionId)}`}
+              >
+                {sessionId}
+              </a>
+            ) : (
+              <span className="font-mono">—</span>
+            ),
+          },
+          {
+            key: 'started',
+            label: t('runs.detail.started'),
+            value: <span className="font-mono tabular-nums">{formatTimestamp(startedAt)}</span>,
+          },
+          {
+            key: 'ended',
+            label: t('runs.detail.ended'),
+            value: <span className="font-mono tabular-nums">{formatTimestamp(completedAt)}</span>,
+          },
+          {
+            key: 'duration',
+            label: t('runs.detail.duration'),
+            value: (
+              <span className="font-mono tabular-nums">
+                {durationLabel(startedAt, completedAt)}
+              </span>
+            ),
+          },
+          ...(run?.iteration !== undefined || durable?.iteration !== undefined
+            ? [
+                {
+                  key: 'iteration',
+                  label: 'Iteration',
+                  value: (
+                    <span className="font-mono tabular-nums">
+                      {run?.iteration ?? durable?.iteration}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
+          ...(run?.agent_id || durable?.agent_id
+            ? [
+                {
+                  key: 'agent',
+                  label: 'Agent',
+                  value: <span className="font-mono">{run?.agent_id ?? durable?.agent_id}</span>,
+                },
+              ]
+            : []),
+          ...(usage
+            ? [
+                {
+                  key: 'tokens',
+                  label: 'Tokens',
+                  value: (
+                    <span className="font-mono tabular-nums">
+                      {usage.prompt_tokens ?? 0} + {usage.completion_tokens ?? 0} ={' '}
+                      {usage.total_tokens ?? 0}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      />
+
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        {cancellable && (
+          <Button
+            size="small"
+            variant="dangerGhost"
             disabled={!canWrite || busy}
             title={!canWrite ? t('common.writesDisabled') : undefined}
             onClick={() => onCancel(runId)}
           >
             {busy ? t('runs.detail.cancelling') : t('runs.detail.cancel')}
-          </button>
+          </Button>
         )}
         {resumable && (
-          <button
-            type="button"
-            className="btn btn-small"
+          <Button
+            size="small"
             disabled={!canWrite || busy}
             title={!canWrite ? t('common.writesDisabled') : undefined}
             onClick={() => onResume(runId)}
           >
             {busy ? t('runs.detail.resuming') : t('runs.detail.resume')}
-          </button>
+          </Button>
         )}
       </div>
 
@@ -385,43 +431,43 @@ export function RunDetail({
 
       {view === 'timeline' && (
         <div id="run-detail-panel" role="tabpanel" aria-label={t('runs.detail.timelineLabel')}>
-          <div className="filter-bar">
-            <fieldset className="filter-chips">
+          <div className="mt-3.5 flex flex-wrap items-center gap-2">
+            <fieldset className="flex flex-wrap gap-1">
               <legend className="sr-only">{t('runs.detail.filtersLabel')}</legend>
               {RUN_EVENT_FILTERS.map((item) => (
-                <button
+                <Button
                   key={item.id}
-                  type="button"
-                  className={`filter-chip ${filter === item.id ? 'active' : ''}`.trim()}
+                  variant="chip"
+                  size="small"
                   aria-pressed={filter === item.id}
                   onClick={() => setFilter(item.id)}
                 >
                   {t(item.labelKey)}
-                </button>
+                </Button>
               ))}
             </fieldset>
-            <input
-              className="input input-compact mono"
+            <Input
+              className="w-auto max-w-56 px-2.25 py-1.25 text-xs font-mono"
               value={typePrefix}
               onChange={(event) => setTypePrefix(event.target.value)}
               placeholder={t('runs.detail.typePrefix')}
               aria-label={t('runs.detail.typePrefixLabel')}
               spellCheck={false}
             />
-            <button
-              type="button"
-              className={`btn btn-small ${showInternal ? 'active' : ''}`.trim()}
+            <Button
+              size="small"
+              className="aria-pressed:bg-accent-soft aria-pressed:text-accent-ink"
               aria-pressed={showInternal}
               onClick={() => setShowInternal((value) => !value)}
             >
               {t('runs.detail.showInternal')}
-            </button>
-            <button type="button" className="btn btn-small" onClick={() => void loadFirstPage()}>
+            </Button>
+            <Button size="small" onClick={() => void loadFirstPage()}>
               {t('runs.detail.refreshEvents')}
-            </button>
-            <span className="count-pill">
+            </Button>
+            <Badge>
               {filtered.length}/{events.length}
-            </span>
+            </Badge>
           </div>
 
           {traceError && events.length === 0 ? (
@@ -459,7 +505,7 @@ export function RunDetail({
                   description={t('runs.detail.noMatchDesc')}
                 />
               ) : (
-                <div className="event-list">
+                <div className="mt-2 flex max-h-105 flex-col gap-1 overflow-y-auto rounded-md bg-sunken px-2.5 py-1.5">
                   {items.map((item) =>
                     item.kind === 'tool' ? (
                       <ToolCallRow key={item.key} group={item} />
@@ -471,19 +517,18 @@ export function RunDetail({
               )}
 
               {hasMore && (
-                <div className="load-more-row">
-                  <button
-                    type="button"
-                    className="btn btn-small"
+                <div className="mt-2 flex flex-wrap items-center gap-2.5 text-sm">
+                  <Button
+                    size="small"
                     disabled={loadingMore || sinceSeq === undefined}
                     onClick={() => void loadMore()}
                   >
                     {loadingMore
                       ? t('runs.detail.loadingMore')
                       : t('runs.detail.loadMore', { count: trace.length })}
-                  </button>
+                  </Button>
                   {sinceSeq === undefined && (
-                    <span className="dim">{t('runs.detail.missingSeq')}</span>
+                    <span className="text-muted">{t('runs.detail.missingSeq')}</span>
                   )}
                 </div>
               )}
@@ -496,23 +541,25 @@ export function RunDetail({
         <div id="run-detail-panel" role="tabpanel" aria-label={t('runs.detail.outputLabel')}>
           {run?.error && (
             <>
-              <h3 className="section-title">{t('runs.detail.errorTitle')}</h3>
-              <pre className="run-output err">{run.error}</pre>
+              <h3 className="text-md font-semibold text-ink">{t('runs.detail.errorTitle')}</h3>
+              <pre className="run-output text-danger">{run.error}</pre>
             </>
           )}
           {run?.output ? (
             <>
-              <h3 className="section-title">{t('runs.detail.outputTitle')}</h3>
+              <h3 className="text-md font-semibold text-ink">{t('runs.detail.outputTitle')}</h3>
               <pre className="run-output">{run.output}</pre>
             </>
           ) : durable?.preview ? (
             <>
-              <h3 className="section-title">{t('runs.detail.checkpointPreview')}</h3>
+              <h3 className="text-md font-semibold text-ink">
+                {t('runs.detail.checkpointPreview')}
+              </h3>
               <pre className="run-output">{durable.preview}</pre>
             </>
           ) : lastCheckpointMessage ? (
             <>
-              <h3 className="section-title">{t('runs.detail.checkpoint')}</h3>
+              <h3 className="text-md font-semibold text-ink">{t('runs.detail.checkpoint')}</h3>
               <pre className="run-output">{lastCheckpointMessage}</pre>
             </>
           ) : (
@@ -528,20 +575,15 @@ export function RunDetail({
         <div id="run-detail-panel" role="tabpanel" aria-label={t('runs.detail.rawLabel')}>
           {raw ? (
             <>
-              <div className="form-actions">
+              <div className="mt-3.5 flex flex-wrap gap-2">
                 <CopyButton
                   text={pretty(raw)}
                   label={t('runs.detail.copyJson')}
                   toast={t('runs.detail.copiedJson')}
-                  className="btn btn-small"
                 />
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  onClick={() => exportJson(raw, runId)}
-                >
+                <Button size="small" onClick={() => exportJson(raw, runId)}>
                   {t('runs.detail.exportJson')}
-                </button>
+                </Button>
               </div>
               <JsonView value={raw} label={t('runs.detail.rawJsonLabel')} open maxHeight={520} />
             </>
@@ -550,6 +592,6 @@ export function RunDetail({
           )}
         </div>
       )}
-    </section>
+    </Section>
   );
 }
