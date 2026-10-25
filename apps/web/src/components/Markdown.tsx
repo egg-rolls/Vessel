@@ -7,7 +7,7 @@ function Inline({ nodes }: { nodes: InlineNode[] }): ReactNode {
     switch (node.type) {
       case 'code':
         return (
-          <code className="md-inline-code" key={index}>
+          <code className="rounded-xs bg-sunken px-1 py-px font-mono text-md" key={index}>
             {node.text}
           </code>
         );
@@ -36,49 +36,64 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
   switch (block.type) {
     case 'heading': {
       const Tag = `h${Math.min(6, Math.max(1, block.level))}` as 'h1';
-      return <Tag className="md-heading">{renderText(block.text)}</Tag>;
+      return <Tag>{renderText(block.text)}</Tag>;
     }
     case 'code':
       return (
-        <div className="md-code-block">
-          {block.lang && <span className="md-code-lang">{block.lang}</span>}
-          <pre className="md-code">
+        <div className="relative mb-2.5 overflow-hidden rounded-sm bg-sunken">
+          {block.lang && (
+            <span className="block bg-deep px-2.5 py-1 font-mono text-2xs uppercase tracking-wider text-muted">
+              {block.lang}
+            </span>
+          )}
+          <pre className="m-0 max-h-95 overflow-auto px-3 py-2.5 font-mono text-sm leading-normal whitespace-pre">
             <code>{block.text}</code>
           </pre>
         </div>
       );
     case 'list':
       return block.ordered ? (
-        <ol className="md-list">
+        <ol className="pl-5">
           {block.items.map((item, index) => (
-            <li key={index}>{renderText(item)}</li>
+            <li className="my-0.75" key={index}>
+              {renderText(item)}
+            </li>
           ))}
         </ol>
       ) : (
-        <ul className="md-list">
+        <ul className="pl-5">
           {block.items.map((item, index) => (
-            <li key={index}>{renderText(item)}</li>
+            <li className="my-0.75" key={index}>
+              {renderText(item)}
+            </li>
           ))}
         </ul>
       );
     case 'blockquote':
-      return <blockquote className="md-quote">{renderText(block.text)}</blockquote>;
+      return <blockquote className="py-0.5 pl-2.5 text-muted">{renderText(block.text)}</blockquote>;
     case 'table':
       return (
-        <div className="md-table-wrap">
-          <table className="md-table">
+        <div className="max-w-full overflow-x-auto">
+          <table className="border-collapse text-md">
             <thead>
               <tr>
                 {block.header.map((cell, index) => (
-                  <th key={index}>{renderText(cell)}</th>
+                  <th
+                    className="bg-sunken px-2.25 py-1.25 text-left align-top font-semibold text-faint"
+                    key={index}
+                  >
+                    {renderText(cell)}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {block.rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
+                <tr className="hover:bg-hover" key={rowIndex}>
                   {row.map((cell, cellIndex) => (
-                    <td key={cellIndex}>{renderText(cell)}</td>
+                    <td className="px-2.25 py-1.25 text-left align-top" key={cellIndex}>
+                      {renderText(cell)}
+                    </td>
                   ))}
                 </tr>
               ))}
@@ -87,9 +102,9 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
         </div>
       );
     case 'hr':
-      return <hr className="md-hr" />;
+      return <hr className="my-3 h-px border-0 bg-line" />;
     default:
-      return <p className="md-paragraph">{renderText(block.text)}</p>;
+      return <p>{renderText(block.text)}</p>;
   }
 }
 
