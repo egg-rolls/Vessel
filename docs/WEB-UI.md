@@ -179,7 +179,7 @@ export function ToolCard({ tone, className, ...props }: ToolCardProps) {
   自动消失，每条也可手动关闭。
 - 容器 `role="status"`；错误条目 `role="alert"`，其余 `role="status"`。
 - 失效交互在 hydration 后按 tenant + request id 集合只提示一次，重连不重复弹；
-  明细与忽略入口在 Observe → Attention 与所属会话的只读失效提示里。
+  详情只在 Observe → Attention 查看，Chat 内不再有失效卡片或本地忽略入口。
 
 ## 硬规则
 
@@ -219,8 +219,21 @@ P2 已迁移 Settings / Integrations / Runs / Observe / Nodes / Agents / Teams /
    P2/P3 的 `btn` / `btn-primary` / `search-input` / `icon-btn` / `action-menu` /
    `modal-body-scroll` / `filter-bar` / `domain-view` / `domain-content` / `data-table` /
    `col-*` / `row-active` 已清零。
-5. **断点**：新代码用 `max-compact:`（680）与 `max-wide:`（1023）；`720` 已随 net toolbar
-   marker 移除，`900`（attention grid）与 `1199`（team chat body）继续使用 legacy 媒体查询。
+5. **断点**：新代码用 `max-compact:`（680）与 `max-wide:`（1023）。其余断点不能静默
+   折进这两个 token，逐条保留如下：
+
+   | 断点 | 使用位置 | 能否用 680 / 1023 替代 | 保留原因 |
+   | --- | --- | --- | --- |
+   | 720 | `domains/nodes.css:58`（`.net-select` 全宽、`.net-command` 两列改一列） | 否 | 681–719 是节点表单的窄桌面区间；折到 680 会让命令块在窄列里溢出，折到 1023 会过早单列。 |
+   | 720 | `domains/teams.css:25`（`.teams-grid` 单列、detail head padding） | 否 | 240px 卡片网格在 681–719 仍可排两列；680 会提前变成移动布局，1023 会过早单列。 |
+   | 900 | `domains/attention.css:72`（隐藏第 4 列起，改三列 grid） | 否 | 六列 attention 表格在 901–1022 仍能容纳；折到 1023 会过早隐藏 agent / team 列，折到 680 会保留溢出列。 |
+   | 1199 | `team.css:205`（`.team-chat-body` 成员栏 272→240px） | 否 | 这是成员栏宽度降档，不是抽屉切换；1023 才切抽屉（`team.css:211`）。折到 1023 会让 1024–1199 提前失去常驻成员栏。 |
+   | 1023 | `layout.css`、`team.css`、`DataTable` / 页面 utilities | 是 | 已统一为 `max-wide:`。 |
+   | 680 | `layout.css`、`team.css`、`base.css` 等 | 是 | 已统一为 `max-compact:`。 |
+
+   边界语义：Tailwind `max-compact:` / `max-wide:` 编译为 `<680` / `<1023`，legacy
+   `@media (max-width: …)` 是 `<=`；恰好 680 / 1023 像素时行为差 1px，已在 P3 视觉差异中记录。
+   新增断点必须先论证不能复用 680 / 1023，并同时更新本表。
 
 迁移新组件时：
 1. 组件改用 Tailwind + CVA，保持 public API 与行为。
