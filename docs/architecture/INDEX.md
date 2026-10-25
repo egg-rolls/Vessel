@@ -30,5 +30,5 @@ paths: [docs/architecture/**]
 ## 主题入口
 
 - **host / scheduler / checkpoint** → [runtime-lifecycle](runtime-lifecycle.md#run) · [state](state.md#run-store) · [assembly](assembly.md#assembly)
-- **member / team / agent / body** → [gateway-rpc](gateway-rpc.md#agent-lifecycle) · `AGENTS.md` · `docs/operations/CONFIG.md` §2.11/2.12
-- **federation / hub / attention / 跨节点** → [gateway](gateway.md#remote) · [docs/operations/REMOTE.md](../operations/REMOTE.md) · `docs/operations/CONFIG.md` §2.15
+- **member / team / agent / body** → [gateway-rpc](gateway-rpc.md#agent-lifecycle) · [AGENTS.md](../../AGENTS.md) · [CONFIG.md](../operations/CONFIG.md)
+- **federation / hub / attention / 跨节点** → [gateway](gateway.md#remote) · [REMOTE.md](../operations/REMOTE.md) · [CONFIG.md](../operations/CONFIG.md)
