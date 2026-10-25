@@ -37,6 +37,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 - 派生不存储：`canAccept = present && live && stable`；`needsResume = present && gone`；`rotating = present && rotation === 'rotating'`。
 - 重启加载：`closed` 或 `membership === 'left'` → `left + gone + closed`；其它 → `present + gone + idle`。不得再写 `stale`；`stale` 只作旧快照 / 旧 wire 只读兼容，转移仅 `stale → closed`。
 - `attachOwner` 是 root owner 的显式 `left → present` 例外；Team roster `add` 的 `reinstate` 是第二条人力路径，engine 不得复活成员。
+- `dispose` 是按 Body session 幂等的 engine 回收（移除 entry、退订 bridge、清 pending、dispose engine）；它不写 `membership` / `presence` / state，也不落快照。状态由调用方写（close 写 `left + gone + closed`，rotate 只切换 Body），失败只记 `agent.dispose.failed`。不要把 dispose 当成 close / left 或 Agent 结束（ADR-091 Errata）。
 
 <a id="dispatch"></a>
 

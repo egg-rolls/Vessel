@@ -212,3 +212,17 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
   token 只能 send / dispatch / rotate 同 team 成员；owner send 的 `from` 是 owner id，
   canonical Web send 是 `human`；`bun test` / `typecheck` / `biome ci` / `check-deps` /
   `check-rpc-methods` / `check-docs` 通过。
+
+## Errata（dispose 语义）
+
+> 2026-10-25，只追加。上文决策 3 的括号把 `dispose` 与 `spawn` / 重启加载 / close 并列写成
+> presence 的写入者，容易被读成 dispose 会改 presence；当前实现不是这样，以此条为准。
+
+- `InProcessMemberRuntime.dispose(member)` 只做 engine 回收：按 Body `session_id` 删除 entries
+  项、退订 bridge 与事件、清 pending，再调用底层 `runtime.dispose()`；按 session 幂等，
+  重复调用无副作用。
+- dispose **不写** `membership` / `presence` / engine state，也不落快照。失败由调用方
+  best-effort 记录 `agent.dispose.failed`，不升级为 close 或 Agent 终态。
+- 状态由调用方写：spawn / 重启加载写 `live` 或 `gone`；`close` 写
+  `left + gone + closed`；rotate 只让新 Body 变 `live`、旧 Body 退役，不改变 Agent 身份。
+- 因此 `dispose` ≠ close / left / Agent 结束；它只回收一具 Body 的执行资源。
