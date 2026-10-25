@@ -7,7 +7,7 @@
 import { type FormEvent, useState } from 'react';
 import { PageHeader } from '../../components/PageHeader';
 import { useToast } from '../../components/ToastProvider';
-import { Button } from '../../components/ui';
+import { Button, Field, Input, Section, Textarea } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -88,48 +88,54 @@ export function AgentEditView({
         actions={<Button onClick={onBack}>{t('agents.back')}</Button>}
       />
       <div className="domain-content">
-        <section className="panel">
-          <p className="section-desc">
+        <Section>
+          <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
             {nodeNames.get(nodeKeyOf(node)) ?? '—'} · {agent.team.name || agent.team.team_id} ·{' '}
             {displayName}
           </p>
-          <form className="team-form" onSubmit={submit}>
-            <div className="form-grid">
-              <label className="field">
-                <span className="field-label">{t('team.form.name')}</span>
-                <input
-                  className="input"
+          <form className="flex flex-col gap-2" onSubmit={submit}>
+            <div className="form-grid mt-1">
+              <Field label={t('team.form.name')} htmlFor="agent-edit-name">
+                <Input
+                  id="agent-edit-name"
                   value={draft.name}
                   onChange={(event) => set('name')(event.target.value)}
                   spellCheck={false}
                   autoComplete="off"
                 />
-              </label>
+              </Field>
 
-              <label className="field">
-                <span className="field-label">{t('agents.form.model')}</span>
-                <input
-                  className="input mono"
+              <Field
+                label={t('agents.form.model')}
+                htmlFor="agent-edit-model"
+                hint={t('agents.form.modelHint')}
+              >
+                <Input
+                  id="agent-edit-model"
+                  className="font-mono"
                   value={draft.model}
                   onChange={(event) => set('model')(event.target.value)}
                   placeholder="—"
                   spellCheck={false}
                   autoComplete="off"
                 />
-                <span className="field-hint">{t('agents.form.modelHint')}</span>
-              </label>
+              </Field>
 
-              <label className="field field-wide">
-                <span className="field-label">{t('agents.form.systemPrompt')}</span>
-                <textarea
-                  className="input team-policy-input"
+              <Field
+                className="col-span-full"
+                label={t('agents.form.systemPrompt')}
+                htmlFor="agent-edit-system-prompt"
+                hint={t('agents.form.systemPromptHint')}
+              >
+                <Textarea
+                  id="agent-edit-system-prompt"
+                  className="min-h-24 resize-y text-sm leading-normal"
                   value={draft.systemPrompt}
                   onChange={(event) => set('systemPrompt')(event.target.value)}
                   rows={6}
                   spellCheck={false}
                 />
-                <span className="field-hint">{t('agents.form.systemPromptHint')}</span>
-              </label>
+              </Field>
             </div>
 
             {error && (
@@ -139,15 +145,15 @@ export function AgentEditView({
             )}
 
             <div className="form-actions">
-              <button type="button" className="btn" onClick={onBack} disabled={busy}>
+              <Button onClick={onBack} disabled={busy}>
                 {t('common.cancel')}
-              </button>
-              <button type="submit" className="btn btn-primary" disabled={busy}>
+              </Button>
+              <Button type="submit" variant="primary" disabled={busy}>
                 {busy ? t('common.processing') : t('team.form.submitEdit')}
-              </button>
+              </Button>
             </div>
           </form>
-        </section>
+        </Section>
       </div>
     </div>
   );

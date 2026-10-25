@@ -11,7 +11,7 @@ import { formatRoute, type Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Button, SearchInput } from '../../components/ui';
+import { Button, SearchInput, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -275,7 +275,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     );
   } else {
     body = (
-      <ul className="net-list">
+      <ul className="flex flex-col gap-2">
         {filtered.map((agent) => {
           const rowKey = `${nodeKeyOf(agent.node)}:${agent.team.team_id}:${agent.member.agent_id}`;
           const name = agentDisplayName(agent.member);
@@ -284,20 +284,30 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
               ? t('agents.presence.live')
               : t('agents.presence.gone');
           return (
-            <li className="net-row" key={rowKey}>
-              <div className="net-row-main">
-                <span className="net-row-title">{name}</span>
-                <span className="net-row-sub">
+            <li
+              className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-line bg-raised px-4 py-3"
+              key={rowKey}
+            >
+              <div className="flex min-w-0 flex-1 basis-55 flex-col gap-0.5">
+                <span className="inline-flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
+                  {name}
+                </span>
+                <span className="min-w-0 wrap-anywhere text-xs text-faint">
                   {nodeNames.get(nodeKeyOf(agent.node)) ?? '—'} ·{' '}
                   {agent.team.name || agent.team.team_id}
                 </span>
               </div>
               <StatusChip status={agent.member.state} />
-              <span className={`net-presence agents-presence-${agent.member.presence}`}>
-                <span className="net-presence-dot" aria-hidden="true" />
+              <span className="inline-flex flex-none items-center gap-1 whitespace-nowrap text-sm text-muted">
+                <span
+                  className={`size-1.75 rounded-full ${
+                    agent.member.presence === 'live' ? 'bg-success' : 'bg-faint'
+                  }`}
+                  aria-hidden="true"
+                />
                 {presence}
               </span>
-              <div className="net-row-actions">
+              <div className="ml-auto inline-flex flex-none flex-wrap items-center gap-2">
                 <Button
                   size="small"
                   onClick={() => openAgent(nodeKeyOf(agent.node), agent.member.agent_id)}
@@ -328,15 +338,16 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
         }
       />
       <div className="domain-content">
-        <div className="filter-bar net-toolbar">
+        <div className="net-toolbar mt-3.5">
           <SearchInput
             value={query}
             onChange={setQuery}
             placeholder={t('agents.search')}
             ariaLabel={t('agents.search')}
+            className="grow basis-60 max-w-search"
           />
-          <select
-            className="input net-select"
+          <Select
+            className="net-select w-auto min-w-32 h-control py-0"
             value={route.nodeKey ?? ''}
             aria-label={t('agents.filter.node')}
             onChange={(event) => navigate(withFilter(route, 'nodeKey', event.target.value))}
@@ -347,9 +358,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
                 {option.label}
               </option>
             ))}
-          </select>
-          <select
-            className="input net-select"
+          </Select>
+          <Select
+            className="net-select w-auto min-w-32 h-control py-0"
             value={route.teamId ?? ''}
             aria-label={t('agents.filter.team')}
             onChange={(event) => navigate(withFilter(route, 'teamId', event.target.value))}
@@ -360,9 +371,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
                 {option.label}
               </option>
             ))}
-          </select>
-          <select
-            className="input net-select"
+          </Select>
+          <Select
+            className="net-select w-auto min-w-32 h-control py-0"
             value={route.state ?? ''}
             aria-label={t('agents.filter.state')}
             onChange={(event) => navigate(withFilter(route, 'state', event.target.value))}
@@ -373,9 +384,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
                 {state}
               </option>
             ))}
-          </select>
-          <select
-            className="input net-select"
+          </Select>
+          <Select
+            className="net-select w-auto min-w-32 h-control py-0"
             value={route.presence ?? ''}
             aria-label={t('agents.filter.presence')}
             onChange={(event) => navigate(withFilter(route, 'presence', event.target.value))}
@@ -386,8 +397,8 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
                 {t(`agents.presence.${presence}`)}
               </option>
             ))}
-          </select>
-          <span className="net-count dim">
+          </Select>
+          <span className="ml-auto text-sm tabular-nums text-muted">
             {t('agents.count', { shown: filtered.length, total: agents.length })}
           </span>
           {hasFilters && (
@@ -398,17 +409,24 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
         </div>
 
         {(failed.length > 0 || partialErrors > 0) && (
-          <div className="agents-notices">
+          <div className="flex flex-col gap-2">
             {failed.map((roster) => (
-              <p className="agents-node-error" role="alert" key={nodeKeyOf(roster.node)}>
-                <span className="agents-node-error-name mono">
+              <p
+                className="m-0 flex flex-wrap gap-2 rounded-sm border border-line-strong bg-danger-soft px-3 py-2 text-sm text-danger"
+                role="alert"
+                key={nodeKeyOf(roster.node)}
+              >
+                <span className="flex-none font-semibold">
                   {nodeNames.get(nodeKeyOf(roster.node)) ?? '—'}
                 </span>
                 <span>{nodeErrorText(roster)}</span>
               </p>
             ))}
             {partialErrors > 0 && (
-              <p className="agents-partial" role="status">
+              <p
+                className="m-0 rounded-sm border border-line-strong bg-warn-soft px-3 py-2 text-sm text-warn"
+                role="status"
+              >
                 {t('agents.partialErrors', { count: partialErrors })}
               </p>
             )}
