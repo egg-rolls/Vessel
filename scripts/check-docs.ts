@@ -216,7 +216,7 @@ async function checkCurrentVersionNarrative(root: string, dir: string, issues: D
         continue;
       }
       if (inFence) continue;
-      if (/^#{1,6}\s+0\.\d+(\.\d+)?\s/.test(line) || /自\s*0\.\d+(\.\d+)?\s*起/.test(line)) {
+      if (/^#{1,6}\s+0\.\d+(\.\d+)?(\s|$)/.test(line) || /自\s*0\.\d+(\.\d+)?\s*起/.test(line)) {
         issues.push({ file: relative, line: index + 1, message: 'current 文档标题不得带版本叙事' });
       }
     }

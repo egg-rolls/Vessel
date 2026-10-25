@@ -366,6 +366,61 @@ describe('checkDocs', () => {
     );
   });
 
+  it('reports a bare version heading', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/architecture/overview.md': moduleDoc(
+          { title: 'Overview', kind: 'current', triggers: '[overview]', paths: '[packages/core/**]' },
+          '# Overview\n\n## 0.26\n',
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('版本叙事') }),
+        );
+      },
+    );
+  });
+
+  it('reports duplicate and nonexistent INDEX links', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/agents/INDEX.md': moduleDoc(
+          { title: 'Agents', kind: 'current', triggers: '[agents]', paths: '[docs/agents/**]' },
+          '# Agents\n\n| [core](core.md) | x |\n| [core](core.md) | y |\n| [missing](missing.md) | z |\n',
+        ),
+      },
+      async (root) => {
+        const issues = await checkDocs(root);
+        expect(issues).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('INDEX 重复链接 core.md') }),
+        );
+        expect(issues).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('INDEX 指向不存在的模块 missing.md') }),
+        );
+      },
+    );
+  });
+
+  it('reports advisory line overflow', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        'docs/agents/core.md': moduleDoc(
+          { title: 'Core', kind: 'advisory', triggers: '[core]', paths: '[packages/core/**]', appliesTo: '[N, M]' },
+          `# Core\n\n${'x\n'.repeat(60)}`,
+        ),
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({ message: expect.stringContaining('行数超过上限 60') }),
+        );
+      },
+    );
+  });
+
   it('reports version narrative in current headings', async () => {
     await withFixture(
       {
