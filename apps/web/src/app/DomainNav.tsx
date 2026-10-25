@@ -2,6 +2,7 @@ import type { Ref } from 'react';
 import { DomainIcon } from '../components/DomainIcon';
 import { ResizeHandle } from '../components/ResizeHandle';
 import { IconButton, Tooltip } from '../components/Tooltip';
+import { cn } from '../components/ui/cn';
 import { t, useLocale } from '../i18n';
 import type { NavMode } from './layout';
 import {
@@ -81,19 +82,43 @@ export function DomainNav({
   const collapseLabel = collapsed ? t('nav.expandNav') : t('nav.collapseNav');
   const drawerA11y = drawer ? { role: 'dialog' as const, 'aria-modal': open } : {};
   const settingsLabel = domainLabel('settings');
+  const itemClass = cn(
+    'flex min-h-control w-full items-center rounded-sm bg-transparent text-left text-md text-muted transition-colors duration-150 hover:bg-hover hover:text-ink',
+    collapsed ? 'justify-center gap-0 px-0 py-1' : 'gap-2.5 px-3 py-1',
+  );
+  const activeClass = 'bg-accent-soft text-accent-ink hover:bg-accent-soft hover:text-accent-ink';
+  const settingsActive = route.domain === 'settings';
   const settingsButton = (
     <button
       type="button"
-      className={`nav-item ${route.domain === 'settings' ? 'active' : ''}`.trim()}
-      aria-current={route.domain === 'settings' ? 'page' : undefined}
+      className={cn(itemClass, settingsActive && activeClass)}
+      aria-current={settingsActive ? 'page' : undefined}
       aria-label={settingsLabel}
       onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
     >
-      <span className="nav-icon">
+      <span className="inline-flex flex-none">
         <DomainIcon domain="settings" />
       </span>
-      <span className="nav-label">{settingsLabel}</span>
+      {showLabels && (
+        <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+          {settingsLabel}
+        </span>
+      )}
     </button>
+  );
+  const navClass = cn(
+    'flex flex-none flex-col bg-surface',
+    drawer
+      ? 'fixed inset-y-0 left-0 z-[var(--z-drawer)] min-h-0 w-[min(86vw,var(--drawer-w))] overflow-y-auto overscroll-contain shadow-elev-3 transition-[transform,visibility] duration-[var(--motion-ui)] ease-[var(--ease)]'
+      : 'relative min-h-0 overflow-y-auto overscroll-contain',
+    drawer &&
+      (open ? 'visible translate-x-0 transition-[transform]' : 'invisible -translate-x-full'),
+    !drawer &&
+      (mode === 'collapsed'
+        ? 'w-[var(--nav-w-collapsed)]'
+        : mode === 'rail'
+          ? 'w-[var(--nav-w-rail)]'
+          : 'w-[var(--nav-w)]'),
   );
 
   return (
@@ -101,41 +126,52 @@ export function DomainNav({
       {...drawerA11y}
       ref={navRef}
       id="domain-nav"
-      className={`domain-nav ${open ? 'open' : ''}`.trim()}
+      className={navClass}
       aria-label={t('nav.mainLabel')}
       inert={drawer && !open ? true : undefined}
       aria-hidden={drawer && !open ? true : undefined}
     >
-      <div className="nav-brand">
-        <span className="nav-brand-mark" aria-hidden="true">
-          V
-        </span>
-        {showCollapseToggle && (
-          <IconButton
-            className="nav-collapse"
-            label={collapseLabel}
-            aria-label={collapseLabel}
-            aria-expanded={!collapsed}
-            onClick={onToggleCollapsed}
-          >
-            {collapsed ? '»' : '«'}
-          </IconButton>
-        )}
-        {drawer && (
-          <IconButton
-            className="nav-close"
-            label={t('nav.closeNav')}
-            aria-label={t('nav.closeNav')}
-            onClick={onClose}
-          >
-            ×
-          </IconButton>
-        )}
-      </div>
-      <div className="nav-list">
-        {NAV_GROUPS.map((group) => (
-          <div className="nav-group" key={group.id}>
-            {showLabels && <div className="nav-group-title">{navGroupLabel(group.id)}</div>}
+      {mode !== 'rail' && (
+        <div
+          className={cn(
+            'flex flex-none items-center gap-2 px-4 pt-3 pb-2',
+            mode === 'collapsed' && 'justify-center gap-0.5 px-0',
+          )}
+        >
+          <span className="font-serif text-xl font-semibold text-accent" aria-hidden="true">
+            V
+          </span>
+          {showCollapseToggle && (
+            <IconButton
+              className={cn('size-6 text-xs', collapsed ? 'ml-0' : 'ml-auto')}
+              label={collapseLabel}
+              aria-label={collapseLabel}
+              aria-expanded={!collapsed}
+              onClick={onToggleCollapsed}
+            >
+              {collapsed ? '»' : '«'}
+            </IconButton>
+          )}
+          {drawer && (
+            <IconButton
+              className="ml-auto"
+              label={t('nav.closeNav')}
+              aria-label={t('nav.closeNav')}
+              onClick={onClose}
+            >
+              ×
+            </IconButton>
+          )}
+        </div>
+      )}
+      <div className={cn('flex flex-1 flex-col gap-0.5 py-1.5', collapsed ? 'px-2' : 'px-2.5')}>
+        {NAV_GROUPS.map((group, index) => (
+          <div className={cn('flex flex-col gap-0.5', index > 0 && 'mt-3')} key={group.id}>
+            {showLabels && (
+              <div className="overflow-hidden text-ellipsis whitespace-nowrap px-3 pt-1 pb-0.5 font-mono text-2xs tracking-[var(--tracking-wide)] text-faint uppercase">
+                {navGroupLabel(group.id)}
+              </div>
+            )}
             {group.domains.map((domainId) => {
               const domain = domainDef(domainId);
               const active = isDomainActive(route, domain.id);
@@ -148,24 +184,36 @@ export function DomainNav({
                 <button
                   key={domain.id}
                   type="button"
-                  className={`nav-item ${status ? 'nav-item-status' : ''} ${active ? 'active' : ''}`.trim()}
+                  className={cn(itemClass, active && activeClass)}
                   aria-current={active ? 'page' : undefined}
                   aria-label={label}
                   onClick={() => navigate(primaryRoute(domain.id))}
                 >
-                  <span className="nav-icon">
+                  <span className="inline-flex flex-none">
                     <DomainIcon domain={domain.id} />
                   </span>
-                  <span className="nav-label">{label}</span>
-                  {status && (
+                  {showLabels && (
+                    <span
+                      className={cn(
+                        'min-w-0 overflow-hidden text-ellipsis whitespace-nowrap',
+                        status && 'flex-1',
+                      )}
+                    >
+                      {label}
+                    </span>
+                  )}
+                  {showLabels && status && (
                     <>
                       <span
-                        className={`nav-status-dot tone-${status.tone}`}
+                        className="size-1.5 flex-none rounded-full bg-faint data-[tone=ok]:bg-success data-[tone=warn]:bg-warn data-[tone=warn]:pulse-soft data-[tone=danger]:bg-danger"
+                        data-tone={status.tone}
                         role="img"
                         aria-label={statusText}
                         title={statusText}
                       />
-                      <span className="nav-status-version mono">{versionText}</span>
+                      <span className="flex-none whitespace-nowrap font-mono text-2xs text-faint">
+                        {versionText}
+                      </span>
                     </>
                   )}
                 </button>
@@ -181,7 +229,12 @@ export function DomainNav({
           </div>
         ))}
       </div>
-      <div className="nav-footer">
+      <div
+        className={cn(
+          'flex flex-none flex-col gap-0.5 px-2.5 pt-2 pb-[calc(var(--space-2)+env(safe-area-inset-bottom))]',
+          collapsed && 'px-2',
+        )}
+      >
         {collapsed ? <Tooltip label={settingsLabel}>{settingsButton}</Tooltip> : settingsButton}
       </div>
       {mode === 'expanded' && !panes.disabled('nav') && (
