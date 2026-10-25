@@ -26,9 +26,15 @@ export function Section({
   const hasHeader = title != null || description != null || actions != null;
 
   return (
-    <Root {...props} className={cn('rounded-md bg-raised px-4.5 py-4 shadow-elev-1', className)}>
+    <Root
+      {...props}
+      className={cn(
+        'rounded-md bg-raised px-4.5 py-4 shadow-elev-1 max-compact:px-4 forced-colors:border',
+        className,
+      )}
+    >
       {hasHeader ? (
-        <div className="flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           {title != null || description != null ? (
             <div className="min-w-0">
               {title != null ? (
