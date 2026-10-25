@@ -6,7 +6,14 @@ import {
   MAX_EVENTS_PER_RUN,
   MAX_EVENTS_TOTAL,
 } from '../src/state/event-store';
-import { buildGroup, groupEvents, isGroupPersisted, type StoredEvent } from '../src/state/events';
+import {
+  buildGroup,
+  groupEvents,
+  isGroupPersisted,
+  isSubscriptionInjectedMessage,
+  isVisibleForGrouping,
+  type StoredEvent,
+} from '../src/state/events';
 
 function event(runId: string, type: string, data: Record<string, unknown> = {}, ts = 1): RunEvent {
   return { type, run_id: runId, data, ts };
@@ -381,5 +388,21 @@ describe('EventStore', () => {
     expect(first.entries).toHaveLength(1);
     expect(second.entries).toHaveLength(2);
     expect(second.entries.at(-1)?.event.type).toBe('llm.stream.chunk');
+  });
+});
+
+describe('subscription injections stay hidden by default (0.27)', () => {
+  test('message.injected is internal unless internal events are shown', () => {
+    const entry = stored('r1', 'message.injected', 1, {
+      message: { role: 'user', name: 'subscription:abc', content: 'diff' },
+    });
+    expect(isVisibleForGrouping(entry, false)).toBe(false);
+    expect(isVisibleForGrouping(entry, true)).toBe(true);
+  });
+
+  test('only subscription-prefixed messages are treated as injected context', () => {
+    expect(isSubscriptionInjectedMessage({ name: 'subscription:abc' })).toBe(true);
+    expect(isSubscriptionInjectedMessage({ name: 'agent:worker' })).toBe(false);
+    expect(isSubscriptionInjectedMessage({})).toBe(false);
   });
 });

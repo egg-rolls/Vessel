@@ -62,7 +62,16 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'session.saved',
   'llm.request',
   'llm.response',
+  'message.injected',
 ]);
+
+/**
+ * 订阅工具注入的上下文消息不是用户发言：默认从 transcript 隐藏。
+ * 识别口径与 TUI 一致——只看 `name` 前缀，不新增 Message 字段。
+ */
+export function isSubscriptionInjectedMessage(message: { name?: string }): boolean {
+  return typeof message.name === 'string' && message.name.startsWith('subscription:');
+}
 
 /** 单个 run 的事件序列 → 可渲染分组。 */
 export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunGroup {

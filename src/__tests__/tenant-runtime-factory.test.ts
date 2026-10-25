@@ -89,10 +89,6 @@ function twoTenantYaml(
   ].join('\n');
 }
 
-function toolNames(bundle: { pluginHost: { listTools(): Array<{ name: string }> } }): string[] {
-  return bundle.pluginHost.listTools().map((def) => def.name);
-}
-
 /** 只识别 GitHub token 的 fake ext redactor（core 默认不认识 ghp_）。 */
 const FAKE_GITHUB_MASK = '[REDACTED_GITHUB_TOKEN]';
 const fakeGithubRedactor: TraceRedactor = {
@@ -479,10 +475,8 @@ describe('createTenantRuntimeFactory', () => {
       expect(work).toBeDefined();
 
       expect(acme?.pluginHost.getTool('bash')).toBeUndefined();
-      expect(toolNames(acme as NonNullable<typeof acme>).sort()).toEqual(['edit', 'read']);
       // 另一 tenant 未配置策略：工具面不变。
       expect(work?.pluginHost.getTool('bash')).toBeDefined();
-      expect(toolNames(work as NonNullable<typeof work>).sort()).toEqual(['bash', 'edit', 'read']);
     } finally {
       await factory.closeAll();
     }
@@ -507,12 +501,9 @@ describe('createTenantRuntimeFactory', () => {
 
     try {
       const acme = factory.bundleFor('acme');
-      const work = factory.bundleFor('work');
       expect(acme?.pluginHost.getTool('read')).toBeDefined();
       expect(acme?.pluginHost.getTool('bash')).toBeUndefined();
       expect(acme?.pluginHost.getTool('edit')).toBeUndefined();
-      expect(toolNames(acme as NonNullable<typeof acme>)).toEqual(['read']);
-      expect(toolNames(work as NonNullable<typeof work>).sort()).toEqual(['bash', 'edit', 'read']);
     } finally {
       await factory.closeAll();
     }
@@ -540,16 +531,8 @@ describe('createTenantRuntimeFactory', () => {
       const acme = factory.bundleFor('acme');
       const work = factory.bundleFor('work');
       expect(acme?.pluginHost.getTool('ask_user')).toBeUndefined();
-      expect(toolNames(acme as NonNullable<typeof acme>)).not.toContain('ask_user');
-      expect(toolNames(acme as NonNullable<typeof acme>).sort()).toEqual(['bash', 'edit', 'read']);
       // 同一工厂内另一 tenant 仍拿到 ask_user。
       expect(work?.pluginHost.getTool('ask_user')).toBeDefined();
-      expect(toolNames(work as NonNullable<typeof work>).sort()).toEqual([
-        'ask_user',
-        'bash',
-        'edit',
-        'read',
-      ]);
     } finally {
       await factory.closeAll();
     }

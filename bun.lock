@@ -91,6 +91,17 @@
         "typescript": "^7.0.2",
       },
     },
+    "plugins/context/doc-subscription": {
+      "name": "@vessel-agent/doc-subscription",
+      "version": "0.26.2",
+      "dependencies": {
+        "@vessel-agent/basic-tools": "0.26.2",
+        "@vessel-agent/core": "0.26.2",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
     "plugins/evals/harness": {
       "name": "@vessel-agent/evals",
       "version": "0.24.0",
@@ -349,6 +360,8 @@
     "@vessel-agent/config": ["@vessel-agent/config@workspace:packages/config"],
 
     "@vessel-agent/core": ["@vessel-agent/core@workspace:packages/core"],
+
+    "@vessel-agent/doc-subscription": ["@vessel-agent/doc-subscription@workspace:plugins/context/doc-subscription"],
 
     "@vessel-agent/evals": ["@vessel-agent/evals@workspace:plugins/evals/harness"],
 

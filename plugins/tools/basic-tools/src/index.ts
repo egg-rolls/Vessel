@@ -200,7 +200,7 @@ function dependsOnBaseCwd(entry: string): boolean {
  * 取真实路径：存在则 realpath；不存在则对最近的已存在祖先做 realpath 再拼回剩余段，
  * 这样符号链接目录下的新路径也不会被词法前缀蒙混过去。
  */
-function canonicalPath(target: string): string {
+export function canonicalPath(target: string): string {
   const absolute = path.resolve(target);
   try {
     return realpathSync.native(absolute);
@@ -232,7 +232,7 @@ function isWithin(candidate: string, root: string): boolean {
 }
 
 /** 解析后的路径边界（配置在工具构造时固定，避免每次调用重复 realpath） */
-interface PathBoundary {
+export interface PathBoundary {
   /** 允许的根；空数组 = 不限制根 */
   allowedRoots: string[];
   denyRoots: string[];
@@ -240,8 +240,11 @@ interface PathBoundary {
   commandPatterns: readonly DeniedCommandPattern[];
 }
 
-/** 构造边界：内置 denylist 始终生效，配置项追加/合并 */
-function buildPathBoundary(config: BasicToolsConfig): PathBoundary {
+/**
+ * 构造边界：内置 denylist 始终生效，配置项追加/合并。
+ * 导出供需要同一套 read/edit 路径边界的插件复用（不要复制第二套实现）。
+ */
+export function buildPathBoundary(config: BasicToolsConfig): PathBoundary {
   const denyEntries = [...DEFAULT_DENY_PATHS, ...(config.denyPaths ?? [])];
   return {
     allowedRoots: (config.allowedRoots ?? []).map((entry) => canonicalPath(expandHome(entry))),
@@ -251,7 +254,7 @@ function buildPathBoundary(config: BasicToolsConfig): PathBoundary {
 }
 
 /** 判定路径：deny 优先于 allow；配置 allowed_roots 后越界为 ask */
-function evaluatePath(target: string, boundary: PathBoundary): 'allow' | 'ask' | 'deny' {
+export function evaluatePath(target: string, boundary: PathBoundary): 'allow' | 'ask' | 'deny' {
   const canonical = canonicalPath(target);
   if (boundary.denyRoots.some((root) => isWithin(canonical, root))) return 'deny';
   if (
@@ -296,7 +299,7 @@ function deniedPathSpellings(entry: string): string[] {
 }
 
 /** 命令文本匹配模式（构造边界时算好，避免每条命令重复展开家目录） */
-interface DeniedCommandPattern {
+export interface DeniedCommandPattern {
   entry: string;
   pattern: RegExp;
 }

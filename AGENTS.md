@@ -15,7 +15,7 @@
 
 - **可嵌入的多 agent 平台 runtime**：极简核心（稳定接口 + 1 个通用 tool-calling loop + 扩展插槽）、Provider 无关；TUI / CLI / Web / Gateway 是参考 harness 外壳。
 - TypeScript + Bun；bun workspaces monorepo：`packages/{core,agent,config,permission,tui,serve}` + `plugins/` + `apps/web`。`@vessel-agent/core` 是零 UI 依赖的库，`@vessel-agent/agent` 是成员能力层，TUI / serve / web 是应用层外壳。
-- **能力工具只有 `bash` / `read` / `edit` 三个**，别急着加第四个（不提供 `grep` / 文件操作 / meta-tools）。内置 `agent` 与 `ask_user` 是接缝工具，MCP 工具经插件注册；工具口径与动作表见 [docs/architecture/tools.md](docs/architecture/tools.md#tools)。
+- **能力工具只有 `bash` / `read` / `edit`**，别急着加第四个（不提供 `grep` / 文件操作 / meta-tools）。插件工具 `subscribe` / `agent` / `ask_user` 按入口注册，MCP 工具经插件注册；工具口径与动作表见 [docs/architecture/tools.md](docs/architecture/tools.md#tools)。
 
 ## 硬安全规则（不可协商）
 

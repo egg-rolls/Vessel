@@ -19,7 +19,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**，也是一个**分布�
 
 |                  | 单体 Agent 工具            | 多 Agent 编排框架      | Vessel                                              |
 | ---------------- | -------------------------- | ---------------------- | --------------------------------------------------- |
-| **能力从哪来**   | 给你 50 个工具，自己挑     | 预定义节点与边         | 三个能力工具，其余由模型组合                        |
+| **能力从哪来**   | 给你 50 个工具，自己挑     | 预定义节点与边         | 能力工具 `bash` / `read` / `edit`，其余由模型组合   |
 | **绑谁**         | 绑一个 LLM 厂商            | 绑平台 / 框架          | 填 Key 即跑，Provider 无关，高频迭代切便宜模型      |
 | **组织单位**     | 一个 Agent                 | 一张图 / 一条流程      | 节点 → Team → Agent，按工作目录形成                 |
 | **通信**         | 内部消息                   | 框架内状态传递         | 定向 `send` / Team 日志 / 跨节点地址                |
@@ -180,9 +180,9 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 ## 工具集
 
-默认运行期 **4 个**工具：三个来自 `plugins/tools/basic-tools` 的**能力工具**，加上 `packages/agent` 的内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）。`ask_user` 在交互 REPL（TTY）或 gateway/serve 注册，`--run` / headless / 管道不注册（`ui.askUser: false` 可关闭）。`team_*` / `delegate_task` 已删除。
+默认运行期工具：`plugins/tools/basic-tools` 提供**能力工具** `bash` / `read` / `edit`；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；未 add 不注入）。`ask_user` 在交互 REPL（TTY）或 gateway/serve 注册，`--run` / headless / 管道不注册（`ui.askUser: false` 可关闭）。`team_*` / `delegate_task` 已删除。
 
-**能力工具（3）—— 模型干活就靠这三个：**
+**能力工具（`bash` / `read` / `edit`）—— 模型干活就靠这几个：**
 
 | 工具   | 干什么                                                                    |
 | ------ | ------------------------------------------------------------------------- |

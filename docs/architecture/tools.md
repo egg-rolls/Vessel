@@ -39,17 +39,18 @@ interface ToolDefinition {
 
 <a id="tools"></a>
 
-## 工具集：三个能力工具，为什么这么少
+## 工具集：能力工具为什么这么少
 
-默认运行期 **4 个**工具：`plugins/tools/basic-tools` 提供 **`bash` / `read` / `edit`** 三个**能力工具**，`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`team_*` / `delegate_task` 已删除。
+默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit`**；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；未 add 不注入）。`team_*` / `delegate_task` 已删除。
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
+| `subscribe` | 默认注册（`doc-subscription` 插件）；agent 显式 add 文件后，下个 run 首次注入全文、之后注入 diff；没有 add 不注入。只接受具体文件，无 glob / 目录 / 自动发现 |
 | `agent` | 默认注册；显式 `agent.enabled: false` 关闭。owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，`new` / `close` 只给 owner）；权限模式与成员配置见 `agent.*`（rotate 与 Team 动作见 ADR-091/092） |
 | `ask_user` | 交互 REPL（stdin 是 TTY）或 `gateway start` / `--serve`；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭 |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：**默认 4 / 显式 `agent.enabled: false` 3 / 交互 REPL 或 gateway-serve 5（+`ask_user`）/ 交互且关闭 agent 4**；配置 MCP 后在基础上加 **N 个 MCP 工具**（N 由 server 提供）。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
+口径：默认 = 能力工具 + `agent` + `subscribe`；显式 `agent.enabled: false` 去掉 `agent`；交互 REPL 或 gateway-serve 再加 `ask_user`。配置 MCP 后在基础上加 **N 个 MCP 工具**（N 由 server 提供）。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -71,9 +72,9 @@ interface ToolDefinition {
 | skills-loader（scanner + CRUD + 文件监听） | skills 就是文件；前端引用、core 只收消息 |
 | memory 插件 | 项目约定写在 `AGENTS.md`，模型自己读；跨会话笔记是 markdown 文件，模型自己读写 |
 
-> MCP 不是「能力工具」，而是把外部工具接进 `PluginHost` 的插件（ADR-039）；它不占基础工具名额，也不改变「三个能力工具」的判据。
+> MCP 不是「能力工具」，而是把外部工具接进 `PluginHost` 的插件（ADR-039）；它不占基础工具名额，也不改变能力工具的判据。
 
-**evals / feishu 不注册模型工具**；工具口径：默认 4 / 交互 5 / 4 + N MCP。
+**evals / feishu 不注册模型工具**；工具口径：默认 = 能力工具 + `agent` + `subscribe`；交互模式再加 `ask_user`；另有 N 个 MCP 工具。
 
 判据只有一条：**能被其他工具替代的工具，就不该存在**。工具越多，模型的选错空间越大；真正的通用原语只有"执行一条命令"，其余都是它的特化。
 

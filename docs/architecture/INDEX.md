@@ -19,7 +19,7 @@ paths: [docs/architecture/**]
 | [runtime-api](runtime-api.md) | `RunOptions.messages` 注入语义与 `AgentRuntime` 公开面 | RunOptions, messages, injection, agent runtime, context, at-path | `packages/core/src/runtime/**`, `packages/core/src/types/**` |
 | [interfaces](interfaces.md) | `LLMProvider` / `ContextManager` / `EventStream` 契约 | LLMProvider, ChatRequest, ContextManager, EventStream, types | `packages/core/src/types/provider.ts`, `context.ts`, `event.ts` |
 | [state](state.md) | `SessionBackend` / `LimitChecker` / `RunStore` 状态 port | session, run store, checkpoint, durable, limits, corruption | `packages/core/src/types/session.ts`, `limits.ts`, `run-store.ts` |
-| [tools](tools.md) | `ToolDefinition`、三个能力工具与权限/路径边界 | tool, bash, read, edit, permission, denylist, allowed_roots | `packages/core/src/types/tool.ts`, `plugins/tools/**` |
+| [tools](tools.md) | `ToolDefinition`、能力工具与权限/路径边界 | tool, bash, read, edit, permission, denylist, allowed_roots | `packages/core/src/types/tool.ts`, `plugins/tools/**` |
 | [guardrails-hooks](guardrails-hooks.md) | Guardrail 四阶段与 Hook 五阶段 | guardrail, hook, replacement, tool_call, before_llm | `packages/core/src/types/guardrail.ts`, `hook.ts` |
 | [extensions](extensions.md) | Plugin / PluginHost、发现与信任边界 | plugin, plugin host, loader, discovery, trust, external, mcp, skill | `packages/core/src/types/plugin.ts`, `src/plugin-loader.ts`, `plugins/**` |
 | [config](config.md) | 配置层序、resolver 与配置块 | config, yaml, precedence, env, tenant overlay, secrets | `packages/config/**`, `src/cli-overrides.ts` |

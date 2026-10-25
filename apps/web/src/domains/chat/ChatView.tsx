@@ -21,7 +21,7 @@ import type {
 } from '../../gateway/types';
 import { t } from '../../i18n';
 import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
-import { isGroupPersisted } from '../../state/events';
+import { isGroupPersisted, isSubscriptionInjectedMessage } from '../../state/events';
 import { EventGroupCache } from '../../state/group-cache';
 import type { PaletteItem } from '../../state/palette';
 import {
@@ -700,7 +700,10 @@ export function ChatView({
     : undefined;
   const transcriptMessages = sessionDetail?.messages ?? [];
   const visibleTranscript = useMemo(
-    () => transcriptMessages.filter((message) => message.role !== 'system'),
+    () =>
+      transcriptMessages.filter(
+        (message) => message.role !== 'system' && !isSubscriptionInjectedMessage(message),
+      ),
     [transcriptMessages],
   );
   const transcriptWindow = useMemo(
