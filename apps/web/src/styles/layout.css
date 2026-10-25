@@ -638,6 +638,7 @@
 }
 
 /* 左锚定手柄：10px 命中区全部在容器内，竖线贴右缘。 */
+
 .resize-handle-nav,
 .resize-handle-sessions {
   right: 0;
@@ -651,6 +652,7 @@
 }
 
 /* 手柄随内容列右缘移动：内容列居中，右缘 = 50% + 宽度 / 2。 */
+
 .resize-handle-chat {
   left: calc(50% + var(--chat-half-w, 430px));
   right: auto;
@@ -748,6 +750,7 @@
 
 @media (max-width: 1023px) {
   /* 平板：隐藏诊断性列，避免表格横向溢出。 */
+
   .data-table .col-optional {
     display: none;
   }
@@ -759,6 +762,7 @@
 
 @media (max-width: 1023px) {
   /* 平板起会话列变成抽屉，不再有可拖拽的列边界。 */
+
   .resize-handle-sessions {
     display: none;
   }
@@ -795,10 +799,6 @@
 
   .more-sheet {
     padding-bottom: calc(22px + env(safe-area-inset-bottom));
-  }
-
-  .kv-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content;
   }
 
   .bottom-nav {

@@ -1,4 +1,5 @@
 /* 权限卡片：渲染在 Composer 槽位（PermissionPrompt）或 AppShell 面板内，不用全局遮罩。 */
+
 .permission-card {
   display: flex;
   flex-direction: column;
@@ -24,6 +25,7 @@
 }
 
 /* 跨 session 待处理条：只提示，不打断当前对话。 */
+
 .pending-permissions-bar {
   display: flex;
   flex-wrap: wrap;
@@ -39,6 +41,7 @@
 }
 
 /* 阻塞语义：warn 圆点 + 文字，不用软底铺满。 */
+
 .pending-permissions-bar::before {
   content: "";
   flex: none;
@@ -50,19 +53,6 @@
 
 .pending-permissions-bar .link-btn:last-of-type {
   margin-left: auto;
-}
-
-.permission-meta {
-  font-size: 11px;
-}
-
-.permission-tool {
-  align-self: flex-start;
-  padding: 3px 10px;
-  border-radius: var(--radius-pill);
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font-size: 11.5px;
 }
 
 .permission-input {
@@ -89,62 +79,9 @@
   padding-right: 4px;
 }
 
-.ask-question {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 13px;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-}
-
-.ask-header {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--accent-ink);
-}
-
-.ask-text {
-  line-height: 1.6;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.ask-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.ask-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 12px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-raised);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.ask-option:hover {
-  background: var(--hover-tint);
-}
-
-.ask-option.picked {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
-
-.ask-option input {
-  accent-color: var(--accent);
-}
-
 /* ActionMenu 已迁移；marker 供未迁移的 `.session-row` / `.team-list-item`
  * 上下文控制 hover 显隐。 */
+
 .action-menu {
   position: relative;
   flex: none;

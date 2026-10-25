@@ -8,7 +8,7 @@ import {
 } from 'react';
 import { cn } from './cn';
 
-/** 与 legacy `.input` 同视觉：sunken 底 + inset 阴影 + focus ring。 */
+/** 输入控件：sunken 底 + inset 阴影 + focus ring。 */
 const CONTROL_CLASS =
   'w-full min-w-0 rounded-sm bg-sunken px-2.75 py-2 text-md text-ink shadow-elev-inset transition-colors placeholder:text-faint focus:outline-none focus:shadow-focus pointer-coarse:min-h-touch disabled:cursor-not-allowed disabled:opacity-45 forced-colors:border';
 

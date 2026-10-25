@@ -9,7 +9,7 @@ export interface SectionProps extends Omit<HTMLAttributes<HTMLElement>, 'title'>
   children?: ReactNode;
 }
 
-/** 结构面板：等价 legacy `.panel` + `.panel-header` / `.section-title`。 */
+/** 结构面板。 */
 export const Section = forwardRef<HTMLElement, SectionProps>(function Section(
   { title, description, actions, titleAs = 'h2', className, children, ...props },
   ref,

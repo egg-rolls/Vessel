@@ -31,11 +31,6 @@
   opacity: 0.45;
 }
 
-.btn.active {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-
 .btn-primary {
   color: var(--surface);
   background: var(--accent);
@@ -49,35 +44,6 @@
 .btn-primary:active:not(:disabled) {
   background-color: var(--accent-ink);
   background-image: linear-gradient(var(--press-tint), var(--press-tint));
-}
-
-.btn-danger {
-  color: var(--surface);
-  background: var(--danger);
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: linear-gradient(var(--hover-tint), var(--hover-tint)), var(--danger);
-}
-
-.btn-danger:active:not(:disabled) {
-  background-color: var(--danger);
-  background-image: linear-gradient(var(--press-tint), var(--press-tint));
-}
-
-.btn-danger-ghost {
-  color: var(--danger);
-  background: transparent;
-}
-
-.btn-danger-ghost:hover:not(:disabled) {
-  color: var(--danger);
-  background: var(--danger-soft);
-}
-
-.btn-small {
-  padding: 4px 10px;
-  font-size: 11px;
 }
 
 .icon-btn {
@@ -133,97 +99,10 @@
 
 /* ── 表单 ─────────────────────────────────────────────── */
 
-.input {
-  width: 100%;
-  min-width: 0;
-  padding: 8px 11px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  color: var(--ink);
-  font-size: 12.5px;
-  transition: background 0.16s var(--ease);
-  box-shadow: var(--elev-inset);
-}
-
-.input::placeholder {
-  color: var(--faint);
-}
-
-.input:focus {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.input.invalid {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-}
-
-.field-label {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.field-hint {
-  font-size: 10.5px;
-  color: var(--faint);
-  overflow-wrap: anywhere;
-}
-
 .field-error {
   font-size: 11px;
   line-height: 1.45;
   color: var(--danger);
-}
-
-.input-compact {
-  width: auto;
-  max-width: 220px;
-  padding: 5px 9px;
-  font-size: 11px;
-}
-
-.switch-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  font-size: 11.5px;
-}
-
-.kv-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.kv-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) max-content;
-  gap: 6px;
-  align-items: center;
-}
-
-.chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-}
-
-.chip-row .perm-badge {
-  font-size: 10px;
 }
 
 .form-grid {
@@ -250,19 +129,7 @@
   font-size: 12px;
 }
 
-/* ── 状态 chip（L2 已迁移到 StatusChip.tsx） ─────────── */
-
-.count-pill {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--surface-sunken);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--muted);
-}
+/* ── 权限徽标 ─────────────────────────────────────────── */
 
 .perm-badge {
   display: inline-block;
@@ -309,30 +176,4 @@
 .filter-bar .search-input {
   flex: 1 1 240px;
   max-width: var(--search-max-w);
-}
-
-.filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.filter-chip {
-  padding: 4px 10px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--faint);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.filter-chip:hover {
-  color: var(--ink);
-  background: var(--hover-tint);
-}
-
-.filter-chip.active {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
 }

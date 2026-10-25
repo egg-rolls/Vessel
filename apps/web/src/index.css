@@ -27,7 +27,6 @@
 @import "./styles/components/json.css" layer(legacy);
 @import "./styles/components/responsive.css" layer(legacy);
 @import "./styles/domains/chat.css" layer(legacy);
-@import "./styles/domains/runs.css" layer(legacy);
 @import "./styles/domains/tools.css" layer(legacy);
 @import "./styles/domains/runs-detail.css" layer(legacy);
 @import "./styles/domains/markdown.css" layer(legacy);
@@ -39,7 +38,6 @@
 @import "./styles/domains/hub.css" layer(legacy);
 @import "./styles/domains/nodes.css" layer(legacy);
 @import "./styles/domains/teams.css" layer(legacy);
-@import "./styles/domains/agents.css" layer(legacy);
 
 /*
  * L1：Tailwind theme aliases。

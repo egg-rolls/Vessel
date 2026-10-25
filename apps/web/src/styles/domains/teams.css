@@ -1,8 +1,7 @@
 /* ─────────────────────────────────────────────────────────────
    Teams（0.25）：跨节点列表 + 详情工具栏。
    列表 / 卡片 / 表单已迁到 L3 utilities；这里只保留 720px 媒体仍依赖的
-   `.teams-grid` / `.teams-detail-head`，以及 S5 TeamChat 仍用的
-   `.team-chat-archived*`。
+   `.teams-grid` / `.teams-detail-head`。
    ───────────────────────────────────────────────────────────── */
 
 .teams-detail-head {
@@ -21,19 +20,6 @@
   margin: var(--space-1) 0 0;
   padding: 0;
   list-style: none;
-}
-
-.team-chat-archived {
-  padding: 1px 8px;
-  border-radius: var(--radius-pill);
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-size: var(--text-xs);
-}
-
-.team-chat-archived-hint {
-  color: var(--faint);
-  font-size: var(--text-xs);
 }
 
 @media (max-width: 720px) {

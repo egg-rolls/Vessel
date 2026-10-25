@@ -3,7 +3,7 @@
 /* ModalShell / Tooltip 已迁移到 Tailwind；这里保留：
  * - keyframes（@utility modal-fade / modal-rise / tooltip-fade 引用）
  * - .modal-body-scroll（CommandPalette 的 `.palette` 需要改滚动结构）
- * - .modal-title / .modal-body / .modal-actions（未迁移的弹窗仍在用）
+ * - .modal-title / .modal-actions（AppShell 与未迁移弹窗仍在用）
  */
 
 @keyframes fade-in {
@@ -38,16 +38,8 @@
   color: var(--ink);
 }
 
-.modal-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--muted);
-}
-
 /* title → body 8；actions 内按钮 12；body → actions 12（8 + 4）。 */
+
 .modal-actions {
   display: flex;
   flex-wrap: wrap;

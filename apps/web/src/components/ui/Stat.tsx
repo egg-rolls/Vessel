@@ -7,7 +7,7 @@ export interface StatProps extends HTMLAttributes<HTMLDivElement> {
   hint?: ReactNode;
 }
 
-/** 指标块：等价 legacy `.stat`。 */
+/** 指标块。 */
 export function Stat({ label, value, hint, className, ...props }: StatProps) {
   return (
     <div

@@ -292,7 +292,7 @@ export function RunDetail({
   return (
     <Section
       ref={sectionRef}
-      className="run-detail"
+      className="run-detail mt-1"
       aria-label={t('runs.detail.label')}
       title={t('runs.detail.title')}
       actions={

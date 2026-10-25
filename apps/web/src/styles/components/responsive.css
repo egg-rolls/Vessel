@@ -28,8 +28,6 @@
 @media (pointer: coarse) {
   .btn,
   .icon-btn,
-  .input,
-  .filter-chip,
   .palette-option {
     min-height: var(--touch-target);
   }

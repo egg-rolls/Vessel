@@ -2,10 +2,8 @@
    Nodes / Teams / Agents 共用网络域原语 + Nodes 专属样式。
 
    行 / 徽标 / 高级详情 / Add node 表单已迁到 L3 utilities；
-   这里只保留 720px 媒体仍依赖的 `.net-toolbar` / `.net-select`、命令块
-   `.net-command*`，以及待 S7 删除的 `.net-card` / `.net-row-sub` /
-   `.field-wide` / `.team-policy-input`。
-   页面外边距统一由 `.domain-view` + `.domain-content` 提供，
+   这里只保留 720px 媒体仍依赖的 `.net-toolbar` / `.net-select` 与命令块
+   `.net-command*`。页面外边距统一由 `.domain-view` + `.domain-content` 提供，
    间距只使用 tokens.css 的 `--space-*`。
    ───────────────────────────────────────────────────────────── */
 
@@ -27,38 +25,6 @@
   min-width: var(--select-min-w);
   height: var(--control-h);
   padding-block: 0;
-}
-
-.net-row-sub {
-  min-width: 0;
-  color: var(--faint);
-  font-size: var(--text-xs);
-  overflow-wrap: anywhere;
-}
-
-.net-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  width: 100%;
-  height: 100%;
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-  color: var(--ink);
-  text-align: left;
-  cursor: pointer;
-  transition:
-    border-color 120ms var(--ease),
-    background 120ms var(--ease),
-    box-shadow 120ms var(--ease);
-}
-
-.net-card:hover {
-  border-color: var(--line-strong);
-  background: var(--surface-raised);
-  box-shadow: var(--elev-1);
 }
 
 .net-commands {
@@ -93,16 +59,6 @@
 }
 
 /* 跨列字段（policy JSON） */
-.field-wide {
-  grid-column: 1 / -1;
-}
-
-.team-policy-input {
-  min-height: 96px;
-  resize: vertical;
-  font-size: var(--text-sm);
-  line-height: 1.5;
-}
 
 @media (max-width: 720px) {
   .net-toolbar .search-input,
