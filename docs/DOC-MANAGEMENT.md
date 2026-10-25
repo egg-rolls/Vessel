@@ -71,8 +71,8 @@
 
 `current` 文档超过 **300 行**或 **100 KB** 时，必须按模块拆分到 `docs/architecture/**` 或 `docs/agents/**`，不得继续整篇常驻。
 
-- 目录必须有 `INDEX.md`：`docs/architecture/INDEX.md` 与 `docs/agents/INDEX.md` 各 ≤60 行，列为「模块 | 一句话 | triggers | paths | 链接」。
-- 模块文档 ≤100 行；一个事实只有一个家，其余位置用链接，不复制。
+- 目录必须有 `INDEX.md`：`docs/architecture/INDEX.md` 与 `docs/agents/INDEX.md` 各 ≤60 行，列为「模块（含链接）| 一句话 | triggers | paths」。
+- 模块文档 ≤100 行（advisory ≤60 行）；一个事实只有一个家，其余位置用链接，不复制。
 - frontmatter 必填 `title` / `kind` / `triggers` / `paths`；`kind` 只允许 `current` 或 `advisory`，`advisory` 另加 `applies_to`（`N` / `M`）。`triggers` 写任务里会出现的词，`paths` 是 glob，命中优先于关键词。
 
 ```yaml
@@ -85,7 +85,7 @@ paths: [packages/serve/**, apps/web/src/gateway/**]
 ```
 
 - 未拆分的存量文档在迁移完成前 grandfather；新增或重构的 `current` 文档立即适用。
-- 迁移完成后，`check-docs` 应校验 frontmatter、INDEX 覆盖、行数与链接；接入前由 `gov` 人工核对。
+- `check-docs` 校验 frontmatter、INDEX 覆盖、行数与链接；新增/重构文档立即生效，存量在迁移完成前 grandfather。
 
 ## 4. O(n)：历史记录
 
@@ -152,6 +152,8 @@ docs/
 
 **按目标检索：** 先写目标 + 目标路径，再按 INDEX 的 `triggers` / `paths` 命中模块；不整读 >300 行的 `current` 文档。无命中时回落 `AGENTS.md`，不把“没搜到”当成“没规则”。
 
+**机器检索：** `bun run scripts/docs-find.ts --goal "<目标>" [--paths <路径>] [--json]`；读 top 3 + `AGENTS.md`；退出码 1 表示无命中，必须回落 `AGENTS.md` 硬规则。
+
 **溯源（要知道为什么 / 当时落了什么）：**
 1. `docs/adr/README.md` — 先找约束
 2. `docs/versions/INDEX.md` — 再找版本快照
@@ -193,6 +195,7 @@ docs/
 - [ ] `current` 文档无 `## 0.x` / `### 0.x`、无逐版本“已实现 / 未发布”章节与“自 0.x 起”叙事
 - [ ] 拆分后的模块有 INDEX 与 frontmatter：模块 ≤100 行、INDEX ≤60 行、链接无死链
 - [ ] 检索走 INDEX 的 `triggers` / `paths`，未整读 >300 行的 `current` 文档
+- [ ] 任务开工跑过 `docs-find`（有命中读 top 3；无命中已回落 AGENTS.md 并记录）
 - [ ] 本批次版本事实已写入 `docs/versions/<version>.md`，并有一行 `INDEX.md`
 - [ ] 新增 ADR 已进 `docs/adr/README.md`
 - [ ] `CHANGELOG.md` 只保留当前版本段

@@ -9,6 +9,8 @@ paths: [docs/agents/**]
 
 改对应路径前读一篇即可；未命中时以 [AGENTS.md](../../AGENTS.md) 的硬安全规则为准。本索引只做下一跳，不写规则正文。
 
+> 检索：`bun run scripts/docs-find.ts --goal "<目标>" --paths <路径>`；本索引只做导航，命中后只读模块。
+
 | 模块 | 一句话 | triggers | paths |
 |---|---|---|---|
 | [core](core.md) | core 边界、Module、事件命名、tool pipeline、compaction、config resolver、存储 | core, runtime, run, resume, loop, tool pipeline, event, config, compaction, limits, lock, storage | `packages/core/**`, `packages/config/**` |

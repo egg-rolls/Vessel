@@ -6,6 +6,7 @@
 ## 先读什么
 
 - 先读本文件与任务相关的 `docs/architecture/` 模块（从 [INDEX](docs/architecture/INDEX.md) 命中）；契约查 `docs/adr/` 的具体编号，不整读全部 ADR。
+- 开工先 `bun run scripts/docs-find.ts --goal "<目标>" --paths <路径>` 取 top 3 模块；退出码 1（无命中）回落本文件硬规则。
 - 历史决策查 ADR，当前版本查 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)；实现事实以代码为准，文档冲突时顺手改文档。
 - 读代码先 grep 定位再读片段，不整读超过 300 行的文件；一次只加载当前任务需要的文档。
 - 过程产物（计划、报告、临时脚本）不进本仓库；文档只写已实现的能力。
