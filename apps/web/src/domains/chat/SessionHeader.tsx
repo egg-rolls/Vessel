@@ -1,6 +1,7 @@
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { Tooltip } from '../../components/Tooltip';
+import { Button } from '../../components/ui';
 import { formatTimestamp, formatTokenCount } from '../../format';
 import type { SessionDetail, SessionInfo } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -55,31 +56,31 @@ function AgentTreeRow({
             {agentLabel(node)}
           </button>
         </Tooltip>
-        {node.currentTool && <span className="dim mono">{node.currentTool}</span>}
+        {node.currentTool && <span className="text-muted font-mono">{node.currentTool}</span>}
         {node.queuePosition !== undefined && (
-          <span className="dim">
+          <span className="text-muted">
             {t('chat.subagents.queuePosition', { position: node.queuePosition })}
           </span>
         )}
-        {node.waitReason && <span className="dim">{node.waitReason}</span>}
-        {duration && <span className="dim">{duration}</span>}
+        {node.waitReason && <span className="text-muted">{node.waitReason}</span>}
+        {duration && <span className="text-muted tabular-nums">{duration}</span>}
         <details className="subagent-node-details">
           <summary>{t('chat.subagents.details')}</summary>
           <dl className="subagent-details">
             <dt>id</dt>
-            <dd className="mono">{node.id}</dd>
+            <dd className="font-mono">{node.id}</dd>
             <dt>depth</dt>
             <dd>{node.depth}</dd>
             {node.runId && (
               <>
                 <dt>run</dt>
-                <dd className="mono">{node.runId}</dd>
+                <dd className="font-mono">{node.runId}</dd>
               </>
             )}
             {node.sessionId && (
               <>
                 <dt>session</dt>
-                <dd className="mono">{node.sessionId}</dd>
+                <dd className="font-mono">{node.sessionId}</dd>
               </>
             )}
             {usage && (
@@ -120,13 +121,13 @@ function AgentTreeRow({
             {node.lastError && (
               <>
                 <dt>error</dt>
-                <dd className="err">{truncate(node.lastError, 240)}</dd>
+                <dd className="text-danger">{truncate(node.lastError, 240)}</dd>
               </>
             )}
           </dl>
-          <button type="button" className="btn btn-small" onClick={() => onSelectAgent?.(node.id)}>
+          <Button type="button" size="small" onClick={() => onSelectAgent?.(node.id)}>
             {t('chat.subagents.view')}
-          </button>
+          </Button>
         </details>
       </div>
       {entry.children.length > 0 && (
@@ -225,20 +226,26 @@ export function SessionHeader({
         </div>
         {activeAgentId && (
           <nav className="subagent-breadcrumb" aria-label={t('chat.subagents.title')}>
-            <button type="button" className="btn-link" onClick={() => onSelectAgent?.(undefined)}>
+            <Button
+              type="button"
+              variant="link"
+              className="no-underline text-accent-ink"
+              onClick={() => onSelectAgent?.(undefined)}
+            >
               {t('chat.subagents.back')}
-            </button>
-            <span className="dim">/</span>
+            </Button>
+            <span className="text-muted">/</span>
             {activeChain.map((node, index) => (
               <span key={node.id} className="subagent-crumb">
-                {index > 0 && <span className="dim">/</span>}
-                <button
+                {index > 0 && <span className="text-muted">/</span>}
+                <Button
                   type="button"
-                  className={`btn-link ${node.id === activeAgentId ? 'active' : ''}`.trim()}
+                  variant="link"
+                  className={`no-underline text-accent-ink ${node.id === activeAgentId ? 'font-semibold' : ''}`.trim()}
                   onClick={() => onSelectAgent?.(node.id)}
                 >
                   {t('chat.subagents.crumb')} · {agentLabel(node)}
-                </button>
+                </Button>
               </span>
             ))}
           </nav>

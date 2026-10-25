@@ -48,7 +48,8 @@
     "typecheck": "tsc --noEmit && tsc -p examples --noEmit",
     "typecheck:examples": "tsc -p examples --noEmit",
     "format": "bunx @biomejs/biome format --write .",
-    "check": "bunx @biomejs/biome check ."
+    "check": "bunx @biomejs/biome check .",
+    "check:web-styles": "bun run scripts/check-web-styles.ts"
   },
   "workspaces": [
     "packages/*",

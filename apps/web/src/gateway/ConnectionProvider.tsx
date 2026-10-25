@@ -17,12 +17,9 @@ import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
 import { resolveConnectionSeed } from './dev-auth';
 import {
-  addDismissedId,
   buildHydrationSnapshot,
   emptyInteractionState,
   interactionReducer,
-  type OrphanedInteraction,
-  readDismissedIds,
 } from './interaction-hydration';
 import {
   askFromEvent,
@@ -83,12 +80,8 @@ export interface ConnectionContextValue {
   closeCode: number | null;
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
-  /** 已失效（run 结束 / 进程重启）的交互；只用于提示，不可应答。 */
-  orphaned: readonly OrphanedInteraction[];
-  /** 从 `interactions.list` 补回 pending / orphaned；失败静默，不阻塞聊天。 */
+  /** 从 `interactions.list` 补回 pending，并把 orphaned 记为终态；失败静默。 */
   hydrateInteractions: () => Promise<void>;
-  /** 关闭失效提示并写入本 tenant 的 dismiss 集合。 */
-  dismissOrphaned: (requestId: string) => void;
   /** 正在提交应答的 requestId；UI 据此禁用按钮，避免双击重复提交。 */
   responding: ReadonlySet<string>;
   connect: (options: ConnectionOptions) => boolean;
@@ -110,15 +103,6 @@ const ConnectionContext = createContext<ConnectionContextValue | null>(null);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** localStorage 在隐私模式下访问也可能抛错：读写都由 hydration 模块 try/catch 兜底。 */
-function browserStorage(): Storage | null {
-  try {
-    return typeof window === 'undefined' ? null : window.localStorage;
-  } catch {
-    return null;
-  }
 }
 
 /** 首次 token：先处理 `#token=`，再读 sessionStorage。该函数必须在路由初始化前调用。 */
@@ -177,7 +161,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [epoch, setEpoch] = useState(0);
   const [tenantEpoch, setTenantEpoch] = useState(0);
   const [interactions, dispatchInteraction] = useReducer(interactionReducer, emptyInteractionState);
-  const { permissions, asks, orphaned } = interactions;
+  const { permissions, asks } = interactions;
   const interactionsRef = useRef(interactions);
   interactionsRef.current = interactions;
   const [responding, setResponding] = useState<ReadonlySet<string>>(() => new Set());
@@ -187,6 +171,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const settledRef = useRef(new Map<string, number>());
   /** hydration 世代：只有最新一次请求能落地。 */
   const hydrationGenerationRef = useRef(0);
+  /** 每个 tenant 已提示过的 orphaned request id；重连后不重复弹。 */
+  const orphanToastIdsRef = useRef(new Map<string, Set<string>>());
 
   const client = useMemo(() => new GatewayClient(gatewayUrl), [gatewayUrl]);
   const tenantIdRef = useRef<string | null>(null);
@@ -211,8 +197,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   /**
    * 从 `interactions.list` 补回刷新 / 重连 / 选会话后丢失的卡片。
    *
-   * 并行拉 pending + orphaned（都显式带 hello tenant）；只有 pending 仍缺 session
-   * 时才再调 `runs.list`。任何失败都只影响本轮 hydration，不 toast、不阻塞。
+   * 并行拉 pending + orphaned（都显式带 hello tenant）；orphaned 只作终态集合
+   * 移除旧卡片，不再渲染本地列表。任何失败都只影响本轮 hydration，不阻塞。
    */
   const hydrateInteractions = useCallback(async (): Promise<void> => {
     if (client.connectionState !== 'open') return;
@@ -239,20 +225,39 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const pending = pendingResult.status === 'fulfilled' ? pendingResult.value : [];
     const orphanedListed = orphanedResult.status === 'fulfilled' ? orphanedResult.value : [];
 
+    // 服务端 orphaned 去重后既用于移除旧卡片，也用于一次性提示计数。
+    const orphanIds = [
+      ...new Set(
+        orphanedListed
+          .filter((item) => item.status === 'orphaned' && item.request_id.length > 0)
+          .map((item) => item.request_id),
+      ),
+    ];
+
     const settled = new Set(settledRef.current.keys());
-    const snapshot = buildHydrationSnapshot({
-      pending,
-      orphaned: orphanedListed,
-      settled,
-      dismissed: readDismissedIds(browserStorage(), tenantAtStart ?? 'default'),
-    });
+    const snapshot = buildHydrationSnapshot({ pending, orphaned: orphanedListed, settled });
     if (!stillCurrent()) return;
+    // 终态 id 写进 settled：之后重放的事件 / 迟到的 pending 列表都不能复活卡片。
+    for (const requestId of snapshot.terminalIds) recordSettled(requestId);
     dispatchInteraction({
       type: 'hydrate',
       snapshot,
       settled: new Set(settledRef.current.keys()),
     });
-  }, [client]);
+
+    // 失效交互只提示一次：同一 tenant 下已提示过的 request id 在重连 / 刷新后
+    // 不重复弹；后续 hydration 只有出现新 id 才再提示。详情只在 Observe → Attention。
+    if (orphanIds.length > 0) {
+      const tenantKey = tenantAtStart ?? 'default';
+      const seen = orphanToastIdsRef.current.get(tenantKey) ?? new Set<string>();
+      const fresh = orphanIds.some((requestId) => !seen.has(requestId));
+      if (fresh) {
+        for (const requestId of orphanIds) seen.add(requestId);
+        orphanToastIdsRef.current.set(tenantKey, seen);
+        toast.info(t('interaction.orphaned.toast', { count: orphanIds.length }));
+      }
+    }
+  }, [client, recordSettled, toast]);
 
   const reportConnectError = useCallback(
     (error: unknown) => {
@@ -468,7 +473,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     toast,
   ]);
 
-  // 连接 / 刷新 / 重连成功后补回 pending / orphaned（epoch 只在 hello 后递增）。
+  // 连接 / 刷新 / 重连成功后补回 pending / 终态 orphaned（epoch 只在 hello 后递增）。
   // biome-ignore lint/correctness/useExhaustiveDependencies: epoch 是 hello 后的显式刷新触发器
   useEffect(() => {
     if (!hasToken) return;
@@ -604,16 +609,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     [client, recordSettled, toast, updateResponding],
   );
 
-  const dismissOrphaned = useCallback(
-    (requestId: string) => {
-      if (!requestId) return;
-      recordSettled(requestId);
-      dispatchInteraction({ type: 'dismiss-orphaned', requestId });
-      addDismissedId(browserStorage(), tenantIdRef.current ?? 'default', requestId);
-    },
-    [recordSettled],
-  );
-
   const value = useMemo<ConnectionContextValue>(
     () => ({
       client,
@@ -638,9 +633,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       closeCode: client.closedWithCode,
       permissions,
       asks,
-      orphaned,
       hydrateInteractions,
-      dismissOrphaned,
       responding,
       connect,
       disconnect,
@@ -670,9 +663,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       tenantEpoch,
       permissions,
       asks,
-      orphaned,
       hydrateInteractions,
-      dismissOrphaned,
       responding,
       connect,
       disconnect,

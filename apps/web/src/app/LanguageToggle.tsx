@@ -16,7 +16,7 @@ export function LanguageToggle() {
 
   return (
     <Button
-      className="appbar-lang"
+      className="min-w-10 flex-none rounded-full font-mono text-xs tracking-wide pointer-coarse:min-h-touch"
       size="small"
       aria-label={label}
       title={label}

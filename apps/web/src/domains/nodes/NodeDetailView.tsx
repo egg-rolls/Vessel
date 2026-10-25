@@ -8,7 +8,7 @@ import type { Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Button } from '../../components/ui';
+import { Button, KeyValueList, Section } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
@@ -46,9 +46,9 @@ export function NodeDetailView({
 
   if (!node) {
     return (
-      <div className="domain-view">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
         <PageHeader title={t('nodes.title')} tenantId={tenantId} />
-        <div className="domain-content">
+        <div className="mt-5 flex flex-col gap-4">
           <NotEnabledState
             title={t('nodes.notFound')}
             reason={t('nodes.notFoundHint')}
@@ -89,7 +89,7 @@ export function NodeDetailView({
   const incarnation = node.current ? (hello?.incarnation ?? '—') : '—';
 
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={displayName}
         tenantId={tenantId}
@@ -109,57 +109,93 @@ export function NodeDetailView({
           </>
         }
       />
-      <div className="domain-content">
-        <section className="panel">
-          <div className="panel-header">
-            <h2 className="section-title">{t('nodes.section.health')}</h2>
-          </div>
-          <dl className="diag-list">
-            <dt>{t('nodes.field.status')}</dt>
-            <dd>
-              <StatusChip status={status} label={statusLabel} />
-            </dd>
-            <dt>{t('nodes.section.dataPlane')}</dt>
-            <dd>{dataPlane}</dd>
-            <dt>{t('nodes.lastHeartbeat')}</dt>
-            <dd className="mono">{heartbeat}</dd>
-          </dl>
+      <div className="mt-5 flex flex-col gap-4">
+        <Section title={t('nodes.section.health')}>
+          <KeyValueList
+            items={[
+              {
+                key: 'status',
+                label: t('nodes.field.status'),
+                value: <StatusChip status={status} label={statusLabel} />,
+              },
+              {
+                key: 'dataPlane',
+                label: t('nodes.section.dataPlane'),
+                value: dataPlane,
+              },
+              {
+                key: 'heartbeat',
+                label: t('nodes.lastHeartbeat'),
+                value: <span className="font-mono">{heartbeat}</span>,
+              },
+            ]}
+          />
           {health.state.status === 'error' && (
-            <p className="field-error" role="alert">
+            <p className="text-xs text-danger leading-snug" role="alert">
               {health.state.error}
             </p>
           )}
-        </section>
+        </Section>
 
-        <section className="panel">
+        <Section>
           {healthData ? (
-            <details className="net-advanced">
-              <summary>{t('nodes.advanced')}</summary>
-              <dl className="diag-list">
-                <dt>{t('nodes.field.nodeId')}</dt>
-                <dd className="mono">{nodeId}</dd>
-                <dt>{t('nodes.field.endpoint')}</dt>
-                <dd className="mono">{healthData.node.endpoint || '—'}</dd>
-                <dt>{t('nodes.field.pid')}</dt>
-                <dd className="mono">{healthData.node.pid}</dd>
-                <dt>{t('nodes.field.startedAt')}</dt>
-                <dd className="mono">{formatTimestamp(healthData.node.started_at) || '—'}</dd>
-                <dt>{t('nodes.field.role')}</dt>
-                <dd className="mono">{healthData.node.role}</dd>
-                <dt>{t('nodes.field.protocol')}</dt>
-                <dd className="mono">
-                  {healthData.protocol.name} v{healthData.protocol.version}
-                </dd>
-                <dt>{t('nodes.field.incarnation')}</dt>
-                <dd className="mono">{incarnation}</dd>
-              </dl>
+            <details className="mt-3 border-t border-line pt-2">
+              <summary className="cursor-pointer text-sm text-faint">{t('nodes.advanced')}</summary>
+              <KeyValueList
+                className="mt-2"
+                items={[
+                  {
+                    key: 'nodeId',
+                    label: t('nodes.field.nodeId'),
+                    value: <span className="font-mono">{nodeId}</span>,
+                  },
+                  {
+                    key: 'endpoint',
+                    label: t('nodes.field.endpoint'),
+                    value: <span className="font-mono">{healthData.node.endpoint || '—'}</span>,
+                  },
+                  {
+                    key: 'pid',
+                    label: t('nodes.field.pid'),
+                    value: <span className="font-mono">{healthData.node.pid}</span>,
+                  },
+                  {
+                    key: 'startedAt',
+                    label: t('nodes.field.startedAt'),
+                    value: (
+                      <span className="font-mono">
+                        {formatTimestamp(healthData.node.started_at) || '—'}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'role',
+                    label: t('nodes.field.role'),
+                    value: <span className="font-mono">{healthData.node.role}</span>,
+                  },
+                  {
+                    key: 'protocol',
+                    label: t('nodes.field.protocol'),
+                    value: (
+                      <span className="font-mono">
+                        {healthData.protocol.name} v{healthData.protocol.version}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'incarnation',
+                    label: t('nodes.field.incarnation'),
+                    value: <span className="font-mono">{incarnation}</span>,
+                  },
+                ]}
+              />
             </details>
           ) : health.state.status === 'error' ? (
             <ErrorState message={health.state.error} onRetry={health.reload} />
           ) : (
             <LoadingState label={t('nodes.health.loading')} rows={2} />
           )}
-        </section>
+        </Section>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type ProxyOptions } from 'vite';
 
@@ -32,7 +33,7 @@ const target = relay?.url ?? GATEWAY;
 const configure = relay ? relayConfigure(relay.secret) : undefined;
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
     proxy: {

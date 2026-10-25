@@ -201,7 +201,7 @@ describe('ask prompt (composer slot)', () => {
     const markup = renderToStaticMarkup(
       <AskPrompt request={ask()} onSubmit={() => {}} onCancel={() => {}} />,
     );
-    expect(markup).toContain('btn-primary');
+    expect(markup).toContain('bg-accent');
     expect(markup).toContain('disabled');
   });
 

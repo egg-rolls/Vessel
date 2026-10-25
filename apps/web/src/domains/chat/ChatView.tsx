@@ -11,6 +11,7 @@ import { usePaletteEntities } from '../../components/PaletteEntities';
 import { ResizeHandle } from '../../components/ResizeHandle';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
+import { Button } from '../../components/ui';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import type {
   AskUserAnswer,
@@ -38,7 +39,6 @@ import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility
 import { windowTail } from '../../transcript';
 import { ChatWelcome } from './ChatWelcome';
 import { Composer } from './Composer';
-import { OrphanedNotices } from './OrphanedNotices';
 import { AskPrompt, PermissionPrompt } from './PromptSlots';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import { SessionHeader } from './SessionHeader';
@@ -105,9 +105,7 @@ export function ChatView({
     tenantId,
     permissions,
     asks,
-    orphaned,
     hydrateInteractions,
-    dismissOrphaned,
     responding,
     respondPermission,
     respondAsk,
@@ -560,11 +558,6 @@ export function ChatView({
   const sessionAsks = useMemo(
     () => pendingForSession(asks, selectedId, sessionRunIds),
     [asks, selectedId, sessionRunIds],
-  );
-  // 失效交互不参与串行槽位 / 队列 / 待处理计数，只在 Composer 上方提示。
-  const sessionOrphans = useMemo(
-    () => pendingForSession(orphaned, selectedId, sessionRunIds),
-    [orphaned, selectedId, sessionRunIds],
   );
   // 串行处理：队列按 requestedAt 排序，ask 按问题拆项；槽位只渲染第一项。
   const pendingItems = useMemo(
@@ -1062,7 +1055,7 @@ export function ChatView({
               <h2 className="conversation-title">
                 {draftActive ? t('chat.draft.title') : t('nav.domain.chat')}
               </h2>
-              <div className="conversation-meta dim">
+              <div className="conversation-meta text-muted">
                 {draftActive ? t('chat.draft.meta') : t('chat.draft.pickSession')}
               </div>
             </div>
@@ -1075,13 +1068,13 @@ export function ChatView({
               title={t('chat.empty.noConnectionTitle')}
               description={t('chat.empty.noConnectionDesc')}
               action={
-                <button
+                <Button
                   type="button"
-                  className="btn btn-primary"
+                  variant="primary"
                   onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
                 >
                   {t('common.configureConnection')}
-                </button>
+                </Button>
               }
             />
           ) : selectedId ? (
@@ -1092,13 +1085,9 @@ export function ChatView({
                   onRetry={detailResource.reload}
                   action={
                     hydrateError === NOT_FOUND_MESSAGE ? (
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => navigate({ domain: 'chat' })}
-                      >
+                      <Button type="button" onClick={() => navigate({ domain: 'chat' })}>
                         {t('breadcrumb.chat')}
-                      </button>
+                      </Button>
                     ) : undefined
                   }
                 />
@@ -1189,8 +1178,6 @@ export function ChatView({
           )}
         </div>
 
-        <OrphanedNotices items={sessionOrphans} onDismiss={dismissOrphaned} />
-
         {pendingItem && pendingItem.kind === 'permission' ? (
           <PermissionPrompt
             key={pendingItem.request.requestId}
@@ -1244,7 +1231,7 @@ export function ChatView({
           body={
             <>
               <p>{t('chat.delete.body')}</p>
-              <p className="dim">
+              <p className="text-muted">
                 {t('chat.delete.counts', { messages: deleteTarget.message_count })}
                 {deleteCounts && !deleteCounts.loading
                   ? t('chat.delete.runsCount', {
@@ -1255,19 +1242,19 @@ export function ChatView({
                     : ''}
               </p>
               {deleteCounts && deleteCounts.active > 0 && (
-                <p className="err" role="alert">
+                <p className="text-danger" role="alert">
                   {t('chat.delete.activeRuns', { count: deleteCounts.active })}
                 </p>
               )}
               {deleteCounts?.error && (
-                <p className="dim">
+                <p className="text-muted">
                   {t('chat.delete.statsFailed', { detail: deleteCounts.error })}
                 </p>
               )}
-              <p className="dim">{t('chat.delete.serverReject')}</p>
-              {!connected && <p className="err">{t('chat.delete.disconnected')}</p>}
+              <p className="text-muted">{t('chat.delete.serverReject')}</p>
+              {!connected && <p className="text-danger">{t('chat.delete.disconnected')}</p>}
               {deleteError && (
-                <p className="err" role="alert">
+                <p className="text-danger" role="alert">
                   {deleteError}
                 </p>
               )}
@@ -1283,9 +1270,9 @@ export function ChatView({
           onCancel={() => setDeleteTarget(null)}
           extra={
             deleteError ? (
-              <button
+              <Button
                 type="button"
-                className="link-btn"
+                variant="link"
                 onClick={() => {
                   const id = deleteTarget.session_id;
                   setDeleteTarget(null);
@@ -1293,7 +1280,7 @@ export function ChatView({
                 }}
               >
                 {t('chat.delete.viewRuns')}
-              </button>
+              </Button>
             ) : undefined
           }
         />

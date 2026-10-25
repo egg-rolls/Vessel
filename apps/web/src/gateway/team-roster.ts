@@ -27,6 +27,8 @@ export interface NodeRoster extends NodeTeams {
   rosters: readonly TeamRosterEntry[];
   /** 列表成功、个别 Team 详情失败的个数（不伪装成空团队）。 */
   partialErrors: number;
+  /** 本轮请求失败，但保留了上一次成功的 teams / rosters。 */
+  stale?: boolean;
 }
 
 function codeOf(error: unknown): string | undefined {
@@ -78,6 +80,36 @@ export async function fetchNodeRoster(node: NodeView, control: TeamControl): Pro
     else partialErrors += 1;
   }
   return { ...list, rosters, partialErrors };
+}
+
+function hasRosterData(roster: NodeRoster | undefined): roster is NodeRoster {
+  if (!roster) return false;
+  return roster.teams.length > 0 || roster.rosters.length > 0;
+}
+
+/**
+ * 合并相邻两轮节点结果：失败节点保留上一轮成功数据并标 `stale`，
+ * 成功节点清掉旧数据 / stale 标记。没有历史数据时才返回空列表（由 UI 报错）。
+ */
+export function mergeNodeRosters(
+  previous: readonly NodeRoster[],
+  next: readonly NodeRoster[],
+): NodeRoster[] {
+  const previousByNode = new Map(previous.map((roster) => [nodeKeyOf(roster.node), roster]));
+  return next.map((roster) => {
+    if (roster.ok) return { ...roster, stale: false };
+    const known = previousByNode.get(nodeKeyOf(roster.node));
+    if (!hasRosterData(known)) return { ...roster, stale: false };
+    return {
+      ...known,
+      node: roster.node,
+      ok: false,
+      error: roster.error,
+      ...(roster.code ? { code: roster.code } : {}),
+      partialErrors: known.partialErrors,
+      stale: true,
+    };
+  });
 }
 
 export interface RosterAgent {

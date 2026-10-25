@@ -3,13 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
 import {
   interactionSessionId,
-  orphanedDismissIds,
   pendingBarSummary,
   pendingBarTarget,
   pendingForSession,
   pendingPermissionsOutsideView,
 } from '../src/domains/chat/pending-permissions';
-import type { OrphanedInteraction } from '../src/gateway/interaction-hydration';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
 
 function permission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
@@ -31,18 +29,6 @@ function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
     runId: 'run-1',
     sessionId: 'session-1',
     requestedAt: 2_000,
-    ...overrides,
-  };
-}
-
-function orphaned(overrides: Partial<OrphanedInteraction> = {}): OrphanedInteraction {
-  return {
-    kind: 'permission',
-    requestId: 'orphan-1',
-    runId: 'run-9',
-    sessionId: undefined,
-    tool: 'bash',
-    createdAt: 500,
     ...overrides,
   };
 }
@@ -92,12 +78,7 @@ describe('compact pending bar', () => {
       }),
     ];
     const markup = renderToStaticMarkup(
-      <PendingPermissionsBar
-        requests={permissions}
-        asks={asks}
-        onOpenSession={() => {}}
-        onDismissOrphans={() => {}}
-      />,
+      <PendingPermissionsBar requests={permissions} asks={asks} onOpenSession={() => {}} />,
     );
 
     // ask 按条计数，不按问题数拆；两类合并成一条 bar。
@@ -125,12 +106,7 @@ describe('compact pending bar', () => {
       }),
     ];
     const markup = renderToStaticMarkup(
-      <PendingPermissionsBar
-        requests={permissions}
-        asks={asks}
-        onOpenSession={() => {}}
-        onDismissOrphans={() => {}}
-      />,
+      <PendingPermissionsBar requests={permissions} asks={asks} onOpenSession={() => {}} />,
     );
 
     expect(markup).toContain('其他会话有 2 个待处理请求');
@@ -140,47 +116,10 @@ describe('compact pending bar', () => {
     expect(pendingBarTarget(pendingBarSummary(permissions, asks))).toBeNull();
   });
 
-  test('bar dismisses orphaned items without jump or decision buttons', () => {
-    const markup = renderToStaticMarkup(
-      <PendingPermissionsBar
-        requests={[]}
-        orphaned={[orphaned(), orphaned({ requestId: 'orphan-2' })]}
-        onOpenSession={() => {}}
-        onDismissOrphans={() => {}}
-      />,
-    );
-
-    expect(markup).toContain('请求已失效（共 2 个）');
-    expect(markup).toContain('关闭');
-    // 只读：不跳转、不复用可应答卡片。
-    expect(markup).not.toContain('前往处理');
-    expect(markup).not.toContain('permission-card');
-    expect(markup).not.toContain('ask-card');
-    expect(markup).not.toContain('本次允许');
-    expect(markup).not.toContain('拒绝');
-    expect(markup).not.toContain('提交');
-    expect(markup.split('<button').length - 1).toBe(1);
-  });
-
-  test('one close action dismisses every orphan in the bar', () => {
-    const items = [
-      orphaned({ requestId: 'orphan-1' }),
-      orphaned({ requestId: 'orphan-2' }),
-      orphaned({ requestId: 'orphan-3' }),
-    ];
-    expect(orphanedDismissIds(items)).toEqual(['orphan-1', 'orphan-2', 'orphan-3']);
-  });
-
   test('bar is absent when nothing is pending', () => {
     expect(
       renderToStaticMarkup(
-        <PendingPermissionsBar
-          requests={[]}
-          asks={[]}
-          orphaned={[]}
-          onOpenSession={() => {}}
-          onDismissOrphans={() => {}}
-        />,
+        <PendingPermissionsBar requests={[]} asks={[]} onOpenSession={() => {}} />,
       ),
     ).toBe('');
   });

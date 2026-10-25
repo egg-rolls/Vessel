@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip, StatusGlyph } from '../../components/StatusChip';
+import { Button } from '../../components/ui';
 import { formatClock } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
 import { t } from '../../i18n';
@@ -70,20 +71,24 @@ function ReasoningBlock({
         setOpen(next);
       }}
     >
-      <summary className="reasoning-summary">
+      <summary className="cursor-pointer select-none px-2.5 py-1.5 text-sm text-faint hover:text-muted">
         {t('chat.reasoning.summary')}
         {seconds !== undefined ? ` · ${seconds}s` : ''}
-        {streaming ? <span className="reasoning-live"> · {t('chat.reasoning.live')}</span> : null}
+        {streaming ? (
+          <span className="reasoning-live text-info"> · {t('chat.reasoning.live')}</span>
+        ) : null}
       </summary>
-      <div className="reasoning-text">{clampedVisible ? clamped : text}</div>
+      <div className="px-2.5 py-2 text-md leading-relaxed whitespace-pre-wrap wrap-anywhere">
+        {clampedVisible ? clamped : text}
+      </div>
       {lines.length > REASONING_PREVIEW_LINES && (
-        <button
-          type="button"
-          className="link-btn reasoning-more"
+        <Button
+          variant="link"
+          className="mx-2.5 mb-2 text-xs"
           onClick={() => setShowAll((value) => !value)}
         >
           {showAll ? t('chat.reasoning.collapse') : t('chat.reasoning.expand')}
-        </button>
+        </Button>
       )}
     </details>
   );
@@ -103,11 +108,14 @@ export interface QueuedSubmission {
 function UserBubble({ text, ts }: { text: string; ts?: number }) {
   const clock = formatClock(ts);
   return (
-    <div className="msg msg-user">
+    <div className="msg-user flex max-w-full justify-end">
       <div className="msg-bubble">
         {text}
         {clock && (
-          <time className="msg-time" dateTime={new Date(ts ?? 0).toISOString()}>
+          <time
+            className="mt-1 block text-right font-mono text-2xs tabular-nums text-faint"
+            dateTime={new Date(ts ?? 0).toISOString()}
+          >
             {clock}
           </time>
         )}
@@ -124,7 +132,7 @@ function FailureNotice({ group }: { group: RunGroup }) {
     <div className="stream-notice failed" role="alert">
       <StatusGlyph status="failed" />
       {meta && (
-        <span className="error-meta mono">
+        <span className="error-meta font-mono tabular-nums">
           {meta}
           {group.errorMeta?.retryable === true ? ` · ${t('chat.run.retryable')}` : ''}
         </span>
@@ -141,7 +149,10 @@ function FailureNotice({ group }: { group: RunGroup }) {
         <pre className="run-error-body">{group.error || t('chat.run.noError')}</pre>
       </details>
       {hint && <p className="run-error-hint">{hint}</p>}
-      <a className="btn btn-small run-detail-link" href={runDetailHref(group)}>
+      <a
+        className="ml-auto inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm bg-sunken px-2.5 py-1 text-sm tracking-wide text-ink no-underline transition-colors duration-150 tint-hover tint-press"
+        href={runDetailHref(group)}
+      >
         {t('chat.run.detail')}
       </a>
     </div>
@@ -222,7 +233,7 @@ export const RunItems = memo(function RunItems({
         }
         if (item.kind === 'text') {
           return (
-            <div className="msg msg-assistant" key={item.key}>
+            <div className="msg-assistant max-w-full" key={item.key}>
               {group.status === 'running' ? (
                 <div className="msg-text">{item.text}</div>
               ) : (
@@ -238,18 +249,18 @@ export const RunItems = memo(function RunItems({
       })}
       {liveReasoning && <ReasoningBlock text={liveReasoning} streaming />}
       {liveText && (
-        <div className="msg msg-assistant">
+        <div className="msg-assistant max-w-full">
           <div className="msg-text live-text">{liveText}</div>
         </div>
       )}
       {showWaiting && (
-        <div className="run-waiting dim" role="status">
-          <span className="run-waiting-dot" aria-hidden="true" />
+        <div className="run-waiting text-muted" role="status">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent pulse-soft" aria-hidden="true" />
           {t('chat.run.waiting')}
         </div>
       )}
       {group.status === 'completed' && group.output && !outputAlreadyShown && (
-        <div className="msg msg-assistant">
+        <div className="msg-assistant max-w-full">
           <Markdown className="msg-text" text={group.output} />
         </div>
       )}
@@ -281,14 +292,14 @@ export function QueuedNotice({
       <StatusChip status={status} label={item.cancelled ? t('chat.run.cancelled') : position} />
       <span className="stream-notice-input">{item.input}</span>
       {!item.cancelled && (
-        <button
-          type="button"
-          className="link-btn stream-notice-action"
+        <Button
+          variant="link"
+          className="stream-notice-action"
           onClick={() => onCancel(item.runId)}
           disabled={item.cancelling}
         >
           {item.cancelling ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
-        </button>
+        </Button>
       )}
     </div>
   );

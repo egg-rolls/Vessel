@@ -33,7 +33,7 @@ export function TeamTranscript({
     const day = localDayKey(message.ts);
     if (day && day !== lastDay) {
       nodes.push(
-        <div className="day-divider team-day-divider" key={`day-${day}`}>
+        <div className="day-divider mt-1.5 mb-0.5" key={`day-${day}`}>
           <span>{localDayLabel(message.ts)}</span>
         </div>,
       );
@@ -63,5 +63,5 @@ export function TeamTranscript({
     );
   }
 
-  return <div className="team-transcript">{nodes}</div>;
+  return <div className="mx-auto flex w-full max-w-180 flex-col gap-3">{nodes}</div>;
 }

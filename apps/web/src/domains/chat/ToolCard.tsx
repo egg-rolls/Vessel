@@ -1,5 +1,8 @@
+// biome-ignore-all lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
 import { useId, useState } from 'react';
 import { CopyButton } from '../../components/CopyButton';
+import { ModalShell } from '../../components/Modal';
+import { Badge, Button } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
@@ -13,11 +16,24 @@ import {
   type ToolCardView,
   toolSummary,
 } from './tool-cards';
+import { useToolDescription } from './tool-catalog';
 
 const STATUS_GLYPH: Record<ToolCardView['status'], string> = {
   running: '●',
   done: '✓',
   error: '✗',
+};
+
+const STATUS_LABEL: Record<ToolCardView['status'], string> = {
+  running: 'chat.tool.status.running',
+  done: 'chat.tool.status.done',
+  error: 'chat.tool.status.error',
+};
+
+const STATUS_BADGE_TONE: Record<ToolCardView['status'], 'info' | 'success' | 'danger'> = {
+  running: 'info',
+  done: 'success',
+  error: 'danger',
 };
 
 const STATUS_TONE: Record<ToolCardView['status'], string> = {
@@ -92,24 +108,24 @@ function PayloadSection({ label, value, defaultOpen = false, tone, verbosity }: 
         {shown}
       </pre>
       {hasMore && (
-        <button
-          type="button"
-          className="link-btn tool-section-more"
+        <Button
+          variant="link"
+          className="tool-section-more"
           onClick={() => setLoadedBytes((value) => value + PAYLOAD_CHUNK_BYTES)}
         >
           {t('chat.tool.loadMore', {
             loaded: Math.round(loadedBytes / 1024),
             total: Math.round(text.length / 1024),
           })}
-        </button>
+        </Button>
       )}
       {!open && preview.truncated && (
-        <button type="button" className="link-btn tool-section-more" onClick={() => setOpen(true)}>
+        <Button variant="link" className="tool-section-more" onClick={() => setOpen(true)}>
           {t('chat.tool.showAll', { total: preview.totalLines })}
-        </button>
+        </Button>
       )}
       {verbosity === 'debug' && (
-        <div className="tool-section-debug mono">
+        <div className="tool-section-debug font-mono tabular-nums">
           {preview.totalLines} lines · {preview.totalBytes} bytes
         </div>
       )}
@@ -127,10 +143,18 @@ function DiffSection({ lines, path }: { lines: DiffLine[]; path?: string }) {
           {path ? ` · ${path}` : ''}
         </span>
       </div>
-      <pre className="tool-section-body tool-diff">
+      <pre className="tool-section-body whitespace-pre wrap-normal">
         {lines.map((line, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
-          <span className={`diff-line diff-${line.kind}`} key={index}>
+          <span
+            key={index}
+            className={`block ${
+              line.kind === 'add'
+                ? 'text-success'
+                : line.kind === 'remove'
+                  ? 'text-danger'
+                  : 'text-faint'
+            }`}
+          >
             {line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' '}
             {line.text}
             {'\n'}
@@ -141,7 +165,7 @@ function DiffSection({ lines, path }: { lines: DiffLine[]; path?: string }) {
   );
 }
 
-/** 工具卡：Codex 式单行 header + 默认折叠的输入/输出/diff/错误分区。 */
+/** 工具卡：Codex 式单行 header；点击打开详情弹窗（描述 + 输入，其余分区折叠）。 */
 export function ToolCard({
   card,
   verbosity = 'normal',
@@ -149,8 +173,8 @@ export function ToolCard({
   card: ToolCardView;
   verbosity?: Verbosity;
 }) {
-  const [manual, setManual] = useState<boolean | null>(null);
-  const expanded = manual ?? card.status === 'error';
+  const [open, setOpen] = useState(false);
+  const description = useToolDescription(card.name);
   const summary = toolSummary(card.name, card.args);
   const diff = card.name === 'edit' ? editDiffOf(card.args) : null;
   const errorText = card.error !== undefined ? valueText(card.error) : '';
@@ -160,30 +184,70 @@ export function ToolCard({
     <div className="tool-card" data-status={card.status}>
       <button
         type="button"
-        className="tool-card-header"
-        aria-expanded={expanded}
-        onClick={() => setManual(!expanded)}
+        className="flex min-h-9 w-full items-center gap-2 rounded-md bg-transparent px-2.5 text-left text-muted hover:bg-hover"
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
       >
         <span
           className={`tool-card-glyph ${STATUS_TONE[card.status]}`}
           role="img"
-          aria-label={card.status}
+          aria-label={t(STATUS_LABEL[card.status])}
         >
           {STATUS_GLYPH[card.status]}
         </span>
-        <span className="tool-card-name">{card.name}</span>
-        {summary && <span className="tool-card-args">{summary}</span>}
-        {card.durationMs != null && (
-          <span className="tool-card-duration">{formatDuration(card.durationMs)}</span>
+        <span className="flex-none font-mono text-sm text-ink">{card.name}</span>
+        {summary && (
+          <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint">{summary}</span>
         )}
-        <span className="tool-card-chevron" aria-hidden="true">
-          {expanded ? '▾' : '▸'}
+        {card.durationMs != null && (
+          <span className="ml-auto flex-none font-mono text-xs tabular-nums text-faint">
+            {formatDuration(card.durationMs)}
+          </span>
+        )}
+        <span className="flex-none text-2xs text-faint" aria-hidden="true">
+          ›
         </span>
       </button>
 
-      {expanded && (
-        <div className="tool-card-body">
-          <PayloadSection label={t('chat.tool.input')} value={card.args} verbosity={verbosity} />
+      {/* 失败不能静默：卡片收起时也保留错误摘要（完整内容在详情弹窗）。 */}
+      {card.status === 'error' && errorText && (
+        <p className="m-0 line-clamp-3 whitespace-pre-wrap break-words px-2.5 pb-2 font-mono text-xs text-danger">
+          {errorText}
+        </p>
+      )}
+
+      {open && (
+        <ModalShell
+          label={t('chat.tool.dialogLabel', { name: card.name })}
+          onClose={() => setOpen(false)}
+          closeLabel={t('common.close')}
+          size="md"
+        >
+          <div className="flex flex-wrap items-center gap-2 pr-8">
+            <h2 className="font-serif text-xl font-semibold text-ink">{card.name}</h2>
+            <Badge tone={STATUS_BADGE_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
+            {card.durationMs != null && (
+              <span className="font-mono text-xs tabular-nums text-faint">
+                {formatDuration(card.durationMs)}
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="font-mono text-xs uppercase tracking-wide text-faint">
+              {t('chat.tool.description')}
+            </span>
+            <p className="m-0 text-md leading-relaxed text-muted">
+              {description ?? t('chat.tool.descriptionUnavailable')}
+            </p>
+          </div>
+
+          <PayloadSection
+            label={t('chat.tool.input')}
+            value={card.args}
+            defaultOpen
+            verbosity={verbosity}
+          />
           <PayloadSection label={t('chat.tool.output')} value={card.result} verbosity={verbosity} />
           {diff && <DiffSection lines={diff.lines} path={diff.path} />}
           <PayloadSection
@@ -194,19 +258,19 @@ export function ToolCard({
             verbosity={verbosity}
           />
           {meta && (
-            <p className="error-meta mono">
+            <p className="error-meta font-mono tabular-nums">
               {meta}
               {card.errorMeta?.retryable === true ? ` · ${t('chat.tool.retryable')}` : ''}
             </p>
           )}
           {card.errorMeta?.httpStatus !== undefined && (
-            <p className="error-meta mono">HTTP {card.errorMeta.httpStatus}</p>
+            <p className="error-meta font-mono tabular-nums">HTTP {card.errorMeta.httpStatus}</p>
           )}
-          {card.truncated && <p className="tool-card-note">{t('chat.tool.truncated')}</p>}
+          {card.truncated && <p className="text-xs text-warn">{t('chat.tool.truncated')}</p>}
           {verbosity === 'debug' && (
-            <section className="tool-section tool-meta">
+            <section className="tool-section">
               <div className="tool-section-label">{t('chat.tool.meta')}</div>
-              <dl className="tool-meta-list mono">
+              <dl className="tool-meta-list font-mono tabular-nums">
                 {card.callId && (
                   <>
                     <dt>call</dt>
@@ -220,7 +284,7 @@ export function ToolCard({
               </dl>
             </section>
           )}
-        </div>
+        </ModalShell>
       )}
     </div>
   );

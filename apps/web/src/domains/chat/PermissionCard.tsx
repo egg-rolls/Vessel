@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Button } from '../../components/ui';
 import type { PermissionRequest, PermissionScope } from '../../gateway/types';
 import { t } from '../../i18n';
 
@@ -78,58 +79,42 @@ export function PermissionCard({
       data-request-id={request.requestId}
     >
       <div className="permission-card-head" id={titleId}>
-        <span className="permission-tool mono">{request.tool}</span>
-        <span className="permission-meta dim">
+        <span className="self-start rounded-full bg-accent-soft px-2.5 py-1 font-mono text-sm text-accent-ink">
+          {request.tool}
+        </span>
+        <span className="text-sm text-muted">
           {busy ? t('permission.busy') : t('permission.inline.waiting')}
         </span>
       </div>
-      <pre className="permission-input">{shown}</pre>
+      <pre className="permission-input m-0 rounded-sm bg-sunken px-3.5 py-3 font-mono text-sm leading-relaxed text-muted whitespace-pre-wrap wrap-anywhere">
+        {shown}
+      </pre>
       {canExpand && (
-        <button
-          type="button"
-          className="link-btn permission-expand"
+        <Button
+          variant="link"
+          className="self-start text-xs"
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
           {expanded ? t('permission.collapse') : t('permission.expand')}
-        </button>
+        </Button>
       )}
       {serialized.truncated && (
-        <span className="dim permission-truncated">{t('permission.truncated')}</span>
+        <span className="self-start text-xs text-muted">{t('permission.truncated')}</span>
       )}
-      <div className="permission-card-actions">
-        <button
-          type="button"
-          className="btn btn-danger-ghost"
-          disabled={disabled}
-          onClick={() => onDecide('deny', 'once')}
-        >
+      <div className="permission-card-actions flex flex-wrap justify-end gap-2">
+        <Button variant="dangerGhost" disabled={disabled} onClick={() => onDecide('deny', 'once')}>
           {t('permission.deny')}
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={disabled}
-          onClick={() => onDecide('allow', 'once')}
-        >
+        </Button>
+        <Button variant="primary" disabled={disabled} onClick={() => onDecide('allow', 'once')}>
           {t('permission.allowOnce')}
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={disabled}
-          onClick={() => onDecide('allow', 'session')}
-        >
+        </Button>
+        <Button disabled={disabled} onClick={() => onDecide('allow', 'session')}>
           {t('permission.allowSession')}
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={disabled}
-          onClick={() => onDecide('allow', 'always')}
-        >
+        </Button>
+        <Button disabled={disabled} onClick={() => onDecide('allow', 'always')}>
           {t('permission.always')}
-        </button>
+        </Button>
       </div>
     </fieldset>
   );

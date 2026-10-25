@@ -43,11 +43,18 @@
     "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif SC", Georgia, serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
 
-  --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
+  /* 原值别名：供 index.css 的 @theme inline 引用（避免同名自引用）。 */
+  --shape-xs: 6px;
+  --shape-sm: 8px;
+  --shape-md: 12px;
+  --shape-lg: 16px;
+  --shape-xl: 20px;
+
+  --radius-xs: var(--shape-xs);
+  --radius-sm: var(--shape-sm);
+  --radius-md: var(--shape-md);
+  --radius-lg: var(--shape-lg);
+  --radius-xl: var(--shape-xl);
   --radius-pill: 999px;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
@@ -59,10 +66,20 @@
   --space-6: 24px;
   --space-8: 32px;
 
-  --text-xs: 10px;
-  --text-sm: 11.5px;
-  --text-body: 14px;
-  --text-title: 22px;
+  /* 原值别名：供 index.css 的 @theme inline 引用（避免同名自引用）。 */
+  --size-2xs: 10px;
+  --size-xs: 10.5px;
+  --size-sm: 11.5px;
+  --size-md: 12.5px;
+  --size-base: 14px;
+  --size-lg: 16px;
+  --size-xl: 19px;
+  --size-2xl: 22px;
+
+  --text-xs: var(--size-2xs);
+  --text-sm: var(--size-sm);
+  --text-body: var(--size-base);
+  --text-title: var(--size-2xl);
 
   --appbar-h: 56px;
   --nav-w: 256px;

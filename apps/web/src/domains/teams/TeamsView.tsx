@@ -9,7 +9,7 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import type { Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
-import { Button, SearchInput } from '../../components/ui';
+import { Button, SearchInput, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -94,7 +94,7 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
 
   if (!anyNodeToken) {
     return (
-      <div className="domain-view">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
         <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
       </div>
     );
@@ -104,7 +104,7 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
     const node = nodes.find((item) => nodeKeyOf(item) === route.nodeKey);
     if (!node) {
       return (
-        <div className="domain-view">
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
           <NotEnabledState
             title={t('teams.nodeMissing')}
             action={
@@ -167,38 +167,46 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
     body = (
       <>
         {partial && (
-          <p className="teams-partial" role="status">
+          <p
+            className="m-0 rounded-sm border border-line-strong bg-warn-soft px-3 py-2 text-sm text-warn"
+            role="status"
+          >
             {t('teams.partialError')}
           </p>
         )}
-        <div className="teams-nodes">
+        <div className="flex flex-col gap-5">
           {visible.map((result) => (
             <section
-              className="teams-node-group"
+              className="flex min-w-0 flex-col gap-2"
               key={nodeKeyOf(result.node)}
               aria-label={nodeNames.get(nodeKeyOf(result.node)) ?? '—'}
             >
-              <header className="teams-node-head">
-                <span className="teams-node-name">
+              <header className="flex items-center gap-2 border-b border-line pb-2">
+                <span className="font-semibold text-ink">
                   {nodeNames.get(nodeKeyOf(result.node)) ?? '—'}
                 </span>
                 {result.node.current && (
-                  <span className="teams-node-current">{t('observe.attention.currentNode')}</span>
+                  <span className="whitespace-nowrap rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent-ink">
+                    {t('observe.attention.currentNode')}
+                  </span>
                 )}
               </header>
               {!result.ok ? (
-                <p className="teams-node-error" role="alert">
+                <p
+                  className="m-0 rounded-sm border border-line-strong bg-danger-soft px-3 py-2 text-sm text-danger"
+                  role="alert"
+                >
                   {nodeErrorText(result)}
                 </p>
               ) : result.teams.length === 0 ? (
-                <p className="teams-node-empty dim">{t('teams.empty')}</p>
+                <p className="m-0 py-2 text-sm text-muted">{t('teams.empty')}</p>
               ) : (
                 <ul className="teams-grid">
                   {result.teams.map((team) => (
                     <li key={team.team_id}>
                       <button
                         type="button"
-                        className="net-card teams-card"
+                        className="flex h-full w-full cursor-pointer flex-col gap-2 rounded-md border border-line bg-raised px-4 py-3 text-left text-ink transition-colors hover:border-line-strong hover:shadow-elev-1"
                         title={t('teams.card.open')}
                         onClick={() =>
                           navigate({
@@ -208,14 +216,20 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
                           })
                         }
                       >
-                        <span className="teams-card-head">
-                          <span className="teams-card-name">{team.name || team.team_id}</span>
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate font-semibold">
+                            {team.name || team.team_id}
+                          </span>
                           {team.archived_at !== undefined && (
-                            <span className="teams-card-archived">{t('teams.card.archived')}</span>
+                            <span className="whitespace-nowrap rounded-full bg-warn-soft px-2 py-0.5 text-xs text-warn">
+                              {t('teams.card.archived')}
+                            </span>
                           )}
                         </span>
-                        <span className="net-row-sub mono">{team.team_id}</span>
-                        <span className="teams-card-meta">
+                        <span className="wrap-anywhere font-mono text-xs text-faint">
+                          {team.team_id}
+                        </span>
+                        <span className="flex flex-wrap gap-3 text-sm text-muted">
                           <span>{t('teams.card.members', { members: team.member_count })}</span>
                           <span>
                             {team.online_count !== undefined
@@ -224,7 +238,9 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
                           </span>
                         </span>
                         {team.description && (
-                          <span className="teams-card-desc">{team.description}</span>
+                          <span className="line-clamp-2 text-sm text-muted">
+                            {team.description}
+                          </span>
                         )}
                       </button>
                     </li>
@@ -239,18 +255,19 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
   }
 
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader title={t('teams.title')} tenantId={tenantId} actions={createButton} />
-      <div className="domain-content">
-        <div className="filter-bar net-toolbar">
+      <div className="mt-5 flex flex-col gap-4">
+        <div className="net-toolbar mt-3.5">
           <SearchInput
             value={query}
             onChange={setQuery}
             placeholder={t('team.list.search')}
             ariaLabel={t('team.list.search')}
+            className="grow basis-60 max-w-search"
           />
-          <select
-            className="input net-select"
+          <Select
+            className="net-select w-auto min-w-32 h-control py-0"
             value={nodeFilter}
             onChange={(event) => changeNodeFilter(event.target.value)}
             aria-label={t('teams.filter.node')}
@@ -261,7 +278,7 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
                 {nodeNames.get(nodeKeyOf(node)) ?? '—'}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         {body}
       </div>

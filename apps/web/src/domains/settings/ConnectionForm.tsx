@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useToast } from '../../components/ToastProvider';
+import { Button, Field, Input, KeyValueList, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -69,17 +70,33 @@ export function ConnectionForm() {
   };
 
   return (
-    <div className="settings-section">
-      <section className="panel">
-        <h2 className="section-title">{t('connection.title')}</h2>
-        <p className="section-desc">
-          {devProxyAuth ? t('settings.connection.devProxyNotice') : t('connection.description')}
-        </p>
+    <div className="flex flex-col gap-6">
+      <Section
+        title={t('connection.title')}
+        description={
+          devProxyAuth ? t('settings.connection.devProxyNotice') : t('connection.description')
+        }
+      >
         <div className="form-grid">
-          <label className="field">
-            <span className="field-label">Gateway URL</span>
-            <input
-              className={`input ${!devProxyAuth && urlError ? 'invalid' : ''}`.trim()}
+          <Field
+            label="Gateway URL"
+            htmlFor="connection-url"
+            error={
+              !devProxyAuth && urlError ? (
+                <span id="connection-url-error">{urlError}</span>
+              ) : undefined
+            }
+            hint={
+              <span className="font-mono">
+                {t('connection.current', {
+                  url: displayGatewayUrl(gatewayUrl, window.location.origin),
+                })}
+              </span>
+            }
+          >
+            <Input
+              id="connection-url"
+              invalid={!devProxyAuth && Boolean(urlError)}
               value={
                 devProxyAuth ? displayGatewayUrl(gatewayUrl, window.location.origin) : urlDraft
               }
@@ -92,7 +109,6 @@ export function ConnectionForm() {
               placeholder={t('connection.urlPlaceholder')}
               spellCheck={false}
               autoComplete="off"
-              aria-invalid={!devProxyAuth && urlError ? true : undefined}
               aria-describedby={!devProxyAuth && urlError ? 'connection-url-error' : undefined}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
@@ -101,23 +117,17 @@ export function ConnectionForm() {
                 }
               }}
             />
-            {!devProxyAuth && urlError && (
-              <span className="field-error" id="connection-url-error" role="alert">
-                {urlError}
-              </span>
-            )}
-            <span className="field-hint mono">
-              {t('connection.current', {
-                url: displayGatewayUrl(gatewayUrl, window.location.origin),
-              })}
-            </span>
-          </label>
+          </Field>
 
           {!devProxyAuth && (
-            <label className="field">
-              <span className="field-label">Token</span>
-              <input
-                className={`input ${tokenError ? 'invalid' : ''}`.trim()}
+            <Field
+              label="Token"
+              htmlFor="connection-token"
+              error={tokenError ? <span id="connection-token-error">{tokenError}</span> : undefined}
+            >
+              <Input
+                id="connection-token"
+                invalid={Boolean(tokenError)}
                 type="password"
                 value={tokenDraft}
                 onChange={(event) => {
@@ -127,7 +137,6 @@ export function ConnectionForm() {
                 placeholder={t('connection.tokenPlaceholder')}
                 spellCheck={false}
                 autoComplete="off"
-                aria-invalid={tokenError ? true : undefined}
                 aria-describedby={tokenError ? 'connection-token-error' : undefined}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
@@ -136,33 +145,22 @@ export function ConnectionForm() {
                   }
                 }}
               />
-              {tokenError && (
-                <span className="field-error" id="connection-token-error" role="alert">
-                  {tokenError}
-                </span>
-              )}
-            </label>
+            </Field>
           )}
         </div>
 
         <div className="form-actions">
           {!devProxyAuth && (
-            <button type="button" className="btn btn-primary" onClick={submit}>
+            <Button variant="primary" onClick={submit}>
               {connectionState === 'open' ? t('connection.reconnect') : t('connection.connect')}
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
-            className="btn"
-            onClick={retry}
-            disabled={!token.trim() || connectionState === 'open'}
-          >
+          <Button onClick={retry} disabled={!token.trim() || connectionState === 'open'}>
             {t('connection.retryNow')}
-          </button>
+          </Button>
           {!devProxyAuth && (
-            <button
-              type="button"
-              className="btn btn-danger-ghost"
+            <Button
+              variant="dangerGhost"
               onClick={() => {
                 disconnect();
                 setTokenDraft('');
@@ -171,7 +169,7 @@ export function ConnectionForm() {
               disabled={!token.trim()}
             >
               {t('connection.disconnect')}
-            </button>
+            </Button>
           )}
         </div>
 
@@ -180,47 +178,90 @@ export function ConnectionForm() {
             {lastError}
           </p>
         )}
-      </section>
+      </Section>
 
-      <section className="panel">
-        <h2 className="section-title">{t('connection.diagnostics')}</h2>
-        <dl className="diag-list">
-          <dt>{t('connection.state')}</dt>
-          <dd>{stateLabel(connectionState)}</dd>
-          <dt>Gateway</dt>
-          <dd className="mono">{displayGatewayUrl(gatewayUrl, window.location.origin)}</dd>
-          <dt>{t('connection.protocol')}</dt>
-          <dd className="mono">
-            {hello ? `v${hello.protocol.version}` : '—'}
-            {hello?.protocol.features.includes('tls') ? ' · TLS' : ''}
-          </dd>
-          <dt>{t('connection.node')}</dt>
-          <dd className="mono">{current ? (nodeNames.get(nodeKeyOf(current)) ?? '—') : '—'}</dd>
-          <dt>{t('connection.tenant')}</dt>
-          <dd className="mono">{tenantId ?? '—'}</dd>
-          <dt>{t('connection.latestSeq')}</dt>
-          <dd className="mono">{hello ? hello.latest_seq : '—'}</dd>
-          <dt>{t('connection.featureCount')}</dt>
-          <dd className="mono">
-            {hello?.protocol.features.length ?? '—'}
-            {hello
-              ? t('connection.featureList', { features: hello.protocol.features.join(', ') })
-              : ''}
-          </dd>
-          <dt>Close code</dt>
-          <dd className="mono">
-            {closeCode === null ? '—' : closeCode}
-            {closeCode === 4401
-              ? t('connection.closeCodeToken')
-              : closeCode === 4403
-                ? t('connection.closeCodeForbidden')
-                : closeCode === 4400
-                  ? t('connection.closeCodeProtocol')
-                  : ''}
-          </dd>
-        </dl>
-        {!hello && <p className="section-desc">{t('connection.failureHint')}</p>}
-      </section>
+      <Section title={t('connection.diagnostics')}>
+        <KeyValueList
+          items={[
+            {
+              key: 'state',
+              label: t('connection.state'),
+              value: stateLabel(connectionState),
+            },
+            {
+              key: 'gateway',
+              label: 'Gateway',
+              value: (
+                <span className="font-mono">
+                  {displayGatewayUrl(gatewayUrl, window.location.origin)}
+                </span>
+              ),
+            },
+            {
+              key: 'protocol',
+              label: t('connection.protocol'),
+              value: (
+                <span className="font-mono">
+                  {hello ? `v${hello.protocol.version}` : '—'}
+                  {hello?.protocol.features.includes('tls') ? ' · TLS' : ''}
+                </span>
+              ),
+            },
+            {
+              key: 'node',
+              label: t('connection.node'),
+              value: (
+                <span className="font-mono">
+                  {current ? (nodeNames.get(nodeKeyOf(current)) ?? '—') : '—'}
+                </span>
+              ),
+            },
+            {
+              key: 'tenant',
+              label: t('connection.tenant'),
+              value: <span className="font-mono">{tenantId ?? '—'}</span>,
+            },
+            {
+              key: 'latestSeq',
+              label: t('connection.latestSeq'),
+              value: <span className="font-mono">{hello ? hello.latest_seq : '—'}</span>,
+            },
+            {
+              key: 'featureCount',
+              label: t('connection.featureCount'),
+              value: (
+                <span className="font-mono">
+                  {hello?.protocol.features.length ?? '—'}
+                  {hello
+                    ? t('connection.featureList', {
+                        features: hello.protocol.features.join(', '),
+                      })
+                    : ''}
+                </span>
+              ),
+            },
+            {
+              key: 'closeCode',
+              label: 'Close code',
+              value: (
+                <span className="font-mono">
+                  {closeCode === null ? '—' : closeCode}
+                  {closeCode === 4401
+                    ? t('connection.closeCodeToken')
+                    : closeCode === 4403
+                      ? t('connection.closeCodeForbidden')
+                      : closeCode === 4400
+                        ? t('connection.closeCodeProtocol')
+                        : ''}
+                </span>
+              ),
+            },
+          ]}
+        />
+        {!hello && (
+          <p className="mt-1.5 max-w-prose text-md text-muted">{t('connection.failureHint')}</p>
+        )}
+      </Section>
 
       <p className="sr-only" aria-live="polite">
         {epoch > 0 && connectionState === 'open' ? t('connection.connected') : ''}

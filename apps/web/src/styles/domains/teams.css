@@ -1,19 +1,8 @@
 /* ─────────────────────────────────────────────────────────────
-   Teams（0.25）：跨节点列表 + 详情工具栏 + Team 表单。
-   行 / 卡片骨架复用 nodes.css 的 `.net-*`；此处只保留 Team 专属部分。
+   Teams（0.25）：跨节点列表 + 详情工具栏。
+   列表 / 卡片 / 表单已迁到 L3 utilities；这里只保留 720px 媒体仍依赖的
+   `.teams-grid` / `.teams-detail-head`。
    ───────────────────────────────────────────────────────────── */
-
-.teams-view {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.teams-detail {
-  flex: 1 1 auto;
-  min-height: 0;
-}
 
 .teams-detail-head {
   display: flex;
@@ -24,89 +13,6 @@
   padding: var(--space-3) var(--space-4) 0;
 }
 
-.teams-detail-node {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.teams-detail-actions {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.teams-node-badge,
-.teams-node-current {
-  padding: 2px 8px;
-  border-radius: var(--radius-pill);
-  font-size: var(--text-xs);
-  white-space: nowrap;
-}
-
-.teams-node-badge {
-  background: var(--surface-sunken);
-  color: var(--muted);
-}
-
-.teams-node-current {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
-
-.teams-partial {
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-size: var(--text-sm);
-}
-
-.teams-nodes {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.teams-node-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.teams-node-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--line);
-}
-
-.teams-node-name {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.teams-node-error {
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--danger-soft);
-  color: var(--danger);
-  font-size: var(--text-sm);
-}
-
-.teams-node-empty {
-  margin: 0;
-  padding: var(--space-2) 0;
-  font-size: var(--text-sm);
-}
-
 .teams-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -114,87 +20,6 @@
   margin: var(--space-1) 0 0;
   padding: 0;
   list-style: none;
-}
-
-.teams-card {
-  gap: var(--space-2);
-}
-
-.teams-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.teams-card-name {
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.teams-card-archived {
-  flex: none;
-  padding: 1px 8px;
-  border-radius: var(--radius-pill);
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-size: var(--text-xs);
-}
-
-.teams-card-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-
-.teams-card-desc {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--text-sm);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.team-chat-archived {
-  padding: 1px 8px;
-  border-radius: var(--radius-pill);
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-size: var(--text-xs);
-}
-
-.team-chat-archived-hint {
-  color: var(--faint);
-  font-size: var(--text-xs);
-}
-
-/* ── Team 表单（Create 弹窗 / Edit 整页共用）────────────── */
-
-.team-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.team-form .form-grid {
-  margin-top: var(--space-1);
-}
-
-.team-form textarea.input {
-  min-height: 64px;
-  resize: vertical;
-  font-family: inherit;
-}
-
-.team-form .input[readonly] {
-  background: var(--surface-deep);
-  color: var(--muted);
 }
 
 @media (max-width: 720px) {

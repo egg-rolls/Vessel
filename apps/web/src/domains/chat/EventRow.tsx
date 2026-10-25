@@ -34,9 +34,11 @@ function ToolPayload({ label, value, open }: { label: string; value: unknown; op
   const text = payloadText(value);
   if (!text) return null;
   return (
-    <details className="event-details" open={open}>
-      <summary className="event-summary">{label}</summary>
-      <pre className="event-payload">{text}</pre>
+    <details className="ml-2 inline-block align-top" open={open}>
+      <summary className="inline cursor-pointer text-sm text-accent">{label}</summary>
+      <pre className="mt-1.5 max-h-72 max-w-3xl overflow-auto rounded-sm bg-deep px-2.5 py-2 font-mono text-sm leading-relaxed text-muted whitespace-pre-wrap wrap-anywhere">
+        {text}
+      </pre>
     </details>
   );
 }
@@ -53,12 +55,14 @@ function renderEventBody(event: RunEvent) {
       const args = d.arguments !== undefined ? d.arguments : d.args;
       return (
         <>
-          <span className="mono">{d.tool_name ?? 'tool'}</span>
+          <span className="font-mono text-md">{d.tool_name ?? 'tool'}</span>
           {args !== undefined && (
             <>
-              <span className="dim">{truncate(payloadText(args), 160)}</span>
+              <span className="text-muted">{truncate(payloadText(args), 160)}</span>
               <ToolPayload label={t('chat.event.args')} value={args} />
-              {d.truncated === true && <span className="dim">{t('chat.event.truncated')}</span>}
+              {d.truncated === true && (
+                <span className="text-muted">{t('chat.event.truncated')}</span>
+              )}
             </>
           )}
         </>
@@ -73,13 +77,15 @@ function renderEventBody(event: RunEvent) {
       };
       return (
         <>
-          <span className="mono">{d.tool_name ?? 'tool'}</span>
-          {d.duration_ms != null && <span className="dim">{d.duration_ms}ms</span>}
+          <span className="font-mono text-md">{d.tool_name ?? 'tool'}</span>
+          {d.duration_ms != null && <span className="text-muted">{d.duration_ms}ms</span>}
           {d.result !== undefined && (
             <>
-              <span className="dim">{truncate(payloadText(d.result), 160)}</span>
+              <span className="text-muted">{truncate(payloadText(d.result), 160)}</span>
               <ToolPayload label={t('chat.event.result')} value={d.result} />
-              {d.truncated === true && <span className="dim">{t('chat.event.truncated')}</span>}
+              {d.truncated === true && (
+                <span className="text-muted">{t('chat.event.truncated')}</span>
+              )}
             </>
           )}
         </>
@@ -90,8 +96,8 @@ function renderEventBody(event: RunEvent) {
       const meta = formatErrorMeta(errorMetaOf(event.data));
       return (
         <>
-          <span className="mono">{d.tool_name ?? 'tool'}</span>
-          {meta && <span className="error-meta mono">{meta}</span>}
+          <span className="font-mono text-md">{d.tool_name ?? 'tool'}</span>
+          {meta && <span className="error-meta font-mono tabular-nums">{meta}</span>}
           <ToolPayload label={t('chat.event.errorExpanded')} value={d.error ?? 'error'} open />
         </>
       );
@@ -100,8 +106,8 @@ function renderEventBody(event: RunEvent) {
       const d = event.data as { guardrail_name?: string; reason?: string };
       return (
         <>
-          <span className="mono">{d.guardrail_name ?? 'guardrail'}</span>
-          <span className="dim">{truncate(d.reason ?? '', 160)}</span>
+          <span className="font-mono text-md">{d.guardrail_name ?? 'guardrail'}</span>
+          <span className="text-muted">{truncate(d.reason ?? '', 160)}</span>
         </>
       );
     }
@@ -109,8 +115,8 @@ function renderEventBody(event: RunEvent) {
       const d = event.data as { guardrail_name?: string; stage?: string };
       return (
         <>
-          <span className="mono">{d.guardrail_name ?? 'guardrail'}</span>
-          <span className="dim">{d.stage ?? ''}</span>
+          <span className="font-mono text-md">{d.guardrail_name ?? 'guardrail'}</span>
+          <span className="text-muted">{d.stage ?? ''}</span>
         </>
       );
     }
@@ -121,12 +127,12 @@ function renderEventBody(event: RunEvent) {
       const parts: string[] = [];
       if (messages !== null) parts.push(`${messages} msgs`);
       if (tools > 0) parts.push(`${tools} tools`);
-      return <span className="dim">{parts.join(' · ')}</span>;
+      return <span className="text-muted">{parts.join(' · ')}</span>;
     }
     case 'llm.response': {
       const d = event.data as { finish_reason?: string; usage?: { total_tokens?: number } };
       return (
-        <span className="dim">
+        <span className="text-muted">
           {d.finish_reason ?? ''}
           {d.usage?.total_tokens != null ? ` · ${d.usage.total_tokens} tok` : ''}
         </span>
@@ -137,23 +143,40 @@ function renderEventBody(event: RunEvent) {
       const meta = formatErrorMeta(errorMetaOf(event.data));
       return (
         <>
-          {meta && <span className="error-meta mono">{meta}</span>}
-          <span className="err">{truncate(d.error ?? 'error', 240)}</span>
+          {meta && <span className="error-meta font-mono tabular-nums">{meta}</span>}
+          <span className="text-danger">{truncate(d.error ?? 'error', 240)}</span>
         </>
       );
     }
     default:
-      return <span className="dim">{truncate(JSON.stringify(event.data), 200)}</span>;
+      return <span className="text-muted">{truncate(JSON.stringify(event.data), 200)}</span>;
   }
 }
 
+const TAG_TONE: Record<string, string> = {
+  'tag-tool-start': 'bg-info-soft text-info',
+  'tag-tool-done': 'bg-success-soft text-success',
+  'tag-tool-fail': 'bg-danger-soft text-danger',
+  'tag-error': 'bg-danger-soft text-danger',
+  'tag-guard': 'bg-warn-soft text-warn',
+  'tag-llm': 'bg-accent-soft text-accent',
+  'tag-raw': 'text-muted',
+};
+
 export function EventRow({ event }: { event: RunEvent }) {
   const tag = eventTag(event.type);
+  const indent = tag.cls.startsWith('tag-tool-') ? ' ml-2.5 pl-3' : '';
   return (
-    <div className={`row ${tag.cls}`}>
-      <span className="ts dim">{formatTimestamp(event.ts, { withMs: true })}</span>
-      <span className={`type-tag ${tag.cls}`}>{tag.label}</span>
-      <span className="event-body">{renderEventBody(event)}</span>
+    <div className={`flex items-baseline gap-2.5 py-1 text-md leading-relaxed text-muted${indent}`}>
+      <span className="font-mono text-sm tabular-nums text-faint">
+        {formatTimestamp(event.ts, { withMs: true })}
+      </span>
+      <span
+        className={`rounded-xs bg-sunken px-1.5 font-mono text-sm leading-4 tracking-wide whitespace-nowrap ${TAG_TONE[tag.cls] ?? 'text-faint'}`}
+      >
+        {tag.label}
+      </span>
+      <span className="min-w-0 flex-1 wrap-anywhere">{renderEventBody(event)}</span>
     </div>
   );
 }

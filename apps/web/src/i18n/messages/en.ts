@@ -206,13 +206,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'resize.nav': 'Resize navigation',
   'resize.sessions': 'Resize session list',
   'resize.chat': 'Resize conversation',
-  // 0.18 H2: no-longer-valid interactions are notice + dismiss only, never answerable.
-  'interaction.orphaned': 'No longer valid (run ended / process restarted)',
-  'interaction.orphaned.label': '{count} no longer valid',
-  'interaction.orphaned.bar': 'Request no longer valid ({count})',
-  'interaction.orphaned.listLabel': 'No-longer-valid interactions',
-  'interaction.orphaned.metaTool': 'tool {tool}',
-  'interaction.orphaned.metaAsk': 'ask',
+  // 0.18 H2 / 0.27: expired interactions only keep a one-shot toast; details live in Observe.
+  'interaction.orphaned.toast': '{count} earlier requests are no longer valid',
   'chat.reasoning.summary': 'Thinking',
   // 0.17: placeholder while a run is running but has no visible content
   'chat.run.waiting': 'Generating…',
@@ -245,6 +240,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.tool.previewLines': 'Preview {shown}/{total} lines',
   'chat.tool.loadMore': 'Load more ({loaded}/{total} KB)',
   'chat.tool.showAll': 'Show all {total} lines',
+  'chat.tool.description': 'Description',
+  'chat.tool.descriptionUnavailable': 'Description unavailable',
+  'chat.tool.dialogLabel': 'Tool details: {name}',
+  'chat.tool.status.running': 'Running',
+  'chat.tool.status.done': 'Done',
+  'chat.tool.status.error': 'Failed',
   'ask.title': 'Agent question',
   'ask.goTo': 'Answer',
   'ask.pendingMore': '{count} more pending',
@@ -654,6 +655,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // Agents (global)
   'agents.title': 'Agents',
   'agents.description': 'Global view of every node’s Team roster.',
+  'agents.staleNode': 'Showing last successful data',
   'agents.empty': 'No Agent yet',
   'agents.emptyHint': 'Agents come only from each node’s present Team roster.',
   'agents.filter.node': 'Node',

@@ -9,7 +9,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { PageHeader } from '../../components/PageHeader';
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
-import { Button } from '../../components/ui';
+import { Button, KeyValueList, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -68,7 +68,7 @@ export function AgentDetailView({
   };
 
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={displayName}
         tenantId={tenantId}
@@ -91,54 +91,73 @@ export function AgentDetailView({
           </>
         }
       />
-      <div className="domain-content">
-        <section className="panel">
-          <div className="panel-header">
-            <h2 className="section-title">{t('agents.detail.title')}</h2>
-          </div>
-          <dl className="diag-list">
-            <dt>{t('agents.filter.node')}</dt>
-            <dd>{nodeNames.get(nodeKeyOf(node)) ?? '—'}</dd>
-            <dt>{t('agents.filter.team')}</dt>
-            <dd>
-              <button type="button" className="link-btn" onClick={onOpenTeam}>
-                {agent.team.name || agent.team.team_id}
-              </button>
-            </dd>
-            <dt>{t('agents.filter.state')}</dt>
-            <dd>
-              <StatusChip status={member.state} />
-            </dd>
-            <dt>{t('agents.filter.presence')}</dt>
-            <dd>{t(`agents.presence.${member.presence}`)}</dd>
-            <dt>{t('agents.detail.membership')}</dt>
-            <dd>{t(`team.membership.${member.membership}`)}</dd>
-            <dt>{t('agents.detail.visibility')}</dt>
-            <dd className="mono">{member.visibility}</dd>
-            <dt>{t('agents.detail.session')}</dt>
-            <dd>
-              {member.session_id ? (
-                <button
-                  type="button"
-                  className="link-btn"
-                  onClick={onOpenSession}
-                  disabled={!node.current}
-                >
-                  {t('team.member.currentSession')}
-                </button>
-              ) : (
-                '—'
-              )}
-            </dd>
-          </dl>
-          <details className="net-advanced">
-            <summary>{t('agents.detail.advanced')}</summary>
-            <dl className="diag-list">
-              <dt>{t('agents.detail.agentId')}</dt>
-              <dd className="mono">{member.agent_id}</dd>
-            </dl>
+      <div className="mt-5 flex flex-col gap-4">
+        <Section title={t('agents.detail.title')}>
+          <KeyValueList
+            items={[
+              {
+                key: 'node',
+                label: t('agents.filter.node'),
+                value: nodeNames.get(nodeKeyOf(node)) ?? '—',
+              },
+              {
+                key: 'team',
+                label: t('agents.filter.team'),
+                value: (
+                  <Button variant="link" onClick={onOpenTeam}>
+                    {agent.team.name || agent.team.team_id}
+                  </Button>
+                ),
+              },
+              {
+                key: 'state',
+                label: t('agents.filter.state'),
+                value: <StatusChip status={member.state} />,
+              },
+              {
+                key: 'presence',
+                label: t('agents.filter.presence'),
+                value: t(`agents.presence.${member.presence}`),
+              },
+              {
+                key: 'membership',
+                label: t('agents.detail.membership'),
+                value: t(`team.membership.${member.membership}`),
+              },
+              {
+                key: 'visibility',
+                label: t('agents.detail.visibility'),
+                value: <span className="font-mono">{member.visibility}</span>,
+              },
+              {
+                key: 'session',
+                label: t('agents.detail.session'),
+                value: member.session_id ? (
+                  <Button variant="link" onClick={onOpenSession} disabled={!node.current}>
+                    {t('team.member.currentSession')}
+                  </Button>
+                ) : (
+                  '—'
+                ),
+              },
+            ]}
+          />
+          <details className="mt-3 border-t border-line pt-2">
+            <summary className="cursor-pointer text-sm text-faint">
+              {t('agents.detail.advanced')}
+            </summary>
+            <KeyValueList
+              className="mt-2"
+              items={[
+                {
+                  key: 'agentId',
+                  label: t('agents.detail.agentId'),
+                  value: <span className="font-mono">{member.agent_id}</span>,
+                },
+              ]}
+            />
           </details>
-        </section>
+        </Section>
       </div>
 
       {closeOpen && (
@@ -147,9 +166,9 @@ export function AgentDetailView({
           body={
             <>
               <p>{t('agents.close.body')}</p>
-              <p className="mono">{displayName}</p>
+              <p className="font-mono">{displayName}</p>
               {closeError && (
-                <p className="field-error" role="alert">
+                <p className="text-xs text-danger leading-snug" role="alert">
                   {closeError}
                 </p>
               )}

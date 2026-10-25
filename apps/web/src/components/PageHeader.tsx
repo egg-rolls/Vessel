@@ -17,20 +17,32 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <header className="page-header">
-      <div className="page-heading">
-        <h1 className="page-title">{title}</h1>
-        {description && <div className="page-desc">{description}</div>}
-        <div className="page-scope">
+    <header className="flex items-center justify-between gap-4 max-compact:flex-col max-compact:items-start">
+      <div className="min-w-0">
+        <h1 className="break-words font-sans text-lg font-semibold leading-tight tracking-wide">
+          {title}
+        </h1>
+        {description && (
+          <div className="mt-0.5 text-md leading-normal text-muted">{description}</div>
+        )}
+        <div className="mt-1 flex flex-wrap gap-1.5">
           <Tooltip label={t('nav.tenantCurrent')}>
-            <span className="scope-chip">
+            <span className="rounded-full bg-sunken px-2 py-0.5 font-mono text-xs text-muted">
               {t('common.tenant')} {tenantId ?? '—'}
             </span>
           </Tooltip>
-          {scopeNote && <span className="scope-chip muted">{scopeNote}</span>}
+          {scopeNote && (
+            <span className="rounded-full bg-sunken px-2 py-0.5 font-mono text-xs text-faint">
+              {scopeNote}
+            </span>
+          )}
         </div>
       </div>
-      {actions && <div className="page-actions">{actions}</div>}
+      {actions && (
+        <div className="flex flex-none flex-wrap items-start gap-2 max-compact:w-full">
+          {actions}
+        </div>
+      )}
     </header>
   );
 }

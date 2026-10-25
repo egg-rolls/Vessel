@@ -202,13 +202,8 @@ export const messages = {
   'resize.nav': '调整导航宽度',
   'resize.sessions': '调整会话列表宽度',
   'resize.chat': '调整会话内容宽度',
-  // 0.18 H2：已失效（run 结束 / 进程重启）交互只提示 + 关闭，不可应答。
-  'interaction.orphaned': '已失效（run 已结束 / 进程重启）',
-  'interaction.orphaned.label': '共 {count} 个已失效',
-  'interaction.orphaned.bar': '请求已失效（共 {count} 个）',
-  'interaction.orphaned.listLabel': '已失效的交互',
-  'interaction.orphaned.metaTool': '工具 {tool}',
-  'interaction.orphaned.metaAsk': '提问',
+  // 0.18 H2 / 0.27：已失效交互只保留一次 toast；详情在 Observe → Attention。
+  'interaction.orphaned.toast': '有 {count} 个历史请求已失效',
   'chat.reasoning.summary': '思考过程',
   // 0.17：运行中但暂无可见内容的占位（不隐藏失败/终态）
   'chat.run.waiting': '正在思考…',
@@ -240,6 +235,12 @@ export const messages = {
   'chat.tool.previewLines': '预览 {shown}/{total} 行',
   'chat.tool.loadMore': '加载更多（{loaded}/{total} KB）',
   'chat.tool.showAll': '展开全部 {total} 行',
+  'chat.tool.description': '描述',
+  'chat.tool.descriptionUnavailable': '描述不可用',
+  'chat.tool.dialogLabel': '工具详情：{name}',
+  'chat.tool.status.running': '运行中',
+  'chat.tool.status.done': '完成',
+  'chat.tool.status.error': '失败',
   'ask.title': 'Agent 提问',
   'ask.goTo': '前往回答',
   'ask.pendingMore': '还有 {count} 个待处理',
@@ -639,6 +640,7 @@ export const messages = {
   // Agents（全局）
   'agents.title': '智能体',
   'agents.description': '所有节点 Team roster 的全局视图。',
+  'agents.staleNode': '显示上次成功的数据',
   'agents.empty': '还没有 Agent',
   'agents.emptyHint': 'Agent 只来自各节点 Team 的 present roster。',
   'agents.filter.node': '节点',

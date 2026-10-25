@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { SegmentedTabs } from '../../components/Tabs';
-import { SearchInput } from '../../components/ui';
+import { Badge, DataTable, SearchInput, Section, Stat } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import {
@@ -65,7 +65,7 @@ export function CapabilitiesView() {
   }));
 
   return (
-    <div className="settings-section">
+    <div className="flex flex-col gap-6">
       {!connected && <StaleNotice message={t('capabilities.stale')} onRetry={resource.reload} />}
       {resource.state.status === 'error' && (
         <StaleNotice
@@ -73,35 +73,35 @@ export function CapabilitiesView() {
           onRetry={resource.reload}
         />
       )}
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="section-title">{t('capabilities.title')}</h2>
-          <span className="mono dim">
+      <Section
+        title={t('capabilities.title')}
+        actions={
+          <span className="font-mono text-md text-muted">
             v{manifest.version} · schema {manifest.config_schema_version}
           </span>
-        </div>
+        }
+      >
         {counts && (
-          <div className="stats-grid">
-            <div className="stat">
-              <span className="stat-value">{counts.methods}</span>
-              <span className="stat-label">
-                {t('capabilities.methodsCount', {
-                  read: counts.read,
-                  write: counts.write,
-                  admin: counts.admin,
-                })}
-              </span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">{counts.tools}</span>
-              <span className="stat-label">{t('capabilities.tools')}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">
-                {counts.enabledPlugins}/{counts.plugins}
-              </span>
-              <span className="stat-label">{t('capabilities.pluginsEnabled')}</span>
-            </div>
+          <div className="my-3 flex flex-wrap gap-2.5">
+            <Stat
+              className="min-w-40 flex-1"
+              value={counts.methods}
+              label={t('capabilities.methodsCount', {
+                read: counts.read,
+                write: counts.write,
+                admin: counts.admin,
+              })}
+            />
+            <Stat
+              className="min-w-40 flex-1"
+              value={counts.tools}
+              label={t('capabilities.tools')}
+            />
+            <Stat
+              className="min-w-40 flex-1"
+              value={`${counts.enabledPlugins}/${counts.plugins}`}
+              label={t('capabilities.pluginsEnabled')}
+            />
           </div>
         )}
         <SegmentedTabs
@@ -110,91 +110,102 @@ export function CapabilitiesView() {
           value={tab}
           onChange={setTab}
         />
-        <div className="filter-bar">
+        <div className="mt-3.5 flex flex-wrap items-center gap-2">
           <SearchInput
             value={query}
             onChange={setQuery}
             placeholder={t(`capabilities.search.${tab}`)}
             ariaLabel={t('capabilities.searchLabel')}
+            className="grow basis-60 max-w-search"
           />
-          <span className="count-pill">
+          <Badge>
             {tab === 'methods'
               ? result?.methods.length
               : tab === 'tools'
                 ? result?.tools.length
                 : result?.plugins.length}
-          </span>
+          </Badge>
         </div>
-      </section>
+      </Section>
 
       {tab === 'methods' &&
         (methodGroups.length === 0 ? (
-          <p className="section-desc">{t('capabilities.noMatchMethods')}</p>
+          <p className="text-md text-muted">{t('capabilities.noMatchMethods')}</p>
         ) : (
           methodGroups.map((group) => (
-            <section className="panel" key={group.permission}>
-              <h3 className="section-title">
-                {t('capabilities.methodsTitle', { permission: group.permission })}{' '}
-                <span className="count-pill">{group.methods.length}</span>
-              </h3>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th scope="col">{t('capabilities.col.method')}</th>
-                    <th scope="col">{t('capabilities.col.permission')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {group.methods.map((method) => (
-                    <tr key={method.name}>
-                      <td className="mono">{method.name}</td>
-                      <td>
-                        <span className={`perm-badge perm-${group.permission}`}>
-                          {group.permission}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
+            <Section
+              key={group.permission}
+              titleAs="h3"
+              title={
+                <>
+                  {t('capabilities.methodsTitle', { permission: group.permission })}{' '}
+                  <Badge>{group.methods.length}</Badge>
+                </>
+              }
+            >
+              <DataTable
+                columns={[
+                  {
+                    key: 'method',
+                    header: t('capabilities.col.method'),
+                    cellClassName: 'font-mono',
+                    cell: (method) => method.name,
+                  },
+                  {
+                    key: 'permission',
+                    header: t('capabilities.col.permission'),
+                    cell: () => (
+                      <span className={`perm-badge perm-${group.permission}`}>
+                        {group.permission}
+                      </span>
+                    ),
+                  },
+                ]}
+                rows={group.methods}
+                rowKey={(method) => method.name}
+              />
+            </Section>
           ))
         ))}
 
       {tab === 'tools' && (
-        <section className="panel">
-          <h2 className="section-title">
-            {t('capabilities.toolsTitle')}{' '}
-            <span className="count-pill">{result?.tools.length ?? 0}</span>
-          </h2>
+        <Section
+          title={
+            <>
+              {t('capabilities.toolsTitle')} <Badge>{result?.tools.length ?? 0}</Badge>
+            </>
+          }
+        >
           {result && result.tools.length === 0 ? (
-            <p className="section-desc">{t('capabilities.noMatchTools')}</p>
+            <p className="text-md text-muted">{t('capabilities.noMatchTools')}</p>
           ) : (
             <ul className="plain-list">
               {result?.tools.map((tool) => (
                 <li key={tool.name}>
-                  <span className="mono">{tool.name}</span>
-                  {tool.description && <span className="dim"> — {tool.description}</span>}
+                  <span className="font-mono">{tool.name}</span>
+                  {tool.description && <span className="text-muted"> — {tool.description}</span>}
                 </li>
               ))}
             </ul>
           )}
-        </section>
+        </Section>
       )}
 
       {tab === 'plugins' && (
-        <section className="panel">
-          <h2 className="section-title">
-            {t('capabilities.pluginsTitle')}{' '}
-            <span className="count-pill">{result?.plugins.length ?? 0}</span>
-          </h2>
+        <Section
+          title={
+            <>
+              {t('capabilities.pluginsTitle')} <Badge>{result?.plugins.length ?? 0}</Badge>
+            </>
+          }
+        >
           {result && result.plugins.length === 0 ? (
-            <p className="section-desc">{t('capabilities.noMatchPlugins')}</p>
+            <p className="text-md text-muted">{t('capabilities.noMatchPlugins')}</p>
           ) : (
             <ul className="plain-list">
               {result?.plugins.map((plugin) => (
                 <li key={plugin.name}>
-                  <span className="mono">{plugin.name}</span>
+                  <span className="font-mono">{plugin.name}</span>
                   <span className={`perm-badge ${plugin.enabled ? 'perm-read' : ''}`}>
                     {plugin.enabled ? t('capabilities.enabled') : t('capabilities.disabled')}
                   </span>
@@ -202,7 +213,7 @@ export function CapabilitiesView() {
               ))}
             </ul>
           )}
-        </section>
+        </Section>
       )}
     </div>
   );

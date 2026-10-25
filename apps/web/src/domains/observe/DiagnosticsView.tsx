@@ -7,8 +7,9 @@
 import { useMemo } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
+import { Button, DataTable, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
-import type { RunEvent } from '../../gateway/types';
+import type { RunEvent, SchedulerRunSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import {
   DIAGNOSTIC_EVENT_TYPES,
@@ -81,50 +82,62 @@ export function DiagnosticsView() {
   const eventsError = events.state.status === 'error' ? events.state.error : null;
 
   return (
-    <div className="settings-section">
-      {!connected && <p className="dim">{t('observe.diagnostics.disconnected')}</p>}
+    <div className="flex flex-col gap-6">
+      {!connected && <p className="text-muted">{t('observe.diagnostics.disconnected')}</p>}
       {healthError && <ErrorState message={healthError} onRetry={health.reload} />}
       {eventsError && <ErrorState message={eventsError} onRetry={events.reload} />}
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="section-title">{t('observe.diagnostics.queueTitle')}</h2>
-          <button type="button" className="btn btn-small" onClick={health.reload}>
+      <Section
+        title={t('observe.diagnostics.queueTitle')}
+        actions={
+          <Button size="small" onClick={health.reload}>
             {t('observe.diagnostics.refresh')}
-          </button>
-        </div>
+          </Button>
+        }
+      >
         {!health.state || health.state.status === 'loading' ? (
           <LoadingState label={t('observe.diagnostics.loading')} rows={2} />
         ) : queue.length === 0 ? (
           <EmptyState title={t('observe.diagnostics.queueEmpty')} />
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>run</th>
-                <th>{t('observe.diagnostics.col.status')}</th>
-                <th>{t('observe.diagnostics.col.session')}</th>
-                <th>{t('observe.diagnostics.col.queuePosition')}</th>
-                <th>{t('observe.diagnostics.col.waitReason')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {queue.map((row) => (
-                <tr key={`${row.status}:${row.run_id}`}>
-                  <td className="mono">{row.run_id}</td>
-                  <td>{row.status}</td>
-                  <td className="mono">{row.session_id ?? '—'}</td>
-                  <td>{row.queue_position ?? '—'}</td>
-                  <td>{row.wait_reason ?? t('observe.diagnostics.noWaitReason')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable<SchedulerRunSummary>
+            columns={[
+              {
+                key: 'run',
+                header: 'run',
+                cellClassName: 'font-mono',
+                cell: (row) => row.run_id,
+              },
+              {
+                key: 'status',
+                header: t('observe.diagnostics.col.status'),
+                cell: (row) => row.status,
+              },
+              {
+                key: 'session',
+                header: t('observe.diagnostics.col.session'),
+                cellClassName: 'font-mono',
+                cell: (row) => row.session_id ?? '—',
+              },
+              {
+                key: 'queuePosition',
+                header: t('observe.diagnostics.col.queuePosition'),
+                cell: (row) => row.queue_position ?? '—',
+              },
+              {
+                key: 'waitReason',
+                header: t('observe.diagnostics.col.waitReason'),
+                cell: (row) => row.wait_reason ?? t('observe.diagnostics.noWaitReason'),
+              },
+            ]}
+            rows={queue}
+            rowKey={(row) => `${row.status}:${row.run_id}`}
+          />
         )}
         {resourceData(health.state)?.runtime && (
-          <p className="dim">
+          <p className="text-muted">
             {t('observe.diagnostics.activeRun')}:{' '}
-            <span className="mono">
+            <span className="font-mono">
               {resourceData(health.state)?.runtime?.active_run_id ?? '—'}
             </span>{' '}
             ·{' '}
@@ -134,29 +147,30 @@ export function DiagnosticsView() {
             })}
           </p>
         )}
-      </section>
+      </Section>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="section-title">{t('observe.diagnostics.errorsTitle')}</h2>
-          <button type="button" className="btn btn-small" onClick={events.reload}>
+      <Section
+        title={t('observe.diagnostics.errorsTitle')}
+        actions={
+          <Button size="small" onClick={events.reload}>
             {t('observe.diagnostics.refresh')}
-          </button>
-        </div>
-        {!includeDiagnostics && <p className="dim">{t('observe.diagnostics.gateHint')}</p>}
+          </Button>
+        }
+      >
+        {!includeDiagnostics && <p className="text-muted">{t('observe.diagnostics.gateHint')}</p>}
         {entries.length === 0 ? (
           <EmptyState title={t('observe.diagnostics.empty')} />
         ) : (
-          <ul className="diag-list diag-errors">
+          <ul className="m-0 flex list-none flex-col gap-1.5 p-0 text-md">
             {entries.map((entry) => (
               <li key={`${entry.type}:${entry.run_id}:${entry.ts}`}>
-                <span className="dim">{formatTime(entry.ts)}</span>{' '}
-                <span className="mono">{entry.type}</span>{' '}
-                <span className="dim">[{entry.category}]</span>
-                {entry.errorCode && <span className="mono"> · {entry.errorCode}</span>}
-                {entry.phase && <span className="dim"> · {entry.phase}</span>}
+                <span className="text-muted">{formatTime(entry.ts)}</span>{' '}
+                <span className="font-mono">{entry.type}</span>{' '}
+                <span className="text-muted">[{entry.category}]</span>
+                {entry.errorCode && <span className="font-mono"> · {entry.errorCode}</span>}
+                {entry.phase && <span className="text-muted"> · {entry.phase}</span>}
                 {entry.retryable !== undefined && (
-                  <span className="dim">
+                  <span className="text-muted">
                     {' '}
                     ·{' '}
                     {t(
@@ -167,12 +181,12 @@ export function DiagnosticsView() {
                   </span>
                 )}
                 {entry.message && <div>{entry.message}</div>}
-                <span className="mono dim">{entry.run_id}</span>
+                <span className="font-mono text-muted">{entry.run_id}</span>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </Section>
     </div>
   );
 }

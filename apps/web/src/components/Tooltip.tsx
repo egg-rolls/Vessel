@@ -14,6 +14,7 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { cn } from './ui/cn';
 
 const SHOW_DELAY = 300;
 const GAP = 8;
@@ -195,12 +196,15 @@ export function Tooltip({
               ref={tipRef}
               id={id}
               role="tooltip"
-              className="tooltip"
+              className="tooltip-fade pointer-events-none fixed z-tooltip max-w-60 rounded-sm bg-raised px-2 py-1 text-xs leading-relaxed text-ink shadow-elev-2"
               data-placement={position?.side ?? placement}
               style={tipStyle}
             >
               <span
-                className="tooltip-arrow"
+                className={cn(
+                  'absolute size-2 -translate-x-1/2 rotate-45 rounded-xs bg-raised',
+                  (position?.side ?? placement) === 'top' ? '-bottom-1' : '-top-1',
+                )}
                 aria-hidden="true"
                 style={{ left: position?.arrow ?? 0 }}
               />
@@ -213,6 +217,10 @@ export function Tooltip({
   );
 }
 
+/** icon-only 按钮的共享视觉：圆形、透明底、hover 变亮、触控目标 ≥44px。 */
+export const iconButtonClass =
+  'inline-flex size-control flex-none items-center justify-center rounded-full bg-transparent text-lg leading-none text-faint transition-colors hover:bg-hover hover:text-ink pointer-coarse:min-h-touch pointer-coarse:min-w-touch forced-colors:border disabled:opacity-45 disabled:cursor-not-allowed';
+
 /** icon-only 按钮：始终带 aria-label + tooltip。 */
 export function IconButton({
   label,
@@ -222,12 +230,7 @@ export function IconButton({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
   return (
     <Tooltip label={label}>
-      <button
-        type="button"
-        className={`icon-btn ${className ?? ''}`.trim()}
-        aria-label={label}
-        {...rest}
-      >
+      <button type="button" className={cn(iconButtonClass, className)} aria-label={label} {...rest}>
         {children}
       </button>
     </Tooltip>

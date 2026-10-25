@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { t } from '../i18n';
-import { Tooltip } from './Tooltip';
+import { iconButtonClass, Tooltip } from './Tooltip';
+import { cn } from './ui';
 
 export interface ActionMenuItem {
   id: string;
@@ -18,10 +19,13 @@ export function ActionMenu({
   label = t('common.moreActions'),
   items,
   disabled = false,
+  className,
 }: {
   label?: string;
   items: readonly ActionMenuItem[];
   disabled?: boolean;
+  /** 追加到触发器容器的布局 / 显隐类（如列表 hover 显隐）。 */
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -75,12 +79,12 @@ export function ActionMenu({
   }, [open]);
 
   return (
-    <span className="action-menu">
+    <span className={cn('relative inline-flex flex-none', className)}>
       <Tooltip label={label}>
         <button
           ref={buttonRef}
           type="button"
-          className="icon-btn"
+          className={iconButtonClass}
           aria-label={label}
           aria-haspopup="menu"
           aria-expanded={open}
@@ -92,12 +96,21 @@ export function ActionMenu({
         </button>
       </Tooltip>
       {open && (
-        <div ref={menuRef} id={menuId} className="menu" role="menu" aria-label={label}>
+        <div
+          ref={menuRef}
+          id={menuId}
+          className="absolute right-0 top-full z-20 mt-1 flex min-w-40 flex-col rounded-lg bg-raised p-1 shadow-elev-3"
+          role="menu"
+          aria-label={label}
+        >
           {items.map((item) => (
             <button
               key={item.id}
               type="button"
-              className={`menu-item ${item.danger ? 'danger' : ''}`.trim()}
+              className={cn(
+                'rounded-md bg-transparent px-2.5 py-2 text-left text-sm text-ink transition-colors hover:bg-hover disabled:opacity-45',
+                item.danger && 'text-danger hover:bg-danger-soft',
+              )}
               role="menuitem"
               disabled={item.disabled}
               onClick={() => {

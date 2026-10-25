@@ -11,7 +11,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Button, SearchInput } from '../../components/ui';
+import { Badge, Button, SearchInput } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
@@ -157,7 +157,7 @@ function NodesList({
     );
   } else {
     body = (
-      <ul className="net-list">
+      <ul className="flex flex-col gap-2">
         {visible.map((node) => (
           <NodeRow
             key={nodeKeyOf(node)}
@@ -173,7 +173,7 @@ function NodesList({
   }
 
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={t('nodes.title')}
         tenantId={tenantId}
@@ -183,14 +183,15 @@ function NodesList({
           </Button>
         }
       />
-      <div className="domain-content">
+      <div className="mt-5 flex flex-col gap-4">
         {nodes.length > 0 && (
-          <div className="filter-bar net-toolbar">
+          <div className="net-toolbar mt-3.5">
             <SearchInput
               value={query}
               onChange={setQuery}
               placeholder={t('nodes.search')}
               ariaLabel={t('nodes.search')}
+              className="grow basis-60 max-w-search"
             />
           </div>
         )}
@@ -262,28 +263,33 @@ function NodeRow({
       : t('nodes.health.loading');
 
   return (
-    <li className="net-row net-node-row">
-      <div className="net-row-main">
-        <span className="net-row-title">
+    <li className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-line bg-raised px-4 py-3">
+      <div className="flex min-w-0 flex-1 basis-55 flex-col gap-0.5">
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
           {displayName}
-          {node.current && <span className="net-badge">{t('nodes.current')}</span>}
+          {node.current && <Badge tone="accent">{t('nodes.current')}</Badge>}
         </span>
-        <span className="net-row-sub mono">{displayGatewayUrl(node.url, pageOrigin())}</span>
+        <span className="min-w-0 wrap-anywhere font-mono text-xs text-faint">
+          {displayGatewayUrl(node.url, pageOrigin())}
+        </span>
       </div>
       <StatusChip status={status} label={statusLabelValue} />
-      <div className="net-row-meta">
+      <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-2 text-sm tabular-nums text-muted">
         <span>
-          <strong>{summary ? summary.teams : '—'}</strong> {t('nodes.field.teams')}
+          <strong className="font-semibold text-ink">{summary ? summary.teams : '—'}</strong>{' '}
+          {t('nodes.field.teams')}
         </span>
         <span>
-          <strong>{summary ? summary.agents : '—'}</strong> {t('nodes.field.agents')}
+          <strong className="font-semibold text-ink">{summary ? summary.agents : '—'}</strong>{' '}
+          {t('nodes.field.agents')}
         </span>
         <span>
-          <strong>{summary ? summary.online : '—'}</strong> {t('nodes.field.online')}
+          <strong className="font-semibold text-ink">{summary ? summary.online : '—'}</strong>{' '}
+          {t('nodes.field.online')}
         </span>
-        <span className="net-row-sub">{heartbeat}</span>
+        <span className="min-w-0 wrap-anywhere text-xs text-faint">{heartbeat}</span>
       </div>
-      <div className="net-row-actions">
+      <div className="ml-auto inline-flex flex-none flex-wrap items-center gap-2">
         <Button size="small" onClick={onOpen}>
           {t('hub.nodes.open')}
         </Button>

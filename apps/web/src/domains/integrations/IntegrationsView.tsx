@@ -14,7 +14,7 @@ import {
 import { StatusChip, statusLabel } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
-import { SearchInput } from '../../components/ui';
+import { Badge, Button, KeyValueList, SearchInput, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import { buildMcpPaletteActions } from '../../state/palette-actions';
@@ -52,7 +52,7 @@ export function IntegrationsView({
   useLocale();
   const { tenantId } = useConnection();
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={t('integrations.title')}
         description={t('integrations.description')}
@@ -66,7 +66,7 @@ export function IntegrationsView({
         panelId="integrations-panel"
       />
       <div
-        className="domain-content"
+        className="mt-5 flex flex-col gap-4"
         id="integrations-panel"
         role="tabpanel"
         aria-label={t('integrations.panelLabel')}
@@ -137,29 +137,30 @@ function ToolsPanel() {
   }
 
   return (
-    <div className="settings-section">
+    <div className="flex flex-col gap-6">
       {!connected && tools.length > 0 && (
         <StaleNotice message={t('integrations.tools.stale')} onRetry={resource.reload} />
       )}
       {error && tools.length > 0 && (
         <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
       )}
-      <div className="filter-bar">
+      <div className="flex flex-wrap items-center gap-2">
         <SearchInput
           value={query}
           onChange={setQuery}
           placeholder={t('integrations.tools.searchPlaceholder')}
           ariaLabel={t('integrations.tools.searchLabel')}
+          className="grow basis-60 max-w-search"
         />
-        <button
-          type="button"
-          className={`filter-chip ${onlyConfirm ? 'active' : ''}`.trim()}
+        <Button
+          variant="chip"
+          size="small"
           aria-pressed={onlyConfirm}
           onClick={() => setOnlyConfirm((value) => !value)}
         >
           {t('integrations.tools.onlyConfirm', { count: confirmCount })}
-        </button>
-        <span className="count-pill">
+        </Button>
+        <span className="ml-1.5 inline-block rounded-full bg-sunken px-1.5 py-0.5 font-mono text-xs text-muted">
           {filtered.length}/{tools.length}
         </span>
       </div>
@@ -169,44 +170,47 @@ function ToolsPanel() {
         <EmptyState
           title={t('integrations.tools.noMatch')}
           action={
-            <button
-              type="button"
-              className="btn"
+            <Button
               onClick={() => {
                 setQuery('');
                 setOnlyConfirm(false);
               }}
             >
               {t('common.clearFilters')}
-            </button>
+            </Button>
           }
         />
       ) : (
-        <div className="card-grid">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {filtered.map((tool, index) => {
             const server = mcpServerOf(tool.name);
             const open = expanded.has(tool.name);
             const panelId = `${panelBaseId}-tool-${index}`;
             return (
-              <article className="card tool-catalog-card" key={tool.name}>
+              <article
+                className="flex flex-col overflow-visible rounded-md bg-raised shadow-elev-1"
+                key={tool.name}
+              >
                 <button
                   type="button"
-                  className="card-header tool-catalog-summary"
+                  className="flex min-h-control w-full items-center gap-2 rounded-md px-3 py-2 text-left text-muted hover:bg-hover pointer-coarse:min-h-touch"
                   aria-expanded={open}
                   aria-controls={open ? panelId : undefined}
                   onClick={() => toggleTool(tool.name)}
                 >
-                  <span className="card-title mono">{tool.name}</span>
+                  <span className="min-w-0 break-words font-mono text-sm font-medium text-ink">
+                    {tool.name}
+                  </span>
                   {tool.has_permission_check && (
-                    <span
-                      className="perm-badge perm-warn"
-                      title={t('integrations.tools.needsConfirm')}
-                    >
+                    <Badge tone="warn" title={t('integrations.tools.needsConfirm')}>
                       {t('integrations.tools.badgeConfirm')}
-                    </span>
+                    </Badge>
                   )}
-                  {server && <span className="perm-badge">MCP · {server}</span>}
-                  <span className="tool-catalog-toggle" aria-hidden="true">
+                  {server && <Badge>MCP · {server}</Badge>}
+                  <span
+                    className="ml-auto flex-none font-mono text-sm leading-none text-faint"
+                    aria-hidden="true"
+                  >
                     {open ? '▾' : '▸'}
                   </span>
                   <span className="sr-only">
@@ -216,9 +220,13 @@ function ToolsPanel() {
                   </span>
                 </button>
                 {open && (
-                  <div className="tool-catalog-detail" id={panelId}>
-                    <h4 className="tool-catalog-detail-title">{t('integrations.tools.details')}</h4>
-                    {tool.description && <p className="card-desc">{tool.description}</p>}
+                  <div className="flex min-w-0 flex-col gap-2 px-3 pb-3" id={panelId}>
+                    <h4 className="m-0 font-mono text-xs font-medium uppercase tracking-wide text-faint">
+                      {t('integrations.tools.details')}
+                    </h4>
+                    {tool.description && (
+                      <p className="text-sm leading-normal text-muted">{tool.description}</p>
+                    )}
                     <JsonView
                       value={tool.input_schema}
                       label={t('integrations.tools.schema')}
@@ -345,8 +353,8 @@ function McpPanel() {
   const error = resource.state.status === 'error' ? resource.state.error : null;
 
   return (
-    <div className="settings-section">
-      <p className="section-desc">
+    <div className="flex flex-col gap-6">
+      <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
         {t('integrations.mcp.globalDesc')}
         {tenantId && tenantId !== 'default'
           ? t('integrations.mcp.currentTenant', { tenant: tenantId })
@@ -359,13 +367,12 @@ function McpPanel() {
           onRetry={resource.reload}
         />
       )}
-      <div className="filter-bar">
-        <span className="count-pill">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge>
           {t('integrations.mcp.counts', { total: servers.length, failed: failed.length })}
-        </span>
-        <button
-          type="button"
-          className="btn btn-small"
+        </Badge>
+        <Button
+          size="small"
           disabled={!connected || failed.length === 0 || reconnectingAll}
           title={!connected ? t('common.writesDisabled') : undefined}
           onClick={() => void reconnectAllFailed()}
@@ -373,10 +380,10 @@ function McpPanel() {
           {reconnectingAll
             ? t('integrations.mcp.reconnectAllBusy')
             : t('integrations.mcp.reconnectAll', { count: failed.length })}
-        </button>
-        <button type="button" className="btn btn-small" onClick={resource.reload}>
+        </Button>
+        <Button size="small" onClick={resource.reload}>
           {t('common.refresh')}
-        </button>
+        </Button>
       </div>
 
       {error && servers.length === 0 ? (
@@ -390,34 +397,37 @@ function McpPanel() {
           description={t('integrations.mcp.emptyDesc')}
         />
       ) : (
-        <div className="card-grid">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {servers.map((server) => (
-            <article className="card" key={server.name}>
-              <div className="card-header">
-                <h3 className="card-title mono">{server.name}</h3>
+            <article
+              className="flex flex-col gap-1.5 rounded-md bg-raised px-4 py-3.5 shadow-elev-1 forced-colors:border"
+              key={server.name}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="min-w-0 wrap-anywhere font-mono text-md font-medium text-ink">
+                  {server.name}
+                </h3>
                 <StatusChip status={server.status} />
               </div>
-              <p className="card-desc">
+              <p className="text-sm leading-normal text-muted">
                 {t('integrations.mcp.toolsCount', { count: server.tools.length })}
               </p>
               {server.tools.length > 0 && (
-                <div className="chip-row">
+                <div className="flex flex-wrap gap-1.5">
                   {server.tools.map((tool) => (
-                    <span className="perm-badge mono" key={tool}>
-                      {tool}
-                    </span>
+                    <Badge key={tool}>{tool}</Badge>
                   ))}
                 </div>
               )}
               {server.error && (
-                <p className="err" role="alert">
+                <p className="text-danger" role="alert">
                   {server.error}
                 </p>
               )}
               {server.status === 'failed' && (
-                <button
-                  type="button"
-                  className="btn btn-small"
+                <Button
+                  size="small"
+                  className="mt-1 self-start"
                   disabled={!connected || busy.has(server.name)}
                   title={!connected ? t('common.writesDisabled') : undefined}
                   onClick={() => void reconnect(server.name)}
@@ -425,7 +435,7 @@ function McpPanel() {
                   {busy.has(server.name)
                     ? t('integrations.mcp.reconnecting')
                     : t('integrations.mcp.reconnect')}
-                </button>
+                </Button>
               )}
             </article>
           ))}
@@ -477,39 +487,65 @@ function ChannelsPanel() {
   }
 
   return (
-    <div className="settings-section">
-      <p className="section-desc">{t('integrations.channels.globalDesc')}</p>
+    <div className="flex flex-col gap-6">
+      <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
+        {t('integrations.channels.globalDesc')}
+      </p>
       {!connected && (
         <StaleNotice message={t('integrations.channels.stale')} onRetry={resource.reload} />
       )}
       {error && (
         <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
       )}
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="section-title">{t('integrations.channels.title')}</h2>
+      <Section
+        title={t('integrations.channels.title')}
+        actions={
           <StatusChip
             status={channel.connected ? 'connected' : 'disconnected'}
             label={statusLabel(channel.connected ? 'connected' : 'disconnected')}
           />
-        </div>
-        <dl className="diag-list">
-          <dt>App ID</dt>
-          <dd className="mono">{channel.appIdMasked || '—'}</dd>
-          <dt>{t('integrations.channels.activeChats')}</dt>
-          <dd className="mono">{channel.active_chats}</dd>
-          <dt>{t('integrations.channels.queuedMessages')}</dt>
-          <dd className="mono">{channel.queued_messages}</dd>
-          <dt>{t('integrations.channels.lastError')}</dt>
-          <dd className={channel.last_error ? 'err' : 'dim'}>{channel.last_error ?? '—'}</dd>
-        </dl>
+        }
+      >
+        <KeyValueList
+          items={[
+            {
+              key: 'app-id',
+              label: 'App ID',
+              value: <span className="font-mono">{channel.appIdMasked || '—'}</span>,
+            },
+            {
+              key: 'active-chats',
+              label: t('integrations.channels.activeChats'),
+              value: <span className="font-mono">{channel.active_chats}</span>,
+            },
+            {
+              key: 'queued-messages',
+              label: t('integrations.channels.queuedMessages'),
+              value: <span className="font-mono">{channel.queued_messages}</span>,
+            },
+            {
+              key: 'last-error',
+              label: t('integrations.channels.lastError'),
+              value: channel.last_error ? (
+                <span className="text-danger">{channel.last_error}</span>
+              ) : (
+                <span className="text-muted">—</span>
+              ),
+            },
+          ]}
+        />
         {channel.last_error && (
-          <p className="form-error" role="alert">
+          <p
+            className="mt-2.5 rounded-sm bg-danger-soft px-2.75 py-2 text-md text-danger"
+            role="alert"
+          >
             {channel.last_error}
           </p>
         )}
-        <p className="section-desc">{t('integrations.channels.noToggle')}</p>
-      </section>
+        <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
+          {t('integrations.channels.noToggle')}
+        </p>
+      </Section>
     </div>
   );
 }

@@ -1,24 +1,9 @@
 /* ── 弹窗 / 菜单 ──────────────────────────────────────── */
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100vw;
-  /* 移动浏览器地址栏收起/展开时，100dvh 才是可见视口；inset 已覆盖旧浏览器。 */
-  height: 100dvh;
-  padding: calc(var(--space-4) + env(safe-area-inset-top))
-    calc(var(--space-4) + env(safe-area-inset-right))
-    calc(var(--space-4) + env(safe-area-inset-bottom))
-    calc(var(--space-4) + env(safe-area-inset-left));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  background: var(--scrim);
-  animation: fade-in 0.16s var(--ease);
-}
+/* ModalShell / Tooltip 已迁移到 Tailwind；这里保留：
+ * - keyframes（@utility modal-fade / modal-rise / tooltip-fade 引用）
+ * - .modal-title / .modal-actions（AppShell 与未迁移弹窗仍在用）
+ */
 
 @keyframes fade-in {
   from {
@@ -26,45 +11,10 @@
   }
 }
 
-.modal {
-  position: relative;
-  width: min(var(--modal-w-md), 100%);
-  max-height: min(86dvh, var(--modal-max-h));
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-5);
-  border: 0;
-  border-radius: var(--radius-xl);
-  background: var(--surface-raised);
-  box-shadow: var(--elev-4);
-  animation: rise-in 0.2s var(--ease);
-  /* 关闭按钮定位在本层，不随内容滚动；圆角需要裁掉正文背景。 */
-  overflow: hidden;
-}
-
-.modal-sm {
-  width: min(var(--modal-w-sm), 100%);
-}
-
-.modal-md {
-  width: min(var(--modal-w-md), 100%);
-}
-
-.modal-lg {
-  width: min(var(--modal-w-lg), 100%);
-}
-
-.modal-body-scroll {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  /* 4px 内衬给输入框 / 按钮的 focus ring 留出空间，负外边距抵消视觉位移。 */
-  padding: var(--space-1);
-  margin: calc(-1 * var(--space-1));
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .modal-title {
@@ -75,79 +25,12 @@
   color: var(--ink);
 }
 
-.modal-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--muted);
-}
-
 /* title → body 8；actions 内按钮 12；body → actions 12（8 + 4）。 */
+
 .modal-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-3);
   margin-top: var(--space-1);
-}
-
-.modal-close {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-}
-
-.modal:has(.modal-close) .modal-title {
-  padding-right: var(--space-8);
-}
-
-/* ── Tooltip ─────────────────────────────────────────── */
-
-.tooltip {
-  position: fixed;
-  z-index: var(--z-tooltip);
-  max-width: 240px;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
-  box-shadow: var(--elev-2);
-  color: var(--ink);
-  font-size: 11px;
-  line-height: 1.45;
-  white-space: normal;
-  pointer-events: none;
-  animation: tooltip-in 0.12s var(--ease);
-}
-
-.tooltip-arrow {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  border-radius: 1px;
-  background: var(--surface-raised);
-  box-shadow: none;
-  transform: translateX(-50%) rotate(45deg);
-}
-
-.tooltip[data-placement="top"] .tooltip-arrow {
-  bottom: -3px;
-}
-
-.tooltip[data-placement="bottom"] .tooltip-arrow {
-  top: -3px;
-}
-
-@keyframes tooltip-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tooltip {
-    animation: none;
-  }
 }

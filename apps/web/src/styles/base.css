@@ -1,4 +1,5 @@
 /* biome-ignore-all lint/complexity/noImportantStyles: reduced-motion overrides must win */
+
 * {
   box-sizing: border-box;
 }
@@ -34,6 +35,7 @@ select {
  * `color-scheme` 是可继承属性，:root 的 light / dark 会带到原生下拉弹层。
  * 保留原生箭头，不设 appearance: none。
  */
+
 select option {
   background: var(--surface-raised);
   color: var(--ink);
@@ -110,10 +112,6 @@ fieldset {
   color: var(--muted);
 }
 
-.err {
-  color: var(--danger);
-}
-
 .ok {
   color: var(--ok);
 }
@@ -149,10 +147,6 @@ fieldset {
   transform: none;
 }
 
-.main-content:focus {
-  outline: none;
-}
-
 kbd,
 .kbd {
   display: inline-block;
@@ -167,14 +161,10 @@ kbd,
 }
 
 @media (forced-colors: active) {
-  .card,
-  .modal,
-  .menu,
   .palette,
   .ask-card,
   .composer,
   .panel,
-  .stat,
   .state-empty,
   .state-loading,
   .state-error,
@@ -182,12 +172,7 @@ kbd,
   .toast,
   .prompt-slot,
   .pending-permissions-bar,
-  .bottom-nav,
-  .tool-card,
-  .event-list,
-  .btn,
-  .input,
-  .status-chip {
+  .tool-card {
     border: 1px solid CanvasText;
   }
 

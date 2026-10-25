@@ -45,13 +45,13 @@ export function AppBar({
       : null;
 
   return (
-    <header className="appbar">
+    <header className="flex h-[var(--appbar-h)] flex-none items-center gap-3 bg-surface px-5 max-compact:gap-2 max-compact:px-3">
       {drawerToggle && (
         <Tooltip label={drawerToggle.label}>
           <button
             id={drawerToggle.id}
             type="button"
-            className="appbar-icon"
+            className="hidden size-9 flex-none items-center justify-center rounded-full bg-transparent text-base text-muted transition-colors duration-150 hover:bg-hover max-wide:inline-flex pointer-coarse:size-touch"
             aria-label={drawerToggle.label}
             aria-expanded={drawerToggle.open}
             aria-controls={drawerToggle.controls}
@@ -61,45 +61,52 @@ export function AppBar({
           </button>
         </Tooltip>
       )}
-      <span className="brand">Vessel</span>
-      <span className="appbar-path" aria-live="polite">
+      <span className="font-serif text-xl font-semibold text-ink">Vessel</span>
+      <span
+        className="overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs tracking-wide text-faint max-compact:hidden"
+        aria-live="polite"
+      >
         {routeBreadcrumb(route)}
       </span>
 
-      <div className="appbar-spacer" />
+      <div className="min-w-0 flex-1" />
 
       <LanguageToggle />
 
       <Tooltip label="Ctrl/Cmd+K">
         <button
           type="button"
-          className="palette-trigger"
+          className="inline-flex min-w-45 items-center gap-2 rounded-full bg-sunken py-1.5 pl-3 pr-2 text-sm text-muted transition-colors duration-150 hover:bg-hover hover:text-ink max-compact:min-w-0 max-compact:px-2.5 pointer-coarse:min-h-touch"
           onClick={onOpenPalette}
           aria-keyshortcuts="Control+K Meta+K"
         >
-          <span className="palette-trigger-icon" aria-hidden="true">
+          <span className="font-mono text-md" aria-hidden="true">
             ⌕
           </span>
-          <span className="palette-trigger-text">{t('nav.searchOrCommand')}</span>
-          <kbd className="kbd">⌘K</kbd>
+          <span className="flex-1 text-left max-compact:hidden">{t('nav.searchOrCommand')}</span>
+          <kbd className="kbd max-compact:hidden">⌘K</kbd>
         </button>
       </Tooltip>
 
       <Tooltip label={t('nav.connStatusTitle')}>
         <button
           type="button"
-          className={`conn conn-${hasToken ? connectionState : 'idle'}`}
+          className="group inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-transparent px-2.5 py-1 text-xs tracking-wide text-muted transition-colors duration-150 hover:bg-hover data-[state=open]:text-success data-[state=connecting]:text-warn data-[state=reconnecting]:text-warn data-[state=closed]:text-danger data-[state=error]:text-danger max-compact:px-2 pointer-coarse:min-h-touch"
+          data-state={hasToken ? connectionState : 'idle'}
           onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
         >
-          <span className="conn-dot" aria-hidden="true" />
-          <span>{connLabel}</span>
+          <span
+            className="size-1.5 flex-none rounded-full bg-faint group-data-[state=open]:bg-success group-data-[state=connecting]:bg-warn group-data-[state=connecting]:pulse-soft group-data-[state=reconnecting]:bg-warn group-data-[state=reconnecting]:pulse-soft group-data-[state=closed]:bg-danger group-data-[state=error]:bg-danger"
+            aria-hidden="true"
+          />
+          <span className="max-compact:hidden">{connLabel}</span>
         </button>
       </Tooltip>
 
       <Tooltip label={t('nav.tenantChipTitle')}>
         <button
           type="button"
-          className="tenant-chip"
+          className="rounded-full bg-transparent px-2.5 py-1 text-xs whitespace-nowrap text-muted transition-colors duration-150 hover:bg-hover hover:text-ink max-compact:hidden pointer-coarse:min-h-touch"
           onClick={() => navigate({ domain: 'settings', tab: 'tenants' })}
         >
           {t('nav.tenant')} <span className="mono">{tenantId ?? '—'}</span>

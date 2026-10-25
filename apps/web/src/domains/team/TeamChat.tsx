@@ -15,7 +15,7 @@ import {
   NotEnabledState,
   StaleNotice,
 } from '../../components/States';
-import { Button } from '../../components/ui';
+import { Button, cn } from '../../components/ui';
 import type {
   AskUserRequest,
   PermissionRequest,
@@ -305,25 +305,27 @@ export function TeamChat({
   return (
     <section className="team-chat" aria-label={team?.name ?? teamId}>
       <header className="team-chat-head">
-        <div className="team-chat-heading">
-          <h1 className="team-chat-title">{team?.name || teamId}</h1>
-          <div className="team-chat-meta">
-            <span className="team-chat-id mono">{teamId}</span>
+        <div className="min-w-0">
+          <h1 className="font-serif text-title font-semibold wrap-anywhere">
+            {team?.name || teamId}
+          </h1>
+          <div className="mt-1.25 flex flex-wrap items-center gap-2 text-sm text-muted">
+            <span className="font-mono text-2xs text-faint">{teamId}</span>
             {team?.workspace && (
-              <span className="team-chat-workspace mono" title={team.workspace}>
+              <span className="max-w-80 truncate font-mono" title={team.workspace}>
                 {team.workspace}
               </span>
             )}
-            <span className="team-chat-description">
+            <span>
               {t('team.chat.descriptionLabel')}: {team?.description || '—'}
             </span>
-            <span className="team-chat-principal mono">
+            <span className="font-mono">
               {t('team.chat.defaultPrincipalLabel')}: {team?.default_principal || '—'}
             </span>
             {archived && (
-              <span className="team-chat-archived">
+              <span className="rounded-full bg-warn-soft px-2 py-0.5 text-xs text-warn">
                 {t('teams.chat.archived')}
-                <span className="team-chat-archived-hint"> {t('teams.chat.archivedHint')}</span>
+                <span className="text-xs text-faint"> {t('teams.chat.archivedHint')}</span>
               </span>
             )}
             <span>
@@ -332,17 +334,17 @@ export function TeamChat({
             <span>{t('team.chat.onlineCount', { count: onlineCount })}</span>
           </div>
         </div>
-        <div className="team-chat-actions">
+        <div className="flex flex-none flex-wrap justify-end gap-1.5">
           <Button
             id="team-members-toggle"
-            className="team-chat-members-toggle"
+            className="team-chat-members-toggle hidden max-wide:inline-flex"
             aria-expanded={membersOpen}
             aria-controls="team-members"
             onClick={() => setMembersOpen((value) => !value)}
           >
             {membersOpen ? t('team.a11y.closeMembers') : t('team.chat.members')}
           </Button>
-          <Button className="team-chat-back" onClick={onBackToList}>
+          <Button className="team-chat-back hidden max-wide:inline-flex" onClick={onBackToList}>
             {t('team.chat.backToList')}
           </Button>
           <Button onClick={resource.reload} disabled={!hasToken || resource.refreshing}>
@@ -358,8 +360,16 @@ export function TeamChat({
           )}
           <div className="team-transcript-scroll">
             {rotateFailure && (
-              <div className="team-notice team-notice-danger" role="alert">
-                <span className="team-notice-tag">{t('team.message.systemTag')}</span>
+              <div
+                className={cn(
+                  'team-notice-danger mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted',
+                  'border-l-danger bg-danger-soft text-ink',
+                )}
+                role="alert"
+              >
+                <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
+                  {t('team.message.systemTag')}
+                </span>
                 <span>
                   {t('team.system.rotateFailed', {
                     name: rotateFailure.agent_id
@@ -368,7 +378,7 @@ export function TeamChat({
                   })}
                 </span>
                 {(rotateFailure.reason ?? rotateFailure.code) && (
-                  <span className="mono"> {rotateFailure.reason ?? rotateFailure.code}</span>
+                  <span className="font-mono"> {rotateFailure.reason ?? rotateFailure.code}</span>
                 )}
               </div>
             )}
@@ -407,14 +417,14 @@ export function TeamChat({
             {canLoadEarlier && (
               <button
                 type="button"
-                className="load-earlier team-load-earlier"
+                className="load-earlier self-center"
                 onClick={() => setLimit(nextLimitFor(limit))}
               >
                 {t('team.chat.loadEarlier')}
               </button>
             )}
             {detail && historyLimited && (
-              <p className="team-history-note" role="status">
+              <p className="m-0 self-center font-mono text-xs text-faint" role="status">
                 {t('team.chat.historyLimited', { count: visibleCount, limit })}
               </p>
             )}
@@ -462,14 +472,14 @@ export function TeamChat({
           {memberWindow.canLoadMore && (
             <button
               type="button"
-              className="load-more team-members-load-more"
+              className="load-more mx-3 my-2"
               onClick={() => setMembersLimit(nextMembersLimitFor(membersLimit))}
             >
               {t('team.chat.loadMoreMembers')}
             </button>
           )}
           {memberWindow.capped && (
-            <p className="team-history-note" role="status">
+            <p className="m-0 self-center font-mono text-xs text-faint" role="status">
               {t('team.chat.membersCapped', { shown: members.length, total: memberTotal })}
             </p>
           )}
@@ -478,7 +488,7 @@ export function TeamChat({
         {narrow && membersOpen && (
           <button
             type="button"
-            className="drawer-backdrop team-drawer-backdrop"
+            className="drawer-backdrop"
             aria-label={t('team.a11y.closeMembers')}
             onClick={() => setMembersOpen(false)}
           />

@@ -7,6 +7,7 @@
  */
 import { ActionMenu } from '../../components/ActionMenu';
 import { StatusChip } from '../../components/StatusChip';
+import { iconButtonClass } from '../../components/Tooltip';
 import type { AskUserRequest, PermissionRequest, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import { memberStatus } from './member-status';
@@ -53,16 +54,16 @@ export function TeamMemberSidebar({
   const totalCount = total ?? members.length;
 
   return (
-    <div className="team-members">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="column-header team-members-head">
         <span className="column-title">{t('team.chat.members')}</span>
-        <span className="team-members-count dim mono">
+        <span className="ml-0.5 font-mono text-2xs text-faint">
           {members.length} / {totalCount}
         </span>
         {onClose && (
           <button
             type="button"
-            className="icon-btn"
+            className={`${iconButtonClass} ml-auto`}
             aria-label={t('team.a11y.closeMembers')}
             onClick={onClose}
           >
@@ -71,7 +72,10 @@ export function TeamMemberSidebar({
         )}
       </div>
 
-      <ul className="team-members-scroll" aria-label={t('team.a11y.memberList')}>
+      <ul
+        className="flex min-h-0 flex-1 list-none flex-col gap-0.5 overflow-y-auto overscroll-contain px-2 pb-3"
+        aria-label={t('team.a11y.memberList')}
+      >
         {members.map((member) => {
           const status = memberStatus(member);
           const sessionId = member.session_id;
@@ -81,24 +85,31 @@ export function TeamMemberSidebar({
           return (
             <li
               key={member.agent_id}
-              className={`team-member-row ${left ? 'left' : ''} ${
-                activeMemberId === member.agent_id ? 'selected' : ''
-              }`.trim()}
+              className={`team-member-row flex items-center gap-1.5 rounded-sm px-1.5 py-1.25 hover:bg-hover ${
+                left ? 'opacity-70' : ''
+              } ${activeMemberId === member.agent_id ? 'bg-accent-soft' : ''}`.trim()}
             >
-              <span className="team-avatar" aria-hidden="true">
+              <span
+                className="grid size-7 flex-none place-items-center rounded-full bg-sunken font-mono text-xs uppercase text-muted"
+                aria-hidden="true"
+              >
                 {name.slice(0, 1).toUpperCase()}
               </span>
               <button
                 type="button"
-                className="team-member-main"
+                className="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 border-0 bg-transparent px-0 py-0.5 text-left text-inherit"
                 onClick={() => onOpenMember(member.agent_id)}
                 aria-label={name}
               >
-                <span className="team-member-name-line">
-                  <span className="team-member-name">{name}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="min-w-0 truncate text-sm">{name}</span>
                   <span
                     role="img"
-                    className={`team-presence-dot ${member.presence}`}
+                    className={`size-1.5 flex-none rounded-full ${
+                      member.presence === 'live'
+                        ? 'bg-success'
+                        : 'border border-faint bg-transparent'
+                    }`}
                     aria-label={
                       member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone')
                     }
@@ -109,12 +120,12 @@ export function TeamMemberSidebar({
                     title={status.titleKey ? t(status.titleKey) : undefined}
                   />
                 </span>
-                <span className="team-member-sub mono">{t(status.labelKey)}</span>
+                <span className="truncate text-2xs text-faint">{t(status.labelKey)}</span>
               </button>
               {attention > 0 && sessionId && (
                 <button
                   type="button"
-                  className="team-attention-badge"
+                  className="h-4.5 min-w-4.5 flex-none cursor-pointer rounded-full border border-warn bg-warn-soft px-1.25 font-mono text-2xs leading-4 text-warn"
                   title={t('team.attention.pending')}
                   aria-label={t('team.attention.count', { count: attention })}
                   onClick={() => onOpenSession(sessionId)}

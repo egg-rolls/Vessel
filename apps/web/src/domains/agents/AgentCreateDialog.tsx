@@ -7,6 +7,7 @@
 import { type FormEvent, useState } from 'react';
 import { ModalShell } from '../../components/Modal';
 import { useToast } from '../../components/ToastProvider';
+import { Button, Field, Input, Select, Textarea } from '../../components/ui';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { TeamSummary } from '../../gateway/types';
@@ -82,12 +83,11 @@ export function AgentCreateDialog({
       closeLabel={t('common.close')}
     >
       <h2 className="modal-title">{title}</h2>
-      <form className="team-form" onSubmit={submit}>
-        <div className="form-grid">
-          <label className="field">
-            <span className="field-label">{t('agents.filter.node')}</span>
-            <select
-              className="input"
+      <form className="flex flex-col gap-2" onSubmit={submit}>
+        <div className="form-grid mt-1">
+          <Field label={t('agents.filter.node')} htmlFor="agent-create-node">
+            <Select
+              id="agent-create-node"
               value={nodeKey}
               onChange={(event) => {
                 setNodeKey(event.target.value);
@@ -101,13 +101,12 @@ export function AgentCreateDialog({
                   {nodeNames.get(nodeKeyOf(item)) ?? '—'}
                 </option>
               ))}
-            </select>
-          </label>
+            </Select>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('agents.filter.team')}</span>
-            <select
-              className="input"
+          <Field label={t('agents.filter.team')} htmlFor="agent-create-team">
+            <Select
+              id="agent-create-team"
               value={draft.teamId}
               onChange={(event) => set('teamId')(event.target.value)}
               aria-label={t('agents.filter.team')}
@@ -118,42 +117,45 @@ export function AgentCreateDialog({
                   {team.name || team.team_id}
                 </option>
               ))}
-            </select>
-          </label>
+            </Select>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('team.form.name')}</span>
-            <input
-              className="input"
+          <Field label={t('team.form.name')} htmlFor="agent-create-name">
+            <Input
+              id="agent-create-name"
               value={draft.name}
               onChange={(event) => set('name')(event.target.value)}
               spellCheck={false}
               autoComplete="off"
             />
-          </label>
+          </Field>
 
-          <label className="field">
-            <span className="field-label">{t('agents.form.model')}</span>
-            <input
-              className="input mono"
+          <Field label={t('agents.form.model')} htmlFor="agent-create-model">
+            <Input
+              id="agent-create-model"
+              className="font-mono"
               value={draft.model}
               onChange={(event) => set('model')(event.target.value)}
               spellCheck={false}
               autoComplete="off"
             />
-          </label>
+          </Field>
 
-          <label className="field field-wide">
-            <span className="field-label">{t('agents.form.systemPrompt')}</span>
-            <textarea
-              className="input team-policy-input"
+          <Field
+            className="col-span-full"
+            label={t('agents.form.systemPrompt')}
+            htmlFor="agent-create-system-prompt"
+            hint={t('agents.form.systemPromptHint')}
+          >
+            <Textarea
+              id="agent-create-system-prompt"
+              className="min-h-24 resize-y text-sm leading-normal"
               value={draft.systemPrompt}
               onChange={(event) => set('systemPrompt')(event.target.value)}
               rows={5}
               spellCheck={false}
             />
-            <span className="field-hint">{t('agents.form.systemPromptHint')}</span>
-          </label>
+          </Field>
         </div>
 
         {error && (
@@ -163,12 +165,12 @@ export function AgentCreateDialog({
         )}
 
         <div className="modal-actions">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>
+          <Button onClick={onClose} disabled={busy}>
             {t('common.cancel')}
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={busy || !node}>
+          </Button>
+          <Button type="submit" variant="primary" disabled={busy || !node}>
             {busy ? t('common.processing') : t('team.form.submitCreate')}
-          </button>
+          </Button>
         </div>
       </form>
     </ModalShell>

@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 
 /**
  * iOS visual viewport：键盘弹出 / 收起时把可视高度写到根元素（`--vvh`），
- * 供 `--dock-max-h` 与 `.app-shell` 使用。不支持 `visualViewport` 的浏览器
+ * 供 `--dock-max-h` 与 AppShell 根节点使用。不支持 `visualViewport` 的浏览器
  * 保持 CSS 里的 `100dvh` 回退。
  */
 export function useVisualViewport(): void {

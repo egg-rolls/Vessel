@@ -13,7 +13,7 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
-import { SearchInput } from '../../components/ui';
+import { Button, cn, DataTable, SearchInput } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { DurableRunSummary, RunStatus } from '../../gateway/types';
@@ -326,7 +326,7 @@ export function RunsView({
     !knownDurable;
 
   return (
-    <div className={`domain-view ${route.runId ? 'detail-open' : ''}`.trim()}>
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader title={t('runs.title')} description={t('runs.description')} tenantId={tenantId} />
       <SegmentedTabs
         label={t('runs.sourceLabel')}
@@ -339,297 +339,320 @@ export function RunsView({
         panelId="runs-panel"
       />
 
-      <div className="filter-bar">
+      <div
+        className={cn('mt-3.5 flex flex-wrap items-center gap-2', route.runId && 'max-wide:hidden')}
+      >
         <SearchInput
           value={query}
           onChange={setQuery}
           placeholder={t('runs.searchPlaceholder')}
           ariaLabel={t('runs.searchLabel')}
+          className="grow basis-60 max-w-search"
         />
-        <fieldset className="filter-chips">
+        <fieldset className="flex flex-wrap gap-1">
           <legend className="sr-only">{t('runs.statusLegend')}</legend>
           {filterList.map((filter) => (
-            <button
+            <Button
               key={filter.id}
-              type="button"
-              className={`filter-chip ${filter.id === status ? 'active' : ''}`.trim()}
+              variant="chip"
+              size="small"
               aria-pressed={filter.id === status}
               onClick={() => setStatus(filter.id)}
             >
               {t(filter.labelKey)}
-            </button>
+            </Button>
           ))}
         </fieldset>
         {route.sessionId && (
-          <button
-            type="button"
-            className="filter-chip active"
+          <Button
+            variant="chip"
+            size="small"
+            className="bg-accent-soft text-accent-ink"
             onClick={() => navigateRoute({ sessionId: undefined, runId: undefined })}
             title={t('runs.clearSessionFilter')}
           >
             {t('runs.sessionChip', { session: route.sessionId.slice(0, 12) })} ×
-          </button>
+          </Button>
         )}
-        <button type="button" className="btn btn-small" onClick={reloadAll} disabled={!hasToken}>
+        <Button size="small" onClick={reloadAll} disabled={!hasToken}>
           {t('common.refresh')}
-        </button>
+        </Button>
       </div>
 
-      <div className="domain-content" id="runs-panel" role="tabpanel" aria-label={t('runs.title')}>
-        {!hasToken ? (
-          <EmptyState
-            title={t('runs.noTokenTitle')}
-            action={
-              <button
-                type="button"
-                className="btn"
-                onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
-              >
-                {t('common.configureConnection')}
-              </button>
-            }
-          />
-        ) : route.tab === 'durable' && !durableAvailable ? (
-          <NotEnabledState
-            title={t('runs.durableDisabledTitle')}
-            reason={t('runs.durableDisabledReason')}
-            hint={t('runs.durableDisabledHint')}
-          />
-        ) : (
-          <>
-            {!connected && current.length > 0 && (
-              <StaleNotice message={t('runs.disconnected')} onRetry={reloadAll} />
-            )}
-            {resourceError && current.length > 0 && (
-              <StaleNotice
-                message={t('common.staleData', { detail: resourceError })}
-                onRetry={reloadAll}
-              />
-            )}
+      <div
+        className="mt-5 flex flex-col gap-4"
+        id="runs-panel"
+        role="tabpanel"
+        aria-label={t('runs.title')}
+      >
+        <div className={cn('flex flex-col gap-4', route.runId && 'max-wide:hidden')}>
+          {!hasToken ? (
+            <EmptyState
+              title={t('runs.noTokenTitle')}
+              action={
+                <Button onClick={() => navigate({ domain: 'settings', tab: 'connection' })}>
+                  {t('common.configureConnection')}
+                </Button>
+              }
+            />
+          ) : route.tab === 'durable' && !durableAvailable ? (
+            <NotEnabledState
+              title={t('runs.durableDisabledTitle')}
+              reason={t('runs.durableDisabledReason')}
+              hint={t('runs.durableDisabledHint')}
+            />
+          ) : (
+            <>
+              {!connected && current.length > 0 && (
+                <StaleNotice message={t('runs.disconnected')} onRetry={reloadAll} />
+              )}
+              {resourceError && current.length > 0 && (
+                <StaleNotice
+                  message={t('common.staleData', { detail: resourceError })}
+                  onRetry={reloadAll}
+                />
+              )}
 
-            {resourceError && current.length === 0 ? (
-              <ErrorState message={resourceError} onRetry={resource.reload} />
-            ) : loading ? (
-              <LoadingState label={t('runs.loading')} />
-            ) : current.length === 0 ? (
-              <EmptyState
-                title={t(route.tab === 'live' ? 'runs.emptyLiveTitle' : 'runs.emptyDurableTitle')}
-                description={t(
-                  route.tab === 'live' ? 'runs.emptyLiveDesc' : 'runs.emptyDurableDesc',
-                )}
-                action={
-                  route.tab === 'live' ? (
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => navigate({ domain: 'chat', sessionId: 'new' })}
+              {resourceError && current.length === 0 ? (
+                <ErrorState message={resourceError} onRetry={resource.reload} />
+              ) : loading ? (
+                <LoadingState label={t('runs.loading')} />
+              ) : current.length === 0 ? (
+                <EmptyState
+                  title={t(route.tab === 'live' ? 'runs.emptyLiveTitle' : 'runs.emptyDurableTitle')}
+                  description={t(
+                    route.tab === 'live' ? 'runs.emptyLiveDesc' : 'runs.emptyDurableDesc',
+                  )}
+                  action={
+                    route.tab === 'live' ? (
+                      <Button
+                        variant="primary"
+                        onClick={() => navigate({ domain: 'chat', sessionId: 'new' })}
+                      >
+                        {t('common.newSession')}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              ) : filtered.length === 0 ? (
+                <EmptyState
+                  title={t('runs.noMatchTitle')}
+                  description={t('runs.noMatchDesc')}
+                  action={
+                    <Button
+                      onClick={() => {
+                        setQuery('');
+                        setStatus('all');
+                        navigateRoute({ sessionId: undefined });
+                      }}
                     >
-                      {t('common.newSession')}
-                    </button>
-                  ) : undefined
-                }
-              />
-            ) : filtered.length === 0 ? (
-              <EmptyState
-                title={t('runs.noMatchTitle')}
-                description={t('runs.noMatchDesc')}
-                action={
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => {
-                      setQuery('');
-                      setStatus('all');
-                      navigateRoute({ sessionId: undefined });
-                    }}
-                  >
-                    {t('common.clearFilters')}
-                  </button>
-                }
-              />
-            ) : route.tab === 'live' ? (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th scope="col">{t('runs.col.state')}</th>
-                    <th scope="col">{t('runs.col.runId')}</th>
-                    <th scope="col" className="col-session">
-                      {t('runs.col.session')}
-                    </th>
-                    <th scope="col">{t('runs.col.started')}</th>
-                    <th scope="col" className="col-meta">
-                      {t('runs.col.duration')}
-                    </th>
-                    <th scope="col" className="col-optional">
-                      Tokens
-                    </th>
-                    <th scope="col">{t('runs.col.actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {windowed.shown.map((raw) => {
-                    const run = raw as RunStatus;
-                    return (
-                      <tr
-                        key={run.run_id}
-                        className={run.run_id === route.runId ? 'row-active' : undefined}
-                      >
-                        <td>
-                          <StatusChip
-                            status={run.status}
-                            label={
-                              run.status === 'queued' && run.queue_position !== undefined
-                                ? t('chat.run.queuedPosition', {
-                                    position: run.queue_position,
-                                  })
-                                : undefined
-                            }
-                          />
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="link-btn mono"
-                            onClick={() =>
-                              navigateRoute({ runId: run.run_id, sessionId: run.session_id })
-                            }
+                      {t('common.clearFilters')}
+                    </Button>
+                  }
+                />
+              ) : route.tab === 'live' ? (
+                <DataTable<RunStatus>
+                  columns={[
+                    {
+                      key: 'status',
+                      header: t('runs.col.state'),
+                      cell: (run) => (
+                        <StatusChip
+                          status={run.status}
+                          label={
+                            run.status === 'queued' && run.queue_position !== undefined
+                              ? t('chat.run.queuedPosition', {
+                                  position: run.queue_position,
+                                })
+                              : undefined
+                          }
+                        />
+                      ),
+                    },
+                    {
+                      key: 'runId',
+                      header: t('runs.col.runId'),
+                      cell: (run) => (
+                        <Button
+                          variant="link"
+                          className="font-mono"
+                          onClick={() =>
+                            navigateRoute({ runId: run.run_id, sessionId: run.session_id })
+                          }
+                        >
+                          {run.run_id.slice(0, 16)}
+                        </Button>
+                      ),
+                    },
+                    {
+                      key: 'session',
+                      header: t('runs.col.session'),
+                      hide: 'compact',
+                      cellClassName: 'font-mono',
+                      cell: (run) => (
+                        <Button
+                          variant="link"
+                          className="font-mono"
+                          onClick={() => navigate({ domain: 'chat', sessionId: run.session_id })}
+                        >
+                          {run.session_id.slice(0, 12)}
+                        </Button>
+                      ),
+                    },
+                    {
+                      key: 'started',
+                      header: t('runs.col.started'),
+                      cellClassName: 'font-mono tabular-nums',
+                      cell: (run) => formatTimestamp(run.started_at),
+                    },
+                    {
+                      key: 'duration',
+                      header: t('runs.col.duration'),
+                      hide: 'compact',
+                      cellClassName: 'font-mono tabular-nums',
+                      cell: (run) => durationLabel(run.started_at, run.completed_at),
+                    },
+                    {
+                      key: 'tokens',
+                      header: 'Tokens',
+                      hide: 'wide',
+                      cellClassName: 'font-mono tabular-nums',
+                      cell: (run) => run.usage?.total_tokens ?? '—',
+                    },
+                    {
+                      key: 'actions',
+                      header: t('runs.col.actions'),
+                      cell: (run) =>
+                        isCancellableRun(run.status) ? (
+                          <Button
+                            size="small"
+                            variant="dangerGhost"
+                            disabled={!connected || busy.has(run.run_id)}
+                            title={!connected ? t('common.writesDisabled') : undefined}
+                            onClick={() => cancel(run.run_id)}
                           >
-                            {run.run_id.slice(0, 16)}
-                          </button>
-                        </td>
-                        <td className="col-session mono">
-                          <button
-                            type="button"
-                            className="link-btn mono"
-                            onClick={() => navigate({ domain: 'chat', sessionId: run.session_id })}
+                            {busy.has(run.run_id) ? t('runs.cancelling') : t('runs.cancel')}
+                          </Button>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        ),
+                    },
+                  ]}
+                  rows={windowed.shown as RunStatus[]}
+                  rowKey={(run) => run.run_id}
+                  activeKey={route.runId}
+                />
+              ) : (
+                <DataTable<DurableRunSummary>
+                  columns={[
+                    {
+                      key: 'status',
+                      header: t('runs.col.state'),
+                      cell: (run) => <StatusChip status={run.status} />,
+                    },
+                    {
+                      key: 'runId',
+                      header: t('runs.col.runId'),
+                      cell: (run) => (
+                        <Button
+                          variant="link"
+                          className="font-mono"
+                          onClick={() =>
+                            navigateRoute({ runId: run.run_id, sessionId: run.session_id })
+                          }
+                        >
+                          {run.run_id.slice(0, 16)}
+                        </Button>
+                      ),
+                    },
+                    {
+                      key: 'session',
+                      header: t('runs.col.session'),
+                      hide: 'compact',
+                      cellClassName: 'font-mono',
+                      cell: (run) => (
+                        <Button
+                          variant="link"
+                          className="font-mono"
+                          onClick={() => navigate({ domain: 'chat', sessionId: run.session_id })}
+                        >
+                          {run.session_id.slice(0, 12)}
+                        </Button>
+                      ),
+                    },
+                    {
+                      key: 'agent',
+                      header: t('runs.col.agent'),
+                      hide: 'wide',
+                      cellClassName: 'font-mono',
+                      cell: (run) => run.agent_id ?? '—',
+                    },
+                    {
+                      key: 'iteration',
+                      header: t('runs.col.iter'),
+                      hide: 'compact',
+                      cellClassName: 'font-mono tabular-nums',
+                      cell: (run) => run.iteration ?? '—',
+                    },
+                    {
+                      key: 'updated',
+                      header: t('runs.col.updated'),
+                      cellClassName: 'font-mono tabular-nums',
+                      cell: (run) => formatTimestamp(run.updated_at),
+                    },
+                    {
+                      key: 'actions',
+                      header: t('runs.col.actions'),
+                      cell: (run) =>
+                        isResumableRun(run.status) ? (
+                          <Button
+                            size="small"
+                            disabled={!connected || busy.has(run.run_id)}
+                            title={!connected ? t('common.writesDisabled') : undefined}
+                            onClick={() => resume(run.run_id)}
                           >
-                            {run.session_id.slice(0, 12)}
-                          </button>
-                        </td>
-                        <td className="mono">{formatTimestamp(run.started_at)}</td>
-                        <td className="mono col-meta">
-                          {durationLabel(run.started_at, run.completed_at)}
-                        </td>
-                        <td className="mono col-optional">{run.usage?.total_tokens ?? '—'}</td>
-                        <td>
-                          {isCancellableRun(run.status) ? (
-                            <button
-                              type="button"
-                              className="btn btn-small btn-danger-ghost"
-                              disabled={!connected || busy.has(run.run_id)}
-                              title={!connected ? t('common.writesDisabled') : undefined}
-                              onClick={() => cancel(run.run_id)}
-                            >
-                              {busy.has(run.run_id) ? t('runs.cancelling') : t('runs.cancel')}
-                            </button>
-                          ) : (
-                            <span className="dim">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th scope="col">{t('runs.col.state')}</th>
-                    <th scope="col">{t('runs.col.runId')}</th>
-                    <th scope="col" className="col-session">
-                      {t('runs.col.session')}
-                    </th>
-                    <th scope="col" className="col-optional">
-                      {t('runs.col.agent')}
-                    </th>
-                    <th scope="col" className="col-meta">
-                      {t('runs.col.iter')}
-                    </th>
-                    <th scope="col">{t('runs.col.updated')}</th>
-                    <th scope="col">{t('runs.col.actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {windowed.shown.map((raw) => {
-                    const run = raw as DurableRunSummary;
-                    return (
-                      <tr
-                        key={run.run_id}
-                        className={run.run_id === route.runId ? 'row-active' : undefined}
-                      >
-                        <td>
-                          <StatusChip status={run.status} />
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="link-btn mono"
-                            onClick={() =>
-                              navigateRoute({ runId: run.run_id, sessionId: run.session_id })
-                            }
-                          >
-                            {run.run_id.slice(0, 16)}
-                          </button>
-                        </td>
-                        <td className="col-session mono">
-                          <button
-                            type="button"
-                            className="link-btn mono"
-                            onClick={() => navigate({ domain: 'chat', sessionId: run.session_id })}
-                          >
-                            {run.session_id.slice(0, 12)}
-                          </button>
-                        </td>
-                        <td className="mono col-optional">{run.agent_id ?? '—'}</td>
-                        <td className="mono col-meta">{run.iteration ?? '—'}</td>
-                        <td className="mono">{formatTimestamp(run.updated_at)}</td>
-                        <td>
-                          {isResumableRun(run.status) ? (
-                            <button
-                              type="button"
-                              className="btn btn-small"
-                              disabled={!connected || busy.has(run.run_id)}
-                              title={!connected ? t('common.writesDisabled') : undefined}
-                              onClick={() => resume(run.run_id)}
-                            >
-                              {busy.has(run.run_id) ? t('runs.resuming') : t('runs.resume')}
-                            </button>
-                          ) : (
-                            <span className="dim">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
+                            {busy.has(run.run_id) ? t('runs.resuming') : t('runs.resume')}
+                          </Button>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        ),
+                    },
+                  ]}
+                  rows={windowed.shown as DurableRunSummary[]}
+                  rowKey={(run) => run.run_id}
+                  activeKey={route.runId}
+                />
+              )}
 
-            {windowed.hiddenCount > 0 && (
-              <button
-                type="button"
-                className="load-more"
-                onClick={() => setLimit((value) => value + 100)}
-              >
-                {t('common.showMore', { count: windowed.hiddenCount })}
-              </button>
-            )}
-          </>
-        )}
+              {windowed.hiddenCount > 0 && (
+                <Button
+                  variant="plain"
+                  className="mx-auto mt-2 rounded-full px-3.5 py-2 text-xs text-muted"
+                  onClick={() => setLimit((value) => value + 100)}
+                >
+                  {t('common.showMore', { count: windowed.hiddenCount })}
+                </Button>
+              )}
+            </>
+          )}
+        </div>
 
         {route.runId &&
           (detailMissing ? (
-            <ErrorState
-              message={
-                detailResource.state.status === 'error'
-                  ? detailResource.state.error
-                  : t('runs.notFound')
-              }
-              onRetry={detailResource.reload}
-            />
+            <div className="max-wide:hidden">
+              <ErrorState
+                message={
+                  detailResource.state.status === 'error'
+                    ? detailResource.state.error
+                    : t('runs.notFound')
+                }
+                onRetry={detailResource.reload}
+              />
+            </div>
           ) : detailLoading ? (
-            <LoadingState label={t('runs.detailLoading')} />
+            <div className="max-wide:hidden">
+              <LoadingState label={t('runs.detailLoading')} />
+            </div>
           ) : detailRun || knownDurable ? (
             <RunDetail
               runId={route.runId}

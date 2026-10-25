@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { DomainIcon } from '../components/DomainIcon';
 import { ModalShell } from '../components/Modal';
+import { cn } from '../components/ui/cn';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import { primaryRoute } from './DomainNav';
@@ -9,6 +10,10 @@ import type { Route } from './router';
 
 /** 移动端常驻 3 项；编排 / Status / Observe / Settings 放进 More sheet。 */
 const BOTTOM_DOMAINS: readonly PrimaryDomain[] = ['chat', 'runs', 'integrations'];
+
+const itemClass =
+  'flex min-h-14 flex-1 flex-col items-center justify-center gap-1 border-0 bg-transparent text-xs text-muted';
+const activeClass = 'rounded-sm bg-accent-soft text-accent-ink';
 
 /** <680px：底部 3 个主域 + More sheet（编排 / Status / 可观测 / 设置 / 连接身份）。 */
 export function BottomNav({ route, navigate }: { route: Route; navigate: (route: Route) => void }) {
@@ -35,14 +40,17 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
 
   return (
     <>
-      <nav className="bottom-nav" aria-label={t('nav.bottomLabel')}>
+      <nav
+        className="hidden flex-none items-stretch justify-around bg-surface shadow-elev-1 [padding-bottom:env(safe-area-inset-bottom)] forced-colors:border max-compact:flex"
+        aria-label={t('nav.bottomLabel')}
+      >
         {BOTTOM_DOMAINS.map((domainId) => {
           const active = isDomainActive(route, domainId);
           return (
             <button
               key={domainId}
               type="button"
-              className={`bottom-item ${active ? 'active' : ''}`.trim()}
+              className={cn(itemClass, active && activeClass)}
               aria-current={active ? 'page' : undefined}
               onClick={() => navigate(primaryRoute(domainId))}
             >
@@ -53,12 +61,12 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
         })}
         <button
           type="button"
-          className={`bottom-item ${moreActive ? 'active' : ''}`.trim()}
+          className={cn(itemClass, moreActive && activeClass)}
           aria-current={moreActive ? 'page' : undefined}
           aria-expanded={moreOpen}
           onClick={() => setMoreOpen(true)}
         >
-          <span className="bottom-more-icon" aria-hidden="true">
+          <span className="text-lg leading-none" aria-hidden="true">
             ⋯
           </span>
           <span>{t('nav.more')}</span>
@@ -69,7 +77,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
         <ModalShell
           label={t('nav.moreSheet')}
           onClose={() => setMoreOpen(false)}
-          className="more-sheet"
+          className="more-sheet mt-auto mb-0 max-w-modal-sm self-center rounded-t-lg rounded-b-sm max-compact:sheet-bottom-pad"
         >
           <h2 className="modal-title">{t('nav.more')}</h2>
           <div className="more-list">

@@ -5,13 +5,12 @@ import { ModalShell } from '../components/Modal';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
 import { useToast } from '../components/ToastProvider';
+import { Button } from '../components/ui';
 import { AgentsView } from '../domains/agents/AgentsView';
 import { ChatView } from '../domains/chat/ChatView';
-import {
-  orphanedDismissIds,
-  pendingPermissionsOutsideView,
-} from '../domains/chat/pending-permissions';
+import { pendingPermissionsOutsideView } from '../domains/chat/pending-permissions';
 import { browserSessionStorage, clearLastSession } from '../domains/chat/session-selection';
+import { ToolCatalogProvider } from '../domains/chat/tool-catalog';
 import { GatewayView } from '../domains/gateway/GatewayView';
 import { HubView } from '../domains/hub/HubView';
 import { IntegrationsView } from '../domains/integrations/IntegrationsView';
@@ -83,8 +82,8 @@ export function AppShell() {
     stale,
     permissions,
     asks,
-    orphaned,
-    dismissOrphaned,
+    client,
+    epoch,
     retry,
     dismissError,
     dismissGap,
@@ -117,18 +116,11 @@ export function AppShell() {
     [permissions, route],
   );
   const otherAsks = useMemo(() => pendingPermissionsOutsideView(asks, route), [asks, route]);
-  const otherOrphans = useMemo(
-    () => pendingPermissionsOutsideView(orphaned, route),
-    [orphaned, route],
-  );
   // compact bar 只跳会话；应答仍在目标会话的 Composer 槽位完成。
   const openPendingSession = useCallback(
     (sessionId: string) => navigate({ domain: 'chat', sessionId }),
     [navigate],
   );
-  const dismissPendingOrphans = useCallback(() => {
-    for (const requestId of orphanedDismissIds(otherOrphans)) dismissOrphaned(requestId);
-  }, [dismissOrphaned, otherOrphans]);
   const viewportWidth = useViewportWidth();
   const panes = usePaneResize();
   const navMode = navModeForWidth(viewportWidth, navCollapsed);
@@ -411,7 +403,7 @@ export function AppShell() {
   return (
     <PaletteEntitiesProvider register={registerEntities}>
       <div
-        className={`app-shell nav-${navMode}`}
+        className="flex h-[var(--vvh,100dvh)] min-h-0 flex-col"
         ref={panes.shellRef}
         style={paneCssVars(panes.layout)}
       >
@@ -440,7 +432,7 @@ export function AppShell() {
         />
 
         {(lastError || tokenError || gapNotice || stale) && (
-          <div className="banners">
+          <div className="flex flex-none flex-col">
             {lastError && (
               <div className="banner banner-error" role="alert">
                 <span>{lastError}</span>
@@ -501,17 +493,15 @@ export function AppShell() {
           </div>
         )}
 
-        {(otherPending.length > 0 || otherAsks.length > 0 || otherOrphans.length > 0) && (
+        {(otherPending.length > 0 || otherAsks.length > 0) && (
           <PendingPermissionsBar
             requests={otherPending}
             asks={otherAsks}
-            orphaned={otherOrphans}
             onOpenSession={openPendingSession}
-            onDismissOrphans={dismissPendingOrphans}
           />
         )}
 
-        <div className="shell-body">
+        <div className="flex min-h-0 flex-auto">
           <DomainNav
             route={route}
             navigate={navigate}
@@ -527,18 +517,24 @@ export function AppShell() {
             key={tenantEpoch}
             id="main"
             ref={mainRef}
-            className="main-content"
+            className="flex min-h-0 min-w-0 flex-auto flex-col overflow-hidden focus:outline-none"
             tabIndex={-1}
             inert={navMode === 'drawer' && navDrawerOpen ? true : undefined}
           >
             {route.domain === 'chat' && (
-              <ChatView
-                route={route}
-                navigate={navigate}
-                sessionsOpen={chatSessionsOpen}
-                onCloseSessions={closeSessions}
-                panes={panes}
-              />
+              <ToolCatalogProvider
+                client={client}
+                enabled={hasToken && connectionState === 'open'}
+                epoch={epoch}
+              >
+                <ChatView
+                  route={route}
+                  navigate={navigate}
+                  sessionsOpen={chatSessionsOpen}
+                  onCloseSessions={closeSessions}
+                  panes={panes}
+                />
+              </ToolCatalogProvider>
             )}
             {route.domain === 'hub' && <HubView />}
             {route.domain === 'gateway' && <GatewayView />}
@@ -605,14 +601,9 @@ export function AppShell() {
               <dd>{t('app.help.close')}</dd>
             </dl>
             <div className="modal-actions">
-              <button
-                type="button"
-                className="btn btn-primary"
-                data-autofocus
-                onClick={() => setHelpOpen(false)}
-              >
+              <Button variant="primary" data-autofocus onClick={() => setHelpOpen(false)}>
                 {t('common.close')}
-              </button>
+              </Button>
             </div>
           </ModalShell>
         )}

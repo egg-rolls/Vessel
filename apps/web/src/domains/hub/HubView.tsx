@@ -40,9 +40,9 @@ export function HubView() {
   const version = configData?.version;
 
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader title={t('hub.title')} tenantId={tenantId} />
-      <div className="domain-content">
+      <div className="mt-5 flex flex-col gap-4">
         {!hasToken ? (
           <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
         ) : configError ? (
