@@ -13,10 +13,10 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
-import { Badge, Button, Input, Section, Stat } from '../../components/ui';
+import { Badge, Button, DataTable, Input, Section, Stat } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
-import type { EvalReport } from '../../gateway/types';
+import type { EvalCaseResult, EvalReport } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
 import { AttentionPanel } from './AttentionPanel';
@@ -59,7 +59,7 @@ export function ObserveView({
   useLocale();
   const { tenantId } = useConnection();
   return (
-    <div className="domain-view">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={t('observe.title')}
         description={t('observe.description')}
@@ -73,7 +73,7 @@ export function ObserveView({
         panelId="observe-panel"
       />
       <div
-        className="domain-content"
+        className="mt-5 flex flex-col gap-4"
         id="observe-panel"
         role="tabpanel"
         aria-label={t('observe.panelLabel')}
@@ -572,33 +572,39 @@ function EvalReportView({
             )}
           />
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th scope="col">{t('observe.evals.col.status')}</th>
-                <th scope="col">{t('observe.evals.col.case')}</th>
-                <th scope="col" className="col-optional">
-                  {t('observe.evals.col.duration')}
-                </th>
-                <th scope="col" className="col-optional">
-                  {t('observe.evals.col.assertions')}
-                </th>
-                <th scope="col">{t('observe.evals.col.output')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {cases.map((item) => (
-                <tr key={item.id}>
-                  <td>
-                    <StatusChip status={item.status} />
-                  </td>
-                  <td className="font-mono">{item.id}</td>
-                  <td className="font-mono tabular-nums col-optional">{item.duration_ms}ms</td>
-                  <td className="font-mono tabular-nums col-optional">
-                    {item.assertions.filter((assertion) => assertion.ok).length}/
-                    {item.assertions.length}
-                  </td>
-                  <td>
+          <DataTable<EvalCaseResult>
+            columns={[
+              {
+                key: 'status',
+                header: t('observe.evals.col.status'),
+                cell: (item) => <StatusChip status={item.status} />,
+              },
+              {
+                key: 'case',
+                header: t('observe.evals.col.case'),
+                cellClassName: 'font-mono',
+                cell: (item) => item.id,
+              },
+              {
+                key: 'duration',
+                header: t('observe.evals.col.duration'),
+                hide: 'wide',
+                cellClassName: 'font-mono tabular-nums',
+                cell: (item) => `${item.duration_ms}ms`,
+              },
+              {
+                key: 'assertions',
+                header: t('observe.evals.col.assertions'),
+                hide: 'wide',
+                cellClassName: 'font-mono tabular-nums',
+                cell: (item) =>
+                  `${item.assertions.filter((assertion) => assertion.ok).length}/${item.assertions.length}`,
+              },
+              {
+                key: 'output',
+                header: t('observe.evals.col.output'),
+                cell: (item) => (
+                  <>
                     {item.error ? (
                       <span className="text-danger">{item.error}</span>
                     ) : (
@@ -624,11 +630,13 @@ function EvalReportView({
                         </ul>
                       </details>
                     )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </>
+                ),
+              },
+            ]}
+            rows={cases}
+            rowKey={(item) => item.id}
+          />
         )}
         {cases.length < filteredCases.length && (
           <Button

@@ -7,9 +7,9 @@
 import { useMemo } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
-import { Button, Section } from '../../components/ui';
+import { Button, DataTable, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
-import type { RunEvent } from '../../gateway/types';
+import type { RunEvent, SchedulerRunSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import {
   DIAGNOSTIC_EVENT_TYPES,
@@ -100,28 +100,39 @@ export function DiagnosticsView() {
         ) : queue.length === 0 ? (
           <EmptyState title={t('observe.diagnostics.queueEmpty')} />
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>run</th>
-                <th>{t('observe.diagnostics.col.status')}</th>
-                <th>{t('observe.diagnostics.col.session')}</th>
-                <th>{t('observe.diagnostics.col.queuePosition')}</th>
-                <th>{t('observe.diagnostics.col.waitReason')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {queue.map((row) => (
-                <tr key={`${row.status}:${row.run_id}`}>
-                  <td className="font-mono">{row.run_id}</td>
-                  <td>{row.status}</td>
-                  <td className="font-mono">{row.session_id ?? '—'}</td>
-                  <td>{row.queue_position ?? '—'}</td>
-                  <td>{row.wait_reason ?? t('observe.diagnostics.noWaitReason')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable<SchedulerRunSummary>
+            columns={[
+              {
+                key: 'run',
+                header: 'run',
+                cellClassName: 'font-mono',
+                cell: (row) => row.run_id,
+              },
+              {
+                key: 'status',
+                header: t('observe.diagnostics.col.status'),
+                cell: (row) => row.status,
+              },
+              {
+                key: 'session',
+                header: t('observe.diagnostics.col.session'),
+                cellClassName: 'font-mono',
+                cell: (row) => row.session_id ?? '—',
+              },
+              {
+                key: 'queuePosition',
+                header: t('observe.diagnostics.col.queuePosition'),
+                cell: (row) => row.queue_position ?? '—',
+              },
+              {
+                key: 'waitReason',
+                header: t('observe.diagnostics.col.waitReason'),
+                cell: (row) => row.wait_reason ?? t('observe.diagnostics.noWaitReason'),
+              },
+            ]}
+            rows={queue}
+            rowKey={(row) => `${row.status}:${row.run_id}`}
+          />
         )}
         {resourceData(health.state)?.runtime && (
           <p className="text-muted">

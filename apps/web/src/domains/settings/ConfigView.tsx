@@ -3,7 +3,7 @@ import { useRefreshSignal } from '../../app/refresh';
 import { CopyButton } from '../../components/CopyButton';
 import { JsonView } from '../../components/JsonView';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
-import { Badge, Button, KeyValueList, SearchInput, Section } from '../../components/ui';
+import { Badge, Button, DataTable, KeyValueList, SearchInput, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import { filterConfigEntries, flattenConfig } from '../../state/config';
@@ -135,26 +135,31 @@ export function ConfigView() {
             {t('config.noMatch', { query: query.trim() })}
           </p>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th scope="col">{t('config.col.path')}</th>
-                <th scope="col">{t('config.col.value')}</th>
-                <th scope="col" className="col-optional">
-                  {t('config.col.type')}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredEntries.map((entry) => (
-                <tr key={entry.path}>
-                  <td className="font-mono">{entry.path}</td>
-                  <td className="font-mono">{entry.value || '—'}</td>
-                  <td className="col-optional text-muted">{entry.type}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable
+            columns={[
+              {
+                key: 'path',
+                header: t('config.col.path'),
+                cellClassName: 'font-mono',
+                cell: (entry) => entry.path,
+              },
+              {
+                key: 'value',
+                header: t('config.col.value'),
+                cellClassName: 'font-mono',
+                cell: (entry) => entry.value || '—',
+              },
+              {
+                key: 'type',
+                header: t('config.col.type'),
+                hide: 'compact',
+                cellClassName: 'text-muted',
+                cell: (entry) => entry.type,
+              },
+            ]}
+            rows={filteredEntries}
+            rowKey={(entry) => entry.path}
+          />
         )}
       </Section>
 
@@ -162,22 +167,24 @@ export function ConfigView() {
         {sourceEntries.length === 0 ? (
           <p className="text-md text-muted">{t('config.noSources')}</p>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th scope="col">{t('config.col.key')}</th>
-                <th scope="col">{t('config.col.source')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sourceEntries.map(([key, source]) => (
-                <tr key={key}>
-                  <td className="font-mono">{key}</td>
-                  <td className="font-mono">{source}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable
+            columns={[
+              {
+                key: 'key',
+                header: t('config.col.key'),
+                cellClassName: 'font-mono',
+                cell: (entry) => entry[0],
+              },
+              {
+                key: 'source',
+                header: t('config.col.source'),
+                cellClassName: 'font-mono',
+                cell: (entry) => entry[1],
+              },
+            ]}
+            rows={sourceEntries}
+            rowKey={(entry) => entry[0]}
+          />
         )}
       </Section>
     </div>

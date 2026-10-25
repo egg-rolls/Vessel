@@ -99,6 +99,7 @@ export function ModalShell({
   closeLabel,
   size = 'md',
   className = '',
+  bodyClassName = '',
   children,
 }: {
   label: string;
@@ -110,6 +111,8 @@ export function ModalShell({
   /** 语义宽度：sm 420 / md 620 / lg 760（tokens.css）。 */
   size?: ModalSize;
   className?: string;
+  /** 追加到滚动主体容器的类；只在需要改滚动结构时传（如命令面板）。 */
+  bodyClassName?: string;
   children: ReactNode;
 }) {
   const dialogRef = useModalA11y(onClose);
@@ -135,8 +138,14 @@ export function ModalShell({
         aria-label={label}
         aria-describedby={describedBy}
       >
-        {/* 保留 marker：CommandPalette 需要 `.palette .modal-body-scroll` 改滚动结构。 */}
-        <div className="modal-body-scroll">{children}</div>
+        <div
+          className={cn(
+            'flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain p-1 -m-1',
+            bodyClassName,
+          )}
+        >
+          {children}
+        </div>
         {closeLabel ? (
           <IconButton className="absolute right-2 top-2" label={closeLabel} onClick={onClose}>
             ×

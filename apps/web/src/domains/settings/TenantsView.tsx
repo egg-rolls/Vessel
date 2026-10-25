@@ -5,7 +5,7 @@ import { usePaletteEntities } from '../../components/PaletteEntities';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
-import { Badge, Button, Field, Input, Section, Select } from '../../components/ui';
+import { Badge, Button, DataTable, Field, Input, Section, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { TenantInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -418,50 +418,70 @@ export function TenantsView() {
           </div>
         }
       >
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th scope="col">{t('settings.tenants.col.tenant')}</th>
-              <th scope="col">{t('settings.tenants.col.name')}</th>
-              <th scope="col">{t('settings.tenants.col.status')}</th>
-              <th scope="col" className="col-optional">
-                {t('settings.tenants.col.created')}
-              </th>
-              <th scope="col" className="col-optional">
-                {t('settings.tenants.col.quota')}
-              </th>
-              <th scope="col" className="col-optional">
-                {t('settings.tenants.col.usage')}
-              </th>
-              <th scope="col">{t('settings.tenants.col.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tenants.map((tenant) => {
-              const active = tenant.tenant_id === tenantId;
-              return (
-                <tr key={tenant.tenant_id} className={active ? 'row-active' : undefined}>
-                  <td className="font-mono">
-                    {tenant.tenant_id}
-                    {active && <Badge className="ml-1.5">{t('settings.tenants.current')}</Badge>}
-                  </td>
-                  <td>{tenant.name ?? '—'}</td>
-                  <td>
-                    <StatusChip
-                      status={tenant.status === 'active' ? 'running' : 'disabled'}
-                      label={t(
-                        tenant.status === 'active'
-                          ? 'settings.tenants.enabled'
-                          : 'settings.tenants.disabled',
-                      )}
-                    />
-                  </td>
-                  <td className="font-mono col-optional">
-                    {tenant.created_at ? new Date(tenant.created_at).toLocaleString() : '—'}
-                  </td>
-                  <td className="font-mono text-muted col-optional">{formatQuota(tenant.quota)}</td>
-                  <td className="font-mono text-muted col-optional">{formatQuota(tenant.usage)}</td>
-                  <td>
+        <DataTable
+          activeKey={tenantId ?? undefined}
+          columns={[
+            {
+              key: 'tenant',
+              header: t('settings.tenants.col.tenant'),
+              cellClassName: 'font-mono',
+              cell: (tenant) => (
+                <>
+                  {tenant.tenant_id}
+                  {tenant.tenant_id === tenantId && (
+                    <Badge className="ml-1.5">{t('settings.tenants.current')}</Badge>
+                  )}
+                </>
+              ),
+            },
+            {
+              key: 'name',
+              header: t('settings.tenants.col.name'),
+              cell: (tenant) => tenant.name ?? '—',
+            },
+            {
+              key: 'status',
+              header: t('settings.tenants.col.status'),
+              cell: (tenant) => (
+                <StatusChip
+                  status={tenant.status === 'active' ? 'running' : 'disabled'}
+                  label={t(
+                    tenant.status === 'active'
+                      ? 'settings.tenants.enabled'
+                      : 'settings.tenants.disabled',
+                  )}
+                />
+              ),
+            },
+            {
+              key: 'created',
+              header: t('settings.tenants.col.created'),
+              hide: 'compact',
+              cellClassName: 'font-mono',
+              cell: (tenant) =>
+                tenant.created_at ? new Date(tenant.created_at).toLocaleString() : '—',
+            },
+            {
+              key: 'quota',
+              header: t('settings.tenants.col.quota'),
+              hide: 'compact',
+              cellClassName: 'font-mono text-muted',
+              cell: (tenant) => formatQuota(tenant.quota),
+            },
+            {
+              key: 'usage',
+              header: t('settings.tenants.col.usage'),
+              hide: 'compact',
+              cellClassName: 'font-mono text-muted',
+              cell: (tenant) => formatQuota(tenant.usage),
+            },
+            {
+              key: 'actions',
+              header: t('settings.tenants.col.actions'),
+              cell: (tenant) => {
+                const active = tenant.tenant_id === tenantId;
+                return (
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <Button
                       size="small"
                       disabled={!connected || tenant.status !== 'active' || active}
@@ -475,12 +495,14 @@ export function TenantsView() {
                     <Button size="small" disabled={!connected} onClick={() => setEditing(tenant)}>
                       {t('common.edit')}
                     </Button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                  </div>
+                );
+              },
+            },
+          ]}
+          rows={tenants}
+          rowKey={(tenant) => tenant.tenant_id}
+        />
       </Section>
 
       {createOpen && (

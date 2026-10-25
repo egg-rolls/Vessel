@@ -6,6 +6,12 @@ export { Badge, type BadgeProps, type BadgeTone } from './Badge';
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
 export { cn } from './cn';
 export {
+  DataTable,
+  type DataTableColumn,
+  type DataTableHide,
+  type DataTableProps,
+} from './DataTable';
+export {
   Field,
   type FieldProps,
   Input,

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { SegmentedTabs } from '../../components/Tabs';
-import { Badge, SearchInput, Section, Stat } from '../../components/ui';
+import { Badge, DataTable, SearchInput, Section, Stat } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import {
@@ -143,26 +143,27 @@ export function CapabilitiesView() {
                 </>
               }
             >
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th scope="col">{t('capabilities.col.method')}</th>
-                    <th scope="col">{t('capabilities.col.permission')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {group.methods.map((method) => (
-                    <tr key={method.name}>
-                      <td className="font-mono">{method.name}</td>
-                      <td>
-                        <span className={`perm-badge perm-${group.permission}`}>
-                          {group.permission}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <DataTable
+                columns={[
+                  {
+                    key: 'method',
+                    header: t('capabilities.col.method'),
+                    cellClassName: 'font-mono',
+                    cell: (method) => method.name,
+                  },
+                  {
+                    key: 'permission',
+                    header: t('capabilities.col.permission'),
+                    cell: () => (
+                      <span className={`perm-badge perm-${group.permission}`}>
+                        {group.permission}
+                      </span>
+                    ),
+                  },
+                ]}
+                rows={group.methods}
+                rowKey={(method) => method.name}
+              />
             </Section>
           ))
         ))}

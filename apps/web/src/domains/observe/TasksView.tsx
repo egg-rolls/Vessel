@@ -6,8 +6,9 @@
 import { useMemo } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
-import { Button, Section } from '../../components/ui';
+import { Button, DataTable, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import type { TaskEntry } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { flattenAgentCards, sortTasks } from '../../state/tasks';
 import { resourceData, useResource } from '../../state/useResource';
@@ -79,32 +80,52 @@ export function TasksView() {
         ) : taskRows.length === 0 ? (
           <EmptyState title={t('observe.tasks.empty')} />
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>{t('observe.tasks.col.id')}</th>
-                <th>{t('observe.tasks.col.title')}</th>
-                <th>{t('observe.tasks.col.assignee')}</th>
-                <th>{t('observe.tasks.col.status')}</th>
-                <th>{t('observe.tasks.col.parent')}</th>
-                <th>{t('observe.tasks.col.artifacts')}</th>
-                <th>{t('observe.tasks.col.since')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {taskRows.map((task) => (
-                <tr key={task.id}>
-                  <td className="font-mono">{task.id}</td>
-                  <td>{task.title}</td>
-                  <td className="font-mono">{task.assignee}</td>
-                  <td>{task.status}</td>
-                  <td className="font-mono">{task.parent_task ?? '—'}</td>
-                  <td className="font-mono">{task.artifact_refs.join(', ') || '—'}</td>
-                  <td className="text-muted">{formatTime(task.since)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable<TaskEntry>
+            columns={[
+              {
+                key: 'id',
+                header: t('observe.tasks.col.id'),
+                cellClassName: 'font-mono',
+                cell: (task) => task.id,
+              },
+              {
+                key: 'title',
+                header: t('observe.tasks.col.title'),
+                cell: (task) => task.title,
+              },
+              {
+                key: 'assignee',
+                header: t('observe.tasks.col.assignee'),
+                cellClassName: 'font-mono',
+                cell: (task) => task.assignee,
+              },
+              {
+                key: 'status',
+                header: t('observe.tasks.col.status'),
+                cell: (task) => task.status,
+              },
+              {
+                key: 'parent',
+                header: t('observe.tasks.col.parent'),
+                cellClassName: 'font-mono',
+                cell: (task) => task.parent_task ?? '—',
+              },
+              {
+                key: 'artifacts',
+                header: t('observe.tasks.col.artifacts'),
+                cellClassName: 'font-mono',
+                cell: (task) => task.artifact_refs.join(', ') || '—',
+              },
+              {
+                key: 'since',
+                header: t('observe.tasks.col.since'),
+                cellClassName: 'text-muted',
+                cell: (task) => formatTime(task.since),
+              },
+            ]}
+            rows={taskRows}
+            rowKey={(task) => task.id}
+          />
         )}
       </Section>
 
