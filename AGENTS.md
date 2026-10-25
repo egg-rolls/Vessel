@@ -24,7 +24,7 @@
 - **权限**：默认无限等待，不得重新引入 120s / 固定 TTL；只有显式正数 `timeoutMs` 才超时；abort 优先于超时。只有 human / policy 能答，没有 agent 审批人，不提供 `allow-after`（ADR-077/079/091）。
 - **数据写入**：session / checkpoint 一律 `atomicWrite`，默认 `durable: true`；损坏 ≠ 不存在，抛 `SessionCorruptError`、不 unlink；一个 tenant 一个写者，锁冲突返回 `tenant_locked` / `session_locked` / `run_locked`（ADR-056/086）。
 - **单 run**：同一个 `AgentRuntime` 同时只允许一个 active run；第二个 run 抛 `run_already_running`；不要另写终态持久化 / 事件发布路径（ADR-054）。
-- **发布纪律**：1.0 前只做干跑，不 tag、不 publish、不合并 `main`、不 force-push；改动只走 PR；tag `v*` 只有 1 打。
+- **发布纪律**：1.0 前只做干跑，不 tag、不 publish、不 force-push；1 本地 squash 到 `main` 后直接 push，PR 只在用户明确要求时开；CI 异步，不作为 push 前置；tag `v*` 只有 1 打。
 - **插件信任**：默认加载外部插件，启动时向 stderr 告警；`VESSEL_NO_EXTERNAL_PLUGINS=1` 只加载仓库插件；显式 `plugins:` 即信任；外部插件以完整进程权限运行，P0-3 只做到缓解——不可信仓库务必 opt-out。
 - **远程**：不默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环必须 TLS；`serve.allowed_origins` 只接受显式 http(s) origin，禁止 `*` / path / query。
 - **MCP**：MCP 工具默认不 `allow`；只按 `auto_approve_tools` 的原始工具名精确放行（ADR-039）。
@@ -74,7 +74,7 @@ bun run scripts/version.ts --check
 bun run scripts/release-dry-run.ts
 ```
 
-改完代码，`bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .` 三个必须过；收口还要求 `check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run`。
+改完代码，至少跑受影响的定向检查；全量 `bun test` / typecheck / biome ci 只在检查点或用户要求时跑。CI 异步，不作为 push 前置。收口额外门禁 `check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run` 只在用户要求或发布检查点。
 完整命令见 [README.md](README.md) 的「快速开始」；CI / 发布见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md) 与 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
 
 ## 分层与能力准入

@@ -81,7 +81,7 @@
 - 运行在 ubuntu + Node 22（`npm`）；Windows 跳过（`.cmd` bin shim 未验证），
   不作为 `cross-platform` 的一部分。
 - 只写 OS 临时目录；**不上传 artifact、不登录 npm、不创建 tag、不发布**。
-- 失败即 PR 红；不设 required 时仍应视为发布前必须人工确认的门禁。
+- CI 异步；失败不阻塞 push，发布前人工确认。
 
 ### 1.3 0.9 Wave 2B2B 门禁
 
@@ -207,7 +207,7 @@
 
 | 对象 | 规则 |
 |---|---|
-| `main` | 禁止直接 push；要求 CI 绿；squash merge；只允许 1 合并 |
+| `main` | 1 本地 squash 后直接 push；不 force-push；PR 可选（用户要求时）；CI 异步不阻塞 |
 | `release/*` | 只有 1 可合并 |
 | `0.x.y-<role>` | 只有该角色 N 可写 |
 | tag `v*` | 只有 1 / CI 可创建；禁止删除已发布 tag |

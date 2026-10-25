@@ -214,7 +214,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | `qa`   | 无（只读）                                                                                                                                            | 全部；输出到个人侧 reports / decisions        |
 
 规则：
-- **跨路径改动只能提 PR 或消息协商，不能直接改。**
+- **跨路径改动先与 1 / owner 消息协商；协商后由 1 本地 squash 到 main，不强制 PR。**
 - `scripts/version.ts` 的写模式**只在发布收口由 1 执行**，机械改写各包 `package.json`；不属于日常跨路径改动，N 不运行写模式。
 - `packages/core/src/types/**` 的接口主权归 `core`；任何接口变更必须同步 `docs/architecture/**` + 对应的 `docs/adr/ADR-*.md`（或新增 ADR），并通知全部 N。
 - 依赖方向单向：`core` ← 其它。`core` 的 `dependencies` 永远为空。
@@ -251,7 +251,7 @@ N 在自己的分支提交（只含共享侧成品）
 
 ### 7.1 分支保护
 
-- `main`：禁止直接 push；只接受 `release/*` 与 `hotfix/*` 合并；CI 必须绿；squash merge。
+- `main`：1 本地 squash 后直接 push；不 force-push；PR 只在用户明确要求时开；CI 异步，不作为 push 前置。
 - `release/*`：只有 1 能合并；N 不直接写。
 - `0.x.y-<role>`：只有该角色 N 写；其他 N 只读。
 - tag `v*`：只有 1 或 CI 创建；已发布 tag 禁止删除或移动。
