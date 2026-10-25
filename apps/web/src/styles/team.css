@@ -1,61 +1,18 @@
 /* ─────────────────────────────────────────────────────────────
-   Team（0.19 S6）：列表 / 群聊 / 成员侧栏 / 成员详情。
-   全部 .team- 前缀，不改动 .chat-* / .session-* / .msg* / .stream-notice。
+   Team（0.19 S6）：团队工作区的响应式布局与列表 / 消息状态 marker。
+   视觉与排版已迁到 L3 utilities；这里只保留：
+   - 1199 / 1023 / 680 断点依赖（无 L1 断点 token）；
+   - 共享子组件的嵌套 marker（`.action-menu` / `.icon-btn` / bubble）；
+   - 现有测试断言依赖的类名（member-row / delivery / notice）。
    ───────────────────────────────────────────────────────────── */
 
-/* ── 工作区布局 ───────────────────────────────────────── */
-
-.team-workspace {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: var(--team-list-w) minmax(0, 1fr) var(--team-members-w);
-}
-
-.team-workspace-list {
-  display: block;
-  overflow-y: auto;
-}
-
-.team-workspace-detail {
-  display: block;
-  overflow-y: auto;
-}
-
-.team-list-column {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border-right: 1px solid var(--line);
-}
-
-/* ── Team 列表 ────────────────────────────────────────── */
-
-.team-list {
-  min-height: 0;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
+/* ── 列表：响应式滚动容器 + action-menu 显隐 ──────────── */
 
 .team-list-standalone {
   height: auto;
   max-width: var(--team-list-max-w);
   margin: 0 auto;
   padding: 24px clamp(16px, 4vw, 32px) 32px;
-}
-
-.team-list-controls {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0 14px 10px;
-}
-
-.team-list-search {
-  width: 100%;
 }
 
 .team-list-scroll {
@@ -77,22 +34,6 @@
   padding: 0;
 }
 
-.team-list-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-}
-
-.team-list-item:hover {
-  background: var(--hover-tint);
-}
-
-.team-list-item.selected {
-  background: var(--accent-soft);
-}
-
 /* 菜单只在 hover / 键盘焦点时出现；隐藏时仍可被键盘发现。 */
 .team-list-item .action-menu {
   opacity: 0;
@@ -103,63 +44,7 @@
   opacity: 1;
 }
 
-.team-list-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.team-list-name-line {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.team-list-name {
-  min-width: 0;
-  font-size: var(--text-sm);
-  font-weight: 550;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.team-list-counts {
-  flex: none;
-  display: flex;
-  gap: 8px;
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
-.team-list-sub {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
-.team-list-workspace {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* ── 群聊 ─────────────────────────────────────────────── */
+/* ── 群聊：1023 抽屉布局依赖 ──────────────────────────── */
 
 .team-chat {
   min-width: 0;
@@ -176,49 +61,6 @@
   gap: 16px;
   padding: 14px clamp(16px, 4vw, 32px);
   border-bottom: 1px solid var(--line);
-}
-
-.team-chat-heading {
-  min-width: 0;
-}
-
-.team-chat-title {
-  font-family: var(--font-serif);
-  font-size: var(--text-title);
-  font-weight: 600;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-}
-
-.team-chat-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 5px;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.team-chat-id {
-  font-size: 10px;
-  color: var(--faint);
-}
-
-.team-chat-workspace {
-  min-width: 0;
-  max-width: var(--drawer-w);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.team-chat-actions {
-  flex: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
 }
 
 .team-chat-members-toggle,
@@ -251,31 +93,6 @@
   padding: 18px clamp(16px, 4vw, 32px) 24px;
 }
 
-.team-transcript {
-  width: 100%;
-  max-width: var(--team-notice-max);
-  margin-inline: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.team-day-divider {
-  margin: 6px 0 2px;
-}
-
-.team-load-earlier {
-  align-self: center;
-}
-
-.team-history-note {
-  align-self: center;
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
 .team-composer-area {
   flex: none;
   padding: 10px clamp(16px, 4vw, 32px) calc(12px + var(--dock-safe-bottom));
@@ -283,136 +100,7 @@
   background: var(--bg);
 }
 
-.team-composer {
-  position: relative;
-}
-
-.team-composer-notices {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-bottom: 4px;
-}
-
-.team-composer-notice {
-  margin: 0;
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
-.team-composer-notice.danger {
-  color: var(--danger);
-}
-
-/* mention chips + popover */
-
-.team-mention-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 6px;
-  padding: 0;
-  border: 0;
-  min-width: 0;
-}
-
-.team-mention-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 4px 1px 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font-size: 11px;
-}
-
-.team-mention-chip button {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-size: 13px;
-  line-height: 1;
-  padding: 2px 4px;
-  cursor: pointer;
-}
-
-.team-mention-popover {
-  margin-bottom: 6px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--elev-2);
-  overflow: hidden;
-}
-
-.team-mention-title {
-  margin: 0;
-  padding: 8px 10px 4px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.team-mention-list {
-  max-height: 240px;
-  overflow-y: auto;
-  padding: 0 4px 4px;
-}
-
-.team-mention-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.team-mention-option.active,
-.team-mention-option:hover {
-  background: var(--hover-tint);
-}
-
-.team-mention-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
-}
-
-.team-mention-empty {
-  margin: 0;
-  padding: 8px 10px;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.team-mention-hint {
-  margin: 0;
-  padding: 4px 10px 8px;
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
-/* ── 消息 ─────────────────────────────────────────────── */
-
-.team-message {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-width: 100%;
-}
+/* ── 消息：bubble 背景 / 失败态由这些 marker 承载 ─────── */
 
 .team-message-self {
   align-items: flex-end;
@@ -420,47 +108,6 @@
 
 .team-message-agent {
   align-items: flex-start;
-}
-
-.team-message-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
-.team-message-sender {
-  font-weight: 550;
-  color: var(--muted);
-}
-
-.team-message-tag {
-  padding: 0 5px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  color: var(--muted);
-}
-
-.team-message-time {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 0.21：federation 入站日志的回信地址（只展示，不在 Web 直接发送）。 */
-.team-message-federation {
-  max-width: var(--drawer-w);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-}
-
-.team-message-reply-address {
-  align-self: flex-start;
 }
 
 .team-message-bubble {
@@ -480,23 +127,15 @@
   border: 1px solid var(--line);
 }
 
-.team-message-text {
-  font-size: var(--text-body);
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.team-message-pending {
-  opacity: 0.72;
-}
-
 .team-message-failed .team-message-bubble {
   border-color: var(--danger);
 }
 
-.team-message-view-body {
-  align-self: flex-start;
-  font-size: 11px;
+/* 测试断言依赖的类名；视觉由 utilities 提供。 */
+.team-notice-danger {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--ink);
 }
 
 .team-delivery-queued {
@@ -521,37 +160,7 @@
   font-size: 11px;
 }
 
-.team-delivery-error .mono {
-  font-size: 10.5px;
-}
-
-.team-notice {
-  max-width: var(--team-notice-max);
-  margin: 2px auto;
-  padding: 5px 12px;
-  border-left: 2px solid var(--line-strong);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--surface-sunken);
-  color: var(--muted);
-  font-size: 11.5px;
-  text-align: center;
-}
-
-.team-notice-danger {
-  border-left-color: var(--danger);
-  background: var(--danger-soft);
-  color: var(--ink);
-}
-
-.team-notice-tag {
-  margin-right: 6px;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  color: var(--faint);
-  text-transform: uppercase;
-}
-
-/* ── 成员侧栏 ─────────────────────────────────────────── */
+/* ── 成员侧栏：1023 抽屉与 icon-btn 对齐依赖 ──────────── */
 
 .team-members-column {
   min-height: 0;
@@ -561,44 +170,15 @@
   border-left: 1px solid var(--line);
 }
 
-.team-members {
-  min-height: 0;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
 .team-members-head {
   padding-bottom: 8px;
-}
-
-.team-members-count {
-  margin-left: 2px;
-  font-size: 10px;
-  color: var(--faint);
 }
 
 .team-members-head .icon-btn {
   margin-left: auto;
 }
 
-.team-members-load-more {
-  margin: 8px 12px 12px;
-}
-
-.team-members-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  margin: 0;
-  padding: 0 8px 12px;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
+/* 测试断言依赖 `team-member-row`；状态视觉由 utilities 提供。 */
 .team-member-row {
   display: flex;
   align-items: center;
@@ -607,125 +187,7 @@
   border-radius: var(--radius-sm);
 }
 
-.team-member-row:hover {
-  background: var(--hover-tint);
-}
-
-.team-member-row.selected {
-  background: var(--accent-soft);
-}
-
-.team-member-row.left {
-  opacity: 0.7;
-}
-
-.team-avatar {
-  flex: none;
-  width: var(--team-avatar);
-  height: var(--team-avatar);
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--surface-sunken);
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-}
-
-.team-member-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.team-member-name-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.team-member-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
-}
-
-.team-member-sub {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-  color: var(--faint);
-}
-
-.team-presence-dot {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ok);
-}
-
-.team-presence-dot.gone {
-  background: transparent;
-  border: 1px solid var(--faint);
-}
-
-.team-attention-badge {
-  flex: none;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border: 1px solid var(--warn);
-  border-radius: 999px;
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 16px;
-  cursor: pointer;
-}
-
-/* ── 成员详情 / 只读 Body ─────────────────────────────── */
-
-.team-member-detail {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.team-member-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  max-width: var(--team-member-max-w);
-  width: 100%;
-  margin-inline: auto;
-  padding: 20px clamp(16px, 4vw, 32px) 32px;
-}
-
-.team-body-card {
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-}
+/* ── 成员详情：数据表与 680 历史条目 ─────────────────── */
 
 .team-body-meta {
   display: grid;
@@ -747,26 +209,6 @@
   overflow-wrap: anywhere;
 }
 
-.team-body-history-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.team-observed-note {
-  margin: 0;
-  font-size: 11px;
-}
-
-.team-body-history {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 .team-body-history-item {
   display: flex;
   align-items: center;
@@ -778,62 +220,15 @@
   background: var(--surface);
 }
 
-.team-body-history-main {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-}
-
-.team-body-view .team-transcript-scroll {
-  padding-top: 16px;
-}
-
-.team-readonly-message {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.team-readonly-tool {
-  max-width: min(100%, var(--team-notice-max));
-  margin: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 /* ── 响应式 ───────────────────────────────────────────── */
 
 @media (max-width: 1199px) {
-  .team-workspace {
-    grid-template-columns:
-      var(--team-list-w-compact) minmax(0, 1fr)
-      var(--team-members-w-compact);
-  }
-
   .team-chat-body {
     grid-template-columns: minmax(0, 1fr) var(--team-members-w-compact);
   }
 }
 
 @media (max-width: 1023px) {
-  .team-workspace {
-    display: block;
-    min-height: 0;
-  }
-
-  .team-list-column {
-    display: none;
-  }
-
   .team-chat {
     height: 100%;
   }

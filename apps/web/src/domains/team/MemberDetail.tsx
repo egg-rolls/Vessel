@@ -74,7 +74,7 @@ function SessionTranscript({ messages }: { messages: readonly Message[] }) {
     const day = ts !== undefined ? localDayKey(ts) : null;
     if (day && day !== lastDay) {
       nodes.push(
-        <div className="day-divider team-day-divider" key={`day-${day}`}>
+        <div className="day-divider mt-1.5 mb-0.5" key={`day-${day}`}>
           <span>{localDayLabel(ts ?? 0)}</span>
         </div>,
       );
@@ -82,34 +82,42 @@ function SessionTranscript({ messages }: { messages: readonly Message[] }) {
     }
     if (message.role === 'system') {
       nodes.push(
-        <div className="team-notice" key={key} role="status">
-          <span className="team-notice-tag">{t('team.message.systemTag')}</span>
+        <div
+          className="mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted"
+          key={key}
+          role="status"
+        >
+          <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
+            {t('team.message.systemTag')}
+          </span>
           <span>{message.content}</span>
         </div>,
       );
       continue;
     }
     nodes.push(
-      <div className={`team-readonly-message team-readonly-${message.role}`} key={key}>
-        <div className="team-message-meta">
-          <span className="team-message-sender mono">{message.name || message.role}</span>
+      <div className="flex flex-col gap-1" key={key}>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
+          <span className="font-medium text-muted">{message.name || message.role}</span>
           {ts !== undefined && (
-            <time className="team-message-time" dateTime={new Date(ts).toISOString()}>
+            <time className="font-mono tabular-nums" dateTime={new Date(ts).toISOString()}>
               {formatClock(ts)}
             </time>
           )}
         </div>
         {message.role === 'tool' ? (
-          <pre className="team-readonly-tool">{message.content}</pre>
+          <pre className="m-0 max-w-180 rounded-sm border border-line bg-sunken px-2.5 py-2 font-mono text-xs whitespace-pre-wrap wrap-anywhere">
+            {message.content}
+          </pre>
         ) : (
           <div className="team-message-bubble">
-            <Markdown className="team-message-text" text={message.content} />
+            <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
           </div>
         )}
       </div>,
     );
   }
-  return <div className="team-transcript">{nodes}</div>;
+  return <div className="mx-auto flex w-full max-w-180 flex-col gap-3">{nodes}</div>;
 }
 
 function BodyTranscript({
@@ -146,19 +154,21 @@ function BodyTranscript({
   }
 
   return (
-    <div className="team-member-detail team-body-view">
+    <div className="team-body-view flex min-h-0 min-w-0 flex-col">
       <header className="team-chat-head">
-        <div className="team-chat-heading">
-          <h1 className="team-chat-title">{t('team.member.title')}</h1>
-          <div className="team-chat-meta">
-            <span className="mono">{bodyId}</span>
+        <div className="min-w-0">
+          <h1 className="font-serif text-title font-semibold wrap-anywhere">
+            {t('team.member.title')}
+          </h1>
+          <div className="mt-1.25 flex flex-wrap items-center gap-2 text-sm text-muted">
+            <span className="font-mono">{bodyId}</span>
           </div>
         </div>
-        <div className="team-chat-actions">
+        <div className="flex flex-none flex-wrap justify-end gap-1.5">
           <Button onClick={onBackToMember}>{t('breadcrumb.team.member')}</Button>
         </div>
       </header>
-      <div className="team-transcript-scroll">
+      <div className="team-transcript-scroll pt-4">
         {!session && !error ? (
           <LoadingState rows={3} />
         ) : !session ? (
@@ -187,20 +197,22 @@ function BodyHistoryList({
 }) {
   if (observed.length > 0) {
     return (
-      <ul className="team-body-history">
+      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
         {observed.map((body) => (
           <li className="team-body-history-item" key={body.session_id}>
-            <div className="team-body-history-main">
-              <span className="mono">{body.session_id}</span>
-              <span className="dim">{t('team.member.epoch', { epoch: body.epoch })}</span>
-              <span className="dim">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+              <span className="font-mono">{body.session_id}</span>
+              <span className="text-muted tabular-nums">
+                {t('team.member.epoch', { epoch: body.epoch })}
+              </span>
+              <span className="text-muted tabular-nums">
                 {t('team.member.observedAt', { time: formatTimestamp(body.observed_at) })}
               </span>
-              {body.reason && <span className="dim mono">{body.reason}</span>}
+              {body.reason && <span className="font-mono text-muted">{body.reason}</span>}
             </div>
-            <button type="button" className="link-btn" onClick={() => onOpenBody(body.session_id)}>
+            <Button variant="link" onClick={() => onOpenBody(body.session_id)}>
               {t('team.member.viewTranscript')}
-            </button>
+            </Button>
           </li>
         ))}
       </ul>
@@ -210,22 +222,24 @@ function BodyHistoryList({
   if (entries.length === 0) return <EmptyState title={t('team.member.empty')} />;
 
   return (
-    <ul className="team-body-history">
+    <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
       {entries.map((body) => (
         <li className="team-body-history-item" key={body.session_id}>
-          <div className="team-body-history-main">
-            <span className="mono">{body.session_id}</span>
-            <span className="dim">{t('team.member.epoch', { epoch: body.epoch })}</span>
-            <span className="dim">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+            <span className="font-mono">{body.session_id}</span>
+            <span className="text-muted tabular-nums">
+              {t('team.member.epoch', { epoch: body.epoch })}
+            </span>
+            <span className="text-muted tabular-nums">
               {t('team.member.startedAt', { time: formatTimestamp(body.started_at) })}
             </span>
-            <span className="dim">
+            <span className="text-muted tabular-nums">
               {t('team.member.retiredAt', { time: formatTimestamp(body.retired_at) })}
             </span>
           </div>
-          <button type="button" className="link-btn" onClick={() => onOpenBody(body.session_id)}>
+          <Button variant="link" onClick={() => onOpenBody(body.session_id)}>
             {t('team.member.viewTranscript')}
-          </button>
+          </Button>
         </li>
       ))}
     </ul>
@@ -334,15 +348,17 @@ export function MemberDetail({
   const observedOnly = history.source === 'observed';
 
   return (
-    <div className="team-member-detail">
+    <div className="flex min-h-0 min-w-0 flex-col">
       <header className="team-chat-head">
-        <div className="team-chat-heading">
-          <h1 className="team-chat-title">{name}</h1>
-          <div className="team-chat-meta">
-            <span className="mono">{member.agent_id}</span>
+        <div className="min-w-0">
+          <h1 className="font-serif text-title font-semibold wrap-anywhere">{name}</h1>
+          <div className="mt-1.25 flex flex-wrap items-center gap-2 text-sm text-muted">
+            <span className="font-mono">{member.agent_id}</span>
             <span
               role="img"
-              className={`team-presence-dot ${member.presence}`}
+              className={`size-1.5 flex-none rounded-full ${
+                member.presence === 'live' ? 'bg-success' : 'border border-faint bg-transparent'
+              }`}
               aria-label={
                 member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone')
               }
@@ -352,29 +368,29 @@ export function MemberDetail({
               label={t(status.labelKey)}
               title={status.titleKey ? t(status.titleKey) : undefined}
             />
-            <span className="dim">
+            <span className="text-muted">
               {t('team.member.visibility', { visibility: member.visibility })}
             </span>
           </div>
         </div>
-        <div className="team-chat-actions">
+        <div className="flex flex-none flex-wrap justify-end gap-1.5">
           <Button onClick={onBack}>{t('breadcrumb.team.chat')}</Button>
         </div>
       </header>
 
       {error && <StaleNotice message={t('team.error.stale')} onRetry={resource.reload} />}
 
-      <div className="team-member-scroll">
-        <section className="team-body-card">
-          <h2 className="section-title">{t('team.member.currentBody')}</h2>
+      <div className="mx-auto flex w-full max-w-225 flex-col gap-5 px-8 py-5 pb-8 max-compact:px-4">
+        <section className="team-body-card rounded-md border border-line bg-surface p-4">
+          <h2 className="text-md font-semibold text-ink">{t('team.member.currentBody')}</h2>
           <dl className="team-body-meta">
             <div>
               <dt>epoch</dt>
-              <dd className="mono">{member.epoch ?? '—'}</dd>
+              <dd className="font-mono tabular-nums">{member.epoch ?? '—'}</dd>
             </div>
             <div>
               <dt>session</dt>
-              <dd className="mono">{member.session_id ?? '—'}</dd>
+              <dd className="font-mono">{member.session_id ?? '—'}</dd>
             </div>
             <div>
               <dt>state</dt>
@@ -398,10 +414,10 @@ export function MemberDetail({
           </Button>
         </section>
 
-        <section className="team-body-history-section">
-          <h2 className="section-title">{t('team.member.retiredBodies')}</h2>
+        <section className="flex flex-col gap-2">
+          <h2 className="text-md font-semibold text-ink">{t('team.member.retiredBodies')}</h2>
           {observedOnly && observed.length > 0 && (
-            <p className="dim team-observed-note">{t('team.member.observedOnly')}</p>
+            <p className="m-0 text-xs">{t('team.member.observedOnly')}</p>
           )}
           <BodyHistoryList
             entries={history.server}

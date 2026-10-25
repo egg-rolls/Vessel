@@ -25,16 +25,18 @@ export function MentionPopover({
   onHover,
 }: MentionPopoverProps) {
   return (
-    <div className="team-mention-popover">
-      <p className="team-mention-title">{t('team.mention.title')}</p>
+    <div className="mb-1.5 overflow-hidden rounded-md border border-line-strong bg-surface shadow-elev-2">
+      <p className="m-0 px-2.5 pt-2 pb-1 font-mono text-2xs uppercase tracking-wider text-faint">
+        {t('team.mention.title')}
+      </p>
       <div
-        className="team-mention-list"
+        className="max-h-60 overflow-y-auto px-1 pb-1"
         id={listId}
         role="listbox"
         aria-label={t('team.a11y.mentionList')}
       >
         {candidates.length === 0 && (
-          <p className="team-mention-empty" role="status">
+          <p className="m-0 px-2.5 py-2 text-sm text-muted" role="status">
             {t('team.mention.empty')}
           </p>
         )}
@@ -49,15 +51,20 @@ export function MentionPopover({
               role="option"
               tabIndex={-1}
               aria-selected={selected}
-              className={`team-mention-option ${selected ? 'active' : ''}`.trim()}
+              className={`flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-inherit hover:bg-hover ${
+                selected ? 'bg-hover' : ''
+              }`.trim()}
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={() => onHover(index)}
               onClick={() => onPick(candidate)}
             >
-              <span className="team-avatar" aria-hidden="true">
+              <span
+                className="grid size-7 flex-none place-items-center rounded-full bg-sunken font-mono text-xs uppercase text-muted"
+                aria-hidden="true"
+              >
                 {candidate.label.slice(0, 1).toUpperCase()}
               </span>
-              <span className="team-mention-name">{candidate.label}</span>
+              <span className="min-w-0 flex-1 truncate text-sm">{candidate.label}</span>
               <StatusChip
                 status={status.chipStatus}
                 label={t(status.labelKey)}
@@ -65,7 +72,11 @@ export function MentionPopover({
               />
               <span
                 role="img"
-                className={`team-presence-dot ${candidate.member.presence}`}
+                className={`size-1.5 flex-none rounded-full ${
+                  candidate.member.presence === 'live'
+                    ? 'bg-success'
+                    : 'border border-faint bg-transparent'
+                }`}
                 aria-label={
                   candidate.member.presence === 'live'
                     ? t('team.presence.live')
@@ -76,7 +87,7 @@ export function MentionPopover({
           );
         })}
       </div>
-      <p className="team-mention-hint">{t('team.mention.hint')}</p>
+      <p className="m-0 px-2.5 pt-1 pb-2 text-xs text-faint">{t('team.mention.hint')}</p>
     </div>
   );
 }

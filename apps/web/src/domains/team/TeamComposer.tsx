@@ -107,25 +107,29 @@ export function TeamComposer({
       : t('team.composer.input');
 
   return (
-    <div className="composer team-composer">
-      <div className="composer-meta">
-        <span className="composer-target" title={targetLabel}>
+    <div className="composer team-composer relative">
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-faint">
+        <span className="min-w-0 truncate font-mono text-xs text-accent" title={targetLabel}>
           {targetLabel}
         </span>
-        <span className="composer-meta-right">
-          <span className="composer-hint dim">{t('team.composer.hint')}</span>
+        <span className="flex flex-none items-center gap-2.5">
+          <span className="flex-none font-mono text-xs">{t('team.composer.hint')}</span>
         </span>
       </div>
 
       {mentions.length > 0 && (
-        <fieldset className="team-mention-chips">
+        <fieldset className="mb-1.5 flex min-w-0 flex-wrap gap-1.5 border-0 p-0">
           <legend className="sr-only">{t('team.mention.title')}</legend>
           {mentions.map((chip) => (
-            <span className="team-mention-chip" key={chip.agentId}>
+            <span
+              className="inline-flex items-center gap-1 rounded-full border border-line-strong bg-accent-soft py-px pr-1 pl-2 text-xs text-accent-ink"
+              key={chip.agentId}
+            >
               <span aria-hidden="true">@</span>
               <span>{chip.label}</span>
               <button
                 type="button"
+                className="cursor-pointer border-0 bg-transparent px-1 py-0.5 text-sm leading-none text-inherit"
                 aria-label={t('team.mention.remove', { name: chip.label })}
                 onClick={() =>
                   onMentionsChange(mentions.filter((item) => item.agentId !== chip.agentId))
@@ -148,31 +152,31 @@ export function TeamComposer({
         />
       )}
 
-      <div className="team-composer-notices">
+      <div className="mb-1 flex flex-col gap-0.5">
         {mentions.length === 0 && (
-          <p className="team-composer-notice">{t('team.composer.noMention')}</p>
+          <p className="m-0 text-xs text-faint">{t('team.composer.noMention')}</p>
         )}
         {(!hasToken || !connected) && (
-          <p className="team-composer-notice" role="status">
+          <p className="m-0 text-xs text-faint" role="status">
             {t('team.composer.disconnected')}
           </p>
         )}
         {tooLarge && (
-          <p className="team-composer-notice danger" role="alert">
+          <p className="m-0 text-xs text-danger" role="alert">
             {t('team.composer.tooLarge', { limit: LIMIT_KIB })}
           </p>
         )}
         {retryHint && (
-          <p className="team-composer-notice" role="status">
+          <p className="m-0 text-xs text-faint" role="status">
             {t('team.delivery.retryHint')}
           </p>
         )}
       </div>
 
-      <div className="composer-row">
+      <div className="flex items-end gap-2.5">
         <AutoGrowTextarea
           ref={inputRef}
-          className="composer-input team-composer-input"
+          className="min-h-6 flex-1 resize-none overflow-y-auto rounded-md bg-sunken px-2.5 py-2 text-base leading-relaxed text-ink placeholder:text-faint focus:outline-none disabled:opacity-55"
           rows={1}
           value={value}
           onChange={(event) => {

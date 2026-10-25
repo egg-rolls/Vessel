@@ -14,6 +14,7 @@ import {
   NotEnabledState,
   StaleNotice,
 } from '../../components/States';
+import { Button, Input } from '../../components/ui';
 import type { TeamSummary } from '../../gateway/types';
 import { t } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
@@ -92,7 +93,7 @@ export function TeamList({
 
   if (!hasToken) {
     return (
-      <div className="team-list">
+      <div className="flex h-full min-h-0 flex-col">
         {title}
         <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
       </div>
@@ -100,11 +101,12 @@ export function TeamList({
   }
 
   return (
-    <div className={`team-list ${standalone ? 'team-list-standalone' : ''}`.trim()}>
+    <div
+      className={`flex min-h-0 flex-col ${standalone ? 'team-list-standalone h-auto' : 'h-full'}`}
+    >
       {title}
-      <div className="team-list-controls">
-        <input
-          className="input team-list-search"
+      <div className="flex flex-none flex-col gap-2 px-3.5 pb-2.5">
+        <Input
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -134,38 +136,38 @@ export function TeamList({
           ) : filtered.length === 0 ? (
             <EmptyState
               title={t('team.list.emptyFiltered', { query: query.trim() })}
-              action={
-                <button type="button" className="btn" onClick={() => setQuery('')}>
-                  {t('team.list.clearSearch')}
-                </button>
-              }
+              action={<Button onClick={() => setQuery('')}>{t('team.list.clearSearch')}</Button>}
             />
           ) : (
             <ul className="team-list-scroll">
               {filtered.map((team) => (
                 <li
                   key={team.team_id}
-                  className={`team-list-item ${selectedTeamId === team.team_id ? 'selected' : ''}`.trim()}
+                  className={`team-list-item flex items-center gap-1 rounded-sm px-1 py-0.5 hover:bg-hover${
+                    selectedTeamId === team.team_id ? ' bg-accent-soft' : ''
+                  }`}
                 >
                   <button
                     type="button"
-                    className="team-list-main"
+                    className="flex min-w-0 flex-1 cursor-pointer flex-col gap-1 rounded-sm border-0 bg-transparent px-2.5 py-2 text-left text-inherit"
                     onClick={() => onOpen(team.team_id)}
                     aria-current={selectedTeamId === team.team_id ? 'true' : undefined}
                   >
-                    <span className="team-list-name-line">
-                      <span className="team-list-name">{team.name || team.team_id}</span>
-                      <span className="team-list-counts mono">
+                    <span className="flex min-w-0 items-baseline justify-between gap-2.5">
+                      <span className="min-w-0 truncate text-sm font-medium">
+                        {team.name || team.team_id}
+                      </span>
+                      <span className="flex flex-none gap-2 text-xs text-muted">
                         <span>{t('team.list.memberCount', { count: team.member_count })}</span>
-                        <span className="dim">
+                        <span className="text-muted">
                           {team.online_count !== undefined
                             ? t('team.list.onlineCount', { count: team.online_count })
                             : '—'}
                         </span>
                       </span>
                     </span>
-                    <span className="team-list-sub">
-                      <span className="team-list-workspace mono" title={team.workspace}>
+                    <span className="flex min-w-0 items-center gap-2 text-xs text-faint">
+                      <span className="truncate font-mono" title={team.workspace}>
                         {team.workspace || '—'}
                       </span>
                     </span>

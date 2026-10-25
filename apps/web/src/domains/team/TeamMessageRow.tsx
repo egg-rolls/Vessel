@@ -7,6 +7,7 @@
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { useOptionalToast } from '../../components/ToastProvider';
+import { Button } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { TeamDelivery, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -34,7 +35,7 @@ function MessageTime({ ts }: { ts: number }) {
   if (!clock) return null;
   const iso = new Date(ts).toISOString();
   return (
-    <time className="team-message-time" dateTime={iso}>
+    <time className="font-mono tabular-nums" dateTime={iso}>
       {clock}
     </time>
   );
@@ -48,7 +49,7 @@ function DeliveryNotes({ deliveries }: { deliveries: readonly TeamDelivery[] }) 
     <>
       {queued.map((delivery) => (
         <span
-          className="team-delivery-queued"
+          className="team-delivery-queued self-start font-mono text-2xs text-faint"
           key={`queued-${delivery.agent_id}`}
           role="status"
           aria-label={t('team.a11y.deliveryQueued')}
@@ -59,12 +60,12 @@ function DeliveryNotes({ deliveries }: { deliveries: readonly TeamDelivery[] }) 
             : delivery.resolution === 'forked'
               ? t('team.delivery.queuedForked')
               : t('team.delivery.queued')}
-          <span className="mono"> · {delivery.agent_id}</span>
+          <span className="font-mono"> · {delivery.agent_id}</span>
         </span>
       ))}
       {failures.map((delivery, index) => (
         <div
-          className="team-delivery-error"
+          className="team-delivery-error self-start flex max-w-180 flex-wrap items-center gap-1.5 rounded-r-sm border-l-2 border-danger bg-danger-soft px-2.5 py-1.25 text-xs text-danger"
           key={`failed-${delivery.agent_id}-${delivery.code ?? delivery.status}`}
           role={index === 0 ? 'alert' : 'status'}
         >
@@ -76,8 +77,8 @@ function DeliveryNotes({ deliveries }: { deliveries: readonly TeamDelivery[] }) 
                 : t('team.delivery.error')
             }
           />
-          <span className="mono">{delivery.code ?? delivery.status}</span>
-          <span className="mono">{delivery.agent_id}</span>
+          <span className="font-mono text-xs">{delivery.code ?? delivery.status}</span>
+          <span className="font-mono text-xs">{delivery.agent_id}</span>
           {delivery.reason && <span>{truncate(delivery.reason, 160)}</span>}
         </div>
       ))}
@@ -91,8 +92,13 @@ function SystemNotice({ message, senderLabel }: { message: TeamMessage; senderLa
     ? t(key, { name: senderLabel ?? message.from })
     : message.content || t('team.system.unknown');
   return (
-    <div className="team-notice" role="status">
-      <span className="team-notice-tag">{t('team.message.systemTag')}</span>
+    <div
+      className="mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted"
+      role="status"
+    >
+      <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
+        {t('team.message.systemTag')}
+      </span>
       <span>{text}</span>
     </div>
   );
@@ -138,61 +144,70 @@ export function TeamMessageRow({
     message.sendStatus === 'failed'
       ? ' team-message-failed'
       : message.sendStatus === 'sending'
-        ? ' team-message-pending'
+        ? ' opacity-70'
         : '';
 
   return (
     <div
-      className={`team-message ${isHuman ? 'team-message-human team-message-self' : 'team-message-agent'}${statusClass}`}
+      className={`flex max-w-full flex-col gap-1 ${isHuman ? 'team-message-self' : 'team-message-agent'}${statusClass}`}
       data-kind={message.kind}
     >
-      <div className="team-message-meta">
-        <span className="team-message-sender">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
+        <span className="font-medium text-muted">
           {isHuman ? t('team.message.you') : (senderLabel ?? message.from)}
         </span>
-        {isAgent && <span className="team-message-tag">{t('team.message.agentTag')}</span>}
-        {isReply && <span className="team-message-tag">{t('team.message.replyTag')}</span>}
+        {isAgent && (
+          <span className="rounded-full border border-line-strong px-1.25 font-mono text-2xs text-muted">
+            {t('team.message.agentTag')}
+          </span>
+        )}
+        {isReply && (
+          <span className="rounded-full border border-line-strong px-1.25 font-mono text-2xs text-muted">
+            {t('team.message.replyTag')}
+          </span>
+        )}
         {federationFrom && (
-          <span className="team-message-federation mono" title={federationFrom}>
+          <span className="max-w-80 truncate font-mono text-muted" title={federationFrom}>
             {t('team.federation.from')} {federationFrom}
           </span>
         )}
         <MessageTime ts={message.ts} />
         {message.sendStatus === 'sending' && (
-          <span className="team-message-sending dim">{t('team.composer.sending')}</span>
+          <span className="text-muted">{t('team.composer.sending')}</span>
         )}
       </div>
 
       <div className="team-message-bubble">
-        <Markdown className="team-message-text" text={message.content} />
+        <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
       </div>
 
       {(isReply || isAgent) && canViewSession && onViewSession && (
-        <button type="button" className="link-btn team-message-view-body" onClick={onViewSession}>
+        <Button variant="link" className="self-start text-xs" onClick={onViewSession}>
           {t('team.message.viewBody')}
-        </button>
+        </Button>
       )}
 
       {federationFrom && (
-        <button
-          type="button"
-          className="link-btn team-message-reply-address"
-          onClick={copyFederationAddress}
-        >
+        <Button variant="link" className="self-start text-xs" onClick={copyFederationAddress}>
           {t('team.federation.reply')}
-        </button>
+        </Button>
       )}
 
       {message.deliveries && <DeliveryNotes deliveries={message.deliveries} />}
 
       {message.sendStatus === 'failed' && (
-        <div className="team-delivery-error team-send-error" role="alert">
+        <div
+          className="team-delivery-error self-start flex max-w-180 flex-wrap items-center gap-1.5 rounded-r-sm border-l-2 border-danger bg-danger-soft px-2.5 py-1.25 text-xs text-danger"
+          role="alert"
+        >
           <StatusChip status="failed" label={t('team.delivery.failed')} />
-          {message.sendError && <span className="mono">{truncate(message.sendError, 160)}</span>}
+          {message.sendError && (
+            <span className="font-mono text-xs">{truncate(message.sendError, 160)}</span>
+          )}
           {onRetry && (
-            <button type="button" className="link-btn" onClick={onRetry}>
+            <Button variant="link" onClick={onRetry}>
               {t('team.delivery.retry')}
-            </button>
+            </Button>
           )}
         </div>
       )}
