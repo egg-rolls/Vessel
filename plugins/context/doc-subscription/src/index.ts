@@ -3,9 +3,10 @@
  * @module @vessel-agent/doc-subscription
  *
  * 提供两件东西：
- * - `subscribe` 工具：显式 add / remove / list 具体文件（无 glob、无自动订阅）。
- * - `BeforeLlm` hook：每个 run 第一次 LLM 请求前检查订阅文件，首次全量、
- *   之后 unified diff，追加到 `ctx.messages` 注入；没有订阅就不注入。
+ * - `subscribe` 工具：显式 add / remove / list / inspect 具体文件（无 glob、无自动订阅）。
+ * - `BeforeLlm` hook：每个 run 第一次 LLM 请求前检查订阅文件，返回一条只含
+ *   path / id / rev / bytes 的短通知（`additionalContext`，不写历史）；
+ *   正文只在模型显式 `inspect` 时返回。
  *
  * 不新增 core 模型 / 事件；订阅状态按 session 存在 `stateDir` 下。
  */
@@ -48,7 +49,7 @@ export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOption
     name: DOC_SUBSCRIPTION_PLUGIN_NAME,
     version: '0.26.2',
     description:
-      'Explicit per-session file subscriptions: `subscribe` tool + BeforeLlm content injection',
+      'Explicit per-session file subscriptions: `subscribe` tool + BeforeLlm change notices',
     install(host: PluginHost, installOptions?: { config?: Record<string, unknown> }): void {
       const config: DocSubscriptionConfig = parseDocSubscriptionConfig(
         installOptions?.config ?? options.config,

@@ -397,19 +397,6 @@ describe('projectMessagesToUiItems（resume）', () => {
     expect(items.map((item) => item.kind)).toEqual(['user', 'assistant', 'tool']);
   });
 
-  it('subscription injections are hidden from resumed history', () => {
-    const items = projectMessagesToUiItems([
-      { role: 'user', content: 'hello' },
-      {
-        role: 'user',
-        name: 'subscription:abc123',
-        content: '<subscription path="a.md" change="diff">+x</subscription>',
-      },
-      { role: 'assistant', content: 'answer' },
-    ]);
-    expect(items.map((item) => item.kind)).toEqual(['user', 'assistant']);
-  });
-
   it('resume 回退把 Error: 前缀的工具结果显示为 failed', () => {
     const items = projectMessagesToUiItems([
       {

@@ -10,7 +10,6 @@ import {
   buildGroup,
   groupEvents,
   isGroupPersisted,
-  isSubscriptionInjectedMessage,
   isVisibleForGrouping,
   type StoredEvent,
 } from '../src/state/events';
@@ -391,18 +390,12 @@ describe('EventStore', () => {
   });
 });
 
-describe('subscription injections stay hidden by default (0.27)', () => {
+describe('message.injected stays internal by default (0.27)', () => {
   test('message.injected is internal unless internal events are shown', () => {
     const entry = stored('r1', 'message.injected', 1, {
-      message: { role: 'user', name: 'subscription:abc', content: 'diff' },
+      message: { role: 'user', name: 'agent:worker', content: 'member reply' },
     });
     expect(isVisibleForGrouping(entry, false)).toBe(false);
     expect(isVisibleForGrouping(entry, true)).toBe(true);
-  });
-
-  test('only subscription-prefixed messages are treated as injected context', () => {
-    expect(isSubscriptionInjectedMessage({ name: 'subscription:abc' })).toBe(true);
-    expect(isSubscriptionInjectedMessage({ name: 'agent:worker' })).toBe(false);
-    expect(isSubscriptionInjectedMessage({})).toBe(false);
   });
 });

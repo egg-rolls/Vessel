@@ -27,22 +27,6 @@ describe('formatResumeHistory（/resume 历史回灌）', () => {
     expect(bodies(lines)).toEqual(['hello', 'hi there', 'tool output']);
   });
 
-  it('订阅注入消息不出现在 resume 历史里', () => {
-    const lines = formatResumeHistory([
-      { role: 'user', content: 'hello' },
-      {
-        role: 'user',
-        name: 'subscription:abc123',
-        content: '<subscription path="a.md" change="diff">+x</subscription>',
-      },
-      { role: 'assistant', content: 'hi there' },
-    ]);
-
-    expect(lines.join('\n')).not.toContain('<subscription');
-    expect(title(lines)).toContain('last 2 messages');
-    expect(bodies(lines)).toEqual(['hello', 'hi there']);
-  });
-
   it('超过 20 条时只保留最后 20 条，标题带 of', () => {
     const messages = Array.from({ length: 25 }, (_, index) => ({
       role: 'user',

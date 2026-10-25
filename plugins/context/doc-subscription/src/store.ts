@@ -5,6 +5,10 @@
  * 状态只落在 `stateDir` 下：`<stateDir>/sessions/<encodeURIComponent(session_id)>.json`。
  * 损坏的状态文件按空状态处理（不崩溃、不删除）；写入走同目录临时文件 + rename，
  * 目录 0700、文件 0600（Windows 上 mode 语义有限，但保持同一调用形状）。
+ *
+ * 两个游标：
+ * - `notified_rev`：短通知已返回给模型的最新 rev；推进后同一 rev 不再通知。
+ * - `seen_rev`：`inspect` 成功返回正文后的最新 rev；失败 / 超限不推进。
  */
 
 import { createHash } from 'node:crypto';
@@ -19,15 +23,21 @@ export interface SubscriptionEntry {
   path: string;
   /** 用户原始输入（相对路径 / `~` 形式，仅用于展示） */
   input: string;
-  /** `''` = 尚未投递；否则为 sha256 hex 或 `deleted` / `too_large:<size>:<mtime>` / `binary:<hash>` */
+  /** 最近一次观察到的状态：sha256 hex / `deleted` / `too_large:<size>:<mtime>` / `binary:<hash>` */
   rev: string;
+  /** 最近一次短通知里的 rev；`''` = 尚未通知 */
+  notified_rev: string;
+  /** 最近一次 inspect 成功返回的 rev；`''` = 模型尚未看过正文 */
+  seen_rev: string;
   /** 最近一次观察到的字节数 */
   size: number;
   /** 最近一次观察到的 mtime（毫秒） */
   mtime_ms: number;
-  /** 最近一次注入时间（Unix ms；0 = 从未） */
-  delivered_at: number;
-  /** 上一版全文（仅文本且 <= maxFullBytes 时保留） */
+  /** 最近一次通知时间（Unix ms；0 = 从未） */
+  notified_at: number;
+  /** 最近一次 inspect 成功时间（Unix ms；0 = 从未） */
+  seen_at: number;
+  /** 上一版 `seen_rev` 对应的全文（仅文本且 <= maxFullBytes 时保留） */
   snapshot?: string;
 }
 
@@ -76,14 +86,19 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
     if (!isRecord(value)) continue;
     const canonical = readString(value, 'path', '');
     if (canonical === '') continue;
+    const rev = readString(value, 'rev', '');
     const entry: SubscriptionEntry = {
       id: readString(value, 'id', '') || subscriptionId(canonical),
       path: canonical,
       input: readString(value, 'input', canonical),
-      rev: readString(value, 'rev', ''),
+      rev,
+      // 旧状态（只有 rev / delivered_at）按“已通知”迁移，避免升级后重复通知。
+      notified_rev: readString(value, 'notified_rev', rev),
+      seen_rev: readString(value, 'seen_rev', ''),
       size: readNumber(value, 'size', 0),
       mtime_ms: readNumber(value, 'mtime_ms', 0),
-      delivered_at: readNumber(value, 'delivered_at', 0),
+      notified_at: readNumber(value, 'notified_at', readNumber(value, 'delivered_at', 0)),
+      seen_at: readNumber(value, 'seen_at', 0),
     };
     if (typeof value.snapshot === 'string') entry.snapshot = value.snapshot;
     // 以 canonical path 为唯一键，避免手改/旧文件里的键与 path 漂移造成重复条目。

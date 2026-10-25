@@ -24,12 +24,7 @@
  */
 
 import { t } from '../i18n/index.js';
-import {
-  isSubscriptionInjectedMessage,
-  projectMessagesToUiItems,
-  projectUiItems,
-  type UiItem,
-} from '../repl/project/ui-item.js';
+import { projectMessagesToUiItems, projectUiItems, type UiItem } from '../repl/project/ui-item.js';
 import type { DurableRunHandle, ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
@@ -566,9 +561,7 @@ export function formatResumeHistory(
   messages: SessionMessageLike[],
   options: HistoryFormatOptions = {},
 ): string[] {
-  const visible = messages.filter(
-    (message) => message.role !== 'system' && !isSubscriptionInjectedMessage(message),
-  );
+  const visible = messages.filter((message) => message.role !== 'system');
   if (visible.length === 0) return [];
 
   const recent = visible.slice(-RESUME_HISTORY_MESSAGES);
@@ -804,8 +797,6 @@ function formatHistoryMessage(
   msg: SessionMessageLike,
   options: HistoryFormatOptions = {},
 ): string[] {
-  // 订阅注入是上下文更新，不是用户发言；即使调用方忘了过滤也不展示。
-  if (isSubscriptionInjectedMessage(msg)) return [];
   if (msg.role === 'user') {
     const fileMatch = msg.content.match(/^<file path="([^"]+)">/);
     if (fileMatch?.[1]) {
@@ -942,8 +933,9 @@ function historyCommand(): CommandEntry {
       }
 
       const { limit, role } = parsed.value;
-      const visible = loaded.messages.filter((message) => !isSubscriptionInjectedMessage(message));
-      const scoped = role ? visible.filter((message) => message.role === role) : visible;
+      const scoped = role
+        ? loaded.messages.filter((message) => message.role === role)
+        : loaded.messages;
       if (scoped.length === 0) {
         return {
           handled: true,

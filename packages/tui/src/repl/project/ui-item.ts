@@ -935,14 +935,6 @@ function parseToolArguments(raw: string | undefined): unknown {
 }
 
 /**
- * 订阅工具注入的上下文消息不是用户发言：默认从 transcript / history 隐藏。
- * 识别口径与 Web 一致——只看 `name` 前缀，不新增 Message 字段。
- */
-export function isSubscriptionInjectedMessage(message: { name?: string }): boolean {
-  return typeof message.name === 'string' && message.name.startsWith('subscription:');
-}
-
-/**
  * 纯函数：把 session messages 投影为 UiItem（resume / 旧数据）。
  * assistant.tool_calls 与后续 tool 消息配对成完整工具卡；找不到结果时仍保留调用。
  */
@@ -989,7 +981,6 @@ export function projectMessagesToUiItems(
       continue;
     }
     if (message.role === 'user') {
-      if (isSubscriptionInjectedMessage(message)) continue;
       items.push({
         kind: 'user',
         id: next('user'),

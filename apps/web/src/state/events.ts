@@ -56,7 +56,13 @@ export interface RunGroup {
   items: TimelineItem[];
 }
 
-/** 默认隐藏的内部事件：状态同步/提示词上下文，不是用户关心的对话内容。 */
+/**
+ * 默认隐藏的内部事件：状态同步/提示词上下文，不是用户关心的对话内容。
+ *
+ * `message.injected` 仍由 owner 注入（成员回复）与 `RunOptions.messages`（@file 等）生产；
+ * `doc-subscription` 改为临时 `additionalContext` 后不再产生该事件。保留在这里，
+ * 让所有“注入到 prompt 的上下文”默认不出现在 run 时间线。
+ */
 export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'context.changed',
   'session.saved',
@@ -64,14 +70,6 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'llm.response',
   'message.injected',
 ]);
-
-/**
- * 订阅工具注入的上下文消息不是用户发言：默认从 transcript 隐藏。
- * 识别口径与 TUI 一致——只看 `name` 前缀，不新增 Message 字段。
- */
-export function isSubscriptionInjectedMessage(message: { name?: string }): boolean {
-  return typeof message.name === 'string' && message.name.startsWith('subscription:');
-}
 
 /** 单个 run 的事件序列 → 可渲染分组。 */
 export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunGroup {

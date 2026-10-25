@@ -1,16 +1,15 @@
 /**
- * doc-subscription 插件测试：工具 round-trip、拒绝项、hook 注入 / 去重 / 隔离、diff 单元。
+ * doc-subscription 插件测试：工具 round-trip、通知（无正文）、inspect、双游标、降级、隔离、diff 单元。
  */
 
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { buildPathBoundary } from '@vessel-agent/basic-tools';
+import { buildPathBoundary, canonicalPath } from '@vessel-agent/basic-tools';
 import type {
   Hook,
   HookContext,
-  Message,
   PluginHost,
   ToolContext,
   ToolDefinition,
@@ -20,6 +19,7 @@ import { parseDocSubscriptionConfig } from '../src/config.js';
 import { unifiedDiff } from '../src/diff.js';
 import { createBeforeLlmHook } from '../src/hook.js';
 import { createDocSubscriptionPlugin } from '../src/index.js';
+import type { SessionSubscriptionState, SubscriptionEntry } from '../src/store.js';
 import { SubscriptionStore } from '../src/store.js';
 import { createSubscribeTool } from '../src/tool.js';
 
@@ -88,6 +88,15 @@ function hookCtx(runId: string, sessionId = 'session'): HookContext {
   return { run_id: runId, session_id: sessionId };
 }
 
+/** 跑一次 hook；断言它从不写 ctx.messages；返回 additionalContext（无通知时为空串） */
+async function hookNotice(hook: Hook, runId: string, sessionId = 'session'): Promise<string> {
+  const ctx = hookCtx(runId, sessionId);
+  const result = await hook.run(ctx);
+  expect(ctx.messages).toBeUndefined();
+  if (result === undefined) return '';
+  return typeof result.additionalContext === 'string' ? result.additionalContext : '';
+}
+
 /** 取数组中指定元素；缺失即测试失败（避免 `!` 断言） */
 function at<T>(items: readonly T[] | undefined, index: number): T {
   const item = items?.[index];
@@ -95,72 +104,70 @@ function at<T>(items: readonly T[] | undefined, index: number): T {
   return item;
 }
 
+/** 取唯一订阅条目 */
+function onlyEntry(state: SessionSubscriptionState): SubscriptionEntry {
+  return at(Object.values(state.subscriptions), 0);
+}
+
 describe('subscribe tool', () => {
   test('add / list / remove round-trip', async () => {
-    const { base, tool, store } = setup();
-    const file = path.join(base, 'notes.txt');
+    const { base, tool } = setup();
+    const file = path.join(base, 'doc.md');
     writeFileSync(file, 'hello\n', 'utf-8');
 
     const added = await runTool(tool, { action: 'add', path: file });
-    expect(added).toContain('added 1:');
-    expect(added).toContain(file);
+    expect(added).toContain('added 1');
+    expect(added).toContain('inspect');
 
     const listed = await runTool(tool, { action: 'list' });
-    expect(listed).toContain(file);
-    expect(listed).toContain('rev=never');
-    expect(listed).toContain('bytes=6');
+    expect(listed).toContain(canonicalPath(file));
+    expect(listed).toContain('pending');
+    expect(listed).toContain('unread');
 
-    const state = await store.load('session');
-    const entries = Object.values(state.subscriptions);
-    expect(entries).toHaveLength(1);
-    const id = at(entries, 0).id;
-
-    const removed = await runTool(tool, { action: 'remove', id });
+    const removed = await runTool(tool, { action: 'remove', path: file });
     expect(removed).toContain('removed:');
     expect(await runTool(tool, { action: 'list' })).toBe('no subscriptions');
   });
 
-  test('remove by path and unknown id', async () => {
-    const { base, tool } = setup();
-    const file = path.join(base, 'a.txt');
-    writeFileSync(file, 'a\n', 'utf-8');
+  test('remove by id and unknown id', async () => {
+    const { base, tool, store } = setup();
+    const file = path.join(base, 'doc.md');
+    writeFileSync(file, 'hello\n', 'utf-8');
     await runTool(tool, { action: 'add', path: file });
+    const id = onlyEntry(await store.load('session')).id;
 
-    expect(await runTool(tool, { action: 'remove', path: file })).toContain('removed:');
-    expect(await runTool(tool, { action: 'remove', id: 'deadbeef0000' })).toContain('not_found');
-    expect(await runTool(tool, { action: 'remove' })).toContain('path 或 id');
+    expect(await runTool(tool, { action: 'remove', id })).toContain('removed:');
+    expect(await runTool(tool, { action: 'remove', id: 'missing' })).toContain('not_found');
   });
 
   test('invalid action', async () => {
     const { tool } = setup();
-    expect(await runTool(tool, { action: 'watch' })).toContain('action 必须是');
-    expect(await runTool(tool, { action: 'add' })).toContain('path 或 paths');
+    expect(await runTool(tool, { action: 'bogus' })).toContain('add / remove / list / inspect');
   });
 
   test('rejects wildcard, directory, missing, denied, outside roots, sensitive name', async () => {
+    const outside = makeTemp();
+    const outsideFile = path.join(outside, 'outside.txt');
+    writeFileSync(outsideFile, 'outside\n', 'utf-8');
     const { base, tool } = setup();
-    const outsideRoot = makeTemp();
-    const outsideFile = path.join(outsideRoot, 'outside.txt');
-    writeFileSync(outsideFile, 'x\n', 'utf-8');
-
-    const dir = path.join(base, 'folder');
-    mkdirSync(dir);
+    const directory = path.join(base, 'dir');
+    mkdirSync(directory);
     const sensitive = path.join(base, '.env');
     writeFileSync(sensitive, 'SECRET=1\n', 'utf-8');
 
     const output = await runTool(tool, {
       action: 'add',
       paths: [
-        '*.ts',
+        path.join(base, '*.ts'),
+        directory,
         path.join(base, 'missing.txt'),
-        dir,
         path.join(homedir(), '.ssh', 'id_rsa'),
         outsideFile,
         sensitive,
       ],
     });
 
-    expect(output).toContain('wildcard: *.ts');
+    expect(output).toContain('wildcard:');
     expect(output).toContain('not_found:');
     expect(output).toContain('not_a_file:');
     expect(output).toContain('path_denied:');
@@ -170,183 +177,229 @@ describe('subscribe tool', () => {
   });
 });
 
-describe('BeforeLlm hook', () => {
-  test('first run injects full content, then diff, never overwrites', async () => {
-    const { base, tool, hook, store } = setup();
+describe('BeforeLlm notice', () => {
+  test('notice contains metadata only, never content or diff, and never writes ctx.messages', async () => {
+    const { base, tool, hook } = setup();
     const file = path.join(base, 'doc.md');
-    writeFileSync(file, 'line one\nline two\n', 'utf-8');
+    writeFileSync(file, 'SECRET-CONTENT\nline two\n', 'utf-8');
     await runTool(tool, { action: 'add', path: file });
 
-    const ctx = hookCtx('run-1');
-    ctx.messages = [{ role: 'user', content: 'existing question' }];
-    await hook.run(ctx);
-
-    expect(ctx.messages).toHaveLength(2);
-    expect(at(ctx.messages, 0).content).toBe('existing question');
-    const first = at<Message>(ctx.messages, 1);
-    expect(first.role).toBe('user');
-    expect(first.name?.startsWith('subscription:')).toBe(true);
-    expect(first.content).toContain('change="full"');
-    expect(first.content).toContain('line one');
-
-    // 未变化的下一个 run：不注入
-    const unchanged = hookCtx('run-2');
-    await hook.run(unchanged);
-    expect(unchanged.messages ?? []).toHaveLength(0);
-
-    // 修改后：注入 diff，并保留新快照
-    writeFileSync(file, 'line one changed\nline two\nline three\n', 'utf-8');
-    const changed = hookCtx('run-3');
-    await hook.run(changed);
-    expect(changed.messages).toHaveLength(1);
-    const diffContent = at(changed.messages, 0).content;
-    expect(diffContent).toContain('change="diff"');
-    expect(diffContent).toContain('-line one');
-    expect(diffContent).toContain('+line one changed');
-    expect(diffContent).toContain('+line three');
-
-    const state = await store.load('session');
-    expect(at(Object.values(state.subscriptions), 0).snapshot).toBe(
-      'line one changed\nline two\nline three\n',
-    );
+    const notice = await hookNotice(hook, 'run-1');
+    expect(notice).toContain('<subscription-notice>');
+    expect(notice).toContain(canonicalPath(file));
+    expect(notice).toContain('id=');
+    expect(notice).toContain('rev="sha256:');
+    expect(notice).toContain('bytes=');
+    expect(notice).toContain('inspect');
+    expect(notice).not.toContain('SECRET-CONTENT');
+    expect(notice).not.toContain('@@');
   });
 
-  test('diff overflow degrades to diff_omitted', async () => {
-    const { base, tool, hook } = setup({ max_diff_lines: 2 });
-    const file = path.join(base, 'big.txt');
-    const original = Array.from({ length: 10 }, (_, i) => `line ${i}`).join('\n');
-    writeFileSync(file, `${original}\n`, 'utf-8');
-    await runTool(tool, { action: 'add', path: file });
-
-    await hook.run(hookCtx('run-1'));
-
-    const updated = Array.from({ length: 10 }, (_, i) => `changed ${i}`).join('\n');
-    writeFileSync(file, `${updated}\n`, 'utf-8');
-    const ctx = hookCtx('run-2');
-    await hook.run(ctx);
-
-    expect(ctx.messages).toHaveLength(1);
-    const content = at(ctx.messages, 0).content;
-    expect(content).toContain('change="diff_omitted"');
-    expect(content).toContain('`read ');
-  });
-
-  test('large file notice (maxFullBytes)', async () => {
-    const { base, tool, hook } = setup({ max_full_bytes: 10 });
-    const file = path.join(base, 'large.txt');
-    writeFileSync(file, 'x'.repeat(100), 'utf-8');
-    await runTool(tool, { action: 'add', path: file });
-
-    const ctx = hookCtx('run-1');
-    await hook.run(ctx);
-    expect(ctx.messages).toHaveLength(1);
-    expect(at(ctx.messages, 0).content).toContain('status="too_large"');
-  });
-
-  test('binary file notice', async () => {
+  test('same rev is not notified twice; a new change notifies again', async () => {
     const { base, tool, hook } = setup();
-    const file = path.join(base, 'blob.bin');
-    writeFileSync(file, Buffer.from([0x41, 0x00, 0x42]));
+    const file = path.join(base, 'doc.md');
+    writeFileSync(file, 'one\n', 'utf-8');
     await runTool(tool, { action: 'add', path: file });
 
-    const ctx = hookCtx('run-1');
-    await hook.run(ctx);
-    expect(ctx.messages).toHaveLength(1);
-    expect(at(ctx.messages, 0).content).toContain('status="binary"');
-    expect(at(ctx.messages, 0).content).not.toContain('ABC');
-  });
+    const first = await hookNotice(hook, 'run-1');
+    expect(first).toContain('Subscribed files changed: 1');
+    expect(await hookNotice(hook, 'run-2')).toBe('');
 
-  test('deleted file injects once', async () => {
-    const { base, tool, hook } = setup();
-    const file = path.join(base, 'gone.txt');
-    writeFileSync(file, 'bye\n', 'utf-8');
-    await runTool(tool, { action: 'add', path: file });
-
-    await hook.run(hookCtx('run-1'));
-    unlinkSync(file);
-
-    const deleted = hookCtx('run-2');
-    await hook.run(deleted);
-    expect(deleted.messages).toHaveLength(1);
-    expect(at(deleted.messages, 0).content).toContain('status="deleted"');
-
-    const again = hookCtx('run-3');
-    await hook.run(again);
-    expect(again.messages ?? []).toHaveLength(0);
+    writeFileSync(file, 'two\n', 'utf-8');
+    const third = await hookNotice(hook, 'run-3');
+    expect(third).toContain('Subscribed files changed: 1');
+    expect(third).not.toContain('two');
   });
 
   test('per-run guard: same run_id only checks once', async () => {
     const { base, tool, hook } = setup();
-    const file = path.join(base, 'once.txt');
-    writeFileSync(file, 'once\n', 'utf-8');
+    const file = path.join(base, 'doc.md');
+    writeFileSync(file, 'one\n', 'utf-8');
     await runTool(tool, { action: 'add', path: file });
 
-    const first = hookCtx('run-same');
-    await hook.run(first);
-    expect(first.messages).toHaveLength(1);
-
-    const second = hookCtx('run-same');
-    await hook.run(second);
-    expect(second.messages ?? []).toHaveLength(0);
+    expect(await hookNotice(hook, 'run-1')).not.toBe('');
+    writeFileSync(file, 'two\n', 'utf-8');
+    expect(await hookNotice(hook, 'run-1')).toBe('');
+    expect(await hookNotice(hook, 'run-2')).not.toBe('');
   });
 
   test('session isolation', async () => {
     const { base, tool, hook } = setup();
-    const file = path.join(base, 'isolated.txt');
-    writeFileSync(file, 'only A\n', 'utf-8');
-    await runTool(tool, { action: 'add', path: file }, 'session-A');
+    const file = path.join(base, 'doc.md');
+    writeFileSync(file, 'one\n', 'utf-8');
+    await runTool(tool, { action: 'add', path: file }, 'session-a');
 
-    const sessionB = hookCtx('run-b', 'session-B');
-    await hook.run(sessionB);
-    expect(sessionB.messages ?? []).toHaveLength(0);
-
-    const sessionA = hookCtx('run-a', 'session-A');
-    await hook.run(sessionA);
-    expect(sessionA.messages).toHaveLength(1);
+    expect(await hookNotice(hook, 'run-1', 'session-b')).toBe('');
+    expect(await hookNotice(hook, 'run-2', 'session-a')).not.toBe('');
   });
 
-  test('no subscriptions means no injection', async () => {
+  test('no subscriptions means no notice', async () => {
     const { hook } = setup();
-    const ctx = hookCtx('run-empty');
-    await hook.run(ctx);
-    expect(ctx.messages ?? []).toHaveLength(0);
+    expect(await hookNotice(hook, 'run-1')).toBe('');
+  });
+
+  test('notice caps the file list and summarizes the rest', async () => {
+    const { base, tool, hook } = setup();
+    const paths: string[] = [];
+    for (let index = 0; index < 25; index += 1) {
+      const file = path.join(base, `doc-${index}.md`);
+      writeFileSync(file, `content ${index}\n`, 'utf-8');
+      paths.push(file);
+    }
+    await runTool(tool, { action: 'add', paths });
+
+    const notice = await hookNotice(hook, 'run-1');
+    expect(notice).toContain('Subscribed files changed: 25');
+    expect(notice).toContain('... and 5 more');
+  });
+});
+
+describe('subscribe inspect', () => {
+  test('first inspect returns full content and advances seen_rev; second returns none', async () => {
+    const { base, tool, hook, store } = setup();
+    const file = path.join(base, 'doc.md');
+    writeFileSync(file, 'line one\nline two\n', 'utf-8');
+    await runTool(tool, { action: 'add', path: file });
+    await hookNotice(hook, 'run-1');
+
+    const full = await runTool(tool, { action: 'inspect', path: file });
+    expect(full).toContain('change="full"');
+    expect(full).toContain('line one');
+    const before = onlyEntry(await store.load('session'));
+    expect(before.seen_rev).not.toBe('');
+    expect(before.seen_rev).toBe(before.rev);
+    expect(await runTool(tool, { action: 'list' })).toContain('read');
+
+    const none = await runTool(tool, { action: 'inspect', path: file });
+    expect(none).toContain('change="none"');
+    expect(none).not.toContain('line one');
+  });
+
+  test('inspect after a change returns a diff and advances seen_rev', async () => {
+    const { base, tool, hook, store } = setup();
+    const file = path.join(base, 'doc.md');
+    writeFileSync(file, 'line one\nline two\n', 'utf-8');
+    await runTool(tool, { action: 'add', path: file });
+    await hookNotice(hook, 'run-1');
+    await runTool(tool, { action: 'inspect', path: file });
+
+    writeFileSync(file, 'line one changed\nline two\nline three\n', 'utf-8');
+    const notice = await hookNotice(hook, 'run-2');
+    expect(notice).toContain('rev="sha256:');
+
+    const diff = await runTool(tool, { action: 'inspect', path: file });
+    expect(diff).toContain('change="diff"');
+    expect(diff).toContain('-line one');
+    expect(diff).toContain('+line one changed');
+    const after = onlyEntry(await store.load('session'));
+    expect(after.seen_rev).toBe(after.rev);
+  });
+
+  test('inspect by id; unknown id is not_found', async () => {
+    const { base, tool, store } = setup();
+    const file = path.join(base, 'doc.md');
+    writeFileSync(file, 'hello\n', 'utf-8');
+    await runTool(tool, { action: 'add', path: file });
+    const id = onlyEntry(await store.load('session')).id;
+
+    expect(await runTool(tool, { action: 'inspect', id })).toContain('change="full"');
+    expect(await runTool(tool, { action: 'inspect', id: 'missing' })).toContain('not_found');
+  });
+
+  test('inspect over maxFullBytes does not advance seen_rev', async () => {
+    const { base, tool, hook, store } = setup({ max_full_bytes: 10 });
+    const file = path.join(base, 'big.txt');
+    writeFileSync(file, '01234567890123456789', 'utf-8');
+    await runTool(tool, { action: 'add', path: file });
+    await hookNotice(hook, 'run-1');
+
+    const output = await runTool(tool, { action: 'inspect', path: file });
+    expect(output).toContain('status="too_large"');
+    expect(output).toContain('use read');
+    expect(onlyEntry(await store.load('session')).seen_rev).toBe('');
+    expect(await runTool(tool, { action: 'list' })).toContain('unread');
+  });
+
+  test('inspect diff overflow degrades and does not advance seen_rev', async () => {
+    const { base, tool, hook, store } = setup({ max_diff_lines: 2 });
+    const file = path.join(base, 'doc.txt');
+    writeFileSync(file, 'a\nb\nc\n', 'utf-8');
+    await runTool(tool, { action: 'add', path: file });
+    await hookNotice(hook, 'run-1');
+    await runTool(tool, { action: 'inspect', path: file });
+    const seen = onlyEntry(await store.load('session')).seen_rev;
+
+    writeFileSync(
+      file,
+      `${Array.from({ length: 10 }, (_, i) => `line ${i}`).join('\n')}\n`,
+      'utf-8',
+    );
+    await hookNotice(hook, 'run-2');
+    const output = await runTool(tool, { action: 'inspect', path: file });
+    expect(output).toContain('change="diff_omitted"');
+    expect(output).toContain('use read');
+    expect(onlyEntry(await store.load('session')).seen_rev).toBe(seen);
+    expect(await runTool(tool, { action: 'list' })).toContain('unread');
+  });
+
+  test('binary inspect degrades without advancing seen_rev', async () => {
+    const { base, tool, hook, store } = setup();
+    const file = path.join(base, 'bin.dat');
+    writeFileSync(file, Buffer.from([0x41, 0x00, 0x42]));
+    await runTool(tool, { action: 'add', path: file });
+
+    const notice = await hookNotice(hook, 'run-1');
+    expect(notice).toContain('status="binary"');
+    const output = await runTool(tool, { action: 'inspect', path: file });
+    expect(output).toContain('status="binary"');
+    expect(onlyEntry(await store.load('session')).seen_rev).toBe('');
+  });
+
+  test('deleted file notifies once and inspect advances seen_rev', async () => {
+    const { base, tool, hook, store } = setup();
+    const file = path.join(base, 'doc.md');
+    writeFileSync(file, 'hello\n', 'utf-8');
+    await runTool(tool, { action: 'add', path: file });
+    await hookNotice(hook, 'run-1');
+
+    unlinkSync(file);
+    const notice = await hookNotice(hook, 'run-2');
+    expect(notice).toContain('status="deleted"');
+    expect(await hookNotice(hook, 'run-3')).toBe('');
+
+    const output = await runTool(tool, { action: 'inspect', path: file });
+    expect(output).toContain('status="deleted"');
+    expect(onlyEntry(await store.load('session')).seen_rev).toBe('deleted');
+    expect(await runTool(tool, { action: 'list' })).toContain('read');
   });
 });
 
 describe('unifiedDiff', () => {
-  const options = { maxBytes: 100_000, maxLines: 1_000 };
+  const options = { maxBytes: 100_000, maxLines: 1000 };
 
   test('single changed line with context and counts', () => {
-    const result = unifiedDiff('a\nb\nc\n', 'a\nX\nc\n', options);
-    expect(result.text).toContain('@@ -1,3 +1,3 @@');
-    expect(result.text).toContain(' a');
-    expect(result.text).toContain('-b');
-    expect(result.text).toContain('+X');
-    expect(result.text).toContain(' c');
+    const result = unifiedDiff('a\nb\nc\nd\ne\n', 'a\nb\nC\nd\ne\n', options);
+    expect(result.text).toBe('@@ -1,5 +1,5 @@\n a\n b\n-c\n+C\n d\n e');
     expect(result.truncated).toBe(false);
   });
 
   test('insertion into empty file uses 0-based start', () => {
-    const result = unifiedDiff('', 'x\n', options);
-    expect(result.text).toContain('@@ -0,0 +1,1 @@');
-    expect(result.text).toContain('+x');
+    const result = unifiedDiff('', 'hello\n', options);
+    expect(result.text).toBe('@@ -0,0 +1,1 @@\n+hello');
   });
 
   test('identical content yields no diff', () => {
-    const result = unifiedDiff('a\nb\n', 'a\nb\n', options);
-    expect(result).toEqual({ text: '', lines: 0, bytes: 0, truncated: false });
+    expect(unifiedDiff('same\n', 'same\n', options).text).toBe('');
   });
 
   test('one-line replacement and CRLF display normalization', () => {
-    const result = unifiedDiff('a\r\nb\r\n', 'a\r\nc\r\n', options);
-    expect(result.text).toContain('@@ -1,2 +1,2 @@');
-    expect(result.text).toContain('-b');
-    expect(result.text).toContain('+c');
-    expect(result.text).not.toContain('\r');
+    expect(unifiedDiff('a\r\nb\r\n', 'a\r\nc\r\n', options).text).toBe(
+      '@@ -1,2 +1,2 @@\n a\n-b\n+c',
+    );
   });
 
   test('marks truncated when over limits', () => {
-    const result = unifiedDiff('a\n', 'b\n', { maxBytes: 1_000, maxLines: 1 });
+    const result = unifiedDiff('a\n', 'b\n', { maxBytes: 1, maxLines: 1 });
     expect(result.lines).toBeGreaterThan(1);
     expect(result.truncated).toBe(true);
   });
@@ -386,9 +439,11 @@ describe('plugin install', () => {
       registerHook: (hook: Hook) => hooks.push(hook),
     } as unknown as PluginHost;
 
-    await createDocSubscriptionPlugin().install(host, {
+    const plugin = createDocSubscriptionPlugin();
+    await plugin.install(host, {
       config: { enabled: false, state_dir: path.join(base, 'state'), cwd: base },
     });
+
     expect(tools).toHaveLength(0);
     expect(hooks).toHaveLength(0);
   });
