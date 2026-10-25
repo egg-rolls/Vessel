@@ -125,6 +125,8 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 - `/settings language <zh-CN|en>` 切换界面语言并写回用户配置 `ui.language`，立即重渲染；`VESSEL_LANG` 显式设置时仍以环境变量为准。
 - `/reload` 重新加载配置文件并刷新 provider 信息；**不重扫插件目录**，新增插件需重启进程。
 - 输入里的 `@路径` 会在发送前展开为注入消息，界面上以引用块显示，用户原文保持不变。
+- `/details [hidden|collapsed|expanded]` 控制工具轨迹详细程度（默认 `collapsed`）；只影响当前进程，不写配置。
+- 启动头显示 `VESSEL · vX`；版本由装配层注入 `ReplContext.version`，缺失时显示 `VESSEL`。
 - 进入 REPL 前默认清屏（仅 TTY）；想保留终端历史时在配置里设 `ui.clearOnStart: false`。
 - 状态栏：上栏显示状态、模型、context、时长与路径 + branch；运行态下栏显示权限档位、bash / 子 agent 计数、session 入口、tenant 与 queue。`Ctrl+T` 切换上栏、`Ctrl+G` 切换下栏、`Ctrl+R` 打开 `/resume`。显隐写回用户配置 `ui.statusBars`（YAML `status_bars: top|bottom|both|none`）；`VESSEL_STATUS_BARS` 只作启动初值。终端 `<40` 列不渲染下栏，`<18` 行默认隐藏。
 - 权限确认默认一直等待应答或取消，不按时间自动失败；`Esc` / `Ctrl+C` 取消本轮并 abort。等待中的请求在 gateway 重启后视为已结束（`run_ended`）。

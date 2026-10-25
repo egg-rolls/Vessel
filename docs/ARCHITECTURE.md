@@ -6,7 +6,7 @@
 
 ## 1. 三层结构与依赖方向
 
-> 本节描述**当前已实现**的结构；0.2 的 Kernel / Modules 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 §14（已实现，未随版本发布），二者不混写。
+> 本节及下方「分层与模块边界」描述**当前已实现**的结构；Kernel / Modules 的决策见 [ADR-037](adr/ADR-037-modular-agent-runtime.md)。
 
 ```
 apps/web                 网页控制台（v1；durable / MCP 面板）
@@ -28,6 +28,13 @@ plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost �
 `plugins/` 与 `core` 的关系是**注入**而非依赖：插件在 `install(host)` 里往 `PluginHost` 注册工具 / provider / guardrail / hook。MCP 是插件，不是 core 模块（ADR-039）。
 
 `src/` 是装配层（`bootstrap.ts` 把 config → provider → plugins → runtime → ReplContext 串起来），不属于任何包。
+
+**分层与模块边界（[ADR-037](adr/ADR-037-modular-agent-runtime.md)）**
+
+- 分层：`Contracts ← Kernel ← Modules ← SDK ← Shells`；`Plugins` 只依赖 Contracts / 公开 API，经 `PluginHost` 在运行期 install。
+- **Module ≠ Plugin**：Module 是编译期 / 构造期边界（provider / context / session / policy / transport / observability，一个 port 一个实现）；Plugin 仍是唯一运行期扩展机制；禁止 `ModuleHost` / `ModuleRegistry`。
+- core 内只做 ports & adapters 与 `@vessel-agent/core/<port>` subpath exports，不拆包；`types/**` 不 import 实现，模块只经 port 交互。
+- `AgentRuntime` 仍是单 agent tool-calling loop；Host / Scheduler 只提供注册、生命周期、调度与边界，不重写循环。
 
 ## 2. 核心哲学：语言空间与两个适配器
 
@@ -1060,6 +1067,20 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **远程客户端（0.6）**：token 解析顺序 `--connect-token` > env（`VESSEL_CONNECT_TOKEN` / `connect.token_env`）> `connect.token`；CA 用 `--ca` / `connect.ca_file`。建连后 `health.get` 取远端 tenant / node；显式 `--tenant` 才把 `tenant_id` 合并进请求（admin 覆盖），否则由 token principal 决定。connect 模式下 `permission.respond` / `ask.respond` 经 RPC 回远端；TUI / headless 同路径。
 - **tenant**：token → principal（`serve.token`→default/admin、`serve.tokens` 按条目、`serve.admin_token`→`*`/admin、回环无 token→default/admin）；非 admin 指定其它 tenant → `forbidden`；跨 tenant 读取 → `not_found`；一个 gateway 服务 N tenant（工厂缺省时非 default tenant `forbidden`）。0.8：durable REST 端点允许 admin 通过 query `tenant_id` 或 `X-Vessel-Tenant` 显式指定 tenant，两处同时出现且不一致 → 400；其余角色仍按 principal 作用域。
 - **错误码**：方法级错误一律 `ok:false`，HTTP 200；冻结集合 `unauthorized` / `forbidden` / `not_found` / `invalid_params` / `tenant_locked` / `quota_exceeded` / `conflict` / `internal` / `not_supported`（0.12：可选能力未注入）。旧路径保留 0.4 错误码映射。
+
+### 13.7.1 canonical agent 生命周期契约（0.25 / 0.26）
+
+> 当前契约；历史背景见 `docs/versions/0.25.0.md` 与 `0.26.0.md`。
+
+- `agents.create`：`{ agents: [{ name?, model?, system_prompt?, team_id?, visibility? }] }`；成功条目带 `agent`。
+- `agents.update`：`{ agents: [{ agent_id, name?, model?, system_prompt? }] }`（每项至少一个字段）；成功条目带 `agent` / `changed` / `applies_to: 'next_body'`（仅 model / system_prompt 实际变化时）。
+- `agents.close`：`{ agents: [{ agent_id }] }`；成功条目 `{ ok: true, agent, agent_id, closed: true }`。
+- 统一结果 `{ results: [...] }`，与输入同序；单条失败 `{ ok: false, code, error }`，不影响其它条目。team-scoped control token 不能 create（逐条 `forbidden`）；update / close 只能操作同 `team_id` 成员，否则逐条 `not_found`。
+- `agents.send`：`{ messages: [{ to, content, conversation_id? }] }` → 成功 `{ ok: true, queued: true, message_id, state }`（strict send，不 resume）。
+- `agents.dispatch`：`{ messages: [{ to, content, conversation_id?, allow_fork? }] }` → 成功 `{ ok: true, status: 'queued', message_id, resolved_to, resolution, conversation_id? }`；业务拒绝逐条 `{ ok: false, code, error }`（`agent_left` / `resume_failed` / `not_visible` / `budget_*` / `conversation_team_mismatch`）。
+- `agents.rotate`：`{ agents: [{ to, startup_prompt, handoff_path?, from_session_id? }] }` → 成功 `{ ok: true, status: 'rotated', agent_id, from_session_id, to_session_id, epoch }`。
+- 三者 permission 都是 `write`；结构错误整体 `invalid_params`；team-scoped token 逐条校验 `team_id`。`principal.agent_id` 只由合成 owner 传输填 root owner id；handler 以 `ctx.principal.agent_id ?? 'human'` 作为 `from` / `viewer`。
+- owner 端点只做传输：用 `defineMethods([...createAgentMethods, ...createTeamMethods])` 组装与 gateway 同源的方法表，wire 名即 canonical；HTTP 状态映射 `invalid_params` 400、`forbidden` 403、`not_found` 404、`conflict` 409、`internal` 500。
 
 ### 13.8 0.6 远程控制面与跨节点 transport
 
