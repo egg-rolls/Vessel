@@ -26,35 +26,75 @@ export interface ToastApi {
 }
 
 const ToastContext = createContext<ToastApi | null>(null);
-const AUTO_DISMISS_MS = 4000;
-const MAX_VISIBLE = 5;
+/** 成功 / 信息 4s，错误 5s；都在 3–5s 区间内。 */
+const AUTO_DISMISS_MS: Record<ToastKind, number> = {
+  success: 4000,
+  info: 4000,
+  error: 5000,
+};
+const MAX_VISIBLE = 3;
 const TOAST_GLYPH: Record<ToastKind, string> = {
   success: '✓',
   error: '✗',
   info: 'i',
 };
 
+function toastKey(kind: ToastKind, message: string): string {
+  return `${kind}\u0000${message}`;
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const timers = useRef(new Map<string, number>());
+  const liveIds = useRef(new Map<string, string>());
+  const itemsRef = useRef<ToastItem[]>([]);
 
-  const dismiss = useCallback((id: string) => {
+  const clearTimer = useCallback((id: string) => {
     const timer = timers.current.get(id);
     if (timer !== undefined) {
       window.clearTimeout(timer);
       timers.current.delete(id);
     }
-    setItems((prev) => prev.filter((item) => item.id !== id));
   }, []);
+
+  const dismiss = useCallback(
+    (id: string) => {
+      clearTimer(id);
+      const removed = itemsRef.current.find((item) => item.id === id);
+      if (removed) liveIds.current.delete(toastKey(removed.kind, removed.message));
+      itemsRef.current = itemsRef.current.filter((item) => item.id !== id);
+      setItems(itemsRef.current);
+    },
+    [clearTimer],
+  );
 
   const push = useCallback(
     (kind: ToastKind, message: string) => {
-      const id = crypto.randomUUID();
-      setItems((prev) => [...prev.slice(-(MAX_VISIBLE - 1)), { id, kind, message }]);
-      const timer = window.setTimeout(() => dismiss(id), AUTO_DISMISS_MS);
+      const key = toastKey(kind, message);
+      // 相同 kind + 文本只保留一条：重置它的计时，不重复插入。
+      const existingId = liveIds.current.get(key);
+      const id = existingId ?? crypto.randomUUID();
+      clearTimer(id);
+
+      let next = itemsRef.current;
+      if (existingId === undefined) {
+        liveIds.current.set(key, id);
+        next = [...next, { id, kind, message }];
+      }
+      if (next.length > MAX_VISIBLE) {
+        const evicted = next.slice(0, next.length - MAX_VISIBLE);
+        next = next.slice(-MAX_VISIBLE);
+        for (const item of evicted) {
+          clearTimer(item.id);
+          liveIds.current.delete(toastKey(item.kind, item.message));
+        }
+      }
+      itemsRef.current = next;
+      setItems(next);
+      const timer = window.setTimeout(() => dismiss(id), AUTO_DISMISS_MS[kind]);
       timers.current.set(id, timer);
     },
-    [dismiss],
+    [clearTimer, dismiss],
   );
 
   useEffect(() => {
@@ -78,7 +118,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="toast-region" aria-live="polite" aria-relevant="additions">
+      <div className="toast-region" role="status" aria-live="polite" aria-relevant="additions">
         {items.map((item) => (
           <div
             key={item.id}
