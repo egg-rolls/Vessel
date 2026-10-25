@@ -21,6 +21,8 @@
 
 判断一个文件属于哪类，不看它“重不重要”，看**下一个读它的人需要什么**。
 
+静态文档可以按模块拆分（`docs/architecture/**`、`docs/agents/**`），但必须有 `INDEX.md` + frontmatter；拆出的 `current` 文档仍禁版本叙事（见 §3.4）。
+
 ## 2. 判定顺序（从上往下，命中即停）
 
 1. 不读它，下一个人会不会做错？会 → **当前态 O(1)**。
@@ -32,6 +34,8 @@
 反例：把“0.14 做了什么”写进 `AGENTS.md`；把“为什么选 A”写进 `CHANGELOG.md`；
 把“当前基线”写进 ADR 索引——都是把不同类塞进一个容器。
 
+**历史只有两个容器：`docs/versions/`（版本快照）与 `docs/adr/`（决策）；不新建第二个历史目录。**
+
 ## 3. O(1)：当前态
 
 ### 3.1 允许的文件
@@ -40,7 +44,7 @@
 | -------------------------- | ---------------------------- | ---------------- |
 | `docs/versions/CURRENT.md` | 当前版本、已合入能力、下一步 | ≤60 行           |
 | `CHANGELOG.md`             | 当前版本的变更摘要           | 只保留当前版本段 |
-| `AGENTS.md`                | AI 行为约定与硬规矩          | 不写版本状态     |
+| `AGENTS.md`                | AI 行为约定与硬规矩          | ≤150 行；不写版本状态 |
 | `README.md`                | 是什么 / 怎么跑 / 边界       | 不写版本状态     |
 | `docs/FILE-MANAGEMENT.md`  | 文件放哪里、路径归属         | 不写版本状态     |
 | `docs/WEB-UI.md`           | Web 组件与视觉约定           | 不写版本状态     |
@@ -53,6 +57,7 @@
 4. **有界**：`CURRENT.md` ≤60 行；超出就写 `docs/versions/<version>.md`，当前态只留一行指针。
 5. **只写事实与下一步**：路径、命令、证据、决定、阻塞。不写“差不多了”“基本完成”。
 6. **版本号单源**：manifest 版本以根 `package.json` 为准，文档不维护第二份副本。
+7. **禁版本叙事**：不得出现 `## 0.x` / `### 0.x`、逐版本“已实现 / 未发布”章节或“自 0.x 起”历史。版本结果写 `docs/versions/<version>.md`，原因写 `docs/adr/ADR-<NNN>-<slug>.md`；current 文档只留当前事实与指针。
 
 ### 3.3 历史往哪搬
 
@@ -61,6 +66,26 @@
 | 某个版本落了什么、breaking、遗留 | `docs/versions/<version>.md`     |
 | 为什么做这个选择、冻结了什么契约 | `docs/adr/ADR-<NNN>-<slug>.md`   |
 | 当前版本摘要                     | `CHANGELOG.md`（只保留当前版本） |
+
+### 3.4 可检索静态文档（拆分规则）
+
+`current` 文档超过 **300 行**或 **100 KB** 时，必须按模块拆分到 `docs/architecture/**` 或 `docs/agents/**`，不得继续整篇常驻。
+
+- 目录必须有 `INDEX.md`：`docs/architecture/INDEX.md` 与 `docs/agents/INDEX.md` 各 ≤60 行，列为「模块 | 一句话 | triggers | paths | 链接」。
+- 模块文档 ≤100 行；一个事实只有一个家，其余位置用链接，不复制。
+- frontmatter 必填 `title` / `kind` / `triggers` / `paths`；`kind` 只允许 `current` 或 `advisory`，`advisory` 另加 `applies_to`（`N` / `M`）。`triggers` 写任务里会出现的词，`paths` 是 glob，命中优先于关键词。
+
+```yaml
+---
+title: Gateway RPC
+kind: current
+triggers: [gateway, rpc, websocket, token, permission]
+paths: [packages/serve/**, apps/web/src/gateway/**]
+---
+```
+
+- 未拆分的存量文档在迁移完成前 grandfather；新增或重构的 `current` 文档立即适用。
+- 迁移完成后，`check-docs` 应校验 frontmatter、INDEX 覆盖、行数与链接；接入前由 `gov` 人工核对。
 
 ## 4. O(n)：历史记录
 
@@ -121,14 +146,16 @@ docs/
 
 **冷启动（要知道现在是什么）：**
 1. `README.md`
-2. `AGENTS.md`
+2. `AGENTS.md` — **硬安全规则只来自这里**
 3. `docs/versions/CURRENT.md`
-4. `docs/ARCHITECTURE.md`
+4. `docs/architecture/INDEX.md` → 命中的模块；未拆分前读 `docs/ARCHITECTURE.md` 的对应小节，不整读
+
+**按目标检索：** 先写目标 + 目标路径，再按 INDEX 的 `triggers` / `paths` 命中模块；不整读 >300 行的 `current` 文档。无命中时回落 `AGENTS.md`，不把“没搜到”当成“没规则”。
 
 **溯源（要知道为什么 / 当时落了什么）：**
 1. `docs/adr/README.md` — 先找约束
 2. `docs/versions/INDEX.md` — 再找版本快照
-3. `docs/ARCHITECTURE.md` / `docs/operations/**` — 最后看实现与运维细节
+3. `docs/operations/**` — 最后看运维细节
 
 **禁止**用“列目录 + 逐个打开”代替索引。
 
@@ -154,12 +181,18 @@ docs/
 - 改写旧 ADR / 版本记录的结论；应新写一条并标 `supersedes`。
 - 临时产物跨检查点保留，或把临时目录当证据库。
 - 代码注释指向版本快照、个人侧文档或 CHANGELOG。
+- 在 `current` 文档里写 `## 0.x` / `### 0.x`、逐版本“已实现 / 未发布”章节或“自 0.x 起”历史。
+- 拆分了文档却没有 `INDEX.md` / frontmatter，或 INDEX 与模块不一致。
+- 把 >300 行的 `current` 文档整篇读进上下文，而不是 INDEX + 命中模块。
 
 ## 10. 检查清单
 
 收口前：
 - [ ] `docs/versions/CURRENT.md` ≤60 行，只有一个当前版本，无历史章节
 - [ ] `AGENTS.md` / `README.md` / `docs/FILE-MANAGEMENT.md` / `docs/WEB-UI.md` 无版本状态
+- [ ] `current` 文档无 `## 0.x` / `### 0.x`、无逐版本“已实现 / 未发布”章节与“自 0.x 起”叙事
+- [ ] 拆分后的模块有 INDEX 与 frontmatter：模块 ≤100 行、INDEX ≤60 行、链接无死链
+- [ ] 检索走 INDEX 的 `triggers` / `paths`，未整读 >300 行的 `current` 文档
 - [ ] 本批次版本事实已写入 `docs/versions/<version>.md`，并有一行 `INDEX.md`
 - [ ] 新增 ADR 已进 `docs/adr/README.md`
 - [ ] `CHANGELOG.md` 只保留当前版本段
