@@ -1,7 +1,7 @@
 ---
 title: 文档、角色与发布门禁
 kind: advisory
-triggers: [docs, doc management, frontmatter, check-docs, release, ci, pr, roles, worktree]
+triggers: [docs, doc management, frontmatter, check-docs, release, release dry run, dry run, dry, publish, tag, smoke-install, smoke install, version check, changelog, ci, pr, roles, worktree]
 paths: [docs/**, AGENTS.md, README.md, .github/**, scripts/**]
 applies_to: [N, M]
 ---
