@@ -23,9 +23,10 @@ import type { Plugin } from '../packages/core/src/index';
 
 const PLUGINS_DIR = fileURLToPath(new URL('../plugins', import.meta.url));
 
-/** 非插件 workspace 包：即使出现在 `node_modules/@vessel` 也不注册 */
+/** 非插件 workspace 包：即使出现在 `node_modules/@vessel-agent` 也不注册 */
 const NON_PLUGIN_PACKAGES: ReadonlySet<string> = new Set([
   'core',
+  'agent',
   'config',
   'tui',
   'serve',
@@ -173,12 +174,12 @@ export function defaultPluginRoots(repoDir: string = PLUGINS_DIR): PluginRoot[] 
     { dir: path.join(process.cwd(), '.vessel', 'plugins'), source: 'project', layout: 'auto' },
     { dir: path.join(os.homedir(), '.vessel', 'plugins'), source: 'user', layout: 'auto' },
     {
-      dir: path.join(repoRoot, 'node_modules', '@vessel'),
+      dir: path.join(repoRoot, 'node_modules', '@vessel-agent'),
       source: 'node_modules',
       layout: 'flat',
     },
     {
-      dir: path.join(process.cwd(), 'node_modules', '@vessel'),
+      dir: path.join(process.cwd(), 'node_modules', '@vessel-agent'),
       source: 'node_modules',
       layout: 'flat',
     },

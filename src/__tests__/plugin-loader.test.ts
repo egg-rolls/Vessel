@@ -177,11 +177,12 @@ describe('插件目录扩展（0.6.1）', () => {
     }
   });
 
-  it('node_modules/@vessel 扫描跳过 core/config/tui/serve/permission', () => {
+  it('node_modules/@vessel-agent 扫描跳过 workspace 包 core/agent/config/tui/serve/permission', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-plugins-'));
     try {
-      const modules = path.join(root, 'node_modules', '@vessel');
+      const modules = path.join(root, 'node_modules', '@vessel-agent');
       writePlugin(path.join(modules, 'core'), '@vessel-agent/core');
+      writePlugin(path.join(modules, 'agent'), '@vessel-agent/agent');
       writePlugin(path.join(modules, 'some-plugin'), '@vessel-agent/some-plugin');
 
       const loader = new PluginLoader({
@@ -189,6 +190,37 @@ describe('插件目录扩展（0.6.1）', () => {
       });
 
       expect(loader.list().map((d) => d.name)).toEqual(['some-plugin']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('defaultPluginRoots 扫描 @vessel-agent scope（ADR-073），不扫旧 @vessel', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-plugins-'));
+    try {
+      const repoDir = path.join(root, 'repo', 'plugins');
+      writePlugin(
+        path.join(root, 'repo', 'node_modules', '@vessel-agent', 'scope-probe-plugin'),
+        '@vessel-agent/scope-probe-plugin',
+      );
+
+      const nodeModuleRoots = defaultPluginRoots(repoDir)
+        .filter((root2) => root2.source === 'node_modules')
+        .map((root2) => path.resolve(root2.dir));
+
+      expect(nodeModuleRoots).toContain(
+        path.resolve(root, 'repo', 'node_modules', '@vessel-agent'),
+      );
+      expect(nodeModuleRoots).toContain(
+        path.resolve(process.cwd(), 'node_modules', '@vessel-agent'),
+      );
+      expect(nodeModuleRoots.some((dir) => path.basename(dir) === '@vessel')).toBe(false);
+
+      // 默认扫描根真的能从 @vessel-agent 发现外部插件
+      const loader = new PluginLoader({ repoDir });
+      expect(loader.list().find((d) => d.name === 'scope-probe-plugin')?.source).toBe(
+        'node_modules',
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
