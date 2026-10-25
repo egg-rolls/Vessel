@@ -6,7 +6,7 @@
  * - 详情 / 编辑是 `#/agents/<nodeKey>/<agentId>[/edit]`，查询串保留列表过滤；
  * - 名称优先，缺失回退短 id；原始 agent_id 只在 Advanced details 出现。
  */
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { formatRoute, type Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
@@ -20,6 +20,7 @@ import {
   fetchNodeRoster,
   filterRosterAgents,
   flattenRoster,
+  mergeNodeRosters,
   type NodeRoster,
   type RosterAgent,
 } from '../../gateway/team-roster';
@@ -107,9 +108,17 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     deps: [epoch, tenantEpoch, nodeKeys],
   });
 
+  // 单节点失败时用上一轮成功数据兜底；否则轮询会把整页 roster 冲成空。
+  const lastRosters = useRef<readonly NodeRoster[]>([]);
   const loadedRosters = resourceData(resource.state);
   const loaded = loadedRosters !== undefined;
-  const rosters = loadedRosters ?? [];
+  const rosters = useMemo(
+    () => mergeNodeRosters(lastRosters.current, loadedRosters ?? []),
+    [loadedRosters],
+  );
+  useEffect(() => {
+    lastRosters.current = rosters;
+  }, [rosters]);
   const rostersByNode = useMemo(
     () => new Map(rosters.map((roster) => [nodeKeyOf(roster.node), roster])),
     [rosters],
@@ -254,7 +263,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   let body: ReactNode;
   if (!loaded) {
     body = <LoadingState label={t('agents.loadingRosters')} rows={3} />;
-  } else if (allFailed && rosters[0]?.code === 'not_found') {
+  } else if (agents.length === 0 && allFailed && rosters[0]?.code === 'not_found') {
     body = (
       <NotEnabledState
         title={t('teams.error.notEnabled')}
@@ -262,7 +271,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
         hint={t('team.error.notEnabledHint')}
       />
     );
-  } else if (allFailed) {
+  } else if (agents.length === 0 && allFailed) {
     body = null;
   } else if (agents.length === 0) {
     body = <EmptyState title={t('agents.empty')} />;
@@ -420,6 +429,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
                   {nodeNames.get(nodeKeyOf(roster.node)) ?? '—'}
                 </span>
                 <span>{nodeErrorText(roster)}</span>
+                {roster.stale && (
+                  <span className="flex-none text-faint">{t('agents.staleNode')}</span>
+                )}
               </p>
             ))}
             {partialErrors > 0 && (
