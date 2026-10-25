@@ -36,6 +36,7 @@
 - 依赖方向单向 `core ← 其它`，由 `scripts/check-deps.ts` 检查；不引入 LangChain / LangGraph。
 - 事件名一律开放字符串 `<domain>.<action>.<event>`，不新增常量 / 枚举；全异步，不写 sync-in-async；不留半成品 stub。
 - **诊断**：走 Logger（stderr），不得 `console.log` 到 stdout（stdout 只留命令结果 / JSON / UX）。
+- 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
 
 ## 领域告诫（按路径命中）
 
@@ -80,12 +81,3 @@ bun run scripts/release-dry-run.ts
 进 core 必须全部满足：大多数 harness 都需要、领域无关、可接口化、不绑 Provider 或厂商 SDK、能被多个应用复用。**拿不准就选插件，不选 core。** core 只放领域无关的运行时；其余做成 `plugins/<category>/<name>/`（放文件夹即注册；目录只在进程启动时扫描一次）。应用层外壳不往 core 反推需求。
 
 判断“要不要动 core”：能做成 Tool（`registerTool`）/ Hook / Guardrail / 事件（开放字符串），或能由 `bash` + 模型自己组合出来 → 不进 core。单个 agent 的 tool-calling loop 仍由 `AgentRuntime` 实现，不要在 Host 再写一套 loop。
-
-## 别做什么
-
-- 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
-- 别给模型再加一个能与 `bash` 等价的能力工具；别加 `wait` / `inbox` / `status` / `cancel`。
-- 别写 harness 层面的 skills 扫描 / 解析 / 注入通道——skills 就是文件，经消息进来。
-- 别把插件对象塞进 runtime 构造函数（走 `plugins` / `pluginHost` 注入）。
-- 别让多个进程同时写同一 tenant；写前必须拿 `.lock`。
-- 别靠 hook / guardrail 抛异常终止 run；要阻断返回 `allowed: false`，要停止就 abort。
