@@ -5,7 +5,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -14,13 +13,10 @@ import { extractTokenFromHash } from '../app/router';
 import { useToast } from '../components/ToastProvider';
 import { t } from '../i18n';
 import { EventStore, type EventStoreSnapshot } from '../state/event-store';
+import { useInteractionStore } from '../stores/interactionStore';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
 import { resolveConnectionSeed } from './dev-auth';
-import {
-  buildHydrationSnapshot,
-  emptyInteractionState,
-  interactionReducer,
-} from './interaction-hydration';
+import { buildHydrationSnapshot } from './interaction-hydration';
 import {
   askFromEvent,
   interactionExpiredMessage,
@@ -160,11 +156,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [epoch, setEpoch] = useState(0);
   const [tenantEpoch, setTenantEpoch] = useState(0);
-  const [interactions, dispatchInteraction] = useReducer(interactionReducer, emptyInteractionState);
-  const { permissions, asks } = interactions;
-  const interactionsRef = useRef(interactions);
-  interactionsRef.current = interactions;
-  const [responding, setResponding] = useState<ReadonlySet<string>>(() => new Set());
+  // 交互的唯一真相源：本 Provider 只写 store，面板直接或经 context 读同一份数据。
+  const permissions = useInteractionStore((state) => state.permissions);
+  const asks = useInteractionStore((state) => state.asks);
+  const responding = useInteractionStore((state) => state.responding);
   const [connectSeq, setConnectSeq] = useState(0);
   const submitGuard = useRef(new SubmitGuard());
   /** 已结算 id：应答成功 / 终态事件 / run 终态 / dismiss；有界 Map（上限 500）。 */
@@ -239,11 +234,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     if (!stillCurrent()) return;
     // 终态 id 写进 settled：之后重放的事件 / 迟到的 pending 列表都不能复活卡片。
     for (const requestId of snapshot.terminalIds) recordSettled(requestId);
-    dispatchInteraction({
-      type: 'hydrate',
-      snapshot,
-      settled: new Set(settledRef.current.keys()),
-    });
+    useInteractionStore.getState().hydrate(snapshot, new Set(settledRef.current.keys()), orphanIds);
 
     // 失效交互只提示一次：同一 tenant 下已提示过的 request id 在重连 / 刷新后
     // 不重复弹；后续 hydration 只有出现新 id 才再提示。详情只在 Observe → Attention。
@@ -302,7 +293,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setConnectionState('idle');
       setHello(null);
       setTenantId(null);
-      dispatchInteraction({ type: 'reset' });
+      useInteractionStore.getState().reset();
       settledRef.current.clear();
       hydrationGenerationRef.current += 1;
       setReconnectAttempt(0);
@@ -322,7 +313,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       if (!request) return;
       // 权限不按时间过期；刷新/重连时靠事件重放 + interactions.list 重建。
       if (settledRef.current.has(request.requestId)) return;
-      dispatchInteraction({ type: 'permission-request', request });
+      useInteractionStore.getState().dispatch({ type: 'permission-request', request });
     };
 
     /** response / expired 事件：无论是否本端应答，都收起对应卡片。 */
@@ -330,11 +321,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const data = event.data as { requestId?: unknown; request_id?: unknown };
       const requestId = data.requestId ?? data.request_id;
       if (typeof requestId !== 'string' || requestId.length === 0) return;
-      const wasPending = interactionsRef.current.permissions.some(
-        (item) => item.requestId === requestId,
-      );
+      const wasPending = useInteractionStore
+        .getState()
+        .permissions.some((item) => item.requestId === requestId);
       recordSettled(requestId);
-      dispatchInteraction({ type: 'settle', requestId });
+      useInteractionStore.getState().dispatch({ type: 'settle', requestId });
       if (expired && wasPending) toast.info(interactionExpiredMessage());
     };
 
@@ -343,7 +334,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const request = askFromEvent(event);
       if (!request) return;
       if (settledRef.current.has(request.requestId)) return;
-      dispatchInteraction({ type: 'ask-request', request });
+      useInteractionStore.getState().dispatch({ type: 'ask-request', request });
     };
 
     /** 其他端应答（ask.user.answered）：静默收起对应卡片。 */
@@ -352,7 +343,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const requestId = data.requestId ?? data.request_id;
       if (typeof requestId !== 'string' || requestId.length === 0) return;
       recordSettled(requestId);
-      dispatchInteraction({ type: 'settle', requestId });
+      useInteractionStore.getState().dispatch({ type: 'settle', requestId });
     };
 
     const offEvent = client.onEvent((event, meta) => {
@@ -368,13 +359,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         event.type === 'run.cancelled'
       ) {
         // run 终态：同 run 的 pending 一律结算，避免 hydration 把它们复活。
-        for (const item of interactionsRef.current.permissions) {
+        const interactions = useInteractionStore.getState();
+        for (const item of interactions.permissions) {
           if (item.runId === event.run_id) recordSettled(item.requestId);
         }
-        for (const item of interactionsRef.current.asks) {
+        for (const item of interactions.asks) {
           if (item.runId === event.run_id) recordSettled(item.requestId);
         }
-        dispatchInteraction({ type: 'run-finished', runId: event.run_id });
+        interactions.dispatch({ type: 'run-finished', runId: event.run_id });
       }
     });
 
@@ -403,7 +395,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       if (previousTenant && nextTenant && previousTenant !== nextTenant) {
         // 切租户：旧事件 / 交互 / settled / 在途 hydration 绝不能带到新租户。
         eventStore.reset(0);
-        dispatchInteraction({ type: 'reset' });
+        useInteractionStore.getState().reset();
         settledRef.current.clear();
         hydrationGenerationRef.current += 1;
         setTenantEpoch((value) => value + 1);
@@ -531,18 +523,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, [client, eventStore, reportConnectError]);
 
   const updateResponding = useCallback((requestId: string, active: boolean) => {
-    setResponding((prev) => {
-      if (active) {
-        if (prev.has(requestId)) return prev;
-        const next = new Set(prev);
-        next.add(requestId);
-        return next;
-      }
-      if (!prev.has(requestId)) return prev;
-      const next = new Set(prev);
-      next.delete(requestId);
-      return next;
-    });
+    useInteractionStore.getState().setResponding(requestId, active);
   }, []);
 
   const respondPermission = useCallback(
@@ -553,19 +534,19 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       try {
         await client.respondPermission(requestId, decision, scope);
         recordSettled(requestId);
-        dispatchInteraction({ type: 'settle', requestId });
+        useInteractionStore.getState().dispatch({ type: 'settle', requestId });
       } catch (error) {
         if (isRunEndedError(error)) {
           // 点击允许时 run 已结束：明确提示，不显示“未允许”。
           recordSettled(requestId);
-          dispatchInteraction({ type: 'settle', requestId });
+          useInteractionStore.getState().dispatch({ type: 'settle', requestId });
           toast.info(interactionRunEndedMessage());
           return;
         }
         if (isNotFoundError(error) || isExpiredError(error)) {
           // 服务端已丢弃 / 已过期：移除卡片并提示，不重试。
           recordSettled(requestId);
-          dispatchInteraction({ type: 'settle', requestId });
+          useInteractionStore.getState().dispatch({ type: 'settle', requestId });
           toast.info(interactionExpiredMessage());
           return;
         }
@@ -585,18 +566,18 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       try {
         await client.respondAsk(requestId, answers);
         recordSettled(requestId);
-        dispatchInteraction({ type: 'settle', requestId });
+        useInteractionStore.getState().dispatch({ type: 'settle', requestId });
       } catch (error) {
         if (isRunEndedError(error)) {
           // run 已结束：卡片失效，明确语义而不是“未作答”。
           recordSettled(requestId);
-          dispatchInteraction({ type: 'settle', requestId });
+          useInteractionStore.getState().dispatch({ type: 'settle', requestId });
           toast.info(interactionRunEndedMessage());
           return;
         }
         if (isNotFoundError(error) || isExpiredError(error)) {
           recordSettled(requestId);
-          dispatchInteraction({ type: 'settle', requestId });
+          useInteractionStore.getState().dispatch({ type: 'settle', requestId });
           toast.info(interactionExpiredMessage());
           return;
         }

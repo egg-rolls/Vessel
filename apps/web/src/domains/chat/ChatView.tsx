@@ -13,12 +13,7 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { useToast } from '../../components/ToastProvider';
 import { Button } from '../../components/ui';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
-import type {
-  AskUserAnswer,
-  PermissionScope,
-  SessionDetail,
-  SessionInfo,
-} from '../../gateway/types';
+import type { AskUserAnswer, PermissionScope, SessionInfo } from '../../gateway/types';
 import { t } from '../../i18n';
 import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
 import { isGroupPersisted } from '../../state/events';
@@ -31,8 +26,6 @@ import {
 } from '../../state/runtime-visibility';
 import {
   filterSessions,
-  removeSessionFromList,
-  renameSessionInList,
   SESSION_PAGE_SIZE,
   selectionAfterDelete,
   sessionTitle,
@@ -41,7 +34,12 @@ import {
 } from '../../state/sessions';
 import { resourceData, useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
+import {
+  SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE,
+  useSessionStore,
+} from '../../stores/sessionStore';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
+import { usePolledAction } from '../../stores/usePolledAction';
 import { windowTail } from '../../transcript';
 import { ChatWelcome } from './ChatWelcome';
 import { Composer } from './Composer';
@@ -62,8 +60,6 @@ import { Transcript } from './Transcript';
 
 const TRANSCRIPT_WINDOW = 50;
 const QUEUE_POLL_MS = 2000;
-/** 内部哨兵；展示时再翻译，避免英文界面泄漏中文错误文案。 */
-const NOT_FOUND_MESSAGE = 'chat.notFound';
 /** 单会话实时组上限：超出时只渲染最近这些 run，并提供运行详情入口。 */
 const MAX_LIVE_GROUPS = 200;
 const SCROLL_FOLLOW_MS = 100;
@@ -72,12 +68,6 @@ type ChatRoute = Extract<Route, { domain: 'chat' }>;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isNotFound(error: unknown): boolean {
-  const code = (error as { code?: unknown }).code;
-  const message = errorMessage(error);
-  return code === 'not_found' || message.startsWith('not_found:');
 }
 
 function useDebounced<T>(value: T, delayMs: number): T {
@@ -107,6 +97,7 @@ export function ChatView({
     hasToken,
     connectionState,
     epoch,
+    tenantEpoch,
     features,
     tenantId,
     permissions,
@@ -131,7 +122,6 @@ export function ChatView({
     draftActive ? crypto.randomUUID() : null,
   );
   const pendingNewSessions = useRef(new Set<string>());
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebounced(query, 150);
   /** 服务端内容搜索；null = 用本地 title/preview/id 过滤兜底。 */
@@ -197,26 +187,55 @@ export function ChatView({
     void hydrateInteractions();
   }, [selectedId, connected, epoch, hydrateInteractions]);
 
-  // 会话列表：有 token 就加载（重连期间走 HTTP RPC），15s 轮询；本地副本支持乐观重命名。
-  const sessionsResource = useResource({
-    load: () => client.listSessions(),
-    enabled: hasToken,
-    pollMs: 15_000,
-    deps: [epoch],
-  });
+  // 会话列表 / 选中 / detail 统一由 sessionStore 持有；实时事件快照仍走 useEventSnapshot。
+  const sessions = useSessionStore((state) => state.sessions);
+  const sessionsLoading = useSessionStore((state) => state.loading);
+  const sessionsError = useSessionStore((state) => state.error);
+  const sessionsLoaded = useSessionStore((state) => state.loaded);
+  const sessionDetailData = useSessionStore((state) => state.detail);
+  const sessionDetailId = useSessionStore((state) => state.detailId);
+  const sessionDetailLoading = useSessionStore((state) => state.detailLoading);
+  const sessionDetailError = useSessionStore((state) => state.detailError);
+  const loadSessions = useSessionStore((state) => state.loadSessions);
+  const loadSessionDetail = useSessionStore((state) => state.loadDetail);
+  const selectSessionInStore = useSessionStore((state) => state.select);
+  const refreshSessions = useSessionStore((state) => state.refresh);
+  const resetSessions = useSessionStore((state) => state.reset);
+  const renameSessionLocal = useSessionStore((state) => state.renameSession);
+  const removeSessionLocal = useSessionStore((state) => state.removeSession);
+  const restoreSessions = useSessionStore((state) => state.setSessions);
+
+  // 路由是选中项的唯一来源；store 只镜像它，切换时由 loadDetail 去重。
   useEffect(() => {
-    if (sessionsResource.state.status === 'success') {
-      setSessions(sortSessions(sessionsResource.state.data));
-    }
-  }, [sessionsResource.state]);
+    selectSessionInStore(selectedId);
+  }, [selectedId, selectSessionInStore]);
+
+  // 会话列表：有 token 就加载（重连期间走 HTTP RPC），15s 轮询；首轮走去重路径。
+  const firstSessionsLoad = useRef(true);
+  usePolledAction(
+    () => {
+      if (!hasToken) return;
+      const force = !firstSessionsLoad.current;
+      firstSessionsLoad.current = false;
+      void loadSessions(client, { epoch, force });
+    },
+    { enabled: hasToken, pollMs: 15_000, deps: [epoch, tenantEpoch, hasToken] },
+  );
+
+  // 与旧 useResource 一致：断开时丢弃列表 / detail。
+  useEffect(() => {
+    if (!hasToken) resetSessions();
+  }, [hasToken, resetSessions]);
+
+  // 离开 Chat / tenant 整体重挂载后不保留上一份快照（等价于旧组件本地 state）。
+  useEffect(() => () => resetSessions(), [resetSessions]);
 
   /** null = 列表尚未加载（或加载失败），此时不能判定记录失效。 */
-  const knownSessionIds = useMemo(() => {
-    const known = resourceData(sessionsResource.state);
-    return known ? known.map((session) => session.session_id) : null;
-  }, [sessionsResource.state]);
-  const sessionsUnavailable =
-    sessionsResource.state.status === 'error' && resourceData(sessionsResource.state) === undefined;
+  const knownSessionIds = useMemo(
+    () => (sessionsLoaded ? sessions.map((session) => session.session_id) : null),
+    [sessions, sessionsLoaded],
+  );
+  const sessionsUnavailable = sessionsError !== null && !sessionsLoaded;
 
   // 只记录真实会话；`new` / 无选择不写。
   useEffect(() => {
@@ -305,29 +324,20 @@ export function ChatView({
     };
   }, [client, debouncedQuery, hasToken]);
 
-  const loadDetail = useCallback(async (): Promise<SessionDetail | null> => {
-    if (!selectedId) return null;
-    try {
-      const detail = await client.getSession(selectedId);
-      pendingNewSessions.current.delete(selectedId);
-      return detail;
-    } catch (error) {
-      if (isNotFound(error)) {
-        // 新会话在首条消息落盘前可能 404：按空历史处理，不伪装成错误。
-        if (pendingNewSessions.current.has(selectedId)) {
-          return { session_id: selectedId, messages: [] };
-        }
-        throw new Error(NOT_FOUND_MESSAGE);
-      }
-      throw error;
-    }
-  }, [client, selectedId]);
+  // 选中会话 detail：store 去重（同 id 同 epoch 不重复拉，切走再切回才重拉）。
+  useEffect(() => {
+    if (!hasToken || !selectedId) return;
+    void loadSessionDetail(client, selectedId, {
+      epoch,
+      allowMissing: pendingNewSessions.current.has(selectedId),
+    });
+  }, [client, epoch, hasToken, selectedId, loadSessionDetail]);
 
-  const detailResource = useResource({
-    load: loadDetail,
-    enabled: hasToken && Boolean(selectedId),
-    deps: [selectedId, epoch],
-  });
+  // 会话出现在列表后，404 容忍（首条消息尚未落盘）不再需要。
+  useEffect(() => {
+    if (pendingNewSessions.current.size === 0) return;
+    for (const session of sessions) pendingNewSessions.current.delete(session.session_id);
+  }, [sessions]);
 
   // 切换会话重置历史窗口。
   // biome-ignore lint/correctness/useExhaustiveDependencies: selectedId 变化是重置条件
@@ -502,15 +512,17 @@ export function ChatView({
   const contextUsage =
     selectedId && contextData?.sessionId === selectedId ? contextData : undefined;
 
-  const detailState = detailResource.state;
+  // detail 只认属于当前选中项的那一份（切走时旧响应不能串到新会话）。
+  const currentDetailError = sessionDetailId === selectedId ? sessionDetailError : null;
   const sessionDetail =
-    selectedId && 'data' in detailState && detailState.data?.session_id === selectedId
-      ? detailState.data
+    selectedId && sessionDetailId === selectedId && sessionDetailData?.session_id === selectedId
+      ? sessionDetailData
       : null;
   // 已有历史时，刷新失败不能把 transcript 换成错误页；只显示 stale 提示。
-  const hydrateError = detailState.status === 'error' && !sessionDetail ? detailState.error : null;
-  const hydrateStale = detailState.status === 'error' && sessionDetail ? detailState.error : null;
-  const hydrating = Boolean(selectedId) && detailState.status === 'loading' && !sessionDetail;
+  const hydrateError = !sessionDetail ? currentDetailError : null;
+  const hydrateStale = sessionDetail ? currentDetailError : null;
+  const hydrating =
+    Boolean(selectedId) && sessionDetailId === selectedId && sessionDetailLoading && !sessionDetail;
 
   // 已删除的会话不能再被记录恢复；只清记录，不改变当前错误页。
   useEffect(() => {
@@ -620,17 +632,30 @@ export function ChatView({
     if (!needsRefresh) return;
     window.clearTimeout(refreshTimer.current);
     refreshTimer.current = window.setTimeout(() => {
-      sessionsResource.reload();
-      detailResource.reload();
+      void refreshSessions(client, {
+        epoch,
+        allowMissing: selectedId ? pendingNewSessions.current.has(selectedId) : false,
+      });
     }, 150);
     return () => window.clearTimeout(refreshTimer.current);
-  }, [snapshot.version, selectedId]);
+  }, [snapshot.version, selectedId, client, epoch, refreshSessions]);
 
   const refreshAll = useCallback(() => {
-    sessionsResource.reload();
-    detailResource.reload();
-  }, [sessionsResource.reload, detailResource.reload]);
+    void refreshSessions(client, {
+      epoch,
+      allowMissing: selectedId ? pendingNewSessions.current.has(selectedId) : false,
+    });
+  }, [client, epoch, refreshSessions, selectedId]);
   useRefreshSignal(refreshAll);
+
+  const reloadDetail = useCallback(() => {
+    if (!selectedId) return;
+    void loadSessionDetail(client, selectedId, {
+      epoch,
+      force: true,
+      allowMissing: pendingNewSessions.current.has(selectedId),
+    });
+  }, [client, epoch, loadSessionDetail, selectedId]);
 
   // 命令面板：最近 20 个会话（跨域可搜）+ 当前会话的改名/删除动作（离开 Chat 时清除）。
   const paletteEntities = useMemo(
@@ -824,7 +849,7 @@ export function ChatView({
         ]);
         toast.info(t('chat.toast.queued'));
       }
-      sessionsResource.reload();
+      void loadSessions(client, { epoch, force: true });
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -907,13 +932,13 @@ export function ChatView({
       return false;
     }
     const previous = sessions;
-    setSessions((list) => renameSessionInList(list, sessionId, title));
+    renameSessionLocal(sessionId, title);
     try {
       await client.renameSession(sessionId, title);
-      sessionsResource.reload();
+      void loadSessions(client, { epoch, force: true });
       return true;
     } catch (error) {
-      setSessions(previous);
+      restoreSessions(previous);
       toast.error(t('chat.toast.renameFailed', { detail: errorMessage(error) }));
       return false;
     }
@@ -938,7 +963,7 @@ export function ChatView({
       if (readLastSession(storage, tenantId) === deleteTarget.session_id) {
         clearLastSession(storage, tenantId);
       }
-      setSessions((list) => removeSessionFromList(list, deleteTarget.session_id));
+      removeSessionLocal(deleteTarget.session_id);
       setDeleteTarget(null);
       if (next.selectedId === null && next.draftId === null) {
         navigate({ domain: 'chat', sessionId: 'new' });
@@ -949,7 +974,7 @@ export function ChatView({
           events: result.events_deleted,
         }),
       );
-      sessionsResource.reload();
+      void loadSessions(client, { epoch, force: true });
     } catch (error) {
       const code = (error as { code?: string }).code;
       setDeleteError(code === 'conflict' ? t('chat.toast.activeRuns') : errorMessage(error));
@@ -986,9 +1011,9 @@ export function ChatView({
           query={query}
           onQueryChange={setQuery}
           searchSnippets={activeServerSearch?.snippets}
-          loading={sessionsResource.state.status === 'loading'}
-          error={sessionsResource.state.status === 'error' ? sessionsResource.state.error : null}
-          onRetry={sessionsResource.reload}
+          loading={sessionsLoading}
+          error={sessionsError}
+          onRetry={() => void loadSessions(client, { epoch, force: true })}
           hasToken={hasToken}
           onSelect={selectSession}
           onNew={startNewSession}
@@ -1088,7 +1113,7 @@ export function ChatView({
               {hydrateError ? (
                 <ErrorState
                   message={hydrateError === NOT_FOUND_MESSAGE ? t('chat.notFound') : hydrateError}
-                  onRetry={detailResource.reload}
+                  onRetry={reloadDetail}
                   action={
                     hydrateError === NOT_FOUND_MESSAGE ? (
                       <Button type="button" onClick={() => navigate({ domain: 'chat' })}>
@@ -1112,7 +1137,7 @@ export function ChatView({
               {hydrateStale && (
                 <StaleNotice
                   message={t('chat.staleHistory', { detail: hydrateStale })}
-                  onRetry={detailResource.reload}
+                  onRetry={reloadDetail}
                 />
               )}
 
