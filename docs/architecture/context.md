@@ -35,13 +35,13 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/agent-runtime.ts
 | `runtime.notice` | 热应用 / 版本通知 | `runtime-notice-hook` → `vessel:notice` | 尾部 | 是 |
 | 文档订阅 | `<subscription-notice>` 短通知 | doc-subscription → `vessel:subscription` | 尾部 | 是 |
 | 80% 预算预警（`limits.*` / `termination.*`） | `[runtime] input_tokens_limit: 820k/1M ...` | core `publishLimitWarnings` → `vessel:limit` | 尾部 | 是 |
+| 80%–90% 上下文压力 | `[runtime] context_window: 820k/1M ...` 推荐 rotate | core `publishContextPressureWarning` → `vessel:limit` | 尾部 | 是 |
 | 旧 `additionalContext` | 任意 hook | 自动转 `vessel:hook` | 尾部 | 是 |
 | 任意 BeforeLlm hook | 自定义消息 | `ctx.messages` | 尾部 | 是（每 run 一次） |
 | LLM 输出 / 工具结果 | assistant / tool | `llm.response` / `tool.call.*` | 顺序 | 是 |
 | 压缩 | 摘要 | `compactAsync` / `autoCompactAsync` | system 之后 | 是（session cache） |
 
-**不注入**：Team 日志不会自动进上下文；只有 `teams.post` 里被 `@` 的成员会收到一条普通 user 消息。
-权限请求 / ask 事件不进上下文，只有工具结果会。
+**不注入**：Team 日志不会自动进上下文；只有 `teams.post` 里被 `@` 的成员会收到一条普通 user 消息。权限请求 / ask 事件不进上下文，只有工具结果会。
 
 ## 一次 run 的顺序
 
@@ -50,8 +50,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/agent-runtime.ts
 3. 写入 `RunOptions.messages`（`message.injected`，用户输入之前）
 4. 输入 guardrail（可改写用户文本）
 5. 写入用户消息（`user.message`）→ `saveSession`
-6. loop：80% 预警 → termination / usage 检查 → `autoCompactAsync`
-   → BeforeLlm hooks（system 只读；`ctx.messages` 追加）→ `appendInjectedMessages`
+6. loop：limits 80% 预警 → termination / usage 检查 → 上下文 80% 压力预警 → `autoCompactAsync`（≥90%）→ BeforeLlm hooks（system 只读；`ctx.messages` 追加）→ `appendInjectedMessages`
    → `buildRequestMessages`（归一化 + 替换基底 system）→ `pluginHost.listTools()`
    → **PrefixGuard** → LLM → assistant / tool 入上下文
 7. `finalizeRun` → save session / checkpoint
@@ -69,15 +68,15 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/agent-runtime.ts
 |---|---|
 | token 预算 | `context.maxTokens` 默认 1,000,000 |
 | 自动压缩 | `autoCompact` 默认 true |
-| 阈值 | `compactThreshold` 默认 0.8 |
+| 阈值 | `compactThreshold` 默认 0.9（80%–89.99% 只推荐 rotate） |
 | 条数兜底 | `maxMessages` 或 `max(100, maxTokens / 100)` |
 | 保留 | system 全保留；最近非 system 在 30% 预算内，至少 2 条 |
 | 摘要 | provider summarizer；失败/空 → 占位摘要 |
 | 结果 | `role: system` + `compaction_summary: true`；旧摘要移除，system 提前 |
-| 事件 | `context.compacted`（auto / overflow / manual） |
+| 事件 | `context.compacted`（auto / overflow / manual）；`context.pressure`（80%–90%，每 run 一次） |
 
 压缩摘要主要靠 session cache 恢复；事件日志未为每次压缩发 `message.compaction`。
-**两个 80% 不是一回事**：`context.compactThreshold` 触发压缩；`limits.inputTokensLimit` 80% 触发 `vessel:limit`。默认都 1M，但机制独立。压缩**未废弃**；`rotate` 是独立换 Body，不自动触发；overflow 仍 `forceCompact` 后重试一次。
+**80% 与 90% 分工**：`context.tokenCount / maxTokens` 到 80%–89.99% 不压缩，发 `context.pressure` + `vessel:limit` 推荐 `agent(rotate)`；≥90% 由 `autoCompactAsync` 自动压缩。`limits.inputTokensLimit` 的 80% usage 预警是另一套机制。`rotate` 不自动触发；overflow 仍 `forceCompact` 后重试一次。
 
 <a id="prefix"></a>
 

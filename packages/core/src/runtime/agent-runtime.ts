@@ -55,6 +55,12 @@ import { MemoryPluginHost } from './plugin-host.js';
 import { type PrefixChangeReason, PromptPrefixGuard } from './prompt-prefix-guard.js';
 import { createToolPipeline, isToolCall, type ToolPipeline } from './tool-pipeline.js';
 
+/**
+ * Context pressure warning ratio：达到该比例但未到自动压缩阈值时，
+ * 只提示模型/用户考虑 `agent(rotate)`，不主动压缩。
+ */
+export const CONTEXT_PRESSURE_WARN_RATIO = 0.8;
+
 /** finalizeRun 的终态输入（C1） */
 type RunTerminalOutcome =
   | { status: 'completed'; output: string }
@@ -1044,6 +1050,9 @@ export class AgentRuntime {
         throw new LimitExceededError(limitBlock);
       }
 
+      // 80%–90%：不压缩，只提示换 Body；≥90% 交给 autoCompactAsync。
+      this.publishContextPressureWarning(execution);
+
       // 0.6.1 E3：按阈值触发真实摘要压缩（旧 ContextManager 无此方法则跳过）。
       // 必须在组装请求前完成，保证本轮请求看到压缩后的历史。
       const compacted = await this.context.autoCompactAsync?.();
@@ -1540,6 +1549,50 @@ export class AgentRuntime {
       },
       ts: Date.now(),
     });
+  }
+
+  /**
+   * 80% 上下文压力：不压缩，只发一次事件 + 尾部消息，建议 `agent(rotate)`。
+   * ≥90% 时静默让 autoCompactAsync 处理；`autoCompact: false` 时同样不主动压缩。
+   */
+  private publishContextPressureWarning(execution: RunExecution): void {
+    const max = this.context.maxTokens;
+    if (max === undefined || max <= 0) return;
+    const used = this.context.tokenCount;
+    const ratio = used / max;
+    // 低于预警线或已超过自动压缩阈值（>0.9）：不提示。
+    // 恰好 0.9 仍提示一次：压缩条件是严格大于，留出这一条边。
+    if (ratio < CONTEXT_PRESSURE_WARN_RATIO || ratio > 0.9) return;
+    if (this.warnedLimitKeys.has('context_window')) return;
+    this.warnedLimitKeys.add('context_window');
+
+    const percent = Math.round(ratio * 100);
+    const hint =
+      'Use agent(rotate) with a startup_prompt to move to a fresh body; automatic compaction runs above 90%.';
+    this.publishEvent({
+      type: 'context.pressure',
+      run_id: execution.runId,
+      data: {
+        run_id: execution.runId,
+        session_id: execution.sessionId,
+        used,
+        max,
+        ratio,
+        threshold: CONTEXT_PRESSURE_WARN_RATIO,
+        hint,
+      },
+      ts: Date.now(),
+    });
+    // 与 limits 预警共用尾部消息格式；不改 system 前缀。
+    this.addContext(
+      {
+        role: 'user',
+        name: 'vessel:limit',
+        content: `[runtime] context_window: ${used}/${max} (${percent}%) — ${hint}`,
+        timestamp: Date.now(),
+      },
+      execution.runId,
+    );
   }
 
   /** 0.15 E2：每 run 每 key 只发一次预警（数据形状为冻结契约） */

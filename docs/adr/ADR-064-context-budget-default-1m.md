@@ -22,3 +22,7 @@ tags: [context, tokens, defaults, config]
 - **后果**：默认配置的长会话可以保留更多历史，减少过早摘要；代价是内存占用与发往 provider 的请求体增大，小窗口模型若不显式配置会在请求侧失败或截断。token 计数仍是估算值，1M 预算不等于 provider 的精确窗口。CI 的 `quality` / `cross-platform` 另需在 `bun test` 前安装 `apps/web` 依赖（根 workspaces 不含 `apps/web`），这不改变运行时行为。
 
 - **关联**：ADR-012（core 稳定性与演化）、ADR-054（RunExecution——压缩仍发生在上下文管理器内，不改 run 终态路径）；`packages/core/src/context/context-manager.ts`、`packages/config/src/defaults.ts`、`.github/actions/quality/action.yml`、`.github/workflows/ci.yml`。
+
+## Errata
+
+- **2026-10-26**：`compactThreshold` 默认值由 `0.8` 调整为 `0.9`，`MemoryContextManager` 构造默认与 `shouldCompact()` fallback 同步；决策 3 中的 0.8 / 约 800,000 以本 Errata 为准。80%–89.99% 不再压缩，改为 `context.pressure` 事件 + `vessel:limit` 尾部消息推荐 `agent(rotate)`；≥90% 仍由 `autoCompactAsync` 自动压缩；provider overflow 的 `forceCompact` 后重试一次兜底不变。

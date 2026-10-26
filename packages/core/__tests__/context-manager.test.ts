@@ -159,11 +159,11 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
     await context.compactAsync();
     expect(budgets).toEqual([1_000_000]);
 
-    // 默认阈值 0.8：800k 以下不触发，超过才压缩
-    context.updateRealTokens(799_999);
+    // 默认阈值 0.9：900k 以下不触发，超过才压缩
+    context.updateRealTokens(899_999);
     expect(await context.autoCompactAsync()).toBe(0);
     context.add({ role: 'user', content: 'y'.repeat(1_200_000) });
-    context.updateRealTokens(800_001);
+    context.updateRealTokens(900_001);
     expect(await context.autoCompactAsync()).toBeGreaterThan(0);
     expect(budgets).toEqual([1_000_000, 1_000_000]);
   });

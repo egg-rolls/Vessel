@@ -40,3 +40,7 @@ tags: [compaction, context, summarizer, chunking, tools]
 - **已知限制**：token 估算为字符近似（ASCII 0.25 / CJK 0.5 token 每字符），边界附近保留量有偏差；配对回退可使保留数略超 `maxMessages`；全部块失败时只剩占位摘要，不重试。
 
 - **关联**：ADR-064（`context.maxTokens` 1M 默认预算）、ADR-083（压缩摘要必须是 system 且同时最多一条）；`packages/core/src/context/context-manager.ts`、`src/tenant-runtime-factory.ts`。
+
+## Errata
+
+- **2026-10-26**：自动压缩默认阈值由 `0.8` 调整为 `0.9`（`tokenCount > maxTokens × 0.9`），显式 `compactThreshold` 仍优先；决策 2 与非目标 1 中的 0.8 以本 Errata 为准。80%–89.99% 不压缩，由 `context.pressure` 事件 + `vessel:limit` 尾部消息推荐 `agent(rotate)`；≥90% 自动压缩；overflow 的 `forceCompact` 兜底、保留区与摘要契约不变。

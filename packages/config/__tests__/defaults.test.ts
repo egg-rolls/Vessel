@@ -53,7 +53,7 @@ describe('DEFAULT_CONFIG', () => {
 
   it('0.6.1：context.autoCompact 默认开启', () => {
     expect(DEFAULT_CONFIG.context?.autoCompact).toBe(true);
-    expect(DEFAULT_CONFIG.context?.compactThreshold).toBe(0.8);
+    expect(DEFAULT_CONFIG.context?.compactThreshold).toBe(0.9);
   });
 
   it('嵌套默认值不跨 loadConfig 调用共享（structuredClone）', async () => {

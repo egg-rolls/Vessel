@@ -75,7 +75,7 @@ export class MemoryContextManager implements ContextManager {
       // 未显式配置时按 token 预算推导安全上限（见 messageCap）。
       maxMessages: config.maxMessages,
       autoCompact: config.autoCompact ?? true,
-      compactThreshold: config.compactThreshold ?? 0.8,
+      compactThreshold: config.compactThreshold ?? 0.9,
       onCompact: config.onCompact,
       summarizer: config.summarizer,
     };
@@ -304,9 +304,9 @@ export class MemoryContextManager implements ContextManager {
   }
 
   private shouldCompact(): boolean {
-    const threshold = this.config.compactThreshold ?? 0.8;
+    const threshold = this.config.compactThreshold ?? 0.9;
     const max = this.config.maxTokens ?? 1_000_000;
-    // 0.10 R1-10：token 预算仍是主阈值（0.8 语义不变）；条数上限是兜底安全网。
+    // 0.10 R1-10：token 预算仍是主阈值（默认 0.9）；条数上限是兜底安全网。
     return this.tokenCount > max * threshold || this.isOverMessageCap();
   }
 
