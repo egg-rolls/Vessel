@@ -22,7 +22,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 - **Agent 是持久身份，Body 是 session + engine**：`body_id ≡ session_id`，`current_body` 是唯一持久指针，`epoch` 存在 `current_body` 内。首具 Body 的 `session_id` 与 agent id 相同。
 - `PersistedAgentRecord` 持久化 `membership` / `model` / `system_prompt` / `current_body` / `forked_from` / `body_history?`；`presence` / `rotation` 不落盘。`body_history` 只记录已退役 Body，最多 20 条，当前 Body 不在其中。
-- 快照写 `version: 2`；读取兼容 v1，首次写 v2 前把 v1 备份为 `<tenant>.json.v1.bak`，备份失败则放弃本次写。
+- 快照写 `version: 3`；读取兼容 v1/v2。v3 持久化 `role: single|member|temporary`：v2 的 `owner===id` → single、`owner` 缺省 → member、`owner≠id` → temporary；single/member 的 owner 补成 id。首次写 v3 前备份 `.v2.bak`（v1 保留 `.v1.bak`），失败则放弃本次写。
 
 <a id="state"></a>
 
@@ -61,9 +61,9 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## 派生：peer / contractor 与冻结
 
-- `AgentService.create` 接受 `CreateMemberInput`：`kind?: 'peer' | 'contractor'` / `owner?: string | null` / `teamId?` / `spawnedBy?`。`kind` 不持久化，只决定 owner / parent / visibility 与校验。
-- **peer**：无 owner / parent，必须绑定 Team，visibility 强制 `team`。**contractor**：owner / parent 缺省为 owner（工具路径填调用者，service 缺省是 root owner）；有 Team 时 visibility 缺省 `team`，unbound 时缺省 `private`。`owner` 省略由入口 / service 补齐，`null` 是显式无 owner。
-- **`agent` 工具 `hire` 对任意成员开放**（含 contractor，是否有 Team 均可）：owner / parent 固定为调用者；调用者有 Team 时绑定该 `team_id`（计入上限 / 冻结），否则 unbound 且不计 Team 上限。`create`（peer）仍要求调用者有 Team，root 只能 `hire`；`new` 不是当前 action。
+- `AgentService.create` 接受 `CreateMemberInput`：`kind?: 'peer' | 'contractor'` / `owner?: string | null` / `teamId?` / `spawnedBy?`。输入 `kind` 映射持久化 `role`：peer → member，contractor → temporary；无 kind 的旧请求按 temporary。
+- **member**：owner=self、无 parent、必须绑定 Team、visibility 强制 `team`。**temporary**：owner/parent 缺省为雇佣者（工具路径填调用者，service 缺省是 single）；有 Team 时 visibility 缺省 `team`，unbound 缺省 `private`。
+- **`agent` 工具 `hire` 对任意成员开放**（含 temporary，是否有 Team 均可）：owner / parent 固定为调用者；调用者有 Team 时绑定该 `team_id`（计入上限 / 冻结），否则 unbound 且不计 Team 上限。`create`（member）仍要求调用者有 Team，single 只能 `hire`；`new` 不是当前 action。转换用 `agents.update { role, team_id? }`，不要求新 Body，只追加 `vessel:notice`。
 - 每 Team present 成员 ≤ 20（peer + contractor 都计入）；`create` / `hire` / `fork` / `reinstate` 增长前检查，超限 `team_full`。同 Team 的幂等 reinstate 不增长，不被冻结 / 上限拦。
 - **冻结**：`TeamRecord.spawn_frozen?` 持久化，`TeamSummary.spawn_frozen?` 回显；canonical `teams.spawnFrozen` 是唯一写路径，`teams.update` 不改。冻结期间 `create` / `hire` / 人类 `agents.create` / `fork` / `reinstate` 全部 `team_frozen`；只有 `frozen: false` 解冻。CLI 为 `vessel team freeze|unfreeze <team_id>`，team-scoped token 只能操作自己的 team。
 - **close 审批与级联**：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接 allow；成员关闭 peer 经权限 bridge 交人类审批；root owner 记录与跨 Team contractor 拒绝；无 bridge 时 ask fail closed。owner close 按 registry 原始记录级联关闭自己的 private contractor，team 可见 contractor 保持 present。
@@ -73,7 +73,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## Team、可见性与预算
 
-- roster 是派生视图：`team_id + membership = present`，不单独持久化。Team 记录与日志在 `<dataDir>/teams/<tenant>/<team_id>/`；`TeamService` 是日志唯一写入点。`TeamMemberSummary.owner?` 标识归属：peer 缺省，contractor 指向 owner。
+- roster 是派生视图：`team_id + membership = present`，不单独持久化。Team 记录与日志在 `<dataDir>/teams/<tenant>/<team_id>/`；`TeamService` 是日志唯一写入点。`TeamMemberSummary.role` 区分 member/temporary，`owner` 仍指向归属（member 为 self，temporary 为雇佣者）。
 - **Team 日志不是队列**：无 `@` 的 post / reply / system 记录只追加，不 dispatch、不产生 run；`@` 必须先写日志再逐条 dispatch。
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；Team 成员强制权限 bridge，只有 human / policy 能应答。
 - conversation 预算挂 `teams[].policy.budget`，状态写 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、损坏 fail-closed）；override 只能由人抬高或清除。

@@ -110,6 +110,7 @@
 | 093 | Hub 控制面（S5） | accepted | 2026-10-23 | hub, control-plane, directory, pairing, scoped-token, secret-store | [ADR-093-hub-control-plane.md](ADR-093-hub-control-plane.md) |
 | 094 | 跨节点 federation（team ↔ team） | accepted | 2026-10-23 | federation, cross-node, team, allowlist, hop, tls, token | [ADR-094-federation-team-to-team.md](ADR-094-federation-team-to-team.md) |
 | 095 | 0.27 成员再派生：peer / contractor、冻结与 close 审批 | accepted | 2026-10-25 | agent, spawn, peer, contractor, team, owner, freeze, permission, rpc, audit | [ADR-095-agent-spawn-and-contractors.md](ADR-095-agent-spawn-and-contractors.md) |
+| 096 | Agent 持久化 role 与临时/成员转换 | accepted | 2026-10-26 | agent, role, single, member, temporary, owner, conversion, snapshot | [ADR-096-agent-role-and-conversion.md](ADR-096-agent-role-and-conversion.md) |
 
 ## 编写约定
 

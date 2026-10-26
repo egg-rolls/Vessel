@@ -13,12 +13,12 @@ applies_to: [N, M]
 ## AgentService 唯一
 
 - 成员能力只由 `packages/agent` 实现；权限 bridge 唯一活路径是 `InProcessMemberRuntime.attachBridge`，不得恢复第二套桥；`packages/core` 不出现 member / owner / visibility / team 概念（ADR-088 / ADR-091）。
-- 内置 `agent` 工具是唯一模型 schema：root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`（root 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`。工具调用者的 owner / parent 固定，模型不能伪造。
+- 内置 `agent` 工具是唯一模型 schema：single 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`（single 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`。工具调用者的 owner / parent 固定，模型不能伪造。
+- 持久化 `role`：`single`（owner=self，无 Team）、`member`（owner=self，Team 必需）、`temporary`（owner=雇佣者，Team 可选）。`create` → member，`hire` → temporary；v3 快照读取 v2 时按旧 owner 推断 role。
 - 不得新增 `wait` / `inbox` / `status` / `cancel`；等待语义是结束这一轮、回复作为新 turn 到达。
-
 ## 派生：peer / contractor
 
-- 两条路径：`peer` 无 owner / parent、必须绑定同 Team、visibility 强制 `team`；`contractor` 的 owner / parent 缺省是 owner（工具路径为调用者，service 缺省 root owner），有 Team 时 visibility 缺省 `team`、unbound 缺省 `private`。`CreateMemberInput.owner` 可选，`null` 表示显式无 owner（peer）。
+- 创建判别仍是 `kind:'peer'|'contractor'`：peer → `role:'member'`（owner=self、无 parent、必须 Team、visibility 强制 `team`）；contractor → `role:'temporary'`（owner/parent 缺省是雇佣者，有 Team 时 visibility 缺省 `team`、unbound 缺省 `private`）。
 - 每 Team present 成员 ≤ 20（peer + contractor 都计入）；`create` / `hire` / `fork` / `reinstate` 增长前检查，超限必须是 `team_full`。同 Team 的幂等 reinstate 不增长，不得被上限或冻结误拦。
 - 冻结是 Team 元数据 `spawn_frozen`：冻结期间 `create` / `hire` / 人类 `agents.create` / `fork` / `reinstate` 一律 `team_frozen`；只能由 `teams.spawnFrozen false` 解冻，`teams.update` 不改该字段。
 - 审计：`agent.spawned` payload 带 `spawned_by`，Team join system 日志的 `from` 取它；private 成员按既有规则不写 Team 日志。
@@ -27,14 +27,15 @@ applies_to: [N, M]
 
 | 调用者 | action | 结果 |
 |---|---|---|
-| root owner | `hire` | contractor；owner / parent = root；unbound（无 `team_id`） |
-| 有 Team 的成员（含 contractor） | `hire` | contractor；owner / parent = 调用者；`team_id` = 调用者 Team，计入 20 人上限与 `team_frozen` |
-| 无 Team 的成员（unbound contractor） | `hire` | contractor；owner / parent = 调用者；无 `team_id`，不计 Team 上限 |
-| 有 Team 的成员 | `create` | peer；无 owner / parent；强制调用者 Team、visibility `team` |
+| single | `hire` | `temporary`；owner / parent = single；unbound（无 `team_id`） |
+| 有 Team 的成员（含 temporary） | `hire` | `temporary`；owner / parent = 调用者；`team_id` = 调用者 Team，计入 20 人上限与 `team_frozen` |
+| 无 Team 的成员（unbound temporary） | `hire` | `temporary`；owner / parent = 调用者；无 `team_id`，不计 Team 上限 |
+| 有 Team 的成员 | `create` | `member`；owner=self；无 parent；强制调用者 Team、visibility `team` |
 
-- `hire` 对任意成员开放：contractor 可以再 hire；root 与 unbound 成员都落 unbound 分支。
-- `create` 仍只给有 Team 的成员；root 不能 `create`（root 只有 `hire`）。
-- action 只有 `create` / `hire` / `send` / `close` / `list` / `rotate` / `post`；`new` 不是当前 action，旧名不恢复。
+- 转换：`agents.update { role, team_id? }`；member 需要 Team，temporary 的 owner 是转换者，
+  single 清空 Team。team-scoped token 只能转本队；不要求新 Body，只追加 `vessel:notice`。
+- `hire` 对任意成员开放；single 与 unbound 成员都落 unbound 分支。`create` 只给有 Team 的成员，
+  single 只能 `hire`。action 无 `new`。
 
 ## session / Body
 

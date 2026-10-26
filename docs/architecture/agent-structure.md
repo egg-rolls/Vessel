@@ -1,78 +1,81 @@
 ---
 title: Agent 结构、成员与临时
 kind: current
-triggers: [agent, member, peer, contractor, temporary, owner, team, create, hire, roster, promote, demote]
-paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/team/**]
+triggers: [agent, member, peer, contractor, temporary, single, owner, team, create, hire, role, promote, demote]
+paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/team/**, apps/web/src/stores/**]
 ---
 
 # Agent 结构、成员与临时
 
-## 身份与归属
+## 角色
 
-| 身份 | `owner` | `parent` | `team` | 说明 |
+| role | `owner` | `parent` | `team` | 说明 |
 |---|---|---|---|---|
-| root owner | `owner === id` | 无 | 无 | 人类主 agent；只能 `hire`，不能 `create` |
-| 成员（peer） | 无 | 无 | **必需** | visibility 强制 `team`；close 需人类审批 |
-| 临时（contractor） | 有（root / 调用者） | 默认 = owner | 可选 | close 由 owner 或自己决定 |
+| `single` | self | 无 | 无 | 单个 agent；只能 `hire`，不能 `create` |
+| `member` | self | 无 | **必需** | visibility 强制 `team`；close 需人类审批 |
+| `temporary` | 雇佣者 | 默认 owner | 可选 | close 由 owner 或自己决定 |
 
-- **成员/临时不是两个模型**：同一个 `PersistedAgentRecord`，区别只是 `owner` / `parent` / `team` 的组合。
-- `spawnedBy` 只进 `agent.spawned` 审计事件；`parentId` 是回复/投递父节点，contractor 默认等于 owner。
-- UI 文案：peer = 成员，contractor = 临时（内部仍叫 contractor）。
+- 同一个 `PersistedAgentRecord`；区别是 `role` / `owner` / `parent` / `team` 的组合。
+- UI：`member` = 成员，`temporary` = 临时；`single` 不在 Team roster 里。
+- `parent_id` 是回复/投递父节点；`spawnedBy` 只进 `agent.spawned` 审计事件。
 
-## 数据模型
-
-`PersistedAgentRecord` / `MemberStatus` 关键字段：
+## 数据模型 v3
 
 | 字段 | 含义 |
 |---|---|
-| `id` / `session_id` | 持久身份 / 当前 Body（`body_id ≡ session_id`） |
-| `owner?` | 归属 principal；缺省 = peer；root 自指 |
-| `parent_id?` | 回复父节点；contractor 默认 owner |
-| `team_id?` | 所属 Team；peer 必需 |
-| `visibility` | `private` / `team` / `tenant`；peer 强制 team |
-| `membership` / `state` | present/left；engine 状态 |
-| `current_body` / `body_history` | 当前 Body 与退役 Body（≤20） |
+| `role` | `single` / `member` / `temporary`（v3 必填） |
+| `owner` | v3 必填；single/member = self，temporary = 雇佣者 |
+| `parent_id` / `team_id` | 回复父节点 / Team；temporary 的 parent 默认 owner |
+| `visibility` | private / team / tenant；member 强制 team |
+| `current_body` / `body_history` | 当前 Body / 退役 Body（≤20） |
 | `model` / `system_prompt` | 下一个 Body 生效 |
 
-`AgentMessage` 带 `from` / `source`（human/agent/system）/ `channel`（team/direct）；
-`AgentEvent` 带 `agent_id` / `team_id` / `parent_id` / `spawned_by`。
+- `AGENT_SNAPSHOT_VERSION = 3`；v1/v2 可读。
+- v2 → v3：`owner===id` → single；`owner` 缺省 → member；`owner≠id` → temporary；
+  single/member 的 owner 补成 id。首次写 v3 前备份 `.v2.bak`（v1 保留 `.v1.bak`）。
+- 旧 `owner===undefined` / `owner===id` 判定全部改按 `role`。
 
-## 创建路径
+## 创建
 
-| 入口 | 能创建什么 | 关键约束 |
-|---|---|---|
-| `teams.create` | 只有 Team | 不创建成员 |
-| `agents.create`（canonical） | peer 或 contractor | peer 必须 `team_id`；contractor 可带 `team_id` 或 unbound |
-| `agent` 工具 `create` | peer | 调用者必须是有 Team 的成员；root 不可用 |
-| `agent` 工具 `hire` | contractor | 任意成员可 hire；root 创建 unbound；有 Team 时继承 |
-| `teams.members add` | 把已有成员/临时绑定到 Team | 不改变 owner/kind |
-| Web Agents → 创建 | 成员/临时 | 选择 Team + 类型；成员需要 Team |
-| CLI / owner transport | 同上 | 走 `agents.create`，可带 `workspace` |
+| 入口 | 结果 |
+|---|---|
+| `teams.create` | 只创建 Team |
+| `agents.create kind:'peer'` | `member`，owner=self，team 必需 |
+| `agents.create kind:'contractor'` | `temporary`，owner=调用者/default，team 可选 |
+| `agent` 工具 `create` | `member`（调用者必须有 Team；single 不可用） |
+| `agent` 工具 `hire` | `temporary`（任意成员可 hire；有 Team 则继承） |
+| `teams.members add` | single → member；temporary 保持 temporary |
+| Web Agents → 创建 | 选择 Team + 类型；成员需要 Team |
 
-- **创建第一个成员**：先创建 Team，再 `agents.create { kind:'peer', team_id, name }`。
-  Team 为空也可以创建 peer；不需要先有成员的 Team。
-- Web 的 Agents 视图只聚合 **Team roster 的 present 成员**；unbound 临时不在这里出现。
-- `new` 不是当前 action；`create` = peer，`hire` = contractor。完整矩阵见
-  [docs/agents/agent.md](../agents/agent.md)。
+- **创建第一个成员**：先建 Team，再 `agents.create { kind:'peer', team_id, name }`。
+  空 Team 也可以创建 member。
+- Agents 视图只聚合 Team roster 的 present 成员；unbound 临时不在这里出现。
+- `new` 不是当前 action；`create` = peer/member，`hire` = contractor/temporary。
 
-## 临时 ↔ 成员转换（设计，未实现）
+## 转换（已实现）
 
-理论等价：**成员 = owner 为空的临时**。转换需要同时处理 owner / parent / team / visibility：
+`agents.update` 增加 `role` / `team_id`：
 
-| 方向 | owner | parent | team | visibility |
+| 目标 | owner | parent | team | visibility |
 |---|---|---|---|---|
-| 临时 → 成员 | 清空 | 清空 | 必需（未绑定则要求选择） | 强制 `team` |
-| 成员 → 临时 | 设为 root / 调用者 | = owner | 保留或清除 | 默认 team（绑定）或 private |
+| `member` | self | 无 | 必需 | team |
+| `temporary` | 转换者 | = owner | 可选 | team / private |
+| `single` | self | 无 | 清空 | private |
 
-建议入口：扩展 canonical `agents.update`，增加 `kind` 与可选 `team_id`；只允许 human /
-owner transport 调用。**已有 Body 的 team / 权限 bridge 是 spawn 期决定的**，所以转换要么
-要求先 rotate，要么明确“下一个 Body 生效”；不能只改快照假装立即生效。
+- 权限：human / owner transport 可转任意可见成员；team-scoped token 只能转本队，
+  不能转 single 或换 Team。
+- 转换只改记录 + roster + snapshot，**不要求新 Body**；已有 Body 继续运行。
+- 向成员上下文追加 `vessel:notice`（`identity changed: old → new; owner=...; team=...`），
+  不启动 turn。Self Card 保持冻结，不改 system 前缀。
+- 事件 `agent.role.changed`。
+- Team 绑定决定 single ↔ member：加入 Team 自动变 member；显式转 single 才离开 Team。
+  temporary 绑定 Team 仍是 temporary。
 
 ## Web 状态
 
-- 没有 Pinia。Web 使用 React Context（`ConnectionProvider` / `NodeProvider`）、
-  `useResource` 与 `useSyncExternalStore`；服务端 RPC 是唯一真相源。
-- 工具策略：每次 `config.get` 独立；保存后由父面板 `reload()`，卡片徽章才更新。
+- 使用 **Zustand** 域 store：`nodeStore` / `teamStore` / `agentStore` / `configStore`；
+  `ConnectionProvider` 保留 WS/token/事件分发。
+- 工具策略、config、capabilities 由 `configStore` 单一来源；保存后卡片/弹窗同步。
 - `localStorage` 只放本地 UI 偏好（runtime context 可见性、orphan toast 已读）。
 
 相关：[member-team](member-team.md)、[gateway-rpc](gateway-rpc.md)、[context](context.md)。
