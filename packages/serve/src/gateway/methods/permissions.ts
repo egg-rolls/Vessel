@@ -64,16 +64,20 @@ function policyParam(params: Record<string, unknown>): ToolPolicy {
 
 /**
  * 工具存在性校验：与 `tools.list` 走同一 `pluginHostFor`，因此 MCP / 插件工具同样可见。
- * 未知工具 `invalid_params`（契约 §7），不泄漏宿主内部结构。
+ * exact 工具名优先；否则把 `tool.*` scoped 键（如 `agent.close`）在第一个 `.` 处拆出
+ * base，base 必须是已注册工具。未知工具 / 未知 base → `invalid_params`（契约 §7），
+ * 不泄漏宿主内部结构。
  */
 function assertKnownTool(tool: string, host: PluginHost | undefined): void {
   if (host === undefined) {
     throw new RpcError('not_found', 'Tool host is not available');
   }
-  const known = host.listTools().some((definition) => definition.name === tool);
-  if (!known) {
-    throw new RpcError('invalid_params', `Unknown tool: ${tool}`, { tool });
-  }
+  const known = new Set(host.listTools().map((definition) => definition.name));
+  if (known.has(tool)) return;
+  const dot = tool.indexOf('.');
+  const base = dot > 0 ? tool.slice(0, dot) : undefined;
+  if (base !== undefined && known.has(base)) return;
+  throw new RpcError('invalid_params', `Unknown tool: ${tool}`, { tool });
 }
 
 export function createPermissionsMethods(deps: PermissionsMethodsDeps): RpcMethodDefinition[] {

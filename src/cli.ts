@@ -647,6 +647,12 @@ function formatResumeError(error: unknown): string {
 async function runWithConfig(result: BootstrapResult) {
   const { runtime, ctx, config } = result;
   /**
+   * 活配置（CONTRACT-tool-policy-ui §1）：启动配置的快照只在服务启动时有效；
+   * 热应用 / 写回成功后必须更新这里，否则 `config.get` 与 `gateway.reload`
+   * 的 diff 基线会一直滞后。
+   */
+  let liveConfig: VesselConfig = config;
+  /**
    * A2：headless 不在这里直接 `process.exit`，否则会跳过末尾的
    * gateway / tenantFactory / transport / shutdown 清理（`--serve --run`
    * 会残留 tenant `.lock`）。只记录退出码，统一走公共清理后再退出。
@@ -855,7 +861,11 @@ async function runWithConfig(result: BootstrapResult) {
         }
         return buildConfigSnapshot({
           // A6-10：不向当前 tenant 暴露其它 tenant 的 overlay。
-          config: sanitizeConfigForSnapshot(bundle.config),
+          // 默认 tenant 读活配置，写回 / 热应用后 `config.get` 立即反映新策略；
+          // 非默认 tenant 仍读各自 bundle 的配置。
+          config: sanitizeConfigForSnapshot(
+            tenantId === result.tenantId ? liveConfig : bundle.config,
+          ),
           sources: bundle.configSources,
           paths: bundle.configPaths ?? { user: '', project: 'vessel.yaml' },
           tenantId,
@@ -876,6 +886,7 @@ async function runWithConfig(result: BootstrapResult) {
           loaded.validation.errors.map((error) => `${error.path}: ${error.message}`).join('; '),
         );
       }
+      liveConfig = loaded.config;
       return loaded.config;
     };
     // 事件出口：notice 同时进事件流（Web/TUI）与模型上下文（BeforeLlm hook）。
@@ -985,7 +996,7 @@ async function runWithConfig(result: BootstrapResult) {
     const reloadRunner = createGatewayReloadRunner({
       // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
       gateway: () => gateway as GatewayReconfigureTarget | null,
-      currentConfig: () => config,
+      currentConfig: () => liveConfig,
       reloadConfig: reloadVesselConfig,
       refreshPlugins: () => {
         tenantFactory?.refreshPlugins();
@@ -1039,6 +1050,15 @@ async function runWithConfig(result: BootstrapResult) {
       permissions: {
         setToolPolicy: ({ tool, policy }) => {
           const written = setToolPolicy(tool, policy, { configPath: hotApplyConfigPath });
+          // 写盘成功后同步活配置（重新赋值而非原地修改），让随后的 config.get 返回新数组。
+          liveConfig = {
+            ...liveConfig,
+            permission: {
+              ...liveConfig.permission,
+              autoApprove: written.autoApprove,
+              neverAutoApprove: written.neverAutoApprove,
+            },
+          };
           return {
             auto_approve: written.autoApprove,
             never_auto_approve: written.neverAutoApprove,

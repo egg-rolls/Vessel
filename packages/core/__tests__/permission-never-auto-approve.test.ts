@@ -2,8 +2,9 @@
  * 0.27 permission.neverAutoApprove（PLAN-0.27-swarm §2.8）。
  *
  * 守卫：
- * - 命中工具名 / `${tool.name}.${action}` 时，把 auto 来源的 allow 降级为 ask；
- * - 工具 checkPermission 的显式 allow / ask / deny 不被改写；
+ * - 命中工具名 / `${tool.name}.${action}` 时，把任何 allow（含工具 checkPermission
+ *   的显式 allow）降级为 ask；
+ * - 显式 deny 保持拒绝；
  * - 无配置或无匹配时行为完全不变。
  */
 import { describe, expect, it } from 'bun:test';
@@ -84,7 +85,7 @@ describe('PermissionPolicy neverAutoApprove', () => {
     expect(requested).toBe(false);
   });
 
-  it('工具 checkPermission 显式 allow 不受 never 命中影响', async () => {
+  it('工具 checkPermission 显式 allow + never 命中 → ask', async () => {
     const events = new MemoryEventStream();
     const policy = policyFor(events, {
       autoApprove: ['agent'],
@@ -97,7 +98,23 @@ describe('PermissionPolicy neverAutoApprove', () => {
       tool('agent', async () => 'allow'),
       { action: 'close' },
     );
-    expect(requested).toBe(false);
+    expect(requested).toBe(true);
+  });
+
+  it('read 类工具显式 allow + exact never → ask', async () => {
+    const events = new MemoryEventStream();
+    const policy = policyFor(events, {
+      autoApprove: ['read'],
+      neverAutoApprove: ['read'],
+    });
+
+    const { requested } = await authorizeWithTrace(
+      policy,
+      events,
+      tool('read', async () => 'allow'),
+      {},
+    );
+    expect(requested).toBe(true);
   });
 
   it('工具 checkPermission 显式 deny 仍拒绝', async () => {

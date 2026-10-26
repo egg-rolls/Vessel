@@ -173,7 +173,12 @@ function readNeverRules(root: Record<string, unknown>): string[] {
   return normalizeRules(raw.filter((item): item is string => typeof item === 'string'));
 }
 
-/** 「不在列表里」的同一份工具名列表（去掉指定项；保持顺序） */
+/**
+ * 「不在列表里」的同一份工具名列表（只去掉 exact 目标键；保持顺序）。
+ *
+ * scoped 键（`tool.*`，例如 `agent.close`）是独立开关：改父工具（`agent`）的档位
+ * 不清除它，改 `agent.close` 也不动 `agent`。
+ */
 function without(rules: readonly string[], tool: string): string[] {
   return rules.filter((rule) => rule !== tool);
 }
@@ -185,9 +190,14 @@ function withTool(rules: readonly string[], tool: string): string[] {
 
 /**
  * 三档策略 → 两个数组（契约 §7：语义完全由现有两个数组表达，不新增字段）。
+ * 只增删 exact 目标键；scoped 键（`tool.*`，例如 `agent.close`）是独立开关，
+ * 不会被父工具（`agent`）的档位切换清除，反过来也一样。
  * - `auto`：进 `auto_approve`，出 `never_auto_approve`
  * - `ask`：两个都不进（缺省行为）
  * - `never`：进 `never_auto_approve`，出 `auto_approve`
+ *
+ * 因此给 `agent` 设 `auto` 不会移除默认的 `agent.close` 保护；要放开
+ * `agent.close` 必须单独给它设 `auto`。
  */
 export function applyToolPolicy(
   snapshot: ToolPolicySnapshot,

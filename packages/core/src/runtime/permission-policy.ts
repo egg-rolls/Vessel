@@ -53,7 +53,7 @@ export class PermissionAbortedError extends Error {
 export class PermissionPolicy {
   private defaultDecision: 'allow' | 'ask';
   private autoApprove: Set<string>;
-  /** 自动放行的例外键（工具名或 `${tool.name}.${action}`）；只改写 auto 来源的 allow */
+  /** 自动放行的例外键（工具名或 `${tool.name}.${action}`）；把任何 allow 降级为 ask */
   private neverAutoApprove: Set<string>;
   private approved: Set<string>;
   /** 显式正数超时；undefined = 无限等待（Addendum A） */
@@ -126,16 +126,11 @@ export class PermissionPolicy {
    */
   async authorize(tool: ToolDefinition, args: unknown, ctx: ToolContext): Promise<void> {
     let decision: 'allow' | 'deny' | 'ask';
-    // 判定来源：'tool' = 工具 checkPermission 的显式判定；'auto' = autoApprove / default / remember。
-    let source: 'tool' | 'auto';
     if (tool.checkPermission) {
       decision = await tool.checkPermission(args, ctx);
-      source = 'tool';
-      // 工具要求确认时，autoApprove / remember-always 仍是用户已表达过的意图；
-      // 显式 allow / deny 保持原判，不被 auto 策略改写。
+      // 工具要求确认时，autoApprove / remember-always 仍是用户已表达过的意图。
       if (decision === 'ask' && (this.autoApprove.has(tool.name) || this.approved.has(tool.name))) {
         decision = 'allow';
-        source = 'auto';
       }
     } else if (
       this.defaultDecision === 'allow' ||
@@ -143,15 +138,14 @@ export class PermissionPolicy {
       this.approved.has(tool.name)
     ) {
       decision = 'allow';
-      source = 'auto';
     } else {
       decision = 'ask';
-      source = 'auto';
     }
 
-    // 0.27：自动放行的例外键只把 auto 来源的 allow 降级为 ask；
-    // 工具 checkPermission 的显式 allow / ask / deny 一律保持原判。
-    if (decision === 'allow' && source === 'auto' && this.hitsNeverAutoApprove(tool, args)) {
+    // 0.27 / CONTRACT-tool-policy-ui §1：neverAutoApprove 命中时把**任何** allow 降级为
+    // ask（包括工具 checkPermission 的显式 allow），这样 read / subscribe / agent 的
+    // “强制确认”才真正生效；deny 不受影响。
+    if (decision === 'allow' && this.hitsNeverAutoApprove(tool, args)) {
       decision = 'ask';
     }
 

@@ -135,6 +135,45 @@ describe('permission-store setToolPolicy（CONTRACT-hot-apply §7）', () => {
     expect(readRoot().api_key).toBe('sk-test');
   });
 
+  it('agent 切 auto 不清除 agent.close（scoped 是独立开关）', () => {
+    fs.writeFileSync(
+      configPath,
+      'permission:\n  auto_approve: [bash]\n  never_auto_approve: [agent.close, edit]\n',
+      'utf-8',
+    );
+    // 只改 exact agent；默认的 agent.close 保护留在 never_auto_approve。
+    expect(setToolPolicy('agent', 'auto', { configPath })).toEqual({
+      autoApprove: ['bash', 'agent'],
+      neverAutoApprove: ['agent.close', 'edit'],
+    });
+  });
+
+  it('agent.close 各档只改自身，不动父工具 agent', () => {
+    const initial =
+      'permission:\n  auto_approve: [agent, agent.close, bash]\n  never_auto_approve: [agent, agent.close, edit]\n';
+
+    fs.writeFileSync(configPath, initial, 'utf-8');
+    // ask：只移除 agent.close，agent 与其它条目保持原样
+    expect(setToolPolicy('agent.close', 'ask', { configPath })).toEqual({
+      autoApprove: ['agent', 'bash'],
+      neverAutoApprove: ['agent', 'edit'],
+    });
+
+    fs.writeFileSync(configPath, initial, 'utf-8');
+    // never：只把 agent.close 放进 never，agent 不受影响
+    expect(setToolPolicy('agent.close', 'never', { configPath })).toEqual({
+      autoApprove: ['agent', 'bash'],
+      neverAutoApprove: ['agent', 'edit', 'agent.close'],
+    });
+
+    fs.writeFileSync(configPath, initial, 'utf-8');
+    // auto：只把 agent.close 放进 auto，agent 不受影响
+    expect(setToolPolicy('agent.close', 'auto', { configPath })).toEqual({
+      autoApprove: ['agent', 'bash', 'agent.close'],
+      neverAutoApprove: ['agent', 'edit'],
+    });
+  });
+
   it('写 snake_case 并清理 camelCase 旧键', () => {
     fs.writeFileSync(
       configPath,

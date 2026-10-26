@@ -90,6 +90,26 @@ describe('permissions.setToolPolicy', () => {
     }
   });
 
+  it('accepts scoped keys whose base tool is registered（agent.close）', async () => {
+    const { deps, writes } = depsWithWriter({
+      pluginHostFor: () => hostWith('bash', 'read', 'edit', 'agent'),
+    });
+    const result = (await handlerOf(deps).handler(
+      { tool: 'agent.close', policy: 'never' },
+      context(),
+    )) as unknown as { ok: boolean; tool: string; policy: string };
+    expect(result).toMatchObject({ ok: true, tool: 'agent.close', policy: 'never' });
+    expect(writes).toEqual([{ tool: 'agent.close', policy: 'never' }]);
+  });
+
+  it('rejects scoped keys with unknown base（nope.close）', async () => {
+    const { deps, writes } = depsWithWriter();
+    await expect(
+      handlerOf(deps).handler({ tool: 'nope.close', policy: 'never' }, context()),
+    ).rejects.toMatchObject({ code: 'invalid_params', message: 'Unknown tool: nope.close' });
+    expect(writes).toEqual([]);
+  });
+
   it('rejects unknown tools with invalid_params（不写盘）', async () => {
     const { deps, writes } = depsWithWriter();
     await expect(
