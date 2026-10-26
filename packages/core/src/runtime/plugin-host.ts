@@ -186,6 +186,19 @@ export class MemoryPluginHost implements PluginHost {
   }
 
   /**
+   * 注销工具（热应用用）。下一轮 `listTools()` 不再返回它。
+   * 安装记录里的 tool 条目一并移除，避免安装失败回滚时把已删的工具“复活”。
+   */
+  unregisterTool(name: string): boolean {
+    if (!this.tools.delete(name)) return false;
+    for (const scope of this.installScopes) {
+      const index = scope.findIndex((entry) => entry.kind === 'tool' && entry.name === name);
+      if (index >= 0) scope.splice(index, 1);
+    }
+    return true;
+  }
+
+  /**
    * 列出所有 Provider 名称
    * @returns Provider 名称数组
    */

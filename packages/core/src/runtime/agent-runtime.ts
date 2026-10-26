@@ -23,7 +23,13 @@ import { GuardrailStage } from '../types/guardrail.js';
 import { type HookContext, HookType } from '../types/hook.js';
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 import type { Logger } from '../types/logging.js';
-import type { AgentRuntimeOptions, Plugin, PluginHost, SelfCardOptions } from '../types/plugin.js';
+import type {
+  AgentRuntimeOptions,
+  Plugin,
+  PluginHost,
+  RuntimePermissionConfig,
+  SelfCardOptions,
+} from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, LLMResponse, Message } from '../types/provider.js';
 import type { RunExecution, RunInterruptReason, RunOptions } from '../types/run.js';
 import type { RunCheckpoint, RunStore } from '../types/run-store.js';
@@ -1473,6 +1479,16 @@ export class AgentRuntime {
   dispose(): Promise<void> {
     this.disposePromise ??= this.disposeRuntime();
     return this.disposePromise;
+  }
+
+  /**
+   * 热应用权限规则（配置变更后调用）。下一轮工具调用按新规则判定，不需要重建 runtime。
+   * 已记住的 "always" 不受影响；`autoApprove` / `neverAutoApprove` 整体替换。
+   */
+  applyPermissionRules(
+    rules: Pick<RuntimePermissionConfig, 'default' | 'autoApprove' | 'neverAutoApprove'>,
+  ): void {
+    this.permissionPolicy.replaceRules(rules);
   }
 
   private async disposeRuntime(): Promise<void> {

@@ -57,6 +57,11 @@ export interface PluginHost {
   listTools(): ToolDefinition[];
   listProviders(): string[];
   /**
+   * 可选：注销已注册的工具（热应用用）。缺省不支持的宿主由调用方按“不可热移除”处理。
+   * 返回是否真的移除了——未注册过返回 false，不视为错误。
+   */
+  unregisterTool?(name: string): boolean;
+  /**
    * 可选：记录一次插件安装的注册，用于安装失败时回滚（0.9）。
    * 不支持回滚的自定义宿主可以不实现。
    */

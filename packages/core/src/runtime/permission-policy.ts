@@ -92,6 +92,30 @@ export class PermissionPolicy {
   }
 
   /**
+   * 就地替换规则（热应用）。策略实例跨 run 存活，配置变更后无需重建 runtime：
+   * 下一轮工具调用即按新规则判定。`default` 缺省时保持当前判定。
+   * 已记住的 "always"（`approved`）不受影响——那是用户在本进程里做出的决定。
+   */
+  replaceRules(config: Pick<RuntimePermissionConfig, 'default' | 'autoApprove' | 'neverAutoApprove'>): void {
+    if (config.default !== undefined) this.defaultDecision = config.default;
+    this.autoApprove = new Set(config.autoApprove ?? []);
+    this.neverAutoApprove = new Set(config.neverAutoApprove ?? []);
+  }
+
+  /** 当前规则快照（诊断 / 通知用）。 */
+  snapshotRules(): {
+    default: 'allow' | 'ask';
+    autoApprove: string[];
+    neverAutoApprove: string[];
+  } {
+    return {
+      default: this.defaultDecision,
+      autoApprove: [...this.autoApprove],
+      neverAutoApprove: [...this.neverAutoApprove],
+    };
+  }
+
+  /**
    * 判定并放行/拒绝工具执行。允许则正常返回；拒绝则抛错。
    * - 工具自带 checkPermission → 用工具的判定；若返回 `ask`，仍受 autoApprove /
    *   已记住（always）约束，命中则放行，否则由本策略统一发一次请求；
