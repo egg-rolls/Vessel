@@ -53,7 +53,10 @@ export class PermissionAbortedError extends Error {
 export class PermissionPolicy {
   private defaultDecision: 'allow' | 'ask';
   private autoApprove: Set<string>;
-  /** 自动放行的例外键（工具名或 `${tool.name}.${action}`）；把任何 allow 降级为 ask */
+  /**
+   * 自动放行的例外键（工具名或 `${tool.name}.${action}`）。exact 工具名把任何 allow
+   * 降级为 ask；scoped 键只降级 auto 来源的 allow（显式工具 allow 保持）。
+   */
   private neverAutoApprove: Set<string>;
   private approved: Set<string>;
   /** 显式正数超时；undefined = 无限等待（Addendum A） */
@@ -126,11 +129,15 @@ export class PermissionPolicy {
    */
   async authorize(tool: ToolDefinition, args: unknown, ctx: ToolContext): Promise<void> {
     let decision: 'allow' | 'deny' | 'ask';
+    // 判定来源：'tool' = 工具 checkPermission 的显式判定；'auto' = autoApprove / default / remember。
+    let source: 'tool' | 'auto';
     if (tool.checkPermission) {
       decision = await tool.checkPermission(args, ctx);
+      source = 'tool';
       // 工具要求确认时，autoApprove / remember-always 仍是用户已表达过的意图。
       if (decision === 'ask' && (this.autoApprove.has(tool.name) || this.approved.has(tool.name))) {
         decision = 'allow';
+        source = 'auto';
       }
     } else if (
       this.defaultDecision === 'allow' ||
@@ -138,15 +145,24 @@ export class PermissionPolicy {
       this.approved.has(tool.name)
     ) {
       decision = 'allow';
+      source = 'auto';
     } else {
       decision = 'ask';
+      source = 'auto';
     }
 
-    // 0.27 / CONTRACT-tool-policy-ui §1：neverAutoApprove 命中时把**任何** allow 降级为
-    // ask（包括工具 checkPermission 的显式 allow），这样 read / subscribe / agent 的
-    // “强制确认”才真正生效；deny 不受影响。
-    if (decision === 'allow' && this.hitsNeverAutoApprove(tool, args)) {
-      decision = 'ask';
+    // 0.27 / CONTRACT-tool-policy-ui §1：neverAutoApprove 的 exact 与 scoped 语义不同。
+    // - exact 工具名（`read` / `agent`）：把**任何** allow 降级为 ask，强制确认才生效；
+    // - scoped `${tool.name}.${action}`（`agent.close`）：只降级 auto 来源的 allow，
+    //   工具 checkPermission 的显式 allow 保持——例如关自己的 contractor 不需要批准，
+    //   而 peer close 经 autoApprove 升级来的 allow 仍需确认。
+    // `deny` 不受影响。
+    if (decision === 'allow') {
+      if (this.hitsNeverExact(tool)) {
+        decision = 'ask';
+      } else if (source === 'auto' && this.hitsNeverScoped(tool, args)) {
+        decision = 'ask';
+      }
     }
 
     if (decision === 'deny') {
@@ -186,20 +202,21 @@ export class PermissionPolicy {
     }
   }
 
-  /**
-   * neverAutoApprove 命中判定：工具名，或 args 为对象且 `action` 为字符串时的
-   * `${tool.name}.${action}`。未配置时零开销。
-   */
-  private hitsNeverAutoApprove(tool: ToolDefinition, args: unknown): boolean {
+  /** exact 工具名命中：降级任何 allow。未配置时零开销。 */
+  private hitsNeverExact(tool: ToolDefinition): boolean {
     if (this.neverAutoApprove.size === 0) return false;
-    if (this.neverAutoApprove.has(tool.name)) return true;
-    if (typeof args === 'object' && args !== null && !Array.isArray(args)) {
-      const action = (args as Record<string, unknown>).action;
-      if (typeof action === 'string') {
-        return this.neverAutoApprove.has(`${tool.name}.${action}`);
-      }
-    }
-    return false;
+    return this.neverAutoApprove.has(tool.name);
+  }
+
+  /**
+   * scoped `${tool.name}.${action}` 命中：只降级 auto 来源的 allow。
+   * args 必须是对象且 `action` 为字符串。未配置时零开销。
+   */
+  private hitsNeverScoped(tool: ToolDefinition, args: unknown): boolean {
+    if (this.neverAutoApprove.size === 0) return false;
+    if (typeof args !== 'object' || args === null || Array.isArray(args)) return false;
+    const action = (args as Record<string, unknown>).action;
+    return typeof action === 'string' && this.neverAutoApprove.has(`${tool.name}.${action}`);
   }
 
   /**

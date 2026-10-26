@@ -2,8 +2,10 @@
  * 0.27 permission.neverAutoApprove（PLAN-0.27-swarm §2.8）。
  *
  * 守卫：
- * - 命中工具名 / `${tool.name}.${action}` 时，把任何 allow（含工具 checkPermission
+ * - exact 工具名命中（`read` / `agent`）：把任何 allow（含工具 checkPermission
  *   的显式 allow）降级为 ask；
+ * - scoped `${tool.name}.${action}` 命中（`agent.close`）：只降级 auto 来源的 allow，
+ *   显式工具 allow 保持（关自己的 contractor 不需要批准）；
  * - 显式 deny 保持拒绝；
  * - 无配置或无匹配时行为完全不变。
  */
@@ -85,11 +87,43 @@ describe('PermissionPolicy neverAutoApprove', () => {
     expect(requested).toBe(false);
   });
 
-  it('工具 checkPermission 显式 allow + never 命中 → ask', async () => {
+  it('scoped never + 工具显式 allow（关自己的 contractor）→ allow，不确认', async () => {
     const events = new MemoryEventStream();
     const policy = policyFor(events, {
       autoApprove: ['agent'],
       neverAutoApprove: ['agent.close'],
+    });
+
+    const { requested } = await authorizeWithTrace(
+      policy,
+      events,
+      tool('agent', async () => 'allow'),
+      { action: 'close' },
+    );
+    expect(requested).toBe(false);
+  });
+
+  it('scoped never + checkPermission ask 经 autoApprove 升级（peer close）→ ask', async () => {
+    const events = new MemoryEventStream();
+    const policy = policyFor(events, {
+      autoApprove: ['agent'],
+      neverAutoApprove: ['agent.close'],
+    });
+
+    const { requested } = await authorizeWithTrace(
+      policy,
+      events,
+      tool('agent', async () => 'ask'),
+      { action: 'close' },
+    );
+    expect(requested).toBe(true);
+  });
+
+  it('exact agent + 工具显式 allow → ask', async () => {
+    const events = new MemoryEventStream();
+    const policy = policyFor(events, {
+      autoApprove: ['agent'],
+      neverAutoApprove: ['agent'],
     });
 
     const { requested } = await authorizeWithTrace(
