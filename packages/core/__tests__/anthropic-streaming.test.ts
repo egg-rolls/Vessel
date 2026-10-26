@@ -202,7 +202,11 @@ describe('AnthropicProvider system messages', () => {
       sink,
     );
 
-    const provider = new AnthropicProvider({ api_key: 'sk-ant-test', model: 'claude-test' });
+    const provider = new AnthropicProvider({
+      api_key: 'sk-ant-test',
+      model: 'claude-test',
+      prompt_cache: false,
+    });
     await provider.chat({ messages: mergedMessages, model: 'claude-test' } as ChatRequest);
 
     expect(sink.body?.system).toContain('BASE PROMPT');
@@ -220,7 +224,11 @@ describe('AnthropicProvider system messages', () => {
       sink,
     );
 
-    const provider = new AnthropicProvider({ api_key: 'sk-ant-test', model: 'claude-test' });
+    const provider = new AnthropicProvider({
+      api_key: 'sk-ant-test',
+      model: 'claude-test',
+      prompt_cache: false,
+    });
     await provider.chat({
       messages: [
         { role: 'system', content: 'BASE PROMPT' },
@@ -245,7 +253,11 @@ describe('AnthropicProvider system messages', () => {
       sink,
     );
 
-    const provider = new AnthropicProvider({ api_key: 'sk-ant-test', model: 'claude-test' });
+    const provider = new AnthropicProvider({
+      api_key: 'sk-ant-test',
+      model: 'claude-test',
+      prompt_cache: false,
+    });
     await provider.chat({
       messages: mergedMessages,
       model: 'claude-test',

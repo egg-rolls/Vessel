@@ -17,6 +17,8 @@ export interface ProviderConfig {
   maxTokens?: number;
   /** 请求超时毫秒；<=0 关闭。缺省由 provider 插件决定（当前 120s） */
   timeoutMs?: number;
+  /** 是否启用 Anthropic 显式提示词缓存（默认 true；其他 provider 忽略） */
+  promptCache?: boolean;
 }
 
 /** Guardrail 配置 */

@@ -116,6 +116,7 @@ export async function createProvider(
         temperature: config.provider?.temperature,
         max_tokens: config.provider?.maxTokens,
         timeout_ms: config.provider?.timeoutMs,
+        prompt_cache: config.provider?.promptCache,
       }),
       providerName,
       providerModel,

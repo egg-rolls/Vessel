@@ -34,6 +34,8 @@ export class StreamAccumulator {
   /** Anthropic 模式：message_start / message_delta 各自累加 */
   private promptTokens = 0;
   private completionTokens = 0;
+  private cacheCreationInputTokens: number | undefined;
+  private cacheReadInputTokens: number | undefined;
   private readonly incrementalUsage: boolean;
 
   /**
@@ -112,6 +114,12 @@ export class StreamAccumulator {
     this.completionTokens = n;
   }
 
+  /** Anthropic 模式：记录显式缓存读写的 input tokens（仅显式提供的字段会被更新） */
+  setCacheTokens(creation?: number, read?: number): void {
+    if (creation !== undefined) this.cacheCreationInputTokens = creation;
+    if (read !== undefined) this.cacheReadInputTokens = read;
+  }
+
   // ── 最终组装 ──────────────────────────────────────
 
   /**
@@ -135,6 +143,12 @@ export class StreamAccumulator {
           prompt_tokens: this.promptTokens,
           completion_tokens: this.completionTokens,
           total_tokens: this.promptTokens + this.completionTokens,
+          ...(this.cacheCreationInputTokens !== undefined
+            ? { cache_creation_input_tokens: this.cacheCreationInputTokens }
+            : {}),
+          ...(this.cacheReadInputTokens !== undefined
+            ? { cache_read_input_tokens: this.cacheReadInputTokens }
+            : {}),
         }
       : this.directUsage;
 

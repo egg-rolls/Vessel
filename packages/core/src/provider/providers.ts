@@ -100,15 +100,68 @@ type OpenAiStreamChunk = {
   usage?: Usage;
 };
 
+/** Anthropic usage 形状（缓存字段仅显式缓存时出现） */
+type AnthropicUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+};
+
 /** Anthropic 流式事件形状（仅取用到的字段） */
 type AnthropicStreamEvent = {
   type: string;
   index?: number;
   content_block?: { type: string; id?: string; name?: string };
   delta?: { type: string; text?: string; partial_json?: string; stop_reason?: string };
-  message?: { usage?: { input_tokens?: number; output_tokens?: number } };
-  usage?: { input_tokens?: number; output_tokens?: number };
+  message?: { usage?: AnthropicUsage };
+  usage?: AnthropicUsage;
 };
+
+/** Anthropic 请求消息（system 单独传，这里只含 user/assistant） */
+type AnthropicMessage = {
+  role: 'user' | 'assistant';
+  content: string | Array<{ type: string; [key: string]: unknown }>;
+};
+
+/** Anthropic 工具定义 */
+type AnthropicTool = {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  cache_control?: { type: 'ephemeral' };
+};
+
+/** 可加 cache_control 的 block 类型（thinking 等不可缓存） */
+const CACHEABLE_BLOCK_TYPES = new Set(['text', 'tool_use', 'tool_result']);
+const EPHEMERAL_CACHE = { type: 'ephemeral' } as const;
+
+/**
+ * 给最后一条消息的最后一个可缓存 block 加缓存断点。
+ * 纯文本内容提升为 text block；最后一个 block 不可缓存时向前查找，找不到则跳过。
+ */
+function addMessageCacheBreakpoint(messages: AnthropicMessage[]): void {
+  const last = messages[messages.length - 1];
+  if (!last) return;
+  if (typeof last.content === 'string') {
+    if (last.content.length === 0) return;
+    last.content = [{ type: 'text', text: last.content, cache_control: EPHEMERAL_CACHE }];
+    return;
+  }
+  for (let i = last.content.length - 1; i >= 0; i -= 1) {
+    const block = last.content[i];
+    if (block && CACHEABLE_BLOCK_TYPES.has(block.type)) {
+      block.cache_control = EPHEMERAL_CACHE;
+      return;
+    }
+  }
+}
+
+/** 给最后一个工具定义加缓存断点。 */
+function addToolsCacheBreakpoint(tools: AnthropicTool[]): void {
+  const last = tools[tools.length - 1];
+  if (last) last.cache_control = EPHEMERAL_CACHE;
+}
 
 /**
  * 内存 Provider 实现
@@ -483,6 +536,7 @@ export class AnthropicProvider implements LLMProvider {
   private model: string;
   private temperature?: number;
   private maxTokens?: number;
+  private promptCache: boolean;
 
   constructor(config: {
     api_key: string;
@@ -490,12 +544,15 @@ export class AnthropicProvider implements LLMProvider {
     model?: string;
     temperature?: number;
     max_tokens?: number;
+    /** 显式提示词缓存；缺省开启 */
+    prompt_cache?: boolean;
   }) {
     this.apiKey = config.api_key;
     this.baseUrl = config.base_url ?? 'https://api.anthropic.com';
     this.model = config.model ?? 'claude-3-opus-20240229';
     this.temperature = config.temperature;
     this.maxTokens = config.max_tokens;
+    this.promptCache = config.prompt_cache ?? true;
   }
 
   /**
@@ -507,15 +564,7 @@ export class AnthropicProvider implements LLMProvider {
     const url = `${this.baseUrl}/v1/messages`;
 
     // 转换消息格式（正确处理工具返回）
-    const messages: Array<{
-      role: 'user' | 'assistant';
-      content:
-        | string
-        | Array<{
-            type: string;
-            [key: string]: unknown;
-          }>;
-    }> = [];
+    const messages: AnthropicMessage[] = [];
 
     for (const msg of req.messages) {
       if (msg.role === 'system') {
@@ -591,18 +640,7 @@ export class AnthropicProvider implements LLMProvider {
       return await this.streamChat(url, messages, systemContent, req, req.on_chunk);
     }
 
-    const body = {
-      model: req.model ?? this.model,
-      temperature: req.temperature ?? this.temperature,
-      max_tokens: req.max_tokens ?? this.maxTokens ?? 4096,
-      messages,
-      system: systemContent,
-      tools: req.tools?.map((t) => ({
-        name: t.function.name,
-        description: t.function.description,
-        input_schema: t.function.parameters,
-      })),
-    };
+    const body = this.buildRequestBody(req, messages, systemContent, false);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -637,6 +675,8 @@ export class AnthropicProvider implements LLMProvider {
       usage: {
         input_tokens: number;
         output_tokens: number;
+        cache_creation_input_tokens?: number;
+        cache_read_input_tokens?: number;
       };
     };
 
@@ -659,6 +699,18 @@ export class AnthropicProvider implements LLMProvider {
       }
     }
 
+    const usage: Usage = {
+      prompt_tokens: data.usage.input_tokens,
+      completion_tokens: data.usage.output_tokens,
+      total_tokens: data.usage.input_tokens + data.usage.output_tokens,
+    };
+    if (data.usage.cache_creation_input_tokens !== undefined) {
+      usage.cache_creation_input_tokens = data.usage.cache_creation_input_tokens;
+    }
+    if (data.usage.cache_read_input_tokens !== undefined) {
+      usage.cache_read_input_tokens = data.usage.cache_read_input_tokens;
+    }
+
     return {
       content,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
@@ -669,12 +721,45 @@ export class AnthropicProvider implements LLMProvider {
           : data.stop_reason === 'max_tokens'
             ? 'length'
             : 'stop',
-      usage: {
-        prompt_tokens: data.usage.input_tokens,
-        completion_tokens: data.usage.output_tokens,
-        total_tokens: data.usage.input_tokens + data.usage.output_tokens,
-      },
+      usage,
     };
+  }
+
+  /**
+   * 组装 Anthropic 请求体（流式/非流式共用）。
+   * 开启提示词缓存时固定加 3 个 ephemeral 断点：system、最后一个 tool、最后一条消息的
+   * 最后一个可缓存 block；关闭时与旧请求体完全一致。
+   */
+  private buildRequestBody(
+    req: ChatRequest,
+    messages: AnthropicMessage[],
+    systemContent: string | undefined,
+    stream: boolean,
+  ): Record<string, unknown> {
+    const tools: AnthropicTool[] | undefined = req.tools?.map((t) => ({
+      name: t.function.name,
+      description: t.function.description,
+      input_schema: t.function.parameters,
+    }));
+
+    if (this.promptCache) {
+      addMessageCacheBreakpoint(messages);
+      if (tools && tools.length > 0) addToolsCacheBreakpoint(tools);
+    }
+
+    const body: Record<string, unknown> = {
+      model: req.model ?? this.model,
+      temperature: req.temperature ?? this.temperature,
+      max_tokens: req.max_tokens ?? this.maxTokens ?? 4096,
+      messages,
+      system:
+        this.promptCache && systemContent
+          ? [{ type: 'text', text: systemContent, cache_control: EPHEMERAL_CACHE }]
+          : systemContent,
+      tools,
+    };
+    if (stream) body.stream = true;
+    return body;
   }
 
   /**
@@ -685,24 +770,12 @@ export class AnthropicProvider implements LLMProvider {
    */
   private async streamChat(
     url: string,
-    messages: Array<{ role: 'user' | 'assistant'; content: string | unknown[] }>,
+    messages: AnthropicMessage[],
     systemContent: string | undefined,
     req: ChatRequest,
     onChunk: (chunk: StreamChunk) => void,
   ): Promise<LLMResponse> {
-    const streamBody = {
-      model: req.model ?? this.model,
-      temperature: req.temperature ?? this.temperature,
-      max_tokens: req.max_tokens ?? this.maxTokens ?? 4096,
-      messages,
-      system: systemContent,
-      tools: req.tools?.map((t) => ({
-        name: t.function.name,
-        description: t.function.description,
-        input_schema: t.function.parameters,
-      })),
-      stream: true,
-    };
+    const streamBody = this.buildRequestBody(req, messages, systemContent, true);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -741,7 +814,10 @@ export class AnthropicProvider implements LLMProvider {
       switch (parsed.type) {
         case 'message_start': {
           const u = parsed.message?.usage;
-          if (u) acc.addPromptTokens(u.input_tokens ?? 0);
+          if (u) {
+            acc.addPromptTokens(u.input_tokens ?? 0);
+            acc.setCacheTokens(u.cache_creation_input_tokens, u.cache_read_input_tokens);
+          }
           break;
         }
         case 'content_block_start': {
@@ -768,7 +844,10 @@ export class AnthropicProvider implements LLMProvider {
             acc.setFinishReason('length');
           }
           const u = parsed.usage;
-          if (u) acc.addCompletionTokens(u.output_tokens ?? 0);
+          if (u) {
+            acc.addCompletionTokens(u.output_tokens ?? 0);
+            acc.setCacheTokens(u.cache_creation_input_tokens, u.cache_read_input_tokens);
+          }
           break;
         }
         case 'message_stop':

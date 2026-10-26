@@ -130,7 +130,8 @@ describe('provider-anthropic 请求形状', () => {
   it('system 抽取、tools input_schema、tool_result / tool_use 映射', async () => {
     const captured: Captured[] = [];
     mockJson(TEXT_RESPONSE, captured);
-    const provider = factoryFor()({ api_key: 'k', timeout_ms: 0 });
+    // 本用例校验基础映射；显式缓存请求形状见 cache.test.ts
+    const provider = factoryFor()({ api_key: 'k', timeout_ms: 0, prompt_cache: false });
 
     const messages: Message[] = [
       { role: 'system', content: 'be brief' },

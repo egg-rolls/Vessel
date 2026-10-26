@@ -38,6 +38,10 @@ export interface Usage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  /** Anthropic 显式提示词缓存：写入缓存的输入 token 数（其他 provider 可缺省） */
+  cache_creation_input_tokens?: number;
+  /** Anthropic 显式提示词缓存：从缓存读取的输入 token 数（其他 provider 可缺省） */
+  cache_read_input_tokens?: number;
 }
 
 /** 聊天请求 */

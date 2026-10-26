@@ -1781,7 +1781,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   // 校验 provider
   if (config.provider) {
     validateEnvName('provider.apiKeyEnv', config.provider.apiKeyEnv, errors);
-    const { name, model, temperature, maxTokens, timeoutMs } = config.provider;
+    const { name, model, temperature, maxTokens, timeoutMs, promptCache } = config.provider;
 
     if (name !== undefined) {
       if (typeof name !== 'string') {
@@ -1823,6 +1823,14 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         path: 'provider.timeoutMs',
         message: 'provider.timeoutMs must be a finite number (<=0 disables the timeout)',
         value: timeoutMs,
+      });
+    }
+
+    if (promptCache !== undefined && typeof promptCache !== 'boolean') {
+      errors.push({
+        path: 'provider.promptCache',
+        message: 'provider.promptCache must be a boolean',
+        value: promptCache,
       });
     }
   }
@@ -2391,6 +2399,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'temperature',
     'maxTokens',
     'timeoutMs',
+    'promptCache',
   ],
   agent: [
     'name',
