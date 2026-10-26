@@ -6,7 +6,8 @@
  * - 失败不自动重试；reload 找不到同内容消息才标 failed；
  * - “再次发送”只把内容填回 Composer，由用户再次确认后作为新日志。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
 import { useDrawerA11y } from '../../app/useDrawerA11y';
 import {
   EmptyState,
@@ -177,6 +178,11 @@ export function TeamChat({
   );
   const reloadRef = useRef(reload);
   reloadRef.current = reload;
+  // Team 栏卡片的 Refresh 走全局刷新信号：按当前窗口大小重拉，不重置草稿。
+  const refreshFromSignal = useCallback(() => {
+    reloadRef.current();
+  }, []);
+  useRefreshSignal(refreshFromSignal);
   sendingRef.current = sending;
 
   const detail = resourceData(detailState) ?? initialDetail;

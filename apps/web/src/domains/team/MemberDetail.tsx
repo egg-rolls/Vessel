@@ -5,7 +5,8 @@
  * `agent.rotated / agent.retired` 的本次页面观察值，并明确标注。
  * 不提供配置 / rotate / close 操作。
  */
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
 import { Markdown } from '../../components/Markdown';
 import {
   EmptyState,
@@ -423,6 +424,13 @@ export function MemberDetail({
   const reload = () => {
     void loadDetail(nodeKey, teamId, client, { limit: 1 }, 'member');
   };
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
+  // Team 栏卡片的 Refresh 走全局刷新信号。
+  const refreshFromSignal = useCallback(() => {
+    reloadRef.current();
+  }, []);
+  useRefreshSignal(refreshFromSignal);
   usePolledAction(
     () => {
       void loadDetail(nodeKey, teamId, client, { limit: 1 }, 'member');

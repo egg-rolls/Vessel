@@ -38,6 +38,15 @@ describe('Team i18n catalog', () => {
     }
   });
 
+  test('exposes the Teams column empty state and drawer copy', () => {
+    expect(zhCN['teams.detail.emptyTitle']).toBe('先打开一个 Team');
+    expect(en['teams.detail.emptyTitle']).toBe('Open a team first');
+    expect(zhCN['teams.detail.emptyDesc']).toContain('Team');
+    expect(en['teams.detail.emptyDesc']).toContain('team');
+    expect(zhCN['teams.openList']).toBe('打开团队列表');
+    expect(en['teams.openList']).toBe('Open team list');
+  });
+
   test('interpolates placeholders in both locales', () => {
     setLocale('zh-CN');
     expect(t('team.list.memberCount', { count: 3 })).toBe('3 成员');

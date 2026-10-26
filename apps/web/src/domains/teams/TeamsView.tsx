@@ -1,27 +1,38 @@
 /**
- * Teams 域入口：跨节点 Team 列表 + 既有群聊 / 成员详情。
+ * Teams 域入口：跨节点 Team 栏 + 详情 pane。
  *
- * - 列表按节点独立成功 / 失败，一个节点 401 不吞掉其它节点；
- * - 搜索按 Team 名称 / id，节点过滤可从 `#/teams?node=` 深链进入；
- * - Create 弹窗写 canonical `teams.create`；Edit / Archive 在详情页。
+ * - Team 栏常驻：标题 / Create / 刷新、搜索、节点过滤、按节点分组的卡片；
+ * - 每张卡片右侧的 ActionMenu 负责 Edit / Freeze / Archive / Refresh；
+ * - 详情 pane 渲染 TeamDetailRoute；默认无 teamId 时显示“先打开 Team”空态，
+ *   不自动打开第一个 Team；
+ * - 窄屏下 Team 栏是抽屉（默认关闭），重开按钮在详情 / 空态处；
+ * - 列表与详情状态来自 `teamStore`；归档 / 刷新后同步 roster。
  */
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { RAIL_MAX_WIDTH } from '../../app/layout';
+import { requestRefresh } from '../../app/refresh';
 import type { Route } from '../../app/router';
-import { PageHeader } from '../../components/PageHeader';
+import { useDrawerA11y } from '../../app/useDrawerA11y';
+import { useViewportWidth } from '../../app/useViewportWidth';
+import { ActionMenu, type ActionMenuItem } from '../../components/ActionMenu';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
+import { useToast } from '../../components/ToastProvider';
 import { Button, SearchInput, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
-import { useNodes } from '../../gateway/NodeProvider';
+import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { NodeTeams } from '../../gateway/team-roster';
+import type { TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
+import { useAgentStore } from '../../stores/agentStore';
 import { teamListData, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { useNodeNames } from '../nodes/useNodeNames';
 import { TeamDetailRoute } from './TeamDetailRoute';
 import { TeamFormDialog } from './TeamFormDialog';
 import { filterTeamResults } from './team-search';
-import { teamNodeFilterFromHash } from './team-url';
+import { teamEditHash, teamNodeFilterFromHash } from './team-url';
 
 export interface TeamsViewProps {
   route: Extract<Route, { domain: 'teams' }>;
@@ -37,30 +48,65 @@ function nodeErrorText(result: NodeTeams): string {
   return result.error ?? t('common.loadFailed');
 }
 
+/** 只有列表 hash 才同步 `?node=`；详情 / 编辑 hash 不重置当前过滤。 */
+function isTeamsListHash(hash: string): boolean {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  const [path = ''] = raw.split('?', 2);
+  const segments = path.split('/').filter(Boolean);
+  return segments.length === 1 && segments[0] === 'teams';
+}
+
 export function TeamsView({ route, navigate }: TeamsViewProps) {
   useLocale();
-  const { epoch, tenantEpoch, tenantId } = useConnection();
+  const toast = useToast();
+  const { epoch, tenantEpoch } = useConnection();
   const { nodes, teamControl, hasTokenFor } = useNodes();
   const nodeNames = useNodeNames();
+  const compact = useViewportWidth() <= RAIL_MAX_WIDTH;
   const [query, setQuery] = useState('');
   const [nodeFilter, setNodeFilter] = useState(
     () => teamNodeFilterFromHash(window.location.hash) ?? '',
   );
   const [createOpen, setCreateOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<{
+    node: NodeView;
+    team: TeamSummary;
+  } | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [freezeBusy, setFreezeBusy] = useState<string | null>(null);
   const isDetail = 'teamId' in route;
   // 当前连接可以没有 token，但额外节点各自带凭据：任一节点可用即进入列表。
   const anyNodeToken = nodes.some((node) => hasTokenFor(node));
   const writableNodes = nodes.filter((node) => hasTokenFor(node));
 
+  const drawerRef = useDrawerA11y({
+    open: drawerOpen,
+    onClose: () => setDrawerOpen(false),
+    enabled: compact,
+    returnFocusId: 'teams-list-toggle',
+  });
+
+  useEffect(() => {
+    if (!compact) setDrawerOpen(false);
+  }, [compact]);
+
   const nodeKeys = nodes.map((node) => nodeKeyOf(node)).join(',');
   const lists = useTeamStore((state) => state.lists);
   const loadAllLists = useTeamStore((state) => state.loadAllLists);
+  const loadDetail = useTeamStore((state) => state.loadDetail);
+  const archiveTeam = useTeamStore((state) => state.archive);
+  const setSpawnFrozen = useTeamStore((state) => state.setSpawnFrozen);
+  const loadRoster = useAgentStore((state) => state.loadRoster);
+
+  // Team 栏常驻：详情路由下也继续轮询列表。
   usePolledAction(
     () => {
       void loadAllLists(nodes, teamControl);
     },
     {
-      enabled: anyNodeToken && nodes.length > 0 && !isDetail,
+      enabled: anyNodeToken && nodes.length > 0,
       pollMs: TEAMS_POLL_MS,
       deps: [epoch, tenantEpoch, nodeKeys],
     },
@@ -68,18 +114,27 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
 
   // `#/teams?node=` 深链来自 Node 详情的只读入口。
   useEffect(() => {
-    const sync = () => setNodeFilter(teamNodeFilterFromHash(window.location.hash) ?? '');
+    const sync = () => {
+      if (!isTeamsListHash(window.location.hash)) return;
+      setNodeFilter(teamNodeFilterFromHash(window.location.hash) ?? '');
+    };
     window.addEventListener('hashchange', sync);
     return () => window.removeEventListener('hashchange', sync);
   }, []);
 
+  const routeTeamKey = isDetail ? `${route.nodeKey}:${route.teamId}` : '';
+  useEffect(() => {
+    if (routeTeamKey) setDrawerOpen(false);
+  }, [routeTeamKey]);
+
   const changeNodeFilter = (value: string) => {
     setNodeFilter(value);
+    if (isDetail) return;
     const next = value ? `#/teams?${new URLSearchParams({ node: value }).toString()}` : '#/teams';
     if (window.location.hash !== next) window.history.replaceState(null, '', next);
   };
 
-  // Hooks 必须在任何早返回之前调用；列表数据在详情路由下未启用，这里只是空数组。
+  // Hooks 必须在任何早返回之前调用。
   const data = useMemo(
     () =>
       nodes
@@ -100,32 +155,117 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
   const partial = failed.length > 0 && failed.length < data.length;
   const hasSearchOrFilter = query.trim() !== '' || nodeFilter !== '';
 
-  if (!anyNodeToken) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-        <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
-      </div>
-    );
-  }
+  const nodeFor = (nodeKey: string) => nodes.find((node) => nodeKeyOf(node) === nodeKey);
 
-  if ('teamId' in route) {
-    const node = nodes.find((item) => nodeKeyOf(item) === route.nodeKey);
-    if (!node) {
-      return (
-        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-          <NotEnabledState
-            title={t('teams.nodeMissing')}
-            action={
-              <Button onClick={() => navigate({ domain: 'teams' })}>
-                {t('team.chat.backToList')}
-              </Button>
-            }
-          />
-        </div>
-      );
+  const reloadSummary = (node: NodeView, teamId: string) => {
+    void loadDetail(
+      nodeKeyOf(node),
+      teamId,
+      teamControl(node),
+      { limit: 1, members_limit: 1 },
+      'summary',
+    );
+  };
+
+  const refreshCurrent = () => {
+    void loadAllLists(nodes, teamControl);
+    if (isDetail) {
+      const node = nodeFor(route.nodeKey);
+      if (node && hasTokenFor(node)) reloadSummary(node, route.teamId);
     }
-    return <TeamDetailRoute node={node} route={route} navigate={navigate} />;
-  }
+    // 详情内容（TeamChat / MemberDetail）按各自的窗口大小重拉。
+    requestRefresh();
+  };
+
+  const toggleFreeze = async (node: NodeView, team: TeamSummary) => {
+    const key = `${nodeKeyOf(node)}:${team.team_id}`;
+    if (freezeBusy !== null) return;
+    const next = team.spawn_frozen !== true;
+    setFreezeBusy(key);
+    try {
+      await setSpawnFrozen(teamControl(node), team.team_id, next);
+      toast.success(next ? t('teams.frozen') : t('teams.unfrozen'));
+      void loadAllLists(nodes, teamControl);
+      reloadSummary(node, team.team_id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setFreezeBusy(null);
+    }
+  };
+
+  const confirmArchive = async () => {
+    if (!archiveTarget || archiving) return;
+    const { node, team } = archiveTarget;
+    const nodeKey = nodeKeyOf(node);
+    setArchiving(true);
+    setArchiveError(null);
+    try {
+      const saved = await archiveTeam(teamControl(node), team.team_id);
+      toast.success(`${saved.name || saved.team_id}: ${t('nodes.teams.archived')}`);
+      setArchiveTarget(null);
+      void loadAllLists(nodes, teamControl);
+      void loadRoster(nodes, teamControl);
+      if (isDetail && route.nodeKey === nodeKey && route.teamId === team.team_id) {
+        navigate({ domain: 'teams' });
+      } else {
+        reloadSummary(node, team.team_id);
+      }
+    } catch (error) {
+      setArchiveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  const openTeam = (node: NodeView, team: TeamSummary) => {
+    navigate({
+      domain: 'teams',
+      nodeKey: nodeKeyOf(node),
+      teamId: team.team_id,
+    });
+    if (compact) setDrawerOpen(false);
+  };
+
+  const menuItems = (node: NodeView, team: TeamSummary): ActionMenuItem[] => {
+    const archived = team.archived_at !== undefined;
+    const frozen = team.spawn_frozen === true;
+    const canWrite = hasTokenFor(node) && !archived;
+    return [
+      {
+        id: 'edit',
+        label: t('common.edit'),
+        disabled: !canWrite,
+        onSelect: () => {
+          window.location.hash = teamEditHash(nodeKeyOf(node), team.team_id);
+          if (compact) setDrawerOpen(false);
+        },
+      },
+      {
+        id: 'freeze',
+        label: frozen ? t('teams.unfreeze') : t('teams.freeze'),
+        disabled: !canWrite || freezeBusy !== null,
+        onSelect: () => {
+          void toggleFreeze(node, team);
+        },
+      },
+      {
+        id: 'archive',
+        label: t('common.archive'),
+        danger: true,
+        disabled: !canWrite,
+        onSelect: () => {
+          setArchiveError(null);
+          setArchiveTarget({ node, team });
+        },
+      },
+      {
+        id: 'refresh',
+        label: t('common.refresh'),
+        onSelect: refreshCurrent,
+      },
+    ];
+  };
 
   const clearSearch = () => {
     setQuery('');
@@ -143,7 +283,11 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
   );
 
   let body: ReactNode;
-  if (!loaded) {
+  if (!anyNodeToken) {
+    body = (
+      <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
+    );
+  } else if (!loaded) {
     body = <LoadingState rows={3} />;
   } else if (allFailed && data[0]?.code === 'not_found') {
     body = (
@@ -207,18 +351,12 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
               ) : (
                 <ul className="teams-grid">
                   {result.teams.map((team) => (
-                    <li key={team.team_id}>
+                    <li className="teams-card" key={team.team_id}>
                       <button
                         type="button"
-                        className="flex h-full w-full cursor-pointer flex-col gap-2 rounded-md border border-line bg-raised px-4 py-3 text-left text-ink transition-colors hover:border-line-strong hover:shadow-elev-1"
+                        className="teams-card-open"
                         title={t('teams.card.open')}
-                        onClick={() =>
-                          navigate({
-                            domain: 'teams',
-                            nodeKey: nodeKeyOf(result.node),
-                            teamId: team.team_id,
-                          })
-                        }
+                        onClick={() => openTeam(result.node, team)}
                       >
                         <span className="flex items-center justify-between gap-2">
                           <span className="min-w-0 truncate font-semibold">
@@ -247,6 +385,11 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
                           </span>
                         )}
                       </button>
+                      <ActionMenu
+                        className="teams-card-menu"
+                        label={`${t('common.moreActions')}: ${team.name || team.team_id}`}
+                        items={menuItems(result.node, team)}
+                      />
                     </li>
                   ))}
                 </ul>
@@ -258,20 +401,63 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
     );
   }
 
+  let detail: ReactNode;
+  if (!isDetail) {
+    detail = (
+      <div className="teams-detail-empty">
+        <EmptyState
+          title={t('teams.detail.emptyTitle')}
+          description={t('teams.detail.emptyDesc')}
+        />
+      </div>
+    );
+  } else {
+    const node = nodeFor(route.nodeKey);
+    detail = node ? (
+      <TeamDetailRoute node={node} route={route} navigate={navigate} />
+    ) : (
+      <div className="teams-detail-empty">
+        <NotEnabledState
+          title={t('teams.nodeMissing')}
+          action={
+            <Button onClick={() => navigate({ domain: 'teams' })}>
+              {t('team.chat.backToList')}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader title={t('teams.title')} tenantId={tenantId} actions={createButton} />
-      <div className="mt-5 flex flex-col gap-4">
-        <div className="net-toolbar mt-3.5">
+    <div className="teams-workspace">
+      <aside
+        {...(compact ? { role: 'dialog' as const, 'aria-modal': drawerOpen } : {})}
+        ref={drawerRef}
+        id="teams-column"
+        className={`teams-column ${drawerOpen ? 'open' : ''}`.trim()}
+        aria-label={t('teams.title')}
+        inert={compact && !drawerOpen ? true : undefined}
+        aria-hidden={compact && !drawerOpen ? true : undefined}
+      >
+        <header className="teams-column-head">
+          <h2 className="teams-column-title">{t('teams.title')}</h2>
+          <div className="teams-column-actions">
+            {createButton}
+            <Button size="small" onClick={refreshCurrent} disabled={!loaded}>
+              {t('common.refresh')}
+            </Button>
+          </div>
+        </header>
+        <div className="teams-column-controls">
           <SearchInput
             value={query}
             onChange={setQuery}
             placeholder={t('team.list.search')}
             ariaLabel={t('team.list.search')}
-            className="grow basis-60 max-w-search"
           />
           <Select
-            className="net-select w-auto min-w-32 h-control py-0"
+            className="h-control w-full py-0"
             value={nodeFilter}
             onChange={(event) => changeNodeFilter(event.target.value)}
             aria-label={t('teams.filter.node')}
@@ -284,8 +470,39 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
             ))}
           </Select>
         </div>
-        {body}
-      </div>
+        <div className="teams-column-scroll">{body}</div>
+      </aside>
+
+      {compact && drawerOpen && (
+        <button
+          type="button"
+          className="drawer-backdrop"
+          aria-label={t('common.close')}
+          onClick={() => setDrawerOpen(false)}
+        />
+      )}
+
+      <section
+        className="teams-detail-pane"
+        aria-label={t('teams.title')}
+        inert={compact && drawerOpen ? true : undefined}
+      >
+        <h1 className="sr-only">{t('teams.title')}</h1>
+        {compact && (
+          <div className="teams-detail-toolbar">
+            <Button
+              id="teams-list-toggle"
+              size="small"
+              aria-expanded={drawerOpen}
+              aria-controls="teams-column"
+              onClick={() => setDrawerOpen(true)}
+            >
+              {t('teams.openList')}
+            </Button>
+          </div>
+        )}
+        <div className="teams-detail-body">{detail}</div>
+      </section>
 
       {createOpen && (
         <TeamFormDialog
@@ -294,6 +511,34 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
           onClose={() => setCreateOpen(false)}
           onSaved={() => {
             void loadAllLists(nodes, teamControl);
+          }}
+        />
+      )}
+
+      {archiveTarget && (
+        <ConfirmDialog
+          title={t('nodes.teams.archiveTitle')}
+          body={
+            <>
+              <p>{t('nodes.teams.archiveBody')}</p>
+              <p className="font-mono">{archiveTarget.team.name || archiveTarget.team.team_id}</p>
+              {archiveError && (
+                <p className="text-xs text-danger leading-snug" role="alert">
+                  {archiveError}
+                </p>
+              )}
+            </>
+          }
+          confirmLabel={t('common.archive')}
+          danger
+          busy={archiving}
+          onConfirm={() => {
+            void confirmArchive();
+          }}
+          onCancel={() => {
+            if (archiving) return;
+            setArchiveTarget(null);
+            setArchiveError(null);
           }}
         />
       )}
