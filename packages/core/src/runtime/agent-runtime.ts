@@ -485,6 +485,25 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * 向当前上下文追加一条 `vessel:notice`（身份变更等运行时提示）。
+   *
+   * 只走 addContext：同步写上下文并发布 `context.changed`；**不入队、不启动 run**。
+   * 下一轮请求（当前 run 的后续迭代或下一次 run）在尾部看到该消息。调用方需保证
+   * 上下文已初始化（成员 runtime 在首次 runTurn 前改用 RunOptions.messages 注入）。
+   */
+  appendNotice(text: string): void {
+    this.addContext(
+      {
+        role: 'user',
+        name: 'vessel:notice',
+        content: text,
+        timestamp: Date.now(),
+      },
+      this.activeRun?.runId ?? 'notice',
+    );
+  }
+
   /** 同步预留 active run 槽位；已有 active run 时抛稳定错误 `run_already_running`。 */
   private beginExecution(runId: string, sessionId: string, branch?: string): RunExecution {
     if (this.activeRun) {

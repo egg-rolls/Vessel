@@ -36,6 +36,7 @@ import {
   type AgentEvent,
   type AgentEventListener,
   type AgentMessage,
+  type AgentRole,
   type AgentService,
   type AgentServiceOptions,
   type AgentUpdateBatchInput,
@@ -185,7 +186,8 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     sessionId: status.session_id,
     ...(status.name !== undefined ? { name: status.name } : {}),
     ...(status.parent_id !== undefined ? { parentId: status.parent_id } : {}),
-    ...(status.owner !== undefined ? { owner: status.owner } : {}),
+    role: status.role,
+    owner: status.owner,
     visibility: status.visibility,
     state,
     presence: 'gone',
@@ -381,13 +383,18 @@ export class AgentServiceImpl implements AgentService {
 
     const existing = this.registry.get(id);
     if (existing) {
-      if (existing.parentId !== undefined || existing.owner !== existing.id) {
+      if (existing.role !== 'single') {
         throw new AgentError('invalid_input', `id belongs to a spawned member: ${id}`);
       }
       const sessionOwner = this.registry.resolve(sessionId);
       if (sessionOwner !== undefined && sessionOwner.id !== id) {
         throw new AgentError('invalid_input', `duplicate session id: ${sessionId}`);
       }
+      // attachOwner 是 root owner 的显式身份：single、owner=self、无 Team / parent。
+      existing.role = 'single';
+      existing.owner = id;
+      existing.parentId = undefined;
+      this.registry.setTeamId(id, undefined);
       this.registry.updateIdentity(id, { sessionId, visibility });
       // 唯一的 left→present 例外：root owner 由人显式重新附着，必须完整复活。
       // S3 roster 落地后重新审视是否仍需该例外。
@@ -412,6 +419,7 @@ export class AgentServiceImpl implements AgentService {
     const record: MemberRecord = {
       id,
       sessionId,
+      role: 'single',
       owner: id,
       visibility,
       state: 'idle',
@@ -445,10 +453,12 @@ export class AgentServiceImpl implements AgentService {
     if (peer && typeof rawOwner === 'string') {
       throw new AgentError('invalid_input', 'peer must not specify an owner');
     }
-    const owner = peer ? undefined : ((rawOwner as string | undefined) ?? this.defaultOwner);
 
     const id = this.newId();
     if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
+    // v3 映射：peer → member（owner=self）；contractor / 无 kind → temporary（owner=雇佣者）。
+    const role: AgentRole = peer ? 'member' : 'temporary';
+    const owner = role === 'member' ? id : ((rawOwner as string | undefined) ?? this.defaultOwner);
 
     const name = optionalString(input.name);
     const spawnedBy = optionalString(input.spawnedBy);
@@ -487,36 +497,29 @@ export class AgentServiceImpl implements AgentService {
     }
 
     let parentId: string | undefined;
-    if (peer) {
+    if (role === 'member') {
       if (input.parentId !== undefined) {
         throw new AgentError('invalid_input', 'peer members must not have a parent');
       }
     } else {
       parentId = optionalString(input.parentId);
-      // contractor 缺省以 owner 为 parent；kind 缺省保持旧行为。
+      // contractor 缺省以 owner（雇佣者）为 parent；无 kind 的旧请求保持无 parent。
       if (kind === 'contractor' && parentId === undefined) parentId = owner;
     }
 
-    // peer 强制 team 可见；contractor 缺省 team（有 Team）或 private（unbound）；
-    // kind 缺省沿用旧语义。
+    // member 强制 team 可见；temporary 缺省 team（有 Team）或 private（unbound）。
     let visibility: MemberVisibility;
-    if (peer) {
+    if (role === 'member') {
       if (input.visibility !== undefined && input.visibility !== 'team') {
         throw new AgentError('invalid_input', 'peer members must use team visibility');
       }
       visibility = 'team';
-    } else if (kind === 'contractor') {
+    } else {
       visibility =
         input.visibility === undefined
           ? teamId !== undefined
             ? 'team'
             : 'private'
-          : resolveVisibility(input.visibility, 'private');
-    } else {
-      // 绑定 Team 且调用方未显式指定 visibility 时缺省 team；否则沿用 private。
-      visibility =
-        teamId !== undefined && input.visibility === undefined
-          ? 'team'
           : resolveVisibility(input.visibility, 'private');
     }
 
@@ -542,7 +545,8 @@ export class AgentServiceImpl implements AgentService {
       id,
       // session 即成员：两者同值，消息可用任一寻址
       sessionId: id,
-      ...(owner !== undefined ? { owner } : {}),
+      role,
+      owner,
       visibility,
       state: 'created',
       presence: 'gone',
@@ -699,7 +703,9 @@ export class AgentServiceImpl implements AgentService {
       id,
       sessionId: id,
       name,
-      ...(source.owner !== undefined ? { owner: source.owner } : {}),
+      role: source.role,
+      // member / single 的 owner 恒为 self；temporary 沿用雇佣者。
+      owner: source.role === 'temporary' ? source.owner : id,
       visibility: source.visibility,
       state: 'created',
       presence: 'gone',
@@ -864,16 +870,17 @@ export class AgentServiceImpl implements AgentService {
   /**
    * 入队时标注发送者类别（仅用于模型上下文，不参与权限判定）。
    *
-   * registry 里登记且不是 external owner（root owner）的 id 视为成员；未登记
-   * principal / root owner / `human` 视为人类；`system` 保持系统来源。
+   * external owner / role single 视为人类；role member / temporary 视为成员；
+   * 未登记 principal / `human` 视为人类；`system` 保持系统来源。
    * 联邦入站 `federation:<principal>@<node>:<team>` 是远端 agent，不是本地人类。
    */
   private messageSource(from: string): AgentMessage['source'] {
     if (from === 'system') return 'system';
     if (from.startsWith('federation:')) return 'agent';
+    if (this.externalOwners.has(from)) return 'human';
     const record = this.registry.get(from);
-    if (record !== undefined && !this.externalOwners.has(from)) return 'agent';
-    return 'human';
+    if (record === undefined) return 'human';
+    return record.role === 'single' ? 'human' : 'agent';
   }
 
   /** 显式 id 先校验；缺省由人类入口生成 `conv_<id>` */
@@ -1429,6 +1436,7 @@ export class AgentServiceImpl implements AgentService {
       .filter(
         (record) =>
           record.membership === 'present' &&
+          record.role === 'temporary' &&
           record.visibility === 'private' &&
           record.owner === member.id &&
           record.id !== member.id,
@@ -1501,9 +1509,21 @@ export class AgentServiceImpl implements AgentService {
     const name = readUpdateString(record, 'name');
     const model = readUpdateString(record, 'model');
     const systemPrompt = readUpdateString(record, 'systemPrompt');
-    if (name === undefined && model === undefined && systemPrompt === undefined) {
-      throw new AgentError('invalid_input', 'update requires name, model or systemPrompt');
+    const requestedRole = readUpdateRole(record);
+    if (
+      name === undefined &&
+      model === undefined &&
+      systemPrompt === undefined &&
+      requestedRole === undefined
+    ) {
+      throw new AgentError('invalid_input', 'update requires name, model, systemPrompt or role');
     }
+
+    // 角色转换先做校验与目标状态计算，避免改到一半失败留下半转换记录。
+    const conversion =
+      requestedRole !== undefined && requestedRole !== target.role
+        ? this.resolveRoleConversion(target, requestedRole, record)
+        : undefined;
 
     const changed: AgentUpdateField[] = [];
     if (name !== undefined && name !== target.name) {
@@ -1521,17 +1541,88 @@ export class AgentServiceImpl implements AgentService {
     }
 
     this.registry.touch(target.id);
-    this.scheduleSnapshot();
     if (changed.length > 0) {
       // 只发字段名；prompt 正文永不进事件。
       this.emit('agent.updated', target, { changed });
     }
+
+    if (conversion !== undefined) {
+      const previousRole = target.role;
+      target.role = conversion.role;
+      target.owner = conversion.owner;
+      if (conversion.parentId === undefined) delete target.parentId;
+      else target.parentId = conversion.parentId;
+      this.registry.setTeamId(target.id, conversion.teamId);
+      target.visibility = conversion.visibility;
+
+      this.emit('agent.role.changed', target, {
+        from: previousRole,
+        to: conversion.role,
+        owner: conversion.owner,
+        ...(conversion.teamId !== undefined ? { team_id: conversion.teamId } : {}),
+      });
+      // notice-only：不换 Body、不触发 system revision，只向下一轮上下文追加一行。
+      this.runtime.notice?.(
+        target.id,
+        `[runtime] identity changed: ${previousRole} → ${conversion.role}; owner=${conversion.owner}; team=${conversion.teamId ?? 'none'}`,
+      );
+      await this.flushSnapshot();
+    } else {
+      this.scheduleSnapshot();
+    }
+
     const affectsNextBody = changed.includes('model') || changed.includes('system_prompt');
     return {
       agent: toMemberStatus(target),
       changed,
       ...(affectsNextBody ? { applies_to: 'next_body' as const } : {}),
     };
+  }
+
+  /**
+   * 角色转换目标状态（不写记录）：
+   * - member：Team 必需（显式或已有），owner=self，清 parent，team 可见；
+   * - temporary：owner / parent = 转换者 `from`，Team 显式或沿用，有 Team 则 team 可见；
+   * - single：清 Team / parent，owner=self，private。
+   */
+  private resolveRoleConversion(
+    target: MemberRecord,
+    role: AgentRole,
+    record: Record<string, unknown>,
+  ): {
+    role: AgentRole;
+    owner: string;
+    parentId?: string;
+    teamId?: string;
+    visibility: MemberVisibility;
+  } {
+    const from = record.from === undefined ? DEFAULT_OWNER : readRequiredString(record, 'from');
+    const explicitTeamId =
+      record.teamId === undefined ? undefined : readRequiredString(record, 'teamId');
+    if (explicitTeamId !== undefined) {
+      if (this.teamBinder === undefined || this.teamBinder.get(explicitTeamId) === undefined) {
+        throw new AgentError('invalid_input', `team_not_found: ${explicitTeamId}`);
+      }
+    }
+
+    if (role === 'member') {
+      const teamId = explicitTeamId ?? target.teamId;
+      if (teamId === undefined) {
+        throw new AgentError('invalid_input', 'member role requires a team');
+      }
+      return { role, owner: target.id, teamId, visibility: 'team' };
+    }
+    if (role === 'temporary') {
+      const teamId = explicitTeamId ?? target.teamId;
+      return {
+        role,
+        owner: from,
+        parentId: from,
+        ...(teamId !== undefined ? { teamId } : {}),
+        visibility: teamId !== undefined ? 'team' : 'private',
+      };
+    }
+    return { role, owner: target.id, visibility: 'private' };
   }
 
   /** update 选择器：id / 当前 Body session 直取；否则唯一当前名字。 */
@@ -1591,8 +1682,15 @@ export class AgentServiceImpl implements AgentService {
     if (target === undefined || !this.registry.canView(target, from)) {
       throw new AgentError('member_not_visible', `member_not_visible: ${to}`);
     }
-    if (this.externalOwners.has(target.id) || target.owner === target.id) {
+    // root owner（external owner）不属 roster；普通 single 加入 Team 时转 member。
+    if (this.externalOwners.has(target.id)) {
       throw new AgentError('invalid_input', 'owner_not_rosterable');
+    }
+    if (target.role === 'single') {
+      target.role = 'member';
+      target.owner = target.id;
+      delete target.parentId;
+      target.visibility = 'team';
     }
     if (target.teamId !== undefined && target.teamId !== teamId) {
       throw new AgentError('invalid_input', `already_in_team: ${target.teamId}`);
@@ -2485,6 +2583,16 @@ function readRequiredString(record: Record<string, unknown>, key: string): strin
 function readUpdateString(record: Record<string, unknown>, key: string): string | undefined {
   if (!Object.hasOwn(record, key) || record[key] === undefined) return undefined;
   return readRequiredString(record, key);
+}
+
+/** update 的 role：缺省或合法值；其它值拒绝 */
+function readUpdateRole(record: Record<string, unknown>): AgentRole | undefined {
+  if (!Object.hasOwn(record, 'role') || record.role === undefined) return undefined;
+  const value = record.role;
+  if (value !== 'single' && value !== 'member' && value !== 'temporary') {
+    throw new AgentError('invalid_input', 'role must be single, member or temporary');
+  }
+  return value;
 }
 
 /** 消息体：非空且不超过上限 */

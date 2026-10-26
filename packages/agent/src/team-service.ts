@@ -268,7 +268,7 @@ export class DefaultTeamService implements AgentTeamService {
     const conversationId = this.resolveConversationId(input.conversation_id);
 
     // Team 日志对 team 可见：private roster 成员不能作为 post 的 actor。
-    // 根 owner 的 `owner === id`，不属 roster，仍允许（见 isPrivateRosterMember）。
+    // role single（root owner）不属 roster，仍允许（见 isPrivateRosterMember）。
     if (from !== 'human') {
       const actor = await this.agent.identify(from);
       if (actor !== undefined && isPrivateRosterMember(actor)) {
@@ -421,9 +421,7 @@ export class DefaultTeamService implements AgentTeamService {
     const target = resolveMember(input.member, visible);
 
     if (input.action === 'add') {
-      if (target.owner === target.id) {
-        throw new TeamError('team_owner_not_rosterable', `team_owner_not_rosterable: ${target.id}`);
-      }
+      // single 允许转入 member（role 转换在 AgentService.reinstate）；root owner 由那里拒绝。
       if (target.team_id !== undefined && target.team_id !== input.team_id) {
         throw new TeamError('team_already_in_team', `team_already_in_team: ${target.id}`);
       }
@@ -1043,6 +1041,7 @@ function toMemberSummary(status: MemberStatus): TeamMemberSummary {
     ...(status.team_id !== undefined ? { team_id: status.team_id } : {}),
     membership: status.membership ?? 'present',
     presence: status.presence ?? 'gone',
+    role: status.role,
     ...(status.owner !== undefined ? { owner: status.owner } : {}),
     visibility: status.visibility,
     state: status.state,
@@ -1118,12 +1117,12 @@ function truncateReplyContent(content: string): string {
 }
 
 /**
- * private roster 成员判定：`owner === id` 是根 owner（人类），不属 roster，保持放行。
- * 没有 owner 的 private 仍是 roster 成员（fail-closed）。
+ * private roster 成员判定：role single 是根 owner / 独立 agent（人类面），不属 roster，
+ * 保持放行；member / temporary 的 private 仍是 roster 成员。
  * Team 日志对 team 可见，这类成员不得作为 actor / mention / send 目标，也不写日志。
  */
 function isPrivateRosterMember(status: MemberStatus): boolean {
-  return status.visibility === 'private' && status.owner !== status.id;
+  return status.visibility === 'private' && status.role !== 'single';
 }
 
 /** 按首次出现顺序去重 */

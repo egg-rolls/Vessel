@@ -437,7 +437,8 @@ describe('agent tool', () => {
     const created = parse<MemberStatus>(
       await callAs(tool, { action: 'create', name: 'worker' }, caller.session_id),
     );
-    expect(created.owner).toBeUndefined();
+    expect(created.role).toBe('member');
+    expect(created.owner).toBe(created.id);
     expect(created.parent_id).toBeUndefined();
     expect(created.team_id).toBe(TEAM_ID);
     expect(created.visibility).toBe('team');
@@ -677,6 +678,7 @@ describe('agent tool', () => {
         session_id: 'body-session',
         membership: 'present',
         presence: 'live',
+        role: 'member',
         visibility: 'team',
         state: 'idle',
         epoch: 0,
@@ -687,6 +689,7 @@ describe('agent tool', () => {
         session_id: 'body-other',
         membership: 'present',
         presence: 'live',
+        role: 'temporary',
         visibility: 'private',
         state: 'running',
         epoch: 0,

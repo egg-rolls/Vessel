@@ -31,6 +31,14 @@ export type MemberState =
 /** 成员可见性；private 仅 owner 可见 */
 export type MemberVisibility = 'private' | 'team' | 'tenant';
 
+/**
+ * 成员角色（v3 持久化）：
+ * - `single`：独立 agent / root owner；owner = self，无 Team / parent，private；
+ * - `member`：Team 成员；owner = self，必须有 Team，team 可见；
+ * - `temporary`：临时成员；owner = 雇佣者，parent 缺省 owner，Team 可选。
+ */
+export type AgentRole = 'single' | 'member' | 'temporary';
+
 /** 进程内存在性：live 表示 engine 在当前进程可用，gone 表示需要 resume（不持久化） */
 export type MemberPresence = 'live' | 'gone';
 
@@ -61,9 +69,11 @@ export interface MemberStatus {
   session_id: string;
   name?: string;
   parent_id?: string;
+  /** 成员角色（v3；由持久化记录派生） */
+  role: AgentRole;
   /**
-   * 归属 / private 可见性 principal；缺省表示 peer（无 owner）。
-   * root owner 的 `owner === id`。
+   * 归属 / private 可见性 principal（v3 写入总有：single / member = self，
+   * temporary = 雇佣者）。DTO 保留可选以兼容旧 wire。
    */
   owner?: string;
   visibility: MemberVisibility;
@@ -84,7 +94,7 @@ export interface MemberStatus {
 }
 
 /**
- * 快照持久化记录（v2）。
+ * 快照持久化记录（v3）。
  *
  * 与 MemberStatus 分离：不把 model / system_prompt 等配置泄漏进对外 DTO。
  * presence / rotation 不持久化（进程内可重建）。
@@ -95,8 +105,10 @@ export interface PersistedAgentRecord {
   session_id: string;
   name?: string;
   parent_id?: string;
-  /** 归属 principal；缺省 = peer（旧数据总有该字段） */
-  owner?: string;
+  /** 成员角色（v3 写入必填；v1 / v2 读取时按 owner 推断） */
+  role: AgentRole;
+  /** 归属 principal（v3 写入必填：single / member = self，temporary = 雇佣者） */
+  owner: string;
   visibility: MemberVisibility;
   /** 最后已知 engine 状态（重启后按 membership 重置） */
   state: MemberState;
@@ -183,6 +195,11 @@ export interface MemberRuntimePort {
   runTurn(member: MemberRuntimeMember, message: AgentMessage): Promise<MemberTurnResult>;
   cancel(member: MemberRuntimeMember): Promise<void> | void;
   dispose(member: MemberRuntimeMember): Promise<void> | void;
+  /**
+   * 身份变更通知（additive，可选）：只向成员上下文追加 `vessel:notice`，
+   * 不启动 turn、不入队。live Body 立即追加；未 spawn 的成员暂存到下一次 runTurn。
+   */
+  notice?(memberId: string, text: string): void;
   /**
    * CONTRACT-hot-apply §4（additive，可选）：把规则热应用到所有存活 Body。
    * 返回实际应用的 Body 数量；未实现的 port 由 AgentService 报 0。
@@ -370,11 +387,11 @@ export interface CreateMemberInput {
   visibility?: MemberVisibility;
   parentId?: string;
   /**
-   * 归属 principal：string = contractor；null = 显式无 owner（peer）；
-   * 缺省 = DEFAULT_OWNER（legacy 行为）。
+   * 归属 principal：string = temporary 的雇佣者；null = 显式 peer（role member）；
+   * 缺省 = DEFAULT_OWNER（legacy / temporary 行为）。
    */
   owner?: string | null;
-  /** 输入判别（不持久化）：peer 无 owner 且必须有 Team；contractor 有 owner */
+  /** 输入判别（不持久化）：peer → role member；contractor → role temporary */
   kind?: 'peer' | 'contractor';
   /** 按已存在 Team 绑定（成员派生路径）；不存在 → invalid_input */
   teamId?: string;
@@ -412,6 +429,12 @@ export interface AgentUpdateInput {
   name?: string;
   model?: string;
   systemPrompt?: string;
+  /** 角色转换目标（member 需要 Team；temporary 的 owner 取 `from`）；不触发新 Body */
+  role?: AgentRole;
+  /** 转换到 member / temporary 时显式指定 Team（缺省沿用已有 Team） */
+  teamId?: string;
+  /** 转换者 principal（team-scoped 权限由入口层校验）；缺省 DEFAULT_OWNER */
+  from?: string;
 }
 
 /** 批量更新（条目并行，逐条结果；与 create / close 同语义） */
@@ -901,7 +924,9 @@ export interface TeamMemberSummary {
   team_id?: string;
   membership: MemberMembership;
   presence: MemberPresence;
-  /** 归属 principal；peer 缺省（Web 用于标记 peer / contractor） */
+  /** 成员角色（roster 只展示 member / temporary） */
+  role: AgentRole;
+  /** 归属 principal（single / member = self，temporary = 雇佣者） */
   owner?: string;
   visibility: MemberVisibility;
   state: MemberState;

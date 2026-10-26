@@ -14,6 +14,7 @@ import { atomicWrite, type Logger, noopLogger } from '@vessel-agent/core';
 import {
   type AgentBodyHistoryEntry,
   type AgentBodyPointer,
+  type AgentRole,
   MAX_BODY_HISTORY,
   type MemberMembership,
   type MemberState,
@@ -21,10 +22,10 @@ import {
   type PersistedAgentRecord,
 } from './types.js';
 
-/** 快照文件版本；当前写入 2，读取兼容 1 */
-export const AGENT_SNAPSHOT_VERSION = 2;
+/** 快照文件版本；当前写入 3，读取兼容 1 / 2 */
+export const AGENT_SNAPSHOT_VERSION = 3;
 
-/** 快照文件形状（v2；v1 的 members 是旧 MemberStatus 形状，读时归一） */
+/** 快照文件形状（v3；v1 / v2 的 members 读时按 owner 推断 role） */
 export interface AgentSnapshotFile {
   version: number;
   tenant_id: string;
@@ -32,8 +33,11 @@ export interface AgentSnapshotFile {
   members: PersistedAgentRecord[];
 }
 
-/** v1 备份后缀（首次写 v2 前创建，供旧二进制回滚） */
+/** 旧版本备份后缀（首次写 v3 前创建，供旧二进制回滚） */
 const V1_BACKUP_SUFFIX = '.v1.bak';
+const V2_BACKUP_SUFFIX = '.v2.bak';
+
+const ROLES: readonly AgentRole[] = ['single', 'member', 'temporary'];
 
 const MEMBER_STATES: readonly MemberState[] = [
   'created',
@@ -106,18 +110,29 @@ function parseBodyHistory(value: unknown): AgentBodyHistoryEntry[] | undefined {
 
 /**
  * 单条成员校验；字段非法返回 undefined（整条丢弃）。
- * v1 / v2 共用：membership 缺省按 state === 'closed' 推断；presence / rotation 不读。
+ * v1 / v2 按 owner 推断 role；v3 使用显式 role。membership 缺省按
+ * state === 'closed' 推断；presence / rotation 不读。
  */
-function parseMember(value: unknown): PersistedAgentRecord | undefined {
+function parseMember(value: unknown, version: number): PersistedAgentRecord | undefined {
   if (!isRecord(value)) return undefined;
   if (!nonEmptyString(value.id) || !nonEmptyString(value.session_id)) return undefined;
-  // owner 可选（peer 缺省）；显式给出则必须是非空字符串。
-  const owner = optionalString(value.owner);
-  if (value.owner !== undefined && owner === undefined) return undefined;
+  // 显式 owner 必须是非空字符串；v1 / v2 可缺省（推断为 member）。
+  const rawOwner = optionalString(value.owner);
+  if (value.owner !== undefined && rawOwner === undefined) return undefined;
   if (!nonEmptyString(value.visibility)) return undefined;
   if (!nonEmptyString(value.state)) return undefined;
   if (!VISIBILITIES.includes(value.visibility as MemberVisibility)) return undefined;
   if (!MEMBER_STATES.includes(value.state as MemberState)) return undefined;
+
+  // v3 才信任显式 role；旧快照一律按 owner 推断。
+  const explicitRole =
+    version >= 3 && ROLES.includes(value.role as AgentRole) ? (value.role as AgentRole) : undefined;
+  const inferredRole: AgentRole =
+    rawOwner === undefined ? 'member' : rawOwner === value.id ? 'single' : 'temporary';
+  const role = explicitRole ?? inferredRole;
+  // single / member 的 owner 恒为 self；temporary 保留雇佣者（v3 必填，缺失视为损坏）。
+  if (role === 'temporary' && rawOwner === undefined) return undefined;
+  const owner = role === 'temporary' ? (rawOwner as string) : value.id;
 
   const state = value.state as MemberState;
   const membership: MemberMembership =
@@ -130,7 +145,8 @@ function parseMember(value: unknown): PersistedAgentRecord | undefined {
   const record: PersistedAgentRecord = {
     id: value.id,
     session_id: value.session_id,
-    ...(owner !== undefined ? { owner } : {}),
+    role,
+    owner,
     visibility: value.visibility as MemberVisibility,
     state,
     membership,
@@ -171,8 +187,10 @@ export class AgentSnapshotStore {
   private pending: (() => PersistedAgentRecord[]) | undefined;
   /** 写入串行链；值表示该次 write 是否成功 */
   private chain: Promise<boolean> = Promise.resolve(true);
-  /** 读到 v1 且尚未成功备份时置位；write 前必须补做，否则放弃写入（避免无回滚） */
-  private backupPending = false;
+  /** 读到 v1 / v2 且尚未成功备份时置位；write 前必须补做，否则放弃写入（避免无回滚） */
+  private backupPendingFor: 1 | 2 | undefined;
+  /** 是否已探测过现有文件版本（未 load 直接 write 时也要补备份） */
+  private backupChecked = false;
   /** 损坏文件隔离失败时置位：write 直接放弃，避免覆盖唯一恢复副本 */
   private writeBlocked = false;
 
@@ -196,7 +214,7 @@ export class AgentSnapshotStore {
     return this.filePath;
   }
 
-  /** 读取；缺失返回空列表；损坏 / 版本不符先隔离再返回空列表；v1 可读并在首次写 v2 前备份 */
+  /** 读取；缺失返回空列表；损坏 / 版本不符先隔离再返回空列表；v1 / v2 可读并在首次写 v3 前备份 */
   async load(): Promise<PersistedAgentRecord[]> {
     let raw: string;
     try {
@@ -226,7 +244,10 @@ export class AgentSnapshotStore {
       return [];
     }
 
-    if (!isRecord(parsed) || (parsed.version !== 1 && parsed.version !== AGENT_SNAPSHOT_VERSION)) {
+    if (
+      !isRecord(parsed) ||
+      (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== AGENT_SNAPSHOT_VERSION)
+    ) {
       const detail = `unsupported snapshot version: ${String(isRecord(parsed) ? parsed.version : 'n/a')}`;
       this.logger.error('agent.snapshot.load_failed', {
         path: this.filePath,
@@ -235,6 +256,7 @@ export class AgentSnapshotStore {
       await this.quarantine(detail);
       return [];
     }
+    this.backupChecked = true;
 
     if (!Array.isArray(parsed.members)) {
       this.logger.error('agent.snapshot.load_failed', {
@@ -245,16 +267,16 @@ export class AgentSnapshotStore {
       return [];
     }
 
-    // R1：旧二进制无法读 v2；首次写 v2 前先留一份 v1 备份。
-    if (parsed.version === 1) {
-      this.backupPending = true;
-      await this.ensureV1Backup();
+    // 旧二进制无法读 v3；首次写 v3 前先留一份对应版本的备份。
+    if (parsed.version === 1 || parsed.version === 2) {
+      this.backupPendingFor = parsed.version;
+      await this.ensureBackup(parsed.version);
     }
 
     const members: PersistedAgentRecord[] = [];
     let skipped = 0;
     for (const entry of parsed.members) {
-      const member = parseMember(entry);
+      const member = parseMember(entry, parsed.version);
       if (member === undefined) {
         skipped += 1;
         continue;
@@ -298,17 +320,17 @@ export class AgentSnapshotStore {
   }
 
   /**
-   * 确保 v1 备份存在。返回 false 表示备份失败；调用方据此决定是否放弃写 v2。
+   * 确保旧版本备份存在。返回 false 表示备份失败；调用方据此决定是否放弃写 v3。
    * 备份已存在视为完成（幂等）。
    */
-  private async ensureV1Backup(): Promise<boolean> {
-    if (!this.backupPending) return true;
-    const backupPath = `${this.filePath}${V1_BACKUP_SUFFIX}`;
+  private async ensureBackup(version: 1 | 2): Promise<boolean> {
+    if (this.backupPendingFor !== version) return true;
+    const backupPath = `${this.filePath}${version === 1 ? V1_BACKUP_SUFFIX : V2_BACKUP_SUFFIX}`;
     try {
       if (!(await fileExists(backupPath))) {
         await copyFile(this.filePath, backupPath);
       }
-      this.backupPending = false;
+      this.backupPendingFor = undefined;
       return true;
     } catch (error) {
       this.logger.error('agent.snapshot.backup_failed', {
@@ -318,6 +340,26 @@ export class AgentSnapshotStore {
       });
       return false;
     }
+  }
+
+  /**
+   * 未调用 load 直接 write 时，探测现有文件版本并补做备份。
+   * 损坏 / 不可读的文件已在 load 或 quarantine 中处理，这里不阻塞新文件写入。
+   */
+  private async ensureSourceBackup(): Promise<boolean> {
+    if (this.backupPendingFor !== undefined) return this.ensureBackup(this.backupPendingFor);
+    if (this.backupChecked) return true;
+    this.backupChecked = true;
+    let version: number | undefined;
+    try {
+      const parsed: unknown = JSON.parse(await readFile(this.filePath, 'utf8'));
+      if (isRecord(parsed) && typeof parsed.version === 'number') version = parsed.version;
+    } catch {
+      return true;
+    }
+    if (version !== 1 && version !== 2) return true;
+    this.backupPendingFor = version;
+    return this.ensureBackup(version);
   }
 
   /** 原子写；任何失败返回 false，不向上抛 */
@@ -330,8 +372,8 @@ export class AgentSnapshotStore {
       });
       return false;
     }
-    // 读到 v1 但备份失败过：写入会失去回滚点，放弃本次写。
-    if (!(await this.ensureV1Backup())) return false;
+    // 读到旧版本但备份失败过：写入会失去回滚点，放弃本次写。
+    if (!(await this.ensureSourceBackup())) return false;
     const file: AgentSnapshotFile = {
       version: AGENT_SNAPSHOT_VERSION,
       tenant_id: this.tenantId,

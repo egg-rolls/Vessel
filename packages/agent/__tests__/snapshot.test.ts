@@ -33,19 +33,13 @@ function baseRecord(overrides: Partial<PersistedAgentRecord> = {}): PersistedAge
   return {
     id: 'member',
     session_id: 'member',
+    role: 'temporary',
     owner: 'main',
     visibility: 'team',
     state: 'idle',
     membership: 'present',
     ...overrides,
   };
-}
-
-/** owner 缺省的持久化记录（peer）；用于验证可选 owner 往返 */
-function ownerlessRecord(overrides: Partial<PersistedAgentRecord> = {}): PersistedAgentRecord {
-  const value = baseRecord(overrides);
-  delete value.owner;
-  return value;
 }
 
 function recordingLogger(): { logger: Logger; errors: string[] } {
@@ -64,7 +58,7 @@ function recordingLogger(): { logger: Logger; errors: string[] } {
 }
 
 describe('Agent snapshot', () => {
-  it('restores members as idle + gone, persists v2 fields, and drops queued messages', async () => {
+  it('restores members as idle + gone, persists v3 fields, and drops queued messages', async () => {
     const dataDir = await tempDir();
     const first = makeService({ dataDir });
 
@@ -88,6 +82,8 @@ describe('Agent snapshot', () => {
         id: string;
         state: string;
         membership: string;
+        role: string;
+        owner: string;
         model?: string;
         current_body?: { session_id: string; epoch: number };
       }[];
@@ -95,6 +91,8 @@ describe('Agent snapshot', () => {
     expect(file.version).toBe(AGENT_SNAPSHOT_VERSION);
     const persisted = file.members.find((member) => member.id === completed.id);
     expect(persisted?.membership).toBe('present');
+    expect(persisted?.role).toBe('temporary');
+    expect(persisted?.owner).toBe('main');
     expect(persisted?.model).toBe('test-model');
     expect(persisted?.current_body?.session_id).toBe(completed.id);
     expect(persisted?.current_body?.epoch).toBe(0);
@@ -113,7 +111,7 @@ describe('Agent snapshot', () => {
     expect((error as AgentError).code).toBe('member_stale');
   });
 
-  it('reads a v1 snapshot, normalizes fields, writes v2, and keeps a .v1.bak', async () => {
+  it('reads a v1 snapshot, normalizes fields, writes v3, and keeps a .v1.bak', async () => {
     const dataDir = await tempDir();
     const path = snapshotPath(dataDir, 'default');
     await mkdir(dirname(path), { recursive: true });
@@ -154,12 +152,16 @@ describe('Agent snapshot', () => {
     expect(present?.membership).toBe('present');
     expect(present?.epoch).toBe(0);
     expect(present?.name).toBe('legacy');
+    // v1 没有 role：owner='main' ≠ id → temporary。
+    expect(present?.role).toBe('temporary');
+    expect(present?.owner).toBe('main');
 
     const closed = byId.get('old-closed');
     expect(closed?.state).toBe('closed');
     expect(closed?.membership).toBe('left');
 
     expect(await readFile(`${path}.v1.bak`, 'utf8')).toBe(rawV1);
+    expect(await readFile(`${path}.v2.bak`, 'utf8').catch(() => 'missing')).toBe('missing');
 
     await service.flushSnapshot();
     const upgraded = JSON.parse(await readFile(path, 'utf8')) as {
@@ -248,38 +250,41 @@ describe('Agent snapshot', () => {
     expect(record?.body_history).toEqual(bodyHistory);
   });
 
-  it('round-trips team_id without changing the snapshot version', async () => {
+  it('round-trips team_id and role in v3', async () => {
     const dataDir = await tempDir();
     const path = snapshotPath(dataDir, 'default');
     const store = new AgentSnapshotStore(path, 'default');
 
     const written = await store.write([
       baseRecord({ team_id: 'team-alpha' }),
+      baseRecord({ id: 'single', session_id: 'single', role: 'single', owner: 'single' }),
       baseRecord({ id: 'unbound', session_id: 'unbound' }),
     ]);
     expect(written).toBe(true);
 
     const file = JSON.parse(await readFile(path, 'utf8')) as {
       version: number;
-      members: { id: string; team_id?: string }[];
+      members: { id: string; team_id?: string; role: string; owner: string }[];
     };
     expect(file.version).toBe(AGENT_SNAPSHOT_VERSION);
-    expect(file.version).toBe(2);
+    expect(file.version).toBe(3);
 
     const loaded = await store.load();
     const byId = new Map(loaded.map((record) => [record.id, record]));
     expect(byId.get('member')?.team_id).toBe('team-alpha');
+    expect(byId.get('member')?.role).toBe('temporary');
     expect(byId.get('unbound')?.team_id).toBeUndefined();
+    expect(byId.get('single')?.role).toBe('single');
   });
 
-  it('round-trips an owner-less member without writing the owner key and keeps version 2', async () => {
+  it('writes role and owner for every v3 record', async () => {
     const dataDir = await tempDir();
     const path = snapshotPath(dataDir, 'default');
     const store = new AgentSnapshotStore(path, 'default');
 
     const written = await store.write([
-      ownerlessRecord(),
-      baseRecord({ id: 'owned', session_id: 'owned', owner: 'main' }),
+      baseRecord({ id: 'member', role: 'member', owner: 'member', visibility: 'team' }),
+      baseRecord({ id: 'temp', role: 'temporary', owner: 'hirer', visibility: 'private' }),
     ]);
     expect(written).toBe(true);
 
@@ -287,17 +292,51 @@ describe('Agent snapshot', () => {
       version: number;
       members: Record<string, unknown>[];
     };
-    expect(file.version).toBe(AGENT_SNAPSHOT_VERSION);
-    expect(file.version).toBe(2);
-    const ownerless = file.members.find((member) => member.id === 'member');
-    expect(ownerless).toBeDefined();
-    expect('owner' in (ownerless as Record<string, unknown>)).toBe(false);
-    expect(file.members.find((member) => member.id === 'owned')?.owner).toBe('main');
+    expect(file.version).toBe(3);
+    const byId = new Map(file.members.map((member) => [member.id as string, member]));
+    expect(byId.get('member')?.role).toBe('member');
+    expect(byId.get('member')?.owner).toBe('member');
+    expect(byId.get('temp')?.role).toBe('temporary');
+    expect(byId.get('temp')?.owner).toBe('hirer');
+  });
 
+  it('migrates a v2 snapshot to roles, backs it up as .v2.bak, and writes v3', async () => {
+    const dataDir = await tempDir();
+    const path = snapshotPath(dataDir, 'default');
+    await mkdir(dirname(path), { recursive: true });
+    const v2 = {
+      version: 2,
+      tenant_id: 'default',
+      updated_at: 1,
+      members: [
+        { id: 'self', session_id: 'self', owner: 'self', visibility: 'private', state: 'idle' },
+        { id: 'peer', session_id: 'peer', visibility: 'team', state: 'idle' },
+        { id: 'temp', session_id: 'temp', owner: 'hirer', visibility: 'private', state: 'idle' },
+      ],
+    };
+    const rawV2 = `${JSON.stringify(v2, null, 2)}\n`;
+    await writeFile(path, rawV2);
+
+    const store = new AgentSnapshotStore(path, 'default');
     const loaded = await store.load();
     const byId = new Map(loaded.map((record) => [record.id, record]));
-    expect(byId.get('member')?.owner).toBeUndefined();
-    expect(byId.get('owned')?.owner).toBe('main');
+    expect(byId.get('self')?.role).toBe('single');
+    expect(byId.get('self')?.owner).toBe('self');
+    expect(byId.get('peer')?.role).toBe('member');
+    expect(byId.get('peer')?.owner).toBe('peer');
+    expect(byId.get('temp')?.role).toBe('temporary');
+    expect(byId.get('temp')?.owner).toBe('hirer');
+    expect(await readFile(`${path}.v2.bak`, 'utf8')).toBe(rawV2);
+    expect(await readFile(`${path}.v1.bak`, 'utf8').catch(() => 'missing')).toBe('missing');
+
+    expect(await store.write(loaded)).toBe(true);
+    const upgraded = JSON.parse(await readFile(path, 'utf8')) as {
+      version: number;
+      members: { id: string; role: string; owner: string }[];
+    };
+    expect(upgraded.version).toBe(3);
+    expect(upgraded.members.find((member) => member.id === 'peer')?.owner).toBe('peer');
+    expect(await readFile(`${path}.v2.bak`, 'utf8')).toBe(rawV2);
   });
 
   it('skips invalid body_history entries individually and keeps the valid ones', async () => {

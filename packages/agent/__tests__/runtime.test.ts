@@ -1055,3 +1055,62 @@ describe('InProcessMemberRuntime.applyPermissionRules（CONTRACT-hot-apply §4�
     expect(apply?.({ default: 'ask' })).toBe(0);
   });
 });
+
+describe('InProcessMemberRuntime notice', () => {
+  it('injects a notice stored before the first turn into the next request without an extra run', async () => {
+    const { records, providerFactory } = echoProviders();
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([]),
+    });
+    const target = member({ id: 'm-notice', session_id: 'body-notice' });
+    await runtime.spawn(target);
+
+    runtime.notice?.(
+      target.id,
+      '[runtime] identity changed: temporary -> member; owner=m-notice; team=alpha',
+    );
+    // 还没有 turn：notice 不启动 run。
+    expect(records[0] ?? []).toHaveLength(0);
+
+    await runtime.runTurn(target, message('hello', 'm-notice'));
+
+    const requests = records[0] ?? [];
+    expect(requests).toHaveLength(1);
+    const notice = requests[0]?.messages.find((entry) => entry.name === 'vessel:notice');
+    expect(notice?.role).toBe('user');
+    expect(notice?.content).toContain('identity changed');
+  });
+
+  it('appends to a live context and shows up in the next request without an extra turn', async () => {
+    const { records, providerFactory } = echoProviders();
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([]),
+    });
+    const target = member({ id: 'm-live', session_id: 'body-live' });
+    await runtime.spawn(target);
+    await runtime.runTurn(target, message('first', 'm-live'));
+
+    const requests = records[0] ?? [];
+    expect(requests).toHaveLength(1);
+
+    runtime.notice?.(
+      target.id,
+      '[runtime] identity changed: member -> single; owner=m-live; team=none',
+    );
+    // notice 只追加上下文：不新增请求 / turn。
+    expect(requests).toHaveLength(1);
+
+    await runtime.runTurn(target, message('second', 'm-live'));
+    expect(requests).toHaveLength(2);
+    const second = requests[1]?.messages ?? [];
+    const noticeIndex = second.findIndex((entry) => entry.name === 'vessel:notice');
+    expect(noticeIndex).toBeGreaterThanOrEqual(0);
+    expect(noticeIndex).toBeLessThan(second.length - 1);
+    expect(second[noticeIndex]?.content).toContain('identity changed');
+    expect(second.at(-1)).toMatchObject({ role: 'user', content: 'second' });
+  });
+});

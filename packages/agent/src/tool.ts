@@ -279,10 +279,10 @@ export function createAgentTool(
      * close 的审批在权限层完成（批准后 handler 照常执行 service.close）。
      * - owner 调用 / 非 close 动作：放行；
      * - self-close：放行；
-     * - contractor：owner 或同 Team 成员放行，其它拒绝；
-     * - peer：需要人类审批（ask）；
-     * - root owner 记录：拒绝。
-     * 批量 close 中只要含 peer 就整体 ask 一次。
+     * - temporary：雇佣者或同 Team 成员放行，其它拒绝；
+     * - member：需要人类审批（ask）；
+     * - single（root owner / 独立 agent）记录：拒绝。
+     * 批量 close 中只要含 member 就整体 ask 一次。
      */
     checkPermission: async (args: unknown, ctx: ToolContext): Promise<'allow' | 'deny' | 'ask'> => {
       const record = isRecord(args) ? args : {};
@@ -315,14 +315,15 @@ export function createAgentTool(
         // 无法解析的目标由 handler 报 unknown_member。
         if (target === undefined) continue;
         if (target.id === caller.id) continue;
-        // root owner 记录不可被成员关闭。
-        if (target.owner === target.id) return 'deny';
-        if (target.owner === undefined) {
+        // single（root owner / 独立 agent）记录不可被成员关闭。
+        if (target.role === 'single') return 'deny';
+        // member 关闭需要人类审批。
+        if (target.role === 'member') {
           needAsk = true;
           continue;
         }
-        // contractor：自己的、或同 Team 的可直接关闭。
-        if (target.owner === caller.id) continue;
+        // temporary：雇佣者的、或同 Team 的可直接关闭。
+        if (target.owner !== undefined && target.owner === caller.id) continue;
         if (target.team_id !== undefined && target.team_id === caller.team_id) continue;
         return 'deny';
       }

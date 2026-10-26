@@ -60,13 +60,14 @@ async function rejectsWithCode(
 }
 
 describe('AgentService.create peer / contractor', () => {
-  it('peer is ownerless, parentless, team-visible and bound to the team roster', async () => {
+  it('peer becomes a member with self owner, no parent, team visibility', async () => {
     const { service } = makeService({ teamBinder: makeBinder(makeTeam(TEAM_ID)) });
     const events = collect(service);
 
     const peer = await service.create({ kind: 'peer', teamId: TEAM_ID, spawnedBy: 'caller' });
 
-    expect(peer.owner).toBeUndefined();
+    expect(peer.role).toBe('member');
+    expect(peer.owner).toBe(peer.id);
     expect(peer.parent_id).toBeUndefined();
     expect(peer.visibility).toBe('team');
     expect(peer.team_id).toBe(TEAM_ID);
@@ -86,6 +87,7 @@ describe('AgentService.create peer / contractor', () => {
       teamId: TEAM_ID,
     });
 
+    expect(contractor.role).toBe('temporary');
     expect(contractor.owner).toBe('worker-1');
     expect(contractor.parent_id).toBe('worker-1');
     expect(contractor.visibility).toBe('team');
@@ -108,12 +110,14 @@ describe('AgentService.create peer / contractor', () => {
     expect(await service.list({ viewer: 'bob' })).toEqual([]);
   });
 
-  it('legacy create without kind/owner/teamId keeps default owner and private visibility', async () => {
+  it('legacy create without kind becomes a temporary with default owner and private visibility', async () => {
     const { service } = makeService();
 
     const legacy = await service.create({});
 
+    expect(legacy.role).toBe('temporary');
     expect(legacy.owner).toBe('main');
+    // 无 kind 的旧请求保持无 parent（contractor 才默认 parent = owner）。
     expect(legacy.parent_id).toBeUndefined();
     expect(legacy.visibility).toBe('private');
     expect((await service.list({ viewer: 'main' })).map((entry) => entry.id)).toEqual([legacy.id]);
@@ -136,7 +140,8 @@ describe('AgentService.create peer / contractor', () => {
 
     const peer = await service.create({ owner: null, teamId: TEAM_ID });
 
-    expect(peer.owner).toBeUndefined();
+    expect(peer.role).toBe('member');
+    expect(peer.owner).toBe(peer.id);
     expect(peer.parent_id).toBeUndefined();
     expect(peer.visibility).toBe('team');
   });
@@ -150,9 +155,10 @@ describe('AgentService.create peer / contractor', () => {
     expect(contractor.owner).toBe('boss');
     expect(contractor.parent_id).toBe('boss');
     expect(legacy.owner).toBe('boss');
+    expect(legacy.parent_id).toBeUndefined();
   });
 
-  it('keeps peer ownerless and honors an explicit owner when ownerId is configured', async () => {
+  it('gives peer self-ownership and honors an explicit owner when ownerId is configured', async () => {
     const { service } = makeService({
       ownerId: 'boss',
       teamBinder: makeBinder(makeTeam(TEAM_ID)),
@@ -161,7 +167,7 @@ describe('AgentService.create peer / contractor', () => {
     const peer = await service.create({ kind: 'peer', teamId: TEAM_ID });
     const explicit = await service.create({ kind: 'contractor', owner: 'worker-1' });
 
-    expect(peer.owner).toBeUndefined();
+    expect(peer.owner).toBe(peer.id);
     expect(explicit.owner).toBe('worker-1');
   });
 

@@ -57,6 +57,20 @@ const DEFAULT_TERMINATION: TerminationPolicy = { maxIterations: 10, maxRuntimeSe
 /** 缺省上下文预算 */
 const DEFAULT_CONTEXT_MAX_TOKENS = 1_000_000;
 
+/** 未 spawn 成员的待注入 notice 上限（按成员条数 / 成员数双边界） */
+const MAX_PENDING_NOTICES = 20;
+const MAX_PENDING_NOTICE_MEMBERS = 100;
+
+/** 身份变更 notice 的上下文消息形状（与 core appendNotice 一致） */
+function noticeMessage(text: string): Message {
+  return {
+    role: 'user',
+    name: 'vessel:notice',
+    content: text,
+    timestamp: Date.now(),
+  };
+}
+
 /** 成员权限模式；bridge 把交互请求转到父事件流，缺省 allow */
 export type MemberRuntimePermissionMode = 'allow' | 'deny' | 'bridge';
 
@@ -81,6 +95,8 @@ interface PendingBridgeRequest {
 /** 成员 runtime 额外需要的中断能力（AgentRuntime 已实现） */
 export interface MemberRunnableAgent extends RunnableAgent {
   interrupt?(reason?: RunInterruptReason): void;
+  /** 只追加上下文，不启动 turn（AgentRuntime 已实现） */
+  appendNotice?(text: string): void;
 }
 
 /** 进程内成员 runtime 选项 */
@@ -135,6 +151,10 @@ export interface InProcessMemberRuntimeOptions {
 
 interface MemberRuntimeEntry {
   runtime: MemberRunnableAgent;
+  /** 成员 id（entries 按 Body session 建键，notice 按成员 id 寻址） */
+  memberId: string;
+  /** 是否已执行过 runTurn；未执行过的空上下文不能直接 appendNotice，否则会跳过历史恢复 */
+  started: boolean;
   /** 成员独占事件流；bridge 请求/应答都经过它 */
   events: MemoryEventStream;
   /** bridge 订阅取消函数（dispose 时回收） */
@@ -360,6 +380,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly eventLog?: AgentRuntimeOptions['eventLog'];
   private readonly runtimeFactory: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
   private readonly entries = new Map<string, MemberRuntimeEntry>();
+  /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界文本队列） */
+  private readonly pendingNotices = new Map<string, string[]>();
 
   constructor(options: InProcessMemberRuntimeOptions) {
     this.providerFactory = options.providerFactory;
@@ -435,6 +457,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     });
     const entry: MemberRuntimeEntry = {
       runtime,
+      memberId: member.id,
+      started: false,
       events,
       unsubscribers: [],
       pendingPermissions: new Map(),
@@ -465,6 +489,9 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
 
   async runTurn(member: MemberRuntimeMember, message: AgentMessage): Promise<MemberTurnResult> {
     const entry = this.requireEntry(member);
+    entry.started = true;
+    // 未 spawn / 未开跑期间暂存的 notice 在历史恢复之后、用户输入之前注入。
+    const pendingNotices = this.takePendingNotices(member.id);
     const runId = randomUUID();
     let terminal: 'completed' | 'failed' | 'cancelled' | undefined;
     let usage: Usage | undefined;
@@ -490,7 +517,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     try {
       const content = await entry.runtime.run(message.content, member.session_id, {
         runId,
-        messages: [sourceMessage],
+        messages: [...pendingNotices.map(noticeMessage), sourceMessage],
       });
       return {
         content,
@@ -515,6 +542,50 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
 
   cancel(member: MemberRuntimeMember): void {
     this.entries.get(member.session_id)?.runtime.interrupt?.('user');
+  }
+
+  /**
+   * 身份变更 notice：live 且已开跑 → 立即追加到上下文（本轮后续请求可见）；
+   * 未 spawn / 未开跑 → 暂存，下一次 runTurn 注入。不启动 turn、不入队。
+   */
+  notice(memberId: string, text: string): void {
+    if (text.length === 0) return;
+    const entry = this.findEntryByMemberId(memberId);
+    if (entry?.started && entry.runtime.appendNotice !== undefined) {
+      entry.runtime.appendNotice(text);
+      return;
+    }
+    this.queuePendingNotice(memberId, text);
+  }
+
+  private findEntryByMemberId(memberId: string): MemberRuntimeEntry | undefined {
+    for (const entry of this.entries.values()) {
+      if (entry.memberId === memberId) return entry;
+    }
+    return undefined;
+  }
+
+  private queuePendingNotice(memberId: string, text: string): void {
+    const existing = this.pendingNotices.get(memberId);
+    if (existing !== undefined) {
+      existing.push(text);
+      if (existing.length > MAX_PENDING_NOTICES) {
+        existing.splice(0, existing.length - MAX_PENDING_NOTICES);
+      }
+      return;
+    }
+    if (this.pendingNotices.size >= MAX_PENDING_NOTICE_MEMBERS) {
+      const oldest = this.pendingNotices.keys().next().value;
+      if (oldest !== undefined) this.pendingNotices.delete(oldest);
+    }
+    this.pendingNotices.set(memberId, [text]);
+  }
+
+  private takePendingNotices(memberId: string): string[] {
+    const notices = this.pendingNotices.get(memberId);
+    if (notices === undefined) return [];
+    this.pendingNotices.delete(memberId);
+    return notices;
   }
 
   async dispose(member: MemberRuntimeMember): Promise<void> {

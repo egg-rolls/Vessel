@@ -69,6 +69,7 @@ export {
   type AgentEvent,
   type AgentEventListener,
   type AgentMessage,
+  type AgentRole,
   type AgentService,
   type AgentServiceOptions,
   type AgentSnapshotOptions,

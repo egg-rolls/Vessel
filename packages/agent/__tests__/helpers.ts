@@ -56,6 +56,8 @@ export async function settle(): Promise<void> {
 /** 记录调用的假执行内核；不联网、不启子进程 */
 export class FakeRuntime implements MemberRuntimePort {
   readonly spawned: MemberRuntimeMember[] = [];
+  /** 身份变更 notice（不启动 turn） */
+  readonly notices: { memberId: string; text: string }[] = [];
   /** spawn 过的 Body session（rotate 断言用；与 spawned 同序） */
   readonly spawnedSessions: string[] = [];
   readonly cancelled: string[] = [];
@@ -89,6 +91,10 @@ export class FakeRuntime implements MemberRuntimePort {
     this.disposedSessions.push(member.session_id);
   }
 
+  notice(memberId: string, text: string): void {
+    this.notices.push({ memberId, text });
+  }
+
   /** CONTRACT-hot-apply §4：记录热应用的权限规则 */
   readonly appliedPermissionRules: RuntimePermissionConfig[] = [];
 
@@ -116,10 +122,13 @@ export function makeService(overrides: Partial<AgentServiceOptions> = {}): {
 
 /** 构造 MemberStatus（只填测试关心的字段；其余给稳定默认值） */
 export function makeMember(overrides: Partial<MemberStatus> & { id: string }): MemberStatus {
+  const owner = overrides.owner ?? 'main';
+  const role = overrides.role ?? (owner === overrides.id ? 'single' : 'temporary');
   return {
     id: overrides.id,
     session_id: overrides.session_id ?? overrides.id,
-    owner: overrides.owner ?? 'main',
+    role,
+    owner,
     visibility: overrides.visibility ?? 'team',
     state: overrides.state ?? 'idle',
     presence: overrides.presence ?? 'live',

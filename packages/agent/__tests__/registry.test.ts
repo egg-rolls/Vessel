@@ -14,6 +14,7 @@ function record(overrides: Partial<MemberRecord> = {}): MemberRecord {
     id: 'm1',
     sessionId: 'm1',
     bodyHistory: [],
+    role: 'temporary',
     owner: 'main',
     visibility: 'private',
     state: 'idle',
@@ -22,13 +23,6 @@ function record(overrides: Partial<MemberRecord> = {}): MemberRecord {
     rotation: 'stable',
     ...overrides,
   };
-}
-
-/** owner 缺省的记录（peer）；用于验证可选 owner 语义 */
-function ownerlessRecord(overrides: Partial<MemberRecord> = {}): MemberRecord {
-  const value = record(overrides);
-  delete value.owner;
-  return value;
 }
 
 describe('MemberRegistry state machine', () => {
@@ -98,37 +92,38 @@ describe('MemberRegistry team fields', () => {
   });
 });
 
-describe('MemberRegistry optional owner', () => {
-  it('omits owner from status / persisted / runtime when absent', () => {
+describe('MemberRegistry role and private visibility', () => {
+  it('persists role and owner through status / persisted records', () => {
     const registry = new MemberRegistry(() => 1);
-    const member = ownerlessRecord();
+    const member = record();
     registry.add(member);
 
-    expect(toMemberStatus(member).owner).toBeUndefined();
-    expect('owner' in toMemberStatus(member)).toBe(false);
-    expect('owner' in toPersistedRecord(member)).toBe(false);
-    expect('owner' in toRuntimeMember(member)).toBe(false);
+    expect(toMemberStatus(member).role).toBe('temporary');
+    expect(toMemberStatus(member).owner).toBe('main');
+    expect(toPersistedRecord(member).role).toBe('temporary');
+    expect(toPersistedRecord(member).owner).toBe('main');
+    expect(toRuntimeMember(member).owner).toBe('main');
   });
 
-  it('hides ownerless private members from every viewer', () => {
-    const registry = new MemberRegistry(() => 1);
-    const member = ownerlessRecord({ visibility: 'private' });
-    registry.add(member);
-
-    expect(registry.canView(member, 'main')).toBe(false);
-    expect(registry.canView(member)).toBe(false);
-    expect(registry.list({ viewer: 'main' })).toEqual([]);
-    expect(registry.list()).toEqual([]);
-  });
-
-  it('keeps owned private members visible only to their owner', () => {
+  it('shows a private temporary member only to its owner', () => {
     const registry = new MemberRegistry(() => 1);
     const member = record({ owner: 'main', visibility: 'private' });
     registry.add(member);
 
     expect(registry.canView(member, 'main')).toBe(true);
     expect(registry.canView(member, 'bob')).toBe(false);
+    expect(registry.canView(member)).toBe(false);
     expect(registry.list({ viewer: 'main' }).map((entry) => entry.id)).toEqual(['m1']);
     expect(registry.list({ viewer: 'bob' })).toEqual([]);
+  });
+
+  it('shows a private single member only to itself', () => {
+    const registry = new MemberRegistry(() => 1);
+    const member = record({ role: 'single', owner: 'm1', visibility: 'private' });
+    registry.add(member);
+
+    expect(registry.canView(member, 'm1')).toBe(true);
+    expect(registry.canView(member, 'main')).toBe(false);
+    expect(registry.list()).toEqual([]);
   });
 });

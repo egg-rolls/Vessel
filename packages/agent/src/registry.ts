@@ -12,6 +12,7 @@ import {
   type AgentBodyHistoryEntry,
   type AgentBodyPointer,
   AgentError,
+  type AgentRole,
   type ListFilter,
   MAX_BODY_HISTORY,
   type MemberMembership,
@@ -33,8 +34,10 @@ export interface MemberRecord {
   bodyHistory: AgentBodyHistoryEntry[];
   name?: string;
   parentId?: string;
-  /** 归属 principal；缺省 = peer */
-  owner?: string;
+  /** 成员角色（v3 持久化） */
+  role: AgentRole;
+  /** 归属 principal；single / member = self，temporary = 雇佣者 */
+  owner: string;
   visibility: MemberVisibility;
   model?: string;
   systemPrompt?: string;
@@ -85,7 +88,8 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
     session_id: currentBodySession(record),
     ...(record.name !== undefined ? { name: record.name } : {}),
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
-    ...(record.owner !== undefined ? { owner: record.owner } : {}),
+    role: record.role,
+    owner: record.owner,
     visibility: record.visibility,
     state: record.state,
     presence: record.presence,
@@ -104,7 +108,8 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
   return {
     id: record.id,
     session_id: record.sessionId,
-    ...(record.owner !== undefined ? { owner: record.owner } : {}),
+    owner: record.owner,
+    role: record.role,
     visibility: record.visibility,
     state: record.state,
     membership: record.membership,
@@ -249,9 +254,11 @@ export class MemberRegistry {
   }
 
   /** 所属 Team；缺失成员静默忽略（与 setPresence 一致） */
-  setTeamId(id: string, teamId: string): void {
+  setTeamId(id: string, teamId: string | undefined): void {
     const record = this.byId.get(id);
-    if (record) record.teamId = teamId;
+    if (!record) return;
+    if (teamId === undefined) delete record.teamId;
+    else record.teamId = teamId;
   }
 
   /** 归属；缺失成员静默忽略（reinstate 用，绕过 closed: [] 状态机） */
@@ -301,12 +308,15 @@ export class MemberRegistry {
     return matches;
   }
 
-  /** private 仅 owner；没有 owner 的 private 一律不可见（fail-closed）；team / tenant 对同 tenant 的任何查看者可见 */
+  /**
+   * private 仅 owner（single = self，temporary = 雇佣者）；缺失查看者不可见（fail-closed）；
+   * team / tenant 对同 tenant 的任何查看者可见。
+   */
   canView(record: MemberRecord, viewer?: string): boolean {
-    if (record.visibility === 'private') {
-      return record.owner !== undefined && viewer === record.owner;
-    }
-    return true;
+    if (record.visibility !== 'private') return true;
+    if (viewer === undefined) return false;
+    if (record.role === 'single') return viewer === record.id;
+    return viewer === record.owner;
   }
 
   /** 列表过滤；不触发任何 run / 状态变化 */
