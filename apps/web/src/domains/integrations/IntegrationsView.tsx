@@ -22,6 +22,13 @@ import { t, useLocale } from '../../i18n';
 import { buildMcpPaletteActions } from '../../state/palette-actions';
 import { resourceData, useResource } from '../../state/useResource';
 import { ToolPolicyControl } from './ToolPolicyControl';
+import {
+  hasScopedNever,
+  type PermissionLists,
+  policyLabelKey,
+  readPermissionLists,
+  toolPolicyOf,
+} from './tool-policy';
 
 type IntegrationsRoute = Extract<Route, { domain: 'integrations' }>;
 type Tab = IntegrationsRoute['tab'];
@@ -34,6 +41,19 @@ const TABS: readonly { id: Tab; labelKey: string }[] = [
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 从 `config.get` 的权限数组推导卡片徽章（不再使用 `has_permission_check`）。 */
+function ToolPolicyBadge({ tool, lists }: { tool: string; lists: PermissionLists }) {
+  const policy = toolPolicyOf(lists, tool);
+  const scoped = hasScopedNever(lists, tool);
+  const tone = policy === 'auto' ? 'success' : policy === 'never' ? 'warn' : 'neutral';
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <Badge tone={tone}>{t(policyLabelKey(policy))}</Badge>
+      {scoped && <Badge tone="warn">{t('integrations.tools.policyScopedNever')}</Badge>}
+    </span>
+  );
 }
 
 /** `mcp__<server>__<tool>` → server 名；普通工具返回 undefined。 */
@@ -94,22 +114,37 @@ function ToolsPanel() {
     enabled: hasToken,
     deps: [epoch],
   });
+  const configResource = useResource({
+    load: () => client.getConfig(),
+    enabled: hasToken,
+    deps: [epoch],
+  });
   useRefreshSignal(resource.reload);
+  useRefreshSignal(configResource.reload);
   const tools = useMemo(() => resourceData(resource.state) ?? [], [resource.state]);
+  const config = resourceData(configResource.state);
+  const permissionLists = useMemo(() => readPermissionLists(config?.config), [config]);
+  /** config 不可用时不给策略徽章，也不推断“需确认”。 */
+  const policyKnown = config !== undefined;
   const confirmCount = useMemo(
-    () => tools.filter((tool) => tool.has_permission_check).length,
-    [tools],
+    () =>
+      policyKnown
+        ? tools.filter((tool) => toolPolicyOf(permissionLists, tool.name) !== 'auto').length
+        : 0,
+    [tools, permissionLists, policyKnown],
   );
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return tools.filter((tool) => {
-      if (onlyConfirm && !tool.has_permission_check) return false;
+      if (onlyConfirm && policyKnown && toolPolicyOf(permissionLists, tool.name) === 'auto') {
+        return false;
+      }
       if (!needle) return true;
       return (
         tool.name.toLowerCase().includes(needle) || tool.description.toLowerCase().includes(needle)
       );
     });
-  }, [tools, query, onlyConfirm]);
+  }, [tools, query, onlyConfirm, permissionLists, policyKnown]);
   const error = resource.state.status === 'error' ? resource.state.error : null;
   const detailServer = detail ? mcpServerOf(detail.name) : undefined;
 
@@ -147,14 +182,16 @@ function ToolsPanel() {
           ariaLabel={t('integrations.tools.searchLabel')}
           className="grow basis-60 max-w-search"
         />
-        <Button
-          variant="chip"
-          size="small"
-          aria-pressed={onlyConfirm}
-          onClick={() => setOnlyConfirm((value) => !value)}
-        >
-          {t('integrations.tools.onlyConfirm', { count: confirmCount })}
-        </Button>
+        {policyKnown && (
+          <Button
+            variant="chip"
+            size="small"
+            aria-pressed={onlyConfirm}
+            onClick={() => setOnlyConfirm((value) => !value)}
+          >
+            {t('integrations.tools.onlyConfirm', { count: confirmCount })}
+          </Button>
+        )}
         <span className="ml-1.5 inline-block rounded-full bg-sunken px-1.5 py-0.5 font-mono text-xs text-muted">
           {filtered.length}/{tools.length}
         </span>
@@ -192,11 +229,7 @@ function ToolsPanel() {
                     <span className="min-w-0 break-words font-mono text-sm font-medium text-ink">
                       {tool.name}
                     </span>
-                    {tool.has_permission_check && (
-                      <Badge tone="warn" title={t('integrations.tools.needsConfirm')}>
-                        {t('integrations.tools.badgeConfirm')}
-                      </Badge>
-                    )}
+                    {policyKnown && <ToolPolicyBadge tool={tool.name} lists={permissionLists} />}
                     {server && <Badge>MCP · {server}</Badge>}
                   </span>
                   <span
@@ -225,11 +258,7 @@ function ToolsPanel() {
             <h2 className="m-0 min-w-0 break-words font-mono text-lg font-medium text-ink">
               {detail.name}
             </h2>
-            {detail.has_permission_check && (
-              <Badge tone="warn" title={t('integrations.tools.needsConfirm')}>
-                {t('integrations.tools.badgeConfirm')}
-              </Badge>
-            )}
+            {policyKnown && <ToolPolicyBadge tool={detail.name} lists={permissionLists} />}
             {detailServer && <Badge>MCP · {detailServer}</Badge>}
           </div>
           <div className="flex flex-col gap-1">

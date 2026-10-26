@@ -1096,6 +1096,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Default: each call asks for approval; the tool is in neither list.',
   'integrations.tools.policyNeverHint':
     'Always asks even when allowed automatically; the tool is added to permission.neverAutoApprove.',
+  'integrations.tools.policyScopedNever': 'Some actions confirm even when auto-approved',
+  'integrations.tools.policyScopedHint':
+    'Some actions (e.g. agent.close) confirm even when auto-approved; set each one separately below.',
+  'integrations.tools.policyScopedLabel': 'Per-action overrides',
+  'integrations.tools.policyScopedNeverOn': 'Confirm even when auto-approved',
+  'integrations.tools.policyScopedNeverHint':
+    'Blocks automatic approval only; an explicit tool allow still runs.',
   'integrations.tools.policyApplied': 'Applied.',
   'integrations.tools.policyFailed': 'Not applied: {detail}',
   'integrations.tools.policySaving': 'Saving…',

@@ -50,15 +50,6 @@ export const TOOL_POLICY_OPTIONS: readonly ToolPolicyOption[] = [
   },
 ];
 
-/**
- * `checkPermission` 恒为 `allow` 的工具：策略控件禁用。
- * `tools.list` 只暴露 `has_permission_check`，不暴露恒安判定，因此这里按工具名保守枚举。
- */
-const ALWAYS_ALLOW_TOOLS: ReadonlySet<string> = new Set(['read', 'subscribe']);
-
-/** 即使没有 `checkPermission` 也允许配置策略的能力工具（bash / edit / agent）。 */
-const POLICY_EDITABLE_TOOLS: ReadonlySet<string> = new Set(['bash', 'edit', 'agent']);
-
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
@@ -77,24 +68,65 @@ export function readPermissionLists(config: unknown): PermissionLists {
 }
 
 /**
- * 数组条目匹配：工具名精确匹配，或 `tool.action` 形式的前缀匹配
- * （`neverAutoApprove` 支持按动作收窄，见 permission-policy `hitsNeverAutoApprove`）。
+ * `tool.action` 形式的按动作条目（例如 `agent.close`）。
+ * 它只收窄该动作，不再把整个工具判成 never，因此单独检测。
  */
-function matchesTool(entries: readonly string[], tool: string): boolean {
-  return entries.some((entry) => entry === tool || entry.startsWith(`${tool}.`));
+function matchesScoped(entries: readonly string[], tool: string): boolean {
+  const prefix = `${tool}.`;
+  return entries.some((entry) => entry.startsWith(prefix));
 }
 
-/** 当前档位：`neverAutoApprove` 命中优先于 `autoApprove`。 */
+/** 当前档位：只看 **exact** 条目；`tool.*` 属于 scoped 提示，不参与整档判定。 */
 export function toolPolicyOf(lists: PermissionLists, tool: string): ToolPolicy {
-  if (matchesTool(lists.neverAutoApprove, tool)) return 'never';
-  if (matchesTool(lists.autoApprove, tool)) return 'auto';
+  if (lists.neverAutoApprove.includes(tool)) return 'never';
+  if (lists.autoApprove.includes(tool)) return 'auto';
   return 'ask';
 }
 
-/** 该工具是否允许改写确认策略（恒 allow / 无权限判定的工具不给伪开关）。 */
-export function isPolicyEditable(tool: Pick<ToolInfo, 'name' | 'has_permission_check'>): boolean {
-  if (ALWAYS_ALLOW_TOOLS.has(tool.name)) return false;
-  return POLICY_EDITABLE_TOOLS.has(tool.name) || tool.has_permission_check;
+/** 是否存在 `tool.*` 形式的强制确认条目（如 `agent.close`）。 */
+export function hasScopedNever(lists: PermissionLists, tool: string): boolean {
+  return matchesScoped(lists.neverAutoApprove, tool);
+}
+
+/** 现有的按动作条目（`tool.*`），来自两个数组；逐项控件按它们各自的 exact 档位展示。 */
+export function scopedEntries(lists: PermissionLists, tool: string): string[] {
+  const prefix = `${tool}.`;
+  const entries = new Set<string>();
+  for (const entry of [...lists.autoApprove, ...lists.neverAutoApprove]) {
+    if (entry.startsWith(prefix)) entries.add(entry);
+  }
+  return [...entries].sort();
+}
+
+/** 所有工具都可配置确认策略；保留为显式判据，避免再次引入工具白名单。 */
+export function isPolicyEditable(_tool: Pick<ToolInfo, 'name' | 'has_permission_check'>): boolean {
+  return true;
+}
+
+function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const seen = new Set(a);
+  return b.every((entry) => seen.has(entry));
+}
+
+/** 两组权限数组是否等价（忽略顺序）。 */
+export function permissionListsEqual(a: PermissionLists, b: PermissionLists): boolean {
+  return (
+    sameStringSet(a.autoApprove, b.autoApprove) &&
+    sameStringSet(a.neverAutoApprove, b.neverAutoApprove)
+  );
+}
+
+/**
+ * 保存后本地快照的让位规则：RPC 返回的 `written` 一直保留，
+ * 直到刷新后的 `config.get` 与它等价才清空（避免 config 对象身份变化就丢失新档位）。
+ */
+export function nextWritten(
+  written: PermissionLists | null,
+  fromConfig: PermissionLists,
+): PermissionLists | null {
+  if (written === null) return null;
+  return permissionListsEqual(fromConfig, written) ? null : written;
 }
 
 /**
@@ -114,4 +146,26 @@ export function policyHintKey(policy: ToolPolicy): string {
     TOOL_POLICY_OPTIONS.find((option) => option.id === policy)?.hintKey ??
     'integrations.tools.policyAskHint'
   );
+}
+
+const POLICY_LABEL_KEYS: Record<ToolPolicy, string> = {
+  auto: 'integrations.tools.policyAuto',
+  ask: 'integrations.tools.policyAsk',
+  never: 'integrations.tools.policyNever',
+};
+
+const SCOPED_POLICY_LABEL_KEYS: Record<ToolPolicy, string> = {
+  ...POLICY_LABEL_KEYS,
+  // scoped never 只阻止自动放行，不等于 exact never 的“强制确认”。
+  never: 'integrations.tools.policyScopedNeverOn',
+};
+
+/** 档位标签 key；scoped 行的 `never` 语义更窄。 */
+export function policyLabelKey(policy: ToolPolicy, scoped = false): string {
+  return (scoped ? SCOPED_POLICY_LABEL_KEYS : POLICY_LABEL_KEYS)[policy];
+}
+
+/** scoped 行在 `never` 档位下的说明 key；其余档位沿用 exact 文案。 */
+export function scopedPolicyHintKey(policy: ToolPolicy): string {
+  return policy === 'never' ? 'integrations.tools.policyScopedNeverHint' : policyHintKey(policy);
 }

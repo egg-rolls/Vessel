@@ -1065,6 +1065,12 @@ export const messages = {
   'integrations.tools.policyAskHint': '默认：每次调用都需要确认；该工具不在任何免确认列表中。',
   'integrations.tools.policyNeverHint':
     '即使被自动放行也必须确认；该工具写入 permission.neverAutoApprove。',
+  'integrations.tools.policyScopedNever': '部分动作即使自动放行也会确认',
+  'integrations.tools.policyScopedHint':
+    '某些动作（例如 agent.close）即使被自动放行也会确认；可在下方逐项单独设置。',
+  'integrations.tools.policyScopedLabel': '按动作覆盖',
+  'integrations.tools.policyScopedNeverOn': '即使自动放行也确认',
+  'integrations.tools.policyScopedNeverHint': '只阻止自动放行；工具显式允许时仍会执行。',
   'integrations.tools.policyApplied': '已生效。',
   'integrations.tools.policyFailed': '未生效：{detail}',
   'integrations.tools.policySaving': '正在保存…',

@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import {
   EMPTY_PERMISSION_LISTS,
+  hasScopedNever,
   isPolicyEditable,
+  nextWritten,
+  permissionListsEqual,
   policyHintKey,
+  policyLabelKey,
   readPermissionLists,
+  scopedEntries,
+  scopedPolicyHintKey,
   supportsToolPolicy,
   TOOL_POLICY_METHOD,
   TOOL_POLICY_OPTIONS,
@@ -47,28 +53,136 @@ describe('toolPolicyOf', () => {
     expect(toolPolicyOf(lists, 'bash')).toBe('never');
   });
 
-  test('honors tool.action entries and does not match other tools by prefix', () => {
+  test('matches only exact tool names; tool.action entries are scoped, not the whole tool', () => {
     const lists = { autoApprove: [], neverAutoApprove: ['agent.close'] };
-    expect(toolPolicyOf(lists, 'agent')).toBe('never');
+    expect(toolPolicyOf(lists, 'agent')).toBe('ask');
     expect(toolPolicyOf(lists, 'agen')).toBe('ask');
     expect(toolPolicyOf({ autoApprove: ['bashing'], neverAutoApprove: [] }, 'bash')).toBe('ask');
+  });
+
+  test('requires an exact never entry for the never policy', () => {
+    expect(toolPolicyOf({ autoApprove: [], neverAutoApprove: ['edit'] }, 'edit')).toBe('never');
+  });
+
+  test('derives a policy for every tool kind, including read, subscribe, agent and MCP', () => {
+    for (const name of [
+      'read',
+      'subscribe',
+      'agent',
+      'bash',
+      'edit',
+      'mcp__srv__echo',
+      'mystery',
+    ]) {
+      expect(toolPolicyOf(EMPTY_PERMISSION_LISTS, name)).toBe('ask');
+    }
+  });
+});
+
+describe('hasScopedNever', () => {
+  test('detects tool.action entries without matching other tools by prefix', () => {
+    const lists = { autoApprove: [], neverAutoApprove: ['agent.close'] };
+    expect(hasScopedNever(lists, 'agent')).toBe(true);
+    expect(hasScopedNever(lists, 'agen')).toBe(false);
+    expect(hasScopedNever(lists, 'bash')).toBe(false);
+  });
+
+  test('does not treat an exact never entry as scoped', () => {
+    expect(hasScopedNever({ autoApprove: [], neverAutoApprove: ['agent'] }, 'agent')).toBe(false);
+  });
+});
+
+describe('scopedEntries', () => {
+  test('lists existing tool.action entries from both arrays, sorted and de-duplicated', () => {
+    expect(
+      scopedEntries(
+        {
+          autoApprove: ['agent.close'],
+          neverAutoApprove: ['agent.pause', 'agent.close'],
+        },
+        'agent',
+      ),
+    ).toEqual(['agent.close', 'agent.pause']);
+  });
+
+  test('ignores exact tool entries and other tools with the same prefix', () => {
+    expect(
+      scopedEntries({ autoApprove: ['agent'], neverAutoApprove: ['agentx.close'] }, 'agent'),
+    ).toEqual([]);
+  });
+});
+
+describe('base and scoped policies stay independent', () => {
+  test('setting agent to auto leaves agent.close untouched', () => {
+    const lists = { autoApprove: ['agent'], neverAutoApprove: ['agent.close'] };
+    expect(toolPolicyOf(lists, 'agent')).toBe('auto');
+    expect(toolPolicyOf(lists, 'agent.close')).toBe('never');
+    expect(hasScopedNever(lists, 'agent')).toBe(true);
+    expect(scopedEntries(lists, 'agent')).toEqual(['agent.close']);
+  });
+
+  test('setting agent.close to ask changes only that row', () => {
+    const lists = { autoApprove: ['agent'], neverAutoApprove: [] };
+    expect(toolPolicyOf(lists, 'agent')).toBe('auto');
+    expect(toolPolicyOf(lists, 'agent.close')).toBe('ask');
+    expect(scopedEntries(lists, 'agent')).toEqual([]);
+  });
+
+  test('setting agent.close to never does not change the base policy', () => {
+    const lists = { autoApprove: [], neverAutoApprove: ['agent.close'] };
+    expect(toolPolicyOf(lists, 'agent')).toBe('ask');
+    expect(toolPolicyOf(lists, 'agent.close')).toBe('never');
   });
 });
 
 describe('isPolicyEditable', () => {
-  test('disables always-allow tools', () => {
-    expect(isPolicyEditable({ name: 'read', has_permission_check: true })).toBe(false);
-    expect(isPolicyEditable({ name: 'subscribe', has_permission_check: true })).toBe(false);
+  test('every tool is configurable, regardless of has_permission_check', () => {
+    for (const name of [
+      'read',
+      'subscribe',
+      'agent',
+      'bash',
+      'edit',
+      'mcp__srv__echo',
+      'mystery',
+    ]) {
+      expect(isPolicyEditable({ name, has_permission_check: false })).toBe(true);
+      expect(isPolicyEditable({ name, has_permission_check: true })).toBe(true);
+    }
+  });
+});
+
+describe('permission list comparison', () => {
+  const before = { autoApprove: ['bash'], neverAutoApprove: ['edit', 'agent.close'] };
+
+  test('ignores ordering but compares both arrays', () => {
+    expect(
+      permissionListsEqual(before, {
+        autoApprove: ['bash'],
+        neverAutoApprove: ['agent.close', 'edit'],
+      }),
+    ).toBe(true);
+    expect(
+      permissionListsEqual(before, {
+        autoApprove: ['bash'],
+        neverAutoApprove: ['agent.close'],
+      }),
+    ).toBe(false);
+    expect(
+      permissionListsEqual(before, {
+        autoApprove: ['edit'],
+        neverAutoApprove: ['edit', 'agent.close'],
+      }),
+    ).toBe(false);
   });
 
-  test('enables tools with a permission check or the core capability tools', () => {
-    expect(isPolicyEditable({ name: 'mcp__srv__echo', has_permission_check: true })).toBe(true);
-    expect(isPolicyEditable({ name: 'agent', has_permission_check: false })).toBe(true);
-    expect(isPolicyEditable({ name: 'bash', has_permission_check: false })).toBe(true);
-  });
-
-  test('disables tools that never ask', () => {
-    expect(isPolicyEditable({ name: 'mystery', has_permission_check: false })).toBe(false);
+  test('keeps the written snapshot until a refreshed config matches it', () => {
+    const written = { autoApprove: ['agent'], neverAutoApprove: [] };
+    // 旧的 config 快照：对象身份变了但数组不同，不能清空 written。
+    expect(nextWritten(written, EMPTY_PERMISSION_LISTS)).toBe(written);
+    // 与 written 等价的新 config 落地后才让位。
+    expect(nextWritten(written, { autoApprove: ['agent'], neverAutoApprove: [] })).toBeNull();
+    expect(nextWritten(null, EMPTY_PERMISSION_LISTS)).toBeNull();
   });
 });
 
@@ -91,6 +205,21 @@ describe('supportsToolPolicy', () => {
     );
     expect(supportsToolPolicy({ methods: [] })).toBe(false);
     expect(supportsToolPolicy(null)).toBe(false);
+  });
+});
+
+describe('scoped policy copy', () => {
+  test('scoped never uses its own label, not the exact force-confirm label', () => {
+    expect(policyLabelKey('never')).toBe('integrations.tools.policyNever');
+    expect(policyLabelKey('never', true)).toBe('integrations.tools.policyScopedNeverOn');
+    expect(policyLabelKey('auto', true)).toBe(policyLabelKey('auto'));
+    expect(policyLabelKey('ask', true)).toBe(policyLabelKey('ask'));
+  });
+
+  test('scoped never has a hint describing automatic-approval blocking only', () => {
+    expect(scopedPolicyHintKey('never')).toBe('integrations.tools.policyScopedNeverHint');
+    expect(scopedPolicyHintKey('ask')).toBe(policyHintKey('ask'));
+    expect(scopedPolicyHintKey('auto')).toBe(policyHintKey('auto'));
   });
 });
 
