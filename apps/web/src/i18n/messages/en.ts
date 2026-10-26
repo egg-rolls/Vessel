@@ -1060,6 +1060,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'integrations.tools.noMatch': 'No tools match.',
   'integrations.tools.needsConfirm': 'Confirmation is required before calling',
   'integrations.tools.badgeConfirm': 'Confirm',
+  'integrations.tools.openDetails': 'Open details for {name}',
+  'integrations.tools.dialogLabel': 'Tool details: {name}',
   'integrations.tools.expand': 'Expand details for {name}',
   'integrations.tools.collapse': 'Collapse details for {name}',
   'integrations.tools.details': 'Tool details',

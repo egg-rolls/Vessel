@@ -1033,6 +1033,8 @@ export const messages = {
   'integrations.tools.noMatch': '没有匹配的工具。',
   'integrations.tools.needsConfirm': '调用前需要确认',
   'integrations.tools.badgeConfirm': '需确认',
+  'integrations.tools.openDetails': '打开 {name} 详情',
+  'integrations.tools.dialogLabel': '工具详情：{name}',
   'integrations.tools.expand': '展开 {name} 详情',
   'integrations.tools.collapse': '收起 {name} 详情',
   'integrations.tools.details': '工具详情',
