@@ -118,6 +118,13 @@
 - **结构门禁**：`bun run scripts/check-docs.ts` 校验 ADR 索引 / 链接与文档一致性；`check-rpc-methods` 断言 canonical 方法 47 个（0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`；0.18 新增 `interactions.list` 并移除 `workflow.*`；0.19 S3 新增 `teams.*`、S5 新增 `auth.*`），新增 `expired` / `run_ended` 不改变方法数。
 - **验证范围**：Windows 全量 `3226 pass / 2 skip / 0 fail`；POSIX（oven/bun + 持久缓存）`3228 pass / 0 fail`，build / Web build 通过。
 
+### 1.7 提示词前缀静态审计（收口手动门禁）
+
+- 命令：`bun run check:prompt-prefix`（`scripts/check-prompt-prefix.ts`）。
+- 范围：`packages/`、`plugins/`、`src/` 下的非测试 `.ts` / `.tsx` 源码；跳过 `__tests__`、`*.test.ts`、`node_modules`、`dist`。
+- 规则：报告 HookResult 构造/返回 `additionalContext:`（system 注入）与 `ctx.systemPrompt =` / `context.systemPrompt =` 赋值。前者只允许 `packages/core/src/types/hook.ts`、`packages/core/src/runtime/hook-runner.ts`、`packages/core/src/runtime/agent-runtime.ts` 的旧字段兼容层；后者不允许任何例外。
+- 输出 `path:line: <pattern>`；有命中 exit 1，无命中 exit 0。当前为手动门禁，尚未接入 `.github/workflows/ci.yml`；改 hook 或 system 注入路径后本地跑一次。
+
 ## 2. Release（`.github/workflows/release.yml`）
 
 ### 触发
