@@ -269,6 +269,75 @@ describe('TeamService system messages', () => {
     expect(store.logs.every((log) => log.team_id === 'alpha')).toBe(true);
   });
 
+  it('writes a system entry for failed / cancelled turns but not for successful ones', async () => {
+    const { agent, store } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha' })],
+    });
+
+    agent.emit({
+      type: 'agent.turn.failed',
+      agent_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      reason: 'max runtime exceeded\nlimit 60s',
+      conversation_id: 'conv_1',
+      ts: 1,
+    });
+    agent.emit({
+      type: 'agent.turn.cancelled',
+      agent_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      reason: 'closed',
+      ts: 2,
+    });
+    // 成功轮不发系统日志；回复走 reply 分支。
+    agent.emit({
+      type: 'agent.turn.completed',
+      agent_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      outcome: 'completed',
+      ts: 3,
+    });
+    agent.emit({
+      type: 'agent.reply.posted',
+      agent_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      message_id: 'reply-ok',
+      content: 'done',
+      ts: 4,
+    });
+    // 旧 Body 的 stale 终态与 private 成员都不写。
+    agent.emit({
+      type: 'agent.turn.failed',
+      agent_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      stale: true,
+      reason: 'old body',
+      ts: 5,
+    });
+    agent.emit({
+      type: 'agent.turn.failed',
+      agent_id: 'private',
+      team_id: 'alpha',
+      visibility: 'private',
+      reason: 'hidden',
+      ts: 6,
+    });
+    await settle();
+
+    const system = store.logs.filter((entry) => entry.kind === 'system');
+    expect(system.map((entry) => [entry.from, entry.to[0], entry.content])).toEqual([
+      ['system', 'a', 'turn failed: max runtime exceeded limit 60s'],
+      ['system', 'a', 'turn cancelled: closed'],
+    ]);
+    expect(system.every((entry) => entry.system_event === undefined)).toBe(true);
+    expect(store.logs.filter((entry) => entry.kind === 'reply')).toHaveLength(1);
+  });
+
   it('join records the spawner as from when spawned_by is set', async () => {
     const { agent, store } = makeTeamHarness();
 

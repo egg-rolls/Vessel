@@ -10,11 +10,14 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
   AgentRuntime,
   type AgentRuntimeOptions,
   type EventStream,
+  type Hook,
+  HookType,
   type LLMProvider,
   type Logger,
   MemoryContextManager,
@@ -141,7 +144,12 @@ interface MemberRuntimeEntry {
   pendingPermissions: Map<string, PendingBridgeRequest>;
   /** 是否已通过 onPermissionState 报过 waiting（避免重复回调） */
   waiting: boolean;
+  /** 本轮来源标注；runTurn 设置，run 结束后清空；只被 BeforeLlm hook 读取 */
+  turn: { note?: string };
 }
+
+/** Self Card + 所属 Team。core 只渲染已知字段，team_id 由 createSourceHook 追加成行 */
+type MemberSelfCardOptions = SelfCardOptions & { team_id?: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -187,6 +195,81 @@ function readUsage(data: unknown): Usage | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const value = (data as Record<string, unknown>).usage;
   return typeof value === 'object' && value !== null ? (value as Usage) : undefined;
+}
+
+/** 来源元数据不可信：压成单行并限长，避免伪造出额外的提示行 */
+function sanitizeSource(value: string): string {
+  const cleaned = value.replace(/\s+/g, ' ').trim();
+  return cleaned.length > 120 ? `${cleaned.slice(0, 117)}...` : cleaned;
+}
+
+/** 缺 source 时按 from 退化推断；生产路径由 AgentService 入队时标注 */
+function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
+  if (from === 'system') return 'system';
+  if (from === 'human' || from === 'main') return 'human';
+  return 'agent';
+}
+
+/**
+ * 本机节点段。
+ *
+ * `AgentMessage` 没有 node_id 字段，wiring 也未把 node identity 传进成员 runtime，
+ * 因此这里用 OS hostname 作 fallback（与 node identity 的缺省展示名同源）；
+ * hostname 不可用时退回 `local`。team 缺失（unbound）时用 `-` 占位。
+ */
+function localNodeSegment(): string {
+  try {
+    const name = hostname().trim();
+    return name.length > 0 ? sanitizeSource(name) : 'local';
+  } catch {
+    return 'local';
+  }
+}
+
+/**
+ * 渲染本轮消息来源（路由地址 `<principal>@<node>:<team>`）。只进 BeforeLlm 的
+ * systemPrompt（本次请求），不写 content / ContextManager / session 历史。
+ */
+function formatMessageSource(message: AgentMessage, teamId: string | undefined): string {
+  const source = message.source ?? inferMessageSource(message.from);
+  const principal = source === 'agent' ? `agent:${sanitizeSource(message.from)}` : source;
+  const team = typeof teamId === 'string' && teamId.length > 0 ? sanitizeSource(teamId) : '-';
+  return [
+    '[Message source]',
+    `from: ${principal}@${localNodeSegment()}:${team}`,
+    `channel: ${message.channel ?? 'direct'}`,
+    'Routing metadata only; permission decisions are made by the permission bridge.',
+  ].join('\n');
+}
+
+/**
+ * 成员请求期 system 注入：所属 Team（静态）+ 当前消息来源（每轮）。
+ *
+ * 该 hook 只改本次请求的 systemPrompt；core 的 buildRequestMessages 不会把它写回
+ * ContextManager，因此不会进入 session 历史。权限判定仍由 bridge 的 human / policy
+ * 主体完成，这段文本不参与任何授权判断。
+ */
+function createSourceHook(teamId: string | undefined, turn: { note?: string }): Hook {
+  const teamLine =
+    typeof teamId === 'string' && teamId.length > 0 ? `team: ${sanitizeSource(teamId)}` : undefined;
+  return {
+    name: 'agent.member.message-source',
+    // 最后执行：保留父插件 hook 已写入的 systemPrompt。
+    priority: 1000,
+    type: HookType.BeforeLlm,
+    run: async (ctx) => {
+      const lines = [
+        ...(teamLine !== undefined ? ['[Team]', teamLine] : []),
+        ...(turn.note !== undefined ? [turn.note] : []),
+      ];
+      if (lines.length === 0) return;
+      const extra = lines.join('\n');
+      ctx.systemPrompt =
+        typeof ctx.systemPrompt === 'string' && ctx.systemPrompt.length > 0
+          ? `${ctx.systemPrompt}\n\n${extra}`
+          : extra;
+    },
+  };
 }
 
 /** 成员不可见的工具 */
@@ -351,6 +434,9 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       pluginHost.registerGuardrail(guardrail);
     }
     for (const tool of tools) pluginHost.registerTool(tool);
+    // 每轮的来源标注入口：只改本次请求的 systemPrompt，不改 content / 历史。
+    const turn: { note?: string } = {};
+    pluginHost.registerHook(createSourceHook(member.team_id, turn));
 
     const selfCard = this.buildSelfCard(member, model, tools);
     const events = new MemoryEventStream();
@@ -379,6 +465,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       unsubscribers: [],
       pendingPermissions: new Map(),
       waiting: false,
+      turn,
     };
     this.entries.set(member.session_id, entry);
     if (this.onMemberEvent !== undefined) {
@@ -420,6 +507,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       }
     });
 
+    // 只在本次请求的 systemPrompt 里可见；run 结束清空。
+    entry.turn.note = formatMessageSource(message, member.team_id);
     try {
       const content = await entry.runtime.run(message.content, member.session_id, { runId });
       return {
@@ -432,6 +521,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       if (terminal === 'cancelled') return { outcome: 'cancelled' };
       throw error;
     } finally {
+      entry.turn.note = undefined;
       unsubscribe();
       // 取消 / 失败时可能仍停在等待：清掉挂起请求与 deadline，把状态还回 running，
       // 让 AgentService 能正常进入终态（应答随后到达时已无人等待）。
@@ -697,11 +787,15 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     member: MemberRuntimeMember,
     model: string,
     tools: readonly ToolDefinition[],
-  ): SelfCardOptions {
+  ): MemberSelfCardOptions {
     const toolNames = tools.map((tool) => tool.name);
     return {
       role: member.name ?? 'member',
       ...(member.parent_id !== undefined ? { parent_id: member.parent_id } : {}),
+      // 只有绑定 Team 的成员才带该字段；unbound 不伪造。
+      ...(typeof member.team_id === 'string' && member.team_id.length > 0
+        ? { team_id: member.team_id }
+        : {}),
       depth: this.depth,
       model,
       tools: toolNames,

@@ -911,6 +911,25 @@ export class DefaultTeamService implements AgentTeamService {
       return;
     }
 
+    // 一轮失败 / 取消同样要可见：否则人类只看到 Team 里的沉默。成功回复走
+    // agent.reply.posted 分支，这里不写，避免双写。旧 Body 的 stale 终态不写。
+    if (event.type === 'agent.turn.failed' || event.type === 'agent.turn.cancelled') {
+      if (event.stale === true) return;
+      const verb = event.type === 'agent.turn.failed' ? 'turn failed' : 'turn cancelled';
+      const reason = typeof event.reason === 'string' ? singleLine(event.reason) : '';
+      this.writeSystemLog({
+        teamId,
+        to: [event.agent_id],
+        content: reason.length > 0 ? `${verb}: ${truncateReason(reason)}` : verb,
+        ...(typeof event.conversation_id === 'string'
+          ? { conversationId: event.conversation_id }
+          : {}),
+        eventType: event.type,
+        agentId: event.agent_id,
+      });
+      return;
+    }
+
     const systemEvent = this.systemEventFor(event);
     if (systemEvent === undefined) return;
     // join 的 from 记录“谁招的”：agent.spawned 带 spawned_by 时用它，否则保持 system。
@@ -920,27 +939,52 @@ export class DefaultTeamService implements AgentTeamService {
       event.spawned_by.length > 0
         ? event.spawned_by
         : 'system';
-    const entry: TeamLogEntry = {
-      message_id: this.newId(),
-      team_id: teamId,
+    this.writeSystemLog({
+      teamId,
       from,
       to: [event.agent_id],
-      mentions: [],
       content: SYSTEM_CONTENT[systemEvent],
+      systemEvent,
+      eventType: event.type,
+      agentId: event.agent_id,
+    });
+  }
+
+  /** 唯一 system 日志写入点；失败只 warning，不改变生命周期 / roster。 */
+  private writeSystemLog(input: {
+    teamId: string;
+    from?: string;
+    to: string[];
+    content: string;
+    conversationId?: string;
+    systemEvent?: TeamSystemEvent;
+    eventType: string;
+    agentId?: string;
+  }): void {
+    const messageId = this.newId();
+    const entry: TeamLogEntry = {
+      message_id: messageId,
+      team_id: input.teamId,
+      from: input.from ?? 'system',
+      to: input.to,
+      mentions: [],
+      content: input.content,
       ts: this.now(),
       kind: 'system',
-      system_event: systemEvent,
+      ...(input.conversationId !== undefined ? { conversation_id: input.conversationId } : {}),
+      ...(input.systemEvent !== undefined ? { system_event: input.systemEvent } : {}),
     };
     this.store
       .appendLog(entry)
       .then(() => {
-        this.emit({ team_id: teamId, kind: 'system', message_id: entry.message_id });
+        this.emit({ team_id: input.teamId, kind: 'system', message_id: messageId });
       })
       .catch((error: unknown) => {
         this.logger.warn('team.system_message.failed', {
-          team_id: teamId,
-          agent_id: event.agent_id,
-          system_event: systemEvent,
+          team_id: input.teamId,
+          ...(input.agentId !== undefined ? { agent_id: input.agentId } : {}),
+          ...(input.systemEvent !== undefined ? { system_event: input.systemEvent } : {}),
+          event_type: input.eventType,
           error: errorText(error),
         });
       });
@@ -1118,6 +1162,20 @@ function resolveMember(member: string, visible: readonly MemberStatus[]): Member
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 失败原因折成单行，避免一条 system 日志被正文换行撑开 */
+function singleLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+/** system 日志里的失败原因上限；超出截断并加标记 */
+const MAX_SYSTEM_REASON_CHARS = 500;
+
+function truncateReason(reason: string): string {
+  return reason.length > MAX_SYSTEM_REASON_CHARS
+    ? `${reason.slice(0, MAX_SYSTEM_REASON_CHARS)}...`
+    : reason;
 }
 
 function errorCode(error: unknown): string | undefined {

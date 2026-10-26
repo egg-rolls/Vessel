@@ -832,6 +832,7 @@ export class AgentServiceImpl implements AgentService {
     from: string,
     conversationId: string | undefined,
     kind?: AgentMessage['kind'],
+    channel?: AgentMessage['channel'],
   ): SendResult {
     const message: AgentMessage = {
       id: this.newId(),
@@ -841,6 +842,9 @@ export class AgentServiceImpl implements AgentService {
       ts: this.now(),
       ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
       ...(kind !== undefined ? { kind } : {}),
+      // 来源标注只用于本轮 system 注入；不改变 content / 权限主体。
+      source: this.messageSource(from),
+      channel: channel ?? 'direct',
     };
     const queue = this.queueFor(target.id);
     queue.pending.push(message);
@@ -854,6 +858,19 @@ export class AgentServiceImpl implements AgentService {
     this.scheduleSnapshot();
     this.pump(target.id);
     return { queued: true, message_id: message.id, state: target.state };
+  }
+
+  /**
+   * 入队时标注发送者类别（仅用于模型上下文，不参与权限判定）。
+   *
+   * registry 里登记且不是 external owner（root owner）的 id 视为成员；未登记
+   * principal / root owner / `human` 视为人类；`system` 保持系统来源。
+   */
+  private messageSource(from: string): AgentMessage['source'] {
+    if (from === 'system') return 'system';
+    const record = this.registry.get(from);
+    if (record !== undefined && !this.externalOwners.has(from)) return 'agent';
+    return 'human';
   }
 
   /** 显式 id 先校验；缺省由人类入口生成 `conv_<id>` */
@@ -895,7 +912,14 @@ export class AgentServiceImpl implements AgentService {
     if (target.rotation === 'rotating') {
       const rejected = this.budgetBeforeEnqueue(target, from, conversationId, originTeamId);
       if (rejected !== undefined) return rejected;
-      const result = this.enqueueMessage(target, content, from, conversationId);
+      const result = this.enqueueMessage(
+        target,
+        content,
+        from,
+        conversationId,
+        undefined,
+        originTeamId === undefined ? undefined : 'team',
+      );
       return {
         status: 'queued',
         message_id: result.message_id,
@@ -907,7 +931,14 @@ export class AgentServiceImpl implements AgentService {
     if (target.presence === 'live') {
       const rejected = this.budgetBeforeEnqueue(target, from, conversationId, originTeamId);
       if (rejected !== undefined) return rejected;
-      const result = this.enqueueMessage(target, content, from, conversationId);
+      const result = this.enqueueMessage(
+        target,
+        content,
+        from,
+        conversationId,
+        undefined,
+        originTeamId === undefined ? undefined : 'team',
+      );
       return {
         status: 'queued',
         message_id: result.message_id,
@@ -945,7 +976,14 @@ export class AgentServiceImpl implements AgentService {
       }
       const rejectedFork = this.budgetBeforeEnqueue(forked, from, conversationId, originTeamId);
       if (rejectedFork !== undefined) return rejectedFork;
-      const forkedResult = this.enqueueMessage(forked, content, from, conversationId);
+      const forkedResult = this.enqueueMessage(
+        forked,
+        content,
+        from,
+        conversationId,
+        undefined,
+        originTeamId === undefined ? undefined : 'team',
+      );
       return {
         status: 'queued',
         message_id: forkedResult.message_id,
@@ -967,7 +1005,14 @@ export class AgentServiceImpl implements AgentService {
     // resume 后、入队前检查（检查与入队之间没有 await）
     const rejected = this.budgetBeforeEnqueue(current, from, conversationId, originTeamId);
     if (rejected !== undefined) return rejected;
-    const result = this.enqueueMessage(current, content, from, conversationId);
+    const result = this.enqueueMessage(
+      current,
+      content,
+      from,
+      conversationId,
+      undefined,
+      originTeamId === undefined ? undefined : 'team',
+    );
     return {
       status: 'queued',
       message_id: result.message_id,

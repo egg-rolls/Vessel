@@ -108,6 +108,18 @@ export interface PersistedAgentRecord {
   usage?: Usage;
 }
 
+/**
+ * 消息来源类别（仅用于本轮模型上下文的来源标注）。
+ *
+ * `human` 是外部 principal（root owner / 未登记调用者），`agent` 是已登记的成员，
+ * `system` 是 rotate 嘱托 / limit warning 这类系统提示。它**不参与权限判定**：
+ * 权限仍由权限 bridge 的 human / policy 主体决定，注入文本不可作为授权依据。
+ */
+export type AgentMessageSource = 'human' | 'agent' | 'system';
+
+/** 消息渠道（仅用于来源标注）：Team 提及 vs 点对点投递 */
+export type AgentMessageChannel = 'team' | 'direct';
+
 /** 成员间消息；队列只在内存，不落 snapshot */
 export interface AgentMessage {
   id: string;
@@ -119,6 +131,16 @@ export interface AgentMessage {
   conversation_id?: string;
   /** 系统提示类别；rotate 成功时移除 limit_warning，避免旧 Body 的预警发给新 Body */
   kind?: 'limit_warning';
+  /**
+   * 发送者类别（内存内元数据，不落 snapshot）。由 AgentService 入队时按 registry
+   * 判定；缺省时执行内核按 `from` 退化推断。只用于告知模型消息从哪来。
+   */
+  source?: AgentMessageSource;
+  /**
+   * 投递渠道（内存内元数据，不落 snapshot）。Team `@` 提及为 `team`，owner /
+   * 成员点对点投递为 `direct`。缺省 `direct`。
+   */
+  channel?: AgentMessageChannel;
 }
 
 /** 传给执行内核的成员身份（不携带 registry 状态） */

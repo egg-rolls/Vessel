@@ -77,6 +77,24 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；Team 成员强制权限 bridge，只有 human / policy 能应答。
 - conversation 预算挂 `teams[].policy.budget`，状态写 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、损坏 fail-closed）；override 只能由人抬高或清除。
 
+<a id="team-vs-sessions"></a>
+
+## Team 与成员会话：同一条 Body 会话
+
+- 成员只有一条活 Body（`body_id ≡ session_id`）。Team `@`、owner 直聊、成员间 `send` 都经 `dispatch` / `enqueueMessage` 进入同一内存队列，并在同一个 Body session 上执行；不存在“Team 会话”与“私聊会话”两套存储。
+- Team `@` 路径：`TeamService.post` 先写 Team 日志（`kind: 'mention'`），再按结构化 `mentions` 逐条 `AgentService.dispatch({ from, content, conversation_id, origin_team_id })`。消息入 `AgentMessage` 队列后，`runTurn` 把 `content` 作为 user 消息交给成员 `AgentRuntime.run(..., member.session_id)`；最终 assistant 文本随 `saveSession` 写入该成员 session。若成员 team 可见且本轮 completed，`AgentService` 另发 `agent.reply.posted`，由 `TeamService` 追加 `kind: 'reply'` 的 Team 日志。同一段文本分别落在 session（上下文消息）与 Team 日志（事件记录），不是双写同一存储。
+- `conversation_id` 只是预算 / 分组键，不是 session 身份：一次 Team `@` 的所有 mention 共用同一个 `conversation_id`；未显式携带的直聊会新生成一个。不同 conversation 的消息仍累积在同一 Body session 的历史里。
+- 成功轮：session 有 user + assistant；team 可见成员的 Team 日志有 `reply`。失败 / 取消轮：core 仍保存已进入上下文的 user 消息（有 partial 文本也保留），Team 日志写一条 `system` 条目 `turn failed: <reason>` / `turn cancelled: <reason>`，不写 `reply`。旧 Body 的 `stale` 终态与 private 成员不写 Team 日志。
+- 因此“Team 里有回复、会话侧似乎没有”通常不是存储分叉：同一条回复在 session 里是 assistant 消息，在 Team 里是 reply 日志；失败轮此前在 Team 里沉默，是因为 `TeamService` 不处理 `agent.turn.failed` / `agent.turn.cancelled`，现已补上 system 条目。
+
+<a id="message-source"></a>
+
+## 来源标注与 Team 归属
+
+- 每轮在模型请求的 systemPrompt 末尾注入 `[Message source]`（`from: human` / `from: agent:<id>` / `from: system`，`channel: team | direct`）和成员所属 `[Team]`。它只存在于本次请求，不写 `content`、不进入 `ContextManager` / session 历史；同一会话后续轮次重新按当轮消息生成。
+- `source` / `channel` 由 `AgentService.enqueueMessage` 按 registry 标注：已登记且非 external owner 的 id 记为 agent，其余 principal（root owner / 未登记 id）记为 human；Team `@` 的 dispatch 带 `origin_team_id` 时渠道记为 team，其余为 direct。二者是内存队列元数据，不落 snapshot。**只用于模型理解来源，不参与权限判定**；权限仍只由权限 bridge 的 human / policy 主体决定，注入文本不能作为授权依据。
+- Self Card 对绑定 Team 的成员带 `team_id`，unbound 成员不伪造该字段。core 的 Self Card 只渲染已知字段，`team_id` 由成员的 `BeforeLlm` hook 追加为 `team: <id>` 行。
+
 ## 约束
 
 - canonical `agents.*` / `teams.*` 是唯一契约，owner 端点只做传输；不要恢复 `agent.*` / `team.*` legacy wire 名（ADR-091 0.26 Addendum）。

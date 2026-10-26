@@ -12,6 +12,7 @@ import {
   type Logger,
   MemoryEventStream,
   MemoryPluginHost,
+  MemorySessionBackend,
   type RunEvent,
   type ToolDefinition,
 } from '@vessel-agent/core';
@@ -229,7 +230,11 @@ describe('InProcessMemberRuntime', () => {
 
     const memberHost = captured[0]?.pluginHost;
     expect(memberHost).not.toBe(parent);
-    expect(memberHost?.getHooks().map((entry) => entry.name)).toEqual(['audit']);
+    // 父 hook 原样继承；成员运行时另注册唯一一个来源注入 hook。
+    expect(memberHost?.getHooks().map((entry) => entry.name)).toEqual([
+      'audit',
+      'agent.member.message-source',
+    ]);
     expect(memberHost?.getGuardrails().map((entry) => entry.name)).toEqual(['blocker']);
   });
 
@@ -512,6 +517,68 @@ describe('InProcessMemberRuntime', () => {
       context: { max: 12_000 },
       how_to_ask: 'This is a non-interactive run; state blockers in your final text.',
     });
+  });
+
+  it('adds team_id to the self card only for team-bound members', async () => {
+    const captured: AgentRuntimeOptions[] = [];
+    const runtime = makeRuntime({ runtimeFactory: capturingRuntimeFactory(captured) });
+
+    await runtime.spawn(member({ id: 'bound', session_id: 'bound', team_id: 'alpha' }));
+    await runtime.spawn(member({ id: 'free', session_id: 'free' }));
+
+    const bound = captured[0]?.selfCard as { team_id?: string } | undefined;
+    expect(bound?.team_id).toBe('alpha');
+    expect(captured[1]?.selfCard).toBeDefined();
+    expect('team_id' in (captured[1]?.selfCard ?? {})).toBe(false);
+  });
+
+  it('injects the message source into this request only, not content or session history', async () => {
+    const { records, providerFactory } = echoProviders();
+    const session = new MemorySessionBackend();
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('read')]),
+      session,
+    });
+    const target = member({ id: 'worker', session_id: 'worker-session', team_id: 'alpha' });
+    await runtime.spawn(target);
+
+    await runtime.runTurn(target, {
+      ...message('hello', 'worker-session'),
+      source: 'human',
+      channel: 'team',
+    });
+
+    const first = records[0]?.[0];
+    const firstSystem = first?.messages.find((entry) => entry.role === 'system')?.content ?? '';
+    expect(firstSystem).toContain('[Message source]');
+    // <principal>@<node>:<team>；node 用本机 hostname（AgentMessage 无 node_id）。
+    expect(firstSystem).toMatch(/from: human@[^:\s]+:alpha/);
+    expect(firstSystem).toContain('channel: team');
+    expect(firstSystem).toContain('team: alpha');
+    expect(first?.messages.find((entry) => entry.role === 'user')?.content).toBe('hello');
+
+    await runtime.runTurn(target, {
+      ...message('follow-up', 'worker-session'),
+      from: 'planner',
+      source: 'agent',
+      channel: 'direct',
+    });
+
+    const second = records[0]?.[1];
+    const secondSystem = second?.messages.find((entry) => entry.role === 'system')?.content ?? '';
+    expect(secondSystem).toContain('from: agent:planner');
+    expect(secondSystem).toContain('channel: direct');
+    expect(secondSystem).not.toContain('from: human');
+
+    // 来源只存在于每次请求的 systemPrompt；持久化历史里没有它。
+    const stored = await session.load('worker-session');
+    const storedContents = (stored?.messages ?? []).map((entry) => entry.content).join('\n');
+    expect(storedContents).not.toContain('[Message source]');
+    expect(storedContents).not.toContain('[Team]');
+    expect(storedContents).toContain('hello');
+    expect(storedContents).toContain('follow-up');
   });
 });
 
