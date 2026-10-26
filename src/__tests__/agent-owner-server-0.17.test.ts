@@ -236,7 +236,16 @@ function fakeTeam(calls: Calls): TeamControlLike {
     },
     async setSpawnFrozen(teamId, frozen) {
       calls.teamSpawnFrozen.push({ teamId, frozen });
-      return { team_id: teamId, spawn_frozen: frozen } as never;
+      // 返回完整 TeamSummary：CI 以 VESSEL_VALIDATE_RESULTS=1 跑 result_schema 校验。
+      return {
+        team_id: teamId,
+        name: 'Alpha',
+        tenant_id: 'default',
+        member_count: 0,
+        online_count: 0,
+        created_at: 1,
+        spawn_frozen: frozen,
+      } as never;
     },
     async list(options) {
       calls.teamList.push(options);
