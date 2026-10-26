@@ -91,8 +91,9 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## 来源标注与 Team 归属
 
-- 每轮把 `[Message source]`（`from: human` / `from: agent:<id>` / `from: system`，`channel: team | direct`）作为一条 `role: 'user'` / `name: 'vessel:source'` 消息，通过 `RunOptions.messages` 在用户输入之前注入。它持久化进 `ContextManager` / session 历史，后续轮次只在尾部追加，不改写 system 前缀。
-- `source` / `channel` 由 `AgentService.enqueueMessage` 按 registry 标注：已登记且非 external owner 的 id 记为 agent，其余 principal（root owner / 未登记 id）记为 human；Team `@` 的 dispatch 带 `origin_team_id` 时渠道记为 team，其余为 direct。二者是内存队列元数据，不落 snapshot。**只用于模型理解来源，不参与权限判定**；权限仍只由权限 bridge 的 human / policy 主体决定，注入文本不能作为授权依据。
+- 每轮把 `[Message source]`（`from: human@<node>:<team>` / `from: agent:<id>@<node>:<team>` / `from: system@<node>:<team>`，`channel: team | direct`）作为一条 `role: 'user'` / `name: 'vessel:source'` 消息，通过 `RunOptions.messages` 在用户输入之前注入。它持久化进 `ContextManager` / session 历史，后续轮次只在尾部追加，不改写 system 前缀。federation 入站的 `from` 已经内嵌远端 `<principal>@<node>:<team>`，直接渲染该地址、不再拼本地 node/team；正文里的 `[federation] from ...` 回信抬头保留。
+- `source` / `channel` 由 `AgentService.enqueueMessage` 按 registry 标注：已登记且非 external owner 的 id 记为 agent，`federation:*` 入站也记为 agent（远端 agent，不是本地人类），其余 principal（root owner / 未登记 id）记为 human；Team `@` 的 dispatch 带 `origin_team_id` 时渠道记为 team，其余为 direct。二者是内存队列元数据，不落 snapshot。**只用于模型理解来源，不参与权限判定**；权限仍只由权限 bridge 的 human / policy 主体决定，注入文本不能作为授权依据。
+- owner 队列注入（`src/agent-owner-injection.ts`）同样在 content 前加 `[Message source]` / `from: agent:<id>` / `channel: direct` 来源块，并保留 `name: agent:<id>`：provider 会丢弃 `name`，模型只能从正文看到发送者。`from` 清洗为单行并限长。
 - Self Card 对绑定 Team 的成员带 `team_id`，unbound 成员不伪造该字段。core 的 `formatSelfCard` 直接渲染 `team: <id>` 行；不再由成员的 `BeforeLlm` hook 追加 Team 行。
 
 ## 约束

@@ -109,13 +109,28 @@ function cleanup(dataDir: string): void {
 }
 
 describe('agent owner injection 0.17', () => {
-  it('maps owner queue messages to user messages with agent name and ts', () => {
-    expect(ownerMessageToMessage(message())).toEqual({
+  it('maps owner queue messages to user messages with a visible source block', () => {
+    const mapped = ownerMessageToMessage(message());
+    expect(mapped).toEqual({
       role: 'user',
       name: 'agent:member-1',
-      content: 'done',
+      content: '[Message source]\nfrom: agent:member-1\nchannel: direct\n\ndone',
       timestamp: 1_700_000_000_000,
     });
+    // provider 丢弃 name：模型必须能从正文看到来源。
+    expect(mapped.content).toContain('[Message source]');
+    expect(mapped.content).toContain('from: agent:member-1');
+    expect(mapped.content).toContain('channel: direct');
+  });
+
+  it('sanitizes the source id to a single bounded line', () => {
+    const mapped = ownerMessageToMessage(message({ from: `mem\nber\t${'x'.repeat(200)}` }));
+    const [header, from, channel] = mapped.content.split('\n');
+    expect(header).toBe('[Message source]');
+    expect(from?.startsWith('from: agent:mem ber ')).toBe(true);
+    expect(from?.length).toBeLessThanOrEqual('from: agent:'.length + 120);
+    expect(from).not.toContain('\n');
+    expect(channel).toBe('channel: direct');
   });
 
   it('drains takeMessages once and appends to ctx.messages', async () => {
@@ -136,7 +151,10 @@ describe('agent owner injection 0.17', () => {
 
     expect(calls).toEqual(['main']);
     expect(ctx.messages?.map((entry) => entry.name)).toEqual(['agent:member-1', 'agent:member-2']);
-    expect(ctx.messages?.map((entry) => entry.content)).toEqual(['done', 'pong']);
+    expect(ctx.messages?.map((entry) => entry.content)).toEqual([
+      '[Message source]\nfrom: agent:member-1\nchannel: direct\n\ndone',
+      '[Message source]\nfrom: agent:member-2\nchannel: direct\n\npong',
+    ]);
 
     // 排空后同一 run 的下一轮不再注入
     const next = hookContext();
@@ -391,7 +409,7 @@ describe('agent owner injection 0.17', () => {
         {
           role: 'user',
           name: `agent:${member.id}`,
-          content: 'reply:hello',
+          content: `[Message source]\nfrom: agent:${member.id}\nchannel: direct\n\nreply:hello`,
           timestamp: expect.any(Number),
         },
       ]);
@@ -440,8 +458,8 @@ describe('agent owner injection 0.17', () => {
       const injected = parentCtx.messages ?? [];
       expect(injected).toHaveLength(2);
       expect(Object.fromEntries(injected.map((entry) => [entry.name, entry.content]))).toEqual({
-        [`agent:${first.id}`]: 'echo:first',
-        [`agent:${second.id}`]: 'echo:second',
+        [`agent:${first.id}`]: `[Message source]\nfrom: agent:${first.id}\nchannel: direct\n\necho:first`,
+        [`agent:${second.id}`]: `[Message source]\nfrom: agent:${second.id}\nchannel: direct\n\necho:second`,
       });
       expect(await wiring.service.takeMessages('main')).toEqual([]);
       wiring.injector.dispose();

@@ -195,6 +195,32 @@ describe('AgentService visibility', () => {
   });
 });
 
+describe('AgentService message source', () => {
+  it('labels federation senders as agent, not human', async () => {
+    const { service, runtime } = makeService();
+    const member = await service.create({ visibility: 'team' });
+
+    await service.send({
+      to: member.id,
+      content: 'remote',
+      from: 'federation:human@RemoteNode:RemoteTeam',
+    });
+    await settle();
+
+    expect(runtime.turns[0]?.message.source).toBe('agent');
+  });
+
+  it('still labels unregistered local principals as human', async () => {
+    const { service, runtime } = makeService();
+    const member = await service.create({ visibility: 'team' });
+
+    await service.send({ to: member.id, content: 'local', from: 'stranger' });
+    await settle();
+
+    expect(runtime.turns[0]?.message.source).toBe('human');
+  });
+});
+
 describe('AgentService replies', () => {
   it('explicit reply suppresses the automatic final text', async () => {
     const { service, runtime } = makeService();

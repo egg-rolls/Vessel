@@ -223,8 +223,20 @@ function localNodeSegment(): string {
 /**
  * 渲染本轮消息来源（路由地址 `<principal>@<node>:<team>`）。由 `runTurn` 作为
  * `RunOptions.messages` 注入为持久化的 `vessel:source` 消息，不改写 system。
+ *
+ * 联邦入站的 `from` 已自带 `<principal>@<node>:<team>`；直接渲染内嵌地址，
+ * 不得再拼本地 node/team（否则会伪装成本机成员）。
  */
 function formatMessageSource(message: AgentMessage, teamId: string | undefined): string {
+  if (message.from.startsWith('federation:')) {
+    const addr = sanitizeSource(message.from.slice('federation:'.length));
+    return [
+      '[Message source]',
+      `from: ${addr}`,
+      `channel: ${message.channel ?? 'team'}`,
+      'Routing metadata only; permission decisions are made by the permission bridge.',
+    ].join('\n');
+  }
   const source = message.source ?? inferMessageSource(message.from);
   const principal = source === 'agent' ? `agent:${sanitizeSource(message.from)}` : source;
   const team = typeof teamId === 'string' && teamId.length > 0 ? sanitizeSource(teamId) : '-';

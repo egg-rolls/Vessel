@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { hostname } from 'node:os';
 import {
   AgentRuntime,
   type AgentRuntimeOptions,
@@ -601,6 +602,33 @@ describe('InProcessMemberRuntime', () => {
     expect(storedContents).not.toContain('[Team]');
     expect(storedContents).toContain('hello');
     expect(storedContents).toContain('follow-up');
+  });
+
+  it('renders federation senders as the remote address, never the local node', async () => {
+    const { records, providerFactory } = echoProviders();
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('read')]),
+    });
+    const target = member({ id: 'worker', session_id: 'worker-session', team_id: 'local-team' });
+    await runtime.spawn(target);
+
+    await runtime.runTurn(target, {
+      ...message('remote hello', 'worker-session'),
+      from: 'federation:human@RemoteNode:RemoteTeam',
+      channel: 'team',
+    });
+
+    const request = records[0]?.[0];
+    const source = request?.messages.find((entry) => entry.name === 'vessel:source');
+    expect(source?.content).toContain('[Message source]');
+    expect(source?.content).toContain('from: human@RemoteNode:RemoteTeam');
+    expect(source?.content).toContain('channel: team');
+    // 不得退回本机 `<principal>@<hostname>:<local team>` 形态。
+    expect(source?.content).not.toContain(hostname());
+    expect(source?.content).not.toContain('@Soulkiller');
+    expect(source?.content).not.toContain('local-team');
   });
 });
 

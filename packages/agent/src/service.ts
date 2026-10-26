@@ -866,9 +866,11 @@ export class AgentServiceImpl implements AgentService {
    *
    * registry 里登记且不是 external owner（root owner）的 id 视为成员；未登记
    * principal / root owner / `human` 视为人类；`system` 保持系统来源。
+   * 联邦入站 `federation:<principal>@<node>:<team>` 是远端 agent，不是本地人类。
    */
   private messageSource(from: string): AgentMessage['source'] {
     if (from === 'system') return 'system';
+    if (from.startsWith('federation:')) return 'agent';
     const record = this.registry.get(from);
     if (record !== undefined && !this.externalOwners.has(from)) return 'agent';
     return 'human';

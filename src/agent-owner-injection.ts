@@ -5,8 +5,9 @@
  * 不会消费它，只能由父 turn 的 BeforeLlm 调 `takeMessages(ownerId)` 排空。
  *
  * 约束：
- * - 注入消息固定 `role:'user'`、`name:'agent:<id>'`、`timestamp:<原消息 ts>`，
- *   content 原样（core E5 用 name+timestamp+content 去重）；
+ * - 注入消息固定 `role:'user'`、`name:'agent:<id>'`、`timestamp:<原消息 ts>`；
+ *   content 前置一行来源块后再接原 content（provider 不转发 `name`，
+ *   模型只能从正文看到发送者）；core E5 仍用 name+timestamp+content 去重；
  * - `takeMessages` 是排空语义；同一消息跨轮不重复；
  * - 成员 runtime 继承父 PluginHost 的 hooks，成员 turn 不得消费 owner 队列，
  *   由 `isMemberSession` 拦截。
@@ -57,15 +58,29 @@ export interface AgentOwnerInjector {
   dispose(): void;
 }
 
+/** 来源不可信：压成单行并限长，避免伪造出额外的提示行 */
+const MAX_SOURCE_LENGTH = 120;
+
+function sanitizeSource(value: string): string {
+  const cleaned = value.replace(/\s+/g, ' ').trim();
+  return cleaned.length > MAX_SOURCE_LENGTH
+    ? `${cleaned.slice(0, MAX_SOURCE_LENGTH - 3)}...`
+    : cleaned;
+}
+
 /**
  * owner 消息 → 模型消息：角色固定 user，名称标注来源成员。
+ * provider 会丢弃 `name`，因此正文前置来源块；`name` 保留供 Web/兼容用途。
  * `timestamp` 取原消息时间，保证 core E5 的稳定去重键不变。
  */
 export function ownerMessageToMessage(message: OwnerQueueMessage): Message {
+  const from = `agent:${sanitizeSource(message.from)}`;
   return {
     role: 'user',
     name: `agent:${message.from}`,
-    content: message.content,
+    content: ['[Message source]', `from: ${from}`, 'channel: direct', '', message.content].join(
+      '\n',
+    ),
     timestamp: message.ts,
   };
 }
