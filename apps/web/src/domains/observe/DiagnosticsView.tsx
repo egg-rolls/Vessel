@@ -9,17 +9,16 @@ import { useRefreshSignal } from '../../app/refresh';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { Button, DataTable, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { useNodes } from '../../gateway/NodeProvider';
+import { nodeKeyOf } from '../../gateway/nodes';
 import type { RunEvent, SchedulerRunSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
-import {
-  DIAGNOSTIC_EVENT_TYPES,
-  diagnosticEntries,
-  includesDiagnostics,
-  runtimeQueueRows,
-} from '../../state/diagnostics';
-import { resourceData, useResource } from '../../state/useResource';
+import { diagnosticEntries, includesDiagnostics, runtimeQueueRows } from '../../state/diagnostics';
+import { resourceData } from '../../state/useResource';
 import { resolveShowProcessErrors, resolveUiVisibility } from '../../state/visibility';
+import { useNodeDiagnostics, useRunStore } from '../../stores/runStore';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
+import { usePolledAction } from '../../stores/usePolledAction';
 
 function formatTime(ts: number): string {
   const date = new Date(ts);
@@ -29,24 +28,39 @@ function formatTime(ts: number): string {
 export function DiagnosticsView() {
   useLocale();
   const { client, connectionState, hasToken, epoch } = useConnection();
+  const { current } = useNodes();
   const connected = hasToken && connectionState === 'open';
+  const loadDiagnostics = useRunStore((state) => state.loadDiagnostics);
+  const diagnostics = useNodeDiagnostics(current);
+  const healthState = diagnostics?.health;
+  const eventsState = diagnostics?.events;
+  const nodeKey = current ? nodeKeyOf(current) : '';
+  const { config, reloadConfig } = useConfigStoreApi();
 
-  const health = useResource({
-    load: () => client.getHealth(),
-    enabled: connected,
-    deps: [epoch],
+  const reloadHealth = () => {
+    if (current && connected) void loadDiagnostics(client, current, 'health');
+  };
+  const reloadEvents = () => {
+    if (current && connected) void loadDiagnostics(client, current, 'events');
+  };
+  const reloadAll = () => {
+    if (current && connected) void loadDiagnostics(client, current, 'both');
+  };
+
+  // Health polls every 5s; diagnostic events only refresh on mount / epoch /
+  // explicit refresh (same cadence as the previous per-panel resources).
+  usePolledAction(reloadHealth, {
+    enabled: connected && current !== null,
+    deps: [epoch, nodeKey],
     pollMs: 5000,
   });
-  const { config, reloadConfig } = useConfigStoreApi();
-  const events = useResource({
-    load: () => client.readEvents({ types: [...DIAGNOSTIC_EVENT_TYPES], limit: 200 }),
-    enabled: connected,
-    deps: [epoch],
+  usePolledAction(reloadEvents, {
+    enabled: connected && current !== null,
+    deps: [epoch, nodeKey],
   });
   useRefreshSignal(() => {
-    health.reload();
+    reloadAll();
     reloadConfig();
-    events.reload();
   });
 
   const gate = useMemo(() => {
@@ -58,13 +72,10 @@ export function DiagnosticsView() {
   }, [config]);
   const includeDiagnostics = includesDiagnostics(gate);
   const entries = useMemo(
-    () => diagnosticEntries((resourceData(events.state) ?? []) as RunEvent[], gate),
-    [events.state, gate],
+    () => diagnosticEntries((resourceData(eventsState) ?? []) as RunEvent[], gate),
+    [eventsState, gate],
   );
-  const queue = useMemo(
-    () => runtimeQueueRows(resourceData(health.state)?.runtime),
-    [health.state],
-  );
+  const queue = useMemo(() => runtimeQueueRows(resourceData(healthState)?.runtime), [healthState]);
 
   if (!hasToken) {
     return (
@@ -75,24 +86,24 @@ export function DiagnosticsView() {
     );
   }
 
-  const healthError = health.state.status === 'error' ? health.state.error : null;
-  const eventsError = events.state.status === 'error' ? events.state.error : null;
+  const healthError = healthState?.status === 'error' ? healthState.error : null;
+  const eventsError = eventsState?.status === 'error' ? eventsState.error : null;
 
   return (
     <div className="flex flex-col gap-6">
       {!connected && <p className="text-muted">{t('observe.diagnostics.disconnected')}</p>}
-      {healthError && <ErrorState message={healthError} onRetry={health.reload} />}
-      {eventsError && <ErrorState message={eventsError} onRetry={events.reload} />}
+      {healthError && <ErrorState message={healthError} onRetry={reloadHealth} />}
+      {eventsError && <ErrorState message={eventsError} onRetry={reloadEvents} />}
 
       <Section
         title={t('observe.diagnostics.queueTitle')}
         actions={
-          <Button size="small" onClick={health.reload}>
+          <Button size="small" onClick={reloadHealth}>
             {t('observe.diagnostics.refresh')}
           </Button>
         }
       >
-        {!health.state || health.state.status === 'loading' ? (
+        {!healthState || healthState.status === 'loading' ? (
           <LoadingState label={t('observe.diagnostics.loading')} rows={2} />
         ) : queue.length === 0 ? (
           <EmptyState title={t('observe.diagnostics.queueEmpty')} />
@@ -131,16 +142,16 @@ export function DiagnosticsView() {
             rowKey={(row) => `${row.status}:${row.run_id}`}
           />
         )}
-        {resourceData(health.state)?.runtime && (
+        {resourceData(healthState)?.runtime && (
           <p className="text-muted">
             {t('observe.diagnostics.activeRun')}:{' '}
             <span className="font-mono">
-              {resourceData(health.state)?.runtime?.active_run_id ?? '—'}
+              {resourceData(healthState)?.runtime?.active_run_id ?? '—'}
             </span>{' '}
             ·{' '}
             {t('observe.diagnostics.stats', {
-              queued: resourceData(health.state)?.runtime?.scheduler.stats.queued ?? 0,
-              running: resourceData(health.state)?.runtime?.scheduler.stats.running ?? 0,
+              queued: resourceData(healthState)?.runtime?.scheduler.stats.queued ?? 0,
+              running: resourceData(healthState)?.runtime?.scheduler.stats.running ?? 0,
             })}
           </p>
         )}
@@ -149,7 +160,7 @@ export function DiagnosticsView() {
       <Section
         title={t('observe.diagnostics.errorsTitle')}
         actions={
-          <Button size="small" onClick={events.reload}>
+          <Button size="small" onClick={reloadEvents}>
             {t('observe.diagnostics.refresh')}
           </Button>
         }

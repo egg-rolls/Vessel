@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { ModalShell } from '../../components/Modal';
 import { usePaletteEntities } from '../../components/PaletteEntities';
@@ -19,7 +19,9 @@ import {
   validateCreateTenant,
   validateUpdateTenant,
 } from '../../state/tenants';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { useTenantStore } from '../../stores/tenantStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 
 function isForbidden(code: string | undefined, message: string): boolean {
   return code === 'forbidden' || code === 'unauthorized' || message.includes('forbidden');
@@ -308,13 +310,20 @@ export function TenantsView() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<TenantInfo | null>(null);
 
-  const resource = useResource({
-    load: () => client.listTenants(),
-    enabled: available,
-    deps: [epoch],
-  });
-  useRefreshSignal(resource.reload);
-  const tenants = resourceData(resource.state);
+  const tenantState = useTenantStore((state) => state.tenants);
+  const loadTenants = useTenantStore((state) => state.loadTenants);
+  const selectTenant = useTenantStore((state) => state.select);
+  const reloadTenants = () => {
+    if (available) void loadTenants(client);
+  };
+  usePolledAction(reloadTenants, { enabled: available, deps: [epoch] });
+  useRefreshSignal(reloadTenants);
+  const tenants = resourceData(tenantState);
+
+  // ConnectionProvider stays the tenant-switch authority; mirror its id here.
+  useEffect(() => {
+    selectTenant(tenantId);
+  }, [tenantId, selectTenant]);
 
   const paletteActions = useMemo(
     () =>
@@ -351,7 +360,7 @@ export function TenantsView() {
       />
     );
   }
-  if (resource.state.status === 'error' && isForbidden(resource.state.code, resource.state.error)) {
+  if (tenantState.status === 'error' && isForbidden(tenantState.code, tenantState.error)) {
     return (
       <NotEnabledState
         title={t('settings.tenants.adminTitle')}
@@ -360,16 +369,14 @@ export function TenantsView() {
       />
     );
   }
-  if (resource.state.status === 'idle' || (resource.state.status === 'loading' && !tenants)) {
+  if (tenantState.status === 'idle' || (tenantState.status === 'loading' && !tenants)) {
     return <LoadingState label={t('settings.tenants.loading')} />;
   }
   if (!tenants) {
     return (
       <ErrorState
-        message={
-          resource.state.status === 'error' ? resource.state.error : t('settings.tenants.noData')
-        }
-        onRetry={resource.reload}
+        message={tenantState.status === 'error' ? tenantState.error : t('settings.tenants.noData')}
+        onRetry={reloadTenants}
       />
     );
   }
@@ -388,15 +395,15 @@ export function TenantsView() {
     if (ok) toast.info(t('settings.tenants.switching', { tenant: tenant.tenant_id }));
   };
 
-  const error = resource.state.status === 'error' ? resource.state.error : null;
+  const error = tenantState.status === 'error' ? tenantState.error : null;
 
   return (
     <div className="flex flex-col gap-6">
       {!connected && (
-        <StaleNotice message={t('settings.tenants.disconnected')} onRetry={resource.reload} />
+        <StaleNotice message={t('settings.tenants.disconnected')} onRetry={reloadTenants} />
       )}
       {error && (
-        <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
+        <StaleNotice message={t('common.staleData', { detail: error })} onRetry={reloadTenants} />
       )}
       <Section
         title={t('settings.tenants.title')}
@@ -412,7 +419,7 @@ export function TenantsView() {
             >
               {t('settings.tenants.new')}
             </Button>
-            <Button size="small" onClick={resource.reload}>
+            <Button size="small" onClick={reloadTenants}>
               {t('common.refresh')}
             </Button>
           </div>
@@ -510,7 +517,7 @@ export function TenantsView() {
           onClose={() => setCreateOpen(false)}
           onCreated={() => {
             setCreateOpen(false);
-            resource.reload();
+            reloadTenants();
           }}
         />
       )}
@@ -520,7 +527,7 @@ export function TenantsView() {
           onClose={() => setEditing(null)}
           onUpdated={() => {
             setEditing(null);
-            resource.reload();
+            reloadTenants();
           }}
         />
       )}

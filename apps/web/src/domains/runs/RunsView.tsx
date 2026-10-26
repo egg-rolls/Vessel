@@ -16,6 +16,8 @@ import { useToast } from '../../components/ToastProvider';
 import { Button, cn, DataTable, SearchInput } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { useNodes } from '../../gateway/NodeProvider';
+import { nodeKeyOf } from '../../gateway/nodes';
 import type { DurableRunSummary, RunStatus } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { buildRunPaletteActions } from '../../state/palette-actions';
@@ -31,6 +33,8 @@ import {
   takeRuns,
 } from '../../state/runs';
 import { resourceData, useResource } from '../../state/useResource';
+import { useNodeRuns, useRunStore } from '../../stores/runStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 import { RunDetail } from './RunDetail';
 
 type RunsRoute = Extract<Route, { domain: 'runs' }>;
@@ -82,27 +86,33 @@ export function RunsView({
   const [limit, setLimit] = useState(100);
   const [busy, setBusy] = useState<Set<string>>(new Set());
 
-  const liveResource = useResource({
-    load: () => client.listRuns(),
-    enabled: hasToken,
+  const { current: currentNode } = useNodes();
+  const nodeRuns = useNodeRuns(currentNode);
+  const liveState = nodeRuns?.live;
+  const durableState = nodeRuns?.durable;
+  const loadRuns = useRunStore((state) => state.loadRuns);
+  const nodeKey = currentNode ? nodeKeyOf(currentNode) : '';
+
+  const reloadLive = useCallback(() => {
+    if (currentNode && hasToken) void loadRuns(client, currentNode, 'live');
+  }, [client, currentNode, hasToken, loadRuns]);
+  const reloadDurable = useCallback(() => {
+    if (currentNode && durableAvailable) void loadRuns(client, currentNode, 'durable');
+  }, [client, currentNode, durableAvailable, loadRuns]);
+
+  usePolledAction(reloadLive, {
+    enabled: hasToken && currentNode !== null,
+    deps: [epoch, nodeKey],
     pollMs: 10_000,
-    deps: [epoch],
   });
-  const durableResource = useResource({
-    load: () => client.listDurableRuns({ limit: 200 }),
-    enabled: durableAvailable,
+  usePolledAction(reloadDurable, {
+    enabled: durableAvailable && currentNode !== null,
+    deps: [epoch, nodeKey],
     pollMs: 15_000,
-    deps: [epoch],
   });
 
-  const live = useMemo(
-    () => sortLiveRuns(resourceData(liveResource.state) ?? []),
-    [liveResource.state],
-  );
-  const durable = useMemo(
-    () => sortDurableRuns(resourceData(durableResource.state) ?? []),
-    [durableResource.state],
-  );
+  const live = useMemo(() => sortLiveRuns(resourceData(liveState) ?? []), [liveState]);
+  const durable = useMemo(() => sortDurableRuns(resourceData(durableState) ?? []), [durableState]);
   const filteredLive = filterLiveRuns(live, {
     query,
     status,
@@ -159,10 +169,10 @@ export function RunsView({
   }, [detailRun, detailStatus]);
 
   const reloadAll = useCallback(() => {
-    liveResource.reload();
-    durableResource.reload();
+    reloadLive();
+    reloadDurable();
     detailResource.reload();
-  }, [liveResource.reload, durableResource.reload, detailResource.reload]);
+  }, [reloadLive, reloadDurable, detailResource.reload]);
   useRefreshSignal(reloadAll);
 
   // 事件驱动刷新：run.* 事件后 500ms 合并刷新（10s 轮询兜底，页面隐藏时暂停）。
@@ -178,8 +188,8 @@ export function RunsView({
       if (!recent.some(({ event }) => event.type.startsWith('run.'))) return;
       window.clearTimeout(eventTimer.current);
       eventTimer.current = window.setTimeout(() => {
-        liveResource.reload();
-        if (durableAvailable) durableResource.reload();
+        reloadLive();
+        if (durableAvailable) reloadDurable();
         if (route.runId) detailResource.reload();
       }, 500);
     });
@@ -187,14 +197,7 @@ export function RunsView({
       unsubscribe();
       window.clearTimeout(eventTimer.current);
     };
-  }, [
-    eventStore,
-    liveResource.reload,
-    durableResource.reload,
-    detailResource.reload,
-    durableAvailable,
-    route.runId,
-  ]);
+  }, [eventStore, reloadLive, reloadDurable, detailResource.reload, durableAvailable, route.runId]);
 
   const withBusy = useCallback(async (runId: string, action: () => Promise<void>) => {
     setBusy((prev) => new Set(prev).add(runId));
@@ -220,7 +223,7 @@ export function RunsView({
           const result = await client.cancelRun(runId);
           if (result.cancelled) {
             toast.success(t('runs.toast.cancelRequested'));
-            liveResource.reload();
+            reloadLive();
             if (route.runId === runId) detailResource.reload();
           } else {
             toast.error(t('runs.toast.cancelNotAccepted'));
@@ -230,7 +233,7 @@ export function RunsView({
         }
       });
     },
-    [client, connected, detailResource.reload, liveResource.reload, route.runId, toast, withBusy],
+    [client, connected, detailResource.reload, reloadLive, route.runId, toast, withBusy],
   );
 
   const resume = useCallback(
@@ -243,18 +246,18 @@ export function RunsView({
         try {
           await client.resumeRun(runId);
           toast.success(t('runs.toast.resumed'));
-          durableResource.reload();
+          reloadDurable();
         } catch (error) {
           if (isAlreadyResumedError(error)) {
             toast.info(t('runs.toast.resuming'));
-            durableResource.reload();
+            reloadDurable();
           } else {
             toast.error(errorMessage(error));
           }
         }
       });
     },
-    [client, connected, durableResource.reload, toast, withBusy],
+    [client, connected, reloadDurable, toast, withBusy],
   );
 
   // 命令面板：最近 run 的实体 + 取消/恢复/打开动作。
@@ -308,11 +311,13 @@ export function RunsView({
   const current = route.tab === 'live' ? live : durable;
   const filtered = route.tab === 'live' ? filteredLive : filteredDurable;
   const windowed = route.tab === 'live' ? windowedLive : windowedDurable;
-  const resource = route.tab === 'live' ? liveResource : durableResource;
-  const resourceError = resource.state.status === 'error' ? resource.state.error : null;
+  const resourceState = route.tab === 'live' ? liveState : durableState;
+  const reloadResource = route.tab === 'live' ? reloadLive : reloadDurable;
+  const resourceError = resourceState?.status === 'error' ? resourceState.error : null;
   const loading =
-    resource.state.status === 'idle' ||
-    (resource.state.status === 'loading' && current.length === 0);
+    resourceState === undefined ||
+    resourceState.status === 'idle' ||
+    (resourceState.status === 'loading' && current.length === 0);
   const detailMissing =
     Boolean(route.runId) &&
     !detailRun &&
@@ -414,7 +419,7 @@ export function RunsView({
               )}
 
               {resourceError && current.length === 0 ? (
-                <ErrorState message={resourceError} onRetry={resource.reload} />
+                <ErrorState message={resourceError} onRetry={reloadResource} />
               ) : loading ? (
                 <LoadingState label={t('runs.loading')} />
               ) : current.length === 0 ? (

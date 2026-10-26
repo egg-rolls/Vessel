@@ -8,10 +8,14 @@ import { useRefreshSignal } from '../../app/refresh';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { Button, DataTable, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { useNodes } from '../../gateway/NodeProvider';
+import { nodeKeyOf } from '../../gateway/nodes';
 import type { TaskEntry } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { flattenAgentCards, sortTasks } from '../../state/tasks';
 import { resourceData, useResource } from '../../state/useResource';
+import { useNodeTasks, useRunStore } from '../../stores/runStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 
 function formatTime(ts: number): string {
   if (!Number.isFinite(ts) || ts <= 0) return '—';
@@ -22,14 +26,21 @@ function formatTime(ts: number): string {
 export function TasksView() {
   useLocale();
   const { client, connectionState, hasToken, epoch } = useConnection();
+  const { current } = useNodes();
   const connected = hasToken && connectionState === 'open';
+  const loadTasks = useRunStore((state) => state.loadTasks);
+  const taskState = useNodeTasks(current);
+  const nodeKey = current ? nodeKeyOf(current) : '';
 
-  const tasks = useResource({
-    load: () => client.listTasks(),
-    enabled: connected,
-    deps: [epoch],
+  const reloadTasks = () => {
+    if (current && connected) void loadTasks(client, current);
+  };
+  usePolledAction(reloadTasks, {
+    enabled: connected && current !== null,
+    deps: [epoch, nodeKey],
     pollMs: 5000,
   });
+
   const agents = useResource({
     load: () => client.listAgentsTree(),
     enabled: connected,
@@ -37,11 +48,11 @@ export function TasksView() {
     pollMs: 5000,
   });
   useRefreshSignal(() => {
-    tasks.reload();
+    reloadTasks();
     agents.reload();
   });
 
-  const taskRows = useMemo(() => sortTasks(resourceData(tasks.state) ?? []), [tasks.state]);
+  const taskRows = useMemo(() => sortTasks(resourceData(taskState) ?? []), [taskState]);
   const agentRows = useMemo(
     () => flattenAgentCards(resourceData(agents.state)?.nodes ?? []),
     [agents.state],
@@ -56,20 +67,20 @@ export function TasksView() {
     );
   }
 
-  const tasksError = tasks.state.status === 'error' ? tasks.state.error : null;
+  const tasksError = taskState?.status === 'error' ? taskState.error : null;
   const agentsError = agents.state.status === 'error' ? agents.state.error : null;
-  const loaded = resourceData(tasks.state) !== undefined;
+  const loaded = resourceData(taskState) !== undefined;
 
   return (
     <div className="flex flex-col gap-6">
       {!connected && <p className="text-muted">{t('observe.tasks.disconnected')}</p>}
-      {tasksError && <ErrorState message={tasksError} onRetry={tasks.reload} />}
+      {tasksError && <ErrorState message={tasksError} onRetry={reloadTasks} />}
       {agentsError && <ErrorState message={agentsError} onRetry={agents.reload} />}
 
       <Section
         title={t('observe.tasks.title')}
         actions={
-          <Button size="small" onClick={tasks.reload}>
+          <Button size="small" onClick={reloadTasks}>
             {t('observe.tasks.refresh')}
           </Button>
         }
