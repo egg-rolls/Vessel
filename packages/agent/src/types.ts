@@ -8,7 +8,13 @@
  */
 
 import type { TeamPolicy } from '@vessel-agent/config';
-import type { EventStream, Logger, RunEvent, Usage } from '@vessel-agent/core';
+import type {
+  EventStream,
+  Logger,
+  RunEvent,
+  RuntimePermissionConfig,
+  Usage,
+} from '@vessel-agent/core';
 
 /** 成员状态（终态：completed / failed / cancelled / closed） */
 export type MemberState =
@@ -177,6 +183,11 @@ export interface MemberRuntimePort {
   runTurn(member: MemberRuntimeMember, message: AgentMessage): Promise<MemberTurnResult>;
   cancel(member: MemberRuntimeMember): Promise<void> | void;
   dispose(member: MemberRuntimeMember): Promise<void> | void;
+  /**
+   * CONTRACT-hot-apply §4（additive，可选）：把规则热应用到所有存活 Body。
+   * 返回实际应用的 Body 数量；未实现的 port 由 AgentService 报 0。
+   */
+  applyPermissionRules?(rules: RuntimePermissionConfig): Promise<number> | number;
 }
 
 /** `AgentService.drain` 结果：无在跑轮 / 已中断收口 / 超时 */
@@ -779,6 +790,14 @@ export interface AgentService {
   drain(options?: AgentDrainOptions): Promise<AgentDrainOutcome>;
   /** 立即落盘待写快照；无 snapshot 或写入成功返回 true，写入失败返回 false */
   flushSnapshot(): Promise<boolean>;
+  /**
+   * CONTRACT-hot-apply §4：把新的权限规则热应用到**所有存活的成员 Body**。
+   *
+   * 装配层只需暴露这一条转发入口（执行内核自己知道哪些 Body 还活着）；
+   * 返回成功应用的 Body 数量，0 表示当前没有存活成员。
+   * 不影响 owner——owner 的 runtime 由装配层单独处理。
+   */
+  applyPermissionRules(rules: RuntimePermissionConfig): Promise<number>;
   /** 订阅成员事件；返回取消函数 */
   subscribe(listener: AgentEventListener): () => void;
 }

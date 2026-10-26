@@ -364,7 +364,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly permissionPolicy?: (
     teamId: string | undefined,
   ) => TeamPermissionPolicy | undefined;
-  private readonly permission?: RuntimePermissionConfig;
+  /** 成员兜底权限（热应用会整体替换，故非 readonly） */
+  private permission?: RuntimePermissionConfig;
   private readonly parentEvents?: EventStream;
   private readonly onPermissionState?: (
     memberId: string,
@@ -546,6 +547,36 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     entry.unsubscribers.length = 0;
     this.clearPending(entry);
     await entry.runtime.dispose();
+  }
+
+  /**
+   * CONTRACT-hot-apply §4：把权限规则热应用到所有存活成员 Body。
+   *
+   * 规则整体替换（与 owner 侧同一语义）。这里只覆盖 core `PermissionPolicy` 的
+   * 判定面；成员工具的 checkPermission 包装（`restrictPermissions`）把 ask 折回
+   * bridge / deny，属于装配期决定，热应用不改它。
+   * `members` 有记录但尚未 spawn 出 Body 时没有可应用的 runtime，跳过并计入未应用。
+   */
+  applyPermissionRules(rules: RuntimePermissionConfig): number {
+    this.permission = rules;
+    let applied = 0;
+    for (const [sessionId, entry] of this.entries) {
+      const runtime = entry.runtime as MemberRunnableAgent & {
+        applyPermissionRules?: (next: RuntimePermissionConfig) => void;
+      };
+      if (typeof runtime.applyPermissionRules !== 'function') continue;
+      try {
+        runtime.applyPermissionRules(rules);
+        applied += 1;
+      } catch (error) {
+        // 单个 Body 失败不影响其它 Body；装配层按数量判定是否全部生效。
+        this.logger.warn('agent.member.permission_apply_failed', {
+          session_id: sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return applied;
   }
 
   /**

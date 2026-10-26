@@ -14,6 +14,7 @@ import {
   MemoryPluginHost,
   MemorySessionBackend,
   type RunEvent,
+  type RuntimePermissionConfig,
   type ToolDefinition,
 } from '@vessel-agent/core';
 import {
@@ -950,5 +951,58 @@ describe('InProcessMemberRuntime permission bridge', () => {
 
     expect(result.content).toBe('final:bash:ok');
     expect(policyResponses).toHaveLength(0);
+  });
+});
+
+describe('InProcessMemberRuntime.applyPermissionRules（CONTRACT-hot-apply §4）', () => {
+  it('applies the rules to every live body and reports the count', async () => {
+    const applied: RuntimePermissionConfig[][] = [];
+    const runtime = createInProcessMemberRuntime({
+      providerFactory: echoProviders().providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash')]),
+      runtimeFactory: async (options) => {
+        const inner = await AgentRuntime.create(options);
+        return {
+          events: inner.events,
+          pluginHost: inner.pluginHost,
+          run: (input, sessionId, runOptions) => inner.run(input, sessionId, runOptions),
+          dispose: () => inner.dispose(),
+          applyPermissionRules: (rules: RuntimePermissionConfig) => {
+            applied.push([rules]);
+            inner.applyPermissionRules(rules);
+          },
+        };
+      },
+    });
+    const first = member({ id: 'm1', session_id: 'm1' });
+    const second = member({ id: 'm2', session_id: 'm2' });
+    await runtime.spawn(first);
+    await runtime.spawn(second);
+
+    const count = runtime.applyPermissionRules?.({
+      default: 'ask',
+      autoApprove: ['bash'],
+      neverAutoApprove: [],
+    });
+
+    expect(count).toBe(2);
+    expect(applied).toEqual([
+      [{ default: 'ask', autoApprove: ['bash'], neverAutoApprove: [] }],
+      [{ default: 'ask', autoApprove: ['bash'], neverAutoApprove: [] }],
+    ]);
+  });
+
+  it('skips disposed bodies and returns 0 when nothing is live', async () => {
+    const runtime = makeRuntime();
+    // port 上的能力是可选方法；本实现一定提供。
+    const apply = runtime.applyPermissionRules?.bind(runtime);
+    expect(apply).toBeDefined();
+    expect(apply?.({ default: 'ask' })).toBe(0);
+
+    const target = member();
+    await runtime.spawn(target);
+    await runtime.dispose(target);
+    expect(apply?.({ default: 'ask' })).toBe(0);
   });
 });

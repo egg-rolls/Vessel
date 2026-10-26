@@ -3,6 +3,7 @@ import type { VesselConfig } from '../../packages/config/src/index';
 import {
   allowedOriginsChanged,
   createGatewayReload,
+  createGatewayReloadRunner,
   diffRestartFields,
   type GatewayReconfigureTarget,
   type GatewayReloadWiringOptions,
@@ -58,7 +59,6 @@ describe('diffRestartFields', () => {
       ),
     ).toEqual(['model']);
     expect(diffRestartFields(config(), config({ agent: { cwd: '/tmp' } }))).toEqual(['agent']);
-    expect(diffRestartFields(config(), config({ permission: {} }))).toEqual(['permission']);
     expect(
       diffRestartFields(
         config(),
@@ -84,6 +84,12 @@ describe('diffRestartFields', () => {
         config({ serve: { allowedOrigins: ['http://a.example'], port: 9000 } }),
       ),
     ).toEqual(['port']);
+  });
+
+  it('permission 不再是需重启字段（CONTRACT-hot-apply §1）', () => {
+    expect(diffRestartFields(config(), config({ permission: { autoApprove: ['bash'] } }))).toEqual(
+      [],
+    );
   });
 
   it('allowed_origins 不是需重启字段（顺序无关）', () => {
@@ -189,5 +195,90 @@ describe('createGatewayReload - config', () => {
 
   it('未知 scope 报错', async () => {
     await expect(createGatewayReload(deps())(['nope'])).rejects.toThrow('unknown reload scope');
+  });
+});
+
+describe('createGatewayReloadRunner - appliers', () => {
+  it('注入的每个 scope 都执行一次，并按契约形状返回 reloaded', async () => {
+    const calls: string[] = [];
+    const runner = createGatewayReloadRunner({
+      ...deps(),
+      appliers: {
+        permission: async () => {
+          calls.push('permission');
+          return ['permission: bash always ask'];
+        },
+        tools: async () => {
+          calls.push('tools');
+          return ['tools: +2 -1'];
+        },
+        mcp: async () => {
+          calls.push('mcp');
+          return ['mcp: filesystem disabled'];
+        },
+      },
+    });
+
+    const result = await runner.reload(['permission', 'tools', 'mcp']);
+    expect(calls).toEqual(['permission', 'tools', 'mcp']);
+    expect(result).toEqual({
+      reloaded: ['permission', 'tools', 'mcp'],
+      requires_restart: [],
+    });
+  });
+
+  it('差异摘要按 scope 归类，空数组表示「执行了但无差异」', async () => {
+    const runner = createGatewayReloadRunner({
+      ...deps(),
+      appliers: {
+        permission: () => [],
+        tools: () => ['tools: +1 -0'],
+      },
+    });
+
+    const outcome = await runner.reloadWithSummaries(['config', 'permission', 'tools']);
+    expect(outcome.summaries.config).toEqual([]);
+    expect(outcome.summaries.permission).toEqual([]);
+    expect(outcome.summaries.tools).toEqual(['tools: +1 -0']);
+    expect(outcome.summaries.mcp).toBeUndefined();
+  });
+
+  it('未注册的已知 scope 也报 unknown reload scope（不静默忽略）', async () => {
+    // 只注入 permission：请求 tools 必须显式失败，而不是假装成功。
+    const runner = createGatewayReloadRunner({
+      ...deps(),
+      appliers: { permission: () => [] },
+    });
+    await expect(runner.reload(['tools'])).rejects.toThrow('unknown reload scope: tools');
+  });
+
+  it('applier 抛错向上抛（不吞掉）', async () => {
+    const runner = createGatewayReloadRunner({
+      ...deps(),
+      appliers: {
+        permission: () => {
+          throw new Error('policy write failed');
+        },
+      },
+    });
+    await expect(runner.reload(['permission'])).rejects.toThrow('policy write failed');
+  });
+
+  it('config 摘要说明哪些字段仍需要重启，且 permission 不再出现', async () => {
+    const runner = createGatewayReloadRunner(
+      deps({
+        next: config({
+          provider: { name: 'anthropic', model: 'claude', apiKey: 'k' },
+          serve: { allowedOrigins: ['http://a.example'] },
+        }),
+      }),
+    );
+    const outcome = await runner.reloadWithSummaries(['config']);
+    expect(outcome.requires_restart).toEqual(['provider', 'model']);
+    expect(outcome.summaries.config).toEqual([
+      'config: provider requires restart',
+      'config: model requires restart',
+    ]);
+    expect(outcome.requires_restart).not.toContain('permission');
   });
 });

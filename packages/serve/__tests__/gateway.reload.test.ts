@@ -119,8 +119,26 @@ describe('gateway.reload', () => {
 
     const { body } = await rpc(gateway, 'admin');
     expect(body.ok).toBe(true);
-    expect(calls).toEqual([['config', 'plugins']]);
-    expect(body.result).toEqual({ reloaded: ['config', 'plugins'], requires_restart: [] });
+    // CONTRACT-hot-apply §1：scope 扩为 config / plugins / permission / tools / mcp。
+    expect(calls).toEqual([['config', 'plugins', 'permission', 'tools', 'mcp']]);
+    expect(body.result).toEqual({
+      reloaded: ['config', 'plugins', 'permission', 'tools', 'mcp'],
+      requires_restart: [],
+    });
+  });
+
+  it('accepts each of the extended scopes', async () => {
+    const calls: string[][] = [];
+    const gateway = startReloadGateway(async (scopes) => {
+      calls.push(scopes);
+      return { reloaded: scopes, requires_restart: [] };
+    });
+
+    const { body } = await rpc(gateway, 'admin', {
+      scopes: ['permission', 'tools', 'mcp'],
+    });
+    expect(body.ok).toBe(true);
+    expect(calls).toEqual([['permission', 'tools', 'mcp']]);
   });
 
   it('rejects unknown or non-array scopes with invalid_params', async () => {

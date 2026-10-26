@@ -23,9 +23,11 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   buildConfigSnapshot,
+  getUserConfigPath,
   isLoopbackHostname,
   loadConfig,
   resolveEffectiveApiKey,
+  type VesselConfig,
 } from '../packages/config/src/index';
 import {
   type EventStream,
@@ -52,6 +54,7 @@ import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
 import { buildCliConfigOverrides } from './cli-overrides';
 import { applyCommandLocale, matchCommand } from './commands/registry';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
+import { type ConfigWatchHandle, startConfigWatch, toConfigReloadOutcome } from './config-watch';
 import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import { createDurableFor } from './durable-wiring';
@@ -68,17 +71,38 @@ import {
   writeForegroundGatewayPid,
 } from './gateway-command';
 import { createGatewayConfigSet } from './gateway-config-control';
-import { createGatewayReload, type GatewayReconfigureTarget } from './gateway-reload-wiring';
+import {
+  createGatewayReloadRunner,
+  type GatewayReconfigureTarget,
+  type GatewayReloadApplier,
+} from './gateway-reload-wiring';
 import { buildGatewayControlPlane } from './gateway-wiring';
 import { installHeadlessPermissionAutoAllow, runHeadless } from './headless-runner';
+import {
+  createMcpApplier,
+  createMcpServerToggle,
+  createPermissionApplier,
+  createToolsApplier,
+  type PermissionApplierState,
+} from './hot-apply-appliers';
+import {
+  assemblePluginTools,
+  collectPermissionTargets,
+  type PermissionApplyTarget,
+  permissionConfigFor,
+  registerRuntimeNoticeHook,
+} from './hot-apply-assembly';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { type LocalHubHandle, startLocalHub } from './hub-local';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { ensureInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
+import { setToolPolicy } from './permission-store';
+import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
+import { createRuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import {
@@ -99,6 +123,12 @@ import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
 import { inspectWebDist, webDistWarning } from './web-dist';
+
+/**
+ * 由专用装配路径管理的工厂式插件：tools applier 不能把它们当普通插件装
+ * （MCP 建连 / evals 报告 / feishu 渠道各有自己的 applier 或启动面）。
+ */
+const MCP_FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'evals', 'feishu']);
 
 // ── 终端排版辅助 ─────────────────────────────────
 
@@ -676,6 +706,17 @@ async function runWithConfig(result: BootstrapResult) {
 
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
   let gateway: Gateway | null = null;
+  /** CONTRACT-hot-apply §2：用户配置监听（关闭时取消，不泄漏句柄）。 */
+  let configWatch: ConfigWatchHandle | undefined;
+  /** 用户配置路径（写回 / 监听同源）。 */
+  let hotApplyConfigPath = getUserConfigPath();
+  /** debounce：默认常量，`VESSEL_CONFIG_WATCH_DEBOUNCE_MS=0` 可关掉合并（测试 / 调试）。 */
+  const hotApplyDebounceMs = ((): number | undefined => {
+    const raw = process.env.VESSEL_CONFIG_WATCH_DEBOUNCE_MS;
+    if (raw === undefined || raw.trim() === '') return undefined;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  })();
   /** S5.1：node → hub 出站；仅在 `hub.direction: node` 时启动。 */
   let hubNodeOutbound: StartedHubNodeOutbound | undefined;
   /** S10.2：gateway 同进程本地 hub（回环）；`hub.autoStart !== false` 时启动。 */
@@ -820,6 +861,166 @@ async function runWithConfig(result: BootstrapResult) {
       },
       set: createGatewayConfigSet({ defaultTenantId: result.tenantId }),
     };
+    // ── 热应用（CONTRACT-hot-apply）────────────────
+    /**
+     * 重新读取配置；校验不通过就抛错（调用方据此**不应用**）。
+     * 与 `gateway.reload` 的 `reloadConfig` 同源，避免两条读数口径。
+     */
+    const reloadVesselConfig = async (): Promise<VesselConfig> => {
+      const loaded = await loadConfig();
+      if (loaded.validation.errors.length > 0) {
+        throw new Error(
+          loaded.validation.errors.map((error) => `${error.path}: ${error.message}`).join('; '),
+        );
+      }
+      return loaded.config;
+    };
+    // 事件出口：notice 同时进事件流（Web/TUI）与模型上下文（BeforeLlm hook）。
+    hotApplyConfigPath = getUserConfigPath();
+    const noticeBus = createRuntimeNoticeBus({
+      events: result.bundle?.runtimeEvents ?? ctx.events,
+      tenantId: result.tenantId,
+    });
+    registerRuntimeNoticeHook(ctx.pluginHost, noticeBus);
+
+    /** 存活 runtime 的集合：owner（bundle / ctx / host）+ 每个 tenant bundle。 */
+    const liveTargets = (): PermissionApplyTarget[] =>
+      collectPermissionTargets({
+        runtime: ctx.runtime,
+        bundleRuntime: result.bundle?.runtime,
+        host: result.host,
+        tenantRuntimes: () => [
+          ...(tenantFactory?.tenantIds() ?? []).map((id) => tenantFactory?.runtimeFor(id)),
+          ...(tenantFactory?.tenantIds() ?? []).map((id) => tenantFactory?.bundleFor(id)?.runtime),
+        ],
+      });
+
+    const permissionState: PermissionApplierState = {
+      current: permissionConfigFor(config, headless),
+    };
+    // 现有工具名快照（启动时）：tools applier 只管辖「启动工具 ∪ 热装配过的插件工具」，
+    // 之后的 agent / MCP 工具一律不动。
+    const managedPluginTools = new Set(ctx.pluginHost.listTools().map((tool) => tool.name));
+    // 插件安装配置基线（用于识别「定义没变但行为配置变了」）：
+    // `computeTargetTools` 每次读到的配置写入 `lastToolsConfigKey`，`targetKey` 读它。
+    const pluginConfigKeyOf = (value: VesselConfig): string =>
+      JSON.stringify(buildPluginConfigMap(value.plugins, declarativePluginEntries(value)));
+    const lastToolsConfigKey: { current?: string } = { current: pluginConfigKeyOf(config) };
+    const toolsConfigKey: { value?: string } = { value: lastToolsConfigKey.current };
+
+    const reloadAppliers: Record<string, GatewayReloadApplier> = {
+      permission: createPermissionApplier(
+        {
+          loadPermission: async () => permissionConfigFor(await reloadVesselConfig(), headless),
+          apply: async (rules) => {
+            let applied = 0;
+            for (const runtime of liveTargets()) {
+              if (typeof runtime.applyPermissionRules !== 'function') continue;
+              try {
+                runtime.applyPermissionRules(rules);
+                applied += 1;
+              } catch (error) {
+                logger.warn('hot_apply.permission_failed', {
+                  runtime: runtime.id,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            // 成员 Body 走 AgentService 的唯一转发入口（没有 agent 时返回 0）。
+            if (result.agent !== undefined) {
+              applied += await result.agent.service.applyPermissionRules(rules);
+            }
+            return applied;
+          },
+        },
+        permissionState,
+      ),
+      tools: createToolsApplier({
+        host: ctx.pluginHost,
+        // 旁路重建：先在临时 host 上算出目标集，再一次性替换真实宿主。
+        computeTargetTools: async () => {
+          const next = await reloadVesselConfig();
+          lastToolsConfigKey.current = pluginConfigKeyOf(next);
+          const assembled = await assemblePluginTools({
+            config: next,
+            tenantId: result.tenantId,
+            excludePlugins: MCP_FACTORY_PLUGINS,
+          });
+          for (const tool of assembled.tools) managedPluginTools.add(tool.name);
+          return assembled.tools;
+        },
+        managedNames: () => [...managedPluginTools],
+        // 插件安装配置（basic-tools 的 cwd 等）变了就整体刷新，否则行为不会生效。
+        targetKey: () => lastToolsConfigKey.current ?? '',
+        previousKey: toolsConfigKey,
+      }),
+    };
+
+    // MCP：没有控制面时不注册该 scope（请求即 `unknown reload scope`）。
+    const mcpPlugin = result.bundle?.mcpPlugin;
+    if (result.mcp !== undefined && mcpPlugin !== undefined) {
+      const toggle = createMcpServerToggle({
+        control: result.mcp,
+        plugin: mcpPlugin,
+        host: ctx.pluginHost,
+      });
+      reloadAppliers.mcp = createMcpApplier({
+        control: result.mcp,
+        toggle,
+        desiredEnabled: async () => {
+          const next = await reloadVesselConfig();
+          const servers = next.mcpServers ?? {};
+          const desired: Record<string, boolean> = {};
+          for (const [name, server] of Object.entries(servers)) {
+            desired[name] = server.enabled !== false;
+          }
+          return desired;
+        },
+      });
+    }
+
+    const reloadRunner = createGatewayReloadRunner({
+      // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
+      gateway: () => gateway as GatewayReconfigureTarget | null,
+      currentConfig: () => config,
+      reloadConfig: reloadVesselConfig,
+      refreshPlugins: () => {
+        tenantFactory?.refreshPlugins();
+        result.bundle?.pluginLoader.refresh();
+      },
+      appliers: reloadAppliers,
+    });
+
+    // 配置监听（CONTRACT-hot-apply §2）：校验通过才应用，失败只记日志 + 发失败 notice。
+    // gateway 启动后再挂监听（此时 reload 面已就绪）；关闭时在 activeCleanup 里取消。
+    configWatch = startConfigWatch({
+      configPath: hotApplyConfigPath,
+      debounceMs: hotApplyDebounceMs,
+      logger,
+      validate: async () => toConfigReloadOutcome(await loadConfig()),
+      apply: async () => {
+        // 只请求已注册的 applier：没有 MCP 的部署不该因为 mcp scope 失败。
+        const registered = new Set(reloadRunner.registeredScopes());
+        const scopes = ['config', 'permission', 'tools', 'mcp'].filter(
+          (scope) => scope === 'config' || registered.has(scope),
+        );
+        const outcome = await reloadRunner.reloadWithSummaries(scopes);
+        // 每个 scope 的差异行汇总为一条 notice 的 details（最多 10 行由总线裁剪）。
+        const lines = Object.entries(outcome.summaries)
+          .filter(([, summary]) => summary.length > 0)
+          .flatMap(([, summary]) => summary);
+        return lines.length > 0
+          ? lines
+          : [`config: reloaded ${outcome.reloaded.join(', ') || 'nothing'}`];
+      },
+      notify: (notice) => {
+        noticeBus.publish(notice);
+      },
+    });
+    if (configWatch === undefined) {
+      logger.warn('config.watch.unavailable', { path: hotApplyConfigPath });
+    }
+
     const gatewayOptions: GatewayOptions & {
       durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
     } = {
@@ -828,25 +1029,19 @@ async function runWithConfig(result: BootstrapResult) {
       // 0.13 Addendum A：权限交互持久化目录（serve 负责文件格式与原子写）。
       // 0.15：命名实例落到 <dataDir>/instances/<instance>，避免同 dataDir 互相覆盖。
       interactionsDir: ensureInteractionsDir(dataDir, foregroundGatewayInstance),
-      // 0.12：`gateway.reload`（serve 负责 RPC 形状/权限，asm 注入实际行为）。
-      reload: createGatewayReload({
-        // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
-        gateway: () => gateway as GatewayReconfigureTarget | null,
-        currentConfig: () => config,
-        reloadConfig: async () => {
-          const loaded = await loadConfig();
-          if (loaded.validation.errors.length > 0) {
-            throw new Error(
-              loaded.validation.errors.map((error) => `${error.path}: ${error.message}`).join('; '),
-            );
-          }
-          return loaded.config;
+      // 0.12 / CONTRACT-hot-apply：`gateway.reload` 的唯一热应用入口。
+      // serve 只做 scope 枚举校验；这里注入 `scope -> applier`。
+      reload: reloadRunner.reload,
+      // CONTRACT-hot-apply §7：permissions.setToolPolicy 的写盘面（用户 YAML）。
+      permissions: {
+        setToolPolicy: ({ tool, policy }) => {
+          const written = setToolPolicy(tool, policy, { configPath: hotApplyConfigPath });
+          return {
+            auto_approve: written.autoApprove,
+            never_auto_approve: written.neverAutoApprove,
+          };
         },
-        refreshPlugins: () => {
-          tenantFactory?.refreshPlugins();
-          result.bundle?.pluginLoader.refresh();
-        },
-      }),
+      },
       hub: eventHub,
       // 0.18：events.list 的二次脱敏与 live hub / trace 同源（ext 幂等）。
       ...(result.bundle ? { redactor: result.bundle.redactor } : {}),
@@ -1097,7 +1292,9 @@ async function runWithConfig(result: BootstrapResult) {
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
   // gateway.stop() 自带 interrupt('shutdown') + 5s drain，后续关闭传 drain:false。
   activeCleanup = async () => {
-    // 先停出站 / 本地 hub，避免 gateway drain 期间继续重连或刷新目录。
+    // 先停配置监听与出站 / 本地 hub，避免 gateway drain 期间继续触发热应用或重连。
+    configWatch?.close();
+    configWatch = undefined;
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
     await localHub?.stop();

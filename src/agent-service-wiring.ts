@@ -184,6 +184,12 @@ class OwnerAwareMemberRuntime implements MemberRuntimePort {
   dispose(member: MemberRuntimeMember): Promise<void> | void {
     return this.inner.dispose(member);
   }
+
+  /** CONTRACT-hot-apply §4：成员 Body 的权限热应用原样转发给执行内核。 */
+  applyPermissionRules(rules: RuntimePermissionConfig): Promise<number> | number {
+    const apply = this.inner.applyPermissionRules;
+    return typeof apply === 'function' ? apply.call(this.inner, rules) : 0;
+  }
 }
 
 /** 构造成员 runtime + AgentService，并注册 root owner（不 spawn） */

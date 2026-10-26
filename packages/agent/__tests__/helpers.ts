@@ -1,4 +1,5 @@
 import type { TeamPolicy } from '@vessel-agent/config';
+import type { RuntimePermissionConfig } from '@vessel-agent/core';
 import {
   type AgentEvent,
   type AgentEventListener,
@@ -86,6 +87,15 @@ export class FakeRuntime implements MemberRuntimePort {
     // 仍按 id 记录（兼容既有断言），另记 session 供 rotate / close 断言
     this.disposed.push(member.id);
     this.disposedSessions.push(member.session_id);
+  }
+
+  /** CONTRACT-hot-apply §4：记录热应用的权限规则 */
+  readonly appliedPermissionRules: RuntimePermissionConfig[] = [];
+
+  applyPermissionRules(rules: RuntimePermissionConfig): number {
+    this.appliedPermissionRules.push(rules);
+    // 语义与 InProcessMemberRuntime 一致：返回仍存活的 Body 数量。
+    return this.spawned.length - this.disposed.length;
   }
 }
 

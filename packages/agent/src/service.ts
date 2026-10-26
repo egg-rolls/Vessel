@@ -17,6 +17,7 @@ import {
   type Logger,
   noopLogger,
   type RunEvent,
+  type RuntimePermissionConfig,
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import {
@@ -1988,6 +1989,26 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     if (!this.snapshot) return true;
     return this.snapshot.flush();
+  }
+
+  /**
+   * CONTRACT-hot-apply §4：把权限规则热应用到所有存活成员 Body。
+   *
+   * 执行内核（`MemberRuntimePort`）自己知道哪些 Body 还在跑，因此这里只做转发；
+   * port 未实现该能力时返回 0（不假装成功）。owner 不在这里——它由装配层单独处理。
+   */
+  async applyPermissionRules(rules: RuntimePermissionConfig): Promise<number> {
+    await this.ready;
+    const apply = this.runtime.applyPermissionRules;
+    if (typeof apply !== 'function') return 0;
+    try {
+      const count = await apply.call(this.runtime, rules);
+      return typeof count === 'number' && Number.isFinite(count) && count > 0 ? count : 0;
+    } catch (error) {
+      // 单个 Body 的失败不能让整条热应用链崩掉；装配层按 0 处理并记日志。
+      this.logger.warn('agent.permission.apply_failed', { error: errorText(error) });
+      return 0;
+    }
   }
 
   subscribe(listener: AgentEventListener): () => void {

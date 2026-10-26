@@ -543,11 +543,11 @@ describe('agent lifecycle contract', () => {
     expect(agentStatusSchema.properties.owner).toBeDefined();
   });
 
-  it('keeps canonical count at 58 with the control plane absent', () => {
+  it('keeps canonical count at 59 with the control plane absent', () => {
     const dispatcher = createLocalRpcDispatcher({ hub: createGatewayEventHub() });
     try {
       const methods = dispatcher.manifest().methods;
-      expect(methods).toHaveLength(58);
+      expect(methods).toHaveLength(59);
       expect(methods.filter((method) => method.name.startsWith('agents.'))).toHaveLength(9);
     } finally {
       dispatcher.dispose();

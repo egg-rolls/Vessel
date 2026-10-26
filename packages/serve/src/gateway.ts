@@ -82,6 +82,10 @@ import {
   createMetricsMethods,
   createTraceMethods,
 } from './gateway/methods/observability.js';
+import {
+  createPermissionsMethods,
+  type PermissionsControl,
+} from './gateway/methods/permissions.js';
 import { createRunMethods } from './gateway/methods/runs.js';
 import { createSessionMethods } from './gateway/methods/sessions.js';
 import { createTeamMethods } from './gateway/methods/teams.js';
@@ -279,10 +283,15 @@ export interface GatewayOptions {
     readEvents?(filter: Record<string, unknown>, tenantId?: string): Promise<RunEvent[]>;
   };
   /**
-   * 0.12 `gateway.reload`：配置 / 插件热重载实现（asm 注入）。
+   * 0.12 `gateway.reload`：配置 / 插件 / 权限 / 工具 / MCP 热应用实现（asm 注入）。
    * 缺省 = 未支持，调用返回 `not_supported`；不得假装需要重启的项已生效。
    */
   reload?: (scopes: string[]) => Promise<GatewayReloadResult>;
+  /**
+   * CONTRACT-hot-apply §7：`permissions.setToolPolicy` 的写盘面（asm 注入）。
+   * 缺省 = 方法仍进 manifest，但 handler 返回 `not_supported`。
+   */
+  permissions?: PermissionsControl;
   /** core deleteSessionData，由 asm 注入 */
   sessionData?: {
     deleteSessionData(
@@ -1098,6 +1107,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createAuthMethods({
       ...(opts.nodeTokens !== undefined ? { nodeTokens: opts.nodeTokens } : {}),
       ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
+    }),
+    // CONTRACT-hot-apply §7：permissions.setToolPolicy（additive，排在表尾）。
+    ...createPermissionsMethods({
+      defaultTenantId,
+      ...(opts.permissions !== undefined ? { permissions: opts.permissions } : {}),
+      pluginHostFor,
     }),
   ];
 

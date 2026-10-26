@@ -1,8 +1,9 @@
 /**
- * gateway.* 管理方法（`gateway.reload`，DECISION-023 §2.3）。
+ * gateway.* 管理方法（`gateway.reload`，DECISION-023 §2.3；CONTRACT-hot-apply §1）。
  *
- * serve 只负责协议形状、权限与参数校验；真实重载由 asm 通过
- * `GatewayOptions.reload` 注入。未注入时明确返回 `not_supported`。
+ * serve 只负责协议形状、权限与参数校验（scope 枚举 + 去重）；真实 applier 由 asm
+ * 通过 `GatewayOptions.reload` 注入。未注入时明确返回 `not_supported`。
+ * 结果形状保持 `{ reloaded, requires_restart }`，不因 scope 扩展而变。
  *
  * @module @vessel-agent/serve
  */
@@ -10,8 +11,13 @@
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import { stringListSchema } from './schemas.js';
 
-/** v1 可热重载的范围（DECISION-023 §2.3）。 */
-export const RELOAD_SCOPES = ['config', 'plugins'] as const;
+/**
+ * 可热重载的范围（DECISION-023 §2.3；CONTRACT-hot-apply §1）。
+ *
+ * serve 只做枚举校验，不实现任何 applier：`scope -> applier` 的映射在 asm 侧
+ * （`src/gateway-reload-wiring.ts`）。新增 applier 不需要改这里以外的协议形状。
+ */
+export const RELOAD_SCOPES = ['config', 'plugins', 'permission', 'tools', 'mcp'] as const;
 
 /** 热重载范围。 */
 export type ReloadScope = (typeof RELOAD_SCOPES)[number];
@@ -56,6 +62,7 @@ export function createAdminMethods(deps: AdminMethodsDeps): RpcMethodDefinition[
         properties: {
           scopes: {
             type: 'array',
+            // 枚举是唯一真相源：新增 applier 只改 RELOAD_SCOPES，不改这里。
             items: { type: 'string', enum: [...RELOAD_SCOPES] },
           },
         },

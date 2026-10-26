@@ -68,6 +68,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'tenants.update': 'admin',
   'permission.respond': 'write',
   'ask.respond': 'write',
+  // CONTRACT-hot-apply §7：工具确认策略三档写回（用户 YAML 的两个数组）。
+  'permissions.setToolPolicy': 'write',
   // 0.18：刷新后读取 pending / answered / orphaned 交互（只读）。
   'interactions.list': 'read',
   'evals.latest': 'read',

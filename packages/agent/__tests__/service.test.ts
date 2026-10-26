@@ -3,6 +3,8 @@ import {
   AgentError,
   type AgentEvent,
   type CreateMemberInput,
+  createAgentService,
+  type MemberRuntimePort,
   type MemberTurnResult,
 } from '../src/index.js';
 import { type Deferred, deferred, makeService, settle } from './helpers.js';
@@ -508,5 +510,48 @@ describe('AgentService update (0.25)', () => {
     expect(renamed?.ok ? renamed.status.agent.name : undefined).toBe('first-renamed');
     const statuses = await service.list({ viewer: 'main' });
     expect(statuses.find((entry) => entry.id === first.id)?.name).toBe('first-renamed');
+  });
+});
+
+describe('AgentService.applyPermissionRules（CONTRACT-hot-apply §4）', () => {
+  it('forwards the rules to the execution kernel and counts applied bodies', async () => {
+    const { service, runtime } = makeService();
+    await service.create({ name: 'worker' });
+
+    const applied = await service.applyPermissionRules({
+      default: 'ask',
+      autoApprove: ['bash'],
+      neverAutoApprove: ['agent.close'],
+    });
+
+    expect(applied).toBe(1);
+    expect(runtime.appliedPermissionRules).toEqual([
+      { default: 'ask', autoApprove: ['bash'], neverAutoApprove: ['agent.close'] },
+    ]);
+  });
+
+  it('returns 0 when the kernel does not support hot rules', async () => {
+    const runtime: MemberRuntimePort = {
+      spawn: async () => {},
+      runTurn: async () => ({}),
+      cancel: () => {},
+      dispose: () => {},
+    };
+    const service = createAgentService({ tenantId: 'default', runtime });
+    expect(await service.applyPermissionRules({ default: 'ask' })).toBe(0);
+  });
+
+  it('a kernel failure is logged and does not throw', async () => {
+    const runtime = {
+      spawn: async () => {},
+      runTurn: async () => ({}),
+      cancel: () => {},
+      dispose: () => {},
+      applyPermissionRules: async (): Promise<number> => {
+        throw new Error('kernel exploded');
+      },
+    } satisfies MemberRuntimePort;
+    const service = createAgentService({ tenantId: 'default', runtime });
+    expect(await service.applyPermissionRules({ default: 'ask' })).toBe(0);
   });
 });

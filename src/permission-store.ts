@@ -28,12 +28,28 @@ export interface PermissionStoreOptions {
   configPath?: string;
 }
 
+/** 免确认规则（旧接口；`permission.auto_approve`） */
+export type AutoApproveRules = string[];
+
+/** 工具确认策略三档（契约 §7） */
+export type ToolPolicy = 'auto' | 'ask' | 'never';
+
+/** 两个规则数组的完整快照 */
+export interface ToolPolicySnapshot {
+  autoApprove: string[];
+  neverAutoApprove: string[];
+}
+
 /** 复用的权限规则存储 */
 export interface PermissionStore {
   list(): string[];
   add(tool: string): string[];
   remove(tool: string): string[];
   set(rules: string[]): string[];
+  /** 两个数组的快照（`auto` / `ask` / `never` 的判定来源） */
+  policy(): ToolPolicySnapshot;
+  /** 三档策略写回：同时维护两个数组；返回写入后的快照 */
+  setPolicy(tool: string, policy: ToolPolicy): ToolPolicySnapshot;
 }
 
 /** 工具名：非空、无控制字符 */
@@ -140,6 +156,72 @@ function assertToolName(tool: string): string {
   return tool.trim();
 }
 
+/** 从 permission 块读取 never_auto_approve（兼容 camelCase） */
+function readNeverRules(root: Record<string, unknown>): string[] {
+  const permission = root.permission;
+  if (permission === undefined || permission === null) return [];
+  if (!isRecord(permission)) {
+    throw new Error('permission_store_invalid_config: permission must be a YAML object');
+  }
+  const raw = permission.never_auto_approve ?? permission.neverAutoApprove;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error(
+      'permission_store_invalid_config: permission.never_auto_approve must be a YAML array',
+    );
+  }
+  return normalizeRules(raw.filter((item): item is string => typeof item === 'string'));
+}
+
+/** 「不在列表里」的同一份工具名列表（去掉指定项；保持顺序） */
+function without(rules: readonly string[], tool: string): string[] {
+  return rules.filter((rule) => rule !== tool);
+}
+
+/** 「在列表里」的同一份工具名列表（追加到末尾；幂等） */
+function withTool(rules: readonly string[], tool: string): string[] {
+  return rules.includes(tool) ? [...rules] : [...rules, tool];
+}
+
+/**
+ * 三档策略 → 两个数组（契约 §7：语义完全由现有两个数组表达，不新增字段）。
+ * - `auto`：进 `auto_approve`，出 `never_auto_approve`
+ * - `ask`：两个都不进（缺省行为）
+ * - `never`：进 `never_auto_approve`，出 `auto_approve`
+ */
+export function applyToolPolicy(
+  snapshot: ToolPolicySnapshot,
+  tool: string,
+  policy: ToolPolicy,
+): ToolPolicySnapshot {
+  const autoApprove = without(snapshot.autoApprove, tool);
+  const neverAutoApprove = without(snapshot.neverAutoApprove, tool);
+  if (policy === 'auto') return { autoApprove: withTool(autoApprove, tool), neverAutoApprove };
+  if (policy === 'never')
+    return { autoApprove, neverAutoApprove: withTool(neverAutoApprove, tool) };
+  return { autoApprove, neverAutoApprove };
+}
+
+/** 写两个数组；permission 块其它键保留，统一写 snake_case */
+function writePolicy(configPath: string, snapshot: ToolPolicySnapshot): ToolPolicySnapshot {
+  const autoApprove = normalizeRules(snapshot.autoApprove);
+  const neverAutoApprove = normalizeRules(snapshot.neverAutoApprove);
+  const root = readRoot(configPath);
+  const existing = root.permission;
+  if (existing !== undefined && existing !== null && !isRecord(existing)) {
+    throw new Error('permission_store_invalid_config: permission must be a YAML object');
+  }
+  const permission: Record<string, unknown> = { ...(existing ?? {}) };
+  // 统一写 snake_case；清理 camelCase 旧键避免两份规则。
+  delete permission.autoApprove;
+  delete permission.neverAutoApprove;
+  permission.auto_approve = autoApprove;
+  permission.never_auto_approve = neverAutoApprove;
+  root.permission = permission;
+  writeRoot(configPath, root);
+  return { autoApprove, neverAutoApprove };
+}
+
 /** 读取当前免确认工具名（文件不存在返回 []） */
 export function listAutoApproveRules(options: PermissionStoreOptions = {}): string[] {
   const configPath = resolveConfigPath(options);
@@ -174,6 +256,30 @@ export function setAutoApproveRules(
   return writeRules(resolveConfigPath(options), rules);
 }
 
+/** 读取两个规则数组（文件不存在返回两个空数组） */
+export function readToolPolicies(options: PermissionStoreOptions = {}): ToolPolicySnapshot {
+  const root = readRoot(resolveConfigPath(options));
+  return {
+    autoApprove: readRules(root),
+    neverAutoApprove: readNeverRules(root),
+  };
+}
+
+/**
+ * 三档策略写回（契约 §7）。工具名由调用方校验存在性；这里只校验形状。
+ * @returns 写入后的两个数组
+ */
+export function setToolPolicy(
+  tool: string,
+  policy: ToolPolicy,
+  options: PermissionStoreOptions = {},
+): ToolPolicySnapshot {
+  const name = assertToolName(tool);
+  const configPath = resolveConfigPath(options);
+  const current = readToolPolicies({ configPath });
+  return writePolicy(configPath, applyToolPolicy(current, name, policy));
+}
+
 /** 构造可注入的存储对象（TUI / 测试用） */
 export function createPermissionStore(options: PermissionStoreOptions = {}): PermissionStore {
   return {
@@ -181,5 +287,7 @@ export function createPermissionStore(options: PermissionStoreOptions = {}): Per
     add: (tool) => addAutoApproveRule(tool, options),
     remove: (tool) => removeAutoApproveRule(tool, options),
     set: (rules) => setAutoApproveRules(rules, options),
+    policy: () => readToolPolicies(options),
+    setPolicy: (tool, policy) => setToolPolicy(tool, policy, options),
   };
 }
