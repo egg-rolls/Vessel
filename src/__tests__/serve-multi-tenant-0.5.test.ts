@@ -20,6 +20,25 @@ function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-tenant-serve-'));
 }
 
+/**
+ * 停掉 spawn 出来的 CLI。
+ *
+ * Bun 1.4.4 在 POSIX 下，Bun.spawn 的子进程处理过 HTTP 请求后会忽略 SIGTERM
+ * （graceful shutdown 不触发，进程也不退出）；SIGKILL 仍然可靠。测试只关心
+ * 进程消失，先给 graceful 一个窗口，再强制结束。
+ */
+async function stopProcess(proc: ReturnType<typeof Bun.spawn>): Promise<void> {
+  proc.kill();
+  const exited = await Promise.race([
+    proc.exited.then(() => true),
+    Bun.sleep(2000).then(() => false),
+  ]);
+  if (!exited) {
+    proc.kill('SIGKILL');
+    await proc.exited;
+  }
+}
+
 function writeFile(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf8');
@@ -180,8 +199,7 @@ it('enforces config max_concurrent_runs through the tenant registry', async () =
     const reset = await rpc(url, 'tok-acme', 'metrics.reset', {});
     expect(reset.error?.code).toBe('not_found');
   } finally {
-    proc.kill();
-    await proc.exited;
+    await stopProcess(proc);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }, 30000);
@@ -428,8 +446,7 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
     });
     expect(offStart.error?.code).toBe('forbidden');
   } finally {
-    proc.kill();
-    await proc.exited;
+    await stopProcess(proc);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }, 60000);
