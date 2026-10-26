@@ -1159,6 +1159,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       permissionMode: memberPermissionMode,
       // 成员 bridge 请求 / 应答与 TUI 订阅的是同一条父事件流。
       parentEvents: runtimeEvents,
+      // 交互 REPL 的 owner 实时流不混入成员 run 输出；gateway / serve / headless 需要。
+      forwardMemberEvents: options.interactive !== true,
       ...(config.agent?.ownerId !== undefined ? { ownerId: config.agent.ownerId } : {}),
       logger,
       // 成员 Body 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。

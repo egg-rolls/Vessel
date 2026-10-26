@@ -109,6 +109,14 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
     const ev = entry.event;
     if (group.firstTs === undefined) group.firstTs = ev.ts;
     if (entry.jobId) group.jobId = entry.jobId;
+    // 中途连上 / run.started 已被环形缓冲裁剪时，仍按任一事件的 session_id 归属会话；
+    // 否则成员 run 的实时卡片会因缺 sessionId 被会话窗口过滤掉。
+    if (group.sessionId === undefined) {
+      const data = ev.data as { session_id?: unknown };
+      if (typeof data.session_id === 'string' && data.session_id.length > 0) {
+        group.sessionId = data.session_id;
+      }
+    }
     switch (ev.type) {
       case 'run.started': {
         const d = ev.data as { input?: string; session_id?: string };

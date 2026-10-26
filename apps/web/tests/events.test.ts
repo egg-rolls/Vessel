@@ -58,6 +58,15 @@ describe('buildGroup', () => {
     );
     expect(buildGroup('r1', [stored('r1', 'run.cancelled', 1)]).status).toBe('cancelled');
   });
+
+  test('falls back to any event session_id when run.started was trimmed', () => {
+    const group = buildGroup('r1', [
+      stored('r1', 'tool.call.started', 1, { tool_name: 'bash', session_id: 'member-s1' }, 100),
+      stored('r1', 'run.completed', 2, { output: 'ok', session_id: 'member-s1' }, 101),
+    ]);
+    expect(group.sessionId).toBe('member-s1');
+    expect(group.status).toBe('completed');
+  });
 });
 
 describe('live streaming buffers (0.17)', () => {

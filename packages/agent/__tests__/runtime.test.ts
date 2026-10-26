@@ -194,6 +194,42 @@ describe('InProcessMemberRuntime', () => {
     expect(calls).toEqual([{ memberId: 'm1', sessionId: 'body-a', type: 'agent.limit.warning' }]);
   });
 
+  it('forwards run events to parentEvents but leaves bridge-owned events to the bridge', async () => {
+    const captured: AgentRuntimeOptions[] = [];
+    const parentEvents = new MemoryEventStream();
+    const forwarded: RunEvent[] = [];
+    parentEvents.subscribe((event) => forwarded.push(event));
+    const runtime = makeRuntime({
+      runtimeFactory: capturingRuntimeFactory(captured),
+      parentEvents,
+      forwardMemberEvents: true,
+      tenantId: 'tenant-a',
+    });
+    await runtime.spawn(member({ id: 'm1', session_id: 'body-a' }));
+
+    const events = captured[0]?.events;
+    if (!events) throw new Error('spawn did not capture an event stream');
+    events.publish({ type: 'run.started', run_id: 'r1', data: { session_id: 'body-a' }, ts: 1 });
+    events.publish({
+      type: 'tool.call.started',
+      run_id: 'r1',
+      data: { session_id: 'body-a', tool_name: 'bash' },
+      ts: 2,
+    });
+    events.publish({ type: 'tool.permission.request', run_id: 'r1', data: {}, ts: 3 });
+    events.publish({ type: 'tool.permission.response', run_id: 'r1', data: {}, ts: 4 });
+    events.publish({ type: 'ask.user.requested', run_id: 'r1', data: {}, ts: 5 });
+    events.publish({ type: 'ask.user.answered', run_id: 'r1', data: {}, ts: 6 });
+    events.publish({ type: 'run.completed', run_id: 'r1', data: { session_id: 'body-a' }, ts: 7 });
+
+    expect(forwarded.map((event) => event.type)).toEqual([
+      'run.started',
+      'tool.call.started',
+      'run.completed',
+    ]);
+    expect(forwarded.every((event) => event.tenant_id === 'tenant-a')).toBe(true);
+  });
+
   it('member runtime hides team_* and delegate_task but can expose agent', async () => {
     const captured: AgentRuntimeOptions[] = [];
     const names = ['bash', 'read', 'edit', 'agent', 'team_spawn', 'delegate_task', 'ask_user'];
@@ -808,6 +844,8 @@ describe('InProcessMemberRuntime permission bridge', () => {
     const parentEvents = new MemoryEventStream();
     const forwarded: RunEvent[] = [];
     parentEvents.subscribe((event) => {
+      // run 事件会并入父流；这里只关心 bridge 关闭时不再转发权限请求。
+      if (event.type !== 'tool.permission.request') return;
       forwarded.push(event);
     });
     const { providerFactory } = toolThenEchoProvider('bash');

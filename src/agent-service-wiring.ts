@@ -50,6 +50,8 @@ import {
   type AgentOwnerInjector,
   createAgentOwnerInjector,
 } from './agent-owner-injection';
+import { resolveTenantPaths } from './data-paths';
+import { acquireSessionLock } from './session-lock';
 
 export interface AgentServiceWiringOptions {
   tenantId: string;
@@ -74,6 +76,11 @@ export interface AgentServiceWiringOptions {
    * 与 `permission.respond` 无需第二套协议。
    */
   parentEvents?: EventStream;
+  /**
+   * 把成员 run 的 llm / tool / run 事件并入 `parentEvents`；interactive REPL 保持
+   * false（避免成员输出混进 owner 实时流），gateway / serve / headless 传 true。
+   */
+  forwardMemberEvents?: boolean;
   /** 成员权限模式：交互 bridge、headless allow（缺省沿用 agent 包缺省 allow） */
   permissionMode?: MemberRuntimePermissionMode;
   /** tenant SessionBackend；成员 Body 用同一份存储按 session_id 续接历史 */
@@ -147,6 +154,9 @@ export function buildMemberRuntimeOptions(
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     // A3c：bridge 权限事件与父入口同源；未提供时成员保持无父流。
     ...(options.parentEvents !== undefined ? { parentEvents: options.parentEvents } : {}),
+    ...(options.forwardMemberEvents !== undefined
+      ? { forwardMemberEvents: options.forwardMemberEvents }
+      : {}),
     ...(onPermissionState !== undefined ? { onPermissionState } : {}),
     ...(onMemberEvent !== undefined ? { onMemberEvent } : {}),
     ...(options.runtimeFactory !== undefined ? { runtimeFactory: options.runtimeFactory } : {}),
@@ -198,6 +208,56 @@ class OwnerAwareMemberRuntime implements MemberRuntimePort {
   }
 }
 
+/**
+ * 成员 Body 的 turn 与 owner run 一样持 session 写锁。
+ *
+ * 成员 runtime 不走 `withSessionWriteLock`，但它在 run 开始时就把 session 写为
+ * `running`；gateway 读时的 session liveness 修复只认写锁，会把仍在执行的成员
+ * turn 误判成 `run lost`（卡片出现 ✗，随后才被终态覆盖）。持锁让该判据成立，
+ * 同时保留“一个 session 一个写者”的语义。
+ */
+class SessionLockedMemberRuntime implements MemberRuntimePort {
+  constructor(
+    private readonly inner: MemberRuntimePort,
+    private readonly tenantDir: string,
+  ) {}
+
+  spawn(member: MemberRuntimeMember): Promise<void> {
+    return this.inner.spawn(member);
+  }
+
+  async runTurn(member: MemberRuntimeMember, message: AgentMessage): Promise<MemberTurnResult> {
+    const lock = await acquireSessionLock({
+      tenantDir: this.tenantDir,
+      kind: 'session',
+      id: member.session_id,
+    });
+    try {
+      return await this.inner.runTurn(member, message);
+    } finally {
+      await lock.release();
+    }
+  }
+
+  cancel(member: MemberRuntimeMember): Promise<void> | void {
+    return this.inner.cancel(member);
+  }
+
+  dispose(member: MemberRuntimeMember): Promise<void> | void {
+    return this.inner.dispose(member);
+  }
+
+  applyPermissionRules(rules: RuntimePermissionConfig): Promise<number> | number {
+    const apply = this.inner.applyPermissionRules;
+    return typeof apply === 'function' ? apply.call(this.inner, rules) : 0;
+  }
+
+  notice(memberId: string, text: string): void {
+    const notice = this.inner.notice;
+    if (typeof notice === 'function') notice.call(this.inner, memberId, text);
+  }
+}
+
 /** 构造成员 runtime + AgentService，并注册 root owner（不 spawn） */
 export async function createAgentServiceWiring(
   options: AgentServiceWiringOptions,
@@ -225,7 +285,13 @@ export async function createAgentServiceWiring(
       (teamId) => (teamId === undefined ? undefined : teamStore.policy(teamId)?.permission),
     ),
   );
-  const runtime = new OwnerAwareMemberRuntime(innerRuntime, ownerId);
+  const runtime = new OwnerAwareMemberRuntime(
+    new SessionLockedMemberRuntime(
+      innerRuntime,
+      resolveTenantPaths(options.dataDir, options.tenantId).root,
+    ),
+    ownerId,
+  );
 
   // 0.19 S4：有 dataDir 才落 conversation 预算；否则保持纯内存。
   const conversationStore =

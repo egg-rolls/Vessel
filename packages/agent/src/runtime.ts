@@ -140,6 +140,12 @@ export interface InProcessMemberRuntimeOptions {
    * `tool.permission.response` / `ask.user.answered` 回灌成员事件流。
    */
   parentEvents?: EventStream;
+  /**
+   * 把成员 run 的 llm / tool / run 生命周期事件并入 `parentEvents`（bridge 自有的
+   * 权限/提问事件除外）。缺省 false；gateway / serve 需要，交互 REPL 不应把成员
+   * 输出混进 owner 的实时流。
+   */
+  forwardMemberEvents?: boolean;
   /** bridge 模式下成员进入/离开权限等待时回调（入口层接 AgentService 状态） */
   onPermissionState?: (memberId: string, sessionId: string, state: MemberPermissionState) => void;
   /** 成员引擎事件回流（当前只转发 agent.limit.warning） */
@@ -375,6 +381,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   /** 成员兜底权限（热应用会整体替换，故非 readonly） */
   private permission?: RuntimePermissionConfig;
   private readonly parentEvents?: EventStream;
+  private readonly forwardMemberEvents: boolean;
   private readonly onPermissionState?: (
     memberId: string,
     sessionId: string,
@@ -407,6 +414,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.permission =
       options.permission !== undefined ? withMemberAutoApprove(options.permission) : undefined;
     this.parentEvents = options.parentEvents;
+    this.forwardMemberEvents = options.forwardMemberEvents === true;
     this.onPermissionState = options.onPermissionState;
     this.onMemberEvent = options.onMemberEvent;
     this.limits = options.limits ?? {};
@@ -499,6 +507,28 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     }
     if (mode === 'bridge' && this.parentEvents !== undefined) {
       this.attachBridge(member, entry);
+    }
+    if (this.forwardMemberEvents && this.parentEvents !== undefined) {
+      const parentEvents = this.parentEvents;
+      entry.unsubscribers.push(
+        entry.events.subscribe((event: RunEvent) => {
+          // 权限/提问请求与应答由 bridge 独占转发；这里再发一次会重复卡片并形成回环。
+          if (
+            PERMISSION_REQUEST_EVENTS.has(event.type) ||
+            PERMISSION_RESPONSE_EVENTS.has(event.type)
+          ) {
+            return;
+          }
+          if (this.entries.get(member.session_id) !== entry) return;
+          // 成员 run 与 owner run 一样并入 tenant 事件流：Web 会话窗口 / trace /
+          // 观测都靠这条流看到 llm、tool 与 run 生命周期事件（session_id 已在 payload 内）。
+          const forwarded: RunEvent =
+            this.tenantId !== undefined && event.tenant_id === undefined
+              ? { ...event, tenant_id: this.tenantId }
+              : event;
+          parentEvents.publish(forwarded);
+        }),
+      );
     }
   }
 

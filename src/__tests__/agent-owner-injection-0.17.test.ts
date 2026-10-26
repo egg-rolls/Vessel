@@ -36,6 +36,8 @@ import {
   createAgentServiceWiring,
 } from '../agent-service-wiring';
 import { parseArgs } from '../cli-args';
+import { resolveTenantPaths } from '../data-paths';
+import { inspectSessionLock } from '../session-lock';
 
 function message(overrides: Partial<OwnerQueueMessage> = {}): OwnerQueueMessage {
   return {
@@ -289,11 +291,13 @@ describe('agent owner injection 0.17', () => {
       wiringOptions(pluginHost, '/tmp/unused', {
         permissionMode: 'bridge',
         parentEvents: events,
+        forwardMemberEvents: true,
       }),
       (memberId, sessionId, state) => states.push(`${memberId}:${sessionId}:${state}`),
     );
     expect(bridge.permissionMode).toBe('bridge');
     expect(bridge.parentEvents).toBe(events);
+    expect(bridge.forwardMemberEvents).toBe(true);
     bridge.onPermissionState?.('m1', 'body-1', 'waiting');
     expect(states).toEqual(['m1:body-1:waiting']);
 
@@ -302,6 +306,7 @@ describe('agent owner injection 0.17', () => {
     );
     expect(headless.permissionMode).toBe('allow');
     expect('parentEvents' in headless).toBe(false);
+    expect('forwardMemberEvents' in headless).toBe(false);
     expect('onPermissionState' in headless).toBe(false);
     expect('onMemberEvent' in headless).toBe(false);
     expect('permission' in headless).toBe(false);
@@ -462,6 +467,40 @@ describe('agent owner injection 0.17', () => {
         [`agent:${second.id}`]: `[Message source]\nfrom: agent:${second.id}\nchannel: direct\n\necho:second`,
       });
       expect(await wiring.service.takeMessages('main')).toEqual([]);
+      wiring.injector.dispose();
+    } finally {
+      cleanup(dataDir);
+    }
+  });
+
+  it('member turn holds the Body session write lock for session liveness', async () => {
+    const pluginHost = new MemoryPluginHost();
+    const dataDir = tmpDir();
+    const observed: string[] = [];
+    try {
+      const tenantDir = resolveTenantPaths(dataDir, 'default').root;
+      const runtimeFactory: NonNullable<AgentServiceWiringOptions['runtimeFactory']> = async (
+        options,
+      ) => ({
+        events: options.events,
+        pluginHost: options.pluginHost ?? new MemoryPluginHost(),
+        async run(input, sessionId) {
+          const inspection = await inspectSessionLock(tenantDir, 'session', sessionId ?? 'default');
+          observed.push(inspection.state);
+          return `ok:${typeof input === 'string' ? input : input.content}`;
+        },
+        async dispose() {},
+      });
+      const wiring = await createAgentServiceWiring(
+        wiringOptions(pluginHost, dataDir, { runtimeFactory }),
+      );
+      const worker = await wiring.service.create({ name: 'worker', parentId: 'main' });
+      await wiring.service.send({ to: worker.id, content: 'hold-lock' });
+      await waitForState(wiring.service, worker.id, 'completed');
+
+      // run 执行期间 liveness 看到 live（而不是 absent → 误判 run lost）。
+      expect(observed).toEqual(['live']);
+      expect((await inspectSessionLock(tenantDir, 'session', worker.id)).state).toBe('absent');
       wiring.injector.dispose();
     } finally {
       cleanup(dataDir);
