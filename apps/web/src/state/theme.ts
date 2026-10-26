@@ -1,4 +1,6 @@
 /** 主题偏好（System / Light / Dark）：localStorage 持久化 + `data-theme`。 */
+import { useUiStore } from '../stores/uiStore';
+
 export type Theme = 'system' | 'light' | 'dark';
 
 export const THEME_KEY = 'vessel.theme';
@@ -44,4 +46,14 @@ export function storeTheme(theme: Theme, storage: Pick<Storage, 'setItem'>): voi
   } catch {
     // 隐私模式/配额满：主题仍在本会话内生效，不阻塞 UI。
   }
+  // Keep the shared store in sync so AppShell applies the change immediately.
+  // `setState` (not `setTheme`) avoids persisting twice.
+  useUiStore.setState({ theme });
+}
+
+/** Theme preference + stable setter backed by the shared UI store. */
+export function useTheme(): { theme: Theme; setTheme: (theme: Theme) => void } {
+  const theme = useUiStore((state) => state.theme);
+  const setTheme = useUiStore((state) => state.setTheme);
+  return { theme, setTheme };
 }

@@ -22,6 +22,7 @@ import { TeamsView } from '../domains/teams/TeamsView';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
+import { applyTheme, useTheme } from '../state/theme';
 import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
 import { DomainNav, primaryRoute } from './DomainNav';
@@ -67,6 +68,7 @@ const SETTINGS_NAV: readonly { tab: SettingsTab; keywords: string[] }[] = [
 
 export function AppShell() {
   const locale = useLocale();
+  const { theme } = useTheme();
   const { route, navigate } = useHashRoute();
   const toast = useToast();
   const {
@@ -147,6 +149,12 @@ export function AppShell() {
     });
   }, []);
   const entities = useMemo(() => [...entityMap.values()].flat(), [entityMap]);
+
+  // Theme lives in uiStore; applying it here keeps the DOM in sync when the
+  // preference changes at runtime.
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
 
   // layout effect 先于 ChatView 的 passive 记录 effect：避免旧会话写进新 tenant key。
   useLayoutEffect(() => {

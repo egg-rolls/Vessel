@@ -18,6 +18,7 @@ import {
 } from '../../state/display-settings';
 import { RUNTIME_MESSAGE_KINDS, useRuntimeVisibility } from '../../state/runtime-visibility';
 import { resourceData } from '../../state/useResource';
+import { useDisplaySettings } from '../../stores/uiStore';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
 function errorMessage(error: unknown): string {
@@ -87,18 +88,20 @@ export function DisplaySettingsView() {
   useRefreshSignal(reloadConfig);
   const data = resourceData(config);
 
-  const [values, setValues] = useState<Record<string, string>>({});
+  const { display, setDisplay } = useDisplaySettings();
   const [saving, setSaving] = useState<string | undefined>();
   const [readOnly, setReadOnly] = useState(false);
 
+  // Mirror the gateway snapshot into the shared store (and localStorage) so the
+  // form values survive a reload and every consumer sees the same state.
   useEffect(() => {
     if (!data) return;
     const next: Record<string, string> = {};
     for (const setting of DISPLAY_SETTINGS) {
       next[setting.key] = readDisplayValue(data, setting.key);
     }
-    setValues(next);
-  }, [data]);
+    setDisplay(next);
+  }, [data, setDisplay]);
 
   // The runtime context group is local-only: keep it available even when the
   // gateway config API is missing or disconnected.
@@ -142,14 +145,14 @@ export function DisplaySettingsView() {
   const change = async (setting: DisplaySettingDef, raw: string) => {
     const value = toConfigValue(setting, raw);
     if (value === undefined) return;
-    const previous = values[setting.key] ?? '';
-    setValues((current) => ({ ...current, [setting.key]: raw }));
+    const previous = display[setting.key] ?? '';
+    setDisplay({ [setting.key]: raw });
     setSaving(setting.key);
     try {
       await client.setConfigValue(setting.key, value);
       toast.success(t('settings.display.saved', { key: setting.key }));
     } catch (error) {
-      setValues((current) => ({ ...current, [setting.key]: previous }));
+      setDisplay({ [setting.key]: previous });
       if (isUnavailable(error)) {
         setReadOnly(true);
         toast.error(t('settings.display.writeUnavailable'));
@@ -178,7 +181,7 @@ export function DisplaySettingsView() {
       >
         <KeyValueList
           items={DISPLAY_SETTINGS.map((setting) => {
-            const current = values[setting.key] ?? '';
+            const current = display[setting.key] ?? '';
             const options =
               setting.type === 'boolean' ? ['true', 'false'] : (setting.options ?? []);
             return {
