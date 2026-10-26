@@ -16,7 +16,7 @@ import type {
 import { createAgentRegistry } from '../src/agents-registry';
 import { type AgentMethodsDeps, createAgentMethods } from '../src/gateway/methods/agents';
 import { agentStatusSchema } from '../src/gateway/methods/schemas';
-import { RpcError, type RpcMethodContext } from '../src/rpc';
+import { createRpcDispatcher, defineMethods, RpcError, type RpcMethodContext } from '../src/rpc';
 import type { TeamControlLike, TeamDetailLike, TeamSummaryLike } from '../src/team-control';
 
 function status(id: string, overrides: Partial<AgentStatusLike> = {}): AgentStatusLike {
@@ -85,10 +85,14 @@ function fakeAgentControl(options: { tenantId?: string; members?: AgentStatusLik
             ...(input.name !== undefined ? ['name'] : []),
             ...(input.model !== undefined ? ['model'] : []),
             ...(input.system_prompt !== undefined ? ['system_prompt'] : []),
+            ...(input.role !== undefined ? ['role'] : []),
+            ...(input.teamId !== undefined ? ['team_id'] : []),
           ];
           const next: AgentStatusLike = {
             ...member,
             ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.role !== undefined ? { role: input.role } : {}),
+            ...(input.teamId !== undefined ? { team_id: input.teamId } : {}),
           };
           members.set(next.id, next);
           return {
@@ -486,6 +490,185 @@ describe('agents.update', () => {
     expect(result.results[1]).toMatchObject({ ok: false, code: 'not_found' });
     // 跨 team 条目从未提交给服务。
     expect(calls.update).toEqual([{ agent_id: 'b1', name: 'beta-renamed' }]);
+  });
+
+  it('maps a role conversion to role, teamId and the human principal', async () => {
+    const { control, calls } = fakeAgentControl({
+      members: [status('a1', { team_id: 'alpha' })],
+    });
+
+    const result = (await methodOf(deps({ agent: control }), 'agents.update').handler(
+      { agents: [{ agent_id: 'a1', role: 'member', team_id: 'alpha' }] },
+      context(),
+    )) as { results: Array<Record<string, unknown>> };
+
+    expect(calls.update).toEqual([
+      { agent_id: 'a1', role: 'member', teamId: 'alpha', from: 'human' },
+    ]);
+    expect(result.results[0]).toMatchObject({
+      ok: true,
+      agent: { id: 'a1', role: 'member', team_id: 'alpha' },
+    });
+  });
+
+  it('uses the owner agent id as the converter principal', async () => {
+    const { control, calls } = fakeAgentControl({
+      members: [status('a1', { team_id: 'alpha' })],
+    });
+
+    await methodOf(deps({ agent: control }), 'agents.update').handler(
+      { agents: [{ agent_id: 'a1', role: 'temporary' }] },
+      context({ agent_id: 'owner-1' }),
+    );
+
+    expect(calls.update).toEqual([{ agent_id: 'a1', role: 'temporary', from: 'owner-1' }]);
+  });
+
+  it('keeps batch order across plain updates and role conversions', async () => {
+    const { control, calls } = fakeAgentControl({
+      members: [status('a1', { team_id: 'alpha' }), status('b1', { team_id: 'alpha' })],
+    });
+
+    const result = (await methodOf(deps({ agent: control }), 'agents.update').handler(
+      {
+        agents: [
+          { agent_id: 'a1', role: 'single' },
+          { agent_id: 'b1', name: 'bee' },
+        ],
+      },
+      context(),
+    )) as { results: Array<Record<string, unknown>> };
+
+    expect(result.results.map((entry) => entry.ok)).toEqual([true, true]);
+    // 非转换条目不带 from，保持旧调用形状。
+    expect(calls.update).toEqual([
+      { agent_id: 'a1', role: 'single', from: 'human' },
+      { agent_id: 'b1', name: 'bee' },
+    ]);
+  });
+
+  it('allows a team-scoped token to convert members within its own team', async () => {
+    const { control, calls } = fakeAgentControl({
+      members: [status('a1', { team_id: 'alpha' })],
+    });
+
+    const result = (await methodOf(deps({ agent: control }), 'agents.update').handler(
+      { agents: [{ agent_id: 'a1', role: 'temporary', team_id: 'alpha' }] },
+      context({ scope: 'control', team_id: 'alpha' }),
+    )) as { results: Array<Record<string, unknown>> };
+
+    expect(result.results[0]).toMatchObject({ ok: true });
+    expect(calls.update).toEqual([
+      { agent_id: 'a1', role: 'temporary', teamId: 'alpha', from: 'human' },
+    ]);
+  });
+
+  it('rejects single and other-team conversions for team-scoped tokens', async () => {
+    const { control, calls } = fakeAgentControl({
+      members: [status('a1', { team_id: 'alpha' })],
+    });
+
+    const result = (await methodOf(deps({ agent: control }), 'agents.update').handler(
+      {
+        agents: [
+          { agent_id: 'a1', role: 'single' },
+          { agent_id: 'a1', role: 'member', team_id: 'beta' },
+        ],
+      },
+      context({ scope: 'control', team_id: 'alpha' }),
+    )) as { results: Array<Record<string, unknown>> };
+
+    expect(result.results[0]).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(result.results[1]).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(calls.update).toEqual([]);
+  });
+
+  it('requires the target to be in the token team for role changes', async () => {
+    const { control, calls } = fakeAgentControl({
+      members: [status('b1', { team_id: 'beta' })],
+    });
+
+    const result = (await methodOf(deps({ agent: control }), 'agents.update').handler(
+      { agents: [{ agent_id: 'b1', role: 'member' }] },
+      context({ scope: 'control', team_id: 'alpha' }),
+    )) as { results: Array<Record<string, unknown>> };
+
+    expect(result.results[0]).toMatchObject({ ok: false, code: 'not_found' });
+    expect(calls.update).toEqual([]);
+  });
+
+  it('rejects an unknown role as invalid_params', async () => {
+    const { control, calls } = fakeAgentControl({
+      members: [status('a1', { team_id: 'alpha' })],
+    });
+
+    await expectRpcError(
+      async () =>
+        await methodOf(deps({ agent: control }), 'agents.update').handler(
+          { agents: [{ agent_id: 'a1', role: 'boss' }] },
+          context(),
+        ),
+      'invalid_params',
+    );
+    expect(calls.update).toEqual([]);
+  });
+});
+
+describe('agent status role', () => {
+  it('maps the membership role into the owner-view agents.list entry', async () => {
+    const { control } = fakeAgentControl({
+      members: [status('a1', { name: 'alice', role: 'member', team_id: 'alpha' })],
+    });
+
+    const result = (await methodOf(deps({ agent: control }), 'agents.list').handler(
+      {},
+      context({ agent_id: 'main' }),
+    )) as { agents: Array<Record<string, unknown>> };
+
+    expect(result.agents[0]).toMatchObject({ id: 'a1', role: 'member', team_id: 'alpha' });
+  });
+
+  it('declares the AgentRole enum on the status schema and keeps owner optional', () => {
+    expect(agentStatusSchema.properties.role).toEqual({
+      type: 'string',
+      enum: ['single', 'member', 'temporary'],
+    });
+    const required = agentStatusSchema.required as string[];
+    expect(required).not.toContain('owner');
+    expect(required).not.toContain('role');
+  });
+
+  it('validates a role-bearing agents.update result when result validation is enabled', async () => {
+    process.env.VESSEL_VALIDATE_RESULTS = '1';
+    try {
+      const { control } = fakeAgentControl({
+        members: [status('a1', { team_id: 'alpha' })],
+      });
+      const dispatcher = createRpcDispatcher({
+        table: defineMethods(createAgentMethods(deps({ agent: control }))),
+        localPrincipal: { tenant_id: 'default', role: 'write' },
+        makeContext: (_method, _params, resolved) => ({
+          principal: resolved,
+          tenantId: resolved.tenant_id,
+          isAdmin: false,
+          allTenants: false,
+          connection: 'http',
+        }),
+      });
+      const response = await dispatcher.dispatchFor(
+        {
+          v: 1,
+          id: 'role-update',
+          method: 'agents.update',
+          params: { agents: [{ agent_id: 'a1', role: 'member', team_id: 'alpha' }] },
+        },
+        { tenant_id: 'default', role: 'write' },
+        'http',
+      );
+      expect(response.ok).toBe(true);
+    } finally {
+      delete process.env.VESSEL_VALIDATE_RESULTS;
+    }
   });
 });
 

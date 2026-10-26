@@ -15,6 +15,7 @@ import type {
   AgentCreateLikeInput,
   AgentDispatchLikeInput,
   AgentLifecycleFailLike,
+  AgentRoleLike,
   AgentRotateLikeInput,
   AgentSendLikeInput,
   AgentStateLike,
@@ -124,6 +125,7 @@ function publicMember(entry: AgentStatusLike): Record<string, unknown> {
     state: entry.state,
     session_id: entry.session_id,
     ...(entry.name !== undefined ? { name: entry.name } : {}),
+    ...(entry.role !== undefined ? { role: entry.role } : {}),
     ...(entry.parent_id !== undefined ? { parent_id: entry.parent_id } : {}),
     ...(entry.current_tool !== undefined ? { current_tool: entry.current_tool } : {}),
     ...(entry.usage !== undefined ? { usage: entry.usage } : {}),
@@ -270,6 +272,16 @@ function optionalVisibility(
   if (value === undefined) return undefined;
   if (value !== 'private' && value !== 'team' && value !== 'tenant') {
     throw new RpcError('invalid_params', `${method}: visibility must be private, team or tenant`);
+  }
+  return value;
+}
+
+/** 可选角色；缺省 undefined，存在但非法 → invalid_params（结构错误整体拒绝）。 */
+function optionalRole(entry: Record<string, unknown>, method: string): AgentRoleLike | undefined {
+  const value = entry.role;
+  if (value === undefined) return undefined;
+  if (value !== 'single' && value !== 'member' && value !== 'temporary') {
+    throw new RpcError('invalid_params', `${method}: role must be single, member or temporary`);
   }
   return value;
 }
@@ -834,10 +846,12 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
     },
     {
       /**
-       * `agents.update`（0.25，write）：批量更新 name / model / system_prompt。
+       * `agents.update`（0.25，write；0.28 增加 role / team_id 转换）。
        *
-       * - 每个条目至少给一个字段；条目并行，结果与输入同序；
+       * - 每个条目至少给一个字段（含 role / team_id）；条目并行，结果与输入同序；
        * - team-scoped token 只能更新 `team_id` 与自身作用域相同的 agent（否则 `not_found`）；
+       *   角色转换只能转 member / temporary（同 team），不能转 single 或换 team（`forbidden`）；
+       * - 转换时 handler 传 `role`、`team_id → teamId`、`from = principal.agent_id ?? 'human'`；
        * - 改名立即生效，唯一性与创建一致（同 Team present 唯一；unbound 为 tenant 唯一），
        *   冲突返回稳定 `invalid_input`；
        * - model / system_prompt 只写入成员记录，**下一次 spawn 的 Body** 才使用；
@@ -860,6 +874,9 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 name: { type: 'string', minLength: 1 },
                 model: { type: 'string', minLength: 1 },
                 system_prompt: { type: 'string' },
+                // 0.28：角色转换（single / member / temporary）与目标 Team。
+                role: { type: 'string', enum: ['single', 'member', 'temporary'] },
+                team_id: { type: 'string', minLength: 1 },
               },
             },
           },
@@ -880,11 +897,19 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             const name = optionalEntryString(entry, 'name', 'agents.update');
             const model = optionalEntryString(entry, 'model', 'agents.update');
             const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.update');
-            if (name === undefined && model === undefined && systemPrompt === undefined) {
+            const role = optionalRole(entry, 'agents.update');
+            const teamId = optionalEntryString(entry, 'team_id', 'agents.update');
+            if (
+              name === undefined &&
+              model === undefined &&
+              systemPrompt === undefined &&
+              role === undefined &&
+              teamId === undefined
+            ) {
               return {
                 failure: fail(
                   'invalid_params',
-                  'at least one of name, model or system_prompt is required',
+                  'at least one of name, model, system_prompt, role or team_id is required',
                 ),
               };
             }
@@ -893,13 +918,30 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
               if (!target || target.team_id !== scope) {
                 return { failure: fail('not_found', `agent not found: ${agentId}`) };
               }
+              if (role === 'single') {
+                return {
+                  failure: fail('forbidden', 'team-scoped token cannot convert members to single'),
+                };
+              }
+              if (teamId !== undefined && teamId !== scope) {
+                return {
+                  failure: fail(
+                    'forbidden',
+                    'team-scoped token cannot move members to another team',
+                  ),
+                };
+              }
             }
+            const conversion = role !== undefined || teamId !== undefined;
             return {
               input: {
                 agent_id: agentId,
                 ...(name !== undefined ? { name } : {}),
                 ...(model !== undefined ? { model } : {}),
                 ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
+                ...(role !== undefined ? { role } : {}),
+                ...(teamId !== undefined ? { teamId } : {}),
+                ...(conversion ? { from: actorOf(ctx) } : {}),
               },
             };
           }),

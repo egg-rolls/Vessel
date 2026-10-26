@@ -92,6 +92,9 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.model !== undefined ? { model: input.model } : {}),
           ...(input.system_prompt !== undefined ? { systemPrompt: input.system_prompt } : {}),
+          ...(input.role !== undefined ? { role: input.role } : {}),
+          ...(input.teamId !== undefined ? { teamId: input.teamId } : {}),
+          ...(input.from !== undefined ? { from: input.from } : {}),
         })),
       });
       return mapLifecycle(batch.results, (result) => ({

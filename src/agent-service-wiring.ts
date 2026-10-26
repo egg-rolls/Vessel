@@ -190,6 +190,12 @@ class OwnerAwareMemberRuntime implements MemberRuntimePort {
     const apply = this.inner.applyPermissionRules;
     return typeof apply === 'function' ? apply.call(this.inner, rules) : 0;
   }
+
+  /** CONTRACT-role-model §5：身份变更 notice 原样转发；未实现时 no-op。 */
+  notice(memberId: string, text: string): void {
+    const notice = this.inner.notice;
+    if (typeof notice === 'function') notice.call(this.inner, memberId, text);
+  }
 }
 
 /** 构造成员 runtime + AgentService，并注册 root owner（不 spawn） */

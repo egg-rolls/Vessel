@@ -124,16 +124,20 @@ export const sessionSearchHitSchema = {
   },
 };
 
+/** 成员角色（AgentRole）；member / temporary / single 的转换入口是 agents.update。 */
+const agentRoleEnum = ['single', 'member', 'temporary'];
+
 /**
  * agents.list / agents.get 的条目（0.14 P0，DECISION-025 §1.4）。
  * 只声明冻结字段；`state` 同时覆盖 Host AgentState 与 run/派生状态。
+ * `role` 同时承载运行期注册表角色（main / subagent）与 v3 成员角色。
  */
 export const agentInfoSchema = {
   type: 'object',
   required: ['id', 'depth', 'state'],
   properties: {
     id: { type: 'string' },
-    role: { type: 'string' },
+    role: { type: 'string', enum: ['main', 'subagent', ...agentRoleEnum] },
     parent_id: { type: 'string' },
     depth: { type: 'integer', minimum: 0 },
     state: {
@@ -678,13 +682,14 @@ export const teamDetailSchema = {
  */
 export const agentStatusSchema = {
   type: 'object',
-  // owner 可选：缺省表示 peer（无 owner）。
+  // owner 可选：缺省表示 peer（无 owner）；role 对旧快照也可缺省。
   required: ['id', 'session_id', 'visibility', 'state'],
   properties: {
     id: { type: 'string' },
     session_id: { type: 'string' },
     name: { type: 'string' },
     parent_id: { type: 'string' },
+    role: { type: 'string', enum: agentRoleEnum },
     owner: { type: 'string' },
     visibility: { type: 'string', enum: ['private', 'team', 'tenant'] },
     state: {

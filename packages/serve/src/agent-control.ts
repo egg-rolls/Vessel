@@ -14,6 +14,9 @@
 /** 成员可见性（与 packages/agent 的 MemberVisibility 同值）。 */
 export type AgentVisibilityLike = 'private' | 'team' | 'tenant';
 
+/** 成员角色（与 packages/agent 的 AgentRole 同值）；转换只经 `agents.update`。 */
+export type AgentRoleLike = 'single' | 'member' | 'temporary';
+
 /** 成员状态机值（含只读 legacy `stale`）。 */
 export type AgentStateLike =
   | 'created'
@@ -32,6 +35,8 @@ export interface AgentStatusLike {
   session_id: string;
   name?: string;
   parent_id?: string;
+  /** v3 成员角色；旧快照可能缺省。 */
+  role?: AgentRoleLike;
   /** 归属 principal；缺省 = peer（无 owner） */
   owner?: string;
   visibility: AgentVisibilityLike;
@@ -119,6 +124,12 @@ export interface AgentUpdateLikeInput {
   name?: string;
   model?: string;
   system_prompt?: string;
+  /** 目标角色；缺省 = 不转换。 */
+  role?: AgentRoleLike;
+  /** wire 的 `team_id`；转换目标 Team（缺省语义由服务按目标角色决定）。 */
+  teamId?: string;
+  /** 转换发起者：`principal.agent_id ?? 'human'`；只随角色 / Team 转换发送。 */
+  from?: string;
 }
 
 /** 成功条目：create / update 返回成员状态；update 额外带变化字段。 */
