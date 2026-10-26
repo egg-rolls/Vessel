@@ -1036,9 +1036,10 @@ describe('InProcessMemberRuntime.applyPermissionRules（CONTRACT-hot-apply §4�
     });
 
     expect(count).toBe(2);
+    // 成员 Body 在 owner 同源规则上恒定保留 `agent` 免确认（与装配期约定一致）。
     expect(applied).toEqual([
-      [{ default: 'ask', autoApprove: ['bash'], neverAutoApprove: [] }],
-      [{ default: 'ask', autoApprove: ['bash'], neverAutoApprove: [] }],
+      [{ default: 'ask', autoApprove: ['bash', 'agent'], neverAutoApprove: [] }],
+      [{ default: 'ask', autoApprove: ['bash', 'agent'], neverAutoApprove: [] }],
     ]);
   });
 
@@ -1053,6 +1054,87 @@ describe('InProcessMemberRuntime.applyPermissionRules（CONTRACT-hot-apply §4�
     await runtime.spawn(target);
     await runtime.dispose(target);
     expect(apply?.({ default: 'ask' })).toBe(0);
+  });
+});
+
+describe('InProcessMemberRuntime permission rules at spawn（auto_approve 不丢失）', () => {
+  it('spawn builds the Body with the configured autoApprove / neverAutoApprove', async () => {
+    const captured: AgentRuntimeOptions[] = [];
+    const runtime = createInProcessMemberRuntime({
+      providerFactory: echoProviders().providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash', 'ask')]),
+      permission: { default: 'ask', autoApprove: ['bash'], neverAutoApprove: ['agent.close'] },
+      runtimeFactory: capturingRuntimeFactory(captured),
+    });
+
+    await runtime.spawn(member());
+
+    expect(captured[0]?.permission).toEqual({
+      default: 'ask',
+      autoApprove: ['bash', 'agent'],
+      neverAutoApprove: ['agent.close'],
+    });
+  });
+
+  it('rules hot-applied before the Body exists are picked up by the next spawn', async () => {
+    const captured: AgentRuntimeOptions[] = [];
+    const runtime = createInProcessMemberRuntime({
+      providerFactory: echoProviders().providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash', 'ask')]),
+      permission: { default: 'ask', autoApprove: [] },
+      runtimeFactory: capturingRuntimeFactory(captured),
+    });
+
+    // 没有存活 Body：热应用只更新运行时基线，不计入 applied。
+    expect(
+      runtime.applyPermissionRules?.({
+        default: 'ask',
+        autoApprove: ['bash', 'edit'],
+        neverAutoApprove: [],
+      }),
+    ).toBe(0);
+
+    await runtime.spawn(member());
+
+    expect(captured[0]?.permission?.autoApprove).toEqual(['bash', 'edit', 'agent']);
+  });
+
+  it('an auto-approved tool does not forward a permission request to the parent', async () => {
+    const parentEvents = new MemoryEventStream();
+    const { providerFactory } = toolThenEchoProvider('bash');
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash', 'ask')]),
+      permission: { default: 'ask', autoApprove: ['bash'] },
+      permissionMode: 'bridge',
+      parentEvents,
+    });
+    const target = member({ parent_id: 'main' });
+    await runtime.spawn(target);
+
+    let requests = 0;
+    parentEvents.subscribe((event) => {
+      if (event.type !== 'tool.permission.request') return;
+      requests += 1;
+      // 如果规则丢失而误弹卡片，自动放行以保证断言失败而不是测试挂起。
+      parentEvents.publish({
+        type: 'tool.permission.response',
+        run_id: event.run_id,
+        data: {
+          requestId: (event.data as Record<string, unknown>).requestId,
+          decision: 'allow',
+        },
+        ts: Date.now(),
+      });
+    });
+
+    const result = await runtime.runTurn(target, message('run bash'));
+
+    expect(result.content).toBe('final:bash:ok');
+    expect(requests).toBe(0);
   });
 });
 

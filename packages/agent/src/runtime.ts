@@ -57,6 +57,18 @@ const DEFAULT_TERMINATION: TerminationPolicy = { maxIterations: 10, maxRuntimeSe
 /** 缺省上下文预算 */
 const DEFAULT_CONTEXT_MAX_TOKENS = 1_000_000;
 
+/**
+ * 成员 Body 恒定免确认的工具：`agent` 工具只允许成员操作自己（rotate）/ 可见 roster
+ * / 自有 contractor，close 的审批由工具 `checkPermission` 与 `neverAutoApprove`
+ * （`agent.close`）决定。owner 同源规则在热应用时会整体替换，这里每次应用前补回。
+ */
+function withMemberAutoApprove(rules: RuntimePermissionConfig): RuntimePermissionConfig {
+  return {
+    ...rules,
+    autoApprove: [...new Set([...(rules.autoApprove ?? []), 'agent'])],
+  };
+}
+
 /** 未 spawn 成员的待注入 notice 上限（按成员条数 / 成员数双边界） */
 const MAX_PENDING_NOTICES = 20;
 const MAX_PENDING_NOTICE_MEMBERS = 100;
@@ -392,7 +404,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.permissionMode = options.permissionMode ?? 'allow';
     this.forceBridgeForTeams = options.forceBridgeForTeams !== false;
     this.permissionPolicy = options.permissionPolicy;
-    this.permission = options.permission;
+    this.permission =
+      options.permission !== undefined ? withMemberAutoApprove(options.permission) : undefined;
     this.parentEvents = options.parentEvents;
     this.onPermissionState = options.onPermissionState;
     this.onMemberEvent = options.onMemberEvent;
@@ -444,8 +457,10 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       pluginHost,
       limits: this.limits,
       termination: this.termination,
-      // 所有工具都包了 checkPermission；这里只是兜底，不让未包装的工具走交互等待。
-      permission: { default: 'allow' },
+      // 与 owner 同源的权限规则：工具 checkPermission 返回 ask 时，core 仍按
+      // autoApprove / neverAutoApprove 判定，否则 auto_approve 的 bash/edit 会在
+      // 成员 Body 上重新弹卡片（热应用后新建的 Body 同样走这里）。
+      permission: this.permission ?? { default: 'allow' },
       selfCard,
       agentId: member.id,
       logger: this.logger,
@@ -608,7 +623,10 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * `members` 有记录但尚未 spawn 出 Body 时没有可应用的 runtime，跳过并计入未应用。
    */
   applyPermissionRules(rules: RuntimePermissionConfig): number {
-    this.permission = rules;
+    // 热应用来自 owner 同源配置；补回成员自有的 `agent` 免确认后同时供存活的
+    // Body 与之后新建的 Body（spawn）使用。
+    const memberRules = withMemberAutoApprove(rules);
+    this.permission = memberRules;
     let applied = 0;
     for (const [sessionId, entry] of this.entries) {
       const runtime = entry.runtime as MemberRunnableAgent & {
@@ -616,7 +634,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       };
       if (typeof runtime.applyPermissionRules !== 'function') continue;
       try {
-        runtime.applyPermissionRules(rules);
+        runtime.applyPermissionRules(memberRules);
         applied += 1;
       } catch (error) {
         // 单个 Body 失败不影响其它 Body；装配层按数量判定是否全部生效。
