@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemberDetail } from '../src/domains/team/MemberDetail';
 import { TeamChat } from '../src/domains/team/TeamChat';
 import { matchesQuery, TeamList } from '../src/domains/team/TeamList';
+import { TeamMemberSidebar } from '../src/domains/team/TeamMemberSidebar';
 import type {
   SessionDetail,
   TeamDetail,
@@ -300,6 +301,60 @@ describe('TeamChat', () => {
     });
     expect(markup).toContain('state-not-enabled');
     expect(markup).toContain(t('team.error.notEnabled'));
+  });
+});
+
+describe('TeamMemberSidebar', () => {
+  test('shows members before temporaries while keeping server order inside each group', () => {
+    const grouped: TeamMember[] = [
+      {
+        agent_id: 'peer-1',
+        name: 'Peer One',
+        membership: 'present',
+        presence: 'live',
+        visibility: 'team',
+      },
+      {
+        agent_id: 'temp-1',
+        name: 'Temp One',
+        membership: 'present',
+        presence: 'live',
+        visibility: 'team',
+        owner: 'owner-1',
+      },
+      {
+        agent_id: 'peer-2',
+        name: 'Peer Two',
+        membership: 'present',
+        presence: 'gone',
+        visibility: 'team',
+      },
+      {
+        agent_id: 'temp-2',
+        name: 'Temp Two',
+        membership: 'present',
+        presence: 'gone',
+        visibility: 'team',
+        owner: 'owner-1',
+      },
+    ];
+    const markup = renderToStaticMarkup(
+      <TeamMemberSidebar
+        members={grouped}
+        permissions={[]}
+        asks={[]}
+        onOpenMember={() => undefined}
+        onOpenSession={() => undefined}
+      />,
+    );
+    const peerOne = markup.indexOf('Peer One');
+    const peerTwo = markup.indexOf('Peer Two');
+    const tempOne = markup.indexOf('Temp One');
+    const tempTwo = markup.indexOf('Temp Two');
+    expect(peerOne).toBeGreaterThan(-1);
+    expect(peerTwo).toBeGreaterThan(peerOne);
+    expect(tempOne).toBeGreaterThan(peerTwo);
+    expect(tempTwo).toBeGreaterThan(tempOne);
   });
 });
 

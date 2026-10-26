@@ -29,7 +29,14 @@ function errorMessage(error: unknown): string {
  * 保存走 canonical `permissions.setToolPolicy`，随后立即 `gateway.reload(['permission'])`。
  * 旧 gateway 缺 `permissions.setToolPolicy` 时控件禁用并提示需要更新的 gateway。
  */
-export function ToolPolicyControl({ tool }: { tool: ToolInfo }) {
+export function ToolPolicyControl({
+  tool,
+  onPolicySaved,
+}: {
+  tool: ToolInfo;
+  /** 策略落盘后通知父列表刷新自己的 `config.get`（卡片徽章与之共享状态）。 */
+  onPolicySaved?: () => void;
+}) {
   const { client, connectionState, hasToken } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const [saving, setSaving] = useState(false);
@@ -70,8 +77,10 @@ export function ToolPolicyControl({ tool }: { tool: ToolInfo }) {
     if (!interactive || policy === toolPolicyOf(lists, target)) return;
     setSaving(true);
     setStatus(null);
+    let persisted = false;
     try {
       const result = await client.setToolPolicy(target, policy);
+      persisted = true;
       setWritten({
         autoApprove: result.auto_approve,
         neverAutoApprove: result.never_auto_approve,
@@ -96,6 +105,8 @@ export function ToolPolicyControl({ tool }: { tool: ToolInfo }) {
     } finally {
       setSaving(false);
       configResource.reload();
+      // 父列表用另一个 config.get 渲染卡片徽章；不清 Pinia，仍走 useResource。
+      if (persisted) onPolicySaved?.();
     }
   };
 

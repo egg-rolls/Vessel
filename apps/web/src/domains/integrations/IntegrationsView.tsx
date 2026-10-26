@@ -269,7 +269,7 @@ function ToolsPanel() {
               <p className="m-0 text-md leading-relaxed text-muted">{detail.description}</p>
             )}
           </div>
-          <ToolPolicyControl tool={detail} />
+          <ToolPolicyControl tool={detail} onPolicySaved={configResource.reload} />
           <JsonView
             value={detail.input_schema}
             label={t('integrations.tools.schema')}

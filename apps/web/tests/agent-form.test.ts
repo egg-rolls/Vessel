@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   type AgentDraft,
+  agentCreateError,
   buildAgentCreateInput,
   buildAgentUpdateInput,
 } from '../src/domains/agents/agent-form';
@@ -17,17 +18,46 @@ const draft = (overrides: Partial<AgentDraft> = {}): AgentDraft => ({
   model: '',
   systemPrompt: '',
   teamId: '',
+  kind: 'peer',
   ...overrides,
 });
 
 describe('buildAgentCreateInput', () => {
-  test('omits empty fields and binds a team only when selected', () => {
-    expect(buildAgentCreateInput(draft())).toEqual({});
+  test('always sends kind and omits other empty fields', () => {
+    expect(buildAgentCreateInput(draft())).toEqual({ kind: 'peer' });
+    expect(buildAgentCreateInput(draft({ kind: 'contractor' }))).toEqual({
+      kind: 'contractor',
+    });
     expect(
       buildAgentCreateInput(
-        draft({ name: ' Alice ', model: ' m1 ', systemPrompt: ' be nice ', teamId: 'core' }),
+        draft({
+          kind: 'contractor',
+          name: ' Alice ',
+          model: ' m1 ',
+          systemPrompt: ' be nice ',
+          teamId: 'core',
+        }),
       ),
-    ).toEqual({ name: 'Alice', model: 'm1', system_prompt: 'be nice', team_id: 'core' });
+    ).toEqual({
+      kind: 'contractor',
+      name: 'Alice',
+      model: 'm1',
+      system_prompt: 'be nice',
+      team_id: 'core',
+    });
+  });
+});
+
+describe('agentCreateError', () => {
+  test('rejects a peer without a Team but allows an unbound temporary', () => {
+    expect(agentCreateError(draft())).toBe('peer_requires_team');
+    expect(agentCreateError(draft({ teamId: 'core' }))).toBeUndefined();
+    expect(agentCreateError(draft({ kind: 'contractor' }))).toBeUndefined();
+    expect(agentCreateError(draft({ kind: 'contractor', teamId: 'core' }))).toBeUndefined();
+  });
+
+  test('treats a missing kind as peer on the shared draft', () => {
+    expect(agentCreateError({ ...draft(), kind: undefined })).toBe('peer_requires_team');
   });
 });
 

@@ -507,8 +507,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.member.observedOnly':
     'Observed during this page session; after a refresh only the current Body is shown.',
   'team.member.currentSession': 'View current session',
-  'team.member.peer': 'peer',
-  'team.member.contractor': 'contractor',
+  'team.member.peer': 'member',
+  'team.member.contractor': 'temporary',
 
   'team.error.notFound': 'Team not found',
   'team.error.notEnabled': 'Team is not enabled',
@@ -759,6 +759,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'agents.form.modelHint': 'Applies from the next Body; leave blank to keep unchanged.',
   'agents.form.systemPrompt': 'System prompt',
   'agents.form.systemPromptHint': 'Applies from the next Body; leave blank to keep unchanged.',
+  'agents.form.kind': 'Type',
+  'agents.form.kindPeer': 'Member (requires Team)',
+  'agents.form.kindContractor': 'Temporary (Team optional)',
+  'agents.form.peerRequiresTeam':
+    'A member must be bound to a Team. Select a Team or switch to Temporary.',
   'agents.form.unbound': 'Unbound',
   'agents.form.noChange': 'Change at least one field.',
   'agents.form.created': 'Created agent {name}',

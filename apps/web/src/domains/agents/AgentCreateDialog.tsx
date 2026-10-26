@@ -14,7 +14,12 @@ import type { TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { useNodeNames } from '../nodes/useNodeNames';
 import { agentErrorText } from './agent-errors';
-import { type AgentDraft, buildAgentCreateInput } from './agent-form';
+import {
+  type AgentDraft,
+  type AgentKind,
+  agentCreateError,
+  buildAgentCreateInput,
+} from './agent-form';
 
 export interface AgentCreateDialogProps {
   nodes: readonly NodeView[];
@@ -24,7 +29,13 @@ export interface AgentCreateDialogProps {
   onSaved: () => void;
 }
 
-const EMPTY_DRAFT: AgentDraft = { name: '', model: '', systemPrompt: '', teamId: '' };
+const EMPTY_DRAFT: AgentDraft = {
+  name: '',
+  model: '',
+  systemPrompt: '',
+  teamId: '',
+  kind: 'peer',
+};
 
 export function AgentCreateDialog({
   nodes,
@@ -49,6 +60,7 @@ export function AgentCreateDialog({
   const node = nodes.find((item) => nodeKeyOf(item) === nodeKey);
   const teams = node ? teamsForNode(nodeKeyOf(node)) : [];
   const title = t('agents.create.title');
+  const peerNeedsTeam = agentCreateError(draft) === 'peer_requires_team';
 
   const set = (key: keyof AgentDraft) => (value: string) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -57,7 +69,7 @@ export function AgentCreateDialog({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy || !node) return;
+    if (busy || !node || peerNeedsTeam) return;
     setBusy(true);
     setError(null);
     try {
@@ -104,7 +116,27 @@ export function AgentCreateDialog({
             </Select>
           </Field>
 
-          <Field label={t('agents.filter.team')} htmlFor="agent-create-team">
+          <Field label={t('agents.form.kind')} htmlFor="agent-create-kind">
+            <Select
+              id="agent-create-kind"
+              value={draft.kind ?? 'peer'}
+              onChange={(event) => {
+                setDraft((prev) => ({ ...prev, kind: event.target.value as AgentKind }));
+                setError(null);
+              }}
+              aria-label={t('agents.form.kind')}
+            >
+              <option value="peer">{t('agents.form.kindPeer')}</option>
+              <option value="contractor">{t('agents.form.kindContractor')}</option>
+            </Select>
+          </Field>
+
+          <Field
+            label={t('agents.filter.team')}
+            htmlFor="agent-create-team"
+            required={(draft.kind ?? 'peer') === 'peer'}
+            hint={peerNeedsTeam ? t('agents.form.peerRequiresTeam') : undefined}
+          >
             <Select
               id="agent-create-team"
               value={draft.teamId}
@@ -168,7 +200,7 @@ export function AgentCreateDialog({
           <Button onClick={onClose} disabled={busy}>
             {t('common.cancel')}
           </Button>
-          <Button type="submit" variant="primary" disabled={busy || !node}>
+          <Button type="submit" variant="primary" disabled={busy || !node || peerNeedsTeam}>
             {busy ? t('common.processing') : t('team.form.submitCreate')}
           </Button>
         </div>

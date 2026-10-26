@@ -1,10 +1,12 @@
 /**
  * Team 成员侧栏：presence / engine state / attention / Body 入口。
  *
- * 顺序唯一来源是服务端 `teams.get` 的 `members` 窗口（DECISION-038 §2.3：
- * live → last_seen desc → name），这里**不得重新排序**。
+ * 分组是 UI 展示规则：成员（owner 缺失）在前，临时（owner 存在）在后；
+ * 组内保持服务端 `teams.get` 的 `members` 窗口原有顺序（DECISION-038 §2.3：
+ * live → last_seen desc → name），不在组内重新排序。
  * `left` 成员整行降透明度，只保留查看动作。
  */
+import { useMemo } from 'react';
 import { ActionMenu } from '../../components/ActionMenu';
 import { StatusChip } from '../../components/StatusChip';
 import { iconButtonClass } from '../../components/Tooltip';
@@ -24,6 +26,17 @@ export function attentionCount(
   const pendingPermissions = permissions.filter((item) => item.sessionId === sessionId).length;
   const pendingAsks = asks.filter((item) => item.sessionId === sessionId).length;
   return pendingPermissions + pendingAsks;
+}
+
+/** 成员（无 owner）在前，临时（有 owner）在后；各自保持传入顺序。 */
+export function groupTeamMembers(members: readonly TeamMember[]): TeamMember[] {
+  const peers: TeamMember[] = [];
+  const contractors: TeamMember[] = [];
+  for (const member of members) {
+    if (member.owner === undefined) peers.push(member);
+    else contractors.push(member);
+  }
+  return [...peers, ...contractors];
 }
 
 function copyAgentId(agentId: string): void {
@@ -53,6 +66,7 @@ export function TeamMemberSidebar({
   onClose,
 }: TeamMemberSidebarProps) {
   const totalCount = total ?? members.length;
+  const ordered = useMemo(() => groupTeamMembers(members), [members]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -77,7 +91,7 @@ export function TeamMemberSidebar({
         className="flex min-h-0 flex-1 list-none flex-col gap-0.5 overflow-y-auto overscroll-contain px-2 pb-3"
         aria-label={t('team.a11y.memberList')}
       >
-        {members.map((member) => {
+        {ordered.map((member) => {
           const status = memberStatus(member);
           const sessionId = member.session_id;
           const attention = attentionCount(member, permissions, asks);

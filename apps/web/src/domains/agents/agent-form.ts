@@ -1,12 +1,25 @@
 /** Agent create / edit 表单（纯函数）：裁剪、空值省略、至少一个有效变更。 */
 import type { AgentCreateInput, AgentUpdateInput } from '../../gateway/types';
 
+export type AgentKind = 'peer' | 'contractor';
+
 export interface AgentDraft {
   name: string;
   model: string;
   systemPrompt: string;
   /** 创建时的 Team；空串 = unbound。 */
   teamId: string;
+  /** 创建判别；编辑表单忽略。缺省按 `peer` 处理。 */
+  kind?: AgentKind;
+}
+
+export type AgentCreateError = 'peer_requires_team';
+
+/** peer 必须绑定 Team；contractor 可 unbound。 */
+export function agentCreateError(draft: AgentDraft): AgentCreateError | undefined {
+  return (draft.kind ?? 'peer') === 'peer' && trimmed(draft.teamId) === ''
+    ? 'peer_requires_team'
+    : undefined;
 }
 
 export type AgentUpdateError = 'no_change';
@@ -21,13 +34,14 @@ function trimmed(value: string): string {
   return value.trim();
 }
 
-/** 创建：空字段不发送；`team_id` 只有显式选择时才绑定。 */
+/** 创建：`kind` 始终发送；空字段不发送；`team_id` 只有显式选择时才绑定。 */
 export function buildAgentCreateInput(draft: AgentDraft): AgentCreateInput {
   const name = trimmed(draft.name);
   const model = trimmed(draft.model);
   const systemPrompt = trimmed(draft.systemPrompt);
   const teamId = trimmed(draft.teamId);
   return {
+    kind: draft.kind ?? 'peer',
     ...(name !== '' ? { name } : {}),
     ...(model !== '' ? { model } : {}),
     ...(systemPrompt !== '' ? { system_prompt: systemPrompt } : {}),
