@@ -4,8 +4,9 @@
  *
  * 提供两件东西：
  * - `subscribe` 工具：显式 add / remove / list / inspect 具体文件（无 glob、无自动订阅）。
- * - `BeforeLlm` hook：每个 run 第一次 LLM 请求前检查订阅文件，返回一条只含
- *   path / id / rev / bytes 的短通知（`additionalContext`，不写历史）；
+ * - `BeforeLlm` hook：每个 run 第一次 LLM 请求前检查订阅文件，向 `ctx.messages`
+ *   追加一条只含 path / id / rev / bytes 的持久化尾部消息
+ *   （`role: user` + `name: 'vessel:subscription'`，不改写 system）；
  *   正文只在模型显式 `inspect` 时返回。
  *
  * 不新增 core 模型 / 事件；订阅状态按 session 存在 `stateDir` 下。

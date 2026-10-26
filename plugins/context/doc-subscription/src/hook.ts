@@ -2,13 +2,14 @@
  * @vessel-agent/doc-subscription - BeforeLlm 变更通知
  * @module @vessel-agent/doc-subscription/hook
  *
- * 每个 run 的第一次 BeforeLlm 检查一次订阅文件，返回一条**只含元数据**的短通知
- * （`HookResult.additionalContext`，仅本次请求的 system 上下文，不写入历史）。
+ * 每个 run 的第一次 BeforeLlm 检查一次订阅文件，向 `ctx.messages` 追加一条
+ * **只含元数据**的持久化尾部消息（`role: user` + `name: 'vessel:subscription'`），
+ * 不改写 system、不再经 `HookResult.additionalContext` 注入。
  *
  * - 通知不含正文 / diff，只列 path、id、rev、bytes；
- * - 通知返回后推进 `notified_rev`，同一 rev 不再重复通知；
+ * - 通知写入后推进 `notified_rev`，同一 rev 不再重复通知；
  * - 正文只在模型显式调用 `subscribe inspect` 时返回，届时才推进 `seen_rev`。
- * - `ctx.messages` 从不写入；文件正文不进入 trace / 日志（插件不主动写）。
+ * - 文件正文不进入 trace / 日志（插件不主动写）。
  */
 
 import { createHash } from 'node:crypto';
@@ -227,7 +228,14 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       }
 
       if (changedCount === 0) return;
-      return { additionalContext: buildNotice(lines, changedCount) };
+      const message = {
+        role: 'user' as const,
+        name: 'vessel:subscription',
+        content: buildNotice(lines, changedCount),
+        timestamp: now,
+      };
+      ctx.messages = [...(ctx.messages ?? []), message];
+      return;
     },
   };
 }

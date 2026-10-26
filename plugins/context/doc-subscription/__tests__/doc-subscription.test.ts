@@ -83,18 +83,29 @@ async function runTool(
   return tool.handler(args, toolCtx(sessionId));
 }
 
-/** 最小 HookContext */
+/** 最小 HookContext（带基底 systemPrompt，用于断言它不被改写） */
+const BASE_SYSTEM = 'BASE-SYSTEM';
 function hookCtx(runId: string, sessionId = 'session'): HookContext {
-  return { run_id: runId, session_id: sessionId };
+  return { run_id: runId, session_id: sessionId, systemPrompt: BASE_SYSTEM };
 }
 
-/** 跑一次 hook；断言它从不写 ctx.messages；返回 additionalContext（无通知时为空串） */
+/**
+ * 跑一次 hook；断言 systemPrompt 未被改写，且最多写入一条 `vessel:subscription`
+ * 消息；返回该消息的 content（无通知时为空串）。
+ */
 async function hookNotice(hook: Hook, runId: string, sessionId = 'session'): Promise<string> {
   const ctx = hookCtx(runId, sessionId);
   const result = await hook.run(ctx);
-  expect(ctx.messages).toBeUndefined();
-  if (result === undefined) return '';
-  return typeof result.additionalContext === 'string' ? result.additionalContext : '';
+  expect(result).toBeUndefined();
+  expect(ctx.systemPrompt).toBe(BASE_SYSTEM);
+  const messages = ctx.messages ?? [];
+  if (messages.length === 0) return '';
+  expect(messages).toHaveLength(1);
+  const message = at(messages, 0);
+  expect(message.role).toBe('user');
+  expect(message.name).toBe('vessel:subscription');
+  expect(typeof message.timestamp).toBe('number');
+  return message.content;
 }
 
 /** 取数组中指定元素；缺失即测试失败（避免 `!` 断言） */
@@ -178,7 +189,7 @@ describe('subscribe tool', () => {
 });
 
 describe('BeforeLlm notice', () => {
-  test('notice contains metadata only, never content or diff, and never writes ctx.messages', async () => {
+  test('notice is a persisted vessel:subscription tail message with metadata only', async () => {
     const { base, tool, hook } = setup();
     const file = path.join(base, 'doc.md');
     writeFileSync(file, 'SECRET-CONTENT\nline two\n', 'utf-8');
@@ -203,7 +214,11 @@ describe('BeforeLlm notice', () => {
 
     const first = await hookNotice(hook, 'run-1');
     expect(first).toContain('Subscribed files changed: 1');
-    expect(await hookNotice(hook, 'run-2')).toBe('');
+
+    // 同一 rev 的后续 run 不再写入通知消息（不重复）。
+    const repeat = hookCtx('run-2');
+    await hook.run(repeat);
+    expect(repeat.messages ?? []).toHaveLength(0);
 
     writeFileSync(file, 'two\n', 'utf-8');
     const third = await hookNotice(hook, 'run-3');

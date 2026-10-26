@@ -1464,6 +1464,18 @@ export class AgentRuntime {
         },
         ts: Date.now(),
       });
+      // 预警同时作为一条持久化尾部消息进入模型上下文（不改 system）。
+      // publishLimitWarnings 在每轮请求组装前调用，因此本轮请求即可看到。
+      const percent = warning.max > 0 ? Math.round((warning.current / warning.max) * 100) : 0;
+      this.addContext(
+        {
+          role: 'user',
+          name: 'vessel:limit',
+          content: `[runtime] ${warning.key}: ${warning.current}/${warning.max} (${percent}%) — ${warning.hint}`,
+          timestamp: Date.now(),
+        },
+        execution.runId,
+      );
     }
   }
 
