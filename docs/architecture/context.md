@@ -34,7 +34,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/agent-runtime.ts
 | owner 队列 | 成员回复 | `agent-owner-injection` BeforeLlm → `ctx.messages` | 本轮 user 后 | 是 |
 | `runtime.notice` | 热应用 / 版本通知 | `runtime-notice-hook` → `vessel:notice` | 尾部 | 是 |
 | 文档订阅 | `<subscription-notice>` 短通知 | doc-subscription → `vessel:subscription` | 尾部 | 是 |
-| 80% 预算预警 | `[runtime] context: 82% ...` | core `publishLimitWarnings` → `vessel:limit` | 尾部 | 是 |
+| 80% 预算预警（`limits.*` / `termination.*`） | `[runtime] input_tokens_limit: 820k/1M ...` | core `publishLimitWarnings` → `vessel:limit` | 尾部 | 是 |
 | 旧 `additionalContext` | 任意 hook | 自动转 `vessel:hook` | 尾部 | 是 |
 | 任意 BeforeLlm hook | 自定义消息 | `ctx.messages` | 尾部 | 是（每 run 一次） |
 | LLM 输出 / 工具结果 | assistant / tool | `llm.response` / `tool.call.*` | 顺序 | 是 |
@@ -76,8 +76,8 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/agent-runtime.ts
 | 结果 | `role: system` + `compaction_summary: true`；旧摘要移除，system 提前 |
 | 事件 | `context.compacted`（auto / overflow / manual） |
 
-压缩摘要当前主要靠 **session cache** 恢复；`projectMessages` 支持 `message.compaction`，
-但运行时主路径没有为每次压缩发这条事件。
+压缩摘要主要靠 session cache 恢复；事件日志未为每次压缩发 `message.compaction`。
+**两个 80% 不是一回事**：`context.compactThreshold` 触发压缩；`limits.inputTokensLimit` 80% 触发 `vessel:limit`。默认都 1M，但机制独立。压缩**未废弃**；`rotate` 是独立换 Body，不自动触发；overflow 仍 `forceCompact` 后重试一次。
 
 <a id="prefix"></a>
 
