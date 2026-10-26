@@ -853,6 +853,12 @@ export class GatewayClient {
     return this.rpc<TeamSummary>('teams.spawnFrozen', { team_id: teamId, frozen });
   }
 
+  /** canonical `agents.list`；管理面 token 会额外返回 private single。 */
+  async listAgents(): Promise<AgentSummary[]> {
+    const body = await this.rpc<{ agents?: AgentSummary[] }>('agents.list', {});
+    return Array.isArray(body?.agents) ? body.agents : [];
+  }
+
   // ── Agent CRUD（0.25；canonical `agents.create|update|close`）──
   // update 的 model / system_prompt 从下一个 Body 生效，name 立即生效。
 

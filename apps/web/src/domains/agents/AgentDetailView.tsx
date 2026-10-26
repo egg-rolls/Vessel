@@ -34,7 +34,8 @@ export function AgentDetailView({
   onBack: () => void;
   onEdit: () => void;
   onSaved: () => void;
-  onOpenTeam: () => void;
+  /** Team-less single 没有 Team 入口。 */
+  onOpenTeam?: () => void;
   onOpenSession: () => void;
 }) {
   useLocale();
@@ -104,11 +105,14 @@ export function AgentDetailView({
               {
                 key: 'team',
                 label: t('agents.filter.team'),
-                value: (
-                  <Button variant="link" onClick={onOpenTeam}>
-                    {agent.team.name || agent.team.team_id}
-                  </Button>
-                ),
+                value:
+                  agent.team && onOpenTeam ? (
+                    <Button variant="link" onClick={onOpenTeam}>
+                      {agent.team.name || agent.team.team_id}
+                    </Button>
+                  ) : (
+                    '—'
+                  ),
               },
               {
                 key: 'role',

@@ -8,7 +8,7 @@
 import type { NodeView } from './NodeProvider';
 import { nodeKeyOf } from './nodes';
 import type { TeamControl } from './team-control';
-import type { TeamMember, TeamSummary } from './types';
+import type { AgentSummary, TeamMember, TeamSummary } from './types';
 
 export interface NodeTeams {
   node: NodeView;
@@ -25,6 +25,11 @@ export interface TeamRosterEntry {
 
 export interface NodeRoster extends NodeTeams {
   rosters: readonly TeamRosterEntry[];
+  /**
+   * canonical `agents.list` 条目（管理面可见 private single）。
+   * 只用于补充 Team roster 之外的无 Team single；Team 页不消费。
+   */
+  agents?: readonly AgentSummary[];
   /** 列表成功、个别 Team 详情失败的个数（不伪装成空团队）。 */
   partialErrors: number;
   /** 本轮请求失败，但保留了上一次成功的 teams / rosters。 */
@@ -63,9 +68,14 @@ export async function fetchAllNodeTeams(
 
 /** Teams 页 / Node 面板：列表 + 每个 Team 的 roster（最多 100 成员）。 */
 export async function fetchNodeRoster(node: NodeView, control: TeamControl): Promise<NodeRoster> {
+  // agents.list 与 Team 数据并行；旧 gateway 没有该方法时按空列表降级。
+  const agentsPromise: Promise<readonly AgentSummary[]> = Promise.resolve()
+    .then(() => control.listAgents())
+    .catch(() => []);
   const list = await fetchNodeTeams(node, control);
+  const agents = await agentsPromise;
   if (!list.ok) {
-    return { ...list, rosters: [], partialErrors: 0 };
+    return { ...list, rosters: [], agents, partialErrors: 0 };
   }
   const settled = await Promise.allSettled(
     list.teams.map(async (team) => ({
@@ -79,7 +89,7 @@ export async function fetchNodeRoster(node: NodeView, control: TeamControl): Pro
     if (result.status === 'fulfilled') rosters.push(result.value);
     else partialErrors += 1;
   }
-  return { ...list, rosters, partialErrors };
+  return { ...list, rosters, agents, partialErrors };
 }
 
 function hasRosterData(roster: NodeRoster | undefined): roster is NodeRoster {
@@ -114,18 +124,50 @@ export function mergeNodeRosters(
 
 export interface RosterAgent {
   node: NodeView;
-  team: TeamSummary;
+  /** Team 归属；Team-less single（来自 agents.list）缺省。 */
+  team?: TeamSummary;
   member: TeamMember;
+}
+
+/** agents.list 条目 → TeamMember（只用于无 Team 的 single 行）。 */
+function memberFromList(entry: AgentSummary): TeamMember | undefined {
+  const agentId = entry.id ?? entry.agent_id;
+  if (!agentId) return undefined;
+  return {
+    agent_id: agentId,
+    ...(entry.name !== undefined ? { name: entry.name } : {}),
+    ...(entry.session_id !== undefined ? { session_id: entry.session_id } : {}),
+    membership: entry.membership ?? 'present',
+    presence: entry.presence ?? 'gone',
+    visibility: entry.visibility ?? 'private',
+    ...(entry.state !== undefined ? { state: entry.state } : {}),
+    ...(entry.role !== undefined ? { role: entry.role } : {}),
+    ...(entry.owner !== undefined ? { owner: entry.owner } : {}),
+  };
 }
 
 /** 展平为全局 agent 列表；一个成员只属于一个 Team。 */
 export function flattenRoster(rosters: readonly NodeRoster[]): RosterAgent[] {
   const agents: RosterAgent[] = [];
+  const seen = new Set<string>();
   for (const roster of rosters) {
     for (const entry of roster.rosters) {
       for (const member of entry.members) {
+        seen.add(`${nodeKeyOf(roster.node)}:${member.agent_id}`);
         agents.push({ node: roster.node, team: entry.team, member });
       }
+    }
+  }
+  // Team roster 之外补充无 Team 的 single（private single 由管理面 agents.list 提供）。
+  for (const roster of rosters) {
+    for (const entry of roster.agents ?? []) {
+      if (entry.role !== 'single' || entry.team_id !== undefined) continue;
+      const member = memberFromList(entry);
+      if (!member) continue;
+      const key = `${nodeKeyOf(roster.node)}:${member.agent_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      agents.push({ node: roster.node, member });
     }
   }
   return agents;
@@ -142,7 +184,7 @@ export interface AgentFilter {
 
 export function matchesAgentFilter(agent: RosterAgent, filter: AgentFilter): boolean {
   if (filter.nodeKey && nodeKeyOf(agent.node) !== filter.nodeKey) return false;
-  if (filter.teamId && agent.team.team_id !== filter.teamId) return false;
+  if (filter.teamId && agent.team?.team_id !== filter.teamId) return false;
   if (filter.state && agent.member.state !== filter.state) return false;
   if (filter.presence && agent.member.presence !== filter.presence) return false;
   return true;
@@ -166,7 +208,7 @@ export function agentFilterOptions(agents: readonly RosterAgent[]): {
   const states = new Set<string>();
   for (const agent of agents) {
     nodes.set(nodeKeyOf(agent.node), agent.node.name);
-    teams.set(agent.team.team_id, agent.team.name || agent.team.team_id);
+    if (agent.team) teams.set(agent.team.team_id, agent.team.name || agent.team.team_id);
     if (agent.member.state) states.add(agent.member.state);
   }
   return {

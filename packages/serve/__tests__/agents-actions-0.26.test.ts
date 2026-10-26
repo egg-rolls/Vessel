@@ -208,6 +208,41 @@ describe('agents.send / dispatch / rotate', () => {
     expect(human.agents).toHaveLength(0);
   });
 
+  it('merges private singles for the human admin viewer only', async () => {
+    const { control, calls } = fakeControl();
+    control.list = async (input = {}) => {
+      calls.list.push({ ...input });
+      return [
+        status('s1', { name: 'solo', role: 'single', visibility: 'private', owner: 's1' }),
+        status('m2', {
+          name: 'hidden',
+          role: 'member',
+          visibility: 'private',
+          owner: 'm2',
+          team_id: 'alpha',
+        }),
+      ];
+    };
+
+    const admin = (await methodOf(deps(control), 'agents.list').handler(
+      {},
+      context({ role: 'admin' }),
+    )) as { agents: Array<Record<string, unknown>> };
+    // 只追加 single；private member 不因管理面身份泄露。
+    expect(admin.agents.map((entry) => entry.id)).toEqual(['s1']);
+    expect(admin.agents[0]).toMatchObject({ role: 'single', visibility: 'private', depth: 0 });
+    expect(calls.list[0]).toMatchObject({ viewer: '*' });
+
+    // 普通 write token 仍走事件派生视图，不调用成员列表。
+    calls.list.length = 0;
+    const human = (await methodOf(deps(control), 'agents.list').handler(
+      {},
+      context({ role: 'write' }),
+    )) as { agents: unknown[] };
+    expect(human.agents).toEqual([]);
+    expect(calls.list).toEqual([]);
+  });
+
   it('isolates a mixed batch and preserves input order', async () => {
     const { control } = fakeControl();
     const result = (await methodOf(deps(control), 'agents.send').handler(

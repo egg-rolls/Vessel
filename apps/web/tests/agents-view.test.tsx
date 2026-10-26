@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ToastProvider } from '../src/components/ToastProvider';
+import { AgentListRow } from '../src/domains/agents/AgentListRow';
 import { SessionHeader } from '../src/domains/chat/SessionHeader';
+import type { RosterAgent } from '../src/gateway/team-roster';
 import type { AgentNode } from '../src/state/agents';
 
 const agents: AgentNode[] = [
@@ -57,6 +59,53 @@ function render(
     </ToastProvider>,
   );
 }
+
+describe('AgentListRow', () => {
+  const node = { name: 'node-a', url: 'https://node-a.test', current: true };
+  const single: RosterAgent = {
+    node,
+    member: {
+      agent_id: 'solo-1',
+      name: 'Solo',
+      membership: 'present',
+      presence: 'live',
+      visibility: 'private',
+      state: 'idle',
+      role: 'single',
+    },
+  };
+
+  test('renders a Team-less single with the node only', () => {
+    const markup = renderToStaticMarkup(
+      <AgentListRow agent={single} nodeName="Node A" onOpen={() => undefined} />,
+    );
+
+    expect(markup).toContain('Solo');
+    expect(markup).toContain('Node A');
+    expect(markup).not.toContain(' · ');
+  });
+
+  test('keeps the Team label for roster members', () => {
+    const markup = renderToStaticMarkup(
+      <AgentListRow
+        agent={{
+          ...single,
+          team: {
+            team_id: 'team-1',
+            name: 'Team One',
+            tenant_id: 'default',
+            member_count: 1,
+            created_at: 1,
+          },
+        }}
+        nodeName="Node A"
+        onOpen={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('Node A · Team One');
+  });
+});
 
 describe('SessionHeader subagent tree', () => {
   test('shows a summary with counts and current tool by default', () => {

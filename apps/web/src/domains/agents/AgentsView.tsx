@@ -10,8 +10,7 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { formatRoute, type Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
-import { StatusChip } from '../../components/StatusChip';
-import { Badge, Button, SearchInput, Select } from '../../components/ui';
+import { Button, SearchInput, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -28,11 +27,11 @@ import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { useNodeNames } from '../nodes/useNodeNames';
-import { roleLabelKey, roleOf } from '../team/role';
 import { AgentCreateDialog } from './AgentCreateDialog';
 import { AgentDetailView } from './AgentDetailView';
 import { AgentEditView } from './AgentEditView';
-import { agentDisplayName, filterAgentsByQuery } from './agent-search';
+import { AgentListRow } from './AgentListRow';
+import { filterAgentsByQuery } from './agent-search';
 import {
   type AgentHashTarget,
   agentDetailHash,
@@ -230,6 +229,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
       );
     }
 
+    const targetTeam = targetAgent.team;
     return (
       <AgentDetailView
         node={targetNode}
@@ -237,14 +237,17 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
         onBack={backToList}
         onEdit={() => openEdit(target.nodeKey, target.agentId)}
         onSaved={reloadRoster}
-        onOpenTeam={() =>
-          navigate({
-            domain: 'teams',
-            nodeKey: target.nodeKey,
-            teamId: targetAgent.team.team_id,
-            agentId: target.agentId,
-          })
-        }
+        {...(targetTeam
+          ? {
+              onOpenTeam: () =>
+                navigate({
+                  domain: 'teams',
+                  nodeKey: target.nodeKey,
+                  teamId: targetTeam.team_id,
+                  agentId: target.agentId,
+                }),
+            }
+          : {})}
         onOpenSession={() => {
           const sessionId = targetAgent.member.session_id;
           if (sessionId) navigate({ domain: 'chat', sessionId });
@@ -290,49 +293,14 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   } else {
     body = (
       <ul className="flex flex-col gap-2">
-        {filtered.map((agent) => {
-          const rowKey = `${nodeKeyOf(agent.node)}:${agent.team.team_id}:${agent.member.agent_id}`;
-          const name = agentDisplayName(agent.member);
-          const presence =
-            agent.member.presence === 'live'
-              ? t('agents.presence.live')
-              : t('agents.presence.gone');
-          return (
-            <li
-              className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-line bg-raised px-4 py-3"
-              key={rowKey}
-            >
-              <div className="flex min-w-0 flex-1 basis-55 flex-col gap-0.5">
-                <span className="inline-flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
-                  {name}
-                  <Badge>{t(roleLabelKey(roleOf(agent.member)))}</Badge>
-                </span>
-                <span className="min-w-0 wrap-anywhere text-xs text-faint">
-                  {nodeNames.get(nodeKeyOf(agent.node)) ?? '—'} ·{' '}
-                  {agent.team.name || agent.team.team_id}
-                </span>
-              </div>
-              <StatusChip status={agent.member.state} />
-              <span className="inline-flex flex-none items-center gap-1 whitespace-nowrap text-sm text-muted">
-                <span
-                  className={`size-1.75 rounded-full ${
-                    agent.member.presence === 'live' ? 'bg-success' : 'bg-faint'
-                  }`}
-                  aria-hidden="true"
-                />
-                {presence}
-              </span>
-              <div className="ml-auto inline-flex flex-none flex-wrap items-center gap-2">
-                <Button
-                  size="small"
-                  onClick={() => openAgent(nodeKeyOf(agent.node), agent.member.agent_id)}
-                >
-                  {t('agents.open')}
-                </Button>
-              </div>
-            </li>
-          );
-        })}
+        {filtered.map((agent) => (
+          <AgentListRow
+            key={`${nodeKeyOf(agent.node)}:${agent.team?.team_id ?? '-'}:${agent.member.agent_id}`}
+            agent={agent}
+            nodeName={nodeNames.get(nodeKeyOf(agent.node)) ?? '—'}
+            onOpen={() => openAgent(nodeKeyOf(agent.node), agent.member.agent_id)}
+          />
+        ))}
       </ul>
     );
   }

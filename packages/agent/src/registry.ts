@@ -25,6 +25,14 @@ import {
   type PersistedAgentRecord,
 } from './types.js';
 
+/**
+ * 管理面 viewer（tenant admin / human principal）。
+ *
+ * 只用于列表：放行 private `single`；private `member` / `temporary` 仍按 owner
+ * 判定，不因管理面身份放开。`*` 与 wildcard admin principal 的语义一致。
+ */
+const ADMIN_VIEWER = '*';
+
 /** 注册表内部记录（camelCase；对外经 toMemberStatus 转 snake_case） */
 export interface MemberRecord {
   id: string;
@@ -311,11 +319,14 @@ export class MemberRegistry {
   /**
    * private 仅 owner（single = self，temporary = 雇佣者）；缺失查看者不可见（fail-closed）；
    * team / tenant 对同 tenant 的任何查看者可见。
+   *
+   * 管理面 viewer（`*`）额外可见 private single（管理面列表），但 private
+   * member / temporary 仍只对 owner 可见。
    */
   canView(record: MemberRecord, viewer?: string): boolean {
     if (record.visibility !== 'private') return true;
     if (viewer === undefined) return false;
-    if (record.role === 'single') return viewer === record.id;
+    if (record.role === 'single') return viewer === record.id || viewer === ADMIN_VIEWER;
     return viewer === record.owner;
   }
 

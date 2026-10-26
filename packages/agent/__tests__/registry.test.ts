@@ -126,4 +126,22 @@ describe('MemberRegistry role and private visibility', () => {
     expect(registry.canView(member, 'main')).toBe(false);
     expect(registry.list()).toEqual([]);
   });
+
+  it('lets the management viewer list private singles but not private members', () => {
+    const registry = new MemberRegistry(() => 1);
+    const single = record({ id: 's1', sessionId: 's1', role: 'single', owner: 's1' });
+    const member = record({ id: 'm2', sessionId: 'm2', role: 'member', owner: 'm2' });
+    const temporary = record({ id: 't1', sessionId: 't1', owner: 'main' });
+    registry.add(single);
+    registry.add(member);
+    registry.add(temporary);
+
+    expect(registry.canView(single, '*')).toBe(true);
+    expect(registry.canView(member, '*')).toBe(false);
+    expect(registry.canView(temporary, '*')).toBe(false);
+    expect(registry.list({ viewer: '*' }).map((entry) => entry.id)).toEqual(['s1']);
+    // 其它 agent 仍然看不到别人的 private single。
+    expect(registry.list({ viewer: 'main' })).toContainEqual(temporary);
+    expect(registry.list({ viewer: 'main' }).map((entry) => entry.id)).not.toContain('s1');
+  });
 });

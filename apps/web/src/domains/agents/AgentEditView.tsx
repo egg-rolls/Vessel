@@ -90,8 +90,8 @@ export function AgentEditView({
       <div className="mt-5 flex flex-col gap-4">
         <Section>
           <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
-            {nodeNames.get(nodeKeyOf(node)) ?? '—'} · {agent.team.name || agent.team.team_id} ·{' '}
-            {displayName}
+            {nodeNames.get(nodeKeyOf(node)) ?? '—'}
+            {agent.team ? ` · ${agent.team.name || agent.team.team_id}` : ''} · {displayName}
           </p>
           <form className="flex flex-col gap-2" onSubmit={submit}>
             <div className="form-grid mt-1">

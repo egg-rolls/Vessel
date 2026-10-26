@@ -49,7 +49,9 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
 
 - **创建第一个成员**：先建 Team，再 `agents.create { kind:'peer', team_id, name }`。
   空 Team 也可以创建 member。
-- Agents 视图只聚合 Team roster 的 present 成员；unbound 临时不在这里出现。
+- Agents 视图合并 Team roster 与 canonical `agents.list`：无 Team 的 `single` 以节点级
+  条目展示（不显示 Team，无 Team 入口）；人类管理面 token 能看到 private single，
+  其它 agent 仍看不到。unbound 临时不在这里出现。Team 页仍只显示 member + temporary。
 - `new` 不是当前 action；`create` = peer/member，`hire` = contractor/temporary。
 
 ## 转换（已实现）

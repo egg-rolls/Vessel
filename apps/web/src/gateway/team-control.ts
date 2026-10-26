@@ -34,6 +34,8 @@ export interface TeamControl {
   /** 0.27：冻结 / 解冻成员创建闸门。 */
   setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamSummary>;
   getSession(sessionId: string): Promise<SessionDetail>;
+  /** canonical `agents.list`；管理面 token 会额外返回 private single。 */
+  listAgents(): Promise<AgentSummary[]>;
   /** 0.25：Agent CRUD（与 Teams 共用同一节点的控制面）。 */
   createAgent(input: AgentCreateInput): Promise<AgentSummary>;
   updateAgent(input: AgentUpdateInput): Promise<AgentSummary>;
@@ -81,6 +83,10 @@ export function createRemoteTeamControl(
       });
       if (!body?.session) throw new Error(`Session not found: ${sessionId}`);
       return body.session;
+    },
+    async listAgents() {
+      const body = await call<{ agents?: AgentSummary[] }>('agents.list', {});
+      return Array.isArray(body?.agents) ? body.agents : [];
     },
     async createAgent(input) {
       return unwrapAgentResult(

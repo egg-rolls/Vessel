@@ -60,6 +60,20 @@ function isDefaultTenant(tenantId: string, defaultTenantId: string): boolean {
   return tenantId === defaultTenantId;
 }
 
+/**
+ * 管理面 viewer：与 `MemberRegistry` 的 ADMIN_VIEWER 同值（serve 不依赖
+ * `@vessel-agent/agent`，因此在此本地定义）。只放行 private single。
+ */
+const ADMIN_VIEWER = '*';
+
+/**
+ * 人类管理面 principal：静态 gateway token / admin token。合成 owner 传输带
+ * `agent_id`，属于 agent 身份，不算人类管理面。
+ */
+function isHumanAdmin(ctx: RpcMethodContext): boolean {
+  return ctx.principal.role === 'admin' && ctx.principal.agent_id === undefined;
+}
+
 /** 事件派生条目按 tenant 过滤；无 tenant 的历史事件只归 default。 */
 function derivedVisible(entry: AgentRegistryEntry, tenantId: string, isDefault: boolean): boolean {
   if (isDefault) {
@@ -501,6 +515,23 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           .filter((entry) => sessionId === undefined || entry.session_id === sessionId)
           .filter((entry) => state === undefined || entry.state === state)
           .map(publicAgent);
+        // 人类管理面在事件派生视图之外合并成员记录里的 single：
+        // private single 只有管理面可见（agent / team token 仍按 viewer 判定）。
+        if (isHumanAdmin(ctx) && deps.agent !== undefined && deps.agent.tenantId === ctx.tenantId) {
+          const members = await deps.agent.list({
+            viewer: ADMIN_VIEWER,
+            ...(state !== undefined ? { state: state as AgentStateLike } : {}),
+            ...(visibility !== undefined ? { visibility } : {}),
+          });
+          for (const member of members) {
+            if (member.role !== 'single') continue;
+            if (sessionId !== undefined && member.session_id !== sessionId) continue;
+            const entry = publicMember(member);
+            const index = agents.findIndex((agent) => agent.id === member.id);
+            if (index >= 0) agents[index] = entry;
+            else agents.push(entry);
+          }
+        }
         return { agents };
       },
     },

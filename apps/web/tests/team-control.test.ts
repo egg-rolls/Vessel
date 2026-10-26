@@ -7,7 +7,7 @@ import {
   flattenRoster,
   type NodeRoster,
 } from '../src/gateway/team-roster';
-import type { TeamMember, TeamSummary } from '../src/gateway/types';
+import type { AgentSummary, TeamMember, TeamSummary } from '../src/gateway/types';
 
 const node: NodeView = {
   name: 'alpha',
@@ -33,7 +33,7 @@ function json(body: unknown, status = 200): Response {
 }
 
 /** 记录 RPC 调用；`failTeamId` 的 teams.get 返回 403。 */
-function installFetch(list: TeamSummary[], failTeamId?: string): void {
+function installFetch(list: TeamSummary[], failTeamId?: string, agents: AgentSummary[] = []): void {
   calls = [];
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? '{}')) as {
@@ -46,6 +46,7 @@ function installFetch(list: TeamSummary[], failTeamId?: string): void {
       authorization: new Headers(init?.headers).get('Authorization'),
     });
     if (body.method === 'teams.list') return json({ ok: true, result: { teams: list } });
+    if (body.method === 'agents.list') return json({ ok: true, result: { agents } });
     if (body.method === 'teams.get') {
       const teamId = String(body.params.team_id);
       if (teamId === failTeamId) {
@@ -117,6 +118,16 @@ describe('remote Team control contract', () => {
     expect(calls[0]?.params).toEqual({ team_id: 'core', frozen: true });
     expect(calls[1]?.params).toEqual({ team_id: 'core', frozen: false });
     expect(calls.every((call) => call.authorization === 'Bearer token-alpha')).toBe(true);
+  });
+
+  test('listAgents uses canonical agents.list', async () => {
+    const solo: AgentSummary = { id: 'solo-1', role: 'single', visibility: 'private' };
+    installFetch([], undefined, [solo]);
+    const control = createRemoteTeamControl(node, () => 'token-alpha');
+
+    expect(await control.listAgents()).toEqual([solo]);
+    expect(calls.map((call) => call.method)).toEqual(['agents.list']);
+    expect(calls[0]?.authorization).toBe('Bearer token-alpha');
   });
 
   test('one failing team detail is counted, not silently dropped as empty', async () => {
