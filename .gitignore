@@ -49,6 +49,8 @@ SHA256SUMS
 *.cer
 *.p12
 *.pfx
+# Self-signed localhost TLS fixtures are committed intentionally.
+!packages/serve/__tests__/fixtures/tls/*.pem
 secrets/
 credentials.json
 service-account.json

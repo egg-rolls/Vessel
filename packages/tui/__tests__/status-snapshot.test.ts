@@ -159,7 +159,7 @@ describe('status snapshot', () => {
     const text = formatStatusSnapshot(buildStatusSnapshot(ctx, makeState('s1'), 61000));
     expect(text).toContain('iterations 1/30');
     expect(text).toContain('tools 1/50');
-    expect(text).toContain('runtime 1m00s/5m00s');
+    expect(text).toContain('runtime 1m00s/10m00s');
     expect(text).toContain('in 1,200/100,000');
     expect(text).toContain('out 300/50,000');
     expect(text).toContain('ctx 0/1,000');
@@ -174,7 +174,7 @@ describe('status snapshot', () => {
     const text = formatStatusSnapshot(buildStatusSnapshot(ctx, makeState('s1'), 1000));
     expect(text).toContain('iterations -/30');
     expect(text).toContain('tools -/50');
-    expect(text).toContain('runtime -/5m00s');
+    expect(text).toContain('runtime -/10m00s');
     expect(text).toContain('cost -/unbounded');
     expect(text).not.toContain('limit blocked');
   });

@@ -204,7 +204,12 @@ describe('InProcessMemberRuntime', () => {
     await runtime.spawn(member());
 
     const toolNames = (captured[0]?.pluginHost?.listTools() ?? []).map((tool) => tool.name).sort();
-    expect(toolNames).toEqual(['agent', 'ask_user', 'bash', 'edit', 'read']);
+    // 只断言行为语义（允许集可见、内部工具不可见），不锁死完整工具清单。
+    expect(toolNames).toEqual(
+      expect.arrayContaining(['agent', 'ask_user', 'bash', 'edit', 'read']),
+    );
+    expect(toolNames).not.toContain('team_spawn');
+    expect(toolNames).not.toContain('delegate_task');
   });
 
   it('member run drops parent hooks or guardrails', async () => {

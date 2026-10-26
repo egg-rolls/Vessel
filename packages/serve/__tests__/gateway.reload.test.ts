@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { MemoryEventStream } from '@vessel-agent/core';
 import type { Gateway, GatewayReloadResult } from '../src/gateway';
+import { RELOAD_SCOPES } from '../src/gateway/methods/admin';
 import type { GatewayAuthLike } from '../src/tenant';
 import { startTestGateway as startGateway } from './helpers';
 
@@ -119,12 +120,10 @@ describe('gateway.reload', () => {
 
     const { body } = await rpc(gateway, 'admin');
     expect(body.ok).toBe(true);
-    // CONTRACT-hot-apply §1：scope 扩为 config / plugins / permission / tools / mcp。
-    expect(calls).toEqual([['config', 'plugins', 'permission', 'tools', 'mcp']]);
-    expect(body.result).toEqual({
-      reloaded: ['config', 'plugins', 'permission', 'tools', 'mcp'],
-      requires_restart: [],
-    });
+    // 跟随 RELOAD_SCOPES 常量，而不是在测试里再抄一份清单。
+    const expected = [...RELOAD_SCOPES];
+    expect(calls).toEqual([expected]);
+    expect(body.result).toEqual({ reloaded: expected, requires_restart: [] });
   });
 
   it('accepts each of the extended scopes', async () => {

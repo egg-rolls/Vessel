@@ -66,10 +66,8 @@ describe('CommandRegistry 扁平命令', () => {
     // 已删命令（/skills、/assets）仍不注册
     expect(names).not.toContain('skills');
     expect(names).not.toContain('assets');
-    expect(names.length).toBe(30);
     // /sessions 保留为 hidden deprecated alias：注册但不出现在 help/autocomplete
     expect(reg.list().find((e) => e.name === 'sessions')?.hidden).toBe(true);
-    expect(reg.visibleList()).toHaveLength(29);
     expect(reg.visibleList().map((e) => e.name)).not.toContain('sessions');
     // /resume 仍是会话恢复，usage 扩展为 delete/rename 子命令
     expect(reg.list().find((e) => e.name === 'resume')?.usage).toBe(

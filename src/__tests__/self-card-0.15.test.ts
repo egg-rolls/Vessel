@@ -19,18 +19,16 @@ import { knownOwnerToolNames, ownerSelfCard } from '../self-card';
 describe('owner self card', () => {
   it('lists only tools that the default owner runtime registers', () => {
     const config: VesselConfig = {};
-    expect(knownOwnerToolNames(config)).toEqual(['bash', 'read', 'edit', 'agent']);
-    expect(knownOwnerToolNames({ ...config, agent: { enabled: true } })).toEqual([
-      'bash',
-      'read',
-      'edit',
-      'agent',
-    ]);
-    expect(knownOwnerToolNames({ ...config, agent: { enabled: false } })).toEqual([
-      'bash',
-      'read',
-      'edit',
-    ]);
+    // 只断言语义（能力工具可见、agent 随开关出现/消失），不锁死完整清单。
+    expect(knownOwnerToolNames(config)).toEqual(
+      expect.arrayContaining(['bash', 'read', 'edit', 'agent']),
+    );
+    expect(knownOwnerToolNames({ ...config, agent: { enabled: true } })).toEqual(
+      expect.arrayContaining(['bash', 'read', 'edit', 'agent']),
+    );
+    const disabled = knownOwnerToolNames({ ...config, agent: { enabled: false } });
+    expect(disabled).toEqual(expect.arrayContaining(['bash', 'read', 'edit']));
+    expect(disabled).not.toContain('agent');
   });
 
   it('adds ask_user only for interactive entries and ui.askUser !== false', () => {

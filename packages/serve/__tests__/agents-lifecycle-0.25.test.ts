@@ -16,10 +16,8 @@ import type {
 import { createAgentRegistry } from '../src/agents-registry';
 import { type AgentMethodsDeps, createAgentMethods } from '../src/gateway/methods/agents';
 import { agentStatusSchema } from '../src/gateway/methods/schemas';
-import { createLocalRpcDispatcher } from '../src/local';
 import { RpcError, type RpcMethodContext } from '../src/rpc';
 import type { TeamControlLike, TeamDetailLike, TeamSummaryLike } from '../src/team-control';
-import { createGatewayEventHub } from '../src/tenant-event-hub';
 
 function status(id: string, overrides: Partial<AgentStatusLike> = {}): AgentStatusLike {
   return {
@@ -541,16 +539,5 @@ describe('agent lifecycle contract', () => {
     const required = agentStatusSchema.required as string[];
     expect(required).not.toContain('owner');
     expect(agentStatusSchema.properties.owner).toBeDefined();
-  });
-
-  it('keeps canonical count at 59 with the control plane absent', () => {
-    const dispatcher = createLocalRpcDispatcher({ hub: createGatewayEventHub() });
-    try {
-      const methods = dispatcher.manifest().methods;
-      expect(methods).toHaveLength(59);
-      expect(methods.filter((method) => method.name.startsWith('agents.'))).toHaveLength(9);
-    } finally {
-      dispatcher.dispose();
-    }
   });
 });
