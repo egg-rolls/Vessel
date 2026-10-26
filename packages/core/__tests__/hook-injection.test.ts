@@ -47,77 +47,88 @@ function injectPlugin(prefix: string): Plugin {
 async function buildRuntime(opts: { systemPrompt?: string; plugins: Plugin[] }) {
   const provider = new CapturingProvider();
   const context = new MemoryContextManager();
+  const events = new MemoryEventStream();
   const runtime = await AgentRuntime.create({
     provider,
     model: 'test',
     context,
-    events: new MemoryEventStream(),
+    events,
     limits: { requestLimit: 10, toolCallsLimit: 5 },
     termination: { maxIterations: 10 },
     session: new MemorySessionBackend(),
     plugins: opts.plugins,
     systemPrompt: opts.systemPrompt,
   });
-  return { runtime, provider, context };
+  return { runtime, provider, context, events };
 }
 
-describe('BeforeLlm hook 注入消费（ADR-018）', () => {
-  it('hook 注入内容进入 LLM 请求的 system 消息，含基底 systemPrompt', async () => {
-    const { runtime, provider } = await buildRuntime({
+function ignoredEvents(events: MemoryEventStream) {
+  return events.getHistory().filter((event) => event.type === 'hook.system_prompt_ignored');
+}
+
+describe('BeforeLlm systemPrompt 冻结（CONTRACT-prefix-invariant）', () => {
+  it('hook 写 ctx.systemPrompt 被忽略，请求 system 仍是基底', async () => {
+    const { runtime, provider, events } = await buildRuntime({
       systemPrompt: 'BASE-SYSTEM',
       plugins: [injectPlugin('INJECTED')],
     });
     await runtime.run('hi');
 
     const sysMsg = provider.receivedMessages.find((m) => m.role === 'system');
-    expect(sysMsg).toBeDefined();
-    expect(sysMsg?.content).toContain('INJECTED');
-    expect(sysMsg?.content).toContain('BASE-SYSTEM');
+    expect(sysMsg?.content).toBe('BASE-SYSTEM');
+    expect(sysMsg?.content).not.toContain('INJECTED');
+    expect(ignoredEvents(events)).toHaveLength(1);
   });
 
-  it('无基底 systemPrompt 时，hook 注入前置一条 system 消息', async () => {
-    const { runtime, provider } = await buildRuntime({
-      plugins: [injectPlugin('INJECTED')],
-    });
-    await runtime.run('hi');
-
-    const sysMsg = provider.receivedMessages.find((m) => m.role === 'system');
-    expect(sysMsg).toBeDefined();
-    expect(sysMsg?.content).toContain('INJECTED');
-  });
-
-  it('注入不污染 ContextManager 持久化的消息', async () => {
-    const { runtime, provider, context } = await buildRuntime({
-      systemPrompt: 'BASE-SYSTEM',
-      plugins: [injectPlugin('INJECTED')],
-    });
-    await runtime.run('hi');
-
-    // 请求侧有注入
-    expect(provider.receivedMessages.find((m) => m.role === 'system')?.content).toContain(
-      'INJECTED',
-    );
-    // 持久化侧仍是纯基底
-    const persisted = context.messages.find((m) => m.role === 'system');
-    expect(persisted?.content).toBe('BASE-SYSTEM');
-    expect(persisted?.content).not.toContain('INJECTED');
-  });
-
-  it('多个 hook 链式 prepend，都进入请求', async () => {
-    const { runtime, provider } = await buildRuntime({
+  it('多个 hook 每 run 只报告一次被忽略', async () => {
+    const { runtime, events } = await buildRuntime({
       systemPrompt: 'BASE',
       plugins: [injectPlugin('FIRST'), injectPlugin('SECOND')],
     });
     await runtime.run('hi');
+    expect(ignoredEvents(events)).toHaveLength(1);
 
-    const sys = provider.receivedMessages.find((m) => m.role === 'system')?.content ?? '';
-    expect(sys).toContain('FIRST');
-    expect(sys).toContain('SECOND');
-    expect(sys).toContain('BASE');
+    // 下一次 run 重新计一次（每 run 一次，而非进程一次）。
+    await runtime.run('again');
+    expect(ignoredEvents(events)).toHaveLength(2);
   });
 
-  it('无注入 hook 时，system 消息仍是基底（回归）', async () => {
-    const { runtime, provider } = await buildRuntime({
+  it('无基底 systemPrompt 时，hook 写 systemPrompt 也不产生 system 消息', async () => {
+    const { runtime, provider, events } = await buildRuntime({
+      plugins: [injectPlugin('INJECTED')],
+    });
+    await runtime.run('hi');
+
+    expect(provider.receivedMessages.some((m) => m.role === 'system')).toBe(false);
+    expect(ignoredEvents(events)).toHaveLength(1);
+  });
+
+  it('hook 可读取基底 systemPrompt', async () => {
+    const seen: Array<string | undefined> = [];
+    const { runtime } = await buildRuntime({
+      systemPrompt: 'BASE-SYSTEM',
+      plugins: [
+        {
+          name: 'reader',
+          install: (host) => {
+            host.registerHook({
+              name: 'reader',
+              type: HookType.BeforeLlm,
+              run: async (ctx: HookContext) => {
+                seen.push(ctx.systemPrompt);
+              },
+            });
+          },
+        },
+      ],
+    });
+    await runtime.run('hi');
+
+    expect(seen).toEqual(['BASE-SYSTEM']);
+  });
+
+  it('无写入 hook 时，system 消息仍是基底（回归）', async () => {
+    const { runtime, provider, events } = await buildRuntime({
       systemPrompt: 'BASE-SYSTEM',
       plugins: [],
     });
@@ -125,6 +136,7 @@ describe('BeforeLlm hook 注入消费（ADR-018）', () => {
 
     const sysMsg = provider.receivedMessages.find((m) => m.role === 'system');
     expect(sysMsg?.content).toBe('BASE-SYSTEM');
+    expect(ignoredEvents(events)).toHaveLength(0);
   });
 });
 

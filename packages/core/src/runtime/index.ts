@@ -9,6 +9,13 @@ export { toErrorEnvelope } from './error-envelope.js';
 export { PermissionTimeoutError } from './permission-policy.js';
 export { MemoryPluginHost } from './plugin-host.js';
 export {
+  type PrefixChangeReason,
+  PromptPrefixChangedError,
+  type PromptPrefixCheckInput,
+  type PromptPrefixCheckResult,
+  PromptPrefixGuard,
+} from './prompt-prefix-guard.js';
+export {
   createToolPipeline,
   createToolPipelineFor,
   type ToolPipeline,

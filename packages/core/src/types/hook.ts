@@ -18,7 +18,10 @@ export enum HookType {
 export interface HookContext {
   run_id: string;
   session_id?: string;
-  /** BeforeLlm 注入位：hook 写这里，loop 在调用 LLM 前读取，作为本次请求的 system 消息 */
+  /**
+   * BeforeLlm：可读的基底 system prompt。写入被忽略（system 跨轮必须稳定），
+   * 首次写入发一次 `hook.system_prompt_ignored` 事件。要追加内容请写 `messages`。
+   */
   systemPrompt?: string;
   /**
    * BeforeLlm 注入位（0.16 E5）：要追加到本次请求的消息，按顺序排在已有上下文之后。
@@ -44,7 +47,10 @@ export interface HookResult {
   reason?: string;
   /** BeforeTool：改写工具输入（后续 hook 与工具 handler 看到改写后的值） */
   updatedInput?: unknown;
-  /** BeforeLlm：追加到本次请求的 system 上下文 */
+  /**
+   * @deprecated 不再拼进 system（会破坏前缀稳定）。runtime 改为追加一条
+   * `{ role: 'user', name: 'vessel:hook' }` 尾消息；新代码请写 `ctx.messages`。
+   */
   additionalContext?: string;
 }
 

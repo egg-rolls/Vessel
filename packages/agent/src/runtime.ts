@@ -16,8 +16,6 @@ import {
   AgentRuntime,
   type AgentRuntimeOptions,
   type EventStream,
-  type Hook,
-  HookType,
   type LLMProvider,
   type Logger,
   MemoryContextManager,
@@ -147,9 +145,6 @@ interface MemberRuntimeEntry {
   waiting: boolean;
 }
 
-/** Self Card + 所属 Team。core 只渲染已知字段，team_id 由 createSourceHook 追加成行 */
-type MemberSelfCardOptions = SelfCardOptions & { team_id?: string };
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -226,8 +221,8 @@ function localNodeSegment(): string {
 }
 
 /**
- * 渲染本轮消息来源（路由地址 `<principal>@<node>:<team>`）。只进 BeforeLlm 的
- * systemPrompt（本次请求），不写 content / ContextManager / session 历史。
+ * 渲染本轮消息来源（路由地址 `<principal>@<node>:<team>`）。由 `runTurn` 作为
+ * `RunOptions.messages` 注入为持久化的 `vessel:source` 消息，不改写 system。
  */
 function formatMessageSource(message: AgentMessage, teamId: string | undefined): string {
   const source = message.source ?? inferMessageSource(message.from);
@@ -239,34 +234,6 @@ function formatMessageSource(message: AgentMessage, teamId: string | undefined):
     `channel: ${message.channel ?? 'direct'}`,
     'Routing metadata only; permission decisions are made by the permission bridge.',
   ].join('\n');
-}
-
-/**
- * 成员请求期 system 注入：只写**静态**的所属 Team。
- *
- * - `team_id` 在成员生命周期内不变，放进 system 不会破坏前缀缓存；
- * - 每轮消息来源是动态的，**绝不能改写 system**：它由 `runTurn` 通过
- *   `RunOptions.messages` 在用户输入之前注入为 `vessel:source` 消息，持久化且不改变前缀；
- * - 权限判定仍由 bridge 的 human / policy 主体完成，这段文本不参与任何授权判断。
- */
-function createSourceHook(teamId: string | undefined): Hook {
-  const teamLine =
-    typeof teamId === 'string' && teamId.length > 0 ? `team: ${sanitizeSource(teamId)}` : undefined;
-  return {
-    name: 'agent.member.message-source',
-    // 最后执行：保留父插件 hook 已写入的 systemPrompt。
-    priority: 1000,
-    type: HookType.BeforeLlm,
-    run: async (ctx) => {
-      if (teamLine === undefined) return;
-      // 静态团队行：同一个字符串每轮重复追加，前缀字节不变。
-      const extra = ['[Team]', teamLine].join('\n');
-      ctx.systemPrompt =
-        typeof ctx.systemPrompt === 'string' && ctx.systemPrompt.length > 0
-          ? `${ctx.systemPrompt}\n\n${extra}`
-          : extra;
-    },
-  };
 }
 
 /** 成员不可见的工具 */
@@ -432,8 +399,6 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       pluginHost.registerGuardrail(guardrail);
     }
     for (const tool of tools) pluginHost.registerTool(tool);
-    // 只写静态 team 行；每轮来源由 runTurn 作为 RunOptions.messages 注入。
-    pluginHost.registerHook(createSourceHook(member.team_id));
 
     const selfCard = this.buildSelfCard(member, model, tools);
     const events = new MemoryEventStream();
@@ -820,7 +785,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     member: MemberRuntimeMember,
     model: string,
     tools: readonly ToolDefinition[],
-  ): MemberSelfCardOptions {
+  ): SelfCardOptions {
     const toolNames = tools.map((tool) => tool.name);
     return {
       role: member.name ?? 'member',

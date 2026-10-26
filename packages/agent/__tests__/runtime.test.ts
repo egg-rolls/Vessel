@@ -236,11 +236,8 @@ describe('InProcessMemberRuntime', () => {
 
     const memberHost = captured[0]?.pluginHost;
     expect(memberHost).not.toBe(parent);
-    // 父 hook 原样继承；成员运行时另注册唯一一个来源注入 hook。
-    expect(memberHost?.getHooks().map((entry) => entry.name)).toEqual([
-      'audit',
-      'agent.member.message-source',
-    ]);
+    // 父 hook 原样继承；core 不再注册每轮来源注入 hook（team 进 Self Card）。
+    expect(memberHost?.getHooks().map((entry) => entry.name)).toEqual(['audit']);
     expect(memberHost?.getGuardrails().map((entry) => entry.name)).toEqual(['blocker']);
   });
 
@@ -538,7 +535,7 @@ describe('InProcessMemberRuntime', () => {
     expect('team_id' in (captured[1]?.selfCard ?? {})).toBe(false);
   });
 
-  it('appends the message source as a persisted tail message, keeping system stable', async () => {
+  it('keeps team in the Self Card and appends the message source as a persisted tail message', async () => {
     const { records, providerFactory } = echoProviders();
     const session = new MemorySessionBackend();
     const runtime = createInProcessMemberRuntime({
@@ -558,9 +555,11 @@ describe('InProcessMemberRuntime', () => {
 
     const first = records[0]?.[0];
     const firstSystem = first?.messages.find((entry) => entry.role === 'system')?.content ?? '';
-    // 动态来源不进 system；静态 team 行留在 system。
-    expect(firstSystem).not.toContain('[Message source]');
+    // 动态来源不进 system；静态 team 行进 Self Card（system 的一部分）。
+    expect(firstSystem).toContain('[Self Card]');
     expect(firstSystem).toContain('team: alpha');
+    expect(firstSystem).not.toContain('[Message source]');
+    expect(firstSystem).not.toContain('[Team]');
     const firstSource = first?.messages.find((entry) => entry.name === 'vessel:source');
     expect(firstSource?.content).toMatch(/from: human@[^:\s]+:alpha/);
     expect(firstSource?.content).toContain('channel: team');
@@ -583,14 +582,20 @@ describe('InProcessMemberRuntime', () => {
 
     const second = records[0]?.[1];
     const secondSystem = second?.messages.find((entry) => entry.role === 'system')?.content ?? '';
+    // Self Card 去掉实时用量后跨 run 稳定；team 行因此也不变。
     expect(secondSystem).toBe(firstSystem);
+    expect(secondSystem).toContain('team: alpha');
+    expect(secondSystem).not.toContain('[Message source]');
     const sources = second?.messages.filter((entry) => entry.name === 'vessel:source') ?? [];
     expect(sources).toHaveLength(2);
     expect(sources[1]?.content).toContain('from: agent:planner');
     expect(sources[1]?.content).toContain('channel: direct');
 
-    // 来源消息持久化到会话历史；team 行只存在于请求的 system 覆盖，不落盘。
+    // 来源消息持久化到会话历史；team 行在持久化的 Self Card system 中。
     const stored = await session.load('worker-session');
+    const storedSystem =
+      (stored?.messages ?? []).find((entry) => entry.role === 'system')?.content ?? '';
+    expect(storedSystem).toContain('team: alpha');
     const storedContents = (stored?.messages ?? []).map((entry) => entry.content).join('\n');
     expect(storedContents).toContain('[Message source]');
     expect(storedContents).not.toContain('[Team]');

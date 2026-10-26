@@ -114,6 +114,8 @@ export interface SelfCardContext {
 export interface SelfCardOptions {
   role: string;
   parent_id?: string;
+  /** 所属 Team（仅绑定 Team 的成员）；非空时渲染 `team: <id>` */
+  team_id?: string;
   depth: number;
   model: string;
   /** 可调用工具名 */

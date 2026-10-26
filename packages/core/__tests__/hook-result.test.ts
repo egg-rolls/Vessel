@@ -33,13 +33,14 @@ function baseOptions(
   host: MemoryPluginHost,
   provider: LLMProvider,
   context = new MemoryContextManager(),
+  events = new MemoryEventStream(),
 ) {
   return {
     provider,
     model: 'test-model',
     pluginHost: host,
     context,
-    events: new MemoryEventStream(),
+    events,
     limits: { requestLimit: 10, toolCallsLimit: 5 },
     termination: { maxIterations: 10 },
   };
@@ -106,8 +107,9 @@ describe('HookResult rewriting (0.6.1 P2)', () => {
     );
   });
 
-  it('appends BeforeLlm additionalContext to the system prompt', async () => {
+  it('appends BeforeLlm additionalContext as a vessel:hook tail message', async () => {
     const captured: Message[][] = [];
+    const events = new MemoryEventStream();
     const host = new MemoryPluginHost();
     host.registerHook({
       name: 'extra-context',
@@ -122,14 +124,22 @@ describe('HookResult rewriting (0.6.1 P2)', () => {
     };
 
     const runtime = await AgentRuntime.create({
-      ...baseOptions(host, provider),
+      ...baseOptions(host, provider, new MemoryContextManager(), events),
       systemPrompt: 'BASE PROMPT',
     });
     await runtime.run('hi');
 
-    expect(captured[0]?.[0]).toMatchObject({
-      role: 'system',
-      content: 'BASE PROMPT\n\nEXTRA CONTEXT',
+    // system 不受影响（前缀稳定）；additionalContext 变成用户尾消息。
+    expect(captured[0]?.[0]).toMatchObject({ role: 'system', content: 'BASE PROMPT' });
+    expect(captured[0]?.[0]?.content).not.toContain('EXTRA CONTEXT');
+    expect(captured[0]?.[captured[0].length - 1]).toMatchObject({
+      role: 'user',
+      name: 'vessel:hook',
+      content: 'EXTRA CONTEXT',
     });
+    expect(typeof captured[0]?.[captured[0].length - 1]?.timestamp).toBe('number');
+    expect(
+      events.getHistory().filter((event) => event.type === 'hook.additional_context_deprecated'),
+    ).toHaveLength(1);
   });
 });

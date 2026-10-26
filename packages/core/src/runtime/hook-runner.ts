@@ -17,8 +17,9 @@ import type { PluginHost } from '../types/plugin.js';
  * 依次运行某阶段的 hook。
  *
  * 0.6.1 P2：聚合 hook 返回值——`updatedInput` 写回 ctx.input 供后续 hook/handler 使用，
- * `additionalContext` 拼接，`block` 短路后续 hook。返回 `{}` 表示全部不干预，
- * 因此旧的 `await runner.run(...)`（忽略返回值）保持兼容。
+ * `additionalContext` 拼接（deprecated：runtime 只把它作为尾消息，不再拼进 system），
+ * `block` 短路后续 hook。返回 `{}` 表示全部不干预，因此旧的
+ * `await runner.run(...)`（忽略返回值）保持兼容。
  */
 export class HookRunner {
   constructor(

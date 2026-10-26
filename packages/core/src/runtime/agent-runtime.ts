@@ -52,6 +52,7 @@ import {
   PermissionTimeoutError,
 } from './permission-policy.js';
 import { MemoryPluginHost } from './plugin-host.js';
+import { type PrefixChangeReason, PromptPrefixGuard } from './prompt-prefix-guard.js';
 import { createToolPipeline, isToolCall, type ToolPipeline } from './tool-pipeline.js';
 
 /** finalizeRun 的终态输入（C1） */
@@ -211,6 +212,7 @@ function formatSelfCardLimits(limits: SelfCardOptions['limits']): string {
 function formatSelfCard(card: SelfCardOptions): string {
   const lines = ['[Self Card]', `role: ${card.role}`];
   if (card.parent_id !== undefined) lines.push(`parent: ${card.parent_id}`);
+  if (card.team_id !== undefined && card.team_id.length > 0) lines.push(`team: ${card.team_id}`);
   lines.push(`depth: ${card.depth}`, `model: ${card.model}`);
   if (card.tools.length > 0) lines.push(`tools: ${card.tools.join(', ')}`);
   const limits = formatSelfCardLimits(card.limits);
@@ -269,6 +271,20 @@ export class AgentRuntime {
   /** 0.16 E5：本 run 已注入的消息稳定键 / 对象引用（BeforeLlm 去重） */
   private readonly injectedMessageKeys = new Set<string>();
   private injectedMessageRefs = new WeakSet<Message>();
+  /** CONTRACT-prefix-invariant：跨轮前缀守卫（每个 session 一份快照） */
+  private readonly prefixGuard: PromptPrefixGuard;
+  /** 调用点设置的显式失效原因；guard 消费后清空 */
+  private pendingPrefixReason?: PrefixChangeReason;
+  /** 本 run 是否已报告 hook 写 systemPrompt 被忽略（每 run 一次） */
+  private systemPromptIgnoredReported = false;
+  /** 本 run 是否已报告 additionalContext 弃用（每 run 一次） */
+  private additionalContextDeprecatedReported = false;
+  /** 本 run 已追加过的旧 additionalContext 内容（避免每个 LLM 迭代重复） */
+  private readonly legacyAdditionalContextSeen = new Set<string>();
+  /** 最近一次 run 的 session / branch / system，用于识别显式切换 */
+  private lastSessionId?: string;
+  private lastBranch?: string;
+  private readonly lastRunSystemPrompts = new Map<string, string>();
   private permissionPolicy: PermissionPolicy;
   private guardrails: GuardrailRunner;
   private hooks: HookRunner;
@@ -353,6 +369,7 @@ export class AgentRuntime {
     );
     this.guardrails = new GuardrailRunner(this.pluginHost, this.events, opts.tenantId);
     this.hooks = new HookRunner(this.pluginHost, this.events, opts.tenantId);
+    this.prefixGuard = new PromptPrefixGuard(this.events, opts.tenantId);
     this.toolPipeline = createToolPipeline({
       pluginHost: this.pluginHost,
       events: this.events,
@@ -449,6 +466,11 @@ export class AgentRuntime {
     const currentSessionId = sessionId || 'default';
     // 单 run 守卫必须在任何 await 之前同步占位，第二个并发调用立即失败。
     const execution = this.beginExecution(runId, currentSessionId, opts?.branch);
+    // branch 实际变化才视为一次显式前缀失效；同一分支的常规多轮不设 reason。
+    if (opts?.branch !== undefined && opts.branch !== this.lastBranch) {
+      this.pendingPrefixReason ??= 'branch';
+    }
+    if (opts?.branch !== undefined) this.lastBranch = opts.branch;
 
     try {
       return await this.executeRun(execution, input, opts);
@@ -487,6 +509,10 @@ export class AgentRuntime {
     // 0.16 E5：BeforeLlm 注入去重按 run 重置
     this.injectedMessageKeys.clear();
     this.injectedMessageRefs = new WeakSet();
+    // CONTRACT-prefix-invariant：每 run 只报告一次的事件与旧 additionalContext 去重
+    this.systemPromptIgnoredReported = false;
+    this.additionalContextDeprecatedReported = false;
+    this.legacyAdditionalContextSeen.clear();
     return execution;
   }
 
@@ -555,6 +581,11 @@ export class AgentRuntime {
 
     // 切换到当前会话的 Context
     this.context.setSessionId(sessionId);
+    // 显式 session 切换：允许上下文整体不同（session 快照本身按 session 隔离）。
+    if (this.lastSessionId !== undefined && this.lastSessionId !== sessionId) {
+      this.pendingPrefixReason ??= 'session_switch';
+    }
+    this.lastSessionId = sessionId;
 
     // 仅当 context 为空时初始化：
     //   - in-process 同会话续聊：context 已有历史，不重置（多轮记忆）
@@ -577,6 +608,15 @@ export class AgentRuntime {
     } else {
       this.runSystemPrompt = this.composeRunSystemPrompt();
     }
+
+    // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
+    // 若同一 session 的基底确实不同（例如运行时重建），标记为一次 system_revision。
+    const requestBaseSystem = this.runSystemPrompt ?? this.systemPrompt ?? '';
+    const previousBaseSystem = this.lastRunSystemPrompts.get(sessionId);
+    if (previousBaseSystem !== undefined && previousBaseSystem !== requestBaseSystem) {
+      this.pendingPrefixReason ??= 'system_revision';
+    }
+    this.lastRunSystemPrompts.set(sessionId, requestBaseSystem);
 
     // 准备用户消息
     const userMessage: Message =
@@ -885,6 +925,10 @@ export class AgentRuntime {
       // legacy 回退（旧文件）。禁止用较旧的 checkpoint 覆盖较新的 session。
       // 0.15 E9：resume 同样在 run 开始时生成一次 Self Card
       this.runSystemPrompt = this.composeRunSystemPrompt();
+      // CONTRACT-prefix-invariant：resume 是显式前缀失效（历史可能已被裁剪）。
+      this.pendingPrefixReason ??= 'resume';
+      this.lastSessionId = sessionId;
+      this.lastRunSystemPrompts.set(sessionId, this.runSystemPrompt ?? this.systemPrompt ?? '');
       const history = await this.loadStoredHistory(sessionId, checkpoint);
       if (history.length === 0) {
         throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
@@ -1003,27 +1047,66 @@ export class AgentRuntime {
       // 0.6.1 E3：按阈值触发真实摘要压缩（旧 ContextManager 无此方法则跳过）。
       // 必须在组装请求前完成，保证本轮请求看到压缩后的历史。
       const compacted = await this.context.autoCompactAsync?.();
-      if (typeof compacted === 'number') this.publishCompacted(execution, compacted, 'auto');
+      if (typeof compacted === 'number') {
+        this.publishCompacted(execution, compacted, 'auto');
+        // 压缩会删除中间的旧消息：必须显式标记，否则守卫会把它当成前缀重写。
+        if (compacted > 0) this.pendingPrefixReason ??= 'compaction';
+      }
 
-      // 执行 BeforeLlm 钩子（hook 可往 ctx.systemPrompt 注入内容：skills / memory）
-      // 用本次 run 的 systemPrompt（含 Self Card）作基底，hook 链 prepend 注入
+      // CONTRACT-prefix-invariant §2：system 冻结。hook 可以读基底 system，
+      // 但写入被忽略（首次写入发一次事件），system 始终是会话级基底 + Self Card。
       const hookCtx: HookContext = { run_id: runId, session_id: sessionId };
       const baseSystemPrompt = this.runSystemPrompt ?? this.systemPrompt;
-      if (baseSystemPrompt) {
-        hookCtx.systemPrompt = baseSystemPrompt;
-      }
+      Object.defineProperty(hookCtx, 'systemPrompt', {
+        enumerable: true,
+        configurable: true,
+        get: () => baseSystemPrompt,
+        set: () => {
+          if (this.systemPromptIgnoredReported) return;
+          this.systemPromptIgnoredReported = true;
+          this.publishEvent({
+            type: 'hook.system_prompt_ignored',
+            run_id: runId,
+            data: { run_id: runId, session_id: sessionId },
+            ts: Date.now(),
+          });
+        },
+      });
       const beforeLlm = await this.hooks.run(HookType.BeforeLlm, hookCtx);
+
+      // §3：旧 additionalContext 不再拼进 system，改为一条尾消息（每 run 去重）。
+      const legacyContext = beforeLlm.additionalContext;
+      if (typeof legacyContext === 'string' && legacyContext.length > 0) {
+        if (!this.additionalContextDeprecatedReported) {
+          this.additionalContextDeprecatedReported = true;
+          this.publishEvent({
+            type: 'hook.additional_context_deprecated',
+            run_id: runId,
+            data: { run_id: runId, session_id: sessionId },
+            ts: Date.now(),
+          });
+        }
+        if (!this.legacyAdditionalContextSeen.has(legacyContext)) {
+          this.legacyAdditionalContextSeen.add(legacyContext);
+          hookCtx.messages = [
+            ...(hookCtx.messages ?? []),
+            {
+              role: 'user',
+              name: 'vessel:hook',
+              content: legacyContext,
+              timestamp: Date.now(),
+            },
+          ];
+        }
+      }
 
       // 0.16 E5：BeforeLlm 注入的消息按返回顺序写入上下文一次（进入本次请求，
       // 后续轮次直接从上下文可见；重复返回同一批消息不重复写入）。
       this.appendInjectedMessages(runId, hookCtx.messages);
 
-      // 组装本次请求的消息（持久化上下文 + BeforeLlm 注入的 system prompt）。
-      // 0.6.1 P2：HookResult.additionalContext 追加在 systemPrompt 之后。
-      const injectedSystem = [hookCtx.systemPrompt, beforeLlm.additionalContext]
-        .filter((value): value is string => typeof value === 'string' && value.length > 0)
-        .join('\n\n');
-      const messages = this.buildRequestMessages(injectedSystem || undefined);
+      // 组装本次请求的消息：system 只来自会话级基底（含 Self Card），
+      // 不接受每轮拼接的 additionalContext（CONTRACT-prefix-invariant §2）。
+      const messages = this.buildRequestMessages(baseSystemPrompt);
 
       // 统一工具来源：PluginHost（插件在 install() 里 registerTool）
       const allTools = this.pluginHost.listTools();
@@ -1036,13 +1119,28 @@ export class AgentRuntime {
         },
       }));
 
+      // §4：请求前检查 system / tools / messages 是否保持前缀；显式 reason 消费后清空。
+      const requestSystem =
+        messages.find((message) => message.role === 'system' && !message.compaction_summary)
+          ?.content ?? '';
+      const prefixReason = this.pendingPrefixReason;
+      this.pendingPrefixReason = undefined;
+      this.prefixGuard.check({
+        sessionId,
+        runId,
+        system: requestSystem,
+        tools: JSON.stringify(toolSchemas),
+        messages,
+        ...(prefixReason !== undefined ? { reason: prefixReason } : {}),
+      });
+
       // 调用 LLM（context-overflow 时强制压缩一次并重试一次，0.10 R2-17）
       const response = await this.chatWithOverflowRetry(execution, {
         messages,
         tools: toolSchemas,
         sessionId,
         ...(signal !== undefined ? { signal } : {}),
-        rebuildMessages: () => this.buildRequestMessages(injectedSystem || undefined),
+        rebuildMessages: () => this.buildRequestMessages(baseSystemPrompt),
       });
 
       // 更新 token 使用量
@@ -1397,6 +1495,8 @@ export class AgentRuntime {
       ? await this.context.compactAsync()
       : this.context.compact();
     this.publishCompacted(this.activeRun, removed, 'manual');
+    // 手动压缩（可能发生在两次 run 之间）同样是一次显式前缀失效。
+    if (removed > 0) this.pendingPrefixReason ??= 'compaction';
     return removed;
   }
 
@@ -1410,6 +1510,8 @@ export class AgentRuntime {
         ? await this.context.compactAsync()
         : this.context.compact();
       this.publishCompacted(execution, removed, reason);
+      // overflow 重试会跳过下一次守卫检查；把原因留给后续请求消费。
+      if (removed > 0) this.pendingPrefixReason ??= 'compaction';
       return removed;
     } catch {
       return 0;
@@ -1730,15 +1832,17 @@ export class AgentRuntime {
 
   /**
    * 组装本次请求的消息数组（ADR-018 / C-03）。
-   * 「持久化上下文 + BeforeLlm hook 写入的 systemPrompt」在此一处收敛：
+   * system 覆盖只来自会话级基底（含 Self Card），不接受每轮 hook 拼接。
    * 1) 先归一化成 Provider 可接受的序列（丢掉孤儿 tool 消息、降级不完整的 tool_calls 轮次）；
-   * 2) 再处理 system：hook 改写时替换；上下文缺 system 时补回基底 systemPrompt。
+   * 2) 再处理 system：上下文缺 system 时补回基底；有 Self Card 时覆盖持久化的旧 system。
    * 注入只影响本次请求，不改动 ContextManager 持久化的消息。
    */
-  private buildRequestMessages(injectedSystem: unknown): Message[] {
+  private buildRequestMessages(systemOverrideInput: unknown): Message[] {
     const messages = this.normalizeMessages(this.context.messages);
     const systemOverride =
-      typeof injectedSystem === 'string' && injectedSystem ? injectedSystem : undefined;
+      typeof systemOverrideInput === 'string' && systemOverrideInput
+        ? systemOverrideInput
+        : undefined;
     // 压缩摘要也是 role=system：它不是基底 system，缺省补回与 hook 改写都不能替换它。
     const isBaseSystem = (m: Message): boolean => m.role === 'system' && !m.compaction_summary;
     const hasSystem = messages.some(isBaseSystem);

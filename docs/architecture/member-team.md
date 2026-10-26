@@ -91,9 +91,9 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## 来源标注与 Team 归属
 
-- 每轮在模型请求的 systemPrompt 末尾注入 `[Message source]`（`from: human` / `from: agent:<id>` / `from: system`，`channel: team | direct`）和成员所属 `[Team]`。它只存在于本次请求，不写 `content`、不进入 `ContextManager` / session 历史；同一会话后续轮次重新按当轮消息生成。
+- 每轮把 `[Message source]`（`from: human` / `from: agent:<id>` / `from: system`，`channel: team | direct`）作为一条 `role: 'user'` / `name: 'vessel:source'` 消息，通过 `RunOptions.messages` 在用户输入之前注入。它持久化进 `ContextManager` / session 历史，后续轮次只在尾部追加，不改写 system 前缀。
 - `source` / `channel` 由 `AgentService.enqueueMessage` 按 registry 标注：已登记且非 external owner 的 id 记为 agent，其余 principal（root owner / 未登记 id）记为 human；Team `@` 的 dispatch 带 `origin_team_id` 时渠道记为 team，其余为 direct。二者是内存队列元数据，不落 snapshot。**只用于模型理解来源，不参与权限判定**；权限仍只由权限 bridge 的 human / policy 主体决定，注入文本不能作为授权依据。
-- Self Card 对绑定 Team 的成员带 `team_id`，unbound 成员不伪造该字段。core 的 Self Card 只渲染已知字段，`team_id` 由成员的 `BeforeLlm` hook 追加为 `team: <id>` 行。
+- Self Card 对绑定 Team 的成员带 `team_id`，unbound 成员不伪造该字段。core 的 `formatSelfCard` 直接渲染 `team: <id>` 行；不再由成员的 `BeforeLlm` hook 追加 Team 行。
 
 ## 约束
 
