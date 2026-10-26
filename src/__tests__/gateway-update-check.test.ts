@@ -101,6 +101,43 @@ describe('gateway update check', () => {
     handle.stop();
   });
 
+  it('stages the asset when one is available', async () => {
+    const { options, published } = baseOptions({
+      check: async () => NEWER,
+      stage: async () => ({
+        staged: true as const,
+        path: '/tmp/vessel-0.27.0.tgz',
+        version: '0.27.0',
+        sha256: 'a'.repeat(64),
+      }),
+    });
+    const handle = startGatewayUpdateCheck(options);
+
+    await handle.checkNow();
+
+    expect(published).toHaveLength(1);
+    expect(published[0]?.summary).toContain('staged');
+    expect(published[0]?.ok).toBe(true);
+    expect(published[0]?.details).toContain('staged: /tmp/vessel-0.27.0.tgz');
+    handle.stop();
+  });
+
+  it('reports staging failure without claiming the update is unavailable', async () => {
+    const { options, published } = baseOptions({
+      check: async () => NEWER,
+      stage: async () => ({ staged: false as const, reason: 'sha256 mismatch' }),
+    });
+    const handle = startGatewayUpdateCheck(options);
+
+    await handle.checkNow();
+
+    expect(published).toHaveLength(1);
+    expect(published[0]?.ok).toBe(false);
+    expect(published[0]?.summary).toContain('0.27.0');
+    expect(published[0]?.details).toContain('sha256 mismatch');
+    handle.stop();
+  });
+
   it('up-to-date publishes nothing', async () => {
     const { options, published } = baseOptions({ check: async () => UP_TO_DATE });
     const handle = startGatewayUpdateCheck(options);

@@ -18,6 +18,8 @@ import { readPackageVersion } from '../version';
 import { resolveUpdateChannel } from './background';
 import { readUpdateCache, shouldCheck, writeUpdateCache } from './cache';
 import { checkForUpdate } from './check';
+import { platformAssetKey, type UpdateManifest } from './manifest';
+import { type StageOutcome, stageUpdate } from './stage';
 
 /** 常驻进程的检查节拍：每小时 tick 一次；真正的网络请求由 24h 缓存节流。 */
 export const GATEWAY_UPDATE_TICK_MS = 60 * 60 * 1000;
@@ -42,6 +44,10 @@ export interface GatewayUpdateCheckOptions {
   env?: Record<string, string | undefined>;
   /** 测试注入。 */
   check?: typeof checkForUpdate;
+  /** 更新资产暂存；缺省下载 + sha256 校验到 `~/.vessel/updates`。 */
+  stage?: (manifest: UpdateManifest) => Promise<StageOutcome>;
+  /** 测试注入的暂存根目录。 */
+  updatesDir?: string;
   cache?: {
     read: typeof readUpdateCache;
     write: typeof writeUpdateCache;
@@ -97,6 +103,13 @@ export function startGatewayUpdateCheck(
     due: shouldCheck,
   };
   const check = options.check ?? checkForUpdate;
+  const stage =
+    options.stage ??
+    ((manifest: UpdateManifest) =>
+      stageUpdate({
+        manifest,
+        ...(options.updatesDir !== undefined ? { updatesDir: options.updatesDir } : {}),
+      }));
   const now = options.now ?? Date.now;
   const intervalMs = options.intervalMs ?? GATEWAY_UPDATE_TICK_MS;
   const initialDelayMs = options.initialDelayMs ?? GATEWAY_UPDATE_INITIAL_DELAY_MS;
@@ -131,12 +144,32 @@ export function startGatewayUpdateCheck(
       });
 
       if (result.upToDate || stopped) return;
-      options.notice.publish({
-        scope: 'update',
-        summary: `update: ${result.latest} available (current ${result.current})`,
-        details: [result.installHint],
-        ok: true,
-      });
+
+      // 只暂存、不安装、不重启：下一轮 hook 把结果告诉模型，Web 事件流也能看到。
+      const staged = await stage(result.manifest);
+      if (stopped) return;
+      if (staged.staged) {
+        options.notice.publish({
+          scope: 'update',
+          summary: `update: ${result.latest} staged (${platformAssetKey()})`,
+          details: [`staged: ${staged.path}`, result.installHint],
+          ok: true,
+        });
+      } else if (staged.skipped) {
+        options.notice.publish({
+          scope: 'update',
+          summary: `update: ${result.latest} available (current ${result.current})`,
+          details: [staged.reason, result.installHint],
+          ok: true,
+        });
+      } else {
+        options.notice.publish({
+          scope: 'update',
+          summary: `update: ${result.latest} found; staging failed`,
+          details: [staged.reason, result.installHint],
+          ok: false,
+        });
+      }
     } catch (error) {
       // 断网 / 清单损坏：静默，只留诊断日志。更新检查不能影响 gateway。
       logger?.warn('update.check.failed', {
