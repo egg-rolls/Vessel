@@ -204,8 +204,9 @@ export function createAgentTool(
       'Long-lived member lifecycle tool for this agent. ' +
       'action=create creates peer member(s) in the caller team (team members only; ' +
       'the root owner has no team and must use hire); ' +
-      'action=hire creates contractor member(s) owned by the caller (root-owned and ' +
-      'unbound for the root owner) and returns the created member; ' +
+      'action=hire creates contractor member(s) owned by the caller (any member may hire); ' +
+      'the new contractor is bound to the caller team when the caller has one and is unbound ' +
+      'otherwise, and returns the created member; ' +
       'action=send delivers a message to a member through the unified dispatch path ' +
       '(live members queue immediately, gone members resume first, rotating members are ' +
       'queued for the new body) and returns immediately; ' +
@@ -338,14 +339,17 @@ export function createAgentTool(
           options.ownerSessionId === undefined ||
           callerSession === options.ownerSessionId;
 
-        /** 成员派生入口的调用者：session 必须能解析出所属 Team，否则 no_team */
+        /**
+         * 成员派生入口的调用者：session 必须能解析出所属 Team，否则 no_team。
+         * 只有 create（peer）要求 Team；hire 对任意成员开放，team 可选。
+         */
         const requireTeamCaller = async (): Promise<MemberStatus & { team_id: string }> => {
           if (callerSession === undefined) {
-            throw invalid('no_team: create/hire requires a member session');
+            throw invalid('no_team: create requires a member session');
           }
           const caller = await service.identify(callerSession);
           if (caller === undefined || caller.team_id === undefined) {
-            throw invalid('no_team: create/hire requires a member with a team');
+            throw invalid('no_team: create requires a member with a team');
           }
           return caller as MemberStatus & { team_id: string };
         };
@@ -391,13 +395,21 @@ export function createAgentTool(
               spawnedBy: ownerId,
             };
           } else {
-            const caller = await requireTeamCaller();
+            // 任意成员（含 contractor，是否有 Team 均可）都能 hire：owner / parent 固定为调用者，
+            // 模型不能伪造。调用者有 Team 时绑定该 Team（计入上限 / 冻结），否则 unbound。
+            if (callerSession === undefined) {
+              throw invalid('hire requires a member session');
+            }
+            const caller = await service.identify(callerSession);
+            if (caller === undefined) {
+              throw invalid('hire requires a member session');
+            }
             fixed = {
               kind: 'contractor',
               owner: caller.id,
               parentId: caller.id,
-              teamId: caller.team_id,
               spawnedBy: caller.id,
+              ...(caller.team_id !== undefined ? { teamId: caller.team_id } : {}),
             };
           }
           const singles = ['name', 'model', 'system_prompt', 'visibility'];

@@ -23,6 +23,19 @@ applies_to: [N, M]
 - 冻结是 Team 元数据 `spawn_frozen`：冻结期间 `create` / `hire` / 人类 `agents.create` / `fork` / `reinstate` 一律 `team_frozen`；只能由 `teams.spawnFrozen false` 解冻，`teams.update` 不改该字段。
 - 审计：`agent.spawned` payload 带 `spawned_by`，Team join system 日志的 `from` 取它；private 成员按既有规则不写 Team 日志。
 
+### create / hire 矩阵
+
+| 调用者 | action | 结果 |
+|---|---|---|
+| root owner | `hire` | contractor；owner / parent = root；unbound（无 `team_id`） |
+| 有 Team 的成员（含 contractor） | `hire` | contractor；owner / parent = 调用者；`team_id` = 调用者 Team，计入 20 人上限与 `team_frozen` |
+| 无 Team 的成员（unbound contractor） | `hire` | contractor；owner / parent = 调用者；无 `team_id`，不计 Team 上限 |
+| 有 Team 的成员 | `create` | peer；无 owner / parent；强制调用者 Team、visibility `team` |
+
+- `hire` 对任意成员开放：contractor 可以再 hire；root 与 unbound 成员都落 unbound 分支。
+- `create` 仍只给有 Team 的成员；root 不能 `create`（root 只有 `hire`）。
+- action 只有 `create` / `hire` / `send` / `close` / `list` / `rotate` / `post`；`new` 不是当前 action，旧名不恢复。
+
 ## session / Body
 
 - `create` 创建的成员初始 `session_id === id`；`rotate` 换活 Body，旧 Body 进 `body_history`。

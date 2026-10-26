@@ -63,6 +63,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 - `AgentService.create` 接受 `CreateMemberInput`：`kind?: 'peer' | 'contractor'` / `owner?: string | null` / `teamId?` / `spawnedBy?`。`kind` 不持久化，只决定 owner / parent / visibility 与校验。
 - **peer**：无 owner / parent，必须绑定 Team，visibility 强制 `team`。**contractor**：owner / parent 缺省为 owner（工具路径填调用者，service 缺省是 root owner）；有 Team 时 visibility 缺省 `team`，unbound 时缺省 `private`。`owner` 省略由入口 / service 补齐，`null` 是显式无 owner。
+- **`agent` 工具 `hire` 对任意成员开放**（含 contractor，是否有 Team 均可）：owner / parent 固定为调用者；调用者有 Team 时绑定该 `team_id`（计入上限 / 冻结），否则 unbound 且不计 Team 上限。`create`（peer）仍要求调用者有 Team，root 只能 `hire`；`new` 不是当前 action。
 - 每 Team present 成员 ≤ 20（peer + contractor 都计入）；`create` / `hire` / `fork` / `reinstate` 增长前检查，超限 `team_full`。同 Team 的幂等 reinstate 不增长，不被冻结 / 上限拦。
 - **冻结**：`TeamRecord.spawn_frozen?` 持久化，`TeamSummary.spawn_frozen?` 回显；canonical `teams.spawnFrozen` 是唯一写路径，`teams.update` 不改。冻结期间 `create` / `hire` / 人类 `agents.create` / `fork` / `reinstate` 全部 `team_frozen`；只有 `frozen: false` 解冻。CLI 为 `vessel team freeze|unfreeze <team_id>`，team-scoped token 只能操作自己的 team。
 - **close 审批与级联**：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接 allow；成员关闭 peer 经权限 bridge 交人类审批；root owner 记录与跨 Team contractor 拒绝；无 bridge 时 ask fail closed。owner close 按 registry 原始记录级联关闭自己的 private contractor，team 可见 contractor 保持 present。

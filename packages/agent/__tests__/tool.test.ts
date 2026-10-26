@@ -480,7 +480,7 @@ describe('agent tool', () => {
     );
   });
 
-  it('member without a team gets no_team for create and hire', async () => {
+  it('unbound contractor can hire an unbound contractor; create still needs a team', async () => {
     const made = makeService();
     const tool = createAgentTool(made.service, {
       ownerId: 'main',
@@ -490,14 +490,96 @@ describe('agent tool', () => {
     const member = parse<MemberStatus>(
       await callAs(tool, { action: 'hire', name: 'loner' }, 'owner-session'),
     );
+    expect(member.team_id).toBeUndefined();
 
     expect(await callAs(tool, { action: 'create', name: 'x' }, member.session_id)).toMatch(
       /^Error: invalid_input: no_team: /,
     );
-    expect(await callAs(tool, { action: 'hire', name: 'y' }, member.session_id)).toMatch(
-      /^Error: invalid_input: no_team: /,
+
+    const nested = parse<MemberStatus>(
+      await callAs(tool, { action: 'hire', name: 'y' }, member.session_id),
     );
-    expect(made.runtime.spawned.map((entry) => entry.name)).toEqual(['loner']);
+    expect(nested.owner).toBe(member.id);
+    expect(nested.parent_id).toBe(member.id);
+    expect(nested.team_id).toBeUndefined();
+    expect(nested.visibility).toBe('private');
+    expect(made.runtime.spawned.map((entry) => entry.name)).toEqual(['loner', 'y']);
+  });
+
+  it('team-bound contractor can hire and the new contractor joins the same team', async () => {
+    const made = makeService({ teamBinder: makeBinder(makeTeamRecord(TEAM_ID)) });
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+    });
+    const lead = await made.service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+    const contractor = parse<MemberStatus>(
+      await callAs(tool, { action: 'hire', name: 'contractor' }, lead.session_id),
+    );
+    expect(contractor.team_id).toBe(TEAM_ID);
+
+    const nested = parse<MemberStatus>(
+      await callAs(tool, { action: 'hire', name: 'nested' }, contractor.session_id),
+    );
+    expect(nested.owner).toBe(contractor.id);
+    expect(nested.parent_id).toBe(contractor.id);
+    expect(nested.team_id).toBe(contractor.team_id);
+    expect(nested.visibility).toBe('team');
+    // peer lead + contractor + nested 三个 present 成员都计入 Team。
+    const teamMembers = (await made.service.list()).filter((entry) => entry.team_id === TEAM_ID);
+    expect(teamMembers.length).toBe(3);
+    expect(made.runtime.spawned.map((entry) => entry.name)).toEqual([
+      'lead',
+      'contractor',
+      'nested',
+    ]);
+  });
+
+  it('nested hires count toward the 20-member team cap and then return team_full', async () => {
+    const made = makeService({ teamBinder: makeBinder(makeTeamRecord(TEAM_ID)) });
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+    });
+    const lead = await made.service.create({
+      kind: 'peer',
+      teamId: TEAM_ID,
+      name: 'lead',
+      spawnedBy: 'main',
+    });
+    const contractor = parse<MemberStatus>(
+      await callAs(tool, { action: 'hire', name: 'nested-0' }, lead.session_id),
+    );
+    // lead + nested-0 = 2 present；补到 19，让下一次 nested hire 正好是第 20 个。
+    for (let index = 1; index <= 17; index += 1) {
+      await made.service.create({
+        kind: 'contractor',
+        teamId: TEAM_ID,
+        owner: lead.id,
+        parentId: lead.id,
+        name: `filler-${index}`,
+        spawnedBy: lead.id,
+      });
+    }
+
+    const twentieth = parse<MemberStatus>(
+      await callAs(tool, { action: 'hire', name: 'twentieth' }, contractor.session_id),
+    );
+    expect(twentieth.team_id).toBe(TEAM_ID);
+
+    const overflow = await callAs(
+      tool,
+      { action: 'hire', name: 'overflow' },
+      contractor.session_id,
+    );
+    expect(overflow).toBe(`Error: team_full: ${TEAM_ID}`);
+    const teamMembers = (await made.service.list()).filter((entry) => entry.team_id === TEAM_ID);
+    expect(teamMembers.length).toBe(20);
   });
 
   it('batch create isolates a per-entry failure for a team member', async () => {
