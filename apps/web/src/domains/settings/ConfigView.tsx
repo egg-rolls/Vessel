@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { CopyButton } from '../../components/CopyButton';
 import { JsonView } from '../../components/JsonView';
@@ -7,25 +7,27 @@ import { Badge, Button, DataTable, KeyValueList, SearchInput, Section } from '..
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import { filterConfigEntries, flattenConfig } from '../../state/config';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
 export function ConfigView() {
   useLocale();
-  const { client, connectionState, hasToken, features, epoch, tenantId } = useConnection();
+  const { connectionState, hasToken, features, tenantId } = useConnection();
   const connected = hasToken && connectionState === 'open';
-  const available = hasToken && features.includes('config');
   const [query, setQuery] = useState('');
 
-  const resource = useResource({
-    load: async () => {
-      const [config, sources] = await Promise.all([client.getConfig(), client.getConfigSources()]);
-      return { config, sources };
-    },
-    enabled: available,
-    deps: [epoch],
-  });
-  useRefreshSignal(resource.reload);
-  const data = resourceData(resource.state);
+  const { config, sources, reloadConfig, reloadSources } = useConfigStoreApi({ sources: true });
+  const refresh = useCallback(() => {
+    reloadConfig();
+    reloadSources();
+  }, [reloadConfig, reloadSources]);
+  useRefreshSignal(refresh);
+  const configData = resourceData(config);
+  const sourcesData = resourceData(sources);
+  const data =
+    configData !== undefined && sourcesData !== undefined
+      ? { config: configData, sources: sourcesData }
+      : undefined;
   const entries = useMemo(() => (data ? flattenConfig(data.config.config) : []), [data]);
   const filteredEntries = useMemo(() => filterConfigEntries(entries, query), [entries, query]);
 
@@ -41,21 +43,24 @@ export function ConfigView() {
       />
     );
   }
+  const configError =
+    config.status === 'error' ? config.error : sources.status === 'error' ? sources.error : null;
+
   if (!data) {
-    return resource.state.status === 'error' ? (
-      <ErrorState message={resource.state.error} onRetry={resource.reload} />
+    return configError ? (
+      <ErrorState message={configError} onRetry={refresh} />
     ) : (
       <LoadingState label={t('config.loading')} />
     );
   }
   const sourceEntries = Object.entries(data.sources.sources);
-  const error = resource.state.status === 'error' ? resource.state.error : null;
+  const error = configError;
 
   return (
     <div className="flex flex-col gap-6">
-      {!connected && <StaleNotice message={t('config.stale')} onRetry={resource.reload} />}
+      {!connected && <StaleNotice message={t('config.stale')} onRetry={refresh} />}
       {error && (
-        <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
+        <StaleNotice message={t('common.staleData', { detail: error })} onRetry={refresh} />
       )}
       <Section
         title={t('config.title')}
@@ -66,7 +71,7 @@ export function ConfigView() {
               label={t('config.copyJson')}
               toast={t('config.copiedJson')}
             />
-            <Button size="small" onClick={resource.reload}>
+            <Button size="small" onClick={refresh}>
               {t('common.refresh')}
             </Button>
           </div>

@@ -287,6 +287,14 @@ export interface TeamUpdateInput {
   policy?: Record<string, unknown>;
 }
 
+/**
+ * Agent 角色 v3（CONTRACT-role-model §1）。
+ *
+ * `single` = 独立 agent；`member` = 团队成员；`temporary` = 临时雇佣者。
+ * 旧 gateway 只返回 owner，UI 用 `roleOf()` 推断（owner 缺失 = member）。
+ */
+export type AgentRole = 'single' | 'member' | 'temporary';
+
 /** teams.get.members 元素。 */
 export interface TeamMember {
   agent_id: string;
@@ -299,7 +307,9 @@ export interface TeamMember {
   epoch?: number;
   /** S3 R1：已退役 Body，≤20；缺失时回退到事件累积。 */
   body_history?: TeamBodyHistoryEntry[];
-  /** 0.27 additive：owner 存在 = contractor，缺失 = peer。 */
+  /** v3 additive：角色；旧 gateway 缺失时按 owner 推断。 */
+  role?: AgentRole;
+  /** v3 additive：single/member = self，temporary = 雇佣者；缺失时按旧语义推断。 */
   owner?: string;
 }
 
@@ -373,6 +383,8 @@ export interface AgentSummary {
   model?: string;
   system_prompt?: string;
   session_id?: string;
+  /** v3 additive：角色；旧 gateway 缺失时按 owner 推断。 */
+  role?: AgentRole;
   /** 0.27 additive：owner 存在 = contractor，缺失 = peer。 */
   owner?: string;
 }
@@ -393,6 +405,10 @@ export interface AgentUpdateInput {
   name?: string;
   model?: string;
   system_prompt?: string;
+  /** v3：转换角色；member 必须带 Team。 */
+  role?: AgentRole;
+  /** v3：转换 / 绑定 Team；member 必需，temporary 可选。 */
+  team_id?: string;
 }
 
 /** canonical `agents.create|update|close` 是批量形状；Web 每次只发一条。 */

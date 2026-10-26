@@ -36,7 +36,9 @@ import {
   sortMessages,
   type TeamEventState,
 } from '../../state/teams';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 import { isOnlineMember } from './member-status';
 import { type MentionChip, memberDisplayName, mentionIds, shortAgentId } from './mention';
 import { TeamComposer } from './TeamComposer';
@@ -75,6 +77,8 @@ export interface TeamChatProps {
   epoch: number;
   tenantEpoch: number;
   teamId: string;
+  /** Store key discriminator for multi-node Teams; defaults for tests / preview. */
+  nodeKey?: string;
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
   events: readonly StoredEvent[];
@@ -108,6 +112,7 @@ export function TeamChat({
   epoch,
   tenantEpoch,
   teamId,
+  nodeKey = 'local',
   permissions,
   asks,
   events,
@@ -149,24 +154,32 @@ export function TeamChat({
     returnFocusId: 'team-members-toggle',
   });
 
-  const resource = useResource({
-    load: () => {
+  const storeKey = teamDetailKey(nodeKey, teamId, 'chat');
+  const detailState = useTeamStore((state) => state.details[storeKey]);
+  const loadDetail = useTeamStore((state) => state.loadDetail);
+  const postTeam = useTeamStore((state) => state.post);
+  const reload = () => {
+    void loadDetail(nodeKey, teamId, client, { limit, members_limit: membersLimit }, 'chat');
+  };
+
+  usePolledAction(
+    () => {
       const cached = detailRef.current;
-      if (!shouldFetchTeam(sendingRef.current, cached !== undefined) && cached) {
-        return Promise.resolve(cached);
+      if (shouldFetchTeam(sendingRef.current, cached !== undefined) || !cached) {
+        void loadDetail(nodeKey, teamId, client, { limit, members_limit: membersLimit }, 'chat');
       }
-      return client.getTeam(teamId, { limit, members_limit: membersLimit });
     },
-    enabled: hasToken,
-    pollMs: TEAM_POLL_MS,
-    deps: [epoch, tenantEpoch, teamId, limit, membersLimit],
-    ...(initialDetail !== undefined ? { initialData: initialDetail } : {}),
-  });
-  const reloadRef = useRef(resource.reload);
-  reloadRef.current = resource.reload;
+    {
+      enabled: hasToken,
+      pollMs: TEAM_POLL_MS,
+      deps: [epoch, tenantEpoch, teamId, limit, membersLimit, nodeKey],
+    },
+  );
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
   sendingRef.current = sending;
 
-  const detail = resourceData(resource.state) ?? initialDetail;
+  const detail = resourceData(detailState) ?? initialDetail;
   detailRef.current = detail;
   const team = detail?.team;
   const members = useMemo(() => detail?.members ?? [], [detail]);
@@ -187,10 +200,10 @@ export function TeamChat({
 
   // 轮询结果并入本地列表；乐观项单独保存，不按内容模糊删除。
   useEffect(() => {
-    const incoming = resourceData(resource.state)?.messages;
+    const incoming = resourceData(detailState)?.messages;
     if (!incoming || incoming.length === 0) return;
     setMessages((prev) => mergeMessages(prev, incoming));
-  }, [resource.state]);
+  }, [detailState]);
 
   // `agent.reply.posted` 立即插入；其它 agent.* 事件只做 roster 失效刷新。
   useEffect(() => {
@@ -256,7 +269,7 @@ export function TeamChat({
     sendingRef.current = true;
 
     try {
-      const result = await client.postTeam({ team_id: teamId, content, mentions });
+      const result = await postTeam(client, { team_id: teamId, content, mentions });
       setSends((prev) =>
         prev.map((send) =>
           send.localId === localId
@@ -314,10 +327,11 @@ export function TeamChat({
 
   const { canLoadEarlier, historyLimited, visibleCount } = teamWindowFlags(limit, rows.length);
   const error =
-    resource.state.status === 'error'
-      ? { message: resource.state.error, code: resource.state.code }
+    detailState?.status === 'error'
+      ? { message: detailState.error, code: detailState.code }
       : initialError;
   const firstLoading = !detail && !error;
+  const refreshing = detailState?.status === 'loading' && resourceData(detailState) !== undefined;
 
   return (
     <section className="team-chat" aria-label={team?.name ?? teamId}>
@@ -361,17 +375,15 @@ export function TeamChat({
           <Button className="team-chat-back hidden max-wide:inline-flex" onClick={onBackToList}>
             {t('team.chat.backToList')}
           </Button>
-          <Button onClick={resource.reload} disabled={!hasToken || resource.refreshing}>
-            {resource.refreshing ? t('team.chat.refreshing') : t('team.chat.refresh')}
+          <Button onClick={reload} disabled={!hasToken || refreshing}>
+            {refreshing ? t('team.chat.refreshing') : t('team.chat.refresh')}
           </Button>
         </div>
       </header>
 
       <div className="team-chat-body">
         <div className="team-chat-main">
-          {detail && error && (
-            <StaleNotice message={t('team.error.stale')} onRetry={resource.reload} />
-          )}
+          {detail && error && <StaleNotice message={t('team.error.stale')} onRetry={reload} />}
           <div className="team-transcript-scroll">
             {rotateFailure && (
               <div
@@ -413,7 +425,7 @@ export function TeamChat({
               ) : (
                 <ErrorState
                   message={error?.message ?? t('team.error.loadFailed')}
-                  onRetry={resource.reload}
+                  onRetry={reload}
                 />
               )
             ) : rows.length === 0 ? (

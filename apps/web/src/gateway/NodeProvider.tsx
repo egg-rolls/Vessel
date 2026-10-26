@@ -1,19 +1,22 @@
 /**
- * 多节点上下文（S9.4，只读聚合）。
+ * 多节点上下文（S9.4）：ConnectionProvider 之上的只读聚合。
  *
- * 当前 WS 连接作为「当前节点」，与 sessionStorage 中的额外节点合并展示。
- * `nodes` 只含 name / url / nodeId / current，永不携带 token；
- * token 只存在于当前连接状态与 sessionStorage，按调用时刻解析。
+ * Node data now lives in `nodeStore` (nodes / current / per-node health); this
+ * provider is the bridge that feeds the connection state and sessionStorage
+ * extras in, and exposes token-bound control helpers. Tokens never enter the
+ * store: `nodes` only contains name / url / nodeId / current.
  */
 import {
   createContext,
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
-  useState,
 } from 'react';
+import { useNodeStore } from '../stores/nodeStore';
+import { usePolledAction } from '../stores/usePolledAction';
 import { useConnection } from './ConnectionProvider';
 import type { ListedInteractionPage } from './interaction-hydration';
 import {
@@ -35,7 +38,6 @@ import {
 } from './nodes';
 import { createRemoteTeamControl, type TeamControl } from './team-control';
 import type { HealthResponse, TeamSummary } from './types';
-import { displayGatewayUrl } from './url';
 
 export interface NodeView extends NodeConfig {
   /** 是否为当前 WS 连接节点（只有它能在本页跳转会话）。 */
@@ -69,44 +71,30 @@ export interface NodeContextValue {
 
 const NodeContext = createContext<NodeContextValue | null>(null);
 
-function pageOrigin(): string {
-  return typeof window === 'undefined' ? '' : window.location.origin;
-}
-
 function pageProtocol(): string {
   return typeof window === 'undefined' ? 'http:' : window.location.protocol;
 }
 
+const NODE_HEALTH_POLL_MS = 15_000;
+
 export function NodeProvider({ children }: { children: ReactNode }) {
-  const { client, token, gatewayUrl, hello, hasToken } = useConnection();
+  const { client, token, gatewayUrl, hello, hasToken, epoch } = useConnection();
   const tokenRef = useRef(token);
   tokenRef.current = token;
 
-  const [extras, setExtras] = useState<NodeConfig[]>(() => readStoredNodes());
-  const extrasRef = useRef(extras);
-  extrasRef.current = extras;
+  const extras = useNodeStore((state) => state.extras);
+  const nodes = useNodeStore((state) => state.nodes);
+  const current = useNodeStore((state) => state.current);
+  const loadHealth = useNodeStore((state) => state.loadHealth);
 
-  const current = useMemo<NodeView | null>(() => {
-    if (!hasToken) return null;
-    const info = hello?.node;
-    const name = info?.name?.trim() || info?.node_id || displayGatewayUrl(gatewayUrl, pageOrigin());
-    return {
-      name,
-      url: gatewayUrl,
-      ...(info?.node_id ? { nodeId: info.node_id } : {}),
-      current: true,
-    };
+  // Persisted extras are read once; connection identity is mirrored on change.
+  useEffect(() => {
+    useNodeStore.getState().setExtras(readStoredNodes());
+  }, []);
+
+  useEffect(() => {
+    useNodeStore.getState().setConnection({ hasToken, hello, gatewayUrl });
   }, [hasToken, hello, gatewayUrl]);
-
-  const extraViews = useMemo<NodeView[]>(
-    () => extras.map((node) => ({ ...node, current: false })),
-    [extras],
-  );
-
-  const nodes = useMemo<readonly NodeView[]>(
-    () => (current ? [current, ...extraViews] : extraViews),
-    [current, extraViews],
-  );
 
   /** 当前节点用实时连接 token；额外节点读各自的 sessionStorage key。 */
   const tokenFor = useCallback((node: NodeConfig): string | undefined => {
@@ -114,8 +102,25 @@ export function NodeProvider({ children }: { children: ReactNode }) {
     return readNodeToken(node.name) ?? undefined;
   }, []);
 
+  const fetchHealth = useCallback(
+    (node: NodeView) => fetchNodeRpc<HealthResponse>(node, 'health.get', {}, tokenFor(node)),
+    [tokenFor],
+  );
+
+  const nodeKeys = nodes.map((node) => node.nodeId ?? node.name).join(',');
+  usePolledAction(
+    () => {
+      if (nodes.length > 0) void loadHealth(nodes, fetchHealth);
+    },
+    {
+      enabled: nodes.length > 0,
+      pollMs: NODE_HEALTH_POLL_MS,
+      deps: [epoch, hasToken, nodeKeys],
+    },
+  );
+
   const refresh = useCallback(() => {
-    setExtras(readStoredNodes());
+    useNodeStore.getState().setExtras(readStoredNodes());
   }, []);
 
   const addNode = useCallback(
@@ -125,10 +130,10 @@ export function NodeProvider({ children }: { children: ReactNode }) {
         return { ok: false, ...(check.error ? { error: check.error } : {}) };
       }
       const config: NodeConfig = { name: check.value.name, url: check.value.url };
-      const next = [...extrasRef.current.filter((node) => node.name !== config.name), config];
+      const next = [...readStoredNodes().filter((node) => node.name !== config.name), config];
       writeStoredNodes(next);
       storeNodeToken(config.name, check.value.token);
-      setExtras(next);
+      useNodeStore.getState().addExtra(config);
       return { ok: true };
     },
     [nodes],
@@ -136,9 +141,9 @@ export function NodeProvider({ children }: { children: ReactNode }) {
 
   const removeNode = useCallback((name: string) => {
     removeNodeToken(name);
-    const next = extrasRef.current.filter((node) => node.name !== name);
+    const next = readStoredNodes().filter((node) => node.name !== name);
     writeStoredNodes(next);
-    setExtras(next);
+    useNodeStore.getState().removeExtra(name);
   }, []);
 
   const fetchAttention = useCallback(
@@ -150,11 +155,6 @@ export function NodeProvider({ children }: { children: ReactNode }) {
   const fetchAllAttention = useCallback(
     (params: NodeAttentionParams = {}) => fetchAllNodeAttention(nodes, params, tokenFor),
     [nodes, tokenFor],
-  );
-
-  const fetchHealth = useCallback(
-    (node: NodeView) => fetchNodeRpc<HealthResponse>(node, 'health.get', {}, tokenFor(node)),
-    [tokenFor],
   );
 
   const teamControl = useCallback(
@@ -175,7 +175,7 @@ export function NodeProvider({ children }: { children: ReactNode }) {
   const value = useMemo<NodeContextValue>(
     () => ({
       nodes,
-      extras: extraViews,
+      extras,
       current,
       addNode,
       removeNode,
@@ -189,7 +189,7 @@ export function NodeProvider({ children }: { children: ReactNode }) {
     }),
     [
       nodes,
-      extraViews,
+      extras,
       current,
       addNode,
       removeNode,

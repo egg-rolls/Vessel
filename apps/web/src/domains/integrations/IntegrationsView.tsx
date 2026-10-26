@@ -21,6 +21,7 @@ import type { ToolInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { buildMcpPaletteActions } from '../../state/palette-actions';
 import { resourceData, useResource } from '../../state/useResource';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { ToolPolicyControl } from './ToolPolicyControl';
 import {
   hasScopedNever,
@@ -114,15 +115,12 @@ function ToolsPanel() {
     enabled: hasToken,
     deps: [epoch],
   });
-  const configResource = useResource({
-    load: () => client.getConfig(),
-    enabled: hasToken,
-    deps: [epoch],
-  });
+  // Shared with the tool-policy dialog: no second config.get for the badges.
+  const { config: configState, reloadConfig } = useConfigStoreApi();
   useRefreshSignal(resource.reload);
-  useRefreshSignal(configResource.reload);
+  useRefreshSignal(reloadConfig);
   const tools = useMemo(() => resourceData(resource.state) ?? [], [resource.state]);
-  const config = resourceData(configResource.state);
+  const config = resourceData(configState);
   const permissionLists = useMemo(() => readPermissionLists(config?.config), [config]);
   /** config 不可用时不给策略徽章，也不推断“需确认”。 */
   const policyKnown = config !== undefined;
@@ -269,7 +267,7 @@ function ToolsPanel() {
               <p className="m-0 text-md leading-relaxed text-muted">{detail.description}</p>
             )}
           </div>
-          <ToolPolicyControl tool={detail} onPolicySaved={configResource.reload} />
+          <ToolPolicyControl tool={detail} />
           <JsonView
             value={detail.input_schema}
             label={t('integrations.tools.schema')}

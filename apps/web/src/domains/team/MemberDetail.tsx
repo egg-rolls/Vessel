@@ -5,7 +5,7 @@
  * `agent.rotated / agent.retired` 的本次页面观察值，并明确标注。
  * 不提供配置 / rotate / close 操作。
  */
-import { type ReactNode, useMemo } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { Markdown } from '../../components/Markdown';
 import {
   EmptyState,
@@ -15,9 +15,12 @@ import {
   StaleNotice,
 } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Button } from '../../components/ui';
+import { useOptionalToast } from '../../components/ToastProvider';
+import { Badge, Button, Select } from '../../components/ui';
 import { formatClock, formatTimestamp, localDayKey, localDayLabel } from '../../format';
 import type {
+  AgentSummary,
+  AgentUpdateInput,
   Message,
   SessionDetail,
   TeamBodyHistoryEntry,
@@ -40,12 +43,22 @@ import {
   serverBodyHistory,
 } from '../../state/teams';
 import { resourceData, useResource } from '../../state/useResource';
+import { teamDetailKey, teamListData, useTeamStore } from '../../stores/teamStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 import { memberStatus } from './member-status';
 import { shortAgentId } from './mention';
+import {
+  conversionActions,
+  conversionError,
+  type RoleConversion,
+  roleLabelKey,
+  roleOf,
+} from './role';
 import type { TeamChatClient } from './TeamChat';
 
 export interface MemberDetailClient extends TeamChatClient {
   getSession(sessionId: string): Promise<SessionDetail>;
+  updateAgent(input: AgentUpdateInput): Promise<AgentSummary>;
 }
 
 export interface MemberDetailProps {
@@ -55,6 +68,8 @@ export interface MemberDetailProps {
   tenantEpoch: number;
   teamId: string;
   memberId: string;
+  /** Store key discriminator for multi-node Teams; defaults for tests / preview. */
+  nodeKey?: string;
   bodyId?: string;
   events: readonly StoredEvent[];
   /** 返回群聊。 */
@@ -255,6 +270,135 @@ function BodyHistoryList({
   );
 }
 
+const CONVERSION_LABEL_KEYS: Record<RoleConversion, string> = {
+  member: 'team.role.toMember',
+  temporary: 'team.role.toTemporary',
+  single: 'team.role.toSingle',
+};
+
+function errorCodeOf(error: unknown): string | undefined {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function RoleConversionSection({
+  member,
+  teamId,
+  nodeKey,
+  client,
+  hasToken,
+  onConverted,
+}: {
+  member: TeamMember;
+  teamId: string;
+  nodeKey: string;
+  client: MemberDetailClient;
+  hasToken: boolean;
+  onConverted: () => void;
+}) {
+  const toast = useOptionalToast();
+  const role = roleOf(member);
+  const actions = conversionActions(role);
+  const teamList = useTeamStore((state) => state.lists[nodeKey]);
+  const teams = teamListData(teamList)?.teams ?? [];
+  const teamOptions = teams.filter((team) => team.archived_at === undefined);
+  const [targetTeamId, setTargetTeamId] = useState(teamId);
+  const [busy, setBusy] = useState<RoleConversion | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [denied, setDenied] = useState(false);
+  const needsTeam = actions.includes('member');
+  const canWrite = hasToken && !denied;
+
+  const convert = async (target: RoleConversion) => {
+    if (!canWrite || busy) return;
+    const invalid = conversionError(target, targetTeamId);
+    if (invalid) {
+      setError(t('team.role.memberRequiresTeam'));
+      return;
+    }
+    setBusy(target);
+    setError(null);
+    const input: AgentUpdateInput = { agent_id: member.agent_id, role: target };
+    if (target === 'member') input.team_id = targetTeamId.trim();
+    try {
+      await client.updateAgent(input);
+      toast?.success(
+        t('team.role.success', {
+          name: member.name?.trim() || shortAgentId(member.agent_id),
+          role: t(roleLabelKey(target)),
+        }),
+      );
+      onConverted();
+    } catch (caught) {
+      if (errorCodeOf(caught) === 'forbidden') {
+        setDenied(true);
+        setError(t('team.role.forbidden'));
+      } else {
+        const detail = caught instanceof Error ? caught.message : String(caught);
+        setError(`${t('team.role.failed')}: ${detail}`);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="text-md font-semibold text-ink">{t('team.role.convert')}</h2>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm text-muted">{t('team.role.label')}</span>
+        <Badge>{t(roleLabelKey(role))}</Badge>
+      </div>
+      {needsTeam && (
+        <label
+          className="flex flex-wrap items-center gap-2 text-sm text-muted"
+          htmlFor="member-role-team"
+        >
+          <span>{t('team.role.memberTeam')}</span>
+          <Select
+            id="member-role-team"
+            value={targetTeamId}
+            onChange={(event) => setTargetTeamId(event.target.value)}
+            aria-label={t('team.role.memberTeam')}
+            disabled={!canWrite || busy !== null}
+          >
+            {teamOptions.length === 0 && (
+              <option value={teamId}>
+                {teams.find((team) => team.team_id === teamId)?.name || teamId}
+              </option>
+            )}
+            {teamOptions.map((team) => (
+              <option key={team.team_id} value={team.team_id}>
+                {team.name || team.team_id}
+              </option>
+            ))}
+          </Select>
+        </label>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {actions.map((target) => (
+          <Button
+            key={target}
+            size="small"
+            disabled={!canWrite || busy !== null}
+            onClick={() => {
+              void convert(target);
+            }}
+          >
+            {busy === target ? t('team.role.busy') : t(CONVERSION_LABEL_KEYS[target])}
+          </Button>
+        ))}
+      </div>
+      {!hasToken && <p className="m-0 text-xs text-muted">{t('common.writesDisabled')}</p>}
+      {error && (
+        <p className="m-0 rounded-sm bg-danger-soft px-2.5 py-1.5 text-xs text-danger" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
 export function MemberDetail({
   client,
   hasToken,
@@ -262,6 +406,7 @@ export function MemberDetail({
   tenantEpoch,
   teamId,
   memberId,
+  nodeKey = 'local',
   bodyId,
   events,
   onBack,
@@ -272,13 +417,18 @@ export function MemberDetail({
   initialSession,
   initialError,
 }: MemberDetailProps) {
-  const resource = useResource({
-    load: () => client.getTeam(teamId, { limit: 1 }),
-    enabled: hasToken,
-    pollMs: 4_000,
-    deps: [epoch, tenantEpoch, teamId],
-    ...(initialDetail !== undefined ? { initialData: initialDetail } : {}),
-  });
+  const storeKey = teamDetailKey(nodeKey, teamId, 'member');
+  const detailState = useTeamStore((state) => state.details[storeKey]);
+  const loadDetail = useTeamStore((state) => state.loadDetail);
+  const reload = () => {
+    void loadDetail(nodeKey, teamId, client, { limit: 1 }, 'member');
+  };
+  usePolledAction(
+    () => {
+      void loadDetail(nodeKey, teamId, client, { limit: 1 }, 'member');
+    },
+    { enabled: hasToken, pollMs: 4_000, deps: [epoch, tenantEpoch, teamId, nodeKey] },
+  );
 
   // 回退历史只读事件；页面内同步派生，刷新后自然丢弃。
   const observedState = useMemo(() => {
@@ -290,7 +440,7 @@ export function MemberDetail({
     return state;
   }, [events, teamId]);
 
-  const detail = resourceData(resource.state) ?? initialDetail;
+  const detail = resourceData(detailState) ?? initialDetail;
   const member = useMemo(
     () => detail?.members.find((item: TeamMember) => item.agent_id === memberId),
     [detail, memberId],
@@ -306,8 +456,8 @@ export function MemberDetail({
   );
 
   const error =
-    resource.state.status === 'error'
-      ? { message: resource.state.error, code: resource.state.code }
+    detailState?.status === 'error'
+      ? { message: detailState.error, code: detailState.code }
       : initialError;
 
   if (bodyId) {
@@ -337,7 +487,7 @@ export function MemberDetail({
         hint={t('team.error.notEnabledHint')}
       />
     ) : (
-      <ErrorState message={error.message} onRetry={resource.reload} />
+      <ErrorState message={error.message} onRetry={reload} />
     );
   }
 
@@ -377,6 +527,7 @@ export function MemberDetail({
               label={t(status.labelKey)}
               title={status.titleKey ? t(status.titleKey) : undefined}
             />
+            <Badge>{t(roleLabelKey(roleOf(member)))}</Badge>
             <span className="text-muted">
               {t('team.member.visibility', { visibility: member.visibility })}
             </span>
@@ -387,7 +538,7 @@ export function MemberDetail({
         </div>
       </header>
 
-      {error && <StaleNotice message={t('team.error.stale')} onRetry={resource.reload} />}
+      {error && <StaleNotice message={t('team.error.stale')} onRetry={reload} />}
 
       <div className="mx-auto flex w-full max-w-225 flex-col gap-5 px-8 py-5 pb-8 max-compact:px-4">
         <section className="team-body-card rounded-md border border-line bg-surface p-4">
@@ -422,6 +573,16 @@ export function MemberDetail({
             {t('team.member.currentSession')}
           </Button>
         </section>
+
+        <RoleConversionSection
+          key={`${nodeKey}:${teamId}:${member.agent_id}`}
+          member={member}
+          teamId={teamId}
+          nodeKey={nodeKey}
+          client={client}
+          hasToken={hasToken}
+          onConverted={reload}
+        />
 
         <section className="flex flex-col gap-2">
           <h2 className="text-md font-semibold text-ink">{t('team.member.retiredBodies')}</h2>

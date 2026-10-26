@@ -116,7 +116,11 @@ export function AgentCreateDialog({
             </Select>
           </Field>
 
-          <Field label={t('agents.form.kind')} htmlFor="agent-create-kind">
+          <Field
+            label={t('agents.form.kind')}
+            htmlFor="agent-create-kind"
+            hint={t('agents.form.roleHint')}
+          >
             <Select
               id="agent-create-kind"
               value={draft.kind ?? 'peer'}

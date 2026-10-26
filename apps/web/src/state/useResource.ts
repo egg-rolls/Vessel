@@ -22,8 +22,9 @@ export function errorCodeOf(error: unknown): string | undefined {
 
 export const initialResourceState: ResourceState<never> = { status: 'idle' };
 
-/** 取出当前数据（success 或保留的旧数据）。 */
-export function resourceData<T>(state: ResourceState<T>): T | undefined {
+/** 取出当前数据（success 或保留的旧数据）；store 中尚未出现的 key 为 undefined。 */
+export function resourceData<T>(state: ResourceState<T> | undefined): T | undefined {
+  if (!state) return undefined;
   if (state.status === 'success') return state.data;
   if (state.status === 'loading' || state.status === 'error') return state.data;
   return undefined;

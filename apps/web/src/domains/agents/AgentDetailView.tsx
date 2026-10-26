@@ -16,6 +16,7 @@ import { nodeKeyOf } from '../../gateway/nodes';
 import type { RosterAgent } from '../../gateway/team-roster';
 import { t, useLocale } from '../../i18n';
 import { useNodeNames } from '../nodes/useNodeNames';
+import { roleLabelKey, roleOf } from '../team/role';
 import { agentErrorText } from './agent-errors';
 import { agentDisplayName } from './agent-search';
 
@@ -108,6 +109,11 @@ export function AgentDetailView({
                     {agent.team.name || agent.team.team_id}
                   </Button>
                 ),
+              },
+              {
+                key: 'role',
+                label: t('team.role.label'),
+                value: t(roleLabelKey(roleOf(member))),
               },
               {
                 key: 'state',

@@ -9,17 +9,18 @@ import { type ReactNode, useMemo, useState } from 'react';
 import type { Route } from '../../app/router';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { PageHeader } from '../../components/PageHeader';
-import { EmptyState, ErrorState, LoadingState } from '../../components/States';
+import { EmptyState, LoadingState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { Badge, Button, SearchInput } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
-import type { HealthResponse } from '../../gateway/types';
 import { displayGatewayUrl } from '../../gateway/url';
 import { t, useLocale } from '../../i18n';
-import { resourceData, useResource } from '../../state/useResource';
+import { type NodeHealthEntry, nodeHealthEntry, useNodeStore } from '../../stores/nodeStore';
+import { teamListData, useTeamListState, useTeamStore } from '../../stores/teamStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 import { AddNodeDialog } from './AddNodeDialog';
 import { matchesNodeQuery } from './display-names';
 import { NodeDetailView } from './NodeDetailView';
@@ -32,22 +33,10 @@ export interface NodePanelViewProps {
   navigate: (route: Route) => void;
 }
 
-interface NodeHealthEntry {
-  node: NodeView;
-  health?: HealthResponse;
-  error?: string;
-  updatedAt?: number;
-}
-
 function pageOrigin(): string {
   return typeof window === 'undefined' ? '' : window.location.origin;
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-const NODES_POLL_MS = 15_000;
 const NODE_TEAMS_POLL_MS = 20_000;
 
 export function NodePanelView({ route, navigate }: NodePanelViewProps) {
@@ -72,46 +61,26 @@ function NodesList({
   navigate: (route: Route) => void;
 }) {
   useLocale();
-  const { epoch } = useConnection();
-  const { fetchHealth, removeNode } = useNodes();
+  const { removeNode } = useNodes();
+  const health = useNodeStore((state) => state.health);
   const [query, setQuery] = useState('');
   const [addOpen, setAddOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<NodeView | null>(null);
 
-  const nodeKeys = nodes.map((node) => nodeKeyOf(node)).join(',');
-  const healthResource = useResource({
-    // 逐节点 try/catch：一个节点不可达不拒绝整个列表。
-    load: () =>
-      Promise.all(
-        nodes.map(async (node): Promise<NodeHealthEntry> => {
-          try {
-            const health = await fetchHealth(node);
-            return { node, health, updatedAt: Date.now() };
-          } catch (error) {
-            return { node, error: messageOf(error) };
-          }
-        }),
-      ),
-    enabled: nodes.length > 0,
-    pollMs: NODES_POLL_MS,
-    deps: [epoch, nodeKeys],
-  });
-
-  const entries = resourceData(healthResource.state) ?? [];
+  const entries = nodes
+    .map((node) => nodeHealthEntry(health, node))
+    .filter((entry): entry is NodeHealthEntry => entry !== undefined);
+  const loaded =
+    nodes.length > 0 &&
+    nodes.every((node) => {
+      const entry = nodeHealthEntry(health, node);
+      return entry?.health !== undefined || entry?.error !== undefined;
+    });
   const entryByKey = useMemo(
     () => new Map(entries.map((entry) => [nodeKeyOf(entry.node), entry])),
     [entries],
   );
-  const healthNames = useMemo(
-    () =>
-      new Map(
-        entries.flatMap((entry) =>
-          entry.health?.node.name ? [[nodeKeyOf(entry.node), entry.health.node.name]] : [],
-        ),
-      ),
-    [entries],
-  );
-  const displayNames = useNodeNames(healthNames);
+  const displayNames = useNodeNames();
 
   const visible = useMemo(
     () =>
@@ -136,9 +105,7 @@ function NodesList({
         }
       />
     );
-  } else if (healthResource.state.status === 'error' && entries.length === 0) {
-    body = <ErrorState message={healthResource.state.error} onRetry={healthResource.reload} />;
-  } else if (entries.length === 0) {
+  } else if (!loaded) {
     body = <LoadingState label={t('common.loading')} rows={2} />;
   } else if (visible.length === 0) {
     body = (
@@ -232,14 +199,17 @@ function NodeRow({
 }) {
   useLocale();
   const { epoch } = useConnection();
-  const { fetchTeams } = useNodes();
+  const { teamControl } = useNodes();
   const key = nodeKeyOf(node);
-  const teamsResource = useResource({
-    load: () => fetchTeams(node),
-    pollMs: NODE_TEAMS_POLL_MS,
-    deps: [epoch, key],
-  });
-  const teams = resourceData(teamsResource.state);
+  const listState = useTeamListState(node);
+  const loadList = useTeamStore((state) => state.loadList);
+  usePolledAction(
+    () => {
+      void loadList(node, teamControl(node));
+    },
+    { enabled: true, pollMs: NODE_TEAMS_POLL_MS, deps: [epoch, key] },
+  );
+  const teams = teamListData(listState)?.teams;
   const summary = teams
     ? {
         teams: teams.length,

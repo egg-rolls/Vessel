@@ -1,10 +1,10 @@
 /**
  * Team 成员侧栏：presence / engine state / attention / Body 入口。
  *
- * 分组是 UI 展示规则：成员（owner 缺失）在前，临时（owner 存在）在后；
- * 组内保持服务端 `teams.get` 的 `members` 窗口原有顺序（DECISION-038 §2.3：
- * live → last_seen desc → name），不在组内重新排序。
- * `left` 成员整行降透明度，只保留查看动作。
+ * 分组是 UI 展示规则（v3 role）：Team roster 只显示 member + temporary，
+ * member 在前、temporary 在后；组内保持服务端 `teams.get` 的 `members`
+ * 窗口原有顺序（DECISION-038 §2.3：live → last_seen desc → name），
+ * 不在组内重新排序。`left` 成员整行降透明度，只保留查看动作。
  */
 import { useMemo } from 'react';
 import { ActionMenu } from '../../components/ActionMenu';
@@ -15,6 +15,7 @@ import type { AskUserRequest, PermissionRequest, TeamMember } from '../../gatewa
 import { t } from '../../i18n';
 import { memberStatus } from './member-status';
 import { shortAgentId } from './mention';
+import { groupMembersByRole, roleLabelKey, roleOf } from './role';
 
 export function attentionCount(
   member: TeamMember,
@@ -28,15 +29,9 @@ export function attentionCount(
   return pendingPermissions + pendingAsks;
 }
 
-/** 成员（无 owner）在前，临时（有 owner）在后；各自保持传入顺序。 */
+/** member 在前、temporary 在后；single 不进入 Team roster。 */
 export function groupTeamMembers(members: readonly TeamMember[]): TeamMember[] {
-  const peers: TeamMember[] = [];
-  const contractors: TeamMember[] = [];
-  for (const member of members) {
-    if (member.owner === undefined) peers.push(member);
-    else contractors.push(member);
-  }
-  return [...peers, ...contractors];
+  return groupMembersByRole(members);
 }
 
 function copyAgentId(agentId: string): void {
@@ -118,11 +113,7 @@ export function TeamMemberSidebar({
               >
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="min-w-0 truncate text-sm">{name}</span>
-                  <Badge className="flex-none">
-                    {member.owner !== undefined
-                      ? t('team.member.contractor')
-                      : t('team.member.peer')}
-                  </Badge>
+                  <Badge className="flex-none">{t(roleLabelKey(roleOf(member)))}</Badge>
                   <span
                     role="img"
                     className={`size-1.5 flex-none rounded-full ${

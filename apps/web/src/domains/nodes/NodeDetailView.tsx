@@ -4,6 +4,7 @@
  * node_id 只在 Advanced details 出现一次；标题用人类可读展示名。
  * Team CRUD 已移到 Teams 域，本页不再写入。
  */
+import { useEffect } from 'react';
 import type { Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, LoadingState, NotEnabledState } from '../../components/States';
@@ -14,7 +15,7 @@ import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import { t, useLocale } from '../../i18n';
-import { resourceData, useResource } from '../../state/useResource';
+import { nodeHealthEntry, useNodeStore } from '../../stores/nodeStore';
 import { teamsForNodeHash } from '../teams/team-url';
 import { useNodeNames } from './useNodeNames';
 
@@ -26,23 +27,20 @@ export function NodeDetailView({
   navigate: (route: Route) => void;
 }) {
   useLocale();
-  const { epoch, tenantId, hello } = useConnection();
+  const { tenantId, hello } = useConnection();
   const { nodes, fetchHealth } = useNodes();
   const node = nodes.find((item) => nodeKeyOf(item) === nodeKey);
-  const health = useResource({
-    load: () => {
-      if (!node) throw new Error(t('nodes.notFound'));
-      return fetchHealth(node);
-    },
-    enabled: node !== undefined,
-    pollMs: 15_000,
-    deps: [epoch, nodeKey],
-  });
-  const healthData = resourceData(health.state);
-  const providedNames = new Map(
-    healthData?.node.name ? [[nodeKey, healthData.node.name] as const] : [],
-  );
-  const displayNames = useNodeNames(providedNames);
+  const health = useNodeStore((state) => state.health);
+  const select = useNodeStore((state) => state.select);
+  const entry = node ? nodeHealthEntry(health, node) : undefined;
+  const healthData = entry?.health;
+  const healthError = entry?.error;
+
+  useEffect(() => {
+    select(nodeKey);
+  }, [nodeKey, select]);
+
+  const displayNames = useNodeNames();
 
   if (!node) {
     return (
@@ -64,27 +62,25 @@ export function NodeDetailView({
   }
 
   const displayName = displayNames.get(nodeKey) ?? '—';
-  const status = healthData
-    ? 'connected'
-    : health.state.status === 'error'
-      ? 'unreachable'
-      : 'pending';
+  const status = healthData ? 'connected' : healthError ? 'unreachable' : 'pending';
   const statusLabel = healthData
     ? t('nodes.health.ok')
-    : health.state.status === 'error'
+    : healthError
       ? t('nodes.health.error')
       : t('nodes.health.loading');
   const dataPlane = healthData
     ? t('nodes.dataPlane.direct')
-    : health.state.status === 'error'
+    : healthError
       ? t('nodes.dataPlane.unreachable')
       : t('nodes.health.loading');
-  const heartbeat =
-    health.state.status === 'success'
-      ? formatTimestamp(health.state.updatedAt) || '—'
-      : health.state.status === 'error'
-        ? t('nodes.health.error')
-        : t('nodes.health.loading');
+  const heartbeat = healthData
+    ? formatTimestamp(entry?.updatedAt) || '—'
+    : healthError
+      ? t('nodes.health.error')
+      : t('nodes.health.loading');
+  const reloadHealth = () => {
+    if (node) void useNodeStore.getState().loadHealth([node], fetchHealth);
+  };
   const nodeId = healthData?.node.node_id ?? node.nodeId ?? '—';
   const incarnation = node.current ? (hello?.incarnation ?? '—') : '—';
 
@@ -130,9 +126,9 @@ export function NodeDetailView({
               },
             ]}
           />
-          {health.state.status === 'error' && (
+          {healthError && (
             <p className="text-xs text-danger leading-snug" role="alert">
-              {health.state.error}
+              {healthError}
             </p>
           )}
         </Section>
@@ -190,8 +186,8 @@ export function NodeDetailView({
                 ]}
               />
             </details>
-          ) : health.state.status === 'error' ? (
-            <ErrorState message={health.state.error} onRetry={health.reload} />
+          ) : healthError ? (
+            <ErrorState message={healthError} onRetry={reloadHealth} />
           ) : (
             <LoadingState label={t('nodes.health.loading')} rows={2} />
           )}

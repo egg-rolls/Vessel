@@ -13,7 +13,9 @@ import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvide
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import { t, useLocale } from '../../i18n';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 import { MemberDetail } from '../team/MemberDetail';
 import { TeamChat } from '../team/TeamChat';
 import { TeamEditView } from './TeamEditView';
@@ -56,12 +58,23 @@ export function TeamDetailRoute({
   const [freezing, setFreezing] = useState(false);
   const [revision, setRevision] = useState(0);
 
-  const teamDetail = useResource({
-    load: () => control.getTeam(route.teamId, { limit: 1, members_limit: 1 }),
-    enabled: hasToken,
-    deps: [epoch, tenantEpoch, nodeKeyOf(node), route.teamId],
-  });
-  const summary = resourceData(teamDetail.state)?.team;
+  const nodeKey = nodeKeyOf(node);
+  const summaryState = useTeamStore(
+    (state) => state.details[teamDetailKey(nodeKey, route.teamId, 'summary')],
+  );
+  const loadDetail = useTeamStore((state) => state.loadDetail);
+  const archiveTeam = useTeamStore((state) => state.archive);
+  const setSpawnFrozen = useTeamStore((state) => state.setSpawnFrozen);
+  const reloadSummary = () => {
+    void loadDetail(nodeKey, route.teamId, control, { limit: 1, members_limit: 1 }, 'summary');
+  };
+  usePolledAction(
+    () => {
+      void loadDetail(nodeKey, route.teamId, control, { limit: 1, members_limit: 1 }, 'summary');
+    },
+    { enabled: hasToken, deps: [epoch, tenantEpoch, nodeKey, route.teamId] },
+  );
+  const summary = resourceData(summaryState)?.team;
   const archived = summary?.archived_at !== undefined;
 
   useEffect(() => {
@@ -88,7 +101,7 @@ export function TeamDetailRoute({
         node={node}
         teamId={route.teamId}
         onBack={backToDetail}
-        onSaved={() => teamDetail.reload()}
+        onSaved={reloadSummary}
       />
     );
   }
@@ -102,11 +115,11 @@ export function TeamDetailRoute({
     setArchiving(true);
     setArchiveError(null);
     try {
-      const saved = await control.archiveTeam(route.teamId);
+      const saved = await archiveTeam(control, route.teamId);
       toast.success(`${saved.name || saved.team_id}: ${t('nodes.teams.archived')}`);
       setArchiveOpen(false);
       setRevision((value) => value + 1);
-      teamDetail.reload();
+      reloadSummary();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setArchiveError(message);
@@ -120,13 +133,13 @@ export function TeamDetailRoute({
     const next = summary.spawn_frozen !== true;
     setFreezing(true);
     try {
-      await control.setSpawnFrozen(route.teamId, next);
+      await setSpawnFrozen(control, route.teamId, next);
       toast.success(next ? t('teams.frozen') : t('teams.unfrozen'));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setFreezing(false);
-      teamDetail.reload();
+      reloadSummary();
     }
   };
 
@@ -143,6 +156,7 @@ export function TeamDetailRoute({
           tenantEpoch={tenantEpoch}
           teamId={route.teamId}
           memberId={route.agentId}
+          nodeKey={nodeKey}
           {...(route.bodyId ? { bodyId: route.bodyId } : {})}
           events={currentEvents}
           onBack={() => navigate({ domain: 'teams', nodeKey: route.nodeKey, teamId: route.teamId })}
@@ -208,6 +222,7 @@ export function TeamDetailRoute({
         epoch={epoch}
         tenantEpoch={tenantEpoch}
         teamId={route.teamId}
+        nodeKey={nodeKey}
         permissions={currentPermissions}
         asks={currentAsks}
         events={currentEvents}

@@ -8,14 +8,15 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import type { Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
-import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
+import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
 import { Button, SearchInput, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
-import { fetchAllNodeTeams, type NodeTeams } from '../../gateway/team-roster';
+import type { NodeTeams } from '../../gateway/team-roster';
 import { t, useLocale } from '../../i18n';
-import { resourceData, useResource } from '../../state/useResource';
+import { teamListData, useTeamStore } from '../../stores/teamStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 import { useNodeNames } from '../nodes/useNodeNames';
 import { TeamDetailRoute } from './TeamDetailRoute';
 import { TeamFormDialog } from './TeamFormDialog';
@@ -52,12 +53,18 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
   const writableNodes = nodes.filter((node) => hasTokenFor(node));
 
   const nodeKeys = nodes.map((node) => nodeKeyOf(node)).join(',');
-  const resource = useResource({
-    load: () => fetchAllNodeTeams(nodes, teamControl),
-    enabled: anyNodeToken && nodes.length > 0 && !isDetail,
-    pollMs: TEAMS_POLL_MS,
-    deps: [epoch, tenantEpoch, nodeKeys],
-  });
+  const lists = useTeamStore((state) => state.lists);
+  const loadAllLists = useTeamStore((state) => state.loadAllLists);
+  usePolledAction(
+    () => {
+      void loadAllLists(nodes, teamControl);
+    },
+    {
+      enabled: anyNodeToken && nodes.length > 0 && !isDetail,
+      pollMs: TEAMS_POLL_MS,
+      deps: [epoch, tenantEpoch, nodeKeys],
+    },
+  );
 
   // `#/teams?node=` 深链来自 Node 详情的只读入口。
   useEffect(() => {
@@ -73,13 +80,14 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
   };
 
   // Hooks 必须在任何早返回之前调用；列表数据在详情路由下未启用，这里只是空数组。
-  const results = resourceData(resource.state);
-  const loaded = results !== undefined;
-  const data = results ?? [];
-  const loadedError =
-    resource.state.status === 'error'
-      ? { message: resource.state.error, code: resource.state.code }
-      : undefined;
+  const data = useMemo(
+    () =>
+      nodes
+        .map((node) => teamListData(lists[nodeKeyOf(node)]))
+        .filter((result): result is NodeTeams => result !== undefined),
+    [nodes, lists],
+  );
+  const loaded = nodes.length > 0 && data.length === nodes.length;
   const searched = useMemo(() => filterTeamResults(data, query), [data, query]);
   const visible = useMemo(
     () => (nodeFilter ? searched.filter((item) => nodeKeyOf(item.node) === nodeFilter) : searched),
@@ -136,11 +144,7 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
 
   let body: ReactNode;
   if (!loaded) {
-    body = loadedError ? (
-      <ErrorState message={loadedError.message} onRetry={resource.reload} />
-    ) : (
-      <LoadingState rows={3} />
-    );
+    body = <LoadingState rows={3} />;
   } else if (allFailed && data[0]?.code === 'not_found') {
     body = (
       <NotEnabledState
@@ -288,7 +292,9 @@ export function TeamsView({ route, navigate }: TeamsViewProps) {
           nodes={writableNodes}
           {...(nodeFilter ? { initialNodeKey: nodeFilter } : {})}
           onClose={() => setCreateOpen(false)}
-          onSaved={() => resource.reload()}
+          onSaved={() => {
+            void loadAllLists(nodes, teamControl);
+          }}
         />
       )}
     </div>

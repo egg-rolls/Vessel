@@ -19,6 +19,7 @@ import {
 } from '../../state/diagnostics';
 import { resourceData, useResource } from '../../state/useResource';
 import { resolveShowProcessErrors, resolveUiVisibility } from '../../state/visibility';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
 function formatTime(ts: number): string {
   const date = new Date(ts);
@@ -36,11 +37,7 @@ export function DiagnosticsView() {
     deps: [epoch],
     pollMs: 5000,
   });
-  const config = useResource({
-    load: () => client.getConfig(),
-    enabled: connected,
-    deps: [epoch],
-  });
+  const { config, reloadConfig } = useConfigStoreApi();
   const events = useResource({
     load: () => client.readEvents({ types: [...DIAGNOSTIC_EVENT_TYPES], limit: 200 }),
     enabled: connected,
@@ -48,17 +45,17 @@ export function DiagnosticsView() {
   });
   useRefreshSignal(() => {
     health.reload();
-    config.reload();
+    reloadConfig();
     events.reload();
   });
 
   const gate = useMemo(() => {
-    const visibility = resolveUiVisibility(resourceData(config.state));
+    const visibility = resolveUiVisibility(resourceData(config));
     return {
       errorLevel: visibility.errorLevel,
-      showProcessErrors: resolveShowProcessErrors(resourceData(config.state)),
+      showProcessErrors: resolveShowProcessErrors(resourceData(config)),
     };
-  }, [config.state]);
+  }, [config]);
   const includeDiagnostics = includesDiagnostics(gate);
   const entries = useMemo(
     () => diagnosticEntries((resourceData(events.state) ?? []) as RunEvent[], gate),

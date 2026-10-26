@@ -41,6 +41,7 @@ import {
 } from '../../state/sessions';
 import { resourceData, useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { windowTail } from '../../transcript';
 import { ChatWelcome } from './ChatWelcome';
 import { Composer } from './Composer';
@@ -269,17 +270,10 @@ export function ChatView({
 
   // 0.15：信息层级来自 `ui.verbosity` / `ui.showInternalEvents` / `ui.errorLevel`；
   // 读取失败回退 0.13 行为（normal / 隐藏内部事件 / user）。
-  const configResource = useResource({
-    load: () => client.getConfig(),
-    enabled: hasToken,
-    deps: [epoch],
-  });
+  const { config: configState } = useConfigStoreApi();
   const visibility = useMemo(
-    () =>
-      resolveUiVisibility(
-        configResource.state.status === 'success' ? configResource.state.data : null,
-      ),
-    [configResource.state],
+    () => resolveUiVisibility(configState.status === 'success' ? configState.data : null),
+    [configState],
   );
   const errorLevel = visibility.errorLevel;
   const showInternal = showsInternalEvents(visibility);

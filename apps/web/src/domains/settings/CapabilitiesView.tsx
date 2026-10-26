@@ -13,23 +13,23 @@ import {
   filterCapabilities,
   groupMethodsByPermission,
 } from '../../state/capabilities';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
 export function CapabilitiesView() {
   useLocale();
-  const { client, connectionState, hasToken, epoch } = useConnection();
+  const { connectionState, hasToken } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const [tab, setTab] = useState<CapabilityTab>('methods');
   const [query, setQuery] = useState('');
 
-  const resource = useResource({
-    load: () => client.getCapabilities(),
-    enabled: hasToken,
-    deps: [epoch],
+  const { capabilities, reloadCapabilities } = useConfigStoreApi({
+    config: false,
+    capabilities: true,
   });
 
-  useRefreshSignal(resource.reload);
-  const manifest = resourceData(resource.state);
+  useRefreshSignal(reloadCapabilities);
+  const manifest = resourceData(capabilities);
   const counts = useMemo(() => (manifest ? capabilityCounts(manifest) : null), [manifest]);
   const result = useMemo(
     () => (manifest ? filterCapabilities(manifest, { tab, query }) : null),
@@ -45,16 +45,16 @@ export function CapabilitiesView() {
       <NotEnabledState title={t('common.notConnected')} reason={t('capabilities.noTokenReason')} />
     );
   }
-  if (resource.state.status === 'idle' || (resource.state.status === 'loading' && !manifest)) {
+  if (capabilities.status === 'idle' || (capabilities.status === 'loading' && !manifest)) {
     return <LoadingState label={t('capabilities.loading')} />;
   }
   if (!manifest) {
     return (
       <ErrorState
         message={
-          resource.state.status === 'error' ? resource.state.error : t('capabilities.noManifest')
+          capabilities.status === 'error' ? capabilities.error : t('capabilities.noManifest')
         }
-        onRetry={resource.reload}
+        onRetry={reloadCapabilities}
       />
     );
   }
@@ -66,11 +66,11 @@ export function CapabilitiesView() {
 
   return (
     <div className="flex flex-col gap-6">
-      {!connected && <StaleNotice message={t('capabilities.stale')} onRetry={resource.reload} />}
-      {resource.state.status === 'error' && (
+      {!connected && <StaleNotice message={t('capabilities.stale')} onRetry={reloadCapabilities} />}
+      {capabilities.status === 'error' && (
         <StaleNotice
-          message={t('common.staleData', { detail: resource.state.error })}
-          onRetry={resource.reload}
+          message={t('common.staleData', { detail: capabilities.error })}
+          onRetry={reloadCapabilities}
         />
       )}
       <Section

@@ -17,7 +17,8 @@ import {
   toConfigValue,
 } from '../../state/display-settings';
 import { RUNTIME_MESSAGE_KINDS, useRuntimeVisibility } from '../../state/runtime-visibility';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -78,17 +79,13 @@ function RuntimeContextSection() {
 export function DisplaySettingsView() {
   useLocale();
   const toast = useToast();
-  const { client, connectionState, hasToken, features, epoch } = useConnection();
+  const { client, connectionState, hasToken, features } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const available = hasToken && features.includes('config');
 
-  const resource = useResource({
-    load: () => client.getConfig(),
-    enabled: available,
-    deps: [epoch],
-  });
-  useRefreshSignal(resource.reload);
-  const data = resourceData(resource.state);
+  const { config, reloadConfig } = useConfigStoreApi();
+  useRefreshSignal(reloadConfig);
+  const data = resourceData(config);
 
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | undefined>();
@@ -132,8 +129,8 @@ export function DisplaySettingsView() {
   if (!data) {
     return (
       <div className="flex flex-col gap-6">
-        {resource.state.status === 'error' ? (
-          <ErrorState message={resource.state.error} onRetry={resource.reload} />
+        {config.status === 'error' ? (
+          <ErrorState message={config.error} onRetry={reloadConfig} />
         ) : (
           <LoadingState label={t('settings.display.loading')} />
         )}
@@ -167,14 +164,14 @@ export function DisplaySettingsView() {
   return (
     <div className="flex flex-col gap-6">
       {!connected && (
-        <StaleNotice message={t('settings.display.disconnected')} onRetry={resource.reload} />
+        <StaleNotice message={t('settings.display.disconnected')} onRetry={reloadConfig} />
       )}
       {readOnly && <p className="text-muted">{t('settings.display.writeUnavailable')}</p>}
       <Section
         title={t('settings.display.title')}
         description={t('settings.display.description')}
         actions={
-          <Button size="small" onClick={resource.reload}>
+          <Button size="small" onClick={reloadConfig}>
             {t('settings.display.refresh')}
           </Button>
         }

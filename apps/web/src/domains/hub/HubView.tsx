@@ -11,7 +11,8 @@ import { ErrorState, LoadingState, NotEnabledState } from '../../components/Stat
 import { StatusChip } from '../../components/StatusChip';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { type HubState, hubInfoFromConfig } from './hub-state';
 
 /** HubState → i18n key 片段（catalog 用 notConfigured 驼峰）。 */
@@ -23,17 +24,13 @@ const STATE_KEYS: Record<HubState, string> = {
 
 export function HubView() {
   useLocale();
-  const { client, hasToken, epoch, tenantId } = useConnection();
+  const { hasToken, tenantId } = useConnection();
 
-  const config = useResource({
-    load: () => client.getConfig(),
-    enabled: hasToken,
-    deps: [epoch, tenantId],
-  });
-  useRefreshSignal(config.reload);
+  const { config, reloadConfig } = useConfigStoreApi();
+  useRefreshSignal(reloadConfig);
 
-  const configData = resourceData(config.state);
-  const configError = config.state.status === 'error' && !configData ? config.state : null;
+  const configData = resourceData(config);
+  const configError = config.status === 'error' && !configData ? config : null;
   const hubInfo = hubInfoFromConfig(configData?.config);
   const stateKey = STATE_KEYS[hubInfo.state];
   const stateLabel = t(`hub.state.${stateKey}`);
@@ -49,7 +46,7 @@ export function HubView() {
           configError.code === 'forbidden' ? (
             <NotEnabledState title={t('hub.error.forbidden')} />
           ) : (
-            <ErrorState message={configError.error} onRetry={config.reload} />
+            <ErrorState message={configError.error} onRetry={reloadConfig} />
           )
         ) : !configData ? (
           <LoadingState label={t('common.loading')} />

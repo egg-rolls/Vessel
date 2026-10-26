@@ -6,28 +6,29 @@
  * - 详情 / 编辑是 `#/agents/<nodeKey>/<agentId>[/edit]`，查询串保留列表过滤；
  * - 名称优先，缺失回退短 id；原始 agent_id 只在 Advanced details 出现。
  */
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { formatRoute, type Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Button, SearchInput, Select } from '../../components/ui';
+import { Badge, Button, SearchInput, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import {
   agentFilterOptions,
-  fetchNodeRoster,
   filterRosterAgents,
   flattenRoster,
-  mergeNodeRosters,
   type NodeRoster,
   type RosterAgent,
 } from '../../gateway/team-roster';
 import type { TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { useAgentStore } from '../../stores/agentStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 import { useNodeNames } from '../nodes/useNodeNames';
+import { roleLabelKey, roleOf } from '../team/role';
 import { AgentCreateDialog } from './AgentCreateDialog';
 import { AgentDetailView } from './AgentDetailView';
 import { AgentEditView } from './AgentEditView';
@@ -101,24 +102,27 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   }, []);
 
   const nodeKeys = nodes.map((node) => nodeKeyOf(node)).join(',');
-  const resource = useResource({
-    load: () => Promise.all(nodes.map((node) => fetchNodeRoster(node, teamControl(node)))),
-    enabled: anyNodeToken && nodes.length > 0,
-    pollMs: ROSTER_POLL_MS,
-    deps: [epoch, tenantEpoch, nodeKeys],
-  });
-
-  // 单节点失败时用上一轮成功数据兜底；否则轮询会把整页 roster 冲成空。
-  const lastRosters = useRef<readonly NodeRoster[]>([]);
-  const loadedRosters = resourceData(resource.state);
-  const loaded = loadedRosters !== undefined;
-  const rosters = useMemo(
-    () => mergeNodeRosters(lastRosters.current, loadedRosters ?? []),
-    [loadedRosters],
+  const rosterState = useAgentStore((state) => state.roster);
+  const loadRoster = useAgentStore((state) => state.loadRoster);
+  const selectAgent = useAgentStore((state) => state.selectAgent);
+  const reloadRoster = () => {
+    void loadRoster(nodes, teamControl);
+  };
+  usePolledAction(
+    () => {
+      void loadRoster(nodes, teamControl);
+    },
+    {
+      enabled: anyNodeToken && nodes.length > 0,
+      pollMs: ROSTER_POLL_MS,
+      deps: [epoch, tenantEpoch, nodeKeys],
+    },
   );
-  useEffect(() => {
-    lastRosters.current = rosters;
-  }, [rosters]);
+
+  // The store keeps the previous successful roster per node across poll failures.
+  const loadedRosters = resourceData(rosterState);
+  const loaded = loadedRosters !== undefined;
+  const rosters = loadedRosters ?? [];
   const rostersByNode = useMemo(
     () => new Map(rosters.map((roster) => [nodeKeyOf(roster.node), roster])),
     [rosters],
@@ -141,6 +145,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     rostersByNode.get(nodeKey)?.teams.filter((team) => team.archived_at === undefined) ?? [];
 
   const openAgent = (nodeKey: string, agentId: string) => {
+    selectAgent(agentId);
     window.location.hash = withQuery(agentDetailHash(nodeKey, agentId), filterQuery);
   };
   const openEdit = (nodeKey: string, agentId: string) => {
@@ -220,7 +225,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
           node={targetNode}
           agent={targetAgent}
           onBack={() => openAgent(target.nodeKey, target.agentId)}
-          onSaved={() => resource.reload()}
+          onSaved={reloadRoster}
         />
       );
     }
@@ -231,7 +236,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
         agent={targetAgent}
         onBack={backToList}
         onEdit={() => openEdit(target.nodeKey, target.agentId)}
-        onSaved={() => resource.reload()}
+        onSaved={reloadRoster}
         onOpenTeam={() =>
           navigate({
             domain: 'teams',
@@ -300,6 +305,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
               <div className="flex min-w-0 flex-1 basis-55 flex-col gap-0.5">
                 <span className="inline-flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
                   {name}
+                  <Badge>{t(roleLabelKey(roleOf(agent.member)))}</Badge>
                 </span>
                 <span className="min-w-0 wrap-anywhere text-xs text-faint">
                   {nodeNames.get(nodeKeyOf(agent.node)) ?? '—'} ·{' '}
@@ -454,7 +460,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
           teamsForNode={teamsForNode}
           {...(route.nodeKey ? { initialNodeKey: route.nodeKey } : {})}
           onClose={() => setCreateOpen(false)}
-          onSaved={() => resource.reload()}
+          onSaved={reloadRoster}
         />
       )}
     </div>

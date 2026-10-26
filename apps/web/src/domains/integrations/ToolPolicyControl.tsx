@@ -1,13 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { ToolInfo, ToolPolicy } from '../../gateway/types';
 import { t } from '../../i18n';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import {
   hasScopedNever,
-  nextWritten,
-  type PermissionLists,
   policyHintKey,
   policyLabelKey,
   readPermissionLists,
@@ -29,47 +28,30 @@ function errorMessage(error: unknown): string {
  * 保存走 canonical `permissions.setToolPolicy`，随后立即 `gateway.reload(['permission'])`。
  * 旧 gateway 缺 `permissions.setToolPolicy` 时控件禁用并提示需要更新的 gateway。
  */
-export function ToolPolicyControl({
-  tool,
-  onPolicySaved,
-}: {
-  tool: ToolInfo;
-  /** 策略落盘后通知父列表刷新自己的 `config.get`（卡片徽章与之共享状态）。 */
-  onPolicySaved?: () => void;
-}) {
+export function ToolPolicyControl({ tool }: { tool: ToolInfo }) {
   const { client, connectionState, hasToken } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const [saving, setSaving] = useState(false);
-  /** RPC 返回的两个数组：本地即时反映写入结果，config 刷新落地后让位给 config。 */
-  const [written, setWritten] = useState<PermissionLists | null>(null);
   const [status, setStatus] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
 
-  const configResource = useResource({
-    load: () => client.getConfig(),
-  });
-  const capabilitiesResource = useResource({
-    load: () => client.getCapabilities(),
-  });
+  const {
+    config: configState,
+    capabilities: capabilitiesState,
+    reloadConfig,
+    applyPermissionLists,
+  } = useConfigStoreApi({ capabilities: true });
 
-  const config = resourceData(configResource.state);
-  const fromConfig = useMemo(() => readPermissionLists(config?.config), [config]);
-  const lists = written ?? fromConfig;
+  const config = resourceData(configState);
+  const lists = useMemo(() => readPermissionLists(config?.config), [config]);
   const loaded = config !== undefined;
   const current = toolPolicyOf(lists, tool.name);
   const scopedNever = hasScopedNever(lists, tool.name);
   const scoped = scopedEntries(lists, tool.name);
 
-  // 保留 RPC 返回的 written，直到刷新后的 config 与它等价；对象身份变化不再清空。
-  useEffect(() => {
-    setWritten((prev) => nextWritten(prev, fromConfig));
-  }, [fromConfig]);
-
   const supported =
-    capabilitiesResource.state.status === 'success'
-      ? supportsToolPolicy(capabilitiesResource.state.data)
-      : false;
+    capabilitiesState.status === 'success' ? supportsToolPolicy(capabilitiesState.data) : false;
   const capabilitiesLoading =
-    capabilitiesResource.state.status === 'idle' || capabilitiesResource.state.status === 'loading';
+    capabilitiesState.status === 'idle' || capabilitiesState.status === 'loading';
   const interactive = supported && connected && loaded && !saving;
 
   /** `target` 可以是基础工具名，也可以是某个 scoped 条目（如 `agent.close`）。 */
@@ -77,11 +59,11 @@ export function ToolPolicyControl({
     if (!interactive || policy === toolPolicyOf(lists, target)) return;
     setSaving(true);
     setStatus(null);
-    let persisted = false;
     try {
       const result = await client.setToolPolicy(target, policy);
-      persisted = true;
-      setWritten({
+      // Cards and this dialog read the same store; update it before the reload
+      // so the new policy is visible immediately in both places.
+      applyPermissionLists({
         autoApprove: result.auto_approve,
         neverAutoApprove: result.never_auto_approve,
       });
@@ -104,9 +86,8 @@ export function ToolPolicyControl({
       });
     } finally {
       setSaving(false);
-      configResource.reload();
-      // 父列表用另一个 config.get 渲染卡片徽章；不清 Pinia，仍走 useResource。
-      if (persisted) onPolicySaved?.();
+      // One reconciliation refresh shared by every config consumer.
+      reloadConfig();
     }
   };
 
@@ -114,8 +95,8 @@ export function ToolPolicyControl({
     if (capabilitiesLoading) return t('integrations.tools.policyChecking');
     if (!supported) return t('integrations.tools.policyUnsupported');
     if (!connected) return t('common.writesDisabled');
-    if (!loaded && configResource.state.status === 'error') {
-      return t('integrations.tools.policyLoadFailed', { detail: configResource.state.error });
+    if (!loaded && configState.status === 'error') {
+      return t('integrations.tools.policyLoadFailed', { detail: configState.error });
     }
     if (scopedNever && current === 'ask') {
       return t('integrations.tools.policyScopedHint');

@@ -13,7 +13,9 @@ import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { TeamDetail, TeamSummary, TeamUpdateInput } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
-import { resourceData, useResource } from '../../state/useResource';
+import { resourceData } from '../../state/useResource';
+import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
+import { usePolledAction } from '../../stores/usePolledAction';
 import { TeamPolicyFields } from './TeamPolicyFields';
 import { nullableChange, trimmedOrUndefined } from './team-form';
 import {
@@ -39,20 +41,30 @@ export function TeamEditView({ node, teamId, onBack, onSaved }: TeamEditViewProp
   const control = teamControl(node);
   const hasToken = hasTokenFor(node);
 
-  const resource = useResource({
-    load: () => control.getTeam(teamId, { limit: 1, members_limit: 1 }),
-    enabled: hasToken,
-    deps: [epoch, tenantEpoch, nodeKeyOf(node), teamId],
-  });
-  const detail = resourceData(resource.state);
+  const nodeKey = nodeKeyOf(node);
+  const detailState = useTeamStore(
+    (state) => state.details[teamDetailKey(nodeKey, teamId, 'summary')],
+  );
+  const loadDetail = useTeamStore((state) => state.loadDetail);
+  const updateTeam = useTeamStore((state) => state.update);
+  const reload = () => {
+    void loadDetail(nodeKey, teamId, control, { limit: 1, members_limit: 1 }, 'summary');
+  };
+  usePolledAction(
+    () => {
+      void loadDetail(nodeKey, teamId, control, { limit: 1, members_limit: 1 }, 'summary');
+    },
+    { enabled: hasToken, deps: [epoch, tenantEpoch, nodeKey, teamId] },
+  );
+  const detail = resourceData(detailState);
 
   let body: ReactNode;
   if (!hasToken) {
     body = (
       <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
     );
-  } else if (resource.state.status === 'error' && !detail) {
-    body = <ErrorState message={resource.state.error} onRetry={resource.reload} />;
+  } else if (detailState?.status === 'error' && !detail) {
+    body = <ErrorState message={detailState.error} onRetry={reload} />;
   } else if (!detail) {
     body = <LoadingState label={t('common.loading')} rows={2} />;
   } else if (detail.team.archived_at !== undefined) {
@@ -63,7 +75,7 @@ export function TeamEditView({ node, teamId, onBack, onSaved }: TeamEditViewProp
         key={detail.team.team_id}
         detail={detail}
         onSave={async (input) => {
-          const saved = await control.updateTeam(input);
+          const saved = await updateTeam(control, input);
           onSaved();
           return saved;
         }}

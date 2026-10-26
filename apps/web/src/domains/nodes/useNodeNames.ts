@@ -1,16 +1,15 @@
 /**
- * 全局节点展示名：优先 `health.get.node.name`，并把已解析的名字按 nodeKey
- * 缓存到 sessionStorage。健康检查短暂失败时继续显示上次名字，不把 UUID / IP
- * 暴露到列表；从未拿到名字时才回退到 URL。
+ * 全局节点展示名：优先 `health.get.node.name`（nodeStore 轮询），并把已解析
+ * 的名字按 nodeKey 缓存到 sessionStorage。健康检查短暂失败时继续显示上次名字，
+ * 不把 UUID / IP 暴露到列表；从未拿到名字时才回退到 URL。
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
-import { resourceData, useResource } from '../../state/useResource';
+import { nodeHealthNames, useNodeStore } from '../../stores/nodeStore';
 import { nodeDisplayNames } from './display-names';
 
 const NODE_NAMES_STORAGE_KEY = 'vessel.node-names';
-const NODE_NAMES_POLL_MS = 30_000;
 
 type NameCache = Record<string, string>;
 
@@ -52,54 +51,34 @@ function cacheableName(name: string | undefined, nodeId: string | undefined): st
 }
 
 export function useNodeNames(provided?: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
-  const { nodes, fetchHealth } = useNodes();
+  const { nodes } = useNodes();
+  const health = useNodeStore((state) => state.health);
   const [cache, setCache] = useState<NameCache>(readNameCache);
-  const [healthNames, setHealthNames] = useState<NameCache>({});
-  const missing = nodes.filter((node) => !provided?.get(nodeKeyOf(node))?.trim());
-  const missingKeys = missing.map((node) => nodeKeyOf(node)).join(',');
 
-  const health = useResource({
-    load: () =>
-      Promise.all(
-        missing.map(async (node): Promise<{ key: string; name?: string }> => {
-          try {
-            const response = await fetchHealth(node);
-            return { key: nodeKeyOf(node), name: response.node.name };
-          } catch {
-            // 单节点失败不影响其它节点；调用方继续用缓存 / URL。
-            return { key: nodeKeyOf(node) };
-          }
-        }),
-      ),
-    enabled: missing.length > 0,
-    pollMs: NODE_NAMES_POLL_MS,
-    deps: [missingKeys],
-  });
+  const names = useMemo(() => nodeHealthNames(health), [health]);
 
   useEffect(() => {
-    const entries = resourceData(health.state);
-    if (!entries) return;
+    if (names.size === 0) return;
     const next: NameCache = {};
-    for (const entry of entries) {
-      const node = nodes.find((item) => nodeKeyOf(item) === entry.key);
-      const name = cacheableName(entry.name, node?.nodeId);
-      if (name) next[entry.key] = name;
+    for (const [key, name] of names) {
+      const node = nodes.find((item) => nodeKeyOf(item) === key);
+      const cacheable = cacheableName(name, node?.nodeId);
+      if (cacheable) next[key] = cacheable;
     }
     if (Object.keys(next).length === 0) return;
-    setHealthNames((previous) => ({ ...previous, ...next }));
     setCache((previous) => {
       const merged = { ...previous, ...next };
       writeNameCache(merged);
       return merged;
     });
-  }, [health.state, nodes]);
+  }, [names, nodes]);
 
   return useMemo(
     () =>
       nodeDisplayNames(
         nodes.map((node) => {
           const key = nodeKeyOf(node);
-          const healthName = provided?.get(key) ?? healthNames[key] ?? cache[key];
+          const healthName = provided?.get(key) ?? names.get(key) ?? cache[key];
           return {
             key,
             name: node.name,
@@ -110,6 +89,6 @@ export function useNodeNames(provided?: ReadonlyMap<string, string>): ReadonlyMa
         }),
         pageOrigin(),
       ),
-    [nodes, provided, healthNames, cache],
+    [nodes, provided, names, cache],
   );
 }

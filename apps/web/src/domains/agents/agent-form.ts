@@ -1,7 +1,13 @@
 /** Agent create / edit 表单（纯函数）：裁剪、空值省略、至少一个有效变更。 */
-import type { AgentCreateInput, AgentUpdateInput } from '../../gateway/types';
+import type { AgentCreateInput, AgentRole, AgentUpdateInput } from '../../gateway/types';
 
+/** 创建判别；服务端映射：peer → member，contractor → temporary。 */
 export type AgentKind = 'peer' | 'contractor';
+
+/** CONTRACT-role-model §3：创建 kind 与 v3 role 的映射（只用于提示）。 */
+export function roleFromKind(kind: AgentKind | undefined): AgentRole {
+  return (kind ?? 'peer') === 'peer' ? 'member' : 'temporary';
+}
 
 export interface AgentDraft {
   name: string;

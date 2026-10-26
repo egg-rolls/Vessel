@@ -17,6 +17,7 @@ import { nodeKeyOf } from '../../gateway/nodes';
 import { displayGatewayUrl } from '../../gateway/url';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { useNodeNames } from '../nodes/useNodeNames';
 import { uptimeParts } from './gateway-state';
 
@@ -29,11 +30,7 @@ export function GatewayView() {
   const { client, connectionState, hasToken, epoch, tenantId, gatewayUrl } = useConnection();
   const { current } = useNodes();
 
-  const config = useResource({
-    load: () => client.getConfig(),
-    enabled: hasToken,
-    deps: [epoch, tenantId],
-  });
+  const { config, reloadConfig } = useConfigStoreApi();
   const health = useResource({
     load: () => client.getHealth(),
     enabled: hasToken,
@@ -41,11 +38,11 @@ export function GatewayView() {
     pollMs: 15_000,
   });
   useRefreshSignal(() => {
-    config.reload();
+    reloadConfig();
     health.reload();
   });
 
-  const configData = resourceData(config.state);
+  const configData = resourceData(config);
   const healthData = resourceData(health.state);
   const providedNames = new Map(
     current && healthData?.node.name ? [[nodeKeyOf(current), healthData.node.name] as const] : [],
@@ -100,9 +97,9 @@ export function GatewayView() {
                   {health.state.error}
                 </p>
               )}
-              {config.state.status === 'error' && !configData && (
+              {config.status === 'error' && !configData && (
                 <p className="field-error" role="alert">
-                  {config.state.error}
+                  {config.error}
                 </p>
               )}
             </section>
