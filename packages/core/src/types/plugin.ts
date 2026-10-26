@@ -75,9 +75,11 @@ export interface RuntimePermissionConfig {
   /** 免确认工具名列表 */
   autoApprove?: string[];
   /**
-   * 自动放行的例外键（0.27）：命中时把来自 autoApprove / default 的 `allow`
-   * 降级为 `ask`；工具 `checkPermission` 的显式判定不受影响。
-   * 键可以是工具名，或 args 为对象且 `action` 为字符串时的 `${tool.name}.${action}`。
+   * 自动放行的例外键（0.27 / CONTRACT-tool-policy-ui §1）：
+   * - exact 工具名命中：把任何 `allow`（含工具 `checkPermission` 的显式 allow）降级为 `ask`；
+   * - `${tool.name}.${action}` 命中：只把 **auto 来源**的 allow 降级为 `ask`，
+   *   不覆盖工具显式 allow（保留 `agent.close` 对 contractor close 的语义）。
+   * `deny` 不受影响。
    */
   neverAutoApprove?: string[];
   /**

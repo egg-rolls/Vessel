@@ -92,7 +92,7 @@ describe('tool checkPermission ask', () => {
     expect(requests).toHaveLength(1);
   });
 
-  it('工具显式 allow 不受 neverAutoApprove 影响', async () => {
+  it('exact neverAutoApprove 命中时工具显式 allow 也 ask', async () => {
     const { requests, error } = await authorize(
       tool(async () => 'allow'),
       {
@@ -100,7 +100,7 @@ describe('tool checkPermission ask', () => {
       },
     );
     expect(error).toBeUndefined();
-    expect(requests).toHaveLength(0);
+    expect(requests).toHaveLength(1);
   });
 
   it('工具显式 deny 即使 autoApprove 也拒绝', async () => {
