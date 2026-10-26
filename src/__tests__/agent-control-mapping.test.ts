@@ -13,6 +13,7 @@ function member(id: string, overrides: Partial<MemberStatus> = {}): MemberStatus
   return {
     id,
     session_id: id,
+    role: 'member',
     visibility: 'team',
     state: 'idle',
     ...overrides,

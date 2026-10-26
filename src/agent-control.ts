@@ -117,7 +117,8 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
               (await service.identify(agentId)) ?? {
                 id: agentId,
                 session_id: agentId,
-                owner: '',
+                role: 'single',
+                owner: agentId,
                 visibility: 'private',
                 state: 'closed',
               },

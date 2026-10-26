@@ -303,6 +303,7 @@ describe('createHubControl with a real TeamService', () => {
       {
         id: 'a1',
         session_id: 'a1',
+        role: 'temporary',
         owner: 'main',
         visibility: 'team',
         state: 'idle',
