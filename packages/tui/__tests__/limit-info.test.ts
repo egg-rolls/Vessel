@@ -34,7 +34,7 @@ describe('limit info reducer', () => {
       context: {},
     } as VesselConfig);
     expect(partial.maxIterations).toBe(5);
-    expect(partial.maxRuntimeSeconds).toBe(300);
+    expect(partial.maxRuntimeSeconds).toBe(600);
     expect(partial.requestLimit).toBeUndefined();
     expect(partial.toolCallsLimit).toBeUndefined();
     expect(partial.contextMaxTokens).toBe(1_000_000);

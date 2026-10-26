@@ -17,6 +17,7 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from '@vessel-agent/core';
+import { PermissionPolicy, type RuntimePermissionConfig } from '@vessel-agent/core/policy';
 import basicToolsPlugin, {
   type BasicToolsConfig,
   createBasicTools,
@@ -61,25 +62,6 @@ function configuredTool(name: string, config: BasicToolsConfig): ToolDefinition 
   return tool;
 }
 
-/** 自动应答权限请求为 allow 的上下文（bash 的 requestPermission 需要应答） */
-function makeAllowContext(): ToolContext {
-  const events = new MemoryEventStream();
-  const context: ToolContext = { run_id: 'perm-run', messages: [], events };
-  events.subscribe((event) => {
-    if (event.type !== 'tool.permission.request') return;
-    const data = event.data;
-    if (typeof data === 'object' && data !== null) {
-      events.publish({
-        type: 'tool.permission.response',
-        run_id: event.run_id,
-        data: { requestId: (data as Record<string, unknown>).requestId, decision: 'allow' },
-        ts: Date.now(),
-      });
-    }
-  });
-  return context;
-}
-
 describe('basic-tools 插件（注册）', () => {
   it('install 注册 bash / read / edit 三个工具，且不多不少', () => {
     const host = new MemoryPluginHost();
@@ -105,30 +87,142 @@ describe('basic-tools 插件（注册）', () => {
     expect(await toolOf('read').checkPermission?.({}, makeContext())).toBe('allow');
   });
 
-  it('bash / edit 的 checkPermission 经 requestPermission 等用户应答', async () => {
+  it('bash / edit 的 checkPermission 只返回 ask，不自行发权限请求', async () => {
     for (const name of ['bash', 'edit']) {
       const events = new MemoryEventStream();
       const context: ToolContext = { run_id: 'perm-run', messages: [], events };
-      let requestedTool: unknown;
+      const requests: unknown[] = [];
       events.subscribe((event) => {
-        if (event.type !== 'tool.permission.request') return;
-        const data = event.data;
-        if (typeof data === 'object' && data !== null) {
-          requestedTool = (data as Record<string, unknown>).tool;
-          // 模拟用户授权：应答同一个 requestId
-          events.publish({
-            type: 'tool.permission.response',
-            run_id: event.run_id,
-            data: { requestId: (data as Record<string, unknown>).requestId, decision: 'allow' },
-            ts: Date.now(),
-          });
-        }
+        if (event.type === 'tool.permission.request') requests.push(event);
       });
 
       const decision = await toolOf(name).checkPermission?.({ probe: true }, context);
-      expect(decision).toBe('allow');
-      expect(requestedTool).toBe(name);
+      // 统一由 core PermissionPolicy 提问；工具层不得重复发请求
+      expect(decision).toBe('ask');
+      expect(requests).toHaveLength(0);
     }
+  });
+});
+
+describe('core PermissionPolicy 统一提问（bash / edit）', () => {
+  interface AuthorizeTrace {
+    requests: unknown[];
+    error: unknown;
+  }
+
+  /** 用真实 PermissionPolicy 跑一次 authorize；请求一到就按 allow 应答（可选 remember）。 */
+  async function authorizeWithPolicy(
+    tool: ToolDefinition,
+    args: unknown,
+    config?: RuntimePermissionConfig,
+    remember = false,
+  ): Promise<AuthorizeTrace> {
+    const events = new MemoryEventStream();
+    const requests: unknown[] = [];
+    const policy = new PermissionPolicy(events, config);
+    events.subscribe((event) => {
+      if (event.type !== 'tool.permission.request') return;
+      requests.push(event);
+      events.publish({
+        type: 'tool.permission.response',
+        run_id: event.run_id,
+        data: {
+          requestId: (event.data as Record<string, unknown>).requestId,
+          decision: 'allow',
+          ...(remember ? { remember: true } : {}),
+        },
+        ts: Date.now(),
+      });
+    });
+
+    const ctx: ToolContext = { run_id: 'perm-run', messages: [], events };
+    let error: unknown;
+    try {
+      await policy.authorize(tool, args, ctx);
+    } catch (caught) {
+      error = caught;
+    }
+    return { requests, error };
+  }
+
+  it('autoApprove 命中 bash 时不发 tool.permission.request', async () => {
+    const { requests, error } = await authorizeWithPolicy(
+      toolOf('bash'),
+      { command: 'echo hi' },
+      { autoApprove: ['bash'] },
+    );
+    expect(error).toBeUndefined();
+    expect(requests).toHaveLength(0);
+  });
+
+  it('普通 bash 只发一次 tool.permission.request', async () => {
+    const { requests, error } = await authorizeWithPolicy(toolOf('bash'), { command: 'echo hi' });
+    expect(error).toBeUndefined();
+    expect(requests).toHaveLength(1);
+  });
+
+  it('neverAutoApprove 命中 bash 时仍 ask', async () => {
+    const { requests, error } = await authorizeWithPolicy(toolOf('bash'), { command: 'echo hi' }, {
+      autoApprove: ['bash'],
+      neverAutoApprove: ['bash'],
+    });
+    expect(error).toBeUndefined();
+    expect(requests).toHaveLength(1);
+  });
+
+  it('敏感路径即使 autoApprove 也直接 deny，不发请求', async () => {
+    const { requests, error } = await authorizeWithPolicy(
+      toolOf('bash'),
+      { command: 'cat ~/.ssh/id_rsa' },
+      { autoApprove: ['bash'] },
+    );
+    expect((error as Error).message).toContain('denied by permission policy');
+    expect(requests).toHaveLength(0);
+  });
+
+  it('autoApprove / 普通 / 敏感路径对 edit 同样生效', async () => {
+    const args = { path: 'probe.txt', old_string: 'a', new_string: 'b' };
+
+    const auto = await authorizeWithPolicy(toolOf('edit'), args, { autoApprove: ['edit'] });
+    expect(auto.error).toBeUndefined();
+    expect(auto.requests).toHaveLength(0);
+
+    const normal = await authorizeWithPolicy(toolOf('edit'), args);
+    expect(normal.error).toBeUndefined();
+    expect(normal.requests).toHaveLength(1);
+
+    const denied = await authorizeWithPolicy(
+      toolOf('edit'),
+      { path: path.join(homedir(), '.ssh', 'id_rsa'), old_string: 'a', new_string: 'b' },
+      { autoApprove: ['edit'] },
+    );
+    expect((denied.error as Error).message).toContain('denied by permission policy');
+    expect(denied.requests).toHaveLength(0);
+  });
+
+  it('用户选择 always（remember）后，后续同工具不再发请求', async () => {
+    const events = new MemoryEventStream();
+    const requests: unknown[] = [];
+    const policy = new PermissionPolicy(events);
+    events.subscribe((event) => {
+      if (event.type !== 'tool.permission.request') return;
+      requests.push(event);
+      events.publish({
+        type: 'tool.permission.response',
+        run_id: event.run_id,
+        data: {
+          requestId: (event.data as Record<string, unknown>).requestId,
+          decision: 'allow',
+          remember: true,
+        },
+        ts: Date.now(),
+      });
+    });
+    const ctx: ToolContext = { run_id: 'perm-run', messages: [], events };
+
+    await policy.authorize(toolOf('bash'), { command: 'echo one' }, ctx);
+    await policy.authorize(toolOf('bash'), { command: 'echo two' }, ctx);
+    expect(requests).toHaveLength(1);
   });
 });
 
@@ -301,15 +395,15 @@ describe('bash 命令文本 denylist（F2）', () => {
 
   it('Windows 分隔符与大小写写法绕过文本检查', async () => {
     const tool = toolOf('bash');
-    expect(
-      await tool.checkPermission?.({ command: 'cat ~\\.SSH\\id_rsa' }, makeAllowContext()),
-    ).toBe('deny');
+    expect(await tool.checkPermission?.({ command: 'cat ~\\.SSH\\id_rsa' }, makeContext())).toBe(
+      'deny',
+    );
   });
 
   it('checkPermission 对命中命令直接 deny，执行前不进入用户确认', async () => {
     const decision = await toolOf('bash').checkPermission?.(
       { command: 'cat ~/.aws/credentials' },
-      makeAllowContext(),
+      makeContext(),
     );
     expect(decision).toBe('deny');
   });
@@ -665,7 +759,7 @@ describe('路径边界（E1）', () => {
     expect(await tool.handler({ path: file }, makeContext())).toContain('敏感路径拒绝列表');
   });
 
-  it('bash cwd 越界 ask、根内 allow', async () => {
+  it('bash cwd 越界与根内都属于 ask（路径只决定 deny 与否）', async () => {
     const allowed = path.join(workDir, 'bash-root');
     mkdirSync(allowed, { recursive: true });
     const outside = path.join(workDir, 'bash-outside');
@@ -675,8 +769,8 @@ describe('路径边界（E1）', () => {
     expect(await tool.checkPermission?.({ command: 'pwd', cwd: outside }, makeContext())).toBe(
       'ask',
     );
-    expect(await tool.checkPermission?.({ command: 'pwd', cwd: allowed }, makeAllowContext())).toBe(
-      'allow',
+    expect(await tool.checkPermission?.({ command: 'pwd', cwd: allowed }, makeContext())).toBe(
+      'ask',
     );
   });
 
@@ -791,9 +885,7 @@ describe('默认工作目录（cwd / working_dir）', () => {
     writeFileSync(path.join(outside, 'outside.txt'), 'outside\n', 'utf-8');
 
     const insideBash = configuredTool('bash', { cwd: allowed, allowedRoots: [allowed] });
-    expect(await insideBash.checkPermission?.({ command: 'pwd' }, makeAllowContext())).toBe(
-      'allow',
-    );
+    expect(await insideBash.checkPermission?.({ command: 'pwd' }, makeContext())).toBe('ask');
 
     const outsideBash = configuredTool('bash', { cwd: outside, allowedRoots: [allowed] });
     expect(await outsideBash.checkPermission?.({ command: 'pwd' }, makeContext())).toBe('ask');
@@ -874,13 +966,13 @@ describe('edit 路径边界（0.15 E8）', () => {
     const outside = writeTemp('edit-outside-root.txt', 'outside\n');
     const tool = configuredTool('edit', { allowedRoots: [allowed], cwd: allowed });
 
-    // 相对路径按 cwd 解析后落在根内：edit 仍需确认，自动应答后 allow
+    // 相对路径按 cwd 解析后落在根内：edit 仍需确认
     expect(
       await tool.checkPermission?.(
         { path: 'inside.txt', old_string: 'inside', new_string: 'x' },
-        makeAllowContext(),
+        makeContext(),
       ),
-    ).toBe('allow');
+    ).toBe('ask');
     // 绝对路径在根外：ask（运行时再向用户确认）
     expect(
       await tool.checkPermission?.(
@@ -902,7 +994,7 @@ describe('自定义 deny_paths 参与 bash 命令文本匹配（0.15 E8）', () 
         {
           command: `cat ${path.join(secretDir, 'token.txt')}`,
         },
-        makeAllowContext(),
+        makeContext(),
       ),
     ).toBe('deny');
     const absolute = await tool.handler(
@@ -916,7 +1008,7 @@ describe('自定义 deny_paths 参与 bash 命令文本匹配（0.15 E8）', () 
     expect(
       await homeTool.checkPermission?.(
         { command: 'cat $HOME/.vessel-e8-secret/key' },
-        makeAllowContext(),
+        makeContext(),
       ),
     ).toBe('deny');
     expect(
@@ -964,7 +1056,7 @@ describe('内置凭据 denylist 隔离（合成 HOME）', () => {
     expect(
       await tool.checkPermission?.(
         { command: `cat \${HOME}/.vessel/config.yaml` },
-        makeAllowContext(),
+        makeContext(),
       ),
     ).toBe('deny');
 

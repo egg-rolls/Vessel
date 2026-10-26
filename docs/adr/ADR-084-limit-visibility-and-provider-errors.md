@@ -41,3 +41,8 @@ tags: [limits, usage, events, error-envelope, observability, provider, retry, ht
 - **已知限制**：`max_runtime.current` 是小数秒，未做整数归一；`run.failed` 不透出建议退避时间；`retry-after` 只参与 429 判定；第三方 provider 的错误对象若既无 `status` 字段也不匹配 message 形状，仍只能按文本分类。
 
 - **关联**：ADR-019（camelCase 类型 / snake_case YAML）、ADR-064（`context.maxTokens` 1M 默认预算）、ADR-080（结构化错误 envelope）；`packages/core/src/types/limits.ts`、`packages/core/src/limits/`、`packages/core/src/runtime/agent-runtime.ts`、`packages/core/src/runtime/error-envelope.ts`、`packages/core/src/provider/errors.ts`、`packages/core/src/provider/providers.ts`、`plugins/provider/openai/src/retry.ts`、`plugins/provider/anthropic/src/retry.ts`。
+
+## Errata
+
+- **2026-10-25：`termination.maxRuntimeSeconds` 默认值 300 → 600。** 原决策正文（§4「`maxRuntimeSeconds` 300 不变」）保持不变，本段记录后续修订：300s 对包含构建、测试与修复循环的常见任务偏紧，默认预算提高到 600s。判定逻辑、`LimitBlock` 形状、`limit.blocked` / `run.failed` 契约均不变；显式配置（文件 / env / tenant overlay）仍覆盖默认值。
+- **2026-10-25：等待用户授权的时长不计入 `max_runtime`。** `PermissionPolicy` 在等待 `tool.permission.response` 期间累计 `pausedMs`；`AgentRuntime` 每轮把该值同步到 `UsageStats.pausedMs`，`evaluateTermination` / `evaluateLimitWarnings` 以 `Date.now() − stats.startTime − pausedMs` 计算 elapsed。理由是人工确认不是机器执行时间，不应消耗运行预算；`pausedMs` 为 additive 可选字段，未提供时行为与原先一致。`max_runtime.current` 仍为毫秒精度小数秒。

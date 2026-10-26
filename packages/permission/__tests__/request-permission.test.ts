@@ -23,6 +23,10 @@ function autoAllow(events: MemoryEventStream): Array<Record<string, unknown>> {
   return requests;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 describe('requestPermission events', () => {
   it('permission request drops session correlation', async () => {
     const events = new MemoryEventStream();
@@ -56,5 +60,32 @@ describe('requestPermission events', () => {
     const data = requests[0];
     if (data === undefined) throw new Error('expected tool.permission.request');
     expect('session_id' in data).toBe(false);
+  });
+
+  it('waits without a timeout by default（只有显式正数 timeout 才计时）', async () => {
+    const events = new MemoryEventStream();
+    const controller = new AbortController();
+    const pending = requestPermission(
+      makeContext(events, { signal: controller.signal }),
+      'bash',
+      { cmd: 'ls' },
+    );
+    let settled = false;
+    pending.then(() => {
+      settled = true;
+    });
+
+    await sleep(80);
+    expect(settled).toBe(false);
+    // 默认无限等待；abort 时旧语义仍兜底返回 'ask'（由调用方决定是否再次询问）
+    controller.abort('cancel');
+    expect(await pending).toBe('ask');
+  });
+
+  it('explicit positive timeout falls back to ask', async () => {
+    const events = new MemoryEventStream();
+    const started = performance.now();
+    expect(await requestPermission(makeContext(events), 'bash', { cmd: 'ls' }, 20)).toBe('ask');
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });

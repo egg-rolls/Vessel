@@ -44,6 +44,13 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.session?.maxHistory).toBeUndefined();
   });
 
+  it('termination defaults: 50 iterations / 600s runtime (ADR-084 Errata)', () => {
+    expect(DEFAULT_CONFIG.termination).toMatchObject({
+      maxIterations: 50,
+      maxRuntimeSeconds: 600,
+    });
+  });
+
   it('0.6.1：context.autoCompact 默认开启', () => {
     expect(DEFAULT_CONFIG.context?.autoCompact).toBe(true);
     expect(DEFAULT_CONFIG.context?.compactThreshold).toBe(0.8);

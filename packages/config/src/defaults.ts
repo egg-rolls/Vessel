@@ -160,7 +160,7 @@ export const DEFAULT_CONFIG: VesselConfig = {
   },
   termination: {
     maxIterations: 50,
-    maxRuntimeSeconds: 300,
+    maxRuntimeSeconds: 600,
   },
   session: {
     backend: 'file',

@@ -60,6 +60,8 @@ export class PermissionPolicy {
   private readonly timeoutMs?: number;
   /** 事件发布出口（0.18：AgentRuntime 注入以先落盘再发布；缺省直接发布） */
   private readonly emit: (event: RunEvent) => void;
+  /** 累计等待用户授权的时长（毫秒）；终止判定把它从 elapsed 中扣除。 */
+  private pausedMsTotal = 0;
 
   constructor(
     private events: EventStream,
@@ -79,9 +81,20 @@ export class PermissionPolicy {
         : undefined;
   }
 
+  /** 累计等待用户授权的时长（毫秒），供终止判定从 `max_runtime` 中扣除。 */
+  get pausedMs(): number {
+    return this.pausedMsTotal;
+  }
+
+  /** 每次 run 开始时重置等待统计；策略实例跨 run 复用，不能把上一次的等待带入下一次。 */
+  resetPausedMs(): void {
+    this.pausedMsTotal = 0;
+  }
+
   /**
    * 判定并放行/拒绝工具执行。允许则正常返回；拒绝则抛错。
-   * - 工具自带 checkPermission → 用工具的判定；
+   * - 工具自带 checkPermission → 用工具的判定；若返回 `ask`，仍受 autoApprove /
+   *   已记住（always）约束，命中则放行，否则由本策略统一发一次请求；
    * - 未声明 → 默认策略：default='ask'（且非 autoApprove/已记住）走事件流确认。
    *   库默认 'allow'（不确认），交互模式由 app 层传 permission.default='ask' 开启。
    */
@@ -92,6 +105,12 @@ export class PermissionPolicy {
     if (tool.checkPermission) {
       decision = await tool.checkPermission(args, ctx);
       source = 'tool';
+      // 工具要求确认时，autoApprove / remember-always 仍是用户已表达过的意图；
+      // 显式 allow / deny 保持原判，不被 auto 策略改写。
+      if (decision === 'ask' && (this.autoApprove.has(tool.name) || this.approved.has(tool.name))) {
+        decision = 'allow';
+        source = 'auto';
+      }
     } else if (
       this.defaultDecision === 'allow' ||
       this.autoApprove.has(tool.name) ||
@@ -174,6 +193,7 @@ export class PermissionPolicy {
     requestId: string,
     ctx: ToolContext,
   ): Promise<unknown> {
+    const waitStartedAt = Date.now();
     try {
       return await this.events.waitFor('tool.permission.response', {
         requestId,
@@ -191,6 +211,9 @@ export class PermissionPolicy {
       throw new PermissionTimeoutError(
         `Permission request for tool "${tool.name}" timed out after ${this.timeoutMs}ms`,
       );
+    } finally {
+      // 人工确认不是机器执行时间：累计后由终止判定从 elapsed 中扣除。
+      this.pausedMsTotal += Date.now() - waitStartedAt;
     }
   }
 }

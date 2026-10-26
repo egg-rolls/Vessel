@@ -231,7 +231,7 @@ function emptyUsage(): UsageSnapshot {
 /**
  * 主 agent 有效限制。
  * 与 bootstrap 一致：limits 整块回退 DEFAULT_CONFIG；termination 逐字段回退
- * （只配置了 maxIterations 时，maxRuntimeSeconds 仍是 300）。
+ * （只配置了 maxIterations 时，maxRuntimeSeconds 仍是 600）。
  */
 export function readEffectiveLimits(config: VesselConfig | undefined): EffectiveLimits {
   const limits = config?.limits ?? DEFAULT_CONFIG.limits ?? {};

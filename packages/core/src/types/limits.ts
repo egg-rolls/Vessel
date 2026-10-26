@@ -67,6 +67,11 @@ export interface UsageStats {
   totalTokens: number;
   totalCost: number;
   startTime: number;
+  /**
+   * 等待用户授权累计的毫秒数（ADR-084 Errata）：人工确认不计入 `max_runtime`。
+   * 缺省 / 0 表示没有暂停。
+   */
+  pausedMs?: number;
 }
 
 /** 限制检查器接口 */

@@ -144,6 +144,20 @@ describe('evaluateTermination', () => {
     expect(block?.hint.length).toBeGreaterThan(0);
   });
 
+  it('subtracts paused permission wait from max_runtime', () => {
+    stats.startTime = Date.now() - 5000;
+
+    // 5s elapsed, 4.5s spent waiting for a human: only 0.5s of budget consumed.
+    stats.pausedMs = 4500;
+    expect(evaluateTermination(stats, { maxIterations: 10, maxRuntimeSeconds: 1 })).toBeNull();
+
+    // Without the pause the same elapsed time trips the limit.
+    stats.pausedMs = 0;
+    expect(evaluateTermination(stats, { maxIterations: 10, maxRuntimeSeconds: 1 })?.key).toBe(
+      'max_runtime',
+    );
+  });
+
   it('returns null within budget and checks iterations before runtime', () => {
     expect(evaluateTermination(stats, { maxIterations: 10 })).toBeNull();
 

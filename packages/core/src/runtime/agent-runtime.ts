@@ -466,6 +466,8 @@ export class AgentRuntime {
       // 0.14 P0：错误 envelope 的阶段来源；输入 guardrail / 进入 loop 后会被更新。
       phase: 'input',
     };
+    // 新 run 不复用上一次的权限等待统计（PermissionPolicy 跨 run 存活）。
+    this.permissionPolicy.resetPausedMs();
     this.activeRun = execution;
     this.activeRunControl = {
       execution,
@@ -949,6 +951,9 @@ export class AgentRuntime {
       if (signal?.aborted) {
         throw new Error(signal.reason ?? 'Run cancelled');
       }
+
+      // 权限等待不计入 max_runtime（ADR-084 Errata）：每轮同步累计暂停时长。
+      stats.pausedMs = this.permissionPolicy.pausedMs;
 
       // 0.15 E2：80% 预警（每 run 每 key 一次，不改变执行）
       this.publishLimitWarnings(execution);

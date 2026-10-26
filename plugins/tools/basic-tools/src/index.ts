@@ -7,7 +7,8 @@
  * - `read`：带行号读文件（支持 offset/limit），权限 allow
  * - `edit`：精确且唯一匹配的字符串替换，权限 ask
  *
- * 危险操作（bash / edit）经 `checkPermission` → `requestPermission` 等用户授权（ADR-029）。
+ * 危险操作（bash / edit）经 `checkPermission` 返回 `ask`，由 core `PermissionPolicy`
+ * 统一发出一次权限请求并等待用户授权（ADR-029 / ADR-079）。
  * `read` / `edit` / `bash` 额外受路径边界约束（0.8 E1）：内置敏感路径 denylist 直接拒绝；
  * 可选 `allowed_roots` 把越界访问降级为 ask。`..` 与符号链接按真实路径判定。
  * `bash` 另在命令文本里匹配内置 denylist 与配置 `deny_paths`（0.14.2 F2 / 0.15）：命中即拒绝。
@@ -29,7 +30,6 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Plugin, PluginHost, ToolContext, ToolDefinition } from '@vessel-agent/core';
-import { requestPermission } from '@vessel-agent/permission';
 
 // ── 常量 ──────────────────────────────────────────
 
@@ -552,6 +552,8 @@ function spawnBash(command: string, cwd: string | undefined) {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
+    // Windows + WSL bash 默认会弹出控制台窗口；隐藏它（POSIX 忽略该选项）
+    windowsHide: true,
     // POSIX 下建独立进程组，取消时能连同孙进程一起杀
     detached: process.platform !== 'win32',
   });
@@ -567,6 +569,7 @@ function killProcessTree(proc: ReturnType<typeof spawnBash>): void {
           cmd: ['taskkill', '/PID', String(pid), '/T', '/F'],
           stdout: 'ignore',
           stderr: 'ignore',
+          windowsHide: true,
         });
       } catch {
         // taskkill 不可用：仍尝试直接 kill
@@ -707,8 +710,9 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
     name: 'bash',
     description:
       'Run a shell command in bash and return merged stdout/stderr with the exit code. ' +
-      'Use it for everything that has no dedicated tool: finding/listing files, batch ' +
-      'edits, git, builds, tests, HTTP requests. ' +
+      'Use it for shell-level work only: git, builds, tests, HTTP requests, process management, ' +
+      'and finding/listing files. Do NOT use it to read file contents: use the `read` tool ' +
+      'instead of cat/sed/head/tail/awk. Do NOT use it to modify files: use the `edit` tool. ' +
       'Commands that spell out built-in or configured sensitive paths (~/.ssh, ~/.aws, ' +
       '~/.gnupg, ~/.vessel/config.yaml and extra deny_paths) are rejected. That check matches ' +
       'the command text only; it is best-effort, not a sandbox.',
@@ -727,7 +731,7 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
       },
       required: ['command'],
     },
-    checkPermission: async (input, ctx) => {
+    checkPermission: async (input) => {
       if (isRecord(input)) {
         // 命令文本命中内置 denylist：与敏感 cwd 一样直接 deny，不走用户 ask
         if (
@@ -742,7 +746,8 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
         // deny 直接拒绝；配置 allowed_roots 的越界走 ask（由运行时向用户确认）
         if (decision !== 'allow') return decision;
       }
-      return requestPermission(ctx, 'bash', input);
+      // 统一由 core PermissionPolicy 发一次请求；autoApprove / neverAutoApprove / always 在那里生效
+      return 'ask';
     },
     handler: async (args: unknown, ctx) => runBash(args, ctx, boundary, baseCwd),
   };
@@ -826,7 +831,8 @@ function createReadTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
     name: 'read',
     description:
       'Read a text file and return its content with line numbers (1-based, `<line>\\t<content>`). ' +
-      `Use offset/limit to page through large files (limit defaults to ${DEFAULT_READ_LIMIT} lines).`,
+      `Use offset/limit to page through large files (limit defaults to ${DEFAULT_READ_LIMIT} lines). ` +
+      'Prefer this tool over bash commands such as cat/sed/head/tail/awk for reading file contents.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -962,7 +968,7 @@ function createEditTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
       },
       required: ['path', 'old_string', 'new_string'],
     },
-    checkPermission: async (input, ctx) => {
+    checkPermission: async (input) => {
       if (isRecord(input)) {
         const inputPath = readString(input, 'path');
         if (inputPath !== '') {
@@ -971,7 +977,8 @@ function createEditTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
           if (decision !== 'allow') return decision;
         }
       }
-      return requestPermission(ctx, 'edit', input);
+      // 统一由 core PermissionPolicy 发一次请求；autoApprove / neverAutoApprove / always 在那里生效
+      return 'ask';
     },
     handler: async (args: unknown, ctx) => editFile(args, ctx.signal, boundary, baseCwd),
   };

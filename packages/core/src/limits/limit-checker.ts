@@ -16,6 +16,15 @@ import type {
 /** 预警阈值（0.15 E2）；硬上限仍由 evaluateUsageLimits / evaluateTermination 判定 */
 export const LIMIT_WARNING_THRESHOLD = 0.8;
 
+/**
+ * 已运行秒数（毫秒精度）。扣除等待用户授权的时长（ADR-084 Errata）：
+ * 人工确认不是机器执行时间，不应消耗 `max_runtime` 预算。
+ */
+function elapsedSeconds(stats: UsageStats): number {
+  const paused = stats.pausedMs ?? 0;
+  return Math.round(((Date.now() - stats.startTime - paused) / 1000) * 1000) / 1000;
+}
+
 /** 单个 key 的预警判定：>= threshold × max 且 < max */
 function warningFor(
   key: LimitBlockKey,
@@ -107,7 +116,7 @@ export function evaluateLimitWarnings(
     ),
   );
   if (termination.maxRuntimeSeconds !== undefined) {
-    const elapsed = Math.round(((Date.now() - stats.startTime) / 1000) * 1000) / 1000;
+    const elapsed = elapsedSeconds(stats);
     push(
       warningFor(
         'max_runtime',
@@ -200,7 +209,7 @@ export function evaluateTermination(
   }
 
   if (policy.maxRuntimeSeconds !== undefined) {
-    const elapsed = Math.round(((Date.now() - stats.startTime) / 1000) * 1000) / 1000;
+    const elapsed = elapsedSeconds(stats);
     if (elapsed >= policy.maxRuntimeSeconds) {
       return {
         scope: 'run',
