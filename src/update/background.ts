@@ -20,7 +20,7 @@ export async function scheduleUpdateCheck(ctx: ReplContext, config: VesselConfig
   try {
     if (!shouldCheck(await readUpdateCache())) return;
 
-    const channel = resolveBackgroundChannel(config);
+    const channel = resolveUpdateChannel(config);
     const result = await checkForUpdate({
       currentVersion: readPackageVersion(),
       channel,
@@ -55,7 +55,10 @@ export async function scheduleUpdateCheck(ctx: ReplContext, config: VesselConfig
 }
 
 /** 后台检查的通道：VESSEL_CHANNEL > 配置 > latest；非法值回退 latest */
-function resolveBackgroundChannel(config: VesselConfig): UpdateChannel {
-  const raw = process.env.VESSEL_CHANNEL ?? config.update?.channel ?? 'latest';
+export function resolveUpdateChannel(
+  config: Pick<VesselConfig, 'update'>,
+  env: Record<string, string | undefined> = process.env,
+): UpdateChannel {
+  const raw = env.VESSEL_CHANNEL ?? config.update?.channel ?? 'latest';
   return raw === 'beta' ? 'beta' : 'latest';
 }

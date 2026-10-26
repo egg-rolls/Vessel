@@ -121,6 +121,7 @@ import { createTenantRuntimeFactory, type TenantRuntimeFactory } from './tenant-
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
+import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
 import { readPackageVersion } from './version';
 import { inspectWebDist, webDistWarning } from './web-dist';
 
@@ -708,6 +709,8 @@ async function runWithConfig(result: BootstrapResult) {
   let gateway: Gateway | null = null;
   /** CONTRACT-hot-apply §2：用户配置监听（关闭时取消，不泄漏句柄）。 */
   let configWatch: ConfigWatchHandle | undefined;
+  /** gateway 侧版本检查；与热应用共用 runtime.notice 通路。 */
+  let gatewayUpdateCheck: GatewayUpdateCheckHandle | undefined;
   /** 用户配置路径（写回 / 监听同源）。 */
   let hotApplyConfigPath = getUserConfigPath();
   /** debounce：默认常量，`VESSEL_CONFIG_WATCH_DEBOUNCE_MS=0` 可关掉合并（测试 / 调试）。 */
@@ -1204,6 +1207,15 @@ async function runWithConfig(result: BootstrapResult) {
       throw error;
     }
 
+    // 版本检查（CONTRACT-hot-apply update scope）：与热应用共用 runtime.notice。
+    // 只读、静默失败；关闭路径上 stop()，不留下定时器。
+    gatewayUpdateCheck = startGatewayUpdateCheck({
+      notice: noticeBus,
+      config,
+      logger,
+      currentVersion: gatewayOptions.version,
+    });
+
     // 0.12：PID 文件供 `gateway status/stop/restart/reload` 使用。
     // `gateway start` 写失败视为启动失败；`--serve` 保持兼容，只告警。
     try {
@@ -1292,7 +1304,9 @@ async function runWithConfig(result: BootstrapResult) {
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
   // gateway.stop() 自带 interrupt('shutdown') + 5s drain，后续关闭传 drain:false。
   activeCleanup = async () => {
-    // 先停配置监听与出站 / 本地 hub，避免 gateway drain 期间继续触发热应用或重连。
+    // 先停配置监听 / 版本检查与出站 / 本地 hub，避免 gateway drain 期间继续触发热应用或重连。
+    gatewayUpdateCheck?.stop();
+    gatewayUpdateCheck = undefined;
     configWatch?.close();
     configWatch = undefined;
     await hubNodeOutbound?.close();

@@ -96,7 +96,9 @@ export class PermissionPolicy {
    * 下一轮工具调用即按新规则判定。`default` 缺省时保持当前判定。
    * 已记住的 "always"（`approved`）不受影响——那是用户在本进程里做出的决定。
    */
-  replaceRules(config: Pick<RuntimePermissionConfig, 'default' | 'autoApprove' | 'neverAutoApprove'>): void {
+  replaceRules(
+    config: Pick<RuntimePermissionConfig, 'default' | 'autoApprove' | 'neverAutoApprove'>,
+  ): void {
     if (config.default !== undefined) this.defaultDecision = config.default;
     this.autoApprove = new Set(config.autoApprove ?? []);
     this.neverAutoApprove = new Set(config.neverAutoApprove ?? []);
