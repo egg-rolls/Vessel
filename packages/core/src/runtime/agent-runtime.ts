@@ -208,14 +208,16 @@ function formatSelfCardLimits(limits: SelfCardOptions['limits']): string {
 }
 
 /** 生成 Self Card 文本（≤400 tokens） */
-function formatSelfCard(card: SelfCardOptions, contextUsed: number): string {
+function formatSelfCard(card: SelfCardOptions): string {
   const lines = ['[Self Card]', `role: ${card.role}`];
   if (card.parent_id !== undefined) lines.push(`parent: ${card.parent_id}`);
   lines.push(`depth: ${card.depth}`, `model: ${card.model}`);
   if (card.tools.length > 0) lines.push(`tools: ${card.tools.join(', ')}`);
   const limits = formatSelfCardLimits(card.limits);
   if (limits) lines.push(`limits: ${limits}`);
-  lines.push(`context: ${card.context.used ?? contextUsed}/${card.context.max} tokens`);
+  // 只写预算、不写实时用量：Self Card 是 system 前缀的一部分，必须跨 run 稳定，
+  // 否则每轮都会让整段提示词缓存失效（价格远大于几行上下文）。
+  lines.push(`context: ${card.context.max} tokens (budget)`);
   if (card.how_to_ask !== undefined) lines.push(`how to ask for help: ${card.how_to_ask}`);
   return truncateToTokens(lines.join('\n'), SELF_CARD_TOKEN_LIMIT);
 }
@@ -1468,7 +1470,7 @@ export class AgentRuntime {
   /** 0.15 E9：本次 run 的 systemPrompt（含 Self Card）；缺省与 this.systemPrompt 相同 */
   private composeRunSystemPrompt(): string | undefined {
     if (!this.selfCard) return this.systemPrompt;
-    const card = formatSelfCard(this.selfCard, this.context.tokenCount);
+    const card = formatSelfCard(this.selfCard);
     return this.systemPrompt ? `${this.systemPrompt}\n\n${card}` : card;
   }
 

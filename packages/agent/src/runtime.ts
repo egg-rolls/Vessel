@@ -23,6 +23,7 @@ import {
   MemoryContextManager,
   MemoryEventStream,
   MemoryPluginHost,
+  type Message,
   noopLogger,
   type PluginHost,
   type RunEvent,
@@ -144,8 +145,6 @@ interface MemberRuntimeEntry {
   pendingPermissions: Map<string, PendingBridgeRequest>;
   /** 是否已通过 onPermissionState 报过 waiting（避免重复回调） */
   waiting: boolean;
-  /** 本轮来源标注；runTurn 设置，run 结束后清空；只被 BeforeLlm hook 读取 */
-  turn: { note?: string };
 }
 
 /** Self Card + 所属 Team。core 只渲染已知字段，team_id 由 createSourceHook 追加成行 */
@@ -243,13 +242,14 @@ function formatMessageSource(message: AgentMessage, teamId: string | undefined):
 }
 
 /**
- * 成员请求期 system 注入：所属 Team（静态）+ 当前消息来源（每轮）。
+ * 成员请求期 system 注入：只写**静态**的所属 Team。
  *
- * 该 hook 只改本次请求的 systemPrompt；core 的 buildRequestMessages 不会把它写回
- * ContextManager，因此不会进入 session 历史。权限判定仍由 bridge 的 human / policy
- * 主体完成，这段文本不参与任何授权判断。
+ * - `team_id` 在成员生命周期内不变，放进 system 不会破坏前缀缓存；
+ * - 每轮消息来源是动态的，**绝不能改写 system**：它由 `runTurn` 通过
+ *   `RunOptions.messages` 在用户输入之前注入为 `vessel:source` 消息，持久化且不改变前缀；
+ * - 权限判定仍由 bridge 的 human / policy 主体完成，这段文本不参与任何授权判断。
  */
-function createSourceHook(teamId: string | undefined, turn: { note?: string }): Hook {
+function createSourceHook(teamId: string | undefined): Hook {
   const teamLine =
     typeof teamId === 'string' && teamId.length > 0 ? `team: ${sanitizeSource(teamId)}` : undefined;
   return {
@@ -258,12 +258,9 @@ function createSourceHook(teamId: string | undefined, turn: { note?: string }): 
     priority: 1000,
     type: HookType.BeforeLlm,
     run: async (ctx) => {
-      const lines = [
-        ...(teamLine !== undefined ? ['[Team]', teamLine] : []),
-        ...(turn.note !== undefined ? [turn.note] : []),
-      ];
-      if (lines.length === 0) return;
-      const extra = lines.join('\n');
+      if (teamLine === undefined) return;
+      // 静态团队行：同一个字符串每轮重复追加，前缀字节不变。
+      const extra = ['[Team]', teamLine].join('\n');
       ctx.systemPrompt =
         typeof ctx.systemPrompt === 'string' && ctx.systemPrompt.length > 0
           ? `${ctx.systemPrompt}\n\n${extra}`
@@ -435,9 +432,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       pluginHost.registerGuardrail(guardrail);
     }
     for (const tool of tools) pluginHost.registerTool(tool);
-    // 每轮的来源标注入口：只改本次请求的 systemPrompt，不改 content / 历史。
-    const turn: { note?: string } = {};
-    pluginHost.registerHook(createSourceHook(member.team_id, turn));
+    // 只写静态 team 行；每轮来源由 runTurn 作为 RunOptions.messages 注入。
+    pluginHost.registerHook(createSourceHook(member.team_id));
 
     const selfCard = this.buildSelfCard(member, model, tools);
     const events = new MemoryEventStream();
@@ -466,7 +462,6 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       unsubscribers: [],
       pendingPermissions: new Map(),
       waiting: false,
-      turn,
     };
     this.entries.set(member.session_id, entry);
     if (this.onMemberEvent !== undefined) {
@@ -508,10 +503,18 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       }
     });
 
-    // 只在本次请求的 systemPrompt 里可见；run 结束清空。
-    entry.turn.note = formatMessageSource(message, member.team_id);
+    // 来源标注作为用户输入之前的持久化消息注入；不改 system，也不改写用户文本。
+    const sourceMessage: Message = {
+      role: 'user',
+      name: 'vessel:source',
+      content: formatMessageSource(message, member.team_id),
+      timestamp: Date.now(),
+    };
     try {
-      const content = await entry.runtime.run(message.content, member.session_id, { runId });
+      const content = await entry.runtime.run(message.content, member.session_id, {
+        runId,
+        messages: [sourceMessage],
+      });
       return {
         content,
         outcome: 'completed',
@@ -522,7 +525,6 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       if (terminal === 'cancelled') return { outcome: 'cancelled' };
       throw error;
     } finally {
-      entry.turn.note = undefined;
       unsubscribe();
       // 取消 / 失败时可能仍停在等待：清掉挂起请求与 deadline，把状态还回 running，
       // 让 AgentService 能正常进入终态（应答随后到达时已无人等待）。

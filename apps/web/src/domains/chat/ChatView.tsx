@@ -700,7 +700,11 @@ export function ChatView({
     : undefined;
   const transcriptMessages = sessionDetail?.messages ?? [];
   const visibleTranscript = useMemo(
-    () => transcriptMessages.filter((message) => message.role !== 'system'),
+    () =>
+      transcriptMessages.filter(
+        // `vessel:*` 是热应用/来源标注的上下文消息：模型需要、人类不需要。
+        (message) => message.role !== 'system' && !message.name?.startsWith('vessel:'),
+      ),
     [transcriptMessages],
   );
   const transcriptWindow = useMemo(

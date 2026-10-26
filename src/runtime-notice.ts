@@ -3,8 +3,9 @@
  *
  * 热应用（config / permission / tools / mcp）的结果要让**人**和**模型**都知道：
  * - 人：`runtime.notice` 事件走现有事件流（Web / TUI 只消费事件，不需要新 RPC）；
- * - 模型：BeforeLlm hook 把最近未消费的通知塞进 `additionalContext`（见
- *   `runtime-notice-hook.ts`），**不写 session 历史**。
+ * - 模型：BeforeLlm hook 把最近未消费的通知追加为 `vessel:notice` 上下文消息
+ *   （见 `runtime-notice-hook.ts`），**持久化在会话尾部**；不改 system 前缀，
+ *   避免每轮让整段提示词缓存失效。
  *
  * 事件名是开放字符串（AGENTS.md），不新增常量表；形状按契约冻结：
  * `{ scope, summary, details?, ok }`。

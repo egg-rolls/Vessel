@@ -538,7 +538,7 @@ describe('InProcessMemberRuntime', () => {
     expect('team_id' in (captured[1]?.selfCard ?? {})).toBe(false);
   });
 
-  it('injects the message source into this request only, not content or session history', async () => {
+  it('appends the message source as a persisted tail message, keeping system stable', async () => {
     const { records, providerFactory } = echoProviders();
     const session = new MemorySessionBackend();
     const runtime = createInProcessMemberRuntime({
@@ -558,12 +558,21 @@ describe('InProcessMemberRuntime', () => {
 
     const first = records[0]?.[0];
     const firstSystem = first?.messages.find((entry) => entry.role === 'system')?.content ?? '';
-    expect(firstSystem).toContain('[Message source]');
-    // <principal>@<node>:<team>；node 用本机 hostname（AgentMessage 无 node_id）。
-    expect(firstSystem).toMatch(/from: human@[^:\s]+:alpha/);
-    expect(firstSystem).toContain('channel: team');
+    // 动态来源不进 system；静态 team 行留在 system。
+    expect(firstSystem).not.toContain('[Message source]');
     expect(firstSystem).toContain('team: alpha');
-    expect(first?.messages.find((entry) => entry.role === 'user')?.content).toBe('hello');
+    const firstSource = first?.messages.find((entry) => entry.name === 'vessel:source');
+    expect(firstSource?.content).toMatch(/from: human@[^:\s]+:alpha/);
+    expect(firstSource?.content).toContain('channel: team');
+    const firstUserIndex =
+      first?.messages.findIndex((entry) => entry.role === 'user' && entry.content === 'hello') ??
+      -1;
+    const firstSourceIndex =
+      first?.messages.findIndex((entry) => entry.name === 'vessel:source') ?? -1;
+    expect(firstUserIndex).toBeGreaterThanOrEqual(0);
+    // 来源在用户输入之前注入，用户文本保持最后一条。
+    expect(firstSourceIndex).toBeGreaterThanOrEqual(0);
+    expect(firstSourceIndex).toBeLessThan(firstUserIndex);
 
     await runtime.runTurn(target, {
       ...message('follow-up', 'worker-session'),
@@ -574,14 +583,16 @@ describe('InProcessMemberRuntime', () => {
 
     const second = records[0]?.[1];
     const secondSystem = second?.messages.find((entry) => entry.role === 'system')?.content ?? '';
-    expect(secondSystem).toContain('from: agent:planner');
-    expect(secondSystem).toContain('channel: direct');
-    expect(secondSystem).not.toContain('from: human');
+    expect(secondSystem).toBe(firstSystem);
+    const sources = second?.messages.filter((entry) => entry.name === 'vessel:source') ?? [];
+    expect(sources).toHaveLength(2);
+    expect(sources[1]?.content).toContain('from: agent:planner');
+    expect(sources[1]?.content).toContain('channel: direct');
 
-    // 来源只存在于每次请求的 systemPrompt；持久化历史里没有它。
+    // 来源消息持久化到会话历史；team 行只存在于请求的 system 覆盖，不落盘。
     const stored = await session.load('worker-session');
     const storedContents = (stored?.messages ?? []).map((entry) => entry.content).join('\n');
-    expect(storedContents).not.toContain('[Message source]');
+    expect(storedContents).toContain('[Message source]');
     expect(storedContents).not.toContain('[Team]');
     expect(storedContents).toContain('hello');
     expect(storedContents).toContain('follow-up');

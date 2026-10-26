@@ -86,6 +86,8 @@ export function formatSessionMarkdown(
   ];
 
   for (const message of messages) {
+    // 热应用/来源标注的上下文消息只给模型看，不进入人类可读导出。
+    if (message.name?.startsWith('vessel:')) continue;
     const heading =
       message.role === 'assistant'
         ? 'Assistant'

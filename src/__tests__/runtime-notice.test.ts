@@ -93,17 +93,22 @@ describe('normalizeNotice', () => {
 });
 
 describe('runtime notice hook', () => {
-  it('把未消费的通知拼进 additionalContext，一行一条', async () => {
+  it('把未消费的通知追加为 vessel:notice 上下文消息，一行一条', async () => {
     const bus = createRuntimeNoticeBus();
     bus.publish({ scope: 'permission', summary: 'permission: bash always ask', ok: true });
     bus.publish({ scope: 'tools', summary: 'tools: +2 -1', ok: true });
 
     const hook = createRuntimeNoticeHook({ bus });
     expect(hook.name).toBe(RUNTIME_NOTICE_HOOK);
-    const result = await hook.run({ run_id: 'r1', session_id: 's1' });
-    expect(result?.additionalContext).toBe(
-      '[runtime] permission: bash always ask\n[runtime] tools: +2 -1',
-    );
+    const ctx: HookContext = { run_id: 'r1', session_id: 's1' };
+    expect(await hook.run(ctx)).toBeUndefined();
+    expect(ctx.messages).toHaveLength(1);
+    expect(ctx.messages?.[0]).toMatchObject({
+      role: 'user',
+      name: 'vessel:notice',
+      content: '[runtime] permission: bash always ask\n[runtime] tools: +2 -1',
+    });
+    expect(typeof ctx.messages?.[0]?.timestamp).toBe('number');
   });
 
   it('同一条通知不会重复注入（只注入一次）', async () => {
@@ -111,33 +116,38 @@ describe('runtime notice hook', () => {
     bus.publish({ scope: 'config', summary: 'config applied', ok: true });
     const hook = createRuntimeNoticeHook({ bus });
 
-    expect(await hook.run({ run_id: 'r1', session_id: 's1' })).toBeDefined();
-    expect(await hook.run({ run_id: 'r2', session_id: 's1' })).toBeUndefined();
+    const first: HookContext = { run_id: 'r1', session_id: 's1' };
+    const second: HookContext = { run_id: 'r2', session_id: 's1' };
+    await hook.run(first);
+    await hook.run(second);
+    expect(first.messages).toHaveLength(1);
+    expect(second.messages).toBeUndefined();
   });
 
-  it('不写 session 历史（只返回 additionalContext）', async () => {
+  it('写成可持久化的上下文消息，而不是 additionalContext', async () => {
     const bus = createRuntimeNoticeBus();
     bus.publish({ scope: 'config', summary: 'config applied', ok: true });
     const hook = createRuntimeNoticeHook({ bus });
     const ctx: HookContext = { run_id: 'r1', session_id: 's1' };
-    const result = await hook.run(ctx);
-    expect(ctx.messages).toBeUndefined();
-    expect(Object.keys(result ?? {})).toEqual(['additionalContext']);
+    expect(await hook.run(ctx)).toBeUndefined();
+    expect(ctx.messages?.[0]?.name).toBe('vessel:notice');
+    expect(ctx.systemPrompt).toBeUndefined();
   });
 
   it('失败的通知带明确前缀', async () => {
     const bus = createRuntimeNoticeBus();
     bus.publish({ scope: 'config', summary: 'config not applied: bad yaml', ok: false });
     const hook = createRuntimeNoticeHook({ bus });
-    const result = await hook.run({ run_id: 'r1', session_id: 's1' });
-    expect(result?.additionalContext).toBe('[runtime] (not applied) config not applied: bad yaml');
+    const ctx: HookContext = { run_id: 'r1', session_id: 's1' };
+    await hook.run(ctx);
+    expect(ctx.messages?.[0]?.content).toBe('[runtime] (not applied) config not applied: bad yaml');
   });
 
   it('没有通知时不干预', async () => {
     const bus = createRuntimeNoticeBus();
-    expect(
-      await createRuntimeNoticeHook({ bus }).run({ run_id: 'r1', session_id: 's' }),
-    ).toBeUndefined();
+    const ctx: HookContext = { run_id: 'r1', session_id: 's' };
+    await createRuntimeNoticeHook({ bus }).run(ctx);
+    expect(ctx.messages).toBeUndefined();
   });
 });
 

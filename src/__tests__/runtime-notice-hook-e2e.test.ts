@@ -11,8 +11,8 @@ import { createRuntimeNoticeBus } from '../runtime-notice';
 import { createRuntimeNoticeHook } from '../runtime-notice-hook';
 
 /**
- * CONTRACT-hot-apply §3：notice 经 BeforeLlm 注入模型上下文，
- * **不写 session 历史**，且同一条只注入一次（真实 AgentRuntime 端到端）。
+ * CONTRACT-hot-apply §3：notice 经 BeforeLlm 追加为 `vessel:notice` 上下文消息，
+ * 不改 system 前缀，且同一条只注入一次（真实 AgentRuntime 端到端）。
  */
 function provider(captured: Message[][]) {
   return {
@@ -43,7 +43,7 @@ function systemMessage(messages: Message[] | undefined): string {
 }
 
 describe('runtime.notice → BeforeLlm（端到端）', () => {
-  it('注入为 system 上下文的一行 [runtime]，不进对话消息', async () => {
+  it('追加为 vessel:notice 消息，不改 system 前缀', async () => {
     const captured: Message[][] = [];
     const host = new MemoryPluginHost();
     const bus = createRuntimeNoticeBus();
@@ -53,9 +53,11 @@ describe('runtime.notice → BeforeLlm（端到端）', () => {
     bus.publish({ scope: 'permission', summary: 'permission: bash always ask', ok: true });
     await runtime.run('hi');
 
-    expect(systemMessage(captured[0])).toBe('BASE PROMPT\n\n[runtime] permission: bash always ask');
-    // 历史里没有这条通知：只有 user 消息。
-    expect(captured[0]?.filter((message) => message.role === 'user')).toHaveLength(1);
+    // system 保持字节稳定：缓存前缀不被通知打断。
+    expect(systemMessage(captured[0])).toBe('BASE PROMPT');
+    const notice = captured[0]?.find((message) => message.name === 'vessel:notice');
+    expect(notice?.content).toBe('[runtime] permission: bash always ask');
+    expect(captured[0]?.filter((message) => message.role === 'user')).toHaveLength(2);
 
     await runtime.dispose();
   });
@@ -71,13 +73,16 @@ describe('runtime.notice → BeforeLlm（端到端）', () => {
     await runtime.run('first');
     await runtime.run('second');
 
-    expect(systemMessage(captured[0])).toContain('[runtime] tools: +1 -0');
-    expect(systemMessage(captured[1])).not.toContain('[runtime] tools: +1 -0');
+    const notices = (messages: Message[] | undefined) =>
+      messages?.filter((message) => message.name === 'vessel:notice') ?? [];
+    expect(notices(captured[0])).toHaveLength(1);
+    expect(notices(captured[1])).toHaveLength(1);
+    expect(notices(captured[1])?.[0]?.content).toBe('[runtime] tools: +1 -0');
 
     await runtime.dispose();
   });
 
-  it('新通知在第二轮注入', async () => {
+  it('新通知在第二轮追加', async () => {
     const captured: Message[][] = [];
     const host = new MemoryPluginHost();
     const bus = createRuntimeNoticeBus();
@@ -88,8 +93,11 @@ describe('runtime.notice → BeforeLlm（端到端）', () => {
     bus.publish({ scope: 'mcp', summary: 'mcp: filesystem disabled', ok: true });
     await runtime.run('second');
 
-    expect(systemMessage(captured[0])).not.toContain('[runtime]');
-    expect(systemMessage(captured[1])).toContain('[runtime] mcp: filesystem disabled');
+    const firstNotices = captured[0]?.filter((message) => message.name === 'vessel:notice') ?? [];
+    const secondNotices = captured[1]?.filter((message) => message.name === 'vessel:notice') ?? [];
+    expect(firstNotices).toHaveLength(0);
+    expect(secondNotices).toHaveLength(1);
+    expect(secondNotices[0]?.content).toBe('[runtime] mcp: filesystem disabled');
 
     await runtime.dispose();
   });
