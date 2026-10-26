@@ -79,7 +79,6 @@ export function AppShell() {
     eventStore,
     lastError,
     tokenError,
-    gapNotice,
     reconnectAttempt,
     stale,
     permissions,
@@ -88,7 +87,6 @@ export function AppShell() {
     epoch,
     retry,
     dismissError,
-    dismissGap,
   } = useConnection();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -439,7 +437,7 @@ export function AppShell() {
               : {})}
         />
 
-        {(lastError || tokenError || gapNotice || stale) && (
+        {(lastError || tokenError || stale) && (
           <div className="flex flex-none flex-col">
             {lastError && (
               <div className="banner banner-error" role="alert">
@@ -463,19 +461,6 @@ export function AppShell() {
                   onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
                 >
                   {t('app.openConnection')}
-                </button>
-              </div>
-            )}
-            {gapNotice && (
-              <div className="banner banner-warn" role="status">
-                <span>{gapNotice}</span>
-                <button
-                  type="button"
-                  className="banner-close"
-                  aria-label={t('common.closeNotice')}
-                  onClick={dismissGap}
-                >
-                  ×
                 </button>
               </div>
             )}

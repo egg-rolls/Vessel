@@ -5,11 +5,33 @@ import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
 import { Button, Input, SearchInput } from '../../components/ui';
-import { relativeTime } from '../../format';
+import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { groupSessionsByDay, normalizeSessionTitle, sessionTitle } from '../../state/sessions';
-import { highlightSegments } from './highlight';
+
+/**
+ * 会话 → agent 地址 `name@node:team`。
+ *
+ * 只认当前节点的 roster，且成员必须显式 `role: 'member'`、带 session_id / name /
+ * team_id；temporary / single / 旧 gateway 缺字段一律不显示第二行。
+ */
+export function sessionAgentAddresses(rosters: readonly NodeRoster[]): ReadonlyMap<string, string> {
+  const addresses = new Map<string, string>();
+  for (const roster of rosters) {
+    if (!roster.node.current || !roster.node.name) continue;
+    for (const entry of roster.rosters) {
+      const teamId = entry.team.team_id;
+      if (!teamId) continue;
+      for (const member of entry.members) {
+        if (member.role !== 'member') continue;
+        if (!member.session_id || !member.name) continue;
+        addresses.set(member.session_id, `${member.name}@${roster.node.name}:${teamId}`);
+      }
+    }
+  }
+  return addresses;
+}
 
 export function SessionList({
   sessions,
@@ -17,6 +39,7 @@ export function SessionList({
   selectedId,
   draftActive,
   pendingBySession,
+  agentAddresses,
   query,
   onQueryChange,
   searchSnippets,
@@ -42,6 +65,8 @@ export function SessionList({
   draftActive: boolean;
   /** 每个会话的待处理权限/提问数量；其他会话只显示徽标，不渲染卡片。 */
   pendingBySession?: ReadonlyMap<string, number>;
+  /** session_id → `name@node:team`；只包含显式 member 的当前节点 roster。 */
+  agentAddresses?: ReadonlyMap<string, string>;
   query: string;
   onQueryChange: (value: string) => void;
   /** 服务端搜索命中的片段；query 非空时优先展示。 */
@@ -212,13 +237,15 @@ export function SessionList({
                   const editing = editingId === session.session_id;
                   const title = sessionTitle(session);
                   const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
-                  const relative = relativeTime(session.updated_at);
+                  const agentAddress = agentAddresses?.get(session.session_id);
                   const snippet = query.trim()
                     ? searchSnippets?.get(session.session_id)
                     : undefined;
                   const preview =
                     snippet ??
                     (session.preview && session.preview !== session.title ? session.preview : '');
+                  // preview 只进 title tooltip，不再占一行布局。
+                  const titleTooltip = preview ? `${title} — ${preview}` : title;
                   return (
                     <div
                       className={`session-row group ${active ? 'active' : ''}`.trim()}
@@ -262,7 +289,7 @@ export function SessionList({
                           >
                             <span className="session-title">
                               <StatusGlyph status={session.status} />
-                              <Tooltip label={title}>
+                              <Tooltip label={titleTooltip}>
                                 <span className="session-title-text">{title}</span>
                               </Tooltip>
                               {pendingCount > 0 && (
@@ -275,28 +302,8 @@ export function SessionList({
                                   </span>
                                 </Tooltip>
                               )}
-                              {relative && (
-                                <span className="session-time">
-                                  {t(
-                                    relative.key,
-                                    'params' in relative ? relative.params : undefined,
-                                  )}
-                                </span>
-                              )}
                             </span>
-                            {preview && (
-                              <span className="session-preview">
-                                {query.trim()
-                                  ? highlightSegments(preview, query).map((segment) =>
-                                      segment.match ? (
-                                        <mark key={segment.start}>{segment.text}</mark>
-                                      ) : (
-                                        <Fragment key={segment.start}>{segment.text}</Fragment>
-                                      ),
-                                    )
-                                  : preview}
-                              </span>
-                            )}
+                            {agentAddress && <span className="session-agent">{agentAddress}</span>}
                           </button>
                           <ActionMenu
                             className="items-center pr-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-compact:opacity-100"

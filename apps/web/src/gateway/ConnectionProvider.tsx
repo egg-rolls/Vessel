@@ -65,7 +65,6 @@ export interface ConnectionContextValue {
   gatewayError: string | null;
   tokenError: string | null;
   lastError: string | null;
-  gapNotice: string | null;
   reconnectAttempt: number;
   /** 每次成功 hello 递增；资源用它作为刷新依赖。 */
   epoch: number;
@@ -85,7 +84,6 @@ export interface ConnectionContextValue {
   clearToken: () => void;
   retry: () => void;
   dismissError: () => void;
-  dismissGap: () => void;
   clearTokenError: () => void;
   respondPermission: (
     requestId: string,
@@ -149,7 +147,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [gatewayError, setGatewayError] = useState<string | null>(initialGateway.error);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
-  const [gapNotice, setGapNotice] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
   const [hello, setHello] = useState<HelloInfo | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -166,8 +163,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const settledRef = useRef(new Map<string, number>());
   /** hydration 世代：只有最新一次请求能落地。 */
   const hydrationGenerationRef = useRef(0);
-  /** 每个 tenant 已提示过的 orphaned request id；重连后不重复弹。 */
-  const orphanToastIdsRef = useRef(new Map<string, Set<string>>());
 
   const client = useMemo(() => new GatewayClient(gatewayUrl), [gatewayUrl]);
   const tenantIdRef = useRef<string | null>(null);
@@ -193,7 +188,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
    * 从 `interactions.list` 补回刷新 / 重连 / 选会话后丢失的卡片。
    *
    * 并行拉 pending + orphaned（都显式带 hello tenant）；orphaned 只作终态集合
-   * 移除旧卡片，不再渲染本地列表。任何失败都只影响本轮 hydration，不阻塞。
+   * 移除旧卡片，不再渲染本地列表，也不弹 toast（历史失效只在 Observe → Attention）。
+   * 任何失败都只影响本轮 hydration，不阻塞。
    */
   const hydrateInteractions = useCallback(async (): Promise<void> => {
     if (client.connectionState !== 'open') return;
@@ -220,7 +216,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const pending = pendingResult.status === 'fulfilled' ? pendingResult.value : [];
     const orphanedListed = orphanedResult.status === 'fulfilled' ? orphanedResult.value : [];
 
-    // 服务端 orphaned 去重后既用于移除旧卡片，也用于一次性提示计数。
+    // 服务端 orphaned 去重后只用于移除旧卡片；orphaned 历史在 Observe → Attention 查看。
     const orphanIds = [
       ...new Set(
         orphanedListed
@@ -235,20 +231,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     // 终态 id 写进 settled：之后重放的事件 / 迟到的 pending 列表都不能复活卡片。
     for (const requestId of snapshot.terminalIds) recordSettled(requestId);
     useInteractionStore.getState().hydrate(snapshot, new Set(settledRef.current.keys()), orphanIds);
-
-    // 失效交互只提示一次：同一 tenant 下已提示过的 request id 在重连 / 刷新后
-    // 不重复弹；后续 hydration 只有出现新 id 才再提示。详情只在 Observe → Attention。
-    if (orphanIds.length > 0) {
-      const tenantKey = tenantAtStart ?? 'default';
-      const seen = orphanToastIdsRef.current.get(tenantKey) ?? new Set<string>();
-      const fresh = orphanIds.some((requestId) => !seen.has(requestId));
-      if (fresh) {
-        for (const requestId of orphanIds) seen.add(requestId);
-        orphanToastIdsRef.current.set(tenantKey, seen);
-        toast.info(t('interaction.orphaned.toast', { count: orphanIds.length }));
-      }
-    }
-  }, [client, recordSettled, toast]);
+  }, [client, recordSettled]);
 
   const reportConnectError = useCallback(
     (error: unknown) => {
@@ -378,7 +361,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const seqPlan = planHelloSeq(info.latest_seq, eventStore.currentSeq);
       if (seqPlan.replay) {
         eventStore.reset(seqPlan.resetTo ?? 0);
-        if (seqPlan.notice) setGapNotice(seqPlan.notice);
+        // 一次性提示走右下角 toast，不占顶部 banner 布局。
+        if (seqPlan.notice) toast.info(seqPlan.notice);
         setTokenError(null);
         setGatewayError(null);
         setLastError(null);
@@ -408,7 +392,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
     const offGap = client.onGap((gap) => {
       eventStore.reset(gap.to_seq);
-      setGapNotice(t('gateway.connection.gap', { from: gap.from_seq, to: gap.to_seq }));
+      // 一次性提示走右下角 toast，不占顶部 banner 布局。
+      toast.info(t('gateway.connection.gap', { from: gap.from_seq, to: gap.to_seq }));
     });
 
     const offState = client.onState((state) => {
@@ -606,7 +591,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       gatewayError,
       tokenError,
       lastError,
-      gapNotice,
       reconnectAttempt,
       epoch,
       tenantEpoch,
@@ -621,7 +605,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       clearToken: disconnect,
       retry,
       dismissError: () => setLastError(null),
-      dismissGap: () => setGapNotice(null),
       clearTokenError: () => setTokenError(null),
       respondPermission,
       respondAsk,
@@ -638,7 +621,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       gatewayError,
       tokenError,
       lastError,
-      gapNotice,
       reconnectAttempt,
       epoch,
       tenantEpoch,

@@ -13,6 +13,7 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { useToast } from '../../components/ToastProvider';
 import { Button } from '../../components/ui';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
+import { useNodes } from '../../gateway/NodeProvider';
 import type { AskUserAnswer, PermissionScope, SessionInfo } from '../../gateway/types';
 import { t } from '../../i18n';
 import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
@@ -34,6 +35,7 @@ import {
 } from '../../state/sessions';
 import { resourceData, useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
+import { useAgentStore } from '../../stores/agentStore';
 import {
   SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE,
   useSessionStore,
@@ -46,7 +48,7 @@ import { Composer } from './Composer';
 import { AskPrompt, PermissionPrompt } from './PromptSlots';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import { SessionHeader } from './SessionHeader';
-import { SessionList } from './SessionList';
+import { SessionList, sessionAgentAddresses } from './SessionList';
 import { QueuedNotice, type QueuedSubmission, RunItems } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
 import {
@@ -60,6 +62,8 @@ import { Transcript } from './Transcript';
 
 const TRANSCRIPT_WINDOW = 50;
 const QUEUE_POLL_MS = 2000;
+/** Roster 与 Agents 域保持一致：会话行的 agent 地址来自同一份 store。 */
+const ROSTER_POLL_MS = 20_000;
 /** 单会话实时组上限：超出时只渲染最近这些 run，并提供运行详情入口。 */
 const MAX_LIVE_GROUPS = 200;
 const SCROLL_FOLLOW_MS = 100;
@@ -114,6 +118,9 @@ export function ChatView({
   useVisualViewport();
   const connected = connectionState === 'open' && hasToken;
   const durableFeature = features.includes('durable-resume');
+  // 会话行的 agent 地址复用 Agents 域的 roster store，不新增 RPC 方法。
+  const { nodes, teamControl } = useNodes();
+  const loadRoster = useAgentStore((state) => state.loadRoster);
 
   const selectedId = route.sessionId && route.sessionId !== 'new' ? route.sessionId : null;
   const draftActive = route.sessionId === 'new';
@@ -196,6 +203,11 @@ export function ChatView({
   const sessionDetailId = useSessionStore((state) => state.detailId);
   const sessionDetailLoading = useSessionStore((state) => state.detailLoading);
   const sessionDetailError = useSessionStore((state) => state.detailError);
+  const rosterState = useAgentStore((state) => state.roster);
+  const agentAddresses = useMemo(
+    () => sessionAgentAddresses(resourceData(rosterState) ?? []),
+    [rosterState],
+  );
   const loadSessions = useSessionStore((state) => state.loadSessions);
   const loadSessionDetail = useSessionStore((state) => state.loadDetail);
   const selectSessionInStore = useSessionStore((state) => state.select);
@@ -220,6 +232,20 @@ export function ChatView({
       void loadSessions(client, { epoch, force });
     },
     { enabled: hasToken, pollMs: 15_000, deps: [epoch, tenantEpoch, hasToken] },
+  );
+
+  // 会话列表第二行来自 agentStore roster（Agents 域同一份数据）。
+  const rosterNodeKeys = nodes.map((node) => node.nodeId ?? node.name).join(',');
+  usePolledAction(
+    () => {
+      if (!hasToken) return;
+      void loadRoster(nodes, teamControl);
+    },
+    {
+      enabled: hasToken && nodes.length > 0,
+      pollMs: ROSTER_POLL_MS,
+      deps: [epoch, tenantEpoch, hasToken, rosterNodeKeys],
+    },
   );
 
   // 与旧 useResource 一致：断开时丢弃列表 / detail。
@@ -1008,6 +1034,7 @@ export function ChatView({
           selectedId={selectedId}
           draftActive={draftActive}
           pendingBySession={pendingBySession}
+          agentAddresses={agentAddresses}
           query={query}
           onQueryChange={setQuery}
           searchSnippets={activeServerSearch?.snippets}
