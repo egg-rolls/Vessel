@@ -188,13 +188,40 @@ describe('permission-store setToolPolicy（CONTRACT-hot-apply §7）', () => {
     });
   });
 
-  it('文件不存在时创建，权限 0600', () => {
-    setToolPolicy('bash', 'auto', { configPath });
+  it('文件不存在时创建，首次写盘补回默认 agent.close 保护，权限 0600', () => {
+    expect(setToolPolicy('bash', 'never', { configPath })).toEqual({
+      autoApprove: [],
+      neverAutoApprove: ['agent.close', 'bash'],
+    });
     const root = readRoot();
-    expect(root.permission).toEqual({ auto_approve: ['bash'], never_auto_approve: [] });
+    expect(root.permission).toEqual({
+      auto_approve: [],
+      never_auto_approve: ['agent.close', 'bash'],
+    });
     if (process.platform !== 'win32') {
       expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it('显式 never_auto_approve 列表优先，不合并默认', () => {
+    fs.writeFileSync(configPath, 'permission:\n  never_auto_approve: [bash]\n', 'utf-8');
+    expect(setToolPolicy('edit', 'never', { configPath })).toEqual({
+      autoApprove: [],
+      neverAutoApprove: ['bash', 'edit'],
+    });
+    expect(readRoot().permission).toEqual({
+      auto_approve: [],
+      never_auto_approve: ['bash', 'edit'],
+    });
+  });
+
+  it('显式空 never_auto_approve 也不被默认覆盖', () => {
+    fs.writeFileSync(configPath, 'permission:\n  never_auto_approve: []\n', 'utf-8');
+    expect(setToolPolicy('bash', 'auto', { configPath })).toEqual({
+      autoApprove: ['bash'],
+      neverAutoApprove: [],
+    });
+    expect(readRoot().permission).toEqual({ auto_approve: ['bash'], never_auto_approve: [] });
   });
 
   it('保留其它 permission 子键（不整体替换块）', () => {
@@ -203,7 +230,7 @@ describe('permission-store setToolPolicy（CONTRACT-hot-apply §7）', () => {
     expect(readRoot().permission).toEqual({
       timeouts: 5,
       auto_approve: [],
-      never_auto_approve: ['bash'],
+      never_auto_approve: ['agent.close', 'bash'],
     });
   });
 
@@ -215,17 +242,17 @@ describe('permission-store setToolPolicy（CONTRACT-hot-apply §7）', () => {
     );
   });
 
-  it('createPermissionStore.policy / setPolicy 往返一致', () => {
+  it('createPermissionStore.policy / setPolicy 往返一致（默认 agent.close 保留）', () => {
     const store = createPermissionStore({ configPath });
-    expect(store.policy()).toEqual({ autoApprove: [], neverAutoApprove: [] });
+    expect(store.policy()).toEqual({ autoApprove: [], neverAutoApprove: ['agent.close'] });
     expect(store.setPolicy('bash', 'auto')).toEqual({
       autoApprove: ['bash'],
-      neverAutoApprove: [],
+      neverAutoApprove: ['agent.close'],
     });
-    expect(store.policy()).toEqual({ autoApprove: ['bash'], neverAutoApprove: [] });
+    expect(store.policy()).toEqual({ autoApprove: ['bash'], neverAutoApprove: ['agent.close'] });
     expect(store.setPolicy('bash', 'never')).toEqual({
       autoApprove: [],
-      neverAutoApprove: ['bash'],
+      neverAutoApprove: ['agent.close', 'bash'],
     });
   });
 });

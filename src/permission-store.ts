@@ -156,15 +156,22 @@ function assertToolName(tool: string): string {
   return tool.trim();
 }
 
+/**
+ * 缺省强制确认键；与 `resolveRuntimePermission` 的 `?? ['agent.close']` 同源。
+ * 键缺失时读回它，避免 Web 首次写盘把默认保护落成 `never_auto_approve: []`。
+ */
+const DEFAULT_NEVER_AUTO_APPROVE = ['agent.close'] as const;
+
 /** 从 permission 块读取 never_auto_approve（兼容 camelCase） */
 function readNeverRules(root: Record<string, unknown>): string[] {
   const permission = root.permission;
-  if (permission === undefined || permission === null) return [];
+  // 显式配置（含空数组）优先；只有键缺失才补回运行时默认。
+  if (permission === undefined || permission === null) return [...DEFAULT_NEVER_AUTO_APPROVE];
   if (!isRecord(permission)) {
     throw new Error('permission_store_invalid_config: permission must be a YAML object');
   }
   const raw = permission.never_auto_approve ?? permission.neverAutoApprove;
-  if (raw === undefined || raw === null) return [];
+  if (raw === undefined || raw === null) return [...DEFAULT_NEVER_AUTO_APPROVE];
   if (!Array.isArray(raw)) {
     throw new Error(
       'permission_store_invalid_config: permission.never_auto_approve must be a YAML array',
@@ -266,7 +273,10 @@ export function setAutoApproveRules(
   return writeRules(resolveConfigPath(options), rules);
 }
 
-/** 读取两个规则数组（文件不存在返回两个空数组） */
+/**
+ * 读取两个规则数组（文件 / key 不存在时 autoApprove 为空，neverAutoApprove 返回
+ * 运行时默认 `['agent.close']`；显式配置优先）。
+ */
 export function readToolPolicies(options: PermissionStoreOptions = {}): ToolPolicySnapshot {
   const root = readRoot(resolveConfigPath(options));
   return {
