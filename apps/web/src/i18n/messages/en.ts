@@ -469,6 +469,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.attention.pending': 'Pending',
   'team.attention.count': '{count} pending',
 
+  'team.pending.title': 'Pending approvals ({count})',
+  'team.pending.hint': "From this Team's member sessions",
+  'team.pending.permission': 'Permission',
+  'team.pending.ask': 'Question',
+
   'team.member.title': 'Member',
   'team.member.currentBody': 'Current Body',
   'team.member.retiredBodies': 'Retired Bodies',

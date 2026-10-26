@@ -33,7 +33,16 @@ export function TeamDetailRoute({
 }) {
   useLocale();
   const toast = useToast();
-  const { connectionState, epoch, tenantEpoch, permissions, asks } = useConnection();
+  const {
+    connectionState,
+    epoch,
+    tenantEpoch,
+    permissions,
+    asks,
+    responding,
+    respondPermission,
+    respondAsk,
+  } = useConnection();
   const { teamControl, hasTokenFor } = useNodes();
   const snapshot = useEventSnapshot();
   const control = teamControl(node);
@@ -202,6 +211,13 @@ export function TeamDetailRoute({
         permissions={currentPermissions}
         asks={currentAsks}
         events={currentEvents}
+        responding={responding}
+        onDecidePermission={(requestId, decision, scope) => {
+          void respondPermission(requestId, decision, scope);
+        }}
+        onRespondAsk={(requestId, answers) => {
+          void respondAsk(requestId, answers);
+        }}
         onOpenMember={(agentId) =>
           navigate({
             domain: 'teams',

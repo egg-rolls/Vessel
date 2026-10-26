@@ -457,6 +457,11 @@ export const messages = {
   'team.attention.pending': '待处理',
   'team.attention.count': '{count} 个待处理',
 
+  'team.pending.title': '待确认（{count}）',
+  'team.pending.hint': '来自本 Team 成员的会话',
+  'team.pending.permission': '权限',
+  'team.pending.ask': '提问',
+
   'team.member.title': '成员',
   'team.member.currentBody': '当前 Body',
   'team.member.retiredBodies': '已退役 Body',

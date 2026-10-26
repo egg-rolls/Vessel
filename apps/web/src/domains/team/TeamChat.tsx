@@ -17,8 +17,10 @@ import {
 } from '../../components/States';
 import { Button, cn } from '../../components/ui';
 import type {
+  AskUserAnswer,
   AskUserRequest,
   PermissionRequest,
+  PermissionScope,
   TeamDetail,
   TeamMember,
   TeamMessage,
@@ -39,6 +41,7 @@ import { isOnlineMember } from './member-status';
 import { type MentionChip, memberDisplayName, mentionIds, shortAgentId } from './mention';
 import { TeamComposer } from './TeamComposer';
 import { TeamMemberSidebar } from './TeamMemberSidebar';
+import { TeamPendingBar } from './TeamPendingBar';
 import { TeamTranscript } from './TeamTranscript';
 import { buildTeamRows, type LocalSend, matchWrittenMessage, shouldFetchTeam } from './team-send';
 import {
@@ -54,6 +57,7 @@ const TEAM_POLL_MS = 4_000;
 /** 与 app/layout 的 RAIL_MAX_WIDTH 一致；不直接 import 以免在 SSR 里访问 window。 */
 const NARROW_MAX_WIDTH = 1023;
 const ROSTER_RELOAD_COOLDOWN_MS = 2_000;
+const EMPTY_RESPONDING: ReadonlySet<string> = new Set();
 
 export interface TeamChatClient {
   getTeam(teamId: string, opts?: { limit?: number; members_limit?: number }): Promise<TeamDetail>;
@@ -74,6 +78,16 @@ export interface TeamChatProps {
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
   events: readonly StoredEvent[];
+  /** 正在提交应答的 requestId；由 ConnectionProvider 维护。 */
+  responding?: ReadonlySet<string>;
+  /** 直接应答成员会话里的权限请求（不切换会话）。 */
+  onDecidePermission?: (
+    requestId: string,
+    decision: 'allow' | 'deny',
+    scope: PermissionScope,
+  ) => void;
+  /** 直接应答成员会话里的 ask_user。 */
+  onRespondAsk?: (requestId: string, answers: AskUserAnswer[]) => void;
   onOpenMember: (agentId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onBackToList: () => void;
@@ -97,6 +111,9 @@ export function TeamChat({
   permissions,
   asks,
   events,
+  responding = EMPTY_RESPONDING,
+  onDecidePermission,
+  onRespondAsk,
   onOpenMember,
   onOpenSession,
   onBackToList,
@@ -428,6 +445,15 @@ export function TeamChat({
           </div>
 
           <div className="team-composer-area">
+            <TeamPendingBar
+              members={members}
+              permissions={permissions}
+              asks={asks}
+              responding={responding}
+              connected={connected}
+              onDecidePermission={onDecidePermission}
+              onRespondAsk={onRespondAsk}
+            />
             <TeamComposer
               value={draft}
               onChange={(value) => {
