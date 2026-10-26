@@ -367,6 +367,23 @@ export const messages = {
   'settings.display.field.showReasoning': '显示思考流',
   'settings.display.field.statusBars': '状态栏位置',
   'settings.display.field.language': '界面语言',
+  'settings.display.runtimeTitle': '运行期上下文消息',
+  'settings.display.runtimeDescription':
+    '仅提供给模型的上下文消息（消息来源、运行通知、订阅通知、预算预警）。默认在会话记录中隐藏；该偏好只保存在当前浏览器。',
+  'settings.display.runtimeShowAll': '全部显示',
+  'settings.display.runtimeShowAllHint': '显示所有运行期上下文类型；单独开关仍然有效。',
+  'settings.display.runtimeKind.source': '消息来源',
+  'settings.display.runtimeKind.source.hint': '每轮用户输入的来源。',
+  'settings.display.runtimeKind.notice': '运行通知',
+  'settings.display.runtimeKind.notice.hint': '热应用与版本更新通知。',
+  'settings.display.runtimeKind.subscription': '订阅通知',
+  'settings.display.runtimeKind.subscription.hint': '订阅文档发生变化时的短通知。',
+  'settings.display.runtimeKind.limit': '预算预警',
+  'settings.display.runtimeKind.limit.hint': '上下文预算用量预警。',
+  'settings.display.runtimeKind.compaction': '压缩标记',
+  'settings.display.runtimeKind.compaction.hint': '上下文压缩标记。',
+  'settings.display.runtimeKind.other': '其他',
+  'settings.display.runtimeKind.other.hint': '未识别的 vessel:* 上下文消息。',
 
   // Team（0.19 S6）。技术词 agent / run / session / Body / epoch / gateway /
   // token / @ / Team / workspace 与错误码保持原文。

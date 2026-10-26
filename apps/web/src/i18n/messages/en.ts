@@ -378,6 +378,25 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.display.field.showReasoning': 'Show reasoning stream',
   'settings.display.field.statusBars': 'Status bar position',
   'settings.display.field.language': 'UI language',
+  'settings.display.runtimeTitle': 'Runtime context messages',
+  'settings.display.runtimeDescription':
+    'Model-only context messages (source, notices, subscriptions, budget warnings) are hidden from transcripts by default. This preference is stored in this browser only.',
+  'settings.display.runtimeShowAll': 'Show all',
+  'settings.display.runtimeShowAllHint':
+    'Reveal every runtime context kind. Individual toggles still apply.',
+  'settings.display.runtimeKind.source': 'Source',
+  'settings.display.runtimeKind.source.hint': "Where each turn's input came from.",
+  'settings.display.runtimeKind.notice': 'Notices',
+  'settings.display.runtimeKind.notice.hint': 'Hot-apply and version update notices.',
+  'settings.display.runtimeKind.subscription': 'Subscriptions',
+  'settings.display.runtimeKind.subscription.hint':
+    'Short notices when subscribed documents change.',
+  'settings.display.runtimeKind.limit': 'Budget warnings',
+  'settings.display.runtimeKind.limit.hint': 'Context budget usage warnings.',
+  'settings.display.runtimeKind.compaction': 'Compaction',
+  'settings.display.runtimeKind.compaction.hint': 'Context compaction markers.',
+  'settings.display.runtimeKind.other': 'Other',
+  'settings.display.runtimeKind.other.hint': 'Unrecognized vessel:* context messages.',
 
   // Team (0.19 S6). Technical terms (agent / run / session / Body / epoch /
   // gateway / token / @ / Team / workspace) and error codes stay untranslated.

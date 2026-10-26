@@ -27,6 +27,11 @@ import type {
 import { t } from '../../i18n';
 import type { StoredEvent } from '../../state/events';
 import {
+  isRuntimeMessageVisible,
+  runtimeMessageKind,
+  useRuntimeVisibility,
+} from '../../state/runtime-visibility';
+import {
   applyTeamEvent,
   createTeamEventState,
   type ObservedBody,
@@ -64,13 +69,15 @@ export interface MemberDetailProps {
 }
 
 function SessionTranscript({ messages }: { messages: readonly Message[] }) {
+  const { visibility } = useRuntimeVisibility();
   const nodes: ReactNode[] = [];
   let lastDay: string | null = null;
   // 只读会话消息没有稳定 id：用局部序号做 key，稳定且不受排序影响。
   let keySeq = 0;
   for (const message of messages) {
-    // 热应用/来源标注的上下文消息只给模型看，不进入人类可读转录。
-    if (message.name?.startsWith('vessel:')) continue;
+    // Runtime context (`vessel:*`) is model-only; hide it unless the user opts in.
+    const kind = runtimeMessageKind(message);
+    if (kind !== undefined && !isRuntimeMessageVisible(visibility, kind)) continue;
     const key = `message-${keySeq++}`;
     const ts = message.timestamp;
     const day = ts !== undefined ? localDayKey(ts) : null;

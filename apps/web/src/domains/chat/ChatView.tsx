@@ -25,6 +25,11 @@ import { isGroupPersisted } from '../../state/events';
 import { EventGroupCache } from '../../state/group-cache';
 import type { PaletteItem } from '../../state/palette';
 import {
+  isRuntimeMessageVisible,
+  runtimeMessageKind,
+  useRuntimeVisibility,
+} from '../../state/runtime-visibility';
+import {
   filterSessions,
   removeSessionFromList,
   renameSessionInList,
@@ -112,6 +117,7 @@ export function ChatView({
   } = useConnection();
   const toast = useToast();
   const snapshot = useEventSnapshot();
+  const { visibility: runtimeVisibility } = useRuntimeVisibility();
   // 键盘弹出时把 visual viewport 尺寸写到根元素，供 dock 上限与外壳高度使用。
   useVisualViewport();
   const connected = connectionState === 'open' && hasToken;
@@ -699,13 +705,15 @@ export function ChatView({
     ? sessions.find((session) => session.session_id === selectedId)
     : undefined;
   const transcriptMessages = sessionDetail?.messages ?? [];
+  // Runtime context (`vessel:*`) is model-only; hide it unless the user opts in.
   const visibleTranscript = useMemo(
     () =>
-      transcriptMessages.filter(
-        // `vessel:*` 是热应用/来源标注的上下文消息：模型需要、人类不需要。
-        (message) => message.role !== 'system' && !message.name?.startsWith('vessel:'),
-      ),
-    [transcriptMessages],
+      transcriptMessages.filter((message) => {
+        if (message.role === 'system') return false;
+        const kind = runtimeMessageKind(message);
+        return kind === undefined || isRuntimeMessageVisible(runtimeVisibility, kind);
+      }),
+    [transcriptMessages, runtimeVisibility],
   );
   const transcriptWindow = useMemo(
     () => windowTail(visibleTranscript, transcriptLimit),

@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
-import { Button, KeyValueList, Section, Select } from '../../components/ui';
+import { Button, Field, KeyValueList, Section, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import {
@@ -16,6 +16,7 @@ import {
   readDisplayValue,
   toConfigValue,
 } from '../../state/display-settings';
+import { RUNTIME_MESSAGE_KINDS, useRuntimeVisibility } from '../../state/runtime-visibility';
 import { resourceData, useResource } from '../../state/useResource';
 
 function errorMessage(error: unknown): string {
@@ -25,6 +26,53 @@ function errorMessage(error: unknown): string {
 function isUnavailable(error: unknown): boolean {
   const code = (error as { code?: unknown }).code;
   return code === 'not_found' || code === 'method_not_allowed';
+}
+
+/** Local-only preference; does not depend on the gateway config API. */
+function RuntimeContextSection() {
+  const { visibility, setKind, setAll } = useRuntimeVisibility();
+  const allVisible = RUNTIME_MESSAGE_KINDS.every((kind) => visibility[kind]);
+
+  return (
+    <Section
+      title={t('settings.display.runtimeTitle')}
+      description={t('settings.display.runtimeDescription')}
+    >
+      <div className="flex flex-col gap-3">
+        <Field
+          label={t('settings.display.runtimeShowAll')}
+          htmlFor="runtime-context-show-all"
+          hint={t('settings.display.runtimeShowAllHint')}
+        >
+          <input
+            id="runtime-context-show-all"
+            type="checkbox"
+            className="h-4 w-4 accent-accent"
+            checked={allVisible}
+            onChange={(event) => setAll(event.target.checked)}
+          />
+        </Field>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {RUNTIME_MESSAGE_KINDS.map((kind) => (
+            <Field
+              key={kind}
+              label={t(`settings.display.runtimeKind.${kind}`)}
+              htmlFor={`runtime-context-${kind}`}
+              hint={t(`settings.display.runtimeKind.${kind}.hint`)}
+            >
+              <input
+                id={`runtime-context-${kind}`}
+                type="checkbox"
+                className="h-4 w-4 accent-accent"
+                checked={visibility[kind]}
+                onChange={(event) => setKind(kind, event.target.checked)}
+              />
+            </Field>
+          ))}
+        </div>
+      </div>
+    </Section>
+  );
 }
 
 export function DisplaySettingsView() {
@@ -55,27 +103,42 @@ export function DisplaySettingsView() {
     setValues(next);
   }, [data]);
 
+  // The runtime context group is local-only: keep it available even when the
+  // gateway config API is missing or disconnected.
+  const runtimeSection = <RuntimeContextSection />;
+
   if (!hasToken) {
     return (
-      <NotEnabledState
-        title={t('settings.display.noToken')}
-        reason={t('settings.display.noTokenReason')}
-      />
+      <div className="flex flex-col gap-6">
+        <NotEnabledState
+          title={t('settings.display.noToken')}
+          reason={t('settings.display.noTokenReason')}
+        />
+        {runtimeSection}
+      </div>
     );
   }
   if (!available) {
     return (
-      <NotEnabledState
-        title={t('settings.display.unavailableTitle')}
-        reason={t('settings.display.unavailableReason')}
-      />
+      <div className="flex flex-col gap-6">
+        <NotEnabledState
+          title={t('settings.display.unavailableTitle')}
+          reason={t('settings.display.unavailableReason')}
+        />
+        {runtimeSection}
+      </div>
     );
   }
   if (!data) {
-    return resource.state.status === 'error' ? (
-      <ErrorState message={resource.state.error} onRetry={resource.reload} />
-    ) : (
-      <LoadingState label={t('settings.display.loading')} />
+    return (
+      <div className="flex flex-col gap-6">
+        {resource.state.status === 'error' ? (
+          <ErrorState message={resource.state.error} onRetry={resource.reload} />
+        ) : (
+          <LoadingState label={t('settings.display.loading')} />
+        )}
+        {runtimeSection}
+      </div>
     );
   }
 
@@ -148,6 +211,7 @@ export function DisplaySettingsView() {
           })}
         />
       </Section>
+      {runtimeSection}
     </div>
   );
 }
