@@ -1059,7 +1059,8 @@ export class AgentRuntime {
       const baseSystemPrompt = this.runSystemPrompt ?? this.systemPrompt;
       Object.defineProperty(hookCtx, 'systemPrompt', {
         enumerable: true,
-        configurable: true,
+        // 不可重定义：hook 只能读，写入被忽略并记一次事件。
+        configurable: false,
         get: () => baseSystemPrompt,
         set: () => {
           if (this.systemPromptIgnoredReported) return;
