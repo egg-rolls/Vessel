@@ -35,6 +35,7 @@ import type {
   FeishuStatus,
   GapFrame,
   GatewayErrorBody,
+  GatewayReloadResult,
   HealthResponse,
   HelloInfo,
   McpServerStatus,
@@ -65,6 +66,8 @@ import type {
   TenantInfo,
   TenantResponse,
   ToolInfo,
+  ToolPolicy,
+  ToolPolicyResult,
 } from './types';
 import { toWebSocketBase } from './url';
 
@@ -699,6 +702,22 @@ export class GatewayClient {
     value: string | boolean,
   ): Promise<{ ok: boolean; key: string; value: string | boolean }> {
     return this.rpc('config.set', { key, value });
+  }
+
+  /**
+   * 写入单个工具的确认策略（canonical `permissions.setToolPolicy`）。
+   * 旧 gateway 没有该方法，调用方须先用 `capabilities.list` 判定是否可用。
+   */
+  setToolPolicy(tool: string, policy: ToolPolicy): Promise<ToolPolicyResult> {
+    return this.rpc<ToolPolicyResult>('permissions.setToolPolicy', { tool, policy });
+  }
+
+  /**
+   * 热应用（canonical `gateway.reload`）。
+   * 只接受 serve 声明的 scope；写策略后调 `['permission']` 让存活 runtime 换规则。
+   */
+  reload(scopes: string[]): Promise<GatewayReloadResult> {
+    return this.rpc<GatewayReloadResult>('gateway.reload', { scopes });
   }
 
   listAgentsTree(

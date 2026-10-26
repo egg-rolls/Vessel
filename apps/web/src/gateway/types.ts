@@ -115,6 +115,21 @@ export interface ToolInfo {
   has_permission_check: boolean;
 }
 
+/**
+ * 工具确认策略（CONTRACT-hot-apply §6/§7）。
+ * 三档完全由 `permission.autoApprove` / `neverAutoApprove` 两个数组表达。
+ */
+export type ToolPolicy = 'auto' | 'ask' | 'never';
+
+/** `permissions.setToolPolicy` 结果（canonical RPC 冻结形状）。 */
+export interface ToolPolicyResult {
+  ok: boolean;
+  tool: string;
+  policy: ToolPolicy;
+  auto_approve: string[];
+  never_auto_approve: string[];
+}
+
 /** ask_user 单个问题 */
 export interface AskUserQuestion {
   header: string;
@@ -616,6 +631,15 @@ export interface ConfigResponse {
    * （Hub / Gateway 状态页显示 `—`），不得用协议版本冒充。
    */
   version?: string;
+}
+
+/**
+ * `gateway.reload` 结果（CONTRACT-hot-apply §1）。
+ * `requires_restart` 不得伪装成已生效。
+ */
+export interface GatewayReloadResult {
+  reloaded: string[];
+  requires_restart: string[];
 }
 
 export interface EvalRunResponse {

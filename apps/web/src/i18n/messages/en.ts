@@ -1067,6 +1067,25 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'integrations.tools.details': 'Tool details',
   'integrations.tools.schema': 'Input schema',
   'integrations.tools.stale': 'Disconnected; showing the last loaded tool catalog.',
+  'integrations.tools.policyLabel': 'Confirmation policy',
+  'integrations.tools.policyAuto': 'Allow automatically',
+  'integrations.tools.policyAsk': 'Confirm every time',
+  'integrations.tools.policyNever': 'Always confirm',
+  'integrations.tools.policyAutoHint':
+    'Calls run without asking; the tool is added to permission.autoApprove.',
+  'integrations.tools.policyAskHint':
+    'Default: each call asks for approval; the tool is in neither list.',
+  'integrations.tools.policyNeverHint':
+    'Always asks even when allowed automatically; the tool is added to permission.neverAutoApprove.',
+  'integrations.tools.policyApplied': 'Applied.',
+  'integrations.tools.policyFailed': 'Not applied: {detail}',
+  'integrations.tools.policySaving': 'Saving…',
+  'integrations.tools.policyChecking': 'Checking gateway capabilities…',
+  'integrations.tools.policyUnsupported': 'Requires a newer gateway.',
+  'integrations.tools.policyLoadFailed': 'Could not read the permission config: {detail}',
+  'integrations.tools.policyReadOnly': 'Read-only; always allowed.',
+  'integrations.tools.policyNotConfigurable':
+    'This tool does not ask for approval; no policy to set.',
   'integrations.mcp.globalDesc':
     'The MCP control plane is gateway-global (default tenant) and does not follow tenant switches.',
   'integrations.mcp.currentTenant': ' Current tenant: {tenant}.',

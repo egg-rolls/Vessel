@@ -21,6 +21,7 @@ import type { ToolInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { buildMcpPaletteActions } from '../../state/palette-actions';
 import { resourceData, useResource } from '../../state/useResource';
+import { ToolPolicyControl } from './ToolPolicyControl';
 
 type IntegrationsRoute = Extract<Route, { domain: 'integrations' }>;
 type Tab = IntegrationsRoute['tab'];
@@ -239,6 +240,7 @@ function ToolsPanel() {
               <p className="m-0 text-md leading-relaxed text-muted">{detail.description}</p>
             )}
           </div>
+          <ToolPolicyControl tool={detail} />
           <JsonView
             value={detail.input_schema}
             label={t('integrations.tools.schema')}
