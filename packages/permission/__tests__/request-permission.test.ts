@@ -65,11 +65,9 @@ describe('requestPermission events', () => {
   it('waits without a timeout by default（只有显式正数 timeout 才计时）', async () => {
     const events = new MemoryEventStream();
     const controller = new AbortController();
-    const pending = requestPermission(
-      makeContext(events, { signal: controller.signal }),
-      'bash',
-      { cmd: 'ls' },
-    );
+    const pending = requestPermission(makeContext(events, { signal: controller.signal }), 'bash', {
+      cmd: 'ls',
+    });
     let settled = false;
     pending.then(() => {
       settled = true;

@@ -162,10 +162,14 @@ describe('core PermissionPolicy 统一提问（bash / edit）', () => {
   });
 
   it('neverAutoApprove 命中 bash 时仍 ask', async () => {
-    const { requests, error } = await authorizeWithPolicy(toolOf('bash'), { command: 'echo hi' }, {
-      autoApprove: ['bash'],
-      neverAutoApprove: ['bash'],
-    });
+    const { requests, error } = await authorizeWithPolicy(
+      toolOf('bash'),
+      { command: 'echo hi' },
+      {
+        autoApprove: ['bash'],
+        neverAutoApprove: ['bash'],
+      },
+    );
     expect(error).toBeUndefined();
     expect(requests).toHaveLength(1);
   });
@@ -1054,10 +1058,7 @@ describe('内置凭据 denylist 隔离（合成 HOME）', () => {
   it(`\${HOME} 写法的内置凭据路径未被拒绝时合成 config.yaml 会被读出`, async () => {
     const tool = configuredTool('bash', {});
     expect(
-      await tool.checkPermission?.(
-        { command: `cat \${HOME}/.vessel/config.yaml` },
-        makeContext(),
-      ),
+      await tool.checkPermission?.({ command: `cat \${HOME}/.vessel/config.yaml` }, makeContext()),
     ).toBe('deny');
 
     const result = await tool.handler(

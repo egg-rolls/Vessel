@@ -64,9 +64,12 @@ async function authorize(
 
 describe('tool checkPermission ask', () => {
   it('autoApprove 命中时不发请求', async () => {
-    const { requests, error } = await authorize(tool(async () => 'ask'), {
-      autoApprove: ['guarded'],
-    });
+    const { requests, error } = await authorize(
+      tool(async () => 'ask'),
+      {
+        autoApprove: ['guarded'],
+      },
+    );
     expect(error).toBeUndefined();
     expect(requests).toHaveLength(0);
   });
@@ -78,26 +81,35 @@ describe('tool checkPermission ask', () => {
   });
 
   it('neverAutoApprove 命中时即使 autoApprove 也 ask', async () => {
-    const { requests, error } = await authorize(tool(async () => 'ask'), {
-      autoApprove: ['guarded'],
-      neverAutoApprove: ['guarded'],
-    });
+    const { requests, error } = await authorize(
+      tool(async () => 'ask'),
+      {
+        autoApprove: ['guarded'],
+        neverAutoApprove: ['guarded'],
+      },
+    );
     expect(error).toBeUndefined();
     expect(requests).toHaveLength(1);
   });
 
   it('工具显式 allow 不受 neverAutoApprove 影响', async () => {
-    const { requests, error } = await authorize(tool(async () => 'allow'), {
-      neverAutoApprove: ['guarded'],
-    });
+    const { requests, error } = await authorize(
+      tool(async () => 'allow'),
+      {
+        neverAutoApprove: ['guarded'],
+      },
+    );
     expect(error).toBeUndefined();
     expect(requests).toHaveLength(0);
   });
 
   it('工具显式 deny 即使 autoApprove 也拒绝', async () => {
-    const { requests, error } = await authorize(tool(async () => 'deny'), {
-      autoApprove: ['guarded'],
-    });
+    const { requests, error } = await authorize(
+      tool(async () => 'deny'),
+      {
+        autoApprove: ['guarded'],
+      },
+    );
     expect((error as Error).message).toContain('denied by permission policy');
     expect(requests).toHaveLength(0);
   });
@@ -146,11 +158,15 @@ describe('tool checkPermission ask', () => {
       }, 50);
     });
 
-    await policy.authorize(tool(async () => 'ask'), {}, {
-      run_id: 'run-1',
-      messages: [],
-      events,
-    });
+    await policy.authorize(
+      tool(async () => 'ask'),
+      {},
+      {
+        run_id: 'run-1',
+        messages: [],
+        events,
+      },
+    );
     expect(policy.pausedMs).toBeGreaterThanOrEqual(40);
 
     policy.resetPausedMs();
