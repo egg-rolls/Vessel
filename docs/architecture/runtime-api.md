@@ -45,7 +45,12 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
   > **为什么要有「全角标点截断」这一步**：中文里路径与标点之间没有空白——`@skills/x.md，请按这个来` 的 token 尾字符是汉字，只剥尾部标点剥不掉 `，` 及其后面的句子；而半角标点**不能**当截断符（会把 `@skills/code-writing.md` 在第一个 `.` 处打断）。所以规则是：**全角标点截断，半角标点只剥尾部**。
 - **skills 不是一条加载通道**：harness 不扫描、不解析、不注入 skills 目录。技能就是 markdown 文件，放两个位置——仓库 `skills/`（项目级，随仓库提交、团队共享）与 `~/.vessel/skills/`（用户级，跨项目复用）。这是纯约定，代码里零硬编码。前端负责查找与引用，core 只收消息。
 
-`BeforeLlm` 的 system 注入是**另一件事**：它只影响本次请求的 system 消息，不改 `ContextManager` 的持久化内容。两者都由 `buildRequestMessages(...)` 在一处组装，避免散落的字符串 diff。
+当前内置使用者：`@path` 文件引用（TUI/headless）与成员来源标注 `vessel:source`
+（`packages/agent`）。两者都持久化，且都在用户输入之前。
+
+`BeforeLlm` 的注入是**另一件事**：system 冻结，hook 只能读 `ctx.systemPrompt`、
+往 `ctx.messages` 追加尾部消息（持久化）；旧 `HookResult.additionalContext` 自动转成
+`vessel:hook` 尾部消息。完整注入矩阵见 [context](context.md#injection)。
 
 <a id="agent-runtime"></a>
 

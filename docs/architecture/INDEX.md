@@ -17,6 +17,7 @@ paths: [docs/architecture/**]
 | [runtime-lifecycle](runtime-lifecycle.md) | `run()` / `resume()` 外壳、单 run 占位与 `finalizeRun` 终态 | run, resume, finalize, execution, checkpoint, cancel, run_already_running | `packages/core/src/runtime/**` |
 | [runtime-loop](runtime-loop.md) | `toolCallingLoop` 骨架与关键约束 | loop, tool call, iteration, guardrail, hook, reasoning | `packages/core/src/runtime/**` |
 | [runtime-api](runtime-api.md) | `RunOptions.messages` 注入语义与 `AgentRuntime` 公开面 | RunOptions, messages, injection, agent runtime, context, at-path | `packages/core/src/runtime/**`, `packages/core/src/types/**` |
+| [context](context.md) | 上下文管理、注入点、压缩与前缀不变量 | context, message, injection, compaction, self card, vessel:source, prefix | `packages/core/src/context/**`, `packages/core/src/runtime/agent-runtime.ts`, `packages/core/src/session/project-messages.ts`, `packages/agent/src/runtime.ts` |
 | [interfaces](interfaces.md) | `LLMProvider` / `ContextManager` / `EventStream` 契约 | LLMProvider, ChatRequest, ContextManager, EventStream, types | `packages/core/src/types/provider.ts`, `context.ts`, `event.ts` |
 | [state](state.md) | `SessionBackend` / `LimitChecker` / `RunStore` 状态 port | session, run store, checkpoint, durable, limits, corruption | `packages/core/src/types/session.ts`, `limits.ts`, `run-store.ts` |
 | [tools](tools.md) | `ToolDefinition`、能力工具与权限/路径边界 | tool, bash, read, edit, permission, denylist, allowed_roots | `packages/core/src/types/tool.ts`, `plugins/tools/**` |

@@ -16,24 +16,25 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/tool.ts]
 ```
 loop:
     signal.aborted?                     → 抛错（Esc 中断）
-    终止策略超限（maxIterations / maxRuntimeSeconds） → 抛错
-    用量限制超限（request / tool_calls / token / cost） → 抛错
-
-    # BeforeLlm hook 有唯一的注入位：hookCtx.systemPrompt
-    hookCtx = { run_id, session_id, systemPrompt: this.systemPrompt }
+    80% 预算预警（每 key 每 run 一次）  → 事件 + `vessel:limit` 尾部消息
+    终止 / 用量上限检查（maxIterations / maxRuntimeSeconds / request / tool_calls / token / cost）
+    autoCompactAsync                    → 压缩时设 PrefixGuard reason=compaction
+    # system 冻结：hook 只读 hookCtx.systemPrompt；动态注入只走 hookCtx.messages
+    # 旧 additionalContext 自动转 vessel:hook
+    hookCtx = { run_id, session_id, systemPrompt: <会话基底> }
     await hooks.run(BeforeLlm, hookCtx)
-
-    messages = buildRequestMessages(hookCtx.systemPrompt)
-    # 归一化只影响本次请求：丢弃孤儿 role:tool；不完整 tool_calls 轮次降级为普通 assistant 文本；
-    # 上下文缺 system 时补回基底 systemPrompt（ADR-035）
+    appendInjectedMessages(hookCtx.messages)   # 每 run 去重
+    messages = buildRequestMessages(<会话基底>)
+    # 归一化：丢弃孤儿 role:tool；残缺 tool_calls 降级；缺 system 时补回基底（ADR-035）
+    tools = pluginHost.listTools()
+    PrefixGuard.check({ system, tools, messages, reason? })
+    # 非纯追加且无 reason → prompt.prefix_changed；STRICT 抛 PromptPrefixChangedError
     发 llm.request（messages 在发布前剥离 reasoning_content，ADR-038）
-    response = provider.chat({ messages, tools: PluginHost 里全部工具, stream: true, on_chunk → 发 llm.stream.chunk })
+    response = provider.chat({ messages, tools, stream: true, on_chunk → 发 llm.stream.chunk })
     # response.reasoning_content（thinking 模型）由 Provider 累积；不进 on_chunk / 事件流
-
     累计 token 用量；context.updateRealTokens(本次 prompt_tokens + completion_tokens)
     发 llm.response
     await hooks.run(AfterLlm, hookCtx)
-
     if finish_reason == 'stop':
         应用 Output guardrail，被阻止 → 抛错
         finalContent = replacement 是字符串 ? replacement : response.content
@@ -81,7 +82,6 @@ loop:
         addContext(assistant 消息，带上 response.reasoning_content)
         return response.content
 ```
-
 <a id="constraints"></a>
 
 ### 关键约束
@@ -93,7 +93,7 @@ loop:
 - **Guardrail `replacement` 四阶段生效**：Input（改写持久化的用户消息）、Output（改写返回值与持久化 assistant 消息）、ToolCall（改写实际执行的调用，先于 assistant 消息写入）、ToolResult（改写事件、上下文与返回值）；非法类型按未改写处理。
 - **thinking 模型的 `reasoning_content`**：Provider 返回后保存在 assistant 消息并随下一轮请求回传（含 `tool_calls` 轮次）；`llm.request` / `context.changed` 事件在发布前剥离该字段，TUI / 观测 / 回放看不到思维链，会话持久化保留（ADR-038）。
 - **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，默认不超时，只有显式正数 `timeoutMs` 才超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。
-- **`HookRunner` 丢弃 hook 返回值**（`Hook.run` 收窄为 `Promise<void>`）。跨 hook 通信的唯一通道是 `HookContext` 的字段（例如 `BeforeLlm` 的 `systemPrompt`）。
+- **Hook 注入只允许追加**：`Hook.run` 可返回 `HookResult`（`block` / `updatedInput`）；`additionalContext` 已弃用，动态上下文统一写 `HookContext.messages`。`systemPrompt` 只读，写入被忽略。
 - **durable checkpoint 只由 `AgentRuntime` 写**（唯一写者）。Host 模式把 Host 的 `runStore` 注入成员 runtime；同时给 Host 与 runtime 两个 store 时 Host 优先，禁止双写（ADR-040）。
 - **单 run 守卫与唯一终态路径**见 [runtime-lifecycle.md](runtime-lifecycle.md#run) 与 [#finalize](runtime-lifecycle.md#finalize)：`activeRun` 在 await 前同步占位，第二个 run 抛 `run_already_running`；终态只经 `finalizeRun`。
 - **插件故障隔离**（ADR-054）：单个 Hook 抛错发 `hook.failed` + `hook.error` 并继续后续 hook；`OnError` 始终 best-effort；Guardrail 的 `check()` 抛错按 fail-closed 处理（`allowed:false` + `reason: 'guardrail_error'`，发 `guardrail.error`），不把原始异常冒泡成 run 失败。

@@ -45,8 +45,10 @@ interface GuardrailResult {
 interface HookContext {
   run_id: string;
   session_id?: string;
-  /** BeforeLlm 注入位：hook 写这里，loop 在调用 LLM 前读取，作为本次请求的 system 消息 */
-  systemPrompt?: string;
+  /** 只读：会话基底 system；写入被忽略并发 hook.system_prompt_ignored */
+  readonly systemPrompt?: string;
+  /** BeforeLlm 唯一的注入位：尾部追加消息（持久化，不写 system） */
+  messages?: Message[];
   [key: string]: unknown;
 }
 
@@ -54,7 +56,17 @@ interface Hook {
   name: string;
   priority?: number;
   type: HookType;
-  run(ctx: HookContext): Promise<void>;
+  run(ctx: HookContext): Promise<void | HookResult>;
+}
+
+interface HookResult {
+  /** BeforeTool：阻断并折回 tool 错误 */
+  block?: boolean;
+  reason?: string;
+  /** BeforeTool：改写工具输入 */
+  updatedInput?: unknown;
+  /** @deprecated 不再进 system；runtime 自动转成 vessel:hook 尾部消息 */
+  additionalContext?: string;
 }
 
 enum HookType {
@@ -66,7 +78,8 @@ enum HookType {
 }
 ```
 
-返回值被丢弃（`Promise<void>`）——跨 hook 通信只用 `HookContext` 字段。
+`HookResult` 只承载当次 hook 的决定；跨 hook 注入统一写 `HookContext.messages`。
+BeforeLlm 的 system 冻结，动态上下文只能尾部追加（见 [context](context.md#prefix)）。
 
 （ADR-054）`HookRunner` 对每个 hook 独立 try/catch。某个 hook 抛错时发 `hook.failed`（兼容既有订阅方）与 `hook.error`（统一信号），继续执行后续 hook，不终止 run，也不丢弃已聚合的结果。
 
