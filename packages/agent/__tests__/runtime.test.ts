@@ -198,7 +198,9 @@ describe('InProcessMemberRuntime', () => {
     const captured: AgentRuntimeOptions[] = [];
     const parentEvents = new MemoryEventStream();
     const forwarded: RunEvent[] = [];
-    parentEvents.subscribe((event) => forwarded.push(event));
+    parentEvents.subscribe((event) => {
+      forwarded.push(event);
+    });
     const runtime = makeRuntime({
       runtimeFactory: capturingRuntimeFactory(captured),
       parentEvents,
