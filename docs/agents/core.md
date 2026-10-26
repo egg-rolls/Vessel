@@ -30,7 +30,7 @@ applies_to: [N, M]
 - **工具执行唯一 pipeline**：不得直调 `ToolDefinition.handler`；顺序 getTool → ToolCall guardrail → BeforeTool → permission → handler → ToolResult guardrail → AfterTool；权限在 guardrail/hook 改写后判定；`tool.call.*` 由调用方发布（ADR-058）。
 - **Host 契约**：per-run session 只由 `AgentHandle.run` 消费 `RunOptions.sessionId`；取消经 `AbortSignal.reason` 透传；`resume` 经 Scheduler（`ScheduledTask.runId`）；`snapshot()` 可 JSON 序列化；合成 `agent.run.*` 带 `mirror_of_run_id`（ADR-081）。唯一 checkpoint 写者是 `AgentRuntime`。
 - **压缩摘要**：`role: 'system'` + `compaction_summary: true`，基底 system 之后、其它消息之前，同时最多一条；应用新压缩时移除旧摘要；不得写回 `assistant`（thinking 模式需要 `reasoning_content`）（ADR-083）。
-- **限额**：命中时先发一次 `limit.blocked` 再抛 `LimitExceededError`；判定只经 `evaluateUsageLimits` / `evaluateTermination`（ADR-084）。
+- **限额**：判定只经 `evaluateUsageLimits` / `evaluateTermination`（ADR-084）。`request_limit` / token / cost / `max_iterations` / `max_runtime` 命中时先发 `limit.blocked` 再抛 `LimitExceededError`；`tool_calls_limit` 是软预算——发一次 `limit.warning`，下一轮请求不提供工具，模型收尾后 run 正常 `completed`。
 - **错误 envelope 只增不改**：`run.failed` / `tool.call.failed` 保留原 `error`，新增字段只附加；不写 prompt / reasoning / 完整工具结果（ADR-080）。
 - **透明化**：事件形状冻结、快照只填已知字段、Self Card 每 run 一次、BeforeLlm 注入只增不改（ADR-086/087）。
 

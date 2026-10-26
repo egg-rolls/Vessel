@@ -45,4 +45,5 @@ tags: [limits, usage, events, error-envelope, observability, provider, retry, ht
 ## Errata
 
 - **2026-10-25：`termination.maxRuntimeSeconds` 默认值 300 → 600。** 原决策正文（§4「`maxRuntimeSeconds` 300 不变」）保持不变，本段记录后续修订：300s 对包含构建、测试与修复循环的常见任务偏紧，默认预算提高到 600s。判定逻辑、`LimitBlock` 形状、`limit.blocked` / `run.failed` 契约均不变；显式配置（文件 / env / tenant overlay）仍覆盖默认值。
+- **2026-10-26：`tool_calls_limit` 改为软预算。** 到达 `limits.toolCallsLimit` 时不再发布 `limit.blocked` / 抛 `LimitExceededError`：runtime 发布一次非致命 `limit.warning`（data 含 `scope` / `key` / `current` / `max` / `source` / `hint`），追加一条 `vessel:limit` 收尾消息，并在下一轮请求中不提供工具。run 以 `completed` 收尾；若模型在无工具请求里仍返回 `tool_calls`，不执行也不再请求。其余使用量 key 与终止策略仍按本 ADR 正文走硬失败。不改 `LimitBlock` 形状、不改配置键、不新增 RPC。
 - **2026-10-25：等待用户授权的时长不计入 `max_runtime`。** `PermissionPolicy` 在等待 `tool.permission.response` 期间累计 `pausedMs`；`AgentRuntime` 每轮把该值同步到 `UsageStats.pausedMs`，`evaluateTermination` / `evaluateLimitWarnings` 以 `Date.now() − stats.startTime − pausedMs` 计算 elapsed。理由是人工确认不是机器执行时间，不应消耗运行预算；`pausedMs` 为 additive 可选字段，未提供时行为与原先一致。`max_runtime.current` 仍为毫秒精度小数秒。

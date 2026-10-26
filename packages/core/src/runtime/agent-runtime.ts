@@ -281,6 +281,11 @@ export class AgentRuntime {
   private readonly prefixGuard: PromptPrefixGuard;
   /** 调用点设置的显式失效原因；guard 消费后清空 */
   private pendingPrefixReason?: PrefixChangeReason;
+  /**
+   * 工具调用预算已用尽（每 run 至多一次）。到达 `limits.toolCallsLimit` 后不再抛错：
+   * 下一轮请求不提供工具，让模型用已有信息收尾；若模型仍返回 tool_calls 也不再执行。
+   */
+  private toolBudgetExhausted = false;
   /** 本 run 是否已报告 hook 写 systemPrompt 被忽略（每 run 一次） */
   private systemPromptIgnoredReported = false;
   /** 本 run 是否已报告 additionalContext 弃用（每 run 一次） */
@@ -530,6 +535,9 @@ export class AgentRuntime {
       cleanups: [],
     };
     this.warnedLimitKeys.clear();
+    // 上一 run 的软预算收尾把 tools 清空；新 run 恢复工具是显式前缀失效。
+    if (this.toolBudgetExhausted) this.pendingPrefixReason ??= 'tools_changed';
+    this.toolBudgetExhausted = false;
     this.eventLogFailureReported = false;
     // 0.16 E5：BeforeLlm 注入去重按 run 重置
     this.injectedMessageKeys.clear();
@@ -1052,9 +1060,43 @@ export class AgentRuntime {
         throw new LimitExceededError(terminationBlock);
       }
 
-      // 检查使用量限制（含 request_limit、tool_calls_limit、token/cost 预算）——硬上限
+      // 检查使用量限制。request / token / cost 仍是硬上限；
+      // tool_calls_limit 是软预算：不再失败，只切换为「无工具收尾」。
       const limitBlock = evaluateUsageLimits(stats, this.limits);
-      if (limitBlock) {
+      if (limitBlock && limitBlock.key === 'tool_calls_limit') {
+        if (!this.toolBudgetExhausted) {
+          this.toolBudgetExhausted = true;
+          // 从有工具切到无工具是一次显式的前缀失效（STRICT 模式需要 reason）。
+          this.pendingPrefixReason ??= 'tools_changed';
+          // 非致命事件：供 UI / 日志观察预算用尽；不复用会触发失败的 `limit.blocked`。
+          this.publishEvent({
+            type: 'limit.warning',
+            run_id: runId,
+            data: {
+              scope: limitBlock.scope,
+              key: limitBlock.key,
+              current: limitBlock.current,
+              max: limitBlock.max,
+              source: limitBlock.source,
+              hint: limitBlock.hint,
+            },
+            ts: Date.now(),
+          });
+          // 模型可见的收尾提示：本轮请求即不再携带工具。
+          this.addContext(
+            {
+              role: 'user',
+              name: 'vessel:limit',
+              content:
+                `[runtime] tool_calls_limit: ${limitBlock.current}/${limitBlock.max} — ` +
+                'tool call budget exhausted; no further tools will be executed. ' +
+                'Using the information already gathered, provide your final answer now.',
+              timestamp: Date.now(),
+            },
+            runId,
+          );
+        }
+      } else if (limitBlock) {
         this.publishEvent({
           type: 'limit.blocked',
           run_id: runId,
@@ -1137,8 +1179,9 @@ export class AgentRuntime {
       // 不接受每轮拼接的 additionalContext（CONTRACT-prefix-invariant §2）。
       const messages = this.buildRequestMessages(baseSystemPrompt);
 
-      // 统一工具来源：PluginHost（插件在 install() 里 registerTool）
-      const allTools = this.pluginHost.listTools();
+      // 统一工具来源：PluginHost（插件在 install() 里 registerTool）。
+      // 预算用尽后不再向模型提供工具；Provider 收到 tools=undefined（不追加 tool_choice）。
+      const allTools = this.toolBudgetExhausted ? [] : this.pluginHost.listTools();
       const toolSchemas = allTools.map((tool) => ({
         type: 'function' as const,
         function: {
@@ -1220,6 +1263,12 @@ export class AgentRuntime {
       // 只有「无 tool_calls 且 stop」才视为终稿（对齐 Claude Code query.ts 的 tool_use 判定）。
       const toolCalls = response.tool_calls;
       const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
+
+      // 软预算收尾：收尾请求已不提供工具，模型仍返回 tool_calls 时不执行、不再请求，
+      // 直接按当前文本完成（空文本给固定说明），保证不会无限循环也不失败。
+      if (this.toolBudgetExhausted && hasToolCalls) {
+        return await this.finishToolBudgetExhausted(response, runId, sessionId);
+      }
 
       if (!hasToolCalls && response.finish_reason === 'stop') {
         // 应用输出 Guardrail
@@ -1415,6 +1464,42 @@ export class AgentRuntime {
         return response.content;
       }
     }
+  }
+
+  /**
+   * 工具预算用尽后的收尾：模型在无工具请求中仍返回 `tool_calls` 时，不执行这些调用、
+   * 也不再发起下一轮请求；按当前文本完成（空文本给固定说明）。仍走 Output guardrail，
+   * 其余失败语义（如 guardrail 阻断）保持不变。
+   */
+  private async finishToolBudgetExhausted(
+    response: LLMResponse,
+    runId: string,
+    sessionId: string,
+  ): Promise<string> {
+    const outputResult = await this.guardrails.apply(
+      response.content,
+      GuardrailStage.Output,
+      runId,
+      sessionId,
+    );
+    if (!outputResult.allowed) {
+      throw new Error(`Output blocked by guardrail: ${outputResult.reason}`);
+    }
+    const content =
+      typeof outputResult.replacement === 'string' ? outputResult.replacement : response.content;
+    const finalContent =
+      content.trim().length > 0
+        ? content
+        : '[runtime] tool call budget exhausted; no final answer was produced.';
+    this.addContext(
+      {
+        role: 'assistant',
+        content: finalContent,
+        ...(response.reasoning_content ? { reasoning_content: response.reasoning_content } : {}),
+      },
+      runId,
+    );
+    return finalContent;
   }
 
   /**

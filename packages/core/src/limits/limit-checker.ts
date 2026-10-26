@@ -42,7 +42,8 @@ function warningFor(
 
 /**
  * 0.15 E2：返回所有已到预警阈值的 key（每个 key 一条）。
- * 只读判定，不改变执行；达到硬上限的 key 不再返回（交给 limit.blocked）。
+ * 只读判定，不改变执行；达到上限的 key 不再返回（硬上限交给 limit.blocked，
+ * `tool_calls_limit` 由 runtime 走软预算收尾）。
  */
 export function evaluateLimitWarnings(
   stats: UsageStats,
@@ -131,7 +132,12 @@ export function evaluateLimitWarnings(
   return warnings;
 }
 
-/** 命中上限时的首个 key（与 checkLimits 的检查顺序一致） */
+/**
+ * 命中上限时的首个 key（与 checkLimits 的检查顺序一致）。
+ *
+ * 注意：`tool_calls_limit` 仍然在这里返回，但 `AgentRuntime` 把它当作**软预算**
+ * ——不抛 `LimitExceededError`，而是切换到无工具收尾。其余 key 仍是硬上限。
+ */
 export function evaluateUsageLimits(stats: UsageStats, limits: UsageLimits): LimitBlock | null {
   if (limits.requestLimit !== undefined && stats.requestCount >= limits.requestLimit) {
     return {
