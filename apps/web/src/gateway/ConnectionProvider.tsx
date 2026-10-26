@@ -16,7 +16,11 @@ import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import { useInteractionStore } from '../stores/interactionStore';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
 import { resolveConnectionSeed } from './dev-auth';
-import { buildHydrationSnapshot } from './interaction-hydration';
+import {
+  buildHydrationSnapshot,
+  pendingIdsForSession,
+  stalePendingIds,
+} from './interaction-hydration';
 import {
   askFromEvent,
   interactionExpiredMessage,
@@ -206,14 +210,22 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       (tenantIdRef.current ?? undefined) === tenantAtStart;
     const tenantParam = tenantAtStart !== undefined ? { tenant_id: tenantAtStart } : {};
 
+    // 本轮 fetch 前本地已有的 id：只对它们做“服务端已无该 pending”的收敛，
+    // fetch 期间新到的实时请求不在列表快照里，不能被误删。
+    const localIds = [
+      ...useInteractionStore.getState().permissions.map((item) => item.requestId),
+      ...useInteractionStore.getState().asks.map((item) => item.requestId),
+    ];
+
     const [pendingResult, orphanedResult] = await Promise.allSettled([
-      client.listInteractions({ status: 'pending', limit: 100, ...tenantParam }),
+      client.listInteractionsPage({ status: 'pending', limit: 100, ...tenantParam }),
       client.listInteractions({ status: 'orphaned', limit: 100, ...tenantParam }),
     ]);
     if (!stillCurrent()) return;
 
     // 旧 gateway（method_not_allowed / not_found）与其他失败都按空结果处理。
-    const pending = pendingResult.status === 'fulfilled' ? pendingResult.value : [];
+    const pendingPage = pendingResult.status === 'fulfilled' ? pendingResult.value : null;
+    const pending = pendingPage?.interactions ?? [];
     const orphanedListed = orphanedResult.status === 'fulfilled' ? orphanedResult.value : [];
 
     // 服务端 orphaned 去重后只用于移除旧卡片；orphaned 历史在 Observe → Attention 查看。
@@ -226,10 +238,17 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     ];
 
     const settled = new Set(settledRef.current.keys());
-    const snapshot = buildHydrationSnapshot({ pending, orphaned: orphanedListed, settled });
+    // 只有拿到“完整”的 pending 列表才能据此删除本地卡片：RPC 失败或还有下一页时
+    // 列表不是全集，仍按“只增不减”合并。
+    const pendingComplete = pendingPage !== null && pendingPage.next_cursor === undefined;
+    const snapshot = {
+      ...buildHydrationSnapshot({ pending, orphaned: orphanedListed, settled }),
+      ...(pendingComplete ? { staleIds: stalePendingIds(localIds, pending, settled) } : {}),
+    };
     if (!stillCurrent()) return;
     // 终态 id 写进 settled：之后重放的事件 / 迟到的 pending 列表都不能复活卡片。
     for (const requestId of snapshot.terminalIds) recordSettled(requestId);
+    for (const requestId of snapshot.staleIds ?? []) recordSettled(requestId);
     useInteractionStore.getState().hydrate(snapshot, new Set(settledRef.current.keys()), orphanIds);
   }, [client, recordSettled]);
 
@@ -351,6 +370,24 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         }
         interactions.dispatch({ type: 'run-finished', runId: event.run_id });
       }
+      if (
+        event.type === 'agent.turn.completed' ||
+        event.type === 'agent.turn.failed' ||
+        event.type === 'agent.turn.cancelled'
+      ) {
+        // 成员 run 没有 run.* 终态事件：turn 结束（run_id = 成员会话 id）时，
+        // 该会话下的 pending 已不可能再被应答，按终态收起。
+        const data = event.data as { session_id?: unknown };
+        const sessionId =
+          typeof data.session_id === 'string' && data.session_id.length > 0
+            ? data.session_id
+            : event.run_id;
+        const interactions = useInteractionStore.getState();
+        for (const requestId of pendingIdsForSession(interactions, sessionId)) {
+          recordSettled(requestId);
+          interactions.dispatch({ type: 'settle', requestId });
+        }
+      }
     });
 
     const offHello = client.onHello((info) => {
@@ -394,6 +431,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       eventStore.reset(gap.to_seq);
       // 一次性提示走右下角 toast，不占顶部 banner 布局。
       toast.info(t('gateway.connection.gap', { from: gap.from_seq, to: gap.to_seq }));
+      // 缺口里的终态事件（如 permission.response）已经丢了：按协议从 to_seq 重连，
+      // 借 hello → epoch → hydrateInteractions 用服务端 pending 收敛本地卡片。
+      void client
+        .restart(token, gap.to_seq, tenantIdRef.current ?? targetTenantId)
+        .catch(reportConnectError);
     });
 
     const offState = client.onState((state) => {
@@ -535,13 +577,16 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           toast.info(interactionExpiredMessage());
           return;
         }
+        // 应答结果不确定（超时 / 连接抖动）：可能服务端已经收下并广播了 response，
+        // 但本端没看到。用服务端 pending 列表收敛一次，避免卡片永久留在顶部栏。
+        void hydrateInteractions();
         toast.error(errorMessage(error));
       } finally {
         submitGuard.current.end(requestId);
         updateResponding(requestId, false);
       }
     },
-    [client, recordSettled, toast, updateResponding],
+    [client, hydrateInteractions, recordSettled, toast, updateResponding],
   );
 
   const respondAsk = useCallback(
@@ -566,13 +611,15 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           toast.info(interactionExpiredMessage());
           return;
         }
+        // 同 respondPermission：结果不确定时以服务端 pending 列表为准收敛。
+        void hydrateInteractions();
         toast.error(errorMessage(error));
       } finally {
         submitGuard.current.end(requestId);
         updateResponding(requestId, false);
       }
     },
-    [client, recordSettled, toast, updateResponding],
+    [client, hydrateInteractions, recordSettled, toast, updateResponding],
   );
 
   const value = useMemo<ConnectionContextValue>(

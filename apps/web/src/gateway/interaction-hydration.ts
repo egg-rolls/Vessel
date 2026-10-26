@@ -56,6 +56,11 @@ export interface HydrationSnapshot {
   asks: readonly AskUserRequest[];
   /** orphaned / answered 的终态 id：只用于移除旧卡片，不再渲染本地失效列表。 */
   terminalIds: readonly string[];
+  /**
+   * 本地已有、但服务端 pending 全集里已不存在的请求 id（已应答 / 已失效）。
+   * 只由“完整 pending 列表”推导；缺失表示本轮不做删除收敛。
+   */
+  staleIds?: readonly string[];
 }
 
 export interface HydrationSources {
@@ -142,6 +147,41 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
   return { permissions, asks, terminalIds };
 }
 
+/**
+ * 服务端 pending 列表是权威：本地已知但列表里没有的 id 视为已应答 / 已失效。
+ *
+ * `pending` 传 `null` 表示本轮列表不可用或分页不完整（RPC 失败 / 还有下一页），
+ * 此时一张卡片都不能删，避免把仍在 pending 的请求误清。`settled` 中的 id
+ * 已由事件结算，不需要重复删除。
+ *
+ * 调用方只传“本轮 fetch 开始前”已有的本地 id：fetch 期间新到的实时请求
+ * 不在列表快照里，不能被当成 stale。
+ */
+export function stalePendingIds(
+  localIds: readonly string[],
+  pending: readonly ListedInteraction[] | null,
+  settled: ReadonlySet<string>,
+): string[] {
+  if (pending === null) return [];
+  const listed = new Set(
+    pending.filter((item) => item.status === 'pending').map((item) => item.request_id),
+  );
+  return [...new Set(localIds)].filter(
+    (requestId) => !listed.has(requestId) && !settled.has(requestId),
+  );
+}
+
+/**
+ * 成员 turn 终态（`agent.turn.completed|failed|cancelled`，run_id = 成员会话 id）
+ * 时该会话下的全部 pending id：权限 + 提问。成员 runtime 同一时刻只有一个 run，
+ * turn 结束时这些请求已不可能再被应答。
+ */
+export function pendingIdsForSession(state: InteractionState, sessionId: string): string[] {
+  return [...state.permissions, ...state.asks]
+    .filter((item) => item.sessionId === sessionId)
+    .map((item) => item.requestId);
+}
+
 export type InteractionAction =
   | { type: 'permission-request'; request: PermissionRequest }
   | { type: 'ask-request'; request: AskUserRequest }
@@ -202,12 +242,22 @@ export function interactionReducer(
       const terminal = new Set(
         action.snapshot.terminalIds.filter((requestId) => !settled.has(requestId)),
       );
+      // 服务端 pending 全集已不含、且本端没有结算事件的旧卡片：直接移除。
+      const stale = new Set(
+        (action.snapshot.staleIds ?? []).filter((requestId) => !settled.has(requestId)),
+      );
 
       const permissions = state.permissions.filter(
-        (item) => !settled.has(item.requestId) && !terminal.has(item.requestId),
+        (item) =>
+          !settled.has(item.requestId) &&
+          !terminal.has(item.requestId) &&
+          !stale.has(item.requestId),
       );
       const asks = state.asks.filter(
-        (item) => !settled.has(item.requestId) && !terminal.has(item.requestId),
+        (item) =>
+          !settled.has(item.requestId) &&
+          !terminal.has(item.requestId) &&
+          !stale.has(item.requestId),
       );
 
       const taken = new Set<string>();

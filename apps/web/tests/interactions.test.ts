@@ -4,6 +4,8 @@ import {
   emptyInteractionState,
   interactionReducer,
   type ListedInteraction,
+  pendingIdsForSession,
+  stalePendingIds,
 } from '../src/gateway/interaction-hydration';
 import {
   askFromEvent,
@@ -446,5 +448,86 @@ describe('interaction hydration', () => {
 
     expect(snapshot.permissions).toHaveLength(0);
     expect(snapshot.terminalIds).toEqual(['perm-1']);
+  });
+
+  test('pendingIdsForSession collects permissions and asks of a member turn', () => {
+    const state = {
+      permissions: [
+        {
+          requestId: 'p-member',
+          tool: 'bash',
+          input: {},
+          runId: 'run-b9ad3260',
+          sessionId: 'member-1',
+          requestedAt: 1,
+        },
+        {
+          requestId: 'p-other',
+          tool: 'bash',
+          input: {},
+          runId: 'run-2',
+          sessionId: 'member-2',
+          requestedAt: 2,
+        },
+      ],
+      asks: [
+        {
+          requestId: 'a-member',
+          questions: [{ header: 'Q', question: 'Which?' }],
+          runId: 'run-b9ad3260',
+          sessionId: 'member-1',
+          requestedAt: 3,
+        },
+      ],
+    };
+
+    expect(pendingIdsForSession(state, 'member-1')).toEqual(['p-member', 'a-member']);
+    expect(pendingIdsForSession(state, 'member-3')).toEqual([]);
+  });
+
+  test('stalePendingIds drops local ids missing from the complete pending list', () => {
+    const pending = [listedPermission({ request_id: 'still-pending' })];
+    const settled = new Set(['settled-by-event']);
+
+    expect(
+      stalePendingIds(
+        ['still-pending', 'answered-elsewhere', 'settled-by-event'],
+        pending,
+        settled,
+      ),
+    ).toEqual(['answered-elsewhere']);
+    // 列表不可用 / 分页不完整（null）时一张都不能删。
+    expect(stalePendingIds(['answered-elsewhere'], null, settled)).toEqual([]);
+  });
+
+  test('hydrate removes a locally pending card the server no longer reports', () => {
+    const request: PermissionRequest = {
+      requestId: 'answered-elsewhere',
+      tool: 'bash',
+      input: { cmd: 'ls' },
+      runId: 'run-b9ad3260',
+      requestedAt: 500,
+    };
+    let state = interactionReducer(emptyInteractionState, {
+      type: 'permission-request',
+      request,
+    });
+    // 服务端 pending 已为空（应答事件丢失 / 本端没看到）：hydration 必须收敛掉。
+    const snapshot = buildHydrationSnapshot({ pending: [], orphaned: [] });
+    state = interactionReducer(state, {
+      type: 'hydrate',
+      snapshot: { ...snapshot, staleIds: ['answered-elsewhere'] },
+    });
+
+    expect(state.permissions).toHaveLength(0);
+
+    // 只删 stale 列表里的 id，仍在 pending 的卡片保留。
+    const other: PermissionRequest = { ...request, requestId: 'still-pending' };
+    state = interactionReducer(state, { type: 'permission-request', request: other });
+    state = interactionReducer(state, {
+      type: 'hydrate',
+      snapshot: { ...snapshot, staleIds: ['answered-elsewhere'] },
+    });
+    expect(state.permissions.map((item) => item.requestId)).toEqual(['still-pending']);
   });
 });
