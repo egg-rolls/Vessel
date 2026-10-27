@@ -43,8 +43,13 @@ export const MAX_STATUS_CONVERSATIONS = 20;
 /** conversation_id：`conv_` + 生成器；接受的显式格式见 `isValidConversationId` */
 const CONVERSATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-/** 保留字：这些 from / to 不是 agent 投递，不参与环检测 */
-const NON_AGENT_IDS = new Set(['human', 'main', 'system']);
+/**
+ * 保留字：这些 from / to 不是 agent 投递，不参与环检测。
+ *
+ * `main` 不在此列 —— 它是 agent（role single），与其它 agent 一样走 hop / cycle /
+ * turns 限制。它曾被放进来，是因为人类消息的 `from` 一度就是 `main`。
+ */
+const NON_AGENT_IDS = new Set(['human', 'system']);
 
 export function isValidConversationId(value: unknown): value is string {
   return typeof value === 'string' && CONVERSATION_ID_PATTERN.test(value);

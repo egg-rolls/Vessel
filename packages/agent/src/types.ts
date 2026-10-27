@@ -529,7 +529,7 @@ export interface AdmitInput {
   content: string;
   agent_id?: string;
   session_id?: string;
-  /** 缺省 human principal（DEFAULT_OWNER 字面量） */
+  /** 缺省 `human`（人类入口）；不是 `DEFAULT_OWNER` —— 那是成员归属的缺省值 */
   from?: string;
   channel?: 'direct' | 'team';
   origin_team_id?: string;

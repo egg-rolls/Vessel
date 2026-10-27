@@ -312,10 +312,16 @@ function isAddressSafePrincipal(name: string): boolean {
   return /^[A-Za-z0-9_-]{1,64}$/.test(name);
 }
 
-/** 缺 source 时按 from 退化推断；生产路径由 AgentService 入队时标注 */
+/**
+ * 缺 source 时按 from 退化推断；生产路径由 AgentService 入队时标注。
+ *
+ * `main` 不在此列：它是 agent（role single），不是人类。曾经把 `main` 当 human
+ * 是因为人类消息的 `from` 就是 `main`（成员归属的缺省值被误用成消息发送者）；
+ * 缺省发送者改成 `human` 之后这个特例不再成立。
+ */
 function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
   if (from === 'system') return 'system';
-  if (from === 'human' || from === 'main') return 'human';
+  if (from === 'human') return 'human';
   return 'agent';
 }
 

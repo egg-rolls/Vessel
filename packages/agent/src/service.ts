@@ -100,6 +100,19 @@ const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
 const TEAM_MEMBER_LIMIT = 20;
 
 /**
+ * 人类 principal：消息的**缺省发送者**。
+ *
+ * 与 `src/federation-address.ts` 的 `LOCAL_HUMAN_PRINCIPAL` 同值同义
+ * （`packages/agent` 不能 import 应用层，各自持一份，**两处必须同改**）。
+ *
+ * 这里**不能**用 `defaultOwner`：那是「临时成员归谁管」的缺省值（`MemberRecord.owner`），
+ * 是 agent 的归属；消息的归属是另一个 principal。两者曾是同一个字符串
+ * （都是 `'main'`），于是人类从 CLI / Web 发消息时 `from` 变成了 `main` 这个 agent
+ * 的 id —— `messageSource` 再也分不出「main 在说话」和「人类在说话」。
+ */
+const DEFAULT_MESSAGE_SENDER = 'human';
+
+/**
  * 成员名合法形状：1-64 位字母 / 数字 / `_` / `-`。
  *
  * **与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同源同义**（那边是
@@ -1290,8 +1303,12 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     if (this.bodyIdleTtlMs > 0) await this.sweepIdleBodies();
     const content = readContent(input as unknown as Record<string, unknown>, 'content');
+    // 缺省发送者是人类，不是 default owner：owner 是**成员归属**的缺省值，
+    // 拿来填消息的 from 会让人类发出的消息带上 `main` 这个 agent 的 id。
     const from =
-      input.from === undefined ? this.defaultOwner : readRequiredString(input as never, 'from');
+      input.from === undefined
+        ? DEFAULT_MESSAGE_SENDER
+        : readRequiredString(input as never, 'from');
     const channel = input.channel ?? 'direct';
     if (channel !== 'direct' && channel !== 'team') {
       throw new AgentError('invalid_input', 'channel must be direct or team');
@@ -1773,7 +1790,8 @@ export class AgentServiceImpl implements AgentService {
   private async sendOne(input: Record<string, unknown>): Promise<SendResult> {
     const to = readRequiredString(input, 'to');
     const content = readContent(input, 'content');
-    const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(input, 'from');
+    const from =
+      input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(input, 'from');
     const target = this.requireMember(to);
     if (target.membership === 'left' || target.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${to}`);
@@ -1815,7 +1833,7 @@ export class AgentServiceImpl implements AgentService {
     const raw = input as unknown as Record<string, unknown>;
     const to = readRequiredString(raw, 'to');
     const content = readContent(raw, 'content');
-    const from = raw.from === undefined ? DEFAULT_OWNER : readRequiredString(raw, 'from');
+    const from = raw.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
 
     const target = this.resolveDispatchTarget(to, from);
     if (target === undefined || !this.registry.canView(target, from)) {
@@ -1959,7 +1977,8 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     const raw = input as unknown as Record<string, unknown>;
     const to = readRequiredString(raw, 'to');
-    const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(raw, 'from');
+    const from =
+      input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
 
     const target = this.resolveDispatchTarget(to, from);
     if (target === undefined || !this.registry.canView(target, from)) {
@@ -2433,7 +2452,8 @@ export class AgentServiceImpl implements AgentService {
     teamId?: string;
     visibility: MemberVisibility;
   } {
-    const from = record.from === undefined ? DEFAULT_OWNER : readRequiredString(record, 'from');
+    const from =
+      record.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(record, 'from');
     const explicitTeamId =
       record.teamId === undefined ? undefined : readRequiredString(record, 'teamId');
     if (explicitTeamId !== undefined) {
@@ -2507,7 +2527,8 @@ export class AgentServiceImpl implements AgentService {
     const raw = input as unknown as Record<string, unknown>;
     const to = readRequiredString(raw, 'to');
     const teamId = readRequiredString(raw, 'team_id');
-    const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(raw, 'from');
+    const from =
+      input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
 
     const target = this.resolveDispatchTarget(to, from);
     if (target === undefined || !this.registry.canView(target, from)) {
@@ -2759,13 +2780,19 @@ export class AgentServiceImpl implements AgentService {
     return this.registry.resolve(from)?.teamId ?? target.teamId;
   }
 
-  /** 是否 human principal（直接对话免 conversation budget） */
+  /**
+   * 是否 human principal（直接对话免 conversation budget）。
+   *
+   * `single` 记录（`main`）**不是**人类：它是 agent，同样受预算约束。
+   * 此前这里还有 `|| id === this.defaultOwner`，与 `role === 'single'` 一起把
+   * `main` 当成人类 —— 但那正是「用成员归属的默认值填消息发送者」造成的假象：
+   * 人类消息的 `from` 曾经就是 `main`。缺省发送者改成 `human` 之后，两者分开，
+   * `main` 只剩「agent」这一个身份。
+   */
   private isHumanPrincipal(id: string): boolean {
-    if (id === 'human' || id === 'system' || id === this.defaultOwner) return true;
+    if (id === DEFAULT_MESSAGE_SENDER || id === 'system') return true;
     if (id.startsWith('federation:')) return false;
-    const record = this.registry.get(id);
-    if (record === undefined) return true;
-    return record.role === 'single';
+    return this.registry.get(id) === undefined;
   }
 
   /**
@@ -3074,14 +3101,15 @@ export class AgentServiceImpl implements AgentService {
 
   /**
    * 入队时标注发送者类别（仅用于模型上下文，不参与权限判定）。
-   * 未登记 principal / `human` / role single 视为人类；`system` 保持系统来源。
+   *
+   * 判据只看「这个 principal 是不是本机登记的成员」：登记了就是 agent（含 `single`
+   * 的 `main`），没登记才是人类 / 系统语境。此前 `role === 'single'` 也归 human，
+   * 与「人类消息的 from 恰好是 main」叠加，导致 `main` 说话和人类说话无法区分。
    */
   private messageSource(from: string): AgentMessage['source'] {
     if (from === 'system') return 'system';
     if (from.startsWith('federation:')) return 'agent';
-    const record = this.registry.get(from);
-    if (record === undefined) return 'human';
-    return record.role === 'single' ? 'human' : 'agent';
+    return this.registry.get(from) === undefined ? 'human' : 'agent';
   }
 
   /**
