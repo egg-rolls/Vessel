@@ -7,7 +7,7 @@
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { useOptionalToast } from '../../components/ToastProvider';
-import { Button } from '../../components/ui';
+import { Badge, Button } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { TeamDelivery, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -140,6 +140,9 @@ export function TeamMessageRow({
   // roster 只含 present，left / private agent 的日志会因此被误标成“我”。
   const isHuman = message.from === 'human';
   const isAgent = !isHuman && !isReply;
+  // 人类定向消息：出站 / 入站都用 `to: ['human']` 落日志（federation 入站的 human
+  // 分支与本机路径一致）。只读日志字段，不按内容猜。
+  const asksHuman = !isHuman && Array.isArray(message.to) && message.to.includes('human');
   const statusClass =
     message.sendStatus === 'failed'
       ? ' team-message-failed'
@@ -165,6 +168,11 @@ export function TeamMessageRow({
           <span className="rounded-full border border-line-strong px-1.25 font-mono text-2xs text-muted">
             {t('team.message.replyTag')}
           </span>
+        )}
+        {asksHuman && (
+          <Badge tone="accent" title={t('team.message.toHumanHint')}>
+            {t('team.message.toHumanTag')}
+          </Badge>
         )}
         {federationFrom && (
           <span className="max-w-80 truncate font-mono text-muted" title={federationFrom}>

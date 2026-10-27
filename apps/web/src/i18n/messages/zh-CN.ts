@@ -432,6 +432,8 @@ export const messages = {
   'team.message.you': '我',
   'team.message.agentTag': 'agent',
   'team.message.replyTag': '回复',
+  'team.message.toHumanTag': '给你',
+  'team.message.toHumanHint': '这条日志是 agent 发给人类的消息',
   'team.message.systemTag': '系统',
   'team.message.viewBody': '查看成员会话',
   'team.federation.from': 'federation 来自',
