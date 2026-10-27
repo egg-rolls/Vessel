@@ -3085,19 +3085,12 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * 发送者的**显示身份**：登记成员返回名字，没有名字返回 id；未登记 principal
-   * （`human` / `system` / 未登记 id / `federation:*`）返回 undefined。
-   *
-   * 为什么无名成员要回 id 而不是 undefined：`source` 把 role single 归为 human
-   * （那是「谁在说话」的语义，正确），但渲染时若只有 `source` 可依，`main` 会被
-   * 画成 `human@<node>` —— 模型的回信于是发给人类而不是 main，main 的 id 丢失。
-   * 名字缺失不等于「不是登记成员」，用 id 兜底才能让渲染层分清这两件事。
-   *
-   * 这条规则对无名 temporary 成员同样成立：它们此前也被画成 `human`。
+   * 发送者显示名：只对本机登记成员有值。人类 / 系统 / 联邦地址没有本机成员名，
+   * 返回 undefined，渲染时退回短 id。
    */
   private senderName(from: string): string | undefined {
     const record = this.registry.get(from);
-    return record === undefined ? undefined : (record.name ?? record.id);
+    return record === undefined ? undefined : record.name;
   }
 
   private scheduleSnapshot(): void {

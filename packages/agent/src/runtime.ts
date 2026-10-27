@@ -332,15 +332,9 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
  * 比「本机两段、跨机三段」少一条分支：早先本机来源省掉 node 段，模型抄回去的
  * 两段地址是否算本机取决于当时有没有 federation 开着，行为不一致。
  *
- * **`from_name` 优先于 `source`**：前者是入队期按 registry 填的登记身份（成员名，
- * 无名成员是它的 id），后者只说明「谁在说话」。`main` 的 role 是 single，
- * `source` 把它归为 human（人类视角喊话，语义没错），若按 `source` 渲染就会写成
- * `human@<node>:<team>`，main 的 id 丢失、模型回信发给人类。有 `from_name` 就说明
- * 是登记成员，principal 用它；没有才说明是 `human` / `system` / 未登记 id。
- *
  * **principal 段必须是能解析到的值**，一条规则两种情况：
- * - 值合法（见 `isAddressSafePrincipal`）就写它：`docs-core@<node>:<team>`；
- * - 值不合法，退回**完整 uuid**。
+ * - 名字合法（见 `isAddressSafePrincipal`）就写名字：`docs-core@<node>:<team>`；
+ * - 名字不可用、或成员无名，一律写**完整 uuid**。
  *
  * 不缩成短 id：node 段是精确命中本机的，落到 `registry.resolve("3ae686c0")` 时
  * 只做 id / session / body 的精确匹配、没有前缀匹配，结果必然是 `unknown_member`
@@ -365,25 +359,16 @@ function formatMessageSource(
     return `<from location="${escapeAttr(address)}" />`;
   }
   const source = message.source ?? inferMessageSource(message.from);
-  // `from_name` 是入队期给的**登记身份**（成员名，无名时是 id）；没有它才说明
-  // 这个 principal 不是本机登记成员（`human` / `system` / 未登记 id）。
-  // 所以它优先于 `source`：`source` 说的是「谁在说话」，role single 的 `main`
-  // 在那里的语义是 human（人类视角喊话），但回信要发给 main 而不是人类。
-  // 只看 `source` 会让 main 渲染成 `human@...`，它的 id 就此丢失。
+  // 一条规则覆盖两种情况：principal 段必须是 resolveAddress 收得下的形状，
+  // 收不下就用完整 uuid（uuid 一定合法）。名字不可用时不做「换个短一点的写法」
+  // 之类的降级 —— 解析侧只做精确匹配，任何截断都是另一种死地址。
   const named = message.from_name === undefined ? undefined : sanitizeSource(message.from_name);
-  // 一条规则：principal 段必须是 resolveAddress 收得下的形状，收不下就用完整
-  // uuid（uuid 一定合法）。不做「换个短一点的写法」之类的降级 —— 解析侧只做
-  // 精确匹配，任何截断都是另一种死地址。
   const principal =
-    named !== undefined
-      ? isAddressSafePrincipal(named)
+    source === 'agent'
+      ? named !== undefined && isAddressSafePrincipal(named)
         ? named
         : sanitizeSource(message.from)
-      : // 非登记 principal：agent 用 from 本身（无名成员经由 from_name 走上面那支，
-        // 这里兜的是 source 被调用方直接标成 agent 的情况），human / system 用类别名。
-        source === 'agent'
-        ? sanitizeSource(message.from)
-        : source;
+      : source;
   const scope = teamId === undefined ? undefined : sanitizeSource(teamId);
   // 段数决定语义：有 node 才写三段，有 team 才写 `@team`。缺的段不补占位符。
   const host = [nodeId, scope].filter((part) => part !== undefined && part !== '');
