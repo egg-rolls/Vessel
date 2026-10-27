@@ -1,8 +1,8 @@
 /**
  * @vessel-agent/feishu — WebSocket 长连接文本 bot。
  *
- * 工厂式插件：asm 注入 provider/model/pluginHost/session/events 等；
- * 渠道自建专用 InProcessRuntimeHost，不占用主 Host。
+ * 工厂式插件：asm 注入 events / AgentService（执行面 admit）/ 可选 cancelRun；
+ * 渠道自管 per-chat 成员生命周期与串行队列，成员 run 经注入的 AgentService 执行。
  * 默认导出是工厂函数，因此列入 `FACTORY_PLUGINS`（短名 feishu）。
  */
 

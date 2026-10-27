@@ -102,13 +102,7 @@ export interface FeishuChannelLike {
   status(): FeishuStatus;
 }
 
-export interface FeishuSchedulerOptions {
-  maxConcurrency: number;
-  maxQueueSize: number;
-  perAgentSerial: boolean;
-}
-
-/** 与 @vessel-agent/feishu `FeishuPluginOptions` 结构一致 */
+/** 与 @vessel-agent/feishu `FeishuPluginOptions` 结构兼容（0.27 起执行面走 AgentService） */
 export interface FeishuChannelOptionsLike {
   /** 与 @vessel-agent/feishu `FeishuConfig` 一致（env 已由 config loader 合并） */
   config: {
@@ -123,15 +117,32 @@ export interface FeishuChannelOptionsLike {
     maxMembers?: number;
   };
   events: EventStream;
-  provider: LLMProvider;
-  model: string;
-  pluginHost: PluginHost;
-  session: SessionBackend;
+  /**
+   * 0.27：注入的 AgentService；成员创建与 admit 执行面。
+   * 缺失时插件 start() 显式失败。装配层接线前的过渡期以下字段保留为
+   * deprecated（插件已不再使用，类型不删以免破坏未迁移调用方）。
+   */
+  service?: unknown;
+  /** 0.27：取消在途 run（装配层接线）；缺省只放弃等待。 */
+  cancelRun?: (runId: string, reason?: string) => boolean;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  provider?: LLMProvider;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  model?: string;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  pluginHost?: PluginHost;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  session?: SessionBackend;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
   contextFactory?: () => ContextManager;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
   runStore?: RunStore;
+  /** @deprecated 0.27：并发由 tenant scheduler 统一裁决；插件不再使用。 */
   maxConcurrency?: number;
+  /** @deprecated 0.27：并发由 tenant scheduler 统一裁决；插件不再使用。 */
   maxQueueSize?: number;
-  perAgentSerial?: boolean;
+  /** @deprecated 0.27：同 body 串行由 tenant scheduler 统一裁决；插件不再使用。 */
+  perBodySerial?: boolean;
   transport?: unknown;
   /** 0.5：tenant 作用域（A-6 §13.4）；缺省不写 tenant_id。 */
   tenantId?: string;

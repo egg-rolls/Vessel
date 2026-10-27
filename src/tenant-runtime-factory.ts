@@ -32,6 +32,7 @@ import {
   estimateTokens,
   type Guardrail,
   type Hook,
+  InProcessScheduler,
   type LLMProvider,
   type Logger,
   MemoryContextManager,
@@ -44,9 +45,9 @@ import {
   type ProviderFactory,
   type RunnableAgent,
   type RunStore,
-  type RuntimeHost,
   type RuntimePermissionConfig,
   resolveTenantPaths,
+  type Scheduler,
   type SelfCardOptions,
   type SessionBackend,
   SessionEventLog,
@@ -65,25 +66,18 @@ import {
 import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import {
-  createEventBus,
   createEventStream,
   createMetricsCollector,
   disposeMetrics,
   type MetricsFactory,
 } from './observability-wiring';
 import { resolveAgentCwd } from './path-resolution';
-import {
-  buildPluginConfigMap,
-  declarativePluginEntries,
-  installWithConfig,
-  withPluginConfig,
-} from './plugin-config';
+import { buildPluginConfigMap, declarativePluginEntries, withPluginConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { createProvider } from './provider-factory';
 import { withReasoning } from './reasoning';
 import { closeRunStore, createRunStore } from './run-store-factory';
-import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
 import { ownerSelfCard } from './self-card';
 import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionBackend } from './session-factory';
@@ -165,13 +159,17 @@ export interface TenantRuntimeBundle {
   providerBaseUrl: string;
   /** tenant 独立事件流（trace / metrics 只订阅它） */
   events: EventStream;
-  /** runtime 事件出口；host 模式下同 tenant 流（host bus 已桥接） */
+  /** runtime 事件出口；与 tenant 流同一实例 */
   runtimeEvents: EventStream;
   session: SessionBackend;
   context: MemoryContextManager;
   pluginHost: PluginHost;
+  /**
+   * 0.27：每 tenant 唯一 `InProcessScheduler`（spec §5.1）。
+   * 装配层只在这里构造一次；`AgentService` 的所有执行都经它的 executor。
+   */
+  scheduler: Scheduler;
   runtime: RunnableAgent;
-  host?: RuntimeHost;
   agentRuntime?: AgentRuntime;
   runStore?: RunStore;
   /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
@@ -455,7 +453,7 @@ export type DrainOutcome = 'idle' | 'interrupted' | 'timeout' | 'unsupported';
 export interface DrainActiveRunsOptions {
   /** active run id 集合；run 终态事件由订阅方删除 */
   activeRuns: Set<string>;
-  /** legacy AgentRuntime.interrupt；host 模式没有 */
+  /** AgentRuntime.interrupt */
   interrupt?: (reason: 'shutdown') => void;
   logger: Logger;
   tenantId: string;
@@ -553,10 +551,27 @@ export async function buildTenantRuntime(
     const summarizer = createContextSummarizer(provider, providerModel);
     const context = new MemoryContextManager(contextConfigFor(config, summarizer));
     const events = createEventStream(config);
+    // 0.27（spec §5.1）：每 tenant 唯一 scheduler，装配层只在此处构造。
+    // 所有 body / owner / 成员的执行都经它的 executor，不再有第二套队列。
+    // 未配置项沿用 core 缺省（无并发上限 / 队列 100 / per-body 串行），符合 spec §5.1「默认无上限」。
+    // 注意：`DEFAULT_SCHEDULER_OPTIONS.maxConcurrency` 仍是 1（0.2 遗留），这里**不用**它兜底。
+    const scheduler = new InProcessScheduler({
+      ...(config.scheduler?.maxConcurrency !== undefined
+        ? { maxConcurrency: config.scheduler.maxConcurrency }
+        : {}),
+      ...(config.scheduler?.maxQueueSize !== undefined
+        ? { maxQueueSize: config.scheduler.maxQueueSize }
+        : {}),
+      ...(config.scheduler?.perBodySerial !== undefined
+        ? { perBodySerial: config.scheduler.perBodySerial }
+        : {}),
+      events,
+      tenantId,
+    });
 
-    // 0.10 R2-18：只跟踪真实在跑的 run（包装 legacy `AgentRuntime.run/resume`），
+    // 0.10 R2-18：只跟踪真实在跑的 run（包装 `AgentRuntime.run/resume`），
     // 不从事件推断——测试 / gateway 也会发布合成的 run.started，按事件跟踪会让
-    // shutdown 白等 5s。host 模式没有可中断的 handle，不在此集合内。
+    // shutdown 白等 5s。
     const activeRuns = new Set<string>();
     let activeRunSeq = 0;
     const trackActive = <T>(promise: Promise<T>): Promise<T> => {
@@ -668,126 +683,56 @@ export async function buildTenantRuntime(
     };
     const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
 
-    let runtime: RunnableAgent | undefined;
-    let host: RuntimeHost | undefined;
-    let agentRuntime: AgentRuntime | undefined;
-    let selectedPluginHost: PluginHost | undefined;
-    let unsubHostBridge: (() => void) | undefined;
-
     const contextFactory = () => new MemoryContextManager(contextConfigFor(config, summarizer));
 
-    if (isHostEnabled(config)) {
-      // 0.9 已知限制：host 模式把插件直接装到共享 PluginHost，成员 runtime 不再持有
-      // `plugins` 列表，因此 `AgentRuntime.dispose()`（插件逆序清理）触达不到这些插件。
-      // 本轮的关闭责任在宿主侧（bootstrap shutdown 只关 runtime/host），等 core 给出
-      // PluginHost/Host 级 dispose 接缝后再迁移；不要在此另造一套清理顺序。
-      const hostPluginHost = new TenantToolHost(new MemoryPluginHost(), toolPolicy);
-      for (const plugin of plugins) {
-        await installWithConfig(plugin, hostPluginHost, pluginConfigs[plugin.name]);
-      }
-
-      const hostEvents = createEventBus(config);
-      // host runtime 事件先进入 host bus，再桥接到本 tenant 流。
-      unsubHostBridge = hostEvents.subscribe((event) => {
-        try {
-          events.publish(event);
-        } catch {
-          // tenant 流订阅者异常不影响 host
-        }
-      });
-
-      const hostResult = await tryCreateHostRuntime({
-        config,
-        owner: {
-          id: config.agent?.ownerId ?? 'main',
-          provider,
-          model: providerModel,
-          pluginHost: hostPluginHost,
-          context,
-          session,
-          systemPrompt,
-          limits,
-          termination,
-          permission,
-          selfCard: withTenantToolPolicy(
-            ownerSelfCard(config, providerModel, {
-              askUser: options.registerAskUser === true,
-            }),
-            toolPolicy,
-          ),
-        },
-        sessionId: options.sessionId ?? crypto.randomUUID(),
+    const agentRuntime = await AgentRuntime.create(
+      // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
+      withReasoning(config, {
+        provider,
+        model: providerModel,
+        context,
+        events,
+        limits,
+        termination,
+        session,
+        // core 0.6.1：pluginConfigs 按名透传；本 worktree 的 core 尚未有该字段，
+        // 同时用 wrapper 绑定配置，保证 core 合并前后行为一致。
+        plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
+        systemPrompt,
+        permission,
+        // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）；
+        // 0.18：tenant policy 只减不增。
+        selfCard: withTenantToolPolicy(
+          ownerSelfCard(config, providerModel, {
+            askUser: options.registerAskUser === true,
+          }),
+          toolPolicy,
+        ),
+        // 0.18（DECISION-032 §1.5）：工具经 tenant policy 过滤器注册
+        // （AgentRuntime 不再自建 host）。
+        pluginHost: new TenantToolHost(new MemoryPluginHost(), toolPolicy),
+        ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
         ...(runStore ? { runStore } : {}),
         ...(eventLog ? { eventLog } : {}),
-        ...(hostEvents ? { events: hostEvents } : {}),
-        contextFactory,
-      });
-
-      if (hostResult.ok) {
-        runtime = hostResult.runtime;
-        host = hostResult.host;
-        selectedPluginHost = hostPluginHost;
-      } else {
-        console.warn(
-          `⚠ Host runtime unavailable (${hostResult.error}); falling back to the single-agent runtime.`,
-        );
-      }
+        logger,
+      } as Parameters<typeof AgentRuntime.create>[0] & {
+        pluginConfigs?: Record<string, Record<string, unknown>>;
+      }),
+    );
+    // 0.10 R2-18：包装 run/resume 以精确跟踪在跑 run（shutdown drain 用）。
+    const originalRun = agentRuntime.run.bind(agentRuntime);
+    agentRuntime.run = (input, sessionId, opts) => trackActive(originalRun(input, sessionId, opts));
+    const originalResume = agentRuntime.resume?.bind(agentRuntime);
+    if (originalResume) {
+      agentRuntime.resume = (runId, opts) => trackActive(originalResume(runId, opts));
     }
 
-    if (!runtime) {
-      agentRuntime = await AgentRuntime.create(
-        // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
-        withReasoning(config, {
-          provider,
-          model: providerModel,
-          context,
-          events,
-          limits,
-          termination,
-          session,
-          // core 0.6.1：pluginConfigs 按名透传；本 worktree 的 core 尚未有该字段，
-          // 同时用 wrapper 绑定配置，保证 core 合并前后行为一致。
-          plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
-          systemPrompt,
-          permission,
-          // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）；
-          // 0.18：tenant policy 只减不增。
-          selfCard: withTenantToolPolicy(
-            ownerSelfCard(config, providerModel, {
-              askUser: options.registerAskUser === true,
-            }),
-            toolPolicy,
-          ),
-          // 0.18（DECISION-032 §1.5）：非 host 路径同样经过滤器注册工具
-          // （AgentRuntime 不再自建 host）。
-          pluginHost: new TenantToolHost(new MemoryPluginHost(), toolPolicy),
-          ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
-          ...(runStore ? { runStore } : {}),
-          ...(eventLog ? { eventLog } : {}),
-          logger,
-        } as Parameters<typeof AgentRuntime.create>[0] & {
-          pluginConfigs?: Record<string, Record<string, unknown>>;
-        }),
-      );
-      // 0.10 R2-18：包装 run/resume 以精确跟踪在跑 run（shutdown drain 用）。
-      const originalRun = agentRuntime.run.bind(agentRuntime);
-      agentRuntime.run = (input, sessionId, opts) =>
-        trackActive(originalRun(input, sessionId, opts));
-      const originalResume = agentRuntime.resume?.bind(agentRuntime);
-      if (originalResume) {
-        agentRuntime.resume = (runId, opts) => trackActive(originalResume(runId, opts));
-      }
-      runtime = agentRuntime;
-      selectedPluginHost = agentRuntime.pluginHost;
-    }
-
-    const activeRuntime = runtime;
     // 0.15：run/resume 的跨进程写锁。memory 后端不落盘，无需锁。
-    const lockedRuntime = withSessionWriteLock(activeRuntime, {
+    const lockedRuntime = withSessionWriteLock(agentRuntime, {
       tenantDir: tenantPaths.root,
       enabled: options.sessionLocks ?? backend !== 'memory',
     });
-    const finalPluginHost = selectedPluginHost ?? activeRuntime.pluginHost;
+    const finalPluginHost = agentRuntime.pluginHost;
 
     // ── Trace ─────────────────────────────────────
     const extRedactor = options.redactor ?? (await loadRedactSecrets(loader));
@@ -881,7 +826,6 @@ export async function buildTenantRuntime(
     /**
      * 0.10 R2-18：有在跑 run 时先 `interrupt('shutdown')`（checkpoint 落 interrupted，
      * 可 `--resume-run`），限时等待终态；超时记录 warning 后继续关闭。
-     * host 模式 core 尚无公开 interrupt，只有 host.close() 的取消语义。
      */
     const drain = async (): Promise<void> => {
       const interrupt = (agentRuntime as { interrupt?: (reason?: 'shutdown') => void } | undefined)
@@ -909,7 +853,7 @@ export async function buildTenantRuntime(
       // serve 路径已由 gateway.stop() 完成 drain，调用方传 drain:false 避免二次 5s。
       if (options.drain !== false) await drain();
 
-      // 关闭顺序：feishu → metrics → MCP → host/runtime → trace
+      // 关闭顺序：feishu → metrics → MCP → runtime → trace
       // → runStore → session。全部 await，异常逐段隔离，后续步骤仍会执行。
       // 0.9：MCP 是工厂式插件，不在 runtime 的 `plugins` 数组里，
       // `AgentRuntime.dispose()` 触达不到；它的 dispose() 只是 close() 的
@@ -927,16 +871,10 @@ export async function buildTenantRuntime(
         }
       }
 
-      try {
-        if (host) await host.close();
-      } catch (error) {
-        report('host.close', error);
-      }
-
       // 0.9：AgentRuntime.dispose() 返回 Promise（逆序调插件 dispose）；
       // 必须等待，否则进程退出会截断插件清理。dispose 自身幂等且不外抛。
       try {
-        await activeRuntime.dispose();
+        await agentRuntime.dispose();
       } catch (error) {
         report('runtime.dispose', error);
       }
@@ -970,7 +908,6 @@ export async function buildTenantRuntime(
         report('session.close', error);
       }
 
-      unsubHostBridge?.();
       unregisterHub?.();
 
       if (ownedLock) {
@@ -998,9 +935,9 @@ export async function buildTenantRuntime(
       session,
       context,
       pluginHost: finalPluginHost,
+      scheduler,
       runtime: lockedRuntime,
-      ...(host ? { host } : {}),
-      ...(agentRuntime ? { agentRuntime } : {}),
+      agentRuntime,
       ...(runStore ? { runStore } : {}),
       ...(eventLog ? { eventLog } : {}),
       ...(trace ? { trace } : {}),

@@ -102,6 +102,7 @@ import { setToolPolicy } from './permission-store';
 import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
+import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
@@ -897,12 +898,11 @@ async function runWithConfig(result: BootstrapResult) {
     });
     registerRuntimeNoticeHook(ctx.pluginHost, noticeBus);
 
-    /** 存活 runtime 的集合：owner（bundle / ctx / host）+ 每个 tenant bundle。 */
+    /** 存活 runtime 的集合：owner（bundle / ctx）+ 每个 tenant bundle。 */
     const liveTargets = (): PermissionApplyTarget[] =>
       collectPermissionTargets({
         runtime: ctx.runtime,
         bundleRuntime: result.bundle?.runtime,
-        host: result.host,
         tenantRuntimes: () => [
           ...(tenantFactory?.tenantIds() ?? []).map((id) => tenantFactory?.runtimeFor(id)),
           ...(tenantFactory?.tenantIds() ?? []).map((id) => tenantFactory?.bundleFor(id)?.runtime),
@@ -1101,6 +1101,18 @@ async function runWithConfig(result: BootstrapResult) {
           }
         : {}),
       ...(result.mcp ? { mcp: { listServers: () => result.mcp?.list() ?? [] } } : {}),
+      // 0.27：default tenant 的 `runs.*` 控制面（AgentService.admit + tenant
+      // scheduler）；agent 关闭时缺省不注入（runs.start 保持 forbidden）。
+      // 非 default tenant 的 `runControlFor` 是后续切片，这里不 stub。
+      ...(result.agent !== undefined && result.bundle !== undefined
+        ? {
+            runControl: createRunControl(
+              result.agent.service,
+              result.bundle.scheduler,
+              result.tenantId,
+            ),
+          }
+        : {}),
       // A-6 §13.3：per-tenant 执行面 / 插件 / trace / session 数据 / 配置。
       ...(tenantFactory
         ? {

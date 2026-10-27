@@ -13,7 +13,11 @@ import {
   createInProcessMemberRuntime,
 } from '@vessel-agent/agent';
 import { loadConfig, resolveTenantToolPolicy } from '../packages/config/src/index';
-import { MemoryLLMProvider, MemoryPluginHost } from '../packages/core/src/index';
+import {
+  InProcessScheduler,
+  MemoryLLMProvider,
+  MemoryPluginHost,
+} from '../packages/core/src/index';
 import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
@@ -78,7 +82,13 @@ export async function listTools(): Promise<ToolsListing> {
       model,
       pluginHost: host,
     });
-    const service = createAgentService({ tenantId, runtime, defaultModel: model });
+    // 0.27：scheduler 必填；只读列举不投递任何 run，用无事件流的进程内调度器。
+    const service = createAgentService({
+      tenantId,
+      runtime,
+      scheduler: new InProcessScheduler(),
+      defaultModel: model,
+    });
     host.registerTool(createAgentTool(service, { ownerId: 'main' }));
     pluginNamesWithFactories.push('agent');
   }

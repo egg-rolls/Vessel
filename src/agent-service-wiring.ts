@@ -1,16 +1,16 @@
 /**
- * 进程内 AgentService 装配（0.17 Phase A）。
+ * 进程内 AgentService 装配（0.17 Phase A / 0.27 统一 agent-body）。
  *
- * 入口层在这里把父 runtime 的 provider / 工具面 / 限额 / 事件流交给成员执行内核：
+ * 入口层在这里把 provider / 工具面 / 限额 / 事件流 / scheduler 交给成员执行内核：
  * - 交互入口传 `permissionMode: 'bridge'` 与父事件流，成员 ask 经父流弹到现有权限卡片；
  * - headless 传 `allow`；
- * - 父 turn 的 BeforeLlm hook 排空 owner 队列（agent 轨 `takeMessages`）。
+ * - `main` 走普通 create（role `single`），由 `admit` 正常执行；不再有 owner 特例。
  *
  * @module vessel/agent-service-wiring
  */
 
 import {
-  type AgentMessage,
+  AgentError,
   type AgentService,
   type AgentTeamService,
   ConversationBudget,
@@ -25,11 +25,8 @@ import {
   type InProcessMemberRuntimeOptions,
   type MemberPermissionState,
   type MemberRunnableAgent,
-  type MemberRuntimeMember,
   type MemberRuntimePermissionMode,
-  type MemberRuntimePort,
   type MemberStatus,
-  type MemberTurnResult,
   type TeamDeclaration,
   type TeamStore,
 } from '@vessel-agent/agent';
@@ -41,17 +38,11 @@ import type {
   PluginHost,
   RunEvent,
   RuntimePermissionConfig,
+  Scheduler,
   TerminationPolicy,
   ToolDefinition,
   UsageLimits,
 } from '@vessel-agent/core';
-import {
-  AGENT_OWNER_INJECTION_HOOK,
-  type AgentOwnerInjector,
-  createAgentOwnerInjector,
-} from './agent-owner-injection';
-import { resolveTenantPaths } from './data-paths';
-import { acquireSessionLock } from './session-lock';
 
 export interface AgentServiceWiringOptions {
   tenantId: string;
@@ -59,6 +50,11 @@ export interface AgentServiceWiringOptions {
   dataDir: string;
   sessionId: string;
   pluginHost: PluginHost;
+  /**
+   * 0.27（spec §5.1）：每 tenant 唯一 scheduler，由装配层（tenant bundle）构造并注入。
+   * `AgentService` 的所有执行都经它的 executor。
+   */
+  scheduler: Scheduler;
   /** 每个成员一个 provider（当前入口共用父实例；provider 无跨请求状态） */
   providerFactory: () => LLMProvider;
   model: string;
@@ -76,11 +72,6 @@ export interface AgentServiceWiringOptions {
    * 与 `permission.respond` 无需第二套协议。
    */
   parentEvents?: EventStream;
-  /**
-   * 把成员 run 的 llm / tool / run 事件并入 `parentEvents`；interactive REPL 保持
-   * false（避免成员输出混进 owner 实时流），gateway / serve / headless 传 true。
-   */
-  forwardMemberEvents?: boolean;
   /** 成员权限模式：交互 bridge、headless allow（缺省沿用 agent 包缺省 allow） */
   permissionMode?: MemberRuntimePermissionMode;
   /** tenant SessionBackend；成员 Body 用同一份存储按 session_id 续接历史 */
@@ -116,8 +107,6 @@ export interface AgentServiceWiring {
   budget?: ConversationBudget;
   /** 0.19 S4：预算状态文件存储；dispose 时需 flush */
   conversationStore?: ConversationStore;
-  /** 父 turn 的 owner 队列注入；关闭时停止 hook（PluginHost 无反注册） */
-  injector: AgentOwnerInjector;
 }
 
 /** 构造成员 runtime 选项（导出便于测试选项传递，不直接构造 runtime） */
@@ -154,9 +143,6 @@ export function buildMemberRuntimeOptions(
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     // A3c：bridge 权限事件与父入口同源；未提供时成员保持无父流。
     ...(options.parentEvents !== undefined ? { parentEvents: options.parentEvents } : {}),
-    ...(options.forwardMemberEvents !== undefined
-      ? { forwardMemberEvents: options.forwardMemberEvents }
-      : {}),
     ...(onPermissionState !== undefined ? { onPermissionState } : {}),
     ...(onMemberEvent !== undefined ? { onMemberEvent } : {}),
     ...(options.runtimeFactory !== undefined ? { runtimeFactory: options.runtimeFactory } : {}),
@@ -167,98 +153,32 @@ export function buildMemberRuntimeOptions(
 }
 
 /**
- * root owner 是 REPL 的主 agent，不在成员执行内核里 spawn。
- * owner 的 turn 由外层 REPL/TUI 驱动；这里显式收口，避免 owner 被标成 failed
- * 或刷 `member runtime not spawned`。owner 队列由 BeforeLlm 的 takeMessages 消费。
- */
-class OwnerAwareMemberRuntime implements MemberRuntimePort {
-  constructor(
-    private readonly inner: MemberRuntimePort,
-    private readonly ownerId: string,
-  ) {}
-
-  spawn(member: MemberRuntimeMember): Promise<void> {
-    if (member.id === this.ownerId) return Promise.resolve();
-    return this.inner.spawn(member);
-  }
-
-  runTurn(member: MemberRuntimeMember, message: AgentMessage): Promise<MemberTurnResult> {
-    if (member.id === this.ownerId) return Promise.resolve({ outcome: 'completed' });
-    return this.inner.runTurn(member, message);
-  }
-
-  cancel(member: MemberRuntimeMember): Promise<void> | void {
-    return this.inner.cancel(member);
-  }
-
-  dispose(member: MemberRuntimeMember): Promise<void> | void {
-    return this.inner.dispose(member);
-  }
-
-  /** CONTRACT-hot-apply §4：成员 Body 的权限热应用原样转发给执行内核。 */
-  applyPermissionRules(rules: RuntimePermissionConfig): Promise<number> | number {
-    const apply = this.inner.applyPermissionRules;
-    return typeof apply === 'function' ? apply.call(this.inner, rules) : 0;
-  }
-
-  /** CONTRACT-role-model §5：身份变更 notice 原样转发；未实现时 no-op。 */
-  notice(memberId: string, text: string): void {
-    const notice = this.inner.notice;
-    if (typeof notice === 'function') notice.call(this.inner, memberId, text);
-  }
-}
-
-/**
- * 成员 Body 的 turn 与 owner run 一样持 session 写锁。
+ * 创建 `main`（普通 single agent）或复用已存在的记录。
  *
- * 成员 runtime 不走 `withSessionWriteLock`，但它在 run 开始时就把 session 写为
- * `running`；gateway 读时的 session liveness 修复只认写锁，会把仍在执行的成员
- * turn 误判成 `run lost`（卡片出现 ✗，随后才被终态覆盖）。持锁让该判据成立，
- * 同时保留“一个 session 一个写者”的语义。
+ * 同一 dataDir 可能被装配多次（REPL 重启 / snapshot 重载），此时 `main` 已在
+ * snapshot 里，`create` 会以 `duplicate member id` 拒绝。只吞这一种错误，
+ * 其它（invalid_input 的其它原因、spawn_failed…）原样抛出。`main` 是 private，
+ * 因此回读必须带 `viewer` 身份，否则列表看不到它。
  */
-class SessionLockedMemberRuntime implements MemberRuntimePort {
-  constructor(
-    private readonly inner: MemberRuntimePort,
-    private readonly tenantDir: string,
-  ) {}
-
-  spawn(member: MemberRuntimeMember): Promise<void> {
-    return this.inner.spawn(member);
-  }
-
-  async runTurn(member: MemberRuntimeMember, message: AgentMessage): Promise<MemberTurnResult> {
-    const lock = await acquireSessionLock({
-      tenantDir: this.tenantDir,
-      kind: 'session',
-      id: member.session_id,
-    });
-    try {
-      return await this.inner.runTurn(member, message);
-    } finally {
-      await lock.release();
-    }
-  }
-
-  cancel(member: MemberRuntimeMember): Promise<void> | void {
-    return this.inner.cancel(member);
-  }
-
-  dispose(member: MemberRuntimeMember): Promise<void> | void {
-    return this.inner.dispose(member);
-  }
-
-  applyPermissionRules(rules: RuntimePermissionConfig): Promise<number> | number {
-    const apply = this.inner.applyPermissionRules;
-    return typeof apply === 'function' ? apply.call(this.inner, rules) : 0;
-  }
-
-  notice(memberId: string, text: string): void {
-    const notice = this.inner.notice;
-    if (typeof notice === 'function') notice.call(this.inner, memberId, text);
+async function createOrRestoreOwner(service: AgentService, ownerId: string): Promise<MemberStatus> {
+  try {
+    return await service.create({ id: ownerId, role: 'single' });
+  } catch (error) {
+    const duplicate =
+      error instanceof AgentError &&
+      error.code === 'invalid_input' &&
+      error.message === `duplicate member id: ${ownerId}`;
+    if (!duplicate) throw error;
+    const existing = (await service.list({ viewer: ownerId })).find(
+      (status) => status.id === ownerId,
+    );
+    // 回读不到说明不是“已存在”的重复，而是别的问题：保留原始错误。
+    if (existing === undefined) throw error;
+    return existing;
   }
 }
 
-/** 构造成员 runtime + AgentService，并注册 root owner（不 spawn） */
+/** 构造成员 runtime + AgentService，并以普通 create 建立 `main` */
 export async function createAgentServiceWiring(
   options: AgentServiceWiringOptions,
 ): Promise<AgentServiceWiring> {
@@ -285,13 +205,7 @@ export async function createAgentServiceWiring(
       (teamId) => (teamId === undefined ? undefined : teamStore.policy(teamId)?.permission),
     ),
   );
-  const runtime = new OwnerAwareMemberRuntime(
-    new SessionLockedMemberRuntime(
-      innerRuntime,
-      resolveTenantPaths(options.dataDir, options.tenantId).root,
-    ),
-    ownerId,
-  );
+  // 0.27：body lease 取代 per-run session 写锁；`main` 也不再走特殊执行路径。
 
   // 0.19 S4：有 dataDir 才落 conversation 预算；否则保持纯内存。
   const conversationStore =
@@ -314,7 +228,9 @@ export async function createAgentServiceWiring(
   const service = createAgentService({
     tenantId: options.tenantId,
     dataDir: options.dataDir,
-    runtime,
+    runtime: innerRuntime,
+    // 0.27（spec §5.1）：执行只经 tenant scheduler 的 executor，不再有第二套队列。
+    scheduler: options.scheduler,
     defaultModel: options.model,
     ownerId,
     // 成员生命周期事件与父入口同源；缺省时只有 subscribe，不进入父流。
@@ -329,30 +245,16 @@ export async function createAgentServiceWiring(
     snapshot: { enabled: true },
   });
   serviceRef = service;
-  const owner = await service.attachOwner({ id: ownerId, sessionId: options.sessionId });
+  const owner = await createOrRestoreOwner(service, ownerId);
   const team = createTeamService({
     tenantId: options.tenantId,
     agent: service,
     store: teamStore,
+    // 0.27：Team 日志的 reply / 失败条目改从 run.* 终态读，与 agent.* 同一条父流。
+    ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     ...(options.federation !== undefined ? { federation: options.federation } : {}),
   });
-
-  // 成员 runtime 复制父 PluginHost 的 hooks；只有父 turn 才能排空 owner 队列。
-  const injector = createAgentOwnerInjector({
-    // owner 是 external owner：pump 不消费，只能由父 turn 排空。
-    source: service,
-    ownerId,
-    // 当前 Body、正在跑的旧 Body、已退役 Body 与 rotate 目标都算成员 Body；
-    // 由 service 统一判定，owner 的 Body 不算。
-    isMemberSession: (sessionId) => sessionId !== undefined && service.isMemberBody(sessionId),
-    ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
-    tenantId: options.tenantId,
-  });
-  const registered = options.pluginHost
-    .getHooks()
-    .some((hook) => hook.name === AGENT_OWNER_INJECTION_HOOK);
-  if (!registered) options.pluginHost.registerHook(injector.hook);
 
   return {
     service,
@@ -367,6 +269,5 @@ export async function createAgentServiceWiring(
     teamStore,
     ...(budget !== undefined ? { budget } : {}),
     ...(conversationStore !== undefined ? { conversationStore } : {}),
-    injector,
   };
 }

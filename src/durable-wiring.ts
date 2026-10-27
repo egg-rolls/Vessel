@@ -3,10 +3,7 @@
  *
  * - 列表：running + interrupted，排序/上限由 core 的 RunStore 保证
  *   （updated_at 倒序、同值 run_id 升序；默认 50、最大 200）。
- * - 恢复路由（按 checkpoint.agent_id）：
- *   - 缺失 / owner / 宿主成员 → `host.resume()`；
- *   - 有 agent_id 且不是宿主成员 → 单 agent `AgentRuntime.resume()`；
- *   - `host.resume` 抛 `agent_not_found` 时**不回退**（避免双跑），原样上报。
+ * - 恢复只走 `AgentRuntime.resume()`；
  * - 禁止「seed session + 合成续跑消息」：恢复只走 core 的 resume。
  */
 
@@ -131,32 +128,6 @@ export async function loadResumableCheckpoint(
   return checkpoint;
 }
 
-/** resume 路由所需的宿主结构（避免依赖具体实现） */
-export interface HostRouteLike {
-  get(id: string): unknown;
-  resume?(runId: string): Promise<unknown>;
-}
-
-/**
- * 选择恢复路径。
- * @param ownerId 本进程 owner 的 agent id（checkpoint 缺失 agent_id 时视为 owner）
- */
-export function routeResume(
-  checkpoint: RunCheckpoint,
-  host: HostRouteLike | undefined,
-  ownerId: string | undefined,
-): 'host' | 'single-agent' {
-  if (!host || typeof host.resume !== 'function') return 'single-agent';
-
-  const agentId = checkpoint.agent_id;
-  if (agentId === undefined) return 'host';
-  if (ownerId !== undefined && agentId === ownerId) return 'host';
-  if (host.get(agentId) !== undefined) return 'host';
-
-  // 有 agent_id 但不是宿主成员：单 agent 恢复，避免把别的成员拉进宿主。
-  return 'single-agent';
-}
-
 /** 把任意错误归一为 `done` 的 failed 结局（不 reject） */
 export function toFailedOutcome(error: unknown): DurableRunOutcome {
   return { status: 'failed', error };
@@ -167,7 +138,7 @@ export function toFailedOutcome(error: unknown): DurableRunOutcome {
  *
  * - default tenant 返回 undefined：由 gateway 的 `durable`（bootstrap bundle）提供；
  * - 非 default tenant 只使用自己的 runStore；没有则 undefined（gateway 返回 403）；
- * - resume 只等待“受理”（host 创建 handle）；AgentRuntime.resume 的完成 Promise 不等待。
+ * - resume 不等待完成：AgentRuntime.resume 的完成 Promise 不阻塞 HTTP。
  */
 export function createDurableFor(
   factory: Pick<TenantRuntimeFactory, 'bundleFor'> | undefined,
@@ -178,19 +149,6 @@ export function createDurableFor(
     const bundle = factory?.bundleFor(tenantId);
     const store = bundle?.runStore;
     if (!store) return undefined;
-
-    const host = bundle?.host;
-    const hostResume = host?.resume;
-    if (host && typeof hostResume === 'function') {
-      return {
-        store,
-        resume: async (runId: string) => {
-          const handle = await hostResume.call(host, runId);
-          // 受理即返回；run 结束/失败不阻塞 HTTP。
-          void handle.result.catch(() => {});
-        },
-      };
-    }
 
     const runtime = bundle?.runtime;
     const runtimeResume = runtime?.resume;

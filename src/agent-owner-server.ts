@@ -281,7 +281,7 @@ function createOwnerRpc(options: {
   const table = defineMethods([
     ...createAgentMethods({
       registry: createAgentRegistry(),
-      runs: new Map(),
+      liveRuns: () => [],
       defaultTenantId: options.tenantId,
       agent: options.control,
       ...(options.teams !== undefined ? { teams: options.teams } : {}),

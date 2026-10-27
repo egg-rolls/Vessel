@@ -58,34 +58,18 @@ function hasApplyPermissionRules(value: unknown): value is PermissionApplyTarget
 }
 
 /**
- * 从一个 runtime 候选（`AgentRuntime` / `OwnerRuntimeFacade` / `RuntimeHost` /
- * 包装过的 `RunnableAgent`）里找到真正能应用权限规则的对象。
+ * 从一个 runtime 候选（`AgentRuntime` / 包装过的 `RunnableAgent`）里找到真正能
+ * 应用权限规则的对象。
  *
- * host 路径下外壳拿到的是 `OwnerRuntimeFacade`（只有 `run`），真正的 runtime 在
- * `handle` 后面；这里按结构逐层下探，找不到就返回 undefined（不抛错，调用方跳过）。
+ * 包装过的 runtime 把真正的 runtime 藏在 `handle` / `inner` 等字段后面；
+ * 这里按结构逐层下探，找不到就返回 undefined（不抛错，调用方跳过）。
  */
 export function resolveAgentRuntime(value: unknown, depth = 0): PermissionApplyTarget | undefined {
   if (value === null || typeof value !== 'object' || depth > 3) return undefined;
   if (hasApplyPermissionRules(value)) return value;
 
   const record = value as Record<string, unknown>;
-  // RuntimeHost：owner 是 `get(ownerId)` 返回的 AgentHandle。
-  const get = record.get;
-  if (typeof get === 'function') {
-    const ownerId = typeof record.ownerId === 'string' ? record.ownerId : undefined;
-    const candidates = ownerId !== undefined ? [ownerId] : [];
-    for (const id of candidates) {
-      try {
-        const handle = (get as (id: string) => unknown).call(value, id);
-        const resolved = resolveAgentRuntime(handle, depth + 1);
-        if (resolved !== undefined) return resolved;
-      } catch {
-        // 宿主实现拒绝未知 id：继续尝试下一层
-      }
-    }
-  }
-
-  // 包装层：OwnerRuntimeFacade.handle / withSessionWriteLock 的 inner 等。
+  // 包装层：withSessionWriteLock 的 inner / 其它持有者字段等。
   for (const key of ['handle', 'inner', 'runtime', 'agentRuntime']) {
     const resolved = resolveAgentRuntime(record[key], depth + 1);
     if (resolved !== undefined) return resolved;
@@ -96,7 +80,6 @@ export function resolveAgentRuntime(value: unknown, depth = 0): PermissionApplyT
 /** 从 bootstrap 结果里收集所有「存活且可热应用权限」的 runtime（按 id 去重）。 */
 export function collectPermissionTargets(input: {
   runtime?: unknown;
-  host?: unknown;
   bundleRuntime?: unknown;
   tenantRuntimes?: () => unknown[];
 }): PermissionApplyTarget[] {
@@ -108,7 +91,6 @@ export function collectPermissionTargets(input: {
   };
   add(input.runtime);
   add(input.bundleRuntime);
-  add(input.host);
   for (const candidate of input.tenantRuntimes?.() ?? []) add(candidate);
   return [...byId.values()];
 }

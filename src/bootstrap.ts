@@ -23,7 +23,6 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
-  AgentRuntime,
   type Logger,
   MemoryContextManager,
   MemoryPluginHost,
@@ -34,7 +33,6 @@ import {
   type RunnableAgent,
   type RunOptions,
   type RunStore,
-  type RuntimeHost,
   readTraceEvents,
   rebuildMetrics,
   resolveTenantPaths,
@@ -72,7 +70,6 @@ import {
   listRunSummaries,
   loadResumableCheckpoint,
   resumeError,
-  routeResume,
 } from './durable-wiring';
 import { createFederationSendPort } from './federation-send-port';
 import { createHubRuntime } from './hub-wiring';
@@ -91,14 +88,12 @@ import {
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
-import { withReasoning } from './reasoning';
 import {
   createHttpRpcClient,
   createLocalRpcClient,
   normalizeConnectUrl,
   type RpcClient,
 } from './rpc/index';
-import { ownerSelfCard } from './self-card';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
@@ -226,7 +221,7 @@ export interface BootstrapOptions {
 }
 
 export interface BootstrapResult {
-  /** 外壳消费面：legacy 时是 AgentRuntime，host 时是 OwnerRuntimeFacade */
+  /** 外壳消费面：tenant 的 AgentRuntime */
   runtime: RunnableAgent;
   ctx: ReplContext;
   config: Awaited<ReturnType<typeof loadConfig>>['config'];
@@ -264,8 +259,6 @@ export interface BootstrapResult {
   trace?: TraceControl;
   /** 0.5：session rename/delete 控制面 */
   sessionControl?: SessionControl;
-  /** host.enabled=true 且构造成功时存在 */
-  host?: RuntimeHost;
   /** nodeId 唯一来源：config.host.nodeId > node.json > 首次生成 */
   nodeId: string;
   /** 节点展示名：config.host.nodeName > node.json > hostname 派生 */
@@ -291,7 +284,7 @@ export interface BootstrapResult {
   ): Promise<{
     sessionId: string;
     result: string;
-    mode: 'host' | 'single-agent';
+    mode: 'single-agent';
   }>;
   /**
    * 幂等关闭：MCP close → Host/runtime dispose → RunStore close。
@@ -1084,7 +1077,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     sessionControl,
     plugins,
     runtime: activeRuntime,
-    host,
     pluginHost: finalPluginHost,
     runtimeEvents,
     trace,
@@ -1097,7 +1089,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // MCP 控制面（bundle 内已安装；保留局部名以兼容后续注入）。
   const mcpControl = bundle.mcp;
 
-  // 非成员 resume 回退 runtime 的构造参数（与 bundle 内保持一致）。
+  // 成员 wiring 的构造参数（与 bundle 内保持一致）。
   const limits = config.limits ?? DEFAULT_CONFIG.limits ?? {};
   const termination = {
     maxIterations:
@@ -1105,7 +1097,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     maxRuntimeSeconds:
       config.termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds,
   };
-  const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
   const permission = {
     default: headless ? ('allow' as const) : ('ask' as const),
     // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
@@ -1159,8 +1150,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       permissionMode: memberPermissionMode,
       // 成员 bridge 请求 / 应答与 TUI 订阅的是同一条父事件流。
       parentEvents: runtimeEvents,
-      // 交互 REPL 的 owner 实时流不混入成员 run 输出；gateway / serve / headless 需要。
-      forwardMemberEvents: options.interactive !== true,
+      // 0.27（spec §5.1）：每 tenant 唯一 scheduler，由 tenant bundle 构造。
+      scheduler: bundle.scheduler,
       ...(config.agent?.ownerId !== undefined ? { ownerId: config.agent.ownerId } : {}),
       logger,
       // 成员 Body 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。
@@ -1222,8 +1213,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       nodeTokens: hubRuntime.nodeTokens,
       control: agentControlLike,
       dispose: async () => {
-        // 先停注入，避免关闭过程中父 turn 再排空 owner 队列。
-        wiring.injector.dispose();
         await ownerServer?.stop();
         // 成员轮必须在 tenant eventLog 关闭前收口：否则尾部事件 append 会被
         // `session_event_log_closed` 拒绝，子会话审计缺尾。
@@ -1238,49 +1227,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // ── Durable resume（0.3）─────────────────────────
-  // 路由按 checkpoint.agent_id：缺失/owner/宿主成员 → host.resume；
-  // 非宿主成员 → 单 agent AgentRuntime.resume（不注入合成消息）。
-  const ownerId = config.agent?.ownerId ?? 'main';
-  let fallbackRuntime: AgentRuntime | undefined;
-
-  const getSingleAgentRuntime = async (): Promise<RunnableAgent> => {
-    if (!host) return activeRuntime;
-    // host 模式下的非成员恢复：按需构造一个共享 port 的单 agent runtime。
-    fallbackRuntime ??= await AgentRuntime.create(
-      // 0.11.1：思考流开关与主 runtime 保持一致（默认 false）。
-      withReasoning(config, {
-        provider,
-        model: providerModel,
-        context,
-        events: runtimeEvents,
-        limits,
-        termination,
-        session,
-        pluginHost: finalPluginHost,
-        systemPrompt,
-        permission,
-        selfCard: ownerSelfCard(config, providerModel, {
-          askUser: registerAskUser,
-        }),
-        ...(runStore ? { runStore } : {}),
-        ...(eventLog ? { eventLog } : {}),
-        logger,
-      }),
-    );
-    return fallbackRuntime;
-  };
-
+  // 恢复只走 tenant runtime 的 `AgentRuntime.resume`（不注入合成消息）。
   const startResume = async (
     runId: string,
     opts?: RunOptions,
-  ): Promise<DurableRunHandleLike & { mode: 'host' | 'single-agent' }> => {
+  ): Promise<DurableRunHandleLike & { mode: 'single-agent' }> => {
     if (!runStore) {
       throw resumeError('durable_disabled', runId, 'durable.enabled is false');
     }
 
     const checkpoint = await loadResumableCheckpoint(runStore, runId);
-    const route = routeResume(checkpoint, host, ownerId);
-    // 0.15: one writer per run across processes (host.resume bypasses the runtime wrapper).
+    // 0.15: one writer per run across processes.
     const runLock = await acquireSessionLock({
       tenantDir: tenantPaths.root,
       kind: 'run',
@@ -1288,45 +1245,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(options.clock ? { now: options.clock } : {}),
     });
 
-    if (route === 'host' && host?.resume) {
-      // agent_not_found 等错误原样上报，不回退（避免与 Host 内的 run 双跑）。
-      let handle: Awaited<ReturnType<typeof host.resume>>;
-      try {
-        handle = await host.resume(runId);
-      } catch (error) {
-        await runLock.release();
-        throw error;
-      }
-      let cancelled = false;
-      const done = handle.result
-        .then(
-          (message) => ({ status: 'completed' as const, message }),
-          (error) =>
-            cancelled ? { status: 'cancelled' as const } : { status: 'failed' as const, error },
-        )
-        .finally(() => {
-          void runLock.release();
-        });
-      return {
-        runId,
-        sessionId: handle.sessionId ?? checkpoint.session_id,
-        done,
-        cancel: () => {
-          cancelled = true;
-          handle.cancel('resume cancelled');
-        },
-        mode: 'host',
-      };
-    }
-
-    const resumeRuntime = await getSingleAgentRuntime();
-    if (typeof resumeRuntime.resume !== 'function') {
+    if (typeof activeRuntime.resume !== 'function') {
       await runLock.release();
       throw resumeError('resume_unavailable', runId, 'runtime does not support resume');
     }
 
     const controller = new AbortController();
-    const promise = resumeRuntime.resume(runId, { ...opts, signal: controller.signal });
+    const promise = activeRuntime.resume(runId, { ...opts, signal: controller.signal });
     const done = promise
       .then(
         (message) => ({ status: 'completed' as const, message }),
@@ -1625,20 +1550,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       });
     }
 
-    // 0.9：dispose 返回 Promise（插件逆序清理）；等待完成，异常不外抛。
-    try {
-      await fallbackRuntime?.dispose();
-    } catch (error) {
-      reportShutdownFailure({
-        events: bundle.events,
-        logger,
-        step: 'fallbackRuntime.dispose',
-        error,
-        tenantId,
-      });
-    }
-
-    // bundle 关闭顺序：feishu → metrics → MCP → host/runtime
+    // bundle 关闭顺序：feishu → metrics → MCP → runtime
     // → trace → runStore → session；锁由 bootstrap 在最后释放。
     await bundle.close(shutdownOptions);
 
@@ -1724,7 +1636,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(tenantLock ? { tenantLock } : {}),
     ...(trace ? { trace } : {}),
     sessionControl,
-    host,
     nodeId,
     nodeName,
     mcp: mcpControl,

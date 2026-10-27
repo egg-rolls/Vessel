@@ -1,5 +1,5 @@
 /**
- * 飞书渠道：WebSocket 长连接、文本消息、per-chat 串行队列、专用 Host。
+ * 飞书渠道：WebSocket 长连接、文本消息、per-chat 串行队列、AgentService 执行面。
  */
 
 import type { PluginHost } from '@vessel-agent/core';
@@ -92,26 +92,20 @@ class FeishuChannelImpl implements FeishuPlugin {
     if (this.config.appId === '' || this.config.appSecret === '') {
       throw new FeishuError('channel_auth_failed', 'feishu app id/secret is required', 'config');
     }
+    // 0.27：执行面只走注入的 AgentService；装配层尚未接线时显式失败，禁止静默降级。
+    if (!this.options.service) {
+      throw new FeishuError(
+        'channel_auth_failed',
+        'feishu requires an injected AgentService (options.service); the assembly layer must wire it',
+        'config',
+      );
+    }
 
     this.runner = new ChatMemberRunner({
       config: this.config,
       events: this.options.events,
-      provider: this.options.provider,
-      model: this.options.model,
-      pluginHost: this.options.pluginHost,
-      session: this.options.session,
-      ...(this.options.contextFactory ? { contextFactory: this.options.contextFactory } : {}),
-      ...(this.options.runStore ? { runStore: this.options.runStore } : {}),
-      ...(this.options.maxConcurrency !== undefined
-        ? { maxConcurrency: this.options.maxConcurrency }
-        : {}),
-      ...(this.options.maxQueueSize !== undefined
-        ? { maxQueueSize: this.options.maxQueueSize }
-        : {}),
-      ...(this.options.perAgentSerial !== undefined
-        ? { perAgentSerial: this.options.perAgentSerial }
-        : {}),
-      ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
+      service: this.options.service,
+      ...(this.options.cancelRun !== undefined ? { cancelRun: this.options.cancelRun } : {}),
     });
 
     try {

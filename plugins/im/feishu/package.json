@@ -20,11 +20,11 @@
     "bun": ">=1.3.9"
   },
   "scripts": {
-    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.76.0",
+    "@vessel-agent/agent": "0.26.2",
     "@vessel-agent/core": "0.26.2"
   },
   "devDependencies": {

@@ -2,15 +2,8 @@
  * @vessel-agent/feishu 公开类型（DECISION-009 §5.3 / Addendum B §11.3）。
  */
 
-import type {
-  ContextManager,
-  EventStream,
-  LLMProvider,
-  Plugin,
-  PluginHost,
-  RunStore,
-  SessionBackend,
-} from '@vessel-agent/core';
+import type { AgentService } from '@vessel-agent/agent';
+import type { EventStream, Plugin } from '@vessel-agent/core';
 
 export interface FeishuConfig {
   enabled?: boolean;
@@ -23,7 +16,7 @@ export interface FeishuConfig {
   sessionPrefix?: string;
   replyTimeoutMs?: number;
   maxReplyChars?: number;
-  /** 专用 Host 成员上限；默认 8，范围 1..64（Addendum B §11.3.1）。 */
+  /** 渠道成员上限；默认 8，范围 1..64（Addendum B §11.3.1）。 */
   maxMembers?: number;
 }
 
@@ -91,20 +84,15 @@ export interface FeishuPluginOptions {
    * tenant 实例由 asm 注入 `env: {}`，避免 ambient VESSEL_FEISHU_* 串用。
    */
   tenantId?: string;
-  /** 专用 Host 的事件出口；渠道把专用 Host 事件转发到这里。 */
+  /** 事件出口（与注入 service 的父事件流同源）；渠道读取 run.* 终态。 */
   events: EventStream;
-  /** 专用 Host 的成员依赖（Addendum B §11.3.3）；不注入主 Host。 */
-  provider: LLMProvider;
-  model: string;
-  pluginHost: PluginHost;
-  session: SessionBackend;
-  contextFactory?: () => ContextManager;
-  /** durable 开启时注入；专用 Host 用于 checkpoint / resume。 */
-  runStore?: RunStore;
-  /** 来自全局 scheduler 配置；未给用 core 默认（默认跨 chat 串行）。 */
-  maxConcurrency?: number;
-  maxQueueSize?: number;
-  perAgentSerial?: boolean;
+  /**
+   * 0.27：注入的 AgentService；成员创建与 admit 执行面。
+   * 缺失时 start() 显式失败（禁止静默降级）。
+   */
+  service: AgentService;
+  /** 0.27：取消在途 run（装配层接线）；缺省只放弃等待。 */
+  cancelRun?: (runId: string, reason?: string) => boolean;
   /** 测试/嵌入注入；缺省用官方 SDK transport。 */
   transport?: FeishuTransport;
   /** 环境变量覆盖（默认 process.env；测试注入）。 */

@@ -1,31 +1,19 @@
 /**
- * 飞书渠道接线（0.4 A2）。
+ * 飞书渠道接线（0.4 A2；0.27 执行面迁移到注入的 AgentService）。
  *
  * - 默认关闭：`feishu.enabled !== true` 时不 import、不构造。
- * - 渠道自建专用 `InProcessRuntimeHost`（`maxMembers = feishu.max_members`）；
- *   asm 只注入 provider / model / pluginHost / session / events / 可选 runStore /
- *   可选 contextFactory / scheduler，**不注入主 Host**（Addendum B §11.3.3）。
+ * - 渠道自管 per-chat 成员生命周期与串行队列；成员 run 经注入的
+ *   `AgentService.admit` 执行（0.27 统一 agent body）。装配层接线
+ *   `service` / `cancelRun` 之前的过渡期保留旧字段（deprecated，插件不再使用）。
  * - 只有显式 `--feishu` 才调用 `channel.start()`；enabled 单独不启动。
  */
 
-import {
-  DEFAULT_FEISHU_OPTIONS,
-  DEFAULT_SCHEDULER_OPTIONS,
-  type VesselConfig,
-} from '../packages/config/src/index';
-import type {
-  ContextManager,
-  EventStream,
-  LLMProvider,
-  PluginHost,
-  RunStore,
-  SessionBackend,
-} from '../packages/core/src/index';
+import { DEFAULT_FEISHU_OPTIONS, type VesselConfig } from '../packages/config/src/index';
+import type { EventStream } from '../packages/core/src/index';
 import type {
   FeishuChannelLike,
   FeishuChannelOptionsLike,
   FeishuModuleLike,
-  FeishuSchedulerOptions,
 } from './control-plane-types';
 import type { PluginLoader } from './plugin-loader';
 
@@ -52,15 +40,6 @@ export function resolveFeishuOptions(config: VesselConfig): ResolvedFeishuOption
     replyTimeoutMs: feishu?.replyTimeoutMs ?? DEFAULT_FEISHU_OPTIONS.replyTimeoutMs,
     maxReplyChars: feishu?.maxReplyChars ?? DEFAULT_FEISHU_OPTIONS.maxReplyChars,
     maxMembers: feishu?.maxMembers ?? DEFAULT_FEISHU_OPTIONS.maxMembers,
-  };
-}
-
-/** 专用 Host 的 Scheduler 选项：复用全局 scheduler.*，缺省用 core 默认值 */
-export function resolveFeishuScheduler(config: VesselConfig): FeishuSchedulerOptions {
-  return {
-    maxConcurrency: config.scheduler?.maxConcurrency ?? DEFAULT_SCHEDULER_OPTIONS.maxConcurrency,
-    maxQueueSize: config.scheduler?.maxQueueSize ?? DEFAULT_SCHEDULER_OPTIONS.maxQueueSize,
-    perAgentSerial: config.scheduler?.perAgentSerial ?? DEFAULT_SCHEDULER_OPTIONS.perAgentSerial,
   };
 }
 
@@ -93,13 +72,26 @@ export function assertFeishuStartable(config: VesselConfig): void {
 
 export interface CreateFeishuOptions {
   config: VesselConfig;
-  provider: LLMProvider;
-  model: string;
-  pluginHost: PluginHost;
-  session: SessionBackend;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  provider?: import('../packages/core/src/index').LLMProvider;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  model?: string;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  pluginHost?: import('../packages/core/src/index').PluginHost;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  session?: import('../packages/core/src/index').SessionBackend;
   events: EventStream;
-  runStore?: RunStore;
-  contextFactory?: () => ContextManager;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  runStore?: import('../packages/core/src/index').RunStore;
+  /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
+  contextFactory?: () => import('../packages/core/src/index').ContextManager;
+  /**
+   * 0.27：注入的 AgentService；成员创建与 admit 执行面。
+   * 装配层接线前的过渡期可缺省（插件 start() 会显式失败），接线后必传。
+   */
+  service?: unknown;
+  /** 0.27：取消在途 run（装配层接线）；缺省只放弃等待。 */
+  cancelRun?: (runId: string, reason?: string) => boolean;
   /** 测试/示例注入 mock transport */
   transport?: unknown;
   /** 0.5：tenant 作用域；事件与状态带 tenant_id */
@@ -166,7 +158,6 @@ export async function createFeishuFromConfig(
     );
   }
 
-  const scheduler = resolveFeishuScheduler(options.config);
   const channelOptions: FeishuChannelOptionsLike = {
     config: {
       enabled: true,
@@ -180,15 +171,9 @@ export async function createFeishuFromConfig(
       maxMembers: resolved.maxMembers,
     },
     events: options.events,
-    provider: options.provider,
-    model: options.model,
-    pluginHost: options.pluginHost,
-    session: options.session,
-    maxConcurrency: scheduler.maxConcurrency,
-    maxQueueSize: scheduler.maxQueueSize,
-    perAgentSerial: scheduler.perAgentSerial,
-    ...(options.runStore ? { runStore: options.runStore } : {}),
-    ...(options.contextFactory ? { contextFactory: options.contextFactory } : {}),
+    // 0.27：执行面注入；装配层接线前可缺省（插件 start() 显式失败）。
+    ...(options.service !== undefined ? { service: options.service } : {}),
+    ...(options.cancelRun !== undefined ? { cancelRun: options.cancelRun } : {}),
     ...(options.transport !== undefined ? { transport: options.transport } : {}),
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
     // tenant 实例显式 `{}`：凭据已由 config loader 合并，禁止插件再读 ambient env。
