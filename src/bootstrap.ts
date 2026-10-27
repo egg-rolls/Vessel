@@ -1188,6 +1188,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.27：回填本机人类投递端口（federation 端口的 getter 在此之后才读得到）。
     localHuman = createTeamHumanDelivery(wiring.team);
     finalPluginHost.registerTool(wiring.tool);
+    // 顺序契约：`main` 的 Body 在 spawn 时快照父宿主工具列表，
+    // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。
+    const owner = await wiring.startOwner();
 
     // S5：hub 目录投影 + team 归属 + 节点 token 控制面。
     const hubRuntime = await createHubRuntime({
@@ -1231,7 +1234,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     agentControl = {
       service: wiring.service,
       team: wiring.team,
-      owner: wiring.owner,
+      owner,
       ownerId: wiring.ownerId,
       ...(ownerServer !== undefined ? { ownerServer } : {}),
       hubControl: hubRuntime.hubControl,
