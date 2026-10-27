@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EventStream, Logger, RunEvent } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
+import { addressSegmentCount, HUMAN_PRINCIPAL } from './team-address.js';
 import {
   type AgentEvent,
   type AgentService,
@@ -546,11 +547,26 @@ export class DefaultTeamService implements AgentTeamService {
       };
     }
 
-    // 0.21：地址形式优先于 id / session / name 解析；不写本地 Team 日志。
-    // 0.27：`human` 是保留 principal 的简化形态（本机人类，无 node 段），也要走地址路。
-    // 只认这一个裸名：其它裸名仍按 id / name 解析，不会被地址路吞掉。
-    if (typeof input.to === 'string' && isAddressTarget(input.to)) {
-      return this.sendFederation(caller, input.to, content, conversationId);
+    // 地址形式优先于 id / session / name 解析。按段数分派（0.27）：
+    // - 3 段 → 地址路；由 port 判定本机 / 远端，本机的就地投递，绝不出网；
+    // - 2 段 → 本机，但仍是地址形态，需要拆成 principal + team 再投，不能当名字查；
+    // - 1 段 → 普通 id / name 解析；裸 `human` 单独短路（它不是成员名）。
+    const segments = typeof input.to === 'string' ? addressSegmentCount(input.to) : undefined;
+    if (segments === 3) {
+      return this.sendAddress(caller, input.to, content, conversationId);
+    }
+    if (segments === 2) {
+      return this.sendLocalAddress(caller, input.to, content, conversationId);
+    }
+    // 1 段 `human`：本机人类，写进调用者自己的 Team 日志。
+    if (input.to === HUMAN_PRINCIPAL) {
+      return this.deliverLocalAddress(
+        caller,
+        { kind: 'local_human' },
+        input.to,
+        content,
+        conversationId,
+      );
     }
 
     const visible = await this.listVisible(caller.id);
@@ -575,6 +591,9 @@ export class DefaultTeamService implements AgentTeamService {
     // 有 Team 的调用者：name 只在同 Team roster 内解析；未命中不得把原始 name
     // 交给 tenant 全局 dispatch（否则会绕过 roster 解析到别的 Team）。
     if (caller.team_id !== undefined && target === undefined) {
+      // 1 段裸名的查找阶梯：本 Team（上面已查）→ 本机其它 Team → 可访问节点。
+      const escalated = await this.resolveBareAgent(caller, input.to, content, conversationId);
+      if (escalated !== undefined) return escalated;
       return {
         status: 'error',
         code: 'unknown_member',
@@ -735,17 +754,201 @@ export class DefaultTeamService implements AgentTeamService {
   }
 
   /**
-   * 地址形式 `<principal>@<node>:<team>`（0.21）。
+   * 裸 agent 名的查找阶梯（0.27）：本 Team 已查过 → 本机其它 Team → 可访问节点。
+   *
+   * 返回 `undefined` 表示**继续按「查完了确实没有」处理**；返回结果表示已经给出
+   * 明确答复（投递成功、歧义、超时）。
+   *
+   * 跨 team 重名不能静默择一：调用方要用完整地址 `<agent>@<team>` 精确指定，
+   * 所以重名一律报错并列出候选。
+   */
+  private async resolveBareAgent(
+    caller: MemberStatus,
+    to: string,
+    content: string,
+    conversationId: string,
+  ): Promise<TeamAgentSendResult | undefined> {
+    const localTeams = this.store
+      .list()
+      .filter((record) => record.team_id !== caller.team_id && record.archived_at === undefined);
+
+    const localMatches: { teamId: string; agentId: string }[] = [];
+    for (const record of localTeams) {
+      const roster = await this.rosterFor(record.team_id, caller.id);
+      const hit = roster.find(
+        (member) => member.agent_id === to || member.session_id === to || member.name === to,
+      );
+      if (hit !== undefined) localMatches.push({ teamId: record.team_id, agentId: hit.agent_id });
+    }
+
+    if (localMatches.length > 1) {
+      const candidates = localMatches
+        .map((match) => `${to}@${match.teamId}`)
+        .sort()
+        .join(', ');
+      return {
+        status: 'error',
+        code: 'ambiguous_member',
+        reason: `ambiguous name: ${to}; use one of: ${candidates}`,
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+
+    const [local] = localMatches;
+    if (local !== undefined) {
+      return this.deliverLocalAddress(
+        caller,
+        { kind: 'local_member', principal: local.agentId, team_id: local.teamId },
+        `${local.agentId}@${local.teamId}`,
+        content,
+        conversationId,
+      );
+    }
+
+    const federation = this.federation;
+    if (federation === undefined) return undefined;
+
+    const found = await federation.lookup(to);
+    if (found.candidates.length > 1) {
+      const candidates = found.candidates
+        .map((candidate) => candidate.address)
+        .sort()
+        .join(', ');
+      return {
+        status: 'error',
+        code: 'ambiguous_member',
+        reason: `ambiguous name: ${to}; use one of: ${candidates}`,
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+    const [remote] = found.candidates;
+    if (remote !== undefined) {
+      return this.sendAddress(caller, remote.address, content, conversationId);
+    }
+    // 没查完就不能说「不存在」：离线 peer 会被误报成查无此人。
+    if (found.timedOut) {
+      return {
+        status: 'error',
+        code: 'lookup_timeout',
+        reason: `could not finish looking up "${to}" within the lookup budget`,
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+    return undefined;
+  }
+
+  /**
+   * 三段地址 `<principal>@<node>:<team>`（0.21 / 0.27）。
+   *
+   * **先问 port 指向哪里**：node 段命中本机时走本机投递（`deliverLocalAddress`），
+   * 绝不出网；只有 `remote` 才发请求。这样模型照抄来源行里的
+   * `<principal>@<本机 nodeId>:<team>` 也能送达，而不是绕一圈被自己拒绝。
    *
    * 前置失败一律不发请求；`from` 由运行时按调用者身份构造，模型不能伪造。
    * 跨节点发送不写本地 Team 日志（`logged:false`），对端负责落日志。
    */
-  private async sendFederation(
+  private async sendAddress(
     caller: MemberStatus,
     to: string,
     content: string,
     conversationId: string,
   ): Promise<TeamAgentSendResult> {
+    const guard = this.addressCallerGuard(caller, conversationId);
+    if (guard !== undefined) return guard;
+
+    const federation = this.federation;
+    if (federation === undefined) {
+      return {
+        status: 'error',
+        code: 'federation_unavailable',
+        reason: 'federation_unavailable',
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+
+    const placement = federation.resolve(to);
+    if (placement.kind === 'invalid') {
+      return {
+        status: 'error',
+        code: placement.code,
+        reason: placement.reason,
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+    if (placement.kind !== 'remote') {
+      return this.deliverLocalAddress(caller, placement, to, content, conversationId);
+    }
+
+    const result = await federation.send({
+      from: `${caller.name}@${federation.nodeId}:${caller.team_id}`,
+      to,
+      content,
+      conversation_id: conversationId,
+    });
+    if (result.status === 'queued') {
+      return {
+        status: 'queued',
+        resolved_to: to,
+        message_id: result.message_id,
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+    return {
+      status: result.status,
+      code: result.code,
+      reason: result.reason,
+      logged: false,
+      conversation_id: conversationId,
+    };
+  }
+
+  /**
+   * 两段地址 `<agent>@<team>`：node 恒为本机，直接本机投递。
+   *
+   * 拆成 principal + team，不走 port —— 两段形态不需要判定「是不是本机」。
+   */
+  private async sendLocalAddress(
+    caller: MemberStatus,
+    to: string,
+    content: string,
+    conversationId: string,
+  ): Promise<TeamAgentSendResult> {
+    const guard = this.addressCallerGuard(caller, conversationId);
+    if (guard !== undefined) return guard;
+
+    const at = to.indexOf('@');
+    const principal = to.slice(0, at);
+    const teamId = to.slice(at + 1);
+    // `human@<team>` 是同一条地址规则的 human 形态，不是名叫 human 的成员。
+    if (principal === HUMAN_PRINCIPAL) {
+      return this.deliverLocalAddress(
+        caller,
+        { kind: 'local_human', team_id: teamId },
+        to,
+        content,
+        conversationId,
+      );
+    }
+    return this.deliverLocalAddress(
+      caller,
+      { kind: 'local_member', principal, team_id: teamId },
+      to,
+      content,
+      conversationId,
+    );
+  }
+
+  /** 发送者前置条件：left 不能发；没有 Team / 名字则构造不出 `from`。 */
+  private addressCallerGuard(
+    caller: MemberStatus,
+    conversationId: string,
+  ): TeamAgentSendResult | undefined {
     if (caller.membership === 'left') {
       return {
         status: 'error',
@@ -773,39 +976,166 @@ export class DefaultTeamService implements AgentTeamService {
         conversation_id: conversationId,
       };
     }
-    const federation = this.federation;
-    if (federation === undefined) {
+    return undefined;
+  }
+
+  /**
+   * 本机地址投递：`human` 只写 Team 日志（零 run）；成员在目标 Team 内按
+   * id / session / name 唯一命中后写 mention 日志并 dispatch 一次。
+   *
+   * **复用 `post()`**：它已经是「校验 roster → 写日志 → dispatch」的唯一实现，
+   * 这里只多做一件事 —— 把地址里的 principal 解析成 agent id。node 段在这条路径上
+   * 没有意义（已经是本机了），所以 2 段与命中本机的 3 段共用这里。
+   */
+  private async deliverLocalAddress(
+    caller: MemberStatus,
+    placement: {
+      kind: 'local_human' | 'local_member';
+      principal?: string;
+      team_id?: string;
+    },
+    to: string,
+    content: string,
+    conversationId: string,
+  ): Promise<TeamAgentSendResult> {
+    const teamId = placement.team_id ?? caller.team_id;
+    if (teamId === undefined) {
       return {
         status: 'error',
-        code: 'federation_unavailable',
-        reason: 'federation_unavailable',
+        code: 'no_team',
+        reason: 'local address needs a team segment or a team-bound sender',
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+    // 地址里的 team 段写错必须报 team_not_found，不能退化成 unknown_member：
+    // 前者是「Team 不存在」，后者会让人去查成员名，排查方向相反。
+    if (this.store.get(teamId) === undefined) {
+      return {
+        status: 'error',
+        code: 'team_not_found',
+        reason: `team_not_found: ${teamId}`,
         logged: false,
         conversation_id: conversationId,
       };
     }
 
-    const result = await federation.send({
-      from: `${caller.name}@${federation.nodeId}:${caller.team_id}`,
-      to,
-      content,
-      conversation_id: conversationId,
-    });
-    if (result.status === 'queued') {
+    // `human`：只写日志、不唤醒成员（与跨节点入站的 human 分支同形）。
+    if (placement.kind === 'local_human') {
+      try {
+        await this.post({
+          team_id: teamId,
+          content,
+          from: caller.id,
+          to: ['human'],
+          conversation_id: conversationId,
+        });
+      } catch (error) {
+        return {
+          status: 'error',
+          code: errorCode(error) ?? 'team_log_write_failed',
+          reason: errorText(error),
+          logged: false,
+          conversation_id: conversationId,
+        };
+      }
       return {
         status: 'queued',
-        resolved_to: to,
-        message_id: result.message_id,
+        resolved_to: 'human',
+        logged: true,
+        conversation_id: conversationId,
+      };
+    }
+
+    const principal = placement.principal ?? to;
+    let targetId: string;
+    try {
+      targetId = await this.resolveAddressMember(teamId, caller.id, principal);
+    } catch (error) {
+      return {
+        status: 'error',
+        code: errorCode(error) ?? 'unknown_member',
+        reason: errorText(error),
         logged: false,
         conversation_id: conversationId,
       };
     }
+
+    let posted: TeamPostResult;
+    try {
+      posted = await this.post({
+        team_id: teamId,
+        content,
+        from: caller.id,
+        mentions: [targetId],
+        conversation_id: conversationId,
+      });
+    } catch (error) {
+      return {
+        status: 'error',
+        code: errorCode(error) ?? 'team_log_write_failed',
+        reason: errorText(error),
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+
+    const [delivery] = posted.delivered;
+    if (delivery === undefined) {
+      return {
+        status: 'queued',
+        resolved_to: targetId,
+        message_id: posted.message_id,
+        logged: true,
+        conversation_id: conversationId,
+      };
+    }
+    if (delivery.status === 'queued') {
+      return {
+        status: 'queued',
+        resolved_to: targetId,
+        ...(delivery.message_id !== undefined ? { message_id: delivery.message_id } : {}),
+        ...(delivery.resolution !== undefined ? { resolution: delivery.resolution } : {}),
+        logged: true,
+        conversation_id: conversationId,
+      };
+    }
     return {
-      status: result.status,
-      code: result.code,
-      reason: result.reason,
-      logged: false,
+      status: delivery.status === 'rejected' ? 'rejected' : 'error',
+      resolved_to: targetId,
+      ...(delivery.code !== undefined ? { code: delivery.code } : {}),
+      ...(delivery.reason !== undefined ? { reason: delivery.reason } : {}),
+      logged: true,
       conversation_id: conversationId,
     };
+  }
+
+  /**
+   * 目标 Team 内按 id / session 精确匹配，再按 name 唯一匹配。
+   *
+   * **只看目标 Team 的 present roster**：地址里的 team 段决定作用域，不能退回
+   * tenant 全局查找，否则 `alice@team-b` 会打到 `team-a` 里的同名成员。
+   */
+  private async resolveAddressMember(
+    teamId: string,
+    viewer: string,
+    principal: string,
+  ): Promise<string> {
+    const roster = await this.rosterFor(teamId, viewer);
+    const exact = roster.find(
+      (member) => member.agent_id === principal || member.session_id === principal,
+    );
+    if (exact !== undefined) return exact.agent_id;
+
+    const byName = roster.filter((member) => member.name === principal);
+    if (byName.length === 1) {
+      const [match] = byName;
+      if (match !== undefined) return match.agent_id;
+    }
+    if (byName.length > 1) {
+      throw new TeamError('invalid_input', `ambiguous name: ${principal}`);
+    }
+    throw new TeamError('unknown_member', `unknown_member: ${principal}`);
   }
 
   /** send 的 to 解析：id / 当前 session 精确匹配优先，其次按调用者可见范围解析 name */
@@ -1238,17 +1568,6 @@ function isPrivateRosterMember(status: MemberStatus): boolean {
 /** 按首次出现顺序去重 */
 function dedupe(values: readonly string[]): string[] {
   return [...new Set(values)];
-}
-
-/**
- * `send` 的 `to` 是否是地址形式（走 `FederationSendPort` 而不是本地 id / name 解析）。
- *
- * 两种形态：全形 `<principal>@<node>:<team>`，以及 0.27 的本机人类简化形态 `human`。
- * 只放宽裸 `human` 一个名字 —— 其它裸值继续按 id / name 解析，本地 resolver 的行为不变。
- * 具体的三段校验 / 本机判定在 app 层的 `resolveAddress`，这里不做第二遍。
- */
-function isAddressTarget(to: string): boolean {
-  return to.includes('@') || to === 'human';
 }
 
 /** 消息体：非空且不超过上限；失败抛 TeamError('invalid_input') */

@@ -98,7 +98,12 @@ import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
 import { reportShutdownFailure } from './shutdown-report';
-import { createTeamHumanDelivery, type LocalHumanTarget } from './team-human-delivery';
+import {
+  createTeamHumanDelivery,
+  createTeamLocalMemberDelivery,
+  type LocalHumanTarget,
+  type LocalMemberTarget,
+} from './team-human-delivery';
 import { createTenantControl } from './tenant-command';
 import {
   acquireTenantLock,
@@ -1140,6 +1145,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.27：发给人类的 send 直接写本机 Team 日志（异步委派，不阻塞 agent）。
     // Team 服务在 createAgentServiceWiring 之后才存在，这里用晚绑定 getter 回填。
     let localHuman: LocalHumanTarget | undefined;
+    let localMember: LocalMemberTarget | undefined;
     // 0.21 S8.2：federation 缺省启用；显式 `federation.enabled: false` 才不注入。
     // 语义不只是「跨节点所以关掉就没」：本机人类投递也挂在这个端口上，关掉 federation
     // 等于连「agent 找本机人类」一起关掉。见下方 localHuman 的构造。
@@ -1151,6 +1157,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             // 展示名只用于把指向本机的 `to` 归一化，不参与向外的 from。
             nodeName,
             localHuman: () => localHuman,
+            localMember: () => localMember,
           })
         : undefined;
     const wiring = await createAgentServiceWiring({
@@ -1188,8 +1195,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(defaultWorkspace !== undefined ? { defaultWorkspace } : {}),
       ...(federation !== undefined ? { federation } : {}),
     });
-    // 0.27：回填本机人类投递端口（federation 端口的 getter 在此之后才读得到）。
+    // 0.27：回填本机投递端口（federation 端口的 getter 在此之后才读得到）。
     localHuman = createTeamHumanDelivery(wiring.team);
+    localMember = createTeamLocalMemberDelivery(wiring.team);
     finalPluginHost.registerTool(wiring.tool);
     // 顺序契约：`main` 的 Body 在 spawn 时快照父宿主工具列表，
     // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。
