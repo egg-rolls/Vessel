@@ -273,6 +273,11 @@ function sanitizeSource(value: string): string {
   return cleaned.length > 120 ? `${cleaned.slice(0, 117)}...` : cleaned;
 }
 
+/** uuid 形状才缩成前 8 位；`human` / 成员名等非 uuid 值原样保留 */
+function shortId(value: string): string {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(value) ? value.slice(0, 8) : value;
+}
+
 /** 缺 source 时按 from 退化推断；生产路径由 AgentService 入队时标注 */
 function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
   if (from === 'system') return 'system';
@@ -284,32 +289,28 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
  * 渲染本轮消息来源。由 `runTurn` 作为 `RunOptions.messages` 注入为持久化的
  * `vessel:source` 消息，不改写 system。
  *
- * **单行方括号**：来源是纯展示，一行 `[from <principal>@<team>]` 就说完了。
+ * **渲染成描述，不渲染成地址**：`[from agent:3ae686c0]` / `[from human]`。
+ * 早先写成 `agent:<uuid>@<team>` 看起来像可回复的地址，但本机来源没有 node 段，
+ * 那条地址按 `resolveAddress` 解析必失败 —— 格式暗示了一个它不支持的操作。
+ * 模型回信本来就靠 `to: <uuid>` 或成员名（trace 里全部如此），从不抄这一行。
+ *
+ * 短 id 只用于展示：完整 uuid 仍在 `AgentMessage.from` 里，trace 可查。
+ *
  * 不用多行块 + 标题，也不用 C 风格的块注释语法 —— `sanitizeSource()` 不处理块注释
  * 的结束标记，名字里带它就提前闭合，运行时不会报错、只会静默错乱。
  *
  * `channel` 是消息的元属性，只进 trace / 日志，不渲染进提示词。
  *
- * **本机来源不带 node 段**：能走到这条路的 `from` 全部是本机 principal（远端一律走
- * `federation:` 前缀的分支）。node 段是跨节点才需要的信息，这里没有 node identity
- * 可填（`AgentMessage` 不携带 node_id），过去用 `os.hostname()` 顶替 —— 那让同一个
- * 概念在展示层与寻址层有了两个不同的值，agent 照抄回来的地址永远对不上。
- *
- * **`from` 用完整 uuid，不缩成短 id**：短 id 不是任何真实 id，模型照抄回来解析不到；
- * 保完整值至少与寻址层一致。
- *
  * 联邦入站的 `from` 已自带 `<principal>@<node>:<team>`；直接渲染内嵌地址，
- * 不得再拼本机 node/team（否则会伪装成本机成员）。
+ * 不得再拼本机 node/team（否则会伪装成本机成员），也不缩 principal。
  */
-function formatMessageSource(message: AgentMessage, teamId: string | undefined): string {
+function formatMessageSource(message: AgentMessage): string {
   if (message.from.startsWith('federation:')) {
-    const addr = sanitizeSource(message.from.slice('federation:'.length));
-    return `[from ${addr}]`;
+    return `[from ${sanitizeSource(message.from.slice('federation:'.length))}]`;
   }
   const source = message.source ?? inferMessageSource(message.from);
-  const principal = source === 'agent' ? `agent:${sanitizeSource(message.from)}` : source;
-  const team = typeof teamId === 'string' && teamId.length > 0 ? sanitizeSource(teamId) : undefined;
-  return `[from ${principal}${team !== undefined ? `@${team}` : ''}]`;
+  if (source !== 'agent') return `[from ${source}]`;
+  return `[from agent:${shortId(sanitizeSource(message.from))}]`;
 }
 
 /** 成员不可见的工具 */
@@ -592,7 +593,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     const sourceMessage: Message = {
       role: 'user',
       name: 'vessel:source',
-      content: formatMessageSource(message, member.team_id),
+      content: formatMessageSource(message),
       timestamp: Date.now(),
     };
     try {

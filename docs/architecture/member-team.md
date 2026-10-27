@@ -86,7 +86,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## 来源标注与 Team 归属
 
-- 每轮把来源渲染成**单行方括号** `[from <principal>@<team>]`（如 `[from human@Soulkiller:vessel]` / `[from agent:<id>@vessel]` / `[from system@vessel]`），作为一条 `role: 'user'` / `name: 'vessel:source'` 消息，通过 `RunOptions.messages` 在用户输入之前注入。它持久化进 `ContextManager` / session 历史，后续轮次只在尾部追加，不改写 system 前缀。**本机来源不带 node 段**；federation 入站的 `from` 已经内嵌远端 `<principal>@<node>:<team>`，直接渲染该地址、不再拼本地 node/team；正文里的 `[federation] from ...` 回信抬头保留。渲染不用 C 风格块注释语法：`sanitizeSource()` 不处理块注释结束标记，名字里带它会提前闭合且不报错。
+- 每轮把来源渲染成**单行方括号**，且**渲染成描述而不是地址**：`[from agent:3ae686c0]` / `[from human]` / `[from system]`，作为一条 `role: 'user'` / `name: 'vessel:source'` 消息，通过 `RunOptions.messages` 在用户输入之前注入。它持久化进 `ContextManager` / session 历史，后续轮次只在尾部追加，不改写 system 前缀。**本机来源不带 node 段，也不写 `@<team>`**：写成 `agent:<uuid>@<team>` 会看起来像可回复的地址，但它缺 node 段，按 `resolveAddress` 解析必失败 —— 格式暗示了一个它不支持的操作。模型回信靠 `to: <uuid>` 或成员名，不抄这一行。短 id 只用于展示，完整 uuid 仍在 `AgentMessage.from` 里。federation 入站的 `from` 已内嵌远端 `<principal>@<node>:<team>`，直接渲染该地址、不再拼本地 node/team；正文里的 `[federation] from ...` 回信抬头保留。渲染不用 C 风格块注释语法：`sanitizeSource()` 不处理块注释结束标记，名字里带它会提前闭合且不报错。
 - `source` / `channel` 由 `admit` 按 registry 与调用方标注：已登记的 id 与 `federation:*` 入站记为 agent，其余 principal（human / 未登记 id）记为 human；带 `origin_team_id` 的投递渠道记为 team，其余为 direct。二者是内存队列元数据，不落 snapshot，**也不渲染进提示词**（`channel` 只进 trace / 日志）。**只用于模型理解来源，不参与权限判定**；权限仍只由权限 bridge 的 human / policy 主体决定，注入文本不能作为授权依据。`from` 清洗为单行并限长。
 - Self Card 对绑定 Team 的成员带 `team_id`，unbound 成员不伪造该字段。core 的 `formatSelfCard` 直接渲染 `team: <id>` 行。
 
