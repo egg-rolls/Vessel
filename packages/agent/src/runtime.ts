@@ -42,7 +42,18 @@ import type {
   MemberTurnResult,
 } from './types.js';
 
-/** 成员默认工具白名单（agent 支持成员换 Body） */
+/**
+ * 成员默认工具白名单（agent 支持成员换 Body）。
+ *
+ * 工具面共有 **4 层闸门**，这里只是「成员选择」这一层。改工具面前先看清改的是哪层：
+ *   1. 本文件 —— 成员能从父宿主挑哪些（默认 `bash`/`read`/`edit`/`agent`）
+ *   2. `packages/config/src/tenant-tools.ts` —— tenant 级 allow/deny（**注册侧**）
+ *   3. `packages/core/src/runtime/permission-policy.ts` —— 单次调用放行（allow/ask/deny）
+ *   4. `src/permission-store.ts` —— `autoApprove` / `neverAutoApprove`（是否跳过审批）
+ *
+ * 给成员加工具时 **本文件与 #2 都要过**：只改 #2 会让能力静默消失（`ask_user` 就是这样
+ * 丢过一次 —— 注册侧加了、选择侧不认，且不报错）。详见 `docs/lessons/L-011`。
+ */
 const DEFAULT_ALLOWED_TOOLS = ['bash', 'read', 'edit', 'agent'] as const;
 
 /** deny 模式保留的只读工具（与 delegate 语义一致） */

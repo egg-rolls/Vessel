@@ -57,8 +57,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 - 入站 `POST /v1/federation/messages` 注册在 gateway `principalForRequest` 之前；出站由 `vessel federation post|peers` 一次性进程发起。不复用 legacy `/v1/team/*`、`RemoteTransport` 或 hub 控制面。
 - envelope 为 `vessel.federation/1`，字段固定 `protocol / message_id / conversation_id / from / to / content / ts / hop / request_id?`；`from` / `to` 为 `{node_id, team_id, principal}`，严格解析，缺字段即 `federation_invalid`。
 - 地址 `<principal>@<node_id>:<team_id>`：`principal` 是目标 Team 的 present 成员名或保留字 `human`；它是名字，不是 agent id。
-- `federation.peers[]` 显式声明 `(nodeId, teamId)` / `url` / `tokenEnv` / `direction` / `caFile?` / `localTeamId?`；无通配、无自动发现，明文 `token` 被 validator 拒绝。
-- 每个 peer 一份 bearer token，内存定长比较；gateway 用户 token / hub node token / peer token 三套命名空间不交叉。非回环 `url` 必须 https。
+- `federation.peers[]` 显式声明 `(nodeId, teamId)` / `url` / `tokenEnv` / `direction` / `caFile?` / `localTeamId?`；无通配、无自动发现，明文 `token` 被 validator 拒绝。每个 peer 一份 bearer token，内存定长比较；三套 token 命名空间（gateway 用户 / hub node / peer）不交叉；非回环 `url` 必须 https。
 
 <a id="federation-guards"></a>
 
@@ -70,11 +69,30 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 - 去重键 `(from.node_id, from.team_id, message_id)`，进程内 LRU 1024；不声称跨重启 exactly-once。入站限流 `federation.rateLimitPerMinute` 1..600（缺省 60），超限 429、零写入。
 - 事件：`federation.received` / `federation.rejected`，payload 不带正文；出站一次性进程不发事件，结果走 CLI JSON / exit code。
 
+## 命名体系：Petname System
+
+**协议只认不可变 ID；名字是「本地叫法」，不参与寻址**（Syncthing / ZeroTier / IPFS 同款）。
+
+| 字段 | 来源 | 全局唯一 | 用途 |
+|---|---|---|---|
+| `node_id` | 本机 UUID（`~/.vessel/data/node.json`） | 是 | **唯一寻址键** |
+| `name` | 配置 > 文件 > hostname | 否，可重名 | 只给人看；**只作本机别名** |
+
+1. **`name` 指不到别人**：匹配不上本机就当远端，远端必须 `node_id`；多台机器同名在协议层无害。
+2. **同名不同层，不许为「看起来一致」而统一**：`resolveAddress()`（agent 输入侧）宽松，
+   认 `human` / `human@<team>`；`parseFederationAddress()`（报文侧）严格，必须三段（`L-011`）。
+3. **跨节点地址里只允许 `node_id`**；`name` 出现即视为本机引用。
+
+**不做全局 DNS**：需协调机构的命名与「无中心、可嵌入」冲突。Petname 让每个节点
+自己给对端起名，目录小到不需要治理。`federation.peers[]` 目前无 `name` 字段，
+所以名字只能指自己；将来有人配 peer 时可加可选 `name`（纯本地、不进报文），
+唯一用途是启动时比对撞名并 warning——**本地防困惑，不是寻址机制**。
+
 ## 不做什么
 
 - hub 不做消息正文 / 事件 / 工具结果代理，不存 transcript，不做 mTLS、多 hub 联邦或节点自动发现。
 - federation 不做 worker / agent 跨节点寻址、远程 spawn / close / rotate / resume / fork、自动中继 / mesh、离线队列 / 重试、跨重启 exactly-once、多 tenant、权限审批人。
-- federation 是传输面，不新增 canonical RPC 方法。
+- federation 是传输面，不新增 canonical RPC 方法；**不做全局名字解析**（DNS / 注册表 / 名字即身份）——名字只在本地有意义。
 
 ## 指针
 
