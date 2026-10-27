@@ -99,6 +99,34 @@ const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
 /** Team 内 present 成员上限（peer + contractor 都计入；后续可配置） */
 const TEAM_MEMBER_LIMIT = 20;
 
+/**
+ * 成员名合法形状：1-64 位字母 / 数字 / `_` / `-`。
+ *
+ * **与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同源同义**（那边是
+ * `[A-Za-z0-9_-]{1,64}`）。两处必须同改：名字会被拼进跨节点地址的 principal 段
+ * （`team-service.ts` 出站 from），不合法的名字建得出来、却永远发不出去。
+ *
+ * 不在 create 时校验的后果实测过：`my.agent` / `docs core` / 中文名 / 超 64 字符
+ * 都能存进 registry，但 `parseFederationAddress` 在形状校验就拒绝整条地址 ——
+ * 不是 `unknown_member`，是地址本身非法。本机按 id 仍能用，跨节点完全不可达。
+ */
+const MEMBER_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** 非法名字的拒绝理由：必须说明允许的形状，不能只说 invalid。 */
+function nameShapeError(name: string): AgentError {
+  return new AgentError(
+    'invalid_input',
+    `name must match ${MEMBER_NAME_RE.source} (letters, digits, underscore, hyphen; ` +
+      `1-64 chars); "${name}" is not addressable cross-node`,
+  );
+}
+
+/** 显式 name 的形状校验；缺省（undefined）放行，由调用方决定是否自动命名。 */
+function assertMemberName(name: string | undefined): void {
+  if (name === undefined) return;
+  if (!MEMBER_NAME_RE.test(name)) throw nameShapeError(name);
+}
+
 /** 每 agent live body 上限缺省值 */
 const DEFAULT_MAX_LIVE_BODIES = 20;
 
@@ -574,6 +602,9 @@ export class AgentServiceImpl implements AgentService {
     const owner = role === 'member' ? id : ((rawOwner as string | undefined) ?? this.defaultOwner);
 
     const name = optionalString(input.name);
+    // 形状校验必须早于任何 registry / team 副作用：名字最终会进跨节点地址，
+    // 建出来再发现发不出去，代价是调用方已经拿到 id 了。
+    assertMemberName(name);
     const spawnedBy = optionalString(input.spawnedBy);
     // 显式 workspace 只由 CLI 传入；默认 workspace 来自配置声明。
     const explicitWorkspace =
@@ -721,6 +752,7 @@ export class AgentServiceImpl implements AgentService {
     // 与 createOne 同一语义：同名 present 成员已存在则复用，不新建。
     // `main` 等启动路径只传 `{ id, role }`、不传 name，占不到这个分支。
     const name = optionalString(input.name);
+    assertMemberName(name);
     if (name !== undefined) {
       const existing = this.reusableByName(name, undefined);
       if (existing !== undefined) return { ...this.statusFor(existing), reused: true };
@@ -795,12 +827,19 @@ export class AgentServiceImpl implements AgentService {
     throw new AgentError('invalid_input', `name_exhausted: ${base}`);
   }
 
-  /** 缺省名：以派生出的 base 走 numbering */
+  /**
+   * 缺省名：以派生出的 base 走 numbering。
+   *
+   * base 可能来自 `spawnedBy` 的既有名字 —— 存量快照里可能有形状非法的名字
+   * （校验是后加的），派生出来的名字同样进跨节点地址，所以 base 不合法就退回
+   * `agent`，不让一条旧记录把非法形状传染给新建成员。
+   */
   private autoNameFor(spawnedBy: string | undefined, teamId: string | undefined): string {
-    const base =
+    const derived =
       (spawnedBy !== undefined ? this.registry.resolve(spawnedBy)?.name : undefined) ??
       spawnedBy ??
       'agent';
+    const base = MEMBER_NAME_RE.test(derived) ? derived : 'agent';
     return this.numberedNameFor(base, teamId);
   }
 
@@ -2325,6 +2364,8 @@ export class AgentServiceImpl implements AgentService {
 
     const changed: AgentUpdateField[] = [];
     if (name !== undefined && name !== target.name) {
+      // 与 create 同一条形状规则：改名是另一条能把「可寻址」变「不可寻址」的路径。
+      assertMemberName(name);
       this.assertNameAvailable(target, name);
       target.name = name;
       changed.push('name');
