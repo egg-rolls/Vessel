@@ -153,6 +153,16 @@ function findOutboundPeer(
   );
 }
 
+/**
+ * 该 node 段是否在配置里出现过（任何 team / 任何方向）。
+ *
+ * 用来区分两种「发不出去」：节点根本不存在 vs 节点存在但这条 peer/方向没开。
+ * 前者是调用方写错了地址，后者是策略。回同一个 code 会让排查方向相反。
+ */
+function hasKnownPeerNode(options: FederationRuntimeOptions, nodeId: string): boolean {
+  return options.peers.some((peer) => peer.nodeId === nodeId);
+}
+
 /** peer.url 缺失 / 非 http(s) 属于配置错误 */
 function resolveEndpoint(
   peer: FederationRuntimePeer,
@@ -281,6 +291,15 @@ export async function postFederation(
 
   const peer = findOutboundPeer(options, input.to);
   if (peer === undefined) {
+    // 地址写错了 node 段 vs 策略不允许：分开报，排查方向完全不同。
+    // reason 只回显 `node:team` 两段（有字符集约束），不回显调用方原文。
+    if (!hasKnownPeerNode(options, input.to.node_id)) {
+      return {
+        status: 'rejected',
+        code: 'federation_unknown_node',
+        reason: `no configured federation node ${input.to.node_id}:${input.to.team_id}`,
+      };
+    }
     return {
       status: 'rejected',
       code: 'federation_not_allowed',
