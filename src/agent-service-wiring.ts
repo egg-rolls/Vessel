@@ -190,7 +190,11 @@ export function buildMemberRuntimeOptions(
  */
 async function createOrRestoreOwner(service: AgentService, ownerId: string): Promise<MemberStatus> {
   try {
-    return await service.create({ id: ownerId, role: 'single' });
+    // `name` 与 id 同值：来源行有名字就渲染名字、没名字才退回 id。不给 name 时
+    // main 靠「id 恰好叫 main」碰巧渲染正确；一旦 `agent.ownerId` 配成别的值，
+    // 渲染出的 principal 就是那个配置值（一个 id），与「有名字用名字」不一致。
+    // 注意：已存在的 main 回读时不补 name（见下方 catch），旧快照靠 id 兜底，结果相同。
+    return await service.create({ id: ownerId, name: ownerId, role: 'single' });
   } catch (error) {
     const duplicate =
       error instanceof AgentError &&
