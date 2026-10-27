@@ -460,18 +460,22 @@ export function createAgentTool(
                 content,
               });
             }
-            // owner 没有本地 Team，无法构造 `<name>@<local node>:<team>`；
-            // 地址形式明确拒绝，绝不回落到 dispatch 或跨节点端口。
-            // 裸 `human` 是同一件事的简化形态（本机人类），一并拒。
+            // owner 是 unbound single：它跟人类的对话就是自己的 session，每轮回复的
+            // 文本人类直接能看到。所以 owner 没有「把话递给人类」这个动作可做 ——
+            // 那是给 Team 成员用的（成员在 Team 里跑，人类不在它的 session 里）。
+            // 两条拒绝理由不同，文案必须分开，否则模型会去追一个不存在的动作：
+            // - `human`：回复本身就是回答，不需要 send；
+            // - 地址形式：owner 没有 Team，构造不出 `<name>@<node>:<team>`。
+            // 旧文案让模型「用 vessel federation post --from ...」——那是 CLI，模型没有
+            // 这条工具调用可发，属于不可执行的死提示。错误消息给的替代动作必须真能用。
             if (typeof to === 'string' && (to.includes('@') || to === 'human')) {
-              return {
-                status: 'rejected',
-                code: 'no_team',
-                reason:
-                  'owner has no local team: local human delivery needs a team to log into; ' +
-                  'for cross-node use vessel federation post --from human@<node>:<team>',
-                logged: false,
-              };
+              const reason =
+                to === 'human'
+                  ? 'owner has no team: your reply text is shown to the human directly, ' +
+                    'so no send is needed. To reach an agent, send to its id.'
+                  : 'owner has no team, so an address cannot be delivered from here; ' +
+                    'to reach an agent, send to its id instead of an address.';
+              return { status: 'rejected', code: 'no_team', reason, logged: false };
             }
             return service.dispatch({ to, content, from: ownerId });
           };
