@@ -454,7 +454,8 @@ export function createAgentTool(
                 status: 'rejected',
                 code: 'no_team',
                 reason:
-                  'owner has no local team; use vessel federation post --from human@<node>:<team>',
+                  'owner has no local team: local human delivery needs a team to log into; ' +
+                  'for cross-node use vessel federation post --from human@<node>:<team>',
                 logged: false,
               };
             }
