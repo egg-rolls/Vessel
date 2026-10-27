@@ -30,8 +30,27 @@ export interface SpinnerState {
   lastThinkingMs?: number;
 }
 
+/**
+ * 0.27：其它 body 的 `run.*` 与本轮流共用一条事件流，spinner 只跟本轮流。
+ * 判定只靠 `session_id`（每条 `run.*` 都带 `agent_id`，主 agent 也有，不能用它区分）。
+ * 未给 `mainSessionId` 或事件缺 `session_id` 时视作本轮流，保持旧行为。
+ */
+function isForeignEvent(data: Record<string, unknown>, mainSessionId: string | undefined): boolean {
+  if (mainSessionId === undefined) return false;
+  const sessionId = data.session_id;
+  return typeof sessionId === 'string' && sessionId.length > 0 && sessionId !== mainSessionId;
+}
+
 /** 纯 reducer：根据单个事件推进 spinner 状态 */
-export function reduceSpinnerState(prev: SpinnerState, event: TuiEvent, now: number): SpinnerState {
+export function reduceSpinnerState(
+  prev: SpinnerState,
+  event: TuiEvent,
+  now: number,
+  mainSessionId?: string,
+): SpinnerState {
+  const data = event.data as Record<string, unknown>;
+  if (isForeignEvent(data, mainSessionId)) return prev;
+
   switch (event.type) {
     case 'run.started':
     case 'run.resumed':
@@ -65,15 +84,19 @@ export function reduceSpinnerState(prev: SpinnerState, event: TuiEvent, now: num
 }
 
 /** 订阅事件流，实时计算 spinner 状态 */
-export function useSpinnerState(events: EventStream): SpinnerState {
+export function useSpinnerState(events: EventStream, mainSessionId?: string): SpinnerState {
   const [state, setState] = useState<SpinnerState>({ verb: 'idle' });
+  const sessionIdRef = useState(() => ({ value: mainSessionId }))[0];
+  sessionIdRef.value = mainSessionId;
 
   useEffect(() => {
     const unsubscribe = events.subscribe((rawEvent) => {
-      setState((prev) => reduceSpinnerState(prev, asTuiEvent(rawEvent), Date.now()));
+      setState((prev) =>
+        reduceSpinnerState(prev, asTuiEvent(rawEvent), Date.now(), sessionIdRef.value),
+      );
     });
     return unsubscribe;
-  }, [events]);
+  }, [events, sessionIdRef]);
 
   return state;
 }

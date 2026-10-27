@@ -175,6 +175,28 @@ function delegateIdOf(data: Record<string, unknown>): string | undefined {
   return readString(data, 'delegateId', 'delegate_id', 'agentId', 'agent_id');
 }
 
+/**
+ * 旧 delegate 归属：只看 `delegate_id`，不看 `agent_id`。
+ *
+ * 0.27 起 `run.*` 带 `agent_id`（主 agent 也有），用 `delegateIdOf` 判断“是否是成员 run”
+ * 会把主 run 误判成成员 run，从而跳过父 run 结束时的子节点收敛。
+ */
+function legacyDelegateIdOf(data: Record<string, unknown>): string | undefined {
+  return readString(data, 'delegateId', 'delegate_id');
+}
+
+/**
+ * 成员 body 的 `run.*` 归属（0.27）。
+ * `run_id` 是 body 的 run id，不再等于成员 id；归属只看 `data.agent_id`，
+ * 且该 id 必须已有成员节点（由 `agent.spawned` 建条）。主 agent 的 run 不属于任何节点。
+ * （主 agent 的 run 同样带 `agent_id`，只是没有对应节点，因此自然落空。）
+ */
+function memberIdOfRun(nodes: AgentNode[], data: Record<string, unknown>): string | undefined {
+  const agentId = readString(data, 'agent_id', 'agentId');
+  if (agentId === undefined) return undefined;
+  return findNode(nodes, agentId) !== undefined ? agentId : undefined;
+}
+
 function errorTextOf(data: Record<string, unknown>): string | undefined {
   const raw = data.error ?? data.message ?? data.reason;
   if (typeof raw === 'string' && raw.trim().length > 0) return raw.trim();
@@ -276,6 +298,8 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
   const base = baseType(type);
   const subagent = isSubagentEvent(type) || delegateIdOf(data) !== undefined;
   const delegateId = delegateIdOf(data);
+  // 旧 `delegate_id` 归属（不看 0.27 的 `agent_id`）：只用于 run.* 的 legacy 分支。
+  const legacyDelegateId = legacyDelegateIdOf(data);
 
   switch (base) {
     case 'agent.spawned': {
@@ -292,58 +316,6 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
           ...(usage !== undefined ? { usage } : {}),
         }),
         { create: true, allowFrozen: true },
-      );
-    }
-
-    case 'agent.turn.started': {
-      if (delegateId === undefined) return nodes;
-      return updateMemberNode(
-        nodes,
-        event,
-        data,
-        delegateId,
-        (node) => {
-          const {
-            endedAt: _endedAt,
-            durationMs: _durationMs,
-            error: _error,
-            currentTool: _currentTool,
-            ...rest
-          } = node;
-          return { ...rest, state: 'running' };
-        },
-        { create: true },
-      );
-    }
-
-    case 'agent.turn.completed':
-    case 'agent.turn.failed':
-    case 'agent.turn.cancelled': {
-      if (delegateId === undefined) return nodes;
-      const fallback: AgentState =
-        base === 'agent.turn.failed'
-          ? 'failed'
-          : base === 'agent.turn.cancelled'
-            ? 'cancelled'
-            : 'completed';
-      const usage = readUsage(data);
-      const error = base === 'agent.turn.failed' ? errorTextOf(data) : undefined;
-      return updateMemberNode(
-        nodes,
-        event,
-        data,
-        delegateId,
-        (node) => {
-          const { currentTool: _currentTool, ...rest } = node;
-          return {
-            ...rest,
-            state: memberStateOf(data) ?? fallback,
-            endedAt: event.ts,
-            ...(usage !== undefined ? { usage } : {}),
-            ...(error !== undefined ? { error } : {}),
-          };
-        },
-        { create: true },
       );
     }
 
@@ -472,11 +444,37 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
       );
     }
 
-    case 'run.started': {
-      if (!subagent || delegateId === undefined) return nodes;
+    case 'run.started':
+    case 'run.resumed': {
+      // 0.27：成员 body 的执行生命周期与主 agent 同一条 `run.*`；靠 `data.agent_id`
+      // 归属到已建条的成员节点（主 agent 自己的 run 走父 run 收敛路径）。
+      const memberId = memberIdOfRun(nodes, data);
+      if (memberId !== undefined) {
+        const childRunId = readString(data, 'run_id') ?? event.run_id;
+        const nodeId = readString(data, 'node_id', 'nodeId');
+        return updateMemberNode(nodes, event, data, memberId, (node) => {
+          const {
+            endedAt: _endedAt,
+            durationMs: _durationMs,
+            error: _error,
+            currentTool: _currentTool,
+            ...rest
+          } = node;
+          return {
+            ...rest,
+            state: 'running',
+            childRunId,
+            ...(nodeId !== undefined ? { nodeId } : {}),
+            ...(readString(data, 'session_id') !== undefined
+              ? { sessionId: readString(data, 'session_id') }
+              : {}),
+          };
+        });
+      }
+      if (!subagent || legacyDelegateId === undefined) return nodes;
       const childRunId = readString(data, 'run_id') ?? event.run_id;
       const nodeId = readString(data, 'node_id', 'nodeId');
-      return updateNode(nodes, delegateId, (node) => ({
+      return updateNode(nodes, legacyDelegateId, (node) => ({
         ...node,
         state: 'running',
         childRunId,
@@ -488,16 +486,16 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
     }
 
     case 'tool.call.started': {
-      if (!subagent || delegateId === undefined) return nodes;
+      if (!subagent || legacyDelegateId === undefined) return nodes;
       const toolName = readString(data, 'tool_name', 'toolName');
       if (toolName === undefined) return nodes;
-      return updateNode(nodes, delegateId, (node) => ({ ...node, currentTool: toolName }));
+      return updateNode(nodes, legacyDelegateId, (node) => ({ ...node, currentTool: toolName }));
     }
 
     case 'tool.call.completed':
     case 'tool.call.failed': {
-      if (!subagent || delegateId === undefined) return nodes;
-      return updateNode(nodes, delegateId, (node) => {
+      if (!subagent || legacyDelegateId === undefined) return nodes;
+      return updateNode(nodes, legacyDelegateId, (node) => {
         if (node.currentTool === undefined) return node;
         const { currentTool: _currentTool, ...rest } = node;
         return rest;
@@ -505,8 +503,21 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
     }
 
     case 'run.completed': {
-      if (subagent && delegateId !== undefined) {
-        return updateNode(nodes, delegateId, (node) => ({
+      const memberId = memberIdOfRun(nodes, data);
+      if (memberId !== undefined) {
+        const usage = readUsage(data);
+        return updateMemberNode(nodes, event, data, memberId, (node) => {
+          const { currentTool: _currentTool, ...rest } = node;
+          return {
+            ...rest,
+            state: 'completed',
+            endedAt: event.ts,
+            ...(usage !== undefined ? { usage } : {}),
+          };
+        });
+      }
+      if (subagent && legacyDelegateId !== undefined) {
+        return updateNode(nodes, legacyDelegateId, (node) => ({
           ...node,
           state: 'completed',
           endedAt: event.ts,
@@ -517,9 +528,24 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
     }
 
     case 'run.failed': {
-      if (subagent && delegateId !== undefined) {
+      const memberId = memberIdOfRun(nodes, data);
+      if (memberId !== undefined) {
+        const usage = readUsage(data);
         const error = errorTextOf(data);
-        return updateNode(nodes, delegateId, (node) => ({
+        return updateMemberNode(nodes, event, data, memberId, (node) => {
+          const { currentTool: _currentTool, ...rest } = node;
+          return {
+            ...rest,
+            state: 'failed',
+            endedAt: event.ts,
+            ...(usage !== undefined ? { usage } : {}),
+            ...(error !== undefined ? { error } : {}),
+          };
+        });
+      }
+      if (subagent && legacyDelegateId !== undefined) {
+        const error = errorTextOf(data);
+        return updateNode(nodes, legacyDelegateId, (node) => ({
           ...node,
           state: 'failed',
           endedAt: event.ts,
@@ -531,8 +557,21 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
     }
 
     case 'run.cancelled': {
-      if (subagent && delegateId !== undefined) {
-        return updateNode(nodes, delegateId, (node) => ({
+      const memberId = memberIdOfRun(nodes, data);
+      if (memberId !== undefined) {
+        const usage = readUsage(data);
+        return updateMemberNode(nodes, event, data, memberId, (node) => {
+          const { currentTool: _currentTool, ...rest } = node;
+          return {
+            ...rest,
+            state: 'cancelled',
+            endedAt: event.ts,
+            ...(usage !== undefined ? { usage } : {}),
+          };
+        });
+      }
+      if (subagent && legacyDelegateId !== undefined) {
+        return updateNode(nodes, legacyDelegateId, (node) => ({
           ...node,
           state: 'cancelled',
           endedAt: event.ts,

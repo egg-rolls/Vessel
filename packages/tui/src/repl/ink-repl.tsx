@@ -598,6 +598,8 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
         }
         const outcome = await executeTurn({
           abort,
+          // 0.27：不加 `sessionId` 之外的参数——默认会话由装配层设为 `main` 的 primary
+          // body（`ctx.currentSessionId`），REPL 只沿用；显式指定其它 body 用 `/resume`。
           run: (signal) =>
             ctx.runtime.run(value, state.currentSessionId, { branch, messages, signal }),
         });
@@ -1136,11 +1138,11 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
     overlay: overlayKind,
   });
   const runActive = ui.run.phase !== 'idle';
-  const spinner = useSpinnerState(ctx.events);
+  const spinner = useSpinnerState(ctx.events, state.currentSessionId);
   const metrics = useStatusMetrics(ctx, state.currentSessionId, ui.run.phase);
   // 子 agent 活动与下栏 sub N 共用同一份 agent-registry 派生（0.17 agent.* 事件）。
   const agentNodes = useAgentRegistry(ctx.events);
-  const runtimeCounters = useRuntimeCounters(ctx.events, agentNodes);
+  const runtimeCounters = useRuntimeCounters(ctx.events, agentNodes, state.currentSessionId);
   // auto 数 = 启动配置的 auto_approve + 本次会话 "always"；ask_user 由运行时永远免确认，不计入。
   const autoApproveCount = useMemo(() => {
     const names = new Set<string>([
@@ -1242,6 +1244,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
           onFlush={handleStreamFlush}
           onComplete={handleStreamComplete}
           detailMode={state.toolDetailMode ?? 'collapsed'}
+          sessionId={state.currentSessionId}
         />
         <SubagentActivity nodes={agentNodes} />
       </Box>
@@ -1675,6 +1678,7 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
       for (const warning of warnings) {
         console.log(warning);
       }
+      // 0.27：默认会话 = 装配层设定的 `main` primary body（`ctx.currentSessionId`）。
       const response = await ctx.runtime.run(trimmed, state.currentSessionId, { branch, messages });
       console.log(response);
     } catch (error) {

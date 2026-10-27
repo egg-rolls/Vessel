@@ -101,13 +101,22 @@ const TERMINAL_RUN_EVENTS = new Set([
   'run.interrupted',
 ]);
 
-/** 折叠事件历史：最后一个没有终态的顶层 run。子 agent 事件（subagent.*）不参与。 */
-export function findActiveRun(events: RunEvent[]): StatusRun {
+/**
+ * 折叠事件历史：最后一个没有终态的 run。子 agent 事件（subagent.*）不参与。
+ *
+ * 0.27：成员 body 的执行也是 `run.*`。给了 `mainSessionId` 时只认该 body 的 run，
+ * 其它 body（成员/并发 body）的事件整体跳过；未给时保持旧行为（最后一个活跃 run）。
+ */
+export function findActiveRun(events: RunEvent[], mainSessionId?: string): StatusRun {
   let active: StatusRun = { state: 'idle' };
   for (const event of events) {
     if (event.type.startsWith('subagent.')) continue;
+    const data = dataOf(event);
+    if (mainSessionId !== undefined) {
+      const sessionId = readString(data, 'session_id', 'sessionId');
+      if (sessionId !== undefined && sessionId !== mainSessionId) continue;
+    }
     if (event.type === 'run.started' || event.type === 'run.resumed') {
-      const data = dataOf(event);
       active = {
         state: 'running',
         runId: event.run_id,
@@ -202,7 +211,9 @@ export function buildStatusSnapshot(
   const estimated = estimateContextUsage(messages, { maxTokens });
   const used = ctx.context.tokenCount > 0 ? ctx.context.tokenCount : estimated.totalTokens;
   const autoApprove = ctx.config.permission?.autoApprove ?? [];
-  const run = findActiveRun(events);
+  // 状态栏只关心 REPL 自己的会话（main primary body）：成员 body 的 run 不计入
+  // 「当前 run」的 usage / limit，但仍在 agentQueue.running 里体现为成员正在跑。
+  const run = findActiveRun(events, state.currentSessionId);
   const runId = run.state === 'running' ? run.runId : undefined;
   const usage = runId !== undefined ? readRunUsage(events, runId, now) : undefined;
   const limitBlock =

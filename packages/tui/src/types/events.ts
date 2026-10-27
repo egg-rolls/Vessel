@@ -150,11 +150,9 @@ export type TuiEvent =
   | { type: 'ask.user.answered'; run_id: string; data: AskUserAnsweredData; ts: number }
   | { type: 'update.available'; run_id: string; data: UpdateAvailableData; ts: number }
   // ── 0.17 成员（agent.*）事件；subagent.* 已无生产者，只由旧 trace 回放读取 ──
+  // 0.27：成员/每条 body 的执行生命周期与主 agent 同源（`run.*` + `data.agent_id`），
+  // 这里只保留 agent 域的身份 / 队列 / 权限事件。
   | { type: 'agent.spawned'; run_id: string; data: AgentEventData; ts: number }
-  | { type: 'agent.turn.started'; run_id: string; data: AgentEventData; ts: number }
-  | { type: 'agent.turn.completed'; run_id: string; data: AgentEventData; ts: number }
-  | { type: 'agent.turn.failed'; run_id: string; data: AgentEventData; ts: number }
-  | { type: 'agent.turn.cancelled'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.message.queued'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.message.sent'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.closed'; run_id: string; data: AgentEventData; ts: number }
@@ -189,10 +187,6 @@ export const KNOWN_TUI_EVENT_TYPES: ReadonlySet<string> = new Set([
   'ask.user.answered',
   'update.available',
   'agent.spawned',
-  'agent.turn.started',
-  'agent.turn.completed',
-  'agent.turn.failed',
-  'agent.turn.cancelled',
   'agent.message.queued',
   'agent.message.sent',
   'agent.closed',

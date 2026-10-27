@@ -250,6 +250,24 @@ function toolStatusFromContent(content: string | undefined): ToolCallStatus {
   return content?.startsWith('Error: ') ? 'failed' : 'completed';
 }
 
+/**
+ * 0.27：`run.*` 同时承载成员 body 的执行生命周期。`data.agent_id` 命中已建条的
+ * agent item 时只更新该成员状态；主 agent 的 run 返回 undefined，继续走 run 摘要分支。
+ */
+function reduceAgentRunItem(
+  state: UiProjectionState,
+  data: Record<string, unknown>,
+  next: string,
+): UiProjectionState | undefined {
+  const agentId = readString(data, 'agent_id', 'agentId');
+  if (agentId === undefined) return undefined;
+  const itemId = state.agentItemIds[agentId];
+  if (itemId === undefined) return undefined;
+  return updateItem(state, itemId, (item) =>
+    item.kind === 'agent' ? { ...item, state: next } : item,
+  );
+}
+
 function updateItem(
   state: UiProjectionState,
   id: string,
@@ -378,6 +396,10 @@ export function reduceUiProjection(
   switch (event.type) {
     case 'run.started':
     case 'run.resumed': {
+      // 0.27：成员 body 的 run 生命周期也是 `run.*`，用 `agent_id` 归属到已建条的
+      // agent item（主 agent 的 run 不属于任何成员 item，继续走下面的通用分支）。
+      const memberItem = reduceAgentRunItem(state, event.data, 'running');
+      if (memberItem !== undefined) return memberItem;
       return {
         ...state,
         runId: event.run_id,
@@ -741,10 +763,6 @@ export function reduceUiProjection(
     }
 
     case 'agent.spawned':
-    case 'agent.turn.started':
-    case 'agent.turn.completed':
-    case 'agent.turn.failed':
-    case 'agent.turn.cancelled':
     case 'agent.message.queued':
     case 'agent.message.sent':
     case 'agent.closed':
@@ -760,21 +778,13 @@ export function reduceUiProjection(
       const task = readString(data, 'task', 'prompt');
       const existingId = state.agentItemIds[agentId];
       const nextState: string =
-        event.type === 'agent.turn.started'
-          ? 'running'
-          : event.type === 'agent.turn.completed'
-            ? 'completed'
-            : event.type === 'agent.turn.failed'
-              ? 'failed'
-              : event.type === 'agent.turn.cancelled'
-                ? 'cancelled'
-                : event.type === 'agent.closed'
-                  ? 'closed'
-                  : event.type === 'agent.stale'
-                    ? 'stale'
-                    : event.type === 'agent.permission.requested'
-                      ? 'waiting_permission'
-                      : (stateOf ?? 'idle');
+        event.type === 'agent.closed'
+          ? 'closed'
+          : event.type === 'agent.stale'
+            ? 'stale'
+            : event.type === 'agent.permission.requested'
+              ? 'waiting_permission'
+              : (stateOf ?? 'idle');
 
       if (existingId !== undefined) {
         return updateItem(state, existingId, (item) =>
@@ -787,7 +797,7 @@ export function reduceUiProjection(
             : item,
         );
       }
-      if (event.type !== 'agent.spawned' && event.type !== 'agent.turn.started') return state;
+      if (event.type !== 'agent.spawned') return state;
       const { id, seq } = nextId(state, 'agent');
       return {
         ...state,
@@ -807,6 +817,8 @@ export function reduceUiProjection(
     }
 
     case 'run.completed': {
+      const member = reduceAgentRunItem(state, event.data, 'completed');
+      if (member !== undefined) return member;
       let next = closeReasoning(state, event.ts);
       next = closeAssistant(next);
       const { id, seq } = nextId(next, 'run');
@@ -834,6 +846,8 @@ export function reduceUiProjection(
     }
 
     case 'run.failed': {
+      const member = reduceAgentRunItem(state, event.data, 'failed');
+      if (member !== undefined) return member;
       // 已流出的半截正文不再用 partial_content 追加（否则重复）。
       const streamedText = state.assistantId !== undefined;
       let next = closeReasoning(state, event.ts);
@@ -881,6 +895,8 @@ export function reduceUiProjection(
     }
 
     case 'run.cancelled': {
+      const member = reduceAgentRunItem(state, event.data, 'cancelled');
+      if (member !== undefined) return member;
       // 已流出的半截正文不再用 partial_content 追加（否则重复）。
       const streamedText = state.assistantId !== undefined;
       let next = closeReasoning(state, event.ts);

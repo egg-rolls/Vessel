@@ -20,7 +20,7 @@ import {
   type UiItem,
   type UiProjectionState,
 } from '../repl/project/ui-item.js';
-import { asTuiEvent } from '../types/events.js';
+import { asTuiEvent, type TuiEvent } from '../types/events.js';
 import { SpinnerWithVerb } from './SpinnerWithVerb.js';
 import { useSpinnerState } from './StateTracker.js';
 import { UiItemView } from './UiItemView.js';
@@ -72,6 +72,97 @@ export function resetStreamProjection(state: UiProjectionState): UiProjectionSta
   return resetUiProjection(state);
 }
 
+/** 本轮流过滤状态（0.27：所有 body 的 `run.*` 进同一条事件流，live 区只跟本轮流） */
+export interface StreamRunGateState {
+  /** 本轮流 run_id；`undefined` = 未锁定（或本轮已终态释放） */
+  runId: string | undefined;
+  /** 当前锁定是否由 session_id 命中（否则是「首个 run」的兜底锁定） */
+  matchedSession: boolean;
+}
+
+/** 单事件的过滤决策 */
+export interface StreamRunGate extends StreamRunGateState {
+  /** 该事件是否折叠进 live 投影 */
+  feed: boolean;
+  /** 折叠前是否重置本轮投影（新的本轮流开始） */
+  reset: boolean;
+  /** 折叠后是否为本轮终态（交给 onComplete 并释放锁定） */
+  release: boolean;
+}
+
+/**
+ * 纯函数：多 body 并发下的 live 区隔离。
+ *
+ * - 首个 `run.started` / `run.resumed` 锁定本轮流 `run_id` 并 reset；
+ * - 给出 `sessionId`（本轮投递的 body）时优先锁定命中的 run：先锁到的若是别的 body，
+ *   同一时刻命中 session 的 run 到达会**接管**锁并 reset；
+ * - 锁定后只有 `run_id` 相同的事件进投影，其它 body 的 run 直接丢弃；
+ * - 终态 `run.completed|failed|cancelled` 仅当 run_id 命中本轮流时结算并释放锁；
+ * - 事件缺 `session_id` 时不做判定，退回「首个 run」语义，避免整屏无输出。
+ */
+export function gateStreamEvent(
+  state: StreamRunGateState,
+  event: TuiEvent,
+  sessionId?: string,
+): StreamRunGate {
+  if (event.type === 'run.started' || event.type === 'run.resumed') {
+    const eventSession = readSessionId(event.data);
+    const matches = sessionId !== undefined && eventSession === sessionId;
+
+    if (state.runId === undefined) {
+      // 有期望 session 时只锁该 body 的 run；事件缺 session_id 无法判定，退回「首个 run」。
+      if (sessionId !== undefined && eventSession !== undefined && !matches) {
+        return { ...state, feed: false, reset: false, release: false };
+      }
+      return {
+        runId: event.run_id,
+        matchedSession: matches,
+        feed: true,
+        reset: true,
+        release: false,
+      };
+    }
+    if (event.run_id === state.runId) {
+      return { ...state, feed: true, reset: false, release: false };
+    }
+    // 兜底锁到别的 body：命中本轮 session 的 run 到达时接管。
+    if (!state.matchedSession && matches) {
+      return {
+        runId: event.run_id,
+        matchedSession: true,
+        feed: true,
+        reset: true,
+        release: false,
+      };
+    }
+    return { ...state, feed: false, reset: false, release: false };
+  }
+
+  if (state.runId !== undefined && event.run_id !== state.runId) {
+    return { ...state, feed: false, reset: false, release: false };
+  }
+
+  const release =
+    state.runId !== undefined &&
+    (event.type === 'run.completed' ||
+      event.type === 'run.failed' ||
+      event.type === 'run.cancelled');
+  return {
+    runId: release ? undefined : state.runId,
+    matchedSession: release ? false : state.matchedSession,
+    feed: true,
+    reset: false,
+    release,
+  };
+}
+
+/** `run.*` 载荷里的 session_id（body id）；缺失返回 undefined。 */
+function readSessionId(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const value = (data as { session_id?: unknown }).session_id;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
 interface StreamOutputProps {
   events: EventStream;
   clearSignal?: number;
@@ -87,6 +178,8 @@ interface StreamOutputProps {
   onComplete?: (items: UiItem[], reason: 'completed' | 'failed' | 'cancelled') => void;
   /** Tool 卡展开/折叠由 Ctrl+O 控制；保留参数以兼容旧接线 */
   detailMode?: 'hidden' | 'collapsed' | 'expanded';
+  /** 本轮投递的 body/session id（多 body 并发时用于锁定本轮流 run） */
+  sessionId?: string;
 }
 
 export function StreamOutput({
@@ -98,6 +191,7 @@ export function StreamOutput({
   onFlush,
   onComplete,
   detailMode = 'collapsed',
+  sessionId,
 }: StreamOutputProps) {
   const { stdout } = useStdout();
   const [projection, setProjection] = useState<UiProjectionState>(() => createUiProjection());
@@ -110,7 +204,11 @@ export function StreamOutput({
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
   const lastExpandSignalRef = useRef(0);
-  const spinnerState = useSpinnerState(events);
+  /** 本轮流 run 过滤状态（多 body 并发时隔离其它 body 的事件） */
+  const gateRef = useRef<StreamRunGateState>({ runId: undefined, matchedSession: false });
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  const spinnerState = useSpinnerState(events, sessionId);
 
   const apply = useCallback((next: UiProjectionState) => {
     projectionRef.current = next;
@@ -141,14 +239,17 @@ export function StreamOutput({
   useEffect(() => {
     const unsubscribe = events.subscribe((rawEvent) => {
       const event = asTuiEvent(rawEvent);
-      if (event.type === 'run.started' || event.type === 'run.resumed') {
-        apply(resetStreamProjection(projectionRef.current));
-        // run.started 本身不产生 item；run.resumed 同样从空开始。
-      }
+      // 0.27：所有 body 的 `run.*` 进同一条事件流（多 body 并发）。live 区只跟本轮流，
+      // 由 gateStreamEvent 按 run_id（+ 本轮 session_id）锁定并丢弃其它 body 的事件。
+      const gate = gateStreamEvent(gateRef.current, event, sessionIdRef.current);
+      gateRef.current = { runId: gate.runId, matchedSession: gate.matchedSession };
+      if (!gate.feed) return;
+      if (gate.reset) apply(resetStreamProjection(projectionRef.current));
 
       const next = reduceUiProjection(projectionRef.current, event);
       apply(next);
 
+      if (!gate.release) return;
       if (event.type === 'run.completed') {
         onCompleteRef.current?.(next.items, 'completed');
         apply(resetStreamProjection(next));
