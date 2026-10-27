@@ -644,14 +644,14 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('team_full', `team_full: ${teamId}`);
     }
     // 名称只由 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫。
-    // 显式名被占用时自动加 `-2..` 后缀而不是报错：name 是给人看的标签，
-    // 不是寻址主键（id 才是），所以重名不值得让整次派生失败。
-    let resolvedName: string;
+    // 名字表达的是职位 / 功能，同 Team 已有同名成员说明这个职能已经有人承担：
+    // 复用已存在的成员，不再造一个同职能的。create / hire 不发消息，所以
+    // 「返回 id 让调用方自己决定要不要 send」不会引入隐式动作。
     if (name !== undefined) {
-      resolvedName = this.nameOccupied(name, teamId) ? this.numberedNameFor(name, teamId) : name;
-    } else {
-      resolvedName = this.autoNameFor(spawnedBy, teamId);
+      const existing = this.reusableByName(name, teamId);
+      if (existing !== undefined) return { ...this.statusFor(existing), reused: true };
     }
+    const resolvedName = name !== undefined ? name : this.autoNameFor(spawnedBy, teamId);
 
     const now = this.now();
     const record: MemberRecord = {
@@ -712,15 +712,13 @@ export class AgentServiceImpl implements AgentService {
     if (input.teamId !== undefined || input.workspace !== undefined) {
       throw new AgentError('invalid_input', 'single agents must not bind a team');
     }
-    // 显式裸名冲突时同样自动加后缀，与 createOne 一致：name 不是寻址主键。
-    // 注意 `main` 等启动路径只传 `{ id, role }`、不传 name，占不到这个分支。
-    const requested = optionalString(input.name);
-    const name =
-      requested === undefined
-        ? undefined
-        : this.nameOccupied(requested, undefined)
-          ? this.numberedNameFor(requested, undefined)
-          : requested;
+    // 与 createOne 同一语义：同名 present 成员已存在则复用，不新建。
+    // `main` 等启动路径只传 `{ id, role }`、不传 name，占不到这个分支。
+    const name = optionalString(input.name);
+    if (name !== undefined) {
+      const existing = this.reusableByName(name, undefined);
+      if (existing !== undefined) return { ...this.statusFor(existing), reused: true };
+    }
     const now = this.now();
     const record: MemberRecord = {
       id,
@@ -762,9 +760,17 @@ export class AgentServiceImpl implements AgentService {
 
   /** name 是否被 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫 */
   private nameOccupied(name: string, teamId: string | undefined): boolean {
+    return this.reusableByName(name, teamId) !== undefined;
+  }
+
+  /**
+   * 同 Team present 成员里叫这个名字的那个（unbound 时 tenant 全扫）。
+   * 名字是职能标签，重名即「这个职能已有人做」——create / hire 复用它而不是新建。
+   */
+  private reusableByName(name: string, teamId: string | undefined): MemberRecord | undefined {
     return this.registry
       .findByName(name)
-      .some(
+      .find(
         (record) =>
           record.membership === 'present' && (teamId === undefined || record.teamId === teamId),
       );

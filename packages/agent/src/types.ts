@@ -119,6 +119,11 @@ export interface MemberStatus {
   body_history?: AgentBodyHistoryEntry[];
   /** 0.27 additive：live Body 状态；`session_id` 仍表示 primary body */
   bodies?: BodyStatus[];
+  /**
+   * `create` / `hire` 专用：同名成员已存在，本次没有新建，返回的是它。
+   * 只在复用出现时存在；正常创建不带这个字段。
+   */
+  reused?: boolean;
 }
 
 /**

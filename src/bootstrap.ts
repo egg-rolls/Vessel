@@ -1154,6 +1154,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           })
         : undefined;
     const wiring = await createAgentServiceWiring({
+      // 来源行的 node 段与 federation 端口共用 nodeIdentity：federation 关掉时
+      // 来源行仍要本机 node 段，不能只挂在 send port 上。
+      nodeId,
       tenantId,
       dataDir,
       sessionId: currentSessionId,

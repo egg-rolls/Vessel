@@ -178,6 +178,16 @@ export interface InProcessMemberRuntimeOptions {
   depth?: number;
   logger?: Logger;
   tenantId?: string;
+  /**
+   * 本机 node id，只用于来源行（`<principal>@<node>:<team>`）。
+   *
+   * 必由装配层从 bootstrap 的 `resolveNodeIdentity()` 传入：那里是 nodeId 的唯一来源。
+   * 执行内核不调 `os.hostname()`、不读 config / node.json —— 逐条消息重算会与
+   * federation 端口用的 nodeId 漂移，而它本身是进程级常量。
+   *
+   * 缺省（纯内存构造 / 测试）时来源行退回两段 `principal@<team>`，不报错。
+   */
+  nodeId?: string;
   includeReasoning?: boolean;
   /** tenant SessionBackend；同 session_id 可跨进程续接历史 */
   session?: AgentRuntimeOptions['session'];
@@ -273,9 +283,17 @@ function sanitizeSource(value: string): string {
   return cleaned.length > 120 ? `${cleaned.slice(0, 117)}...` : cleaned;
 }
 
-/** uuid 形状才缩成前 8 位；`human` / 成员名等非 uuid 值原样保留 */
-function shortId(value: string): string {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(value) ? value.slice(0, 8) : value;
+/**
+ * XML 属性值转义。名字是模型可控的字符串，`"` 不转义就能闭合属性再伪造一个
+ * `id="..."`——和块注释结束标记同一类问题：不报错，只会静默错乱。
+ * 顺序要紧：`&` 必须先换，否则会把后面换出来的实体再转一遍。
+ */
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /** 缺 source 时按 from 退化推断；生产路径由 AgentService 入队时标注 */
@@ -289,36 +307,50 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
  * 渲染本轮消息来源。由 `runTurn` 作为 `RunOptions.messages` 注入为持久化的
  * `vessel:source` 消息，不改写 system。
  *
- * **渲染成描述，不渲染成地址**：`[from agent:docs-core (3ae686c0)]` / `[from human]`。
- * 早先写成 `agent:<uuid>@<team>` 看起来像可回复的地址，但本机来源没有 node 段，
- * 那条地址按 `resolveAddress` 解析必失败 —— 格式暗示了一个它不支持的操作。
- * 模型回信本来就靠 `to: <uuid>` 或成员名（trace 里全部如此），从不抄这一行。
+ * **渲染成可回信的地址，不渲染成描述**：`<from location="docs-core@a1b2c3d4:vessel-core" />`。
+ * 地址就是 `resolveAddress` / `agent send` 吃的同一形态，模型不需要第二套语法：
+ * 回信时把 `location` 的值原样填进 `to` 即可。
  *
- * **name 在前、短 id 在后**：名字给人读，短 id 保唯一；只有 uuid 没有名字时省掉名字段。
- * 圆括号包 id，避免与外层方括号叠成 `[[...]]`。短 id 只是展示辅助 —— 完整 uuid 仍在
- * `AgentMessage.from` 里，trace 可查。
+ * **本机来源也写满三段**，node 段来自装配层传入的 `nodeId`（见
+ * `InProcessMemberRuntimeOptions.nodeId`），不在这里解析。让模型只学一种地址形态，
+ * 比「本机两段、跨机三段」少一条分支：早先本机来源省掉 node 段，模型抄回去的
+ * 两段地址是否算本机取决于当时有没有 federation 开着，行为不一致。
  *
- * 不用多行块 + 标题，也不用 C 风格的块注释语法 —— `sanitizeSource()` 不处理块注释
- * 的结束标记，名字里带它就提前闭合，运行时不会报错、只会静默错乱。
+ * **principal 段是可回信的**：有名字写名字（`docs-core`），无名成员写**完整 uuid**。
+ * 不能缩成短 id —— `registry.resolve()` 与 `resolveMember()` 都只做精确匹配
+ * （id / session / body / name），没有前缀匹配，`3ae686c0@<node>:<team>` 会必然
+ * `unknown_member`。省那 28 个字符换一个死地址，而来源行还持久化进历史、
+ * 模型下次照样抄。名字是给人读的提示，name / id 都可用于回信。
+ *
+ * **缺 `nodeId` 时退回两段** `principal@<team>`（纯内存构造 / 测试路径）：不伪造 node 段，
+ * 也不去猜一个主机名。
  *
  * `channel` 是消息的元属性，只进 trace / 日志，不渲染进提示词。
  *
- * 联邦入站的 `from` 已自带 `<principal>@<node>:<team>`；直接渲染内嵌地址，
- * 不得再拼本机 node/team（否则会伪装成本机成员），也不缩 principal。
+ * 联邦入站的 `from` 已自带 `<principal>@<node>:<team>`：整体作为 location 原样渲染，
+ * 不再拼本机 node/team（否则会把它伪装成本机成员）。
  */
-function formatMessageSource(message: AgentMessage): string {
+function formatMessageSource(
+  message: AgentMessage,
+  teamId: string | undefined,
+  nodeId: string | undefined,
+): string {
   if (message.from.startsWith('federation:')) {
-    return `[from ${sanitizeSource(message.from.slice('federation:'.length))}]`;
+    const address = sanitizeSource(message.from.slice('federation:'.length));
+    return `<from location="${escapeAttr(address)}" />`;
   }
   const source = message.source ?? inferMessageSource(message.from);
-  if (source !== 'agent') return `[from ${source}]`;
-  const id = shortId(sanitizeSource(message.from));
-  // 无名字时写 `agent (id)`，不写 `agent:(id)`：冒号后面没有东西不像名字。
-  const label =
-    message.from_name === undefined
-      ? `agent (${id})`
-      : `agent:${sanitizeSource(message.from_name)} (${id})`;
-  return `[from ${label}]`;
+  const principal =
+    source === 'agent'
+      ? message.from_name !== undefined
+        ? sanitizeSource(message.from_name)
+        : sanitizeSource(message.from)
+      : source;
+  const scope = teamId === undefined ? undefined : sanitizeSource(teamId);
+  // 段数决定语义：有 node 才写三段，有 team 才写 `@team`。缺的段不补占位符。
+  const host = [nodeId, scope].filter((part) => part !== undefined && part !== '');
+  const address = host.length === 0 ? principal : `${principal}@${host.join(':')}`;
+  return `<from location="${escapeAttr(address)}" />`;
 }
 
 /** 成员不可见的工具 */
@@ -347,7 +379,11 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   name: { type: 'string', description: 'create/hire: display name' },
   model: { type: 'string', description: 'create/hire: model override' },
   system_prompt: { type: 'string', description: 'create/hire: optional system prompt' },
-  to: { type: 'string', description: 'send: member id or session id; rotate: target agent' },
+  to: {
+    type: 'string',
+    description:
+      'send: target agent; use the location value from the source line as-is, or a member id',
+  },
   content: { type: 'string', description: 'send/post: message text' },
   messages: { type: 'array', description: 'send: [{to, content}]' },
   members: {
@@ -428,6 +464,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly depth: number;
   private readonly logger: Logger;
   private readonly tenantId?: string;
+  private readonly nodeId?: string;
   private readonly includeReasoning?: boolean;
   private readonly session?: AgentRuntimeOptions['session'];
   private readonly eventLog?: AgentRuntimeOptions['eventLog'];
@@ -457,6 +494,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.depth = options.depth ?? 1;
     this.logger = options.logger ?? noopLogger;
     this.tenantId = options.tenantId;
+    this.nodeId = options.nodeId;
     this.includeReasoning = options.includeReasoning;
     this.session = options.session;
     this.eventLog = options.eventLog;
@@ -601,7 +639,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     const sourceMessage: Message = {
       role: 'user',
       name: 'vessel:source',
-      content: formatMessageSource(message),
+      content: formatMessageSource(message, member.team_id, this.nodeId),
       timestamp: Date.now(),
     };
     try {

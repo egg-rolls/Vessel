@@ -160,20 +160,20 @@ function mapDerivedEntry(entry: unknown, fixed: Record<string, unknown>): unknow
 }
 
 /**
- * 显式申请的名字被同 Team present 成员占用时，service 会自动加 `-2..` 后缀。
- * 结果里点明这件事：调用方要的名字没拿到，否则它会以为成员就叫请求的那个名字。
- * 没有改名时（含未指定 name）不加这个字段，避免每次调用多一段无用文本。
+ * 同名成员已存在时 service 复用而不是新建，返回体带 `reused: true`。
+ * 这里补一句 note 点明「没有再建一个」：否则调用方会以为刚创建了成员，
+ * 进而再发一次消息，而它其实是在给一个已有的成员派活。
+ * 正常创建时不加这个字段，避免每次调用多一段无用文本。
  */
-function withRenamedNote<T extends { name?: string }>(
+function withReusedNote<T extends { id: string; name?: string; reused?: boolean }>(
   result: T,
-  requested: unknown,
-): T & { requested_name?: string; note?: string } {
-  if (typeof requested !== 'string' || result.name === undefined) return result;
-  if (result.name === requested) return result;
+): T & { note?: string } {
+  if (result.reused !== true) return result;
   return {
     ...result,
-    requested_name: requested,
-    note: `name already taken in this team; assigned ${result.name}`,
+    note:
+      `a member named ${result.name ?? result.id} already exists in this team; ` +
+      'reuse it with action=send',
   };
 }
 
@@ -261,8 +261,9 @@ export function createAgentTool(
         to: {
           type: 'string',
           description:
-            'send: member id or session id, or a federated address ' +
+            'send: member id or session id, or an address ' +
             '<principal>@<node_id>:<team_id> (any value containing @ is treated as an address); ' +
+            'a local sender gets a node segment too, so send the location value back as-is; ' +
             'rotate: target agent',
         },
         content: { type: 'string', description: 'send/post: message text' },
@@ -428,18 +429,18 @@ export function createAgentTool(
             const result = await service.create({
               members: entries as unknown as CreateMemberInput[],
             });
-            // batch 逐条对照输入里的 name，改过名的条目单独标注
+            // batch 逐条标注复用：命中同名成员的条目要说明「没新建」
             const results = entries.map((entry, index) => {
               const item = result.results[index];
               if (item === undefined || !item.ok || !isRecord(entry)) return item;
-              return { ...item, status: withRenamedNote(item.status, entry.name) };
+              return { ...item, status: withReusedNote(item.status) };
             });
             return JSON.stringify({ ...result, results });
           }
           const created = await service.create(
             mapDerived(record, fixed) as unknown as CreateMemberInput,
           );
-          return JSON.stringify(withRenamedNote(created, record.name));
+          return JSON.stringify(withReusedNote(created));
         }
 
         if (action === 'send') {

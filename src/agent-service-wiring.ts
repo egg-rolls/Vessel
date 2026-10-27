@@ -45,6 +45,14 @@ import type {
 } from '@vessel-agent/core';
 
 export interface AgentServiceWiringOptions {
+  /**
+   * 本机 node id：唯一的 nodeId 来源是 bootstrap 的 `resolveNodeIdentity()`，
+   * 装配层只做分发，不自己解析。
+   *
+   * 两个消费者共用这一个值：成员来源行（`<principal>@<node>:<team>`）与
+   * federation 发送端口。必填 —— federation 关闭时来源行仍要 node 段。
+   */
+  nodeId: string;
   tenantId: string;
   /** 全局 dataDir；snapshot 落 `<dataDir>/agents/<tenant>.json` */
   dataDir: string;
@@ -166,6 +174,9 @@ export function buildMemberRuntimeOptions(
     ...(options.session !== undefined ? { session: options.session } : {}),
     ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
     tenantId: options.tenantId,
+    // 来源行的 node 段：与 federation 端口同源（bootstrap 的 nodeIdentity），
+    // 只在装配期传一次，执行内核不自己解析。
+    nodeId: options.nodeId,
   };
 }
 
