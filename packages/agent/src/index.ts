@@ -42,6 +42,13 @@ export {
   AgentSnapshotStore,
   snapshotPath,
 } from './snapshot.js';
+export {
+  type AddressSegmentCount,
+  addressSegmentCount,
+  HUMAN_PRINCIPAL,
+  isAddressTarget,
+  MAX_ADDRESS_LENGTH,
+} from './team-address.js';
 export { createTeamService, DefaultTeamService, type TeamServiceOptions } from './team-service.js';
 export {
   normalizeWorkspace,
@@ -108,6 +115,9 @@ export {
   DEFAULT_OWNER,
   type DispatchInput,
   type DispatchResult,
+  type FederationAddressPlacement,
+  type FederationAgentCandidate,
+  type FederationLookupResult,
   type FederationSendPort,
   type FederationSendRequest,
   type FederationSendResult,

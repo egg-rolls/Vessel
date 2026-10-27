@@ -68,6 +68,13 @@ export interface FederationClientIo {
   timeoutMs?: number;
   now?: () => number;
   generateId?: () => string;
+  /**
+   * 调用方的**总预算**信号（0.27）。
+   *
+   * 批量查找时多个请求共用一个 deadline：单个 peer 各自 10s 会变成 N×10s，
+   * 所以总预算要从这里传进来，与单次超时取**先到者**（`AbortSignal.any`）。
+   */
+  signal?: AbortSignal;
 }
 
 /** 出站结果（DECISION-036 §3.4；`remote_code` 只透传对端错误码） */
@@ -254,6 +261,17 @@ export function buildFederationMessage(
   return message;
 }
 
+/**
+ * 单次请求的信号：单次超时与调用方总预算取先到者。
+ *
+ * `AbortSignal.any` 让一个 peer 的请求不会活过整批的 deadline —— 否则 N 个不可达
+ * peer 会各等一次 `timeoutMs`，总耗时变成 N 倍。
+ */
+function requestSignal(io: Pick<FederationClientIo, 'timeoutMs' | 'signal'>): AbortSignal {
+  const perRequest = AbortSignal.timeout(io.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  return io.signal === undefined ? perRequest : AbortSignal.any([io.signal, perRequest]);
+}
+
 function errorDetail(body: unknown): { code?: string; message?: string } {
   if (!isRecord(body) || !isRecord(body.error)) return {};
   const result: { code?: string; message?: string } = {};
@@ -317,7 +335,7 @@ export async function postFederation(
       authorization: `Bearer ${peer.token}`,
     },
     body: JSON.stringify(message),
-    signal: AbortSignal.timeout(io.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    signal: requestSignal(io),
   };
   if (peer.caFile !== undefined) {
     let ca: string;
@@ -480,7 +498,7 @@ export async function postFederationTeamInfo(
       authorization: `Bearer ${peer.token}`,
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(io.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    signal: requestSignal(io),
   };
   if (peer.caFile !== undefined) {
     let ca: string;
