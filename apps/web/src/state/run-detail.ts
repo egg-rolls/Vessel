@@ -197,11 +197,12 @@ export interface TraceRunLike {
 }
 
 /**
- * 选择事件记录（trace）使用的 run id。
+ * 选择事件记录（trace）使用的 run id：`core_run_id ?? run_id`。
  *
- * gateway 的 `runs.list` / `runs.get` 返回引擎 run id，而 trace 文件按 core run id
- * 命名（`run.started.event.run_id`）。live 详情必须用 `core_run_id`，否则永远读不到事件；
- * durable 的 checkpoint id 本身就是 core run id。
+ * 0.27 后 `core_run_id` 不再返回（`job_id ≡ run_id`），live 直接退化到 `run_id`；
+ * 旧 gateway 仍优先 `core_run_id`。run 尚未进入 live 列表（如排队中）时返回
+ * undefined，由调用方渲染「尚未映射」的排队文案。
+ * durable 的 checkpoint id 本身就是 run id。
  */
 export function traceRunId(
   tab: 'live' | 'durable',
@@ -210,7 +211,8 @@ export function traceRunId(
   durableId?: string,
 ): string | undefined {
   if (tab === 'durable') return run?.run_id ?? durableId ?? fallbackId;
-  return run?.core_run_id;
+  if (!run) return undefined;
+  return run.core_run_id ?? run.run_id;
 }
 
 export interface TraceErrorLike {

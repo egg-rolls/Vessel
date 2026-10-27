@@ -271,6 +271,63 @@ function BodyHistoryList({
   );
 }
 
+/**
+ * 多 Body 列表（0.27）。
+ *
+ * `member.bodies` 是服务端 live body 列表；字段缺省时本组件不渲染，
+ * 由「当前 Body」卡片上的单 body 信息（`session_id` / `epoch` / 打开按钮）退化承担。
+ */
+function LiveBodiesList({
+  member,
+  onOpenSession,
+}: {
+  member: TeamMember;
+  onOpenSession: (sessionId: string) => void;
+}) {
+  const bodies = (member.bodies ?? []).filter((body) => body.retired_at === undefined);
+  if (bodies.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <h3 className="m-0 text-sm font-semibold text-muted">
+        {t('team.member.liveBodies', { count: bodies.length })}
+      </h3>
+      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+        {bodies.map((body, index) => {
+          const sessionId = body.session_id ?? body.body_id ?? '';
+          // `primary` 字段缺失时按 agent 的 `session_id`（primary body）判断。
+          const primary = body.primary ?? (sessionId.length > 0 && sessionId === member.session_id);
+          return (
+            <li
+              className="team-body-item flex flex-wrap items-center gap-2 text-sm"
+              key={sessionId || `body-${index}`}
+            >
+              <span className="font-mono">{sessionId || '—'}</span>
+              {primary && <Badge>{t('team.member.primaryBadge')}</Badge>}
+              {body.epoch !== undefined && (
+                <span className="text-muted tabular-nums">
+                  {t('team.member.epoch', { epoch: body.epoch })}
+                </span>
+              )}
+              {body.state && <span className="font-mono text-muted">{body.state}</span>}
+              <Button
+                variant="link"
+                disabled={!sessionId}
+                title={t('team.member.openBody')}
+                onClick={() => {
+                  if (sessionId) onOpenSession(sessionId);
+                }}
+              >
+                {t('team.member.openBody')}
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 const CONVERSION_LABEL_KEYS: Record<RoleConversion, string> = {
   member: 'team.role.toMember',
   temporary: 'team.role.toTemporary',
@@ -439,6 +496,7 @@ export function MemberDetail({
   );
 
   // 回退历史只读事件；页面内同步派生，刷新后自然丢弃。
+  // `agent.rotated` / `agent.retired` 是 agent 域生命周期事件，仍带 `team_id`。
   const observedState = useMemo(() => {
     let state = createTeamEventState();
     for (const entry of events) {
@@ -580,6 +638,7 @@ export function MemberDetail({
           >
             {t('team.member.currentSession')}
           </Button>
+          <LiveBodiesList member={member} onOpenSession={onOpenSession} />
         </section>
 
         <RoleConversionSection

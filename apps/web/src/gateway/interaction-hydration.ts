@@ -171,17 +171,6 @@ export function stalePendingIds(
   );
 }
 
-/**
- * 成员 turn 终态（`agent.turn.completed|failed|cancelled`，run_id = 成员会话 id）
- * 时该会话下的全部 pending id：权限 + 提问。成员 runtime 同一时刻只有一个 run，
- * turn 结束时这些请求已不可能再被应答。
- */
-export function pendingIdsForSession(state: InteractionState, sessionId: string): string[] {
-  return [...state.permissions, ...state.asks]
-    .filter((item) => item.sessionId === sessionId)
-    .map((item) => item.requestId);
-}
-
 export type InteractionAction =
   | { type: 'permission-request'; request: PermissionRequest }
   | { type: 'ask-request'; request: AskUserRequest }

@@ -49,6 +49,7 @@ import type {
   RpcResponseEnvelope,
   RunEvent,
   RunResponse,
+  RunStartResult,
   RunStatus,
   RunsResponse,
   ServerFrame,
@@ -412,22 +413,19 @@ export class GatewayClient {
    * 提交 run：优先 0.5 canonical RPC `runs.start`（带 tenant + quota），
    * 旧 gateway 不支持时回退 WS legacy `run.submit`。
    */
-  async submitRun(
-    input: string,
-    sessionId?: string,
-  ): Promise<{ run_id: string; status: RunStatus['status']; queue_position?: number }> {
+  /**
+   * 0.27：`runs.start` 解析 session → agent/body 后回填 `agent_id` / `session_id`。
+   * 不传 `sessionId` 时服务端投递到 `main` 的 primary body，返回值就是实际 body。
+   */
+  async submitRun(input: string, sessionId?: string): Promise<RunStartResult> {
     try {
-      return await this.rpc<{
-        run_id: string;
-        status: RunStatus['status'];
-        queue_position?: number;
-      }>('runs.start', {
+      return await this.rpc<RunStartResult>('runs.start', {
         input,
         ...(sessionId ? { session_id: sessionId } : {}),
       });
     } catch (error) {
       if (!canFallbackToLegacyRuns(error)) throw error;
-      return this.request('run.submit', {
+      return this.request<RunStartResult>('run.submit', {
         input,
         ...(sessionId ? { session_id: sessionId } : {}),
       });
@@ -508,8 +506,9 @@ export class GatewayClient {
   }
 
   /** 当前 gateway 进程内的 live runs（内存，无分页）。 */
+  /** 0.27：`runs.list` 支持 agent / session 维度过滤（agent_id 为 additive 参数）。 */
   async listRuns(
-    params: { session_id?: string; status?: string; tenant_id?: string } = {},
+    params: { session_id?: string; agent_id?: string; status?: string; tenant_id?: string } = {},
   ): Promise<RunStatus[]> {
     const body = await this.rpc<RunsResponse>('runs.list', params);
     return body.runs ?? [];
@@ -915,11 +914,12 @@ export class GatewayClient {
 
   /** interrupted/其它状态的 durable run 摘要 */
   async listDurableRuns(
-    params: { status?: string; session_id?: string; limit?: number } = {},
+    params: { status?: string; session_id?: string; agent_id?: string; limit?: number } = {},
   ): Promise<DurableRunSummary[]> {
     const query = new URLSearchParams();
     if (params.status) query.set('status', params.status);
     if (params.session_id) query.set('session_id', params.session_id);
+    if (params.agent_id) query.set('agent_id', params.agent_id);
     if (params.limit !== undefined) query.set('limit', String(params.limit));
     const suffix = query.toString();
     const body = await this.httpJson<DurableRunsResponse>(

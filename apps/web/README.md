@@ -56,7 +56,6 @@ bun run src/cli.ts gateway start
 每个 commit：
 
 ```bash
-bun test <定向测试文件>
 bun run typecheck
 bunx @biomejs/biome ci .
 cd apps/web && npm run typecheck
@@ -65,11 +64,13 @@ cd apps/web && npm run typecheck
 检查点 / 收口：
 
 ```bash
-bun test
 bun run typecheck
 bunx @biomejs/biome ci .
 cd apps/web && npm run build
+VESSEL_MOCK=1 bun run src/cli.ts --run "hello"
 ```
+
+仓库没有自动化测试套件：Web 侧改动靠 `npm run typecheck` / `npm run build` 与人工验收。
 
 ## 脚本
 
@@ -77,7 +78,6 @@ cd apps/web && npm run build
 |---|---|
 | `bun run dev:web` | gateway（必要时）+ relay + Vite 5173 |
 | `bun run build:web:watch` | `vite build --watch`，持续更新 `apps/web/dist` |
-| `bun run test:web` | 只跑 `apps/web/tests` |
 | `cd apps/web && npm run build` | 类型检查 + 生产构建 |
 | `cd apps/web && npm run typecheck` | 只做类型检查 |
 

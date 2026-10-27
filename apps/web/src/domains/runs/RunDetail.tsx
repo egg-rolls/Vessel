@@ -174,7 +174,7 @@ export function RunDetail({
   /** trace 请求代次：切换 run 后旧响应不得覆盖新 run。 */
   const traceGeneration = useRef(0);
 
-  // 实时事件的 run_id 是 core run id；live 列表的 run_id 是 gateway 引擎 id。
+  // 0.27 起 `job_id ≡ run_id`，实时事件与列表用同一个 id；旧 gateway 仍可能有 core_run_id。
   const coreRunId = traceRunId(tab, run, runId, durable?.run_id);
 
   const liveEvents = useMemo(() => {

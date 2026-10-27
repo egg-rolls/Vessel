@@ -38,20 +38,28 @@ export interface RunFilter {
   query?: string;
   status?: RunStatusFilter;
   sessionId?: string;
+  /** 0.27：按 agent 维度过滤（`session_id` 是 body，`agent_id` 是 agent）。 */
+  agentId?: string;
 }
 
 function matchesStatus(status: string, filter: RunStatusFilter): boolean {
   return filter === 'all' || status === filter;
 }
 
+/** live `RunStatus` 0.27 起带 `agent_id`；旧 gateway 缺失时按 `session_id` 反查兜底。 */
+export function runAgentId(run: Pick<RunStatus, 'agent_id' | 'session_id'>): string | undefined {
+  return run.agent_id ?? run.session_id;
+}
+
 export function filterLiveRuns(
   runs: readonly RunStatus[],
-  { query = '', status = 'all', sessionId }: RunFilter = {},
+  { query = '', status = 'all', sessionId, agentId }: RunFilter = {},
 ): RunStatus[] {
   const needle = query.trim().toLowerCase();
   return runs.filter((run) => {
     if (!matchesStatus(run.status, status)) return false;
     if (sessionId && run.session_id !== sessionId) return false;
+    if (agentId && runAgentId(run) !== agentId) return false;
     if (!needle) return true;
     return [run.run_id, run.session_id, run.output, run.error].some((value) =>
       (value ?? '').toLowerCase().includes(needle),
@@ -61,12 +69,13 @@ export function filterLiveRuns(
 
 export function filterDurableRuns(
   runs: readonly DurableRunSummary[],
-  { query = '', status = 'all', sessionId }: RunFilter = {},
+  { query = '', status = 'all', sessionId, agentId }: RunFilter = {},
 ): DurableRunSummary[] {
   const needle = query.trim().toLowerCase();
   return runs.filter((run) => {
     if (!matchesStatus(run.status, status)) return false;
     if (sessionId && run.session_id !== sessionId) return false;
+    if (agentId && runAgentId(run) !== agentId) return false;
     if (!needle) return true;
     return [run.run_id, run.session_id, run.agent_id, run.preview].some((value) =>
       (value ?? '').toLowerCase().includes(needle),

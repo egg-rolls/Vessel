@@ -45,6 +45,7 @@ import { usePolledAction } from '../../stores/usePolledAction';
 import { windowTail } from '../../transcript';
 import { ChatWelcome } from './ChatWelcome';
 import { Composer } from './Composer';
+import { findMainSession, type MainSession, primaryBodySessions } from './main-session';
 import { AskPrompt, PermissionPrompt } from './PromptSlots';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import { SessionHeader } from './SessionHeader';
@@ -125,9 +126,7 @@ export function ChatView({
   const selectedId = route.sessionId && route.sessionId !== 'new' ? route.sessionId : null;
   const draftActive = route.sessionId === 'new';
 
-  const [draftId, setDraftId] = useState<string | null>(() =>
-    draftActive ? crypto.randomUUID() : null,
-  );
+  // 草稿态不再本地造 session id：首次发送由 `runs.start` 解析 main primary body。
   const pendingNewSessions = useRef(new Set<string>());
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebounced(query, 150);
@@ -176,15 +175,10 @@ export function ChatView({
   const refreshTimer = useRef<number | undefined>(undefined);
   const lastSnapshotVersion = useRef(0);
 
-  // 草稿 id：进入 #/chat/new 时生成一次；离开时丢弃（未发送不落盘）。
+  // 进入草稿态时把焦点交给输入框；会话 id 由服务端在首次发送后回填。
   useEffect(() => {
-    if (draftActive) {
-      if (!draftId) setDraftId(crypto.randomUUID());
-      setComposerFocus((value) => value + 1);
-    } else if (draftId) {
-      setDraftId(null);
-    }
-  }, [draftActive, draftId]);
+    if (draftActive) setComposerFocus((value) => value + 1);
+  }, [draftActive]);
 
   // 选中会话 / 重连后从服务端补回 pending 交互（浏览器刷新不会重放旧 WS 事件）。
   // ConnectionProvider 的 [epoch, hasToken] effect 负责连接 / 刷新，这里补“切会话”。
@@ -204,10 +198,27 @@ export function ChatView({
   const sessionDetailLoading = useSessionStore((state) => state.detailLoading);
   const sessionDetailError = useSessionStore((state) => state.detailError);
   const rosterState = useAgentStore((state) => state.roster);
-  const agentAddresses = useMemo(
-    () => sessionAgentAddresses(resourceData(rosterState) ?? []),
-    [rosterState],
-  );
+  const rosters = useMemo(() => resourceData(rosterState) ?? [], [rosterState]);
+  const agentAddresses = useMemo(() => sessionAgentAddresses(rosters), [rosters]);
+  // 默认会话 = `main` 的 primary body（0.27）；roster 拿不到 main 时为 null，
+  // 此时保持旧行为（草稿态发送不带 session_id，由服务端解析）。
+  const mainSession = useMemo<MainSession | null>(() => {
+    // 默认会话属于当前节点；没有 current 标记（单节点 / 测试）时退回第一份 roster。
+    const current = rosters.find((roster) => roster.node.current) ?? rosters[0];
+    return findMainSession(current?.agents ?? []);
+  }, [rosters]);
+  // 会话行 body 归属：`bodies` 缺省时为空集合，列表完全退化为现状。
+  const primarySessionIds = useMemo(() => primaryBodySessions(rosters), [rosters]);
+  /** 默认会话入口：只在 main primary body 还没出现在**完整**列表里时提供（不受窗口化影响）。 */
+  const defaultSessionEntry = useMemo(() => {
+    if (!mainSession) return undefined;
+    if (sessions.some((session) => session.session_id === mainSession.sessionId)) return undefined;
+    return {
+      sessionId: mainSession.sessionId,
+      label: mainSession.name,
+      bodyCount: mainSession.bodies.length,
+    };
+  }, [mainSession, sessions]);
   const loadSessions = useSessionStore((state) => state.loadSessions);
   const loadSessionDetail = useSessionStore((state) => state.loadDetail);
   const selectSessionInStore = useSessionStore((state) => state.select);
@@ -843,7 +854,6 @@ export function ChatView({
   };
 
   const startNewSession = () => {
-    if (draftActive) setDraftId(crypto.randomUUID());
     navigate({ domain: 'chat', sessionId: 'new' });
     onCloseSessions();
   };
@@ -851,19 +861,30 @@ export function ChatView({
   const handleSend = async () => {
     const text = input.trim();
     if (!text || submitting || !connected) return;
-    const targetSessionId = selectedId ?? draftId ?? crypto.randomUUID();
-    if (!selectedId) pendingNewSessions.current.add(targetSessionId);
+    // 0.27：草稿态发送**不带** session_id，由服务端投递到 main 的 primary body，
+    // 再用 runs.start 返回的真实 session_id 跳转（不本地造 UUID）。
+    const targetSessionId = selectedId;
     setSubmitting(true);
     try {
-      const result = await client.submitRun(text, targetSessionId);
+      const result = targetSessionId
+        ? await client.submitRun(text, targetSessionId)
+        : await client.submitRun(text);
+      const nextSessionId = targetSessionId ?? result.session_id ?? null;
+      if (!nextSessionId) {
+        // 契约要求 runs.start 回填 session_id；缺失时停下，不本地兜底。
+        throw new Error('runs.start returned no session_id');
+      }
+      // 新会话可能尚未落盘：标记后 detail 404 可容忍（会话出现在列表即失效）。
+      if (!targetSessionId) pendingNewSessions.current.add(nextSessionId);
       setInput('');
-      if (!selectedId) navigate({ domain: 'chat', sessionId: targetSessionId });
+      if (!targetSessionId) navigate({ domain: 'chat', sessionId: nextSessionId });
       if (result.status === 'queued' && !seenJobIds.has(result.run_id)) {
+        const queuedSessionId = result.session_id ?? targetSessionId;
         setQueuedRuns((prev) => [
           ...prev.filter((item) => item.runId !== result.run_id),
           {
             runId: result.run_id,
-            sessionId: targetSessionId,
+            ...(queuedSessionId ? { sessionId: queuedSessionId } : {}),
             input: text,
             ...(result.queue_position !== undefined
               ? { queuePosition: result.queue_position }
@@ -984,7 +1005,8 @@ export function ChatView({
     setDeleteError(null);
     try {
       const result = await client.deleteSession(deleteTarget.session_id);
-      const next = selectionAfterDelete(selectedId, draftId, deleteTarget.session_id);
+      // 草稿态没有本地 session id（0.27），删除只可能在真实会话行上发生。
+      const next = selectionAfterDelete(selectedId, null, deleteTarget.session_id);
       const storage = browserSessionStorage();
       if (readLastSession(storage, tenantId) === deleteTarget.session_id) {
         clearLastSession(storage, tenantId);
@@ -1035,6 +1057,8 @@ export function ChatView({
           draftActive={draftActive}
           pendingBySession={pendingBySession}
           agentAddresses={agentAddresses}
+          defaultSession={defaultSessionEntry}
+          primarySessionIds={primarySessionIds}
           query={query}
           onQueryChange={setQuery}
           searchSnippets={activeServerSearch?.snippets}

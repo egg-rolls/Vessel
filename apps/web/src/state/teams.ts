@@ -1,10 +1,10 @@
 /**
  * Team 事件派生状态（纯函数，无 React / 无全局单例）。
  *
- * - 权威消息源是 `teams.get` 轮询；`agent.reply.posted` 只做即时插入 / 覆盖，
- *   二者按 `message_id` 合并，绝不产生第二条（T11）。
- * - 过滤：只消费 `event.data.team_id === activeTeamId` 的事件；缺 `team_id`
- *   一律忽略（旧事件 / unbound agent 不得混入）。
+ * - 权威消息源只有 `teams.get` 轮询；本模块不构造消息正文，只产出「需要重新拉取」的信号。
+ * - 成员活动由 `run.*` 驱动：`run.*` 带 `agent_id` / `session_id`，但不保证带 `team_id`，
+ *   因此缺 `team_id` 时按 roster 成员的 `session_id` 集合反查归属；
+ *   带 `team_id` 的事件仍只按 team 过滤（旧事件 / unbound agent 不得混入）。
  * - 去重：`lastAppliedSeq` 防止 50ms 合批重复应用；EventStore 的 seq 去重之外再兜一层。
  * - Body 历史：优先服务端 `member.body_history`；仅字段缺失时才累积事件观察值。
  */
@@ -20,9 +20,9 @@ export interface ObservedBody {
 
 export interface TeamEventState {
   lastAppliedSeq: number;
-  messages: TeamMessage[];
   /** 仅在 member.body_history 缺失时使用；按 agent_id 分组 */
   fallbackBodyHistory: Record<string, ObservedBody[]>;
+  /** 需要重新拉取 `teams.get`（消息 + roster）的信号；正文永远来自轮询。 */
   rosterDirty: boolean;
 }
 
@@ -39,7 +39,6 @@ const MAX_OBSERVED_BODIES = 20;
 export function createTeamEventState(): TeamEventState {
   return {
     lastAppliedSeq: 0,
-    messages: [],
     fallbackBodyHistory: {},
     rosterDirty: false,
   };
@@ -76,27 +75,6 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function asStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
-}
-
-/** 从 `agent.reply.posted` 构造回复消息；缺 `message_id` 时返回 null（等轮询）。 */
-function replyMessageFromEvent(event: TeamEventLike, teamId: string): TeamMessage | null {
-  const messageId = asString(event.data.message_id);
-  if (!messageId) return null;
-  return {
-    message_id: messageId,
-    team_id: teamId,
-    from: asString(event.data.from) ?? asString(event.data.agent_id) ?? 'unknown',
-    to: asStringArray(event.data.to),
-    mentions: asStringArray(event.data.mentions),
-    content: typeof event.data.content === 'string' ? event.data.content : '',
-    ts: asNumber(event.data.ts) ?? event.ts,
-    kind: 'reply',
-  };
-}
-
 function appendObserved(
   history: Record<string, ObservedBody[]>,
   agentId: string,
@@ -112,31 +90,45 @@ function appendObserved(
 }
 
 /**
+ * 事件是否属于当前 Team。
+ *
+ * `team_id` 存在时以它为准；`run.*` 不保证带 `team_id`（§5.2），
+ * 此时用 roster 成员的 `session_id` 集合反查归属。两者都没有则忽略。
+ */
+function belongsToTeam(
+  event: TeamEventLike,
+  activeTeamId: string,
+  memberSessionIds: ReadonlySet<string> | undefined,
+): boolean {
+  const eventTeamId = asString(event.data.team_id);
+  if (eventTeamId !== undefined) return eventTeamId === activeTeamId;
+  const sessionId = asString(event.data.session_id);
+  if (sessionId === undefined || memberSessionIds === undefined) return false;
+  return memberSessionIds.has(sessionId);
+}
+
+/**
  * 应用一条 Team 事件，返回新状态（不修改入参）。
  *
  * - 有 `seq` 且 `<= lastAppliedSeq` → 原样返回；
  * - 有 `seq` 时先更新 `lastAppliedSeq`，即使事件因 team 不匹配被忽略；
- * - 缺 `team_id` / 不匹配 → 除 seq 外不改变任何状态；
- * - 其它 `agent.*` 事件只置 `rosterDirty`，不伪造消息正文。
+ * - 不属于当前 Team → 除 seq 外不改变任何状态；
+ * - 不构造消息正文：正文只来自 `teams.get` 轮询，事件最多置 `rosterDirty`。
  */
 export function applyTeamEvent(
   state: TeamEventState,
   event: TeamEventLike,
   activeTeamId: string,
+  memberSessionIds?: ReadonlySet<string>,
 ): TeamEventState {
   if (event.seq !== undefined && event.seq <= state.lastAppliedSeq) return state;
 
   const next: TeamEventState =
     event.seq !== undefined ? { ...state, lastAppliedSeq: event.seq } : state;
 
-  if (event.data.team_id !== activeTeamId) return next;
+  if (!belongsToTeam(event, activeTeamId, memberSessionIds)) return next;
 
   switch (event.type) {
-    case 'agent.reply.posted': {
-      const message = replyMessageFromEvent(event, activeTeamId);
-      if (!message) return next;
-      return { ...next, messages: mergeMessages(next.messages, [message]) };
-    }
     case 'agent.rotated': {
       const agentId = asString(event.data.agent_id);
       const sessionId = asString(event.data.from_session_id);
@@ -163,15 +155,12 @@ export function applyTeamEvent(
       if (history === next.fallbackBodyHistory) return next;
       return { ...next, fallbackBodyHistory: history };
     }
-    case 'agent.turn.started':
-    case 'agent.turn.completed':
-    case 'agent.turn.failed':
-    case 'agent.turn.cancelled':
-      // 旧 Body 的迟到轮（stale:true）不得影响当前成员状态 / 触发失效刷新。
-      if (event.data.stale === true) return next;
-      return { ...next, rosterDirty: true };
     default:
-      if (event.type.startsWith('agent.')) return { ...next, rosterDirty: true };
+      // run.* 是唯一 run 生命周期（成员状态靠它 + agent_id 刷新）；
+      // agent.* 生命周期事件同样只需重新拉取，不参与正文构造。
+      if (event.type.startsWith('run.') || event.type.startsWith('agent.')) {
+        return { ...next, rosterDirty: true };
+      }
       return next;
   }
 }

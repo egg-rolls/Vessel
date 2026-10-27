@@ -40,6 +40,8 @@ export function SessionList({
   draftActive,
   pendingBySession,
   agentAddresses,
+  defaultSession,
+  primarySessionIds,
   query,
   onQueryChange,
   searchSnippets,
@@ -67,6 +69,13 @@ export function SessionList({
   pendingBySession?: ReadonlyMap<string, number>;
   /** session_id → `name@node:team`；只包含显式 member 的当前节点 roster。 */
   agentAddresses?: ReadonlyMap<string, string>;
+  /**
+   * 0.27 默认会话入口（`main` 的 primary body）：只在它还没出现在列表行里时补一行，
+   * 让空态也有明确的“默认会话”可点。`bodyCount` 用于提示同 agent 还有别的 body。
+   */
+  defaultSession?: { sessionId: string; label: string; bodyCount: number };
+  /** 0.27：属于某 agent primary body 的会话（`bodies[].primary`）；缺省不显示徽标。 */
+  primarySessionIds?: ReadonlySet<string>;
   query: string;
   onQueryChange: (value: string) => void;
   /** 服务端搜索命中的片段；query 非空时优先展示。 */
@@ -96,6 +105,9 @@ export function SessionList({
   const [renameError, setRenameError] = useState<string | null>(null);
   const committing = useRef(false);
   const renameRef = useRef<HTMLInputElement | null>(null);
+  // 搜索中不插入默认会话行，避免“无匹配”被一条非搜索结果掩盖；
+  // 是否已在列表里出现由调用方判断（它拿得到完整列表，这里只有窗口化的行）。
+  const showDefault = defaultSession !== undefined && !query.trim();
 
   useEffect(() => {
     if (!editingId) return;
@@ -195,7 +207,7 @@ export function SessionList({
           />
         ) : loading && sessions.length === 0 ? (
           <LoadingState label={t('chat.sessionList.loading')} />
-        ) : sessions.length === 0 ? (
+        ) : sessions.length === 0 && !showDefault ? (
           query.trim() ? (
             <EmptyState
               title={t('chat.sessionList.noMatch', { query: query.trim() })}
@@ -217,6 +229,29 @@ export function SessionList({
           )
         ) : (
           <>
+            {showDefault && defaultSession && (
+              <div
+                className={`session-row default ${
+                  defaultSession.sessionId === selectedId ? 'active' : ''
+                }`.trim()}
+              >
+                <button
+                  type="button"
+                  className="session-main"
+                  aria-current={defaultSession.sessionId === selectedId ? 'true' : undefined}
+                  onClick={() => onSelect(defaultSession.sessionId)}
+                >
+                  <span className="session-title">
+                    <span className="session-title-text">{defaultSession.label}</span>
+                  </span>
+                  <span className="session-agent">
+                    {defaultSession.bodyCount > 1
+                      ? t('team.member.liveBodies', { count: defaultSession.bodyCount })
+                      : t('team.member.currentBody')}
+                  </span>
+                </button>
+              </div>
+            )}
             {draftActive && (
               <div className="session-row draft active">
                 <div className="session-main">
@@ -304,6 +339,11 @@ export function SessionList({
                               )}
                             </span>
                             {agentAddress && <span className="session-agent">{agentAddress}</span>}
+                            {!agentAddress && primarySessionIds?.has(session.session_id) && (
+                              <span className="session-agent text-accent-ink">
+                                {t('team.member.primaryBadge')}
+                              </span>
+                            )}
                           </button>
                           <ActionMenu
                             className="items-center pr-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-compact:opacity-100"

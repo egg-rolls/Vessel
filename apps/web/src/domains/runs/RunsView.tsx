@@ -13,7 +13,7 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
-import { Button, cn, DataTable, SearchInput } from '../../components/ui';
+import { Button, cn, DataTable, SearchInput, Select } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
@@ -28,6 +28,7 @@ import {
   isCancellableRun,
   isResumableRun,
   type RunStatusFilter,
+  runAgentId,
   sortDurableRuns,
   sortLiveRuns,
   takeRuns,
@@ -84,6 +85,11 @@ export function RunsView({
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<RunStatusFilter>('all');
   const [limit, setLimit] = useState(100);
+  /**
+   * agent 维度过滤（0.27）。`router.ts` 的 `agentId` 路由参数不在本切片所有权内，
+   * 先做成页面内 state：不进 URL，刷新页面即清空；与 status 一样切 tab 时重置。
+   */
+  const [agentId, setAgentId] = useState<string>('');
   const [busy, setBusy] = useState<Set<string>>(new Set());
 
   const { current: currentNode } = useNodes();
@@ -117,20 +123,33 @@ export function RunsView({
     query,
     status,
     ...(route.sessionId ? { sessionId: route.sessionId } : {}),
+    ...(agentId ? { agentId } : {}),
   });
   const filteredDurable = filterDurableRuns(durable, {
     query,
     status,
     ...(route.sessionId ? { sessionId: route.sessionId } : {}),
+    ...(agentId ? { agentId } : {}),
   });
   const windowedLive = takeRuns(filteredLive, limit);
   const windowedDurable = takeRuns(filteredDurable, limit);
+
+  // agent 过滤下拉的候选：只列当前 tab 内出现过的 agent（升序，去重）。
+  // 只取 `agent_id`：旧 gateway 缺失时不列候选，不做 session→agent 的猜测展示。
+  const agentOptions = useMemo(() => {
+    const ids = new Set<string>();
+    for (const run of route.tab === 'live' ? live : durable) {
+      if (run.agent_id) ids.add(run.agent_id);
+    }
+    return [...ids].sort((a, b) => a.localeCompare(b));
+  }, [route.tab, live, durable]);
 
   // 切换 tab 时回到第一页与「全部」。
   // biome-ignore lint/correctness/useExhaustiveDependencies: route.tab 变化是重置条件
   useEffect(() => {
     setLimit(100);
     setStatus('all');
+    setAgentId('');
   }, [route.tab]);
 
   const knownLive = route.runId ? live.find((run) => run.run_id === route.runId) : undefined;
@@ -368,6 +387,19 @@ export function RunsView({
             </Button>
           ))}
         </fieldset>
+        <Select
+          className="net-select h-control w-auto min-w-32 py-0"
+          value={agentId}
+          aria-label={t('runs.filterByAgent')}
+          onChange={(event) => setAgentId(event.target.value)}
+        >
+          <option value="">{t('common.all')}</option>
+          {agentOptions.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </Select>
         {route.sessionId && (
           <Button
             variant="chip"
@@ -377,6 +409,17 @@ export function RunsView({
             title={t('runs.clearSessionFilter')}
           >
             {t('runs.sessionChip', { session: route.sessionId.slice(0, 12) })} ×
+          </Button>
+        )}
+        {agentId && (
+          <Button
+            variant="chip"
+            size="small"
+            className="bg-accent-soft text-accent-ink"
+            onClick={() => setAgentId('')}
+            title={t('runs.clearAgentFilter')}
+          >
+            {t('runs.agentChip', { agent: agentId.slice(0, 12) })} ×
           </Button>
         )}
         <Button size="small" onClick={reloadAll} disabled={!hasToken}>
@@ -448,6 +491,7 @@ export function RunsView({
                       onClick={() => {
                         setQuery('');
                         setStatus('all');
+                        setAgentId('');
                         navigateRoute({ sessionId: undefined });
                       }}
                     >
@@ -501,6 +545,22 @@ export function RunsView({
                           onClick={() => navigate({ domain: 'chat', sessionId: run.session_id })}
                         >
                           {run.session_id.slice(0, 12)}
+                        </Button>
+                      ),
+                    },
+                    {
+                      key: 'agent',
+                      header: t('runs.col.agent'),
+                      hide: 'wide',
+                      cellClassName: 'font-mono',
+                      cell: (run) => (
+                        <Button
+                          variant="link"
+                          className="font-mono"
+                          title={t('runs.filterByAgent')}
+                          onClick={() => setAgentId(runAgentId(run) ?? '')}
+                        >
+                          {runAgentId(run) ?? '—'}
                         </Button>
                       ),
                     },

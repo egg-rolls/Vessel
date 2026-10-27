@@ -188,7 +188,10 @@ export interface PermissionRequest {
 /** 运行状态（/v1/runs/:id、run.get；durable checkpoint 是其中的超集） */
 export interface RunStatus {
   run_id: string;
-  /** gateway 引擎 id → core run id；trace 事件使用 core run id。 */
+  /**
+   * 0.26 及更早：gateway 引擎 id → core run id（trace 事件用 core run id）。
+   * 0.27 统一 run id 后服务端不再返回；读侧保留 `core_run_id ?? run_id` 兼容旧 gateway。
+   */
   core_run_id?: string;
   session_id: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
@@ -205,12 +208,26 @@ export interface RunStatus {
   retryable?: boolean;
   http_status?: number;
   details?: Record<string, unknown>;
-  /** durable checkpoint 字段（runs.get 对 durable run 返回）。 */
+  /** 0.27：live/durable 都带执行该 run 的 agent（body = `session_id`）。 */
   agent_id?: string;
   iteration?: number;
   updated_at?: number;
   preview?: string;
   messages?: Message[];
+}
+
+/**
+ * `runs.start` 受理结果（0.27 additive）。
+ *
+ * 服务端解析 session → agent/body 后回填 `agent_id` / `session_id`（body id）；
+ * 未传 `session_id` 时它就是 main primary body。旧 gateway 不返回，读侧按可选处理。
+ */
+export interface RunStartResult {
+  run_id: string;
+  status: RunStatus['status'];
+  queue_position?: number;
+  agent_id?: string;
+  session_id?: string;
 }
 
 /** agents.tree 节点（0.15 E5）。 */
@@ -249,6 +266,23 @@ export interface TeamBodyHistoryEntry {
   epoch: number;
   started_at: number;
   retired_at: number;
+}
+
+/**
+ * 0.27 live Body（`MemberStatus.bodies?` / `agents.list` 的 `bodies?`）。
+ *
+ * `body_id ≡ session_id`；`primary` 存在时为该 agent 的缺省投递目标。
+ * 字段全部可选：旧 gateway 不返回 `bodies`，读侧降级为「只有 `session_id` 一个 body」。
+ */
+export interface BodyStatus {
+  body_id?: string;
+  session_id?: string;
+  state?: string;
+  epoch?: number;
+  created_at?: number;
+  last_active_at?: number;
+  primary?: boolean;
+  retired_at?: number;
 }
 
 /** teams.list 元素 / teams.get.team。 */
@@ -307,6 +341,8 @@ export interface TeamMember {
   epoch?: number;
   /** S3 R1：已退役 Body，≤20；缺失时回退到事件累积。 */
   body_history?: TeamBodyHistoryEntry[];
+  /** 0.27 additive：live body 列表；缺失时只有 `session_id` 一个 body。 */
+  bodies?: BodyStatus[];
   /** v3 additive：角色；旧 gateway 缺失时按 owner 推断。 */
   role?: AgentRole;
   /** v3 additive：single/member = self，temporary = 雇佣者；缺失时按旧语义推断。 */
@@ -387,6 +423,8 @@ export interface AgentSummary {
   role?: AgentRole;
   /** 0.27 additive：owner 存在 = contractor，缺失 = peer。 */
   owner?: string;
+  /** 0.27 additive：live body 列表；`session_id` 仍是 primary body。 */
+  bodies?: BodyStatus[];
 }
 
 export interface AgentCreateInput {

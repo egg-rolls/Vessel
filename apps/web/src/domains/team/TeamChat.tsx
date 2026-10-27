@@ -1,7 +1,8 @@
 /**
- * Team 群聊容器：轮询 `teams.get` + 事件即时插入 + 乐观发送。
+ * Team 群聊容器：轮询 `teams.get` + 事件触发定向 reload + 乐观发送。
  *
- * - 权威消息源是轮询；`agent.reply.posted` 只按 `message_id` 插入 / 覆盖；
+ * - 权威消息源只有轮询；`run.*` / `agent.*` 事件只让 roster 与日志失效，
+ *   不构造消息正文；
  * - 发送串行（无幂等键）：发送期间停轮询，成功后 reload 对账；
  * - 失败不自动重试；reload 找不到同内容消息才标 failed；
  * - “再次发送”只把内容填回 Composer，由用户再次确认后作为新日志。
@@ -141,7 +142,6 @@ export function TeamChat({
   const [narrow, setNarrow] = useState(false);
 
   const eventStateRef = useRef<TeamEventState>(createTeamEventState());
-  const lastEventMessagesRef = useRef<TeamMessage[]>(eventStateRef.current.messages);
   const lastRosterReloadAt = useRef(0);
   const rosterTimer = useRef<number | undefined>(undefined);
   /** 发送期间不发起新的 `teams.get`；保持 pollMs 稳定，避免 useResource 重跑。 */
@@ -211,21 +211,22 @@ export function TeamChat({
     setMessages((prev) => mergeMessages(prev, incoming));
   }, [detailState]);
 
-  // `agent.reply.posted` 立即插入；其它 agent.* 事件只做 roster 失效刷新。
+  // `run.*` / `agent.*` 事件只让 roster + 日志失效（250ms 合并一次定向 reload）；
+  // 正文永远来自 `teams.get` 轮询，事件不构造消息。
   useEffect(() => {
+    const memberSessionIds = new Set(
+      members
+        .map((member) => member.session_id)
+        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+    );
     let state = eventStateRef.current;
     for (const entry of events) {
       if (entry.seq <= state.lastAppliedSeq) continue;
-      state = applyTeamEvent(state, { ...entry.event, seq: entry.seq }, teamId);
+      state = applyTeamEvent(state, { ...entry.event, seq: entry.seq }, teamId, memberSessionIds);
     }
     // dirty 只触发一次失效刷新；后续没有新事件时不能反复 reload。
     const rosterDirty = state.rosterDirty;
     eventStateRef.current = rosterDirty ? { ...state, rosterDirty: false } : state;
-
-    if (state.messages !== lastEventMessagesRef.current) {
-      lastEventMessagesRef.current = state.messages;
-      setMessages((prev) => mergeMessages(prev, state.messages));
-    }
 
     if (rosterDirty) {
       const now = Date.now();
@@ -235,7 +236,7 @@ export function TeamChat({
         rosterTimer.current = window.setTimeout(() => reloadRef.current(), 250);
       }
     }
-  }, [events, teamId]);
+  }, [events, teamId, members]);
 
   const memberById = useMemo(() => {
     const map = new Map<string, TeamMember>();

@@ -16,11 +16,7 @@ import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import { useInteractionStore } from '../stores/interactionStore';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
 import { resolveConnectionSeed } from './dev-auth';
-import {
-  buildHydrationSnapshot,
-  pendingIdsForSession,
-  stalePendingIds,
-} from './interaction-hydration';
+import { buildHydrationSnapshot, stalePendingIds } from './interaction-hydration';
 import {
   askFromEvent,
   interactionExpiredMessage,
@@ -369,24 +365,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           if (item.runId === event.run_id) recordSettled(item.requestId);
         }
         interactions.dispatch({ type: 'run-finished', runId: event.run_id });
-      }
-      if (
-        event.type === 'agent.turn.completed' ||
-        event.type === 'agent.turn.failed' ||
-        event.type === 'agent.turn.cancelled'
-      ) {
-        // 成员 run 没有 run.* 终态事件：turn 结束（run_id = 成员会话 id）时，
-        // 该会话下的 pending 已不可能再被应答，按终态收起。
-        const data = event.data as { session_id?: unknown };
-        const sessionId =
-          typeof data.session_id === 'string' && data.session_id.length > 0
-            ? data.session_id
-            : event.run_id;
-        const interactions = useInteractionStore.getState();
-        for (const requestId of pendingIdsForSession(interactions, sessionId)) {
-          recordSettled(requestId);
-          interactions.dispatch({ type: 'settle', requestId });
-        }
       }
     });
 
