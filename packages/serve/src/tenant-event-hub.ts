@@ -5,11 +5,11 @@
  * 每个 tenant 的 runtimeEvents 通过 `register()` 接入。hub **不提供 publish**，
  * 业务代码只能写自己的 tenant 流。
  *
- * - `subscribe()`：原始 fan-in（RunEngine），事件缺 `tenant_id` 时补齐（克隆）；
+ * - `subscribe()`：原始 fan-in（interactions registry），事件缺 `tenant_id` 时补齐（克隆）；
  * - `subscribeSequenced()`：`map`（脱敏 / 裁剪）之后、分配单调 `seq` 的事件；
  * - `since()` / `gapFor()` / `latestSeq` / `oldestSeq`：供 WS / SSE 回放。
  *
- * `map` 不得修改原事件：原始订阅者（engine）必须看到原始 requestId / input。
+ * `map` 不得修改原事件：原始订阅者（interactions registry）必须看到原始 requestId / input。
  *
  * @module @vessel-agent/serve/tenant-event-hub
  */

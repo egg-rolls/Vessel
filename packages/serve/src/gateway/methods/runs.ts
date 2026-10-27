@@ -1,32 +1,41 @@
 /**
  * runs.* 方法（list / get / start / cancel / resume）。
  *
+ * 0.27 统一 run 口径：
+ * - live 只读 `RunControlLike.snapshot()`（queued + running）；serve 不再持有
+ *   执行队列、runtime 入口或 run 记录；
+ * - durable 读 `DurableGatewayOptions.store`（每 body checkpoint）；
+ * - `runs.list` = live ∪ durable，按 `run_id` 去重、live 优先；
+ * - `runs.start` / `runs.cancel` 只调控制面，执行生命周期归 app / AgentService。
+ *
  * @module @vessel-agent/serve
  */
 
-import type { RunnableAgent } from '@vessel-agent/core';
 import {
   type DurableCheckpointLike,
   type DurableGatewayOptions,
+  errorMetaOf,
   isResumableStatus,
   previewOf,
 } from '../../durable.js';
-import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
-import { errorMetaOf, type RunEngine, type RunRecord } from '../../run-engine.js';
+import { RpcError, type RpcMethodContext, type RpcMethodDefinition } from '../../rpc.js';
+import type { LiveRunSnapshotLike, RunControlLike } from '../../run-control.js';
 import { mapTenantError, type TenantControlLike } from '../../tenant.js';
 import { checkpointBelongsToTenant, stringParam } from './common.js';
 import { runStatusSchema } from './schemas.js';
 
 export interface RunMethodsDeps {
   defaultTenantId: string;
-  runs: ReadonlyMap<string, RunRecord>;
-  publicStatus: RunEngine['publicStatus'];
-  submitRun: RunEngine['submitRun'];
-  cancelRun: RunEngine['cancelRun'];
-  /** 非 default tenant 未注入 → forbidden；default 保持旧码。 */
-  requireRuntime(tenantId: string): RunnableAgent;
+  /**
+   * per-tenant run 控制面；default 用 `runControl`，其它 tenant 只走
+   * `runControlFor`（缺失不回退 default）。
+   */
+  runControlFor(tenantId: string): RunControlLike | undefined;
+  /** 同 `runControlFor`，但缺失时按 `requireRuntime` 语义抛错。 */
+  requireRunControl(tenantId: string): RunControlLike;
   durableForTenant(tenantId: string): DurableGatewayOptions | undefined;
   tenants?: TenantControlLike;
+  /** 已受理（queued + running）的 run 数，quota 同步检查用。 */
   activeCount(tenantId: string): number;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
@@ -59,14 +68,43 @@ export function normalizeDurableRun(run: Record<string, unknown>): Record<string
   return out;
 }
 
+/** live run → `runStatusSchema` 形状（不含 core_run_id：0.27 起统一 run id）。 */
+export function liveRunStatus(run: LiveRunSnapshotLike): Record<string, unknown> {
+  return {
+    run_id: run.run_id,
+    agent_id: run.agent_id,
+    session_id: run.session_id,
+    status: run.status,
+    ...(run.queue_position !== undefined ? { queue_position: run.queue_position } : {}),
+    ...(run.started_at !== undefined ? { started_at: run.started_at } : {}),
+  };
+}
+
+/** snapshot 的 live run（queued 在前，running 在后）。 */
+function liveRunsOf(control: RunControlLike): LiveRunSnapshotLike[] {
+  try {
+    const snapshot = control.snapshot();
+    return [...snapshot.queued, ...snapshot.running];
+  } catch {
+    // 控制面不可用不得让只读列表 500；按「无 live」处理。
+    return [];
+  }
+}
+
+/** 排序键：`updated_at ?? started_at ?? 0`，倒序。 */
+function recencyOf(run: Record<string, unknown>): number {
+  const updated = run.updated_at;
+  if (typeof updated === 'number' && Number.isFinite(updated)) return updated;
+  const started = run.started_at;
+  if (typeof started === 'number' && Number.isFinite(started)) return started;
+  return 0;
+}
+
 export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
   const {
     defaultTenantId,
-    runs,
-    publicStatus,
-    submitRun,
-    cancelRun,
-    requireRuntime,
+    runControlFor,
+    requireRunControl,
     durableForTenant,
     tenants,
     activeCount,
@@ -100,6 +138,62 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
     }
   }
 
+  /** live 命中（该 tenant 的 snapshot 里同 id 的 queued / running）。 */
+  function findLive(tenantId: string, runId: string): LiveRunSnapshotLike | undefined {
+    const control = runControlFor(tenantId);
+    if (control === undefined) return undefined;
+    return liveRunsOf(control).find((run) => run.run_id === runId);
+  }
+
+  /**
+   * `runs.list` = live ∪ durable：
+   * 按 `run_id` 去重、live 优先；`updated_at ?? started_at ?? 0` 倒序。
+   * `agent_id` / `session_id` / `status` 过滤可组合。
+   */
+  async function listRuns(
+    ctx: RpcMethodContext,
+    filters: { sessionId?: string; status?: string; agentId?: string },
+  ): Promise<Array<Record<string, unknown>>> {
+    const control = runControlFor(ctx.tenantId);
+    const durable = durableForTenant(ctx.tenantId);
+    if (control === undefined && durable === undefined) {
+      // 旧语义：非 default tenant 无任何运行面 → forbidden；default 返回空。
+      if (ctx.tenantId !== defaultTenantId) {
+        throw new RpcError(
+          'forbidden',
+          `Durable runs are not configured for tenant: ${ctx.tenantId}`,
+        );
+      }
+      return [];
+    }
+
+    const live = control === undefined ? [] : liveRunsOf(control).map(liveRunStatus);
+    const checkpoints =
+      durable === undefined
+        ? []
+        : (await durable.store.list()).map((checkpoint) =>
+            normalizeDurableRun(checkpoint as unknown as Record<string, unknown>),
+          );
+
+    const seen = new Set<string>();
+    const merged: Array<Record<string, unknown>> = [];
+    for (const run of [...live, ...checkpoints]) {
+      const runId = run.run_id;
+      if (typeof runId !== 'string' || seen.has(runId)) continue;
+      seen.add(runId);
+      merged.push(run);
+    }
+
+    return merged
+      .filter(
+        (run) =>
+          (!filters.sessionId || run.session_id === filters.sessionId) &&
+          (!filters.status || run.status === filters.status) &&
+          (!filters.agentId || run.agent_id === filters.agentId),
+      )
+      .sort((left, right) => recencyOf(right) - recencyOf(left));
+  }
+
   return [
     {
       name: 'runs.list',
@@ -109,6 +203,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         properties: {
           session_id: { type: 'string' },
           status: { type: 'string' },
+          agent_id: { type: 'string' },
         },
       },
       result_schema: {
@@ -118,17 +213,12 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           runs: { type: 'array', items: runStatusSchema },
         },
       },
-      handler: (params, ctx) => {
-        const sessionFilter = typeof params.session_id === 'string' ? params.session_id : undefined;
-        const statusFilter = typeof params.status === 'string' ? params.status : undefined;
-        return {
-          runs: [...runs.values()]
-            .filter((record) => record.tenant_id === ctx.tenantId)
-            .filter((record) => !sessionFilter || record.session_id === sessionFilter)
-            .filter((record) => !statusFilter || record.status === statusFilter)
-            .map(publicStatus),
-        };
-      },
+      handler: (params, ctx) =>
+        listRuns(ctx, {
+          ...(typeof params.session_id === 'string' ? { sessionId: params.session_id } : {}),
+          ...(typeof params.status === 'string' ? { status: params.status } : {}),
+          ...(typeof params.agent_id === 'string' ? { agentId: params.agent_id } : {}),
+        }).then((runs) => ({ runs })),
     },
     {
       name: 'runs.get',
@@ -145,8 +235,8 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
       },
       handler: async (params, ctx) => {
         const runId = stringParam(params, 'run_id');
-        const record = runs.get(runId);
-        if (record && record.tenant_id === ctx.tenantId) return { run: publicStatus(record) };
+        const live = findLive(ctx.tenantId, runId);
+        if (live !== undefined) return { run: liveRunStatus(live) };
         const durable = durableForTenant(ctx.tenantId);
         if (!durable) {
           if (ctx.tenantId !== defaultTenantId) {
@@ -157,6 +247,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           }
           throw new RpcError('not_found', `Run not found: ${runId}`);
         }
+        // durable 页签覆盖所有 body；tenant 校验在下一行统一做。
         const checkpoint = await durable.store.load(runId);
         if (!checkpoint || !checkpointBelongsToTenant(checkpoint, ctx.tenantId)) {
           throw new RpcError('not_found', `Run not found: ${runId}`);
@@ -173,6 +264,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         properties: {
           input: { type: 'string', minLength: 1 },
           session_id: { type: 'string' },
+          agent_id: { type: 'string', minLength: 1 },
           tenant_id: { type: 'string' },
         },
       },
@@ -186,13 +278,35 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
             enum: ['queued', 'running', 'completed', 'failed', 'cancelled'],
           },
           queue_position: { type: 'integer' },
+          agent_id: { type: 'string' },
+          session_id: { type: 'string' },
         },
       },
       handler: async (params, ctx) => {
-        requireRuntime(ctx.tenantId);
+        const control = requireRunControl(ctx.tenantId);
         await enforceConcurrentQuota(ctx.tenantId);
         await checkQuota(ctx.tenantId, 'runs.start');
-        return submitRun(params, ctx.tenantId);
+        const agentId = typeof params.agent_id === 'string' ? params.agent_id : undefined;
+        const requestedSession =
+          typeof params.session_id === 'string' ? params.session_id : undefined;
+        const result = await control.start({
+          input: stringParam(params, 'input'),
+          ...(agentId !== undefined ? { agent_id: agentId } : {}),
+          ...(requestedSession !== undefined ? { session_id: requestedSession } : {}),
+        });
+        // `session_id` 只能来自控制面；控制面没回传时不编造（用请求值）。
+        const returnedSession = (result as { session_id?: unknown }).session_id;
+        const sessionId =
+          typeof returnedSession === 'string' && returnedSession.length > 0
+            ? returnedSession
+            : requestedSession;
+        return {
+          run_id: result.run_id,
+          status: result.status,
+          ...(result.queue_position !== undefined ? { queue_position: result.queue_position } : {}),
+          ...(agentId !== undefined ? { agent_id: agentId } : {}),
+          ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+        };
       },
     },
     {
@@ -208,9 +322,29 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         required: ['cancelled'],
         properties: { cancelled: { type: 'boolean' } },
       },
-      handler: (params, ctx) => ({
-        cancelled: cancelRun(stringParam(params, 'run_id'), ctx.tenantId),
-      }),
+      handler: async (params, ctx) => {
+        const runId = stringParam(params, 'run_id');
+        const control = runControlFor(ctx.tenantId);
+        if (control === undefined) {
+          if (ctx.tenantId !== defaultTenantId) {
+            throw new RpcError(
+              'forbidden',
+              `Tenant run control is not configured: ${ctx.tenantId}`,
+            );
+          }
+          throw new RpcError('not_found', `Run not found: ${runId}`);
+        }
+        // 先按 snapshot 判存在（跨 tenant 一律 not_found，不泄漏存在性）。
+        const target = liveRunsOf(control).find((run) => run.run_id === runId);
+        if (target === undefined) throw new RpcError('not_found', `Run not found: ${runId}`);
+        const cancelled = await control.cancel(runId);
+        // scheduler 不会为 queued-cancel 产出 core 事件，也就没有 checkpoint；
+        // 补一条终态 checkpoint，否则该 run 会从列表消失。
+        if (target.status === 'queued') {
+          await writeQueuedCancelledCheckpoint(ctx.tenantId, target);
+        }
+        return { cancelled };
+      },
     },
     {
       name: 'runs.resume',
@@ -283,4 +417,38 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
       },
     },
   ];
+
+  /**
+   * queued-cancel 的终态 checkpoint。store 无 `save` / 该 tenant 无 durable
+   * → 跳过（不报错、不建内存账本）。
+   */
+  async function writeQueuedCancelledCheckpoint(
+    tenantId: string,
+    run: LiveRunSnapshotLike,
+  ): Promise<void> {
+    const store = durableForTenant(tenantId)?.store;
+    const save = store?.save;
+    if (store === undefined || typeof save !== 'function') return;
+    const now = Date.now();
+    const checkpoint: DurableCheckpointLike = {
+      run_id: run.run_id,
+      session_id: run.session_id,
+      agent_id: run.agent_id,
+      status: 'cancelled',
+      messages: [],
+      metadata: { reason: 'cancelled_while_queued' },
+      created_at: now,
+      updated_at: now,
+      tenant_id: tenantId,
+    };
+    try {
+      await save.call(store, checkpoint);
+    } catch (error) {
+      // checkpoint 写入是 best-effort：取消已经生效，不得因此回 500。
+      console.warn('[vessel] runs.cancel: checkpoint save failed', {
+        run_id: run.run_id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }

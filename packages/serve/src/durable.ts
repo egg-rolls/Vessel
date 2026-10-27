@@ -24,6 +24,47 @@ export const DURABLE_RUN_STATUSES: readonly DurableRunStatus[] = [
 export const DEFAULT_DURABLE_LIMIT = 50;
 export const MAX_DURABLE_LIMIT = 200;
 
+/**
+ * run 终态错误 envelope（来自 `run.failed` 事件 / checkpoint metadata）。
+ * 0.27：从已删除的执行引擎原样搬出，字段与语义不变。
+ */
+export interface RunErrorMeta {
+  error_code?: string;
+  category?: string;
+  phase?: string;
+  retryable?: boolean;
+  http_status?: number;
+  details?: Record<string, unknown>;
+}
+
+/** 从 run.failed data 中取 envelope；缺失/非法值不推断。 */
+export function errorMetaOf(data: unknown): RunErrorMeta | undefined {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return undefined;
+  const source = data as Record<string, unknown>;
+  const meta: RunErrorMeta = {};
+  if (typeof source.error_code === 'string' && source.error_code.length > 0) {
+    meta.error_code = source.error_code;
+  }
+  if (typeof source.category === 'string' && source.category.length > 0) {
+    meta.category = source.category;
+  }
+  if (typeof source.phase === 'string' && source.phase.length > 0) {
+    meta.phase = source.phase;
+  }
+  if (typeof source.retryable === 'boolean') meta.retryable = source.retryable;
+  if (typeof source.http_status === 'number' && Number.isFinite(source.http_status)) {
+    meta.http_status = source.http_status;
+  }
+  if (
+    typeof source.details === 'object' &&
+    source.details !== null &&
+    !Array.isArray(source.details)
+  ) {
+    meta.details = source.details as Record<string, unknown>;
+  }
+  return Object.keys(meta).length > 0 ? meta : undefined;
+}
+
 /** checkpoint 的最小结构面（gateway 只读这些字段） */
 export interface DurableCheckpointLike {
   run_id: string;
@@ -35,6 +76,8 @@ export interface DurableCheckpointLike {
   /** 0.18：checkpoint 附加数据；`preview` 为 session 上下文派生的预览。 */
   metadata?: Record<string, unknown>;
   iteration?: number;
+  /** 0.27：queued-cancel 补写的终态 checkpoint 会带 `created_at`。 */
+  created_at?: number;
   updated_at: number;
   /** 0.5：所属 tenant；缺省视为 default */
   tenant_id?: string;
@@ -48,6 +91,12 @@ export interface DurableStoreLike {
     session_id?: string;
     limit?: number;
   }): Promise<DurableCheckpointLike[]>;
+  /**
+   * 0.27：写一条 checkpoint（core `RunStore.save` 已有此方法，属复用）。
+   * 只用于 `runs.cancel` 命中 queued run 时补终态——scheduler 不会为
+   * queued-cancel 产出 core 事件，也就没有 checkpoint。缺失 = 跳过写入。
+   */
+  save?(checkpoint: DurableCheckpointLike): Promise<void>;
 }
 
 /** gateway durable 注入面；缺省 = 端点关闭 */

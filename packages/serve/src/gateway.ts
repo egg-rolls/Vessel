@@ -17,7 +17,6 @@ import type {
   ContextManager,
   PluginHost,
   RunEvent,
-  RunInterruptReason,
   RunnableAgent,
   SessionBackend,
   TraceRedactor,
@@ -102,6 +101,7 @@ import {
   writeSse,
 } from './gateway/sse.js';
 import { serveStatic } from './gateway/static.js';
+import { createInteractionsRegistry } from './interactions-registry.js';
 import type { McpGatewayOptions } from './mcp.js';
 import type { MetricsProvider, MetricsSnapshot } from './metrics.js';
 import {
@@ -128,7 +128,7 @@ import {
   type RpcRequest,
   type RpcResponse,
 } from './rpc.js';
-import { createRunEngine, type RunRecord } from './run-engine.js';
+import type { LiveRunSnapshotLike, RunControlLike, RunControlSnapshotLike } from './run-control.js';
 import type { TeamControlLike } from './team-control.js';
 import {
   type ConfigGatewayOptionsLike,
@@ -177,6 +177,17 @@ export interface GatewayOptions {
   session?: SessionBackend;
   /** 运行时（可选）——运行控制端点；结构类型 RunnableAgent（A10），不要断言成 AgentRuntime */
   runtime?: RunnableAgent;
+  /**
+   * 0.27：default tenant 的 run 控制面（app 侧适配 AgentService / scheduler）。
+   * live 只读 `snapshot()`；`runs.start` / `runs.cancel` 只调 `start` / `cancel`。
+   * 缺省 = `runs.*` 无 live 面（只剩 durable）。
+   */
+  runControl?: RunControlLike;
+  /**
+   * 0.27：非 default tenant 的 run 控制面工厂。
+   * **绝不回退** `runControl`（否则跨租户执行 / 读快照）。
+   */
+  runControlFor?: (tenantId: string) => RunControlLike | undefined;
   /** 上下文管理器（可选）——会话切换时 clear，修跨会话串历史 */
   context?: ContextManager;
   /** 工具宿主（可选）——缺省读 runtime.pluginHost */
@@ -195,7 +206,11 @@ export interface GatewayOptions {
   staticDir?: string;
   /** 请求体上限（字节，默认 1 MiB） */
   maxBodyBytes?: number;
-  /** 运行队列上限（默认 100） */
+  /**
+   * @deprecated 0.27：gateway 不再持有运行队列（调度归 app / AgentService，
+   * 上限由 scheduler `maxQueueSize` 决定）。保留字段只为不破坏既有调用方，
+   * 传入也不生效。
+   */
   maxQueue?: number;
   /** 额外允许的浏览器 Origin（默认只允许同源） */
   allowedOrigins?: string[];
@@ -390,18 +405,6 @@ interface WsData {
 
 type Ws = import('bun').ServerWebSocket<WsData>;
 
-/**
- * 0.10 R2-18：`RunnableAgent` 尚未把 `interrupt()` 纳入结构契约，
- * gateway 按可选能力探测（`AgentRuntime` 已实现），不依赖具体类。
- */
-type InterruptibleRuntime = RunnableAgent & {
-  interrupt?(reason?: RunInterruptReason): void;
-};
-
-/** 运行队列上限（防止无界堆积） */
-const MAX_QUEUE = 100;
-/** 保留的运行记录数 */
-const MAX_RUNS = 200;
 /** WS 慢客户端硬关闭阈值（最终安全网） */
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 /** WS 事件背压：高水位开始丢事件，低水位补 gap（DECISION-009 §10.3.5） */
@@ -495,7 +498,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   ) {
     throw new Error('hub must be a TenantEventHub.');
   }
-  const { session, runtime, context } = opts;
+  const { session, runtime } = opts;
   const hostname = opts.hostname ?? DEFAULT_HOSTNAME;
   if (hostname.includes('/')) {
     throw new Error(`Invalid gateway hostname "${hostname}": must be a bare host or IP address.`);
@@ -666,7 +669,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   });
   const startedAt = Date.now();
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY;
-  const maxQueue = opts.maxQueue ?? MAX_QUEUE;
   // 0.12：可被 `reconfigure()` 热替换；后续请求在读取点看到新值。
   let allowedOrigins = normalizeAllowedOrigins(opts.allowedOrigins);
   const heartbeatMs = opts.heartbeatMs ?? 15_000;
@@ -699,36 +701,24 @@ export function startGateway(opts: GatewayOptions): Gateway {
         })
       : undefined;
 
-  // 共享运行引擎（gateway 与 createLocalRpcDispatcher 同一套实现，A-5 §12.1）。
-  // 0.18：engine 只拿 per-tenant 流；hub 负责把 tenant 事件扇入到这里。
-  const engine = createRunEngine({
-    ...(runtime ? { runtime: runtime } : {}),
-    ...(context ? { context } : {}),
-    ...(opts.runtimeFor ? { runtimeFor: opts.runtimeFor } : {}),
-    ...(opts.contextFor ? { contextFor: opts.contextFor } : {}),
+  /**
+   * 0.27：交互注册表（权限 / ask）。执行、调度、run 队列都不在 gateway：
+   * 它只消费 `run.*` 事件并维护 pending / answered / orphaned。
+   */
+  const interactions = createInteractionsRegistry({
     tenantEventsFor: (tenantId) => hub.streamFor(tenantId),
     defaultTenantId,
-    maxQueue,
-    maxRuns: MAX_RUNS,
     ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
   });
-  /** engine 的请求观察面：原始 tenant 事件（hub 隔离订阅者异常）。 */
-  const unsubscribeEngine = hub.subscribe((event) => {
-    engine.handleEvent(event);
+  /** 注册表的请求观察面：原始 tenant 事件（hub 隔离订阅者异常）。 */
+  const unsubscribeInteractions = hub.subscribe((event) => {
+    interactions.handleEvent(event);
   });
   /**
-   * 0.14 P0：agents 注册表。只吃实时事件；Host / run 记录由方法层合并。
+   * 0.14 P0：agents 注册表。只吃实时事件；live run 由方法层从控制面快照合并。
    * 在事件订阅处 ingest 脱敏/裁剪后的副本，与广播保持一致。
    */
   const agentRegistry = createAgentRegistry();
-  const runs = engine.runs;
-  const queue = engine.queue;
-  const coreToJob = engine.coreToJob;
-  const publicStatus = engine.publicStatus;
-  const submitRun = engine.submitRun;
-  const cancelRun = engine.cancelRun;
-  const respondPermission = engine.respondPermission;
-  const respondAsk = engine.respondAsk;
   /**
    * 本进程已受理的 durable resume（快速 409，不替代 core 校验）。
    * Addendum A §2：首个调用成功，后续（含重复）一律 run_already_running。
@@ -799,7 +789,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       nodeId,
       seq: item.seq,
       event: item.event,
-      jobId: coreToJob.get(item.event.run_id),
+      // 0.27：统一 run id —— job_id 与 core run id 同值，不再查映射。
+      ...(item.event.run_id ? { jobId: item.event.run_id } : {}),
     });
   }
 
@@ -946,41 +937,72 @@ export function startGateway(opts: GatewayOptions): Gateway {
     broadcastEvent(item);
   });
 
-  // ── 运行队列 ───────────────────────────────────
+  // ── 运行快照（只读控制面）─────────────────────
 
-  function runtimeSnapshot(tenantId: string): Record<string, unknown> {
-    const tenantRuns = [...runs.values()].filter((record) => record.tenant_id === tenantId);
-    const queued = queue
-      .map((record, index) => ({ record, index }))
-      .filter(({ record }) => record.tenant_id === tenantId)
-      .map(({ record, index }) => ({
-        run_id: record.run_id,
-        session_id: record.session_id,
-        status: 'queued',
-        queue_position: index + 1,
-        ...(record.core_run_id !== undefined ? { agent_id: record.core_run_id } : {}),
-      }));
-    const running = tenantRuns
-      .filter((record) => record.status === 'running')
-      .map((record) => ({
-        run_id: record.run_id,
-        session_id: record.session_id,
-        status: 'running',
-        ...(record.core_run_id !== undefined ? { agent_id: record.core_run_id } : {}),
-        ...(record.started_at !== undefined ? { started_at: record.started_at } : {}),
-      }));
-    const stats = {
-      queued: tenantRuns.filter((record) => record.status === 'queued').length,
-      running: tenantRuns.filter((record) => record.status === 'running').length,
-      completed: tenantRuns.filter((record) => record.status === 'completed').length,
-      failed: tenantRuns.filter((record) => record.status === 'failed').length,
-      cancelled: tenantRuns.filter((record) => record.status === 'cancelled').length,
-    };
-    const activeId = engine.active?.tenant_id === tenantId ? engine.active : undefined;
+  /** 空快照：无控制面时的 wire 形状（`active_run_id` 不出现）。 */
+  function emptyRuntimeSnapshot(): Record<string, unknown> {
     return {
-      ...(activeId ? { active_run_id: activeId.run_id } : {}),
-      scheduler: { as_of: Date.now(), queued, running, stats },
+      scheduler: {
+        as_of: Date.now(),
+        queued: [],
+        running: [],
+        stats: { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 },
+      },
     };
+  }
+
+  /**
+   * 0.27：运行态只读控制面 snapshot（scheduler 是唯一 live 事实源）。
+   * 形状与原 engine 版一致；`active_run_id` = 首个 running run。
+   */
+  function runtimeSnapshot(tenantId: string): Record<string, unknown> {
+    const control = runControlForTenant(tenantId);
+    if (control === undefined) return emptyRuntimeSnapshot();
+    let snapshot: RunControlSnapshotLike;
+    try {
+      snapshot = control.snapshot();
+    } catch {
+      return emptyRuntimeSnapshot();
+    }
+    const queued = snapshot.queued.map((run) => ({
+      run_id: run.run_id,
+      session_id: run.session_id,
+      agent_id: run.agent_id,
+      status: run.status,
+      ...(run.queue_position !== undefined ? { queue_position: run.queue_position } : {}),
+      ...(run.queued_at !== undefined ? { queued_at: run.queued_at } : {}),
+    }));
+    const running = snapshot.running.map((run) => ({
+      run_id: run.run_id,
+      session_id: run.session_id,
+      agent_id: run.agent_id,
+      status: run.status,
+      ...(run.started_at !== undefined ? { started_at: run.started_at } : {}),
+    }));
+    const stats = snapshot.stats ?? {
+      queued: queued.length,
+      running: running.length,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    };
+    const active = snapshot.running[0];
+    return {
+      ...(active !== undefined ? { active_run_id: active.run_id } : {}),
+      scheduler: { as_of: snapshot.as_of, queued, running, stats },
+    };
+  }
+
+  /** 该 tenant 的 live run（queued + running）；无控制面 = 空。 */
+  function liveRunsFor(tenantId: string): LiveRunSnapshotLike[] {
+    const control = runControlForTenant(tenantId);
+    if (control === undefined) return [];
+    try {
+      const snapshot = control.snapshot();
+      return [...snapshot.queued, ...snapshot.running];
+    } catch {
+      return [];
+    }
   }
 
   // ── 0.5 RPC 方法表（E10/E11；A-3 §10.1 v1.1） ──
@@ -1021,14 +1043,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createSessionMethods({ defaultTenantId, sessionFor, sessionData: opts.sessionData }),
     ...createRunMethods({
       defaultTenantId,
-      runs,
-      publicStatus,
-      submitRun,
-      cancelRun,
-      requireRuntime,
+      runControlFor: runControlForTenant,
+      requireRunControl,
       durableForTenant,
       tenants: opts.tenants,
-      activeCount: (tenantId) => engine.activeCount(tenantId),
+      activeCount: (tenantId) => liveRunsFor(tenantId).length,
       reserveResume,
       releaseResume,
     }),
@@ -1079,12 +1098,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createTraceMethods(observabilityMethodsDeps),
     ...createTenantMethods({ tenants: opts.tenants }),
     ...createInteractionMethods({
-      respondPermission,
-      respondAsk,
+      // 0.27：交互状态唯一来源是 interactions registry（执行引擎已删除）。
+      respondPermission: (requestId, decision, remember, tenantId, scope, actor) =>
+        interactions.respondPermission(requestId, decision, remember, tenantId, scope, actor),
+      respondAsk: (requestId, answers, tenantId, actor) =>
+        interactions.respondAsk(requestId, answers, tenantId, actor),
       interactions: {
-        interactionRecords: engine.interactionRecords,
-        pendingPermissions: engine.pendingPermissions,
-        pendingAsks: engine.pendingAsks,
+        interactionRecords: interactions.interactionRecords,
+        pendingPermissions: interactions.pendingPermissions,
+        pendingAsks: interactions.pendingAsks,
       },
       ...(opts.hubTeamScope !== undefined ? { teamScope: opts.hubTeamScope } : {}),
     }),
@@ -1095,8 +1117,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 0.14 P0：agents 注册表（additive，排在表尾）。
     ...createAgentMethods({
       registry: agentRegistry,
-      runs,
-      queue: () => queue,
+      liveRuns: liveRunsFor,
       defaultTenantId,
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
       ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
@@ -1370,10 +1391,23 @@ export function startGateway(opts: GatewayOptions): Gateway {
     };
   }
 
-  /** per-tenant 执行面；非 default 无工厂 → forbidden（A-3 §10.4） */
-  function runtimeFor(tenantId: string): RunnableAgent | undefined {
-    if (tenantId === defaultTenantId) return runtime;
-    return opts.runtimeFor?.(tenantId);
+  /**
+   * 0.27：per-tenant run 控制面。default 用 `runControl`，其它 tenant **只用**
+   * `runControlFor`（绝不回退 default，否则跨租户执行 / 读快照）。
+   */
+  function runControlForTenant(tenantId: string): RunControlLike | undefined {
+    if (tenantId === defaultTenantId) return opts.runControl;
+    return opts.runControlFor?.(tenantId);
+  }
+
+  /** 同 `requireRuntime` 的错误码语义（非 default → forbidden；default 带 legacy_code）。 */
+  function requireRunControl(tenantId: string): RunControlLike {
+    const resolved = runControlForTenant(tenantId);
+    if (resolved !== undefined) return resolved;
+    if (tenantId !== defaultTenantId) {
+      throw new RpcError('forbidden', `Tenant runtime is not configured: ${tenantId}`);
+    }
+    throw new RpcError('forbidden', 'No runtime configured', { legacy_code: 'no_runtime' });
   }
 
   function sessionFor(tenantId: string): SessionBackend | undefined {
@@ -1471,18 +1505,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       return opts.pluginsFor(tenantId) ?? [];
     }
     return opts.pluginsFor?.(tenantId) ?? opts.plugins?.() ?? [];
-  }
-
-  function requireRuntime(tenantId: string): RunnableAgent {
-    const resolved = runtimeFor(tenantId);
-    if (!resolved) {
-      // 非 default tenant 未注入 runtimeFor → forbidden；default 保持旧码。
-      if (tenantId !== defaultTenantId) {
-        throw new RpcError('forbidden', `Tenant runtime is not configured: ${tenantId}`);
-      }
-      throw new RpcError('forbidden', 'No runtime configured', { legacy_code: 'no_runtime' });
-    }
-    return resolved;
   }
 
   // ── federation 入站与诊断事件 ──────────────────
@@ -2355,31 +2377,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
       }
 
-      // 0.1.0 兼容：阻塞式 /run（旧 web 客户端 / 脚本）
+      // 0.1.0 兼容：阻塞式 /run 已删除（0.27）。
+      // gateway 不再持有 run 记录，无法等待终态；app 侧执行生命周期归 AgentService。
+      // 旧客户端改用 `POST /v1/runs`（202 + 事件流）。
       if (path === '/run' && req.method === 'POST') {
-        const body = await readJsonBody(req, maxBodyBytes, extra);
-        if (body instanceof Response) return body;
-        if (typeof body.input !== 'string' || body.input.length === 0) {
-          return errorJson('invalid_request', 'input is required', 400, extra);
-        }
-        try {
-          const started = (await callMethod('runs.start', body, principal)) as {
-            run_id?: unknown;
-          };
-          const runId = typeof started.run_id === 'string' ? started.run_id : '';
-          const record = runs.get(runId);
-          if (!record) return errorJson('internal', 'Run not found', 500, extra);
-          await record.done;
-          if (record.status === 'completed') return json({ output: record.output }, 200, extra);
-          return errorJson(
-            record.status === 'cancelled' ? 'cancelled' : 'internal',
-            record.error ?? 'Run failed',
-            record.status === 'cancelled' ? 409 : 500,
-            extra,
-          );
-        } catch (error) {
-          return legacyErrorResponse(error, extra);
-        }
+        return errorJson(
+          'method_not_allowed',
+          'POST /run is removed; use POST /v1/runs (async) and subscribe to events',
+          405,
+          extra,
+        );
       }
 
       return errorJson('not_found', `Not found: ${path}`, 404, extra);
@@ -2466,50 +2473,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }, heartbeatMs);
   (heartbeat as { unref?: () => void } | undefined)?.unref?.();
 
-  /** 关闭时等待 active run 的上限（0.10 R2-18） */
-  const SHUTDOWN_RUN_TIMEOUT_MS = 5_000;
-
   /** 关闭路径的异常只记 stderr，不阻断后续清理 */
   function reportStopError(action: string, error: unknown): void {
     const detail = error instanceof Error ? error.message : String(error);
     console.error(`[vessel] gateway stop: ${action} failed: ${detail}`);
-  }
-
-  /**
-   * 以 `shutdown` reason 中断 active run（0.10 R2-18）。
-   *
-   * 优先调用 runtime 的 `interrupt()`（AgentRuntime 会把 checkpoint 落 `interrupted`）；
-   * 同时用现有 `RunOptions.signal` 透传同一 reason，覆盖未实现 `interrupt` 的 facade。
-   */
-  function interruptActiveRun(record: RunRecord): void {
-    const tenantRuntime = runtimeFor(record.tenant_id) as InterruptibleRuntime | undefined;
-    const interrupt = tenantRuntime?.interrupt;
-    if (typeof interrupt === 'function') {
-      try {
-        interrupt.call(tenantRuntime, 'shutdown');
-      } catch (error) {
-        reportStopError('interrupt active run', error);
-      }
-    }
-    try {
-      record.controller.abort('shutdown');
-    } catch (error) {
-      reportStopError('abort active run', error);
-    }
-  }
-
-  /** 限时等待 run 终态；超时返回 false，不抛 */
-  async function waitForRun(record: RunRecord, timeoutMs: number): Promise<boolean> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const expired = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs);
-      (timer as { unref?: () => void }).unref?.();
-    });
-    try {
-      return await Promise.race([record.done.then(() => true), expired]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
   }
 
   function closeWsClients(): void {
@@ -2536,35 +2503,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   async function shutdown(): Promise<void> {
     if (heartbeat !== undefined) clearInterval(heartbeat);
-    // 先清队列：active run 收尾时 pump() 不得再启动新 run。
-    for (const record of queue.splice(0)) {
-      record.status = 'cancelled';
-      record.completed_at = Date.now();
-      record.resolveDone();
-    }
 
-    // 中断并等待 active run 落终态；等待期间事件仍订阅，终态帧可正常广播。
-    const activeRun = engine.active;
-    if (activeRun !== null) {
-      interruptActiveRun(activeRun);
-      const settled = await waitForRun(activeRun, SHUTDOWN_RUN_TIMEOUT_MS);
-      if (!settled) {
-        console.error(
-          `[vessel] gateway stop: run ${activeRun.run_id} did not finish within ` +
-            `${SHUTDOWN_RUN_TIMEOUT_MS}ms`,
-        );
-      }
-    }
-
+    // 0.27：执行生命周期归 app / AgentService —— gateway 只退订、关连接。
+    // 这里不再清队列、不中断 active run、不等终态。
     try {
       unsubscribe();
     } catch (error) {
       reportStopError('unsubscribe events', error);
     }
     try {
-      unsubscribeEngine();
+      unsubscribeInteractions();
     } catch (error) {
-      reportStopError('unsubscribe engine events', error);
+      reportStopError('unsubscribe interactions', error);
     }
 
     unsubscribeTokenRevoke?.();

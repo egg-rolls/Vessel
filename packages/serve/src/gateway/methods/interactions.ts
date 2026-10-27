@@ -6,6 +6,12 @@
 
 import type { HubTeamScopeLike } from '../../hub-control.js';
 import type {
+  PendingAsk,
+  PendingPermission,
+  PermissionRespondResult,
+  PermissionScope,
+} from '../../interactions-registry.js';
+import type {
   StoredInteraction,
   StoredInteractionAnswer,
   StoredInteractionStatus,
@@ -16,12 +22,6 @@ import {
   type RpcMethodContext,
   type RpcMethodDefinition,
 } from '../../rpc.js';
-import type {
-  PendingAsk,
-  PendingPermission,
-  PermissionRespondResult,
-  PermissionScope,
-} from '../../run-engine.js';
 import { stringParam } from './common.js';
 
 /**

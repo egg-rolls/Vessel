@@ -2,7 +2,8 @@
  * agents.* / tasks.* 方法（0.14 P0；0.15 E5）。
  *
  * 数据源优先级：
- *   1. active / queued run 记录（补齐根 agent 与队列位置）；
+ *   1. live run 快照（`RunControlLike.snapshot()` 的 queued + running，补齐根 agent
+ *      与队列位置）；
  *   2. `subagent.*` 事件派生条目（保留 parent/depth/task/session/usage）。
  *
  * `tasks.*` 只读派生，不持久化；未知 id 返回 `not_found`。
@@ -30,7 +31,7 @@ import {
   type RpcMethodContext,
   type RpcMethodDefinition,
 } from '../../rpc.js';
-import type { RunRecord } from '../../run-engine.js';
+import type { LiveRunSnapshotLike } from '../../run-control.js';
 import type { TeamControlLike } from '../../team-control.js';
 import { stringParam } from './common.js';
 import {
@@ -43,9 +44,14 @@ import {
 
 export interface AgentMethodsDeps {
   registry: AgentRegistry;
-  runs: ReadonlyMap<string, RunRecord>;
-  /** FIFO 队列（按入队顺序）；用于根 agent 的 queue_position。 */
-  queue?: () => readonly RunRecord[];
+  /**
+   * 0.27：某 tenant 的 live run 快照（唯一来源 = `RunControlLike.snapshot()`
+   * 的 queued + running）；serve 不再持有 run 记录或队列。
+   *
+   * 需要 tenant 参数：`LiveRunSnapshotLike` 不带 tenant_id（snapshot 本身按
+   * tenant 取），返回合并列表会把别的 tenant 的 agent 泄漏给当前调用方。
+   */
+  liveRuns: (tenantId: string) => readonly LiveRunSnapshotLike[];
   defaultTenantId: string;
   /**
    * 0.25：agent 生命周期控制面（app 注入 AgentService 适配器）。
@@ -92,22 +98,21 @@ function collectAgents(deps: AgentMethodsDeps, tenantId: string): Map<string, Ag
     merged.set(entry.id, { ...entry });
   }
 
-  // 2. active / queued run：补齐根 agent 与队列位置。
-  const queue = deps.queue?.() ?? [];
-  for (const record of deps.runs.values()) {
-    if (record.tenant_id !== tenantId) continue;
-    if (record.status !== 'queued' && record.status !== 'running') continue;
-    const id = record.core_run_id ?? record.run_id;
-    if (merged.has(id)) continue;
-    const position = record.status === 'queued' ? queue.indexOf(record) : -1;
-    merged.set(id, {
-      id,
+  // 2. live run 快照：补齐根 agent 与队列位置。
+  // 0.27：id 用 `agent_id`（不再借用 core run id），状态 / 队列位 / session
+  // 全部来自 scheduler snapshot。
+  for (const run of deps.liveRuns(tenantId)) {
+    if (merged.has(run.agent_id)) continue;
+    merged.set(run.agent_id, {
+      id: run.agent_id,
       role: 'main',
       depth: 0,
-      state: record.status,
-      session_id: record.session_id,
-      ...(record.started_at !== undefined ? { started_at: record.started_at } : {}),
-      ...(position >= 0 ? { queue_position: position + 1 } : {}),
+      state: run.status,
+      session_id: run.session_id,
+      ...(run.started_at !== undefined ? { started_at: run.started_at } : {}),
+      ...(run.queue_position !== undefined && run.queue_position >= 1
+        ? { queue_position: run.queue_position }
+        : {}),
     });
   }
 
@@ -463,6 +468,70 @@ const agentRotateEntrySchema = {
   },
 };
 
+/**
+ * viewer 作用域下的可见成员：`deps` 是事件派生视图 + live 快照。
+ *
+ * 可见性口径只有这一处，`agents.list` / `agents.get` 共用：
+ * - 合成 owner principal（带 `agent_id`）→ 以该 agent 为 viewer 查 AgentService；
+ * - 人类管理面 → 事件派生视图 + private single；
+ * - 其它（team-scoped token 等）→ 只有事件派生视图。
+ *
+ * `agents.tree` **不**走这里：它仍直读事件派生视图（见 ADR-091 已知限制），
+ * 因此看不到 private single，也不认 viewer 口径。
+ *
+ * `filters.sessionId` 是**逐条**过滤（不是取到结果后整条抹）：同一 id 在注册表与
+ * 成员表里的 session 可能不同（rotate 后旧 Body、stale 快照），整条抹会连带丢掉
+ * 原本可见的注册表条目。
+ */
+async function visibleAgents(
+  deps: AgentMethodsDeps,
+  ctx: RpcMethodContext,
+  filters: { sessionId?: string; state?: string; visibility?: AgentVisibilityLike } = {},
+): Promise<Record<string, unknown>[]> {
+  const sessionId = filters.sessionId;
+  const stateArg = filters.state as AgentStateLike | undefined;
+  const visibilityArg = filters.visibility;
+  const agentServiceAvailable = deps.agent !== undefined && deps.agent.tenantId === ctx.tenantId;
+
+  // 合成 owner principal 携带 agent id：按 viewer 从 AgentService 列出成员，
+  // private 可见性与 CLI `vessel agent list` 的语义保持不变。
+  const viewer = ctx.principal.agent_id;
+  if (viewer !== undefined && agentServiceAvailable) {
+    const members = await (deps.agent as AgentControlLike).list({
+      viewer,
+      ...(stateArg !== undefined ? { state: stateArg } : {}),
+      ...(visibilityArg !== undefined ? { visibility: visibilityArg } : {}),
+    });
+    return members
+      .filter((entry) => sessionId === undefined || entry.session_id === sessionId)
+      .map(publicMember);
+  }
+
+  const agents = [...collectAgents(deps, ctx.tenantId).values()]
+    .filter((entry) => sessionId === undefined || entry.session_id === sessionId)
+    .filter((entry) => filters.state === undefined || entry.state === filters.state)
+    .map(publicAgent);
+
+  // 人类管理面在事件派生视图之外合并成员记录里的 single：
+  // private single 只有管理面可见（agent / team token 仍按 viewer 判定）。
+  if (isHumanAdmin(ctx) && agentServiceAvailable) {
+    const members = await (deps.agent as AgentControlLike).list({
+      viewer: ADMIN_VIEWER,
+      ...(stateArg !== undefined ? { state: stateArg } : {}),
+      ...(visibilityArg !== undefined ? { visibility: visibilityArg } : {}),
+    });
+    for (const member of members) {
+      if (member.role !== 'single') continue;
+      if (sessionId !== undefined && member.session_id !== sessionId) continue;
+      const entry = publicMember(member);
+      const index = agents.findIndex((agent) => agent.id === member.id);
+      if (index >= 0) agents[index] = entry;
+      else agents.push(entry);
+    }
+  }
+  return agents;
+}
+
 export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[] {
   return [
     {
@@ -493,45 +562,11 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           params.visibility === 'tenant'
             ? params.visibility
             : undefined;
-        // 合成 owner principal 携带 agent id：按 viewer 从 AgentService 列出成员，
-        // private 可见性与 CLI `vessel agent list` 的语义保持不变。
-        const viewer = ctx.principal.agent_id;
-        if (
-          viewer !== undefined &&
-          deps.agent !== undefined &&
-          deps.agent.tenantId === ctx.tenantId
-        ) {
-          const members = await deps.agent.list({
-            viewer,
-            ...(state !== undefined ? { state: state as AgentStateLike } : {}),
-            ...(visibility !== undefined ? { visibility } : {}),
-          });
-          const agents = members
-            .filter((entry) => sessionId === undefined || entry.session_id === sessionId)
-            .map(publicMember);
-          return { agents };
-        }
-        const agents = [...collectAgents(deps, ctx.tenantId).values()]
-          .filter((entry) => sessionId === undefined || entry.session_id === sessionId)
-          .filter((entry) => state === undefined || entry.state === state)
-          .map(publicAgent);
-        // 人类管理面在事件派生视图之外合并成员记录里的 single：
-        // private single 只有管理面可见（agent / team token 仍按 viewer 判定）。
-        if (isHumanAdmin(ctx) && deps.agent !== undefined && deps.agent.tenantId === ctx.tenantId) {
-          const members = await deps.agent.list({
-            viewer: ADMIN_VIEWER,
-            ...(state !== undefined ? { state: state as AgentStateLike } : {}),
-            ...(visibility !== undefined ? { visibility } : {}),
-          });
-          for (const member of members) {
-            if (member.role !== 'single') continue;
-            if (sessionId !== undefined && member.session_id !== sessionId) continue;
-            const entry = publicMember(member);
-            const index = agents.findIndex((agent) => agent.id === member.id);
-            if (index >= 0) agents[index] = entry;
-            else agents.push(entry);
-          }
-        }
+        const agents = await visibleAgents(deps, ctx, {
+          ...(sessionId !== undefined ? { sessionId } : {}),
+          ...(state !== undefined ? { state } : {}),
+          ...(visibility !== undefined ? { visibility } : {}),
+        });
         return { agents };
       },
     },
@@ -548,13 +583,16 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         required: ['agent'],
         properties: { agent: agentInfoSchema },
       },
-      handler: (params, ctx) => {
+      handler: async (params, ctx) => {
         const agentId = stringParam(params, 'agent_id');
-        const agent = collectAgents(deps, ctx.tenantId).get(agentId);
+        // 与 `agents.list` 同一可见性口径：人类管理面能看到 private single，
+        // 合成 owner principal 按自身 viewer 判定，team-scoped token 只看事件派生。
+        const agents = await visibleAgents(deps, ctx);
+        const agent = agents.find((entry) => entry.id === agentId);
         if (!agent) {
           throw new RpcError('not_found', `agent not found: ${agentId}`, { agent_id: agentId });
         }
-        return { agent: publicAgent(agent) };
+        return { agent };
       },
     },
     {
