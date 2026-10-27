@@ -159,6 +159,24 @@ function mapDerivedEntry(entry: unknown, fixed: Record<string, unknown>): unknow
   return isRecord(entry) ? mapDerived(entry, fixed) : entry;
 }
 
+/**
+ * 显式申请的名字被同 Team present 成员占用时，service 会自动加 `-2..` 后缀。
+ * 结果里点明这件事：调用方要的名字没拿到，否则它会以为成员就叫请求的那个名字。
+ * 没有改名时（含未指定 name）不加这个字段，避免每次调用多一段无用文本。
+ */
+function withRenamedNote<T extends { name?: string }>(
+  result: T,
+  requested: unknown,
+): T & { requested_name?: string; note?: string } {
+  if (typeof requested !== 'string' || result.name === undefined) return result;
+  if (result.name === requested) return result;
+  return {
+    ...result,
+    requested_name: requested,
+    note: `name already taken in this team; assigned ${result.name}`,
+  };
+}
+
 /** `from` 不暴露：工具调用者恒为 owner，模型不能伪造发送者 */
 function mapSend(record: Record<string, unknown>): Record<string, unknown> {
   const input: Record<string, unknown> = {};
@@ -410,11 +428,18 @@ export function createAgentTool(
             const result = await service.create({
               members: entries as unknown as CreateMemberInput[],
             });
-            return JSON.stringify(result);
+            // batch 逐条对照输入里的 name，改过名的条目单独标注
+            const results = entries.map((entry, index) => {
+              const item = result.results[index];
+              if (item === undefined || !item.ok || !isRecord(entry)) return item;
+              return { ...item, status: withRenamedNote(item.status, entry.name) };
+            });
+            return JSON.stringify({ ...result, results });
           }
-          return JSON.stringify(
-            await service.create(mapDerived(record, fixed) as unknown as CreateMemberInput),
+          const created = await service.create(
+            mapDerived(record, fixed) as unknown as CreateMemberInput,
           );
+          return JSON.stringify(withRenamedNote(created, record.name));
         }
 
         if (action === 'send') {

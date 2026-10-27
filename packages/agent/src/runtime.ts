@@ -284,11 +284,19 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
  * 渲染本轮消息来源。由 `runTurn` 作为 `RunOptions.messages` 注入为持久化的
  * `vessel:source` 消息，不改写 system。
  *
+ * **单行方括号**：来源是纯展示，一行 `[from <principal>@<team>]` 就说完了。
+ * 不用多行块 + 标题，也不用 C 风格的块注释语法 —— `sanitizeSource()` 不处理块注释
+ * 的结束标记，名字里带它就提前闭合，运行时不会报错、只会静默错乱。
+ *
+ * `channel` 是消息的元属性，只进 trace / 日志，不渲染进提示词。
+ *
  * **本机来源不带 node 段**：能走到这条路的 `from` 全部是本机 principal（远端一律走
  * `federation:` 前缀的分支）。node 段是跨节点才需要的信息，这里没有 node identity
  * 可填（`AgentMessage` 不携带 node_id），过去用 `os.hostname()` 顶替 —— 那让同一个
  * 概念在展示层与寻址层有了两个不同的值，agent 照抄回来的地址永远对不上。
- * 省略它，`human` / `agent:<name>` 都是可直接回信的形态。
+ *
+ * **`from` 用完整 uuid，不缩成短 id**：短 id 不是任何真实 id，模型照抄回来解析不到；
+ * 保完整值至少与寻址层一致。
  *
  * 联邦入站的 `from` 已自带 `<principal>@<node>:<team>`；直接渲染内嵌地址，
  * 不得再拼本机 node/team（否则会伪装成本机成员）。
@@ -296,18 +304,12 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
 function formatMessageSource(message: AgentMessage, teamId: string | undefined): string {
   if (message.from.startsWith('federation:')) {
     const addr = sanitizeSource(message.from.slice('federation:'.length));
-    return ['[Message source]', `from: ${addr}`, `channel: ${message.channel ?? 'team'}`].join(
-      '\n',
-    );
+    return `[from ${addr}]`;
   }
   const source = message.source ?? inferMessageSource(message.from);
   const principal = source === 'agent' ? `agent:${sanitizeSource(message.from)}` : source;
   const team = typeof teamId === 'string' && teamId.length > 0 ? sanitizeSource(teamId) : undefined;
-  return [
-    '[Message source]',
-    `from: ${principal}${team !== undefined ? `@${team}` : ''}`,
-    `channel: ${message.channel ?? 'direct'}`,
-  ].join('\n');
+  return `[from ${principal}${team !== undefined ? `@${team}` : ''}]`;
 }
 
 /** 成员不可见的工具 */

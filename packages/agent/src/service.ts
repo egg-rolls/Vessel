@@ -644,12 +644,11 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('team_full', `team_full: ${teamId}`);
     }
     // 名称只由 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫。
+    // 显式名被占用时自动加 `-2..` 后缀而不是报错：name 是给人看的标签，
+    // 不是寻址主键（id 才是），所以重名不值得让整次派生失败。
     let resolvedName: string;
     if (name !== undefined) {
-      if (this.nameOccupied(name, teamId)) {
-        throw new AgentError('invalid_input', `duplicate member name: ${name}`);
-      }
-      resolvedName = name;
+      resolvedName = this.nameOccupied(name, teamId) ? this.numberedNameFor(name, teamId) : name;
     } else {
       resolvedName = this.autoNameFor(spawnedBy, teamId);
     }
@@ -766,17 +765,26 @@ export class AgentServiceImpl implements AgentService {
       );
   }
 
-  /** 缺省名：`${base}-2..${base}-101`；100 次仍冲突则 name_exhausted */
-  private autoNameFor(spawnedBy: string | undefined, teamId: string | undefined): string {
-    const base =
-      (spawnedBy !== undefined ? this.registry.resolve(spawnedBy)?.name : undefined) ??
-      spawnedBy ??
-      'agent';
+  /**
+   * `${base}-2..${base}-101` 中第一个未被占用的名字；100 次仍冲突则 name_exhausted。
+   * 占用判据就是 `nameOccupied`：同 Team 的 present 成员（unbound 时 tenant 全扫），
+   * 不同 Team 可以同名。
+   */
+  private numberedNameFor(base: string, teamId: string | undefined): string {
     for (let index = 2; index <= 101; index += 1) {
       const candidate = `${base}-${index}`;
       if (!this.nameOccupied(candidate, teamId)) return candidate;
     }
     throw new AgentError('invalid_input', `name_exhausted: ${base}`);
+  }
+
+  /** 缺省名：以派生出的 base 走 numbering */
+  private autoNameFor(spawnedBy: string | undefined, teamId: string | undefined): string {
+    const base =
+      (spawnedBy !== undefined ? this.registry.resolve(spawnedBy)?.name : undefined) ??
+      spawnedBy ??
+      'agent';
+    return this.numberedNameFor(base, teamId);
   }
 
   /**

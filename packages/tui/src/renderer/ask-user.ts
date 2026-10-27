@@ -170,11 +170,8 @@ export interface CreateAskUserToolOptions {
 export function createAskUserTool(opts: CreateAskUserToolOptions = {}): ToolDefinition {
   return {
     name: 'ask_user',
-    description: `Ask the user up to 4 questions during execution, with optional multiple-choice options and multi-select.
-Each question can have up to 4 options; the user may pick one, select multiple (multi_select: true), or type their own answer.
-This tool pauses the run and waits for the user to answer all questions, then returns the answers.
-Use when you need clarification, confirmation, or to gather information only the user can provide.
-Do NOT use for trivial questions you can resolve yourself.`,
+    description: `Ask the user questions and wait for all answers. A question may offer options; the user picks one, picks several (multi_select), or types their own.
+Use for clarification, confirmation, or information only the user has. Not for things you can resolve yourself.`,
     inputSchema: {
       type: 'object',
       properties: {
