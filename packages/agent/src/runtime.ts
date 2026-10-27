@@ -296,6 +296,22 @@ function escapeAttr(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * principal 段是否合法到能被 `resolveAddress` 接受。
+ *
+ * 与 `src/federation-address.ts:23` 的 `FEDERATION_PRINCIPAL_RE` 同源同形状
+ * （`[A-Za-z0-9_-]{1,64}`）。不 import 它：`packages/agent` 不依赖应用层 `src/`，
+ * 方向是 `core ← packages ← src`。改这一处要同步改那边，反之亦然。
+ *
+ * 需要这个判定是因为成员名只校验非空（`AgentService.create` 的 `optionalString`），
+ * 没有任何字符集约束：`my.agent`（含点）、`docs core`（含空格）、中文名、超 64 字符
+ * 全都能存进 registry。这类名字直接拼进地址会让 `parseFederationAddress` 在
+ * **形状校验**就失败（不是 `unknown_member`，是整个地址非法），模型抄回去必然发不出去。
+ */
+function isAddressSafePrincipal(name: string): boolean {
+  return /^[A-Za-z0-9_-]{1,64}$/.test(name);
+}
+
 /** 缺 source 时按 from 退化推断；生产路径由 AgentService 入队时标注 */
 function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
   if (from === 'system') return 'system';
@@ -316,11 +332,14 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
  * 比「本机两段、跨机三段」少一条分支：早先本机来源省掉 node 段，模型抄回去的
  * 两段地址是否算本机取决于当时有没有 federation 开着，行为不一致。
  *
- * **principal 段是可回信的**：有名字写名字（`docs-core`），无名成员写**完整 uuid**。
- * 不能缩成短 id —— `registry.resolve()` 与 `resolveMember()` 都只做精确匹配
- * （id / session / body / name），没有前缀匹配，`3ae686c0@<node>:<team>` 会必然
- * `unknown_member`。省那 28 个字符换一个死地址，而来源行还持久化进历史、
- * 模型下次照样抄。名字是给人读的提示，name / id 都可用于回信。
+ * **principal 段必须是能解析到的值**，一条规则两种情况：
+ * - 名字合法（见 `isAddressSafePrincipal`）就写名字：`docs-core@<node>:<team>`；
+ * - 名字不可用、或成员无名，一律写**完整 uuid**。
+ *
+ * 不缩成短 id：node 段是精确命中本机的，落到 `registry.resolve("3ae686c0")` 时
+ * 只做 id / session / body 的精确匹配、没有前缀匹配，结果必然是 `unknown_member`
+ * ——消息发不出去，而不是被误路由到远端。来源行还会持久化进历史，模型下一轮照样抄。
+ * 名字不可用时同理不做任何截断降级，uuid 是唯一保证合法的 principal。
  *
  * **缺 `nodeId` 时退回两段** `principal@<team>`（纯内存构造 / 测试路径）：不伪造 node 段，
  * 也不去猜一个主机名。
@@ -340,10 +359,14 @@ function formatMessageSource(
     return `<from location="${escapeAttr(address)}" />`;
   }
   const source = message.source ?? inferMessageSource(message.from);
+  // 一条规则覆盖两种情况：principal 段必须是 resolveAddress 收得下的形状，
+  // 收不下就用完整 uuid（uuid 一定合法）。名字不可用时不做「换个短一点的写法」
+  // 之类的降级 —— 解析侧只做精确匹配，任何截断都是另一种死地址。
+  const named = message.from_name === undefined ? undefined : sanitizeSource(message.from_name);
   const principal =
     source === 'agent'
-      ? message.from_name !== undefined
-        ? sanitizeSource(message.from_name)
+      ? named !== undefined && isAddressSafePrincipal(named)
+        ? named
         : sanitizeSource(message.from)
       : source;
   const scope = teamId === undefined ? undefined : sanitizeSource(teamId);
