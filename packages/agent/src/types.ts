@@ -193,6 +193,14 @@ export interface AgentMessage {
    * 成员点对点投递为 `direct`。缺省 `direct`。
    */
   channel?: AgentMessageChannel;
+  /**
+   * 发送者的显示名（内存内元数据，不落 snapshot）。由 AgentService 入队时按
+   * registry 填；人类 / 系统 / 联邦地址没有本机成员名，缺省。
+   *
+   * 只用于来源标注的可读性：`from` 仍是 uuid，是唯一身份。执行内核不持有 registry，
+   * 所以名字必须随消息带过来，不能到渲染时再查。
+   */
+  from_name?: string;
 }
 
 /** 传给执行内核的成员身份（不携带 registry 状态） */

@@ -289,12 +289,14 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
  * 渲染本轮消息来源。由 `runTurn` 作为 `RunOptions.messages` 注入为持久化的
  * `vessel:source` 消息，不改写 system。
  *
- * **渲染成描述，不渲染成地址**：`[from agent:3ae686c0]` / `[from human]`。
+ * **渲染成描述，不渲染成地址**：`[from agent:docs-core (3ae686c0)]` / `[from human]`。
  * 早先写成 `agent:<uuid>@<team>` 看起来像可回复的地址，但本机来源没有 node 段，
  * 那条地址按 `resolveAddress` 解析必失败 —— 格式暗示了一个它不支持的操作。
  * 模型回信本来就靠 `to: <uuid>` 或成员名（trace 里全部如此），从不抄这一行。
  *
- * 短 id 只用于展示：完整 uuid 仍在 `AgentMessage.from` 里，trace 可查。
+ * **name 在前、短 id 在后**：名字给人读，短 id 保唯一；只有 uuid 没有名字时省掉名字段。
+ * 圆括号包 id，避免与外层方括号叠成 `[[...]]`。短 id 只是展示辅助 —— 完整 uuid 仍在
+ * `AgentMessage.from` 里，trace 可查。
  *
  * 不用多行块 + 标题，也不用 C 风格的块注释语法 —— `sanitizeSource()` 不处理块注释
  * 的结束标记，名字里带它就提前闭合，运行时不会报错、只会静默错乱。
@@ -310,7 +312,13 @@ function formatMessageSource(message: AgentMessage): string {
   }
   const source = message.source ?? inferMessageSource(message.from);
   if (source !== 'agent') return `[from ${source}]`;
-  return `[from agent:${shortId(sanitizeSource(message.from))}]`;
+  const id = shortId(sanitizeSource(message.from));
+  // 无名字时写 `agent (id)`，不写 `agent:(id)`：冒号后面没有东西不像名字。
+  const label =
+    message.from_name === undefined
+      ? `agent (${id})`
+      : `agent:${sanitizeSource(message.from_name)} (${id})`;
+  return `[from ${label}]`;
 }
 
 /** 成员不可见的工具 */

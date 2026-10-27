@@ -1323,6 +1323,7 @@ export class AgentServiceImpl implements AgentService {
     }
 
     // 5. 入该 body mailbox，满足条件时 submit
+    const senderName = this.senderName(from);
     const message: AgentMessage = {
       id: this.newId(),
       from,
@@ -1332,6 +1333,8 @@ export class AgentServiceImpl implements AgentService {
       ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
       source: this.messageSource(from),
       channel,
+      // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
+      ...(senderName !== undefined ? { from_name: senderName } : {}),
     };
     entry.pending.push(message);
     this.registry.touchBody(record.id, entry.bodyId, this.now());
@@ -3026,6 +3029,15 @@ export class AgentServiceImpl implements AgentService {
     const record = this.registry.get(from);
     if (record === undefined) return 'human';
     return record.role === 'single' ? 'human' : 'agent';
+  }
+
+  /**
+   * 发送者显示名：只对本机登记成员有值。人类 / 系统 / 联邦地址没有本机成员名，
+   * 返回 undefined，渲染时退回短 id。
+   */
+  private senderName(from: string): string | undefined {
+    const record = this.registry.get(from);
+    return record === undefined ? undefined : record.name;
   }
 
   private scheduleSnapshot(): void {
