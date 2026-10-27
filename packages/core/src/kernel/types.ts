@@ -7,61 +7,16 @@
  * @module @vessel-agent/core/kernel
  */
 
-import type { ContextManager } from '../types/context.js';
 import type { EventHandler, EventStream, Unsubscribe } from '../types/event.js';
-import type { TerminationPolicy, UsageLimits } from '../types/limits.js';
-import type { PluginHost, RuntimePermissionConfig, SelfCardOptions } from '../types/plugin.js';
-import type { LLMProvider, Message, Usage } from '../types/provider.js';
+import type { PluginHost } from '../types/plugin.js';
+import type { Message, Usage } from '../types/provider.js';
 import type { RunInterruptReason, RunOptions } from '../types/run.js';
-import type { RunStore } from '../types/run-store.js';
-import type { SessionBackend } from '../types/session.js';
 
 /** Agent 生命周期状态 */
 export type AgentState = 'idle' | 'running' | 'cancelled' | 'error' | 'closed';
 
 /** Run 生命周期状态 */
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-
-/**
- * Host 接受的成员规格。
- * `provider` / `model` 必填；其余可缺省，由 Host 的默认值或调用方注入。
- */
-export interface AgentSpec {
-  /**
-   * 成员 id；缺省生成 UUID。
-   * 必须匹配 `[A-Za-z0-9_-]{1,64}`（A11）；不含 ':'（地址分隔符）与 '/'（session 命名空间）。
-   */
-  id?: string;
-  name?: string;
-  provider: LLMProvider;
-  model: string;
-  /** 成员能力集；缺省用 Host 注入的 pluginHost */
-  pluginHost?: PluginHost;
-  systemPrompt?: string;
-  /** 成员独占上下文；缺省由 contextFactory 创建 */
-  context?: ContextManager;
-  /** 成员专用 session 后端；缺省用 Host 共享后端并按 agentId 命名空间隔离 */
-  session?: SessionBackend;
-  /** 成员默认 session id；缺省 'default'（位于该成员的命名空间内） */
-  sessionId?: string;
-  /** run / agent / host 三级限额；0.2 R1 先使用 run（agent 同源） */
-  limits?: Limits;
-  termination?: TerminationPolicy;
-  permission?: RuntimePermissionConfig;
-  metadata?: Record<string, unknown>;
-  /** 0.5：成员所属 tenant；缺省继承 Host 的 tenantId */
-  tenantId?: string;
-  /** 0.15 E9：成员 Self Card；Ext 为 delegate 子成员设置，缺省不注入 */
-  selfCard?: SelfCardOptions;
-}
-
-/** 限额作用域（F3）；0.2 R1 只消费 run，agent/host 由 R2 接 */
-export interface Limits {
-  run?: UsageLimits;
-  agent?: UsageLimits;
-  host?: UsageLimits;
-  termination?: TerminationPolicy;
-}
 
 /** 成员状态视图（可序列化，不含 runtime 内部对象） */
 export interface AgentStatus {
@@ -118,7 +73,7 @@ export interface RunHandle {
   cancel(reason?: string): void;
 }
 
-/** 成员句柄（Host 的唯一寻址单位） */
+/** 成员句柄（agent 的唯一寻址单位） */
 export interface AgentHandle {
   readonly id: string;
   readonly name?: string;
@@ -198,7 +153,7 @@ export interface PeerInfo {
   lastSeen?: number;
 }
 
-/** Host 聚合事件的过滤条件 */
+/** 聚合事件的过滤条件 */
 export interface EventFilter {
   agentId?: string;
   runId?: string;
@@ -208,7 +163,7 @@ export interface EventFilter {
   nodeId?: string;
 }
 
-/** Host 级事件总线；仍实现 EventStream（9 接口不变） */
+/** 聚合事件总线；仍实现 EventStream（9 接口不变） */
 export interface EventBus extends EventStream {
   subscribeFiltered(handler: EventHandler, filter?: EventFilter): Unsubscribe;
 }
@@ -230,10 +185,15 @@ export interface RunnableAgent {
 /** Scheduler 提交项（R1 冻结；R2 实现队列/并发） */
 export interface ScheduledTask {
   agent: AgentHandle;
+  /**
+   * 串行键（0.27 必填）：同一键同时最多一个 running。
+   * 统一入口总是 body/session id，因此不同 body 可并发、同 body 串行。
+   */
+  serialKey: string;
   /** 成员默认 session；R2 用于 RunHandle.sessionId */
   sessionId?: string;
   /**
-   * 0.14.1（additive）：固定 run id。Host.resume 用它保持 `RunHandle.id` 与原 run 一致；
+   * 0.14.1（additive）：固定 run id，用于保持 `RunHandle.id` 与 durable run 一致；
    * 缺省由 Scheduler 生成。重复 id 的 submit 会被拒绝。
    */
   runId?: string;
@@ -242,19 +202,19 @@ export interface ScheduledTask {
   /** 预留：0.2 只做 FIFO，不实现优先级 */
   priority?: number;
   /**
-   * @internal Host 使用：直接执行入口（收到 runId 后创建 RunHandle）。
+   * 直接执行入口（收到 runId 后创建 RunHandle）。
    * 自定义 Scheduler 必须优先调用它，否则会和 `AgentHandle.run` 形成递归。
    */
   executor?: (runId: string) => Promise<RunHandle>;
 }
 
 export interface SchedulerOptions {
-  /** 全局并发上限；默认 1（0.2 保守） */
+  /** 全局并发上限；缺省 Infinity（0.27：显式正整数才限制） */
   maxConcurrency?: number;
   /** 队列上限；默认 100 */
   maxQueueSize?: number;
-  /** 同一成员串行（默认 true） */
-  perAgentSerial?: boolean;
+  /** 同一 body/session 串行（默认 true）；不同 body 可并发 */
+  perBodySerial?: boolean;
   /** 0.15 E4：队列事件发布流；缺省不发（只读观测，不改变调度） */
   events?: EventStream;
   /** 0.15 E4：事件 tenant 盖章；缺省不写 */
@@ -263,9 +223,9 @@ export interface SchedulerOptions {
 
 /**
  * 0.15 E3/E4：队列等待原因。
- * core 只产出 `capacity` / `per_agent_serial`；其余取值预留给上层调度实现。
+ * core 只产出 `capacity` / `per_body_serial`；其余取值预留给上层调度实现。
  */
-export type WaitReason = 'capacity' | 'per_agent_serial' | 'paused' | 'dependency' | 'quota';
+export type WaitReason = 'capacity' | 'per_body_serial' | 'paused' | 'dependency' | 'quota';
 
 export interface SchedulerStats {
   queued: number;
@@ -291,36 +251,6 @@ export interface RunSnapshot {
   startedAt?: number;
 }
 
-/** 一个成员的只读摘要（0.14.1，纯 JSON；0.15 E3 additive 字段） */
-export interface AgentSnapshot {
-  id: string;
-  name?: string;
-  state: AgentState;
-  /** 当前 run 的 session；空闲时为成员默认 session */
-  sessionId: string;
-  currentRunId?: string;
-  toolNames: string[];
-  lastError?: string;
-  /** 当前 run 开始时间（Unix ms） */
-  startedAt?: number;
-  /** 该成员排队中的位置（1 起） */
-  queuePosition?: number;
-  /** 所属节点；Host 能提供 transport.nodeId 时填写 */
-  nodeId?: string;
-  /** 当前任务；来自 spec.metadata.task（Ext 可填） */
-  task?: { id: string; title?: string };
-  /** 排队等待原因（仅 queued 时有） */
-  waitReason?: WaitReason;
-  /** 上下文已用 token；实现能读取 context 时填写 */
-  contextUsed?: number;
-  /** 上下文 token 上限；ContextManager 提供 maxTokens 时填写 */
-  contextMax?: number;
-  /** 子 agent 数；Host 不维护父子关系时缺省 */
-  childrenCount?: number;
-  /** 最近活动时间（Unix ms） */
-  lastSeen?: number;
-}
-
 /** Scheduler 只读快照（0.14.1） */
 export interface SchedulerSnapshot {
   asOf: number;
@@ -329,76 +259,12 @@ export interface SchedulerSnapshot {
   stats: SchedulerStats;
 }
 
-/** Host 只读快照：agent / run / queue（0.14.1） */
-export interface HostSnapshot {
-  asOf: number;
-  agents: AgentSnapshot[];
-  runs: RunSnapshot[];
-  scheduler: SchedulerSnapshot;
-}
-
 /** 调度器契约（F2：R1 只冻结类型；R2 实现完整队列） */
 export interface Scheduler {
   submit(task: ScheduledTask): Promise<RunHandle>;
   cancel(runId: string, reason?: string): boolean;
   stats(): SchedulerStats;
-  /** 可选：只读快照；自定义 Scheduler 可不实现（Host 会降级） */
+  /** 可选：只读快照；自定义 Scheduler 可不实现（消费方按缺省处理） */
   snapshot?(): SchedulerSnapshot;
   close(): Promise<void>;
-}
-
-/** 多 agent 宿主 */
-export interface RuntimeHost {
-  readonly events: EventBus;
-  /** Scheduler 在 R1 为受限实现（串行/并发拒绝），R2 替换 */
-  readonly scheduler: Scheduler;
-  spawn(spec: AgentSpec): Promise<AgentHandle>;
-  get(id: string): AgentHandle | undefined;
-  list(): AgentStatus[];
-  send(message: AgentMessage): Promise<void>;
-  /**
-   * 读取任意 mailbox（含非成员）。`send` 到非成员地址时按需创建邮箱（F4/Q2）；
-   * 未知且从未投递的 id 返回空页。
-   */
-  inbox(id: string, cursor?: string): Promise<InboxPage>;
-  /** 生命周期便捷入口；委托给 AgentHandle.cancel */
-  cancel(id: string, runId?: string, reason?: RunInterruptReason): void;
-  close(): Promise<void>;
-  /**
-   * 从 durable checkpoint 恢复一次 run（additive）。
-   * 恢复后 `RunHandle.id` 与原 `run_id` 相同；未配置 RunStore 的实现可不提供。
-   * 0.14.1：恢复经 Scheduler 排队，受并发 / 成员串行约束；`opts.signal` 可取消。
-   */
-  resume?(runId: string, opts?: RunOptions): Promise<RunHandle>;
-  /** 可选：agent / run / queue 的只读、可序列化快照（0.14.1） */
-  snapshot?(): HostSnapshot;
-}
-
-/**
- * SDK 组合选项（F3：冻结 `limits` 形状；具体 createRuntime 在 R2/R6 落地）。
- * asm 的 owner facade / 装配层消费此类型。
- */
-export interface RuntimeOptions {
-  defaults?: Partial<AgentSpec>;
-  pluginHost?: PluginHost;
-  contextFactory?: () => ContextManager;
-  session?: SessionBackend;
-  permission?: RuntimePermissionConfig;
-  scheduler?: SchedulerOptions;
-  limits?: Limits;
-  events?: EventBus;
-  /** R3 接；R1 只冻结类型，不实现 */
-  transport?: Transport;
-  /** 0.3：durable run 检查点存储（additive） */
-  runStore?: RunStore;
-  /** 0.5：Host 级 tenant；成员 spec.tenantId 优先 */
-  tenantId?: string;
-  /** 0.14.1：透传给每个成员 runtime 的插件安装配置 */
-  pluginConfigs?: Record<string, Record<string, unknown>>;
-  /** 0.14.1：透传给每个成员 runtime 的诊断 logger */
-  logger?: import('../types/logging.js').Logger;
-  /** 0.14.1：透传给每个成员 runtime 的 reasoning 开关 */
-  includeReasoning?: boolean;
-  /** 0.18：会话事件日志（唯一真相源）；透传给每个成员 runtime */
-  eventLog?: import('../types/event.js').SessionEventLogPort;
 }

@@ -122,10 +122,11 @@ class QueuedRunHandle implements RunHandle {
 export class InProcessScheduler implements InternalScheduler {
   private readonly queue: QueueEntry[] = [];
   private readonly active = new Map<string, QueueEntry>();
-  private readonly agentRunning = new Set<string>();
+  /** 正在运行的 serialKey（body/session）；默认同键串行 */
+  private readonly serialRunning = new Set<string>();
   private readonly maxConcurrency: number;
   private readonly maxQueueSize: number;
-  private readonly perAgentSerial: boolean;
+  private readonly perBodySerial: boolean;
   /** 0.15 E4：队列事件发布流；缺省不发 */
   private readonly events?: EventStream;
   private readonly tenantId?: string;
@@ -135,9 +136,14 @@ export class InProcessScheduler implements InternalScheduler {
   private closed = false;
 
   constructor(options: SchedulerOptions = {}) {
-    this.maxConcurrency = Math.max(1, options.maxConcurrency ?? 1);
+    // 0.27：默认无上限；只有显式正整数才限制。
+    const explicit = options.maxConcurrency;
+    this.maxConcurrency =
+      typeof explicit === 'number' && Number.isInteger(explicit) && explicit > 0
+        ? explicit
+        : Number.POSITIVE_INFINITY;
     this.maxQueueSize = Math.max(1, options.maxQueueSize ?? 100);
-    this.perAgentSerial = options.perAgentSerial ?? true;
+    this.perBodySerial = options.perBodySerial ?? true;
     this.events = options.events;
     this.tenantId = options.tenantId;
   }
@@ -241,10 +247,10 @@ export class InProcessScheduler implements InternalScheduler {
       this.cancelled++;
     }
     this.active.clear();
-    this.agentRunning.clear();
+    this.serialRunning.clear();
   }
 
-  /** @internal 按成员取消排队与运行中的 run（Host.closeMember） */
+  /** @internal 按成员取消排队与运行中的 run */
   [kCancelAgentRuns](agentId: string, reason?: string): number {
     let count = 0;
 
@@ -270,12 +276,13 @@ export class InProcessScheduler implements InternalScheduler {
     return count;
   }
 
-  /** 有空位时按 FIFO 取第一个可执行任务（同成员串行时跳过忙碌成员） */
+  /** 有空位时按 FIFO 取第一个可执行任务（同 serialKey 串行时跳过忙碌 body） */
   private drain(): void {
     while (!this.closed && this.active.size < this.maxConcurrency) {
       const index = this.queue.findIndex(
         (entry) =>
-          !entry.cancelled && (!this.perAgentSerial || !this.agentRunning.has(entry.task.agent.id)),
+          !entry.cancelled &&
+          (!this.perBodySerial || !this.serialRunning.has(this.serialKeyOf(entry.task))),
       );
       if (index === -1) break;
       const [entry] = this.queue.splice(index, 1);
@@ -287,14 +294,19 @@ export class InProcessScheduler implements InternalScheduler {
 
   /**
    * 0.15 E4：该任务为何排队。
-   * 容量已满优先；其次同成员串行。core 不会产出 paused / dependency / quota。
+   * 容量已满优先；其次同 body 串行。core 不会产出 paused / dependency / quota。
    */
   private waitReasonFor(entry: QueueEntry): WaitReason {
     if (this.active.size >= this.maxConcurrency) return 'capacity';
-    if (this.perAgentSerial && this.agentRunning.has(entry.task.agent.id)) {
-      return 'per_agent_serial';
+    if (this.perBodySerial && this.serialRunning.has(this.serialKeyOf(entry.task))) {
+      return 'per_body_serial';
     }
     return 'capacity';
+  }
+
+  /** 串行键：契约必填；JS 调用方缺省时退化为 session/agent，避免共享空键。 */
+  private serialKeyOf(task: ScheduledTask): string {
+    return task.serialKey ?? task.sessionId ?? task.agent.id;
   }
 
   /** 入队观测：只有 submit 后仍留在队列里的任务才发布 */
@@ -329,6 +341,7 @@ export class InProcessScheduler implements InternalScheduler {
       run_id: entry.run.id,
       data: {
         agent_id: entry.task.agent.id,
+        session_id: entry.task.sessionId,
         run_id: entry.run.id,
         position,
         wait_reason: waitReason,
@@ -341,10 +354,10 @@ export class InProcessScheduler implements InternalScheduler {
 
   /** 启动一个排队任务 */
   private async start(entry: QueueEntry): Promise<void> {
-    const agentId = entry.task.agent.id;
+    const serialKey = this.serialKeyOf(entry.task);
     entry.startedAt = Date.now();
     this.active.set(entry.run.id, entry);
-    this.agentRunning.add(agentId);
+    this.serialRunning.add(serialKey);
     // F9：采用 task 上最终确定的 sessionId（自定义 Scheduler 可能改写）
     entry.run.setSessionId(entry.task.sessionId ?? 'default');
     entry.run.setRunning();
@@ -362,7 +375,7 @@ export class InProcessScheduler implements InternalScheduler {
     }
   }
 
-  /** 直接执行入口：executor > Host 内部符号 > 第三方 handle.run */
+  /** 直接执行入口：executor > 内部符号 > handle.run */
   private executeTask(task: ScheduledTask, runId: string): Promise<RunHandle> {
     if (task.executor) return task.executor(runId);
 
@@ -384,7 +397,7 @@ export class InProcessScheduler implements InternalScheduler {
   /** 结算：更新计数、释放槽位、继续 drain */
   private settle(entry: QueueEntry, outcome: 'completed' | 'failed' | 'cancelled'): void {
     if (!this.active.delete(entry.run.id)) return;
-    this.agentRunning.delete(entry.task.agent.id);
+    this.serialRunning.delete(this.serialKeyOf(entry.task));
     if (outcome === 'completed') this.completed++;
     else if (outcome === 'cancelled') this.cancelled++;
     else this.failed++;

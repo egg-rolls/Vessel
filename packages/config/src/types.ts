@@ -119,9 +119,8 @@ export interface UpdateConfig {
   source?: string;
 }
 
-/** Host 配置（0.2；默认关闭，关闭时走 0.1 单 agent 路径） */
+/** Host 配置（节点身份；无开关，节点始终存在） */
 export interface HostConfig {
-  enabled?: boolean;
   /** nodeId 唯一来源；缺省进程内生成 */
   nodeId?: string;
   /**
@@ -129,18 +128,16 @@ export interface HostConfig {
    * 只影响展示，寻址 / 去重仍用 `nodeId`。
    */
   nodeName?: string;
-  /** Host 全局预算；缺省关闭 */
-  limits?: UsageLimitsConfig;
 }
 
-/** Scheduler 配置（仅 host.enabled=true 时生效） */
+/** Scheduler 配置（所有 agent/body 都经同一 scheduler，始终生效） */
 export interface SchedulerConfig {
   /** 全局 FIFO 并发上限（默认 1） */
   maxConcurrency?: number;
   /** 队列上限（默认 100） */
   maxQueueSize?: number;
-  /** 同一成员串行（默认 true） */
-  perAgentSerial?: boolean;
+  /** 同一 body 串行（默认 true） */
+  perBodySerial?: boolean;
 }
 
 /** MCP server 配置（0.3；`mcp_servers` map 的值，键为 server 名） */

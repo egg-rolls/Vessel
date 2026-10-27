@@ -2142,16 +2142,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 host（0.2；默认关闭）
+  // 校验 host（节点身份；无开关）
   if (config.host) {
-    const { enabled, nodeId, nodeName, limits } = config.host;
-    if (enabled !== undefined && typeof enabled !== 'boolean') {
-      errors.push({
-        path: 'host.enabled',
-        message: 'host.enabled must be a boolean',
-        value: enabled,
-      });
-    }
+    const { nodeId, nodeName } = config.host;
     if (nodeId !== undefined && (typeof nodeId !== 'string' || !NODE_ID_RE.test(nodeId))) {
       errors.push({
         path: 'host.nodeId',
@@ -2166,12 +2159,11 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         value: nodeName,
       });
     }
-    if (limits) validateLimits('host.limits', limits, errors);
   }
 
-  // 校验 scheduler（schema 层始终校验；host 关闭时由 bootstrap 告警忽略）
+  // 校验 scheduler（所有 agent/body 都经同一 scheduler）
   if (config.scheduler) {
-    const { maxConcurrency, maxQueueSize, perAgentSerial } = config.scheduler;
+    const { maxConcurrency, maxQueueSize, perBodySerial } = config.scheduler;
     if (
       maxConcurrency !== undefined &&
       (!Number.isInteger(maxConcurrency) || maxConcurrency <= 0)
@@ -2189,11 +2181,11 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         value: maxQueueSize,
       });
     }
-    if (perAgentSerial !== undefined && typeof perAgentSerial !== 'boolean') {
+    if (perBodySerial !== undefined && typeof perBodySerial !== 'boolean') {
       errors.push({
-        path: 'scheduler.perAgentSerial',
-        message: 'scheduler.perAgentSerial must be a boolean',
-        value: perAgentSerial,
+        path: 'scheduler.perBodySerial',
+        message: 'scheduler.perBodySerial must be a boolean',
+        value: perBodySerial,
       });
     }
   }
@@ -2420,8 +2412,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   session: ['backend', 'storagePath', 'maxHistory'],
   permission: ['autoApprove', 'neverAutoApprove'],
   update: ['autoCheck', 'channel', 'source'],
-  host: ['enabled', 'nodeId', 'nodeName', 'limits'],
-  scheduler: ['maxConcurrency', 'maxQueueSize', 'perAgentSerial'],
+  host: ['nodeId', 'nodeName'],
+  scheduler: ['maxConcurrency', 'maxQueueSize', 'perBodySerial'],
   transport: ['kind', 'token'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
   serve: [

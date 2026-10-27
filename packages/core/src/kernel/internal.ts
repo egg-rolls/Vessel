@@ -1,7 +1,7 @@
 /**
  * Kernel 内部符号与内部接口（不从公开 index 导出）。
  *
- * 用途：Host 与 Scheduler 之间的直接执行 / 取消通道，
+ * 用途：AgentHandle 与 Scheduler 之间的直接执行 / 取消通道，
  * 避免 `Scheduler.submit → AgentHandle.run → Scheduler.submit` 递归。
  *
  * @module @vessel-agent/core/kernel
@@ -11,10 +11,10 @@ import type { Message } from '../types/provider.js';
 import type { RunOptions } from '../types/run.js';
 import type { AgentHandle, RunHandle, Scheduler } from './types.js';
 
-/** AgentHandle 的直执行入口（Host 实现） */
+/** AgentHandle 的直执行入口（实现方按需提供） */
 export const kExecuteAgentRun = Symbol('vessel.kernel.executeAgentRun');
 
-/** Host 的 AgentHandle 额外能力（sessionId 由 ScheduledTask 透传，F9） */
+/** AgentHandle 的额外执行能力（sessionId 由 ScheduledTask 透传，F9） */
 export interface InternalAgentHandle extends AgentHandle {
   [kExecuteAgentRun](
     input: string | Message,
@@ -23,7 +23,7 @@ export interface InternalAgentHandle extends AgentHandle {
   ): Promise<RunHandle>;
 }
 
-/** Scheduler 的按成员取消入口（Host.closeMember 使用） */
+/** Scheduler 的按成员取消入口 */
 export const kCancelAgentRuns = Symbol('vessel.kernel.cancelAgentRuns');
 
 /** 支持按成员取消的 Scheduler（内置实现） */

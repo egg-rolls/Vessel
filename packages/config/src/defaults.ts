@@ -30,14 +30,13 @@ export function defaultModelForProvider(name: string | undefined): string | unde
 }
 
 /**
- * 0.2 Scheduler 默认值。
- * 不写入 DEFAULT_CONFIG：只有 host.enabled=true 时才被消费，
- * 未配置时保持 0.1 行为（不创建 Scheduler）。
+ * Scheduler 默认值（0.2 起；0.27 起所有 agent/body 都经同一 scheduler）。
+ * 不写入 DEFAULT_CONFIG：缺省即按 body 串行。
  */
 export const DEFAULT_SCHEDULER_OPTIONS: Required<SchedulerConfig> = {
   maxConcurrency: 1,
   maxQueueSize: 100,
-  perAgentSerial: true,
+  perBodySerial: true,
 };
 
 /**

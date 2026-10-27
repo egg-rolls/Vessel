@@ -1,5 +1,5 @@
 /**
- * Host 级 EventBus 实现（复用 MemoryEventStream，不新增事件机制）。
+ * 聚合 EventBus 实现（复用 MemoryEventStream，不新增事件机制）。
  *
  * @module @vessel-agent/core/kernel
  */
@@ -21,7 +21,7 @@ function matches(event: RunEvent, filter?: EventFilter): boolean {
   return true;
 }
 
-/** Host 聚合事件总线 */
+/** 聚合事件总线 */
 export class MemoryEventBus implements EventBus {
   private readonly stream: MemoryEventStream;
 
