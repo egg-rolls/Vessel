@@ -1,35 +1,48 @@
 /**
- * AgentService：成员生命周期、消息队列与回复投递。
+ * AgentService：Agent 身份、多 Body 生命周期、统一准入与回复投递。
  *
- * 约束：
- * - `send` 入队即返回，不等待 runTurn；
- * - 同一成员同时只有一轮在跑，其余消息排队；
- * - close 先 cancel 当前轮再 dispose；后到的 run 终态不得覆盖 closed；
- * - 消息队列只在内存；状态变化经节流 snapshot 落盘。
+ * 0.27 不变量：
+ * - 一个 Agent 可有多个 live Body（`body_id ≡ session_id`），每 Body 独立 runtime /
+ *   历史 / checkpoint / 队列；同 Body 串行、不同 Body 并发由 Scheduler 保证；
+ * - 所有入口（send / dispatch / Team @ / runs.start）只调用 `admit`；
+ * - `run.*` 是唯一执行生命周期，本服务不 emit `agent.turn.*` / `agent.reply.posted`；
+ * - 队列按 Body，不按 Agent；预算 block 的消息留在 Body mailbox。
  *
  * @module @vessel-agent/agent
  */
 
 import { randomUUID } from 'node:crypto';
 import {
+  type AgentHandle,
   assertTenantId,
   type EventStream,
   type Logger,
   noopLogger,
   type RunEvent,
+  type RunHandle,
+  type RunStatus,
+  type RunStore,
   type RuntimePermissionConfig,
+  type ScheduledTask,
+  type Scheduler,
+  type Usage,
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import {
+  ADMIN_VIEWER,
+  type AgentBodyRecord,
+  liveBodies,
   type MemberRecord,
   MemberRegistry,
+  primaryBody,
   toMemberStatus,
   toPersistedRecord,
   toRuntimeMember,
 } from './registry.js';
 import { AgentSnapshotStore, snapshotPath } from './snapshot.js';
 import {
-  type AgentBodyPointer,
+  type AdmitInput,
+  type AdmitResult,
   type AgentDrainOptions,
   type AgentDrainOutcome,
   AgentError,
@@ -43,9 +56,10 @@ import {
   type AgentUpdateField,
   type AgentUpdateInput,
   type AgentUpdateResult,
-  type AttachOwnerInput,
   type BatchItemResult,
   type BatchResult,
+  type BodyLeasePort,
+  type BodyStatus,
   type BudgetBlockReason,
   type BudgetCheckResult,
   type BudgetOverrideInput,
@@ -71,6 +85,7 @@ import {
   type PersistedAgentRecord,
   type ReinstateInput,
   type ReplyResult,
+  type ResumeResult,
   type RotateInput,
   type RotateResult,
   type SendBatchInput,
@@ -84,20 +99,46 @@ const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
 /** Team 内 present 成员上限（peer + contractor 都计入；后续可配置） */
 const TEAM_MEMBER_LIMIT = 20;
 
-/** 单成员运行态（不落 snapshot）；队列 per-agent，不 per-body */
-interface MemberQueue {
+/** 每 agent live body 上限缺省值 */
+const DEFAULT_MAX_LIVE_BODIES = 20;
+
+/**
+ * turn 域预算维度：投递侧不拦（否则消息进不了 body mailbox，override 也无从恢复）；
+ * 由 turn_start 检查后留在 mailbox，override / release 后重新准入。
+ */
+const TURN_DIMENSIONS: ReadonlySet<string> = new Set(['turns', 'tokens']);
+
+/** 空闲 body TTL 缺省值（小时）；0 = 关闭 */
+const DEFAULT_BODY_IDLE_TTL_HOURS = 24;
+
+/** Body 执行态（对外 BodyStatus.state） */
+type BodyExecState = 'idle' | 'running' | 'waiting_permission' | 'closed';
+
+/** 单个 Body 的运行态（不落 snapshot） */
+interface BodyEntry {
+  agentId: string;
+  bodyId: string;
+  epoch: number;
+  state: BodyExecState;
+  primary: boolean;
+  createdAt: number;
+  lastActiveAt: number;
+  retired: boolean;
+  runtimeMember: MemberRuntimeMember;
+  /** 预算 block 留在 mailbox 的消息；正常消息 submit 后即移出 */
   pending: AgentMessage[];
-  turnActive: boolean;
-  /** 本轮实际运行的 Body（pump 时捕获） */
-  activeBodySession?: string;
-  /** 本轮 conversation（0.19 S4；系统消息也继承） */
-  activeConversationId?: string;
-  repliedThisTurn: boolean;
-  closing: boolean;
+  /** 已提交给 scheduler、尚未开始执行的 run */
+  queuedRuns: Set<string>;
+  /** 正在执行的 run（同 body 同时最多一个） */
+  active?: { runId: string; conversationId?: string; replied: boolean };
+  budgetHold: Set<string>;
   /** `${session_id}|${key}`；rotate 成功 / close 时清空 */
   warnedSignals: Set<string>;
-  /** 接收侧被预算挡下的 conversation（只作 bookkeeping，override / release 时清） */
-  budgetHold: Set<string>;
+  closing: boolean;
+  spawned: boolean;
+  /** 在途 spawn（single-flight）：并发 admit 只 spawn 一次 */
+  spawning?: Promise<void>;
+  leaseHeld: boolean;
 }
 
 /** 事件 extra 允许预算字段（开放字符串事件，不在 AgentEvent 里加常量） */
@@ -123,6 +164,12 @@ type ForkOutcome =
       code: 'fork_not_allowed' | 'fork_failed' | 'agent_left' | 'team_full' | 'team_frozen';
       reason: string;
     };
+
+/** 一次准入的内部结果（message_id 供 send / dispatch 复用） */
+interface AdmitOutcome {
+  result: AdmitResult;
+  message: AgentMessage;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -172,18 +219,63 @@ function resolveVisibility(value: unknown, fallback: MemberVisibility): MemberVi
   return value as MemberVisibility;
 }
 
+/** 内部 Body → 对外状态 */
+function toBodyStatus(entry: BodyEntry): BodyStatus {
+  return {
+    session_id: entry.bodyId,
+    epoch: entry.epoch,
+    state: entry.state,
+    primary: entry.primary,
+    created_at: entry.createdAt,
+    last_active_at: entry.lastActiveAt,
+  };
+}
+
 /** 从快照恢复记录：engine 状态是进程内易失，重启后非 left 一律 idle + gone */
 function recordFromStatus(status: PersistedAgentRecord, now: number): MemberRecord {
   const state: MemberState =
     status.membership === 'left' || status.state === 'closed' ? 'closed' : 'idle';
-  const currentBody = status.current_body ?? {
-    session_id: status.session_id,
-    epoch: 0,
-    started_at: status.last_seen ?? now,
-  };
+  const bodies: AgentBodyRecord[] = (status.bodies ?? []).map((body) => ({
+    bodyId: body.body_id,
+    epoch: body.epoch,
+    createdAt: body.created_at,
+    lastActiveAt: body.last_active_at,
+    ...(body.retired_at !== undefined ? { retiredAt: body.retired_at } : {}),
+    primary: body.primary === true,
+  }));
+  if (bodies.length === 0) {
+    const live = status.current_body ?? {
+      session_id: status.session_id,
+      epoch: 0,
+      started_at: status.last_seen ?? now,
+    };
+    bodies.push({
+      bodyId: live.session_id,
+      epoch: live.epoch,
+      createdAt: live.started_at,
+      lastActiveAt: status.last_seen ?? live.started_at,
+      primary: true,
+    });
+  }
+  const primaryBodyId =
+    status.primary_body_id ??
+    status.current_body?.session_id ??
+    bodies.find((body) => body.primary && body.retiredAt === undefined)?.bodyId;
+  const primary = bodies.find((body) => body.bodyId === primaryBodyId);
   return {
     id: status.id,
     sessionId: status.session_id,
+    bodies,
+    ...(primaryBodyId !== undefined ? { primaryBodyId } : {}),
+    ...(primary !== undefined
+      ? {
+          currentBody: {
+            session_id: primary.bodyId,
+            epoch: primary.epoch,
+            started_at: primary.createdAt,
+          },
+        }
+      : {}),
     ...(status.name !== undefined ? { name: status.name } : {}),
     ...(status.parent_id !== undefined ? { parentId: status.parent_id } : {}),
     role: status.role,
@@ -194,7 +286,6 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     membership: status.membership,
     ...(status.team_id !== undefined ? { teamId: status.team_id } : {}),
     rotation: 'stable',
-    currentBody,
     bodyHistory: status.body_history ?? [],
     ...(status.model !== undefined ? { model: status.model } : {}),
     ...(status.system_prompt !== undefined ? { systemPrompt: status.system_prompt } : {}),
@@ -205,25 +296,92 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
   };
 }
 
+/** Scheduler 返回的 RunHandle 适配器：把 runtime 轮次包装成 run 生命周期 */
+class BodyRunHandle implements RunHandle {
+  readonly result: Promise<string>;
+  private state: RunStatus = 'running';
+  private usageValue: Usage | undefined;
+  private resolveResult!: (value: string) => void;
+  private rejectResult!: (reason?: unknown) => void;
+  cancelRequested = false;
+  cancelHandler: ((reason?: string) => void) | undefined;
+
+  constructor(
+    readonly id: string,
+    readonly agentId: string,
+    readonly sessionId: string,
+  ) {
+    this.result = new Promise<string>((resolve, reject) => {
+      this.resolveResult = resolve;
+      this.rejectResult = reject;
+    });
+    void this.result.catch(() => {});
+  }
+
+  status(): RunStatus {
+    return this.state;
+  }
+
+  usage(): Usage | undefined {
+    return this.usageValue;
+  }
+
+  setUsage(usage: Usage | undefined): void {
+    this.usageValue = usage;
+  }
+
+  cancel(reason?: string): void {
+    if (this.terminal()) return;
+    this.cancelRequested = true;
+    this.cancelHandler?.(reason);
+  }
+
+  terminal(): boolean {
+    return this.state === 'completed' || this.state === 'failed' || this.state === 'cancelled';
+  }
+
+  complete(content: string): void {
+    if (this.terminal()) return;
+    this.state = 'completed';
+    this.resolveResult(content);
+  }
+
+  fail(error: unknown): void {
+    if (this.terminal()) return;
+    this.state = 'failed';
+    this.rejectResult(error instanceof Error ? error : new Error(String(error)));
+  }
+
+  markCancelled(reason?: string): void {
+    if (this.terminal()) return;
+    this.state = 'cancelled';
+    this.rejectResult(new Error(reason ?? 'run cancelled'));
+  }
+}
+
 /** 默认实现 */
 export class AgentServiceImpl implements AgentService {
   private readonly registry: MemberRegistry;
   private readonly runtime: AgentServiceOptions['runtime'];
+  private readonly scheduler: Scheduler;
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly logger: Logger;
   private readonly snapshot: AgentSnapshotStore | undefined;
-  private readonly queues = new Map<string, MemberQueue>();
+  private readonly maxLiveBodies: number;
+  private readonly bodyIdleTtlMs: number;
+  private readonly bodyLease: BodyLeasePort | undefined;
+  private readonly runStore: RunStore | undefined;
+  /** AgentService 的 body registry：agentId → bodyId → BodyEntry（含已退役直到清理） */
+  private readonly bodyRegistry = new Map<string, Map<string, BodyEntry>>();
+  /** run_id → 准入消息 id（send / dispatch 复用） */
+  private readonly runMessageIds = new Map<string, string>();
   /** drain 之后不再从队列起新轮（关闭窗口内排队的消息随进程退出丢弃） */
   private draining = false;
-  /** gone 成员的 single-flight resume；同一 id 并发 dispatch 只 spawn 一次 */
-  private readonly resuming = new Map<string, Promise<void>>();
   /** 同一源成员的 single-flight fork；并发只 spawn 一个新 Agent */
   private readonly forking = new Map<string, Promise<ForkOutcome>>();
   /** 进行中的 rotate（agentId → 旧 / 新 Body）；只在内存 */
   private readonly rotations = new Map<string, RotationState>();
-  /** external owner（REPL 主 agent）：队列由 takeMessages 消费，pump 永不执行 */
-  private readonly externalOwners = new Set<string>();
   private readonly listeners = new Set<AgentEventListener>();
   private readonly tenantId: string;
   private readonly eventStream: EventStream | undefined;
@@ -247,9 +405,13 @@ export class AgentServiceImpl implements AgentService {
     if (!options.runtime) {
       throw new AgentError('invalid_input', 'runtime is required');
     }
+    if (!options.scheduler) {
+      throw new AgentError('invalid_input', 'scheduler is required');
+    }
 
     this.registry = new MemberRegistry(options.now);
     this.runtime = options.runtime;
+    this.scheduler = options.scheduler;
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
     this.logger = options.logger ?? noopLogger;
@@ -263,6 +425,17 @@ export class AgentServiceImpl implements AgentService {
     this.teamBinder = options.teamBinder;
     this.teamPolicy = options.teamPolicy;
     this.budgetPort = options.budget;
+    this.maxLiveBodies =
+      typeof options.maxLiveBodies === 'number' && options.maxLiveBodies > 0
+        ? Math.floor(options.maxLiveBodies)
+        : DEFAULT_MAX_LIVE_BODIES;
+    const ttlHours =
+      typeof options.bodyIdleTtlHours === 'number' && options.bodyIdleTtlHours >= 0
+        ? options.bodyIdleTtlHours
+        : DEFAULT_BODY_IDLE_TTL_HOURS;
+    this.bodyIdleTtlMs = ttlHours * 60 * 60 * 1000;
+    this.bodyLease = options.bodyLease;
+    this.runStore = options.runStore;
 
     const dataDir = options.dataDir;
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
@@ -282,7 +455,7 @@ export class AgentServiceImpl implements AgentService {
 
   /**
    * 重启恢复：非 left 成员一律 idle + gone（engine 状态是进程内易失）。
-   * 旧快照里的重名容忍加载并 warning（new 才会强制唯一）。
+   * Body 只恢复记录，运行时在首次 admit 时惰性重建。
    */
   private async loadSnapshot(): Promise<void> {
     if (!this.snapshot) return;
@@ -290,7 +463,6 @@ export class AgentServiceImpl implements AgentService {
     try {
       members = await this.snapshot.load();
     } catch (error) {
-      // load 自身不抛；这里兜底，避免损坏文件阻塞构造
       this.logger.error('agent.snapshot.load_failed', { error: errorText(error) });
       return;
     }
@@ -314,7 +486,6 @@ export class AgentServiceImpl implements AgentService {
         else ids.push(record.id);
       }
       if (record.membership === 'present') {
-        // 兼容事件：payload 用新语义（gone / idle），事件名仅为 wire 兼容保留
         this.emit('agent.stale', record, { state: 'idle', presence: 'gone' });
       }
     }
@@ -335,6 +506,8 @@ export class AgentServiceImpl implements AgentService {
     const record = input as unknown as Record<string, unknown>;
     if ('members' in record) {
       if (
+        record.id !== undefined ||
+        record.role !== undefined ||
         record.name !== undefined ||
         record.model !== undefined ||
         record.systemPrompt !== undefined ||
@@ -370,72 +543,6 @@ export class AgentServiceImpl implements AgentService {
     return this.createOne(record);
   }
 
-  /**
-   * 注册 root owner（REPL 主 agent）。
-   * 不调用 runtime.spawn；恢复的记录置 live / present，并补齐 current_body。
-   */
-  async attachOwner(input: AttachOwnerInput): Promise<MemberStatus> {
-    await this.ready;
-    const raw = input as unknown as Record<string, unknown>;
-    const id = readRequiredString(raw, 'id');
-    const sessionId = raw.sessionId === undefined ? id : readRequiredString(raw, 'sessionId');
-    const visibility = resolveVisibility(raw.visibility, 'private');
-
-    const existing = this.registry.get(id);
-    if (existing) {
-      if (existing.role !== 'single') {
-        throw new AgentError('invalid_input', `id belongs to a spawned member: ${id}`);
-      }
-      const sessionOwner = this.registry.resolve(sessionId);
-      if (sessionOwner !== undefined && sessionOwner.id !== id) {
-        throw new AgentError('invalid_input', `duplicate session id: ${sessionId}`);
-      }
-      // attachOwner 是 root owner 的显式身份：single、owner=self、无 Team / parent。
-      existing.role = 'single';
-      existing.owner = id;
-      existing.parentId = undefined;
-      this.registry.setTeamId(id, undefined);
-      this.registry.updateIdentity(id, { sessionId, visibility });
-      // 唯一的 left→present 例外：root owner 由人显式重新附着，必须完整复活。
-      // S3 roster 落地后重新审视是否仍需该例外。
-      if (existing.state === 'closed' || existing.state === 'stale') existing.state = 'idle';
-      existing.membership = 'present';
-      this.registry.setPresence(id, 'live');
-      if (existing.currentBody?.session_id !== sessionId) {
-        this.registry.setCurrentBody(id, {
-          session_id: sessionId,
-          epoch: existing.currentBody?.epoch ?? 0,
-          started_at: this.now(),
-        });
-      }
-      this.externalOwners.add(id);
-      this.scheduleSnapshot();
-      return toMemberStatus(existing);
-    }
-
-    if (this.registry.resolve(sessionId) !== undefined) {
-      throw new AgentError('invalid_input', `duplicate session id: ${sessionId}`);
-    }
-    const record: MemberRecord = {
-      id,
-      sessionId,
-      role: 'single',
-      owner: id,
-      visibility,
-      state: 'idle',
-      presence: 'live',
-      membership: 'present',
-      rotation: 'stable',
-      currentBody: { session_id: sessionId, epoch: 0, started_at: this.now() },
-      bodyHistory: [],
-    };
-    this.registry.add(record);
-    this.queueFor(id);
-    this.externalOwners.add(id);
-    this.scheduleSnapshot();
-    return toMemberStatus(record);
-  }
-
   private async createOne(input: Record<string, unknown>): Promise<MemberStatus> {
     const kind = input.kind;
     if (kind !== undefined && kind !== 'peer' && kind !== 'contractor') {
@@ -445,7 +552,10 @@ export class AgentServiceImpl implements AgentService {
     if (rawOwner !== undefined && rawOwner !== null && !nonEmpty(rawOwner)) {
       throw new AgentError('invalid_input', 'owner must be a non-empty string or null');
     }
-    // owner === null 与 peer 等价（即使 kind 缺省）；contractor 不能显式无 owner。
+    const explicitRole = input.role === undefined ? undefined : readAgentRole(input, 'role');
+    if (explicitRole === 'single') {
+      return this.createSingle(input);
+    }
     if (kind === 'contractor' && rawOwner === null) {
       throw new AgentError('invalid_input', 'contractor requires an owner');
     }
@@ -454,8 +564,11 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', 'peer must not specify an owner');
     }
 
-    const id = this.newId();
+    const id = input.id === undefined ? this.newId() : readRequiredString(input, 'id');
     if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
+    if (this.registry.resolve(id) !== undefined || this.registry.getBySession(id) !== undefined) {
+      throw new AgentError('invalid_input', `duplicate member id: ${id}`);
+    }
     // v3 映射：peer → member（owner=self）；contractor / 无 kind → temporary（owner=雇佣者）。
     const role: AgentRole = peer ? 'member' : 'temporary';
     const owner = role === 'member' ? id : ((rawOwner as string | undefined) ?? this.defaultOwner);
@@ -541,10 +654,21 @@ export class AgentServiceImpl implements AgentService {
       resolvedName = this.autoNameFor(spawnedBy, teamId);
     }
 
+    const now = this.now();
     const record: MemberRecord = {
       id,
-      // session 即成员：两者同值，消息可用任一寻址
       sessionId: id,
+      bodies: [
+        {
+          bodyId: id,
+          epoch: 0,
+          createdAt: now,
+          lastActiveAt: now,
+          primary: true,
+        },
+      ],
+      primaryBodyId: id,
+      currentBody: { session_id: id, epoch: 0, started_at: now },
       role,
       owner,
       visibility,
@@ -552,7 +676,6 @@ export class AgentServiceImpl implements AgentService {
       presence: 'gone',
       membership: 'present',
       rotation: 'stable',
-      currentBody: { session_id: id, epoch: 0, started_at: this.now() },
       bodyHistory: [],
     };
     record.name = resolvedName;
@@ -574,7 +697,54 @@ export class AgentServiceImpl implements AgentService {
       presence: 'live',
       ...(spawnedBy !== undefined ? { spawned_by: spawnedBy } : {}),
     });
-    return toMemberStatus(record);
+    return this.statusFor(record);
+  }
+
+  /**
+   * `main` 等普通 single agent（0.27）：owner=self、无 Team / parent、private（可显式）。
+   * 不 attachOwner、无外部 owner 队列。
+   */
+  private async createSingle(input: Record<string, unknown>): Promise<MemberStatus> {
+    const id = input.id === undefined ? this.newId() : readRequiredString(input, 'id');
+    if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
+    if (this.registry.get(id) !== undefined || this.registry.getBySession(id) !== undefined) {
+      throw new AgentError('invalid_input', `duplicate member id: ${id}`);
+    }
+    if (input.teamId !== undefined || input.workspace !== undefined) {
+      throw new AgentError('invalid_input', 'single agents must not bind a team');
+    }
+    const name = optionalString(input.name);
+    if (name !== undefined && this.nameOccupied(name, undefined)) {
+      throw new AgentError('invalid_input', `duplicate member name: ${name}`);
+    }
+    const now = this.now();
+    const record: MemberRecord = {
+      id,
+      sessionId: id,
+      bodies: [{ bodyId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true }],
+      primaryBodyId: id,
+      currentBody: { session_id: id, epoch: 0, started_at: now },
+      ...(name !== undefined ? { name } : {}),
+      role: 'single',
+      owner: id,
+      visibility: resolveVisibility(input.visibility, 'private'),
+      state: 'created',
+      presence: 'gone',
+      membership: 'present',
+      rotation: 'stable',
+      bodyHistory: [],
+    };
+    const model = optionalString(input.model) ?? this.defaultModel;
+    if (model !== undefined) record.model = model;
+    const systemPrompt = optionalString(input.systemPrompt);
+    if (systemPrompt !== undefined) record.systemPrompt = systemPrompt;
+    try {
+      await this.spawnRecord(record);
+    } catch (error) {
+      throw new AgentError('spawn_failed', `spawn_failed: ${errorText(error)}`);
+    }
+    this.emit('agent.spawned', record, { state: 'idle', presence: 'live' });
+    return this.statusFor(record);
   }
 
   /** 同 Team 的 present 成员数（上限闸门；与 name 检查同在无 await 窗口） */
@@ -610,17 +780,22 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * 创建路径共用的 spawn / 回滚骨架（createOne 与 fork）。
-   * registry.add → runtime.spawn；失败移除新增记录与队列后重抛，成功 idle + live。
-   * 事件由调用方在各自的前置检查之后再发（fork 的源复查必须先于事件）。
+   * 创建路径共用的 spawn / 回滚骨架（createOne / createSingle / fork）。
+   * registry.add → 首个 Body lease + runtime.spawn；失败移除记录 / Body 后重抛。
    */
   private async spawnRecord(record: MemberRecord): Promise<void> {
+    const body = primaryBody(record);
+    if (body === undefined) throw new Error('missing initial body');
     this.registry.add(record);
+    let entry: BodyEntry | undefined;
     try {
-      await this.runtime.spawn(toRuntimeMember(record));
+      entry = await this.entryFor(record, body, true);
+      await this.runtime.spawn(entry.runtimeMember);
+      entry.spawned = true;
     } catch (error) {
+      if (entry !== undefined) await this.disposeEntry(entry);
       this.registry.remove(record.id);
-      this.queues.delete(record.id);
+      this.bodyRegistry.delete(record.id);
       throw error;
     }
     this.registry.setState(record.id, 'idle');
@@ -630,9 +805,7 @@ export class AgentServiceImpl implements AgentService {
 
   /**
    * 0.20 fork：resume 失败后的兜底。single-flight（同一源并发只 spawn 一次）。
-   *
-   * 失败一律显式且零写入：源记录不动，registry 不留新记录，不发事件。
-   * 成功时源仍保持 present + gone；新 Agent 不继承历史 / body_history。
+   * 失败一律显式且零写入；成功时源仍保持 present + gone。
    */
   private async ensureForked(sourceId: string): Promise<ForkOutcome> {
     const inflight = this.forking.get(sourceId);
@@ -653,11 +826,10 @@ export class AgentServiceImpl implements AgentService {
       source === undefined ||
       source.membership === 'left' ||
       source.state === 'closed' ||
-      this.queueFor(sourceId).closing
+      this.hasClosingBody(sourceId)
     ) {
       return { ok: false, code: 'agent_left', reason: `agent_left: ${sourceId}` };
     }
-    // fork 必须显式可见；private 成员永不写 Team 日志。
     if (source.visibility === 'private') {
       return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: private' };
     }
@@ -669,7 +841,6 @@ export class AgentServiceImpl implements AgentService {
     if (team === undefined) {
       return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: no_team' };
     }
-    // 冻结 / 上限先于 existingFork / name：命中时不得产生任何写入。
     if (team.spawn_frozen === true) {
       return { ok: false, code: 'team_frozen', reason: `team_frozen: ${teamId}` };
     }
@@ -677,7 +848,6 @@ export class AgentServiceImpl implements AgentService {
       return { ok: false, code: 'team_full', reason: `team_full: ${teamId}` };
     }
 
-    // 用现有 forked_from 自描述去重，不新增源侧指针、不写源记录。
     const existingFork = this.registry
       .all()
       .find((record) => record.forkedFrom === sourceId && record.membership === 'present');
@@ -699,9 +869,13 @@ export class AgentServiceImpl implements AgentService {
       return { ok: false, code: 'fork_failed', reason: 'fork_failed: session_id_collision' };
     }
 
+    const now = this.now();
     const record: MemberRecord = {
       id,
       sessionId: id,
+      bodies: [{ bodyId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true }],
+      primaryBodyId: id,
+      currentBody: { session_id: id, epoch: 0, started_at: now },
       name,
       role: source.role,
       // member / single 的 owner 恒为 self；temporary 沿用雇佣者。
@@ -712,7 +886,6 @@ export class AgentServiceImpl implements AgentService {
       membership: 'present',
       teamId,
       rotation: 'stable',
-      currentBody: { session_id: id, epoch: 0, started_at: this.now() },
       bodyHistory: [],
       forkedFrom: source.id,
     };
@@ -728,17 +901,15 @@ export class AgentServiceImpl implements AgentService {
     }
 
     // spawn 期间源可能已被 close：踢人不得凭空产生新 Agent。
-    // 复查必须先于 agent.forked：否则日志会出现一条无法回滚的 fork。
     const currentSource = this.registry.get(source.id);
     if (
       currentSource === undefined ||
       currentSource.membership === 'left' ||
       currentSource.state === 'closed' ||
-      this.queueFor(source.id).closing
+      this.hasClosingBody(source.id)
     ) {
-      await this.disposeBody(toRuntimeMember(record));
+      await this.disposeAgentBodies(record);
       this.registry.remove(record.id);
-      this.queues.delete(record.id);
       this.scheduleSnapshot();
       return { ok: false, code: 'agent_left', reason: `agent_left: ${sourceId}` };
     }
@@ -764,6 +935,742 @@ export class AgentServiceImpl implements AgentService {
     return undefined;
   }
 
+  // ─── Body registry ──────────────────────────────────────────────
+
+  private entryMap(agentId: string): Map<string, BodyEntry> {
+    let map = this.bodyRegistry.get(agentId);
+    if (!map) {
+      map = new Map();
+      this.bodyRegistry.set(agentId, map);
+    }
+    return map;
+  }
+
+  private liveEntries(agentId: string): BodyEntry[] {
+    const map = this.bodyRegistry.get(agentId);
+    if (!map) return [];
+    return [...map.values()].filter((entry) => !entry.retired && !entry.closing);
+  }
+
+  private findEntry(agentId: string, bodyId: string): BodyEntry | undefined {
+    return this.bodyRegistry.get(agentId)?.get(bodyId);
+  }
+
+  private hasClosingBody(agentId: string): boolean {
+    return this.liveEntries(agentId).some((entry) => entry.closing);
+  }
+
+  /** 从记录构造 BodyEntry；`withLease` 时获取跨进程租约 */
+  private async entryFor(
+    record: MemberRecord,
+    body: AgentBodyRecord,
+    withLease = true,
+  ): Promise<BodyEntry> {
+    const existing = this.findEntry(record.id, body.bodyId);
+    if (existing !== undefined) return existing;
+    let leaseHeld = false;
+    if (withLease && this.bodyLease !== undefined) {
+      try {
+        await this.bodyLease.acquire(body.bodyId);
+        leaseHeld = true;
+      } catch (error) {
+        throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
+      }
+    }
+    const entry: BodyEntry = {
+      agentId: record.id,
+      bodyId: body.bodyId,
+      epoch: body.epoch,
+      state: 'idle',
+      primary: body.primary,
+      createdAt: body.createdAt,
+      lastActiveAt: body.lastActiveAt,
+      retired: false,
+      runtimeMember: { ...toRuntimeMember(record), session_id: body.bodyId },
+      pending: [],
+      queuedRuns: new Set(),
+      budgetHold: new Set(),
+      warnedSignals: new Set(),
+      closing: false,
+      spawned: false,
+      spawning: undefined,
+      leaseHeld,
+    };
+    this.entryMap(record.id).set(body.bodyId, entry);
+    return entry;
+  }
+
+  /** 新增一个 live body（上限 / 冲突 / lease 都在这里） */
+  private async createBody(
+    record: MemberRecord,
+    bodyId: string,
+    options: { epoch?: number; primary?: boolean } = {},
+  ): Promise<AgentBodyRecord> {
+    const live = liveBodies(record);
+    if (live.length >= this.maxLiveBodies) {
+      throw new AgentError(
+        'body_limit',
+        `body_limit: ${record.id} (max ${this.maxLiveBodies} live bodies)`,
+      );
+    }
+    if (
+      this.registry.getBySession(bodyId) !== undefined ||
+      record.bodies.some((body) => body.bodyId === bodyId)
+    ) {
+      throw new AgentError('invalid_input', `duplicate session id: ${bodyId}`);
+    }
+    const now = this.now();
+    const body: AgentBodyRecord = {
+      bodyId,
+      epoch: options.epoch ?? 0,
+      createdAt: now,
+      lastActiveAt: now,
+      primary: options.primary ?? live.length === 0,
+    };
+    if (this.bodyLease !== undefined) {
+      try {
+        await this.bodyLease.acquire(bodyId);
+      } catch (error) {
+        throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
+      }
+    }
+    this.registry.addBody(record.id, body);
+    return body;
+  }
+
+  /** 解析或惰性创建 body；`requested` 是显式 session（必须未退役） */
+  private async ensureBody(
+    record: MemberRecord,
+    requested?: string,
+  ): Promise<{ entry: BodyEntry; body: AgentBodyRecord }> {
+    let body: AgentBodyRecord | undefined;
+    if (requested !== undefined) {
+      body = record.bodies.find((entry) => entry.bodyId === requested);
+      if (body !== undefined && body.retiredAt !== undefined) {
+        throw new AgentError('invalid_input', `session is retired: ${requested}`);
+      }
+      if (body === undefined) {
+        body = await this.createBody(record, requested, { epoch: 0 });
+      }
+    } else {
+      body = primaryBody(record);
+      if (body === undefined) {
+        body = await this.createBody(record, this.newId(), { epoch: 0 });
+      }
+    }
+    const entry = await this.entryFor(record, body);
+    entry.primary = body.primary;
+    return { entry, body };
+  }
+
+  /**
+   * 惰性重建 body runtime；并发 admit single-flight，只 spawn 一次。
+   * `presence === gone`（重启 / stale）时即使 entry 标记为 spawned 也要重新 spawn：
+   * registry presence 是进程外可观测的唯一真相。
+   */
+  private async ensureRuntime(entry: BodyEntry): Promise<void> {
+    const record = this.registry.get(entry.agentId);
+    const stale = record === undefined || record.presence === 'gone';
+    if (entry.spawned && !stale) return;
+    if (entry.spawning !== undefined) {
+      await entry.spawning;
+      return;
+    }
+    const spawning = (async () => {
+      await this.runtime.spawn(entry.runtimeMember);
+      entry.spawned = true;
+      this.registry.setPresence(entry.agentId, 'live');
+    })();
+    entry.spawning = spawning;
+    try {
+      await spawning;
+    } finally {
+      entry.spawning = undefined;
+    }
+  }
+
+  private async disposeEntry(entry: BodyEntry): Promise<boolean> {
+    let ok = true;
+    if (entry.spawned) {
+      try {
+        await this.runtime.dispose(entry.runtimeMember);
+        entry.spawned = false;
+      } catch (error) {
+        ok = false;
+        this.logger.warn('agent.dispose.failed', {
+          member_id: entry.agentId,
+          session_id: entry.bodyId,
+          error: errorText(error),
+        });
+      }
+    }
+    if (entry.leaseHeld && this.bodyLease !== undefined) {
+      try {
+        await this.bodyLease.release(entry.bodyId);
+        entry.leaseHeld = false;
+      } catch (error) {
+        this.logger.warn('agent.body.lease_release_failed', {
+          session_id: entry.bodyId,
+          error: errorText(error),
+        });
+      }
+    }
+    this.bodyRegistry.get(entry.agentId)?.delete(entry.bodyId);
+    return ok;
+  }
+
+  /** 退役一个 body：取消排队 run、清 mailbox、迁 primary、落 snapshot */
+  private async retireBodyEntry(
+    record: MemberRecord,
+    entry: BodyEntry,
+    reason: string,
+    at: number = this.now(),
+  ): Promise<void> {
+    if (entry.retired) return;
+    const wasPrimary = entry.primary || record.primaryBodyId === entry.bodyId;
+    entry.retired = true;
+    entry.state = 'closed';
+    entry.primary = false;
+    entry.closing = true;
+    entry.pending.length = 0;
+    for (const runId of entry.queuedRuns) this.scheduler.cancel(runId, `body retired: ${reason}`);
+    entry.queuedRuns.clear();
+    if (wasPrimary) {
+      this.registry.pushBodyHistory(record.id, {
+        session_id: entry.bodyId,
+        epoch: entry.epoch,
+        started_at: entry.createdAt,
+        retired_at: at,
+      });
+    }
+    this.registry.retireBody(record.id, entry.bodyId, at);
+    if (wasPrimary) this.promotePrimary(record);
+    this.emitForSession('agent.retired', record, entry.bodyId, {
+      body_id: entry.bodyId,
+      epoch: entry.epoch,
+      reason,
+    });
+    this.scheduleSnapshot();
+    if (entry.active === undefined) await this.disposeEntry(entry);
+    this.updateAgentState(record.id);
+  }
+
+  /** primary 晋升：最近活跃的 live body；没有则清空 */
+  private promotePrimary(record: MemberRecord): void {
+    const entries = this.liveEntries(record.id)
+      .filter((entry) => !entry.retired)
+      .sort((left, right) => right.lastActiveAt - left.lastActiveAt);
+    const next = entries[0];
+    for (const entry of entries) entry.primary = entry === next;
+    this.registry.setPrimaryBody(record.id, next?.bodyId);
+  }
+
+  /** 关闭 agent 的所有 body（cancel/dispose/release） */
+  private async disposeAgentBodies(record: MemberRecord): Promise<void> {
+    const entries = [...(this.bodyRegistry.get(record.id)?.values() ?? [])];
+    for (const entry of entries) {
+      entry.closing = true;
+      entry.pending.length = 0;
+      for (const runId of entry.queuedRuns) this.scheduler.cancel(runId, 'agent closed');
+      entry.queuedRuns.clear();
+      if (entry.active !== undefined) {
+        try {
+          this.runtime.cancel(entry.runtimeMember);
+        } catch (error) {
+          this.logger.warn('agent.cancel.failed', {
+            member_id: entry.agentId,
+            session_id: entry.bodyId,
+            error: errorText(error),
+          });
+        }
+      }
+      entry.retired = true;
+      entry.state = 'closed';
+      entry.primary = false;
+      this.registry.retireBody(record.id, entry.bodyId, this.now());
+      await this.disposeEntry(entry);
+    }
+    this.bodyRegistry.delete(record.id);
+  }
+
+  // ─── 统一准入 ───────────────────────────────────────────────────
+
+  async admit(input: AdmitInput): Promise<AdmitResult> {
+    await this.ready;
+    const outcome = await this.admitInternal(input);
+    return outcome.result;
+  }
+
+  async bodies(agentId: string): Promise<BodyStatus[]> {
+    await this.ready;
+    const record = this.registry.get(agentId);
+    if (record === undefined) throw new AgentError('unknown_member', `unknown_member: ${agentId}`);
+    const entries = this.liveEntries(agentId).sort(
+      (left, right) => Number(right.primary) - Number(left.primary),
+    );
+    if (entries.length === 0) {
+      return liveBodies(record).map((body) => ({
+        session_id: body.bodyId,
+        epoch: body.epoch,
+        state: 'idle' as const,
+        primary: body.primary,
+        created_at: body.createdAt,
+        last_active_at: body.lastActiveAt,
+      }));
+    }
+    return entries.map(toBodyStatus);
+  }
+
+  /** 统一准入主链路：resolve → membership/visibility → body → budget → mailbox → scheduler */
+  private async admitInternal(input: AdmitInput): Promise<AdmitOutcome> {
+    await this.ready;
+    if (this.bodyIdleTtlMs > 0) await this.sweepIdleBodies();
+    const content = readContent(input as unknown as Record<string, unknown>, 'content');
+    const from =
+      input.from === undefined ? this.defaultOwner : readRequiredString(input as never, 'from');
+    const channel = input.channel ?? 'direct';
+    if (channel !== 'direct' && channel !== 'team') {
+      throw new AgentError('invalid_input', 'channel must be direct or team');
+    }
+    const strict = input.strict === true;
+
+    // 1. session → agent/body 解析（绑定优先；矛盾输入 = invalid_input）
+    let record: MemberRecord;
+    let requestedBodyId: string | undefined;
+    if (input.session_id !== undefined) {
+      const sessionId = readRequiredString(input as never, 'session_id');
+      const bound = this.registry.getBySession(sessionId);
+      if (bound !== undefined) {
+        if (input.agent_id !== undefined && input.agent_id !== bound.id) {
+          throw new AgentError(
+            'invalid_input',
+            `session ${sessionId} belongs to ${bound.id}, not ${input.agent_id}`,
+          );
+        }
+        record = bound;
+        requestedBodyId = sessionId;
+      } else {
+        record = this.requireAgent(input.agent_id ?? DEFAULT_OWNER);
+        requestedBodyId = sessionId;
+      }
+    } else {
+      record = this.requireAgent(input.agent_id ?? DEFAULT_OWNER);
+    }
+
+    // 2. membership / presence / visibility
+    // 人类入口（runs.start / REPL / Web）是管理面：private single 对 ADMIN_VIEWER 可见。
+    if (!this.canAdmitView(record, from)) {
+      throw new AgentError('member_not_visible', `member_not_visible: ${record.id}`);
+    }
+    if (record.membership === 'left' || record.state === 'closed') {
+      throw new AgentError('member_closed', `member_closed: ${record.id}`);
+    }
+    if (strict && record.presence === 'gone') {
+      throw new AgentError('member_stale', `member_stale: ${record.id}`);
+    }
+
+    // 3. body resolve / 创建（每 agent 上限 body_limit）
+    const { entry } = await this.ensureBody(record, requestedBodyId);
+    if (strict) {
+      // send 不自动恢复 gone；但同 agent 其它 live body 存在时允许投递到该 body。
+      if (entry.retired) throw new AgentError('member_closed', `member_closed: ${record.id}`);
+    } else {
+      try {
+        await this.ensureRuntime(entry);
+      } catch (error) {
+        throw new AgentError('spawn_failed', `resume_failed: ${errorText(error)}`);
+      }
+    }
+
+    // 4. 预算：human 直接对话免 conversation budget（替代原 externalOwner 特例）；
+    //    面向 member 的投递（含 human → member）仍走 budget，与旧口径一致。
+    //    投递侧只拦 hop / cycle / wall-clock / team 不一致；turns / tokens 是 turn 域，
+    //    留给 turn_start 检查（block 时消息留在 body mailbox，override 后重新准入）。
+    const conversationId = this.resolveConversationId(input.conversation_id);
+    const originTeamId = input.origin_team_id;
+    if (!this.isHumanPrincipal(record.id)) {
+      const teamId = originTeamId ?? this.resolveOriginTeam(from, record);
+      const check = this.checkDelivery(
+        record,
+        from,
+        conversationId,
+        teamId,
+        originTeamId !== undefined,
+      );
+      if (!check.ok && !TURN_DIMENSIONS.has(check.dimension)) {
+        this.emitBudgetBlocked(record, check, {
+          conversation_id: conversationId,
+          from,
+          to: record.id,
+          phase: 'enqueue',
+          ...(teamId !== undefined ? { teamId } : {}),
+        });
+        throw new AgentError(this.budgetCode(check.reason), `${check.reason}: ${check.dimension}`);
+      }
+    }
+
+    // 5. 入该 body mailbox，满足条件时 submit
+    const message: AgentMessage = {
+      id: this.newId(),
+      from,
+      to: record.id,
+      content,
+      ts: this.now(),
+      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+      source: this.messageSource(from),
+      channel,
+    };
+    entry.pending.push(message);
+    this.registry.touchBody(record.id, entry.bodyId, this.now());
+    this.emitForSession('agent.message.queued', record, entry.bodyId, {
+      state: record.state,
+      message_id: message.id,
+      from,
+      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+    });
+    this.scheduleSnapshot();
+
+    const submitted = await this.submitMessage(record, entry, message);
+    this.runMessageIds.set(submitted.runId, message.id);
+    const status = submitted.handle.status();
+    const queuePosition = this.queuePositionFor(submitted.runId, status);
+    return {
+      result: {
+        run_id: submitted.runId,
+        agent_id: record.id,
+        session_id: entry.bodyId,
+        status,
+        ...(queuePosition !== undefined ? { queue_position: queuePosition } : {}),
+      },
+      message,
+    };
+  }
+
+  /**
+   * 提交一条消息给 scheduler；预算 turn-start block 时留在 mailbox（不 submit）。
+   * 每个 run id 在提交前固定，保证 entry 返回 / events 一致。
+   */
+  private async submitMessage(
+    record: MemberRecord,
+    entry: BodyEntry,
+    message: AgentMessage,
+  ): Promise<{ runId: string; handle: RunHandle }> {
+    if (this.draining || entry.closing || entry.retired) {
+      throw new AgentError('member_closed', `member_closed: ${record.id}`);
+    }
+    const runId = this.newId();
+    entry.queuedRuns.add(runId);
+    const task: ScheduledTask = {
+      agent: { id: record.id } as AgentHandle,
+      serialKey: entry.bodyId,
+      runId,
+      sessionId: entry.bodyId,
+      input: message.content,
+      executor: async (scheduledRunId) => {
+        entry.queuedRuns.delete(scheduledRunId);
+        return this.startBodyRun(record, entry, message, scheduledRunId);
+      },
+    };
+    try {
+      const handle = await this.scheduler.submit(task);
+      return { runId, handle };
+    } catch (error) {
+      entry.queuedRuns.delete(runId);
+      const index = entry.pending.indexOf(message);
+      if (index >= 0) entry.pending.splice(index, 1);
+      throw error;
+    }
+  }
+
+  private holdBlockedMessage(
+    record: MemberRecord,
+    entry: BodyEntry,
+    message: AgentMessage,
+    check: BudgetBlockedCheck,
+  ): void {
+    const conversationId = message.conversation_id;
+    if (conversationId === undefined) return;
+    entry.budgetHold.add(conversationId);
+    this.budgetPort?.noteHold?.(conversationId, record.id);
+    this.budgetPort?.noteTurnBlocked?.({
+      conversation_id: conversationId,
+      ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
+      dimension: check.dimension,
+      reason: check.reason,
+    });
+    if (this.blockedBudgetEvents.has(conversationId)) return;
+    this.blockedBudgetEvents.add(conversationId);
+    this.emitBudgetBlocked(record, check, {
+      conversation_id: conversationId,
+      message_id: message.id,
+      from: message.from,
+      to: record.id,
+      phase: 'turn_start',
+    });
+  }
+
+  private queuePositionFor(runId: string, status: RunStatus): number | undefined {
+    if (status !== 'queued' || this.scheduler.snapshot === undefined) return undefined;
+    const index = this.scheduler.snapshot().queued.findIndex((run) => run.runId === runId);
+    return index >= 0 ? index + 1 : undefined;
+  }
+
+  // ─── Body 执行 ─────────────────────────────────────────────────
+
+  /**
+   * scheduler executor：开始该 body 的一轮。
+   * 预算 turn_start 检查在这里（而不是提交时）：block 时消息留在 body mailbox，
+   * override / release 后由 `retryHeldMessages` 重新准入。
+   */
+  private async startBodyRun(
+    record: MemberRecord,
+    entry: BodyEntry,
+    message: AgentMessage,
+    runId: string,
+  ): Promise<RunHandle> {
+    if (entry.retired || entry.closing) {
+      const cancelled = new BodyRunHandle(runId, record.id, entry.bodyId);
+      cancelled.markCancelled('body closed');
+      return cancelled;
+    }
+    const conversationId = message.conversation_id;
+    if (!this.isHumanPrincipal(record.id)) {
+      const check = this.checkTurnStart(record, message, entry.bodyId);
+      if (!check.ok) {
+        this.holdBlockedMessage(record, entry, message, check);
+        const held = new BodyRunHandle(runId, record.id, entry.bodyId);
+        held.complete('');
+        return held;
+      }
+    }
+    const index = entry.pending.indexOf(message);
+    if (index >= 0) entry.pending.splice(index, 1);
+    if (conversationId !== undefined) {
+      this.budgetPort?.noteTurnStarted({
+        conversation_id: conversationId,
+        ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
+        agent_id: record.id,
+        message_id: message.id,
+      });
+      entry.budgetHold.delete(conversationId);
+      this.blockedBudgetEvents.delete(conversationId);
+      this.budgetPort?.clearHold?.(conversationId, record.id);
+      this.emitBudgetWarnings(record, conversationId, 'turn_start');
+    }
+    await this.ensureRuntime(entry);
+    entry.state = 'running';
+    entry.lastActiveAt = this.now();
+    entry.active = {
+      runId,
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      replied: false,
+    };
+    this.registry.touchBody(record.id, entry.bodyId, entry.lastActiveAt);
+    this.updateAgentState(record.id);
+    this.scheduleSnapshot();
+    const handle = new BodyRunHandle(runId, record.id, entry.bodyId);
+    handle.cancelHandler = () => {
+      try {
+        this.runtime.cancel(entry.runtimeMember);
+      } catch (error) {
+        this.logger.warn('agent.cancel.failed', {
+          member_id: record.id,
+          session_id: entry.bodyId,
+          error: errorText(error),
+        });
+      }
+    };
+    void this.executeBodyTurn(record, entry, message, handle);
+    return handle;
+  }
+
+  /** 执行并收口一轮；任何异常都收口为失败，不让后台任务产生未处理 rejection */
+  private async executeBodyTurn(
+    record: MemberRecord,
+    entry: BodyEntry,
+    message: AgentMessage,
+    handle: BodyRunHandle,
+  ): Promise<void> {
+    let result: MemberTurnResult | undefined;
+    let failure: string | undefined;
+    try {
+      result = await this.runtime.runTurn(entry.runtimeMember, message, handle.id);
+    } catch (error) {
+      if (!handle.cancelRequested && !entry.closing) {
+        failure = errorText(error);
+        this.logger.error('agent.run.failed', {
+          member_id: record.id,
+          session_id: entry.bodyId,
+          run_id: handle.id,
+          error: failure,
+        });
+      }
+    }
+    handle.setUsage(result?.usage);
+    const conversationId = message.conversation_id;
+    if (conversationId !== undefined) {
+      this.budgetPort?.noteTurnFinished({
+        conversation_id: conversationId,
+        ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
+        agent_id: record.id,
+        message_id: message.id,
+        ...(result?.usage !== undefined ? { usage: result.usage } : {}),
+      });
+    }
+    // 先取出本轮是否已显式 reply；随后清空 active（同 body 可继续下一轮）
+    const replied = entry.active?.replied === true;
+    entry.active = undefined;
+    entry.state = 'idle';
+    entry.lastActiveAt = this.now();
+    this.registry.touchBody(record.id, entry.bodyId, entry.lastActiveAt);
+    if (result?.usage !== undefined) this.registry.setUsage(record.id, result.usage);
+
+    const current = this.registry.get(record.id);
+    const cancelled = handle.cancelRequested || result?.outcome === 'cancelled';
+    const outcome = cancelled
+      ? 'cancelled'
+      : failure !== undefined
+        ? 'failed'
+        : (result?.outcome ?? 'completed');
+
+    // 旧 body（rotate / TTL 已退役）：epoch fencing，不写 agent 状态、不投父队列
+    if (entry.retired || !current || current.state === 'closed') {
+      if (outcome === 'completed' && nonEmpty(result?.content)) {
+        this.emitForSession('agent.reply.stale', record, entry.bodyId, {
+          body_id: entry.bodyId,
+          epoch: entry.epoch,
+          message_id: message.id,
+          reason: 'epoch_fenced',
+        });
+      }
+      this.updateAgentState(record.id);
+      this.scheduleSnapshot();
+      if (entry.retired) await this.disposeEntry(entry);
+      this.settleHandle(handle, outcome, failure, result?.content);
+      return;
+    }
+
+    if (outcome === 'completed' && !handle.cancelRequested) {
+      if (!replied) {
+        await this.deliverToParent(current, result?.content, conversationId);
+      }
+    }
+
+    this.updateAgentState(record.id, outcome);
+    this.scheduleSnapshot();
+    this.settleHandle(handle, outcome, failure, result?.content);
+  }
+
+  private settleHandle(
+    handle: BodyRunHandle,
+    outcome: 'completed' | 'failed' | 'cancelled',
+    failure: string | undefined,
+    content: string | undefined,
+  ): void {
+    if (outcome === 'cancelled') handle.markCancelled(failure ?? 'run cancelled');
+    else if (outcome === 'failed') handle.fail(failure ?? 'run failed');
+    else handle.complete(content ?? '');
+  }
+
+  /** 自动最终文本投递到父成员；父已 left / closed / gone 时显式 dropped */
+  private async deliverToParent(
+    member: MemberRecord,
+    content: string | undefined,
+    conversationId: string | undefined,
+  ): Promise<void> {
+    if (!nonEmpty(content) || !nonEmpty(member.parentId)) return;
+    const parent = this.registry.resolve(member.parentId);
+    if (!parent) return;
+    if (parent.membership === 'left' || parent.state === 'closed' || parent.presence === 'gone') {
+      const reason =
+        parent.membership === 'left'
+          ? 'parent_left'
+          : parent.state === 'closed'
+            ? 'parent_closed'
+            : 'parent_gone';
+      this.emit('agent.reply.dropped', member, { to: parent.id, reason });
+      return;
+    }
+    try {
+      await this.admitInternal({
+        content,
+        agent_id: parent.id,
+        from: member.id,
+        channel: 'direct',
+        ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+        strict: false,
+      });
+    } catch (error) {
+      this.logger.warn('agent.reply.drop_failed', {
+        member_id: member.id,
+        parent_id: parent.id,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /** 按 live body 汇总 agent 状态（running / waiting_permission / idle） */
+  /**
+   * 按 live body 汇总 agent 状态（running / waiting_permission / idle）。
+   * `terminal` 是刚结束的一轮结局：没有 active body 时用它（保持 agents 对外终态口径）。
+   */
+  private updateAgentState(agentId: string, terminal?: 'completed' | 'failed' | 'cancelled'): void {
+    const record = this.registry.get(agentId);
+    if (!record || record.membership === 'left' || record.state === 'closed') return;
+    const entries = this.liveEntries(agentId);
+    const anyWaiting = entries.some((entry) => entry.state === 'waiting_permission');
+    const anyRunning = entries.some(
+      (entry) => entry.state === 'running' || entry.state === 'waiting_permission',
+    );
+    const target: MemberState = anyWaiting
+      ? 'waiting_permission'
+      : anyRunning
+        ? 'running'
+        : (terminal ?? 'idle');
+    if (record.state === target) return;
+    try {
+      if (
+        target === 'running' &&
+        (record.state === 'completed' || record.state === 'failed' || record.state === 'cancelled')
+      ) {
+        this.registry.setState(agentId, 'idle');
+      }
+      this.registry.setState(agentId, target);
+    } catch (error) {
+      // 状态竞争（close / 迟到回调）不应打断执行；只记日志。
+      this.logger.warn('agent.state.update_failed', {
+        agent_id: agentId,
+        state: target,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /** 空闲 body TTL sweep；返回本次退役数量 */
+  async sweepIdleBodies(now: number = this.now()): Promise<number> {
+    await this.ready;
+    if (this.bodyIdleTtlMs <= 0) return 0;
+    let retiredCount = 0;
+    for (const record of this.registry.all()) {
+      if (record.membership === 'left' || record.state === 'closed') continue;
+      const entries = this.liveEntries(record.id);
+      let changed = false;
+      for (const entry of entries) {
+        if (entry.active !== undefined || entry.closing) continue;
+        if (entry.queuedRuns.size > 0 || entry.pending.length > 0) continue;
+        if (entry.state !== 'idle') continue;
+        if (entry.lastActiveAt + this.bodyIdleTtlMs >= now) continue;
+        await this.retireBodyEntry(record, entry, 'idle_ttl', now);
+        retiredCount += 1;
+        changed = true;
+      }
+      if (changed) this.scheduleSnapshot();
+    }
+    return retiredCount;
+  }
+
+  // ─── send / dispatch ───────────────────────────────────────────
+
   async send(input: SendInput): Promise<SendResult>;
   async send(input: SendBatchInput): Promise<BatchResult<SendResult>>;
   async send(input: SendInput | SendBatchInput): Promise<SendResult | BatchResult<SendResult>> {
@@ -786,21 +1693,20 @@ export class AgentServiceImpl implements AgentService {
       const settled = await Promise.allSettled(
         messages.map((entry) =>
           isRecord(entry)
-            ? this.enqueue(entry)
+            ? this.sendOne(entry)
             : Promise.reject(new AgentError('invalid_input', 'messages entries must be objects')),
         ),
       );
       return settleBatch(settled);
     }
-    return this.enqueue(record);
+    return this.sendOne(record);
   }
 
-  /** strict send 入队（不 resume）；async 只为把校验异常转成逐条 rejection */
-  private async enqueue(input: Record<string, unknown>): Promise<SendResult> {
+  /** strict send：不自动恢复 gone 成员；走同一个 admit。 */
+  private async sendOne(input: Record<string, unknown>): Promise<SendResult> {
     const to = readRequiredString(input, 'to');
     const content = readContent(input, 'content');
     const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(input, 'from');
-
     const target = this.requireMember(to);
     if (target.membership === 'left' || target.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${to}`);
@@ -808,93 +1714,34 @@ export class AgentServiceImpl implements AgentService {
     if (target.presence === 'gone') {
       throw new AgentError('member_stale', `member_stale: ${to}`);
     }
-    if (this.queueFor(target.id).closing) {
-      throw new AgentError('member_closed', `member_closed: ${to}`);
-    }
     if (!this.registry.canView(target, from)) {
       throw new AgentError('member_not_visible', `member_not_visible: ${to}`);
     }
-
-    const conversationId = this.resolveConversationId(input.conversation_id);
-    const teamId = this.resolveOriginTeam(from, target);
-    // 状态 / 可见性检查在前，预算检查在后：被拒绝的投递不预留 hop。
-    const check = this.checkDelivery(target, from, conversationId, teamId);
-    if (!check.ok) {
-      this.emitBudgetBlocked(target, check, {
-        conversation_id: conversationId,
-        from,
-        to: target.id,
-        phase: 'enqueue',
-        ...(teamId !== undefined ? { teamId } : {}),
-      });
-      throw new AgentError(this.budgetCode(check.reason), `${check.reason}: ${check.dimension}`);
-    }
-    return this.enqueueMessage(target, content, from, conversationId);
-  }
-
-  /** 唯一入队实现：send / dispatch / reply 之外的入队路径都走这里 */
-  private enqueueMessage(
-    target: MemberRecord,
-    content: string,
-    from: string,
-    conversationId: string | undefined,
-    kind?: AgentMessage['kind'],
-    channel?: AgentMessage['channel'],
-  ): SendResult {
-    const message: AgentMessage = {
-      id: this.newId(),
-      from,
-      to: target.id,
+    const sessionId = this.registry.getBySession(to)?.id === target.id ? to : undefined;
+    const result = await this.admit({
       content,
-      ts: this.now(),
-      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
-      ...(kind !== undefined ? { kind } : {}),
-      // 来源标注只用于本轮 system 注入；不改变 content / 权限主体。
-      source: this.messageSource(from),
-      channel: channel ?? 'direct',
-    };
-    const queue = this.queueFor(target.id);
-    queue.pending.push(message);
-    this.registry.touch(target.id);
-    this.emit('agent.message.queued', target, {
-      state: target.state,
-      message_id: message.id,
+      agent_id: target.id,
+      ...(sessionId !== undefined ? { session_id: sessionId } : {}),
       from,
-      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+      channel: 'direct',
+      ...(input.conversation_id !== undefined
+        ? { conversation_id: readRequiredString(input, 'conversation_id') }
+        : {}),
+      strict: true,
     });
-    this.scheduleSnapshot();
-    this.pump(target.id);
-    return { queued: true, message_id: message.id, state: target.state };
+    const messageId = this.runMessageIds.get(result.run_id) ?? result.run_id;
+    return {
+      queued: true,
+      message_id: messageId,
+      state: this.registry.get(target.id)?.state ?? target.state,
+      run_id: result.run_id,
+      session_id: result.session_id,
+    };
   }
 
   /**
-   * 入队时标注发送者类别（仅用于模型上下文，不参与权限判定）。
-   *
-   * external owner / role single 视为人类；role member / temporary 视为成员；
-   * 未登记 principal / `human` 视为人类；`system` 保持系统来源。
-   * 联邦入站 `federation:<principal>@<node>:<team>` 是远端 agent，不是本地人类。
-   */
-  private messageSource(from: string): AgentMessage['source'] {
-    if (from === 'system') return 'system';
-    if (from.startsWith('federation:')) return 'agent';
-    if (this.externalOwners.has(from)) return 'human';
-    const record = this.registry.get(from);
-    if (record === undefined) return 'human';
-    return record.role === 'single' ? 'human' : 'agent';
-  }
-
-  /** 显式 id 先校验；缺省由人类入口生成 `conv_<id>` */
-  private resolveConversationId(value: unknown): string {
-    if (value === undefined) return generateConversationId(this.newId);
-    if (!isValidConversationId(value)) {
-      throw new AgentError('invalid_input', 'invalid conversation_id');
-    }
-    return value;
-  }
-
-  /**
-   * dispatch：统一投递入口。
-   * `to` 解析顺序 id/session → 唯一 name；gone 走 single-flight resume。
+   * dispatch：统一投递入口。`to` 为 id / session / 唯一 name。
+   * 与 strict `send` 的区别：gone 成员会先确保 runtime（可 resume）；失败可按策略 fork。
    */
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
     await this.ready;
@@ -907,63 +1754,43 @@ export class AgentServiceImpl implements AgentService {
     if (target === undefined || !this.registry.canView(target, from)) {
       return { status: 'rejected', code: 'not_visible', reason: `not_visible: ${to}` };
     }
-
     if (target.membership === 'left' || target.state === 'closed') {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
-    // close 已置 closing 但尚未清空队列：不再入队，避免返回 queued 后消息被丢弃。
-    if (this.queueFor(target.id).closing) {
+    if (this.hasClosingBody(target.id)) {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
 
     const conversationId = this.resolveConversationId(input.conversation_id);
     const originTeamId =
       raw.origin_team_id === undefined ? undefined : readRequiredString(raw, 'origin_team_id');
-    if (target.rotation === 'rotating') {
-      const rejected = this.budgetBeforeEnqueue(target, from, conversationId, originTeamId);
-      if (rejected !== undefined) return rejected;
-      const result = this.enqueueMessage(
-        target,
+    const boundSession = this.registry.getBySession(to)?.id === target.id ? to : undefined;
+    const attempt = async (agentId: string, sessionId?: string) =>
+      this.admit({
         content,
+        agent_id: agentId,
+        ...(sessionId !== undefined ? { session_id: sessionId } : {}),
         from,
-        conversationId,
-        undefined,
-        originTeamId === undefined ? undefined : 'team',
-      );
-      return {
-        status: 'queued',
-        message_id: result.message_id,
-        resolved_to: target.id,
-        resolution: 'rotating',
+        channel: originTeamId === undefined ? 'direct' : 'team',
+        ...(originTeamId !== undefined ? { origin_team_id: originTeamId } : {}),
         conversation_id: conversationId,
-      };
-    }
-    if (target.presence === 'live') {
-      const rejected = this.budgetBeforeEnqueue(target, from, conversationId, originTeamId);
-      if (rejected !== undefined) return rejected;
-      const result = this.enqueueMessage(
-        target,
-        content,
-        from,
-        conversationId,
-        undefined,
-        originTeamId === undefined ? undefined : 'team',
-      );
-      return {
-        status: 'queued',
-        message_id: result.message_id,
-        resolved_to: target.id,
-        resolution: 'live',
-        conversation_id: conversationId,
-      };
-    }
+        strict: false,
+      });
 
+    // admit 会把 presence 拉回 live，所以先捕获投递前的 presence 来区分 live / resumed。
+    const wasLive = target.presence === 'live';
     try {
-      await this.ensureResumed(target.id);
+      const result = await attempt(target.id, boundSession);
+      return {
+        status: 'queued',
+        message_id: this.runMessageIds.get(result.run_id) ?? result.run_id,
+        resolved_to: target.id,
+        resolution: wasLive ? 'live' : 'resumed',
+        conversation_id: conversationId,
+      };
     } catch (error) {
-      // resume 失败：只有显式/team policy 允许且满足 fork 前置时才兜底；不得静默降级。
       if (!this.resolveAllowFork(target, raw.allow_fork)) {
-        return { status: 'rejected', code: 'resume_failed', reason: errorText(error) };
+        return this.rejectAdmit(error);
       }
       const fork = await this.ensureForked(target.id);
       if (!fork.ok) {
@@ -977,89 +1804,44 @@ export class AgentServiceImpl implements AgentService {
         ) {
           return { status: 'rejected', code: fork.code, reason: fork.reason };
         }
-        // fork_not_allowed：没有发生 fork，仍按 resume 失败显式拒绝。
         return { status: 'rejected', code: 'resume_failed', reason: fork.reason };
       }
       const forked = this.registry.get(fork.member.id);
       if (forked === undefined || forked.membership === 'left' || forked.state === 'closed') {
         return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
       }
-      const rejectedFork = this.budgetBeforeEnqueue(forked, from, conversationId, originTeamId);
-      if (rejectedFork !== undefined) return rejectedFork;
-      const forkedResult = this.enqueueMessage(
-        forked,
-        content,
-        from,
-        conversationId,
-        undefined,
-        originTeamId === undefined ? undefined : 'team',
-      );
-      return {
-        status: 'queued',
-        message_id: forkedResult.message_id,
-        resolved_to: forked.id,
-        resolution: 'forked',
-        conversation_id: conversationId,
-      };
+      try {
+        const result = await attempt(forked.id);
+        return {
+          status: 'queued',
+          message_id: this.runMessageIds.get(result.run_id) ?? result.run_id,
+          resolved_to: forked.id,
+          resolution: 'forked',
+          conversation_id: conversationId,
+        };
+      } catch (forkError) {
+        return this.rejectAdmit(forkError);
+      }
     }
-    // resume 期间成员可能已被 close：复查后拒绝，不把消息投进已关闭成员
-    const current = this.registry.get(target.id);
-    if (
-      current === undefined ||
-      current.membership === 'left' ||
-      current.state === 'closed' ||
-      current.presence === 'gone'
-    ) {
-      return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
-    }
-    // resume 后、入队前检查（检查与入队之间没有 await）
-    const rejected = this.budgetBeforeEnqueue(current, from, conversationId, originTeamId);
-    if (rejected !== undefined) return rejected;
-    const result = this.enqueueMessage(
-      current,
-      content,
-      from,
-      conversationId,
-      undefined,
-      originTeamId === undefined ? undefined : 'team',
-    );
-    return {
-      status: 'queued',
-      message_id: result.message_id,
-      resolved_to: current.id,
-      resolution: 'resumed',
-      conversation_id: conversationId,
-    };
   }
 
-  /** 发送侧预算检查：通过返回 undefined，拒绝时发 blocked 事件并给出 DispatchResult */
-  private budgetBeforeEnqueue(
-    target: MemberRecord,
-    from: string,
-    conversationId: string,
-    originTeamId?: string,
-  ): DispatchResult | undefined {
-    const teamId = originTeamId ?? this.resolveOriginTeam(from, target);
-    const check = this.checkDelivery(
-      target,
-      from,
-      conversationId,
-      teamId,
-      originTeamId !== undefined,
-    );
-    if (check.ok) return undefined;
-    this.emitBudgetBlocked(target, check, {
-      conversation_id: conversationId,
-      from,
-      to: target.id,
-      phase: 'enqueue',
-      ...(teamId !== undefined ? { teamId } : {}),
-    });
-    return {
-      status: 'rejected',
-      code: this.budgetCode(check.reason),
-      reason: `${check.reason}: ${check.dimension}`,
-    };
+  /** admit / spawn 失败 → DispatchResult（稳定 code 尽量保留） */
+  private rejectAdmit(error: unknown): DispatchResult {
+    const code = errorCode(error);
+    if (code === 'member_not_visible') {
+      return { status: 'rejected', code: 'not_visible', reason: errorText(error) };
+    }
+    if (code === 'member_closed') {
+      return { status: 'rejected', code: 'agent_left', reason: errorText(error) };
+    }
+    if (
+      code === 'budget_exceeded' ||
+      code === 'budget_unavailable' ||
+      code === 'conversation_team_mismatch'
+    ) {
+      return { status: 'rejected', code, reason: errorText(error) };
+    }
+    return { status: 'rejected', code: 'resume_failed', reason: errorText(error) };
   }
 
   /**
@@ -1074,7 +1856,6 @@ export class AgentServiceImpl implements AgentService {
     if (matches.length === 0) {
       throw new AgentError('unknown_member', `unknown_member: ${to}`);
     }
-    // present 优先；只有 left 匹配时选中它，由 dispatch 返回 agent_left。
     const present = matches.filter((record) => record.membership === 'present');
     const pool = present.length > 0 ? present : matches;
     const visible = pool.filter((record) => this.registry.canView(record, from));
@@ -1101,50 +1882,11 @@ export class AgentServiceImpl implements AgentService {
     return this.teamPolicy?.(target.teamId)?.allowFork === true;
   }
 
-  /**
-   * single-flight resume：同一成员并发 dispatch 只 spawn 一次。
-   * spawn 成功后复查 membership（close 可能在等待期间发生）。
-   */
-  private async ensureResumed(id: string): Promise<void> {
-    const inflight = this.resuming.get(id);
-    if (inflight) return inflight;
-    const promise = this.resumeOne(id);
-    this.resuming.set(id, promise);
-    try {
-      await promise;
-    } finally {
-      if (this.resuming.get(id) === promise) this.resuming.delete(id);
-    }
-  }
-
-  private async resumeOne(id: string): Promise<void> {
-    const record = this.registry.get(id);
-    if (!record) throw new AgentError('unknown_member', `unknown_member: ${id}`);
-    await this.runtime.spawn(toRuntimeMember(record));
-
-    const current = this.registry.get(id);
-    if (!current || current.membership === 'left' || current.state === 'closed') {
-      if (current) {
-        try {
-          await this.runtime.dispose(toRuntimeMember(current));
-        } catch (error) {
-          this.logger.warn('agent.dispose.failed', { member_id: id, error: errorText(error) });
-        }
-        this.registry.setPresence(id, 'gone');
-      }
-      throw new AgentError('member_closed', `agent_left: ${id}`);
-    }
-    this.registry.setPresence(id, 'live');
-    this.emit('agent.resumed', current, {
-      presence: 'live',
-      state: current.state,
-      epoch: current.currentBody?.epoch ?? 0,
-    });
-  }
+  // ─── rotate / close ────────────────────────────────────────────
 
   /**
-   * 换一具新 Body：新 session + epoch + 1，spawn 成功后原子切指针并落盘。
-   * 失败保持旧指针、不自动 fork / 重试 / 限流；启动嘱托只在成功后入队。
+   * 只退休 primary body：创建新 primary（新 session + epoch+1），其它 live body 不变。
+   * 旧 body 进 body_history；正在跑的旧轮由 epoch fencing 在轮末 dispose。
    */
   async rotate(input: RotateInput): Promise<RotateResult> {
     await this.ready;
@@ -1156,48 +1898,39 @@ export class AgentServiceImpl implements AgentService {
     if (target === undefined || !this.registry.canView(target, from)) {
       return { status: 'failed', code: 'not_visible', reason: `not_visible: ${to}` };
     }
-    const queue = this.queueFor(target.id);
-    if (target.membership === 'left' || target.state === 'closed' || queue.closing) {
+    if (
+      target.membership === 'left' ||
+      target.state === 'closed' ||
+      this.hasClosingBody(target.id)
+    ) {
       return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
     if (this.rotations.has(target.id) || target.rotation === 'rotating') {
       return { status: 'failed', code: 'rotating', reason: `rotating: ${target.id}` };
     }
-    if (target.presence !== 'live') {
+    const oldBody = primaryBody(target);
+    if (target.presence !== 'live' || oldBody === undefined) {
       return { status: 'failed', code: 'body_not_live', reason: `body_not_live: ${target.id}` };
     }
-    if (this.externalOwners.has(target.id)) {
-      return { status: 'failed', code: 'rotate_failed', reason: 'owner_not_rotatable' };
-    }
 
-    // 最终 self-only 闸门：调用者 session 必须就是 target 的当前 Body。
     const callerSession = input.from_session_id;
-    if (callerSession !== undefined) {
-      const caller = this.registry.resolve(callerSession);
-      if (caller !== target || target.currentBody?.session_id !== callerSession) {
-        return {
-          status: 'failed',
-          code: 'not_current_body',
-          reason: `not_current_body: ${callerSession}`,
-        };
-      }
+    if (callerSession !== undefined && callerSession !== oldBody.bodyId) {
+      return {
+        status: 'failed',
+        code: 'not_current_body',
+        reason: `not_current_body: ${callerSession}`,
+      };
     }
 
     const startupPrompt = readContent(raw, 'startup_prompt');
-
-    // 指针切换前捕获旧 Body 身份与可回滚状态。
-    const oldPointer: AgentBodyPointer = target.currentBody ?? {
-      session_id: target.sessionId,
-      epoch: 0,
-      started_at: this.now(),
-    };
-    const fromSessionId = oldPointer.session_id;
-    const fromEpoch = oldPointer.epoch;
-    const oldBodyHistory = [...target.bodyHistory];
-    const oldMember = toRuntimeMember(target);
-
+    const fromSessionId = oldBody.bodyId;
+    const fromEpoch = oldBody.epoch;
     const toSessionId = this.newId();
-    if (!nonEmpty(toSessionId) || this.registry.resolve(toSessionId) !== undefined) {
+    if (
+      !nonEmpty(toSessionId) ||
+      this.registry.getBySession(toSessionId) !== undefined ||
+      target.bodies.some((body) => body.bodyId === toSessionId)
+    ) {
       this.emitForSession('agent.rotate.failed', target, fromSessionId, {
         from_session_id: fromSessionId,
         ...(nonEmpty(toSessionId) ? { to_session_id: toSessionId } : {}),
@@ -1206,17 +1939,14 @@ export class AgentServiceImpl implements AgentService {
       return { status: 'failed', code: 'rotate_failed', reason: 'session_id_collision' };
     }
     const toEpoch = fromEpoch + 1;
-    const newMember: MemberRuntimeMember = { ...oldMember, session_id: toSessionId };
-
-    const isAborted = (): boolean => {
-      const current = this.registry.get(target.id);
-      return (
-        current === undefined ||
-        current.membership === 'left' ||
-        current.state === 'closed' ||
-        this.queueFor(target.id).closing
-      );
-    };
+    const oldEntry = this.bodyRegistry.get(target.id)?.get(fromSessionId);
+    if (liveBodies(target).length >= this.maxLiveBodies) {
+      return {
+        status: 'failed',
+        code: 'rotate_failed',
+        reason: `body_limit: ${target.id} (max ${this.maxLiveBodies})`,
+      };
+    }
 
     this.registry.setRotation(target.id, 'rotating');
     this.rotations.set(target.id, { fromSessionId, fromEpoch, toSessionId, toEpoch });
@@ -1226,10 +1956,20 @@ export class AgentServiceImpl implements AgentService {
       epoch: toEpoch,
     });
 
+    let newBody: AgentBodyRecord | undefined;
+    const rollbackNew = async (): Promise<void> => {
+      const entry = this.findEntry(target.id, toSessionId);
+      if (entry !== undefined) await this.disposeEntry(entry);
+      if (newBody !== undefined) this.registry.removeBody(target.id, toSessionId);
+    };
     try {
       try {
-        await this.runtime.spawn(newMember);
+        newBody = await this.createBody(target, toSessionId, { epoch: toEpoch, primary: false });
+        const newEntry = await this.entryFor(target, newBody, false);
+        await this.ensureRuntime(newEntry);
+        newEntry.primary = true;
       } catch (error) {
+        await rollbackNew();
         this.registry.setRotation(target.id, 'stable');
         this.rotations.delete(target.id);
         this.emitForSession('agent.rotate.failed', target, fromSessionId, {
@@ -1237,29 +1977,12 @@ export class AgentServiceImpl implements AgentService {
           to_session_id: toSessionId,
           reason: errorText(error),
         });
-        this.pump(target.id);
         return { status: 'failed', code: 'rotate_failed', reason: errorText(error) };
       }
 
-      // spawn 之后可能已 close：dispose 新 engine，不切换指针。
-      if (isAborted()) {
-        this.registry.setRotation(target.id, 'stable');
-        this.rotations.delete(target.id);
-        await this.disposeBody(newMember);
-        this.emitForSession('agent.rotate.failed', target, fromSessionId, {
-          from_session_id: fromSessionId,
-          to_session_id: toSessionId,
-          reason: 'agent_left',
-        });
-        return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
-      }
-
-      this.registry.pushBodyHistory(target.id, { ...oldPointer, retired_at: this.now() });
-      this.registry.setCurrentBody(target.id, {
-        session_id: toSessionId,
-        epoch: toEpoch,
-        started_at: this.now(),
-      });
+      // 提交 primary；flush 失败回滚到旧 body。
+      this.registry.setPrimaryBody(target.id, toSessionId);
+      if (oldEntry !== undefined) oldEntry.primary = false;
       this.scheduleSnapshot();
       let ok = false;
       try {
@@ -1267,71 +1990,62 @@ export class AgentServiceImpl implements AgentService {
       } catch {
         ok = false;
       }
-
-      // flush 之后才 close：指针已提交，不再回滚；新 engine 由 close / 本分支回收。
-      if (isAborted()) {
-        this.registry.setRotation(target.id, 'stable');
-        this.rotations.delete(target.id);
-        await this.disposeBody(newMember);
-        this.emitForSession('agent.rotate.failed', target, fromSessionId, {
-          from_session_id: fromSessionId,
-          to_session_id: toSessionId,
-          reason: 'agent_left',
-        });
-        return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
-      }
-
       if (!ok) {
-        this.registry.setCurrentBody(target.id, oldPointer);
-        this.registry.setBodyHistory(target.id, oldBodyHistory);
+        this.registry.setPrimaryBody(target.id, fromSessionId);
+        if (oldEntry !== undefined) oldEntry.primary = true;
+        await rollbackNew();
         this.registry.setRotation(target.id, 'stable');
         this.rotations.delete(target.id);
-        await this.disposeBody(newMember);
         this.emitForSession('agent.rotate.failed', target, fromSessionId, {
           from_session_id: fromSessionId,
           to_session_id: toSessionId,
           reason: 'snapshot_write_failed',
         });
-        this.pump(target.id);
         return { status: 'failed', code: 'rotate_failed', reason: 'snapshot_write_failed' };
       }
 
-      // 旧 Body 的 80% 预警不得发给新 Body；按 kind 移除，不匹配正文前缀。
-      for (let i = queue.pending.length - 1; i >= 0; i--) {
-        if (queue.pending[i]?.kind === 'limit_warning') queue.pending.splice(i, 1);
-      }
-      // rotate startup 是系统消息：不计 hop，但运行起来算一次 turn；继承触发 rotate 的会话。
-      const startupConversationId =
-        queue.activeConversationId ?? generateConversationId(this.newId);
-      queue.pending.unshift({
-        id: this.newId(),
-        from: 'system',
-        to: target.id,
-        content: startupPrompt,
-        ts: this.now(),
-        conversation_id: startupConversationId,
-      });
-      queue.warnedSignals.clear();
       this.emitForSession('agent.rotated', target, toSessionId, {
         from_session_id: fromSessionId,
         to_session_id: toSessionId,
         epoch: toEpoch,
       });
-      this.scheduleSnapshot();
-      this.registry.setRotation(target.id, 'stable');
-      this.rotations.delete(target.id);
 
-      // 没有在跑的旧轮才立即退役；否则交给 executeTurn 的 stale 分支。
-      if (!queue.turnActive) {
-        const disposed = await this.disposeBody(oldMember);
-        this.emitForSession('agent.retired', target, fromSessionId, {
-          body_id: fromSessionId,
+      // 旧 primary 退休；正在跑的旧轮由 executeBodyTurn 的 fencing 分支收口。
+      if (oldEntry !== undefined) {
+        await this.retireBodyEntry(target, oldEntry, 'rotation');
+      } else {
+        this.registry.pushBodyHistory(target.id, {
+          session_id: fromSessionId,
           epoch: fromEpoch,
-          reason: disposed ? 'rotation' : 'dispose_failed',
+          started_at: oldBody.createdAt,
+          retired_at: this.now(),
         });
+        this.registry.retireBody(target.id, fromSessionId);
       }
 
-      this.pump(target.id);
+      // startup prompt：system 消息，继承触发 rotate 的会话；不计 hop。
+      const inheritedConversation =
+        oldEntry?.active?.conversationId ?? generateConversationId(this.newId);
+      try {
+        await this.admitInternal({
+          content: startupPrompt,
+          agent_id: target.id,
+          session_id: toSessionId,
+          from: 'system',
+          channel: 'direct',
+          conversation_id: inheritedConversation,
+          strict: false,
+        });
+      } catch (error) {
+        this.logger.warn('agent.rotate.startup_failed', {
+          agent_id: target.id,
+          error: errorText(error),
+        });
+      }
+      this.registry.setRotation(target.id, 'stable');
+      this.rotations.delete(target.id);
+      this.scheduleSnapshot();
+      this.updateAgentState(target.id);
       return {
         status: 'rotated',
         agent_id: target.id,
@@ -1340,7 +2054,6 @@ export class AgentServiceImpl implements AgentService {
         epoch: toEpoch,
       };
     } finally {
-      // 任何出口都不得留下 rotating 相位或残留的 rotation state。
       this.rotations.delete(target.id);
       const current = this.registry.get(target.id);
       if (current?.rotation === 'rotating') this.registry.setRotation(target.id, 'stable');
@@ -1387,50 +2100,14 @@ export class AgentServiceImpl implements AgentService {
     const member = this.requireMember(ref);
     if (member.membership === 'left' || member.state === 'closed') return { state: 'closed' };
 
-    const queue = this.queueFor(member.id);
-    queue.closing = true;
-    queue.pending.length = 0;
-    queue.warnedSignals.clear();
-    queue.budgetHold.clear();
-    queue.activeConversationId = undefined;
-
-    const activeSession = queue.activeBodySession;
-    const currentSession = member.currentBody?.session_id ?? member.sessionId;
-    if (queue.turnActive) {
-      try {
-        await this.runtime.cancel(
-          this.runtimeMemberForSession(member, activeSession ?? currentSession),
-        );
-      } catch (error) {
-        this.logger.warn('agent.cancel.failed', {
-          member_id: member.id,
-          error: errorText(error),
-        });
-      }
-    }
-
-    // cancel 期间执行内核仍可能完成本轮；closing 已置位，executeTurn 不会覆盖 closed
+    await this.disposeAgentBodies(member);
     this.registry.setState(member.id, 'closed');
     member.membership = 'left';
     this.registry.setPresence(member.id, 'gone');
-    queue.pending.length = 0;
     this.emit('agent.closed', member, { state: 'closed', presence: 'gone' });
     this.scheduleSnapshot();
 
-    // 旧 / 新 / 正在 rotate 的目标 Body 全部回收（dispose 按 session 幂等）。
-    const sessions = new Set<string>();
-    if (activeSession !== undefined) sessions.add(activeSession);
-    sessions.add(currentSession);
-    sessions.add(member.sessionId);
-    const rotating = this.rotations.get(member.id);
-    if (rotating !== undefined) sessions.add(rotating.toSessionId);
-    for (const sessionId of sessions) {
-      await this.disposeBody(this.runtimeMemberForSession(member, sessionId));
-    }
-    queue.activeBodySession = undefined;
-
     // owner close 后 private contractor 会对所有人不可见：按 registry 原始记录级联关闭。
-    // team 可见的 contractor 保持 present（队友仍可收）；递归天然覆盖链式 private。
     const privateChildren = this.registry
       .all()
       .filter(
@@ -1445,7 +2122,6 @@ export class AgentServiceImpl implements AgentService {
       try {
         await this.closeOne(child.id);
       } catch (error) {
-        // 单个子成员失败不阻断 owner close。
         this.logger.warn('agent.cascade_close.failed', {
           owner_id: member.id,
           agent_id: child.id,
@@ -1457,6 +2133,109 @@ export class AgentServiceImpl implements AgentService {
     await this.flushSnapshot();
     return { state: 'closed' };
   }
+
+  // ─── durable resume ────────────────────────────────────────────
+
+  async resume(runId: string): Promise<ResumeResult> {
+    await this.ready;
+    if (this.runStore === undefined) {
+      throw new AgentError('invalid_input', `run_store_required: ${runId}`);
+    }
+    const checkpoint = await this.runStore.load(runId);
+    if (checkpoint === null) {
+      throw new AgentError('invalid_input', `run_not_found: ${runId}`);
+    }
+    const bound = this.registry.getBySession(checkpoint.session_id);
+    const agentId = checkpoint.agent_id ?? bound?.id;
+    if (agentId === undefined) {
+      throw new AgentError('unknown_member', `unknown_member: ${checkpoint.session_id}`);
+    }
+    const record = this.requireAgent(agentId);
+    if (record.membership === 'left' || record.state === 'closed') {
+      throw new AgentError('member_closed', `member_closed: ${agentId}`);
+    }
+    const { entry } = await this.ensureBody(record, checkpoint.session_id);
+    await this.ensureRuntime(entry);
+    if (this.runtime.resume === undefined) {
+      throw new AgentError('invalid_input', 'resume_not_supported');
+    }
+    const run = this.newId();
+    entry.queuedRuns.add(run);
+    const task: ScheduledTask = {
+      agent: { id: record.id } as AgentHandle,
+      serialKey: entry.bodyId,
+      runId: run,
+      sessionId: entry.bodyId,
+      input: '',
+      executor: async (scheduledRunId) => {
+        entry.queuedRuns.delete(scheduledRunId);
+        return this.startResumeRun(record, entry, scheduledRunId);
+      },
+    };
+    const handle = await this.scheduler.submit(task);
+    const status = handle.status();
+    const queuePosition = this.queuePositionFor(run, status);
+    return {
+      run_id: run,
+      agent_id: record.id,
+      session_id: entry.bodyId,
+      status,
+      ...(queuePosition !== undefined ? { queue_position: queuePosition } : {}),
+    };
+  }
+
+  private async startResumeRun(
+    record: MemberRecord,
+    entry: BodyEntry,
+    runId: string,
+  ): Promise<RunHandle> {
+    const resume = this.runtime.resume;
+    if (resume === undefined) throw new Error('resume_not_supported');
+    entry.state = 'running';
+    entry.lastActiveAt = this.now();
+    entry.active = { runId, replied: true };
+    this.updateAgentState(record.id);
+    const handle = new BodyRunHandle(runId, record.id, entry.bodyId);
+    handle.cancelHandler = () => {
+      try {
+        this.runtime.cancel(entry.runtimeMember);
+      } catch (error) {
+        this.logger.warn('agent.cancel.failed', {
+          member_id: record.id,
+          session_id: entry.bodyId,
+          error: errorText(error),
+        });
+      }
+    };
+    void (async () => {
+      let result: MemberTurnResult | undefined;
+      let failure: string | undefined;
+      try {
+        result = await resume.call(this.runtime, entry.runtimeMember, runId);
+      } catch (error) {
+        if (!handle.cancelRequested && !entry.closing) failure = errorText(error);
+      }
+      handle.setUsage(result?.usage);
+      entry.active = undefined;
+      entry.state = 'idle';
+      entry.lastActiveAt = this.now();
+      this.registry.touchBody(record.id, entry.bodyId, entry.lastActiveAt);
+      if (result?.usage !== undefined) this.registry.setUsage(record.id, result.usage);
+      const cancelled = handle.cancelRequested || result?.outcome === 'cancelled';
+      const outcome = cancelled
+        ? 'cancelled'
+        : failure !== undefined
+          ? 'failed'
+          : (result?.outcome ?? 'completed');
+      this.updateAgentState(record.id, outcome);
+      this.scheduleSnapshot();
+      this.settleHandle(handle, outcome, failure, result?.content);
+      if (entry.retired) await this.disposeEntry(entry);
+    })();
+    return handle;
+  }
+
+  // ─── life-cycle / update / list ────────────────────────────────
 
   async update(input: AgentUpdateInput): Promise<AgentUpdateResult>;
   async update(input: AgentUpdateBatchInput): Promise<BatchResult<AgentUpdateResult>>;
@@ -1476,7 +2255,6 @@ export class AgentServiceImpl implements AgentService {
       if (updates.length === 0) {
         throw new AgentError('invalid_input', 'updates must not be empty');
       }
-      // 与 new / close 一致：条目并行，失败隔离，结果保持输入顺序。
       const settled = await Promise.allSettled(
         updates.map((entry) =>
           isRecord(entry)
@@ -1489,13 +2267,6 @@ export class AgentServiceImpl implements AgentService {
     return this.updateOne(record);
   }
 
-  /**
-   * 单条更新。
-   *
-   * - `name` 立即改并保持同 Team（unbound 为 tenant）内 present 成员唯一；
-   * - `model` / `systemPrompt` 只写入记录，已有 Body 不重建——下一次 spawn 才生效；
-   * - 事件 `agent.updated` 只带变化字段名，不带 prompt 正文。
-   */
   private async updateOne(record: Record<string, unknown>): Promise<AgentUpdateResult> {
     const ref = nonEmpty(record.id) ? record.id : nonEmpty(record.to) ? record.to : undefined;
     if (ref === undefined) {
@@ -1519,7 +2290,6 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', 'update requires name, model, systemPrompt or role');
     }
 
-    // 角色转换先做校验与目标状态计算，避免改到一半失败留下半转换记录。
     const conversion =
       requestedRole !== undefined && requestedRole !== target.role
         ? this.resolveRoleConversion(target, requestedRole, record)
@@ -1542,7 +2312,6 @@ export class AgentServiceImpl implements AgentService {
 
     this.registry.touch(target.id);
     if (changed.length > 0) {
-      // 只发字段名；prompt 正文永不进事件。
       this.emit('agent.updated', target, { changed });
     }
 
@@ -1561,7 +2330,6 @@ export class AgentServiceImpl implements AgentService {
         owner: conversion.owner,
         ...(conversion.teamId !== undefined ? { team_id: conversion.teamId } : {}),
       });
-      // notice-only：不换 Body、不触发 system revision，只向下一轮上下文追加一行。
       this.runtime.notice?.(
         target.id,
         `[runtime] identity changed: ${previousRole} → ${conversion.role}; owner=${conversion.owner}; team=${conversion.teamId ?? 'none'}`,
@@ -1573,7 +2341,7 @@ export class AgentServiceImpl implements AgentService {
 
     const affectsNextBody = changed.includes('model') || changed.includes('system_prompt');
     return {
-      agent: toMemberStatus(target),
+      agent: this.statusFor(target),
       changed,
       ...(affectsNextBody ? { applies_to: 'next_body' as const } : {}),
     };
@@ -1625,7 +2393,7 @@ export class AgentServiceImpl implements AgentService {
     return { role, owner: target.id, visibility: 'private' };
   }
 
-  /** update 选择器：id / 当前 Body session 直取；否则唯一当前名字。 */
+  /** update 选择器：id / 任一 live Body session 直取；否则唯一当前名字。 */
   private resolveUpdateTarget(ref: string): MemberRecord {
     const direct = this.registry.resolve(ref);
     if (direct !== undefined) return direct;
@@ -1633,7 +2401,6 @@ export class AgentServiceImpl implements AgentService {
     if (matches.length === 0) {
       throw new AgentError('unknown_member', `unknown_member: ${ref}`);
     }
-    // present 优先；只剩 left 时选中它，由 updateOne 返回 member_closed。
     const present = matches.filter((record) => record.membership === 'present');
     const pool = present.length > 0 ? present : matches;
     if (pool.length > 1) {
@@ -1664,12 +2431,7 @@ export class AgentServiceImpl implements AgentService {
 
   /**
    * roster add：绑定 Team 并把 `left` / `closed` 恢复为 `present`。
-   *
-   * 这是继 `attachOwner` 之后**第二条人力 `left → present` 路径**：只由 roster 管理
-   * （teams.members add / owner 端点）调用，engine 与普通投递路径都不能复活成员。
-   * `closed → idle` 不能走普通 `setState`（TRANSITIONS.closed 为空数组），因此与
-   * `attachOwner` 一样直接写 state。不 spawn、不新建 session，Body / 历史全部保留；
-   * 下一次 dispatch 才由 single-flight resume 拉起 engine。
+   * 只由 roster 管理调用；不 spawn、不新建 session。
    */
   async reinstate(input: ReinstateInput): Promise<MemberStatus> {
     await this.ready;
@@ -1682,10 +2444,6 @@ export class AgentServiceImpl implements AgentService {
     if (target === undefined || !this.registry.canView(target, from)) {
       throw new AgentError('member_not_visible', `member_not_visible: ${to}`);
     }
-    // root owner（external owner）不属 roster；普通 single 加入 Team 时转 member。
-    if (this.externalOwners.has(target.id)) {
-      throw new AgentError('invalid_input', 'owner_not_rosterable');
-    }
     if (target.role === 'single') {
       target.role = 'member';
       target.owner = target.id;
@@ -1697,9 +2455,8 @@ export class AgentServiceImpl implements AgentService {
     }
 
     const stillPresent = target.membership === 'present' && target.state !== 'closed';
-    // 已在同一 Team 的幂等 reinstate 不是增长，不该被冻结/上限拦住。
     if (stillPresent && target.teamId === teamId) {
-      return toMemberStatus(target);
+      return this.statusFor(target);
     }
 
     const team = this.teamBinder?.get(teamId);
@@ -1711,44 +2468,32 @@ export class AgentServiceImpl implements AgentService {
     }
 
     if (stillPresent) {
-      // 已 present 只是未绑定：只补 team_id，不改 state / presence，也不清队列。
       this.registry.setTeamId(target.id, teamId);
     } else {
       this.registry.setTeamId(target.id, teamId);
       this.registry.setMembership(target.id, 'present');
-      // 专用路径：closed 没有普通状态转移；与 attachOwner 并列的第二条人工复活路径。
       target.state = 'idle';
       this.registry.setPresence(target.id, 'gone');
-      // close 会置 queue.closing / 清空 pending；复活后必须清掉 closing，
-      // 否则下一次 dispatch 会被当成 agent_left。
-      const queue = this.queueFor(target.id);
-      queue.closing = false;
-      queue.pending.length = 0;
-      queue.budgetHold.clear();
+      for (const entry of this.liveEntries(target.id)) entry.closing = false;
     }
 
     this.emit('agent.rejoined', target, { state: target.state, presence: target.presence });
     this.scheduleSnapshot();
-    return toMemberStatus(target);
+    return this.statusFor(target);
   }
 
   async list(filter: ListFilter = {}): Promise<MemberStatus[]> {
     await this.ready;
-    return this.registry.list(filter).map(toMemberStatus);
+    if (this.bodyIdleTtlMs > 0) await this.sweepIdleBodies();
+    return this.registry.list(filter).map((record) => this.statusFor(record));
   }
 
-  /** 当前 Body session（或成员 id）→ 状态；忽略可见性，退役 Body 不再命中 */
+  /** 任一 live body session（或成员 id）→ 状态；退役 Body 不再命中 */
   async identify(sessionId: string): Promise<MemberStatus | undefined> {
     await this.ready;
     if (!nonEmpty(sessionId)) return undefined;
     const record = this.registry.resolve(sessionId);
-    return record === undefined ? undefined : toMemberStatus(record);
-  }
-
-  async hasMember(sessionId: string): Promise<boolean> {
-    await this.ready;
-    const record = this.registry.getBySession(sessionId);
-    return record !== undefined && !this.externalOwners.has(record.id);
+    return record === undefined ? undefined : this.statusFor(record);
   }
 
   async reply(memberId: string, content: string): Promise<ReplyResult> {
@@ -1765,82 +2510,49 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('no_parent', `member has no parent: ${memberId}`);
     }
     const parent = this.requireMember(member.parentId);
-    if (
-      parent.membership === 'left' ||
-      parent.state === 'closed' ||
-      this.queueFor(parent.id).closing
-    ) {
+    if (parent.membership === 'left' || parent.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${parent.id}`);
     }
     if (parent.presence === 'gone') {
       throw new AgentError('member_stale', `member_stale: ${parent.id}`);
     }
 
-    // 本轮已显式回复 → 抑制自动最终文本
-    this.queueFor(member.id).repliedThisTurn = true;
-    // 回复归到触发它的成员 turn；没有在跑轮次时生成新会话。
+    // 本轮已显式回复 → 抑制自动最终文本（标记当前正在跑的 body）
+    const activeEntry = this.liveEntries(member.id).find((entry) => entry.active !== undefined);
+    if (activeEntry?.active !== undefined) activeEntry.active.replied = true;
     const conversationId =
-      this.queueFor(member.id).activeConversationId ?? generateConversationId(this.newId);
-    // external owner 不参与预算；父成员回复是 agent→agent 投递，走发送侧检查。
-    if (!this.externalOwners.has(parent.id)) {
-      const teamId = this.resolveOriginTeam(member.id, parent);
-      const check = this.checkDelivery(parent, member.id, conversationId, teamId);
-      if (!check.ok) {
-        this.emitBudgetBlocked(parent, check, {
-          conversation_id: conversationId,
-          from: member.id,
-          to: parent.id,
-          phase: 'enqueue',
-          ...(teamId !== undefined ? { teamId } : {}),
-        });
-        throw new AgentError(this.budgetCode(check.reason), `${check.reason}: ${check.dimension}`);
-      }
-    }
-    const result = this.enqueueMessage(parent, text, member.id, conversationId);
-    return { queued: true, message_id: result.message_id, to: parent.id };
+      activeEntry?.active?.conversationId ?? generateConversationId(this.newId);
+    const result = await this.admit({
+      content: text,
+      agent_id: parent.id,
+      from: member.id,
+      channel: 'direct',
+      conversation_id: conversationId,
+      strict: true,
+    });
+    return {
+      queued: true,
+      message_id: this.runMessageIds.get(result.run_id) ?? result.run_id,
+      to: parent.id,
+    };
   }
 
-  /**
-   * 取走成员待处理消息（REPL owner 轮询）；FIFO、取走即删除，
-   * 不触发 pump / runTurn。limit 缺省取空队列。
-   */
-  async takeMessages(memberId: string, limit?: number): Promise<AgentMessage[]> {
-    await this.ready;
-    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
-      throw new AgentError('invalid_input', 'limit must be a positive integer');
-    }
-    const member = this.requireMember(memberId);
-    if (member.membership === 'left' || member.state === 'closed') {
-      throw new AgentError('member_closed', `member_closed: ${memberId}`);
-    }
-    if (member.presence === 'gone') {
-      throw new AgentError('member_stale', `member_stale: ${memberId}`);
-    }
-    const queue = this.queueFor(member.id);
-    if (queue.closing) {
-      throw new AgentError('member_closed', `member_closed: ${memberId}`);
-    }
-    const count =
-      limit === undefined ? queue.pending.length : Math.min(limit, queue.pending.length);
-    const taken = queue.pending.splice(0, count);
-    if (taken.length > 0) this.registry.touch(member.id);
-    return taken;
-  }
-
-  /** bridge 执行内核上报的等待/恢复；只接受当前运行 Body，旧 Body 的迟到回调丢弃 */
+  /** bridge 执行内核上报的等待/恢复；只接受对应 body 的当前 run */
   notePermissionState(memberId: string, sessionId: string, state: MemberPermissionState): void {
+    const entry = this.findEntry(memberId, sessionId);
+    if (entry === undefined || entry.retired || entry.closing) return;
     const member = this.registry.get(memberId);
     if (!member || member.state === 'closed' || member.presence === 'gone') return;
-    const queue = this.queueFor(memberId);
-    if (!queue.turnActive || queue.activeBodySession !== sessionId) return;
+    if (entry.active === undefined) return;
     try {
       if (state === 'waiting') {
-        if (member.state !== 'running') return;
-        this.registry.setState(member.id, 'waiting_permission');
+        if (entry.state !== 'running') return;
+        entry.state = 'waiting_permission';
       } else {
-        if (member.state !== 'waiting_permission') return;
-        this.registry.setState(member.id, 'running');
+        if (entry.state !== 'waiting_permission') return;
+        entry.state = 'running';
       }
+      this.updateAgentState(memberId);
     } catch (error) {
       this.logger.warn('agent.permission.state_failed', {
         member_id: memberId,
@@ -1854,18 +2566,16 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * 成员引擎事件回流：只处理**当前** Body 的 `agent.limit.warning`，
-   * 按 `${sessionId}|${key}` 去重后作为系统提示排进该 Agent 的下一轮。
-   * 旧 Body 的预警丢弃，避免换身体后串台。
+   * 成员引擎事件回流：只处理 live body 的 `agent.limit.warning`，
+   * 按 `${sessionId}|${key}` 去重后作为系统提示排进该 body 的下一轮。
    */
   noteMemberEvent(memberId: string, sessionId: string, event: RunEvent): void {
     if (event.type !== 'agent.limit.warning') return;
     const record = this.registry.get(memberId);
     if (!record) return;
     if (record.membership === 'left' || record.state === 'closed') return;
-    const queue = this.queueFor(memberId);
-    if (queue.closing) return;
-    if (record.currentBody?.session_id !== sessionId) return;
+    const entry = this.findEntry(memberId, sessionId);
+    if (entry === undefined || entry.retired || entry.closing) return;
 
     const data = isRecord(event.data) ? event.data : undefined;
     if (!data) return;
@@ -1879,37 +2589,45 @@ export class AgentServiceImpl implements AgentService {
       typeof data.threshold === 'number' && Number.isFinite(data.threshold) ? data.threshold : 0.8;
 
     const dedupeKey = `${sessionId}|${key}`;
-    if (queue.warnedSignals.has(dedupeKey)) return;
-    queue.warnedSignals.add(dedupeKey);
+    if (entry.warnedSignals.has(dedupeKey)) return;
+    entry.warnedSignals.add(dedupeKey);
 
     const text =
       `[system] Context/usage limit warning: ${key} is at ${current}/${max} (>= ${threshold}). ` +
       'If your context is nearly full, write a handoff and call agent.rotate with ' +
       'startup_prompt to continue in a fresh body.';
-    // 系统提示继承当前 turn 的会话；事件迟到时也不能丢分组。
-    const conversationId = queue.activeConversationId ?? generateConversationId(this.newId);
-    this.enqueueMessage(record, text, 'system', conversationId, 'limit_warning');
-  }
-
-  /** 该 session 是否属于某个非 owner 成员的 Body（当前 / 在跑 / 已退役 / rotate 目标）。 */
-  isMemberBody(sessionId: string): boolean {
-    if (!nonEmpty(sessionId)) return false;
-    for (const record of this.registry.all()) {
-      if (this.externalOwners.has(record.id)) continue;
-      if (record.currentBody?.session_id === sessionId) return true;
-      if (record.bodyHistory.some((entry) => entry.session_id === sessionId)) return true;
-    }
-    for (const queue of this.queues.values()) {
-      if (queue.activeBodySession === sessionId) return true;
-    }
-    for (const rotation of this.rotations.values()) {
-      if (rotation.fromSessionId === sessionId || rotation.toSessionId === sessionId) return true;
-    }
-    return false;
+    const conversationId = entry.active?.conversationId ?? generateConversationId(this.newId);
+    const message: AgentMessage = {
+      id: this.newId(),
+      from: 'system',
+      to: memberId,
+      content: text,
+      ts: this.now(),
+      conversation_id: conversationId,
+      kind: 'limit_warning',
+      source: 'system',
+      channel: 'direct',
+    };
+    entry.pending.push(message);
+    this.emitForSession('agent.message.queued', record, sessionId, {
+      state: record.state,
+      message_id: message.id,
+      from: 'system',
+      conversation_id: conversationId,
+    });
+    void this.submitMessage(record, entry, message).catch((error) => {
+      this.logger.warn('agent.limit_warning.enqueue_failed', {
+        member_id: memberId,
+        session_id: sessionId,
+        error: errorText(error),
+      });
+    });
   }
 
   currentConversation(agentId: string): string | undefined {
-    return this.queues.get(agentId)?.activeConversationId;
+    const entries = this.liveEntries(agentId);
+    const active = entries.find((entry) => entry.active !== undefined);
+    return active?.active?.conversationId;
   }
 
   async budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview> {
@@ -1919,12 +2637,14 @@ export class AgentServiceImpl implements AgentService {
     }
     if ('dimension' in input) {
       const result = this.budgetPort.override(input);
-      // override 只能由人触发：清 hold、重新 pump 受影响 Agent，并发审计事件。
       const released = this.budgetPort.release(input.conversation_id);
       this.blockedBudgetEvents.delete(input.conversation_id);
       for (const agentId of released) {
-        this.queues.get(agentId)?.budgetHold.delete(input.conversation_id);
-        this.pump(agentId);
+        const entries = this.liveEntries(agentId);
+        for (const entry of entries) {
+          entry.budgetHold.delete(input.conversation_id);
+          this.retryHeldMessages(entry);
+        }
       }
       this.publishTeamBudgetEvent(input.team_id, 'team.budget.override', {
         conversation_id: input.conversation_id,
@@ -1943,9 +2663,52 @@ export class AgentServiceImpl implements AgentService {
     };
   }
 
+  /** override / release 后重新准入 mailbox 里的消息 */
+  private retryHeldMessages(entry: BodyEntry): void {
+    if (entry.pending.length === 0 || entry.retired || entry.closing) return;
+    const record = this.registry.get(entry.agentId);
+    if (record === undefined) return;
+    const held = entry.pending.splice(0);
+    void (async () => {
+      for (const message of held) {
+        try {
+          const submitted = await this.submitMessage(record, entry, message);
+          this.runMessageIds.set(submitted.runId, message.id);
+        } catch (error) {
+          this.logger.warn('agent.budget.retry_failed', {
+            agent_id: record.id,
+            session_id: entry.bodyId,
+            error: errorText(error),
+          });
+        }
+      }
+    })();
+  }
+
   /** 发送者所属 Team 优先；human / owner 无 Team 时退回目标 Team */
   private resolveOriginTeam(from: string, target: MemberRecord): string | undefined {
     return this.registry.resolve(from)?.teamId ?? target.teamId;
+  }
+
+  /** 是否 human principal（直接对话免 conversation budget） */
+  private isHumanPrincipal(id: string): boolean {
+    if (id === 'human' || id === 'system' || id === this.defaultOwner) return true;
+    if (id.startsWith('federation:')) return false;
+    const record = this.registry.get(id);
+    if (record === undefined) return true;
+    return record.role === 'single';
+  }
+
+  /**
+   * 准入可见性：先按 sender 自身身份判定（private 成员的 owner 语义不变）；
+   * 人类 / 管理面入口再退一步按 ADMIN_VIEWER 判定，使 private `single`（main）
+   * 对 Web / REPL / runs.start 可见，而其它 agent 仍看不到。
+   */
+  private canAdmitView(record: MemberRecord, from: string): boolean {
+    if (this.registry.canView(record, from)) return true;
+    if (record.role !== 'single') return false;
+    const human = this.isHumanPrincipal(from);
+    return human && this.registry.canView(record, ADMIN_VIEWER);
   }
 
   /** conversation 预算检查 + 通过后的告警收集 */
@@ -1978,7 +2741,6 @@ export class AgentServiceImpl implements AgentService {
     const warnings = this.budgetPort?.takeWarnings?.(conversationId) ?? [];
     for (const warning of warnings) {
       const teamId = teamIdOverride ?? warning.team_id ?? member.teamId;
-      // team.budget.* 契约要求 team_id；unbound 会话没有团队事件面，只保留拒绝结果。
       if (teamId === undefined) continue;
       this.emit('team.budget.warning', member, {
         conversation_id: conversationId,
@@ -2005,7 +2767,6 @@ export class AgentServiceImpl implements AgentService {
     },
   ): void {
     const teamId = extra.teamId ?? member.teamId;
-    // team.budget.* 契约要求 team_id；unbound 会话没有团队事件面，只保留拒绝结果。
     if (teamId === undefined) return;
     this.emit('team.budget.blocked', member, {
       conversation_id: extra.conversation_id,
@@ -2043,6 +2804,32 @@ export class AgentServiceImpl implements AgentService {
     }
   }
 
+  /** 预算 block reason -> 稳定错误码 */
+  private budgetCode(
+    reason: BudgetBlockReason,
+  ): 'budget_exceeded' | 'budget_unavailable' | 'conversation_team_mismatch' {
+    return reason === 'budget_unavailable' || reason === 'conversation_team_mismatch'
+      ? reason
+      : 'budget_exceeded';
+  }
+
+  /** 接收侧检查：无预算端口 / 消息无会话时视为可运行 */
+  private checkTurnStart(
+    member: MemberRecord,
+    message: AgentMessage,
+    sessionId: string,
+  ): BudgetCheckResult {
+    const conversationId = message.conversation_id;
+    if (this.budgetPort === undefined || conversationId === undefined) return { ok: true };
+    return this.budgetPort.canStartTurn({
+      conversation_id: conversationId,
+      ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
+      agent_id: member.id,
+      session_id: sessionId,
+      message_id: message.id,
+    });
+  }
+
   /**
    * 关闭前中断并等待成员轮收口：此后不再从队列起新轮，只在跑轮结束（或超时）。
    * 不改 registry 状态 / membership；队列里的后续消息随进程退出丢弃。
@@ -2051,22 +2838,27 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     this.draining = true;
     const active = (): boolean => {
-      for (const queue of this.queues.values()) {
-        if (queue.turnActive) return true;
+      for (const map of this.bodyRegistry.values()) {
+        for (const entry of map.values()) {
+          if (entry.active !== undefined) return true;
+        }
       }
       return false;
     };
     if (!active()) return 'idle';
 
-    for (const record of this.registry.all()) {
-      const member = toRuntimeMember(record);
-      try {
-        this.runtime.cancel(member);
-      } catch (error) {
-        this.logger.warn('agent.drain.cancel_failed', {
-          member_id: record.id,
-          error: errorText(error),
-        });
+    for (const map of this.bodyRegistry.values()) {
+      for (const entry of map.values()) {
+        if (entry.active === undefined) continue;
+        try {
+          this.runtime.cancel(entry.runtimeMember);
+        } catch (error) {
+          this.logger.warn('agent.drain.cancel_failed', {
+            member_id: entry.agentId,
+            session_id: entry.bodyId,
+            error: errorText(error),
+          });
+        }
       }
     }
 
@@ -2092,10 +2884,8 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * CONTRACT-hot-apply §4：把权限规则热应用到所有存活成员 Body。
-   *
-   * 执行内核（`MemberRuntimePort`）自己知道哪些 Body 还在跑，因此这里只做转发；
-   * port 未实现该能力时返回 0（不假装成功）。owner 不在这里——它由装配层单独处理。
+   * CONTRACT-hot-apply §4：把权限规则热应用到所有 live Body。
+   * 返回成功应用的 Body 数量；port 未实现时返回 0。
    */
   async applyPermissionRules(rules: RuntimePermissionConfig): Promise<number> {
     await this.ready;
@@ -2105,7 +2895,6 @@ export class AgentServiceImpl implements AgentService {
       const count = await apply.call(this.runtime, rules);
       return typeof count === 'number' && Number.isFinite(count) && count > 0 ? count : 0;
     } catch (error) {
-      // 单个 Body 的失败不能让整条热应用链崩掉；装配层按 0 处理并记日志。
       this.logger.warn('agent.permission.apply_failed', { error: errorText(error) });
       return 0;
     }
@@ -2124,14 +2913,15 @@ export class AgentServiceImpl implements AgentService {
     };
   }
 
-  /** 发成员事件（默认用当前 Body 的 session）；监听器与 EventStream 异常都隔离 */
+  /** 发成员事件（默认用 primary Body 的 session）；监听器与 EventStream 异常都隔离 */
   private emit(type: string, member: MemberRecord, extra: AgentEventExtra = {}): void {
-    this.emitForSession(type, member, member.currentBody?.session_id ?? member.sessionId, extra);
+    const primary = primaryBody(member);
+    this.emitForSession(type, member, primary?.bodyId ?? member.sessionId, extra);
   }
 
   /**
-   * 指定 Body 的事件出口：旧轮的 turn / reply.stale / retired 必须带旧 session，
-   * rotate 事件带显式 from / to。`run_id` 始终是成员 id。
+   * 指定 Body 的事件出口：body 级事件必须带自己的 session_id；
+   * `run_id` 始终是成员 id（run.* 由 runtime / scheduler 发布）。
    */
   private emitForSession(
     type: string,
@@ -2146,7 +2936,6 @@ export class AgentServiceImpl implements AgentService {
       ...(member.parentId !== undefined ? { parent_id: member.parentId } : {}),
       visibility: member.visibility,
       ...(member.name !== undefined ? { name: member.name } : {}),
-      // S3：spawned / closed / rotated / retired / rejoined 等身份事件都带 team_id
       ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
       ...extra,
       ts: this.now(),
@@ -2180,41 +2969,23 @@ export class AgentServiceImpl implements AgentService {
     }
   }
 
-  /** 取队列；不存在则建 */
-  private queueFor(memberId: string): MemberQueue {
-    let queue = this.queues.get(memberId);
-    if (!queue) {
-      queue = {
-        pending: [],
-        turnActive: false,
-        repliedThisTurn: false,
-        closing: false,
-        warnedSignals: new Set(),
-        budgetHold: new Set(),
-      };
-      this.queues.set(memberId, queue);
-    }
-    return queue;
+  /** 对外状态：叠加 body 运行态 */
+  private statusFor(record: MemberRecord): MemberStatus {
+    const status = toMemberStatus(record);
+    const entries = this.liveEntries(record.id);
+    if (entries.length === 0) return status;
+    return {
+      ...status,
+      bodies: entries
+        .sort((left, right) => Number(right.primary) - Number(left.primary))
+        .map(toBodyStatus),
+    };
   }
 
-  /** 按指定 Body session 构造执行内核身份（close / 延迟退役用） */
-  private runtimeMemberForSession(record: MemberRecord, sessionId: string): MemberRuntimeMember {
-    return { ...toRuntimeMember(record), session_id: sessionId };
-  }
-
-  /** best-effort dispose；runtime 按 session 幂等，失败只记日志 */
-  private async disposeBody(member: MemberRuntimeMember): Promise<boolean> {
-    try {
-      await this.runtime.dispose(member);
-      return true;
-    } catch (error) {
-      this.logger.warn('agent.dispose.failed', {
-        member_id: member.id,
-        session_id: member.session_id,
-        error: errorText(error),
-      });
-      return false;
-    }
+  private requireAgent(agentId: string): MemberRecord {
+    const record = this.registry.get(agentId) ?? this.registry.resolve(agentId);
+    if (!record) throw new AgentError('unknown_member', `unknown_member: ${agentId}`);
+    return record;
   }
 
   private requireMember(ref: string): MemberRecord {
@@ -2223,341 +2994,25 @@ export class AgentServiceImpl implements AgentService {
     return member;
   }
 
-  /**
-   * 有排队消息且无在跑轮次时启动下一轮；waiting_permission / closing 不推进。
-   * external owner 的消息只入队，由 REPL 通过 takeMessages 消费，不在这里起轮。
-   */
-  private pump(memberId: string): void {
-    if (this.draining) return;
-    const member = this.registry.get(memberId);
-    if (!member) return;
-    // gone（需 resume）或 rotating（S2 轮换中）都不推进队列
-    if (member.presence === 'gone' || member.rotation === 'rotating') return;
-    if (this.externalOwners.has(memberId)) return;
-    const queue = this.queueFor(memberId);
-    if (queue.turnActive || queue.closing) return;
-    if (member.state === 'created' || member.state === 'closed') return;
-    if (member.state === 'waiting_permission') return;
-    if (queue.pending.length === 0) return;
-
-    // 起轮时捕获 Body 身份：轮末指针可能已被 rotate 切走。
-    const runtimeMember = toRuntimeMember(member);
-    const capturedEpoch = member.currentBody?.epoch ?? 0;
-
-    // 扫描第一条可运行消息：被挡的会话留在原位置，不阻塞同一 Agent 的其它会话。
-    let selected = -1;
-    const blocked: Array<{ index: number; message: AgentMessage; check: BudgetCheckResult }> = [];
-    for (let index = 0; index < queue.pending.length; index += 1) {
-      const candidate = queue.pending[index];
-      if (candidate === undefined) continue;
-      const check = this.checkTurnStart(member, candidate, runtimeMember.session_id);
-      if (check.ok) {
-        selected = index;
-        break;
-      }
-      blocked.push({ index, message: candidate, check });
+  /** 显式 id 先校验；缺省由人类入口生成 `conv_<id>` */
+  private resolveConversationId(value: unknown): string {
+    if (value === undefined) return generateConversationId(this.newId);
+    if (!isValidConversationId(value)) {
+      throw new AgentError('invalid_input', 'invalid conversation_id');
     }
-
-    if (selected < 0) {
-      this.holdBlockedMessages(member, queue, blocked);
-      return;
-    }
-
-    const [message] = queue.pending.splice(selected, 1);
-    if (message === undefined) return;
-    const conversationId = message.conversation_id;
-    if (conversationId !== undefined) {
-      this.budgetPort?.noteTurnStarted({
-        conversation_id: conversationId,
-        ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
-        agent_id: member.id,
-        message_id: message.id,
-      });
-      queue.budgetHold.delete(conversationId);
-      this.blockedBudgetEvents.delete(conversationId);
-      this.budgetPort?.clearHold?.(conversationId, member.id);
-      this.emitBudgetWarnings(member, conversationId, 'turn_start');
-    }
-
-    if (member.state === 'completed' || member.state === 'failed' || member.state === 'cancelled') {
-      this.registry.setState(memberId, 'idle');
-    }
-    this.registry.setState(memberId, 'running');
-    queue.turnActive = true;
-    queue.repliedThisTurn = false;
-    queue.activeConversationId = conversationId;
-    queue.activeBodySession = runtimeMember.session_id;
-    this.emit('agent.turn.started', member, {
-      state: 'running',
-      message_id: message.id,
-      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
-    });
-    this.scheduleSnapshot();
-    void this.executeTurn(member, message, runtimeMember, capturedEpoch);
-  }
-
-  /** 预算 block reason -> 稳定错误码（mismatch / unavailable 不折叠成 exceeded） */
-  private budgetCode(
-    reason: BudgetBlockReason,
-  ): 'budget_exceeded' | 'budget_unavailable' | 'conversation_team_mismatch' {
-    return reason === 'budget_unavailable' || reason === 'conversation_team_mismatch'
-      ? reason
-      : 'budget_exceeded';
-  }
-
-  /** 接收侧检查：无预算端口 / 消息无会话时视为可运行 */
-  private checkTurnStart(
-    member: MemberRecord,
-    message: AgentMessage,
-    sessionId: string,
-  ): BudgetCheckResult {
-    const conversationId = message.conversation_id;
-    if (this.budgetPort === undefined || conversationId === undefined) return { ok: true };
-    return this.budgetPort.canStartTurn({
-      conversation_id: conversationId,
-      ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
-      agent_id: member.id,
-      session_id: sessionId,
-      message_id: message.id,
-    });
+    return value;
   }
 
   /**
-   * 所有排队消息都被挡：保留消息（不 shift），持久化 blocked，发一次 blocked 事件。
+   * 入队时标注发送者类别（仅用于模型上下文，不参与权限判定）。
+   * 未登记 principal / `human` / role single 视为人类；`system` 保持系统来源。
    */
-  private holdBlockedMessages(
-    member: MemberRecord,
-    queue: MemberQueue,
-    blocked: Array<{ index: number; message: AgentMessage; check: BudgetCheckResult }>,
-  ): void {
-    const reported = new Set<string>();
-    for (const entry of blocked) {
-      const check = entry.check;
-      if (check.ok) continue;
-      const conversationId = entry.message.conversation_id;
-      if (conversationId === undefined) continue;
-      queue.budgetHold.add(conversationId);
-      this.budgetPort?.noteHold?.(conversationId, member.id);
-      this.budgetPort?.noteTurnBlocked?.({
-        conversation_id: conversationId,
-        ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
-        dimension: check.dimension,
-        reason: check.reason,
-      });
-      if (reported.has(conversationId) || this.blockedBudgetEvents.has(conversationId)) continue;
-      reported.add(conversationId);
-      this.blockedBudgetEvents.add(conversationId);
-      this.emitBudgetBlocked(member, check, {
-        conversation_id: conversationId,
-        message_id: entry.message.id,
-        from: entry.message.from,
-        to: member.id,
-        phase: 'turn_start',
-      });
-    }
-  }
-
-  /**
-   * 执行一轮；任何异常都收口为 failed，不让后台任务产生未处理 rejection。
-   * `runtimeMember` / `capturedEpoch` 是起轮时捕获的 Body 身份；轮末指针已切换
-   * 则按 epoch fencing 丢弃本轮的 state / usage / 自动回复。
-   */
-  private async executeTurn(
-    member: MemberRecord,
-    message: AgentMessage,
-    runtimeMember: MemberRuntimeMember,
-    capturedEpoch: number,
-  ): Promise<void> {
-    const queue = this.queueFor(member.id);
-    const conversationId = queue.activeConversationId ?? message.conversation_id;
-    let result: MemberTurnResult | undefined;
-    let failure: string | undefined;
-    try {
-      result = await this.runtime.runTurn(runtimeMember, message);
-    } catch (error) {
-      failure = errorText(error);
-      // close 主动取消不是失败；按 error 记录会把正常关闭刷成告警
-      if (queue.closing) {
-        this.logger.debug('agent.turn.cancelled', { member_id: member.id });
-      } else {
-        this.logger.error('agent.turn.failed', {
-          member_id: member.id,
-          error: failure,
-        });
-      }
-    }
-    queue.turnActive = false;
-    queue.activeConversationId = undefined;
-
-    // turn 完成（含失败 / 取消 / 旧 Body）都记 tokens 与活动时间，并强制落盘。
-    if (conversationId !== undefined) {
-      this.budgetPort?.noteTurnFinished({
-        conversation_id: conversationId,
-        ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
-        agent_id: member.id,
-        message_id: message.id,
-        ...(result?.usage !== undefined ? { usage: result.usage } : {}),
-      });
-    }
-
-    const current = this.registry.get(member.id);
-    // 旧 Body：指针已切走。成对发终态（stale），但不写 registry / usage，也不投递父队列。
-    if (current?.currentBody?.session_id !== runtimeMember.session_id) {
-      // 先同步收口旧 Body 的运行态，再允许任何 await / 新轮启动：
-      // 否则残留 waiting_permission 会让 pump 永远挡住新 Body。
-      if (queue.activeBodySession === runtimeMember.session_id) queue.activeBodySession = undefined;
-      if (current !== undefined && current.membership !== 'left' && current.state !== 'closed') {
-        if (current.state === 'waiting_permission') {
-          this.registry.setState(member.id, 'running');
-        }
-        if (current.state === 'running') {
-          this.registry.setState(member.id, 'idle');
-        }
-        this.scheduleSnapshot();
-      }
-      if (current !== undefined) {
-        const outcome = failure !== undefined ? 'failed' : (result?.outcome ?? 'completed');
-        const state: MemberState =
-          outcome === 'failed' ? 'failed' : outcome === 'cancelled' ? 'cancelled' : 'completed';
-        this.emitForSession(
-          outcome === 'failed'
-            ? 'agent.turn.failed'
-            : outcome === 'cancelled'
-              ? 'agent.turn.cancelled'
-              : 'agent.turn.completed',
-          current,
-          runtimeMember.session_id,
-          {
-            state,
-            outcome,
-            message_id: message.id,
-            body_id: runtimeMember.session_id,
-            stale: true,
-            ...(message.conversation_id !== undefined
-              ? { conversation_id: message.conversation_id }
-              : {}),
-            ...(failure !== undefined ? { reason: failure } : {}),
-          },
-        );
-        this.emitForSession('agent.reply.stale', current, runtimeMember.session_id, {
-          body_id: runtimeMember.session_id,
-          epoch: capturedEpoch,
-          message_id: message.id,
-          reason: 'epoch_fenced',
-        });
-      }
-      const disposed = await this.disposeBody(runtimeMember);
-      if (current !== undefined) {
-        this.emitForSession('agent.retired', current, runtimeMember.session_id, {
-          body_id: runtimeMember.session_id,
-          epoch: capturedEpoch,
-          reason: disposed ? 'rotation' : 'dispose_failed',
-        });
-      }
-      this.pump(member.id);
-      return;
-    }
-
-    if (current === undefined) return;
-    if (queue.activeBodySession === runtimeMember.session_id) queue.activeBodySession = undefined;
-    // close 已发生（或成员已被关闭）：后到的终态不得覆盖 closed
-    if (queue.closing || current.state === 'closed' || current.presence === 'gone') {
-      if (queue.closing) {
-        this.emit('agent.turn.cancelled', current, {
-          state: current.state,
-          outcome: 'cancelled',
-          reason: 'closed',
-          message_id: message.id,
-        });
-      }
-      return;
-    }
-
-    if (result?.usage !== undefined) this.registry.setUsage(member.id, result.usage);
-
-    const outcome = failure !== undefined ? 'failed' : (result?.outcome ?? 'completed');
-    const state: MemberState =
-      outcome === 'failed' ? 'failed' : outcome === 'cancelled' ? 'cancelled' : 'completed';
-    // 应答丢失时可能仍停在 waiting_permission；先回到 running 才能进终态
-    if (current.state === 'waiting_permission') this.registry.setState(member.id, 'running');
-    this.registry.setState(member.id, state);
-    this.emit(
-      outcome === 'failed'
-        ? 'agent.turn.failed'
-        : outcome === 'cancelled'
-          ? 'agent.turn.cancelled'
-          : 'agent.turn.completed',
-      current,
-      {
-        state,
-        outcome,
-        message_id: message.id,
-        ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
-        ...(failure !== undefined ? { reason: failure } : {}),
-        ...(outcome === 'completed' && result?.usage !== undefined ? { usage: result.usage } : {}),
-      },
-    );
-
-    // 0.19 S6：Team 成员的最终文本只发事件，由 TeamService 写日志；
-    // AgentService 不直接写 Team 日志，避免双写。agent.turn.completed 仍不带正文。
-    if (outcome === 'completed' && nonEmpty(result?.content) && current.teamId !== undefined) {
-      this.emit('agent.reply.posted', current, {
-        message_id: this.newId(),
-        content: truncateMessageContent(result.content as string),
-        ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
-      });
-    }
-
-    if (outcome === 'completed' && !queue.repliedThisTurn && nonEmpty(result?.content)) {
-      this.deliverToParent(current, result.content as string, conversationId);
-    }
-
-    this.scheduleSnapshot();
-    this.pump(member.id);
-  }
-
-  /**
-   * 自动最终文本投递到父成员队列；父不存在（owner 未 attach）时丢弃。
-   * 父已 left / closed / gone 时显式发 `agent.reply.dropped`（不静默、不入队、不重试）。
-   * 父是 external owner 时不参与预算；父是成员时被挡只发事件、不进 turn 收尾。
-   */
-  private deliverToParent(
-    member: MemberRecord,
-    content: string,
-    conversationId: string | undefined,
-  ): void {
-    if (!nonEmpty(member.parentId)) return;
-    const parent = this.registry.resolve(member.parentId);
-    if (!parent) return;
-    if (parent.membership === 'left' || parent.state === 'closed' || parent.presence === 'gone') {
-      const reason =
-        parent.membership === 'left'
-          ? 'parent_left'
-          : parent.state === 'closed'
-            ? 'parent_closed'
-            : 'parent_gone';
-      this.emit('agent.reply.dropped', member, { to: parent.id, reason });
-      return;
-    }
-    const parentQueue = this.queueFor(parent.id);
-    if (parentQueue.closing) return;
-
-    if (conversationId !== undefined && !this.externalOwners.has(parent.id)) {
-      const teamId = this.resolveOriginTeam(member.id, parent);
-      const check = this.checkDelivery(parent, member.id, conversationId, teamId);
-      if (!check.ok) {
-        this.emitBudgetBlocked(parent, check, {
-          conversation_id: conversationId,
-          from: member.id,
-          to: parent.id,
-          phase: 'enqueue',
-          ...(teamId !== undefined ? { teamId } : {}),
-        });
-        return;
-      }
-    }
-
-    this.enqueueMessage(parent, content, member.id, conversationId);
+  private messageSource(from: string): AgentMessage['source'] {
+    if (from === 'system') return 'system';
+    if (from.startsWith('federation:')) return 'agent';
+    const record = this.registry.get(from);
+    if (record === undefined) return 'human';
+    return record.role === 'single' ? 'human' : 'agent';
   }
 
   private scheduleSnapshot(): void {
@@ -2588,9 +3043,14 @@ function readUpdateString(record: Record<string, unknown>, key: string): string 
 /** update 的 role：缺省或合法值；其它值拒绝 */
 function readUpdateRole(record: Record<string, unknown>): AgentRole | undefined {
   if (!Object.hasOwn(record, 'role') || record.role === undefined) return undefined;
-  const value = record.role;
+  return readAgentRole(record, 'role');
+}
+
+/** 严格的 role 字面量校验 */
+function readAgentRole(record: Record<string, unknown>, key: string): AgentRole {
+  const value = record[key];
   if (value !== 'single' && value !== 'member' && value !== 'temporary') {
-    throw new AgentError('invalid_input', 'role must be single, member or temporary');
+    throw new AgentError('invalid_input', `${key} must be single, member or temporary`);
   }
   return value;
 }
@@ -2602,25 +3062,6 @@ function readContent(record: Record<string, unknown>, key: string): string {
     throw new AgentError('invalid_input', `content exceeds ${MAX_MESSAGE_BYTES} bytes`);
   }
   return value;
-}
-
-/**
- * `agent.reply.posted` 的正文上限：超限按 UTF-8 字节截断并加标记，
- * 不静默丢整条回复。事件与 Team 日志使用同一段截断后的文本。
- */
-function truncateMessageContent(content: string): string {
-  if (Buffer.byteLength(content, 'utf8') <= MAX_MESSAGE_BYTES) return content;
-  const marker = '\n[truncated]';
-  const budget = MAX_MESSAGE_BYTES - Buffer.byteLength(marker, 'utf8');
-  let used = 0;
-  let out = '';
-  for (const char of content) {
-    const size = Buffer.byteLength(char, 'utf8');
-    if (used + size > budget) break;
-    out += char;
-    used += size;
-  }
-  return out + marker;
 }
 
 function optionalString(value: unknown): string | undefined {

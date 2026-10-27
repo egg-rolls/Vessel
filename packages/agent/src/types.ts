@@ -12,7 +12,10 @@ import type {
   EventStream,
   Logger,
   RunEvent,
+  RunOptions,
+  RunStore,
   RuntimePermissionConfig,
+  Scheduler,
   Usage,
 } from '@vessel-agent/core';
 
@@ -58,9 +61,32 @@ export interface AgentBodyPointer {
 /** body_history 上限；超出时丢弃最旧条目 */
 export const MAX_BODY_HISTORY = 20;
 
+/** `bodies[]` 保留的已退役条目上限；超出时丢弃最旧 */
+export const MAX_RETIRED_BODIES = 50;
+
 /** 已退役 Body 的历史条目；只追加，有界（最多 20 条） */
 export interface AgentBodyHistoryEntry extends AgentBodyPointer {
   retired_at: number;
+}
+
+/** Body 的对外状态（`body_id ≡ session_id`） */
+export interface BodyStatus {
+  session_id: string;
+  epoch: number;
+  state: 'idle' | 'running' | 'waiting_permission' | 'closed';
+  primary: boolean;
+  created_at: number;
+  last_active_at: number;
+}
+
+/** 持久化的 Body 记录（v4 唯一真相） */
+export interface PersistedBodyRecord {
+  body_id: string;
+  epoch: number;
+  created_at: number;
+  last_active_at: number;
+  retired_at?: number;
+  primary?: boolean;
 }
 
 /** 成员对外状态（E1 冻结形状；新字段 additive） */
@@ -91,11 +117,14 @@ export interface MemberStatus {
   team_id?: string;
   /** 已退役 Body 历史（0.19 S6 additive；≤20，当前 Body 不在其中） */
   body_history?: AgentBodyHistoryEntry[];
+  /** 0.27 additive：live Body 状态；`session_id` 仍表示 primary body */
+  bodies?: BodyStatus[];
 }
 
 /**
- * 快照持久化记录（v3）。
+ * 快照持久化记录（v4）。
  *
+ * `bodies[]` 是唯一真相；`current_body` / `body_history` 保留为旧数据的兼容视图。
  * 与 MemberStatus 分离：不把 model / system_prompt 等配置泄漏进对外 DTO。
  * presence / rotation 不持久化（进程内可重建）。
  */
@@ -117,9 +146,14 @@ export interface PersistedAgentRecord {
   team_id?: string;
   model?: string;
   system_prompt?: string;
+  /** 兼容视图：primary body 指针（v4 以 `bodies[]` 为真相） */
   current_body?: AgentBodyPointer;
   /** 已退役 Body 的历史（只追加，最多 20 条；当前 Body 不在其中） */
   body_history?: AgentBodyHistoryEntry[];
+  /** 0.27：全部 Body（含已退役，退役保留 ≤50）；唯一真相 */
+  bodies?: PersistedBodyRecord[];
+  /** 0.27：primary body 的 body_id */
+  primary_body_id?: string;
   forked_from?: string;
   current_tool?: string;
   last_seen?: number;
@@ -192,7 +226,20 @@ export interface MemberTurnResult {
  */
 export interface MemberRuntimePort {
   spawn(member: MemberRuntimeMember): Promise<void>;
-  runTurn(member: MemberRuntimeMember, message: AgentMessage): Promise<MemberTurnResult>;
+  /**
+   * 执行一轮；`runId` 由调度器固定（0.27），缺省时由实现生成。
+   * 同一 body 的 run id 必须与调度器事件里的 run_id 一致。
+   */
+  runTurn(
+    member: MemberRuntimeMember,
+    message: AgentMessage,
+    runId?: string,
+  ): Promise<MemberTurnResult>;
+  /**
+   * 从 durable checkpoint 恢复一个 run（0.27 additive，可选）。
+   * 返回本轮最终文本；body 身份由 `member` 指定。
+   */
+  resume?(member: MemberRuntimeMember, runId: string, opts?: RunOptions): Promise<MemberTurnResult>;
   cancel(member: MemberRuntimeMember): Promise<void> | void;
   dispose(member: MemberRuntimeMember): Promise<void> | void;
   /**
@@ -381,6 +428,16 @@ export interface ConversationBudgetPort {
 
 /** 成员创建参数 */
 export interface CreateMemberInput {
+  /**
+   * 显式 id（0.27）：用于 `main` 等固定身份的普通 create。
+   * 缺省由 id 生成器分配。
+   */
+  id?: string;
+  /**
+   * 显式角色（0.27）：`single` 走普通 create 创建 main（owner=self、无 Team、private）。
+   * 缺省按 kind / owner 推断（member / temporary）。
+   */
+  role?: AgentRole;
   name?: string;
   model?: string;
   systemPrompt?: string;
@@ -451,15 +508,34 @@ export interface AgentUpdateResult {
 }
 
 /**
- * 注册 root owner（REPL 主 agent）。不调用 runtime.spawn。
- * 重复 attach 幂等；stale 记录恢复为 idle。
+ * 统一准入输入（0.27）：runs.start / agents.send / dispatch / Team @ 全部走这里。
+ *
+ * `strict` 是 agents.send 语义：不自动恢复 gone 成员；dispatch / runs.start 缺省允许。
  */
-export interface AttachOwnerInput {
-  id: string;
-  /** 缺省与 id 相同 */
-  sessionId?: string;
-  visibility?: MemberVisibility;
+export interface AdmitInput {
+  content: string;
+  agent_id?: string;
+  session_id?: string;
+  /** 缺省 human principal（DEFAULT_OWNER 字面量） */
+  from?: string;
+  channel?: 'direct' | 'team';
+  origin_team_id?: string;
+  conversation_id?: string;
+  /** agents.send 语义：不自动恢复 gone 成员；dispatch/runs.start 缺省允许 */
+  strict?: boolean;
 }
+
+/** 统一准入结果；`session_id` 是 body id */
+export interface AdmitResult {
+  run_id: string;
+  agent_id: string;
+  session_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  queue_position?: number;
+}
+
+/** resume 结果与 admit 同形 */
+export interface ResumeResult extends AdmitResult {}
 
 /** 发送参数；`to` 可传成员 id 或 session id */
 export interface SendInput {
@@ -596,6 +672,9 @@ export interface SendResult {
   queued: true;
   message_id: string;
   state: MemberState;
+  /** 0.27 additive：本次准入的 run / body；预算 block 留在 mailbox 时仍返回 run_id */
+  run_id?: string;
+  session_id?: string;
 }
 
 /** 成员回复父级的结果 */
@@ -652,9 +731,9 @@ export interface AgentEvent {
   spawned_by?: string;
   /** 会话分组（0.19 S4；system 事件可能缺省） */
   conversation_id?: string;
-  /** 本轮 usage（turn.completed 有则带） */
+  /** 本轮 usage（run.* 终态由 core 事件携带，AgentEvent 不再填） */
   usage?: Usage;
-  /** 仅在 `agent.reply.posted` 携带本轮最终文本（≤64 KiB，超限截断） */
+  /** 已废弃：0.27 删除 `agent.reply.posted`，AgentEvent 不再携带正文 */
   content?: string;
   state?: MemberState;
   /** 进程内 presence（agent.stale / agent.resumed 等生命周期事件） */
@@ -684,6 +763,16 @@ export interface AgentEvent {
 /** 事件监听器；抛错会被隔离，不影响服务行为 */
 export type AgentEventListener = (event: AgentEvent) => void;
 
+/**
+ * Body 跨进程单写者租约（0.27）。缺省无锁（纯内存测试）。
+ * 装配层用现有 session-lock 格式实现，body 存活期间持有。
+ */
+export interface BodyLeasePort {
+  acquire(bodyId: string): Promise<void>;
+  release(bodyId: string): Promise<void>;
+  isAlive(bodyId: string): Promise<boolean>;
+}
+
 /** AgentService 构造参数 */
 export interface AgentServiceOptions {
   /** 一个实例只服务一个 tenant */
@@ -691,6 +780,16 @@ export interface AgentServiceOptions {
   /** 缺省不落盘（纯内存） */
   dataDir?: string;
   runtime: MemberRuntimePort;
+  /** 0.27：每 tenant 唯一调度器（必填）；执行只经 scheduler executor */
+  scheduler: Scheduler;
+  /** 每 agent 最多 live body；缺省 20 */
+  maxLiveBodies?: number;
+  /** 空闲 body TTL（小时）；缺省 24，0 = 关闭 */
+  bodyIdleTtlHours?: number;
+  /** body 跨进程租约；缺省无锁 */
+  bodyLease?: BodyLeasePort;
+  /** durable resume 用 checkpoint 存储；缺省禁止 resume */
+  runStore?: RunStore;
   now?: () => number;
   /** 注入 id 生成器（session_id === member id） */
   newId?: () => string;
@@ -729,7 +828,8 @@ export type AgentErrorCode =
   | 'invalid_state_transition'
   | 'budget_exceeded'
   | 'budget_unavailable'
-  | 'conversation_team_mismatch';
+  | 'conversation_team_mismatch'
+  | 'body_limit';
 
 /** AgentService 错误；code 稳定，message 供人读 */
 export class AgentError extends Error {
@@ -747,8 +847,18 @@ export interface AgentService {
   // create 是普通方法名，不会与构造签名冲突
   create(input: CreateMemberInput): Promise<MemberStatus>;
   create(input: CreateBatchInput): Promise<BatchResult<MemberStatus>>;
-  /** 注册 root owner；不 spawn，重复调用幂等 */
-  attachOwner(input: AttachOwnerInput): Promise<MemberStatus>;
+  /**
+   * 统一准入（0.27）：所有入口（runs.start / send / dispatch / Team @）都走这里。
+   * 解析 session → agent/body，检查可见性 / 预算，入 body mailbox 并交给 scheduler。
+   */
+  admit(input: AdmitInput): Promise<AdmitResult>;
+  /**
+   * 从 durable checkpoint 恢复 run：解析 checkpoint 的 agent/body，确保 body，
+   * 再经 scheduler 调用 runtime.resume。
+   */
+  resume(runId: string): Promise<ResumeResult>;
+  /** 某 agent 的 live Body 状态（primary 优先） */
+  bodies(agentId: string): Promise<BodyStatus[]>;
   /**
    * 更新名字 / model / systemPrompt；名字立即生效且保持同 Team（unbound 为 tenant）
    * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 Body。
@@ -776,18 +886,8 @@ export interface AgentService {
   close(input: CloseInput): Promise<CloseResult>;
   close(input: CloseBatchInput): Promise<BatchResult<CloseResult>>;
   list(filter?: ListFilter): Promise<MemberStatus[]>;
-  /**
-   * session 是否属于被 spawn 的成员；external owner 的 session 返回 false。
-   * O(1) 直查，不受 visibility 过滤。
-   */
-  hasMember(sessionId: string): Promise<boolean>;
   /** 成员显式回复父级；本轮自动最终文本随后被抑制 */
   reply(memberId: string, content: string): Promise<ReplyResult>;
-  /**
-   * 取走成员待处理消息（REPL owner 用）；FIFO，不触发 runTurn，不重复投递。
-   * limit 缺省取空队列。
-   */
-  takeMessages(memberId: string, limit?: number): Promise<AgentMessage[]>;
   /**
    * 当前 Body session -> 成员状态；忽略可见性。
    * 只由 TeamService / agent 工具做调用者身份解析，不向模型暴露。
@@ -795,15 +895,15 @@ export interface AgentService {
   identify(sessionId: string): Promise<MemberStatus | undefined>;
   /** 执行内核 bridge 上报的权限等待/恢复；只接受当前运行 Body 的回调 */
   notePermissionState(memberId: string, sessionId: string, state: MemberPermissionState): void;
-  /** 成员引擎事件回流（装配用）；当前只处理当前 Body 的 agent.limit.warning */
+  /** 成员引擎事件回流（装配用）；当前只处理 live Body 的 agent.limit.warning */
   noteMemberEvent(memberId: string, sessionId: string, event: RunEvent): void;
-  /**
-   * 该 session 是否属于某个非 owner 成员的 Body：当前 Body、正在跑的旧 Body、
-   * 已退役 Body 或 rotate 目标 Body 都算。owner 的 Body 不算。
-   */
-  isMemberBody(sessionId: string): boolean;
   /** 当前 turn 的 conversation_id；无在跑轮次或缺省时 undefined（TeamService 用） */
   currentConversation(agentId: string): string | undefined;
+  /**
+   * 0.27：空闲 body TTL sweep（测试注入时钟直接调）。
+   * 返回本次退役的 body 数；TTL=0 时 no-op。
+   */
+  sweepIdleBodies(now?: number): Promise<number>;
   /** conversation 预算状态 / 人工 override（只由人力入口调用） */
   budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview>;
   /**

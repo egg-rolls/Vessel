@@ -20,12 +20,13 @@ import {
   type MemberState,
   type MemberVisibility,
   type PersistedAgentRecord,
+  type PersistedBodyRecord,
 } from './types.js';
 
-/** 快照文件版本；当前写入 3，读取兼容 1 / 2 */
-export const AGENT_SNAPSHOT_VERSION = 3;
+/** 快照文件版本；当前写入 4，读取兼容 1 / 2 / 3 */
+export const AGENT_SNAPSHOT_VERSION = 4;
 
-/** 快照文件形状（v3；v1 / v2 的 members 读时按 owner 推断 role） */
+/** 快照文件形状（v4；v1 / v2 的 members 读时按 owner 推断 role） */
 export interface AgentSnapshotFile {
   version: number;
   tenant_id: string;
@@ -33,9 +34,10 @@ export interface AgentSnapshotFile {
   members: PersistedAgentRecord[];
 }
 
-/** 旧版本备份后缀（首次写 v3 前创建，供旧二进制回滚） */
+/** 旧版本备份后缀（首次写 v4 前创建，供旧二进制回滚） */
 const V1_BACKUP_SUFFIX = '.v1.bak';
 const V2_BACKUP_SUFFIX = '.v2.bak';
+const V3_BACKUP_SUFFIX = '.v3.bak';
 
 const ROLES: readonly AgentRole[] = ['single', 'member', 'temporary'];
 
@@ -108,6 +110,99 @@ function parseBodyHistory(value: unknown): AgentBodyHistoryEntry[] | undefined {
   return entries.slice(-MAX_BODY_HISTORY);
 }
 
+function parsePersistedBody(value: unknown): PersistedBodyRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  const bodyId = optionalString(value.body_id) ?? optionalString(value.session_id);
+  if (bodyId === undefined) return undefined;
+  const epoch =
+    typeof value.epoch === 'number' && Number.isInteger(value.epoch) && value.epoch >= 0
+      ? value.epoch
+      : 0;
+  const createdAt =
+    typeof value.created_at === 'number' && Number.isFinite(value.created_at)
+      ? value.created_at
+      : typeof value.last_active_at === 'number' && Number.isFinite(value.last_active_at)
+        ? value.last_active_at
+        : 0;
+  const lastActiveAt =
+    typeof value.last_active_at === 'number' && Number.isFinite(value.last_active_at)
+      ? value.last_active_at
+      : createdAt;
+  const record: PersistedBodyRecord = {
+    body_id: bodyId,
+    epoch,
+    created_at: createdAt,
+    last_active_at: lastActiveAt,
+  };
+  if (typeof value.retired_at === 'number' && Number.isFinite(value.retired_at)) {
+    record.retired_at = value.retired_at;
+  }
+  if (value.primary === true) record.primary = true;
+  return record;
+}
+
+function parsePersistedBodies(value: unknown): PersistedBodyRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const bodies: PersistedBodyRecord[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const body = parsePersistedBody(item);
+    if (body === undefined || seen.has(body.body_id)) continue;
+    seen.add(body.body_id);
+    bodies.push(body);
+  }
+  return bodies.length > 0 ? bodies : undefined;
+}
+
+/**
+ * v1–v3 → v4：`current_body` 变成唯一 live body + primary；旧 `body_history`
+ * 迁入 `bodies[]`（已退役）。v4 只读新字段。`bodies[]` 是唯一真相。
+ */
+function migrateBodies(
+  version: number,
+  currentBody: AgentBodyPointer | undefined,
+  bodyHistory: AgentBodyHistoryEntry[] | undefined,
+  explicitBodies: PersistedBodyRecord[] | undefined,
+  explicitPrimary: string | undefined,
+  fallbackSessionId: string,
+  lastSeen: number | undefined,
+): { bodies: PersistedBodyRecord[]; primary?: string } {
+  if (version >= 4 && explicitBodies !== undefined) {
+    return {
+      bodies: explicitBodies,
+      ...(explicitPrimary !== undefined ? { primary: explicitPrimary } : {}),
+    };
+  }
+  const bodies: PersistedBodyRecord[] = [];
+  const seen = new Set<string>();
+  for (const entry of bodyHistory ?? []) {
+    if (seen.has(entry.session_id)) continue;
+    seen.add(entry.session_id);
+    bodies.push({
+      body_id: entry.session_id,
+      epoch: entry.epoch,
+      created_at: entry.started_at,
+      last_active_at: entry.retired_at,
+      retired_at: entry.retired_at,
+    });
+  }
+  const live = currentBody ?? {
+    session_id: fallbackSessionId,
+    epoch: 0,
+    started_at: lastSeen ?? 0,
+  };
+  if (!seen.has(live.session_id)) {
+    bodies.push({
+      body_id: live.session_id,
+      epoch: live.epoch,
+      created_at: live.started_at,
+      last_active_at: lastSeen ?? live.started_at,
+      primary: true,
+    });
+  }
+  return { bodies, primary: live.session_id };
+}
+
 /**
  * 单条成员校验；字段非法返回 undefined（整条丢弃）。
  * v1 / v2 按 owner 推断 role；v3 使用显式 role。membership 缺省按
@@ -166,13 +261,28 @@ function parseMember(value: unknown, version: number): PersistedAgentRecord | un
   if (currentBody !== undefined) record.current_body = currentBody;
   const bodyHistory = parseBodyHistory(value.body_history);
   if (bodyHistory !== undefined) record.body_history = bodyHistory;
+  const lastSeen =
+    typeof value.last_seen === 'number' && Number.isFinite(value.last_seen)
+      ? value.last_seen
+      : undefined;
+  const explicitBodies = parsePersistedBodies(value.bodies);
+  const explicitPrimary = optionalString(value.primary_body_id);
+  const migrated = migrateBodies(
+    version,
+    currentBody,
+    bodyHistory,
+    explicitBodies,
+    explicitPrimary,
+    value.session_id,
+    lastSeen,
+  );
+  record.bodies = migrated.bodies;
+  if (migrated.primary !== undefined) record.primary_body_id = migrated.primary;
   const forkedFrom = optionalString(value.forked_from);
   if (forkedFrom !== undefined) record.forked_from = forkedFrom;
   const currentTool = optionalString(value.current_tool);
   if (currentTool !== undefined) record.current_tool = currentTool;
-  if (typeof value.last_seen === 'number' && Number.isFinite(value.last_seen)) {
-    record.last_seen = value.last_seen;
-  }
+  if (lastSeen !== undefined) record.last_seen = lastSeen;
   if (isRecord(value.usage)) record.usage = value.usage;
   return record;
 }
@@ -187,8 +297,8 @@ export class AgentSnapshotStore {
   private pending: (() => PersistedAgentRecord[]) | undefined;
   /** 写入串行链；值表示该次 write 是否成功 */
   private chain: Promise<boolean> = Promise.resolve(true);
-  /** 读到 v1 / v2 且尚未成功备份时置位；write 前必须补做，否则放弃写入（避免无回滚） */
-  private backupPendingFor: 1 | 2 | undefined;
+  /** 读到旧版且尚未成功备份时置位；write 前必须补做，否则放弃写入（避免无回滚） */
+  private backupPendingFor: 1 | 2 | 3 | undefined;
   /** 是否已探测过现有文件版本（未 load 直接 write 时也要补备份） */
   private backupChecked = false;
   /** 损坏文件隔离失败时置位：write 直接放弃，避免覆盖唯一恢复副本 */
@@ -246,7 +356,10 @@ export class AgentSnapshotStore {
 
     if (
       !isRecord(parsed) ||
-      (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== AGENT_SNAPSHOT_VERSION)
+      (parsed.version !== 1 &&
+        parsed.version !== 2 &&
+        parsed.version !== 3 &&
+        parsed.version !== AGENT_SNAPSHOT_VERSION)
     ) {
       const detail = `unsupported snapshot version: ${String(isRecord(parsed) ? parsed.version : 'n/a')}`;
       this.logger.error('agent.snapshot.load_failed', {
@@ -267,8 +380,8 @@ export class AgentSnapshotStore {
       return [];
     }
 
-    // 旧二进制无法读 v3；首次写 v3 前先留一份对应版本的备份。
-    if (parsed.version === 1 || parsed.version === 2) {
+    // 旧二进制无法读 v4；首次写 v4 前先留一份对应版本的备份。
+    if (parsed.version === 1 || parsed.version === 2 || parsed.version === 3) {
       this.backupPendingFor = parsed.version;
       await this.ensureBackup(parsed.version);
     }
@@ -323,9 +436,11 @@ export class AgentSnapshotStore {
    * 确保旧版本备份存在。返回 false 表示备份失败；调用方据此决定是否放弃写 v3。
    * 备份已存在视为完成（幂等）。
    */
-  private async ensureBackup(version: 1 | 2): Promise<boolean> {
+  private async ensureBackup(version: 1 | 2 | 3): Promise<boolean> {
     if (this.backupPendingFor !== version) return true;
-    const backupPath = `${this.filePath}${version === 1 ? V1_BACKUP_SUFFIX : V2_BACKUP_SUFFIX}`;
+    const suffix =
+      version === 1 ? V1_BACKUP_SUFFIX : version === 2 ? V2_BACKUP_SUFFIX : V3_BACKUP_SUFFIX;
+    const backupPath = `${this.filePath}${suffix}`;
     try {
       if (!(await fileExists(backupPath))) {
         await copyFile(this.filePath, backupPath);
@@ -357,7 +472,7 @@ export class AgentSnapshotStore {
     } catch {
       return true;
     }
-    if (version !== 1 && version !== 2) return true;
+    if (version !== 1 && version !== 2 && version !== 3) return true;
     this.backupPendingFor = version;
     return this.ensureBackup(version);
   }

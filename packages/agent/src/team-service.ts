@@ -5,7 +5,8 @@
  * - roster 由 Agent 记录派生（`team_id` + `membership`），不单独持久化；
  * - 只追加团队日志；无 `@` 的 post 绝不 dispatch（结构性保证零 run）；
  * - `@` 使用结构化 agent id，先写日志再并行 dispatch，逐条返回结果；
- * - 订阅 `agent.spawned/rejoined/closed/rotated` 写系统消息（只写日志）。
+ * - 订阅 `agent.spawned/rejoined/closed/rotated` 写系统消息（只写日志）；
+ * - 0.27：另从可注入的 `EventStream` 订阅 `run.*` 终态写 reply / 失败日志。
  *
  * 依赖边界：只依赖 `AgentService` 与 `TeamStore` 接口，不 import team-store.ts。
  *
@@ -13,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Logger } from '@vessel-agent/core';
+import type { EventStream, Logger, RunEvent } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import {
   type AgentEvent,
@@ -60,6 +61,8 @@ export interface TeamServiceOptions {
   logger?: Logger;
   /** 0.21：跨节点发送端口；缺失时地址形式返回 federation_unavailable */
   federation?: FederationSendPort;
+  /** 0.27：run.* 事件来源；缺省时 reply / 失败日志不写（fail-closed） */
+  events?: EventStream;
 }
 
 /** 系统消息固定英文文案（不含正文） */
@@ -71,6 +74,17 @@ const SYSTEM_CONTENT: Record<TeamSystemEvent, string> = {
   budget_override: 'budget limit overridden',
   fork: 'agent forked',
 };
+
+/**
+ * 已退役 Body 记账上限（0.27）。每 agent 退役 Body ≤`MAX_RETIRED_BODIES`（50），
+ * 超限按插入顺序丢最旧，保证长活进程不无界增长。
+ */
+const MAX_RETIRED_BODIES_TRACKED = 256;
+
+/** 退役 Body 键（`agentId\0sessionId`）：同一 agent 的不同 Body 互不共用 */
+function retiredBodyKey(agentId: string, sessionId: string): string {
+  return `${agentId}\u0000${sessionId}`;
+}
 
 const NOOP_LOGGER: Logger = {
   debug: () => undefined,
@@ -109,10 +123,24 @@ export class DefaultTeamService implements AgentTeamService {
   private readonly logger: Logger;
   private readonly federation: FederationSendPort | undefined;
   private readonly unsubscribe: () => void;
+  /** 0.27：run.* 订阅的取消函数；没有 events 时为 undefined */
+  private readonly unsubscribeRuns: (() => void) | undefined;
   /** 指针事件监听者；绝不含正文（Web hub 用） */
   private readonly listeners = new Set<(event: TeamServiceEvent) => void>();
   /** members remove 期间的标记：把该次 agent.closed 写成 archive 而不是 leave */
   private readonly archiveInFlight = new Set<string>();
+  /**
+   * 0.27：已退役 / 已关闭的 Body（`agentId\0sessionId`，有界）。
+   *
+   * `run.*` 终态不带 `stale` 字段，无法照抄旧回合事件的 `stale === true` 抑制。
+   * 退役 / 关闭总是先于旧 Body 的 in-flight 轮收尾（`retireBodyEntry` 先发
+   * `agent.retired`），所以在 `agent.*` 管道上记账，在 `onRunEvent` 里抑制旧 Body
+   * 的 reply / 失败（文档：旧 Body 的终态不写 Team 日志）。超限丢最旧，dispose 清空。
+   *
+   * 反向记账（只记“死掉的”）而不是正向白名单：snapshot 恢复的成员不会再发
+   * `agent.spawned`，白名单会把重启后所有成员的正常回复一起吞掉。
+   */
+  private readonly retiredBodies = new Set<string>();
   private disposed = false;
 
   constructor(options: TeamServiceOptions) {
@@ -124,6 +152,10 @@ export class DefaultTeamService implements AgentTeamService {
     this.logger = options.logger ?? NOOP_LOGGER;
     this.federation = options.federation;
     this.unsubscribe = this.agent.subscribe((event) => this.onAgentEvent(event));
+    this.unsubscribeRuns =
+      options.events !== undefined
+        ? options.events.subscribe((event) => this.onRunEvent(event))
+        : undefined;
   }
 
   async list(options: TeamListOptions = {}): Promise<TeamSummary[]> {
@@ -632,7 +664,9 @@ export class DefaultTeamService implements AgentTeamService {
     if (this.disposed) return;
     this.disposed = true;
     this.listeners.clear();
+    this.retiredBodies.clear();
     this.unsubscribe();
+    this.unsubscribeRuns?.();
   }
 
   /**
@@ -872,61 +906,16 @@ export class DefaultTeamService implements AgentTeamService {
 
   /** system 消息：只写日志、不 dispatch；失败只 warning（不改变生命周期） */
   private onAgentEvent(event: AgentEvent): void {
+    // 0.27：先记账（早于下面所有 early return）——private / unbound 成员的退役、
+    // 关闭同样要抑制其旧 Body 的 run.* 终态。
+    this.noteBodyLifecycle(event);
+
     // Team log is team-visible. Private members (internal workers) must not leak
     // id / name / reply into the team log. Fail closed for unknown visibility.
     if (event.visibility !== 'team' && event.visibility !== 'tenant') return;
 
     const teamId = event.team_id;
     if (teamId === undefined || teamId.length === 0) return;
-
-    // 0.19 S6：成员完成一轮的最终文本。AgentService 只发事件；TeamService 是
-    // 唯一日志写入点，且**不 dispatch / 不唤醒任何人**。message_id 与事件一致，
-    // 供 Web 按 id 合并。
-    if (event.type === 'agent.reply.posted') {
-      if (typeof event.content !== 'string' || event.content.length === 0) return;
-      const entry: TeamLogEntry = {
-        message_id: event.message_id ?? this.newId(),
-        team_id: teamId,
-        from: event.agent_id,
-        to: [],
-        mentions: [],
-        content: truncateReplyContent(event.content),
-        ts: event.ts,
-        kind: 'reply',
-      };
-      this.store
-        .appendLog(entry)
-        .then(() => {
-          this.emit({ team_id: teamId, kind: 'reply', message_id: entry.message_id });
-        })
-        .catch((error: unknown) => {
-          this.logger.warn('team.reply_message.failed', {
-            team_id: teamId,
-            agent_id: event.agent_id,
-            error: errorText(error),
-          });
-        });
-      return;
-    }
-
-    // 一轮失败 / 取消同样要可见：否则人类只看到 Team 里的沉默。成功回复走
-    // agent.reply.posted 分支，这里不写，避免双写。旧 Body 的 stale 终态不写。
-    if (event.type === 'agent.turn.failed' || event.type === 'agent.turn.cancelled') {
-      if (event.stale === true) return;
-      const verb = event.type === 'agent.turn.failed' ? 'turn failed' : 'turn cancelled';
-      const reason = typeof event.reason === 'string' ? singleLine(event.reason) : '';
-      this.writeSystemLog({
-        teamId,
-        to: [event.agent_id],
-        content: reason.length > 0 ? `${verb}: ${truncateReason(reason)}` : verb,
-        ...(typeof event.conversation_id === 'string'
-          ? { conversationId: event.conversation_id }
-          : {}),
-        eventType: event.type,
-        agentId: event.agent_id,
-      });
-      return;
-    }
 
     const systemEvent = this.systemEventFor(event);
     if (systemEvent === undefined) return;
@@ -946,6 +935,125 @@ export class DefaultTeamService implements AgentTeamService {
       eventType: event.type,
       agentId: event.agent_id,
     });
+  }
+
+  /**
+   * 0.27：Body 退役 / 成员关闭记账（`agent.*` 管道）。
+   *
+   * 只维护 `(agent_id, session_id)` 集合；不写日志、不改变生命周期。
+   * 放在 `onAgentEvent` 所有 early return 之前：private / unbound 成员的
+   * 旧 Body 同样要抑制终态。
+   */
+  private noteBodyLifecycle(event: AgentEvent): void {
+    switch (event.type) {
+      case 'agent.retired':
+        if (event.session_id !== undefined && event.session_id.length > 0) {
+          this.markRetiredBody(event.agent_id, event.session_id);
+        }
+        return;
+      case 'agent.closed':
+        // close 关掉该成员的全部 Body，逐条记账（不用通配键：复活时无法逐条撤销）。
+        if (event.session_id !== undefined && event.session_id.length > 0) {
+          this.markRetiredBody(event.agent_id, event.session_id);
+        }
+        return;
+      case 'agent.rejoined':
+        // reinstate 把 close 置 closing 的 live Body 放回可跑：撤销该 Body 的记账，
+        // 否则复活后的正常轮会被误判成旧 Body。
+        if (event.session_id !== undefined && event.session_id.length > 0) {
+          this.retiredBodies.delete(retiredBodyKey(event.agent_id, event.session_id));
+        }
+        return;
+      default:
+        return;
+    }
+  }
+
+  /** 记账并维持上限（Set 保持插入顺序，超出丢最旧） */
+  private markRetiredBody(agentId: string, sessionId: string): void {
+    const key = retiredBodyKey(agentId, sessionId);
+    this.retiredBodies.delete(key);
+    this.retiredBodies.add(key);
+    while (this.retiredBodies.size > MAX_RETIRED_BODIES_TRACKED) {
+      const oldest = this.retiredBodies.values().next().value;
+      if (oldest === undefined) return;
+      this.retiredBodies.delete(oldest);
+    }
+  }
+
+  /**
+   * 该 Body 是否已退役 / 已关闭。没记账就当活着：`agent.retired` 与 `run.*` 终态
+   * 都出自同一进程内的 `AgentService`，退役一定先记账（`retireBodyEntry` 先 emit）。
+   */
+  private isRetiredBody(agentId: string, sessionId: string | undefined): boolean {
+    if (sessionId === undefined) return false;
+    return this.retiredBodies.has(retiredBodyKey(agentId, sessionId));
+  }
+
+  /**
+   * 0.27：run.* 终态写 Team 日志（成员 run 走父事件流，与 agent.* 不同管道）。
+   * 归属字段由 runtime 并入 `data`；缺任一字段即放弃（fail-closed），不猜。
+   * 旧 Body（已退役 / 已关闭）的终态一律不写：与旧回合事件的 `stale` 抑制等价，
+   * reply / 失败 / 取消三条分支共用这一次判断。只写日志、不 dispatch。
+   */
+  private onRunEvent(event: RunEvent): void {
+    if (typeof event.data !== 'object' || event.data === null) return;
+    const data = event.data as Record<string, unknown>;
+    const sessionId = typeof data.session_id === 'string' ? data.session_id : undefined;
+
+    // Team log is team-visible. Private members must not leak id / reply.
+    const visibility = data.visibility;
+    if (visibility !== 'team' && visibility !== 'tenant') return;
+
+    const teamId = data.team_id;
+    if (typeof teamId !== 'string' || teamId.length === 0) return;
+    const agentId = data.agent_id;
+    if (typeof agentId !== 'string' || agentId.length === 0) return;
+    // 旧 Body（已退役 / 已关闭）的终态不写 Team 日志。
+    if (this.isRetiredBody(agentId, sessionId)) return;
+
+    if (event.type === 'run.completed') {
+      const output = data.output;
+      if (typeof output !== 'string' || output.length === 0) return;
+      const entry: TeamLogEntry = {
+        message_id: this.newId(),
+        team_id: teamId,
+        from: agentId,
+        to: [],
+        mentions: [],
+        content: truncateReplyContent(output),
+        ts: event.ts,
+        kind: 'reply',
+      };
+      this.store
+        .appendLog(entry)
+        .then(() => {
+          this.emit({ team_id: teamId, kind: 'reply', message_id: entry.message_id });
+        })
+        .catch((error: unknown) => {
+          this.logger.warn('team.reply_message.failed', {
+            team_id: teamId,
+            agent_id: agentId,
+            error: errorText(error),
+          });
+        });
+      return;
+    }
+
+    // 失败 / 取消同样要可见：否则人类只看到 Team 里的沉默。
+    if (event.type === 'run.failed' || event.type === 'run.cancelled') {
+      const verb = event.type === 'run.failed' ? 'turn failed' : 'turn cancelled';
+      const error = typeof data.error === 'string' ? singleLine(data.error) : '';
+      const reason = typeof data.reason === 'string' ? singleLine(data.reason) : '';
+      const detail = error.length > 0 ? error : reason;
+      this.writeSystemLog({
+        teamId,
+        to: [agentId],
+        content: detail.length > 0 ? `${verb}: ${truncateReason(detail)}` : verb,
+        eventType: event.type,
+        agentId,
+      });
+    }
   }
 
   /** 唯一 system 日志写入点；失败只 warning，不改变生命周期 / roster。 */

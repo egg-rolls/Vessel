@@ -27,6 +27,7 @@ import {
   type RunEvent,
   type RunInterruptReason,
   type RunnableAgent,
+  type RunOptions,
   type RuntimePermissionConfig,
   type SelfCardOptions,
   type TerminationPolicy,
@@ -98,6 +99,13 @@ const PERMISSION_RESPONSE_EVENTS: ReadonlySet<string> = new Set([
   'ask.user.answered',
 ]);
 
+/** run 终态事件：并入父流时补成员归属（TeamService / TUI 都读 data.agent_id） */
+const RUN_TERMINAL_EVENTS: ReadonlySet<string> = new Set([
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+]);
+
 /** bridge 内待答请求；deny-after 只挂在有 parentEvents 的桥上 */
 interface PendingBridgeRequest {
   kind: 'permission' | 'ask';
@@ -140,12 +148,6 @@ export interface InProcessMemberRuntimeOptions {
    * `tool.permission.response` / `ask.user.answered` 回灌成员事件流。
    */
   parentEvents?: EventStream;
-  /**
-   * 把成员 run 的 llm / tool / run 生命周期事件并入 `parentEvents`（bridge 自有的
-   * 权限/提问事件除外）。缺省 false；gateway / serve 需要，交互 REPL 不应把成员
-   * 输出混进 owner 的实时流。
-   */
-  forwardMemberEvents?: boolean;
   /** bridge 模式下成员进入/离开权限等待时回调（入口层接 AgentService 状态） */
   onPermissionState?: (memberId: string, sessionId: string, state: MemberPermissionState) => void;
   /** 成员引擎事件回流（当前只转发 agent.limit.warning） */
@@ -163,6 +165,8 @@ export interface InProcessMemberRuntimeOptions {
   session?: AgentRuntimeOptions['session'];
   /** tenant 会话事件日志（唯一真相源；存在时成员事件同样落盘） */
   eventLog?: AgentRuntimeOptions['eventLog'];
+  /** 0.27：每 body 的 durable checkpoint 存储；透传给每个 AgentRuntime */
+  runStore?: AgentRuntimeOptions['runStore'];
   /** 覆盖 runtime 构造（测试捕获 options） */
   runtimeFactory?: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
 }
@@ -220,6 +224,22 @@ function bridgeRequestData(event: RunEvent, member: MemberRuntimeMember): Record
   }
   if (typeof data.source !== 'string') data.source = 'runtime';
   return data;
+}
+
+/**
+ * run 终态并入父流前补齐成员归属（0.27）：写在 `data` 内而非事件顶层，
+ * TeamService 与 TUI 都读 `data.agent_id`。已存在的值不覆盖；`data` 不是
+ * 对象时原样返回（不抛错）。
+ */
+function withMemberIdentity(event: RunEvent, member: MemberRuntimeMember): RunEvent {
+  if (!isRecord(event.data)) return event;
+  const data: Record<string, unknown> = { ...event.data };
+  if (data.agent_id === undefined) data.agent_id = member.id;
+  if (data.team_id === undefined && member.team_id !== undefined) {
+    data.team_id = member.team_id;
+  }
+  if (data.visibility === undefined) data.visibility = member.visibility;
+  return { ...event, data };
 }
 
 /** 读 run.completed 事件里的 usage */
@@ -381,7 +401,6 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   /** 成员兜底权限（热应用会整体替换，故非 readonly） */
   private permission?: RuntimePermissionConfig;
   private readonly parentEvents?: EventStream;
-  private readonly forwardMemberEvents: boolean;
   private readonly onPermissionState?: (
     memberId: string,
     sessionId: string,
@@ -397,6 +416,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly includeReasoning?: boolean;
   private readonly session?: AgentRuntimeOptions['session'];
   private readonly eventLog?: AgentRuntimeOptions['eventLog'];
+  private readonly runStore?: AgentRuntimeOptions['runStore'];
   private readonly runtimeFactory: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
   private readonly entries = new Map<string, MemberRuntimeEntry>();
   /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界文本队列） */
@@ -414,7 +434,6 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.permission =
       options.permission !== undefined ? withMemberAutoApprove(options.permission) : undefined;
     this.parentEvents = options.parentEvents;
-    this.forwardMemberEvents = options.forwardMemberEvents === true;
     this.onPermissionState = options.onPermissionState;
     this.onMemberEvent = options.onMemberEvent;
     this.limits = options.limits ?? {};
@@ -426,6 +445,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.includeReasoning = options.includeReasoning;
     this.session = options.session;
     this.eventLog = options.eventLog;
+    this.runStore = options.runStore;
     this.runtimeFactory =
       options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
     if (this.permissionMode === 'bridge' && this.parentEvents === undefined) {
@@ -477,6 +497,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       ...(this.includeReasoning !== undefined ? { includeReasoning: this.includeReasoning } : {}),
       ...(this.session !== undefined ? { session: this.session } : {}),
       ...(this.eventLog !== undefined ? { eventLog: this.eventLog } : {}),
+      ...(this.runStore !== undefined ? { runStore: this.runStore } : {}),
     });
     const entry: MemberRuntimeEntry = {
       runtime,
@@ -508,7 +529,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     if (mode === 'bridge' && this.parentEvents !== undefined) {
       this.attachBridge(member, entry);
     }
-    if (this.forwardMemberEvents && this.parentEvents !== undefined) {
+    // 0.27：所有 body 事件无条件并入父事件流；权限/ask 请求与应答仍由 bridge 独占。
+    if (this.parentEvents !== undefined) {
       const parentEvents = this.parentEvents;
       entry.unsubscribers.push(
         entry.events.subscribe((event: RunEvent) => {
@@ -522,22 +544,30 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
           if (this.entries.get(member.session_id) !== entry) return;
           // 成员 run 与 owner run 一样并入 tenant 事件流：Web 会话窗口 / trace /
           // 观测都靠这条流看到 llm、tool 与 run 生命周期事件（session_id 已在 payload 内）。
-          const forwarded: RunEvent =
-            this.tenantId !== undefined && event.tenant_id === undefined
-              ? { ...event, tenant_id: this.tenantId }
-              : event;
-          parentEvents.publish(forwarded);
+          // 终态事件额外补成员归属，Team 侧才能把 reply / 失败写进团队日志。
+          const forwarded: RunEvent = RUN_TERMINAL_EVENTS.has(event.type)
+            ? withMemberIdentity(event, member)
+            : event;
+          const scoped: RunEvent =
+            this.tenantId !== undefined && forwarded.tenant_id === undefined
+              ? { ...forwarded, tenant_id: this.tenantId }
+              : forwarded;
+          parentEvents.publish(scoped);
         }),
       );
     }
   }
 
-  async runTurn(member: MemberRuntimeMember, message: AgentMessage): Promise<MemberTurnResult> {
+  async runTurn(
+    member: MemberRuntimeMember,
+    message: AgentMessage,
+    scheduledRunId?: string,
+  ): Promise<MemberTurnResult> {
     const entry = this.requireEntry(member);
     entry.started = true;
     // 未 spawn / 未开跑期间暂存的 notice 在历史恢复之后、用户输入之前注入。
     const pendingNotices = this.takePendingNotices(member.id);
-    const runId = randomUUID();
+    const runId = scheduledRunId ?? randomUUID();
     let terminal: 'completed' | 'failed' | 'cancelled' | undefined;
     let usage: Usage | undefined;
     const unsubscribe = entry.runtime.events.subscribe((event: RunEvent) => {
@@ -585,6 +615,52 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     }
   }
 
+  /**
+   * 从 durable checkpoint 恢复（0.27）。checkpoint 的会话历史由 core 读取；
+   * 这里只注入 pending notice / 调用方附加消息，并回连同 run 终态。
+   */
+  async resume(
+    member: MemberRuntimeMember,
+    runId: string,
+    opts?: RunOptions,
+  ): Promise<MemberTurnResult> {
+    const entry = this.requireEntry(member);
+    const resume = entry.runtime.resume?.bind(entry.runtime);
+    if (resume === undefined) throw new Error('member runtime does not support resume');
+    entry.started = true;
+    const pendingNotices = this.takePendingNotices(member.id);
+    let terminal: 'completed' | 'failed' | 'cancelled' | undefined;
+    let usage: Usage | undefined;
+    const unsubscribe = entry.runtime.events.subscribe((event: RunEvent) => {
+      if (event.run_id !== runId) return;
+      if (event.type === 'run.completed') {
+        terminal = 'completed';
+        usage = readUsage(event.data);
+      } else if (event.type === 'run.cancelled') {
+        terminal = 'cancelled';
+      } else if (event.type === 'run.failed') {
+        terminal = 'failed';
+      }
+    });
+    try {
+      const content = await resume(runId, {
+        ...opts,
+        messages: [...pendingNotices.map(noticeMessage), ...(opts?.messages ?? [])],
+      });
+      return { content, outcome: 'completed', ...(usage !== undefined ? { usage } : {}) };
+    } catch (error) {
+      if (terminal === 'cancelled') return { outcome: 'cancelled' };
+      throw error;
+    } finally {
+      unsubscribe();
+      this.clearPending(entry);
+      if (entry.waiting) {
+        entry.waiting = false;
+        this.notifyPermissionState(member.id, member.session_id, 'running');
+      }
+    }
+  }
+
   cancel(member: MemberRuntimeMember): void {
     this.entries.get(member.session_id)?.runtime.interrupt?.('user');
   }
@@ -595,19 +671,15 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    */
   notice(memberId: string, text: string): void {
     if (text.length === 0) return;
-    const entry = this.findEntryByMemberId(memberId);
-    if (entry?.started && entry.runtime.appendNotice !== undefined) {
-      entry.runtime.appendNotice(text);
-      return;
-    }
-    this.queuePendingNotice(memberId, text);
-  }
-
-  private findEntryByMemberId(memberId: string): MemberRuntimeEntry | undefined {
+    let delivered = false;
     for (const entry of this.entries.values()) {
-      if (entry.memberId === memberId) return entry;
+      if (entry.memberId !== memberId) continue;
+      if (entry.started && entry.runtime.appendNotice !== undefined) {
+        entry.runtime.appendNotice(text);
+        delivered = true;
+      }
     }
-    return undefined;
+    if (!delivered) this.queuePendingNotice(memberId, text);
   }
 
   private queuePendingNotice(memberId: string, text: string): void {
@@ -781,7 +853,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
 
   /**
    * team 显式 deny-after 的单次 deadline；hold / 缺失 / 非法秒数都不建定时器。
-   * 到期后把 normal response 同时交给成员流（解除等待）与父流（RunEngine 审计）。
+   * 到期后把 normal response 同时交给成员流（解除等待）与父流（供父入口观测）。
    */
   private scheduleDenyAfter(
     member: MemberRuntimeMember,
