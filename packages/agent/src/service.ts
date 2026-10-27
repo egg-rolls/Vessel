@@ -99,6 +99,47 @@ const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
 /** Team 内 present 成员上限（peer + contractor 都计入；后续可配置） */
 const TEAM_MEMBER_LIMIT = 20;
 
+/**
+ * 人类 principal：消息的**缺省发送者**。
+ *
+ * 与 `src/federation-address.ts` 的 `LOCAL_HUMAN_PRINCIPAL` 同值同义
+ * （`packages/agent` 不能 import 应用层，各自持一份，**两处必须同改**）。
+ *
+ * 这里**不能**用 `defaultOwner`：那是「临时成员归谁管」的缺省值（`MemberRecord.owner`），
+ * 是 agent 的归属；消息的归属是另一个 principal。两者曾是同一个字符串
+ * （都是 `'main'`），于是人类从 CLI / Web 发消息时 `from` 变成了 `main` 这个 agent
+ * 的 id —— `messageSource` 再也分不出「main 在说话」和「人类在说话」。
+ */
+const DEFAULT_MESSAGE_SENDER = 'human';
+
+/**
+ * 成员名合法形状：1-64 位字母 / 数字 / `_` / `-`。
+ *
+ * **与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同源同义**（那边是
+ * `[A-Za-z0-9_-]{1,64}`）。两处必须同改：名字会被拼进跨节点地址的 principal 段
+ * （`team-service.ts` 出站 from），不合法的名字建得出来、却永远发不出去。
+ *
+ * 不在 create 时校验的后果实测过：`my.agent` / `docs core` / 中文名 / 超 64 字符
+ * 都能存进 registry，但 `parseFederationAddress` 在形状校验就拒绝整条地址 ——
+ * 不是 `unknown_member`，是地址本身非法。本机按 id 仍能用，跨节点完全不可达。
+ */
+const MEMBER_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** 非法名字的拒绝理由：必须说明允许的形状，不能只说 invalid。 */
+function nameShapeError(name: string): AgentError {
+  return new AgentError(
+    'invalid_input',
+    `name must match ${MEMBER_NAME_RE.source} (letters, digits, underscore, hyphen; ` +
+      `1-64 chars); "${name}" is not addressable cross-node`,
+  );
+}
+
+/** 显式 name 的形状校验；缺省（undefined）放行，由调用方决定是否自动命名。 */
+function assertMemberName(name: string | undefined): void {
+  if (name === undefined) return;
+  if (!MEMBER_NAME_RE.test(name)) throw nameShapeError(name);
+}
+
 /** 每 agent live body 上限缺省值 */
 const DEFAULT_MAX_LIVE_BODIES = 20;
 
@@ -574,6 +615,9 @@ export class AgentServiceImpl implements AgentService {
     const owner = role === 'member' ? id : ((rawOwner as string | undefined) ?? this.defaultOwner);
 
     const name = optionalString(input.name);
+    // 形状校验必须早于任何 registry / team 副作用：名字最终会进跨节点地址，
+    // 建出来再发现发不出去，代价是调用方已经拿到 id 了。
+    assertMemberName(name);
     const spawnedBy = optionalString(input.spawnedBy);
     // 显式 workspace 只由 CLI 传入；默认 workspace 来自配置声明。
     const explicitWorkspace =
@@ -636,23 +680,28 @@ export class AgentServiceImpl implements AgentService {
           : resolveVisibility(input.visibility, 'private');
     }
 
-    // 冻结 / 上限 / 名称检查 / registry.add 之间不得有 await（F7）。
+    // 名称只由 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫。
+    // 名字表达的是职位 / 功能，同 Team 已有同名成员说明这个职能已经有人承担：
+    // 复用已存在的成员，不再造一个同职能的。create / hire 不发消息，所以
+    // 「返回 id 让调用方自己决定要不要 send」不会引入隐式动作。
+    //
+    // **必须排在冻结 / 上限闸门之前**：复用不创建成员、不占额度，上面两条闸门
+    // 限制的是「再塞一个进来」。放在后面的话，Team 满员时这条分支永远走不到，
+    // 调用方拿到 `team_full` 而看不到「这个职能已经有人做」——恰好是最需要它的
+    // 场景。冻结同理：冻结禁止新增，不禁止把已有的交回来。
+    if (name !== undefined) {
+      const existing = this.reusableByName(name, teamId);
+      if (existing !== undefined) return { ...this.statusFor(existing), reused: true };
+    }
+    // 冻结 / 上限 / registry.add 之间不得有 await（F7）。
+    // `reusableByName` 是同步的（`registry.findByName`），上面那次提前返回不破坏窗口。
     if (teamId !== undefined && this.teamBinder?.get(teamId)?.spawn_frozen === true) {
       throw new AgentError('team_frozen', `team_frozen: ${teamId}`);
     }
     if (teamId !== undefined && this.presentTeamCount(teamId) >= TEAM_MEMBER_LIMIT) {
       throw new AgentError('team_full', `team_full: ${teamId}`);
     }
-    // 名称只由 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫。
-    let resolvedName: string;
-    if (name !== undefined) {
-      if (this.nameOccupied(name, teamId)) {
-        throw new AgentError('invalid_input', `duplicate member name: ${name}`);
-      }
-      resolvedName = name;
-    } else {
-      resolvedName = this.autoNameFor(spawnedBy, teamId);
-    }
+    const resolvedName = name !== undefined ? name : this.autoNameFor(spawnedBy, teamId);
 
     const now = this.now();
     const record: MemberRecord = {
@@ -713,9 +762,13 @@ export class AgentServiceImpl implements AgentService {
     if (input.teamId !== undefined || input.workspace !== undefined) {
       throw new AgentError('invalid_input', 'single agents must not bind a team');
     }
+    // 与 createOne 同一语义：同名 present 成员已存在则复用，不新建。
+    // `main` 等启动路径只传 `{ id, role }`、不传 name，占不到这个分支。
     const name = optionalString(input.name);
-    if (name !== undefined && this.nameOccupied(name, undefined)) {
-      throw new AgentError('invalid_input', `duplicate member name: ${name}`);
+    assertMemberName(name);
+    if (name !== undefined) {
+      const existing = this.reusableByName(name, undefined);
+      if (existing !== undefined) return { ...this.statusFor(existing), reused: true };
     }
     const now = this.now();
     const record: MemberRecord = {
@@ -758,25 +811,49 @@ export class AgentServiceImpl implements AgentService {
 
   /** name 是否被 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫 */
   private nameOccupied(name: string, teamId: string | undefined): boolean {
+    return this.reusableByName(name, teamId) !== undefined;
+  }
+
+  /**
+   * 同 Team present 成员里叫这个名字的那个（unbound 时 tenant 全扫）。
+   * 名字是职能标签，重名即「这个职能已有人做」——create / hire 复用它而不是新建。
+   */
+  private reusableByName(name: string, teamId: string | undefined): MemberRecord | undefined {
     return this.registry
       .findByName(name)
-      .some(
+      .find(
         (record) =>
           record.membership === 'present' && (teamId === undefined || record.teamId === teamId),
       );
   }
 
-  /** 缺省名：`${base}-2..${base}-101`；100 次仍冲突则 name_exhausted */
-  private autoNameFor(spawnedBy: string | undefined, teamId: string | undefined): string {
-    const base =
-      (spawnedBy !== undefined ? this.registry.resolve(spawnedBy)?.name : undefined) ??
-      spawnedBy ??
-      'agent';
+  /**
+   * `${base}-2..${base}-101` 中第一个未被占用的名字；100 次仍冲突则 name_exhausted。
+   * 占用判据就是 `nameOccupied`：同 Team 的 present 成员（unbound 时 tenant 全扫），
+   * 不同 Team 可以同名。
+   */
+  private numberedNameFor(base: string, teamId: string | undefined): string {
     for (let index = 2; index <= 101; index += 1) {
       const candidate = `${base}-${index}`;
       if (!this.nameOccupied(candidate, teamId)) return candidate;
     }
     throw new AgentError('invalid_input', `name_exhausted: ${base}`);
+  }
+
+  /**
+   * 缺省名：以派生出的 base 走 numbering。
+   *
+   * base 可能来自 `spawnedBy` 的既有名字 —— 存量快照里可能有形状非法的名字
+   * （校验是后加的），派生出来的名字同样进跨节点地址，所以 base 不合法就退回
+   * `agent`，不让一条旧记录把非法形状传染给新建成员。
+   */
+  private autoNameFor(spawnedBy: string | undefined, teamId: string | undefined): string {
+    const derived =
+      (spawnedBy !== undefined ? this.registry.resolve(spawnedBy)?.name : undefined) ??
+      spawnedBy ??
+      'agent';
+    const base = MEMBER_NAME_RE.test(derived) ? derived : 'agent';
+    return this.numberedNameFor(base, teamId);
   }
 
   /**
@@ -1226,8 +1303,12 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     if (this.bodyIdleTtlMs > 0) await this.sweepIdleBodies();
     const content = readContent(input as unknown as Record<string, unknown>, 'content');
+    // 缺省发送者是人类，不是 default owner：owner 是**成员归属**的缺省值，
+    // 拿来填消息的 from 会让人类发出的消息带上 `main` 这个 agent 的 id。
     const from =
-      input.from === undefined ? this.defaultOwner : readRequiredString(input as never, 'from');
+      input.from === undefined
+        ? DEFAULT_MESSAGE_SENDER
+        : readRequiredString(input as never, 'from');
     const channel = input.channel ?? 'direct';
     if (channel !== 'direct' && channel !== 'team') {
       throw new AgentError('invalid_input', 'channel must be direct or team');
@@ -1310,6 +1391,7 @@ export class AgentServiceImpl implements AgentService {
     }
 
     // 5. 入该 body mailbox，满足条件时 submit
+    const senderName = this.senderName(from);
     const message: AgentMessage = {
       id: this.newId(),
       from,
@@ -1319,6 +1401,8 @@ export class AgentServiceImpl implements AgentService {
       ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
       source: this.messageSource(from),
       channel,
+      // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
+      ...(senderName !== undefined ? { from_name: senderName } : {}),
     };
     entry.pending.push(message);
     this.registry.touchBody(record.id, entry.bodyId, this.now());
@@ -1706,7 +1790,8 @@ export class AgentServiceImpl implements AgentService {
   private async sendOne(input: Record<string, unknown>): Promise<SendResult> {
     const to = readRequiredString(input, 'to');
     const content = readContent(input, 'content');
-    const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(input, 'from');
+    const from =
+      input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(input, 'from');
     const target = this.requireMember(to);
     if (target.membership === 'left' || target.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${to}`);
@@ -1748,7 +1833,7 @@ export class AgentServiceImpl implements AgentService {
     const raw = input as unknown as Record<string, unknown>;
     const to = readRequiredString(raw, 'to');
     const content = readContent(raw, 'content');
-    const from = raw.from === undefined ? DEFAULT_OWNER : readRequiredString(raw, 'from');
+    const from = raw.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
 
     const target = this.resolveDispatchTarget(to, from);
     if (target === undefined || !this.registry.canView(target, from)) {
@@ -1892,7 +1977,8 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     const raw = input as unknown as Record<string, unknown>;
     const to = readRequiredString(raw, 'to');
-    const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(raw, 'from');
+    const from =
+      input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
 
     const target = this.resolveDispatchTarget(to, from);
     if (target === undefined || !this.registry.canView(target, from)) {
@@ -2297,6 +2383,8 @@ export class AgentServiceImpl implements AgentService {
 
     const changed: AgentUpdateField[] = [];
     if (name !== undefined && name !== target.name) {
+      // 与 create 同一条形状规则：改名是另一条能把「可寻址」变「不可寻址」的路径。
+      assertMemberName(name);
       this.assertNameAvailable(target, name);
       target.name = name;
       changed.push('name');
@@ -2364,7 +2452,8 @@ export class AgentServiceImpl implements AgentService {
     teamId?: string;
     visibility: MemberVisibility;
   } {
-    const from = record.from === undefined ? DEFAULT_OWNER : readRequiredString(record, 'from');
+    const from =
+      record.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(record, 'from');
     const explicitTeamId =
       record.teamId === undefined ? undefined : readRequiredString(record, 'teamId');
     if (explicitTeamId !== undefined) {
@@ -2438,7 +2527,8 @@ export class AgentServiceImpl implements AgentService {
     const raw = input as unknown as Record<string, unknown>;
     const to = readRequiredString(raw, 'to');
     const teamId = readRequiredString(raw, 'team_id');
-    const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(raw, 'from');
+    const from =
+      input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
 
     const target = this.resolveDispatchTarget(to, from);
     if (target === undefined || !this.registry.canView(target, from)) {
@@ -2690,13 +2780,19 @@ export class AgentServiceImpl implements AgentService {
     return this.registry.resolve(from)?.teamId ?? target.teamId;
   }
 
-  /** 是否 human principal（直接对话免 conversation budget） */
+  /**
+   * 是否 human principal（直接对话免 conversation budget）。
+   *
+   * `single` 记录（`main`）**不是**人类：它是 agent，同样受预算约束。
+   * 此前这里还有 `|| id === this.defaultOwner`，与 `role === 'single'` 一起把
+   * `main` 当成人类 —— 但那正是「用成员归属的默认值填消息发送者」造成的假象：
+   * 人类消息的 `from` 曾经就是 `main`。缺省发送者改成 `human` 之后，两者分开，
+   * `main` 只剩「agent」这一个身份。
+   */
   private isHumanPrincipal(id: string): boolean {
-    if (id === 'human' || id === 'system' || id === this.defaultOwner) return true;
+    if (id === DEFAULT_MESSAGE_SENDER || id === 'system') return true;
     if (id.startsWith('federation:')) return false;
-    const record = this.registry.get(id);
-    if (record === undefined) return true;
-    return record.role === 'single';
+    return this.registry.get(id) === undefined;
   }
 
   /**
@@ -3005,14 +3101,24 @@ export class AgentServiceImpl implements AgentService {
 
   /**
    * 入队时标注发送者类别（仅用于模型上下文，不参与权限判定）。
-   * 未登记 principal / `human` / role single 视为人类；`system` 保持系统来源。
+   *
+   * 判据只看「这个 principal 是不是本机登记的成员」：登记了就是 agent（含 `single`
+   * 的 `main`），没登记才是人类 / 系统语境。此前 `role === 'single'` 也归 human，
+   * 与「人类消息的 from 恰好是 main」叠加，导致 `main` 说话和人类说话无法区分。
    */
   private messageSource(from: string): AgentMessage['source'] {
     if (from === 'system') return 'system';
     if (from.startsWith('federation:')) return 'agent';
+    return this.registry.get(from) === undefined ? 'human' : 'agent';
+  }
+
+  /**
+   * 发送者显示名：只对本机登记成员有值。人类 / 系统 / 联邦地址没有本机成员名，
+   * 返回 undefined，渲染时退回短 id。
+   */
+  private senderName(from: string): string | undefined {
     const record = this.registry.get(from);
-    if (record === undefined) return 'human';
-    return record.role === 'single' ? 'human' : 'agent';
+    return record === undefined ? undefined : record.name;
   }
 
   private scheduleSnapshot(): void {

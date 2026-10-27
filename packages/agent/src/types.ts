@@ -119,6 +119,11 @@ export interface MemberStatus {
   body_history?: AgentBodyHistoryEntry[];
   /** 0.27 additive：live Body 状态；`session_id` 仍表示 primary body */
   bodies?: BodyStatus[];
+  /**
+   * `create` / `hire` 专用：同名成员已存在，本次没有新建，返回的是它。
+   * 只在复用出现时存在；正常创建不带这个字段。
+   */
+  reused?: boolean;
 }
 
 /**
@@ -193,6 +198,14 @@ export interface AgentMessage {
    * 成员点对点投递为 `direct`。缺省 `direct`。
    */
   channel?: AgentMessageChannel;
+  /**
+   * 发送者的显示名（内存内元数据，不落 snapshot）。由 AgentService 入队时按
+   * registry 填；人类 / 系统 / 联邦地址没有本机成员名，缺省。
+   *
+   * 只用于来源标注的可读性：`from` 仍是 uuid，是唯一身份。执行内核不持有 registry，
+   * 所以名字必须随消息带过来，不能到渲染时再查。
+   */
+  from_name?: string;
 }
 
 /** 传给执行内核的成员身份（不携带 registry 状态） */
@@ -516,7 +529,7 @@ export interface AdmitInput {
   content: string;
   agent_id?: string;
   session_id?: string;
-  /** 缺省 human principal（DEFAULT_OWNER 字面量） */
+  /** 缺省 `human`（人类入口）；不是 `DEFAULT_OWNER` —— 那是成员归属的缺省值 */
   from?: string;
   channel?: 'direct' | 'team';
   origin_team_id?: string;
@@ -1148,12 +1161,63 @@ export interface TeamAgentSendResult {
 }
 
 /**
+ * 地址归属判定（纯解析，不发网络）。
+ *
+ * `local_*` 由 Team 层在本机完成投递：判断「是不是本机」只有 app 层知道
+ * （`node_id` + 展示名），但投递要用调用者的 agent id 与 Team roster，
+ * 只有 Team 层有。所以 port 只回答「指向哪里」，不代做本地投递。
+ */
+export type FederationAddressPlacement =
+  | { kind: 'local_human'; team_id?: string }
+  | { kind: 'local_member'; principal: string; team_id: string }
+  | { kind: 'remote' }
+  | { kind: 'invalid'; code: string; reason: string };
+
+/**
+ * 裸 agent 名在可访问节点上的查找结果（0.27）。
+ *
+ * 候选用**地址**表示而不是 agent id：`team-info` 是脱敏目录（ADR-094 明确不返回
+ * agent id / workspace / policy），而且在本方案里地址本来就是精确定位手段 ——
+ * `<name>@<node_id>:<team_id>` 可以直接发回去。
+ */
+export interface FederationAgentCandidate {
+  /** 完整地址 `<name>@<node_id>:<team_id>` */
+  address: string;
+  name: string;
+  node_id: string;
+  team_id: string;
+}
+
+export interface FederationLookupResult {
+  candidates: FederationAgentCandidate[];
+  /**
+   * 预算内没查完（有 peer 超时 / 不可达）。
+   *
+   * 调用方要据此区分「查完了确实没有」和「没查完」：后者不能报 unknown，
+   * 否则离线 peer 会被误报成「这个人不存在」。
+   */
+  timedOut: boolean;
+}
+
+/**
  * 跨节点发送端口（0.21）。由 app 层注入：`packages/agent` 不依赖 federation
  * client / 配置 / HTTP，只负责判断地址形式、填 `from` 与映射结果。
  */
 export interface FederationSendPort {
   /** 本机节点 id；`from` 由 agent 层用 `<caller>@<nodeId>:<team>` 构造。 */
   readonly nodeId: string;
+  /**
+   * 判定地址指向本机还是远端（0.27）。本机结果由调用方就地投递，绝不出网。
+   * 非法地址也在这里判，不发任何请求。
+   */
+  resolve(to: string): FederationAddressPlacement;
+  /**
+   * 在所有可访问节点上按名字找候选人（0.27）。
+   *
+   * **必须有总预算**：并发打所有 out peer，共用一个 deadline；不是每个 peer 各等
+   * 一次超时。预算耗尽时返回已拿到的候选 + `timedOut: true`。
+   */
+  lookup(principal: string): Promise<FederationLookupResult>;
   send(input: FederationSendRequest): Promise<FederationSendResult>;
 }
 

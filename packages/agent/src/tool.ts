@@ -159,6 +159,24 @@ function mapDerivedEntry(entry: unknown, fixed: Record<string, unknown>): unknow
   return isRecord(entry) ? mapDerived(entry, fixed) : entry;
 }
 
+/**
+ * 同名成员已存在时 service 复用而不是新建，返回体带 `reused: true`。
+ * 这里补一句 note 点明「没有再建一个」：否则调用方会以为刚创建了成员，
+ * 进而再发一次消息，而它其实是在给一个已有的成员派活。
+ * 正常创建时不加这个字段，避免每次调用多一段无用文本。
+ */
+function withReusedNote<T extends { id: string; name?: string; reused?: boolean }>(
+  result: T,
+): T & { note?: string } {
+  if (result.reused !== true) return result;
+  return {
+    ...result,
+    note:
+      `a member named ${result.name ?? result.id} already exists in this team; ` +
+      'reuse it with action=send',
+  };
+}
+
 /** `from` 不暴露：工具调用者恒为 owner，模型不能伪造发送者 */
 function mapSend(record: Record<string, unknown>): Record<string, unknown> {
   const input: Record<string, unknown> = {};
@@ -201,33 +219,21 @@ export function createAgentTool(
   return {
     name: 'agent',
     description:
-      'Long-lived member lifecycle tool for this agent. ' +
-      'action=create creates peer member(s) in the caller team (team members only; ' +
-      'the root owner has no team and must use hire); ' +
-      'action=hire creates contractor member(s) owned by the caller (any member may hire); ' +
-      'the new contractor is bound to the caller team when the caller has one and is unbound ' +
-      'otherwise, and returns the created member; ' +
-      'action=send delivers a message to a member through the unified dispatch path ' +
-      '(live members queue immediately, gone members resume first, rotating members are ' +
-      'queued for the new body) and returns immediately; ' +
-      'action=post appends a message to the caller team log only and never notifies or wakes ' +
-      'any member; ' +
-      'action=close releases member(s) (idempotent); action=list returns the roster; ' +
-      'action=rotate moves an agent into a fresh body (new session, epoch + 1) with ' +
-      'startup_prompt as the first message. ' +
-      'A body may only rotate itself; startup_prompt is required. ' +
-      'Agent bodies may use create, hire, close, rotate, post, send and list. ' +
-      'Closing a peer requires human approval; closing your own contractor or yourself ' +
-      'needs no approval. ' +
-      'Batch: create/hire/close accept `members` and send accepts `messages`; entries run in ' +
-      'parallel and return {results:[...]} in input order, each entry either its result ' +
-      'or an error. ' +
-      'A failed entry does not abort the others; do not mix single fields with a batch. ' +
-      'Cross-node replies: when a federated message arrives from <principal>@<node>:<team>, ' +
-      'reply with action=send and set to to that address; the runtime fills from with your ' +
-      'own <name>@<local node>:<team>, so a from field is neither accepted nor needed. ' +
-      'A member without a team cannot send to an address (no_team); the owner cannot either ' +
-      '(use the vessel federation post CLI).',
+      'Long-lived member lifecycle tool. ' +
+      'create: peer member(s) in the caller team (root owner: use hire). ' +
+      'hire: contractor owned by the caller (any member may hire), bound to the caller team if it ' +
+      'has one. ' +
+      'send: dispatch a message (live queue now, gone resume first, rotating queue for the new ' +
+      'body); returns immediately. ' +
+      'post: append to the caller team log only; never notifies or wakes anyone. ' +
+      'close: release member(s), idempotent. list: return the roster. ' +
+      'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first; ' +
+      'a body may only rotate itself. ' +
+      'Bodies may use create, hire, close, rotate, post, send and list. ' +
+      'Closing a peer needs human approval; closing your own contractor or yourself does not. ' +
+      'Cross-node: reply to a federated from by sending to that address; from is runtime-filled ' +
+      'and must not be given. ' +
+      'No team means no address send (no_team), owner included.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -255,8 +261,9 @@ export function createAgentTool(
         to: {
           type: 'string',
           description:
-            'send: member id or session id, or a federated address ' +
+            'send: member id or session id, or an address ' +
             '<principal>@<node_id>:<team_id> (any value containing @ is treated as an address); ' +
+            'a local sender gets a node segment too, so send the location value back as-is; ' +
             'rotate: target agent',
         },
         content: { type: 'string', description: 'send/post: message text' },
@@ -422,11 +429,18 @@ export function createAgentTool(
             const result = await service.create({
               members: entries as unknown as CreateMemberInput[],
             });
-            return JSON.stringify(result);
+            // batch 逐条标注复用：命中同名成员的条目要说明「没新建」
+            const results = entries.map((entry, index) => {
+              const item = result.results[index];
+              if (item === undefined || !item.ok || !isRecord(entry)) return item;
+              return { ...item, status: withReusedNote(item.status) };
+            });
+            return JSON.stringify({ ...result, results });
           }
-          return JSON.stringify(
-            await service.create(mapDerived(record, fixed) as unknown as CreateMemberInput),
+          const created = await service.create(
+            mapDerived(record, fixed) as unknown as CreateMemberInput,
           );
+          return JSON.stringify(withReusedNote(created));
         }
 
         if (action === 'send') {
@@ -446,18 +460,22 @@ export function createAgentTool(
                 content,
               });
             }
-            // owner 没有本地 Team，无法构造 `<name>@<local node>:<team>`；
-            // 地址形式明确拒绝，绝不回落到 dispatch 或跨节点端口。
-            // 裸 `human` 是同一件事的简化形态（本机人类），一并拒。
+            // owner 是 unbound single：它跟人类的对话就是自己的 session，每轮回复的
+            // 文本人类直接能看到。所以 owner 没有「把话递给人类」这个动作可做 ——
+            // 那是给 Team 成员用的（成员在 Team 里跑，人类不在它的 session 里）。
+            // 两条拒绝理由不同，文案必须分开，否则模型会去追一个不存在的动作：
+            // - `human`：回复本身就是回答，不需要 send；
+            // - 地址形式：owner 没有 Team，构造不出 `<name>@<node>:<team>`。
+            // 旧文案让模型「用 vessel federation post --from ...」——那是 CLI，模型没有
+            // 这条工具调用可发，属于不可执行的死提示。错误消息给的替代动作必须真能用。
             if (typeof to === 'string' && (to.includes('@') || to === 'human')) {
-              return {
-                status: 'rejected',
-                code: 'no_team',
-                reason:
-                  'owner has no local team: local human delivery needs a team to log into; ' +
-                  'for cross-node use vessel federation post --from human@<node>:<team>',
-                logged: false,
-              };
+              const reason =
+                to === 'human'
+                  ? 'owner has no team: your reply text is shown to the human directly, ' +
+                    'so no send is needed. To reach an agent, send to its id.'
+                  : 'owner has no team, so an address cannot be delivered from here; ' +
+                    'to reach an agent, send to its id instead of an address.';
+              return { status: 'rejected', code: 'no_team', reason, logged: false };
             }
             return service.dispatch({ to, content, from: ownerId });
           };

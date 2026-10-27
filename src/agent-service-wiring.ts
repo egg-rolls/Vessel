@@ -45,6 +45,14 @@ import type {
 } from '@vessel-agent/core';
 
 export interface AgentServiceWiringOptions {
+  /**
+   * 本机 node id：唯一的 nodeId 来源是 bootstrap 的 `resolveNodeIdentity()`，
+   * 装配层只做分发，不自己解析。
+   *
+   * 两个消费者共用这一个值：成员来源行（`<principal>@<node>:<team>`）与
+   * federation 发送端口。必填 —— federation 关闭时来源行仍要 node 段。
+   */
+  nodeId: string;
   tenantId: string;
   /** 全局 dataDir；snapshot 落 `<dataDir>/agents/<tenant>.json` */
   dataDir: string;
@@ -166,6 +174,9 @@ export function buildMemberRuntimeOptions(
     ...(options.session !== undefined ? { session: options.session } : {}),
     ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
     tenantId: options.tenantId,
+    // 来源行的 node 段：与 federation 端口同源（bootstrap 的 nodeIdentity），
+    // 只在装配期传一次，执行内核不自己解析。
+    nodeId: options.nodeId,
   };
 }
 
@@ -179,7 +190,11 @@ export function buildMemberRuntimeOptions(
  */
 async function createOrRestoreOwner(service: AgentService, ownerId: string): Promise<MemberStatus> {
   try {
-    return await service.create({ id: ownerId, role: 'single' });
+    // `name` 与 id 同值：来源行有名字就渲染名字、没名字才退回 id。不给 name 时
+    // main 靠「id 恰好叫 main」碰巧渲染正确；一旦 `agent.ownerId` 配成别的值，
+    // 渲染出的 principal 就是那个配置值（一个 id），与「有名字用名字」不一致。
+    // 注意：已存在的 main 回读时不补 name（见下方 catch），旧快照靠 id 兜底，结果相同。
+    return await service.create({ id: ownerId, name: ownerId, role: 'single' });
   } catch (error) {
     const duplicate =
       error instanceof AgentError &&

@@ -12,6 +12,9 @@
  */
 
 import type {
+  FederationAddressPlacement,
+  FederationAgentCandidate,
+  FederationLookupResult,
   FederationSendPort,
   FederationSendRequest,
   FederationSendResult,
@@ -23,13 +26,15 @@ import {
   resolveAddress,
 } from './federation-address';
 import {
+  FEDERATION_TEAM_INFO_MAX_LIMIT,
   FederationClientError,
   type FederationClientIo,
   type FederationPostInput,
   postFederation,
+  postFederationTeamInfo,
 } from './federation-client';
 import { resolveFederationOptions } from './federation-config';
-import type { LocalHumanTarget } from './team-human-delivery';
+import type { LocalHumanTarget, LocalMemberTarget } from './team-human-delivery';
 
 export interface FederationSendPortOptions {
   federation: FederationConfig;
@@ -39,6 +44,8 @@ export interface FederationSendPortOptions {
   env?: Record<string, string | undefined>;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** 裸名跨节点查找的**总**预算（缺省 2000ms）；不是每个 peer 各等一次。 */
+  lookupTimeoutMs?: number;
   now?: () => number;
   generateId?: () => string;
   /**
@@ -48,6 +55,13 @@ export interface FederationSendPortOptions {
    * 一切行为与没有这个特判完全一致（fail-safe）。
    */
   localHuman?: () => LocalHumanTarget | undefined;
+  /**
+   * 本机成员投递（0.27）：node 段命中本机的地址直接交给本机 Team 层。
+   *
+   * 与 `localHuman` 同形的晚绑定 getter，理由也一样：Team 服务在本端口之后才
+   * 构造。**不 import Team 层** —— port 只声明「怎么投」，不依赖谁实现。
+   */
+  localMember?: () => LocalMemberTarget | undefined;
   /**
    * 本机展示名（`node.json` / `host.node_name` / hostname 派生）。
    *
@@ -73,6 +87,9 @@ function errorCodeOf(error: unknown): string | undefined {
 /** 本机人类投递失败时的兜底 code（底层没有 code 才用）。 */
 const LOCAL_HUMAN_DELIVERY_FAILED = 'local_human_delivery_failed';
 
+/** 本机成员投递失败时的兜底 code（底层没有 code 才用）。 */
+const LOCAL_MEMBER_DELIVERY_FAILED = 'local_member_delivery_failed';
+
 /**
  * 构造跨节点发送端口。
  *
@@ -95,6 +112,98 @@ export function createFederationSendPort(options: FederationSendPortOptions): Fe
 
   return {
     nodeId: options.nodeId,
+    resolve(to: string): FederationAddressPlacement {
+      const placement = resolveAddress(to, {
+        nodeId: options.nodeId,
+        ...(options.nodeName !== undefined ? { name: options.nodeName } : {}),
+      });
+      switch (placement.kind) {
+        case 'local_human':
+          return placement.team_id === undefined
+            ? { kind: 'local_human' }
+            : { kind: 'local_human', team_id: placement.team_id };
+        case 'local_agent':
+          // 裸 agent 不是地址；Team 层在段数 1 时不会走到这里，防御性归为非法。
+          return {
+            kind: 'invalid',
+            code: 'federation_invalid_address',
+            reason: 'a bare agent name is not an address',
+          };
+        case 'local_member':
+          return {
+            kind: 'local_member',
+            principal: placement.principal,
+            team_id: placement.team_id,
+          };
+        case 'remote':
+          return { kind: 'remote' };
+        case 'invalid':
+          return { kind: 'invalid', code: placement.code, reason: placement.message };
+      }
+    },
+    async lookup(principal: string): Promise<FederationLookupResult> {
+      // 只查开了 out 方向且配了 url 的 peer；收件方向的对端不提供目录。
+      const peers = runtime.peers.filter(
+        (peer) =>
+          (peer.direction === 'out' || peer.direction === 'both') &&
+          peer.url !== undefined &&
+          peer.allowDirectory === true,
+      );
+      if (peers.length === 0) return { candidates: [], timedOut: false };
+
+      // **一个总预算打所有 peer**：不是每个 peer 各等一次超时。
+      const controller = new AbortController();
+      const deadline = setTimeout(() => controller.abort(), options.lookupTimeoutMs ?? 2000);
+      // 预算到点后仍要回收已完成的候选，所以用 allSettled 而不是 race。
+      try {
+        const settled = await Promise.allSettled(
+          peers.map((peer) =>
+            postFederationTeamInfo(
+              runtime,
+              {
+                to: { principal, node_id: peer.nodeId, team_id: peer.teamId },
+                members_limit: FEDERATION_TEAM_INFO_MAX_LIMIT,
+              },
+              { ...io, signal: controller.signal },
+            ),
+          ),
+        );
+
+        const candidates: FederationAgentCandidate[] = [];
+        const seen = new Set<string>();
+        let timedOut = false;
+        for (const [index, result] of settled.entries()) {
+          const peer = peers[index];
+          if (peer === undefined) continue;
+          if (result.status === 'rejected') {
+            timedOut = true;
+            continue;
+          }
+          if (result.value.status !== 'ok') {
+            // `federation_peer_unreachable` / 限流等：没查完，不是「不存在」。
+            if (result.value.code === 'federation_peer_unreachable') timedOut = true;
+            continue;
+          }
+          for (const member of result.value.team.members) {
+            if (member.name !== principal) continue;
+            // 用 peer 的 `teamId` 而不是响应里的 `team_id`：两者在配了 `localTeamId`
+            // 时不等，而发出去要能命中同一个 peer 配置，否则候选地址自己发不回去。
+            const address = `${principal}@${peer.nodeId}:${peer.teamId}`;
+            if (seen.has(address)) continue;
+            seen.add(address);
+            candidates.push({
+              address,
+              name: principal,
+              node_id: peer.nodeId,
+              team_id: peer.teamId,
+            });
+          }
+        }
+        return { candidates, timedOut };
+      } finally {
+        clearTimeout(deadline);
+      }
+    },
     async send(input: FederationSendRequest): Promise<FederationSendResult> {
       const localHuman = options.localHuman?.();
       /**
@@ -172,15 +281,43 @@ export function createFederationSendPort(options: FederationSendPortOptions): Fe
         }
       }
 
-      // 全形地址且 node 段指向本机的成员：这是本机投递，跨节点发出去会回环。
-      // 明确拒绝并给出可用形式，而不是交给 allowlist 谎报「没有 outbound peer」。
+      // 本机成员地址（2 段，或 3 段但 node 段命中本机）：就地投递，绝不出网。
+      // 走回调而不是 import Team 层，注入边界与 `localHuman` 同形。
       if (to.kind === 'local_member') {
+        const localMember = options.localMember?.();
+        if (localMember === undefined) {
+          return {
+            status: 'error',
+            code: LOCAL_MEMBER_DELIVERY_FAILED,
+            reason: 'local member delivery is not available on this node',
+          };
+        }
+        try {
+          const { message_id } = await localMember.deliver({
+            team_id: to.team_id,
+            to: to.principal,
+            from: input.from,
+            content: input.content,
+            ...(input.conversation_id !== undefined
+              ? { conversation_id: input.conversation_id }
+              : {}),
+          });
+          return { status: 'queued', message_id };
+        } catch (error) {
+          return {
+            status: 'error',
+            code: errorCodeOf(error) ?? LOCAL_MEMBER_DELIVERY_FAILED,
+            reason: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+
+      // 裸 agent 名不是可投递地址；`resolve()` 不会把它交到这里。
+      if (to.kind === 'local_agent') {
         return {
           status: 'rejected',
-          code: 'local_member_address',
-          reason:
-            `cannot federate to this node; send to "${to.principal}" directly ` +
-            '(members are addressed by id or name on the local node)',
+          code: 'federation_invalid_address',
+          reason: 'a bare agent name is not an address; use <agent>@<team>',
         };
       }
 
