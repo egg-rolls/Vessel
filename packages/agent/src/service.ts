@@ -712,10 +712,15 @@ export class AgentServiceImpl implements AgentService {
     if (input.teamId !== undefined || input.workspace !== undefined) {
       throw new AgentError('invalid_input', 'single agents must not bind a team');
     }
-    const name = optionalString(input.name);
-    if (name !== undefined && this.nameOccupied(name, undefined)) {
-      throw new AgentError('invalid_input', `duplicate member name: ${name}`);
-    }
+    // 显式裸名冲突时同样自动加后缀，与 createOne 一致：name 不是寻址主键。
+    // 注意 `main` 等启动路径只传 `{ id, role }`、不传 name，占不到这个分支。
+    const requested = optionalString(input.name);
+    const name =
+      requested === undefined
+        ? undefined
+        : this.nameOccupied(requested, undefined)
+          ? this.numberedNameFor(requested, undefined)
+          : requested;
     const now = this.now();
     const record: MemberRecord = {
       id,
