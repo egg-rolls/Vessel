@@ -5,7 +5,6 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
-import { hostname as osHostname } from 'node:os';
 import * as path from 'node:path';
 import {
   type AgentService,
@@ -1138,15 +1137,19 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(team.policy !== undefined ? { policy: team.policy } : {}),
     }));
     const defaultWorkspace = resolveDefaultTeamWorkspace(config, teamDeclarations, logger);
-    // 0.27：`human@<本机>:<team>` 的 send 直接写本机 Team 日志（异步委派，不阻塞 agent）。
+    // 0.27：发给人类的 send 直接写本机 Team 日志（异步委派，不阻塞 agent）。
     // Team 服务在 createAgentServiceWiring 之后才存在，这里用晚绑定 getter 回填。
     let localHuman: LocalHumanTarget | undefined;
     // 0.21 S8.2：federation 缺省启用；显式 `federation.enabled: false` 才不注入。
+    // 语义不只是「跨节点所以关掉就没」：本机人类投递也挂在这个端口上，关掉 federation
+    // 等于连「agent 找本机人类」一起关掉。见下方 localHuman 的构造。
     const federation =
       config.federation?.enabled !== false
         ? createFederationSendPort({
             federation: config.federation ?? {},
             nodeId,
+            // 展示名只用于把指向本机的 `to` 归一化，不参与向外的 from。
+            nodeName,
             localHuman: () => localHuman,
           })
         : undefined;
@@ -1183,11 +1186,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(federation !== undefined ? { federation } : {}),
     });
     // 0.27：回填本机人类投递端口（federation 端口的 getter 在此之后才读得到）。
-    // node 段同时认 node_id 与展示名：agent 是从 `[Message source]` 抄地址的，那里
-    // 渲染的是 hostname 派生的展示名，而本机真实身份是 node.json 的 UUID。
-    // 两个展示名来源不同（host 配置 / 文件 / hostname 派生），大小写也可能不同，
-    // 判定侧已做大小写不敏感比较。
-    localHuman = createTeamHumanDelivery(wiring.team, [nodeId, nodeName, osHostname()]);
+    localHuman = createTeamHumanDelivery(wiring.team);
     finalPluginHost.registerTool(wiring.tool);
 
     // S5：hub 目录投影 + team 归属 + 节点 token 控制面。

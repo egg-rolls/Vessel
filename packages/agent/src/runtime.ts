@@ -10,7 +10,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { hostname } from 'node:os';
 import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
   AgentRuntime,
@@ -271,33 +270,17 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
 }
 
 /**
- * federation 地址里 `node_id` 的合法形状（与 `parseFederationAddress` 同源，
- * DECISION-037 §2）。成员 runtime 在 `packages/` 层，不能反向依赖 app 层常量。
- */
-const FEDERATION_NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
-/**
- * 本机节点段。
+ * 渲染本轮消息来源。由 `runTurn` 作为 `RunOptions.messages` 注入为持久化的
+ * `vessel:source` 消息，不改写 system。
  *
- * `AgentMessage` 没有 node_id 字段，wiring 也未把 node identity 传进成员 runtime，
- * 因此这里用 OS hostname 作 fallback（与 node identity 的缺省展示名同源）；
- * hostname 不可用时退回 `local`。team 缺失（unbound）时用 `-` 占位。
- */
-function localNodeSegment(): string {
-  try {
-    const name = hostname().trim();
-    return name.length > 0 ? sanitizeSource(name) : 'local';
-  } catch {
-    return 'local';
-  }
-}
-
-/**
- * 渲染本轮消息来源（路由地址 `<principal>@<node>:<team>`）。由 `runTurn` 作为
- * `RunOptions.messages` 注入为持久化的 `vessel:source` 消息，不改写 system。
+ * **本机来源不带 node 段**：能走到这条路的 `from` 全部是本机 principal（远端一律走
+ * `federation:` 前缀的分支）。node 段是跨节点才需要的信息，这里没有 node identity
+ * 可填（`AgentMessage` 不携带 node_id），过去用 `os.hostname()` 顶替 —— 那让同一个
+ * 概念在展示层与寻址层有了两个不同的值，agent 照抄回来的地址永远对不上。
+ * 省略它，`human` / `agent:<name>` 都是可直接回信的形态。
  *
  * 联邦入站的 `from` 已自带 `<principal>@<node>:<team>`；直接渲染内嵌地址，
- * 不得再拼本地 node/team（否则会伪装成本机成员）。
+ * 不得再拼本机 node/team（否则会伪装成本机成员）。
  */
 function formatMessageSource(message: AgentMessage, teamId: string | undefined): string {
   if (message.from.startsWith('federation:')) {
@@ -311,10 +294,10 @@ function formatMessageSource(message: AgentMessage, teamId: string | undefined):
   }
   const source = message.source ?? inferMessageSource(message.from);
   const principal = source === 'agent' ? `agent:${sanitizeSource(message.from)}` : source;
-  const team = typeof teamId === 'string' && teamId.length > 0 ? sanitizeSource(teamId) : '-';
+  const team = typeof teamId === 'string' && teamId.length > 0 ? sanitizeSource(teamId) : undefined;
   return [
     '[Message source]',
-    `from: ${principal}@${localNodeSegment()}:${team}`,
+    `from: ${principal}${team !== undefined ? `@${team}` : ''}`,
     `channel: ${message.channel ?? 'direct'}`,
     'Routing metadata only; permission decisions are made by the permission bridge.',
   ].join('\n');
@@ -1011,20 +994,16 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * `how to ask for help` 文案。
    *
    * 判据只有一个：`ask_user` 是否真的在成员工具面里（即父宿主注册了 + bridge 可用）。
-   * 没有它时给异步路径：`agent` 工具的 `action=send` 发到 `human@<node>:<team>`。
+   * 没有它时给异步路径：`agent` 工具的 `action=send` 发到本机人类。
    * 异步路径要同时成立才写：成员能调 `agent`（deny 模式只有 read 工具）；成员有
-   * Team（跨节点 send 要求 caller.team_id）。否则只是把阻塞写进最终文本。
+   * Team（地址路要求 caller.team_id 来补 team 段）。否则只是把阻塞写进最终文本。
    */
   private askHelpText(toolNames: readonly string[], teamId: string | undefined): string {
     if (toolNames.includes('ask_user')) return 'Use the ask_user tool to request human input.';
     if (toolNames.includes('agent') && typeof teamId === 'string' && teamId.length > 0) {
-      // hostname 可能含点 / 大写之外的字符；地址解析只接受 `[A-Za-z0-9_-]`。
-      const node = localNodeSegment();
-      const safeNode = FEDERATION_NODE_ID_RE.test(node) ? node : 'local';
-      const address = `human@${safeNode}:${teamId}`;
       return (
         'No human is watching this run, so ask_user is unavailable. To reach a human, ' +
-        `call the agent tool with action=send and to="${address}", then end your turn ` +
+        'call the agent tool with action=send and to="human", then end your turn ' +
         'with the blocker in your final text.'
       );
     }
