@@ -105,7 +105,14 @@ export interface AgentServiceWiringOptions {
 export interface AgentServiceWiring {
   service: AgentService;
   tool: ToolDefinition;
-  owner: MemberStatus;
+  /**
+   * 派生 `main`（role `single`）成员，返回建好或复用的状态。
+   *
+   * 排序契约：**必须在父宿主 `registerTool(tool)` 之后调用**。成员 Body 在 spawn
+   * 时快照父宿主的工具列表（`packages/agent/src/runtime.ts` 的 `selectTools`），
+   * 装配期就 spawn 会让 `main` 永久缺 `agent` 工具。幂等：并发/重复调用只 create 一次。
+   */
+  startOwner: () => Promise<MemberStatus>;
   ownerId: string;
   /** 0.19 S3：Team 能力层（owner 端点 / gateway 注入 / agent 工具共用） */
   team: AgentTeamService;
@@ -188,7 +195,7 @@ async function createOrRestoreOwner(service: AgentService, ownerId: string): Pro
   }
 }
 
-/** 构造成员 runtime + AgentService，并以普通 create 建立 `main` */
+/** 构造成员 runtime + AgentService；`main` 由返回的 `startOwner()` 在工具注册后再派生 */
 export async function createAgentServiceWiring(
   options: AgentServiceWiringOptions,
 ): Promise<AgentServiceWiring> {
@@ -255,7 +262,19 @@ export async function createAgentServiceWiring(
     snapshot: { enabled: true },
   });
   serviceRef = service;
-  const owner = await createOrRestoreOwner(service, ownerId);
+  // 装配只组装，不 spawn：`main` 的 Body 会快照父宿主工具列表，调用方必须先
+  // `registerTool(tool)` 再调 `startOwner()`。并发/重复调用共享同一个 promise；
+  // 失败时清掉 memo，避免用缓存住的 rejection 毒化重试。
+  let ownerPromise: Promise<MemberStatus> | undefined;
+  const startOwner = (): Promise<MemberStatus> => {
+    if (ownerPromise === undefined) {
+      ownerPromise = createOrRestoreOwner(service, ownerId).catch((error: unknown) => {
+        ownerPromise = undefined;
+        throw error;
+      });
+    }
+    return ownerPromise;
+  };
   const team = createTeamService({
     tenantId: options.tenantId,
     agent: service,
@@ -273,7 +292,7 @@ export async function createAgentServiceWiring(
       ownerSessionId: options.sessionId,
       team,
     }),
-    owner,
+    startOwner,
     ownerId,
     team,
     teamStore,
