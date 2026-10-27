@@ -636,20 +636,26 @@ export class AgentServiceImpl implements AgentService {
           : resolveVisibility(input.visibility, 'private');
     }
 
-    // 冻结 / 上限 / 名称检查 / registry.add 之间不得有 await（F7）。
+    // 名称只由 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫。
+    // 名字表达的是职位 / 功能，同 Team 已有同名成员说明这个职能已经有人承担：
+    // 复用已存在的成员，不再造一个同职能的。create / hire 不发消息，所以
+    // 「返回 id 让调用方自己决定要不要 send」不会引入隐式动作。
+    //
+    // **必须排在冻结 / 上限闸门之前**：复用不创建成员、不占额度，上面两条闸门
+    // 限制的是「再塞一个进来」。放在后面的话，Team 满员时这条分支永远走不到，
+    // 调用方拿到 `team_full` 而看不到「这个职能已经有人做」——恰好是最需要它的
+    // 场景。冻结同理：冻结禁止新增，不禁止把已有的交回来。
+    if (name !== undefined) {
+      const existing = this.reusableByName(name, teamId);
+      if (existing !== undefined) return { ...this.statusFor(existing), reused: true };
+    }
+    // 冻结 / 上限 / registry.add 之间不得有 await（F7）。
+    // `reusableByName` 是同步的（`registry.findByName`），上面那次提前返回不破坏窗口。
     if (teamId !== undefined && this.teamBinder?.get(teamId)?.spawn_frozen === true) {
       throw new AgentError('team_frozen', `team_frozen: ${teamId}`);
     }
     if (teamId !== undefined && this.presentTeamCount(teamId) >= TEAM_MEMBER_LIMIT) {
       throw new AgentError('team_full', `team_full: ${teamId}`);
-    }
-    // 名称只由 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫。
-    // 名字表达的是职位 / 功能，同 Team 已有同名成员说明这个职能已经有人承担：
-    // 复用已存在的成员，不再造一个同职能的。create / hire 不发消息，所以
-    // 「返回 id 让调用方自己决定要不要 send」不会引入隐式动作。
-    if (name !== undefined) {
-      const existing = this.reusableByName(name, teamId);
-      if (existing !== undefined) return { ...this.statusFor(existing), reused: true };
     }
     const resolvedName = name !== undefined ? name : this.autoNameFor(spawnedBy, teamId);
 
