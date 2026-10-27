@@ -25,6 +25,7 @@ import {
   postFederation,
 } from './federation-client';
 import { resolveFederationOptions } from './federation-config';
+import { isLocalNodeName, type LocalHumanTarget } from './team-human-delivery';
 
 export interface FederationSendPortOptions {
   federation: FederationConfig;
@@ -36,7 +37,24 @@ export interface FederationSendPortOptions {
   timeoutMs?: number;
   now?: () => number;
   generateId?: () => string;
+  /**
+   * 本机人类投递（0.27）：`human@<本机 node>:<team>` 直接写本机 Team 日志。
+   *
+   * 晚绑定 getter：本机 Team 服务在本端口之后才构造。缺省 / 返回 `undefined` 时
+   * 一切行为与没有这个特判完全一致（fail-safe）。
+   */
+  localHuman?: () => LocalHumanTarget | undefined;
 }
+
+/** 错误对象上的稳定 code（TeamError / Node 错误都有）。 */
+function errorCodeOf(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && code !== '' ? code : undefined;
+}
+
+/** 本机人类投递失败时的兜底 code（底层没有 code 才用）。 */
+const LOCAL_HUMAN_DELIVERY_FAILED = 'local_human_delivery_failed';
 
 /**
  * 构造跨节点发送端口。
@@ -84,6 +102,37 @@ export function createFederationSendPort(options: FederationSendPortOptions): Fe
           code: 'federation_invalid',
           reason: 'federation from node_id does not match this node',
         };
+      }
+
+      // 0.27：`human@<本机>:<team>` 在本机完成投递，不查 allowlist、不发网络请求。
+      // 判定同时认 node_id 与展示名：agent 是从 `[Message source]`（hostname 段）
+      // 抄地址的。非 human principal 一律不走这条短路。
+      if (to.address.principal === 'human') {
+        const localHuman = options.localHuman?.();
+        if (localHuman !== undefined) {
+          const isLocal =
+            to.address.node_id === options.nodeId ||
+            isLocalNodeName(localHuman.nodeNames, to.address.node_id);
+          if (isLocal) {
+            try {
+              const { message_id } = await localHuman.deliver({
+                team_id: to.address.team_id,
+                from: input.from,
+                content: input.content,
+                ...(input.conversation_id !== undefined
+                  ? { conversation_id: input.conversation_id }
+                  : {}),
+              });
+              return { status: 'queued', message_id };
+            } catch (error) {
+              return {
+                status: 'error',
+                code: errorCodeOf(error) ?? LOCAL_HUMAN_DELIVERY_FAILED,
+                reason: error instanceof Error ? error.message : String(error),
+              };
+            }
+          }
+        }
       }
 
       const request: FederationPostInput = {
