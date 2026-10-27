@@ -233,6 +233,21 @@ export function resolveAddress(raw: string, local: ResolveNodeAliases): LocalAdd
  *
  * 大小写不敏感：`name` 常来自 hostname（Windows 全大写）或用户配置（混合大小写），
  * 两者不同源。`nodeId` 也一并比较，因为它才是 canonical 值。
+ *
+ * **只认本机的 id 与展示名**，对端没有名字可用 —— 这是刻意的，不是遗漏：
+ * - `federation.peers[]` 只有人写的 `nodeId` / `teamId` / `url` / `tokenEnv`，
+ *   **没有 `name` 字段**；加字段是新增实体，且解决不了根本问题 —— 对端名字应当由
+ *   配对流程登记（hub 侧已在存对端自报的 name，两个平面还没打通），不是人手抄。
+ * - 一旦这里比较**对端**的名字，「name 命中就算本机」会把发往对端的地址误判成本机
+ *   并就地投递 —— 这是本模块最危险的失效模式。何况 node 展示名本来就不是全局唯一
+ *   （两台机器可以同名），它没有资格单独作为寻址依据。
+ *
+ * 因此跨节点必须写 `node_id`。名字只在本机有意义。
+ *
+ * 已知限制：展示名每次启动现算（`config.host.nodeName` > `node.json` > hostname），
+ * 而 `node.json` **不存 name**，所以历史来源行里的旧名字匹配不上。这时行为是
+ * 明确报错（远端分支 → `federation_unknown_node`），不是错误投递。修法是让名字
+ * 稳定（`node.json` 落 name，或配对登记），属独立立项，不在这里兜底。
  */
 export function isLocalNodeSegment(segment: string, local: ResolveNodeAliases): boolean {
   const needle = segment.toLowerCase();
