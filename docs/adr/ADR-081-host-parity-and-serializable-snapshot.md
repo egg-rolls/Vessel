@@ -31,3 +31,19 @@ tags: [runtime, host, scheduler, resume, snapshot, tools, display]
 - **验证**：`packages/core/__tests__/runtime-host.test.ts`（per-run session、cancel reason、resume 排队、透传、mirror 字段、snapshot）、`scheduler.test.ts`（固定 runId、队列快照）、`durable-host.test.ts`（resume 并发 / 串行约束）、`tool-display.test.ts`（listTools 透出、LLM schema 不含 display）；`bun run typecheck`、`bunx @biomejs/biome ci .`。
 
 - **关联**：ADR-026（工具自描述）、ADR-037（模块化 runtime）、ADR-040（durable resume）、ADR-052（跨节点 team 调度）、ADR-054（RunExecution 与失败隔离）、ADR-058（统一工具执行管道）；`packages/core/src/kernel/runtime-host.ts`、`packages/core/src/kernel/scheduler.ts`、`packages/core/src/kernel/types.ts`、`packages/core/src/types/run.ts`、`packages/core/src/types/tool.ts`。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- per-run session 的消费者是 `admit` → `scheduler.submit` → `runtime.run(input, bodyId, opts)`；
+  `RunOptions.sessionId` 语义不变（= body id），单 agent 的 `AgentRuntime.run` 仍以显式参数为准。
+- 取消链路是 `runs.cancel(runId)` → `scheduler.cancel(runId, reason)` → `AbortSignal.reason`；
+  reason 语义不变（`shutdown` / `timeout` → interrupted checkpoint，`user` → cancelled），
+  执行面主语是 Scheduler 与 body。
+- 可序列化视图在 `Scheduler.snapshot?()`（`RunSnapshot`：`runId` / `agentId` / `sessionId` /
+  `state` / `queuePosition`）与 `runs.list|get`；`HostSnapshot` / `AgentSnapshot` /
+  `mirror_of_run_id` 没有生产者。
+- 决策 3 的结论继续有效：resume 受并发上限与 body 串行约束，执行者是 `AgentService.resume` +
+  tenant Scheduler。

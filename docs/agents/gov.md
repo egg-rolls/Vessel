@@ -26,9 +26,9 @@ applies_to: [N, M]
 
 ## 门禁
 
-- 改完代码：`bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .` 三个必须过。
+- 改完代码：`bun run typecheck` + `bunx @biomejs/biome ci .` 必须过。仓库无自动化测试套件；运行时正确性只有一条端到端烟测 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
 - 收口还要求：`check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run`。
-- 纯文档改动至少跑 `check-docs` 与 `version --check`；不跑全量测试 / 构建。
+- 纯文档改动至少跑 `check-docs` 与 `version --check`；不跑全量 typecheck / 构建。
 
 ## 发布与 CI
 

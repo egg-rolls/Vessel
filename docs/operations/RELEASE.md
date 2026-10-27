@@ -5,12 +5,12 @@
 > **0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布**；不发布二进制（ADR-006 继续有效）；只发 npm 库包 + GitHub Release。
 > **0.5 / 0.11 / 0.12 / 0.13 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
 > 发布仍等 1.0.0 之后。
-> **0.10 发布前置**：除发布干跑外，新增安装解析 smoke（16 个子包 + 根 tarball）；
+> **0.10 发布前置**：除发布干跑外，新增安装解析 smoke（17 个子包 + 根 tarball）；
 > **必须先构建 Web 控制台**（`apps/web` 的 `npm ci` + `npm run build`）——`dist/` 被
 > `.gitignore` 忽略，根 tarball 的 `files` 虽然包含 `apps/web/dist`，不构建就会发出缺少
 > Web 控制台的根包。smoke 会断言根 tarball 含 `apps/web/dist/index.html`。
-> **0.11 包 scope**：16 个可发布子包为 **`@vessel-agent/*`**（6 个库包 + 10 个插件包）；`apps/web` 是 private，不发布。
-> 根 CLI 的发布名仍是 **`vessel-agent`**（bin 仍是 `vessel`），必须在 16 个子包之后发布。
+> **0.11 包 scope**：17 个可发布子包为 **`@vessel-agent/*`**（6 个库包 + 11 个插件包）；`apps/web` 是 private，不发布。
+> 根 CLI 的发布名仍是 **`vessel-agent`**（bin 仍是 `vessel`），必须在 17 个子包之后发布。
 > 发布账号需要对 `vessel-agent` npm 组织有写权限。
 
 ## 1. 版本语义
@@ -22,18 +22,19 @@
 ## 2. 发布前置条件
 
 - [ ] 目标改动已合并到 `release/<major>.<minor>`。
-- [ ] `bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .` 全绿。
+- [ ] `bun run typecheck` / `bunx @biomejs/biome ci .` 全绿，端到端烟测
+      `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"` exit 0（仓库无自动化测试套件）。
 - [ ] `cd apps/web && npm ci && npm run build` 成功，且 `apps/web/dist/index.html` 存在。
       这一步必须早于 `release-dry-run` / `smoke-install`：`dist/` 被 `.gitignore` 忽略，
       不构建时根 tarball 会缺少 Web 控制台（smoke 会直接失败）。
 - [ ] `CHANGELOG.md` 已更新（Unreleased → `## [<version>] - YYYY-MM-DD`）；0.2 未发布，其条目已并入 `## [0.3.0]`。
-- [ ] 根 `package.json` 与所有可发布 workspace `package.json` 版本一致：根包 + **16 个可发布子包**
+- [ ] 根 `package.json` 与所有可发布 workspace `package.json` 版本一致：根包 + **17 个可发布子包**
       （`@vessel-agent/core`、`@vessel-agent/permission`、`@vessel-agent/config`、`@vessel-agent/agent`、
       `@vessel-agent/serve`、`@vessel-agent/tui`
-      + 10 个插件包：`basic-tools`、`mcp-client`、`evals`、`feishu`、`hook-logging`、
+      + 11 个插件包：`basic-tools`、`doc-subscription`、`mcp-client`、`evals`、`feishu`、`hook-logging`、
       `provider-anthropic`、`provider-openai`、`guardrail-pii`、`redact-secrets`、`tool-policy`）。
 - [ ] 根包 `package.json` 的 `name` 为 **`vessel-agent`**（bin 仍是 `vessel`）。
-- [ ] 16 个可发布子包的 `name` 以 **`@vessel-agent/`** 开头，包间依赖均为 `@vessel-agent/*` 的精确版本；不得残留旧 `@vessel` scope（历史 ADR / CHANGELOG 除外）。
+- [ ] 17 个可发布子包的 `name` 以 **`@vessel-agent/`** 开头，包间依赖均为 `@vessel-agent/*` 的精确版本；不得残留旧 `@vessel` scope（历史 ADR / CHANGELOG 除外）。
 - [ ] `release/*` 已合并到 `main`，且 `main` CI 绿。
 - [ ] 仓库 Secrets 已配置 `NPM_TOKEN`。
 - [ ] 发布干跑通过：`bun run scripts/release-dry-run.ts`（见 §2.1）。
@@ -69,7 +70,7 @@ bun run scripts/release-dry-run.ts
 3. **ext 在 bump 之后用普通 `bun install` 刷新 `bun.lock`（不要 `--frozen-lockfile`）**，
    确保 lock 记录 0.5.0；
 4. gov 写 `CHANGELOG.md` 的 `## [0.5.0]`；
-5. 复跑 `version --check`、`release-dry-run`、三件套与 qa 最终门禁；
+5. 复跑 `version --check`、`release-dry-run`、typecheck + biome 与 qa 最终门禁；
 6. 仍然**不 tag、不 push、不 publish、不合并 `main`**。
 
 若干跑报 `internal_dependency_version`，说明 `bun.lock` 与 manifest 版本不一致
@@ -87,9 +88,9 @@ bun run scripts/smoke-install.ts --force  # Windows 上强制尝试（默认跳�
 - **前置**：`apps/web/dist/index.html` 必须存在（先 `cd apps/web && npm ci && npm run build`）。
   脚本在打包根包前检查该文件，并断言根 tarball 的文件清单包含
   `apps/web/dist/index.html`；缺失时 smoke 失败（exit 1），不会静默发出缺 Web 的包。
-- 对全部 16 个可发布子包与根包执行 `npm pack` 到 OS 临时目录。
+- 对全部可发布子包与根包执行 `npm pack` 到 OS 临时目录。
 - 临时工程写入与 `overrides` 完全一致的 `file:` 依赖，`npm install --no-save`
-  根 tarball + 16 个子包；根包对 `@vessel-agent/*` 的精确版本依赖全部指向本地 tarball，
+  根 tarball + 全部子包；根包对 `@vessel-agent/*` 的精确版本依赖全部指向本地 tarball，
   因此**不需要这些版本已经发布到 npm**。
 - 运行 `vessel --version`（等于根版本）与 `VESSEL_MOCK=1 vessel --tools`
   （断言 `bash` / `read` / `edit`），不需要 API Key。
@@ -99,8 +100,8 @@ bun run scripts/smoke-install.ts --force  # Windows 上强制尝试（默认跳�
 - **不做**：不创建 tag、不 push、不 `npm publish`、不上传 artifact。
 
 发布顺序在 `.github/workflows/release.yml` 中固定为：
-**先 16 个子包**（core → permission → config → agent → serve → tui → plugins），
-**最后根 `vessel-agent`**（它依赖前 16 个包的精确版本）。
+**先 17 个子包**（core → permission → config → agent → serve → tui → plugins），
+**最后根 `vessel-agent`**（它依赖前 17 个包的精确版本）。
 
 ## 2.3 0.12 运行形态与发布前确认
 
@@ -178,14 +179,14 @@ git push origin v0.5.0
    **任一步失败即停止，不会进入 publish。**
 2. 复跑 quality。
 3. `npm publish`：`publish-npm` 是独立 checkout，会再次构建 Web 控制台；
-   **先 16 个子包**
+   **先 17 个子包**
    （core → permission → config → agent → serve → tui → plugins），
    **最后根 `vessel-agent`**（`--provenance --access public`，稳定版 `latest` / 预发布 `beta`）。
    根包名不是 `vessel-agent` 时 workflow fail-fast。
 4. 创建 GitHub Release：自动 notes + `latest.json`（`assets: {}`）。
 5. **不构建二进制、不产出 sha256**。
 
-发布顺序：`verify → quality → publish-npm（16 个子包 → 根 vessel-agent）→ github-release`。
+发布顺序：`verify → quality → publish-npm（17 个子包 → 根 vessel-agent）→ github-release`。
 
 发布后用户侧：`vessel update --check` 读取 `latest.json`，只提示版本与安装命令；0.5.0 不做下载/自替换。
 
@@ -204,7 +205,7 @@ git push origin v0.5.0-beta.1
 
 ```bash
 git switch -c hotfix/<slug> main
-# 修复 + 测试
+# 修复 + typecheck / biome
 git commit -F <personal>/docs/tmp/hotfix-msg.txt
 # 1 合并到 main 与 release/0.1
 git tag -a v0.3.1 -m "v0.3.1"

@@ -83,7 +83,7 @@ interface AgentRuntimeOptions {
   limitChecker?: LimitChecker;  // 可选注入；缺省 new MemoryLimitChecker()
   session?: SessionBackend;
   runStore?: RunStore;          // 可选注入；缺省不写 checkpoint
-  agentId?: string;             // Host 模式用于 checkpoint.agent_id
+  agentId?: string;             // 写入 checkpoint.agent_id（body 所属 agent）
   systemPrompt?: string;
   permission?: RuntimePermissionConfig;
 }
@@ -93,5 +93,5 @@ interface AgentRuntimeOptions {
 
 run 级状态收敛在 `RunExecution`（`runId` / `sessionId` / `branch` / `createdAt` / `startedAt` / `stats` / `context`，从根入口导出）。`run()` / `resume()` 共用同一个 `activeRun` 槽位，在第一个 await 之前同步占位；已有 active run 时立即抛 `RunAlreadyRunningError`（`code: 'run_already_running'`，继承 `RunResumeError`）。公开签名与 `AgentRuntimeOptions` 不变。
 
-Kernel 侧：`RunnableAgent.resume?(runId, opts?)` 返回 `RunHandle`；`RuntimeHost.resume?(runId)` 同样恢复，但**不经 Scheduler**（保持 run_id 不变）。resume 只接受 `running` / `interrupted`；同一 run 并发恢复首个成功，后续 `run_already_running`（ADR-040）。
+Kernel 侧：`RunnableAgent.resume?(runId, opts?)` 返回 `RunHandle`。准入侧 `AgentService.resume(runId)` 加载 checkpoint、解析 agent / body，再用 `ScheduledTask.runId` 固定 run id 经 Scheduler 排队——resume 没有绕过调度的旁路。resume 只接受 `running` / `interrupted`；同一 run 并发恢复首个成功，后续 `run_already_running`（ADR-040 / ADR-097）。
 

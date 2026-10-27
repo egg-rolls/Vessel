@@ -76,3 +76,16 @@ tags: [agent, service, package, lifecycle, queue, snapshot, owner, permission, c
 
 - **权限 bridge**：唯一活路径是 `InProcessMemberRuntime.attachBridge`；`AgentServiceOptions.permissionBridge` / `PermissionBridge` / `AgentService.requestPermission` 已删除。`notePermissionState` 仍用于当前 Body 的 `waiting_permission` 状态回调。Team 成员强制 bridge，只有 human 或 team policy 的 `deny-after` 能应答。
 - **S4 additive**：`conversation_id` 贯穿 `dispatch` / `send` / Team `post` / 成员 send / `reply` / rotate；预算状态由 `ConversationBudget` 写入 `<dataDir>/conversations/<tenant>.json`；Team 预算来自 `teams[].policy.budget`。canonical 新增 `teams.budget`（write，不进 control scope），总数为 48。详见 [ADR-079](ADR-079-permission-lifecycle-persistence.md) 与 [ADR-091](ADR-091-agent-body-and-presence.md) 的 S4 Addendum。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- 所有 agent 只经同一个 `AgentService.admit` 准入：`main` 用普通 create 路径（role `single`、
+  owner=self、无 Team），与其它 agent 同一条准入、同一个 tenant Scheduler；`attachOwner` /
+  `externalOwners` / `takeMessages` 与父 turn 排空的 owner 外部队列不在模型内。
+- 成员事件去掉 `agent.turn.*` / `agent.reply.posted`，执行生命周期统一 `run.*` 并带 `agent_id` +
+  `session_id`。
+- 快照持久化是 v4：`bodies[]` 是唯一真相，`primary_body_id` 表示缺省投递目标；`current_body` /
+  `body_history` 仅作旧数据兼容视图，不再是「当前 Body」的唯一指针。

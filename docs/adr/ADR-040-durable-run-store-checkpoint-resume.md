@@ -26,3 +26,22 @@ related: [25, 32, 37]
 - **后果**：本机崩溃后可恢复；每次 checkpoint 有 IO 成本；`MemoryRunStore` 进程退出即丢。resume 绕过 Scheduler 是刻意取舍：恢复保持原 run_id、不受全局并发上限约束，调用方需自行避免与调度器的并发争用。
 - **已知限制（qa C1-09b / DECISION-008 §8 A-2）**：resume 并发守卫仅为 **per-Host / per-store-instance**；多 Host 共享同一 `FileRunStore`、或跨进程同时恢复同一 run，不在 0.3 的协调范围，属部署错误。
 - **关联**：ADR-025（参考实现先例）、ADR-032（事件回放）、ADR-037、DECISION-008 §4.1 / §8 Addendum A / §9.2。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- `RuntimeHost` / `InProcessRuntimeHost` / `AgentHandle` 不在执行路径上：每个 tenant 一个
+  `InProcessScheduler`，`AgentService` 注入它；run 只经 `scheduler.submit` 的 executor 调每 body
+  的 `AgentRuntime.run`。
+- 串行键是 `serialKey = body/session`（`perBodySerial`，默认 true）：同一 body 同时一个 running，
+  不同 body 并发；`maxConcurrency` 默认无上限，只有显式正整数才限制。
+- per-run session 由 body 决定（`session_id ≡ body_id`）；`ScheduledTask.sessionId` 仍是该 body，
+  没有 Host 级成员注册表 / spawn / `AgentHandle` 这一层。
+- 以 Host 为执行面的子系统（渠道 runner、workflow、resume 路由）经 `AgentService.admit` 或直接
+  `scheduler.submit`；没有第二套 host 生命周期，也没有 Host 合成的 `agent.run.*` /
+  `mirror_of_run_id`。
+- resume 一律经 Scheduler 排队：`AgentService.resume(runId)` 加载 checkpoint → 解析 agent / body
+  → 确保 body → `scheduler.submit`（`ScheduledTask.runId` 固定 run id）；没有绕过 Scheduler 的
+  resume 路径，也没有「resume 不受并发上限约束」的行为。

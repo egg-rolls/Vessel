@@ -40,3 +40,14 @@ tags: [permission, interaction, persistence, gateway, web, tui, lifecycle]
 - **ask 与权限同一生命周期**：ask 也持久化到 interaction store（`kind: 'ask'` + `answers`），不再使用内存 `pendingAsks`。重复应答返回 `duplicate: true`，不同答案返回 `conflict`，已 orphaned / 重启后返回 `run_ended`，未知 requestId 仍是 `not_found`。
 - **成员 pending 的终态清理**：`agent.turn.completed|failed|cancelled` 与 `agent.closed` 按 `agent_id + session_id` 把该成员 pending（permission + ask）转为 `orphaned` 并持久化；不按成员事件的 `run_id` 匹配（成员 ID 与 core run id 不同源）。root run 终态仍按 `run_id` 清理，两套匹配键并存。
 - **hold / deny-after**：默认 `hold`，不建定时器；pending 在 gateway 持久化，重启后 `orphaned`，迟到应答 `run_ended`。只有 team policy 显式 `permission.unattended: 'deny-after'` + 必填 `deny_after_seconds` 才在该成员的 bridge 内建一次性 deadline；到期以 `answered_by: 'policy'` / `answered_via: 'policy'` / `policy: 'deny_after'` 应答（permission deny，ask 空 answers）。**没有 allow-after，也没有全局 TTL**；core `timeoutMs` 仍为 undefined，ADR-079 的默认无限等待不变。没有 `parentEvents`（无人端）的 team 成员走既有 ask → deny，不挂起、不创建 deadline。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- pending（permission + ask）的终态清理由 `run.completed|failed|cancelled` 驱动，按 `run_id` 匹配
+  （`packages/serve/src/interactions-registry.ts:376`）；`agent.closed` 仍按 `agent_id` 清理该 agent
+  全部 body 的 pending。
+- 因此不需要「成员事件 `run_id` 与 core run id 不同源」这一例外：body 的 run 就是 core run，
+  `run_id` 全局唯一，按 `run_id` 匹配即可。

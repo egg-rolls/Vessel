@@ -32,3 +32,14 @@ tags: [event, gateway, tenant, multi-tenant, hub, breaking]
 - **后果**：事件面从一个“聚合流 + 桥”收敛为一个 fan-in 组件；新增 tenant 只需 `register`，不再改 cli 的桥。代价是 0.18 的嵌入方 API breaking（`GatewayOptions.events` → `hub`），测试需要构造 hub；hub 成为事件链路的单点，必须保证订阅者异常隔离与 `map` 不抛（已分别隔离 / 降级为跳过该事件）。`SharedEvents` 相关文档与测试同步删除。
 
 - **关联**：ADR-007（流式=事件订阅）、ADR-016（流式增量事件）、ADR-029（交互暂停事件流）、ADR-036（Gateway 协议）、ADR-048（统一 RPC 方法表）、ADR-067（去重键范围）、ADR-079（权限生命周期 / 应答投递）、ADR-082（ask 内联）；`packages/serve/src/tenant-event-hub.ts`、`packages/serve/src/gateway.ts`、`packages/serve/src/run-engine.ts`、`src/cli.ts`、`src/bootstrap.ts`、`src/tenant-runtime-factory.ts`、`src/shutdown-sequence.ts`。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- run 生命周期由 tenant `InProcessScheduler` 与 `runStore` checkpoint 承载：`runs.list|get` 的 live
+  视图来自 `Scheduler.snapshot()`，durable 视图来自 checkpoint；`RunEngine` / `RunRecord` 不构成
+  run 口径。
+- hub 的 fan-in 契约不变（`register` / `streamFor` / `subscribe` / `subscribeSequenced` / `since` /
+  `gapFor`，且不暴露 `publish`）；raw 订阅者由 interactions registry 与 runs 视图接管。

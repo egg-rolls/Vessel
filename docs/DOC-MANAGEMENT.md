@@ -154,6 +154,8 @@ docs/
 
 **机器检索：** `bun run scripts/docs-find.ts --goal "<目标>" [--paths <路径>] [--json]`；读 top 3 + `AGENTS.md`；退出码 1 表示无命中，必须回落 `AGENTS.md` 硬规则。
 
+扫描范围：`docs/architecture`、`docs/agents`（共享侧），加上最近祖先目录下的 `docs/constitution`、`docs/lessons`、`docs/roles`（个人侧；个人侧根目录跑时输出 `../../docs/...`，找不到时静默跳过，CI 与单独 clone 不受影响）。**每篇规则文档都必须有非空 `triggers`**，否则永远不被召回。
+
 **溯源（要知道为什么 / 当时落了什么）：**
 1. `docs/adr/README.md` — 先找约束
 2. `docs/versions/INDEX.md` — 再找版本快照

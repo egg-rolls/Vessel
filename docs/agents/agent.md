@@ -12,9 +12,9 @@ applies_to: [N, M]
 
 ## AgentService 唯一
 
-- 成员能力只由 `packages/agent` 实现；权限 bridge 唯一活路径是 `InProcessMemberRuntime.attachBridge`，不得恢复第二套桥；`packages/core` 不出现 member / owner / visibility / team 概念（ADR-088 / ADR-091）。
+- 成员能力只由 `packages/agent` 实现；权限 bridge 只有一条活路径（body 创建 / 恢复时挂桥），不得恢复第二套桥；`packages/core` 不出现 member / owner / visibility / team 概念（ADR-088 / ADR-091）。
 - 内置 `agent` 工具是唯一模型 schema：single 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`（single 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`。工具调用者的 owner / parent 固定，模型不能伪造。
-- 持久化 `role`：`single`（owner=self，无 Team）、`member`（owner=self，Team 必需）、`temporary`（owner=雇佣者，Team 可选）。`create` → member，`hire` → temporary；v3 快照读取 v2 时按旧 owner 推断 role。
+- 持久化 `role`：`single`（owner=self，无 Team）、`member`（owner=self，Team 必需）、`temporary`（owner=雇佣者，Team 可选）。`create` → member，`hire` → temporary；读取 v1 / v2 快照时按旧 owner 推断 role。
 - 不得新增 `wait` / `inbox` / `status` / `cancel`；等待语义是结束这一轮、回复作为新 turn 到达。
 ## 派生：peer / contractor
 
@@ -39,14 +39,14 @@ applies_to: [N, M]
 
 ## session / Body
 
-- `create` 创建的成员初始 `session_id === id`；`rotate` 换活 Body，旧 Body 进 `body_history`。
-- 状态机：`created|idle|running|waiting_permission|completed|failed|cancelled|closed`；`stale` 只读兼容、不得再写入；重启后非 `left` 成员为 `idle + presence='gone'`（ADR-091/092）。
+- 一个 agent 可同时有多个 live body（`body_id ≡ session_id`，每 agent ≤20，空闲 24h 自动 retire）；`primary_body_id` 是缺省投递目标；`rotate` 只退休 primary body，其它 body 与其在途 run 不受影响。快照 `version: 4`：`bodies[]` 是唯一真相，`current_body` / `body_history` 只读兼容。
+- 状态机：`created|idle|running|waiting_permission|completed|failed|cancelled|closed`；`stale` 只读兼容、不得再写入；重启后非 `left` 成员为 `idle + presence='gone'`（ADR-091/092/097）。
 
 ## 投递与 Team
 
-- `dispatch` 是统一投递入口：live / rotating 入队，gone 先 single-flight resume 再入队；不得在每个入口重写状态检查或并发 spawn。fork 只在 `gone + resume` 失败后按 policy / 显式 `allow_fork` 发生；rotate 失败保持旧身体（ADR-091/092）。
+- 准入唯一：`dispatch` 与 strict `send` 共用同一条 `admit`（可投性检查 → 目标 body mailbox → `scheduler.submit`）；live / rotating 入队，gone 先 single-flight resume 再入队；不得在每个入口重写状态检查或并发 spawn。fork 只在 `gone + resume` 失败后按 policy / 显式 `allow_fork` 发生；rotate 失败保持旧 primary（ADR-091/092/097）。
 - close 的审批在权限层完成：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接放行；成员关闭 peer 必须经 bridge 由人类审批；root owner 记录与跨 Team contractor 必须拒绝；无 bridge 时 ask 必须 fail closed。owner close 级联自己的 private contractor，team 可见 contractor 保留。
-- Team 日志不是队列：无 `@` 的 post / reply / system 绝不产生 run；`@` 必须先写日志再 dispatch；`TeamService` 是唯一写入点。
+- Team 日志不是队列：无 `@` 的 post / reply / system 绝不产生 run；`@` 必须先写日志再逐条 `admit`；`TeamService` 是唯一写入点，reply 由 `run.completed.output` 驱动、失败 / 取消写 `system` 条目。
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；team-scoped token 只能访问自己的 `team_id`，不匹配 `not_found`。
 - `teams.create` 仅 human / admin；`archive` 拒绝 present 成员（`team_not_empty`），不提供隐式 hard delete。
 
@@ -56,5 +56,5 @@ applies_to: [N, M]
 
 ## 指针
 
-- RPC 形状：[gateway-rpc.md](../architecture/gateway-rpc.md#agent-lifecycle)；配置字段：[CONFIG.md](../operations/CONFIG.md)；决策：[ADR-095](../adr/ADR-095-agent-spawn-and-contractors.md)。
+- RPC 形状：[gateway-rpc.md](../architecture/gateway-rpc.md#agent-lifecycle)；配置字段：[CONFIG.md](../operations/CONFIG.md)；决策：[ADR-095](../adr/ADR-095-agent-spawn-and-contractors.md) · [ADR-097](../adr/ADR-097-unified-agent-body-model.md)。
 - 权限默认无限 / only-human 见 AGENTS.md 硬安全规则；本文件不复述。

@@ -18,3 +18,19 @@ related: [12, 17, 30, 36, 37, 40]
 - **备选**：(a) 新增 metrics 事件或第 10 个接口——违反 ADR-012/017 的克制原则；(b) metrics 持久化 / 跨 Host 合并——0.4 只需要进程内快照；(c) 自动 prune 调度器——引入新的生命周期与并发问题；(d) gateway 无界缓冲——慢客户端会导致内存无界增长。均不取。
 - **后果**：可观测性不增加扩展面；0.3 默认行为不变（事件历史缺省仍 1000）。metrics 是瞬时值；`runs.cancelled` 保持 0，取消计入 failed；`completed` 可能大于 `started`（resume 不计 started）。事件上限会丢旧事件（回放应使用 `FileEventStore`）；prune 需要显式调用；多 Host 不合并；gateway 缓冲与 core 事件历史相互独立。gateway 慢客户端会收到 `gap`，极端情况下被硬断开（4 MiB），这是刻意的背压。
 - **关联**：ADR-030、ADR-036、ADR-037、ADR-040；DECISION-009 §5.4 / §5.7 / §9 / §10.2 / §10.3 / §11.4 / §12.1。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- `RuntimeHost` / `InProcessRuntimeHost` / `AgentHandle` 不在执行路径上：每个 tenant 一个
+  `InProcessScheduler`，`AgentService` 注入它；run 只经 `scheduler.submit` 的 executor 调每 body
+  的 `AgentRuntime.run`。
+- 串行键是 `serialKey = body/session`（`perBodySerial`，默认 true）：同一 body 同时一个 running，
+  不同 body 并发；`maxConcurrency` 默认无上限，只有显式正整数才限制。
+- per-run session 由 body 决定（`session_id ≡ body_id`）；`ScheduledTask.sessionId` 仍是该 body，
+  没有 Host 级成员注册表 / spawn / `AgentHandle` 这一层。
+- 以 Host 为执行面的子系统（渠道 runner、workflow、resume 路由）经 `AgentService.admit` 或直接
+  `scheduler.submit`；没有第二套 host 生命周期，也没有 Host 合成的 `agent.run.*` /
+  `mirror_of_run_id`。

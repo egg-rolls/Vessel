@@ -24,3 +24,12 @@ related: [10, 12, 30, 34, 37, 39, 40]
 - **备选**：(a) 放进 core——把编排语义与第二套扩展面塞进冻结区，违反 ADR-012 / ADR-034 / ADR-037；(b) 注册 `run_workflow` 工具——模型可触发任意路径定义，权限边界不清晰；(c) 新写一个调度器——与 `Scheduler` / `RuntimeHost` 重复；(d) 引入表达式引擎——扩大攻击面与依赖面。均不取。
 - **后果**：core 零改动；workflow 默认关闭、显式 opt-in；不增加默认工具。resume 可能重复副作用，文档与 TUI/gateway 提示必须如实写明。单 agent 回退时并行退化为串行；workflow 定义是用户文件，不提供可视化编辑器。0.4 `workflow cancel` 只支持同进程；文件级取消标记留到 0.5。0.4 不做跨机器编排。**已知限制**：`type: tool` 直接调用 handler，绕过 runtime 的 guardrail / hook；需要 guardrail 的步骤必须用 `type: agent`。agent step 共享 Host 成员的 session，workflow 级会话隔离不在 0.4 承诺。
 - **关联**：ADR-010、ADR-012、ADR-030、ADR-034、ADR-037、ADR-039、ADR-040；DECISION-009 §5.1 / §5.5 / §5.6 / §5.7 / §5.8 / §9 / §11.1 / §11.4 / §12.1 / §12.4 / §13.1。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- `scheduler` 的串行键是 body/session（`perBodySerial`，默认 true），没有 `perAgentSerial`。
+- workflow 插件本身已由 [ADR-090](ADR-090-remove-workflow-plugin.md) supersede；上文其余 Host
+  叙述不再代表当前实现。

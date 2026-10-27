@@ -60,6 +60,7 @@ interface PluginHost {
 ```
 plugins/
 ├── tools/basic-tools/       package.json + src/index.ts   → bash / read / edit
+├── context/doc-subscription/→ @vessel-agent/doc-subscription（subscribe 工具 + BeforeLlm hook）
 ├── mcp/client/              → MCP client（工厂式；配置 mcp_servers 才构造）
 ├── evals/harness/           → @vessel-agent/evals（工厂式；asm 直接调用库，不注册工具）
 ├── im/feishu/               → @vessel-agent/feishu（工厂式；--feishu 才启动）
@@ -70,7 +71,7 @@ plugins/
 └── provider/{openai,anthropic}/
 ```
 
-共 **10 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `mcp-client`、`evals` 与 `feishu`。MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。
+共 **11 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `mcp-client`、`evals` 与 `feishu`。MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。
 
 `PluginLoader` 的接口：
 

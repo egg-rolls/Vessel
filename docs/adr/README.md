@@ -111,6 +111,7 @@
 | 094 | 跨节点 federation（team ↔ team） | accepted | 2026-10-23 | federation, cross-node, team, allowlist, hop, tls, token | [ADR-094-federation-team-to-team.md](ADR-094-federation-team-to-team.md) |
 | 095 | 0.27 成员再派生：peer / contractor、冻结与 close 审批 | accepted | 2026-10-25 | agent, spawn, peer, contractor, team, owner, freeze, permission, rpc, audit | [ADR-095-agent-spawn-and-contractors.md](ADR-095-agent-spawn-and-contractors.md) |
 | 096 | Agent 持久化 role 与临时/成员转换 | accepted | 2026-10-26 | agent, role, single, member, temporary, owner, conversion, snapshot | [ADR-096-agent-role-and-conversion.md](ADR-096-agent-role-and-conversion.md) |
+| 097 | 0.27 统一 agent/body 模型：单执行路径与多 Body | accepted | 2026-10-26 | agent, body, scheduler, run, session, snapshot | [ADR-097-unified-agent-body-model.md](ADR-097-unified-agent-body-model.md) |
 
 ## 编写约定
 

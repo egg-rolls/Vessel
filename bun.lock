@@ -6,12 +6,12 @@
       "name": "vessel-agent",
       "dependencies": {
         "@promptctl/rich-js": "^0.10.0",
-        "@vessel-agent/agent": "0.24.0",
-        "@vessel-agent/config": "0.24.0",
-        "@vessel-agent/core": "0.24.0",
-        "@vessel-agent/permission": "0.24.0",
-        "@vessel-agent/serve": "0.24.0",
-        "@vessel-agent/tui": "0.24.0",
+        "@vessel-agent/agent": "0.26.2",
+        "@vessel-agent/config": "0.26.2",
+        "@vessel-agent/core": "0.26.2",
+        "@vessel-agent/permission": "0.26.2",
+        "@vessel-agent/serve": "0.26.2",
+        "@vessel-agent/tui": "0.26.2",
         "yaml": "^2.9.0",
       },
       "devDependencies": {
@@ -25,10 +25,10 @@
     },
     "packages/agent": {
       "name": "@vessel-agent/agent",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
-        "@vessel-agent/config": "0.24.0",
-        "@vessel-agent/core": "0.24.0",
+        "@vessel-agent/config": "0.26.2",
+        "@vessel-agent/core": "0.26.2",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
@@ -36,9 +36,9 @@
     },
     "packages/config": {
       "name": "@vessel-agent/config",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
-        "@vessel-agent/core": "0.24.0",
+        "@vessel-agent/core": "0.26.2",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
@@ -46,14 +46,14 @@
     },
     "packages/core": {
       "name": "@vessel-agent/core",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "packages/permission": {
       "name": "@vessel-agent/permission",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -63,7 +63,7 @@
     },
     "packages/serve": {
       "name": "@vessel-agent/serve",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/config": "0.10.0",
         "@vessel-agent/core": "0.10.0",
@@ -74,7 +74,7 @@
     },
     "packages/tui": {
       "name": "@vessel-agent/tui",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@types/react": "^19.2.17",
         "@vessel-agent/config": "0.10.0",
@@ -104,7 +104,7 @@
     },
     "plugins/evals/harness": {
       "name": "@vessel-agent/evals",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
         "yaml": "^2.9.0",
@@ -115,10 +115,11 @@
     },
     "plugins/im/feishu": {
       "name": "@vessel-agent/feishu",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@larksuiteoapi/node-sdk": "^1.76.0",
-        "@vessel-agent/core": "0.10.0",
+        "@vessel-agent/agent": "0.26.2",
+        "@vessel-agent/core": "0.26.2",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
@@ -126,7 +127,7 @@
     },
     "plugins/mcp/client": {
       "name": "@vessel-agent/mcp-client",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -136,7 +137,7 @@
     },
     "plugins/observability/hook-logging": {
       "name": "@vessel-agent/hook-logging",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -146,7 +147,7 @@
     },
     "plugins/provider/anthropic": {
       "name": "@vessel-agent/provider-anthropic",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -156,7 +157,7 @@
     },
     "plugins/provider/openai": {
       "name": "@vessel-agent/provider-openai",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -166,7 +167,7 @@
     },
     "plugins/security/guardrail-pii": {
       "name": "@vessel-agent/guardrail-pii",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -176,7 +177,7 @@
     },
     "plugins/security/redact-secrets": {
       "name": "@vessel-agent/redact-secrets",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -186,7 +187,7 @@
     },
     "plugins/security/tool-policy": {
       "name": "@vessel-agent/tool-policy",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
       },
@@ -196,7 +197,7 @@
     },
     "plugins/tools/basic-tools": {
       "name": "@vessel-agent/basic-tools",
-      "version": "0.24.0",
+      "version": "0.26.2",
       "dependencies": {
         "@vessel-agent/core": "0.10.0",
         "@vessel-agent/permission": "0.10.0",

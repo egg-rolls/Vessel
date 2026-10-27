@@ -246,3 +246,17 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
   Team handoff，其余闸门（private / no_team / already_forked / single-flight）不变。
 - S2 Addendum 的 CLI `vessel agent rotate … --handoff` 同样删除，详见 ADR-092 Errata。
 - Team 不再有默认接头人；无 `@` 的 post 仍只写日志。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- `current_body` 单指针换成 `bodies[]`：一个 agent 可同时有多个 live body（默认上限 20），
+  `primary_body_id` 指向缺省投递目标；`current_body` / `body_history` 降级为旧数据的兼容视图。
+- `main` 是普通 `single` agent（owner=self、无 Team），由 `admit` 正常执行；没有 root owner 复活
+  例外。
+- 执行生命周期统一 `run.*`（payload 带 `agent_id` + `session_id`）；Team `reply` 日志由
+  `run.completed.output` 写，失败 / 取消写 `system` 条目。
+- rotate 只退休 primary body，其它 live body 及其 epoch 不受影响；epoch fencing 按该 body 自己的
+  epoch / 退役标志判定，不比较「当前指针」。

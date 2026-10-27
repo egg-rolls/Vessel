@@ -29,3 +29,19 @@ related: [4, 30, 34, 37, 39]
 - **备选**：(a) 进 core——重 SDK 与渠道语义污染 core；(b) Webhook / 轮询——需要公网 HTTPS 或额外基础设施；(c) 个人微信——无官方 API；(d) 多渠道抽象层——0.4 只有一个真实渠道，抽象会变成 speculative generality。均不取。
 - **后果**：core 零改动；飞书默认关闭；离线测试可用。只支持文本与单 chat 单 session；富媒体与 thread 留待后续。凭据处理成为硬门禁；`--feishu` 必须显式开启。
 - **关联**：ADR-004、ADR-030、ADR-034、ADR-037、ADR-039；DECISION-009 §5.3 / §5.5 / §5.6 / §5.7 / §5.10 / §9 / §10.1 / §11.3 / §11.4 / §12.1 / §13.3 / §13.5。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- `RuntimeHost` / `InProcessRuntimeHost` / `AgentHandle` 不在执行路径上：每个 tenant 一个
+  `InProcessScheduler`，`AgentService` 注入它；run 只经 `scheduler.submit` 的 executor 调每 body
+  的 `AgentRuntime.run`。
+- 串行键是 `serialKey = body/session`（`perBodySerial`，默认 true）：同一 body 同时一个 running，
+  不同 body 并发；`maxConcurrency` 默认无上限，只有显式正整数才限制。
+- per-run session 由 body 决定（`session_id ≡ body_id`）；`ScheduledTask.sessionId` 仍是该 body，
+  没有 Host 级成员注册表 / spawn / `AgentHandle` 这一层。
+- 以 Host 为执行面的子系统（渠道 runner、workflow、resume 路由）经 `AgentService.admit` 或直接
+  `scheduler.submit`；没有第二套 host 生命周期，也没有 Host 合成的 `agent.run.*` /
+  `mirror_of_run_id`。

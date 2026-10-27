@@ -17,9 +17,9 @@
 | ------------- | ------------------------------------------------------------------- | -------------------------------------- |
 | 物理路径      | 工作区根（本仓库的上一级，非 git）                                  | 本仓库根（`Vessel/`）                  |
 | 是否 git 仓库 | 否                                                                  | 是                                     |
-| 放什么        | handoff / plan / report / decision / worktree / 临时文件 / 私有笔记 | 源码 / 测试 / 公开文档 / CI / 发布配置 |
+| 放什么        | handoff / plan / report / decision / worktree / 临时文件 / 私有笔记 | 源码 / 公开文档 / CI / 发布配置 |
 | 谁能写        | 1 与各 N 均可                                                       | 各 N 只能写自己独占路径，经 1 合并     |
-| 审查          | 不需要                                                              | 必须：三件套 + 路径归属 + 内容审查     |
+| 审查          | 不需要                                                              | 必须：typecheck + biome + 路径归属 + 内容审查 |
 
 > 判断口诀：**「删掉它会不会影响别人使用或理解项目？」**
 > 会 → 共享侧；不会 → 个人侧。
@@ -142,10 +142,10 @@ Vessel\                                    # 共享侧（git）
 
 **禁止**：handoff、计划、报告、验收过程表、日期命名的文档、截图、数据库、日志。
 
-### 3.3 代码与测试
+### 3.3 代码
 
 - 代码按事业部独占（见 §5）。
-- 测试与代码同包：`src/**/__tests__/**` 或包级 `__tests__/`；fixture 放 `__tests__/fixtures/`。
+- **仓库没有自动化测试文件**：不存在 `__tests__/`、`*.test.ts`、`fixtures/` 目录，也不要新增。改动的证据是 typecheck + biome + `scripts/check-*.ts` + 端到端烟测（`VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`）。
 - 新增包必须进入根 `package.json` 的 workspaces（`packages/*`、`plugins/*/*`）。
 - 新增插件放 `plugins/<category>/<name>/`，目录即注册；进程启动时扫描一次。
 
@@ -171,7 +171,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | `tui`   | D4 终端产品                         | `packages/tui/**`                                                                                                                             |
 | `web`   | D5 远程控制面                       | `packages/serve/**`、`apps/web/**`                                                                                                            |
 | `gov`   | D6 工程治理                         | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`build.ts` 除外）、`.gitignore` |
-| `qa`    | 质量与交叉验证（staff，不是事业部） | 无独占写路径；只读审查、跑测试、写个人侧报告                                                                                                  |
+| `qa`    | 质量与交叉验证（staff，不是事业部） | 无独占写路径；只读审查、跑 typecheck / biome / check-* 与烟测、写个人侧报告                                                                   |
 
 ### 4.2 版本、分支、worktree
 
@@ -229,7 +229,7 @@ N 读 handoff → 写 PLAN-<version>-<role>.md（方案 / 影响面 / 风险）
         ↓
 用户或 1 审批方案
         ↓
-N 在 worktree 实现 → 自测三件套 → 写 REPORT-<version>-<role>-<slug>.md
+N 在 worktree 实现 → 自测 typecheck + biome（必要时加烟测）→ 写 REPORT-<version>-<role>-<slug>.md
         ↓
 N 在自己的分支提交（只含共享侧成品）
         ↓
@@ -243,7 +243,7 @@ N 在自己的分支提交（只含共享侧成品）
 - [ ] 对使用者/贡献者/AI 有长期价值，不是过程产物。
 - [ ] 放在正确分类与正确路径。
 - [ ] 不含个人路径、会话 ID、密钥、临时数据、日志。
-- [ ] `bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .` 全绿（代码改动）。
+- [ ] `bun run typecheck` / `bunx @biomejs/biome ci .` 全绿（代码改动）；涉及运行时行为时附端到端烟测结果。
 - [ ] 文档与代码一致；未实现的能力明确标注。
 - [ ] 没有半成品 stub、没有指向已删除目录的链接。
 
@@ -258,7 +258,7 @@ N 在自己的分支提交（只含共享侧成品）
 
 ### 7.2 合并流程
 
-1. N 在 `<version>-<role>` 完成一个任务，跑三件套，提交。
+1. N 在 `<version>-<role>` 完成一个任务，跑 typecheck + biome，提交。
 2. N 在个人侧 `REPORT-*` / `HANDOFF-*` 写清：改了什么、影响哪些路径、需要谁复核。
 3. 1 审查 diff，决定目标版本（通常 `release/<version>`）。
 4. 冲突：1 召集相关 N，双方给出理由，1 裁决；裁决写入个人侧 `docs/decisions/`。
@@ -288,24 +288,26 @@ N 在自己的分支提交（只含共享侧成品）
 
 | Job                                                  | 内容                                                                                                                                                                                                                                                                                                                            |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `quality`（ubuntu）                                  | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test`（`VESSEL_VALIDATE_RESULTS=1`）→ `bun run build`                                                                                                                                                             |
-| `architecture`（ubuntu）                             | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check`                                                                                                                                                                                 |
-| `offline-integration`（ubuntu）                      | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；全部使用 mock 或临时目录，不依赖外网                                       |
+| `quality`（ubuntu）                                  | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → Node 22 + `apps/web` `npm ci` → `bun run lint` → `bun run typecheck` → `bun run build`（无 Test step）                                                                                                                                                        |
+| `architecture`（ubuntu）                             | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-web-styles.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check`                                                                                                                                                 |
+| `offline-integration`（ubuntu）                      | `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；使用 mock 或临时目录，不依赖外网                                                                                                                                                                                                                                 |
 | `release-dry-run`（ubuntu）                          | 仅 PR + `release/**` push：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，不上传、不 publish、不 tag                                                                                                                                                                                                                 |
-| `install-smoke`（ubuntu）                            | 仅 PR + `release/**` push：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；17 个子包 + 根 tarball 的 `npm pack` 与 `file:` overrides 安装解析，运行 `vessel --version` / `--tools`（mock），并断言根 tarball 含 `apps/web/dist/index.html`；不上传、不 publish、不 tag；Windows 跳过 |
-| `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`（`VESSEL_VALIDATE_RESULTS=1`）；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵                                                                                                                                                                                                                 |
+| `install-smoke`（ubuntu）                            | 仅 PR + `release/**` push：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；全部可发布子包 + 根 tarball 的 `npm pack` 与 `file:` overrides 安装解析，运行 `vessel --version` / `--tools`（mock），并断言根 tarball 含 `apps/web/dist/index.html`；不上传、不 publish、不 tag；Windows 跳过 |
+| `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck`；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵                                                                                                                                                                                                                                                             |
 | `web`                                                | `apps/web`：`npm ci` → `npm run build`                                                                                                                                                                                                                                                                                          |
 | `examples`                                           | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（`examples/tsconfig.json` 随仓库提供）                                                                                                                                                                                                                           |
 | `smoke`                                              | 仅 `main` / `release/**` push：headless 文本、stdin、`@file`、`/help`、`/exit`（mock）                                                                                                                                                                                                                                          |
 - 同一 ref 的旧 run 自动取消；缓存 Bun / npm。
-- 三件套任何一项红，禁止合并。
+- `tls-ca` / `frontend-cors` 只做依赖安装，保留 job 结构以免改动 branch protection 语义。
+- 仓库没有自动化测试套件；门禁是 typecheck + biome + `check-*.ts` 脚本，运行时正确性靠 `smoke` job 的 CLI 端到端路径（仅 `main` / `release/**` push）与人工验收。
+- 门禁任何一项红，禁止合并。
 
 ### 9.2 Release（`.github/workflows/release.yml`）
 
 触发：push tag `v*`（含预发布）。**1.0 前不触发本流程。**
 1. 校验 tag 在 `main` 上，且所有可发布 workspace `package.json` 版本一致、`CHANGELOG.md` 含该版本；`verify` 跑 `release-dry-run` 与 `smoke-install`，任一失败则不进入发布。
 2. 复跑 quality（发布前再验一次）。
-3. `npm publish` 所有公开包：稳定版 `latest`，预发布 `beta`；`--provenance --access public`。先发 17 个 `@vessel-agent/*` 子包，最后发根 CLI `vessel-agent`（bin 仍是 `vessel`）。
+3. `npm publish` 所有公开包：稳定版 `latest`，预发布 `beta`；`--provenance --access public`。先发 16 个 `@vessel-agent/*` 子包，最后发根 CLI `vessel-agent`（bin 仍是 `vessel`）。
 4. 创建 GitHub Release：自动 notes + `latest.json`（当前 `assets` 为空）。
 5. **不构建二进制**（ADR-006 继续有效）；后续再评估。
 6. 发布失败不自动重试；修版本后重新打 tag（旧 tag 保留，不覆盖）。
@@ -334,4 +336,4 @@ N 在自己的分支提交（只含共享侧成品）
 - 代码改到别人独占路径而未协商。
 - 提交里含密钥、会话库、日志、构建产物。
 - 文档描述了不存在的能力，或链接指向已删除目录。
-- 未经三件套就提交或合并。
+- 未经 typecheck + biome 就提交或合并。

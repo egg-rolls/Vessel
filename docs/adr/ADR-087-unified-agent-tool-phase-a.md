@@ -54,3 +54,15 @@ tags: [agent, tools, session, registry, permission, events, config, compatibilit
   - `allow` 模式对成员复制到的工具一律放行（`checkPermission: 'allow'`），不是按工具白名单逐项判定；需要收窄时用 `deny` + `readOnlyTools`。
 
 - **关联**：[ADR-037](ADR-037-modular-agent-runtime.md)（Host / runtime 边界）、[ADR-081](ADR-081-host-parity-and-serializable-snapshot.md)（Host 对等与快照）、[ADR-086](ADR-086-transparency-and-multi-instance-safety.md)（Self Card、delegate 关联字段、`agents.tree`）。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- 成员执行事件统一为 `run.*`（payload 带 `agent_id` + `session_id`）；`agent.turn.*` 不作为执行
+  生命周期发射。
+- `agent.reply.injected` / `agent.reply.inject_failed` 随 owner 外部队列一起不在模型内；成员回复作为
+  消息经同一个 `admit` 进入父 body 的 mailbox，是一次独立 run。
+- 保留并继续有效的成员事件：`agent.spawned` / `agent.message.queued` / `agent.closed` /
+  `agent.rotated` / `agent.retired` / `agent.permission.requested|responded`。

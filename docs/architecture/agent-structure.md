@@ -17,23 +17,28 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
 
 - 同一个 `PersistedAgentRecord`；区别是 `role` / `owner` / `parent` / `team` 的组合。
 - UI：`member` = 成员，`temporary` = 临时；`single` 不在 Team roster 里。
+- `main` 是普通 `single`（owner=self、无 Team、visibility `private`），走普通 create 与 `admit`；没有外部 owner，也不由父 turn 驱动。管理面 human 可见，其它 agent 不可见（ADR-097）。
 - `parent_id` 是回复/投递父节点；`spawnedBy` 只进 `agent.spawned` 审计事件。
 
-## 数据模型 v3
+## 数据模型 v4
 
 | 字段 | 含义 |
 |---|---|
-| `role` | `single` / `member` / `temporary`（v3 必填） |
-| `owner` | v3 必填；single/member = self，temporary = 雇佣者 |
+| `role` | `single` / `member` / `temporary` |
+| `owner` | single/member = self，temporary = 雇佣者 |
 | `parent_id` / `team_id` | 回复父节点 / Team；temporary 的 parent 默认 owner |
 | `visibility` | private / team / tenant；member 强制 team |
-| `current_body` / `body_history` | 当前 Body / 退役 Body（≤20） |
+| `bodies[]` | 全部 Body（含已退役，退役保留 ≤50）；唯一真相 |
+| `primary_body_id` | 缺省投递目标（primary body 的 body_id） |
+| `current_body` / `body_history` | 兼容视图：旧 primary 指针 / 已退役 primary（≤20）；只读、不回写 |
 | `model` / `system_prompt` | 下一个 Body 生效 |
 
-- `AGENT_SNAPSHOT_VERSION = 3`；v1/v2 可读。
+- `AGENT_SNAPSHOT_VERSION = 4`；v1 / v2 / v3 可读，不回写旧版本。
+- v3 → v4：`current_body` 迁成唯一 live body + primary，旧 `body_history` 迁入 `bodies[]`；
+  首次写 v4 前备份 `.v3.bak`（v1 / v2 各保留 `.v1.bak` / `.v2.bak`）。
 - v2 → v3：`owner===id` → single；`owner` 缺省 → member；`owner≠id` → temporary；
-  single/member 的 owner 补成 id。首次写 v3 前备份 `.v2.bak`（v1 保留 `.v1.bak`）。
-- 旧 `owner===undefined` / `owner===id` 判定全部改按 `role`。
+  single/member 的 owner 补成 id。旧 `owner===undefined` / `owner===id` 判定全部改按 `role`。
+- 每 agent 最多 20 个 live body；`bodies[]` 里已退役条目保留 ≤50，超限淘汰最旧。
 
 ## 创建
 
@@ -54,7 +59,7 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
   其它 agent 仍看不到。unbound 临时不在这里出现。Team 页仍只显示 member + temporary。
 - `new` 不是当前 action；`create` = peer/member，`hire` = contractor/temporary。
 
-## 转换（已实现）
+## 转换
 
 `agents.update` 增加 `role` / `team_id`：
 

@@ -73,3 +73,17 @@ tags: [agent, body, rotate, epoch, fencing, snapshot, session, permission, cli]
   `handoff_path` 参数、`agent.rotating` payload 的 `handoff`、启动消息末尾的 `[handoff: …]`
   均已删除。
 - `startup_prompt` 仍是必填自由文本，原样作为新 Body 的第一条消息；平台不解析、不插入路径。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- rotate 只退休 primary body 并新建 primary（新 session id）；其它 live body 的历史、checkpoint 与
+  在途 run 完全不变。
+- 旧 body 的 fencing 按该 body 自身的 epoch / `retired` 标记判定，不比较「当前指针」；被 fence 的
+  轮不写 agent state / usage、不投父队列，只发 `agent.reply.stale`。
+- 准入是 per-body admission + `scheduler.submit`：每个 body 一个 mailbox，串行由
+  `serialKey = body/session` 保证。
+- `body_history` 保留为「已退役 primary 的兼容视图（≤20）」；真相是 `bodies[]`（已退役条目保留
+  ≤50）。

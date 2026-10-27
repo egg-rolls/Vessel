@@ -34,3 +34,14 @@ related: [88, 91, 95]
 - **后果**：所有 `owner===undefined` / `owner===id` 判定改为按 `role`；旧二进制不能读 v3，
   只能靠 `.v1.bak` / `.v2.bak` 回滚；team-scoped token 的转换需要在 serve 层做 team 归属校验。
 - **关联**：ADR-088（agent 包边界）、ADR-091（Body/presence）、ADR-095（peer/contractor）。
+
+## Errata（0.27 统一 agent/body）
+
+> 2026-10-26，只追加。上文正文保留当时结论；与 0.27 实现不一致处以本条为准，
+> 当前模型见 [ADR-097](ADR-097-unified-agent-body-model.md)。
+
+- 快照版本是 **v4**：`AGENT_SNAPSHOT_VERSION = 4`；读取兼容 v1–v3。
+- v3 → v4 迁移：`current_body` 变成唯一 live body + primary，旧 `body_history` 迁入 `bodies[]`
+  （已退役）；`bodies[]` 是唯一真相，旧字段只作兼容视图，旧数据可读、不回写。
+- `role` 语义（`single` / `member` / `temporary`）与 v3 的推断规则不变；本条只改快照版本与 Body
+  字段，不改变 role 决策。
