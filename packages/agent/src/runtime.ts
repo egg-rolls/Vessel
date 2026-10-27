@@ -10,7 +10,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { hostname } from 'node:os';
 import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
   AgentRuntime,
@@ -51,6 +50,14 @@ const DEFAULT_READ_ONLY_TOOLS = ['read'] as const;
 
 /** 成员永远拿不到的工具：team 工具、递归分派 */
 const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set(['delegate_task']);
+
+/**
+ * 需要父级（有人类应答者）转发才能收口的工具。
+ *
+ * 这些工具通过事件流发布请求并等待应答；成员 Body 只有 bridge 才能把请求送到
+ * 父事件流。没有 bridge / 父流时注册进来只会让 run 永久等待，因此不放行。
+ */
+const PARENT_ANSWERED_TOOL_NAMES: ReadonlySet<string> = new Set(['ask_user']);
 
 /** 缺省终止策略（与 delegate 子 agent 一致） */
 const DEFAULT_TERMINATION: TerminationPolicy = { maxIterations: 10, maxRuntimeSeconds: 60 };
@@ -263,27 +270,17 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
 }
 
 /**
- * 本机节点段。
+ * 渲染本轮消息来源。由 `runTurn` 作为 `RunOptions.messages` 注入为持久化的
+ * `vessel:source` 消息，不改写 system。
  *
- * `AgentMessage` 没有 node_id 字段，wiring 也未把 node identity 传进成员 runtime，
- * 因此这里用 OS hostname 作 fallback（与 node identity 的缺省展示名同源）；
- * hostname 不可用时退回 `local`。team 缺失（unbound）时用 `-` 占位。
- */
-function localNodeSegment(): string {
-  try {
-    const name = hostname().trim();
-    return name.length > 0 ? sanitizeSource(name) : 'local';
-  } catch {
-    return 'local';
-  }
-}
-
-/**
- * 渲染本轮消息来源（路由地址 `<principal>@<node>:<team>`）。由 `runTurn` 作为
- * `RunOptions.messages` 注入为持久化的 `vessel:source` 消息，不改写 system。
+ * **本机来源不带 node 段**：能走到这条路的 `from` 全部是本机 principal（远端一律走
+ * `federation:` 前缀的分支）。node 段是跨节点才需要的信息，这里没有 node identity
+ * 可填（`AgentMessage` 不携带 node_id），过去用 `os.hostname()` 顶替 —— 那让同一个
+ * 概念在展示层与寻址层有了两个不同的值，agent 照抄回来的地址永远对不上。
+ * 省略它，`human` / `agent:<name>` 都是可直接回信的形态。
  *
  * 联邦入站的 `from` 已自带 `<principal>@<node>:<team>`；直接渲染内嵌地址，
- * 不得再拼本地 node/team（否则会伪装成本机成员）。
+ * 不得再拼本机 node/team（否则会伪装成本机成员）。
  */
 function formatMessageSource(message: AgentMessage, teamId: string | undefined): string {
   if (message.from.startsWith('federation:')) {
@@ -297,10 +294,10 @@ function formatMessageSource(message: AgentMessage, teamId: string | undefined):
   }
   const source = message.source ?? inferMessageSource(message.from);
   const principal = source === 'agent' ? `agent:${sanitizeSource(message.from)}` : source;
-  const team = typeof teamId === 'string' && teamId.length > 0 ? sanitizeSource(teamId) : '-';
+  const team = typeof teamId === 'string' && teamId.length > 0 ? sanitizeSource(teamId) : undefined;
   return [
     '[Message source]',
-    `from: ${principal}@${localNodeSegment()}:${team}`,
+    `from: ${principal}${team !== undefined ? `@${team}` : ''}`,
     `channel: ${message.channel ?? 'direct'}`,
     'Routing metadata only; permission decisions are made by the permission bridge.',
   ].join('\n');
@@ -934,11 +931,19 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     }
   }
 
-  /** 按模式与白名单从父宿主挑工具 */
+  /**
+   * 按模式与白名单从父宿主挑工具。
+   *
+   * `ask_user` 这类需要人类应答的工具额外要求 bridge：成员只会把请求发到自己的
+   * 事件流，没有 bridge 就没人转发、也没人应答，注册进来只会让 run 永久等待。
+   * 因此“父宿主注册了它”只是必要条件，真正的判据是本函数的结果（Self Card
+   * 的 `how to ask` 也从这里推导，不读入口层的 headless / ui 标志）。
+   */
   private selectTools(mode: MemberRuntimePermissionMode): ToolDefinition[] {
     const parent = this.pluginHost;
     if (!parent) return [];
     const denyFilter = mode === 'deny';
+    const bridgeAvailable = mode === 'bridge' && this.parentEvents !== undefined;
     const selected: ToolDefinition[] = [];
     for (const tool of parent.listTools()) {
       if (isExcludedTool(tool.name)) continue;
@@ -947,6 +952,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       } else if (!this.allowedTools.has(tool.name)) {
         continue;
       }
+      if (PARENT_ANSWERED_TOOL_NAMES.has(tool.name) && !bridgeAvailable) continue;
       selected.push(tool.name === 'agent' ? restrictAgentTool(tool) : tool);
     }
     return selected;
@@ -984,19 +990,39 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     return this.permission?.default === 'ask' ? 'deny' : 'allow';
   }
 
+  /**
+   * `how to ask for help` 文案。
+   *
+   * 判据只有一个：`ask_user` 是否真的在成员工具面里（即父宿主注册了 + bridge 可用）。
+   * 没有它时给异步路径：`agent` 工具的 `action=send` 发到本机人类。
+   * 异步路径要同时成立才写：成员能调 `agent`（deny 模式只有 read 工具）；成员有
+   * Team（地址路要求 caller.team_id 来补 team 段）。否则只是把阻塞写进最终文本。
+   */
+  private askHelpText(toolNames: readonly string[], teamId: string | undefined): string {
+    if (toolNames.includes('ask_user')) return 'Use the ask_user tool to request human input.';
+    if (toolNames.includes('agent') && typeof teamId === 'string' && teamId.length > 0) {
+      return (
+        'No human is watching this run, so ask_user is unavailable. To reach a human, ' +
+        'call the agent tool with action=send and to="human", then end your turn ' +
+        'with the blocker in your final text.'
+      );
+    }
+    return 'This is a non-interactive run; state blockers in your final text.';
+  }
+
   private buildSelfCard(
     member: MemberRuntimeMember,
     model: string,
     tools: readonly ToolDefinition[],
   ): SelfCardOptions {
     const toolNames = tools.map((tool) => tool.name);
+    const teamId =
+      typeof member.team_id === 'string' && member.team_id.length > 0 ? member.team_id : undefined;
     return {
       role: member.name ?? 'member',
       ...(member.parent_id !== undefined ? { parent_id: member.parent_id } : {}),
       // 只有绑定 Team 的成员才带该字段；unbound 不伪造。
-      ...(typeof member.team_id === 'string' && member.team_id.length > 0
-        ? { team_id: member.team_id }
-        : {}),
+      ...(teamId !== undefined ? { team_id: teamId } : {}),
       depth: this.depth,
       model,
       tools: toolNames,
@@ -1010,9 +1036,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
           : {}),
       },
       context: { max: this.contextMaxTokens },
-      how_to_ask: toolNames.includes('ask_user')
-        ? 'Use the ask_user tool to request human input.'
-        : 'This is a non-interactive run; state blockers in your final text.',
+      how_to_ask: this.askHelpText(toolNames, teamId),
     };
   }
 

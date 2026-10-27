@@ -446,6 +446,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.message.you': 'You',
   'team.message.agentTag': 'agent',
   'team.message.replyTag': 'Reply',
+  'team.message.toHumanTag': 'For you',
+  'team.message.toHumanHint': 'This log is a message from an agent to the human',
   'team.message.systemTag': 'System',
   'team.message.viewBody': 'View member session',
   'team.federation.from': 'federation from',

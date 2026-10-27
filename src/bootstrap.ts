@@ -98,6 +98,7 @@ import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
 import { reportShutdownFailure } from './shutdown-report';
+import { createTeamHumanDelivery, type LocalHumanTarget } from './team-human-delivery';
 import { createTenantControl } from './tenant-command';
 import {
   acquireTenantLock,
@@ -1035,6 +1036,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 0.17 A4：成员工具只走 AgentService；显式 `agent.enabled: true` 才启动。
   const agentPlan = resolveAgentWiring(config, { headless });
   const agentServiceEnabled = agentPlan.agentEnabled;
+  /**
+   * 父宿主是否真的有 ask_user 应答者（0.27）。
+   *
+   * 成员 Body 的白名单由 AgentService 决定，与 owner 宿主是两处：owner 注册了
+   * ask_user 不等于成员拿得到。这里把「入口有应答者 + 配置未关闭」收敛成一个
+   * 事实，下面既传给 tenant runtime（注册工具）也传给 AgentService（放行给成员）。
+   * headless 入口本来就不传 registerAskUser，取值 false。
+   */
+  const askUserAvailable = registerAskUser && config.ui?.askUser !== false;
 
   const bundle = await buildTenantRuntime({
     tenantId,
@@ -1048,7 +1058,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(options.mockScenario !== undefined ? { mockScenario: options.mockScenario } : {}),
     headless,
     // 0.15：显式 ui.askUser=false 关闭；无客户端的入口不会传 true。
-    registerAskUser: registerAskUser && config.ui?.askUser !== false,
+    registerAskUser: askUserAvailable,
     loader,
     nodeId,
     sessionId: currentSessionId,
@@ -1127,10 +1137,21 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(team.policy !== undefined ? { policy: team.policy } : {}),
     }));
     const defaultWorkspace = resolveDefaultTeamWorkspace(config, teamDeclarations, logger);
+    // 0.27：发给人类的 send 直接写本机 Team 日志（异步委派，不阻塞 agent）。
+    // Team 服务在 createAgentServiceWiring 之后才存在，这里用晚绑定 getter 回填。
+    let localHuman: LocalHumanTarget | undefined;
     // 0.21 S8.2：federation 缺省启用；显式 `federation.enabled: false` 才不注入。
+    // 语义不只是「跨节点所以关掉就没」：本机人类投递也挂在这个端口上，关掉 federation
+    // 等于连「agent 找本机人类」一起关掉。见下方 localHuman 的构造。
     const federation =
       config.federation?.enabled !== false
-        ? createFederationSendPort({ federation: config.federation ?? {}, nodeId })
+        ? createFederationSendPort({
+            federation: config.federation ?? {},
+            nodeId,
+            // 展示名只用于把指向本机的 `to` 归一化，不参与向外的 from。
+            nodeName,
+            localHuman: () => localHuman,
+          })
         : undefined;
     const wiring = await createAgentServiceWiring({
       tenantId,
@@ -1143,6 +1164,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       limits: agentPlan.limits ?? limits,
       termination: memberTermination,
       ...(agentPlan.readOnlyTools !== undefined ? { readOnlyTools: agentPlan.readOnlyTools } : {}),
+      // 0.27：成员 Body 只能拿到父宿主真注册了的工具。有应答者才放行 ask_user；
+      // 成员 runtime 仍要求 bridge 可用，没有父流时会自行剔除（避免永久等待）。
+      ...(askUserAvailable ? { extraTools: ['ask_user'] } : {}),
       ...(config.context?.maxTokens !== undefined
         ? { contextMaxTokens: config.context.maxTokens }
         : {}),
@@ -1161,6 +1185,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(defaultWorkspace !== undefined ? { defaultWorkspace } : {}),
       ...(federation !== undefined ? { federation } : {}),
     });
+    // 0.27：回填本机人类投递端口（federation 端口的 getter 在此之后才读得到）。
+    localHuman = createTeamHumanDelivery(wiring.team);
     finalPluginHost.registerTool(wiring.tool);
 
     // S5：hub 目录投影 + team 归属 + 节点 token 控制面。

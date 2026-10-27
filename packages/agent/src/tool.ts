@@ -448,7 +448,8 @@ export function createAgentTool(
             }
             // owner 没有本地 Team，无法构造 `<name>@<local node>:<team>`；
             // 地址形式明确拒绝，绝不回落到 dispatch 或跨节点端口。
-            if (typeof to === 'string' && to.includes('@')) {
+            // 裸 `human` 是同一件事的简化形态（本机人类），一并拒。
+            if (typeof to === 'string' && (to.includes('@') || to === 'human')) {
               return {
                 status: 'rejected',
                 code: 'no_team',

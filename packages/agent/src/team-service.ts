@@ -547,7 +547,9 @@ export class DefaultTeamService implements AgentTeamService {
     }
 
     // 0.21：地址形式优先于 id / session / name 解析；不写本地 Team 日志。
-    if (typeof input.to === 'string' && input.to.includes('@')) {
+    // 0.27：`human` 是保留 principal 的简化形态（本机人类，无 node 段），也要走地址路。
+    // 只认这一个裸名：其它裸名仍按 id / name 解析，不会被地址路吞掉。
+    if (typeof input.to === 'string' && isAddressTarget(input.to)) {
       return this.sendFederation(caller, input.to, content, conversationId);
     }
 
@@ -1236,6 +1238,17 @@ function isPrivateRosterMember(status: MemberStatus): boolean {
 /** 按首次出现顺序去重 */
 function dedupe(values: readonly string[]): string[] {
   return [...new Set(values)];
+}
+
+/**
+ * `send` 的 `to` 是否是地址形式（走 `FederationSendPort` 而不是本地 id / name 解析）。
+ *
+ * 两种形态：全形 `<principal>@<node>:<team>`，以及 0.27 的本机人类简化形态 `human`。
+ * 只放宽裸 `human` 一个名字 —— 其它裸值继续按 id / name 解析，本地 resolver 的行为不变。
+ * 具体的三段校验 / 本机判定在 app 层的 `resolveAddress`，这里不做第二遍。
+ */
+function isAddressTarget(to: string): boolean {
+  return to.includes('@') || to === 'human';
 }
 
 /** 消息体：非空且不超过上限；失败抛 TeamError('invalid_input') */
