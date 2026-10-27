@@ -201,33 +201,20 @@ export function createAgentTool(
   return {
     name: 'agent',
     description:
-      'Long-lived member lifecycle tool for this agent. ' +
-      'action=create creates peer member(s) in the caller team (team members only; ' +
-      'the root owner has no team and must use hire); ' +
-      'action=hire creates contractor member(s) owned by the caller (any member may hire); ' +
-      'the new contractor is bound to the caller team when the caller has one and is unbound ' +
-      'otherwise, and returns the created member; ' +
-      'action=send delivers a message to a member through the unified dispatch path ' +
-      '(live members queue immediately, gone members resume first, rotating members are ' +
-      'queued for the new body) and returns immediately; ' +
-      'action=post appends a message to the caller team log only and never notifies or wakes ' +
-      'any member; ' +
-      'action=close releases member(s) (idempotent); action=list returns the roster; ' +
-      'action=rotate moves an agent into a fresh body (new session, epoch + 1) with ' +
-      'startup_prompt as the first message. ' +
-      'A body may only rotate itself; startup_prompt is required. ' +
-      'Agent bodies may use create, hire, close, rotate, post, send and list. ' +
-      'Closing a peer requires human approval; closing your own contractor or yourself ' +
-      'needs no approval. ' +
-      'Batch: create/hire/close accept `members` and send accepts `messages`; entries run in ' +
-      'parallel and return {results:[...]} in input order, each entry either its result ' +
-      'or an error. ' +
-      'A failed entry does not abort the others; do not mix single fields with a batch. ' +
-      'Cross-node replies: when a federated message arrives from <principal>@<node>:<team>, ' +
-      'reply with action=send and set to to that address; the runtime fills from with your ' +
-      'own <name>@<local node>:<team>, so a from field is neither accepted nor needed. ' +
-      'A member without a team cannot send to an address (no_team); the owner cannot either ' +
-      '(use the vessel federation post CLI).',
+      'Long-lived member lifecycle tool. ' +
+      'create: peer member(s) in the caller team (root owner: use hire). ' +
+      'hire: contractor member(s) owned by the caller (any member may hire). ' +
+      'send: deliver via unified dispatch (live members queue, gone members resume, rotating ' +
+      'members queue for the new body) and return immediately. ' +
+      'post: append to the caller team log only; never notifies or wakes anyone. ' +
+      'close: release member(s), idempotent. list: return the roster. ' +
+      'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first; ' +
+      'a body may only rotate itself. ' +
+      'Bodies may use create, hire, close, rotate, post, send and list. ' +
+      'Closing a peer needs human approval; closing your own contractor or yourself does not. ' +
+      'Cross-node: reply to a federated from by sending to that address; from is runtime-filled ' +
+      'and must not be given. ' +
+      'No team means no address send (no_team), owner included.',
     inputSchema: {
       type: 'object',
       properties: {

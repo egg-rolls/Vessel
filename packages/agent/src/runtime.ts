@@ -296,12 +296,9 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
 function formatMessageSource(message: AgentMessage, teamId: string | undefined): string {
   if (message.from.startsWith('federation:')) {
     const addr = sanitizeSource(message.from.slice('federation:'.length));
-    return [
-      '[Message source]',
-      `from: ${addr}`,
-      `channel: ${message.channel ?? 'team'}`,
-      'Routing metadata only; permission decisions are made by the permission bridge.',
-    ].join('\n');
+    return ['[Message source]', `from: ${addr}`, `channel: ${message.channel ?? 'team'}`].join(
+      '\n',
+    );
   }
   const source = message.source ?? inferMessageSource(message.from);
   const principal = source === 'agent' ? `agent:${sanitizeSource(message.from)}` : source;
@@ -310,7 +307,6 @@ function formatMessageSource(message: AgentMessage, teamId: string | undefined):
     '[Message source]',
     `from: ${principal}${team !== undefined ? `@${team}` : ''}`,
     `channel: ${message.channel ?? 'direct'}`,
-    'Routing metadata only; permission decisions are made by the permission bridge.',
   ].join('\n');
 }
 
