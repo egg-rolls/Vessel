@@ -34,6 +34,26 @@ export interface LocalHumanTarget {
 }
 
 /**
+ * 本机成员投递端口：把指向本机成员的地址就地投递，不出网。
+ *
+ * 与 `LocalHumanTarget` 分开是因为语义不同 —— 成员要真的被唤醒（一个 run），
+ * 人类只写日志。两者都是 `FederationSendPort` 的注入回调，装配层晚绑定。
+ */
+export interface LocalMemberTarget {
+  /**
+   * 投递到本机 Team 的某个成员（`to` 是 principal：name 或 id）。
+   * 返回该次投递的 `message_id`；不可投递抛错（错误码透传给调用方）。
+   */
+  deliver(input: {
+    team_id: string;
+    to: string;
+    from: string;
+    content: string;
+    conversation_id?: string;
+  }): Promise<{ message_id: string }>;
+}
+
+/**
  * 日志 `from` 用 principal（`<principal>@<node>:<team>` → `<principal>`）。
  *
  * 地址形如成员名时 Web 能按 roster 解析出成员标签与「查看 Body」入口；写成完整
@@ -52,6 +72,54 @@ function senderName(from: string): string {
  * `team` 是装配层的 Team 服务（`AgentTeamService` 端口）；本机 Team 服务在本端口
  * 之后才构造，所以装配层用 `FederationSendPortOptions.localHuman` 的 getter 晚绑定。
  */
+/**
+ * 构造本机成员投递端口。
+ *
+ * 只投递、不做地址解析 —— 「是不是本机」由 `federation-address.ts` 独家判定，
+ * principal 到 agent id 的解析由 Team 层自己做（同 Team 内 name 唯一）。
+ */
+export function createTeamLocalMemberDelivery(team: AgentTeamService): LocalMemberTarget {
+  return {
+    async deliver(input: {
+      team_id: string;
+      to: string;
+      from: string;
+      content: string;
+      conversation_id?: string;
+    }): Promise<{ message_id: string }> {
+      const roster = await team.roster(input.team_id);
+      const target = roster.find(
+        (member) => member.agent_id === input.to || member.name === input.to,
+      );
+      if (target === undefined) {
+        throw codedError('unknown_member', `unknown_member: ${input.to}`);
+      }
+      const senderName = input.from.slice(0, input.from.indexOf('@'));
+      const sender = roster.find((member) => member.name === senderName);
+      if (sender === undefined) {
+        throw codedError('unknown_member', `unknown_member: ${senderName}`);
+      }
+      // `post` 已是「写 mention 日志 → dispatch 一次」的唯一实现；这里只把两端名字
+      // 解析成 agent id，不重复实现投递。
+      const written = await team.post({
+        team_id: input.team_id,
+        content: input.content,
+        from: sender.agent_id,
+        mentions: [target.agent_id],
+        ...(input.conversation_id !== undefined ? { conversation_id: input.conversation_id } : {}),
+      });
+      return { message_id: written.message_id };
+    },
+  };
+}
+
+/** 带稳定 code 的错误：port 会把 `code` 原样透传给调用方。 */
+function codedError(code: string, message: string): Error {
+  const error = new Error(message);
+  (error as { code?: string }).code = code;
+  return error;
+}
+
 export function createTeamHumanDelivery(team: AgentTeamService): LocalHumanTarget {
   return {
     async deliver(input: {

@@ -34,7 +34,7 @@ import {
   postFederationTeamInfo,
 } from './federation-client';
 import { resolveFederationOptions } from './federation-config';
-import type { LocalHumanTarget } from './team-human-delivery';
+import type { LocalHumanTarget, LocalMemberTarget } from './team-human-delivery';
 
 export interface FederationSendPortOptions {
   federation: FederationConfig;
@@ -55,6 +55,13 @@ export interface FederationSendPortOptions {
    * 一切行为与没有这个特判完全一致（fail-safe）。
    */
   localHuman?: () => LocalHumanTarget | undefined;
+  /**
+   * 本机成员投递（0.27）：node 段命中本机的地址直接交给本机 Team 层。
+   *
+   * 与 `localHuman` 同形的晚绑定 getter，理由也一样：Team 服务在本端口之后才
+   * 构造。**不 import Team 层** —— port 只声明「怎么投」，不依赖谁实现。
+   */
+  localMember?: () => LocalMemberTarget | undefined;
   /**
    * 本机展示名（`node.json` / `host.node_name` / hostname 派生）。
    *
@@ -79,6 +86,9 @@ function errorCodeOf(error: unknown): string | undefined {
 
 /** 本机人类投递失败时的兜底 code（底层没有 code 才用）。 */
 const LOCAL_HUMAN_DELIVERY_FAILED = 'local_human_delivery_failed';
+
+/** 本机成员投递失败时的兜底 code（底层没有 code 才用）。 */
+const LOCAL_MEMBER_DELIVERY_FAILED = 'local_member_delivery_failed';
 
 /**
  * 构造跨节点发送端口。
@@ -271,17 +281,35 @@ export function createFederationSendPort(options: FederationSendPortOptions): Fe
         }
       }
 
-      // 全形地址且 node 段指向本机的成员：这是本机投递，跨节点发出去会回环。
-      // 0.27 起 agent 层会先用 `resolve()` 拦下并就地投递，这里是纵深防御：
-      // 走到这里说明调用方跳过了那一层，明确拒绝而不是交给 allowlist 谎报。
+      // 本机成员地址（2 段，或 3 段但 node 段命中本机）：就地投递，绝不出网。
+      // 走回调而不是 import Team 层，注入边界与 `localHuman` 同形。
       if (to.kind === 'local_member') {
-        return {
-          status: 'rejected',
-          code: 'local_member_address',
-          reason:
-            `cannot federate to this node; send to "${to.principal}" directly ` +
-            '(members are addressed by id or name on the local node)',
-        };
+        const localMember = options.localMember?.();
+        if (localMember === undefined) {
+          return {
+            status: 'error',
+            code: LOCAL_MEMBER_DELIVERY_FAILED,
+            reason: 'local member delivery is not available on this node',
+          };
+        }
+        try {
+          const { message_id } = await localMember.deliver({
+            team_id: to.team_id,
+            to: to.principal,
+            from: input.from,
+            content: input.content,
+            ...(input.conversation_id !== undefined
+              ? { conversation_id: input.conversation_id }
+              : {}),
+          });
+          return { status: 'queued', message_id };
+        } catch (error) {
+          return {
+            status: 'error',
+            code: errorCodeOf(error) ?? LOCAL_MEMBER_DELIVERY_FAILED,
+            reason: error instanceof Error ? error.message : String(error),
+          };
+        }
       }
 
       // 裸 agent 名不是可投递地址；`resolve()` 不会把它交到这里。
