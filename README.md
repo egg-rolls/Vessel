@@ -154,7 +154,9 @@ vessel migrate --from sqlite --to file-v2   # 默认 dry-run
 vessel trace prune --dry-run         # 查看将清理的 trace
 vessel --tenant acme --run "..."     # 指定 tenant
 vessel --connect http://127.0.0.1:8642 --run "..."  # 走 gateway RPC（回环或远程），不取 tenant 锁
-bun test                             # 在源码仓库内跑测试
+bun run typecheck                    # 静态类型检查（源码仓库内）
+bunx @biomejs/biome ci .             # 格式 / lint（源码仓库内）
+VESSEL_MOCK=1 bun run src/cli.ts --run "hello"  # 端到端烟测（无需 API Key）
 ```
 
 REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/mcp` `/runs` `/metrics` `/feishu` `/setup` `/settings` `/reload` `/clear` `/exit`）。

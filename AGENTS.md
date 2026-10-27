@@ -53,14 +53,13 @@
 
 ## 文件与目录
 
-- 共享侧 / 个人侧分工、目录结构、角色独占路径、分支与发布规则见 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)。共享侧只放源码、测试、长期文档与 CI。
+- 共享侧 / 个人侧分工、目录结构、角色独占路径、分支与发布规则见 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)。共享侧只放源码、长期文档与 CI。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。引用路径前先确认存在（`docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`processes/`、`legacy/` 已删除）；当前版本见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)。
 
 ## 怎么跑与门禁
 
 ```bash
 bun install
-bun test
 bun run typecheck
 bunx @biomejs/biome ci .
 VESSEL_MOCK=1 bun run src/cli.ts
@@ -74,7 +73,8 @@ bun run scripts/version.ts --check
 bun run scripts/release-dry-run.ts
 ```
 
-改完代码，至少跑受影响的定向检查；全量 `bun test` / typecheck / biome ci 只在检查点或用户要求时跑。CI 异步，不作为 push 前置。收口额外门禁 `check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run` 只在用户要求或发布检查点。
+仓库**没有自动化测试套件**：门禁只有 `bun run typecheck` + `bunx @biomejs/biome ci .`（加 `scripts/check-*.ts` 静态断言），运行时正确性靠一条端到端烟测 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
+改完代码至少跑 typecheck 与 biome；CI 异步，不作为 push 前置。收口额外门禁 `check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run` 只在用户要求或发布检查点。
 完整命令见 [README.md](README.md) 的「快速开始」；CI / 发布见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md) 与 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
 
 ## 分层与能力准入

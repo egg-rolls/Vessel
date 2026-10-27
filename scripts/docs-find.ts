@@ -1,11 +1,19 @@
 #!/usr/bin/env bun
 
 /**
- * 按目标检索静态文档（docs/architecture + docs/agents）。
+ * 按目标检索静态文档。
  *
- * 发现：扫描两个目录，排除 INDEX.md（INDEX 只做导航，不参与检索）。
+ * 扫描范围（两级）：
+ * - 共享侧：`docs/architecture`、`docs/agents`（相对 root，始终参与）。
+ * - 个人侧：`docs/constitution`、`docs/lessons`、`docs/roles`；从 root 起向上查找
+ *   （含 root 自身，最多 3 层祖先），取第一个其 `docs/` 下含上述任一目录的祖先作为
+ *   personal base，只扫该 base 下实际存在的目录。CI 只 clone 共享仓库，找不到时静默跳过。
+ *
+ * 发现：排除 INDEX.md（INDEX 只做导航，不参与检索）。
  * 打分：paths glob 命中 +5（每模块一次）、trigger 每命中 +1、title 命中 +2（每模块一次）。
  * 退出码：0 有命中；1 无命中（调用方必须回落 AGENTS.md 硬规则）；2 参数 / 目录错误。
+ *
+ * 输出 `path` 可直接从 cwd 打开：个人侧文档按 personal base 距 root 的层数加 `../` 前缀。
  *
  * 用法：bun run scripts/docs-find.ts --goal "add RPC method" [--paths <p>] [--trigger <t>] [--json] [--limit 5]
  * `--root` 仅用于测试（默认 process.cwd()）。
@@ -13,10 +21,14 @@
 
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { parseFrontmatter, parseStringArray } from './check-docs';
 
-const DOC_DIRS = ['docs/architecture', 'docs/agents'] as const;
+/** 共享侧：相对 root，始终参与扫描。 */
+const SHARED_DOC_DIRS = ['docs/architecture', 'docs/agents'] as const;
+/** 个人侧：只在找到 personal base 时扫描。 */
+const PERSONAL_DOC_DIRS = ['docs/constitution', 'docs/lessons', 'docs/roles'] as const;
+const MAX_PERSONAL_DEPTH = 3;
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 20;
 const MAX_TOKENS = 256;
@@ -61,6 +73,16 @@ interface LoadResult {
   warnings: string[];
 }
 
+/**
+ * 一个扫描 base：base 是磁盘绝对路径，displayBase 是输出用的可直接打开的前缀
+ * （共享侧为空，个人侧为若干 `../`），dirs 是要扫的 root 相对目录。
+ */
+interface DocDir {
+  base: string;
+  displayBase: string;
+  dirs: readonly string[];
+}
+
 interface RunResult {
   exitCode: 0 | 1 | 2;
   stdout: string;
@@ -76,6 +98,10 @@ const USAGE = `用法: bun run scripts/docs-find.ts --goal "<目标>" [--paths <
   --limit <n>       返回条数，默认 5，上限 20
   --root <dir>      仅用于测试（默认 process.cwd()）
   --help            显示本说明
+
+扫描范围：root 的 docs/architecture、docs/agents；若 root 或其 3 层内祖先存在
+docs/constitution、docs/lessons、docs/roles，则同时扫描最近的那个 base（个人侧，
+输出路径带 ../ 前缀，可直接从 cwd 打开；找不到时静默跳过）。
 `;
 
 function tokenize(text: string): string[] {
@@ -161,37 +187,71 @@ function extractAnchors(text: string): DocsFindAnchor[] {
   return anchors;
 }
 
-async function loadModules(root: string): Promise<LoadResult> {
+/**
+ * 解析参与扫描的文档目录。
+ *
+ * 共享侧两个目录相对 root，displayBase 为空（输出仍是 `docs/architecture/x.md`）。
+ * 个人侧从 root 向上最多 3 层祖先里找第一个 `docs/{constitution,lessons,roles}` 存在的
+ * 祖先作为 personal base；只加入该 base 下实际存在的目录，找不到时静默跳过。
+ */
+function resolveDocDirs(root: string): DocDir[] {
+  const dirs: DocDir[] = SHARED_DOC_DIRS.map((dir) => ({
+    base: root,
+    displayBase: '',
+    dirs: [dir],
+  }));
+  let personalBase: string | null = null;
+  let depth = 0;
+  let candidate = root;
+  for (let step = 0; step <= MAX_PERSONAL_DEPTH; step += 1) {
+    if (PERSONAL_DOC_DIRS.some((dir) => existsSync(join(candidate, dir)))) {
+      personalBase = candidate;
+      depth = step;
+      break;
+    }
+    const parent = dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
+  }
+  if (personalBase === null) return dirs;
+  const present = PERSONAL_DOC_DIRS.filter((dir) => existsSync(join(personalBase, dir)));
+  if (present.length === 0) return dirs;
+  dirs.push({ base: personalBase, displayBase: '../'.repeat(depth), dirs: present });
+  return dirs;
+}
+
+async function loadModules(dirs: DocDir[]): Promise<LoadResult> {
   const modules: ModuleDoc[] = [];
   const warnings: string[] = [];
-  for (const dir of DOC_DIRS) {
-    const full = join(root, dir);
-    if (!existsSync(full)) continue;
-    const files = (await readdir(full))
-      .filter((file) => file.endsWith('.md') && file !== 'INDEX.md')
-      .sort();
-    for (const file of files) {
-      const relative = `${dir}/${file}`;
-      const text = await readFile(join(root, relative), 'utf8');
-      const frontmatter = parseFrontmatter(text);
-      if (!frontmatter) {
-        warnings.push(`${relative}: 缺少合法 frontmatter，跳过`);
-        continue;
+  for (const dir of dirs) {
+    for (const relativeDir of dir.dirs) {
+      const full = join(dir.base, relativeDir);
+      if (!existsSync(full)) continue;
+      const files = await readdir(full);
+      const markdown = files.filter((file) => file.endsWith('.md') && file !== 'INDEX.md').sort();
+      for (const file of markdown) {
+        const relative = `${dir.displayBase}${relativeDir}/${file}`;
+        const text = await readFile(join(full, file), 'utf8');
+        const frontmatter = parseFrontmatter(text);
+        if (!frontmatter) {
+          warnings.push(`${relative}: 缺少合法 frontmatter，跳过`);
+          continue;
+        }
+        const triggers = parseStringArray(frontmatter.triggers ?? '');
+        const paths = parseStringArray(frontmatter.paths ?? '');
+        if (!frontmatter.title || !frontmatter.kind || !triggers || !paths) {
+          warnings.push(`${relative}: frontmatter 字段不完整，跳过`);
+          continue;
+        }
+        modules.push({
+          path: relative,
+          title: frontmatter.title,
+          kind: frontmatter.kind,
+          triggers,
+          paths,
+          text,
+        });
       }
-      const triggers = parseStringArray(frontmatter.triggers ?? '');
-      const paths = parseStringArray(frontmatter.paths ?? '');
-      if (!frontmatter.title || !frontmatter.kind || !triggers || !paths) {
-        warnings.push(`${relative}: frontmatter 字段不完整，跳过`);
-        continue;
-      }
-      modules.push({
-        path: relative,
-        title: frontmatter.title,
-        kind: frontmatter.kind,
-        triggers,
-        paths,
-        text,
-      });
     }
   }
   return { modules, warnings };
@@ -355,13 +415,15 @@ export async function runDocsFind(argv: string[], defaultRoot = process.cwd()): 
     };
   }
 
-  const { modules, warnings } = await loadModules(root);
+  const docDirs = resolveDocDirs(root);
+  const { modules, warnings } = await loadModules(docDirs);
   const stderr = warnings.length > 0 ? `${warnings.join('\n')}\n` : '';
   if (modules.length === 0) {
+    const scanned = [...SHARED_DOC_DIRS, ...PERSONAL_DOC_DIRS].join(' / ');
     return {
       exitCode: 2,
       stdout: '',
-      stderr: `${stderr}没有可解析的模块（检查 ${DOC_DIRS.join(' / ')}）\n`,
+      stderr: `${stderr}没有可解析的模块（检查 ${scanned}）\n`,
     };
   }
 

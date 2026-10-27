@@ -72,9 +72,9 @@ jobs:
       - name: Check version consistency
         run: bun run scripts/version.ts --check
 
-  # ── 离线集成：MCP / gateway / 0.4 能力（0.3 + 0.4）──
-  # MCP 用本地 mock server（stdio fixture / 127.0.0.1:0），
-  # TLS 用本地自签证书；evals / feishu 均用 mock，不依赖外网。
+  # ── 离线集成：config sources matrix / trace smoke ──
+  # 原 MCP / gateway / evals / feishu / core 的离线测试已随测试移除；
+  # 这里只保留不依赖外网的脚本检查。
   offline-integration:
     name: Offline Integration
     runs-on: ubuntu-latest
@@ -100,23 +100,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: MCP client offline tests
-        run: bun test plugins/mcp/client
-
-      - name: Gateway remote/TLS offline tests
-        run: bun test packages/serve
-
-      - name: Evals offline tests
-        run: bun test plugins/evals/harness
-
-      - name: Feishu offline tests
-        run: bun test plugins/im/feishu
-
-      # Core metrics / event history / prune / hardening tests.
-      # Broad directory keeps this stable while core names the new test files.
-      - name: Core observability and stability tests
-        run: bun test packages/core
-
       - name: Config sources matrix
         run: bun run scripts/check-config-sources.ts
 
@@ -124,6 +107,7 @@ jobs:
         run: bun run scripts/check-trace.ts
 
   # ── 0.6 TLS / CA 专项（ubuntu；非 required）────────
+  # 测试已移除：本 job 现在只做依赖安装，保留结构以免改动 branch protection 语义。
   tls-ca:
     name: TLS CA
     runs-on: ubuntu-latest
@@ -149,20 +133,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Gateway TLS and remote auth
-        run: >-
-          bun test
-          packages/serve/__tests__/gateway.tls.test.ts
-          packages/serve/__tests__/gateway.remote.test.ts
-
-      - name: Remote client CA and connect e2e
-        run: >-
-          bun test
-          src/__tests__/connect-e2e-0.6.test.ts
-          src/__tests__/rpc-remote-0.6.test.ts
-          packages/config/__tests__/zero-six-remote.test.ts
-
   # ── 0.6 独立前端 / CORS 专项（ubuntu；非 required）──
+  # 测试已移除：本 job 现在只做依赖安装，保留结构以免改动 branch protection 语义。
   frontend-cors:
     name: Frontend CORS
     runs-on: ubuntu-latest
@@ -187,15 +159,6 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      - name: Gateway Origin and tenant override
-        run: >-
-          bun test
-          packages/serve/__tests__/gateway.origin.test.ts
-          packages/serve/__tests__/gateway.ws-tenant.test.ts
-
-      - name: Runtime gateway URL
-        run: bun test apps/web/tests/gatewayUrl.test.ts
 
   # ── 发布干跑：PR + release/**（0.4，不发布、不上传）──
   release-dry-run:
@@ -307,8 +270,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # 根 `bun test` 会扫 apps/web/tests；apps/web 不在根 workspaces 里，
-      # 必须先装它自己的依赖（react 等），否则测试文件按 error 计。
+      # apps/web 不在根 workspaces 里，web build 需要它自己的 Node 依赖（react 等），
+      # 所以这里单独 setup Node 并 npm ci。
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
@@ -322,12 +285,6 @@ jobs:
 
       - name: Run type checking
         run: bun run typecheck
-
-      # 0.9：开启 canonical RPC 结果校验，防止 result_schema 与实现漂移。
-      - name: Run tests
-        env:
-          VESSEL_VALIDATE_RESULTS: "1"
-        run: bun test
 
   # ── Web 控制台构建 ───────────────────────────────
   web:

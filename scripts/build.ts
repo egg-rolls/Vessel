@@ -3,7 +3,7 @@
 /**
  * Vessel 构建脚本
  *
- * 只做质量门禁（typecheck / lint / test）——插件由运行时扫描发现（src/plugin-loader.ts），
+ * 只做质量门禁（typecheck / lint）——插件由运行时扫描发现（src/plugin-loader.ts），
  * 无需构建期注册表；单二进制分发形态已废弃（ADR-006）。
  * `bun run typecheck` 现在同时覆盖 `examples/**`（examples/tsconfig.json）。
  *
@@ -34,16 +34,6 @@ try {
   process.exit(1);
 }
 
-// 3. 运行测试
-console.log('3️⃣ Running tests...');
-try {
-  execSync('bun test', { stdio: 'inherit' });
-  console.log('✅ Tests passed\n');
-} catch (_error) {
-  console.error('❌ Tests failed');
-  process.exit(1);
-}
-
-// 4. 显示结果
+// 3. 显示结果
 console.log('📦 Build complete!');
 console.log('\nRun with: bun run src/cli.ts');

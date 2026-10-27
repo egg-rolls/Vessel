@@ -101,7 +101,7 @@ jobs:
       - name: Release dry run
         run: bun run scripts/release-dry-run.ts
 
-      # 安装解析 smoke：16 个子包 + 根 tarball（共 17 个非 private 包）真正装到临时目录并运行
+      # 安装解析 smoke：17 个子包 + 根 tarball（共 18 个非 private 包）真正装到临时目录并运行
       # `vessel --version` / `vessel --tools`（mock，无 Key，不发布）。
       - name: Install resolution smoke
         run: bun run scripts/smoke-install.ts
@@ -120,7 +120,7 @@ jobs:
       - name: Run quality checks
         uses: ./.github/actions/quality
 
-  # ── npm 发布（先 16 个子包，最后根 CLI `vessel-agent`；共 17 个非 private 包）──
+  # ── npm 发布（先 17 个子包，最后根 CLI `vessel-agent`；共 18 个非 private 包）──
   publish-npm:
     name: Publish to npm
     needs: [verify, quality]
@@ -166,6 +166,7 @@ jobs:
             packages/serve
             packages/tui
             plugins/tools/basic-tools
+            plugins/context/doc-subscription
             plugins/mcp/client
             plugins/evals/harness
             plugins/im/feishu
@@ -193,7 +194,7 @@ jobs:
             )
           done
 
-      # 根 CLI 包依赖上面 16 个包（共 17 个非 private 包），必须最后发布；发布名 `vessel-agent`，
+      # 根 CLI 包依赖上面 17 个包（共 18 个非 private 包），必须最后发布；发布名 `vessel-agent`，
       # bin 仍是 `vessel`。名称不符时 fail-fast，避免把过渡名发到 npm。
       - name: Publish root CLI package
         shell: bash

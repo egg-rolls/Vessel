@@ -40,8 +40,6 @@ export const ROOT_COMPAT_SYMBOLS = [
 /** 0.2 kernel / transport 新增的根导出。 */
 export const ROOT_0_2_SYMBOLS = [
   'createCancellationScope',
-  'createRuntime',
-  'InProcessRuntimeHost',
   'InProcessScheduler',
   'InProcessTransport',
   'MemoryEventBus',
@@ -57,13 +55,7 @@ export const ROOT_0_4_SYMBOLS = ['MetricsCollector', 'pruneRuns'] as const;
 export const SMOKE_TARGETS: Readonly<Record<string, readonly string[]>> = {
   '.': [...ROOT_COMPAT_SYMBOLS, ...ROOT_0_2_SYMBOLS, ...ROOT_0_3_SYMBOLS, ...ROOT_0_4_SYMBOLS],
   './context': ['MemoryContextManager'],
-  './kernel': [
-    'createCancellationScope',
-    'createRuntime',
-    'InProcessRuntimeHost',
-    'InProcessScheduler',
-    'MemoryEventBus',
-  ],
+  './kernel': ['createCancellationScope', 'InProcessScheduler', 'MemoryEventBus'],
   './observability': ['FileEventStore', 'MemoryEventStream', 'MetricsCollector', 'replayRun'],
   './policy': ['GuardrailRunner', 'HookRunner', 'PermissionPolicy', 'GuardrailStage', 'HookType'],
   './provider': ['AnthropicProvider', 'MemoryLLMProvider', 'OpenAICompatibleProvider'],

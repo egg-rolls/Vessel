@@ -44,6 +44,7 @@ export const PUBLISH_ORDER = [
   'packages/serve',
   'packages/tui',
   'plugins/tools/basic-tools',
+  'plugins/context/doc-subscription',
   'plugins/mcp/client',
   'plugins/evals/harness',
   'plugins/im/feishu',
