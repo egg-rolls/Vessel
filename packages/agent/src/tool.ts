@@ -203,9 +203,10 @@ export function createAgentTool(
     description:
       'Long-lived member lifecycle tool. ' +
       'create: peer member(s) in the caller team (root owner: use hire). ' +
-      'hire: contractor member(s) owned by the caller (any member may hire). ' +
-      'send: deliver via unified dispatch (live members queue, gone members resume, rotating ' +
-      'members queue for the new body) and return immediately. ' +
+      'hire: contractor owned by the caller (any member may hire), bound to the caller team if it ' +
+      'has one. ' +
+      'send: dispatch a message (live queue now, gone resume first, rotating queue for the new ' +
+      'body); returns immediately. ' +
       'post: append to the caller team log only; never notifies or wakes anyone. ' +
       'close: release member(s), idempotent. list: return the roster. ' +
       'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first; ' +
