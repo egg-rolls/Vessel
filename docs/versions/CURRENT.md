@@ -5,32 +5,34 @@
 
 ## 版本
 
-**0.26.2（2026-10-24）** — 开发中，未 tag、未 publish。版本号以根 `package.json` 为唯一来源。
+**0.27.0（2026-10-28）** — 开发中，未 tag、未 publish。版本号以根 `package.json` 为唯一来源；
+manifest 已 bump（19 个 `package.json` + `CHANGELOG.md` 一致），未 tag、未 publish。
 
 ## 已合入
 
-- **0.27 蜂群增长**：成员可 `create` 同 Team peer / `hire` contractor；成员关闭 peer 经人类审批，
-  owner close 级联 private contractor；每 Team present ≤ 20（`team_full`），
-  `teams.spawnFrozen` / `vessel team freeze|unfreeze` 停止增长（`team_frozen`）；
-  `agents.create` 条目支持 `kind`，owner 可选。
-- **单一 RPC 契约**：canonical `agents.create|update|close|send|dispatch|rotate` 与
-  `teams.*` 统一为批量契约，方法表 **58**；loopback owner 端点只做 transport，
-  用合成 principal 分发同一方法表，`agent.*` / `team.*` wire 名已删除，CLI 语法不变。
-- **Web 易用性**：Agents → Teams → Nodes 编排顺序、Hub / Gateway 状态页、
-  对象页 CRUD、列表搜索与语言切换。
-- **UI 结构收敛**：弹窗 portal + 全视口遮罩 + `sm/md/lg` 尺寸 tokens；共享
-  `SearchInput`；工具目录紧凑卡片；完整中英文 catalog；select 浮层与失效
-  CSS tokens 已修正。
-- **节点显示名**：`node.json` 的 `name` additive 暴露；所有展示位优先主机名并缓存；
-  `node_id` 仍是唯一寻址键，只出现在详情高级信息。
-- **默认能力开启**：`agent` / `durable` / `evals` / `federation` / `hub.autoStart`
-  默认 true，均可显式 `false` 关闭。
-- **本地 hub**：gateway 在 `<dataDir>/hub` 启动同进程目录服务，只监听回环。
-- **CI**：Bun 1.4.4（B-011 mitigated）。
+- **统一 agent/body 模型**（ADR-097）：所有 agent（含 `main`）只经 `AgentService.admit` 准入；
+  `body_id ≡ session_id`，一个 agent 可多 body（每 agent ≤ 20 live，空闲 TTL 24h），
+  同 body 串行、跨 body 并发；每 body 独立 runtime / context / 历史 / runStore；
+  `run.*` 是唯一执行生命周期。三套并行事实（`RunEngine`、`RuntimeHost`、owner/member
+  执行二分）已删除。
+- **按段数寻址**：1 段本机 agent / 2 段本机 Team / 3 段跨节点；来源行是可回信的
+  `<from location="principal@node:team" />`，本机也写满三段。`human` / `system` 是保留
+  principal，不能当成员名或 id；人类 principal 与 `main` 已拆开（`defaultOwner` 只表示
+  临时成员归属）。
+- **蜂群增长**：`create` peer / `hire` contractor，每 Team ≤ 20（`team_full`），
+  `teams.spawnFrozen` 冻结增长，成员 close peer 经人类审批；重名复用返回 `reused: true`。
+- **canonical RPC 方法表 59**，含 `permissions.setToolPolicy` 与 `teams.spawnFrozen`。
+- **Web**：Tailwind L1/L2/L3 分层 + `components/ui` 通用层 + zustand domain stores +
+  `check-web-styles` 门禁。
+- **文档**：`docs/architecture/` 20 个模块（≤100 行）+ INDEX、`docs/agents/` 7 篇路径告诫、
+  `AGENTS.md` 84 行；`check-docs` 与 `docs-find` 是结构门禁。
+- **门禁**：`typecheck` + `biome ci` + `scripts/check-*.ts`；仓库无自动化测试套件，
+  运行时正确性靠 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
 
 ## 下一步
 
-- rotate 的 Web UI；远程 agent 生命周期（跨节点策略）仍未开放。
+- rotate 的 Web UI；远程 agent 生命周期（跨节点 spawn / close / rotate）仍未开放。
+- hub ↔ federation 身份联动挂起。
 
 ## 入口
 
