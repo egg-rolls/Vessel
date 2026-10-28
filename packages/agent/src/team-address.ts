@@ -25,8 +25,39 @@ export type AddressSegmentCount = 1 | 2 | 3;
 /** 三段最长情形（principal + `@` + node + `:` + team）；超过直接不是地址。 */
 export const MAX_ADDRESS_LENGTH = 64 + 1 + 64 + 1 + 64;
 
+// ── 保留 principal 词典 ──────────────────────────────
+//
+// 这些字符串在寻址 / 消息来源判定里有固定含义，**不能被成员名或成员 id 占用**。
+// 占用后的故障都是静默的：名字形状合法，成员建得出来，但
+//
+// - `human`：`resolveAddress` 把它短路成本机人类，于是这个成员的出站 `from` 被
+//   读成人类（跨节点身份丢失），`dispatch({to:'human'})` 也会投给它而不是人类；
+// - `system`：`messageSource` / `inferMessageSource` 把它读成系统消息，同理。
+//
+// **新增保留名的唯一入口是本区块**：加常量 → 进 `RESERVED_PRINCIPALS` → 创建路径
+// 的 `assertMemberName` / 显式 id 校验自动生效。别在消费侧再写字面量比较。
+
 /** 人类 principal 的保留值：`human` / `human@<team>` / `human@<node>:<team>`。 */
 export const HUMAN_PRINCIPAL = 'human' as const;
+
+/** 系统消息发送者的保留值：不是成员，只是 `AgentMessageSource` 的 `system`。 */
+export const SYSTEM_PRINCIPAL = 'system' as const;
+
+/**
+ * 全部保留 principal：既不是成员名，也不是成员 id。
+ *
+ * 只读集合（`ReadonlySet`）而不是数组：消费侧 `conversation-budget` 要按值查表，
+ * 一份清单两处用，避免又分叉出第二份字符串列表。
+ */
+export const RESERVED_PRINCIPALS: ReadonlySet<string> = new Set([
+  HUMAN_PRINCIPAL,
+  SYSTEM_PRINCIPAL,
+]);
+
+/** 是否是保留 principal（不能当成员名 / 成员 id）。 */
+export function isReservedPrincipal(value: string): boolean {
+  return RESERVED_PRINCIPALS.has(value);
+}
 
 /**
  * 数一个 `send` 目标的段数；形状不合法返回 `undefined`。

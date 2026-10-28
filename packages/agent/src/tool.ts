@@ -8,6 +8,7 @@
  */
 
 import type { ToolContext, ToolDefinition } from '@vessel-agent/core';
+import { HUMAN_PRINCIPAL } from './team-address.js';
 import { TeamMetadataCorruptError } from './team-store.js';
 import {
   AgentError,
@@ -468,9 +469,9 @@ export function createAgentTool(
             // - 地址形式：owner 没有 Team，构造不出 `<name>@<node>:<team>`。
             // 旧文案让模型「用 vessel federation post --from ...」——那是 CLI，模型没有
             // 这条工具调用可发，属于不可执行的死提示。错误消息给的替代动作必须真能用。
-            if (typeof to === 'string' && (to.includes('@') || to === 'human')) {
+            if (typeof to === 'string' && (to.includes('@') || to === HUMAN_PRINCIPAL)) {
               const reason =
-                to === 'human'
+                to === HUMAN_PRINCIPAL
                   ? 'owner has no team: your reply text is shown to the human directly, ' +
                     'so no send is needed. To reach an agent, send to its id.'
                   : 'owner has no team, so an address cannot be delivered from here; ' +

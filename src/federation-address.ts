@@ -17,6 +17,7 @@
 import {
   type AddressSegmentCount,
   addressSegmentCount,
+  HUMAN_PRINCIPAL,
   MAX_ADDRESS_LENGTH,
 } from '@vessel-agent/agent';
 
@@ -111,12 +112,13 @@ export function formatFederationAddress(address: FederationAddress): string {
 // ── 本机地址（0.27）──────────────────────────────────
 
 /**
- * 人类 principal 的保留值。
+ * 人类 principal 的保留值。**值由 `@vessel-agent/agent` 的 `HUMAN_PRINCIPAL` 定义**
+ * —— 那是保留名词典的唯一归属地，这里 re-export 只为保留本模块的既有调用方。
  *
  * 本机形态有三种写法都合法：`human`（无 team，退回发送者自己的 Team）、
  * `human@<team_id>`、`human@<node>:<team_id>`（node 段命中本机）。
  */
-export const LOCAL_HUMAN_PRINCIPAL = 'human' as const;
+export const LOCAL_HUMAN_PRINCIPAL = HUMAN_PRINCIPAL;
 
 /** 地址解析结果：`local_*` 都不需要出网，`remote` 才走 federation。 */
 export type LocalAddressResolution =

@@ -34,6 +34,7 @@ import {
   type Usage,
   type UsageLimits,
 } from '@vessel-agent/core';
+import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
 import type {
   AgentMessage,
   MemberPermissionState,
@@ -320,8 +321,8 @@ function isAddressSafePrincipal(name: string): boolean {
  * 缺省发送者改成 `human` 之后这个特例不再成立。
  */
 function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
-  if (from === 'system') return 'system';
-  if (from === 'human') return 'human';
+  if (from === SYSTEM_PRINCIPAL) return 'system';
+  if (from === HUMAN_PRINCIPAL) return 'human';
   return 'agent';
 }
 

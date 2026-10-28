@@ -47,7 +47,10 @@ export {
   addressSegmentCount,
   HUMAN_PRINCIPAL,
   isAddressTarget,
+  isReservedPrincipal,
   MAX_ADDRESS_LENGTH,
+  RESERVED_PRINCIPALS,
+  SYSTEM_PRINCIPAL,
 } from './team-address.js';
 export { createTeamService, DefaultTeamService, type TeamServiceOptions } from './team-service.js';
 export {

@@ -269,7 +269,7 @@ export class DefaultTeamService implements AgentTeamService {
       const entry: TeamLogEntry = {
         message_id: messageId,
         team_id: input.team_id,
-        from: 'human',
+        from: HUMAN_PRINCIPAL,
         to: [],
         mentions: [],
         content: `budget override ${result.conversation_id} ${result.dimension} ${result.previous_max} -> ${result.max}`,
@@ -302,7 +302,7 @@ export class DefaultTeamService implements AgentTeamService {
 
     // Team 日志对 team 可见：private roster 成员不能作为 post 的 actor。
     // role single（root owner）不属 roster，仍允许（见 isPrivateRosterMember）。
-    if (from !== 'human') {
+    if (from !== HUMAN_PRINCIPAL) {
       const actor = await this.agent.identify(from);
       if (actor !== undefined && isPrivateRosterMember(actor)) {
         throw new TeamError('team_private_member', `team_private_member: ${from}`);
@@ -1027,7 +1027,7 @@ export class DefaultTeamService implements AgentTeamService {
           team_id: teamId,
           content,
           from: caller.id,
-          to: ['human'],
+          to: [HUMAN_PRINCIPAL],
           conversation_id: conversationId,
         });
       } catch (error) {
@@ -1041,7 +1041,7 @@ export class DefaultTeamService implements AgentTeamService {
       }
       return {
         status: 'queued',
-        resolved_to: 'human',
+        resolved_to: HUMAN_PRINCIPAL,
         logged: true,
         conversation_id: conversationId,
       };

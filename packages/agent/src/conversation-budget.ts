@@ -16,6 +16,7 @@ import {
   MAX_CONVERSATION_EDGES,
   type StoredConversation,
 } from './conversation-store.js';
+import { RESERVED_PRINCIPALS } from './team-address.js';
 import {
   AgentError,
   type BudgetBlockReason,
@@ -46,10 +47,13 @@ const CONVERSATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 /**
  * 保留字：这些 from / to 不是 agent 投递，不参与环检测。
  *
+ * 清单来自 `team-address.ts` 的保留 principal 词典（`RESERVED_PRINCIPALS`），
+ * 不在这里另写一份字符串列表 —— 两处各写一份就会分叉。
+ *
  * `main` 不在此列 —— 它是 agent（role single），与其它 agent 一样走 hop / cycle /
  * turns 限制。它曾被放进来，是因为人类消息的 `from` 一度就是 `main`。
  */
-const NON_AGENT_IDS = new Set(['human', 'system']);
+const NON_AGENT_IDS = RESERVED_PRINCIPALS;
 
 export function isValidConversationId(value: unknown): value is string {
   return typeof value === 'string' && CONVERSATION_ID_PATTERN.test(value);

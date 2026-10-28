@@ -41,6 +41,12 @@ import {
 } from './registry.js';
 import { AgentSnapshotStore, snapshotPath } from './snapshot.js';
 import {
+  HUMAN_PRINCIPAL,
+  isReservedPrincipal,
+  RESERVED_PRINCIPALS,
+  SYSTEM_PRINCIPAL,
+} from './team-address.js';
+import {
   type AdmitInput,
   type AdmitResult,
   type AgentDrainOptions,
@@ -102,15 +108,16 @@ const TEAM_MEMBER_LIMIT = 20;
 /**
  * 人类 principal：消息的**缺省发送者**。
  *
- * 与 `src/federation-address.ts` 的 `LOCAL_HUMAN_PRINCIPAL` 同值同义
- * （`packages/agent` 不能 import 应用层，各自持一份，**两处必须同改**）。
+ * 取值来自保留名词典（`team-address.ts` 的 `HUMAN_PRINCIPAL`）—— app 层的
+ * `LOCAL_HUMAN_PRINCIPAL` 也从那里 re-export，所以这边不再是「本包自己一份、
+ * 与那边必须同改」。
  *
  * 这里**不能**用 `defaultOwner`：那是「临时成员归谁管」的缺省值（`MemberRecord.owner`），
  * 是 agent 的归属；消息的归属是另一个 principal。两者曾是同一个字符串
  * （都是 `'main'`），于是人类从 CLI / Web 发消息时 `from` 变成了 `main` 这个 agent
  * 的 id —— `messageSource` 再也分不出「main 在说话」和「人类在说话」。
  */
-const DEFAULT_MESSAGE_SENDER = 'human';
+const DEFAULT_MESSAGE_SENDER = HUMAN_PRINCIPAL;
 
 /**
  * 成员名合法形状：1-64 位字母 / 数字 / `_` / `-`。
@@ -134,10 +141,35 @@ function nameShapeError(name: string): AgentError {
   );
 }
 
-/** 显式 name 的形状校验；缺省（undefined）放行，由调用方决定是否自动命名。 */
+/**
+ * 保留 principal（`human` / `system`）的拒绝理由：同样要说清为什么不能用，而不是
+ * 只说 invalid —— 名字形状本身合法，只报「不匹配 RE」会让人查不出原因。
+ */
+function nameReservedError(field: 'name' | 'id', value: string): AgentError {
+  return new AgentError(
+    'invalid_input',
+    `${field} must not be a reserved principal (${[...RESERVED_PRINCIPALS].join(', ')}); ` +
+      `"${value}" is read as that principal on the addressing / message-source path, ` +
+      'not as a member, so its traffic would be attributed to it instead of to the member',
+  );
+}
+
+/** 显式 name 的形状与保留名校验；缺省（undefined）放行，由调用方决定是否自动命名。 */
 function assertMemberName(name: string | undefined): void {
   if (name === undefined) return;
   if (!MEMBER_NAME_RE.test(name)) throw nameShapeError(name);
+  if (isReservedPrincipal(name)) throw nameReservedError('name', name);
+}
+
+/**
+ * 显式 id 的保留名校验：与 name 同理 —— id 也是 principal（`send` 的 from / to、
+ * `dispatch` 的解析阶梯都会先按 id / name 找成员），保留 id 会把人类消息读成 agent。
+ *
+ * **只校验调用方显式传入的 id**，不校验生成器产物与 `defaultOwner`：配置里的
+ * `agent.ownerId` 是既有约定（`main`），改它属于迁移语义，不在本次范围内。
+ */
+function assertExplicitId(id: string): void {
+  if (isReservedPrincipal(id)) throw nameReservedError('id', id);
 }
 
 /** 每 agent live body 上限缺省值 */
@@ -607,6 +639,8 @@ export class AgentServiceImpl implements AgentService {
 
     const id = input.id === undefined ? this.newId() : readRequiredString(input, 'id');
     if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
+    // 保留 id 与保留名同样要拒（只有调用方显式传 id 时才会命中）。
+    if (input.id !== undefined) assertExplicitId(id);
     if (this.registry.resolve(id) !== undefined || this.registry.getBySession(id) !== undefined) {
       throw new AgentError('invalid_input', `duplicate member id: ${id}`);
     }
@@ -756,6 +790,7 @@ export class AgentServiceImpl implements AgentService {
   private async createSingle(input: Record<string, unknown>): Promise<MemberStatus> {
     const id = input.id === undefined ? this.newId() : readRequiredString(input, 'id');
     if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
+    if (input.id !== undefined) assertExplicitId(id);
     if (this.registry.get(id) !== undefined || this.registry.getBySession(id) !== undefined) {
       throw new AgentError('invalid_input', `duplicate member id: ${id}`);
     }
@@ -846,6 +881,12 @@ export class AgentServiceImpl implements AgentService {
    * base 可能来自 `spawnedBy` 的既有名字 —— 存量快照里可能有形状非法的名字
    * （校验是后加的），派生出来的名字同样进跨节点地址，所以 base 不合法就退回
    * `agent`，不让一条旧记录把非法形状传染给新建成员。
+   *
+   * 保留 principal（`human` / `system`）不会由这里派生出来：base 无论是什么都要经
+   * `numberedNameFor` 变成 `${base}-<n>`（n ≥ 2），结果永远不是保留名 —— 所以
+   * `spawnedBy: 'human'` 得到的是 `human-2`，可以合法存在。这也是这里**不**额外
+   * 加保留名回退的原因：加了会把既有自动命名从 `human-2` 改成 `agent-2`。
+   * 若以后改 `numberedNameFor` 让它可能返回裸 base，保留名回退必须补在这里。
    */
   private autoNameFor(spawnedBy: string | undefined, teamId: string | undefined): string {
     const derived =
@@ -2117,7 +2158,7 @@ export class AgentServiceImpl implements AgentService {
           content: startupPrompt,
           agent_id: target.id,
           session_id: toSessionId,
-          from: 'system',
+          from: SYSTEM_PRINCIPAL,
           channel: 'direct',
           conversation_id: inheritedConversation,
           strict: false,
@@ -2689,7 +2730,7 @@ export class AgentServiceImpl implements AgentService {
     const conversationId = entry.active?.conversationId ?? generateConversationId(this.newId);
     const message: AgentMessage = {
       id: this.newId(),
-      from: 'system',
+      from: SYSTEM_PRINCIPAL,
       to: memberId,
       content: text,
       ts: this.now(),
@@ -2702,7 +2743,7 @@ export class AgentServiceImpl implements AgentService {
     this.emitForSession('agent.message.queued', record, sessionId, {
       state: record.state,
       message_id: message.id,
-      from: 'system',
+      from: SYSTEM_PRINCIPAL,
       conversation_id: conversationId,
     });
     void this.submitMessage(record, entry, message).catch((error) => {
@@ -2790,7 +2831,7 @@ export class AgentServiceImpl implements AgentService {
    * `main` 只剩「agent」这一个身份。
    */
   private isHumanPrincipal(id: string): boolean {
-    if (id === DEFAULT_MESSAGE_SENDER || id === 'system') return true;
+    if (isReservedPrincipal(id)) return true;
     if (id.startsWith('federation:')) return false;
     return this.registry.get(id) === undefined;
   }
@@ -3107,7 +3148,7 @@ export class AgentServiceImpl implements AgentService {
    * 与「人类消息的 from 恰好是 main」叠加，导致 `main` 说话和人类说话无法区分。
    */
   private messageSource(from: string): AgentMessage['source'] {
-    if (from === 'system') return 'system';
+    if (from === SYSTEM_PRINCIPAL) return 'system';
     if (from.startsWith('federation:')) return 'agent';
     return this.registry.get(from) === undefined ? 'human' : 'agent';
   }
