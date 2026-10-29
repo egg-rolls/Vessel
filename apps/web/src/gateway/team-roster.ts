@@ -26,8 +26,10 @@ export interface TeamRosterEntry {
 export interface NodeRoster extends NodeTeams {
   rosters: readonly TeamRosterEntry[];
   /**
-   * canonical `agents.list` 条目（管理面可见 private single）。
-   * 只用于补充 Team roster 之外的无 Team single；Team 页不消费。
+   * canonical `agents.list` 条目（管理面口径）。
+   *
+   * 两处消费：`findMainSession` 解析默认会话（`agents.list` 里有从未跑过 run 的
+   * `main`），以及补齐 Team roster 之外的成员。Team 页不消费。
    */
   agents?: readonly AgentSummary[];
   /** 列表成功、个别 Team 详情失败的个数（不伪装成空团队）。 */
@@ -124,12 +126,12 @@ export function mergeNodeRosters(
 
 export interface RosterAgent {
   node: NodeView;
-  /** Team 归属；Team-less single（来自 agents.list）缺省。 */
+  /** Team 归属；来自 `agents.list` 且 roster 未覆盖时缺省。 */
   team?: TeamSummary;
   member: TeamMember;
 }
 
-/** agents.list 条目 → TeamMember（只用于无 Team 的 single 行）。 */
+/** agents.list 条目 → TeamMember（Team roster 之外的补充行）。 */
 function memberFromList(entry: AgentSummary): TeamMember | undefined {
   const agentId = entry.id ?? entry.agent_id;
   if (!agentId) return undefined;
@@ -158,13 +160,15 @@ export function flattenRoster(rosters: readonly NodeRoster[]): RosterAgent[] {
       }
     }
   }
-  // Team roster 之外补充无 Team 的 single（private single 由管理面 agents.list 提供）。
+  // Team roster 之外补齐 `agents.list` 里的成员（0.28：不再有 single 特例，
+  // 判据是「roster 还没覆盖这个 agent」，见 needsListSupplement）。
   for (const roster of rosters) {
+    const nodeKey = nodeKeyOf(roster.node);
     for (const entry of roster.agents ?? []) {
-      if (entry.role !== 'single' || entry.team_id !== undefined) continue;
+      if (!needsListSupplement(entry, seen, nodeKey)) continue;
       const member = memberFromList(entry);
       if (!member) continue;
-      const key = `${nodeKeyOf(roster.node)}:${member.agent_id}`;
+      const key = `${nodeKey}:${member.agent_id}`;
       if (seen.has(key)) continue;
       seen.add(key);
       agents.push({ node: roster.node, member });
@@ -180,6 +184,19 @@ export interface AgentFilter {
   state?: string;
   /** presence：live / gone。 */
   presence?: string;
+}
+
+/**
+ * Team roster 之外还要补哪些 `agents.list` 条目。
+ *
+ * 0.28 前只补「无 Team 的 `single`」（`main`）；`single` 删掉后 `main` 是普通
+ * 成员，`teams.get` 已经带出它，但 roster 有 `members_limit` 上限，且从未跑过 run
+ * 的成员不保证出现在 roster 里。补齐条件因此改为「roster 没有这个 agent」：
+ * 不再按 role 过滤（role 里已无 single），以 agent_id 去重。
+ */
+function needsListSupplement(entry: AgentSummary, seen: Set<string>, nodeKey: string): boolean {
+  const agentId = entry.id ?? entry.agent_id;
+  return agentId !== undefined && !seen.has(`${nodeKey}:${agentId}`);
 }
 
 export function matchesAgentFilter(agent: RosterAgent, filter: AgentFilter): boolean {

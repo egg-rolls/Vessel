@@ -270,6 +270,8 @@ export class AgentRuntime {
   private systemPrompt?: string;
   /** 0.15 E9：Self Card 选项；缺省不注入 */
   private readonly selfCard?: SelfCardOptions;
+  /** 0.28：上下文压力提示的尾句文案；缺省用 `agent(rotate)` 原文案。可经 `applyContextPolicy` 热替换 */
+  private contextPressureHint?: string;
   /** 0.15 E9：本次 run 的 systemPrompt（含 Self Card）；run 结束后清空 */
   private runSystemPrompt?: string;
   /** 0.15 E2：本 run 已预警的 limit key（每个 key 只发一次） */
@@ -351,6 +353,7 @@ export class AgentRuntime {
     this.session = opts.session;
     this.systemPrompt = opts.systemPrompt;
     this.selfCard = opts.selfCard;
+    this.contextPressureHint = opts.contextPressureHint;
     this.runStore = opts.runStore;
     this.pluginConfigs = opts.pluginConfigs;
     this.agentId = opts.agentId;
@@ -1112,6 +1115,7 @@ export class AgentRuntime {
       }
 
       // 80%–90%：不压缩，只提示换 Body；≥90% 交给 autoCompactAsync。
+      // 自动压缩关闭时没有后续压缩降水位，提示不设上界（见 publishContextPressureWarning）。
       this.publishContextPressureWarning(execution);
 
       // 0.6.1 E3：按阈值触发真实摘要压缩（旧 ContextManager 无此方法则跳过）。
@@ -1657,21 +1661,26 @@ export class AgentRuntime {
 
   /**
    * 80% 上下文压力：不压缩，只发一次事件 + 尾部消息，建议 `agent(rotate)`。
-   * ≥90% 时静默让 autoCompactAsync 处理；`autoCompact: false` 时同样不主动压缩。
+   * 自动压缩开启时 ≥90% 静默让 autoCompactAsync 处理；**关闭时必须取消上界** ——
+   * 此时没有压缩会把水位降回来，token 只会上穿 0.9，上界会让提示永久静默。
    */
   private publishContextPressureWarning(execution: RunExecution): void {
     const max = this.context.maxTokens;
     if (max === undefined || max <= 0) return;
     const used = this.context.tokenCount;
     const ratio = used / max;
-    // 低于预警线或已超过自动压缩阈值（>0.9）：不提示。
+    // 缺省（实现不暴露 autoCompact）按开启处理，与 0.27 行为一致。
+    const autoCompact = this.context.autoCompact !== false;
+    // 自动压缩开启时：低于预警线或已超过自动压缩阈值（>0.9）不提示。
     // 恰好 0.9 仍提示一次：压缩条件是严格大于，留出这一条边。
-    if (ratio < CONTEXT_PRESSURE_WARN_RATIO || ratio > 0.9) return;
+    if (ratio < CONTEXT_PRESSURE_WARN_RATIO) return;
+    if (autoCompact && ratio > 0.9) return;
     if (this.warnedLimitKeys.has('context_window')) return;
     this.warnedLimitKeys.add('context_window');
 
     const percent = Math.round(ratio * 100);
     const hint =
+      this.contextPressureHint ??
       'Use agent(rotate) with a startup_prompt to move to a fresh body; automatic compaction runs above 90%.';
     this.publishEvent({
       type: 'context.pressure',
@@ -1763,6 +1772,16 @@ export class AgentRuntime {
     rules: Pick<RuntimePermissionConfig, 'default' | 'autoApprove' | 'neverAutoApprove'>,
   ): void {
     this.permissionPolicy.replaceRules(rules);
+  }
+
+  /**
+   * 热应用上下文策略（身份转换后调用）。下一轮请求生效，不需要重建 runtime。
+   *
+   * 只替换压力提示的尾句：缺省（未给 `contextPressureHint`）回落到 `agent(rotate)`
+   * 原文案。自动压缩开关由调用方自己的 `ContextManager` 决定，core 不感知身份。
+   */
+  applyContextPolicy(policy: Pick<AgentRuntimeOptions, 'contextPressureHint'>): void {
+    this.contextPressureHint = policy.contextPressureHint;
   }
 
   private async disposeRuntime(): Promise<void> {

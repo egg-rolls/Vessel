@@ -1,7 +1,7 @@
 /**
  * Agents 列表行（纯展示）。
  *
- * Team 行显示 `node · team`；Team-less single 只显示 node，不伪造 Team 列，
+ * Team 行显示 `node · team`；没有 Team 归属时只显示 node，不伪造 Team 列，
  * 也没有 Team 入口。单独成文件便于渲染测试。
  */
 import { StatusChip } from '../../components/StatusChip';

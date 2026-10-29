@@ -46,6 +46,7 @@ import { windowTail } from '../../transcript';
 import { ChatWelcome } from './ChatWelcome';
 import { Composer } from './Composer';
 import { findMainSession, type MainSession, primaryBodySessions } from './main-session';
+import { type StartInNewAgentResult, startInNewAgent } from './new-session';
 import { AskPrompt, PermissionPrompt } from './PromptSlots';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import { SessionHeader } from './SessionHeader';
@@ -861,15 +862,29 @@ export function ChatView({
   const handleSend = async () => {
     const text = input.trim();
     if (!text || submitting || !connected) return;
-    // 0.27：草稿态发送**不带** session_id，由服务端投递到 main 的 primary body，
-    // 再用 runs.start 返回的真实 session_id 跳转（不本地造 UUID）。
+    // 0.28（CONTRACT §3）：草稿态 = 一个新 agent。先 `agents.create`（只给客户端生成的
+    // 唯一名）拿 `{id, session_id}`，再 `runs.start{agent_id}`；`runs.start` 失败时
+    // best-effort 回收，不留空 agent。选中已有会话时按 session 投递，行为不变。
     const targetSessionId = selectedId;
     setSubmitting(true);
     try {
-      const result = targetSessionId
-        ? await client.submitRun(text, targetSessionId)
-        : await client.submitRun(text);
-      const nextSessionId = targetSessionId ?? result.session_id ?? null;
+      let nextSessionId: string | undefined;
+      let run: StartInNewAgentResult['run'];
+      if (targetSessionId) {
+        run = await client.submitRun(text, targetSessionId);
+        nextSessionId = targetSessionId;
+      } else {
+        const started = await startInNewAgent(
+          {
+            createAgent: (agentInput) => client.createAgent(agentInput),
+            closeAgent: (agentId) => client.closeAgent(agentId),
+          },
+          (agentInput, sessionId, agentId) => client.submitRun(agentInput, sessionId, agentId),
+          text,
+        );
+        run = started.run;
+        nextSessionId = started.sessionId;
+      }
       if (!nextSessionId) {
         // 契约要求 runs.start 回填 session_id；缺失时停下，不本地兜底。
         throw new Error('runs.start returned no session_id');
@@ -878,17 +893,15 @@ export function ChatView({
       if (!targetSessionId) pendingNewSessions.current.add(nextSessionId);
       setInput('');
       if (!targetSessionId) navigate({ domain: 'chat', sessionId: nextSessionId });
-      if (result.status === 'queued' && !seenJobIds.has(result.run_id)) {
-        const queuedSessionId = result.session_id ?? targetSessionId;
+      if (run.status === 'queued' && !seenJobIds.has(run.run_id)) {
+        const queuedSessionId = run.session_id ?? nextSessionId;
         setQueuedRuns((prev) => [
-          ...prev.filter((item) => item.runId !== result.run_id),
+          ...prev.filter((item) => item.runId !== run.run_id),
           {
-            runId: result.run_id,
+            runId: run.run_id,
             ...(queuedSessionId ? { sessionId: queuedSessionId } : {}),
             input: text,
-            ...(result.queue_position !== undefined
-              ? { queuePosition: result.queue_position }
-              : {}),
+            ...(run.queue_position !== undefined ? { queuePosition: run.queue_position } : {}),
             submittedAt: Date.now(),
             cancelling: false,
             cancelled: false,
@@ -897,6 +910,8 @@ export function ChatView({
         toast.info(t('chat.toast.queued'));
       }
       void loadSessions(client, { epoch, force: true });
+      // 新会话建了新 agent：roster（会话行的 agent 地址）要立刻反映它。
+      if (!targetSessionId) void loadRoster(nodes, teamControl);
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {

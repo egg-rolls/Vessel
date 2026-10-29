@@ -68,7 +68,8 @@ function isDefaultTenant(tenantId: string, defaultTenantId: string): boolean {
 
 /**
  * 管理面 viewer：与 `MemberRegistry` 的 ADMIN_VIEWER 同值（serve 不依赖
- * `@vessel-agent/agent`，因此在此本地定义）。只放行 private single。
+ * `@vessel-agent/agent`，因此在此本地定义）。
+ * 0.28 起它不再放行任何 private 记录（`single` 已删），只表达「管理面口径」。
  */
 const ADMIN_VIEWER = '*';
 
@@ -299,8 +300,8 @@ function optionalVisibility(
 function optionalRole(entry: Record<string, unknown>, method: string): AgentRoleLike | undefined {
   const value = entry.role;
   if (value === undefined) return undefined;
-  if (value !== 'single' && value !== 'member' && value !== 'temporary') {
-    throw new RpcError('invalid_params', `${method}: role must be single, member or temporary`);
+  if (value !== 'member' && value !== 'temporary') {
+    throw new RpcError('invalid_params', `${method}: role must be member or temporary`);
   }
   return value;
 }
@@ -473,11 +474,11 @@ const agentRotateEntrySchema = {
  *
  * 可见性口径只有这一处，`agents.list` / `agents.get` 共用：
  * - 合成 owner principal（带 `agent_id`）→ 以该 agent 为 viewer 查 AgentService；
- * - 人类管理面 → 事件派生视图 + private single；
+ * - 人类管理面 → 事件派生视图 + 成员记录（private 仍按 owner 判定，管理面不例外）；
  * - 其它（team-scoped token 等）→ 只有事件派生视图。
  *
  * `agents.tree` **不**走这里：它仍直读事件派生视图（见 ADR-091 已知限制），
- * 因此看不到 private single，也不认 viewer 口径。
+ * 因此看不到成员记录里的 private 条目，也不认 viewer 口径。
  *
  * `filters.sessionId` 是**逐条**过滤（不是取到结果后整条抹）：同一 id 在注册表与
  * 成员表里的 session 可能不同（rotate 后旧 Body、stale 快照），整条抹会连带丢掉
@@ -512,8 +513,10 @@ async function visibleAgents(
     .filter((entry) => filters.state === undefined || entry.state === filters.state)
     .map(publicAgent);
 
-  // 人类管理面在事件派生视图之外合并成员记录里的 single：
-  // private single 只有管理面可见（agent / team token 仍按 viewer 判定）。
+  // 人类管理面在事件派生视图之外合并成员记录：
+  // 从未跑过 run 的成员不会出现在事件派生视图里（例如刚启动的 `main`），
+  // 管理面列表必须看得到它们，否则 Web 连「默认会话」都解析不出来。
+  // 可见性仍按 ADMIN_VIEWER 判定（0.28 起 private 不再因管理面身份放开）。
   if (isHumanAdmin(ctx) && agentServiceAvailable) {
     const members = await (deps.agent as AgentControlLike).list({
       viewer: ADMIN_VIEWER,
@@ -521,7 +524,6 @@ async function visibleAgents(
       ...(visibilityArg !== undefined ? { visibility: visibilityArg } : {}),
     });
     for (const member of members) {
-      if (member.role !== 'single') continue;
       if (sessionId !== undefined && member.session_id !== sessionId) continue;
       const entry = publicMember(member);
       const index = agents.findIndex((agent) => agent.id === member.id);
@@ -585,7 +587,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
       },
       handler: async (params, ctx) => {
         const agentId = stringParam(params, 'agent_id');
-        // 与 `agents.list` 同一可见性口径：人类管理面能看到 private single，
+        // 与 `agents.list` 同一可见性口径：人类管理面额外合并成员记录，
         // 合成 owner principal 按自身 viewer 判定，team-scoped token 只看事件派生。
         const agents = await visibleAgents(deps, ctx);
         const agent = agents.find((entry) => entry.id === agentId);
@@ -919,7 +921,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
        *
        * - 每个条目至少给一个字段（含 role / team_id）；条目并行，结果与输入同序；
        * - team-scoped token 只能更新 `team_id` 与自身作用域相同的 agent（否则 `not_found`）；
-       *   角色转换只能转 member / temporary（同 team），不能转 single 或换 team（`forbidden`）；
+       *   角色转换只能在 member / temporary 之间且不能换 team（`forbidden`）；
        * - 转换时 handler 传 `role`、`team_id → teamId`、`from = principal.agent_id ?? 'human'`；
        * - 改名立即生效，唯一性与创建一致（同 Team present 唯一；unbound 为 tenant 唯一），
        *   冲突返回稳定 `invalid_input`；
@@ -943,8 +945,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 name: { type: 'string', minLength: 1 },
                 model: { type: 'string', minLength: 1 },
                 system_prompt: { type: 'string' },
-                // 0.28：角色转换（single / member / temporary）与目标 Team。
-                role: { type: 'string', enum: ['single', 'member', 'temporary'] },
+                // 0.28：角色转换（member / temporary）与目标 Team。
+                role: { type: 'string', enum: ['member', 'temporary'] },
                 team_id: { type: 'string', minLength: 1 },
               },
             },
@@ -986,11 +988,6 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
               const target = await control.get(agentId);
               if (!target || target.team_id !== scope) {
                 return { failure: fail('not_found', `agent not found: ${agentId}`) };
-              }
-              if (role === 'single') {
-                return {
-                  failure: fail('forbidden', 'team-scoped token cannot convert members to single'),
-                };
               }
               if (teamId !== undefined && teamId !== scope) {
                 return {

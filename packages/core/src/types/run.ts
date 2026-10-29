@@ -60,6 +60,15 @@ export interface RunOptions {
    * 不消费该字段（避免双来源）。
    */
   sessionId?: string;
+  /**
+   * 0.28（D10）：本次投给哪个 agent。
+   *
+   * `RunnableAgent.run()` 只带 session 时，走 `admit` 的入口只能「只传 session_id」，
+   * 那会让未绑定的 session 落到 `main` 上长出第二具 body（CONTRACT-0.28 §3 禁止）。
+   * 装配层用它把「这一次投给哪个 agent」表达出来；core 不解释语义，只透传给适配器。
+   * 未给出时保持既有行为（`/resume` 等按 session 的路径不受影响）。
+   */
+  agentId?: string;
   /** AbortSignal——设置后可在外部中断 run()（Hermes/Claude Code 模式） */
   signal?: AbortSignal;
   /** 当前 git branch——app 层采集，core 透传存入 RunState.branch */

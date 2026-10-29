@@ -68,6 +68,7 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
     async create(inputs: AgentCreateLikeInput[]): Promise<AgentLifecycleBatchResultLike> {
       const batch = await service.create({
         members: inputs.map((input) => ({
+          ...(input.id !== undefined ? { id: input.id } : {}),
           ...(input.kind !== undefined ? { kind: input.kind } : {}),
           ...(input.team_id !== undefined ? { teamId: input.team_id } : {}),
           ...(input.name !== undefined ? { name: input.name } : {}),
@@ -117,7 +118,7 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
               (await service.identify(agentId)) ?? {
                 id: agentId,
                 session_id: agentId,
-                role: 'single',
+                role: 'member',
                 owner: agentId,
                 visibility: 'private',
                 state: 'closed',

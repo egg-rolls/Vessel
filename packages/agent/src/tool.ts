@@ -288,8 +288,8 @@ export function createAgentTool(
      * - owner 调用 / 非 close 动作：放行；
      * - self-close：放行；
      * - temporary：雇佣者或同 Team 成员放行，其它拒绝；
-     * - member：需要人类审批（ask）；
-     * - single（root owner / 独立 agent）记录：拒绝。
+     * - member：需要人类审批（ask）—— 含 `main`。0.28 删除了「single 记录直接 deny」
+     *   这条：`main` 现在是 member，成员关它要让人类看到并有明确答复，而不是静默拒绝。
      * 批量 close 中只要含 member 就整体 ask 一次。
      */
     checkPermission: async (args: unknown, ctx: ToolContext): Promise<'allow' | 'deny' | 'ask'> => {
@@ -323,9 +323,7 @@ export function createAgentTool(
         // 无法解析的目标由 handler 报 unknown_member。
         if (target === undefined) continue;
         if (target.id === caller.id) continue;
-        // single（root owner / 独立 agent）记录不可被成员关闭。
-        if (target.role === 'single') return 'deny';
-        // member 关闭需要人类审批。
+        // member 关闭需要人类审批（`main` 也是 member，同样走审批而不是被静默拒绝）。
         if (target.role === 'member') {
           needAsk = true;
           continue;
@@ -461,12 +459,12 @@ export function createAgentTool(
                 content,
               });
             }
-            // owner 是 unbound single：它跟人类的对话就是自己的 session，每轮回复的
-            // 文本人类直接能看到。所以 owner 没有「把话递给人类」这个动作可做 ——
+            // owner 的会话就是人类直接看的那个 session，每轮回复的文本人类直接能看到。
+            // 所以 owner 没有「把话递给人类」这个动作可做 ——
             // 那是给 Team 成员用的（成员在 Team 里跑，人类不在它的 session 里）。
             // 两条拒绝理由不同，文案必须分开，否则模型会去追一个不存在的动作：
             // - `human`：回复本身就是回答，不需要 send；
-            // - 地址形式：owner 没有 Team，构造不出 `<name>@<node>:<team>`。
+            // - 地址形式：owner 所在 Team 的构型不允许它从这里发地址。
             // 旧文案让模型「用 vessel federation post --from ...」——那是 CLI，模型没有
             // 这条工具调用可发，属于不可执行的死提示。错误消息给的替代动作必须真能用。
             if (typeof to === 'string' && (to.includes('@') || to === HUMAN_PRINCIPAL)) {

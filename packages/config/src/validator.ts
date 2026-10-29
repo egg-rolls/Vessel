@@ -1952,6 +1952,19 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         value: agent.ownerId,
       });
     }
+    // 0.28：临时 agent 空闲回收 TTL。0 = 关闭，负数无意义（拒绝，不静默回退默认）。
+    if (
+      agent.temporaryTtlHours !== undefined &&
+      (typeof agent.temporaryTtlHours !== 'number' ||
+        !Number.isFinite(agent.temporaryTtlHours) ||
+        agent.temporaryTtlHours < 0)
+    ) {
+      errors.push({
+        path: 'agent.temporaryTtlHours',
+        message: 'agent.temporaryTtlHours must be a non-negative number',
+        value: agent.temporaryTtlHours,
+      });
+    }
 
     // 0.1.0 只有 systemPrompt 被消费——其余字段明确警告，不静默忽略。
     for (const key of ['name', 'temperature', 'maxTokens'] as const) {
@@ -2408,6 +2421,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'permissionMode',
     'readOnlyTools',
     'ownerId',
+    'temporaryTtlHours',
   ],
   session: ['backend', 'storagePath', 'maxHistory'],
   permission: ['autoApprove', 'neverAutoApprove'],

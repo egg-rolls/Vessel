@@ -15,7 +15,7 @@
 export type AgentVisibilityLike = 'private' | 'team' | 'tenant';
 
 /** 成员角色（与 packages/agent 的 AgentRole 同值）；转换只经 `agents.update`。 */
-export type AgentRoleLike = 'single' | 'member' | 'temporary';
+export type AgentRoleLike = 'member' | 'temporary';
 
 /** 成员状态机值（含只读 legacy `stale`）。 */
 export type AgentStateLike =
@@ -63,6 +63,15 @@ export interface AgentStatusLike {
 
 /** `agents.create` 的单个条目（workspace 由 handler 从 team_id 解析后填入）。 */
 export interface AgentCreateLikeInput {
+  /**
+   * 0.28（D10）：本地装配层直接调用时指定 agent id。
+   *
+   * 仅进程内适配器使用（`local-run-adapter`）：把 agent id 定成已有的会话 id，
+   * 使 `create` 生成的唯一 body 恰好就是那个会话，避免「agent 自带一具 body +
+   * 会话再建一具」的双 body（CONTRACT-0.28 §1 要求恰好一具）。
+   * **不进 gateway 的 `agents.create` schema**：远端仍由服务生成 id。
+   */
+  id?: string;
   /** 输入判别（不落盘）：peer 无 owner 且绑定 team；contractor 归属调用者。缺省 = 旧行为。 */
   kind?: 'peer' | 'contractor';
   /** peer / 成员派生路径：按已存在 Team 绑定；peer 必填。 */

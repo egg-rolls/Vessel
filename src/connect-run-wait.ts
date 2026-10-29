@@ -100,11 +100,13 @@ export async function waitForConnectedRun(options: WaitForConnectedRunOptions): 
   const candidates = new Set<string>();
   let coreRunId: string | undefined;
   /**
-   * `runs.get` 是否可用。可用时只信 job → core_run_id 的权威映射，
-   * 不再用 session+input 猜测（同 prompt 并发 run 会误收别人的终态）。
+   * 明确探测到 `runs.get` 拿不到本 run 的记录后才允许 session+input 事件猜测兜底。
+   *
+   * 0.28 D11：**不能**因为「曾经成功过」就永久关闭兜底。本地 member run /
+   * 非 durable 远端在 run 期间 `runs.get` 成功、终态后记录消失，若沿用旧判据
+   * （只有 `!authoritative` 才置位）兜底永不启用，只能等到超时；
+   * 而终态事件其实早已到达。见 CONTRACT-0.28 §9.1。
    */
-  let authoritative = false;
-  /** 明确探测到 runs.get 不可用后才允许事件猜测兜底 */
   let getRunUnavailable = false;
 
   const matchStarted = (event: RunEvent): boolean => {
@@ -172,14 +174,14 @@ export async function waitForConnectedRun(options: WaitForConnectedRunOptions): 
         try {
           raw = await getRun(jobId);
         } catch {
-          // 旧 gateway / 权限不足：允许退回 session+input 事件匹配。
-          if (!authoritative) getRunUnavailable = true;
+          // 旧 gateway / 权限不足 / 记录已消失（非 durable）：一律退回事件匹配。
+          // 「查不到」与「不可用」同等对待——见 CONTRACT-0.28 §9.1。
+          getRunUnavailable = true;
           trySettleFromEvents();
           return;
         }
         const record = unwrapRun(raw);
         if (record === undefined || settled) return;
-        authoritative = true;
         getRunUnavailable = false;
         if (typeof record.core_run_id === 'string') {
           coreRunId = record.core_run_id;
@@ -197,8 +199,20 @@ export async function waitForConnectedRun(options: WaitForConnectedRunOptions): 
           settleFromEvent(direct);
           return;
         }
-        // 只有明确探测到 runs.get 不可用时，才退回 session+input 猜测。
+        // 0.27 起 `job_id` 与 core run id 同值（gateway.ts:792）：先做**精确**匹配，
+        // 它不会误收同 prompt 的其它 run。这一步必须在 session+input 猜测之前。
+        const exact = terminalByRun.get(jobId);
+        if (exact !== undefined) {
+          settleFromEvent(exact);
+          return;
+        }
+        // 只有明确探测到 runs.get 不可用、且精确匹配也没命中时，才退回猜测。
         if (!getRunUnavailable) return;
+        // 0.27 起 job_id 就是 run_id：一旦本 job 的 started 被我方看到（候选里
+        // 有 jobId），它的终态一定会以 jobId 到达，绝不能退回「session+input」
+        // 猜测 —— 同 prompt 的并发 run 会因为 input 相同而进同一候选集，
+        // 先完成的那个会被误认成本 job 的终态（实测可复现）。
+        if (candidates.has(jobId)) return;
         for (const runId of candidates) {
           const terminal = terminalByRun.get(runId);
           if (terminal) {
@@ -223,12 +237,20 @@ export async function waitForConnectedRun(options: WaitForConnectedRunOptions): 
           settleFromEvent(event);
           return;
         }
-        if (getRunUnavailable && candidates.has(event.run_id)) {
-          // 旧 gateway（runs.get 不可用）：退回 session+input 匹配。
+        // 0.27 起 job_id 就是 run_id：本 job 的终态可以**精确**认领，
+        // 不必等 runs.get（本地 / 非 durable 远端终态后就查不到了）。
+        if (event.run_id === jobId) {
           settleFromEvent(event);
           return;
         }
-        // 权威模式下先缓冲；runs.get 会给出本 job 的 core_run_id 或终态。
+        if (getRunUnavailable && !candidates.has(jobId) && candidates.has(event.run_id)) {
+          // 旧 gateway（job_id ≠ run_id）：退回 session+input 匹配。
+          // 一旦 `jobId` 已出现在候选里，说明本 job 的身份是可精确判定的，
+          // 此时猜测会误收同 prompt 的其它 run，因此不再允许。
+          settleFromEvent(event);
+          return;
+        }
+        // 先缓冲；runs.get 会给出本 job 的 core_run_id 或终态。
         void refreshRun();
       });
 

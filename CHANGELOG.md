@@ -9,6 +9,36 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [0.28.0] - 2026-10-29
+
+> 0.28.0（基于 0.27.0，未发布）：Team 即工作区，会话即临时 agent。完整记录见
+> [`docs/versions/0.28.0.md`](docs/versions/0.28.0.md)。未 tag、未 publish。
+
+### Removed
+
+- **`single` role**：`AgentRole` 收敛为 `member | temporary`，`main` 是普通成员。
+  存量快照读取时降级为 `member`。
+- **一 agent 多 body**：一个 agent 恰好一具 live body（`body_id ≡ session_id`），
+  rotate 窗口内允许两具。快照格式不变，存量多 body 取 primary、其余进 `body_history`。
+- **`maxLiveBodies` / `bodyIdleTtlHours`**：换成 agent 级 `agent.temporaryTtlHours`（默认 2h）。
+
+### Added
+
+- **Team 即工作区**：打开目录即得到对应 Team；撞 slug 加后缀且绝不合并；
+  headless 同一 data root 至多一个合成 Team。
+- **会话即 agent**：Web / TUI 新会话建临时 agent，三入口同走 `runs.start → admit`。
+- **临时 agent 回收与复活**：到期从 roster 移除但保留 body 记录，复活可接回原会话。
+- **role 感知上下文策略**：临时 agent 不自动压缩、到线只提示；策略可在活体上热切换。
+
+### Fixed
+
+- `waitForConnectedRun` 事件兜底从不启用（本地 member run 无 durable checkpoint），
+  并修掉同 prompt 并发时误收他人终态。
+- 本地 REPL 绕过准入，会话不属于任何 agent —— 改走 `admit`。
+- 飞书渠道在真实装配下起不来（`AgentService` 早于 wiring 构造）、成员名含冒号非法、
+  TTL 回收后不能复活。
+- `slugifyWorkspace` 缺 `realpath` 与 NFC 归一。
+
 ## [0.27.0] - 2026-10-28
 
 > 0.27.0（基于 0.26.2，未发布）：架构级重写——把三套并行执行事实收敛成一套统一

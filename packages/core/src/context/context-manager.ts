@@ -127,6 +127,14 @@ export class MemoryContextManager implements ContextManager {
     return this.config.maxTokens ?? 1_000_000;
   }
 
+  /**
+   * 0.28：自动压缩是否启用。只读暴露给 runtime：关闭时压力提示不能在上穿压缩
+   * 阈值后静默（没有后续压缩会再把它降回来）。
+   */
+  get autoCompact(): boolean {
+    return this.config.autoCompact !== false;
+  }
+
   /** 用 LLM 返回的真实 token 数替代估算 */
   updateRealTokens(total: number): void {
     this.realTokens = total;

@@ -331,7 +331,6 @@ function LiveBodiesList({
 const CONVERSION_LABEL_KEYS: Record<RoleConversion, string> = {
   member: 'team.role.toMember',
   temporary: 'team.role.toTemporary',
-  single: 'team.role.toSingle',
 };
 
 function errorCodeOf(error: unknown): string | undefined {

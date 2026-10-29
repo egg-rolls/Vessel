@@ -3,18 +3,21 @@
  *
  * - 成员经注入的 `AgentService` 创建（id 按 chat 派生；重复 id 视为 snapshot
  *   重载后的已存在成员，按 createOrRestoreOwner 的口径容忍）；
- * - 执行走 `service.admit`：`session_id = <prefix>:<chat_id>` 保证 per-chat Body
- *   与独立会话历史；渠道自身的 per-chat 串行由 channel.ts 的 PerChatQueues 保证，
- *   全局并发 / 同 body 串行由 tenant scheduler 统一裁决；
+ * - 执行走 `service.admit`，**只给 `agent_id`**：一个 agent 恰好一具 Body
+ *   （CONTRACT §1），per-chat 的隔离由「每个 chat 一个 agent」保证，不再需要旧的
+ *   `session_id = <prefix>:<chat_id>` 合成 session。渠道自身的 per-chat 串行由
+ *   channel.ts 的 PerChatQueues 保证，全局并发 / 同 body 串行由 tenant scheduler 裁决；
  * - `admit` 只返回排队信封；最终文本来自 `run.completed.data.output`。
  *   等待口径与 `src/connect-run-wait.ts` 一致（先订阅注入的 events 流再 admit，
  *   按 `run_id` 匹配终态），但插件不得 import `src/**`，因此在此复刻约 15 行语义；
  * - 成员 run.* 事件已由 service 的父事件流接线到达注入的 `events`，
  *   本类不再做任何事件转发；
+ * - 成员被 TTL 回收后，下一条消息先 `reinstate` 原地复活再 admit（CONTRACT §4.2）；
+ *   Team 由装配层注入 `resolveTeamId`，缺省时保持旧的 `member_closed` 行为；
  * - 达到 max_members 后新 chat 返回 MemberLimitError（渠道回 busy，不逐出）。
  */
 
-import { AgentError, type AgentService } from '@vessel-agent/agent';
+import { type AdmitResult, AgentError, type AgentService } from '@vessel-agent/agent';
 import type { EventStream, RunEvent } from '@vessel-agent/core';
 import { fallbackAgentId, maskSecrets, sanitizeAgentId } from './config.js';
 import type { ResolvedFeishuConfig } from './types.js';
@@ -55,6 +58,18 @@ function terminalOutputOf(event: RunEvent): string {
   });
 }
 
+/** 成员被回收（TTL sweep / 显式 close）后 admit 抛出的唯一错误码。 */
+function isMemberClosed(error: unknown): boolean {
+  if (error instanceof AgentError) return error.code === 'member_closed';
+  // 插件与装配层可能各持一份 `@vessel-agent/agent`（node 链接 / 测试双实例）：
+  // 结构判据兜底，避免因 instanceof 失配把可复活路径当成未知错误。
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === 'member_closed'
+  );
+}
+
 /** abort 原因归一为 Error；渠道侧按 signal.aborted 静默处理。 */
 function abortError(signal: AbortSignal): Error {
   const reason: unknown = signal.reason;
@@ -71,6 +86,12 @@ export interface ChatMemberRunnerOptions {
   service: AgentService;
   /** 取消在途 run（装配层接线）；缺省只放弃等待，不通知 service。 */
   cancelRun?: (runId: string, reason?: string) => boolean;
+  /**
+   * 0.28 F2：成员被 TTL 回收后复活所需的 Team id（CONTRACT §4.2）。
+   * `reinstate` 的 `team_id` 是必填，渠道自己不知道 workspace，只能由装配层
+   * 提供（默认 workspace 对应的 Team）；缺省时不复活，`member_closed` 原样抛出。
+   */
+  resolveTeamId?: () => string | undefined;
 }
 
 export class ChatMemberRunner {
@@ -126,8 +147,7 @@ export class ChatMemberRunner {
    */
   async run(chatId: string, text: string, signal: AbortSignal): Promise<string> {
     const agentId = await this.ensureMember(chatId);
-    const sessionId = `${this.options.config.sessionPrefix}:${chatId}`;
-    return await this.waitForOutput(agentId, sessionId, text, signal);
+    return await this.waitForOutput(agentId, text, signal);
   }
 
   /**
@@ -147,13 +167,8 @@ export class ChatMemberRunner {
   }
 
   /** 先订阅再 admit；admit 返回前到达的终态进缓冲，极快 run 不会漏。 */
-  private async waitForOutput(
-    agentId: string,
-    sessionId: string,
-    text: string,
-    signal: AbortSignal,
-  ): Promise<string> {
-    const { service, events, cancelRun } = this.options;
+  private async waitForOutput(agentId: string, text: string, signal: AbortSignal): Promise<string> {
+    const { events, cancelRun } = this.options;
 
     const buffered: RunEvent[] = [];
     let onTerminal: ((event: RunEvent) => void) | undefined;
@@ -166,11 +181,9 @@ export class ChatMemberRunner {
     try {
       if (signal.aborted) throw abortError(signal);
 
-      const admitted = await service.admit({
-        agent_id: agentId,
-        session_id: sessionId,
-        content: text,
-      });
+      // 只给 `agent_id`：`admit` 会解析到该 agent 的唯一 live Body。带 `from` 缺省
+      // 是 `human`（消息发送者是人类，不是成员归属的默认 owner）。
+      const admitted = await this.admitWithRevival(agentId, text);
 
       return await new Promise<string>((resolve, reject) => {
         let settled = false;
@@ -224,6 +237,44 @@ export class ChatMemberRunner {
     }
   }
 
+  /**
+   * 投递；成员已被 TTL 回收时先 `reinstate` 原地复活再重试一次（CONTRACT §4.2）。
+   *
+   * 只在 `admit` 报 `member_closed` 时触发：该错误在入队前抛出，重试不会留下
+   * 半条消息。复活是幂等原语（present 成员直接返回现状），但这里只在 closed
+   * 时调用，避免把仍然存活的无 Team 成员顺手绑进 Team。
+   */
+  private async admitWithRevival(agentId: string, text: string): Promise<AdmitResult> {
+    const { service } = this.options;
+    try {
+      return await service.admit({ agent_id: agentId, content: text });
+    } catch (error) {
+      if (!isMemberClosed(error)) throw error;
+      if (!(await this.revive(agentId))) throw error;
+      return await service.admit({ agent_id: agentId, content: text });
+    }
+  }
+
+  /**
+   * 复活被回收的渠道成员。返回 false 表示无法复活（装配层未提供 Team / 成员
+   * 不在 registry），调用方保留原始的 `member_closed`。
+   *
+   * `reinstate` 会原地清 body 的 `retiredAt`、重设 primary、清 bodyHistory 中同一
+   * session 的条目并刷新 lastSeen，因此 agent id / session_id / 历史都不变；
+   * 渠道侧不需要（也不能）新建 body。
+   */
+  private async revive(agentId: string): Promise<boolean> {
+    const { service, resolveTeamId } = this.options;
+    if (resolveTeamId === undefined) return false;
+    const teamId = resolveTeamId();
+    if (teamId === undefined || teamId === '') return false;
+    const status = await service.identify(agentId);
+    if (status === undefined) return false;
+    if (status.membership !== 'left' && status.state !== 'closed') return false;
+    await service.reinstate({ to: agentId, team_id: teamId });
+    return true;
+  }
+
   private async createMember(chatId: string): Promise<string> {
     const existing = this.members.get(chatId);
     if (existing !== undefined) return existing;
@@ -233,7 +284,7 @@ export class ChatMemberRunner {
     this.usedAgentIds.add(agentId);
 
     try {
-      await this.ensureAgent(agentId, chatId);
+      await this.ensureAgent(agentId);
     } catch (error) {
       this.usedAgentIds.delete(agentId);
       throw error;
@@ -252,14 +303,26 @@ export class ChatMemberRunner {
    * 在注入的 service 上创建成员；重复 id 视为 snapshot 重载后的已存在成员
    * （口径同 src/agent-service-wiring.ts 的 createOrRestoreOwner，但不 import 它）：
    * 只吞 `duplicate member id` 这一种 invalid_input，其余原样抛出。
+   *
+   * 只传 `id`，其余全走 service 的缺省：导出的角色是 `temporary`（渠道成员是受管 /
+   * 临时的，`single` 在 0.28 已不存在），不绑 Team（chat 没有 workspace 概念）。
+   *
+   * **为什么不传 name**（0.28 R8）：
+   * - 合法形状不是充分条件。`name` 一旦存在且 service 配了 `defaultWorkspace`，
+   *   `create` 会走 `teamBinder.ensureForWorkspace({ workspace, name })` 把成员绑进
+   *   该 Team（`visibility` 随之变 `team`）。渠道成员必须保持 unbound private，
+   *   所以这里连 name 都不给；缺省命名由 service 的 `autoNameFor` 负责。
+   * - 旧写法 `name: \`feishu:${chatId}\`` 在任何配置下都不合法：`MEMBER_NAME_RE`
+   *   （`packages/agent/src/service.ts` 的 `/^[A-Za-z0-9_-]{1,64}$/`）不接受 `:`，
+   *   该 create 必然抛 `invalid_input`（`name must match ...`）。成员 id 已经编码了
+   *   chat（`feishu_<sanitized chat id>`），name 不承担寻址职责。
+   *
+   * **不传 owner**：temporary 的缺省归属由 service 决定（`AgentServiceOptions.ownerId`）；
+   * 渠道侧钉死一个 owner 会把「谁拥有这些成员」固化在插件里，与装配层的裁决冲突。
    */
-  private async ensureAgent(agentId: string, chatId: string): Promise<void> {
+  private async ensureAgent(agentId: string): Promise<void> {
     try {
-      await this.options.service.create({
-        id: agentId,
-        role: 'single',
-        name: `feishu:${chatId}`,
-      });
+      await this.options.service.create({ id: agentId });
     } catch (error) {
       const duplicate =
         error instanceof AgentError &&

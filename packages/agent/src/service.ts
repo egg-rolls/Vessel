@@ -29,7 +29,6 @@ import {
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import {
-  ADMIN_VIEWER,
   type AgentBodyRecord,
   liveBodies,
   type MemberRecord,
@@ -81,6 +80,7 @@ import {
   type DispatchInput,
   type DispatchResult,
   type ListFilter,
+  MAX_BODY_HISTORY,
   MAX_MESSAGE_BYTES,
   type MemberPermissionState,
   type MemberRuntimeMember,
@@ -172,17 +172,22 @@ function assertExplicitId(id: string): void {
   if (isReservedPrincipal(id)) throw nameReservedError('id', id);
 }
 
-/** 每 agent live body 上限缺省值 */
-const DEFAULT_MAX_LIVE_BODIES = 20;
-
 /**
  * turn 域预算维度：投递侧不拦（否则消息进不了 body mailbox，override 也无从恢复）；
  * 由 turn_start 检查后留在 mailbox，override / release 后重新准入。
  */
 const TURN_DIMENSIONS: ReadonlySet<string> = new Set(['turns', 'tokens']);
 
-/** 空闲 body TTL 缺省值（小时）；0 = 关闭 */
-const DEFAULT_BODY_IDLE_TTL_HOURS = 24;
+/**
+ * 临时 agent 空闲回收 TTL 缺省值（小时，D5）；0 = 关闭。
+ *
+ * 2 小时是裁决值：回收可逆（`reinstate` 原地复活），代价只是复活一次。
+ */
+const DEFAULT_TEMPORARY_TTL_HOURS = 2;
+
+/** sweep 节奏：`clamp(ttl / 10, 60s, 15min)`；不做独立配置键 */
+const SWEEP_INTERVAL_MIN_MS = 60_000;
+const SWEEP_INTERVAL_MAX_MS = 900_000;
 
 /** Body 执行态（对外 BodyStatus.state） */
 type BodyExecState = 'idle' | 'running' | 'waiting_permission' | 'closed';
@@ -304,7 +309,14 @@ function toBodyStatus(entry: BodyEntry): BodyStatus {
   };
 }
 
-/** 从快照恢复记录：engine 状态是进程内易失，重启后非 left 一律 idle + gone */
+/**
+ * 从快照恢复记录：engine 状态是进程内易失，重启后非 left 一律 idle + gone。
+ *
+ * 0.28：文件格式仍是 v4 `bodies[]`，但语义收窄为「一具 live Body」。存量多 body
+ * 快照按 PLAN §5.3 迁移：primary 留作 `body`，其余 live body 以
+ * `retired_at = last_active_at` 进 `body_history`。**绝不在 parse 阶段 reject** ——
+ * 那会把整条成员丢掉，其全部 session 不可见。
+ */
 function recordFromStatus(status: PersistedAgentRecord, now: number): MemberRecord {
   const state: MemberState =
     status.membership === 'left' || status.state === 'closed' ? 'closed' : 'idle';
@@ -330,25 +342,43 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
       primary: true,
     });
   }
-  const primaryBodyId =
-    status.primary_body_id ??
-    status.current_body?.session_id ??
-    bodies.find((body) => body.primary && body.retiredAt === undefined)?.bodyId;
-  const primary = bodies.find((body) => body.bodyId === primaryBodyId);
+  const live = bodies.filter((body) => body.retiredAt === undefined);
+  const declaredPrimaryId =
+    status.primary_body_id ?? status.current_body?.session_id ?? status.session_id;
+  // primary 选取阶梯：显式指针 → primary 标记 → 最近活跃 → 第一具 live；
+  // 全 body 都已退役时退回「任意一具」（保底可寻址，见 PLAN §5.3 末条）。
+  const chosen =
+    live.find((body) => body.bodyId === declaredPrimaryId) ??
+    live.find((body) => body.primary) ??
+    [...live].sort((left, right) => right.lastActiveAt - left.lastActiveAt)[0] ??
+    bodies.find((body) => body.bodyId === declaredPrimaryId) ??
+    bodies[0];
+  const bodyHistory = [...(status.body_history ?? [])];
+  const seenHistory = new Set(bodyHistory.map((entry) => entry.session_id));
+  const retired: AgentBodyRecord[] = [];
+  for (const body of bodies) {
+    if (body === chosen || body.retiredAt !== undefined) continue;
+    // 降级为历史的 live body：必须有 history 条目，否则 `ensureBody` 认不出它已退役，
+    // 会被惰性 createBody 复活成第二具 live Body。
+    if (!seenHistory.has(body.bodyId)) {
+      bodyHistory.push({
+        session_id: body.bodyId,
+        epoch: body.epoch,
+        started_at: body.createdAt,
+        retired_at: body.lastActiveAt,
+      });
+      seenHistory.add(body.bodyId);
+    }
+    retired.push(body);
+  }
+  if (retired.length > 0) {
+    bodyHistory.sort((left, right) => left.retired_at - right.retired_at);
+  }
+  const primary = chosen === undefined ? undefined : { ...chosen, primary: true };
   return {
     id: status.id,
     sessionId: status.session_id,
-    bodies,
-    ...(primaryBodyId !== undefined ? { primaryBodyId } : {}),
-    ...(primary !== undefined
-      ? {
-          currentBody: {
-            session_id: primary.bodyId,
-            epoch: primary.epoch,
-            started_at: primary.createdAt,
-          },
-        }
-      : {}),
+    ...(primary !== undefined ? { body: primary } : {}),
     ...(status.name !== undefined ? { name: status.name } : {}),
     ...(status.parent_id !== undefined ? { parentId: status.parent_id } : {}),
     role: status.role,
@@ -359,7 +389,7 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     membership: status.membership,
     ...(status.team_id !== undefined ? { teamId: status.team_id } : {}),
     rotation: 'stable',
-    bodyHistory: status.body_history ?? [],
+    bodyHistory: bodyHistory.slice(-MAX_BODY_HISTORY),
     ...(status.model !== undefined ? { model: status.model } : {}),
     ...(status.system_prompt !== undefined ? { systemPrompt: status.system_prompt } : {}),
     ...(status.forked_from !== undefined ? { forkedFrom: status.forked_from } : {}),
@@ -441,8 +471,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly newId: () => string;
   private readonly logger: Logger;
   private readonly snapshot: AgentSnapshotStore | undefined;
-  private readonly maxLiveBodies: number;
-  private readonly bodyIdleTtlMs: number;
+  /** 临时 agent 空闲回收 TTL（毫秒）；0 = 关闭 */
+  private readonly temporaryTtlMs: number;
   private readonly bodyLease: BodyLeasePort | undefined;
   private readonly runStore: RunStore | undefined;
   /** AgentService 的 body registry：agentId → bodyId → BodyEntry（含已退役直到清理） */
@@ -498,15 +528,11 @@ export class AgentServiceImpl implements AgentService {
     this.teamBinder = options.teamBinder;
     this.teamPolicy = options.teamPolicy;
     this.budgetPort = options.budget;
-    this.maxLiveBodies =
-      typeof options.maxLiveBodies === 'number' && options.maxLiveBodies > 0
-        ? Math.floor(options.maxLiveBodies)
-        : DEFAULT_MAX_LIVE_BODIES;
     const ttlHours =
-      typeof options.bodyIdleTtlHours === 'number' && options.bodyIdleTtlHours >= 0
-        ? options.bodyIdleTtlHours
-        : DEFAULT_BODY_IDLE_TTL_HOURS;
-    this.bodyIdleTtlMs = ttlHours * 60 * 60 * 1000;
+      typeof options.temporaryTtlHours === 'number' && options.temporaryTtlHours >= 0
+        ? options.temporaryTtlHours
+        : DEFAULT_TEMPORARY_TTL_HOURS;
+    this.temporaryTtlMs = ttlHours * 60 * 60 * 1000;
     this.bodyLease = options.bodyLease;
     this.runStore = options.runStore;
 
@@ -541,8 +567,17 @@ export class AgentServiceImpl implements AgentService {
     }
     const idsByName = new Map<string, string[]>();
     let restored = 0;
+    let migrated = 0;
     for (const status of members) {
       const record = recordFromStatus(status, this.now());
+      // 0.28 迁移收尾（见 `snapshot.ts`）：存量 `single` 降级成 `member`，但它带着
+      // `visibility: private` 且没有 Team。member 只允许 team 可见，所以
+      // 「member + private」这个组合只可能由迁移产生（`create` 从不产出）。
+      // 不处理的话：成员对自己之外的入口全部 `member_not_visible`，也不在任何
+      // roster 里 —— 升级即静默消失。按不变式识别，不新增持久字段。
+      if (record.role === 'member' && record.visibility === 'private') {
+        if (await this.bindMigratedMember(record)) migrated += 1;
+      }
       try {
         this.registry.add(record);
         restored += 1;
@@ -567,7 +602,34 @@ export class AgentServiceImpl implements AgentService {
         this.logger.warn('agent.snapshot.duplicate_name', { name, ids });
       }
     }
+    if (migrated > 0) {
+      this.logger.warn('agent.snapshot.single_role_migrated', { count: migrated });
+    }
     if (restored > 0) this.scheduleSnapshot();
+  }
+
+  /**
+   * 把迁移后的成员接回 Team：有 defaultWorkspace 时 ensure（幂等）并绑定；
+   * 返回是否绑定成功。失败只警告、保留记载 —— 成员仍可按 id 寻址，
+   * 只是没有 Team 归属，绝不因为绑定失败把记录丢掉。
+   */
+  private async bindMigratedMember(record: MemberRecord): Promise<boolean> {
+    if (this.teamBinder === undefined || this.defaultWorkspace === undefined) {
+      this.logger.warn('agent.snapshot.single_role_unbound', { member_id: record.id });
+      return false;
+    }
+    try {
+      const team = await this.teamBinder.ensureForWorkspace({ workspace: this.defaultWorkspace });
+      record.teamId = team.team_id;
+      record.visibility = 'team';
+      return true;
+    } catch (error) {
+      this.logger.warn('agent.snapshot.single_role_bind_failed', {
+        member_id: record.id,
+        error: errorText(error),
+      });
+      return false;
+    }
   }
 
   async create(input: CreateMemberInput): Promise<MemberStatus>;
@@ -626,9 +688,6 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', 'owner must be a non-empty string or null');
     }
     const explicitRole = input.role === undefined ? undefined : readAgentRole(input, 'role');
-    if (explicitRole === 'single') {
-      return this.createSingle(input);
-    }
     if (kind === 'contractor' && rawOwner === null) {
       throw new AgentError('invalid_input', 'contractor requires an owner');
     }
@@ -646,7 +705,18 @@ export class AgentServiceImpl implements AgentService {
     }
     // v3 映射：peer → member（owner=self）；contractor / 无 kind → temporary（owner=雇佣者）。
     const role: AgentRole = peer ? 'member' : 'temporary';
-    const owner = role === 'member' ? id : ((rawOwner as string | undefined) ?? this.defaultOwner);
+    // `role` 参数只用于一致性校验，不参与推导：`main` 走 peer，成员由 kind / owner 决定。
+    // 允许覆盖会让「显式 role」与「kind 推导」产生两种互相矛盾的身份，所以冲突即拒绝。
+    if (explicitRole !== undefined && explicitRole !== role) {
+      throw new AgentError(
+        'invalid_input',
+        `role ${explicitRole} conflicts with the role derived from kind / owner (${role})`,
+      );
+    }
+    // temporary 的缺省 owner 是**人类**（发起创建的人），不是 `defaultOwner`（`main`）。
+    // 人类消息的缺省 `from` 就是 `human`；缺省成 `main` 会让每个渠道 / 本地新会话的
+    // private 成员对人类不可见，随后每条消息都以 `member_not_visible` 结束。
+    const owner = role === 'member' ? id : ((rawOwner as string | undefined) ?? HUMAN_PRINCIPAL);
 
     const name = optionalString(input.name);
     // 形状校验必须早于任何 registry / team 副作用：名字最终会进跨节点地址，
@@ -741,17 +811,7 @@ export class AgentServiceImpl implements AgentService {
     const record: MemberRecord = {
       id,
       sessionId: id,
-      bodies: [
-        {
-          bodyId: id,
-          epoch: 0,
-          createdAt: now,
-          lastActiveAt: now,
-          primary: true,
-        },
-      ],
-      primaryBodyId: id,
-      currentBody: { session_id: id, epoch: 0, started_at: now },
+      body: { bodyId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true },
       role,
       owner,
       visibility,
@@ -780,58 +840,6 @@ export class AgentServiceImpl implements AgentService {
       presence: 'live',
       ...(spawnedBy !== undefined ? { spawned_by: spawnedBy } : {}),
     });
-    return this.statusFor(record);
-  }
-
-  /**
-   * `main` 等普通 single agent（0.27）：owner=self、无 Team / parent、private（可显式）。
-   * 不 attachOwner、无外部 owner 队列。
-   */
-  private async createSingle(input: Record<string, unknown>): Promise<MemberStatus> {
-    const id = input.id === undefined ? this.newId() : readRequiredString(input, 'id');
-    if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
-    if (input.id !== undefined) assertExplicitId(id);
-    if (this.registry.get(id) !== undefined || this.registry.getBySession(id) !== undefined) {
-      throw new AgentError('invalid_input', `duplicate member id: ${id}`);
-    }
-    if (input.teamId !== undefined || input.workspace !== undefined) {
-      throw new AgentError('invalid_input', 'single agents must not bind a team');
-    }
-    // 与 createOne 同一语义：同名 present 成员已存在则复用，不新建。
-    // `main` 等启动路径只传 `{ id, role }`、不传 name，占不到这个分支。
-    const name = optionalString(input.name);
-    assertMemberName(name);
-    if (name !== undefined) {
-      const existing = this.reusableByName(name, undefined);
-      if (existing !== undefined) return { ...this.statusFor(existing), reused: true };
-    }
-    const now = this.now();
-    const record: MemberRecord = {
-      id,
-      sessionId: id,
-      bodies: [{ bodyId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true }],
-      primaryBodyId: id,
-      currentBody: { session_id: id, epoch: 0, started_at: now },
-      ...(name !== undefined ? { name } : {}),
-      role: 'single',
-      owner: id,
-      visibility: resolveVisibility(input.visibility, 'private'),
-      state: 'created',
-      presence: 'gone',
-      membership: 'present',
-      rotation: 'stable',
-      bodyHistory: [],
-    };
-    const model = optionalString(input.model) ?? this.defaultModel;
-    if (model !== undefined) record.model = model;
-    const systemPrompt = optionalString(input.systemPrompt);
-    if (systemPrompt !== undefined) record.systemPrompt = systemPrompt;
-    try {
-      await this.spawnRecord(record);
-    } catch (error) {
-      throw new AgentError('spawn_failed', `spawn_failed: ${errorText(error)}`);
-    }
-    this.emit('agent.spawned', record, { state: 'idle', presence: 'live' });
     return this.statusFor(record);
   }
 
@@ -991,12 +999,10 @@ export class AgentServiceImpl implements AgentService {
     const record: MemberRecord = {
       id,
       sessionId: id,
-      bodies: [{ bodyId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true }],
-      primaryBodyId: id,
-      currentBody: { session_id: id, epoch: 0, started_at: now },
+      body: { bodyId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true },
       name,
       role: source.role,
-      // member / single 的 owner 恒为 self；temporary 沿用雇佣者。
+      // member 的 owner 恒为 self；temporary 沿用雇佣者。
       owner: source.role === 'temporary' ? source.owner : id,
       visibility: source.visibility,
       state: 'created',
@@ -1118,22 +1124,28 @@ export class AgentServiceImpl implements AgentService {
     return entry;
   }
 
-  /** 新增一个 live body（上限 / 冲突 / lease 都在这里） */
+  /**
+   * 新增一个 live body —— **唯一闸门**（0.28 单 body 不变量）。
+   *
+   * 已有 live body 时只允许 `rotation: true`（rotate 窗口内新体与待退役体短暂共存）；
+   * 其它任何路径（`ensureBody` 惰性创建 / `create` / `fork`）一律 `body_limit`。
+   * rotate 的 count 检查已删除：与这里重复，且 max = 1 时会让 rotate 恒失败。
+   */
   private async createBody(
     record: MemberRecord,
     bodyId: string,
-    options: { epoch?: number; primary?: boolean } = {},
+    options: { epoch?: number; primary?: boolean; rotation?: boolean } = {},
   ): Promise<AgentBodyRecord> {
     const live = liveBodies(record);
-    if (live.length >= this.maxLiveBodies) {
-      throw new AgentError(
-        'body_limit',
-        `body_limit: ${record.id} (max ${this.maxLiveBodies} live bodies)`,
-      );
+    if (live.length > 0 && options.rotation !== true) {
+      throw new AgentError('body_limit', `body_limit: ${record.id} (max 1 live body)`);
     }
     if (
       this.registry.getBySession(bodyId) !== undefined ||
-      record.bodies.some((body) => body.bodyId === bodyId)
+      record.body?.bodyId === bodyId ||
+      record.retiring?.bodyId === bodyId ||
+      // 已退役的 session 不得重新准入：复活只走 `reinstate`（原地 unretire）。
+      this.registry.isRetiredSession(bodyId)
     ) {
       throw new AgentError('invalid_input', `duplicate session id: ${bodyId}`);
     }
@@ -1163,15 +1175,25 @@ export class AgentServiceImpl implements AgentService {
   ): Promise<{ entry: BodyEntry; body: AgentBodyRecord }> {
     let body: AgentBodyRecord | undefined;
     if (requested !== undefined) {
-      body = record.bodies.find((entry) => entry.bodyId === requested);
+      if (record.body?.bodyId === requested) body = record.body;
+      else if (record.retiring?.bodyId === requested) body = record.retiring;
       if (body !== undefined && body.retiredAt !== undefined) {
         throw new AgentError('invalid_input', `session is retired: ${requested}`);
       }
       if (body === undefined) {
+        // `bodyHistory` 里的 id 也在这里被拒：否则惰性 createBody 会把它复活成
+        // 第二具 live body（D2 不变量破且无任何报错）。
+        if (this.registry.isRetiredSession(requested)) {
+          throw new AgentError('invalid_input', `session is retired: ${requested}`);
+        }
         body = await this.createBody(record, requested, { epoch: 0 });
       }
     } else {
       body = primaryBody(record);
+      if (body?.retiredAt !== undefined) {
+        // 只剩退役 body：不自动开新体，否则复活路径永远走不到（必须 reinstate）。
+        throw new AgentError('invalid_input', `session is retired: ${body.bodyId}`);
+      }
       if (body === undefined) {
         body = await this.createBody(record, this.newId(), { epoch: 0 });
       }
@@ -1245,7 +1267,7 @@ export class AgentServiceImpl implements AgentService {
     at: number = this.now(),
   ): Promise<void> {
     if (entry.retired) return;
-    const wasPrimary = entry.primary || record.primaryBodyId === entry.bodyId;
+    const wasPrimary = entry.primary || record.body?.bodyId === entry.bodyId;
     entry.retired = true;
     entry.state = 'closed';
     entry.primary = false;
@@ -1253,14 +1275,8 @@ export class AgentServiceImpl implements AgentService {
     entry.pending.length = 0;
     for (const runId of entry.queuedRuns) this.scheduler.cancel(runId, `body retired: ${reason}`);
     entry.queuedRuns.clear();
-    if (wasPrimary) {
-      this.registry.pushBodyHistory(record.id, {
-        session_id: entry.bodyId,
-        epoch: entry.epoch,
-        started_at: entry.createdAt,
-        retired_at: at,
-      });
-    }
+    // `retireBody` 自己记 `body_history`；这里不再重复 push，否则同一 session
+    // 会在 DTO 的 body_history 里出现两次。
     this.registry.retireBody(record.id, entry.bodyId, at);
     if (wasPrimary) this.promotePrimary(record);
     this.emitForSession('agent.retired', record, entry.bodyId, {
@@ -1342,7 +1358,8 @@ export class AgentServiceImpl implements AgentService {
   /** 统一准入主链路：resolve → membership/visibility → body → budget → mailbox → scheduler */
   private async admitInternal(input: AdmitInput): Promise<AdmitOutcome> {
     await this.ready;
-    if (this.bodyIdleTtlMs > 0) await this.sweepIdleBodies();
+    // 0.28：不再在 admit 里顺带 sweep —— 那会回收调用方正要投递的目标（竞态）。
+    // 回收只由装配层的定时器驱动（`AgentService` 保持无定时器）。
     const content = readContent(input as unknown as Record<string, unknown>, 'content');
     // 缺省发送者是人类，不是 default owner：owner 是**成员归属**的缺省值，
     // 拿来填消息的 from 会让人类发出的消息带上 `main` 这个 agent 的 id。
@@ -1372,15 +1389,14 @@ export class AgentServiceImpl implements AgentService {
         record = bound;
         requestedBodyId = sessionId;
       } else {
-        record = this.requireAgent(input.agent_id ?? DEFAULT_OWNER);
+        record = this.requireAgent(input.agent_id ?? this.defaultOwner);
         requestedBodyId = sessionId;
       }
     } else {
-      record = this.requireAgent(input.agent_id ?? DEFAULT_OWNER);
+      record = this.requireAgent(input.agent_id ?? this.defaultOwner);
     }
 
-    // 2. membership / presence / visibility
-    // 人类入口（runs.start / REPL / Web）是管理面：private single 对 ADMIN_VIEWER 可见。
+    // 2. membership / presence / visibility（只按 sender 自身的可见性判定）
     if (!this.canAdmitView(record, from)) {
       throw new AgentError('member_not_visible', `member_not_visible: ${record.id}`);
     }
@@ -1771,27 +1787,81 @@ export class AgentServiceImpl implements AgentService {
     }
   }
 
-  /** 空闲 body TTL sweep；返回本次退役数量 */
-  async sweepIdleBodies(now: number = this.now()): Promise<number> {
+  /**
+   * 临时 agent 空闲回收（D5）；返回本次回收的 agent 数量。TTL=0 时 no-op。
+   *
+   * 三条硬约束：
+   * 1. **判据读持久化字段**：`max(record.lastSeen, body.lastActiveAt)`。不读内存
+   *    `lastEntries` —— 冷启动后无人 admit 的 agent 没有 entry，用内存判据就永不触发。
+   * 2. **只回收 `role === 'temporary' && membership === 'present'`**；`member`（含
+   *    `main`）永不回收。
+   * 3. 有在跑轮 / 排队消息 / 权限等待的 agent 一律跳过：回收不得打断在途工作。
+   *
+   * 动作复用 `membership='left'` + `state='closed'`（roster 只放 present），
+   * **不新增持久字段**；body 记录保留并标 `retiredAt`（续接历史的唯一钥匙）。
+   */
+  async sweepIdleTemporaries(now: number = this.now()): Promise<number> {
     await this.ready;
-    if (this.bodyIdleTtlMs <= 0) return 0;
-    let retiredCount = 0;
+    if (this.temporaryTtlMs <= 0) return 0;
+    let reclaimed = 0;
     for (const record of this.registry.all()) {
-      if (record.membership === 'left' || record.state === 'closed') continue;
-      const entries = this.liveEntries(record.id);
-      let changed = false;
-      for (const entry of entries) {
-        if (entry.active !== undefined || entry.closing) continue;
-        if (entry.queuedRuns.size > 0 || entry.pending.length > 0) continue;
-        if (entry.state !== 'idle') continue;
-        if (entry.lastActiveAt + this.bodyIdleTtlMs >= now) continue;
-        await this.retireBodyEntry(record, entry, 'idle_ttl', now);
-        retiredCount += 1;
-        changed = true;
-      }
-      if (changed) this.scheduleSnapshot();
+      if (record.role !== 'temporary') continue;
+      if (record.membership !== 'present') continue;
+      if (record.state === 'closed' || record.state === 'running') continue;
+      if (record.state === 'waiting_permission') continue;
+      if (this.hasNonIdleWork(record.id)) continue;
+      const body = record.body;
+      const lastActive = Math.max(record.lastSeen ?? 0, body?.lastActiveAt ?? 0);
+      if (lastActive + this.temporaryTtlMs >= now) continue;
+      await this.reclaimAgent(record, now, 'idle_ttl');
+      reclaimed += 1;
     }
-    return retiredCount;
+    return reclaimed;
+  }
+
+  /** 该 agent 是否有在跑的轮 / 排队消息 / 权限等待（回收前必须为空） */
+  private hasNonIdleWork(agentId: string): boolean {
+    const entries = this.bodyRegistry.get(agentId);
+    if (entries === undefined) return false;
+    for (const entry of entries.values()) {
+      if (entry.active !== undefined) return true;
+      if (entry.queuedRuns.size > 0) return true;
+      if (entry.pending.length > 0) return true;
+      if (entry.state === 'running' || entry.state === 'waiting_permission') return true;
+    }
+    return false;
+  }
+
+  /**
+   * 回收一个 agent：退役其 body，置 `membership='left'` + `state='closed'`。
+   * 审计复用 `agent.closed` + `reason`，不新增事件类型。
+   */
+  private async reclaimAgent(record: MemberRecord, at: number, reason: string): Promise<void> {
+    for (const entry of [...(this.bodyRegistry.get(record.id)?.values() ?? [])]) {
+      await this.retireBodyEntry(record, entry, reason, at);
+    }
+    // 没有内存 entry 时也要让 body 记录带上 retiredAt：body 记录永不删。
+    if (record.body !== undefined && record.body.retiredAt === undefined) {
+      this.registry.retireBody(record.id, record.body.bodyId, at);
+    }
+    record.state = 'closed';
+    record.membership = 'left';
+    this.registry.setPresence(record.id, 'gone');
+    this.emit('agent.closed', record, {
+      state: 'closed',
+      presence: 'gone',
+      reason,
+    });
+    this.scheduleSnapshot();
+  }
+
+  /** sweep 节奏：`clamp(ttl / 10, 60s, 15min)`；TTL=0 时返回 undefined（没有定时器） */
+  sweepIntervalMs(): number | undefined {
+    if (this.temporaryTtlMs <= 0) return undefined;
+    return Math.min(
+      SWEEP_INTERVAL_MAX_MS,
+      Math.max(SWEEP_INTERVAL_MIN_MS, Math.floor(this.temporaryTtlMs / 10)),
+    );
   }
 
   // ─── send / dispatch ───────────────────────────────────────────
@@ -2056,7 +2126,8 @@ export class AgentServiceImpl implements AgentService {
     if (
       !nonEmpty(toSessionId) ||
       this.registry.getBySession(toSessionId) !== undefined ||
-      target.bodies.some((body) => body.bodyId === toSessionId)
+      target.body?.bodyId === toSessionId ||
+      target.retiring?.bodyId === toSessionId
     ) {
       this.emitForSession('agent.rotate.failed', target, fromSessionId, {
         from_session_id: fromSessionId,
@@ -2067,13 +2138,6 @@ export class AgentServiceImpl implements AgentService {
     }
     const toEpoch = fromEpoch + 1;
     const oldEntry = this.bodyRegistry.get(target.id)?.get(fromSessionId);
-    if (liveBodies(target).length >= this.maxLiveBodies) {
-      return {
-        status: 'failed',
-        code: 'rotate_failed',
-        reason: `body_limit: ${target.id} (max ${this.maxLiveBodies})`,
-      };
-    }
 
     this.registry.setRotation(target.id, 'rotating');
     this.rotations.set(target.id, { fromSessionId, fromEpoch, toSessionId, toEpoch });
@@ -2091,7 +2155,13 @@ export class AgentServiceImpl implements AgentService {
     };
     try {
       try {
-        newBody = await this.createBody(target, toSessionId, { epoch: toEpoch, primary: false });
+        // `rotation: true` 是唯一允许「已有 live body 时再建一具」的入口；
+        // 旧 body 由 addBody 暂存到 retiring，窗口结束后 retireBody 记入 history。
+        newBody = await this.createBody(target, toSessionId, {
+          epoch: toEpoch,
+          primary: false,
+          rotation: true,
+        });
         const newEntry = await this.entryFor(target, newBody, false);
         await this.ensureRuntime(newEntry);
         newEntry.primary = true;
@@ -2138,16 +2208,12 @@ export class AgentServiceImpl implements AgentService {
       });
 
       // 旧 primary 退休；正在跑的旧轮由 executeBodyTurn 的 fencing 分支收口。
+      // 没有内存 entry 时也要收口 `retiring` 槽位并记 history（retireBody 负责记账）。
       if (oldEntry !== undefined) {
         await this.retireBodyEntry(target, oldEntry, 'rotation');
       } else {
-        this.registry.pushBodyHistory(target.id, {
-          session_id: fromSessionId,
-          epoch: fromEpoch,
-          started_at: oldBody.createdAt,
-          retired_at: this.now(),
-        });
         this.registry.retireBody(target.id, fromSessionId);
+        this.promotePrimary(target);
       }
 
       // startup prompt：system 消息，继承触发 rotate 的会话；不计 hop。
@@ -2459,10 +2525,12 @@ export class AgentServiceImpl implements AgentService {
         owner: conversion.owner,
         ...(conversion.teamId !== undefined ? { team_id: conversion.teamId } : {}),
       });
-      this.runtime.notice?.(
-        target.id,
-        `[runtime] identity changed: ${previousRole} → ${conversion.role}; owner=${conversion.owner}; team=${conversion.teamId ?? 'none'}`,
-      );
+      // 0.28 D6 / R4：**同一具活体**按新身份换策略，不重建 body（契约 §5）。
+      // 两条路径共用 `role → policy` 的唯一映射：
+      // - 有活体 ⇒ `applyContextPolicy` 立刻翻转开关；
+      // - 无活体 ⇒ 返回 0，下一次 spawn 读同一份映射，结果一致。
+      const applied = await this.applyContextPolicyToBodies(target);
+      this.announceContextPolicy(target, previousRole, applied);
       await this.flushSnapshot();
     } else {
       this.scheduleSnapshot();
@@ -2477,10 +2545,69 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 把转换后的上下文策略应用到该成员的活体（0.28 D6 / R4）。
+   *
+   * 只给 port 支持时调用；未实现 / 抛错一律按 0 处理 —— 策略轮换失败不得让
+   * 身份转换本身失败（转换已经落盘，回滚代价更大）。
+   */
+  private async applyContextPolicyToBodies(target: MemberRecord): Promise<number> {
+    const apply = this.runtime.applyContextPolicy;
+    if (apply === undefined) return 0;
+    try {
+      // 每个活体都发给 `runtimeMember`（`session_id` 是 body；`role` 是转换后的角色）。
+      // 单 body 不变量下只有一具，但 rotate 窗口内可能有两具，两具都要跟上。
+      let applied = 0;
+      for (const entry of this.liveEntries(target.id)) {
+        const runtimeMember: MemberRuntimeMember = {
+          ...entry.runtimeMember,
+          role: target.role,
+        };
+        // 同步条目缓存的身份：`entry.runtimeMember` 是 spawn 时的快照，转换后已过期。
+        // 不同步它，之后 dispose / 重 spawn / 任何按活体身份读 role 的路径都会看到旧
+        // 角色 —— 比「策略没换」更难发现的静默不一致。
+        entry.runtimeMember = runtimeMember;
+        applied += (await apply.call(this.runtime, runtimeMember)) ?? 0;
+      }
+      return applied;
+    } catch (error) {
+      this.logger.warn('agent.context_policy.apply_failed', {
+        member_id: target.id,
+        role: target.role,
+        error: errorText(error),
+      });
+      return 0;
+    }
+  }
+
+  /**
+   * 身份转换后的上下文策略告知（0.28 R4）。
+   *
+   * 转换后活体上的策略（自动压缩开关 + 压力提示尾句）已经就位，这里只把结果
+   * 显式说给模型：哪条策略、从下一轮起对**这具 body** 生效。不再需要「忽略旧
+   * 压力文案」的补丁式说明 —— 文案本身已随转换热替换。
+   */
+  private announceContextPolicy(
+    target: MemberRecord,
+    previousRole: AgentRole,
+    applied: number,
+  ): void {
+    const compress = target.role === 'member';
+    const live =
+      applied > 0
+        ? 'This body now follows it from the next turn, including the pressure warning wording'
+        : 'It applies from the next body';
+    this.runtime.notice?.(
+      target.id,
+      `[runtime] identity changed: ${previousRole} → ${target.role}; owner=${target.owner}; ` +
+        `team=${target.teamId ?? 'none'}. Context policy: automatic compaction is ` +
+        `${compress ? 'on' : 'off'}. ${live}.`,
+    );
+  }
+
+  /**
    * 角色转换目标状态（不写记录）：
    * - member：Team 必需（显式或已有），owner=self，清 parent，team 可见；
-   * - temporary：owner / parent = 转换者 `from`，Team 显式或沿用，有 Team 则 team 可见；
-   * - single：清 Team / parent，owner=self，private。
+   * - temporary：owner / parent = 转换者 `from`，Team 显式或沿用，有 Team 则 team 可见。
    */
   private resolveRoleConversion(
     target: MemberRecord,
@@ -2520,7 +2647,8 @@ export class AgentServiceImpl implements AgentService {
         visibility: teamId !== undefined ? 'team' : 'private',
       };
     }
-    return { role, owner: target.id, visibility: 'private' };
+    // AgentRole 只剩两值（0.28）；走到这里说明 role 不是 member / temporary。
+    throw new AgentError('invalid_input', `unsupported role conversion: ${role}`);
   }
 
   /** update 选择器：id / 任一 live Body session 直取；否则唯一当前名字。 */
@@ -2575,12 +2703,6 @@ export class AgentServiceImpl implements AgentService {
     if (target === undefined || !this.registry.canView(target, from)) {
       throw new AgentError('member_not_visible', `member_not_visible: ${to}`);
     }
-    if (target.role === 'single') {
-      target.role = 'member';
-      target.owner = target.id;
-      delete target.parentId;
-      target.visibility = 'team';
-    }
     if (target.teamId !== undefined && target.teamId !== teamId) {
       throw new AgentError('invalid_input', `already_in_team: ${target.teamId}`);
     }
@@ -2598,14 +2720,31 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('team_full', `team_full: ${teamId}`);
     }
 
+    // member 的可见性由角色决定（team），不能停在 private：绑上 Team 之后仍是
+    // private 的 member 是个不可达组合（`create` 从不产出，只有存量迁移会出现），
+    // 而 private 只对 owner 可见 —— main 之外的入口会全部 `member_not_visible`。
     if (stillPresent) {
       this.registry.setTeamId(target.id, teamId);
+      if (target.role === 'member' && target.visibility === 'private') target.visibility = 'team';
     } else {
       this.registry.setTeamId(target.id, teamId);
       this.registry.setMembership(target.id, 'present');
       target.state = 'idle';
       this.registry.setPresence(target.id, 'gone');
-      for (const entry of this.liveEntries(target.id)) entry.closing = false;
+      // 复活 = 三件事（CONTRACT §4.2）：membership / state / presence（上面三行）+
+      // body 原地 unretire（清 retiredAt、重设 primary）+ 清 bodyHistory 里该 session。
+      // 不清 retiredAt 的话后续 admit 会撞 `session is retired`，数据在但接不回去。
+      this.registry.unretireBody(target.id);
+      // 刷新计时基准，否则下一个 tick 立刻再回收（判据读的就是这两个字段）。
+      const revivedAt = this.now();
+      target.lastSeen = revivedAt;
+      if (target.body !== undefined) target.body.lastActiveAt = revivedAt;
+      for (const entry of this.bodyRegistry.get(target.id)?.values() ?? []) {
+        entry.closing = false;
+        entry.retired = false;
+        entry.state = 'idle';
+        entry.lastActiveAt = revivedAt;
+      }
     }
 
     this.emit('agent.rejoined', target, { state: target.state, presence: target.presence });
@@ -2615,7 +2754,7 @@ export class AgentServiceImpl implements AgentService {
 
   async list(filter: ListFilter = {}): Promise<MemberStatus[]> {
     await this.ready;
-    if (this.bodyIdleTtlMs > 0) await this.sweepIdleBodies();
+    // 只读：不在 list 里 sweep（隐式回收会改调用方正要读的快照语义）。
     return this.registry.list(filter).map((record) => this.statusFor(record));
   }
 
@@ -2824,11 +2963,9 @@ export class AgentServiceImpl implements AgentService {
   /**
    * 是否 human principal（直接对话免 conversation budget）。
    *
-   * `single` 记录（`main`）**不是**人类：它是 agent，同样受预算约束。
-   * 此前这里还有 `|| id === this.defaultOwner`，与 `role === 'single'` 一起把
-   * `main` 当成人类 —— 但那正是「用成员归属的默认值填消息发送者」造成的假象：
-   * 人类消息的 `from` 曾经就是 `main`。缺省发送者改成 `human` 之后，两者分开，
-   * `main` 只剩「agent」这一个身份。
+   * 判据是「这个 principal 有没有在本机登记成成员」：登记了就是 agent（`main` 也是
+   * agent），没登记才是人类 / 系统语境。**不按 role 判定** —— `role` 描述的是成员
+   * 归属（Team / 雇佣关系），不是「谁在说话」。
    */
   private isHumanPrincipal(id: string): boolean {
     if (isReservedPrincipal(id)) return true;
@@ -2837,15 +2974,15 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * 准入可见性：先按 sender 自身身份判定（private 成员的 owner 语义不变）；
-   * 人类 / 管理面入口再退一步按 ADMIN_VIEWER 判定，使 private `single`（main）
-   * 对 Web / REPL / runs.start 可见，而其它 agent 仍看不到。
+   * 准入可见性：只按 sender 自身的可见性判定（private 成员的 owner 语义）。
+   *
+   * 0.28 删除了 `role === 'single'` 时「人类按 ADMIN_VIEWER 放行 private」这条特例：
+   * 它的存在只是因为 `main` 曾是 private single，而人类入口的 `from` 是 `human`
+   * 不是 `main`。现在 `main` 是 team 成员，人类新建的 temporary 缺省 owner 就是
+   * `human`（`createOne`），所以按 owner 判定即可，不需要身份旁路。
    */
   private canAdmitView(record: MemberRecord, from: string): boolean {
-    if (this.registry.canView(record, from)) return true;
-    if (record.role !== 'single') return false;
-    const human = this.isHumanPrincipal(from);
-    return human && this.registry.canView(record, ADMIN_VIEWER);
+    return this.registry.canView(record, from);
   }
 
   /** conversation 预算检查 + 通过后的告警收集 */
@@ -3143,9 +3280,9 @@ export class AgentServiceImpl implements AgentService {
   /**
    * 入队时标注发送者类别（仅用于模型上下文，不参与权限判定）。
    *
-   * 判据只看「这个 principal 是不是本机登记的成员」：登记了就是 agent（含 `single`
-   * 的 `main`），没登记才是人类 / 系统语境。此前 `role === 'single'` 也归 human，
-   * 与「人类消息的 from 恰好是 main」叠加，导致 `main` 说话和人类说话无法区分。
+   * 判据只看「这个 principal 是不是本机登记的成员」：登记了就是 agent（`main` 也是
+   * agent），没登记才是人类 / 系统语境。这里**不看 role** —— 人类的缺省 `from` 是
+   * `human`，与成员身份彻底分开。
    */
   private messageSource(from: string): AgentMessage['source'] {
     if (from === SYSTEM_PRINCIPAL) return 'system';
@@ -3193,11 +3330,11 @@ function readUpdateRole(record: Record<string, unknown>): AgentRole | undefined 
   return readAgentRole(record, 'role');
 }
 
-/** 严格的 role 字面量校验 */
+/** 严格的 role 字面量校验（0.28 只剩 member / temporary） */
 function readAgentRole(record: Record<string, unknown>, key: string): AgentRole {
   const value = record[key];
-  if (value !== 'single' && value !== 'member' && value !== 'temporary') {
-    throw new AgentError('invalid_input', `${key} must be single, member or temporary`);
+  if (value !== 'member' && value !== 'temporary') {
+    throw new AgentError('invalid_input', `${key} must be member or temporary`);
   }
   return value;
 }

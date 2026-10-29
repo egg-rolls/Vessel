@@ -9,7 +9,7 @@
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { AgentSummary, BodyStatus } from '../../gateway/types';
 
-/** `main` 的 agent id（private single，Web 默认投递目标）。 */
+/** `main` 的 agent id（team 成员，Web 默认投递目标）。 */
 export const MAIN_AGENT_ID = 'main';
 
 export interface MainSession {
@@ -52,18 +52,22 @@ export function findMainSession(agents: readonly AgentSummary[]): MainSession | 
 }
 
 /**
- * roster → 属于某个 agent primary body 的 `session_id` 集合（0.27）。
+ * roster → 属于某个 agent primary body 的 `session_id` 集合。
  *
- * 只读 `bodies`（`agents.list` / Team roster 成员的 additive 字段），primary 取
- * `bodies[].primary === true`，其次该 agent 的 `session_id`。`bodies` 缺省时返回空集合，
- * 会话列表保持现状（不因为缺字段出现空列表或误标 primary）。
+ * 0.28 起 `body_id ≡ session_id` 且每个 agent 恰好一具 live body（rotate 窗口除外），
+ * 所以**每个成员条目的 `session_id` 本身就是它的 primary body session**。
+ * 因此不再要求 `bodies` 字段存在：
+ * - 有 `bodies` 时以 `bodies[].primary === true` 为准（rotate 窗口 / 旧 gateway 精确）；
+ * - 没有 `bodies` 时退回 `session_id`（当前 gateway 根本不发 `bodies`，
+ *   按旧逻辑这里会恒为空集，会话列表的 primary 标记就永远不会渲染）。
  */
 export function primaryBodySessions(rosters: readonly NodeRoster[]): ReadonlySet<string> {
   const primaryIds = new Set<string>();
   const add = (sessionId: string | undefined, bodies: readonly BodyStatus[] | undefined) => {
-    if (!bodies || bodies.length === 0) return;
-    const primaryBody = bodies.find((body) => body.primary === true);
-    const primaryId = (primaryBody ? bodySessionId(primaryBody) : undefined) ?? sessionId?.trim();
+    const trimmed = sessionId?.trim() ?? '';
+    const primaryBody = (bodies ?? []).find((body) => body.primary === true);
+    const primaryId =
+      (primaryBody ? bodySessionId(primaryBody) : undefined) ?? (trimmed || undefined);
     if (primaryId) primaryIds.add(primaryId);
   };
   for (const roster of rosters) {

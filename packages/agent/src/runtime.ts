@@ -14,6 +14,7 @@ import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
   AgentRuntime,
   type AgentRuntimeOptions,
+  type ContextManager,
   type EventStream,
   type LLMProvider,
   type Logger,
@@ -37,6 +38,7 @@ import {
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
 import type {
   AgentMessage,
+  AgentRole,
   MemberPermissionState,
   MemberRuntimeMember,
   MemberRuntimePort,
@@ -93,6 +95,163 @@ function withMemberAutoApprove(rules: RuntimePermissionConfig): RuntimePermissio
 const MAX_PENDING_NOTICES = 20;
 const MAX_PENDING_NOTICE_MEMBERS = 100;
 
+/**
+ * temporary 成员的主动压缩阈值（0.28 D6/D7）。
+ *
+ * core 的 `MemoryContextManager` 把阈值默认成 0.9 且不可见，而角色策略层在这里
+ * **不改 core** 的前提下需要自己判断「这次要不要主动压缩」，所以这一个数字被复制。
+ * 代价是与 core 有漂移风险；缓解：core 一旦暴露 `compactThreshold` getter，本常量
+ * 直接删掉改读 getter（`R4.compact` 探针把两边算出的判定放在一起对比，漂移会被它看见）。
+ */
+const ROLE_COMPACT_THRESHOLD = 0.9;
+
+/**
+ * 按角色包装 per-body `ContextManager`：**自动压缩开关可在活体上热切换**。
+ *
+ * 为什么不是 spawn 时直接把 `autoCompact` 交给 core（0.28 之前的做法）：那是构造期
+ * 配置，没有 setter。转正（`temporary → member`）要求「同一具 live body 不重建，
+ * 但下一次 run 按新身份生效」，于是开关必须能在活体上翻转（契约 §5 / D6）。
+ *
+ * 分层不变：本类只接收**裸参数**（一个布尔），不认 `role`；角色语义仍留在本文件的
+ * spawn（`role === 'temporary'`）与 `applyContextPolicy`。本类只使用 `ContextManager`
+ * 接口上已有的方法，core 不知道这里存在。
+ *
+ * 内层 `MemoryContextManager` 恒以 `autoCompact: false` 构造，原因有两条：
+ * - 真要把开关交给本类，内层就不能自己按阈值压缩（否则 `add()` 会绕过本类的开关，
+ *   也就是 temporary 会在 `add()` 里被压缩 —— 正是契约禁止的）；
+ * - 内层仍负责**硬兜底**：消息条数上限的摘要与移除在 `add()` 里独立于 `autoCompact`。
+ *
+ * 因此压缩时机从「`add()` 时」挪到「请求组装前」，这是本包装唯一的可观测差异：
+ * 同一轮内水位到阈值时，压缩发生在下一次请求之前而不是写入那一刻。结果一致，
+ * 且这正是 core 在有 summarizer 时走的既有路径。
+ */
+class RoleAwareContext implements ContextManager {
+  /** 自动压缩是否开启；`setAutoCompact` 是唯一的写入口。 */
+  private compacting: boolean;
+
+  constructor(
+    private readonly inner: MemoryContextManager,
+    autoCompact: boolean,
+  ) {
+    this.compacting = autoCompact;
+  }
+
+  /** 热切换自动压缩；返回是否真的变了（调用方据此决定要不要提示）。 */
+  setAutoCompact(next: boolean): boolean {
+    if (this.compacting === next) return false;
+    this.compacting = next;
+    return true;
+  }
+
+  /** 当前开关（供装配层 / 探针直接读）。 */
+  get enabled(): boolean {
+    return this.compacting;
+  }
+
+  add(msg: Message): void {
+    this.inner.add(msg);
+  }
+
+  get messages(): Message[] {
+    return this.inner.messages;
+  }
+
+  compact(): number {
+    return this.inner.compact();
+  }
+
+  /**
+   * 手动 / overflow 压缩入口，**原样透传**（`compactAsync()` 的 `force` 缺省为 true，
+   * 与 core 一致）：调用方是 `compactContext` / `forceCompact`，包装不得改写强制语义。
+   */
+  compactAsync(): Promise<number> {
+    return this.inner.compactAsync();
+  }
+
+  /**
+   * 主动压缩。关闭时返回 0 —— **硬兜底不经过这里**：消息条数上限由内层 `add()`
+   * 处理，provider overflow 由 runtime 的 `forceCompact`（`compactAsync`）处理。
+   * 「不主动压缩」≠「绝不压缩」（契约 §5）。
+   *
+   * 开启时自己判阈值：内层的 `autoCompact` 恒为 false，所以不能委派
+   * `inner.autoCompactAsync()`（那会恒返回 0）。判完再走 `inner.compactAsync(false)`，
+   * 摘要器 / 并发去重 / 应用逻辑仍然只有 core 一份。
+   *
+   * **`false` 不是笔误**：core 的 `autoCompactAsync` 也是 `compactAsync(false)`
+   * （`context-manager.ts:205`）—— 非强制模式按 token 预算保留最近的尾部消息；
+   * 传 `true` 会「至少摘要到只剩 2 条」，比设计意图激进得多。
+   */
+  async autoCompactAsync(): Promise<number> {
+    if (!this.compacting) return 0;
+    const max = this.inner.maxTokens;
+    if (max !== undefined && max > 0) {
+      if (this.inner.tokenCount <= max * ROLE_COMPACT_THRESHOLD) return 0;
+    }
+    return this.inner.compactAsync(false);
+  }
+
+  clear(): void {
+    this.inner.clear();
+  }
+
+  get tokenCount(): number {
+    return this.inner.tokenCount;
+  }
+
+  get maxTokens(): number | undefined {
+    return this.inner.maxTokens;
+  }
+
+  /**
+   * 必须返回**当前**开关：runtime 用它决定压力提示的上界（`agent-runtime.ts:1673`）。
+   * 返回固定的 false 会让转正后 0.9 以上的提示继续发；返回固定的 true 会让
+   * temporary 的提示在 0.9 以上静默 —— 两边都是契约 §5 明禁的静默。
+   */
+  get autoCompact(): boolean {
+    return this.compacting;
+  }
+
+  setSessionId(sessionId: string): void {
+    this.inner.setSessionId(sessionId);
+  }
+
+  getSessionId(): string {
+    return this.inner.getSessionId();
+  }
+
+  updateRealTokens(total: number): void {
+    this.inner.updateRealTokens(total);
+  }
+}
+
+/** temporary 的压力提示（与 0.28 前的文案逐字一致）。 */
+const TEMPORARY_PRESSURE_HINT =
+  'Report what is done and what remains, then ask the user to start a new ' +
+  'session or compact the context; this member does not compact automatically.';
+
+/**
+ * 角色 → 上下文策略（**唯一**映射点）。
+ *
+ * 只这里是 `role` 的消费者：core 不认 role（契约 §5），spawn 与热切换都从这里取
+ * 同一份策略，所以「转正后下一次 run 用的策略」与「转正那天新建 body 会用的策略」
+ * 结构上不可能漂移。
+ */
+interface ContextPolicy {
+  /** 是否主动按阈值压缩 */
+  autoCompact: boolean;
+  /** 压力提示尾句；缺省 = core 的 `agent(rotate)` 原文案 */
+  pressureHint?: string;
+}
+
+function contextPolicyFor(role: AgentRole): ContextPolicy {
+  if (role === 'temporary') {
+    // rotate 对 temporary 不禁用（D6）：换 body 仍是合法出路。文案只换成
+    // 「上报状态 / 请用户手动切上下文」，因为临时会话的收尾由用户决定。
+    return { autoCompact: false, pressureHint: TEMPORARY_PRESSURE_HINT };
+  }
+  return { autoCompact: true };
+}
+
 /** 身份变更 notice 的上下文消息形状（与 core appendNotice 一致） */
 function noticeMessage(text: string): Message {
   return {
@@ -136,6 +295,11 @@ export interface MemberRunnableAgent extends RunnableAgent {
   interrupt?(reason?: RunInterruptReason): void;
   /** 只追加上下文，不启动 turn（AgentRuntime 已实现） */
   appendNotice?(text: string): void;
+  /**
+   * 0.28（additive）：热应用上下文策略，下一轮请求生效（`AgentRuntime` 已实现）。
+   * 只用于压力提示尾句；自动压缩开关由 `RoleAwareContext` 承担。
+   */
+  applyContextPolicy?(policy: { contextPressureHint?: string }): void;
 }
 
 /** 进程内成员 runtime 选项 */
@@ -204,6 +368,8 @@ interface MemberRuntimeEntry {
   runtime: MemberRunnableAgent;
   /** 成员 id（entries 按 Body session 建键，notice 按成员 id 寻址） */
   memberId: string;
+  /** per-body 上下文包装：`applyContextPolicy` 靠它在活体上翻转开关 */
+  context: RoleAwareContext;
   /** 是否已执行过 runTurn；未执行过的空上下文不能直接 appendNotice，否则会跳过历史恢复 */
   started: boolean;
   /** 成员独占事件流；bridge 请求/应答都经过它 */
@@ -560,10 +726,23 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
 
     const selfCard = this.buildSelfCard(member, model, tools);
     const events = new MemoryEventStream();
+    // 0.28 D6/D7：temporary 不主动压缩（一具 body 的生命周期由调用方的会话决定，
+    // 压缩会把调用方还在看的历史摘要掉）；到线只提示。core 只收到裸参数，不认 role。
+    // 两道硬兜底仍然生效：消息条数上限（`RoleAwareContext` 内层，与开关无关）
+    // 与 provider overflow 的 forceCompact（runtime 内的 overflow 重试）。
+    //
+    // 开关放在 `RoleAwareContext` 而不是 core 的构造配置：转正后同一具 live body
+    // 必须能翻转策略（契约 §5 / D6）。内层恒 `autoCompact: false`，由包装决定要不要
+    // 主动压缩 —— 否则 `add()` 会绕过包装、在 temporary 上按阈值压缩。
+    const policy = contextPolicyFor(member.role);
+    const context = new RoleAwareContext(
+      new MemoryContextManager({ maxTokens: this.contextMaxTokens, autoCompact: false }),
+      policy.autoCompact,
+    );
     const runtime = await this.runtimeFactory({
       provider: this.providerFactory(),
       model,
-      context: new MemoryContextManager({ maxTokens: this.contextMaxTokens }),
+      context,
       events,
       pluginHost,
       limits: this.limits,
@@ -574,6 +753,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       permission: this.permission ?? { default: 'allow' },
       selfCard,
       agentId: member.id,
+      ...(policy.pressureHint !== undefined ? { contextPressureHint: policy.pressureHint } : {}),
       logger: this.logger,
       ...(member.system_prompt !== undefined ? { systemPrompt: member.system_prompt } : {}),
       ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
@@ -590,6 +770,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       unsubscribers: [],
       pendingPermissions: new Map(),
       waiting: false,
+      context,
     };
     this.entries.set(member.session_id, entry);
     if (this.onMemberEvent !== undefined) {
@@ -824,6 +1005,40 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       } catch (error) {
         // 单个 Body 失败不影响其它 Body；装配层按数量判定是否全部生效。
         this.logger.warn('agent.member.permission_apply_failed', {
+          session_id: sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return applied;
+  }
+
+  /**
+   * 0.28 D6：角色转换后把上下文策略热应用到该成员的**活体**（契约 §5 / R4）。
+   *
+   * 两件事一起换，body 不重建、历史不动 —— 「转正那天同一具活着的 body
+   * 不必重建，但下一次 run 的上下文策略按新身份生效」：
+   * - 自动压缩开关（`RoleAwareContext`）；
+   * - 80%–90% 压力提示的尾句文案（core `AgentRuntime.applyContextPolicy`）。
+   *
+   * 返回实际应用的 body 数。未 spawn（没有活体）时返回 0：那种情况下策略由
+   * 下一次 `spawn` 的 `contextPolicyFor(role)` 生效，两条路径共用同一份映射。
+   */
+  applyContextPolicy(member: MemberRuntimeMember): number {
+    const policy = contextPolicyFor(member.role);
+    let applied = 0;
+    for (const [sessionId, entry] of this.entries) {
+      if (entry.memberId !== member.id) continue;
+      try {
+        let touched = entry.context.setAutoCompact(policy.autoCompact);
+        if (typeof entry.runtime.applyContextPolicy === 'function') {
+          entry.runtime.applyContextPolicy({ contextPressureHint: policy.pressureHint });
+          touched = true;
+        }
+        if (touched) applied += 1;
+      } catch (error) {
+        // 单个 Body 失败不影响其它 Body；装配层按数量判定。
+        this.logger.warn('agent.member.context_policy_apply_failed', {
           session_id: sessionId,
           error: error instanceof Error ? error.message : String(error),
         });

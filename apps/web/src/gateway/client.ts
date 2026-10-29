@@ -415,15 +415,25 @@ export class GatewayClient {
    */
   /**
    * 0.27：`runs.start` 解析 session → agent/body 后回填 `agent_id` / `session_id`。
-   * 不传 `sessionId` 时服务端投递到 `main` 的 primary body，返回值就是实际 body。
+   *
+   * 0.28（CONTRACT §3 / §3.1）：`agentId` 表达「这一次投给哪个 agent」。
+   * 新会话必须先 `agents.create` 再带 `agentId` 调这里 —— 只传 `session_id`
+   * 会让未绑定的 session 落到 `main` 上长出第二具 body。
+   * `agentId` 缺省时保持 0.27 行为（`/resume` 等按 session 的路径不受影响）。
    */
-  async submitRun(input: string, sessionId?: string): Promise<RunStartResult> {
+  async submitRun(input: string, sessionId?: string, agentId?: string): Promise<RunStartResult> {
+    const params = {
+      input,
+      ...(sessionId ? { session_id: sessionId } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+    };
     try {
-      return await this.rpc<RunStartResult>('runs.start', {
-        input,
-        ...(sessionId ? { session_id: sessionId } : {}),
-      });
+      return await this.rpc<RunStartResult>('runs.start', params);
     } catch (error) {
+      // 带 `agentId` 时**不能**回退：legacy `run.submit` 没有 agent 维度，丢掉了
+      // `agent_id` 就会落到 `main` 上长出第二具 body（契约 §3 明禁，且是静默的）。
+      // 宁可在只支持 legacy 的旧 gateway 上显式失败，让用户看到真实原因。
+      if (agentId) throw error;
       if (!canFallbackToLegacyRuns(error)) throw error;
       return this.request<RunStartResult>('run.submit', {
         input,
@@ -852,7 +862,7 @@ export class GatewayClient {
     return this.rpc<TeamSummary>('teams.spawnFrozen', { team_id: teamId, frozen });
   }
 
-  /** canonical `agents.list`；管理面 token 会额外返回 private single。 */
+  /** canonical `agents.list`；管理面 token 会额外返回成员记录。 */
   async listAgents(): Promise<AgentSummary[]> {
     const body = await this.rpc<{ agents?: AgentSummary[] }>('agents.list', {});
     return Array.isArray(body?.agents) ? body.agents : [];

@@ -74,6 +74,7 @@ import {
 import { createFederationSendPort } from './federation-send-port';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
+import { createLocalRunAdapter } from './local-run-adapter';
 import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
@@ -94,6 +95,7 @@ import {
   normalizeConnectUrl,
   type RpcClient,
 } from './rpc/index';
+import { createRunControl } from './run-control';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
@@ -1051,6 +1053,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
    */
   const askUserAvailable = registerAskUser && config.ui?.askUser !== false;
 
+  // 0.28 F2：飞书渠道成员被 TTL 回收后，复活所需的 Team id 要等
+  // `createAgentServiceWiring` 之后才存在；bundle（含渠道）先构造，所以用晚绑定
+  // getter 回填（与 localHuman / localMember 同口径）。headless / 无默认 workspace
+  // 时保持 undefined，渠道退回「回收后 member_closed」的旧行为。
+  let feishuTeamId: string | undefined;
+  // 0.28：渠道执行面所需的 AgentService 同样晚绑定 —— 渠道随 bundle 构造，
+  // `createAgentServiceWiring` 之后才存在；插件在 `start()` 时求值。
+  let feishuAgentService: AgentService | undefined;
   const bundle = await buildTenantRuntime({
     tenantId,
     config,
@@ -1077,6 +1087,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(options.loadMcpModule ? { loadMcpModule: options.loadMcpModule } : {}),
     ...(options.loadFeishuModule ? { loadFeishuModule: options.loadFeishuModule } : {}),
     ...(options.feishuTransport !== undefined ? { feishuTransport: options.feishuTransport } : {}),
+    resolveFeishuTeamId: () => feishuTeamId,
+    resolveFeishuService: () => feishuAgentService,
   }).catch((error: unknown) => {
     console.error(`✗ ${error instanceof Error ? error.message : error}`);
     process.exit(configErrorExitCode);
@@ -1141,7 +1153,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       workspace: team.workspace,
       ...(team.policy !== undefined ? { policy: team.policy } : {}),
     }));
-    const defaultWorkspace = resolveDefaultTeamWorkspace(config, teamDeclarations, logger);
+    // 0.28 C3：打开目录即建 Team。声明命中优先；否则交互入口退回 agent.cwd / 进程 cwd。
+    // headless（`--run` / 管道）保持 undefined：一次性进程不该在数据目录里留空 Team。
+    const defaultWorkspace =
+      resolveDefaultTeamWorkspace(config, teamDeclarations, logger) ??
+      (headless ? undefined : (resolveAgentCwd(config) ?? process.cwd()));
     // 0.27：发给人类的 send 直接写本机 Team 日志（异步委派，不阻塞 agent）。
     // Team 服务在 createAgentServiceWiring 之后才存在，这里用晚绑定 getter 回填。
     let localHuman: LocalHumanTarget | undefined;
@@ -1194,10 +1210,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       teamDeclarations,
       ...(defaultWorkspace !== undefined ? { defaultWorkspace } : {}),
       ...(federation !== undefined ? { federation } : {}),
+      ...(config.agent?.temporaryTtlHours !== undefined
+        ? { temporaryTtlHours: config.agent.temporaryTtlHours }
+        : {}),
     });
     // 0.27：回填本机投递端口（federation 端口的 getter 在此之后才读得到）。
     localHuman = createTeamHumanDelivery(wiring.team);
     localMember = createTeamLocalMemberDelivery(wiring.team);
+    // 0.28 F2：回填飞书成员复活用的 Team（默认 workspace 的 Team；缺省不复活）。
+    feishuTeamId = wiring.defaultTeam?.team_id;
+    // 0.28：回填渠道执行面（渠道 `start()` 时才读取；此处不提前构造 / 不改变次序）。
+    feishuAgentService = wiring.service;
     finalPluginHost.registerTool(wiring.tool);
     // 顺序契约：`main` 的 Body 在 spawn 时快照父宿主工具列表，
     // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。
@@ -1254,6 +1277,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       control: agentControlLike,
       dispose: async () => {
         await ownerServer?.stop();
+        // 回收定时器必须先停：否则 drain 期间 sweep 仍可能回收正要收口的 agent。
+        wiring.stopSweep();
         // 成员轮必须在 tenant eventLog 关闭前收口：否则尾部事件 append 会被
         // `session_event_log_closed` 拒绝，子会话审计缺尾。
         await wiring.service.drain({ timeoutMs: 5000 });
@@ -1353,6 +1378,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.18：live 与 trace 同源（bundle.redactor 已是 core+ext 组合实例）。
     redactor: bundle.redactor,
   });
+  // 0.28 C3：本地 `runs.*` 控制面（与 dispatcher / TUI 适配器共用同一实例）。
+  // agent 未启用时缺省 undefined，`runs.start` 保持既有 forbidden 语义。
+  const localRunControl =
+    agentControl !== undefined
+      ? createRunControl(agentControl.service, bundle.scheduler, tenantId)
+      : undefined;
+
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,
     session,
@@ -1472,6 +1504,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       : {}),
     ...(mcpControl ? { mcp: { listServers: () => mcpControl.list() } } : {}),
     ...(feishuChannel ? { feishu: { status: () => feishuChannel.status() } } : {}),
+    // 0.28 C3：本地裸跑与 `--serve` 共用同一套方法表——`agents.*` / `teams.*` /
+    // `runs.*` 必须注入同一批控制面，否则 TUI 里 `agents.create` 返回 not_found、
+    // `runs.start` 返回 forbidden。三者在 agent 未启用时保持缺省（方法进 manifest，
+    // handler 按既有语义报错），不新增实体。
+    ...(agentControl !== undefined
+      ? { agent: agentControl.control, teams: agentControl.team, runControl: localRunControl }
+      : {}),
   });
   // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume`
   // 只靠 `rpc.subscribe` 等待终态；缺少 onEvent 时订阅是 no-op，命令会一直挂起。
@@ -1623,17 +1662,34 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
   };
 
+  // ── 本地 TUI 的执行适配器（0.28 C3 / D10 / D12）─────────
+  // 本地裸跑不能直连 `bundle.runtime`：那条路径绕过 `admit`，每个会话都用到
+  // tenant 共享的运行时，C4 的 role 感知策略对它无效（PLAN §12.3）。
+  // 适配器把执行转成 `runs.start → admit`，并把 `ctx.context` 换成当前 body 的镜像。
+  const localRun =
+    agentControl !== undefined && localRunControl !== undefined
+      ? createLocalRunAdapter({
+          events: runtimeEvents,
+          pluginHost: finalPluginHost,
+          runControl: localRunControl,
+          agentControl: agentControl.control,
+          session,
+        })
+      : undefined;
+
   // ── ReplContext ─────────────────────────────────
   // 工具/插件的唯一来源是同一个 PluginHost（插件在 install() 里注册）。
   const ctx: ReplContextWithPermissions = {
-    runtime: bundle.runtime,
+    runtime: localRun?.runtime ?? bundle.runtime,
     pluginHost: finalPluginHost,
     session,
     events: runtimeEvents,
-    context,
+    context: localRun?.context ?? context,
     currentSessionId,
     onSessionChange: (id) => {
       currentSessionId = id;
+      // D12：切会话（/new、/resume、/runs resume）后把镜像指向该会话。
+      void localRun?.runtime.focusSession(id);
     },
     provider: { name: providerName, model: providerModel, baseUrl: providerBaseUrl },
     plugins: plugins.map((p) => p.name),

@@ -14,7 +14,7 @@ import { groupSessionsByDay, normalizeSessionTitle, sessionTitle } from '../../s
  * 会话 → agent 地址 `name@node:team`。
  *
  * 只认当前节点的 roster，且成员必须显式 `role: 'member'`、带 session_id / name /
- * team_id；temporary / single / 旧 gateway 缺字段一律不显示第二行。
+ * team_id；temporary / 旧 gateway 缺字段一律不显示第二行。
  */
 export function sessionAgentAddresses(rosters: readonly NodeRoster[]): ReadonlyMap<string, string> {
   const addresses = new Map<string, string>();

@@ -2,6 +2,8 @@
  * Team workspace 归一化与 `team_id` 生成（0.19 S3）。
  *
  * - workspace 是 Team 的唯一分组键；归一化不要求目录存在；
+ * - 同一目录的不同写法（junction / symlink、大小写、8.3 短名、NFD / NFC）必须收敛成同一个
+ *   workspace，否则同一块目录会被切成多个 team；
  * - `team_id` = slug(workspace basename)，冲突时追加 sha256 前 8 位；
  * - Windows 比较大小写不敏感，但存储保持原样（只影响比较键）。
  *
@@ -9,6 +11,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, parse, resolve } from 'node:path';
 
@@ -50,14 +53,49 @@ function stripTrailingSeparators(value: string): string {
 }
 
 /**
- * 归一化 workspace：trim、展开 `~`、`path.resolve`、去尾分隔符。
- * 不要求目录存在。空输入抛错。
+ * NFC 归一化：Windows / macOS 文件系统不保证返回规范化过的名字，同一个视觉等价的名字
+ * （如 `caf\u00e9` 的 precomposed 与 `cafe\u0301` 的组合写法）会算出不同 basename 与哈希。
+ */
+function toNfc(value: string): string {
+  return value.normalize('NFC');
+}
+
+/**
+ * 把路径解析成「这块目录的真实身份」。
+ *
+ * 取舍：
+ * - **存在则 `realpathSync`**：junction / symlink / 大小写 / 8.3 短名 / `..` 都会收敛到同一串，
+ *   否则同一块目录会因写法不同被切成多个 team（`team_id` 是分桶键，多切一刀就是两个 team）。
+ *   用 `.native` 取操作系统原生结果——JS 实现不跟随 junction。
+ * - **不存在则退回普通 `resolve`**：workspace 允许指向还没建的目录（`ensureForWorkspace`
+ *   不要求目录存在），此时没有真实身份可查，只能按字面路径算；等目录建好后再次调用会
+ *   收敛到真实路径，属已接受的取舍（首次调用者拿到的是字面 slug）。
+ * - **失败也退回普通 `resolve`**：权限 / 路径非法 / 非法 UTF-16 等 `realpath` 抛错的场景，
+ *   归一化不应当把调用方打断（这些函数的调用方遍布 store 的启动与读路径）。
+ * - 前缀 `\\?\` 由 `realpathSync.native` 去掉，长路径写法与普通写法因此收敛。
+ */
+function resolveIdentity(value: string): string {
+  try {
+    return realpathSync.native(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * 归一化 workspace：trim、展开 `~`、`path.resolve`、解析真实路径、NFC、去尾分隔符。
+ * 不需要目录存在（不存在时按字面路径算）。空输入抛错。
+ *
+ * 顺序要点：先 `resolve` 消掉 `..` 与相对段，再 `realpath`（`\\?\` 前缀下 `..` 不被解析，
+ * 必须先用普通 `resolve`）；`realpath` 之后再 NFC，最后才去掉尾分隔符——`realpath` 对根目录
+ * 会返回 `C:\`，去尾必须放在它之后。
  */
 export function normalizeWorkspace(input: string): string {
   if (typeof input !== 'string' || input.trim() === '') {
     throw new Error('invalid_workspace: workspace must be a non-empty string');
   }
-  return stripTrailingSeparators(resolve(expandHome(input.trim())));
+  const absolute = resolve(expandHome(input.trim()));
+  return stripTrailingSeparators(toNfc(resolveIdentity(absolute)));
 }
 
 /**

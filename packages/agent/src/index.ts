@@ -127,7 +127,6 @@ export {
   type ListFilter,
   MAX_BODY_HISTORY,
   MAX_MESSAGE_BYTES,
-  MAX_RETIRED_BODIES,
   type MemberMembership,
   type MemberPermissionState,
   type MemberPresence,

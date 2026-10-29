@@ -123,8 +123,16 @@ export interface FeishuChannelOptionsLike {
    * deprecated（插件已不再使用，类型不删以免破坏未迁移调用方）。
    */
   service?: unknown;
+  /**
+   * 0.28：`service` 的装配层晚绑定 getter（与 `resolveTeamId` 同形状）。
+   * AgentService 在 tenant bundle 之后才构造，渠道构造时拿不到实例；
+   * `start()` 时才求值。缺省时回落到 `service` / 显式失败。
+   */
+  resolveService?: () => unknown;
   /** 0.27：取消在途 run（装配层接线）；缺省只放弃等待。 */
   cancelRun?: (runId: string, reason?: string) => boolean;
+  /** 0.28 F2：成员被 TTL 回收后 `reinstate` 所需的 Team id（装配层提供）；缺省不复活。 */
+  resolveTeamId?: () => string | undefined;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
   provider?: LLMProvider;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */

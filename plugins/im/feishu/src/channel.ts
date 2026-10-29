@@ -93,7 +93,10 @@ class FeishuChannelImpl implements FeishuPlugin {
       throw new FeishuError('channel_auth_failed', 'feishu app id/secret is required', 'config');
     }
     // 0.27：执行面只走注入的 AgentService；装配层尚未接线时显式失败，禁止静默降级。
-    if (!this.options.service) {
+    // 0.28：AgentService 可能在渠道构造之后才存在，装配层用 `resolveService`
+    // getter 晚绑定；`start()` 是唯一的求值点。
+    const service = this.options.resolveService?.() ?? this.options.service;
+    if (!service) {
       throw new FeishuError(
         'channel_auth_failed',
         'feishu requires an injected AgentService (options.service); the assembly layer must wire it',
@@ -104,8 +107,11 @@ class FeishuChannelImpl implements FeishuPlugin {
     this.runner = new ChatMemberRunner({
       config: this.config,
       events: this.options.events,
-      service: this.options.service,
+      service,
       ...(this.options.cancelRun !== undefined ? { cancelRun: this.options.cancelRun } : {}),
+      ...(this.options.resolveTeamId !== undefined
+        ? { resolveTeamId: this.options.resolveTeamId }
+        : {}),
     });
 
     try {

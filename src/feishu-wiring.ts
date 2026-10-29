@@ -90,8 +90,20 @@ export interface CreateFeishuOptions {
    * 装配层接线前的过渡期可缺省（插件 start() 会显式失败），接线后必传。
    */
   service?: unknown;
+  /**
+   * 0.28：`service` 的装配层晚绑定 getter。
+   * `AgentService` 要到 `createAgentServiceWiring` 之后才存在，而渠道在 tenant
+   * bundle 构造时就要建出来，所以只能传 getter，由插件在 `start()` 时求值。
+   */
+  resolveService?: () => unknown;
   /** 0.27：取消在途 run（装配层接线）；缺省只放弃等待。 */
   cancelRun?: (runId: string, reason?: string) => boolean;
+  /**
+   * 0.28 F2：成员被 TTL 回收后复活所需的 Team id（`reinstate` 的必填项）。
+   * Team 在 `createAgentServiceWiring` 之后才存在，装配层用 getter 晚绑定；
+   * 缺省时渠道保持旧行为（回收后投递抛 `member_closed`）。
+   */
+  resolveTeamId?: () => string | undefined;
   /** 测试/示例注入 mock transport */
   transport?: unknown;
   /** 0.5：tenant 作用域；事件与状态带 tenant_id */
@@ -173,7 +185,9 @@ export async function createFeishuFromConfig(
     events: options.events,
     // 0.27：执行面注入；装配层接线前可缺省（插件 start() 显式失败）。
     ...(options.service !== undefined ? { service: options.service } : {}),
+    ...(options.resolveService !== undefined ? { resolveService: options.resolveService } : {}),
     ...(options.cancelRun !== undefined ? { cancelRun: options.cancelRun } : {}),
+    ...(options.resolveTeamId !== undefined ? { resolveTeamId: options.resolveTeamId } : {}),
     ...(options.transport !== undefined ? { transport: options.transport } : {}),
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
     // tenant 实例显式 `{}`：凭据已由 config loader 合并，禁止插件再读 ambient env。

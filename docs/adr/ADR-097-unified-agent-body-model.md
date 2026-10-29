@@ -92,3 +92,24 @@ related: [40, 54, 81, 86, 88, 91, 92, 95, 96]
     `## Errata（0.27 统一 agent/body）` 段落。**
   - 过程契约不进本仓库：统一的模型与删除清单见 `PLAN-0.27-unified-agent-body`（FROZEN spec），
     验收口径的测试维度由 `ADDENDUM-0.27-tests-removal` 取代。
+
+## Errata（0.28 agent 身份）
+
+本文的**决策 5 / 6 / 7 / 10 与决策 1 的 `main` 部分**在 0.28 被推翻；正文保留，以本段为准：
+
+- **决策 1（`main` 的角色）**：`main` 不再是 `role:'single'` 的无 Team private agent。`AgentRole`
+  只剩 `'member' | 'temporary'`，`main` 是普通 `member`，用 `create({ id, name, kind:'peer',
+  workspace })` 创建，必须有对应 Team。存量 `role:'single'` 读取时降级为 `member` 并补绑默认 Team。
+- **决策 5 / 6（多 body）**：一个 agent **恰好一具 live body**（`body_id ≡ session_id`），不再
+  「可同时有多个 live body」，`MAX_LIVE_BODIES` / `maxLiveBodies` / `body_limit` 的多 body
+  语义删除，`body_limit` 现在是「已有 live body 时不得再建第二具」。唯一例外是
+  `rotation === 'rotating'` 期间的两具（新 + 待退役）。
+- **决策 7（body 级空闲 TTL）**：body 级 TTL（`bodyIdleTtlHours`）删除；回收改为 **agent 级**，
+  只对 `temporary` 且 `present` 生效，`member`（含 `main`）永不回收。回收 = `membership='left'`
+  + `state='closed'`，body 记录保留并标 `retiredAt`（绝不删），审计仍用 `agent.closed` +
+  `reason:'idle_ttl'`。复活复用 `reinstate`（原地 unretire + 清 `bodyHistory` 同名条目）。
+- **决策 10（rotate 与多 body 的关系）**：rotate 语义不变（退休 primary、新建 primary），但
+  「其它 live body 不受影响」不再有适用对象——正常情况下只有一具。
+- `bodyHistory` 上限为 `MAX_BODY_HISTORY = 20`；`trimRetiredBodies()` / `MAX_RETIRED_BODIES` 删除。
+- 上下文策略按 `role` 分层：`temporary` 不主动压缩（到线只提示），`member` 主动压缩；转换时
+  在**同一具活体**上热切换。core 不知道 `role`。

@@ -35,12 +35,14 @@ export type MemberState =
 export type MemberVisibility = 'private' | 'team' | 'tenant';
 
 /**
- * 成员角色（v3 持久化）：
- * - `single`：独立 agent / root owner；owner = self，无 Team / parent，private；
- * - `member`：Team 成员；owner = self，必须有 Team，team 可见；
- * - `temporary`：临时成员；owner = 雇佣者，parent 缺省 owner，Team 可选。
+ * 成员角色（v3 持久化；0.28 收窄为两值）：
+ * - `member`：Team 成员；owner = self，必须有 Team，team 可见。`main` 也是 member；
+ * - `temporary`：临时成员；owner = 雇佣者（缺省 `human`），parent 缺省 owner，Team 可选。
+ *
+ * 0.27 的 `single`（无 Team 的独立 agent）已删除：所有 agent 都属于某个 Team。
+ * 存量快照里的 `role:'single'` 在读取时降级为 `member`（见 `snapshot.ts`）。
  */
-export type AgentRole = 'single' | 'member' | 'temporary';
+export type AgentRole = 'member' | 'temporary';
 
 /** 进程内存在性：live 表示 engine 在当前进程可用，gone 表示需要 resume（不持久化） */
 export type MemberPresence = 'live' | 'gone';
@@ -60,9 +62,6 @@ export interface AgentBodyPointer {
 
 /** body_history 上限；超出时丢弃最旧条目 */
 export const MAX_BODY_HISTORY = 20;
-
-/** `bodies[]` 保留的已退役条目上限；超出时丢弃最旧 */
-export const MAX_RETIRED_BODIES = 50;
 
 /** 已退役 Body 的历史条目；只追加，有界（最多 20 条） */
 export interface AgentBodyHistoryEntry extends AgentBodyPointer {
@@ -98,8 +97,8 @@ export interface MemberStatus {
   /** 成员角色（v3；由持久化记录派生） */
   role: AgentRole;
   /**
-   * 归属 / private 可见性 principal（v3 写入总有：single / member = self，
-   * temporary = 雇佣者）。DTO 保留可选以兼容旧 wire。
+   * 归属 / private 可见性 principal（v3 写入总有：member = self，
+   * temporary = 雇佣者，缺省 `human`）。DTO 保留可选以兼容旧 wire。
    */
   owner?: string;
   visibility: MemberVisibility;
@@ -141,7 +140,7 @@ export interface PersistedAgentRecord {
   parent_id?: string;
   /** 成员角色（v3 写入必填；v1 / v2 读取时按 owner 推断） */
   role: AgentRole;
-  /** 归属 principal（v3 写入必填：single / member = self，temporary = 雇佣者） */
+  /** 归属 principal（v3 写入必填：member = self，temporary = 雇佣者） */
   owner: string;
   visibility: MemberVisibility;
   /** 最后已知 engine 状态（重启后按 membership 重置） */
@@ -214,6 +213,11 @@ export interface MemberRuntimeMember {
   session_id: string;
   name?: string;
   parent_id?: string;
+  /**
+   * 成员角色（0.28）。执行内核据此决定上下文策略；core 不知道这个字段，
+   * 策略参数由本层翻译成裸参数（见 `packages/agent/src/runtime.ts` 的 spawn）。
+   */
+  role: AgentRole;
   /** 归属 principal；peer 缺省 */
   owner?: string;
   visibility: MemberVisibility;
@@ -265,6 +269,15 @@ export interface MemberRuntimePort {
    * 返回实际应用的 Body 数量；未实现的 port 由 AgentService 报 0。
    */
   applyPermissionRules?(rules: RuntimePermissionConfig): Promise<number> | number;
+  /**
+   * 0.28 D6（additive，可选）：角色转换后把上下文策略热应用到该成员的活体。
+   *
+   * `member.role` 是**转换后**的角色；实现的唯一义务是让活体「下一次 run」按它生效
+   * （自动压缩开关 + 80%–90% 压力提示尾句），不重建 body、不动历史。返回实际应用的
+   * Body 数量（没有活体时为 0，此时策略由下一次 spawn 生效）。未实现的 port 由
+   * AgentService 按 0 处理并走兜底轮换。
+   */
+  applyContextPolicy?(member: MemberRuntimeMember): Promise<number> | number;
 }
 
 /** `AgentService.drain` 结果：无在跑轮 / 已中断收口 / 超时 */
@@ -447,8 +460,8 @@ export interface CreateMemberInput {
    */
   id?: string;
   /**
-   * 显式角色（0.27）：`single` 走普通 create 创建 main（owner=self、无 Team、private）。
-   * 缺省按 kind / owner 推断（member / temporary）。
+   * 显式角色（0.27；0.28 起只剩 member / temporary）。
+   * 缺省按 kind / owner 推断（member / temporary）；peer 推导出的 member 不接受覆盖。
    */
   role?: AgentRole;
   name?: string;
@@ -795,10 +808,13 @@ export interface AgentServiceOptions {
   runtime: MemberRuntimePort;
   /** 0.27：每 tenant 唯一调度器（必填）；执行只经 scheduler executor */
   scheduler: Scheduler;
-  /** 每 agent 最多 live body；缺省 20 */
-  maxLiveBodies?: number;
-  /** 空闲 body TTL（小时）；缺省 24，0 = 关闭 */
-  bodyIdleTtlHours?: number;
+  /**
+   * 临时 agent 的空闲回收 TTL（小时）；缺省 2（D5），0 = 关闭。
+   *
+   * 只回收 `role === 'temporary' && membership === 'present'`；`member`（含 `main`）
+   * 永不回收。判据是**持久化**的 `max(lastSeen, body.lastActiveAt)`，不读内存 entry。
+   */
+  temporaryTtlHours?: number;
   /** body 跨进程租约；缺省无锁 */
   bodyLease?: BodyLeasePort;
   /** durable resume 用 checkpoint 存储；缺省禁止 resume */
@@ -913,10 +929,12 @@ export interface AgentService {
   /** 当前 turn 的 conversation_id；无在跑轮次或缺省时 undefined（TeamService 用） */
   currentConversation(agentId: string): string | undefined;
   /**
-   * 0.27：空闲 body TTL sweep（测试注入时钟直接调）。
-   * 返回本次退役的 body 数；TTL=0 时 no-op。
+   * 0.28：临时 agent 空闲回收（装配层定时器 / 测试注入时钟直接调）。
+   * 返回本次回收的 agent 数；TTL=0 时 no-op。
    */
-  sweepIdleBodies(now?: number): Promise<number>;
+  sweepIdleTemporaries(now?: number): Promise<number>;
+  /** sweep 节奏（毫秒）；TTL=0 时 undefined，表示不需要定时器 */
+  sweepIntervalMs(): number | undefined;
   /** conversation 预算状态 / 人工 override（只由人力入口调用） */
   budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview>;
   /**
@@ -1039,7 +1057,7 @@ export interface TeamMemberSummary {
   presence: MemberPresence;
   /** 成员角色（roster 只展示 member / temporary） */
   role: AgentRole;
-  /** 归属 principal（single / member = self，temporary = 雇佣者） */
+  /** 归属 principal（member = self，temporary = 雇佣者） */
   owner?: string;
   visibility: MemberVisibility;
   state: MemberState;

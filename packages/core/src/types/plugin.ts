@@ -169,6 +169,12 @@ export interface AgentRuntimeOptions {
   /** 0.15 E9：Self Card；缺省不注入，行为不变 */
   selfCard?: SelfCardOptions;
   /**
+   * 0.28：上下文压力提示的尾句文案；缺省保持 `agent(rotate)` 原文案。
+   * 供不能靠 rotate 自愈的入口（如 temporary 成员）换成自己的行动建议。
+   * 运行期可用 `AgentRuntime.applyContextPolicy` 热替换（身份转换后下一轮生效）。
+   */
+  contextPressureHint?: string;
+  /**
    * 0.18：会话事件日志（唯一真相源）。提供时 runtime 在发布每个事实事件前
    * 先追加落盘（`llm.stream.chunk` 等派生事件除外）；缺省不落盘，行为与 0.17 一致。
    */

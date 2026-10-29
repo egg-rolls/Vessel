@@ -77,6 +77,13 @@ export interface AgentConfig {
   /** 主 agent（owner）成员 ID（默认 main） */
   ownerId?: string;
   /**
+   * 临时 agent 空闲回收 TTL（小时，默认 2，0 = 关闭；D5）。
+   *
+   * 只回收 `role === 'temporary'` 且仍在册的 agent；`member`（含 `main`）永不回收。
+   * 回收可逆：`reinstate` 会原地复活同一具 body（session 继续可续接）。
+   */
+  temporaryTtlHours?: number;
+  /**
    * 默认工作目录（0.11.1，DECISION-022 §2.4）。
    * 支持 `~`；相对路径按进程 cwd 解析为绝对路径（由装配层解析，validator 只校验类型）。
    * 优先级：工具参数 `cwd` > `agent.cwd` > `process.cwd()`。

@@ -9,6 +9,7 @@
  * @module vessel/agent-service-wiring
  */
 
+import * as path from 'node:path';
 import {
   AgentError,
   type AgentService,
@@ -28,6 +29,7 @@ import {
   type MemberRuntimePermissionMode,
   type MemberStatus,
   type TeamDeclaration,
+  type TeamRecord,
   type TeamStore,
 } from '@vessel-agent/agent';
 import type {
@@ -108,6 +110,12 @@ export interface AgentServiceWiringOptions {
   defaultWorkspace?: string;
   /** 0.21：跨节点发送端口；只在 federation 启用时由 bootstrap 注入 */
   federation?: FederationSendPort;
+  /**
+   * 0.28（D5）：临时 agent 空闲回收 TTL（小时）；缺省 2，0 = 关闭。
+   *
+   * 定时器由装配层持（`AgentService` 自身无定时器，否则 CLI / smoke / probe 会挂住）。
+   */
+  temporaryTtlHours?: number;
 }
 
 export interface AgentServiceWiring {
@@ -126,10 +134,21 @@ export interface AgentServiceWiring {
   team: AgentTeamService;
   /** Team 文件存储；dispose 时需 flush（内部字段） */
   teamStore: TeamStore;
+  /**
+   * 0.28 C3：打开目录对应的 Team（`defaultWorkspace` 的 ensure 结果）。
+   * headless / 无 defaultWorkspace / ensure 失败时缺省。内部字段，不上 wire。
+   */
+  defaultTeam?: TeamRecord;
   /** 0.19 S4：conversation 预算（有 dataDir 时构造） */
   budget?: ConversationBudget;
   /** 0.19 S4：预算状态文件存储；dispose 时需 flush */
   conversationStore?: ConversationStore;
+  /**
+   * 0.28：停掉临时 agent 回收定时器。**必须先于** `service.drain()` 调用：
+   * 否则 drain 期间 sweep 仍可能回收正要收口的 agent。
+   * TTL=0（关闭）时是 no-op。
+   */
+  stopSweep: () => void;
 }
 
 /** 构造成员 runtime 选项（导出便于测试选项传递，不直接构造 runtime） */
@@ -181,20 +200,36 @@ export function buildMemberRuntimeOptions(
 }
 
 /**
- * 创建 `main`（普通 single agent）或复用已存在的记录。
+ * 创建 `main`（`role: 'member'` 的普通 Team 成员）或复用已存在的记录。
+ *
+ * `kind: 'peer'` 是唯一的角色来源（CONTRACT §2）：peer → member，owner = self，
+ * 必须有 Team。所以这里必须给 `workspace` —— `create` 会经 TeamBinder
+ * `ensureForWorkspace` 建好（或复用）该目录的 Team，再把 main 绑进去。
+ * **不用 `role` 覆盖**：`create` 只把 role 用作一致性校验，peer 推导出的 member
+ * 不可被改写。
  *
  * 同一 dataDir 可能被装配多次（REPL 重启 / snapshot 重载），此时 `main` 已在
  * snapshot 里，`create` 会以 `duplicate member id` 拒绝。只吞这一种错误，
- * 其它（invalid_input 的其它原因、spawn_failed…）原样抛出。`main` 是 private，
- * 因此回读必须带 `viewer` 身份，否则列表看不到它。
+ * 其它（invalid_input 的其它原因、spawn_failed…）原样抛出。`main` 是 team 可见，
+ * 回读仍带 `viewer` 身份：owner 语义一致，且不依赖可见性放宽。
  */
-async function createOrRestoreOwner(service: AgentService, ownerId: string): Promise<MemberStatus> {
+async function createOrRestoreOwner(
+  service: AgentService,
+  ownerId: string,
+  ownerWorkspace: string,
+  teamBinder: TeamStore,
+): Promise<MemberStatus> {
   try {
     // `name` 与 id 同值：来源行有名字就渲染名字、没名字才退回 id。不给 name 时
     // main 靠「id 恰好叫 main」碰巧渲染正确；一旦 `agent.ownerId` 配成别的值，
     // 渲染出的 principal 就是那个配置值（一个 id），与「有名字用名字」不一致。
     // 注意：已存在的 main 回读时不补 name（见下方 catch），旧快照靠 id 兜底，结果相同。
-    return await service.create({ id: ownerId, name: ownerId, role: 'single' });
+    return await service.create({
+      id: ownerId,
+      name: ownerId,
+      kind: 'peer',
+      workspace: ownerWorkspace,
+    });
   } catch (error) {
     const duplicate =
       error instanceof AgentError &&
@@ -206,6 +241,15 @@ async function createOrRestoreOwner(service: AgentService, ownerId: string): Pro
     );
     // 回读不到说明不是“已存在”的重复，而是别的问题：保留原始错误。
     if (existing === undefined) throw error;
+    // 存量 `main`（0.27 是 private single、无 Team）迁移成 member 后可能仍是 unbound：
+    // 冷启动期 `defaultWorkspace` 缺失时迁移只能先保住记录（见
+    // `AgentServiceImpl.bindMigratedMember`）。这里补做绑定 —— 不变式是
+    // 「所有 agent 都属于某个 Team」，main 尤其不能悬空。`reinstate` 正是
+    // 「把 present 成员绑到 Team」的既有入口，不新增方法。
+    if (existing.role === 'member' && existing.team_id === undefined) {
+      const team = await teamBinder.ensureForWorkspace({ workspace: ownerWorkspace });
+      return service.reinstate({ to: ownerId, team_id: team.team_id, from: ownerId });
+    }
     return existing;
   }
 }
@@ -225,6 +269,28 @@ export async function createAgentServiceWiring(
   });
   await teamStore.ready();
   await teamStore.seed(options.teamDeclarations ?? []);
+
+  // 0.28 C3：打开目录即建 Team。`defaultWorkspace` 已由 bootstrap 判定（声明命中或
+  // 交互入口的 cwd）；headless 传 undefined，这里不建，避免一次性进程留空 Team。
+  // 建失败只警告不阻断启动：Team 缺失时成员创建按原有 unbound 路径降级。
+  let defaultTeam: TeamRecord | undefined;
+  if (options.defaultWorkspace !== undefined) {
+    try {
+      defaultTeam = await teamStore.ensureForWorkspace({ workspace: options.defaultWorkspace });
+    } catch (error) {
+      options.logger?.warn('team.default_workspace_unavailable', {
+        workspace: options.defaultWorkspace,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // 0.28 f1：headless（bootstrap 不传 defaultWorkspace）没有可复用的 Team，而 `main`
+  // 又必须属于某个 Team（CONTRACT §2）。这里给「同一个 data root」一个固定锚点，
+  // 不再用 `process.cwd()`：cwd 是进程属性，两个不同 cwd 的 headless 首启会把 Team
+  // 钉在各自的目录上（并发时都在快照落盘前开始，数据根会留下两个 Team）。
+  // 锚点不需要目录存在 —— `ensureForWorkspace` 只按路径算身份，不建目录。
+  const headlessTeamWorkspace = path.join(options.dataDir, 'headless');
 
   // 成员 bridge 进入/离开权限等待时回调 AgentService；service 在 runtime 之后构造，
   // 用晚绑定避免循环依赖。
@@ -274,19 +340,56 @@ export async function createAgentServiceWiring(
     teamBinder: teamStore,
     teamPolicy: (teamId) => teamStore.policy(teamId),
     ...(budget !== undefined ? { budget } : {}),
+    ...(options.temporaryTtlHours !== undefined
+      ? { temporaryTtlHours: options.temporaryTtlHours }
+      : {}),
     snapshot: { enabled: true },
   });
   serviceRef = service;
+
+  // 0.28（C2）：临时 agent 空闲回收的定时器只在装配层。
+  // `.unref()` 让 headless / smoke / probe 不被它挂住；`stopSweep` 由 dispose 先调。
+  const sweepIntervalMs = service.sweepIntervalMs();
+  let sweepTimer: ReturnType<typeof setInterval> | undefined;
+  if (sweepIntervalMs !== undefined) {
+    sweepTimer = setInterval(() => {
+      void service.sweepIdleTemporaries().catch((error: unknown) => {
+        options.logger?.warn('agent.sweep.failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, sweepIntervalMs);
+    (sweepTimer as { unref?: () => void }).unref?.();
+  }
+  const stopSweep = (): void => {
+    if (sweepTimer === undefined) return;
+    clearInterval(sweepTimer);
+    sweepTimer = undefined;
+  };
   // 装配只组装，不 spawn：`main` 的 Body 会快照父宿主工具列表，调用方必须先
   // `registerTool(tool)` 再调 `startOwner()`。并发/重复调用共享同一个 promise；
   // 失败时清掉 memo，避免用缓存住的 rejection 毒化重试。
   let ownerPromise: Promise<MemberStatus> | undefined;
   const startOwner = (): Promise<MemberStatus> => {
     if (ownerPromise === undefined) {
-      ownerPromise = createOrRestoreOwner(service, ownerId).catch((error: unknown) => {
-        ownerPromise = undefined;
-        throw error;
-      });
+      // `main` 是 peer member，必须有 Team（CONTRACT §2 的前置不变式）。peer 无
+      // Team 会被 `create` 直接拒绝，而 `main` 不存在等于整个入口不存在。
+      //
+      // `options.defaultWorkspace` 由 bootstrap 判定（声明命中，或交互入口的 cwd）。
+      // 交互入口（TUI / Web）有 defaultWorkspace：沿用它的 Team，行为不变。
+      // headless 故意传 undefined（CONTRACT §6）—— 但 §2 的「所有 agent 都属于某个
+      // Team」是无条件的：不建 Team 就没有 `main`。这里按 §2 解，并用与 cwd 无关的
+      // 固定锚点（同一 data root 只有一个），保证 headless 至多留下一个 Team。
+      // `defaultWorkspace` 存在但 ensure 失败时保持原兜底（cwd），交互路径不受影响。
+      const ownerWorkspace =
+        defaultTeam?.workspace ??
+        (options.defaultWorkspace === undefined ? headlessTeamWorkspace : process.cwd());
+      ownerPromise = createOrRestoreOwner(service, ownerId, ownerWorkspace, teamStore).catch(
+        (error: unknown) => {
+          ownerPromise = undefined;
+          throw error;
+        },
+      );
     }
     return ownerPromise;
   };
@@ -311,7 +414,9 @@ export async function createAgentServiceWiring(
     ownerId,
     team,
     teamStore,
+    ...(defaultTeam !== undefined ? { defaultTeam } : {}),
     ...(budget !== undefined ? { budget } : {}),
     ...(conversationStore !== undefined ? { conversationStore } : {}),
+    stopSweep,
   };
 }

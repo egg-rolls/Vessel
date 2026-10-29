@@ -1,7 +1,7 @@
 ---
 title: AgentService、Body 与 Team
 kind: current
-triggers: [agent, member, team, body, session, dispatch, send, rotate, fork, spawn, peer, contractor, owner, freeze, presence, membership, visibility, roster, budget, conversation]
+triggers: [agent, member, team, body, session, dispatch, send, rotate, fork, spawn, peer, contractor, owner, freeze, presence, membership, visibility, roster, budget]
 paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ---
 
@@ -19,9 +19,9 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## Agent 身份与 Body
 
-- **Agent 是持久身份，Body 是活执行单元**：`body_id ≡ session_id`，一个 agent 可同时有多个 live body（每 agent ≤ 20，可配置）；每个 body 有独立 `AgentRuntime`、独立 context、独立 session 历史、独立事件流、独立 runStore 与独立 body lease。
-- `PersistedAgentRecord` 持久化 `membership` / `model` / `system_prompt` / `bodies[]` / `primary_body_id` / `forked_from`；`presence` / `rotation` 不落盘。`bodies[]` 是唯一真相（已退役条目保留 ≤50），`primary_body_id` 是缺省投递目标；`current_body` / `body_history` 降级为旧数据的兼容视图（只读、不回写，`body_history` ≤20 条已退役 primary）。快照写 `version: 4`，读取兼容 v1 / v2 / v3；v3 → v4 把 `current_body` 迁成唯一 live body + primary、旧 `body_history` 迁入 `bodies[]`，首次写 v4 前备份 `.v3.bak`（v1 / v2 各保留自己的 `.bak`），失败则放弃本次写。
-- `role` 语义不变：`single`（owner=self、无 Team）、`member`（owner=self、Team 必需）、`temporary`（owner=雇佣者、Team 可选）。`main` 是普通 `single`，走普通 create 路径，没有外部 owner。
+- **Agent 是持久身份，Body 是活执行单元**：`body_id ≡ session_id`，一个 agent 恰好一具 live body（唯一例外见「约束」的 rotate 窗口）；每个 body 有独立 `AgentRuntime`、独立 context、独立 session 历史、独立事件流、独立 runStore 与独立 body lease。
+- `PersistedAgentRecord` 持久化 `membership` / `model` / `system_prompt` / `bodies[]` / `primary_body_id` / `forked_from`；`presence` / `rotation` 不落盘。`bodies[]` 是唯一真相，`primary_body_id` 是缺省投递目标；`current_body` / `body_history` 降级为旧数据的兼容视图（只读、不回写）。快照写 `version: 4`，读取兼容 v1 / v2 / v3；v3 → v4 把 `current_body` 迁成唯一 live body + primary、旧 `body_history` 迁入 `bodies[]`，首次写 v4 前备份 `.v3.bak`，失败则放弃本次写。
+- `role` 只有 `member`（owner=self、Team 必需）与 `temporary`（owner=雇佣者，缺省 `human`、Team 可选）。`main` 是普通 `member`，用 `kind:'peer'` + `workspace` 创建，必须有 Team。
 
 <a id="state"></a>
 
@@ -59,8 +59,8 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ## 派生：peer / contractor 与冻结
 
 - `AgentService.create` 接受 `CreateMemberInput`：`kind?: 'peer' | 'contractor'` / `owner?: string | null` / `teamId?` / `spawnedBy?`。输入 `kind` 映射持久化 `role`：peer → member，contractor → temporary；无 kind 的旧请求按 temporary。
-- **member**：owner=self、无 parent、必须绑定 Team、visibility 强制 `team`。**temporary**：owner/parent 缺省为雇佣者（工具路径填调用者，service 缺省是 single）；有 Team 时 visibility 缺省 `team`，unbound 缺省 `private`。
-- **`agent` 工具 `hire` 对任意成员开放**（含 temporary，是否有 Team 均可）：owner / parent 固定为调用者；调用者有 Team 时绑定该 `team_id`（计入上限 / 冻结），否则 unbound 且不计 Team 上限。`create`（member）仍要求调用者有 Team，single 只能 `hire`；`new` 不是当前 action。转换用 `agents.update { role, team_id? }`，不要求新 Body，只追加 `vessel:notice`。
+- **member**：owner=self、无 parent、必须绑定 Team、visibility 强制 `team`。**temporary**：owner/parent 缺省为雇佣者（工具路径填调用者，service 缺省 `human`）；有 Team 时 visibility 缺省 `team`，unbound 缺省 `private`。
+- **`agent` 工具 `hire` 对任意成员开放**（含 temporary，是否有 Team 均可）：owner / parent 固定为调用者；调用者有 Team 时绑定该 `team_id`（计入上限 / 冻结），否则 unbound 且不计 Team 上限。`create`（member）仍要求调用者有 Team；`new` 不是当前 action。转换用 `agents.update { role, team_id? }`，不要求新 Body，只追加 `vessel:notice`。
 - 每 Team present 成员 ≤ 20（peer + contractor 都计入）；`create` / `hire` / `fork` / `reinstate` 增长前检查，超限 `team_full`。同 Team 的幂等 reinstate 不增长，不被冻结 / 上限拦。
 - **冻结**：`TeamRecord.spawn_frozen?` 持久化，`TeamSummary.spawn_frozen?` 回显；canonical `teams.spawnFrozen` 是唯一写路径，`teams.update` 不改。冻结期间 `create` / `hire` / 人类 `agents.create` / `fork` / `reinstate` 全部 `team_frozen`；只有 `frozen: false` 解冻。CLI 为 `vessel team freeze|unfreeze <team_id>`，team-scoped token 只能操作自己的 team。
 - **close 审批与级联**：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接 allow；成员关闭 peer 经权限 bridge 交人类审批；root owner 记录与跨 Team contractor 拒绝；无 bridge 时 ask fail closed。owner close 按 registry 原始记录级联关闭自己的 private contractor，team 可见 contractor 保持 present。**审计**：`agent.spawned` payload 带 `spawned_by`；Team join system 日志的 `from` 取 `spawned_by`；private 成员按既有规则不写 Team 日志。
@@ -69,8 +69,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## Team、可见性与预算
 
-- roster 是派生视图：`team_id + membership = present`，不单独持久化。Team 记录与日志在 `<dataDir>/teams/<tenant>/<team_id>/`；`TeamService` 是日志唯一写入点。`TeamMemberSummary.role` 区分 member/temporary，`owner` 仍指向归属（member 为 self，temporary 为雇佣者）。
-- **Team 日志不是队列**：无 `@` 的 post / reply / system 记录只追加，不 dispatch、不产生 run；`@` 必须先写日志再逐条 admit。
+- roster 是派生视图：`team_id + membership = present`，不单独持久化。Team 记录与日志在 `<dataDir>/teams/<tenant>/<team_id>/`；`TeamService` 是日志唯一写入点。`TeamMemberSummary.role` 区分 member/temporary，`owner` 仍指向归属（member 为 self，temporary 为雇佣者）。**Team 日志不是队列**：无 `@` 的 post / reply / system 记录只追加，不 dispatch、不产生 run；`@` 必须先写日志再逐条 admit。
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；Team 成员强制权限 bridge，只有 human / policy 能应答。
 - conversation 预算挂 `teams[].policy.budget`，状态写 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、损坏 fail-closed）；override 只能由人抬高或清除。human 直接对话免 conversation budget；Team / agent→agent 仍走预算，被 block 的消息留在该 body mailbox，override / release 后重新准入。
 
@@ -87,13 +86,14 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ## 来源标注与 Team 归属
 
 - 每轮把来源渲染成一条**自闭合 XML 标签，`location` 是唯一属性，值是可直接回信的地址**：本机 agent `<from location="docs-core@a1b2c3d4:vessel-core" />`、本机人类 `<from location="human@a1b2c3d4:vessel-core" />`、本机系统 `<from location="system@a1b2c3d4:vessel-core" />`、federation 入站 `<from location="alice@node2:vessel-ext" />`（`from` 已内嵌远端地址，原样渲染、不再拼本机 node/team）。**渲染成地址而不是描述**：`location` 就是 `resolveAddress` / agent `send` 吃的同一形态，模型回信时把该值原样填进 `to` 即可，不需要第二套语法。作为一条 `role: 'user'` / `name: 'vessel:source'` 消息，通过 `RunOptions.messages` 在用户输入之前注入；它持久化进 `ContextManager` / session 历史，后续轮次只在尾部追加，不改写 system 前缀。**本机来源也写满三段**，node 段取自装配层传入的 `InProcessMemberRuntimeOptions.nodeId`（唯一来源是 bootstrap 的 `resolveNodeIdentity()`，执行内核不调 `os.hostname()`、不读 config / node.json）。之所以不再给本机来源省 node 段：跨机地址本来就三段，本机两段会让模型学两种形态，且「两段算不算本机」取决于当时 federation 是否开着，行为不一致。无 Team 的成员写两段 `<from location="docs-core@a1b2c3d4" />`（缺段不伪造）；`nodeId` 缺省（纯内存构造 / 测试）时同样退回两段，这是唯一允许的降级。**principal 段必须是能解析到的值**：名字匹配 `[A-Za-z0-9_-]{1,64}`（与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同形状）就用名字，否则——包括无名成员、含点或空格或中文的名字、超过 64 字符的名字——一律写**完整 uuid**。成员名只校验非空、没有字符集约束，非法名字拼进地址会让整条地址在形状校验就失败（不是 `unknown_member`）；也不截断成短 id，解析侧 `registry.resolve()` / `resolveMember()` 只做精确匹配、没有前缀匹配，截断只会得到另一种发不出去的死地址。属性值必须转义（`&` / `<` / `>` / `"`，`&` 最先）：名字是模型可控字符串，不转义就能闭合属性再伪造一个属性。名字来自 `AgentMessage.from_name`（内存元数据，与 `source` / `channel` 同性质，不落 snapshot）——执行内核不持有 registry，名字必须随消息带过来；完整 uuid 仍在 `AgentMessage.from` 里。
-- `source` / `channel` / `from_name` 由 `admit` 按 registry 与调用方标注：**登记的成员 id 与 `federation:*` 入站记为 agent（`main` 也是 agent —— 它的 role 是 single，但仍是一个 agent 记录），未登记的 principal 记为 human**；带 `origin_team_id` 的投递渠道记为 team，其余为 direct；`from_name` 只对本机登记成员有值。三者是内存队列元数据，不落 snapshot，**`channel` 也不渲染进提示词**（只进 trace / 日志）。**只用于模型理解来源，不参与权限判定**；权限仍只由权限 bridge 的 human / policy 主体决定，注入文本不能作为授权依据。`from` 清洗为单行并限长。**消息的缺省发送者是 `human`，不是 `defaultOwner`**：后者是「临时成员归谁管」（`MemberRecord.owner`）的缺省值，属于 agent 归属；用同一个字符串填消息的 `from` 会让人类从 CLI / Web 发出的消息带上 `main` 这个 agent 的 id，`source` 就再也分不出「main 在说话」和「人类在说话」，`main` 也会被当成人类而绕过 conversation budget。
+- `source` / `channel` / `from_name` 由 `admit` 按 registry 与调用方标注：**登记的成员 id 与 `federation:*` 入站记为 agent（`main` 也是 agent，role 是 `member`），未登记的 principal 记为 human**；带 `origin_team_id` 的投递渠道记为 team，其余为 direct；`from_name` 只对本机登记成员有值。三者是内存队列元数据，不落 snapshot，**`channel` 也不渲染进提示词**（只进 trace / 日志）。**只用于模型理解来源，不参与权限判定**；权限仍只由权限 bridge 的 human / policy 主体决定，注入文本不能作为授权依据。`from` 清洗为单行并限长。**消息的缺省发送者是 `human`，不是 `defaultOwner`**：后者是「临时成员归谁管」（`MemberRecord.owner`）的缺省值，属于 agent 归属；用同一个字符串填消息的 `from` 会让人类从 CLI / Web 发出的消息带上 `main` 这个 agent 的 id，`source` 就再也分不出「main 在说话」和「人类在说话」，`main` 也会被当成人类而绕过 conversation budget。
 - Self Card 对绑定 Team 的成员带 `team_id`，unbound 成员不伪造该字段。core 的 `formatSelfCard` 直接渲染 `team: <id>` 行。
 
 ## 约束
 
 - canonical `agents.*` / `teams.*` 是唯一契约。消息队列只在内存（每 body 一个 mailbox），重启丢失未处理消息；不新增持久化消息队列。成员会话会出现在 tenant `sessions.list` 中；不得把 `packages/core` 变成 member-aware。
-- body 上限与空闲 TTL 是唯一背压：闲置超过 TTL 的 body 自动退休；primary 被 retire 时提升最近活跃的 live body，没有 live body 则清空 primary。
+- **一个 agent 恰好一具 live body**（唯一例外是 rotate 窗口：新体与待退役体短暂共存）。`bodyHistory` 是只追加的退役记账（≤20）；body 记录**永不删**——`body_id ≡ session_id` 是续接历史的唯一钥匙。
+- **空闲回收是 agent 级而非 body 级**：只回收 `role === 'temporary'` 且仍在册的 agent，`member`（含 `main`）永不回收。判据读**持久化**的 `max(lastSeen, body.lastActiveAt)`，不用内存 entry（冷启动后为空，否则永不触发）。动作复用 `membership='left'` + `state='closed'`，body 记录保留并标 `retiredAt`；回收可逆——`reinstate` 原地 unretire（清 `retiredAt`、重设 primary、清 `bodyHistory` 同 id 条目、刷新 `lastSeen`）。定时 sweep 只在装配层（`setInterval` + `.unref()`，返回 `stopSweep`），`AgentService` 自身无定时器；`admit` / `list` 不再顺带 sweep（会回收调用方正要投递的目标）。节奏 `clamp(ttl / 10, 60s, 15min)`，TTL 见 `agent.temporaryTtlHours`。
 
 ## 指针
 

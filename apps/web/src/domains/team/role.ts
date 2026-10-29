@@ -1,14 +1,21 @@
 /**
  * Agent role v3 display helpers (CONTRACT-role-model §7).
  *
- * Old gateways only send `owner`; infer `member` when it is missing and
- * `temporary` when it is present. Never infer `single` from a Team roster —
- * single agents are not team members.
+ * 0.28: `single` no longer exists. Old gateways may still send it, so this module
+ * is the single place that downgrades it — everything downstream only ever sees
+ * `member` | `temporary`.
+ *
+ * Old gateways that omit `role` are inferred from `owner`: missing owner = member,
+ * present owner = temporary.
  */
 import type { AgentRole, TeamMember } from '../../gateway/types';
 
+/** Legacy role values a pre-0.28 gateway may still send. */
+type LegacyRole = AgentRole | 'single';
+
 export function roleOf(member: Pick<TeamMember, 'role' | 'owner'>): AgentRole {
-  if (member.role !== undefined) return member.role;
+  const role = member.role as LegacyRole | undefined;
+  if (role !== undefined) return role === 'single' ? 'member' : role;
   return member.owner === undefined ? 'member' : 'temporary';
 }
 
@@ -21,19 +28,22 @@ export function groupMembersByRole(members: readonly TeamMember[]): TeamMember[]
   const membersGroup: TeamMember[] = [];
   const temporaryGroup: TeamMember[] = [];
   for (const member of members) {
-    const role = roleOf(member);
-    if (role === 'single') continue;
-    if (role === 'temporary') temporaryGroup.push(member);
+    if (roleOf(member) === 'temporary') temporaryGroup.push(member);
     else membersGroup.push(member);
   }
   return [...membersGroup, ...temporaryGroup];
 }
 
-export type RoleConversion = 'member' | 'temporary' | 'single';
+export type RoleConversion = AgentRole;
 
-/** Actions shown for a member's current role (no-op conversion omitted). */
+/**
+ * Actions shown for a member's current role (no-op conversion omitted).
+ *
+ * `temporary → member` needs a Team (already true for every roster member);
+ * `member → temporary` demotes and is available for any member, `main` included.
+ */
 export function conversionActions(role: AgentRole): RoleConversion[] {
-  return (['member', 'temporary', 'single'] as const).filter((target) => target !== role);
+  return (['member', 'temporary'] as const).filter((target) => target !== role);
 }
 
 /** Member conversion requires a Team; inline validation mirrors the server. */

@@ -29,7 +29,7 @@ export function attentionCount(
   return pendingPermissions + pendingAsks;
 }
 
-/** member 在前、temporary 在后；single 不进入 Team roster。 */
+/** member 在前、temporary 在后（roster 顺序的本地兜底）。 */
 export function groupTeamMembers(members: readonly TeamMember[]): TeamMember[] {
   return groupMembersByRole(members);
 }

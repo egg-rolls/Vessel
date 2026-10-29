@@ -91,8 +91,19 @@ export interface FeishuPluginOptions {
    * 缺失时 start() 显式失败（禁止静默降级）。
    */
   service: AgentService;
+  /**
+   * 0.28：`service` 的装配层晚绑定 getter（与 `resolveTeamId` 同形状）。
+   * AgentService 在 tenant bundle 之后才构造，渠道构造时拿不到实例；`start()`
+   * 时求值，优先于静态 `service`。二者皆缺省时 `start()` 显式失败。
+   */
+  resolveService?: () => AgentService | undefined;
   /** 0.27：取消在途 run（装配层接线）；缺省只放弃等待。 */
   cancelRun?: (runId: string, reason?: string) => boolean;
+  /**
+   * 0.28 F2：成员被 TTL 回收后 `reinstate` 所需的 Team id。
+   * 渠道不知道 workspace，由装配层提供默认 workspace 的 Team；缺省不复活。
+   */
+  resolveTeamId?: () => string | undefined;
   /** 测试/嵌入注入；缺省用官方 SDK transport。 */
   transport?: FeishuTransport;
   /** 环境变量覆盖（默认 process.env；测试注入）。 */

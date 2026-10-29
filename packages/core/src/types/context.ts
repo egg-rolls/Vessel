@@ -43,6 +43,11 @@ export interface ContextManager {
   readonly tokenCount: number;
   /** 0.15：上下文 token 预算上限；实现能提供时用于快照 `context_max`，否则缺省 */
   readonly maxTokens?: number;
+  /**
+   * 0.28：自动压缩是否启用；实现能提供时 runtime 据此决定压力提示的上界。
+   * 缺省（实现不提供）按「开启」处理，行为与 0.27 一致。
+   */
+  readonly autoCompact?: boolean;
   setSessionId(sessionId: string): void;
   getSessionId(): string;
   /** 用 LLM 响应的真实 token 数替代估算（Auto Compact 使用） */

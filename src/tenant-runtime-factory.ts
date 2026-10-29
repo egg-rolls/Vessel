@@ -141,6 +141,18 @@ export interface BuildTenantRuntimeOptions {
   loadMcpModule?: () => Promise<unknown | null>;
   loadFeishuModule?: () => Promise<unknown | null>;
   feishuTransport?: unknown;
+  /**
+   * 0.28 F2：渠道成员被 TTL 回收后复活所需的 Team id。
+   * Team 由 bootstrap 的 `createAgentServiceWiring` 在 bundle 之后才建出来，
+   * 所以这里是晚绑定 getter（与 localHuman / localMember 同口径）；缺省不复活。
+   */
+  resolveFeishuTeamId?: () => string | undefined;
+  /**
+   * 0.28：飞书渠道执行面所需的 `AgentService`，同样是晚绑定 getter。
+   * bundle（含渠道）先于 `createAgentServiceWiring` 构造；渠道在 `start()` 时求值。
+   * 缺省时渠道 `start()` 保持显式失败（禁止静默降级）。
+   */
+  resolveFeishuService?: () => unknown;
   /** 0.18：tenant 事件扇入面；每个 tenant 的运行时流在构建时注册。 */
   hub?: TenantEventHub;
 }
@@ -802,6 +814,12 @@ export async function buildTenantRuntime(
       ...(runStore ? { runStore } : {}),
       contextFactory,
       ...(options.feishuTransport !== undefined ? { transport: options.feishuTransport } : {}),
+      ...(options.resolveFeishuTeamId !== undefined
+        ? { resolveTeamId: options.resolveFeishuTeamId }
+        : {}),
+      ...(options.resolveFeishuService !== undefined
+        ? { resolveService: options.resolveFeishuService }
+        : {}),
       loader,
       ...(options.loadFeishuModule ? { loadModule: options.loadFeishuModule } : {}),
     });

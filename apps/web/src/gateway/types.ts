@@ -322,12 +322,14 @@ export interface TeamUpdateInput {
 }
 
 /**
- * Agent 角色 v3（CONTRACT-role-model §1）。
+ * Agent 角色 v3（CONTRACT-role-model §1；0.28 收窄）。
  *
- * `single` = 独立 agent；`member` = 团队成员；`temporary` = 临时雇佣者。
+ * `member` = 团队成员（含 `main`）；`temporary` = 临时雇佣者。
  * 旧 gateway 只返回 owner，UI 用 `roleOf()` 推断（owner 缺失 = member）。
+ * 0.27 的 `single` 已删除：旧 gateway 仍可能送来该值，读侧统一按 `member` 处理
+ * （`roleOf` 是唯一归一点，不要在各组件里各写一遍）。
  */
-export type AgentRole = 'single' | 'member' | 'temporary';
+export type AgentRole = 'member' | 'temporary';
 
 /** teams.get.members 元素。 */
 export interface TeamMember {
@@ -345,7 +347,7 @@ export interface TeamMember {
   bodies?: BodyStatus[];
   /** v3 additive：角色；旧 gateway 缺失时按 owner 推断。 */
   role?: AgentRole;
-  /** v3 additive：single/member = self，temporary = 雇佣者；缺失时按旧语义推断。 */
+  /** v3 additive：member = self，temporary = 雇佣者；缺失时按旧语义推断。 */
   owner?: string;
 }
 

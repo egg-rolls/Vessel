@@ -39,7 +39,17 @@ const V1_BACKUP_SUFFIX = '.v1.bak';
 const V2_BACKUP_SUFFIX = '.v2.bak';
 const V3_BACKUP_SUFFIX = '.v3.bak';
 
-const ROLES: readonly AgentRole[] = ['single', 'member', 'temporary'];
+/**
+ * 快照里合法的 role 字面量。
+ *
+ * `single` 只用于**读取**存量数据：0.27 及更早写出的 `main` 是 `role:'single'`，
+ * 0.28 起该角色不存在，读到即降级为 `member`（见 `parseMember`）。新写入永远是
+ * `member` / `temporary` 之一，所以这里不把它加进 `AgentRole`。
+ */
+const READABLE_ROLES: readonly (AgentRole | 'single')[] = ['single', 'member', 'temporary'];
+
+/** 存量 `single` → `member`：所有 agent 都归某个 Team，不再有独立 agent。 */
+const LEGACY_SINGLE_ROLE = 'single';
 
 const MEMBER_STATES: readonly MemberState[] = [
   'created',
@@ -221,11 +231,19 @@ function parseMember(value: unknown, version: number): PersistedAgentRecord | un
 
   // v3 才信任显式 role；旧快照一律按 owner 推断。
   const explicitRole =
-    version >= 3 && ROLES.includes(value.role as AgentRole) ? (value.role as AgentRole) : undefined;
-  const inferredRole: AgentRole =
-    rawOwner === undefined ? 'member' : rawOwner === value.id ? 'single' : 'temporary';
-  const role = explicitRole ?? inferredRole;
-  // single / member 的 owner 恒为 self；temporary 保留雇佣者（v3 必填，缺失视为损坏）。
+    version >= 3 && READABLE_ROLES.includes(value.role as AgentRole | 'single')
+      ? (value.role as AgentRole | 'single')
+      : undefined;
+  // 推断阶梯：无 owner → member；owner === id → 存量 single（降级为 member）；
+  // 其余 → temporary。**绝不在 parse 阶段 reject**：丢一条记录等于把它全部会话变不可见。
+  const inferredRole: AgentRole | 'single' =
+    rawOwner === undefined ? 'member' : rawOwner === value.id ? LEGACY_SINGLE_ROLE : 'temporary';
+  const declaredRole = explicitRole ?? inferredRole;
+  // 0.28 迁移：`single` 降级为 `member`，可见性保持原值（private 仍按 owner 判定，
+  // owner 恒为 self 所以升级后成员对自己可见、可寻址）。降级只发生一次，写回即 member。
+  const role: AgentRole =
+    declaredRole === LEGACY_SINGLE_ROLE ? 'member' : (declaredRole as AgentRole);
+  // member 的 owner 恒为 self；temporary 保留雇佣者（v3 必填，缺失视为损坏）。
   if (role === 'temporary' && rawOwner === undefined) return undefined;
   const owner = role === 'temporary' ? (rawOwner as string) : value.id;
 

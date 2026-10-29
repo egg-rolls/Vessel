@@ -301,7 +301,6 @@ export class DefaultTeamService implements AgentTeamService {
     const conversationId = this.resolveConversationId(input.conversation_id);
 
     // Team 日志对 team 可见：private roster 成员不能作为 post 的 actor。
-    // role single（root owner）不属 roster，仍允许（见 isPrivateRosterMember）。
     if (from !== HUMAN_PRINCIPAL) {
       const actor = await this.agent.identify(from);
       if (actor !== undefined && isPrivateRosterMember(actor)) {
@@ -454,7 +453,6 @@ export class DefaultTeamService implements AgentTeamService {
     const target = resolveMember(input.member, visible);
 
     if (input.action === 'add') {
-      // single 允许转入 member（role 转换在 AgentService.reinstate）；root owner 由那里拒绝。
       if (target.team_id !== undefined && target.team_id !== input.team_id) {
         throw new TeamError('team_already_in_team', `team_already_in_team: ${target.id}`);
       }
@@ -1557,12 +1555,12 @@ function truncateReplyContent(content: string): string {
 }
 
 /**
- * private roster 成员判定：role single 是根 owner / 独立 agent（人类面），不属 roster，
- * 保持放行；member / temporary 的 private 仍是 roster 成员。
+ * private roster 成员判定：所有 private 成员都是 roster 成员（0.28 起不再有
+ * `single` 旁路 —— 那是「无 Team 的独立 agent」才需要的例外）。
  * Team 日志对 team 可见，这类成员不得作为 actor / mention / send 目标，也不写日志。
  */
 function isPrivateRosterMember(status: MemberStatus): boolean {
-  return status.visibility === 'private' && status.role !== 'single';
+  return status.visibility === 'private';
 }
 
 /** 按首次出现顺序去重 */

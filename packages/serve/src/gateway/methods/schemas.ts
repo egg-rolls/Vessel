@@ -124,8 +124,8 @@ export const sessionSearchHitSchema = {
   },
 };
 
-/** 成员角色（AgentRole）；member / temporary / single 的转换入口是 agents.update。 */
-const agentRoleEnum = ['single', 'member', 'temporary'];
+/** 成员角色（AgentRole）；member / temporary 的转换入口是 agents.update。 */
+const agentRoleEnum = ['member', 'temporary'];
 
 /**
  * agents.list / agents.get 的条目（0.14 P0，DECISION-025 §1.4）。

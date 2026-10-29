@@ -34,7 +34,7 @@ export function AgentDetailView({
   onBack: () => void;
   onEdit: () => void;
   onSaved: () => void;
-  /** Team-less single 没有 Team 入口。 */
+  /** 没有 Team 归属时不显示 Team 入口。 */
   onOpenTeam?: () => void;
   onOpenSession: () => void;
 }) {
