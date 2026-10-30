@@ -449,6 +449,24 @@ export const zhCN = {
   'status.agentQueueEntry': '{id} · pos {position} · {reason}',
   'status.compactionValue': '移除 {removed} · 保留 {remaining} · {reason}',
   'status.noUsage': '-',
+  'status.label.cache': 'cache',
+
+  // 0.29 缓存命中：两个比率都不可用时整块显示「不可用（原因）」，绝不显示 0%。
+  // 计数是所有上报了缓存字段的响应之和，与左侧两个比率同源，可人工复核。
+  'cache.value':
+    '输入占比 {inputShare} · 前缀健康度 {prefixHealth} · read {read} / write {write} / prompt {prompt} · 上报 {reported}',
+  'cache.unavailable':
+    '不可用（{reason}）· read {read} / write {write} / prompt {prompt} · 上报 {reported}',
+  'cache.notAvailable': '不适用',
+  'cache.notAvailableReason': '不适用（{reason}）',
+  'cache.reason.no-requests': '本会话还没有 LLM 响应',
+  'cache.reason.no-cache-fields': 'provider 不上报缓存字段',
+  'cache.reason.zero-denominator': '缓存计数分母为 0',
+  'cache.reason.prompt-not-inclusive': 'prompt_tokens 未含缓存',
+  // run 结束后的自提示：第 1 行只放结论（窄终端不截断），第 2 行放原因与原始计数
+  'cache.notice': '缓存 · 输入占比 {inputShare} · 前缀健康度 {prefixHealth}',
+  'cache.noticeUnavailable': '缓存 · 不可用（{reason}）',
+  'cache.noticeDetail': 'read {read} · write {write} · prompt {prompt} · 上报 {reported}',
 
   'limits.unbounded': '∞',
   'limits.unknown': 'unknown',

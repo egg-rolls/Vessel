@@ -14,6 +14,7 @@ import type { ReplContext } from '../repl-context.js';
 import { formatDuration } from '../utils/display-labels.js';
 import { padToWidth } from '../utils/text-layout.js';
 import { buildAgentRegistry } from './agent-registry.js';
+import { type CacheStats, formatCacheSummary, readCacheStats } from './cache-metrics.js';
 import {
   type EffectiveLimits,
   findLatestLimitBlock,
@@ -59,6 +60,11 @@ export interface StatusSnapshot {
   limits: EffectiveLimits;
   /** active run 的已用量；idle 时 undefined（展示为 `-`） */
   usage?: UsageSnapshot;
+  /**
+   * 会话级 prompt-cache 命中统计（0.29 B4）。
+   * 与 `usage` 不同：它从事件历史聚合，**idle 时也有值**（见 cache-metrics.ts 头注释）。
+   */
+  cache: CacheStats;
   /** active run 最近一次限制命中 */
   limitBlock?: LimitBlockInfo;
   /** active run 每个 key 最新一条 80% 预警 */
@@ -227,6 +233,8 @@ export function buildStatusSnapshot(
   ).length;
   const agentQueue = { ...queued, running: runningAgents };
   const lastCompaction = findLatestCompaction(events);
+  // 会话级聚合：不受 active run 影响，idle 时同样成立（BRIEF §2）。
+  const cache = readCacheStats(events, state.currentSessionId);
 
   return {
     asOf: now,
@@ -244,6 +252,7 @@ export function buildStatusSnapshot(
     },
     limits: readEffectiveLimits(ctx.config),
     ...(usage !== undefined ? { usage } : {}),
+    cache,
     ...(limitBlock !== undefined ? { limitBlock } : {}),
     limitWarnings,
     permissions: {
@@ -398,6 +407,8 @@ export function formatStatusSnapshot(snapshot: StatusSnapshot): string {
     line(t('status.label.context'), contextValue),
     line(t('status.label.limits'), limitsValue),
     line(t('status.label.budget'), budgetValue),
+    // 0.29：会话级缓存命中。idle 时 budget 全是 `-`，这一行仍然有值。
+    line(t('status.label.cache'), formatCacheSummary(snapshot.cache)),
     ...(snapshot.limitBlock !== undefined
       ? [`  ${t('status.limitBlocked', { value: formatLimitBlock(snapshot.limitBlock) })}`]
       : []),

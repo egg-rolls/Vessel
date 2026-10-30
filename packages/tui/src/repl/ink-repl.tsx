@@ -57,6 +57,7 @@ import { renderViewAsText } from '../views/render-text.js';
 import { viewContextKey } from '../views/selection.js';
 import type { ViewAction } from '../views/types.js';
 import { useAgentRegistry } from './agent-registry.js';
+import { formatCacheNotice, readCacheStats } from './cache-metrics.js';
 import { maybeClearOnStart } from './clear-on-start.js';
 import { failureFallbackAction, failureViewerTitle } from './error-archive.js';
 import {
@@ -165,6 +166,30 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
   /** 本轮普通消息原文；事件流在 user.message 之前失败时补一条 user item */
   const pendingUserTextRef = useRef<string | undefined>(undefined);
 
+  /**
+   * 0.29 B4：run 收尾后归档一条会话级缓存命中提示。
+   *
+   * 只在**有缓存数据可看**时追加（provider 不上报缓存字段时整块静默）—— 每轮都刷
+   * 一条「不可用」是噪声，而 `/status` 的 cache 行始终给出完整状态。
+   * 数据从事件历史聚合，run 已终态也不影响（见 cache-metrics.ts 头注释）。
+   */
+  const archiveCacheNotice = useCallback(
+    (sessionId: string) => {
+      const notice = formatCacheNotice(readCacheStats(ctx.events.getHistory(), sessionId));
+      if (notice === undefined) return;
+      dispatch({
+        type: 'appendItem',
+        item: {
+          kind: 'notice',
+          level: 'info',
+          text: notice.text,
+          ...(notice.detail !== undefined ? { detail: notice.detail } : {}),
+        },
+      });
+    },
+    [ctx.events, dispatch],
+  );
+
   // ── 0.13 上/下栏显隐 ──────────────────────────────
   // 初始值：VESSEL_STATUS_BARS > ui.statusBars > 自动（上栏开、下栏 rows>=18）。
   // 手动切换后本次进程内优先；写回 YAML 由 ctx.settings.setStatusBars（asm 注入）完成。
@@ -258,8 +283,9 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
         if (action) dispatch(action);
       }
       dispatch({ type: 'runEnd' });
+      archiveCacheNotice(handle.sessionId);
     },
-    [dispatch],
+    [dispatch, archiveCacheNotice],
   );
 
   // 预计算的命令列表（用于内联补全）；hidden alias（/sessions）不出现
@@ -633,6 +659,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
       } finally {
         pendingUserTextRef.current = undefined;
         dispatch({ type: 'runEnd' });
+        archiveCacheNotice(state.currentSessionId);
       }
     },
     [
@@ -647,6 +674,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
       ui.queueEditIndex,
       dispatch,
       startResumeRun,
+      archiveCacheNotice,
       clearScreen,
     ],
   );
@@ -1684,7 +1712,19 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
     } catch (error) {
       console.error(formatClassifiedError(classifyError(error)));
     }
+    // 0.29 B4：行模式同样能看到缓存命中（语义与 Ink 路径一致，见 archiveCacheNotice）。
+    printCacheNotice(ctx, state.currentSessionId);
   }
 
   ctx.onExit();
+}
+
+/**
+ * 行模式（非 TTY）的缓存命中提示；与 Ink 路径的 `archiveCacheNotice` 同一口径
+ * （抑制规则也共用 `formatCacheNotice` 的 undefined 语义）。
+ */
+function printCacheNotice(ctx: ReplContext, sessionId: string): void {
+  const notice = formatCacheNotice(readCacheStats(ctx.events.getHistory(), sessionId));
+  if (notice === undefined) return;
+  console.log(`${notice.text}${notice.detail !== undefined ? `\n  ${notice.detail}` : ''}`);
 }
