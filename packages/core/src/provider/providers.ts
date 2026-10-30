@@ -14,6 +14,12 @@ import type {
 import type { ToolCall } from '../types/tool.js';
 import { ProviderHttpError, parseRetryAfterMs } from './errors.js';
 import { StreamAccumulator } from './stream-accumulator.js';
+import {
+  type AnthropicRawUsage,
+  fromAnthropicUsage,
+  fromOpenAiUsage,
+  type OpenAiRawUsage,
+} from './usage.js';
 
 /** SSE 事件（解析自 HTTP 流） */
 interface SseEvent {
@@ -97,15 +103,7 @@ type OpenAiStreamChunk = {
     };
     finish_reason?: FinishReason;
   }>;
-  usage?: Usage;
-};
-
-/** Anthropic usage 形状（缓存字段仅显式缓存时出现） */
-type AnthropicUsage = {
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cache_read_input_tokens?: number;
+  usage?: OpenAiRawUsage;
 };
 
 /** Anthropic 流式事件形状（仅取用到的字段） */
@@ -114,8 +112,8 @@ type AnthropicStreamEvent = {
   index?: number;
   content_block?: { type: string; id?: string; name?: string };
   delta?: { type: string; text?: string; partial_json?: string; stop_reason?: string };
-  message?: { usage?: AnthropicUsage };
-  usage?: AnthropicUsage;
+  message?: { usage?: AnthropicRawUsage };
+  usage?: AnthropicRawUsage;
 };
 
 /** Anthropic 请求消息（system 单独传，这里只含 user/assistant） */
@@ -400,11 +398,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         };
         finish_reason: FinishReason;
       }>;
-      usage?: {
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
-      };
+      usage?: OpenAiRawUsage;
     };
 
     const choice = data.choices[0];
@@ -425,7 +419,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
       content: choice.message.content ?? '',
       tool_calls: toolCalls,
       finish_reason: choice.finish_reason,
-      usage: data.usage,
+      // U1：prompt_tokens 原生已含缓存，只从 details / DeepSeek 字段提取读取量。
+      usage: data.usage ? fromOpenAiUsage(data.usage) : undefined,
       ...(choice.message.reasoning_content
         ? { reasoning_content: choice.message.reasoning_content }
         : {}),
@@ -699,17 +694,8 @@ export class AnthropicProvider implements LLMProvider {
       }
     }
 
-    const usage: Usage = {
-      prompt_tokens: data.usage.input_tokens,
-      completion_tokens: data.usage.output_tokens,
-      total_tokens: data.usage.input_tokens + data.usage.output_tokens,
-    };
-    if (data.usage.cache_creation_input_tokens !== undefined) {
-      usage.cache_creation_input_tokens = data.usage.cache_creation_input_tokens;
-    }
-    if (data.usage.cache_read_input_tokens !== undefined) {
-      usage.cache_read_input_tokens = data.usage.cache_read_input_tokens;
-    }
+    // U1：Anthropic 的 input_tokens 是排他语义，抬成含缓存的全部输入。
+    const usage: Usage = fromAnthropicUsage(data.usage);
 
     return {
       content,

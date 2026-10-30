@@ -1228,15 +1228,11 @@ export class AgentRuntime {
         );
         // Auto Compact：用**本次请求**的真实 token 数替代字符估算。
         // 不能用累计 stats.totalTokens——多轮会线性放大，第二轮就误触发 compact（C-04）。
-        // 0.29：Anthropic 的 `input_tokens` 不包含缓存读/写（排他语义），只拿它当总输入
-        // 会系统性低估，偏差正好等于缓存命中量 —— 开了 prompt cache 后压缩该触发却不触发，
-        // 只能靠 provider 400 后的溢出重试兜底。这里补上缓存两项，与 total_tokens 口径
-        // 无关（限额仍走 stats，见 CONTRACT-0.29 §5）。
+        // 0.29 U1：`prompt_tokens` 已由 adapter 统一为「含缓存的全部输入」
+        // （CONTRACT-0.29 §1），因此这里**不得**再加 cache_read / cache_creation
+        // ——它们是 prompt_tokens 的子集，再加会重复计数（§5.1）。
         this.context.updateRealTokens(
-          (response.usage.prompt_tokens ?? 0) +
-            (response.usage.cache_read_input_tokens ?? 0) +
-            (response.usage.cache_creation_input_tokens ?? 0) +
-            (response.usage.completion_tokens ?? 0),
+          (response.usage.prompt_tokens ?? 0) + (response.usage.completion_tokens ?? 0),
         );
       }
 
