@@ -46,7 +46,7 @@ const USAGE_KEYS = [
   'completion_tokens',
   'total_tokens',
   'total_cost',
-  // CONTRACT-0.29 §3：缓存计数（`prompt_tokens` 的子集），metadata 档落盘不得丢。
+  // 缓存计数是 `prompt_tokens` 的子集，不是并列项 —— 见上方白名单说明。
   'cache_read_input_tokens',
   'cache_creation_input_tokens',
 ] as const;
