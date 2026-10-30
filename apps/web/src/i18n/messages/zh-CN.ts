@@ -1174,6 +1174,11 @@ export const messages = {
   'observe.metrics.stat.cancelled': '已取消',
   'observe.metrics.stat.toolCalls': '工具调用（失败 {failed}）',
   'observe.metrics.stat.tokens': 'Tokens（{prompt}+{completion}）',
+  'observe.metrics.stat.cacheInputShare': '缓存输入占比（读 / 全部输入）',
+  'observe.metrics.stat.cachePrefixHealth': '前缀健康度（读 / 读+写）',
+  'observe.metrics.stat.cacheUnavailable': '不可用',
+  'observe.metrics.stat.cacheUnavailableHint': '本批事件没有缓存数据（provider 未报告）',
+  'observe.metrics.stat.cacheHint': '读 {read} / 写 {write}，输入共 {prompt}',
   'observe.metrics.stat.avgDuration': '平均耗时（最大 {max}ms）',
   'observe.metrics.stat.updatedAt': '更新于',
   'observe.metrics.sourceDesc':

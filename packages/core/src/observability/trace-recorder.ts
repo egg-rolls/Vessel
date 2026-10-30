@@ -34,7 +34,21 @@ const METADATA_KEYS = [
   'message_count',
   'finish_reason',
 ] as const;
-const USAGE_KEYS = ['prompt_tokens', 'completion_tokens', 'total_tokens', 'total_cost'] as const;
+/**
+ * `metadata` 档的 usage 白名单。
+ *
+ * 0.29 B3：加入两个缓存计数。它们与 `prompt_tokens` 同源（CONTRACT-0.29 §3），
+ * 漏掉会让 `rebuildMetrics` 在 metadata 档下少两个字段，破坏 ADR-047 的
+ * 「重建形状 == 实时 collector 形状」。
+ */
+const USAGE_KEYS = [
+  'prompt_tokens',
+  'completion_tokens',
+  'total_tokens',
+  'total_cost',
+  'cache_read_input_tokens',
+  'cache_creation_input_tokens',
+] as const;
 
 /** 每 run 的队列与 seq 状态 */
 interface RunTraceState {

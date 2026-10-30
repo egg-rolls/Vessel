@@ -1217,6 +1217,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.metrics.stat.cancelled': 'Cancelled',
   'observe.metrics.stat.toolCalls': 'Tool calls (failed {failed})',
   'observe.metrics.stat.tokens': 'Tokens ({prompt}+{completion})',
+  'observe.metrics.stat.cacheInputShare': 'Cache input share (read / all input)',
+  'observe.metrics.stat.cachePrefixHealth': 'Prefix health (read / read+write)',
+  'observe.metrics.stat.cacheUnavailable': 'Unavailable',
+  'observe.metrics.stat.cacheUnavailableHint':
+    'No cache data in this batch (provider does not report it)',
+  'observe.metrics.stat.cacheHint': 'read {read} / write {write}, {prompt} input total',
   'observe.metrics.stat.avgDuration': 'Average duration (max {max}ms)',
   'observe.metrics.stat.updatedAt': 'Updated at',
   'observe.metrics.sourceDesc':

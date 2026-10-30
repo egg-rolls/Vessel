@@ -356,6 +356,10 @@ export const metricsSnapshotSchema = {
         prompt_tokens: { type: 'integer' },
         completion_tokens: { type: 'integer' },
         total_tokens: { type: 'integer' },
+        // 0.29 B3（CONTRACT-0.29 §3）：additive，**不进 required**。
+        // 缺省表示该批事件没有缓存数据（provider 不支持），不是 0。
+        cache_read_tokens: { type: 'integer', minimum: 0 },
+        cache_creation_tokens: { type: 'integer', minimum: 0 },
       },
     },
     duration_ms: {
