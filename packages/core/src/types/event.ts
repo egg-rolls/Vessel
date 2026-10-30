@@ -35,6 +35,10 @@ export interface LlmResponsePayload extends BaseEventPayload {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
+    /** CONTRACT-0.29 §3：缓存读计数（`prompt_tokens` 的子集；缺省=provider 未上报） */
+    cache_read_input_tokens?: number;
+    /** CONTRACT-0.29 §3：缓存写计数（`prompt_tokens` 的子集；缺省=provider 未上报） */
+    cache_creation_input_tokens?: number;
   };
 }
 
@@ -88,6 +92,10 @@ export interface RunCompletedPayload extends BaseEventPayload {
     completion_tokens: number;
     total_tokens: number;
     total_cost?: number;
+    /** CONTRACT-0.29 §3：缓存读计数（`prompt_tokens` 的子集；缺省=provider 未上报） */
+    cache_read_input_tokens?: number;
+    /** CONTRACT-0.29 §3：缓存写计数（`prompt_tokens` 的子集；缺省=provider 未上报） */
+    cache_creation_input_tokens?: number;
   };
   duration_ms: number;
   iterations: number;

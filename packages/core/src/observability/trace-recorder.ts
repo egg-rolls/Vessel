@@ -34,7 +34,15 @@ const METADATA_KEYS = [
   'message_count',
   'finish_reason',
 ] as const;
-const USAGE_KEYS = ['prompt_tokens', 'completion_tokens', 'total_tokens', 'total_cost'] as const;
+const USAGE_KEYS = [
+  'prompt_tokens',
+  'completion_tokens',
+  'total_tokens',
+  'total_cost',
+  // CONTRACT-0.29 §3：缓存计数（`prompt_tokens` 的子集），metadata 档落盘不得丢。
+  'cache_read_input_tokens',
+  'cache_creation_input_tokens',
+] as const;
 
 /** 每 run 的队列与 seq 状态 */
 interface RunTraceState {
