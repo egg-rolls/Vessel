@@ -459,6 +459,26 @@ export const en: Record<MessageKey, string> = {
   'status.agentQueueEntry': '{id} · pos {position} · {reason}',
   'status.compactionValue': 'removed {removed} · remaining {remaining} · {reason}',
   'status.noUsage': '-',
+  'status.label.cache': 'cache',
+
+  // 0.29 cache hit: when both ratios are unavailable say so explicitly, never 0%.
+  // Counters are summed over every response that reported cache fields, so they
+  // reconcile with the ratios.
+  'cache.value':
+    'input share {inputShare} · prefix health {prefixHealth} · read {read} / write {write} / prompt {prompt} · reported {reported}',
+  'cache.unavailable':
+    'unavailable ({reason}) · read {read} / write {write} / prompt {prompt} · reported {reported}',
+  'cache.notAvailable': 'n/a',
+  'cache.notAvailableReason': 'n/a ({reason})',
+  'cache.reason.no-requests': 'no LLM response in this session yet',
+  'cache.reason.no-cache-fields': 'provider reports no cache fields',
+  'cache.reason.zero-denominator': 'cache counter denominator is zero',
+  'cache.reason.prompt-not-inclusive': 'prompt_tokens excludes cache tokens',
+  // Post-run self notice: line 1 is the verdict only (narrow terminals do not truncate it),
+  // line 2 carries the reason and the raw counters.
+  'cache.notice': 'cache · input share {inputShare} · prefix health {prefixHealth}',
+  'cache.noticeUnavailable': 'cache · unavailable ({reason})',
+  'cache.noticeDetail': 'read {read} · write {write} · prompt {prompt} · reported {reported}',
 
   'limits.unbounded': 'unbounded',
   'limits.unknown': 'unknown',
