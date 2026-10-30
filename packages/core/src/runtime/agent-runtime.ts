@@ -906,13 +906,25 @@ export class AgentRuntime {
     }
   }
 
-  /** RunState/checkpoint 共用的 usage 快照 */
+  /**
+   * RunState/checkpoint 共用的 usage 快照。
+   *
+   * CONTRACT-0.29 §1.2：缓存两项**只在有 provider 上报过时**才写出。
+   * `UsageStats` 用数字累加，但「从未上报过缓存」必须回写成 `undefined`（省略键），
+   * 不能因为累加器是数字就冒出一个 `cache_read_input_tokens: 0`。
+   */
   private usageFromStats(stats: UsageStats): NonNullable<RunState['usage']> {
     return {
       prompt_tokens: stats.inputTokens,
       completion_tokens: stats.outputTokens,
       total_tokens: stats.totalTokens,
       total_cost: stats.totalCost,
+      ...(stats.cacheReadTokens !== undefined
+        ? { cache_read_input_tokens: stats.cacheReadTokens }
+        : {}),
+      ...(stats.cacheCreationTokens !== undefined
+        ? { cache_creation_input_tokens: stats.cacheCreationTokens }
+        : {}),
     };
   }
 
@@ -955,6 +967,14 @@ export class AgentRuntime {
         totalTokens: checkpoint.usage?.total_tokens ?? 0,
         totalCost: checkpoint.usage?.total_cost ?? 0,
         startTime: execution.startedAt,
+        // CONTRACT-0.29 B1：缓存计数必须跨 resume 连续累加，否则命中率/成本归因归零。
+        // 「checkpoint 里没有」= provider 从未上报过（§1.2），保持 `undefined` 而不是 0。
+        ...(checkpoint.usage?.cache_read_input_tokens !== undefined
+          ? { cacheReadTokens: checkpoint.usage.cache_read_input_tokens }
+          : {}),
+        ...(checkpoint.usage?.cache_creation_input_tokens !== undefined
+          ? { cacheCreationTokens: checkpoint.usage.cache_creation_input_tokens }
+          : {}),
       };
 
       // 0.18：session 缓存 + 事件日志是恢复来源；checkpoint.messages 只作
@@ -1226,6 +1246,18 @@ export class AgentRuntime {
           response.usage.prompt_tokens ?? 0,
           response.usage.completion_tokens ?? 0,
         );
+        // CONTRACT-0.29 B1：缓存两项绕过 `addTokens`（`types/limits.ts` 的公开端口，
+        // 签名不变）在这里直接累加；它们是 `prompt_tokens` 的**子集**，只做计数，
+        // 不进 `inputTokens` / `totalTokens`（§1.2 禁止相加）。
+        // 「未上报」用 `undefined` 保持缺省，一旦某轮上报过就持续累加。
+        const cacheRead = response.usage.cache_read_input_tokens;
+        if (cacheRead !== undefined) {
+          stats.cacheReadTokens = (stats.cacheReadTokens ?? 0) + cacheRead;
+        }
+        const cacheCreation = response.usage.cache_creation_input_tokens;
+        if (cacheCreation !== undefined) {
+          stats.cacheCreationTokens = (stats.cacheCreationTokens ?? 0) + cacheCreation;
+        }
         // Auto Compact：用**本次请求**的真实 token 数替代字符估算。
         // 不能用累计 stats.totalTokens——多轮会线性放大，第二轮就误触发 compact（C-04）。
         // 0.29 U1：`prompt_tokens` 已由 adapter 统一为「含缓存的全部输入」

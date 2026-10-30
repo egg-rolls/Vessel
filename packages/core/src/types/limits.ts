@@ -72,6 +72,17 @@ export interface UsageStats {
    * 缺省 / 0 表示没有暂停。
    */
   pausedMs?: number;
+  /**
+   * 从提示词缓存读取的输入 token 累计（CONTRACT-0.29 §3）。
+   * 是 `inputTokens` 的**子集**，禁止再加到 `inputTokens` / `totalTokens` 上。
+   * 缺省表示本次 run 没有任何 provider 上报过该字段（≠ 0）。
+   */
+  cacheReadTokens?: number;
+  /**
+   * 写入提示词缓存的输入 token 累计（CONTRACT-0.29 §3）。
+   * 语义同 `cacheReadTokens`：子集，缺省表示「未上报」而不是 0。
+   */
+  cacheCreationTokens?: number;
 }
 
 /** 限制检查器接口 */
