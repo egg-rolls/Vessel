@@ -13,6 +13,7 @@
 
 import type { FinishReason, LLMResponse, StreamChunk, Usage } from '../types/provider.js';
 import type { ToolCall } from '../types/tool.js';
+import { fromAnthropicUsage, fromOpenAiUsage, type OpenAiRawUsage } from './usage.js';
 
 /** 工具调用累积条目（统一字段名，消除 OpenAI .arguments vs Anthropic .inputJson 差异） */
 interface ToolCallEntry {
@@ -99,9 +100,9 @@ export class StreamAccumulator {
 
   // ── Usage（两种模式）──────────────────────────────
 
-  /** OpenAI 模式：直接赋值完整 Usage 对象 */
-  setUsage(usage: Usage): void {
-    this.directUsage = usage;
+  /** OpenAI 模式：直接赋值完整 Usage 对象（入参为原生 usage，存储时归一化） */
+  setUsage(usage: OpenAiRawUsage): void {
+    this.directUsage = fromOpenAiUsage(usage);
   }
 
   /** Anthropic 模式：记录 prompt tokens */
@@ -139,17 +140,16 @@ export class StreamAccumulator {
         : undefined;
 
     const usage: Usage | undefined = this.incrementalUsage
-      ? {
-          prompt_tokens: this.promptTokens,
-          completion_tokens: this.completionTokens,
-          total_tokens: this.promptTokens + this.completionTokens,
+      ? fromAnthropicUsage({
+          input_tokens: this.promptTokens,
+          output_tokens: this.completionTokens,
           ...(this.cacheCreationInputTokens !== undefined
             ? { cache_creation_input_tokens: this.cacheCreationInputTokens }
             : {}),
           ...(this.cacheReadInputTokens !== undefined
             ? { cache_read_input_tokens: this.cacheReadInputTokens }
             : {}),
-        }
+        })
       : this.directUsage;
 
     this.onChunk({ type: 'finish', finish_reason: this.finishReason, usage });
