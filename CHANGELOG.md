@@ -9,6 +9,36 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [0.29.0] - 2026-10-30
+
+> 0.29.0（基于 0.28.0，未发布）：prompt cache 的计量、命中率与压缩修复。完整记录见
+> [`docs/versions/0.29.0.md`](docs/versions/0.29.0.md)。未 tag、未 publish。
+
+### Fixed
+
+- **缓存开启后压缩不触发**：Anthropic 的 `input_tokens` 不含缓存读写，压缩判断却拿它
+  当真实上下文规模，于是只剩残差 —— 100k 会话可能只报 5k，偏差正好等于命中量。
+  压缩永不触发，只能靠 provider 400 后的溢出重试，第二次直接抛错。
+
+### Added
+
+- **`prompt_tokens` 语义统一**：所有 provider 统一为「含缓存的全部输入」；Anthropic 由
+  adapter 补上两个缓存字段，OpenAI 只提取 `cached_tokens`，DeepSeek 折叠拆分字段。
+  不报告缓存时字段缺省（`undefined`），不是 0。
+- **缓存计数贯通**：`UsageStats` / 事件 / session / checkpoint / **resume** 都带缓存数。
+- **命中率展示**：`metrics.get` 聚合两个计数；Web Observe 与 TUI `/status` 显示
+  「输入占比」与「前缀健康度」。比率在展示层派生，不进快照。
+
+### Changed
+
+- `inputTokensLimit` 会更早触发（限额吃含缓存的 `prompt_tokens`）—— 语义统一的必然结果。
+- 跨版本 resume 按新口径整体读入历史 `prompt_tokens`，长跑 run 可能一跳顶到限额。
+
+### Not building
+
+- 不做计费 / 价格表（ADR-005）。`totalCostLimit` 保持恒 0，是设计选择不是缺陷。
+- 不建模最小可缓存阈值；不做 warmup 单列（聚合量上不可还原）。
+
 ## [0.28.0] - 2026-10-29
 
 > 0.28.0（基于 0.27.0，未发布）：Team 即工作区，会话即临时 agent。完整记录见
