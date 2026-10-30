@@ -554,6 +554,15 @@ export interface MetricsSnapshot {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    /**
+     * 缓存读取 token 累计（CONTRACT-0.29 §3）。
+     *
+     * `undefined` = 该批事件没有任何缓存数据（provider 不支持缓存）。
+     * 面板必须显示「不可用」，**不能**当成 0% 命中率。
+     */
+    cache_read_tokens?: number;
+    /** 缓存写入 token 累计；`undefined` 语义同上 */
+    cache_creation_tokens?: number;
   };
   duration_ms: { total: number; max: number; avg: number };
   updated_at: number;

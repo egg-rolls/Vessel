@@ -20,6 +20,7 @@ import type { EvalCaseResult, EvalReport } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
 import { AttentionPanel } from './AttentionPanel';
+import { cacheStatTexts } from './cache-metrics';
 import { DiagnosticsView } from './DiagnosticsView';
 import { TasksView } from './TasksView';
 
@@ -106,6 +107,18 @@ function MetricsPanel() {
   const data = resourceData(resource.state);
   const metrics = data?.metrics;
   useRefreshSignal(resource.reload);
+
+  // CONTRACT-0.29 §2.2：比率是展示层派生量，不进 wire。
+  const cache = useMemo(() => (metrics ? cacheStatTexts(metrics.llm) : undefined), [metrics]);
+  // 全部事件都没有缓存数据 → 「不可用」，绝不渲染 0%。
+  // 单侧缺失时该侧画 `—`（`cacheStatTexts` 已处理），不在这里兜底成 0。
+  const cacheHint = cache?.available
+    ? t('observe.metrics.stat.cacheHint', {
+        read: cache.cacheReadText,
+        write: cache.cacheCreationText,
+        prompt: cache.promptTokensText,
+      })
+    : t('observe.metrics.stat.cacheUnavailableHint');
 
   if (!hasToken) {
     return (
@@ -235,6 +248,17 @@ function MetricsPanel() {
                   prompt: metrics.llm.prompt_tokens,
                   completion: metrics.llm.completion_tokens,
                 })}
+              />
+              <Stat
+                className="min-w-40 flex-1"
+                value={cache?.inputShareText ?? t('observe.metrics.stat.cacheUnavailable')}
+                label={t('observe.metrics.stat.cacheInputShare')}
+                hint={cacheHint}
+              />
+              <Stat
+                className="min-w-40 flex-1"
+                value={cache?.prefixHealthText ?? t('observe.metrics.stat.cacheUnavailable')}
+                label={t('observe.metrics.stat.cachePrefixHealth')}
               />
               <Stat
                 className="min-w-40 flex-1"

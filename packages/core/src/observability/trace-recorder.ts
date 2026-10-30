@@ -34,6 +34,13 @@ const METADATA_KEYS = [
   'message_count',
   'finish_reason',
 ] as const;
+/**
+ * `metadata` 档的 usage 白名单。
+ *
+ * 0.29：缓存计数与 `prompt_tokens` 同源（CONTRACT-0.29 §3），
+ * 漏掉会让 `rebuildMetrics` 在 metadata 档下少两个字段，破坏 ADR-047 的
+ * 「重建形状 == 实时 collector 形状」。
+ */
 const USAGE_KEYS = [
   'prompt_tokens',
   'completion_tokens',

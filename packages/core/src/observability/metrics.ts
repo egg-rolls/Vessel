@@ -11,11 +11,26 @@
 
 import type { EventStream, RunEvent, Unsubscribe } from '../types/event.js';
 
-/** 进程内 metrics 快照（DECISION-009 §5.4.1 冻结形状） */
+/** 进程内 metrics 快照（DECISION-009 §5.4.1 冻结形状；0.29 B3 只做 additive） */
 export interface MetricsSnapshot {
   runs: { started: number; completed: number; failed: number; cancelled: number };
   tool_calls: { total: number; failed: number };
-  llm: { requests: number; prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  llm: {
+    requests: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    /**
+     * 缓存读取 token 累计（CONTRACT-0.29 §3）。
+     *
+     * **缺省 = 该批事件里没有任何缓存数据**（不支持缓存的 provider，§1.2）。
+     * 不得用 0 表示「不支持」——0 只在 provider 明确报告了 0 时出现。
+     * 比率是展示层派生量，不进快照（§2.2）。
+     */
+    cache_read_tokens?: number;
+    /** 缓存写入 token 累计；缺省语义同 `cache_read_tokens` */
+    cache_creation_tokens?: number;
+  };
   duration_ms: { total: number; max: number; avg: number };
   updated_at: number;
 }
@@ -23,6 +38,16 @@ export interface MetricsSnapshot {
 /** 非负有限数字；其他值按 0 */
 function nonNegative(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * 可选计数：字段缺失 / 非数字 / 负数 → `undefined`（= 没有数据）。
+ *
+ * 与 `nonNegative` 的区别是本函数**不把缺失折叠成 0**——缓存计数必须能区分
+ * 「provider 不支持缓存」与「命中了 0 个 token」（CONTRACT-0.29 §1.2）。
+ */
+function optionalCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 /** 读取事件 data 对象 */
@@ -44,7 +69,12 @@ function readObject(value: unknown): Record<string, unknown> | undefined {
 export class MetricsAccumulator {
   private runs = { started: 0, completed: 0, failed: 0, cancelled: 0 };
   private toolCalls = { total: 0, failed: 0 };
-  private llm = { requests: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  private llm: MetricsSnapshot['llm'] = {
+    requests: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+  };
   private duration = { total: 0, max: 0 };
   private updatedAt = 0;
 
@@ -134,6 +164,16 @@ export class MetricsAccumulator {
     this.llm.prompt_tokens += prompt;
     this.llm.completion_tokens += completion;
     this.llm.total_tokens += total;
+
+    // 缓存计数（0.29 B3）：只有事件真的带了该字段才累加，全部缺失时保持 undefined。
+    const cacheRead = optionalCount(usage.cache_read_input_tokens);
+    if (cacheRead !== undefined) {
+      this.llm.cache_read_tokens = (this.llm.cache_read_tokens ?? 0) + cacheRead;
+    }
+    const cacheCreation = optionalCount(usage.cache_creation_input_tokens);
+    if (cacheCreation !== undefined) {
+      this.llm.cache_creation_tokens = (this.llm.cache_creation_tokens ?? 0) + cacheCreation;
+    }
   }
 }
 
