@@ -18,6 +18,8 @@ export interface AttentionInteraction {
   agent_id?: string;
   team_id?: string;
   tool?: string;
+  /** ask 专用：模型给出的问题（离线模式也展示；权限请求没有）。 */
+  questions?: unknown;
   created_at: number;
   status: string;
 }
@@ -76,6 +78,7 @@ function parseInteraction(value: unknown): AttentionInteraction | undefined {
       ? { team_id: optionalString(value, 'team_id') }
       : {}),
     ...(optionalString(value, 'tool') !== undefined ? { tool: optionalString(value, 'tool') } : {}),
+    ...(value.questions !== undefined ? { questions: value.questions } : {}),
     created_at: createdAt,
     status: optionalString(value, 'status') ?? 'pending',
   };

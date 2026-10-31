@@ -96,8 +96,8 @@ async function printTools(): Promise<void> {
   for (const w of warnings) console.warn(`⚠ ${w}`);
   console.log(ui.section(`Tools (${tools.length}):`));
   for (const t of tools) console.log(`  - ${t.name}: ${t.description}`);
-  // 0.15：--tools 是一次性命令，仍按 headless 口径；ask_user 只在交互 REPL / gateway 注册。
-  console.log('ask_user (interactive REPL / gateway only)');
+  // 0.33：headless 也注册 ask_user（请求落盘后挂起），这里仍不展开它的 schema。
+  console.log('ask_user (interactive REPL / gateway / headless-async; not listed here)');
 }
 
 /**

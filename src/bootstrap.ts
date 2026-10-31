@@ -54,6 +54,7 @@ import { createAgentControl } from './agent-control';
 import { type AgentOwnerServer, startAgentOwnerServer } from './agent-owner-server';
 import { createAgentServiceWiring } from './agent-service-wiring';
 import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
+import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from './ask-channel';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import {
@@ -74,6 +75,7 @@ import {
 import { createFederationSendPort } from './federation-send-port';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
+import { resolveInteractionsDir } from './interactions-dir';
 import { createLocalRunAdapter } from './local-run-adapter';
 import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
@@ -161,7 +163,8 @@ export interface BootstrapOptions {
    */
   interactive?: boolean;
   /**
-   * 是否注册 ask_user（默认 = interactive；headless 下注册只会让 waitFor 超时）。
+   * 是否注册 ask_user（默认 = interactive）。
+   * 0.33：headless 也注册（请求落盘后中断 run，可 resume），不再靠「不注册」避免等待。
    * 最终还会被 `ui.askUser: false` 关闭；CLI 在 gateway/serve 模式下显式传 true。
    */
   registerAskUser?: boolean;
@@ -1044,14 +1047,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const agentPlan = resolveAgentWiring(config, { headless });
   const agentServiceEnabled = agentPlan.agentEnabled;
   /**
-   * 父宿主是否真的有 ask_user 应答者（0.27）。
+   * 父宿主是否注册 ask_user（0.27 / 0.33）。
    *
-   * 成员 Body 的白名单由 AgentService 决定，与 owner 宿主是两处：owner 注册了
-   * ask_user 不等于成员拿得到。这里把「入口有应答者 + 配置未关闭」收敛成一个
-   * 事实，下面既传给 tenant runtime（注册工具）也传给 AgentService（放行给成员）。
-   * headless 入口本来就不传 registerAskUser，取值 false。
+   * 0.33：headless 也注册（请求落盘后挂起，人类稍后回答并 resume），
+   * 所以「注册」不再等于「进程内有应答者」。成员 Body 仍只允许有**交互**
+   * 应答者的入口拿 ask_user：headless 成员没有 bridge 应答者，放行只会让
+   * 成员 run 永久等待。
    */
   const askUserAvailable = registerAskUser && config.ui?.askUser !== false;
+  const interactiveHumanAvailable = askUserAvailable && !headless;
 
   // 0.28 F2：飞书渠道成员被 TTL 回收后，复活所需的 Team id 要等
   // `createAgentServiceWiring` 之后才存在；bundle（含渠道）先构造，所以用晚绑定
@@ -1190,19 +1194,20 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       limits: agentPlan.limits ?? limits,
       termination: memberTermination,
       ...(agentPlan.readOnlyTools !== undefined ? { readOnlyTools: agentPlan.readOnlyTools } : {}),
-      // 0.27：成员 Body 只能拿到父宿主真注册了的工具。有应答者才放行 ask_user；
-      // 成员 runtime 仍要求 bridge 可用，没有父流时会自行剔除（避免永久等待）。
-      ...(askUserAvailable ? { extraTools: ['ask_user'] } : {}),
+      // 0.27：成员 Body 只能拿到父宿主真注册了的工具。只有**交互**入口才放行
+      // ask_user；headless 的父宿主会挂起（没有进程内应答者），成员放行只会
+      // 让成员 run 等一个不会到来的 bridge 应答。
+      ...(interactiveHumanAvailable ? { extraTools: ['ask_user'] } : {}),
       ...(config.context?.maxTokens !== undefined
         ? { contextMaxTokens: config.context.maxTokens }
         : {}),
       permission,
       permissionMode: memberPermissionMode,
-      // 0.31：按**入口是否真有应答者**判定，而不是 `!headless`：feishu 非 TTY
+      // 0.31：按**入口是否真有进程内应答者**判定，而不是 `!headless`：feishu 非 TTY
       // （headless=false）既没有 TUI 也没有 gateway 权限卡片，用 !headless 会让
-      // rotate 请求永远等不到人。registerAskUser 正是入口层的应答者信号
-      // （TUI / serve 为 true；--run / 管道 / feishu 非 TTY 为 false）。
-      humanApproval: registerAskUser === true,
+      // rotate 请求永远等不到人。0.33 起 headless 注册 ask_user 但不等于有应答者，
+      // 所以这里用 interactiveHumanAvailable（排除 headless）。
+      humanApproval: interactiveHumanAvailable,
       // 成员 bridge 请求 / 应答与 TUI 订阅的是同一条父事件流。
       parentEvents: runtimeEvents,
       // 0.27（spec §5.1）：每 tenant 唯一 scheduler，由 tenant bundle 构造。
@@ -1323,7 +1328,40 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       throw resumeError('resume_unavailable', runId, 'runtime does not support resume');
     }
 
+    // 0.33 A：headless ask 的回答在 resume 前以 `user.message` 事件注入历史。
+    // 走既有 projection 路径（见 ask-channel），不改 core resume 契约；重复 resume
+    // 由 `source + request_id` 去重。
+    const interactionsDir = resolveInteractionsDir(dataDir);
+    try {
+      const delivered = await deliverAnsweredAsksToSession({
+        ...(eventLog !== undefined ? { eventLog } : {}),
+        dir: interactionsDir,
+        tenantId,
+        runId,
+        sessionId: checkpoint.session_id,
+      });
+      if (delivered > 0) {
+        logger.info('ask.resume.answers_delivered', { run_id: runId, count: delivered });
+      }
+    } catch (error) {
+      logger.warn('ask.resume.deliver_failed', {
+        run_id: runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     const controller = new AbortController();
+    // 调用方的 signal（headless ask 挂起用 abort('timeout')）桥接到内部 controller；
+    // 原先直接覆盖会丢掉外部中断，导致 resume 无法从 headless 收口。
+    const externalSignal = opts?.signal;
+    if (externalSignal !== undefined) {
+      if (externalSignal.aborted) controller.abort(externalSignal.reason);
+      else {
+        externalSignal.addEventListener('abort', () => controller.abort(externalSignal.reason), {
+          once: true,
+        });
+      }
+    }
     const promise = activeRuntime.resume(runId, { ...opts, signal: controller.signal });
     const done = promise
       .then(
@@ -1333,6 +1371,29 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             ? { status: 'cancelled' as const }
             : { status: 'failed' as const, error },
       )
+      .then(async (outcome) => {
+        // run 真正收口后，遗留的 pending ask 不再可回答。
+        // `timeout` 是 headless ask 挂起（checkpoint interrupted），必须保留。
+        const suspended = controller.signal.aborted && controller.signal.reason === 'timeout';
+        if (!suspended && (outcome.status === 'completed' || outcome.status === 'cancelled')) {
+          try {
+            const orphaned = await orphanPendingAsksForRun({
+              dir: interactionsDir,
+              tenantId,
+              runId,
+            });
+            if (orphaned > 0) {
+              logger.info('ask.resume.orphaned', { run_id: runId, count: orphaned });
+            }
+          } catch (error) {
+            logger.warn('ask.resume.orphan_failed', {
+              run_id: runId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        return outcome;
+      })
       .finally(() => {
         void runLock.release();
       });

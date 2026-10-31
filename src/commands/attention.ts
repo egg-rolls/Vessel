@@ -14,6 +14,7 @@ import {
   loadConfig,
   type VesselConfig,
 } from '../../packages/config/src/index';
+import { createOfflineAttentionTarget } from '../ask-channel';
 import {
   type AttentionInteraction,
   type AttentionPage,
@@ -37,8 +38,10 @@ import {
   type ControlPlaneTargetOptions,
   resolveControlPlaneTarget,
 } from '../control-plane-target';
+import { resolveDataDir } from '../data-paths';
 import { parseFederationAddress } from '../federation-address';
 import { t } from '../i18n';
+import { resolveInteractionsDir } from '../interactions-dir';
 import { RpcClientError } from '../rpc';
 import { ui } from '../ui-style';
 
@@ -101,10 +104,26 @@ function formatTime(createdAt: number): string {
   return Number.isNaN(date.getTime()) ? String(createdAt) : date.toISOString();
 }
 
+/** ask 的第一条问题文本（离线模式是唯一能看到的提问内容）。 */
+function firstQuestion(questions: unknown): string | undefined {
+  if (!Array.isArray(questions)) return undefined;
+  for (const entry of questions) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const question = (entry as Record<string, unknown>).question;
+    if (typeof question === 'string' && question.trim() !== '') {
+      const trimmed = question.trim();
+      return trimmed.length <= 80 ? trimmed : `${trimmed.slice(0, 77)}...`;
+    }
+  }
+  return undefined;
+}
+
 function formatRow(index: number, item: AttentionInteraction): string {
+  const question = item.kind === 'ask' ? firstQuestion(item.questions) : undefined;
   return (
     `${index}. [${item.kind}] ${item.request_id}  tool=${item.tool ?? '-'}  ` +
-    `agent=${item.agent_id ?? '-'}  team=${item.team_id ?? '-'}  ${formatTime(item.created_at)}`
+    `agent=${item.agent_id ?? '-'}  team=${item.team_id ?? '-'}  ${formatTime(item.created_at)}` +
+    (question !== undefined ? `  q=${question}` : '')
   );
 }
 
@@ -773,7 +792,14 @@ export async function attentionCommand(
   options: AttentionCommandOptions = {},
 ): Promise<CommandResult> {
   try {
-    const config = options.config ?? (await loadConfig({ env: options.env ?? process.env })).config;
+    // tenant 只用于离线模式；显式传入 config 时按配置默认值兜底。
+    const loaded =
+      options.config !== undefined
+        ? undefined
+        : await loadConfig({ env: options.env ?? process.env });
+    const config = options.config ?? loaded?.config ?? ({} as VesselConfig);
+    // 离线模式必须尊重 `--tenant`，否则 acme 的 ask 在默认 tenant 下永远查不到。
+    const tenantId = command.tenantId ?? loaded?.tenantId ?? config.tenant?.default ?? 'default';
     const configured = configuredAttentionNodes(config);
 
     if (command.allNodes) {
@@ -820,7 +846,32 @@ export async function attentionCommand(
       ...(command.caFile !== undefined ? { caFile: command.caFile } : {}),
       ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
     });
-    if (!resolved.ok) return { exitCode: 1, stdout: '', stderr: resolved.error };
+    if (!resolved.ok) {
+      // 0.33 A：没有本地 gateway 时，headless ask 的请求仍在
+      // `<dataDir>/interactions-<tenant>.json` 里；离线 target 复用同一套
+      // interactions.list / ask.respond 语义，让人类仍能回答。
+      // 显式指定实例 / --connect / --to 时不做回退（用户已指定目标）。
+      const canFallBackOffline =
+        resolved.code === 'no_gateway' &&
+        command.connectUrl === undefined &&
+        command.to === undefined &&
+        options.instance === undefined;
+      if (canFallBackOffline) {
+        const dataDir = options.dataDir ?? resolveDataDir(config, options.env ?? process.env);
+        const dir = resolveInteractionsDir(dataDir);
+        const offline = createOfflineAttentionTarget({ dir, tenantId, nodeId: 'local' });
+        try {
+          const outcome = await runAttention(offline.target, command, options);
+          return {
+            ...outcome,
+            stderr: [offline.note, outcome.stderr].filter((line) => line !== '').join('\n'),
+          };
+        } finally {
+          await offline.target.close().catch(() => undefined);
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: resolved.error };
+    }
 
     try {
       return await runAttention(resolved.target, command, options);

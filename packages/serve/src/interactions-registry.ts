@@ -91,6 +91,14 @@ export interface InteractionsRegistryOptions {
   defaultTenantId: string;
   /** 交互持久化目录；缺省 = 不落盘。 */
   interactionsDir?: string;
+  /**
+   * 启动 hydrate 时如何对待磁盘上的 `pending`。
+   *
+   * gateway 的语义是「本进程没有对应 run」→ `orphaned`（默认）；
+   * 离线 attention 只读写文件、没有 run，但请求可能属于一个 `interrupted`
+   * 的 headless run，仍可被人类回答 → `pending`。
+   */
+  hydratePendingAs?: 'orphaned' | 'pending';
 }
 
 /** 交互注册表（serve 内唯一交互状态）。 */
@@ -169,6 +177,13 @@ export function createInteractionsRegistry(
   const pendingPermissions = new Map<string, PendingPermission>();
   /** requestId → 持久化交互记录（pending / answered / orphaned）。 */
   const interactionRecords = new Map<string, StoredInteraction>();
+  /**
+   * headless 因等不到人类而挂起的 ask（0.33）。
+   *
+   * 这类请求的 run 会以 `run.failed` 收口（checkpoint 是 `interrupted`），
+   * 不能按普通终态转 `orphaned`——人类稍后仍要回答它。
+   */
+  const suspendedAskIds = new Set<string>();
   const interactionsStore =
     options.interactionsDir !== undefined && options.interactionsDir !== ''
       ? new InteractionsStore(options.interactionsDir)
@@ -184,13 +199,31 @@ export function createInteractionsRegistry(
     }
   }
 
+  /**
+   * 每个 tenant 的落盘串行链（0.33）。
+   *
+   * `save` 是 fire-and-forget；同一 tenant 的并发 atomicWrite 可能乱序落盘，
+   * 让较早的快照（例如 `suspended` 之前的 ask）覆盖较新的状态。按 tenant
+   * 串行化后，最后一次调用的快照一定最后落盘。
+   */
+  const persistChains = new Map<string, Promise<void>>();
+
   /** 重写某个 tenant 的全部记录；写失败只记 stderr（RPC 不因此失败）。 */
   function persistTenant(tenantId: string): void {
-    if (!interactionsStore) return;
+    const store = interactionsStore;
+    if (!store) return;
     const records = [...interactionRecords.values()]
       .filter((record) => record.tenant_id === tenantId)
       .sort((a, b) => a.created_at - b.created_at);
-    void interactionsStore.save(tenantId, records);
+    const previous = persistChains.get(tenantId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => store.save(tenantId, records))
+      .catch(() => undefined);
+    persistChains.set(tenantId, next);
+    void next.finally(() => {
+      if (persistChains.get(tenantId) === next) persistChains.delete(tenantId);
+    });
   }
 
   function persistTenants(tenantIds: ReadonlySet<string>): void {
@@ -200,15 +233,25 @@ export function createInteractionsRegistry(
   /**
    * 启动时加载持久化记录。
    *
-   * 本进程尚未执行任何 run，因此加载到的 `pending` 一定没有对应 run：
+   * gateway：本进程尚未执行任何 run，加载到的 `pending` 一定没有对应 run，
    * 标记为 `orphaned`，应答返回 `run_ended`，不假装可执行。
+   * 离线 attention：`hydratePendingAs: 'pending'`，让 headless run 挂起后
+   * 仍可被人类回答（文件是唯一事实源）。
    */
   function hydrateInteractions(): void {
     if (!interactionsStore) return;
+    const pendingStatus = options.hydratePendingAs ?? 'orphaned';
     const changedTenants = new Set<string>();
     for (const loaded of interactionsStore.loadAllSync()) {
+      // 0.33：headless 挂起的 ask（suspended）即使重启后也要保持 pending，
+      // 否则人类永远答不了、--resume-run 也拿不到答案。
+      const keepPending =
+        loaded.status === 'pending' &&
+        (pendingStatus === 'pending' || (loaded.kind === 'ask' && loaded.suspended === true));
       const record: StoredInteraction =
-        loaded.status === 'pending' ? { ...loaded, status: 'orphaned' as const } : loaded;
+        loaded.status === 'pending' && !keepPending
+          ? { ...loaded, status: 'orphaned' as StoredInteractionStatus }
+          : loaded;
       if (record.status !== loaded.status) changedTenants.add(record.tenant_id);
       interactionRecords.set(record.requestId, record);
     }
@@ -279,6 +322,7 @@ export function createInteractionsRegistry(
         : { decision: decision as 'allow' | 'deny', scope }),
     };
     pendingPermissions.delete(requestId);
+    suspendedAskIds.delete(requestId);
     rememberRecord({ ...record, status: 'answered' as const, answer });
     persistTenant(record.tenant_id);
   }
@@ -364,6 +408,27 @@ export function createInteractionsRegistry(
       }
       return;
     }
+    if (event.type === 'ask.user.timeout') {
+      // headless 等不到人类：run 即将以 `interrupted` 收口。标住 requestId，
+      // 下面的终态清理会保留它以等待迟到的回答；同时把 suspended 写进记录，
+      // 让下一个 gateway 进程启动 hydrate 时也不把它转 orphaned。
+      const data = isRecord(event.data) ? event.data : {};
+      const requestId = nonEmptyString(data.requestId);
+      if (requestId !== undefined) {
+        suspendedAskIds.add(requestId);
+        const record = interactionRecords.get(requestId);
+        if (
+          record !== undefined &&
+          record.status === 'pending' &&
+          (record.kind ?? 'permission') === 'ask' &&
+          record.suspended !== true
+        ) {
+          rememberRecord({ ...record, suspended: true });
+          persistTenant(record.tenant_id);
+        }
+      }
+      return;
+    }
     if (event.type === 'tool.permission.response' || event.type === 'ask.user.answered') {
       recordStreamResponse(event);
       return;
@@ -378,6 +443,8 @@ export function createInteractionsRegistry(
       const terminalTenants = new Set<string>();
       for (const [id, record] of interactionRecords) {
         if (record.status !== 'pending' || record.run_id !== event.run_id) continue;
+        // headless ask 的 run 以 interrupted 收口：请求仍然有效，保留 pending。
+        if ((record.kind ?? 'permission') === 'ask' && suspendedAskIds.has(id)) continue;
         pendingPermissions.delete(id);
         rememberRecord({ ...record, status: 'orphaned' as StoredInteractionStatus });
         terminalTenants.add(record.tenant_id);
@@ -563,6 +630,7 @@ export function createInteractionsRegistry(
           latency_ms: latency,
         },
       });
+      suspendedAskIds.delete(requestId);
       persistTenant(record.tenant_id);
       return {
         ok: true,

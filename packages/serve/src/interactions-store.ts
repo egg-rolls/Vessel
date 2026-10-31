@@ -51,6 +51,14 @@ export interface StoredInteraction {
   input: unknown;
   created_at: number;
   status: StoredInteractionStatus;
+  /**
+   * 0.33：headless 因无人应答而挂起的 ask。
+   *
+   * 该 run 的 checkpoint 是 `interrupted`（可 resume），请求必须跨进程保留为
+   * `pending`；gateway 启动 hydrate 时据此不把 `pending` 转 `orphaned`。
+   * 普通交互（权限 / 活 run 的 ask）不写该字段。
+   */
+  suspended?: boolean;
   answer?: StoredInteractionAnswer;
 }
 
@@ -144,6 +152,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
     input,
     created_at,
     status,
+    ...(value.suspended === true ? { suspended: true } : {}),
     ...(parsedAnswer !== undefined ? { answer: parsedAnswer } : {}),
   };
 }

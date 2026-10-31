@@ -77,7 +77,13 @@ import {
   type GatewayReloadApplier,
 } from './gateway-reload-wiring';
 import { buildGatewayControlPlane } from './gateway-wiring';
-import { installHeadlessPermissionAutoAllow, runHeadless } from './headless-runner';
+import {
+  HEADLESS_ASK_SUSPENDED_EXIT_CODE,
+  installHeadlessAskSuspend,
+  installHeadlessPermissionAutoAllow,
+  printSuspendedAsk,
+  runHeadless,
+} from './headless-runner';
 import {
   applyTools,
   createMcpApplier,
@@ -96,7 +102,7 @@ import {
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { type LocalHubHandle, startLocalHub } from './hub-local';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
-import { ensureInteractionsDir } from './interactions-dir';
+import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { setToolPolicy } from './permission-store';
@@ -532,10 +538,11 @@ const headless =
 const serveRequested = servePort !== null;
 const entersRepl = !headless && !serveRequested;
 const interactive = entersRepl && process.stdin.isTTY === true;
-// 0.15：交互 REPL 或 gateway/serve 才有 ask_user 应答者；
-// `--run` / headless / 管道一律不注册（否则只能等 120s 超时）。
-// `ui.askUser: false` 在 bootstrap / tenant factory 内按配置关闭。
-const askUserClient = interactive || (serveRequested && !headless);
+// 0.15 / 0.33：交互 REPL、gateway/serve、headless 都注册 ask_user。
+// headless 没有进程内应答者：由 headless runner 落盘后中断 run（可 resume），
+// 不再用「不注册」把它藏起来。`ui.askUser: false` 仍在 bootstrap / tenant
+// factory 内按配置关闭。
+const askUserClient = interactive || (serveRequested && !headless) || headless;
 
 // ── 主流程 ──────────────────────────────────────
 
@@ -685,16 +692,44 @@ async function runWithConfig(result: BootstrapResult) {
     const uninstallPermissionAutoAllow = headless
       ? installHeadlessPermissionAutoAllow(ctx.events)
       : undefined;
+    // 0.33 A：恢复后的 run 若再提问，同样落盘并挂起（不无限等待）。
+    const resumeAskController = headless ? new AbortController() : undefined;
+    const resumeAskControl =
+      resumeAskController !== undefined
+        ? installHeadlessAskSuspend(
+            ctx.events,
+            {
+              dir: resolveInteractionsDir(resolveDataDir(config), foregroundGatewayInstance),
+              tenantId: result.tenantId,
+            },
+            resumeAskController,
+          )
+        : undefined;
     try {
-      const outcome = await result.resumeRun(resumeRunId);
+      const outcome = await result.resumeRun(
+        resumeRunId,
+        resumeAskController !== undefined ? { signal: resumeAskController.signal } : undefined,
+      );
       console.log(outcome.result);
       ctx.currentSessionId = outcome.sessionId;
       ctx.onSessionChange(outcome.sessionId);
       if (entersRepl) await startInkRepl(ctx);
     } catch (error) {
-      console.error(formatResumeError(error));
-      exitCode = 1;
+      await resumeAskControl?.flush();
+      const suspendedAsk = resumeAskControl?.suspended() ? resumeAskControl.last() : undefined;
+      if (suspendedAsk !== undefined) {
+        printSuspendedAsk(
+          suspendedAsk,
+          resolveInteractionsDir(resolveDataDir(config), foregroundGatewayInstance),
+          result.tenantId,
+        );
+        exitCode = HEADLESS_ASK_SUSPENDED_EXIT_CODE;
+      } else {
+        console.error(formatResumeError(error));
+        exitCode = 1;
+      }
     } finally {
+      resumeAskControl?.unsubscribe();
       uninstallPermissionAutoAllow?.();
       await result.shutdown();
     }
@@ -1394,6 +1429,12 @@ async function runWithConfig(result: BootstrapResult) {
       pipeMode,
       sessionId: ctx.currentSessionId,
       provider: ctx.provider,
+      askChannel: {
+        // 纯 headless 与 `--serve --run` 都落盘（后者与 gateway registry 写同一份
+        // 一致记录）；这样即使进程立刻退出，suspended 请求也跨进程保留。
+        dir: resolveInteractionsDir(resolveDataDir(config), foregroundGatewayInstance),
+        tenantId: result.tenantId,
+      },
     });
   } else if (args.feishu && process.stdin.isTTY !== true) {
     // Addendum D §13.3：非 TTY + 无 --serve → 仅渠道前台，不启动 REPL。

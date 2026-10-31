@@ -110,6 +110,12 @@ export {
   createAgentMethods,
 } from './gateway/methods/agents.js';
 export {
+  createInteractionMethods,
+  type InteractionMethodsDeps,
+  type InteractionSources,
+  type ListedInteraction,
+} from './gateway/methods/interactions.js';
+export {
   createPermissionsMethods,
   type PermissionsControl,
   type PermissionsMethodsDeps,
@@ -171,6 +177,21 @@ export {
   parseHubPointerReason,
   parseHubTeamMeta,
 } from './hub-protocol.js';
+export {
+  createInteractionsRegistry,
+  type InteractionActor,
+  type InteractionsRegistry,
+  type InteractionsRegistryOptions,
+  type PendingAsk,
+  type PendingPermission,
+} from './interactions-registry.js';
+export {
+  InteractionsStore,
+  type StoredInteraction,
+  type StoredInteractionAnswer,
+  type StoredInteractionKind,
+  type StoredInteractionStatus,
+} from './interactions-store.js';
 export {
   createLocalRpcDispatcher,
   type LocalRpcDispatcher,

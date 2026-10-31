@@ -123,7 +123,7 @@ export interface BuildTenantRuntimeOptions {
   mockScenario?: MockScenarioName;
   headless?: boolean;
   /**
-   * ask_user：交互 REPL 与 serve/gateway 注册；headless / --run 不注册。
+   * ask_user：交互 REPL、serve/gateway 与 headless（落盘后挂起）都注册。
    * `ui.askUser: false` 可关闭（0.15）。
    */
   registerAskUser?: boolean;
