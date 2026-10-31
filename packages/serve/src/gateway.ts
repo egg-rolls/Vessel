@@ -636,7 +636,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.mcp) features.push('mcp-status');
   if (tlsMaterial) features.push('tls');
   if (opts.evals) features.push('evals');
-  if (opts.feishu || opts.feishuFor) features.push('feishu');
+  // 能力位表达 per-gateway/default-tenant 的真实可用性，而不是「resolver 存在」；
+  // 非 default tenant 的 channel 仍由 feishuForTenant 按请求解析，不受这里影响。
+  const feishuChannel = opts.feishu ?? opts.feishuFor?.(defaultTenantId);
+  if (feishuChannel) features.push('feishu');
   if (opts.metrics) features.push('metrics');
   if (opts.config) features.push('config');
   if (opts.tenants) features.push('tenants');

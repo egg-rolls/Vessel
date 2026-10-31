@@ -335,6 +335,13 @@ export function RunsView({
     navigate({ ...route, ...patch });
   };
 
+  // 本页是路由级滚动容器；切 tab 时重置 scrollTop，避免沿用上一页的位置。
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const changeTab = (tab: RunsRoute['tab']) => {
+    scrollRef.current?.scrollTo?.({ top: 0 });
+    navigate({ domain: 'runs', tab });
+  };
+
   const filterList = route.tab === 'live' ? LIVE_FILTERS : DURABLE_FILTERS;
   const current = route.tab === 'live' ? live : durable;
   const filtered = route.tab === 'live' ? filteredLive : filteredDurable;
@@ -359,7 +366,10 @@ export function RunsView({
     !knownDurable;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
+    <div
+      ref={scrollRef}
+      className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]"
+    >
       <PageHeader title={t('runs.title')} description={t('runs.description')} tenantId={tenantId} />
       <SegmentedTabs
         label={t('runs.sourceLabel')}
@@ -368,7 +378,7 @@ export function RunsView({
           { id: 'durable', label: t('runs.source.durable') },
         ]}
         value={route.tab}
-        onChange={(tab) => navigate({ domain: 'runs', tab })}
+        onChange={changeTab}
         panelId="runs-panel"
       />
 

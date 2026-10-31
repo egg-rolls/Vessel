@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { settingsTabLabel } from '../../app/nav';
 import type { Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
@@ -37,8 +38,18 @@ export function SettingsView({
     label: settingsTabLabel(id),
   }));
 
+  // 本页是路由级滚动容器；切 tab 时重置 scrollTop，避免沿用上一页的位置。
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const changeTab = (tab: SettingsTab) => {
+    scrollRef.current?.scrollTo?.({ top: 0 });
+    navigate({ domain: 'settings', tab });
+  };
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
+    <div
+      ref={scrollRef}
+      className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]"
+    >
       <PageHeader
         title={t('settings.title')}
         description={t('settings.description')}
@@ -48,7 +59,7 @@ export function SettingsView({
         label={t('settings.tabsLabel')}
         tabs={tabs}
         value={route.tab}
-        onChange={(tab) => navigate({ domain: 'settings', tab })}
+        onChange={changeTab}
         panelId="settings-panel"
       />
       <div
