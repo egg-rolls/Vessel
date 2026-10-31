@@ -1,136 +1,30 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+/**
+ * RunDetail 容器：头部、元信息、取消/恢复、timeline/output/raw 三个视图。
+ *
+ * S3：trace 数据/分页在 useRunTrace；timeline 渲染在 RunTimeline。
+ */
+
+import { useEffect, useRef } from 'react';
 import { CopyButton } from '../../components/CopyButton';
 import { JsonView } from '../../components/JsonView';
-import {
-  EmptyState,
-  ErrorState,
-  LoadingState,
-  NotEnabledState,
-  StaleNotice,
-} from '../../components/States';
+import { EmptyState, LoadingState, StaleNotice } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
-import { useToast } from '../../components/ToastProvider';
 import { iconButtonClass } from '../../components/Tooltip';
-import { Badge, Button, Input, KeyValueList, Section } from '../../components/ui';
+import { Button, KeyValueList, Section } from '../../components/ui';
 import { formatTimestamp } from '../../format';
-import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
-import type { DurableRunSummary, RunEvent, RunStatus } from '../../gateway/types';
+import type { DurableRunSummary, RunStatus } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
-import {
-  filterRunEvents,
-  groupRunEvents,
-  isTraceUnavailable,
-  mergeRunEvents,
-  nextSinceSeq,
-  RUN_EVENT_FILTERS,
-  type RunEventFilter,
-  type ToolCallGroup,
-  traceRunId,
-} from '../../state/run-detail';
 import { isCancellableRun, isResumableRun } from '../../state/runs';
-import { EventRow } from '../chat/EventRow';
-
-const EVENT_PAGE_SIZE = 500;
-
-type DetailTab = 'timeline' | 'output' | 'raw';
+import { RunTimeline } from './RunTimeline';
+import { durationLabel, exportJson, pretty } from './run-detail-format';
+import { type DetailTab, useRunTrace } from './useRunTrace';
 
 const DETAIL_TABS: readonly { id: DetailTab; labelKey: string }[] = [
   { id: 'timeline', labelKey: 'runs.detail.tab.timeline' },
   { id: 'output', labelKey: 'runs.detail.tab.output' },
   { id: 'raw', labelKey: 'runs.detail.tab.raw' },
 ];
-
-function pretty(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-
-/** 耗时文案；同 `RunsView`：已结束的 run 没有 `completed_at` 时显示 `—`，不按「现在」算。 */
-function durationLabel(start?: number, end?: number, running = false): string {
-  if (start === undefined) return '—';
-  const stop = end ?? (running ? Date.now() : undefined);
-  if (stop === undefined) return '—';
-  const value = Math.max(0, stop - start);
-  return value < 1000 ? `${value}ms` : `${(value / 1000).toFixed(1)}s`;
-}
-
-function exportJson(data: unknown, runId: string): void {
-  const blob = new Blob([pretty(data)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `run-${runId.replace(/[^A-Za-z0-9_.-]+/g, '_')}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
-
-function ToolCallRow({ group }: { group: ToolCallGroup }) {
-  const [open, setOpen] = useState(group.status === 'failed');
-  const chip =
-    group.status === 'failed' ? 'failed' : group.status === 'completed' ? 'completed' : 'running';
-  const label =
-    group.status === 'failed'
-      ? t('runs.detail.tool.failed')
-      : group.status === 'completed'
-        ? t('runs.detail.tool.completed')
-        : t('runs.detail.tool.running');
-  return (
-    <div className={`tool-call ${group.status}`}>
-      <button
-        type="button"
-        className="tool-call-head"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <StatusChip status={chip} label={label} />
-        <span className="font-mono tool-call-name">{group.name}</span>
-        {group.durationMs !== undefined && (
-          <span className="font-mono text-muted">{group.durationMs}ms</span>
-        )}
-        <span className="text-muted tool-call-toggle" aria-hidden="true">
-          {open ? '▾' : '▸'}
-        </span>
-      </button>
-      {open && (
-        <div className="tool-call-body">
-          {group.arguments !== undefined && (
-            <div className="tool-call-field">
-              <span className="font-mono text-2xs uppercase tracking-widest text-faint">
-                arguments
-              </span>
-              <pre className="json-body">{pretty(group.arguments)}</pre>
-            </div>
-          )}
-          {group.result !== undefined && (
-            <div className="tool-call-field">
-              <span className="font-mono text-2xs uppercase tracking-widest text-faint">
-                result
-              </span>
-              <pre className="json-body">{pretty(group.result)}</pre>
-            </div>
-          )}
-          {group.error && (
-            <div className="tool-call-field">
-              <span className="font-mono text-2xs uppercase tracking-widest text-faint">error</span>
-              <pre className="json-body text-danger">{group.error}</pre>
-            </div>
-          )}
-          {group.arguments === undefined && group.result === undefined && !group.error && (
-            <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
-              {t('runs.detail.noToolDetails')}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function RunDetail({
   runId,
@@ -157,85 +51,10 @@ export function RunDetail({
   busy?: boolean;
 }) {
   useLocale();
-  const { client, hasToken, connectionState } = useConnection();
-  const toast = useToast();
-  const snapshot = useEventSnapshot();
-  const connected = hasToken && connectionState === 'open';
+  const runTrace = useRunTrace(runId, tab, run, durable, active);
+  const { view, setView, connected, loadFirstPage, coreRunId } = runTrace;
 
-  const [view, setView] = useState<DetailTab>('timeline');
-  const [filter, setFilter] = useState<RunEventFilter>('all');
-  const [showInternal, setShowInternal] = useState(false);
-  const [typePrefix, setTypePrefix] = useState('');
-  const [trace, setTrace] = useState<RunEvent[]>([]);
-  const [traceError, setTraceError] = useState<{ code?: string; message: string } | null>(null);
-  const [traceLoading, setTraceLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
-  const [reloadToken, setReloadToken] = useState(0);
-  const previousActive = useRef(active);
   const sectionRef = useRef<HTMLElement | null>(null);
-  /** trace 请求代次：切换 run 后旧响应不得覆盖新 run。 */
-  const traceGeneration = useRef(0);
-
-  // 0.27 起 `job_id ≡ run_id`，实时事件与列表用同一个 id；旧 gateway 仍可能有 core_run_id。
-  const coreRunId = traceRunId(tab, run, runId, durable?.run_id);
-
-  const liveEvents = useMemo(() => {
-    if (!coreRunId) return [];
-    return snapshot.entries
-      .filter((entry) => entry.event.run_id === coreRunId)
-      .map((entry) => entry.event);
-  }, [snapshot.entries, coreRunId]);
-
-  const loadFirstPage = useCallback(async () => {
-    if (!coreRunId || !hasToken) return;
-    traceGeneration.current += 1;
-    const generation = traceGeneration.current;
-    setTraceLoading(true);
-    setTraceError(null);
-    try {
-      const events = await client.readEvents({ run_id: coreRunId, limit: EVENT_PAGE_SIZE });
-      if (generation !== traceGeneration.current) return;
-      setTrace(events);
-      setHasMore(events.length >= EVENT_PAGE_SIZE);
-    } catch (error) {
-      if (generation !== traceGeneration.current) return;
-      setTrace([]);
-      setHasMore(false);
-      setTraceError({
-        code: (error as { code?: string }).code,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      if (generation === traceGeneration.current) setTraceLoading(false);
-    }
-  }, [client, coreRunId, hasToken]);
-
-  // 切换 run / 手动重载：重置过滤器与分页。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runId/coreRunId 变化时重置
-  useEffect(() => {
-    traceGeneration.current += 1;
-    setTrace([]);
-    setHasMore(false);
-    setTraceError(null);
-    setFilter('all');
-    setTypePrefix('');
-    setView('timeline');
-  }, [runId, coreRunId]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken 是显式刷新触发器
-  useEffect(() => {
-    void loadFirstPage();
-  }, [loadFirstPage, reloadToken]);
-
-  // 活动 run 结束（状态轮询）后补拉一次 trace，避免错过终态前的事件。
-  useEffect(() => {
-    if (previousActive.current && !active) {
-      setReloadToken((value) => value + 1);
-    }
-    previousActive.current = active;
-  }, [active]);
-
   // 选中 run 后把详情滚入视野（桌面为内联面板；移动端是整页）。
   // biome-ignore lint/correctness/useExhaustiveDependencies: runId 变化是滚动触发条件
   useEffect(() => {
@@ -245,40 +64,6 @@ export function RunDetail({
       behavior: reduced ? 'auto' : 'smooth',
     });
   }, [runId]);
-
-  const events = useMemo(() => mergeRunEvents(trace, liveEvents), [trace, liveEvents]);
-  const filtered = useMemo(
-    () => filterRunEvents(events, { filter, showInternal, typePrefix }),
-    [events, filter, showInternal, typePrefix],
-  );
-  const items = useMemo(() => groupRunEvents(filtered), [filtered]);
-  const sinceSeq = nextSinceSeq(trace);
-
-  const loadMore = async () => {
-    if (!coreRunId || sinceSeq === undefined || loadingMore) return;
-    const generation = traceGeneration.current;
-    setLoadingMore(true);
-    try {
-      const next = await client.readEvents({
-        run_id: coreRunId,
-        since_seq: sinceSeq,
-        limit: EVENT_PAGE_SIZE,
-      });
-      if (generation !== traceGeneration.current) return;
-      setTrace((prev) => mergeRunEvents(prev, next));
-      setHasMore(next.length >= EVENT_PAGE_SIZE);
-    } catch (error) {
-      if (generation === traceGeneration.current) {
-        toast.error(
-          t('runs.detail.loadMoreFailed', {
-            detail: error instanceof Error ? error.message : String(error),
-          }),
-        );
-      }
-    } finally {
-      if (generation === traceGeneration.current) setLoadingMore(false);
-    }
-  };
 
   const status = run?.status ?? durable?.status;
   const sessionId = run?.session_id ?? durable?.session_id;
@@ -435,113 +220,7 @@ export function RunDetail({
         panelId="run-detail-panel"
       />
 
-      {view === 'timeline' && (
-        <div id="run-detail-panel" role="tabpanel" aria-label={t('runs.detail.timelineLabel')}>
-          <div className="mt-3.5 flex flex-wrap items-center gap-2">
-            <fieldset className="flex flex-wrap gap-1">
-              <legend className="sr-only">{t('runs.detail.filtersLabel')}</legend>
-              {RUN_EVENT_FILTERS.map((item) => (
-                <Button
-                  key={item.id}
-                  variant="chip"
-                  size="small"
-                  aria-pressed={filter === item.id}
-                  onClick={() => setFilter(item.id)}
-                >
-                  {t(item.labelKey)}
-                </Button>
-              ))}
-            </fieldset>
-            <Input
-              className="w-auto max-w-56 px-2.25 py-1.25 text-xs font-mono"
-              value={typePrefix}
-              onChange={(event) => setTypePrefix(event.target.value)}
-              placeholder={t('runs.detail.typePrefix')}
-              aria-label={t('runs.detail.typePrefixLabel')}
-              spellCheck={false}
-            />
-            <Button
-              size="small"
-              className="aria-pressed:bg-accent-soft aria-pressed:text-accent-ink"
-              aria-pressed={showInternal}
-              onClick={() => setShowInternal((value) => !value)}
-            >
-              {t('runs.detail.showInternal')}
-            </Button>
-            <Button size="small" onClick={() => void loadFirstPage()}>
-              {t('runs.detail.refreshEvents')}
-            </Button>
-            <Badge>
-              {filtered.length}/{events.length}
-            </Badge>
-          </div>
-
-          {traceError && events.length === 0 ? (
-            isTraceUnavailable(traceError) ? (
-              <NotEnabledState
-                title={t('runs.detail.traceDisabledTitle')}
-                reason={traceError.message}
-                hint={t('runs.detail.traceDisabledHint')}
-              />
-            ) : (
-              <ErrorState message={traceError.message} onRetry={() => void loadFirstPage()} />
-            )
-          ) : (
-            <>
-              {traceError && (
-                <StaleNotice
-                  message={t('runs.detail.traceStale', { count: liveEvents.length })}
-                  onRetry={() => void loadFirstPage()}
-                />
-              )}
-              {traceLoading && events.length === 0 ? (
-                <LoadingState label={t('runs.detail.loadingTrace')} />
-              ) : events.length === 0 ? (
-                <EmptyState
-                  title={t('runs.detail.emptyTraceTitle')}
-                  description={
-                    tab === 'live' && !coreRunId
-                      ? t('runs.detail.emptyTraceQueued')
-                      : t('runs.detail.emptyTraceDesc')
-                  }
-                />
-              ) : filtered.length === 0 ? (
-                <EmptyState
-                  title={t('runs.detail.noMatchTitle')}
-                  description={t('runs.detail.noMatchDesc')}
-                />
-              ) : (
-                <div className="mt-2 flex max-h-105 flex-col gap-1 overflow-y-auto rounded-md bg-sunken px-2.5 py-1.5">
-                  {items.map((item) =>
-                    item.kind === 'tool' ? (
-                      <ToolCallRow key={item.key} group={item} />
-                    ) : (
-                      <EventRow key={item.key} event={item.event} />
-                    ),
-                  )}
-                </div>
-              )}
-
-              {hasMore && (
-                <div className="mt-2 flex flex-wrap items-center gap-2.5 text-sm">
-                  <Button
-                    size="small"
-                    disabled={loadingMore || sinceSeq === undefined}
-                    onClick={() => void loadMore()}
-                  >
-                    {loadingMore
-                      ? t('runs.detail.loadingMore')
-                      : t('runs.detail.loadMore', { count: trace.length })}
-                  </Button>
-                  {sinceSeq === undefined && (
-                    <span className="text-muted">{t('runs.detail.missingSeq')}</span>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      {view === 'timeline' && <RunTimeline trace={runTrace} tab={tab} coreRunId={coreRunId} />}
 
       {view === 'output' && (
         <div id="run-detail-panel" role="tabpanel" aria-label={t('runs.detail.outputLabel')}>
