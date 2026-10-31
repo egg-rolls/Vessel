@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -59,8 +59,19 @@ export function ObserveView({
 }) {
   useLocale();
   const { tenantId } = useConnection();
+  // 本页是 Observe 唯一的滚动容器（`main` 是 `overflow-hidden`，路由变化的
+  // `window.scrollTo` 重置不到它）。切 tab 时若沿用上一页的 scrollTop，长内容
+  // （如诊断表格）的 sticky 表头会立刻钉在视口上沿，看起来像压住了 tab 栏。
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const changeTab = (tab: ObserveRoute['tab']) => {
+    scrollRef.current?.scrollTo?.({ top: 0 });
+    navigate({ domain: 'observe', tab });
+  };
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
+    <div
+      ref={scrollRef}
+      className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]"
+    >
       <PageHeader
         title={t('observe.title')}
         description={t('observe.description')}
@@ -70,7 +81,7 @@ export function ObserveView({
         label={t('observe.tabsLabel')}
         tabs={observeTabs()}
         value={route.tab}
-        onChange={(tab) => navigate({ domain: 'observe', tab })}
+        onChange={changeTab}
         panelId="observe-panel"
       />
       <div

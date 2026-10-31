@@ -386,7 +386,8 @@ function McpPanel() {
     );
   }
 
-  const error = resource.state.status === 'error' ? resource.state.error : null;
+  const errorState = resource.state.status === 'error' ? resource.state : null;
+  const error = errorState?.error ?? null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -423,7 +424,16 @@ function McpPanel() {
       </div>
 
       {error && servers.length === 0 ? (
-        <ErrorState message={error} onRetry={resource.reload} />
+        // 同 ChannelsPanel：`mcp_disabled` 是「没配 mcp_servers」的配置状态，不是故障。
+        errorState?.code === 'mcp_disabled' || errorState?.code === 'not_found' ? (
+          <NotEnabledState
+            title={t('integrations.mcp.disabledTitle')}
+            reason={t('integrations.mcp.disabledReason')}
+            hint={t('integrations.mcp.disabledHint')}
+          />
+        ) : (
+          <ErrorState message={error} onRetry={resource.reload} />
+        )
       ) : resource.state.status === 'idle' ||
         (resource.state.status === 'loading' && servers.length === 0) ? (
         <LoadingState label={t('integrations.mcp.loading')} />
@@ -511,8 +521,22 @@ function ChannelsPanel() {
       />
     );
   }
-  const error = resource.state.status === 'error' ? resource.state.error : null;
+  const errorState = resource.state.status === 'error' ? resource.state : null;
+  const error = errorState?.error ?? null;
   if (error && !channel) {
+    // 「渠道未启用」是配置状态，不是故障：`feishu.status` 在 default tenant 未启用时抛
+    // `not_found`、其它 tenant 未配置时抛 `forbidden`，REST 兜底是 `channel_disabled`。
+    // 画成「加载失败 + 重试」会让人以为重试能修好，而它永远不会成功。
+    const code = errorState?.code;
+    if (code === 'not_found' || code === 'channel_disabled' || code === 'forbidden') {
+      return (
+        <NotEnabledState
+          title={t('integrations.channels.disabledTitle')}
+          reason={t('integrations.channels.disabledReason')}
+          hint={t('integrations.channels.disabledHint')}
+        />
+      );
+    }
     return <ErrorState message={error} onRetry={resource.reload} />;
   }
   if (resource.state.status === 'idle' || (resource.state.status === 'loading' && !channel)) {
