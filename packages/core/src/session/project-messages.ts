@@ -13,7 +13,8 @@
  * - `tool.call.completed`    → `{role:'tool', content: result}`
  * - `tool.call.failed`       → `{role:'tool', content: content ?? "Error: <error>"}`
  * - `run.completed.output`   → 覆盖最后一条无 tool_calls 的 assistant 文本
- * - `message.compaction`     → 压缩摘要（若未来记录；当前会话文件仍是摘要来源）
+ * - `message.compaction`     → 压缩摘要（0.32 起由 runtime 记录；带 `kept` 边界时
+ *                              按应用侧同一规则替换旧历史，否则只追加摘要）
  *
  * 不产生消息的事件（run.* / permission / context.* / limit 等）直接忽略。
  *
@@ -36,6 +37,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function readCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 /** 宽松校验一条 Message（只信结构，不做业务解释） */
@@ -134,7 +141,20 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
         compaction_summary: true,
       };
       message.timestamp ??= event.ts;
-      messages.push(message);
+      // 压缩是「替换」而不是「追加」：应用侧保留全部 system + 最近 `kept`
+      // 条非 system，并移除旧摘要。没有 `kept` 的旧事件只追加摘要。
+      const kept = readCount(data.kept);
+      if (kept === undefined) {
+        messages.push(message);
+      } else {
+        const prior = messages.filter((entry) => entry.compaction_summary !== true);
+        const systemMessages = prior.filter((entry) => entry.role === 'system');
+        const nonSystem = prior.filter((entry) => entry.role !== 'system');
+        const tail =
+          kept >= nonSystem.length ? nonSystem : nonSystem.slice(nonSystem.length - kept);
+        messages.length = 0;
+        messages.push(...systemMessages, message, ...tail);
+      }
       lastAssistant = undefined;
       continue;
     }

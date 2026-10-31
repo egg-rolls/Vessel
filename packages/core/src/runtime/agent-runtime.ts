@@ -626,7 +626,13 @@ export class AgentRuntime {
       // 0.18：新 run 也要重放 session 缓存之后的日志增量；否则 saveSession 会把
       // 未进入上下文的事件标记成“已覆盖”（derived_upto_seq 超前）。
       const history = await this.loadStoredHistory(sessionId);
-      if (!history.some((message) => message.role === 'system') && this.runSystemPrompt) {
+      // 事件日志重建时可能只有压缩摘要（role system）；基底 system 仍要补回。
+      if (
+        !history.some(
+          (message) => message.role === 'system' && message.compaction_summary !== true,
+        ) &&
+        this.runSystemPrompt
+      ) {
         this.addContext({ role: 'system', content: this.runSystemPrompt }, runId);
       }
       for (const message of history) {
@@ -982,7 +988,13 @@ export class AgentRuntime {
       }
       this.context.clear();
       this.context.setSessionId(sessionId);
-      if (!history.some((message) => message.role === 'system') && this.runSystemPrompt) {
+      // 事件日志重建时可能只有压缩摘要（role system）；基底 system 仍要补回。
+      if (
+        !history.some(
+          (message) => message.role === 'system' && message.compaction_summary !== true,
+        ) &&
+        this.runSystemPrompt
+      ) {
         this.addContext({ role: 'system', content: this.runSystemPrompt }, runId);
       }
       for (const message of history) {
@@ -1586,7 +1598,7 @@ export class AgentRuntime {
     }
   }
 
-  /** 0.15 E1：removed>0 时发布 `context.compacted` */
+  /** 0.15 E1：removed>0 时发布 `context.compacted`；0.32 同时把摘要落事件日志 */
   private publishCompacted(
     execution: RunExecution | undefined,
     removed: number,
@@ -1595,6 +1607,7 @@ export class AgentRuntime {
     if (removed <= 0) return;
     const runId = execution?.runId ?? this.activeRun?.runId ?? 'manual';
     const sessionId = execution?.sessionId ?? this.context.getSessionId();
+    const remaining = this.context.messages.length;
     this.publishEvent({
       type: 'context.compacted',
       run_id: runId,
@@ -1602,10 +1615,41 @@ export class AgentRuntime {
         run_id: runId,
         session_id: sessionId,
         removed,
-        remaining: this.context.messages.length,
+        remaining,
         reason,
       },
       ts: Date.now(),
+    });
+
+    // 0.32：压缩摘要进事件日志（唯一真相源），session cache 只做加速。
+    // `data.message` 就是 applyCompaction 写入的摘要；`kept` 是应用后保留的
+    // 非 system 消息数，供投影按同一边界裁剪旧历史。摘要只能取自刚压缩的那个
+    // 会话；会话在 await 期间被切换时不写错事件。
+    if (this.context.getSessionId() !== sessionId) return;
+    const messages = this.context.messages;
+    let summary: Message | undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const candidate = messages[index];
+      if (candidate?.role === 'system' && candidate.compaction_summary === true) {
+        summary = candidate;
+        break;
+      }
+    }
+    if (summary === undefined) return;
+    const ts = summary.timestamp ?? Date.now();
+    this.publishEvent({
+      type: 'message.compaction',
+      run_id: runId,
+      data: {
+        run_id: runId,
+        session_id: sessionId,
+        removed,
+        remaining,
+        kept: messages.filter((message) => message.role !== 'system').length,
+        reason,
+        message: { ...summary, timestamp: ts },
+      },
+      ts,
     });
   }
 
