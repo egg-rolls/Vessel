@@ -2895,6 +2895,21 @@ export class AgentServiceImpl implements AgentService {
     });
   }
 
+  /** 0.31：body 上下文水位；交给 runtime 的只读视图，不落盘。 */
+  contextRatio(sessionId: string): number | undefined {
+    return this.runtime.contextRatio?.(sessionId);
+  }
+
+  /**
+   * 0.31：工具侧可见事件出口。agent 工具在权限事件流之外没有父流句柄，
+   * rotate 的批准 / 拒绝结果经这里与 `agent.*` 事件同一条流发出。
+   */
+  noteAgentEvent(type: string, sessionId: string, extra: Record<string, unknown> = {}): void {
+    const record = this.registry.resolve(sessionId);
+    if (record === undefined) return;
+    this.emitForSession(type, record, sessionId, extra);
+  }
+
   currentConversation(agentId: string): string | undefined {
     const entries = this.liveEntries(agentId);
     const active = entries.find((entry) => entry.active !== undefined);

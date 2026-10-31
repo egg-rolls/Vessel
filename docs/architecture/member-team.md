@@ -50,9 +50,10 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ## rotate 与 epoch fencing
 
 - rotate 只退休 **primary body** 并新建 primary（新 session id）；同一 Agent 已有进行中的 rotate 返回 `rotating`。其它 live body 的历史、checkpoint、epoch 与在途 run 完全不受影响。模型侧 `agent` 工具只能 rotate 自己，靠 `from_session_id` 等于当前 primary body 做最终闸门。
+- **模型发起的 rotate 必须先经人类权限确认**（0.31）：`agent` 工具发出 `tool.permission.request`（`tool: agent.rotate`，`input` 带当前上下文比例与提示），复用既有 permission / bridge 通道；批准才调用 `AgentService.rotate`，拒绝或无人类通道（headless）返回 `rotate_not_needed`，旧 body 继续。CLI / 人工 RPC 的 rotate 不带 `from_session_id`，不额外询问。
 - 切换顺序固定：spawn 新 body → 提交 primary（`primary_body_id`）→ 快照落盘 → 旧 primary 退休进 `body_history` → 启动嘱托入队 → `rotation = stable`。spawn 或快照失败时恢复旧 primary、dispose 新 body、返回 `rotate_failed`，不自动重试。
 - 旧 body 的轮按**该 body 自身** epoch / 退役标志 fencing：发带 `stale: true` 的配对终态与 `agent.reply.stale`，不写 state / usage、不投父队列。
-- 事件：`agent.rotating` / `agent.rotated` / `agent.rotate.failed` / `agent.retired` / `agent.reply.stale`；payload 不带启动嘱托正文。
+- 事件：`agent.rotate.approved` / `agent.rotate.denied` / `agent.rotating` / `agent.rotated` / `agent.rotate.failed` / `agent.retired` / `agent.reply.stale`；payload 不带启动嘱托正文，也不带确认卡片正文。
 
 <a id="spawn"></a>
 

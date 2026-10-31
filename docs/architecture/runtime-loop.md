@@ -16,9 +16,8 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/tool.ts]
 ```
 loop:
     signal.aborted?                     → 抛错（Esc 中断）
-    用量 / 终止 80% 预警（每 key 每 run 一次） → 事件 + `vessel:limit` 尾部消息
+    用量 / 终止 90% 预警（每 key 每 run 一次） → 事件 + `vessel:limit` 尾部消息
     终止 / 硬上限检查（maxIterations / maxRuntimeSeconds / request / token / cost）→ 抛错
-    tool_calls_limit 到达 → 软预算：发一次 limit.warning + `vessel:limit` 收尾消息，本轮起 tools 为空（不执行工具）
     autoCompactAsync                    → 压缩时设 PrefixGuard reason=compaction
     # system 冻结：hook 只读 hookCtx.systemPrompt；动态注入只走 hookCtx.messages
     # 旧 additionalContext 自动转 vessel:hook

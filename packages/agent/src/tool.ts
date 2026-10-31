@@ -7,7 +7,8 @@
  * @module @vessel-agent/agent
  */
 
-import type { ToolContext, ToolDefinition } from '@vessel-agent/core';
+import { randomUUID } from 'node:crypto';
+import { LIMIT_WARNING_THRESHOLD, type ToolContext, type ToolDefinition } from '@vessel-agent/core';
 import { HUMAN_PRINCIPAL } from './team-address.js';
 import { TeamMetadataCorruptError } from './team-store.js';
 import {
@@ -208,6 +209,13 @@ export interface AgentToolOptions {
   ownerSessionId?: string;
   /** 成员 Body 的 Team 能力（post / send / list）；缺失时这些动作报错 */
   team?: AgentTeamService;
+  /**
+   * 0.31：是否有能应答权限确认的人类通道（交互 REPL / serve；headless 为 false）。
+   *
+   * 只影响模型发起的 rotate：无人类通道时不发请求、不等待，直接
+   * `rotate_not_needed`，避免 bridge 收不到人类应答而挂死。
+   */
+  humanApproval?: boolean;
 }
 
 /** 构造内置 `agent` 工具；生命周期全部委托给 AgentService */
@@ -365,6 +373,83 @@ export function createAgentTool(
           if (callerSession === undefined) {
             throw invalid('rotate requires a calling body');
           }
+          // 0.31：模型发起的 rotate 一律先问人类。CLI / 人工 RPC 直接走
+          // service.rotate（不带 from_session_id），不经过这里，因此不会被询问。
+          const ratio = service.contextRatio(callerSession);
+          const percent = ratio === undefined ? undefined : Math.round(ratio * 100);
+          const warning =
+            ratio === undefined
+              ? 'Context usage is unknown; rotate only with human approval.'
+              : ratio >= LIMIT_WARNING_THRESHOLD
+                ? `Context is at ${percent}% (at or above the ${Math.round(
+                    LIMIT_WARNING_THRESHOLD * 100,
+                  )}% line); rotation is recommended.`
+                : `Context is at ${percent}% (below the ${Math.round(
+                    LIMIT_WARNING_THRESHOLD * 100,
+                  )}% line); rotation is usually unnecessary.`;
+
+          let approved = false;
+          let denial = 'no_human_channel';
+          if (options.humanApproval === true) {
+            const requestId = randomUUID();
+            ctx.events.publish({
+              type: 'tool.permission.request',
+              run_id: ctx.run_id,
+              data: {
+                requestId,
+                tool: 'agent.rotate',
+                input: {
+                  action: 'rotate',
+                  to: (record.to ?? callerSession) as string,
+                  ...(ratio !== undefined
+                    ? { context_ratio: ratio, context_percent: percent }
+                    : {}),
+                  warning,
+                },
+                session_id: callerSession,
+                ...(ctx.tool_call_id !== undefined ? { tool_call_id: ctx.tool_call_id } : {}),
+                source: ctx.source ?? 'runtime',
+              },
+              ts: Date.now(),
+            });
+            try {
+              const response = await ctx.events.waitFor('tool.permission.response', {
+                requestId,
+                ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+              });
+              const data = isRecord(response) ? response : {};
+              // 缺 answered_by = legacy human（TUI）；policy / auto_allow 不是人类。
+              const human = data.answered_by === undefined || data.answered_by === 'human';
+              const decision =
+                data.decision ?? (data.allowed === false ? ('deny' as const) : ('allow' as const));
+              approved = human && decision === 'allow';
+              if (!human) denial = 'no_human_channel';
+              else if (!approved) denial = 'denied_by_human';
+            } catch (error) {
+              if (ctx.signal?.aborted) throw error;
+              denial = 'approval_unavailable';
+            }
+          }
+
+          const decisionData = {
+            ...(ratio !== undefined ? { context_ratio: ratio } : {}),
+            ...(percent !== undefined ? { context_percent: percent } : {}),
+            warning,
+          };
+          if (!approved) {
+            service.noteAgentEvent('agent.rotate.denied', callerSession, {
+              ...decisionData,
+              reason: denial,
+            });
+            return JSON.stringify({
+              status: 'failed',
+              code: 'rotate_not_needed',
+              reason: denial,
+              ...decisionData,
+            });
+          }
+
+          service.noteAgentEvent('agent.rotate.approved', callerSession, decisionData);
           const result = await service.rotate({
             to: (record.to ?? callerSession) as string,
             startup_prompt: record.startup_prompt as string,

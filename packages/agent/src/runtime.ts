@@ -98,12 +98,12 @@ const MAX_PENDING_NOTICE_MEMBERS = 100;
 /**
  * temporary 成员的主动压缩阈值（0.28 D6/D7）。
  *
- * core 的 `MemoryContextManager` 把阈值默认成 0.9 且不可见，而角色策略层在这里
+ * core 的 `MemoryContextManager` 把阈值默认成 0.95 且不可见，而角色策略层在这里
  * **不改 core** 的前提下需要自己判断「这次要不要主动压缩」，所以这一个数字被复制。
  * 代价是与 core 有漂移风险；缓解：core 一旦暴露 `compactThreshold` getter，本常量
  * 直接删掉改读 getter（`R4.compact` 探针把两边算出的判定放在一起对比，漂移会被它看见）。
  */
-const ROLE_COMPACT_THRESHOLD = 0.9;
+const ROLE_COMPACT_THRESHOLD = 0.95;
 
 /**
  * 按角色包装 per-body `ContextManager`：**自动压缩开关可在活体上热切换**。
@@ -965,6 +965,18 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       }
     }
     if (!delivered) this.queuePendingNotice(memberId, text);
+  }
+
+  /**
+   * 0.31：body 上下文水位。只读 per-body 包装上的 tokenCount / maxTokens，
+   * 不推断、不落盘；没有活体或没有 token 预算时返回 undefined。
+   */
+  contextRatio(sessionId: string): number | undefined {
+    const entry = this.entries.get(sessionId);
+    if (entry === undefined) return undefined;
+    const max = entry.context.maxTokens;
+    if (typeof max !== 'number' || !Number.isFinite(max) || max <= 0) return undefined;
+    return entry.context.tokenCount / max;
   }
 
   private queuePendingNotice(memberId: string, text: string): void {

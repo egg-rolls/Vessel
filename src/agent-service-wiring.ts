@@ -85,6 +85,12 @@ export interface AgentServiceWiringOptions {
   /** 成员权限模式：交互 bridge、headless allow（缺省沿用 agent 包缺省 allow） */
   permissionMode?: MemberRuntimePermissionMode;
   /**
+   * 0.31：是否存在能应答权限确认的人类通道。headless 传 false —— 模型 rotate
+   * 不发请求、直接 `rotate_not_needed`，避免等不到应答而挂死。
+   * 缺省 false（纯内存 / 工具清单场景不需要确认）。
+   */
+  humanApproval?: boolean;
+  /**
    * 在成员默认白名单（bash / read / edit / agent）之外额外放行的工具名，原样透传给
    * `InProcessMemberRuntimeOptions.extraTools`。
    *
@@ -409,6 +415,7 @@ export async function createAgentServiceWiring(
       ownerId,
       ownerSessionId: options.sessionId,
       team,
+      humanApproval: options.humanApproval === true,
     }),
     startOwner,
     ownerId,

@@ -287,6 +287,13 @@ export interface MemberRuntimePort {
    * AgentService 按 0 处理并走兜底轮换。
    */
   applyContextPolicy?(member: MemberRuntimeMember): Promise<number> | number;
+  /**
+   * 0.31（additive，可选）：body 当前上下文水位（0–1）。
+   *
+   * 只读诊断值，供 AgentService 生成 rotate 确认文案；不落盘、不新增 RPC。
+   * 无活体 / 无 token 预算时返回 undefined。
+   */
+  contextRatio?(sessionId: string): number | undefined;
 }
 
 /** `AgentService.drain` 结果：无在跑轮 / 已中断收口 / 超时 */
@@ -935,6 +942,16 @@ export interface AgentService {
   notePermissionState(memberId: string, sessionId: string, state: MemberPermissionState): void;
   /** 成员引擎事件回流（装配用）；当前只处理 live Body 的 agent.limit.warning */
   noteMemberEvent(memberId: string, sessionId: string, event: RunEvent): void;
+  /**
+   * 0.31：body 当前上下文水位（0–1）；无活体 / 无预算时 undefined。
+   * 模型 rotate 的确认文案用它，不新增 RPC。
+   */
+  contextRatio(sessionId: string): number | undefined;
+  /**
+   * 0.31：工具侧可见事件出口（如 rotate 确认结果）。与 `agent.*` 同一条父流；
+   * session 解析不到成员时静默丢弃。
+   */
+  noteAgentEvent(type: string, sessionId: string, extra?: Record<string, unknown>): void;
   /** 当前 turn 的 conversation_id；无在跑轮次或缺省时 undefined（TeamService 用） */
   currentConversation(agentId: string): string | undefined;
   /**
