@@ -42,6 +42,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `agent.defaultVisibility` / `permissionMode` / `readOnlyTools` | 成员可见性与权限模式：`bridge`（交互默认）/ `allow`（headless 默认）/ `deny`（保留 `readOnlyTools`，默认 `["read"]`）；0.17 |
 | `agent.followReplies` / `cwd` / `systemPrompt` | 回复注入策略（不自动续跑父 turn）/ 默认工作目录 / 主 agent systemPrompt |
 | `agent.temporaryTtlHours` | 临时 agent（`role: temporary`）空闲回收 TTL，小时，默认 `2`，`0` = 关闭；只回收在册 temporary，`member`（含 `main`）永不回收；回收可逆（`reinstate` 原地复活同一具 body） |
+| `agent.inbox_max_messages`（TS 字段 `inboxMaxMessages`） | 每 agent 持久化收件箱条数上限，默认 `200`；必须是正整数（非整数 / `<=0` 启动即报错）；append 与 load 超出时按最旧消息裁剪 |
 | `mcp_servers.<name>.*` | MCP server：`transport`（stdio/http）、`command`/`args`/`env`、`url`/`headers`、`enabled`、`connect_timeout_ms`、`tool_timeout_ms`、`tool_prefix`、`auto_approve_tools` |
 | `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 true（0.24；显式 false 关闭）；`backend: file \| memory`；0.5 起 `path` 默认 `<data_dir>/tenants/<tenant_id>/runs`，显式配置优先但可逃出 tenant（启动 warn）；0.3 只接受 `checkpoint_every: iteration` |
 | `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true`、token 非空**且 TLS cert/key 成对**（0.6 起强制） |

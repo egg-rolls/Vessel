@@ -114,6 +114,20 @@ function collectAgents(deps: AgentMethodsDeps, tenantId: string): Map<string, Ag
     });
   }
 
+  // 3. 0.32：运行时上下文用量（`context.changed` / `context.pressure` 派生，
+  //    按 body / session 键）。没有真实用量时保持字段缺省，不用配置默认值伪造。
+  for (const entry of merged.values()) {
+    if (entry.session_id === undefined) continue;
+    const usage = deps.registry.contextUsage(entry.session_id);
+    if (!usage) continue;
+    const usageVisible = isDefault
+      ? usage.tenant_id === undefined || usage.tenant_id === tenantId
+      : usage.tenant_id === tenantId;
+    if (!usageVisible) continue;
+    if (usage.used !== undefined) entry.context_used = usage.used;
+    if (usage.max !== undefined) entry.context_max = usage.max;
+  }
+
   return merged;
 }
 

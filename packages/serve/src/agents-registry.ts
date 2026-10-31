@@ -50,10 +50,25 @@ export interface AgentRegistryFilter {
   state?: string;
 }
 
+/**
+ * 0.32：来自运行时事件的上下文用量。
+ *
+ * 唯一真实来源是 core runtime 的 `context.changed.token_count`（每次写入上下文
+ * 都发），以及 `context.pressure` 的 `used` / `max`（90% 预警时才发，因此
+ * `max` 只在运行时真的报过时才有；不按配置默认值伪造）。
+ */
+export interface AgentContextUsage {
+  used?: number;
+  max?: number;
+  tenant_id?: string;
+}
+
 export interface AgentRegistry {
   ingest(event: RunEvent): void;
   list(filter?: AgentRegistryFilter): AgentRegistryEntry[];
   get(id: string): AgentRegistryEntry | undefined;
+  /** 按 body / session 读最近一次运行时上下文用量；没有事件时 undefined。 */
+  contextUsage(sessionId: string): AgentContextUsage | undefined;
 }
 
 interface MutableEntry extends AgentRegistryEntry {
@@ -126,6 +141,8 @@ export function createAgentRegistry(): AgentRegistry {
   const entries = new Map<string, MutableEntry>();
   const runToAgent = new Map<string, string>();
   const runSession = new Map<string, string>();
+  /** body / session → 最近一次运行时上下文用量（context.changed / context.pressure）。 */
+  const contextUsages = new Map<string, AgentContextUsage>();
   let seq = 0;
 
   function ensure(id: string, seed: Partial<AgentRegistryEntry> = {}): MutableEntry {
@@ -197,10 +214,39 @@ export function createAgentRegistry(): AgentRegistry {
     }
   }
 
+  /**
+   * 0.32：记录真实上下文用量。`context.changed` 带 `token_count`（写入上下文时
+   * 每条约一次）；`context.pressure` 是 90% 预警，额外带运行时 `max`。
+   * 字段只按事件里真实存在的数字收敛，缺一个就保留上一次的值，不推断。
+   */
+  function ingestContext(event: RunEvent, data: Record<string, unknown>): void {
+    const sessionId = stringField(data, 'session_id');
+    if (!sessionId) return;
+    const previous = contextUsages.get(sessionId);
+    const used =
+      event.type === 'context.pressure'
+        ? countField(data, 'used')
+        : countField(data, 'token_count');
+    const max = event.type === 'context.pressure' ? countField(data, 'max') : undefined;
+    const nextUsed = used ?? previous?.used;
+    const nextMax = max !== undefined && max > 0 ? max : previous?.max;
+    if (nextUsed === undefined && nextMax === undefined) return;
+    contextUsages.set(sessionId, {
+      ...(nextUsed !== undefined ? { used: nextUsed } : {}),
+      ...(nextMax !== undefined ? { max: nextMax } : {}),
+      ...(event.tenant_id !== undefined ? { tenant_id: event.tenant_id } : {}),
+    });
+  }
+
   function ingest(event: RunEvent): void {
     const type = event.type;
     const data = isRecord(event.data) ? event.data : {};
     const tenantId = event.tenant_id;
+
+    if (type === 'context.changed' || type === 'context.pressure') {
+      ingestContext(event, data);
+      return;
+    }
 
     if (type === 'agent.queue.entered' || type === 'agent.queue.left') {
       ingestQueue(event, data);
@@ -368,5 +414,10 @@ export function createAgentRegistry(): AgentRegistry {
     return entry ? { ...entry } : undefined;
   }
 
-  return { ingest, list, get };
+  function contextUsage(sessionId: string): AgentContextUsage | undefined {
+    const usage = contextUsages.get(sessionId);
+    return usage ? { ...usage } : undefined;
+  }
+
+  return { ingest, list, get, contextUsage };
 }
