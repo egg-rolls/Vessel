@@ -20,6 +20,7 @@ import {
   noopLogger,
   type RunEvent,
   type RunHandle,
+  type RunInterruptReason,
   type RunStatus,
   type RunStore,
   type RuntimePermissionConfig,
@@ -210,7 +211,7 @@ interface BodyEntry {
   /** 已提交给 scheduler、尚未开始执行的 run */
   queuedRuns: Set<string>;
   /** 正在执行的 run（同 body 同时最多一个） */
-  active?: { runId: string; conversationId?: string; replied: boolean };
+  active?: { runId: string; messageId?: string; conversationId?: string; replied: boolean };
   budgetHold: Set<string>;
   closing: boolean;
   spawned: boolean;
@@ -481,6 +482,13 @@ export class AgentServiceImpl implements AgentService {
   private readonly bodyRegistry = new Map<string, Map<string, BodyEntry>>();
   /** run_id → 准入消息 id（send / dispatch 复用） */
   private readonly runMessageIds = new Map<string, string>();
+  /** body 级串行操作（0.32-D 打断重排）；按 bodyId 排队，避免两次打断交错。 */
+  private readonly bodyOps = new Map<string, Promise<unknown>>();
+  /**
+   * 0.32-D：run_id → 取消原因。scheduler 在 real handle attach 之前被取消时，
+   * `attach()` 会用固定 'run cancelled' 调 cancel，丢掉原始 reason；打断按 id 修正。
+   */
+  private readonly interruptReasons = new Map<string, RunInterruptReason>();
   /** drain 之后不再从队列起新轮（关闭窗口内排队的消息随进程退出丢弃） */
   private draining = false;
   /** 同一源成员的 single-flight fork；并发只 spawn 一个新 Agent */
@@ -1419,6 +1427,7 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', 'channel must be direct or team');
     }
     const strict = input.strict === true;
+    const important = input.important === true;
 
     // 1. session → agent/body 解析（绑定优先；矛盾输入 = invalid_input）
     let record: MemberRecord;
@@ -1519,6 +1528,7 @@ export class AgentServiceImpl implements AgentService {
           ts: message.ts,
           source: from,
           text: content,
+          ...(important ? { important: true } : {}),
         });
         const runId = this.newId();
         this.runMessageIds.set(runId, message.id);
@@ -1547,6 +1557,7 @@ export class AgentServiceImpl implements AgentService {
         ts: message.ts,
         source: from,
         text: content,
+        ...(important ? { important: true } : {}),
       });
       this.inbox.hold(record.id, message.id);
     }
@@ -1706,6 +1717,7 @@ export class AgentServiceImpl implements AgentService {
     entry.lastActiveAt = this.now();
     entry.active = {
       runId,
+      messageId: message.id,
       ...(conversationId !== undefined ? { conversationId } : {}),
       replied: false,
     };
@@ -1713,9 +1725,14 @@ export class AgentServiceImpl implements AgentService {
     this.updateAgentState(record.id);
     this.scheduleSnapshot();
     const handle = new BodyRunHandle(runId, record.id, entry.bodyId);
-    handle.cancelHandler = () => {
+    handle.cancelHandler = (reason) => {
       try {
-        this.runtime.cancel(entry.runtimeMember);
+        // 0.32-D：打断必须让 core 发出 `run.cancelled` reason=`interrupt`；
+        // 其它取消路径（close / rotate / drain）保持 `user`。
+        const interruptReason: RunInterruptReason =
+          this.interruptReasons.get(handle.id) ?? (reason === 'interrupt' ? 'interrupt' : 'user');
+        this.interruptReasons.delete(handle.id);
+        this.runtime.cancel(entry.runtimeMember, interruptReason);
       } catch (error) {
         this.logger.warn('agent.cancel.failed', {
           member_id: record.id,
@@ -1814,6 +1831,7 @@ export class AgentServiceImpl implements AgentService {
     failure: string | undefined,
     content: string | undefined,
   ): void {
+    this.interruptReasons.delete(handle.id);
     if (outcome === 'cancelled') handle.markCancelled(failure ?? 'run cancelled');
     else if (outcome === 'failed') handle.fail(failure ?? 'run failed');
     else handle.complete(content ?? '');
@@ -1981,7 +1999,14 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     const record = input as unknown as Record<string, unknown>;
     if ('messages' in record) {
-      if (record.to !== undefined || record.content !== undefined || record.from !== undefined) {
+      if (
+        record.to !== undefined ||
+        record.content !== undefined ||
+        record.from !== undefined ||
+        record.interrupt !== undefined ||
+        record.message_id !== undefined ||
+        record.important !== undefined
+      ) {
         throw new AgentError(
           'invalid_input',
           'pass either single to/content or messages, not both',
@@ -2009,9 +2034,27 @@ export class AgentServiceImpl implements AgentService {
   /** strict send：不自动恢复 gone 成员；走同一个 admit。 */
   private async sendOne(input: Record<string, unknown>): Promise<SendResult> {
     const to = readRequiredString(input, 'to');
-    const content = readContent(input, 'content');
     const from =
       input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(input, 'from');
+    const interrupt = readOptionalBoolean(input, 'interrupt');
+    const important = readOptionalBoolean(input, 'important');
+    let messageId: string | undefined;
+    if (input.message_id !== undefined) messageId = readRequiredString(input, 'message_id');
+    if (messageId !== undefined && !interrupt) {
+      throw new AgentError('invalid_input', 'message_id requires interrupt: true');
+    }
+    // 指定 inbox 消息时不重复给正文；两者同时出现属于歧义输入。
+    let content: string;
+    if (messageId !== undefined) {
+      if (input.content !== undefined && input.content !== '') {
+        if (typeof input.content !== 'string' || input.content.trim() !== '') {
+          throw new AgentError('invalid_input', 'pass either content or message_id, not both');
+        }
+      }
+      content = '';
+    } else {
+      content = readContent(input, 'content');
+    }
     const target = this.requireMember(to);
     if (target.membership === 'left' || target.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${to}`);
@@ -2022,6 +2065,20 @@ export class AgentServiceImpl implements AgentService {
     if (!this.registry.canView(target, from)) {
       throw new AgentError('member_not_visible', `member_not_visible: ${to}`);
     }
+    const conversationId =
+      input.conversation_id !== undefined
+        ? readRequiredString(input, 'conversation_id')
+        : undefined;
+    if (interrupt) {
+      return this.sendInterrupt(target, {
+        memberKey: to,
+        from,
+        content,
+        ...(messageId !== undefined ? { messageId } : {}),
+        important,
+        ...(conversationId !== undefined ? { conversationId } : {}),
+      });
+    }
     const sessionId = this.registry.getBySession(to)?.id === target.id ? to : undefined;
     const result = await this.admit({
       content,
@@ -2029,19 +2086,200 @@ export class AgentServiceImpl implements AgentService {
       ...(sessionId !== undefined ? { session_id: sessionId } : {}),
       from,
       channel: 'direct',
-      ...(input.conversation_id !== undefined
-        ? { conversation_id: readRequiredString(input, 'conversation_id') }
-        : {}),
+      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
       strict: true,
+      ...(important ? { important: true } : {}),
     });
-    const messageId = this.runMessageIds.get(result.run_id) ?? result.run_id;
+    const messageIdResult = this.runMessageIds.get(result.run_id) ?? result.run_id;
     return {
       queued: true,
-      message_id: messageId,
+      message_id: messageIdResult,
       state: this.registry.get(target.id)?.state ?? target.state,
       run_id: result.run_id,
       session_id: result.session_id,
     };
+  }
+
+  /**
+   * 0.32-D 紧急打断：取消该 body 当前的 active run（reason `interrupt`），把指定
+   * inbox 消息（或本次正文）作为下一条输入，排在现有队列之前；旧队列随后照常。
+   *
+   * 顺序保证（不新增优先级系统）：
+   * 1. 在同一同步块内先 `scheduler.cancel` 掉该 body 所有 queued run 与 active run
+   *    （scheduler 的 serialKey 仍被 active 占着，drain 不会在此时起新轮）；
+   * 2. 依次把打断消息、旧队列消息重新 `submitMessage` 到 scheduler（每次 submit 在
+   *    返回 promise 前已同步入队），因此队列顺序 = 打断 → 旧队列原顺序；
+   * 3. 旧消息的 inbox 记录始终处于 held/unread，取消的只是尚未执行的 run，重新提交
+   *    后只在真正开始执行时 markConsumed —— 每条消息仍只注入一次。
+   * 并发打断按 agent 串行（`withBodyOp`）。
+   */
+  private async sendInterrupt(
+    target: MemberRecord,
+    input: {
+      memberKey: string;
+      from: string;
+      content: string;
+      messageId?: string;
+      important: boolean;
+      conversationId?: string;
+    },
+  ): Promise<SendResult> {
+    return this.withBodyOp(target.id, async () => {
+      if (this.rotations.has(target.id)) {
+        throw new AgentError('invalid_input', 'interrupt is not supported during rotate');
+      }
+      const sessionId =
+        this.registry.getBySession(input.memberKey)?.id === target.id ? input.memberKey : undefined;
+      const { entry } = await this.ensureBody(target, sessionId);
+      if (this.draining || entry.closing || entry.retired) {
+        throw new AgentError('member_closed', `member_closed: ${target.id}`);
+      }
+
+      // 1. 该 body 当前的 running / queued run（scheduler 快照是活跃状态的唯一真相）。
+      const snapshot = this.scheduler.snapshot?.();
+      let runningIds: string[];
+      let queuedRunIds: string[];
+      if (snapshot !== undefined) {
+        runningIds = snapshot.running
+          .filter((run) => run.sessionId === entry.bodyId)
+          .map((run) => run.runId);
+        queuedRunIds = snapshot.queued
+          .filter((run) => run.sessionId === entry.bodyId)
+          .map((run) => run.runId);
+      } else {
+        runningIds = entry.active !== undefined ? [entry.active.runId] : [];
+        queuedRunIds = [...entry.queuedRuns].filter((id) => id !== entry.active?.runId);
+      }
+
+      // 2. 先解析打断消息（任何非法 id 都在改动队列之前报错）。
+      let interruptMessage: AgentMessage;
+      if (input.messageId !== undefined) {
+        const stored = this.inbox?.findByIds(target.id, [input.messageId])[0];
+        if (stored === undefined) {
+          throw new AgentError('invalid_input', `unknown_message: ${input.messageId}`);
+        }
+        if (stored.status === 'consumed') {
+          throw new AgentError('invalid_input', `message_already_consumed: ${input.messageId}`);
+        }
+        if (entry.active?.messageId === stored.id) {
+          throw new AgentError('invalid_input', `message_already_running: ${input.messageId}`);
+        }
+        const existing = entry.pending.find((message) => message.id === stored.id);
+        interruptMessage =
+          existing ??
+          ({
+            id: stored.id,
+            from: stored.source,
+            to: target.id,
+            content: stored.text,
+            ts: this.now(),
+            source: this.messageSource(stored.source),
+            channel: 'direct',
+            ...(input.conversationId !== undefined
+              ? { conversation_id: input.conversationId }
+              : {}),
+          } satisfies AgentMessage);
+        this.inbox?.hold(target.id, stored.id);
+      } else {
+        const id = this.newId();
+        const message: AgentMessage = {
+          id,
+          from: input.from,
+          to: target.id,
+          content: input.content,
+          ts: this.now(),
+          source: this.messageSource(input.from),
+          channel: 'direct',
+          ...(input.conversationId !== undefined ? { conversation_id: input.conversationId } : {}),
+        };
+        this.inbox?.append(target.id, {
+          id,
+          ts: message.ts,
+          source: input.from,
+          text: input.content,
+          ...(input.important ? { important: true } : {}),
+        });
+        this.inbox?.hold(target.id, id);
+        interruptMessage = message;
+      }
+      if (!entry.pending.includes(interruptMessage)) entry.pending.push(interruptMessage);
+      this.registry.touchBody(target.id, entry.bodyId, this.now());
+
+      // 3. 取消尚未开始的 run，保留其消息用于按原顺序重投。
+      const oldMessages: AgentMessage[] = [];
+      const seenMessageIds = new Set<string>();
+      for (const runId of queuedRunIds) {
+        const messageIdForRun = this.runMessageIds.get(runId);
+        const message =
+          messageIdForRun !== undefined
+            ? entry.pending.find((candidate) => candidate.id === messageIdForRun)
+            : undefined;
+        if (message === undefined) {
+          // 状态不一致（queued run 找不到对应消息）：不取消、不重投，宁可顺序退化也不丢消息。
+          this.logger.warn('agent.interrupt.queue_message_missing', {
+            agent_id: target.id,
+            session_id: entry.bodyId,
+            run_id: runId,
+          });
+          continue;
+        }
+        this.scheduler.cancel(runId, 'interrupt');
+        entry.queuedRuns.delete(runId);
+        this.runMessageIds.delete(runId);
+        if (message.id !== interruptMessage.id && !seenMessageIds.has(message.id)) {
+          seenMessageIds.add(message.id);
+          oldMessages.push(message);
+        }
+      }
+      // 4. 取消 active / 已进入 executor 但尚未置 active 的 run。先记原因，防止
+      //    scheduler 在 handle attach 前取消时把 reason 固定成 'run cancelled'。
+      for (const runId of runningIds) {
+        this.interruptReasons.set(runId, 'interrupt');
+        this.scheduler.cancel(runId, 'interrupt');
+      }
+
+      // 5. 同步入队：打断消息在前，旧队列随后（submit 在返回 promise 前已 push）。
+      const submissions: Array<Promise<{ runId: string; handle: RunHandle }>> = [];
+      submissions.push(this.submitMessage(target, entry, interruptMessage));
+      for (const message of oldMessages) {
+        submissions.push(this.submitMessage(target, entry, message));
+      }
+      const submitted = await Promise.all(submissions);
+      submitted.forEach((item, index) => {
+        const message = index === 0 ? interruptMessage : oldMessages[index - 1];
+        if (message !== undefined) this.runMessageIds.set(item.runId, message.id);
+      });
+      this.emitForSession('agent.message.queued', target, entry.bodyId, {
+        state: target.state,
+        message_id: interruptMessage.id,
+        from: input.from,
+        ...(input.conversationId !== undefined ? { conversation_id: input.conversationId } : {}),
+      });
+      this.scheduleSnapshot();
+
+      const first = submitted[0];
+      if (first === undefined) {
+        throw new AgentError('invalid_input', 'interrupt produced no run');
+      }
+      return {
+        queued: true,
+        message_id: interruptMessage.id,
+        state: this.registry.get(target.id)?.state ?? target.state,
+        run_id: first.runId,
+        session_id: entry.bodyId,
+      };
+    });
+  }
+
+  /** 同一 agent 的打断重排串行执行（普通 admit 不经过此锁）。 */
+  private withBodyOp<T>(key: string, op: () => Promise<T>): Promise<T> {
+    const previous = this.bodyOps.get(key) ?? Promise.resolve();
+    const next = previous.then(op, op);
+    this.bodyOps.set(
+      key,
+      next.catch(() => {}),
+    );
+    return next;
   }
 
   /**
@@ -3433,6 +3671,16 @@ function readRequiredString(record: Record<string, unknown>, key: string): strin
   const value = record[key];
   if (!nonEmpty(value)) {
     throw new AgentError('invalid_input', `${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+/** 缺省 → false；存在但不是布尔 → invalid_input（不静默忽略）。 */
+function readOptionalBoolean(record: Record<string, unknown>, key: string): boolean {
+  const value = record[key];
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') {
+    throw new AgentError('invalid_input', `${key} must be a boolean`);
   }
   return value;
 }

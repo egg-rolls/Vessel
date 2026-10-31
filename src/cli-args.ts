@@ -157,7 +157,19 @@ export type AgentCommand =
       /** 0.19 S3：显式 workspace → 隐式建 / 复用 Team 并绑定 */
       workspace?: string;
     }
-  | { kind: 'send'; json: boolean; member: string; content: string }
+  | {
+      kind: 'send';
+      json: boolean;
+      member: string;
+      content: string;
+      /** 0.32：打断当前 run（可只带 --message-id）。 */
+      interrupt?: boolean;
+      /** 按 id 重投已有 inbox 消息；必须与 --interrupt 同用。 */
+      messageId?: string;
+      /** 标记为重要消息（渲染 `[!]`）。 */
+      important?: boolean;
+    }
+  | { kind: 'inbox'; json: boolean; member: string }
   | { kind: 'dispatch'; json: boolean; to: string; content: string; allowFork?: boolean }
   | {
       kind: 'rotate';
@@ -400,7 +412,7 @@ export interface CliArgs {
   statusCommand: { json: boolean } | null;
   /** 0.14：`vessel agents [--json]` */
   agentsCommand: { json: boolean } | null;
-  /** 0.17：`vessel agent create|send|close|list|dispatch|rotate` */
+  /** 0.17：`vessel agent create|send|inbox|close|list|dispatch|rotate` */
   agentCommand: AgentCommand | null;
   /** 0.19 S3：`vessel team list|get|post|members`；0.24：create|update|archive */
   teamCommand: TeamCommand | null;
@@ -2234,7 +2246,7 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `agent create|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate） */
+/** `agent create|send|inbox|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate；0.32 inbox） */
 function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
   if (sub === undefined || sub === '--help' || sub === '-h') {
@@ -2303,6 +2315,76 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
 
   if (sub === 'send') {
     let json = false;
+    let interrupt = false;
+    let important = false;
+    let messageId: string | undefined;
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--interrupt') {
+        interrupt = true;
+        continue;
+      }
+      if (a === '--important') {
+        important = true;
+        continue;
+      }
+      if (a === '--message-id') {
+        const value = readFlagValue(tail, i, '--message-id');
+        if (!value.ok) return value;
+        messageId = value.value;
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for agent send: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [member, ...contentParts] = positional;
+    if (member === undefined || member === '') {
+      return { ok: false, error: 'agent send requires <member> <content...>' };
+    }
+    const content = contentParts.join(' ');
+    if (messageId !== undefined && !interrupt) {
+      return { ok: false, error: 'agent send --message-id requires --interrupt' };
+    }
+    if (interrupt) {
+      if (content !== '' && messageId !== undefined) {
+        return { ok: false, error: 'agent send: pass either content or --message-id, not both' };
+      }
+      if (content === '' && messageId === undefined) {
+        return {
+          ok: false,
+          error: 'agent send --interrupt requires <content...> or --message-id <id>',
+        };
+      }
+    } else if (content === '') {
+      return { ok: false, error: 'agent send requires non-empty <content...>' };
+    }
+    args.agentCommand = {
+      kind: 'send',
+      json,
+      member,
+      content,
+      ...(interrupt ? { interrupt: true } : {}),
+      ...(messageId !== undefined ? { messageId } : {}),
+      ...(important ? { important: true } : {}),
+    };
+    return { ok: true, args };
+  }
+
+  if (sub === 'inbox') {
+    let json = false;
     const positional: string[] = [];
     for (const a of tail) {
       if (a === '--help' || a === '-h') {
@@ -2313,18 +2395,20 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
         json = true;
         continue;
       }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for agent inbox: ${a}` };
+      }
       positional.push(a);
     }
     if (args.help) return { ok: true, args };
-    const [member, ...contentParts] = positional;
+    const [member, extra] = positional;
     if (member === undefined || member === '') {
-      return { ok: false, error: 'agent send requires <member> <content...>' };
+      return { ok: false, error: 'agent inbox requires <member>' };
     }
-    const content = contentParts.join(' ');
-    if (content === '') {
-      return { ok: false, error: 'agent send requires non-empty <content...>' };
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for agent inbox: ${extra}` };
     }
-    args.agentCommand = { kind: 'send', json, member, content };
+    args.agentCommand = { kind: 'inbox', json, member };
     return { ok: true, args };
   }
 

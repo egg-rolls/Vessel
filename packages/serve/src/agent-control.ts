@@ -104,10 +104,15 @@ export interface AgentListLikeInput {
 /** `agents.send` 的单个条目（strict send：不 resume）。 */
 export interface AgentSendLikeInput {
   to: string;
+  /** `interrupt + message_id` 时可为空：正文取自 inbox 里的既有消息。 */
   content: string;
   conversation_id?: string;
   /** 合成 owner principal 的 agent id；缺省由 app 适配器使用 DEFAULT_OWNER。 */
   from?: string;
+  /** 0.32-D：打断当前 run，并把本次消息 / message_id 指定的 inbox 消息优先投递。 */
+  interrupt?: boolean;
+  message_id?: string;
+  important?: boolean;
 }
 
 /** `agents.dispatch` 的单个条目。 */

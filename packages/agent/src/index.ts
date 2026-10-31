@@ -21,6 +21,18 @@ export {
   type StoredConversation,
 } from './conversation-store.js';
 export {
+  AGENT_INBOX_VERSION,
+  type AgentInboxEntryInput,
+  type AgentInboxListEntry,
+  type AgentInboxPort,
+  AgentInboxStore,
+  type AgentInboxStoreOptions,
+  DEFAULT_MAX_INBOX_MESSAGES,
+  INBOX_READ_DEFAULT_LIMIT,
+  inboxPath,
+  type StoredInboxMessage,
+} from './inbox.js';
+export {
   canTransition,
   type MemberRecord,
   MemberRegistry,

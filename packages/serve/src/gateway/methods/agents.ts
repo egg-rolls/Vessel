@@ -422,11 +422,15 @@ const agentRotateResultSchema = {
 
 const agentSendEntrySchema = {
   type: 'object',
-  required: ['to', 'content'],
+  required: ['to'],
   properties: {
     to: { type: 'string', minLength: 1 },
     content: { type: 'string', minLength: 1 },
     conversation_id: { type: 'string', minLength: 1 },
+    // 0.32-D：打断 + 指定 inbox 消息 / 重要标记（additive，不新增方法）。
+    interrupt: { type: 'boolean' },
+    message_id: { type: 'string', minLength: 1 },
+    important: { type: 'boolean' },
   },
 };
 
@@ -1031,7 +1035,34 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           entries.map(async (entry): Promise<Prepared<AgentSendLikeInput>> => {
             const to = optionalEntryString(entry, 'to', 'agents.send');
             const content = optionalEntryString(entry, 'content', 'agents.send');
-            if (to === undefined || content === undefined) {
+            const messageId = optionalEntryString(entry, 'message_id', 'agents.send');
+            if (entry.interrupt !== undefined && typeof entry.interrupt !== 'boolean') {
+              return { failure: fail('invalid_params', 'interrupt must be a boolean') };
+            }
+            if (entry.important !== undefined && typeof entry.important !== 'boolean') {
+              return { failure: fail('invalid_params', 'important must be a boolean') };
+            }
+            const interrupt = entry.interrupt === true;
+            if (to === undefined) {
+              return { failure: fail('invalid_params', 'to must be a non-empty string') };
+            }
+            if (messageId !== undefined && !interrupt) {
+              return {
+                failure: fail('invalid_params', 'message_id requires interrupt: true'),
+              };
+            }
+            if (interrupt) {
+              if (content === undefined && messageId === undefined) {
+                return {
+                  failure: fail('invalid_params', 'interrupt requires content or message_id'),
+                };
+              }
+              if (content !== undefined && messageId !== undefined) {
+                return {
+                  failure: fail('invalid_params', 'pass either content or message_id, not both'),
+                };
+              }
+            } else if (content === undefined) {
               return {
                 failure: fail('invalid_params', 'to and content must be non-empty strings'),
               };
@@ -1043,9 +1074,12 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             return {
               input: {
                 to,
-                content,
+                content: content ?? '',
                 from,
                 ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+                ...(interrupt ? { interrupt: true } : {}),
+                ...(messageId !== undefined ? { message_id: messageId } : {}),
+                ...(entry.important === true ? { important: true } : {}),
               },
             };
           }),

@@ -43,7 +43,7 @@ export interface RunExecution {
  * - `shutdown` / `timeout`：checkpoint 落 `interrupted`，可 `--resume-run`；
  * - `user`：按用户取消处理，checkpoint 落 `cancelled`。
  */
-export type RunInterruptReason = 'shutdown' | 'timeout' | 'user';
+export type RunInterruptReason = 'shutdown' | 'timeout' | 'user' | 'interrupt';
 
 /** Run 选项 */
 export interface RunOptions {

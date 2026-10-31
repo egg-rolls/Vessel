@@ -160,6 +160,9 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
           ...(input.conversation_id !== undefined
             ? { conversation_id: input.conversation_id }
             : {}),
+          ...(input.interrupt !== undefined ? { interrupt: input.interrupt } : {}),
+          ...(input.message_id !== undefined ? { message_id: input.message_id } : {}),
+          ...(input.important !== undefined ? { important: input.important } : {}),
         })),
       });
       return {

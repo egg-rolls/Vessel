@@ -993,8 +993,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     }
   }
 
-  cancel(member: MemberRuntimeMember): void {
-    this.entries.get(member.session_id)?.runtime.interrupt?.('user');
+  cancel(member: MemberRuntimeMember, reason: RunInterruptReason = 'user'): void {
+    this.entries.get(member.session_id)?.runtime.interrupt?.(reason);
   }
 
   /**

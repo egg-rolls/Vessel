@@ -2,6 +2,7 @@
  * `vessel agent create|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate）。
  *
  * 只做参数映射与渲染；生命周期全部在 REPL owner 的 AgentService。
+ * `inbox` 是只读本地队列，由 `agent-inbox-command` 处理，不经过这里。
  * `--json` 原样输出端点结果，人类输出走 ui-style，错误码进 stderr。
  *
  * @module vessel/agent-command
@@ -23,6 +24,9 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
 }
+
+/** 走 owner RPC 的子命令；`inbox` 是本地只读命令，不在此列。 */
+type AgentOwnerCommand = Exclude<AgentCommand, { kind: 'inbox' }>;
 
 export interface AgentCommandOptions {
   dataDir: string;
@@ -83,7 +87,7 @@ function formatCloseResult(result: unknown): string {
   return `${ui.symbol('ok')} closed`;
 }
 
-function methodParams(command: AgentCommand): {
+function methodParams(command: AgentOwnerCommand): {
   method: AgentOwnerMethod;
   params: Record<string, unknown>;
 } {
@@ -106,7 +110,18 @@ function methodParams(command: AgentCommand): {
   if (command.kind === 'send') {
     return {
       method: 'agents.send',
-      params: { messages: [{ to: command.member, content: command.content }] },
+      params: {
+        messages: [
+          {
+            to: command.member,
+            // messageId 模式必须省略 content：gateway 拒绝空 content。
+            ...(command.messageId === undefined ? { content: command.content } : {}),
+            ...(command.interrupt === true ? { interrupt: true } : {}),
+            ...(command.messageId !== undefined ? { message_id: command.messageId } : {}),
+            ...(command.important === true ? { important: true } : {}),
+          },
+        ],
+      },
     };
   }
   if (command.kind === 'dispatch') {
@@ -214,7 +229,7 @@ function humanOutput(command: AgentCommand, result: unknown): string {
 
 /** 执行一个 agent 子命令；不抛错，错误转 exitCode / stderr */
 export async function runAgentCommand(
-  command: AgentCommand,
+  command: AgentOwnerCommand,
   options: AgentCommandOptions,
 ): Promise<CommandResult> {
   let record: AgentOwnerRecord;

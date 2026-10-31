@@ -8,6 +8,7 @@
 
 import { loadConfig, type VesselConfig } from '../../packages/config/src/index';
 import { runAgentCommand } from '../agent-command';
+import { runAgentInboxCommand } from '../agent-inbox-command';
 import { agentsCommand } from '../agents-command';
 import type { CliArgs } from '../cli-args';
 import { runUpdateCommand } from '../cli-update';
@@ -312,11 +313,12 @@ export const cliCommands: readonly CliCommand[] = [
     run: async (args) => {
       const command = args.agentCommand;
       if (command === null) return 1;
+      const dataDir = await resolveCommandDataDir();
+      const tenant = args.tenantArg !== null ? { tenantId: args.tenantArg } : {};
       return printCommandResult(
-        await runAgentCommand(command, {
-          dataDir: await resolveCommandDataDir(),
-          ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-        }),
+        command.kind === 'inbox'
+          ? await runAgentInboxCommand(command, { dataDir, ...tenant })
+          : await runAgentCommand(command, { dataDir, ...tenant }),
       );
     },
   },

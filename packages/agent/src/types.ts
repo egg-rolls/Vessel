@@ -12,6 +12,7 @@ import type {
   EventStream,
   Logger,
   RunEvent,
+  RunInterruptReason,
   RunOptions,
   RunStore,
   RuntimePermissionConfig,
@@ -259,7 +260,7 @@ export interface MemberRuntimePort {
    * 返回本轮最终文本；body 身份由 `member` 指定。
    */
   resume?(member: MemberRuntimeMember, runId: string, opts?: RunOptions): Promise<MemberTurnResult>;
-  cancel(member: MemberRuntimeMember): Promise<void> | void;
+  cancel(member: MemberRuntimeMember, reason?: RunInterruptReason): Promise<void> | void;
   dispose(member: MemberRuntimeMember): Promise<void> | void;
   /**
    * 身份变更通知（additive，可选）：只向成员上下文追加 `vessel:notice`，
@@ -589,6 +590,8 @@ export interface AdmitInput {
   conversation_id?: string;
   /** agents.send 语义：不自动恢复 gone 成员；dispatch/runs.start 缺省允许 */
   strict?: boolean;
+  /** 0.32-D：写入收件箱时的重要标记（只做标记，不改变调度）。 */
+  important?: boolean;
 }
 
 /** 统一准入结果；`session_id` 是 body id */
@@ -606,11 +609,21 @@ export interface ResumeResult extends AdmitResult {}
 /** 发送参数；`to` 可传成员 id 或 session id */
 export interface SendInput {
   to: string;
+  /** `interrupt + message_id` 时可为空：正文取自 inbox 里的既有消息。 */
   content: string;
   /** 发送者；缺省 DEFAULT_OWNER，private 成员只有 owner 能寻址 */
   from?: string;
   /** 会话分组；缺省由入口生成（0.19 S4） */
   conversation_id?: string;
+  /**
+   * 0.32-D：取消目标 body 当前 active run（reason `interrupt`），把本次消息
+   * （或 `message_id` 指定的 inbox 消息）作为下一条输入，排在现有队列之前。
+   */
+  interrupt?: boolean;
+  /** 指定要优先投递的 inbox 消息 id（无需重复 content；必须与 interrupt 同用）。 */
+  message_id?: string;
+  /** 写入收件箱时的重要标记（不改变调度；`message_id` 已存在时忽略）。 */
+  important?: boolean;
 }
 
 /** 批量发送 */

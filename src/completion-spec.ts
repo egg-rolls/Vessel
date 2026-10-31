@@ -355,7 +355,11 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
         flags: ['--json', '--name', '--model', '--visibility', '--system-prompt', '--workspace'],
         flagValues: { '--visibility': AGENT_VISIBILITIES },
       },
-      { name: 'send', flags: ['--json'] },
+      {
+        name: 'send',
+        flags: ['--json', '--interrupt', '--message-id', '--important'],
+      },
+      { name: 'inbox', flags: ['--json'] },
       { name: 'dispatch', flags: ['--json'] },
       { name: 'rotate', flags: ['--json', '--startup'] },
       { name: 'close', flags: ['--json'] },
