@@ -52,6 +52,7 @@ export function MemberDetail({
   onBackToMember,
   onOpenSession,
   onOpenBody,
+  embedded = false,
   initialDetail,
   initialSession,
   initialError,
@@ -152,59 +153,78 @@ export function MemberDetail({
   const status = memberStatus(member);
   const name = member.name?.trim() || shortAgentId(member.agent_id);
   const observedOnly = history.source === 'observed';
+  const memberMeta = (
+    <>
+      <span className="font-mono">{member.agent_id}</span>
+      <span
+        role="img"
+        className={`size-1.5 flex-none rounded-full ${
+          member.presence === 'live' ? 'bg-success' : 'border border-faint bg-transparent'
+        }`}
+        aria-label={member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone')}
+      />
+      <StatusChip
+        status={status.chipStatus}
+        label={t(status.labelKey)}
+        title={status.titleKey ? t(status.titleKey) : undefined}
+      />
+      <Badge>{t(roleLabelKey(roleOf(member)))}</Badge>
+      <span className="text-muted">
+        {t('team.member.visibility', { visibility: member.visibility })}
+      </span>
+    </>
+  );
 
   return (
     <div className="flex min-h-0 min-w-0 flex-col">
-      <header className="team-chat-head">
-        <div className="min-w-0">
-          <h1 className="font-serif text-title font-semibold wrap-anywhere">{name}</h1>
-          <div className="mt-1.25 flex flex-wrap items-center gap-2 text-sm text-muted">
-            <span className="font-mono">{member.agent_id}</span>
-            <span
-              role="img"
-              className={`size-1.5 flex-none rounded-full ${
-                member.presence === 'live' ? 'bg-success' : 'border border-faint bg-transparent'
-              }`}
-              aria-label={
-                member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone')
-              }
-            />
-            <StatusChip
-              status={status.chipStatus}
-              label={t(status.labelKey)}
-              title={status.titleKey ? t(status.titleKey) : undefined}
-            />
-            <Badge>{t(roleLabelKey(roleOf(member)))}</Badge>
-            <span className="text-muted">
-              {t('team.member.visibility', { visibility: member.visibility })}
-            </span>
+      {!embedded && (
+        <header className="team-chat-head">
+          <div className="min-w-0">
+            <h1 className="font-serif text-title font-semibold wrap-anywhere">{name}</h1>
+            <div className="mt-1.25 flex flex-wrap items-center gap-2 text-sm text-muted">
+              {memberMeta}
+            </div>
           </div>
-        </div>
-        <div className="flex flex-none flex-wrap justify-end gap-1.5">
-          <Button onClick={onBack}>{t('breadcrumb.team.chat')}</Button>
-        </div>
-      </header>
+          <div className="flex flex-none flex-wrap justify-end gap-1.5">
+            <Button onClick={onBack}>{t('breadcrumb.team.chat')}</Button>
+          </div>
+        </header>
+      )}
+
+      {embedded && (
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted">{memberMeta}</div>
+      )}
 
       {error && <StaleNotice message={t('team.error.stale')} onRetry={reload} />}
 
-      <div className="mx-auto flex w-full max-w-225 flex-col gap-5 px-8 py-5 pb-8 max-compact:px-4">
+      <div
+        className={
+          embedded
+            ? 'flex w-full flex-col gap-5'
+            : 'mx-auto flex w-full max-w-225 flex-col gap-5 px-8 py-5 pb-8 max-compact:px-4'
+        }
+      >
         <section className="team-body-card rounded-md border border-line bg-surface p-4">
           <h2 className="text-md font-semibold text-ink">{t('team.member.currentBody')}</h2>
           <dl className="team-body-meta">
             <div>
-              <dt>epoch</dt>
-              <dd className="font-mono tabular-nums">{member.epoch ?? '—'}</dd>
+              <dt>{t('team.member.sessionNumber')}</dt>
+              <dd className="font-mono tabular-nums">
+                {member.epoch !== undefined
+                  ? t('team.member.sessionIndex', { n: member.epoch })
+                  : '—'}
+              </dd>
             </div>
             <div>
-              <dt>session</dt>
+              <dt>{t('agents.detail.session')}</dt>
               <dd className="font-mono">{member.session_id ?? '—'}</dd>
             </div>
             <div>
-              <dt>state</dt>
+              <dt>{t('agents.filter.state')}</dt>
               <dd>{t(status.labelKey)}</dd>
             </div>
             <div>
-              <dt>presence</dt>
+              <dt>{t('agents.filter.presence')}</dt>
               <dd>
                 {member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone')}
               </dd>

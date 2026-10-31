@@ -403,8 +403,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.display.runtimeKind.other': 'Other',
   'settings.display.runtimeKind.other.hint': 'Unrecognized vessel:* context messages.',
 
-  // Team (0.19 S6). Technical terms (agent / run / session / Body / epoch /
-  // gateway / token / @ / Team / workspace) and error codes stay untranslated.
+  // Team (0.19 S6). Technical terms (agent / run / session / gateway / token /
+  // @ / Team / workspace) and error codes stay untranslated.
 
   'team.list.title': 'Teams',
   'team.list.description':
@@ -463,13 +463,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.system.join': '{name} joined the Team',
   'team.system.leave': '{name} left the Team',
   'team.system.archive': 'The Team was archived',
-  'team.system.rotate': '{name} rotated to a new Body',
-  'team.system.rotateFailed': '{name} failed to rotate its Body',
+  'team.system.rotate': '{name} started a new session',
+  'team.system.rotateFailed': '{name} failed to start a new session',
   'team.system.fork': 'agent forked',
   'team.system.unknown': 'Team system event',
 
   'team.delivery.queued': 'Queued',
-  'team.delivery.queuedRotating': 'Waiting for Body rotation',
+  'team.delivery.queuedRotating': 'Waiting for the next session',
   'team.delivery.queuedForked': 'Forked and queued',
   'team.delivery.rejected': 'Rejected',
   'team.delivery.error': 'Delivery failed',
@@ -501,21 +501,22 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.pending.ask': 'Question',
 
   'team.member.title': 'Member',
-  'team.member.currentBody': 'Current Body',
-  'team.member.liveBodies': 'Live Bodies ({count})',
+  'team.member.currentBody': 'Current session',
+  'team.member.liveBodies': 'Active sessions ({count})',
   'team.member.primaryBadge': 'primary',
-  'team.member.openBody': 'Open this Body session',
-  'team.member.retiredBodies': 'Retired Bodies',
-  'team.member.epoch': 'epoch {epoch}',
+  'team.member.openBody': 'Open this session',
+  'team.member.retiredBodies': 'Past sessions',
+  'team.member.sessionNumber': 'Session',
+  'team.member.sessionIndex': 'Session {n}',
   'team.member.session': 'session {session}',
   'team.member.startedAt': 'Started {time}',
   'team.member.retiredAt': 'Retired {time}',
   'team.member.observedAt': 'Observed {time}',
-  'team.member.empty': 'No retired Bodies',
+  'team.member.empty': 'No past sessions',
   'team.member.viewTranscript': 'View read-only transcript',
   'team.member.visibility': 'Visibility {visibility}',
   'team.member.observedOnly':
-    'Observed during this page session; after a refresh only the current Body is shown.',
+    'Observed during this page session; after a refresh only the current session is shown.',
   'team.member.currentSession': 'View current session',
   'team.member.peer': 'member',
   'team.member.contractor': 'temporary',
@@ -546,7 +547,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.a11y.deliveryQueued': 'Delivery queued',
   'team.a11y.openMembers': 'Open member list',
   'team.a11y.closeMembers': 'Close member list',
-  'team.a11y.bodyHistory': 'Body history',
+  'team.a11y.bodyHistory': 'Session history',
 
   // 0.24 / 0.25 network IA: navigation / breadcrumbs
   'nav.domain.hub': 'Hub',
@@ -725,7 +726,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'agents.presence.gone': 'gone',
   'agents.partialErrors': '{count} Team details failed to load',
   'agents.loadingRosters': 'Aggregating node rosters…',
-  'agents.open': 'Open member',
   'breadcrumb.team.chat': 'Team chat',
   'breadcrumb.team.member': 'Member',
   'hub.add.title': 'Add node',
@@ -781,9 +781,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'agents.edit.title': 'Edit agent',
   'agents.back': 'Back to Agents',
   'agents.form.model': 'Model',
-  'agents.form.modelHint': 'Applies from the next Body; leave blank to keep unchanged.',
+  'agents.form.modelHint': 'Applies from the next session; leave blank to keep unchanged.',
   'agents.form.systemPrompt': 'System prompt',
-  'agents.form.systemPromptHint': 'Applies from the next Body; leave blank to keep unchanged.',
+  'agents.form.systemPromptHint': 'Applies from the next session; leave blank to keep unchanged.',
   'agents.form.kind': 'Type',
   'agents.form.kindPeer': 'Member (requires Team)',
   'agents.form.kindContractor': 'Temporary (Team optional)',

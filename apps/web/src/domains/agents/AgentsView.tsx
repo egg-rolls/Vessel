@@ -27,6 +27,7 @@ import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { useNodeNames } from '../nodes/useNodeNames';
+import { BodyTranscript } from '../team/BodyTranscripts';
 import { AgentCreateDialog } from './AgentCreateDialog';
 import { AgentDetailView } from './AgentDetailView';
 import { AgentEditView } from './AgentEditView';
@@ -34,6 +35,7 @@ import { AgentListRow } from './AgentListRow';
 import { filterAgentsByQuery } from './agent-search';
 import {
   type AgentHashTarget,
+  agentBodyHash,
   agentDetailHash,
   agentEditHash,
   agentHashTarget,
@@ -229,7 +231,18 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
       );
     }
 
-    const targetTeam = targetAgent.team;
+    if (target.bodyId) {
+      return (
+        <BodyTranscript
+          client={teamControl(targetNode)}
+          hasToken={hasTokenFor(targetNode)}
+          epoch={epoch}
+          bodyId={target.bodyId}
+          onBackToMember={() => openAgent(target.nodeKey, target.agentId)}
+        />
+      );
+    }
+
     return (
       <AgentDetailView
         node={targetNode}
@@ -237,20 +250,15 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
         onBack={backToList}
         onEdit={() => openEdit(target.nodeKey, target.agentId)}
         onSaved={reloadRoster}
-        {...(targetTeam
-          ? {
-              onOpenTeam: () =>
-                navigate({
-                  domain: 'teams',
-                  nodeKey: target.nodeKey,
-                  teamId: targetTeam.team_id,
-                  agentId: target.agentId,
-                }),
-            }
-          : {})}
         onOpenSession={() => {
           const sessionId = targetAgent.member.session_id;
           if (sessionId) navigate({ domain: 'chat', sessionId });
+        }}
+        onOpenBody={(sessionId) => {
+          window.location.hash = withQuery(
+            agentBodyHash(target.nodeKey, target.agentId, sessionId),
+            filterQuery,
+          );
         }}
       />
     );
@@ -292,7 +300,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     );
   } else {
     body = (
-      <ul className="flex flex-col gap-2">
+      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {filtered.map((agent) => (
           <AgentListRow
             key={`${nodeKeyOf(agent.node)}:${agent.team?.team_id ?? '-'}:${agent.member.agent_id}`}

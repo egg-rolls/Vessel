@@ -1,7 +1,8 @@
 /**
- * Agent 只读详情 + Edit / Close 入口。
+ * Agent 详情 + Edit / Close 入口。
  *
- * 数据复用 Agents 列表已加载的 roster；agent_id 只在 Advanced details 出现一次。
+ * Team 成员复用 `MemberDetail` 面板（嵌入模式，唯一一份成员面板）；
+ * 无 Team 归属时退回键值信息。数据复用 Agents 列表已加载的 roster。
  * Close 走警告确认，并严格处理 `{results:[{ok:false}]}` 的失败。
  */
 import { useState } from 'react';
@@ -10,12 +11,13 @@ import { PageHeader } from '../../components/PageHeader';
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { Button, KeyValueList, Section } from '../../components/ui';
-import { useConnection } from '../../gateway/ConnectionProvider';
+import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { RosterAgent } from '../../gateway/team-roster';
 import { t, useLocale } from '../../i18n';
 import { useNodeNames } from '../nodes/useNodeNames';
+import { MemberDetail } from '../team/MemberDetail';
 import { roleLabelKey, roleOf } from '../team/role';
 import { agentErrorText } from './agent-errors';
 import { agentDisplayName } from './agent-search';
@@ -26,22 +28,22 @@ export function AgentDetailView({
   onBack,
   onEdit,
   onSaved,
-  onOpenTeam,
   onOpenSession,
+  onOpenBody,
 }: {
   node: NodeView;
   agent: RosterAgent;
   onBack: () => void;
   onEdit: () => void;
   onSaved: () => void;
-  /** 没有 Team 归属时不显示 Team 入口。 */
-  onOpenTeam?: () => void;
   onOpenSession: () => void;
+  onOpenBody: (sessionId: string) => void;
 }) {
   useLocale();
   const toast = useToast();
-  const { tenantId } = useConnection();
-  const { teamControl } = useNodes();
+  const { tenantId, epoch, tenantEpoch } = useConnection();
+  const { teamControl, hasTokenFor } = useNodes();
+  const snapshot = useEventSnapshot();
   const nodeNames = useNodeNames();
   const [closeOpen, setCloseOpen] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -94,80 +96,91 @@ export function AgentDetailView({
         }
       />
       <div className="mt-5 flex flex-col gap-4">
-        <Section title={t('agents.detail.title')}>
-          <KeyValueList
-            items={[
-              {
-                key: 'node',
-                label: t('agents.filter.node'),
-                value: nodeNames.get(nodeKeyOf(node)) ?? '—',
-              },
-              {
-                key: 'team',
-                label: t('agents.filter.team'),
-                value:
-                  agent.team && onOpenTeam ? (
-                    <Button variant="link" onClick={onOpenTeam}>
-                      {agent.team.name || agent.team.team_id}
+        {agent.team ? (
+          <MemberDetail
+            embedded
+            client={teamControl(node)}
+            hasToken={hasTokenFor(node)}
+            epoch={epoch}
+            tenantEpoch={tenantEpoch}
+            teamId={agent.team.team_id}
+            memberId={member.agent_id}
+            nodeKey={nodeKeyOf(node)}
+            events={node.current ? snapshot.entries : []}
+            onBack={onBack}
+            onBackToMember={onBack}
+            onOpenSession={onOpenSession}
+            onOpenBody={onOpenBody}
+          />
+        ) : (
+          <Section title={t('agents.detail.title')}>
+            <KeyValueList
+              items={[
+                {
+                  key: 'node',
+                  label: t('agents.filter.node'),
+                  value: nodeNames.get(nodeKeyOf(node)) ?? '—',
+                },
+                {
+                  key: 'team',
+                  label: t('agents.filter.team'),
+                  value: '—',
+                },
+                {
+                  key: 'role',
+                  label: t('team.role.label'),
+                  value: t(roleLabelKey(roleOf(member))),
+                },
+                {
+                  key: 'state',
+                  label: t('agents.filter.state'),
+                  value: <StatusChip status={member.state} />,
+                },
+                {
+                  key: 'presence',
+                  label: t('agents.filter.presence'),
+                  value: t(`agents.presence.${member.presence}`),
+                },
+                {
+                  key: 'membership',
+                  label: t('agents.detail.membership'),
+                  value: t(`team.membership.${member.membership}`),
+                },
+                {
+                  key: 'visibility',
+                  label: t('agents.detail.visibility'),
+                  value: <span className="font-mono">{member.visibility}</span>,
+                },
+                {
+                  key: 'session',
+                  label: t('agents.detail.session'),
+                  value: member.session_id ? (
+                    <Button variant="link" onClick={onOpenSession} disabled={!node.current}>
+                      {t('team.member.currentSession')}
                     </Button>
                   ) : (
                     '—'
                   ),
-              },
-              {
-                key: 'role',
-                label: t('team.role.label'),
-                value: t(roleLabelKey(roleOf(member))),
-              },
-              {
-                key: 'state',
-                label: t('agents.filter.state'),
-                value: <StatusChip status={member.state} />,
-              },
-              {
-                key: 'presence',
-                label: t('agents.filter.presence'),
-                value: t(`agents.presence.${member.presence}`),
-              },
-              {
-                key: 'membership',
-                label: t('agents.detail.membership'),
-                value: t(`team.membership.${member.membership}`),
-              },
-              {
-                key: 'visibility',
-                label: t('agents.detail.visibility'),
-                value: <span className="font-mono">{member.visibility}</span>,
-              },
-              {
-                key: 'session',
-                label: t('agents.detail.session'),
-                value: member.session_id ? (
-                  <Button variant="link" onClick={onOpenSession} disabled={!node.current}>
-                    {t('team.member.currentSession')}
-                  </Button>
-                ) : (
-                  '—'
-                ),
-              },
-            ]}
-          />
-          <details className="mt-3 border-t border-line pt-2">
-            <summary className="cursor-pointer text-sm text-faint">
-              {t('agents.detail.advanced')}
-            </summary>
-            <KeyValueList
-              className="mt-2"
-              items={[
-                {
-                  key: 'agentId',
-                  label: t('agents.detail.agentId'),
-                  value: <span className="font-mono">{member.agent_id}</span>,
                 },
               ]}
             />
-          </details>
-        </Section>
+            <details className="mt-3 border-t border-line pt-2">
+              <summary className="cursor-pointer text-sm text-faint">
+                {t('agents.detail.advanced')}
+              </summary>
+              <KeyValueList
+                className="mt-2"
+                items={[
+                  {
+                    key: 'agentId',
+                    label: t('agents.detail.agentId'),
+                    value: <span className="font-mono">{member.agent_id}</span>,
+                  },
+                ]}
+              />
+            </details>
+          </Section>
+        )}
       </div>
 
       {closeOpen && (

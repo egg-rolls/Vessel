@@ -29,6 +29,8 @@ export interface MemberDetailProps {
   onBackToMember: () => void;
   onOpenSession: (sessionId: string) => void;
   onOpenBody: (sessionId: string) => void;
+  /** 嵌在外部详情页里时不再渲染自己的标题栏。 */
+  embedded?: boolean;
   initialDetail?: TeamDetail;
   initialSession?: SessionDetail;
   initialError?: { message: string; code?: string };

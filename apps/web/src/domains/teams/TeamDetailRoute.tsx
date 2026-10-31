@@ -15,7 +15,7 @@ import { t, useLocale } from '../../i18n';
 import { resourceData } from '../../state/useResource';
 import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
-import { MemberDetail } from '../team/MemberDetail';
+import { agentBodyHash, agentDetailHash } from '../agents/agent-url';
 import { TeamChat } from '../team/TeamChat';
 import { TeamEditView } from './TeamEditView';
 import { TeamNodeBadge } from './TeamNodeBadge';
@@ -74,6 +74,19 @@ export function TeamDetailRoute({
     return () => window.removeEventListener('hashchange', sync);
   }, [route.nodeKey, route.teamId]);
 
+  // 成员面板已收敛到 Agents 域：旧 `#/teams/.../agents/<id>` 深链重定向过去。
+  useEffect(() => {
+    if (!route.agentId) return;
+    const hash = route.bodyId
+      ? agentBodyHash(nodeKey, route.agentId, route.bodyId)
+      : agentDetailHash(nodeKey, route.agentId);
+    if (window.location.hash === hash) return;
+    // replaceState 不产生历史记录，也不会自己触发 hashchange；显式通知壳层重解析。
+    // 延后到微任务，等父级 useHashRoute 的监听注册完成。
+    window.history.replaceState(null, '', hash);
+    queueMicrotask(() => window.dispatchEvent(new Event('hashchange')));
+  }, [route.agentId, route.bodyId, nodeKey]);
+
   const backToDetail = () => {
     window.location.hash = formatRoute({
       domain: 'teams',
@@ -97,45 +110,8 @@ export function TeamDetailRoute({
   const currentPermissions = node.current ? permissions : [];
   const currentAsks = node.current ? asks : [];
 
-  if (route.agentId) {
-    return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-        <div className="teams-detail-head">
-          <TeamNodeBadge node={node} />
-        </div>
-        <MemberDetail
-          client={control}
-          hasToken={hasToken}
-          epoch={epoch}
-          tenantEpoch={tenantEpoch}
-          teamId={route.teamId}
-          memberId={route.agentId}
-          nodeKey={nodeKey}
-          {...(route.bodyId ? { bodyId: route.bodyId } : {})}
-          events={currentEvents}
-          onBack={() => navigate({ domain: 'teams', nodeKey: route.nodeKey, teamId: route.teamId })}
-          onBackToMember={() =>
-            navigate({
-              domain: 'teams',
-              nodeKey: route.nodeKey,
-              teamId: route.teamId,
-              agentId: route.agentId,
-            })
-          }
-          onOpenSession={(sessionId) => navigate({ domain: 'chat', sessionId })}
-          onOpenBody={(sessionId) =>
-            navigate({
-              domain: 'teams',
-              nodeKey: route.nodeKey,
-              teamId: route.teamId,
-              agentId: route.agentId,
-              bodyId: sessionId,
-            })
-          }
-        />
-      </div>
-    );
-  }
+  // 重定向进行中：不渲染群聊，避免旧成员深链闪一帧。
+  if (route.agentId) return null;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
@@ -162,14 +138,10 @@ export function TeamDetailRoute({
         onRespondAsk={(requestId, answers) => {
           void respondAsk(requestId, answers);
         }}
-        onOpenMember={(agentId) =>
-          navigate({
-            domain: 'teams',
-            nodeKey: route.nodeKey,
-            teamId: route.teamId,
-            agentId,
-          })
-        }
+        onOpenMember={(agentId) => {
+          // 成员面板只在 Agents 域渲染；这里直接切到同一条 agents 深链。
+          window.location.hash = agentDetailHash(nodeKey, agentId);
+        }}
         onOpenSession={(sessionId) => navigate({ domain: 'chat', sessionId })}
         onBackToList={() => navigate({ domain: 'teams' })}
       />

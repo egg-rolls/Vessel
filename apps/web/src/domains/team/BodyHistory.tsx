@@ -22,7 +22,7 @@ export function BodyHistoryList({
             <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
               <span className="font-mono">{body.session_id}</span>
               <span className="text-muted tabular-nums">
-                {t('team.member.epoch', { epoch: body.epoch })}
+                {t('team.member.sessionIndex', { n: body.epoch })}
               </span>
               <span className="text-muted tabular-nums">
                 {t('team.member.observedAt', { time: formatTimestamp(body.observed_at) })}
@@ -47,7 +47,7 @@ export function BodyHistoryList({
           <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
             <span className="font-mono">{body.session_id}</span>
             <span className="text-muted tabular-nums">
-              {t('team.member.epoch', { epoch: body.epoch })}
+              {t('team.member.sessionIndex', { n: body.epoch })}
             </span>
             <span className="text-muted tabular-nums">
               {t('team.member.startedAt', { time: formatTimestamp(body.started_at) })}
@@ -100,7 +100,7 @@ export function LiveBodiesList({
               {primary && <Badge>{t('team.member.primaryBadge')}</Badge>}
               {body.epoch !== undefined && (
                 <span className="text-muted tabular-nums">
-                  {t('team.member.epoch', { epoch: body.epoch })}
+                  {t('team.member.sessionIndex', { n: body.epoch })}
                 </span>
               )}
               {body.state && <span className="font-mono text-muted">{body.state}</span>}
