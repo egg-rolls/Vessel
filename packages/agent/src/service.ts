@@ -557,6 +557,9 @@ export class AgentServiceImpl implements AgentService {
             dataDir,
             tenantId: options.tenantId,
             logger: this.logger,
+            ...(options.inboxMaxMessages !== undefined
+              ? { maxMessages: options.inboxMaxMessages }
+              : {}),
           })
         : undefined;
     if (this.inbox !== undefined) this.runtime.attachInbox?.(this.inbox);

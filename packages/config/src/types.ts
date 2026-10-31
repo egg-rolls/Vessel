@@ -83,6 +83,13 @@ export interface AgentConfig {
    */
   temporaryTtlHours?: number;
   /**
+   * 每个成员持久化收件箱的消息条数上限（0.32；默认 200）。
+   *
+   * 超出时按最旧裁剪（`AgentInboxStore` 的 `maxMessages`）。缺省不写入配置，
+   * 由 store 使用 `DEFAULT_MAX_INBOX_MESSAGES`。
+   */
+  inboxMaxMessages?: number;
+  /**
    * 默认工作目录（0.11.1，DECISION-022 §2.4）。
    * 支持 `~`；相对路径按进程 cwd 解析为绝对路径（由装配层解析，validator 只校验类型）。
    * 优先级：工具参数 `cwd` > `agent.cwd` > `process.cwd()`。

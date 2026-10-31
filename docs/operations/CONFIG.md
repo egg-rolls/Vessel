@@ -274,6 +274,7 @@ agent:
   permission_mode: bridge    # bridge | allow | deny；缺省交互 bridge、headless allow
   read_only_tools: [read]    # deny 模式保留的工具
   model: gpt-4               # 可选：成员默认模型
+  inbox_max_messages: 200    # 成员收件箱上限；默认 200，按最旧裁剪
   # limits / termination 缺省继承顶层；cwd 见 §2.4
 ```
 
@@ -284,10 +285,11 @@ agent:
 - **`agent.follow_replies`**（默认 `false`）：回复在下一次 `BeforeLlm` 注入父会话；不会自动开启新的父 turn。
 - **`agent.model` / `agent.limits` / `agent.termination`**：成员默认模型与限额；`limits` / `termination` 缺省继承顶层，不放大。
 - **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
-- **工具数（实测）**：默认 4（`bash` / `read` / `edit` / `agent`）；显式 `agent.enabled: false` 为 3；真交互 REPL（TTY）或 gateway/serve 默认 5（+`ask_user`）；交互且关闭 agent 为 4。
+- **`agent.inbox_max_messages`**（0.32，默认 `200`）：每个成员持久化收件箱的消息条数上限，超出时按最旧裁剪；只影响成员收件箱（`agent` 工具投递给 busy / rotating 成员的消息），不影响会话历史。缺省不写入配置即用 200；必须是正整数。
+- **工具数（实测）**：默认 5（`bash` / `read` / `edit` / `agent` / `inbox`）；真交互 REPL（TTY）或 gateway/serve 默认 6（+`ask_user`）；显式 `agent.enabled: false` 时不启用成员 runtime，因而不注册成员工具面（root 只剩 `bash` / `read` / `edit`）。
 - **owner 端点**：只由交互 REPL / serve 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`--run` / headless / 管道不监听 owner 端口、不写记录，但 AgentService / TeamService 仍在进程内可用。`vessel agent create|send|dispatch|close|list|rotate [--json]` 经该记录 attach。
 - **rotate（0.19，ADR-092）**：成员可调用 `agent.rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 owner 端点 `agent.rotate` 或 `vessel agent rotate <to> --startup <text> [--json]`。`--startup` 必填且非空；`rotated` 退出 0、`failed` 退出 1。失败保持旧身体，不自动 fork / 重试；`rotating` 期间消息排队。
-- **已知限制**：消息队列只在内存，重启丢失未处理消息；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **58**（见 §2.13）。
+- **已知限制**：排队消息写入 per-agent inbox（上限 `agent.inbox_max_messages`），重启后可由模型经 `inbox` 工具读取；已开始执行的一轮仍需显式 resume；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **58**（见 §2.13）。
 
 ### 2.12 Team 声明（0.19 S3，ADR-091；S4 增加 policy.permission / policy.budget）
 

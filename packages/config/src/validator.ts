@@ -1964,6 +1964,20 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         value: agent.temporaryTtlHours,
       });
     }
+    // 0.32：成员收件箱上限。必须为正整数（0 / 负数 / 非整数 / 非有限均拒绝）；
+    // 缺省不传，由 store 使用默认 200。
+    if (
+      agent.inboxMaxMessages !== undefined &&
+      (typeof agent.inboxMaxMessages !== 'number' ||
+        !Number.isInteger(agent.inboxMaxMessages) ||
+        agent.inboxMaxMessages <= 0)
+    ) {
+      errors.push({
+        path: 'agent.inboxMaxMessages',
+        message: 'agent.inboxMaxMessages must be a positive integer',
+        value: agent.inboxMaxMessages,
+      });
+    }
 
     // 0.1.0 只有 systemPrompt 被消费——其余字段明确警告，不静默忽略。
     for (const key of ['name', 'temperature', 'maxTokens'] as const) {
@@ -2421,6 +2435,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'readOnlyTools',
     'ownerId',
     'temporaryTtlHours',
+    'inboxMaxMessages',
   ],
   session: ['backend', 'storagePath', 'maxHistory'],
   permission: ['autoApprove', 'neverAutoApprove'],

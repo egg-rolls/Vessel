@@ -122,6 +122,11 @@ export interface AgentServiceWiringOptions {
    * 定时器由装配层持（`AgentService` 自身无定时器，否则 CLI / smoke / probe 会挂住）。
    */
   temporaryTtlHours?: number;
+  /**
+   * 0.32：成员收件箱消息上限（条）；缺省 200（AgentInboxStore 默认）。
+   * 只在 `dataDir` 存在时生效。
+   */
+  inboxMaxMessages?: number;
 }
 
 export interface AgentServiceWiring {
@@ -348,6 +353,9 @@ export async function createAgentServiceWiring(
     ...(budget !== undefined ? { budget } : {}),
     ...(options.temporaryTtlHours !== undefined
       ? { temporaryTtlHours: options.temporaryTtlHours }
+      : {}),
+    ...(options.inboxMaxMessages !== undefined
+      ? { inboxMaxMessages: options.inboxMaxMessages }
       : {}),
     snapshot: { enabled: true },
   });

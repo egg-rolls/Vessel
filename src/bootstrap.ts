@@ -1218,6 +1218,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(config.agent?.temporaryTtlHours !== undefined
         ? { temporaryTtlHours: config.agent.temporaryTtlHours }
         : {}),
+      ...(config.agent?.inboxMaxMessages !== undefined
+        ? { inboxMaxMessages: config.agent.inboxMaxMessages }
+        : {}),
     });
     // 0.27：回填本机投递端口（federation 端口的 getter 在此之后才读得到）。
     localHuman = createTeamHumanDelivery(wiring.team);

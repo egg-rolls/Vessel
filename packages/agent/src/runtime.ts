@@ -35,7 +35,7 @@ import {
   type Usage,
   type UsageLimits,
 } from '@vessel-agent/core';
-import { type AgentInboxPort, createInboxHook } from './inbox.js';
+import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './inbox.js';
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
 import type {
   AgentMessage,
@@ -688,7 +688,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly entries = new Map<string, MemberRuntimeEntry>();
   /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界文本队列） */
   private readonly pendingNotices = new Map<string, string[]>();
-  /** 0.32：由装配层挂上的收件箱；spawn 时据此注册 `vessel:inbox` hook */
+  /** 0.32：由装配层挂上的收件箱；spawn 时据此注册 notice hook 与 `inbox` 工具 */
   private inbox?: AgentInboxPort;
 
   constructor(options: InProcessMemberRuntimeOptions) {
@@ -738,35 +738,41 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     const tools = this.selectTools(mode).map((tool) =>
       this.restrictPermissions(tool, member.id, mode),
     );
+    // 0.32：只有 spawn 时已 attach 收件箱的 Body 才注册 notice hook 与 inbox 工具；
+    // 开关放在可变对象里，`disableInbox` 之后（rotate / retire 的旧 Body）hook 直接返回。
+    const inbox = this.inbox;
+    const inboxState = inbox !== undefined ? { enabled: true } : undefined;
+    const inboxTool =
+      inbox !== undefined
+        ? this.restrictPermissions(createInboxTool({ inbox, agentId: member.id }), member.id, mode)
+        : undefined;
     const pluginHost = new MemoryPluginHost();
     for (const hook of this.pluginHost?.getHooks() ?? []) pluginHost.registerHook(hook);
     for (const guardrail of this.pluginHost?.getGuardrails() ?? []) {
       pluginHost.registerGuardrail(guardrail);
     }
     for (const tool of tools) pluginHost.registerTool(tool);
+    // inbox 工具只读本地队列，不是工作区能力：deny 模式也注册。
+    if (inboxTool !== undefined) pluginHost.registerTool(inboxTool);
 
-    const selfCard = this.buildSelfCard(member, model, tools);
+    const selfCard = this.buildSelfCard(
+      member,
+      model,
+      inboxTool !== undefined ? [...tools, inboxTool] : tools,
+    );
     const events = new MemoryEventStream();
-    // 0.32：只有 spawn 时已 attach 收件箱的 Body 才注册注入 hook；开关放在可变对象里，
-    // `disableInbox` 之后（rotate / retire 的旧 Body）hook 直接返回、不再取消息。
-    const inbox = this.inbox;
-    const inboxState = inbox !== undefined ? { enabled: true } : undefined;
     if (inbox !== undefined && inboxState !== undefined) {
       pluginHost.registerHook(
-        createInboxHook({
+        createInboxNoticeHook({
           inbox,
           agentId: member.id,
           isEnabled: () => inboxState.enabled,
-          onDelivered: ({ runId, sessionId, messages }) => {
+          onNotified: ({ runId, unread }) => {
+            // 人类可见的提示：模型侧另有一条 `vessel:notice` 尾消息（不含正文）。
             events.publish({
-              type: 'agent.inbox.delivered',
+              type: 'runtime.notice',
               run_id: runId,
-              data: {
-                agent_id: member.id,
-                session_id: sessionId ?? member.session_id,
-                count: messages.length,
-                message_ids: messages.map((message) => message.id),
-              },
+              data: { scope: 'inbox', summary: `[inbox] ${unread} unread message(s)`, ok: true },
               ts: Date.now(),
             });
           },
@@ -1164,6 +1170,17 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     const tools = this.selectTools(entry.mode, source).map((tool) =>
       this.restrictPermissions(tool, entry.memberId, entry.mode),
     );
+    // 工具热刷新会清空并重注册整个宿主；inbox 工具不在父宿主里，必须一起补回。
+    const inbox = this.inbox;
+    if (inbox !== undefined && entry.inboxState !== undefined) {
+      tools.push(
+        this.restrictPermissions(
+          createInboxTool({ inbox, agentId: entry.memberId }),
+          entry.memberId,
+          entry.mode,
+        ),
+      );
+    }
     try {
       for (const existing of previous) entry.pluginHost.unregisterTool(existing.name);
       for (const tool of tools) entry.pluginHost.registerTool(tool);

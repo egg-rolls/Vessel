@@ -305,7 +305,7 @@ export interface MemberRuntimePort {
   /**
    * 0.32（additive，可选）：挂上按 agent_id 的持久化收件箱。
    *
-   * 之后 spawn 的每个 Body 注册 `vessel:inbox` BeforeLlm hook；传 undefined 关闭。
+   * 之后 spawn 的每个 Body 注册未读 notice hook 与 `inbox` 工具；传 undefined 关闭。
    * 不新增 RPC / DTO。
    */
   attachInbox?(inbox: AgentInboxPort | undefined): void;
@@ -855,6 +855,11 @@ export interface AgentServiceOptions {
    * 永不回收。判据是**持久化**的 `max(lastSeen, body.lastActiveAt)`，不读内存 entry。
    */
   temporaryTtlHours?: number;
+  /**
+   * 0.32：每个成员持久化收件箱的消息条数上限；缺省 200（store 默认）。
+   * 只在有 `dataDir` 时可生效。
+   */
+  inboxMaxMessages?: number;
   /** body 跨进程租约；缺省无锁 */
   bodyLease?: BodyLeasePort;
   /** durable resume 用 checkpoint 存储；缺省禁止 resume */
