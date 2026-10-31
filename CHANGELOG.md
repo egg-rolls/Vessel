@@ -9,6 +9,32 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [0.30.0] - 2026-10-31
+
+> 0.30.0（基于 0.29.0，未发布）：Web 产物自愈、Tasks 面退场、诊断页补齐、Web 大文件拆分。
+> 完整记录见 [`docs/versions/0.30.0.md`](docs/versions/0.30.0.md)。未 tag、未 publish。
+
+### Added
+
+- **Web 产物自愈**：gateway 启动发现 `dist` 落后于 `src` 时不阻塞，后台重建；bundle 指纹与
+  `dist/build.json` 的 `builtAt` 比对，已开页面提示刷新；无法判断时保持静默。
+- **诊断页**：补 runtime / MCP / plugins / config sources；`health.get` 透传 `wait_reason`；
+  复用既有 RPC，不新增方法。
+
+### Changed
+
+- **删除 Tasks 面（breaking）**：Web Tasks 页与 `tasks.list` / `tasks.get` RPC、
+  `AgentTaskEntry`、`AgentRegistryEntry.delegate`、`state/tasks` 一并退场。
+- **Web 大文件拆分**：10 个 >500 行逻辑文件按域拆为容器 + hooks/子视图，导入路径与导出面不变；
+  最大逻辑文件降至 550 行（i18n 除外）。
+
+### Fixed
+
+- 已结束 run 的时长不再增长；去掉重复 tenant chip。
+- 未启用的飞书 / MCP 渠道显示为「未启用」，不再画成加载失败。
+- Observe / Runs / Settings / Integrations 切 tab 重置滚动。
+- `hello.features` 只在 default tenant 实际有渠道时含 `feishu`。
+
 ## [0.29.0] - 2026-10-30
 
 > 0.29.0（基于 0.28.0，未发布）：prompt cache 的计量、命中率与压缩修复。完整记录见

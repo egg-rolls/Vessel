@@ -5,37 +5,36 @@
 
 ## 版本
 
-**0.29.0（2026-10-30）** — 未 tag、未 publish。版本号以根 `package.json` 为唯一来源；
+**0.30.0（2026-10-31）** — 未 tag、未 publish。版本号以根 `package.json` 为唯一来源；
 manifest 与 `CHANGELOG.md` 一致。
 
 ## 已合入
 
-- **prompt cache 计量**：`prompt_tokens` 在所有 provider 上统一为「含缓存的全部输入」
-  （U1）。`UsageStats`、事件、session、checkpoint 与 resume 都带
-  `cacheReadTokens` / `cacheCreationTokens`；provider 不报告缓存时字段**缺省**而非 0。
-- **命中率**：`MetricsSnapshot.llm` 聚合两个缓存计数；Web Observe 与 TUI `/status`、
-  run 收尾提示显示「输入占比」与「前缀健康度」两个口径。比率是展示层派生量，不进快照。
-- **压缩判断用真实输入规模**：修掉「缓存开启后 `prompt_tokens` 只剩残差、压缩永不触发」
-  的缺陷。`token_count` 是已发布字段，其值随之变化。
-- **Team 即工作区**：打开目录即得到对应 Team；新会话建临时 agent（不是给 `main` 加 body），
-  闲置回收但会话可复活。三入口（本地 TUI / `--connect` / Web）同走 `runs.start → admit`。
-- **`AgentRole = 'member' | 'temporary'`**：`single` 已删除，`main` 是普通成员；
-  一个 agent 恰好一具 live body（rotate 窗口内允许两具）。
-- **寻址**：1 段本机 agent / 2 段本机 Team / 3 段跨节点；来源行是可回信的
-  `<from location="principal@node:team" />`。`human` / `system` 是保留 principal。
-- **飞书渠道**：晚绑定 `AgentService`，成员名合法化，TTL 回收后下一条消息自动复活。
-- **门禁**：`typecheck` + `biome ci` + `scripts/check-*.ts`；仓库无自动化测试套件，
-  运行时正确性靠探针与 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
+- **Web 产物自愈**：gateway 启动时发现 `apps/web/dist` 落后于 `apps/web/src` 不阻塞启动，
+  在后台重建；bundle 内指纹与 `dist/build.json` 的 `builtAt` 比对，已打开的页面显示刷新提示。
+  无法判断（旧产物 / fetch 失败 / vite dev）时保持静默。
+- **Tasks 面退场（breaking）**：删除 Web Tasks 页与 `tasks.list` / `tasks.get`，
+  连同 `AgentTaskEntry`、`AgentRegistryEntry.delegate`、`state/tasks`。
+- **诊断页**：Observe 补 runtime / MCP / plugins / config sources；`health.get` 透传
+  `wait_reason`；删掉 `agent.run.failed` / `plugin.error` 两个死过滤项；复用既有 RPC。
+- **Web 大文件拆分**：10 个 >500 行逻辑文件（7846 行）按域拆成容器 + 同目录 hooks/子视图，
+  导入路径与导出面不变；全 web 最大逻辑文件降至 550 行（i18n 文案表除外）。
+- **Web 修复**：已结束 run 时长不再增长、去重复 tenant chip、未启用渠道显示为未启用、
+  四个视图切 tab 重置滚动、`feishu` 能力位按 default tenant 实际解析。
+- **门禁**：每切片 `typecheck` + `biome ci` + web tsc + web build + mock 烟测；
+  收口另有 `check-*` 与 `version --check`。仓库无自动化测试套件。
 
 ## 下一步
 
-- rotate 的 Web UI；远程 agent 生命周期（跨节点 spawn / close / rotate）仍未开放。
+- **浏览器人工回归尚未执行**：聊天流式滚动 / 切 session、Runs 切换翻页、trace 分页、
+  member body 历史、命令面板 / banner、断线重连与切 tenant。
+- 剩余 536–550 行文件不在本轮范围：`AttentionPanel` / `TeamsView` / `TeamChat` / `TenantsView`。
+- 诊断页仍缺 `doctor --deep` 的 config / provider / data_dir / session / plugins / mcp /
+  serve_port / attach / feishu_credentials 覆盖；无诊断聚合端点、无多节点入口、事件无翻页。
 - hub ↔ federation 身份联动挂起（`PLAN-0.28-hub-federation-identity.md`）。
-- 计费与价格表：ADR-005 禁止内置价格，若要做需用户提供价格表（插件或 `pricing:` 配置块）。
-- `token` 限额与会话预算的底层口径随 U1 自然变化，但没有单独设计。
+- 计费与价格表：ADR-005 禁止内置价格，若要做需用户提供价格表。
 
 ## 入口
 
 - 版本历史：[INDEX.md](INDEX.md)
 - 当前版本变更摘要：[../../CHANGELOG.md](../../CHANGELOG.md)
-- 管理规则：[../DOC-MANAGEMENT.md](../DOC-MANAGEMENT.md)

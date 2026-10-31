@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/serve",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -23,8 +23,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vessel-agent/config": "0.29.0",
-    "@vessel-agent/core": "0.29.0"
+    "@vessel-agent/config": "0.30.0",
+    "@vessel-agent/core": "0.30.0"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
