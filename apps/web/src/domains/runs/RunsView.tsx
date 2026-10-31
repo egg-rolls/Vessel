@@ -62,9 +62,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function durationLabel(start?: number, end?: number): string {
+/**
+ * 耗时文案。
+ *
+ * `completed_at` 只有 durable checkpoint 才有，live 快照的已完成 run 没有该字段
+ * （`liveRunStatus` 不产出）。**不能**用 `Date.now()` 兜底已结束的 run —— 那会让
+ * 耗时随当前时间无限增长（实测显示到 6 万秒）。只有还在跑的 run 才按「现在」算。
+ */
+function durationLabel(start?: number, end?: number, running = false): string {
   if (start === undefined) return '—';
-  const value = Math.max(0, (end ?? Date.now()) - start);
+  const stop = end ?? (running ? Date.now() : undefined);
+  if (stop === undefined) return '—';
+  const value = Math.max(0, stop - start);
   return value < 1000 ? `${value}ms` : `${(value / 1000).toFixed(1)}s`;
 }
 
@@ -575,7 +584,12 @@ export function RunsView({
                       header: t('runs.col.duration'),
                       hide: 'compact',
                       cellClassName: 'font-mono tabular-nums',
-                      cell: (run) => durationLabel(run.started_at, run.completed_at),
+                      cell: (run) =>
+                        durationLabel(
+                          run.started_at,
+                          run.completed_at,
+                          run.status === 'running' || run.status === 'queued',
+                        ),
                     },
                     {
                       key: 'tokens',

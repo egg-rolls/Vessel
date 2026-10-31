@@ -49,9 +49,12 @@ function pretty(value: unknown): string {
   }
 }
 
-function durationLabel(start?: number, end?: number): string {
+/** 耗时文案；同 `RunsView`：已结束的 run 没有 `completed_at` 时显示 `—`，不按「现在」算。 */
+function durationLabel(start?: number, end?: number, running = false): string {
   if (start === undefined) return '—';
-  const value = Math.max(0, (end ?? Date.now()) - start);
+  const stop = end ?? (running ? Date.now() : undefined);
+  if (stop === undefined) return '—';
+  const value = Math.max(0, stop - start);
   return value < 1000 ? `${value}ms` : `${(value / 1000).toFixed(1)}s`;
 }
 
@@ -353,7 +356,7 @@ export function RunDetail({
             label: t('runs.detail.duration'),
             value: (
               <span className="font-mono tabular-nums">
-                {durationLabel(startedAt, completedAt)}
+                {durationLabel(startedAt, completedAt, status === 'running' || status === 'queued')}
               </span>
             ),
           },

@@ -1,17 +1,23 @@
 import type { ReactNode } from 'react';
-import { t } from '../i18n';
-import { Tooltip } from './Tooltip';
 
-/** 页面标题：唯一 h1 + active tenant + 可选的 default-tenant 作用域说明。 */
+/**
+ * 页面标题：唯一 h1 + 可选的作用域说明。
+ *
+ * **不显示当前租户**：`AppBar` 的右侧已经在全局显示它（`nav.tenant`），
+ * 每个页面再挂一枚 chip 是重复信息。
+ */
 export function PageHeader({
   title,
   description,
-  tenantId,
   scopeNote,
   actions,
 }: {
   title: string;
   description?: ReactNode;
+  /**
+   * 已不渲染（见上方说明）。保留在签名里是为了不让 8 个调用方跟着改；
+   * 删它要级联改 7 个视图组件的 props，收益不抵churn。
+   */
   tenantId?: string | null;
   scopeNote?: string;
   actions?: ReactNode;
@@ -25,18 +31,13 @@ export function PageHeader({
         {description && (
           <div className="mt-0.5 text-md leading-normal text-muted">{description}</div>
         )}
-        <div className="mt-1 flex flex-wrap gap-1.5">
-          <Tooltip label={t('nav.tenantCurrent')}>
-            <span className="rounded-full bg-sunken px-2 py-0.5 font-mono text-xs text-muted">
-              {t('common.tenant')} {tenantId ?? '—'}
-            </span>
-          </Tooltip>
-          {scopeNote && (
+        {scopeNote && (
+          <div className="mt-1 flex flex-wrap gap-1.5">
             <span className="rounded-full bg-sunken px-2 py-0.5 font-mono text-xs text-faint">
               {scopeNote}
             </span>
-          )}
-        </div>
+          </div>
+        )}
       </div>
       {actions && (
         <div className="flex flex-none flex-wrap items-start gap-2 max-compact:w-full">
