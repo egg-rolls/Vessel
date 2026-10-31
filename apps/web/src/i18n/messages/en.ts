@@ -360,6 +360,51 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.diagnostics.projectPath': 'Project config',
   'observe.diagnostics.overlayKeys': 'Tenant overlay keys',
   'observe.diagnostics.notAvailable': 'Not available',
+  // 0.33 D: doctor --deep checks
+  'observe.diagnostics.doctorTitle': 'Doctor checks (--deep)',
+  'observe.diagnostics.doctorHint':
+    'The same nine checks as `vessel doctor --deep`, read from existing RPC data. Checks the gateway cannot observe state why instead of guessing.',
+  'observe.diagnostics.doctorColCheck': 'Check',
+  'observe.diagnostics.doctorColStatus': 'Status',
+  'observe.diagnostics.doctorColSource': 'Source',
+  'observe.diagnostics.doctorColDetail': 'Detail',
+  'observe.diagnostics.doctor.status.ok': 'ok',
+  'observe.diagnostics.doctor.status.warn': 'warn',
+  'observe.diagnostics.doctor.status.fail': 'fail',
+  'observe.diagnostics.doctor.status.info': 'info',
+  'observe.diagnostics.doctor.status.unavailable': 'unavailable',
+  'observe.diagnostics.doctor.pending': 'Waiting for data',
+  'observe.diagnostics.doctor.set': '<set>',
+  'observe.diagnostics.doctor.unset': '<unset>',
+  'observe.diagnostics.doctor.config.detail': 'user={user} · project={project}',
+  'observe.diagnostics.doctor.config.unverified':
+    'Config validation errors/warnings are not exposed by gateway RPC; run `vessel doctor`',
+  'observe.diagnostics.doctor.provider.detail': '{provider} / {model} / api key {key}',
+  'observe.diagnostics.doctor.dataDir.configured': '{path} (source: {source})',
+  'observe.diagnostics.doctor.dataDir.default': '{path} (default)',
+  'observe.diagnostics.doctor.dataDir.unverified':
+    'Writability is checked by `vessel doctor` on the host',
+  'observe.diagnostics.doctor.session.memory': 'backend=memory (no persistence)',
+  'observe.diagnostics.doctor.session.detail': 'backend={backend} · path={path}',
+  'observe.diagnostics.doctor.session.derived':
+    'derived from data_dir; run `vessel doctor` for the resolved path',
+  'observe.diagnostics.doctor.writability': 'writability not verified (needs `vessel doctor`)',
+  'observe.diagnostics.doctor.plugins.ok': '{enabled} enabled / {total} discovered',
+  'observe.diagnostics.doctor.plugins.missing': 'unknown configured plugin(s): {names}',
+  'observe.diagnostics.doctor.mcp.invalid': 'invalid server config: {names}',
+  'observe.diagnostics.doctor.mcp.rpc': '{servers} server(s) via RPC / {configured} configured',
+  'observe.diagnostics.doctor.mcp.disabled': 'MCP is not enabled on this gateway',
+  'observe.diagnostics.doctor.mcp.unavailable': 'MCP status unavailable',
+  'observe.diagnostics.doctor.servePort.notConfigured':
+    'serve.port is not configured; doctor skips this check',
+  'observe.diagnostics.doctor.servePort.systemPort':
+    '{host}:0 (system-assigned) · endpoint {endpoint}',
+  'observe.diagnostics.doctor.servePort.detail': '{host}:{port} configured · endpoint {endpoint}',
+  'observe.diagnostics.doctor.servePort.unverified':
+    'Port bindability is checked by `vessel doctor`; the browser cannot bind',
+  'observe.diagnostics.doctor.attach.disconnected': 'Gateway is not attached',
+  'observe.diagnostics.doctor.feishu.disabled': 'Feishu is not enabled',
+  'observe.diagnostics.doctor.feishu.detail': 'app id {appId}, app secret {appSecret}',
   // 0.15: Settings → Display
   'settings.tab.display': 'Display',
   'settings.display.title': 'Display & visibility',

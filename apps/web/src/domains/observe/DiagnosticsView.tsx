@@ -26,6 +26,7 @@ import { resolveShowProcessErrors, resolveUiVisibility } from '../../state/visib
 import { useNodeDiagnostics, useRunStore } from '../../stores/runStore';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { usePolledAction } from '../../stores/usePolledAction';
+import { DoctorChecksSection } from './DoctorChecksSection';
 
 function formatTime(ts: number): string {
   const date = new Date(ts);
@@ -56,7 +57,7 @@ function mcpTone(status: McpServerState): 'success' | 'danger' | 'neutral' {
 
 export function DiagnosticsView() {
   useLocale();
-  const { client, connectionState, hasToken, epoch } = useConnection();
+  const { client, connectionState, hasToken, epoch, gatewayUrl } = useConnection();
   const { current } = useNodes();
   const connected = hasToken && connectionState === 'open';
   const loadDiagnostics = useRunStore((state) => state.loadDiagnostics);
@@ -94,13 +95,14 @@ export function DiagnosticsView() {
     pollMs: 10_000,
     deps: [epoch, nodeKey],
   });
-  useRefreshSignal(() => {
+  const refreshAll = () => {
     reloadAll();
     reloadConfig();
     reloadSources();
     reloadCapabilities();
     mcp.reload();
-  });
+  };
+  useRefreshSignal(refreshAll);
 
   const gate = useMemo(() => {
     const visibility = resolveUiVisibility(resourceData(config));
@@ -153,6 +155,17 @@ export function DiagnosticsView() {
       {!connected && <p className="text-muted">{t('observe.diagnostics.disconnected')}</p>}
       {healthError && <ErrorState message={healthError} onRetry={reloadHealth} />}
       {eventsError && <ErrorState message={eventsError} onRetry={reloadEvents} />}
+
+      <DoctorChecksSection
+        config={config}
+        sources={sources}
+        health={healthState}
+        capabilities={capabilities}
+        mcp={mcp.state}
+        gatewayUrl={gatewayUrl}
+        connected={connected}
+        onRefresh={refreshAll}
+      />
 
       <Section
         title={t('observe.diagnostics.runtimeTitle')}
