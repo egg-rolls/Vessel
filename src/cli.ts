@@ -124,7 +124,7 @@ import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
 import { readPackageVersion } from './version';
-import { inspectWebDist, webDistWarning } from './web-dist';
+import { ensureWebDist, webDistWarning } from './web-dist';
 
 /**
  * 由专用装配路径管理的工厂式插件：tools applier 不能把它们当普通插件装
@@ -467,9 +467,11 @@ if (foregroundGateway && args.gateway !== null) {
   foregroundGatewayInstance = prepared.instance;
   process.once('exit', () => foregroundGatewayLock?.releaseSync());
 }
-// 启动诊断：静态产物缺失/过期只提示，不改退出码。
+// 启动诊断：静态产物缺失/过期时自动重建（`VESSEL_NO_WEB_AUTOBUILD=1` 关闭）；
+// 重建失败只告警，不改退出码，继续以现有产物提供服务。
 if (foregroundGateway || args.servePort !== null) {
-  const warning = webDistWarning(await inspectWebDist());
+  const status = await ensureWebDist({ warn: (line) => console.error(ui.warn(line)) });
+  const warning = webDistWarning(status);
   if (warning) console.error(ui.warn(warning));
 }
 // `-r/--resume` 无 id：列出当前 tenant 的会话（connect 模式无法本地列出）。

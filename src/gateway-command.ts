@@ -48,7 +48,7 @@ import { t } from './i18n';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
-import { inspectWebDist, webDistWarning } from './web-dist';
+import { ensureWebDist, webDistWarning } from './web-dist';
 
 /** 依赖注入（CLI 只用默认值；测试注入平台/路径/命令执行） */
 export interface GatewayCommandDeps {
@@ -891,9 +891,14 @@ async function startDaemonCommand(
   const instance = deriveGatewayInstance(options.instance, options.port);
   const logPath = options.daemonLog ?? options.logPath ?? gatewayLogPath(context.dataDir, instance);
 
-  // 启动诊断：静态产物缺失/过期只提示，不改退出码。
+  // 启动诊断：静态产物缺失/过期时自动重建（`VESSEL_NO_WEB_AUTOBUILD=1` 关闭）；
+  // 重建失败只告警，不改退出码。
   const staticDir = context.env.VESSEL_STATIC_DIR;
-  const warning = webDistWarning(await inspectWebDist(staticDir ? { staticDir } : {}));
+  const status = await ensureWebDist({
+    ...(staticDir !== undefined ? { staticDir } : {}),
+    warn: (line) => printErr(ui.warn(line)),
+  });
+  const warning = webDistWarning(status);
   if (warning) printErr(ui.warn(warning));
 
   const duplicate = await duplicateExplicitNodeId(context.dataDir, instance, context.config, {

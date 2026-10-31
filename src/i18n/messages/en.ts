@@ -175,6 +175,9 @@ export const en: Record<MessageKey, string> = {
     'Web console assets are missing at {path}; run `bun run dev:web` for Vite dev, or build with `cd apps/web && npm run build`.',
   'gateway.webDistStale':
     'Web console assets may be stale: {index} is older than {source}; run `bun run build:web:watch` or rebuild.',
+  'gateway.webDistBuilding': 'Web assets are stale; rebuilding ({path})…',
+  'gateway.webDistBuilt': 'Web assets rebuilt.',
+  'gateway.webDistBuildFailed': 'Web rebuild failed; serving the existing assets: {detail}',
   'gateway.noToken':
     'No gateway token configured (serve.token / serve.admin_token / VESSEL_GATEWAY_TOKEN); cannot call the local RPC.',
   'gateway.reloadNoGateway': 'Gateway is not running; run `vessel gateway start` first.',

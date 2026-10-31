@@ -146,3 +146,73 @@ export function webDistWarning(status: WebDistStatus): string | null {
   }
   return null;
 }
+
+export interface EnsureWebDistOptions extends InspectWebDistOptions {
+  /** 显式关闭自动构建；缺省读 `VESSEL_NO_WEB_AUTOBUILD` */
+  autoBuild?: boolean;
+  /** 进度 / 失败信息出口；缺省写 stderr */
+  warn?: (line: string) => void;
+  /** 构建超时（ms）；缺省 180_000 */
+  buildTimeoutMs?: number;
+}
+
+/** Web 源码工程根（`apps/web`），由 `apps/web/src` 反推。 */
+const DEFAULT_WEB_ROOT = path.dirname(DEFAULT_WEB_SRC_DIR);
+
+/**
+ * 自动构建的前提：源码工程在、且它有**自己的** `node_modules`
+ * （`apps/web` 用 npm + package-lock，不在 bun workspaces 里，根依赖不够）。
+ */
+async function canAutoBuild(): Promise<boolean> {
+  const hasPackage = (await fileMtime(path.join(DEFAULT_WEB_ROOT, 'package.json'))) !== undefined;
+  if (!hasPackage) return false;
+  try {
+    const modules = await stat(path.join(DEFAULT_WEB_ROOT, 'node_modules'));
+    return modules.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 静态产物过期/缺失时**自动重建**，返回重建后的状态。
+ *
+ * 为什么自动而不是只警告：`dist` 不入 git，gateway 托管它 —— 源码改了没重新构建，
+ * 界面就一直是旧的，而版本号不变、人也不会主动去看时间戳。既然 gateway 已经能判断
+ * 产物比源码旧，让它顺手建一次，比提醒用户去敲命令更可靠。
+ *
+ * 只在**仓库内默认目录**下生效（自定义 `VESSEL_STATIC_DIR` 不碰）。任何失败都只告警、
+ * 不改退出码，继续以现有产物提供服务。
+ */
+export async function ensureWebDist(options: EnsureWebDistOptions = {}): Promise<WebDistStatus> {
+  const warn = options.warn ?? ((line: string) => console.error(line));
+  const status = await inspectWebDist(options);
+  const enabled = options.autoBuild ?? (process.env.VESSEL_NO_WEB_AUTOBUILD ?? '').trim() !== '1';
+  if (!enabled) return status;
+  if (status.exists && !status.stale) return status;
+  // 只构建仓库内的默认产物；显式 staticDir / VESSEL_STATIC_DIR 指向的目录不归我们管。
+  const explicitDir = options.staticDir ?? process.env.VESSEL_STATIC_DIR;
+  if (explicitDir !== undefined && explicitDir.trim() !== '') return status;
+  if (!(await canAutoBuild())) return status;
+
+  warn(t('gateway.webDistBuilding', { path: DEFAULT_WEB_ROOT }));
+  try {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    await promisify(execFile)(process.execPath, ['run', 'build'], {
+      cwd: DEFAULT_WEB_ROOT,
+      timeout: options.buildTimeoutMs ?? 180_000,
+      encoding: 'utf8',
+    });
+  } catch (error) {
+    warn(
+      t('gateway.webDistBuildFailed', {
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return status;
+  }
+  const rebuilt = await inspectWebDist(options);
+  warn(t('gateway.webDistBuilt'));
+  return rebuilt;
+}
