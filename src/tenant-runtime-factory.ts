@@ -243,6 +243,14 @@ export class TenantToolHost implements PluginHost {
     this.inner.registerTool(def);
   }
 
+  /**
+   * 转发注销（热应用 tools applier 用）：内层宿主不支持时返回 false，
+   * 由 applier 按“不可热移除”降级，不在这里抛错。
+   */
+  unregisterTool(name: string): boolean {
+    return this.inner.unregisterTool?.(name) ?? false;
+  }
+
   registerProvider(name: string, factory: ProviderFactory): void {
     this.inner.registerProvider(name, factory);
   }

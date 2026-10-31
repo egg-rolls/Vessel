@@ -16,6 +16,7 @@ import type {
   RunStore,
   RuntimePermissionConfig,
   Scheduler,
+  ToolDefinition,
   Usage,
 } from '@vessel-agent/core';
 
@@ -269,6 +270,14 @@ export interface MemberRuntimePort {
    * 返回实际应用的 Body 数量；未实现的 port 由 AgentService 报 0。
    */
   applyPermissionRules?(rules: RuntimePermissionConfig): Promise<number> | number;
+  /**
+   * CONTRACT-hot-apply §4（additive，可选）：把工具面热刷新到所有存活 Body。
+   *
+   * 在同一具 body 上换工具宿主，不重建 session / context / provider；有 active run
+   * 时延迟到轮边界。`tools` 缺省取父宿主当前工具面。返回实际刷新的 Body 数量；
+   * 未实现的 port 由 AgentService 报 0。
+   */
+  refreshTools?(tools?: readonly ToolDefinition[]): Promise<number> | number;
   /**
    * 0.28 D6（additive，可选）：角色转换后把上下文策略热应用到该成员的活体。
    *
@@ -952,6 +961,14 @@ export interface AgentService {
    * 不影响 owner——owner 的 runtime 由装配层单独处理。
    */
   applyPermissionRules(rules: RuntimePermissionConfig): Promise<number>;
+  /**
+   * CONTRACT-hot-apply §4（additive，可选）：把工具面热刷新到所有存活的成员 Body。
+   *
+   * 装配层只需暴露这一条转发入口；有 active run 的 body 由执行内核延迟到轮边界。
+   * `tools` 缺省取成员 runtime 的父宿主；返回成功刷新的 Body 数量，0 表示没有存活成员
+   * （或 port 未实现）。
+   */
+  refreshTools?(tools?: readonly ToolDefinition[]): Promise<number>;
   /** 订阅成员事件；返回取消函数 */
   subscribe(listener: AgentEventListener): () => void;
 }

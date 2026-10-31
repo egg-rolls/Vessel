@@ -125,12 +125,43 @@ export interface ToolsApplierOptions {
   previousKey?: { value?: string };
 }
 
-/** 一次 `tools` applier 的结果（摘要 + 明细，便于测试断言） */
+/**
+ * 一次 `tools` applier 的结果（摘要 + 明细，便于测试断言）。
+ *
+ * `added` / `removed` / `updated` 是**目标与现状的差异**；宿主不支持注销时，
+ * `removed` / `updated` 里的名字实际被保留（见 `kept`），不会从宿主上消失。
+ */
 export interface ToolsApplyResult {
   summaries: ApplierSummaryLine[];
   added: string[];
   removed: string[];
   updated: string[];
+  /**
+   * 宿主不支持注销而未能移除 / 更新的工具名（`restart to remove`）。
+   * 仅降级路径出现；正常路径不返回该字段（optional additive）。
+   */
+  kept?: string[];
+}
+
+/**
+ * 本 applier 实际管辖的插件工具名（启动装配产出）。
+ *
+ * 宿主上还有非插件来源的工具，必须排除：
+ * - `agent` / `ask_user` 由入口按能力注册，不属于插件配置；
+ * - MCP 工具由 `mcp` applier 管理（`toolSource` 非 null）。
+ *
+ * 用它们初始化管辖域，之后的 tools reload 才不会把自己的工具判成 `removed`。
+ */
+export function pluginManagedToolNames(
+  host: PluginHost,
+  mcp?: { toolSource(name: string): unknown },
+): string[] {
+  return host
+    .listTools()
+    .map((tool) => tool.name)
+    .filter(
+      (name) => name !== 'agent' && name !== 'ask_user' && (mcp?.toolSource(name) ?? null) === null,
+    );
 }
 
 /**
@@ -154,8 +185,10 @@ function toolSignature(definition: ToolDefinition): string {
  * 2. 先注销要移除 / 要更新的工具，再注册新增 / 更新的工具；
  * 3. 任一步失败 → 按记录逆序回滚（恢复旧定义、注销新注册），再抛错。
  *
- * `unregisterTool` 是可选的（自定义宿主可能没有）：缺少时无法移除旧工具，
- * 此时明确报“不可热移除”，不假装已删除。
+ * `unregisterTool` 是可选的（自定义宿主可能没有）：缺少时降级为“只增不删”——
+ * 新增工具照常注册，待移除 / 待更新的旧定义原样保留并进 `kept`，摘要明确写
+ * `restart to remove`；不抛错，也不假装已删除。旧错误码
+ * `tools_hot_apply_unsupported` 仅保留为外部契约文案，正常路径不再抛出。
  */
 export async function applyTools(
   options: ToolsApplierOptions,
@@ -195,11 +228,10 @@ export async function applyTools(
 
   const unregister = host.unregisterTool?.bind(host);
   const toUnregister = [...new Set([...removed, ...updated])];
-  if (toUnregister.length > 0 && unregister === undefined) {
-    throw new Error(
-      `tools_hot_apply_unsupported: host cannot unregister ${toUnregister.join(', ')}`,
-    );
-  }
+  // 宿主不支持注销：只增不删。待移除 / 待更新的旧定义保留进 `kept`（重启才能清掉）。
+  const degraded = unregister === undefined;
+  const kept = degraded ? [...toUnregister] : undefined;
+  const toRegister = degraded ? added : [...added, ...updated];
 
   /** 回滚记录：注销了什么（用于恢复）+ 注册了什么（用于撤销） */
   const unregistered: ToolDefinition[] = [];
@@ -223,13 +255,15 @@ export async function applyTools(
   };
 
   try {
-    for (const name of toUnregister) {
-      const existing = currentByName.get(name);
-      const removable = unregister?.(name) ?? false;
-      // 每个真正移除的定义都记下来：回滚时要按原样放回去（含纯 removed）。
-      if (removable && existing !== undefined) unregistered.push(existing);
+    if (!degraded) {
+      for (const name of toUnregister) {
+        const existing = currentByName.get(name);
+        const removable = unregister?.(name) ?? false;
+        // 每个真正移除的定义都记下来：回滚时要按原样放回去（含纯 removed）。
+        if (removable && existing !== undefined) unregistered.push(existing);
+      }
     }
-    for (const name of [...added, ...updated]) {
+    for (const name of toRegister) {
       const definition = targetByName.get(name);
       if (definition === undefined) continue;
       host.registerTool(definition);
@@ -240,6 +274,15 @@ export async function applyTools(
     throw new Error(
       `tools_hot_apply_failed: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+
+  if (degraded) {
+    const summaries: ApplierSummaryLine[] = [`tools: +${added.length}`];
+    if (added.length > 0) summaries.push(`tools: added ${added.join(', ')}`);
+    if (kept !== undefined && kept.length > 0) {
+      summaries.push(`tools: kept ${kept.join(', ')} (restart to remove)`);
+    }
+    return { summaries, added, removed, updated, ...(kept !== undefined ? { kept } : {}) };
   }
 
   // `+N -M` 只数真正的增删；同名刷新单独一行，避免把「改定义」算成新增。

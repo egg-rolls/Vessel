@@ -79,11 +79,12 @@ import {
 import { buildGatewayControlPlane } from './gateway-wiring';
 import { installHeadlessPermissionAutoAllow, runHeadless } from './headless-runner';
 import {
+  applyTools,
   createMcpApplier,
   createMcpServerToggle,
   createPermissionApplier,
-  createToolsApplier,
   type PermissionApplierState,
+  pluginManagedToolNames,
 } from './hot-apply-appliers';
 import {
   assemblePluginTools,
@@ -914,9 +915,10 @@ async function runWithConfig(result: BootstrapResult) {
     const permissionState: PermissionApplierState = {
       current: permissionConfigFor(config, headless),
     };
-    // 现有工具名快照（启动时）：tools applier 只管辖「启动工具 ∪ 热装配过的插件工具」，
-    // 之后的 agent / MCP 工具一律不动。
-    const managedPluginTools = new Set(ctx.pluginHost.listTools().map((tool) => tool.name));
+    // 启动时**插件装配实际产出**：tools applier 只管辖「插件工具 ∪ 热装配过的插件工具」。
+    // 入口注册的 agent / ask_user 与 MCP 工具（toolSource 非 null）不在管辖域内，
+    // 否则一次 reload 会把它们判成 removed（D1）。
+    const managedPluginTools = new Set(pluginManagedToolNames(ctx.pluginHost, result.mcp));
     // 插件安装配置基线（用于识别「定义没变但行为配置变了」）：
     // `computeTargetTools` 每次读到的配置写入 `lastToolsConfigKey`，`targetKey` 读它。
     const pluginConfigKeyOf = (value: VesselConfig): string =>
@@ -951,25 +953,32 @@ async function runWithConfig(result: BootstrapResult) {
         },
         permissionState,
       ),
-      tools: createToolsApplier({
-        host: ctx.pluginHost,
-        // 旁路重建：先在临时 host 上算出目标集，再一次性替换真实宿主。
-        computeTargetTools: async () => {
-          const next = await reloadVesselConfig();
-          lastToolsConfigKey.current = pluginConfigKeyOf(next);
-          const assembled = await assemblePluginTools({
-            config: next,
-            tenantId: result.tenantId,
-            excludePlugins: MCP_FACTORY_PLUGINS,
-          });
-          for (const tool of assembled.tools) managedPluginTools.add(tool.name);
-          return assembled.tools;
-        },
-        managedNames: () => [...managedPluginTools],
-        // 插件安装配置（basic-tools 的 cwd 等）变了就整体刷新，否则行为不会生效。
-        targetKey: () => lastToolsConfigKey.current ?? '',
-        previousKey: toolsConfigKey,
-      }),
+      tools: async () => {
+        const outcome = await applyTools({
+          host: ctx.pluginHost,
+          // 旁路重建：先在临时 host 上算出目标集，再一次性替换真实宿主。
+          computeTargetTools: async () => {
+            const next = await reloadVesselConfig();
+            lastToolsConfigKey.current = pluginConfigKeyOf(next);
+            const assembled = await assemblePluginTools({
+              config: next,
+              tenantId: result.tenantId,
+              excludePlugins: MCP_FACTORY_PLUGINS,
+            });
+            for (const tool of assembled.tools) managedPluginTools.add(tool.name);
+            return assembled.tools;
+          },
+          managedNames: () => [...managedPluginTools],
+          // 插件安装配置（basic-tools 的 cwd 等）变了就整体刷新，否则行为不会生效。
+          targetKey: () => lastToolsConfigKey.current ?? '',
+          previousKey: toolsConfigKey,
+        });
+        // 成员 Body 的工具面是 spawn 时快照：owner 宿主更新后在同一具 body 上刷新，
+        // 不重建 session / context（有 active run 时由执行内核延迟到轮边界）。
+        // 传入应用后的全量工具面（含 agent / ask_user / MCP），成员侧再按白名单过滤。
+        await result.agent?.service.refreshTools?.(ctx.pluginHost.listTools());
+        return outcome.summaries;
+      },
     };
 
     // MCP：没有控制面时不注册该 scope（请求即 `unknown reload scope`）。

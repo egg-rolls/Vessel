@@ -16,7 +16,8 @@
  *   返回空数组表示「该 scope 执行了但无差异」；
  * - 只注册真实存在的 applier（例如没有 MCP server 时不注册 `mcp`），
  *   请求未注册的 scope → 抛 `unknown reload scope`（不静默忽略）；
- * - applier 抛错向上抛（RPC 返回错误），由调用方决定是否广播失败 notice。
+ * - 单个 scope 的 applier 抛错不中断其余 scope：失败写进该 scope 的摘要
+ *   （`<scope>: reload failed (...)`），由调用方广播，不新增失败字段。
  *
  * 这样 serve 的协议形状完全不变，新增 applier 只是往注入表里加一个键，且每个 applier
  * 都能脱离 CLI 单独测试。
@@ -150,54 +151,62 @@ export function createGatewayReloadRunner(
     const summaries: Record<string, string[]> = {};
 
     for (const scope of requested) {
-      if (scope === 'plugins') {
-        // 只失效目录缓存；pluginHost / 已安装插件 / active run 不动。
-        options.refreshPlugins();
-        reloaded.push('plugins');
-        summaries.plugins = [];
-        continue;
-      }
-
-      if (scope === 'config') {
-        const current = options.currentConfig();
-        let next: VesselConfig;
-        try {
-          next = await options.reloadConfig();
-        } catch (error) {
-          throw new Error(
-            `config_reload_failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-
-        const restartFields = diffRestartFields(current, next);
-        if (allowedOriginsChanged(current, next)) {
-          const target = options.gateway();
-          const reconfigure = target?.reconfigure;
-          if (!target || typeof reconfigure !== 'function') {
-            // web 尚未提供 reconfigure：不声称 config 已生效。
-            requiresRestart.push('serve.allowedOrigins');
-          } else {
-            await reconfigure.call(target, {
-              allowedOrigins: next.serve?.allowedOrigins ?? [],
-            });
-            reloaded.push('config');
-          }
-        } else {
-          reloaded.push('config');
-        }
-        requiresRestart.push(...restartFields);
-        summaries.config = restartFields.map((field) => `config: ${field} requires restart`);
-        continue;
-      }
-
-      const applier = appliers[scope];
-      if (applier === undefined) {
-        // 未知 scope 显式报错（契约 §1：不静默忽略）。
+      // 未知 scope 是请求错误，不是执行失败：在隔离之外显式抛出（契约 §1：不静默忽略）。
+      if (scope !== 'plugins' && scope !== 'config' && appliers[scope] === undefined) {
         throw new Error(`unknown reload scope: ${scope}`);
       }
-      const lines = await applier();
-      reloaded.push(scope);
-      summaries[scope] = Array.isArray(lines) ? [...lines] : [];
+      // 每个 scope 独立收口：单个 applier 失败不阻断后续 scope，失败写进该 scope
+      // 的摘要（不新增 `failures` 字段），调用方仍能广播失败原因。
+      try {
+        if (scope === 'plugins') {
+          // 只失效目录缓存；pluginHost / 已安装插件 / active run 不动。
+          options.refreshPlugins();
+          reloaded.push('plugins');
+          summaries.plugins = [];
+          continue;
+        }
+
+        if (scope === 'config') {
+          const current = options.currentConfig();
+          let next: VesselConfig;
+          try {
+            next = await options.reloadConfig();
+          } catch (error) {
+            throw new Error(
+              `config_reload_failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+
+          const restartFields = diffRestartFields(current, next);
+          if (allowedOriginsChanged(current, next)) {
+            const target = options.gateway();
+            const reconfigure = target?.reconfigure;
+            if (!target || typeof reconfigure !== 'function') {
+              // web 尚未提供 reconfigure：不声称 config 已生效。
+              requiresRestart.push('serve.allowedOrigins');
+            } else {
+              await reconfigure.call(target, {
+                allowedOrigins: next.serve?.allowedOrigins ?? [],
+              });
+              reloaded.push('config');
+            }
+          } else {
+            reloaded.push('config');
+          }
+          requiresRestart.push(...restartFields);
+          summaries.config = restartFields.map((field) => `config: ${field} requires restart`);
+          continue;
+        }
+
+        const applier = appliers[scope] as GatewayReloadApplier;
+        const lines = await applier();
+        reloaded.push(scope);
+        summaries[scope] = Array.isArray(lines) ? [...lines] : [];
+      } catch (error) {
+        summaries[scope] = [
+          `${scope}: reload failed (${error instanceof Error ? error.message : String(error)})`,
+        ];
+      }
     }
 
     return { reloaded, requires_restart: requiresRestart, summaries };

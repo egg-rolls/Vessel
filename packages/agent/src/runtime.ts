@@ -370,6 +370,19 @@ interface MemberRuntimeEntry {
   memberId: string;
   /** per-body 上下文包装：`applyContextPolicy` 靠它在活体上翻转开关 */
   context: RoleAwareContext;
+  /**
+   * body 独占工具宿主（spawn 时快照）。`refreshTools` 原地替换其中的定义，
+   * 不动 runtime / session / context / provider，下一轮请求即读到新工具面。
+   */
+  pluginHost: MemoryPluginHost;
+  /** spawn 时选定的权限模式；refreshTools 用它重新筛工具 */
+  mode: MemberRuntimePermissionMode;
+  /** 是否有在跑轮：工具热刷新只在轮边界应用（单 run + prompt prefix 冻结） */
+  running: boolean;
+  /** 在跑轮期间收到过 refreshTools：轮结束再应用 */
+  toolsRefreshPending: boolean;
+  /** pending 的工具来源（调用方显式传入的快照；缺省时轮结束再读父宿主） */
+  pendingTools?: readonly ToolDefinition[];
   /** 是否已执行过 runTurn；未执行过的空上下文不能直接 appendNotice，否则会跳过历史恢复 */
   started: boolean;
   /** 成员独占事件流；bridge 请求/应答都经过它 */
@@ -771,6 +784,10 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       pendingPermissions: new Map(),
       waiting: false,
       context,
+      pluginHost,
+      mode,
+      running: false,
+      toolsRefreshPending: false,
     };
     this.entries.set(member.session_id, entry);
     if (this.onMemberEvent !== undefined) {
@@ -829,6 +846,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   ): Promise<MemberTurnResult> {
     const entry = this.requireEntry(member);
     entry.started = true;
+    entry.running = true;
     // 未 spawn / 未开跑期间暂存的 notice 在历史恢复之后、用户输入之前注入。
     const pendingNotices = this.takePendingNotices(member.id);
     const runId = scheduledRunId ?? randomUUID();
@@ -876,6 +894,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
         entry.waiting = false;
         this.notifyPermissionState(member.id, member.session_id, 'running');
       }
+      this.finishRun(member, entry);
     }
   }
 
@@ -892,6 +911,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     const resume = entry.runtime.resume?.bind(entry.runtime);
     if (resume === undefined) throw new Error('member runtime does not support resume');
     entry.started = true;
+    entry.running = true;
     const pendingNotices = this.takePendingNotices(member.id);
     let terminal: 'completed' | 'failed' | 'cancelled' | undefined;
     let usage: Usage | undefined;
@@ -922,6 +942,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
         entry.waiting = false;
         this.notifyPermissionState(member.id, member.session_id, 'running');
       }
+      this.finishRun(member, entry);
     }
   }
 
@@ -1011,6 +1032,75 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       }
     }
     return applied;
+  }
+
+  /**
+   * 工具热重载（CONTRACT-hot-apply §4，additive）：在**同一具 body** 上重跑工具筛选，
+   * 原地替换 body 自己的工具宿主，不重建 body、不动 session / context / provider。
+   *
+   * - 没有在跑轮 → 立即应用；
+   * - 有在跑轮 → 置 pending，run 结束再应用（ADR-054 单 run；run 中途换工具面会打乱
+   *   已在途的工具调用与 prompt prefix）。
+   *
+   * `tools` 缺省取父宿主当前工具面；传入时以传入集合为来源（调用方刚应用过的快照）。
+   * 返回实际刷新的 body 数。
+   */
+  refreshTools(tools?: readonly ToolDefinition[]): number {
+    const source = tools ?? this.pluginHost?.listTools() ?? [];
+    let applied = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.running) {
+        entry.toolsRefreshPending = true;
+        entry.pendingTools = source;
+        continue;
+      }
+      if (this.applyToolsToEntry(entry, source)) applied += 1;
+    }
+    return applied;
+  }
+
+  /** 轮结束：清 running；若期间收到过工具刷新，在轮边界应用。 */
+  private finishRun(member: MemberRuntimeMember, entry: MemberRuntimeEntry): void {
+    entry.running = false;
+    if (!entry.toolsRefreshPending) return;
+    entry.toolsRefreshPending = false;
+    const source = entry.pendingTools ?? this.pluginHost?.listTools() ?? [];
+    entry.pendingTools = undefined;
+    // body 已被 dispose（entries 里已无此条目）时不再触碰其宿主。
+    if (this.entries.get(member.session_id) !== entry) return;
+    this.applyToolsToEntry(entry, source);
+  }
+
+  /**
+   * 把目标工具面替换进 body 自己的宿主。
+   *
+   * `MemoryPluginHost.registerTool` 对同名重复注册抛错，因此先清空旧工具再注册新集合；
+   * 失败时尽量恢复旧定义（best-effort），不让 body 停在半空状态。返回是否成功。
+   */
+  private applyToolsToEntry(entry: MemberRuntimeEntry, source: readonly ToolDefinition[]): boolean {
+    const previous = entry.pluginHost.listTools();
+    const tools = this.selectTools(entry.mode, source).map((tool) =>
+      this.restrictPermissions(tool, entry.memberId, entry.mode),
+    );
+    try {
+      for (const existing of previous) entry.pluginHost.unregisterTool(existing.name);
+      for (const tool of tools) entry.pluginHost.registerTool(tool);
+      return true;
+    } catch (error) {
+      try {
+        for (const tool of entry.pluginHost.listTools()) {
+          entry.pluginHost.unregisterTool(tool.name);
+        }
+        for (const tool of previous) entry.pluginHost.registerTool(tool);
+      } catch {
+        // 回滚是 best-effort：不掩盖原始错误
+      }
+      this.logger.warn('agent.member.tools_refresh_failed', {
+        member_id: entry.memberId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   /**
@@ -1240,13 +1330,14 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * 因此“父宿主注册了它”只是必要条件，真正的判据是本函数的结果（Self Card
    * 的 `how to ask` 也从这里推导，不读入口层的 headless / ui 标志）。
    */
-  private selectTools(mode: MemberRuntimePermissionMode): ToolDefinition[] {
-    const parent = this.pluginHost;
-    if (!parent) return [];
+  private selectTools(
+    mode: MemberRuntimePermissionMode,
+    source: readonly ToolDefinition[] = this.pluginHost?.listTools() ?? [],
+  ): ToolDefinition[] {
     const denyFilter = mode === 'deny';
     const bridgeAvailable = mode === 'bridge' && this.parentEvents !== undefined;
     const selected: ToolDefinition[] = [];
-    for (const tool of parent.listTools()) {
+    for (const tool of source) {
       if (isExcludedTool(tool.name)) continue;
       if (denyFilter) {
         if (!this.readOnlyTools.has(tool.name)) continue;

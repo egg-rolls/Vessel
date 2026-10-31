@@ -25,6 +25,7 @@ import {
   type RuntimePermissionConfig,
   type ScheduledTask,
   type Scheduler,
+  type ToolDefinition,
   type Usage,
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
@@ -3170,6 +3171,23 @@ export class AgentServiceImpl implements AgentService {
       return typeof count === 'number' && Number.isFinite(count) && count > 0 ? count : 0;
     } catch (error) {
       this.logger.warn('agent.permission.apply_failed', { error: errorText(error) });
+      return 0;
+    }
+  }
+
+  /**
+   * CONTRACT-hot-apply §4：把工具面热刷新到所有 live Body（additive）。
+   * 返回成功刷新的 Body 数量；port 未实现时返回 0。刷新失败不得让 tools reload 失败。
+   */
+  async refreshTools(tools?: readonly ToolDefinition[]): Promise<number> {
+    await this.ready;
+    const apply = this.runtime.refreshTools;
+    if (typeof apply !== 'function') return 0;
+    try {
+      const count = await apply.call(this.runtime, tools);
+      return typeof count === 'number' && Number.isFinite(count) && count > 0 ? count : 0;
+    } catch (error) {
+      this.logger.warn('agent.tools.refresh_failed', { error: errorText(error) });
       return 0;
     }
   }
