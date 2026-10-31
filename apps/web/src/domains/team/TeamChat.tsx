@@ -7,534 +7,138 @@
  * - 失败不自动重试；reload 找不到同内容消息才标 failed；
  * - “再次发送”只把内容填回 Composer，由用户再次确认后作为新日志。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRefreshSignal } from '../../app/refresh';
-import { useDrawerA11y } from '../../app/useDrawerA11y';
-import {
-  EmptyState,
-  ErrorState,
-  LoadingState,
-  NotEnabledState,
-  StaleNotice,
-} from '../../components/States';
-import { Button, cn } from '../../components/ui';
-import type {
-  AskUserAnswer,
-  AskUserRequest,
-  PermissionRequest,
-  PermissionScope,
-  TeamDetail,
-  TeamMember,
-  TeamMessage,
-  TeamPostResult,
-} from '../../gateway/types';
-import { t } from '../../i18n';
-import type { StoredEvent } from '../../state/events';
-import {
-  applyTeamEvent,
-  createTeamEventState,
-  latestRotateFailure,
-  mergeMessages,
-  sortMessages,
-  type TeamEventState,
-} from '../../state/teams';
-import { resourceData } from '../../state/useResource';
-import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
-import { usePolledAction } from '../../stores/usePolledAction';
-import { isOnlineMember } from './member-status';
-import { type MentionChip, memberDisplayName, mentionIds, shortAgentId } from './mention';
-import { TeamComposer } from './TeamComposer';
-import { TeamMemberSidebar } from './TeamMemberSidebar';
-import { TeamPendingBar } from './TeamPendingBar';
-import { TeamTranscript } from './TeamTranscript';
-import { buildTeamRows, type LocalSend, matchWrittenMessage, shouldFetchTeam } from './team-send';
-import {
-  DEFAULT_LIMIT,
-  DEFAULT_MEMBERS_LIMIT,
-  memberWindowFlags,
-  nextLimitFor,
-  nextMembersLimitFor,
-  teamWindowFlags,
-} from './team-window';
+import { TeamChatHeader } from './TeamChatHeader';
+import { TeamChatMain } from './TeamChatMain';
+import { TeamChatMembersAside } from './TeamChatMembersAside';
+import type { TeamChatProps } from './team-chat-types';
+import { nextLimitFor, nextMembersLimitFor } from './team-window';
+import { useTeamChat } from './useTeamChat';
 
-const TEAM_POLL_MS = 4_000;
-/** 与 app/layout 的 RAIL_MAX_WIDTH 一致；不直接 import 以免在 SSR 里访问 window。 */
-const NARROW_MAX_WIDTH = 1023;
-const ROSTER_RELOAD_COOLDOWN_MS = 2_000;
-const EMPTY_RESPONDING: ReadonlySet<string> = new Set();
+export type { TeamChatClient, TeamChatProps } from './team-chat-types';
 
-export interface TeamChatClient {
-  getTeam(teamId: string, opts?: { limit?: number; members_limit?: number }): Promise<TeamDetail>;
-  postTeam(input: {
-    team_id: string;
-    content: string;
-    mentions?: string[];
-  }): Promise<TeamPostResult>;
-}
+export function TeamChat(props: TeamChatProps) {
+  const {
+    team,
+    teamId,
+    archived,
+    members,
+    memberTotal,
+    onlineCount,
+    membersOpen,
+    setMembersOpen,
+    narrow,
+    membersDrawerRef,
+    detail,
+    error,
+    firstLoading,
+    refreshing,
+    rotateFailure,
+    rows,
+    resolveMember,
+    agentLabel,
+    draft,
+    setDraft,
+    chips,
+    setChips,
+    retryHint,
+    setRetryHint,
+    sending,
+    handleSend,
+    handleRetry,
+    reload,
+    hasToken,
+    canLoadEarlier,
+    historyLimited,
+    visibleCount,
+    limit,
+    setLimit,
+    memberWindow,
+    membersLimit,
+    setMembersLimit,
+    permissions,
+    asks,
+    responding,
+    connected,
+    onDecidePermission,
+    onRespondAsk,
+    onOpenSession,
+    onBackToList,
+    openMember,
+  } = useTeamChat(props);
 
-export interface TeamChatProps {
-  client: TeamChatClient;
-  hasToken: boolean;
-  connectionState: string;
-  epoch: number;
-  tenantEpoch: number;
-  teamId: string;
-  /** Store key discriminator for multi-node Teams; defaults for tests / preview. */
-  nodeKey?: string;
-  permissions: readonly PermissionRequest[];
-  asks: readonly AskUserRequest[];
-  events: readonly StoredEvent[];
-  /** 正在提交应答的 requestId；由 ConnectionProvider 维护。 */
-  responding?: ReadonlySet<string>;
-  /** 直接应答成员会话里的权限请求（不切换会话）。 */
-  onDecidePermission?: (
-    requestId: string,
-    decision: 'allow' | 'deny',
-    scope: PermissionScope,
-  ) => void;
-  /** 直接应答成员会话里的 ask_user。 */
-  onRespondAsk?: (requestId: string, answers: AskUserAnswer[]) => void;
-  onOpenMember: (agentId: string) => void;
-  onOpenSession: (sessionId: string) => void;
-  onBackToList: () => void;
-  /** 测试 / 预览注入，避免 SSR 依赖 effect。 */
-  initialDetail?: TeamDetail;
-  initialLimit?: number;
-  initialError?: { message: string; code?: string };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function TeamChat({
-  client,
-  hasToken,
-  connectionState,
-  epoch,
-  tenantEpoch,
-  teamId,
-  nodeKey = 'local',
-  permissions,
-  asks,
-  events,
-  responding = EMPTY_RESPONDING,
-  onDecidePermission,
-  onRespondAsk,
-  onOpenMember,
-  onOpenSession,
-  onBackToList,
-  initialDetail,
-  initialLimit = DEFAULT_LIMIT,
-  initialError,
-}: TeamChatProps) {
-  const [limit, setLimit] = useState(initialLimit);
-  const [membersLimit, setMembersLimit] = useState(DEFAULT_MEMBERS_LIMIT);
-  const [draft, setDraft] = useState('');
-  const [chips, setChips] = useState<MentionChip[]>([]);
-  const [sends, setSends] = useState<LocalSend[]>([]);
-  const [sending, setSending] = useState(false);
-  const [retryHint, setRetryHint] = useState(false);
-  const [messages, setMessages] = useState<TeamMessage[]>(() =>
-    initialDetail ? sortMessages(initialDetail.messages) : [],
-  );
-  const [membersOpen, setMembersOpen] = useState(false);
-  const [narrow, setNarrow] = useState(false);
-
-  const eventStateRef = useRef<TeamEventState>(createTeamEventState());
-  const lastRosterReloadAt = useRef(0);
-  const rosterTimer = useRef<number | undefined>(undefined);
-  /** 发送期间不发起新的 `teams.get`；保持 pollMs 稳定，避免 useResource 重跑。 */
-  const sendingRef = useRef(false);
-  const detailRef = useRef<TeamDetail | undefined>(initialDetail);
-
-  const membersDrawerRef = useDrawerA11y({
-    open: membersOpen,
-    onClose: () => setMembersOpen(false),
-    enabled: narrow,
-    returnFocusId: 'team-members-toggle',
-  });
-
-  const storeKey = teamDetailKey(nodeKey, teamId, 'chat');
-  const detailState = useTeamStore((state) => state.details[storeKey]);
-  const loadDetail = useTeamStore((state) => state.loadDetail);
-  const postTeam = useTeamStore((state) => state.post);
-  const reload = () => {
-    void loadDetail(nodeKey, teamId, client, { limit, members_limit: membersLimit }, 'chat');
+  const onComposerChange = (value: string) => {
+    setDraft(value);
+    if (retryHint) setRetryHint(false);
   };
-
-  usePolledAction(
-    () => {
-      const cached = detailRef.current;
-      if (shouldFetchTeam(sendingRef.current, cached !== undefined) || !cached) {
-        void loadDetail(nodeKey, teamId, client, { limit, members_limit: membersLimit }, 'chat');
-      }
-    },
-    {
-      enabled: hasToken,
-      pollMs: TEAM_POLL_MS,
-      deps: [epoch, tenantEpoch, teamId, limit, membersLimit, nodeKey],
-    },
-  );
-  const reloadRef = useRef(reload);
-  reloadRef.current = reload;
-  // Team 栏卡片的 Refresh 走全局刷新信号：按当前窗口大小重拉，不重置草稿。
-  const refreshFromSignal = useCallback(() => {
-    reloadRef.current();
-  }, []);
-  useRefreshSignal(refreshFromSignal);
-  sendingRef.current = sending;
-
-  const detail = resourceData(detailState) ?? initialDetail;
-  detailRef.current = detail;
-  const team = detail?.team;
-  const members = useMemo(() => detail?.members ?? [], [detail]);
-  const connected = hasToken && connectionState === 'open';
-  // 归档 Team 只读：日志仍可轮询查看，但不接受新消息。
-  const archived = team?.archived_at !== undefined;
-
-  useEffect(() => {
-    const update = () => setNarrow(window.innerWidth <= NARROW_MAX_WIDTH);
-    update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
-  }, []);
-
-  useEffect(() => {
-    return () => window.clearTimeout(rosterTimer.current);
-  }, []);
-
-  // 轮询结果并入本地列表；乐观项单独保存，不按内容模糊删除。
-  useEffect(() => {
-    const incoming = resourceData(detailState)?.messages;
-    if (!incoming || incoming.length === 0) return;
-    setMessages((prev) => mergeMessages(prev, incoming));
-  }, [detailState]);
-
-  // `run.*` / `agent.*` 事件只让 roster + 日志失效（250ms 合并一次定向 reload）；
-  // 正文永远来自 `teams.get` 轮询，事件不构造消息。
-  useEffect(() => {
-    const memberSessionIds = new Set(
-      members
-        .map((member) => member.session_id)
-        .filter((value): value is string => typeof value === 'string' && value.length > 0),
-    );
-    let state = eventStateRef.current;
-    for (const entry of events) {
-      if (entry.seq <= state.lastAppliedSeq) continue;
-      state = applyTeamEvent(state, { ...entry.event, seq: entry.seq }, teamId, memberSessionIds);
-    }
-    // dirty 只触发一次失效刷新；后续没有新事件时不能反复 reload。
-    const rosterDirty = state.rosterDirty;
-    eventStateRef.current = rosterDirty ? { ...state, rosterDirty: false } : state;
-
-    if (rosterDirty) {
-      const now = Date.now();
-      if (now - lastRosterReloadAt.current >= ROSTER_RELOAD_COOLDOWN_MS) {
-        lastRosterReloadAt.current = now;
-        window.clearTimeout(rosterTimer.current);
-        rosterTimer.current = window.setTimeout(() => reloadRef.current(), 250);
-      }
-    }
-  }, [events, teamId, members]);
-
-  const memberById = useMemo(() => {
-    const map = new Map<string, TeamMember>();
-    for (const member of members) map.set(member.agent_id, member);
-    return map;
-  }, [members]);
-
-  const resolveMember = (agentId: string): TeamMember | undefined => memberById.get(agentId);
-
-  const agentLabel = (agentId: string): string => {
-    const member = memberById.get(agentId);
-    return member ? memberDisplayName(member) : shortAgentId(agentId);
-  };
-
-  // rotate 失败不写 Team 日志；用事件派生一条错误灰条，成功后自动消失。
-  const rotateFailure = useMemo(() => latestRotateFailure(events, teamId), [events, teamId]);
-
-  const rows = useMemo(() => buildTeamRows(messages, sends, teamId), [messages, sends, teamId]);
-
-  const memberTotal = team?.member_count ?? members.length;
-  const memberWindow = memberWindowFlags(members.length, memberTotal, membersLimit);
-  // 窗口只含前 N 个成员；在线总数用服务端完整计数，缺失才回退窗口内计数。
-  const onlineCount = team?.online_count ?? members.filter(isOnlineMember).length;
-
-  const handleSend = async () => {
-    const content = draft.trim();
-    if (!content || sending || !hasToken || connectionState !== 'open' || archived) return;
-    const mentions = mentionIds(chips);
-    const localId = `local:${crypto.randomUUID()}`;
-    const ts = Date.now();
-
-    setSends((prev) => [...prev, { localId, content, mentions, ts, status: 'sending' }]);
-    setDraft('');
-    setChips([]);
-    setRetryHint(false);
-    setSending(true);
-    sendingRef.current = true;
-
-    try {
-      const result = await postTeam(client, { team_id: teamId, content, mentions });
-      setSends((prev) =>
-        prev.map((send) =>
-          send.localId === localId
-            ? {
-                ...send,
-                status: 'sent',
-                messageId: result.message_id,
-                deliveries: result.delivered,
-              }
-            : send,
-        ),
-      );
-      // reload 必须发生在发送锁释放之后，否则 load 会命中缓存分支而不发请求。
-      setSending(false);
-      sendingRef.current = false;
-      reloadRef.current();
-    } catch (error) {
-      // 响应可能丢失：重新拉一次，按 content + mentions + ts 对账。
-      let written: TeamMessage | undefined;
-      try {
-        const fresh = await client.getTeam(teamId, { limit, members_limit: membersLimit });
-        setMessages((prev) => mergeMessages(prev, fresh.messages));
-        written = matchWrittenMessage(fresh.messages, content, mentions, ts);
-      } catch {
-        // 对账失败：保留 failed，交给用户“再次发送”或刷新。
-      }
-      setSends((prev) =>
-        prev.map((send) => {
-          if (send.localId !== localId) return send;
-          if (written) {
-            return { ...send, status: 'sent', messageId: written.message_id };
-          }
-          return { ...send, status: 'failed', error: errorMessage(error) };
-        }),
-      );
-      setSending(false);
-      sendingRef.current = false;
-      reloadRef.current();
-    } finally {
-      setSending(false);
-      sendingRef.current = false;
-    }
-  };
-
-  const handleRetry = (message: TeamMessage) => {
-    setDraft(message.content);
-    setChips(message.mentions.map((agentId) => ({ agentId, label: agentLabel(agentId) })));
-    setRetryHint(true);
-  };
-
-  const openMember = (agentId: string) => {
-    setMembersOpen(false);
-    onOpenMember(agentId);
-  };
-
-  const { canLoadEarlier, historyLimited, visibleCount } = teamWindowFlags(limit, rows.length);
-  const error =
-    detailState?.status === 'error'
-      ? { message: detailState.error, code: detailState.code }
-      : initialError;
-  const firstLoading = !detail && !error;
-  const refreshing = detailState?.status === 'loading' && resourceData(detailState) !== undefined;
 
   return (
     <section className="team-chat" aria-label={team?.name ?? teamId}>
-      <header className="team-chat-head">
-        <div className="min-w-0">
-          <h1 className="font-serif text-title font-semibold wrap-anywhere">
-            {team?.name || teamId}
-          </h1>
-          <div className="mt-1.25 flex flex-wrap items-center gap-2 text-sm text-muted">
-            <span className="font-mono text-2xs text-faint">{teamId}</span>
-            {team?.workspace && (
-              <span className="max-w-80 truncate font-mono" title={team.workspace}>
-                {team.workspace}
-              </span>
-            )}
-            <span>
-              {t('team.chat.descriptionLabel')}: {team?.description || '—'}
-            </span>
-            {archived && (
-              <span className="rounded-full bg-warn-soft px-2 py-0.5 text-xs text-warn">
-                {t('teams.chat.archived')}
-                <span className="text-xs text-faint"> {t('teams.chat.archivedHint')}</span>
-              </span>
-            )}
-            <span>
-              {t('team.chat.memberWindow', { shown: members.length, total: memberTotal })}
-            </span>
-            <span>{t('team.chat.onlineCount', { count: onlineCount })}</span>
-          </div>
-        </div>
-        <div className="flex flex-none flex-wrap justify-end gap-1.5">
-          <Button
-            id="team-members-toggle"
-            className="team-chat-members-toggle hidden max-wide:inline-flex"
-            aria-expanded={membersOpen}
-            aria-controls="team-members"
-            onClick={() => setMembersOpen((value) => !value)}
-          >
-            {membersOpen ? t('team.a11y.closeMembers') : t('team.chat.members')}
-          </Button>
-          <Button className="team-chat-back hidden max-wide:inline-flex" onClick={onBackToList}>
-            {t('team.chat.backToList')}
-          </Button>
-          <Button onClick={reload} disabled={!hasToken || refreshing}>
-            {refreshing ? t('team.chat.refreshing') : t('team.chat.refresh')}
-          </Button>
-        </div>
-      </header>
+      <TeamChatHeader
+        team={team}
+        teamId={teamId}
+        archived={archived}
+        membersShown={members.length}
+        memberTotal={memberTotal}
+        onlineCount={onlineCount}
+        membersOpen={membersOpen}
+        onToggleMembers={() => setMembersOpen((value) => !value)}
+        onBackToList={onBackToList}
+        onRefresh={reload}
+        hasToken={hasToken}
+        refreshing={refreshing}
+      />
 
       <div className="team-chat-body">
-        <div className="team-chat-main">
-          {detail && error && <StaleNotice message={t('team.error.stale')} onRetry={reload} />}
-          <div className="team-transcript-scroll">
-            {rotateFailure && (
-              <div
-                className={cn(
-                  'team-notice-danger mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted',
-                  'border-l-danger bg-danger-soft text-ink',
-                )}
-                role="alert"
-              >
-                <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
-                  {t('team.message.systemTag')}
-                </span>
-                <span>
-                  {t('team.system.rotateFailed', {
-                    name: rotateFailure.agent_id
-                      ? agentLabel(rotateFailure.agent_id)
-                      : t('team.system.unknown'),
-                  })}
-                </span>
-                {(rotateFailure.reason ?? rotateFailure.code) && (
-                  <span className="font-mono"> {rotateFailure.reason ?? rotateFailure.code}</span>
-                )}
-              </div>
-            )}
-            {!hasToken ? (
-              <NotEnabledState
-                title={t('team.error.noToken')}
-                reason={t('team.error.noTokenReason')}
-              />
-            ) : firstLoading ? (
-              <LoadingState rows={3} />
-            ) : !detail ? (
-              error?.code === 'not_found' ? (
-                <NotEnabledState
-                  title={t('team.error.notEnabled')}
-                  reason={t('team.error.notEnabledReason')}
-                  hint={t('team.error.notEnabledHint')}
-                />
-              ) : (
-                <ErrorState
-                  message={error?.message ?? t('team.error.loadFailed')}
-                  onRetry={reload}
-                />
-              )
-            ) : rows.length === 0 ? (
-              <EmptyState title={t('team.chat.empty')} description={t('team.chat.emptyHint')} />
-            ) : (
-              <TeamTranscript
-                messages={rows}
-                resolveMember={resolveMember}
-                resolveMemberLabel={agentLabel}
-                onViewMemberSession={(_agentId, sessionId) => onOpenSession(sessionId)}
-                onRetrySend={handleRetry}
-              />
-            )}
+        <TeamChatMain
+          detail={detail}
+          error={error}
+          hasToken={hasToken}
+          firstLoading={firstLoading}
+          rows={rows}
+          rotateFailure={rotateFailure}
+          resolveMember={resolveMember}
+          agentLabel={agentLabel}
+          onOpenSession={onOpenSession}
+          onRetrySend={handleRetry}
+          onRefresh={reload}
+          canLoadEarlier={canLoadEarlier}
+          historyLimited={historyLimited}
+          visibleCount={visibleCount}
+          limit={limit}
+          onLoadEarlier={() => setLimit(nextLimitFor(limit))}
+          members={members}
+          permissions={permissions}
+          asks={asks}
+          responding={responding}
+          connected={connected}
+          onDecidePermission={onDecidePermission}
+          onRespondAsk={onRespondAsk}
+          draft={draft}
+          onDraftChange={onComposerChange}
+          chips={chips}
+          onChipsChange={setChips}
+          onSend={() => void handleSend()}
+          sending={sending}
+          archived={archived}
+          targetLabel={team?.name ?? teamId}
+          retryHint={retryHint}
+        />
 
-            {canLoadEarlier && (
-              <button
-                type="button"
-                className="load-earlier self-center"
-                onClick={() => setLimit(nextLimitFor(limit))}
-              >
-                {t('team.chat.loadEarlier')}
-              </button>
-            )}
-            {detail && historyLimited && (
-              <p className="m-0 self-center font-mono text-xs text-faint" role="status">
-                {t('team.chat.historyLimited', { count: visibleCount, limit })}
-              </p>
-            )}
-          </div>
-
-          <div className="team-composer-area">
-            <TeamPendingBar
-              members={members}
-              permissions={permissions}
-              asks={asks}
-              responding={responding}
-              connected={connected}
-              onDecidePermission={onDecidePermission}
-              onRespondAsk={onRespondAsk}
-            />
-            <TeamComposer
-              value={draft}
-              onChange={(value) => {
-                setDraft(value);
-                if (retryHint) setRetryHint(false);
-              }}
-              mentions={chips}
-              onMentionsChange={setChips}
-              onSend={() => void handleSend()}
-              sending={sending}
-              hasToken={hasToken}
-              connected={connected && !archived}
-              disabled={archived}
-              members={members}
-              targetLabel={team?.name ?? teamId}
-              retryHint={retryHint}
-            />
-          </div>
-        </div>
-
-        <aside
-          id="team-members"
-          ref={membersDrawerRef}
-          {...(narrow ? { role: 'dialog' as const, 'aria-modal': membersOpen } : {})}
-          className={`team-members-column ${membersOpen ? 'open' : ''}`.trim()}
-          aria-label={t('team.a11y.memberList')}
-          inert={narrow && !membersOpen ? true : undefined}
-          aria-hidden={narrow && !membersOpen ? true : undefined}
-        >
-          <TeamMemberSidebar
-            members={members}
-            total={memberTotal}
-            permissions={permissions}
-            asks={asks}
-            onOpenMember={openMember}
-            onOpenSession={onOpenSession}
-            onClose={narrow ? () => setMembersOpen(false) : undefined}
-          />
-          {memberWindow.canLoadMore && (
-            <button
-              type="button"
-              className="load-more mx-3 my-2"
-              onClick={() => setMembersLimit(nextMembersLimitFor(membersLimit))}
-            >
-              {t('team.chat.loadMoreMembers')}
-            </button>
-          )}
-          {memberWindow.capped && (
-            <p className="m-0 self-center font-mono text-xs text-faint" role="status">
-              {t('team.chat.membersCapped', { shown: members.length, total: memberTotal })}
-            </p>
-          )}
-        </aside>
-
-        {narrow && membersOpen && (
-          <button
-            type="button"
-            className="drawer-backdrop"
-            aria-label={t('team.a11y.closeMembers')}
-            onClick={() => setMembersOpen(false)}
-          />
-        )}
+        <TeamChatMembersAside
+          members={members}
+          memberTotal={memberTotal}
+          permissions={permissions}
+          asks={asks}
+          onOpenMember={openMember}
+          onOpenSession={onOpenSession}
+          onClose={narrow ? () => setMembersOpen(false) : undefined}
+          membersOpen={membersOpen}
+          narrow={narrow}
+          drawerRef={membersDrawerRef}
+          memberWindow={memberWindow}
+          onLoadMore={() => setMembersLimit(nextMembersLimitFor(membersLimit))}
+          onCloseDrawer={() => setMembersOpen(false)}
+        />
       </div>
     </section>
   );
