@@ -1,71 +1,31 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { CommandPalette } from '../components/CommandPalette';
-import { ConfirmDialog } from '../components/ConfirmDialog';
-import { ModalShell } from '../components/Modal';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
 import { RefreshBanner } from '../components/RefreshBanner';
 import { useToast } from '../components/ToastProvider';
-import { Button } from '../components/ui';
-import { AgentsView } from '../domains/agents/AgentsView';
-import { ChatView } from '../domains/chat/ChatView';
 import { pendingPermissionsOutsideView } from '../domains/chat/pending-permissions';
 import { browserSessionStorage, clearLastSession } from '../domains/chat/session-selection';
-import { ToolCatalogProvider } from '../domains/chat/tool-catalog';
-import { GatewayView } from '../domains/gateway/GatewayView';
-import { HubView } from '../domains/hub/HubView';
-import { IntegrationsView } from '../domains/integrations/IntegrationsView';
-import { NodePanelView } from '../domains/nodes/NodePanelView';
-import { ObserveView } from '../domains/observe/ObserveView';
-import { RunsView } from '../domains/runs/RunsView';
-import { SettingsView } from '../domains/settings/SettingsView';
-import { TeamsView } from '../domains/teams/TeamsView';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
 import { applyTheme, useTheme } from '../state/theme';
 import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
-import { DomainNav, primaryRoute } from './DomainNav';
-import { defaultNavCollapsed, navModeForWidth, parseNavCollapsed } from './layout';
-import { DOMAINS, domainLabel, routeBreadcrumb, settingsTabLabel } from './nav';
-import { requestRefresh } from './refresh';
-import { formatRoute, type Route } from './router';
+import { DomainNav } from './DomainNav';
+import { defaultNavCollapsed, navModeForWidth } from './layout';
+import { routeBreadcrumb } from './nav';
+import { readNavPreference, writeNavPreference } from './nav-preference';
+import { buildPaletteItems } from './palette-items';
+import { formatRoute } from './router';
+import { ShellBanners } from './ShellBanners';
+import { ShellOverlays } from './ShellOverlays';
+import { ShellRouteView } from './ShellRouteView';
 import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { tenantResetPlan } from './tenant-reset';
 import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
 import { paneCssVars, usePaneResize } from './usePaneResize';
 import { useViewportWidth } from './useViewportWidth';
-
-type SettingsTab = Extract<Route, { domain: 'settings' }>['tab'];
-
-const NAV_COLLAPSED_KEY = 'vessel.nav.collapsed';
-
-function readNavPreference(): boolean | null {
-  try {
-    return parseNavCollapsed(localStorage.getItem(NAV_COLLAPSED_KEY));
-  } catch {
-    return null;
-  }
-}
-
-function writeNavPreference(collapsed: boolean): void {
-  try {
-    localStorage.setItem(NAV_COLLAPSED_KEY, collapsed ? '1' : '0');
-  } catch {
-    // 隐私模式/配额满：折叠仍在本会话内生效。
-  }
-}
-
-const SETTINGS_NAV: readonly { tab: SettingsTab; keywords: string[] }[] = [
-  { tab: 'connection', keywords: ['gateway', 'token', 'url', 'connect'] },
-  { tab: 'config', keywords: ['config', 'sources', 'paths'] },
-  { tab: 'capabilities', keywords: ['capabilities', 'methods', 'plugins'] },
-  { tab: 'tenants', keywords: ['tenant', 'quota', 'admin'] },
-  { tab: 'appearance', keywords: ['theme', 'dark', 'light'] },
-  { tab: 'display', keywords: ['display', 'verbosity', 'errorLevel', 'settings'] },
-];
 
 export function AppShell() {
   const locale = useLocale();
@@ -248,123 +208,13 @@ export function AppShell() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [modalOpen]);
 
+  const openHelp = useCallback(() => setHelpOpen(true), []);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: locale 变化需要重算面板文案
-  const paletteItems = useMemo<PaletteItem[]>(() => {
-    const items: PaletteItem[] = [
-      ...DOMAINS.map((domain) => ({
-        id: `nav-${domain.id}`,
-        group: 'navigation' as const,
-        label: t('nav.openNamed', { domain: domainLabel(domain.id) }),
-        keywords: [domain.id, domainLabel(domain.id)],
-        hint: t('nav.hintNavigation'),
-        run: () => navigate(primaryRoute(domain.id)),
-      })),
-      {
-        id: 'nav-settings',
-        group: 'navigation',
-        label: t('nav.openNamed', { domain: domainLabel('settings') }),
-        keywords: ['settings', '设置'],
-        hint: t('nav.hintNavigation'),
-        run: () => navigate({ domain: 'settings', tab: 'connection' }),
-      },
-      ...SETTINGS_NAV.map((entry) => ({
-        id: `nav-settings-${entry.tab}`,
-        group: 'navigation' as const,
-        label: t('breadcrumb.settings', { tab: settingsTabLabel(entry.tab) }),
-        keywords: ['settings', entry.tab, ...entry.keywords],
-        hint: t('nav.hintSettings'),
-        run: () => navigate({ domain: 'settings', tab: entry.tab }),
-      })),
-      {
-        id: 'action-new-session',
-        group: 'action',
-        label: t('palette.action.newSession'),
-        keywords: ['new', 'session', 'chat'],
-        hint: t('palette.hint.action'),
-        run: () => {
-          // 先回到 Chat 再进入 new，确保已在 new 时也会生成新的草稿 id。
-          navigate({ domain: 'chat' });
-          window.setTimeout(() => navigate({ domain: 'chat', sessionId: 'new' }), 0);
-        },
-      },
-      {
-        id: 'action-resume-run',
-        group: 'action',
-        label: t('palette.action.resumeRun'),
-        keywords: ['resume', 'durable', 'interrupted', '恢复'],
-        hint: t('palette.hint.action'),
-        run: () => navigate({ domain: 'runs', tab: 'durable' }),
-      },
-      {
-        id: 'action-tenant',
-        group: 'action',
-        label: t('palette.action.switchTenant'),
-        keywords: ['tenant', 'switch', '租户'],
-        hint: t('palette.hint.action'),
-        run: () => navigate({ domain: 'settings', tab: 'tenants' }),
-      },
-      {
-        id: 'action-connection',
-        group: 'action',
-        label: t('palette.action.connectionSettings'),
-        keywords: ['gateway', 'token', 'url', 'connect'],
-        hint: t('palette.hint.action'),
-        run: () => navigate({ domain: 'settings', tab: 'connection' }),
-      },
-      {
-        id: 'action-config',
-        group: 'action',
-        label: t('palette.action.viewConfig'),
-        keywords: ['config', 'sources'],
-        hint: t('palette.hint.action'),
-        run: () => navigate({ domain: 'settings', tab: 'config' }),
-      },
-      {
-        id: 'action-capabilities',
-        group: 'action',
-        label: t('palette.action.viewCapabilities'),
-        keywords: ['capabilities', 'methods'],
-        hint: t('palette.hint.action'),
-        run: () => navigate({ domain: 'settings', tab: 'capabilities' }),
-      },
-      {
-        id: 'action-refresh',
-        group: 'action',
-        label: t('palette.action.refresh'),
-        keywords: ['refresh', 'reload'],
-        hint: t('palette.hint.action'),
-        run: () => {
-          requestRefresh();
-          toast.info(t('palette.toast.refreshed'));
-        },
-      },
-      {
-        id: 'help-shortcuts',
-        group: 'help',
-        label: t('palette.action.shortcuts'),
-        keywords: ['help', 'keyboard', 'shortcut'],
-        hint: t('palette.hint.help'),
-        run: () => setHelpOpen(true),
-      },
-    ];
-    if (hasToken) {
-      items.push({
-        id: 'action-retry',
-        group: 'action',
-        label:
-          connectionState === 'open'
-            ? t('palette.action.checkConnection')
-            : t('palette.action.reconnect'),
-        keywords: ['reconnect', 'retry'],
-        hint: t('palette.hint.action'),
-        run: () => {
-          retry();
-          toast.info(t('palette.toast.reconnecting'));
-        },
-      });
-    }
-    return items;
-  }, [connectionState, hasToken, locale, navigate, retry, toast]);
+  const paletteItems = useMemo<PaletteItem[]>(
+    () => buildPaletteItems({ hasToken, connectionState, navigate, retry, toast, openHelp }),
+    [connectionState, hasToken, locale, navigate, retry, toast, openHelp],
+  );
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
 
@@ -440,54 +290,16 @@ export function AppShell() {
               : {})}
         />
 
-        {(lastError || tokenError || stale) && (
-          <div className="flex flex-none flex-col">
-            {lastError && (
-              <div className="banner banner-error" role="alert">
-                <span>{lastError}</span>
-                <button
-                  type="button"
-                  className="banner-close"
-                  aria-label={t('app.closeError')}
-                  onClick={dismissError}
-                >
-                  ×
-                </button>
-              </div>
-            )}
-            {tokenError && (
-              <div className="banner banner-error" role="alert">
-                <span>{tokenError}</span>
-                <button
-                  type="button"
-                  className="link-btn"
-                  onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
-                >
-                  {t('app.openConnection')}
-                </button>
-              </div>
-            )}
-            {stale && (
-              <div className="banner banner-stale" role="status">
-                <span>
-                  {connectionState === 'reconnecting'
-                    ? t('app.reconnecting', { count: Math.max(1, reconnectAttempt) })
-                    : t('app.stale')}
-                </span>
-                <button type="button" className="link-btn" onClick={retry}>
-                  {t('app.retryNow')}
-                </button>
-                <button
-                  type="button"
-                  className="link-btn"
-                  onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
-                >
-                  {t('app.connectionSettings')}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        <ShellBanners
+          lastError={lastError}
+          tokenError={tokenError}
+          stale={stale}
+          connectionState={connectionState}
+          reconnectAttempt={reconnectAttempt}
+          onDismissError={dismissError}
+          onRetry={retry}
+          onOpenConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
+        />
 
         {(otherPending.length > 0 || otherAsks.length > 0) && (
           <PendingPermissionsBar
@@ -517,32 +329,17 @@ export function AppShell() {
             tabIndex={-1}
             inert={navMode === 'drawer' && navDrawerOpen ? true : undefined}
           >
-            {route.domain === 'chat' && (
-              <ToolCatalogProvider
-                client={client}
-                enabled={hasToken && connectionState === 'open'}
-                epoch={epoch}
-              >
-                <ChatView
-                  route={route}
-                  navigate={navigate}
-                  sessionsOpen={chatSessionsOpen}
-                  onCloseSessions={closeSessions}
-                  panes={panes}
-                />
-              </ToolCatalogProvider>
-            )}
-            {route.domain === 'hub' && <HubView />}
-            {route.domain === 'gateway' && <GatewayView />}
-            {route.domain === 'nodes' && <NodePanelView route={route} navigate={navigate} />}
-            {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} />}
-            {route.domain === 'agents' && <AgentsView route={route} navigate={navigate} />}
-            {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
-            {route.domain === 'integrations' && (
-              <IntegrationsView route={route} navigate={navigate} />
-            )}
-            {route.domain === 'observe' && <ObserveView route={route} navigate={navigate} />}
-            {route.domain === 'settings' && <SettingsView route={route} navigate={navigate} />}
+            <ShellRouteView
+              route={route}
+              navigate={navigate}
+              chatSessionsOpen={chatSessionsOpen}
+              onCloseSessions={closeSessions}
+              panes={panes}
+              client={client}
+              hasToken={hasToken}
+              connectionState={connectionState}
+              epoch={epoch}
+            />
           </main>
         </div>
 
@@ -561,63 +358,23 @@ export function AppShell() {
           {announcement}
         </div>
 
-        {paletteOpen && (
-          <CommandPalette
-            items={paletteItems}
-            entities={entities}
-            initialQuery={paletteQuery}
-            onClose={closePalette}
-            onExecute={runPaletteItem}
-          />
-        )}
-
-        {helpOpen && (
-          <ModalShell label={t('app.help.title')} onClose={() => setHelpOpen(false)}>
-            <h2 className="modal-title">{t('app.help.title')}</h2>
-            <dl className="shortcut-list">
-              <dt>
-                <kbd className="kbd">Ctrl/Cmd</kbd> + <kbd className="kbd">K</kbd>
-              </dt>
-              <dd>{t('app.help.openClose')}</dd>
-              <dt>
-                <kbd className="kbd">/</kbd>
-              </dt>
-              <dd>{t('app.help.actionMode')}</dd>
-              <dt>
-                <kbd className="kbd">↑</kbd> / <kbd className="kbd">↓</kbd>
-              </dt>
-              <dd>{t('app.help.move')}</dd>
-              <dt>
-                <kbd className="kbd">Enter</kbd>
-              </dt>
-              <dd>{t('app.help.execute')}</dd>
-              <dt>
-                <kbd className="kbd">Esc</kbd>
-              </dt>
-              <dd>{t('app.help.close')}</dd>
-            </dl>
-            <div className="modal-actions">
-              <Button variant="primary" data-autofocus onClick={() => setHelpOpen(false)}>
-                {t('common.close')}
-              </Button>
-            </div>
-          </ModalShell>
-        )}
-
-        {pendingAction?.confirm && (
-          <ConfirmDialog
-            title={pendingAction.confirm.title}
-            body={<p>{pendingAction.confirm.body}</p>}
-            confirmLabel={pendingAction.confirm.confirmLabel}
-            danger
-            onConfirm={() => {
-              const action = pendingAction;
-              setPendingAction(null);
-              action.run();
-            }}
-            onCancel={() => setPendingAction(null)}
-          />
-        )}
+        <ShellOverlays
+          paletteOpen={paletteOpen}
+          paletteItems={paletteItems}
+          entities={entities}
+          paletteQuery={paletteQuery}
+          onClosePalette={closePalette}
+          onExecutePalette={runPaletteItem}
+          helpOpen={helpOpen}
+          onCloseHelp={() => setHelpOpen(false)}
+          pendingAction={pendingAction}
+          onClearPending={() => setPendingAction(null)}
+          onConfirmPending={() => {
+            const action = pendingAction;
+            setPendingAction(null);
+            action?.run();
+          }}
+        />
       </div>
     </PaletteEntitiesProvider>
   );
