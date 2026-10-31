@@ -174,12 +174,18 @@ async function canAutoBuild(): Promise<boolean> {
   }
 }
 
+/** 进行中的构建；重复调用共用同一个 promise，避免并发起两份。 */
+let inFlightBuild: Promise<void> | undefined;
+
 /**
- * 静态产物过期/缺失时**自动重建**，返回重建后的状态。
+ * 静态产物过期/缺失时**后台重建**，立即返回当前状态（不阻塞启动）。
  *
- * 为什么自动而不是只警告：`dist` 不入 git，gateway 托管它 —— 源码改了没重新构建，
- * 界面就一直是旧的，而版本号不变、人也不会主动去看时间戳。既然 gateway 已经能判断
- * 产物比源码旧，让它顺手建一次，比提醒用户去敲命令更可靠。
+ * 为什么后台：`bun run build` 实测约 19 秒（`tsc --noEmit && vite build`），
+ * 放在启动路径上会让每次「改过 web 源码后启动」都慢 19 秒。
+ *
+ * 为什么不阻塞也能接受：gateway 静态资源是**每次请求读盘**的，重建完成后
+ * 下一次加载就拿到新产物 —— 不需要重启。已打开的页面靠 `RefreshBanner`
+ * 轮询 `dist/build.json` 自行发现并提示刷新。
  *
  * 只在**仓库内默认目录**下生效（自定义 `VESSEL_STATIC_DIR` 不碰）。任何失败都只告警、
  * 不改退出码，继续以现有产物提供服务。
@@ -195,24 +201,27 @@ export async function ensureWebDist(options: EnsureWebDistOptions = {}): Promise
   if (explicitDir !== undefined && explicitDir.trim() !== '') return status;
   if (!(await canAutoBuild())) return status;
 
+  if (inFlightBuild !== undefined) return status;
   warn(t('gateway.webDistBuilding', { path: DEFAULT_WEB_ROOT }));
-  try {
-    const { execFile } = await import('node:child_process');
-    const { promisify } = await import('node:util');
-    await promisify(execFile)(process.execPath, ['run', 'build'], {
-      cwd: DEFAULT_WEB_ROOT,
-      timeout: options.buildTimeoutMs ?? 180_000,
-      encoding: 'utf8',
-    });
-  } catch (error) {
-    warn(
-      t('gateway.webDistBuildFailed', {
-        detail: error instanceof Error ? error.message : String(error),
-      }),
-    );
-    return status;
-  }
-  const rebuilt = await inspectWebDist(options);
-  warn(t('gateway.webDistBuilt'));
-  return rebuilt;
+  inFlightBuild = (async (): Promise<void> => {
+    try {
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      await promisify(execFile)(process.execPath, ['run', 'build'], {
+        cwd: DEFAULT_WEB_ROOT,
+        timeout: options.buildTimeoutMs ?? 180_000,
+        encoding: 'utf8',
+      });
+      warn(t('gateway.webDistBuilt'));
+    } catch (error) {
+      warn(
+        t('gateway.webDistBuildFailed', {
+          detail: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    } finally {
+      inFlightBuild = undefined;
+    }
+  })();
+  return status;
 }

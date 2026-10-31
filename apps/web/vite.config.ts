@@ -81,6 +81,11 @@ const configure = relay ? relayConfigure(relay.secret) : undefined;
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), writeBuildStamp()],
+  define: {
+    // 页面把「我是哪一次构建」编进 bundle，运行时与 `dist/build.json` 比对，
+    // 不一致就提示刷新 —— 后台重建完成后用户能立刻知道。
+    __VESSEL_WEB_BUILD__: JSON.stringify(STAMP),
+  },
   server: {
     port: 5173,
     proxy: {

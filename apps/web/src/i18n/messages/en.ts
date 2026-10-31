@@ -25,6 +25,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.expandNav': 'Expand sidebar',
   'nav.collapsed': 'Collapse',
   'nav.jumpToMain': 'Skip to main content',
+  'webBuild.outdated': 'The console was updated in the background; reload to load the new version.',
+  'webBuild.reload': 'Reload',
   'nav.more': 'More',
   'nav.moreSheet': 'More navigation',
   'nav.connection': 'Connection',

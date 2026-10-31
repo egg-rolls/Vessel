@@ -4,6 +4,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ModalShell } from '../components/Modal';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
+import { RefreshBanner } from '../components/RefreshBanner';
 import { useToast } from '../components/ToastProvider';
 import { Button } from '../components/ui';
 import { AgentsView } from '../domains/agents/AgentsView';
@@ -423,6 +424,8 @@ export function AppShell() {
         >
           {t('nav.jumpToMain')}
         </button>
+        {/* 后台重建完成后，已打开的页面自报「该刷新了」。 */}
+        <RefreshBanner />
         <AppBar
           route={route}
           navigate={navigate}

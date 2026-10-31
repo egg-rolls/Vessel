@@ -25,6 +25,8 @@ export const messages = {
   'nav.expandNav': '展开侧栏',
   'nav.collapsed': '折叠',
   'nav.jumpToMain': '跳到主内容',
+  'webBuild.outdated': 'Web 控制台已在后台更新，刷新以加载新版本。',
+  'webBuild.reload': '刷新',
   'nav.more': '更多',
   'nav.moreSheet': '更多导航',
   'nav.connection': '连接',
