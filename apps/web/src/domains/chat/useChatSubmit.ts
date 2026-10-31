@@ -6,6 +6,7 @@ import type { NodeView } from '../../gateway/NodeProvider';
 import type { TeamControl } from '../../gateway/team-control';
 import { t } from '../../i18n';
 import type { EventStoreSnapshot } from '../../state/event-store';
+import { startedRunIds } from '../../state/events';
 import type { SessionLoadOptions } from '../../stores/sessionStore';
 import { errorMessage } from './errors';
 import { type StartInNewAgentResult, startInNewAgent } from './new-session';
@@ -56,15 +57,9 @@ export function useChatSubmit({
   const queuedRef = useRef(queuedRuns);
   queuedRef.current = queuedRuns;
 
-  const seenJobIds = useMemo(
-    () =>
-      new Set(
-        snapshot.entries
-          .map((entry) => entry.jobId)
-          .filter((jobId): jobId is string => Boolean(jobId)),
-      ),
-    [snapshot.entries],
-  );
+  // 只有 `run.started` 表示事件流已接管；`agent.queue.entered` 在排队时就会到，
+  // 把它当成接管信号会让占位卡片只闪一下（0.30 回归 F3）。
+  const startedRuns = useMemo(() => startedRunIds(snapshot.entries), [snapshot.entries]);
 
   // 排队位置没有推送事件：只轮询未取消的排队卡片。
   useEffect(() => {
@@ -116,10 +111,10 @@ export function useChatSubmit({
     return () => window.clearInterval(id);
   }, [queuedRuns, client]);
 
-  // 事件流接管后移除排队占位卡片。
+  // 事件流接管（run 真正开始）后移除排队占位卡片。
   useEffect(() => {
-    setQueuedRuns((prev) => prev.filter((item) => !seenJobIds.has(item.runId)));
-  }, [seenJobIds]);
+    setQueuedRuns((prev) => prev.filter((item) => !startedRuns.has(item.runId)));
+  }, [startedRuns]);
 
   const handleSend = async () => {
     const text = input.trim();
@@ -155,7 +150,7 @@ export function useChatSubmit({
       if (!targetSessionId) pendingNewSessions.current.add(nextSessionId);
       setInput('');
       if (!targetSessionId) navigate({ domain: 'chat', sessionId: nextSessionId });
-      if (run.status === 'queued' && !seenJobIds.has(run.run_id)) {
+      if (run.status === 'queued' && !startedRuns.has(run.run_id)) {
         const queuedSessionId = run.session_id ?? nextSessionId;
         setQueuedRuns((prev) => [
           ...prev.filter((item) => item.runId !== run.run_id),
@@ -183,14 +178,16 @@ export function useChatSubmit({
 
   // 引用保持稳定：memo(RunItems) 依赖这几个回调，避免每个 token 让全部实时项重渲染。
   const handleCancel = useCallback(
-    async (group: { jobId?: string }) => {
-      const jobId = group.jobId;
-      if (!jobId) return;
-      setCancelling((prev) => new Set(prev).add(jobId));
+    async (group: { runId: string }) => {
+      // 取消只认真实 run id。`jobId` 是事件帧的 run_id，成员事件上它是成员 id，
+      // 对新会话恰好等于 session id —— 用它取消会得到 not_found（F2）。
+      const runId = group.runId;
+      if (!runId) return;
+      setCancelling((prev) => new Set(prev).add(runId));
       try {
-        const result = await client.cancelRun(jobId);
+        const result = await client.cancelRun(runId);
         if (result.cancelled) {
-          setCancelledJobs((prev) => new Set(prev).add(jobId));
+          setCancelledJobs((prev) => new Set(prev).add(runId));
           toast.success(t('chat.toast.cancelRequested'));
         }
       } catch (error) {
@@ -198,7 +195,7 @@ export function useChatSubmit({
       } finally {
         setCancelling((prev) => {
           const next = new Set(prev);
-          next.delete(jobId);
+          next.delete(runId);
           return next;
         });
       }

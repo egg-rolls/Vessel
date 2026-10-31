@@ -191,14 +191,17 @@ export function useChatTranscript({
     hiddenLiveGroups > 0 ? visibleGroups.slice(-MAX_LIVE_GROUPS) : visibleGroups;
 
   // 0.18：停止入口固定在底部 Composer 区域，只对当前会话仍在跑的 run 出现。
+  // `hasRunEvent` 排除成员事件聚合出的“永不终态”分组：它们的 runId 是成员 id，
+  // 拿去 cancel 只会 not_found（F2）；没有 live run 时 Stop 也必须消失。
   const runningGroup = useMemo(
     () =>
       renderedGroups.find(
-        (group) => group.status === 'running' && group.jobId && !cancelledJobs.has(group.jobId),
+        (group) =>
+          group.status === 'running' && group.hasRunEvent && !cancelledJobs.has(group.runId),
       ) ?? null,
     [renderedGroups, cancelledJobs],
   );
-  const stopBusy = runningGroup?.jobId ? cancelling.has(runningGroup.jobId) : false;
+  const stopBusy = runningGroup ? cancelling.has(runningGroup.runId) : false;
 
   // 0.18：当前会话的 pending 固定落在 Composer 槽位，不再挂到运行段或页面顶部。
   // 缺 sessionId 的旧流请求按 run 归属补判；run 终态时 ConnectionProvider 会清掉请求。

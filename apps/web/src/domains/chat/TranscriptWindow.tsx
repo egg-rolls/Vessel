@@ -234,7 +234,7 @@ export function TranscriptWindow({
                   <RunItems
                     key={group.runId}
                     group={group}
-                    cancelled={group.jobId ? cancelledJobs.has(group.jobId) : false}
+                    cancelled={cancelledJobs.has(group.runId)}
                     hideInput={
                       hasTranscript &&
                       transcriptMessages.some(

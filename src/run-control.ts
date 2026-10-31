@@ -24,6 +24,17 @@ function statusOf(state: RunStatus): RunControlStatus {
   return state;
 }
 
+/**
+ * 适配层返回形状：`AdmitResult.session_id` 是本次解析 / 创建的 body id。
+ *
+ * `RunStartLikeResult` 只约束 run 状态，没有 session；但 gateway 的
+ * `runs.start` 会把控制面回传的 `session_id` 原样带给 Web（不编造）。
+ * 新会话首次发送依赖它回填路由，所以这里必须透传，不能丢。
+ */
+interface RunStartResultWithSession extends RunStartLikeResult {
+  session_id?: string;
+}
+
 /** camelCase `RunSnapshot` → snake_case `LiveRunSnapshotLike`。 */
 function mapRun(run: {
   runId: string;
@@ -86,11 +97,15 @@ export function createRunControl(
         ...(input.session_id !== undefined ? { session_id: input.session_id } : {}),
       };
       const result = await service.admit(admit);
-      return {
+      const mapped: RunStartResultWithSession = {
         run_id: result.run_id,
         status: statusOf(result.status),
         ...(result.queue_position !== undefined ? { queue_position: result.queue_position } : {}),
+        // 新会话由服务端在本 agent 下建 body；不回填这个 session，Web 无法把草稿
+        // 切到真实会话（没有本地兜底，缺失即视为契约失败）。
+        ...(result.session_id ? { session_id: result.session_id } : {}),
       };
+      return mapped;
     },
     cancel(runId: string, reason?: string): boolean {
       return scheduler.cancel(runId, reason);

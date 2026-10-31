@@ -32,6 +32,16 @@ export interface RunGroup {
   runId: string;
   jobId?: string;
   sessionId?: string;
+  /**
+   * 该分组是否由真实 run 的事件构成。
+   *
+   * 成员级事件（`agent.spawned` / `agent.message.queued` …）的 `run_id` 是**成员 id**，
+   * 不是 run id，也会按 run_id 聚成一组，但永远不会有终态事件。判据用事件载荷：
+   * run 事件自报 `data.run_id === event.run_id`（core runtime / scheduler 都是这个形状），
+   * 成员事件不带 `data.run_id`。Stop / 取消只认这里为 true 的分组，否则会把成员 id
+   * （对新会话恰好等于 session id）当成 run id 发给 `runs.cancel`。
+   */
+  hasRunEvent: boolean;
   input?: string;
   output?: string;
   error?: string;
@@ -73,7 +83,7 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
 
 /** 单个 run 的事件序列 → 可渲染分组。 */
 export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunGroup {
-  const group: RunGroup = { runId, status: 'running', items: [] };
+  const group: RunGroup = { runId, status: 'running', hasRunEvent: false, items: [] };
   let buf = '';
   let textIndex = 0;
   let reasoningBuf = '';
@@ -109,6 +119,11 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
     const ev = entry.event;
     if (group.firstTs === undefined) group.firstTs = ev.ts;
     if (entry.jobId) group.jobId = entry.jobId;
+    // 载荷自报 run_id 的才是 run 事件；成员事件的 run_id 是成员 id（见 hasRunEvent）。
+    const payloadRunId = (ev.data as { run_id?: unknown }).run_id;
+    if (typeof payloadRunId === 'string' && payloadRunId === ev.run_id) {
+      group.hasRunEvent = true;
+    }
     // 中途连上 / run.started 已被环形缓冲裁剪时，仍按任一事件的 session_id 归属会话；
     // 否则成员 run 的实时卡片会因缺 sessionId 被会话窗口过滤掉。
     if (group.sessionId === undefined) {
@@ -239,6 +254,21 @@ export function groupEvents(
   return [...byRun.entries()]
     .map(([runId, list]) => buildGroup(runId, list))
     .sort((a, b) => (a.startedAt ?? a.firstTs ?? 0) - (b.startedAt ?? b.firstTs ?? 0));
+}
+
+/**
+ * 事件流里已经真正开始执行的 run id。
+ *
+ * 排队阶段先到的是 `agent.queue.entered`（`run_id` 是排队 run 的真实 id），
+ * 它只说明 run 进了队列，**不代表事件流已接管**；排队占位卡片必须保留到
+ * `run.started` 出现，否则用户既看不到排队位置也点不到取消。
+ */
+export function startedRunIds(entries: readonly StoredEvent[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (entry.event.type === 'run.started') ids.add(entry.event.run_id);
+  }
+  return ids;
 }
 
 /** 只保留属于某个会话的 run 分组。 */
