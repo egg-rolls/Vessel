@@ -9,6 +9,27 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [0.33.0] - 2026-10-31
+
+> 0.33.0（基于 0.32.0，未发布）：headless ask 异步、压缩质量、Web 尾部拆分、诊断 doctor 覆盖。
+> 完整记录见 [`docs/versions/0.33.0.md`](docs/versions/0.33.0.md)。
+
+### Added
+
+- **headless ask 异步**：`--run` 提问时挂起并 exit 3，`attention` 离线应答，`--resume-run` 恢复；
+  ADR-082 追加 Errata（headless 注册反转）。
+- **压缩质量**：压缩前清旧工具输出（保留配对/system/最近 5 条），摘要九段模板。
+- **诊断页**：覆盖 doctor --deep 九类检查，缺数据源标 unavailable 并写原因。
+
+### Changed
+
+- **Web 尾部拆分**：AttentionPanel / TeamsView / TeamChat / TenantsView 拆为薄容器，
+  导入路径与导出面不变。
+
+### 验证
+
+- 一次性探针：ask、compaction、web-split parity、doctor；每线门禁全 exit 0。无测试文件。
+
 ## [0.32.0] - 2026-10-31
 
 > 0.32.0（基于 0.31.0，未发布）：上下文管理系统。完整记录见
