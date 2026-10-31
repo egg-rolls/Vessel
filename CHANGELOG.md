@@ -9,6 +9,30 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [0.32.0] - 2026-10-31
+
+> 0.32.0（基于 0.31.0，未发布）：上下文管理系统。完整记录见
+> [`docs/versions/0.32.0.md`](docs/versions/0.32.0.md)。
+
+### Added
+
+- **持久化收件箱**（按 agent_id，上限可配置 `agent.inbox_max_messages`，默认 200）；
+  消息有稳定 id、summary、important。
+- **模型驱动读取**：`inbox` 工具 `list`/`read`，由模型决定取几条、取哪条；未读只发一条 notice。
+- **紧急打断**：`agents.send {interrupt, message_id, important}` 取消当前 run 并优先投递指定消息；
+  只读 `vessel agent inbox` / `agent send --interrupt` CLI。
+- **压缩可恢复**：`message.compaction` 事件落事件日志。
+- **可观测**：TUI/Web 渲染 context 生命周期 notice；`agents.tree` 输出真实 `context_used`。
+
+### Changed
+
+- rotate 顺序固定为 启动嘱托 → 旧队列 → 新队列；写前日志。
+- retire 清理旧 pending notice / 权限 / hook；limit warning 不再双投递。
+
+### Fixed
+
+- rotate/busy/重启丢消息、顺序错乱、权限挂死、通知串味、startup 失败静默、Web 水位无 producer。
+
 ## [0.31.0] - 2026-10-31
 
 > 0.31.0（基于 0.30.0，未发布）：Chat 修复、热应用降级与 body 热重载、Web IA 收敛、
