@@ -34,3 +34,13 @@ tags: [ask-user, tools, gateway, cli, web, rendering, visibility, i18n]
 - **验证**：`src/__tests__/headless.test.ts`、`config-set-command.test.ts`、`packages/config/__tests__/ui-config.test.ts`、`apps/web/tests/permission-inline.test.tsx`、`run-card.test.tsx`、`tool-cards.test.ts`、`visibility.test.ts`、`group-cache.test.ts`；`bun run typecheck`、`bunx @biomejs/biome ci .`、`bun run scripts/check-docs.ts`。
 
 - **关联**：ADR-029（交互暂停事件流）、ADR-036（Gateway 协议）、ADR-062（TUI i18n）、ADR-072（UI 设置与 Web i18n）、ADR-074（gateway 生命周期）、ADR-079（权限内联与持久化）、ADR-080（可见性配置）；`packages/config/src/types.ts`、`src/bootstrap.ts`、`src/tenant-runtime-factory.ts`、`src/cli.ts`、`apps/web/src/domains/chat/AskCard.tsx`、`ToolCard.tsx`、`RunCard.tsx`、`apps/web/src/state/visibility.ts`、`apps/web/src/state/group-cache.ts`。
+
+## Errata（2026-10-31，0.33）
+
+> 本条只追加。上文「注册矩阵 / 非目标」中「headless / `--run` / 管道不注册 `ask_user`」按此覆盖；其余结论不变。
+
+- **headless / `--run` 注册 `ask_user`（异步，不挂死）**：headless runner 订阅 `ask.user.requested`，把请求写入 `InteractionsStore`（`kind: 'ask'`、`suspended: true`），发布 `ask.user.timeout`，随后以中断原因 `timeout` 终止当前 run。checkpoint 落 `interrupted`，`--run` 不等待人类，以**退出码 3** 收口并打印 request / run 与后续命令。管道输入同属 headless 入口。
+- **离线应答**：没有本地 gateway 时，`vessel attention` 回退到同一份 `<dataDir>/interactions-<tenant>.json`（进程内复用既有 `interactions.list` / `ask.respond` / `permission.respond` 语义，不新增 RPC）；`--tenant` 生效，列表展示问题文本。
+- **恢复投递**：`vessel --resume-run <runId>` 在 `AgentRuntime.resume` 前，把该 run 已回答的 ask 以一条 `user.message` 事件（`data.source = 'ask_resume'`）追加进 session 事件日志；答案进入下一轮 LLM 请求，重复 resume 按 `request_id` 去重。
+- **`suspended` 标记**：`StoredInteraction.suspended = true` 表示「run 已 interrupted、等待人类回答」的 ask；gateway 重启 hydrate 时这类记录保持 `pending`（仍可回答），普通 pending（权限 / 活 run 的 ask）仍转 `orphaned`。
+- **不变**：`ask.respond` 参数 / 返回形状、`ui.askUser: false` 一律关闭、交互 REPL 与 gateway/serve 的默认无限等待语义；不新增 RPC 或配置键。

@@ -296,6 +296,7 @@ function printHelp(): void {
       '',
       `  ${ui.section(t('help.section.headless'))}`,
       align(headless, width),
+      `  ${ui.dim(t('help.note.askSuspended'))}`,
       '',
       `  ${ui.section(t('help.section.gateway'))}`,
       align(gateway, width),

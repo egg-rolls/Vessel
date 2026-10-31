@@ -11,6 +11,10 @@ export const zhCN = {
   'help.section.usage': '用法',
   'help.section.session': '会话',
   'help.section.headless': 'Headless 模式',
+  'help.note.askSuspended':
+    '--run 中模型调用 ask_user 时以 exit 3 挂起；用 ' +
+    '`vessel attention respond <id> --answers <json>` 回答（无 gateway 时自动离线），再 ' +
+    '`vessel --resume-run <runId>` 恢复。',
   'help.section.gateway': 'Gateway 生命周期（0.12）',
   'help.section.capability': '能力（0.4）',
   'help.section.config': '配置（0.5）',

@@ -133,6 +133,10 @@ vessel --connect https://gateway.example.com:8642 \
   --connect-token "$VESSEL_CONNECT_TOKEN" --ca ./ca.pem --run "..."  # 远程客户端
 vessel --resume-run                  # 列出 interrupted durable run
 vessel --resume-run <runId>          # 恢复并继续
+# headless ask：--run 中模型调用 ask_user 时进程不等待，exit 3 并挂起 run
+vessel attention --json              # 无本地 gateway 时自动读本地 interactions 文件
+vessel attention respond <request_id> --answers '[{"header":"Deploy","question":"Deploy now?","answer":"yes"}]'
+vessel --resume-run <runId>          # 回答后恢复；答案以 user.message 注入下一轮
 vessel eval smoke                    # 跑 eval suite（默认离线）
 vessel --feishu                      # 前台运行飞书渠道（需 enabled + 凭据）
 vessel --version                     # 显示版本（读根 package.json）
@@ -159,6 +163,15 @@ bunx @biomejs/biome ci .             # 格式 / lint（源码仓库内）
 VESSEL_MOCK=1 bun run src/cli.ts --run "hello"  # 端到端烟测（无需 API Key）
 ```
 
+> **headless ask（退出码 3）**：`vessel --run` 中模型调用 `ask_user` 时，进程不等待人类；请求写入
+> `<data_dir>/interactions-<tenant>.json`（`suspended: true`），run 的 checkpoint 落 `interrupted`，
+> 退出码为 **3**，stderr 打印 `request_id` / `run_id` 与后续命令。查看与回答：
+> `vessel attention --json`（没有本地 gateway 时自动离线读同一份文件）、
+> `vessel attention respond <request_id> --answers '<json 数组>'`；随后
+> `vessel --resume-run <run_id>` 恢复，答案以 `user.message`（`source=ask_resume`）注入下一轮。
+> `--serve --run` / `--connect --run` 有 gateway 应答面时可在进程存活期间直接回答；
+> `ui.askUser: false` 仍在所有入口关闭该工具。
+
 REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/mcp` `/runs` `/metrics` `/feishu` `/setup` `/settings` `/reload` `/clear` `/exit`）。
 - `/clear` 清屏，**不清空会话上下文**；需要新会话用 `/new`。
 - `/settings language <zh-CN|en>` 切换界面语言并写回用户配置 `ui.language`，立即重渲染；`VESSEL_LANG` 显式设置时仍以环境变量为准。
@@ -182,7 +195,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 ## 工具集
 
-默认运行期工具：`plugins/tools/basic-tools` 提供**能力工具** `bash` / `read` / `edit`；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；变更只发短通知，按需 `inspect`；未 add 不通知）。`ask_user` 在交互 REPL（TTY）或 gateway/serve 注册，`--run` / headless / 管道不注册（`ui.askUser: false` 可关闭）。`team_*` / `delegate_task` 已删除。
+默认运行期工具：`plugins/tools/basic-tools` 提供**能力工具** `bash` / `read` / `edit`；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；变更只发短通知，按需 `inspect`；未 add 不通知）。`ask_user` 在交互 REPL（TTY）、gateway/serve 与 headless（`--run` / 管道；请求落盘后挂起、退出码 3）注册（`ui.askUser: false` 可关闭）。`team_*` / `delegate_task` 已删除。
 
 **能力工具（`bash` / `read` / `edit`）—— 模型干活就靠这几个：**
 
@@ -197,10 +210,10 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 | 工具                    | 何时注册                                                                                      | 干什么                                                                                                                                                                                                                                                        |
 | ----------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent`                 | 默认注册；`agent.enabled: false` 关闭                                                         | 成员生命周期：root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`（root 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`。`create` 建同 Team peer，`hire` 建调用者拥有的 contractor；成员关 peer 需人类审批；`send` 走统一 dispatch，入队即返回，不等待结果，`to` 也接受跨节点地址 `<principal>@<node_id>:<team_id>`；`post` 只写 Team 日志，不通知任何 Agent |
-| `ask_user`              | 交互 REPL（TTY）或 gateway/serve；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭 | 向用户提问，经事件流暂停等待回答                                                                                                                                                                                                                              |
+| `ask_user`              | 交互 REPL（TTY）、gateway/serve、headless（`--run` / 管道，异步挂起）；`ui.askUser: false` 可关闭 | 向用户提问；交互入口经事件流等待回答，headless 落盘后中断 run（exit 3），人类稍后 `attention respond` + `--resume-run`                                                                                                                                         |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功                                                         | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化                                                                                                                                                                                                     |
 
-口径：默认 **4**（3 个能力工具 + `agent`）；显式 `agent.enabled: false` 为 **3**；交互 REPL 或 gateway/serve 默认 **5**（+`ask_user`）；交互 + `agent.enabled: false` 为 **4**；配置 MCP 后为 **3 + N 个 MCP 工具**。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需要实际运行/连接后，在 REPL 用 `/mcp` 或经 gateway `GET /v1/mcp/servers` 查看。
+口径：默认 **4**（3 个能力工具 + `agent`）；显式 `agent.enabled: false` 为 **3**；交互 REPL、gateway/serve 与 headless 默认 **5**（+`ask_user`）；`agent.enabled: false` 时为 **4**；配置 MCP 后为 **3 + N 个 MCP 工具**。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway / headless-async; not listed here)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需要实际运行/连接后，在 REPL 用 `/mcp` 或经 gateway `GET /v1/mcp/servers` 查看。
 
 **为什么这么少？** 这是刻意的。没有 `grep` 工具、没有 file-ops——**能被 bash 组合出来的能力，就不再单开一个工具**。MCP 不是能力工具，而是把外部工具接进 `PluginHost` 的插件（ADR-039）。工具越多，模型的选错空间越大、核心越难保持小。真正的通用原语只有一个：执行命令。其余都是它的特化。
 
@@ -255,7 +268,8 @@ durable:
 ```
 
 - 进程崩溃或中断后：`--resume-run` 列出 interrupted run，`--resume-run <runId>` 恢复；
-  REPL 内用 `/runs` 与 `/runs resume <runId>`。
+  REPL 内用 `/runs` 与 `/runs resume <runId>`。headless ask 挂起的 run，其已回答的 ask
+  会在 resume 前以 `user.message`（`source=ask_resume`）注入历史，答案进入下一轮。
 - 只支持本机 file / memory；不做跨机器恢复、分布式锁、跨进程并发写协调。
 - resume 并发守卫是 per-Host / per-store-instance；多 Host 共享同一 `FileRunStore` 或跨进程同时恢复同一 run 属部署错误。
 - 已知错误码：`run_not_found` / `run_not_resumable` / `run_already_running` / `run_store_required` / `agent_not_found`。
