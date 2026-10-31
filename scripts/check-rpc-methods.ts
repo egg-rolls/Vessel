@@ -49,10 +49,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'agents.send': 'write',
   'agents.dispatch': 'write',
   'agents.rotate': 'write',
-  // 0.15（DECISION-030 E5）：canonical agent 树与只读任务板。
+  // 0.15（DECISION-030 E5）：canonical agent 树。
   'agents.tree': 'read',
-  'tasks.list': 'read',
-  'tasks.get': 'read',
   'events.list': 'read',
   'events.subscribe': 'read',
   'tools.list': 'read',

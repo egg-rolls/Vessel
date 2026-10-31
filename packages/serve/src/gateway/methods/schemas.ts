@@ -192,24 +192,6 @@ export const agentCardSchema = {
   },
 };
 
-/** tasks.list / tasks.get 条目（0.15 E5，只读派生）。 */
-export const taskEntrySchema = {
-  type: 'object',
-  required: ['id', 'title', 'assignee', 'status', 'artifact_refs', 'since'],
-  properties: {
-    id: { type: 'string' },
-    title: { type: 'string' },
-    assignee: { type: 'string' },
-    status: {
-      type: 'string',
-      enum: ['queued', 'running', 'completed', 'failed', 'cancelled'],
-    },
-    parent_task: { type: 'string' },
-    artifact_refs: stringListSchema,
-    since: { type: 'number' },
-  },
-};
-
 const schedulerStatsSchema = {
   type: 'object',
   required: ['queued', 'running', 'completed', 'failed', 'cancelled'],

@@ -56,9 +56,6 @@ import type {
   SessionDetail,
   SessionInfo,
   SessionSearchHit,
-  TaskEntry,
-  TaskResponse,
-  TasksResponse,
   TeamCreateInput,
   TeamDetail,
   TeamPostResult,
@@ -733,16 +730,6 @@ export class GatewayClient {
     params: { session_id?: string; state?: string } = {},
   ): Promise<AgentsTreeResponse> {
     return this.rpc<AgentsTreeResponse>('agents.tree', params);
-  }
-
-  async listTasks(params: { status?: string; assignee?: string } = {}): Promise<TaskEntry[]> {
-    const body = await this.rpc<TasksResponse>('tasks.list', params);
-    return body.tasks ?? [];
-  }
-
-  async getTask(taskId: string): Promise<TaskEntry> {
-    const body = await this.rpc<TaskResponse>('tasks.get', { task_id: taskId });
-    return body.task;
   }
 
   async listTenants(): Promise<TenantInfo[]> {

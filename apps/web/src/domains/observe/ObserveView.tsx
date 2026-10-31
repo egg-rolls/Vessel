@@ -22,7 +22,6 @@ import { resourceData, useResource } from '../../state/useResource';
 import { AttentionPanel } from './AttentionPanel';
 import { cacheStatTexts } from './cache-metrics';
 import { DiagnosticsView } from './DiagnosticsView';
-import { TasksView } from './TasksView';
 
 type ObserveRoute = Extract<Route, { domain: 'observe' }>;
 type Tab = ObserveRoute['tab'];
@@ -32,7 +31,6 @@ function observeTabs(): readonly { id: Tab; label: string }[] {
     { id: 'metrics', label: t('observe.tab.metrics') },
     { id: 'evals', label: t('observe.tab.evals') },
     { id: 'diagnostics', label: t('observe.tab.diagnostics') },
-    { id: 'tasks', label: t('observe.tab.tasks') },
     { id: 'attention', label: t('observe.tab.attention') },
   ];
 }
@@ -93,7 +91,6 @@ export function ObserveView({
         {route.tab === 'metrics' && <MetricsPanel />}
         {route.tab === 'evals' && <EvalsPanel />}
         {route.tab === 'diagnostics' && <DiagnosticsView />}
-        {route.tab === 'tasks' && <TasksView />}
         {route.tab === 'attention' && <AttentionPanel navigate={navigate} />}
       </div>
     </div>

@@ -469,25 +469,6 @@ export interface AgentBatchResponse {
   results?: AgentBatchEntry[];
 }
 
-/** tasks.list / tasks.get 条目（只读派生）。 */
-export interface TaskEntry {
-  id: string;
-  title: string;
-  assignee: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-  parent_task?: string;
-  artifact_refs: string[];
-  since: number;
-}
-
-export interface TasksResponse {
-  tasks: TaskEntry[];
-}
-
-export interface TaskResponse {
-  task: TaskEntry;
-}
-
 /** health.get 的 runtime.scheduler 条目（0.15 E6）。 */
 export interface SchedulerRunSummary {
   run_id: string;

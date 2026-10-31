@@ -1,12 +1,10 @@
 /**
- * agents.* / tasks.* 方法（0.14 P0；0.15 E5）。
+ * agents.* 方法（0.14 P0；0.15 E5）。
  *
  * 数据源优先级：
  *   1. live run 快照（`RunControlLike.snapshot()` 的 queued + running，补齐根 agent
  *      与队列位置）；
  *   2. `subagent.*` 事件派生条目（保留 parent/depth/task/session/usage）。
- *
- * `tasks.*` 只读派生，不持久化；未知 id 返回 `not_found`。
  *
  * @module @vessel-agent/serve
  */
@@ -24,7 +22,7 @@ import type {
   AgentUpdateLikeInput,
   AgentVisibilityLike,
 } from '../../agent-control.js';
-import type { AgentRegistry, AgentRegistryEntry, AgentTaskEntry } from '../../agents-registry.js';
+import type { AgentRegistry, AgentRegistryEntry } from '../../agents-registry.js';
 import {
   isTeamScopedPrincipal,
   RpcError,
@@ -39,7 +37,6 @@ import {
   agentInfoSchema,
   agentStatusSchema,
   stringListSchema,
-  taskEntrySchema,
 } from './schemas.js';
 
 export interface AgentMethodsDeps {
@@ -178,23 +175,6 @@ function publicAgentCard(
     ...(entry.context_max !== undefined ? { context_max: entry.context_max } : {}),
     ...(entry.last_seen !== undefined ? { last_seen: entry.last_seen } : {}),
     ...(entry.artifact_refs !== undefined ? { artifact_refs: entry.artifact_refs } : {}),
-  };
-}
-
-function taskVisible(task: AgentTaskEntry, tenantId: string, isDefault: boolean): boolean {
-  if (isDefault) return task.tenant_id === undefined || task.tenant_id === tenantId;
-  return task.tenant_id === tenantId;
-}
-
-function publicTask(task: AgentTaskEntry): Record<string, unknown> {
-  return {
-    id: task.id,
-    title: task.title,
-    assignee: task.assignee,
-    status: task.status,
-    artifact_refs: task.artifact_refs,
-    since: task.since,
-    ...(task.parent_task !== undefined ? { parent_task: task.parent_task } : {}),
   };
 }
 
@@ -641,59 +621,6 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           )
           .map((entry) => publicAgentCard(entry, (children.get(entry.id) ?? []).sort()));
         return { nodes, as_of: Date.now() };
-      },
-    },
-    {
-      name: 'tasks.list',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        properties: {
-          status: { type: 'string' },
-          assignee: { type: 'string' },
-        },
-      },
-      result_schema: {
-        type: 'object',
-        required: ['tasks'],
-        properties: {
-          tasks: { type: 'array', items: taskEntrySchema },
-        },
-      },
-      handler: (params, ctx) => {
-        const isDefault = isDefaultTenant(ctx.tenantId, deps.defaultTenantId);
-        const status = typeof params.status === 'string' ? params.status : undefined;
-        const assignee = typeof params.assignee === 'string' ? params.assignee : undefined;
-        const tasks = deps.registry
-          .listTasks()
-          .filter((task) => taskVisible(task, ctx.tenantId, isDefault))
-          .filter((task) => status === undefined || task.status === status)
-          .filter((task) => assignee === undefined || task.assignee === assignee)
-          .map(publicTask);
-        return { tasks };
-      },
-    },
-    {
-      name: 'tasks.get',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        required: ['task_id'],
-        properties: { task_id: { type: 'string', minLength: 1 } },
-      },
-      result_schema: {
-        type: 'object',
-        required: ['task'],
-        properties: { task: taskEntrySchema },
-      },
-      handler: (params, ctx) => {
-        const taskId = stringParam(params, 'task_id');
-        const isDefault = isDefaultTenant(ctx.tenantId, deps.defaultTenantId);
-        const task = deps.registry.getTask(taskId);
-        if (!task || !taskVisible(task, ctx.tenantId, isDefault)) {
-          throw new RpcError('not_found', `task not found: ${taskId}`, { task_id: taskId });
-        }
-        return { task: publicTask(task) };
       },
     },
     {

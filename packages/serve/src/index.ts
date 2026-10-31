@@ -37,7 +37,6 @@ export type {
 export {
   type AgentRegistry,
   type AgentRegistryEntry,
-  type AgentTaskEntry,
   createAgentRegistry,
 } from './agents-registry.js';
 export {

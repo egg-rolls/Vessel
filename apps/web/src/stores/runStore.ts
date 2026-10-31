@@ -1,5 +1,5 @@
 /**
- * Run domain store: live/durable runs, tasks and diagnostics, keyed by node.
+ * Run domain store: live/durable runs and diagnostics, keyed by node.
  *
  * Panels read the same per-node `ResourceState` contract as `state/useResource`
  * (a refresh keeps the previous data, a failure keeps stale data + error code).
@@ -9,13 +9,7 @@ import { create } from 'zustand';
 import type { GatewayClient } from '../gateway/client';
 import type { NodeView } from '../gateway/NodeProvider';
 import { nodeKeyOf } from '../gateway/nodes';
-import type {
-  DurableRunSummary,
-  HealthResponse,
-  RunEvent,
-  RunStatus,
-  TaskEntry,
-} from '../gateway/types';
+import type { DurableRunSummary, HealthResponse, RunEvent, RunStatus } from '../gateway/types';
 import { DIAGNOSTIC_EVENT_TYPES } from '../state/diagnostics';
 import type { ResourceState } from '../state/useResource';
 import {
@@ -45,7 +39,6 @@ export interface NodeDiagnosticsResources {
 
 interface RunStoreState {
   runsByNode: Record<string, NodeRunResources>;
-  tasksByNode: Record<string, ResourceState<TaskEntry[]>>;
   diagnosticsByNode: Record<string, NodeDiagnosticsResources>;
   /** Load one node's live or durable run list. Defaults to `live`. */
   loadRuns: (
@@ -53,7 +46,6 @@ interface RunStoreState {
     node: Pick<NodeView, 'name' | 'nodeId'>,
     kind?: RunListKind,
   ) => Promise<void>;
-  loadTasks: (client: GatewayClient, node: Pick<NodeView, 'name' | 'nodeId'>) => Promise<void>;
   /** Load one node's runtime health and/or diagnostic events. Defaults to both. */
   loadDiagnostics: (
     client: GatewayClient,
@@ -67,10 +59,6 @@ type StateSetter = (updater: (state: RunStoreState) => Partial<RunStoreState>) =
 
 function runGenerationKey(nodeKey: string, kind: RunListKind): string {
   return `run:${kind}:${nodeKey}`;
-}
-
-function taskGenerationKey(nodeKey: string): string {
-  return `task:${nodeKey}`;
 }
 
 function diagnosticsGenerationKey(nodeKey: string, source: DiagnosticSource): string {
@@ -154,7 +142,6 @@ export const useRunStore = create<RunStoreState>()((set, get) => {
 
   return {
     runsByNode: {},
-    tasksByNode: {},
     diagnosticsByNode: {},
 
     loadRuns: async (client, node, kind = 'live') => {
@@ -196,20 +183,6 @@ export const useRunStore = create<RunStoreState>()((set, get) => {
       );
     },
 
-    loadTasks: async (client, node) => {
-      const nodeKey = nodeKeyOf(node);
-      const previous = get().tasksByNode[nodeKey];
-      await loadResource<TaskEntry[]>(
-        set,
-        taskGenerationKey(nodeKey),
-        previous,
-        (state, next) => ({
-          tasksByNode: { ...state.tasksByNode, [nodeKey]: next },
-        }),
-        () => client.listTasks(),
-      );
-    },
-
     loadDiagnostics: async (client, node, source = 'both') => {
       const nodeKey = nodeKeyOf(node);
       const loads: Promise<void>[] = [];
@@ -228,14 +201,11 @@ export const useRunStore = create<RunStoreState>()((set, get) => {
         invalidateGeneration(runGenerationKey(nodeKey, 'live'));
         invalidateGeneration(runGenerationKey(nodeKey, 'durable'));
       }
-      for (const nodeKey of Object.keys(state.tasksByNode)) {
-        invalidateGeneration(taskGenerationKey(nodeKey));
-      }
       for (const nodeKey of Object.keys(state.diagnosticsByNode)) {
         invalidateGeneration(diagnosticsGenerationKey(nodeKey, 'health'));
         invalidateGeneration(diagnosticsGenerationKey(nodeKey, 'events'));
       }
-      set({ runsByNode: {}, tasksByNode: {}, diagnosticsByNode: {} });
+      set({ runsByNode: {}, diagnosticsByNode: {} });
     },
   };
 });
@@ -245,13 +215,6 @@ export function useNodeRuns(
   node: Pick<NodeView, 'name' | 'nodeId'> | null,
 ): NodeRunResources | undefined {
   return useRunStore((state) => (node ? state.runsByNode[nodeKeyOf(node)] : undefined));
-}
-
-/** Read one node's task board without subscribing to other nodes. */
-export function useNodeTasks(
-  node: Pick<NodeView, 'name' | 'nodeId'> | null,
-): ResourceState<TaskEntry[]> | undefined {
-  return useRunStore((state) => (node ? state.tasksByNode[nodeKeyOf(node)] : undefined));
 }
 
 /** Read one node's diagnostics without subscribing to other nodes. */
