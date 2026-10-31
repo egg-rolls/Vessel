@@ -376,7 +376,9 @@ export function createAgentTool(
           // 0.31：模型发起的 rotate 一律先问人类。CLI / 人工 RPC 直接走
           // service.rotate（不带 from_session_id），不经过这里，因此不会被询问。
           const ratio = service.contextRatio(callerSession);
-          const percent = ratio === undefined ? undefined : Math.round(ratio * 100);
+          // floor：0.895 必须显示 89%（低于 90% 线），不能用 round 显示成 90%
+          // 却同时说“below the 90% line”。
+          const percent = ratio === undefined ? undefined : Math.floor(ratio * 100);
           const warning =
             ratio === undefined
               ? 'Context usage is unknown; rotate only with human approval.'
