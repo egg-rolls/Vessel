@@ -202,9 +202,15 @@
   color: var(--faint);
 }
 
-.stream-notice.queued {
+.stream-notice.queued,
+.stream-notice.warn {
   background: var(--warn-soft);
   color: var(--warn);
+}
+
+.stream-notice.info {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .stream-notice .run-error,

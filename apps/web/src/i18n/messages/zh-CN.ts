@@ -945,6 +945,11 @@ export const messages = {
   'chat.event.result': '结果',
   'chat.event.errorExpanded': '错误（已展开）',
   'chat.event.truncated': '（已截断）',
+  'chat.notice.contextPressure': '上下文水位 {percent}% · {used}/{max}',
+  'chat.notice.contextCompacted': '上下文压缩 · 移除 {removed} · 剩余 {remaining} · {reason}',
+  'chat.notice.limitWarning': '限额预警 · {key} {current}/{max}',
+  'chat.notice.rotating': '上下文切换中 · {from} → {to}',
+  'chat.notice.rotated': '上下文已切换 · {from} → {to} · epoch {epoch}',
   'chat.role.assistant': '助手',
   'chat.loadEarlier': '加载更早（还有 {count} 条）',
 

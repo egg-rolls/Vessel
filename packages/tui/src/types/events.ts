@@ -80,6 +80,26 @@ export interface CompactedEventData extends Record<string, unknown> {
   reason?: 'auto' | 'overflow' | 'manual';
 }
 
+/** context.pressure 载荷（90% 水位提示；0.32 消费） */
+export interface ContextPressureEventData extends Record<string, unknown> {
+  run_id?: string;
+  session_id?: string;
+  used?: number;
+  max?: number;
+  ratio?: number;
+  threshold?: number;
+  hint?: string;
+}
+
+/** agent.rotating / agent.rotated 载荷（body 切换） */
+export interface RotateEventData extends Record<string, unknown> {
+  agent_id?: string;
+  session_id?: string;
+  from_session_id?: string;
+  to_session_id?: string;
+  epoch?: number;
+}
+
 /** `user.message` 载荷（0.18 事件日志；message 为实际写入上下文的用户消息） */
 export interface UserMessageData extends Record<string, unknown> {
   message?: unknown;
@@ -162,6 +182,10 @@ export type TuiEvent =
   | { type: 'agent.queue.entered'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.queue.left'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.limit.warning'; run_id: string; data: LimitEventData; ts: number }
+  // ── 上下文生命周期（0.32：pressure → compacted → rotating/rotated 因果链） ──
+  | { type: 'agent.rotating'; run_id: string; data: RotateEventData; ts: number }
+  | { type: 'agent.rotated'; run_id: string; data: RotateEventData; ts: number }
+  | { type: 'context.pressure'; run_id: string; data: ContextPressureEventData; ts: number }
   // ── 透明化事件（0.14.3 / 0.15） ──
   | { type: 'limit.blocked'; run_id: string; data: LimitEventData; ts: number }
   | { type: 'context.compacted'; run_id: string; data: CompactedEventData; ts: number }
@@ -196,6 +220,9 @@ export const KNOWN_TUI_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent.queue.entered',
   'agent.queue.left',
   'agent.limit.warning',
+  'agent.rotating',
+  'agent.rotated',
+  'context.pressure',
   'limit.blocked',
   'context.compacted',
 ]);

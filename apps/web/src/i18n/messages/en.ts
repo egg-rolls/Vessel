@@ -972,6 +972,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.event.result': 'Result',
   'chat.event.errorExpanded': 'Error (expanded)',
   'chat.event.truncated': '(truncated)',
+  'chat.notice.contextPressure': 'context at {percent}% · {used}/{max}',
+  'chat.notice.contextCompacted':
+    'context compacted · removed {removed} · remaining {remaining} · {reason}',
+  'chat.notice.limitWarning': 'limit warning · {key} {current}/{max}',
+  'chat.notice.rotating': 'context rotating · {from} → {to}',
+  'chat.notice.rotated': 'context rotated · {from} → {to} · epoch {epoch}',
   'chat.role.assistant': 'Assistant',
   'chat.loadEarlier': 'Load earlier ({count} remaining)',
 

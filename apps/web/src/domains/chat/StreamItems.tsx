@@ -9,7 +9,7 @@ import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
-import { EventRow } from './EventRow';
+import { EventRow, NoticeRow } from './EventRow';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
 
@@ -193,10 +193,11 @@ export const RunItems = memo(function RunItems({
   const renderItems = useMemo(() => {
     const items = foldToolItems(group.items);
     if (verbosity !== 'minimal') return items;
-    // minimal：只保留正文、失败工具与非工具事件（失败永不静默）。
+    // minimal：只保留正文、上下文 notice、失败工具与非工具事件（失败永不静默）。
     return items.filter(
       (item) =>
         item.kind === 'text' ||
+        item.kind === 'notice' ||
         item.kind === 'event' ||
         (item.kind === 'tool' && item.status === 'error'),
     );
@@ -244,6 +245,9 @@ export const RunItems = memo(function RunItems({
         }
         if (item.kind === 'tool') {
           return <ToolCard key={item.key} card={item} verbosity={verbosity} />;
+        }
+        if (item.kind === 'notice') {
+          return <NoticeRow key={item.key} event={item.event} />;
         }
         return <EventRow key={item.key} event={item.event} />;
       })}

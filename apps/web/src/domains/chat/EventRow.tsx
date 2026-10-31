@@ -1,4 +1,4 @@
-import { formatTimestamp } from '../../format';
+import { formatTimestamp, formatTokenCount } from '../../format';
 import type { RunEvent } from '../../gateway/types';
 import { t } from '../../i18n';
 import { errorMetaOf, formatErrorMeta } from '../../state/error-visibility';
@@ -162,6 +162,96 @@ const TAG_TONE: Record<string, string> = {
   'tag-llm': 'bg-accent-soft text-accent',
   'tag-raw': 'text-muted',
 };
+
+function numberOf(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function shortId(value: unknown): string {
+  return typeof value === 'string' && value.length > 0 ? truncate(value, 12) : '?';
+}
+
+/**
+ * 上下文生命周期事件 → 一条语义 notice。
+ *
+ * 与原始事件卡的区别：这里只呈现用户能行动的信号（水位百分比、压缩、轮换），
+ * 文案在渲染时取 `t()`，locale 切换会跟着重算；未知类型返回 null 由调用方回退。
+ */
+function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: string } | null {
+  const data = event.data;
+  switch (event.type) {
+    case 'context.pressure': {
+      const used = numberOf(data.used);
+      const max = numberOf(data.max);
+      const ratio = numberOf(data.ratio);
+      const percent =
+        ratio !== undefined
+          ? Math.round(ratio * 100)
+          : used !== undefined && max !== undefined && max > 0
+            ? Math.round((used / max) * 100)
+            : undefined;
+      return {
+        tone: 'warn',
+        text: t('chat.notice.contextPressure', {
+          percent: percent ?? '?',
+          used: used !== undefined ? formatTokenCount(used) : '?',
+          max: max !== undefined ? formatTokenCount(max) : '?',
+        }),
+      };
+    }
+    case 'context.compacted': {
+      return {
+        tone: 'info',
+        text: t('chat.notice.contextCompacted', {
+          removed: numberOf(data.removed) ?? 0,
+          remaining: numberOf(data.remaining) ?? 0,
+          reason: typeof data.reason === 'string' && data.reason.length > 0 ? data.reason : 'auto',
+        }),
+      };
+    }
+    case 'agent.limit.warning': {
+      return {
+        tone: 'warn',
+        text: t('chat.notice.limitWarning', {
+          key: typeof data.key === 'string' && data.key.length > 0 ? data.key : 'limit',
+          current: numberOf(data.current) ?? '?',
+          max: numberOf(data.max) ?? '?',
+        }),
+      };
+    }
+    case 'agent.rotating': {
+      return {
+        tone: 'info',
+        text: t('chat.notice.rotating', {
+          from: shortId(data.from_session_id),
+          to: shortId(data.to_session_id),
+        }),
+      };
+    }
+    case 'agent.rotated': {
+      return {
+        tone: 'info',
+        text: t('chat.notice.rotated', {
+          from: shortId(data.from_session_id),
+          to: shortId(data.to_session_id),
+          epoch: numberOf(data.epoch) ?? '?',
+        }),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+export function NoticeRow({ event }: { event: RunEvent }) {
+  const view = noticeView(event);
+  if (!view) return <EventRow event={event} />;
+  return (
+    <div className={`stream-notice ${view.tone}`} role="status">
+      <span className="min-w-0 flex-1 wrap-anywhere">{view.text}</span>
+    </div>
+  );
+}
 
 export function EventRow({ event }: { event: RunEvent }) {
   const tag = eventTag(event.type);

@@ -26,6 +26,8 @@ export type TimelineItem =
       startedAt?: number;
       endedAt?: number;
     }
+  /** 上下文生命周期事件：按语义 notice 渲染，不再落成原始事件卡。 */
+  | { kind: 'notice'; event: RunEvent; key: string }
   | { kind: 'event'; event: RunEvent; key: string };
 
 export interface RunGroup {
@@ -187,6 +189,17 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         if (group.sessionId === undefined && typeof d.session_id === 'string') {
           group.sessionId = d.session_id;
         }
+        continue;
+      }
+      // 上下文生命周期：percent → pressure → compacted → rotating/rotated 的因果链，
+      // 由 NoticeRow 按类型渲染，避免默认分支的原始 JSON 卡。
+      case 'context.pressure':
+      case 'context.compacted':
+      case 'agent.limit.warning':
+      case 'agent.rotating':
+      case 'agent.rotated': {
+        flush();
+        group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
         continue;
       }
       case 'llm.stream.chunk': {

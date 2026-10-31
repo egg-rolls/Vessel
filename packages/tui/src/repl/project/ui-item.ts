@@ -21,7 +21,7 @@ import {
   type TuiEvent,
   type TuiUnknownEvent,
 } from '../../types/events.js';
-import { shortSessionId } from '../../utils/display-labels.js';
+import { formatTokenCount, shortSessionId } from '../../utils/display-labels.js';
 import { sanitizeTerminalText } from '../../utils/sanitize-terminal-text.js';
 
 export type ToolCallStatus = 'running' | 'completed' | 'failed';
@@ -703,6 +703,36 @@ export function reduceUiProjection(
       };
     }
 
+    case 'context.pressure': {
+      const { id, seq } = nextId(state, 'notice');
+      const used = readNumber(event.data, 'used');
+      const max = readNumber(event.data, 'max');
+      const ratio = readNumber(event.data, 'ratio');
+      const percent =
+        ratio !== undefined
+          ? Math.round(ratio * 100)
+          : used !== undefined && max !== undefined && max > 0
+            ? Math.round((used / max) * 100)
+            : undefined;
+      return {
+        ...state,
+        seq,
+        items: [
+          ...state.items,
+          {
+            kind: 'notice',
+            id,
+            level: 'warn',
+            text: t('item.contextPressure', {
+              percent: percent ?? '?',
+              used: used !== undefined ? formatTokenCount(used) : '?',
+              max: max !== undefined ? formatTokenCount(max) : '?',
+            }),
+          },
+        ],
+      };
+    }
+
     case 'context.compacted': {
       const { id, seq } = nextId(state, 'notice');
       return {
@@ -742,6 +772,24 @@ export function reduceUiProjection(
             }),
           },
         ],
+      };
+    }
+
+    case 'agent.rotating':
+    case 'agent.rotated': {
+      const { id, seq } = nextId(state, 'notice');
+      const data = event.data;
+      const from = shortSessionId(readString(data, 'from_session_id') ?? '', 12);
+      const to = shortSessionId(readString(data, 'to_session_id') ?? '', 12);
+      const epoch = readNumber(data, 'epoch');
+      const text =
+        event.type === 'agent.rotating'
+          ? t('item.rotating', { from: from || '?', to: to || '?' })
+          : t('item.rotated', { from: from || '?', to: to || '?', epoch: epoch ?? '?' });
+      return {
+        ...state,
+        seq,
+        items: [...state.items, { kind: 'notice', id, level: 'info', text }],
       };
     }
 
