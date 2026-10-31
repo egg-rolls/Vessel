@@ -18,6 +18,24 @@ function placeholderSummary(removed: number): string {
 }
 
 /**
+ * 旧工具结果被清空后写入的占位文本。
+ *
+ * 清空而不是删除：tool 消息与 assistant 的 tool_calls 按 tool_call_id 配对，
+ * 删除任一侧都会让 provider 拒绝请求；只替换 content 既缩短输入，
+ * 又完整保留 role / tool_call_id / name 与 assistant.tool_calls。
+ */
+const CLEARED_TOOL_RESULT = '[Old tool result content cleared]';
+
+/**
+ * 压缩时保留原文的最近工具结果条数。
+ *
+ * 取 5 与 Claude Code microcompact 的 keepRecent 默认值一致：一次 assistant
+ * 轮次常有 1–5 个并行工具调用，模型仍可能直接引用这些结果；更早的输出
+ * 已可由摘要覆盖。属于压缩策略常量，按契约不新增配置键。
+ */
+const KEEP_RECENT_TOOL_RESULTS = 5;
+
+/**
  * 字符级 token 估算（ASCII 0.25 / CJK 0.5 token 每字符）。
  * 与 0.4 起的口径一致；TUI `/context` 应改用本函数。
  */
@@ -149,6 +167,8 @@ export class MemoryContextManager implements ContextManager {
     const plan = this.planCompaction(force);
     if (!plan) return 0;
 
+    // 先按原始内容决定压缩边界，再清空旧工具输出：阈值与 0.3 保留预算不变。
+    this.clearOldToolResults(plan.sessionId);
     this.applyCompaction(plan, placeholderSummary(plan.toSummarize.length));
     this.realTokens = 0;
     return plan.toSummarize.length;
@@ -165,6 +185,9 @@ export class MemoryContextManager implements ContextManager {
 
     const plan = this.planCompaction(force);
     if (!plan) return 0;
+
+    // summarizer 之前清空：它看到的旧工具结果已是占位文本，配对结构不变。
+    this.clearOldToolResults(plan.sessionId);
 
     const removed = plan.toSummarize.length;
     const task = (async () => {
@@ -289,6 +312,35 @@ export class MemoryContextManager implements ContextManager {
       sessionId,
       toSummarize: nonSystem.slice(0, keepFrom),
     };
+  }
+
+  /**
+   * 压缩前清空旧工具结果的内容，保留最近 KEEP_RECENT_TOOL_RESULTS 条原文。
+   *
+   * - 为什么清空而不删除：tool 消息是 assistant.tool_calls 的结果配对，删除会让
+   *   provider 看到孤立的 tool_calls / tool 结果而拒绝请求；只替换 content 即可
+   *   回收 token，同时保住 role、tool_call_id、name 与 assistant.tool_calls。
+   * - 为什么保留最近若干条：这些结果通常仍被当前轮的模型直接引用，清空会丢失
+   *   工作集；更早的输出由摘要覆盖即可。
+   * - 为什么 system 原样保留：system 是会话级基底与摘要载体，任何压缩都不得改动
+   *   或删除；本方法只匹配 role === 'tool'。
+   * - 调用时机必须在 planCompaction 之后，让触发阈值与 0.3 保留预算按原始内容
+   *   计算，不改变既有边界逻辑。
+   */
+  private clearOldToolResults(sessionId: string): void {
+    const msgs = this.sessionMessages.get(sessionId) ?? [];
+    let keep = KEEP_RECENT_TOOL_RESULTS;
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
+      const message = msgs[i];
+      if (message?.role !== 'tool') continue;
+      if (keep > 0) {
+        keep -= 1;
+        continue;
+      }
+      // 空内容本来就无需回收；已是占位文本则保持幂等。
+      if (!message.content || message.content === CLEARED_TOOL_RESULT) continue;
+      message.content = CLEARED_TOOL_RESULT;
+    }
   }
 
   /**

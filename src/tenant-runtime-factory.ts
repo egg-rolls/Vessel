@@ -310,12 +310,43 @@ const SUMMARIZER_MIN_CHUNK_TOKENS = 2_000;
 const SUMMARIZER_PARTIAL_MAX_TOKENS = 1024;
 const SUMMARIZER_REDUCE_MAX_TOKENS = 2048;
 
-const SUMMARY_SYSTEM_PROMPT =
-  'Summarize the conversation for context compaction. Preserve decisions, file paths, tool names and results, and open tasks. Output only the summary.';
-const PARTIAL_SYSTEM_PROMPT =
-  'Summarize this part of a longer conversation for context compaction. Preserve decisions, file paths, tool names and results, and open tasks. Output only the partial summary.';
-const REDUCE_SYSTEM_PROMPT =
-  'Combine the ordered partial summaries into one conversation summary for context compaction. Preserve decisions, file paths, tool names and results, and open tasks. Output only the final summary.';
+/**
+ * 压缩摘要的固定段落，按此顺序输出。
+ *
+ * 为什么固定：压缩后模型只能看到一条 system 摘要，段落稳定才能快速定位
+ * 「正在做什么 / 卡在哪 / 关键值是多少」；部分摘要与 reduce 也沿用同一模板，
+ * 合并时不会因段落漂移丢信息。摘要文本本身原样进入摘要消息与
+ * `message.compaction` 事件，这里只约束模型输出，不做二次改写。
+ */
+const SUMMARY_SECTIONS = [
+  '目标',
+  '约束',
+  '已完成',
+  '进行中',
+  '阻塞',
+  '决策',
+  '相关文件',
+  '下一步',
+  '关键值',
+] as const;
+
+/** 组装摘要提示：任务说明 + 固定段落 + 必须保留的事实。 */
+function summaryPrompt(task: string): string {
+  return [
+    task,
+    'Output only the summary. Use exactly these sections in this order, each as a markdown heading "## <section>"; write "（未提及）" under a section with no content:',
+    SUMMARY_SECTIONS.map((section) => `## ${section}`).join('\n'),
+    'Preserve decisions, file paths, tool names and results, and open tasks. Put concrete values (ids, counts, thresholds, paths, versions) under 关键值.',
+  ].join(' ');
+}
+
+const SUMMARY_SYSTEM_PROMPT = summaryPrompt('Summarize the conversation for context compaction.');
+const PARTIAL_SYSTEM_PROMPT = summaryPrompt(
+  'Summarize this part of a longer conversation for context compaction.',
+);
+const REDUCE_SYSTEM_PROMPT = summaryPrompt(
+  'Combine the ordered partial summaries into one conversation summary for context compaction.',
+);
 
 /**
  * 渲染一条消息。`reasoning_content` 不进入摘要（与事件流一致）。
