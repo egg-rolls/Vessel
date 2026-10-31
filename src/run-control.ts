@@ -10,7 +10,7 @@
  */
 
 import type { AdmitInput, AgentService } from '@vessel-agent/agent';
-import type { RunStatus, Scheduler, SchedulerSnapshot } from '@vessel-agent/core';
+import type { RunStatus, Scheduler, SchedulerSnapshot, WaitReason } from '@vessel-agent/core';
 import type {
   LiveRunSnapshotLike,
   RunControlLike,
@@ -31,6 +31,7 @@ function mapRun(run: {
   sessionId: string;
   state: RunStatus;
   queuePosition?: number;
+  waitReason?: WaitReason;
   queuedAt?: number;
   startedAt?: number;
 }): LiveRunSnapshotLike {
@@ -40,6 +41,7 @@ function mapRun(run: {
     session_id: run.sessionId,
     status: statusOf(run.state),
     ...(run.queuePosition !== undefined ? { queue_position: run.queuePosition } : {}),
+    ...(run.waitReason !== undefined ? { wait_reason: run.waitReason } : {}),
     ...(run.queuedAt !== undefined ? { queued_at: run.queuedAt } : {}),
     ...(run.startedAt !== undefined ? { started_at: run.startedAt } : {}),
   };

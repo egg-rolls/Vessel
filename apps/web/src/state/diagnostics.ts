@@ -1,7 +1,7 @@
 /**
  * Diagnostics 纯函数：错误事件筛选 / 分类 / 摘要与 runtime 队列行。
  *
- * 默认只展示 run/tool/agent 级错误；`ui.errorLevel: all` 或
+ * 默认只展示 run/tool 级错误；`ui.errorLevel: all` 或
  * `observability.showProcessErrors: true` 才包含 process/shutdown/hook/plugin。
  */
 import type { RunEvent, RuntimeHealth, SchedulerRunSummary } from '../gateway/types';
@@ -21,14 +21,13 @@ export interface DiagnosticGate {
   showProcessErrors: boolean;
 }
 
-export const USER_ERROR_TYPES = ['run.failed', 'tool.call.failed', 'agent.run.failed'] as const;
+export const USER_ERROR_TYPES = ['run.failed', 'tool.call.failed'] as const;
 
 export const DIAGNOSTIC_ERROR_TYPES = [
   'process.error',
   'shutdown.failed',
   'hook.error',
   'hook.failed',
-  'plugin.error',
   'plugin.failed',
   'plugin.init.failed',
   'plugin.dispose.failed',

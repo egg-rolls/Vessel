@@ -970,6 +970,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       agent_id: run.agent_id,
       status: run.status,
       ...(run.queue_position !== undefined ? { queue_position: run.queue_position } : {}),
+      ...(run.wait_reason !== undefined ? { wait_reason: run.wait_reason } : {}),
       ...(run.queued_at !== undefined ? { queued_at: run.queued_at } : {}),
     }));
     const running = snapshot.running.map((run) => ({

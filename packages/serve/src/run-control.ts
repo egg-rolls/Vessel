@@ -26,6 +26,8 @@ export interface LiveRunSnapshotLike {
   status: RunControlStatus;
   /** FIFO 队列位置（1 起；仅 queued 时有）。 */
   queue_position?: number;
+  /** 等待原因（仅 queued 时有；值域同 core WaitReason）。 */
+  wait_reason?: string;
   queued_at?: number;
   started_at?: number;
 }

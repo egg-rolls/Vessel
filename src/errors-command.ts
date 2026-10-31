@@ -1,8 +1,8 @@
 /**
  * `vessel errors [--json] [--limit N]`（0.14 DECISION-025 §1.5）。
  *
- * 最近错误摘要：默认只含 run/tool/agent 级错误；`ui.errorLevel: all` 或
- * `observability.showProcessErrors: true` 时追加 process/shutdown/hook/plugin。
+ * 最近错误摘要：默认只含 run/tool 级错误；`ui.errorLevel: all` 或
+ * `observability.showProcessErrors: true` 时追加 process/shutdown/hook。
  * 本地读 trace；`--connect` 时调用 `events.list`。输出不含密钥 / stack。
  *
  * @module vessel/errors-command
@@ -34,15 +34,10 @@ const MAX_LIMIT = 200;
 const READ_LIMIT = 500;
 
 /** 用户可见错误（默认 errorLevel: user） */
-const USER_ERROR_TYPES = ['run.failed', 'tool.call.failed', 'agent.run.failed'] as const;
+const USER_ERROR_TYPES = ['run.failed', 'tool.call.failed'] as const;
 
 /** 诊断级错误（errorLevel: all 或 showProcessErrors） */
-const DIAGNOSTIC_ERROR_TYPES = [
-  'process.error',
-  'shutdown.failed',
-  'hook.error',
-  'plugin.error',
-] as const;
+const DIAGNOSTIC_ERROR_TYPES = ['process.error', 'shutdown.failed', 'hook.error'] as const;
 
 interface ErrorSummary {
   type: string;
