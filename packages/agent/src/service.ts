@@ -29,6 +29,7 @@ import {
   type Usage,
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
+import { AgentInboxStore } from './inbox.js';
 import {
   type AgentBodyRecord,
   liveBodies,
@@ -211,8 +212,6 @@ interface BodyEntry {
   /** 正在执行的 run（同 body 同时最多一个） */
   active?: { runId: string; conversationId?: string; replied: boolean };
   budgetHold: Set<string>;
-  /** `${session_id}|${key}`；rotate 成功 / close 时清空 */
-  warnedSignals: Set<string>;
   closing: boolean;
   spawned: boolean;
   /** 在途 spawn（single-flight）：并发 admit 只 spawn 一次 */
@@ -476,6 +475,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly temporaryTtlMs: number;
   private readonly bodyLease: BodyLeasePort | undefined;
   private readonly runStore: RunStore | undefined;
+  /** 0.32：持久化收件箱；有 `dataDir` 时唯一实例，否则 undefined（行为不变） */
+  private readonly inbox: AgentInboxStore | undefined;
   /** AgentService 的 body registry：agentId → bodyId → BodyEntry（含已退役直到清理） */
   private readonly bodyRegistry = new Map<string, Map<string, BodyEntry>>();
   /** run_id → 准入消息 id（send / dispatch 复用） */
@@ -550,6 +551,15 @@ export class AgentServiceImpl implements AgentService {
             now: this.now,
           })
         : undefined;
+    this.inbox =
+      dataDir !== undefined
+        ? new AgentInboxStore({
+            dataDir,
+            tenantId: options.tenantId,
+            logger: this.logger,
+          })
+        : undefined;
+    if (this.inbox !== undefined) this.runtime.attachInbox?.(this.inbox);
     this.ready = this.loadSnapshot();
   }
 
@@ -1115,7 +1125,6 @@ export class AgentServiceImpl implements AgentService {
       pending: [],
       queuedRuns: new Set(),
       budgetHold: new Set(),
-      warnedSignals: new Set(),
       closing: false,
       spawned: false,
       spawning: undefined,
@@ -1268,6 +1277,9 @@ export class AgentServiceImpl implements AgentService {
     at: number = this.now(),
   ): Promise<void> {
     if (entry.retired) return;
+    const wasWaitingPermission = entry.state === 'waiting_permission';
+    // 0.32：先关旧 body 的 inbox hook，再 releaseHeld —— 顺序反了旧 body 仍可能消费。
+    this.runtime.disableInbox?.(entry.bodyId);
     const wasPrimary = entry.primary || record.body?.bodyId === entry.bodyId;
     entry.retired = true;
     entry.state = 'closed';
@@ -1276,6 +1288,24 @@ export class AgentServiceImpl implements AgentService {
     entry.pending.length = 0;
     for (const runId of entry.queuedRuns) this.scheduler.cancel(runId, `body retired: ${reason}`);
     entry.queuedRuns.clear();
+    if (wasWaitingPermission) {
+      // 旧 body 上等待人类的权限请求随 body 一起失效；留事件让入口侧收口交互卡。
+      try {
+        this.runtime.cancel(entry.runtimeMember);
+      } catch (error) {
+        this.logger.warn('agent.cancel.failed', {
+          member_id: entry.agentId,
+          session_id: entry.bodyId,
+          error: errorText(error),
+        });
+      }
+      this.emitForSession('agent.permission.cancelled', record, entry.bodyId, {
+        reason: 'body_retired',
+      });
+    }
+    // 旧队列（含 hold）转为可注入；pendingNotices 不得串到新 body。
+    this.inbox?.releaseHeld(record.id);
+    this.runtime.clearPendingNotices?.(record.id);
     // `retireBody` 自己记 `body_history`；这里不再重复 push，否则同一 session
     // 会在 DTO 的 body_history 里出现两次。
     this.registry.retireBody(record.id, entry.bodyId, at);
@@ -1304,6 +1334,9 @@ export class AgentServiceImpl implements AgentService {
   private async disposeAgentBodies(record: MemberRecord): Promise<void> {
     const entries = [...(this.bodyRegistry.get(record.id)?.values() ?? [])];
     for (const entry of entries) {
+      // 0.32：body 关闭时旧 hook 立即停止读取 inbox；通知队列同时清空。
+      this.runtime.disableInbox?.(entry.bodyId);
+      this.runtime.clearPendingNotices?.(entry.agentId);
       entry.closing = true;
       entry.pending.length = 0;
       for (const runId of entry.queuedRuns) this.scheduler.cancel(runId, 'agent closed');
@@ -1325,6 +1358,8 @@ export class AgentServiceImpl implements AgentService {
       this.registry.retireBody(record.id, entry.bodyId, this.now());
       await this.disposeEntry(entry);
     }
+    // 0.32：关闭后未消费消息仍可注入；不释放 hold 会让 reinstate 的 body 永远跳过它们。
+    this.inbox?.releaseHeld(record.id);
     this.bodyRegistry.delete(record.id);
   }
 
@@ -1356,8 +1391,16 @@ export class AgentServiceImpl implements AgentService {
     return entries.map(toBodyStatus);
   }
 
-  /** 统一准入主链路：resolve → membership/visibility → body → budget → mailbox → scheduler */
-  private async admitInternal(input: AdmitInput): Promise<AdmitOutcome> {
+  /**
+   * 统一准入主链路：resolve → membership/visibility → body → budget → mailbox → scheduler。
+   *
+   * `internal.startup` 只由 rotate 使用：启动嘱托直接作为 run input，不进 inbox，
+   * 也不受 rotate 窗口守卫影响（否则新 body 的首轮会被当成旧队列）。
+   */
+  private async admitInternal(
+    input: AdmitInput,
+    internal?: { startup?: boolean },
+  ): Promise<AdmitOutcome> {
     await this.ready;
     // 0.28：不再在 admit 里顺带 sweep —— 那会回收调用方正要投递的目标（竞态）。
     // 回收只由装配层的定时器驱动（`AgentService` 保持无定时器）。
@@ -1462,6 +1505,48 @@ export class AgentServiceImpl implements AgentService {
       // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
       ...(senderName !== undefined ? { from_name: senderName } : {}),
     };
+    // rotate 窗口内：旧 body 即将退役，消息只落 inbox（不进旧队列、不提交），
+    // 由新 body 的 hook 按「启动嘱托 → 旧队列 → 新队列」顺序注入。
+    // 启动嘱托本身例外：它是新 body 的 run input，永不进 inbox。
+    if (this.inbox !== undefined && internal?.startup !== true && this.rotations.has(record.id)) {
+      const rotation = this.rotations.get(record.id);
+      if (rotation !== undefined) {
+        this.inbox.append(record.id, {
+          id: message.id,
+          ts: message.ts,
+          source: from,
+          text: content,
+        });
+        const runId = this.newId();
+        this.runMessageIds.set(runId, message.id);
+        this.emitForSession('agent.message.queued', record, rotation.toSessionId, {
+          state: record.state,
+          message_id: message.id,
+          from,
+          ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+        });
+        return {
+          result: {
+            run_id: runId,
+            agent_id: record.id,
+            session_id: rotation.toSessionId,
+            status: 'queued',
+          },
+          message,
+        };
+      }
+    }
+    // 写前日志：先落 inbox 再进 mailbox / scheduler；held 表示本进程的 pending run 持有它。
+    const inboxed = this.inbox !== undefined && internal?.startup !== true;
+    if (this.inbox !== undefined && inboxed) {
+      this.inbox.append(record.id, {
+        id: message.id,
+        ts: message.ts,
+        source: from,
+        text: content,
+      });
+      this.inbox.hold(record.id, message.id);
+    }
     entry.pending.push(message);
     this.registry.touchBody(record.id, entry.bodyId, this.now());
     this.emitForSession('agent.message.queued', record, entry.bodyId, {
@@ -1472,7 +1557,21 @@ export class AgentServiceImpl implements AgentService {
     });
     this.scheduleSnapshot();
 
-    const submitted = await this.submitMessage(record, entry, message);
+    let submitted: { runId: string; handle: RunHandle };
+    try {
+      submitted = await this.submitMessage(record, entry, message);
+    } catch (error) {
+      if (inboxed) {
+        if (entry.retired || entry.closing || this.draining) {
+          // rotate / close 竞争：投递还没提交，body 已收口。保留未读，交给新 body 注入。
+          this.inbox?.unhold(record.id, [message.id]);
+        } else {
+          // 调度拒绝 = 明确投递失败：清掉写前日志，避免重启后被重新注入。
+          this.inbox?.discard(record.id, [message.id]);
+        }
+      }
+      throw error;
+    }
     this.runMessageIds.set(submitted.runId, message.id);
     const status = submitted.handle.status();
     const queuePosition = this.queuePositionFor(submitted.runId, status);
@@ -1622,6 +1721,9 @@ export class AgentServiceImpl implements AgentService {
         });
       }
     };
+    // 0.32：消息真正作为 run input 开始前标记 consumed（inbox 至多注入一次）。
+    // startup 消息不在 inbox 里，markConsumed 对未知 id 无操作。
+    await this.inbox?.markConsumed(record.id, [message.id], entry.bodyId);
     void this.executeBodyTurn(record, entry, message, handle);
     return handle;
   }
@@ -1743,11 +1845,14 @@ export class AgentServiceImpl implements AgentService {
         strict: false,
       });
     } catch (error) {
+      const reason = errorText(error);
       this.logger.warn('agent.reply.drop_failed', {
         member_id: member.id,
         parent_id: parent.id,
-        error: errorText(error),
+        error: reason,
       });
+      // 0.32：投递失败不再只留日志；可见事件让入口侧能看到丢失的回复。
+      this.emit('agent.reply.drop_failed', member, { to: parent.id, reason });
     }
   }
 
@@ -2142,11 +2247,17 @@ export class AgentServiceImpl implements AgentService {
 
     this.registry.setRotation(target.id, 'rotating');
     this.rotations.set(target.id, { fromSessionId, fromEpoch, toSessionId, toEpoch });
+    // 0.32：rotate 窗口一开始就关旧 body 的 inbox hook —— 否则旧轮在窗口内还有
+    // 机会把本该给新 body 的消息取走。回滚时在 finally 里恢复。
+    if (oldEntry !== undefined) this.runtime.disableInbox?.(oldEntry.bodyId);
     this.emitForSession('agent.rotating', target, fromSessionId, {
       from_session_id: fromSessionId,
       to_session_id: toSessionId,
       epoch: toEpoch,
     });
+
+    // 0.32：退役旧 body 前先把 inbox 写链落盘；未消费消息跨 body 不丢。
+    await this.inbox?.flush();
 
     let newBody: AgentBodyRecord | undefined;
     const rollbackNew = async (): Promise<void> => {
@@ -2216,24 +2327,35 @@ export class AgentServiceImpl implements AgentService {
         this.registry.retireBody(target.id, fromSessionId);
         this.promotePrimary(target);
       }
+      // `oldEntry` 缺失时 retireBodyEntry 不会跑：旧队列仍要放出、notice 仍要清。
+      this.inbox?.releaseHeld(target.id);
+      this.runtime.clearPendingNotices?.(target.id);
 
       // startup prompt：system 消息，继承触发 rotate 的会话；不计 hop。
       const inheritedConversation =
         oldEntry?.active?.conversationId ?? generateConversationId(this.newId);
       try {
-        await this.admitInternal({
-          content: startupPrompt,
-          agent_id: target.id,
-          session_id: toSessionId,
-          from: SYSTEM_PRINCIPAL,
-          channel: 'direct',
-          conversation_id: inheritedConversation,
-          strict: false,
-        });
+        await this.admitInternal(
+          {
+            content: startupPrompt,
+            agent_id: target.id,
+            session_id: toSessionId,
+            from: SYSTEM_PRINCIPAL,
+            channel: 'direct',
+            conversation_id: inheritedConversation,
+            strict: false,
+          },
+          { startup: true },
+        );
       } catch (error) {
         this.logger.warn('agent.rotate.startup_failed', {
           agent_id: target.id,
           error: errorText(error),
+        });
+        this.emitForSession('agent.rotate.startup_failed', target, toSessionId, {
+          from_session_id: fromSessionId,
+          to_session_id: toSessionId,
+          reason: errorText(error),
         });
       }
       this.registry.setRotation(target.id, 'stable');
@@ -2251,6 +2373,10 @@ export class AgentServiceImpl implements AgentService {
       this.rotations.delete(target.id);
       const current = this.registry.get(target.id);
       if (current?.rotation === 'rotating') this.registry.setRotation(target.id, 'stable');
+      // 回滚 / 异常退出：旧 body 没退役就恢复它的 inbox hook，消息不能留在无人读取的状态。
+      if (oldEntry !== undefined && !oldEntry.retired) {
+        this.runtime.enableInbox?.(oldEntry.bodyId);
+      }
     }
   }
 
@@ -2837,62 +2963,12 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * 成员引擎事件回流：只处理 live body 的 `agent.limit.warning`，
-   * 按 `${sessionId}|${key}` 去重后作为系统提示排进该 body 的下一轮。
+   * 成员引擎事件回流。0.32：`agent.limit.warning` 的第二条投递已删除 ——
+   * core 已把 `vessel:limit` 注入本轮上下文，service 不再排第二条系统提示。
+   * 保留入口只为兼容 runtime 回调（见 `src/agent-service-wiring.ts`）。
    */
-  noteMemberEvent(memberId: string, sessionId: string, event: RunEvent): void {
-    if (event.type !== 'agent.limit.warning') return;
-    const record = this.registry.get(memberId);
-    if (!record) return;
-    if (record.membership === 'left' || record.state === 'closed') return;
-    const entry = this.findEntry(memberId, sessionId);
-    if (entry === undefined || entry.retired || entry.closing) return;
-
-    const data = isRecord(event.data) ? event.data : undefined;
-    if (!data) return;
-    const key = data.key;
-    const current = data.current;
-    const max = data.max;
-    if (!nonEmpty(key)) return;
-    if (typeof current !== 'number' || !Number.isFinite(current)) return;
-    if (typeof max !== 'number' || !Number.isFinite(max)) return;
-    const threshold =
-      typeof data.threshold === 'number' && Number.isFinite(data.threshold) ? data.threshold : 0.8;
-
-    const dedupeKey = `${sessionId}|${key}`;
-    if (entry.warnedSignals.has(dedupeKey)) return;
-    entry.warnedSignals.add(dedupeKey);
-
-    const text =
-      `[system] Context/usage limit warning: ${key} is at ${current}/${max} (>= ${threshold}). ` +
-      'If your context is nearly full, write a handoff and call agent.rotate with ' +
-      'startup_prompt to continue in a fresh body.';
-    const conversationId = entry.active?.conversationId ?? generateConversationId(this.newId);
-    const message: AgentMessage = {
-      id: this.newId(),
-      from: SYSTEM_PRINCIPAL,
-      to: memberId,
-      content: text,
-      ts: this.now(),
-      conversation_id: conversationId,
-      kind: 'limit_warning',
-      source: 'system',
-      channel: 'direct',
-    };
-    entry.pending.push(message);
-    this.emitForSession('agent.message.queued', record, sessionId, {
-      state: record.state,
-      message_id: message.id,
-      from: SYSTEM_PRINCIPAL,
-      conversation_id: conversationId,
-    });
-    void this.submitMessage(record, entry, message).catch((error) => {
-      this.logger.warn('agent.limit_warning.enqueue_failed', {
-        member_id: memberId,
-        session_id: sessionId,
-        error: errorText(error),
-      });
-    });
+  noteMemberEvent(_memberId: string, _sessionId: string, _event: RunEvent): void {
+    return;
   }
 
   /** 0.31：body 上下文水位；交给 runtime 的只读视图，不落盘。 */
@@ -3174,6 +3250,8 @@ export class AgentServiceImpl implements AgentService {
 
   async flushSnapshot(): Promise<boolean> {
     await this.ready;
+    // 0.32：inbox 写链一并落盘（store 自己记错误，不改变 snapshot 的返回值语义）。
+    if (this.inbox !== undefined) await this.inbox.flush();
     if (!this.snapshot) return true;
     return this.snapshot.flush();
   }

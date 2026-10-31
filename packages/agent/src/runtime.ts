@@ -35,6 +35,7 @@ import {
   type Usage,
   type UsageLimits,
 } from '@vessel-agent/core';
+import { type AgentInboxPort, createInboxHook } from './inbox.js';
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
 import type {
   AgentMessage,
@@ -393,6 +394,11 @@ interface MemberRuntimeEntry {
   pendingPermissions: Map<string, PendingBridgeRequest>;
   /** 是否已通过 onPermissionState 报过 waiting（避免重复回调） */
   waiting: boolean;
+  /**
+   * 0.32：该 Body 的 inbox hook 开关（spawn 时 attach 了收件箱才有）。
+   * hook 在 spawn 时注册、之后才建 entry，故开关由这个可变对象承载。
+   */
+  inboxState?: { enabled: boolean };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -682,6 +688,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly entries = new Map<string, MemberRuntimeEntry>();
   /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界文本队列） */
   private readonly pendingNotices = new Map<string, string[]>();
+  /** 0.32：由装配层挂上的收件箱；spawn 时据此注册 `vessel:inbox` hook */
+  private inbox?: AgentInboxPort;
 
   constructor(options: InProcessMemberRuntimeOptions) {
     this.providerFactory = options.providerFactory;
@@ -739,6 +747,32 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
 
     const selfCard = this.buildSelfCard(member, model, tools);
     const events = new MemoryEventStream();
+    // 0.32：只有 spawn 时已 attach 收件箱的 Body 才注册注入 hook；开关放在可变对象里，
+    // `disableInbox` 之后（rotate / retire 的旧 Body）hook 直接返回、不再取消息。
+    const inbox = this.inbox;
+    const inboxState = inbox !== undefined ? { enabled: true } : undefined;
+    if (inbox !== undefined && inboxState !== undefined) {
+      pluginHost.registerHook(
+        createInboxHook({
+          inbox,
+          agentId: member.id,
+          isEnabled: () => inboxState.enabled,
+          onDelivered: ({ runId, sessionId, messages }) => {
+            events.publish({
+              type: 'agent.inbox.delivered',
+              run_id: runId,
+              data: {
+                agent_id: member.id,
+                session_id: sessionId ?? member.session_id,
+                count: messages.length,
+                message_ids: messages.map((message) => message.id),
+              },
+              ts: Date.now(),
+            });
+          },
+        }),
+      );
+    }
     // 0.28 D6/D7：temporary 不主动压缩（一具 body 的生命周期由调用方的会话决定，
     // 压缩会把调用方还在看的历史摘要掉）；到线只提示。core 只收到裸参数，不认 role。
     // 两道硬兜底仍然生效：消息条数上限（`RoleAwareContext` 内层，与开关无关）
@@ -788,6 +822,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       mode,
       running: false,
       toolsRefreshPending: false,
+      ...(inboxState !== undefined ? { inboxState } : {}),
     };
     this.entries.set(member.session_id, entry);
     if (this.onMemberEvent !== undefined) {
@@ -987,6 +1022,31 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   canConfirm(sessionId: string): boolean {
     const entry = this.entries.get(sessionId);
     return entry !== undefined && entry.mode === 'bridge' && this.parentEvents !== undefined;
+  }
+
+  /**
+   * 0.32：挂上 / 摘掉收件箱。只影响之后 spawn 的 Body；已存在的 Body 按 CONTRACT
+   * 保留 spawn 时的决定（`disableInbox` 负责逐 Body 关闭）。
+   */
+  attachInbox(inbox: AgentInboxPort | undefined): void {
+    this.inbox = inbox;
+  }
+
+  /** 0.32：旧 Body 的 inbox hook 不再取消息（rotate / retire）。 */
+  disableInbox(sessionId: string): void {
+    const entry = this.entries.get(sessionId);
+    if (entry?.inboxState !== undefined) entry.inboxState.enabled = false;
+  }
+
+  /** 0.32：rotate 回滚时恢复旧 Body 的 inbox hook。 */
+  enableInbox(sessionId: string): void {
+    const entry = this.entries.get(sessionId);
+    if (entry?.inboxState !== undefined) entry.inboxState.enabled = true;
+  }
+
+  /** 0.32：清掉该成员尚未注入的 notice（retire 时避免串到新 Body）。 */
+  clearPendingNotices(memberId: string): void {
+    this.pendingNotices.delete(memberId);
   }
 
   private queuePendingNotice(memberId: string, text: string): void {

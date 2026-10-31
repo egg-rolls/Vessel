@@ -19,6 +19,7 @@ import type {
   ToolDefinition,
   Usage,
 } from '@vessel-agent/core';
+import type { AgentInboxPort } from './inbox.js';
 
 /** 成员状态（终态：completed / failed / cancelled / closed） */
 export type MemberState =
@@ -301,6 +302,22 @@ export interface MemberRuntimePort {
    * 无 team body 不会 attachBridge，发请求只会永久等待。服务端据此 fail-closed。
    */
   canConfirm?(sessionId: string): boolean;
+  /**
+   * 0.32（additive，可选）：挂上按 agent_id 的持久化收件箱。
+   *
+   * 之后 spawn 的每个 Body 注册 `vessel:inbox` BeforeLlm hook；传 undefined 关闭。
+   * 不新增 RPC / DTO。
+   */
+  attachInbox?(inbox: AgentInboxPort | undefined): void;
+  /**
+   * 0.32（additive，可选）：关闭某个旧 Body 的 inbox hook（rotate / retire）。
+   * 只是让 hook 不再取消息；已 hold 的队列由 `releaseHeld` 重新放出。
+   */
+  disableInbox?(sessionId: string): void;
+  /** 0.32（additive，可选）：rotate 回滚时恢复旧 Body 的 inbox hook。 */
+  enableInbox?(sessionId: string): void;
+  /** 0.32（additive，可选）：丢弃该成员尚未 spawn / 未开跑时暂存的 notice。 */
+  clearPendingNotices?(memberId: string): void;
 }
 
 /** `AgentService.drain` 结果：无在跑轮 / 已中断收口 / 超时 */
