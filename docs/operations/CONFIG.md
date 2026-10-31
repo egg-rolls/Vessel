@@ -225,7 +225,6 @@ observability:
 ```yaml
 limits:
   request_limit: 100            # 单 run 的 LLM 请求次数上限
-  tool_calls_limit: 50          # 单 run 的工具调用软预算（到达后停止调工具、收尾）
   input_tokens_limit: 1000000   # 单 run 累计输入 token 上限
   output_tokens_limit: 50000    # 单 run 累计输出 token 上限
   # total_cost_limit: 1.5      # 单 run 累计成本上限；缺省不限制
@@ -234,18 +233,19 @@ termination:
   max_runtime_seconds: 600      # 单 run 墙钟秒数上限（等待用户授权的时间不计入）
 ```
 
-- **默认值**（0.14.3）：`request_limit` 100、`tool_calls_limit` 50、`input_tokens_limit` 1,000,000（原 100,000，与 `context.maxTokens` 对齐）、`output_tokens_limit` 50,000；`max_iterations` 50（原 20）、`max_runtime_seconds` 600（ADR-084 Errata；原 300，等待权限确认的时间不计入）。`total_cost_limit` 无默认值。
-- **判定**：每轮先判终止策略（`max_iterations` / `max_runtime_seconds`），再判使用量限额；两者都按 `current >= max` 判定、首个命中生效。使用量限额的检查顺序固定 request → tool calls → input tokens → output tokens → total cost；终止策略先 `max_iterations`、后 `max_runtime`。默认 `max_iterations` 50 先于 `request_limit` 100 触发；要提高请求次数的实际上限，两者需一起调整。
+- **默认值**（0.31）：`request_limit` 100、`input_tokens_limit` 1,000,000（原 100,000，与 `context.maxTokens` 对齐）、`output_tokens_limit` 50,000；`max_iterations` 50（原 20）、`max_runtime_seconds` 600（ADR-084 Errata；原 300，等待权限确认的时间不计入）。`total_cost_limit` 无默认值。
+- **判定**：每轮先判终止策略（`max_iterations` / `max_runtime_seconds`），再判使用量限额；两者都按 `current >= max` 判定、首个命中生效。使用量限额的检查顺序固定 request → input tokens → output tokens → total cost；终止策略先 `max_iterations`、后 `max_runtime`。默认 `max_iterations` 50 先于 `request_limit` 100 触发；要提高请求次数的实际上限，两者需一起调整。
 - **命中行为**：`request_limit` / token / cost 与 `max_iterations` / `max_runtime` 命中时发布一次 `limit.blocked`（`error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`；`run.failed` 保留原 `error` 文本，附同一结构化的 `details`。`source` 是对应的 camelCase 配置路径（如 `limits.inputTokensLimit` / `termination.maxIterations`）；错误文本前缀分别为 `Usage limits exceeded: ...` 与 `Termination policy triggered: ...`。`max_runtime` 的 `current` 是已运行秒数（毫秒精度小数）。
-- **`tool_calls_limit` 例外（软预算）**：到达上限不抛错、不产生 `run.failed`；发布一次 `limit.warning`（`key` / `current` / `max` / `source`），追加一条 `vessel:limit` 收尾消息，下一轮请求不提供工具。模型随后给出的文本即最终答复，run 正常 `completed`；若模型在无工具请求里仍返回 `tool_calls`，这些调用不执行，按当前文本完成（空文本给固定说明），不会再发起下一轮请求。
+- **`tool_calls_limit` 已移除（0.31）**：不再有工具调用次数预算；旧配置里的该键被忽略、不报错。循环仍由 `max_iterations` / `max_runtime_seconds` 兜底。
 - **成本**：core 不为内置 provider 计价，`total_cost` 默认为 0；`total_cost_limit` 只在宿主显式调用 `LimitChecker.addCost()` 后才有意义。
-- **不新增配置键**：以上键均已存在，tenant overlay 可覆盖 `limits` / `termination`。`LimitBlock.key` 固定为五个使用量 key 加 `max_iterations` / `max_runtime`。
+- **不新增配置键**：以上键均已存在，tenant overlay 可覆盖 `limits` / `termination`。`LimitBlock.key` 固定为四个使用量 key 加 `max_iterations` / `max_runtime`。
 
 ### 2.9 上下文压缩行为（0.14.4，ADR-085）
 
 > 本节只说明压缩行为，**没有新增配置键**。相关既有键：`context.max_tokens`（默认 1,000,000）与 `context.max_messages`（可选；缺省按 `max(100, floor(max_tokens / 100))` 推导）。
 
-- **触发**：token 估算超过 `max_tokens × 0.8`，或消息条数超过 `max_messages`（缺省推导值）时触发自动压缩；`auto_compact: false` 只关闭 token 阈值，条数超限仍强制压缩。
+- **触发**：token 估算超过 `max_tokens × 0.95`（`context.compact_threshold` 缺省 0.95），或消息条数超过 `max_messages`（缺省推导值）时触发自动压缩；`auto_compact: false` 只关闭 token 阈值，条数超限仍强制压缩。
+- **压力提示**：上下文达到 `max_tokens × 0.9` 时每 run 发一次 `context.pressure` 事件与尾部消息，建议 `agent(rotate)`；自动压缩开启时超过 0.95 后不再提示。
 - **保留区**：从最新非 system 消息向前累计估算 token，预算为 `max_tokens × 0.3`，最新 2 条非 system 消息无论如何保留；同时受条数上限 `max(2, max_messages - system 条数 - 1)` 约束。token 或条数任一超限都触发摘要；两者都未超时不压缩。非 system 少于 3 条时不压缩。
 - **tool 配对**：保留区第一条是 `tool` 时，边界回退到对应的 `assistant(tool_calls)`，避免压缩后出现孤立 `tool`。配对完整性优先于条数上限，保留数可能略超 `max_messages`。
 - **摘要输入**：`assistant` 的工具调用渲染为 `[tool_call:<name>] <arguments>`，`tool` 结果渲染为 `[tool:<id>] <content>`；单条超过 12,000 字符截断，`reasoning_content` 不进入摘要。输入按 `min(48_000, max(2_000, floor(max_tokens / 8)))` 估算 token 分块；单块一次摘要，多块逐块 partial 后再 reduce。某块失败只写占位标记并继续，全部失败时回退 `[Auto Compact: N older messages summarized. Continuing...]`，不中断 run。

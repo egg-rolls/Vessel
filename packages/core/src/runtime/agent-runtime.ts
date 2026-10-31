@@ -59,7 +59,7 @@ import { createToolPipeline, isToolCall, type ToolPipeline } from './tool-pipeli
  * Context pressure warning ratio：达到该比例但未到自动压缩阈值时，
  * 只提示模型/用户考虑 `agent(rotate)`，不主动压缩。
  */
-export const CONTEXT_PRESSURE_WARN_RATIO = 0.8;
+export const CONTEXT_PRESSURE_WARN_RATIO = 0.9;
 
 /** finalizeRun 的终态输入（C1） */
 type RunTerminalOutcome =
@@ -199,7 +199,6 @@ function truncateToTokens(text: string, limit: number): string {
 function formatSelfCardLimits(limits: SelfCardOptions['limits']): string {
   const parts: string[] = [];
   if (limits.requestLimit !== undefined) parts.push(`requests 0/${limits.requestLimit}`);
-  if (limits.toolCallsLimit !== undefined) parts.push(`tool calls 0/${limits.toolCallsLimit}`);
   if (limits.inputTokensLimit !== undefined) {
     parts.push(`input tokens 0/${limits.inputTokensLimit}`);
   }
@@ -283,11 +282,6 @@ export class AgentRuntime {
   private readonly prefixGuard: PromptPrefixGuard;
   /** 调用点设置的显式失效原因；guard 消费后清空 */
   private pendingPrefixReason?: PrefixChangeReason;
-  /**
-   * 工具调用预算已用尽（每 run 至多一次）。到达 `limits.toolCallsLimit` 后不再抛错：
-   * 下一轮请求不提供工具，让模型用已有信息收尾；若模型仍返回 tool_calls 也不再执行。
-   */
-  private toolBudgetExhausted = false;
   /** 本 run 是否已报告 hook 写 systemPrompt 被忽略（每 run 一次） */
   private systemPromptIgnoredReported = false;
   /** 本 run 是否已报告 additionalContext 弃用（每 run 一次） */
@@ -538,9 +532,6 @@ export class AgentRuntime {
       cleanups: [],
     };
     this.warnedLimitKeys.clear();
-    // 上一 run 的软预算收尾把 tools 清空；新 run 恢复工具是显式前缀失效。
-    if (this.toolBudgetExhausted) this.pendingPrefixReason ??= 'tools_changed';
-    this.toolBudgetExhausted = false;
     this.eventLogFailureReported = false;
     // 0.16 E5：BeforeLlm 注入去重按 run 重置
     this.injectedMessageKeys.clear();
@@ -1063,7 +1054,7 @@ export class AgentRuntime {
       // 权限等待不计入 max_runtime（ADR-084 Errata）：每轮同步累计暂停时长。
       stats.pausedMs = this.permissionPolicy.pausedMs;
 
-      // 0.15 E2：80% 预警（每 run 每 key 一次，不改变执行）
+      // 0.15 E2：90% 预警（每 run 每 key 一次，不改变执行）
       this.publishLimitWarnings(execution);
 
       // 检查终止条件
@@ -1083,43 +1074,10 @@ export class AgentRuntime {
         throw new LimitExceededError(terminationBlock);
       }
 
-      // 检查使用量限制。request / token / cost 仍是硬上限；
-      // tool_calls_limit 是软预算：不再失败，只切换为「无工具收尾」。
+      // 检查使用量限制。request / token / cost 都是硬上限；循环由
+      // max_iterations / max_runtime_seconds 兜底，不再有工具调用次数预算。
       const limitBlock = evaluateUsageLimits(stats, this.limits);
-      if (limitBlock && limitBlock.key === 'tool_calls_limit') {
-        if (!this.toolBudgetExhausted) {
-          this.toolBudgetExhausted = true;
-          // 从有工具切到无工具是一次显式的前缀失效（STRICT 模式需要 reason）。
-          this.pendingPrefixReason ??= 'tools_changed';
-          // 非致命事件：供 UI / 日志观察预算用尽；不复用会触发失败的 `limit.blocked`。
-          this.publishEvent({
-            type: 'limit.warning',
-            run_id: runId,
-            data: {
-              scope: limitBlock.scope,
-              key: limitBlock.key,
-              current: limitBlock.current,
-              max: limitBlock.max,
-              source: limitBlock.source,
-              hint: limitBlock.hint,
-            },
-            ts: Date.now(),
-          });
-          // 模型可见的收尾提示：本轮请求即不再携带工具。
-          this.addContext(
-            {
-              role: 'user',
-              name: 'vessel:limit',
-              content:
-                `[runtime] tool_calls_limit: ${limitBlock.current}/${limitBlock.max} — ` +
-                'tool call budget exhausted; no further tools will be executed. ' +
-                'Using the information already gathered, provide your final answer now.',
-              timestamp: Date.now(),
-            },
-            runId,
-          );
-        }
-      } else if (limitBlock) {
+      if (limitBlock) {
         this.publishEvent({
           type: 'limit.blocked',
           run_id: runId,
@@ -1134,7 +1092,7 @@ export class AgentRuntime {
         throw new LimitExceededError(limitBlock);
       }
 
-      // 80%–90%：不压缩，只提示换 Body；≥90% 交给 autoCompactAsync。
+      // 90%–95%：不压缩，只提示换 Body；>95% 交给 autoCompactAsync。
       // 自动压缩关闭时没有后续压缩降水位，提示不设上界（见 publishContextPressureWarning）。
       this.publishContextPressureWarning(execution);
 
@@ -1204,8 +1162,7 @@ export class AgentRuntime {
       const messages = this.buildRequestMessages(baseSystemPrompt);
 
       // 统一工具来源：PluginHost（插件在 install() 里 registerTool）。
-      // 预算用尽后不再向模型提供工具；Provider 收到 tools=undefined（不追加 tool_choice）。
-      const allTools = this.toolBudgetExhausted ? [] : this.pluginHost.listTools();
+      const allTools = this.pluginHost.listTools();
       const toolSchemas = allTools.map((tool) => ({
         type: 'function' as const,
         function: {
@@ -1302,12 +1259,6 @@ export class AgentRuntime {
       // 只有「无 tool_calls 且 stop」才视为终稿（对齐 Claude Code query.ts 的 tool_use 判定）。
       const toolCalls = response.tool_calls;
       const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
-
-      // 软预算收尾：收尾请求已不提供工具，模型仍返回 tool_calls 时不执行、不再请求，
-      // 直接按当前文本完成（空文本给固定说明），保证不会无限循环也不失败。
-      if (this.toolBudgetExhausted && hasToolCalls) {
-        return await this.finishToolBudgetExhausted(response, runId, sessionId);
-      }
 
       if (!hasToolCalls && response.finish_reason === 'stop') {
         // 应用输出 Guardrail
@@ -1506,42 +1457,6 @@ export class AgentRuntime {
   }
 
   /**
-   * 工具预算用尽后的收尾：模型在无工具请求中仍返回 `tool_calls` 时，不执行这些调用、
-   * 也不再发起下一轮请求；按当前文本完成（空文本给固定说明）。仍走 Output guardrail，
-   * 其余失败语义（如 guardrail 阻断）保持不变。
-   */
-  private async finishToolBudgetExhausted(
-    response: LLMResponse,
-    runId: string,
-    sessionId: string,
-  ): Promise<string> {
-    const outputResult = await this.guardrails.apply(
-      response.content,
-      GuardrailStage.Output,
-      runId,
-      sessionId,
-    );
-    if (!outputResult.allowed) {
-      throw new Error(`Output blocked by guardrail: ${outputResult.reason}`);
-    }
-    const content =
-      typeof outputResult.replacement === 'string' ? outputResult.replacement : response.content;
-    const finalContent =
-      content.trim().length > 0
-        ? content
-        : '[runtime] tool call budget exhausted; no final answer was produced.';
-    this.addContext(
-      {
-        role: 'assistant',
-        content: finalContent,
-        ...(response.reasoning_content ? { reasoning_content: response.reasoning_content } : {}),
-      },
-      runId,
-    );
-    return finalContent;
-  }
-
-  /**
    * 调用 provider，并在 context-overflow（400）时强制压缩一次后重试一次（0.10 R2-17）。
    *
    * 每次真实请求都递增 request 计数并发布 `llm.request`（重试请求看到的是压缩后的上下文）。
@@ -1695,9 +1610,9 @@ export class AgentRuntime {
   }
 
   /**
-   * 80% 上下文压力：不压缩，只发一次事件 + 尾部消息，建议 `agent(rotate)`。
-   * 自动压缩开启时 ≥90% 静默让 autoCompactAsync 处理；**关闭时必须取消上界** ——
-   * 此时没有压缩会把水位降回来，token 只会上穿 0.9，上界会让提示永久静默。
+   * 90% 上下文压力：不压缩，只发一次事件 + 尾部消息，建议 `agent(rotate)`。
+   * 自动压缩开启时 >95% 静默让 autoCompactAsync 处理；**关闭时必须取消上界** ——
+   * 此时没有压缩会把水位降回来，token 只会上穿 0.95，上界会让提示永久静默。
    */
   private publishContextPressureWarning(execution: RunExecution): void {
     const max = this.context.maxTokens;
@@ -1706,17 +1621,17 @@ export class AgentRuntime {
     const ratio = used / max;
     // 缺省（实现不暴露 autoCompact）按开启处理，与 0.27 行为一致。
     const autoCompact = this.context.autoCompact !== false;
-    // 自动压缩开启时：低于预警线或已超过自动压缩阈值（>0.9）不提示。
-    // 恰好 0.9 仍提示一次：压缩条件是严格大于，留出这一条边。
+    // 自动压缩开启时：低于预警线或已超过自动压缩阈值（>0.95）不提示。
+    // 恰好 0.95 仍提示一次：压缩条件是严格大于，留出这一条边。
     if (ratio < CONTEXT_PRESSURE_WARN_RATIO) return;
-    if (autoCompact && ratio > 0.9) return;
+    if (autoCompact && ratio > 0.95) return;
     if (this.warnedLimitKeys.has('context_window')) return;
     this.warnedLimitKeys.add('context_window');
 
     const percent = Math.round(ratio * 100);
     const hint =
       this.contextPressureHint ??
-      'Use agent(rotate) with a startup_prompt to move to a fresh body; automatic compaction runs above 90%.';
+      'Use agent(rotate) with a startup_prompt to move to a fresh body; automatic compaction runs above 95%.';
     this.publishEvent({
       type: 'context.pressure',
       run_id: execution.runId,

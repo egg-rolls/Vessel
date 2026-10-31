@@ -245,7 +245,6 @@ export function readEffectiveLimits(config: VesselConfig | undefined): Effective
     maxIterations,
     ...(maxRuntimeSeconds !== undefined ? { maxRuntimeSeconds } : {}),
     ...(limits.requestLimit !== undefined ? { requestLimit: limits.requestLimit } : {}),
-    ...(limits.toolCallsLimit !== undefined ? { toolCallsLimit: limits.toolCallsLimit } : {}),
     ...(limits.inputTokensLimit !== undefined ? { inputTokensLimit: limits.inputTokensLimit } : {}),
     ...(limits.outputTokensLimit !== undefined
       ? { outputTokensLimit: limits.outputTokensLimit }
@@ -272,7 +271,6 @@ export function readDelegateLimits(config: VesselConfig | undefined): EffectiveL
     maxIterations,
     ...(maxRuntimeSeconds !== undefined ? { maxRuntimeSeconds } : {}),
     ...(limits.requestLimit !== undefined ? { requestLimit: limits.requestLimit } : {}),
-    ...(limits.toolCallsLimit !== undefined ? { toolCallsLimit: limits.toolCallsLimit } : {}),
     ...(limits.inputTokensLimit !== undefined ? { inputTokensLimit: limits.inputTokensLimit } : {}),
     ...(limits.outputTokensLimit !== undefined
       ? { outputTokensLimit: limits.outputTokensLimit }

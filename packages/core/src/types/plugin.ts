@@ -93,7 +93,6 @@ export interface RuntimePermissionConfig {
 /** Self Card 的有效限额（0.15 E9）：键名与 UsageLimits / TerminationPolicy 一致 */
 export interface SelfCardLimits {
   requestLimit?: number;
-  toolCallsLimit?: number;
   inputTokensLimit?: number;
   outputTokensLimit?: number;
   totalCostLimit?: number;

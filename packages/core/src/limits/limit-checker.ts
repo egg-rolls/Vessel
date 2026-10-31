@@ -13,8 +13,8 @@ import type {
   UsageStats,
 } from '../types/limits.js';
 
-/** 预警阈值（0.15 E2）；硬上限仍由 evaluateUsageLimits / evaluateTermination 判定 */
-export const LIMIT_WARNING_THRESHOLD = 0.8;
+/** 预警阈值（0.31 起 0.9）；硬上限仍由 evaluateUsageLimits / evaluateTermination 判定 */
+export const LIMIT_WARNING_THRESHOLD = 0.9;
 
 /**
  * 已运行秒数（毫秒精度）。扣除等待用户授权的时长（ADR-084 Errata）：
@@ -42,8 +42,7 @@ function warningFor(
 
 /**
  * 0.15 E2：返回所有已到预警阈值的 key（每个 key 一条）。
- * 只读判定，不改变执行；达到上限的 key 不再返回（硬上限交给 limit.blocked，
- * `tool_calls_limit` 由 runtime 走软预算收尾）。
+ * 只读判定，不改变执行；达到上限的 key 不再返回（硬上限交给 limit.blocked）。
  */
 export function evaluateLimitWarnings(
   stats: UsageStats,
@@ -63,16 +62,6 @@ export function evaluateLimitWarnings(
       limits.requestLimit,
       'limits.requestLimit',
       'Increase limits.requestLimit or reduce the number of LLM requests.',
-      threshold,
-    ),
-  );
-  push(
-    warningFor(
-      'tool_calls_limit',
-      stats.toolCallsCount,
-      limits.toolCallsLimit,
-      'limits.toolCallsLimit',
-      'Increase limits.toolCallsLimit or reduce tool usage in the task.',
       threshold,
     ),
   );
@@ -132,12 +121,7 @@ export function evaluateLimitWarnings(
   return warnings;
 }
 
-/**
- * 命中上限时的首个 key（与 checkLimits 的检查顺序一致）。
- *
- * 注意：`tool_calls_limit` 仍然在这里返回，但 `AgentRuntime` 把它当作**软预算**
- * ——不抛 `LimitExceededError`，而是切换到无工具收尾。其余 key 仍是硬上限。
- */
+/** 命中上限时的首个 key（与 checkLimits 的检查顺序一致）。 */
 export function evaluateUsageLimits(stats: UsageStats, limits: UsageLimits): LimitBlock | null {
   if (limits.requestLimit !== undefined && stats.requestCount >= limits.requestLimit) {
     return {
@@ -147,17 +131,6 @@ export function evaluateUsageLimits(stats: UsageStats, limits: UsageLimits): Lim
       max: limits.requestLimit,
       source: 'limits.requestLimit',
       hint: 'Increase limits.requestLimit or reduce the number of LLM requests.',
-      retryable: false,
-    };
-  }
-  if (limits.toolCallsLimit !== undefined && stats.toolCallsCount >= limits.toolCallsLimit) {
-    return {
-      scope: 'run',
-      key: 'tool_calls_limit',
-      current: stats.toolCallsCount,
-      max: limits.toolCallsLimit,
-      source: 'limits.toolCallsLimit',
-      hint: 'Increase limits.toolCallsLimit or reduce tool usage in the task.',
       retryable: false,
     };
   }

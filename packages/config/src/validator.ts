@@ -73,7 +73,6 @@ function validateLimits(
 ): void {
   const fields: Array<[string, number | undefined, string]> = [
     ['requestLimit', limits.requestLimit, 'Request limit'],
-    ['toolCallsLimit', limits.toolCallsLimit, 'Tool calls limit'],
     ['inputTokensLimit', limits.inputTokensLimit, 'Input tokens limit'],
     ['outputTokensLimit', limits.outputTokensLimit, 'Output tokens limit'],
     ['totalCostLimit', limits.totalCostLimit, 'Total cost limit'],

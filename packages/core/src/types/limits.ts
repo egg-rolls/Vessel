@@ -6,7 +6,6 @@
 /** 使用量限制 */
 export interface UsageLimits {
   requestLimit?: number;
-  toolCallsLimit?: number;
   inputTokensLimit?: number;
   outputTokensLimit?: number;
   totalCostLimit?: number;
@@ -15,7 +14,6 @@ export interface UsageLimits {
 /** 命中的使用量 / 终止上限 key */
 export type LimitBlockKey =
   | 'request_limit'
-  | 'tool_calls_limit'
   | 'input_tokens_limit'
   | 'output_tokens_limit'
   | 'total_cost_limit'
@@ -46,7 +44,7 @@ export interface LimitWarning {
   max: number;
   /** 配置来源，例如 `limits.inputTokensLimit` */
   source: string;
-  /** 触发预警的比例（0.15 固定 0.8） */
+  /** 触发预警的比例（0.31 起 0.9） */
   threshold: number;
   /** 一句可执行建议 */
   hint: string;

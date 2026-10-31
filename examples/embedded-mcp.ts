@@ -70,7 +70,7 @@ async function main(): Promise<void> {
       context: new MemoryContextManager(),
       events,
       session: new MemorySessionBackend(),
-      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      limits: { requestLimit: 10 },
       termination: { maxIterations: 3 },
       pluginHost,
     });

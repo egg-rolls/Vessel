@@ -153,7 +153,6 @@ export const DEFAULT_CONFIG: VesselConfig = {
   },
   limits: {
     requestLimit: 100,
-    toolCallsLimit: 50,
     inputTokensLimit: 1000000,
     outputTokensLimit: 50000,
   },
@@ -170,6 +169,6 @@ export const DEFAULT_CONFIG: VesselConfig = {
     // （0.10：条数不再硬截断，超限先摘要）。显式配置仍原样透传。
     // 0.6.1 P1：默认开启压缩；有 provider summarizer 时生成真实摘要。
     autoCompact: true,
-    compactThreshold: 0.9,
+    compactThreshold: 0.95,
   },
 };

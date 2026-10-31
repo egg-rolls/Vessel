@@ -38,7 +38,6 @@ export interface HookConfig {
 /** 使用量限制配置 */
 export interface UsageLimitsConfig {
   requestLimit?: number;
-  toolCallsLimit?: number;
   inputTokensLimit?: number;
   outputTokensLimit?: number;
   totalCostLimit?: number;

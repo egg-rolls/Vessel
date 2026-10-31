@@ -54,7 +54,6 @@ async function main() {
     events,
     limits: {
       requestLimit: 100,
-      toolCallsLimit: 50,
     },
     termination: {
       maxIterations: 10,
