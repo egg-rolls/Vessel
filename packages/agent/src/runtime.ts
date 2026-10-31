@@ -772,7 +772,13 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
             events.publish({
               type: 'runtime.notice',
               run_id: runId,
-              data: { scope: 'inbox', summary: `[inbox] ${unread} unread message(s)`, ok: true },
+              data: {
+                scope: 'inbox',
+                summary:
+                  `[inbox] ${unread} unread message(s); ` +
+                  'use the inbox tool (action="list") to view them.',
+                ok: true,
+              },
               ts: Date.now(),
             });
           },
