@@ -9,6 +9,32 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [0.31.0] - 2026-10-31
+
+> 0.31.0（基于 0.30.0，未发布）：Chat 修复、热应用降级与 body 热重载、Web IA 收敛、
+> 限额与阈值调整、rotate 权限确认。完整记录见 [`docs/versions/0.31.0.md`](docs/versions/0.31.0.md)。
+
+### Added
+
+- **Body 热重载**：reload 后在同一具 body 上重做工具/权限快照，session / epoch 不变；
+  active run 延迟到 turn 边界应用。
+- **rotate 权限确认**：模型自换需人类批准，确认卡带上下文比例；拒绝 / 无人类通道
+  fail-closed 为 `rotate_not_needed`；owner / CLI 不变。
+- **Web IA**：成员面板收敛到 agents 域；智能体页改响应式卡片网格，点卡片即打开。
+
+### Changed
+
+- **删除 `limits.toolCallsLimit`（breaking config）**：旧配置可加载但不再生效；
+  循环由 `max_iterations` / `max_runtime_seconds` 兜底。
+- 上下文提示 0.9、自动压缩 0.95，temporary body 同步。
+- 用户面术语 Body / epoch → 会话 / 第 N 次会话；wire 字段不变。
+
+### Fixed
+
+- 热应用不再抛 `tools_hot_apply_unsupported`；`TenantToolHost` 转发 unregister；
+  reload scope 相互隔离。
+- Chat：新会话首发送、Stop 真实 run id、队列占位瞬闪。
+
 ## [0.30.0] - 2026-10-31
 
 > 0.30.0（基于 0.29.0，未发布）：Web 产物自愈、Tasks 面退场、诊断页补齐、Web 大文件拆分。
