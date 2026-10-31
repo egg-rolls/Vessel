@@ -1198,8 +1198,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         : {}),
       permission,
       permissionMode: memberPermissionMode,
-      // 0.31：headless 没有人类应答者，模型 rotate 直接拒绝而不是等权限应答。
-      humanApproval: !headless,
+      // 0.31：按**入口是否真有应答者**判定，而不是 `!headless`：feishu 非 TTY
+      // （headless=false）既没有 TUI 也没有 gateway 权限卡片，用 !headless 会让
+      // rotate 请求永远等不到人。registerAskUser 正是入口层的应答者信号
+      // （TUI / serve 为 true；--run / 管道 / feishu 非 TTY 为 false）。
+      humanApproval: registerAskUser === true,
       // 成员 bridge 请求 / 应答与 TUI 订阅的是同一条父事件流。
       parentEvents: runtimeEvents,
       // 0.27（spec §5.1）：每 tenant 唯一 scheduler，由 tenant bundle 构造。

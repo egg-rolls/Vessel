@@ -390,7 +390,10 @@ export function createAgentTool(
 
           let approved = false;
           let denial = 'no_human_channel';
-          if (options.humanApproval === true) {
+          // 入口有人类 + 该 body 真有 bridge，两个条件都成立才发请求；否则
+          // fail-closed。只检查入口标志会在 permissionMode=allow 的无 team body
+          // 上把请求发进无人订阅的事件流并永久等待。
+          if (options.humanApproval === true && service.canConfirm(callerSession)) {
             const requestId = randomUUID();
             ctx.events.publish({
               type: 'tool.permission.request',

@@ -2900,6 +2900,11 @@ export class AgentServiceImpl implements AgentService {
     return this.runtime.contextRatio?.(sessionId);
   }
 
+  /** 0.31：该 body 的交互请求是否有 bridge 到达人类；无 bridge 时 fail-closed。 */
+  canConfirm(sessionId: string): boolean {
+    return this.runtime.canConfirm?.(sessionId) === true;
+  }
+
   /**
    * 0.31：工具侧可见事件出口。agent 工具在权限事件流之外没有父流句柄，
    * rotate 的批准 / 拒绝结果经这里与 `agent.*` 事件同一条流发出。

@@ -294,6 +294,13 @@ export interface MemberRuntimePort {
    * 无活体 / 无 token 预算时返回 undefined。
    */
   contextRatio?(sessionId: string): number | undefined;
+  /**
+   * 0.31（additive，可选）：该 body 的交互请求是否真能到达人类。
+   *
+   * 判据是「bridge 已挂上」而不是「宿主有人类」：permissionMode=allow 的
+   * 无 team body 不会 attachBridge，发请求只会永久等待。服务端据此 fail-closed。
+   */
+  canConfirm?(sessionId: string): boolean;
 }
 
 /** `AgentService.drain` 结果：无在跑轮 / 已中断收口 / 超时 */
@@ -947,6 +954,11 @@ export interface AgentService {
    * 模型 rotate 的确认文案用它，不新增 RPC。
    */
   contextRatio(sessionId: string): number | undefined;
+  /**
+   * 0.31：该 body 的权限请求能否被人类应答（bridge 可用）。
+   * 无 bridge 时必须 fail-closed，不能发一个没人接的请求。
+   */
+  canConfirm(sessionId: string): boolean;
   /**
    * 0.31：工具侧可见事件出口（如 rotate 确认结果）。与 `agent.*` 同一条父流；
    * session 解析不到成员时静默丢弃。

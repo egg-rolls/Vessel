@@ -979,6 +979,16 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     return entry.context.tokenCount / max;
   }
 
+  /**
+   * 0.31：该 body 的交互请求能否到达人类。只认「bridge 已挂上」：
+   * permissionMode=allow 的无 team body 不发请求，避免请求发进无人订阅的
+   * 成员事件流后永久等待。有父流但没 bridge 同样不算。
+   */
+  canConfirm(sessionId: string): boolean {
+    const entry = this.entries.get(sessionId);
+    return entry !== undefined && entry.mode === 'bridge' && this.parentEvents !== undefined;
+  }
+
   private queuePendingNotice(memberId: string, text: string): void {
     const existing = this.pendingNotices.get(memberId);
     if (existing !== undefined) {
