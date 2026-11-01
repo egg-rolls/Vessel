@@ -104,6 +104,10 @@ tags: [agent, session, runtime, loop, run, layering, terminology, control-plane,
   > fence 必须更高，旧 token 写 `SessionEventLog` / `RunRecord` 被拒；生命周期事件带
   > `epoch` + `fencing_token`；`FileLeaseService` 仅单节点，不做集群共识。详见目标架构文档 §5。
 
+  > **上下文 v2 补充（0.34）**：手动 `/compact`（live EU 或 idle 瞬态）是 Session 级控制操作，
+  > 写 `message.compaction` + `SessionState`，**不写 `RunRecord`、不启动 Run**；是对「正常执行
+  > 路径 Run 唯一写者」的显式受控例外。详见目标架构文档 §5。
+
   #### 6. 四连接语义（冻结）
 
   1. **Loop 不碰持久层**：`LOOP → RUN` 交还 facts / usage；`RUN → SessionEventLog` 追加事实、
