@@ -103,7 +103,8 @@ tags: [agent, session, runtime, loop, run, layering, terminology, control-plane,
 
   1. **Loop 不碰持久层**：`LOOP → RUN` 交还 facts / usage；`RUN → SessionEventLog` 追加事实、
      `RUN → RunRecordStore` 写 checkpoint；`LOOP → EventStream` 只发 observation。
-     **`SessionEventLog` / `RunRecord` 的唯一写者 = Run。**
+     **`SessionEventLog` / `RunRecord` 的正常执行路径唯一写者 = Run**；ControlPlane 生命周期转移
+     （`queued → cancelled`、`running → interrupted`）是受控例外，见目标架构文档。
   2. **EU → SessionEventLog 只读**：EU 只持 session 引用 / 只读句柄；不追加事实、不写 checkpoint。
   3. **租约链路**：ControlPlane 授权 → LeaseService 颁发 → ExecutionUnit 持有并续租；Run 不接触
      LeaseService；`RunRecord` 记 `fencingToken`，由 EU 启动 Run 时注入。**fencingToken 来自 EU
