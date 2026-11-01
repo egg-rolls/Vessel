@@ -6,7 +6,7 @@ paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 ---
 
 # Scheduler 与执行面
-> 0.34 术语与分层迁移中：目标模型见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
+> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
 
 > 执行面只有一层：每个 tenant 一个 `InProcessScheduler`，所有 agent / body 的 run 都经它排队。Scheduler 不知道 member / owner / visibility；成员能力层见 [member-team.md](member-team.md)。单 run 外壳见 [runtime-lifecycle.md](runtime-lifecycle.md#run)。
 

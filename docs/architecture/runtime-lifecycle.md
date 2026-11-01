@@ -6,7 +6,7 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/run.ts]
 ---
 
 # Run 生命周期
-> 0.34 术语与分层迁移中：目标模型见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
+> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
 
 <a id="run"></a>
 

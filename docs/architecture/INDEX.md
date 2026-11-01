@@ -6,7 +6,7 @@ paths: [docs/architecture/**]
 ---
 
 # 架构索引
-> 0.34 术语与分层迁移中：目标模型见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
+> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
 
 按目标或路径命中；命中后只读对应模块，不整读全部。未命中时回落 `AGENTS.md` 硬规则，不把“没搜到”当“没规则”。历史见 `docs/versions/INDEX.md` 与 `docs/adr/README.md`。
 
@@ -34,6 +34,7 @@ paths: [docs/architecture/**]
 | [member-team](member-team.md) | AgentService、多 Body、admit/dispatch/rotate、peer/contractor、Team 与预算 | agent, member, team, body, admit, dispatch, rotate, spawn, peer, contractor, freeze, presence, roster, budget | `packages/agent/**`, `src/agent-service-wiring.ts` |
 | [agent-structure](agent-structure.md) | 成员/临时的定义、数据模型、创建路径与转换设计 | agent, member, peer, contractor, temporary, owner, create, hire, promote, demote | `packages/agent/**`, `apps/web/src/domains/agents/**`, `apps/web/src/domains/team/**` |
 | [federation-hub](federation-hub.md) | hub 目录控制面与跨节点 federation 数据面 | hub, federation, peer, pairing, directory, allowlist, hop | `src/hub/**`, `src/federation-*.ts`, `packages/serve/src/gateway/**` |
+| [0.34-target](0.34-target.md)（kind: target） | 目标/迁移态：五词、附属词、分层、10 边界、C1–C4、10 裁决、4 连线、3 铁律、Stage 0–4、5 图 | target, migration, layering, agent, session, runtime, loop, run, control plane, execution unit, lease, federation | `docs/architecture/**`, `packages/core/**`, `packages/agent/**`, `src/**` |
 
 ## 主题入口
 

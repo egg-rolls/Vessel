@@ -37,10 +37,11 @@ const LINK_FILES = [
 
 const ARCH_DIR = 'docs/architecture';
 const AGENTS_DIR = 'docs/agents';
-const DOC_KINDS = new Set(['current', 'advisory']);
+const DOC_KINDS = new Set(['current', 'advisory', 'target']);
 const APPLIES_TO = new Set(['N', 'M']);
 const ARCH_MODULE_LINE_LIMIT = 100;
 const ADVISORY_LINE_LIMIT = 60;
+const TARGET_MODULE_LINE_LIMIT = 600;
 const DOC_INDEX_LINE_LIMIT = 60;
 const ADR_DIR = 'docs/adr';
 const ADR_FILE_PATTERN = /^ADR-(\d{3})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
@@ -74,8 +75,10 @@ export async function checkDocs(root: string): Promise<DocIssue[]> {
     await checkLinks(root, `${AGENTS_DIR}/${file}`, issues);
   }
 
-  await checkDocTree(root, ARCH_DIR, 'current', ARCH_MODULE_LINE_LIMIT, issues);
-  await checkDocTree(root, AGENTS_DIR, 'advisory', ADVISORY_LINE_LIMIT, issues);
+  await checkDocTree(root, ARCH_DIR, new Set(['current', 'target']), issues, (kind) =>
+    kind === 'target' ? TARGET_MODULE_LINE_LIMIT : ARCH_MODULE_LINE_LIMIT,
+  );
+  await checkDocTree(root, AGENTS_DIR, new Set(['advisory']), issues, () => ADVISORY_LINE_LIMIT);
   await checkDocIndex(root, ARCH_DIR, issues);
   await checkDocIndex(root, AGENTS_DIR, issues);
   await checkCurrentVersionNarrative(root, ARCH_DIR, issues);
@@ -91,9 +94,9 @@ function countLines(text: string): number {
 async function checkDocTree(
   root: string,
   dir: string,
-  expectedKind: string,
-  lineLimit: number,
+  expectedKinds: ReadonlySet<string>,
   issues: DocIssue[],
+  lineLimitFor: (kind: string) => number,
 ): Promise<void> {
   if (!existsSync(join(root, dir))) return;
   for (const file of await listMarkdownFiles(root, dir)) {
@@ -108,10 +111,19 @@ async function checkDocTree(
     if (!frontmatter.title?.trim()) {
       issues.push({ file: relative, line: 0, message: 'frontmatter.title 不能为空' });
     }
-    if (!DOC_KINDS.has(frontmatter.kind ?? '')) {
-      issues.push({ file: relative, line: 0, message: 'frontmatter.kind 必须是 current|advisory' });
-    } else if (frontmatter.kind !== expectedKind) {
-      issues.push({ file: relative, line: 0, message: `frontmatter.kind 必须是 ${expectedKind}` });
+    const kind = frontmatter.kind ?? '';
+    if (!DOC_KINDS.has(kind)) {
+      issues.push({
+        file: relative,
+        line: 0,
+        message: 'frontmatter.kind 必须是 current|advisory|target',
+      });
+    } else if (!expectedKinds.has(kind)) {
+      issues.push({
+        file: relative,
+        line: 0,
+        message: `frontmatter.kind 必须是 ${[...expectedKinds].join('|')}`,
+      });
     }
     const triggers =
       frontmatter.triggers === undefined ? null : parseStringArray(frontmatter.triggers);
@@ -122,7 +134,7 @@ async function checkDocTree(
     if (!paths || paths.length === 0) {
       issues.push({ file: relative, line: 0, message: 'frontmatter.paths 必须是非空数组' });
     }
-    if (expectedKind === 'advisory') {
+    if (kind === 'advisory') {
       const appliesTo =
         frontmatter.applies_to === undefined ? null : parseStringArray(frontmatter.applies_to);
       if (!appliesTo || appliesTo.length === 0) {
@@ -131,8 +143,9 @@ async function checkDocTree(
         issues.push({ file: relative, line: 0, message: 'applies_to 只能包含 N|M' });
       }
     } else if (frontmatter.applies_to !== undefined) {
-      issues.push({ file: relative, line: 0, message: 'current 文档不能有 applies_to' });
+      issues.push({ file: relative, line: 0, message: '非 advisory 文档不能有 applies_to' });
     }
+    const lineLimit = lineLimitFor(kind);
     if (countLines(text) > lineLimit) {
       issues.push({ file: relative, line: 0, message: `文档行数超过上限 ${lineLimit}` });
     }
