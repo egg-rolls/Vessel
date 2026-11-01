@@ -3062,10 +3062,12 @@ export class AgentServiceImpl implements AgentService {
         toSessionId,
         oldLeaseToken > 0 ? oldLeaseToken + 1 : undefined,
       );
-      // 子 primary 已就绪：旧 primary EU retire/dispose、旧 SessionLease 释放、
-      // 旧 binding 立即进 history（父 Session/transcript 不复制、不改写）。
+      // 子 primary 已就绪：旧 primary EU dispose、旧 SessionLease 释放。
+      // 父 binding 留在 transient `retiringBinding`（无有效 lease / EU），durable
+      // binding 记录不搬 history；下一次 rotate/restart/compactFork 的
+      // `retireResidualBinding` 才把它退役进 history。父 Session 上新起 run 会
+      // 惰性重建 EU 并重新 acquire 更高的 SessionLease，不能复用旧 token。
       if (parentEntry !== undefined) await this.disposeEntry(parentEntry);
-      this.registry.retireBinding(target.id, fromSessionId);
       this.registry.setPrimaryBinding(target.id, toSessionId);
       this.scheduleSnapshot();
 
