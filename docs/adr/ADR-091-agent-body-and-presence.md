@@ -260,3 +260,11 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
   `run.completed.output` 写，失败 / 取消写 `system` 条目。
 - rotate 只退休 primary body，其它 live body 及其 epoch 不受影响；epoch fencing 按该 body 自己的
   epoch / 退役标志判定，不比较「当前指针」。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `body` / `BodyEntry` / `AgentBodyRecord` / `PersistedBodyRecord` → `BindingRecord`；`MemberRecord` → `AgentRecord`。
+- BindingRecord **不存活跃 lease**，lease 由 LeaseService 动态颁发。
+- `body_id` 在 Stage 1a 作为过渡 wire 字段保留，目标以 `session_id` 为准。

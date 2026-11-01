@@ -44,3 +44,11 @@ tags: [compaction, context, summarizer, chunking, tools]
 ## Errata
 
 - **2026-10-26**：自动压缩默认阈值由 `0.8` 调整为 `0.9`（`tokenCount > maxTokens × 0.9`），显式 `compactThreshold` 仍优先；决策 2 与非目标 1 中的 0.8 以本 Errata 为准。80%–89.99% 不压缩，由 `context.pressure` 事件 + `vessel:limit` 尾部消息推荐 `agent(rotate)`；≥90% 自动压缩；overflow 的 `forceCompact` 兜底、保留区与摘要契约不变。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `ContextManager` / `MemoryContextManager` → `WorkingContext` / `MemoryWorkingContext`。
+- WorkingContext 目标为 per-run、瞬时、不落库，只读当前 SessionEventLog。
+- 压缩保留与分块摘要结论不变。

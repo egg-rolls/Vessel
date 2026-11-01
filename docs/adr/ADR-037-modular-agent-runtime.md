@@ -44,3 +44,11 @@ related: [3, 4, 12, 15, 17, 30, 34, 36, 38]
 - 以 Host 为执行面的子系统（渠道 runner、workflow、resume 路由）经 `AgentService.admit` 或直接
   `scheduler.submit`；没有第二套 host 生命周期，也没有 Host 合成的 `agent.run.*` /
   `mirror_of_run_id`。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- Runtime 词义改为无状态框架/工厂（C4）；`AgentRuntime` → `ExecutionUnit`。
+- Run → Loop：`ToolCallingLoop` 目标为 Run 内闭包，不再单独导出。
+- 本 ADR 的「Kernel 最小集 / 模块 ≠ 插件」结论保留。

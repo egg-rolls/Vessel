@@ -14,3 +14,10 @@ related: [17, 18]
 - **备选**：(a) 保持 async-in-constructor + `ready`——已证明反模式，P0 issue (#17)。(b) 让构造函数接受临时 Promise 并在外部等待——不改变现状。均不取。
 - **后果**：用户拿到 runtime 时插件已就绪，无需额外 await。构造函数私有化防止直接 `new`。静态工厂方法成为标准实例化路径。Core 冻结不变——本 ADR 属 bug 修复不冲击冻结状态。
 - **关联**：ADR-017(2b)、ADR-018；[issue #17](https://github.com/egg-rolls/Vessel/issues/17)。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `AgentRuntime` → `ExecutionUnit`；Runtime 词义改为无状态 `RuntimeFactory`（C4）。
+- 原「静态工厂在返回前完成插件安装」的语义目标归 Runtime 工厂：工厂负责装配无状态 Runtime 并产出 per-session ExecutionUnit。

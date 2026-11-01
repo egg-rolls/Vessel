@@ -47,3 +47,10 @@ tags: [runtime, host, scheduler, resume, snapshot, tools, display]
   `mirror_of_run_id` 没有生产者。
 - 决策 3 的结论继续有效：resume 受并发上限与 body 串行约束，执行者是 `AgentService.resume` +
   tenant Scheduler。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `AgentRuntime` → `ExecutionUnit`；Runtime 目标为无状态工厂。
+- Scheduler 仍属 ControlPlane；本 ADR 的调度与快照结论不变。

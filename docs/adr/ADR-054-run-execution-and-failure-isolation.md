@@ -25,3 +25,10 @@ tags: [runtime, correctness, hooks, guardrails]
 - **后果**：同一 runtime 的行为从“并发时状态互相污染”变为“明确拒绝第二个 run”，调用方需要为真正的并行准备多个 runtime（与 Host 模型一致）。坏 hook / 坏 guardrail 从“run 失败”降级为“可观测的降级信号 + 继续执行”，代价是错误不再自动终止 run；需要强制终止的场景应通过 guardrail 返回 `allowed: false` 或显式 abort 表达，而不是依赖抛异常。终态持久化失败多出一个可观测事件。
 
 - **关联**：ADR-027（事件订阅与 `waitFor`）、ADR-030（开放字符串事件名）、ADR-033（依赖倒置与编排外推）、ADR-040（durable run / resume 语义）；`packages/core/src/runtime/agent-runtime.ts`、`hook-runner.ts`、`guardrail-runner.ts`、`types/run.ts`、`types/run-store.ts`。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `RunExecution` → `Run`（瞬时）；`AgentRuntime` → `ExecutionUnit`。
+- 单 active run 语义保留；run 的持久记录改称 `RunRecord`。

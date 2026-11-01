@@ -3,6 +3,8 @@
 > Vessel 仓库的 AI 行为约定。与代码冲突时以代码为准，并顺手改掉本文档。
 > 领域细节按路径读 `docs/agents/`；未命中时以本文件的硬安全规则为准。
 
+> 0.34 术语与分层迁移中：目标模型见 [ADR-098](docs/adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；架构页正文仍描述现态。
+
 ## 先读什么
 
 - 先读本文件与任务相关的 `docs/architecture/` 模块（从 [INDEX](docs/architecture/INDEX.md) 命中）；契约查 `docs/adr/` 的具体编号，不整读全部 ADR。

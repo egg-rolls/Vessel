@@ -57,3 +57,10 @@ tags: [agent, spawn, peer, contractor, team, owner, freeze, permission, rpc, aud
   - `agent.spawned.spawned_by` 与 Team join `from` 一致；`neverAutoApprove` 只降级 auto allow。
 
 - **关联**：[ADR-079](ADR-079-permission-lifecycle-persistence.md)（权限生命周期）、[ADR-088](ADR-088-agent-service-package.md)（AgentService 分层）、[ADR-091](ADR-091-agent-body-and-presence.md)（Agent / Body / Team）、[ADR-092](ADR-092-agent-rotate-and-epoch-fencing.md)（rotate / epoch fencing）。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `body` → `BindingRecord`，`AgentRuntime` → `ExecutionUnit`。
+- spawn / peer / contractor 与 close 审批语义不变。

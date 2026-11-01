@@ -15,3 +15,10 @@ related: [17, 23, 26, 29]
 - **备选**：(a) 保持现状——可测试性差、`agent-runtime.ts` 持续膨胀；(b) 把权限/guardrail/hook 全做成插件——权限策略是 loop 骨架的默认行为（ADR-029），guardrail/hook 编排是 loop 的编排步骤，插件化会破坏 loop 骨架完整性。均不取。
 - **后果**：`AgentRuntime` 从 778 行降至 676 行（权限/guardrail/hook 编排逻辑外推 156 行到三个 runner）；`LimitChecker`/`PluginHost` 可注入替代实现（测试/嵌入场景）；三个 runner 可独立单测。接口面仅增 2 个可选字段，向后兼容。冻结范围收紧为「9 接口语义 + loop 拓扑 + 事件名」不变。
 - **关联**：ADR-017（解冻局部）、ADR-023（构造语义论证）、ADR-026/029（权限策略）。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `AgentRuntime` → `ExecutionUnit`。
+- 持久端口注入顺序目标：PersistencePorts 只注入 Runtime 工厂层与 Run；ExecutionUnit 只拿只读 EventLog 句柄；Loop 不注入任何 PersistencePort。

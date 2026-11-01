@@ -45,3 +45,11 @@ related: [25, 32, 37]
 - resume 一律经 Scheduler 排队：`AgentService.resume(runId)` 加载 checkpoint → 解析 agent / body
   → 确保 body → `scheduler.submit`（`ScheduledTask.runId` 固定 run id）；没有绕过 Scheduler 的
   resume 路径，也没有「resume 不受并发上限约束」的行为。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `RunCheckpoint` → `RunRecord`；checkpoint 改为增量（C1）：开始写 `status=running`，安全点更新 `event_cursor/iteration/usage`，结束 finalize。
+- resume 从 SessionEventLog + cursor 重建 WorkingContext；WorkingContext 不落库。
+- `SessionBackend` 目标拆为 Session 元数据壳 + `SessionEventLog` port + `RunRecordStore`。

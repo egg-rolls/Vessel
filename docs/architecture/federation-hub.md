@@ -6,9 +6,9 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 ---
 
 # Hub 控制面与跨节点 Federation
+> 0.34 术语与分层迁移中：目标模型见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
 
 > 两个独立平面：**hub 控制面**只传目录与指针元数据；**federation 数据面**只做节点到节点的 team 投递。hub 不代理正文、不替节点授权（ADR-093 / ADR-094）。
-
 <a id="planes"></a>
 
 ## 两个平面

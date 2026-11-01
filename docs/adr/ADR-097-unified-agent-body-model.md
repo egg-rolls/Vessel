@@ -113,3 +113,10 @@ related: [40, 54, 81, 86, 88, 91, 92, 95, 96]
 - `bodyHistory` 上限为 `MAX_BODY_HISTORY = 20`；`trimRetiredBodies()` / `MAX_RETIRED_BODIES` 删除。
 - 上下文策略按 `role` 分层：`temporary` 不主动压缩（到线只提示），`member` 主动压缩；转换时
   在**同一具活体**上热切换。core 不知道 `role`。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `body` 系列 → `BindingRecord`，`AgentRuntime` → `ExecutionUnit`。
+- 决策 4 中「`RunRecord` 不参与 run 口径」被 ADR-098 C1 取代：`RunRecord` 成为 run 的增量 checkpoint，live 视图仍来自 Scheduler。

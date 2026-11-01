@@ -89,3 +89,11 @@ tags: [agent, service, package, lifecycle, queue, snapshot, owner, permission, c
   `session_id`。
 - 快照持久化是 v4：`bodies[]` 是唯一真相，`primary_body_id` 表示缺省投递目标；`current_body` /
   `body_history` 仅作旧数据兼容视图，不再是「当前 Body」的唯一指针。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- `AgentRuntime` → `ExecutionUnit`；per-body 活对象由 `ExecutionUnit` 承载。
+- `InProcessMemberRuntime` 的工厂/池职责目标并入 ControlPlane 的 `RuntimeFactory` wiring。
+- 分层与「唯一实现」结论不变。

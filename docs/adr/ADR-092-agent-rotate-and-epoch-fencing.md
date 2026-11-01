@@ -87,3 +87,11 @@ tags: [agent, body, rotate, epoch, fencing, snapshot, session, permission, cli]
   `serialKey = body/session` 保证。
 - `body_history` 保留为「已退役 primary 的兼容视图（≤20）」；真相是 `bodies[]`（已退役条目保留
   ≤50）。
+
+## Errata（0.34 术语与分层）
+
+> 2026-11-01，只追加。上文保留当时结论；以下为目标语义，**尚未实现**，见 [ADR-098](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+
+- epoch fencing 目标落在 `BindingRecord`。
+- 两级 lease 为 `BindingLease`（binding_id）→ `SessionLease`（session_id），顺序 binding→session、逆序释放。
+- EU 持有并续租，Run 不访问 LeaseService。
