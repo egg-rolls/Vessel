@@ -16,6 +16,9 @@ import type {
   Logger,
   RunEvent,
   RunInterruptReason,
+  RunOptions,
+  RunRecord,
+  RunRecordStore,
   RuntimePermissionConfig,
   Scheduler,
   SessionEventLogPort,
@@ -213,7 +216,7 @@ export interface AgentMessage {
 }
 
 /** 传给执行内核的成员身份（不携带 registry 状态） */
-export interface MemberRuntimeMember {
+export interface MemberExecutionMember {
   id: string;
   session_id: string;
   name?: string;
@@ -251,14 +254,14 @@ export interface MemberTurnResult {
  * runTurn 被 AgentService 调用，不得在内部吞掉取消；
  * 成员若调用 `reply`，本轮自动最终文本会被抑制。
  */
-export interface MemberRuntimePort {
-  spawn(member: MemberRuntimeMember): Promise<void>;
+export interface MemberExecutionPort {
+  spawn(member: MemberExecutionMember): Promise<void>;
   /**
    * 执行一轮；`runId` 由调度器固定（0.27），缺省时由实现生成。
    * 同一 body 的 run id 必须与调度器事件里的 run_id 一致。
    */
   runTurn(
-    member: MemberRuntimeMember,
+    member: MemberExecutionMember,
     message: AgentMessage,
     runId?: string,
   ): Promise<MemberTurnResult>;
@@ -267,12 +270,19 @@ export interface MemberRuntimePort {
    * `-r/--resume` 与 AgentService 的 resume 准入路径显式调用；未实现时回退 `runTurn`。
    */
   resumeTurn?(
-    member: MemberRuntimeMember,
+    member: MemberExecutionMember,
     message: AgentMessage,
     runId?: string,
   ): Promise<MemberTurnResult>;
-  cancel(member: MemberRuntimeMember, reason?: RunInterruptReason): Promise<void> | void;
-  dispose(member: MemberRuntimeMember): Promise<void> | void;
+  /**
+   * Stage 4（additive，可选）：用已加载的 RunRecord 恢复成员 EU 上的同一 run。
+   * 调用方已经过 RunRecordStore 加载并完成 agent/session 路由；port 只按
+   * `record.session_id` 找活的 ExecutionUnit，未实现 / 未 spawn 时调用方报
+   * `member_execution_not_found`。
+   */
+  resumeRun?(record: RunRecord, opts?: RunOptions): Promise<string>;
+  cancel(member: MemberExecutionMember, reason?: RunInterruptReason): Promise<void> | void;
+  dispose(member: MemberExecutionMember): Promise<void> | void;
   /**
    * Stage 3（additive，可选）：当前 session 有效 SessionLease 的 fencingToken。
    * 用于 restart/compactFork 的 conflict payload 与生命周期事件。
@@ -309,7 +319,7 @@ export interface MemberRuntimePort {
    * ExecutionUnit 数量（没有活体时为 0，此时策略由下一次 spawn 生效）。未实现的 port 由
    * AgentService 按 0 处理并走兜底轮换。
    */
-  applyContextPolicy?(member: MemberRuntimeMember): Promise<number> | number;
+  applyContextPolicy?(member: MemberExecutionMember): Promise<number> | number;
   /**
    * 0.31（additive，可选）：body 当前上下文水位（0–1）。
    *
@@ -615,7 +625,7 @@ export interface AdmitInput {
   important?: boolean;
   /**
    * Q5（仅内部装配使用，不暴露为 RPC）：本次投递按「续接已有 session」执行，
-   * 调度到 `MemberRuntimePort.resumeTurn` → core `resumeSession(sessionId, input)`。
+   * 调度到 `MemberExecutionPort.resumeTurn` → core `resumeSession(sessionId, input)`。
    * 缺省 = 普通 `run`。
    */
   resume?: boolean;
@@ -983,7 +993,7 @@ export interface AgentServiceOptions {
   tenantId: string;
   /** 缺省不落盘（纯内存） */
   dataDir?: string;
-  runtime: MemberRuntimePort;
+  runtime: MemberExecutionPort;
   /** 0.27：每 tenant 唯一调度器（必填）；执行只经 scheduler executor */
   scheduler: Scheduler;
   /**
@@ -1010,6 +1020,11 @@ export interface AgentServiceOptions {
    * 把压缩副本写成子 session 的 `message.injected` 事件。缺省时 compactFork 失败。
    */
   eventLog?: SessionEventLogPort;
+  /**
+   * Stage 4：成员 run durable 的 RunRecord 存储（内部装配选项，不是公开 RPC）。
+   * `resumeRun` 用它按 run_id 加载记录；缺省时成员 resume 不可用。
+   */
+  runStore?: RunRecordStore;
   now?: () => number;
   /** 注入 id 生成器（session_id === member id） */
   newId?: () => string;
@@ -1089,6 +1104,15 @@ export interface AgentService {
    * rotating 入队等待；left / resume 失败返回 rejected。
    */
   dispatch(input: DispatchInput): Promise<DispatchResult>;
+  /**
+   * Stage 4（内部装配用，不暴露为 RPC）：按 run_id 恢复成员的一轮 run。
+   *
+   * 装配层先 `RunRecordStore.load` 并按 `agent_id` 路由到成员；本方法再经
+   * scheduler 的 session 串行键提交，保证同 session 排队 / active run 记账不倒退。
+   * 缺记录 / 缺成员 / 未 spawn 分别抛 `run_not_found` / `agent_not_found` /
+   * `member_execution_not_found`。
+   */
+  resumeRun(runId: string, opts?: RunOptions): Promise<string>;
   /**
    * 换一具新 ExecutionUnit：旧 ExecutionUnit 跑完当前轮后退役，新 ExecutionUnit 以 startup_prompt 开始。
    * 失败保持旧指针，不自动 fork / 重试。

@@ -3,7 +3,7 @@
 > Vessel 仓库的 AI 行为约定。与代码冲突时以代码为准，并顺手改掉本文档。
 > 领域细节按路径读 `docs/agents/`；未命中时以本文件的硬安全规则为准。
 
-> 0.34 术语与分层迁移中：目标模型见 [docs/architecture/0.34-target.md](docs/architecture/0.34-target.md)，决策见 [ADR-098](docs/adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；架构页正文仍描述现态。
+> 0.34 Stage 4 已落地：分层为 `Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-session）→ Run（瞬时，持 WorkingContext）→ ToolCallingLoop`；架构页正文描述该已实现状态。目标模型见 [docs/architecture/0.34-target.md](docs/architecture/0.34-target.md)，决策见 [ADR-098](docs/adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
 
 ## 先读什么
 
@@ -83,4 +83,6 @@ bun run scripts/release-dry-run.ts
 
 进 core 必须全部满足：大多数 harness 都需要、领域无关、可接口化、不绑 Provider 或厂商 SDK、能被多个应用复用。**拿不准就选插件，不选 core。** core 只放领域无关的运行时；其余做成 `plugins/<category>/<name>/`（放文件夹即注册；目录只在进程启动时扫描一次）。应用层外壳不往 core 反推需求。
 
-判断“要不要动 core”：能做成 Tool（`registerTool`）/ Hook / Guardrail / 事件（开放字符串），或能由 `bash` + 模型自己组合出来 → 不进 core。单个 agent 的 tool-calling loop 仍由 `ExecutionUnit` 实现，不要在 Host 再写一套 loop。
+判断“要不要动 core”：能做成 Tool（`registerTool`）/ Hook / Guardrail / 事件（开放字符串），或能由 `bash` + 模型自己组合出来 → 不进 core。单个 agent 的 tool-calling loop 仍由 per-session `ExecutionUnit` 实现，不要在 Host 再写一套 loop。
+
+**Stage 4 分层红线**：`Runtime` 只持 tenant profile 与 `(tenantId, sessionId)` EU 目录，不持 Session / Run / WorkingContext / lease / RunRecordStore；唯一 EU 构造入口是 `Runtime.getOrCreateExecutionUnit`。事实事件 / RunRecord / SessionState 只由 Run 经 `RunJournal` 写，EU 只持只读 EventLog；`WorkingContext` 每次 Run 新建。

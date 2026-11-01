@@ -824,6 +824,7 @@ async function runWithConfig(result: BootstrapResult) {
 
       tenantFactory = await createTenantRuntimeFactory({
         config,
+        runtime: result.executionRuntime,
         ...(result.bundle ? { seededTenants: [result.bundle] } : {}),
         useMock,
         mockScenario,
@@ -1171,7 +1172,6 @@ async function runWithConfig(result: BootstrapResult) {
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
             sessionFor: (tenantId: string) =>
               livenessSessionFor(tenantId) ?? tenantFactory?.sessionFor(tenantId),
-            contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
             pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
             pluginsFor: (tenantId: string) => tenantFactory?.pluginsFor(tenantId) ?? [],
             plugins: () => tenantFactory?.pluginsFor(result.tenantId) ?? [],

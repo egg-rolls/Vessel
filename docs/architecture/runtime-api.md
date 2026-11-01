@@ -6,6 +6,7 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/**]
 ---
 
 # 消息与运行时 API
+> Stage 4 已落地：`Runtime` 是 per-node 无状态工厂，`ExecutionUnit` 是 per-session，`WorkingContext` 归每次 Run。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
 
 <a id="messages"></a>
 
@@ -31,7 +32,7 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
 语义边界：
 
 - **顺序**：注入消息在前，用户输入在后。
-- **持久化**：注入消息与用户输入一样进 `WorkingContext`（是本轮真实对话历史的一部分，不是一次性遮罩）。
+- **持久化**：注入消息与用户输入一样进本 Run 的 `WorkingContext`（是本轮真实对话历史的一部分，不是一次性遮罩）。
 - **Input guardrail 先于写用户消息**：注入消息写入后、用户消息写入前执行；被阻断的输入不进入上下文（已写入的注入消息保留）。`replacement` 是字符串时，改写后的内容才是持久化的用户消息（PII 脱敏语义）。
 - **会话标题**：取首轮最后一条 `user` 消息；注入消息在前，不抢标题。
 - **core 不解释语义**：core 不知道哪条是 skill、哪条是附件。它只按序 `addContext`。
@@ -54,44 +55,44 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
 
 <a id="execution-unit"></a>
 
-## `ExecutionUnit` 公开面
+## `Runtime` 与 `ExecutionUnit` 公开面
+
+`Runtime` 是 per-node 无状态工厂（只持 tenant profile 与 `(tenantId, sessionId)` EU 目录）；`ExecutionUnit` 是 per-session 长活对象。tenant 与成员都经 `getOrCreateExecutionUnit`；同 key 返回同一对象，`agentId` 不一致抛 `execution_unit_binding_conflict`。
+
+| API | 语义 |
+|---|---|
+| `registerProfile(profile)` | 同 tenant 幂等；冲突抛错。profile：`tenantId` / `providerFactory` / `model` / `plugins` / `pluginHostFactory?` / `limits?` / `termination?` / `includeReasoning?` / `context{maxTokens?,autoCompact?,summarizer?}` / `systemPrompt?` / `permission?` / `journalFactory` |
+| `getOrCreateExecutionUnit(req)` | 请求：`tenantId` / `sessionId` / `agentId?` / `session?` / `events` / `eventLog?` / `leaseService?` / `bindingLease?` / `pluginHost?` / `plugins?` / `contextFactory?` / `overrides?` |
+| `getExecutionUnit` / `retireExecutionUnit` / `listExecutionUnits` / `profileCount` | 诊断与 ControlPlane 生命周期；retire 幂等 |
 
 ```ts
 class ExecutionUnit {
   static create(opts: ExecutionUnitOptions): Promise<ExecutionUnit>;
-
-  /** 事件流——headless / 外部订阅者的入口 */
-  readonly events: EventStream;
-  /** 工具与插件的唯一来源——TUI/装配层从这里读，不再经由 ToolRegistry */
-  readonly pluginHost: PluginHost;
-
-  run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string>;
-  /** durable：从 checkpoint 恢复并继续；未配置 runStore 抛 run_store_required */
-  resume(runId: string, opts?: RunOptions): Promise<string>;
-  dispose(): void;
+  readonly events: EventStream;         // headless / 外部订阅者入口
+  readonly pluginHost: PluginHost;      // 工具与插件的唯一来源
+  run(input, sessionId?, opts?): Promise<string>;
+  resumeRun(record: RunRecord, opts?): Promise<string>;  // 调用方负责 load / 路由
+  resumeSession(sessionId, input, opts?): Promise<string>;
+  interrupt(reason?): void;
+  dispose(): Promise<void>;
 }
 
 interface ExecutionUnitOptions {
-  provider: LLMProvider;
-  model: string;
-  context: WorkingContext;
-  events: EventStream;
-  limits: UsageLimits;
-  termination: TerminationPolicy;
-  plugins?: Plugin[];
-  pluginHost?: PluginHost;      // 可选注入；缺省 new MemoryPluginHost()
-  limitChecker?: LimitChecker;  // 可选注入；缺省 new MemoryLimitChecker()
+  provider: LLMProvider; model: string;
+  contextFactory: (init: { sessionId: string }) => WorkingContext;  // 每次 Run 新建
+  events: EventStream; limits: UsageLimits; termination: TerminationPolicy;
+  plugins?: Plugin[]; pluginHost?: PluginHost; limitChecker?: LimitChecker;
   session?: SessionStore;
-  runStore?: RunRecordStore;          // 可选注入；缺省不写 checkpoint
-  agentId?: string;             // 写入 checkpoint.agent_id（body 所属 agent）
-  systemPrompt?: string;
-  permission?: RuntimePermissionConfig;
+  journalFactory: RunJournalFactory;   // 事实事件 / RunRecord / SessionState 唯一写端口
+  agentId?: string; systemPrompt?: string; permission?: RuntimePermissionConfig;
+  eventLog?: SessionEventLogPort;      // 只读；写由 journal 承担
+  leaseService?: LeaseServicePort;     // EU 持有/续租，Run 不持
 }
 ```
 
-`create()` 是异步静态工厂（构造函数私有）——插件安装是异步的，且要求 fail-fast（ADR-023）。
+`create()` 是异步静态工厂（插件安装 fail-fast，ADR-023）；装配层不再直接调用，tenant bundle 与成员 host 都经 `Runtime`。
 
-run 级状态收敛在 `Run`（`runId` / `sessionId` / `branch` / `createdAt` / `startedAt` / `stats` / `context`，从根入口导出）。`run()` / `resumeRun()` 共用同一个 `activeRun` 槽位，在第一个 await 之前同步占位；已有 active run 时立即抛 `RunAlreadyRunningError`（`code: 'run_already_running'`，继承 `RunResumeError`）。公开签名与 `ExecutionUnitOptions` 不变。
+run 级状态收敛在 `Run`（`runId` / `sessionId` / `branch` / 计时 / `stats` / `workingContext`）。`run()` / `resumeRun()` 共用 `activeRun` 槽位并在首个 await 前同步占位；已有 active run 抛 `RunAlreadyRunningError`。公开 `RunnableAgent.resumeRun?(runId)` 仍是门面签名，per-session 门面负责 `runStore.load` 后调 `EU.resumeRun(record)`。
 
-Kernel 侧：`RunnableAgent.resume?(runId, opts?)` 返回 `RunHandle`。准入侧 `AgentService.resume(runId)` 加载 checkpoint、解析 agent / body，再用 `ScheduledTask.runId` 固定 run id 经 Scheduler 排队——resume 没有绕过调度的旁路。resume 只接受 `running` / `interrupted`；同一 run 并发恢复首个成功，后续 `run_already_running`（ADR-040 / ADR-097）。
+Kernel 侧：`AgentService.resume(runId)` 加载 checkpoint、解析 agent / body，再用 `ScheduledTask.runId` 经 Scheduler 排队；resume 只接受 `running` / `interrupted`，并发恢复首个成功、后续 `run_already_running`（ADR-040 / ADR-097）。
 

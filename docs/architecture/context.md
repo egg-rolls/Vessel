@@ -7,8 +7,10 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 
 # 上下文与消息注入
 
-`WorkingContext` 是**每个 session 一份**的内存消息表；`ExecutionUnit` 是唯一写者。
-事件日志是恢复的真相源；**compaction 是唯一允许重写历史的地方**。
+`WorkingContext` 是**每次 Run 一份**的内存消息窗口（Stage 4）；`ExecutionUnit` 只持 `contextFactory`，不持跨 Run 实例。`Run` 是唯一写者（`RunJournal`），事件日志是恢复的真相源，**compaction 是唯一允许重写历史的地方**。
+
+- **生命周期**：Run 开始由 `contextFactory` 新建，从 SessionState 快照 + 事件日志增量播种（无快照则全量投影）；Run 结束用它写投影后随 Run 释放，下一次 Run 重新 new（只复用消息数据，不复用对象）。
+- **无 active Run**：`/compact` 用瞬态 WorkingContext + transient journal（`run_id='manual'`）；`appendNotice` 写 SessionState 快照；`contextRatio` 返回上一 Run 的 `lastContextRatio`。
 
 ## 消息模型
 
@@ -46,7 +48,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 ## 一次 run 的顺序
 
 1. `setSessionId(sessionId)`
-2. context 为空 → 生成 system（基底 + Self Card）+ 恢复历史；非空 → 重算静态 system
+2. 本 Run 的新 context 生成 system（基底 + Self Card）+ 从 SessionState 快照 / 事件日志播种历史
 3. 写入 `RunOptions.messages`（`message.injected`，用户输入之前）
 4. 输入 guardrail（可改写用户文本）
 5. 写入用户消息（`user.message`）→ `saveSession`
@@ -57,8 +59,9 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 
 ## 持久化与恢复
 
-- `saveSession` 在 run 开始（用户消息写入后）与结束各写一次。
-- `loadStoredHistory`：有 cache 且知道 `derived_upto_seq` → 只读事件日志增量；否则全量 `projectMessages`，按尾部重叠去重。
+- `RunJournal.saveSessionState` 在 run 开始（用户消息写入后）与结束各写一次；journal 是唯一写者。
+- `loadStoredHistory`：有 cache 且知道 `derived_upto_seq` → 只读事件日志增量；否则全量 `projectMessages`，按尾部重叠去重。**尾部出现 `message.compaction` 时强制全量重投影**——压缩是替换语义，缓存 + 增量无法表达“删掉旧历史”。两次 Run 的窗口对象不同，但播种出的消息数据等价。
+- **可观察面 parity**：同一 session 且日志尾未前进时静默播种（不发 `context.changed`），并沿用上一 Run 的真实 token 数；只有 baseline 也会播种的场景才发重建事件。
 - 事件 → 消息：`user.message` / `message.injected` / `llm.response` / `tool.call.completed|failed` / `message.compaction`。
 - durable 模式额外有 checkpoint；resume 先校验事件游标。详见 [state](state.md)、[events](events.md)。
 
@@ -75,7 +78,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | 结果 | `role: system` + `compaction_summary: true`；旧摘要移除，system 提前 |
 | 事件 | `context.compacted`（auto / overflow / manual）；`context.pressure`（90%–95%，每 run 一次） |
 
-压缩摘要主要靠 session cache 恢复；事件日志未为每次压缩发 `message.compaction`。
+压缩摘要经 `RunJournal` 追加 `message.compaction` 事实事件（Run 内以当前 `runId`，两次 Run 之间的手动 `/compact` 用 `run_id='manual'`），恢复时从 session cache + 事件日志重建。
 **90% 与 95% 分工**：`context.tokenCount / maxTokens` 到 90%–94.99% 不压缩，发 `context.pressure` + `vessel:limit` 推荐 `agent(rotate)`；≥95% 由 `autoCompactAsync` 自动压缩。`limits.inputTokensLimit` 的 90% usage 预警是另一套机制。`rotate` 不自动触发；模型发起的 rotate 必须经人类权限确认。overflow 仍 `forceCompact` 后重试一次。
 
 <a id="prefix"></a>
@@ -90,10 +93,8 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 
 ## 各层责任
 
-core：system / Self Card、历史、用户、assistant/tool、压缩、PrefixGuard。
-`packages/agent`：`vessel:source`、成员/owner 队列、Team 派发。
+core：system / Self Card、历史、用户、assistant/tool、压缩、PrefixGuard；`packages/agent`：`vessel:source`、成员/owner 队列、Team 派发。
 asm (`src/`)：owner 队列注入、runtime notice、配置热应用通知、summarizer、版本通知。
 plugins：doc-subscription `vessel:subscription`、hook-logging（只观测）、MCP 工具结果。
 TUI / Web：`@path` 引用、用户输入、`vessel:*` 可见性过滤。
-
 相关：[runtime-loop](runtime-loop.md)、[runtime-api](runtime-api.md)、[guardrails-hooks](guardrails-hooks.md)、[member-team](member-team.md)。

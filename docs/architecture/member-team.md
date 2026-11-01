@@ -6,7 +6,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ---
 
 # AgentService、Body 与 Team
-> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
+> Stage 4 已落地：成员的执行单元由 `MemberExecutionHost` 经 per-node `Runtime.getOrCreateExecutionUnit` 取得；成员 run 与 tenant run 一样写 `RunRecord`，`runs.resume` 按 `RunRecord.agent_id` 路由回成员 EU。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
 
 > 成员能力层的当前事实。RPC 方法形状见 [gateway-rpc.md](gateway-rpc.md#agent-lifecycle)；改动前的硬约定见 [docs/agents/agent.md](../agents/agent.md)。core 不知道 member / owner / visibility（ADR-088 / ADR-097）。
 <a id="layering"></a>
@@ -14,12 +14,13 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ## 分层与唯一实现
 
 - `packages/agent` 是唯一成员能力实现：注册表、body registry、准入、状态机、可见性、权限 bridge 与快照都在包内；入口（REPL / CLI / Gateway / Web）只解析输入、调用 `AgentService`、渲染事件。装配在 `src/agent-service-wiring.ts`，执行经每 tenant 一个 `InProcessScheduler`。所有 agent（含 `main`）走同一条 `admit`，不得在入口或插件里复制第二套成员生命周期或第二套队列。
+- 执行内核是 `MemberExecutionHost`（`MemberExecutionHostOptions`，实现 `MemberExecutionPort`）；它不再自己构造 EU，而是用装配层注入的 per-node `Runtime` 取/建成员 EU。成员 run 的 `RunRecord` 由 tenant `journalFactory` 写入，`RunRecord.agent_id` 是 resume 路由键。
 
 <a id="identity-body"></a>
 
 ## Agent 身份与 Body
 
-- **Agent 是持久身份，Body 是活执行单元**：`body_id ≡ session_id`，一个 agent 恰好一具 live body（唯一例外见「约束」的 rotate 窗口）；每个 body 有独立 `ExecutionUnit`、独立 context、独立 session 历史、独立事件流、独立 runStore 与独立 body lease。
+- **Agent 是持久身份，Body 是活执行单元**：`body_id ≡ session_id`，一个 agent 恰好一具 live body（唯一例外见「约束」的 rotate 窗口）；每个 body 有独立 `ExecutionUnit`（per-session）、独立 session 历史、独立事件流与独立 body lease。`WorkingContext` 归每次 Run（Run 开始时由 `contextFactory` 新建），不是 body 的长期字段。
 - `PersistedAgentRecord` 持久化 `membership` / `model` / `system_prompt` / `bodies[]` / `primary_body_id` / `forked_from`；`presence` / `rotation` 不落盘。`bodies[]` 是唯一真相，`primary_body_id` 是缺省投递目标；`current_body` / `body_history` 降级为旧数据的兼容视图（只读、不回写）。快照写 `version: 4`，读取兼容 v1 / v2 / v3；v3 → v4 把 `current_body` 迁成唯一 live body + primary、旧 `body_history` 迁入 `bodies[]`，首次写 v4 前备份 `.v3.bak`，失败则放弃本次写。
 - `role` 只有 `member`（owner=self、Team 必需）与 `temporary`（owner=雇佣者，缺省 `human`、Team 可选）。`main` 是普通 `member`，用 `kind:'peer'` + `workspace` 创建，必须有 Team。
 
@@ -50,7 +51,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 - rotate 只退休 **primary body** 并新建 primary（新 session id）；同一 Agent 已有进行中的 rotate 返回 `rotating`。其它 live body 的历史、checkpoint、epoch 与在途 run 完全不受影响。模型侧 `agent` 工具只能 rotate 自己，靠 `from_session_id` 等于当前 primary body 做最终闸门。**模型发起的 rotate 还须先经人类权限确认**（0.31）：`agent` 工具发 `tool.permission.request`（`tool: agent.rotate`，带上下文比例），批准才调用 `AgentService.rotate`；拒绝或无人类通道返回 `rotate_not_needed`；CLI / 人工 RPC 不额外询问。
 - 切换顺序固定：spawn 新 body → 提交 primary（`primary_body_id`）→ 快照落盘 → 旧 primary 退休进 `body_history` → 启动嘱托入队 → `rotation = stable`。spawn 或快照失败时恢复旧 primary、dispose 新 body、返回 `rotate_failed`，不自动重试。旧 body 的轮按**该 body 自身** epoch / 退役标志 fencing：发带 `stale: true` 的配对终态与 `agent.reply.stale`，不写 state / usage、不投父队列。
-- 事件：`agent.rotate.approved` / `agent.rotate.denied` / `agent.rotating` / `agent.rotated` / `agent.rotate.failed` / `agent.retired` / `agent.reply.stale`；payload 不带启动嘱托正文，也不带确认卡片正文。
+- 事件：`agent.rotate.approved` / `agent.rotate.denied` / `agent.rotating` / `agent.rotated` / `agent.rotate.failed` / `agent.retired` / `agent.reply.stale`；payload 不带启动嘱托正文，也不带确认卡片正文。**成员 durable resume（Stage 4，不新增 RPC）**：`runs.resume` 先加载 `RunRecord`；`agent_id` 命中成员时交 `AgentService.resumeRun(runId)`（经 scheduler 的 session 串行键，复用 active run 记账 / lease 续租），否则按 `session_id` 取 tenant EU 调 `EU.resumeRun(record)`。
 - **restart / compactFork（0.34，ADR-098）**：restart 复用同一 Session（`session_id` 不变），binding id 不变、`epoch + 1`；旧 binding 先退役进 history、旧 EU 先 dispose，再按同一 lease key 获取更高 fence 的新租约并新建 EU；有 active run 返回 `conflict`；事件 `agent.restarting` / `agent.restarted`。compactFork 以父 Session 的压缩副本新建子 Session 并成为新 primary（`epoch + 1`），父 Session / binding / EU 不动；事件 `agent.compact_forked`；无 `keep_turns`。两者与 rotate 一样先 binding lease 再 session lease、逆序释放；TTL / 续租由 `lease.ttlMs` / `lease.renewMs` 配置（[CONFIG](../operations/CONFIG.md)）。
 
 <a id="spawn"></a>
@@ -76,7 +77,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## Team 与 body 会话：一条消息一个 run
 
-- Team `@` 路径：`TeamService.post` 先写 Team 日志（`kind: 'mention'`），再按结构化 `mentions` 逐条 `admit({ channel: 'team', origin_team_id, conversation_id })`。消息进入目标 body 的 mailbox，由该 body 的 `ExecutionUnit` 执行；assistant 文本随 `saveSession` 写入该 body session。不存在“Team 会话”与“私聊会话”两套存储，同一 body 上的所有投递共用一份历史。
+- Team `@` 路径：`TeamService.post` 先写 Team 日志（`kind: 'mention'`），再按结构化 `mentions` 逐条 `admit({ channel: 'team', origin_team_id, conversation_id })`。消息进入目标 body 的 mailbox，由该 body 的 `ExecutionUnit` 执行；assistant 文本随 `RunJournal.saveSessionState` 写入该 body session。不存在“Team 会话”与“私聊会话”两套存储，同一 body 上的所有投递共用一份历史。
 - `run.*` 是唯一执行生命周期（payload 带 `agent_id` + `session_id`）。成功轮 team 可见成员由 `TeamService` 从 `run.completed.output` 写一条 `kind: 'reply'` 的 Team 日志；失败 / 取消轮从 `run.failed` / `run.cancelled` 写 `kind: 'system'` 条目 `turn failed: <reason>` / `turn cancelled: <reason>`，不写 reply。private 成员与被 fence 的旧 body 不写 Team 日志。同一段文本分别落在 session（上下文消息）与 Team 日志（事件记录），不是双写同一存储。
 - `conversation_id` 只是预算 / 分组键，不是 session 身份：一次 Team `@` 的所有 mention 共用同一个 `conversation_id`；未显式携带的直聊会新生成一个。不同 conversation 的消息仍累积在同一 body session 的历史里。
 
@@ -84,7 +85,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## 来源标注与 Team 归属
 
-- 每轮把来源渲染成一条**自闭合 XML 标签，`location` 是唯一属性，值是可直接回信的地址**：本机 agent `<from location="docs-core@a1b2c3d4:vessel-core" />`、本机人类 `<from location="human@a1b2c3d4:vessel-core" />`、本机系统 `<from location="system@a1b2c3d4:vessel-core" />`、federation 入站 `<from location="alice@node2:vessel-ext" />`（`from` 已内嵌远端地址，原样渲染、不再拼本机 node/team）。**渲染成地址而不是描述**：`location` 就是 `resolveAddress` / agent `send` 吃的同一形态，模型回信时把该值原样填进 `to` 即可，不需要第二套语法。作为一条 `role: 'user'` / `name: 'vessel:source'` 消息，通过 `RunOptions.messages` 在用户输入之前注入；它持久化进 `ContextManager` / session 历史，后续轮次只在尾部追加，不改写 system 前缀。**本机来源也写满三段**，node 段取自装配层传入的 `InProcessMemberRuntimeOptions.nodeId`（唯一来源是 bootstrap 的 `resolveNodeIdentity()`，执行内核不调 `os.hostname()`、不读 config / node.json）。之所以不再给本机来源省 node 段：跨机地址本来就三段，本机两段会让模型学两种形态，且「两段算不算本机」取决于当时 federation 是否开着，行为不一致。无 Team 的成员写两段 `<from location="docs-core@a1b2c3d4" />`（缺段不伪造）；`nodeId` 缺省（纯内存构造 / 测试）时同样退回两段，这是唯一允许的降级。**principal 段必须是能解析到的值**：名字匹配 `[A-Za-z0-9_-]{1,64}`（与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同形状）就用名字，否则——包括无名成员、含点或空格或中文的名字、超过 64 字符的名字——一律写**完整 uuid**。成员名只校验非空、没有字符集约束，非法名字拼进地址会让整条地址在形状校验就失败（不是 `unknown_member`）；也不截断成短 id，解析侧 `registry.resolve()` / `resolveMember()` 只做精确匹配、没有前缀匹配，截断只会得到另一种发不出去的死地址。属性值必须转义（`&` / `<` / `>` / `"`，`&` 最先）：名字是模型可控字符串，不转义就能闭合属性再伪造一个属性。名字来自 `AgentMessage.from_name`（内存元数据，与 `source` / `channel` 同性质，不落 snapshot）——执行内核不持有 registry，名字必须随消息带过来；完整 uuid 仍在 `AgentMessage.from` 里。
+- 每轮把来源渲染成一条**自闭合 XML 标签，`location` 是唯一属性，值是可直接回信的地址**：本机 agent `<from location="docs-core@a1b2c3d4:vessel-core" />`、本机人类 `<from location="human@a1b2c3d4:vessel-core" />`、本机系统 `<from location="system@a1b2c3d4:vessel-core" />`、federation 入站 `<from location="alice@node2:vessel-ext" />`（`from` 已内嵌远端地址，原样渲染、不再拼本机 node/team）。**渲染成地址而不是描述**：`location` 就是 `resolveAddress` / agent `send` 吃的同一形态，模型回信时把该值原样填进 `to` 即可，不需要第二套语法。作为一条 `role: 'user'` / `name: 'vessel:source'` 消息，通过 `RunOptions.messages` 在用户输入之前注入；它持久化进本 Run 的 `WorkingContext` / session 历史，后续轮次只在尾部追加，不改写 system 前缀。**本机来源也写满三段**，node 段取自装配层传入的 `MemberExecutionHostOptions.nodeId`（唯一来源是 bootstrap 的 `resolveNodeIdentity()`，执行内核不调 `os.hostname()`、不读 config / node.json）。之所以不再给本机来源省 node 段：跨机地址本来就三段，本机两段会让模型学两种形态，且「两段算不算本机」取决于当时 federation 是否开着，行为不一致。无 Team 的成员写两段 `<from location="docs-core@a1b2c3d4" />`（缺段不伪造）；`nodeId` 缺省（纯内存构造 / 测试）时同样退回两段，这是唯一允许的降级。**principal 段必须是能解析到的值**：名字匹配 `[A-Za-z0-9_-]{1,64}`（与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同形状）就用名字，否则——包括无名成员、含点或空格或中文的名字、超过 64 字符的名字——一律写**完整 uuid**。成员名只校验非空、没有字符集约束，非法名字拼进地址会让整条地址在形状校验就失败（不是 `unknown_member`）；也不截断成短 id，解析侧 `registry.resolve()` / `resolveMember()` 只做精确匹配、没有前缀匹配，截断只会得到另一种发不出去的死地址。属性值必须转义（`&` / `<` / `>` / `"`，`&` 最先）：名字是模型可控字符串，不转义就能闭合属性再伪造一个属性。名字来自 `AgentMessage.from_name`（内存元数据，与 `source` / `channel` 同性质，不落 snapshot）——执行内核不持有 registry，名字必须随消息带过来；完整 uuid 仍在 `AgentMessage.from` 里。
 - `source` / `channel` / `from_name` 由 `admit` 按 registry 与调用方标注：**登记的成员 id 与 `federation:*` 入站记为 agent（`main` 也是 agent，role 是 `member`），未登记的 principal 记为 human**；带 `origin_team_id` 的投递渠道记为 team，其余为 direct；`from_name` 只对本机登记成员有值。三者是内存队列元数据，不落 snapshot，**`channel` 也不渲染进提示词**（只进 trace / 日志）。**只用于模型理解来源，不参与权限判定**；权限仍只由权限 bridge 的 human / policy 主体决定，注入文本不能作为授权依据。`from` 清洗为单行并限长。**消息的缺省发送者是 `human`，不是 `defaultOwner`**：后者是「临时成员归谁管」（`MemberRecord.owner`）的缺省值，属于 agent 归属；用同一个字符串填消息的 `from` 会让人类从 CLI / Web 发出的消息带上 `main` 这个 agent 的 id，`source` 就再也分不出「main 在说话」和「人类在说话」，`main` 也会被当成人类而绕过 conversation budget。
 - Self Card 对绑定 Team 的成员带 `team_id`，unbound 成员不伪造该字段。core 的 `formatSelfCard` 直接渲染 `team: <id>` 行。
 

@@ -2,8 +2,10 @@
  * 每 tenant 执行面（0.5 A-6 / DECISION-010 §13.2）。
  *
  * `buildTenantRuntime()` 构造一个 tenant 的独立 bundle：
- *   config / provider / session / runStore / context / pluginHost + plugins /
+ *   config / provider / session / runStore / 共享 pluginHost + plugins /
  *   trace / metrics / redactor / sessionControl / feishu / MCP。
+ * Stage 4：bundle 不持长期 WorkingContext / ExecutionUnit；profile 注册到传入的
+ * per-node `Runtime`，`bundle.runtime` 是按 session 解析 EU 的门面。
  *
  * `createTenantRuntimeFactory()` 为 `--serve` 预构建全部 active tenant：
  * - 每个 tenant 独立 EventStream，构建时注册进 gateway 的 `TenantEventHub`；
@@ -27,12 +29,13 @@ import {
 } from '../packages/config/src/index';
 import {
   createDefaultTraceRedactor,
+  createRunJournalFactory,
   type EventStream,
-  ExecutionUnit,
   estimateTokens,
   type Guardrail,
   type Hook,
   InProcessScheduler,
+  installPluginsIntoHost,
   type LLMProvider,
   type Logger,
   MemoryPluginHost,
@@ -45,6 +48,7 @@ import {
   type ProviderFactory,
   type RunnableAgent,
   type RunRecordStore,
+  type Runtime,
   type RuntimePermissionConfig,
   resolveTenantPaths,
   type Scheduler,
@@ -77,7 +81,7 @@ import { buildPluginConfigMap, declarativePluginEntries, withPluginConfig } from
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { createProvider } from './provider-factory';
-import { withReasoning } from './reasoning';
+import { includeReasoningFor } from './reasoning';
 import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';
 import { ownerSelfCard } from './self-card';
 import { createSessionControl, type SessionControl } from './session-control';
@@ -96,6 +100,11 @@ import {
 /** 构造一个 tenant 执行面的输入 */
 export interface BuildTenantRuntimeOptions {
   tenantId: string;
+  /**
+   * Stage 4：per-node Runtime。tenant profile 注册到它，per-session EU 经
+   * `getOrCreateExecutionUnit` 取得；bundle 不再自己构造 ExecutionUnit。
+   */
+  runtime: Runtime;
   /** 已合并 tenant overlay 的配置 */
   config: VesselConfig;
   tenantPaths: TenantPaths;
@@ -175,15 +184,17 @@ export interface TenantRuntimeBundle {
   /** runtime 事件出口；与 tenant 流同一实例 */
   runtimeEvents: EventStream;
   session: SessionStore;
-  context: MemoryWorkingContext;
   pluginHost: PluginHost;
   /**
    * 0.27：每 tenant 唯一 `InProcessScheduler`（spec §5.1）。
    * 装配层只在这里构造一次；`AgentService` 的所有执行都经它的 executor。
    */
   scheduler: Scheduler;
+  /**
+   * per-session 门面：每次 run/resume 按 session_id 解析本 tenant 的
+   * ExecutionUnit（Stage 4）。不再是一个长期存活的 EU 实例。
+   */
   runtime: RunnableAgent;
-  executionUnit?: ExecutionUnit;
   /** ADR-098 C2：本 tenant 的租约服务；memory 后端 / 关闭 sessionLocks 时缺省 */
   leaseService?: FileLeaseService;
   /** 0.34 Stage 3：compactFork 压缩摘要器（与 tenant 上下文共用） */
@@ -619,7 +630,6 @@ export async function buildTenantRuntime(
     const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
 
     const summarizer = createContextSummarizer(provider, providerModel);
-    const context = new MemoryWorkingContext(contextConfigFor(config, summarizer));
     const events = createEventStream(config);
     // 0.27（spec §5.1）：每 tenant 唯一 scheduler，装配层只在此处构造。
     // 所有 body / owner / 成员的执行都经它的 executor，不再有第二套队列。
@@ -763,56 +773,126 @@ export async function buildTenantRuntime(
 
     const contextFactory = () => new MemoryWorkingContext(contextConfigFor(config, summarizer));
 
-    const executionUnit = await ExecutionUnit.create(
+    // ── Stage 4：tenant 范围内只安装一次插件 ──────────
+    // 插件安装原本在 ExecutionUnit 构造内；改成 per-session EU 后，同一 tenant 的
+    // 多个 EU 共享一个 tenant PluginHost，安装/init/dispose 只发生一次。
+    const finalPluginHost = new TenantToolHost(new MemoryPluginHost(), toolPolicy);
+    const installedPlugins = await installPluginsIntoHost({
+      host: finalPluginHost,
+      plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
+      publish: (event) => events.publish(event),
+      logger,
+    });
+
+    // 铁律 1：持久端口只到 Runtime 工厂层；EU 经 journal 写入。
+    // 成员 run 与 tenant run 共用同一工厂 → 成员 run 同样写 RunRecord。
+    const journalFactory = createRunJournalFactory({
+      ...(eventLog !== undefined ? { eventLog } : {}),
+      session,
+      ...(runStore !== undefined ? { runStore } : {}),
+      ...(leaseService !== undefined
+        ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
+        : {}),
+      tenantId,
+      logger,
+    });
+
+    options.runtime.registerProfile({
+      tenantId,
+      providerFactory: () => provider,
+      model: providerModel,
+      // 插件已由装配层安装到共享 host；EU 不重复安装。
+      plugins: [],
+      pluginHostFactory: () => finalPluginHost,
+      limits,
+      termination,
       // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
-      withReasoning(config, {
-        provider,
-        model: providerModel,
-        context,
-        events,
-        limits,
-        termination,
-        session,
-        // core 0.6.1：pluginConfigs 按名透传；本 worktree 的 core 尚未有该字段，
-        // 同时用 wrapper 绑定配置，保证 core 合并前后行为一致。
-        plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
-        systemPrompt,
-        permission,
-        // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）；
-        // 0.18：tenant policy 只减不增。
-        selfCard: withTenantToolPolicy(
-          ownerSelfCard(config, providerModel, {
-            askUser: options.registerAskUser === true,
-          }),
-          toolPolicy,
-        ),
-        // 0.18（DECISION-032 §1.5）：工具经 tenant policy 过滤器注册
-        // （ExecutionUnit 不再自建 host）。
-        pluginHost: new TenantToolHost(new MemoryPluginHost(), toolPolicy),
-        ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
-        ...(runStore ? { runStore } : {}),
-        ...(eventLog ? { eventLog } : {}),
-        ...(leaseService !== undefined ? { leaseService } : {}),
-        logger,
-      } as Parameters<typeof ExecutionUnit.create>[0] & {
-        pluginConfigs?: Record<string, Record<string, unknown>>;
+      includeReasoning: includeReasoningFor(config),
+      context: {
+        ...(config.context?.maxTokens !== undefined ? { maxTokens: config.context.maxTokens } : {}),
+        ...(config.context?.autoCompact !== undefined
+          ? { autoCompact: config.context.autoCompact }
+          : {}),
+        summarizer,
+      },
+      systemPrompt,
+      permission,
+      journalFactory,
+    });
+
+    // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）；
+    // 0.18：tenant policy 只减不增。
+    const selfCard = withTenantToolPolicy(
+      ownerSelfCard(config, providerModel, {
+        askUser: options.registerAskUser === true,
       }),
+      toolPolicy,
     );
-    // 0.10 R2-18：包装 run/resumeRun 以精确跟踪在跑 run（shutdown drain 用）。
-    const originalRun = executionUnit.run.bind(executionUnit);
-    executionUnit.run = (input, sessionId, opts) =>
-      trackActive(originalRun(input, sessionId, opts));
-    const originalResume = executionUnit.resumeRun?.bind(executionUnit);
-    if (originalResume) {
-      executionUnit.resumeRun = (runId, opts) => trackActive(originalResume(runId, opts));
-    }
+
+    /** 本 bundle 已服务过的 session（关闭时逐个 retire）。 */
+    const servedSessionIds = new Set<string>();
+
+    const executionUnitFor = (sessionId: string) =>
+      options.runtime.getOrCreateExecutionUnit({
+        tenantId,
+        sessionId,
+        events,
+        session,
+        ...(eventLog !== undefined ? { eventLog } : {}),
+        ...(leaseService !== undefined ? { leaseService } : {}),
+        pluginHost: finalPluginHost,
+        plugins: [],
+        // tenant EU 仍用完整 context 配置（maxMessages / compactThreshold 不进 profile 形状）；
+        // profile 的 `context` 只是成员路径的缺省值。
+        contextFactory: () => new MemoryWorkingContext(contextConfigFor(config, summarizer)),
+        overrides: { selfCard },
+      });
+
+    // Stage 4：bundle.runtime 是 per-session 门面，不再是单个长期存活的 EU。
+    // `id` / `applyPermissionRules` 让既有热应用装配（按结构解析 live runtime）继续命中
+    // 本 tenant 已建的 EU，不新增公开 RPC/事件。
+    const executionFacade: RunnableAgent & {
+      readonly id: string;
+      applyPermissionRules(rules: RuntimePermissionConfig): void;
+    } = {
+      id: `tenant:${tenantId}`,
+      events,
+      pluginHost: finalPluginHost,
+      applyPermissionRules(rules) {
+        for (const sessionId of servedSessionIds) {
+          options.runtime.getExecutionUnit({ tenantId, sessionId })?.applyPermissionRules(rules);
+        }
+      },
+      async run(input, sessionId, opts) {
+        const targetSession = sessionId ?? options.sessionId ?? 'default';
+        servedSessionIds.add(targetSession);
+        const unit = await executionUnitFor(targetSession);
+        return trackActive(unit.run(input, targetSession, opts));
+      },
+      async resumeRun(runId, opts) {
+        if (runStore === undefined) throw new Error(`durable_disabled: ${runId}`);
+        const record = await runStore.load(runId);
+        if (record === null) throw new Error(`run_not_found: ${runId}`);
+        servedSessionIds.add(record.session_id);
+        const unit = await executionUnitFor(record.session_id);
+        // 调用方负责按 agent_id 路由；门面只处理 tenant EU。
+        return trackActive(unit.resumeRun(record, opts));
+      },
+      async resumeSession(sessionId, input, opts) {
+        servedSessionIds.add(sessionId);
+        const unit = await executionUnitFor(sessionId);
+        return trackActive(unit.resumeSession(sessionId, input, opts));
+      },
+      async dispose() {
+        // 生命周期归 ControlPlane（bundle.close 逐个 retire）；门面不销毁共享 EU。
+      },
+    };
 
     // 0.15：run/resumeRun 的跨进程写锁。memory 后端不落盘，无需锁。
-    const lockedRuntime = withSessionWriteLock(executionUnit, {
+    const lockedRuntime = withSessionWriteLock(executionFacade, {
       tenantDir: tenantPaths.root,
       enabled: options.sessionLocks ?? backend !== 'memory',
     });
-    const finalPluginHost = executionUnit.pluginHost;
 
     // ── Trace ─────────────────────────────────────
     const extRedactor = options.redactor ?? (await loadRedactSecrets(loader));
@@ -914,30 +994,31 @@ export async function buildTenantRuntime(
      * 可 `--resume-run`），限时等待终态；超时记录 warning 后继续关闭。
      */
     const drain = async (): Promise<void> => {
-      const interrupt = (executionUnit as { interrupt?: (reason?: 'shutdown') => void } | undefined)
-        ?.interrupt;
       try {
         await drainActiveRuns({
           activeRuns,
           logger,
           tenantId,
           timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
-          ...(typeof interrupt === 'function'
-            ? { interrupt: (reason: 'shutdown') => interrupt.call(executionUnit, reason) }
-            : {}),
+          interrupt: (reason: 'shutdown') => {
+            // Stage 4：每个 session 一个 EU；逐个软中断（checkpoint 落 interrupted）。
+            for (const sessionId of servedSessionIds) {
+              options.runtime.getExecutionUnit({ tenantId, sessionId })?.interrupt?.(reason);
+            }
+          },
         });
       } catch (error) {
         report('runtime.interrupt', error);
       }
     };
 
-    const close = async (options: { drain?: boolean } = {}): Promise<void> => {
+    const close = async (closeOptions: { drain?: boolean } = {}): Promise<void> => {
       if (closed) return;
       closed = true;
 
       // 先中断 / 等待在跑 run，再进入关闭顺序。
       // serve 路径已由 gateway.stop() 完成 drain，调用方传 drain:false 避免二次 5s。
-      if (options.drain !== false) await drain();
+      if (closeOptions.drain !== false) await drain();
 
       // 关闭顺序：feishu → metrics → MCP → runtime → trace
       // → runStore → session。全部 await，异常逐段隔离，后续步骤仍会执行。
@@ -957,12 +1038,22 @@ export async function buildTenantRuntime(
         }
       }
 
-      // 0.9：ExecutionUnit.dispose() 返回 Promise（逆序调插件 dispose）；
-      // 必须等待，否则进程退出会截断插件清理。dispose 自身幂等且不外抛。
+      // Stage 4：per-session EU 由 Runtime 目录持有；逐个 retire（dispose + 移出目录）。
+      // retire 幂等；单条失败不阻断其余条目与后续关闭步骤。
+      for (const sessionId of servedSessionIds) {
+        try {
+          await options.runtime.retireExecutionUnit({ tenantId, sessionId });
+        } catch (error) {
+          report('runtime.retire', error);
+        }
+      }
+      servedSessionIds.clear();
+
+      // 插件在 EU 之外安装（tenant host 共享），随 bundle 关闭一起 dispose。
       try {
-        await executionUnit.dispose();
+        await installedPlugins.dispose();
       } catch (error) {
-        report('runtime.dispose', error);
+        report('runtime.plugin.dispose', error);
       }
 
       if (trace) {
@@ -1019,11 +1110,9 @@ export async function buildTenantRuntime(
       events,
       runtimeEvents: events,
       session,
-      context,
       pluginHost: finalPluginHost,
       scheduler,
       runtime: lockedRuntime,
-      executionUnit,
       ...(leaseService !== undefined ? { leaseService } : {}),
       summarizer,
       ...(runStore ? { runStore } : {}),
@@ -1079,6 +1168,11 @@ async function loadRedactSecrets(loader: PluginLoader): Promise<TraceRedactor | 
 
 /** 工厂注入 */
 export interface TenantRuntimeFactoryOptions {
+  /**
+   * Stage 4：per-node Runtime（bootstrap 构造，serve 的 default tenant 与
+   * 工厂新建的其它 tenant 共用；profile 按 tenant 注册）。
+   */
+  runtime: Runtime;
   /** 基础配置（用于 data_dir / tenant 列表） */
   config: VesselConfig;
   configPath?: string;
@@ -1124,7 +1218,6 @@ export interface TenantRuntimeFactory {
   tenantIds(): string[];
   runtimeFor(tenantId: string): RunnableAgent | undefined;
   sessionFor(tenantId: string): SessionStore | undefined;
-  contextFor(tenantId: string): MemoryWorkingContext | undefined;
   pluginHostFor(tenantId: string): PluginHost | undefined;
   metricsFor(tenantId: string): MetricsControlLike | undefined;
   pluginsFor(tenantId: string): Array<{ name: string; enabled: boolean }> | undefined;
@@ -1243,6 +1336,7 @@ export async function createTenantRuntimeFactory(
       if (bundles.has(tenantId)) continue;
       const bundle = await buildTenantRuntime({
         tenantId,
+        runtime: options.runtime,
         config: loaded.config,
         tenantPaths: loaded.tenantPaths,
         configSources: loaded.sources,
@@ -1278,7 +1372,6 @@ export async function createTenantRuntimeFactory(
       tenantIds: () => [...bundles.keys()],
       runtimeFor: (tenantId) => bundles.get(tenantId)?.runtime,
       sessionFor: (tenantId) => bundles.get(tenantId)?.session,
-      contextFor: (tenantId) => bundles.get(tenantId)?.context,
       pluginHostFor: (tenantId) => bundles.get(tenantId)?.pluginHost,
       metricsFor: (tenantId) => bundles.get(tenantId)?.metrics,
       pluginsFor: (tenantId) => {

@@ -6,7 +6,7 @@ paths: [src/**]
 ---
 
 # 装配层（`src/`）
-> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
+> Stage 4 已落地：`bootstrap` 每 node 构造一次 `Runtime`，tenant bundle 注册 profile 并把 `bundle.runtime` 暴露为 per-session 门面；成员 host 与 tenant bundle 共用同一个 Runtime。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
 
 <a id="assembly"></a>
 
@@ -19,7 +19,7 @@ paths: [src/**]
 | `src/cli-overrides.ts` | 0.8.1：把**显式** CLI flag 组装成 `Partial<VesselConfig>`（serve / connect / TLS / allowed-origins），作为 loader 的最高优先级层；未给出的字段不写入 |
 | `src/cli-update.ts` | `update [--check] [--channel latest\|beta] [--json] [--force]`：只读检查与提示 |
 | `src/update/` | 更新清单解析、GitHub 通道选择、24h 缓存、后台检查、semver 比较；不自替换 |
-| `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team / MCP，装配 session backend 与 RunRecordStore；进程退出时关闭 MCP / Host / RunRecordStore。0.8：`LocalRpcClient` 的 `onEvent` 订阅 `runtimeEvents`，以只读方式转发 `events.event`。0.8.1：接受 `cliOverrides` 并传给 loader；connect token / CA 只读 `config.connect` |
+| `src/bootstrap.ts` | config → provider → plugins → `Runtime` → `ReplContext`；每 node 构造一次 `Runtime` 并传给 tenant bundle 与成员 host；按配置构造 delegate / team / MCP，装配 session backend 与 RunRecordStore；进程退出时关闭 MCP / Runtime 目录 / RunRecordStore。0.8：`LocalRpcClient` 的 `onEvent` 订阅 `runtimeEvents`，以只读方式转发 `events.event`。0.8.1：接受 `cliOverrides` 并传给 loader；connect token / CA 只读 `config.connect`。Stage 4：`runs.resume` 按 `RunRecord.agent_id` 路由到成员 `AgentService`，否则按 session 取 tenant EU |
 | `src/plugin-loader.ts` | 插件发现（见 [extensions.md](extensions.md#discovery)） |
 | `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
 | `src/agent-service-wiring.ts` / `src/agent-owner-injection.ts` | 0.17：把父 provider / PluginHost / 限额 / 事件流交给 AgentService；owner 队列经 `BeforeLlm` 注入 |
@@ -29,7 +29,7 @@ paths: [src/**]
 | `src/hub/` | 0.19 S5：hub 独立前台进程（`runtime` / `server` / `registry` / `control-client` / `secret-store` / `token-broker` / `client-protocol` / `types`） |
 | `src/hub-wiring.ts` / `src/node-token-store.ts` / `src/node-token-control.ts` / `src/hub-pairing.ts` | 0.19 S5：`HubControlLike` / `TeamScopeLike` 投影、节点 token 表（只存 hash）、`auth.exchange|revoke|tokens` 与一次性配对码 |
 | `src/gateway-wiring.ts` | 0.15 / 0.19：`buildGatewayControlPlane` 透传 `teams` / `hubControl` / `teamScope` / `nodeTokens` |
-| `src/tenant-runtime-factory.ts` | 构造单个 tenant 的独立执行面（config / provider / session / run store / context / PluginHost / trace / writer lock）；runtime 共用同一份 resolved 权限 |
+| `src/tenant-runtime-factory.ts` | 构造单个 tenant 的独立执行面（config / provider / session / run store / PluginHost / trace / writer lock）：把 profile 注册到注入的 `Runtime`，插件在 tenant host 上只安装一次；`bundle.runtime` 是 per-session 门面（按 session 解析 EU），`bundle.pluginHost` 是共享 host。`TenantRuntimeFactory` 只是多 tenant bundle 缓存，不是 `Runtime` |
 | `src/session-factory.ts` | `session.backend` → sqlite / file / memory |
 | `src/run-record-store-factory.ts` | `durable.backend/path` → `FileRunRecordStore` / `MemoryRunRecordStore`；未启用返回 null。0.8：透传 `tenantId`（归属校验）与 `tenantRunsDir` |
 | `src/durable-wiring.ts` | checkpoint / resume 的装配适配：Host 成员优先，其次单 agent runtime |
@@ -58,11 +58,11 @@ vessel --feishu
   `--tools` / `--version` / `--help` 互斥。
 - TUI：`/metrics`、`/feishu`；启动横幅只在飞书已连接时追加一行。
 
-**REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 `mcp` / `runs` / `metrics` / `feishu` 控制面适配器。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 [runtime-api.md](runtime-api.md#messages)）。
+**REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 `mcp` / `runs` / `metrics` / `feishu` 控制面适配器。`context` 是**外壳只读镜像**：agent 启用时来自 local-run adapter 的会话镜像，否则是装配层新建的独立 `MemoryWorkingContext`；它不再与执行内核共享实例（WorkingContext 归每次 Run）。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 [runtime-api.md](runtime-api.md#messages)）。
 
 **用户可见行为（0.3.0；0.4 见上）**：
 
-- `/clear` 只清屏，不清空 `WorkingContext`；需要新会话用 `/new`。
+- `/clear` 只清屏，不清空会话历史；需要新会话用 `/new`（执行内核的 `WorkingContext` 本就随 Run 重建）。
 - `@路径` 引用在发送前展开为注入消息，界面以引用块展示，用户原文不变。
 - `/reload` 只重载配置文件并刷新 provider 信息，**不重扫插件目录**；新增插件需重启进程。
 - `/mcp` 列出 server（name / status / 工具数）；`/mcp reconnect <name>` 显式重连。未配置 `mcp_servers` 时给明确提示。

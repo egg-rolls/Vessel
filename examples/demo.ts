@@ -5,6 +5,7 @@
  */
 
 import {
+  createRunJournalFactory,
   ExecutionUnit,
   MemoryEventStream,
   MemoryLLMProvider,
@@ -41,16 +42,16 @@ async function main() {
   });
 
   // 3. 创建其他组件
-  const context = new MemoryWorkingContext();
   const events = new MemoryEventStream();
   const session = new MemorySessionStore();
 
-  // 4. 创建 Runtime
+  // 4. 创建 Runtime（WorkingContext 每 Run 新建）
   const runtime = await ExecutionUnit.create({
     provider,
     model: 'gpt-4',
     pluginHost: host,
-    context,
+    contextFactory: () => new MemoryWorkingContext(),
+    journalFactory: createRunJournalFactory({}),
     events,
     limits: {
       requestLimit: 100,

@@ -1,5 +1,5 @@
 /**
- * 进程内成员执行内核适配（MemberRuntimePort）。
+ * 进程内成员执行内核适配（MemberExecutionPort）。
  *
  * 每个成员独占一个 ExecutionUnit / Context / EventStream；工具从父 PluginHost
  * 按白名单复制，hooks / guardrails 一并继承。`permissionMode: 'bridge'` 时
@@ -13,10 +13,8 @@ import { randomUUID } from 'node:crypto';
 import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
   type EventStream,
-  ExecutionUnit,
   type ExecutionUnitOptions,
   type LeaseGrant,
-  type LLMProvider,
   type Logger,
   MemoryEventStream,
   MemoryPluginHost,
@@ -27,6 +25,9 @@ import {
   type RunEvent,
   type RunInterruptReason,
   type RunnableAgent,
+  type RunOptions,
+  type RunRecord,
+  type Runtime,
   type RuntimePermissionConfig,
   type SelfCardOptions,
   type TerminationPolicy,
@@ -40,9 +41,9 @@ import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
 import type {
   AgentMessage,
   AgentRole,
+  MemberExecutionMember,
+  MemberExecutionPort,
   MemberPermissionState,
-  MemberRuntimeMember,
-  MemberRuntimePort,
   MemberTurnResult,
 } from './types.js';
 
@@ -264,7 +265,7 @@ function noticeMessage(text: string): Message {
 }
 
 /** 成员权限模式；bridge 把交互请求转到父事件流，缺省 allow */
-export type MemberRuntimePermissionMode = 'allow' | 'deny' | 'bridge';
+export type MemberExecutionPermissionMode = 'allow' | 'deny' | 'bridge';
 
 /** 需要父级应答的交互请求事件 */
 const PERMISSION_REQUEST_EVENTS: ReadonlySet<string> = new Set([
@@ -291,8 +292,18 @@ interface PendingBridgeRequest {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-/** 成员 runtime 额外需要的中断能力（ExecutionUnit 已实现） */
-export interface MemberRunnableAgent extends RunnableAgent {
+/**
+ * 成员 runtime 额外需要的中断能力（ExecutionUnit 已实现）。
+ *
+ * `resumeRun` 用 `RunRecord` 而非公开门面的 `runId`（Stage 4）：调用方
+ * （AgentService）先经 RunRecordStore 加载记录，再委托到这里。因此这里用
+ * `Omit` 摘掉 `RunnableAgent` 的 runId 签名，避免两条恢复语义并存。
+ */
+export interface MemberRunnableAgent extends Omit<RunnableAgent, 'resumeRun'> {
+  /** Stage 4：用已加载的 RunRecord 恢复同一 run（ExecutionUnit 已实现）。 */
+  resumeRun?(record: RunRecord, opts?: RunOptions): Promise<string>;
+  /** Stage 4：上一 Run 结束时的上下文水位；无 active Run 时供 host 读取。 */
+  lastContextRatio?: number;
   interrupt?(reason?: RunInterruptReason): void;
   /** Stage 3：当前 session 有效 SessionLease 的 fencingToken（ExecutionUnit 已实现）。 */
   sessionLeaseToken?(sessionId: string): number | undefined;
@@ -307,10 +318,13 @@ export interface MemberRunnableAgent extends RunnableAgent {
   applyContextPolicy?(policy: { contextPressureHint?: string }): void;
 }
 
-/** 进程内成员 runtime 选项 */
-export interface InProcessMemberRuntimeOptions {
-  /** 每个成员一个 provider 实例 */
-  providerFactory: () => LLMProvider;
+/** 进程内成员执行宿主选项 */
+export interface MemberExecutionHostOptions {
+  /**
+   * Stage 4：per-node Runtime（必填）。成员的 ExecutionUnit 一律经
+   * `getOrCreateExecutionUnit` 取得，不再在 host 内直接构造。
+   */
+  runtime: Runtime;
   /** 成员未指定 model 时的默认模型；两者都缺省时 spawn 失败 */
   model?: string;
   /** 工具 / hooks / guardrails 的来源（父宿主）；缺省时成员没有工具 */
@@ -320,7 +334,7 @@ export interface InProcessMemberRuntimeOptions {
   /** deny 模式保留的只读工具（默认 ['read']） */
   readOnlyTools?: readonly string[];
   /** 缺省 allow；deny 只保留只读工具；bridge 需配合 parentEvents */
-  permissionMode?: MemberRuntimePermissionMode;
+  permissionMode?: MemberExecutionPermissionMode;
   /**
    * 有 team_id 的成员强制 bridge（忽略全局 `allow`）；缺省开启。
    * 无 parentEvents 时仍走 fail-closed 的 ask → deny。
@@ -368,25 +382,24 @@ export interface InProcessMemberRuntimeOptions {
    * 缺省时 EU 侧租约为 no-op。
    */
   leaseService?: ExecutionUnitOptions['leaseService'];
-  /** 0.27：每 body 的 durable checkpoint 存储；透传给每个 ExecutionUnit */
-  runStore?: ExecutionUnitOptions['runStore'];
-  /** 覆盖 runtime 构造（测试捕获 options） */
-  runtimeFactory?: (options: ExecutionUnitOptions) => Promise<MemberRunnableAgent>;
 }
 
-interface MemberRuntimeEntry {
+interface MemberExecutionEntry {
   runtime: MemberRunnableAgent;
   /** 成员 id（entries 按 ExecutionUnit session 建键，notice 按成员 id 寻址） */
   memberId: string;
-  /** per-body 上下文包装：`applyContextPolicy` 靠它在活体上翻转开关 */
-  context: RoleAwareContext;
+  /**
+   * per-body 上下文策略（可变）：每次 Run 新建 `RoleAwareContext` 时读取；
+   * `applyContextPolicy` 只改这里，下一次 Run 自然生效（Stage 4 per-Run context）。
+   */
+  contextPolicy: { autoCompact: boolean };
   /**
    * body 独占工具宿主（spawn 时快照）。`refreshTools` 原地替换其中的定义，
    * 不动 runtime / session / context / provider，下一轮请求即读到新工具面。
    */
   pluginHost: MemoryPluginHost;
   /** spawn 时选定的权限模式；refreshTools 用它重新筛工具 */
-  mode: MemberRuntimePermissionMode;
+  mode: MemberExecutionPermissionMode;
   /** 是否有在跑轮：工具热刷新只在轮边界应用（单 run + prompt prefix 冻结） */
   running: boolean;
   /** 在跑轮期间收到过 refreshTools：轮结束再应用 */
@@ -420,7 +433,10 @@ function readRequestId(data: unknown): string | undefined {
 }
 
 /** 转发到父流前补齐成员归属字段；已有字段不覆盖 */
-function bridgeRequestData(event: RunEvent, member: MemberRuntimeMember): Record<string, unknown> {
+function bridgeRequestData(
+  event: RunEvent,
+  member: MemberExecutionMember,
+): Record<string, unknown> {
   const data = isRecord(event.data) ? { ...event.data } : {};
   // core 契约用 camelCase requestId；UI / 0.16 形状用 snake_case，别名 additive。
   const requestId = readRequestId(data);
@@ -454,7 +470,7 @@ function bridgeRequestData(event: RunEvent, member: MemberRuntimeMember): Record
  * TeamService 与 TUI 都读 `data.agent_id`。已存在的值不覆盖；`data` 不是
  * 对象时原样返回（不抛错）。
  */
-function withMemberIdentity(event: RunEvent, member: MemberRuntimeMember): RunEvent {
+function withMemberIdentity(event: RunEvent, member: MemberExecutionMember): RunEvent {
   if (!isRecord(event.data)) return event;
   const data: Record<string, unknown> = { ...event.data };
   if (data.agent_id === undefined) data.agent_id = member.id;
@@ -529,7 +545,7 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
  * 回信时把 `location` 的值原样填进 `to` 即可。
  *
  * **本机来源也写满三段**，node 段来自装配层传入的 `nodeId`（见
- * `InProcessMemberRuntimeOptions.nodeId`），不在这里解析。让模型只学一种地址形态，
+ * `MemberExecutionHostOptions.nodeId`），不在这里解析。让模型只学一种地址形态，
  * 比「本机两段、跨机三段」少一条分支：早先本机来源省掉 node 段，模型抄回去的
  * 两段地址是否算本机取决于当时有没有 federation 开着，行为不一致。
  *
@@ -662,13 +678,12 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
 }
 
 /** 进程内成员执行内核 */
-export class InProcessMemberRuntime implements MemberRuntimePort {
-  private readonly providerFactory: () => LLMProvider;
+export class MemberExecutionHost implements MemberExecutionPort {
   private readonly model?: string;
   private readonly pluginHost?: PluginHost;
   private readonly allowedTools: ReadonlySet<string>;
   private readonly readOnlyTools: ReadonlySet<string>;
-  private readonly permissionMode: MemberRuntimePermissionMode;
+  private readonly permissionMode: MemberExecutionPermissionMode;
   private readonly forceBridgeForTeams: boolean;
   private readonly permissionPolicy?: (
     teamId: string | undefined,
@@ -692,17 +707,15 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly includeReasoning?: boolean;
   private readonly session?: ExecutionUnitOptions['session'];
   private readonly eventLog?: ExecutionUnitOptions['eventLog'];
-  private readonly runStore?: ExecutionUnitOptions['runStore'];
   private readonly leaseService?: ExecutionUnitOptions['leaseService'];
-  private readonly runtimeFactory: (options: ExecutionUnitOptions) => Promise<MemberRunnableAgent>;
-  private readonly entries = new Map<string, MemberRuntimeEntry>();
+  private readonly runtime: Runtime;
+  private readonly entries = new Map<string, MemberExecutionEntry>();
   /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界文本队列） */
   private readonly pendingNotices = new Map<string, string[]>();
   /** 0.32：由装配层挂上的收件箱；spawn 时据此注册 notice hook 与 `inbox` 工具 */
   private inbox?: AgentInboxPort;
 
-  constructor(options: InProcessMemberRuntimeOptions) {
-    this.providerFactory = options.providerFactory;
+  constructor(options: MemberExecutionHostOptions) {
     this.model = options.model;
     this.pluginHost = options.pluginHost;
     this.allowedTools = new Set([...DEFAULT_ALLOWED_TOOLS, ...(options.extraTools ?? [])]);
@@ -725,10 +738,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.includeReasoning = options.includeReasoning;
     this.session = options.session;
     this.eventLog = options.eventLog;
-    this.runStore = options.runStore;
     this.leaseService = options.leaseService;
-    this.runtimeFactory =
-      options.runtimeFactory ?? ((runtimeOptions) => ExecutionUnit.create(runtimeOptions));
+    this.runtime = options.runtime;
     if (this.permissionMode === 'bridge' && this.parentEvents === undefined) {
       this.logger.warn('agent.member.permission_bridge_unavailable', {
         fallback: 'ask_denied',
@@ -736,7 +747,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     }
   }
 
-  async spawn(member: MemberRuntimeMember): Promise<void> {
+  async spawn(member: MemberExecutionMember): Promise<void> {
     if (this.entries.has(member.session_id)) {
       throw new Error(`member runtime already spawned: ${member.session_id}`);
     }
@@ -805,37 +816,45 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     // 必须能翻转策略（契约 §5 / D6）。内层恒 `autoCompact: false`，由包装决定要不要
     // 主动压缩 —— 否则 `add()` 会绕过包装、在 temporary 上按阈值压缩。
     const policy = contextPolicyFor(member.role);
-    const context = new RoleAwareContext(
-      new MemoryWorkingContext({ maxTokens: this.contextMaxTokens, autoCompact: false }),
-      policy.autoCompact,
-    );
-    const runtime = await this.runtimeFactory({
-      provider: this.providerFactory(),
-      model,
-      context,
-      events,
-      pluginHost,
-      limits: this.limits,
-      termination: this.termination,
-      // 与 owner 同源的权限规则：工具 checkPermission 返回 ask 时，core 仍按
-      // autoApprove / neverAutoApprove 判定，否则 auto_approve 的 bash/edit 会在
-      // 成员 ExecutionUnit 上重新弹卡片（热应用后新建的 ExecutionUnit 同样走这里）。
-      permission: this.permission ?? { default: 'allow' },
-      selfCard,
+    // per-body 可变策略：每次 Run 的 `contextFactory` 读取同一对象，
+    // `applyContextPolicy` 只改这里，下一次 Run 自然生效。
+    const contextPolicy = { autoCompact: policy.autoCompact };
+    const runtime = await this.runtime.getOrCreateExecutionUnit({
+      tenantId: this.tenantId ?? 'default',
+      sessionId: member.session_id,
       agentId: member.id,
-      ...(policy.pressureHint !== undefined ? { contextPressureHint: policy.pressureHint } : {}),
-      logger: this.logger,
-      ...(member.system_prompt !== undefined ? { systemPrompt: member.system_prompt } : {}),
-      ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
-      ...(this.includeReasoning !== undefined ? { includeReasoning: this.includeReasoning } : {}),
+      // 成员自有事件流；所有 body 事件仍由下方订阅并入父流。
+      events,
       ...(this.session !== undefined ? { session: this.session } : {}),
       ...(this.eventLog !== undefined ? { eventLog: this.eventLog } : {}),
-      ...(this.runStore !== undefined ? { runStore: this.runStore } : {}),
+      ...(this.leaseService !== undefined ? { leaseService: this.leaseService } : {}),
       // Stage 3：ControlPlane 获取的 BindingLease 凭据随 spawn 透传给 EU（EU 只续租/释放）。
       ...(member.binding_lease !== undefined ? { bindingLease: member.binding_lease } : {}),
-      ...(this.leaseService !== undefined ? { leaseService: this.leaseService } : {}),
+      pluginHost,
+      // 成员宿主已自带工具面；不让 tenant profile 的插件再次安装进来。
+      plugins: [],
+      limits: this.limits,
+      termination: this.termination,
+      ...(this.includeReasoning !== undefined ? { includeReasoning: this.includeReasoning } : {}),
+      logger: this.logger,
+      // Stage 4：WorkingContext 是 per-Run 实例；这里只给工厂，EU 每次 Run 调用它。
+      contextFactory: () =>
+        new RoleAwareContext(
+          new MemoryWorkingContext({ maxTokens: this.contextMaxTokens, autoCompact: false }),
+          contextPolicy.autoCompact,
+        ),
+      overrides: {
+        model,
+        // 与 owner 同源的权限规则：工具 checkPermission 返回 ask 时，core 仍按
+        // autoApprove / neverAutoApprove 判定，否则 auto_approve 的 bash/edit 会在
+        // 成员 ExecutionUnit 上重新弹卡片（热应用后新建的 ExecutionUnit 同样走这里）。
+        permission: this.permission ?? { default: 'allow' },
+        selfCard,
+        ...(policy.pressureHint !== undefined ? { contextPressureHint: policy.pressureHint } : {}),
+        ...(member.system_prompt !== undefined ? { systemPrompt: member.system_prompt } : {}),
+      },
     });
-    const entry: MemberRuntimeEntry = {
+    const entry: MemberExecutionEntry = {
       runtime,
       memberId: member.id,
       started: false,
@@ -843,7 +862,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       unsubscribers: [],
       pendingPermissions: new Map(),
       waiting: false,
-      context,
+      contextPolicy,
       pluginHost,
       mode,
       running: false,
@@ -901,7 +920,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   async runTurn(
-    member: MemberRuntimeMember,
+    member: MemberExecutionMember,
     message: AgentMessage,
     scheduledRunId?: string,
   ): Promise<MemberTurnResult> {
@@ -914,7 +933,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * 唯一区别是 core 侧调用 `resumeSession(sessionId, input)` 而不是 `run`。
    */
   async resumeTurn(
-    member: MemberRuntimeMember,
+    member: MemberExecutionMember,
     message: AgentMessage,
     scheduledRunId?: string,
   ): Promise<MemberTurnResult> {
@@ -922,7 +941,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   private async executeTurn(
-    member: MemberRuntimeMember,
+    member: MemberExecutionMember,
     message: AgentMessage,
     scheduledRunId: string | undefined,
     resume: boolean,
@@ -985,7 +1004,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     }
   }
 
-  cancel(member: MemberRuntimeMember, reason: RunInterruptReason = 'user'): void {
+  cancel(member: MemberExecutionMember, reason: RunInterruptReason = 'user'): void {
     this.entries.get(member.session_id)?.runtime.interrupt?.(reason);
   }
 
@@ -1007,15 +1026,11 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   /**
-   * 0.31：body 上下文水位。只读 per-body 包装上的 tokenCount / maxTokens，
-   * 不推断、不落盘；没有活体或没有 token 预算时返回 undefined。
+   * 0.31：body 上下文水位。Stage 4 起读上一 Run 结束时 EU 记录的标量，
+   * 不重建窗口、不推断；没有活体或无 token 预算时返回 undefined。
    */
   contextRatio(sessionId: string): number | undefined {
-    const entry = this.entries.get(sessionId);
-    if (entry === undefined) return undefined;
-    const max = entry.context.maxTokens;
-    if (typeof max !== 'number' || !Number.isFinite(max) || max <= 0) return undefined;
-    return entry.context.tokenCount / max;
+    return this.entries.get(sessionId)?.runtime.lastContextRatio;
   }
 
   /**
@@ -1076,7 +1091,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     return notices;
   }
 
-  async dispose(member: MemberRuntimeMember): Promise<void> {
+  async dispose(member: MemberExecutionMember): Promise<void> {
     const entry = this.entries.get(member.session_id);
     if (!entry) return;
     // 先移除，避免 dispose 期间 / 之后又有 runTurn 走进已释放的 runtime
@@ -1084,7 +1099,27 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     for (const unsubscribe of entry.unsubscribers) unsubscribe();
     entry.unsubscribers.length = 0;
     this.clearPending(entry);
-    await entry.runtime.dispose();
+    // Stage 4：EU 生命周期归 Runtime 目录；直接 dispose 会留下 stale cache，
+    // 同 (tenant, session) 再 spawn 时拿回已释放的实例。
+    await this.runtime.retireExecutionUnit({
+      tenantId: this.tenantId ?? 'default',
+      sessionId: member.session_id,
+    });
+  }
+
+  /**
+   * Stage 4：用已加载的 RunRecord 恢复成员的一轮 run。
+   *
+   * 调用方（AgentService）负责 RunRecord 加载与 scheduler 串行；这里只按
+   * `record.session_id` 找活的 ExecutionUnit。未 spawn 时抛稳定错误码，
+   * 由装配层映射到 RPC，不做隐式 spawn（语义由 AgentService 决定）。
+   */
+  async resumeRun(record: RunRecord, opts?: RunOptions): Promise<string> {
+    const entry = this.entries.get(record.session_id);
+    if (entry === undefined || entry.runtime.resumeRun === undefined) {
+      throw new Error(`member_execution_not_found: ${record.session_id}`);
+    }
+    return entry.runtime.resumeRun(record, opts);
   }
 
   sessionLeaseToken(sessionId: string): number | undefined {
@@ -1156,7 +1191,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   /** 轮结束：清 running；若期间收到过工具刷新，在轮边界应用。 */
-  private finishRun(member: MemberRuntimeMember, entry: MemberRuntimeEntry): void {
+  private finishRun(member: MemberExecutionMember, entry: MemberExecutionEntry): void {
     entry.running = false;
     if (!entry.toolsRefreshPending) return;
     entry.toolsRefreshPending = false;
@@ -1173,7 +1208,10 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * `MemoryPluginHost.registerTool` 对同名重复注册抛错，因此先清空旧工具再注册新集合；
    * 失败时尽量恢复旧定义（best-effort），不让 body 停在半空状态。返回是否成功。
    */
-  private applyToolsToEntry(entry: MemberRuntimeEntry, source: readonly ToolDefinition[]): boolean {
+  private applyToolsToEntry(
+    entry: MemberExecutionEntry,
+    source: readonly ToolDefinition[],
+  ): boolean {
     const previous = entry.pluginHost.listTools();
     const tools = this.selectTools(entry.mode, source).map((tool) =>
       this.restrictPermissions(tool, entry.memberId, entry.mode),
@@ -1215,19 +1253,20 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    *
    * 两件事一起换，body 不重建、历史不动 —— 「转正那天同一具活着的 body
    * 不必重建，但下一次 run 的上下文策略按新身份生效」：
-   * - 自动压缩开关（`RoleAwareContext`）；
+   * - 自动压缩开关（entry 上的可变 `contextPolicy`，per-Run 工厂读取）；
    * - 80%–90% 压力提示的尾句文案（core `ExecutionUnit.applyContextPolicy`）。
    *
    * 返回实际应用的 body 数。未 spawn（没有活体）时返回 0：那种情况下策略由
    * 下一次 `spawn` 的 `contextPolicyFor(role)` 生效，两条路径共用同一份映射。
    */
-  applyContextPolicy(member: MemberRuntimeMember): number {
+  applyContextPolicy(member: MemberExecutionMember): number {
     const policy = contextPolicyFor(member.role);
     let applied = 0;
     for (const [sessionId, entry] of this.entries) {
       if (entry.memberId !== member.id) continue;
       try {
-        let touched = entry.context.setAutoCompact(policy.autoCompact);
+        let touched = entry.contextPolicy.autoCompact !== policy.autoCompact;
+        entry.contextPolicy.autoCompact = policy.autoCompact;
         if (typeof entry.runtime.applyContextPolicy === 'function') {
           entry.runtime.applyContextPolicy({ contextPressureHint: policy.pressureHint });
           touched = true;
@@ -1248,7 +1287,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * 权限 bridge：成员请求 → 父流（补成员归属字段）；父级应答 → 成员流。
    * 只回灌本成员挂起过的 requestId，父流上的其它应答不会串台。
    */
-  private attachBridge(member: MemberRuntimeMember, entry: MemberRuntimeEntry): void {
+  private attachBridge(member: MemberExecutionMember, entry: MemberExecutionEntry): void {
     const parentEvents = this.parentEvents;
     if (!parentEvents) return;
 
@@ -1320,7 +1359,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * 非空 team_id 的成员把全局 allow 提升为 bridge；显式 deny 保持只读工具，
    * 不因 Team 绑定放宽。缺 parentEvents 时仍由 ask → deny 收口。
    */
-  private effectivePermissionMode(member: MemberRuntimeMember): MemberRuntimePermissionMode {
+  private effectivePermissionMode(member: MemberExecutionMember): MemberExecutionPermissionMode {
     if (
       this.forceBridgeForTeams &&
       this.permissionMode === 'allow' &&
@@ -1332,14 +1371,14 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     return this.permissionMode;
   }
 
-  private clearPending(entry: MemberRuntimeEntry): void {
+  private clearPending(entry: MemberExecutionEntry): void {
     for (const pending of entry.pendingPermissions.values()) {
       if (pending.timer !== undefined) clearTimeout(pending.timer);
     }
     entry.pendingPermissions.clear();
   }
 
-  private noteBridgeSettled(member: MemberRuntimeMember, entry: MemberRuntimeEntry): void {
+  private noteBridgeSettled(member: MemberExecutionMember, entry: MemberExecutionEntry): void {
     if (entry.pendingPermissions.size === 0 && entry.waiting) {
       entry.waiting = false;
       this.notifyPermissionState(member.id, member.session_id, 'running');
@@ -1351,8 +1390,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * 到期后把 normal response 同时交给成员流（解除等待）与父流（供父入口观测）。
    */
   private scheduleDenyAfter(
-    member: MemberRuntimeMember,
-    entry: MemberRuntimeEntry,
+    member: MemberExecutionMember,
+    entry: MemberExecutionEntry,
     requestId: string,
     kind: 'permission' | 'ask',
     forwarded: RunEvent,
@@ -1438,7 +1477,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * 的 `how to ask` 也从这里推导，不读入口层的 headless / ui 标志）。
    */
   private selectTools(
-    mode: MemberRuntimePermissionMode,
+    mode: MemberExecutionPermissionMode,
     source: readonly ToolDefinition[] = this.pluginHost?.listTools() ?? [],
   ): ToolDefinition[] {
     const denyFilter = mode === 'deny';
@@ -1465,7 +1504,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private restrictPermissions(
     tool: ToolDefinition,
     memberId: string,
-    mode: MemberRuntimePermissionMode,
+    mode: MemberExecutionPermissionMode,
   ): ToolDefinition {
     const check = tool.checkPermission;
     return {
@@ -1510,7 +1549,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   private buildSelfCard(
-    member: MemberRuntimeMember,
+    member: MemberExecutionMember,
     model: string,
     tools: readonly ToolDefinition[],
   ): SelfCardOptions {
@@ -1539,16 +1578,16 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     };
   }
 
-  private requireEntry(member: MemberRuntimeMember): MemberRuntimeEntry {
+  private requireEntry(member: MemberExecutionMember): MemberExecutionEntry {
     const entry = this.entries.get(member.session_id);
     if (!entry) throw new Error(`member runtime not spawned: ${member.session_id}`);
     return entry;
   }
 }
 
-/** 工厂：入口层只依赖 MemberRuntimePort */
-export function createInProcessMemberRuntime(
-  options: InProcessMemberRuntimeOptions,
-): MemberRuntimePort {
-  return new InProcessMemberRuntime(options);
+/** 工厂：入口层只依赖 MemberExecutionPort */
+export function createMemberExecutionHost(
+  options: MemberExecutionHostOptions,
+): MemberExecutionPort {
+  return new MemberExecutionHost(options);
 }

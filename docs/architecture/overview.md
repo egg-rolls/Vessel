@@ -6,7 +6,7 @@ paths: [packages/core/**, packages/**, plugins/**]
 ---
 
 # 概览与分层
-> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
+> Stage 4 已落地：`Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-session）→ Run（瞬时，持 WorkingContext）→ ToolCallingLoop`。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
 
 <a id="layering"></a>
 
@@ -22,8 +22,9 @@ packages/tui             终端界面：Ink REPL、流式渲染、slash 命令�
     │
 packages/config          声明式 YAML 配置：加载、校验（未知键报错）、snake_case→camelCase 映射
     │
-packages/core            运行时：tool-calling loop、provider 抽象、context、session、事件流、
-                         权限策略、guardrail/hook 编排、PluginHost、Kernel、RunRecordStore
+packages/core            运行时：Runtime、ExecutionUnit、tool-calling loop、provider 抽象、
+                         context、session、事件流、权限策略、guardrail/hook 编排、
+                         PluginHost、Kernel、RunRecordStore
                          ← 零 UI 依赖，可独立嵌入
 packages/permission      共享权限原语（工具经事件流等用户授权）
 plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost 注册工具
@@ -40,7 +41,7 @@ plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost �
 - 分层：`Contracts ← Kernel ← Modules ← SDK ← Shells`；`Plugins` 只依赖 Contracts / 公开 API，经 `PluginHost` 在运行期 install。
 - **Module ≠ Plugin**：Module 是编译期 / 构造期边界（provider / context / session / policy / transport / observability，一个 port 一个实现）；Plugin 仍是唯一运行期扩展机制；禁止 `ModuleHost` / `ModuleRegistry`。
 - core 内只做 ports & adapters 与 `@vessel-agent/core/<port>` subpath exports，不拆包；`types/**` 不 import 实现，模块只经 port 交互。
-- `ExecutionUnit` 仍是单 agent tool-calling loop；Host / Scheduler 只提供注册、生命周期、调度与边界，不重写循环。
+- `ExecutionUnit` 仍是单 agent tool-calling loop（现在是 per-session）；`Runtime` 只提供 profile 注册与 EU 目录，Host / Scheduler 只提供注册、生命周期、调度与边界，不重写循环。
 
 <a id="philosophy"></a>
 
@@ -66,7 +67,7 @@ plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost �
         └──────────────────────────────────────┘
 ```
 
-- **① 世界 → 语言**：`WorkingContext` 里的消息 + 工具 schema（`PluginHost.listTools()`）+ system prompt，组成一次 `ChatRequest`。
+- **① 世界 → 语言**：本 Run 的 `WorkingContext` 消息 + 工具 schema（`PluginHost.listTools()`）+ system prompt，组成一次 `ChatRequest`。
 - **② 语言 → 世界**：解析 `tool_calls` → 权限判定 → 执行 handler → 结果作为 `role: tool` 消息折回语言空间。
 
 **两个插槽**是这套折叠的全部可扩展点：
@@ -74,7 +75,7 @@ plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost �
 | 插槽 | 实现 | 放什么 |
 |---|---|---|
 | **工具** | `PluginHost` | 语言 → 世界的能力。`PluginHost` 是**唯一的工具注册表**（core 里没有第二个） |
-| **知识** | `WorkingContext` | 世界 → 语言的输入。消息、system prompt、注入的文本 |
+| **知识** | `WorkingContext`（per Run） | 世界 → 语言的输入。消息、system prompt、注入的文本 |
 
 其余扩展点（guardrail、hook、provider、session backend）都挂在 `PluginHost` 上，不新增插槽。
 

@@ -25,7 +25,10 @@ export function withSessionWriteLock(
   if (options.enabled === false) return runtime;
   const tenantDir = options.tenantDir;
 
+  // 保留被包装对象上的其它结构面（Stage 4 门面的 `id` / `applyPermissionRules`
+  // 供热应用按结构解析；只覆盖 run 级写锁相关方法）。
   const wrapped: RunnableAgent = {
+    ...runtime,
     events: runtime.events,
     pluginHost: runtime.pluginHost,
     async run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string> {
@@ -47,6 +50,14 @@ export function withSessionWriteLock(
         await lock.release();
       }
     };
+  }
+
+  // Stage 4：per-session 门面把 resumeSession 也暴露出来；它按会话历史开新 run，
+  // 与既有 EU.resumeSession 一样不走 run 级文件锁，原样转发。
+  if (typeof runtime.resumeSession === 'function') {
+    const resumeSession = runtime.resumeSession.bind(runtime);
+    wrapped.resumeSession = (sessionId: string, input: string | Message, opts?: RunOptions) =>
+      resumeSession(sessionId, input, opts);
   }
 
   return wrapped;

@@ -33,6 +33,7 @@ import {
   type RunnableAgent,
   type RunOptions,
   type RunRecordStore,
+  Runtime,
   readTraceEvents,
   rebuildMetrics,
   resolveTenantPaths,
@@ -232,8 +233,13 @@ export interface BootstrapOptions {
 }
 
 export interface BootstrapResult {
-  /** 外壳消费面：tenant 的 ExecutionUnit */
+  /** 外壳消费面：per-session 门面（本地 adapter 或 tenant bundle 门面） */
   runtime: RunnableAgent;
+  /**
+   * Stage 4：本 node 的 Runtime（tenant profile 注册表 + per-session EU 目录）。
+   * `--serve` 的 TenantRuntimeFactory 复用它；connect 模式不会用到。
+   */
+  executionRuntime: Runtime;
   ctx: ReplContext;
   config: Awaited<ReturnType<typeof loadConfig>>['config'];
   /** 0.5：解析后的 tenant 与目录 */
@@ -560,6 +566,11 @@ async function bootstrapConnect(input: {
     }
   }
 
+  // Stage 4：connect 模式不执行本地 tenant run（远端才是执行面），但 BootstrapResult
+  // 需要同一形状；这里给一个未注册 profile 的空 Runtime（`--connect` 与 `--serve` 互斥）。
+  const executionRuntime = new Runtime({
+    ...(input.logger !== undefined ? { logger: input.logger } : {}),
+  });
   const events = createEventStream(input.config);
   const pluginHost = new MemoryPluginHost();
   const session = new MemorySessionStore();
@@ -800,6 +811,7 @@ async function bootstrapConnect(input: {
 
   return {
     runtime,
+    executionRuntime,
     ctx,
     config: input.config,
     tenantId: effectiveTenantId,
@@ -1094,8 +1106,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 0.28：渠道执行面所需的 AgentService 同样晚绑定 —— 渠道随 bundle 构造，
   // `createAgentServiceWiring` 之后才存在；插件在 `start()` 时求值。
   let feishuAgentService: AgentService | undefined;
+  // Stage 4：每 node 每进程一个 Runtime；tenant bundle 与成员 host 共用。
+  const executionRuntime = new Runtime({ logger });
   const bundle = await buildTenantRuntime({
     tenantId,
+    runtime: executionRuntime,
     config,
     tenantPaths,
     configSources: loaded.sources,
@@ -1128,15 +1143,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
 
   const {
-    provider,
     providerName,
     providerModel,
     providerBaseUrl,
-    context,
     session,
     sessionControl,
     plugins,
-    runtime: activeRuntime,
     pluginHost: finalPluginHost,
     runtimeEvents,
     trace,
@@ -1148,6 +1160,16 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // MCP 控制面（bundle 内已安装；保留局部名以兼容后续注入）。
   const mcpControl = bundle.mcp;
+
+  // Stage 4：WorkingContext 归 Run，tenant bundle 不再持有长期存活实例。
+  // 外壳的 `ctx.context` 仍需要一个可读窗口：agent 启用时用 local-run-adapter 的
+  // 会话镜像；否则（agent 关闭 / headless）用这个独立镜像，避免和执行内核共享实例。
+  const context = new MemoryWorkingContext({
+    maxTokens: config.context?.maxTokens,
+    maxMessages: config.context?.maxMessages,
+    autoCompact: config.context?.autoCompact,
+    compactThreshold: config.context?.compactThreshold,
+  });
 
   // 成员 wiring 的构造参数（与 bundle 内保持一致）。
   const limits = config.limits ?? DEFAULT_CONFIG.limits ?? {};
@@ -1217,8 +1239,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       dataDir,
       sessionId: currentSessionId,
       pluginHost: finalPluginHost,
-      // provider 无跨请求状态；成员与父级共用同一实例。
-      providerFactory: () => provider,
+      // Stage 4：成员 EU 经同一 Runtime 的 getOrCreateExecutionUnit 取得；
+      // agentId 绑定保证同 session 不会被 tenant / 成员两条路径静默复用。
+      runtime: executionRuntime,
+      // 成员 run durable：RunRecord 与 tenant run 同一条 journal 写路径。
+      ...(runStore !== undefined ? { runStore } : {}),
       model: agentPlan.model ?? providerModel,
       limits: agentPlan.limits ?? limits,
       termination: memberTermination,
@@ -1356,11 +1381,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(options.clock ? { now: options.clock } : {}),
     });
 
-    if (typeof activeRuntime.resumeRun !== 'function') {
-      await runLock.release();
-      throw resumeError('resume_unavailable', runId, 'runtime does not support resumeRun');
-    }
-
     // 0.33 A：headless ask 的回答在 resume 前以 `user.message` 事件注入历史。
     // 走既有 projection 路径（见 ask-channel），不改 core resume 契约；重复 resume
     // 由 `source + request_id` 去重。
@@ -1395,7 +1415,20 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         });
       }
     }
-    const promise = activeRuntime.resumeRun(runId, { ...opts, signal: controller.signal });
+    const resumeOptions = { ...opts, signal: controller.signal };
+    // Stage 4：成员 run 有 agent_id，回到 AgentService（scheduler 串行 / active run
+    // 记账 / lease 续租都复用）；tenant run 直接按 session 取 EU 恢复。不新增 RPC。
+    const memberService = agentControl?.service;
+    const promise =
+      checkpoint.agent_id !== undefined && memberService !== undefined
+        ? memberService.resumeRun(runId, resumeOptions)
+        : // tenant run：走 bundle 的 per-session 门面，复用 owner Self Card / context
+          // 覆盖与 run 级文件锁（startResume 已持有一次，session-lock 引用计数消化）。
+          typeof bundle.runtime.resumeRun === 'function'
+          ? bundle.runtime.resumeRun(runId, resumeOptions)
+          : Promise.reject(
+              resumeError('resume_unavailable', runId, 'runtime does not support resumeRun'),
+            );
     const done = promise
       .then(
         (message) => ({ status: 'completed' as const, message }),
@@ -1588,7 +1621,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     runtimeFor: (requestedTenant: string) =>
       requestedTenant === tenantId ? bundle.runtime : undefined,
     sessionFor: (requestedTenant: string) => (requestedTenant === tenantId ? session : undefined),
-    contextFor: (requestedTenant: string) => (requestedTenant === tenantId ? context : undefined),
     pluginHostFor: (requestedTenant: string) =>
       requestedTenant === tenantId ? finalPluginHost : undefined,
     ...(runStore
@@ -1833,6 +1865,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   return {
     runtime: resumableRuntime,
+    executionRuntime,
     ctx,
     config,
     tenantId,

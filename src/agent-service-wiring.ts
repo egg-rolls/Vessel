@@ -18,15 +18,14 @@ import {
   ConversationStore,
   createAgentService,
   createAgentTool,
-  createInProcessMemberRuntime,
+  createMemberExecutionHost,
   createTeamService,
   DEFAULT_OWNER,
   type FederationSendPort,
   FileTeamStore,
-  type InProcessMemberRuntimeOptions,
+  type MemberExecutionHostOptions,
+  type MemberExecutionPermissionMode,
   type MemberPermissionState,
-  type MemberRunnableAgent,
-  type MemberRuntimePermissionMode,
   type MemberStatus,
   type TeamDeclaration,
   type TeamRecord,
@@ -37,10 +36,11 @@ import type {
   EventStream,
   ExecutionUnitOptions,
   LeaseServicePort,
-  LLMProvider,
   Logger,
   PluginHost,
   RunEvent,
+  RunRecordStore,
+  Runtime,
   RuntimePermissionConfig,
   Scheduler,
   TerminationPolicy,
@@ -67,8 +67,11 @@ export interface AgentServiceWiringOptions {
    * `AgentService` 的所有执行都经它的 executor。
    */
   scheduler: Scheduler;
-  /** 每个成员一个 provider（当前入口共用父实例；provider 无跨请求状态） */
-  providerFactory: () => LLMProvider;
+  /**
+   * Stage 4：per-node Runtime（bootstrap 构造）。成员 ExecutionUnit 一律经
+   * `getOrCreateExecutionUnit` 取得；host 不再自己构造 provider / EU。
+   */
+  runtime: Runtime;
   model: string;
   limits?: UsageLimits;
   termination?: TerminationPolicy;
@@ -85,7 +88,7 @@ export interface AgentServiceWiringOptions {
    */
   parentEvents?: EventStream;
   /** 成员权限模式：交互 bridge、headless allow（缺省沿用 agent 包缺省 allow） */
-  permissionMode?: MemberRuntimePermissionMode;
+  permissionMode?: MemberExecutionPermissionMode;
   /**
    * 0.31：是否存在能应答权限确认的人类通道。headless 传 false —— 模型 rotate
    * 不发请求、直接 `rotate_not_needed`，避免等不到应答而挂死。
@@ -94,7 +97,7 @@ export interface AgentServiceWiringOptions {
   humanApproval?: boolean;
   /**
    * 在成员默认白名单（bash / read / edit / agent）之外额外放行的工具名，原样透传给
-   * `InProcessMemberRuntimeOptions.extraTools`。
+   * `MemberExecutionHostOptions.extraTools`。
    *
    * 唯一用途是让「父宿主真的注册了某工具」这件事传到成员 ExecutionUnit（当前只有
    * `ask_user`：serve / 交互 REPL 有应答者，headless 没有）。可选 = 不传则维持旧工具面。
@@ -115,10 +118,10 @@ export interface AgentServiceWiringOptions {
    */
   summarizer?: ContextSummarizer;
   /**
-   * 测试接缝：覆盖成员 ExecutionUnit 构造。缺省 `ExecutionUnit.create`；
-   * bridge / owner 队列的端到端测试用 fake runtime，不调真实 provider。
+   * Stage 4：成员 run durable 的 RunRecord 存储（内部装配选项，不是公开 RPC）。
+   * 经 journal 工厂让成员 run 与 tenant run 走同一条写路径。
    */
-  runtimeFactory?: (options: ExecutionUnitOptions) => Promise<MemberRunnableAgent>;
+  runStore?: RunRecordStore;
   /** 0.19 S3：全局配置声明的 Team；只补写缺失的 team.json */
   teamDeclarations?: readonly TeamDeclaration[];
   /**
@@ -175,12 +178,12 @@ export interface AgentServiceWiring {
 }
 
 /** 构造成员 runtime 选项（导出便于测试选项传递，不直接构造 runtime） */
-export function buildMemberRuntimeOptions(
+export function buildMemberExecutionOptions(
   options: AgentServiceWiringOptions,
   onPermissionState?: (memberId: string, sessionId: string, state: MemberPermissionState) => void,
   onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void,
-  teamPolicy?: InProcessMemberRuntimeOptions['permissionPolicy'],
-): InProcessMemberRuntimeOptions {
+  teamPolicy?: MemberExecutionHostOptions['permissionPolicy'],
+): MemberExecutionHostOptions {
   // 成员 ExecutionUnit 只能通过 `agent` 工具 rotate 自己（tool handler 收紧），
   // 因此 member runtime 免确认该工具；owner 侧权限不变。
   const permission =
@@ -191,7 +194,7 @@ export function buildMemberRuntimeOptions(
         }
       : undefined;
   return {
-    providerFactory: options.providerFactory,
+    runtime: options.runtime,
     model: options.model,
     pluginHost: options.pluginHost,
     ...(options.limits !== undefined ? { limits: options.limits } : {}),
@@ -212,7 +215,6 @@ export function buildMemberRuntimeOptions(
     ...(options.parentEvents !== undefined ? { parentEvents: options.parentEvents } : {}),
     ...(onPermissionState !== undefined ? { onPermissionState } : {}),
     ...(onMemberEvent !== undefined ? { onMemberEvent } : {}),
-    ...(options.runtimeFactory !== undefined ? { runtimeFactory: options.runtimeFactory } : {}),
     ...(options.session !== undefined ? { session: options.session } : {}),
     ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
     ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
@@ -319,8 +321,8 @@ export async function createAgentServiceWiring(
   // 成员 bridge 进入/离开权限等待时回调 AgentService；service 在 runtime 之后构造，
   // 用晚绑定避免循环依赖。
   let serviceRef: AgentService | undefined;
-  const innerRuntime = createInProcessMemberRuntime(
-    buildMemberRuntimeOptions(
+  const innerRuntime = createMemberExecutionHost(
+    buildMemberExecutionOptions(
       options,
       (memberId, sessionId, state) => serviceRef?.notePermissionState(memberId, sessionId, state),
       (memberId, sessionId, event) => serviceRef?.noteMemberEvent(memberId, sessionId, event),
@@ -353,6 +355,7 @@ export async function createAgentServiceWiring(
     runtime: innerRuntime,
     // 0.27（spec §5.1）：执行只经 tenant scheduler 的 executor，不再有第二套队列。
     scheduler: options.scheduler,
+    ...(options.runStore !== undefined ? { runStore: options.runStore } : {}),
     defaultModel: options.model,
     ownerId,
     // 成员生命周期事件与父入口同源；缺省时只有 subscribe，不进入父流。

@@ -6,13 +6,15 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/run.ts]
 ---
 
 # Run 生命周期
-> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
+> Stage 4 已落地：`Runtime`（per-node 无状态工厂）→ `ExecutionUnit`（per-session）→ `Run`（瞬时）→ `ToolCallingLoop`。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
 
 <a id="run"></a>
 
-## Run 外壳
+## Runtime 与 Run 外壳
 
-`ExecutionUnit`（`packages/core/src/runtime/execution-unit.ts`）是唯一的循环实现。编排细节外推给了三个 runner：`PermissionPolicy`（权限）、`GuardrailRunner`（四阶段 guardrail）、`HookRunner`（五阶段 hook）——`ExecutionUnit` 只做协调。
+- `Runtime`（`packages/core/src/runtime/runtime.ts`）是每 node 一个的无状态工厂：只持有装配期注册的 tenant profile 与 `(tenantId, sessionId)` ExecutionUnit 目录，不持 Session / Run / WorkingContext / lease / RunRecordStore。
+- `ExecutionUnit` 是 **per-session** 的长活执行单元：持 Session 引用、只读 EventLog、两级 lease、`activeRun` 与 abort。tenant 与成员两条路径都经 `Runtime.getOrCreateExecutionUnit` 取得 EU；同 `(tenantId, sessionId)` 返回同一对象，`agentId` 不一致时抛 `execution_unit_binding_conflict`。
+- `ExecutionUnit`（`packages/core/src/runtime/execution-unit.ts`）是唯一的循环实现。编排细节外推给了三个 runner：`PermissionPolicy`（权限）、`GuardrailRunner`（四阶段 guardrail）、`HookRunner`（五阶段 hook）——`ExecutionUnit` 只做协调。
 
 ### `run()`：一次请求的外壳
 
@@ -22,12 +24,11 @@ run(input, sessionId?, opts?):
     execution = beginExecution(runId, sessionId)   # run 级状态 + 同步占位
         # 已有 active run → 立即抛 run_already_running（RunAlreadyRunningError）
         # 占位发生在任何 await 之前；finally 里 endExecution 释放
-    context.setSessionId(sessionId)
+        # Run 在此时经 contextFactory 新建自己的 WorkingContext（per-Run，不复用上一 Run 对象）
 
-    # 只在 context 为空时初始化（同会话续聊时不重置，多轮记忆靠这个）
-    if context.messages 为空:
-        从 session.load(sessionId) 恢复历史 → addContext 每条
-        若没恢复出历史且有 systemPrompt → addContext(system 消息)
+    # 从 SessionState 快照 + 事件日志增量播种本 Run 的窗口
+    从 session.load(sessionId) 恢复历史 → addContext 每条
+    若没恢复出历史且有 systemPrompt → addContext(system 消息)
 
     runState = { run_id, session_id, messages: [userMessage], status: 'running', branch }
     发 run.started
@@ -44,9 +45,9 @@ run(input, sessionId?, opts?):
         addContext(effectiveUser)        # 用户输入在后
 
         # 初始状态保存真实上下文（恢复历史 + 注入 + 用户输入），运行中崩溃不丢历史
-        runState.messages = context.messages
-        session.save(runState)
-        writeCheckpoint(runState, 'running')      # durable 开启时；发 run.checkpoint
+        runState.messages = run.workingContext.messages
+        journal.saveSessionState(runState)        # RunJournal 是唯一持久化写者
+        journal.saveCheckpoint(runRecord)          # durable 开启时；发 run.checkpoint
 
         output = await toolCallingLoop(execution, signal)
         await finalizeRun(execution, runState, { status: 'completed', output })
@@ -58,7 +59,7 @@ run(input, sessionId?, opts?):
 # run() / resumeRun() / resumeSession() 共用的唯一终态路径
 finalizeRun(run, sessionState, outcome):
     if outcome.status == 'completed':
-        writeRunRecord(run, 'completed') → saveSessionState(sessionState) → 发 run.completed
+        journal.saveCheckpoint(runRecord, 'completed') → journal.saveSessionState(sessionState) → 发 run.completed
         return
 
     # 失败 / 取消 / 中断
@@ -66,14 +67,23 @@ finalizeRun(run, sessionState, outcome):
     sessionState.status = cancelled ? 'cancelled' : 'failed'
     sessionState.messages = run.workingContext.messages  # 失败也保存真实上下文，不覆盖历史
     OnError hook（best-effort；自己抛错只发 hook.error，不替换原始错误）
-    writeRunRecord(run, failed | cancelled | interrupted) → saveSessionState(sessionState)
+    journal.saveCheckpoint(runRecord, failed | cancelled | interrupted) → journal.saveSessionState(sessionState)
     发 run.cancelled（用户取消）或 run.failed（Host 中断 / 普通错误）
     # finalizeRun 自身失败（如磁盘写失败）→ 发 run.finalize.failed，原错误继续上抛
 ```
 
 <a id="finalize"></a>
 
-`resumeRun()` / `resumeSession()` 走同一条 `finalizeRun` 路径，因此用户取消同样发 `run.cancelled`，RunRecord 状态同样按 abort reason 映射为 `cancelled` / `interrupted`。`Run` 是 run 级瞬时状态的唯一来源（run id / session / branch / 计时 / usage / workingContext），可恢复进度在 `RunRecord`，见 [runtime-api.md](runtime-api.md#execution-unit)。
+`resumeRun(record)` / `resumeSession()` 走同一条 `finalizeRun` 路径，因此用户取消同样发 `run.cancelled`，RunRecord 状态同样按 abort reason 映射为 `cancelled` / `interrupted`。`Run` 是 run 级瞬时状态的唯一来源（run id / session / branch / 计时 / usage / workingContext），可恢复进度在 `RunRecord`，见 [runtime-api.md](runtime-api.md#execution-unit)。
+
+<a id="writer"></a>
+
+## 写者（铁律 1）
+
+- 事实事件、RunRecord checkpoint、SessionState 投影全部经 `RunJournal`（`packages/core/src/runtime/run-journal.ts`）。`ExecutionUnit` 只持只读 EventLog，不再直接 `eventLog.append` / `runStore.save` / `session.save`。
+- 工厂由装配层按 tenant 构造（`createRunJournalFactory`，持有 `eventLog` / `session` / `runStore` / `fenceOf`），放进 `TenantRuntimeProfile.journalFactory`；tenant run 与成员 run 走同一条写路径。
+- `RunJournal` 保留 `flush → cursor → saveCheckpoint` 顺序；fencing 校验只读 `fenceOf` 回调，Run 不持 `LeaseService`。
+- `/compact` 等无 active Run 的写走 transient journal（`run_id='manual'`）；插件生命周期事件走 `run_id='plugin'`，均不在 Run 事实内。
 
 <a id="lease"></a>
 

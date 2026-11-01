@@ -17,10 +17,10 @@ import {
   type ExecutionUnitStatus,
   type ListFilter,
   MAX_BINDING_HISTORY,
+  type MemberExecutionMember,
   type MemberMembership,
   type MemberPresence,
   type MemberRotation,
-  type MemberRuntimeMember,
   type MemberState,
   type MemberStatus,
   type MemberVisibility,
@@ -243,7 +243,7 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
 }
 
 /** 注册表记录 → 执行内核身份（primary binding；per-body 由 service 覆盖 session_id） */
-export function toRuntimeMember(record: MemberRecord): MemberRuntimeMember {
+export function toRuntimeMember(record: MemberRecord): MemberExecutionMember {
   return {
     id: record.id,
     session_id: currentBindingSession(record),

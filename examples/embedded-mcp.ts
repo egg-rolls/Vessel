@@ -12,6 +12,7 @@
 
 import { fileURLToPath } from 'node:url';
 import {
+  createRunJournalFactory,
   ExecutionUnit,
   MemoryEventStream,
   MemoryLLMProvider,
@@ -67,7 +68,8 @@ async function main(): Promise<void> {
     const runtime = await ExecutionUnit.create({
       provider: new MemoryLLMProvider(),
       model: 'mock-model',
-      context: new MemoryWorkingContext(),
+      contextFactory: () => new MemoryWorkingContext(),
+      journalFactory: createRunJournalFactory({}),
       events,
       session: new MemorySessionStore(),
       limits: { requestLimit: 10 },

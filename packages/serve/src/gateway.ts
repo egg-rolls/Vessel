@@ -327,7 +327,6 @@ export interface GatewayOptions {
   /** per-tenant 执行面（A-3 §10.4） */
   runtimeFor?: (tenantId: string) => RunnableAgent | undefined;
   sessionFor?: (tenantId: string) => SessionStore | undefined;
-  contextFor?: (tenantId: string) => WorkingContext | undefined;
   pluginHostFor?: (tenantId: string) => PluginHost | undefined;
   /** 缺省 tenant（wildcard admin 未指定时使用） */
   defaultTenantId?: string;

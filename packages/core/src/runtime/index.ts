@@ -8,6 +8,7 @@ export { toErrorEnvelope } from './error-envelope.js';
 export { ExecutionUnit } from './execution-unit.js';
 export { PermissionTimeoutError } from './permission-policy.js';
 export { MemoryPluginHost } from './plugin-host.js';
+export { type InstalledPlugins, installPluginsIntoHost } from './plugin-install.js';
 export {
   type PrefixChangeReason,
   PromptPrefixChangedError,
@@ -15,6 +16,15 @@ export {
   type PromptPrefixCheckResult,
   PromptPrefixGuard,
 } from './prompt-prefix-guard.js';
+export {
+  createRunJournalFactory,
+  type RunJournal,
+  type RunJournalFactory,
+  type RunJournalFactoryOptions,
+  type RunJournalIdentity,
+  type RunJournalTransientIdentity,
+} from './run-journal.js';
+export { type ExecutionUnitRequest, Runtime, type TenantRuntimeProfile } from './runtime.js';
 export {
   createToolPipeline,
   createToolPipelineFor,

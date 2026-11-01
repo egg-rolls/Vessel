@@ -10,7 +10,7 @@
  * - **终态等待**：复用 `waitForConnectedRun`（含 D11 修好的事件兜底），不自写一套。
  * - **D12 的上下文**：`ctx.context` 换成「当前 body 的镜像」——run 结束后从
  *   SessionStore 读回该会话的消息。core 的 per-body context 在
- *   `InProcessMemberRuntime` 内部，不经 RPC 拿不到；SessionStore 是同一份真相
+ *   `MemberExecutionHost` 内部，不经 RPC 拿不到；SessionStore 是同一份真相
  *   的持久化投影，且 `/resume` 正是靠它取历史，语义一致。
  *
  * 契约 §3 的两条禁止在这里落实：

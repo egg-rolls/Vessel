@@ -33,7 +33,7 @@ interface PluginHost {
 }
 ```
 
-这是**唯一的扩展机制**。`ExecutionUnitOptions` 里的 `plugins?: Plugin[]` 在 `ExecutionUnit.create()` 时逐个 `install`（install 失败即构造失败，fail-fast）；也可直接注入 `pluginHost?: PluginHost` 替换实现。
+这是**唯一的扩展机制**。tenant 插件由装配层经 `installPluginsIntoHost()` 在共享 `PluginHost` 上安装一次（install 失败即构造失败，fail-fast），per-session EU 复用该 host；直接嵌入方仍可在 `ExecutionUnitOptions.plugins` 里传插件，由 `ExecutionUnit.create()` 逐个 `install`。也可直接注入 `pluginHost?: PluginHost` 替换实现。
 
 <a id="extension-model"></a>
 

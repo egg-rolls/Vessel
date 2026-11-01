@@ -66,6 +66,9 @@ export {
   createToolPipeline,
   createToolPipelineFor,
   ExecutionUnit,
+  type ExecutionUnitRequest,
+  type InstalledPlugins,
+  installPluginsIntoHost,
   MemoryPluginHost,
   PermissionTimeoutError,
   type PrefixChangeReason,
@@ -73,6 +76,8 @@ export {
   type PromptPrefixCheckInput,
   type PromptPrefixCheckResult,
   PromptPrefixGuard,
+  Runtime,
+  type TenantRuntimeProfile,
   type ToolPipeline,
   type ToolPipelineDeps,
   type ToolPipelineFactoryDeps,
@@ -81,6 +86,13 @@ export {
   type ToolPipelineStages,
   toErrorEnvelope,
 } from './runtime/index.js';
+// Stage 4：Run 写端口（接口 type-only；实现类不导出；装配缝只导出工厂函数）
+export {
+  createRunJournalFactory,
+  type RunJournal,
+  type RunJournalFactory,
+  type RunJournalFactoryOptions,
+} from './runtime/run-journal.js';
 // 会话后端
 export {
   AtomicWriteError,

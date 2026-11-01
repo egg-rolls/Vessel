@@ -5,13 +5,15 @@
 
 import * as path from 'node:path';
 import {
+  createRunJournalFactory,
   type EventStream,
   ExecutionUnit,
   type LLMProvider,
   MemoryEventStream,
   MemoryWorkingContext,
+  type Message,
   type RunEvent,
-  type RunnableAgent,
+  type RunOptions,
 } from '@vessel-agent/core';
 import { evaluateAssertions } from './assertions.js';
 import { EvalsError, invalid } from './errors.js';
@@ -57,8 +59,20 @@ function publishEvalEvent(
   });
 }
 
+/**
+ * eval 只消费 run / dispose / events。
+ *
+ * Stage 4 起 `ExecutionUnit.resumeRun` 改为接收 RunRecord，结构上不再是
+ * `RunnableAgent`；这里收窄到 eval 真正用到的面，两种 runtime 都能装进来。
+ */
+interface EvalRuntime {
+  readonly events: EventStream;
+  run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string>;
+  dispose(): void | Promise<void>;
+}
+
 interface RuntimeBundle {
-  runtime: RunnableAgent;
+  runtime: EvalRuntime;
   events: EventStream;
   captured: RunEvent[];
   scripted?: ScriptedProvider;
@@ -86,10 +100,11 @@ async function createDefaultBundle(
   const runtime = await ExecutionUnit.create({
     provider,
     model: options.model ?? (options.providerFactory ? NETWORK_MODEL : DEFAULT_MODEL),
-    context: new MemoryWorkingContext(),
+    contextFactory: () => new MemoryWorkingContext(),
     events,
     limits: {},
     termination: { maxIterations: 10 },
+    journalFactory: createRunJournalFactory({}),
     ...(options.plugins ? { plugins: options.plugins } : {}),
   });
 
@@ -107,7 +122,7 @@ async function createDefaultBundle(
   };
 }
 
-function attachCollector(runtime: RunnableAgent): RuntimeBundle {
+function attachCollector(runtime: EvalRuntime): RuntimeBundle {
   const captured: RunEvent[] = [];
   runtime.events.subscribe((event) => {
     captured.push(event);

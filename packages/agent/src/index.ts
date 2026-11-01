@@ -3,7 +3,7 @@
  * @module @vessel-agent/agent
  *
  * 负责成员 registry、生命周期、消息队列、回复投递、可见性与快照。
- * 不负责 UI / 传输 / provider / 工具 schema；执行内核由 MemberRuntimePort 注入。
+ * 不负责 UI / 传输 / provider / 工具 schema；执行内核由 MemberExecutionPort 注入。
  */
 
 export {
@@ -41,11 +41,11 @@ export {
   toRuntimeMember,
 } from './registry.js';
 export {
-  createInProcessMemberRuntime,
-  InProcessMemberRuntime,
-  type InProcessMemberRuntimeOptions,
+  createMemberExecutionHost,
+  MemberExecutionHost,
+  type MemberExecutionHostOptions,
+  type MemberExecutionPermissionMode,
   type MemberRunnableAgent,
-  type MemberRuntimePermissionMode,
 } from './runtime.js';
 export { AgentServiceImpl, createAgentService } from './service.js';
 export {
@@ -142,12 +142,12 @@ export {
   type ListFilter,
   MAX_BINDING_HISTORY,
   MAX_MESSAGE_BYTES,
+  type MemberExecutionMember,
+  type MemberExecutionPort,
   type MemberMembership,
   type MemberPermissionState,
   type MemberPresence,
   type MemberRotation,
-  type MemberRuntimeMember,
-  type MemberRuntimePort,
   type MemberState,
   type MemberStatus,
   type MemberTurnResult,

@@ -27,6 +27,10 @@ import {
   type RunEvent,
   type RunHandle,
   type RunInterruptReason,
+  type RunOptions,
+  type RunRecord,
+  type RunRecordStore,
+  RunResumeError,
   type RunStatus,
   type RuntimePermissionConfig,
   type ScheduledTask,
@@ -94,8 +98,8 @@ import {
   type ListFilter,
   MAX_BINDING_HISTORY,
   MAX_MESSAGE_BYTES,
+  type MemberExecutionMember,
   type MemberPermissionState,
-  type MemberRuntimeMember,
   type MemberState,
   type MemberStatus,
   type MemberTurnResult,
@@ -215,7 +219,7 @@ interface ExecutionUnitEntry {
   createdAt: number;
   lastActiveAt: number;
   retired: boolean;
-  runtimeMember: MemberRuntimeMember;
+  runtimeMember: MemberExecutionMember;
   /** 预算 block 留在 mailbox 的消息；正常消息 submit 后即移出 */
   pending: AgentMessage[];
   /** 已提交给 scheduler、尚未开始执行的 run */
@@ -496,6 +500,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly pendingBindingLeases = new Map<string, LeaseGrant>();
   /** compactFork：父 transcript 读取 / 子 session 种子写入 */
   private readonly eventLog: SessionEventLogPort | undefined;
+  /** Stage 4：成员 run durable 记录；resumeRun 的加载端口 */
+  private readonly runStore: RunRecordStore | undefined;
   /** 0.32：持久化收件箱；有 `dataDir` 时唯一实例，否则 undefined（行为不变） */
   private readonly inbox: AgentInboxStore | undefined;
   /** AgentService 的 body registry：agentId → bindingId → ExecutionUnitEntry（含已退役直到清理） */
@@ -567,6 +573,7 @@ export class AgentServiceImpl implements AgentService {
     this.leaseService = options.leaseService;
     this.summarizer = options.summarizer;
     this.eventLog = options.eventLog;
+    this.runStore = options.runStore;
 
     const dataDir = options.dataDir;
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
@@ -1154,7 +1161,7 @@ export class AgentServiceImpl implements AgentService {
         throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
       }
     }
-    const runtimeMember: MemberRuntimeMember = {
+    const runtimeMember: MemberExecutionMember = {
       ...toRuntimeMember(record),
       session_id: body.bindingId,
       ...(grant !== undefined ? { binding_lease: grant } : {}),
@@ -1800,22 +1807,7 @@ export class AgentServiceImpl implements AgentService {
     this.updateAgentState(record.id);
     this.scheduleSnapshot();
     const handle = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
-    handle.cancelHandler = (reason) => {
-      try {
-        // 0.32-D：打断必须让 core 发出 `run.cancelled` reason=`interrupt`；
-        // 其它取消路径（close / rotate / drain）保持 `user`。
-        const interruptReason: RunInterruptReason =
-          this.interruptReasons.get(handle.id) ?? (reason === 'interrupt' ? 'interrupt' : 'user');
-        this.interruptReasons.delete(handle.id);
-        this.runtime.cancel(entry.runtimeMember, interruptReason);
-      } catch (error) {
-        this.logger.warn('agent.cancel.failed', {
-          member_id: record.id,
-          session_id: entry.bindingId,
-          error: errorText(error),
-        });
-      }
-    };
+    this.bindRunCancelHandler(entry, handle);
     // 0.32：消息真正作为 run input 开始前标记 consumed（inbox 至多注入一次）。
     // startup 消息不在 inbox 里，markConsumed 对未知 id 无操作。
     await this.inbox?.markConsumed(record.id, [message.id], entry.bindingId);
@@ -1902,6 +1894,197 @@ export class AgentServiceImpl implements AgentService {
     this.updateAgentState(record.id, outcome);
     this.scheduleSnapshot();
     this.settleHandle(handle, outcome, failure, result?.content);
+  }
+
+  /**
+   * Stage 4（内部装配，不暴露为 RPC）：按 run_id 恢复成员的一轮 run。
+   *
+   * 装配层先加载 RunRecord 并按 `agent_id` 路由到这里；本方法再经 scheduler 的
+   * session 串行键提交，复用 `ExecutionUnitRunHandle` 的 active run 记账与取消路由，
+   * 不另造队列。`run_not_found` / `agent_not_found` / `member_execution_not_found`
+   * 是稳定错误码。
+   */
+  async resumeRun(runId: string, opts?: RunOptions): Promise<string> {
+    await this.ready;
+    if (this.runStore === undefined) {
+      throw new RunResumeError('run_store_required', runId);
+    }
+    const record = await this.runStore.load(runId);
+    if (record === null) {
+      throw new RunResumeError('run_not_found', runId);
+    }
+    const agentId = record.agent_id;
+    const memberRecord = agentId !== undefined ? this.registry.get(agentId) : undefined;
+    if (memberRecord === undefined) {
+      throw new RunResumeError('agent_not_found', runId);
+    }
+    // 重启后 entry 尚未重建：按已有 binding 惰性 spawn，不注入用户消息、不走 admit。
+    const entry = await this.resumableEntry(memberRecord, record.session_id);
+    if (entry === undefined || !entry.spawned || this.runtime.resumeRun === undefined) {
+      throw new Error(`member_execution_not_found: ${record.session_id}`);
+    }
+    const handle = await this.submitResumeRun(memberRecord, entry, record, opts);
+    return handle.result;
+  }
+
+  /**
+   * 为 resume 取/重建**已存在** binding 的 entry。
+   *
+   * 不复用 `ensureExecutionUnit`：后者对未知 session 会惰性 `createBinding`，
+   * 那等于把一条旧 run 复活成新 body。resume 只允许命中当前 / rotate 窗口内
+   * 的 binding；已退役或未知 session 分别保留稳定错误 `session is retired` /
+   * `member_execution_not_found`。重启后 entry 不存在时按原 binding 重建并 spawn。
+   */
+  private async resumableEntry(
+    record: MemberRecord,
+    sessionId: string,
+  ): Promise<ExecutionUnitEntry | undefined> {
+    const body =
+      record.binding?.bindingId === sessionId
+        ? record.binding
+        : record.retiringBinding?.bindingId === sessionId
+          ? record.retiringBinding
+          : undefined;
+    if (body === undefined) {
+      if (this.registry.isRetiredSession(sessionId)) {
+        throw new AgentError('invalid_input', `session is retired: ${sessionId}`);
+      }
+      return undefined;
+    }
+    if (body.retiredAt !== undefined) {
+      throw new AgentError('invalid_input', `session is retired: ${sessionId}`);
+    }
+    let entry = this.findEntry(record.id, sessionId);
+    if (entry !== undefined && (entry.retired || entry.closing)) return undefined;
+    if (entry === undefined) {
+      entry = await this.entryFor(record, body);
+      entry.primary = body.primary;
+    }
+    // 幂等：已 spawn 且 presence 非 gone 时直接返回；否则（含重启后 gone）重建。
+    await this.ensureRuntime(entry);
+    return entry;
+  }
+
+  /** 提交 resumable run；与 `submitMessage` 共用 scheduler / queuedRuns 记账。 */
+  private async submitResumeRun(
+    record: MemberRecord,
+    entry: ExecutionUnitEntry,
+    runRecord: RunRecord,
+    opts: RunOptions | undefined,
+  ): Promise<RunHandle> {
+    if (this.draining || entry.closing || entry.retired) {
+      throw new AgentError('member_closed', `member_closed: ${record.id}`);
+    }
+    const runId = runRecord.run_id;
+    entry.queuedRuns.add(runId);
+    const task: ScheduledTask = {
+      agent: { id: record.id } as AgentHandle,
+      runId,
+      sessionId: entry.bindingId,
+      // resume 不注入新的用户消息；executor 直接驱动 EU.resumeRun(record)。
+      input: '',
+      executor: async (scheduledRunId) => {
+        entry.queuedRuns.delete(scheduledRunId);
+        return this.startExecutionUnitResume(record, entry, runRecord, scheduledRunId, opts);
+      },
+    };
+    try {
+      return await this.scheduler.submit(task);
+    } catch (error) {
+      entry.queuedRuns.delete(runId);
+      throw error;
+    }
+  }
+
+  /** scheduler executor：开始一次 resumable run；active run 记账与普通 run 一致。 */
+  private async startExecutionUnitResume(
+    record: MemberRecord,
+    entry: ExecutionUnitEntry,
+    runRecord: RunRecord,
+    runId: string,
+    opts: RunOptions | undefined,
+  ): Promise<RunHandle> {
+    if (entry.retired || entry.closing) {
+      const cancelled = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
+      cancelled.markCancelled('body closed');
+      return cancelled;
+    }
+    entry.state = 'running';
+    entry.lastActiveAt = this.now();
+    entry.active = { runId, replied: false };
+    this.registry.touchBinding(record.id, entry.bindingId, entry.lastActiveAt);
+    this.updateAgentState(record.id);
+    this.scheduleSnapshot();
+    const handle = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
+    this.bindRunCancelHandler(entry, handle);
+    void this.executeExecutionUnitResume(record, entry, runRecord, handle, opts);
+    return handle;
+  }
+
+  /** 执行并收口一次 resume；异常收口为 failed，不让后台任务产生未处理 rejection。 */
+  private async executeExecutionUnitResume(
+    record: MemberRecord,
+    entry: ExecutionUnitEntry,
+    runRecord: RunRecord,
+    handle: ExecutionUnitRunHandle,
+    opts: RunOptions | undefined,
+  ): Promise<void> {
+    const resume = this.runtime.resumeRun;
+    let content: string | undefined;
+    let failure: string | undefined;
+    try {
+      if (resume === undefined) {
+        throw new Error(`member_execution_not_found: ${runRecord.session_id}`);
+      }
+      content = await resume.call(this.runtime, runRecord, opts);
+    } catch (error) {
+      if (!handle.cancelRequested && !entry.closing) {
+        failure = errorText(error);
+        this.logger.error('agent.run.failed', {
+          member_id: record.id,
+          session_id: entry.bindingId,
+          run_id: handle.id,
+          error: failure,
+        });
+      }
+    }
+    entry.active = undefined;
+    entry.state = 'idle';
+    entry.lastActiveAt = this.now();
+    this.registry.touchBinding(record.id, entry.bindingId, entry.lastActiveAt);
+    const current = this.registry.get(record.id);
+    const cancelled = handle.cancelRequested;
+    const outcome = cancelled ? 'cancelled' : failure !== undefined ? 'failed' : 'completed';
+    if (entry.retired || !current || current.state === 'closed') {
+      this.updateAgentState(record.id);
+      this.scheduleSnapshot();
+      if (entry.retired) await this.disposeEntry(entry);
+      this.settleHandle(handle, outcome, failure, content);
+      return;
+    }
+    this.updateAgentState(record.id, outcome);
+    this.scheduleSnapshot();
+    this.settleHandle(handle, outcome, failure, content);
+  }
+
+  /** 运行 handle 的取消路由；普通 run 与 resume 共用。 */
+  private bindRunCancelHandler(entry: ExecutionUnitEntry, handle: ExecutionUnitRunHandle): void {
+    handle.cancelHandler = (reason) => {
+      try {
+        // 0.32-D：打断必须让 core 发出 `run.cancelled` reason=`interrupt`；
+        // 其它取消路径（close / rotate / drain）保持 `user`。
+        const interruptReason: RunInterruptReason =
+          this.interruptReasons.get(handle.id) ?? (reason === 'interrupt' ? 'interrupt' : 'user');
+        this.interruptReasons.delete(handle.id);
+        this.runtime.cancel(entry.runtimeMember, interruptReason);
+      } catch (error) {
+        this.logger.warn('agent.cancel.failed', {
+          member_id: entry.agentId,
+          session_id: entry.bindingId,
+          error: errorText(error),
+        });
+      }
+    };
   }
 
   private settleHandle(
@@ -3404,7 +3587,7 @@ export class AgentServiceImpl implements AgentService {
       // 单 body 不变量下只有一具，但 rotate 窗口内可能有两具，两具都要跟上。
       let applied = 0;
       for (const entry of this.liveEntries(target.id)) {
-        const runtimeMember: MemberRuntimeMember = {
+        const runtimeMember: MemberExecutionMember = {
           ...entry.runtimeMember,
           role: target.role,
         };

@@ -10,14 +10,10 @@
 import {
   createAgentService,
   createAgentTool,
-  createInProcessMemberRuntime,
+  createMemberExecutionHost,
 } from '@vessel-agent/agent';
 import { loadConfig, resolveTenantToolPolicy } from '../packages/config/src/index';
-import {
-  InProcessScheduler,
-  MemoryLLMProvider,
-  MemoryPluginHost,
-} from '../packages/core/src/index';
+import { InProcessScheduler, MemoryPluginHost, Runtime } from '../packages/core/src/index';
 import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
@@ -75,10 +71,10 @@ export async function listTools(): Promise<ToolsListing> {
 
   const pluginNamesWithFactories = [...pluginNames];
   if (agentEnabled) {
-    // 只注册工具 schema；不 spawn 成员、不落 snapshot。
+    // 只注册工具 schema；不 spawn 成员、不落 snapshot，故 Runtime 无需注册 profile。
     const model = config.agent?.model ?? config.provider?.model ?? 'mock-model';
-    const runtime = createInProcessMemberRuntime({
-      providerFactory: () => new MemoryLLMProvider(),
+    const runtime = createMemberExecutionHost({
+      runtime: new Runtime(),
       model,
       pluginHost: host,
     });
