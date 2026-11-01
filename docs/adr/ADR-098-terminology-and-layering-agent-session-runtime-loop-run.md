@@ -25,7 +25,7 @@ tags: [agent, session, runtime, loop, run, layering, terminology, control-plane,
   |---|---|---|
   | **Agent** | 持久身份 + 能力档位 + membership/visibility 指针；不持有会话绑定、执行状态或 run | `AgentRecord`（原 `MemberRecord`） |
   | **Session** | 持久对话事实：append-only 事件 + 元数据壳（标题、预览、seq 游标、时间） | `SessionEventLog` + `SessionInfo` |
-  | **Runtime** | 嵌入式执行框架/工厂：provider 注册表、工具集、插件引用、loop 模板；无状态、per-node、不绑定任何 Session | 新 `Runtime` / `RuntimeFactory` |
+  | **Runtime** | 嵌入式执行框架/工厂：provider 注册表、工具集、插件引用、loop 模板；无状态、per-node、不绑定任何 Session | `Runtime`（无状态工厂，别名 `RuntimeFactory`） |
   | **Loop** | Run 内的纯函数/闭包：LLM 迭代编排（请求组装、工具 pipeline、终止判定）；零策略、无跨 run 状态、不碰持久化 | `ToolCallingLoop` |
   | **Run** | 一次执行：瞬时对象 + 增量 checkpoint 的 `RunRecord`；拥有 `WorkingContext` | `Run` + `RunRecord`（原 `RunCheckpoint`） |
 
@@ -37,7 +37,7 @@ tags: [agent, session, runtime, loop, run, layering, terminology, control-plane,
   | 词 | 定义 |
   |---|---|
   | **ControlPlane** | 管理面：Agent / Session / Binding / Team / Inbox / Conversation 生命周期、准入、路由、Scheduler、LeaseService |
-  | **BindingRecord** | Agent ↔ Session 的 durable 绑定：epoch / primary / retired / 历史；**不存活跃 lease**，只保留 leaseId 与最后 renew 快照用于追溯 |
+  | **BindingRecord** | Agent ↔ Session 的 durable 绑定：epoch / primary / retired / 历史；**不持有有效、可用于续租的活跃租约**；仅留存 leaseId 与最后 renew 快照用于审计追溯 |
   | **ExecutionUnit** | per-session 活执行对象（原 `AgentRuntime`）；持有 Session 引用、只读事件句柄、lease 句柄、`activeRun`、abort |
   | **WorkingContext** | Run 从 `SessionEventLog` 生成的可重建窗口（消息切片、token 预算、压缩标记、检索游标）；**per-run 瞬时，不落库** |
   | **LeaseService** | 单节点本地租约服务；颁发/续租/回收 `BindingLease` + `SessionLease`；租约带 tenant 标签 |
@@ -93,7 +93,7 @@ tags: [agent, session, runtime, loop, run, layering, terminology, control-plane,
   | **C1** | **RunRecord 增量 checkpoint**：run 开始写 `status=running`；LLM/工具安全点更新 `event_cursor / iteration / usage`；结束 finalize。`WorkingContext` 不落库，resume 从 `SessionEventLog` + cursor 重建。 |
   | **C2** | **两级 lease**：`BindingLease`（binding_id，ControlPlane 授权 / LeaseService 颁发 / EU 持有并续租，归属保活）→ `SessionLease`（session_id，EU 在 Run 前获取，独占/append fencing）。顺序 binding → session；EU retire 时逆序释放；Run 不访问 LeaseService；读路径不需要租约。 |
   | **C3** | **`ToolCallingLoop` = Run 内纯函数/闭包**：不导出、无策略、不持租约/持久化；复杂时可降级为 Run 内局部类，禁止提升到 EU 方法。 |
-  | **C4** | **`AgentRuntime` 整体改名 `ExecutionUnit`**；新建 `Runtime`（`RuntimeFactory`）无状态工厂；代码中不再出现 `AgentRuntime`。 |
+  | **C4** | **`AgentRuntime` 整体改名 `ExecutionUnit`**；新建 `Runtime`（无状态工厂，别名 `RuntimeFactory`）；代码中不再出现 `AgentRuntime`。 |
 
   C1 之所以把 checkpoint 前置到 run 开始，是因为「durable run / run 可 resume」这一既有口径要求
   crash 后能找到 run 记录；只在结束时写与 resume 直接冲突。C2 的授权者（ControlPlane）与持有者
@@ -106,7 +106,8 @@ tags: [agent, session, runtime, loop, run, layering, terminology, control-plane,
      **`SessionEventLog` / `RunRecord` 的唯一写者 = Run。**
   2. **EU → SessionEventLog 只读**：EU 只持 session 引用 / 只读句柄；不追加事实、不写 checkpoint。
   3. **租约链路**：ControlPlane 授权 → LeaseService 颁发 → ExecutionUnit 持有并续租；Run 不接触
-     LeaseService；`RunRecord` 记 `fencingToken`，由 EU 启动 Run 时注入。
+     LeaseService；`RunRecord` 记 `fencingToken`，由 EU 启动 Run 时注入。**fencingToken 来自 EU
+     当前持有的有效 SessionLease**，不是 Run 自行生成。
   4. **联邦逻辑边 vs 物理边**：图中 `TeamService A ↔ TeamService B` 是**逻辑边**；物理路径 =
      `TeamService A → federation client → Gateway B → ControlPlane B admit → TeamService B`。
 
@@ -128,7 +129,7 @@ tags: [agent, session, runtime, loop, run, layering, terminology, control-plane,
   | **1b** | 抽 `ToolCallingLoop`（Run 内闭包） | 无（等价搬移） |
   | **2** | 类型拆分：`RunState` → Session 元数据 + `RunRecord`；`SessionBackend` 拆端口；`ContextManager` → `WorkingContext`；resume 拆词 | 有 |
   | **3** | 生命周期：rotate / restart / compactFork / fork；两级 lease；`serialKey` → `session_id` | 有 |
-  | **4** | Runtime 框架化：新增 `Runtime` / `RuntimeFactory`、Runtime 与 EU 分离、`WorkingContext` per Run、成员 run durable | 有 |
+  | **4** | Runtime 框架化：新增 `Runtime`（无状态工厂，别名 `RuntimeFactory`）、Runtime 与 EU 分离、`WorkingContext` per Run、成员 run durable | 有 |
 
   0.34 顺序：Stage 0 → 1a → 1b → S2 → S1 → S5；0.35 续 Stage 2 → 3 → 4 与上下文 v2 B。
 
