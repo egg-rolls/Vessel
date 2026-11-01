@@ -18,12 +18,12 @@
 
 import type {
   Logger,
-  RunCheckpoint,
-  RunState,
-  RunStore,
-  SessionBackend,
+  RunRecord,
+  RunRecordStore,
   SessionEventLog,
   SessionInfo,
+  SessionState,
+  SessionStore,
 } from '../packages/core/src/index';
 import {
   acquireSessionLock,
@@ -45,9 +45,9 @@ const TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([
 export interface SessionLivenessContext {
   tenantDir: string;
   /** 原始 backend（与调用方暴露的是同一实例） */
-  session: SessionBackend;
+  session: SessionStore;
   eventLog?: SessionEventLog;
-  runStore?: RunStore;
+  runStore?: RunRecordStore;
   logger: Logger;
   now?: () => number;
   hostname?: string;
@@ -102,13 +102,16 @@ export async function reconcileSession(
     if (sessionLock.state === 'live' || sessionLock.state === 'unparseable') return 'live';
 
     // 2) resume 只持 run 锁 → run 锁活着同样跳过。
-    const runLock: SessionLockInspection = await inspectSessionLock(
-      ctx.tenantDir,
-      'run',
-      initial.run_id,
-      opts,
-    );
-    if (runLock.state === 'live' || runLock.state === 'unparseable') return 'live';
+    const runId = initial.last_run_id;
+    if (runId !== undefined) {
+      const runLock: SessionLockInspection = await inspectSessionLock(
+        ctx.tenantDir,
+        'run',
+        runId,
+        opts,
+      );
+      if (runLock.state === 'live' || runLock.state === 'unparseable') return 'live';
+    }
 
     // 3) 抢占 session 写锁；冲突说明别的实例正在处理。
     let lock: Awaited<ReturnType<typeof acquireSessionLock>>;
@@ -129,27 +132,42 @@ export async function reconcileSession(
       const state = await ctx.session.load(sessionId);
       if (state === null || state.status !== 'running') return 'ok';
 
-      // 5) 游标：已有本 run 的终态事件 → 不追加，只同步；否则追加一条 process_lost。
+      // 5) 最近 RunRecord：run 级进度只读这里，不回溯到 SessionState。
+      const runId = state.last_run_id;
+      let record: RunRecord | null = null;
+      if (ctx.runStore !== undefined && runId !== undefined) {
+        try {
+          record = await ctx.runStore.load(runId);
+        } catch (error) {
+          ctx.logger.warn(`session liveness: RunRecord load failed: ${errorText(error)}`, {
+            session_id: sessionId,
+            run_id: runId,
+            error: errorText(error),
+          });
+        }
+      }
+
+      // 6) 游标：已有本 run 的终态事件 → 不追加，只同步；否则追加一条 process_lost。
       let cursor: number | undefined;
-      if (ctx.eventLog !== undefined) {
+      if (ctx.eventLog !== undefined && runId !== undefined) {
         const records = await ctx.eventLog.read(sessionId);
         const hasTerminal = records.some(
-          (record) => record.run_id === state.run_id && TERMINAL_EVENT_TYPES.has(record.type),
+          (entry) => entry.run_id === runId && TERMINAL_EVENT_TYPES.has(entry.type),
         );
         if (hasTerminal) {
-          cursor = records.reduce((max, record) => Math.max(max, record.seq), 0);
+          cursor = records.reduce((max, entry) => Math.max(max, entry.seq), 0);
         } else {
           const ts = now();
           const appended = await ctx.eventLog.append({
             session_id: sessionId,
-            run_id: state.run_id,
+            run_id: runId,
             ts,
             type: 'run.failed',
             data: {
-              run_id: state.run_id,
+              run_id: runId,
               session_id: sessionId,
               error: RUN_LOST_ERROR,
-              duration_ms: Math.max(0, ts - state.started_at),
+              duration_ms: Math.max(0, ts - (record?.created_at ?? state.created_at)),
               error_code: 'process_lost',
               category: 'internal',
               phase: 'run',
@@ -162,51 +180,49 @@ export async function reconcileSession(
         cursor = state.derived_upto_seq;
       }
 
-      // 6) session 终态；updated_at 必须显式写（FileSessionBackend 会复用已加载值）。
+      // 7) SessionState 终态：只写派生字段 status / updated_at / derived_upto_seq。
+      //    updated_at 必须显式写（FileSessionStore 会复用已加载值）。
       const completedAt = now();
-      const failed: RunState = {
+      const failed: SessionState = {
         ...state,
-        status: 'failed',
-        completed_at: completedAt,
+        status: 'interrupted',
         updated_at: completedAt,
-        error: RUN_LOST_ERROR,
         ...(cursor !== undefined ? { derived_upto_seq: cursor } : {}),
       };
       await ctx.session.save(failed);
 
-      // 7) index 同步（best-effort 语义由调用方决定；这里失败即上报 error）。
+      // 8) index 同步（best-effort 语义由调用方决定；这里失败即上报 error）。
       if (ctx.eventLog !== undefined) {
         await ctx.eventLog.updateIndex(sessionId, {
-          status: 'failed',
+          status: 'interrupted',
           updated_at: completedAt,
           ...(cursor !== undefined ? { event_count: cursor, derived_upto_seq: cursor } : {}),
         });
       }
 
-      // 8) durable checkpoint：running → interrupted，保留 resume 能力（best-effort）。
-      if (ctx.runStore !== undefined) {
+      // 9) RunRecord 受控例外（Q1）：仅 running → interrupted。
+      //    只改 status / error / error_envelope / updated_at / event_cursor；
+      //    不写 usage / iteration / branch / agent_id。
+      if (ctx.runStore !== undefined && record !== null && record.status === 'running') {
         try {
-          const checkpoint = await ctx.runStore.load(state.run_id);
-          if (checkpoint !== null && checkpoint.status === 'running') {
-            const interrupted: RunCheckpoint = {
-              ...checkpoint,
-              status: 'interrupted',
-              error: RUN_LOST_ERROR,
-              error_envelope: {
-                error_code: 'process_lost',
-                category: 'internal',
-                phase: 'run',
-                retryable: false,
-              },
-              updated_at: completedAt,
-              event_cursor: cursor ?? checkpoint.event_cursor,
-            };
-            await ctx.runStore.save(interrupted);
-          }
+          const interrupted: RunRecord = {
+            ...record,
+            status: 'interrupted',
+            error: RUN_LOST_ERROR,
+            error_envelope: {
+              error_code: 'process_lost',
+              category: 'internal',
+              phase: 'run',
+              retryable: false,
+            },
+            updated_at: completedAt,
+            event_cursor: cursor ?? record.event_cursor,
+          };
+          await ctx.runStore.save(interrupted);
         } catch (error) {
-          ctx.logger.warn(`session liveness: checkpoint update failed: ${errorText(error)}`, {
+          ctx.logger.warn(`session liveness: RunRecord update failed: ${errorText(error)}`, {
             session_id: sessionId,
-            run_id: state.run_id,
+            ...(runId !== undefined ? { run_id: runId } : {}),
             error: errorText(error),
           });
         }
@@ -268,15 +284,15 @@ export async function reconcileStaleSessions(
  * 修复失败不影响读（上层已把错误收进 `reconcileSession`）。
  */
 export function withLivenessRepair(
-  backend: SessionBackend,
+  backend: SessionStore,
   ctx: SessionLivenessContext,
-): SessionBackend {
+): SessionStore {
   return {
-    async load(sessionId: string): Promise<RunState | null> {
+    async load(sessionId: string): Promise<SessionState | null> {
       await reconcileSession(sessionId, ctx);
       return backend.load(sessionId);
     },
-    save(state: RunState): Promise<void> {
+    save(state: SessionState): Promise<void> {
       return backend.save(state);
     },
     delete(sessionId: string): Promise<void> {

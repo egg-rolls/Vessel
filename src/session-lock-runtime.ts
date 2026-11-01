@@ -1,7 +1,7 @@
 /**
  * RunnableAgent 的 session / run 写锁包装（0.15 DESIGN-0.14 §1.2）。
  *
- * 每次 `run()` 取目标 session 的写锁，`resume()` 取 run 锁；
+ * 每次 `run()` 取目标 session 的写锁，`resumeRun()` 取 run 锁；
  * REPL 进程级长锁由 bootstrap 另行持有，同进程重复获取由 session-lock 的引用计数消化。
  *
  * @module vessel/session-lock-runtime
@@ -16,7 +16,7 @@ export interface SessionWriteLockOptions {
   enabled?: boolean;
 }
 
-/** 给 runtime 的 run / resume 套上跨进程写锁。 */
+/** 给 runtime 的 run / resumeRun 套上跨进程写锁。 */
 export function withSessionWriteLock(
   runtime: RunnableAgent,
   options: SessionWriteLockOptions,
@@ -41,12 +41,12 @@ export function withSessionWriteLock(
     },
   };
 
-  if (typeof runtime.resume === 'function') {
-    const resume = runtime.resume.bind(runtime);
-    wrapped.resume = async (runId: string, opts?: RunOptions): Promise<string> => {
+  if (typeof runtime.resumeRun === 'function') {
+    const resumeRun = runtime.resumeRun.bind(runtime);
+    wrapped.resumeRun = async (runId: string, opts?: RunOptions): Promise<string> => {
       const lock = await acquireSessionLock({ tenantDir, kind: 'run', id: runId });
       try {
-        return await resume(runId, opts);
+        return await resumeRun(runId, opts);
       } finally {
         await lock.release();
       }

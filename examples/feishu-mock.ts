@@ -8,11 +8,11 @@
 
 import type { VesselConfig } from '../packages/config/src/index';
 import {
-  MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
   MemoryPluginHost,
-  MemorySessionBackend,
+  MemorySessionStore,
+  MemoryWorkingContext,
 } from '../packages/core/src/index';
 import type {
   FeishuIncomingMessage,
@@ -56,9 +56,9 @@ async function main(): Promise<number> {
     provider: new MemoryLLMProvider(),
     model: 'mock-model',
     pluginHost: new MemoryPluginHost(),
-    session: new MemorySessionBackend(),
+    session: new MemorySessionStore(),
     events: new MemoryEventStream(),
-    contextFactory: () => new MemoryContextManager(),
+    contextFactory: () => new MemoryWorkingContext(),
     transport,
     loadModule: async () => import('../plugins/im/feishu/src/index'),
   });

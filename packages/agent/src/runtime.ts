@@ -12,28 +12,27 @@
 import { randomUUID } from 'node:crypto';
 import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
-  type ContextManager,
   type EventStream,
   ExecutionUnit,
   type ExecutionUnitOptions,
   type LLMProvider,
   type Logger,
-  MemoryContextManager,
   MemoryEventStream,
   MemoryPluginHost,
+  MemoryWorkingContext,
   type Message,
   noopLogger,
   type PluginHost,
   type RunEvent,
   type RunInterruptReason,
   type RunnableAgent,
-  type RunOptions,
   type RuntimePermissionConfig,
   type SelfCardOptions,
   type TerminationPolicy,
   type ToolDefinition,
   type Usage,
   type UsageLimits,
+  type WorkingContext,
 } from '@vessel-agent/core';
 import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './inbox.js';
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
@@ -99,7 +98,7 @@ const MAX_PENDING_NOTICE_MEMBERS = 100;
 /**
  * temporary 成员的主动压缩阈值（0.28 D6/D7）。
  *
- * core 的 `MemoryContextManager` 把阈值默认成 0.95 且不可见，而角色策略层在这里
+ * core 的 `MemoryWorkingContext` 把阈值默认成 0.95 且不可见，而角色策略层在这里
  * **不改 core** 的前提下需要自己判断「这次要不要主动压缩」，所以这一个数字被复制。
  * 代价是与 core 有漂移风险；缓解：core 一旦暴露 `compactThreshold` getter，本常量
  * 直接删掉改读 getter（`R4.compact` 探针把两边算出的判定放在一起对比，漂移会被它看见）。
@@ -107,17 +106,17 @@ const MAX_PENDING_NOTICE_MEMBERS = 100;
 const ROLE_COMPACT_THRESHOLD = 0.95;
 
 /**
- * 按角色包装 per-body `ContextManager`：**自动压缩开关可在活体上热切换**。
+ * 按角色包装 per-body `WorkingContext`：**自动压缩开关可在活体上热切换**。
  *
  * 为什么不是 spawn 时直接把 `autoCompact` 交给 core（0.28 之前的做法）：那是构造期
  * 配置，没有 setter。转正（`temporary → member`）要求「同一具 live body 不重建，
  * 但下一次 run 按新身份生效」，于是开关必须能在活体上翻转（契约 §5 / D6）。
  *
  * 分层不变：本类只接收**裸参数**（一个布尔），不认 `role`；角色语义仍留在本文件的
- * spawn（`role === 'temporary'`）与 `applyContextPolicy`。本类只使用 `ContextManager`
+ * spawn（`role === 'temporary'`）与 `applyContextPolicy`。本类只使用 `WorkingContext`
  * 接口上已有的方法，core 不知道这里存在。
  *
- * 内层 `MemoryContextManager` 恒以 `autoCompact: false` 构造，原因有两条：
+ * 内层 `MemoryWorkingContext` 恒以 `autoCompact: false` 构造，原因有两条：
  * - 真要把开关交给本类，内层就不能自己按阈值压缩（否则 `add()` 会绕过本类的开关，
  *   也就是 temporary 会在 `add()` 里被压缩 —— 正是契约禁止的）；
  * - 内层仍负责**硬兜底**：消息条数上限的摘要与移除在 `add()` 里独立于 `autoCompact`。
@@ -126,12 +125,12 @@ const ROLE_COMPACT_THRESHOLD = 0.95;
  * 同一轮内水位到阈值时，压缩发生在下一次请求之前而不是写入那一刻。结果一致，
  * 且这正是 core 在有 summarizer 时走的既有路径。
  */
-class RoleAwareContext implements ContextManager {
+class RoleAwareContext implements WorkingContext {
   /** 自动压缩是否开启；`setAutoCompact` 是唯一的写入口。 */
   private compacting: boolean;
 
   constructor(
-    private readonly inner: MemoryContextManager,
+    private readonly inner: MemoryWorkingContext,
     autoCompact: boolean,
   ) {
     this.compacting = autoCompact;
@@ -355,7 +354,7 @@ export interface InProcessMemberRuntimeOptions {
    */
   nodeId?: string;
   includeReasoning?: boolean;
-  /** tenant SessionBackend；同 session_id 可跨进程续接历史 */
+  /** tenant SessionStore；同 session_id 可跨进程续接历史 */
   session?: ExecutionUnitOptions['session'];
   /** tenant 会话事件日志（唯一真相源；存在时成员事件同样落盘） */
   eventLog?: ExecutionUnitOptions['eventLog'];
@@ -795,7 +794,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     // 主动压缩 —— 否则 `add()` 会绕过包装、在 temporary 上按阈值压缩。
     const policy = contextPolicyFor(member.role);
     const context = new RoleAwareContext(
-      new MemoryContextManager({ maxTokens: this.contextMaxTokens, autoCompact: false }),
+      new MemoryWorkingContext({ maxTokens: this.contextMaxTokens, autoCompact: false }),
       policy.autoCompact,
     );
     const runtime = await this.runtimeFactory({
@@ -891,6 +890,28 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     message: AgentMessage,
     scheduledRunId?: string,
   ): Promise<MemberTurnResult> {
+    return this.executeTurn(member, message, scheduledRunId, false);
+  }
+
+  /**
+   * Q5：按 session 历史启动一次新 run（`-r/--resume` 与 AgentService 的
+   * resume 准入路径显式走这里）。与 `runTurn` 共用调度、事件、终态逻辑；
+   * 唯一区别是 core 侧调用 `resumeSession(sessionId, input)` 而不是 `run`。
+   */
+  async resumeTurn(
+    member: MemberRuntimeMember,
+    message: AgentMessage,
+    scheduledRunId?: string,
+  ): Promise<MemberTurnResult> {
+    return this.executeTurn(member, message, scheduledRunId, true);
+  }
+
+  private async executeTurn(
+    member: MemberRuntimeMember,
+    message: AgentMessage,
+    scheduledRunId: string | undefined,
+    resume: boolean,
+  ): Promise<MemberTurnResult> {
     const entry = this.requireEntry(member);
     entry.started = true;
     entry.running = true;
@@ -919,10 +940,14 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       timestamp: Date.now(),
     };
     try {
-      const content = await entry.runtime.run(message.content, member.session_id, {
+      const turnOptions = {
         runId,
         messages: [...pendingNotices.map(noticeMessage), sourceMessage],
-      });
+      };
+      const content =
+        resume && entry.runtime.resumeSession !== undefined
+          ? await entry.runtime.resumeSession(member.session_id, message.content, turnOptions)
+          : await entry.runtime.run(message.content, member.session_id, turnOptions);
       return {
         content,
         outcome: 'completed',
@@ -936,54 +961,6 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       unsubscribe();
       // 取消 / 失败时可能仍停在等待：清掉挂起请求与 deadline，把状态还回 running，
       // 让 AgentService 能正常进入终态（应答随后到达时已无人等待）。
-      this.clearPending(entry);
-      if (entry.waiting) {
-        entry.waiting = false;
-        this.notifyPermissionState(member.id, member.session_id, 'running');
-      }
-      this.finishRun(member, entry);
-    }
-  }
-
-  /**
-   * 从 durable checkpoint 恢复（0.27）。checkpoint 的会话历史由 core 读取；
-   * 这里只注入 pending notice / 调用方附加消息，并回连同 run 终态。
-   */
-  async resume(
-    member: MemberRuntimeMember,
-    runId: string,
-    opts?: RunOptions,
-  ): Promise<MemberTurnResult> {
-    const entry = this.requireEntry(member);
-    const resume = entry.runtime.resume?.bind(entry.runtime);
-    if (resume === undefined) throw new Error('member runtime does not support resume');
-    entry.started = true;
-    entry.running = true;
-    const pendingNotices = this.takePendingNotices(member.id);
-    let terminal: 'completed' | 'failed' | 'cancelled' | undefined;
-    let usage: Usage | undefined;
-    const unsubscribe = entry.runtime.events.subscribe((event: RunEvent) => {
-      if (event.run_id !== runId) return;
-      if (event.type === 'run.completed') {
-        terminal = 'completed';
-        usage = readUsage(event.data);
-      } else if (event.type === 'run.cancelled') {
-        terminal = 'cancelled';
-      } else if (event.type === 'run.failed') {
-        terminal = 'failed';
-      }
-    });
-    try {
-      const content = await resume(runId, {
-        ...opts,
-        messages: [...pendingNotices.map(noticeMessage), ...(opts?.messages ?? [])],
-      });
-      return { content, outcome: 'completed', ...(usage !== undefined ? { usage } : {}) };
-    } catch (error) {
-      if (terminal === 'cancelled') return { outcome: 'cancelled' };
-      throw error;
-    } finally {
-      unsubscribe();
       this.clearPending(entry);
       if (entry.waiting) {
         entry.waiting = false;

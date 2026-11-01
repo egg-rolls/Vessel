@@ -7,13 +7,13 @@
  */
 
 import type {
-  ContextManager,
   EventStream,
   LLMProvider,
   Plugin,
   PluginHost,
-  RunStore,
-  SessionBackend,
+  RunRecordStore,
+  SessionStore,
+  WorkingContext,
 } from '../packages/core/src/index';
 
 // ── evals ───────────────────────────────────────
@@ -140,11 +140,11 @@ export interface FeishuChannelOptionsLike {
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
   pluginHost?: PluginHost;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  session?: SessionBackend;
+  session?: SessionStore;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  contextFactory?: () => ContextManager;
+  contextFactory?: () => WorkingContext;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  runStore?: RunStore;
+  runStore?: RunRecordStore;
   /** @deprecated 0.27：并发由 tenant scheduler 统一裁决；插件不再使用。 */
   maxConcurrency?: number;
   /** @deprecated 0.27：并发由 tenant scheduler 统一裁决；插件不再使用。 */

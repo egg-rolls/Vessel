@@ -19,7 +19,7 @@ paths: [apps/web/**, packages/serve/src/gateway/**]
 
 ### 会话切换
 
-`GatewayOptions.context` 存在且目标 session 与当前不同时：先 `context.setSessionId(target)` 再 `context.clear()`，随后 `runtime.run` 从 `SessionBackend` 重载目标会话历史。没有 `context` 时无法保证隔离（需装配层传入）。
+`GatewayOptions.context` 存在且目标 session 与当前不同时：先 `context.setSessionId(target)` 再 `context.clear()`，随后 `runtime.run` 从 `SessionStore` 重载目标会话历史。没有 `context` 时无法保证隔离（需装配层传入）。
 
 <a id="web"></a>
 

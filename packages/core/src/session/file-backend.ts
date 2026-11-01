@@ -1,25 +1,36 @@
 /**
- * File-based Session Backend 实现
+ * File-based SessionStore 实现
  *
- * 将 Run 状态保存为 JSON 文件，每会话一个文件。
+ * 将会话壳（SessionState）保存为 JSON 文件，每会话一个文件。
  * 0.5：同会话写入串行 + temp/rename 原子写 + session_id 路径编码。
+ *
+ * 磁盘格式沿用旧键（`started_at` / `branch` / `run_id` / `completed_at` ...
+ * 作为镜像），新旧 reader 都能解析；读取时映射回 `SessionState`。
  *
  * @module @vessel-agent/core/session
  */
 
 import { mkdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
+import type { Message } from '../types/provider.js';
+import type { RunUsage } from '../types/run-record-store.js';
+import type {
+  LegacyRunSnapshot,
+  SessionInfo,
+  SessionState,
+  SessionStatus,
+  SessionStore,
+} from '../types/session.js';
 import { atomicWrite } from './atomic-write.js';
-import { deriveSessionMeta, toSessionInfo } from './session-backend.js';
+import { deriveSessionMeta, toSessionInfo } from './session-store.js';
 
 /**
- * 文件 Session Backend 实现
+ * 文件 SessionStore 实现
  *
  * 存储格式：`{basePath}/{encodeURIComponent(session_id)}.json`
  * 旧数据（未编码文件名）在 load 时回退读取。
  */
-export interface FileSessionBackendOptions {
+export interface FileSessionStoreOptions {
   /** 配置后：写入补齐 tenant_id，读取过滤其它 tenant 的会话 */
   tenantId?: string;
 }
@@ -47,7 +58,7 @@ function isNotFound(error: unknown): boolean {
 }
 
 /** 单个文件的读取结果；ENOENT 之外的可读/解析错误直接抛 SessionCorruptError */
-type ReadStateResult = { found: true; state: RunState } | { found: false };
+type ReadStateResult = { found: true; state: SessionState } | { found: false };
 
 /** 归属 tenant：缺失记 default；非对象 JSON 不读取字段 */
 function ownerOf(value: unknown): string {
@@ -56,7 +67,56 @@ function ownerOf(value: unknown): string {
   return tenantId === undefined || tenantId === null ? 'default' : String(tenantId);
 }
 
-export class FileSessionBackend implements SessionBackend {
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined;
+}
+
+/** 旧 JSON 顶层 run 字段 -> SessionState.legacy_run（一版兼容） */
+function toLegacyRun(raw: Record<string, unknown>): LegacyRunSnapshot | undefined {
+  const completed_at = optionalNumber(raw.completed_at);
+  const usage =
+    typeof raw.usage === 'object' && raw.usage !== null ? (raw.usage as RunUsage) : undefined;
+  const error = optionalString(raw.error);
+  if (completed_at === undefined && usage === undefined && error === undefined) return undefined;
+  return {
+    ...(completed_at !== undefined ? { completed_at } : {}),
+    ...(usage !== undefined ? { usage } : {}),
+    ...(error !== undefined ? { error } : {}),
+  };
+}
+
+/**
+ * 磁盘 JSON -> SessionState。
+ *
+ * 旧键 `started_at` / `branch` / `run_id` / `completed_at` / `usage` / `error`
+ * 分别映射到 `created_at` / `created_on_branch` / `last_run_id` / `legacy_run`；
+ * 不做形状校验（与旧实现一致），`messages` 非数组时降级为 undefined。
+ */
+function toSessionState(value: unknown): SessionState {
+  const raw = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
+  const createdAt = optionalNumber(raw.created_at) ?? optionalNumber(raw.started_at) ?? 0;
+  const updatedAt = optionalNumber(raw.updated_at) ?? createdAt;
+  return {
+    session_id: raw.session_id as string,
+    created_at: createdAt,
+    updated_at: updatedAt,
+    title: optionalString(raw.title),
+    preview: optionalString(raw.preview),
+    tenant_id: optionalString(raw.tenant_id),
+    created_on_branch: optionalString(raw.created_on_branch) ?? optionalString(raw.branch),
+    messages: Array.isArray(raw.messages) ? (raw.messages as Message[]) : undefined,
+    derived_upto_seq: optionalNumber(raw.derived_upto_seq),
+    status: raw.status as SessionStatus | undefined,
+    last_run_id: optionalString(raw.last_run_id) ?? optionalString(raw.run_id),
+    legacy_run: toLegacyRun(raw),
+  };
+}
+
+export class FileSessionStore implements SessionStore {
   private readonly basePath: string;
   private readonly tenantId?: string;
   /** 目录创建只做一次（失败后可重试） */
@@ -67,7 +127,7 @@ export class FileSessionBackend implements SessionBackend {
   /**
    * @param basePath 会话文件存储目录，默认 `.vessel/sessions`
    */
-  constructor(basePath = '.vessel/sessions', options: FileSessionBackendOptions = {}) {
+  constructor(basePath = '.vessel/sessions', options: FileSessionStoreOptions = {}) {
     this.basePath = basePath;
     this.tenantId = options.tenantId;
   }
@@ -113,7 +173,7 @@ export class FileSessionBackend implements SessionBackend {
   }
 
   /**
-   * 加载 Run 状态
+   * 加载会话状态
    *
    * 损坏检测（0.8.1）：
    * - 主路径 `ENOENT` → 才尝试 legacy 路径；
@@ -122,10 +182,10 @@ export class FileSessionBackend implements SessionBackend {
    * - 主路径存在但属于其它 tenant → 返回 null，不回退 legacy。
    *
    * @param sessionId 会话 ID
-   * @returns Run 状态或 null（两处文件都不存在，或属于其它 tenant）
+   * @returns 会话状态或 null（两处文件都不存在，或属于其它 tenant）
    * @throws {SessionCorruptError} 文件存在但不可读或 JSON 不合法
    */
-  async load(sessionId: string): Promise<RunState | null> {
+  async load(sessionId: string): Promise<SessionState | null> {
     const primaryPath = this.filePath(sessionId);
     const primary = await this.readStateFile(primaryPath);
     if (primary.found) {
@@ -151,21 +211,23 @@ export class FileSessionBackend implements SessionBackend {
     }
 
     try {
-      return { found: true, state: JSON.parse(content) as RunState };
+      return { found: true, state: toSessionState(JSON.parse(content)) };
     } catch (error) {
       throw new SessionCorruptError(path, error);
     }
   }
 
   /**
-   * 保存 Run 状态
+   * 保存会话状态
    *
    * 自动派生 title/preview（首条用户消息）并刷新 updated_at，
-   * 行为与 SQLiteSessionBackend 一致。同 session 串行写入。
+   * 行为与 SQLiteSessionStore 一致。同 session 串行写入。
+   * 磁盘保留旧顶层 run 字段镜像（status/run_id/completed_at/usage/error/branch），
+   * 供旧 reader 解析。
    *
-   * @param state Run 状态
+   * @param state 会话状态
    */
-  async save(state: RunState): Promise<void> {
+  async save(state: SessionState): Promise<void> {
     const sessionId = state.session_id;
     const previous = this.pendingWrites.get(sessionId) ?? Promise.resolve();
     const task = () => this.writeSession(sessionId, state);
@@ -183,29 +245,41 @@ export class FileSessionBackend implements SessionBackend {
     }
   }
 
-  private async writeSession(sessionId: string, state: RunState): Promise<void> {
+  private async writeSession(sessionId: string, state: SessionState): Promise<void> {
     await this.ensureDir();
 
     const effective = this.applyTenant(state);
     await this.assertWritableOwner(sessionId);
 
-    const meta = deriveSessionMeta(effective.messages);
+    const messages = effective.messages ?? [];
+    const meta = deriveSessionMeta(messages);
     const title = effective.title ?? meta.title;
     const preview = effective.preview ?? meta.preview;
     const updatedAt = effective.updated_at ?? Date.now();
 
-    const enriched: RunState = {
-      ...effective,
+    const disk = {
+      session_id: effective.session_id,
       title,
       preview,
+      tenant_id: effective.tenant_id,
+      created_at: effective.created_at,
       updated_at: updatedAt,
+      started_at: effective.created_at,
+      completed_at: effective.legacy_run?.completed_at,
+      status: effective.status,
+      usage: effective.legacy_run?.usage,
+      error: effective.legacy_run?.error,
+      branch: effective.created_on_branch,
+      run_id: effective.last_run_id,
+      messages,
+      derived_upto_seq: effective.derived_upto_seq,
     };
 
-    await atomicWrite(this.filePath(sessionId), JSON.stringify(enriched, null, 2));
+    await atomicWrite(this.filePath(sessionId), JSON.stringify(disk, null, 2));
   }
 
   /** 写入前补齐/校验 tenant_id；跨 tenant 直接抛错 */
-  private applyTenant(state: RunState): RunState {
+  private applyTenant(state: SessionState): SessionState {
     if (this.tenantId === undefined) return state;
     if (state.tenant_id !== undefined && state.tenant_id !== this.tenantId) {
       throw new Error(`tenant_mismatch: session ${state.session_id} belongs to ${state.tenant_id}`);
@@ -214,7 +288,7 @@ export class FileSessionBackend implements SessionBackend {
   }
 
   /** 读取时过滤其它 tenant 的会话（缺省视为 default） */
-  private isForeign(state: RunState): boolean {
+  private isForeign(state: SessionState): boolean {
     if (this.tenantId === undefined) return false;
     if (typeof state !== 'object' || state === null) return true;
     return (state.tenant_id ?? 'default') !== this.tenantId;
@@ -337,14 +411,14 @@ export class FileSessionBackend implements SessionBackend {
     const results: SessionInfo[] = [];
 
     for (const id of ids) {
-      let state: RunState | null;
+      let state: SessionState | null;
       try {
         state = await this.load(id);
       } catch (error) {
         if (error instanceof SessionCorruptError) continue;
         throw error;
       }
-      if (state && state.messages.length > 0) {
+      if (state && (state.messages?.length ?? 0) > 0) {
         results.push(toSessionInfo(state));
       }
     }
@@ -365,4 +439,4 @@ export class FileSessionBackend implements SessionBackend {
   }
 }
 
-export type { RunState, SessionBackend };
+export type { SessionState, SessionStore };

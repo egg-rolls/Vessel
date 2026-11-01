@@ -98,7 +98,7 @@ export interface AgentServiceWiringOptions {
    * `ask_user`：serve / 交互 REPL 有应答者，headless 没有）。可选 = 不传则维持旧工具面。
    */
   extraTools?: readonly string[];
-  /** tenant SessionBackend；成员 ExecutionUnit 用同一份存储按 session_id 续接历史 */
+  /** tenant SessionStore；成员 ExecutionUnit 用同一份存储按 session_id 续接历史 */
   session?: ExecutionUnitOptions['session'];
   /** tenant SessionEventLog；与父入口同源（缺省不落 trace） */
   eventLog?: ExecutionUnitOptions['eventLog'];

@@ -1,15 +1,15 @@
 /**
  * `vessel --resume-run`（无参）：列出可恢复的 interrupted run。
  *
- * 一次性命令：只加载配置 + 打开 RunStore，不构造 runtime、不需要 API Key。
- * 排序与上限沿用 core 的 RunStore（updated_at 倒序、同值 run_id 升序；默认 50/最大 200）。
+ * 一次性命令：只加载配置 + 打开 RunRecordStore，不构造 runtime、不需要 API Key。
+ * 排序与上限沿用 core 的 RunRecordStore（updated_at 倒序、同值 run_id 升序；默认 50/最大 200）。
  */
 
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
 import { resolveDataDir, resolveTenantPaths } from './data-paths';
 import { previewOf } from './durable-wiring';
-import { closeRunStore, createRunStore } from './run-store-factory';
+import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';
 
 /** 列表展示上限（core 的默认值；显式写出来让语义可见） */
 const LIST_LIMIT = 50;
@@ -42,7 +42,7 @@ export async function runResumeList(options: ConfigLoadOptions = {}): Promise<nu
   // A4：与执行面一致 —— 未显式 durable.path 时使用
   // `<data_dir>/tenants/<id>/runs`，而不是回退到 `~/.vessel/runs`。
   const tenantPaths = resolveTenantPaths(resolveDataDir(config), tenantId);
-  const store = createRunStore(config, {
+  const store = createRunRecordStore(config, {
     tenantRunsDir: tenantPaths.runs_dir,
     tenantId,
   });
@@ -62,17 +62,17 @@ export async function runResumeList(options: ConfigLoadOptions = {}): Promise<nu
     console.log(
       '  RUN ID                            SESSION ID                        UPDATED                  ITER  PREVIEW',
     );
-    for (const checkpoint of runs) {
-      const iteration = checkpoint.iteration === undefined ? '-' : String(checkpoint.iteration);
-      const preview = previewOf(checkpoint) ?? '';
+    for (const record of runs) {
+      const iteration = record.iteration === undefined ? '-' : String(record.iteration);
+      const preview = previewOf(record) ?? '';
       console.log(
         [
           '  ',
-          clip(checkpoint.run_id, 32).padEnd(32),
+          clip(record.run_id, 32).padEnd(32),
           '  ',
-          clip(checkpoint.session_id, 32).padEnd(32),
+          clip(record.session_id, 32).padEnd(32),
           '  ',
-          formatTimestamp(checkpoint.updated_at).padEnd(24),
+          formatTimestamp(record.updated_at).padEnd(24),
           '  ',
           iteration.padEnd(4),
           '  ',
@@ -82,6 +82,6 @@ export async function runResumeList(options: ConfigLoadOptions = {}): Promise<nu
     }
     return 0;
   } finally {
-    await closeRunStore(store);
+    await closeRunRecordStore(store);
   }
 }

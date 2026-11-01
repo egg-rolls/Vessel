@@ -1,7 +1,7 @@
 ---
 title: 核心接口
 kind: current
-triggers: [LLMProvider, ChatRequest, ContextManager, EventStream, interface, types]
+triggers: [LLMProvider, ChatRequest, WorkingContext, EventStream, interface, types]
 paths: [packages/core/src/types/provider.ts, packages/core/src/types/context.ts, packages/core/src/types/event.ts]
 ---
 
@@ -55,10 +55,10 @@ interface Message {
 
 <a id="context"></a>
 
-### `ContextManager`（`types/context.ts`）
+### `WorkingContext`（`types/context.ts`）
 
 ```ts
-interface ContextManager {
+interface WorkingContext {
   add(msg: Message): void;
   readonly messages: Message[];
   /** @returns 本次移除的消息数（0 = 未压缩） */

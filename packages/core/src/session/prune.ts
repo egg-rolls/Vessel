@@ -1,17 +1,17 @@
 /**
  * Run 清理 helper（0.4 C2）
  *
- * 只通过公开的 `RunStore.list` / `RunStore.delete` 工作，不修改 port 接口。
- * 受 `RunStore.list` 的 limit 上限（200）约束：
+ * 只通过公开的 `RunRecordStore.list` / `RunRecordStore.delete` 工作，不修改 port 接口。
+ * 受 `RunRecordStore.list` 的 limit 上限（200）约束：
  * - `keep_latest > 200` 不保证精确；
  * - `kept` 是在可枚举窗口内统计的近似值（JSDoc 已注明）。
  *
  * @module @vessel-agent/core/session
  */
 
-import type { RunCheckpoint, RunStore } from '../types/run-store.js';
+import type { RunRecord, RunRecordStore } from '../types/run-record-store.js';
 
-/** 每页最多读取的 checkpoints（RunStore 实现的硬上限） */
+/** 每页最多读取的 checkpoints（RunRecordStore 实现的硬上限） */
 const PAGE_LIMIT = 200;
 /** 防御性页数上限，避免自定义 store 不删除时死循环 */
 const MAX_PAGES = 10000;
@@ -20,7 +20,7 @@ const MAX_PAGES = 10000;
 export interface PruneRunsOptions {
   older_than_ms?: number;
   keep_latest?: number;
-  status?: Array<RunCheckpoint['status']>;
+  status?: Array<RunRecord['status']>;
 }
 
 /** pruneRuns 结果 */
@@ -29,7 +29,7 @@ export interface PruneRunsResult {
   kept: number;
 }
 
-const RUN_STATUSES: ReadonlySet<RunCheckpoint['status']> = new Set([
+const RUN_STATUSES: ReadonlySet<RunRecord['status']> = new Set([
   'running',
   'interrupted',
   'completed',
@@ -38,11 +38,9 @@ const RUN_STATUSES: ReadonlySet<RunCheckpoint['status']> = new Set([
 ]);
 
 /** 去重并丢弃非法状态；`undefined` 表示不过滤 */
-function normalizeStatuses(
-  status?: Array<RunCheckpoint['status']>,
-): RunCheckpoint['status'][] | undefined {
+function normalizeStatuses(status?: Array<RunRecord['status']>): RunRecord['status'][] | undefined {
   if (status === undefined) return undefined;
-  const normalized: RunCheckpoint['status'][] = [];
+  const normalized: RunRecord['status'][] = [];
   for (const value of status) {
     if (RUN_STATUSES.has(value) && !normalized.includes(value)) normalized.push(value);
   }
@@ -56,8 +54,8 @@ function normalizeNumber(value?: number): number | undefined {
   return Math.max(0, Math.floor(value));
 }
 
-/** 与 RunStore 相同的排序：updated_at 倒序、同值 run_id 升序 */
-function compareCheckpoints(a: RunCheckpoint, b: RunCheckpoint): number {
+/** 与 RunRecordStore 相同的排序：updated_at 倒序、同值 run_id 升序 */
+function compareCheckpoints(a: RunRecord, b: RunRecord): number {
   if (b.updated_at !== a.updated_at) return b.updated_at - a.updated_at;
   if (a.run_id === b.run_id) return 0;
   return a.run_id < b.run_id ? -1 : 1;
@@ -74,7 +72,7 @@ function compareCheckpoints(a: RunCheckpoint, b: RunCheckpoint): number {
  * - 三个条件全部缺省时不删除。
  *
  * `kept` = 本次操作后仍保留的、符合 `status` 过滤的条目数。
- * 由于 `RunStore.list` 单次最多返回 200 条，超出该窗口的条目无法精确统计；
+ * 由于 `RunRecordStore.list` 单次最多返回 200 条，超出该窗口的条目无法精确统计；
  * `keep_latest > 200` 也不保证精确。
  * `older_than_ms` 同样受 200 窗口限制：若首个窗口内没有可删项，更旧的条目
  * 无法被本轮列表触及，因此年龄裁剪在超大数据集上也是尽力而为。
@@ -82,7 +80,7 @@ function compareCheckpoints(a: RunCheckpoint, b: RunCheckpoint): number {
  * 删除过程中任一 `list` / `delete` 抛错会直接向上传播；错误前已完成的删除保留。
  */
 export async function pruneRuns(
-  store: RunStore,
+  store: RunRecordStore,
   opts: PruneRunsOptions = {},
 ): Promise<PruneRunsResult> {
   const statuses = normalizeStatuses(opts.status);
@@ -101,7 +99,7 @@ export async function pruneRuns(
   }
 
   const now = Date.now();
-  const filters: Array<RunCheckpoint['status'] | undefined> =
+  const filters: Array<RunRecord['status'] | undefined> =
     statuses === undefined ? [undefined] : statuses;
 
   // keep_latest 是跨 status 的全局保留集合；每个状态取首页即可覆盖全局前 K

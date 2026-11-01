@@ -14,7 +14,7 @@ import type {
   ErrorPhase,
   ToErrorEnvelopeOptions,
 } from '../types/error.js';
-import { RunAlreadyRunningError, RunResumeError } from '../types/run-store.js';
+import { RunAlreadyRunningError, RunResumeError } from '../types/run-record-store.js';
 import { PermissionAbortedError, PermissionTimeoutError } from './permission-policy.js';
 
 const PERMISSION_DENIED_PATTERNS: readonly RegExp[] = [

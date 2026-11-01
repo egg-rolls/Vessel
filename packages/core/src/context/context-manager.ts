@@ -1,5 +1,5 @@
 /**
- * ContextManager 实现
+ * WorkingContext 实现
  * @module @vessel-agent/core/context
  *
  * Auto Compact: add() 时如果 autoCompact=true 且 token 超阈值，自动压缩。
@@ -9,7 +9,7 @@
  * system 消息永不丢；token 估算统一由本模块导出，供 harness 复用。
  */
 
-import type { ContextConfig, ContextManager } from '../types/context.js';
+import type { ContextConfig, WorkingContext } from '../types/context.js';
 import type { Message } from '../types/provider.js';
 
 /** 无 summarizer 时的占位摘要（保持 0.4/0.5 的可见行为） */
@@ -79,7 +79,7 @@ interface CompactionPlan {
   toSummarize: Message[];
 }
 
-export class MemoryContextManager implements ContextManager {
+export class MemoryWorkingContext implements WorkingContext {
   private sessionMessages: Map<string, Message[]> = new Map();
   private currentSessionId = 'default';
   private config: ContextConfig;
@@ -388,4 +388,4 @@ export class MemoryContextManager implements ContextManager {
   }
 }
 
-export type { ContextConfig, ContextManager };
+export type { ContextConfig, WorkingContext };

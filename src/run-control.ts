@@ -95,6 +95,7 @@ export function createRunControl(
         content: input.input,
         ...(input.agent_id !== undefined ? { agent_id: input.agent_id } : {}),
         ...(input.session_id !== undefined ? { session_id: input.session_id } : {}),
+        ...(input.resume === true ? { resume: true } : {}),
       };
       const result = await service.admit(admit);
       const mapped: RunStartResultWithSession = {

@@ -44,7 +44,7 @@ export interface SessionSearchHit {
   message_count: number;
 }
 
-/** 会话详情（sessions.get 返回 `{ session: RunState }`） */
+/** 会话详情（sessions.get 返回 `{ session: SessionState + 最近 RunRecord 投影 }`） */
 export interface SessionDetail {
   session_id: string;
   messages: Message[];

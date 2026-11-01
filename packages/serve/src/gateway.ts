@@ -9,17 +9,17 @@
  * - 默认只监听回环地址 127.0.0.1；远程监听必须显式 allowRemote + TLS + 显式 token；
  * - 浏览器 WS 必须在首帧 `{kind:'auth',token,since}` 鉴权，token 不接受 URL/query；
  * - 事件在传输层分配单调 seq，支持 since 回放与 gap 信号，不改 core 类型；
- * - 单 runtime / 单 ContextManager：运行串行执行；会话切换时 clear 上下文（G2）；
+ * - 单 runtime / 单 WorkingContext：运行串行执行；会话切换时 clear 上下文（G2）；
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import type {
-  ContextManager,
   PluginHost,
   RunEvent,
   RunnableAgent,
-  SessionBackend,
+  SessionStore,
   TraceRedactor,
+  WorkingContext,
 } from '@vessel-agent/core';
 import { createDefaultTraceRedactor } from '@vessel-agent/core';
 import { createAgentRegistry } from './agents-registry.js';
@@ -174,7 +174,7 @@ export interface GatewayOptions {
    */
   hubTeamScope?: HubTeamScopeLike;
   /** 会话后端（可选）——/v1/sessions 数据源 */
-  session?: SessionBackend;
+  session?: SessionStore;
   /** 运行时（可选）——运行控制端点；结构类型 RunnableAgent（A10），不要断言成 ExecutionUnit */
   runtime?: RunnableAgent;
   /**
@@ -189,7 +189,7 @@ export interface GatewayOptions {
    */
   runControlFor?: (tenantId: string) => RunControlLike | undefined;
   /** 上下文管理器（可选）——会话切换时 clear，修跨会话串历史 */
-  context?: ContextManager;
+  context?: WorkingContext;
   /** 工具宿主（可选）——缺省读 runtime.pluginHost */
   pluginHost?: PluginHost;
   /** 监听端口（默认 8642；0 = 系统分配） */
@@ -326,8 +326,8 @@ export interface GatewayOptions {
   redactor?: TraceRedactor;
   /** per-tenant 执行面（A-3 §10.4） */
   runtimeFor?: (tenantId: string) => RunnableAgent | undefined;
-  sessionFor?: (tenantId: string) => SessionBackend | undefined;
-  contextFor?: (tenantId: string) => ContextManager | undefined;
+  sessionFor?: (tenantId: string) => SessionStore | undefined;
+  contextFor?: (tenantId: string) => WorkingContext | undefined;
   pluginHostFor?: (tenantId: string) => PluginHost | undefined;
   /** 缺省 tenant（wildcard admin 未指定时使用） */
   defaultTenantId?: string;
@@ -1044,7 +1044,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // events.list → events.subscribe → tools/plugins → metrics → mcp → trace →
     // tenants → interactions → evals → feishu → gateway。
     ...createConfigMethods(configMethodsDeps),
-    ...createSessionMethods({ defaultTenantId, sessionFor, sessionData: opts.sessionData }),
+    ...createSessionMethods({
+      defaultTenantId,
+      sessionFor,
+      sessionData: opts.sessionData,
+      runStoreFor: (tenantId) => durableForTenant(tenantId)?.store,
+    }),
     ...createRunMethods({
       defaultTenantId,
       runControlFor: runControlForTenant,
@@ -1414,7 +1419,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     throw new RpcError('forbidden', 'No runtime configured', { legacy_code: 'no_runtime' });
   }
 
-  function sessionFor(tenantId: string): SessionBackend | undefined {
+  function sessionFor(tenantId: string): SessionStore | undefined {
     if (tenantId === defaultTenantId) return session;
     return opts.sessionFor?.(tenantId);
   }

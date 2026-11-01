@@ -56,6 +56,11 @@ export interface RunStartLikeInput {
   agent_id?: string;
   /** 已绑定 body；未绑定则归 `agent_id` 并惰性创建 body。 */
   session_id?: string;
+  /**
+   * Q5（仅内部装配使用，不暴露为 `runs.start` RPC）：按续接已有 session 执行，
+   * app 侧映射到 `AgentService.admit({ resume: true })`。
+   */
+  resume?: boolean;
 }
 
 /** `runs.start` 的受理结果。 */

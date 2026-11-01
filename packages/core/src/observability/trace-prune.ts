@@ -1,7 +1,7 @@
 /**
  * Trace 留存与 prune（0.5 F2 / DECISION-010 §2.2、E9）
  *
- * - 不删除 running / interrupted run（有 RunStore 用状态；否则看 trace 是否有终态事件）
+ * - 不删除 running / interrupted run（有 RunRecordStore 用状态；否则看 trace 是否有终态事件）
  * - retentionDays / maxRuns / maxBytes 可组合
  * - 只 unlink 本目录的 `.jsonl`，不触碰 tenant 其它目录
  *
@@ -11,7 +11,7 @@
 import { readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunEvent } from '../types/event.js';
-import type { RunStore } from '../types/run-store.js';
+import type { RunRecordStore } from '../types/run-record-store.js';
 import { parseTraceText } from './read-trace.js';
 
 const DAY_MS = 86_400_000;
@@ -26,7 +26,7 @@ export interface PruneTraceOptions {
   /** 每 tenant 字节上限；0 = 不限 */
   maxBytes?: number;
   /** 状态权威；未提供时按 trace 是否含终态事件判定 */
-  runStore?: RunStore;
+  runStore?: RunRecordStore;
   now?: number;
 }
 
@@ -88,7 +88,7 @@ async function inspectFile(traceDir: string, entry: string): Promise<TraceFileIn
   };
 }
 
-async function isProtected(file: TraceFileInfo, runStore?: RunStore): Promise<boolean> {
+async function isProtected(file: TraceFileInfo, runStore?: RunRecordStore): Promise<boolean> {
   if (runStore) {
     try {
       const checkpoint = await runStore.load(file.runId);

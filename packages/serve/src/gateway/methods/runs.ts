@@ -338,10 +338,10 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         const target = liveRunsOf(control).find((run) => run.run_id === runId);
         if (target === undefined) throw new RpcError('not_found', `Run not found: ${runId}`);
         const cancelled = await control.cancel(runId);
-        // scheduler 不会为 queued-cancel 产出 core 事件，也就没有 checkpoint；
-        // 补一条终态 checkpoint，否则该 run 会从列表消失。
+        // scheduler 不会为 queued-cancel 产出 core 事件，也就没有 RunRecord；
+        // 补一条终态 RunRecord，否则该 run 会从列表消失。
         if (target.status === 'queued') {
-          await writeQueuedCancelledCheckpoint(ctx.tenantId, target);
+          await writeQueuedCancelledRecord(ctx.tenantId, target);
         }
         return { cancelled };
       },
@@ -419,10 +419,13 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
   ];
 
   /**
-   * queued-cancel 的终态 checkpoint。store 无 `save` / 该 tenant 无 durable
-   * → 跳过（不报错、不建内存账本）。
+   * queued-cancel 的终态 RunRecord（Q1 受控例外：仅 `queued → cancelled`）。
+   *
+   * 只写 `status` / `error` / `updated_at`（以及记录身份所需的 run_id /
+   * session_id / created_at / tenant_id）；不写 usage / iteration /
+   * event_cursor / metadata。store 无 `save` → 跳过（不报错、不建内存账本）。
    */
-  async function writeQueuedCancelledCheckpoint(
+  async function writeQueuedCancelledRecord(
     tenantId: string,
     run: LiveRunSnapshotLike,
   ): Promise<void> {
@@ -430,22 +433,20 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
     const save = store?.save;
     if (store === undefined || typeof save !== 'function') return;
     const now = Date.now();
-    const checkpoint: DurableCheckpointLike = {
+    const record: DurableCheckpointLike = {
       run_id: run.run_id,
       session_id: run.session_id,
-      agent_id: run.agent_id,
       status: 'cancelled',
-      messages: [],
-      metadata: { reason: 'cancelled_while_queued' },
-      created_at: now,
+      error: 'cancelled_while_queued',
+      created_at: run.started_at ?? now,
       updated_at: now,
       tenant_id: tenantId,
     };
     try {
-      await save.call(store, checkpoint);
+      await save.call(store, record);
     } catch (error) {
-      // checkpoint 写入是 best-effort：取消已经生效，不得因此回 500。
-      console.warn('[vessel] runs.cancel: checkpoint save failed', {
+      // RunRecord 写入是 best-effort：取消已经生效，不得因此回 500。
+      console.warn('[vessel] runs.cancel: RunRecord save failed', {
         run_id: run.run_id,
         message: error instanceof Error ? error.message : String(error),
       });

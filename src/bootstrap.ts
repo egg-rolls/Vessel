@@ -24,15 +24,15 @@ import {
 } from '../packages/config/src/index';
 import {
   type Logger,
-  MemoryContextManager,
   MemoryPluginHost,
-  MemorySessionBackend,
+  MemorySessionStore,
+  MemoryWorkingContext,
   pruneTrace,
   type ReadTraceOptions,
   type RunEvent,
   type RunnableAgent,
   type RunOptions,
-  type RunStore,
+  type RunRecordStore,
   readTraceEvents,
   rebuildMetrics,
   resolveTenantPaths,
@@ -277,7 +277,7 @@ export interface BootstrapResult {
   /** 0.3：MCP 控制面（未配置 mcp_servers 时为 undefined） */
   mcp?: McpControl;
   /** 0.3 durable：checkpoint store（durable 关闭时为 undefined） */
-  runStore?: RunStore;
+  runStore?: RunRecordStore;
   /** 0.3 durable：TUI `/runs` 控制面（durable 关闭时为 undefined） */
   runs?: DurableRunsControlLike;
   /** 0.4：飞书渠道（enabled 时构造，不自动 start）；未启用为 undefined */
@@ -298,7 +298,7 @@ export interface BootstrapResult {
     mode: 'single-agent';
   }>;
   /**
-   * 幂等关闭：MCP close → Host/runtime dispose → RunStore close。
+   * 幂等关闭：MCP close → Host/runtime dispose → RunRecordStore close。
    * 新代码应 await 本函数；`cleanup()` 仅供旧调用点兼容。
    * `drain: false`：调用方已 `await gateway.stop()`，避免重复限时等待。
    */
@@ -355,6 +355,35 @@ function isRunEventValue(value: unknown): value is RunEvent {
     typeof value.run_id === 'string' &&
     typeof value.ts === 'number'
   );
+}
+
+/**
+ * Q5：`-r/--resume <id>` 的首轮显式走 `resumeSession(sessionId, input)`，
+ * 之后恢复普通 `run`。只用于本地进程内路径；connect 模式没有新 RPC，
+ * 保持 `runs.start` 到远端 AgentService 的既有语义。
+ */
+function withFirstRunResume(runtime: RunnableAgent, sessionId: string): RunnableAgent {
+  let pending = true;
+  return {
+    events: runtime.events,
+    pluginHost: runtime.pluginHost,
+    async run(input, sid, opts) {
+      if (pending) {
+        pending = false;
+        const resume = runtime.resumeSession;
+        if (typeof resume === 'function') {
+          const target = sid !== undefined && sid !== '' ? sid : sessionId;
+          return resume.call(runtime, target, input, opts);
+        }
+      }
+      return runtime.run(input, sid, opts);
+    },
+    dispose: () => runtime.dispose(),
+    ...(runtime.resumeRun !== undefined ? { resumeRun: runtime.resumeRun.bind(runtime) } : {}),
+    ...(runtime.resumeSession !== undefined
+      ? { resumeSession: runtime.resumeSession.bind(runtime) }
+      : {}),
+  };
 }
 
 /**
@@ -533,8 +562,8 @@ async function bootstrapConnect(input: {
 
   const events = createEventStream(input.config);
   const pluginHost = new MemoryPluginHost();
-  const session = new MemorySessionBackend();
-  const context = new MemoryContextManager({
+  const session = new MemorySessionStore();
+  const context = new MemoryWorkingContext({
     maxTokens: input.config.context?.maxTokens,
     maxMessages: input.config.context?.maxMessages,
     autoCompact: input.config.context?.autoCompact,
@@ -1305,7 +1334,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // ── Durable resume（0.3）─────────────────────────
-  // 恢复只走 tenant runtime 的 `ExecutionUnit.resume`（不注入合成消息）。
+  // 恢复只走 tenant runtime 的 `ExecutionUnit.resumeRun`（不注入合成消息）。
   const startResume = async (
     runId: string,
     opts?: RunOptions,
@@ -1323,9 +1352,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(options.clock ? { now: options.clock } : {}),
     });
 
-    if (typeof activeRuntime.resume !== 'function') {
+    if (typeof activeRuntime.resumeRun !== 'function') {
       await runLock.release();
-      throw resumeError('resume_unavailable', runId, 'runtime does not support resume');
+      throw resumeError('resume_unavailable', runId, 'runtime does not support resumeRun');
     }
 
     // 0.33 A：headless ask 的回答在 resume 前以 `user.message` 事件注入历史。
@@ -1362,7 +1391,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         });
       }
     }
-    const promise = activeRuntime.resume(runId, { ...opts, signal: controller.signal });
+    const promise = activeRuntime.resumeRun(runId, { ...opts, signal: controller.signal });
     const done = promise
       .then(
         (message) => ({ status: 'completed' as const, message }),
@@ -1748,8 +1777,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // ── ReplContext ─────────────────────────────────
   // 工具/插件的唯一来源是同一个 PluginHost（插件在 install() 里注册）。
+  const baseRuntime: RunnableAgent = localRun?.runtime ?? bundle.runtime;
+  // Q5：显式 `-r/--resume <id>` 的首轮走 resumeSession；connect 模式不走这里。
+  const resumableRuntime =
+    options.resumeSessionId !== undefined
+      ? withFirstRunResume(baseRuntime, options.resumeSessionId)
+      : baseRuntime;
   const ctx: ReplContextWithPermissions = {
-    runtime: localRun?.runtime ?? bundle.runtime,
+    runtime: resumableRuntime,
     pluginHost: finalPluginHost,
     session,
     events: runtimeEvents,
@@ -1791,7 +1826,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   };
 
   return {
-    runtime: bundle.runtime,
+    runtime: resumableRuntime,
     ctx,
     config,
     tenantId,

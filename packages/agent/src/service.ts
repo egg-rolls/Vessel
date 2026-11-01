@@ -22,7 +22,6 @@ import {
   type RunHandle,
   type RunInterruptReason,
   type RunStatus,
-  type RunStore,
   type RuntimePermissionConfig,
   type ScheduledTask,
   type Scheduler,
@@ -94,7 +93,6 @@ import {
   type PersistedAgentRecord,
   type ReinstateInput,
   type ReplyResult,
-  type ResumeResult,
   type RotateInput,
   type RotateResult,
   type SendBatchInput,
@@ -475,7 +473,6 @@ export class AgentServiceImpl implements AgentService {
   /** 临时 agent 空闲回收 TTL（毫秒）；0 = 关闭 */
   private readonly temporaryTtlMs: number;
   private readonly bindingLease: BindingLeasePort | undefined;
-  private readonly runStore: RunStore | undefined;
   /** 0.32：持久化收件箱；有 `dataDir` 时唯一实例，否则 undefined（行为不变） */
   private readonly inbox: AgentInboxStore | undefined;
   /** AgentService 的 body registry：agentId → bindingId → ExecutionUnitEntry（含已退役直到清理） */
@@ -524,6 +521,7 @@ export class AgentServiceImpl implements AgentService {
 
     this.registry = new MemberRegistry(options.now);
     this.runtime = options.runtime;
+
     this.scheduler = options.scheduler;
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
@@ -544,7 +542,6 @@ export class AgentServiceImpl implements AgentService {
         : DEFAULT_TEMPORARY_TTL_HOURS;
     this.temporaryTtlMs = ttlHours * 60 * 60 * 1000;
     this.bindingLease = options.bindingLease;
-    this.runStore = options.runStore;
 
     const dataDir = options.dataDir;
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
@@ -1428,6 +1425,8 @@ export class AgentServiceImpl implements AgentService {
     }
     const strict = input.strict === true;
     const important = input.important === true;
+    // Q5：仅内部装配传入；runs.start RPC 不暴露该字段。
+    const resume = input.resume === true;
 
     // 1. session → agent/body 解析（绑定优先；矛盾输入 = invalid_input）
     let record: MemberRecord;
@@ -1573,7 +1572,7 @@ export class AgentServiceImpl implements AgentService {
 
     let submitted: { runId: string; handle: RunHandle };
     try {
-      submitted = await this.submitMessage(record, entry, message);
+      submitted = await this.submitMessage(record, entry, message, resume);
     } catch (error) {
       if (inboxed) {
         if (entry.retired || entry.closing || this.draining) {
@@ -1609,6 +1608,7 @@ export class AgentServiceImpl implements AgentService {
     record: MemberRecord,
     entry: ExecutionUnitEntry,
     message: AgentMessage,
+    resume = false,
   ): Promise<{ runId: string; handle: RunHandle }> {
     if (this.draining || entry.closing || entry.retired) {
       throw new AgentError('member_closed', `member_closed: ${record.id}`);
@@ -1623,7 +1623,7 @@ export class AgentServiceImpl implements AgentService {
       input: message.content,
       executor: async (scheduledRunId) => {
         entry.queuedRuns.delete(scheduledRunId);
-        return this.startExecutionUnitRun(record, entry, message, scheduledRunId);
+        return this.startExecutionUnitRun(record, entry, message, scheduledRunId, resume);
       },
     };
     try {
@@ -1682,6 +1682,7 @@ export class AgentServiceImpl implements AgentService {
     entry: ExecutionUnitEntry,
     message: AgentMessage,
     runId: string,
+    resume = false,
   ): Promise<RunHandle> {
     if (entry.retired || entry.closing) {
       const cancelled = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
@@ -1744,7 +1745,7 @@ export class AgentServiceImpl implements AgentService {
     // 0.32：消息真正作为 run input 开始前标记 consumed（inbox 至多注入一次）。
     // startup 消息不在 inbox 里，markConsumed 对未知 id 无操作。
     await this.inbox?.markConsumed(record.id, [message.id], entry.bindingId);
-    void this.executeExecutionUnitTurn(record, entry, message, handle);
+    void this.executeExecutionUnitTurn(record, entry, message, handle, resume);
     return handle;
   }
 
@@ -1754,11 +1755,15 @@ export class AgentServiceImpl implements AgentService {
     entry: ExecutionUnitEntry,
     message: AgentMessage,
     handle: ExecutionUnitRunHandle,
+    resume = false,
   ): Promise<void> {
     let result: MemberTurnResult | undefined;
     let failure: string | undefined;
     try {
-      result = await this.runtime.runTurn(entry.runtimeMember, message, handle.id);
+      result =
+        resume && this.runtime.resumeTurn !== undefined
+          ? await this.runtime.resumeTurn(entry.runtimeMember, message, handle.id)
+          : await this.runtime.runTurn(entry.runtimeMember, message, handle.id);
     } catch (error) {
       if (!handle.cancelRequested && !entry.closing) {
         failure = errorText(error);
@@ -2693,107 +2698,6 @@ export class AgentServiceImpl implements AgentService {
 
     await this.flushSnapshot();
     return { state: 'closed' };
-  }
-
-  // ─── durable resume ────────────────────────────────────────────
-
-  async resume(runId: string): Promise<ResumeResult> {
-    await this.ready;
-    if (this.runStore === undefined) {
-      throw new AgentError('invalid_input', `run_store_required: ${runId}`);
-    }
-    const checkpoint = await this.runStore.load(runId);
-    if (checkpoint === null) {
-      throw new AgentError('invalid_input', `run_not_found: ${runId}`);
-    }
-    const bound = this.registry.getBySession(checkpoint.session_id);
-    const agentId = checkpoint.agent_id ?? bound?.id;
-    if (agentId === undefined) {
-      throw new AgentError('unknown_member', `unknown_member: ${checkpoint.session_id}`);
-    }
-    const record = this.requireAgent(agentId);
-    if (record.membership === 'left' || record.state === 'closed') {
-      throw new AgentError('member_closed', `member_closed: ${agentId}`);
-    }
-    const { entry } = await this.ensureExecutionUnit(record, checkpoint.session_id);
-    await this.ensureRuntime(entry);
-    if (this.runtime.resume === undefined) {
-      throw new AgentError('invalid_input', 'resume_not_supported');
-    }
-    const run = this.newId();
-    entry.queuedRuns.add(run);
-    const task: ScheduledTask = {
-      agent: { id: record.id } as AgentHandle,
-      serialKey: entry.bindingId,
-      runId: run,
-      sessionId: entry.bindingId,
-      input: '',
-      executor: async (scheduledRunId) => {
-        entry.queuedRuns.delete(scheduledRunId);
-        return this.startResumeRun(record, entry, scheduledRunId);
-      },
-    };
-    const handle = await this.scheduler.submit(task);
-    const status = handle.status();
-    const queuePosition = this.queuePositionFor(run, status);
-    return {
-      run_id: run,
-      agent_id: record.id,
-      session_id: entry.bindingId,
-      status,
-      ...(queuePosition !== undefined ? { queue_position: queuePosition } : {}),
-    };
-  }
-
-  private async startResumeRun(
-    record: MemberRecord,
-    entry: ExecutionUnitEntry,
-    runId: string,
-  ): Promise<RunHandle> {
-    const resume = this.runtime.resume;
-    if (resume === undefined) throw new Error('resume_not_supported');
-    entry.state = 'running';
-    entry.lastActiveAt = this.now();
-    entry.active = { runId, replied: true };
-    this.updateAgentState(record.id);
-    const handle = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
-    handle.cancelHandler = () => {
-      try {
-        this.runtime.cancel(entry.runtimeMember);
-      } catch (error) {
-        this.logger.warn('agent.cancel.failed', {
-          member_id: record.id,
-          session_id: entry.bindingId,
-          error: errorText(error),
-        });
-      }
-    };
-    void (async () => {
-      let result: MemberTurnResult | undefined;
-      let failure: string | undefined;
-      try {
-        result = await resume.call(this.runtime, entry.runtimeMember, runId);
-      } catch (error) {
-        if (!handle.cancelRequested && !entry.closing) failure = errorText(error);
-      }
-      handle.setUsage(result?.usage);
-      entry.active = undefined;
-      entry.state = 'idle';
-      entry.lastActiveAt = this.now();
-      this.registry.touchBinding(record.id, entry.bindingId, entry.lastActiveAt);
-      if (result?.usage !== undefined) this.registry.setUsage(record.id, result.usage);
-      const cancelled = handle.cancelRequested || result?.outcome === 'cancelled';
-      const outcome = cancelled
-        ? 'cancelled'
-        : failure !== undefined
-          ? 'failed'
-          : (result?.outcome ?? 'completed');
-      this.updateAgentState(record.id, outcome);
-      this.scheduleSnapshot();
-      this.settleHandle(handle, outcome, failure, result?.content);
-      if (entry.retired) await this.disposeEntry(entry);
-    })();
-    return handle;
   }
 
   // ─── life-cycle / update / list ────────────────────────────────

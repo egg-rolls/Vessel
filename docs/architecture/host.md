@@ -54,7 +54,7 @@ paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 
 - 同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`。`serialKey` 保证 Scheduler 不会为同一 body 并发起 run。
 - 中断必须带原因（`interrupt('shutdown'|'timeout'|'user')`），不得只 abort signal。
-- checkpoint / run store 写入仍走单一 `RunStore`，写者是 body 的 `ExecutionUnit`，不得双写。
+- checkpoint / run store 写入仍走单一 `RunRecordStore`，写者是 body 的 `ExecutionUnit`，不得双写。
 - 不在 Scheduler 里新增权限、tool pipeline 或 context 逻辑；这些属于 core 的单 run 路径。
 
 ## 指针

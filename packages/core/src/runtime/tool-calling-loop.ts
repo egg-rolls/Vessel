@@ -21,7 +21,7 @@ import type {
   UsageStats,
 } from '../types/limits.js';
 import type { ChatRequest, LLMResponse, Message } from '../types/provider.js';
-import type { RunExecution } from '../types/run.js';
+import type { Run } from '../types/run.js';
 import type { ToolCall } from '../types/tool.js';
 import type { GuardrailRunner } from './guardrail-runner.js';
 import type { HookRunner } from './hook-runner.js';
@@ -33,7 +33,7 @@ export type LoopResult = string;
 
 /** Run 内一次 loop 的完整依赖面；每 run 构造一次，无跨 run 状态。 */
 export interface LoopContext {
-  readonly execution: RunExecution;
+  readonly execution: Run;
   readonly window: MessageWindowPort;
   readonly provider: ProviderPort;
   readonly tools: ToolExecutor;
@@ -178,7 +178,7 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     // 自动压缩关闭时没有后续压缩降水位，提示不设上界（见 publishContextPressureWarning）。
     ctx.controls.publishContextPressureWarning();
 
-    // 0.6.1 E3：按阈值触发真实摘要压缩（旧 ContextManager 无此方法则跳过）。
+    // 0.6.1 E3：按阈值触发真实摘要压缩（旧 WorkingContext 无此方法则跳过）。
     // 必须在组装请求前完成，保证本轮请求看到压缩后的历史。
     const compacted = await ctx.window.autoCompact();
     if (typeof compacted === 'number') {

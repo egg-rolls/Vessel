@@ -1,13 +1,21 @@
 /**
- * SQLite Session Backend 实现
+ * SQLite SessionStore 实现
  * @module @vessel-agent/core/session
  */
 
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
-import { deriveSessionMeta } from './session-backend.js';
+import type { Message } from '../types/provider.js';
+import type { RunUsage } from '../types/run-record-store.js';
+import type {
+  LegacyRunSnapshot,
+  SessionInfo,
+  SessionState,
+  SessionStatus,
+  SessionStore,
+} from '../types/session.js';
+import { deriveSessionMeta } from './session-store.js';
 
 /** sessions 表完整行（SELECT * 的形状） */
 interface SessionRow {
@@ -16,7 +24,7 @@ interface SessionRow {
   messages: string;
   started_at: number;
   completed_at: number | null;
-  status: RunState['status'];
+  status: SessionStatus;
   usage: string | null;
   error: string | null;
   title: string | null;
@@ -41,27 +49,46 @@ interface SessionListRow {
   tenant_id: string | null;
 }
 
-/** SQLite backend 选项（与 FileSessionBackend 对齐） */
-export interface SQLiteSessionBackendOptions {
+/** SQLite backend 选项（与 FileSessionStore 对齐） */
+export interface SQLiteSessionStoreOptions {
   /** 配置后：写入补齐 tenant_id，读取/列表/删除过滤其它 tenant */
   tenantId?: string;
 }
 
+/** 旧行顶层 run 字段 -> SessionState.legacy_run（一版兼容） */
+function toLegacyRun(
+  completedAt: number | null,
+  usage: string | null,
+  error: string | null,
+): LegacyRunSnapshot | undefined {
+  const completed_at = completedAt || undefined;
+  const parsedUsage = usage ? (JSON.parse(usage) as RunUsage) : undefined;
+  const message = error || undefined;
+  if (completed_at === undefined && parsedUsage === undefined && message === undefined) {
+    return undefined;
+  }
+  return {
+    ...(completed_at !== undefined ? { completed_at } : {}),
+    ...(parsedUsage !== undefined ? { usage: parsedUsage } : {}),
+    ...(message !== undefined ? { error: message } : {}),
+  };
+}
+
 /**
- * SQLite Session Backend 实现
- * 将 Run 状态保存到 SQLite 数据库
+ * SQLite SessionStore 实现
+ * 将会话壳（SessionState）保存到 SQLite 数据库；表/列保持旧 schema。
  */
-export class SQLiteSessionBackend implements SessionBackend {
+export class SQLiteSessionStore implements SessionStore {
   private db: Database;
   private readonly tenantId?: string;
 
   /**
-   * @param dbPath SQLite 数据库文件路径，默认 `.vessel/sessions.db`（与 FileSessionBackend 的
+   * @param dbPath SQLite 数据库文件路径，默认 `.vessel/sessions.db`（与 FileSessionStore 的
    *   `.vessel/sessions` 同级）；传 `:memory:` 走内存库（测试用），不建目录。
    * @param options 可选 tenant 作用域；缺省不隔离（0.4 行为）
    */
-  constructor(dbPath = '.vessel/sessions.db', options: SQLiteSessionBackendOptions = {}) {
-    // SQLite 只创建文件、不创建父目录——首次运行前先补目录（对标 FileSessionBackend 的惰性 mkdir）
+  constructor(dbPath = '.vessel/sessions.db', options: SQLiteSessionStoreOptions = {}) {
+    // SQLite 只创建文件、不创建父目录——首次运行前先补目录（对标 FileSessionStore 的惰性 mkdir）
     if (dbPath !== ':memory:') {
       try {
         mkdirSync(dirname(dbPath), { recursive: true });
@@ -117,11 +144,11 @@ export class SQLiteSessionBackend implements SessionBackend {
   }
 
   /**
-   * 加载 Run 状态
-   * @param session_id 会话 ID
-   * @returns Run 状态或 null
+   * 加载会话状态
+   * @param sessionId 会话 ID
+   * @returns 会话状态或 null
    */
-  async load(sessionId: string): Promise<RunState | null> {
+  async load(sessionId: string): Promise<SessionState | null> {
     const stmt = this.db.prepare('SELECT * FROM sessions WHERE session_id = ?');
     const row = stmt.get(sessionId) as SessionRow | null;
 
@@ -134,34 +161,35 @@ export class SQLiteSessionBackend implements SessionBackend {
     }
 
     return {
-      run_id: row.run_id,
       session_id: row.session_id,
-      messages: JSON.parse(row.messages),
-      started_at: row.started_at,
-      completed_at: row.completed_at || undefined,
-      status: row.status,
-      usage: row.usage ? JSON.parse(row.usage) : undefined,
-      error: row.error || undefined,
+      created_at: row.started_at,
+      updated_at: row.updated_at || row.started_at,
       title: row.title || undefined,
       preview: row.preview || undefined,
-      updated_at: row.updated_at || undefined,
-      branch: row.branch || undefined,
       tenant_id: row.tenant_id || undefined,
-      ...(typeof row.derived_upto_seq === 'number' && Number.isFinite(row.derived_upto_seq)
-        ? { derived_upto_seq: row.derived_upto_seq }
-        : {}),
+      created_on_branch: row.branch || undefined,
+      messages: JSON.parse(row.messages) as Message[],
+      derived_upto_seq:
+        typeof row.derived_upto_seq === 'number' && Number.isFinite(row.derived_upto_seq)
+          ? row.derived_upto_seq
+          : undefined,
+      status: row.status,
+      last_run_id: row.run_id || undefined,
+      legacy_run: toLegacyRun(row.completed_at, row.usage, row.error),
     };
   }
 
   /**
-   * 保存 Run 状态
+   * 保存会话状态
    * 自动派生 title/preview（首条用户消息）并刷新 updated_at
-   * @param state Run 状态
+   * 磁盘列沿用旧 schema：run_id/started_at/completed_at/usage/error/branch 为镜像。
+   * @param state 会话状态
    */
-  async save(state: RunState): Promise<void> {
+  async save(state: SessionState): Promise<void> {
     const effective = this.applyTenant(state);
     this.assertNoForeignRow(effective.session_id);
-    const meta = deriveSessionMeta(effective.messages);
+    const messages = effective.messages ?? [];
+    const meta = deriveSessionMeta(messages);
     const title = effective.title ?? meta.title;
     const preview = effective.preview ?? meta.preview;
     const updatedAt = effective.updated_at ?? Date.now();
@@ -174,24 +202,24 @@ export class SQLiteSessionBackend implements SessionBackend {
 
     stmt.run(
       effective.session_id,
-      effective.run_id,
-      JSON.stringify(effective.messages),
-      effective.started_at,
-      effective.completed_at || null,
-      effective.status,
-      effective.usage ? JSON.stringify(effective.usage) : null,
-      effective.error || null,
+      effective.last_run_id ?? '',
+      JSON.stringify(messages),
+      effective.created_at,
+      effective.legacy_run?.completed_at ?? null,
+      effective.status ?? 'running',
+      effective.legacy_run?.usage ? JSON.stringify(effective.legacy_run.usage) : null,
+      effective.legacy_run?.error ?? null,
       title,
       preview,
       updatedAt,
-      effective.branch || null,
-      effective.tenant_id || null,
+      effective.created_on_branch ?? null,
+      effective.tenant_id ?? null,
       typeof effective.derived_upto_seq === 'number' ? effective.derived_upto_seq : null,
     );
   }
 
   /** 写入前补齐/校验 tenant_id；跨 tenant 直接抛错 */
-  private applyTenant(state: RunState): RunState {
+  private applyTenant(state: SessionState): SessionState {
     if (this.tenantId === undefined) return state;
     if (state.tenant_id !== undefined && state.tenant_id !== this.tenantId) {
       throw new Error(`tenant_mismatch: session ${state.session_id} belongs to ${state.tenant_id}`);
@@ -214,7 +242,7 @@ export class SQLiteSessionBackend implements SessionBackend {
 
   /**
    * 删除会话
-   * @param session_id 会话 ID
+   * @param sessionId 会话 ID
    */
   async delete(sessionId: string): Promise<void> {
     if (this.tenantId === undefined) {
@@ -290,4 +318,4 @@ export class SQLiteSessionBackend implements SessionBackend {
   }
 }
 
-export type { RunState, SessionBackend, SessionInfo };
+export type { SessionInfo, SessionState, SessionStore };

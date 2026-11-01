@@ -127,7 +127,7 @@ function readMessages(value: unknown): SessionMessageLike[] {
     });
 }
 
-/** 读取会话列表：RPC 优先，第三方嵌入退回 SessionBackend */
+/** 读取会话列表：RPC 优先，第三方嵌入退回 SessionStore */
 export async function listSessions(ctx: ReplContext): Promise<SessionInfo[]> {
   if (ctx.rpc) {
     const raw = await ctx.rpc.request<unknown>('sessions.list');
@@ -136,7 +136,7 @@ export async function listSessions(ctx: ReplContext): Promise<SessionInfo[]> {
   return sortSessions(await ctx.session.listRich());
 }
 
-/** 读取单个会话：RPC 优先，第三方嵌入退回 SessionBackend */
+/** 读取单个会话：RPC 优先，第三方嵌入退回 SessionStore */
 export async function getSessionState(
   ctx: ReplContext,
   sessionId: string,
@@ -169,7 +169,7 @@ function readDeleteResult(value: unknown): SessionDeleteResultLike {
   return result;
 }
 
-/** 删除会话：RPC 优先，第三方嵌入退回 SessionBackend */
+/** 删除会话：RPC 优先，第三方嵌入退回 SessionStore */
 export async function deleteSession(
   ctx: ReplContext,
   sessionId: string,

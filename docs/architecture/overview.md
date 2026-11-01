@@ -23,7 +23,7 @@ packages/tui             终端界面：Ink REPL、流式渲染、slash 命令�
 packages/config          声明式 YAML 配置：加载、校验（未知键报错）、snake_case→camelCase 映射
     │
 packages/core            运行时：tool-calling loop、provider 抽象、context、session、事件流、
-                         权限策略、guardrail/hook 编排、PluginHost、Kernel、RunStore
+                         权限策略、guardrail/hook 编排、PluginHost、Kernel、RunRecordStore
                          ← 零 UI 依赖，可独立嵌入
 packages/permission      共享权限原语（工具经事件流等用户授权）
 plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost 注册工具
@@ -66,7 +66,7 @@ plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost �
         └──────────────────────────────────────┘
 ```
 
-- **① 世界 → 语言**：`ContextManager` 里的消息 + 工具 schema（`PluginHost.listTools()`）+ system prompt，组成一次 `ChatRequest`。
+- **① 世界 → 语言**：`WorkingContext` 里的消息 + 工具 schema（`PluginHost.listTools()`）+ system prompt，组成一次 `ChatRequest`。
 - **② 语言 → 世界**：解析 `tool_calls` → 权限判定 → 执行 handler → 结果作为 `role: tool` 消息折回语言空间。
 
 **两个插槽**是这套折叠的全部可扩展点：
@@ -74,7 +74,7 @@ plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost �
 | 插槽 | 实现 | 放什么 |
 |---|---|---|
 | **工具** | `PluginHost` | 语言 → 世界的能力。`PluginHost` 是**唯一的工具注册表**（core 里没有第二个） |
-| **知识** | `ContextManager` | 世界 → 语言的输入。消息、system prompt、注入的文本 |
+| **知识** | `WorkingContext` | 世界 → 语言的输入。消息、system prompt、注入的文本 |
 
 其余扩展点（guardrail、hook、provider、session backend）都挂在 `PluginHost` 上，不新增插槽。
 

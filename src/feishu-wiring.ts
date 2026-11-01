@@ -79,12 +79,12 @@ export interface CreateFeishuOptions {
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
   pluginHost?: import('../packages/core/src/index').PluginHost;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  session?: import('../packages/core/src/index').SessionBackend;
+  session?: import('../packages/core/src/index').SessionStore;
   events: EventStream;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  runStore?: import('../packages/core/src/index').RunStore;
+  runStore?: import('../packages/core/src/index').RunRecordStore;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  contextFactory?: () => import('../packages/core/src/index').ContextManager;
+  contextFactory?: () => import('../packages/core/src/index').WorkingContext;
   /**
    * 0.27：注入的 AgentService；成员创建与 admit 执行面。
    * 装配层接线前的过渡期可缺省（插件 start() 会显式失败），接线后必传。

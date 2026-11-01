@@ -1,7 +1,7 @@
 /**
  * session rename / delete（0.5 E15 / A-3 §10.5、A-4 §11.3）
  *
- * - rename：load → 改 title → save；不改 session_id，不扩展 SessionBackend 接口；
+ * - rename：load → 改 title → save；不改 session_id，不扩展 SessionStore 接口；
  * - delete：委托 core `deleteSessionData`（running/interrupted → conflict），
  *   进程内不实现第二套清理语义。
  *
@@ -12,9 +12,9 @@ import {
   deleteSessionData as coreDeleteSessionData,
   type DeleteSessionDataResult,
   type EventStream,
-  type RunStore,
-  type SessionBackend,
+  type RunRecordStore,
   type SessionEventLog,
+  type SessionStore,
   type TenantPaths,
 } from '../packages/core/src/index';
 
@@ -41,9 +41,9 @@ export interface SessionDeleteResult {
 export type DeleteSessionDataFn = (
   sessionId: string,
   opts: {
-    session: SessionBackend;
+    session: SessionStore;
     paths: TenantPaths;
-    runStore?: RunStore;
+    runStore?: RunRecordStore;
     events?: EventStream;
     tenantId?: string;
     eventLog?: SessionEventLog;
@@ -58,9 +58,9 @@ export interface SessionControl {
 
 /** createSessionControl 选项 */
 export interface CreateSessionControlOptions {
-  session: SessionBackend;
+  session: SessionStore;
   paths: TenantPaths;
-  runStore?: RunStore;
+  runStore?: RunRecordStore;
   /** 传入后 core 会发 `session.deleted`（带 tenant_id 与计数） */
   events?: EventStream;
   tenantId?: string;
@@ -73,9 +73,9 @@ export interface CreateSessionControlOptions {
 function defaultDeleteSessionData(
   sessionId: string,
   opts: {
-    session: SessionBackend;
+    session: SessionStore;
     paths: TenantPaths;
-    runStore?: RunStore;
+    runStore?: RunRecordStore;
     events?: EventStream;
     tenantId?: string;
     eventLog?: SessionEventLog;

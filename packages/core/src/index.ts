@@ -12,7 +12,7 @@ export {
   estimateMessagesTokens,
   estimateMessageTokens,
   estimateTokens,
-  MemoryContextManager,
+  MemoryWorkingContext,
 } from './context/index.js';
 
 // 事件流
@@ -22,6 +22,9 @@ export {
   type MemoryEventStreamOptions,
   replayRun,
 } from './events/index.js';
+// 顶层 `RunStatus` 保持 kernel 调度语义（queued/running/...）；
+// RunRecord 的 RunStatus 经 `./session` / `./types` 子路径导出。
+export type { RunStatus } from './kernel/index.js';
 // Kernel（0.2 R1：Host / Handles / Cancellation / EventBus / Transport port）
 export * from './kernel/index.js';
 // 限制检查器
@@ -85,10 +88,10 @@ export {
   type DeleteSessionDataOptions,
   type DeleteSessionDataResult,
   deleteSessionData,
-  FileRunStore,
-  FileSessionBackend,
-  MemoryRunStore,
-  MemorySessionBackend,
+  FileRunRecordStore,
+  FileSessionStore,
+  MemoryRunRecordStore,
+  MemorySessionStore,
   mergeHistoryProjection,
   type ProjectableEvent,
   type PruneRunsOptions,
@@ -102,8 +105,8 @@ export {
   SessionEventLog,
   type SessionEventLogOptions,
   type SessionLogIndex,
-  SQLiteSessionBackend,
-  type SQLiteSessionBackendOptions,
+  SQLiteSessionStore,
+  type SQLiteSessionStoreOptions,
   sessionLogDirExists,
 } from './session/index.js';
 // 多租户（0.5 F4：tenant 解析与目录布局）

@@ -55,24 +55,23 @@ run(input, sessionId?, opts?):
         await finalizeRun(execution, runState, { status: 'failed', error, signal })
         throw
 
-# run() 与 resume() 共用的唯一终态路径
-finalizeRun(execution, runState, outcome):
+# run() / resumeRun() / resumeSession() 共用的唯一终态路径
+finalizeRun(run, sessionState, outcome):
     if outcome.status == 'completed':
-        runState = completed + usage + messages
-        session.save → writeCheckpoint('completed') → 发 run.completed
+        writeRunRecord(run, 'completed') → saveSessionState(sessionState) → 发 run.completed
         return
 
     # 失败 / 取消 / 中断
     cancelled = signal 已 abort 且 reason 不属于 Host 中断集合
-    runState.status = cancelled ? 'cancelled' : 'failed'
-    runState.messages = context.messages       # 失败也保存真实上下文，不覆盖历史
+    sessionState.status = cancelled ? 'cancelled' : 'failed'
+    sessionState.messages = run.workingContext.messages  # 失败也保存真实上下文，不覆盖历史
     OnError hook（best-effort；自己抛错只发 hook.error，不替换原始错误）
-    session.save → writeCheckpoint(failed | cancelled | interrupted)
+    writeRunRecord(run, failed | cancelled | interrupted) → saveSessionState(sessionState)
     发 run.cancelled（用户取消）或 run.failed（Host 中断 / 普通错误）
     # finalizeRun 自身失败（如磁盘写失败）→ 发 run.finalize.failed，原错误继续上抛
 ```
 
 <a id="finalize"></a>
 
-`resume()` 走同一条 `finalizeRun` 路径，因此用户取消同样发 `run.cancelled`，checkpoint 状态同样按 abort reason 映射为 `cancelled` / `interrupted`。`RunExecution` 是 run 级状态的唯一来源（run id / session / branch / 计时 / usage / context），见 [runtime-api.md](runtime-api.md#execution-unit)。
+`resumeRun()` / `resumeSession()` 走同一条 `finalizeRun` 路径，因此用户取消同样发 `run.cancelled`，RunRecord 状态同样按 abort reason 映射为 `cancelled` / `interrupted`。`Run` 是 run 级瞬时状态的唯一来源（run id / session / branch / 计时 / usage / workingContext），可恢复进度在 `RunRecord`，见 [runtime-api.md](runtime-api.md#execution-unit)。
 

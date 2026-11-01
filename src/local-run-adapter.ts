@@ -9,8 +9,8 @@
  *   未给出时按 session 解析（`/resume` 等路径不受影响）。
  * - **终态等待**：复用 `waitForConnectedRun`（含 D11 修好的事件兜底），不自写一套。
  * - **D12 的上下文**：`ctx.context` 换成「当前 body 的镜像」——run 结束后从
- *   SessionBackend 读回该会话的消息。core 的 per-body context 在
- *   `InProcessMemberRuntime` 内部，不经 RPC 拿不到；SessionBackend 是同一份真相
+ *   SessionStore 读回该会话的消息。core 的 per-body context 在
+ *   `InProcessMemberRuntime` 内部，不经 RPC 拿不到；SessionStore 是同一份真相
  *   的持久化投影，且 `/resume` 正是靠它取历史，语义一致。
  *
  * 契约 §3 的两条禁止在这里落实：
@@ -22,13 +22,14 @@
 
 import { HUMAN_PRINCIPAL } from '@vessel-agent/agent';
 import {
-  type ContextManager,
   type EventStream,
-  MemoryContextManager,
+  MemoryWorkingContext,
   type Message,
   type PluginHost,
   type RunnableAgent,
-  type SessionBackend,
+  type RunOptions,
+  type SessionStore,
+  type WorkingContext,
 } from '../packages/core/src/index';
 import type { AgentControlLike } from '../packages/serve/src/index';
 import type { RunControlLike } from '../packages/serve/src/run-control.js';
@@ -48,7 +49,7 @@ export interface LocalRunAdapterOptions {
   /** 同一个 agent 控制面（建 agent 走 canonical `agents.create`） */
   agentControl: AgentControlLike;
   /** 会话后端：`/resume` 与 D12 的上下文镜像同源 */
-  session: SessionBackend;
+  session: SessionStore;
   /** run 终态等待上限；缺省 10 分钟（与 `--connect` 一致） */
   timeoutMs?: number;
   pollIntervalMs?: number;
@@ -125,18 +126,18 @@ function createFailureOf(raw: unknown): string {
  * 构造本地 `ctx.runtime` 与它背后的 `ctx.context` 镜像。
  *
  * 返回 `runtime`（交给 `ctx.runtime`）与 `context`（交给 `ctx.context`）。
- * `context` 是一个 `MemoryContextManager`：`/new`、`/resume` 的 `clear()` 照常生效，
- * 每轮 run 结束后用 SessionBackend 的真实消息覆盖，于是 `/context`、`/compact`、
+ * `context` 是一个 `MemoryWorkingContext`：`/new`、`/resume` 的 `clear()` 照常生效，
+ * 每轮 run 结束后用 SessionStore 的真实消息覆盖，于是 `/context`、`/compact`、
  * 状态栏用量都看得到内容（D12）。
  */
 export function createLocalRunAdapter(options: LocalRunAdapterOptions): {
   runtime: LocalRunAdapter;
-  context: ContextManager;
+  context: WorkingContext;
 } {
   /** session → agent id（契约 §3：先建 agent，之后每轮都带 agent_id） */
   const agentBySession = new Map<string, string>();
   /** `ctx.context` 的实体：run 结束后由会话历史覆盖 */
-  const mirror = new MemoryContextManager();
+  const mirror = new MemoryWorkingContext();
   /** 当前镜像指向哪个会话 */
   let focused: string | undefined;
 
@@ -201,66 +202,80 @@ export function createLocalRunAdapter(options: LocalRunAdapterOptions): {
     return agent.id;
   };
 
+  const perform = async (
+    inputValue: string | Message,
+    sessionId: string | undefined,
+    opts: RunOptions | undefined,
+    resume: boolean,
+  ): Promise<string> => {
+    const prompt = typeof inputValue === 'string' ? inputValue : inputValue.content;
+    const targetSession = sessionId ?? focused ?? '';
+    if (targetSession === '') throw new Error('run() requires a session');
+
+    const agentId = await ensureAgent(targetSession, opts?.agentId);
+
+    try {
+      return await waitForConnectedRun({
+        events: options.events,
+        prompt,
+        sessionId: targetSession,
+        timeoutMs: options.timeoutMs ?? DEFAULT_LOCAL_RUN_TIMEOUT_MS,
+        ...(options.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),
+        ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+        start: async (): Promise<ConnectRunStart> => {
+          const result = await options.runControl.start({
+            input: prompt,
+            // 契约 §3：必须带 agent_id，否则会落到 main 上长第二具 body。
+            agent_id: agentId,
+            session_id: targetSession,
+            // Q5：-r/--resume 的首轮显式走 resume 准入（内部字段，不进 RPC schema）。
+            ...(resume ? { resume: true } : {}),
+          });
+          if (typeof result.run_id !== 'string' || result.run_id === '') {
+            throw new Error('runs.start returned no run_id');
+          }
+          return { kind: 'job', jobId: result.run_id };
+        },
+        getRun: async (jobId) => {
+          // 本地没有 durable checkpoint：只报当前 live 状态，查不到就抛，
+          // 让 waitForConnectedRun 走事件兜底（D11 已让「查不到」等同「不可用」）。
+          const snapshot = options.runControl.snapshot();
+          const live = [...snapshot.running, ...snapshot.queued].find(
+            (run) => run.run_id === jobId,
+          );
+          if (live === undefined) {
+            throw Object.assign(new Error(`run not found: ${jobId}`), {
+              code: 'not_found',
+            });
+          }
+          return {
+            run: {
+              run_id: live.run_id,
+              session_id: live.session_id,
+              agent_id: live.agent_id,
+              status: live.status,
+            },
+          };
+        },
+      });
+    } finally {
+      // D12：每轮结束把该会话的真实历史同步进 `ctx.context`。
+      await refresh(targetSession);
+    }
+  };
+
   const runtime: LocalRunAdapter = {
     events: options.events,
     pluginHost: options.pluginHost,
     focusSession,
 
-    async run(inputValue, sessionId, opts) {
-      const prompt = typeof inputValue === 'string' ? inputValue : inputValue.content;
-      const targetSession = sessionId ?? focused ?? '';
-      if (targetSession === '') throw new Error('run() requires a session');
+    run(inputValue, sessionId, opts) {
+      return perform(inputValue, sessionId, opts, false);
+    },
 
-      const agentId = await ensureAgent(targetSession, opts?.agentId);
-
-      try {
-        return await waitForConnectedRun({
-          events: options.events,
-          prompt,
-          sessionId: targetSession,
-          timeoutMs: options.timeoutMs ?? DEFAULT_LOCAL_RUN_TIMEOUT_MS,
-          ...(options.pollIntervalMs !== undefined
-            ? { pollIntervalMs: options.pollIntervalMs }
-            : {}),
-          ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
-          start: async (): Promise<ConnectRunStart> => {
-            const result = await options.runControl.start({
-              input: prompt,
-              // 契约 §3：必须带 agent_id，否则会落到 main 上长第二具 body。
-              agent_id: agentId,
-              session_id: targetSession,
-            });
-            if (typeof result.run_id !== 'string' || result.run_id === '') {
-              throw new Error('runs.start returned no run_id');
-            }
-            return { kind: 'job', jobId: result.run_id };
-          },
-          getRun: async (jobId) => {
-            // 本地没有 durable checkpoint：只报当前 live 状态，查不到就抛，
-            // 让 waitForConnectedRun 走事件兜底（D11 已让「查不到」等同「不可用」）。
-            const snapshot = options.runControl.snapshot();
-            const live = [...snapshot.running, ...snapshot.queued].find(
-              (run) => run.run_id === jobId,
-            );
-            if (live === undefined) {
-              throw Object.assign(new Error(`run not found: ${jobId}`), {
-                code: 'not_found',
-              });
-            }
-            return {
-              run: {
-                run_id: live.run_id,
-                session_id: live.session_id,
-                agent_id: live.agent_id,
-                status: live.status,
-              },
-            };
-          },
-        });
-      } finally {
-        // D12：每轮结束把该会话的真实历史同步进 `ctx.context`。
-        await refresh(targetSession);
-      }
+    /** Q5：`-r/--resume` 的首轮显式走 resume 准入；不新增 RPC。 */
+    resumeSession(sessionId, inputValue, opts) {
+      return perform(inputValue, sessionId, opts, true);
     },
 
     dispose() {

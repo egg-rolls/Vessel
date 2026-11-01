@@ -1,14 +1,14 @@
 /**
  * Durable run 网关边界（0.3 W1，DECISION-008 §4.4 + Addendum A）。
  *
- * gateway 只是 **只读消费者**：数据来自 asm 注入的 `RunStore` / resume 适配器。
- * 这里用结构类型镜像 core 的 `RunCheckpoint` / `RunStore`（字段与 §4.1 一致），
+ * gateway 只是 **只读消费者**：数据来自 asm 注入的 `RunRecordStore` / resume 适配器。
+ * 这里用结构类型镜像 core 的 `RunRecord` / `RunRecordStore`（字段与 §4.1 一致），
  * 不依赖 core 新模块是否已经导出；asm 可以直接把 core 实例传进来。
  *
  * @module @vessel-agent/serve/durable
  */
 
-/** run 状态（与 core `RunCheckpoint['status']` 一致） */
+/** run 状态（与 core `RunRecord['status']` 一致） */
 export type DurableRunStatus = 'running' | 'interrupted' | 'completed' | 'failed' | 'cancelled';
 
 /** 允许的 run 状态集合 */
@@ -25,7 +25,7 @@ export const DEFAULT_DURABLE_LIMIT = 50;
 export const MAX_DURABLE_LIMIT = 200;
 
 /**
- * run 终态错误 envelope（来自 `run.failed` 事件 / checkpoint metadata）。
+ * run 终态错误 envelope（来自 `run.failed` 事件 / RunRecord metadata）。
  * 0.27：从已删除的执行引擎原样搬出，字段与语义不变。
  */
 export interface RunErrorMeta {
@@ -65,25 +65,28 @@ export function errorMetaOf(data: unknown): RunErrorMeta | undefined {
   return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
-/** checkpoint 的最小结构面（gateway 只读这些字段） */
+/** RunRecord 的最小结构面（gateway 只读这些字段） */
 export interface DurableCheckpointLike {
   run_id: string;
   session_id: string;
   agent_id?: string;
   status: DurableRunStatus;
-  /** 0.18 起 core 只写 `[]`；新 checkpoint 的预览在 `metadata.preview`。 */
+  /** 0.18 起 core 只写 `[]`；旧文件的 messages 读取时映射为 `legacy_messages`。 */
   messages?: Array<{ role?: string; content?: string }>;
-  /** 0.18：checkpoint 附加数据；`preview` 为 session 上下文派生的预览。 */
+  /** 只读兼容：旧 checkpoint 的消息；新 RunRecord 不写历史。 */
+  legacy_messages?: Array<{ role?: string; content?: string }>;
+  /** RunRecord 附加数据；`preview` 为 session 上下文派生的预览。 */
   metadata?: Record<string, unknown>;
   iteration?: number;
-  /** 0.27：queued-cancel 补写的终态 checkpoint 会带 `created_at`。 */
+  error?: string;
+  /** 0.27：queued-cancel 补写的终态 RunRecord 会带 `created_at`。 */
   created_at?: number;
   updated_at: number;
   /** 0.5：所属 tenant；缺省视为 default */
   tenant_id?: string;
 }
 
-/** store 的最小结构面（core RunStore 结构满足） */
+/** store 的最小结构面（core RunRecordStore 结构满足） */
 export interface DurableStoreLike {
   load(runId: string): Promise<DurableCheckpointLike | null>;
   list(opts?: {
@@ -92,9 +95,9 @@ export interface DurableStoreLike {
     limit?: number;
   }): Promise<DurableCheckpointLike[]>;
   /**
-   * 0.27：写一条 checkpoint（core `RunStore.save` 已有此方法，属复用）。
+   * 0.27：写一条 RunRecord（core `RunRecordStore.save` 已有此方法，属复用）。
    * 只用于 `runs.cancel` 命中 queued run 时补终态——scheduler 不会为
-   * queued-cancel 产出 core 事件，也就没有 checkpoint。缺失 = 跳过写入。
+   * queued-cancel 产出 core 事件，也就没有 RunRecord。缺失 = 跳过写入。
    */
   save?(checkpoint: DurableCheckpointLike): Promise<void>;
 }
@@ -164,7 +167,7 @@ export function previewOf(checkpoint: DurableCheckpointLike): string | undefined
     }
   }
 
-  const messages = checkpoint.messages;
+  const messages = checkpoint.messages ?? checkpoint.legacy_messages;
   if (!Array.isArray(messages)) return undefined;
   for (let index = messages.length - 1; index >= 0; index--) {
     const content = messages[index]?.content;

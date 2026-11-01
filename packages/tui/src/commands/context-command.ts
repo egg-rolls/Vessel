@@ -8,7 +8,7 @@
  * 压缩后把 context.messages 写回当前会话快照（远端内存后端 load 为空则跳过）。
  */
 
-import type { ContextManager, Message } from '@vessel-agent/core';
+import type { Message, WorkingContext } from '@vessel-agent/core';
 import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
@@ -16,7 +16,7 @@ import type { CommandEntry, CommandResult, ReplState } from './commands.js';
 import { getSessionState } from './sessions-command.js';
 
 /** 0.6.1 core 的可选异步压缩入口 */
-interface CompactableContext extends ContextManager {
+interface CompactableContext extends WorkingContext {
   compactAsync?(): Promise<number>;
   compactWithSummary?(): Promise<number>;
 }
@@ -186,7 +186,7 @@ export interface CompactOutcome {
 
 /** 纯适配：优先 runtime.compactContext；否则 compactAsync；同步 compact 也兼容 Promise */
 export async function compactSessionContext(
-  context: ContextManager,
+  context: WorkingContext,
   persist?: (messages: Message[]) => Promise<boolean>,
   runtime?: unknown,
 ): Promise<CompactOutcome> {

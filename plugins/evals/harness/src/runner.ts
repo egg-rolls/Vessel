@@ -8,8 +8,8 @@ import {
   type EventStream,
   ExecutionUnit,
   type LLMProvider,
-  MemoryContextManager,
   MemoryEventStream,
+  MemoryWorkingContext,
   type RunEvent,
   type RunnableAgent,
 } from '@vessel-agent/core';
@@ -86,7 +86,7 @@ async function createDefaultBundle(
   const runtime = await ExecutionUnit.create({
     provider,
     model: options.model ?? (options.providerFactory ? NETWORK_MODEL : DEFAULT_MODEL),
-    context: new MemoryContextManager(),
+    context: new MemoryWorkingContext(),
     events,
     limits: {},
     termination: { maxIterations: 10 },

@@ -4,7 +4,7 @@
  * @module @vessel-agent/serve
  */
 
-import type { SessionBackend } from '@vessel-agent/core';
+import type { SessionState, SessionStore } from '@vessel-agent/core';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import {
   MAX_SESSION_SEARCH_LIMIT,
@@ -17,9 +17,16 @@ import { MethodError } from '../errors.js';
 import { stringParam, tenantParamSchema } from './common.js';
 import { runStateSchema, sessionInfoSchema, sessionSearchHitSchema } from './schemas.js';
 
+/** run 记录的最小读取面（gateway 只需要按 run_id 取最近一条）。 */
+export interface SessionRunLookup {
+  load(runId: string): Promise<unknown>;
+}
+
 export interface SessionMethodsDeps {
   defaultTenantId: string;
-  sessionFor(tenantId: string): SessionBackend | undefined;
+  sessionFor(tenantId: string): SessionStore | undefined;
+  /** 最近 RunRecord 的读取面；缺省时 `sessions.get` 只用 `legacy_run` 投影。 */
+  runStoreFor?(tenantId: string): SessionRunLookup | undefined;
   sessionData?: {
     deleteSessionData(
       sessionId: string,
@@ -32,10 +39,65 @@ export interface SessionMethodsDeps {
   };
 }
 
-export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinition[] {
-  const { defaultTenantId, sessionFor, sessionData } = deps;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
-  function requireSession(tenantId: string): SessionBackend {
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** 终态（update_at 可作为 completed_at）。 */
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+]);
+
+/**
+ * `sessions.get` 的线上投影：SessionState 元数据 + 最近 RunRecord（或 `legacy_run`）。
+ *
+ * 形状保持既有 `runStateSchema`：run 字段来自 RunRecord，session 字段来自 SessionState。
+ */
+export function toSessionView(state: SessionState, latestRaw: unknown): Record<string, unknown> {
+  const latest = isRecord(latestRaw) ? latestRaw : undefined;
+  const legacy = state.legacy_run;
+  const status = optionalString(latest?.status) ?? state.status ?? 'running';
+  const terminal = TERMINAL_STATUSES.has(status);
+  const runId = optionalString(latest?.run_id) ?? state.last_run_id ?? state.session_id;
+  const startedAt = optionalNumber(latest?.created_at) ?? state.created_at;
+  const updatedAt = optionalNumber(latest?.updated_at) ?? state.updated_at;
+  const completedAt = terminal ? updatedAt : legacy?.completed_at;
+  const usage = latest?.usage ?? legacy?.usage;
+  const error = optionalString(latest?.error) ?? legacy?.error;
+  const branch = optionalString(latest?.branch) ?? state.created_on_branch;
+
+  return {
+    run_id: runId,
+    session_id: state.session_id,
+    messages: state.messages ?? [],
+    started_at: startedAt,
+    ...(completedAt !== undefined ? { completed_at: completedAt } : {}),
+    status,
+    ...(usage !== undefined ? { usage } : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(state.title !== undefined ? { title: state.title } : {}),
+    ...(state.preview !== undefined ? { preview: state.preview } : {}),
+    updated_at: updatedAt,
+    ...(branch !== undefined ? { branch } : {}),
+    ...(state.tenant_id !== undefined ? { tenant_id: state.tenant_id } : {}),
+  };
+}
+
+export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinition[] {
+  const { defaultTenantId, sessionFor, runStoreFor, sessionData } = deps;
+
+  function requireSession(tenantId: string): SessionStore {
     const resolved = sessionFor(tenantId);
     if (!resolved) {
       if (tenantId !== defaultTenantId) {
@@ -91,7 +153,12 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const backend = requireSession(ctx.tenantId);
         const state = await backend.load(stringParam(params, 'session_id'));
         if (!state) throw new RpcError('not_found', 'Session not found');
-        return { session: state };
+        const runStore = runStoreFor?.(ctx.tenantId);
+        const latest =
+          runStore !== undefined && state.last_run_id !== undefined
+            ? await runStore.load(state.last_run_id)
+            : undefined;
+        return { session: toSessionView(state, latest) };
       },
     },
     {

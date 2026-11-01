@@ -35,8 +35,8 @@ import {
   InProcessScheduler,
   type LLMProvider,
   type Logger,
-  MemoryContextManager,
   MemoryPluginHost,
+  MemoryWorkingContext,
   type Message,
   noopLogger,
   type Plugin,
@@ -44,13 +44,13 @@ import {
   type PluginInstallScope,
   type ProviderFactory,
   type RunnableAgent,
-  type RunStore,
+  type RunRecordStore,
   type RuntimePermissionConfig,
   resolveTenantPaths,
   type Scheduler,
   type SelfCardOptions,
-  type SessionBackend,
   SessionEventLog,
+  type SessionStore,
   type TenantPaths,
   type ToolDefinition,
   type TraceRedactor,
@@ -77,10 +77,10 @@ import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { createProvider } from './provider-factory';
 import { withReasoning } from './reasoning';
-import { closeRunStore, createRunStore } from './run-store-factory';
+import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';
 import { ownerSelfCard } from './self-card';
 import { createSessionControl, type SessionControl } from './session-control';
-import { createSessionBackend } from './session-factory';
+import { createSessionStore } from './session-factory';
 import { withSessionWriteLock } from './session-lock-runtime';
 import { reportShutdownFailure } from './shutdown-report';
 import { acquireTenantLock, type TenantLock, type TenantLockMode } from './tenant-lock';
@@ -173,8 +173,8 @@ export interface TenantRuntimeBundle {
   events: EventStream;
   /** runtime 事件出口；与 tenant 流同一实例 */
   runtimeEvents: EventStream;
-  session: SessionBackend;
-  context: MemoryContextManager;
+  session: SessionStore;
+  context: MemoryWorkingContext;
   pluginHost: PluginHost;
   /**
    * 0.27：每 tenant 唯一 `InProcessScheduler`（spec §5.1）。
@@ -183,7 +183,7 @@ export interface TenantRuntimeBundle {
   scheduler: Scheduler;
   runtime: RunnableAgent;
   executionUnit?: ExecutionUnit;
-  runStore?: RunStore;
+  runStore?: RunRecordStore;
   /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
   eventLog?: SessionEventLog;
   trace?: TraceControl;
@@ -592,7 +592,7 @@ export async function buildTenantRuntime(
       }
     }
 
-    const runStore = createRunStore(config, {
+    const runStore = createRunRecordStore(config, {
       tenantRunsDir: tenantPaths.runs_dir,
       tenantId,
     });
@@ -600,7 +600,7 @@ export async function buildTenantRuntime(
     const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
 
     const summarizer = createContextSummarizer(provider, providerModel);
-    const context = new MemoryContextManager(contextConfigFor(config, summarizer));
+    const context = new MemoryWorkingContext(contextConfigFor(config, summarizer));
     const events = createEventStream(config);
     // 0.27（spec §5.1）：每 tenant 唯一 scheduler，装配层只在此处构造。
     // 所有 body / owner / 成员的执行都经它的 executor，不再有第二套队列。
@@ -642,7 +642,7 @@ export async function buildTenantRuntime(
     // 0.18：本 tenant 的运行时流注册进 gateway 的事件扇入面。
     const unregisterHub = options.hub?.register(tenantId, events);
 
-    const session = createSessionBackend(config.session, {
+    const session = createSessionStore(config.session, {
       tenantSessionsDir: tenantPaths.sessions_dir,
       tenantSessionsDbPath: tenantSessionsDbPath(tenantPaths.root),
       tenantId,
@@ -734,7 +734,7 @@ export async function buildTenantRuntime(
     };
     const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
 
-    const contextFactory = () => new MemoryContextManager(contextConfigFor(config, summarizer));
+    const contextFactory = () => new MemoryWorkingContext(contextConfigFor(config, summarizer));
 
     const executionUnit = await ExecutionUnit.create(
       // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
@@ -770,16 +770,16 @@ export async function buildTenantRuntime(
         pluginConfigs?: Record<string, Record<string, unknown>>;
       }),
     );
-    // 0.10 R2-18：包装 run/resume 以精确跟踪在跑 run（shutdown drain 用）。
+    // 0.10 R2-18：包装 run/resumeRun 以精确跟踪在跑 run（shutdown drain 用）。
     const originalRun = executionUnit.run.bind(executionUnit);
     executionUnit.run = (input, sessionId, opts) =>
       trackActive(originalRun(input, sessionId, opts));
-    const originalResume = executionUnit.resume?.bind(executionUnit);
+    const originalResume = executionUnit.resumeRun?.bind(executionUnit);
     if (originalResume) {
-      executionUnit.resume = (runId, opts) => trackActive(originalResume(runId, opts));
+      executionUnit.resumeRun = (runId, opts) => trackActive(originalResume(runId, opts));
     }
 
-    // 0.15：run/resume 的跨进程写锁。memory 后端不落盘，无需锁。
+    // 0.15：run/resumeRun 的跨进程写锁。memory 后端不落盘，无需锁。
     const lockedRuntime = withSessionWriteLock(executionUnit, {
       tenantDir: tenantPaths.root,
       enabled: options.sessionLocks ?? backend !== 'memory',
@@ -950,7 +950,7 @@ export async function buildTenantRuntime(
         }
       }
 
-      await closeRunStore(runStore, (error) => report('runStore.close', error));
+      await closeRunRecordStore(runStore, (error) => report('runStore.close', error));
 
       if (eventLog) {
         try {
@@ -1093,8 +1093,8 @@ export interface TenantRuntimeFactory {
   /** 已成功构建的 tenant id */
   tenantIds(): string[];
   runtimeFor(tenantId: string): RunnableAgent | undefined;
-  sessionFor(tenantId: string): SessionBackend | undefined;
-  contextFor(tenantId: string): MemoryContextManager | undefined;
+  sessionFor(tenantId: string): SessionStore | undefined;
+  contextFor(tenantId: string): MemoryWorkingContext | undefined;
   pluginHostFor(tenantId: string): PluginHost | undefined;
   metricsFor(tenantId: string): MetricsControlLike | undefined;
   pluginsFor(tenantId: string): Array<{ name: string; enabled: boolean }> | undefined;

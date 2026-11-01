@@ -6,11 +6,11 @@
 
 import {
   ExecutionUnit,
-  MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
   MemoryPluginHost,
-  MemorySessionBackend,
+  MemorySessionStore,
+  MemoryWorkingContext,
   type RunEvent,
 } from '../packages/core/src/index';
 
@@ -41,9 +41,9 @@ async function main() {
   });
 
   // 3. 创建其他组件
-  const context = new MemoryContextManager();
+  const context = new MemoryWorkingContext();
   const events = new MemoryEventStream();
-  const session = new MemorySessionBackend();
+  const session = new MemorySessionStore();
 
   // 4. 创建 Runtime
   const runtime = await ExecutionUnit.create({
@@ -87,7 +87,7 @@ async function main() {
   const savedState = await session.load(sessionId);
   console.log(`Session saved: ${savedState?.session_id}`);
   console.log(`Session status: ${savedState?.status}`);
-  console.log(`Messages in session: ${savedState?.messages.length}\n`);
+  console.log(`Messages in session: ${savedState?.messages?.length ?? 0}\n`);
 
   console.log('--- Demo 3: Event History ---');
   const history = events.getHistory();

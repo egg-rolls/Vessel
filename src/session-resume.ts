@@ -13,9 +13,9 @@
 
 import type { ConfigLoadOptions, VesselConfig } from '../packages/config/src/index';
 import { loadConfig } from '../packages/config/src/index';
-import type { SessionBackend, SessionInfo } from '../packages/core/src/index';
+import type { SessionInfo, SessionStore } from '../packages/core/src/index';
 import { resolveDataDir, resolveTenantPaths } from './data-paths';
-import { createSessionBackend } from './session-factory';
+import { createSessionStore } from './session-factory';
 
 /** 列表展示上限 */
 const LIST_LIMIT = 50;
@@ -23,7 +23,7 @@ const LIST_LIMIT = 50;
 export interface LocalSessionOptions extends ConfigLoadOptions {}
 
 interface OpenedSession {
-  backend: SessionBackend;
+  backend: SessionStore;
   config: VesselConfig;
   tenantId: string;
   close: () => void;
@@ -42,7 +42,7 @@ async function openLocalSession(options: LocalSessionOptions): Promise<OpenedSes
 
   const dataDir = resolveDataDir(loaded.config);
   const paths = resolveTenantPaths(dataDir, loaded.tenantId);
-  const backend = createSessionBackend(loaded.config.session, {
+  const backend = createSessionStore(loaded.config.session, {
     tenantSessionsDir: paths.sessions_dir,
     tenantSessionsDbPath: `${paths.root}/sessions.db`,
     tenantId: loaded.tenantId,
@@ -98,8 +98,12 @@ export async function resolveContinueSessionId(
   }
 }
 
-/** `-r <id>`：确认会话存在且有消息，避免静默新建空会话 */
-export async function validateResumeSessionId(
+/**
+ * `-r/--resume <id>` 的 CLI wrapper（Q5）：确认会话存在且有消息，
+ * 避免静默新建空会话。只读会话存储，不发 RPC；续聊的 run 由后续
+ * `ExecutionUnit.resumeSession(sessionId)` / `run()` 新建。
+ */
+export async function resumeSession(
   sessionId: string,
   options: LocalSessionOptions = {},
 ): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -113,7 +117,7 @@ export async function validateResumeSessionId(
     if (!state) {
       return { ok: false, error: `session_not_found: ${sessionId}` };
     }
-    if (state.messages.length === 0) {
+    if ((state.messages?.length ?? 0) === 0) {
       return { ok: false, error: `session_empty: ${sessionId}` };
     }
     return { ok: true };

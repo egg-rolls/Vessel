@@ -59,7 +59,7 @@ export const runStatusSchema = {
   },
 };
 
-/** core RunState（sessions.get 的 `session`）。 */
+/** `sessions.get` 的 `session`：SessionState + 最近 RunRecord 的投影。 */
 export const runStateSchema = {
   type: 'object',
   required: ['run_id', 'session_id', 'messages', 'started_at', 'status'],
@@ -69,7 +69,10 @@ export const runStateSchema = {
     messages: { type: 'array' },
     started_at: { type: 'number' },
     completed_at: { type: 'number' },
-    status: { type: 'string', enum: ['running', 'completed', 'failed', 'cancelled'] },
+    status: {
+      type: 'string',
+      enum: ['running', 'interrupted', 'completed', 'failed', 'cancelled'],
+    },
     usage: usageSchema,
     error: { type: 'string' },
     title: { type: 'string' },
@@ -77,8 +80,6 @@ export const runStateSchema = {
     updated_at: { type: 'number' },
     branch: { type: 'string' },
     tenant_id: { type: 'string' },
-    ended_at: { type: 'number' },
-    end_reason: { type: 'string' },
   },
 };
 
@@ -106,8 +107,6 @@ export const sessionInfoSchema = {
     // nullable/union，故不声明类型（任意值通过），required 与其余字段仍受约束。
     branch: {},
     tenant_id: {},
-    ended_at: {},
-    end_reason: {},
   },
 };
 

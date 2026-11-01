@@ -13,11 +13,11 @@
 import { fileURLToPath } from 'node:url';
 import {
   ExecutionUnit,
-  MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
   MemoryPluginHost,
-  MemorySessionBackend,
+  MemorySessionStore,
+  MemoryWorkingContext,
 } from '../packages/core/src/index';
 import { createMcpPlugin } from '../plugins/mcp/client/src/index';
 
@@ -67,9 +67,9 @@ async function main(): Promise<void> {
     const runtime = await ExecutionUnit.create({
       provider: new MemoryLLMProvider(),
       model: 'mock-model',
-      context: new MemoryContextManager(),
+      context: new MemoryWorkingContext(),
       events,
-      session: new MemorySessionBackend(),
+      session: new MemorySessionStore(),
       limits: { requestLimit: 10 },
       termination: { maxIterations: 3 },
       pluginHost,

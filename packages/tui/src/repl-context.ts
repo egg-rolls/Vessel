@@ -13,11 +13,11 @@
 
 import type { VesselConfig } from '@vessel-agent/config';
 import type {
-  ContextManager,
   EventStream,
   PluginHost,
   RunnableAgent,
-  SessionBackend,
+  SessionStore,
+  WorkingContext,
 } from '@vessel-agent/core';
 
 // ── 0.3 T1：注入控制面（tui 定义结构，asm 实现；tui 不 import 任何实现） ──
@@ -275,13 +275,13 @@ export interface ReplContext {
   pluginHost: PluginHost;
 
   /** 会话后端——/resume、/history 的增删改查 */
-  session: SessionBackend;
+  session: SessionStore;
 
   /** 事件流——StreamOutput / StateTracker 订阅，获取 LlmStreamChunk + 工具调用事件 */
   events: EventStream;
 
-  /** 上下文管理器--/new、/resume 切会话时 clear()，让 runtime.run() 重新从 SessionBackend 载入历史 */
-  context: ContextManager;
+  /** 上下文管理器--/new、/resume 切会话时 clear()，让 runtime.run() 重新从 SessionStore 载入历史 */
+  context: WorkingContext;
 
   // ── 可变状态（REPL 读写，壳感知变化）────────────────
 

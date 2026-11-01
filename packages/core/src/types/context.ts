@@ -23,15 +23,15 @@ export type ContextSummarizer = (
 /** `context.compacted` 的 reason（0.15 E1） */
 export type ContextCompactedReason = 'auto' | 'overflow' | 'manual';
 
-/** 上下文管理器接口 */
-export interface ContextManager {
+/** 一次 Run 的上下文窗口（per Run，从 SessionEventLog 重建，不落库） */
+export interface WorkingContext {
   add(msg: Message): void;
   readonly messages: Message[];
   /** @returns 本次移除的消息数（0 = 未压缩）；同步实现，无 summarizer 时用占位符 */
   compact(): number;
   /**
    * 0.6.1 E3：异步压缩。配置 summarizer 时产生真实摘要，
-   * 否则回退到同步 compact() 的占位符。实现可选，旧 ContextManager 不受影响。
+   * 否则回退到同步 compact() 的占位符。实现可选。
    */
   compactAsync?(): Promise<number>;
   /**

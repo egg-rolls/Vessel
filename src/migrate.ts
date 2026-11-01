@@ -16,9 +16,9 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   atomicWrite,
-  type RunCheckpoint,
-  type RunState,
+  type RunRecord,
   resolveTenantPaths,
+  type SessionState,
   type TenantPaths,
 } from '../packages/core/src/index';
 import { expandHome } from './data-paths';
@@ -100,10 +100,9 @@ function encodeId(value: string): string | undefined {
   }
 }
 
-const RUN_STATE_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
-const RUN_CHECKPOINT_STATUSES = new Set([...RUN_STATE_STATUSES, 'interrupted']);
+const RUN_STATUSES = new Set(['running', 'interrupted', 'completed', 'failed', 'cancelled']);
 
-function isUsage(value: unknown): value is RunState['usage'] {
+function isUsage(value: unknown): value is RunRecord['usage'] {
   return (
     isRecord(value) &&
     typeof value.prompt_tokens === 'number' &&
@@ -119,14 +118,19 @@ function sourceTenantOf(value: Record<string, unknown>): string | undefined {
     : undefined;
 }
 
-interface RunStateCandidate {
-  state: RunState;
+interface SessionCandidate {
+  session: SessionState;
+  /** 旧顶层 run 字段拆出的 RunRecord；无可用 run 字段时为 undefined */
+  run?: RunRecord;
   /** 源数据自带的 tenant；undefined = 0.4 legacy */
   sourceTenantId?: string;
 }
 
-/** 规范化 RunState；非法返回 undefined。保留源 tenant_id，不在此处改写归属。 */
-function normalizeRunState(value: unknown): RunStateCandidate | undefined {
+/**
+ * 规范化旧 session JSON/sqlite 行（旧 `RunState`）：拆成 `SessionState` + `RunRecord`。
+ * 非法返回 undefined。保留源 tenant_id，不在此处改写归属。
+ */
+function normalizeLegacySession(value: unknown): SessionCandidate | undefined {
   if (!isRecord(value)) return undefined;
   if (typeof value.session_id !== 'string' || typeof value.run_id !== 'string') {
     return undefined;
@@ -134,44 +138,76 @@ function normalizeRunState(value: unknown): RunStateCandidate | undefined {
   if (!Array.isArray(value.messages) || typeof value.started_at !== 'number') {
     return undefined;
   }
-  if (typeof value.status !== 'string' || !RUN_STATE_STATUSES.has(value.status)) {
+  if (typeof value.status !== 'string' || !RUN_STATUSES.has(value.status)) {
     return undefined;
   }
 
   const sourceTenantId = sourceTenantOf(value);
+  const startedAt = value.started_at;
+  const updatedAt = typeof value.updated_at === 'number' ? value.updated_at : startedAt;
+  const completedAt = typeof value.completed_at === 'number' ? value.completed_at : undefined;
+  const usage = isUsage(value.usage) ? value.usage : undefined;
+  const error = typeof value.error === 'string' ? value.error : undefined;
+  const branch = typeof value.branch === 'string' ? value.branch : undefined;
+  const derivedUptoSeq =
+    typeof value.derived_upto_seq === 'number' ? value.derived_upto_seq : undefined;
+
+  const legacyRun =
+    completedAt !== undefined || usage !== undefined || error !== undefined
+      ? {
+          ...(completedAt !== undefined ? { completed_at: completedAt } : {}),
+          ...(usage !== undefined ? { usage } : {}),
+          ...(error !== undefined ? { error } : {}),
+        }
+      : undefined;
+
+  const session: SessionState = {
+    session_id: value.session_id,
+    created_at: startedAt,
+    updated_at: updatedAt,
+    ...(typeof value.title === 'string' ? { title: value.title } : {}),
+    ...(typeof value.preview === 'string' ? { preview: value.preview } : {}),
+    ...(sourceTenantId !== undefined ? { tenant_id: sourceTenantId } : {}),
+    ...(branch !== undefined ? { created_on_branch: branch } : {}),
+    messages: value.messages as SessionState['messages'],
+    ...(derivedUptoSeq !== undefined ? { derived_upto_seq: derivedUptoSeq } : {}),
+    status: value.status as SessionState['status'],
+    last_run_id: value.run_id,
+    ...(legacyRun !== undefined ? { legacy_run: legacyRun } : {}),
+  };
+
+  const record: RunRecord = {
+    run_id: value.run_id,
+    session_id: value.session_id,
+    status: value.status as RunRecord['status'],
+    created_at: startedAt,
+    updated_at: completedAt ?? updatedAt,
+    ...(isUsage(value.usage) ? { usage: value.usage } : {}),
+    ...(typeof value.error === 'string' ? { error: value.error } : {}),
+    ...(branch !== undefined ? { branch } : {}),
+    ...(derivedUptoSeq !== undefined ? { event_cursor: derivedUptoSeq } : {}),
+    ...(sourceTenantId !== undefined ? { tenant_id: sourceTenantId } : {}),
+  };
+
   return {
-    state: {
-      run_id: value.run_id,
-      session_id: value.session_id,
-      messages: value.messages as RunState['messages'],
-      started_at: value.started_at,
-      status: value.status as RunState['status'],
-      ...(typeof value.completed_at === 'number' ? { completed_at: value.completed_at } : {}),
-      ...(isUsage(value.usage) ? { usage: value.usage } : {}),
-      ...(typeof value.error === 'string' ? { error: value.error } : {}),
-      ...(typeof value.title === 'string' ? { title: value.title } : {}),
-      ...(typeof value.preview === 'string' ? { preview: value.preview } : {}),
-      ...(typeof value.updated_at === 'number' ? { updated_at: value.updated_at } : {}),
-      ...(typeof value.branch === 'string' ? { branch: value.branch } : {}),
-      ...(sourceTenantId !== undefined ? { tenant_id: sourceTenantId } : {}),
-    },
+    session,
+    run: record,
     ...(sourceTenantId !== undefined ? { sourceTenantId } : {}),
   };
 }
 
-interface RunCheckpointCandidate {
-  checkpoint: RunCheckpoint;
+interface RunRecordCandidate {
+  record: RunRecord;
   sourceTenantId?: string;
 }
 
-/** 规范化 RunCheckpoint；非法返回 undefined。保留源 tenant_id。 */
-function normalizeRunCheckpoint(value: unknown): RunCheckpointCandidate | undefined {
+/** 规范化旧 RunCheckpoint；非法返回 undefined。旧 `messages` 收进只读兼容字段。 */
+function normalizeRunRecord(value: unknown): RunRecordCandidate | undefined {
   if (!isRecord(value)) return undefined;
   if (typeof value.run_id !== 'string' || typeof value.session_id !== 'string') {
     return undefined;
   }
-  if (!Array.isArray(value.messages)) return undefined;
-  if (typeof value.status !== 'string' || !RUN_CHECKPOINT_STATUSES.has(value.status)) {
+  if (typeof value.status !== 'string' || !RUN_STATUSES.has(value.status)) {
     return undefined;
   }
   if (typeof value.created_at !== 'number' || typeof value.updated_at !== 'number') {
@@ -180,22 +216,52 @@ function normalizeRunCheckpoint(value: unknown): RunCheckpointCandidate | undefi
 
   const sourceTenantId = sourceTenantOf(value);
   return {
-    checkpoint: {
+    record: {
       run_id: value.run_id,
       session_id: value.session_id,
-      status: value.status as RunCheckpoint['status'],
-      messages: value.messages as RunCheckpoint['messages'],
+      status: value.status as RunRecord['status'],
       created_at: value.created_at,
       updated_at: value.updated_at,
       ...(typeof value.agent_id === 'string' ? { agent_id: value.agent_id } : {}),
       ...(isUsage(value.usage) ? { usage: value.usage } : {}),
       ...(typeof value.iteration === 'number' ? { iteration: value.iteration } : {}),
       ...(typeof value.error === 'string' ? { error: value.error } : {}),
+      ...(typeof value.event_cursor === 'number' ? { event_cursor: value.event_cursor } : {}),
       ...(isRecord(value.metadata) ? { metadata: value.metadata } : {}),
+      ...(Array.isArray(value.messages)
+        ? { legacy_messages: value.messages as NonNullable<RunRecord['legacy_messages']> }
+        : {}),
       ...(sourceTenantId !== undefined ? { tenant_id: sourceTenantId } : {}),
     },
     ...(sourceTenantId !== undefined ? { sourceTenantId } : {}),
   };
+}
+
+/** SessionState -> 磁盘形状（保留旧顶层 run 镜像键），与 FileSessionStore 写入一致。 */
+function toStoredSession(state: SessionState): Record<string, unknown> {
+  return {
+    session_id: state.session_id,
+    title: state.title,
+    preview: state.preview,
+    tenant_id: state.tenant_id,
+    created_at: state.created_at,
+    updated_at: state.updated_at,
+    started_at: state.created_at,
+    completed_at: state.legacy_run?.completed_at,
+    status: state.status,
+    usage: state.legacy_run?.usage,
+    error: state.legacy_run?.error,
+    branch: state.created_on_branch,
+    run_id: state.last_run_id,
+    messages: state.messages ?? [],
+    derived_upto_seq: state.derived_upto_seq,
+  };
+}
+
+/** RunRecord -> 磁盘形状（旧 reader 仍能解析 `messages`）。 */
+function toStoredRunRecord(record: RunRecord): Record<string, unknown> {
+  const { legacy_messages, ...rest } = record;
+  return { ...rest, messages: legacy_messages ?? [] };
 }
 
 /** legacy（无 tenant）补目标 tenant；源 tenant 不同则返回 undefined（foreign → skipped） */
@@ -223,7 +289,7 @@ async function writeIfAbsent(
 }
 
 /** 读取 sqlite sessions 表（只读，绝不创建） */
-function readSqliteSessions(sourcePath: string, counts: MigrateCounts): RunStateCandidate[] {
+function readSqliteSessions(sourcePath: string, counts: MigrateCounts): SessionCandidate[] {
   if (!existsSync(sourcePath)) {
     throw new MigrateError('source_not_found', `sqlite source not found: ${sourcePath}`);
   }
@@ -232,7 +298,7 @@ function readSqliteSessions(sourcePath: string, counts: MigrateCounts): RunState
   try {
     db = new Database(sourcePath, { readonly: true });
     const rows = db.prepare('SELECT * FROM sessions').all() as Record<string, unknown>[];
-    const candidates: RunStateCandidate[] = [];
+    const candidates: SessionCandidate[] = [];
 
     for (const row of rows) {
       if (typeof row.session_id !== 'string') {
@@ -242,7 +308,7 @@ function readSqliteSessions(sourcePath: string, counts: MigrateCounts): RunState
       }
       counts.found += 1;
       try {
-        const candidate = normalizeRunState({
+        const candidate = normalizeLegacySession({
           run_id: row.run_id,
           session_id: row.session_id,
           messages: parseJson(row.messages),
@@ -280,7 +346,7 @@ function readSqliteSessions(sourcePath: string, counts: MigrateCounts): RunState
 async function readFileV1Sessions(
   sourceDir: string,
   counts: MigrateCounts,
-): Promise<RunStateCandidate[]> {
+): Promise<SessionCandidate[]> {
   if (!existsSync(sourceDir)) {
     throw new MigrateError('source_not_found', `file-v1 sessions source not found: ${sourceDir}`);
   }
@@ -295,12 +361,12 @@ async function readFileV1Sessions(
     throw new MigrateError('invalid_source', `cannot read sessions source: ${sourceDir}`);
   }
 
-  const candidates: RunStateCandidate[] = [];
+  const candidates: SessionCandidate[] = [];
   for (const name of entries) {
     counts.found += 1;
     try {
       const parsed: unknown = JSON.parse(await readFile(join(sourceDir, name), 'utf8'));
-      const candidate = normalizeRunState(parsed);
+      const candidate = normalizeLegacySession(parsed);
       if (!candidate) {
         counts.invalid += 1;
         continue;
@@ -317,7 +383,7 @@ async function readFileV1Sessions(
 async function readFileV1Runs(
   sourceDir: string,
   counts: MigrateCounts,
-): Promise<RunCheckpointCandidate[]> {
+): Promise<RunRecordCandidate[]> {
   let entries: string[];
   try {
     const dirents = await readdir(sourceDir, { withFileTypes: true });
@@ -328,12 +394,12 @@ async function readFileV1Runs(
     return [];
   }
 
-  const checkpoints: RunCheckpointCandidate[] = [];
+  const checkpoints: RunRecordCandidate[] = [];
   for (const name of entries) {
     counts.found += 1;
     try {
       const parsed: unknown = JSON.parse(await readFile(join(sourceDir, name), 'utf8'));
-      const candidate = normalizeRunCheckpoint(parsed);
+      const candidate = normalizeRunRecord(parsed);
       if (!candidate) {
         counts.invalid += 1;
         continue;
@@ -404,41 +470,58 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
     }
   }
 
+  // 显式 runs 源优先；这些 run_id 不再从 session 顶层字段派生第二份。
+  const explicitRunIds = new Set(runCandidates.map((candidate) => candidate.record.run_id));
+
   try {
     for (const candidate of sessionCandidates) {
-      const encoded = encodeId(candidate.state.session_id);
+      const encoded = encodeId(candidate.session.session_id);
       if (encoded === undefined) {
         sessions.invalid += 1;
         continue;
       }
       // 源已有 tenant：不同归属 → skipped，绝不改写。legacy 无 tenant 才补目标值。
-      const payload = assignTenant(candidate.state, candidate.sourceTenantId, options.tenantId);
-      if (!payload) {
+      const state = assignTenant(candidate.session, candidate.sourceTenantId, options.tenantId);
+      if (!state) {
         sessions.skipped += 1;
         continue;
       }
       const target = join(tenantPaths.sessions_dir, `${encoded}.json`);
-      const outcome = await writeIfAbsent(target, payload, apply);
+      const outcome = await writeIfAbsent(target, toStoredSession(state), apply);
       sessions[outcome] += 1;
+
+      // 旧 session 顶层 run 字段 → 独立 RunRecord（或仅在 session 里留 legacy_run）。
+      const derived = candidate.run;
+      if (derived === undefined || explicitRunIds.has(derived.run_id)) continue;
+      runs.found += 1;
+      const encodedRun = encodeId(derived.run_id);
+      if (encodedRun === undefined) {
+        runs.invalid += 1;
+        continue;
+      }
+      const record = assignTenant(derived, candidate.sourceTenantId, options.tenantId);
+      if (!record) {
+        runs.skipped += 1;
+        continue;
+      }
+      const runTarget = join(tenantPaths.runs_dir, `${encodedRun}.json`);
+      const runOutcome = await writeIfAbsent(runTarget, toStoredRunRecord(record), apply);
+      runs[runOutcome] += 1;
     }
 
     for (const candidate of runCandidates) {
-      const encoded = encodeId(candidate.checkpoint.run_id);
+      const encoded = encodeId(candidate.record.run_id);
       if (encoded === undefined) {
         runs.invalid += 1;
         continue;
       }
-      const payload = assignTenant(
-        candidate.checkpoint,
-        candidate.sourceTenantId,
-        options.tenantId,
-      );
+      const payload = assignTenant(candidate.record, candidate.sourceTenantId, options.tenantId);
       if (!payload) {
         runs.skipped += 1;
         continue;
       }
       const target = join(tenantPaths.runs_dir, `${encoded}.json`);
-      const outcome = await writeIfAbsent(target, payload, apply);
+      const outcome = await writeIfAbsent(target, toStoredRunRecord(payload), apply);
       runs[outcome] += 1;
     }
   } finally {

@@ -3,9 +3,21 @@
  * @module @vessel-agent/core/session
  */
 
-export type { RunCheckpoint, RunResumeCode, RunStore } from '../types/run-store.js';
-export { RunAlreadyRunningError, RunResumeError } from '../types/run-store.js';
-export type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
+export type {
+  RunRecord,
+  RunRecordStore,
+  RunResumeCode,
+  RunStatus,
+  RunUsage,
+} from '../types/run-record-store.js';
+export { RunAlreadyRunningError, RunResumeError } from '../types/run-record-store.js';
+export type {
+  LegacyRunSnapshot,
+  SessionInfo,
+  SessionState,
+  SessionStatus,
+  SessionStore,
+} from '../types/session.js';
 export {
   AtomicWriteError,
   type AtomicWriteOptions,
@@ -18,8 +30,8 @@ export {
   SessionDeleteConflictError,
 } from './delete-session.js';
 export {
-  FileSessionBackend,
-  type FileSessionBackendOptions,
+  FileSessionStore,
+  type FileSessionStoreOptions,
   SessionCorruptError,
 } from './file-backend.js';
 export {
@@ -32,12 +44,7 @@ export {
   type PruneRunsResult,
   pruneRuns,
 } from './prune.js';
-export { FileRunStore, MemoryRunStore } from './run-store.js';
-export {
-  deriveSessionMeta,
-  MemorySessionBackend,
-  toSessionInfo,
-} from './session-backend.js';
+export { FileRunRecordStore, MemoryRunRecordStore } from './run-record-store.js';
 export {
   type ReadSessionEventsOptions,
   removeLegacySessionTrace,
@@ -47,6 +54,11 @@ export {
   sessionLogDirExists,
 } from './session-event-log.js';
 export {
-  SQLiteSessionBackend,
-  type SQLiteSessionBackendOptions,
+  deriveSessionMeta,
+  MemorySessionStore,
+  toSessionInfo,
+} from './session-store.js';
+export {
+  SQLiteSessionStore,
+  type SQLiteSessionStoreOptions,
 } from './sqlite-backend.js';

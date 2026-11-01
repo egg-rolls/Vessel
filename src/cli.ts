@@ -118,11 +118,7 @@ import {
   type SessionLivenessContext,
   withLivenessRepair,
 } from './session-liveness';
-import {
-  resolveContinueSessionId,
-  runSessionList,
-  validateResumeSessionId,
-} from './session-resume';
+import { resolveContinueSessionId, resumeSession, runSessionList } from './session-resume';
 import { shutdownServeStack } from './shutdown-sequence';
 import { createTenantControl } from './tenant-command';
 import { createTenantRuntimeFactory, type TenantRuntimeFactory } from './tenant-runtime-factory';
@@ -517,10 +513,11 @@ if (args.continueArg) {
     resolvedSessionId = resolved.sessionId;
   }
 } else if (args.resumeArg !== null && args.resumeArg !== '') {
-  if (connectConfigured) {
-    resumeSessionId = args.resumeArg;
-  } else {
-    const checked = await validateResumeSessionId(args.resumeArg, {
+  // 本地与 connect 都记录 resume 意图；本地由 bootstrap 首轮显式走
+  // `resumeSession`（Q5），connect 由远端 `runs.start` 处理（不新增 RPC）。
+  resumeSessionId = args.resumeArg;
+  if (!connectConfigured) {
+    const checked = await resumeSession(args.resumeArg, {
       ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
     });
     if (!checked.ok) {
@@ -1436,6 +1433,7 @@ async function runWithConfig(result: BootstrapResult) {
         dir: resolveInteractionsDir(resolveDataDir(config), foregroundGatewayInstance),
         tenantId: result.tenantId,
       },
+      ...(result.runStore !== undefined ? { runStore: result.runStore } : {}),
     });
   } else if (args.feishu && process.stdin.isTTY !== true) {
     // Addendum D §13.3：非 TTY + 无 --serve → 仅渠道前台，不启动 REPL。

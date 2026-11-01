@@ -20,7 +20,7 @@ applies_to: [N, M]
 
 ## 负空间（不得恢复）
 
-- durable 只做 core 的 `RunStore` port；多租户原语在 core，跨节点 transport 在装配层；已移除 / 不进 core 的能力清单见 [plugins.md](plugins.md)。
+- durable 只做 core 的 `RunRecordStore` port；多租户原语在 core，跨节点 transport 在装配层；已移除 / 不进 core 的能力清单见 [plugins.md](plugins.md)。
 - legacy 传输面（`transport.kind` / loopback / remote / 旧 team 面）见 [serve.md](serve.md#legacy-transport)。
 - mock 场景只在 `src/mock/`；`VESSEL_MOCK_SCENARIO` 只在 CLI 入口读一次（ADR-063）。
 

@@ -3,10 +3,10 @@
  * @module @vessel-agent/core/context
  */
 
-export type { ContextConfig, ContextManager } from '../types/context.js';
+export type { ContextConfig, WorkingContext } from '../types/context.js';
 export {
   estimateMessagesTokens,
   estimateMessageTokens,
   estimateTokens,
-  MemoryContextManager,
+  MemoryWorkingContext,
 } from './context-manager.js';

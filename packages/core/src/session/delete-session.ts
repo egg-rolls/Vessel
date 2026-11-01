@@ -3,7 +3,7 @@
  *
  * - 有 running / interrupted run → `conflict`，零删除
  * - 否则删快照 + 按 session_id 清理 runs/events，返回计数
- * - 不新增 `SessionBackend` 方法；并发由上层单写者锁保证
+ * - 不新增 `SessionStore` 方法；并发由上层单写者锁保证
  *
  * @module @vessel-agent/core/session
  */
@@ -11,8 +11,8 @@
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { EventStream } from '../types/event.js';
-import type { RunStore } from '../types/run-store.js';
-import type { SessionBackend } from '../types/session.js';
+import type { RunRecordStore } from '../types/run-record-store.js';
+import type { SessionStore } from '../types/session.js';
 import { removeLegacySessionTrace, type SessionEventLog } from './session-event-log.js';
 
 const PAGE_LIMIT = 200;
@@ -39,9 +39,9 @@ export class SessionDeleteConflictError extends Error {
 
 /** 删除选项 */
 export interface DeleteSessionDataOptions {
-  session: SessionBackend;
+  session: SessionStore;
   /** 有 durable 时必须传入，才能判定 running/interrupted 并清理 runs */
-  runStore?: RunStore;
+  runStore?: RunRecordStore;
   /** tenant 的 events/ 目录；提供时同步删除 `<run>.jsonl` */
   traceDir?: string;
   events?: EventStream;

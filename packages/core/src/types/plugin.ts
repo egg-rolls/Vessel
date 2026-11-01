@@ -6,7 +6,7 @@
 import type { Guardrail } from './guardrail.js';
 import type { Hook } from './hook.js';
 import type { ProviderFactory } from './provider.js';
-import type { RunStore } from './run-store.js';
+import type { RunRecordStore } from './run-record-store.js';
 import type { ToolDefinition } from './tool.js';
 
 /**
@@ -131,7 +131,7 @@ export interface SelfCardOptions {
 export interface ExecutionUnitOptions {
   provider: import('./provider.js').LLMProvider;
   model: string;
-  context: import('./context.js').ContextManager;
+  context: import('./context.js').WorkingContext;
   events: import('./event.js').EventStream;
   limits: import('./limits.js').UsageLimits;
   termination: import('./limits.js').TerminationPolicy;
@@ -141,7 +141,7 @@ export interface ExecutionUnitOptions {
    * 存在时以 `install(host, { config })` 调用；缺省时保持 `install(host)`。
    */
   pluginConfigs?: Record<string, Record<string, unknown>>;
-  session?: import('./session.js').SessionBackend;
+  session?: import('./session.js').SessionStore;
   systemPrompt?: string; // 系统提示词
   /** 默认权限策略——未声明 checkPermission 的工具用 default/autoApprove 判定（ADR-029） */
   permission?: RuntimePermissionConfig;
@@ -149,11 +149,11 @@ export interface ExecutionUnitOptions {
   pluginHost?: PluginHost;
   /** 可注入的限制检查器（默认 MemoryLimitChecker）——依赖倒置（ADR-033） */
   limitChecker?: import('./limits.js').LimitChecker;
-  /** 可选：durable run 检查点存储；缺省不写 checkpoint（零开销） */
-  runStore?: RunStore;
+  /** 可选：durable run 记录存储；缺省不写 RunRecord（零开销） */
+  runStore?: RunRecordStore;
   /** 可选：写入 checkpoint.agent_id（Host 注入成员 id；单 agent 可缺省） */
   agentId?: string;
-  /** 0.5：所属 tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
+  /** 0.5：所属 tenant；事件 / SessionState / RunRecord 在缺失时补齐 */
   tenantId?: string;
   /**
    * 0.11.1：是否把思维的流式增量（`reasoning_delta`）经 `llm.stream.chunk` 发布。

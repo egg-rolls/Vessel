@@ -20,7 +20,7 @@ export interface RunOptions {
   /**
    * 本轮请求前置注入的消息。core 不解释其来源与语义——
    * skill 内容、附件、引用文件、项目约定，任何要进语言空间的文本都走这里。
-   * 写入顺序：注入消息在前，用户输入在后；两者都持久化进 ContextManager。
+   * 写入顺序：注入消息在前，用户输入在后；两者都持久化进 WorkingContext。
    */
   messages?: Message[];
 }
@@ -31,7 +31,7 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
 语义边界：
 
 - **顺序**：注入消息在前，用户输入在后。
-- **持久化**：注入消息与用户输入一样进 `ContextManager`（是本轮真实对话历史的一部分，不是一次性遮罩）。
+- **持久化**：注入消息与用户输入一样进 `WorkingContext`（是本轮真实对话历史的一部分，不是一次性遮罩）。
 - **Input guardrail 先于写用户消息**：注入消息写入后、用户消息写入前执行；被阻断的输入不进入上下文（已写入的注入消息保留）。`replacement` 是字符串时，改写后的内容才是持久化的用户消息（PII 脱敏语义）。
 - **会话标题**：取首轮最后一条 `user` 消息；注入消息在前，不抢标题。
 - **core 不解释语义**：core 不知道哪条是 skill、哪条是附件。它只按序 `addContext`。
@@ -74,15 +74,15 @@ class ExecutionUnit {
 interface ExecutionUnitOptions {
   provider: LLMProvider;
   model: string;
-  context: ContextManager;
+  context: WorkingContext;
   events: EventStream;
   limits: UsageLimits;
   termination: TerminationPolicy;
   plugins?: Plugin[];
   pluginHost?: PluginHost;      // 可选注入；缺省 new MemoryPluginHost()
   limitChecker?: LimitChecker;  // 可选注入；缺省 new MemoryLimitChecker()
-  session?: SessionBackend;
-  runStore?: RunStore;          // 可选注入；缺省不写 checkpoint
+  session?: SessionStore;
+  runStore?: RunRecordStore;          // 可选注入；缺省不写 checkpoint
   agentId?: string;             // 写入 checkpoint.agent_id（body 所属 agent）
   systemPrompt?: string;
   permission?: RuntimePermissionConfig;
@@ -91,7 +91,7 @@ interface ExecutionUnitOptions {
 
 `create()` 是异步静态工厂（构造函数私有）——插件安装是异步的，且要求 fail-fast（ADR-023）。
 
-run 级状态收敛在 `RunExecution`（`runId` / `sessionId` / `branch` / `createdAt` / `startedAt` / `stats` / `context`，从根入口导出）。`run()` / `resume()` 共用同一个 `activeRun` 槽位，在第一个 await 之前同步占位；已有 active run 时立即抛 `RunAlreadyRunningError`（`code: 'run_already_running'`，继承 `RunResumeError`）。公开签名与 `ExecutionUnitOptions` 不变。
+run 级状态收敛在 `Run`（`runId` / `sessionId` / `branch` / `createdAt` / `startedAt` / `stats` / `context`，从根入口导出）。`run()` / `resumeRun()` 共用同一个 `activeRun` 槽位，在第一个 await 之前同步占位；已有 active run 时立即抛 `RunAlreadyRunningError`（`code: 'run_already_running'`，继承 `RunResumeError`）。公开签名与 `ExecutionUnitOptions` 不变。
 
 Kernel 侧：`RunnableAgent.resume?(runId, opts?)` 返回 `RunHandle`。准入侧 `AgentService.resume(runId)` 加载 checkpoint、解析 agent / body，再用 `ScheduledTask.runId` 固定 run id 经 Scheduler 排队——resume 没有绕过调度的旁路。resume 只接受 `running` / `interrupted`；同一 run 并发恢复首个成功，后续 `run_already_running`（ADR-040 / ADR-097）。
 

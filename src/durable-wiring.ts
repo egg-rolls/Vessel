@@ -1,13 +1,13 @@
 /**
  * Durable run 接线（0.3 A1）。
  *
- * - 列表：running + interrupted，排序/上限由 core 的 RunStore 保证
+ * - 列表：running + interrupted，排序/上限由 core 的 RunRecordStore 保证
  *   （updated_at 倒序、同值 run_id 升序；默认 50、最大 200）。
- * - 恢复只走 `ExecutionUnit.resume()`；
- * - 禁止「seed session + 合成续跑消息」：恢复只走 core 的 resume。
+ * - 恢复只走 `ExecutionUnit.resumeRun()`；
+ * - 禁止「seed session + 合成续跑消息」：恢复只走 core 的 resumeRun。
  */
 
-import type { RunCheckpoint, RunStore } from '../packages/core/src/index';
+import type { RunRecord, RunRecordStore } from '../packages/core/src/index';
 import type { DurableGatewayOptions } from '../packages/serve/src/index';
 import type { TenantRuntimeFactory } from './tenant-runtime-factory';
 
@@ -71,12 +71,13 @@ export function isResumeError(error: unknown): error is ResumeErrorLike {
 }
 
 /** 提取列表预览：metadata.preview > 最后一条 user 消息（截断 60） */
-export function previewOf(checkpoint: RunCheckpoint): string | undefined {
-  const fromMeta = checkpoint.metadata?.preview;
+export function previewOf(record: RunRecord): string | undefined {
+  const fromMeta = record.metadata?.preview;
   if (typeof fromMeta === 'string' && fromMeta.trim() !== '') return fromMeta;
 
-  for (let i = checkpoint.messages.length - 1; i >= 0; i--) {
-    const message = checkpoint.messages[i];
+  const messages = record.legacy_messages ?? [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
     if (message?.role !== 'user') continue;
     const text = message.content.replace(/\s+/g, ' ').trim();
     if (text !== '') return text.length > 60 ? `${text.slice(0, 60)}...` : text;
@@ -86,7 +87,7 @@ export function previewOf(checkpoint: RunCheckpoint): string | undefined {
 
 /** 列出 running/interrupted run（排序/上限交给 core） */
 export async function listRunSummaries(
-  store: RunStore,
+  store: RunRecordStore,
   opts?: {
     status?: 'running' | 'interrupted';
     session_id?: string;
@@ -96,7 +97,7 @@ export async function listRunSummaries(
   const checkpoints = await store.list(opts);
   return checkpoints
     .filter(
-      (checkpoint): checkpoint is RunCheckpoint & { status: 'running' | 'interrupted' } =>
+      (checkpoint): checkpoint is RunRecord & { status: 'running' | 'interrupted' } =>
         checkpoint.status === 'running' || checkpoint.status === 'interrupted',
     )
     .map((checkpoint) => ({
@@ -115,15 +116,15 @@ export async function listRunSummaries(
  * @throws ResumeErrorLike `run_not_found` / `run_not_resumable`
  */
 export async function loadResumableCheckpoint(
-  store: RunStore,
+  store: RunRecordStore,
   runId: string,
-): Promise<RunCheckpoint> {
+): Promise<RunRecord> {
   const checkpoint = await store.load(runId);
   if (!checkpoint) throw resumeError('run_not_found', runId);
   if (checkpoint.status !== 'running' && checkpoint.status !== 'interrupted') {
     throw resumeError('run_not_resumable', runId, checkpoint.status);
   }
-  // 0.18：checkpoint 不再携带完整 messages；历史由 ExecutionUnit 从
+  // 0.18：RunRecord 不再携带完整 messages；历史由 ExecutionUnit 从
   // session 缓存 + 会话事件日志重建。空历史仍由 runtime 返回稳定错误。
   return checkpoint;
 }
@@ -138,7 +139,7 @@ export function toFailedOutcome(error: unknown): DurableRunOutcome {
  *
  * - default tenant 返回 undefined：由 gateway 的 `durable`（bootstrap bundle）提供；
  * - 非 default tenant 只使用自己的 runStore；没有则 undefined（gateway 返回 403）；
- * - resume 不等待完成：ExecutionUnit.resume 的完成 Promise 不阻塞 HTTP。
+ * - resume 不等待完成：ExecutionUnit.resumeRun 的完成 Promise 不阻塞 HTTP。
  */
 export function createDurableFor(
   factory: Pick<TenantRuntimeFactory, 'bundleFor'> | undefined,
@@ -151,12 +152,12 @@ export function createDurableFor(
     if (!store) return undefined;
 
     const runtime = bundle?.runtime;
-    const runtimeResume = runtime?.resume;
+    const runtimeResume = runtime?.resumeRun;
     if (runtime && typeof runtimeResume === 'function') {
       return {
         store,
         resume: (runId: string) => {
-          // ExecutionUnit.resume 在 run 结束时才 resolve：不等待。
+          // ExecutionUnit.resumeRun 在 run 结束时才 resolve：不等待。
           void runtimeResume.call(runtime, runId).catch(() => {});
         },
       };

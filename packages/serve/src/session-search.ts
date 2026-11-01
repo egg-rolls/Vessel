@@ -1,14 +1,14 @@
 /**
  * 会话内容搜索（0.6.1 E5）。
  *
- * 数据面只依赖 core 的 `SessionBackend`：先 `listRich()` 取摘要，
+ * 数据面只依赖 core 的 `SessionStore`：先 `listRich()` 取摘要，
  * 再逐会话 `load()` 线性扫描消息内容（file/sqlite 后端通用）。
  * 结果形状冻结为 `{ sessions: SessionSearchHit[] }` 的元素。
  *
  * @module @vessel-agent/serve/session-search
  */
 
-import type { Message, SessionBackend, SessionInfo } from '@vessel-agent/core';
+import type { Message, SessionInfo, SessionStore } from '@vessel-agent/core';
 
 /** 默认/最大返回条数（E5 冻结形状的 limit 上限） */
 export const DEFAULT_SESSION_SEARCH_LIMIT = 20;
@@ -88,7 +88,7 @@ export function findSessionSnippet(
  * `listRich()` 已按 updated_at 倒序；结果保持该顺序并截断到 limit。
  */
 export async function searchSessions(
-  backend: SessionBackend,
+  backend: SessionStore,
   query: string,
   limit: number = DEFAULT_SESSION_SEARCH_LIMIT,
 ): Promise<SessionSearchHit[]> {
@@ -98,7 +98,7 @@ export async function searchSessions(
     if (hits.length >= limit) break;
     const state = await backend.load(info.session_id);
     if (!state) continue;
-    const snippet = findSessionSnippet(info, state.messages, query);
+    const snippet = findSessionSnippet(info, state.messages ?? [], query);
     if (snippet === null) continue;
     hits.push({
       session_id: info.session_id,

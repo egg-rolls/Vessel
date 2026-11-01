@@ -15,7 +15,7 @@ import {
 import { createStderrLogger, noopLogger } from '../logging.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
 import { deriveSessionMeta, mergeHistoryProjection, projectMessages } from '../session/index.js';
-import type { ContextCompactedReason, ContextManager } from '../types/context.js';
+import type { ContextCompactedReason, WorkingContext } from '../types/context.js';
 import type { ErrorEnvelope } from '../types/error.js';
 import type { EventStream, RunEvent, SessionEventLogPort, Unsubscribe } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
@@ -30,14 +30,19 @@ import type {
   SelfCardOptions,
 } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, LLMResponse, Message } from '../types/provider.js';
-import type { RunExecution, RunInterruptReason, RunOptions } from '../types/run.js';
-import type { RunCheckpoint, RunStore } from '../types/run-store.js';
+import type { Run, RunInterruptReason, RunOptions } from '../types/run.js';
+import type { RunRecord, RunRecordStore, RunUsage } from '../types/run-record-store.js';
 import {
   RUN_INTERRUPT_REASONS,
   RunAlreadyRunningError,
   RunResumeError,
-} from '../types/run-store.js';
-import type { RunState, SessionBackend } from '../types/session.js';
+} from '../types/run-record-store.js';
+import type {
+  LegacyRunSnapshot,
+  SessionState,
+  SessionStatus,
+  SessionStore,
+} from '../types/session.js';
 
 export type { RunOptions } from '../types/run.js';
 
@@ -70,6 +75,16 @@ type RunTerminalOutcome =
   | { status: 'completed'; output: string }
   | { status: 'failed'; error: unknown; signal?: AbortSignal };
 
+/** loadStoredHistory 的结果：消息窗口 + 已覆盖的事件游标 + 会话壳。 */
+interface StoredHistory {
+  messages: Message[];
+  /** 消息窗口已覆盖到的事件 seq（无持久游标时 undefined） */
+  cursor?: number;
+  sessionState: SessionState | null;
+  /** 读到的会话事件条数；用于判定「会话是否存在（事件日志）」 */
+  eventCount: number;
+}
+
 /** 新建一次 run 的 usage 统计 */
 function createUsageStats(startTime: number): UsageStats {
   return {
@@ -80,6 +95,44 @@ function createUsageStats(startTime: number): UsageStats {
     totalTokens: 0,
     totalCost: 0,
     startTime,
+  };
+}
+
+/** 新建一次 run 的持久记录；之后各安全点原地更新。 */
+function createRunRecord(args: {
+  runId: string;
+  sessionId: string;
+  createdAt: number;
+  agentId?: string;
+  tenantId?: string;
+  branch?: string;
+}): RunRecord {
+  return {
+    run_id: args.runId,
+    session_id: args.sessionId,
+    status: 'running',
+    created_at: args.createdAt,
+    updated_at: args.createdAt,
+    metadata: { tool_calls_count: 0 },
+    ...(args.agentId !== undefined ? { agent_id: args.agentId } : {}),
+    ...(args.tenantId !== undefined ? { tenant_id: args.tenantId } : {}),
+    ...(args.branch !== undefined ? { branch: args.branch } : {}),
+  };
+}
+
+/**
+ * Q4=b：SessionState 顶层 run 字段的一版镜像（旧 reader 兼容）。
+ * 终态的 `completed_at` 由 RunRecord 的 `updated_at` 投影；running 不写。
+ */
+function legacyRunFromRecord(record: RunRecord): LegacyRunSnapshot | undefined {
+  const completedAt = record.status === 'running' ? undefined : record.updated_at;
+  const usage = record.usage;
+  const error = record.error;
+  if (completedAt === undefined && usage === undefined && error === undefined) return undefined;
+  return {
+    ...(completedAt !== undefined ? { completed_at: completedAt } : {}),
+    ...(usage !== undefined ? { usage } : {}),
+    ...(error !== undefined ? { error } : {}),
   };
 }
 
@@ -242,14 +295,14 @@ function formatSelfCard(card: SelfCardOptions): string {
 export class ExecutionUnit {
   private provider: LLMProvider;
   private model: string;
-  private context: ContextManager;
+  private context: WorkingContext;
   /** 事件流（公开只读——headless/外部可订阅事件，实现应答策略，ADR-029） */
   readonly events: EventStream;
   /** 插件宿主（公开只读——app/TUI 从这里读工具与插件，工具的唯一来源） */
   readonly pluginHost: PluginHost;
   private limits: UsageLimits;
   private termination: TerminationPolicy;
-  private session?: SessionBackend;
+  private session?: SessionStore;
   private limitChecker: LimitChecker;
   private systemPrompt?: string;
   /** 0.15 E9：Self Card 选项；缺省不注入 */
@@ -283,11 +336,11 @@ export class ExecutionUnit {
   /** 统一工具执行管道（0.8.2 Wave 2B1）：permission + handler + ToolResult guardrail */
   private readonly toolPipeline: ToolPipeline;
   /** durable run 检查点（0.3）；缺省不写、零开销 */
-  private readonly runStore?: RunStore;
+  private readonly runStore?: RunRecordStore;
   /** E1：按插件名提供的安装配置 */
   private readonly pluginConfigs?: Record<string, Record<string, unknown>>;
   private readonly agentId?: string;
-  /** 0.5：tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
+  /** 0.5：tenant；事件 / SessionState / RunRecord 在缺失时补齐 */
   private readonly tenantId?: string;
   /** 0.11.1：是否发布 reasoning 流式增量（默认 false） */
   private readonly includeReasoning: boolean;
@@ -301,13 +354,19 @@ export class ExecutionUnit {
    * 当前 active run（0.8 C1）：run 级状态隔离 + 单 run 守卫。
    * 同步占位、`finally` 清空；已有值时新的 run()/resume() 立即 `run_already_running`。
    */
-  private activeRun?: RunExecution;
+  private activeRun?: Run;
+  /**
+   * Q6：当前 WorkingContext 窗口已覆盖的事件游标（含 session 缓存之外的增量）。
+   * 仅当同一 session 的持久游标与它相等时，下一 run 才能直接把窗口当种子复用。
+   */
+  private seededCursor?: number;
+  private seededSessionId?: string;
   /**
    * 当前 run 的中断控制（0.10 R2-18）：`interrupt()` 与调用方 `opts.signal`
    * 汇合到同一个内部 AbortController；随 active run 创建 / 释放。
    */
   private activeRunControl?: {
-    execution: RunExecution;
+    execution: Run;
     controller: AbortController;
     cleanups: Array<() => void>;
   };
@@ -492,19 +551,28 @@ export class ExecutionUnit {
   }
 
   /** 同步预留 active run 槽位；已有 active run 时抛稳定错误 `run_already_running`。 */
-  private beginExecution(runId: string, sessionId: string, branch?: string): RunExecution {
+  private beginExecution(runId: string, sessionId: string, branch?: string): Run {
     if (this.activeRun) {
       throw new RunAlreadyRunningError(runId);
     }
     const now = Date.now();
-    const execution: RunExecution = {
+    const execution: Run = {
       runId,
       sessionId,
       ...(branch !== undefined ? { branch } : {}),
       createdAt: now,
       startedAt: now,
       stats: createUsageStats(now),
-      context: this.context,
+      // Q6：窗口仍复用注入实例；run 开始时复位/播种，Run.workingContext 指向它。
+      workingContext: this.context,
+      record: createRunRecord({
+        runId,
+        sessionId,
+        createdAt: now,
+        ...(this.agentId !== undefined ? { agentId: this.agentId } : {}),
+        ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
+        ...(branch !== undefined ? { branch } : {}),
+      }),
       // 0.14 P0：错误 envelope 的阶段来源；输入 guardrail / 进入 loop 后会被更新。
       phase: 'input',
     };
@@ -528,7 +596,7 @@ export class ExecutionUnit {
     return execution;
   }
 
-  private endExecution(execution: RunExecution): void {
+  private endExecution(execution: Run): void {
     if (this.activeRun === execution) this.activeRun = undefined;
     if (this.activeRunControl?.execution === execution) {
       for (const cleanup of this.activeRunControl.cleanups) cleanup();
@@ -560,10 +628,7 @@ export class ExecutionUnit {
    * 把调用方 signal 桥接到当前 run 的内部 controller（0.10 R2-18）。
    * 外部 reason 原样透传，保持既有 cancelled / interrupted 语义。
    */
-  private executionSignal(
-    execution: RunExecution,
-    external?: AbortSignal,
-  ): AbortSignal | undefined {
+  private executionSignal(execution: Run, external?: AbortSignal): AbortSignal | undefined {
     const control =
       this.activeRunControl?.execution === execution ? this.activeRunControl : undefined;
     if (!control) return external;
@@ -583,48 +648,33 @@ export class ExecutionUnit {
 
   /** run() 的主体：调用方已持有 execution 槽位。 */
   private async executeRun(
-    execution: RunExecution,
+    execution: Run,
     input: string | Message,
     opts?: RunOptions,
   ): Promise<string> {
-    const { runId, sessionId, createdAt } = execution;
+    const { runId, sessionId } = execution;
+    const workingContext = execution.workingContext;
     // 外部 signal 与 interrupt() 的内部 controller 统一成一个 signal（0.10 R2-18）
     const signal = this.executionSignal(execution, opts?.signal);
 
-    // 切换到当前会话的 Context
-    this.context.setSessionId(sessionId);
     // 显式 session 切换：允许上下文整体不同（session 快照本身按 session 隔离）。
     if (this.lastSessionId !== undefined && this.lastSessionId !== sessionId) {
       this.pendingPrefixReason ??= 'session_switch';
     }
     this.lastSessionId = sessionId;
 
-    // 仅当 context 为空时初始化：
-    //   - in-process 同会话续聊：context 已有历史，不重置（多轮记忆）
-    //   - cross-process resume / 新进程：context 空，从 SessionBackend 恢复该 session 历史
-    //   - 无 backend 或无历史：加 system prompt 起新对话
-    // 不再无条件 clear() -- 那会丢多轮历史（debug-notes 当年为修累积 bug 的过度修复）。
-    // 只在 context 为空时加载一次，不会累积。
-    if (this.context.messages.length === 0) {
-      // 0.15 E9：Self Card 在 run 开始时生成一次；无 selfCard 时等于原 systemPrompt
-      this.runSystemPrompt = this.composeRunSystemPrompt();
-      // 0.18：新 run 也要重放 session 缓存之后的日志增量；否则 saveSession 会把
+    // 0.15 E9：Self Card 在 run 开始时生成一次；无 selfCard 时等于原 systemPrompt
+    this.runSystemPrompt = this.composeRunSystemPrompt();
+
+    // Q6：per-Run 窗口。仅当同一 session 的持久游标仍等于上次播种游标时，
+    // 才把上一 run 的窗口直接当种子；否则复位并全量重放事件日志。
+    const stored = await this.loadSessionState(sessionId);
+    const sessionCursor = await this.resolveSessionCursor(sessionId);
+    if (!this.canReuseWindow(sessionId, sessionCursor)) {
+      // 0.18：新 run 也要重放 session 缓存之后的日志增量；否则 saveSessionState 会把
       // 未进入上下文的事件标记成“已覆盖”（derived_upto_seq 超前）。
       const history = await this.loadStoredHistory(sessionId);
-      // 事件日志重建时可能只有压缩摘要（role system）；基底 system 仍要补回。
-      if (
-        !history.some(
-          (message) => message.role === 'system' && message.compaction_summary !== true,
-        ) &&
-        this.runSystemPrompt
-      ) {
-        this.addContext({ role: 'system', content: this.runSystemPrompt }, runId);
-      }
-      for (const message of history) {
-        this.addContext(message, runId);
-      }
-    } else {
-      this.runSystemPrompt = this.composeRunSystemPrompt();
+      this.seedWorkingContext(sessionId, runId, history);
     }
 
     // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
@@ -640,16 +690,14 @@ export class ExecutionUnit {
     const userMessage: Message =
       typeof input === 'string' ? { role: 'user', content: input } : input;
 
-    // 创建 Run 状态
-    const runState: RunState = {
-      run_id: runId,
-      session_id: sessionId,
-      messages: [userMessage],
-      started_at: createdAt,
-      status: 'running',
-      branch: execution.branch,
-      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
-    };
+    // 会话壳：run 启动即建立；title / preview / created_at 从既有 SessionState 保留。
+    const sessionState = this.createSessionState(
+      sessionId,
+      runId,
+      stored,
+      execution.branch,
+      Date.now(),
+    );
 
     // 发布 Run 开始事件
     this.publishEvent({
@@ -699,23 +747,22 @@ export class ExecutionUnit {
         ts: Date.now(),
       });
 
-      // 初始状态保存真实上下文（恢复历史 + 注入 + 用户输入），运行中崩溃不再丢历史（C-02）
-      runState.messages = this.context.messages;
-      await this.saveSession(runState);
-      await this.updateSessionIndexBestEffort(runState);
-
-      // durable checkpoint：run 开始（用户消息已写入上下文）
-      await this.writeCheckpoint(execution, 'running');
+      // 初始保存：先 RunRecord（含 event_cursor），再 SessionState 投影（含 derived_upto_seq）。
+      // 恢复历史 + 注入 + 用户输入都已进入上下文，运行中崩溃不再丢历史（C-02）。
+      sessionState.messages = workingContext.messages;
+      await this.writeRunRecord(execution, 'running');
+      await this.saveSessionState(sessionState);
+      await this.updateSessionIndexBestEffort(sessionState);
 
       // 执行 tool-calling loop
       const response = await runToolCallingLoop(this.createLoopContext(execution, signal));
 
       // 统一终态：status / OnError / session / checkpoint / 事件
-      await this.finalizeRun(execution, runState, { status: 'completed', output: response });
+      await this.finalizeRun(execution, sessionState, { status: 'completed', output: response });
 
       return response;
     } catch (error) {
-      await this.finalizeFailure(execution, runState, error, signal);
+      await this.finalizeFailure(execution, sessionState, error, signal);
       throw error;
     }
   }
@@ -723,24 +770,20 @@ export class ExecutionUnit {
   /**
    * 统一终态（C1）：run()/resume() 共用。
    *
-   * 顺序：status 映射 → OnError hook（best-effort）→ saveSession →
-   * writeCheckpoint → 发布 run.completed / run.cancelled / run.failed。
+   * 顺序：status 映射 → OnError hook（best-effort）→ writeRunRecord →
+   * saveSessionState → 发布 run.completed / run.cancelled / run.failed。
    */
   private async finalizeRun(
-    execution: RunExecution,
-    runState: RunState,
+    execution: Run,
+    sessionState: SessionState,
     outcome: RunTerminalOutcome,
   ): Promise<void> {
     const { runId, sessionId, startedAt, stats } = execution;
 
     if (outcome.status === 'completed') {
-      runState.status = 'completed';
-      runState.completed_at = Date.now();
-      runState.usage = this.usageFromStats(stats);
-      runState.messages = this.context.messages;
-
-      await this.saveSession(runState);
-      await this.writeCheckpoint(execution, 'completed');
+      await this.writeRunRecord(execution, 'completed');
+      this.finalizeSessionState(execution, sessionState, 'completed');
+      await this.saveSessionState(sessionState);
 
       this.publishEvent({
         type: 'run.completed',
@@ -749,13 +792,13 @@ export class ExecutionUnit {
           run_id: runId,
           session_id: sessionId,
           output: outcome.output,
-          usage: runState.usage,
+          usage: execution.record.usage,
           duration_ms: Date.now() - startedAt,
           iterations: stats.requestCount,
         },
         ts: Date.now(),
       });
-      await this.finishEventLog(runState);
+      await this.finishEventLog(sessionState);
       return;
     }
 
@@ -763,11 +806,7 @@ export class ExecutionUnit {
     // 用户显式取消 → cancelled；Host 中断/普通错误 → failed（与事件口径一致）
     const cancelled = this.isUserCancelled(signal);
     const errorMessage = errorText(outcome.error);
-    runState.status = cancelled ? 'cancelled' : 'failed';
-    runState.completed_at = Date.now();
-    runState.error = errorMessage;
-    // 失败也保存真实上下文，避免用单条 user 消息覆盖既有历史（C-02）
-    runState.messages = this.context.messages;
+    const terminalStatus = this.failureCheckpointStatus(signal);
 
     // OnError Hook best-effort（C2）：hook 故障不得替换原始错误，也不得跳过终态写入。
     try {
@@ -791,8 +830,6 @@ export class ExecutionUnit {
       });
     }
 
-    await this.saveSession(runState);
-
     // 用户显式取消发 run.cancelled；Host 关闭/中断与普通失败保持 run.failed
     const permissionTimeout = outcome.error instanceof PermissionTimeoutError;
     // 0.14 P0：结构化错误 envelope 只附加到 run.failed；run.cancelled 保持原形状。
@@ -802,14 +839,11 @@ export class ExecutionUnit {
           ...(execution.phase !== undefined ? { phase: execution.phase } : {}),
         });
 
-    // durable checkpoint：失败 / 取消 / 中断（best-effort，不覆盖原始错误）
-    await this.writeCheckpoint(
-      execution,
-      this.failureCheckpointStatus(signal),
-      errorMessage,
-      true,
-      envelope,
-    );
+    // durable 终态：失败 / 取消 / 中断（best-effort，不覆盖原始错误）。
+    // 失败同样保存真实上下文，避免用单条 user 消息覆盖既有历史（C-02）。
+    await this.writeRunRecord(execution, terminalStatus, errorMessage, true, envelope);
+    this.finalizeSessionState(execution, sessionState, terminalStatus);
+    await this.saveSessionState(sessionState);
 
     const partial = execution.partialContent;
     this.publishEvent({
@@ -830,31 +864,36 @@ export class ExecutionUnit {
       },
       ts: Date.now(),
     });
-    await this.finishEventLog(runState);
+    await this.finishEventLog(sessionState);
   }
 
   /**
    * 0.18：终态收尾——等待事件日志落盘，然后 best-effort 更新会话索引。
    * 成功/失败路径共用；日志失败不覆盖 run 终态。
    */
-  private async finishEventLog(runState: RunState): Promise<void> {
+  private async finishEventLog(sessionState: SessionState): Promise<void> {
     if (!this.eventLog) return;
     await this.flushEventLogWrites();
+    // Q6：终态事件（run.completed 等）落盘后，当前窗口仍与日志投影等价；
+    // 把播种游标推进到日志尾，下一 run 才能安全地把它当种子。
+    const cursor = await this.currentEventCursor(sessionState.session_id);
+    this.seededSessionId = sessionState.session_id;
+    this.seededCursor = cursor;
     try {
-      await this.updateSessionIndex(runState);
+      await this.updateSessionIndex(sessionState);
     } catch (error) {
       this.logger.warn('session index update failed', {
-        session_id: runState.session_id,
+        session_id: sessionState.session_id,
         error: errorText(error),
       });
     }
     // P2：run 结束关闭该 session 的写句柄，避免长进程每会话永久占用一个 FD。
     // 下次 run/append 会重新打开并从文件尾恢复 seq。
     try {
-      await this.eventLog.release?.(runState.session_id);
+      await this.eventLog.release?.(sessionState.session_id);
     } catch (error) {
       this.logger.warn('session event log release failed', {
-        session_id: runState.session_id,
+        session_id: sessionState.session_id,
         error: errorText(error),
       });
     }
@@ -865,13 +904,13 @@ export class ExecutionUnit {
    * OnError hook 已在 finalizeRun 内部 best-effort。
    */
   private async finalizeFailure(
-    execution: RunExecution,
-    runState: RunState,
+    execution: Run,
+    sessionState: SessionState,
     error: unknown,
     signal?: AbortSignal,
   ): Promise<void> {
     try {
-      await this.finalizeRun(execution, runState, { status: 'failed', error, signal });
+      await this.finalizeRun(execution, sessionState, { status: 'failed', error, signal });
     } catch (finalizeError) {
       this.publishEvent({
         type: 'run.finalize.failed',
@@ -889,13 +928,13 @@ export class ExecutionUnit {
   }
 
   /**
-   * RunState/checkpoint 共用的 usage 快照。
+   * SessionState 镜像 / RunRecord 共用的 usage 快照。
    *
    * CONTRACT-0.29 §1.2：缓存两项**只在有 provider 上报过时**才写出。
    * `UsageStats` 用数字累加，但「从未上报过缓存」必须回写成 `undefined`（省略键），
    * 不能因为累加器是数字就冒出一个 `cache_read_input_tokens: 0`。
    */
-  private usageFromStats(stats: UsageStats): NonNullable<RunState['usage']> {
+  private usageFromStats(stats: UsageStats): RunUsage {
     return {
       prompt_tokens: stats.inputTokens,
       completion_tokens: stats.outputTokens,
@@ -911,13 +950,37 @@ export class ExecutionUnit {
   }
 
   /**
-   * 从 RunStore 恢复并继续一次 run（0.3 durable）。
+   * 用一条历史投影复位并播种本次 run 的 WorkingContext。
+   * 事件日志可能只有压缩摘要（role system）；基底 system 仍要补回。
+   */
+  private seedWorkingContext(sessionId: string, runId: string, history: StoredHistory): void {
+    const workingContext = this.context;
+    // 先切到目标 session 再清空：clear() 只清当前 session 的桶。
+    workingContext.setSessionId(sessionId);
+    workingContext.clear();
+    if (
+      !history.messages.some(
+        (message) => message.role === 'system' && message.compaction_summary !== true,
+      ) &&
+      this.runSystemPrompt
+    ) {
+      this.addContext({ role: 'system', content: this.runSystemPrompt }, runId);
+    }
+    for (const message of history.messages) {
+      this.addContext(message, runId);
+    }
+    this.seededSessionId = sessionId;
+    this.seededCursor = history.cursor;
+  }
+
+  /**
+   * 从 RunRecordStore 恢复并继续一次 run（0.3 durable）。
    *
-   * - 会话历史 / usage / iteration 来自 checkpoint；
+   * - 会话历史 / usage / iteration 来自 RunRecord + SessionEventLog；
    * - 不注入新的用户消息；
    * - run id 保持不变，返回值语义与 run() 一致。
    */
-  async resume(runId: string, opts?: RunOptions): Promise<string> {
+  async resumeRun(runId: string, opts?: RunOptions): Promise<string> {
     if (!this.runStore) throw new RunResumeError('run_store_required', runId);
     if (this.resuming.has(runId)) throw new RunAlreadyRunningError(runId);
 
@@ -926,110 +989,138 @@ export class ExecutionUnit {
     const signal = this.executionSignal(execution, opts?.signal);
     this.resuming.add(runId);
     try {
-      const checkpoint = await this.runStore.load(runId);
-      if (!checkpoint) throw new RunResumeError('run_not_found', runId);
-      if (checkpoint.status !== 'running' && checkpoint.status !== 'interrupted') {
-        throw new RunResumeError('run_not_resumable', runId, checkpoint.status);
+      const record = await this.runStore.load(runId);
+      if (!record) throw new RunResumeError('run_not_found', runId);
+      if (record.status !== 'running' && record.status !== 'interrupted') {
+        throw new RunResumeError('run_not_resumable', runId, record.status);
       }
-      const sessionId = checkpoint.session_id;
+      const sessionId = record.session_id;
       execution.sessionId = sessionId;
-      execution.createdAt = checkpoint.created_at;
+      execution.createdAt = record.created_at;
       execution.branch =
-        typeof checkpoint.metadata?.branch === 'string' ? checkpoint.metadata.branch : undefined;
+        record.branch ??
+        (typeof record.metadata?.branch === 'string' ? record.metadata.branch : undefined);
+      // Run 持有的 RunRecord 与磁盘上的同一 run 对齐；后续安全点原地更新。
+      const runRecord = execution.record;
+      runRecord.session_id = sessionId;
+      runRecord.created_at = record.created_at;
+      runRecord.updated_at = record.updated_at;
+      runRecord.branch = execution.branch;
+      runRecord.agent_id = record.agent_id ?? this.agentId;
+      runRecord.tenant_id = this.tenantId ?? record.tenant_id;
+      runRecord.metadata = record.metadata ?? runRecord.metadata;
 
       // 恢复统计，保持 limits / termination 连续
       execution.stats = {
-        requestCount: checkpoint.iteration ?? 0,
+        requestCount: record.iteration ?? 0,
         toolCallsCount:
-          typeof checkpoint.metadata?.tool_calls_count === 'number'
-            ? checkpoint.metadata.tool_calls_count
+          typeof record.metadata?.tool_calls_count === 'number'
+            ? record.metadata.tool_calls_count
             : 0,
-        inputTokens: checkpoint.usage?.prompt_tokens ?? 0,
-        outputTokens: checkpoint.usage?.completion_tokens ?? 0,
-        totalTokens: checkpoint.usage?.total_tokens ?? 0,
-        totalCost: checkpoint.usage?.total_cost ?? 0,
+        inputTokens: record.usage?.prompt_tokens ?? 0,
+        outputTokens: record.usage?.completion_tokens ?? 0,
+        totalTokens: record.usage?.total_tokens ?? 0,
+        totalCost: record.usage?.total_cost ?? 0,
         startTime: execution.startedAt,
         // CONTRACT-0.29 B1：缓存计数必须跨 resume 连续累加，否则命中率/成本归因归零。
-        // 「checkpoint 里没有」= provider 从未上报过（§1.2），保持 `undefined` 而不是 0。
-        ...(checkpoint.usage?.cache_read_input_tokens !== undefined
-          ? { cacheReadTokens: checkpoint.usage.cache_read_input_tokens }
+        // 「RunRecord 里没有」= provider 从未上报过（§1.2），保持 `undefined` 而不是 0。
+        ...(record.usage?.cache_read_input_tokens !== undefined
+          ? { cacheReadTokens: record.usage.cache_read_input_tokens }
           : {}),
-        ...(checkpoint.usage?.cache_creation_input_tokens !== undefined
-          ? { cacheCreationTokens: checkpoint.usage.cache_creation_input_tokens }
+        ...(record.usage?.cache_creation_input_tokens !== undefined
+          ? { cacheCreationTokens: record.usage.cache_creation_input_tokens }
           : {}),
       };
 
-      // 0.18：session 缓存 + 事件日志是恢复来源；checkpoint.messages 只作
-      // legacy 回退（旧文件）。禁止用较旧的 checkpoint 覆盖较新的 session。
+      // 0.18：SessionState 缓存 + 事件日志是恢复来源；legacy_messages 只作
+      // 旧文件回退。禁止用较旧的 RunRecord 覆盖较新的 session。
       // 0.15 E9：resume 同样在 run 开始时生成一次 Self Card
       this.runSystemPrompt = this.composeRunSystemPrompt();
       // CONTRACT-prefix-invariant：resume 是显式前缀失效（历史可能已被裁剪）。
       this.pendingPrefixReason ??= 'resume';
       this.lastSessionId = sessionId;
       this.lastRunSystemPrompts.set(sessionId, this.runSystemPrompt ?? this.systemPrompt ?? '');
-      const history = await this.loadStoredHistory(sessionId, checkpoint);
-      if (history.length === 0) {
+      const history = await this.loadStoredHistory(sessionId, record);
+      if (history.messages.length === 0) {
         throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
       }
-      this.context.clear();
-      this.context.setSessionId(sessionId);
-      // 事件日志重建时可能只有压缩摘要（role system）；基底 system 仍要补回。
-      if (
-        !history.some(
-          (message) => message.role === 'system' && message.compaction_summary !== true,
-        ) &&
-        this.runSystemPrompt
-      ) {
-        this.addContext({ role: 'system', content: this.runSystemPrompt }, runId);
-      }
-      for (const message of history) {
-        this.addContext(message, runId);
-      }
+      this.seedWorkingContext(sessionId, runId, history);
 
-      const runState: RunState = {
-        run_id: runId,
-        session_id: sessionId,
-        messages: this.context.messages,
-        started_at: execution.createdAt,
-        status: 'running',
-        ...(execution.branch !== undefined ? { branch: execution.branch } : {}),
-        ...((this.tenantId ?? checkpoint.tenant_id) !== undefined
-          ? { tenant_id: this.tenantId ?? checkpoint.tenant_id }
-          : {}),
-      };
-      // 0.18：先发布 run.resumed，再 saveSession；否则 derived_upto_seq 会漏掉
-      // 这条事件（legacy checkpoint 复用 session 时尤其明显）。
+      const sessionState = this.createSessionState(
+        sessionId,
+        runId,
+        history.sessionState,
+        execution.branch,
+        Date.now(),
+      );
+      // 会话文件缺失时，tenant 权威回退到 RunRecord 的启动快照。
+      if (sessionState.tenant_id === undefined && record.tenant_id !== undefined) {
+        sessionState.tenant_id = record.tenant_id;
+      }
+      // 0.18：先发布 run.resumed，再落盘；否则 derived_upto_seq 会漏掉
+      // 这条事件（legacy RunRecord 复用 session 时尤其明显）。
       this.publishEvent({
         type: 'run.resumed',
         run_id: runId,
         data: {
           run_id: runId,
           session_id: sessionId,
-          from_status: checkpoint.status,
+          from_status: record.status,
           iteration: execution.stats.requestCount,
         },
         ts: Date.now(),
       });
 
-      await this.saveSession(runState);
-      await this.updateSessionIndexBestEffort(runState);
-
-      // 标记已被接管（唯一写者：ExecutionUnit）
-      await this.writeCheckpoint(execution, 'running');
+      // 标记已被接管（唯一写者：Run）。先 RunRecord，再 SessionState 投影。
+      sessionState.messages = execution.workingContext.messages;
+      await this.writeRunRecord(execution, 'running');
+      await this.saveSessionState(sessionState);
+      await this.updateSessionIndexBestEffort(sessionState);
 
       try {
         const response = await runToolCallingLoop(this.createLoopContext(execution, signal));
 
         // 与 run() 共用终态路径：用户取消同样发 run.cancelled（C1）
-        await this.finalizeRun(execution, runState, { status: 'completed', output: response });
+        await this.finalizeRun(execution, sessionState, { status: 'completed', output: response });
 
         return response;
       } catch (error) {
-        await this.finalizeFailure(execution, runState, error, signal);
+        await this.finalizeFailure(execution, sessionState, error, signal);
         throw error;
       }
     } finally {
       this.resuming.delete(runId);
+      this.endExecution(execution);
+    }
+  }
+
+  /**
+   * 按 session 历史启动一次全新的 run（Q5；不新增 RPC）。
+   *
+   * - 会话必须已存在（SessionState 或事件日志）；不会新建会话；
+   * - 生成新的 run id；调度器可通过 `opts.runId` 固定它；
+   * - 历史播种 / 单 run 守卫 / 终态路径与 `run()` 完全共用。
+   */
+  async resumeSession(
+    sessionId: string,
+    input: string | Message,
+    opts?: RunOptions,
+  ): Promise<string> {
+    const stored = await this.loadSessionState(sessionId);
+    const cursor = await this.resolveSessionCursor(sessionId);
+    if (stored === null && cursor === undefined) {
+      throw new Error(`session_not_found: ${sessionId}`);
+    }
+    const runId = opts?.runId ?? randomUUID();
+    // 单 run 守卫必须在任何 await 之前同步占位（与 run() 同口径）。
+    const execution = this.beginExecution(runId, sessionId, opts?.branch);
+    if (opts?.branch !== undefined && opts.branch !== this.lastBranch) {
+      this.pendingPrefixReason ??= 'branch';
+    }
+    if (opts?.branch !== undefined) this.lastBranch = opts.branch;
+    try {
+      return await this.executeRun(execution, input, opts);
+    } finally {
       this.endExecution(execution);
     }
   }
@@ -1040,15 +1131,15 @@ export class ExecutionUnit {
    * loop 只做算法编排；窗口、provider、工具执行、事件与控制策略全部经端口
    * 绑定回当前 `ExecutionUnit` / `execution`，不引入跨 run 状态。
    */
-  private createLoopContext(execution: RunExecution, signal?: AbortSignal): LoopContext {
+  private createLoopContext(execution: Run, signal?: AbortSignal): LoopContext {
     return {
       execution,
       window: {
         addMessage: (m, id) => this.addContext(m, id),
-        buildRequestMessages: (o) => this.buildRequestMessages(o),
+        buildRequestMessages: (o) => this.buildRequestMessages(o, execution.workingContext),
         appendInjectedMessages: (id, m) => this.appendInjectedMessages(id, m),
-        updateRealTokens: (t) => this.context.updateRealTokens(t),
-        autoCompact: async () => this.context.autoCompactAsync?.(),
+        updateRealTokens: (t) => execution.workingContext.updateRealTokens(t),
+        autoCompact: async () => execution.workingContext.autoCompactAsync?.(),
       },
       provider: {
         chat: (args) => this.chatWithOverflowRetry(execution, args),
@@ -1106,7 +1197,7 @@ export class ExecutionUnit {
         markLegacyContextSeen: (s) => {
           this.legacyAdditionalContextSeen.add(s);
         },
-        onSafePoint: () => this.writeCheckpoint(execution, 'running'),
+        onSafePoint: () => this.writeRunRecord(execution, 'running'),
       },
     };
   }
@@ -1118,7 +1209,7 @@ export class ExecutionUnit {
    * 第二次仍失败则原样抛出，不包装 provider 错误。
    */
   private async chatWithOverflowRetry(
-    execution: RunExecution,
+    execution: Run,
     args: {
       messages: Message[];
       tools: NonNullable<ChatRequest['tools']>;
@@ -1210,7 +1301,7 @@ export class ExecutionUnit {
 
   /**
    * 0.15 E1：手动压缩上下文，并发布 `context.compacted`（reason=manual）。
-   * 供 harness 的 `/compact` 一类入口调用；直接调 ContextManager 不会产生事件。
+   * 供 harness 的 `/compact` 一类入口调用；直接调 WorkingContext 不会产生事件。
    * @returns 移除的消息数（0 = 未压缩）
    */
   async compactContext(): Promise<number> {
@@ -1225,13 +1316,14 @@ export class ExecutionUnit {
 
   /** 强制压缩一次（overflow 重试用）；压缩失败不覆盖 provider 原始错误。 */
   private async forceCompact(
-    execution?: RunExecution,
+    execution?: Run,
     reason: ContextCompactedReason = 'overflow',
   ): Promise<number> {
+    const workingContext = execution?.workingContext ?? this.context;
     try {
-      const removed = this.context.compactAsync
-        ? await this.context.compactAsync()
-        : this.context.compact();
+      const removed = workingContext.compactAsync
+        ? await workingContext.compactAsync()
+        : workingContext.compact();
       this.publishCompacted(execution, removed, reason);
       // overflow 重试会跳过下一次守卫检查；把原因留给后续请求消费。
       if (removed > 0) this.pendingPrefixReason ??= 'compaction';
@@ -1243,14 +1335,15 @@ export class ExecutionUnit {
 
   /** 0.15 E1：removed>0 时发布 `context.compacted`；0.32 同时把摘要落事件日志 */
   private publishCompacted(
-    execution: RunExecution | undefined,
+    execution: Run | undefined,
     removed: number,
     reason: ContextCompactedReason,
   ): void {
     if (removed <= 0) return;
+    const workingContext = execution?.workingContext ?? this.context;
     const runId = execution?.runId ?? this.activeRun?.runId ?? 'manual';
-    const sessionId = execution?.sessionId ?? this.context.getSessionId();
-    const remaining = this.context.messages.length;
+    const sessionId = execution?.sessionId ?? workingContext.getSessionId();
+    const remaining = workingContext.messages.length;
     this.publishEvent({
       type: 'context.compacted',
       run_id: runId,
@@ -1268,8 +1361,8 @@ export class ExecutionUnit {
     // `data.message` 就是 applyCompaction 写入的摘要；`kept` 是应用后保留的
     // 非 system 消息数，供投影按同一边界裁剪旧历史。摘要只能取自刚压缩的那个
     // 会话；会话在 await 期间被切换时不写错事件。
-    if (this.context.getSessionId() !== sessionId) return;
-    const messages = this.context.messages;
+    if (workingContext.getSessionId() !== sessionId) return;
+    const messages = workingContext.messages;
     let summary: Message | undefined;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const candidate = messages[index];
@@ -1301,13 +1394,14 @@ export class ExecutionUnit {
    * 自动压缩开启时 >95% 静默让 autoCompactAsync 处理；**关闭时必须取消上界** ——
    * 此时没有压缩会把水位降回来，token 只会上穿 0.95，上界会让提示永久静默。
    */
-  private publishContextPressureWarning(execution: RunExecution): void {
-    const max = this.context.maxTokens;
+  private publishContextPressureWarning(execution: Run): void {
+    const workingContext = execution.workingContext;
+    const max = workingContext.maxTokens;
     if (max === undefined || max <= 0) return;
-    const used = this.context.tokenCount;
+    const used = workingContext.tokenCount;
     const ratio = used / max;
     // 缺省（实现不暴露 autoCompact）按开启处理，与 0.27 行为一致。
-    const autoCompact = this.context.autoCompact !== false;
+    const autoCompact = workingContext.autoCompact !== false;
     // 自动压缩开启时：低于预警线或已超过自动压缩阈值（>0.95）不提示。
     // 恰好 0.95 仍提示一次：压缩条件是严格大于，留出这一条边。
     if (ratio < CONTEXT_PRESSURE_WARN_RATIO) return;
@@ -1346,7 +1440,7 @@ export class ExecutionUnit {
   }
 
   /** 0.15 E2：每 run 每 key 只发一次预警（数据形状为冻结契约） */
-  private publishLimitWarnings(execution: RunExecution): void {
+  private publishLimitWarnings(execution: Run): void {
     const warnings = evaluateLimitWarnings(
       execution.stats,
       this.limits,
@@ -1415,7 +1509,7 @@ export class ExecutionUnit {
    * 热应用上下文策略（身份转换后调用）。下一轮请求生效，不需要重建 runtime。
    *
    * 只替换压力提示的尾句：缺省（未给 `contextPressureHint`）回落到 `agent(rotate)`
-   * 原文案。自动压缩开关由调用方自己的 `ContextManager` 决定，core 不感知身份。
+   * 原文案。自动压缩开关由调用方自己的 `WorkingContext` 决定，core 不感知身份。
    */
   applyContextPolicy(policy: Pick<ExecutionUnitOptions, 'contextPressureHint'>): void {
     this.contextPressureHint = policy.contextPressureHint;
@@ -1446,7 +1540,7 @@ export class ExecutionUnit {
    * 错误文本由调用方按原顺序折回上下文；工具失败不终止 run，模型可自行纠错。
    */
   private async recordToolFailure(
-    execution: RunExecution,
+    execution: Run,
     opts: {
       toolCallId: string;
       toolName: string;
@@ -1521,7 +1615,7 @@ export class ExecutionUnit {
    */
   private async runToolCall(
     entry: PreparedToolCall,
-    execution: RunExecution,
+    execution: Run,
     signal?: AbortSignal,
   ): Promise<ToolExecutionOutcome> {
     const { toolCall, toolName } = entry;
@@ -1551,7 +1645,7 @@ export class ExecutionUnit {
         sessionId,
         toolCall,
         args: entry.args,
-        messages: this.context.messages,
+        messages: execution.workingContext.messages,
         // F10：把当前 run 的 signal 交给工具，便于 handler 响应取消
         ...(signal ? { signal } : {}),
         stages: {
@@ -1635,7 +1729,7 @@ export class ExecutionUnit {
         run_id: runId,
         data: {
           run_id: runId,
-          session_id: this.context.getSessionId(),
+          session_id: (this.activeRun?.workingContext ?? this.context).getSessionId(),
           message,
         },
         ts: Date.now(),
@@ -1649,10 +1743,13 @@ export class ExecutionUnit {
    * system 覆盖只来自会话级基底（含 Self Card），不接受每轮 hook 拼接。
    * 1) 先归一化成 Provider 可接受的序列（丢掉孤儿 tool 消息、降级不完整的 tool_calls 轮次）；
    * 2) 再处理 system：上下文缺 system 时补回基底；有 Self Card 时覆盖持久化的旧 system。
-   * 注入只影响本次请求，不改动 ContextManager 持久化的消息。
+   * 注入只影响本次请求，不改动 WorkingContext 持久化的消息。
    */
-  private buildRequestMessages(systemOverrideInput: unknown): Message[] {
-    const messages = this.normalizeMessages(this.context.messages);
+  private buildRequestMessages(
+    systemOverrideInput: unknown,
+    workingContext: WorkingContext = this.context,
+  ): Message[] {
+    const messages = this.normalizeMessages(workingContext.messages);
     const systemOverride =
       typeof systemOverrideInput === 'string' && systemOverrideInput
         ? systemOverrideInput
@@ -1741,9 +1838,10 @@ export class ExecutionUnit {
    * 加入上下文并发布 context.changed 事件（ADR-031：同步写保证关键路径可靠 + 事件观测可回放）
    */
   private addContext(msg: Message, runId: string): void {
+    const workingContext = this.activeRun?.workingContext ?? this.context;
     // 0.6.1 P2：逐条消息时间戳（已有值不覆盖，恢复的历史保持原时间）
     const stamped: Message = msg.timestamp === undefined ? { ...msg, timestamp: Date.now() } : msg;
-    this.context.add(stamped);
+    workingContext.add(stamped);
     this.publishEvent({
       type: 'context.changed',
       run_id: runId,
@@ -1754,8 +1852,8 @@ export class ExecutionUnit {
           : {}),
         // 持久化保留 reasoning_content；事件里剔除，避免思维链泄漏到 TUI/观测
         message: this.stripReasoningFromMessage(stamped),
-        message_count: this.context.messages.length,
-        token_count: this.context.tokenCount,
+        message_count: workingContext.messages.length,
+        token_count: workingContext.tokenCount,
       },
       ts: Date.now(),
     });
@@ -1774,51 +1872,52 @@ export class ExecutionUnit {
   }
 
   /**
-   * 写 checkpoint 并发布开放事件 `run.checkpoint`；未配置 store 时 no-op。
+   * 原地更新执行中 Run 的 RunRecord，落盘并发布开放事件 `run.checkpoint`。
+   * 未配置 store 时不落盘、不发事件，但仍更新内存记录供 SessionState 镜像。
    * 写入失败默认让 run 失败（durable 已开启就不能静默降级）；
    * `bestEffort` 用于失败路径上的最终写入，避免覆盖原始错误。
    */
-  private async writeCheckpoint(
-    execution: RunExecution,
-    status: RunCheckpoint['status'],
+  private async writeRunRecord(
+    execution: Run,
+    status: RunRecord['status'],
     error?: string,
     bestEffort = false,
     errorEnvelope?: ErrorEnvelope,
   ): Promise<void> {
+    const { runId, sessionId, createdAt, stats, branch } = execution;
+    const record = execution.record;
+    record.run_id = runId;
+    record.session_id = sessionId;
+    record.status = status;
+    if (errorEnvelope !== undefined) record.error_envelope = errorEnvelope;
+    else delete record.error_envelope;
+    record.usage = this.usageFromStats(stats);
+    record.iteration = stats.requestCount;
+    record.created_at = createdAt || Date.now();
+    record.updated_at = Date.now();
+    record.metadata = {
+      tool_calls_count: stats.toolCallsCount,
+      ...(branch !== undefined ? { branch } : {}),
+      // 0.18：RunRecord 不再带 messages；durable 列表的 preview 从这里取。
+      preview: deriveSessionMeta(execution.workingContext.messages).preview,
+    };
+    record.agent_id = this.agentId ?? record.agent_id;
+    record.tenant_id = this.tenantId ?? record.tenant_id;
+    record.branch = branch;
+    if (error !== undefined) record.error = error;
+    else delete record.error;
+
     if (!this.runStore) return;
 
     if (this.eventLog) await this.flushEventLogWrites();
     const eventCursor = await this.currentEventCursor(execution.sessionId);
+    if (eventCursor !== undefined) record.event_cursor = eventCursor;
 
-    const { runId, sessionId, createdAt, stats, branch } = execution;
-    const checkpoint: RunCheckpoint = {
-      run_id: runId,
-      session_id: sessionId,
-      status,
-      // 0.18 C2：不再写完整 messages；历史由 session 缓存 + 事件日志重建。
-      messages: [],
-      ...(eventCursor !== undefined ? { event_cursor: eventCursor } : {}),
-      ...(errorEnvelope !== undefined ? { error_envelope: errorEnvelope } : {}),
-      usage: this.usageFromStats(stats),
-      iteration: stats.requestCount,
-      created_at: createdAt || Date.now(),
-      updated_at: Date.now(),
-      metadata: {
-        tool_calls_count: stats.toolCallsCount,
-        ...(branch !== undefined ? { branch } : {}),
-        // 0.18：checkpoint 不再带 messages；durable 列表的 preview 从这里取。
-        preview: deriveSessionMeta(this.context.messages).preview,
-      },
-      ...(this.agentId !== undefined ? { agent_id: this.agentId } : {}),
-      ...(error !== undefined ? { error } : {}),
-      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
-    };
-
-    // 0.14 P0：checkpoint 写失败按 checkpoint 阶段归类；成功后恢复原阶段。
+    // 0.14 P0：RunRecord 写失败按 checkpoint 阶段归类；成功后恢复原阶段。
     const previousPhase = execution.phase;
     execution.phase = 'checkpoint';
     try {
-      await this.runStore.save(checkpoint);
+      await this.runStore.save(record);
     } catch (saveError) {
       if (bestEffort) {
         execution.phase = previousPhase;
@@ -1836,8 +1935,9 @@ export class ExecutionUnit {
         run_id: runId,
         session_id: sessionId,
         status,
-        iteration: checkpoint.iteration,
-        message_count: checkpoint.messages.length,
+        iteration: record.iteration,
+        // 0.18 C2：RunRecord 不再写完整 messages；保持既有事件形状。
+        message_count: 0,
       },
       ts: Date.now(),
     });
@@ -1845,18 +1945,15 @@ export class ExecutionUnit {
 
   /**
    * 0.18：恢复历史（run 启动 / resume 共用）。优先级：
-   * 1) session 缓存（含压缩摘要等事件不可重建的消息）+ 事件日志中 `seq > derived_upto_seq` 的增量；
+   * 1) SessionState 缓存（含压缩摘要等事件不可重建的消息）+ 事件日志中 `seq > derived_upto_seq` 的增量；
    * 2) 事件日志完整投影（旧缓存无 derived 时做重叠去重）；
-   * 3) 旧 checkpoint.messages（仅 resume 的 legacy 只读兼容）。
+   * 3) legacy 回退：RunRecord.legacy_messages（旧 checkpoint messages）→ SessionState.messages。
    *
-   * run() 也必须走这里：否则崩溃后新 run 只读缓存，saveSession 会把未重放的
+   * run() 也必须走这里：否则崩溃后新 run 只读缓存，saveSessionState 会把未重放的
    * 尾段事件错误标记为已覆盖。
    */
-  private async loadStoredHistory(
-    sessionId: string,
-    checkpoint?: RunCheckpoint,
-  ): Promise<Message[]> {
-    let sessionState: RunState | null = null;
+  private async loadStoredHistory(sessionId: string, record?: RunRecord): Promise<StoredHistory> {
+    let sessionState: SessionState | null = null;
     if (this.session) {
       sessionState = await this.session.load(sessionId);
     }
@@ -1874,17 +1971,17 @@ export class ExecutionUnit {
           sessionId,
           needFullProjection ? {} : { sinceSeq: derived },
         );
-        // 一致性校验（P2）：checkpoint 游标 / session 派生游标不得超前于日志。
+        // 一致性校验（P2）：RunRecord 游标 / SessionState 派生游标不得超前于日志。
         const lastSeq = await this.eventLog.lastSeq?.(sessionId);
-        const checkpointCursor = checkpoint?.event_cursor;
+        const recordCursor = record?.event_cursor;
         if (
-          typeof checkpointCursor === 'number' &&
-          checkpointCursor > 0 &&
-          (lastSeq === undefined || lastSeq < checkpointCursor)
+          typeof recordCursor === 'number' &&
+          recordCursor > 0 &&
+          (lastSeq === undefined || lastSeq < recordCursor)
         ) {
-          this.logger.warn('session event log is behind checkpoint', {
+          this.logger.warn('session event log is behind run record', {
             session_id: sessionId,
-            event_cursor: checkpointCursor,
+            event_cursor: recordCursor,
             last_seq: lastSeq,
           });
         }
@@ -1907,63 +2004,90 @@ export class ExecutionUnit {
       }
     }
 
+    // 消息窗口实际覆盖到的游标：缓存游标与本次读到的最后事件 seq 的较大者。
+    let cursor = typeof derived === 'number' ? derived : undefined;
+    const lastReadSeq = events[events.length - 1]?.seq;
+    if (typeof lastReadSeq === 'number') cursor = Math.max(cursor ?? lastReadSeq, lastReadSeq);
+    const eventCount = events.length;
+
     if (cached !== undefined) {
       const history = structuredClone(cached);
       const projected = projectMessages(events);
       if (typeof derived === 'number') {
         // 增量：tail 严格在缓存之后，直接追加；崩溃在工具轮中间时 tool 结果在这里。
         if (projected.length > 0) history.push(...projected);
-        return history;
+        return {
+          messages: history,
+          ...(cursor !== undefined ? { cursor } : {}),
+          sessionState,
+          eventCount,
+        };
       }
       // 旧数据（无 derived）：全量投影可能与缓存重叠，按尾部重叠去重后追加。
-      return projected.length > 0 ? mergeHistoryProjection(history, projected) : history;
+      const merged = projected.length > 0 ? mergeHistoryProjection(history, projected) : history;
+      return {
+        messages: merged,
+        ...(cursor !== undefined ? { cursor } : {}),
+        sessionState,
+        eventCount,
+      };
     }
 
     if (events.length > 0) {
       const projected = projectMessages(events);
-      if (projected.length > 0) return projected;
+      if (projected.length > 0) {
+        return {
+          messages: projected,
+          ...(cursor !== undefined ? { cursor } : {}),
+          sessionState,
+          eventCount,
+        };
+      }
     }
 
-    return checkpoint !== undefined && Array.isArray(checkpoint.messages)
-      ? checkpoint.messages
-      : [];
+    // legacy 回退：旧 RunRecord.messages 优先，其次 SessionState 的历史缓存。
+    if (record?.legacy_messages !== undefined && record.legacy_messages.length > 0) {
+      return { messages: record.legacy_messages, sessionState, eventCount };
+    }
+    return { messages: sessionState?.messages ?? [], sessionState, eventCount };
   }
 
   /** 0.18：best-effort 索引更新；永不向外抛 */
-  private async updateSessionIndexBestEffort(runState: RunState): Promise<void> {
+  private async updateSessionIndexBestEffort(sessionState: SessionState): Promise<void> {
     try {
-      await this.updateSessionIndex(runState);
+      await this.updateSessionIndex(sessionState);
     } catch (error) {
       this.logger.warn('session index update failed', {
-        session_id: runState.session_id,
+        session_id: sessionState.session_id,
         error: errorText(error),
       });
     }
   }
 
   /** 0.18：best-effort 更新 `index.json` 元数据（失败只记日志，不影响 run） */
-  private async updateSessionIndex(runState: RunState): Promise<void> {
+  private async updateSessionIndex(sessionState: SessionState): Promise<void> {
     if (!this.eventLog?.updateIndex) return;
     await this.flushEventLogWrites();
-    const cursor = await this.currentEventCursor(runState.session_id);
-    let stored: RunState | null = null;
+    const cursor = await this.currentEventCursor(sessionState.session_id);
+    let stored: SessionState | null = null;
     if (this.session) {
       try {
-        stored = await this.session.load(runState.session_id);
+        stored = await this.session.load(sessionState.session_id);
       } catch (error) {
         this.logger.warn('session load failed during index update', {
-          session_id: runState.session_id,
+          session_id: sessionState.session_id,
           error: errorText(error),
         });
       }
     }
-    const derived = deriveSessionMeta(runState.messages);
-    await this.eventLog.updateIndex(runState.session_id, {
-      status: runState.status,
-      title: runState.title ?? stored?.title ?? derived.title,
-      preview: runState.preview ?? stored?.preview ?? derived.preview,
-      started_at: runState.started_at,
-      updated_at: runState.completed_at ?? Date.now(),
+    const messages = sessionState.messages ?? [];
+    const derived = deriveSessionMeta(messages);
+    await this.eventLog.updateIndex(sessionState.session_id, {
+      status: sessionState.status,
+      title: sessionState.title ?? stored?.title ?? derived.title,
+      preview: sessionState.preview ?? stored?.preview ?? derived.preview,
+      started_at: sessionState.created_at,
+      updated_at: sessionState.updated_at,
       ...(cursor !== undefined ? { event_count: cursor, derived_upto_seq: cursor } : {}),
     });
   }
@@ -1980,24 +2104,109 @@ export class ExecutionUnit {
     }
   }
 
-  /** 保存 session 快照，并发布 `session.saved` */
-  private async saveSession(runState: RunState): Promise<void> {
+  /** 读取会话壳（SessionState）；无 SessionStore 时 null。 */
+  private async loadSessionState(sessionId: string): Promise<SessionState | null> {
+    if (!this.session) return null;
+    return this.session.load(sessionId);
+  }
+
+  /**
+   * 当前会话日志尾（Q6 的 session 游标）。
+   * 无事件日志时返回 undefined：此时只能依赖进程内窗口复用。
+   */
+  private async resolveSessionCursor(sessionId: string): Promise<number | undefined> {
+    if (!this.eventLog) return undefined;
+    try {
+      await this.eventLog.flush(sessionId);
+      const inMemory = this.eventLog.lastPersistedSeq(sessionId);
+      if (inMemory !== undefined) return inMemory;
+      return await this.eventLog.lastSeq?.(sessionId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Q6 快速路径：同一 session、窗口非空，且持久游标仍等于窗口上次播种/保存的游标。
+   * 任何增量事件（或其它会话切换）都会让条件失败，回退到全量重放。
+   */
+  private canReuseWindow(sessionId: string, sessionCursor: number | undefined): boolean {
+    return (
+      this.context.getSessionId() === sessionId &&
+      this.context.messages.length > 0 &&
+      this.seededSessionId === sessionId &&
+      this.seededCursor === sessionCursor
+    );
+  }
+
+  /**
+   * 构造本次 run 的 SessionState 壳：
+   * 保留既有 title / preview / created_at / created_on_branch / tenant_id，
+   * 覆盖 status / last_run_id / updated_at；messages 在保存时由窗口投影补齐。
+   */
+  private createSessionState(
+    sessionId: string,
+    runId: string,
+    stored: SessionState | null,
+    branch: string | undefined,
+    now: number,
+  ): SessionState {
+    const tenantId = this.tenantId ?? stored?.tenant_id;
+    const createdOnBranch = stored?.created_on_branch ?? branch;
+    return {
+      session_id: sessionId,
+      ...(stored?.title !== undefined ? { title: stored.title } : {}),
+      ...(stored?.preview !== undefined ? { preview: stored.preview } : {}),
+      ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
+      created_at: stored?.created_at ?? now,
+      updated_at: now,
+      ...(createdOnBranch !== undefined ? { created_on_branch: createdOnBranch } : {}),
+      status: 'running',
+      last_run_id: runId,
+    };
+  }
+
+  /**
+   * 终态收尾 SessionState：status / updated_at / last_run_id / messages，
+   * 并按 Q4=b 写入顶层 run 字段镜像（来自刚落盘的 RunRecord）。
+   */
+  private finalizeSessionState(
+    execution: Run,
+    sessionState: SessionState,
+    status: SessionStatus,
+  ): void {
+    sessionState.status = status;
+    sessionState.updated_at = Date.now();
+    sessionState.last_run_id = execution.runId;
+    sessionState.messages = execution.workingContext.messages;
+    const mirror = legacyRunFromRecord(execution.record);
+    if (mirror !== undefined) sessionState.legacy_run = mirror;
+    else delete sessionState.legacy_run;
+  }
+
+  /** 保存 SessionState 投影，并发布 `session.saved` */
+  private async saveSessionState(sessionState: SessionState): Promise<void> {
     if (!this.session) return;
+    sessionState.messages = (this.activeRun?.workingContext ?? this.context).messages;
     if (this.eventLog) {
       // 先等待已入队事件落盘，再记录缓存覆盖到的 seq；resume 只重放之后的增量。
       await this.flushEventLogWrites();
-      const cursor = await this.currentEventCursor(runState.session_id);
-      if (cursor !== undefined) runState.derived_upto_seq = cursor;
+      const cursor = await this.currentEventCursor(sessionState.session_id);
+      if (cursor !== undefined) sessionState.derived_upto_seq = cursor;
+      this.seededSessionId = sessionState.session_id;
+      this.seededCursor = cursor;
+    } else {
+      this.seededSessionId = sessionState.session_id;
     }
-    await this.session.save(runState);
+    await this.session.save(sessionState);
     this.publishEvent({
       type: 'session.saved',
-      run_id: runState.run_id,
+      run_id: sessionState.last_run_id ?? 'session',
       data: {
-        run_id: runState.run_id,
-        session_id: runState.session_id,
-        status: runState.status,
-        message_count: runState.messages.length,
+        run_id: sessionState.last_run_id ?? 'session',
+        session_id: sessionState.session_id,
+        status: sessionState.status,
+        message_count: sessionState.messages.length,
       },
       ts: Date.now(),
     });

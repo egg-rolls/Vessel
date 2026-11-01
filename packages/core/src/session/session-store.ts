@@ -1,10 +1,10 @@
 /**
- * Session Backend 实现
+ * SessionStore 实现
  * @module @vessel-agent/core/session
  */
 
 import type { Message } from '../types/provider.js';
-import type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
+import type { SessionInfo, SessionState, SessionStore } from '../types/session.js';
 
 /**
  * 从首轮用户消息派生 title/preview（照搬 Hermes list_sessions_rich 的 preview 语义）。
@@ -24,51 +24,50 @@ export function deriveSessionMeta(messages: Message[]): { title: string; preview
   };
 }
 
-/** RunState -> SessionInfo 摘要（title/preview 优先用已存储值，否则派生） */
-export function toSessionInfo(state: RunState): SessionInfo {
-  const derived = deriveSessionMeta(state.messages);
+/** SessionState -> SessionInfo 摘要（title/preview 优先用已存储值，否则派生） */
+export function toSessionInfo(state: SessionState): SessionInfo {
+  const messages = state.messages ?? [];
+  const derived = deriveSessionMeta(messages);
   return {
     session_id: state.session_id,
     title: state.title ?? derived.title,
     preview: state.preview ?? derived.preview,
-    status: state.status,
-    started_at: state.started_at,
-    updated_at: state.updated_at ?? state.completed_at ?? state.started_at,
-    message_count: state.messages.length,
-    branch: state.branch,
+    status: state.status ?? 'running',
+    started_at: state.created_at,
+    updated_at: state.updated_at,
+    message_count: messages.length,
+    branch: state.created_on_branch,
     tenant_id: state.tenant_id,
-    ...(state.ended_at !== undefined ? { ended_at: state.ended_at } : {}),
-    ...(state.end_reason !== undefined ? { end_reason: state.end_reason } : {}),
   };
 }
 
 /**
- * 内存 Session Backend 实现
+ * 内存 SessionStore 实现
  * 用于测试和开发，生产环境应使用文件或数据库存储
  */
-export class MemorySessionBackend implements SessionBackend {
-  private sessions: Map<string, RunState> = new Map();
+export class MemorySessionStore implements SessionStore {
+  private sessions: Map<string, SessionState> = new Map();
 
   /**
-   * 加载 Run 状态
-   * @param session_id 会话 ID
-   * @returns Run 状态或 null
+   * 加载会话状态
+   * @param sessionId 会话 ID
+   * @returns 会话状态或 null
    */
-  async load(sessionId: string): Promise<RunState | null> {
+  async load(sessionId: string): Promise<SessionState | null> {
     return this.sessions.get(sessionId) ?? null;
   }
 
   /**
-   * 保存 Run 状态
-   * @param state Run 状态
+   * 保存会话状态
+   * @param state 会话状态
    */
-  async save(state: RunState): Promise<void> {
+  async save(state: SessionState): Promise<void> {
     this.sessions.set(state.session_id, { ...state });
   }
 
   /**
    * 删除会话
-   * @param session_id 会话 ID
+   * @param sessionId 会话 ID
    */
   async delete(sessionId: string): Promise<void> {
     this.sessions.delete(sessionId);
@@ -88,7 +87,7 @@ export class MemorySessionBackend implements SessionBackend {
    */
   async listRich(): Promise<SessionInfo[]> {
     return Array.from(this.sessions.values())
-      .filter((s) => s.messages.length > 0)
+      .filter((s) => (s.messages?.length ?? 0) > 0)
       .map(toSessionInfo)
       .sort((a, b) => {
         if (a.updated_at !== b.updated_at) return b.updated_at - a.updated_at;
@@ -104,4 +103,4 @@ export class MemorySessionBackend implements SessionBackend {
   }
 }
 
-export type { RunState, SessionBackend };
+export type { SessionState, SessionStore };

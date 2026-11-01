@@ -1,15 +1,19 @@
 /**
- * Durable RunStore 装配（0.3 A1）。
+ * Durable RunRecordStore 装配（0.3 A1）。
  *
  * - 只有 `durable.enabled !== false` 才创建 store；缺省开启，显式 false 时不创建。
- * - file 后端目录支持 `~` 展开；目录创建由 core 的 FileRunStore 负责。
+ * - file 后端目录支持 `~` 展开；目录创建由 core 的 FileRunRecordStore 负责。
  * - 生命周期由 bootstrap.shutdown() 在最后关闭（checkpoint 写入先完成）。
  */
 
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_DURABLE_OPTIONS, type VesselConfig } from '../packages/config/src/index';
-import { FileRunStore, MemoryRunStore, type RunStore } from '../packages/core/src/index';
+import {
+  FileRunRecordStore,
+  MemoryRunRecordStore,
+  type RunRecordStore,
+} from '../packages/core/src/index';
 
 export interface ResolvedDurableOptions {
   enabled: boolean;
@@ -19,11 +23,11 @@ export interface ResolvedDurableOptions {
 }
 
 /** run store 选项 */
-export interface RunStoreOptions {
+export interface RunRecordStoreOptions {
   /** tenant 的 runs 目录（`<tenant>/runs`）；显式 durable.path 优先 */
   tenantRunsDir?: string;
   /**
-   * 所属 tenant（A5）。FileRunStore 用它补齐/校验 checkpoint.tenant_id，
+   * 所属 tenant（A5）。FileRunRecordStore 用它补齐/校验 record.tenant_id，
    * 并在 delete 时拒绝跨 tenant 归属（core 侧实现）。
    */
   tenantId?: string;
@@ -32,7 +36,7 @@ export interface RunStoreOptions {
 /** config → durable 选项（默认值只在 DEFAULT_DURABLE_OPTIONS 一处） */
 export function resolveDurableOptions(
   config: VesselConfig,
-  opts: RunStoreOptions = {},
+  opts: RunRecordStoreOptions = {},
 ): ResolvedDurableOptions {
   const durable = config.durable;
   return {
@@ -57,23 +61,23 @@ export function resolveRunStorePath(input?: string): string {
 }
 
 /** 按配置创建 store；durable 关闭时返回 undefined */
-export function createRunStore(
+export function createRunRecordStore(
   config: VesselConfig,
-  opts: RunStoreOptions = {},
-): RunStore | undefined {
+  opts: RunRecordStoreOptions = {},
+): RunRecordStore | undefined {
   const options = resolveDurableOptions(config, opts);
   if (!options.enabled) return undefined;
 
-  if (options.backend === 'memory') return new MemoryRunStore();
-  return new FileRunStore({
+  if (options.backend === 'memory') return new MemoryRunRecordStore();
+  return new FileRunRecordStore({
     dir: resolveRunStorePath(options.path),
     ...(opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {}),
   });
 }
 
 /** 关闭 store；失败不阻断退出 */
-export async function closeRunStore(
-  store: RunStore | undefined,
+export async function closeRunRecordStore(
+  store: RunRecordStore | undefined,
   onError?: (error: unknown) => void,
 ): Promise<void> {
   if (!store?.close) return;

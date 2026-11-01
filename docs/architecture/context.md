@@ -7,7 +7,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 
 # 上下文与消息注入
 
-`ContextManager` 是**每个 session 一份**的内存消息表；`ExecutionUnit` 是唯一写者。
+`WorkingContext` 是**每个 session 一份**的内存消息表；`ExecutionUnit` 是唯一写者。
 事件日志是恢复的真相源；**compaction 是唯一允许重写历史的地方**。
 
 ## 消息模型

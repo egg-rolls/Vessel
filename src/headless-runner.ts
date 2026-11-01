@@ -10,7 +10,9 @@ import type {
   Message,
   RunEvent,
   RunnableAgent,
-  SessionBackend,
+  RunRecordStore,
+  SessionState,
+  SessionStore,
   Unsubscribe,
 } from '../packages/core/src/index';
 import { asTuiEvent } from '../packages/tui/src/types/events.js';
@@ -40,6 +42,8 @@ export interface HeadlessOptions {
   provider: { name: string; model: string };
   /** 0.33 A：ask 落盘 + 挂起；缺省 = 不启用（embedded 调用方保持旧行为） */
   askChannel?: HeadlessAskChannel;
+  /** durable RunRecordStore；`@file.json` 播种时写匹配的 completed RunRecord */
+  runStore?: RunRecordStore;
 }
 
 /** ask 挂起时的退出码：请求已持久化，run 可 resume。 */
@@ -185,7 +189,7 @@ export function installHeadlessPermissionAutoAllow(events: EventStream): Unsubsc
  */
 export async function runHeadless(
   runtime: RunnableAgent,
-  session: SessionBackend,
+  session: SessionStore,
   options: HeadlessOptions,
 ): Promise<number> {
   const { sessionId, provider } = options;
@@ -240,7 +244,7 @@ export async function runHeadless(
 /**
  * 读取 headless 输入：无参=stdin，@file=文件内容（.json=多轮 seeding），其余=文本 prompt
  */
-async function readInput(options: HeadlessOptions, session: SessionBackend): Promise<string> {
+async function readInput(options: HeadlessOptions, session: SessionStore): Promise<string> {
   const { runArg, pipeMode, sessionId } = options;
   const readStdin = runArg === '' || (runArg === null && pipeMode);
 
@@ -250,7 +254,7 @@ async function readInput(options: HeadlessOptions, session: SessionBackend): Pro
   if (runArg?.startsWith('@')) {
     const filePath = runArg.slice(1);
     if (filePath.endsWith('.json')) {
-      return seedFromMessagesFile(filePath, sessionId, session);
+      return seedFromMessagesFile(filePath, sessionId, session, options.runStore);
     }
     try {
       return await Bun.file(filePath).text();
@@ -267,7 +271,8 @@ async function readInput(options: HeadlessOptions, session: SessionBackend): Pro
 async function seedFromMessagesFile(
   filePath: string,
   sessionId: string,
-  session: SessionBackend,
+  session: SessionStore,
+  runStore?: RunRecordStore,
 ): Promise<string> {
   let raw: string;
   try {
@@ -309,13 +314,30 @@ async function seedFromMessagesFile(
 
   const history = msgs.slice(0, -1);
   if (history.length > 0) {
-    await session.save({
-      run_id: crypto.randomUUID(),
+    const now = Date.now();
+    const runId = crypto.randomUUID();
+    const state: SessionState = {
       session_id: sessionId,
       messages: history,
-      started_at: Date.now(),
+      created_at: now,
+      updated_at: now,
       status: 'completed',
-    });
+      last_run_id: runId,
+    };
+    if (runStore !== undefined) {
+      // 同一次播种写两件持久事实：会话壳 + 一条 completed RunRecord。
+      await runStore.save({
+        run_id: runId,
+        session_id: sessionId,
+        status: 'completed',
+        created_at: now,
+        updated_at: now,
+      });
+    } else {
+      // 无 RunRecordStore 时把 run 终态留在 legacy_run，sessions.get 仍可投影。
+      state.legacy_run = { completed_at: now };
+    }
+    await session.save(state);
   }
 
   return last.content;

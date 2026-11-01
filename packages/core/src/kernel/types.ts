@@ -177,8 +177,10 @@ export interface RunnableAgent {
   readonly events: EventStream;
   readonly pluginHost: PluginHost;
   run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string>;
-  /** 可选：从 durable checkpoint 恢复（ExecutionUnit 已实现） */
-  resume?(runId: string, opts?: RunOptions): Promise<string>;
+  /** 可选：从 durable RunRecord 恢复同一 run（ExecutionUnit 已实现） */
+  resumeRun?(runId: string, opts?: RunOptions): Promise<string>;
+  /** 可选：按 session 历史启动新 run（ExecutionUnit 已实现） */
+  resumeSession?(sessionId: string, input: string | Message, opts?: RunOptions): Promise<string>;
   dispose(): void | Promise<void>;
 }
 

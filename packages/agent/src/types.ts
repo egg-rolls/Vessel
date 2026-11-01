@@ -13,8 +13,6 @@ import type {
   Logger,
   RunEvent,
   RunInterruptReason,
-  RunOptions,
-  RunStore,
   RuntimePermissionConfig,
   Scheduler,
   ToolDefinition,
@@ -256,10 +254,14 @@ export interface MemberRuntimePort {
     runId?: string,
   ): Promise<MemberTurnResult>;
   /**
-   * 从 durable checkpoint 恢复一个 run（0.27 additive，可选）。
-   * 返回本轮最终文本；body 身份由 `member` 指定。
+   * Q5（additive，可选）：按 session 历史启动新 run。
+   * `-r/--resume` 与 AgentService 的 resume 准入路径显式调用；未实现时回退 `runTurn`。
    */
-  resume?(member: MemberRuntimeMember, runId: string, opts?: RunOptions): Promise<MemberTurnResult>;
+  resumeTurn?(
+    member: MemberRuntimeMember,
+    message: AgentMessage,
+    runId?: string,
+  ): Promise<MemberTurnResult>;
   cancel(member: MemberRuntimeMember, reason?: RunInterruptReason): Promise<void> | void;
   dispose(member: MemberRuntimeMember): Promise<void> | void;
   /**
@@ -592,6 +594,12 @@ export interface AdmitInput {
   strict?: boolean;
   /** 0.32-D：写入收件箱时的重要标记（只做标记，不改变调度）。 */
   important?: boolean;
+  /**
+   * Q5（仅内部装配使用，不暴露为 RPC）：本次投递按「续接已有 session」执行，
+   * 调度到 `MemberRuntimePort.resumeTurn` → core `resumeSession(sessionId, input)`。
+   * 缺省 = 普通 `run`。
+   */
+  resume?: boolean;
 }
 
 /** 统一准入结果；`session_id` 是 body id */
@@ -875,8 +883,6 @@ export interface AgentServiceOptions {
   inboxMaxMessages?: number;
   /** binding 跨进程租约；缺省无锁 */
   bindingLease?: BindingLeasePort;
-  /** durable resume 用 checkpoint 存储；缺省禁止 resume */
-  runStore?: RunStore;
   now?: () => number;
   /** 注入 id 生成器（session_id === member id） */
   newId?: () => string;
@@ -939,11 +945,6 @@ export interface AgentService {
    * 解析 session → agent/body，检查可见性 / 预算，入 body mailbox 并交给 scheduler。
    */
   admit(input: AdmitInput): Promise<AdmitResult>;
-  /**
-   * 从 durable checkpoint 恢复 run：解析 checkpoint 的 agent/body，确保 body，
-   * 再经 scheduler 调用 runtime.resume。
-   */
-  resume(runId: string): Promise<ResumeResult>;
   /** 某 agent 的 live ExecutionUnit 状态（primary 优先） */
   bodies(agentId: string): Promise<ExecutionUnitStatus[]>;
   /**

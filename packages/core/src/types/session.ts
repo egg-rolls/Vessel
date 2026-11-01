@@ -4,49 +4,41 @@
  */
 
 import type { Message } from './provider.js';
+import type { RunUsage } from './run-record-store.js';
 
-/** Run 状态 */
-export interface RunState {
-  run_id: string;
-  session_id: string;
-  messages: Message[];
-  started_at: number;
+/** 会话状态（最近一次 RunRecord 的派生快照；真相源是 SessionEventLog） */
+export type SessionStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+
+/** @internal 一版兼容：旧 session JSON/sqlite 顶层 run 字段的合成投影。 */
+export interface LegacyRunSnapshot {
   completed_at?: number;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-    total_cost?: number;
-    /** CONTRACT-0.29 §3：缓存读计数（`prompt_tokens` 的子集；缺省=provider 未上报） */
-    cache_read_input_tokens?: number;
-    /** CONTRACT-0.29 §3：缓存写计数（`prompt_tokens` 的子集；缺省=provider 未上报） */
-    cache_creation_input_tokens?: number;
-  };
+  usage?: RunUsage;
   error?: string;
-  /** 会话标题（默认从首条用户消息派生，可由 /title 覆盖） */
+}
+
+/**
+ * 会话壳（元数据 + messages 投影缓存）。
+ *
+ * `messages` / `derived_upto_seq` / `status` / `last_run_id` 都是派生数据，
+ * 唯一真相源是 `SessionEventLog`；`legacy_run` 仅用于一版旧数据兼容。
+ */
+export interface SessionState {
+  session_id: string;
   title?: string;
-  /** 首条用户消息摘要（前 60 字符），用于 /resume 列表 */
   preview?: string;
-  /** 最后活动时间戳（ms），用于 /resume 按 recency 排序 */
-  updated_at?: number;
-  /** 会话创建时的 git branch（用于 /resume 列表展示） */
-  branch?: string;
-  /** 0.5：所属 tenant；缺省视为 `default` */
   tenant_id?: string;
-  /** 0.6.1 P2：会话结束时间（Unix ms）；旧数据/未结束会话缺失 */
-  ended_at?: number;
-  /** 0.6.1 P2：结束原因（由写入方定义，如 new / resume / exit） */
-  end_reason?: string;
-  /**
-   * 0.18（additive）：`messages` 投影缓存已覆盖到的会话事件 seq。
-   * resume 时只重放 `seq > derived_upto_seq` 的事件来补齐崩溃期间的增量；
-   * 旧数据缺失时按「messages 即完整历史」处理。
-   *
-   * `messages` 仍是投影缓存，唯一真相源是 `sessions/<id>/events.ndjson`；
-   * 彻底移除缓存留待 0.18 后续阶段。
-   */
+  created_at: number;
+  updated_at: number;
+  created_on_branch?: string;
+  /** Projection cache only; truth is SessionEventLog. */
+  messages?: Message[];
   derived_upto_seq?: number;
+  /** Derived snapshot of the latest RunRecord; NOT truth. */
+  status?: SessionStatus;
+  /** Derived pointer to the latest run; NOT truth. */
+  last_run_id?: string;
+  /** @internal one-release legacy compatibility snapshot (dual-write/read). */
+  legacy_run?: LegacyRunSnapshot;
 }
 
 /** 会话摘要（listRich 返回，照搬 Hermes list_sessions_rich 的字段集，简化） */
@@ -62,25 +54,12 @@ export interface SessionInfo {
   branch?: string;
   /** 0.5：所属 tenant；缺省视为 `default` */
   tenant_id?: string;
-  /** 0.6.1 P2：会话结束时间（Unix ms）；未结束/旧数据缺失 */
-  ended_at?: number;
-  /** 0.6.1 P2：结束原因 */
-  end_reason?: string;
 }
 
-/** Session 信息 */
-export interface Session {
-  session_id: string;
-  created_at: number;
-  updated_at: number;
-  runs: RunState[];
-  metadata?: Record<string, unknown>;
-}
-
-/** Session Backend 接口 */
-export interface SessionBackend {
-  load(sessionId: string): Promise<RunState | null>;
-  save(state: RunState): Promise<void>;
+/** Session 元数据存储 port（只收发 SessionState；不含事件日志） */
+export interface SessionStore {
+  load(sessionId: string): Promise<SessionState | null>;
+  save(state: SessionState): Promise<void>;
   delete(sessionId: string): Promise<void>;
   list(): Promise<string[]>;
   /** 列出会话摘要（含 title/preview/updated_at/message_count），按 recency 倒序，过滤空会话 */
