@@ -99,6 +99,11 @@ tags: [agent, session, runtime, loop, run, layering, terminology, control-plane,
   crash 后能找到 run 记录；只在结束时写与 resume 直接冲突。C2 的授权者（ControlPlane）与持有者
   （EU）分离，是「Run 不接触 LeaseService」得以成立的前提：Run 只收到 EU 注入的 fencingToken。
 
+  > **Stage 3 补充（用户 2026-11-01）**：`restart` / `compactFork` 的 `conflict` payload 带
+  > `run_id` / `session_id` / `lease_token`；`compactFork` 旧 primary EU/lease retire，新 lease
+  > fence 必须更高，旧 token 写 `SessionEventLog` / `RunRecord` 被拒；生命周期事件带
+  > `epoch` + `fencing_token`；`FileLeaseService` 仅单节点，不做集群共识。详见目标架构文档 §5。
+
   #### 6. 四连接语义（冻结）
 
   1. **Loop 不碰持久层**：`LOOP → RUN` 交还 facts / usage；`RUN → SessionEventLog` 追加事实、
