@@ -4,6 +4,7 @@
  */
 
 export type { ContextConfig, WorkingContext } from '../types/context.js';
+export { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
 export {
   compactMessagesForFork,
   estimateMessagesTokens,
@@ -11,3 +12,4 @@ export {
   estimateTokens,
   MemoryWorkingContext,
 } from './context-manager.js';
+export { createSessionBreaker } from './session-breaker.js';

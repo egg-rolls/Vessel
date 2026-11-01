@@ -15,7 +15,11 @@ import {
 import { createStderrLogger, noopLogger } from '../logging.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
 import { deriveSessionMeta, mergeHistoryProjection, projectMessages } from '../session/index.js';
-import type { ContextCompactedReason, WorkingContext } from '../types/context.js';
+import {
+  type ContextCompactedReason,
+  DEFAULT_COMPACT_THRESHOLD,
+  type WorkingContext,
+} from '../types/context.js';
 import type { ErrorEnvelope } from '../types/error.js';
 import type { EventStream, RunEvent, SessionEventLogPort, Unsubscribe } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
@@ -321,6 +325,12 @@ export class ExecutionUnit {
   private activeJournal?: RunJournal;
   /** 无 Run 的受控写（`manual` / `plugin`），按 runId+session 缓存以统一 flush */
   private readonly transientJournals = new Map<string, RunJournal>();
+  /**
+   * C2：每个 Run 已发布过的 `lastCompaction.id`（EU 上按 runId 记录）。
+   * `add()` 内的同步压缩不经过 loop 的发布点，`addContext` 用它与已发布 id 比对补发；
+   * 随 Run 释放。手动 / overflow / loop 自动压缩直发时由 `publishCompacted` 记入。
+   */
+  private readonly lastReportedCompactionId = new Map<string, number>();
   /** 上一 Run 结束时记录的上下文水位；无 active Run 时供成员 host 读取 */
   private lastContextRatioValue?: number;
   private readonly boundAgentId?: string;
@@ -750,6 +760,8 @@ export class ExecutionUnit {
         : undefined;
     await this.flushJournalWrites();
     if (this.activeRun === execution) this.activeRun = undefined;
+    // C2：已发布 id 是 Run 级状态；Run 结束即丢弃，避免跨 Run 复用 miss。
+    this.lastReportedCompactionId.delete(execution.runId);
     if (this.activeJournal !== undefined) {
       await this.activeJournal.close();
       this.activeJournal = undefined;
@@ -1560,31 +1572,54 @@ export class ExecutionUnit {
   }
 
   /**
-   * 0.15 E1：手动压缩上下文，并发布 `context.compacted`（reason=manual）。
+   * 0.15 E1 / 0.34 C6：手动压缩上下文，并发布 `context.compacted`（reason=manual）。
    * 供 harness 的 `/compact` 一类入口调用；直接调 WorkingContext 不会产生事件。
-   * @returns 移除的消息数（0 = 未压缩）
+   * `sessionId` 用于无 active Run 的瞬态路径（idle EU 尚未跑过 run 时 lastSessionId 为空）。
+   * @returns `{ removed, remaining, messages }`：移除条数、压缩后条数、压缩后窗口
    */
-  async compactContext(): Promise<number> {
+  async compactContext(
+    sessionId?: string,
+  ): Promise<{ removed: number; remaining: number; messages: Message[] }> {
     const execution = this.activeRun;
     let removed: number;
+    let remaining: number;
+    let messages: Message[];
     if (execution !== undefined) {
       const context = execution.workingContext;
       removed = context.compactAsync ? await context.compactAsync() : context.compact();
       this.publishCompacted(context, execution.runId, execution.sessionId, removed, 'manual');
+      remaining = context.messages.length;
+      messages = context.messages;
+      // C6：摘要事件必须落盘后才能返回；否则调用方 kill 后 resume 看不到压缩态。
+      await this.activeJournal?.flush();
     } else {
-      // PLAN §4.3：两次 Run 之间从 contextFactory 建瞬态窗口；播种后压缩，
-      // 以 run_id='manual' 写摘要，写完即弃，不修改任何长期实例。
-      const sessionId = this.lastSessionId ?? 'default';
-      const context = this.contextFactory({ sessionId });
-      context.setSessionId(sessionId);
-      const history = await this.loadStoredHistory(sessionId);
+      // 两次 Run 之间：从 contextFactory 建瞬态窗口；播种后压缩，
+      // 以 run_id='manual' 写摘要，写完即弃。
+      const target = sessionId ?? this.lastSessionId ?? 'default';
+      const context = this.contextFactory({ sessionId: target });
+      context.setSessionId(target);
+      const history = await this.loadStoredHistory(target);
       this.seedTransientContext(context, history);
       removed = context.compactAsync ? await context.compactAsync() : context.compact();
-      this.publishCompacted(context, 'manual', sessionId, removed, 'manual');
+      this.publishCompacted(context, 'manual', target, removed, 'manual');
+      remaining = context.messages.length;
+      messages = context.messages;
+      const journal = this.transientJournal('manual', target);
+      if (removed > 0 && history.sessionState !== null) {
+        // 无 active Run 的压缩也要落 SessionState：下一次 run/resume 直接读缓存，
+        // 不必依赖“看到压缩事件再全量重投影”。journal 先 flush 事件再写 derived。
+        await journal.saveSessionState({
+          ...history.sessionState,
+          messages,
+          updated_at: Date.now(),
+        });
+      } else {
+        await journal.flush();
+      }
     }
     // 手动压缩（可能发生在两次 run 之间）同样是一次显式前缀失效。
     if (removed > 0) this.pendingPrefixReason ??= 'compaction';
-    return removed;
+    return { removed, remaining, messages };
   }
 
   /** 强制压缩一次（overflow 重试用）；压缩失败不覆盖 provider 原始错误。 */
@@ -1647,6 +1682,10 @@ export class ExecutionUnit {
     reason: ContextCompactedReason,
   ): void {
     if (removed <= 0) return;
+    // C2：直发路径（loop 自动 / overflow / manual）发布后记录 id，
+    // 使 `addContext` 的补发不会对同一次压缩重复发事件。
+    const report = workingContext.lastCompaction;
+    if (report !== undefined) this.lastReportedCompactionId.set(runId, report.id);
     const remaining = workingContext.messages.length;
     this.publishEvent({
       type: 'context.compacted',
@@ -1657,6 +1696,8 @@ export class ExecutionUnit {
         removed,
         remaining,
         reason,
+        // C1：摘要降级可观测（旧事件形状不变，字段缺省即不写）。
+        ...(report?.degraded !== undefined ? { degraded: report.degraded } : {}),
       },
       ts: Date.now(),
     });
@@ -1677,6 +1718,7 @@ export class ExecutionUnit {
     }
     if (summary === undefined) return;
     const ts = summary.timestamp ?? Date.now();
+    const clearedToolCallIds = report?.cleared_tool_call_ids ?? [];
     this.publishEvent({
       type: 'message.compaction',
       run_id: runId,
@@ -1688,6 +1730,9 @@ export class ExecutionUnit {
         kept: messages.filter((message) => message.role !== 'system').length,
         reason,
         message: { ...summary, timestamp: ts },
+        // C1：本次被替换为占位的 tool_call_id（空数组省略）与摘要是否降级。
+        ...(clearedToolCallIds.length > 0 ? { cleared_tool_call_ids: clearedToolCallIds } : {}),
+        ...(report?.degraded !== undefined ? { degraded: report.degraded } : {}),
       },
       ts,
     });
@@ -1695,8 +1740,8 @@ export class ExecutionUnit {
 
   /**
    * 90% 上下文压力：不压缩，只发一次事件 + 尾部消息，建议 `agent(rotate)`。
-   * 自动压缩开启时 >95% 静默让 autoCompactAsync 处理；**关闭时必须取消上界** ——
-   * 此时没有压缩会把水位降回来，token 只会上穿 0.95，上界会让提示永久静默。
+   * 自动压缩开启时超过压缩阈值静默让 autoCompactAsync 处理；**关闭时必须取消上界** ——
+   * 此时没有压缩会把水位降回来，token 只会持续上穿阈值，上界会让提示永久静默。
    */
   private publishContextPressureWarning(execution: Run): void {
     const workingContext = execution.workingContext;
@@ -1706,17 +1751,19 @@ export class ExecutionUnit {
     const ratio = used / max;
     // 缺省（实现不暴露 autoCompact）按开启处理，与 0.27 行为一致。
     const autoCompact = workingContext.autoCompact !== false;
-    // 自动压缩开启时：低于预警线或已超过自动压缩阈值（>0.95）不提示。
-    // 恰好 0.95 仍提示一次：压缩条件是严格大于，留出这一条边。
+    // 压缩阈值：应用层经 config 注入，库实现不提供时用 core 兜底值。
+    const threshold = workingContext.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
+    // 自动压缩开启时：低于预警线或已超过自动压缩阈值不提示。
+    // 恰好等于阈值仍提示一次：压缩条件是严格大于，留出这一条边。
     if (ratio < CONTEXT_PRESSURE_WARN_RATIO) return;
-    if (autoCompact && ratio > 0.95) return;
+    if (autoCompact && ratio > threshold) return;
     if (this.warnedLimitKeys.has('context_window')) return;
     this.warnedLimitKeys.add('context_window');
 
     const percent = Math.round(ratio * 100);
     const hint =
       this.contextPressureHint ??
-      'Use agent(rotate) with a startup_prompt to move to a fresh body; automatic compaction runs above 95%.';
+      `Use agent(rotate) with a startup_prompt to move to a fresh body; automatic compaction runs above ${Math.round(threshold * 100)}%.`;
     this.publishEvent({
       type: 'context.pressure',
       run_id: execution.runId,
@@ -2139,6 +2186,28 @@ export class ExecutionUnit {
   }
 
   /**
+   * C2：`add()` 内部可能同步压缩（无 summarizer / 条数上限），那条路径不经过
+   * loop 的发布点。与已发布的 `lastCompaction.id` 比对，变化时补发一次压缩事件。
+   */
+  private publishUntrackedCompaction(execution: Run): void {
+    const report = execution.workingContext.lastCompaction;
+    if (report === undefined) return;
+    if (this.lastReportedCompactionId.get(execution.runId) === report.id) return;
+    if (report.removed <= 0) {
+      // 未移除任何消息：不发布（publishCompacted 同样跳过），但要记下 id 防止反复比对。
+      this.lastReportedCompactionId.set(execution.runId, report.id);
+      return;
+    }
+    this.publishCompacted(
+      execution.workingContext,
+      execution.runId,
+      execution.sessionId,
+      report.removed,
+      'auto',
+    );
+  }
+
+  /**
    * 加入上下文并发布 context.changed 事件（ADR-031：同步写保证关键路径可靠 + 事件观测可回放）
    */
   private addContext(msg: Message, runId: string): void {
@@ -2157,6 +2226,7 @@ export class ExecutionUnit {
     }
     const workingContext = execution.workingContext;
     workingContext.add(stamped);
+    this.publishUntrackedCompaction(execution);
     this.publishEvent({
       type: 'context.changed',
       run_id: runId,
@@ -2465,6 +2535,19 @@ export class ExecutionUnit {
     if (!this.session) return;
     const execution = this.activeRun;
     if (execution !== undefined) sessionState.messages = execution.workingContext.messages;
+    // C4：终态快照保存前重读存储侧 title，保留 run 进行中的人工 rename。
+    // 读失败保留快照并继续（不抛），不影响终态落盘。
+    if (sessionState.status !== 'running') {
+      try {
+        const stored = await this.session.load(sessionState.session_id);
+        if (stored?.title !== undefined) sessionState.title = stored.title;
+      } catch (error) {
+        this.logger.warn('session load failed before final save', {
+          session_id: sessionState.session_id,
+          error: errorText(error),
+        });
+      }
+    }
     // 先等待所有 journal 的在途事件落盘，再记录缓存覆盖到的 seq；
     // resume 只重放之后的增量（journal 自身也会 flush 一次）。
     await this.flushJournalWrites();

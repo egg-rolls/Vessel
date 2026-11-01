@@ -493,6 +493,7 @@ export class AgentServiceImpl implements AgentService {
   private readonly temporaryTtlMs: number;
   private readonly leaseService: LeaseServicePort | undefined;
   private readonly summarizer: ContextSummarizer | undefined;
+  private readonly contextMaxTokens: number | undefined;
   /**
    * createBinding 获取、entryFor 消费的 BindingLease 凭据（bindingId → grant）。
    * 只覆盖两者之间极短的窗口；entry 建立后凭据保存在 `ExecutionUnitEntry.leaseId`。
@@ -572,6 +573,7 @@ export class AgentServiceImpl implements AgentService {
     this.temporaryTtlMs = ttlHours * 60 * 60 * 1000;
     this.leaseService = options.leaseService;
     this.summarizer = options.summarizer;
+    this.contextMaxTokens = options.contextMaxTokens;
     this.eventLog = options.eventLog;
     this.runStore = options.runStore;
 
@@ -3189,10 +3191,10 @@ export class AgentServiceImpl implements AgentService {
     try {
       await this.eventLog.flush(fromSessionId);
       const events = await this.eventLog.read(fromSessionId);
-      seed = await compactMessagesForFork(
-        projectMessages(events),
-        this.summarizer !== undefined ? { summarizer: this.summarizer } : {},
-      );
+      seed = await compactMessagesForFork(projectMessages(events), {
+        ...(this.summarizer !== undefined ? { summarizer: this.summarizer } : {}),
+        ...(this.contextMaxTokens !== undefined ? { maxTokens: this.contextMaxTokens } : {}),
+      });
     } catch (error) {
       this.emitForSession('agent.compact_fork.failed', target, fromSessionId, {
         from_session_id: fromSessionId,

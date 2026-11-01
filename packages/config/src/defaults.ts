@@ -3,6 +3,7 @@
  * @module @vessel-agent/config
  */
 
+import { DEFAULT_COMPACT_THRESHOLD } from '@vessel-agent/core';
 import type {
   DurableConfig,
   EvalsConfig,
@@ -181,6 +182,7 @@ export const DEFAULT_CONFIG: VesselConfig = {
     // （0.10：条数不再硬截断，超限先摘要）。显式配置仍原样透传。
     // 0.6.1 P1：默认开启压缩；有 provider summarizer 时生成真实摘要。
     autoCompact: true,
-    compactThreshold: 0.95,
+    // 0.34 S2 / R3：应用层唯一阈值来源；与 core 库兜底常量同值。
+    compactThreshold: DEFAULT_COMPACT_THRESHOLD,
   },
 };

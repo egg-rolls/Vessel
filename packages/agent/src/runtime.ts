@@ -12,6 +12,8 @@
 import { randomUUID } from 'node:crypto';
 import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
+  type ContextSummarizer,
+  DEFAULT_COMPACT_THRESHOLD,
   type EventStream,
   type ExecutionUnitOptions,
   type LeaseGrant,
@@ -98,16 +100,6 @@ const MAX_PENDING_NOTICES = 20;
 const MAX_PENDING_NOTICE_MEMBERS = 100;
 
 /**
- * temporary 成员的主动压缩阈值（0.28 D6/D7）。
- *
- * core 的 `MemoryWorkingContext` 把阈值默认成 0.95 且不可见，而角色策略层在这里
- * **不改 core** 的前提下需要自己判断「这次要不要主动压缩」，所以这一个数字被复制。
- * 代价是与 core 有漂移风险；缓解：core 一旦暴露 `compactThreshold` getter，本常量
- * 直接删掉改读 getter（`R4.compact` 探针把两边算出的判定放在一起对比，漂移会被它看见）。
- */
-const ROLE_COMPACT_THRESHOLD = 0.95;
-
-/**
  * 按角色包装 per-body `WorkingContext`：**自动压缩开关可在活体上热切换**。
  *
  * 为什么不是 spawn 时直接把 `autoCompact` 交给 core（0.28 之前的做法）：那是构造期
@@ -187,7 +179,10 @@ class RoleAwareContext implements WorkingContext {
     if (!this.compacting) return 0;
     const max = this.inner.maxTokens;
     if (max !== undefined && max > 0) {
-      if (this.inner.tokenCount <= max * ROLE_COMPACT_THRESHOLD) return 0;
+      // 唯一真相源：内层 `WorkingContext.compactThreshold`（应用层由 config 注入，
+      // core 未配置时兜底 0.85 —— 与 CONTRACT-0.34-context C5 一致）。
+      const threshold = this.inner.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
+      if (this.inner.tokenCount <= max * threshold) return 0;
     }
     return this.inner.compactAsync(false);
   }
@@ -358,6 +353,18 @@ export interface MemberExecutionHostOptions {
   termination?: TerminationPolicy;
   /** 上下文预算；同时写入 Self Card 的 context.max */
   contextMaxTokens?: number;
+  /**
+   * 成员上下文的压缩阈值（0.34 S2 / C5）。装配层传入 `config.context.compactThreshold`；
+   * 缺省时内层 `MemoryWorkingContext` 用 core 兜底值。
+   */
+  contextCompactThreshold?: number;
+  /** 成员上下文的真实摘要器；缺省时压缩退回占位摘要。 */
+  summarizer?: ContextSummarizer;
+  /**
+   * 0.34 S4 / R7：按 session 取带熔断的摘要器（与 owner 共享计数）。
+   * 缺省时回落到 `summarizer`。
+   */
+  summarizerForSession?: (sessionId: string) => ContextSummarizer;
   /** 成员深度（Self Card） */
   depth?: number;
   logger?: Logger;
@@ -700,6 +707,9 @@ export class MemberExecutionHost implements MemberExecutionPort {
   private readonly limits: UsageLimits;
   private readonly termination: TerminationPolicy;
   private readonly contextMaxTokens: number;
+  private readonly contextCompactThreshold: number | undefined;
+  private readonly summarizer: ContextSummarizer | undefined;
+  private readonly summarizerForSession: ((sessionId: string) => ContextSummarizer) | undefined;
   private readonly depth: number;
   private readonly logger: Logger;
   private readonly tenantId?: string;
@@ -731,6 +741,9 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.limits = options.limits ?? {};
     this.termination = options.termination ?? DEFAULT_TERMINATION;
     this.contextMaxTokens = options.contextMaxTokens ?? DEFAULT_CONTEXT_MAX_TOKENS;
+    this.contextCompactThreshold = options.contextCompactThreshold;
+    this.summarizer = options.summarizer;
+    this.summarizerForSession = options.summarizerForSession;
     this.depth = options.depth ?? 1;
     this.logger = options.logger ?? noopLogger;
     this.tenantId = options.tenantId;
@@ -838,11 +851,19 @@ export class MemberExecutionHost implements MemberExecutionPort {
       ...(this.includeReasoning !== undefined ? { includeReasoning: this.includeReasoning } : {}),
       logger: this.logger,
       // Stage 4：WorkingContext 是 per-Run 实例；这里只给工厂，EU 每次 Run 调用它。
-      contextFactory: () =>
-        new RoleAwareContext(
-          new MemoryWorkingContext({ maxTokens: this.contextMaxTokens, autoCompact: false }),
+      contextFactory: () => {
+        // R7：成员与 owner 按同一 session_id 取熔断器；未接线时回落裸 summarizer。
+        const summarizer = this.summarizerForSession?.(member.session_id) ?? this.summarizer;
+        return new RoleAwareContext(
+          new MemoryWorkingContext({
+            maxTokens: this.contextMaxTokens,
+            autoCompact: false,
+            compactThreshold: this.contextCompactThreshold,
+            ...(summarizer !== undefined ? { summarizer } : {}),
+          }),
           contextPolicy.autoCompact,
-        ),
+        );
+      },
       overrides: {
         model,
         // 与 owner 同源的权限规则：工具 checkPermission 返回 ask 时，core 仍按

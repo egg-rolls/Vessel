@@ -27,6 +27,7 @@ import {
   MemoryPluginHost,
   MemorySessionStore,
   MemoryWorkingContext,
+  type Message,
   pruneTrace,
   type ReadTraceOptions,
   type RunEvent,
@@ -711,7 +712,11 @@ async function bootstrapConnect(input: {
    * 终态等待逻辑（事件匹配 + runs.get 确认 + 轮询 + 超时）在
    * `connect-run-wait.ts`，便于单测“终态事件不投递”场景。
    */
-  const runtime: RunnableAgent = {
+  // CONTRACT-0.34-context C6/C7：connect 模式的手动压缩经 canonical RPC。
+  // 不改核心 `RunnableAgent`；只在本字面量上做结构化扩展。
+  const runtime: RunnableAgent & {
+    compactContext?(sessionId?: string): Promise<{ removed: number; remaining: number }>;
+  } = {
     events,
     pluginHost,
     async run(inputValue, sessionId, opts) {
@@ -742,6 +747,12 @@ async function bootstrapConnect(input: {
           return { kind: 'job', jobId: result.run_id };
         },
         getRun: (jobId) => rpc.request<unknown>('runs.get', { run_id: jobId }),
+      });
+    },
+    async compactContext(sessionId?: string) {
+      const target = sessionId ?? currentSessionId;
+      return await rpc.request<{ removed: number; remaining: number }>('sessions.compact', {
+        session_id: target,
       });
     },
     dispose() {
@@ -1255,6 +1266,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(config.context?.maxTokens !== undefined
         ? { contextMaxTokens: config.context.maxTokens }
         : {}),
+      ...(config.context?.compactThreshold !== undefined
+        ? { contextCompactThreshold: config.context.compactThreshold }
+        : {}),
       permission,
       permissionMode: memberPermissionMode,
       // 0.31：按**入口是否真有进程内应答者**判定，而不是 `!headless`：feishu 非 TTY
@@ -1273,6 +1287,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(eventLog !== undefined ? { eventLog } : {}),
       ...(bundle.leaseService !== undefined ? { leaseService: bundle.leaseService } : {}),
       ...(bundle.summarizer !== undefined ? { summarizer: bundle.summarizer } : {}),
+      ...(bundle.summarizerForSession !== undefined
+        ? { summarizerForSession: bundle.summarizerForSession }
+        : {}),
       teamDeclarations,
       ...(defaultWorkspace !== undefined ? { defaultWorkspace } : {}),
       ...(federation !== undefined ? { federation } : {}),
@@ -1810,6 +1827,21 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           runControl: localRunControl,
           agentControl: agentControl.control,
           session,
+          // 0.34 S2 / C5：TUI mirror 与 tenant 上下文同源（阈值 / 预算 / 自动压缩）。
+          contextConfig: config.context,
+          // C6：`/compact` 走 tenant 执行门面 → 已存在的 EU；RunnableAgent 类型
+          // 不暴露该可选方法，按结构读取（门面 / 写锁包装都以结构透传）。
+          compactContext: (sessionId) => {
+            const runtime = bundle.runtime as RunnableAgent & {
+              compactContext?(
+                id: string,
+              ): Promise<{ removed: number; remaining: number; messages?: Message[] }>;
+            };
+            if (typeof runtime.compactContext !== 'function') {
+              return Promise.reject(new Error('compact_unavailable'));
+            }
+            return runtime.compactContext(sessionId);
+          },
         })
       : undefined;
 

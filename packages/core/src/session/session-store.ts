@@ -19,9 +19,15 @@ export function deriveSessionMeta(messages: Message[]): { title: string; preview
   const userMessage = turnUsers[turnUsers.length - 1] ?? messages.find((m) => m.role === 'user');
   const raw = (userMessage?.content ?? '').toString().replace(/\s+/g, ' ').trim();
   return {
-    title: raw.slice(0, 40) || 'Untitled',
-    preview: raw.slice(0, 60),
+    title: truncateCodePoints(raw, 40) || 'Untitled',
+    preview: truncateCodePoints(raw, 60),
   };
+}
+
+/** 按码点截断，避免 UTF-16 `slice` 切开 emoji 的代理对。 */
+function truncateCodePoints(value: string, limit: number): string {
+  const codePoints = Array.from(value);
+  return codePoints.length <= limit ? value : codePoints.slice(0, limit).join('');
 }
 
 /** SessionState -> SessionInfo 摘要（title/preview 优先用已存储值，否则派生） */

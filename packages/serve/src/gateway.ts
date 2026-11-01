@@ -122,6 +122,7 @@ import {
   type RpcDispatcher,
   RpcError,
   type RpcErrorBody,
+  type RpcErrorCode,
   type RpcMethodContext,
   type RpcMethodDefinition,
   type RpcMethodTable,
@@ -1048,6 +1049,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       sessionFor,
       sessionData: opts.sessionData,
       runStoreFor: (tenantId) => durableForTenant(tenantId)?.store,
+      runtimeFor: opts.runtimeFor,
     }),
     ...createRunMethods({
       defaultTenantId,
@@ -1872,7 +1874,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  function legacyStatus(code: ProtocolError['code'], fallback = 400): number {
+  function legacyStatus(code: ProtocolError['code'] | RpcErrorCode, fallback = 400): number {
     switch (code) {
       case 'unauthorized':
         return 401;
@@ -1882,11 +1884,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
       case 'run_not_found':
       case 'eval_not_found':
         return 404;
+      // CONTRACT-0.34-context C7：legacy REST 适配 canonical sessions.compact 时
+      // 语义与 canonical 错误一致：会话不存在 = 404，压缩不可用 = 409。
+      case 'session_not_found':
+        return 404;
       case 'method_not_allowed':
         return 405;
       case 'conflict':
       case 'run_already_running':
       case 'tenant_locked':
+      case 'compact_unavailable':
         return 409;
       case 'busy':
         return 429;

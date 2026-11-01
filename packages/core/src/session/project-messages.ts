@@ -21,6 +21,7 @@
  * @module @vessel-agent/core/session
  */
 
+import { formatClearedToolResult, isClearedToolResult } from '../context/index.js';
 import type { Message } from '../types/provider.js';
 import type { ToolCall } from '../types/tool.js';
 
@@ -43,6 +44,15 @@ function readCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const result: string[] = [];
+  for (const entry of value) {
+    if (typeof entry === 'string' && entry.length > 0) result.push(entry);
+  }
+  return result;
 }
 
 /** 宽松校验一条 Message（只信结构，不做业务解释） */
@@ -141,6 +151,20 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
         compaction_summary: true,
       };
       message.timestamp ??= event.ts;
+      // 0.34 S1：先按 cleared_tool_call_ids 把已构建消息里命中的 tool 结果
+      // 换回确定性占位（与压缩时同一函数），再按 `kept` 裁剪。
+      // 已是占位的保持幂等；旧事件没有该字段时整段跳过。
+      const clearedIds = readStringArray(data.cleared_tool_call_ids);
+      if (clearedIds.length > 0) {
+        const wanted = new Set(clearedIds);
+        for (const entry of messages) {
+          if (entry.role !== 'tool') continue;
+          const id = entry.tool_call_id;
+          if (id === undefined || !wanted.has(id)) continue;
+          if (!entry.content || isClearedToolResult(entry.content)) continue;
+          entry.content = formatClearedToolResult(messages, id, entry.content);
+        }
+      }
       // 压缩是「替换」而不是「追加」：应用侧保留全部 system + 最近 `kept`
       // 条非 system，并移除旧摘要。没有 `kept` 的旧事件只追加摘要。
       const kept = readCount(data.kept);

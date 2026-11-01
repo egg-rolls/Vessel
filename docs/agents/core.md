@@ -31,7 +31,7 @@ applies_to: [N, M]
 - **Host 契约**：per-run session 只由 `AgentHandle.run` 消费 `RunOptions.sessionId`；取消经 `AbortSignal.reason` 透传；`resume` 经 Scheduler（`ScheduledTask.runId`）；`snapshot()` 可 JSON 序列化；合成 `agent.run.*` 带 `mirror_of_run_id`（ADR-081）。
 - **Runtime / ExecutionUnit 分层**：`Runtime` 是 per-node 无状态工厂（只持 tenant profile 与 `(tenantId, sessionId)` EU 目录），`ExecutionUnit` 是 per-session 长活对象；唯一 EU 构造入口是 `Runtime.getOrCreateExecutionUnit`。
 - **唯一写者**：事实事件 / RunRecord / SessionState 由 Run 经 `RunJournal` 写；`ExecutionUnit` 只持只读 EventLog（ADR-098 C1）。`WorkingContext` 归每次 Run（`contextFactory` 新建），不是 EU 的长期字段。
-- **压缩摘要**：`role: 'system'` + `compaction_summary: true`，基底 system 之后、其它消息之前，同时最多一条；应用新压缩时移除旧摘要；不得写回 `assistant`（thinking 模式需要 `reasoning_content`）（ADR-083）。
+- **压缩摘要**：`role: 'system'` + `compaction_summary: true`，基底 system 之后、其它消息之前，同时最多一条；应用新压缩时移除旧摘要；不得写回 `assistant`（thinking 模式需要 `reasoning_content`）。`message.compaction` 可带 `cleared_tool_call_ids` / `degraded`，恢复先按 id 写回确定性占位再按 `kept` 裁剪（ADR-083）。
 - **限额**：判定只经 `evaluateUsageLimits` / `evaluateTermination`（ADR-084）。`request_limit` / token / cost / `max_iterations` / `max_runtime` 命中时先发 `limit.blocked` 再抛 `LimitExceededError`；`tool_calls_limit` 是软预算——发一次 `limit.warning`，下一轮请求不提供工具，模型收尾后 run 正常 `completed`。
 - **错误 envelope 只增不改**：`run.failed` / `tool.call.failed` 保留原 `error`，新增字段只附加；不写 prompt / reasoning / 完整工具结果（ADR-080）。
 - **透明化**：事件形状冻结、快照只填已知字段、Self Card 每 run 一次、BeforeLlm 注入只增不改（ADR-086/087）。
@@ -41,7 +41,7 @@ applies_to: [N, M]
 - 配置层序固定 `CLI > env > tenant overlay > project > user > default`，只在 `loadConfig()` 合并；CLI flag 经 `buildCliConfigOverrides()`；serve / connect 不自读 argv / env（ADR-057）。
 - legacy 配置只读：新版 `provider:` 优先；未注册 provider 且无 `provider.base_url` 抛 `ProviderConfigError`；YAML 解析失败 / 重复键是 validation error；API Key 经 `resolveEffectiveApiKey()`（ADR-068）。
 - 默认 `session.backend: file`；保留 sqlite；检测到 legacy 数据只提示 `vessel migrate`，不自动迁移。
-- `context.maxTokens` 默认 1M；`provider.maxTokens` 是单次输出上限（ADR-064）。
+- `context.maxTokens` 默认 1M；`context.compactThreshold` 默认 0.85 且是应用层唯一来源（core 兜底同值）；`provider.maxTokens` 是单次输出上限（ADR-064）。
 
 ## 指针
 

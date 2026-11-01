@@ -31,7 +31,10 @@ export type RpcErrorCode =
   // 0.13：交互请求已过期/已随 run 取消（DECISION-024 §2.2）。
   | 'expired'
   // 0.13 Addendum A：run 已结束 / 重启后找不到 run，权限请求失效。
-  | 'run_ended';
+  | 'run_ended'
+  // 0.34 CONTRACT-0.34-context C7：sessions.compact。
+  | 'session_not_found'
+  | 'compact_unavailable';
 
 /** 方法权限（manifest 同名字段） */
 export type MethodPermission = 'read' | 'write' | 'admin';

@@ -18,6 +18,7 @@
  */
 
 import { join } from 'node:path';
+import { deriveSessionMeta } from '@vessel-agent/core/session';
 import {
   type ConfigSources,
   DEFAULT_CONFIG,
@@ -28,8 +29,10 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
+  type ContextSummarizer,
   createDefaultTraceRedactor,
   createRunJournalFactory,
+  createSessionBreaker,
   type EventStream,
   estimateTokens,
   type Guardrail,
@@ -46,6 +49,7 @@ import {
   type PluginHost,
   type PluginInstallScope,
   type ProviderFactory,
+  projectMessages,
   type RunnableAgent,
   type RunRecordStore,
   type Runtime,
@@ -199,6 +203,8 @@ export interface TenantRuntimeBundle {
   leaseService?: FileLeaseService;
   /** 0.34 Stage 3：compactFork 压缩摘要器（与 tenant 上下文共用） */
   summarizer?: ContextSummarizer;
+  /** 0.34 S4 / R7：按 session 取带熔断的摘要器（与 `summarizer` 同分桶） */
+  summarizerForSession?: (sessionId: string) => ContextSummarizer;
   runStore?: RunRecordStore;
   /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
   eventLog?: SessionEventLog;
@@ -316,8 +322,53 @@ function withTenantToolPolicy(
   };
 }
 
-/** core 0.6.1 E3 的 summarizer 形状（本 worktree 的 core 尚未导出该类型） */
-type ContextSummarizer = (messages: Message[], options: { maxTokens: number }) => Promise<string>;
+/**
+ * C4（AI 命名）：命名约束写在 system 提示词里，输出再经 `sanitizeGeneratedTitle` 清洗。
+ * 不新增配置键；模型 / 超时沿用当前 tenant provider。
+ */
+const SESSION_TITLE_SYSTEM_PROMPT =
+  'Give this conversation a title: 3-7 words, at most 40 characters. ' +
+  "Make it imperative and follow the user's language. " +
+  'No quotes, no markdown, no trailing punctuation. Do not answer the question. ' +
+  'Reply with the title only.';
+
+/** 去掉首尾引号 / 反引号（含中英文引号） */
+function stripWrappingQuotes(value: string): string {
+  return value
+    .replace(/^["'`“”‘’]+/, '')
+    .replace(/["'`“”‘’]+$/, '')
+    .trim();
+}
+
+/**
+ * C4：清洗 AI 生成的标题 —— trim → 去首尾引号 / 反引号 → 去 `Title:` 前缀
+ * → 折叠空白 → 去句末标点 → 按码点截 40。返回空串表示放弃（保留派生标题）。
+ */
+export function sanitizeGeneratedTitle(raw: string): string {
+  let title = stripWrappingQuotes(raw);
+  title = title.replace(/^title\s*[:：]\s*/i, '').trim();
+  // `Title: "Foo"` 这类组合：去前缀后再剥一次引号。
+  title = stripWrappingQuotes(title);
+  title = title.replace(/\s+/g, ' ').trim();
+  title = title.replace(/[.,;:!?。，；：！？…]+$/u, '').trim();
+  const codePoints = Array.from(title);
+  return (codePoints.length > 40 ? codePoints.slice(0, 40).join('') : title).trim();
+}
+
+/**
+ * C4：命名输入 —— 首条真实 user 消息（跳过 `vessel:` 注入与压缩摘要），
+ * 取前 500 码点；没有可用输入返回 undefined。
+ */
+function firstUserInputForTitle(messages: Message[]): string | undefined {
+  for (const message of messages) {
+    if (message.role !== 'user') continue;
+    if (message.compaction_summary === true) continue;
+    if (message.name?.startsWith('vessel:') === true) continue;
+    const input = Array.from(message.content).slice(0, 500).join('').trim();
+    if (input !== '') return input;
+  }
+  return undefined;
+}
 
 /** 单条消息渲染上限（字符）；超出只保留前缀，避免单条工具结果独占分块预算。 */
 const SUMMARIZER_MAX_MESSAGE_CHARS = 12_000;
@@ -325,6 +376,8 @@ const SUMMARIZER_MAX_CHUNK_TOKENS = 48_000;
 const SUMMARIZER_MIN_CHUNK_TOKENS = 2_000;
 const SUMMARIZER_PARTIAL_MAX_TOKENS = 1024;
 const SUMMARIZER_REDUCE_MAX_TOKENS = 2048;
+/** C3：单次摘要请求的上限；超时由 provider 请求自身取消，不阻塞请求组装。 */
+const SUMMARIZER_TIMEOUT_MS = 15_000;
 
 /**
  * 压缩摘要的固定段落，按此顺序输出。
@@ -336,6 +389,7 @@ const SUMMARIZER_REDUCE_MAX_TOKENS = 2048;
  */
 const SUMMARY_SECTIONS = [
   '目标',
+  '当前用户要求（原话）',
   '约束',
   '已完成',
   '进行中',
@@ -352,6 +406,7 @@ function summaryPrompt(task: string): string {
     task,
     'Output only the summary. Use exactly these sections in this order, each as a markdown heading "## <section>"; write "（未提及）" under a section with no content:',
     SUMMARY_SECTIONS.map((section) => `## ${section}`).join('\n'),
+    "Under 当前用户要求（原话）, quote the user's most recent explicit request as close to their original wording as possible.",
     'Preserve decisions, file paths, tool names and results, and open tasks. Put concrete values (ids, counts, thresholds, paths, versions) under 关键值.',
   ].join(' ');
 }
@@ -418,11 +473,17 @@ function truncateToTokenBudget(text: string, maxTokens: number): string {
   return text.slice(0, low);
 }
 
+/** C3：把当前窗口的已有摘要并入 system 提示，要求合并而非重写。 */
+function withPreviousSummary(system: string, previous: string | undefined): string {
+  if (previous === undefined || previous.trim() === '') return system;
+  return `${system}\n\nMerge the existing summary; do not drop its facts.\n\nExisting summary:\n${previous}`;
+}
+
 /**
  * 用当前 provider 生成真实上下文摘要（0.6.1 E3，0.14.4 分块）。
  *
- * 单块：一次摘要调用（输出 ≤ max(128, min(context.maxTokens, 2048))）。
- * 多块：每块一次部分摘要（≤1024），再 reduce 一次（≤2048）。
+ * 单块：一次摘要调用（输出预算见 C3；有旧摘要时合并）。
+ * 多块：每块一次部分摘要（≤1024），再 reduce 一次（同一输出预算，只在此合并旧摘要）。
  * 分块失败写占位标记继续；reduce 失败拼接部分摘要；全部失败返回空串，
  * 由 core 回退占位摘要。
  */
@@ -436,6 +497,7 @@ export function createContextSummarizer(provider: LLMProvider, model: string): C
       ],
       max_tokens: maxTokens,
       temperature: 0,
+      signal: AbortSignal.timeout(SUMMARIZER_TIMEOUT_MS),
     });
     return typeof response.content === 'string' ? response.content : '';
   };
@@ -449,15 +511,16 @@ export function createContextSummarizer(provider: LLMProvider, model: string): C
     const chunks = chunkSummarizerTranscript(rendered, chunkBudget);
     if (chunks.length === 0) return '';
 
-    const maxOutputTokens = Math.max(
-      128,
-      Math.min(options.maxTokens, SUMMARIZER_REDUCE_MAX_TOKENS),
-    );
+    // C3：输出预算随被移除内容的规模增长；无 removedTokens 时沿用旧上限。
+    const maxOutputTokens =
+      options.removedTokens !== undefined
+        ? Math.max(2048, Math.min(8192, Math.floor(options.removedTokens / 8)))
+        : Math.max(128, Math.min(options.maxTokens, SUMMARIZER_REDUCE_MAX_TOKENS));
 
     if (chunks.length === 1) {
       try {
         return await summarize(
-          SUMMARY_SYSTEM_PROMPT,
+          withPreviousSummary(SUMMARY_SYSTEM_PROMPT, options.previousSummary),
           chunks[0]?.join('\n\n') ?? '',
           maxOutputTokens,
         );
@@ -482,7 +545,11 @@ export function createContextSummarizer(provider: LLMProvider, model: string): C
 
     const joined = partials.join('\n\n');
     try {
-      return await summarize(REDUCE_SYSTEM_PROMPT, joined, maxOutputTokens);
+      return await summarize(
+        withPreviousSummary(REDUCE_SYSTEM_PROMPT, options.previousSummary),
+        joined,
+        maxOutputTokens,
+      );
     } catch {
       return truncateToTokenBudget(joined, maxOutputTokens);
     }
@@ -490,13 +557,13 @@ export function createContextSummarizer(provider: LLMProvider, model: string): C
 }
 
 /** 每 tenant 的上下文配置（含真实 summarizer）；供 owner 与成员共用。 */
-function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer) {
+function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer | undefined) {
   return {
     maxTokens: config.context?.maxTokens,
     maxMessages: config.context?.maxMessages,
     autoCompact: config.context?.autoCompact,
     compactThreshold: config.context?.compactThreshold,
-    summarizer,
+    ...(summarizer !== undefined ? { summarizer } : {}),
   };
 }
 
@@ -630,6 +697,9 @@ export async function buildTenantRuntime(
     const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
 
     const summarizer = createContextSummarizer(provider, providerModel);
+    // R7：熔断按 session 分桶；owner / 成员共享同一份计数，`force` 由 core 传入。
+    const summarizerForSession =
+      summarizer !== undefined ? createSessionBreaker(summarizer) : undefined;
     const events = createEventStream(config);
     // 0.27（spec §5.1）：每 tenant 唯一 scheduler，装配层只在此处构造。
     // 所有 body / owner / 成员的执行都经它的 executor，不再有第二套队列。
@@ -844,9 +914,90 @@ export async function buildTenantRuntime(
         plugins: [],
         // tenant EU 仍用完整 context 配置（maxMessages / compactThreshold 不进 profile 形状）；
         // profile 的 `context` 只是成员路径的缺省值。
-        contextFactory: () => new MemoryWorkingContext(contextConfigFor(config, summarizer)),
+        contextFactory: () =>
+          new MemoryWorkingContext(
+            contextConfigFor(config, summarizerForSession?.(sessionId) ?? summarizer),
+          ),
         overrides: { selfCard },
       });
+
+    /**
+     * C6：idle session（无 live EU）的等价瞬态压缩路径。
+     * 不启动 Run、不注入用户消息；从事件日志/缓存播种，压缩后经 transient journal
+     * 写 `message.compaction` 与 SessionState，下一次 run/resume 直接读压缩后的缓存。
+     */
+    const compactIdleSession = async (
+      sessionId: string,
+    ): Promise<{ removed: number; remaining: number; messages: Message[] }> => {
+      const state = await session.load(sessionId);
+      if (state === null) throw new Error('compact_unavailable');
+      const workingContext = new MemoryWorkingContext(
+        contextConfigFor(config, summarizerForSession?.(sessionId) ?? summarizer),
+      );
+      workingContext.setSessionId(sessionId);
+      let history: Message[] = state.messages ?? [];
+      if (eventLog !== undefined) {
+        await eventLog.flush(sessionId);
+        const stored = await eventLog.read(sessionId);
+        if (stored.length > 0) history = projectMessages(stored);
+      }
+      if (
+        !history.some(
+          (message) => message.role === 'system' && message.compaction_summary !== true,
+        ) &&
+        systemPrompt !== ''
+      ) {
+        workingContext.add({ role: 'system', content: systemPrompt, timestamp: Date.now() });
+      }
+      for (const message of history) workingContext.add(message);
+      const removed = workingContext.compactAsync
+        ? await workingContext.compactAsync()
+        : workingContext.compact();
+      const remaining = workingContext.messages.length;
+      const messages = workingContext.messages;
+      if (removed > 0) {
+        const journal = journalFactory.transient({ runId: 'manual', events, sessionId });
+        const report = workingContext.lastCompaction;
+        const summary = [...messages]
+          .reverse()
+          .find((message) => message.role === 'system' && message.compaction_summary === true);
+        const ts = summary?.timestamp ?? Date.now();
+        journal.appendFact({
+          type: 'context.compacted',
+          run_id: 'manual',
+          data: {
+            run_id: 'manual',
+            session_id: sessionId,
+            removed,
+            remaining,
+            reason: 'manual',
+            ...(report?.degraded !== undefined ? { degraded: report.degraded } : {}),
+          },
+          ts,
+        });
+        if (summary !== undefined) {
+          const cleared = report?.cleared_tool_call_ids ?? [];
+          journal.appendFact({
+            type: 'message.compaction',
+            run_id: 'manual',
+            data: {
+              run_id: 'manual',
+              session_id: sessionId,
+              removed,
+              remaining,
+              kept: messages.filter((message) => message.role !== 'system').length,
+              reason: 'manual',
+              message: { ...summary, timestamp: ts },
+              ...(cleared.length > 0 ? { cleared_tool_call_ids: cleared } : {}),
+              ...(report?.degraded !== undefined ? { degraded: report.degraded } : {}),
+            },
+            ts,
+          });
+        }
+        await journal.saveSessionState({ ...state, messages, updated_at: Date.now() });
+      }
+      return { removed, remaining, messages };
+    };
 
     // Stage 4：bundle.runtime 是 per-session 门面，不再是单个长期存活的 EU。
     // `id` / `applyPermissionRules` 让既有热应用装配（按结构解析 live runtime）继续命中
@@ -854,6 +1005,10 @@ export async function buildTenantRuntime(
     const executionFacade: RunnableAgent & {
       readonly id: string;
       applyPermissionRules(rules: RuntimePermissionConfig): void;
+      /** C6：手动压缩；有 live EU 用 EU，idle session 走等价瞬态路径。 */
+      compactContext?(
+        sessionId: string,
+      ): Promise<{ removed: number; remaining: number; messages?: Message[] }>;
     } = {
       id: `tenant:${tenantId}`,
       events,
@@ -862,6 +1017,13 @@ export async function buildTenantRuntime(
         for (const sessionId of servedSessionIds) {
           options.runtime.getExecutionUnit({ tenantId, sessionId })?.applyPermissionRules(rules);
         }
+      },
+      async compactContext(sessionId) {
+        // C6：有 live EU（含成员 EU）走 EU；idle session 走等价瞬态路径，
+        // 不为它新造 EU（避免 agentId 绑定冲突与目录残留）。
+        const unit = options.runtime.getExecutionUnit({ tenantId, sessionId });
+        if (unit !== undefined) return unit.compactContext(sessionId);
+        return compactIdleSession(sessionId);
       },
       async run(input, sessionId, opts) {
         const targetSession = sessionId ?? options.sessionId ?? 'default';
@@ -974,6 +1136,64 @@ export async function buildTenantRuntime(
 
     const metrics = createMetricsCollector(events, config, options.metricsFactory);
 
+    // ── C4：AI 命名（ControlPlane 元数据写，与 sessions.rename 同一 save 路径） ──
+    // 订阅本 tenant 事件流（含成员转发事件）；fire-and-forget，失败只 warn，
+    // 不阻塞 run 终态，也不写 SessionEventLog。
+    const titleGenerationInFlight = new Set<string>();
+    const generateSessionTitle = async (sessionId: string): Promise<void> => {
+      try {
+        const state = await session.load(sessionId);
+        if (state === null) return;
+        const messages = state.messages ?? [];
+        const derivedTitle = deriveSessionMeta(messages).title;
+        // 人工 title 永不被覆盖；AI 已写过（不等于派生标题）则不再生成。
+        if (state.title !== undefined && state.title !== derivedTitle) return;
+        const input = firstUserInputForTitle(messages);
+        if (input === undefined) return;
+        const response = await provider.chat({
+          model: providerModel,
+          messages: [
+            { role: 'system', content: SESSION_TITLE_SYSTEM_PROMPT },
+            { role: 'user', content: input },
+          ],
+          max_tokens: 64,
+          temperature: 0.2,
+          signal: AbortSignal.timeout(5000),
+        });
+        const title = sanitizeGeneratedTitle(response.content);
+        if (title === '') return;
+        // 生成窗口内可能人工 rename / 已有另一次命名：写前重读，保住人工标题。
+        const current = await session.load(sessionId);
+        if (current === null) return;
+        const currentDerived = deriveSessionMeta(current.messages ?? []).title;
+        if (current.title !== undefined && current.title !== currentDerived) return;
+        await session.save({ ...current, title, updated_at: Date.now() });
+        events.publish({
+          type: 'session.titled',
+          run_id: 'session',
+          data: { session_id: sessionId, title },
+          ts: Date.now(),
+        });
+      } catch (error) {
+        logger.warn('session title generation failed', {
+          session_id: sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    const unsubscribeTitles = events.subscribe((event) => {
+      if (event.type !== 'run.completed') return;
+      if (providerName === 'mock') return;
+      const data = event.data as Record<string, unknown>;
+      const sessionId = typeof data.session_id === 'string' ? data.session_id : undefined;
+      if (sessionId === undefined) return;
+      if (titleGenerationInFlight.has(sessionId)) return;
+      titleGenerationInFlight.add(sessionId);
+      void generateSessionTitle(sessionId).finally(() => {
+        titleGenerationInFlight.delete(sessionId);
+      });
+    });
+
     let closed = false;
     const SHUTDOWN_DRAIN_TIMEOUT_MS = 5000;
 
@@ -1085,6 +1305,7 @@ export async function buildTenantRuntime(
         report('session.close', error);
       }
 
+      unsubscribeTitles();
       unregisterHub?.();
 
       if (ownedLock) {
@@ -1115,6 +1336,7 @@ export async function buildTenantRuntime(
       runtime: lockedRuntime,
       ...(leaseService !== undefined ? { leaseService } : {}),
       summarizer,
+      ...(summarizerForSession !== undefined ? { summarizerForSession } : {}),
       ...(runStore ? { runStore } : {}),
       ...(eventLog ? { eventLog } : {}),
       ...(trace ? { trace } : {}),

@@ -8,7 +8,12 @@
  * 压缩后把 context.messages 写回当前会话快照（远端内存后端 load 为空则跳过）。
  */
 
-import type { Message, WorkingContext } from '@vessel-agent/core';
+import {
+  DEFAULT_COMPACT_THRESHOLD,
+  estimateTokens,
+  type Message,
+  type WorkingContext,
+} from '@vessel-agent/core';
 import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
@@ -21,24 +26,22 @@ interface CompactableContext extends WorkingContext {
   compactWithSummary?(): Promise<number>;
 }
 
-/** 0.15 core：手动压缩并发布 `context.compacted（reason=manual）` 的入口 */
+/**
+ * 0.15 / 0.34 C6：手动压缩并发布 `context.compacted（reason=manual）` 的入口。
+ * 老实现返回移除条数；0.34 的 EU 路径返回 `{removed, remaining}`（remaining 是
+ * 压缩后的真实窗口条数，镜像可能尚未刷新）。
+ */
 interface CompactableRuntime {
-  compactContext?(): Promise<number>;
+  compactContext?(
+    sessionId?: string,
+  ): Promise<number | { removed: number; remaining: number; messages?: Message[] }>;
 }
 
-const DEFAULT_MAX_TOKENS = 4096;
-const DEFAULT_COMPACT_THRESHOLD = 0.8;
-
-/** 与 core 一致的字符估算：ASCII 0.25 / CJK 0.5 token 每字符 */
-export function estimateTokens(text: string): number {
-  if (!text) return 0;
-  let cjk = 0;
-  let total = 0;
-  for (const char of text) {
-    total++;
-    if (/[一-鿿㐀-䶿]/.test(char)) cjk++;
-  }
-  return Math.ceil((total - cjk) * 0.25 + cjk * 0.5);
+/** `compact_unavailable`：EU / 门面不可用 → 回落 mirror 路径，不当作失败。 */
+function isCompactUnavailable(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return error.message.includes('compact_unavailable') || code === 'compact_unavailable';
 }
 
 export interface ContextUsage {
@@ -71,7 +74,7 @@ export function estimateContextUsage(
     messages: { count: 0, tokens: 0 },
     toolResults: { count: 0, tokens: 0 },
     totalTokens: 0,
-    maxTokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+    maxTokens: options.maxTokens ?? 1_000_000,
     threshold: options.threshold ?? DEFAULT_COMPACT_THRESHOLD,
     autoCompact: options.autoCompact ?? false,
     counts: { system: 0, user: 0, assistant: 0, tool: 0, other: 0 },
@@ -182,36 +185,74 @@ export interface CompactOutcome {
   mode: 'runtime' | 'async' | 'sync';
   /** 会话快照是否写回（远端内存后端 load 为空时为 false） */
   persisted: boolean;
+  /** 本地 mirror 是否已刷新到压缩后窗口（connect 无 messages 时为 false） */
+  mirrorSynced: boolean;
 }
 
-/** 纯适配：优先 runtime.compactContext；否则 compactAsync；同步 compact 也兼容 Promise */
+/**
+ * 纯适配：优先 runtime.compactContext；`compact_unavailable` 或没有该入口时
+ * 回落 compactAsync / sync compact（同步 compact 也兼容 Promise）。
+ */
 export async function compactSessionContext(
   context: WorkingContext,
   persist?: (messages: Message[]) => Promise<boolean>,
   runtime?: unknown,
+  sessionId?: string,
 ): Promise<CompactOutcome> {
   const candidate = context as CompactableContext;
   const runtimeCandidate = runtime as CompactableRuntime | undefined;
+  const runtimeCompact = runtimeCandidate?.compactContext;
   let removed = 0;
+  let remaining: number | undefined;
+  let compactedMessages: Message[] | undefined;
   let mode: CompactOutcome['mode'] = 'sync';
+  let useFallback = typeof runtimeCompact !== 'function';
 
-  if (typeof runtimeCandidate?.compactContext === 'function') {
-    removed = await runtimeCandidate.compactContext();
-    mode = 'runtime';
-  } else if (typeof candidate.compactAsync === 'function') {
-    removed = await candidate.compactAsync();
-    mode = 'async';
-  } else if (typeof candidate.compactWithSummary === 'function') {
-    removed = await candidate.compactWithSummary();
-    mode = 'async';
-  } else {
-    const result = context.compact() as number | Promise<number>;
-    removed = await result;
+  if (typeof runtimeCompact === 'function') {
+    try {
+      const result = await runtimeCompact.call(runtimeCandidate, sessionId);
+      if (typeof result === 'number') {
+        // 老运行时：只有移除条数，remaining 仍按 mirror 近似。
+        removed = result;
+      } else {
+        // EU 路径：remaining 是压缩后的真实窗口条数，覆盖 mirror 近似。
+        removed = result.removed;
+        remaining = result.remaining;
+        compactedMessages = result.messages;
+      }
+      mode = 'runtime';
+    } catch (error) {
+      if (!isCompactUnavailable(error)) throw error;
+      useFallback = true;
+    }
   }
 
-  const remaining = context.messages.length;
+  if (useFallback) {
+    if (typeof candidate.compactAsync === 'function') {
+      removed = await candidate.compactAsync();
+      mode = 'async';
+    } else if (typeof candidate.compactWithSummary === 'function') {
+      removed = await candidate.compactWithSummary();
+      mode = 'async';
+    } else {
+      const result = context.compact() as number | Promise<number>;
+      removed = await result;
+    }
+  }
+
+  // 本地视图：EU 返回压缩后窗口时直接刷新 mirror；connect RPC 没有 messages，
+  // 明确标记 stale（不静默延迟）。
+  let mirrorSynced = mode !== 'runtime';
+  if (compactedMessages !== undefined) {
+    context.clear();
+    for (const message of compactedMessages) context.add(message);
+    mirrorSynced = true;
+  }
+  if (remaining === undefined) remaining = context.messages.length;
   let persisted = false;
-  if (removed > 0 && persist) {
+  // EU 路径已经把压缩态写进事件日志/SessionState：不要再把壳层 mirror 写回缓存。
+  // 只有 mirror 路径才持久化。
+  if (mode !== 'runtime' && removed > 0 && persist) {
     try {
       persisted = await persist(context.messages);
     } catch {
@@ -219,7 +260,7 @@ export async function compactSessionContext(
     }
   }
 
-  return { removed, remaining, mode, persisted };
+  return { removed, remaining, mode, persisted, mirrorSynced };
 }
 
 export async function runCompactCommand(
@@ -246,6 +287,7 @@ export async function runCompactCommand(
       }
     },
     ctx.runtime,
+    state.currentSessionId,
   );
 
   if (outcome.removed === 0) {
@@ -268,7 +310,16 @@ export async function runCompactCommand(
       '',
       `Compacted ${outcome.removed} message(s); ${outcome.remaining} remain.`,
       `Mode: ${note}.`,
-      `Session snapshot: ${outcome.persisted ? 'updated' : 'not written (remote/read-only backend)'}.`,
+      `Local view: ${
+        outcome.mirrorSynced
+          ? `refreshed (${outcome.remaining} messages)`
+          : 'stale until the next run (server state is compacted)'
+      }.`,
+      outcome.mode === 'runtime'
+        ? 'Session state: event log + journal (SessionState saved when no run is active).'
+        : `Session snapshot: ${
+            outcome.persisted ? 'updated' : 'not written (remote/read-only backend)'
+          }.`,
       '',
     ].join('\n'),
   };

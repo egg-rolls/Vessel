@@ -33,6 +33,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'sessions.search': 'read',
   'sessions.delete': 'write',
   'sessions.rename': 'write',
+  // 0.34（CONTRACT-0.34-context C7）：手动压缩（connect / 远程）。
+  'sessions.compact': 'write',
   'runs.list': 'read',
   'runs.get': 'read',
   'runs.start': 'write',

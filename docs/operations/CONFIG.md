@@ -244,11 +244,13 @@ termination:
 
 > 本节只说明压缩行为，**没有新增配置键**。相关既有键：`context.max_tokens`（默认 1,000,000）与 `context.max_messages`（可选；缺省按 `max(100, floor(max_tokens / 100))` 推导）。
 
-- **触发**：token 估算超过 `max_tokens × 0.95`（`context.compact_threshold` 缺省 0.95），或消息条数超过 `max_messages`（缺省推导值）时触发自动压缩；`auto_compact: false` 只关闭 token 阈值，条数超限仍强制压缩。
-- **压力提示**：上下文达到 `max_tokens × 0.9` 时每 run 发一次 `context.pressure` 事件与尾部消息，建议 `agent(rotate)`；自动压缩开启时超过 0.95 后不再提示。
+- **触发**：token 估算严格超过 `max_tokens × compact_threshold`（`context.compact_threshold` 缺省 0.85），或消息条数超过 `max_messages`（缺省推导值）时触发自动压缩；`auto_compact: false` 只关闭 token 阈值，条数超限仍强制压缩。
+- **压力提示**：上下文达到 `max_tokens × 0.9` 且未越过阈值时每 run 发一次 `context.pressure` 事件与尾部消息，建议 `agent(rotate)`；提示上界与文案百分比都由 `compact_threshold` 派生，自动压缩开启且已超过阈值后不再提示；自动压缩默认开启时，缺省 0.85 下该提示不会出现。
 - **保留区**：从最新非 system 消息向前累计估算 token，预算为 `max_tokens × 0.3`，最新 2 条非 system 消息无论如何保留；同时受条数上限 `max(2, max_messages - system 条数 - 1)` 约束。token 或条数任一超限都触发摘要；两者都未超时不压缩。非 system 少于 3 条时不压缩。
+- **工具结果清空**：保留最近工具结果直到累计估算 token ≤ `max_tokens × 5%`（至少 1 条、最多 10 条）；其余结果替换为 `[cleared <tool>: <命令摘要> -> exit <n>, <n> lines]` 占位（不含完整参数 / 输出），并把 `cleared_tool_call_ids` 写入 `message.compaction`；恢复时同一确定性函数写回占位。
+- **手动 `/compact`**：本地有 live EU 走 `compactContext`，idle session 走等价瞬态路径（不启动 Run；写 `message.compaction` + SessionState），connect 走 `sessions.compact` RPC；成功后 TUI 本地视图立即刷新，connect 本地视图标记 stale 至下一次 run。
 - **tool 配对**：保留区第一条是 `tool` 时，边界回退到对应的 `assistant(tool_calls)`，避免压缩后出现孤立 `tool`。配对完整性优先于条数上限，保留数可能略超 `max_messages`。
-- **摘要输入**：`assistant` 的工具调用渲染为 `[tool_call:<name>] <arguments>`，`tool` 结果渲染为 `[tool:<id>] <content>`；单条超过 12,000 字符截断，`reasoning_content` 不进入摘要。输入按 `min(48_000, max(2_000, floor(max_tokens / 8)))` 估算 token 分块；单块一次摘要，多块逐块 partial 后再 reduce。某块失败只写占位标记并继续，全部失败时回退 `[Auto Compact: N older messages summarized. Continuing...]`，不中断 run。
+- **摘要输入**：`assistant` 的工具调用渲染为 `[tool_call:<name>] <arguments>`，`tool` 结果渲染为 `[tool:<id>] <content>`；单条超过 12,000 字符截断，`reasoning_content` 不进入摘要。输入按 `min(48_000, max(2_000, floor(max_tokens / 8)))` 估算 token 分块；单块一次摘要，多块逐块 partial 后再 reduce。模板含“当前用户要求（原话）”；有旧摘要时合并而非重写；单次 provider 调用 15s 超时，输出预算 `clamp(floor(removedTokens / 8), 2048, 8192)`；per-session 连续 3 次失败熔断 10 分钟，手动 / overflow（`force`）绕过。某块失败只写占位标记并继续，全部失败时回退 `[Auto Compact: N older messages summarized. Continuing...]` 并标记 `degraded: true`，不中断 run。
 
 ### 2.10 多实例锁、数据根与交互记录（0.15，ADR-086）
 

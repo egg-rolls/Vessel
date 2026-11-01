@@ -9,8 +9,15 @@
  * system 消息永不丢；token 估算统一由本模块导出，供 harness 复用。
  */
 
-import type { ContextConfig, WorkingContext } from '../types/context.js';
+import {
+  type CompactionReport,
+  type ContextConfig,
+  type ContextSummarizer,
+  DEFAULT_COMPACT_THRESHOLD,
+  type WorkingContext,
+} from '../types/context.js';
 import type { Message } from '../types/provider.js';
+import { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
 
 /** 无 summarizer 时的占位摘要（保持 0.4/0.5 的可见行为） */
 function placeholderSummary(removed: number): string {
@@ -18,22 +25,14 @@ function placeholderSummary(removed: number): string {
 }
 
 /**
- * 旧工具结果被清空后写入的占位文本。
+ * 压缩时保留原文的最近工具结果预算（R5，0.34 S1）。
  *
- * 清空而不是删除：tool 消息与 assistant 的 tool_calls 按 tool_call_id 配对，
- * 删除任一侧都会让 provider 拒绝请求；只替换 content 既缩短输入，
- * 又完整保留 role / tool_call_id / name 与 assistant.tool_calls。
+ * 从尾部累计 tool 结果的估算 token，保留到不超过 `maxTokens × 5%`：
+ * 至少保留 1 条（最新结果通常仍被本轮引用），最多 10 条（一次 assistant
+ * 轮次的并行调用上限）。属于压缩策略常量，按契约不新增配置键。
  */
-const CLEARED_TOOL_RESULT = '[Old tool result content cleared]';
-
-/**
- * 压缩时保留原文的最近工具结果条数。
- *
- * 取 5 与 Claude Code microcompact 的 keepRecent 默认值一致：一次 assistant
- * 轮次常有 1–5 个并行工具调用，模型仍可能直接引用这些结果；更早的输出
- * 已可由摘要覆盖。属于压缩策略常量，按契约不新增配置键。
- */
-const KEEP_RECENT_TOOL_RESULTS = 5;
+const KEEP_RECENT_TOKEN_RATIO = 0.05;
+const KEEP_RECENT_MAX = 10;
 
 /**
  * 字符级 token 估算（ASCII 0.25 / CJK 0.5 token 每字符）。
@@ -167,22 +166,70 @@ function applyCompactionToMessages(
 }
 
 /**
- * 清空旧工具结果内容（就地修改传入消息对象），保留最近 KEEP_RECENT_TOOL_RESULTS 条。
- * 调用方负责传入可安全修改的副本。
+ * 清空时保留原文的最近工具结果条数（R5）：从尾部累计估算 token，
+ * 保留到累计 ≤ `maxTokens × 5%`，至少 1 条、最多 10 条。
  */
-function clearOldToolResultsIn(messages: readonly Message[]): void {
-  let keep = KEEP_RECENT_TOOL_RESULTS;
+function retainedToolResultCount(messages: readonly Message[], maxTokens: number): number {
+  const budget = maxTokens * KEEP_RECENT_TOKEN_RATIO;
+  let kept = 0;
+  let tokens = 0;
+  for (let i = messages.length - 1; i >= 0 && kept < KEEP_RECENT_MAX; i -= 1) {
+    const message = messages[i];
+    if (message?.role !== 'tool') continue;
+    const cost = estimateMessageTokens(message);
+    // 最新 1 条无论如何保留；之后超出预算即停止。
+    if (kept > 0 && tokens + cost > budget) break;
+    tokens += cost;
+    kept += 1;
+  }
+  return kept;
+}
+
+/**
+ * 清空旧工具结果内容（就地修改传入消息对象），返回本次被清空的 tool_call_id。
+ *
+ * 保留最近结果按 token 预算自适应（R5）。清空而不是删除：tool 消息与
+ * assistant 的 tool_calls 按 tool_call_id 配对，删除任一侧都会让 provider
+ * 拒绝请求；只替换 content 既缩短输入，又完整保留 role / tool_call_id /
+ * name 与 assistant.tool_calls。调用方负责传入可安全修改的副本。
+ */
+function clearOldToolResultsIn(messages: readonly Message[], maxTokens: number): string[] {
+  const keep = retainedToolResultCount(messages, maxTokens);
+  let skipped = 0;
+  const cleared: string[] = [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (message?.role !== 'tool') continue;
-    if (keep > 0) {
-      keep -= 1;
+    if (skipped < keep) {
+      skipped += 1;
       continue;
     }
     // 空内容本来就无需回收；已是占位文本则保持幂等。
-    if (!message.content || message.content === CLEARED_TOOL_RESULT) continue;
-    message.content = CLEARED_TOOL_RESULT;
+    if (!message.content || isClearedToolResult(message.content)) continue;
+    message.content = formatClearedToolResult(
+      messages,
+      message.tool_call_id ?? '',
+      message.content,
+    );
+    if (message.tool_call_id !== undefined) cleared.push(message.tool_call_id);
   }
+  return cleared.reverse();
+}
+
+/**
+ * 当前窗口最近一条压缩摘要（C3 `previousSummary`）。
+ *
+ * 摘要器据此在原摘要上合并，而不是每次只概括本次移除的消息；没有旧摘要
+ * （首次压缩）时返回 undefined。
+ */
+function lastSummaryContent(messages: readonly Message[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role === 'system' && message.compaction_summary === true) {
+      return message.content;
+    }
+  }
+  return undefined;
 }
 
 /** 深拷贝一条消息，避免压缩改动父会话的对象引用。 */
@@ -204,7 +251,7 @@ function cloneMessage(message: Message): Message {
 export async function compactMessagesForFork(
   messages: Message[],
   opts: {
-    summarizer?: (messages: Message[], opts: { maxTokens: number }) => Promise<string>;
+    summarizer?: ContextSummarizer;
     maxTokens?: number;
   } = {},
 ): Promise<Message[]> {
@@ -214,11 +261,20 @@ export async function compactMessagesForFork(
   const plan = planCompactionForMessages(copy, { maxTokens }, true);
   if (!plan) return copy;
 
-  clearOldToolResultsIn(copy);
+  // 摘要输入按原始内容计量：清空旧工具结果之前取旧摘要与移除量。
+  const previousSummary = lastSummaryContent(copy);
+  const removedTokens = estimateMessagesTokens(plan.toSummarize);
+  clearOldToolResultsIn(copy, maxTokens);
   let summary = '';
   if (opts.summarizer) {
     try {
-      summary = await opts.summarizer(plan.toSummarize, { maxTokens });
+      summary = await opts.summarizer(plan.toSummarize, {
+        maxTokens,
+        previousSummary,
+        removedTokens,
+        // compactFork 是显式 fork 操作，按手动压缩处理。
+        force: true,
+      });
     } catch {
       // 摘要失败不阻断 compactFork：退回占位符。
       summary = '';
@@ -235,6 +291,9 @@ export class MemoryWorkingContext implements WorkingContext {
   private realTokens = 0;
   /** 异步压缩去重：同一会话同一时刻只跑一次 summarizer */
   private compaction?: { sessionId: string; promise: Promise<number> };
+  /** 压缩报告序号：单调递增，runtime 据此发现这期间发生了压缩（C2） */
+  private compactionSeq = 0;
+  private compactionReport?: CompactionReport;
 
   constructor(config: ContextConfig = {}) {
     this.config = {
@@ -242,7 +301,7 @@ export class MemoryWorkingContext implements WorkingContext {
       // 未显式配置时按 token 预算推导安全上限（见 messageCap）。
       maxMessages: config.maxMessages,
       autoCompact: config.autoCompact ?? true,
-      compactThreshold: config.compactThreshold ?? 0.95,
+      compactThreshold: config.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD,
       onCompact: config.onCompact,
       summarizer: config.summarizer,
     };
@@ -250,21 +309,37 @@ export class MemoryWorkingContext implements WorkingContext {
   }
 
   setSessionId(sessionId: string): void {
+    // 跨会话切换时丢弃上一会话的真实锚点：realTokens 属于某个 provider 请求的
+    // 历史，另一个会话不能复用；同值重复设置不重置（runtime 每轮会调用一次）。
+    if (sessionId !== this.currentSessionId) {
+      this.realTokens = 0;
+    }
     this.currentSessionId = sessionId;
     if (!this.sessionMessages.has(sessionId)) {
       this.sessionMessages.set(sessionId, []);
     }
-    this.realTokens = 0;
   }
 
   getSessionId(): string {
     return this.currentSessionId;
   }
 
+  /** 0.34 S2：自动压缩阈值；未由应用层注入时用库兜底值。 */
+  get compactThreshold(): number {
+    return this.config.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
+  }
+
   add(msg: Message): void {
     const msgs = this.sessionMessages.get(this.currentSessionId) || [];
     msgs.push(msg);
     this.sessionMessages.set(this.currentSessionId, msgs);
+
+    // 真实锚点 + 尾部增量：realTokens 来自上一次 provider 响应的真实用量；
+    // 响应之后新增的消息（本轮追加、工具结果）用估算补齐，下一次响应再校正。
+    // 必须在同步压缩之前累加——压缩会按现有逻辑把 realTokens 归零。
+    if (this.realTokens > 0) {
+      this.realTokens += estimateMessageTokens(msg);
+    }
 
     // 配置真实 summarizer 时不在 add() 里同步压缩（不能 await）：
     // 由 runtime 在请求组装前调用 autoCompactAsync() 产生真实摘要。
@@ -283,7 +358,15 @@ export class MemoryWorkingContext implements WorkingContext {
     return [...(this.sessionMessages.get(this.currentSessionId) || [])];
   }
 
-  /** Token 数：优先用 LLM 真实值，否则用统一估算（content / tool_calls / reasoning） */
+  /** 0.34 S1：最近一次成功压缩的报告；未压缩过时缺省。 */
+  get lastCompaction(): CompactionReport | undefined {
+    return this.compactionReport;
+  }
+
+  /**
+   * Token 数：优先用真实锚点（上一次 provider 响应 + 其后新增消息的估算增量），
+   * 没有任何真实值时才用统一估算重扫全部消息（content / tool_calls / reasoning）。
+   */
   get tokenCount(): number {
     if (this.realTokens > 0) return this.realTokens;
     return estimateMessagesTokens(this.sessionMessages.get(this.currentSessionId) || []);
@@ -302,7 +385,10 @@ export class MemoryWorkingContext implements WorkingContext {
     return this.config.autoCompact !== false;
   }
 
-  /** 用 LLM 返回的真实 token 数替代估算 */
+  /**
+   * 用 LLM 返回的真实 token 数绝对重置锚点（而非累加）；之后 add() 的新消息
+   * 在锚点上做估算增量，直到下一次 provider 响应再次校正。
+   */
   updateRealTokens(total: number): void {
     this.realTokens = total;
   }
@@ -317,9 +403,10 @@ export class MemoryWorkingContext implements WorkingContext {
     if (!plan) return 0;
 
     // 先按原始内容决定压缩边界，再清空旧工具输出：阈值与 0.3 保留预算不变。
-    this.clearOldToolResults(plan.sessionId);
+    const cleared = this.clearOldToolResults(plan.sessionId);
     this.applyCompaction(plan, placeholderSummary(plan.toSummarize.length));
     this.realTokens = 0;
+    this.recordCompaction(plan.toSummarize.length, cleared, true);
     return plan.toSummarize.length;
   }
 
@@ -335,8 +422,13 @@ export class MemoryWorkingContext implements WorkingContext {
     const plan = this.planCompaction(force);
     if (!plan) return 0;
 
+    // 摘要输入按原始内容计量：清空旧工具结果之前取旧摘要与移除量。
+    // 旧摘要取计划所属会话的当前窗口（await 期间可能切换会话）。
+    const previousSummary = lastSummaryContent(this.sessionMessages.get(plan.sessionId) ?? []);
+    const removedTokens = estimateMessagesTokens(plan.toSummarize);
+
     // summarizer 之前清空：它看到的旧工具结果已是占位文本，配对结构不变。
-    this.clearOldToolResults(plan.sessionId);
+    const cleared = this.clearOldToolResults(plan.sessionId);
 
     const removed = plan.toSummarize.length;
     const task = (async () => {
@@ -345,6 +437,9 @@ export class MemoryWorkingContext implements WorkingContext {
         try {
           summary = await this.config.summarizer(plan.toSummarize, {
             maxTokens: this.config.maxTokens ?? 1_000_000,
+            previousSummary,
+            removedTokens,
+            force,
           });
         } catch {
           // 摘要失败不应中断 run：退回占位符。
@@ -354,6 +449,7 @@ export class MemoryWorkingContext implements WorkingContext {
       const text = summary.trim() ? summary : placeholderSummary(removed);
       this.applyCompaction(plan, text);
       if (this.currentSessionId === plan.sessionId) this.realTokens = 0;
+      this.recordCompaction(removed, cleared, !summary.trim());
       return removed;
     })();
 
@@ -384,6 +480,8 @@ export class MemoryWorkingContext implements WorkingContext {
 
   clearSession(sessionId: string): void {
     this.sessionMessages.set(sessionId, []);
+    // 清空当前会话后旧锚点已不代表其内容，必须归零；其他会话的锚点不受影响。
+    if (sessionId === this.currentSessionId) this.realTokens = 0;
   }
 
   deleteSession(sessionId: string): void {
@@ -411,7 +509,7 @@ export class MemoryWorkingContext implements WorkingContext {
   }
 
   /**
-   * 压缩前清空旧工具结果的内容，保留最近 KEEP_RECENT_TOOL_RESULTS 条原文。
+   * 压缩前清空旧工具结果的内容，保留最近结果按 `maxTokens × 5%` 自适应（R5）。
    *
    * - 为什么清空而不删除：tool 消息是 assistant.tool_calls 的结果配对，删除会让
    *   provider 看到孤立的 tool_calls / tool 结果而拒绝请求；只替换 content 即可
@@ -422,9 +520,24 @@ export class MemoryWorkingContext implements WorkingContext {
    *   或删除；本方法只匹配 role === 'tool'。
    * - 调用时机必须在 planCompaction 之后，让触发阈值与 0.3 保留预算按原始内容
    *   计算，不改变既有边界逻辑。
+   * @returns 本次被替换为占位的 tool_call_id（按消息顺序）
    */
-  private clearOldToolResults(sessionId: string): void {
-    clearOldToolResultsIn(this.sessionMessages.get(sessionId) ?? []);
+  private clearOldToolResults(sessionId: string): string[] {
+    return clearOldToolResultsIn(
+      this.sessionMessages.get(sessionId) ?? [],
+      this.config.maxTokens ?? 1_000_000,
+    );
+  }
+
+  /** 记录一次成功压缩（C2）：单调 id 供 runtime 判重，不持久化。 */
+  private recordCompaction(removed: number, cleared: string[], degraded: boolean): void {
+    this.compactionSeq += 1;
+    this.compactionReport = {
+      id: this.compactionSeq,
+      removed,
+      cleared_tool_call_ids: cleared,
+      degraded,
+    };
   }
 
   /**
@@ -441,9 +554,9 @@ export class MemoryWorkingContext implements WorkingContext {
   }
 
   private shouldCompact(): boolean {
-    const threshold = this.config.compactThreshold ?? 0.95;
+    const threshold = this.config.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
     const max = this.config.maxTokens ?? 1_000_000;
-    // 0.10 R1-10：token 预算仍是主阈值（默认 0.95）；条数上限是兜底安全网。
+    // 0.10 R1-10：token 预算仍是主阈值（默认 0.85）；条数上限是兜底安全网。
     return this.tokenCount > max * threshold || this.isOverMessageCap();
   }
 

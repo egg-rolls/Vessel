@@ -5,10 +5,22 @@
 
 import type { Message } from './provider.js';
 
-/** 摘要器选项（0.6.1 E3） */
+/** 摘要器选项（0.6.1 E3；0.34 S4 / C3 additive） */
 export interface ContextSummaryOptions {
   /** 摘要目标 token 预算（取 ContextConfig.maxTokens） */
   maxTokens: number;
+  /**
+   * 当前窗口已有压缩摘要（最后一条 `compaction_summary` system 消息的 content）。
+   * 摘要器应在其基础上合并更新，而不是只概括本次移除的消息；缺省表示首次压缩。
+   */
+  previousSummary?: string;
+  /** 本次将被摘要替代的消息估算 token（`estimateMessagesTokens(toSummarize)`），驱动输出预算 */
+  removedTokens?: number;
+  /**
+   * 手动 / overflow 压缩为 true，自动阈值为 false。
+   * 熔断器据此绕过冷却并先清零失败计数（R7）。
+   */
+  force?: boolean;
 }
 
 /**
@@ -22,6 +34,30 @@ export type ContextSummarizer = (
 
 /** `context.compacted` 的 reason（0.15 E1） */
 export type ContextCompactedReason = 'auto' | 'overflow' | 'manual';
+
+/**
+ * 一次压缩的结果报告（0.34 S1 / C2）。
+ *
+ * 只服务事件写入与 runtime 判重：不持久化，也不参与投影。
+ */
+export interface CompactionReport {
+  /** 单调递增；runtime 据此发现 `add()` 内同步压缩 */
+  id: number;
+  /** 本次移除的消息数 */
+  removed: number;
+  /** 本次被替换为占位的 tool_call_id（空数组 = 没有可清空的工具结果） */
+  cleared_tool_call_ids: string[];
+  /** 摘要由占位符代替（失败/超时/空/无 summarizer） */
+  degraded: boolean;
+}
+
+/**
+ * 库未配置 `compactThreshold` 时的兜底阈值（0.34 S2）。
+ *
+ * 应用层唯一来源是 `config.context.compactThreshold`（默认同值）；core 只在
+ * 未注入配置时使用本常量，不参与应用层判定。
+ */
+export const DEFAULT_COMPACT_THRESHOLD = 0.85;
 
 /** 一次 Run 的上下文窗口（per Run，从 SessionEventLog 重建，不落库） */
 export interface WorkingContext {
@@ -48,6 +84,16 @@ export interface WorkingContext {
    * 缺省（实现不提供）按「开启」处理，行为与 0.27 一致。
    */
   readonly autoCompact?: boolean;
+  /**
+   * 0.34 S2：自动压缩阈值。应用层由 config 注入；
+   * 实现不提供时 runtime 用 `DEFAULT_COMPACT_THRESHOLD` 兜底。
+   */
+  readonly compactThreshold?: number;
+  /**
+   * 0.34 S1：最近一次成功压缩的报告（C2）。不持久化；runtime 比对 `id`
+   * 判断这期间是否发生了（含 `add()` 内的同步压缩）。
+   */
+  readonly lastCompaction?: CompactionReport;
   setSessionId(sessionId: string): void;
   getSessionId(): string;
   /** 用 LLM 响应的真实 token 数替代估算（Auto Compact 使用） */

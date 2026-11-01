@@ -50,9 +50,27 @@ export interface LocalRunAdapterOptions {
   agentControl: AgentControlLike;
   /** 会话后端：`/resume` 与 D12 的上下文镜像同源 */
   session: SessionStore;
+  /**
+   * 0.34 S2 / C5：TUI mirror 的上下文配置（与 tenant 同源）。
+   * 缺省时保持 `MemoryWorkingContext` 原有行为；mirror 不接收 summarizer
+   * （UI 镜像不能异步压缩）。
+   */
+  contextConfig?: {
+    maxTokens?: number;
+    maxMessages?: number;
+    autoCompact?: boolean;
+    compactThreshold?: number;
+  };
   /** run 终态等待上限；缺省 10 分钟（与 `--connect` 一致） */
   timeoutMs?: number;
   pollIntervalMs?: number;
+  /**
+   * C6：手动压缩入口（`/compact`）。由装配层绑定到 tenant 执行门面；缺省时
+   * `compactContext` 一律报 `compact_unavailable`，不回落到 mirror 压缩。
+   */
+  compactContext?: (
+    sessionId: string,
+  ) => Promise<{ removed: number; remaining: number; messages?: Message[] }>;
 }
 
 /** `ctx.context` 背后的取数面（TUI 只经 `ctx.context` 读，不需要知道它）。 */
@@ -62,6 +80,13 @@ export interface LocalRunAdapter extends RunnableAgent {
    * `/resume` / `/new` / `/clear` 之后由装配层调用（bootstrap 的 onSessionChange）。
    */
   focusSession(sessionId: string): Promise<void>;
+  /**
+   * C6：手动压缩。缺省作用于当前聚焦会话；未绑定回调时报 `compact_unavailable`
+   * （TUI 据此回落到 mirror 路径，而不是假装压缩成功）。
+   */
+  compactContext?(
+    sessionId?: string,
+  ): Promise<{ removed: number; remaining: number; messages?: Message[] }>;
 }
 
 /** `service.create` 的成员名字形状（与 `MEMBER_NAME_RE` 一致）。 */
@@ -137,7 +162,7 @@ export function createLocalRunAdapter(options: LocalRunAdapterOptions): {
   /** session → agent id（契约 §3：先建 agent，之后每轮都带 agent_id） */
   const agentBySession = new Map<string, string>();
   /** `ctx.context` 的实体：run 结束后由会话历史覆盖 */
-  const mirror = new MemoryWorkingContext();
+  const mirror = new MemoryWorkingContext(options.contextConfig ?? {});
   /** 当前镜像指向哪个会话 */
   let focused: string | undefined;
 
@@ -268,6 +293,26 @@ export function createLocalRunAdapter(options: LocalRunAdapterOptions): {
     events: options.events,
     pluginHost: options.pluginHost,
     focusSession,
+
+    /**
+     * C6：`/compact` 优先走 EU（带真实 summarizer 与事件发布）。
+     * 没有绑定回调 / 没有聚焦会话时显式不可用，由调用方回落 mirror。
+     */
+    async compactContext(sessionId?: string) {
+      const target = sessionId ?? focused;
+      if (target === undefined || target === '') throw new Error('compact_unavailable');
+      const compact = options.compactContext;
+      if (compact === undefined) throw new Error('compact_unavailable');
+      const result = await compact(target);
+      // C6/G1：用 EU 压缩后的窗口刷新镜像；绝不能用压缩前历史覆盖。
+      if (Array.isArray(result.messages)) {
+        mirror.clear();
+        mirror.setSessionId(target);
+        for (const message of result.messages) mirror.add(message);
+        focused = target;
+      }
+      return result;
+    },
 
     run(inputValue, sessionId, opts) {
       return perform(inputValue, sessionId, opts, false);

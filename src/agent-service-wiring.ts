@@ -76,6 +76,8 @@ export interface AgentServiceWiringOptions {
   limits?: UsageLimits;
   termination?: TerminationPolicy;
   contextMaxTokens?: number;
+  /** 0.34 S2 / C5：成员上下文的压缩阈值；装配层传 `config.context.compactThreshold`。 */
+  contextCompactThreshold?: number;
   permission?: RuntimePermissionConfig;
   /** deny 模式保留的只读工具（默认 ['read']） */
   readOnlyTools?: readonly string[];
@@ -117,6 +119,11 @@ export interface AgentServiceWiringOptions {
    * 缺省时 compactFork 使用占位摘要。
    */
   summarizer?: ContextSummarizer;
+  /**
+   * 0.34 S4 / R7：成员上下文按 session 取带熔断的摘要器（与 owner 共享计数）。
+   * 缺省时成员回落到 `summarizer`。
+   */
+  summarizerForSession?: (sessionId: string) => ContextSummarizer;
   /**
    * Stage 4：成员 run durable 的 RunRecord 存储（内部装配选项，不是公开 RPC）。
    * 经 journal 工厂让成员 run 与 tenant run 走同一条写路径。
@@ -201,6 +208,13 @@ export function buildMemberExecutionOptions(
     ...(options.termination !== undefined ? { termination: options.termination } : {}),
     ...(options.contextMaxTokens !== undefined
       ? { contextMaxTokens: options.contextMaxTokens }
+      : {}),
+    ...(options.contextCompactThreshold !== undefined
+      ? { contextCompactThreshold: options.contextCompactThreshold }
+      : {}),
+    ...(options.summarizer !== undefined ? { summarizer: options.summarizer } : {}),
+    ...(options.summarizerForSession !== undefined
+      ? { summarizerForSession: options.summarizerForSession }
       : {}),
     ...(permission !== undefined ? { permission } : {}),
     ...(options.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
@@ -375,6 +389,10 @@ export async function createAgentServiceWiring(
       : {}),
     ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
     ...(options.summarizer !== undefined ? { summarizer: options.summarizer } : {}),
+    // 0.34 S2：compactFork 的压缩预算与 tenant 上下文同源。
+    ...(options.contextMaxTokens !== undefined
+      ? { contextMaxTokens: options.contextMaxTokens }
+      : {}),
     // Stage 3：compactFork 从父 Session 事件日志重建/压缩 transcript。
     ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
     snapshot: { enabled: true },

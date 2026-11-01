@@ -11,6 +11,7 @@ import type {
   ConfigValidationError,
   ConfigValidationResult,
   ConfigValidationWarning,
+  ContextConfig,
   EvalsConfig,
   FederationConfig,
   FeishuConfig,
@@ -112,6 +113,52 @@ function validateTermination(
         value: maxRuntimeSeconds,
       });
     }
+  }
+}
+
+/** 校验 context 块（0.34 S2：阈值与窗口配置的字段范围） */
+function validateContext(context: ContextConfig, errors: ConfigValidationError[]): void {
+  const { maxTokens, maxMessages, autoCompact, compactThreshold } = context;
+
+  if (
+    maxTokens !== undefined &&
+    (typeof maxTokens !== 'number' || !Number.isFinite(maxTokens) || maxTokens <= 0)
+  ) {
+    errors.push({
+      path: 'context.maxTokens',
+      message: 'Max tokens must be a positive number',
+      value: maxTokens,
+    });
+  }
+
+  if (
+    maxMessages !== undefined &&
+    (typeof maxMessages !== 'number' || !Number.isInteger(maxMessages) || maxMessages <= 0)
+  ) {
+    errors.push({
+      path: 'context.maxMessages',
+      message: 'context.maxMessages must be a positive integer',
+      value: maxMessages,
+    });
+  }
+
+  if (autoCompact !== undefined && typeof autoCompact !== 'boolean') {
+    errors.push({
+      path: 'context.autoCompact',
+      message: 'context.autoCompact must be a boolean',
+      value: autoCompact,
+    });
+  }
+
+  if (
+    compactThreshold !== undefined &&
+    (typeof compactThreshold !== 'number' || !(compactThreshold > 0 && compactThreshold <= 1))
+  ) {
+    errors.push({
+      path: 'context.compactThreshold',
+      message: 'context.compactThreshold must be a number between 0 (exclusive) and 1 (inclusive)',
+      value: compactThreshold,
+    });
   }
 }
 
@@ -2000,6 +2047,11 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   // 校验 termination
   if (config.termination) {
     validateTermination('termination', config.termination, errors);
+  }
+
+  // 校验 context（0.34 S2）
+  if (config.context) {
+    validateContext(config.context, errors);
   }
 
   // 校验 session

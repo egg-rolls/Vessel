@@ -1002,6 +1002,11 @@ export interface AgentServiceOptions {
    */
   summarizer?: ContextSummarizer;
   /**
+   * 0.34 S2：compactFork 的压缩预算（与 tenant 上下文共用）。
+   * 缺省时 `compactMessagesForFork` 按 1M 兜底。
+   */
+  contextMaxTokens?: number;
+  /**
    * 临时 agent 的空闲回收 TTL（小时）；缺省 2（D5），0 = 关闭。
    *
    * 只回收 `role === 'temporary' && membership === 'present'`；`member`（含 `main`）

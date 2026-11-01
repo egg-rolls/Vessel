@@ -27,6 +27,11 @@ export interface SessionMethodsDeps {
   sessionFor(tenantId: string): SessionStore | undefined;
   /** 最近 RunRecord 的读取面；缺省时 `sessions.get` 只用 `legacy_run` 投影。 */
   runStoreFor?(tenantId: string): SessionRunLookup | undefined;
+  /**
+   * CONTRACT-0.34-context C7：仅服务 `sessions.compact` 的 per-tenant 执行面。
+   * 结构化读取可选 `compactContext(sessionId)`；缺省或方法缺失 = `compact_unavailable`。
+   */
+  runtimeFor?(tenantId: string): unknown;
   sessionData?: {
     deleteSessionData(
       sessionId: string,
@@ -49,6 +54,18 @@ function optionalString(value: unknown): string | undefined {
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+type CompactContextFn = (sessionId: string) => Promise<{ removed: number; remaining: number }>;
+
+/** `compact_unavailable` 可能以 RpcError.code 或 message 形式到达（远程 / 本地门面）。 */
+function isCompactUnavailable(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return (
+    (typeof code === 'string' && code.includes('compact_unavailable')) ||
+    (typeof message === 'string' && message.includes('compact_unavailable'))
+  );
 }
 
 /** 终态（update_at 可作为 completed_at）。 */
@@ -95,7 +112,7 @@ export function toSessionView(state: SessionState, latestRaw: unknown): Record<s
 }
 
 export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinition[] {
-  const { defaultTenantId, sessionFor, runStoreFor, sessionData } = deps;
+  const { defaultTenantId, sessionFor, runStoreFor, sessionData, runtimeFor } = deps;
 
   function requireSession(tenantId: string): SessionStore {
     const resolved = sessionFor(tenantId);
@@ -257,6 +274,56 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         if (!state) throw new RpcError('not_found', 'Session not found');
         await backend.save({ ...state, title, updated_at: Date.now() });
         return { session_id: sessionId, title };
+      },
+    },
+    {
+      // CONTRACT-0.34-context C7：手动压缩。远程 / connect 走本方法；
+      // 本地 TUI 直接经 ExecutionUnit.compactContext。
+      name: 'sessions.compact',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['session_id'],
+        properties: { session_id: { type: 'string', minLength: 1 } },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['removed', 'remaining', 'reason'],
+        properties: {
+          removed: { type: 'integer', minimum: 0 },
+          remaining: { type: 'integer', minimum: 0 },
+          reason: { type: 'string', enum: ['manual'] },
+        },
+      },
+      handler: async (params, ctx) => {
+        const backend = requireSession(ctx.tenantId);
+        const sessionId = stringParam(params, 'session_id');
+        const state = await backend.load(sessionId);
+        if (!state) throw new RpcError('session_not_found', 'Session not found');
+
+        const runtime = runtimeFor?.(ctx.tenantId) as
+          | { compactContext?: CompactContextFn }
+          | undefined;
+        const compactContext = runtime?.compactContext;
+        if (typeof compactContext !== 'function') {
+          throw new RpcError('compact_unavailable', 'Context compaction is not available');
+        }
+
+        try {
+          const result = await compactContext.call(runtime, sessionId);
+          return {
+            removed: result.removed,
+            remaining: result.remaining,
+            reason: 'manual' as const,
+          };
+        } catch (error) {
+          // runtime 门面把“没有 live EU / 无方法”也报成 compact_unavailable；
+          // 其它错误原样抛给 dispatcher（内部错误不伪装成不可用）。
+          if (isCompactUnavailable(error)) {
+            throw new RpcError('compact_unavailable', 'Context compaction is not available');
+          }
+          throw error;
+        }
       },
     },
   ];

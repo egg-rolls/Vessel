@@ -31,7 +31,10 @@ export type RpcErrorCode =
   // 0.13：权限/交互请求已过期或已取消（DECISION-024 §2.2）。
   | 'expired'
   // 0.13 Addendum A：run 已结束 / 重启后找不到 run。
-  | 'run_ended';
+  | 'run_ended'
+  // 0.34 CONTRACT-0.34-context C7：sessions.compact（与 serve 侧错误码同步）。
+  | 'session_not_found'
+  | 'compact_unavailable';
 
 /** 成功响应 */
 export interface RpcSuccessResponse {
