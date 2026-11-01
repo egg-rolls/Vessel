@@ -12,15 +12,15 @@ import { access, copyFile, mkdir, readFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { atomicWrite, type Logger, noopLogger } from '@vessel-agent/core';
 import {
-  type AgentBodyHistoryEntry,
-  type AgentBodyPointer,
   type AgentRole,
-  MAX_BODY_HISTORY,
+  type BindingHistoryEntry,
+  type BindingPointer,
+  MAX_BINDING_HISTORY,
   type MemberMembership,
   type MemberState,
   type MemberVisibility,
   type PersistedAgentRecord,
-  type PersistedBodyRecord,
+  type PersistedBindingRecord,
 } from './types.js';
 
 /** 快照文件版本；当前写入 4，读取兼容 1 / 2 / 3 */
@@ -92,7 +92,7 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 /** current_body：session_id 非空、epoch 为 >=0 整数、started_at 为有限数字才保留 */
-function parseBody(value: unknown): AgentBodyPointer | undefined {
+function parseBindingPointer(value: unknown): BindingPointer | undefined {
   if (!isRecord(value)) return undefined;
   if (!nonEmptyString(value.session_id)) return undefined;
   if (typeof value.epoch !== 'number' || !Number.isInteger(value.epoch) || value.epoch < 0) {
@@ -103,27 +103,27 @@ function parseBody(value: unknown): AgentBodyPointer | undefined {
 }
 
 /**
- * body_history：逐条校验（Body 指针 + 有限 retired_at），非法条目单独跳过；
- * 最多保留最后 MAX_BODY_HISTORY 条。无有效条目返回 undefined。
+ * body_history：逐条校验（Binding 指针 + 有限 retired_at），非法条目单独跳过；
+ * 最多保留最后 MAX_BINDING_HISTORY 条。无有效条目返回 undefined。
  */
-function parseBodyHistory(value: unknown): AgentBodyHistoryEntry[] | undefined {
+function parseBindingHistory(value: unknown): BindingHistoryEntry[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const entries: AgentBodyHistoryEntry[] = [];
+  const entries: BindingHistoryEntry[] = [];
   for (const item of value) {
     if (!isRecord(item)) continue;
-    const body = parseBody(item);
+    const body = parseBindingPointer(item);
     if (body === undefined) continue;
     if (typeof item.retired_at !== 'number' || !Number.isFinite(item.retired_at)) continue;
     entries.push({ ...body, retired_at: item.retired_at });
   }
   if (entries.length === 0) return undefined;
-  return entries.slice(-MAX_BODY_HISTORY);
+  return entries.slice(-MAX_BINDING_HISTORY);
 }
 
-function parsePersistedBody(value: unknown): PersistedBodyRecord | undefined {
+function parsePersistedBinding(value: unknown): PersistedBindingRecord | undefined {
   if (!isRecord(value)) return undefined;
-  const bodyId = optionalString(value.body_id) ?? optionalString(value.session_id);
-  if (bodyId === undefined) return undefined;
+  const bindingId = optionalString(value.body_id) ?? optionalString(value.session_id);
+  if (bindingId === undefined) return undefined;
   const epoch =
     typeof value.epoch === 'number' && Number.isInteger(value.epoch) && value.epoch >= 0
       ? value.epoch
@@ -138,8 +138,8 @@ function parsePersistedBody(value: unknown): PersistedBodyRecord | undefined {
     typeof value.last_active_at === 'number' && Number.isFinite(value.last_active_at)
       ? value.last_active_at
       : createdAt;
-  const record: PersistedBodyRecord = {
-    body_id: bodyId,
+  const record: PersistedBindingRecord = {
+    body_id: bindingId,
     epoch,
     created_at: createdAt,
     last_active_at: lastActiveAt,
@@ -151,12 +151,12 @@ function parsePersistedBody(value: unknown): PersistedBodyRecord | undefined {
   return record;
 }
 
-function parsePersistedBodies(value: unknown): PersistedBodyRecord[] | undefined {
+function parsePersistedBodies(value: unknown): PersistedBindingRecord[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const bodies: PersistedBodyRecord[] = [];
+  const bodies: PersistedBindingRecord[] = [];
   const seen = new Set<string>();
   for (const item of value) {
-    const body = parsePersistedBody(item);
+    const body = parsePersistedBinding(item);
     if (body === undefined || seen.has(body.body_id)) continue;
     seen.add(body.body_id);
     bodies.push(body);
@@ -165,27 +165,27 @@ function parsePersistedBodies(value: unknown): PersistedBodyRecord[] | undefined
 }
 
 /**
- * v1–v3 → v4：`current_body` 变成唯一 live body + primary；旧 `body_history`
+ * v1–v3 → v4：`current_body` 变成唯一 live binding + primary；旧 `body_history`
  * 迁入 `bodies[]`（已退役）。v4 只读新字段。`bodies[]` 是唯一真相。
  */
 function migrateBodies(
   version: number,
-  currentBody: AgentBodyPointer | undefined,
-  bodyHistory: AgentBodyHistoryEntry[] | undefined,
-  explicitBodies: PersistedBodyRecord[] | undefined,
+  currentBinding: BindingPointer | undefined,
+  bindingHistory: BindingHistoryEntry[] | undefined,
+  explicitBodies: PersistedBindingRecord[] | undefined,
   explicitPrimary: string | undefined,
   fallbackSessionId: string,
   lastSeen: number | undefined,
-): { bodies: PersistedBodyRecord[]; primary?: string } {
+): { bodies: PersistedBindingRecord[]; primary?: string } {
   if (version >= 4 && explicitBodies !== undefined) {
     return {
       bodies: explicitBodies,
       ...(explicitPrimary !== undefined ? { primary: explicitPrimary } : {}),
     };
   }
-  const bodies: PersistedBodyRecord[] = [];
+  const bodies: PersistedBindingRecord[] = [];
   const seen = new Set<string>();
-  for (const entry of bodyHistory ?? []) {
+  for (const entry of bindingHistory ?? []) {
     if (seen.has(entry.session_id)) continue;
     seen.add(entry.session_id);
     bodies.push({
@@ -196,7 +196,7 @@ function migrateBodies(
       retired_at: entry.retired_at,
     });
   }
-  const live = currentBody ?? {
+  const live = currentBinding ?? {
     session_id: fallbackSessionId,
     epoch: 0,
     started_at: lastSeen ?? 0,
@@ -275,10 +275,10 @@ function parseMember(value: unknown, version: number): PersistedAgentRecord | un
   if (model !== undefined) record.model = model;
   const systemPrompt = optionalString(value.system_prompt);
   if (systemPrompt !== undefined) record.system_prompt = systemPrompt;
-  const currentBody = parseBody(value.current_body);
-  if (currentBody !== undefined) record.current_body = currentBody;
-  const bodyHistory = parseBodyHistory(value.body_history);
-  if (bodyHistory !== undefined) record.body_history = bodyHistory;
+  const currentBinding = parseBindingPointer(value.current_body);
+  if (currentBinding !== undefined) record.current_body = currentBinding;
+  const bindingHistory = parseBindingHistory(value.body_history);
+  if (bindingHistory !== undefined) record.body_history = bindingHistory;
   const lastSeen =
     typeof value.last_seen === 'number' && Number.isFinite(value.last_seen)
       ? value.last_seen
@@ -287,8 +287,8 @@ function parseMember(value: unknown, version: number): PersistedAgentRecord | un
   const explicitPrimary = optionalString(value.primary_body_id);
   const migrated = migrateBodies(
     version,
-    currentBody,
-    bodyHistory,
+    currentBinding,
+    bindingHistory,
     explicitBodies,
     explicitPrimary,
     value.session_id,

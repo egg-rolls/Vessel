@@ -59,9 +59,9 @@ export {
 } from './provider/index.js';
 // 运行时
 export {
-  AgentRuntime,
   createToolPipeline,
   createToolPipelineFor,
+  ExecutionUnit,
   MemoryPluginHost,
   PermissionTimeoutError,
   type PrefixChangeReason,

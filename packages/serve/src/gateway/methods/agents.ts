@@ -479,7 +479,7 @@ const agentRotateEntrySchema = {
  * 因此看不到成员记录里的 private 条目，也不认 viewer 口径。
  *
  * `filters.sessionId` 是**逐条**过滤（不是取到结果后整条抹）：同一 id 在注册表与
- * 成员表里的 session 可能不同（rotate 后旧 Body、stale 快照），整条抹会连带丢掉
+ * 成员表里的 session 可能不同（rotate 后旧 Binding、stale 快照），整条抹会连带丢掉
  * 原本可见的注册表条目。
  */
 async function visibleAgents(
@@ -870,7 +870,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
        * - 转换时 handler 传 `role`、`team_id → teamId`、`from = principal.agent_id ?? 'human'`；
        * - 改名立即生效，唯一性与创建一致（同 Team present 唯一；unbound 为 tenant 唯一），
        *   冲突返回稳定 `invalid_input`；
-       * - model / system_prompt 只写入成员记录，**下一次 spawn 的 Body** 才使用；
+       * - model / system_prompt 只写入成员记录，**下一次 spawn 的 Binding** 才使用；
        *   实际变化时成功条目带 `applies_to: 'next_body'`；
        * - 服务发布 `agent.updated`，只带变化字段名，不带 prompt 正文。
        */
@@ -1168,7 +1168,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
     },
     {
       /**
-       * `agents.rotate`（0.26，write）：批量换 Body。
+       * `agents.rotate`（0.26，write）：批量换 Binding。
        *
        * 人类路径（owner / gateway）不传 `from_session_id`，可 rotate 任意可见成员；
        * 成员工具路径仍由 AgentService 以 `from_session_id` 收紧为只能 rotate 自己。

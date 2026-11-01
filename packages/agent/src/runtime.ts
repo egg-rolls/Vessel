@@ -1,7 +1,7 @@
 /**
  * 进程内成员执行内核适配（MemberRuntimePort）。
  *
- * 每个成员独占一个 AgentRuntime / Context / EventStream；工具从父 PluginHost
+ * 每个成员独占一个 ExecutionUnit / Context / EventStream；工具从父 PluginHost
  * 按白名单复制，hooks / guardrails 一并继承。`permissionMode: 'bridge'` 时
  * 成员的权限/提问请求转发到 `parentEvents`，父级应答原样回灌成员事件流；
  * 没有 `parentEvents` 时退化为 ask → deny（A3a 行为），避免 run 永久等待。
@@ -12,10 +12,10 @@
 import { randomUUID } from 'node:crypto';
 import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
-  AgentRuntime,
-  type AgentRuntimeOptions,
   type ContextManager,
   type EventStream,
+  ExecutionUnit,
+  type ExecutionUnitOptions,
   type LLMProvider,
   type Logger,
   MemoryContextManager,
@@ -47,7 +47,7 @@ import type {
 } from './types.js';
 
 /**
- * 成员默认工具白名单（agent 支持成员换 Body）。
+ * 成员默认工具白名单（agent 支持成员换 ExecutionUnit）。
  *
  * 工具面共有 **4 层闸门**，这里只是「成员选择」这一层。改工具面前先看清改的是哪层：
  *   1. 本文件 —— 成员能从父宿主挑哪些（默认 `bash`/`read`/`edit`/`agent`）
@@ -69,7 +69,7 @@ const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set(['delegate_task']);
 /**
  * 需要父级（有人类应答者）转发才能收口的工具。
  *
- * 这些工具通过事件流发布请求并等待应答；成员 Body 只有 bridge 才能把请求送到
+ * 这些工具通过事件流发布请求并等待应答；成员 ExecutionUnit 只有 bridge 才能把请求送到
  * 父事件流。没有 bridge / 父流时注册进来只会让 run 永久等待，因此不放行。
  */
 const PARENT_ANSWERED_TOOL_NAMES: ReadonlySet<string> = new Set(['ask_user']);
@@ -81,7 +81,7 @@ const DEFAULT_TERMINATION: TerminationPolicy = { maxIterations: 10, maxRuntimeSe
 const DEFAULT_CONTEXT_MAX_TOKENS = 1_000_000;
 
 /**
- * 成员 Body 恒定免确认的工具：`agent` 工具只允许成员操作自己（rotate）/ 可见 roster
+ * 成员 ExecutionUnit 恒定免确认的工具：`agent` 工具只允许成员操作自己（rotate）/ 可见 roster
  * / 自有 contractor，close 的审批由工具 `checkPermission` 与 `neverAutoApprove`
  * （`agent.close`）决定。owner 同源规则在热应用时会整体替换，这里每次应用前补回。
  */
@@ -291,13 +291,13 @@ interface PendingBridgeRequest {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-/** 成员 runtime 额外需要的中断能力（AgentRuntime 已实现） */
+/** 成员 runtime 额外需要的中断能力（ExecutionUnit 已实现） */
 export interface MemberRunnableAgent extends RunnableAgent {
   interrupt?(reason?: RunInterruptReason): void;
-  /** 只追加上下文，不启动 turn（AgentRuntime 已实现） */
+  /** 只追加上下文，不启动 turn（ExecutionUnit 已实现） */
   appendNotice?(text: string): void;
   /**
-   * 0.28（additive）：热应用上下文策略，下一轮请求生效（`AgentRuntime` 已实现）。
+   * 0.28（additive）：热应用上下文策略，下一轮请求生效（`ExecutionUnit` 已实现）。
    * 只用于压力提示尾句；自动压缩开关由 `RoleAwareContext` 承担。
    */
   applyContextPolicy?(policy: { contextPressureHint?: string }): void;
@@ -356,18 +356,18 @@ export interface InProcessMemberRuntimeOptions {
   nodeId?: string;
   includeReasoning?: boolean;
   /** tenant SessionBackend；同 session_id 可跨进程续接历史 */
-  session?: AgentRuntimeOptions['session'];
+  session?: ExecutionUnitOptions['session'];
   /** tenant 会话事件日志（唯一真相源；存在时成员事件同样落盘） */
-  eventLog?: AgentRuntimeOptions['eventLog'];
-  /** 0.27：每 body 的 durable checkpoint 存储；透传给每个 AgentRuntime */
-  runStore?: AgentRuntimeOptions['runStore'];
+  eventLog?: ExecutionUnitOptions['eventLog'];
+  /** 0.27：每 body 的 durable checkpoint 存储；透传给每个 ExecutionUnit */
+  runStore?: ExecutionUnitOptions['runStore'];
   /** 覆盖 runtime 构造（测试捕获 options） */
-  runtimeFactory?: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
+  runtimeFactory?: (options: ExecutionUnitOptions) => Promise<MemberRunnableAgent>;
 }
 
 interface MemberRuntimeEntry {
   runtime: MemberRunnableAgent;
-  /** 成员 id（entries 按 Body session 建键，notice 按成员 id 寻址） */
+  /** 成员 id（entries 按 ExecutionUnit session 建键，notice 按成员 id 寻址） */
   memberId: string;
   /** per-body 上下文包装：`applyContextPolicy` 靠它在活体上翻转开关 */
   context: RoleAwareContext;
@@ -395,7 +395,7 @@ interface MemberRuntimeEntry {
   /** 是否已通过 onPermissionState 报过 waiting（避免重复回调） */
   waiting: boolean;
   /**
-   * 0.32：该 Body 的 inbox hook 开关（spawn 时 attach 了收件箱才有）。
+   * 0.32：该 ExecutionUnit 的 inbox hook 开关（spawn 时 attach 了收件箱才有）。
    * hook 在 spawn 时注册、之后才建 entry，故开关由这个可变对象承载。
    */
   inboxState?: { enabled: boolean };
@@ -681,10 +681,10 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly tenantId?: string;
   private readonly nodeId?: string;
   private readonly includeReasoning?: boolean;
-  private readonly session?: AgentRuntimeOptions['session'];
-  private readonly eventLog?: AgentRuntimeOptions['eventLog'];
-  private readonly runStore?: AgentRuntimeOptions['runStore'];
-  private readonly runtimeFactory: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
+  private readonly session?: ExecutionUnitOptions['session'];
+  private readonly eventLog?: ExecutionUnitOptions['eventLog'];
+  private readonly runStore?: ExecutionUnitOptions['runStore'];
+  private readonly runtimeFactory: (options: ExecutionUnitOptions) => Promise<MemberRunnableAgent>;
   private readonly entries = new Map<string, MemberRuntimeEntry>();
   /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界文本队列） */
   private readonly pendingNotices = new Map<string, string[]>();
@@ -717,7 +717,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.eventLog = options.eventLog;
     this.runStore = options.runStore;
     this.runtimeFactory =
-      options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
+      options.runtimeFactory ?? ((runtimeOptions) => ExecutionUnit.create(runtimeOptions));
     if (this.permissionMode === 'bridge' && this.parentEvents === undefined) {
       this.logger.warn('agent.member.permission_bridge_unavailable', {
         fallback: 'ask_denied',
@@ -738,8 +738,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     const tools = this.selectTools(mode).map((tool) =>
       this.restrictPermissions(tool, member.id, mode),
     );
-    // 0.32：只有 spawn 时已 attach 收件箱的 Body 才注册 notice hook 与 inbox 工具；
-    // 开关放在可变对象里，`disableInbox` 之后（rotate / retire 的旧 Body）hook 直接返回。
+    // 0.32：只有 spawn 时已 attach 收件箱的 ExecutionUnit 才注册 notice hook 与 inbox 工具；
+    // 开关放在可变对象里，`disableInbox` 之后（rotate / retire 的旧 ExecutionUnit）hook 直接返回。
     const inbox = this.inbox;
     const inboxState = inbox !== undefined ? { enabled: true } : undefined;
     const inboxTool =
@@ -808,7 +808,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       termination: this.termination,
       // 与 owner 同源的权限规则：工具 checkPermission 返回 ask 时，core 仍按
       // autoApprove / neverAutoApprove 判定，否则 auto_approve 的 bash/edit 会在
-      // 成员 Body 上重新弹卡片（热应用后新建的 Body 同样走这里）。
+      // 成员 ExecutionUnit 上重新弹卡片（热应用后新建的 ExecutionUnit 同样走这里）。
       permission: this.permission ?? { default: 'allow' },
       selfCard,
       agentId: member.id,
@@ -1037,26 +1037,26 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   /**
-   * 0.32：挂上 / 摘掉收件箱。只影响之后 spawn 的 Body；已存在的 Body 按 CONTRACT
-   * 保留 spawn 时的决定（`disableInbox` 负责逐 Body 关闭）。
+   * 0.32：挂上 / 摘掉收件箱。只影响之后 spawn 的 ExecutionUnit；已存在的 ExecutionUnit 按 CONTRACT
+   * 保留 spawn 时的决定（`disableInbox` 负责逐 ExecutionUnit 关闭）。
    */
   attachInbox(inbox: AgentInboxPort | undefined): void {
     this.inbox = inbox;
   }
 
-  /** 0.32：旧 Body 的 inbox hook 不再取消息（rotate / retire）。 */
+  /** 0.32：旧 ExecutionUnit 的 inbox hook 不再取消息（rotate / retire）。 */
   disableInbox(sessionId: string): void {
     const entry = this.entries.get(sessionId);
     if (entry?.inboxState !== undefined) entry.inboxState.enabled = false;
   }
 
-  /** 0.32：rotate 回滚时恢复旧 Body 的 inbox hook。 */
+  /** 0.32：rotate 回滚时恢复旧 ExecutionUnit 的 inbox hook。 */
   enableInbox(sessionId: string): void {
     const entry = this.entries.get(sessionId);
     if (entry?.inboxState !== undefined) entry.inboxState.enabled = true;
   }
 
-  /** 0.32：清掉该成员尚未注入的 notice（retire 时避免串到新 Body）。 */
+  /** 0.32：清掉该成员尚未注入的 notice（retire 时避免串到新 ExecutionUnit）。 */
   clearPendingNotices(memberId: string): void {
     this.pendingNotices.delete(memberId);
   }
@@ -1096,16 +1096,16 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   /**
-   * CONTRACT-hot-apply §4：把权限规则热应用到所有存活成员 Body。
+   * CONTRACT-hot-apply §4：把权限规则热应用到所有存活成员 ExecutionUnit。
    *
    * 规则整体替换（与 owner 侧同一语义）。这里只覆盖 core `PermissionPolicy` 的
    * 判定面；成员工具的 checkPermission 包装（`restrictPermissions`）把 ask 折回
    * bridge / deny，属于装配期决定，热应用不改它。
-   * `members` 有记录但尚未 spawn 出 Body 时没有可应用的 runtime，跳过并计入未应用。
+   * `members` 有记录但尚未 spawn 出 ExecutionUnit 时没有可应用的 runtime，跳过并计入未应用。
    */
   applyPermissionRules(rules: RuntimePermissionConfig): number {
     // 热应用来自 owner 同源配置；补回成员自有的 `agent` 免确认后同时供存活的
-    // Body 与之后新建的 Body（spawn）使用。
+    // ExecutionUnit 与之后新建的 ExecutionUnit（spawn）使用。
     const memberRules = withMemberAutoApprove(rules);
     this.permission = memberRules;
     let applied = 0;
@@ -1118,7 +1118,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
         runtime.applyPermissionRules(memberRules);
         applied += 1;
       } catch (error) {
-        // 单个 Body 失败不影响其它 Body；装配层按数量判定是否全部生效。
+        // 单个 ExecutionUnit 失败不影响其它 ExecutionUnit；装配层按数量判定是否全部生效。
         this.logger.warn('agent.member.permission_apply_failed', {
           session_id: sessionId,
           error: error instanceof Error ? error.message : String(error),
@@ -1214,7 +1214,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * 两件事一起换，body 不重建、历史不动 —— 「转正那天同一具活着的 body
    * 不必重建，但下一次 run 的上下文策略按新身份生效」：
    * - 自动压缩开关（`RoleAwareContext`）；
-   * - 80%–90% 压力提示的尾句文案（core `AgentRuntime.applyContextPolicy`）。
+   * - 80%–90% 压力提示的尾句文案（core `ExecutionUnit.applyContextPolicy`）。
    *
    * 返回实际应用的 body 数。未 spawn（没有活体）时返回 0：那种情况下策略由
    * 下一次 `spawn` 的 `contextPolicyFor(role)` 生效，两条路径共用同一份映射。
@@ -1232,7 +1232,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
         }
         if (touched) applied += 1;
       } catch (error) {
-        // 单个 Body 失败不影响其它 Body；装配层按数量判定。
+        // 单个 ExecutionUnit 失败不影响其它 ExecutionUnit；装配层按数量判定。
         this.logger.warn('agent.member.context_policy_apply_failed', {
           session_id: sessionId,
           error: error instanceof Error ? error.message : String(error),

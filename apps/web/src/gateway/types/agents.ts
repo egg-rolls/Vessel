@@ -33,7 +33,7 @@ export interface AgentsTreeResponse {
  * `body_id ≡ session_id`；`primary` 存在时为该 agent 的缺省投递目标。
  * 字段全部可选：旧 gateway 不返回 `bodies`，读侧降级为「只有 `session_id` 一个 body」。
  */
-export interface BodyStatus {
+export interface ExecutionUnitStatus {
   body_id?: string;
   session_id?: string;
   state?: string;
@@ -77,7 +77,7 @@ export interface AgentSummary {
   /** 0.27 additive：owner 存在 = contractor，缺失 = peer。 */
   owner?: string;
   /** 0.27 additive：live body 列表；`session_id` 仍是 primary body。 */
-  bodies?: BodyStatus[];
+  bodies?: ExecutionUnitStatus[];
 }
 
 export interface AgentCreateInput {

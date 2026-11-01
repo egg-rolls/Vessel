@@ -488,7 +488,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
 
       if (!value.trim()) return;
 
-      // 运行中禁止并发 run（AgentRuntime.run 会重置 stats 并共享 context）。
+      // 运行中禁止并发 run（ExecutionUnit.run 会重置 stats 并共享 context）。
       // 除 /exit 外一律入队，run 结束后按顺序自动执行。
       const isExitCommand = value.trim() === '/exit';
       if (ui.run.phase !== 'idle' && !isExitCommand) {

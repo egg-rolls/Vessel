@@ -29,8 +29,8 @@ export interface TeamSummaryLike {
   spawn_frozen?: boolean;
 }
 
-/** 已退役 Body（0.19 S6 additive）。 */
-export interface AgentBodyHistoryEntryLike {
+/** 已退役 Binding（0.19 S6 additive）。 */
+export interface BindingHistoryEntryLike {
   session_id: string;
   epoch: number;
   started_at: number;
@@ -52,8 +52,8 @@ export interface TeamMemberLike {
   epoch: number;
   /** 0.21 additive：epoch ms */
   last_seen?: number;
-  /** 已退役 Body 历史（可选；旧数据缺失不报错） */
-  body_history?: AgentBodyHistoryEntryLike[];
+  /** 已退役 Binding 历史（可选；旧数据缺失不报错） */
+  body_history?: BindingHistoryEntryLike[];
 }
 
 /** 只追加团队日志的一条记录。 */

@@ -19,7 +19,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## Agent 身份与 Body
 
-- **Agent 是持久身份，Body 是活执行单元**：`body_id ≡ session_id`，一个 agent 恰好一具 live body（唯一例外见「约束」的 rotate 窗口）；每个 body 有独立 `AgentRuntime`、独立 context、独立 session 历史、独立事件流、独立 runStore 与独立 body lease。
+- **Agent 是持久身份，Body 是活执行单元**：`body_id ≡ session_id`，一个 agent 恰好一具 live body（唯一例外见「约束」的 rotate 窗口）；每个 body 有独立 `ExecutionUnit`、独立 context、独立 session 历史、独立事件流、独立 runStore 与独立 body lease。
 - `PersistedAgentRecord` 持久化 `membership` / `model` / `system_prompt` / `bodies[]` / `primary_body_id` / `forked_from`；`presence` / `rotation` 不落盘。`bodies[]` 是唯一真相，`primary_body_id` 是缺省投递目标；`current_body` / `body_history` 降级为旧数据的兼容视图（只读、不回写）。快照写 `version: 4`，读取兼容 v1 / v2 / v3；v3 → v4 把 `current_body` 迁成唯一 live body + primary、旧 `body_history` 迁入 `bodies[]`，首次写 v4 前备份 `.v3.bak`，失败则放弃本次写。
 - `role` 只有 `member`（owner=self、Team 必需）与 `temporary`（owner=雇佣者，缺省 `human`、Team 可选）。`main` 是普通 `member`，用 `kind:'peer'` + `workspace` 创建，必须有 Team。
 
@@ -77,7 +77,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## Team 与 body 会话：一条消息一个 run
 
-- Team `@` 路径：`TeamService.post` 先写 Team 日志（`kind: 'mention'`），再按结构化 `mentions` 逐条 `admit({ channel: 'team', origin_team_id, conversation_id })`。消息进入目标 body 的 mailbox，由该 body 的 `AgentRuntime` 执行；assistant 文本随 `saveSession` 写入该 body session。不存在“Team 会话”与“私聊会话”两套存储，同一 body 上的所有投递共用一份历史。
+- Team `@` 路径：`TeamService.post` 先写 Team 日志（`kind: 'mention'`），再按结构化 `mentions` 逐条 `admit({ channel: 'team', origin_team_id, conversation_id })`。消息进入目标 body 的 mailbox，由该 body 的 `ExecutionUnit` 执行；assistant 文本随 `saveSession` 写入该 body session。不存在“Team 会话”与“私聊会话”两套存储，同一 body 上的所有投递共用一份历史。
 - `run.*` 是唯一执行生命周期（payload 带 `agent_id` + `session_id`）。成功轮 team 可见成员由 `TeamService` 从 `run.completed.output` 写一条 `kind: 'reply'` 的 Team 日志；失败 / 取消轮从 `run.failed` / `run.cancelled` 写 `kind: 'system'` 条目 `turn failed: <reason>` / `turn cancelled: <reason>`，不写 reply。private 成员与被 fence 的旧 body 不写 Team 日志。同一段文本分别落在 session（上下文消息）与 Team 日志（事件记录），不是双写同一存储。
 - `conversation_id` 只是预算 / 分组键，不是 session 身份：一次 Team `@` 的所有 mention 共用同一个 `conversation_id`；未显式携带的直聊会新生成一个。不同 conversation 的消息仍累积在同一 body session 的历史里。
 

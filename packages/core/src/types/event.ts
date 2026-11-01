@@ -183,7 +183,7 @@ export interface SessionIndexPatch {
 }
 
 /**
- * AgentRuntime 依赖的事件日志端口（0.18）。
+ * ExecutionUnit 依赖的事件日志端口（0.18）。
  *
  * 只暴露 runtime 需要的部分；完整实现见 `@vessel-agent/core/session`
  * 的 `SessionEventLog`（read / iterate / 索引 / 删除）。

@@ -41,7 +41,7 @@ export function permissionConfigFor(
   return resolveRuntimePermission(config, headless);
 }
 
-/** 只保留 `applyPermissionRules` 的最小 runtime 形状（不做 `as AgentRuntime` 断言）。 */
+/** 只保留 `applyPermissionRules` 的最小 runtime 形状（不做 `as ExecutionUnit` 断言）。 */
 export interface PermissionApplyTarget {
   id: string;
   applyPermissionRules?: (rules: RuntimePermissionConfig) => void;
@@ -58,20 +58,20 @@ function hasApplyPermissionRules(value: unknown): value is PermissionApplyTarget
 }
 
 /**
- * 从一个 runtime 候选（`AgentRuntime` / 包装过的 `RunnableAgent`）里找到真正能
+ * 从一个 runtime 候选（`ExecutionUnit` / 包装过的 `RunnableAgent`）里找到真正能
  * 应用权限规则的对象。
  *
  * 包装过的 runtime 把真正的 runtime 藏在 `handle` / `inner` 等字段后面；
  * 这里按结构逐层下探，找不到就返回 undefined（不抛错，调用方跳过）。
  */
-export function resolveAgentRuntime(value: unknown, depth = 0): PermissionApplyTarget | undefined {
+export function resolveExecutionUnit(value: unknown, depth = 0): PermissionApplyTarget | undefined {
   if (value === null || typeof value !== 'object' || depth > 3) return undefined;
   if (hasApplyPermissionRules(value)) return value;
 
   const record = value as Record<string, unknown>;
   // 包装层：withSessionWriteLock 的 inner / 其它持有者字段等。
-  for (const key of ['handle', 'inner', 'runtime', 'agentRuntime']) {
-    const resolved = resolveAgentRuntime(record[key], depth + 1);
+  for (const key of ['handle', 'inner', 'runtime', 'executionUnit']) {
+    const resolved = resolveExecutionUnit(record[key], depth + 1);
     if (resolved !== undefined) return resolved;
   }
   return undefined;
@@ -85,7 +85,7 @@ export function collectPermissionTargets(input: {
 }): PermissionApplyTarget[] {
   const byId = new Map<string, PermissionApplyTarget>();
   const add = (candidate: unknown): void => {
-    const resolved = resolveAgentRuntime(candidate);
+    const resolved = resolveExecutionUnit(candidate);
     if (resolved === undefined) return;
     if (!byId.has(resolved.id)) byId.set(resolved.id, resolved);
   };

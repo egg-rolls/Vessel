@@ -40,7 +40,7 @@ plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost �
 - 分层：`Contracts ← Kernel ← Modules ← SDK ← Shells`；`Plugins` 只依赖 Contracts / 公开 API，经 `PluginHost` 在运行期 install。
 - **Module ≠ Plugin**：Module 是编译期 / 构造期边界（provider / context / session / policy / transport / observability，一个 port 一个实现）；Plugin 仍是唯一运行期扩展机制；禁止 `ModuleHost` / `ModuleRegistry`。
 - core 内只做 ports & adapters 与 `@vessel-agent/core/<port>` subpath exports，不拆包；`types/**` 不 import 实现，模块只经 port 交互。
-- `AgentRuntime` 仍是单 agent tool-calling loop；Host / Scheduler 只提供注册、生命周期、调度与边界，不重写循环。
+- `ExecutionUnit` 仍是单 agent tool-calling loop；Host / Scheduler 只提供注册、生命周期、调度与边界，不重写循环。
 
 <a id="philosophy"></a>
 

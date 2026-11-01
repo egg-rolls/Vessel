@@ -3,7 +3,7 @@
  *
  * - 成员经注入的 `AgentService` 创建（id 按 chat 派生；重复 id 视为 snapshot
  *   重载后的已存在成员，按 createOrRestoreOwner 的口径容忍）；
- * - 执行走 `service.admit`，**只给 `agent_id`**：一个 agent 恰好一具 Body
+ * - 执行走 `service.admit`，**只给 `agent_id`**：一个 agent 恰好一具 ExecutionUnit
  *   （CONTRACT §1），per-chat 的隔离由「每个 chat 一个 agent」保证，不再需要旧的
  *   `session_id = <prefix>:<chat_id>` 合成 session。渠道自身的 per-chat 串行由
  *   channel.ts 的 PerChatQueues 保证，全局并发 / 同 body 串行由 tenant scheduler 裁决；
@@ -181,7 +181,7 @@ export class ChatMemberRunner {
     try {
       if (signal.aborted) throw abortError(signal);
 
-      // 只给 `agent_id`：`admit` 会解析到该 agent 的唯一 live Body。带 `from` 缺省
+      // 只给 `agent_id`：`admit` 会解析到该 agent 的唯一 live ExecutionUnit。带 `from` 缺省
       // 是 `human`（消息发送者是人类，不是成员归属的默认 owner）。
       const admitted = await this.admitWithRevival(agentId, text);
 

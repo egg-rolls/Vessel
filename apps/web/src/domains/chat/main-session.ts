@@ -7,7 +7,7 @@
  *   供会话列表加 primary 标记；`bodies` 缺省时**不产出任何条目**（完全退化为现状）。
  */
 import type { NodeRoster } from '../../gateway/team-roster';
-import type { AgentSummary, BodyStatus } from '../../gateway/types';
+import type { AgentSummary, ExecutionUnitStatus } from '../../gateway/types';
 
 /** `main` 的 agent id（team 成员，Web 默认投递目标）。 */
 export const MAIN_AGENT_ID = 'main';
@@ -22,7 +22,7 @@ export interface MainSession {
 }
 
 /** `body_id ≡ session_id`；旧 gateway 可能只带其中一个。 */
-function bodySessionId(body: BodyStatus): string | undefined {
+function bodySessionId(body: ExecutionUnitStatus): string | undefined {
   const id = body.session_id ?? body.body_id;
   const trimmed = typeof id === 'string' ? id.trim() : '';
   return trimmed || undefined;
@@ -63,7 +63,10 @@ export function findMainSession(agents: readonly AgentSummary[]): MainSession | 
  */
 export function primaryBodySessions(rosters: readonly NodeRoster[]): ReadonlySet<string> {
   const primaryIds = new Set<string>();
-  const add = (sessionId: string | undefined, bodies: readonly BodyStatus[] | undefined) => {
+  const add = (
+    sessionId: string | undefined,
+    bodies: readonly ExecutionUnitStatus[] | undefined,
+  ) => {
     const trimmed = sessionId?.trim() ?? '';
     const primaryBody = (bodies ?? []).find((body) => body.primary === true);
     const primaryId =

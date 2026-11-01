@@ -1,12 +1,12 @@
 /**
- * AgentService：Agent 身份、多 Body 生命周期、统一准入与回复投递。
+ * AgentService：Agent 身份、多 ExecutionUnit 生命周期、统一准入与回复投递。
  *
  * 0.27 不变量：
- * - 一个 Agent 可有多个 live Body（`body_id ≡ session_id`），每 Body 独立 runtime /
- *   历史 / checkpoint / 队列；同 Body 串行、不同 Body 并发由 Scheduler 保证；
+ * - 一个 Agent 可有多个 live ExecutionUnit（`body_id ≡ session_id`），每 ExecutionUnit 独立 runtime /
+ *   历史 / checkpoint / 队列；同 ExecutionUnit 串行、不同 ExecutionUnit 并发由 Scheduler 保证；
  * - 所有入口（send / dispatch / Team @ / runs.start）只调用 `admit`；
  * - `run.*` 是唯一执行生命周期，本服务不 emit `agent.turn.*` / `agent.reply.posted`；
- * - 队列按 Body，不按 Agent；预算 block 的消息留在 Body mailbox。
+ * - 队列按 ExecutionUnit，不按 Agent；预算 block 的消息留在 ExecutionUnit mailbox。
  *
  * @module @vessel-agent/agent
  */
@@ -32,11 +32,11 @@ import {
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import { AgentInboxStore } from './inbox.js';
 import {
-  type AgentBodyRecord,
-  liveBodies,
+  type BindingRecord,
+  liveBindings,
   type MemberRecord,
   MemberRegistry,
-  primaryBody,
+  primaryBinding,
   toMemberStatus,
   toPersistedRecord,
   toRuntimeMember,
@@ -66,8 +66,7 @@ import {
   type AgentUpdateResult,
   type BatchItemResult,
   type BatchResult,
-  type BodyLeasePort,
-  type BodyStatus,
+  type BindingLeasePort,
   type BudgetBlockReason,
   type BudgetCheckResult,
   type BudgetOverrideInput,
@@ -82,8 +81,9 @@ import {
   DEFAULT_OWNER,
   type DispatchInput,
   type DispatchResult,
+  type ExecutionUnitStatus,
   type ListFilter,
-  MAX_BODY_HISTORY,
+  MAX_BINDING_HISTORY,
   MAX_MESSAGE_BYTES,
   type MemberPermissionState,
   type MemberRuntimeMember,
@@ -192,15 +192,15 @@ const DEFAULT_TEMPORARY_TTL_HOURS = 2;
 const SWEEP_INTERVAL_MIN_MS = 60_000;
 const SWEEP_INTERVAL_MAX_MS = 900_000;
 
-/** Body 执行态（对外 BodyStatus.state） */
-type BodyExecState = 'idle' | 'running' | 'waiting_permission' | 'closed';
+/** ExecutionUnit 执行态（对外 ExecutionUnitStatus.state） */
+type ExecutionUnitState = 'idle' | 'running' | 'waiting_permission' | 'closed';
 
-/** 单个 Body 的运行态（不落 snapshot） */
-interface BodyEntry {
+/** 单个 ExecutionUnit 的运行态（不落 snapshot） */
+interface ExecutionUnitEntry {
   agentId: string;
-  bodyId: string;
+  bindingId: string;
   epoch: number;
-  state: BodyExecState;
+  state: ExecutionUnitState;
   primary: boolean;
   createdAt: number;
   lastActiveAt: number;
@@ -227,7 +227,7 @@ type AgentEventExtra = Omit<Partial<AgentEvent>, 'type' | 'agent_id' | 'session_
 /** 预算拒绝结果的窄类型 */
 type BudgetBlockedCheck = Extract<BudgetCheckResult, { ok: false }>;
 
-/** rotate 窗口内的旧 / 新 Body 身份（agentId → state） */
+/** rotate 窗口内的旧 / 新 ExecutionUnit 身份（agentId → state） */
 interface RotationState {
   fromSessionId: string;
   fromEpoch: number;
@@ -298,10 +298,10 @@ function resolveVisibility(value: unknown, fallback: MemberVisibility): MemberVi
   return value as MemberVisibility;
 }
 
-/** 内部 Body → 对外状态 */
-function toBodyStatus(entry: BodyEntry): BodyStatus {
+/** 内部 ExecutionUnit → 对外状态 */
+function toExecutionUnitStatus(entry: ExecutionUnitEntry): ExecutionUnitStatus {
   return {
-    session_id: entry.bodyId,
+    session_id: entry.bindingId,
     epoch: entry.epoch,
     state: entry.state,
     primary: entry.primary,
@@ -313,16 +313,16 @@ function toBodyStatus(entry: BodyEntry): BodyStatus {
 /**
  * 从快照恢复记录：engine 状态是进程内易失，重启后非 left 一律 idle + gone。
  *
- * 0.28：文件格式仍是 v4 `bodies[]`，但语义收窄为「一具 live Body」。存量多 body
- * 快照按 PLAN §5.3 迁移：primary 留作 `body`，其余 live body 以
+ * 0.28：文件格式仍是 v4 `bodies[]`，但语义收窄为「一具 live ExecutionUnit」。存量多 body
+ * 快照按 PLAN §5.3 迁移：primary 留作 `binding`，其余 live body 以
  * `retired_at = last_active_at` 进 `body_history`。**绝不在 parse 阶段 reject** ——
  * 那会把整条成员丢掉，其全部 session 不可见。
  */
 function recordFromStatus(status: PersistedAgentRecord, now: number): MemberRecord {
   const state: MemberState =
     status.membership === 'left' || status.state === 'closed' ? 'closed' : 'idle';
-  const bodies: AgentBodyRecord[] = (status.bodies ?? []).map((body) => ({
-    bodyId: body.body_id,
+  const bodies: BindingRecord[] = (status.bodies ?? []).map((body) => ({
+    bindingId: body.body_id,
     epoch: body.epoch,
     createdAt: body.created_at,
     lastActiveAt: body.last_active_at,
@@ -336,7 +336,7 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
       started_at: status.last_seen ?? now,
     };
     bodies.push({
-      bodyId: live.session_id,
+      bindingId: live.session_id,
       epoch: live.epoch,
       createdAt: live.started_at,
       lastActiveAt: status.last_seen ?? live.started_at,
@@ -349,37 +349,37 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
   // primary 选取阶梯：显式指针 → primary 标记 → 最近活跃 → 第一具 live；
   // 全 body 都已退役时退回「任意一具」（保底可寻址，见 PLAN §5.3 末条）。
   const chosen =
-    live.find((body) => body.bodyId === declaredPrimaryId) ??
+    live.find((body) => body.bindingId === declaredPrimaryId) ??
     live.find((body) => body.primary) ??
     [...live].sort((left, right) => right.lastActiveAt - left.lastActiveAt)[0] ??
-    bodies.find((body) => body.bodyId === declaredPrimaryId) ??
+    bodies.find((body) => body.bindingId === declaredPrimaryId) ??
     bodies[0];
-  const bodyHistory = [...(status.body_history ?? [])];
-  const seenHistory = new Set(bodyHistory.map((entry) => entry.session_id));
-  const retired: AgentBodyRecord[] = [];
+  const bindingHistory = [...(status.body_history ?? [])];
+  const seenHistory = new Set(bindingHistory.map((entry) => entry.session_id));
+  const retired: BindingRecord[] = [];
   for (const body of bodies) {
     if (body === chosen || body.retiredAt !== undefined) continue;
-    // 降级为历史的 live body：必须有 history 条目，否则 `ensureBody` 认不出它已退役，
-    // 会被惰性 createBody 复活成第二具 live Body。
-    if (!seenHistory.has(body.bodyId)) {
-      bodyHistory.push({
-        session_id: body.bodyId,
+    // 降级为历史的 live body：必须有 history 条目，否则 `ensureExecutionUnit` 认不出它已退役，
+    // 会被惰性 createBinding 复活成第二具 live ExecutionUnit。
+    if (!seenHistory.has(body.bindingId)) {
+      bindingHistory.push({
+        session_id: body.bindingId,
         epoch: body.epoch,
         started_at: body.createdAt,
         retired_at: body.lastActiveAt,
       });
-      seenHistory.add(body.bodyId);
+      seenHistory.add(body.bindingId);
     }
     retired.push(body);
   }
   if (retired.length > 0) {
-    bodyHistory.sort((left, right) => left.retired_at - right.retired_at);
+    bindingHistory.sort((left, right) => left.retired_at - right.retired_at);
   }
   const primary = chosen === undefined ? undefined : { ...chosen, primary: true };
   return {
     id: status.id,
     sessionId: status.session_id,
-    ...(primary !== undefined ? { body: primary } : {}),
+    ...(primary !== undefined ? { binding: primary } : {}),
     ...(status.name !== undefined ? { name: status.name } : {}),
     ...(status.parent_id !== undefined ? { parentId: status.parent_id } : {}),
     role: status.role,
@@ -390,7 +390,7 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     membership: status.membership,
     ...(status.team_id !== undefined ? { teamId: status.team_id } : {}),
     rotation: 'stable',
-    bodyHistory: bodyHistory.slice(-MAX_BODY_HISTORY),
+    bindingHistory: bindingHistory.slice(-MAX_BINDING_HISTORY),
     ...(status.model !== undefined ? { model: status.model } : {}),
     ...(status.system_prompt !== undefined ? { systemPrompt: status.system_prompt } : {}),
     ...(status.forked_from !== undefined ? { forkedFrom: status.forked_from } : {}),
@@ -401,7 +401,7 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
 }
 
 /** Scheduler 返回的 RunHandle 适配器：把 runtime 轮次包装成 run 生命周期 */
-class BodyRunHandle implements RunHandle {
+class ExecutionUnitRunHandle implements RunHandle {
   readonly result: Promise<string>;
   private state: RunStatus = 'running';
   private usageValue: Usage | undefined;
@@ -474,16 +474,16 @@ export class AgentServiceImpl implements AgentService {
   private readonly snapshot: AgentSnapshotStore | undefined;
   /** 临时 agent 空闲回收 TTL（毫秒）；0 = 关闭 */
   private readonly temporaryTtlMs: number;
-  private readonly bodyLease: BodyLeasePort | undefined;
+  private readonly bindingLease: BindingLeasePort | undefined;
   private readonly runStore: RunStore | undefined;
   /** 0.32：持久化收件箱；有 `dataDir` 时唯一实例，否则 undefined（行为不变） */
   private readonly inbox: AgentInboxStore | undefined;
-  /** AgentService 的 body registry：agentId → bodyId → BodyEntry（含已退役直到清理） */
-  private readonly bodyRegistry = new Map<string, Map<string, BodyEntry>>();
+  /** AgentService 的 body registry：agentId → bindingId → ExecutionUnitEntry（含已退役直到清理） */
+  private readonly executionUnitRegistry = new Map<string, Map<string, ExecutionUnitEntry>>();
   /** run_id → 准入消息 id（send / dispatch 复用） */
   private readonly runMessageIds = new Map<string, string>();
-  /** body 级串行操作（0.32-D 打断重排）；按 bodyId 排队，避免两次打断交错。 */
-  private readonly bodyOps = new Map<string, Promise<unknown>>();
+  /** body 级串行操作（0.32-D 打断重排）；按 bindingId 排队，避免两次打断交错。 */
+  private readonly executionUnitOps = new Map<string, Promise<unknown>>();
   /**
    * 0.32-D：run_id → 取消原因。scheduler 在 real handle attach 之前被取消时，
    * `attach()` 会用固定 'run cancelled' 调 cancel，丢掉原始 reason；打断按 id 修正。
@@ -493,7 +493,7 @@ export class AgentServiceImpl implements AgentService {
   private draining = false;
   /** 同一源成员的 single-flight fork；并发只 spawn 一个新 Agent */
   private readonly forking = new Map<string, Promise<ForkOutcome>>();
-  /** 进行中的 rotate（agentId → 旧 / 新 Body）；只在内存 */
+  /** 进行中的 rotate（agentId → 旧 / 新 ExecutionUnit）；只在内存 */
   private readonly rotations = new Map<string, RotationState>();
   private readonly listeners = new Set<AgentEventListener>();
   private readonly tenantId: string;
@@ -543,7 +543,7 @@ export class AgentServiceImpl implements AgentService {
         ? options.temporaryTtlHours
         : DEFAULT_TEMPORARY_TTL_HOURS;
     this.temporaryTtlMs = ttlHours * 60 * 60 * 1000;
-    this.bodyLease = options.bodyLease;
+    this.bindingLease = options.bindingLease;
     this.runStore = options.runStore;
 
     const dataDir = options.dataDir;
@@ -576,7 +576,7 @@ export class AgentServiceImpl implements AgentService {
 
   /**
    * 重启恢复：非 left 成员一律 idle + gone（engine 状态是进程内易失）。
-   * Body 只恢复记录，运行时在首次 admit 时惰性重建。
+   * ExecutionUnit 只恢复记录，运行时在首次 admit 时惰性重建。
    */
   private async loadSnapshot(): Promise<void> {
     if (!this.snapshot) return;
@@ -833,7 +833,7 @@ export class AgentServiceImpl implements AgentService {
     const record: MemberRecord = {
       id,
       sessionId: id,
-      body: { bodyId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true },
+      binding: { bindingId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true },
       role,
       owner,
       visibility,
@@ -841,7 +841,7 @@ export class AgentServiceImpl implements AgentService {
       presence: 'gone',
       membership: 'present',
       rotation: 'stable',
-      bodyHistory: [],
+      bindingHistory: [],
     };
     record.name = resolvedName;
     if (teamId !== undefined) record.teamId = teamId;
@@ -929,13 +929,13 @@ export class AgentServiceImpl implements AgentService {
 
   /**
    * 创建路径共用的 spawn / 回滚骨架（createOne / createSingle / fork）。
-   * registry.add → 首个 Body lease + runtime.spawn；失败移除记录 / Body 后重抛。
+   * registry.add → 首个 ExecutionUnit lease + runtime.spawn；失败移除记录 / ExecutionUnit 后重抛。
    */
   private async spawnRecord(record: MemberRecord): Promise<void> {
-    const body = primaryBody(record);
+    const body = primaryBinding(record);
     if (body === undefined) throw new Error('missing initial body');
     this.registry.add(record);
-    let entry: BodyEntry | undefined;
+    let entry: ExecutionUnitEntry | undefined;
     try {
       entry = await this.entryFor(record, body, true);
       await this.runtime.spawn(entry.runtimeMember);
@@ -943,7 +943,7 @@ export class AgentServiceImpl implements AgentService {
     } catch (error) {
       if (entry !== undefined) await this.disposeEntry(entry);
       this.registry.remove(record.id);
-      this.bodyRegistry.delete(record.id);
+      this.executionUnitRegistry.delete(record.id);
       throw error;
     }
     this.registry.setState(record.id, 'idle');
@@ -974,7 +974,7 @@ export class AgentServiceImpl implements AgentService {
       source === undefined ||
       source.membership === 'left' ||
       source.state === 'closed' ||
-      this.hasClosingBody(sourceId)
+      this.hasClosingExecutionUnit(sourceId)
     ) {
       return { ok: false, code: 'agent_left', reason: `agent_left: ${sourceId}` };
     }
@@ -1021,7 +1021,7 @@ export class AgentServiceImpl implements AgentService {
     const record: MemberRecord = {
       id,
       sessionId: id,
-      body: { bodyId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true },
+      binding: { bindingId: id, epoch: 0, createdAt: now, lastActiveAt: now, primary: true },
       name,
       role: source.role,
       // member 的 owner 恒为 self；temporary 沿用雇佣者。
@@ -1032,7 +1032,7 @@ export class AgentServiceImpl implements AgentService {
       membership: 'present',
       teamId,
       rotation: 'stable',
-      bodyHistory: [],
+      bindingHistory: [],
       forkedFrom: source.id,
     };
     if (source.systemPrompt !== undefined) record.systemPrompt = source.systemPrompt;
@@ -1052,7 +1052,7 @@ export class AgentServiceImpl implements AgentService {
       currentSource === undefined ||
       currentSource.membership === 'left' ||
       currentSource.state === 'closed' ||
-      this.hasClosingBody(source.id)
+      this.hasClosingExecutionUnit(source.id)
     ) {
       await this.disposeAgentBodies(record);
       this.registry.remove(record.id);
@@ -1081,58 +1081,58 @@ export class AgentServiceImpl implements AgentService {
     return undefined;
   }
 
-  // ─── Body registry ──────────────────────────────────────────────
+  // ─── ExecutionUnit registry ──────────────────────────────────────────────
 
-  private entryMap(agentId: string): Map<string, BodyEntry> {
-    let map = this.bodyRegistry.get(agentId);
+  private entryMap(agentId: string): Map<string, ExecutionUnitEntry> {
+    let map = this.executionUnitRegistry.get(agentId);
     if (!map) {
       map = new Map();
-      this.bodyRegistry.set(agentId, map);
+      this.executionUnitRegistry.set(agentId, map);
     }
     return map;
   }
 
-  private liveEntries(agentId: string): BodyEntry[] {
-    const map = this.bodyRegistry.get(agentId);
+  private liveEntries(agentId: string): ExecutionUnitEntry[] {
+    const map = this.executionUnitRegistry.get(agentId);
     if (!map) return [];
     return [...map.values()].filter((entry) => !entry.retired && !entry.closing);
   }
 
-  private findEntry(agentId: string, bodyId: string): BodyEntry | undefined {
-    return this.bodyRegistry.get(agentId)?.get(bodyId);
+  private findEntry(agentId: string, bindingId: string): ExecutionUnitEntry | undefined {
+    return this.executionUnitRegistry.get(agentId)?.get(bindingId);
   }
 
-  private hasClosingBody(agentId: string): boolean {
+  private hasClosingExecutionUnit(agentId: string): boolean {
     return this.liveEntries(agentId).some((entry) => entry.closing);
   }
 
-  /** 从记录构造 BodyEntry；`withLease` 时获取跨进程租约 */
+  /** 从记录构造 ExecutionUnitEntry；`withLease` 时获取跨进程租约 */
   private async entryFor(
     record: MemberRecord,
-    body: AgentBodyRecord,
+    body: BindingRecord,
     withLease = true,
-  ): Promise<BodyEntry> {
-    const existing = this.findEntry(record.id, body.bodyId);
+  ): Promise<ExecutionUnitEntry> {
+    const existing = this.findEntry(record.id, body.bindingId);
     if (existing !== undefined) return existing;
     let leaseHeld = false;
-    if (withLease && this.bodyLease !== undefined) {
+    if (withLease && this.bindingLease !== undefined) {
       try {
-        await this.bodyLease.acquire(body.bodyId);
+        await this.bindingLease.acquire(body.bindingId);
         leaseHeld = true;
       } catch (error) {
         throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
       }
     }
-    const entry: BodyEntry = {
+    const entry: ExecutionUnitEntry = {
       agentId: record.id,
-      bodyId: body.bodyId,
+      bindingId: body.bindingId,
       epoch: body.epoch,
       state: 'idle',
       primary: body.primary,
       createdAt: body.createdAt,
       lastActiveAt: body.lastActiveAt,
       retired: false,
-      runtimeMember: { ...toRuntimeMember(record), session_id: body.bodyId },
+      runtimeMember: { ...toRuntimeMember(record), session_id: body.bindingId },
       pending: [],
       queuedRuns: new Set(),
       budgetHold: new Set(),
@@ -1141,7 +1141,7 @@ export class AgentServiceImpl implements AgentService {
       spawning: undefined,
       leaseHeld,
     };
-    this.entryMap(record.id).set(body.bodyId, entry);
+    this.entryMap(record.id).set(body.bindingId, entry);
     return entry;
   }
 
@@ -1149,74 +1149,74 @@ export class AgentServiceImpl implements AgentService {
    * 新增一个 live body —— **唯一闸门**（0.28 单 body 不变量）。
    *
    * 已有 live body 时只允许 `rotation: true`（rotate 窗口内新体与待退役体短暂共存）；
-   * 其它任何路径（`ensureBody` 惰性创建 / `create` / `fork`）一律 `body_limit`。
+   * 其它任何路径（`ensureExecutionUnit` 惰性创建 / `create` / `fork`）一律 `body_limit`。
    * rotate 的 count 检查已删除：与这里重复，且 max = 1 时会让 rotate 恒失败。
    */
-  private async createBody(
+  private async createBinding(
     record: MemberRecord,
-    bodyId: string,
+    bindingId: string,
     options: { epoch?: number; primary?: boolean; rotation?: boolean } = {},
-  ): Promise<AgentBodyRecord> {
-    const live = liveBodies(record);
+  ): Promise<BindingRecord> {
+    const live = liveBindings(record);
     if (live.length > 0 && options.rotation !== true) {
       throw new AgentError('body_limit', `body_limit: ${record.id} (max 1 live body)`);
     }
     if (
-      this.registry.getBySession(bodyId) !== undefined ||
-      record.body?.bodyId === bodyId ||
-      record.retiring?.bodyId === bodyId ||
+      this.registry.getBySession(bindingId) !== undefined ||
+      record.binding?.bindingId === bindingId ||
+      record.retiringBinding?.bindingId === bindingId ||
       // 已退役的 session 不得重新准入：复活只走 `reinstate`（原地 unretire）。
-      this.registry.isRetiredSession(bodyId)
+      this.registry.isRetiredSession(bindingId)
     ) {
-      throw new AgentError('invalid_input', `duplicate session id: ${bodyId}`);
+      throw new AgentError('invalid_input', `duplicate session id: ${bindingId}`);
     }
     const now = this.now();
-    const body: AgentBodyRecord = {
-      bodyId,
+    const body: BindingRecord = {
+      bindingId,
       epoch: options.epoch ?? 0,
       createdAt: now,
       lastActiveAt: now,
       primary: options.primary ?? live.length === 0,
     };
-    if (this.bodyLease !== undefined) {
+    if (this.bindingLease !== undefined) {
       try {
-        await this.bodyLease.acquire(bodyId);
+        await this.bindingLease.acquire(bindingId);
       } catch (error) {
         throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
       }
     }
-    this.registry.addBody(record.id, body);
+    this.registry.addBinding(record.id, body);
     return body;
   }
 
   /** 解析或惰性创建 body；`requested` 是显式 session（必须未退役） */
-  private async ensureBody(
+  private async ensureExecutionUnit(
     record: MemberRecord,
     requested?: string,
-  ): Promise<{ entry: BodyEntry; body: AgentBodyRecord }> {
-    let body: AgentBodyRecord | undefined;
+  ): Promise<{ entry: ExecutionUnitEntry; body: BindingRecord }> {
+    let body: BindingRecord | undefined;
     if (requested !== undefined) {
-      if (record.body?.bodyId === requested) body = record.body;
-      else if (record.retiring?.bodyId === requested) body = record.retiring;
+      if (record.binding?.bindingId === requested) body = record.binding;
+      else if (record.retiringBinding?.bindingId === requested) body = record.retiringBinding;
       if (body !== undefined && body.retiredAt !== undefined) {
         throw new AgentError('invalid_input', `session is retired: ${requested}`);
       }
       if (body === undefined) {
-        // `bodyHistory` 里的 id 也在这里被拒：否则惰性 createBody 会把它复活成
+        // `bindingHistory` 里的 id 也在这里被拒：否则惰性 createBinding 会把它复活成
         // 第二具 live body（D2 不变量破且无任何报错）。
         if (this.registry.isRetiredSession(requested)) {
           throw new AgentError('invalid_input', `session is retired: ${requested}`);
         }
-        body = await this.createBody(record, requested, { epoch: 0 });
+        body = await this.createBinding(record, requested, { epoch: 0 });
       }
     } else {
-      body = primaryBody(record);
+      body = primaryBinding(record);
       if (body?.retiredAt !== undefined) {
         // 只剩退役 body：不自动开新体，否则复活路径永远走不到（必须 reinstate）。
-        throw new AgentError('invalid_input', `session is retired: ${body.bodyId}`);
+        throw new AgentError('invalid_input', `session is retired: ${body.bindingId}`);
       }
       if (body === undefined) {
-        body = await this.createBody(record, this.newId(), { epoch: 0 });
+        body = await this.createBinding(record, this.newId(), { epoch: 0 });
       }
     }
     const entry = await this.entryFor(record, body);
@@ -1229,7 +1229,7 @@ export class AgentServiceImpl implements AgentService {
    * `presence === gone`（重启 / stale）时即使 entry 标记为 spawned 也要重新 spawn：
    * registry presence 是进程外可观测的唯一真相。
    */
-  private async ensureRuntime(entry: BodyEntry): Promise<void> {
+  private async ensureRuntime(entry: ExecutionUnitEntry): Promise<void> {
     const record = this.registry.get(entry.agentId);
     const stale = record === undefined || record.presence === 'gone';
     if (entry.spawned && !stale) return;
@@ -1250,7 +1250,7 @@ export class AgentServiceImpl implements AgentService {
     }
   }
 
-  private async disposeEntry(entry: BodyEntry): Promise<boolean> {
+  private async disposeEntry(entry: ExecutionUnitEntry): Promise<boolean> {
     let ok = true;
     if (entry.spawned) {
       try {
@@ -1260,38 +1260,38 @@ export class AgentServiceImpl implements AgentService {
         ok = false;
         this.logger.warn('agent.dispose.failed', {
           member_id: entry.agentId,
-          session_id: entry.bodyId,
+          session_id: entry.bindingId,
           error: errorText(error),
         });
       }
     }
-    if (entry.leaseHeld && this.bodyLease !== undefined) {
+    if (entry.leaseHeld && this.bindingLease !== undefined) {
       try {
-        await this.bodyLease.release(entry.bodyId);
+        await this.bindingLease.release(entry.bindingId);
         entry.leaseHeld = false;
       } catch (error) {
         this.logger.warn('agent.body.lease_release_failed', {
-          session_id: entry.bodyId,
+          session_id: entry.bindingId,
           error: errorText(error),
         });
       }
     }
-    this.bodyRegistry.get(entry.agentId)?.delete(entry.bodyId);
+    this.executionUnitRegistry.get(entry.agentId)?.delete(entry.bindingId);
     return ok;
   }
 
   /** 退役一个 body：取消排队 run、清 mailbox、迁 primary、落 snapshot */
-  private async retireBodyEntry(
+  private async retireExecutionUnitEntry(
     record: MemberRecord,
-    entry: BodyEntry,
+    entry: ExecutionUnitEntry,
     reason: string,
     at: number = this.now(),
   ): Promise<void> {
     if (entry.retired) return;
     const wasWaitingPermission = entry.state === 'waiting_permission';
     // 0.32：先关旧 body 的 inbox hook，再 releaseHeld —— 顺序反了旧 body 仍可能消费。
-    this.runtime.disableInbox?.(entry.bodyId);
-    const wasPrimary = entry.primary || record.body?.bodyId === entry.bodyId;
+    this.runtime.disableInbox?.(entry.bindingId);
+    const wasPrimary = entry.primary || record.binding?.bindingId === entry.bindingId;
     entry.retired = true;
     entry.state = 'closed';
     entry.primary = false;
@@ -1306,23 +1306,23 @@ export class AgentServiceImpl implements AgentService {
       } catch (error) {
         this.logger.warn('agent.cancel.failed', {
           member_id: entry.agentId,
-          session_id: entry.bodyId,
+          session_id: entry.bindingId,
           error: errorText(error),
         });
       }
-      this.emitForSession('agent.permission.cancelled', record, entry.bodyId, {
+      this.emitForSession('agent.permission.cancelled', record, entry.bindingId, {
         reason: 'body_retired',
       });
     }
     // 旧队列（含 hold）转为可注入；pendingNotices 不得串到新 body。
     this.inbox?.releaseHeld(record.id);
     this.runtime.clearPendingNotices?.(record.id);
-    // `retireBody` 自己记 `body_history`；这里不再重复 push，否则同一 session
+    // `retireBinding` 自己记 `body_history`；这里不再重复 push，否则同一 session
     // 会在 DTO 的 body_history 里出现两次。
-    this.registry.retireBody(record.id, entry.bodyId, at);
+    this.registry.retireBinding(record.id, entry.bindingId, at);
     if (wasPrimary) this.promotePrimary(record);
-    this.emitForSession('agent.retired', record, entry.bodyId, {
-      body_id: entry.bodyId,
+    this.emitForSession('agent.retired', record, entry.bindingId, {
+      body_id: entry.bindingId,
       epoch: entry.epoch,
       reason,
     });
@@ -1338,15 +1338,15 @@ export class AgentServiceImpl implements AgentService {
       .sort((left, right) => right.lastActiveAt - left.lastActiveAt);
     const next = entries[0];
     for (const entry of entries) entry.primary = entry === next;
-    this.registry.setPrimaryBody(record.id, next?.bodyId);
+    this.registry.setPrimaryBinding(record.id, next?.bindingId);
   }
 
   /** 关闭 agent 的所有 body（cancel/dispose/release） */
   private async disposeAgentBodies(record: MemberRecord): Promise<void> {
-    const entries = [...(this.bodyRegistry.get(record.id)?.values() ?? [])];
+    const entries = [...(this.executionUnitRegistry.get(record.id)?.values() ?? [])];
     for (const entry of entries) {
       // 0.32：body 关闭时旧 hook 立即停止读取 inbox；通知队列同时清空。
-      this.runtime.disableInbox?.(entry.bodyId);
+      this.runtime.disableInbox?.(entry.bindingId);
       this.runtime.clearPendingNotices?.(entry.agentId);
       entry.closing = true;
       entry.pending.length = 0;
@@ -1358,7 +1358,7 @@ export class AgentServiceImpl implements AgentService {
         } catch (error) {
           this.logger.warn('agent.cancel.failed', {
             member_id: entry.agentId,
-            session_id: entry.bodyId,
+            session_id: entry.bindingId,
             error: errorText(error),
           });
         }
@@ -1366,12 +1366,12 @@ export class AgentServiceImpl implements AgentService {
       entry.retired = true;
       entry.state = 'closed';
       entry.primary = false;
-      this.registry.retireBody(record.id, entry.bodyId, this.now());
+      this.registry.retireBinding(record.id, entry.bindingId, this.now());
       await this.disposeEntry(entry);
     }
     // 0.32：关闭后未消费消息仍可注入；不释放 hold 会让 reinstate 的 body 永远跳过它们。
     this.inbox?.releaseHeld(record.id);
-    this.bodyRegistry.delete(record.id);
+    this.executionUnitRegistry.delete(record.id);
   }
 
   // ─── 统一准入 ───────────────────────────────────────────────────
@@ -1382,7 +1382,7 @@ export class AgentServiceImpl implements AgentService {
     return outcome.result;
   }
 
-  async bodies(agentId: string): Promise<BodyStatus[]> {
+  async bodies(agentId: string): Promise<ExecutionUnitStatus[]> {
     await this.ready;
     const record = this.registry.get(agentId);
     if (record === undefined) throw new AgentError('unknown_member', `unknown_member: ${agentId}`);
@@ -1390,8 +1390,8 @@ export class AgentServiceImpl implements AgentService {
       (left, right) => Number(right.primary) - Number(left.primary),
     );
     if (entries.length === 0) {
-      return liveBodies(record).map((body) => ({
-        session_id: body.bodyId,
+      return liveBindings(record).map((body) => ({
+        session_id: body.bindingId,
         epoch: body.epoch,
         state: 'idle' as const,
         primary: body.primary,
@@ -1399,7 +1399,7 @@ export class AgentServiceImpl implements AgentService {
         last_active_at: body.lastActiveAt,
       }));
     }
-    return entries.map(toBodyStatus);
+    return entries.map(toExecutionUnitStatus);
   }
 
   /**
@@ -1431,7 +1431,7 @@ export class AgentServiceImpl implements AgentService {
 
     // 1. session → agent/body 解析（绑定优先；矛盾输入 = invalid_input）
     let record: MemberRecord;
-    let requestedBodyId: string | undefined;
+    let requestedBindingId: string | undefined;
     if (input.session_id !== undefined) {
       const sessionId = readRequiredString(input as never, 'session_id');
       const bound = this.registry.getBySession(sessionId);
@@ -1443,10 +1443,10 @@ export class AgentServiceImpl implements AgentService {
           );
         }
         record = bound;
-        requestedBodyId = sessionId;
+        requestedBindingId = sessionId;
       } else {
         record = this.requireAgent(input.agent_id ?? this.defaultOwner);
-        requestedBodyId = sessionId;
+        requestedBindingId = sessionId;
       }
     } else {
       record = this.requireAgent(input.agent_id ?? this.defaultOwner);
@@ -1464,7 +1464,7 @@ export class AgentServiceImpl implements AgentService {
     }
 
     // 3. body resolve / 创建（每 agent 上限 body_limit）
-    const { entry } = await this.ensureBody(record, requestedBodyId);
+    const { entry } = await this.ensureExecutionUnit(record, requestedBindingId);
     if (strict) {
       // send 不自动恢复 gone；但同 agent 其它 live body 存在时允许投递到该 body。
       if (entry.retired) throw new AgentError('member_closed', `member_closed: ${record.id}`);
@@ -1562,8 +1562,8 @@ export class AgentServiceImpl implements AgentService {
       this.inbox.hold(record.id, message.id);
     }
     entry.pending.push(message);
-    this.registry.touchBody(record.id, entry.bodyId, this.now());
-    this.emitForSession('agent.message.queued', record, entry.bodyId, {
+    this.registry.touchBinding(record.id, entry.bindingId, this.now());
+    this.emitForSession('agent.message.queued', record, entry.bindingId, {
       state: record.state,
       message_id: message.id,
       from,
@@ -1593,7 +1593,7 @@ export class AgentServiceImpl implements AgentService {
       result: {
         run_id: submitted.runId,
         agent_id: record.id,
-        session_id: entry.bodyId,
+        session_id: entry.bindingId,
         status,
         ...(queuePosition !== undefined ? { queue_position: queuePosition } : {}),
       },
@@ -1607,7 +1607,7 @@ export class AgentServiceImpl implements AgentService {
    */
   private async submitMessage(
     record: MemberRecord,
-    entry: BodyEntry,
+    entry: ExecutionUnitEntry,
     message: AgentMessage,
   ): Promise<{ runId: string; handle: RunHandle }> {
     if (this.draining || entry.closing || entry.retired) {
@@ -1617,13 +1617,13 @@ export class AgentServiceImpl implements AgentService {
     entry.queuedRuns.add(runId);
     const task: ScheduledTask = {
       agent: { id: record.id } as AgentHandle,
-      serialKey: entry.bodyId,
+      serialKey: entry.bindingId,
       runId,
-      sessionId: entry.bodyId,
+      sessionId: entry.bindingId,
       input: message.content,
       executor: async (scheduledRunId) => {
         entry.queuedRuns.delete(scheduledRunId);
-        return this.startBodyRun(record, entry, message, scheduledRunId);
+        return this.startExecutionUnitRun(record, entry, message, scheduledRunId);
       },
     };
     try {
@@ -1639,7 +1639,7 @@ export class AgentServiceImpl implements AgentService {
 
   private holdBlockedMessage(
     record: MemberRecord,
-    entry: BodyEntry,
+    entry: ExecutionUnitEntry,
     message: AgentMessage,
     check: BudgetBlockedCheck,
   ): void {
@@ -1670,30 +1670,30 @@ export class AgentServiceImpl implements AgentService {
     return index >= 0 ? index + 1 : undefined;
   }
 
-  // ─── Body 执行 ─────────────────────────────────────────────────
+  // ─── ExecutionUnit 执行 ─────────────────────────────────────────────────
 
   /**
    * scheduler executor：开始该 body 的一轮。
    * 预算 turn_start 检查在这里（而不是提交时）：block 时消息留在 body mailbox，
    * override / release 后由 `retryHeldMessages` 重新准入。
    */
-  private async startBodyRun(
+  private async startExecutionUnitRun(
     record: MemberRecord,
-    entry: BodyEntry,
+    entry: ExecutionUnitEntry,
     message: AgentMessage,
     runId: string,
   ): Promise<RunHandle> {
     if (entry.retired || entry.closing) {
-      const cancelled = new BodyRunHandle(runId, record.id, entry.bodyId);
+      const cancelled = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
       cancelled.markCancelled('body closed');
       return cancelled;
     }
     const conversationId = message.conversation_id;
     if (!this.isHumanPrincipal(record.id)) {
-      const check = this.checkTurnStart(record, message, entry.bodyId);
+      const check = this.checkTurnStart(record, message, entry.bindingId);
       if (!check.ok) {
         this.holdBlockedMessage(record, entry, message, check);
-        const held = new BodyRunHandle(runId, record.id, entry.bodyId);
+        const held = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
         held.complete('');
         return held;
       }
@@ -1721,10 +1721,10 @@ export class AgentServiceImpl implements AgentService {
       ...(conversationId !== undefined ? { conversationId } : {}),
       replied: false,
     };
-    this.registry.touchBody(record.id, entry.bodyId, entry.lastActiveAt);
+    this.registry.touchBinding(record.id, entry.bindingId, entry.lastActiveAt);
     this.updateAgentState(record.id);
     this.scheduleSnapshot();
-    const handle = new BodyRunHandle(runId, record.id, entry.bodyId);
+    const handle = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
     handle.cancelHandler = (reason) => {
       try {
         // 0.32-D：打断必须让 core 发出 `run.cancelled` reason=`interrupt`；
@@ -1736,24 +1736,24 @@ export class AgentServiceImpl implements AgentService {
       } catch (error) {
         this.logger.warn('agent.cancel.failed', {
           member_id: record.id,
-          session_id: entry.bodyId,
+          session_id: entry.bindingId,
           error: errorText(error),
         });
       }
     };
     // 0.32：消息真正作为 run input 开始前标记 consumed（inbox 至多注入一次）。
     // startup 消息不在 inbox 里，markConsumed 对未知 id 无操作。
-    await this.inbox?.markConsumed(record.id, [message.id], entry.bodyId);
-    void this.executeBodyTurn(record, entry, message, handle);
+    await this.inbox?.markConsumed(record.id, [message.id], entry.bindingId);
+    void this.executeExecutionUnitTurn(record, entry, message, handle);
     return handle;
   }
 
   /** 执行并收口一轮；任何异常都收口为失败，不让后台任务产生未处理 rejection */
-  private async executeBodyTurn(
+  private async executeExecutionUnitTurn(
     record: MemberRecord,
-    entry: BodyEntry,
+    entry: ExecutionUnitEntry,
     message: AgentMessage,
-    handle: BodyRunHandle,
+    handle: ExecutionUnitRunHandle,
   ): Promise<void> {
     let result: MemberTurnResult | undefined;
     let failure: string | undefined;
@@ -1764,7 +1764,7 @@ export class AgentServiceImpl implements AgentService {
         failure = errorText(error);
         this.logger.error('agent.run.failed', {
           member_id: record.id,
-          session_id: entry.bodyId,
+          session_id: entry.bindingId,
           run_id: handle.id,
           error: failure,
         });
@@ -1786,7 +1786,7 @@ export class AgentServiceImpl implements AgentService {
     entry.active = undefined;
     entry.state = 'idle';
     entry.lastActiveAt = this.now();
-    this.registry.touchBody(record.id, entry.bodyId, entry.lastActiveAt);
+    this.registry.touchBinding(record.id, entry.bindingId, entry.lastActiveAt);
     if (result?.usage !== undefined) this.registry.setUsage(record.id, result.usage);
 
     const current = this.registry.get(record.id);
@@ -1800,8 +1800,8 @@ export class AgentServiceImpl implements AgentService {
     // 旧 body（rotate / TTL 已退役）：epoch fencing，不写 agent 状态、不投父队列
     if (entry.retired || !current || current.state === 'closed') {
       if (outcome === 'completed' && nonEmpty(result?.content)) {
-        this.emitForSession('agent.reply.stale', record, entry.bodyId, {
-          body_id: entry.bodyId,
+        this.emitForSession('agent.reply.stale', record, entry.bindingId, {
+          body_id: entry.bindingId,
           epoch: entry.epoch,
           message_id: message.id,
           reason: 'epoch_fenced',
@@ -1826,7 +1826,7 @@ export class AgentServiceImpl implements AgentService {
   }
 
   private settleHandle(
-    handle: BodyRunHandle,
+    handle: ExecutionUnitRunHandle,
     outcome: 'completed' | 'failed' | 'cancelled',
     failure: string | undefined,
     content: string | undefined,
@@ -1937,7 +1937,7 @@ export class AgentServiceImpl implements AgentService {
       if (record.state === 'closed' || record.state === 'running') continue;
       if (record.state === 'waiting_permission') continue;
       if (this.hasNonIdleWork(record.id)) continue;
-      const body = record.body;
+      const body = record.binding;
       const lastActive = Math.max(record.lastSeen ?? 0, body?.lastActiveAt ?? 0);
       if (lastActive + this.temporaryTtlMs >= now) continue;
       await this.reclaimAgent(record, now, 'idle_ttl');
@@ -1948,7 +1948,7 @@ export class AgentServiceImpl implements AgentService {
 
   /** 该 agent 是否有在跑的轮 / 排队消息 / 权限等待（回收前必须为空） */
   private hasNonIdleWork(agentId: string): boolean {
-    const entries = this.bodyRegistry.get(agentId);
+    const entries = this.executionUnitRegistry.get(agentId);
     if (entries === undefined) return false;
     for (const entry of entries.values()) {
       if (entry.active !== undefined) return true;
@@ -1964,12 +1964,12 @@ export class AgentServiceImpl implements AgentService {
    * 审计复用 `agent.closed` + `reason`，不新增事件类型。
    */
   private async reclaimAgent(record: MemberRecord, at: number, reason: string): Promise<void> {
-    for (const entry of [...(this.bodyRegistry.get(record.id)?.values() ?? [])]) {
-      await this.retireBodyEntry(record, entry, reason, at);
+    for (const entry of [...(this.executionUnitRegistry.get(record.id)?.values() ?? [])]) {
+      await this.retireExecutionUnitEntry(record, entry, reason, at);
     }
     // 没有内存 entry 时也要让 body 记录带上 retiredAt：body 记录永不删。
-    if (record.body !== undefined && record.body.retiredAt === undefined) {
-      this.registry.retireBody(record.id, record.body.bodyId, at);
+    if (record.binding !== undefined && record.binding.retiredAt === undefined) {
+      this.registry.retireBinding(record.id, record.binding.bindingId, at);
     }
     record.state = 'closed';
     record.membership = 'left';
@@ -2111,7 +2111,7 @@ export class AgentServiceImpl implements AgentService {
    *    返回 promise 前已同步入队），因此队列顺序 = 打断 → 旧队列原顺序；
    * 3. 旧消息的 inbox 记录始终处于 held/unread，取消的只是尚未执行的 run，重新提交
    *    后只在真正开始执行时 markConsumed —— 每条消息仍只注入一次。
-   * 并发打断按 agent 串行（`withBodyOp`）。
+   * 并发打断按 agent 串行（`withExecutionUnitOp`）。
    */
   private async sendInterrupt(
     target: MemberRecord,
@@ -2124,13 +2124,13 @@ export class AgentServiceImpl implements AgentService {
       conversationId?: string;
     },
   ): Promise<SendResult> {
-    return this.withBodyOp(target.id, async () => {
+    return this.withExecutionUnitOp(target.id, async () => {
       if (this.rotations.has(target.id)) {
         throw new AgentError('invalid_input', 'interrupt is not supported during rotate');
       }
       const sessionId =
         this.registry.getBySession(input.memberKey)?.id === target.id ? input.memberKey : undefined;
-      const { entry } = await this.ensureBody(target, sessionId);
+      const { entry } = await this.ensureExecutionUnit(target, sessionId);
       if (this.draining || entry.closing || entry.retired) {
         throw new AgentError('member_closed', `member_closed: ${target.id}`);
       }
@@ -2141,10 +2141,10 @@ export class AgentServiceImpl implements AgentService {
       let queuedRunIds: string[];
       if (snapshot !== undefined) {
         runningIds = snapshot.running
-          .filter((run) => run.sessionId === entry.bodyId)
+          .filter((run) => run.sessionId === entry.bindingId)
           .map((run) => run.runId);
         queuedRunIds = snapshot.queued
-          .filter((run) => run.sessionId === entry.bodyId)
+          .filter((run) => run.sessionId === entry.bindingId)
           .map((run) => run.runId);
       } else {
         runningIds = entry.active !== undefined ? [entry.active.runId] : [];
@@ -2203,7 +2203,7 @@ export class AgentServiceImpl implements AgentService {
         interruptMessage = message;
       }
       if (!entry.pending.includes(interruptMessage)) entry.pending.push(interruptMessage);
-      this.registry.touchBody(target.id, entry.bodyId, this.now());
+      this.registry.touchBinding(target.id, entry.bindingId, this.now());
 
       // 3. 取消尚未开始的 run，保留其消息用于按原顺序重投。
       const oldMessages: AgentMessage[] = [];
@@ -2218,7 +2218,7 @@ export class AgentServiceImpl implements AgentService {
           // 状态不一致（queued run 找不到对应消息）：不取消、不重投，宁可顺序退化也不丢消息。
           this.logger.warn('agent.interrupt.queue_message_missing', {
             agent_id: target.id,
-            session_id: entry.bodyId,
+            session_id: entry.bindingId,
             run_id: runId,
           });
           continue;
@@ -2249,7 +2249,7 @@ export class AgentServiceImpl implements AgentService {
         const message = index === 0 ? interruptMessage : oldMessages[index - 1];
         if (message !== undefined) this.runMessageIds.set(item.runId, message.id);
       });
-      this.emitForSession('agent.message.queued', target, entry.bodyId, {
+      this.emitForSession('agent.message.queued', target, entry.bindingId, {
         state: target.state,
         message_id: interruptMessage.id,
         from: input.from,
@@ -2266,16 +2266,16 @@ export class AgentServiceImpl implements AgentService {
         message_id: interruptMessage.id,
         state: this.registry.get(target.id)?.state ?? target.state,
         run_id: first.runId,
-        session_id: entry.bodyId,
+        session_id: entry.bindingId,
       };
     });
   }
 
   /** 同一 agent 的打断重排串行执行（普通 admit 不经过此锁）。 */
-  private withBodyOp<T>(key: string, op: () => Promise<T>): Promise<T> {
-    const previous = this.bodyOps.get(key) ?? Promise.resolve();
+  private withExecutionUnitOp<T>(key: string, op: () => Promise<T>): Promise<T> {
+    const previous = this.executionUnitOps.get(key) ?? Promise.resolve();
     const next = previous.then(op, op);
-    this.bodyOps.set(
+    this.executionUnitOps.set(
       key,
       next.catch(() => {}),
     );
@@ -2300,7 +2300,7 @@ export class AgentServiceImpl implements AgentService {
     if (target.membership === 'left' || target.state === 'closed') {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
-    if (this.hasClosingBody(target.id)) {
+    if (this.hasClosingExecutionUnit(target.id)) {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
 
@@ -2445,20 +2445,20 @@ export class AgentServiceImpl implements AgentService {
     if (
       target.membership === 'left' ||
       target.state === 'closed' ||
-      this.hasClosingBody(target.id)
+      this.hasClosingExecutionUnit(target.id)
     ) {
       return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
     if (this.rotations.has(target.id) || target.rotation === 'rotating') {
       return { status: 'failed', code: 'rotating', reason: `rotating: ${target.id}` };
     }
-    const oldBody = primaryBody(target);
-    if (target.presence !== 'live' || oldBody === undefined) {
+    const oldBinding = primaryBinding(target);
+    if (target.presence !== 'live' || oldBinding === undefined) {
       return { status: 'failed', code: 'body_not_live', reason: `body_not_live: ${target.id}` };
     }
 
     const callerSession = input.from_session_id;
-    if (callerSession !== undefined && callerSession !== oldBody.bodyId) {
+    if (callerSession !== undefined && callerSession !== oldBinding.bindingId) {
       return {
         status: 'failed',
         code: 'not_current_body',
@@ -2467,14 +2467,14 @@ export class AgentServiceImpl implements AgentService {
     }
 
     const startupPrompt = readContent(raw, 'startup_prompt');
-    const fromSessionId = oldBody.bodyId;
-    const fromEpoch = oldBody.epoch;
+    const fromSessionId = oldBinding.bindingId;
+    const fromEpoch = oldBinding.epoch;
     const toSessionId = this.newId();
     if (
       !nonEmpty(toSessionId) ||
       this.registry.getBySession(toSessionId) !== undefined ||
-      target.body?.bodyId === toSessionId ||
-      target.retiring?.bodyId === toSessionId
+      target.binding?.bindingId === toSessionId ||
+      target.retiringBinding?.bindingId === toSessionId
     ) {
       this.emitForSession('agent.rotate.failed', target, fromSessionId, {
         from_session_id: fromSessionId,
@@ -2484,13 +2484,13 @@ export class AgentServiceImpl implements AgentService {
       return { status: 'failed', code: 'rotate_failed', reason: 'session_id_collision' };
     }
     const toEpoch = fromEpoch + 1;
-    const oldEntry = this.bodyRegistry.get(target.id)?.get(fromSessionId);
+    const oldEntry = this.executionUnitRegistry.get(target.id)?.get(fromSessionId);
 
     this.registry.setRotation(target.id, 'rotating');
     this.rotations.set(target.id, { fromSessionId, fromEpoch, toSessionId, toEpoch });
     // 0.32：rotate 窗口一开始就关旧 body 的 inbox hook —— 否则旧轮在窗口内还有
     // 机会把本该给新 body 的消息取走。回滚时在 finally 里恢复。
-    if (oldEntry !== undefined) this.runtime.disableInbox?.(oldEntry.bodyId);
+    if (oldEntry !== undefined) this.runtime.disableInbox?.(oldEntry.bindingId);
     this.emitForSession('agent.rotating', target, fromSessionId, {
       from_session_id: fromSessionId,
       to_session_id: toSessionId,
@@ -2500,22 +2500,22 @@ export class AgentServiceImpl implements AgentService {
     // 0.32：退役旧 body 前先把 inbox 写链落盘；未消费消息跨 body 不丢。
     await this.inbox?.flush();
 
-    let newBody: AgentBodyRecord | undefined;
+    let newBinding: BindingRecord | undefined;
     const rollbackNew = async (): Promise<void> => {
       const entry = this.findEntry(target.id, toSessionId);
       if (entry !== undefined) await this.disposeEntry(entry);
-      if (newBody !== undefined) this.registry.removeBody(target.id, toSessionId);
+      if (newBinding !== undefined) this.registry.removeBinding(target.id, toSessionId);
     };
     try {
       try {
         // `rotation: true` 是唯一允许「已有 live body 时再建一具」的入口；
-        // 旧 body 由 addBody 暂存到 retiring，窗口结束后 retireBody 记入 history。
-        newBody = await this.createBody(target, toSessionId, {
+        // 旧 body 由 addBinding 暂存到 retiringBinding，窗口结束后 retireBinding 记入 history。
+        newBinding = await this.createBinding(target, toSessionId, {
           epoch: toEpoch,
           primary: false,
           rotation: true,
         });
-        const newEntry = await this.entryFor(target, newBody, false);
+        const newEntry = await this.entryFor(target, newBinding, false);
         await this.ensureRuntime(newEntry);
         newEntry.primary = true;
       } catch (error) {
@@ -2531,7 +2531,7 @@ export class AgentServiceImpl implements AgentService {
       }
 
       // 提交 primary；flush 失败回滚到旧 body。
-      this.registry.setPrimaryBody(target.id, toSessionId);
+      this.registry.setPrimaryBinding(target.id, toSessionId);
       if (oldEntry !== undefined) oldEntry.primary = false;
       this.scheduleSnapshot();
       let ok = false;
@@ -2541,7 +2541,7 @@ export class AgentServiceImpl implements AgentService {
         ok = false;
       }
       if (!ok) {
-        this.registry.setPrimaryBody(target.id, fromSessionId);
+        this.registry.setPrimaryBinding(target.id, fromSessionId);
         if (oldEntry !== undefined) oldEntry.primary = true;
         await rollbackNew();
         this.registry.setRotation(target.id, 'stable');
@@ -2560,15 +2560,15 @@ export class AgentServiceImpl implements AgentService {
         epoch: toEpoch,
       });
 
-      // 旧 primary 退休；正在跑的旧轮由 executeBodyTurn 的 fencing 分支收口。
-      // 没有内存 entry 时也要收口 `retiring` 槽位并记 history（retireBody 负责记账）。
+      // 旧 primary 退休；正在跑的旧轮由 executeExecutionUnitTurn 的 fencing 分支收口。
+      // 没有内存 entry 时也要收口 `retiringBinding` 槽位并记 history（retireBinding 负责记账）。
       if (oldEntry !== undefined) {
-        await this.retireBodyEntry(target, oldEntry, 'rotation');
+        await this.retireExecutionUnitEntry(target, oldEntry, 'rotation');
       } else {
-        this.registry.retireBody(target.id, fromSessionId);
+        this.registry.retireBinding(target.id, fromSessionId);
         this.promotePrimary(target);
       }
-      // `oldEntry` 缺失时 retireBodyEntry 不会跑：旧队列仍要放出、notice 仍要清。
+      // `oldEntry` 缺失时 retireExecutionUnitEntry 不会跑：旧队列仍要放出、notice 仍要清。
       this.inbox?.releaseHeld(target.id);
       this.runtime.clearPendingNotices?.(target.id);
 
@@ -2616,7 +2616,7 @@ export class AgentServiceImpl implements AgentService {
       if (current?.rotation === 'rotating') this.registry.setRotation(target.id, 'stable');
       // 回滚 / 异常退出：旧 body 没退役就恢复它的 inbox hook，消息不能留在无人读取的状态。
       if (oldEntry !== undefined && !oldEntry.retired) {
-        this.runtime.enableInbox?.(oldEntry.bodyId);
+        this.runtime.enableInbox?.(oldEntry.bindingId);
       }
     }
   }
@@ -2715,7 +2715,7 @@ export class AgentServiceImpl implements AgentService {
     if (record.membership === 'left' || record.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${agentId}`);
     }
-    const { entry } = await this.ensureBody(record, checkpoint.session_id);
+    const { entry } = await this.ensureExecutionUnit(record, checkpoint.session_id);
     await this.ensureRuntime(entry);
     if (this.runtime.resume === undefined) {
       throw new AgentError('invalid_input', 'resume_not_supported');
@@ -2724,9 +2724,9 @@ export class AgentServiceImpl implements AgentService {
     entry.queuedRuns.add(run);
     const task: ScheduledTask = {
       agent: { id: record.id } as AgentHandle,
-      serialKey: entry.bodyId,
+      serialKey: entry.bindingId,
       runId: run,
-      sessionId: entry.bodyId,
+      sessionId: entry.bindingId,
       input: '',
       executor: async (scheduledRunId) => {
         entry.queuedRuns.delete(scheduledRunId);
@@ -2739,7 +2739,7 @@ export class AgentServiceImpl implements AgentService {
     return {
       run_id: run,
       agent_id: record.id,
-      session_id: entry.bodyId,
+      session_id: entry.bindingId,
       status,
       ...(queuePosition !== undefined ? { queue_position: queuePosition } : {}),
     };
@@ -2747,7 +2747,7 @@ export class AgentServiceImpl implements AgentService {
 
   private async startResumeRun(
     record: MemberRecord,
-    entry: BodyEntry,
+    entry: ExecutionUnitEntry,
     runId: string,
   ): Promise<RunHandle> {
     const resume = this.runtime.resume;
@@ -2756,14 +2756,14 @@ export class AgentServiceImpl implements AgentService {
     entry.lastActiveAt = this.now();
     entry.active = { runId, replied: true };
     this.updateAgentState(record.id);
-    const handle = new BodyRunHandle(runId, record.id, entry.bodyId);
+    const handle = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
     handle.cancelHandler = () => {
       try {
         this.runtime.cancel(entry.runtimeMember);
       } catch (error) {
         this.logger.warn('agent.cancel.failed', {
           member_id: record.id,
-          session_id: entry.bodyId,
+          session_id: entry.bindingId,
           error: errorText(error),
         });
       }
@@ -2780,7 +2780,7 @@ export class AgentServiceImpl implements AgentService {
       entry.active = undefined;
       entry.state = 'idle';
       entry.lastActiveAt = this.now();
-      this.registry.touchBody(record.id, entry.bodyId, entry.lastActiveAt);
+      this.registry.touchBinding(record.id, entry.bindingId, entry.lastActiveAt);
       if (result?.usage !== undefined) this.registry.setUsage(record.id, result.usage);
       const cancelled = handle.cancelRequested || result?.outcome === 'cancelled';
       const outcome = cancelled
@@ -2904,11 +2904,11 @@ export class AgentServiceImpl implements AgentService {
       this.scheduleSnapshot();
     }
 
-    const affectsNextBody = changed.includes('model') || changed.includes('system_prompt');
+    const affectsNextBinding = changed.includes('model') || changed.includes('system_prompt');
     return {
       agent: this.statusFor(target),
       changed,
-      ...(affectsNextBody ? { applies_to: 'next_body' as const } : {}),
+      ...(affectsNextBinding ? { applies_to: 'next_body' as const } : {}),
     };
   }
 
@@ -3019,7 +3019,7 @@ export class AgentServiceImpl implements AgentService {
     throw new AgentError('invalid_input', `unsupported role conversion: ${role}`);
   }
 
-  /** update 选择器：id / 任一 live Body session 直取；否则唯一当前名字。 */
+  /** update 选择器：id / 任一 live ExecutionUnit session 直取；否则唯一当前名字。 */
   private resolveUpdateTarget(ref: string): MemberRecord {
     const direct = this.registry.resolve(ref);
     if (direct !== undefined) return direct;
@@ -3100,14 +3100,14 @@ export class AgentServiceImpl implements AgentService {
       target.state = 'idle';
       this.registry.setPresence(target.id, 'gone');
       // 复活 = 三件事（CONTRACT §4.2）：membership / state / presence（上面三行）+
-      // body 原地 unretire（清 retiredAt、重设 primary）+ 清 bodyHistory 里该 session。
+      // body 原地 unretire（清 retiredAt、重设 primary）+ 清 bindingHistory 里该 session。
       // 不清 retiredAt 的话后续 admit 会撞 `session is retired`，数据在但接不回去。
-      this.registry.unretireBody(target.id);
+      this.registry.unretireBinding(target.id);
       // 刷新计时基准，否则下一个 tick 立刻再回收（判据读的就是这两个字段）。
       const revivedAt = this.now();
       target.lastSeen = revivedAt;
-      if (target.body !== undefined) target.body.lastActiveAt = revivedAt;
-      for (const entry of this.bodyRegistry.get(target.id)?.values() ?? []) {
+      if (target.binding !== undefined) target.binding.lastActiveAt = revivedAt;
+      for (const entry of this.executionUnitRegistry.get(target.id)?.values() ?? []) {
         entry.closing = false;
         entry.retired = false;
         entry.state = 'idle';
@@ -3126,7 +3126,7 @@ export class AgentServiceImpl implements AgentService {
     return this.registry.list(filter).map((record) => this.statusFor(record));
   }
 
-  /** 任一 live body session（或成员 id）→ 状态；退役 Body 不再命中 */
+  /** 任一 live body session（或成员 id）→ 状态；退役 ExecutionUnit 不再命中 */
   async identify(sessionId: string): Promise<MemberStatus | undefined> {
     await this.ready;
     if (!nonEmpty(sessionId)) return undefined;
@@ -3272,7 +3272,7 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /** override / release 后重新准入 mailbox 里的消息 */
-  private retryHeldMessages(entry: BodyEntry): void {
+  private retryHeldMessages(entry: ExecutionUnitEntry): void {
     if (entry.pending.length === 0 || entry.retired || entry.closing) return;
     const record = this.registry.get(entry.agentId);
     if (record === undefined) return;
@@ -3285,7 +3285,7 @@ export class AgentServiceImpl implements AgentService {
         } catch (error) {
           this.logger.warn('agent.budget.retry_failed', {
             agent_id: record.id,
-            session_id: entry.bodyId,
+            session_id: entry.bindingId,
             error: errorText(error),
           });
         }
@@ -3450,7 +3450,7 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     this.draining = true;
     const active = (): boolean => {
-      for (const map of this.bodyRegistry.values()) {
+      for (const map of this.executionUnitRegistry.values()) {
         for (const entry of map.values()) {
           if (entry.active !== undefined) return true;
         }
@@ -3459,7 +3459,7 @@ export class AgentServiceImpl implements AgentService {
     };
     if (!active()) return 'idle';
 
-    for (const map of this.bodyRegistry.values()) {
+    for (const map of this.executionUnitRegistry.values()) {
       for (const entry of map.values()) {
         if (entry.active === undefined) continue;
         try {
@@ -3467,7 +3467,7 @@ export class AgentServiceImpl implements AgentService {
         } catch (error) {
           this.logger.warn('agent.drain.cancel_failed', {
             member_id: entry.agentId,
-            session_id: entry.bodyId,
+            session_id: entry.bindingId,
             error: errorText(error),
           });
         }
@@ -3498,8 +3498,8 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * CONTRACT-hot-apply §4：把权限规则热应用到所有 live Body。
-   * 返回成功应用的 Body 数量；port 未实现时返回 0。
+   * CONTRACT-hot-apply §4：把权限规则热应用到所有 live ExecutionUnit。
+   * 返回成功应用的 ExecutionUnit 数量；port 未实现时返回 0。
    */
   async applyPermissionRules(rules: RuntimePermissionConfig): Promise<number> {
     await this.ready;
@@ -3515,8 +3515,8 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * CONTRACT-hot-apply §4：把工具面热刷新到所有 live Body（additive）。
-   * 返回成功刷新的 Body 数量；port 未实现时返回 0。刷新失败不得让 tools reload 失败。
+   * CONTRACT-hot-apply §4：把工具面热刷新到所有 live ExecutionUnit（additive）。
+   * 返回成功刷新的 ExecutionUnit 数量；port 未实现时返回 0。刷新失败不得让 tools reload 失败。
    */
   async refreshTools(tools?: readonly ToolDefinition[]): Promise<number> {
     await this.ready;
@@ -3544,14 +3544,14 @@ export class AgentServiceImpl implements AgentService {
     };
   }
 
-  /** 发成员事件（默认用 primary Body 的 session）；监听器与 EventStream 异常都隔离 */
+  /** 发成员事件（默认用 primary ExecutionUnit 的 session）；监听器与 EventStream 异常都隔离 */
   private emit(type: string, member: MemberRecord, extra: AgentEventExtra = {}): void {
-    const primary = primaryBody(member);
-    this.emitForSession(type, member, primary?.bodyId ?? member.sessionId, extra);
+    const primary = primaryBinding(member);
+    this.emitForSession(type, member, primary?.bindingId ?? member.sessionId, extra);
   }
 
   /**
-   * 指定 Body 的事件出口：body 级事件必须带自己的 session_id；
+   * 指定 ExecutionUnit 的事件出口：body 级事件必须带自己的 session_id；
    * `run_id` 始终是成员 id（run.* 由 runtime / scheduler 发布）。
    */
   private emitForSession(
@@ -3609,7 +3609,7 @@ export class AgentServiceImpl implements AgentService {
       ...status,
       bodies: entries
         .sort((left, right) => Number(right.primary) - Number(left.primary))
-        .map(toBodyStatus),
+        .map(toExecutionUnitStatus),
     };
   }
 

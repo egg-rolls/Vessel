@@ -1,7 +1,7 @@
 /**
  * 统一工具执行管道（0.8.2 Wave 2B1）。
  *
- * AgentRuntime、delegate 子 runtime 共用同一套工具执行语义：
+ * ExecutionUnit、delegate 子 runtime 共用同一套工具执行语义：
  * ToolCall guardrail → BeforeTool hook → 权限判定（最终工具与参数）
  * → handler（timeout/abort）→ ToolResult guardrail → AfterTool hook。
  *

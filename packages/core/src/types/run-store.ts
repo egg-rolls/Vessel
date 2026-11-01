@@ -85,7 +85,7 @@ export class RunResumeError extends Error {
 }
 
 /**
- * 同一 `AgentRuntime` 已有 active run（0.8 C1）。
+ * 同一 `ExecutionUnit` 已有 active run（0.8 C1）。
  *
  * 继承 `RunResumeError` 以保持既有 `instanceof` 与 `code` 消费方兼容；
  * `message` 固定为 `run_already_running`，调用方按 `code` 分支即可。
@@ -99,10 +99,10 @@ export class RunAlreadyRunningError extends RunResumeError {
 
 /**
  * @internal 非用户取消的 reason。
- * AgentRuntime 据此把 checkpoint 写成 `interrupted`（可恢复），
+ * ExecutionUnit 据此把 checkpoint 写成 `interrupted`（可恢复），
  * 其他取消 reason 一律写 `cancelled`。
  *
- * 0.10 R2-18：`AgentRuntime.interrupt('shutdown' | 'timeout')` 使用同名字符串；
+ * 0.10 R2-18：`ExecutionUnit.interrupt('shutdown' | 'timeout')` 使用同名字符串；
  * `interrupt('user')` 不在集合内 → cancelled。
  */
 export const RUN_INTERRUPT_REASONS: ReadonlySet<string> = new Set([

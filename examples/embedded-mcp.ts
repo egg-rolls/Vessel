@@ -6,13 +6,13 @@
  * 演示：
  * 1. 用与 `mcp_servers` 配置相同的形状描述一个本地 stdio MCP server；
  * 2. 把 `createMcpPlugin` 安装到 PluginHost（工具的唯一注册表）；
- * 3. 启动一个嵌入的 AgentRuntime（MemoryLLMProvider），并对 MCP 工具做一次直接调用；
+ * 3. 启动一个嵌入的 ExecutionUnit（MemoryLLMProvider），并对 MCP 工具做一次直接调用；
  * 4. 退出时关闭 MCP 连接（子进程）。
  */
 
 import { fileURLToPath } from 'node:url';
 import {
-  AgentRuntime,
+  ExecutionUnit,
   MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
@@ -64,7 +64,7 @@ async function main(): Promise<void> {
     console.log('Tool result:', toolResult);
 
     // 嵌入 runtime：同一个 PluginHost 既是 MCP 工具的来源，也是默认工具集。
-    const runtime = await AgentRuntime.create({
+    const runtime = await ExecutionUnit.create({
       provider: new MemoryLLMProvider(),
       model: 'mock-model',
       context: new MemoryContextManager(),

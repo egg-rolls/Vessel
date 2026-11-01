@@ -53,26 +53,26 @@ export type MemberPresence = 'live' | 'gone';
 /** 成员归属：present 在册，left 已关闭（持久化） */
 export type MemberMembership = 'present' | 'left';
 
-/** Body 轮换相位（不持久化；S2 rotate 使用） */
+/** Binding 轮换相位（不持久化；S2 rotate 使用） */
 export type MemberRotation = 'stable' | 'rotating';
 
-/** Body 指针：body_id ≡ session_id，epoch 由 current_body 派生 */
-export interface AgentBodyPointer {
+/** Binding 指针：body_id ≡ session_id，epoch 由 current_body 派生 */
+export interface BindingPointer {
   session_id: string;
   epoch: number;
   started_at: number;
 }
 
 /** body_history 上限；超出时丢弃最旧条目 */
-export const MAX_BODY_HISTORY = 20;
+export const MAX_BINDING_HISTORY = 20;
 
-/** 已退役 Body 的历史条目；只追加，有界（最多 20 条） */
-export interface AgentBodyHistoryEntry extends AgentBodyPointer {
+/** 已退役 Binding 的历史条目；只追加，有界（最多 20 条） */
+export interface BindingHistoryEntry extends BindingPointer {
   retired_at: number;
 }
 
-/** Body 的对外状态（`body_id ≡ session_id`） */
-export interface BodyStatus {
+/** ExecutionUnit 的对外状态（`body_id ≡ session_id`） */
+export interface ExecutionUnitStatus {
   session_id: string;
   epoch: number;
   state: 'idle' | 'running' | 'waiting_permission' | 'closed';
@@ -81,8 +81,8 @@ export interface BodyStatus {
   last_active_at: number;
 }
 
-/** 持久化的 Body 记录（v4 唯一真相） */
-export interface PersistedBodyRecord {
+/** 持久化的 Binding 记录（v4 唯一真相） */
+export interface PersistedBindingRecord {
   body_id: string;
   epoch: number;
   created_at: number;
@@ -113,14 +113,14 @@ export interface MemberStatus {
   presence?: MemberPresence;
   /** 归属（DTO 派生，持久化在 PersistedAgentRecord） */
   membership?: MemberMembership;
-  /** 当前 Body 的 epoch（由 current_body 派生） */
+  /** 当前 Binding 的 epoch（由 current_body 派生） */
   epoch?: number;
   /** 所属 Team（0.19 S3；unbound 时缺省） */
   team_id?: string;
-  /** 已退役 Body 历史（0.19 S6 additive；≤20，当前 Body 不在其中） */
-  body_history?: AgentBodyHistoryEntry[];
-  /** 0.27 additive：live Body 状态；`session_id` 仍表示 primary body */
-  bodies?: BodyStatus[];
+  /** 已退役 Binding 历史（0.19 S6 additive；≤20，当前 Binding 不在其中） */
+  body_history?: BindingHistoryEntry[];
+  /** 0.27 additive：live ExecutionUnit 状态；`session_id` 仍表示 primary binding */
+  bodies?: ExecutionUnitStatus[];
   /**
    * `create` / `hire` 专用：同名成员已存在，本次没有新建，返回的是它。
    * 只在复用出现时存在；正常创建不带这个字段。
@@ -137,7 +137,7 @@ export interface MemberStatus {
  */
 export interface PersistedAgentRecord {
   id: string;
-  /** 第一具 Body 的 session（兼容旧数据） */
+  /** 第一具 Binding 的 session（兼容旧数据） */
   session_id: string;
   name?: string;
   parent_id?: string;
@@ -153,13 +153,13 @@ export interface PersistedAgentRecord {
   team_id?: string;
   model?: string;
   system_prompt?: string;
-  /** 兼容视图：primary body 指针（v4 以 `bodies[]` 为真相） */
-  current_body?: AgentBodyPointer;
-  /** 已退役 Body 的历史（只追加，最多 20 条；当前 Body 不在其中） */
-  body_history?: AgentBodyHistoryEntry[];
-  /** 0.27：全部 Body（含已退役，退役保留 ≤50）；唯一真相 */
-  bodies?: PersistedBodyRecord[];
-  /** 0.27：primary body 的 body_id */
+  /** 兼容视图：primary binding 指针（v4 以 `bodies[]` 为真相） */
+  current_body?: BindingPointer;
+  /** 已退役 Binding 的历史（只追加，最多 20 条；当前 Binding 不在其中） */
+  body_history?: BindingHistoryEntry[];
+  /** 0.27：全部 Binding（含已退役，退役保留 ≤50）；唯一真相 */
+  bodies?: PersistedBindingRecord[];
+  /** 0.27：primary binding 的 body_id */
   primary_body_id?: string;
   forked_from?: string;
   current_tool?: string;
@@ -188,7 +188,7 @@ export interface AgentMessage {
   ts: number;
   /** 会话分组（0.19 S4）；系统提示也继承当前会话 */
   conversation_id?: string;
-  /** 系统提示类别；rotate 成功时移除 limit_warning，避免旧 Body 的预警发给新 Body */
+  /** 系统提示类别；rotate 成功时移除 limit_warning，避免旧 ExecutionUnit 的预警发给新 ExecutionUnit */
   kind?: 'limit_warning';
   /**
    * 发送者类别（内存内元数据，不落 snapshot）。由 AgentService 入队时按 registry
@@ -264,19 +264,19 @@ export interface MemberRuntimePort {
   dispose(member: MemberRuntimeMember): Promise<void> | void;
   /**
    * 身份变更通知（additive，可选）：只向成员上下文追加 `vessel:notice`，
-   * 不启动 turn、不入队。live Body 立即追加；未 spawn 的成员暂存到下一次 runTurn。
+   * 不启动 turn、不入队。live ExecutionUnit 立即追加；未 spawn 的成员暂存到下一次 runTurn。
    */
   notice?(memberId: string, text: string): void;
   /**
-   * CONTRACT-hot-apply §4（additive，可选）：把规则热应用到所有存活 Body。
-   * 返回实际应用的 Body 数量；未实现的 port 由 AgentService 报 0。
+   * CONTRACT-hot-apply §4（additive，可选）：把规则热应用到所有存活 ExecutionUnit。
+   * 返回实际应用的 ExecutionUnit 数量；未实现的 port 由 AgentService 报 0。
    */
   applyPermissionRules?(rules: RuntimePermissionConfig): Promise<number> | number;
   /**
-   * CONTRACT-hot-apply §4（additive，可选）：把工具面热刷新到所有存活 Body。
+   * CONTRACT-hot-apply §4（additive，可选）：把工具面热刷新到所有存活 ExecutionUnit。
    *
    * 在同一具 body 上换工具宿主，不重建 session / context / provider；有 active run
-   * 时延迟到轮边界。`tools` 缺省取父宿主当前工具面。返回实际刷新的 Body 数量；
+   * 时延迟到轮边界。`tools` 缺省取父宿主当前工具面。返回实际刷新的 ExecutionUnit 数量；
    * 未实现的 port 由 AgentService 报 0。
    */
   refreshTools?(tools?: readonly ToolDefinition[]): Promise<number> | number;
@@ -285,7 +285,7 @@ export interface MemberRuntimePort {
    *
    * `member.role` 是**转换后**的角色；实现的唯一义务是让活体「下一次 run」按它生效
    * （自动压缩开关 + 80%–90% 压力提示尾句），不重建 body、不动历史。返回实际应用的
-   * Body 数量（没有活体时为 0，此时策略由下一次 spawn 生效）。未实现的 port 由
+   * ExecutionUnit 数量（没有活体时为 0，此时策略由下一次 spawn 生效）。未实现的 port 由
    * AgentService 按 0 处理并走兜底轮换。
    */
   applyContextPolicy?(member: MemberRuntimeMember): Promise<number> | number;
@@ -306,16 +306,16 @@ export interface MemberRuntimePort {
   /**
    * 0.32（additive，可选）：挂上按 agent_id 的持久化收件箱。
    *
-   * 之后 spawn 的每个 Body 注册未读 notice hook 与 `inbox` 工具；传 undefined 关闭。
+   * 之后 spawn 的每个 ExecutionUnit 注册未读 notice hook 与 `inbox` 工具；传 undefined 关闭。
    * 不新增 RPC / DTO。
    */
   attachInbox?(inbox: AgentInboxPort | undefined): void;
   /**
-   * 0.32（additive，可选）：关闭某个旧 Body 的 inbox hook（rotate / retire）。
+   * 0.32（additive，可选）：关闭某个旧 ExecutionUnit 的 inbox hook（rotate / retire）。
    * 只是让 hook 不再取消息；已 hold 的队列由 `releaseHeld` 重新放出。
    */
   disableInbox?(sessionId: string): void;
-  /** 0.32（additive，可选）：rotate 回滚时恢复旧 Body 的 inbox hook。 */
+  /** 0.32（additive，可选）：rotate 回滚时恢复旧 ExecutionUnit 的 inbox hook。 */
   enableInbox?(sessionId: string): void;
   /** 0.32（additive，可选）：丢弃该成员尚未 spawn / 未开跑时暂存的 notice。 */
   clearPendingNotices?(memberId: string): void;
@@ -539,13 +539,13 @@ export type AgentUpdateField = 'name' | 'model' | 'system_prompt';
 /**
  * 更新成员（0.25）。
  *
- * 选择器 `id` / `to` 接受成员 id、当前 Body session 或唯一当前名字（与其它入口一致）。
+ * 选择器 `id` / `to` 接受成员 id、当前 Binding session 或唯一当前名字（与其它入口一致）。
  * `name` 是**新名字**，不是选择器；改名立即生效。
- * `model` / `systemPrompt` 只写入记录，由**下一次 spawn 的 Body** 使用；
- * 当前已存在的 Body 不会因 update 而重建。
+ * `model` / `systemPrompt` 只写入记录，由**下一次 spawn 的 ExecutionUnit** 使用；
+ * 当前已存在的 ExecutionUnit 不会因 update 而重建。
  */
 export interface AgentUpdateInput {
-  /** 选择器：成员 id / 当前 Body session / 唯一当前名字 */
+  /** 选择器：成员 id / 当前 Binding session / 唯一当前名字 */
   id?: string;
   /** 选择器别名（与 close 的 `to` 一致） */
   to?: string;
@@ -553,7 +553,7 @@ export interface AgentUpdateInput {
   name?: string;
   model?: string;
   systemPrompt?: string;
-  /** 角色转换目标（member 需要 Team；temporary 的 owner 取 `from`）；不触发新 Body */
+  /** 角色转换目标（member 需要 Team；temporary 的 owner 取 `from`）；不触发新 ExecutionUnit */
   role?: AgentRole;
   /** 转换到 member / temporary 时显式指定 Team（缺省沿用已有 Team） */
   teamId?: string;
@@ -679,14 +679,14 @@ export type DispatchResult =
     };
 
 /**
- * rotate：Agent 换一具新 Body；id / name / owner / 配置不变。
- * startup_prompt 必填，作为新 Body 的第一条消息。
+ * rotate：Agent 换一具新 ExecutionUnit；id / name / owner / 配置不变。
+ * startup_prompt 必填，作为新 ExecutionUnit 的第一条消息。
  */
 export interface RotateInput {
-  /** agent id | 当前 Body 的 session_id | 唯一 name */
+  /** agent id | 当前 ExecutionUnit 的 session_id | 唯一 name */
   to: string;
   startup_prompt: string;
-  /** 调用者当前 Body 的 session；agent 工具路径必填，CLI / owner 路径缺省 */
+  /** 调用者当前 ExecutionUnit 的 session；agent 工具路径必填，CLI / owner 路径缺省 */
   from_session_id?: string;
   /** 可见性判定；缺省 DEFAULT_OWNER */
   from?: string;
@@ -719,7 +719,7 @@ export type RotateResult =
  * 这是继 `attachOwner` 之后第二条人力 `left → present` 路径。
  */
 export interface ReinstateInput {
-  /** agent id | 当前 Body session | 唯一 name */
+  /** agent id | 当前 Binding session | 唯一 name */
   to: string;
   /** 目标 Team；unbound Agent 在此写入 */
   team_id: string;
@@ -817,14 +817,14 @@ export interface AgentEvent {
   state?: MemberState;
   /** 进程内 presence（agent.stale / agent.resumed 等生命周期事件） */
   presence?: MemberPresence;
-  /** 当前 Body epoch（agent.resumed） */
+  /** 当前 ExecutionUnit epoch（agent.resumed） */
   epoch?: number;
-  /** rotate：旧 / 新 Body 的 session */
+  /** rotate：旧 / 新 Binding 的 session */
   from_session_id?: string;
   to_session_id?: string;
-  /** 事件所属 Body（旧轮终态 / retired / reply.stale） */
+  /** 事件所属 ExecutionUnit（旧轮终态 / retired / reply.stale） */
   body_id?: string;
-  /** 旧 Body 轮末终态标记 */
+  /** 旧 ExecutionUnit 轮末终态标记 */
   stale?: boolean;
   message_id?: string;
   /** 消息来源（queued 事件） */
@@ -843,13 +843,13 @@ export interface AgentEvent {
 export type AgentEventListener = (event: AgentEvent) => void;
 
 /**
- * Body 跨进程单写者租约（0.27）。缺省无锁（纯内存测试）。
- * 装配层用现有 session-lock 格式实现，body 存活期间持有。
+ * Binding 跨进程单写者租约（0.27）。缺省无锁（纯内存测试）。
+ * 装配层用现有 session-lock 格式实现，binding 存活期间持有。
  */
-export interface BodyLeasePort {
-  acquire(bodyId: string): Promise<void>;
-  release(bodyId: string): Promise<void>;
-  isAlive(bodyId: string): Promise<boolean>;
+export interface BindingLeasePort {
+  acquire(bindingId: string): Promise<void>;
+  release(bindingId: string): Promise<void>;
+  isAlive(bindingId: string): Promise<boolean>;
 }
 
 /** AgentService 构造参数 */
@@ -873,8 +873,8 @@ export interface AgentServiceOptions {
    * 只在有 `dataDir` 时可生效。
    */
   inboxMaxMessages?: number;
-  /** body 跨进程租约；缺省无锁 */
-  bodyLease?: BodyLeasePort;
+  /** binding 跨进程租约；缺省无锁 */
+  bindingLease?: BindingLeasePort;
   /** durable resume 用 checkpoint 存储；缺省禁止 resume */
   runStore?: RunStore;
   now?: () => number;
@@ -944,11 +944,11 @@ export interface AgentService {
    * 再经 scheduler 调用 runtime.resume。
    */
   resume(runId: string): Promise<ResumeResult>;
-  /** 某 agent 的 live Body 状态（primary 优先） */
-  bodies(agentId: string): Promise<BodyStatus[]>;
+  /** 某 agent 的 live ExecutionUnit 状态（primary 优先） */
+  bodies(agentId: string): Promise<ExecutionUnitStatus[]>;
   /**
    * 更新名字 / model / systemPrompt；名字立即生效且保持同 Team（unbound 为 tenant）
-   * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 Body。
+   * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 ExecutionUnit。
    */
   update(input: AgentUpdateInput): Promise<AgentUpdateResult>;
   /** 批量更新：条目并行，按输入顺序返回逐条结果 */
@@ -961,7 +961,7 @@ export interface AgentService {
    */
   dispatch(input: DispatchInput): Promise<DispatchResult>;
   /**
-   * 换一具新 Body：旧 Body 跑完当前轮后退役，新 Body 以 startup_prompt 开始。
+   * 换一具新 ExecutionUnit：旧 ExecutionUnit 跑完当前轮后退役，新 ExecutionUnit 以 startup_prompt 开始。
    * 失败保持旧指针，不自动 fork / 重试。
    */
   rotate(input: RotateInput): Promise<RotateResult>;
@@ -976,13 +976,13 @@ export interface AgentService {
   /** 成员显式回复父级；本轮自动最终文本随后被抑制 */
   reply(memberId: string, content: string): Promise<ReplyResult>;
   /**
-   * 当前 Body session -> 成员状态；忽略可见性。
+   * 当前 Binding session -> 成员状态；忽略可见性。
    * 只由 TeamService / agent 工具做调用者身份解析，不向模型暴露。
    */
   identify(sessionId: string): Promise<MemberStatus | undefined>;
-  /** 执行内核 bridge 上报的权限等待/恢复；只接受当前运行 Body 的回调 */
+  /** 执行内核 bridge 上报的权限等待/恢复；只接受当前运行 ExecutionUnit 的回调 */
   notePermissionState(memberId: string, sessionId: string, state: MemberPermissionState): void;
-  /** 成员引擎事件回流（装配用）；当前只处理 live Body 的 agent.limit.warning */
+  /** 成员引擎事件回流（装配用）；当前只处理 live ExecutionUnit 的 agent.limit.warning */
   noteMemberEvent(memberId: string, sessionId: string, event: RunEvent): void;
   /**
    * 0.31：body 当前上下文水位（0–1）；无活体 / 无预算时 undefined。
@@ -1011,25 +1011,25 @@ export interface AgentService {
   /** conversation 预算状态 / 人工 override（只由人力入口调用） */
   budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview>;
   /**
-   * 关闭前中断并等待成员轮收口（含成员 Body 共享的 eventLog 写入）。
+   * 关闭前中断并等待成员轮收口（含成员 ExecutionUnit 共享的 eventLog 写入）。
    * 只影响在跑轮：不改 registry 状态 / membership，也不启动队列里的后续消息。
    */
   drain(options?: AgentDrainOptions): Promise<AgentDrainOutcome>;
   /** 立即落盘待写快照；无 snapshot 或写入成功返回 true，写入失败返回 false */
   flushSnapshot(): Promise<boolean>;
   /**
-   * CONTRACT-hot-apply §4：把新的权限规则热应用到**所有存活的成员 Body**。
+   * CONTRACT-hot-apply §4：把新的权限规则热应用到**所有存活的成员 ExecutionUnit**。
    *
-   * 装配层只需暴露这一条转发入口（执行内核自己知道哪些 Body 还活着）；
-   * 返回成功应用的 Body 数量，0 表示当前没有存活成员。
+   * 装配层只需暴露这一条转发入口（执行内核自己知道哪些 ExecutionUnit 还活着）；
+   * 返回成功应用的 ExecutionUnit 数量，0 表示当前没有存活成员。
    * 不影响 owner——owner 的 runtime 由装配层单独处理。
    */
   applyPermissionRules(rules: RuntimePermissionConfig): Promise<number>;
   /**
-   * CONTRACT-hot-apply §4（additive，可选）：把工具面热刷新到所有存活的成员 Body。
+   * CONTRACT-hot-apply §4（additive，可选）：把工具面热刷新到所有存活的成员 ExecutionUnit。
    *
    * 装配层只需暴露这一条转发入口；有 active run 的 body 由执行内核延迟到轮边界。
-   * `tools` 缺省取成员 runtime 的父宿主；返回成功刷新的 Body 数量，0 表示没有存活成员
+   * `tools` 缺省取成员 runtime 的父宿主；返回成功刷新的 ExecutionUnit 数量，0 表示没有存活成员
    * （或 port 未实现）。
    */
   refreshTools?(tools?: readonly ToolDefinition[]): Promise<number>;
@@ -1145,8 +1145,8 @@ export interface TeamMemberSummary {
   epoch: number;
   /** 最后活跃时间（0.21 additive；epoch ms） */
   last_seen?: number;
-  /** 已退役 Body 历史（0.19 S6 additive；可选，旧数据缺失不报错） */
-  body_history?: AgentBodyHistoryEntry[];
+  /** 已退役 Binding 历史（0.19 S6 additive；可选，旧数据缺失不报错） */
+  body_history?: BindingHistoryEntry[];
 }
 
 export interface TeamSummary {
@@ -1237,7 +1237,7 @@ export interface TeamRosterOptions {
   viewer?: string;
 }
 
-/** 成员 Body 的 A2A send（agent 工具用）；from 由 session 解析，模型不能伪造 */
+/** 成员 ExecutionUnit 的 A2A send（agent 工具用）；from 由 session 解析，模型不能伪造 */
 export interface TeamAgentSendInput {
   from_session_id: string;
   to: string;
@@ -1397,9 +1397,9 @@ export interface AgentTeamService {
   post(input: TeamPostInput): Promise<TeamPostResult>;
   /** 未知 Team 返回 undefined；业务失败抛 TeamError */
   members(input: TeamMembersInput): Promise<TeamMembersResult | undefined>;
-  /** 成员 Body 的 A2A send */
+  /** 成员 ExecutionUnit 的 A2A send */
   send(input: TeamAgentSendInput): Promise<TeamAgentSendResult>;
-  /** 成员 Body 的 list：有 Team 只返回同 Team  roster；无 Team 返回自己的可见成员 */
+  /** 成员 ExecutionUnit 的 list：有 Team 只返回同 Team  roster；无 Team 返回自己的可见成员 */
   listForCaller(sessionId: string): Promise<TeamMemberSummary[]>;
   /** body session -> 成员（含 team_id） */
   identify(sessionId: string): Promise<TeamMemberSummary | undefined>;

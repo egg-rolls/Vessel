@@ -1,4 +1,4 @@
-import type { AgentRole, BodyStatus } from './agents';
+import type { AgentRole, ExecutionUnitStatus } from './agents';
 
 // ── Team（0.19 S6，node-local） ─────────────────────
 // 契约来自个人侧 PLAN-0.19-s3-team 与 S6 R1；字段只增不改。
@@ -60,7 +60,7 @@ export interface TeamMember {
   /** S3 R1：已退役 Body，≤20；缺失时回退到事件累积。 */
   body_history?: TeamBodyHistoryEntry[];
   /** 0.27 additive：live body 列表；缺失时只有 `session_id` 一个 body。 */
-  bodies?: BodyStatus[];
+  bodies?: ExecutionUnitStatus[];
   /** v3 additive：角色；旧 gateway 缺失时按 owner 推断。 */
   role?: AgentRole;
   /** v3 additive：member = self，temporary = 雇佣者；缺失时按旧语义推断。 */

@@ -212,7 +212,7 @@ export interface AgentDispatchBatchResultLike {
   results: AgentDispatchItemLike[];
 }
 
-/** `agents.rotate` 成功条目：Body 已切换。 */
+/** `agents.rotate` 成功条目：Binding 已切换。 */
 export interface AgentRotateOkLike {
   ok: true;
   status: 'rotated';
@@ -240,12 +240,12 @@ export interface AgentControlLike {
   update(inputs: AgentUpdateLikeInput[]): Promise<AgentLifecycleBatchResultLike>;
   /** 批量关闭；条目并行，结果与输入同序。 */
   close(agentIds: string[]): Promise<AgentCloseBatchResultLike>;
-  /** 按成员 id / 当前 Body session 查找（忽略可见性）；未知返回 undefined。 */
+  /** 按成员 id / 当前 Binding session 查找（忽略可见性）；未知返回 undefined。 */
   get(agentId: string): Promise<AgentStatusLike | undefined>;
   /** 成员列表；viewer 决定 private 可见性。 */
   list(input?: AgentListLikeInput): Promise<AgentStatusLike[]>;
   /**
-   * 按 dispatch 的寻址规则（id / 当前 Body session / 唯一 present name）解析目标。
+   * 按 dispatch 的寻址规则（id / 当前 Binding session / 唯一 present name）解析目标。
    * 未知或同名歧义返回 undefined；只用于 team-scoped token 的作用域校验。
    */
   resolve(target: string): Promise<AgentStatusLike | undefined>;

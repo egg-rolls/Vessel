@@ -2,7 +2,7 @@
  * 会话事件 → `Message[]` 纯函数投影（0.18）。
  *
  * 输入是 `events.ndjson` 的记录（或任何 `{type, ts, data}` 序列），输出与
- * AgentRuntime 写入 ContextManager 的消息形状一致（不含 system prompt；
+ * ExecutionUnit 写入 ContextManager 的消息形状一致（不含 system prompt；
  * 调用方按 run 的 systemPrompt 自行补齐）。
  *
  * 覆盖的事实事件：

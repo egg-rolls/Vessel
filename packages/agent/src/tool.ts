@@ -34,7 +34,7 @@ const ACTIONS = ['create', 'hire', 'send', 'close', 'list', 'rotate', 'post'] as
 /** root owner 可见的动作：root 没有 Team，不暴露 create（派 peer 需要 Team） */
 const OWNER_ACTIONS = ['hire', 'send', 'close', 'list', 'rotate', 'post'] as const;
 
-/** 成员 Body 可用的动作；rotate 在动作闸门之前单独处理 */
+/** 成员 ExecutionUnit 可用的动作；rotate 在动作闸门之前单独处理 */
 const BODY_ACTIONS: readonly string[] = [
   'create',
   'hire',
@@ -205,9 +205,9 @@ function readState(value: unknown): MemberState {
 export interface AgentToolOptions {
   /** 调用者（root owner）id；成员 owner / parent 与 list viewer 都用它 */
   ownerId?: string;
-  /** root owner 自己的 session；用于区分 owner 调用与成员 Body 调用 */
+  /** root owner 自己的 session；用于区分 owner 调用与成员 ExecutionUnit 调用 */
   ownerSessionId?: string;
-  /** 成员 Body 的 Team 能力（post / send / list）；缺失时这些动作报错 */
+  /** 成员 ExecutionUnit 的 Team 能力（post / send / list）；缺失时这些动作报错 */
   team?: AgentTeamService;
   /**
    * 0.31：是否有能应答权限确认的人类通道（交互 REPL / serve；headless 为 false）。
@@ -348,7 +348,7 @@ export function createAgentTool(
         const record = isRecord(args) ? args : {};
         const action = record.action;
         const callerSession = ctx?.session_id;
-        // 成员 Body 调用（有 session 且不是 root owner 的 session）只能 rotate 自己。
+        // 成员 ExecutionUnit 调用（有 session 且不是 root owner 的 session）只能 rotate 自己。
         const isOwnerCaller =
           callerSession === undefined ||
           options.ownerSessionId === undefined ||
@@ -533,7 +533,7 @@ export function createAgentTool(
         }
 
         if (action === 'send') {
-          // owner 走统一 dispatch；成员 Body 用自己的 session 走 TeamService.send
+          // owner 走统一 dispatch；成员 ExecutionUnit 用自己的 session 走 TeamService.send
           // （from 恒由入口决定，模型不能伪造）。
           const sendSingle = async (
             entry: unknown,

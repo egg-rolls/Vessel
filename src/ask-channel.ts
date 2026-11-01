@@ -5,7 +5,7 @@
  * 1. headless 进程把 `ask.user.requested` 落盘；
  * 2. 没有 gateway 时，`vessel attention` 用离线 target 读写同一份文件；
  * 3. `--resume-run` 前把已回答的 ask 追加为一条 `user.message` 事件，
- *    让 `AgentRuntime.resume` 从既有历史路径读到答案。
+ *    让 `ExecutionUnit.resume` 从既有历史路径读到答案。
  *
  * 不做 run 调度、不持有运行时状态；只做文件读改写与事件注入。
  *

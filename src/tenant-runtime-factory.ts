@@ -26,9 +26,9 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
-  AgentRuntime,
   createDefaultTraceRedactor,
   type EventStream,
+  ExecutionUnit,
   estimateTokens,
   type Guardrail,
   type Hook,
@@ -182,7 +182,7 @@ export interface TenantRuntimeBundle {
    */
   scheduler: Scheduler;
   runtime: RunnableAgent;
-  agentRuntime?: AgentRuntime;
+  executionUnit?: ExecutionUnit;
   runStore?: RunStore;
   /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
   eventLog?: SessionEventLog;
@@ -504,7 +504,7 @@ export type DrainOutcome = 'idle' | 'interrupted' | 'timeout' | 'unsupported';
 export interface DrainActiveRunsOptions {
   /** active run id 集合；run 终态事件由订阅方删除 */
   activeRuns: Set<string>;
-  /** AgentRuntime.interrupt */
+  /** ExecutionUnit.interrupt */
   interrupt?: (reason: 'shutdown') => void;
   logger: Logger;
   tenantId: string;
@@ -620,7 +620,7 @@ export async function buildTenantRuntime(
       tenantId,
     });
 
-    // 0.10 R2-18：只跟踪真实在跑的 run（包装 `AgentRuntime.run/resume`），
+    // 0.10 R2-18：只跟踪真实在跑的 run（包装 `ExecutionUnit.run/resume`），
     // 不从事件推断——测试 / gateway 也会发布合成的 run.started，按事件跟踪会让
     // shutdown 白等 5s。
     const activeRuns = new Set<string>();
@@ -690,7 +690,7 @@ export async function buildTenantRuntime(
       const category = descriptor?.category ?? 'unknown';
       const plugin = await loader.load(name);
       if (plugin) {
-        // E1：配置在 install 时透传（host 路径直接传；非 host 路径见 AgentRuntime）。
+        // E1：配置在 install 时透传（host 路径直接传；非 host 路径见 ExecutionUnit）。
         plugins.push(plugin);
         pluginLoadEvents.push({
           type: 'plugin.loaded',
@@ -736,7 +736,7 @@ export async function buildTenantRuntime(
 
     const contextFactory = () => new MemoryContextManager(contextConfigFor(config, summarizer));
 
-    const agentRuntime = await AgentRuntime.create(
+    const executionUnit = await ExecutionUnit.create(
       // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
       withReasoning(config, {
         provider,
@@ -760,30 +760,31 @@ export async function buildTenantRuntime(
           toolPolicy,
         ),
         // 0.18（DECISION-032 §1.5）：工具经 tenant policy 过滤器注册
-        // （AgentRuntime 不再自建 host）。
+        // （ExecutionUnit 不再自建 host）。
         pluginHost: new TenantToolHost(new MemoryPluginHost(), toolPolicy),
         ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
         ...(runStore ? { runStore } : {}),
         ...(eventLog ? { eventLog } : {}),
         logger,
-      } as Parameters<typeof AgentRuntime.create>[0] & {
+      } as Parameters<typeof ExecutionUnit.create>[0] & {
         pluginConfigs?: Record<string, Record<string, unknown>>;
       }),
     );
     // 0.10 R2-18：包装 run/resume 以精确跟踪在跑 run（shutdown drain 用）。
-    const originalRun = agentRuntime.run.bind(agentRuntime);
-    agentRuntime.run = (input, sessionId, opts) => trackActive(originalRun(input, sessionId, opts));
-    const originalResume = agentRuntime.resume?.bind(agentRuntime);
+    const originalRun = executionUnit.run.bind(executionUnit);
+    executionUnit.run = (input, sessionId, opts) =>
+      trackActive(originalRun(input, sessionId, opts));
+    const originalResume = executionUnit.resume?.bind(executionUnit);
     if (originalResume) {
-      agentRuntime.resume = (runId, opts) => trackActive(originalResume(runId, opts));
+      executionUnit.resume = (runId, opts) => trackActive(originalResume(runId, opts));
     }
 
     // 0.15：run/resume 的跨进程写锁。memory 后端不落盘，无需锁。
-    const lockedRuntime = withSessionWriteLock(agentRuntime, {
+    const lockedRuntime = withSessionWriteLock(executionUnit, {
       tenantDir: tenantPaths.root,
       enabled: options.sessionLocks ?? backend !== 'memory',
     });
-    const finalPluginHost = agentRuntime.pluginHost;
+    const finalPluginHost = executionUnit.pluginHost;
 
     // ── Trace ─────────────────────────────────────
     const extRedactor = options.redactor ?? (await loadRedactSecrets(loader));
@@ -885,7 +886,7 @@ export async function buildTenantRuntime(
      * 可 `--resume-run`），限时等待终态；超时记录 warning 后继续关闭。
      */
     const drain = async (): Promise<void> => {
-      const interrupt = (agentRuntime as { interrupt?: (reason?: 'shutdown') => void } | undefined)
+      const interrupt = (executionUnit as { interrupt?: (reason?: 'shutdown') => void } | undefined)
         ?.interrupt;
       try {
         await drainActiveRuns({
@@ -894,7 +895,7 @@ export async function buildTenantRuntime(
           tenantId,
           timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
           ...(typeof interrupt === 'function'
-            ? { interrupt: (reason: 'shutdown') => interrupt.call(agentRuntime, reason) }
+            ? { interrupt: (reason: 'shutdown') => interrupt.call(executionUnit, reason) }
             : {}),
         });
       } catch (error) {
@@ -913,7 +914,7 @@ export async function buildTenantRuntime(
       // 关闭顺序：feishu → metrics → MCP → runtime → trace
       // → runStore → session。全部 await，异常逐段隔离，后续步骤仍会执行。
       // 0.9：MCP 是工厂式插件，不在 runtime 的 `plugins` 数组里，
-      // `AgentRuntime.dispose()` 触达不到；它的 dispose() 只是 close() 的
+      // `ExecutionUnit.dispose()` 触达不到；它的 dispose() 只是 close() 的
       // 幂等别名（ext 0.9），因此这里保留显式 close —— 不要为接 dispose
       // 而改安装顺序（DECISION-019 A）。
       await stopFeishuChannel(feishuChannel, (error) => report('feishu.stop', error));
@@ -928,10 +929,10 @@ export async function buildTenantRuntime(
         }
       }
 
-      // 0.9：AgentRuntime.dispose() 返回 Promise（逆序调插件 dispose）；
+      // 0.9：ExecutionUnit.dispose() 返回 Promise（逆序调插件 dispose）；
       // 必须等待，否则进程退出会截断插件清理。dispose 自身幂等且不外抛。
       try {
-        await agentRuntime.dispose();
+        await executionUnit.dispose();
       } catch (error) {
         report('runtime.dispose', error);
       }
@@ -994,7 +995,7 @@ export async function buildTenantRuntime(
       pluginHost: finalPluginHost,
       scheduler,
       runtime: lockedRuntime,
-      agentRuntime,
+      executionUnit,
       ...(runStore ? { runStore } : {}),
       ...(eventLog ? { eventLog } : {}),
       ...(trace ? { trace } : {}),

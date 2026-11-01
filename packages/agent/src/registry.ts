@@ -2,21 +2,21 @@
  * 内存成员注册表。
  *
  * 一个 registry 实例只服务一个 tenant（跨 tenant 不可见 / 不可寻址由构造边界保证）。
- * 一个 Agent 恰好一具 live Body（`body_id ≡ session_id`），唯一例外是 rotate 窗口：
- * 此时 `retiring` 暂存待退役的旧 Body。`bodyHistory` 是只追加的退役体记账（≤20 条）。
+ * 一个 Agent 恰好一具 live Binding（`body_id ≡ session_id`），唯一例外是 rotate 窗口：
+ * 此时 `retiringBinding` 暂存待退役的旧 Binding。`bindingHistory` 是只追加的退役体记账（≤20 条）。
  *
  * @module @vessel-agent/agent
  */
 
 import type { Usage } from '@vessel-agent/core';
 import {
-  type AgentBodyHistoryEntry,
-  type AgentBodyPointer,
   AgentError,
   type AgentRole,
-  type BodyStatus,
+  type BindingHistoryEntry,
+  type BindingPointer,
+  type ExecutionUnitStatus,
   type ListFilter,
-  MAX_BODY_HISTORY,
+  MAX_BINDING_HISTORY,
   type MemberMembership,
   type MemberPresence,
   type MemberRotation,
@@ -25,7 +25,7 @@ import {
   type MemberStatus,
   type MemberVisibility,
   type PersistedAgentRecord,
-  type PersistedBodyRecord,
+  type PersistedBindingRecord,
 } from './types.js';
 
 /**
@@ -37,9 +37,9 @@ import {
  */
 export const ADMIN_VIEWER = '*';
 
-/** 注册表内部 Body 记录（camelCase；对外经 toMemberStatus 转 snake_case） */
-export interface AgentBodyRecord {
-  bodyId: string;
+/** 注册表内部 Binding 记录（camelCase；对外经 toMemberStatus 转 snake_case） */
+export interface BindingRecord {
+  bindingId: string;
   epoch: number;
   createdAt: number;
   lastActiveAt: number;
@@ -50,21 +50,21 @@ export interface AgentBodyRecord {
 /** 注册表内部记录（camelCase；对外经 toMemberStatus 转 snake_case） */
 export interface MemberRecord {
   id: string;
-  /** 第一具 Body 的 session（兼容旧数据；当前 Body 见 body） */
+  /** 第一具 Binding 的 session（兼容旧数据；当前 Binding 见 binding） */
   sessionId: string;
   /**
-   * 当前 Body（恰一具；0.28 起不再有 N 具）。回收 / close 后**保留记录**并标
+   * 当前 Binding（恰一具；0.28 起不再有 N 具）。回收 / close 后**保留记录**并标
    * `retiredAt`——`body_id ≡ session_id` 是续接历史的唯一钥匙，绝不删。
    * 只有 rotate 失败回滚这类中间态才短暂缺省。
    */
-  body?: AgentBodyRecord;
+  binding?: BindingRecord;
   /**
-   * rotate 窗口内待退役的旧 Body（`rotation === 'rotating'` 期间与新 Body 共存）。
-   * 窗口结束即清空：退役后进 `bodyHistory`。
+   * rotate 窗口内待退役的旧 Binding（`rotation === 'rotating'` 期间与新 Binding 共存）。
+   * 窗口结束即清空：退役后进 `bindingHistory`。
    */
-  retiring?: AgentBodyRecord;
-  /** 已退役 Body 的历史；只追加，最多 MAX_BODY_HISTORY 条 */
-  bodyHistory: AgentBodyHistoryEntry[];
+  retiringBinding?: BindingRecord;
+  /** 已退役 Binding 的历史；只追加，最多 MAX_BINDING_HISTORY 条 */
+  bindingHistory: BindingHistoryEntry[];
   name?: string;
   parentId?: string;
   /** 成员角色（v3 持久化） */
@@ -81,7 +81,7 @@ export interface MemberRecord {
   membership: MemberMembership;
   /** 所属 Team（0.19 S3）；unbound 时缺省，持久化 */
   teamId?: string;
-  /** Body 轮换相位；不持久化 */
+  /** Binding 轮换相位；不持久化 */
   rotation: MemberRotation;
   forkedFrom?: string;
   currentTool?: string;
@@ -111,45 +111,46 @@ export function canTransition(from: MemberState, to: MemberState): boolean {
 }
 
 /**
- * 所有 live Body（未退役）。
+ * 所有 live Binding（未退役）。
  *
  * 0.28 起正常情况至多一具；`rotation === 'rotating'` 期间是两具（新 + 待退役），
  * rotate 的回滚 / flush 依赖这一点，所以这里**保持**返回列表的语义不变。
  */
-export function liveBodies(record: MemberRecord): AgentBodyRecord[] {
-  const live: AgentBodyRecord[] = [];
-  if (record.body !== undefined && record.body.retiredAt === undefined) live.push(record.body);
-  if (record.retiring !== undefined && record.retiring.retiredAt === undefined) {
-    live.push(record.retiring);
+export function liveBindings(record: MemberRecord): BindingRecord[] {
+  const live: BindingRecord[] = [];
+  if (record.binding !== undefined && record.binding.retiredAt === undefined)
+    live.push(record.binding);
+  if (record.retiringBinding !== undefined && record.retiringBinding.retiredAt === undefined) {
+    live.push(record.retiringBinding);
   }
   return live;
 }
 
-/** primary Body；缺省回落到唯一 live body / 兼容指针 */
-export function primaryBody(record: MemberRecord): AgentBodyRecord | undefined {
-  const live = liveBodies(record);
+/** primary Binding；缺省回落到唯一 live body / 兼容指针 */
+export function primaryBinding(record: MemberRecord): BindingRecord | undefined {
+  const live = liveBindings(record);
   return live.find((body) => body.primary) ?? live[0] ?? undefined;
 }
 
-/** 记录里该 id 的 Body 槽位（当前或 rotate 窗口内的待退役体；含已退役） */
-function findBody(record: MemberRecord, bodyId: string): AgentBodyRecord | undefined {
-  if (record.body?.bodyId === bodyId) return record.body;
-  if (record.retiring?.bodyId === bodyId) return record.retiring;
+/** 记录里该 id 的 Binding 槽位（当前或 rotate 窗口内的待退役体；含已退役） */
+function findBinding(record: MemberRecord, bindingId: string): BindingRecord | undefined {
+  if (record.binding?.bindingId === bindingId) return record.binding;
+  if (record.retiringBinding?.bindingId === bindingId) return record.retiringBinding;
   return undefined;
 }
 
-/** 参与 session 寻址的 Body session：primary 优先，否则当前 Body，最后兼容 sessionId */
-export function currentBodySession(record: MemberRecord): string {
-  return primaryBody(record)?.bodyId ?? record.body?.bodyId ?? record.sessionId;
+/** 参与 session 寻址的 Binding session：primary 优先，否则当前 Binding，最后兼容 sessionId */
+export function currentBindingSession(record: MemberRecord): string {
+  return primaryBinding(record)?.bindingId ?? record.binding?.bindingId ?? record.sessionId;
 }
 
 /** 注册表记录 → 对外状态 */
 export function toMemberStatus(record: MemberRecord): MemberStatus {
-  const primary = primaryBody(record);
-  const bodies: BodyStatus[] = liveBodies(record)
+  const primary = primaryBinding(record);
+  const bodies: ExecutionUnitStatus[] = liveBindings(record)
     .sort((left, right) => Number(right.primary) - Number(left.primary))
     .map((body) => ({
-      session_id: body.bodyId,
+      session_id: body.bindingId,
       epoch: body.epoch,
       state: 'idle',
       primary: body.primary,
@@ -158,7 +159,7 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
     }));
   return {
     id: record.id,
-    session_id: currentBodySession(record),
+    session_id: currentBindingSession(record),
     ...(record.name !== undefined ? { name: record.name } : {}),
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
     role: record.role,
@@ -168,8 +169,8 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
     presence: record.presence,
     membership: record.membership,
     ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
-    epoch: primary?.epoch ?? record.body?.epoch ?? 0,
-    ...(record.bodyHistory.length > 0 ? { body_history: record.bodyHistory } : {}),
+    epoch: primary?.epoch ?? record.binding?.epoch ?? 0,
+    ...(record.bindingHistory.length > 0 ? { body_history: record.bindingHistory } : {}),
     ...(bodies.length > 0 ? { bodies } : {}),
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
     ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
@@ -177,10 +178,10 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
   };
 }
 
-/** 内部 Body → 持久化形状（snake_case） */
-export function toPersistedBody(body: AgentBodyRecord): PersistedBodyRecord {
+/** 内部 Binding → 持久化形状（snake_case） */
+export function toPersistedBinding(body: BindingRecord): PersistedBindingRecord {
   return {
-    body_id: body.bodyId,
+    body_id: body.bindingId,
     epoch: body.epoch,
     created_at: body.createdAt,
     last_active_at: body.lastActiveAt,
@@ -191,22 +192,22 @@ export function toPersistedBody(body: AgentBodyRecord): PersistedBodyRecord {
 
 /** 注册表记录 → 快照持久化记录（不落 presence / rotation） */
 export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
-  const primary = primaryBody(record);
-  // rotate 窗口内旧 Body 还挂在 `retiring` 上、尚未进 `bodyHistory`。若此刻落盘，
-  // 旧 session id 会整体丢失（`bodies[]` 只写当前 Body）→ 崩溃后接不回去。
+  const primary = primaryBinding(record);
+  // rotate 窗口内旧 Binding 还挂在 `retiringBinding` 上、尚未进 `bindingHistory`。若此刻落盘，
+  // 旧 session id 会整体丢失（`bodies[]` 只写当前 Binding）→ 崩溃后接不回去。
   // 所以窗口内也把待退役体记进 `body_history`（写完即退役，不影响 live 判定）。
   const history =
-    record.retiring !== undefined && record.retiring.retiredAt === undefined
+    record.retiringBinding !== undefined && record.retiringBinding.retiredAt === undefined
       ? [
-          ...record.bodyHistory,
+          ...record.bindingHistory,
           {
-            session_id: record.retiring.bodyId,
-            epoch: record.retiring.epoch,
-            started_at: record.retiring.createdAt,
-            retired_at: record.retiring.lastActiveAt,
+            session_id: record.retiringBinding.bindingId,
+            epoch: record.retiringBinding.epoch,
+            started_at: record.retiringBinding.createdAt,
+            retired_at: record.retiringBinding.lastActiveAt,
           },
         ]
-      : record.bodyHistory;
+      : record.bindingHistory;
   return {
     id: record.id,
     session_id: record.sessionId,
@@ -223,17 +224,17 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
     ...(primary !== undefined
       ? {
           current_body: {
-            session_id: primary.bodyId,
+            session_id: primary.bindingId,
             epoch: primary.epoch,
             started_at: primary.createdAt,
           },
         }
       : {}),
-    ...(history.length > 0 ? { body_history: history.slice(-MAX_BODY_HISTORY) } : {}),
-    // 文件格式不变（v4 仍读 `bodies[]`），但 0.28 起恒写 1 项：当前 Body。
-    // rotate 期间待退役的旧 Body 写在 `body_history`，不占 `bodies[]`。
-    ...(record.body !== undefined ? { bodies: [toPersistedBody(record.body)] } : {}),
-    ...(primary !== undefined ? { primary_body_id: primary.bodyId } : {}),
+    ...(history.length > 0 ? { body_history: history.slice(-MAX_BINDING_HISTORY) } : {}),
+    // 文件格式不变（v4 仍读 `bodies[]`），但 0.28 起恒写 1 项：当前 Binding。
+    // rotate 期间待退役的旧 Binding 写在 `body_history`，不占 `bodies[]`。
+    ...(record.binding !== undefined ? { bodies: [toPersistedBinding(record.binding)] } : {}),
+    ...(primary !== undefined ? { primary_body_id: primary.bindingId } : {}),
     ...(record.forkedFrom !== undefined ? { forked_from: record.forkedFrom } : {}),
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
     ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
@@ -241,11 +242,11 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
   };
 }
 
-/** 注册表记录 → 执行内核身份（primary body；per-body 由 service 覆盖 session_id） */
+/** 注册表记录 → 执行内核身份（primary binding；per-body 由 service 覆盖 session_id） */
 export function toRuntimeMember(record: MemberRecord): MemberRuntimeMember {
   return {
     id: record.id,
-    session_id: currentBodySession(record),
+    session_id: currentBindingSession(record),
     ...(record.name !== undefined ? { name: record.name } : {}),
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
     role: record.role,
@@ -270,14 +271,14 @@ export class MemberRegistry {
     if (this.byId.has(record.id)) {
       throw new AgentError('invalid_input', `duplicate member id: ${record.id}`);
     }
-    for (const body of liveBodies(record)) {
-      const owner = this.bySession.get(body.bodyId);
+    for (const body of liveBindings(record)) {
+      const owner = this.bySession.get(body.bindingId);
       if (owner !== undefined && owner !== record.id) {
         throw new AgentError('invalid_input', `duplicate member id: ${record.id}`);
       }
     }
     this.byId.set(record.id, record);
-    for (const body of liveBodies(record)) this.bySession.set(body.bodyId, record.id);
+    for (const body of liveBindings(record)) this.bySession.set(body.bindingId, record.id);
   }
 
   /** 成员 id、任一 live body session 寻址 */
@@ -287,7 +288,7 @@ export class MemberRegistry {
     const id = this.bySession.get(idOrSession);
     if (id !== undefined) return this.byId.get(id);
     for (const record of this.byId.values()) {
-      if (liveBodies(record).some((body) => body.bodyId === idOrSession)) return record;
+      if (liveBindings(record).some((body) => body.bindingId === idOrSession)) return record;
     }
     return undefined;
   }
@@ -301,22 +302,23 @@ export class MemberRegistry {
     const id = this.bySession.get(sessionId);
     if (id !== undefined) return this.byId.get(id);
     for (const record of this.byId.values()) {
-      if (liveBodies(record).some((body) => body.bodyId === sessionId)) return record;
+      if (liveBindings(record).some((body) => body.bindingId === sessionId)) return record;
     }
     return undefined;
   }
 
   /**
-   * 该 session 是否是**已退役**的 Body（在 `bodyHistory` 或不 live 的 Body 里）。
+   * 该 session 是否是**已退役**的 Binding（在 `bindingHistory` 或不 live 的 Binding 里）。
    *
-   * 用途是拒绝对历史 session 的重新准入：否则惰性 `createBody` 会把它复活成第二具
-   * live Body，D2 不变量破且没有任何报错。复活必须走 `reinstate`（原地 unretire）。
+   * 用途是拒绝对历史 session 的重新准入：否则惰性 `createBinding` 会把它复活成第二具
+   * live Binding，D2 不变量破且没有任何报错。复活必须走 `reinstate`（原地 unretire）。
    */
   isRetiredSession(sessionId: string): boolean {
     for (const record of this.byId.values()) {
-      if (record.bodyHistory.some((entry) => entry.session_id === sessionId)) return true;
-      if (record.body?.bodyId === sessionId && record.body.retiredAt !== undefined) return true;
-      if (record.retiring?.bodyId === sessionId) return true;
+      if (record.bindingHistory.some((entry) => entry.session_id === sessionId)) return true;
+      if (record.binding?.bindingId === sessionId && record.binding.retiredAt !== undefined)
+        return true;
+      if (record.retiringBinding?.bindingId === sessionId) return true;
     }
     return false;
   }
@@ -325,11 +327,11 @@ export class MemberRegistry {
     const record = this.byId.get(id);
     if (!record) return;
     this.byId.delete(id);
-    for (const body of liveBodies(record)) {
-      if (this.bySession.get(body.bodyId) === id) this.bySession.delete(body.bodyId);
+    for (const body of liveBindings(record)) {
+      if (this.bySession.get(body.bindingId) === id) this.bySession.delete(body.bindingId);
     }
-    if (this.bySession.get(currentBodySession(record)) === id) {
-      this.bySession.delete(currentBodySession(record));
+    if (this.bySession.get(currentBindingSession(record)) === id) {
+      this.bySession.delete(currentBindingSession(record));
     }
   }
 
@@ -365,11 +367,11 @@ export class MemberRegistry {
     if (record) record.lastSeen = this.now();
   }
 
-  /** 刷新指定 Body 的 last_active_at（body 域活动） */
-  touchBody(id: string, bodyId: string, at: number = this.now()): void {
+  /** 刷新指定 Binding 的 last_active_at（body 域活动） */
+  touchBinding(id: string, bindingId: string, at: number = this.now()): void {
     const record = this.byId.get(id);
     if (!record) return;
-    const body = findBody(record, bodyId);
+    const body = findBinding(record, bindingId);
     if (body === undefined) return;
     body.lastActiveAt = at;
     record.lastSeen = at;
@@ -401,60 +403,60 @@ export class MemberRegistry {
   }
 
   /**
-   * 新增 live Body 并迁移 session 寻址键。
+   * 新增 live Binding 并迁移 session 寻址键。
    *
-   * 单 body 模型下只有两种情形能走到这里：(a) 记录当前没有 live Body（首次 / 回收后
-   * 已被 `reinstate` 清槽）；(b) rotate 窗口——旧 Body 先挪进 `retiring`，新 Body 占
-   * `body`，窗口结束后旧 Body 由 `retireBody` 记入 `bodyHistory`。
+   * 单 body 模型下只有两种情形能走到这里：(a) 记录当前没有 live Binding（首次 / 回收后
+   * 已被 `reinstate` 清槽）；(b) rotate 窗口——旧 Binding 先挪进 `retiringBinding`，新 Binding 占
+   * `binding`，窗口结束后旧 Binding 由 `retireBinding` 记入 `bindingHistory`。
    */
-  addBody(id: string, body: AgentBodyRecord): void {
+  addBinding(id: string, body: BindingRecord): void {
     const record = this.byId.get(id);
     if (!record) throw new AgentError('unknown_member', `unknown member: ${id}`);
-    const existing = findBody(record, body.bodyId);
+    const existing = findBinding(record, body.bindingId);
     if (existing !== undefined && existing.retiredAt === undefined) {
-      throw new AgentError('invalid_input', `duplicate body: ${body.bodyId}`);
+      throw new AgentError('invalid_input', `duplicate body: ${body.bindingId}`);
     }
-    const owner = this.bySession.get(body.bodyId);
+    const owner = this.bySession.get(body.bindingId);
     if (owner !== undefined && owner !== id) {
-      throw new AgentError('invalid_input', `duplicate body: ${body.bodyId}`);
+      throw new AgentError('invalid_input', `duplicate body: ${body.bindingId}`);
     }
-    const replaced = record.body;
+    const replaced = record.binding;
     if (replaced !== undefined) {
       if (replaced.retiredAt === undefined) {
-        // rotate：旧 Body 暂存到 retiring，等窗口结束再退役。
-        record.retiring = replaced;
+        // rotate：旧 Binding 暂存到 retiringBinding，等窗口结束再退役。
+        record.retiringBinding = replaced;
       } else {
-        // 已退役的 Body 让位给新 Body：先进 history，绝不静默丢弃。
-        this.pushBodyHistory(id, {
-          session_id: replaced.bodyId,
+        // 已退役的 Binding 让位给新 Binding：先进 history，绝不静默丢弃。
+        this.pushBindingHistory(id, {
+          session_id: replaced.bindingId,
           epoch: replaced.epoch,
           started_at: replaced.createdAt,
           retired_at: replaced.retiredAt,
         });
       }
     }
-    record.body = body;
-    this.bySession.set(body.bodyId, id);
-    if (body.primary) this.setPrimaryBody(id, body.bodyId);
+    record.binding = body;
+    this.bySession.set(body.bindingId, id);
+    if (body.primary) this.setPrimaryBinding(id, body.bindingId);
   }
 
   /**
-   * 退役 Body：标 retiredAt、清 primary、从 session 索引移除、记入 `body_history`。
+   * 退役 Binding：标 retiredAt、清 primary、从 session 索引移除、记入 `body_history`。
    *
    * body 记录**保留**（不删）：`body_id ≡ session_id` 是续接历史的唯一钥匙，
    * `reinstate` 靠原地 unretire 复活。
    */
-  retireBody(id: string, bodyId: string, at: number = this.now()): AgentBodyRecord | undefined {
+  retireBinding(id: string, bindingId: string, at: number = this.now()): BindingRecord | undefined {
     const record = this.byId.get(id);
     if (!record) return undefined;
-    const body = findBody(record, bodyId);
+    const body = findBinding(record, bindingId);
     if (body === undefined || body.retiredAt !== undefined) return body;
     body.retiredAt = at;
     body.primary = false;
-    if (this.bySession.get(bodyId) === id) this.bySession.delete(bodyId);
-    if (record.retiring === body) delete record.retiring;
-    this.pushBodyHistory(id, {
-      session_id: body.bodyId,
+    if (this.bySession.get(bindingId) === id) this.bySession.delete(bindingId);
+    if (record.retiringBinding === body) delete record.retiringBinding;
+    this.pushBindingHistory(id, {
+      session_id: body.bindingId,
       epoch: body.epoch,
       started_at: body.createdAt,
       retired_at: at,
@@ -463,78 +465,82 @@ export class MemberRegistry {
   }
 
   /**
-   * 原地复活一个已退役的 Body（`reinstate` 用）：清 `retiredAt`、重设 primary、
+   * 原地复活一个已退役的 Binding（`reinstate` 用）：清 `retiredAt`、重设 primary、
    * 从 `body_history` 移除该 session（否则 DTO 同时显示 live 和已退役）。
    * 返回是否真的发生了复活。
    */
-  unretireBody(id: string, bodyId?: string): boolean {
+  unretireBinding(id: string, bindingId?: string): boolean {
     const record = this.byId.get(id);
     if (!record) return false;
-    const body = bodyId === undefined ? record.body : findBody(record, bodyId);
+    const body = bindingId === undefined ? record.binding : findBinding(record, bindingId);
     if (body === undefined || body.retiredAt === undefined) return false;
     delete body.retiredAt;
-    record.bodyHistory = record.bodyHistory.filter((entry) => entry.session_id !== body.bodyId);
-    this.bySession.set(body.bodyId, id);
-    this.setPrimaryBody(id, body.bodyId);
+    record.bindingHistory = record.bindingHistory.filter(
+      (entry) => entry.session_id !== body.bindingId,
+    );
+    this.bySession.set(body.bindingId, id);
+    this.setPrimaryBinding(id, body.bindingId);
     return true;
   }
 
-  /** 完全移除一个 Body（rotate 失败回滚用）；只用于从未提交的中间态 */
-  removeBody(id: string, bodyId: string): void {
+  /** 完全移除一个 Binding（rotate 失败回滚用）；只用于从未提交的中间态 */
+  removeBinding(id: string, bindingId: string): void {
     const record = this.byId.get(id);
     if (!record) return;
-    if (this.bySession.get(bodyId) === id) this.bySession.delete(bodyId);
-    if (record.retiring?.bodyId === bodyId) {
-      delete record.retiring;
+    if (this.bySession.get(bindingId) === id) this.bySession.delete(bindingId);
+    if (record.retiringBinding?.bindingId === bindingId) {
+      delete record.retiringBinding;
       return;
     }
-    if (record.body?.bodyId !== bodyId) return;
-    const previous = record.retiring;
+    if (record.binding?.bindingId !== bindingId) return;
+    const previous = record.retiringBinding;
     if (previous === undefined) {
-      delete record.body;
+      delete record.binding;
       return;
     }
-    // 回滚：待退役的仍是当前 Body，primary 由它自己带着。
-    delete record.retiring;
-    record.body = previous;
-    this.bySession.set(previous.bodyId, id);
+    // 回滚：待退役的仍是当前 Binding，primary 由它自己带着。
+    delete record.retiringBinding;
+    record.binding = previous;
+    this.bySession.set(previous.bindingId, id);
   }
 
-  /** 设置 primary（undefined = 清空）；live Body 的 primary 标记同步 */
-  setPrimaryBody(id: string, bodyId: string | undefined): void {
+  /** 设置 primary（undefined = 清空）；live Binding 的 primary 标记同步 */
+  setPrimaryBinding(id: string, bindingId: string | undefined): void {
     const record = this.byId.get(id);
     if (!record) return;
     const target =
-      bodyId === undefined ? undefined : liveBodies(record).find((body) => body.bodyId === bodyId);
-    if (bodyId !== undefined && target === undefined) return;
-    for (const body of liveBodies(record)) body.primary = body === target;
+      bindingId === undefined
+        ? undefined
+        : liveBindings(record).find((body) => body.bindingId === bindingId);
+    if (bindingId !== undefined && target === undefined) return;
+    for (const body of liveBindings(record)) body.primary = body === target;
   }
 
-  /** 兼容旧调用：把指针设为 primary body（同步 bodies）。 */
-  setCurrentBody(id: string, body: AgentBodyPointer): void {
-    this.setPrimaryBody(id, body.session_id);
+  /** 兼容旧调用：把指针设为 primary binding（同步 bodies）。 */
+  setCurrentBinding(id: string, body: BindingPointer): void {
+    this.setPrimaryBinding(id, body.session_id);
   }
 
-  /** Body 轮换相位（进程内，不持久化） */
+  /** Binding 轮换相位（进程内，不持久化） */
   setRotation(id: string, rotation: MemberRotation): void {
     const record = this.byId.get(id);
     if (record) record.rotation = rotation;
   }
 
-  /** 追加退役 Body；超过 MAX_BODY_HISTORY 时丢弃最旧条目 */
-  pushBodyHistory(id: string, entry: AgentBodyHistoryEntry): void {
+  /** 追加退役 Binding；超过 MAX_BINDING_HISTORY 时丢弃最旧条目 */
+  pushBindingHistory(id: string, entry: BindingHistoryEntry): void {
     const record = this.byId.get(id);
     if (!record) return;
-    record.bodyHistory.push(entry);
-    if (record.bodyHistory.length > MAX_BODY_HISTORY) {
-      record.bodyHistory.splice(0, record.bodyHistory.length - MAX_BODY_HISTORY);
+    record.bindingHistory.push(entry);
+    if (record.bindingHistory.length > MAX_BINDING_HISTORY) {
+      record.bindingHistory.splice(0, record.bindingHistory.length - MAX_BINDING_HISTORY);
     }
   }
 
-  /** 整组覆盖 body history（rotate 失败回滚用） */
-  setBodyHistory(id: string, entries: readonly AgentBodyHistoryEntry[]): void {
+  /** 整组覆盖 binding history（rotate 失败回滚用） */
+  setBindingHistory(id: string, entries: readonly BindingHistoryEntry[]): void {
     const record = this.byId.get(id);
-    if (record) record.bodyHistory = [...entries];
+    if (record) record.bindingHistory = [...entries];
   }
 
   /** 按 name 查找（tenant 内可能重名：旧快照容忍重名，new 强制唯一） */

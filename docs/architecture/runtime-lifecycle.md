@@ -12,7 +12,7 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/run.ts]
 
 ## Run 外壳
 
-`AgentRuntime`（`packages/core/src/runtime/agent-runtime.ts`）是唯一的循环实现。编排细节外推给了三个 runner：`PermissionPolicy`（权限）、`GuardrailRunner`（四阶段 guardrail）、`HookRunner`（五阶段 hook）——`AgentRuntime` 只做协调。
+`ExecutionUnit`（`packages/core/src/runtime/execution-unit.ts`）是唯一的循环实现。编排细节外推给了三个 runner：`PermissionPolicy`（权限）、`GuardrailRunner`（四阶段 guardrail）、`HookRunner`（五阶段 hook）——`ExecutionUnit` 只做协调。
 
 ### `run()`：一次请求的外壳
 
@@ -74,5 +74,5 @@ finalizeRun(execution, runState, outcome):
 
 <a id="finalize"></a>
 
-`resume()` 走同一条 `finalizeRun` 路径，因此用户取消同样发 `run.cancelled`，checkpoint 状态同样按 abort reason 映射为 `cancelled` / `interrupted`。`RunExecution` 是 run 级状态的唯一来源（run id / session / branch / 计时 / usage / context），见 [runtime-api.md](runtime-api.md#agent-runtime)。
+`resume()` 走同一条 `finalizeRun` 路径，因此用户取消同样发 `run.cancelled`，checkpoint 状态同样按 abort reason 映射为 `cancelled` / `interrupted`。`RunExecution` 是 run 级状态的唯一来源（run id / session / branch / 计时 / usage / context），见 [runtime-api.md](runtime-api.md#execution-unit)。
 

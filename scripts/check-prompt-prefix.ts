@@ -12,7 +12,7 @@
  * 允许清单只覆盖 P1 的旧字段兼容层（字段仍保留，等待外部插件迁移）：
  *   packages/core/src/types/hook.ts
  *   packages/core/src/runtime/hook-runner.ts
- *   packages/core/src/runtime/agent-runtime.ts
+ *   packages/core/src/runtime/execution-unit.ts
  * P2 不允许任何例外。
  *
  * 启发式：用字符级状态机去掉行注释、块注释与字符串/模板字面量内容后再匹配，
@@ -47,7 +47,7 @@ const TEST_FILE = /\.test\.tsx?$/;
 export const ADDITIONAL_CONTEXT_ALLOWLIST: ReadonlySet<string> = new Set([
   'packages/core/src/types/hook.ts',
   'packages/core/src/runtime/hook-runner.ts',
-  'packages/core/src/runtime/agent-runtime.ts',
+  'packages/core/src/runtime/execution-unit.ts',
 ]);
 
 interface Rule {

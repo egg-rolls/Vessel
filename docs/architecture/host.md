@@ -15,14 +15,14 @@ paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 ## 定位
 
 - `packages/core/src/kernel/scheduler.ts` 提供 `Scheduler` / `ScheduledTask` / `InProcessScheduler`。装配层每 tenant 构造一个实例并注入 `AgentService`；run 路径上没有第二层执行壳（ADR-081 / ADR-097）。
-- 执行事实在每 body 的 `AgentRuntime`：Scheduler 只负责排队、并发、取消与只读视图，不复制 `toolCallingLoop`，也不写第二套终态持久化路径。
+- 执行事实在每 body 的 `ExecutionUnit`：Scheduler 只负责排队、并发、取消与只读视图，不复制 `toolCallingLoop`，也不写第二套终态持久化路径。
 - 入队形态固定：`admit` 组一个 `ScheduledTask`，`serialKey` 必填且等于 body / session id，`executor` 收到 runId 后调用该 body 的 `runtime.run`。
 
 <a id="run-binding"></a>
 
 ## 串行键与取消
 
-- `serialKey` 是唯一串行维度：`perBodySerial`（默认 true）保证同一 body 同时最多一个 running，不同 body 可并发。`ScheduledTask.sessionId` 与该 body 相同，`RunOptions.sessionId` 语义不变（= body id）；单 agent 的 `AgentRuntime.run(input, sessionId, opts)` 仍以显式参数为准，不读该字段（避免双来源）。
+- `serialKey` 是唯一串行维度：`perBodySerial`（默认 true）保证同一 body 同时最多一个 running，不同 body 可并发。`ScheduledTask.sessionId` 与该 body 相同，`RunOptions.sessionId` 语义不变（= body id）；单 agent 的 `ExecutionUnit.run(input, sessionId, opts)` 仍以显式参数为准，不读该字段（避免双来源）。
 - 取消链路：`runs.cancel(runId)` → `scheduler.cancel(runId, reason?)` → 该 run 的 `AbortSignal.reason`；queued 取消由控制面补一条 `cancelled` checkpoint，running 取消由 `finalizeRun` 收口。
 - reason 语义沿用 run 生命周期：`shutdown` / `timeout` 落 interrupted checkpoint，`user` 或未传落 cancelled。
 
@@ -48,16 +48,16 @@ paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 
 - 队列事件是 `agent.queue.entered` / `agent.queue.left`，带 `agent_id` + `session_id`、队列位置与等待原因（`capacity` / `per_body_serial`）。
 - `SchedulerOptions`：`maxConcurrency` 缺省无上限（只有显式正整数才限制）、`maxQueueSize` 默认 100、`perBodySerial` 默认 true。队列满时 `submit` 抛错，不静默丢任务；缺省项由 Scheduler 自己兜底，装配层不传 `0` / 负数。
-- `AgentRuntimeOptions`（`pluginConfigs` / `logger` / `includeReasoning` 等）由装配层构造 body runtime 时传入，Scheduler 只排队任务、不做覆盖。工具展示元数据 `ToolDefinition.display` 由 `PluginHost.listTools()` 透出，不进入 LLM schema（见 [tools.md](tools.md#tool-definition)）。
+- `ExecutionUnitOptions`（`pluginConfigs` / `logger` / `includeReasoning` 等）由装配层构造 body runtime 时传入，Scheduler 只排队任务、不做覆盖。工具展示元数据 `ToolDefinition.display` 由 `PluginHost.listTools()` 透出，不进入 LLM schema（见 [tools.md](tools.md#tool-definition)）。
 
 ## 约束
 
-- 同一个 `AgentRuntime` 同时只允许一个 active run；第二个 run 抛 `run_already_running`。`serialKey` 保证 Scheduler 不会为同一 body 并发起 run。
+- 同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`。`serialKey` 保证 Scheduler 不会为同一 body 并发起 run。
 - 中断必须带原因（`interrupt('shutdown'|'timeout'|'user')`），不得只 abort signal。
-- checkpoint / run store 写入仍走单一 `RunStore`，写者是 body 的 `AgentRuntime`，不得双写。
+- checkpoint / run store 写入仍走单一 `RunStore`，写者是 body 的 `ExecutionUnit`，不得双写。
 - 不在 Scheduler 里新增权限、tool pipeline 或 context 逻辑；这些属于 core 的单 run 路径。
 
 ## 指针
 
-- [runtime-lifecycle.md](runtime-lifecycle.md#run) · [runtime-api.md](runtime-api.md#agent-runtime) · [state.md](state.md#run-store) · [assembly.md](assembly.md#assembly)
+- [runtime-lifecycle.md](runtime-lifecycle.md#run) · [runtime-api.md](runtime-api.md#execution-unit) · [state.md](state.md#run-store) · [assembly.md](assembly.md#assembly)
 - 决策：[ADR-081](../adr/ADR-081-host-parity-and-serializable-snapshot.md) · [ADR-097](../adr/ADR-097-unified-agent-body-model.md) · [ADR-040](../adr/ADR-040-durable-run-store-checkpoint-resume.md) · [ADR-054](../adr/ADR-054-run-execution-and-failure-isolation.md)

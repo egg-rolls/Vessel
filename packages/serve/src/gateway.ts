@@ -175,7 +175,7 @@ export interface GatewayOptions {
   hubTeamScope?: HubTeamScopeLike;
   /** 会话后端（可选）——/v1/sessions 数据源 */
   session?: SessionBackend;
-  /** 运行时（可选）——运行控制端点；结构类型 RunnableAgent（A10），不要断言成 AgentRuntime */
+  /** 运行时（可选）——运行控制端点；结构类型 RunnableAgent（A10），不要断言成 ExecutionUnit */
   runtime?: RunnableAgent;
   /**
    * 0.27：default tenant 的 run 控制面（app 侧适配 AgentService / scheduler）。

@@ -980,7 +980,7 @@ async function runWithConfig(result: BootstrapResult) {
                 });
               }
             }
-            // 成员 Body 走 AgentService 的唯一转发入口（没有 agent 时返回 0）。
+            // 成员 ExecutionUnit 走 AgentService 的唯一转发入口（没有 agent 时返回 0）。
             if (result.agent !== undefined) {
               applied += await result.agent.service.applyPermissionRules(rules);
             }
@@ -1009,7 +1009,7 @@ async function runWithConfig(result: BootstrapResult) {
           targetKey: () => lastToolsConfigKey.current ?? '',
           previousKey: toolsConfigKey,
         });
-        // 成员 Body 的工具面是 spawn 时快照：owner 宿主更新后在同一具 body 上刷新，
+        // 成员 ExecutionUnit 的工具面是 spawn 时快照：owner 宿主更新后在同一具 body 上刷新，
         // 不重建 session / context（有 active run 时由执行内核延迟到轮边界）。
         // 传入应用后的全量工具面（含 agent / ask_user / MCP），成员侧再按白名单过滤。
         await result.agent?.service.refreshTools?.(ctx.pluginHost.listTools());

@@ -22,7 +22,7 @@ const LEVEL_ORDER: Record<LogLevel, number> = {
   error: 40,
 };
 
-/** 丢弃全部日志；`AgentRuntimeOptions.logger` 缺省值 */
+/** 丢弃全部日志；`ExecutionUnitOptions.logger` 缺省值 */
 export const noopLogger: Logger = {
   debug: () => {},
   info: () => {},

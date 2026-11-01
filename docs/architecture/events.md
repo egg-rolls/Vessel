@@ -26,25 +26,25 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 
 | 事件名 | payload | 发布方 |
 |---|---|---|
-| `run.started` | `RunStartedPayload` | agent-runtime |
-| `llm.request` | `LlmRequestPayload` | agent-runtime |
-| `llm.response` | `LlmResponsePayload` | agent-runtime |
-| `llm.stream.chunk` | `LlmStreamChunkPayload` | agent-runtime |
-| `tool.call.started` | `ToolCallStartedPayload` | agent-runtime |
-| `tool.call.completed` | `ToolCallCompletedPayload` | agent-runtime |
-| `tool.call.failed` | `ToolCallFailedPayload` | agent-runtime |
+| `run.started` | `RunStartedPayload` | execution-unit |
+| `llm.request` | `LlmRequestPayload` | execution-unit |
+| `llm.response` | `LlmResponsePayload` | execution-unit |
+| `llm.stream.chunk` | `LlmStreamChunkPayload` | execution-unit |
+| `tool.call.started` | `ToolCallStartedPayload` | execution-unit |
+| `tool.call.completed` | `ToolCallCompletedPayload` | execution-unit |
+| `tool.call.failed` | `ToolCallFailedPayload` | execution-unit |
 | `guardrail.blocked` | `GuardrailBlockedPayload` | guardrail-runner |
 | `guardrail.error` | `{ run_id, guardrail_name, stage, error }` | guardrail-runner（0.8：`check()` 抛错，随后按 `guardrail_error` blocked） |
 | `hook.failed` / `hook.error` | `{ hook_name, hook_type, run_id, duration_ms, error }` | hook-runner（0.8：单 hook 抛错后继续后续 hook） |
-| `context.changed` | `{ run_id, message, message_count, token_count }` | agent-runtime |
-| `run.completed` | `RunCompletedPayload` | agent-runtime |
-| `run.failed` | `RunFailedPayload` | agent-runtime |
-| `run.cancelled` | `RunCancelledPayload` | agent-runtime（0.5：仅显式用户取消；Host 中断仍发 `run.failed`） |
+| `context.changed` | `{ run_id, message, message_count, token_count }` | execution-unit |
+| `run.completed` | `RunCompletedPayload` | execution-unit |
+| `run.failed` | `RunFailedPayload` | execution-unit |
+| `run.cancelled` | `RunCancelledPayload` | execution-unit（0.5：仅显式用户取消；Host 中断仍发 `run.failed`） |
 | `replay.started` | `{ run_id, event_count }` | replayRun |
 | `replay.completed` | `{ run_id, event_count, duration_ms }` | replayRun |
-| `run.checkpoint` | `{ run_id, session_id, status, iteration? }` | agent-runtime |
-| `run.resumed` | `{ run_id, session_id, from_status, iteration }` | agent-runtime |
-| `run.finalize.failed` | `{ run_id, session_id, error }` | agent-runtime（0.8：终态持久化失败，保留原始 run 错误） |
+| `run.checkpoint` | `{ run_id, session_id, status, iteration? }` | execution-unit |
+| `run.resumed` | `{ run_id, session_id, from_status, iteration }` | execution-unit |
+| `run.finalize.failed` | `{ run_id, session_id, error }` | execution-unit（0.8：终态持久化失败，保留原始 run 错误） |
 
 **约定事件名**（不在 `EventPayload` 联合类型里，按开放字符串协议使用）：
 

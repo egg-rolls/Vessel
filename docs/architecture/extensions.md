@@ -33,7 +33,7 @@ interface PluginHost {
 }
 ```
 
-这是**唯一的扩展机制**。`AgentRuntimeOptions` 里的 `plugins?: Plugin[]` 在 `AgentRuntime.create()` 时逐个 `install`（install 失败即构造失败，fail-fast）；也可直接注入 `pluginHost?: PluginHost` 替换实现。
+这是**唯一的扩展机制**。`ExecutionUnitOptions` 里的 `plugins?: Plugin[]` 在 `ExecutionUnit.create()` 时逐个 `install`（install 失败即构造失败，fail-fast）；也可直接注入 `pluginHost?: PluginHost` 替换实现。
 
 <a id="extension-model"></a>
 

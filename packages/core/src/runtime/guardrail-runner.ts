@@ -1,6 +1,6 @@
 /**
  * Guardrail 编排器（四阶段）。
- * 从 AgentRuntime 抽出（ADR-033 编排逻辑外推），保持单一职责。
+ * 从 ExecutionUnit 抽出（ADR-033 编排逻辑外推），保持单一职责。
  *
  * 0.8 C2：`check` 抛错按 fail-closed 处理（blocked + `guardrail_error`），
  * 发 `guardrail.error`，不把异常冒泡成 run 失败。

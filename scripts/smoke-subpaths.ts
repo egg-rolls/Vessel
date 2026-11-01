@@ -22,7 +22,7 @@ const PACKAGE_NAME = '@vessel-agent/core';
 
 /** 0.1 根入口必须保持的运行时符号（类型导出在运行时不可见）。 */
 export const ROOT_COMPAT_SYMBOLS = [
-  'AgentRuntime',
+  'ExecutionUnit',
   'AnthropicProvider',
   'FileEventStore',
   'FileSessionBackend',

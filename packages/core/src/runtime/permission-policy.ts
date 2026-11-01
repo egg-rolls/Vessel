@@ -1,6 +1,6 @@
 /**
  * 权限策略（ADR-026/029）——工具执行前的权限判定。
- * 从 AgentRuntime 抽出（ADR-033 编排逻辑外推），保持单一职责。
+ * 从 ExecutionUnit 抽出（ADR-033 编排逻辑外推），保持单一职责。
  * @module @vessel-agent/core/runtime
  */
 
@@ -61,7 +61,7 @@ export class PermissionPolicy {
   private approved: Set<string>;
   /** 显式正数超时；undefined = 无限等待（Addendum A） */
   private readonly timeoutMs?: number;
-  /** 事件发布出口（0.18：AgentRuntime 注入以先落盘再发布；缺省直接发布） */
+  /** 事件发布出口（0.18：ExecutionUnit 注入以先落盘再发布；缺省直接发布） */
   private readonly emit: (event: RunEvent) => void;
   /** 累计等待用户授权的时长（毫秒）；终止判定把它从 elapsed 中扣除。 */
   private pausedMsTotal = 0;

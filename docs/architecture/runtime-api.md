@@ -52,13 +52,13 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
 往 `ctx.messages` 追加尾部消息（持久化）；旧 `HookResult.additionalContext` 自动转成
 `vessel:hook` 尾部消息。完整注入矩阵见 [context](context.md#injection)。
 
-<a id="agent-runtime"></a>
+<a id="execution-unit"></a>
 
-## `AgentRuntime` 公开面
+## `ExecutionUnit` 公开面
 
 ```ts
-class AgentRuntime {
-  static create(opts: AgentRuntimeOptions): Promise<AgentRuntime>;
+class ExecutionUnit {
+  static create(opts: ExecutionUnitOptions): Promise<ExecutionUnit>;
 
   /** 事件流——headless / 外部订阅者的入口 */
   readonly events: EventStream;
@@ -71,7 +71,7 @@ class AgentRuntime {
   dispose(): void;
 }
 
-interface AgentRuntimeOptions {
+interface ExecutionUnitOptions {
   provider: LLMProvider;
   model: string;
   context: ContextManager;
@@ -91,7 +91,7 @@ interface AgentRuntimeOptions {
 
 `create()` 是异步静态工厂（构造函数私有）——插件安装是异步的，且要求 fail-fast（ADR-023）。
 
-run 级状态收敛在 `RunExecution`（`runId` / `sessionId` / `branch` / `createdAt` / `startedAt` / `stats` / `context`，从根入口导出）。`run()` / `resume()` 共用同一个 `activeRun` 槽位，在第一个 await 之前同步占位；已有 active run 时立即抛 `RunAlreadyRunningError`（`code: 'run_already_running'`，继承 `RunResumeError`）。公开签名与 `AgentRuntimeOptions` 不变。
+run 级状态收敛在 `RunExecution`（`runId` / `sessionId` / `branch` / `createdAt` / `startedAt` / `stats` / `context`，从根入口导出）。`run()` / `resume()` 共用同一个 `activeRun` 槽位，在第一个 await 之前同步占位；已有 active run 时立即抛 `RunAlreadyRunningError`（`code: 'run_already_running'`，继承 `RunResumeError`）。公开签名与 `ExecutionUnitOptions` 不变。
 
 Kernel 侧：`RunnableAgent.resume?(runId, opts?)` 返回 `RunHandle`。准入侧 `AgentService.resume(runId)` 加载 checkpoint、解析 agent / body，再用 `ScheduledTask.runId` 固定 run id 经 Scheduler 排队——resume 没有绕过调度的旁路。resume 只接受 `running` / `interrupted`；同一 run 并发恢复首个成功，后续 `run_already_running`（ADR-040 / ADR-097）。
 

@@ -33,8 +33,8 @@ import {
   type TeamStore,
 } from '@vessel-agent/agent';
 import type {
-  AgentRuntimeOptions,
   EventStream,
+  ExecutionUnitOptions,
   LLMProvider,
   Logger,
   PluginHost,
@@ -94,19 +94,19 @@ export interface AgentServiceWiringOptions {
    * 在成员默认白名单（bash / read / edit / agent）之外额外放行的工具名，原样透传给
    * `InProcessMemberRuntimeOptions.extraTools`。
    *
-   * 唯一用途是让「父宿主真的注册了某工具」这件事传到成员 Body（当前只有
+   * 唯一用途是让「父宿主真的注册了某工具」这件事传到成员 ExecutionUnit（当前只有
    * `ask_user`：serve / 交互 REPL 有应答者，headless 没有）。可选 = 不传则维持旧工具面。
    */
   extraTools?: readonly string[];
-  /** tenant SessionBackend；成员 Body 用同一份存储按 session_id 续接历史 */
-  session?: AgentRuntimeOptions['session'];
+  /** tenant SessionBackend；成员 ExecutionUnit 用同一份存储按 session_id 续接历史 */
+  session?: ExecutionUnitOptions['session'];
   /** tenant SessionEventLog；与父入口同源（缺省不落 trace） */
-  eventLog?: AgentRuntimeOptions['eventLog'];
+  eventLog?: ExecutionUnitOptions['eventLog'];
   /**
-   * 测试接缝：覆盖成员 AgentRuntime 构造。缺省 `AgentRuntime.create`；
+   * 测试接缝：覆盖成员 ExecutionUnit 构造。缺省 `ExecutionUnit.create`；
    * bridge / owner 队列的端到端测试用 fake runtime，不调真实 provider。
    */
-  runtimeFactory?: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
+  runtimeFactory?: (options: ExecutionUnitOptions) => Promise<MemberRunnableAgent>;
   /** 0.19 S3：全局配置声明的 Team；只补写缺失的 team.json */
   teamDeclarations?: readonly TeamDeclaration[];
   /**
@@ -135,7 +135,7 @@ export interface AgentServiceWiring {
   /**
    * 派生 `main`（role `single`）成员，返回建好或复用的状态。
    *
-   * 排序契约：**必须在父宿主 `registerTool(tool)` 之后调用**。成员 Body 在 spawn
+   * 排序契约：**必须在父宿主 `registerTool(tool)` 之后调用**。成员 ExecutionUnit 在 spawn
    * 时快照父宿主的工具列表（`packages/agent/src/runtime.ts` 的 `selectTools`），
    * 装配期就 spawn 会让 `main` 永久缺 `agent` 工具。幂等：并发/重复调用只 create 一次。
    */
@@ -169,7 +169,7 @@ export function buildMemberRuntimeOptions(
   onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void,
   teamPolicy?: InProcessMemberRuntimeOptions['permissionPolicy'],
 ): InProcessMemberRuntimeOptions {
-  // 成员 Body 只能通过 `agent` 工具 rotate 自己（tool handler 收紧），
+  // 成员 ExecutionUnit 只能通过 `agent` 工具 rotate 自己（tool handler 收紧），
   // 因此 member runtime 免确认该工具；owner 侧权限不变。
   const permission =
     options.permission !== undefined
@@ -380,7 +380,7 @@ export async function createAgentServiceWiring(
     clearInterval(sweepTimer);
     sweepTimer = undefined;
   };
-  // 装配只组装，不 spawn：`main` 的 Body 会快照父宿主工具列表，调用方必须先
+  // 装配只组装，不 spawn：`main` 的 ExecutionUnit 会快照父宿主工具列表，调用方必须先
   // `registerTool(tool)` 再调 `startOwner()`。并发/重复调用共享同一个 promise；
   // 失败时清掉 memo，避免用缓存住的 rejection 毒化重试。
   let ownerPromise: Promise<MemberStatus> | undefined;

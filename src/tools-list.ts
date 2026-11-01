@@ -1,5 +1,5 @@
 /**
- * `--tools` 的工具清单——不构造 AgentRuntime、不需要 API Key。
+ * `--tools` 的工具清单——不构造 ExecutionUnit、不需要 API Key。
  *
  * 输出口径固定为 headless 口径：默认 4 个（bash / edit / read / agent）；
  * 显式 `agent.enabled: false` 时只列出 3 个能力工具。

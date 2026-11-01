@@ -265,7 +265,7 @@ export interface CapabilityManifestLike {
 export interface ReplContext {
   // ── 核心能力（egg-rolls 构造并注入）──────────────────
 
-  /** 可运行 agent——REPL 只依赖 A10 的最小结构类型（不绑定 AgentRuntime） */
+  /** 可运行 agent——REPL 只依赖 A10 的最小结构类型（不绑定 ExecutionUnit） */
   runtime: RunnableAgent;
 
   /**

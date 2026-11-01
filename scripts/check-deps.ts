@@ -58,7 +58,7 @@ const CORE_MODULE_SET = new Set<string>(CORE_MODULES);
 export const KERNEL_ALLOWED_IMPORTS: Readonly<Record<string, ReadonlySet<string>>> = {
   [`${CORE_SRC}/context/context-manager.ts`]: new Set(['MemoryContextManager']),
   [`${CORE_SRC}/events/event-stream.ts`]: new Set(['MemoryEventStream']),
-  [`${CORE_SRC}/runtime/agent-runtime.ts`]: new Set(['AgentRuntime']),
+  [`${CORE_SRC}/runtime/execution-unit.ts`]: new Set(['ExecutionUnit']),
   [`${CORE_SRC}/runtime/plugin-host.ts`]: new Set(['MemoryPluginHost']),
 };
 

@@ -3,9 +3,9 @@
  * @module @vessel-agent/core/runtime
  */
 
-export type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
-export { AgentRuntime } from './agent-runtime.js';
+export type { ExecutionUnitOptions, Plugin, PluginHost } from '../types/plugin.js';
 export { toErrorEnvelope } from './error-envelope.js';
+export { ExecutionUnit } from './execution-unit.js';
 export { PermissionTimeoutError } from './permission-policy.js';
 export { MemoryPluginHost } from './plugin-host.js';
 export {

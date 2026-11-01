@@ -445,7 +445,7 @@ export const teamSummarySchema = {
   },
 };
 
-/** 已退役 Body（0.19 S6 additive）。 */
+/** 已退役 Binding（0.19 S6 additive）。 */
 export const agentBodyHistoryEntrySchema = {
   type: 'object',
   required: ['session_id', 'epoch', 'started_at', 'retired_at'],

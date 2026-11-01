@@ -170,14 +170,14 @@ export interface EventBus extends EventStream {
 
 /**
  * 可运行 agent 的最小结构类型（A10）。
- * `AgentRuntime` 已结构满足；asm 的 owner facade 实现它，tui/web 消费它，
- * 禁止 `as unknown as AgentRuntime`。
+ * `ExecutionUnit` 已结构满足；asm 的 owner facade 实现它，tui/web 消费它，
+ * 禁止 `as unknown as ExecutionUnit`。
  */
 export interface RunnableAgent {
   readonly events: EventStream;
   readonly pluginHost: PluginHost;
   run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string>;
-  /** 可选：从 durable checkpoint 恢复（AgentRuntime 已实现） */
+  /** 可选：从 durable checkpoint 恢复（ExecutionUnit 已实现） */
   resume?(runId: string, opts?: RunOptions): Promise<string>;
   dispose(): void | Promise<void>;
 }

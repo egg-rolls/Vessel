@@ -1,5 +1,5 @@
 /**
- * AgentRuntime 实现
+ * ExecutionUnit 实现
  * @module @vessel-agent/core/runtime
  */
 
@@ -24,7 +24,7 @@ import { type HookContext, HookType } from '../types/hook.js';
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 import type { Logger } from '../types/logging.js';
 import type {
-  AgentRuntimeOptions,
+  ExecutionUnitOptions,
   Plugin,
   PluginHost,
   RuntimePermissionConfig,
@@ -249,12 +249,12 @@ interface ToolExecutionOutcome {
 }
 
 /**
- * Agent Runtime
+ * Execution Unit
  * 核心运行时，实现 tool-calling loop。
  * 协调 provider/context/events/limits/termination/session + 三个编排器（权限/guardrail/hook），
  * 自身不再内联编排逻辑（ADR-033）。
  */
-export class AgentRuntime {
+export class ExecutionUnit {
   private provider: LLMProvider;
   private model: string;
   private context: ContextManager;
@@ -337,7 +337,7 @@ export class AgentRuntime {
   /** 每个 run 只报告一次落盘失败，避免刷屏 */
   private eventLogFailureReported = false;
 
-  private constructor(opts: AgentRuntimeOptions) {
+  private constructor(opts: ExecutionUnitOptions) {
     this.provider = opts.provider;
     this.model = opts.model;
     this.context = opts.context;
@@ -367,7 +367,7 @@ export class AgentRuntime {
     // 初始化 PluginHost（唯一工具来源与注册表）——插件在 install() 里 registerTool
     this.pluginHost = opts.pluginHost ?? new MemoryPluginHost();
 
-    // 编排器（ADR-033）：权限策略 / guardrail / hook 各自独立，AgentRuntime 只协调。
+    // 编排器（ADR-033）：权限策略 / guardrail / hook 各自独立，ExecutionUnit 只协调。
     // 0.18：权限请求经 runtime 的 publishEvent，才能保证先落盘再发布。
     this.permissionPolicy = new PermissionPolicy(
       this.events,
@@ -388,9 +388,9 @@ export class AgentRuntime {
     });
   }
 
-  /** 创建并异步初始化 AgentRuntime。用此替代 new AgentRuntime()。 */
-  static async create(opts: AgentRuntimeOptions): Promise<AgentRuntime> {
-    const runtime = new AgentRuntime(opts);
+  /** 创建并异步初始化 ExecutionUnit。用此替代 new ExecutionUnit()。 */
+  static async create(opts: ExecutionUnitOptions): Promise<ExecutionUnit> {
+    const runtime = new ExecutionUnit(opts);
     await runtime.installPlugins(opts.plugins ?? []);
     await runtime.initPlugins();
     return runtime;
@@ -1029,7 +1029,7 @@ export class AgentRuntime {
       await this.saveSession(runState);
       await this.updateSessionIndexBestEffort(runState);
 
-      // 标记已被接管（唯一写者：AgentRuntime）
+      // 标记已被接管（唯一写者：ExecutionUnit）
       await this.writeCheckpoint(execution, 'running');
 
       try {
@@ -1104,7 +1104,7 @@ export class AgentRuntime {
         throw new LimitExceededError(limitBlock);
       }
 
-      // 90%–95%：不压缩，只提示换 Body；>95% 交给 autoCompactAsync。
+      // 90%–95%：不压缩，只提示换 ExecutionUnit；>95% 交给 autoCompactAsync。
       // 自动压缩关闭时没有后续压缩降水位，提示不设上界（见 publishContextPressureWarning）。
       this.publishContextPressureWarning(execution);
 
@@ -1774,7 +1774,7 @@ export class AgentRuntime {
    * 只替换压力提示的尾句：缺省（未给 `contextPressureHint`）回落到 `agent(rotate)`
    * 原文案。自动压缩开关由调用方自己的 `ContextManager` 决定，core 不感知身份。
    */
-  applyContextPolicy(policy: Pick<AgentRuntimeOptions, 'contextPressureHint'>): void {
+  applyContextPolicy(policy: Pick<ExecutionUnitOptions, 'contextPressureHint'>): void {
     this.contextPressureHint = policy.contextPressureHint;
   }
 

@@ -49,7 +49,7 @@ export function withPluginConfig(
     ...(plugin.description !== undefined ? { description: plugin.description } : {}),
     install: (host) => installWithConfig(plugin, host, config),
     // 0.9 生命周期 v2：包装层必须透传 init/dispose，否则配置过的插件
-    // 不会收到 init，也不会在 AgentRuntime.dispose() 时被清理。
+    // 不会收到 init，也不会在 ExecutionUnit.dispose() 时被清理。
     ...(plugin.init !== undefined ? { init: (ctx: PluginInitContext) => plugin.init?.(ctx) } : {}),
     ...(plugin.dispose !== undefined ? { dispose: () => plugin.dispose?.() } : {}),
   };
@@ -88,7 +88,7 @@ export function declarativePluginEntries(config: VesselConfig): PluginConfig[] {
 }
 
 /**
- * 构造 `plugin.name → config` 映射（core 0.6.1 的 `AgentRuntimeOptions.pluginConfigs`）。
+ * 构造 `plugin.name → config` 映射（core 0.6.1 的 `ExecutionUnitOptions.pluginConfigs`）。
  * 声明式条目先合并，显式 `plugins[].config` 覆盖。
  *
  * 0.11.1（DECISION-022 §2.4）：`agentCwd` 是全局默认工作目录，只作为

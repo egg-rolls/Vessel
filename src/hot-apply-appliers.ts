@@ -7,7 +7,7 @@
  *
  * ## 语义边界
  *
- * - `permission`：对**所有存活 runtime** 调 `applyPermissionRules`（owner + 成员 Body）；
+ * - `permission`：对**所有存活 runtime** 调 `applyPermissionRules`（owner + 成员 ExecutionUnit）；
  *   下一轮工具调用即按新规则判定。已记住的 "always" 不受影响（core 语义）。
  * - `tools`：先在**旁路**注册到临时 host 求出目标工具集，再一次性替换真实宿主；
  *   注册失败只回滚已发生的差异，绝不留下半更新状态。

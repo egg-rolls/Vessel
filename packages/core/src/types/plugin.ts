@@ -31,7 +31,7 @@ export interface Plugin {
   install(host: PluginHost, options?: PluginInstallOptions): void | Promise<void>;
   /** 所有插件 install 成功后按安装顺序调用；异常被隔离在单个插件内（0.9） */
   init?(ctx: PluginInitContext): void | Promise<void>;
-  /** `AgentRuntime.dispose()` 时按逆安装顺序调用；best-effort（0.9） */
+  /** `ExecutionUnit.dispose()` 时按逆安装顺序调用；best-effort（0.9） */
   dispose?(): void | Promise<void>;
 }
 
@@ -127,8 +127,8 @@ export interface SelfCardOptions {
   how_to_ask?: string;
 }
 
-/** AgentRuntime 配置 */
-export interface AgentRuntimeOptions {
+/** ExecutionUnit 配置 */
+export interface ExecutionUnitOptions {
   provider: import('./provider.js').LLMProvider;
   model: string;
   context: import('./context.js').ContextManager;
@@ -170,7 +170,7 @@ export interface AgentRuntimeOptions {
   /**
    * 0.28：上下文压力提示的尾句文案；缺省保持 `agent(rotate)` 原文案。
    * 供不能靠 rotate 自愈的入口（如 temporary 成员）换成自己的行动建议。
-   * 运行期可用 `AgentRuntime.applyContextPolicy` 热替换（身份转换后下一轮生效）。
+   * 运行期可用 `ExecutionUnit.applyContextPolicy` 热替换（身份转换后下一轮生效）。
    */
   contextPressureHint?: string;
   /**

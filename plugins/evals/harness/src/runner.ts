@@ -5,8 +5,8 @@
 
 import * as path from 'node:path';
 import {
-  AgentRuntime,
   type EventStream,
+  ExecutionUnit,
   type LLMProvider,
   MemoryContextManager,
   MemoryEventStream,
@@ -83,7 +83,7 @@ async function createDefaultBundle(
   extras: { scripted?: ScriptedProvider; switchable?: SwitchableProvider } = {},
 ): Promise<RuntimeBundle> {
   const events = new MemoryEventStream();
-  const runtime = await AgentRuntime.create({
+  const runtime = await ExecutionUnit.create({
     provider,
     model: options.model ?? (options.providerFactory ? NETWORK_MODEL : DEFAULT_MODEL),
     context: new MemoryContextManager(),

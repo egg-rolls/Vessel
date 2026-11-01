@@ -3,7 +3,7 @@
  *
  * - 列表：running + interrupted，排序/上限由 core 的 RunStore 保证
  *   （updated_at 倒序、同值 run_id 升序；默认 50、最大 200）。
- * - 恢复只走 `AgentRuntime.resume()`；
+ * - 恢复只走 `ExecutionUnit.resume()`；
  * - 禁止「seed session + 合成续跑消息」：恢复只走 core 的 resume。
  */
 
@@ -123,7 +123,7 @@ export async function loadResumableCheckpoint(
   if (checkpoint.status !== 'running' && checkpoint.status !== 'interrupted') {
     throw resumeError('run_not_resumable', runId, checkpoint.status);
   }
-  // 0.18：checkpoint 不再携带完整 messages；历史由 AgentRuntime 从
+  // 0.18：checkpoint 不再携带完整 messages；历史由 ExecutionUnit 从
   // session 缓存 + 会话事件日志重建。空历史仍由 runtime 返回稳定错误。
   return checkpoint;
 }
@@ -138,7 +138,7 @@ export function toFailedOutcome(error: unknown): DurableRunOutcome {
  *
  * - default tenant 返回 undefined：由 gateway 的 `durable`（bootstrap bundle）提供；
  * - 非 default tenant 只使用自己的 runStore；没有则 undefined（gateway 返回 403）；
- * - resume 不等待完成：AgentRuntime.resume 的完成 Promise 不阻塞 HTTP。
+ * - resume 不等待完成：ExecutionUnit.resume 的完成 Promise 不阻塞 HTTP。
  */
 export function createDurableFor(
   factory: Pick<TenantRuntimeFactory, 'bundleFor'> | undefined,
@@ -156,7 +156,7 @@ export function createDurableFor(
       return {
         store,
         resume: (runId: string) => {
-          // AgentRuntime.resume 在 run 结束时才 resolve：不等待。
+          // ExecutionUnit.resume 在 run 结束时才 resolve：不等待。
           void runtimeResume.call(runtime, runId).catch(() => {});
         },
       };

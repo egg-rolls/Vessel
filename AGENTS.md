@@ -25,7 +25,7 @@
 - **密钥**：不输出 / 不记录解析后的密钥；`app_secret` 永不打印，`app_id` 只允许前 4 位 + `***`；trace / 事件 / 日志 / `config show` 经 redactor；core 不给默认厂商 Key / Base URL / 价格（ADR-050/069）。
 - **权限**：默认无限等待，不得重新引入 120s / 固定 TTL；只有显式正数 `timeoutMs` 才超时；abort 优先于超时。只有 human / policy 能答，没有 agent 审批人，不提供 `allow-after`（ADR-077/079/091）。
 - **数据写入**：session / checkpoint 一律 `atomicWrite`，默认 `durable: true`；损坏 ≠ 不存在，抛 `SessionCorruptError`、不 unlink；一个 tenant 一个写者，锁冲突返回 `tenant_locked` / `session_locked` / `run_locked`（ADR-056/086）。
-- **单 run**：同一个 `AgentRuntime` 同时只允许一个 active run；第二个 run 抛 `run_already_running`；不要另写终态持久化 / 事件发布路径（ADR-054）。
+- **单 run**：同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`；不要另写终态持久化 / 事件发布路径（ADR-054）。
 - **发布纪律**：1.0 前只做干跑，不 tag、不 publish、不 force-push；1 本地 squash 到 `main` 后直接 push，PR 只在用户明确要求时开；CI 异步，不作为 push 前置；tag `v*` 只有 1 打。
 - **插件信任**：默认加载外部插件，启动时向 stderr 告警；`VESSEL_NO_EXTERNAL_PLUGINS=1` 只加载仓库插件；显式 `plugins:` 即信任；外部插件以完整进程权限运行，P0-3 只做到缓解——不可信仓库务必 opt-out。
 - **远程**：不默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环必须 TLS；`serve.allowed_origins` 只接受显式 http(s) origin，禁止 `*` / path / query。
@@ -83,4 +83,4 @@ bun run scripts/release-dry-run.ts
 
 进 core 必须全部满足：大多数 harness 都需要、领域无关、可接口化、不绑 Provider 或厂商 SDK、能被多个应用复用。**拿不准就选插件，不选 core。** core 只放领域无关的运行时；其余做成 `plugins/<category>/<name>/`（放文件夹即注册；目录只在进程启动时扫描一次）。应用层外壳不往 core 反推需求。
 
-判断“要不要动 core”：能做成 Tool（`registerTool`）/ Hook / Guardrail / 事件（开放字符串），或能由 `bash` + 模型自己组合出来 → 不进 core。单个 agent 的 tool-calling loop 仍由 `AgentRuntime` 实现，不要在 Host 再写一套 loop。
+判断“要不要动 core”：能做成 Tool（`registerTool`）/ Hook / Guardrail / 事件（开放字符串），或能由 `bash` + 模型自己组合出来 → 不进 core。单个 agent 的 tool-calling loop 仍由 `ExecutionUnit` 实现，不要在 Host 再写一套 loop。

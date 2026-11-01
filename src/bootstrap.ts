@@ -232,7 +232,7 @@ export interface BootstrapOptions {
 }
 
 export interface BootstrapResult {
-  /** 外壳消费面：tenant 的 AgentRuntime */
+  /** 外壳消费面：tenant 的 ExecutionUnit */
   runtime: RunnableAgent;
   ctx: ReplContext;
   config: Awaited<ReturnType<typeof loadConfig>>['config'];
@@ -1050,7 +1050,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
    * 父宿主是否注册 ask_user（0.27 / 0.33）。
    *
    * 0.33：headless 也注册（请求落盘后挂起，人类稍后回答并 resume），
-   * 所以「注册」不再等于「进程内有应答者」。成员 Body 仍只允许有**交互**
+   * 所以「注册」不再等于「进程内有应答者」。成员 ExecutionUnit 仍只允许有**交互**
    * 应答者的入口拿 ask_user：headless 成员没有 bridge 应答者，放行只会让
    * 成员 run 永久等待。
    */
@@ -1194,7 +1194,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       limits: agentPlan.limits ?? limits,
       termination: memberTermination,
       ...(agentPlan.readOnlyTools !== undefined ? { readOnlyTools: agentPlan.readOnlyTools } : {}),
-      // 0.27：成员 Body 只能拿到父宿主真注册了的工具。只有**交互**入口才放行
+      // 0.27：成员 ExecutionUnit 只能拿到父宿主真注册了的工具。只有**交互**入口才放行
       // ask_user；headless 的父宿主会挂起（没有进程内应答者），成员放行只会
       // 让成员 run 等一个不会到来的 bridge 应答。
       ...(interactiveHumanAvailable ? { extraTools: ['ask_user'] } : {}),
@@ -1214,7 +1214,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       scheduler: bundle.scheduler,
       ...(config.agent?.ownerId !== undefined ? { ownerId: config.agent.ownerId } : {}),
       logger,
-      // 成员 Body 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。
+      // 成员 ExecutionUnit 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。
       session,
       ...(eventLog !== undefined ? { eventLog } : {}),
       teamDeclarations,
@@ -1235,7 +1235,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.28：回填渠道执行面（渠道 `start()` 时才读取；此处不提前构造 / 不改变次序）。
     feishuAgentService = wiring.service;
     finalPluginHost.registerTool(wiring.tool);
-    // 顺序契约：`main` 的 Body 在 spawn 时快照父宿主工具列表，
+    // 顺序契约：`main` 的 ExecutionUnit 在 spawn 时快照父宿主工具列表，
     // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。
     const owner = await wiring.startOwner();
 
@@ -1305,7 +1305,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // ── Durable resume（0.3）─────────────────────────
-  // 恢复只走 tenant runtime 的 `AgentRuntime.resume`（不注入合成消息）。
+  // 恢复只走 tenant runtime 的 `ExecutionUnit.resume`（不注入合成消息）。
   const startResume = async (
     runId: string,
     opts?: RunOptions,

@@ -1,6 +1,6 @@
 /**
  * Hook 编排器（五阶段）。
- * 从 AgentRuntime 抽出（ADR-033 编排逻辑外推），保持单一职责。
+ * 从 ExecutionUnit 抽出（ADR-033 编排逻辑外推），保持单一职责。
  *
  * 0.5：发 `hook.started` / `hook.completed` / `hook.failed`（DECISION-010 §2.2）。
  * 0.8 C2：单个 hook 抛错不再向上传播——发 `hook.error`（并保留 `hook.failed` 兼容），

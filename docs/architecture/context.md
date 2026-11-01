@@ -2,12 +2,12 @@
 title: 上下文与消息注入
 kind: current
 triggers: [context, message, injection, compaction, system prompt, self card, vessel:source, notice, token, prefix, history]
-paths: [packages/core/src/context/**, packages/core/src/runtime/agent-runtime.ts, packages/core/src/session/project-messages.ts, packages/agent/src/runtime.ts, src/runtime-notice-hook.ts, src/agent-owner-injection.ts, plugins/context/doc-subscription/**]
+paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.ts, packages/core/src/session/project-messages.ts, packages/agent/src/runtime.ts, src/runtime-notice-hook.ts, src/agent-owner-injection.ts, plugins/context/doc-subscription/**]
 ---
 
 # 上下文与消息注入
 
-`ContextManager` 是**每个 session 一份**的内存消息表；`AgentRuntime` 是唯一写者。
+`ContextManager` 是**每个 session 一份**的内存消息表；`ExecutionUnit` 是唯一写者。
 事件日志是恢复的真相源；**compaction 是唯一允许重写历史的地方**。
 
 ## 消息模型
@@ -26,7 +26,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/agent-runtime.ts
 
 | 来源 | 内容 | 方式 | 位置 | 持久化 |
 |---|---|---|---|---|
-| `config.agent.systemPrompt` / 成员 `system_prompt` | 基底提示词 | `AgentRuntime.systemPrompt` | 第一条 system | 是 |
+| `config.agent.systemPrompt` / 成员 `system_prompt` | 基底提示词 | `ExecutionUnit.systemPrompt` | 第一条 system | 是 |
 | core `formatSelfCard` | role / parent / team / depth / model / tools / limits / context budget / how_to_ask | `composeRunSystemPrompt` | system | 是 |
 | 历史恢复 | session cache + 事件日志 | `loadStoredHistory` / `projectMessages` | 用户输入前 | 是 |
 | 用户输入 | `run(input)` | `addContext` + `user.message` | 本轮 user | 是 |

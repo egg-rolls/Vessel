@@ -5,7 +5,7 @@
  */
 
 import {
-  AgentRuntime,
+  ExecutionUnit,
   MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
@@ -46,7 +46,7 @@ async function main() {
   const session = new MemorySessionBackend();
 
   // 4. 创建 Runtime
-  const runtime = await AgentRuntime.create({
+  const runtime = await ExecutionUnit.create({
     provider,
     model: 'gpt-4',
     pluginHost: host,

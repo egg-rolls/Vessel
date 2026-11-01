@@ -12,7 +12,7 @@ import type { Message } from './provider.js';
  * 一次 run 的执行态（0.8 C1）。
  *
  * run 级状态（run id / session / branch / 计时 / usage）收敛在这里，
- * 由 `AgentRuntime` 在 run()/resume() 入口创建、`finally` 释放；
+ * 由 `ExecutionUnit` 在 run()/resume() 入口创建、`finally` 释放；
  * 调用方不应持有或修改它。
  */
 export interface RunExecution {
@@ -38,7 +38,7 @@ export interface RunExecution {
 }
 
 /**
- * `AgentRuntime.interrupt()` 的中断原因（0.10 R2-18）。
+ * `ExecutionUnit.interrupt()` 的中断原因（0.10 R2-18）。
  *
  * - `shutdown` / `timeout`：checkpoint 落 `interrupted`，可 `--resume-run`；
  * - `user`：按用户取消处理，checkpoint 落 `cancelled`。
@@ -50,13 +50,13 @@ export interface RunOptions {
   /**
    * @internal 仅供 Kernel/Host 使用：指定本次 run 的 run_id，
    * 使 `RunHandle.id` 与事件流里的 `run_id` 一致（F6）。
-   * 普通调用方不要设置；缺省由 AgentRuntime 生成。
+   * 普通调用方不要设置；缺省由 ExecutionUnit 生成。
    */
   runId?: string;
   /**
    * per-run session（0.14.1，additive）：多 agent Host 的 `AgentHandle.run` 用它
    * 覆盖成员默认 session；`ScheduledTask.sessionId` 仍可被自定义 Scheduler 改写。
-   * 单 agent `AgentRuntime.run(input, sessionId, opts)` 继续以显式参数为准，
+   * 单 agent `ExecutionUnit.run(input, sessionId, opts)` 继续以显式参数为准，
    * 不消费该字段（避免双来源）。
    */
   sessionId?: string;
