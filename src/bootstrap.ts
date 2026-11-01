@@ -1246,6 +1246,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 成员 ExecutionUnit 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。
       session,
       ...(eventLog !== undefined ? { eventLog } : {}),
+      ...(bundle.leaseService !== undefined ? { leaseService: bundle.leaseService } : {}),
+      ...(bundle.summarizer !== undefined ? { summarizer: bundle.summarizer } : {}),
       teamDeclarations,
       ...(defaultWorkspace !== undefined ? { defaultWorkspace } : {}),
       ...(federation !== undefined ? { federation } : {}),
@@ -1283,6 +1285,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     // owner 端点与 gateway 共用同一 canonical 控制面适配器。
     const agentControlLike = createAgentControl(wiring.service, tenantId);
+    // 0.34 Stage 3：CLI / TUI / gateway 的所有 delete 入口共用同一个前置钩子。
+    sessionControl.setDetachSession((sessionId) => wiring.service.detachSession(sessionId));
     let ownerServer: AgentOwnerServer | undefined;
     // owner 端点只服务交互 REPL / serve 的 CLI attach；headless（`--run` / 管道）
     // 是一次性进程，不监听端口。AgentService / Team 仍在进程内可用。
@@ -1573,9 +1577,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             ),
           );
         }
-        return withTenantLock({ tenantDir: tenantPaths.root, tenantId }, () =>
-          sessionControl.delete(sessionId),
-        );
+        return withTenantLock({ tenantDir: tenantPaths.root, tenantId }, async () => {
+          // 0.34 Stage 3：sessionControl.delete 内部先 detach；冲突（active run /
+          // 活 SessionLease）直接抛 `conflict`，不做任何删除。
+          return sessionControl.delete(sessionId);
+        });
       },
     },
     redactor: bundle.redactor,

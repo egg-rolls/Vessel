@@ -100,6 +100,24 @@ export interface RotateEventData extends Record<string, unknown> {
   epoch?: number;
 }
 
+/** agent.restarting / agent.restarted 载荷（同一 Session，epoch 递增） */
+export interface RestartEventData extends Record<string, unknown> {
+  agent_id?: string;
+  session_id?: string;
+  from_session_id?: string;
+  to_session_id?: string;
+  from_epoch?: number;
+  epoch?: number;
+}
+
+/** agent.compact_forked 载荷（子 Session 继承压缩上下文） */
+export interface CompactForkEventData extends Record<string, unknown> {
+  agent_id?: string;
+  from_session_id?: string;
+  to_session_id?: string;
+  epoch?: number;
+}
+
 /** `user.message` 载荷（0.18 事件日志；message 为实际写入上下文的用户消息） */
 export interface UserMessageData extends Record<string, unknown> {
   message?: unknown;
@@ -185,6 +203,9 @@ export type TuiEvent =
   // ── 上下文生命周期（0.32：pressure → compacted → rotating/rotated 因果链） ──
   | { type: 'agent.rotating'; run_id: string; data: RotateEventData; ts: number }
   | { type: 'agent.rotated'; run_id: string; data: RotateEventData; ts: number }
+  | { type: 'agent.restarting'; run_id: string; data: RestartEventData; ts: number }
+  | { type: 'agent.restarted'; run_id: string; data: RestartEventData; ts: number }
+  | { type: 'agent.compact_forked'; run_id: string; data: CompactForkEventData; ts: number }
   | { type: 'context.pressure'; run_id: string; data: ContextPressureEventData; ts: number }
   // ── 透明化事件（0.14.3 / 0.15） ──
   | { type: 'limit.blocked'; run_id: string; data: LimitEventData; ts: number }
@@ -222,6 +243,9 @@ export const KNOWN_TUI_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent.limit.warning',
   'agent.rotating',
   'agent.rotated',
+  'agent.restarting',
+  'agent.restarted',
+  'agent.compact_forked',
   'context.pressure',
   'limit.blocked',
   'context.compacted',

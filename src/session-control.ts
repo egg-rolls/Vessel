@@ -54,6 +54,11 @@ export type DeleteSessionDataFn = (
 export interface SessionControl {
   rename(sessionId: string, title: string): Promise<void>;
   delete(sessionId: string): Promise<SessionDeleteResult>;
+  /**
+   * 0.34 Stage 3：AgentService 晚于 tenant bundle 构造，删除前钩子需要回填。
+   * 未回填时 delete 行为与旧版一致。
+   */
+  setDetachSession(detach: ((sessionId: string) => Promise<void>) | undefined): void;
 }
 
 /** createSessionControl 选项 */
@@ -66,6 +71,11 @@ export interface CreateSessionControlOptions {
   tenantId?: string;
   /** 0.18：删除会话时同目录清理事件日志（events.ndjson + index.json） */
   eventLog?: SessionEventLog;
+  /**
+   * 0.34 Stage 3：删除前的权威钩子（`AgentService.detachSession`）。
+   * 冲突（active run / 活 SessionLease）必须抛 `conflict`，且不得删除任何数据。
+   */
+  detachSession?: (sessionId: string) => Promise<void>;
   deleteSessionData?: DeleteSessionDataFn;
 }
 
@@ -94,8 +104,13 @@ function defaultDeleteSessionData(
 /** 创建 session 控制面 */
 export function createSessionControl(options: CreateSessionControlOptions): SessionControl {
   const deleteFn = options.deleteSessionData ?? defaultDeleteSessionData;
+  let detachSession = options.detachSession;
 
   return {
+    setDetachSession(detach: ((sessionId: string) => Promise<void>) | undefined): void {
+      detachSession = detach;
+    },
+
     async rename(sessionId: string, title: string): Promise<void> {
       const state = await options.session.load(sessionId);
       if (!state) throw new SessionNotFoundError(sessionId);
@@ -105,6 +120,8 @@ export function createSessionControl(options: CreateSessionControlOptions): Sess
     },
 
     async delete(sessionId: string): Promise<SessionDeleteResult> {
+      // 先 detach（dispose EU / 释放租约 / 退役 binding），再走 core 数据删除。
+      if (detachSession !== undefined) await detachSession(sessionId);
       return deleteFn(sessionId, {
         session: options.session,
         paths: options.paths,

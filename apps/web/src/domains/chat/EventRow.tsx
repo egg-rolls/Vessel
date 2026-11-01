@@ -238,6 +238,36 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
         }),
       };
     }
+    case 'agent.restarting': {
+      return {
+        tone: 'info',
+        text: t('chat.notice.restarting', {
+          session: shortId(data.from_session_id ?? data.session_id),
+          from: numberOf(data.from_epoch) ?? '?',
+          epoch: numberOf(data.epoch) ?? '?',
+        }),
+      };
+    }
+    case 'agent.restarted': {
+      return {
+        tone: 'info',
+        text: t('chat.notice.restarted', {
+          session: shortId(data.from_session_id ?? data.session_id),
+          from: numberOf(data.from_epoch) ?? '?',
+          epoch: numberOf(data.epoch) ?? '?',
+        }),
+      };
+    }
+    case 'agent.compact_forked': {
+      return {
+        tone: 'info',
+        text: t('chat.notice.compactForked', {
+          from: shortId(data.from_session_id),
+          to: shortId(data.to_session_id),
+          epoch: numberOf(data.epoch) ?? '?',
+        }),
+      };
+    }
     default:
       return null;
   }

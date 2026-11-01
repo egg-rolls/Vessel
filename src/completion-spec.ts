@@ -362,6 +362,8 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       { name: 'inbox', flags: ['--json'] },
       { name: 'dispatch', flags: ['--json'] },
       { name: 'rotate', flags: ['--json', '--startup'] },
+      { name: 'restart', flags: ['--json', '--startup'] },
+      { name: 'compact-fork', flags: ['--json', '--startup'] },
       { name: 'close', flags: ['--json'] },
       {
         name: 'list',

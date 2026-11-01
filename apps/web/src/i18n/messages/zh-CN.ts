@@ -992,6 +992,9 @@ export const messages = {
   'chat.notice.limitWarning': '限额预警 · {key} {current}/{max}',
   'chat.notice.rotating': '上下文切换中 · {from} → {to}',
   'chat.notice.rotated': '上下文已切换 · {from} → {to} · epoch {epoch}',
+  'chat.notice.restarting': '上下文重启中 · {session} · epoch {from} → {epoch}',
+  'chat.notice.restarted': '上下文已重启 · {session} · epoch {from} → {epoch}',
+  'chat.notice.compactForked': '上下文已压缩分叉 · {from} → {to} · epoch {epoch}',
   'chat.role.assistant': '助手',
   'chat.loadEarlier': '加载更早（还有 {count} 条）',
 

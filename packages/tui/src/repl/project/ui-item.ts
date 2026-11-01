@@ -793,6 +793,53 @@ export function reduceUiProjection(
       };
     }
 
+    case 'agent.restarting':
+    case 'agent.restarted': {
+      const { id, seq } = nextId(state, 'notice');
+      const data = event.data;
+      const session = shortSessionId(
+        readString(data, 'from_session_id') ?? readString(data, 'session_id') ?? '',
+        12,
+      );
+      const fromEpoch = readNumber(data, 'from_epoch');
+      const epoch = readNumber(data, 'epoch');
+      const text =
+        event.type === 'agent.restarting'
+          ? t('item.restarting', {
+              session: session || '?',
+              from: fromEpoch ?? '?',
+              epoch: epoch ?? '?',
+            })
+          : t('item.restarted', {
+              session: session || '?',
+              from: fromEpoch ?? '?',
+              epoch: epoch ?? '?',
+            });
+      return {
+        ...state,
+        seq,
+        items: [...state.items, { kind: 'notice', id, level: 'info', text }],
+      };
+    }
+
+    case 'agent.compact_forked': {
+      const { id, seq } = nextId(state, 'notice');
+      const data = event.data;
+      const from = shortSessionId(readString(data, 'from_session_id') ?? '', 12);
+      const to = shortSessionId(readString(data, 'to_session_id') ?? '', 12);
+      const epoch = readNumber(data, 'epoch');
+      const text = t('item.compactForked', {
+        from: from || '?',
+        to: to || '?',
+        epoch: epoch ?? '?',
+      });
+      return {
+        ...state,
+        seq,
+        items: [...state.items, { kind: 'notice', id, level: 'info', text }],
+      };
+    }
+
     case 'ask.user.requested': {
       const { id, seq } = nextId(state, 'notice');
       return {

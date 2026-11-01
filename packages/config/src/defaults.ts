@@ -7,6 +7,7 @@ import type {
   DurableConfig,
   EvalsConfig,
   FeishuConfig,
+  LeaseConfig,
   McpServerConfig,
   ObservabilityConfig,
   SchedulerConfig,
@@ -45,6 +46,17 @@ export const DEFAULT_SCHEDULER_OPTIONS: Required<SchedulerConfig> = {
  */
 export const DEFAULT_TRANSPORT_OPTIONS: Required<Pick<TransportConfig, 'kind'>> = {
   kind: 'in-process',
+};
+
+/**
+ * 0.34 两级租约默认值（body / session）。
+ * 不写入 DEFAULT_CONFIG：未配置 `lease` 时 EU 按这些值续租与过期。
+ *
+ * 约束：`ttlMs > renewMs`，`renewMs >= 1000`，`ttlMs >= renewMs + 1000`。
+ */
+export const DEFAULT_LEASE_OPTIONS: Required<LeaseConfig> = {
+  ttlMs: 30_000,
+  renewMs: 10_000,
 };
 
 /**

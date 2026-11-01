@@ -11,15 +11,24 @@
 import type { AgentService, BatchItemResult, MemberStatus } from '@vessel-agent/agent';
 import type {
   AgentCloseBatchResultLike,
+  AgentCompactForkBatchResultLike,
+  AgentCompactForkItemLike,
+  AgentCompactForkLikeInput,
   AgentControlLike,
   AgentCreateLikeInput,
   AgentDispatchBatchResultLike,
   AgentDispatchItemLike,
   AgentDispatchLikeInput,
+  AgentForkBatchResultLike,
+  AgentForkItemLike,
+  AgentForkLikeInput,
   AgentLifecycleBatchResultLike,
   AgentLifecycleFailLike,
   AgentLifecycleItemLike,
   AgentListLikeInput,
+  AgentRestartBatchResultLike,
+  AgentRestartItemLike,
+  AgentRestartLikeInput,
   AgentRotateBatchResultLike,
   AgentRotateItemLike,
   AgentRotateLikeInput,
@@ -237,6 +246,110 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
           from_session_id: result.from_session_id,
           to_session_id: result.to_session_id,
           epoch: result.epoch,
+        };
+      });
+      return { results };
+    },
+    async restart(inputs: AgentRestartLikeInput[]): Promise<AgentRestartBatchResultLike> {
+      const settledResults = await Promise.allSettled(
+        inputs.map((input) =>
+          service.restart({
+            to: input.to,
+            ...(input.startup_prompt !== undefined ? { startup_prompt: input.startup_prompt } : {}),
+            ...(input.from !== undefined ? { from: input.from } : {}),
+            ...(input.from_session_id !== undefined
+              ? { from_session_id: input.from_session_id }
+              : {}),
+          }),
+        ),
+      );
+      const results: AgentRestartItemLike[] = settledResults.map((settledResult) => {
+        if (settledResult.status === 'rejected') return failureFrom(settledResult.reason);
+        const result = settledResult.value;
+        if (result.status !== 'restarted') {
+          return {
+            ok: false,
+            code: result.code,
+            error: result.reason,
+            ...(result.run_id !== undefined ? { run_id: result.run_id } : {}),
+            ...(result.session_id !== undefined ? { session_id: result.session_id } : {}),
+            ...(result.lease_token !== undefined ? { lease_token: result.lease_token } : {}),
+            ...(result.epoch !== undefined ? { epoch: result.epoch } : {}),
+          };
+        }
+        return {
+          ok: true,
+          status: 'restarted',
+          agent_id: result.agent_id,
+          session_id: result.session_id,
+          from_epoch: result.from_epoch,
+          epoch: result.epoch,
+        };
+      });
+      return { results };
+    },
+    async compactFork(
+      inputs: AgentCompactForkLikeInput[],
+    ): Promise<AgentCompactForkBatchResultLike> {
+      const settledResults = await Promise.allSettled(
+        inputs.map((input) =>
+          service.compactFork({
+            to: input.to,
+            ...(input.startup_prompt !== undefined ? { startup_prompt: input.startup_prompt } : {}),
+            ...(input.from !== undefined ? { from: input.from } : {}),
+            ...(input.from_session_id !== undefined
+              ? { from_session_id: input.from_session_id }
+              : {}),
+          }),
+        ),
+      );
+      const results: AgentCompactForkItemLike[] = settledResults.map((settledResult) => {
+        if (settledResult.status === 'rejected') return failureFrom(settledResult.reason);
+        const result = settledResult.value;
+        if (result.status !== 'compact_forked') {
+          return {
+            ok: false,
+            code: result.code,
+            error: result.reason,
+            ...(result.run_id !== undefined ? { run_id: result.run_id } : {}),
+            ...(result.session_id !== undefined ? { session_id: result.session_id } : {}),
+            ...(result.lease_token !== undefined ? { lease_token: result.lease_token } : {}),
+            ...(result.epoch !== undefined ? { epoch: result.epoch } : {}),
+          };
+        }
+        return {
+          ok: true,
+          status: 'compact_forked',
+          agent_id: result.agent_id,
+          from_session_id: result.from_session_id,
+          to_session_id: result.to_session_id,
+          epoch: result.epoch,
+        };
+      });
+      return { results };
+    },
+    async fork(inputs: AgentForkLikeInput[]): Promise<AgentForkBatchResultLike> {
+      const settledResults = await Promise.allSettled(
+        inputs.map((input) =>
+          service.fork({
+            to: input.to,
+            ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.from !== undefined ? { from: input.from } : {}),
+          }),
+        ),
+      );
+      const results: AgentForkItemLike[] = settledResults.map((settledResult) => {
+        if (settledResult.status === 'rejected') return failureFrom(settledResult.reason);
+        const result = settledResult.value;
+        if (!result.ok) {
+          return { ok: false, code: result.code, error: result.reason };
+        }
+        return {
+          ok: true,
+          status: 'forked',
+          agent_id: result.member.id,
+          from_agent_id: result.from_agent_id,
+          session_id: result.member.session_id,
         };
       });
       return { results };

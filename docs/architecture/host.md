@@ -16,13 +16,13 @@ paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 
 - `packages/core/src/kernel/scheduler.ts` 提供 `Scheduler` / `ScheduledTask` / `InProcessScheduler`。装配层每 tenant 构造一个实例并注入 `AgentService`；run 路径上没有第二层执行壳（ADR-081 / ADR-097）。
 - 执行事实在每 body 的 `ExecutionUnit`：Scheduler 只负责排队、并发、取消与只读视图，不复制 `toolCallingLoop`，也不写第二套终态持久化路径。
-- 入队形态固定：`admit` 组一个 `ScheduledTask`，`serialKey` 必填且等于 body / session id，`executor` 收到 runId 后调用该 body 的 `runtime.run`。
+- 入队形态固定：`admit` 组一个 `ScheduledTask`，调度键 `session_id` 必填且等于 body id，`executor` 收到 runId 后调用该 body 的 `runtime.run`。
 
 <a id="run-binding"></a>
 
 ## 串行键与取消
 
-- `serialKey` 是唯一串行维度：`perBodySerial`（默认 true）保证同一 body 同时最多一个 running，不同 body 可并发。`ScheduledTask.sessionId` 与该 body 相同，`RunOptions.sessionId` 语义不变（= body id）；单 agent 的 `ExecutionUnit.run(input, sessionId, opts)` 仍以显式参数为准，不读该字段（避免双来源）。
+- `session_id` 是唯一串行维度：`perBodySerial`（默认 true）保证同一 body 同时最多一个 running，不同 body 可并发。`ScheduledTask.sessionId` 与该 body 相同，`RunOptions.sessionId` 语义不变（= body id）；单 agent 的 `ExecutionUnit.run(input, sessionId, opts)` 仍以显式参数为准，不读该字段（避免双来源）。0.34 起不再有独立的 `serialKey` 字段。
 - 取消链路：`runs.cancel(runId)` → `scheduler.cancel(runId, reason?)` → 该 run 的 `AbortSignal.reason`；queued 取消由控制面补一条 `cancelled` checkpoint，running 取消由 `finalizeRun` 收口。
 - reason 语义沿用 run 生命周期：`shutdown` / `timeout` 落 interrupted checkpoint，`user` 或未传落 cancelled。
 
@@ -52,10 +52,11 @@ paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 
 ## 约束
 
-- 同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`。`serialKey` 保证 Scheduler 不会为同一 body 并发起 run。
+- 同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`。调度键 `session_id` 保证 Scheduler 不会为同一 body 并发起 run。
 - 中断必须带原因（`interrupt('shutdown'|'timeout'|'user')`），不得只 abort signal。
 - checkpoint / run store 写入仍走单一 `RunRecordStore`，写者是 body 的 `ExecutionUnit`，不得双写。
 - 不在 Scheduler 里新增权限、tool pipeline 或 context 逻辑；这些属于 core 的单 run 路径。
+- `LeaseService` 仅单节点本地（`.locks/leases/**`）：不做多节点 / 集群共识，不可当分布式锁用；跨节点迁移/接管靠 TTL 过期 + fencing，同一 `dataDir` 多进程依赖本地文件系统语义。
 
 ## 指针
 

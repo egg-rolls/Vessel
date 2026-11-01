@@ -37,6 +37,7 @@ import {
   sessionIndexFilePath,
 } from '../tenant/index.js';
 import type { SessionEventInput, SessionEventRecord, SessionIndexPatch } from '../types/event.js';
+import { LeaseExpiredError, type LeaseKind } from '../types/lease.js';
 import type { Logger } from '../types/logging.js';
 import { atomicWrite } from './atomic-write.js';
 
@@ -71,6 +72,12 @@ export interface SessionEventLogOptions {
   logger?: Logger;
   /** 每条 fsync；缺省 true（测试可关） */
   durable?: boolean;
+  /**
+   * ADR-098 C2：可选 fencing 校验（装配层传 `LeaseServicePort.fenceOf`）。
+   * `SessionEventInput.fencing_token` 低于当前 fence 时拒绝 append（`stale_fence`）。
+   * 缺省不校验；读路径永远不校验。
+   */
+  fenceOf?: (kind: LeaseKind, key: string) => Promise<number>;
   /**
    * 同时保持打开的写句柄上限（LRU）。超过时关闭最久未使用的 writer；
    * 下次 append 会重新打开并从文件尾恢复 seq。缺省 32。
@@ -144,6 +151,9 @@ function parseRecord(line: string): SessionEventRecord | null {
       ts: parsed.ts,
       type: parsed.type,
       data: parsed.data,
+      ...(typeof parsed.fencing_token === 'number' && Number.isFinite(parsed.fencing_token)
+        ? { fencing_token: parsed.fencing_token }
+        : {}),
     };
   } catch {
     return null;
@@ -215,6 +225,7 @@ export class SessionEventLog {
   private readonly dir: string;
   private readonly logger: Logger;
   private readonly durable: boolean;
+  private readonly fenceOf?: (kind: LeaseKind, key: string) => Promise<number>;
   private readonly maxOpenWriters: number;
   private readonly writers = new Map<string, WriterState>();
   /**
@@ -232,6 +243,7 @@ export class SessionEventLog {
     this.dir = options.dir;
     this.logger = options.logger ?? noopLogger;
     this.durable = options.durable ?? true;
+    this.fenceOf = options.fenceOf;
     this.maxOpenWriters = Math.max(
       1,
       Math.floor(options.maxOpenWriters ?? DEFAULT_MAX_OPEN_WRITERS),
@@ -261,6 +273,13 @@ export class SessionEventLog {
     const state = this.getOrCreateWriter(input.session_id);
     const task = state.queue.then(async () => {
       await state.ready;
+      // ADR-098 C2：旧 fencing token 必须被拒（在分配 seq / 写入之前）。
+      if (input.fencing_token !== undefined && this.fenceOf !== undefined) {
+        const current = await this.fenceOf('session', input.session_id);
+        if (input.fencing_token < current) {
+          throw new LeaseExpiredError('stale_fence', input.session_id);
+        }
+      }
       await this.syncWithFile(state);
       state.lastUsed = Date.now();
       const seq = state.assignedSeq + 1;
@@ -273,6 +292,7 @@ export class SessionEventLog {
         ts: input.ts,
         type: input.type,
         data: input.data,
+        ...(input.fencing_token !== undefined ? { fencing_token: input.fencing_token } : {}),
       };
       const handle = state.handle;
       if (!handle) throw new Error('session_event_log_unavailable');

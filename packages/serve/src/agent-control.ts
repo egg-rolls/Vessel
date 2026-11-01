@@ -132,6 +132,38 @@ export interface AgentRotateLikeInput {
   from?: string;
 }
 
+/**
+ * `agents.restart` 的单个条目：同一 Session 复用，换新 ExecutionUnit、epoch + 1。
+ * `startup_prompt` 是续接 transcript 后的首轮输入；缺省表示不追加。
+ */
+export interface AgentRestartLikeInput {
+  to: string;
+  startup_prompt?: string;
+  from_session_id?: string;
+  from?: string;
+}
+
+/**
+ * `agents.compactFork` 的单个条目：以父 Session 的压缩副本为种子新建子 Session。
+ * 父 Session / binding 不变；子 Session 成为新的 primary（epoch + 1）。
+ */
+export interface AgentCompactForkLikeInput {
+  to: string;
+  startup_prompt?: string;
+  from_session_id?: string;
+  from?: string;
+}
+
+/**
+ * `agents.fork` 的单个条目：新建空 Session 的 Agent，不复制 transcript。
+ * 权限 / 可见性按 `agents.create`。
+ */
+export interface AgentForkLikeInput {
+  to: string;
+  name?: string;
+  from?: string;
+}
+
 /** `agents.update` 的单个条目。 */
 export interface AgentUpdateLikeInput {
   agent_id: string;
@@ -169,6 +201,14 @@ export interface AgentLifecycleFailLike {
   ok: false;
   code: string;
   error: string;
+  /** Stage 3 conflict payload：当前 active run */
+  run_id?: string;
+  /** Stage 3 conflict payload：目标 Session */
+  session_id?: string;
+  /** Stage 3 conflict payload：当前有效 SessionLease 的 fencingToken（无则 null） */
+  lease_token?: number | null;
+  /** Stage 3 conflict payload：当前 binding epoch */
+  epoch?: number;
 }
 
 export type AgentLifecycleItemLike = AgentLifecycleOkLike | AgentLifecycleFailLike;
@@ -228,6 +268,53 @@ export interface AgentRotateBatchResultLike {
   results: AgentRotateItemLike[];
 }
 
+/** `agents.restart` 成功条目：同一 Session，epoch 递增。 */
+export interface AgentRestartOkLike {
+  ok: true;
+  status: 'restarted';
+  agent_id: string;
+  session_id: string;
+  from_epoch: number;
+  epoch: number;
+}
+
+export type AgentRestartItemLike = AgentRestartOkLike | AgentLifecycleFailLike;
+
+export interface AgentRestartBatchResultLike {
+  results: AgentRestartItemLike[];
+}
+
+/** `agents.compactFork` 成功条目：新建子 Session，继承压缩后的上下文。 */
+export interface AgentCompactForkOkLike {
+  ok: true;
+  status: 'compact_forked';
+  agent_id: string;
+  from_session_id: string;
+  to_session_id: string;
+  epoch: number;
+}
+
+export type AgentCompactForkItemLike = AgentCompactForkOkLike | AgentLifecycleFailLike;
+
+export interface AgentCompactForkBatchResultLike {
+  results: AgentCompactForkItemLike[];
+}
+
+/** `agents.fork` 成功条目：新建 Agent + 空 Session，不复制 transcript。 */
+export interface AgentForkOkLike {
+  ok: true;
+  status: 'forked';
+  agent_id: string;
+  from_agent_id: string;
+  session_id: string;
+}
+
+export type AgentForkItemLike = AgentForkOkLike | AgentLifecycleFailLike;
+
+export interface AgentForkBatchResultLike {
+  results: AgentForkItemLike[];
+}
+
 /**
  * 注入的 Agent 生命周期控制面；`tenantId` 决定 canonical RPC 的 tenant 作用域。
  * 未注入 / tenant 不匹配时 `agents.create|update|close` 返回 `not_found`。
@@ -255,4 +342,10 @@ export interface AgentControlLike {
   dispatch(inputs: AgentDispatchLikeInput[]): Promise<AgentDispatchBatchResultLike>;
   /** 批量 rotate；条目并行，结果与输入同序。 */
   rotate(inputs: AgentRotateLikeInput[]): Promise<AgentRotateBatchResultLike>;
+  /** 批量 restart（同一 Session，epoch + 1）；条目并行，结果与输入同序。 */
+  restart(inputs: AgentRestartLikeInput[]): Promise<AgentRestartBatchResultLike>;
+  /** 批量 compactFork（新 primary Session）；条目并行，结果与输入同序。 */
+  compactFork(inputs: AgentCompactForkLikeInput[]): Promise<AgentCompactForkBatchResultLike>;
+  /** 批量 fork（新 Agent + 空 Session）；条目并行，结果与输入同序。 */
+  fork(inputs: AgentForkLikeInput[]): Promise<AgentForkBatchResultLike>;
 }

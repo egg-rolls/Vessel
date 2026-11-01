@@ -155,6 +155,11 @@ export function applyTeamEvent(
       if (history === next.fallbackBodyHistory) return next;
       return { ...next, fallbackBodyHistory: history };
     }
+    case 'agent.restarting':
+    case 'agent.restarted':
+    case 'agent.compact_forked':
+      // 0.34：restart 复用 Session，compactFork 换 primary Session；都只需重拉 roster。
+      return { ...next, rosterDirty: true };
     default:
       // run.* 是唯一 run 生命周期（成员状态靠它 + agent_id 刷新）；
       // agent.* 生命周期事件同样只需重新拉取，不参与正文构造。

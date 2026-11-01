@@ -33,8 +33,10 @@ import {
   type TeamStore,
 } from '@vessel-agent/agent';
 import type {
+  ContextSummarizer,
   EventStream,
   ExecutionUnitOptions,
+  LeaseServicePort,
   LLMProvider,
   Logger,
   PluginHost,
@@ -102,6 +104,16 @@ export interface AgentServiceWiringOptions {
   session?: ExecutionUnitOptions['session'];
   /** tenant SessionEventLog；与父入口同源（缺省不落 trace） */
   eventLog?: ExecutionUnitOptions['eventLog'];
+  /**
+   * ADR-098 C2：per-tenant 租约服务。透传给 AgentService（BindingLease）与成员
+   * ExecutionUnit（SessionLease）；缺省时两级租约都是 no-op。
+   */
+  leaseService?: LeaseServicePort;
+  /**
+   * 0.34 Stage 3：compactFork 的压缩摘要器；与 tenant 上下文共用。
+   * 缺省时 compactFork 使用占位摘要。
+   */
+  summarizer?: ContextSummarizer;
   /**
    * 测试接缝：覆盖成员 ExecutionUnit 构造。缺省 `ExecutionUnit.create`；
    * bridge / owner 队列的端到端测试用 fake runtime，不调真实 provider。
@@ -203,6 +215,7 @@ export function buildMemberRuntimeOptions(
     ...(options.runtimeFactory !== undefined ? { runtimeFactory: options.runtimeFactory } : {}),
     ...(options.session !== undefined ? { session: options.session } : {}),
     ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
+    ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
     tenantId: options.tenantId,
     // 来源行的 node 段：与 federation 端口同源（bootstrap 的 nodeIdentity），
     // 只在装配期传一次，执行内核不自己解析。
@@ -357,6 +370,10 @@ export async function createAgentServiceWiring(
     ...(options.inboxMaxMessages !== undefined
       ? { inboxMaxMessages: options.inboxMaxMessages }
       : {}),
+    ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
+    ...(options.summarizer !== undefined ? { summarizer: options.summarizer } : {}),
+    // Stage 3：compactFork 从父 Session 事件日志重建/压缩 transcript。
+    ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
     snapshot: { enabled: true },
   });
   serviceRef = service;

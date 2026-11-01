@@ -1214,6 +1214,8 @@ async function runWithConfig(result: BootstrapResult) {
                     { code: 'forbidden' },
                   );
                 }
+                // 0.34 Stage 3：sessionControl.delete 内部先 detach（冲突抛 conflict）；
+                // 其它 tenant 只有执行面，没有 binding/EU 需要 detach。
                 return bundle.sessionControl.delete(sessionId);
               },
             },

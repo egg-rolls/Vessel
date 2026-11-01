@@ -5,6 +5,7 @@
 
 export type { ContextConfig, WorkingContext } from '../types/context.js';
 export {
+  compactMessagesForFork,
   estimateMessagesTokens,
   estimateMessageTokens,
   estimateTokens,

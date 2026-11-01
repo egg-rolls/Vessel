@@ -384,6 +384,19 @@ attention:
 - `vessel attention --node <name>` 使用该节点；`--all-nodes` 逐节点并发、只用于列表，单节点失败不影响其它节点（任一失败 exit 1）；`--to` 多匹配必须显式 `--node`。
 - 应答必须落到单个节点；不跨节点批量应答。
 
+### 2.16 两级租约（`lease`，0.34，ADR-098）
+
+```yaml
+lease:
+  ttl_ms: 30000     # 租约 TTL（毫秒）；默认 30000
+  renew_ms: 10000   # 续租间隔（毫秒）；默认 10000
+```
+
+- `lease.ttlMs` / `lease.renewMs` 控制系统两级租约（binding → session）的过期与续租；缺省分别消费 `30000` / `10000`。
+- 约束：`ttlMs > renewMs`，且 `renewMs >= 1000`、`ttlMs >= renewMs + 1000`；违反时 `validateConfig` 报带键名的错误。两个值都必须是正整数毫秒。
+- 除默认值外不在代码里硬编码；配置后由 ExecutionUnit 续租使用。
+- **仅单节点本地**：租约文件在 `<dataDir>/.locks/leases/**`，不做多节点 / 集群共识，不可当分布式锁用；跨节点迁移/接管靠 TTL 过期 + fencing token。同一 `dataDir` 多进程可用，但依赖本地文件系统语义（原子 `wx` / rename）。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：

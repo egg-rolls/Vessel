@@ -153,6 +153,19 @@ export interface SchedulerConfig {
   perBodySerial?: boolean;
 }
 
+/**
+ * Lease 配置（0.34 两级租约）。
+ *
+ * 约束：`ttlMs > renewMs`，且 `renewMs >= 1000`、`ttlMs >= renewMs + 1000`。
+ * 缺省消费 `DEFAULT_LEASE_OPTIONS`；除默认值外不硬编码。
+ */
+export interface LeaseConfig {
+  /** 租约 TTL 毫秒（默认 30000） */
+  ttlMs?: number;
+  /** 续租间隔毫秒（默认 10000） */
+  renewMs?: number;
+}
+
 /** MCP server 配置（0.3；`mcp_servers` map 的值，键为 server 名） */
 export interface McpServerConfig {
   /** 传输方式；stdio 必填 command，http 必填 url */
@@ -633,6 +646,8 @@ export interface VesselConfig {
   update?: UpdateConfig;
   host?: HostConfig;
   scheduler?: SchedulerConfig;
+  /** 0.34：两级 body/session 租约（TTL / 续租间隔） */
+  lease?: LeaseConfig;
   transport?: TransportConfig;
   /** 0.6：`--connect` 客户端 token/CA */
   connect?: ConnectConfig;

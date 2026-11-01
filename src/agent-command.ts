@@ -1,5 +1,6 @@
 /**
- * `vessel agent create|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate）。
+ * `vessel agent create|send|close|list|dispatch|rotate|restart|compact-fork`（0.17 Phase A；
+ * 0.19 dispatch / rotate；0.34 restart / compact-fork）。
  *
  * 只做参数映射与渲染；生命周期全部在 REPL owner 的 AgentService。
  * `inbox` 是只读本地队列，由 `agent-inbox-command` 处理，不经过这里。
@@ -151,6 +152,36 @@ function methodParams(command: AgentOwnerCommand): {
       },
     };
   }
+  if (command.kind === 'restart') {
+    return {
+      method: 'agents.restart',
+      params: {
+        agents: [
+          {
+            to: command.to,
+            ...(command.startupPrompt !== undefined
+              ? { startup_prompt: command.startupPrompt }
+              : {}),
+          },
+        ],
+      },
+    };
+  }
+  if (command.kind === 'compactFork') {
+    return {
+      method: 'agents.compactFork',
+      params: {
+        agents: [
+          {
+            to: command.to,
+            ...(command.startupPrompt !== undefined
+              ? { startup_prompt: command.startupPrompt }
+              : {}),
+          },
+        ],
+      },
+    };
+  }
   if (command.kind === 'close') {
     return {
       method: 'agents.close',
@@ -222,6 +253,20 @@ function humanOutput(command: AgentCommand, result: unknown): string {
     }
     return item !== undefined ? failureLine(item) : JSON.stringify(result, null, 2);
   }
+  if (command.kind === 'restart') {
+    const item = firstResult(result);
+    if (item !== undefined && item.ok === true) {
+      return `restarted ${String(item.agent_id)} epoch ${String(item.from_epoch)} -> ${String(item.epoch)} session ${String(item.session_id)}`;
+    }
+    return item !== undefined ? failureLine(item) : JSON.stringify(result, null, 2);
+  }
+  if (command.kind === 'compactFork') {
+    const item = firstResult(result);
+    if (item !== undefined && item.ok === true) {
+      return `compact-forked ${String(item.agent_id)} epoch ${String(item.epoch)} ${String(item.from_session_id)} -> ${String(item.to_session_id)}`;
+    }
+    return item !== undefined ? failureLine(item) : JSON.stringify(result, null, 2);
+  }
   if (command.kind === 'close') return formatCloseResult(result);
   const statuses = agentList(result);
   return statuses !== undefined ? formatList(statuses) : JSON.stringify(result, null, 2);
@@ -255,12 +300,15 @@ export async function runAgentCommand(
       ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     });
     const stdout = command.json ? JSON.stringify(result, null, 2) : humanOutput(command, result);
-    // 单条 send / dispatch / rotate / create 的逐条失败 → exit 1（close 保持批量汇总语义）。
+    // 单条 send / dispatch / rotate / restart / compact-fork / create 的逐条失败 → exit 1
+    // （close 保持批量汇总语义）。
     const single =
       command.kind === 'create' ||
       command.kind === 'send' ||
       command.kind === 'dispatch' ||
-      command.kind === 'rotate';
+      command.kind === 'rotate' ||
+      command.kind === 'restart' ||
+      command.kind === 'compactFork';
     const item = single ? firstResult(result) : undefined;
     const rejected = item !== undefined && item.ok === false;
     return { exitCode: rejected ? 1 : 0, stdout, stderr: '' };

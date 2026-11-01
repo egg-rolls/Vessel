@@ -1365,6 +1365,7 @@ export const TENANT_OVERLAY_ALLOWED_KEYS: readonly string[] = [
   'mcpServers',
   'host',
   'scheduler',
+  'lease',
   'transport',
   'quota',
 ];
@@ -2216,6 +2217,51 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
+  // 校验 lease（0.34 两级租约；EU 续租与过期）
+  if (config.lease) {
+    const { ttlMs, renewMs } = config.lease;
+    const isPositiveInteger = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isInteger(value) && value > 0;
+    const ttlOk = isPositiveInteger(ttlMs);
+    const renewOk = isPositiveInteger(renewMs);
+    if (ttlMs !== undefined && !ttlOk) {
+      errors.push({
+        path: 'lease.ttlMs',
+        message: 'lease.ttlMs must be a positive integer',
+        value: ttlMs,
+      });
+    }
+    if (renewMs !== undefined && !renewOk) {
+      errors.push({
+        path: 'lease.renewMs',
+        message: 'lease.renewMs must be a positive integer',
+        value: renewMs,
+      });
+    }
+    if (renewOk && renewMs < 1000) {
+      errors.push({
+        path: 'lease.renewMs',
+        message: 'lease.renewMs must be at least 1000',
+        value: renewMs,
+      });
+    }
+    if (ttlOk && renewOk) {
+      if (ttlMs <= renewMs) {
+        errors.push({
+          path: 'lease.ttlMs',
+          message: 'lease.ttlMs must be greater than lease.renewMs',
+          value: ttlMs,
+        });
+      } else if (ttlMs < renewMs + 1000) {
+        errors.push({
+          path: 'lease.ttlMs',
+          message: 'lease.ttlMs must be at least lease.renewMs + 1000',
+          value: ttlMs,
+        });
+      }
+    }
+  }
+
   // 校验 transport（0.2；0.22.1 只剩 in-process）
   if (config.transport) {
     const { kind, token } = config.transport;
@@ -2442,6 +2488,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   update: ['autoCheck', 'channel', 'source'],
   host: ['nodeId', 'nodeName'],
   scheduler: ['maxConcurrency', 'maxQueueSize', 'perBodySerial'],
+  // 0.34：两级 body/session 租约。
+  lease: ['ttlMs', 'renewMs'],
   transport: ['kind', 'token'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
   serve: [
@@ -2593,6 +2641,7 @@ export const KNOWN_CONFIG_KEYS = [
   'update',
   'host',
   'scheduler',
+  'lease',
   'transport',
   'connect',
   'attention',

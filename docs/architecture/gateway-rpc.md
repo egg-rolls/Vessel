@@ -1,7 +1,7 @@
 ---
 title: 统一 RPC 方法表
 kind: current
-triggers: [rpc, method, canonical, envelope, permission, agents.create, agents.rotate, teams.spawnFrozen, manifest]
+triggers: [rpc, method, canonical, envelope, permission, agents.create, agents.rotate, agents.restart, agents.compactFork, agents.fork, teams.spawnFrozen, manifest]
 paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 ---
 
@@ -10,7 +10,7 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 <a id="rpc-methods"></a>
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get|sources|set`；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get|tree` / `agents.create|update|close|send|dispatch|rotate`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get|reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond` / `permissions.setToolPolicy`；`interactions.list`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（admin-only，缺省 `not_supported`）；`teams.list|get|post|members|budget` / `teams.create|update|archive|spawnFrozen`；`auth.exchange|revoke|tokens`。permission 以表格为准。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get|sources|set`；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get|tree` / `agents.create|update|close|send|dispatch|rotate|restart|compactFork|fork`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get|reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond` / `permissions.setToolPolicy`；`interactions.list`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（admin-only，缺省 `not_supported`）；`teams.list|get|post|members|budget` / `teams.create|update|archive|spawnFrozen`；`auth.exchange|revoke|tokens`。permission 以表格为准。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -39,6 +39,9 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 | `agents.send` | write |
 | `agents.dispatch` | write |
 | `agents.rotate` | write |
+| `agents.restart` | write |
+| `agents.compactFork` | write |
+| `agents.fork` | write |
 | `events.list` | read |
 | `events.subscribe` | read |
 | `tools.list` | read |
@@ -86,13 +89,12 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 
 <a id="agent-lifecycle"></a>
 
-- `agents.create`：`{ agents: [{ kind?, name?, model?, system_prompt?, team_id?, workspace?, visibility? }] }`。`kind` 只取 `peer` / `contractor`；peer 必须有 `team_id`、不接受 `workspace`，`workspace` 只对合成 owner 传输开放；成功条目带 `agent`（`owner` 可选）。无 `kind` 的旧形状语义不变。`agents.list` / `agents.get` / agent status 条目带 `role`：运行期注册表角色 `main` / `subagent`，或成员角色 `single` / `member` / `temporary`；`owner` 对外仍可选（v3 总是写入）。人类管理面 principal（`role:'admin'` 且无 `agent_id`）的 `agents.list` 在事件派生视图外合并无 Team 的 `single`（含 private single）；合成 owner 传输与其它 agent / team token 仍按 viewer 可见性判定，private member / temporary 不放开。
-- `agents.update`：`{ agents: [{ agent_id, name?, model?, system_prompt?, role?, team_id? }] }`（每项至少一个字段；`role` 只取 `single` / `member` / `temporary`）。`role` / `team_id` 是显式角色转换：`member` 必须绑定 Team、`temporary` 归属转换者（`from`）、`single` 清空 Team；handler 传 `team_id → teamId` 与 `from = principal.agent_id ?? 'human'`。成功条目带 `agent` / `changed` / `applies_to: 'next_body'`（仅 model / system_prompt 实际变化时）。`agents.close`：`{ agents: [{ agent_id }] }`；成功条目 `{ ok: true, agent, agent_id, closed: true }`。
-- `agents.send`：`{ messages: [{ to, content, conversation_id? }] }` → 成功 `{ ok: true, queued: true, message_id, state }`（strict send，不 resume）。`agents.dispatch`：`{ messages: [{ to, content, conversation_id?, allow_fork? }] }` → 成功 `{ ok: true, status: 'queued', message_id, resolved_to, resolution, conversation_id? }`；业务拒绝逐条 `{ ok: false, code, error }`（`agent_left` / `resume_failed` / `not_visible` / `budget_*` / `conversation_team_mismatch`）。`agents.rotate`：`{ agents: [{ to, startup_prompt, from_session_id? }] }` → 成功 `{ ok: true, status: 'rotated', agent_id, from_session_id, to_session_id, epoch }`。
-- 统一结果 `{ results: [...] }`，与输入同序；单条失败 `{ ok: false, code, error }`，不影响其它条目。三者 permission 都是 `write`；结构错误整体 `invalid_params`；team-scoped control token 不能 create / close（`forbidden`），update / send / dispatch / rotate 只能操作同 `team_id` 成员，否则逐条 `not_found`；update 的角色转换只能转 `member` / `temporary`（同 Team），不能转 `single` 或换到其它 Team（`forbidden`）。`principal.agent_id` 只由合成 owner 传输填 root owner id；handler 以 `ctx.principal.agent_id ?? 'human'` 作为 `from` / `viewer`。owner 端点只做传输：用 `defineMethods([...createAgentMethods, ...createTeamMethods])` 组装与 gateway 同源的方法表，wire 名即 canonical；HTTP 状态映射 `invalid_params` 400、`forbidden` 403、`not_found` 404、`conflict` 409、`internal` 500。
+- `agents.create`：`{ agents: [{ kind?, name?, model?, system_prompt?, team_id?, workspace?, visibility? }] }`。`kind` 只取 `peer` / `contractor`；peer 必须有 `team_id`、不接受 `workspace`，`workspace` 只对合成 owner 传输开放；成功条目带 `agent`（`owner` 可选）。无 `kind` 的旧形状语义不变。`agents.list` / `agents.get` / agent status 条目带 `role`：运行期注册表角色 `main` / `subagent`，或成员角色 `member` / `temporary`（`single` 已删除，存量快照读取时降级为 `member`）；`owner` 对外仍可选（v3 总是写入）。人类管理面 principal（`role:'admin'` 且无 `agent_id`）的 `agents.list` 在事件派生视图外合并无 Team 的 `member`；合成 owner 传输与其它 agent / team token 仍按 viewer 可见性判定，private member / temporary 不放开。
+- `agents.update`：`{ agents: [{ agent_id, name?, model?, system_prompt?, role?, team_id? }] }`（每项至少一个字段；`role` 只取 `member` / `temporary`）。`role` / `team_id` 是显式角色转换：`member` 必须绑定 Team、`temporary` 归属转换者（`from`）；handler 传 `team_id → teamId` 与 `from = principal.agent_id ?? 'human'`。成功条目带 `agent` / `changed` / `applies_to: 'next_body'`（仅 model / system_prompt 实际变化时）。`agents.close`：`{ agents: [{ agent_id }] }`；成功条目 `{ ok: true, agent, agent_id, closed: true }`。
+- `agents.send`：`{ messages: [{ to, content, conversation_id? }] }` → 成功 `{ ok: true, queued: true, message_id, state }`（strict send，不 resume）。`agents.dispatch`：`{ messages: [{ to, content, conversation_id?, allow_fork? }] }` → 成功 `{ ok: true, status: 'queued', message_id, resolved_to, resolution, conversation_id? }`；业务拒绝逐条 `{ ok: false, code, error }`（`agent_left` / `resume_failed` / `not_visible` / `budget_*` / `conversation_team_mismatch`）。`agents.rotate`：`{ agents: [{ to, startup_prompt, from_session_id? }] }` → 成功 `{ ok: true, status: 'rotated', agent_id, from_session_id, to_session_id, epoch }`。`agents.restart`（0.34）：`{ agents: [{ to, startup_prompt?, from_session_id? }] }` → `{ ok: true, status: 'restarted', agent_id, session_id, from_epoch, epoch }`；复用同一 Session，epoch + 1，有 active run 返回 `conflict`。`agents.compactFork`（0.34）：相同入参 → `{ ok: true, status: 'compact_forked', agent_id, from_session_id, to_session_id, epoch }`；子 Session 成为新的 primary，父 Session / binding 不动。`agents.fork`（0.34）：`{ agents: [{ to, name? }] }` → `{ ok: true, status: 'forked', agent_id, from_agent_id, session_id }`；新建 Agent + 空 Session，不复制 transcript，权限 / 可见性按 `agents.create`，不加 CLI。
+- 统一结果 `{ results: [...] }`，与输入同序；单条失败 `{ ok: false, code, error }`，不影响其它条目。上述生命周期方法 permission 都是 `write`；结构错误整体 `invalid_params`；team-scoped control token 不能 create / close / fork（`forbidden`），update / send / dispatch / rotate / restart / compactFork 只能操作同 `team_id` 成员，否则逐条 `not_found`；update 的角色转换只能转 `member` / `temporary`（同 Team），不能换到其它 Team（`forbidden`）。`principal.agent_id` 只由合成 owner 传输填 root owner id；handler 以 `ctx.principal.agent_id ?? 'human'` 作为 `from` / `viewer`。owner 端点只做传输：用 `defineMethods([...createAgentMethods, ...createTeamMethods])` 组装与 gateway 同源的方法表，wire 名即 canonical；HTTP 状态映射 `invalid_params` 400、`forbidden` 403、`not_found` 404、`conflict` 409、`internal` 500。
 
 ## canonical team 冻结契约
-
 <a id="team-spawn-frozen"></a>
 
 - `teams.spawnFrozen`：`{ team_id, frozen }` → `TeamSummary`（含 `spawn_frozen?`，`false` 时字段缺省）；permission 为 `write`。team-scoped control token 只能操作自己的 team，其它 team 返回 `not_found`。冻结是 Team 元数据，`teams.update` 不修改该字段；冻结期间该 Team 的 create / hire / 人类 `agents.create` / fork / reinstate 均返回 `team_frozen`，只有 `frozen: false` 解冻。CLI 为 `vessel team freeze|unfreeze <team_id>`。

@@ -79,6 +79,155 @@ interface CompactionPlan {
   toSummarize: Message[];
 }
 
+/** 消息条数安全上限：显式 `maxMessages` 优先；否则按 token 预算推导 */
+function messageCapFor(config: { maxTokens?: number; maxMessages?: number }): number {
+  const configured = config.maxMessages;
+  if (configured !== undefined && configured > 0) return configured;
+  const maxTokens = config.maxTokens ?? 1_000_000;
+  return Math.max(100, Math.floor(maxTokens / 100));
+}
+
+/**
+ * 纯函数版压缩边界计算：`compactMessagesForFork` 与 `MemoryWorkingContext` 共用。
+ * 不读实例状态，返回的 `toSummarize` 是传入消息数组的对象引用。
+ */
+function planCompactionForMessages(
+  msgs: readonly Message[],
+  config: { maxTokens?: number; maxMessages?: number },
+  force: boolean,
+): { toSummarize: Message[] } | null {
+  const nonSystem = msgs.filter((m) => m.role !== 'system');
+  // 非 system 少于 3 条时没有可摘要消息（至少保留 2 条）。
+  if (nonSystem.length < 3) return null;
+
+  const budget = (config.maxTokens ?? 1_000_000) * 0.3;
+  let keepFromByTokens = nonSystem.length - 1;
+  let keptTokens = 0;
+  let kept = 0;
+  for (let i = nonSystem.length - 1; i >= 0; i -= 1) {
+    const message = nonSystem[i];
+    if (!message) break;
+    const cost = estimateMessageTokens(message);
+    // 超出预算即停止；最新 2 条无论如何保留。
+    if (kept >= 2 && keptTokens + cost > budget) break;
+    keptTokens += cost;
+    kept += 1;
+    keepFromByTokens = i;
+  }
+
+  // 压缩后 system 条数 = systemCount（旧摘要被新摘要替换，净数不变）+ 1 条新摘要。
+  const systemCount = msgs.filter((m) => m.role === 'system').length;
+  const maxKept = Math.max(2, messageCapFor(config) - systemCount - 1);
+  const keepFromByCap = nonSystem.length - Math.min(nonSystem.length, maxKept);
+  // 任一上限超限都要摘要：取更靠后的边界（保留更少），但不低于 2 条。
+  let keepFrom = Math.min(Math.max(keepFromByTokens, keepFromByCap), nonSystem.length - 2);
+
+  // 手动 compact / overflow 重试强制推进：即使全部能装下，也至少摘要到只剩 2 条。
+  // autoCompact 传 false，避免在阈值未触发时无谓压缩。
+  if (force && keepFrom === 0) keepFrom = nonSystem.length - 2;
+
+  // 孤立 tool 消息会因缺少对应的 assistant(tool_calls) 被 provider 拒绝，
+  // 把边界回退到该 tool 的 assistant，直到边界不再是 tool。
+  // 配对完整性优先于条数上限，回退后保留数可能略超 messageCap。
+  while (keepFrom > 0 && nonSystem[keepFrom]?.role === 'tool') {
+    const toolCallId = nonSystem[keepFrom]?.tool_call_id;
+    let ownerIndex = -1;
+    for (let i = keepFrom - 1; i >= 0; i -= 1) {
+      const candidate = nonSystem[i];
+      if (
+        candidate?.role === 'assistant' &&
+        (candidate.tool_calls ?? []).some((call) => call.id === toolCallId)
+      ) {
+        ownerIndex = i;
+        break;
+      }
+    }
+    // 找不到 owner 说明历史本身不完整，继续前移也无法配对。
+    if (ownerIndex < 0) break;
+    keepFrom = ownerIndex;
+  }
+
+  if (keepFrom === 0) return null;
+  return { toSummarize: nonSystem.slice(0, keepFrom) };
+}
+
+/** 纯函数版压缩应用：system 保留 + 新摘要替掉旧摘要 + 其余消息保持原顺序。 */
+function applyCompactionToMessages(
+  messages: readonly Message[],
+  toSummarize: readonly Message[],
+  summaryText: string,
+): Message[] {
+  const summary: Message = { role: 'system', content: summaryText, compaction_summary: true };
+  const removed = new Set(toSummarize);
+  // 旧摘要一并移除，保证任意时刻最多一条摘要。
+  const remaining = messages.filter((m) => !removed.has(m) && !m.compaction_summary);
+  const systemMsgs = remaining.filter((m) => m.role === 'system');
+  const others = remaining.filter((m) => m.role !== 'system');
+  return [...systemMsgs, summary, ...others];
+}
+
+/**
+ * 清空旧工具结果内容（就地修改传入消息对象），保留最近 KEEP_RECENT_TOOL_RESULTS 条。
+ * 调用方负责传入可安全修改的副本。
+ */
+function clearOldToolResultsIn(messages: readonly Message[]): void {
+  let keep = KEEP_RECENT_TOOL_RESULTS;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role !== 'tool') continue;
+    if (keep > 0) {
+      keep -= 1;
+      continue;
+    }
+    // 空内容本来就无需回收；已是占位文本则保持幂等。
+    if (!message.content || message.content === CLEARED_TOOL_RESULT) continue;
+    message.content = CLEARED_TOOL_RESULT;
+  }
+}
+
+/** 深拷贝一条消息，避免压缩改动父会话的对象引用。 */
+function cloneMessage(message: Message): Message {
+  return {
+    ...message,
+    ...(message.tool_calls !== undefined
+      ? {
+          tool_calls: message.tool_calls.map((call) => ({
+            ...call,
+            ...(call.function !== undefined ? { function: { ...call.function } } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
+/** 把一份消息数组压缩成新 Session 的种子（compactFork）；父数组/消息不被修改。 */
+export async function compactMessagesForFork(
+  messages: Message[],
+  opts: {
+    summarizer?: (messages: Message[], opts: { maxTokens: number }) => Promise<string>;
+    maxTokens?: number;
+  } = {},
+): Promise<Message[]> {
+  const maxTokens = opts.maxTokens ?? 1_000_000;
+  // 与父会话完全隔离：后续清空旧工具结果 / 摘要都只动副本。
+  const copy = messages.map(cloneMessage);
+  const plan = planCompactionForMessages(copy, { maxTokens }, true);
+  if (!plan) return copy;
+
+  clearOldToolResultsIn(copy);
+  let summary = '';
+  if (opts.summarizer) {
+    try {
+      summary = await opts.summarizer(plan.toSummarize, { maxTokens });
+    } catch {
+      // 摘要失败不阻断 compactFork：退回占位符。
+      summary = '';
+    }
+  }
+  const text = summary.trim() ? summary : placeholderSummary(plan.toSummarize.length);
+  return applyCompactionToMessages(copy, plan.toSummarize, text);
+}
+
 export class MemoryWorkingContext implements WorkingContext {
   private sessionMessages: Map<string, Message[]> = new Map();
   private currentSessionId = 'default';
@@ -256,62 +405,9 @@ export class MemoryWorkingContext implements WorkingContext {
   private planCompaction(force = false): CompactionPlan | null {
     const sessionId = this.currentSessionId;
     const msgs = this.sessionMessages.get(sessionId) || [];
-    const nonSystem = msgs.filter((m) => m.role !== 'system');
-    // 非 system 少于 3 条时没有可摘要消息（至少保留 2 条）。
-    if (nonSystem.length < 3) return null;
-
-    const budget = (this.config.maxTokens ?? 1_000_000) * 0.3;
-    let keepFromByTokens = nonSystem.length - 1;
-    let keptTokens = 0;
-    let kept = 0;
-    for (let i = nonSystem.length - 1; i >= 0; i -= 1) {
-      const message = nonSystem[i];
-      if (!message) break;
-      const cost = estimateMessageTokens(message);
-      // 超出预算即停止；最新 2 条无论如何保留。
-      if (kept >= 2 && keptTokens + cost > budget) break;
-      keptTokens += cost;
-      kept += 1;
-      keepFromByTokens = i;
-    }
-
-    // 压缩后 system 条数 = systemCount（旧摘要被新摘要替换，净数不变）+ 1 条新摘要。
-    const systemCount = msgs.filter((m) => m.role === 'system').length;
-    const maxKept = Math.max(2, this.messageCap - systemCount - 1);
-    const keepFromByCap = nonSystem.length - Math.min(nonSystem.length, maxKept);
-    // 任一上限超限都要摘要：取更靠后的边界（保留更少），但不低于 2 条。
-    let keepFrom = Math.min(Math.max(keepFromByTokens, keepFromByCap), nonSystem.length - 2);
-
-    // 手动 compact / overflow 重试强制推进：即使全部能装下，也至少摘要到只剩 2 条。
-    // autoCompact 传 false，避免在阈值未触发时无谓压缩。
-    if (force && keepFrom === 0) keepFrom = nonSystem.length - 2;
-
-    // 孤立 tool 消息会因缺少对应的 assistant(tool_calls) 被 provider 拒绝，
-    // 把边界回退到该 tool 的 assistant，直到边界不再是 tool。
-    // 配对完整性优先于条数上限，回退后保留数可能略超 messageCap。
-    while (keepFrom > 0 && nonSystem[keepFrom]?.role === 'tool') {
-      const toolCallId = nonSystem[keepFrom]?.tool_call_id;
-      let ownerIndex = -1;
-      for (let i = keepFrom - 1; i >= 0; i -= 1) {
-        const candidate = nonSystem[i];
-        if (
-          candidate?.role === 'assistant' &&
-          (candidate.tool_calls ?? []).some((call) => call.id === toolCallId)
-        ) {
-          ownerIndex = i;
-          break;
-        }
-      }
-      // 找不到 owner 说明历史本身不完整，继续前移也无法配对。
-      if (ownerIndex < 0) break;
-      keepFrom = ownerIndex;
-    }
-
-    if (keepFrom === 0) return null;
-    return {
-      sessionId,
-      toSummarize: nonSystem.slice(0, keepFrom),
-    };
+    const plan = planCompactionForMessages(msgs, this.config, force);
+    if (!plan) return null;
+    return { sessionId, toSummarize: plan.toSummarize };
   }
 
   /**
@@ -328,19 +424,7 @@ export class MemoryWorkingContext implements WorkingContext {
    *   计算，不改变既有边界逻辑。
    */
   private clearOldToolResults(sessionId: string): void {
-    const msgs = this.sessionMessages.get(sessionId) ?? [];
-    let keep = KEEP_RECENT_TOOL_RESULTS;
-    for (let i = msgs.length - 1; i >= 0; i -= 1) {
-      const message = msgs[i];
-      if (message?.role !== 'tool') continue;
-      if (keep > 0) {
-        keep -= 1;
-        continue;
-      }
-      // 空内容本来就无需回收；已是占位文本则保持幂等。
-      if (!message.content || message.content === CLEARED_TOOL_RESULT) continue;
-      message.content = CLEARED_TOOL_RESULT;
-    }
+    clearOldToolResultsIn(this.sessionMessages.get(sessionId) ?? []);
   }
 
   /**
@@ -350,15 +434,8 @@ export class MemoryWorkingContext implements WorkingContext {
    * 必须带 reasoning_content，摘要没有 → 下一轮请求会被 Provider 拒绝。
    */
   private applyCompaction(plan: CompactionPlan, summaryText: string): void {
-    const summary: Message = { role: 'system', content: summaryText, compaction_summary: true };
     const current = this.sessionMessages.get(plan.sessionId) ?? [];
-    const removed = new Set(plan.toSummarize);
-    // 旧摘要一并移除，保证任意时刻最多一条摘要。
-    const remaining = current.filter((m) => !removed.has(m) && !m.compaction_summary);
-    const systemMsgs = remaining.filter((m) => m.role === 'system');
-    const others = remaining.filter((m) => m.role !== 'system');
-    const next = [...systemMsgs, summary, ...others];
-
+    const next = applyCompactionToMessages(current, plan.toSummarize, summaryText);
     this.sessionMessages.set(plan.sessionId, next);
     this.config.onCompact?.(plan.toSummarize.length, next.length);
   }

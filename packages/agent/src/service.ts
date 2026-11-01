@@ -15,9 +15,15 @@ import { randomUUID } from 'node:crypto';
 import {
   type AgentHandle,
   assertTenantId,
+  type ContextSummarizer,
+  compactMessagesForFork,
   type EventStream,
+  type LeaseGrant,
+  type LeaseServicePort,
   type Logger,
+  type Message,
   noopLogger,
+  projectMessages,
   type RunEvent,
   type RunHandle,
   type RunInterruptReason,
@@ -25,6 +31,7 @@ import {
   type RuntimePermissionConfig,
   type ScheduledTask,
   type Scheduler,
+  type SessionEventLogPort,
   type ToolDefinition,
   type Usage,
 } from '@vessel-agent/core';
@@ -65,7 +72,6 @@ import {
   type AgentUpdateResult,
   type BatchItemResult,
   type BatchResult,
-  type BindingLeasePort,
   type BudgetBlockReason,
   type BudgetCheckResult,
   type BudgetOverrideInput,
@@ -74,6 +80,8 @@ import {
   type CloseBatchInput,
   type CloseInput,
   type CloseResult,
+  type CompactForkInput,
+  type CompactForkResult,
   type ConversationBudgetPort,
   type CreateBatchInput,
   type CreateMemberInput,
@@ -81,6 +89,8 @@ import {
   type DispatchInput,
   type DispatchResult,
   type ExecutionUnitStatus,
+  type ForkInput,
+  type ForkResult,
   type ListFilter,
   MAX_BINDING_HISTORY,
   MAX_MESSAGE_BYTES,
@@ -93,6 +103,8 @@ import {
   type PersistedAgentRecord,
   type ReinstateInput,
   type ReplyResult,
+  type RestartInput,
+  type RestartResult,
   type RotateInput,
   type RotateResult,
   type SendBatchInput,
@@ -215,7 +227,10 @@ interface ExecutionUnitEntry {
   spawned: boolean;
   /** 在途 spawn（single-flight）：并发 admit 只 spawn 一次 */
   spawning?: Promise<void>;
-  leaseHeld: boolean;
+  /** BindingLease 凭据（Stage 3，内存；dispose 时释放） */
+  leaseId?: string;
+  /** 该 binding 的 fencing token（Stage 3，内存；传给 EU） */
+  fencingToken?: number;
 }
 
 /** 事件 extra 允许预算字段（开放字符串事件，不在 AgentEvent 里加常量） */
@@ -472,7 +487,15 @@ export class AgentServiceImpl implements AgentService {
   private readonly snapshot: AgentSnapshotStore | undefined;
   /** 临时 agent 空闲回收 TTL（毫秒）；0 = 关闭 */
   private readonly temporaryTtlMs: number;
-  private readonly bindingLease: BindingLeasePort | undefined;
+  private readonly leaseService: LeaseServicePort | undefined;
+  private readonly summarizer: ContextSummarizer | undefined;
+  /**
+   * createBinding 获取、entryFor 消费的 BindingLease 凭据（bindingId → grant）。
+   * 只覆盖两者之间极短的窗口；entry 建立后凭据保存在 `ExecutionUnitEntry.leaseId`。
+   */
+  private readonly pendingBindingLeases = new Map<string, LeaseGrant>();
+  /** compactFork：父 transcript 读取 / 子 session 种子写入 */
+  private readonly eventLog: SessionEventLogPort | undefined;
   /** 0.32：持久化收件箱；有 `dataDir` 时唯一实例，否则 undefined（行为不变） */
   private readonly inbox: AgentInboxStore | undefined;
   /** AgentService 的 body registry：agentId → bindingId → ExecutionUnitEntry（含已退役直到清理） */
@@ -541,7 +564,9 @@ export class AgentServiceImpl implements AgentService {
         ? options.temporaryTtlHours
         : DEFAULT_TEMPORARY_TTL_HOURS;
     this.temporaryTtlMs = ttlHours * 60 * 60 * 1000;
-    this.bindingLease = options.bindingLease;
+    this.leaseService = options.leaseService;
+    this.summarizer = options.summarizer;
+    this.eventLog = options.eventLog;
 
     const dataDir = options.dataDir;
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
@@ -934,7 +959,7 @@ export class AgentServiceImpl implements AgentService {
     this.registry.add(record);
     let entry: ExecutionUnitEntry | undefined;
     try {
-      entry = await this.entryFor(record, body, true);
+      entry = await this.entryFor(record, body);
       await this.runtime.spawn(entry.runtimeMember);
       entry.spawned = true;
     } catch (error) {
@@ -952,10 +977,13 @@ export class AgentServiceImpl implements AgentService {
    * 0.20 fork：resume 失败后的兜底。single-flight（同一源并发只 spawn 一次）。
    * 失败一律显式且零写入；成功时源仍保持 present + gone。
    */
-  private async ensureForked(sourceId: string): Promise<ForkOutcome> {
+  private async ensureForked(
+    sourceId: string,
+    options: { name?: string } = {},
+  ): Promise<ForkOutcome> {
     const inflight = this.forking.get(sourceId);
     if (inflight) return inflight;
-    const promise = this.forkOne(sourceId);
+    const promise = this.forkOne(sourceId, options);
     this.forking.set(sourceId, promise);
     try {
       return await promise;
@@ -964,7 +992,7 @@ export class AgentServiceImpl implements AgentService {
     }
   }
 
-  private async forkOne(sourceId: string): Promise<ForkOutcome> {
+  private async forkOne(sourceId: string, options: { name?: string } = {}): Promise<ForkOutcome> {
     const source = this.registry.get(sourceId);
     // fork 不是复活路径：left / closed / 正在关闭一律 agent_left。
     if (
@@ -1004,9 +1032,15 @@ export class AgentServiceImpl implements AgentService {
       };
     }
 
-    const name = this.forkNameFor(source.name ?? source.id, teamId);
+    const name =
+      options.name !== undefined
+        ? options.name
+        : this.forkNameFor(source.name ?? source.id, teamId);
     if (name === undefined) {
       return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: name_exhausted' };
+    }
+    if (options.name !== undefined && this.nameOccupied(options.name, teamId)) {
+      return { ok: false, code: 'fork_not_allowed', reason: `fork_not_allowed: name_taken` };
     }
 
     const id = this.newId();
@@ -1103,23 +1137,28 @@ export class AgentServiceImpl implements AgentService {
     return this.liveEntries(agentId).some((entry) => entry.closing);
   }
 
-  /** 从记录构造 ExecutionUnitEntry；`withLease` 时获取跨进程租约 */
-  private async entryFor(
-    record: MemberRecord,
-    body: BindingRecord,
-    withLease = true,
-  ): Promise<ExecutionUnitEntry> {
+  /**
+   * 从记录构造 ExecutionUnitEntry。
+   * binding 租约优先消费 `createBinding` 预获取的 grant；否则此处获取
+   * （首次 create / fork 的初始 binding 走的正是后者）。
+   */
+  private async entryFor(record: MemberRecord, body: BindingRecord): Promise<ExecutionUnitEntry> {
     const existing = this.findEntry(record.id, body.bindingId);
     if (existing !== undefined) return existing;
-    let leaseHeld = false;
-    if (withLease && this.bindingLease !== undefined) {
+    let grant = this.pendingBindingLeases.get(body.bindingId);
+    if (grant !== undefined) this.pendingBindingLeases.delete(body.bindingId);
+    if (grant === undefined && this.leaseService !== undefined) {
       try {
-        await this.bindingLease.acquire(body.bindingId);
-        leaseHeld = true;
+        grant = await this.leaseService.acquire('binding', body.bindingId);
       } catch (error) {
         throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
       }
     }
+    const runtimeMember: MemberRuntimeMember = {
+      ...toRuntimeMember(record),
+      session_id: body.bindingId,
+      ...(grant !== undefined ? { binding_lease: grant } : {}),
+    };
     const entry: ExecutionUnitEntry = {
       agentId: record.id,
       bindingId: body.bindingId,
@@ -1129,14 +1168,14 @@ export class AgentServiceImpl implements AgentService {
       createdAt: body.createdAt,
       lastActiveAt: body.lastActiveAt,
       retired: false,
-      runtimeMember: { ...toRuntimeMember(record), session_id: body.bindingId },
+      runtimeMember,
       pending: [],
       queuedRuns: new Set(),
       budgetHold: new Set(),
       closing: false,
       spawned: false,
       spawning: undefined,
-      leaseHeld,
+      ...(grant !== undefined ? { leaseId: grant.leaseId, fencingToken: grant.fencingToken } : {}),
     };
     this.entryMap(record.id).set(body.bindingId, entry);
     return entry;
@@ -1152,7 +1191,13 @@ export class AgentServiceImpl implements AgentService {
   private async createBinding(
     record: MemberRecord,
     bindingId: string,
-    options: { epoch?: number; primary?: boolean; rotation?: boolean } = {},
+    options: {
+      epoch?: number;
+      primary?: boolean;
+      rotation?: boolean;
+      /** restart 专用：同 id 旧 binding 已退役进 history，允许重新入主位 */
+      restart?: boolean;
+    } = {},
   ): Promise<BindingRecord> {
     const live = liveBindings(record);
     if (live.length > 0 && options.rotation !== true) {
@@ -1163,7 +1208,8 @@ export class AgentServiceImpl implements AgentService {
       record.binding?.bindingId === bindingId ||
       record.retiringBinding?.bindingId === bindingId ||
       // 已退役的 session 不得重新准入：复活只走 `reinstate`（原地 unretire）。
-      this.registry.isRetiredSession(bindingId)
+      // restart 是唯一例外：同一个 session 由调用方显式重启为新 epoch。
+      (!options.restart && this.registry.isRetiredSession(bindingId))
     ) {
       throw new AgentError('invalid_input', `duplicate session id: ${bindingId}`);
     }
@@ -1175,15 +1221,44 @@ export class AgentServiceImpl implements AgentService {
       lastActiveAt: now,
       primary: options.primary ?? live.length === 0,
     };
-    if (this.bindingLease !== undefined) {
+    let grant: LeaseGrant | undefined;
+    if (this.leaseService !== undefined) {
       try {
-        await this.bindingLease.acquire(bindingId);
+        grant = await this.leaseService.acquire('binding', bindingId);
       } catch (error) {
         throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
       }
     }
-    this.registry.addBinding(record.id, body);
+    try {
+      this.registry.addBinding(record.id, body);
+    } catch (error) {
+      if (grant !== undefined) await this.releaseLeaseGrant(grant);
+      throw error;
+    }
+    // 交给紧随其后的 entryFor 消费；entry 建立后凭据落在 entry.leaseId。
+    if (grant !== undefined) this.pendingBindingLeases.set(bindingId, grant);
     return body;
+  }
+
+  /** 释放一个尚未落到 entry 上的 grant（createBinding 回滚 / 未消费的 pending）。 */
+  private async releaseLeaseGrant(grant: LeaseGrant): Promise<void> {
+    if (this.leaseService === undefined) return;
+    try {
+      await this.leaseService.release(grant.leaseId);
+    } catch (error) {
+      this.logger.warn('agent.body.lease_release_failed', {
+        session_id: grant.key,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /** 回滚未消费的 pending binding lease（createBinding 成功但 entry 未建立）。 */
+  private async releasePendingBindingLease(bindingId: string): Promise<void> {
+    const grant = this.pendingBindingLeases.get(bindingId);
+    if (grant === undefined) return;
+    this.pendingBindingLeases.delete(bindingId);
+    await this.releaseLeaseGrant(grant);
   }
 
   /** 解析或惰性创建 body；`requested` 是显式 session（必须未退役） */
@@ -1262,10 +1337,10 @@ export class AgentServiceImpl implements AgentService {
         });
       }
     }
-    if (entry.leaseHeld && this.bindingLease !== undefined) {
+    if (entry.leaseId !== undefined && this.leaseService !== undefined) {
       try {
-        await this.bindingLease.release(entry.bindingId);
-        entry.leaseHeld = false;
+        await this.leaseService.release(entry.leaseId);
+        entry.leaseId = undefined;
       } catch (error) {
         this.logger.warn('agent.body.lease_release_failed', {
           session_id: entry.bindingId,
@@ -1617,7 +1692,6 @@ export class AgentServiceImpl implements AgentService {
     entry.queuedRuns.add(runId);
     const task: ScheduledTask = {
       agent: { id: record.id } as AgentHandle,
-      serialKey: entry.bindingId,
       runId,
       sessionId: entry.bindingId,
       input: message.content,
@@ -2111,7 +2185,7 @@ export class AgentServiceImpl implements AgentService {
    *
    * 顺序保证（不新增优先级系统）：
    * 1. 在同一同步块内先 `scheduler.cancel` 掉该 body 所有 queued run 与 active run
-   *    （scheduler 的 serialKey 仍被 active 占着，drain 不会在此时起新轮）；
+   *    （scheduler 的 session_id 串行键仍被 active 占着，drain 不会在此时起新轮）；
    * 2. 依次把打断消息、旧队列消息重新 `submitMessage` 到 scheduler（每次 submit 在
    *    返回 promise 前已同步入队），因此队列顺序 = 打断 → 旧队列原顺序；
    * 3. 旧消息的 inbox 记录始终处于 held/unread，取消的只是尚未执行的 run，重新提交
@@ -2491,6 +2565,7 @@ export class AgentServiceImpl implements AgentService {
     const toEpoch = fromEpoch + 1;
     const oldEntry = this.executionUnitRegistry.get(target.id)?.get(fromSessionId);
 
+    await this.retireResidualBinding(target);
     this.registry.setRotation(target.id, 'rotating');
     this.rotations.set(target.id, { fromSessionId, fromEpoch, toSessionId, toEpoch });
     // 0.32：rotate 窗口一开始就关旧 body 的 inbox hook —— 否则旧轮在窗口内还有
@@ -2500,15 +2575,19 @@ export class AgentServiceImpl implements AgentService {
       from_session_id: fromSessionId,
       to_session_id: toSessionId,
       epoch: toEpoch,
+      fencing_token:
+        this.runtime.sessionLeaseToken?.(fromSessionId) ?? oldEntry?.fencingToken ?? null,
     });
 
     // 0.32：退役旧 body 前先把 inbox 写链落盘；未消费消息跨 body 不丢。
     await this.inbox?.flush();
 
     let newBinding: BindingRecord | undefined;
+    let newEntry: ExecutionUnitEntry | undefined;
     const rollbackNew = async (): Promise<void> => {
       const entry = this.findEntry(target.id, toSessionId);
       if (entry !== undefined) await this.disposeEntry(entry);
+      await this.releasePendingBindingLease(toSessionId);
       if (newBinding !== undefined) this.registry.removeBinding(target.id, toSessionId);
     };
     try {
@@ -2520,7 +2599,7 @@ export class AgentServiceImpl implements AgentService {
           primary: false,
           rotation: true,
         });
-        const newEntry = await this.entryFor(target, newBinding, false);
+        newEntry = await this.entryFor(target, newBinding);
         await this.ensureRuntime(newEntry);
         newEntry.primary = true;
       } catch (error) {
@@ -2563,6 +2642,8 @@ export class AgentServiceImpl implements AgentService {
         from_session_id: fromSessionId,
         to_session_id: toSessionId,
         epoch: toEpoch,
+        fencing_token:
+          this.runtime.sessionLeaseToken?.(toSessionId) ?? newEntry?.fencingToken ?? null,
       });
 
       // 旧 primary 退休；正在跑的旧轮由 executeExecutionUnitTurn 的 fencing 分支收口。
@@ -2624,6 +2705,497 @@ export class AgentServiceImpl implements AgentService {
         this.runtime.enableInbox?.(oldEntry.bindingId);
       }
     }
+  }
+
+  // ─── restart / compactFork / fork / detach ─────────────────────────────
+
+  /**
+   * 清掉非 rotate 窗口遗留的 live `retiringBinding`（compactFork 保留的父体）。
+   *
+   * 后续 rotate / restart / compactFork 需要占用该槽位时，先显式退役父 binding 并
+   * dispose 其 EU；否则 `addBinding` 会直接覆盖槽位，父 binding 既没进 history，
+   * 其 EU 的租约也不会释放。
+   */
+  private async retireResidualBinding(record: MemberRecord): Promise<void> {
+    const residual = record.retiringBinding;
+    if (residual === undefined || residual.retiredAt !== undefined) return;
+    if (record.rotation === 'rotating') return;
+    const entry = this.findEntry(record.id, residual.bindingId);
+    if (entry !== undefined) await this.disposeEntry(entry);
+    this.registry.retireBinding(record.id, residual.bindingId);
+  }
+
+  /**
+   * 同一 Session 原地换体：binding id 不变、epoch+1。
+   * 旧 Binding 先退役进 history、旧 EU 先 dispose / 释放租约；新 Binding 同 id 入主位、
+   * 新 EU 后建。有 active run → `conflict`（不隐式取消）。
+   */
+  async restart(input: RestartInput): Promise<RestartResult> {
+    await this.ready;
+    const raw = input as unknown as Record<string, unknown>;
+    const to = readRequiredString(raw, 'to');
+    const from =
+      input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
+
+    const target = this.resolveDispatchTarget(to, from);
+    if (target === undefined || !this.registry.canView(target, from)) {
+      return { status: 'failed', code: 'not_visible', reason: `not_visible: ${to}` };
+    }
+    if (
+      target.membership === 'left' ||
+      target.state === 'closed' ||
+      this.hasClosingExecutionUnit(target.id)
+    ) {
+      return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
+    }
+    if (this.rotations.has(target.id) || target.rotation === 'rotating') {
+      return { status: 'failed', code: 'conflict', reason: `rotating: ${target.id}` };
+    }
+    const oldBinding = primaryBinding(target);
+    if (target.presence !== 'live' || oldBinding === undefined) {
+      return { status: 'failed', code: 'body_not_live', reason: `body_not_live: ${target.id}` };
+    }
+    const sessionId = oldBinding.bindingId;
+    const callerSession = input.from_session_id;
+    if (callerSession !== undefined && callerSession !== sessionId) {
+      return {
+        status: 'failed',
+        code: 'not_current_body',
+        reason: `not_current_body: ${callerSession}`,
+      };
+    }
+    const fromEpoch = oldBinding.epoch;
+    const epoch = fromEpoch + 1;
+    const oldEntry = this.executionUnitRegistry.get(target.id)?.get(sessionId);
+    // 等在途 spawn 落地再判断/退役，避免 spawn 在 dispose 之后把 body 复活。
+    if (oldEntry?.spawning !== undefined) await oldEntry.spawning.catch(() => {});
+    if (oldEntry?.active !== undefined) {
+      const runId = oldEntry.active.runId;
+      const leaseToken = this.runtime.sessionLeaseToken?.(sessionId) ?? null;
+      const conflict = {
+        run_id: runId,
+        session_id: sessionId,
+        lease_token: leaseToken,
+        epoch: fromEpoch,
+      };
+      this.emitForSession('agent.restart.failed', target, sessionId, {
+        from_session_id: sessionId,
+        to_session_id: sessionId,
+        from_epoch: fromEpoch,
+        reason: 'active_run',
+        ...conflict,
+      });
+      return {
+        status: 'failed',
+        code: 'conflict',
+        reason: `active_run: ${runId}`,
+        ...conflict,
+      };
+    }
+
+    await this.retireResidualBinding(target);
+    this.registry.setRotation(target.id, 'rotating');
+    // 与 rotate 同样的窗口守卫：窗口内到达的消息只落 inbox，避免在「旧 binding 已退役、
+    // 新 binding 未建」的间隙被惰性 createBinding 造出第二具 body。
+    this.rotations.set(target.id, {
+      fromSessionId: sessionId,
+      fromEpoch,
+      toSessionId: sessionId,
+      toEpoch: epoch,
+    });
+    this.emitForSession('agent.restarting', target, sessionId, {
+      from_session_id: sessionId,
+      to_session_id: sessionId,
+      from_epoch: fromEpoch,
+      epoch,
+      fencing_token: this.runtime.sessionLeaseToken?.(sessionId) ?? oldEntry?.fencingToken ?? null,
+    });
+    let newBinding: BindingRecord | undefined;
+    const rollbackNew = async (): Promise<void> => {
+      const entry = this.findEntry(target.id, sessionId);
+      if (entry !== undefined) await this.disposeEntry(entry);
+      await this.releasePendingBindingLease(sessionId);
+      if (newBinding !== undefined) this.registry.removeBinding(target.id, sessionId);
+    };
+    try {
+      // 先停旧体、退役旧 binding（进 history），再清槽让同 id 能重新入主位。
+      if (oldEntry !== undefined && !oldEntry.retired) {
+        this.runtime.disableInbox?.(sessionId);
+        await this.retireExecutionUnitEntry(target, oldEntry, 'restart');
+      } else {
+        // 已退役的残留 entry 也要清掉，否则 entryFor 会把新 binding 认成旧 entry。
+        if (oldEntry !== undefined) await this.disposeEntry(oldEntry);
+        this.registry.retireBinding(target.id, sessionId);
+        this.promotePrimary(target);
+      }
+      this.registry.removeBinding(target.id, sessionId);
+      this.inbox?.releaseHeld(target.id);
+      this.runtime.clearPendingNotices?.(target.id);
+
+      newBinding = await this.createBinding(target, sessionId, {
+        epoch,
+        primary: true,
+        restart: true,
+        // compactFork 之后同 Agent 可能另有 live binding（父 Session 不动）；
+        // restart 只换自己这一具，不应被 body_limit 拒绝。
+        rotation: true,
+      });
+      const newEntry = await this.entryFor(target, newBinding);
+      await this.ensureRuntime(newEntry);
+      newEntry.primary = true;
+      this.registry.setPrimaryBinding(target.id, sessionId);
+
+      const startupPrompt =
+        raw.startup_prompt === undefined ? undefined : readContent(raw, 'startup_prompt');
+      if (startupPrompt !== undefined) {
+        try {
+          await this.admitInternal(
+            {
+              content: startupPrompt,
+              agent_id: target.id,
+              session_id: sessionId,
+              from: SYSTEM_PRINCIPAL,
+              channel: 'direct',
+              conversation_id: generateConversationId(this.newId),
+              strict: false,
+            },
+            { startup: true },
+          );
+        } catch (error) {
+          this.logger.warn('agent.restart.startup_failed', {
+            agent_id: target.id,
+            error: errorText(error),
+          });
+        }
+      }
+
+      this.scheduleSnapshot();
+      const flushed = await this.flushSnapshot().catch(() => false);
+      if (!flushed) {
+        this.logger.warn('agent.restart.snapshot_write_failed', { agent_id: target.id });
+      }
+      this.updateAgentState(target.id);
+      this.emitForSession('agent.restarted', target, sessionId, {
+        from_session_id: sessionId,
+        to_session_id: sessionId,
+        from_epoch: fromEpoch,
+        epoch,
+        fencing_token: this.runtime.sessionLeaseToken?.(sessionId) ?? newEntry.fencingToken ?? null,
+      });
+      return {
+        status: 'restarted',
+        agent_id: target.id,
+        session_id: sessionId,
+        from_epoch: fromEpoch,
+        epoch,
+      };
+    } catch (error) {
+      await rollbackNew();
+      this.emitForSession('agent.restart.failed', target, sessionId, {
+        from_session_id: sessionId,
+        to_session_id: sessionId,
+        from_epoch: fromEpoch,
+        epoch,
+        reason: errorText(error),
+      });
+      return { status: 'failed', code: 'restart_failed', reason: errorText(error) };
+    } finally {
+      this.rotations.delete(target.id);
+      const current = this.registry.get(target.id);
+      if (current?.rotation === 'rotating') this.registry.setRotation(target.id, 'stable');
+    }
+  }
+
+  /**
+   * 同 Agent 新建 Session（epoch+1，成为新 primary），父 Session / binding 不动。
+   * 子 Session 以父 transcript 的压缩副本为种子（`message.injected` 事件）。
+   */
+  async compactFork(input: CompactForkInput): Promise<CompactForkResult> {
+    await this.ready;
+    const raw = input as unknown as Record<string, unknown>;
+    const to = readRequiredString(raw, 'to');
+    const from =
+      input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
+
+    const target = this.resolveDispatchTarget(to, from);
+    if (target === undefined || !this.registry.canView(target, from)) {
+      return { status: 'failed', code: 'not_visible', reason: `not_visible: ${to}` };
+    }
+    if (
+      target.membership === 'left' ||
+      target.state === 'closed' ||
+      this.hasClosingExecutionUnit(target.id)
+    ) {
+      return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
+    }
+    if (this.rotations.has(target.id) || target.rotation === 'rotating') {
+      return {
+        status: 'failed',
+        code: 'compact_fork_failed',
+        reason: `rotating: ${target.id}`,
+      };
+    }
+    const parentBinding = primaryBinding(target);
+    if (target.presence !== 'live' || parentBinding === undefined) {
+      return { status: 'failed', code: 'body_not_live', reason: `body_not_live: ${target.id}` };
+    }
+    const fromSessionId = parentBinding.bindingId;
+    const callerSession = input.from_session_id;
+    if (callerSession !== undefined && callerSession !== fromSessionId) {
+      return {
+        status: 'failed',
+        code: 'not_current_body',
+        reason: `not_current_body: ${callerSession}`,
+      };
+    }
+    if (this.eventLog === undefined) {
+      return {
+        status: 'failed',
+        code: 'compact_fork_failed',
+        reason: 'compact_fork_failed: event_log_unavailable',
+      };
+    }
+    const fromEpoch = parentBinding.epoch;
+    const epoch = fromEpoch + 1;
+    const parentEntry = this.findEntry(target.id, fromSessionId);
+    if (parentEntry?.spawning !== undefined) await parentEntry.spawning.catch(() => {});
+    if (parentEntry?.active !== undefined) {
+      const runId = parentEntry.active.runId;
+      const leaseToken = this.runtime.sessionLeaseToken?.(fromSessionId) ?? null;
+      const conflict = {
+        run_id: runId,
+        session_id: fromSessionId,
+        lease_token: leaseToken,
+        epoch: fromEpoch,
+      };
+      this.emitForSession('agent.compact_fork.failed', target, fromSessionId, {
+        from_session_id: fromSessionId,
+        reason: 'active_run',
+        ...conflict,
+      });
+      return {
+        status: 'failed',
+        code: 'conflict',
+        reason: `active_run: ${runId}`,
+        ...conflict,
+      };
+    }
+    const toSessionId = this.newId();
+    if (
+      !nonEmpty(toSessionId) ||
+      this.registry.getBySession(toSessionId) !== undefined ||
+      target.binding?.bindingId === toSessionId ||
+      target.retiringBinding?.bindingId === toSessionId ||
+      this.registry.isRetiredSession(toSessionId)
+    ) {
+      this.emitForSession('agent.compact_fork.failed', target, fromSessionId, {
+        from_session_id: fromSessionId,
+        to_session_id: toSessionId,
+        epoch,
+        reason: 'session_id_collision',
+      });
+      return {
+        status: 'failed',
+        code: 'compact_fork_failed',
+        reason: 'session_id_collision',
+      };
+    }
+
+    // 父 transcript → 压缩副本（只读父事件；不改父 Session / WorkingContext）。
+    let seed: Message[];
+    try {
+      await this.eventLog.flush(fromSessionId);
+      const events = await this.eventLog.read(fromSessionId);
+      seed = await compactMessagesForFork(
+        projectMessages(events),
+        this.summarizer !== undefined ? { summarizer: this.summarizer } : {},
+      );
+    } catch (error) {
+      this.emitForSession('agent.compact_fork.failed', target, fromSessionId, {
+        from_session_id: fromSessionId,
+        to_session_id: toSessionId,
+        epoch,
+        reason: errorText(error),
+      });
+      return { status: 'failed', code: 'compact_fork_failed', reason: errorText(error) };
+    }
+
+    // 旧 primary 的 token 先记下；旧 EU 在子 primary 就绪后再 retire/dispose，
+    // 子创建失败时父 binding 仍在 retiringBinding，可回滚恢复。
+    const oldLeaseToken = this.runtime.sessionLeaseToken?.(fromSessionId) ?? 0;
+    await this.retireResidualBinding(target);
+    let newBinding: BindingRecord | undefined;
+    const rollbackNew = async (): Promise<void> => {
+      const entry = this.findEntry(target.id, toSessionId);
+      if (entry !== undefined) await this.disposeEntry(entry);
+      await this.releasePendingBindingLease(toSessionId);
+      if (newBinding !== undefined) {
+        this.registry.removeBinding(target.id, toSessionId);
+        // 回滚后父 binding 重新成为 primary（addBinding 曾把它的 primary 标记清掉）。
+        this.registry.setPrimaryBinding(target.id, fromSessionId);
+      }
+    };
+    try {
+      // 子 primary 先建；父 binding 由 addBinding 暂存到 retiringBinding，
+      // 等子 EU / 新 SessionLease 就绪后立即退役进 history。
+      newBinding = await this.createBinding(target, toSessionId, {
+        epoch,
+        primary: true,
+        rotation: true,
+      });
+      // 子 Session 种子：按现有事件投影形状，统一写 `message.injected`。
+      for (const message of seed) {
+        await this.eventLog.append({
+          session_id: toSessionId,
+          run_id: toSessionId,
+          type: 'message.injected',
+          ts: this.now(),
+          data: { message },
+        });
+      }
+      const newEntry = await this.entryFor(target, newBinding);
+      await this.ensureRuntime(newEntry);
+      newEntry.primary = true;
+      // 新 primary 的 SessionLease 立刻拿到手（fence 高于旧 primary），
+      // 旧 token 对新 Session 的写入由 token >= currentFence 拒绝。
+      const newLease = await this.runtime.ensureSessionLease?.(
+        toSessionId,
+        oldLeaseToken > 0 ? oldLeaseToken + 1 : undefined,
+      );
+      // 子 primary 已就绪：旧 primary EU retire/dispose、旧 SessionLease 释放、
+      // 旧 binding 立即进 history（父 Session/transcript 不复制、不改写）。
+      if (parentEntry !== undefined) await this.disposeEntry(parentEntry);
+      this.registry.retireBinding(target.id, fromSessionId);
+      this.registry.setPrimaryBinding(target.id, toSessionId);
+      this.scheduleSnapshot();
+
+      const startupPrompt =
+        raw.startup_prompt === undefined ? undefined : readContent(raw, 'startup_prompt');
+      if (startupPrompt !== undefined) {
+        try {
+          await this.admitInternal(
+            {
+              content: startupPrompt,
+              agent_id: target.id,
+              session_id: toSessionId,
+              from: SYSTEM_PRINCIPAL,
+              channel: 'direct',
+              conversation_id: generateConversationId(this.newId),
+              strict: false,
+            },
+            { startup: true },
+          );
+        } catch (error) {
+          this.logger.warn('agent.compact_fork.startup_failed', {
+            agent_id: target.id,
+            error: errorText(error),
+          });
+        }
+      }
+
+      this.updateAgentState(target.id);
+      this.emitForSession('agent.compact_forked', target, toSessionId, {
+        from_session_id: fromSessionId,
+        to_session_id: toSessionId,
+        epoch,
+        fencing_token: newLease?.fencingToken ?? newEntry.fencingToken ?? null,
+      });
+      return {
+        status: 'compact_forked',
+        agent_id: target.id,
+        from_session_id: fromSessionId,
+        to_session_id: toSessionId,
+        epoch,
+      };
+    } catch (error) {
+      await rollbackNew();
+      this.emitForSession('agent.compact_fork.failed', target, fromSessionId, {
+        from_session_id: fromSessionId,
+        to_session_id: toSessionId,
+        epoch,
+        reason: errorText(error),
+      });
+      return { status: 'failed', code: 'compact_fork_failed', reason: errorText(error) };
+    }
+  }
+
+  /** Agent 级 fork：新 Agent、空 Session、不复制 transcript；复用 `forkOne`。 */
+  async fork(input: ForkInput): Promise<ForkResult> {
+    await this.ready;
+    const raw = input as unknown as Record<string, unknown>;
+    const to = readRequiredString(raw, 'to');
+    const from =
+      input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
+
+    let target: MemberRecord | undefined;
+    try {
+      target = this.resolveDispatchTarget(to, from);
+    } catch (error) {
+      return { ok: false, code: 'unknown_member', reason: errorText(error) };
+    }
+    if (target === undefined || !this.registry.canView(target, from)) {
+      return { ok: false, code: 'not_visible', reason: `not_visible: ${to}` };
+    }
+    if (input.name !== undefined) {
+      try {
+        assertMemberName(input.name);
+      } catch (error) {
+        return { ok: false, code: 'fork_failed', reason: errorText(error) };
+      }
+    }
+    const outcome = await this.ensureForked(
+      target.id,
+      input.name !== undefined ? { name: input.name } : {},
+    );
+    if (!outcome.ok) {
+      this.emitForSession(
+        'agent.fork.failed',
+        target,
+        primaryBinding(target)?.bindingId ?? target.sessionId,
+        { from: target.id, to: input.name ?? to, reason: outcome.reason },
+      );
+      return { ok: false, code: outcome.code, reason: outcome.reason };
+    }
+    return {
+      ok: true,
+      member: this.statusFor(outcome.member),
+      from_agent_id: outcome.member.forkedFrom ?? target.id,
+    };
+  }
+
+  /**
+   * delete 前置钩子：有 active run → `conflict`；否则 dispose 对应 EU、
+   * 释放 binding 租约、退役 binding、清 primary 指针。未知 session 幂等返回。
+   */
+  async detachSession(sessionId: string): Promise<void> {
+    await this.ready;
+    const record = this.registry.getBySession(sessionId);
+    if (record === undefined) {
+      // 已退役但仍留在内存里的旧 entry：同样释放租约，避免 delete 后租约泄漏。
+      for (const [agentId, entries] of this.executionUnitRegistry) {
+        const entry = entries.get(sessionId);
+        if (entry === undefined) continue;
+        if (entry.active !== undefined) {
+          throw new AgentError('conflict', `session_busy: ${sessionId}`);
+        }
+        await this.disposeEntry(entry);
+        this.updateAgentState(agentId);
+      }
+      return;
+    }
+    const entry = this.findEntry(record.id, sessionId);
+    if (entry?.spawning !== undefined) await entry.spawning.catch(() => {});
+    if (entry?.active !== undefined) {
+      throw new AgentError('conflict', `session_busy: ${sessionId}`);
+    }
+    if (entry !== undefined) {
+      await this.retireExecutionUnitEntry(record, entry, 'session_deleted');
+    } else {
+      this.registry.retireBinding(record.id, sessionId);
+      this.promotePrimary(record);
+    }
+    this.scheduleSnapshot();
+    this.updateAgentState(record.id);
   }
 
   async close(input: CloseInput): Promise<CloseResult>;

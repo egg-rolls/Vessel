@@ -63,6 +63,7 @@ import {
   createFeishuFromConfig,
   stopFeishuChannel,
 } from './feishu-wiring';
+import { FileLeaseService } from './lease-service';
 import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import {
@@ -183,6 +184,10 @@ export interface TenantRuntimeBundle {
   scheduler: Scheduler;
   runtime: RunnableAgent;
   executionUnit?: ExecutionUnit;
+  /** ADR-098 C2：本 tenant 的租约服务；memory 后端 / 关闭 sessionLocks 时缺省 */
+  leaseService?: FileLeaseService;
+  /** 0.34 Stage 3：compactFork 压缩摘要器（与 tenant 上下文共用） */
+  summarizer?: ContextSummarizer;
   runStore?: RunRecordStore;
   /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
   eventLog?: SessionEventLog;
@@ -592,6 +597,20 @@ export async function buildTenantRuntime(
       }
     }
 
+    // ADR-098 C2：SessionLease 接管 session 级写排他；memory 后端或无写意图时缺省
+    // 不创建（EU / 事件日志端口缺省为 no-op，行为等同现状）。
+    const leaseConfig = (config as { lease?: { ttlMs?: number; renewMs?: number } }).lease;
+    const sessionLocksEnabled = options.sessionLocks ?? backend !== 'memory';
+    const leaseService = sessionLocksEnabled
+      ? new FileLeaseService({
+          tenantDir: tenantPaths.root,
+          tenantId,
+          ...(leaseConfig?.ttlMs !== undefined ? { ttlMs: leaseConfig.ttlMs } : {}),
+          ...(leaseConfig?.renewMs !== undefined ? { renewMs: leaseConfig.renewMs } : {}),
+          logger,
+        })
+      : undefined;
+
     const runStore = createRunRecordStore(config, {
       tenantRunsDir: tenantPaths.runs_dir,
       tenantId,
@@ -651,7 +670,15 @@ export async function buildTenantRuntime(
     // 仅在本地写意图 + 持久化后端时创建；memory 后端/只读执行面保持零磁盘写入。
     const eventLog =
       options.writeTrace === true && backend !== 'memory'
-        ? new SessionEventLog({ dir: tenantPaths.sessions_dir, tenantId, logger })
+        ? new SessionEventLog({
+            dir: tenantPaths.sessions_dir,
+            tenantId,
+            logger,
+            // ADR-098 C2：旧 fencing token 拒绝 append；读路径不校验。
+            ...(leaseService !== undefined
+              ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
+              : {}),
+          })
         : undefined;
     const sessionControl = createSessionControl({
       session,
@@ -765,6 +792,7 @@ export async function buildTenantRuntime(
         ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
         ...(runStore ? { runStore } : {}),
         ...(eventLog ? { eventLog } : {}),
+        ...(leaseService !== undefined ? { leaseService } : {}),
         logger,
       } as Parameters<typeof ExecutionUnit.create>[0] & {
         pluginConfigs?: Record<string, Record<string, unknown>>;
@@ -996,6 +1024,8 @@ export async function buildTenantRuntime(
       scheduler,
       runtime: lockedRuntime,
       executionUnit,
+      ...(leaseService !== undefined ? { leaseService } : {}),
+      summarizer,
       ...(runStore ? { runStore } : {}),
       ...(eventLog ? { eventLog } : {}),
       ...(trace ? { trace } : {}),

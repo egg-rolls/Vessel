@@ -178,4 +178,14 @@ export interface ExecutionUnitOptions {
    * 先追加落盘（`llm.stream.chunk` 等派生事件除外）；缺省不落盘，行为与 0.17 一致。
    */
   eventLog?: import('./event.js').SessionEventLogPort;
+  /**
+   * ADR-098 C2：两级租约服务（装配层注入；缺省 no-op，行为等同现状）。
+   * 提供时 EU 在首个 run/resume 前 acquire SessionLease，后台续租并注入 fencing token。
+   */
+  leaseService?: import('./lease.js').LeaseServicePort;
+  /**
+   * ADR-098 C2：ControlPlane 在 spawn 时授予的 BindingLease。
+   * EU 只续租 / 释放，不负责首次获取。
+   */
+  bindingLease?: import('./lease.js').LeaseGrant;
 }

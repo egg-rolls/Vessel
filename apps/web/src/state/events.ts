@@ -197,7 +197,10 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
       case 'context.compacted':
       case 'agent.limit.warning':
       case 'agent.rotating':
-      case 'agent.rotated': {
+      case 'agent.rotated':
+      case 'agent.restarting':
+      case 'agent.restarted':
+      case 'agent.compact_forked': {
         flush();
         group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
         continue;

@@ -15,6 +15,7 @@ import {
   type EventStream,
   ExecutionUnit,
   type ExecutionUnitOptions,
+  type LeaseGrant,
   type LLMProvider,
   type Logger,
   MemoryEventStream,
@@ -293,6 +294,10 @@ interface PendingBridgeRequest {
 /** 成员 runtime 额外需要的中断能力（ExecutionUnit 已实现） */
 export interface MemberRunnableAgent extends RunnableAgent {
   interrupt?(reason?: RunInterruptReason): void;
+  /** Stage 3：当前 session 有效 SessionLease 的 fencingToken（ExecutionUnit 已实现）。 */
+  sessionLeaseToken?(sessionId: string): number | undefined;
+  /** Stage 3：compactFork 预取新 primary 的 SessionLease（ExecutionUnit 已实现）。 */
+  ensureSessionLease?(sessionId: string, minFence?: number): Promise<LeaseGrant | undefined>;
   /** 只追加上下文，不启动 turn（ExecutionUnit 已实现） */
   appendNotice?(text: string): void;
   /**
@@ -358,6 +363,11 @@ export interface InProcessMemberRuntimeOptions {
   session?: ExecutionUnitOptions['session'];
   /** tenant 会话事件日志（唯一真相源；存在时成员事件同样落盘） */
   eventLog?: ExecutionUnitOptions['eventLog'];
+  /**
+   * Stage 3：per-tenant 租约服务，透传给每个成员 ExecutionUnit（SessionLease）。
+   * 缺省时 EU 侧租约为 no-op。
+   */
+  leaseService?: ExecutionUnitOptions['leaseService'];
   /** 0.27：每 body 的 durable checkpoint 存储；透传给每个 ExecutionUnit */
   runStore?: ExecutionUnitOptions['runStore'];
   /** 覆盖 runtime 构造（测试捕获 options） */
@@ -683,6 +693,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly session?: ExecutionUnitOptions['session'];
   private readonly eventLog?: ExecutionUnitOptions['eventLog'];
   private readonly runStore?: ExecutionUnitOptions['runStore'];
+  private readonly leaseService?: ExecutionUnitOptions['leaseService'];
   private readonly runtimeFactory: (options: ExecutionUnitOptions) => Promise<MemberRunnableAgent>;
   private readonly entries = new Map<string, MemberRuntimeEntry>();
   /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界文本队列） */
@@ -715,6 +726,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.session = options.session;
     this.eventLog = options.eventLog;
     this.runStore = options.runStore;
+    this.leaseService = options.leaseService;
     this.runtimeFactory =
       options.runtimeFactory ?? ((runtimeOptions) => ExecutionUnit.create(runtimeOptions));
     if (this.permissionMode === 'bridge' && this.parentEvents === undefined) {
@@ -819,6 +831,9 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       ...(this.session !== undefined ? { session: this.session } : {}),
       ...(this.eventLog !== undefined ? { eventLog: this.eventLog } : {}),
       ...(this.runStore !== undefined ? { runStore: this.runStore } : {}),
+      // Stage 3：ControlPlane 获取的 BindingLease 凭据随 spawn 透传给 EU（EU 只续租/释放）。
+      ...(member.binding_lease !== undefined ? { bindingLease: member.binding_lease } : {}),
+      ...(this.leaseService !== undefined ? { leaseService: this.leaseService } : {}),
     });
     const entry: MemberRuntimeEntry = {
       runtime,
@@ -1070,6 +1085,16 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     entry.unsubscribers.length = 0;
     this.clearPending(entry);
     await entry.runtime.dispose();
+  }
+
+  sessionLeaseToken(sessionId: string): number | undefined {
+    return this.entries.get(sessionId)?.runtime.sessionLeaseToken?.(sessionId);
+  }
+
+  async ensureSessionLease(sessionId: string, minFence?: number): Promise<LeaseGrant | undefined> {
+    const entry = this.entries.get(sessionId);
+    if (entry === undefined) return undefined;
+    return entry.runtime.ensureSessionLease?.(sessionId, minFence);
   }
 
   /**

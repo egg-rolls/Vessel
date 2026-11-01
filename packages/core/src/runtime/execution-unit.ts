@@ -20,6 +20,7 @@ import type { ErrorEnvelope } from '../types/error.js';
 import type { EventStream, RunEvent, SessionEventLogPort, Unsubscribe } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { HookType } from '../types/hook.js';
+import { LeaseExpiredError, type LeaseGrant, type LeaseServicePort } from '../types/lease.js';
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 import type { Logger } from '../types/logging.js';
 import type {
@@ -380,6 +381,18 @@ export class ExecutionUnit {
   private readonly pendingEventLogWrites = new Set<Promise<void>>();
   /** 每个 run 只报告一次落盘失败，避免刷屏 */
   private eventLogFailureReported = false;
+  /** ADR-098 C2：注入的租约服务；缺省 no-op（行为等同现状） */
+  private readonly leaseService?: LeaseServicePort;
+  /** ADR-098 C2：ControlPlane 在 spawn 时授予的 BindingLease（EU 只续租/释放） */
+  private readonly bindingLease?: LeaseGrant;
+  /** ADR-098 C2：本 EU 持有的 SessionLease（按 session 记录，用于 fencing token） */
+  private readonly sessionLeases = new Map<string, LeaseGrant>();
+  /** 后台续租定时器；`.unref()` 防止 smoke/CLI 被挂住 */
+  private leaseRenewTimer?: ReturnType<typeof setInterval>;
+  /** 续租去重：上一轮未完成时跳过 */
+  private renewingLeases?: Promise<void>;
+  /** 租约丢失后 EU 不再接受新 run（ControlPlane 下次惰性重建） */
+  private leaseLost = false;
 
   private constructor(opts: ExecutionUnitOptions) {
     this.provider = opts.provider;
@@ -398,6 +411,8 @@ export class ExecutionUnit {
     this.tenantId = opts.tenantId;
     this.includeReasoning = opts.includeReasoning === true;
     this.eventLog = opts.eventLog;
+    this.leaseService = opts.leaseService;
+    this.bindingLease = opts.bindingLease;
     this.logger =
       opts.logger ??
       (process.env.VESSEL_DEBUG ? createStderrLogger({ level: 'debug' }) : noopLogger);
@@ -513,6 +528,7 @@ export class ExecutionUnit {
    * @returns 最终响应文本
    */
   async run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string> {
+    if (this.leaseLost) throw new LeaseExpiredError('lease_expired');
     // F6：Host 可指定 runId，使 RunHandle.id 与事件流 run_id 一致；普通调用方缺省生成
     const runId = opts?.runId ?? randomUUID();
     const currentSessionId = sessionId || 'default';
@@ -528,6 +544,7 @@ export class ExecutionUnit {
       return await this.executeRun(execution, input, opts);
     } finally {
       this.endExecution(execution);
+      await this.releaseTransientSessionLease(currentSessionId);
     }
   }
 
@@ -548,6 +565,184 @@ export class ExecutionUnit {
       },
       this.activeRun?.runId ?? 'notice',
     );
+  }
+
+  /**
+   * 确认/续租本 session 的 SessionLease（首个 run/resume 前调用）。
+   * 同一 key 已有有效租约时续租；没有时 acquire。未注入 leaseService 时 no-op。
+   */
+  private async acquireSessionLease(sessionId: string): Promise<LeaseGrant | undefined> {
+    const service = this.leaseService;
+    if (!service) return undefined;
+    if (this.leaseLost) throw new LeaseExpiredError('lease_expired');
+
+    const existing = this.sessionLeases.get(sessionId);
+    if (existing !== undefined) {
+      try {
+        const renewed = await service.renew(existing.leaseId);
+        this.sessionLeases.set(sessionId, renewed);
+        this.startLeaseRenewTimer();
+        return renewed;
+      } catch (error) {
+        this.onLeaseLost(error);
+        throw error;
+      }
+    }
+
+    try {
+      const grant = await service.acquire('session', sessionId);
+      this.sessionLeases.set(sessionId, grant);
+      this.startLeaseRenewTimer();
+      return grant;
+    } catch (error) {
+      // 同 key 被其它持有者占用是正常冲突，不标记本 EU 失效。
+      if (error instanceof LeaseExpiredError) this.onLeaseLost(error);
+      throw error;
+    }
+  }
+
+  /** 当前 session 有效 SessionLease 的 fencingToken；没有有效租约返回 undefined。 */
+  sessionLeaseToken(sessionId: string): number | undefined {
+    if (this.leaseLost) return undefined;
+    const grant = this.sessionLeases.get(sessionId);
+    if (grant === undefined || grant.expiresAt <= Date.now()) return undefined;
+    return grant.fencingToken;
+  }
+
+  /**
+   * ControlPlane 预取 / 提级 SessionLease（compactFork 用）。
+   * 已有有效租约直接返回；否则 acquire，`minFence` 保证新 token 高于旧 primary。
+   */
+  async ensureSessionLease(sessionId: string, minFence?: number): Promise<LeaseGrant | undefined> {
+    const service = this.leaseService;
+    if (service === undefined || this.leaseLost) return undefined;
+    const existing = this.sessionLeases.get(sessionId);
+    if (existing !== undefined && existing.expiresAt > Date.now()) return existing;
+    const grant =
+      minFence !== undefined
+        ? await service.acquire('session', sessionId, { minFence })
+        : await service.acquire('session', sessionId);
+    this.sessionLeases.set(sessionId, grant);
+    this.startLeaseRenewTimer();
+    return grant;
+  }
+
+  /** 按当前租约 TTL 的 1/3 启动后台续租；`.unref()` 不阻止进程退出。 */
+  private startLeaseRenewTimer(): void {
+    if (!this.leaseService || this.leaseRenewTimer !== undefined) return;
+    const now = Date.now();
+    let ttlMs = 30_000;
+    for (const grant of this.sessionLeases.values()) {
+      ttlMs = Math.min(ttlMs, grant.expiresAt - now);
+    }
+    if (this.bindingLease !== undefined) {
+      ttlMs = Math.min(ttlMs, this.bindingLease.expiresAt - now);
+    }
+    // 配置了 `lease.renewMs` 时优先使用；缺省按 TTL/3（默认 30s TTL → 10s）。
+    const configuredRenewMs = this.leaseService.renewMs;
+    const intervalMs =
+      configuredRenewMs !== undefined && configuredRenewMs > 0
+        ? Math.max(1_000, Math.floor(configuredRenewMs))
+        : Math.max(1_000, Math.floor(ttlMs / 3));
+    this.leaseRenewTimer = setInterval(() => {
+      void this.renewLeases();
+    }, intervalMs);
+    (this.leaseRenewTimer as { unref?: () => void }).unref?.();
+  }
+
+  private clearLeaseRenewTimer(): void {
+    if (this.leaseRenewTimer === undefined) return;
+    clearInterval(this.leaseRenewTimer);
+    this.leaseRenewTimer = undefined;
+  }
+
+  /** 续租 SessionLease + BindingLease；任一失败即进入租约丢失流程。 */
+  private async renewLeases(): Promise<void> {
+    const service = this.leaseService;
+    if (!service || this.leaseLost) return;
+    if (this.renewingLeases !== undefined) return this.renewingLeases;
+
+    const task = (async () => {
+      try {
+        for (const [sessionId, grant] of [...this.sessionLeases]) {
+          const renewed = await service.renew(grant.leaseId);
+          this.sessionLeases.set(sessionId, renewed);
+        }
+        if (this.bindingLease !== undefined) {
+          await service.renew(this.bindingLease.leaseId);
+        }
+      } catch (error) {
+        this.onLeaseLost(error);
+      }
+    })();
+    this.renewingLeases = task;
+    try {
+      await task;
+    } finally {
+      if (this.renewingLeases === task) this.renewingLeases = undefined;
+    }
+  }
+
+  /**
+   * 租约丢失：停止接受新 run，abort 当前 activeRun。
+   * `shutdown` abort reason 让终态 checkpoint 落 `interrupted`（可 resume）。
+   */
+  private onLeaseLost(error: unknown): void {
+    if (this.leaseLost) return;
+    this.leaseLost = true;
+    this.clearLeaseRenewTimer();
+    this.logger.warn('session lease lost', {
+      ...(this.agentId !== undefined ? { agent_id: this.agentId } : {}),
+      error: errorText(error),
+    });
+    const control = this.activeRunControl;
+    if (control !== undefined && !control.controller.signal.aborted) {
+      control.controller.abort('shutdown');
+    }
+  }
+
+  /** 当前 session 已持有的 fencing token；未持有返回 undefined（读路径不受影响）。 */
+  private fencingTokenFor(sessionId: string): number | undefined {
+    return this.sessionLeases.get(sessionId)?.fencingToken;
+  }
+
+  /**
+   * 非 per-session EU（tenant 根 EU，没有 BindingLease）在每次 run 结束后释放
+   * SessionLease；成员 EU 持有到 dispose。否则根 EU 切换 session 后会一直占着旧
+   * session 的跨进程写租约。
+   */
+  private async releaseTransientSessionLease(sessionId: string): Promise<void> {
+    if (this.bindingLease !== undefined) return;
+    const grant = this.sessionLeases.get(sessionId);
+    if (grant === undefined) return;
+    this.sessionLeases.delete(sessionId);
+    try {
+      await this.leaseService?.release(grant.leaseId);
+    } catch {
+      // best-effort；dispose 仍会兜底。
+    }
+    if (this.sessionLeases.size === 0) this.clearLeaseRenewTimer();
+  }
+
+  /** dispose：先 SessionLease 后 BindingLease，全部 best-effort。 */
+  private async releaseLeases(): Promise<void> {
+    const service = this.leaseService;
+    if (!service) return;
+    for (const grant of [...this.sessionLeases.values()]) {
+      try {
+        await service.release(grant.leaseId);
+      } catch {
+        // dispose 不因租约释放失败而阻塞。
+      }
+    }
+    this.sessionLeases.clear();
+    if (this.bindingLease !== undefined) {
+      try {
+        await service.release(this.bindingLease.leaseId);
+      } catch {
+        // 同上。
+      }
+    }
   }
 
   /** 同步预留 active run 槽位；已有 active run 时抛稳定错误 `run_already_running`。 */
@@ -653,6 +848,9 @@ export class ExecutionUnit {
     opts?: RunOptions,
   ): Promise<string> {
     const { runId, sessionId } = execution;
+    // ADR-098 C2：首个 run 前获取 SessionLease；同一 session 复用则续租。
+    const lease = await this.acquireSessionLease(sessionId);
+    if (lease !== undefined) execution.record.fencing_token = lease.fencingToken;
     const workingContext = execution.workingContext;
     // 外部 signal 与 interrupt() 的内部 controller 统一成一个 signal（0.10 R2-18）
     const signal = this.executionSignal(execution, opts?.signal);
@@ -981,6 +1179,7 @@ export class ExecutionUnit {
    * - run id 保持不变，返回值语义与 run() 一致。
    */
   async resumeRun(runId: string, opts?: RunOptions): Promise<string> {
+    if (this.leaseLost) throw new LeaseExpiredError('lease_expired');
     if (!this.runStore) throw new RunResumeError('run_store_required', runId);
     if (this.resuming.has(runId)) throw new RunAlreadyRunningError(runId);
 
@@ -996,6 +1195,8 @@ export class ExecutionUnit {
       }
       const sessionId = record.session_id;
       execution.sessionId = sessionId;
+      // resume 需要有效 SessionLease；token 刷新后继续同一 run。
+      const lease = await this.acquireSessionLease(sessionId);
       execution.createdAt = record.created_at;
       execution.branch =
         record.branch ??
@@ -1009,6 +1210,7 @@ export class ExecutionUnit {
       runRecord.agent_id = record.agent_id ?? this.agentId;
       runRecord.tenant_id = this.tenantId ?? record.tenant_id;
       runRecord.metadata = record.metadata ?? runRecord.metadata;
+      if (lease !== undefined) runRecord.fencing_token = lease.fencingToken;
 
       // 恢复统计，保持 limits / termination 连续
       execution.stats = {
@@ -1091,6 +1293,7 @@ export class ExecutionUnit {
     } finally {
       this.resuming.delete(runId);
       this.endExecution(execution);
+      await this.releaseTransientSessionLease(execution.sessionId);
     }
   }
 
@@ -1106,6 +1309,7 @@ export class ExecutionUnit {
     input: string | Message,
     opts?: RunOptions,
   ): Promise<string> {
+    if (this.leaseLost) throw new LeaseExpiredError('lease_expired');
     const stored = await this.loadSessionState(sessionId);
     const cursor = await this.resolveSessionCursor(sessionId);
     if (stored === null && cursor === undefined) {
@@ -1122,6 +1326,7 @@ export class ExecutionUnit {
       return await this.executeRun(execution, input, opts);
     } finally {
       this.endExecution(execution);
+      await this.releaseTransientSessionLease(sessionId);
     }
   }
 
@@ -1516,6 +1721,7 @@ export class ExecutionUnit {
   }
 
   private async disposeRuntime(): Promise<void> {
+    this.clearLeaseRenewTimer();
     this.eventLogUnsubscribe?.();
     for (let i = this.installedPlugins.length - 1; i >= 0; i -= 1) {
       const plugin = this.installedPlugins[i] as Plugin;
@@ -1532,6 +1738,8 @@ export class ExecutionUnit {
       }
     }
     await this.flushEventLogWrites();
+    // 逆序释放两级租约：SessionLease → BindingLease。
+    await this.releaseLeases();
     this.session?.close?.();
   }
 
@@ -1908,6 +2116,16 @@ export class ExecutionUnit {
     else delete record.error;
 
     if (!this.runStore) return;
+
+    // ADR-098 C2：旧 fencing token 不得写 RunRecord（与 SessionEventLog 同口径）。
+    if (
+      record.fencing_token !== undefined &&
+      this.leaseService !== undefined &&
+      record.fencing_token < (await this.leaseService.fenceOf('session', record.session_id))
+    ) {
+      if (bestEffort) return;
+      throw new LeaseExpiredError('stale_fence', record.session_id);
+    }
 
     if (this.eventLog) await this.flushEventLogWrites();
     const eventCursor = await this.currentEventCursor(execution.sessionId);
@@ -2292,6 +2510,8 @@ export class ExecutionUnit {
       return;
     }
 
+    // ADR-098 C2：随事件携带当前 SessionLease 的 fencing token（未持有则缺省）。
+    const fencingToken = this.fencingTokenFor(sessionId);
     const done = log
       .append({
         session_id: sessionId,
@@ -2299,6 +2519,7 @@ export class ExecutionUnit {
         type: event.type,
         ts: event.ts,
         data: persistData ?? event.data,
+        ...(fencingToken !== undefined ? { fencing_token: fencingToken } : {}),
       })
       .then(
         () => {

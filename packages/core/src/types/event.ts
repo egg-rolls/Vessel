@@ -163,6 +163,12 @@ export interface SessionEventInput {
   type: string;
   ts: number;
   data: unknown;
+  /**
+   * ADR-098 C2：写入时持有的 SessionLease fencing token。
+   * 装配层可注入校验器（`LeaseServicePort.fenceOf`）；旧 token 拒绝 append。
+   * 缺省时不校验（读路径 / 旧生产者保持兼容）。
+   */
+  fencing_token?: number;
 }
 
 /** 落盘后的会话事件记录（`events.ndjson` 单行） */

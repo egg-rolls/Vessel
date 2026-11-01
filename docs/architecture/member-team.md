@@ -42,17 +42,16 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ## 准入与投递：admit / dispatch / strict send
 
 - `AgentService.admit({ agent_id?, session_id?, content, from, channel })` 是唯一准入：resolve agent → membership / presence / visibility → 复用或创建 body → 预算 → 入该 body mailbox → 满足条件时 `scheduler.submit`。`session_id` 已绑定则以绑定为准，显式传了不同 `agent_id` 返回 `invalid_input`；未绑定归 `agent_id ?? 'main'` 并在首次发言时建 body；未传 `session_id` 用该 agent 的 primary body。
-- `dispatch`（缺省）与 strict `send` 复用同一条 admit，`to` 按 id → session_id → 唯一 name 解析。差别只有 presence：dispatch 允许确保 body / 恢复成员 presence，strict 不自动恢复（`gone` → `member_stale`）。稳定失败码：`agent_left` / `not_visible` / `resume_failed` / `body_limit`（新建 body 超上限）/ `team_full` / `team_frozen`。
-- fork 只有一个触发点：`dispatch` 在 `presence === 'gone'` 且 resume 失败后，按 `teams[].policy.allowFork` / 显式 `allow_fork` 尝试；不新增工具动作或 RPC。失败零写入，源记录保持不变。
+- `dispatch`（缺省）与 strict `send` 复用同一条 admit，`to` 按 id → session_id → 唯一 name 解析。差别只有 presence：dispatch 允许确保 body / 恢复成员 presence，strict 不自动恢复（`gone` → `member_stale`）。稳定失败码：`agent_left` / `not_visible` / `resume_failed` / `body_limit`（新建 body 超上限）/ `team_full` / `team_frozen`。fork 有两个入口：`dispatch` 在 `presence === 'gone'` 且 resume 失败后按 `teams[].policy.allowFork` / 显式 `allow_fork` 尝试；canonical RPC `agents.fork`（0.34）直接新建空 Session 的 Agent（不复制 transcript，权限 / 可见性按 `agents.create`）。两者复用同一 `forkOne`，失败零写入，源记录保持不变。
 
 <a id="rotate"></a>
 
 ## rotate 与 epoch fencing
 
 - rotate 只退休 **primary body** 并新建 primary（新 session id）；同一 Agent 已有进行中的 rotate 返回 `rotating`。其它 live body 的历史、checkpoint、epoch 与在途 run 完全不受影响。模型侧 `agent` 工具只能 rotate 自己，靠 `from_session_id` 等于当前 primary body 做最终闸门。**模型发起的 rotate 还须先经人类权限确认**（0.31）：`agent` 工具发 `tool.permission.request`（`tool: agent.rotate`，带上下文比例），批准才调用 `AgentService.rotate`；拒绝或无人类通道返回 `rotate_not_needed`；CLI / 人工 RPC 不额外询问。
-- 切换顺序固定：spawn 新 body → 提交 primary（`primary_body_id`）→ 快照落盘 → 旧 primary 退休进 `body_history` → 启动嘱托入队 → `rotation = stable`。spawn 或快照失败时恢复旧 primary、dispose 新 body、返回 `rotate_failed`，不自动重试。
-- 旧 body 的轮按**该 body 自身** epoch / 退役标志 fencing：发带 `stale: true` 的配对终态与 `agent.reply.stale`，不写 state / usage、不投父队列。
+- 切换顺序固定：spawn 新 body → 提交 primary（`primary_body_id`）→ 快照落盘 → 旧 primary 退休进 `body_history` → 启动嘱托入队 → `rotation = stable`。spawn 或快照失败时恢复旧 primary、dispose 新 body、返回 `rotate_failed`，不自动重试。旧 body 的轮按**该 body 自身** epoch / 退役标志 fencing：发带 `stale: true` 的配对终态与 `agent.reply.stale`，不写 state / usage、不投父队列。
 - 事件：`agent.rotate.approved` / `agent.rotate.denied` / `agent.rotating` / `agent.rotated` / `agent.rotate.failed` / `agent.retired` / `agent.reply.stale`；payload 不带启动嘱托正文，也不带确认卡片正文。
+- **restart / compactFork（0.34，ADR-098）**：restart 复用同一 Session（`session_id` 不变），binding id 不变、`epoch + 1`；旧 binding 先退役进 history、旧 EU 先 dispose，再按同一 lease key 获取更高 fence 的新租约并新建 EU；有 active run 返回 `conflict`；事件 `agent.restarting` / `agent.restarted`。compactFork 以父 Session 的压缩副本新建子 Session 并成为新 primary（`epoch + 1`），父 Session / binding / EU 不动；事件 `agent.compact_forked`；无 `keep_turns`。两者与 rotate 一样先 binding lease 再 session lease、逆序释放；TTL / 续租由 `lease.ttlMs` / `lease.renewMs` 配置（[CONFIG](../operations/CONFIG.md)）。
 
 <a id="spawn"></a>
 

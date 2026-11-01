@@ -10,10 +10,13 @@
  */
 
 import type {
+  AgentCompactForkLikeInput,
   AgentControlLike,
   AgentCreateLikeInput,
   AgentDispatchLikeInput,
+  AgentForkLikeInput,
   AgentLifecycleFailLike,
+  AgentRestartLikeInput,
   AgentRoleLike,
   AgentRotateLikeInput,
   AgentSendLikeInput,
@@ -365,6 +368,11 @@ const agentStateEnum = [
 const agentActionFailProperties = {
   code: { type: 'string' },
   error: { type: 'string' },
+  // Stage 3 conflict payload（restart / compactFork）：上层据此取消/重试。
+  // session_id / epoch 在具体结果里已有，不在此重复声明。
+  run_id: { type: 'string' },
+  // nullable：校验器子集没有 union，lease_token 由 producer 保证 number | null。
+  lease_token: {},
 };
 
 const agentSendResultSchema = {
@@ -434,6 +442,76 @@ const agentRotateResultSchema = {
   },
 };
 
+const agentRestartResultSchema = {
+  type: 'object',
+  required: ['results'],
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['ok'],
+        properties: {
+          ok: { type: 'boolean' },
+          status: { type: 'string', enum: ['restarted'] },
+          agent_id: { type: 'string' },
+          session_id: { type: 'string' },
+          from_epoch: { type: 'integer', minimum: 0 },
+          epoch: { type: 'integer', minimum: 0 },
+          ...agentActionFailProperties,
+        },
+      },
+    },
+  },
+};
+
+const agentCompactForkResultSchema = {
+  type: 'object',
+  required: ['results'],
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['ok'],
+        properties: {
+          ok: { type: 'boolean' },
+          status: { type: 'string', enum: ['compact_forked'] },
+          agent_id: { type: 'string' },
+          from_session_id: { type: 'string' },
+          to_session_id: { type: 'string' },
+          // conflict 时的目标 Session（父 Session）
+          session_id: { type: 'string' },
+          epoch: { type: 'integer', minimum: 0 },
+          ...agentActionFailProperties,
+        },
+      },
+    },
+  },
+};
+
+const agentForkResultSchema = {
+  type: 'object',
+  required: ['results'],
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['ok'],
+        properties: {
+          ok: { type: 'boolean' },
+          status: { type: 'string', enum: ['forked'] },
+          agent_id: { type: 'string' },
+          from_agent_id: { type: 'string' },
+          session_id: { type: 'string' },
+          ...agentActionFailProperties,
+        },
+      },
+    },
+  },
+};
+
 const agentSendEntrySchema = {
   type: 'object',
   required: ['to'],
@@ -464,6 +542,35 @@ const agentRotateEntrySchema = {
     to: { type: 'string', minLength: 1 },
     startup_prompt: { type: 'string', minLength: 1 },
     from_session_id: { type: 'string', minLength: 1 },
+  },
+};
+
+const agentRestartEntrySchema = {
+  type: 'object',
+  required: ['to'],
+  properties: {
+    to: { type: 'string', minLength: 1 },
+    startup_prompt: { type: 'string', minLength: 1 },
+    from_session_id: { type: 'string', minLength: 1 },
+  },
+};
+
+const agentCompactForkEntrySchema = {
+  type: 'object',
+  required: ['to'],
+  properties: {
+    to: { type: 'string', minLength: 1 },
+    startup_prompt: { type: 'string', minLength: 1 },
+    from_session_id: { type: 'string', minLength: 1 },
+  },
+};
+
+const agentForkEntrySchema = {
+  type: 'object',
+  required: ['to'],
+  properties: {
+    to: { type: 'string', minLength: 1 },
+    name: { type: 'string', minLength: 1 },
   },
 };
 
@@ -1218,6 +1325,163 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           .map((entry) => entry.input);
         if (inputs.length === 0) return mergeBatchResults(prepared, []);
         const batch = await control.rotate(inputs);
+        return mergeBatchResults(prepared, batch.results);
+      },
+    },
+    {
+      /**
+       * `agents.restart`（0.34，write）：同一 Session 复用，换新 ExecutionUnit、epoch + 1。
+       *
+       * 与 rotate 共用批量 / team-scope / 错误形状；`startup_prompt` 可选
+       * （续接同一 transcript 后的首轮输入）。
+       */
+      name: 'agents.restart',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['agents'],
+        properties: {
+          agents: { type: 'array', items: agentRestartEntrySchema },
+        },
+      },
+      result_schema: agentRestartResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireAgentControl(deps.agent, ctx);
+        const entries = requireObjectEntries(params, 'agents', 'agents.restart');
+        const scope = teamScopeOf(ctx);
+        const from = actorOf(ctx);
+
+        const prepared = await Promise.all(
+          entries.map(async (entry): Promise<Prepared<AgentRestartLikeInput>> => {
+            const to = optionalEntryString(entry, 'to', 'agents.restart');
+            if (to === undefined) {
+              return { failure: fail('invalid_params', 'to must be a non-empty string') };
+            }
+            if (!(await targetInTeamScope(control, scope, to, true))) {
+              return { failure: fail('not_found', `agent not found: ${to}`) };
+            }
+            const startupPrompt = optionalEntryString(entry, 'startup_prompt', 'agents.restart');
+            const fromSessionId = optionalEntryString(entry, 'from_session_id', 'agents.restart');
+            return {
+              input: {
+                to,
+                ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
+                from,
+                ...(fromSessionId !== undefined ? { from_session_id: fromSessionId } : {}),
+              },
+            };
+          }),
+        );
+
+        const inputs = prepared
+          .filter((entry): entry is { input: AgentRestartLikeInput } => 'input' in entry)
+          .map((entry) => entry.input);
+        if (inputs.length === 0) return mergeBatchResults(prepared, []);
+        const batch = await control.restart(inputs);
+        return mergeBatchResults(prepared, batch.results);
+      },
+    },
+    {
+      /**
+       * `agents.compactFork`（0.34，write）：以父 Session 的压缩副本新建子 Session，
+       * 子 Session 成为新的 primary（epoch + 1）；父 Session / binding 不动。
+       */
+      name: 'agents.compactFork',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['agents'],
+        properties: {
+          agents: { type: 'array', items: agentCompactForkEntrySchema },
+        },
+      },
+      result_schema: agentCompactForkResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireAgentControl(deps.agent, ctx);
+        const entries = requireObjectEntries(params, 'agents', 'agents.compactFork');
+        const scope = teamScopeOf(ctx);
+        const from = actorOf(ctx);
+
+        const prepared = await Promise.all(
+          entries.map(async (entry): Promise<Prepared<AgentCompactForkLikeInput>> => {
+            const to = optionalEntryString(entry, 'to', 'agents.compactFork');
+            if (to === undefined) {
+              return { failure: fail('invalid_params', 'to must be a non-empty string') };
+            }
+            if (!(await targetInTeamScope(control, scope, to, true))) {
+              return { failure: fail('not_found', `agent not found: ${to}`) };
+            }
+            const startupPrompt = optionalEntryString(
+              entry,
+              'startup_prompt',
+              'agents.compactFork',
+            );
+            const fromSessionId = optionalEntryString(
+              entry,
+              'from_session_id',
+              'agents.compactFork',
+            );
+            return {
+              input: {
+                to,
+                ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
+                from,
+                ...(fromSessionId !== undefined ? { from_session_id: fromSessionId } : {}),
+              },
+            };
+          }),
+        );
+
+        const inputs = prepared
+          .filter((entry): entry is { input: AgentCompactForkLikeInput } => 'input' in entry)
+          .map((entry) => entry.input);
+        if (inputs.length === 0) return mergeBatchResults(prepared, []);
+        const batch = await control.compactFork(inputs);
+        return mergeBatchResults(prepared, batch.results);
+      },
+    },
+    {
+      /**
+       * `agents.fork`（0.34，write）：新建空 Session 的 Agent，不复制 transcript。
+       *
+       * 权限 / 可见性按 `agents.create`：team-scoped token 不能 fork。
+       * 不加 CLI。
+       */
+      name: 'agents.fork',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['agents'],
+        properties: {
+          agents: { type: 'array', items: agentForkEntrySchema },
+        },
+      },
+      result_schema: agentForkResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireAgentControl(deps.agent, ctx);
+        const entries = requireObjectEntries(params, 'agents', 'agents.fork');
+        const scope = teamScopeOf(ctx);
+        const from = actorOf(ctx);
+        if (scope !== undefined) {
+          return {
+            results: entries.map(() => fail('forbidden', 'team-scoped token cannot fork agents')),
+          };
+        }
+
+        const prepared = entries.map((entry): Prepared<AgentForkLikeInput> => {
+          const to = optionalEntryString(entry, 'to', 'agents.fork');
+          const name = optionalEntryString(entry, 'name', 'agents.fork');
+          if (to === undefined) {
+            return { failure: fail('invalid_params', 'to must be a non-empty string') };
+          }
+          return { input: { to, ...(name !== undefined ? { name } : {}), from } };
+        });
+
+        const inputs = prepared
+          .filter((entry): entry is { input: AgentForkLikeInput } => 'input' in entry)
+          .map((entry) => entry.input);
+        if (inputs.length === 0) return mergeBatchResults(prepared, []);
+        const batch = await control.fork(inputs);
         return mergeBatchResults(prepared, batch.results);
       },
     },

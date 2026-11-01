@@ -177,6 +177,20 @@ export type AgentCommand =
       to: string;
       startupPrompt: string;
     }
+  | {
+      /** 0.34：同一 Session 换新 ExecutionUnit；`--startup` 可选。 */
+      kind: 'restart';
+      json: boolean;
+      to: string;
+      startupPrompt?: string;
+    }
+  | {
+      /** 0.34：以压缩副本新建子 Session；`--startup` 可选。 */
+      kind: 'compactFork';
+      json: boolean;
+      to: string;
+      startupPrompt?: string;
+    }
   | { kind: 'close'; json: boolean; members: string[] }
   | { kind: 'list'; json: boolean; visibility?: AgentVisibilityArg; state?: AgentStateArg };
 
@@ -2246,7 +2260,7 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `agent create|send|inbox|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate；0.32 inbox） */
+/** `agent create|send|inbox|close|list|dispatch|rotate|restart|compact-fork`（0.17 Phase A；0.19 dispatch / rotate；0.32 inbox；0.34 restart / compact-fork） */
 function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
   if (sub === undefined || sub === '--help' || sub === '-h') {
@@ -2493,6 +2507,54 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       to,
       startupPrompt,
     };
+    return { ok: true, args };
+  }
+
+  if (sub === 'restart' || sub === 'compact-fork') {
+    const label = sub === 'restart' ? 'agent restart' : 'agent compact-fork';
+    let json = false;
+    let startupPrompt: string | undefined;
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--startup') {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        startupPrompt = value.value;
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for ${label}: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [to, extra] = positional;
+    if (to === undefined || to === '') {
+      return { ok: false, error: `${label} requires <to>` };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for ${label}: ${extra}` };
+    }
+    if (startupPrompt === '') {
+      return { ok: false, error: `${label} --startup must be non-empty` };
+    }
+    const shared = {
+      json,
+      to,
+      ...(startupPrompt !== undefined ? { startupPrompt } : {}),
+    };
+    args.agentCommand =
+      sub === 'restart' ? { kind: 'restart', ...shared } : { kind: 'compactFork', ...shared };
     return { ok: true, args };
   }
 

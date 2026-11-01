@@ -1,7 +1,7 @@
 ---
 title: Run 生命周期
 kind: current
-triggers: [run, resume, finalize, execution, checkpoint, cancel, active run, run_already_running]
+triggers: [run, resume, finalize, execution, checkpoint, cancel, active run, run_already_running, lease, fencing, execution unit lifecycle]
 paths: [packages/core/src/runtime/**, packages/core/src/types/run.ts]
 ---
 
@@ -74,4 +74,14 @@ finalizeRun(run, sessionState, outcome):
 <a id="finalize"></a>
 
 `resumeRun()` / `resumeSession()` 走同一条 `finalizeRun` 路径，因此用户取消同样发 `run.cancelled`，RunRecord 状态同样按 abort reason 映射为 `cancelled` / `interrupted`。`Run` 是 run 级瞬时状态的唯一来源（run id / session / branch / 计时 / usage / workingContext），可恢复进度在 `RunRecord`，见 [runtime-api.md](runtime-api.md#execution-unit)。
+
+<a id="lease"></a>
+
+## ExecutionUnit 与两级租约（0.34）
+
+- 每个需要执行的 body 持有两级租约：先获取 **binding lease**（同一 Agent binding 的排他写者），再获取 **session lease**（同一 Session 的排他写者）。释放顺序相反：先 session、后 binding。
+- 租约由 `LeaseServicePort` 提供 `LeaseGrant`（lease id / fencing token / `expires_at`）。续租间隔 `lease.renewMs`、TTL `lease.ttlMs`（默认 10000 / 30000，见 [CONFIG](../operations/CONFIG.md)）；进程退出或 dispose 时停止续租。
+- **fencing**：每次获取新租约 token 单调递增；ExecutionUnit 写 SessionEventLog / RunRecord 时携带 `fencing_token`，旧 token 的写入被拒绝（`stale_fence`）。读路径不带租约。
+- **过期与接管**：持有者崩溃后租约在 TTL 后过期，下一个 ExecutionUnit 可获取更高 fence 的租约并接管同一 Session；旧 holder 若恢复，其写入因 fence 过期被拒。
+- dispose 必须释放两级租约并清除续租定时器；不得残留租约文件或活跃定时器。
 

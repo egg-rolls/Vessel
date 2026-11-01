@@ -9,6 +9,7 @@
 
 // 上下文管理器 + 单一 token 估算（0.10 R1-10）
 export {
+  compactMessagesForFork,
   estimateMessagesTokens,
   estimateMessageTokens,
   estimateTokens,

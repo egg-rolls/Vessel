@@ -46,6 +46,8 @@ export interface RunRecord {
   error_envelope?: ErrorEnvelope;
   /** 指向 SessionEventLog 的 seq（唯一真相源游标） */
   event_cursor?: number;
+  /** ADR-098 C2：启动本 run 时持有的 SessionLease fencing token */
+  fencing_token?: number;
   created_at: number;
   updated_at: number;
   /** 0.5：所属 tenant；缺省视为 `default` */

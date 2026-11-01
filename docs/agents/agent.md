@@ -1,7 +1,7 @@
 ---
 title: AgentService 与 Team 约定
 kind: advisory
-triggers: [agent, member, team, session, dispatch, rotate, fork, spawn, peer, contractor, owner, freeze, budget, visibility, agent tool, permission, answered_by, human, deny-after, timeout, approval]
+triggers: [agent, member, team, session, dispatch, rotate, restart, compactFork, fork, spawn, peer, contractor, owner, freeze, budget, visibility, agent tool, permission, answered_by, human, deny-after, timeout, approval]
 paths: [packages/agent/**]
 applies_to: [N, M]
 ---
@@ -40,11 +40,11 @@ applies_to: [N, M]
 ## session / Body
 
 - 一个 agent 可同时有多个 live body（`body_id ≡ session_id`，每 agent ≤20，空闲 24h 自动 retire）；`primary_body_id` 是缺省投递目标；`rotate` 只退休 primary body，其它 body 与其在途 run 不受影响。快照 `version: 4`：`bodies[]` 是唯一真相，`current_body` / `body_history` 只读兼容。
-- 状态机：`created|idle|running|waiting_permission|completed|failed|cancelled|closed`；`stale` 只读兼容、不得再写入；重启后非 `left` 成员为 `idle + presence='gone'`（ADR-091/092/097）。
+- 状态机：`created|idle|running|waiting_permission|completed|failed|cancelled|closed`；`stale` 只读兼容、不得再写入；重启后非 `left` 成员为 `idle + presence='gone'`（ADR-091/092/097）。0.34 操作分离：`restart` 复用同一 Session（epoch + 1；先 dispose 旧 ExecutionUnit，再建新 ExecutionUnit，同 key 租约 fence 递增）；`compactFork` 以父 Session 的压缩副本新建子 Session 并成为新 primary（父 Session / binding 不动）；`fork` 新建空 Session、不复制 transcript。canonical RPC 为 `agents.restart` / `agents.compactFork` / `agents.fork`；CLI 只有 `vessel agent restart|compact-fork`，fork 不加 CLI。
 
 ## 投递与 Team
 
-- 准入唯一：`dispatch` 与 strict `send` 共用同一条 `admit`（可投性检查 → 目标 body mailbox → `scheduler.submit`）；live / rotating 入队，gone 先 single-flight resume 再入队；不得在每个入口重写状态检查或并发 spawn。fork 只在 `gone + resume` 失败后按 policy / 显式 `allow_fork` 发生；rotate 失败保持旧 primary（ADR-091/092/097）。
+- 准入唯一：`dispatch` 与 strict `send` 共用同一条 `admit`（可投性检查 → 目标 body mailbox → `scheduler.submit`）；live / rotating 入队，gone 先 single-flight resume 再入队；不得在每个入口重写状态检查或并发 spawn。fork 有两条入口：`gone + resume` 失败后按 policy / 显式 `allow_fork` 自动发生，或 canonical `agents.fork` 显式新建；rotate 失败保持旧 primary，restart / compactFork 失败零写入（ADR-091/092/097/098）。
 - close 的审批在权限层完成：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接放行；成员关闭 peer 必须经 bridge 由人类审批；root owner 记录与跨 Team contractor 必须拒绝；无 bridge 时 ask 必须 fail closed。owner close 级联自己的 private contractor，team 可见 contractor 保留。
 - Team 日志不是队列：无 `@` 的 post / reply / system 绝不产生 run；`@` 必须先写日志再逐条 `admit`；`TeamService` 是唯一写入点，reply 由 `run.completed.output` 驱动、失败 / 取消写 `system` 条目。
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；team-scoped token 只能访问自己的 `team_id`，不匹配 `not_found`。

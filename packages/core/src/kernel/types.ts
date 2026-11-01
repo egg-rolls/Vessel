@@ -188,11 +188,10 @@ export interface RunnableAgent {
 export interface ScheduledTask {
   agent: AgentHandle;
   /**
-   * 串行键（0.27 必填）：同一键同时最多一个 running。
-   * 统一入口总是 body/session id，因此不同 body 可并发、同 body 串行。
+   * 串行键 = `sessionId ?? agent.id`（0.34 Stage 3）：同一 session 同时最多一个
+   * running；不同 session 可并发。不再接受外部串行键覆盖。
    */
-  serialKey: string;
-  /** 成员默认 session；R2 用于 RunHandle.sessionId */
+  /** 成员默认 session；R2 用于 RunHandle.sessionId，也是默认串行键 */
   sessionId?: string;
   /**
    * 0.14.1（additive）：固定 run id，用于保持 `RunHandle.id` 与 durable run 一致；

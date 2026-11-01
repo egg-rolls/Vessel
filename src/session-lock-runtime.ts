@@ -1,7 +1,8 @@
 /**
- * RunnableAgent 的 session / run 写锁包装（0.15 DESIGN-0.14 §1.2）。
+ * RunnableAgent 的 run 写锁包装（0.15 DESIGN-0.14 §1.2 / 0.34 Stage 3）。
  *
- * 每次 `run()` 取目标 session 的写锁，`resumeRun()` 取 run 锁；
+ * Session 级排他已迁移到 `LeaseServicePort`（ExecutionUnit 在首个 run 前 acquire
+ * SessionLease）；本包装只保留 `resumeRun()` 的 `run` 级文件写锁。
  * REPL 进程级长锁由 bootstrap 另行持有，同进程重复获取由 session-lock 的引用计数消化。
  *
  * @module vessel/session-lock-runtime
@@ -28,13 +29,8 @@ export function withSessionWriteLock(
     events: runtime.events,
     pluginHost: runtime.pluginHost,
     async run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string> {
-      const id = sessionId !== undefined && sessionId !== '' ? sessionId : 'default';
-      const lock = await acquireSessionLock({ tenantDir, kind: 'session', id });
-      try {
-        return await runtime.run(input, sessionId, opts);
-      } finally {
-        await lock.release();
-      }
+      // session 级排他由 ExecutionUnit 持有的 SessionLease 负责；这里不再取文件锁。
+      return runtime.run(input, sessionId, opts);
     },
     async dispose(): Promise<void> {
       await runtime.dispose();

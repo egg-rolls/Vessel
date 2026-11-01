@@ -1023,6 +1023,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.limitWarning': 'limit warning · {key} {current}/{max}',
   'chat.notice.rotating': 'context rotating · {from} → {to}',
   'chat.notice.rotated': 'context rotated · {from} → {to} · epoch {epoch}',
+  'chat.notice.restarting': 'context restarting · {session} · epoch {from} → {epoch}',
+  'chat.notice.restarted': 'context restarted · {session} · epoch {from} → {epoch}',
+  'chat.notice.compactForked': 'context compact-forked · {from} → {to} · epoch {epoch}',
   'chat.role.assistant': 'Assistant',
   'chat.loadEarlier': 'Load earlier ({count} remaining)',
 
