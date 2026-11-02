@@ -909,6 +909,12 @@ export class ExecutionUnit {
     // per-Run 新实例 seed 会 clear，复用路径显式恢复同一口径。
     if (reuseLikeBaseline && this.lastRealTokens !== undefined) {
       execution.workingContext.updateRealTokens(this.lastRealTokens);
+    } else {
+      // V4 / G4：新进程续接（或进程内窗口重建）时用最近一次 RunRecord 的
+      // usage 作为真实锚点。SessionState.legacy_run 是 latest RunRecord 的
+      // 派生镜像，已随 wake 读取，不新增字段也不额外 I/O。
+      // 注意：多请求 run 的 usage 是累计值，会偏高；单请求 run 精确。
+      this.seedRealTokensFromStoredRun(execution, stored);
     }
 
     // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
@@ -1226,6 +1232,21 @@ export class ExecutionUnit {
     for (const message of history.messages) {
       add(message);
     }
+  }
+
+  /**
+   * V4 / G4：用最近一次 RunRecord 的 usage 恢复真实 token 锚点。
+   *
+   * `SessionState.legacy_run` 是 latest RunRecord 的派生快照（见
+   * `finalizeSessionState`）；prompt+completion 即最后一次请求的输入与输出。
+   * 多请求 run 的 `usage` 是整轮累计，锚点会偏高；单请求 run 精确。
+   * 最后一次请求之后追加的消息由 `WorkingContext.add()` 的估算增量补齐。
+   */
+  private seedRealTokensFromStoredRun(execution: Run, stored: SessionState | null): void {
+    const usage = stored?.legacy_run?.usage;
+    if (usage === undefined) return;
+    const total = (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
+    if (total > 0) execution.workingContext.updateRealTokens(total);
   }
 
   /**
