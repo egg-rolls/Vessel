@@ -1,9 +1,11 @@
 /**
  * Settings → Display：经 canonical `config.set` 写白名单键（0.15 E6）。
  *
- * 写入的是用户配置；gateway 未注入 writer 时显示只读并提示重启 / 注入。
+ * 值从 `configStore` 派生，本地只有按 key 的 `displayPending` overlay；
+ * 写成功后 await 一次 config 刷新，服务端值等于 pending 才清 overlay。
+ * gateway 未注入 writer 时显示只读。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
@@ -11,14 +13,16 @@ import { Button, Field, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { setLocale, t, useLocale } from '../../i18n';
 import {
+  confirmedDisplayKeys,
   DISPLAY_SETTINGS,
   type DisplaySettingDef,
   readDisplayValue,
+  resolveDisplayValues,
   toConfigValue,
 } from '../../state/display-settings';
 import { RUNTIME_MESSAGE_KINDS, useRuntimeVisibility } from '../../state/runtime-visibility';
 import { resourceData } from '../../state/useResource';
-import { useDisplaySettings } from '../../stores/uiStore';
+import { useUiStore } from '../../stores/uiStore';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
 function errorMessage(error: unknown): string {
@@ -157,24 +161,25 @@ export function DisplaySettingsView() {
   const connected = hasToken && connectionState === 'open';
   const available = hasToken && features.includes('config');
 
-  const { config, reloadConfig } = useConfigStoreApi();
+  const { config, reloadConfig, reloadConfigAsync } = useConfigStoreApi();
   useRefreshSignal(reloadConfig);
   const data = resourceData(config);
 
-  const { display, setDisplay } = useDisplaySettings();
+  const pending = useUiStore((state) => state.displayPending);
+  const setDisplayPending = useUiStore((state) => state.setDisplayPending);
+  const clearDisplayPending = useUiStore((state) => state.clearDisplayPending);
   const [saving, setSaving] = useState<string | undefined>();
   const [readOnly, setReadOnly] = useState(false);
 
-  // Mirror the gateway snapshot into the shared store (and localStorage) so the
-  // form values survive a reload and every consumer sees the same state.
+  // 服务端快照是唯一真相；本地只叠一层按 key 的乐观 overlay。
+  const display = useMemo(() => resolveDisplayValues(data, pending), [data, pending]);
+
+  // 服务端确认后清除 overlay；旧快照（值与 pending 不同）不会覆盖用户选择。
   useEffect(() => {
     if (!data) return;
-    const next: Record<string, string> = {};
-    for (const setting of DISPLAY_SETTINGS) {
-      next[setting.key] = readDisplayValue(data, setting.key);
-    }
-    setDisplay(next);
-  }, [data, setDisplay]);
+    const confirmed = confirmedDisplayKeys(data, pending);
+    if (confirmed.length > 0) clearDisplayPending(confirmed);
+  }, [data, pending, clearDisplayPending]);
 
   // The runtime context group is local-only: keep it available even when the
   // gateway config API is missing or disconnected.
@@ -218,25 +223,36 @@ export function DisplaySettingsView() {
   const change = async (setting: DisplaySettingDef, raw: string) => {
     const value = toConfigValue(setting, raw);
     if (value === undefined) return;
-    const previous = display[setting.key] ?? '';
-    setDisplay({ [setting.key]: raw });
+    // 乐观 overlay：旧快照到达时仍显示用户选择，直到服务端值确认。
+    setDisplayPending({ [setting.key]: raw });
     setSaving(setting.key);
     try {
-      await client.setConfigValue(setting.key, value);
-      // 显示 / 可见性由 config store 驱动：写成功后立即刷新快照，界面无需重连。
-      reloadConfig();
+      // 只有 config.set 失败才算“保存失败”；刷新失败不影响已写入的事实。
+      try {
+        await client.setConfigValue(setting.key, value);
+      } catch (error) {
+        // 失败只清本次写入值，回到服务端值；不恢复更早的未确认选择。
+        clearDisplayPending([{ key: setting.key, value: raw }]);
+        if (isUnavailable(error)) {
+          setReadOnly(true);
+          toast.error(t('settings.display.writeUnavailable'));
+        } else {
+          toast.error(t('settings.display.saveFailed', { detail: errorMessage(error) }));
+        }
+        return;
+      }
+
       if (setting.key === 'ui.language' && (value === 'zh-CN' || value === 'en')) {
         setLocale(value);
       }
-      toast.success(t('settings.display.saved', { key: setting.key }));
-    } catch (error) {
-      setDisplay({ [setting.key]: previous });
-      if (isUnavailable(error)) {
-        setReadOnly(true);
-        toast.error(t('settings.display.writeUnavailable'));
-      } else {
-        toast.error(t('settings.display.saveFailed', { detail: errorMessage(error) }));
+      // 刷新失败/被竞态抢先时 fresh 为 undefined：保留 pending，等轮询确认。
+      const fresh = await reloadConfigAsync().catch(() => undefined);
+      if (fresh) {
+        const serverValue = readDisplayValue(fresh, setting.key);
+        // 只有服务端值真的等于 pending 才清除；且只清本次写入的值（快速 A→B 不清 B）。
+        if (serverValue === raw) clearDisplayPending([{ key: setting.key, value: raw }]);
       }
+      toast.success(t('settings.display.saved', { key: setting.key }));
     } finally {
       setSaving(undefined);
     }

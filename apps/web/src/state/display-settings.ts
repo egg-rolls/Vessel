@@ -56,6 +56,39 @@ export function readDisplayValue(source: unknown, key: string): string {
   return '';
 }
 
+/**
+ * 服务端快照 + 本地乐观 overlay：pending 优先。
+ * 保存中到达的旧快照不会覆盖用户刚选的值。
+ */
+export function resolveDisplayValues(
+  source: unknown,
+  pending: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const setting of DISPLAY_SETTINGS) {
+    next[setting.key] = readDisplayValue(source, setting.key);
+  }
+  return { ...next, ...pending };
+}
+
+/** 一条待确认的乐观写入；清 overlay 时必须按键+值匹配，避免清掉更新的选择。 */
+export interface DisplayPendingEntry {
+  key: string;
+  value: string;
+}
+
+/** pending 中已被服务端快照确认的条目（key+value）；用于按值清除 overlay。 */
+export function confirmedDisplayKeys(
+  source: unknown,
+  pending: Readonly<Record<string, string>>,
+): DisplayPendingEntry[] {
+  const confirmed: DisplayPendingEntry[] = [];
+  for (const [key, value] of Object.entries(pending)) {
+    if (readDisplayValue(source, key) === value) confirmed.push({ key, value });
+  }
+  return confirmed;
+}
+
 /** 把表单值转成 `config.set` 的 value；非法返回 undefined。 */
 export function toConfigValue(
   setting: DisplaySettingDef,

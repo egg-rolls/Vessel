@@ -6,7 +6,7 @@
 import { useCallback, useEffect } from 'react';
 import { useConnection } from '../gateway/ConnectionProvider';
 import type { CapabilityManifest, ConfigResponse, ConfigSourcesResponse } from '../gateway/types';
-import type { ResourceState } from '../state/useResource';
+import { type ResourceState, resourceData } from '../state/useResource';
 import { type PermissionArrays, useConfigStore } from './configStore';
 import { usePolledAction } from './usePolledAction';
 
@@ -26,6 +26,8 @@ export interface ConfigStoreApi {
   sources: ResourceState<ConfigSourcesResponse>;
   capabilities: ResourceState<CapabilityManifest>;
   reloadConfig: () => void;
+  /** Force-reload and resolve with the snapshot that landed (or undefined when offline). */
+  reloadConfigAsync: () => Promise<ConfigResponse | undefined>;
   reloadSources: () => void;
   reloadCapabilities: () => void;
   applyPermissionLists: (lists: PermissionArrays) => void;
@@ -83,12 +85,17 @@ export function useConfigStoreApi(options: UseConfigStoreOptions = {}): ConfigSt
     },
   );
 
-  const reloadConfig = useCallback(() => {
-    if (!hasToken) return;
-    void useConfigStore
+  const reloadConfigAsync = useCallback(async (): Promise<ConfigResponse | undefined> => {
+    if (!hasToken) return undefined;
+    await useConfigStore
       .getState()
       .loadConfig(client, { tenantId: tenantId ?? undefined, epoch, force: true });
+    return resourceData(useConfigStore.getState().config);
   }, [client, epoch, hasToken, tenantId]);
+
+  const reloadConfig = useCallback(() => {
+    void reloadConfigAsync();
+  }, [reloadConfigAsync]);
 
   const reloadSources = useCallback(() => {
     if (!hasToken) return;
@@ -107,6 +114,7 @@ export function useConfigStoreApi(options: UseConfigStoreOptions = {}): ConfigSt
     sources,
     capabilities,
     reloadConfig,
+    reloadConfigAsync,
     reloadSources,
     reloadCapabilities,
     applyPermissionLists: useConfigStore.getState().applyPermissionLists,
