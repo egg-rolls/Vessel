@@ -15,14 +15,18 @@ import type {
 } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { RotateFailureView } from '../../state/teams';
+import { useStickyBottom } from '../chat/useStickyBottom';
 import type { MentionChip } from './mention';
 import { TeamComposer } from './TeamComposer';
 import type { TeamMessageView } from './TeamMessageRow';
 import { TeamPendingBar } from './TeamPendingBar';
 import { TeamTranscript } from './TeamTranscript';
 import type { TeamChatDecidePermission, TeamChatRespondAsk } from './team-chat-types';
+import { teamChatResetKey, teamFollowKey } from './team-scroll';
 
 export interface TeamChatMainProps {
+  /** 稳定 chat key：detail 尚未到达时也能区分会话。 */
+  teamId: string;
   detail: TeamDetail | undefined;
   error: { message: string; code?: string } | undefined;
   hasToken: boolean;
@@ -58,6 +62,7 @@ export interface TeamChatMainProps {
 }
 
 export function TeamChatMain({
+  teamId,
   detail,
   error,
   hasToken,
@@ -91,10 +96,19 @@ export function TeamChatMain({
   targetLabel,
   retryHint,
 }: TeamChatMainProps) {
+  // detail 到达时再 settle 一次（等布局稳定再贴底）；加载更早历史不改这个 key。
+  const resetKey = teamChatResetKey(teamId, detail?.team.team_id);
+  // 用“最后一条消息的身份”而不是 rows.length：loadEarlier 只在前方追加旧消息。
+  const followKey = teamFollowKey(rows);
+  const { scrollRef, pinned, onScroll, scrollToBottom } = useStickyBottom({
+    resetKey,
+    followKey,
+  });
+
   return (
     <div className="team-chat-main">
       {detail && error && <StaleNotice message={t('team.error.stale')} onRetry={onRefresh} />}
-      <div className="team-transcript-scroll">
+      <div className="team-transcript-scroll" ref={scrollRef} onScroll={onScroll}>
         {rotateFailure && (
           <div
             className={cn(
@@ -156,6 +170,11 @@ export function TeamChatMain({
           <p className="m-0 self-center font-mono text-xs text-faint" role="status">
             {t('team.chat.historyLimited', { count: visibleCount, limit })}
           </p>
+        )}
+        {!pinned && (
+          <button type="button" className="to-bottom" onClick={scrollToBottom}>
+            {t('chat.toBottom')}
+          </button>
         )}
       </div>
 

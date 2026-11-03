@@ -90,6 +90,7 @@ export function TeamChat(props: TeamChatProps) {
 
       <div className="team-chat-body">
         <TeamChatMain
+          teamId={teamId}
           detail={detail}
           error={error}
           hasToken={hasToken}
