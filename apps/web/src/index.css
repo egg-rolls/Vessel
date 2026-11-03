@@ -175,11 +175,11 @@
 }
 
 @utility modal-fade {
-  animation: fade-in 0.16s var(--ease);
+  animation: fade-in 0.14s var(--ease);
 }
 
 @utility modal-rise {
-  animation: rise-in 0.2s var(--ease);
+  animation: rise-in 0.18s var(--ease);
 }
 
 /* 底部导航 sheet：小屏额外给 safe-area 留白。 */

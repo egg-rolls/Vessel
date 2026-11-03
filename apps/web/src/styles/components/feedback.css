@@ -17,9 +17,22 @@
   display: none;
 }
 
+/* 新 chip 只在挂载时进入一次；已有 chip 不重复播放。 */
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.98);
+  }
+}
+
+.message-chip {
+  animation: message-in 160ms var(--ease);
+}
+
+/* 弹窗面板：淡入 + 轻微上浮 / 收束。 */
 @keyframes rise-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(4px) scale(0.985);
   }
 }

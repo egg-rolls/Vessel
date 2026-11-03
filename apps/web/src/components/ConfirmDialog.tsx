@@ -39,12 +39,15 @@ export function ConfirmDialog({
       closeOnBackdrop={!busy}
       size="sm"
     >
-      <h2 className="font-serif text-xl font-semibold leading-tight text-ink">{title}</h2>
-      <div id={bodyId} className="flex flex-col gap-3 text-md leading-relaxed text-muted">
+      <h2 className="modal-title">{title}</h2>
+      <div
+        id={bodyId}
+        className="flex flex-col gap-3 text-md leading-relaxed text-muted text-pretty"
+      >
         {body}
       </div>
       {extra}
-      <div className="mt-1 flex flex-wrap justify-end gap-3">
+      <div className="modal-actions" aria-busy={busy || undefined}>
         <Button onClick={onCancel} disabled={busy} data-autofocus>
           {resolvedCancel}
         </Button>

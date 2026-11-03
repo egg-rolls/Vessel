@@ -73,7 +73,7 @@ export function AppBar({
         {routeBreadcrumb(route)}
       </span>
 
-      <div className="flex min-w-0 flex-1 justify-center px-2">{center}</div>
+      <div className="flex min-w-0 flex-1 justify-center px-2 max-compact:px-1">{center}</div>
 
       <LanguageToggle />
 

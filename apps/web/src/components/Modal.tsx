@@ -49,7 +49,8 @@ export function useModalA11y(onClose: () => void) {
         : [];
 
     const preferred = root?.querySelector<HTMLElement>('[data-autofocus]');
-    (preferred ?? focusables()[0])?.focus();
+    // 没有任何可聚焦元素时把焦点放到面板本身（tabIndex=-1），焦点不留在遮罩外。
+    (preferred ?? focusables()[0] ?? root)?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -129,7 +130,7 @@ export function ModalShell({
       <div
         ref={dialogRef}
         className={cn(
-          'modal-rise relative flex max-h-[min(86dvh,var(--modal-max-h))] w-full flex-col gap-2 overflow-hidden rounded-xl bg-raised p-5 shadow-elev-4 max-compact:p-4',
+          'modal-rise relative flex max-h-[min(86dvh,var(--modal-max-h))] w-full flex-col gap-3 overflow-hidden rounded-lg border border-line bg-raised p-5 shadow-elev-4 max-compact:p-4',
           MODAL_WIDTH[size],
           className,
         )}
@@ -137,10 +138,11 @@ export function ModalShell({
         aria-modal="true"
         aria-label={label}
         aria-describedby={describedBy}
+        tabIndex={-1}
       >
         <div
           className={cn(
-            'flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain p-1 -m-1',
+            'flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain p-1 -m-1',
             bodyClassName,
           )}
         >
