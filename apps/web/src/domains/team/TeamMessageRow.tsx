@@ -7,8 +7,7 @@
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { useOptionalToast } from '../../components/ToastProvider';
-import { IconButton } from '../../components/Tooltip';
-import { Badge, Icon, MessageActions, useMessageCopy } from '../../components/ui';
+import { Badge, type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { TeamDelivery, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -152,6 +151,29 @@ export function TeamMessageRow({
         ? ' opacity-70'
         : '';
 
+  // 所有操作收进同一行：hover / focus 时整组显现，不再各自堆叠。
+  const actions: MessageAction[] = [];
+  if (message.content.trim().length > 0 && message.sendStatus !== 'sending') {
+    actions.push({ id: 'copy', label: t('common.copy'), onSelect: () => copy(message.content) });
+  }
+  if ((isReply || isAgent) && canViewSession && onViewSession) {
+    actions.push({
+      id: 'transcript',
+      label: t('team.message.viewBody'),
+      onSelect: onViewSession,
+    });
+  }
+  if (federationFrom) {
+    actions.push({
+      id: 'reply',
+      label: t('team.federation.reply'),
+      onSelect: copyFederationAddress,
+    });
+  }
+  if (message.sendStatus === 'failed' && onRetry) {
+    actions.push({ id: 'retry', label: t('team.delivery.retry'), onSelect: onRetry });
+  }
+
   return (
     <div
       className={`group flex max-w-full flex-col gap-1 ${isHuman ? 'team-message-self' : 'team-message-agent'}${statusClass}`}
@@ -191,32 +213,7 @@ export function TeamMessageRow({
         <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
       </div>
 
-      {message.content.trim().length > 0 && message.sendStatus !== 'sending' && (
-        <MessageActions
-          className="self-start"
-          actions={[{ id: 'copy', label: t('common.copy'), onSelect: () => copy(message.content) }]}
-        />
-      )}
-
-      {(isReply || isAgent) && canViewSession && onViewSession && (
-        <IconButton
-          label={t('team.message.viewBody')}
-          className="self-start"
-          onClick={onViewSession}
-        >
-          <Icon name="transcript" />
-        </IconButton>
-      )}
-
-      {federationFrom && (
-        <IconButton
-          label={t('team.federation.reply')}
-          className="self-start"
-          onClick={copyFederationAddress}
-        >
-          <Icon name="reply" />
-        </IconButton>
-      )}
+      <MessageActions className={isHuman ? 'self-end' : 'self-start'} actions={actions} />
 
       {message.deliveries && <DeliveryNotes deliveries={message.deliveries} />}
 
@@ -228,11 +225,6 @@ export function TeamMessageRow({
           <StatusChip status="failed" label={t('team.delivery.failed')} />
           {message.sendError && (
             <span className="font-mono text-xs">{truncate(message.sendError, 160)}</span>
-          )}
-          {onRetry && (
-            <IconButton label={t('team.delivery.retry')} onClick={onRetry}>
-              <Icon name="retry" />
-            </IconButton>
           )}
         </div>
       )}

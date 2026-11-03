@@ -187,9 +187,9 @@ export function useChatSubmit({
     await submitText(input);
   };
 
-  /** 重试：把前一条 user 内容在同一 session 重新提交；会追加新消息，不改历史。 */
+  /** 重试：把用户内容在原 session 重新提交；历史删除由调用方确认后先完成。 */
   const handleRetry = async (text: string) => {
-    if (await submitText(text)) toast.info(t('chat.message.retryHint'));
+    await submitText(text);
   };
 
   // 引用保持稳定：memo(RunItems) 依赖这几个回调，避免每个 token 让全部实时项重渲染。

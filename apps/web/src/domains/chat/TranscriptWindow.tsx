@@ -80,20 +80,20 @@ export function TranscriptWindow({
   onCancelQueued: (runId: string) => void;
   onConfigureConnection: () => void;
   onGoChat: () => void;
-  onEditMessage: (text: string) => void;
-  onRetryMessage: (text: string) => void;
+  onEditMessage: (keepMessages: number, text: string) => void;
+  onRetryMessage: (keepMessages: number, text: string) => void;
 }) {
   // 打开 / 切换会话的 reset key：detail 到达（hydrate）会再触发一次稳定贴底；
   // 加载更早历史不改变这两个字段，因此不会跳底。
   const resetKey = selectedId ? `${selectedId}:${detailSessionId ?? ''}` : null;
   const followKey = `${snapshotVersion}:${renderedGroups.length}:${visibleQueued.length}`;
-  const { scrollRef, pinned, onScroll, scrollToBottom } = useStickyBottom({
+  const { scrollRef, pinned, onScroll, scrollToBottom, userIntentProps } = useStickyBottom({
     resetKey,
     followKey,
   });
 
   return (
-    <div className="conversation-scroll" ref={scrollRef} onScroll={onScroll}>
+    <div className="conversation-scroll" ref={scrollRef} onScroll={onScroll} {...userIntentProps}>
       {!hasToken ? (
         <EmptyState
           title={t('chat.empty.noConnectionTitle')}

@@ -100,7 +100,7 @@ export function TeamChatMain({
   const resetKey = teamChatResetKey(teamId, detail?.team.team_id);
   // 用“最后一条消息的身份”而不是 rows.length：loadEarlier 只在前方追加旧消息。
   const followKey = teamFollowKey(rows);
-  const { scrollRef, pinned, onScroll, scrollToBottom } = useStickyBottom({
+  const { scrollRef, pinned, onScroll, scrollToBottom, userIntentProps } = useStickyBottom({
     resetKey,
     followKey,
   });
@@ -108,7 +108,12 @@ export function TeamChatMain({
   return (
     <div className="team-chat-main">
       {detail && error && <StaleNotice message={t('team.error.stale')} onRetry={onRefresh} />}
-      <div className="team-transcript-scroll" ref={scrollRef} onScroll={onScroll}>
+      <div
+        className="team-transcript-scroll"
+        ref={scrollRef}
+        onScroll={onScroll}
+        {...userIntentProps}
+      >
         {rotateFailure && (
           <div
             className={cn(

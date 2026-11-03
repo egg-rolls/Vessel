@@ -25,17 +25,20 @@ function MessageTime({ message, block = false }: { message: Message; block?: boo
 
 function TranscriptMessage({
   message,
+  messageIndex,
   previousUser,
   onCopy,
   onEdit,
   onRetry,
 }: {
   message: Message;
-  /** 该助手消息前一条真实用户输入；缺失时不提供重试。 */
-  previousUser?: string;
+  /** 该消息在 `sessions.get` 的 `session.messages` 里的下标；缺失时不提供撤回。 */
+  messageIndex: number | undefined;
+  /** 该助手消息前一条真实用户输入及其在 `session.messages` 里的下标。 */
+  previousUser?: { text: string; index: number };
   onCopy: (text: string) => void;
-  onEdit: (text: string) => void;
-  onRetry: (text: string) => void;
+  onEdit: (keepMessages: number, text: string) => void;
+  onRetry: (keepMessages: number, text: string) => void;
 }) {
   if (message.role === 'system') return null;
 
@@ -57,10 +60,19 @@ function TranscriptMessage({
   if (message.role === 'user') {
     const actions: MessageAction[] = [];
     if (message.content.trim().length > 0) {
-      actions.push(
-        { id: 'copy', label: t('chat.message.copy'), onSelect: () => onCopy(message.content) },
-        { id: 'edit', label: t('chat.message.edit'), onSelect: () => onEdit(message.content) },
-      );
+      actions.push({
+        id: 'copy',
+        label: t('chat.message.copy'),
+        onSelect: () => onCopy(message.content),
+      });
+      // 撤回必须用 `sessions.get` 的完整消息下标，不能用可见窗口下标。
+      if (messageIndex !== undefined) {
+        actions.push({
+          id: 'edit',
+          label: t('chat.message.edit'),
+          onSelect: () => onEdit(messageIndex, message.content),
+        });
+      }
     }
     return (
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
@@ -83,11 +95,11 @@ function TranscriptMessage({
     });
   }
   // 中间轮次的 assistant 消息带 tool_calls；重试只给最终答复，避免一轮出现多个重试。
-  if (calls.length === 0 && previousUser !== undefined && previousUser.trim().length > 0) {
+  if (calls.length === 0 && previousUser !== undefined && previousUser.text.trim().length > 0) {
     actions.push({
       id: 'retry',
       label: t('chat.message.retry'),
-      onSelect: () => onRetry(previousUser),
+      onSelect: () => onRetry(previousUser.index, previousUser.text),
     });
   }
   return (
@@ -114,23 +126,22 @@ function TranscriptMessage({
 }
 
 /**
- * 找该助手消息前一条真实用户输入。`allMessages` 是完整可见序列（跨窗口回溯）；
- * runtime 上下文消息（`vessel:*`）不是用户输入，跳过。
+ * 找该助手消息前一条真实用户输入及其下标。`allMessages` 是 `sessions.get` 的完整
+ * 消息序列（跨窗口回溯），返回的下标直接作为 `keep_messages`；runtime 上下文消息
+ * （`vessel:*`）不是用户输入，跳过。
  */
-function previousUserContent(
+function previousUserMessage(
   message: Message,
-  index: number,
-  messages: readonly Message[],
   allMessages: readonly Message[] | undefined,
-): string | undefined {
-  if (message.role !== 'assistant') return undefined;
-  const source = allMessages ?? messages;
-  const currentIndex = allMessages ? source.indexOf(message) : index;
+): { text: string; index: number } | undefined {
+  if (message.role !== 'assistant' || !allMessages) return undefined;
+  const currentIndex = allMessages.indexOf(message);
+  if (currentIndex < 0) return undefined;
   for (let cursor = currentIndex - 1; cursor >= 0; cursor -= 1) {
-    const candidate = source[cursor];
+    const candidate = allMessages[cursor];
     if (candidate?.role !== 'user') continue;
     if (runtimeMessageKind(candidate) !== undefined) continue;
-    return candidate.content;
+    return { text: candidate.content, index: cursor };
   }
   return undefined;
 }
@@ -141,12 +152,15 @@ function withDayGroups(
   startIndex: number,
   allMessages: readonly Message[] | undefined,
   onCopy: (text: string) => void,
-  onEdit: (text: string) => void,
-  onRetry: (text: string) => void,
+  onEdit: (keepMessages: number, text: string) => void,
+  onRetry: (keepMessages: number, text: string) => void,
 ): ReactNode[] {
   const nodes: ReactNode[] = [];
   let lastDay: string | null = null;
   messages.forEach((message, index) => {
+    // 撤回下标只认 `sessions.get` 的完整消息序列；对象不在其中时不提供撤回。
+    const sourceIndex = allMessages?.indexOf(message);
+    const messageIndex = sourceIndex !== undefined && sourceIndex >= 0 ? sourceIndex : undefined;
     const day = message.timestamp !== undefined ? localDayKey(message.timestamp) : null;
     if (day && day !== lastDay) {
       nodes.push(
@@ -164,7 +178,8 @@ function withDayGroups(
         // biome-ignore lint/suspicious/noArrayIndexKey: 窗口切片用完整列表下标做稳定 key
         key={`${startIndex + index}`}
         message={message}
-        previousUser={previousUserContent(message, index, messages, allMessages)}
+        messageIndex={messageIndex}
+        previousUser={previousUserMessage(message, allMessages)}
         onCopy={onCopy}
         onEdit={onEdit}
         onRetry={onRetry}
@@ -191,10 +206,10 @@ export function Transcript({
   startIndex: number;
   hiddenCount: number;
   onLoadEarlier: () => void;
-  /** 编辑 = 把原文写回 Composer，不删除原消息。 */
-  onEditMessage: (text: string) => void;
-  /** 重试 = 用前一条用户内容重新提交。 */
-  onRetryMessage: (text: string) => void;
+  /** 编辑 = 确认后删除该消息及其后历史，并把原文写回 Composer。 */
+  onEditMessage: (keepMessages: number, text: string) => void;
+  /** 重试 = 确认后删除该回复及其后历史，并重新发送前一条用户内容。 */
+  onRetryMessage: (keepMessages: number, text: string) => void;
   /** 实时 run 的展开项与排队 notice：与历史消息共享同一列表与间距。 */
   children?: ReactNode;
 }) {

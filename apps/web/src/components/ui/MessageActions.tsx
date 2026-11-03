@@ -7,7 +7,7 @@ import { cn } from './cn';
 import { Icon } from './Icon';
 
 export interface MessageAction {
-  id: 'copy' | 'edit' | 'retry';
+  id: 'copy' | 'edit' | 'retry' | 'transcript' | 'reply';
   /** 已 i18n，直接进 Tooltip / aria-label。 */
   label: string;
   disabled?: boolean;
@@ -52,7 +52,7 @@ export function MessageActions({ actions, className }: MessageActionsProps) {
       role="group"
       aria-label={t('chat.message.actions')}
       className={cn(
-        'flex flex-wrap items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100',
+        'flex w-fit flex-row flex-nowrap items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100',
         className,
       )}
     >

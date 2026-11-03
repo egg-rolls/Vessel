@@ -2,12 +2,20 @@
  * 聊天窗吸附滚动的 React 绑定。纯决策在 `sticky-bottom.ts`，这里只负责
  * rAF / timer / ResizeObserver 的接线与 pinned state。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type HTMLAttributes, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   STICKY_BOTTOM_THRESHOLD_PX,
   STICKY_FOLLOW_INTERVAL_MS,
   StickyBottomController,
 } from './sticky-bottom';
+
+/** 手势后这段时间内的 scroll 视为用户滚动（覆盖滚动动画 / 惯性）。 */
+export const STICKY_USER_INTENT_WINDOW_MS = 500;
+
+export type ScrollUserIntentProps = Pick<
+  HTMLAttributes<HTMLDivElement>,
+  'onWheel' | 'onTouchStart' | 'onTouchMove' | 'onKeyDown' | 'onPointerDown'
+>;
 
 export interface UseStickyBottomOptions {
   /**
@@ -27,6 +35,8 @@ export interface UseStickyBottomResult {
   onScroll: () => void;
   /** 「回到底部」：pinned + smooth；流式跟随不使用 smooth。 */
   scrollToBottom: () => void;
+  /** 手势监听：展开到滚动容器上，用于区分用户滚动与程序化滚动。 */
+  userIntentProps: ScrollUserIntentProps;
 }
 
 export function useStickyBottom({
@@ -42,6 +52,8 @@ export function useStickyBottom({
   } | null>(null);
   const [pinned, setPinned] = useState(true);
   const followTimer = useRef<number | undefined>(undefined);
+  /** 最近一次用户手势的时间戳；窗口内的 scroll 按 userInitiated 处理。 */
+  const userIntentUntil = useRef(0);
 
   const scrollRef = useCallback((element: HTMLDivElement | null) => {
     elementRef.current = element;
@@ -117,10 +129,25 @@ export function useStickyBottom({
 
   useEffect(() => clearFollowTimer, [clearFollowTimer]);
 
+  const markUserIntent = useCallback(() => {
+    userIntentUntil.current = Date.now() + STICKY_USER_INTENT_WINDOW_MS;
+  }, []);
+
+  const userIntentProps = useMemo<ScrollUserIntentProps>(
+    () => ({
+      onWheel: markUserIntent,
+      onTouchStart: markUserIntent,
+      onTouchMove: markUserIntent,
+      onKeyDown: markUserIntent,
+      onPointerDown: markUserIntent,
+    }),
+    [markUserIntent],
+  );
+
   const onScroll = useCallback(() => {
     const active = controller();
     if (!active) return;
-    setPinned(active.onScroll());
+    setPinned(active.onScroll(Date.now() < userIntentUntil.current));
   }, [controller]);
 
   const scrollToBottom = useCallback(() => {
@@ -130,5 +157,5 @@ export function useStickyBottom({
     setPinned(true);
   }, [controller]);
 
-  return { scrollRef, pinned, onScroll, scrollToBottom };
+  return { scrollRef, pinned, onScroll, scrollToBottom, userIntentProps };
 }

@@ -1057,9 +1057,15 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.message.copy': 'Copy',
   'chat.message.copied': 'Copied',
   'chat.message.edit': 'Edit',
-  'chat.message.editHint': 'Loaded into the composer; edit and send again',
   'chat.message.retry': 'Retry',
-  'chat.message.retryHint': 'Resent as a new run',
+  'chat.message.rewind.editTitle': 'Edit message',
+  'chat.message.rewind.editBody':
+    'This removes this message and everything after it, then puts the text back in the composer. This cannot be undone.',
+  'chat.message.rewind.retryTitle': 'Regenerate',
+  'chat.message.rewind.retryBody':
+    'This removes this reply and everything after it, then resends the previous user message. This cannot be undone.',
+  'chat.message.rewind.confirm': 'Continue',
+  'chat.message.rewind.done': 'Rewound',
 
   // Runs
   'runs.title': 'Runs',

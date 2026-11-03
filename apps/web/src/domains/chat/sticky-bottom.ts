@@ -53,12 +53,17 @@ export class StickyBottomController {
   /** “回到底部”的 smooth 动画期间保持 pinned，避免按钮闪烁。 */
   private smoothActive = false;
   private lastScrollTop: number;
+  /** 上一次观察到的内容高度：高度变化 = 内容增长，不是用户滚动。 */
+  private lastHeight: number;
+  /** 最近一次程序化 jump 的落点；用于吞掉紧随其后的 scroll echo。 */
+  private lastJumpTop: number | null = null;
 
   constructor(
     private readonly box: StickyScrollBox,
     private readonly options: StickyBottomOptions = {},
   ) {
     this.lastScrollTop = box.scrollTop;
+    this.lastHeight = box.scrollHeight;
   }
 
   get pinned(): boolean {
@@ -73,9 +78,37 @@ export class StickyBottomController {
     return (this.options.now ?? Date.now)();
   }
 
-  /** 用户滚动：阈值内重新吸附，超出则脱离。smooth 动画期间不抖动。 */
-  onScroll(): boolean {
+  /**
+   * 滚动事件。`userInitiated` 由 `useStickyBottom` 依据最近的手势（500ms 窗口）传入。
+   *
+   * 程序化滚动（内容增长后的跟随、jump、smooth）也会触发 scroll；只看像素距离会把
+   * 「一帧内大量新内容把 distance 推过阈值」误判成用户上滚，从而解除跟随。因此：
+   * - 非用户滚动且内容高度变化 → 不动 pinned（增长不是用户行为）。
+   * - 非用户滚动且 scrollTop 等于最近一次 jump 落点（±1px）→ 吞掉 echo。
+   * - 其余非用户滚动（高度不变、位置变化）仍按距离判定，覆盖滚动条拖动。
+   * - 用户手势 → 原逻辑（阈值吸附、脱离、smooth 打断）。
+   */
+  onScroll(userInitiated = false): boolean {
     const top = this.box.scrollTop;
+    const height = this.box.scrollHeight;
+    const heightChanged = height !== this.lastHeight;
+    this.lastHeight = height;
+
+    if (!userInitiated) {
+      if (heightChanged) {
+        this.lastScrollTop = top;
+        return this.pinnedValue;
+      }
+      if (this.lastJumpTop !== null && Math.abs(top - this.lastJumpTop) <= 1) {
+        // 程序化 jump 的 scroll echo：位置没变，不重新判定。
+        this.lastJumpTop = null;
+        this.lastScrollTop = top;
+        return this.pinnedValue;
+      }
+    } else {
+      this.lastJumpTop = null;
+    }
+
     // 用户上滚打断 smooth 动画：立即交还控制权，不继续吸附。
     if (this.smoothActive && top < this.lastScrollTop) this.smoothActive = false;
     this.lastScrollTop = top;
@@ -112,6 +145,9 @@ export class StickyBottomController {
     this.smoothActive = false;
     this.box.scrollTop = this.box.scrollHeight;
     this.lastScrollTop = this.box.scrollTop;
+    // jump 自身会触发 scroll；记录落点与当时高度，供 echo 判定。
+    this.lastJumpTop = this.box.scrollTop;
+    this.lastHeight = this.box.scrollHeight;
     this.lastFollowAt = this.now();
   }
 
@@ -171,8 +207,11 @@ export class StickyBottomController {
 
   /** 容器高度变化（dock / 窗口）：pinned 时贴底，未 pinned 不抢。 */
   onResize(): void {
+    // 无论是否 pinned 都要同步高度快照，避免下一次 scroll 误判成“内容增长”。
+    this.lastHeight = this.box.scrollHeight;
     if (this.settling || !this.pinnedValue) return;
     this.box.scrollTop = this.box.scrollHeight;
     this.lastScrollTop = this.box.scrollTop;
+    this.lastJumpTop = this.box.scrollTop;
   }
 }

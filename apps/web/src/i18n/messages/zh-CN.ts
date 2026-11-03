@@ -1021,9 +1021,15 @@ export const messages = {
   'chat.message.copy': '复制',
   'chat.message.copied': '已复制',
   'chat.message.edit': '编辑',
-  'chat.message.editHint': '已填入输入框，修改后重新发送',
   'chat.message.retry': '重试',
-  'chat.message.retryHint': '已重新发起请求',
+  'chat.message.rewind.editTitle': '编辑消息',
+  'chat.message.rewind.editBody':
+    '将删除这条消息及其后的全部内容，并把原文放回输入框。此操作不可撤销。',
+  'chat.message.rewind.retryTitle': '重新生成',
+  'chat.message.rewind.retryBody':
+    '将删除这条回复及其后的全部内容，并重新发送上一条用户消息。此操作不可撤销。',
+  'chat.message.rewind.confirm': '继续',
+  'chat.message.rewind.done': '已撤回',
 
   // Runs
   'runs.title': '运行',

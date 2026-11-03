@@ -98,6 +98,8 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
  * `agent.restarted` / `agent.compact_forked`）不在此列，聊天窗继续显示。
  */
 export const CHAT_HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set([
+  // rewind 是历史删除的持久化标记，不是对话内容：永不渲染。
+  'session.rewound',
   'agent.spawned',
   'agent.message.queued',
   'agent.message.sent',

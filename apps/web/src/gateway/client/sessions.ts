@@ -57,6 +57,17 @@ export abstract class SessionsClient extends RpcClient {
     return this.rpc<DeleteSessionResult>('sessions.delete', { session_id: sessionId });
   }
 
+  /**
+   * 撤回：删除 `keepMessages` 及其后的全部历史（保留 `[0, keepMessages)`）。
+   * `keepMessages` 必须是 `sessions.get` 返回的 `session.messages` 下标。
+   */
+  rewindSession(
+    sessionId: string,
+    keepMessages: number,
+  ): Promise<{ session_id: string; removed: number; remaining: number }> {
+    return this.rpc('sessions.rewind', { session_id: sessionId, keep_messages: keepMessages });
+  }
+
   /** 重命名会话；后端会更新 updated_at，列表按倒序会自然跳到顶部。 */
   renameSession(sessionId: string, title: string): Promise<RenameSessionResult> {
     return this.rpc<RenameSessionResult>('sessions.rename', {

@@ -110,6 +110,13 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
 
   const offEvent = client.onEvent((event, meta) => {
     if (!eventStore.push(event, meta)) return;
+    if (event.type === 'session.rewound') {
+      // 历史已删除：立即丢掉该会话的缓冲事件（含刚 push 的 marker 本身）。
+      const sessionId = (event.data as { session_id?: unknown }).session_id;
+      if (typeof sessionId === 'string' && sessionId.length > 0) {
+        eventStore.dropSession(sessionId);
+      }
+    }
     if (event.type === 'tool.permission.request') addPermission(event);
     if (event.type === 'tool.permission.response') removeByEvent(event, false);
     if (event.type === 'tool.permission.expired') removeByEvent(event, true);
