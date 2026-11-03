@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { MessageBar, type MessageBarItem } from '../components/MessageBar';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
-import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
-import { RefreshBanner } from '../components/RefreshBanner';
-import { useToast } from '../components/ToastProvider';
-import { pendingPermissionsOutsideView } from '../domains/chat/pending-permissions';
+import { useToast, useToastFeed } from '../components/ToastProvider';
+import {
+  pendingBarSummary,
+  pendingBarTarget,
+  pendingPermissionsOutsideView,
+} from '../domains/chat/pending-permissions';
 import { browserSessionStorage, clearLastSession } from '../domains/chat/session-selection';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
@@ -17,13 +20,14 @@ import { routeBreadcrumb } from './nav';
 import { readNavPreference, writeNavPreference } from './nav-preference';
 import { buildPaletteItems } from './palette-items';
 import { formatRoute } from './router';
-import { ShellBanners } from './ShellBanners';
 import { ShellOverlays } from './ShellOverlays';
 import { ShellRouteView } from './ShellRouteView';
+import { shellNoticeItems } from './shellNoticeItems';
 import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { tenantResetPlan } from './tenant-reset';
 import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
+import { useOutdatedBuild } from './useOutdatedBuild';
 import { paneCssVars, usePaneResize } from './usePaneResize';
 import { useViewportWidth } from './useViewportWidth';
 
@@ -32,6 +36,8 @@ export function AppShell() {
   const { theme } = useTheme();
   const { route, navigate } = useHashRoute();
   const toast = useToast();
+  const toastFeed = useToastFeed();
+  const outdated = useOutdatedBuild();
   const {
     connectionState,
     hasToken,
@@ -82,6 +88,63 @@ export function AppShell() {
     (sessionId: string) => navigate({ domain: 'chat', sessionId }),
     [navigate],
   );
+
+  // 0.37：外壳只把持久提示与 toast feed 组合成 items，渲染固定在 AppBar 中心。
+  const shellItems = shellNoticeItems({
+    lastError,
+    tokenError,
+    stale,
+    connectionState,
+    reconnectAttempt,
+    onDismissError: dismissError,
+    onRetry: retry,
+    onOpenConnection: () => navigate({ domain: 'settings', tab: 'connection' }),
+  });
+
+  const pendingSummary = pendingBarSummary(otherPending, otherAsks);
+  // compact bar 只跳会话；应答仍在目标会话的 Composer 槽位完成。
+  const pendingTarget = pendingBarTarget(pendingSummary);
+  const pendingItem: MessageBarItem | null = pendingSummary.earliest
+    ? {
+        id: 'pending-requests',
+        tone: 'info',
+        text: pendingTarget
+          ? t('pending.bar.summary', { count: pendingSummary.count })
+          : `${t('pending.bar.summary', { count: pendingSummary.count })} · ${t('pending.bar.unresolved')}`,
+        ...(pendingTarget
+          ? {
+              actions: [
+                {
+                  label: t('permission.goTo'),
+                  onClick: () => openPendingSession(pendingTarget.sessionId),
+                },
+              ],
+            }
+          : {}),
+      }
+    : null;
+
+  const buildItem: MessageBarItem | null = outdated
+    ? {
+        id: 'web-build-outdated',
+        tone: 'warn',
+        text: t('webBuild.outdated'),
+        actions: [{ label: t('webBuild.reload'), onClick: () => window.location.reload() }],
+      }
+    : null;
+
+  const messageItems: MessageBarItem[] = [
+    ...shellItems,
+    ...(pendingItem ? [pendingItem] : []),
+    ...(buildItem ? [buildItem] : []),
+    ...toastFeed.items.map((item) => ({
+      id: `toast-${item.id}`,
+      tone: item.kind,
+      text: item.message,
+      onDismiss: () => toastFeed.dismiss(item.id),
+    })),
+  ];
+
   const viewportWidth = useViewportWidth();
   const panes = usePaneResize();
   const navMode = navModeForWidth(viewportWidth, navCollapsed);
@@ -274,11 +337,10 @@ export function AppShell() {
         >
           {t('nav.jumpToMain')}
         </button>
-        {/* 后台重建完成后，已打开的页面自报「该刷新了」。 */}
-        <RefreshBanner />
         <AppBar
           route={route}
           navigate={navigate}
+          center={<MessageBar items={messageItems} />}
           onOpenPalette={() => {
             setPaletteQuery('');
             setPaletteOpen(true);
@@ -289,25 +351,6 @@ export function AppShell() {
               ? { onToggleNav: toggleNavDrawer, navOpen: navDrawerOpen }
               : {})}
         />
-
-        <ShellBanners
-          lastError={lastError}
-          tokenError={tokenError}
-          stale={stale}
-          connectionState={connectionState}
-          reconnectAttempt={reconnectAttempt}
-          onDismissError={dismissError}
-          onRetry={retry}
-          onOpenConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
-        />
-
-        {(otherPending.length > 0 || otherAsks.length > 0) && (
-          <PendingPermissionsBar
-            requests={otherPending}
-            asks={otherAsks}
-            onOpenSession={openPendingSession}
-          />
-        )}
 
         <div className="flex min-h-0 flex-auto">
           <DomainNav

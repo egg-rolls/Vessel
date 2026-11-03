@@ -20,6 +20,8 @@ applies_to: [N, M]
 - Team 写操作只经 canonical `teams.*`；成员 add / remove 走 CLI / owner 端点，Web 不直接改 roster。
 - token 只存 `sessionStorage`，不落 `localStorage` / URL / 日志。
 - 权限 / `ask_user` 卡片内联在所属 `RunCard`，不得恢复全局遮罩；其他端应答 / 过期 / run 终态必须收起卡片。
+- 所有 transient 提示 / banner / 交互摘要统一经 AppBar 中心 `MessageBar`；`ToastProvider`
+  只提供 API，不渲染，禁止新增 fixed toast / 浮层（见 [WEB-UI.md](../WEB-UI.md) 硬规则 7）。
 - 不用 `backdrop-filter` 做层级；层级靠边框与阴影表达（ADR-072/082）。
 
 ## 指针

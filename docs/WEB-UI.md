@@ -74,6 +74,7 @@ Linen 视觉的 body、标题、表单默认样式仍由 `src/styles/base.css` �
 | `ConfirmDialog`                                                                  | `components/ConfirmDialog.tsx`       | 破坏性动作确认；初始焦点在取消；`danger` / `busy` / `confirmDisabled`                                                                     |
 | `PageHeader`                                                                     | `components/PageHeader.tsx`          | 页面唯一 `h1` + tenant；`description` / `actions` 由调用方给                                                                              |
 | `StatusChip` / `StatusGlyph` / `statusMeta`                                      | `components/StatusChip.tsx`          | 字形 + 文本 + 语义色；颜色只是增强                                                                                                        |
+| `MessageBar`                                                                     | `components/MessageBar.tsx`          | AppBar 中心唯一提示轨；`items: { id, tone, text, actions?, onDismiss? }[]`；容器 `role=status` + `aria-live=polite`，错误 chip `role=alert`；actions 常显、可 Tab |
 | `EmptyState` / `LoadingState` / `ErrorState` / `NotEnabledState` / `StaleNotice` | `components/States.tsx`              | 空 / 加载 / 错误（含 Retry）/ 未启用（不提供重试）/ 陈旧数据                                                                              |
 | `ActionMenu`                                                                     | `components/ActionMenu.tsx`          | 行级 `⋯`；`aria-haspopup`、方向键 / Esc / 点外关闭                                                                                        |
 | `CopyButton`                                                                     | `components/CopyButton.tsx`          | 复制文本，经 Toast 反馈                                                                                                                   |
@@ -172,13 +173,18 @@ export function ToolCard({ tone, className, ...props }: ToolCardProps) {
 错误给 Retry；未启用不提供 Retry；陈旧数据用 `StaleNotice` 且不阻塞内容。
 状态必须同时有字形或文本，不能只靠颜色。
 
-### Toast
+### MessageBar / Toast API
 
-- 统一位置：右下角 `toast-region`（`feedback.css`）；不新增全局遮罩，也不为失效交互恢复顶部占位。
+- 唯一位置：AppBar 中心 `MessageBar`（`components/MessageBar.tsx`）。toast、构建过期、
+  连接 / 鉴权 / 断线、其他会话的 pending 摘要都进这一条横向可滚动的轨道；不新增全局
+  遮罩、固定 toast、顶部 / 底部 banner，也不为失效交互恢复独立占位。
+- `ToastProvider` 只提供 API 与状态，不渲染：`useToast` 负责推送，`useToastFeed`
+  暴露 `{ items, dismiss }`，由 `AppShell` 组合进 `MessageBar`。
 - 只在用户主动操作的成功 / 失败、连接失败、交互失效时使用；后台轮询与静默刷新不 toast。
 - `ToastProvider` 对相同 `kind + message` 去重；最多同时 3 条；`success` / `info` 4s、`error` 5s
   自动消失，每条也可手动关闭。
-- 容器 `role="status"`；错误条目 `role="alert"`，其余 `role="status"`。
+- `MessageBar` 容器 `role="status"` + `aria-live="polite"`；错误 chip `role="alert"`；
+  actions 常显且可 Tab，文本截断时用 `title` 保留全文。
 - 失效交互在 hydration 后按 tenant + request id 集合只提示一次，重连不重复弹；
   详情只在 Observe → Attention 查看，Chat 内不再有失效卡片或本地忽略入口。
 
@@ -198,6 +204,9 @@ export function ToolCard({ tone, className, ...props }: ToolCardProps) {
    技术词 / 命令 / 错误码保持原文。
 6. **可访问性不回退**：`ModalShell` / `ActionMenu` / `SegmentedTabs` / `Tooltip`
    的焦点、键盘、Esc、portal 行为由 L2 保证，不要在业务页绕过。
+7. **提示统一走 MessageBar**：所有 transient message / banner / interaction summary
+   统一经 AppBar 中心 `MessageBar`；禁止新增 fixed toast / banner / 右下角浮层 /
+   自建通知区域。`ToastProvider` 只提供 API，不渲染。
 
 运行 `bun run check:web-styles`（CI Architecture job 也会跑）检查第 1、2 条。
 

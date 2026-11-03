@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { fetchServedBuild, isOutdated } from '../build-info';
-import { t } from '../i18n';
 
 /**
- * 「页面已过期，请刷新」提示条。
+ * 「页面已过期」轮询（0.37，原顶部刷新提示的逻辑）。
  *
  * 背景：`dist` 不入 git，gateway 在产物落后于源码时**后台重建**。重建完成后，
  * 已经打开的标签页仍然是旧 bundle（它自己的 JS 不会变），只有重新加载才会拿到新的。
@@ -13,7 +12,7 @@ import { t } from '../i18n';
  */
 const POLL_MS = 10_000;
 
-export function RefreshBanner() {
+export function useOutdatedBuild(): boolean {
   const [outdated, setOutdated] = useState(false);
 
   useEffect(() => {
@@ -41,21 +40,5 @@ export function RefreshBanner() {
     };
   }, []);
 
-  if (!outdated) return null;
-
-  return (
-    <div
-      role="status"
-      className="flex flex-none items-center justify-between gap-3 bg-warn-soft px-4 py-1.5 text-sm text-ink"
-    >
-      <span>{t('webBuild.outdated')}</span>
-      <button
-        type="button"
-        className="rounded-md border border-line-strong bg-surface px-2.5 py-0.5 text-xs font-medium transition-colors hover:bg-hover"
-        onClick={() => window.location.reload()}
-      >
-        {t('webBuild.reload')}
-      </button>
-    </div>
-  );
+  return outdated;
 }

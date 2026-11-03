@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Tooltip } from '../components/Tooltip';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
@@ -14,6 +15,7 @@ export function AppBar({
   onToggleNav,
   navOpen = false,
   navigate,
+  center,
 }: {
   route: Route;
   onOpenPalette: () => void;
@@ -22,6 +24,8 @@ export function AppBar({
   onToggleNav?: () => void;
   navOpen?: boolean;
   navigate: (route: Route) => void;
+  /** AppBar 中心插槽：外壳用它挂 MessageBar。 */
+  center?: ReactNode;
 }) {
   useLocale();
   const { connectionState, tenantId, hasToken } = useConnection();
@@ -69,7 +73,7 @@ export function AppBar({
         {routeBreadcrumb(route)}
       </span>
 
-      <div className="min-w-0 flex-1" />
+      <div className="flex min-w-0 flex-1 justify-center px-2">{center}</div>
 
       <LanguageToggle />
 

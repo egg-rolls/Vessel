@@ -24,37 +24,6 @@
   gap: 8px;
 }
 
-/* 跨 session 待处理条：只提示，不打断当前对话。 */
-
-.pending-permissions-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin: 0 16px 8px;
-  padding: 8px 12px;
-  border-radius: var(--radius-lg);
-  background: var(--surface-raised);
-  box-shadow: var(--elev-2);
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-/* 阻塞语义：warn 圆点 + 文字，不用软底铺满。 */
-
-.pending-permissions-bar::before {
-  content: "";
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-pill);
-  background: var(--warn);
-}
-
-.pending-permissions-bar .link-btn:last-of-type {
-  margin-left: auto;
-}
-
 .permission-input {
   margin: 0;
   padding: 12px 14px;

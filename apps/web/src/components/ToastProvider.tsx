@@ -8,7 +8,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { t } from '../i18n';
 
 export type ToastKind = 'success' | 'error' | 'info';
 
@@ -26,6 +25,15 @@ export interface ToastApi {
 }
 
 const ToastContext = createContext<ToastApi | null>(null);
+
+/** 只读 feed：AppShell 用它把 toast 交给 AppBar 中心的 MessageBar 渲染。 */
+export interface ToastFeed {
+  items: ToastItem[];
+  dismiss: (id: string) => void;
+}
+
+const ToastFeedContext = createContext<ToastFeed | null>(null);
+
 /** 成功 / 信息 4s，错误 5s；都在 3–5s 区间内。 */
 const AUTO_DISMISS_MS: Record<ToastKind, number> = {
   success: 4000,
@@ -33,11 +41,6 @@ const AUTO_DISMISS_MS: Record<ToastKind, number> = {
   error: 5000,
 };
 const MAX_VISIBLE = 3;
-const TOAST_GLYPH: Record<ToastKind, string> = {
-  success: '✓',
-  error: '✗',
-  info: 'i',
-};
 
 function toastKey(kind: ToastKind, message: string): string {
   return `${kind}\u0000${message}`;
@@ -115,33 +118,20 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     [push, dismiss],
   );
 
+  const feed = useMemo<ToastFeed>(() => ({ items, dismiss }), [items, dismiss]);
+
   return (
     <ToastContext.Provider value={api}>
-      {children}
-      <div className="toast-region" role="status" aria-live="polite" aria-relevant="additions">
-        {items.map((item) => (
-          <div
-            key={item.id}
-            className={`toast toast-${item.kind}`}
-            role={item.kind === 'error' ? 'alert' : 'status'}
-          >
-            <span className="toast-icon" aria-hidden="true">
-              {TOAST_GLYPH[item.kind]}
-            </span>
-            <span className="toast-message">{item.message}</span>
-            <button
-              type="button"
-              className="toast-close"
-              aria-label={t('common.closeNotice')}
-              onClick={() => dismiss(item.id)}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
+      <ToastFeedContext.Provider value={feed}>{children}</ToastFeedContext.Provider>
     </ToastContext.Provider>
   );
+}
+
+/** 只读 toast 列表；渲染统一交给 AppBar 中心的 MessageBar。 */
+export function useToastFeed(): ToastFeed {
+  const value = useContext(ToastFeedContext);
+  if (!value) throw new Error('useToastFeed must be used inside <ToastProvider>');
+  return value;
 }
 
 export function useToast(): ToastApi {

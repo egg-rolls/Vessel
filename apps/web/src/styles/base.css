@@ -153,9 +153,7 @@ kbd,
   .state-loading,
   .state-error,
   .state-not-enabled,
-  .toast,
   .prompt-slot,
-  .pending-permissions-bar,
   .tool-card {
     border: 1px solid CanvasText;
   }
