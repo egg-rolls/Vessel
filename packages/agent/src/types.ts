@@ -1272,7 +1272,14 @@ export interface TeamDeclaration {
   policy?: Record<string, unknown>;
 }
 
-export type TeamSystemEvent = 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override' | 'fork';
+export type TeamSystemEvent =
+  | 'join'
+  | 'leave'
+  | 'rotate'
+  | 'archive'
+  | 'budget_override'
+  | 'fork'
+  | 'retract';
 
 /** 只追加团队日志的一行 */
 export interface TeamLogEntry {
@@ -1288,6 +1295,8 @@ export interface TeamLogEntry {
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
   system_event?: TeamSystemEvent;
+  /** 撤回 tombstone 指向的目标 message_id；只在 `system_event:'retract'` 上出现 */
+  retracted_message_id?: string;
   /** 会话分组（0.19 S4；系统消息缺省） */
   conversation_id?: string;
   /** 跨节点来源 / 目标地址（0.21 additive；只在 federation 入站日志出现） */
@@ -1382,6 +1391,21 @@ export interface TeamPostResult {
   ts: number;
   /** 本条 post 的会话分组（0.19 S4） */
   conversation_id?: string;
+}
+
+/** 撤回一条 Team 日志消息：只追加 tombstone，不改写 / 不级联删除。 */
+export interface TeamRetractInput {
+  team_id: string;
+  message_id: string;
+  /** 操作者 principal；缺省 `human`（不暴露为 RPC 参数） */
+  from?: string;
+}
+
+export interface TeamRetractResult {
+  /** tombstone 自己的 message_id */
+  message_id: string;
+  team_id: string;
+  retracted_message_id: string;
 }
 
 export interface TeamMembersInput {
@@ -1572,6 +1596,8 @@ export interface AgentTeamService {
   get(teamId: string, options?: TeamGetOptions): Promise<TeamDetail | undefined>;
   roster(teamId: string, options?: TeamRosterOptions): Promise<TeamMemberSummary[]>;
   post(input: TeamPostInput): Promise<TeamPostResult>;
+  /** 追加撤回 tombstone；目标必须仍在可读日志窗口内。 */
+  retract(input: TeamRetractInput): Promise<TeamRetractResult>;
   /** 未知 Team 返回 undefined；业务失败抛 TeamError */
   members(input: TeamMembersInput): Promise<TeamMembersResult | undefined>;
   /** 成员 ExecutionUnit 的 A2A send */
@@ -1603,7 +1629,10 @@ export type TeamErrorCode =
   | 'team_archived'
   | 'unknown_member'
   | 'invalid_input'
-  | 'not_visible';
+  | 'not_visible'
+  // 0.38：撤回目标不在可读窗口 / 已被撤回。
+  | 'message_not_found'
+  | 'conflict';
 
 export class TeamError extends Error {
   readonly code: TeamErrorCode;

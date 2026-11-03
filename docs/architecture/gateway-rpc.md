@@ -9,7 +9,7 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 <a id="rpc-methods"></a>
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get|sources|set`；`sessions.list|get|search|delete|rename|compact|rewind`；`runs.list|get|start|cancel|resume`；`agents.list|get|tree` / `agents.create|update|close|send|dispatch|rotate|restart|compactFork|fork`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get|reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond` / `permissions.setToolPolicy`；`interactions.list`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（admin-only，缺省 `not_supported`）；`teams.list|get|post|members|budget` / `teams.create|update|archive|spawnFrozen`；`auth.exchange|revoke|tokens`。permission 以表格为准。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get|sources|set`；`sessions.list|get|search|delete|rename|compact|rewind`；`runs.list|get|start|cancel|resume`；`agents.list|get|tree` / `agents.create|update|close|send|dispatch|rotate|restart|compactFork|fork`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get|reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond` / `permissions.setToolPolicy`；`interactions.list`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（admin-only，缺省 `not_supported`）；`teams.list|get|post|retract|members|budget` / `teams.create|update|archive|spawnFrozen`；`auth.exchange|revoke|tokens`。permission 以表格为准。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -67,6 +67,7 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 | `teams.list` | read |
 | `teams.get` | read |
 | `teams.post` | write |
+| `teams.retract` | write |
 | `teams.members` | write |
 | `teams.budget` | write |
 | `teams.create` | write |
@@ -99,3 +100,4 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 <a id="team-spawn-frozen"></a>
 
 - `teams.spawnFrozen`：`{ team_id, frozen }` → `TeamSummary`（含 `spawn_frozen?`，`false` 时字段缺省）；permission 为 `write`。team-scoped control token 只能操作自己的 team，其它 team 返回 `not_found`。冻结是 Team 元数据，`teams.update` 不修改该字段；冻结期间该 Team 的 create / hire / 人类 `agents.create` / fork / reinstate 均返回 `team_frozen`，只有 `frozen: false` 解冻。CLI 为 `vessel team freeze|unfreeze <team_id>`。
+- `teams.retract`：`{ team_id, message_id }` → `{ team_id, message_id, retracted_message_id }`（`message_id` 是新 tombstone，`retracted_message_id` 是目标）；permission `write`，team scope 校验同其它 `teams.*`。日志保持 append-only：只追加一条 `kind:'system'`、`system_event:'retract'`、`content:''` 的 tombstone，不删除 / 不改写原消息，也不级联删除后续回复。错误：Team 不存在 `not_found`；目标不在可读窗口（最近 1000 条）`not_found`（details `team_code: message_not_found`）；目标为 system 行 / tombstone `invalid_params`；目标已被撤回 `conflict`（`already_retracted`）；归档 Team 复用 `team_archived`。

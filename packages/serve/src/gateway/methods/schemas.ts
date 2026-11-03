@@ -491,11 +491,13 @@ export const teamMessageSchema = {
     content: { type: 'string' },
     ts: { type: 'number' },
     kind: { type: 'string', enum: ['post', 'mention', 'system', 'reply'] },
-    // 0.19 S4：人工预算 override 的系统记录。
+    // 0.19 S4：人工预算 override 的系统记录；0.38：撤回 tombstone。
     system_event: {
       type: 'string',
-      enum: ['join', 'leave', 'rotate', 'archive', 'budget_override', 'fork'],
+      enum: ['join', 'leave', 'rotate', 'archive', 'budget_override', 'fork', 'retract'],
     },
+    // 0.38：撤回 tombstone 指向的目标 message_id。
+    retracted_message_id: { type: 'string' },
     // 0.19 S4：会话分组；旧日志缺省。
     conversation_id: { type: 'string' },
     // 0.21：跨节点报文元数据（additive；同机消息缺失）。
@@ -539,6 +541,17 @@ export const teamPostResultSchema = {
     ts: { type: 'number' },
     // 0.19 S4：本次 post 的会话分组；新实现总是返回。
     conversation_id: { type: 'string' },
+  },
+};
+
+/** teams.retract 结果：`message_id` 是 tombstone，`retracted_message_id` 是目标。 */
+export const teamRetractResultSchema = {
+  type: 'object',
+  required: ['team_id', 'message_id', 'retracted_message_id'],
+  properties: {
+    team_id: { type: 'string' },
+    message_id: { type: 'string' },
+    retracted_message_id: { type: 'string' },
   },
 };
 

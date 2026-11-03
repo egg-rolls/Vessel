@@ -22,6 +22,7 @@ import {
   teamDetailSchema,
   teamMembersResultSchema,
   teamPostResultSchema,
+  teamRetractResultSchema,
   teamSummarySchema,
 } from './schemas.js';
 
@@ -151,6 +152,10 @@ function mapTeamError(error: unknown): never {
       : undefined;
   const message = error instanceof Error ? error.message : String(error);
   if (code === undefined) throw new RpcError('internal', message);
+  // 0.38：撤回目标不存在或不在可读窗口内。
+  if (code === 'message_not_found') {
+    throw new RpcError('not_found', message, { team_code: code });
+  }
   if (
     code === 'team_not_found' ||
     code === 'team_conversation_not_found' ||
@@ -159,7 +164,8 @@ function mapTeamError(error: unknown): never {
     throw new RpcError('not_found', message);
   }
   // S10.3：archive 的前置条件与只读状态是业务冲突，不是参数错误。
-  if (code === 'team_not_empty' || code === 'team_archived') {
+  // 0.38：已撤回的目标同样按 conflict（message `already_retracted`）。
+  if (code === 'team_not_empty' || code === 'team_archived' || code === 'conflict') {
     throw new RpcError('conflict', message, { team_code: code });
   }
   if (code === 'team_log_write_failed') throw new RpcError('internal', message);
@@ -395,6 +401,31 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
             from: actorOf(ctx),
             ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
           });
+        } catch (error) {
+          return mapTeamError(error);
+        }
+      },
+    },
+    {
+      // 0.38：撤回 = 追加 tombstone；不删除原消息，也不级联删除后续回复。
+      name: 'teams.retract',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['team_id', 'message_id'],
+        properties: {
+          team_id: { type: 'string', minLength: 1 },
+          message_id: { type: 'string', minLength: 1 },
+        },
+      },
+      result_schema: teamRetractResultSchema,
+      handler: async (params, ctx) => {
+        try {
+          const control = requireTeamControl(teams, ctx);
+          const teamId = stringParam(params, 'team_id');
+          assertTeamScope(teamScopeOf(ctx), teamId);
+          const messageId = stringParam(params, 'message_id');
+          return await control.retract({ team_id: teamId, message_id: messageId });
         } catch (error) {
           return mapTeamError(error);
         }

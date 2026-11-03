@@ -66,7 +66,9 @@ export interface TeamMessageLike {
   content: string;
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
-  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override' | 'fork';
+  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override' | 'fork' | 'retract';
+  /** 撤回 tombstone 指向的目标 message_id */
+  retracted_message_id?: string;
   /** 0.19 S4 会话分组；旧日志缺省 */
   conversation_id?: string;
   /** 0.21：跨节点回信地址（additive） */
@@ -107,6 +109,14 @@ export interface TeamPostResultLike {
   ts: number;
   /** 0.19 S4 会话分组 */
   conversation_id?: string;
+}
+
+/** teams.retract 结果。 */
+export interface TeamRetractResultLike {
+  /** tombstone 自己的 message_id */
+  message_id: string;
+  team_id: string;
+  retracted_message_id: string;
 }
 
 /** 预算维度（0.19 S4）。 */
@@ -204,6 +214,8 @@ export interface TeamControlLike {
     /** 0.21：跨节点报文元数据 */
     federation?: TeamLogFederationLike;
   }): Promise<TeamPostResultLike>;
+  /** 0.38：追加撤回 tombstone（日志保留原消息；目标须在可读窗口内）。 */
+  retract(input: { team_id: string; message_id: string }): Promise<TeamRetractResultLike>;
   members(input: {
     team_id: string;
     action: 'add' | 'remove';

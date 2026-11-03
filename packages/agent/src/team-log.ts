@@ -74,9 +74,14 @@ function parseEntry(line: string): TeamLogEntry | null {
       systemEvent === 'rotate' ||
       systemEvent === 'archive' ||
       systemEvent === 'budget_override' ||
-      systemEvent === 'fork'
+      systemEvent === 'fork' ||
+      systemEvent === 'retract'
     ) {
       entry.system_event = systemEvent;
+    }
+    // 撤回 tombstone 的目标；只接受非空 string，其它值忽略。
+    if (typeof parsed.retracted_message_id === 'string' && parsed.retracted_message_id !== '') {
+      entry.retracted_message_id = parsed.retracted_message_id;
     }
     return entry;
   } catch {

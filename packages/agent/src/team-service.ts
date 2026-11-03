@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import type { EventStream, Logger, RunEvent } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import { addressSegmentCount, HUMAN_PRINCIPAL } from './team-address.js';
+import { MAX_LOG_READ_LIMIT } from './team-log.js';
 import {
   type AgentEvent,
   type AgentService,
@@ -44,6 +45,8 @@ import {
   type TeamPostInput,
   type TeamPostResult,
   type TeamRecord,
+  type TeamRetractInput,
+  type TeamRetractResult,
   type TeamRosterOptions,
   type TeamServiceEvent,
   type TeamStore,
@@ -74,6 +77,9 @@ const SYSTEM_CONTENT: Record<TeamSystemEvent, string> = {
   rotate: 'agent rotated body',
   budget_override: 'budget limit overridden',
   fork: 'agent forked',
+  // retract 的 tombstone 由 retract() 自己写（content 为空，UI 按 system_event 渲染）；
+  // 这里只满足 Record 完整性，不会被 systemEventFor 选中。
+  retract: 'message retracted',
 };
 
 /**
@@ -440,6 +446,65 @@ export class DefaultTeamService implements AgentTeamService {
       delivered,
       ts,
       conversation_id: conversationId,
+    };
+  }
+
+  /**
+   * 撤回：日志保持 append-only，追加一条 system tombstone；不删除 / 不改写原消息，
+   * 也不级联删除后续回复。目标必须仍在可读窗口（≤1000 条）内。
+   */
+  async retract(input: TeamRetractInput): Promise<TeamRetractResult> {
+    const record = this.store.get(input.team_id);
+    if (record === undefined) {
+      throw new TeamError('team_not_found', `team_not_found: ${input.team_id}`);
+    }
+    assertTeamNotArchived(record, input.team_id);
+
+    const entries = await this.store.readLog(input.team_id, { limit: MAX_LOG_READ_LIMIT });
+    const target = entries.find((entry) => entry.message_id === input.message_id);
+    if (target === undefined) {
+      // 窗口外的旧消息不支持撤回：与真正不存在一样按 message_not_found 返回。
+      throw new TeamError(
+        'message_not_found',
+        `message_not_found: ${input.message_id} (outside the ${MAX_LOG_READ_LIMIT}-entry read window)`,
+      );
+    }
+    // system 行（含已有 tombstone）本身不可撤回。
+    if (target.kind === 'system') {
+      throw new TeamError('invalid_input', `cannot retract system message: ${input.message_id}`);
+    }
+    const alreadyRetracted = entries.some(
+      (entry) =>
+        entry.system_event === 'retract' && entry.retracted_message_id === input.message_id,
+    );
+    if (alreadyRetracted) {
+      throw new TeamError('conflict', 'already_retracted');
+    }
+
+    const messageId = this.newId();
+    const entry: TeamLogEntry = {
+      message_id: messageId,
+      team_id: input.team_id,
+      from: input.from ?? HUMAN_PRINCIPAL,
+      to: [],
+      mentions: [],
+      content: '',
+      ts: this.now(),
+      kind: 'system',
+      system_event: 'retract',
+      retracted_message_id: input.message_id,
+    };
+    try {
+      await this.store.appendLog(entry);
+    } catch (error) {
+      throw new TeamError('team_log_write_failed', errorText(error));
+    }
+    // 指针事件：web 的定向 reload 据此拉到 tombstone；不含正文。
+    this.emit({ team_id: input.team_id, kind: 'system', message_id: messageId });
+    return {
+      message_id: messageId,
+      team_id: input.team_id,
+      retracted_message_id: input.message_id,
     };
   }
 

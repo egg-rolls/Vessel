@@ -185,6 +185,8 @@ export {
   type TeamPostInput,
   type TeamPostResult,
   type TeamRecord,
+  type TeamRetractInput,
+  type TeamRetractResult,
   type TeamRosterOptions,
   type TeamServiceEvent,
   type TeamStore,

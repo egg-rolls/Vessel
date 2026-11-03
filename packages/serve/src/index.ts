@@ -288,6 +288,7 @@ export type {
   TeamMembersResultLike,
   TeamMessageLike,
   TeamPostResultLike,
+  TeamRetractResultLike,
   TeamSummaryLike,
 } from './team-control.js';
 export {

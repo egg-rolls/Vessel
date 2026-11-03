@@ -88,6 +88,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'teams.list': 'read',
   'teams.get': 'read',
   'teams.post': 'write',
+  // 0.38（CONTRACT-0.38-team-retract）：消息撤回 = 追加 tombstone。
+  'teams.retract': 'write',
   'teams.members': 'write',
   // 0.24 S10.3：Team CRUD（create 仅 human / admin；update / archive 可在
   // team-scoped control 白名单内，但只能操作自己的 team）。
