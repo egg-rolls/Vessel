@@ -5,6 +5,7 @@ import type {
   PermissionScope,
   TeamDetail,
   TeamPostResult,
+  TeamRetractResult,
 } from '../../gateway/types';
 import type { StoredEvent } from '../../state/events';
 
@@ -15,6 +16,7 @@ export interface TeamChatClient {
     content: string;
     mentions?: string[];
   }): Promise<TeamPostResult>;
+  retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult>;
 }
 
 export type TeamChatDecidePermission = (

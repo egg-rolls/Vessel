@@ -19,6 +19,7 @@ import type {
   TeamCreateInput,
   TeamDetail,
   TeamPostResult,
+  TeamRetractResult,
   TeamSummary,
   TeamUpdateInput,
 } from './types';
@@ -34,6 +35,8 @@ export interface TeamControl {
   createTeam(input: TeamCreateInput): Promise<TeamSummary>;
   updateTeam(input: TeamUpdateInput): Promise<TeamSummary>;
   archiveTeam(teamId: string): Promise<TeamSummary>;
+  /** 0.38：追加 tombstone（append-only）；目标消息由 UI 隐藏。 */
+  retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult>;
   /** 0.27：冻结 / 解冻成员创建闸门。 */
   setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamSummary>;
   getSession(sessionId: string): Promise<SessionDetail>;
@@ -78,6 +81,9 @@ export function createRemoteTeamControl(
     },
     archiveTeam(teamId) {
       return call<TeamSummary>('teams.archive', { team_id: teamId });
+    },
+    retractTeam(input) {
+      return call<TeamRetractResult>('teams.retract', input);
     },
     setSpawnFrozen(teamId, frozen) {
       return call<TeamSummary>('teams.spawnFrozen', { team_id: teamId, frozen });

@@ -7,6 +7,8 @@
  * - 失败不自动重试；reload 找不到同内容消息才标 failed；
  * - “再次发送”只把内容填回 Composer，由用户再次确认后作为新日志。
  */
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { t } from '../../i18n';
 import { TeamChatHeader } from './TeamChatHeader';
 import { TeamChatMain } from './TeamChatMain';
 import { TeamChatMembersAside } from './TeamChatMembersAside';
@@ -45,6 +47,14 @@ export function TeamChat(props: TeamChatProps) {
     sending,
     handleSend,
     handleRetry,
+    editMessage,
+    resendMessage,
+    requestRetract,
+    cancelRetract,
+    confirmRetract,
+    retractTarget,
+    retracting,
+    retractError,
     reload,
     hasToken,
     canLoadEarlier,
@@ -101,6 +111,9 @@ export function TeamChat(props: TeamChatProps) {
           agentLabel={agentLabel}
           onOpenSession={onOpenSession}
           onRetrySend={handleRetry}
+          onEditMessage={editMessage}
+          onResendMessage={resendMessage}
+          onRetractMessage={requestRetract}
           onRefresh={reload}
           canLoadEarlier={canLoadEarlier}
           historyLimited={historyLimited}
@@ -141,6 +154,27 @@ export function TeamChat(props: TeamChatProps) {
           onCloseDrawer={() => setMembersOpen(false)}
         />
       </div>
+
+      {retractTarget && (
+        <ConfirmDialog
+          title={t('team.message.retractTitle')}
+          body={<p>{t('team.message.retractBody')}</p>}
+          confirmLabel={t('team.message.retractConfirm')}
+          danger
+          busy={retracting}
+          onConfirm={() => {
+            void confirmRetract();
+          }}
+          onCancel={cancelRetract}
+          extra={
+            retractError ? (
+              <p className="text-xs text-danger leading-snug" role="alert">
+                {retractError}
+              </p>
+            ) : undefined
+          }
+        />
+      )}
     </section>
   );
 }

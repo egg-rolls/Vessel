@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { useDrawerA11y } from '../../app/useDrawerA11y';
+import { useOptionalToast } from '../../components/ToastProvider';
 import type { TeamDetail, TeamMember, TeamMessage } from '../../gateway/types';
+import { t } from '../../i18n';
 import {
   applyTeamEvent,
   createTeamEventState,
@@ -67,6 +69,10 @@ export function useTeamChat({
   );
   const [membersOpen, setMembersOpen] = useState(false);
   const [narrow, setNarrow] = useState(false);
+  const [retractTarget, setRetractTarget] = useState<TeamMessage | null>(null);
+  const [retracting, setRetracting] = useState(false);
+  const [retractError, setRetractError] = useState<string | undefined>();
+  const toast = useOptionalToast();
 
   const eventStateRef = useRef<TeamEventState>(createTeamEventState());
   const lastRosterReloadAt = useRef(0);
@@ -202,17 +208,14 @@ export function useTeamChat({
   // 窗口只含前 N 个成员；在线总数用服务端完整计数，缺失才回退窗口内计数。
   const onlineCount = team?.online_count ?? members.filter(isOnlineMember).length;
 
-  const handleSend = async () => {
-    const content = draft.trim();
-    if (!content || sending || !hasToken || connectionState !== 'open' || archived) return;
-    const mentions = mentionIds(chips);
+  /** 发送正文 + mentions；edit / resend / 普通发送共用同一条落盘路径。 */
+  const submitContent = async (rawContent: string, mentions: string[]): Promise<boolean> => {
+    const content = rawContent.trim();
+    if (!content || sending || !hasToken || connectionState !== 'open' || archived) return false;
     const localId = `local:${crypto.randomUUID()}`;
     const ts = Date.now();
 
     setSends((prev) => [...prev, { localId, content, mentions, ts, status: 'sending' }]);
-    setDraft('');
-    setChips([]);
-    setRetryHint(false);
     setSending(true);
     sendingRef.current = true;
 
@@ -260,12 +263,66 @@ export function useTeamChat({
       setSending(false);
       sendingRef.current = false;
     }
+    return true;
+  };
+
+  const handleSend = async () => {
+    const content = draft.trim();
+    const mentions = mentionIds(chips);
+    const started = await submitContent(content, mentions);
+    if (!started) return;
+    setDraft('');
+    setChips([]);
+    setRetryHint(false);
   };
 
   const handleRetry = (message: TeamMessage) => {
     setDraft(message.content);
     setChips(message.mentions.map((agentId) => ({ agentId, label: agentLabel(agentId) })));
     setRetryHint(true);
+  };
+
+  /** edit：回填正文 + mention chips；不发送、不删日志。 */
+  const editMessage = (message: TeamMessage) => {
+    setDraft(message.content);
+    setChips(message.mentions.map((agentId) => ({ agentId, label: agentLabel(agentId) })));
+    setRetryHint(false);
+  };
+
+  /** resend：复用发送路径，按正文 + mentions 追加一条新日志。 */
+  const resendMessage = (message: TeamMessage) => {
+    void submitContent(message.content, message.mentions);
+  };
+
+  const requestRetract = (message: TeamMessage) => {
+    setRetractError(undefined);
+    setRetractTarget(message);
+  };
+
+  const cancelRetract = () => {
+    if (retracting) return;
+    setRetractTarget(null);
+    setRetractError(undefined);
+  };
+
+  const confirmRetract = async () => {
+    const target = retractTarget;
+    if (!target || retracting) return;
+    setRetracting(true);
+    setRetractError(undefined);
+    try {
+      await client.retractTeam({ team_id: teamId, message_id: target.message_id });
+      setRetractTarget(null);
+      toast?.success(t('team.message.retractDone'));
+      reloadRef.current();
+    } catch (error) {
+      // 失败保留弹窗与错误，用户可重试或取消。
+      const message = errorMessage(error);
+      setRetractError(message);
+      toast?.error(message);
+    } finally {
+      setRetracting(false);
+    }
   };
 
   const openMember = (agentId: string) => {
@@ -310,6 +367,14 @@ export function useTeamChat({
     sending,
     handleSend,
     handleRetry,
+    editMessage,
+    resendMessage,
+    requestRetract,
+    cancelRetract,
+    confirmRetract,
+    retractTarget,
+    retracting,
+    retractError,
     reload,
     hasToken,
     canLoadEarlier,

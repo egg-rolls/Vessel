@@ -37,6 +37,9 @@ export interface TeamChatMainProps {
   agentLabel: (agentId: string) => string;
   onOpenSession: (sessionId: string) => void;
   onRetrySend: (message: TeamMessage) => void;
+  onEditMessage: (message: TeamMessage) => void;
+  onResendMessage: (message: TeamMessage) => void;
+  onRetractMessage: (message: TeamMessage) => void;
   onRefresh: () => void;
   canLoadEarlier: boolean;
   historyLimited: boolean;
@@ -73,6 +76,9 @@ export function TeamChatMain({
   agentLabel,
   onOpenSession,
   onRetrySend,
+  onEditMessage,
+  onResendMessage,
+  onRetractMessage,
   onRefresh,
   canLoadEarlier,
   historyLimited,
@@ -163,6 +169,9 @@ export function TeamChatMain({
             resolveMemberLabel={agentLabel}
             onViewMemberSession={(_agentId, sessionId) => onOpenSession(sessionId)}
             onRetrySend={onRetrySend}
+            onEditMessage={onEditMessage}
+            onResendMessage={onResendMessage}
+            onRetractMessage={onRetractMessage}
           />
         )}
 

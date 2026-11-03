@@ -15,6 +15,9 @@ export interface TeamTranscriptProps {
   resolveMemberLabel?: (agentId: string) => string | undefined;
   onViewMemberSession?: (agentId: string, sessionId: string) => void;
   onRetrySend?: (message: TeamMessageView) => void;
+  onEditMessage?: (message: TeamMessageView) => void;
+  onResendMessage?: (message: TeamMessageView) => void;
+  onRetractMessage?: (message: TeamMessageView) => void;
 }
 
 export function TeamTranscript({
@@ -23,6 +26,9 @@ export function TeamTranscript({
   resolveMemberLabel,
   onViewMemberSession,
   onRetrySend,
+  onEditMessage,
+  onResendMessage,
+  onRetractMessage,
 }: TeamTranscriptProps) {
   if (messages.length === 0) return null;
 
@@ -59,6 +65,9 @@ export function TeamTranscript({
             : undefined
         }
         onRetry={message.sendStatus === 'failed' ? () => onRetrySend?.(message) : undefined}
+        onEdit={onEditMessage ? () => onEditMessage(message) : undefined}
+        onResend={onResendMessage ? () => onResendMessage(message) : undefined}
+        onRetract={onRetractMessage ? () => onRetractMessage(message) : undefined}
       />,
     );
   }

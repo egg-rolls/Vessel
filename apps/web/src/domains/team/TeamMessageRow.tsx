@@ -24,6 +24,7 @@ const SYSTEM_KEYS: Record<string, string> = {
   archive: 'team.system.archive',
   rotate: 'team.system.rotate',
   fork: 'team.system.fork',
+  retract: 'team.system.retract',
 };
 
 function truncate(value: string, length: number): string {
@@ -88,9 +89,10 @@ function DeliveryNotes({ deliveries }: { deliveries: readonly TeamDelivery[] }) 
 
 function SystemNotice({ message, senderLabel }: { message: TeamMessage; senderLabel?: string }) {
   const key = message.system_event ? SYSTEM_KEYS[message.system_event] : undefined;
-  const text = key
-    ? t(key, { name: senderLabel ?? message.from })
-    : message.content || t('team.system.unknown');
+  // 撤回 tombstone 的 `from` 固定为 human（`to` / `mentions` 为空），显示“我/你”。
+  const rawName = senderLabel ?? message.from;
+  const name = rawName === 'human' ? t('team.message.you') : rawName;
+  const text = key ? t(key, { name }) : message.content || t('team.system.unknown');
   return (
     <div
       className="mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted"
@@ -110,12 +112,18 @@ export function TeamMessageRow({
   canViewSession,
   onViewSession,
   onRetry,
+  onEdit,
+  onResend,
+  onRetract,
 }: {
   message: TeamMessageView;
   senderLabel?: string;
   canViewSession?: boolean;
   onViewSession?: () => void;
   onRetry?: () => void;
+  onEdit?: () => void;
+  onResend?: () => void;
+  onRetract?: () => void;
 }) {
   // 钩子必须在 system 早退之前调用，保证同一实例的 hook 顺序稳定。
   const toast = useOptionalToast();
@@ -151,10 +159,25 @@ export function TeamMessageRow({
         ? ' opacity-70'
         : '';
 
+  // 已落盘的人类消息才有 edit / resend / retract；本地 failed 只保留 retry。
+  const persisted = message.sendStatus === undefined || message.sendStatus === 'sent';
+  const hasContent = message.content.trim().length > 0;
+
   // 所有操作收进同一行：hover / focus 时整组显现，不再各自堆叠。
   const actions: MessageAction[] = [];
-  if (message.content.trim().length > 0 && message.sendStatus !== 'sending') {
+  if (hasContent && message.sendStatus !== 'sending') {
     actions.push({ id: 'copy', label: t('common.copy'), onSelect: () => copy(message.content) });
+  }
+  if (isHuman && persisted) {
+    if (hasContent && onEdit) {
+      actions.push({ id: 'edit', label: t('team.message.edit'), onSelect: onEdit });
+    }
+    if (hasContent && onResend) {
+      actions.push({ id: 'resend', label: t('team.message.resend'), onSelect: onResend });
+    }
+    if (onRetract) {
+      actions.push({ id: 'retract', label: t('team.message.retract'), onSelect: onRetract });
+    }
   }
   if ((isReply || isAgent) && canViewSession && onViewSession) {
     actions.push({
@@ -170,7 +193,8 @@ export function TeamMessageRow({
       onSelect: copyFederationAddress,
     });
   }
-  if (message.sendStatus === 'failed' && onRetry) {
+  // retry 只服务于本地未落盘的人类发送；agent / reply 永不出现。
+  if (isHuman && message.sendStatus === 'failed' && onRetry) {
     actions.push({ id: 'retry', label: t('team.delivery.retry'), onSelect: onRetry });
   }
 

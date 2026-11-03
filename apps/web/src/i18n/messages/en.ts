@@ -503,6 +503,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.message.toHumanHint': 'This log is a message from an agent to the human',
   'team.message.systemTag': 'System',
   'team.message.viewBody': 'View member session',
+  'team.message.edit': 'Edit',
+  'team.message.resend': 'Resend',
+  'team.message.retract': 'Retract',
+  'team.message.retractTitle': 'Retract message',
+  'team.message.retractBody':
+    'This message will be hidden from the Team view; the log keeps a retraction marker and later replies remain. This cannot be undone.',
+  'team.message.retractConfirm': 'Retract',
+  'team.message.retractDone': 'Retracted',
   'team.federation.from': 'federation from',
   'team.federation.reply': 'Reply by address',
   'team.federation.replyHint':
@@ -514,6 +522,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.system.rotate': '{name} started a new session',
   'team.system.rotateFailed': '{name} failed to start a new session',
   'team.system.fork': 'agent forked',
+  'team.system.retract': '{name} retracted a message',
   'team.system.unknown': 'Team system event',
 
   'team.delivery.queued': 'Queued',

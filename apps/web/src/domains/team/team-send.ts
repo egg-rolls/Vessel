@@ -59,13 +59,27 @@ export function buildTeamRows(
   sends: readonly LocalSend[],
   teamId: string,
 ): TeamMessageView[] {
-  const serverIds = new Set(messages.map((message) => message.message_id));
+  // 0.38：tombstone 只隐藏目标消息；tombstone 自己保留为系统行。
+  const retractedIds = new Set<string>();
+  for (const message of messages) {
+    if (
+      message.kind === 'system' &&
+      message.system_event === 'retract' &&
+      typeof message.retracted_message_id === 'string'
+    ) {
+      retractedIds.add(message.retracted_message_id);
+    }
+  }
+  const visible = retractedIds.size
+    ? messages.filter((message) => !retractedIds.has(message.message_id))
+    : messages;
+  const serverIds = new Set(visible.map((message) => message.message_id));
   const sendByKey = new Map<string, LocalSend>();
   const localMessages: TeamMessage[] = [];
   for (const send of sends) {
     const key = send.messageId ?? send.localId;
     sendByKey.set(key, send);
-    if (serverIds.has(key)) continue;
+    if (serverIds.has(key) || retractedIds.has(key)) continue;
     localMessages.push({
       message_id: key,
       team_id: teamId,
@@ -77,7 +91,7 @@ export function buildTeamRows(
       kind: send.mentions.length > 0 ? 'mention' : 'post',
     });
   }
-  return mergeMessages(messages, localMessages).map((message) => {
+  return mergeMessages(visible, localMessages).map((message) => {
     const send = sendByKey.get(message.message_id);
     if (!send) return message;
     return {

@@ -77,7 +77,10 @@ export interface TeamMessage {
   content: string;
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
-  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'fork';
+  /** 0.38：`retract` 为 append-only tombstone，目标是 `retracted_message_id`。 */
+  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'fork' | 'retract';
+  /** 0.38 additive：tombstone 指向被撤回的消息；仅 `system_event: 'retract'` 时出现。 */
+  retracted_message_id?: string;
   /** 0.21 additive：federation 入站日志的回信地址；本地日志缺失。 */
   federation?: TeamMessageFederation;
 }
@@ -110,6 +113,15 @@ export interface TeamPostResult {
   mentions: string[];
   delivered: TeamDelivery[];
   ts: number;
+}
+
+/** `teams.retract` 结果（0.38 append-only tombstone）。 */
+export interface TeamRetractResult {
+  team_id: string;
+  /** tombstone 自己的 message_id。 */
+  message_id: string;
+  /** 被撤回的目标 message_id。 */
+  retracted_message_id: string;
 }
 
 /** teams.get 结果。 */

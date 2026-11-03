@@ -7,7 +7,7 @@ import { cn } from './cn';
 import { Icon } from './Icon';
 
 export interface MessageAction {
-  id: 'copy' | 'edit' | 'retry' | 'transcript' | 'reply';
+  id: 'copy' | 'edit' | 'retry' | 'resend' | 'transcript' | 'reply' | 'retract';
   /** 已 i18n，直接进 Tooltip / aria-label。 */
   label: string;
   disabled?: boolean;

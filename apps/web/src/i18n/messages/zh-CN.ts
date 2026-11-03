@@ -486,6 +486,14 @@ export const messages = {
   'team.message.toHumanHint': '这条日志是 agent 发给人类的消息',
   'team.message.systemTag': '系统',
   'team.message.viewBody': '查看成员会话',
+  'team.message.edit': '编辑',
+  'team.message.resend': '重发',
+  'team.message.retract': '撤回',
+  'team.message.retractTitle': '撤回消息',
+  'team.message.retractBody':
+    '这条消息会从 Team 视图中隐藏；日志保留撤回标记，后续回复不删除。此操作不可撤销。',
+  'team.message.retractConfirm': '撤回',
+  'team.message.retractDone': '已撤回',
   'team.federation.from': 'federation 来自',
   'team.federation.reply': '按地址回复',
   'team.federation.replyHint':
@@ -497,6 +505,7 @@ export const messages = {
   'team.system.rotate': '{name} 开始了新会话',
   'team.system.rotateFailed': '{name} 开始新会话失败',
   'team.system.fork': 'agent 已 fork',
+  'team.system.retract': '{name} 撤回了一条消息',
   'team.system.unknown': 'Team 系统事件',
 
   'team.delivery.queued': '排队中',

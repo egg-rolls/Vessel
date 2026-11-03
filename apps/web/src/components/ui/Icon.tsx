@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { cn } from './cn';
 
 /** 消息操作里使用的图标。只做内联 SVG，颜色继承 `currentColor`。 */
-export type IconName = 'copy' | 'edit' | 'retry' | 'transcript' | 'reply';
+export type IconName = 'copy' | 'edit' | 'retry' | 'resend' | 'transcript' | 'reply' | 'retract';
 
 const PATHS: Record<IconName, ReactNode> = {
   copy: (
@@ -34,6 +34,18 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M6.25 3.5 2.75 7l3.5 3.5" />
       <path d="M2.75 7h6.5A3.75 3.75 0 0 1 13 10.75v2" />
+    </>
+  ),
+  retract: (
+    <>
+      <path d="M2.75 6.25h7.5a3 3 0 0 1 0 6H7" />
+      <path d="M5.25 3.5 2.5 6.25l2.75 2.75" />
+    </>
+  ),
+  resend: (
+    <>
+      <path d="M13.5 2.5 2.5 7.25l4.75 1.5 1.5 4.75z" />
+      <path d="M7.25 8.75 13.5 2.5" />
     </>
   ),
 };
