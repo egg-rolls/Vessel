@@ -30,19 +30,12 @@ export function messageCountOf(data: Record<string, unknown>): number | null {
   return null;
 }
 
-function ToolPayload({ label, value, open }: { label: string; value: unknown; open?: boolean }) {
-  const text = payloadText(value);
-  if (!text) return null;
-  return (
-    <details className="ml-2 inline-block align-top" open={open}>
-      <summary className="inline cursor-pointer text-sm text-accent">{label}</summary>
-      <pre className="mt-1.5 max-h-72 max-w-3xl overflow-auto rounded-sm bg-deep px-2.5 py-2 font-mono text-sm leading-relaxed text-muted whitespace-pre-wrap wrap-anywhere">
-        {text}
-      </pre>
-    </details>
-  );
-}
-
+/**
+ * 事件的单行核心摘要（折叠态 summary）。
+ *
+ * 只保留用户扫一眼需要的信息；完整载荷在展开区由 `EventPayload` 渲染。
+ * 错误事件（`error` / `*.failed`）的错误文本必须留在这里，不能只藏在展开区。
+ */
 function renderEventBody(event: RunEvent) {
   switch (event.type) {
     case 'tool.call.started': {
@@ -59,7 +52,6 @@ function renderEventBody(event: RunEvent) {
           {args !== undefined && (
             <>
               <span className="text-muted">{truncate(payloadText(args), 160)}</span>
-              <ToolPayload label={t('chat.event.args')} value={args} />
               {d.truncated === true && (
                 <span className="text-muted">{t('chat.event.truncated')}</span>
               )}
@@ -82,7 +74,6 @@ function renderEventBody(event: RunEvent) {
           {d.result !== undefined && (
             <>
               <span className="text-muted">{truncate(payloadText(d.result), 160)}</span>
-              <ToolPayload label={t('chat.event.result')} value={d.result} />
               {d.truncated === true && (
                 <span className="text-muted">{t('chat.event.truncated')}</span>
               )}
@@ -98,7 +89,7 @@ function renderEventBody(event: RunEvent) {
         <>
           <span className="font-mono text-md">{d.tool_name ?? 'tool'}</span>
           {meta && <span className="error-meta font-mono tabular-nums">{meta}</span>}
-          <ToolPayload label={t('chat.event.errorExpanded')} value={d.error ?? 'error'} open />
+          <span className="text-danger">{truncate(d.error ?? 'error', 240)}</span>
         </>
       );
     }
@@ -148,8 +139,20 @@ function renderEventBody(event: RunEvent) {
         </>
       );
     }
-    default:
+    default: {
+      // 兜底的 `*.failed`：摘要保留错误文本，展开区仍有完整载荷。
+      const d = event.data as { error?: unknown };
+      if (event.type.endsWith('.failed') && typeof d.error === 'string' && d.error.length > 0) {
+        const meta = formatErrorMeta(errorMetaOf(event.data));
+        return (
+          <>
+            {meta && <span className="error-meta font-mono tabular-nums">{meta}</span>}
+            <span className="text-danger">{truncate(d.error, 240)}</span>
+          </>
+        );
+      }
       return <span className="text-muted">{truncate(JSON.stringify(event.data), 200)}</span>;
+    }
   }
 }
 
@@ -268,7 +271,7 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
         }),
       };
     }
-    // hook.* 是内部执行细节：折叠成一行，替代默认分支的原始 JSON。
+    // hook.* 是内部执行细节：折叠成一行 notice，展开仍是完整载荷。
     case 'hook.started':
     case 'hook.completed':
     case 'hook.system_prompt_ignored':
@@ -284,13 +287,51 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
   }
 }
 
+/** 切换提示：纯 CSS 按 details 的 open 状态二选一，不引入受控状态。 */
+function ToggleHint() {
+  return (
+    <span className="event-block-toggle" aria-hidden="true">
+      <span className="event-toggle-expand">{t('chat.event.expand')}</span>
+      <span className="event-toggle-collapse">{t('chat.event.collapse')}</span>
+    </span>
+  );
+}
+
+/** 展开区：事件元信息 + 完整原始载荷。 */
+function EventPayload({ event }: { event: RunEvent }) {
+  // 运行时可能缺省 data；类型上它不可空，先落到 unknown 再判空，避免伪造 "undefined"。
+  const data: unknown = event.data;
+  const text = data === undefined || data === null ? '' : payloadText(data);
+  return (
+    <div className="event-block-body">
+      <div className="event-raw-label">{t('chat.event.raw')}</div>
+      <dl className="event-meta-list" aria-label={t('chat.event.meta')}>
+        <dt>{t('chat.event.type')}</dt>
+        <dd className="font-mono wrap-anywhere">{event.type}</dd>
+        <dt>{t('chat.event.time')}</dt>
+        <dd className="font-mono tabular-nums">{formatTimestamp(event.ts, { withMs: true })}</dd>
+        <dt>{t('chat.event.runId')}</dt>
+        <dd className="font-mono wrap-anywhere">{event.run_id}</dd>
+      </dl>
+      <div className="event-raw-label">{t('chat.event.rawData')}</div>
+      <pre className="event-raw-pre">{text || t('chat.event.empty')}</pre>
+    </div>
+  );
+}
+
 export function NoticeRow({ event }: { event: RunEvent }) {
   const view = noticeView(event);
   if (!view) return <EventRow event={event} />;
   return (
-    <div className={`stream-notice ${view.tone}`} role="status">
-      <span className="min-w-0 flex-1 wrap-anywhere">{view.text}</span>
-    </div>
+    <details className={`event-block notice-block ${view.tone}`}>
+      <summary className="event-block-summary">
+        <span className="notice-block-text" role="status">
+          {view.text}
+        </span>
+        <ToggleHint />
+      </summary>
+      <EventPayload event={event} />
+    </details>
   );
 }
 
@@ -298,16 +339,20 @@ export function EventRow({ event }: { event: RunEvent }) {
   const tag = eventTag(event.type);
   const indent = tag.cls.startsWith('tag-tool-') ? ' ml-2.5 pl-3' : '';
   return (
-    <div className={`flex items-baseline gap-2.5 py-1 text-md leading-relaxed text-muted${indent}`}>
-      <span className="font-mono text-sm tabular-nums text-faint">
-        {formatTimestamp(event.ts, { withMs: true })}
-      </span>
-      <span
-        className={`rounded-xs bg-sunken px-1.5 font-mono text-sm leading-4 tracking-wide whitespace-nowrap ${TAG_TONE[tag.cls] ?? 'text-faint'}`}
-      >
-        {tag.label}
-      </span>
-      <span className="min-w-0 flex-1 wrap-anywhere">{renderEventBody(event)}</span>
-    </div>
+    <details className={`event-block${indent}`}>
+      <summary className="event-block-summary">
+        <span className="shrink-0 font-mono text-sm tabular-nums text-faint">
+          {formatTimestamp(event.ts, { withMs: true })}
+        </span>
+        <span
+          className={`shrink-0 rounded-xs bg-sunken px-1.5 font-mono text-sm leading-4 tracking-wide whitespace-nowrap ${TAG_TONE[tag.cls] ?? 'text-faint'}`}
+        >
+          {tag.label}
+        </span>
+        <span className="event-block-preview">{renderEventBody(event)}</span>
+        <ToggleHint />
+      </summary>
+      <EventPayload event={event} />
+    </details>
   );
 }

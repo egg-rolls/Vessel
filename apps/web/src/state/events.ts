@@ -88,6 +88,27 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'hook.additional_context_deprecated',
 ]);
 
+/**
+ * 只属于观察面（Observe / Runs）的成员事件：聊天窗无条件不展示。
+ *
+ * 这些事件的 `run_id` 是成员 / 队列入队 id，不是 run id，落进聊天时间线只会变成
+ * 与对话无关的原始 JSON 卡。用显式集合而不是 `hasRunEvent` 推断：成员事件将来
+ * 若补上 `data.run_id`，也不能重新漏进聊天窗。lifecycle notice
+ * （`agent.limit.warning` / `agent.rotating` / `agent.rotated` / `agent.restarting` /
+ * `agent.restarted` / `agent.compact_forked`）不在此列，聊天窗继续显示。
+ */
+export const CHAT_HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'agent.spawned',
+  'agent.message.queued',
+  'agent.message.sent',
+  'agent.closed',
+  'agent.stale',
+  'agent.permission.requested',
+  'agent.permission.responded',
+  'agent.queue.entered',
+  'agent.queue.left',
+]);
+
 /** 单个 run 的事件序列 → 可渲染分组。 */
 export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunGroup {
   const group: RunGroup = { runId, status: 'running', hasRunEvent: false, items: [] };
@@ -252,6 +273,8 @@ export function isVisibleForGrouping(
   showInternal: boolean,
   errorLevel: ErrorVisibility = 'user',
 ): boolean {
+  // 观察面事件无视 showInternal：聊天窗永远不展示，只在 Observe / Runs 可见。
+  if (CHAT_HIDDEN_EVENT_TYPES.has(entry.event.type)) return false;
   if (!showInternal && INTERNAL_EVENT_TYPES.has(entry.event.type)) return false;
   // 子 agent 事件属于内部执行细节：默认不按 child run_id 拆成 raw JSON 卡片。
   if (!showInternal && entry.event.type.startsWith('subagent.')) return false;
