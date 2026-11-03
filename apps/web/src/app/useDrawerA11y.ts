@@ -26,7 +26,7 @@ export function useDrawerA11y({
   useEffect(() => {
     if (!enabled) {
       wasOpen.current = open;
-      return;
+      return undefined;
     }
     if (open) {
       const first = containerRef.current?.querySelector<HTMLElement>(FOCUSABLE);
@@ -42,6 +42,8 @@ export function useDrawerA11y({
       wasOpen.current = false;
       document.getElementById(returnFocusId)?.focus();
     }
+    // `noImplicitReturns`：与上面的 cleanup 分支显式对齐，React 接受 undefined。
+    return undefined;
   }, [enabled, open, returnFocusId]);
 
   useEffect(() => {

@@ -66,6 +66,9 @@ jobs:
       - name: Check web style contract
         run: bun run scripts/check-web-styles.ts
 
+      - name: Check web i18n contract
+        run: bun run scripts/check-i18n.ts
+
       - name: Check RPC method table
         run: bun run scripts/check-rpc-methods.ts
 

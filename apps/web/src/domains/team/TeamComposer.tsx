@@ -224,7 +224,10 @@ export function TeamComposer({
               }
               if ((event.key === 'Enter' || event.key === 'Tab') && candidates.length > 0) {
                 event.preventDefault();
-                pick(candidates[active] ?? candidates[0]);
+                // active 可能因候选收缩而越界，退回第一项。二者在 length > 0 下必然存在，
+                // 但编译器证明不了；显式判空而不是加非空断言（仓库零 `!`）。
+                const choice = candidates[active] ?? candidates[0];
+                if (choice !== undefined) pick(choice);
                 return;
               }
               if (event.key === 'Tab') {
