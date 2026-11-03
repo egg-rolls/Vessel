@@ -366,8 +366,8 @@ export class ExecutionUnit {
   private readonly eventLogUnsubscribe?: Unsubscribe;
   /** ADR-098 C2：注入的租约服务；缺省 no-op（行为等同现状） */
   private readonly leaseService?: LeaseServicePort;
-  /** ADR-098 C2：ControlPlane 在 spawn 时授予的 BindingLease（EU 只续租/释放） */
-  private readonly bindingLease?: LeaseGrant;
+  /** ADR-098 C2：ControlPlane 在 spawn 时授予的 BindingLease（EU 续租/释放；续租后更新） */
+  private bindingLease?: LeaseGrant;
   /** ADR-098 C2：本 EU 持有的 SessionLease（按 session 记录，用于 fencing token） */
   private readonly sessionLeases = new Map<string, LeaseGrant>();
   /** 后台续租定时器；`.unref()` 防止 smoke/CLI 被挂住 */
@@ -398,6 +398,11 @@ export class ExecutionUnit {
     this.logger =
       opts.logger ??
       (process.env.VESSEL_DEBUG ? createStderrLogger({ level: 'debug' }) : noopLogger);
+    // 空闲 EU 也必须续租 BindingLease：仅靠 acquireSessionLease/ensureSessionLease
+    // 启动计时器会让“已 join、尚未跑过 run”的 body 在 TTL（默认 30s）后丢租约。
+    if (this.leaseService !== undefined && this.bindingLease !== undefined) {
+      this.startLeaseRenewTimer();
+    }
     if (this.eventLog) {
       // 交互应答由 harness / 插件直接发布；runtime 只补落盘，不二次发布。
       this.eventLogUnsubscribe = this.events.subscribe((event) => this.persistObservedEvent(event));
@@ -541,8 +546,20 @@ export class ExecutionUnit {
         this.startLeaseRenewTimer();
         return renewed;
       } catch (error) {
-        this.onLeaseLost(error);
-        throw error;
+        // 与后台续租同口径：真实过期 / stale_fence 才丢租约；普通 I/O 错误时
+        // existing 尚未过期，继续用它开跑，下个 tick 再续，不毒化 EU。
+        if (error instanceof LeaseExpiredError || existing.expiresAt <= Date.now()) {
+          this.onLeaseLost(error);
+          throw error;
+        }
+        this.logger.warn('session lease renew failed; using existing grant', {
+          ...(this.boundAgentId !== undefined ? { agent_id: this.boundAgentId } : {}),
+          lease_kind: existing.kind,
+          lease_key: existing.key,
+          error: errorText(error),
+        });
+        this.startLeaseRenewTimer();
+        return existing;
       }
     }
 
@@ -595,12 +612,15 @@ export class ExecutionUnit {
     if (this.bindingLease !== undefined) {
       ttlMs = Math.min(ttlMs, this.bindingLease.expiresAt - now);
     }
-    // 配置了 `lease.renewMs` 时优先使用；缺省按 TTL/3（默认 30s TTL → 10s）。
+    // 续租间隔：优先 `lease.renewMs`，但不得超过最近一张租约剩余 TTL 的 1/3
+    // （构造时 bindingLease 可能已消耗掉一部分 TTL，固定 10s 会来不及）。
     const configuredRenewMs = this.leaseService.renewMs;
-    const intervalMs =
+    const ttlDerivedMs = Math.max(1_000, Math.floor(ttlMs / 3));
+    const configuredMs =
       configuredRenewMs !== undefined && configuredRenewMs > 0
         ? Math.max(1_000, Math.floor(configuredRenewMs))
-        : Math.max(1_000, Math.floor(ttlMs / 3));
+        : ttlDerivedMs;
+    const intervalMs = Math.min(configuredMs, ttlDerivedMs);
     this.leaseRenewTimer = setInterval(() => {
       void this.renewLeases();
     }, intervalMs);
@@ -613,23 +633,29 @@ export class ExecutionUnit {
     this.leaseRenewTimer = undefined;
   }
 
-  /** 续租 SessionLease + BindingLease；任一失败即进入租约丢失流程。 */
+  /**
+   * 续租 SessionLease + BindingLease。
+   *
+   * 单次续租失败不等同租约丢失：只有 `LeaseExpiredError`（真实过期 / stale_fence）
+   * 或租约时钟已过期才进入丢失流程；其它错误（瞬时 I/O 等）只记 warn，
+   * 下个 tick 继续重试——一次抖动不应把整个 EU 毒化。
+   */
   private async renewLeases(): Promise<void> {
     const service = this.leaseService;
     if (!service || this.leaseLost) return;
     if (this.renewingLeases !== undefined) return this.renewingLeases;
 
     const task = (async () => {
-      try {
-        for (const [sessionId, grant] of [...this.sessionLeases]) {
-          const renewed = await service.renew(grant.leaseId);
-          this.sessionLeases.set(sessionId, renewed);
-        }
-        if (this.bindingLease !== undefined) {
-          await service.renew(this.bindingLease.leaseId);
-        }
-      } catch (error) {
-        this.onLeaseLost(error);
+      for (const [sessionId, grant] of [...this.sessionLeases]) {
+        const renewed = await this.renewGrant(grant);
+        if (this.leaseLost) return;
+        if (renewed !== undefined) this.sessionLeases.set(sessionId, renewed);
+      }
+      const binding = this.bindingLease;
+      if (binding !== undefined) {
+        const renewed = await this.renewGrant(binding);
+        // 续租成功必须保存新 grant，否则 expiresAt 停留在 acquire 时刻。
+        if (renewed !== undefined) this.bindingLease = renewed;
       }
     })();
     this.renewingLeases = task;
@@ -637,6 +663,30 @@ export class ExecutionUnit {
       await task;
     } finally {
       if (this.renewingLeases === task) this.renewingLeases = undefined;
+    }
+  }
+
+  /**
+   * 续租单个 grant；返回新 grant，失败返回 undefined。
+   * 真实过期 / stale_fence 或租约时钟已过期 → `onLeaseLost`（停表，不再无限重试）。
+   */
+  private async renewGrant(grant: LeaseGrant): Promise<LeaseGrant | undefined> {
+    const service = this.leaseService;
+    if (service === undefined || this.leaseLost) return undefined;
+    try {
+      return await service.renew(grant.leaseId);
+    } catch (error) {
+      if (error instanceof LeaseExpiredError || grant.expiresAt <= Date.now()) {
+        this.onLeaseLost(error);
+        return undefined;
+      }
+      this.logger.warn('lease renew failed; will retry', {
+        ...(this.boundAgentId !== undefined ? { agent_id: this.boundAgentId } : {}),
+        lease_kind: grant.kind,
+        lease_key: grant.key,
+        error: errorText(error),
+      });
+      return undefined;
     }
   }
 

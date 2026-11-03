@@ -18,6 +18,7 @@ import {
   type ContextSummarizer,
   compactMessagesForFork,
   type EventStream,
+  LeaseExpiredError,
   type LeaseGrant,
   type LeaseServicePort,
   type Logger,
@@ -1827,12 +1828,14 @@ export class AgentServiceImpl implements AgentService {
   ): Promise<void> {
     let result: MemberTurnResult | undefined;
     let failure: string | undefined;
+    let leaseLostFailure = false;
     try {
       result =
         resume && this.runtime.resumeTurn !== undefined
           ? await this.runtime.resumeTurn(entry.runtimeMember, message, handle.id)
           : await this.runtime.runTurn(entry.runtimeMember, message, handle.id);
     } catch (error) {
+      leaseLostFailure = this.isLeaseLossFailure(entry, error);
       if (!handle.cancelRequested && !entry.closing) {
         failure = errorText(error);
         this.logger.error('agent.run.failed', {
@@ -1861,6 +1864,18 @@ export class AgentServiceImpl implements AgentService {
     entry.lastActiveAt = this.now();
     this.registry.touchBinding(record.id, entry.bindingId, entry.lastActiveAt);
     if (result?.usage !== undefined) this.registry.setUsage(record.id, result.usage);
+
+    if (leaseLostFailure && !entry.closing && !entry.retired) {
+      // 租约丢失后 EU 内部的 leaseLost 没有重置路径；拆掉这具 body runtime，
+      // 下一次 admit 重新 spawn 并重新获取 BindingLease（不改 membership / epoch）。
+      // closing / retired 的体由 rotate / close 自己的收口路径 dispose，避免竞态。
+      this.logger.warn('agent.body.lease_lost', {
+        member_id: record.id,
+        session_id: entry.bindingId,
+        run_id: handle.id,
+      });
+      await this.disposeEntry(entry);
+    }
 
     const current = this.registry.get(record.id);
     const cancelled = handle.cancelRequested || result?.outcome === 'cancelled';
@@ -1896,6 +1911,23 @@ export class AgentServiceImpl implements AgentService {
     this.updateAgentState(record.id, outcome);
     this.scheduleSnapshot();
     this.settleHandle(handle, outcome, failure, result?.content);
+  }
+
+  /**
+   * 本轮失败是否由租约丢失导致。
+   *
+   * `LeaseExpiredError`（lease_expired / stale_fence）最直接；但租约丢失时
+   * `ExecutionUnit.onLeaseLost` 会以 `shutdown` abort 当前 run，外层看到的只是
+   * `Error('shutdown')`，所以再按 EU 的 session lease token 兜底判定。
+   */
+  private isLeaseLossFailure(entry: ExecutionUnitEntry, error: unknown): boolean {
+    if (error instanceof LeaseExpiredError) return true;
+    const message = errorText(error);
+    if (message.includes('lease_expired') || message.includes('stale_fence')) return true;
+    if (this.leaseService === undefined) return false;
+    return (
+      message === 'shutdown' && this.runtime.sessionLeaseToken?.(entry.bindingId) === undefined
+    );
   }
 
   /**
