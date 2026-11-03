@@ -47,12 +47,10 @@ import {
   startGateway,
   type TenantEventHub,
 } from '../packages/serve/src/index';
-import { startInkRepl } from '../packages/tui/src/index';
-import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
+import { startInkRepl } from '../packages/tui/src/repl/ink-repl';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
 import { buildCliConfigOverrides } from './cli-overrides';
-import { applyCommandLocale, matchCommand } from './commands/registry';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import { type ConfigWatchHandle, startConfigWatch, toConfigReloadOutcome } from './config-watch';
 import type { FeishuChannelLike } from './control-plane-types';
@@ -409,10 +407,14 @@ if (demoRequested) {
 }
 // 一次性命令注册表：按注册顺序命中第一个，执行后直接退出。
 // 命中后不进入 bootstrap / REPL / serve / headless 主流程。
-const command = matchCommand(args);
-if (command) {
-  await applyCommandLocale();
-  process.exit((await command.run(args, { useMock })) ?? 0);
+// dynamic import：--help / --version 早退路径不再加载注册表（S4 §2.3）。
+{
+  const { applyCommandLocale, matchCommand } = await import('./commands/registry');
+  const command = matchCommand(args);
+  if (command) {
+    await applyCommandLocale();
+    process.exit((await command.run(args, { useMock })) ?? 0);
+  }
 }
 // 0.12：`gateway start` / `gateway restart` 前台 = 现有 `--serve` 管线。
 // `--daemon` 及其它 gateway 子命令已由注册表处理。
@@ -595,6 +597,8 @@ applyLocale((config.ui as { language?: string } | undefined)?.language);
 
 // 首启向导（仅真正交互的 REPL；serve-only / 管道无 TTY 时已由 bootstrap 快速失败）
 if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
+  // 首启分支内 dynamic import：常规启动不加载 wizard（S4 §2.3）。
+  const { runSetupWizard } = await import('../packages/tui/src/wizard/setup-wizard');
   const userConfig = await runSetupWizard();
   if (userConfig.apiKey) {
     config.apiKey = userConfig.apiKey;
@@ -1459,7 +1463,9 @@ async function runWithConfig(result: BootstrapResult) {
       config.update?.autoCheck !== false &&
       !process.env.VESSEL_NO_UPDATE_CHECK
     ) {
-      void scheduleUpdateCheck(ctx, config);
+      setTimeout(() => {
+        void scheduleUpdateCheck(ctx, config);
+      }, 0);
     }
     await startInkRepl(ctx);
   }

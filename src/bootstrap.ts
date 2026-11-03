@@ -1046,7 +1046,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // 启动 prune：best-effort，失败只 warn（无写意图时不触碰磁盘）。
   const localWrites = options.acquireLock === true || options.dataDir !== undefined;
-  if (localWrites) {
+  // 交互 REPL 的首帧不能被 prune 阻塞：留到 bootstrap 末尾用 timer 调度（S4 §2.2）。
+  // headless / serve 没有首帧指标，保持 await，避免改变其生命周期语义。
+  const pruneAfterFirstFrame = localWrites && options.interactive === true;
+  const pruneTraceBestEffort = async (): Promise<void> => {
     try {
       await pruneTenantTrace({ config, tenantPaths });
     } catch (error) {
@@ -1054,6 +1057,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         `⚠ Failed to prune trace: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  };
+  if (localWrites && !pruneAfterFirstFrame) {
+    await pruneTraceBestEffort();
   }
 
   // ── 每 tenant 执行面（0.5 A-6）──────────────────
@@ -1891,6 +1897,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       void shutdown().finally(() => process.exit(0));
     },
   };
+
+  // 交互模式：prune 在 bootstrap 返回后由 timer 执行，首帧写入不等待它（S4 D2）。
+  if (pruneAfterFirstFrame) {
+    setTimeout(() => {
+      void pruneTraceBestEffort();
+    }, 0);
+  }
 
   return {
     runtime: resumableRuntime,

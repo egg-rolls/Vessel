@@ -349,32 +349,35 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
     if (startupWrittenRef.current) return;
     startupWrittenRef.current = true;
     let disposed = false;
-    void loadStartupFacts(ctx)
-      .then((facts) => {
-        if (disposed) return;
-        const header = buildStartupHeader({
-          columns: stdout.columns ?? 80,
-          rows: stdout.rows ?? 24,
-          ...(ctx.version ? { version: ctx.version } : {}),
-          summary: {
-            model: ctx.provider.model,
-            sessionId: ctx.currentSessionId,
-            ...(ctx.tenant ? { tenantId: ctx.tenant.tenant_id } : {}),
-            mcpCount: facts.mcpServers?.length ?? 0,
-            interruptedRuns: facts.interruptedRuns?.length ?? 0,
-            feishuConnected: facts.feishu?.connected ?? false,
-          },
+    // 调度到首帧之后：启动信息查询（含 runs.list）不进入首帧写出窗口。
+    setTimeout(() => {
+      void loadStartupFacts(ctx)
+        .then((facts) => {
+          if (disposed) return;
+          const header = buildStartupHeader({
+            columns: stdout.columns ?? 80,
+            rows: stdout.rows ?? 24,
+            ...(ctx.version ? { version: ctx.version } : {}),
+            summary: {
+              model: ctx.provider.model,
+              sessionId: ctx.currentSessionId,
+              ...(ctx.tenant ? { tenantId: ctx.tenant.tenant_id } : {}),
+              mcpCount: facts.mcpServers?.length ?? 0,
+              interruptedRuns: facts.interruptedRuns?.length ?? 0,
+              feishuConnected: facts.feishu?.connected ?? false,
+            },
+          });
+          const notice = buildStartupNotice(facts);
+          const lines = notice ? [...header, notice] : header;
+          // 启动头 / wordmark / tagline / 能力提示统一暗金品牌色（打开终端第一眼看到的文字）。
+          if (lines.length > 0) {
+            dispatch({ type: 'appendHistoryLines', lines, tone: 'brand' });
+          }
+        })
+        .catch(() => {
+          // 启动信息失败不阻塞 REPL
         });
-        const notice = buildStartupNotice(facts);
-        const lines = notice ? [...header, notice] : header;
-        // 启动头 / wordmark / tagline / 能力提示统一暗金品牌色（打开终端第一眼看到的文字）。
-        if (lines.length > 0) {
-          dispatch({ type: 'appendHistoryLines', lines, tone: 'brand' });
-        }
-      })
-      .catch(() => {
-        // 启动信息失败不阻塞 REPL
-      });
+    }, 0);
     return () => {
       disposed = true;
     };
