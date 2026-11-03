@@ -2107,6 +2107,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
         if (!isLoopbackAddress(srv.requestIP(req)?.address)) {
           return errorJson('forbidden', 'Local token is only available on loopback', 403);
         }
+        // 反代 / 通配监听时，客户端 IP 仍可能是回环；Host 也必须是回环，
+        // 否则代理域名下的页面会拿到 token。
+        const host = req.headers.get('host');
+        let hostName: string | null = null;
+        try {
+          hostName = host === null ? null : new URL(`http://${host}`).hostname;
+        } catch {
+          hostName = null;
+        }
+        if (hostName === null || !isLoopbackHostname(hostName)) {
+          return errorJson('forbidden', 'Local token requires a loopback Host', 403);
+        }
         if (!sameOriginRequest(req)) {
           return errorJson('forbidden', 'Local token requires a same-origin request', 403);
         }
