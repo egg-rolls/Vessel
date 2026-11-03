@@ -1,4 +1,6 @@
 import type {
+  AgentRotateInput,
+  AgentRotateSuccess,
   AgentSummary,
   AgentUpdateInput,
   SessionDetail,
@@ -10,6 +12,7 @@ import type { TeamChatClient } from './TeamChat';
 export interface MemberDetailClient extends TeamChatClient {
   getSession(sessionId: string): Promise<SessionDetail>;
   updateAgent(input: AgentUpdateInput): Promise<AgentSummary>;
+  rotateAgent(input: AgentRotateInput): Promise<AgentRotateSuccess>;
 }
 
 export interface MemberDetailProps {

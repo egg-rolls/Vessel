@@ -427,6 +427,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.display.field.askUser': 'Allow ask_user',
   'settings.display.field.askUser.hint':
     'Registration setting: takes effect on a new connection or after a gateway restart.',
+  'settings.display.booleanOn': 'Enabled',
   'settings.display.field.showReasoning': 'Show reasoning stream',
   'settings.display.field.statusBars': 'Status bar position',
   'settings.display.field.language': 'UI language',
@@ -565,6 +566,20 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.member.observedOnly':
     'Observed during this page session; after a refresh only the current session is shown.',
   'team.member.currentSession': 'View current session',
+  'team.member.rotate.open': 'New context',
+  'team.member.rotate.title': 'Start a new context',
+  'team.member.rotate.description':
+    'Switches {name} to a new body. The old body is retired and its session stays read-only.',
+  'team.member.rotate.startupLabel': 'Startup prompt (first message of the new body)',
+  'team.member.rotate.confirm': 'Start new context',
+  'team.member.rotate.success': 'Started a new context for {name}',
+  'team.member.rotate.defaultPrompt':
+    'You are {name}. Continue with your previous responsibilities and the current task.',
+  'team.member.rotate.error.bodyNotLive':
+    'This member has no live body right now. Refresh and try again.',
+  'team.member.rotate.error.memberStale': 'The member changed. Refresh and try again.',
+  'team.member.rotate.error.activeRun':
+    'This member still has a run in progress. Wait for it to finish or cancel it.',
   'team.member.peer': 'member',
   'team.member.contractor': 'temporary',
   'team.role.member': 'member',

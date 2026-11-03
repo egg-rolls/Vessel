@@ -29,7 +29,7 @@ export function SegmentedTabs<T extends string>({
   return (
     <div
       className={cn(
-        'mt-3.5 inline-flex max-w-full gap-0.5 overflow-x-auto rounded-full bg-sunken p-1',
+        'mt-3.5 inline-flex shrink-0 max-w-full gap-0.5 overflow-x-auto rounded-full bg-sunken p-1',
         disabled && 'opacity-45',
       )}
       role="tablist"

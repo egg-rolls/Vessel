@@ -3,10 +3,11 @@
  *
  * Body 历史优先服务端 `member.body_history`；只有字段缺失时才使用
  * `agent.rotated / agent.retired` 的本次页面观察值，并明确标注。
- * 不提供配置 / rotate / close 操作。
+ * 提供需确认的 rotate（新上下文）；不提供配置 / close 操作。
  */
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import {
   EmptyState,
   ErrorState,
@@ -15,6 +16,7 @@ import {
   StaleNotice,
 } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
+import { useToast } from '../../components/ToastProvider';
 import { Badge, Button } from '../../components/ui';
 import type { TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -37,6 +39,15 @@ import { RoleConversionSection } from './RoleConversionSection';
 import { roleLabelKey, roleOf } from './role';
 
 export type { MemberDetailClient, MemberDetailProps } from './member-detail-types';
+
+/** `agents.rotate` 的常见失败码 → 可读文案；未知错误原样返回。 */
+function rotateErrorMessage(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === 'body_not_live') return t('team.member.rotate.error.bodyNotLive');
+  if (code === 'member_stale') return t('team.member.rotate.error.memberStale');
+  if (code === 'active_run') return t('team.member.rotate.error.activeRun');
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function MemberDetail({
   client,
@@ -103,6 +114,12 @@ export function MemberDetail({
     [member, observed],
   );
 
+  const toast = useToast();
+  const [rotateOpen, setRotateOpen] = useState(false);
+  const [startupPrompt, setStartupPrompt] = useState('');
+  const [rotating, setRotating] = useState(false);
+  const [rotateError, setRotateError] = useState<string | null>(null);
+
   const error =
     detailState?.status === 'error'
       ? { message: detailState.error, code: detailState.code }
@@ -153,6 +170,32 @@ export function MemberDetail({
   const status = memberStatus(member);
   const name = member.name?.trim() || shortAgentId(member.agent_id);
   const observedOnly = history.source === 'observed';
+
+  const openRotate = () => {
+    setStartupPrompt(t('team.member.rotate.defaultPrompt', { name }));
+    setRotateError(null);
+    setRotateOpen(true);
+  };
+
+  const submitRotate = async () => {
+    const prompt = startupPrompt.trim();
+    if (!prompt || rotating) return;
+    setRotating(true);
+    setRotateError(null);
+    try {
+      await client.rotateAgent({ to: member.agent_id, startup_prompt: prompt });
+      toast.success(t('team.member.rotate.success', { name }));
+      setRotateOpen(false);
+      reload();
+      // 群聊 / 团队详情共享同一 server snapshot，rotate 后一并刷新。
+      void loadDetail(nodeKey, teamId, client, { limit: 1 }, 'chat');
+    } catch (error) {
+      setRotateError(rotateErrorMessage(error));
+    } finally {
+      setRotating(false);
+    }
+  };
+
   const memberMeta = (
     <>
       <span className="font-mono">{member.agent_id}</span>
@@ -230,15 +273,18 @@ export function MemberDetail({
               </dd>
             </div>
           </dl>
-          <Button
-            variant="primary"
-            disabled={!member.session_id}
-            onClick={() => {
-              if (member.session_id) onOpenSession(member.session_id);
-            }}
-          >
-            {t('team.member.currentSession')}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="primary"
+              disabled={!member.session_id}
+              onClick={() => {
+                if (member.session_id) onOpenSession(member.session_id);
+              }}
+            >
+              {t('team.member.currentSession')}
+            </Button>
+            <Button onClick={openRotate}>{t('team.member.rotate.open')}</Button>
+          </div>
           <LiveBodiesList member={member} onOpenSession={onOpenSession} />
         </section>
 
@@ -264,6 +310,35 @@ export function MemberDetail({
           />
         </section>
       </div>
+
+      {rotateOpen && (
+        <ConfirmDialog
+          title={t('team.member.rotate.title')}
+          body={
+            <>
+              <p className="m-0">{t('team.member.rotate.description', { name })}</p>
+              <label className="flex flex-col gap-1.5" htmlFor="rotate-startup-prompt">
+                <span className="text-faint">{t('team.member.rotate.startupLabel')}</span>
+                <textarea
+                  id="rotate-startup-prompt"
+                  className="min-h-28 w-full rounded-md border border-line bg-surface p-2.5 font-mono text-sm leading-relaxed text-ink"
+                  value={startupPrompt}
+                  disabled={rotating}
+                  onChange={(event) => setStartupPrompt(event.target.value)}
+                />
+              </label>
+              {rotateError && <p className="m-0 text-danger">{rotateError}</p>}
+            </>
+          }
+          confirmLabel={t('team.member.rotate.confirm')}
+          busy={rotating}
+          confirmDisabled={startupPrompt.trim().length === 0}
+          onConfirm={() => void submitRotate()}
+          onCancel={() => {
+            if (!rotating) setRotateOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

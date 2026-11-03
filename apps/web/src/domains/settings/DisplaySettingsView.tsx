@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
-import { Button, Field, KeyValueList, Section, Select } from '../../components/ui';
+import { Button, Field, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { setLocale, t, useLocale } from '../../i18n';
 import {
@@ -74,6 +74,79 @@ function RuntimeContextSection() {
         </div>
       </div>
     </Section>
+  );
+}
+
+/**
+ * 可写键的控件网格（纯展示）：布尔用 checkbox、枚举用 radio。
+ * 单独导出便于静态渲染断言；不依赖 connection / store。
+ */
+export function DisplaySettingsFields({
+  display,
+  disabledFor,
+  onChange,
+}: {
+  display: Record<string, string>;
+  disabledFor?: (setting: DisplaySettingDef) => boolean;
+  onChange: (setting: DisplaySettingDef, raw: string) => void;
+}) {
+  return (
+    <div className="mt-2.5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {DISPLAY_SETTINGS.map((setting) => {
+        const current = display[setting.key] ?? '';
+        const disabled = disabledFor?.(setting) ?? false;
+        return (
+          <fieldset
+            key={setting.key}
+            disabled={disabled}
+            className="min-w-0 rounded-md border border-line bg-raised p-3"
+          >
+            <legend className="px-1 font-mono text-xs tracking-wide text-faint">
+              {setting.key}
+            </legend>
+            <div className="text-md text-ink">{t(`settings.display.field.${setting.id}`)}</div>
+            {setting.id === 'askUser' && (
+              <div className="mt-0.5 text-sm text-muted">
+                {t('settings.display.field.askUser.hint')}
+              </div>
+            )}
+            {setting.type === 'boolean' ? (
+              <label className="mt-2.5 flex items-center gap-2 text-md">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-accent"
+                  checked={current === 'true'}
+                  disabled={disabled}
+                  onChange={(event) => onChange(setting, event.target.checked ? 'true' : 'false')}
+                />
+                <span>{t('settings.display.booleanOn')}</span>
+              </label>
+            ) : (
+              <div
+                className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5"
+                role="radiogroup"
+                aria-label={setting.key}
+              >
+                {(setting.options ?? []).map((option) => (
+                  <label key={option} className="flex items-center gap-1.5 text-md">
+                    <input
+                      type="radio"
+                      name={setting.key}
+                      value={option}
+                      className="h-4 w-4 accent-accent"
+                      checked={current === option}
+                      disabled={disabled}
+                      onChange={() => onChange(setting, option)}
+                    />
+                    <span className="font-mono">{option}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </fieldset>
+        );
+      })}
+    </div>
   );
 }
 
@@ -184,39 +257,10 @@ export function DisplaySettingsView() {
           </Button>
         }
       >
-        <KeyValueList
-          items={DISPLAY_SETTINGS.map((setting) => {
-            const current = display[setting.key] ?? '';
-            const options =
-              setting.type === 'boolean' ? ['true', 'false'] : (setting.options ?? []);
-            return {
-              key: setting.key,
-              label: (
-                <>
-                  <span className="font-mono">{setting.key}</span>
-                  <div className="text-muted">{t(`settings.display.field.${setting.id}`)}</div>
-                  {setting.id === 'askUser' && (
-                    <div className="text-muted">{t('settings.display.field.askUser.hint')}</div>
-                  )}
-                </>
-              ),
-              value: (
-                <Select
-                  aria-label={setting.key}
-                  value={options.includes(current) ? current : ''}
-                  disabled={!connected || saving === setting.key || readOnly}
-                  onChange={(event) => void change(setting, event.target.value)}
-                >
-                  {!options.includes(current) && <option value="">—</option>}
-                  {options.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </Select>
-              ),
-            };
-          })}
+        <DisplaySettingsFields
+          display={display}
+          disabledFor={(setting) => !connected || saving === setting.key || readOnly}
+          onChange={(setting, raw) => void change(setting, raw)}
         />
       </Section>
       {runtimeSection}

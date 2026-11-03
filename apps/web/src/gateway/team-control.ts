@@ -5,11 +5,14 @@
  * HTTP 适配器。token 每次调用时解析，只进 Authorization 头，不进返回值 / 日志。
  * 写操作（create / update / archive）落在节点自己，必须人类 token。
  */
-import { unwrapAgentResult } from './agent-result';
+import { unwrapAgentResult, unwrapAgentRotate } from './agent-result';
 import { fetchNodeRpc, type NodeConfig } from './nodes';
 import type {
   AgentBatchResponse,
   AgentCreateInput,
+  AgentRotateInput,
+  AgentRotateResponse,
+  AgentRotateSuccess,
   AgentSummary,
   AgentUpdateInput,
   SessionDetail,
@@ -40,6 +43,8 @@ export interface TeamControl {
   createAgent(input: AgentCreateInput): Promise<AgentSummary>;
   updateAgent(input: AgentUpdateInput): Promise<AgentSummary>;
   closeAgent(agentId: string): Promise<AgentSummary>;
+  /** 0.26：为成员换一具新 Body（startup_prompt 必填）。 */
+  rotateAgent(input: AgentRotateInput): Promise<AgentRotateSuccess>;
 }
 
 /** 额外节点的适配器；`resolveToken` 在每次请求时读取该节点自己的凭据。 */
@@ -101,6 +106,11 @@ export function createRemoteTeamControl(
     async closeAgent(agentId) {
       return unwrapAgentResult(
         await call<AgentBatchResponse>('agents.close', { agents: [{ agent_id: agentId }] }),
+      );
+    },
+    async rotateAgent(input) {
+      return unwrapAgentRotate(
+        await call<AgentRotateResponse>('agents.rotate', { agents: [input] }),
       );
     },
   };
