@@ -81,6 +81,11 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'llm.request',
   'llm.response',
   'message.injected',
+  // hook.* 由 `ui.showInternalEvents` 统一控制（CONFIG 契约），失败仍走 errorLevel。
+  'hook.started',
+  'hook.completed',
+  'hook.system_prompt_ignored',
+  'hook.additional_context_deprecated',
 ]);
 
 /** 单个 run 的事件序列 → 可渲染分组。 */
@@ -200,7 +205,11 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
       case 'agent.rotated':
       case 'agent.restarting':
       case 'agent.restarted':
-      case 'agent.compact_forked': {
+      case 'agent.compact_forked':
+      case 'hook.started':
+      case 'hook.completed':
+      case 'hook.system_prompt_ignored':
+      case 'hook.additional_context_deprecated': {
         flush();
         group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
         continue;

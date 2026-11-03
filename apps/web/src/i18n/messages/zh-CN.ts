@@ -396,7 +396,7 @@ export const messages = {
   // 0.15: Settings → Display
   'settings.tab.display': '显示',
   'settings.display.title': '显示与可见性',
-  'settings.display.description': '写入用户配置；仅列出的键可写。保存后新连接或重启 gateway 生效。',
+  'settings.display.description': '写入用户配置；仅列出的键可写。显示与可见性设置保存后立即生效。',
   'settings.display.noToken': '未连接 gateway',
   'settings.display.noTokenReason': '连接后才能读取/写入设置。',
   'settings.display.unavailableTitle': '配置接口未启用',
@@ -412,6 +412,7 @@ export const messages = {
   'settings.display.field.errorLevel': '错误层级',
   'settings.display.field.showProcessErrors': '显示 process 错误',
   'settings.display.field.askUser': '允许 ask_user',
+  'settings.display.field.askUser.hint': '注册类设置：保存后需新连接或重启 gateway 才生效。',
   'settings.display.field.showReasoning': '显示思考流',
   'settings.display.field.statusBars': '状态栏位置',
   'settings.display.field.language': '界面语言',
@@ -995,6 +996,7 @@ export const messages = {
   'chat.notice.restarting': '上下文重启中 · {session} · epoch {from} → {epoch}',
   'chat.notice.restarted': '上下文已重启 · {session} · epoch {from} → {epoch}',
   'chat.notice.compactForked': '上下文已压缩分叉 · {from} → {to} · epoch {epoch}',
+  'chat.notice.hook': 'hook · {name}',
   'chat.role.assistant': '助手',
   'chat.loadEarlier': '加载更早（还有 {count} 条）',
 

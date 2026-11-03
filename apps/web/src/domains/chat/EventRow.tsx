@@ -268,6 +268,17 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
         }),
       };
     }
+    // hook.* 是内部执行细节：折叠成一行，替代默认分支的原始 JSON。
+    case 'hook.started':
+    case 'hook.completed':
+    case 'hook.system_prompt_ignored':
+    case 'hook.additional_context_deprecated': {
+      const name =
+        typeof data.hook_name === 'string' && data.hook_name.length > 0
+          ? data.hook_name
+          : event.type;
+      return { tone: 'info', text: t('chat.notice.hook', { name }) };
+    }
     default:
       return null;
   }

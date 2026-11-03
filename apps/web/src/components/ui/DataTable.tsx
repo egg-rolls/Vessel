@@ -23,6 +23,11 @@ export interface DataTableProps<Row> {
   activeKey?: string;
   /** 追加到 `<table>` 的布局类。 */
   className?: string;
+  /**
+   * 表头吸顶。只在表格自身处于有界滚动容器内时开启；页面级表格保持
+   * 默认 false，否则会钉在路由滚动容器顶部、压住 PageHeader / SegmentedTabs。
+   */
+  stickyHeader?: boolean;
 }
 
 const HIDE_CLASS: Record<DataTableHide, string> = {
@@ -31,8 +36,9 @@ const HIDE_CLASS: Record<DataTableHide, string> = {
 };
 
 /**
- * 语义数据表：表头 sticky、行 hover / 选中底色、列断点隐藏与末列换行规则。
- * 只负责展示，不含排序 / 分页 / 虚拟化。
+ * 语义数据表：行 hover / 选中底色、列断点隐藏与末列换行规则。
+ * 表头默认不吸顶（页面级表格会被路由滚动容器钉在顶部、遮挡页头与 tab）；
+ * 只有表格自己带滚动容器时才传 `stickyHeader`。只负责展示，不含排序 / 分页 / 虚拟化。
  */
 export function DataTable<Row>({
   columns,
@@ -40,6 +46,7 @@ export function DataTable<Row>({
   rowKey,
   activeKey,
   className,
+  stickyHeader = false,
 }: DataTableProps<Row>) {
   return (
     <table className={cn('w-full border-collapse bg-raised text-md', className)}>
@@ -50,7 +57,8 @@ export function DataTable<Row>({
               key={column.key}
               scope="col"
               className={cn(
-                'sticky top-0 z-1 h-9 bg-sunken px-2.5 py-1.5 text-left align-middle font-mono text-xs font-medium tracking-wide text-faint uppercase wrap-anywhere max-compact:px-1.5',
+                'h-9 bg-sunken px-2.5 py-1.5 text-left align-middle font-mono text-xs font-medium tracking-wide text-faint uppercase wrap-anywhere max-compact:px-1.5',
+                stickyHeader && 'sticky top-0 z-1',
                 column.hide && HIDE_CLASS[column.hide],
               )}
             >

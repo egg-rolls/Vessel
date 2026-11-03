@@ -86,7 +86,7 @@ Linen 视觉的 body、标题、表单默认样式仍由 `src/styles/base.css` �
 | `Select`                                                                         | `components/ui/Field.tsx`            | 自定义 listbox（`role=combobox` 触发器 + portal 弹层）；`value` / `onChange(event.target.value)` / `<option>` children 写法不变；方向键 / Home / End / Enter / Space / Esc / Tab / 点外关闭，焦点留在触发器 |
 | `KeyValueList`                                                                   | `components/ui/KeyValueList.tsx`     | 两列 `dl` 网格（等价旧 `.diag-list`）；`items: { label, value }[]`，value 自动断行                                                      |
 | `Stat`                                                                           | `components/ui/Stat.tsx`             | 指标块；`label` / `value` / `hint`                                                                                                                                                                        |
-| `DataTable`                                                                      | `components/ui/DataTable.tsx`        | 语义化表格；`columns`（`hide: 'wide' \| 'compact'`）/ `rows` / `rowKey` / `activeKey`；不做排序、分页、虚拟化                         |
+| `DataTable`                                                                      | `components/ui/DataTable.tsx`        | 语义化表格；`columns`（`hide: 'wide' \| 'compact'`）/ `rows` / `rowKey` / `activeKey` / `stickyHeader`（默认 false，仅限自身有滚动容器的表格）；不做排序、分页、虚拟化                         |
 
 `StatusChip` 的 tone 只取 `muted` / `info` / `warn` / `ok` / `danger`；新增状态先加
 `STATUS_META` 与 i18n key，不要在业务页手写颜色。

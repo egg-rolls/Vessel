@@ -1077,6 +1077,8 @@ export function projectMessagesToUiItems(
 
   for (const message of messages) {
     if (message.role === 'system') continue;
+    // 热应用/来源标注的上下文消息只给模型看，不进入人类可读投影（与 commands.ts / export-command.ts 同口径）。
+    if (message.name?.startsWith('vessel:')) continue;
     if (message.role === 'tool') {
       // 已被 assistant.tool_calls 配对的消息不再单独成项
       if (message.tool_call_id !== undefined && pairedToolCalls.has(message.tool_call_id)) continue;

@@ -409,7 +409,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.tab.display': 'Display',
   'settings.display.title': 'Display & visibility',
   'settings.display.description':
-    'Writes user config; only the listed keys are writable. Takes effect for new connections or after a gateway restart.',
+    'Writes user config; only the listed keys are writable. Display and visibility settings apply immediately after saving.',
   'settings.display.noToken': 'Not connected',
   'settings.display.noTokenReason': 'Connect to read or write settings.',
   'settings.display.unavailableTitle': 'Config API not enabled',
@@ -425,6 +425,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.display.field.errorLevel': 'Error level',
   'settings.display.field.showProcessErrors': 'Show process errors',
   'settings.display.field.askUser': 'Allow ask_user',
+  'settings.display.field.askUser.hint':
+    'Registration setting: takes effect on a new connection or after a gateway restart.',
   'settings.display.field.showReasoning': 'Show reasoning stream',
   'settings.display.field.statusBars': 'Status bar position',
   'settings.display.field.language': 'UI language',
@@ -1026,6 +1028,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.restarting': 'context restarting · {session} · epoch {from} → {epoch}',
   'chat.notice.restarted': 'context restarted · {session} · epoch {from} → {epoch}',
   'chat.notice.compactForked': 'context compact-forked · {from} → {to} · epoch {epoch}',
+  'chat.notice.hook': 'hook · {name}',
   'chat.role.assistant': 'Assistant',
   'chat.loadEarlier': 'Load earlier ({count} remaining)',
 

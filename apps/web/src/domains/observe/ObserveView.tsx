@@ -38,8 +38,7 @@ export function ObserveView({
   useLocale();
   const { tenantId } = useConnection();
   // 本页是 Observe 唯一的滚动容器（`main` 是 `overflow-hidden`，路由变化的
-  // `window.scrollTo` 重置不到它）。切 tab 时若沿用上一页的 scrollTop，长内容
-  // （如诊断表格）的 sticky 表头会立刻钉在视口上沿，看起来像压住了 tab 栏。
+  // `window.scrollTo` 重置不到它）。切 tab 时重置 scrollTop，避免沿用上一页的位置。
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const changeTab = (tab: ObserveRoute['tab']) => {
     scrollRef.current?.scrollTo?.({ top: 0 });

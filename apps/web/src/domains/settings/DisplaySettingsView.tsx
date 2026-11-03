@@ -9,7 +9,7 @@ import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../co
 import { useToast } from '../../components/ToastProvider';
 import { Button, Field, KeyValueList, Section, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
-import { t, useLocale } from '../../i18n';
+import { setLocale, t, useLocale } from '../../i18n';
 import {
   DISPLAY_SETTINGS,
   type DisplaySettingDef,
@@ -150,6 +150,11 @@ export function DisplaySettingsView() {
     setSaving(setting.key);
     try {
       await client.setConfigValue(setting.key, value);
+      // 显示 / 可见性由 config store 驱动：写成功后立即刷新快照，界面无需重连。
+      reloadConfig();
+      if (setting.key === 'ui.language' && (value === 'zh-CN' || value === 'en')) {
+        setLocale(value);
+      }
       toast.success(t('settings.display.saved', { key: setting.key }));
     } catch (error) {
       setDisplay({ [setting.key]: previous });
@@ -190,6 +195,9 @@ export function DisplaySettingsView() {
                 <>
                   <span className="font-mono">{setting.key}</span>
                   <div className="text-muted">{t(`settings.display.field.${setting.id}`)}</div>
+                  {setting.id === 'askUser' && (
+                    <div className="text-muted">{t('settings.display.field.askUser.hint')}</div>
+                  )}
                 </>
               ),
               value: (
