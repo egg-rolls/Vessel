@@ -77,8 +77,8 @@ const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set(['delegate_task']);
  */
 const PARENT_ANSWERED_TOOL_NAMES: ReadonlySet<string> = new Set(['ask_user']);
 
-/** 缺省终止策略（与 delegate 子 agent 一致） */
-const DEFAULT_TERMINATION: TerminationPolicy = { maxIterations: 10, maxRuntimeSeconds: 60 };
+/** 缺省终止策略：不设累计上限（交互 run 靠自动压缩、模型自然停止与用户中断收口） */
+const DEFAULT_TERMINATION: TerminationPolicy = {};
 
 /** 缺省上下文预算 */
 const DEFAULT_CONTEXT_MAX_TOKENS = 1_000_000;

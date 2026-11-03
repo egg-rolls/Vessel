@@ -210,8 +210,8 @@ export class Runtime {
       contextFactory: req.contextFactory ?? this.defaultContextFactory(profile),
       events: req.events,
       limits: req.limits ?? profile.limits ?? {},
-      // Assembly 总是给出完整 termination；缺省保持既有运行上限，避免无限循环。
-      termination: req.termination ?? profile.termination ?? { maxIterations: 20 },
+      // 缺省不设累计上限：交互 run 靠自动压缩 / 模型自然停止 / 用户中断收口。
+      termination: req.termination ?? profile.termination ?? {},
       plugins: req.plugins !== undefined ? [...req.plugins] : [...profile.plugins],
       journalFactory: profile.journalFactory,
       logger: req.logger ?? this.logger,

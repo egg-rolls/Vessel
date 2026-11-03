@@ -175,7 +175,7 @@ export function evaluateTermination(
   stats: UsageStats,
   policy: TerminationPolicy,
 ): LimitBlock | null {
-  if (stats.requestCount >= policy.maxIterations) {
+  if (policy.maxIterations !== undefined && stats.requestCount >= policy.maxIterations) {
     return {
       scope: 'run',
       key: 'max_iterations',

@@ -164,15 +164,6 @@ export const DEFAULT_CONFIG: VesselConfig = {
     temperature: 0.7,
     maxTokens: 4096,
   },
-  limits: {
-    requestLimit: 100,
-    inputTokensLimit: 1000000,
-    outputTokensLimit: 50000,
-  },
-  termination: {
-    maxIterations: 50,
-    maxRuntimeSeconds: 600,
-  },
   session: {
     backend: 'file',
   },

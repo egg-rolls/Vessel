@@ -224,19 +224,21 @@ observability:
 
 ```yaml
 limits:
-  request_limit: 100            # 单 run 的 LLM 请求次数上限
-  input_tokens_limit: 1000000   # 单 run 累计输入 token 上限
-  output_tokens_limit: 50000    # 单 run 累计输出 token 上限
-  # total_cost_limit: 1.5      # 单 run 累计成本上限；缺省不限制
+  # 默认不限制；以下均为显式 opt-in，配置后才生效
+  # request_limit: 100            # 单 run 的 LLM 请求次数上限
+  # input_tokens_limit: 1000000   # 单 run 累计输入 token 上限（含 cache_read，非上下文窗口）
+  # output_tokens_limit: 50000    # 单 run 累计输出 token 上限
+  # total_cost_limit: 1.5        # 单 run 累计成本上限；缺省不限制
 termination:
-  max_iterations: 50            # 迭代上限
-  max_runtime_seconds: 600      # 单 run 墙钟秒数上限（等待用户授权的时间不计入）
+  # 默认不限制；以下均为显式 opt-in，配置后才生效
+  # max_iterations: 50            # 迭代上限
+  # max_runtime_seconds: 600      # 单 run 墙钟秒数上限（等待用户授权的时间不计入）
 ```
 
-- **默认值**（0.31）：`request_limit` 100、`input_tokens_limit` 1,000,000（原 100,000，与 `context.maxTokens` 对齐）、`output_tokens_limit` 50,000；`max_iterations` 50（原 20）、`max_runtime_seconds` 600（ADR-084 Errata；原 300，等待权限确认的时间不计入）。`total_cost_limit` 无默认值。
-- **判定**：每轮先判终止策略（`max_iterations` / `max_runtime_seconds`），再判使用量限额；两者都按 `current >= max` 判定、首个命中生效。使用量限额的检查顺序固定 request → input tokens → output tokens → total cost；终止策略先 `max_iterations`、后 `max_runtime`。默认 `max_iterations` 50 先于 `request_limit` 100 触发；要提高请求次数的实际上限，两者需一起调整。
+- **默认值**：`limits` 与 `termination` 全部缺省，即不设单 run 累计上限；长任务靠自动压缩、模型自然停止与用户中断收口。`request_limit` / `input_tokens_limit` / `output_tokens_limit` / `total_cost_limit` / `max_iterations` / `max_runtime_seconds` 都是显式 opt-in，未配置时对应判定跳过。
+- **判定**：每轮先判终止策略（`max_iterations` / `max_runtime_seconds`），再判使用量限额；两者都按 `current >= max` 判定、首个命中生效，未配置的 key 跳过。使用量限额的检查顺序固定 request → input tokens → output tokens → total cost；终止策略先 `max_iterations`、后 `max_runtime`。同时配置 `max_iterations` 与 `request_limit` 时，两者谁先命中取决于各自取值。
 - **命中行为**：`request_limit` / token / cost 与 `max_iterations` / `max_runtime` 命中时发布一次 `limit.blocked`（`error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`；`run.failed` 保留原 `error` 文本，附同一结构化的 `details`。`source` 是对应的 camelCase 配置路径（如 `limits.inputTokensLimit` / `termination.maxIterations`）；错误文本前缀分别为 `Usage limits exceeded: ...` 与 `Termination policy triggered: ...`。`max_runtime` 的 `current` 是已运行秒数（毫秒精度小数）。
-- **`tool_calls_limit` 已移除（0.31）**：不再有工具调用次数预算；旧配置里的该键被忽略、不报错。循环仍由 `max_iterations` / `max_runtime_seconds` 兜底。
+- **`tool_calls_limit` 已移除（0.31）**：不再有工具调用次数预算；旧配置里的该键被忽略、不报错。显式配置 `max_iterations` / `max_runtime_seconds` 时仍由它们兜底。
 - **成本**：core 不为内置 provider 计价，`total_cost` 默认为 0；`total_cost_limit` 只在宿主显式调用 `LimitChecker.addCost()` 后才有意义。
 - **不新增配置键**：以上键均已存在，tenant overlay 可覆盖 `limits` / `termination`。`LimitBlock.key` 固定为四个使用量 key 加 `max_iterations` / `max_runtime`。
 

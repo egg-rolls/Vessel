@@ -230,16 +230,13 @@ function emptyUsage(): UsageSnapshot {
 
 /**
  * 主 agent 有效限制。
- * 与 bootstrap 一致：limits 整块回退 DEFAULT_CONFIG；termination 逐字段回退
- * （只配置了 maxIterations 时，maxRuntimeSeconds 仍是 600）。
+ * 与 bootstrap 一致：只透传用户显式配置；缺省字段保持 undefined（上限不限制）。
  */
 export function readEffectiveLimits(config: VesselConfig | undefined): EffectiveLimits {
-  const limits = config?.limits ?? DEFAULT_CONFIG.limits ?? {};
+  const limits = config?.limits ?? {};
   const termination = config?.termination;
-  const maxIterations =
-    termination?.maxIterations ?? DEFAULT_CONFIG.termination?.maxIterations ?? 20;
-  const maxRuntimeSeconds =
-    termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds;
+  const maxIterations = termination?.maxIterations;
+  const maxRuntimeSeconds = termination?.maxRuntimeSeconds;
   const maxContext = config?.context?.maxTokens ?? DEFAULT_CONFIG.context?.maxTokens ?? 1_000_000;
   return {
     maxIterations,
@@ -262,11 +259,9 @@ export function readEffectiveLimits(config: VesselConfig | undefined): Effective
 export function readDelegateLimits(config: VesselConfig | undefined): EffectiveLimits {
   const agent = config?.agent;
   const termination = agent?.termination;
-  const limits = agent?.limits ?? DEFAULT_CONFIG.limits ?? {};
-  const maxIterations =
-    termination?.maxIterations ?? DEFAULT_CONFIG.termination?.maxIterations ?? 20;
-  const maxRuntimeSeconds =
-    termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds;
+  const limits = agent?.limits ?? {};
+  const maxIterations = termination?.maxIterations;
+  const maxRuntimeSeconds = termination?.maxRuntimeSeconds;
   return {
     maxIterations,
     ...(maxRuntimeSeconds !== undefined ? { maxRuntimeSeconds } : {}),

@@ -18,7 +18,7 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/tool.ts]
 loop:
     signal.aborted?                     → 抛错（Esc 中断）
     用量 / 终止 90% 预警（每 key 每 run 一次） → 事件 + `vessel:limit` 尾部消息
-    终止 / 硬上限检查（maxIterations / maxRuntimeSeconds / request / token / cost）→ 抛错
+    终止 / 硬上限检查（maxIterations / maxRuntimeSeconds / request / token / cost，仅显式配置时检查）→ 抛错
     autoCompactAsync                    → 压缩时设 PrefixGuard reason=compaction
     # system 冻结：hook 只读 hookCtx.systemPrompt；动态注入只走 hookCtx.messages
     # 旧 additionalContext 自动转 vessel:hook

@@ -16,7 +16,6 @@ import {
 } from '@vessel-agent/agent';
 import {
   buildConfigSnapshot,
-  DEFAULT_CONFIG,
   getUserConfigPath,
   loadConfig,
   resolveEffectiveApiKey,
@@ -1183,12 +1182,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
 
   // 成员 wiring 的构造参数（与 bundle 内保持一致）。
-  const limits = config.limits ?? DEFAULT_CONFIG.limits ?? {};
+  const limits = config.limits ?? {};
   const termination = {
-    maxIterations:
-      config.termination?.maxIterations ?? DEFAULT_CONFIG.termination?.maxIterations ?? 20,
-    maxRuntimeSeconds:
-      config.termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds,
+    maxIterations: config.termination?.maxIterations,
+    maxRuntimeSeconds: config.termination?.maxRuntimeSeconds,
   };
   const permission = {
     default: headless ? ('allow' as const) : ('ask' as const),

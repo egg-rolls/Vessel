@@ -79,7 +79,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | 事件 | `context.compacted`（auto / overflow / manual）；`message.compaction`（可选 `cleared_tool_call_ids` / `degraded`）；`context.pressure`（90%–threshold，每 run 一次） |
 
 压缩摘要经 `RunJournal` 追加 `message.compaction` 事实事件（Run 内以当前 `runId`，两次 Run 之间的手动 `/compact` 用 `run_id='manual'`），恢复时从 session cache + 事件日志重建。
-**90% 与 threshold 分工**：`context.tokenCount / maxTokens` 到 90% 且未超过 `compactThreshold` 时不压缩，发 `context.pressure` + `vessel:limit` 推荐 `agent(rotate)`；超过阈值（默认 85%）由 `autoCompactAsync` 自动压缩，因此默认配置（自动压缩开启）下压力提示不会出现。`limits.inputTokensLimit` 的 90% usage 预警是另一套机制。`rotate` 不自动触发；模型发起的 rotate 必须经人类权限确认。overflow 仍 `forceCompact` 后重试一次。
+**90% 与 threshold 分工**：`context.tokenCount / maxTokens` 到 90% 且未超过 `compactThreshold` 时不压缩，发 `context.pressure` + `vessel:limit` 推荐 `agent(rotate)`；超过阈值（默认 85%）由 `autoCompactAsync` 自动压缩，因此默认配置（自动压缩开启）下压力提示不会出现。`limits.inputTokensLimit` 是另一套机制：仅在显式配置后才做 90% usage 预警与硬上限判定，缺省不限。`rotate` 不自动触发；模型发起的 rotate 必须经人类权限确认。overflow 仍 `forceCompact` 后重试一次。
 
 <a id="prefix"></a>
 

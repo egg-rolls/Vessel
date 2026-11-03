@@ -50,9 +50,9 @@ export interface LimitWarning {
   hint: string;
 }
 
-/** 终止策略 */
+/** 终止策略（字段均可选；缺省表示不设该上限） */
 export interface TerminationPolicy {
-  maxIterations: number;
+  maxIterations?: number;
   maxRuntimeSeconds?: number;
 }
 

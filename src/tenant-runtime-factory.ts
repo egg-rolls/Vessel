@@ -21,7 +21,6 @@ import { join } from 'node:path';
 import { deriveSessionMeta } from '@vessel-agent/core/session';
 import {
   type ConfigSources,
-  DEFAULT_CONFIG,
   isTenantToolAllowed,
   loadConfig,
   resolveTenantToolPolicy,
@@ -832,12 +831,10 @@ export async function buildTenantRuntime(
     const permission = resolveRuntimePermission(config, headless);
 
     // ── Runtime ───────────────────────────────────
-    const limits = config.limits ?? DEFAULT_CONFIG.limits ?? {};
+    const limits = config.limits ?? {};
     const termination = {
-      maxIterations:
-        config.termination?.maxIterations ?? DEFAULT_CONFIG.termination?.maxIterations ?? 20,
-      maxRuntimeSeconds:
-        config.termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds,
+      maxIterations: config.termination?.maxIterations,
+      maxRuntimeSeconds: config.termination?.maxRuntimeSeconds,
     };
     const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
 

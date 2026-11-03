@@ -48,7 +48,7 @@ interface UsageLimits {
 }
 
 interface TerminationPolicy {
-  maxIterations: number;
+  maxIterations?: number;
   maxRuntimeSeconds?: number;
 }
 ```
