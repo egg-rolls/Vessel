@@ -9,7 +9,7 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 <a id="rpc-methods"></a>
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get|sources|set`；`sessions.list|get|search|delete|rename|compact`；`runs.list|get|start|cancel|resume`；`agents.list|get|tree` / `agents.create|update|close|send|dispatch|rotate|restart|compactFork|fork`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get|reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond` / `permissions.setToolPolicy`；`interactions.list`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（admin-only，缺省 `not_supported`）；`teams.list|get|post|members|budget` / `teams.create|update|archive|spawnFrozen`；`auth.exchange|revoke|tokens`。permission 以表格为准。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get|sources|set`；`sessions.list|get|search|delete|rename|compact|rewind`；`runs.list|get|start|cancel|resume`；`agents.list|get|tree` / `agents.create|update|close|send|dispatch|rotate|restart|compactFork|fork`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get|reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond` / `permissions.setToolPolicy`；`interactions.list`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（admin-only，缺省 `not_supported`）；`teams.list|get|post|members|budget` / `teams.create|update|archive|spawnFrozen`；`auth.exchange|revoke|tokens`。permission 以表格为准。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -25,6 +25,7 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 | `sessions.delete` | write |
 | `sessions.rename` | write |
 | `sessions.compact` | write |
+| `sessions.rewind` | write |
 | `runs.list` | read |
 | `runs.get` | read |
 | `runs.start` | write |
@@ -83,7 +84,7 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 - **events**：`events.list` 支持 `run_id` / `since_seq` / `since_ts` / `types` / `type_prefix` / `limit`（默认 50、最大 500），按 `(seq ?? ts)` 升序。`events.subscribe` 支持 `since`（gateway wire seq）/ `since_ts` / `run_id` / `types` / `all_tenants`（仅 admin）。RPC 回调为 `{ method: 'events.event', params: RunEvent }`；WS 旧 `{ kind: 'event', event }` 不变。
 - **manifest**：`capabilities.list` 返回 `{ version, config_schema_version: 1, methods: [{ name, params_schema?, result_schema?, permission }], tools, plugins }`；只含 canonical 方法。manifest 按 `ctx.tenantId` 生成，tools / plugins 取 `pluginHostFor` / `pluginsFor`（缺省回退全局）。
 - **客户端**：`RpcClient` 有 `request()` + `subscribe()`；`LocalRpcClient` / `HttpRpcClient`。CLI/TUI 不绕开方法表。本地 `subscribe()` 由装配层桥接到 `runtimeEvents`（只读旁路，不写回事件流）。`--connect <url>` / `VESSEL_CONNECT` 使用 `HttpRpcClient`、不取 tenant 写锁、不写本地 store / trace；回环可明文，非回环必须 HTTPS + token。token 解析顺序 `--connect-token` > env（`VESSEL_CONNECT_TOKEN` / `connect.token_env`）> `connect.token`；CA 用 `--ca` / `connect.ca_file`。建连后 `health.get` 取远端 tenant / node；显式 `--tenant` 才把 `tenant_id` 合并进请求（admin 覆盖），否则由 token principal 决定。connect 模式下 `permission.respond` / `ask.respond` 经 RPC 回远端；TUI / headless 同路径。
-- **tenant 与错误码**：token → principal（`serve.token`→default/admin、`serve.tokens` 按条目、`serve.admin_token`→`*`/admin、回环无 token→default/admin）；非 admin 指定其它 tenant → `forbidden`；跨 tenant 读取 → `not_found`；一个 gateway 服务 N tenant（工厂缺省时非 default tenant `forbidden`）。durable REST 端点允许 admin 通过 query `tenant_id` 或 `X-Vessel-Tenant` 显式指定 tenant，两处同时出现且不一致 → 400。方法级错误一律 `ok:false`，HTTP 200；冻结集合 `unauthorized` / `forbidden` / `not_found` / `invalid_params` / `tenant_locked` / `quota_exceeded` / `conflict` / `internal` / `not_supported`，增长类业务码还有 `team_full` / `team_frozen`，会话压缩另有 `session_not_found` / `compact_unavailable`。旧路径保留既有错误码映射。
+- **tenant 与错误码**：token → principal（`serve.token`→default/admin、`serve.tokens` 按条目、`serve.admin_token`→`*`/admin、回环无 token→default/admin）；非 admin 指定其它 tenant → `forbidden`；跨 tenant 读取 → `not_found`；一个 gateway 服务 N tenant（工厂缺省时非 default tenant `forbidden`）。durable REST 端点允许 admin 通过 query `tenant_id` 或 `X-Vessel-Tenant` 显式指定 tenant，两处同时出现且不一致 → 400。方法级错误一律 `ok:false`，HTTP 200；冻结集合 `unauthorized` / `forbidden` / `not_found` / `invalid_params` / `tenant_locked` / `quota_exceeded` / `conflict` / `internal` / `not_supported`，增长类业务码还有 `team_full` / `team_frozen`，会话压缩另有 `session_not_found` / `compact_unavailable`；消息撤回另有 `session_not_found` / `rewind_unavailable`（活动 run 返回 `conflict`，message `run_in_progress`）。旧路径保留既有错误码映射。
 
 ## canonical agent 生命周期契约
 

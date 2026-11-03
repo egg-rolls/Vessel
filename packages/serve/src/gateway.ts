@@ -1909,6 +1909,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       case 'run_already_running':
       case 'tenant_locked':
       case 'compact_unavailable':
+      // CONTRACT-0.37：sessions.rewind 无 runtime / 方法 → 409（与 compact 一致）。
+      case 'rewind_unavailable':
         return 409;
       case 'busy':
         return 429;

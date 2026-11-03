@@ -15,6 +15,8 @@
  * - `run.completed.output`   → 覆盖最后一条无 tool_calls 的 assistant 文本
  * - `message.compaction`     → 压缩摘要（0.32 起由 runtime 记录；带 `kept` 边界时
  *                              按应用侧同一规则替换旧历史，否则只追加摘要）
+ * - `session.rewound`        → 把当前投影截到 `keep_projected`（0.37 消息撤回；
+ *                              全量重投影时不能复活已删除的消息）
  *
  * 不产生消息的事件（run.* / permission / context.* / limit 等）直接忽略。
  *
@@ -144,6 +146,16 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
       }
       continue;
     }
+    if (event.type === 'session.rewound') {
+      // 0.37：撤回是「删除尾部」事实。`keep_projected` 是投影空间下标；
+      // 旧事件缺该字段时退回 `keep_messages`（两者在无 base system 时相同）。
+      const keepProjected = readCount(data.keep_projected) ?? readCount(data.keep_messages);
+      if (keepProjected !== undefined && messages.length > keepProjected) {
+        messages.length = keepProjected;
+      }
+      lastAssistant = undefined;
+      continue;
+    }
     if (event.type === 'message.compaction') {
       const message = asMessage(data.message) ?? {
         role: 'system' as const,
@@ -252,6 +264,19 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
   }
 
   return messages;
+}
+
+/**
+ * 0.37：`SessionState.messages` 下标 → `projectMessages` 投影空间下标。
+ *
+ * `projectMessages` 不产生 base system prompt；当 `messages[0]` 是非压缩 system
+ * 时它只存在于缓存，投影下标比 state 下标小 1。其余消息 1:1。
+ */
+export function projectedKeepCount(messages: readonly Message[], keep: number): number {
+  const first = messages[0];
+  const hasBaseSystem =
+    first !== undefined && first.role === 'system' && first.compaction_summary !== true;
+  return Math.max(0, keep - (hasBaseSystem ? 1 : 0));
 }
 
 /** 消息内容签名（忽略 timestamp：事件时间与上下文写入时间会有毫秒差） */

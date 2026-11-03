@@ -110,6 +110,7 @@ export {
   type ProjectableEvent,
   type PruneRunsOptions,
   type PruneRunsResult,
+  projectedKeepCount,
   projectMessages,
   pruneRuns,
   type ReadSessionEventsOptions,

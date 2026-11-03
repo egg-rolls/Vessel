@@ -35,6 +35,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'sessions.rename': 'write',
   // 0.34（CONTRACT-0.34-context C7）：手动压缩（connect / 远程）。
   'sessions.compact': 'write',
+  // 0.37（CONTRACT-0.37-message-rewind）：消息撤回（硬删除尾部历史）。
+  'sessions.rewind': 'write',
   'runs.list': 'read',
   'runs.get': 'read',
   'runs.start': 'write',

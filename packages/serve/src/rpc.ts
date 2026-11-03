@@ -34,7 +34,9 @@ export type RpcErrorCode =
   | 'run_ended'
   // 0.34 CONTRACT-0.34-context C7：sessions.compact。
   | 'session_not_found'
-  | 'compact_unavailable';
+  | 'compact_unavailable'
+  // 0.37 CONTRACT-0.37：sessions.rewind（无 runtime / 方法）。
+  | 'rewind_unavailable';
 
 /** 方法权限（manifest 同名字段） */
 export type MethodPermission = 'read' | 'write' | 'admin';
@@ -446,6 +448,7 @@ function mapExternalErrorCode(code: unknown): RpcErrorCode | null {
     case 'not_supported':
     case 'expired':
     case 'run_ended':
+    case 'rewind_unavailable':
       return code;
     default:
       return null;

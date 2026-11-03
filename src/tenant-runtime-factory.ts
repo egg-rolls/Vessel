@@ -48,6 +48,7 @@ import {
   type PluginHost,
   type PluginInstallScope,
   type ProviderFactory,
+  projectedKeepCount,
   projectMessages,
   type RunnableAgent,
   type RunRecordStore,
@@ -996,6 +997,39 @@ export async function buildTenantRuntime(
       return { removed, remaining, messages };
     };
 
+    /**
+     * 0.37：idle session（无 live EU）的等价撤回路径。
+     * 不启动 Run、不建 EU；marker 经 transient journal 落盘后再写截断后的 SessionState。
+     */
+    const rewindIdleSession = async (
+      sessionId: string,
+      keepMessages: number,
+    ): Promise<{ removed: number; remaining: number }> => {
+      const state = await session.load(sessionId);
+      if (state === null) throw new Error('session_not_found');
+      const messages = state.messages ?? [];
+      if (!Number.isInteger(keepMessages) || keepMessages < 0 || keepMessages > messages.length) {
+        throw new Error('invalid_params');
+      }
+      const kept = messages.slice(0, keepMessages);
+      const removed = messages.length - kept.length;
+      const journal = journalFactory.transient({ runId: 'manual', events, sessionId });
+      journal.appendFact({
+        type: 'session.rewound',
+        run_id: 'manual',
+        data: {
+          run_id: 'manual',
+          session_id: sessionId,
+          keep_messages: keepMessages,
+          keep_projected: projectedKeepCount(messages, keepMessages),
+          removed,
+        },
+        ts: Date.now(),
+      });
+      await journal.saveSessionState({ ...state, messages: kept, updated_at: Date.now() });
+      return { removed, remaining: kept.length };
+    };
+
     // Stage 4：bundle.runtime 是 per-session 门面，不再是单个长期存活的 EU。
     // `id` / `applyPermissionRules` 让既有热应用装配（按结构解析 live runtime）继续命中
     // 本 tenant 已建的 EU，不新增公开 RPC/事件。
@@ -1006,6 +1040,11 @@ export async function buildTenantRuntime(
       compactContext?(
         sessionId: string,
       ): Promise<{ removed: number; remaining: number; messages?: Message[] }>;
+      /** 0.37：消息撤回（删除 `[keepMessages, ...)`）；有 live EU 用 EU，idle 走瞬态路径。 */
+      rewindContext?(
+        sessionId: string,
+        keepMessages: number,
+      ): Promise<{ removed: number; remaining: number }>;
     } = {
       id: `tenant:${tenantId}`,
       events,
@@ -1021,6 +1060,12 @@ export async function buildTenantRuntime(
         const unit = options.runtime.getExecutionUnit({ tenantId, sessionId });
         if (unit !== undefined) return unit.compactContext(sessionId);
         return compactIdleSession(sessionId);
+      },
+      async rewindContext(sessionId, keepMessages) {
+        // 0.37：有 live EU 走 EU（含 active run 拒绝）；idle session 不新造 EU。
+        const unit = options.runtime.getExecutionUnit({ tenantId, sessionId });
+        if (unit !== undefined) return unit.rewindContext(sessionId, keepMessages);
+        return rewindIdleSession(sessionId, keepMessages);
       },
       async run(input, sessionId, opts) {
         const targetSession = sessionId ?? options.sessionId ?? 'default';

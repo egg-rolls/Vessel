@@ -58,6 +58,16 @@ function optionalNumber(value: unknown): number | undefined {
 
 type CompactContextFn = (sessionId: string) => Promise<{ removed: number; remaining: number }>;
 
+type RewindContextFn = (
+  sessionId: string,
+  keepMessages: number,
+) => Promise<{ removed: number; remaining: number }>;
+
+/** 门面 / EU 以 `Error(message)` 表达的业务错误（见 CONTRACT-0.37 §3）。 */
+function rewindErrorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** `compact_unavailable` 可能以 RpcError.code 或 message 形式到达（远程 / 本地门面）。 */
 function isCompactUnavailable(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
@@ -321,6 +331,73 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           // 其它错误原样抛给 dispatcher（内部错误不伪装成不可用）。
           if (isCompactUnavailable(error)) {
             throw new RpcError('compact_unavailable', 'Context compaction is not available');
+          }
+          throw error;
+        }
+      },
+    },
+    {
+      // CONTRACT-0.37：消息撤回。`keep_messages` 是 `sessions.get` 的
+      // `session.messages` 下标；删除 `[keep_messages, ...)`。
+      name: 'sessions.rewind',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['session_id', 'keep_messages'],
+        properties: {
+          session_id: { type: 'string', minLength: 1 },
+          keep_messages: { type: 'integer', minimum: 0 },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['session_id', 'removed', 'remaining'],
+        properties: {
+          session_id: { type: 'string' },
+          removed: { type: 'integer', minimum: 0 },
+          remaining: { type: 'integer', minimum: 0 },
+        },
+      },
+      handler: async (params, ctx) => {
+        const backend = requireSession(ctx.tenantId);
+        const sessionId = stringParam(params, 'session_id');
+        const state = await backend.load(sessionId);
+        if (!state) throw new RpcError('session_not_found', 'Session not found');
+
+        const keepMessages = optionalNumber(params.keep_messages);
+        if (keepMessages === undefined || !Number.isInteger(keepMessages) || keepMessages < 0) {
+          throw new RpcError('invalid_params', 'keep_messages must be a non-negative integer');
+        }
+
+        const runtime = runtimeFor?.(ctx.tenantId) as
+          | { rewindContext?: RewindContextFn }
+          | undefined;
+        const rewindContext = runtime?.rewindContext;
+        if (typeof rewindContext !== 'function') {
+          throw new RpcError('rewind_unavailable', 'Message rewind is not available');
+        }
+
+        try {
+          const result = await rewindContext.call(runtime, sessionId, keepMessages);
+          return {
+            session_id: sessionId,
+            removed: result.removed,
+            remaining: result.remaining,
+          };
+        } catch (error) {
+          // 门面 / EU 的业务错误是 `Error(message)`；内部错误不伪装成业务码。
+          const text = rewindErrorText(error);
+          if (text.includes('run_in_progress')) {
+            throw new RpcError('conflict', 'run_in_progress');
+          }
+          if (text.includes('session_not_found')) {
+            throw new RpcError('session_not_found', 'Session not found');
+          }
+          if (text.includes('invalid_params')) {
+            throw new RpcError('invalid_params', text);
+          }
+          if (text.includes('rewind_unavailable')) {
+            throw new RpcError('rewind_unavailable', 'Message rewind is not available');
           }
           throw error;
         }

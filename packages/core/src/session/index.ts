@@ -37,6 +37,7 @@ export {
 export {
   mergeHistoryProjection,
   type ProjectableEvent,
+  projectedKeepCount,
   projectMessages,
 } from './project-messages.js';
 export {
