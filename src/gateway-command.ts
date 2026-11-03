@@ -45,6 +45,7 @@ import { gatewayBaseUrl, reloadGateway } from './gateway/reload';
 import {
   installService,
   resolveServiceTarget,
+  type ServiceStatus,
   serviceStatus,
   uninstallService,
 } from './gateway/service';
@@ -628,6 +629,16 @@ export async function gatewayStatus(
   const selector = options.selector ?? {};
   const useSelection =
     selector.instance !== undefined || selector.port !== undefined || selector.all === true;
+  // 无选择器：服务查询与状态收集并行；有选择器时不启动 schtasks（提前返回）。
+  const servicePromise = useSelection
+    ? undefined
+    : serviceStatus(context.platform, {
+        dataDir: context.dataDir,
+        ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
+        ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+      });
+  // collect 抛错时 service 不再被 await，挂空 catch 避免 unhandled rejection（错误语义不变）。
+  servicePromise?.catch(() => undefined);
   const snapshot = await collectStateFor(context, options);
   const entries = snapshot.entries;
 
@@ -670,11 +681,8 @@ export async function gatewayStatus(
     return allLive ? 0 : 1;
   }
 
-  const service = await serviceStatus(context.platform, {
-    dataDir: context.dataDir,
-    ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-  });
+  // 有选择器分支已在上面提前返回，此处 servicePromise 必然存在。
+  const service = await (servicePromise as Promise<ServiceStatus>);
   const allLive = entries.length > 0 && entries.every(entryOccupied);
   const defaultEntry = findStateEntry(entries, DEFAULT_GATEWAY_INSTANCE);
 

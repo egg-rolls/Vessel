@@ -50,7 +50,7 @@ export function gatewayPidPath(dataDir: string, instance?: string): string {
   return path.join(dataDir, gatewayPidFileName(instance));
 }
 export const COMMAND_TIMEOUT_MS = 3000;
-export const PROCESS_PROBE_TIMEOUT_MS = 15_000;
+export const PROCESS_PROBE_TIMEOUT_MS = 2_000;
 export function createCommandRunner(timeoutMs: number = COMMAND_TIMEOUT_MS): CommandRunner {
   return async (argv) => {
     try {
@@ -434,6 +434,8 @@ export interface CollectGatewayStateOptions extends ClassifyGatewayRecordOptions
   graceMs?: number;
   startingGraceMs?: number;
   reclaimRetentionMs?: number;
+  /** 内部探针 seam：health 探测并发度；不持久化、不进配置、不对用户暴露。 */
+  concurrency?: number;
 }
 function parseEpochPid(raw: unknown): { pid: number; started_at: number } | null {
   if (!isRecord(raw)) return null;
@@ -466,6 +468,26 @@ function parseStateHub(raw: unknown): { pid: number; started_at: number; url?: s
 /** E6：win32 上 hostname 忽略大小写。 */
 function sameHostName(left: string, right: string): boolean {
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+const HEALTH_PROBE_CONCURRENCY = 4;
+/**
+ * 本地有界 worker 循环。只改变异步完成顺序；结果由调用方按下标写回，
+ * 合并顺序与分支判定仍由调用方按 instances 顺序完成。
+ */
+async function runBounded(
+  items: readonly number[],
+  concurrency: number,
+  worker: (index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const index = items[next] as number;
+      next += 1;
+      await worker(index);
+    }
+  });
+  await Promise.all(runners);
 }
 /** 一次 readdir 构建统一状态视图；热路径不调用 inspectProcess/Get-CimInstance。 */
 export async function collectGatewayState(
@@ -511,24 +533,72 @@ export async function collectGatewayState(
   );
   const read = <T>(p: string | undefined, parse: (raw: unknown) => T | null) =>
     p === undefined ? undefined : readGatewayStateFile<T>(p, { now, graceMs, parse });
+  // owner / hub 与实例阶段互不依赖，先发起读取。
+  const ownerSnapPromise = read(path.join(dataDir, 'agent-owner.json'), parseStateOwner);
+  const hubPath = path.join(hubDataDir, 'hub.lock');
+  const hubSnapPromise = read(hubPath, parseStateHub);
+  const requestedConcurrency = options.concurrency;
+  const concurrency =
+    requestedConcurrency !== undefined &&
+    Number.isFinite(requestedConcurrency) &&
+    requestedConcurrency >= 1
+      ? Math.floor(requestedConcurrency)
+      : HEALTH_PROBE_CONCURRENCY;
+  // 读阶段并行：readGatewayStateFile 无副作用；结果仍按 instances 下标落位。
+  const reads = await Promise.all(
+    instances.map(async (instance) => {
+      const pidPath = pids.get(instance);
+      const lockPath = locks.get(instance);
+      const [ps, ls] = await Promise.all([
+        read(pidPath, parseGatewayPid),
+        read(lockPath, parseStateLock),
+      ]);
+      return { instance, pidPath, lockPath, ps, ls };
+    }),
+  );
   const entries: GatewayStateEntry[] = [];
-  for (const instance of instances) {
-    const pidPath = pids.get(instance),
-      lockPath = locks.get(instance);
-    const entry: GatewayStateEntry = { instance, pidPath, lockPath, state: 'absent' };
-    const ps = await read(pidPath, parseGatewayPid);
-    const ls = await read(lockPath, parseStateLock);
-    if (ps?.kind === 'ok') entry.record = ps.value;
-    if (ls?.kind === 'ok') entry.lock = ls.value;
+  const lockAliveByIndex: boolean[] = [];
+  const classifications: (GatewayRecordClassification | undefined)[] = [];
+  const toClassify: number[] = [];
+  for (const [index, item] of reads.entries()) {
+    const entry: GatewayStateEntry = {
+      instance: item.instance,
+      pidPath: item.pidPath,
+      lockPath: item.lockPath,
+      state: 'absent',
+    };
+    if (item.ps?.kind === 'ok') entry.record = item.ps.value;
+    if (item.ls?.kind === 'ok') entry.lock = item.ls.value;
+    entries.push(entry);
+    classifications.push(undefined);
     const lock = entry.lock;
-    const lockAlive =
-      lock !== undefined && isProcessAlive(lock.pid) && !beforeBoot(lock.started_at);
+    lockAliveByIndex.push(
+      lock !== undefined && isProcessAlive(lock.pid) && !beforeBoot(lock.started_at),
+    );
+    // 与串行分支链一致：只有 io-error / foreign-host 之后的 record 条目才探测。
+    const ioError = item.ps?.kind === 'io-error' || item.ls?.kind === 'io-error';
+    const foreignHost = lock !== undefined && !sameHostName(lock.host, hostname);
+    if (!ioError && !foreignHost && entry.record !== undefined) toClassify.push(index);
+  }
+  // 判定阶段有界并发；结果按下标写回，合并顺序不变。
+  await runBounded(toClassify, concurrency, async (index) => {
+    const record = entries[index]?.record;
+    if (record === undefined) return;
+    classifications[index] = await classifyGatewayRecord(record, { ...options, now, bootTime });
+  });
+  for (const [index, item] of reads.entries()) {
+    const entry = entries[index];
+    if (entry === undefined) continue;
+    const { ps, ls } = item;
+    const lock = entry.lock;
+    const lockAlive = lockAliveByIndex[index] === true;
     if (ps?.kind === 'io-error' || ls?.kind === 'io-error') {
       Object.assign(entry, { state: 'unknown', reason: 'io-error' });
     } else if (lock !== undefined && !sameHostName(lock.host, hostname)) {
       Object.assign(entry, { state: 'foreign-host', reason: 'lock-host-mismatch' });
     } else if (entry.record !== undefined) {
-      const c = await classifyGatewayRecord(entry.record, { ...options, now, bootTime });
+      const c = classifications[index];
+      if (c === undefined) continue;
       Object.assign(entry, { state: c.state, reason: c.reason });
       if (c.state !== 'stale' && lock !== undefined && lock.pid !== entry.record.pid) {
         Object.assign(entry, { state: 'unknown', reason: 'lock-pid-mismatch' });
@@ -555,9 +625,8 @@ export async function collectGatewayState(
       else if (state === 'degraded') reason = 'no-pid-record';
       Object.assign(entry, { state, reason });
     }
-    entries.push(entry);
   }
-  const ownerSnap = await read(path.join(dataDir, 'agent-owner.json'), parseStateOwner);
+  const ownerSnap = await ownerSnapPromise;
   const owners: GatewayStateOwner[] = [];
   if (ownerSnap?.kind === 'ok') {
     const owner = ownerSnap.value;
@@ -565,8 +634,7 @@ export async function collectGatewayState(
     if (target === undefined) owners.push(owner);
     else target.owner = owner;
   }
-  const hubPath = path.join(hubDataDir, 'hub.lock');
-  const hs = await read(hubPath, parseStateHub);
+  const hs = await hubSnapPromise;
   const record = hs?.kind === 'ok' ? hs.value : undefined;
   const alive = record !== undefined && isProcessAlive(record.pid);
   const running = record !== undefined && alive && !isBeforeBoot(record.started_at, { bootTime });

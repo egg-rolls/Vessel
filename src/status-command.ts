@@ -195,17 +195,27 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
   });
   const entries = snapshot.entries;
 
+  const explicitConnect =
+    (options.connectUrl !== null && options.connectUrl !== undefined) ||
+    (env.VESSEL_CONNECT ?? '').trim() !== '';
+  // collect 已判定本地目标只有 degraded（无 running、无远端）时，attach 与 health 同口径 500ms；
+  // 显式超时、远端目标、存在 running 目标均保持默认 10s。
+  const attachTimeoutMs =
+    options.requestTimeoutMs === undefined &&
+    !explicitConnect &&
+    !entries.some((entry) => entry.state === 'running')
+      ? 500
+      : undefined;
+
   const targetResult = await resolveControlPlaneTarget({
     ...options,
+    ...(attachTimeoutMs !== undefined ? { requestTimeoutMs: attachTimeoutMs } : {}),
     config,
     dataDir,
     env,
     tenantId,
     entries,
   });
-  const explicitConnect =
-    (options.connectUrl !== null && options.connectUrl !== undefined) ||
-    (env.VESSEL_CONNECT ?? '').trim() !== '';
 
   let attach: AttachView | undefined;
   let attachError: string | undefined;
