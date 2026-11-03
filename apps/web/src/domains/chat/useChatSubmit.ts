@@ -116,9 +116,13 @@ export function useChatSubmit({
     setQueuedRuns((prev) => prev.filter((item) => !startedRuns.has(item.runId)));
   }, [startedRuns]);
 
-  const handleSend = async () => {
-    const text = input.trim();
-    if (!text || submitting || !connected) return;
+  /**
+   * 提交一段文本（发送与重试共用）：草稿态建新 agent，已有会话按 session 投递。
+   * 返回是否成功发起，供调用方决定是否给出「已重新发起」之类反馈。
+   */
+  const submitText = async (raw: string): Promise<boolean> => {
+    const text = raw.trim();
+    if (!text || submitting || !connected) return false;
     // 0.28（CONTRACT §3）：草稿态 = 一个新 agent。先 `agents.create`（只给客户端生成的
     // 唯一名）拿 `{id, session_id}`，再 `runs.start{agent_id}`；`runs.start` 失败时
     // best-effort 回收，不留空 agent。选中已有会话时按 session 投递，行为不变。
@@ -148,7 +152,8 @@ export function useChatSubmit({
       }
       // 新会话可能尚未落盘：标记后 detail 404 可容忍（会话出现在列表即失效）。
       if (!targetSessionId) pendingNewSessions.current.add(nextSessionId);
-      setInput('');
+      // 只在当前输入仍是被提交的文本时清空：重试不应吞掉用户新写的草稿。
+      setInput((current) => (current.trim() === text ? '' : current));
       if (!targetSessionId) navigate({ domain: 'chat', sessionId: nextSessionId });
       if (run.status === 'queued' && !startedRuns.has(run.run_id)) {
         const queuedSessionId = run.session_id ?? nextSessionId;
@@ -169,11 +174,22 @@ export function useChatSubmit({
       void loadSessions(client, { epoch, force: true });
       // 新会话建了新 agent：roster（会话行的 agent 地址）要立刻反映它。
       if (!targetSessionId) void loadRoster(nodes, teamControl);
+      return true;
     } catch (error) {
       toast.error(errorMessage(error));
+      return false;
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleSend = async () => {
+    await submitText(input);
+  };
+
+  /** 重试：把前一条 user 内容在同一 session 重新提交；会追加新消息，不改历史。 */
+  const handleRetry = async (text: string) => {
+    if (await submitText(text)) toast.info(t('chat.message.retryHint'));
   };
 
   // 引用保持稳定：memo(RunItems) 依赖这几个回调，避免每个 token 让全部实时项重渲染。
@@ -241,6 +257,7 @@ export function useChatSubmit({
     cancelling,
     cancelledJobs,
     handleSend,
+    handleRetry,
     handleCancel,
     handleCancelQueued,
   };

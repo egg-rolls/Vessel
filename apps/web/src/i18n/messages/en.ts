@@ -1052,6 +1052,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.hook': 'hook · {name}',
   'chat.role.assistant': 'Assistant',
   'chat.loadEarlier': 'Load earlier ({count} remaining)',
+  // 0.36: message bubble action group
+  'chat.message.actions': 'Message actions',
+  'chat.message.copy': 'Copy',
+  'chat.message.copied': 'Copied',
+  'chat.message.edit': 'Edit',
+  'chat.message.editHint': 'Loaded into the composer; edit and send again',
+  'chat.message.retry': 'Retry',
+  'chat.message.retryHint': 'Resent as a new run',
 
   // Runs
   'runs.title': 'Runs',

@@ -1016,6 +1016,14 @@ export const messages = {
   'chat.notice.hook': 'hook · {name}',
   'chat.role.assistant': '助手',
   'chat.loadEarlier': '加载更早（还有 {count} 条）',
+  // 0.36: 消息气泡操作组
+  'chat.message.actions': '消息操作',
+  'chat.message.copy': '复制',
+  'chat.message.copied': '已复制',
+  'chat.message.edit': '编辑',
+  'chat.message.editHint': '已填入输入框，修改后重新发送',
+  'chat.message.retry': '重试',
+  'chat.message.retryHint': '已重新发起请求',
 
   // Runs
   'runs.title': '运行',

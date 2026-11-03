@@ -49,6 +49,8 @@ export function TranscriptWindow({
   onCancelQueued,
   onConfigureConnection,
   onGoChat,
+  onEditMessage,
+  onRetryMessage,
 }: {
   hasToken: boolean;
   selectedId: string | null;
@@ -78,6 +80,8 @@ export function TranscriptWindow({
   onCancelQueued: (runId: string) => void;
   onConfigureConnection: () => void;
   onGoChat: () => void;
+  onEditMessage: (text: string) => void;
+  onRetryMessage: (text: string) => void;
 }) {
   // 打开 / 切换会话的 reset key：detail 到达（hydrate）会再触发一次稳定贴底；
   // 加载更早历史不改变这两个字段，因此不会跳底。
@@ -149,9 +153,12 @@ export function TranscriptWindow({
           (!activeAgent && (renderedGroups.length > 0 || visibleQueued.length > 0)) ? (
             <Transcript
               messages={transcriptWindow.shown}
+              allMessages={transcriptMessages}
               startIndex={transcriptStart}
               hiddenCount={transcriptWindow.hiddenCount}
               onLoadEarlier={onLoadEarlier}
+              onEditMessage={onEditMessage}
+              onRetryMessage={onRetryMessage}
             >
               {!activeAgent &&
                 renderedGroups.map((group) => (

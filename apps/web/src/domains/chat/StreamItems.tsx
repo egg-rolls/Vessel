@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip, StatusGlyph } from '../../components/StatusChip';
-import { Button } from '../../components/ui';
+import { Button, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
 import { t } from '../../i18n';
@@ -179,6 +179,7 @@ export const RunItems = memo(function RunItems({
   hideInput?: boolean;
   verbosity?: Verbosity;
 }) {
+  const copy = useMessageCopy();
   const status =
     group.status === 'cancelled' || (cancelled && group.status === 'failed')
       ? 'cancelled'
@@ -190,6 +191,7 @@ export const RunItems = memo(function RunItems({
     .join('')
     .trim();
   const outputAlreadyShown = group.output !== undefined && inlineText.includes(group.output.trim());
+  const completedOutput = group.status === 'completed' ? group.output : undefined;
   const renderItems = useMemo(() => {
     const items = foldToolItems(group.items);
     if (verbosity !== 'minimal') return items;
@@ -234,11 +236,19 @@ export const RunItems = memo(function RunItems({
         }
         if (item.kind === 'text') {
           return (
-            <div className="msg-assistant max-w-full" key={item.key}>
+            <div className="msg-assistant group max-w-full" key={item.key}>
               {group.status === 'running' ? (
                 <div className="msg-text">{item.text}</div>
               ) : (
                 <Markdown className="msg-text" text={item.text} />
+              )}
+              {group.status !== 'running' && item.text.trim().length > 0 && (
+                <MessageActions
+                  className="mt-1"
+                  actions={[
+                    { id: 'copy', label: t('chat.message.copy'), onSelect: () => copy(item.text) },
+                  ]}
+                />
               )}
             </div>
           );
@@ -263,9 +273,15 @@ export const RunItems = memo(function RunItems({
           {t('chat.run.waiting')}
         </div>
       )}
-      {group.status === 'completed' && group.output && !outputAlreadyShown && (
-        <div className="msg-assistant max-w-full">
-          <Markdown className="msg-text" text={group.output} />
+      {completedOutput !== undefined && !outputAlreadyShown && (
+        <div className="msg-assistant group max-w-full">
+          <Markdown className="msg-text" text={completedOutput} />
+          <MessageActions
+            className="mt-1"
+            actions={[
+              { id: 'copy', label: t('chat.message.copy'), onSelect: () => copy(completedOutput) },
+            ]}
+          />
         </div>
       )}
       {group.status === 'failed' && status === 'failed' && <FailureNotice group={group} />}

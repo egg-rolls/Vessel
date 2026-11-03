@@ -21,7 +21,14 @@ export {
   Textarea,
   type TextareaProps,
 } from './Field';
+export { Icon, type IconName } from './Icon';
 export { type KeyValueItem, KeyValueList, type KeyValueListProps } from './KeyValueList';
+export {
+  type MessageAction,
+  MessageActions,
+  type MessageActionsProps,
+  useMessageCopy,
+} from './MessageActions';
 export { SearchInput } from './SearchInput';
 export { Section, type SectionProps } from './Section';
 export { Stat, type StatProps } from './Stat';

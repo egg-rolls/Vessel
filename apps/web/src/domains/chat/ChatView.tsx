@@ -6,6 +6,7 @@ import type { PaneResizeApi } from '../../app/usePaneResize';
 import { useViewportWidth } from '../../app/useViewportWidth';
 import { useVisualViewport } from '../../app/useVisualViewport';
 import { ResizeHandle } from '../../components/ResizeHandle';
+import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import type { AskUserAnswer, PermissionScope } from '../../gateway/types';
@@ -58,6 +59,7 @@ export function ChatView({
     respondAsk,
   } = useConnection();
   const snapshot = useEventSnapshot();
+  const toast = useToast();
   const { visibility: runtimeVisibility } = useRuntimeVisibility();
   // 键盘弹出时把 visual viewport 尺寸写到根元素，供 dock 上限与外壳高度使用。
   useVisualViewport();
@@ -196,6 +198,17 @@ export function ChatView({
   const stopHandler =
     connected && runningGroup ? () => void submitApi.handleCancel(runningGroup) : undefined;
 
+  // 编辑历史用户消息：只回填 Composer，不删除原消息（没有 rewind/delete RPC）。
+  const handleEditMessage = (text: string) => {
+    submitApi.setInput(text);
+    setComposerFocus((value) => value + 1);
+    toast.info(t('chat.message.editHint'));
+  };
+  // 重试：用该助手消息前一条用户内容在同一 session 重新发起。
+  const handleRetryMessage = (text: string) => {
+    void submitApi.handleRetry(text);
+  };
+
   return (
     <div className="chat-workspace">
       <SessionRail
@@ -292,6 +305,8 @@ export function ChatView({
           onCancelQueued={(runId) => void submitApi.handleCancelQueued(runId)}
           onConfigureConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
           onGoChat={() => navigate({ domain: 'chat' })}
+          onEditMessage={handleEditMessage}
+          onRetryMessage={handleRetryMessage}
         />
 
         <ComposerSlot

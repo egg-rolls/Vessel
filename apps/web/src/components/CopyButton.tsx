@@ -3,23 +3,7 @@ import { t } from '../i18n';
 import { useToast } from './ToastProvider';
 import { Tooltip } from './Tooltip';
 import { Button } from './ui';
-
-async function copyText(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  // 非安全上下文兜底（P0 不引入依赖）。
-  const area = document.createElement('textarea');
-  area.value = text;
-  area.setAttribute('readonly', '');
-  area.style.position = 'fixed';
-  area.style.opacity = '0';
-  document.body.appendChild(area);
-  area.select();
-  document.execCommand('copy');
-  document.body.removeChild(area);
-}
+import { copyText } from './ui/clipboard';
 
 export function CopyButton({
   text,

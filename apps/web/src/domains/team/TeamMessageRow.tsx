@@ -7,7 +7,8 @@
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { useOptionalToast } from '../../components/ToastProvider';
-import { Badge, Button } from '../../components/ui';
+import { IconButton } from '../../components/Tooltip';
+import { Badge, Icon, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { TeamDelivery, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -119,6 +120,7 @@ export function TeamMessageRow({
 }) {
   // 钩子必须在 system 早退之前调用，保证同一实例的 hook 顺序稳定。
   const toast = useOptionalToast();
+  const copy = useMessageCopy(t('common.copied'));
 
   if (message.kind === 'system') {
     return <SystemNotice message={message} senderLabel={senderLabel} />;
@@ -152,7 +154,7 @@ export function TeamMessageRow({
 
   return (
     <div
-      className={`flex max-w-full flex-col gap-1 ${isHuman ? 'team-message-self' : 'team-message-agent'}${statusClass}`}
+      className={`group flex max-w-full flex-col gap-1 ${isHuman ? 'team-message-self' : 'team-message-agent'}${statusClass}`}
       data-kind={message.kind}
     >
       <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
@@ -189,16 +191,31 @@ export function TeamMessageRow({
         <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
       </div>
 
+      {message.content.trim().length > 0 && message.sendStatus !== 'sending' && (
+        <MessageActions
+          className="self-start"
+          actions={[{ id: 'copy', label: t('common.copy'), onSelect: () => copy(message.content) }]}
+        />
+      )}
+
       {(isReply || isAgent) && canViewSession && onViewSession && (
-        <Button variant="link" className="self-start text-xs" onClick={onViewSession}>
-          {t('team.message.viewBody')}
-        </Button>
+        <IconButton
+          label={t('team.message.viewBody')}
+          className="self-start"
+          onClick={onViewSession}
+        >
+          <Icon name="transcript" />
+        </IconButton>
       )}
 
       {federationFrom && (
-        <Button variant="link" className="self-start text-xs" onClick={copyFederationAddress}>
-          {t('team.federation.reply')}
-        </Button>
+        <IconButton
+          label={t('team.federation.reply')}
+          className="self-start"
+          onClick={copyFederationAddress}
+        >
+          <Icon name="reply" />
+        </IconButton>
       )}
 
       {message.deliveries && <DeliveryNotes deliveries={message.deliveries} />}
@@ -213,9 +230,9 @@ export function TeamMessageRow({
             <span className="font-mono text-xs">{truncate(message.sendError, 160)}</span>
           )}
           {onRetry && (
-            <Button variant="link" onClick={onRetry}>
-              {t('team.delivery.retry')}
-            </Button>
+            <IconButton label={t('team.delivery.retry')} onClick={onRetry}>
+              <Icon name="retry" />
+            </IconButton>
           )}
         </div>
       )}

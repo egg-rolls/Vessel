@@ -1,5 +1,6 @@
 import { EmptyState } from '../../components/States';
-import { Badge, Button } from '../../components/ui';
+import { IconButton } from '../../components/Tooltip';
+import { Badge, Icon } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import type { TeamBodyHistoryEntry, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -29,9 +30,12 @@ export function BodyHistoryList({
               </span>
               {body.reason && <span className="font-mono text-muted">{body.reason}</span>}
             </div>
-            <Button variant="link" onClick={() => onOpenBody(body.session_id)}>
-              {t('team.member.viewTranscript')}
-            </Button>
+            <IconButton
+              label={t('team.member.viewTranscript')}
+              onClick={() => onOpenBody(body.session_id)}
+            >
+              <Icon name="transcript" />
+            </IconButton>
           </li>
         ))}
       </ul>
@@ -56,9 +60,12 @@ export function BodyHistoryList({
               {t('team.member.retiredAt', { time: formatTimestamp(body.retired_at) })}
             </span>
           </div>
-          <Button variant="link" onClick={() => onOpenBody(body.session_id)}>
-            {t('team.member.viewTranscript')}
-          </Button>
+          <IconButton
+            label={t('team.member.viewTranscript')}
+            onClick={() => onOpenBody(body.session_id)}
+          >
+            <Icon name="transcript" />
+          </IconButton>
         </li>
       ))}
     </ul>
@@ -104,16 +111,15 @@ export function LiveBodiesList({
                 </span>
               )}
               {body.state && <span className="font-mono text-muted">{body.state}</span>}
-              <Button
-                variant="link"
+              <IconButton
+                label={t('team.member.openBody')}
                 disabled={!sessionId}
-                title={t('team.member.openBody')}
                 onClick={() => {
                   if (sessionId) onOpenSession(sessionId);
                 }}
               >
-                {t('team.member.openBody')}
-              </Button>
+                <Icon name="transcript" />
+              </IconButton>
             </li>
           );
         })}

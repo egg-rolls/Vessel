@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react';
 import { Markdown } from '../../components/Markdown';
+import { type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock, localDayKey, localDayLabel } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
+import { runtimeMessageKind } from '../../state/runtime-visibility';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -21,7 +23,20 @@ function MessageTime({ message, block = false }: { message: Message; block?: boo
   );
 }
 
-function TranscriptMessage({ message }: { message: Message }) {
+function TranscriptMessage({
+  message,
+  previousUser,
+  onCopy,
+  onEdit,
+  onRetry,
+}: {
+  message: Message;
+  /** 该助手消息前一条真实用户输入；缺失时不提供重试。 */
+  previousUser?: string;
+  onCopy: (text: string) => void;
+  onEdit: (text: string) => void;
+  onRetry: (text: string) => void;
+}) {
   if (message.role === 'system') return null;
 
   if (message.role === 'tool') {
@@ -40,19 +55,43 @@ function TranscriptMessage({ message }: { message: Message }) {
   }
 
   if (message.role === 'user') {
+    const actions: MessageAction[] = [];
+    if (message.content.trim().length > 0) {
+      actions.push(
+        { id: 'copy', label: t('chat.message.copy'), onSelect: () => onCopy(message.content) },
+        { id: 'edit', label: t('chat.message.edit'), onSelect: () => onEdit(message.content) },
+      );
+    }
     return (
-      <div className="msg-user flex max-w-full justify-end">
+      <div className="msg-user group flex max-w-full flex-col items-end gap-1">
         <div className="msg-bubble">
           {message.content}
           <MessageTime message={message} block />
         </div>
+        {actions.length > 0 && <MessageActions className="justify-end" actions={actions} />}
       </div>
     );
   }
 
   const calls = message.tool_calls ?? [];
+  const actions: MessageAction[] = [];
+  if (message.content.trim().length > 0) {
+    actions.push({
+      id: 'copy',
+      label: t('chat.message.copy'),
+      onSelect: () => onCopy(message.content),
+    });
+  }
+  // 中间轮次的 assistant 消息带 tool_calls；重试只给最终答复，避免一轮出现多个重试。
+  if (calls.length === 0 && previousUser !== undefined && previousUser.trim().length > 0) {
+    actions.push({
+      id: 'retry',
+      label: t('chat.message.retry'),
+      onSelect: () => onRetry(previousUser),
+    });
+  }
   return (
-    <div className="msg-assistant max-w-full">
+    <div className="msg-assistant group max-w-full">
       <div className="flex flex-wrap items-baseline gap-2">
         <div className="mb-1.5 block font-mono text-2xs tracking-widest uppercase text-faint">
           {t('chat.role.assistant')}
@@ -69,12 +108,42 @@ function TranscriptMessage({ message }: { message: Message }) {
           <span className="text-muted">{truncate(call.function.arguments || '', 120)}</span>
         </div>
       ))}
+      {actions.length > 0 && <MessageActions className="mt-1" actions={actions} />}
     </div>
   );
 }
 
+/**
+ * 找该助手消息前一条真实用户输入。`allMessages` 是完整可见序列（跨窗口回溯）；
+ * runtime 上下文消息（`vessel:*`）不是用户输入，跳过。
+ */
+function previousUserContent(
+  message: Message,
+  index: number,
+  messages: readonly Message[],
+  allMessages: readonly Message[] | undefined,
+): string | undefined {
+  if (message.role !== 'assistant') return undefined;
+  const source = allMessages ?? messages;
+  const currentIndex = allMessages ? source.indexOf(message) : index;
+  for (let cursor = currentIndex - 1; cursor >= 0; cursor -= 1) {
+    const candidate = source[cursor];
+    if (candidate?.role !== 'user') continue;
+    if (runtimeMessageKind(candidate) !== undefined) continue;
+    return candidate.content;
+  }
+  return undefined;
+}
+
 /** 按消息时间做本地日分组；没有 timestamp 的消息不显示分组头（降级）。 */
-function withDayGroups(messages: Message[], startIndex: number): ReactNode[] {
+function withDayGroups(
+  messages: Message[],
+  startIndex: number,
+  allMessages: readonly Message[] | undefined,
+  onCopy: (text: string) => void,
+  onEdit: (text: string) => void,
+  onRetry: (text: string) => void,
+): ReactNode[] {
   const nodes: ReactNode[] = [];
   let lastDay: string | null = null;
   messages.forEach((message, index) => {
@@ -91,8 +160,15 @@ function withDayGroups(messages: Message[], startIndex: number): ReactNode[] {
       lastDay = day;
     }
     nodes.push(
-      // biome-ignore lint/suspicious/noArrayIndexKey: 窗口切片用完整列表下标做稳定 key
-      <TranscriptMessage key={`${startIndex + index}`} message={message} />,
+      <TranscriptMessage
+        // biome-ignore lint/suspicious/noArrayIndexKey: 窗口切片用完整列表下标做稳定 key
+        key={`${startIndex + index}`}
+        message={message}
+        previousUser={previousUserContent(message, index, messages, allMessages)}
+        onCopy={onCopy}
+        onEdit={onEdit}
+        onRetry={onRetry}
+      />,
     );
   });
   return nodes;
@@ -100,19 +176,29 @@ function withDayGroups(messages: Message[], startIndex: number): ReactNode[] {
 
 export function Transcript({
   messages,
+  allMessages,
   startIndex,
   hiddenCount,
   onLoadEarlier,
+  onEditMessage,
+  onRetryMessage,
   children,
 }: {
   messages: Message[];
+  /** 完整可见消息序列，用于回溯窗口外的前一条用户输入。 */
+  allMessages?: readonly Message[];
   /** 窗口在完整可见消息里的起始下标，用于稳定 key。 */
   startIndex: number;
   hiddenCount: number;
   onLoadEarlier: () => void;
+  /** 编辑 = 把原文写回 Composer，不删除原消息。 */
+  onEditMessage: (text: string) => void;
+  /** 重试 = 用前一条用户内容重新提交。 */
+  onRetryMessage: (text: string) => void;
   /** 实时 run 的展开项与排队 notice：与历史消息共享同一列表与间距。 */
   children?: ReactNode;
 }) {
+  const copy = useMessageCopy();
   if (messages.length === 0 && !children) return null;
   return (
     <div className="flex flex-col gap-4 py-1.5 pb-2.5">
@@ -125,7 +211,7 @@ export function Transcript({
           {t('chat.loadEarlier', { count: hiddenCount })}
         </button>
       )}
-      {withDayGroups(messages, startIndex)}
+      {withDayGroups(messages, startIndex, allMessages, copy, onEditMessage, onRetryMessage)}
       {children}
     </div>
   );
