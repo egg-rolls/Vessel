@@ -27,7 +27,7 @@ paths: [apps/web/**, packages/serve/src/gateway/**]
 
 - React + Vite；`GatewayClient` 用 WS 收事件，`seq` 去重、断线重连（`since`）、gap 提示。
 - token 存 URL fragment，再转 `sessionStorage`；不写 `localStorage`、不进 URL query。
-- **本机自动连接**：回环页面且 `sessionStorage` 无 token 时，启动后探测同源 `GET /v1/local/token`（dev server 未代理 `/v1` 时再探 `127.0.0.1:8642`），拿到 token 仍只写 `sessionStorage` 并自动连接。只尝试一次；用户已保存的 URL 指向别处、已有 token 或跨源被拒时安静回退到连接表单，不覆盖用户配置。该端点只在回环 + 同源下返回配置的 legacy token；本机任意进程可直接读取是其固有边界（不是远程能力）。
+- **本机自动连接**：回环页面且 `sessionStorage` 无 token 时，启动后探测同源 `GET /v1/local/token`（dev server 未代理 `/v1` 时再探 `127.0.0.1:8642`），拿到 token 仍只写 `sessionStorage` 并自动连接。只尝试一次；用户已保存的 URL 指向别处、已有 token 或跨源被拒时安静回退到连接表单，不覆盖用户配置。该端点只在回环 socket + 回环 Host + 同源下返回配置的 legacy token；本机任意进程可直接读取是其固有边界（不是远程能力）。
 - **运行时 gateway URL**：优先级 `localStorage['vessel.gateway-url']` > `VITE_GATEWAY_URL` > 同源；只接受 `http(s)://host[:port]` origin，拒绝 path / query / hash / userinfo / wildcard；非回环必须 https，HTTPS 页面拒绝 http/ws（mixed content）。换 URL 时重建 client 并重置 seq / 时间线 / 选中会话。
 - **独立前端**：可把 `apps/web/dist` 部署到任意静态站点；服务端配置 `serve.allowed_origins` 允许该 Origin（CORS + WS upgrade），浏览器需信任 gateway 证书。同源部署仍由 gateway 托管 `dist`。
 - 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask_user 表单。

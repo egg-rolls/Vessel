@@ -2122,9 +2122,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
         if (!sameOriginRequest(req)) {
           return errorJson('forbidden', 'Local token requires a same-origin request', 403);
         }
-        // 未配置 token 时 `configuredToken` 为空，但 gateway 内部仍生成了临时 token；
-        // 该值绝不通过此端点泄露（404 让前端安静回退到手动表单）。
-        const localToken = configuredToken ?? opts.auth?.legacyToken;
+        // 只下发显式 legacy gateway token（serve.token / token_env / VESSEL_GATEWAY_TOKEN）。
+        // `serve.tokens`-only 时 `auth.legacyToken` 是首条客户端 token，不在此暴露；
+        // 未配置时内部生成的临时 token 也绝不泄露（404 让前端安静回退到手动表单）。
+        const localToken = configuredToken;
         if (localToken === undefined) return json({ token: null }, 404);
         return json({ token: localToken }, 200);
       }
