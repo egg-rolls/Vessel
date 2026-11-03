@@ -18,9 +18,11 @@ import {
   type ConnectionOptions,
 } from './connection-context';
 import { createConnectionHandlers } from './connection-handlers';
-import { computeInitialConnection } from './connection-initial';
+import { computeInitialConnection, TOKEN_KEY } from './connection-initial';
 import { SubmitGuard } from './interactions';
+import { discoverLocalGatewayToken, shouldAttemptLocalConnect } from './local-connect';
 import type { HelloInfo } from './types';
+import { GATEWAY_URL_KEY } from './url';
 import { useConnectionControls } from './use-connection-controls';
 import { useInteractionHydration } from './use-interaction-hydration';
 import { useInteractionResponses } from './use-interaction-responses';
@@ -66,7 +68,46 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   tenantIdRef.current = tenantId;
   const tokenRef = useRef(token);
   tokenRef.current = token;
+  const gatewayUrlRef = useRef(gatewayUrl);
+  gatewayUrlRef.current = gatewayUrl;
+  /** 本机自动连接只尝试一次（也覆盖 React 双调用）。 */
+  const localConnectTriedRef = useRef(false);
   const hasToken = token.trim().length > 0;
+
+  // 0.35：本机 WebUI 自动连接。挂载后只探测一次；失败静默回退到手动表单。
+  useEffect(() => {
+    if (localConnectTriedRef.current) return;
+    localConnectTriedRef.current = true;
+    const context = {
+      hostname: window.location.hostname,
+      origin: window.location.origin,
+      token: tokenRef.current,
+      storedUrl: localStorage.getItem(GATEWAY_URL_KEY) ?? '',
+      devProxyAuth,
+    };
+    if (!shouldAttemptLocalConnect(context)) return;
+    void discoverLocalGatewayToken({ context }).then((found) => {
+      if (found === null) return;
+      // 探测期间用户可能已手动连接 / 输入 token：不覆盖。
+      if (tokenRef.current.trim() !== '') return;
+      const savedUrl = (localStorage.getItem(GATEWAY_URL_KEY) ?? '').trim();
+      if (savedUrl === '') {
+        // 没有用户保存的地址：把目标对齐到 token 来源（同源或默认本机 gateway）。
+        const current = gatewayUrlRef.current;
+        if (found.gatewayUrl === '') {
+          if (current !== '' && current !== window.location.origin) setGatewayUrl('');
+        } else if (current !== found.gatewayUrl) {
+          setGatewayUrl(found.gatewayUrl);
+        }
+      }
+      // token 仍只进 sessionStorage，不落 localStorage / URL / 日志。
+      sessionStorage.setItem(TOKEN_KEY, found.token);
+      setTokenError(null);
+      setGatewayError(null);
+      setLastError(null);
+      setToken(found.token);
+    });
+  }, []);
 
   const recordSettled = useCallback((requestId: string) => {
     if (!requestId) return;

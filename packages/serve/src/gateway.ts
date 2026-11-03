@@ -42,6 +42,7 @@ import {
   buildContentSecurityPolicy,
   corsHeaders,
   hostAllowed,
+  isLoopbackAddress,
   isLoopbackHostname,
   loadTlsMaterial,
   normalizeAllowedOrigins,
@@ -450,6 +451,20 @@ function errorJson(
   extra: Record<string, string> = {},
 ): Response {
   return json({ error: protocolError(code, message) }, status, extra);
+}
+
+/**
+ * 浏览器请求是否同源：无 `Origin`（同源 GET / 非浏览器客户端）或与请求 URL 同源。
+ * 跨源请求即使命中 `allowed_origins` 也不放行本机便利端点。
+ */
+function sameOriginRequest(req: Request): boolean {
+  const origin = req.headers.get('origin');
+  if (origin === null || origin.trim() === '') return true;
+  try {
+    return new URL(origin).origin === new URL(req.url).origin;
+  } catch {
+    return false;
+  }
 }
 
 /** 从请求体读取 JSON 对象（带大小上限） */
@@ -2079,6 +2094,27 @@ export function startGateway(opts: GatewayOptions): Gateway {
           200,
           extra,
         );
+      }
+
+      // 0.35：本机 WebUI 自动连接。只在**回环 socket + 同源（或无 Origin）**时返回
+      // 显式配置的 legacy token；永不下发启动时自动生成的临时 token，也不带任何 CORS 头。
+      // 安全边界：本机任意进程都能直接拿到该 token（回环便利的固有代价）——这是
+      // 本机使用便利，不是远程能力；远程监听仍必须显式 token + TLS。
+      if (path === '/v1/local/token') {
+        if (req.method !== 'GET') {
+          return errorJson('method_not_allowed', 'Only GET is allowed', 405, { Allow: 'GET' });
+        }
+        if (!isLoopbackAddress(srv.requestIP(req)?.address)) {
+          return errorJson('forbidden', 'Local token is only available on loopback', 403);
+        }
+        if (!sameOriginRequest(req)) {
+          return errorJson('forbidden', 'Local token requires a same-origin request', 403);
+        }
+        // 未配置 token 时 `configuredToken` 为空，但 gateway 内部仍生成了临时 token；
+        // 该值绝不通过此端点泄露（404 让前端安静回退到手动表单）。
+        const localToken = configuredToken ?? opts.auth?.legacyToken;
+        if (localToken === undefined) return json({ token: null }, 404);
+        return json({ token: localToken }, 200);
       }
 
       // S5：hub 配对。一次性 code 即凭据，在 Bearer 校验之前处理。

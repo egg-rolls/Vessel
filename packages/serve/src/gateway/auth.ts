@@ -16,6 +16,18 @@ export function isLoopbackHostname(hostname: string): boolean {
   return isIP(lower) === 4 && lower.startsWith('127.');
 }
 
+/**
+ * 请求来源 socket 是否回环：127.0.0.0/8、::1、IPv4-mapped `::ffff:127.x.x.x`。
+ * 只用于本机便利端点（如 `/v1/local/token`）的来源判定，不替代 Host / Origin 校验。
+ */
+export function isLoopbackAddress(address: string | null | undefined): boolean {
+  if (typeof address !== 'string' || address === '') return false;
+  const lower = address.toLowerCase();
+  if (lower === '::1') return true;
+  const mapped = lower.startsWith('::ffff:') ? lower.slice('::ffff:'.length) : lower;
+  return isIP(mapped) === 4 && mapped.startsWith('127.');
+}
+
 /** 通配绑定：0.0.0.0 / ::（可带方括号） */
 export function isWildcardHostname(hostname: string): boolean {
   const host =

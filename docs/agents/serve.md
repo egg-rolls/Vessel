@@ -25,6 +25,7 @@ applies_to: [N, M]
 ## 远程安全
 
 - 远程 opt-in / TLS / Origin 的规则见 AGENTS 硬安全规则；实现上 `serve.allowed_origins` 归一化为 `URL.origin`，HTTP 与 WS upgrade 共用同一判定。
+- `/v1/local/token` 是本机便利端点，不是远程能力：只对回环 socket + 同源（或无 Origin）返回**已配置**的 legacy token；不带 CORS 头、不暴露自动生成的临时 token、不写日志。本机任意进程可读取是该便利的固有安全边界。
 - token 不进 WS URL / query；首帧 `auth` 5s 内未合法即关闭 4401；非 admin 指定其它 tenant → 4403。
 - 完整证书 / Origin / 客户端步骤见 [REMOTE.md](../operations/REMOTE.md)；契约见 [gateway.md](../architecture/gateway.md#protocol)。
 

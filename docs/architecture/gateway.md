@@ -30,6 +30,7 @@ paths: [packages/serve/src/**, packages/serve/src/gateway/**, src/serve-auth.ts,
 | 方法 / 路径 | 说明 |
 |---|---|
 | `GET /v1/health`（`/health` 兼容） | 开放探针；返回 clients / latest_seq / protocol / node |
+| `GET /v1/local/token` | 本机 WebUI 自动连接；**仅回环 socket + 同源（或无 Origin）**返回已配置 legacy token（`{token}`），未配置 404、不生成临时 token；无 CORS 头、`Cache-Control: no-store`、不写日志 |
 | `GET /v1/events`（WS，`/ws` 兼容） | 事件流；query token 仅为兼容，客户端用首帧 `auth`，token 不进 URL |
 | `GET /v1/events`（SSE，`/events` 兼容） | 只读事件流；`?token=` |
 | `GET /v1/sessions`（`/sessions` 兼容） | 会话列表（`listRich`） |
