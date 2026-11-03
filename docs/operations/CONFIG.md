@@ -220,7 +220,7 @@ observability:
 - **校验**：枚举与布尔值非法时由 validator 拒绝，不做静默回退；四个键都支持 `vessel config set`。
 - **CLI 写配置**：`vessel config set ui.verbosity <minimal|normal|debug>`、`ui.showInternalEvents <true|false>`、`ui.errorLevel <user|all>`、`ui.askUser <true|false>`、`observability.showProcessErrors <true|false>`；与其它键一样只改用户配置、保留其它键、`0600` 原子写。
 
-### 2.8 限额与终止（0.14.3，ADR-084）
+### 2.8 限额与终止（默认不限制；机制见 ADR-084，默认值自 0.35 起为 opt-in）
 
 ```yaml
 limits:
