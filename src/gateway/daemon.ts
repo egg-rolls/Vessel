@@ -13,12 +13,14 @@ import { type FileHandle, mkdir, open, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   type CommandRunner,
+  cleanupGatewayStateEntry,
+  collectGatewayState,
   type GatewayPidRecord,
+  type GatewayStateSnapshot,
   gatewayPidPath,
   isProcessAlive,
+  normalizeGatewayInstance,
   readGatewayPidRecord,
-  readGatewayPidState,
-  removeGatewayPid,
 } from './pid';
 
 /** daemon 启动选项 */
@@ -43,13 +45,15 @@ export interface StartDaemonOptions {
   exclusive?: boolean;
   platform?: NodeJS.Platform;
   runCommand?: CommandRunner;
+  /** 调用方已收集的状态快照；缺省自行 collect。 */
+  state?: GatewayStateSnapshot;
 }
 
 export type StartDaemonResult =
-  | { ok: true; record: GatewayPidRecord; logPath: string }
+  | { ok: true; record: GatewayPidRecord; logPath: string; unconfirmed?: true }
   | {
       ok: false;
-      error: 'already_running' | 'spawn_failed' | 'timeout' | 'exited';
+      error: 'already_running' | 'state_unknown' | 'spawn_failed' | 'timeout' | 'exited';
       message: string;
       logPath: string;
       pid?: number;
@@ -105,26 +109,39 @@ export function buildDaemonArgv(options: {
 /** 启动分离的 gateway 子进程并等待 PID 文件出现 */
 export async function startGatewayDaemon(options: StartDaemonOptions): Promise<StartDaemonResult> {
   const instance = options.instance;
+  const normalizedInstance = normalizeGatewayInstance(instance);
   const logPath = options.logPath ?? gatewayLogPath(options.dataDir, instance);
 
   if (options.checkDuplicate !== false) {
-    // 存活 + 命令行匹配才算重复；死 pid / 不可解析 / PID 复用都回收。
-    const state = await readGatewayPidState(options.dataDir, {
-      ...(instance !== undefined ? { instance } : {}),
-      ...(options.platform !== undefined ? { platform: options.platform } : {}),
-      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-    });
-    if (state.kind === 'running') {
-      return {
-        ok: false,
-        error: 'already_running',
-        message: `gateway is already running (pid ${state.record.pid})`,
-        logPath,
-        runningPid: state.record.pid,
-      };
-    }
-    if (state.kind !== 'absent') {
-      await removeGatewayPid(options.dataDir, instance).catch(() => undefined);
+    // 消费统一状态视图：running/degraded/starting 拒绝且不删；stale 条件清理；
+    // unknown/foreign-host 拒绝且不删。
+    const state = options.state ?? (await collectGatewayState(options.dataDir));
+    const entry = state.entries.find((item) => item.instance === normalizedInstance);
+    if (entry !== undefined) {
+      const pid = entry.record?.pid ?? entry.lock?.pid;
+      if (entry.state === 'running' || entry.state === 'degraded' || entry.state === 'starting') {
+        return {
+          ok: false,
+          error: 'already_running',
+          message: `gateway is already running (pid ${pid ?? 0})`,
+          logPath,
+          ...(pid !== undefined ? { runningPid: pid } : {}),
+        };
+      }
+      if (entry.state === 'unknown' || entry.state === 'foreign-host') {
+        return {
+          ok: false,
+          error: 'state_unknown',
+          message:
+            entry.state === 'unknown'
+              ? 'gateway state could not be confirmed; no files were deleted'
+              : `gateway lock belongs to another host (${entry.lock?.host ?? 'unknown'}); no files were deleted`,
+          logPath,
+        };
+      }
+      if (entry.state === 'stale') {
+        await cleanupGatewayStateEntry(options.dataDir, entry).catch(() => undefined);
+      }
     }
   }
 
@@ -211,6 +228,13 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
     // 已经退出
   }
   await handle.close().catch(() => undefined);
+
+  // 超时后对账：PID 文件已出现且进程仍活 → 视为已启动但未确认，留给用户查看。
+  const raced = await readGatewayPidRecord(options.dataDir, instance);
+  if (raced !== null && raced.pid === child.pid && isProcessAlive(raced.pid)) {
+    return { ok: true, record: raced, logPath, unconfirmed: true };
+  }
+
   const tail = await tailLog(logPath);
   return {
     ok: false,

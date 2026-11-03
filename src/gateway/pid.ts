@@ -1,89 +1,39 @@
-/**
- * Gateway PID 文件（0.12 DECISION-023 §2.1）。
- *
- * - 路径：`<dataDir>/gateway.pid`；JSON
- *   `{pid, started_at, host, port, version, node_id?}`；
- * - 原子写：同目录临时文件 0600 → rename；
- * - 存活判定：pid 存活**且**命令行匹配 gateway/serve 才算运行中；
- *   死 pid / 不可解析 / 命令行不匹配都按 stale 处理（可回收）。
- *
- * @module vessel/gateway/pid
- */
-
+/** Gateway PID state files (0.35): atomic records, compare-and-delete, collectGatewayState. */
 import * as fs from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
-
-/** PID 文件内容（冻结字段；0.14 追加可选 instance） */
+import { isLoopbackHostname } from '../../packages/config/src/index';
+import { createHttpRpcClient } from '../rpc/http-client';
 export interface GatewayPidRecord {
   pid: number;
-  /** ISO-8601 */
   started_at: string;
   host: string;
   port: number;
   version: string;
   node_id?: string;
-  /** 命名实例；缺省/旧文件视为 default（0.14） */
   instance?: string;
 }
-
-/** 读取 + 分类结果 */
-export type GatewayPidState =
-  | { kind: 'absent' }
-  | { kind: 'invalid'; reason: string }
-  | { kind: 'stale'; reason: 'dead' | 'unreadable' | 'mismatch'; record: GatewayPidRecord }
-  | { kind: 'running'; record: GatewayPidRecord };
-
-/** 单个实例的 PID 发现结果（0.14） */
-export interface GatewayPidEntry {
-  instance: string;
-  path: string;
-  state: GatewayPidState;
-}
-
-/** 子进程命令结果（ps / powershell 探测用） */
 export interface CommandResult {
   exitCode: number;
   stdout: string;
   stderr: string;
 }
-
-/** 命令执行器（测试注入） */
 export type CommandRunner = (argv: string[]) => Promise<CommandResult>;
-
-/** 进程探测结果 */
 export interface ProcessInfo {
   alive: boolean;
-  /** 读不到命令行时为 undefined（按 stale 处理） */
   commandLine?: string;
 }
-
-/** 探测选项 */
 export interface InspectProcessOptions {
   platform?: NodeJS.Platform;
   runCommand?: CommandRunner;
-  /** Linux /proc 读取注入 */
   readCmdline?: (pid: number) => Promise<string | undefined>;
 }
-
-/** PID 读取选项（0.14：instance） */
-export interface ReadGatewayPidOptions extends InspectProcessOptions {
-  /** 目标实例；缺省 default */
-  instance?: string;
-}
-
-/** 默认实例名 */
 export const DEFAULT_GATEWAY_INSTANCE = 'default';
-
-/** 实例名字符集（不允许路径分隔符） */
 const GATEWAY_INSTANCE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-
-/** 是否为合法实例名 */
 export function isValidGatewayInstance(value: string): boolean {
   return value === DEFAULT_GATEWAY_INSTANCE || GATEWAY_INSTANCE_RE.test(value);
 }
-
-/** 归一化实例名：空值 → default；非法抛错 */
 export function normalizeGatewayInstance(instance?: string): string {
   if (instance === undefined || instance.trim() === '') return DEFAULT_GATEWAY_INSTANCE;
   const trimmed = instance.trim();
@@ -92,31 +42,15 @@ export function normalizeGatewayInstance(instance?: string): string {
   }
   return trimmed;
 }
-
-/** PID 文件名：default → gateway.pid；命名 → gateway-<instance>.pid */
 export function gatewayPidFileName(instance?: string): string {
   const name = normalizeGatewayInstance(instance);
   return name === DEFAULT_GATEWAY_INSTANCE ? 'gateway.pid' : `gateway-${name}.pid`;
 }
-
-/** `<dataDir>/gateway.pid` 或 `<dataDir>/gateway-<instance>.pid` */
 export function gatewayPidPath(dataDir: string, instance?: string): string {
   return path.join(dataDir, gatewayPidFileName(instance));
 }
-
-/** 默认命令超时（ps / schtasks 等短命令） */
 export const COMMAND_TIMEOUT_MS = 3000;
-
-/**
- * 进程探测超时（Windows WMI 查询）。
- *
- * 冷启动 PowerShell + Get-CimInstance 在空闲机器上约 1s；CI 的 Windows runner
- * 上受并发与杀毒扫描影响经常超过 3s。超时会被当成“读不到命令行”，进而把
- * 存活的 gateway 判成 stale（`gateway status` 退出 1），因此这里单独放宽。
- */
 export const PROCESS_PROBE_TIMEOUT_MS = 15_000;
-
-/** 构造带超时的命令执行器（失败统一归一为 exitCode 1） */
 export function createCommandRunner(timeoutMs: number = COMMAND_TIMEOUT_MS): CommandRunner {
   return async (argv) => {
     try {
@@ -137,18 +71,11 @@ export function createCommandRunner(timeoutMs: number = COMMAND_TIMEOUT_MS): Com
     }
   };
 }
-
-/** 默认命令执行器：Bun.spawn + 3s 超时 */
 export const defaultCommandRunner: CommandRunner = createCommandRunner();
-
-/** 进程探测执行器：更宽松的超时，避免慢 WMI 查询把存活进程判成 stale */
 const defaultProcessProbeRunner: CommandRunner = createCommandRunner(PROCESS_PROBE_TIMEOUT_MS);
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-
-/** 校验并解析 PID 记录；字段非法返回 null */
 export function parseGatewayPid(raw: unknown): GatewayPidRecord | null {
   if (!isRecord(raw)) return null;
   const { pid, started_at, host, port, version, node_id, instance } = raw;
@@ -171,8 +98,6 @@ export function parseGatewayPid(raw: unknown): GatewayPidRecord | null {
     ...(instance !== undefined ? { instance } : {}),
   };
 }
-
-/** 进程是否存活（EPERM 视为存活） */
 export function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -182,16 +107,12 @@ export function isProcessAlive(pid: number): boolean {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
-
-/** 命令行是否像 Vessel gateway/serve（进程复用 PID 的保护） */
 export function isGatewayCommandLine(commandLine: string): boolean {
   if (commandLine.trim() === '') return false;
   const vessel = /(^|[\\/\s])vessel(\.cmd|\.exe|\.js)?\b|src[\\/]cli\.(ts|js)\b|\bcli\.(ts|js)\b/i;
   if (!vessel.test(commandLine)) return false;
   return /\bgateway\b[\s\S]*\bstart\b|(?:^|\s)--serve\b/i.test(commandLine);
 }
-
-/** 读取 Linux /proc/<pid>/cmdline（NUL 分隔）；失败返回 undefined */
 async function readLinuxCmdline(pid: number): Promise<string | undefined> {
   try {
     const raw = await readFile(`/proc/${pid}/cmdline`, 'utf8');
@@ -205,19 +126,14 @@ async function readLinuxCmdline(pid: number): Promise<string | undefined> {
     return undefined;
   }
 }
-
-/** 探测进程存活与命令行 */
 export async function inspectProcess(
   pid: number,
   options: InspectProcessOptions = {},
 ): Promise<ProcessInfo> {
   if (!isProcessAlive(pid)) return { alive: false };
-
   const platform = options.platform ?? process.platform;
-  // 未注入执行器时，进程探测用更宽松的超时（Windows 的 WMI 查询可能很慢）。
   const runCommand = options.runCommand ?? defaultProcessProbeRunner;
   let commandLine: string | undefined;
-
   if (platform === 'linux') {
     commandLine = await (options.readCmdline ?? readLinuxCmdline)(pid);
     if (commandLine === undefined) {
@@ -238,23 +154,8 @@ export async function inspectProcess(
     const result = await runCommand(['ps', '-p', String(pid), '-o', 'command=']);
     commandLine = result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
   }
-
   return { alive: true, ...(commandLine !== undefined ? { commandLine } : {}) };
 }
-
-/** 按进程信息给 PID 记录分类 */
-export function classifyGatewayPid(record: GatewayPidRecord, info: ProcessInfo): GatewayPidState {
-  if (!info.alive) return { kind: 'stale', reason: 'dead', record };
-  if (info.commandLine === undefined || info.commandLine.trim() === '') {
-    return { kind: 'stale', reason: 'unreadable', record };
-  }
-  if (!isGatewayCommandLine(info.commandLine)) {
-    return { kind: 'stale', reason: 'mismatch', record };
-  }
-  return { kind: 'running', record };
-}
-
-/** 只读取 PID 记录（不探测进程）；文件缺失/损坏返回 null */
 export async function readGatewayPidRecord(
   dataDir: string,
   instance?: string,
@@ -266,95 +167,6 @@ export async function readGatewayPidRecord(
     return null;
   }
 }
-
-/** 读取指定路径并分类（内部；列表用） */
-async function readGatewayPidStateAtPath(
-  filePath: string,
-  options: InspectProcessOptions = {},
-): Promise<GatewayPidState> {
-  let raw: string;
-  try {
-    raw = await readFile(filePath, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
-    return { kind: 'invalid', reason: error instanceof Error ? error.message : String(error) };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { kind: 'invalid', reason: 'invalid JSON' };
-  }
-  const record = parseGatewayPid(parsed);
-  if (!record) return { kind: 'invalid', reason: 'invalid pid file fields' };
-
-  const info = await inspectProcess(record.pid, options);
-  return classifyGatewayPid(record, info);
-}
-
-/** 读取并分类 PID 文件；文件不存在 → absent */
-export async function readGatewayPidState(
-  dataDir: string,
-  options: ReadGatewayPidOptions = {},
-): Promise<GatewayPidState> {
-  const filePath = gatewayPidPath(dataDir, options.instance);
-  return readGatewayPidStateAtPath(filePath, options);
-}
-
-/**
- * 列出 `<dataDir>` 下全部实例 PID（`gateway.pid` + `gateway-<instance>.pid`）。
- * 非规范文件名（如 `gateway-default.pid`）忽略；按 default 优先、实例名排序。
- */
-export async function listGatewayPidStates(
-  dataDir: string,
-  options: InspectProcessOptions = {},
-): Promise<GatewayPidEntry[]> {
-  let names: string[];
-  try {
-    names = await readdir(dataDir);
-  } catch {
-    return [];
-  }
-
-  const found = new Map<string, string>();
-  for (const name of names) {
-    if (name.startsWith('.') || !name.endsWith('.pid')) continue;
-    let instance: string | undefined;
-    if (name === 'gateway.pid') {
-      instance = DEFAULT_GATEWAY_INSTANCE;
-    } else {
-      const match = /^gateway-(.+)\.pid$/.exec(name);
-      if (!match) continue;
-      const candidate = match[1] ?? '';
-      if (!isValidGatewayInstance(candidate)) continue;
-      // `gateway-default.pid` 不是规范路径（default 固定 gateway.pid）。
-      if (candidate === DEFAULT_GATEWAY_INSTANCE) continue;
-      instance = candidate;
-    }
-    if (instance !== undefined && !found.has(instance)) {
-      found.set(instance, path.join(dataDir, name));
-    }
-  }
-
-  const entries: GatewayPidEntry[] = [];
-  for (const [instance, filePath] of found) {
-    entries.push({
-      instance,
-      path: filePath,
-      state: await readGatewayPidStateAtPath(filePath, options),
-    });
-  }
-  entries.sort((a, b) => {
-    if (a.instance === b.instance) return 0;
-    if (a.instance === DEFAULT_GATEWAY_INSTANCE) return -1;
-    if (b.instance === DEFAULT_GATEWAY_INSTANCE) return 1;
-    return a.instance < b.instance ? -1 : 1;
-  });
-  return entries;
-}
-
-/** 原子写 PID 文件（0600，同目录临时文件 + rename） */
 export async function writeGatewayPid(
   dataDir: string,
   record: GatewayPidRecord,
@@ -376,13 +188,10 @@ export async function writeGatewayPid(
   const stored: GatewayPidRecord =
     name === DEFAULT_GATEWAY_INSTANCE ? base : { ...base, instance: name };
   const body = `${JSON.stringify(stored, null, 2)}\n`;
-
   await writeFile(tmp, body, { mode: 0o600 });
   try {
     await chmod(tmp, 0o600);
-  } catch {
-    // Windows 上 chmod 只影响 readonly 位；忽略
-  }
+  } catch {}
   try {
     await rename(tmp, filePath);
   } catch (error) {
@@ -391,27 +200,441 @@ export async function writeGatewayPid(
   }
   try {
     await chmod(filePath, 0o600);
-  } catch {
-    // best-effort
-  }
+  } catch {}
 }
-
-/** 删除 PID 文件（不存在视为成功） */
-export async function removeGatewayPid(dataDir: string, instance?: string): Promise<void> {
+export type GatewayRecordState = 'running' | 'degraded' | 'stale' | 'unknown';
+export interface GatewayRecordClassification {
+  state: GatewayRecordState;
+  reason?: string;
+  record: GatewayPidRecord;
+}
+export interface GatewayHealthIdentity {
+  pid: number;
+  started_at: number;
+  node_id?: string;
+}
+export type GatewayHealthProbe = (target: {
+  baseUrl: string;
+  token: string;
+  timeoutMs: number;
+}) => Promise<GatewayHealthIdentity | undefined>;
+export interface ClassifyGatewayRecordOptions {
+  token?: string;
+  timeoutMs?: number;
+  now?: number;
+  bootTime?: number;
+  probe?: GatewayHealthProbe;
+  fetch?: typeof fetch;
+}
+function toEpochMs(value: string | number): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+export function isBeforeBoot(
+  startedAt: string | number,
+  options: { bootTime?: number; toleranceMs?: number } = {},
+): boolean {
+  const startedMs = toEpochMs(startedAt);
+  if (startedMs === undefined) return false;
+  const bootTime = options.bootTime ?? Date.now() - os.uptime() * 1000;
+  return startedMs < bootTime - (options.toleranceMs ?? 5000);
+}
+function resolveProbeHost(host: string): string | undefined {
+  const normalized = host.trim().toLowerCase();
+  if (normalized === '0.0.0.0') return '127.0.0.1';
+  if (normalized === '::' || normalized === '[::]') return '[::1]';
+  if (!isLoopbackHostname(normalized)) return undefined;
+  return normalized === '::1' ? '[::1]' : normalized;
+}
+function createHealthProbe(fetchImpl?: typeof fetch): GatewayHealthProbe {
+  return async (target) => {
+    const client = createHttpRpcClient({
+      baseUrl: target.baseUrl,
+      token: target.token,
+      subscribe: false,
+      requestTimeoutMs: target.timeoutMs,
+      ...(fetchImpl !== undefined ? { fetch: fetchImpl } : {}),
+    });
+    try {
+      const result = await client.request<unknown>('health.get', {});
+      if (!isRecord(result) || !isRecord(result.node)) return undefined;
+      const { pid, started_at, node_id } = result.node;
+      if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
+      if (typeof started_at !== 'number' || !Number.isFinite(started_at)) return undefined;
+      return {
+        pid,
+        started_at,
+        ...(typeof node_id === 'string' && node_id !== '' ? { node_id } : {}),
+      };
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  };
+}
+export async function classifyGatewayRecord(
+  record: GatewayPidRecord,
+  options: ClassifyGatewayRecordOptions = {},
+): Promise<GatewayRecordClassification> {
+  if (!isProcessAlive(record.pid)) return { state: 'stale', reason: 'dead', record };
+  const now = options.now ?? Date.now();
+  const bootTime = options.bootTime ?? now - os.uptime() * 1000;
+  if (isBeforeBoot(record.started_at, { bootTime })) {
+    return { state: 'stale', reason: 'pre-boot', record };
+  }
+  const probeHost = resolveProbeHost(record.host);
+  if (probeHost === undefined) return { state: 'degraded', reason: 'non-loopback', record };
+  const token = options.token;
+  if (token === undefined || token === '') return { state: 'degraded', reason: 'no-token', record };
+  let identity: GatewayHealthIdentity | undefined;
   try {
-    await unlink(gatewayPidPath(dataDir, instance));
+    identity = await (options.probe ?? createHealthProbe(options.fetch))({
+      baseUrl: `http://${probeHost}:${record.port}`,
+      token,
+      timeoutMs: options.timeoutMs ?? 500,
+    });
+  } catch {
+    return { state: 'degraded', reason: 'unreachable', record };
+  }
+  if (identity === undefined) return { state: 'degraded', reason: 'unreachable', record };
+  const startedMs = toEpochMs(record.started_at);
+  const matches =
+    identity.pid === record.pid &&
+    (record.node_id === undefined || identity.node_id === record.node_id) &&
+    startedMs !== undefined &&
+    Math.abs(identity.started_at - startedMs) <= 30_000;
+  return matches ? { state: 'running', record } : { state: 'degraded', reason: 'mismatch', record };
+}
+export interface GatewayRecordIdentity {
+  pid: number;
+  started_at: string | number;
+}
+export async function deleteRecordIfOwned(
+  filePath: string,
+  expected: GatewayRecordIdentity,
+  options: {
+    quarantine?: boolean;
+    now?: number;
+    parse?: (raw: unknown) => GatewayRecordIdentity | null;
+  } = {},
+): Promise<boolean> {
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  let record: GatewayRecordIdentity | null;
+  try {
+    record = (options.parse ?? parseGatewayPid)(parsed);
+  } catch {
+    return false;
+  }
+  const actual = record ? toEpochMs(record.started_at) : undefined;
+  const wanted = toEpochMs(expected.started_at);
+  if (!record || record.pid !== expected.pid || wanted === undefined || actual !== wanted) {
+    return false;
+  }
+  const reclaimPath = `${filePath}.reclaim-${options.now ?? Date.now()}`;
+  await rename(filePath, reclaimPath);
+  if (options.quarantine !== true) await unlink(reclaimPath).catch(() => undefined);
+  return true;
+}
+export async function quarantineCorruptRecordIfUnchanged(
+  filePath: string,
+  observedMtimeMs: number,
+  options: { now?: number } = {},
+): Promise<boolean> {
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await fs.promises.stat(filePath)).mtimeMs;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  if (mtimeMs !== observedMtimeMs) return false;
+  await rename(filePath, `${filePath}.reclaim-${options.now ?? Date.now()}`);
+  return true;
+}
+export type GatewayStateFileSnapshot<T> =
+  | { kind: 'absent' }
+  | { kind: 'ok'; value: T; mtimeMs: number }
+  | { kind: 'corrupt'; reason: string; mtimeMs: number; ageMs: number; reclaimable: boolean }
+  | { kind: 'io-error'; error: Error };
+export async function readGatewayStateFile<T = unknown>(
+  filePath: string,
+  options: { now?: number; graceMs?: number; parse?: (raw: unknown) => T | null } = {},
+): Promise<GatewayStateFileSnapshot<T>> {
+  let raw: string;
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await fs.promises.stat(filePath)).mtimeMs;
+    raw = await readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
+    return { kind: 'io-error', error: error instanceof Error ? error : new Error(String(error)) };
+  }
+  const corrupt = (reason: string): GatewayStateFileSnapshot<T> => {
+    const ageMs = Math.max(0, (options.now ?? Date.now()) - mtimeMs);
+    return {
+      kind: 'corrupt',
+      reason,
+      mtimeMs,
+      ageMs,
+      reclaimable: ageMs > (options.graceMs ?? 5000),
+    };
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return corrupt('invalid JSON');
+  }
+  let value: T | null;
+  try {
+    value = (options.parse ?? ((input: unknown): T => input as T))(parsed);
+  } catch {
+    value = null;
+  }
+  return value === null ? corrupt('invalid fields') : { kind: 'ok', value, mtimeMs };
+}
+export interface GatewayStateEntry {
+  instance: string;
+  pidPath?: string;
+  lockPath?: string;
+  record?: GatewayPidRecord;
+  lock?: GatewayStateLock;
+  state: 'absent' | 'starting' | 'running' | 'degraded' | 'stale' | 'unknown' | 'foreign-host';
+  reason?: string;
+  owner?: GatewayStateOwner;
+}
+export type GatewayStateLock = { pid: number; started_at: number; host: string };
+export type GatewayStateOwner = Pick<GatewayPidRecord, 'pid' | 'host' | 'port' | 'started_at'> &
+  Record<'token' | 'tenant_id', string>;
+export interface GatewayStateSnapshot {
+  entries: GatewayStateEntry[];
+  owners: GatewayStateOwner[];
+  hub?: {
+    path: string;
+    state: 'running' | 'stale' | 'unknown';
+    reason?: string;
+    record?: { pid: number; started_at: number; url?: string };
+  };
+}
+export interface CollectGatewayStateOptions extends ClassifyGatewayRecordOptions {
+  hubDataDir?: string;
+  hostname?: string;
+  graceMs?: number;
+  startingGraceMs?: number;
+  reclaimRetentionMs?: number;
+}
+function parseEpochPid(raw: unknown): { pid: number; started_at: number } | null {
+  if (!isRecord(raw)) return null;
+  const { pid, started_at } = raw;
+  if (!Number.isInteger(pid) || (pid as number) <= 0) return null;
+  if (typeof started_at !== 'number' || !Number.isFinite(started_at)) return null;
+  return { pid: pid as number, started_at };
+}
+function parseStateLock(raw: unknown): GatewayStateLock | null {
+  const base = parseEpochPid(raw);
+  if (base === null || !isRecord(raw) || typeof raw.host !== 'string') return null;
+  return { ...base, host: raw.host };
+}
+function parseStateOwner(raw: unknown): GatewayStateOwner | null {
+  if (!isRecord(raw)) return null;
+  const { pid, host, port, token, started_at, tenant_id } = raw;
+  if (!Number.isInteger(pid) || (pid as number) <= 0) return null;
+  if (typeof host !== 'string' || !isLoopbackHostname(host.trim().toLowerCase())) return null;
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) return null;
+  if (typeof token !== 'string' || token === '') return null;
+  if (typeof started_at !== 'string' || Number.isNaN(Date.parse(started_at))) return null;
+  if (typeof tenant_id !== 'string' || tenant_id === '') return null;
+  return { pid: pid as number, host, port, token, started_at, tenant_id };
+}
+function parseStateHub(raw: unknown): { pid: number; started_at: number; url?: string } | null {
+  const base = parseEpochPid(raw);
+  if (base === null || !isRecord(raw)) return null;
+  return { ...base, ...(typeof raw.url === 'string' ? { url: raw.url } : {}) };
+}
+/** E6：win32 上 hostname 忽略大小写。 */
+function sameHostName(left: string, right: string): boolean {
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+/** 一次 readdir 构建统一状态视图；热路径不调用 inspectProcess/Get-CimInstance。 */
+export async function collectGatewayState(
+  dataDir: string,
+  options: CollectGatewayStateOptions = {},
+): Promise<GatewayStateSnapshot> {
+  const now = options.now ?? Date.now();
+  const bootTime = options.bootTime ?? now - os.uptime() * 1000;
+  const beforeBoot = (t: number) => isBeforeBoot(t, { bootTime });
+  const hostname = options.hostname ?? os.hostname();
+  const graceMs = options.graceMs ?? 5000;
+  const startingGraceMs = options.startingGraceMs ?? 60_000;
+  const retentionMs = options.reclaimRetentionMs ?? 604_800_000;
+  const names = await readdir(dataDir).catch(() => [] as string[]);
+  const hubDataDir = options.hubDataDir ?? path.join(dataDir, 'hub');
+  for (const dir of [dataDir, hubDataDir]) {
+    const list = dir === dataDir ? names : await readdir(dir).catch(() => [] as string[]);
+    for (const name of list) {
+      if (!name.includes('.reclaim-')) continue;
+      const target = path.join(dir, name);
+      const stat = await fs.promises.stat(target).catch(() => undefined);
+      if (stat !== undefined && now - stat.mtimeMs > retentionMs)
+        await unlink(target).catch(() => undefined);
+    }
+  }
+  const pids = new Map<string, string>();
+  const locks = new Map<string, string>();
+  for (const name of names) {
+    if (name.startsWith('.') || name.includes('.reclaim-')) continue;
+    if (name === 'gateway.pid') {
+      pids.set('default', path.join(dataDir, name));
+      continue;
+    }
+    const match = /^gateway-(.+)\.(pid|lock)$/.exec(name);
+    if (match === null) continue;
+    const instance = match[1] ?? '';
+    if (!isValidGatewayInstance(instance)) continue;
+    if (match[2] === 'lock') locks.set(instance, path.join(dataDir, name));
+    else if (instance !== 'default') pids.set(instance, path.join(dataDir, name));
+  }
+  const instances = [...new Set([...pids.keys(), ...locks.keys()])].sort((a, b) =>
+    a === 'default' ? -1 : b === 'default' ? 1 : a < b ? -1 : 1,
+  );
+  const read = <T>(p: string | undefined, parse: (raw: unknown) => T | null) =>
+    p === undefined ? undefined : readGatewayStateFile<T>(p, { now, graceMs, parse });
+  const entries: GatewayStateEntry[] = [];
+  for (const instance of instances) {
+    const pidPath = pids.get(instance),
+      lockPath = locks.get(instance);
+    const entry: GatewayStateEntry = { instance, pidPath, lockPath, state: 'absent' };
+    const ps = await read(pidPath, parseGatewayPid);
+    const ls = await read(lockPath, parseStateLock);
+    if (ps?.kind === 'ok') entry.record = ps.value;
+    if (ls?.kind === 'ok') entry.lock = ls.value;
+    const lock = entry.lock;
+    const lockAlive =
+      lock !== undefined && isProcessAlive(lock.pid) && !beforeBoot(lock.started_at);
+    if (ps?.kind === 'io-error' || ls?.kind === 'io-error') {
+      Object.assign(entry, { state: 'unknown', reason: 'io-error' });
+    } else if (lock !== undefined && !sameHostName(lock.host, hostname)) {
+      Object.assign(entry, { state: 'foreign-host', reason: 'lock-host-mismatch' });
+    } else if (entry.record !== undefined) {
+      const c = await classifyGatewayRecord(entry.record, { ...options, now, bootTime });
+      Object.assign(entry, { state: c.state, reason: c.reason });
+      if (c.state !== 'stale' && lock !== undefined && lock.pid !== entry.record.pid) {
+        Object.assign(entry, { state: 'unknown', reason: 'lock-pid-mismatch' });
+      } else if (c.state !== 'stale' && ls?.kind === 'corrupt' && !ls.reclaimable) {
+        Object.assign(entry, { state: 'unknown', reason: ls.reason });
+      }
+    } else if (ps?.kind === 'corrupt' && lockAlive && lock !== undefined) {
+      const state = now - lock.started_at <= startingGraceMs ? 'starting' : 'degraded';
+      Object.assign(entry, { state, reason: 'no-pid-record' });
+    } else if (ps?.kind === 'corrupt' || (lock === undefined && ls?.kind === 'corrupt')) {
+      const corrupt = ps?.kind === 'corrupt' ? ps : ls?.kind === 'corrupt' ? ls : undefined;
+      const reason = corrupt?.kind === 'corrupt' ? corrupt.reason : undefined;
+      entry.state = corrupt?.reclaimable === true ? 'stale' : 'unknown';
+      entry.reason = corrupt?.reclaimable === true ? 'corrupt' : reason;
+    } else if (lock !== undefined) {
+      const staleReason = isProcessAlive(lock.pid) ? 'pre-boot' : 'dead';
+      const state = !lockAlive
+        ? 'stale'
+        : now - lock.started_at <= startingGraceMs
+          ? 'starting'
+          : 'degraded';
+      let reason: string | undefined;
+      if (!lockAlive) reason = staleReason;
+      else if (state === 'degraded') reason = 'no-pid-record';
+      Object.assign(entry, { state, reason });
+    }
+    entries.push(entry);
+  }
+  const ownerSnap = await read(path.join(dataDir, 'agent-owner.json'), parseStateOwner);
+  const owners: GatewayStateOwner[] = [];
+  if (ownerSnap?.kind === 'ok') {
+    const owner = ownerSnap.value;
+    const target = entries.find((e) => e.record?.pid === owner.pid || e.lock?.pid === owner.pid);
+    if (target === undefined) owners.push(owner);
+    else target.owner = owner;
+  }
+  const hubPath = path.join(hubDataDir, 'hub.lock');
+  const hs = await read(hubPath, parseStateHub);
+  const record = hs?.kind === 'ok' ? hs.value : undefined;
+  const alive = record !== undefined && isProcessAlive(record.pid);
+  const running = record !== undefined && alive && !isBeforeBoot(record.started_at, { bootTime });
+  const hubReason = running ? undefined : alive ? 'pre-boot' : 'dead';
+  const hub: GatewayStateSnapshot['hub'] = record
+    ? { path: hubPath, state: running ? 'running' : 'stale', reason: hubReason, record }
+    : hs !== undefined && hs.kind !== 'absent'
+      ? { path: hubPath, state: 'unknown', reason: hs.kind === 'corrupt' ? hs.reason : 'io-error' }
+      : undefined;
+  return { entries, owners, hub };
+}
+/** 同步 compare-and-delete（pid+started_at）；先 rename 再删除。 */
+export function deleteRecordIfOwnedSync(
+  filePath: string,
+  expected: GatewayRecordIdentity,
+  options: { parse?: (raw: unknown) => GatewayRecordIdentity | null; now?: number } = {},
+): boolean {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const record = (options.parse ?? parseGatewayPid)(JSON.parse(raw));
+    const actual = record === null ? undefined : toEpochMs(record.started_at);
+    const wanted = toEpochMs(expected.started_at);
+    if (record?.pid !== expected.pid || wanted === undefined || actual !== wanted) return false;
+    const reclaim = `${filePath}.reclaim-${options.now ?? Date.now()}`;
+    fs.renameSync(filePath, reclaim);
+    fs.rmSync(reclaim, { force: true });
+    return true;
+  } catch {
+    return false;
   }
 }
-
-/** 同步删除：仅当文件属于 `pid`（process 'exit' 钩子用） */
-export function removeGatewayPidIfOwnedSync(dataDir: string, pid: number, instance?: string): void {
-  try {
-    const filePath = gatewayPidPath(dataDir, instance);
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as { pid?: unknown };
-    if (parsed.pid === pid) fs.unlinkSync(filePath);
-  } catch {
-    // 文件不存在 / 损坏 / 实例名非法 / 无权限：退出路径不抛错
+/** 损坏文件过宽限后隔离（先复读 mtime，未变才 rename）。 */
+async function quarantineIfCorrupt(filePath: string, now: number, graceMs: number): Promise<void> {
+  const stat = await fs.promises.stat(filePath).catch(() => undefined);
+  if (stat !== undefined && now - stat.mtimeMs > graceMs) {
+    await quarantineCorruptRecordIfUnchanged(filePath, stat.mtimeMs, { now });
+  }
+}
+/** 条件清理一个可回收 entry 的 pid/lock/owner；任一文件被改过则不删。 */
+export async function cleanupGatewayStateEntry(
+  dataDir: string,
+  entry: GatewayStateEntry,
+  options: { now?: number; bootTime?: number; graceMs?: number; hostname?: string } = {},
+): Promise<void> {
+  const now = options.now ?? Date.now();
+  const bootTime = options.bootTime ?? now - os.uptime() * 1000;
+  const graceMs = options.graceMs ?? 5000;
+  const hostname = options.hostname ?? os.hostname();
+  const { pidPath, lockPath, record, lock, owner } = entry;
+  if (pidPath !== undefined && record !== undefined) await deleteRecordIfOwned(pidPath, record);
+  else if (pidPath !== undefined && entry.state === 'stale')
+    await quarantineIfCorrupt(pidPath, now, graceMs);
+  if (lockPath !== undefined && lock !== undefined) {
+    if (
+      sameHostName(lock.host, hostname) &&
+      (!isProcessAlive(lock.pid) || isBeforeBoot(lock.started_at, { bootTime }))
+    )
+      await deleteRecordIfOwned(lockPath, lock, { parse: parseStateLock });
+  } else if (lockPath !== undefined && entry.state === 'stale') {
+    await quarantineIfCorrupt(lockPath, now, graceMs);
+  }
+  if (
+    owner !== undefined &&
+    (owner.pid === record?.pid || owner.pid === lock?.pid) &&
+    (!isProcessAlive(owner.pid) || isBeforeBoot(owner.started_at, { bootTime }))
+  ) {
+    await deleteRecordIfOwned(path.join(dataDir, 'agent-owner.json'), owner, {
+      parse: parseStateOwner,
+    });
   }
 }

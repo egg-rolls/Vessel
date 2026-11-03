@@ -15,9 +15,14 @@ import {
   resolveControlPlaneTarget,
 } from './control-plane-target';
 import { resolveDataDir } from './data-paths';
-import { type GatewayPidEntry, listGatewayPidStates } from './gateway/pid';
+import {
+  collectGatewayState,
+  type GatewayStateEntry,
+  type GatewayStateSnapshot,
+} from './gateway/pid';
 import { gatewayBaseUrl } from './gateway/reload';
 import { t } from './i18n';
+import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
 
@@ -31,10 +36,13 @@ export interface StatusCommandOptions extends ControlPlaneTargetOptions {
   json?: boolean;
   now?: () => number;
   version?: string;
+  /** 内部计数探针注入；缺省 collectGatewayState。 */
+  collectState?: typeof collectGatewayState;
 }
 
 interface InstanceView {
   instance: string;
+  state: GatewayStateEntry['state'];
   running: boolean;
   pid?: number;
   host?: string;
@@ -78,16 +86,17 @@ function pickNumber(record: Record<string, unknown> | undefined, key: string): n
 }
 
 function instanceView(
-  entry: GatewayPidEntry,
+  entry: GatewayStateEntry,
   config: VesselConfig,
   now: () => number,
 ): InstanceView {
-  const state = entry.state;
-  if (state.kind === 'running') {
-    const record = state.record;
+  const pidFile = entry.pidPath ?? entry.lockPath ?? '';
+  const record = entry.record;
+  if (record !== undefined) {
     return {
       instance: entry.instance,
-      running: true,
+      state: entry.state,
+      running: entry.state === 'running' || entry.state === 'degraded',
       pid: record.pid,
       host: record.host,
       port: record.port,
@@ -96,18 +105,18 @@ function instanceView(
       uptime_seconds: Math.max(0, Math.floor((now() - Date.parse(record.started_at)) / 1000)),
       version: record.version,
       ...(record.node_id !== undefined ? { node_id: record.node_id } : {}),
-      pid_file: entry.path,
+      pid_file: pidFile,
+      ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
     };
   }
   return {
     instance: entry.instance,
+    state: entry.state,
     running: false,
-    pid_file: entry.path,
-    ...(state.kind === 'stale'
-      ? { stale: true, pid: state.record.pid, reason: state.reason }
-      : state.kind === 'invalid'
-        ? { reason: state.reason }
-        : {}),
+    pid_file: pidFile,
+    ...(entry.lock !== undefined ? { pid: entry.lock.pid } : {}),
+    ...(entry.state === 'stale' ? { stale: true } : {}),
+    ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
   };
 }
 
@@ -179,10 +188,12 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
   }
 
   const dataDir = options.dataDir ?? resolveDataDir(config, env);
-  const entries = await listGatewayPidStates(dataDir, {
-    ...(options.platform !== undefined ? { platform: options.platform } : {}),
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+  const collectState = options.collectState ?? collectGatewayState;
+  const token = resolveGatewayToken(config, env);
+  const snapshot: GatewayStateSnapshot = await collectState(dataDir, {
+    ...(token !== undefined ? { token } : {}),
   });
+  const entries = snapshot.entries;
 
   const targetResult = await resolveControlPlaneTarget({
     ...options,
@@ -190,6 +201,7 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
     dataDir,
     env,
     tenantId,
+    entries,
   });
   const explicitConnect =
     (options.connectUrl !== null && options.connectUrl !== undefined) ||
@@ -213,7 +225,10 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
   }
 
   const instances = entries.map((entry) => instanceView(entry, config, now));
-  const running = entries.some((entry) => entry.state.kind === 'running');
+  const running = entries.some(
+    (entry) =>
+      entry.state === 'running' || entry.state === 'degraded' || entry.state === 'starting',
+  );
   const payload = {
     as_of: new Date(now()).toISOString(),
     version: options.version ?? readPackageVersion(),
@@ -271,13 +286,27 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
     lines.push(`  ${ui.dim(t('status.noInstances'))}`);
   } else {
     for (const instance of instances) {
-      const value = instance.running
-        ? `${ui.ok(t('gateway.running'))}  pid ${instance.pid}  ${instance.url ?? ''}`
-        : instance.stale === true
-          ? ui.warn(`${t('gateway.notRunning')} (stale: ${instance.reason ?? ''})`)
-          : t('gateway.notRunning');
+      const value =
+        instance.state === 'running'
+          ? `${ui.ok(t('gateway.running'))}  pid ${instance.pid}  ${instance.url ?? ''}`
+          : instance.state === 'degraded'
+            ? ui.warn(
+                t('gateway.status.degraded', {
+                  pid: instance.pid ?? 0,
+                  reason: instance.reason ?? '',
+                }),
+              )
+            : instance.state === 'starting'
+              ? ui.warn(t('gateway.status.starting', { pid: instance.pid ?? 0 }))
+              : instance.stale === true
+                ? ui.warn(`${t('gateway.notRunning')} (stale: ${instance.reason ?? ''})`)
+                : instance.state === 'unknown'
+                  ? ui.warn(t('gateway.status.unknown'))
+                  : instance.state === 'foreign-host'
+                    ? ui.warn(t('gateway.status.foreignHost', { host: instance.reason ?? '' }))
+                    : t('gateway.notRunning');
       lines.push(ui.kv(instance.instance, value.trimEnd(), 12));
-      lines.push(`  ${ui.dim(instance.pid_file)}`);
+      if (instance.pid_file !== '') lines.push(`  ${ui.dim(instance.pid_file)}`);
     }
   }
   return { exitCode, stdout: lines.join('\n'), stderr: '' };

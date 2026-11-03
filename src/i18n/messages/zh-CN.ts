@@ -187,8 +187,22 @@ export const zhCN = {
   'gateway.status.node': '节点',
   'gateway.status.service': '服务',
   'gateway.status.stale': '陈旧 PID 文件（pid {pid}，{reason}），可安全回收。',
-  'gateway.status.invalid': 'PID 文件不可解析（{reason}），可安全回收。',
   'gateway.status.pidFile': 'PID 文件：{path}',
+  'gateway.status.starting': '启动中（pid {pid}），尚未确认。',
+  'gateway.status.degraded': '进程存活但身份未确认（pid {pid}）：{reason}',
+  'gateway.status.unknown': '无法确认 gateway 状态，未删除任何文件。',
+  'gateway.status.foreignHost': '锁属于其它主机（{host}），未删除任何文件。',
+  'gateway.status.selectHint':
+    '发现 {count} 个 gateway 实例；用 --instance、--port 或 --all 选择。',
+  'gateway.stop.starting': 'Gateway 实例“{instance}”仍在启动，请稍后重试；未删除任何文件。',
+  'gateway.stop.notGateway':
+    '拒绝停止 pid {pid}：命令行不像 gateway（可能是 PID 复用）；未删除任何文件。',
+  'gateway.stop.reclaimed': '已回收 gateway 实例“{instance}”的陈旧状态。',
+  'gateway.stop.cleanupFailed': 'Gateway（pid {pid}）的状态文件未能清理：{files}',
+  'gateway.startedUnconfirmed':
+    'Gateway 已启动（pid {pid}），但未在时限内确认；请用 `vessel gateway status` 检查。',
+  'gateway.list.owner': 'Owner',
+  'gateway.list.hub': 'Hub',
   'gateway.serviceInstallFailed': '服务注册失败：{detail}',
   'gateway.serviceInstalled': '服务已注册（{target}）：{path}',
   'gateway.serviceUninstallFailed': '服务移除失败：{detail}',

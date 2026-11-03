@@ -60,7 +60,7 @@ import { resolveDataDir } from './data-paths';
 import { createDurableFor } from './durable-wiring';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import type { GatewayInstanceLock } from './gateway/instance-lock';
-import { DEFAULT_GATEWAY_INSTANCE } from './gateway/pid';
+import { collectGatewayState, DEFAULT_GATEWAY_INSTANCE } from './gateway/pid';
 import { renderGatewayBanner } from './gateway-banner';
 import {
   deriveGatewayInstance,
@@ -429,18 +429,23 @@ if (foregroundGateway && args.gateway !== null) {
   let targetHost = gatewayArgs.kind === 'start' ? gatewayArgs.host : undefined;
 
   if (gatewayArgs.kind === 'restart') {
-    // 选择器命中的实例在停止前读取实际 port/host，用于原样重启。
+    // 停前快照：保留 instance；有 PID 记录时原样保留 port/host（port 0 也保持）。
     const { config } = await loadConfig();
-    const targets = await resolveGatewayTargets(resolveDataDir(config), gatewayArgs);
+    const dataDir = resolveDataDir(config);
+    const token = resolveGatewayToken(config);
+    const entries = (
+      await collectGatewayState(dataDir, { ...(token !== undefined ? { token } : {}) })
+    ).entries;
+    const targets = await resolveGatewayTargets(dataDir, gatewayArgs, { entries });
     const previous = targets.ok ? targets.entries[0] : undefined;
     if (previous !== undefined) {
       targetInstance = previous.instance;
-      if (previous.state.kind === 'running' || previous.state.kind === 'stale') {
-        targetPort = previous.state.record.port;
-        targetHost = previous.state.record.host;
+      if (previous.record !== undefined) {
+        targetPort = previous.record.port;
+        targetHost = previous.record.host;
       }
     }
-    const stopCode = await stopGateway({ selector: gatewayArgs });
+    const stopCode = await stopGateway({ selector: gatewayArgs, entries });
     if (stopCode !== 0) process.exit(stopCode);
   }
 
@@ -1303,6 +1308,9 @@ async function runWithConfig(result: BootstrapResult) {
         port: gateway.port,
         version: gatewayOptions.version,
         instance: foregroundGatewayInstance,
+        ...(foregroundGatewayLock !== undefined
+          ? { startedAt: foregroundGatewayLock.startedAt }
+          : {}),
         ...(result.nodeId ? { nodeId: result.nodeId } : {}),
       });
     } catch (error) {

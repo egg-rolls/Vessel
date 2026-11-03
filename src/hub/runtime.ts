@@ -14,12 +14,20 @@
  * @module vessel/hub/runtime
  */
 
-import { mkdir, open, readFile, unlink } from 'node:fs/promises';
+import * as fs from 'node:fs';
+import { mkdir, open } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Logger } from '@vessel-agent/core';
 import type { HubControlChange, HubNodeSnapshotInput } from '@vessel-agent/serve';
 import type { HubConfig, VesselConfig } from '../../packages/config/src/index';
 import { expandHome, resolveDataDir } from '../data-paths';
+import {
+  deleteRecordIfOwned,
+  isBeforeBoot,
+  isProcessAlive as pidIsAlive,
+  quarantineCorruptRecordIfUnchanged,
+  readGatewayStateFile,
+} from '../gateway/pid';
 import { resolveNodeId } from '../node-identity';
 import {
   createHubControlClient,
@@ -78,6 +86,9 @@ export const HUB_LOCK_FILE = 'hub.lock';
 
 /** 本机节点目录刷新合并窗口。 */
 const LOCAL_NODE_REFRESH_MS = 250;
+
+/** 不可解析 hub.lock 的宽限（E3）。 */
+const HUB_UNPARSEABLE_GRACE_MS = 5_000;
 
 /** `<hubDataDir>/hub.lock` 的内容；仅用于判定实例存活。 */
 export interface HubLockFile {
@@ -157,55 +168,40 @@ function errnoCode(error: unknown): unknown {
     : undefined;
 }
 
-/** `process.kill(pid, 0)`：EPERM 表示进程存在但不可发信号，仍视为存活。 */
-function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  if (pid === process.pid) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return errnoCode(error) === 'EPERM';
-  }
-}
-
-async function readHubLock(lockPath: string): Promise<HubLockFile | undefined> {
-  try {
-    const raw = await readFile(lockPath, 'utf8');
-    const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== 'object' || parsed === null) return undefined;
-    const info = parsed as Partial<HubLockFile>;
-    if (typeof info.pid !== 'number') return undefined;
-    return {
-      pid: info.pid,
-      started_at: typeof info.started_at === 'number' ? info.started_at : 0,
-      ...(typeof info.url === 'string' ? { url: info.url } : {}),
-    };
-  } catch {
-    return undefined;
-  }
+/** hub.lock 形状校验；deleteRecordIfOwned / readGatewayStateFile 的 parse 回调。 */
+function parseHubLockRecord(raw: unknown): HubLockFile | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const info = raw as Partial<HubLockFile>;
+  if (typeof info.pid !== 'number' || !Number.isInteger(info.pid) || info.pid <= 0) return null;
+  if (typeof info.started_at !== 'number' || !Number.isFinite(info.started_at)) return null;
+  return {
+    pid: info.pid,
+    started_at: info.started_at,
+    ...(typeof info.url === 'string' ? { url: info.url } : {}),
+  };
 }
 
 interface HubLockHandle {
   release(): Promise<void>;
+  /** process 'exit' 兜底；不抛错。 */
+  releaseSync(): void;
   /** 服务绑定端口后补写 url（仅诊断；不影响单实例判定）。 */
   setUrl(url: string): Promise<void>;
 }
 
-async function releaseHubLock(lockPath: string): Promise<void> {
-  const existing = await readHubLock(lockPath);
-  if (existing === undefined || existing.pid !== process.pid) return;
-  try {
-    await unlink(lockPath);
-  } catch (error) {
-    if (errnoCode(error) !== 'ENOENT') throw error;
-  }
+async function releaseHubLock(lockPath: string, startedAt: number): Promise<void> {
+  await deleteRecordIfOwned(
+    lockPath,
+    { pid: process.pid, started_at: startedAt },
+    { parse: parseHubLockRecord },
+  );
 }
 
 /**
  * 获取 `<hubDataDir>/hub.lock` 独占锁。
  *
- * 存活进程持锁 → `hub_already_running`；死进程 / 损坏锁视为陈旧并回收。
+ * 只确认 stale（pid 死或 pre-boot）才回收，且 compare-and-delete；
+ * 活 pid post-boot → `hub_already_running`；损坏未过宽限 / I/O 错误 → 保守拒绝。
  * 文件以 0600 创建，内容为 `{pid, started_at, url?}`。
  */
 async function acquireHubLock(
@@ -223,14 +219,38 @@ async function acquireHubLock(
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const handle = await open(lockPath, 'wx', 0o600);
+      const file = await open(lockPath, 'wx', 0o600);
       try {
-        await handle.writeFile(payload, 'utf8');
+        await file.writeFile(payload, 'utf8');
       } finally {
-        await handle.close();
+        await file.close();
       }
+      let released = false;
       return {
-        release: () => releaseHubLock(lockPath),
+        release: async (): Promise<void> => {
+          if (released) return;
+          released = true;
+          await releaseHubLock(lockPath, startedAt);
+        },
+        releaseSync: (): void => {
+          if (released) return;
+          released = true;
+          try {
+            const current = parseHubLockRecord(JSON.parse(fs.readFileSync(lockPath, 'utf8')));
+            if (
+              current === null ||
+              current.pid !== process.pid ||
+              current.started_at !== startedAt
+            ) {
+              return;
+            }
+            const reclaimPath = `${lockPath}.reclaim-${Date.now()}`;
+            fs.renameSync(lockPath, reclaimPath);
+            fs.rmSync(reclaimPath, { force: true });
+          } catch {
+            // 退出路径不抛错。
+          }
+        },
         async setUrl(nextUrl: string): Promise<void> {
           const next: HubLockFile = { pid: process.pid, started_at: startedAt, url: nextUrl };
           try {
@@ -247,22 +267,59 @@ async function acquireHubLock(
       };
     } catch (error) {
       if (errnoCode(error) !== 'EEXIST') throw error;
-      const existing = await readHubLock(lockPath);
-      if (existing !== undefined && isProcessAlive(existing.pid)) {
+
+      const snapshot = await readGatewayStateFile<HubLockFile>(lockPath, {
+        now: now(),
+        graceMs: HUB_UNPARSEABLE_GRACE_MS,
+        parse: parseHubLockRecord,
+      });
+
+      if (snapshot.kind === 'absent') continue;
+      if (snapshot.kind === 'io-error') {
+        throw new HubRuntimeError(
+          'hub_already_running',
+          `hub data dir lock is unreadable (${snapshot.error.message}): ${dataDir}`,
+        );
+      }
+      if (snapshot.kind === 'corrupt') {
+        if (!snapshot.reclaimable) {
+          throw new HubRuntimeError(
+            'hub_already_running',
+            `hub data dir lock is ${snapshot.reason}: ${dataDir}`,
+          );
+        }
+        const quarantined = await quarantineCorruptRecordIfUnchanged(lockPath, snapshot.mtimeMs, {
+          now: now(),
+        });
+        if (quarantined) continue;
+        throw new HubRuntimeError(
+          'hub_already_running',
+          `hub data dir lock changed during recovery: ${dataDir}`,
+        );
+      }
+
+      const existing = snapshot.value;
+      if (pidIsAlive(existing.pid) && !isBeforeBoot(existing.started_at)) {
         throw new HubRuntimeError(
           'hub_already_running',
           `hub data dir is already in use by pid ${existing.pid}: ${dataDir}`,
         );
       }
+
       logger?.warn('hub.runtime.stale_lock_reclaimed', {
         data_dir: dataDir,
-        pid: existing?.pid ?? null,
+        pid: existing.pid,
       });
-      try {
-        await unlink(lockPath);
-      } catch (unlinkError) {
-        if (errnoCode(unlinkError) !== 'ENOENT') throw unlinkError;
-      }
+      const deleted = await deleteRecordIfOwned(
+        lockPath,
+        { pid: existing.pid, started_at: existing.started_at },
+        { quarantine: true, now: now(), parse: parseHubLockRecord },
+      );
+      if (deleted) continue;
+      throw new HubRuntimeError(
+        'hub_already_running',
+        `hub data dir lock changed during recovery: ${dataDir}`,
+      );
     }
   }
   throw new HubRuntimeError('hub_already_running', `hub data dir is already in use: ${dataDir}`);
@@ -566,6 +623,8 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   // url 在服务起来后补写；锁只用于存活判定，不承载协议状态。
   if (options.singleInstance !== false) {
     lock = await acquireHubLock(dataDir, '', clock, logger);
+    const exitLock = lock;
+    process.once('exit', () => exitLock.releaseSync());
   }
 
   try {

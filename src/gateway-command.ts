@@ -12,10 +12,11 @@
  * @module vessel/gateway-command
  */
 
+import * as path from 'node:path';
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
-import { resolveDataDir } from './data-paths';
+import { expandHome, resolveDataDir } from './data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
 import {
   acquireGatewayInstanceLock,
@@ -24,17 +25,20 @@ import {
 } from './gateway/instance-lock';
 import {
   type CommandRunner,
+  cleanupGatewayStateEntry,
+  collectGatewayState,
+  createCommandRunner,
   DEFAULT_GATEWAY_INSTANCE,
-  type GatewayPidEntry,
+  deleteRecordIfOwnedSync,
   type GatewayPidRecord,
+  type GatewayStateEntry,
+  type GatewayStateOwner,
+  type GatewayStateSnapshot,
   gatewayPidPath,
-  type InspectProcessOptions,
+  inspectProcess,
+  isGatewayCommandLine,
   isProcessAlive,
-  listGatewayPidStates,
   normalizeGatewayInstance,
-  readGatewayPidState,
-  removeGatewayPid,
-  removeGatewayPidIfOwnedSync,
   writeGatewayPid,
 } from './gateway/pid';
 import { gatewayBaseUrl, reloadGateway } from './gateway/reload';
@@ -69,6 +73,8 @@ export interface GatewayCommandDeps {
   rpcTarget?: ControlPlaneTarget;
   /** 0.15：daemon 子进程透传 `--exclusive` */
   exclusive?: boolean;
+  /** 内部计数探针注入；缺省 collectGatewayState。 */
+  collectState?: typeof collectGatewayState;
 }
 
 interface ResolvedContext {
@@ -89,18 +95,6 @@ async function resolveContext(deps: GatewayCommandDeps): Promise<ResolvedContext
     env,
     version: deps.version ?? readPackageVersion(),
   };
-}
-
-function formatUptime(totalSeconds: number): string {
-  const seconds = Math.max(0, Math.floor(totalSeconds));
-  const days = Math.floor(seconds / 86_400);
-  const hours = Math.floor((seconds % 86_400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const rest = seconds % 60;
-  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${rest}s`;
-  return `${rest}s`;
 }
 
 /** stop 的平台终止方式（Windows 没有 POSIX 信号语义） */
@@ -124,29 +118,69 @@ export function deriveGatewayInstance(instance?: string, port?: number): string 
   return DEFAULT_GATEWAY_INSTANCE;
 }
 
-function inspectOptions(options: InspectProcessOptions): InspectProcessOptions {
-  return {
-    ...(options.platform !== undefined ? { platform: options.platform } : {}),
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-    ...(options.readCmdline !== undefined ? { readCmdline: options.readCmdline } : {}),
-  };
+/** `config.hub.dataDir` 分流时的 hub 目录；缺省交给 collect 用 `<dataDir>/hub`。 */
+function configuredHubDataDir(config: VesselConfig): string | undefined {
+  const configured = config.hub?.dataDir;
+  return configured === undefined ? undefined : path.resolve(expandHome(configured));
+}
+
+/** 单一读入口：命令层统一从这里取状态快照。 */
+async function collectStateFor(
+  context: ResolvedContext,
+  deps: Pick<GatewayCommandDeps, 'collectState'> = {},
+): Promise<GatewayStateSnapshot> {
+  const collect = deps.collectState ?? collectGatewayState;
+  const token = resolveGatewayToken(context.config, context.env);
+  const hubDataDir = configuredHubDataDir(context.config);
+  return collect(context.dataDir, {
+    ...(token !== undefined ? { token } : {}),
+    ...(hubDataDir !== undefined ? { hubDataDir } : {}),
+  });
+}
+
+function findStateEntry(
+  entries: GatewayStateEntry[],
+  instance: string,
+): GatewayStateEntry | undefined {
+  return entries.find((entry) => entry.instance === instance);
+}
+
+function entryPid(entry: GatewayStateEntry): number | undefined {
+  return entry.record?.pid ?? entry.lock?.pid;
+}
+
+/** 进程仍被该记录占用（身份未确认也算占用，只是不可自动回收）。 */
+function entryOccupied(entry: GatewayStateEntry): boolean {
+  return entry.state === 'running' || entry.state === 'degraded' || entry.state === 'starting';
 }
 
 /** 选择器解析结果 */
 export type GatewayTargetsResult =
-  | { ok: true; entries: GatewayPidEntry[]; all: boolean }
+  | { ok: true; entries: GatewayStateEntry[]; all: boolean }
   | { ok: false; error: string; code: 'multiple_instances' | 'invalid_selector' };
 
 /**
  * 按 `--instance` / `--port` / `--all` 解析目标；无选择器时：
  * 0 个实例 → 空；1 个 → 该实例；≥2 个 → `multiple_instances`。
+ *
+ * 已收集的 entries 由调用方传入（单次扫描）；缺省时自行 collect。
  */
 export async function resolveGatewayTargets(
   dataDir: string,
   selector: GatewaySelector,
-  options: { platform?: NodeJS.Platform; runCommand?: CommandRunner } = {},
+  options: {
+    entries?: GatewayStateEntry[];
+    collectState?: typeof collectGatewayState;
+    token?: string;
+  } = {},
 ): Promise<GatewayTargetsResult> {
-  const entries = await listGatewayPidStates(dataDir, inspectOptions(options));
+  const entries =
+    options.entries ??
+    (
+      await (options.collectState ?? collectGatewayState)(dataDir, {
+        ...(options.token !== undefined ? { token: options.token } : {}),
+      })
+    ).entries;
 
   if (selector.all === true) return { ok: true, entries, all: true };
 
@@ -167,11 +201,7 @@ export async function resolveGatewayTargets(
   if (selector.port !== undefined) {
     return {
       ok: true,
-      entries: entries.filter(
-        (entry) =>
-          (entry.state.kind === 'running' || entry.state.kind === 'stale') &&
-          entry.state.record.port === selector.port,
-      ),
+      entries: entries.filter((entry) => entry.record?.port === selector.port),
       all: false,
     };
   }
@@ -189,29 +219,28 @@ export async function resolveGatewayTargets(
   return { ok: true, entries, all: false };
 }
 
-/** 运行中的目标实例 */
-function runningTargets(entries: GatewayPidEntry[]): GatewayPidEntry[] {
-  return entries.filter((entry) => entry.state.kind === 'running');
+/** 运行中的目标实例（身份已确认，可直接 RPC / reload） */
+function runningTargets(entries: GatewayStateEntry[]): GatewayStateEntry[] {
+  return entries.filter((entry) => entry.state === 'running');
 }
 
 /**
  * 显式 node_id 与其它运行实例重复时拒绝（0.14）。
  * 自动生成的 node_id 不在此检查范围。
  */
-async function duplicateExplicitNodeId(
-  dataDir: string,
+function duplicateExplicitNodeId(
+  entries: GatewayStateEntry[],
   instance: string,
   config: VesselConfig,
-  options: InspectProcessOptions,
-): Promise<GatewayPidEntry | undefined> {
+): GatewayStateEntry | undefined {
   const nodeId = config.host?.nodeId;
   if (nodeId === undefined || nodeId === '') return undefined;
-  const entries = await listGatewayPidStates(dataDir, inspectOptions(options));
   return entries.find(
     (entry) =>
       entry.instance !== instance &&
-      entry.state.kind === 'running' &&
-      entry.state.record.node_id === nodeId,
+      entry.record !== undefined &&
+      (entry.state === 'running' || entry.state === 'degraded') &&
+      entry.record.node_id === nodeId,
   );
 }
 
@@ -225,10 +254,8 @@ export async function prepareForegroundGatewayStart(
     config?: VesselConfig;
     dataDir?: string;
     env?: Record<string, string | undefined>;
-    platform?: NodeJS.Platform;
-    runCommand?: CommandRunner;
-    readCmdline?: (pid: number) => Promise<string | undefined>;
     instance?: string;
+    collectState?: typeof collectGatewayState;
   } = {},
 ): Promise<
   | {
@@ -241,30 +268,50 @@ export async function prepareForegroundGatewayStart(
   | { ok: false; error: string; runningPid?: number }
 > {
   const config = options.config ?? (await loadConfig()).config;
-  const dataDir = options.dataDir ?? resolveDataDir(config, options.env ?? process.env);
+  const env = options.env ?? process.env;
+  const dataDir = options.dataDir ?? resolveDataDir(config, env);
   const instance = normalizeGatewayInstance(options.instance);
-  const state = await readGatewayPidState(dataDir, {
-    instance,
-    ...inspectOptions(options),
+  const token = resolveGatewayToken(config, env);
+  const snapshot = await (options.collectState ?? collectGatewayState)(dataDir, {
+    ...(token !== undefined ? { token } : {}),
   });
+  const entry = findStateEntry(snapshot.entries, instance);
 
-  if (state.kind === 'running') {
+  if (entry !== undefined && entryOccupied(entry)) {
+    const pid = entryPid(entry);
+    if (entry.record !== undefined) {
+      return {
+        ok: false,
+        error: t('gateway.alreadyRunning', {
+          pid: entry.record.pid,
+          url: gatewayBaseUrl(entry.record, config.serve?.tls !== undefined),
+        }),
+        ...(pid !== undefined ? { runningPid: pid } : {}),
+      };
+    }
     return {
       ok: false,
-      error: t('gateway.alreadyRunning', {
-        pid: state.record.pid,
-        url: gatewayBaseUrl(state.record, config.serve?.tls !== undefined),
-      }),
-      runningPid: state.record.pid,
+      error: t('gateway.alreadyRunningPid', { pid: pid ?? 0 }),
+      ...(pid !== undefined ? { runningPid: pid } : {}),
     };
   }
-  if (state.kind !== 'absent') {
-    await removeGatewayPid(dataDir, instance).catch(() => undefined);
+  if (entry !== undefined && (entry.state === 'unknown' || entry.state === 'foreign-host')) {
+    return {
+      ok: false,
+      error:
+        entry.state === 'unknown'
+          ? t('gateway.status.unknown')
+          : t('gateway.status.foreignHost', { host: entry.lock?.host ?? '' }),
+    };
+  }
+  if (entry !== undefined && entry.state === 'stale') {
+    // 只有确认 stale 才条件清理；文件被别人改过则不动。
+    await cleanupGatewayStateEntry(dataDir, entry).catch(() => undefined);
   }
 
-  const duplicate = await duplicateExplicitNodeId(dataDir, instance, config, options);
+  const duplicate = duplicateExplicitNodeId(snapshot.entries, instance, config);
   if (duplicate !== undefined) {
-    const owner = duplicate.state.kind === 'running' ? duplicate.state.record : undefined;
+    const owner = duplicate.record;
     return {
       ok: false,
       error:
@@ -296,11 +343,13 @@ export async function writeForegroundGatewayPid(options: {
   version?: string;
   nodeId?: string;
   instance?: string;
+  /** 与实例锁共享的 started_at（epoch ms）；缺省取当前时间。 */
+  startedAt?: number;
 }): Promise<void> {
   const instance = normalizeGatewayInstance(options.instance);
   const record: GatewayPidRecord = {
     pid: process.pid,
-    started_at: new Date().toISOString(),
+    started_at: new Date(options.startedAt ?? Date.now()).toISOString(),
     host: options.host,
     port: options.port,
     version: options.version ?? readPackageVersion(),
@@ -308,7 +357,12 @@ export async function writeForegroundGatewayPid(options: {
     ...(instance !== DEFAULT_GATEWAY_INSTANCE ? { instance } : {}),
   };
   await writeGatewayPid(options.dataDir, record, instance);
-  process.once('exit', () => removeGatewayPidIfOwnedSync(options.dataDir, process.pid, instance));
+  process.once('exit', () =>
+    deleteRecordIfOwnedSync(gatewayPidPath(options.dataDir, instance), {
+      pid: process.pid,
+      started_at: record.started_at,
+    }),
+  );
 }
 
 /** `gateway stop`（也供 cli.ts 的前台 restart 复用） */
@@ -316,6 +370,8 @@ export async function stopGateway(
   options: GatewayCommandDeps & {
     timeoutMs?: number;
     selector?: GatewaySelector;
+    /** 已收集的状态（restart 停前快照）；缺省自行 collect。 */
+    entries?: GatewayStateEntry[];
   } = {},
 ): Promise<number> {
   const context = await resolveContext(options);
@@ -324,37 +380,100 @@ export async function stopGateway(
   const timeoutMs = options.timeoutMs ?? 10_000;
   const sleep = options.sleep ?? sleepDefault;
   const selector = options.selector ?? {};
+  const fallbackRunner = options.runCommand ?? createCommandRunner(2000);
 
+  const entries = options.entries ?? (await collectStateFor(context, options)).entries;
+  const token = resolveGatewayToken(context.config, context.env);
   const targets = await resolveGatewayTargets(context.dataDir, selector, {
-    platform: context.platform,
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+    entries,
+    ...(options.collectState !== undefined ? { collectState: options.collectState } : {}),
+    ...(token !== undefined ? { token } : {}),
   });
   if (!targets.ok) {
     printErr(ui.err(targets.error));
     return 1;
   }
 
-  // 选择器命中的 stale/invalid 文件直接回收；未选中的实例不动。
-  for (const entry of targets.entries) {
-    if (entry.state.kind === 'stale' || entry.state.kind === 'invalid') {
-      await removeGatewayPid(context.dataDir, entry.instance).catch(() => undefined);
-    }
-  }
-
-  const running = runningTargets(targets.entries);
-  if (running.length === 0) {
+  if (targets.entries.length === 0) {
     print(ui.info(t('gateway.notRunning')));
     return 0;
   }
 
   let failed = false;
-  for (const entry of running) {
-    if (entry.state.kind !== 'running') continue;
-    const pid = entry.state.record.pid;
+  for (const entry of targets.entries) {
+    if (entry.state === 'stale') {
+      // 确认 stale：条件清理 pid/lock/owner，不杀进程。
+      try {
+        await cleanupGatewayStateEntry(context.dataDir, entry);
+        print(ui.ok(t('gateway.stop.reclaimed', { instance: entry.instance })));
+      } catch (error) {
+        printErr(
+          ui.err(
+            t('gateway.stop.cleanupFailed', {
+              pid: entryPid(entry) ?? 0,
+              files: errorMessage(error),
+            }),
+          ),
+        );
+        failed = true;
+      }
+      continue;
+    }
+    if (entry.state === 'starting') {
+      // R4：正在启动不等待，不删除任何文件。
+      printErr(ui.err(t('gateway.stop.starting', { instance: entry.instance })));
+      failed = true;
+      continue;
+    }
+    if (entry.state === 'unknown') {
+      printErr(ui.err(t('gateway.status.unknown')));
+      failed = true;
+      continue;
+    }
+    if (entry.state === 'foreign-host') {
+      printErr(ui.err(t('gateway.status.foreignHost', { host: entry.lock?.host ?? '' })));
+      failed = true;
+      continue;
+    }
+    if (entry.state !== 'running' && entry.state !== 'degraded') continue;
+
+    const pid = entryPid(entry);
+    if (pid === undefined) {
+      printErr(ui.err(t('gateway.status.unknown')));
+      failed = true;
+      continue;
+    }
     if (pid === process.pid) {
       printErr(ui.err(t('gateway.stopSelf')));
       failed = true;
       continue;
+    }
+
+    if (entry.state === 'degraded') {
+      // R3：仅当 2s 命令行回退确认是 gateway 才杀；不可读/超时/非 gateway → 拒绝且不删。
+      let alive = true;
+      let commandLine: string | undefined;
+      try {
+        const info = await inspectProcess(pid, {
+          platform: context.platform,
+          runCommand: fallbackRunner,
+        });
+        alive = info.alive;
+        commandLine = info.commandLine;
+      } catch {
+        commandLine = undefined;
+      }
+      if (alive && (commandLine === undefined || !isGatewayCommandLine(commandLine))) {
+        printErr(ui.err(t('gateway.stop.notGateway', { pid })));
+        failed = true;
+        continue;
+      }
+      if (!alive) {
+        // 竞态：收集后已自行退出；按已死亡处理，做条件清理。
+        const clean = await cleanupStoppedEntry(context, entry, print, printErr);
+        if (!clean) failed = true;
+        continue;
+      }
     }
 
     try {
@@ -382,27 +501,58 @@ export async function stopGateway(
       failed = true;
       continue;
     }
-    await removeGatewayPid(context.dataDir, entry.instance).catch(() => undefined);
-    print(ui.ok(t('gateway.stopped', { pid })));
+
+    // 确认死亡后按 pid+started_at 条件清理（Windows 强杀补偿）。
+    const clean = await cleanupStoppedEntry(context, entry, print, printErr);
+    if (!clean) failed = true;
   }
 
   return failed ? 1 : 0;
 }
 
-/** 单个实例的状态 JSON（0.14） */
+/** 进程确认死亡后清理该实例的 pid/lock/owner，并核对文件确实消失。 */
+async function cleanupStoppedEntry(
+  context: ResolvedContext,
+  entry: GatewayStateEntry,
+  print: (line: string) => void,
+  printErr: (line: string) => void,
+): Promise<boolean> {
+  const pid = entryPid(entry) ?? 0;
+  try {
+    await cleanupGatewayStateEntry(context.dataDir, entry);
+  } catch (error) {
+    printErr(ui.err(t('gateway.stop.cleanupFailed', { pid, files: errorMessage(error) })));
+    return false;
+  }
+  const remaining: string[] = [];
+  if (entry.pidPath !== undefined && (await Bun.file(entry.pidPath).exists())) {
+    remaining.push(entry.pidPath);
+  }
+  if (entry.lockPath !== undefined && (await Bun.file(entry.lockPath).exists())) {
+    remaining.push(entry.lockPath);
+  }
+  if (remaining.length > 0) {
+    printErr(ui.err(t('gateway.stop.cleanupFailed', { pid, files: remaining.join(', ') })));
+    return false;
+  }
+  print(ui.ok(t('gateway.stopped', { pid })));
+  return true;
+}
+
+/** 单个实例的状态 JSON（0.14 字段；0.35 只为 gateway list 增加 state）。 */
 function instanceStatusJson(
-  entry: GatewayPidEntry,
+  entry: GatewayStateEntry,
   config: VesselConfig,
   now: () => number,
 ): Record<string, unknown> {
-  const state = entry.state;
+  const record = entry.record;
+  const pidFile = entry.pidPath ?? entry.lockPath ?? '';
   const tls = config.serve?.tls !== undefined;
-  if (state.kind === 'running') {
-    const record = state.record;
+  if (record !== undefined) {
     const uptimeSeconds = Math.floor((now() - Date.parse(record.started_at)) / 1000);
     return {
       instance: entry.instance,
-      running: true,
+      running: entry.state === 'running',
       pid: record.pid,
       host: record.host,
       port: record.port,
@@ -411,19 +561,56 @@ function instanceStatusJson(
       uptime_seconds: Math.max(0, uptimeSeconds),
       version: record.version,
       ...(record.node_id !== undefined ? { node_id: record.node_id } : {}),
-      pid_file: entry.path,
+      pid_file: pidFile,
+      ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
     };
   }
   return {
     instance: entry.instance,
     running: false,
-    pid_file: entry.path,
-    ...(state.kind === 'stale'
-      ? { stale: true, pid: state.record.pid, reason: state.reason }
-      : state.kind === 'invalid'
-        ? { reason: state.reason }
-        : {}),
+    pid_file: pidFile,
+    ...(entry.lock !== undefined ? { pid: entry.lock.pid } : {}),
+    ...(entry.state === 'stale' ? { stale: true } : {}),
+    ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
   };
+}
+
+/** 人类可读的实例状态行（status / list / stop 共用）。 */
+function formatEntryState(entry: GatewayStateEntry, config: VesselConfig): string {
+  const record = entry.record;
+  const tls = config.serve?.tls !== undefined;
+  switch (entry.state) {
+    case 'running':
+      return `${ui.ok(t('gateway.running'))}  pid ${record?.pid ?? 0}  ${record ? gatewayBaseUrl(record, tls) : ''}`;
+    case 'degraded':
+      return ui.warn(
+        t('gateway.status.degraded', {
+          pid: record?.pid ?? entry.lock?.pid ?? 0,
+          reason: entry.reason ?? '',
+        }),
+      );
+    case 'starting':
+      return ui.warn(t('gateway.status.starting', { pid: entryPid(entry) ?? 0 }));
+    case 'stale':
+      return ui.warn(
+        t('gateway.status.stale', {
+          pid: record?.pid ?? entry.lock?.pid ?? 0,
+          reason: entry.reason ?? '',
+        }),
+      );
+    case 'unknown':
+      return ui.warn(t('gateway.status.unknown'));
+    case 'foreign-host':
+      return ui.warn(t('gateway.status.foreignHost', { host: entry.lock?.host ?? '' }));
+    default:
+      return t('gateway.notRunning');
+  }
+}
+
+function serviceLine(service: Awaited<ReturnType<typeof serviceStatus>>): string {
+  return service.supported
+    ? `${service.target} (${service.installed ? 'installed' : 'not installed'})`
+    : 'unsupported on this platform';
 }
 
 /** `gateway status [--json] [--instance|--port|--all]` */
@@ -441,148 +628,118 @@ export async function gatewayStatus(
   const selector = options.selector ?? {};
   const useSelection =
     selector.instance !== undefined || selector.port !== undefined || selector.all === true;
+  const snapshot = await collectStateFor(context, options);
+  const entries = snapshot.entries;
 
   if (useSelection) {
     const targets = await resolveGatewayTargets(context.dataDir, selector, {
-      platform: context.platform,
-      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+      entries,
+      ...(options.collectState !== undefined ? { collectState: options.collectState } : {}),
     });
     if (!targets.ok) {
       printErr(ui.err(targets.error));
       return 1;
     }
-    const entries = targets.entries;
-    const allRunning = entries.length > 0 && runningTargets(entries).length === entries.length;
+    const selected = targets.entries;
+    // R11：running/degraded/starting 都表示进程仍在，exit 0；stale/unknown/foreign-host → 1。
+    const allLive = selected.length > 0 && selected.every(entryOccupied);
     if (json) {
       print(
         JSON.stringify(
           {
             as_of: new Date(now()).toISOString(),
-            instances: entries.map((entry) => instanceStatusJson(entry, context.config, now)),
+            instances: selected.map((entry) => instanceStatusJson(entry, context.config, now)),
           },
           null,
           2,
         ),
       );
-      return allRunning ? 0 : 1;
+      return allLive ? 0 : 1;
     }
     print(ui.title(t('gateway.status.title')));
     print(ui.rule(48));
-    if (entries.length === 0) {
+    if (selected.length === 0) {
       print(ui.kv(t('gateway.status.status'), t('gateway.notRunning'), 10));
       return 1;
     }
-    for (const entry of entries) {
-      const status = instanceStatusJson(entry, context.config, now);
-      const stateText =
-        status.running === true ? ui.ok(t('gateway.running')) : t('gateway.notRunning');
-      print(
-        ui.kv(
-          entry.instance,
-          `${stateText}${status.url !== undefined ? `  ${String(status.url)}` : ''}`,
-          12,
-        ),
-      );
+    for (const entry of selected) {
+      print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
+      const pidFile = entry.pidPath ?? entry.lockPath;
+      if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
     }
-    return allRunning ? 0 : 1;
+    return allLive ? 0 : 1;
   }
 
-  const state = await readGatewayPidState(context.dataDir, {
-    platform: context.platform,
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-  });
   const service = await serviceStatus(context.platform, {
     dataDir: context.dataDir,
     ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
     ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
   });
-
-  if (state.kind !== 'running') {
-    const stale = state.kind === 'stale' || state.kind === 'invalid';
-    if (json) {
-      print(
-        JSON.stringify(
-          {
-            running: false,
-            pid_file: gatewayPidPath(context.dataDir),
-            ...(stale ? { stale: true } : {}),
-            ...(state.kind === 'stale'
-              ? { pid: state.record.pid, reason: state.reason }
-              : state.kind === 'invalid'
-                ? { reason: state.reason }
-                : {}),
-            service,
-          },
-          null,
-          2,
-        ),
-      );
-    } else {
-      print(ui.title(t('gateway.status.title')));
-      print(ui.rule(48));
-      print(ui.kv(t('gateway.status.status'), t('gateway.notRunning'), 10));
-      if (state.kind === 'stale') {
-        print(
-          `  ${ui.warn(
-            t('gateway.status.stale', { pid: state.record.pid, reason: state.reason }),
-          )}`,
-        );
-      } else if (state.kind === 'invalid') {
-        print(`  ${ui.warn(t('gateway.status.invalid', { reason: state.reason }))}`);
-      }
-      print(`  ${ui.dim(t('gateway.status.pidFile', { path: gatewayPidPath(context.dataDir) }))}`);
-    }
-    return 1;
-  }
-
-  const record = state.record;
-  const tls = context.config.serve?.tls !== undefined;
-  const url = gatewayBaseUrl(record, tls);
-  const uptimeSeconds = Math.floor((now() - Date.parse(record.started_at)) / 1000);
+  const allLive = entries.length > 0 && entries.every(entryOccupied);
+  const defaultEntry = findStateEntry(entries, DEFAULT_GATEWAY_INSTANCE);
 
   if (json) {
-    print(
-      JSON.stringify(
-        {
-          instance: DEFAULT_GATEWAY_INSTANCE,
-          running: true,
-          pid: record.pid,
-          host: record.host,
-          port: record.port,
-          url,
-          started_at: record.started_at,
-          uptime_seconds: Math.max(0, uptimeSeconds),
-          version: record.version,
-          ...(record.node_id !== undefined ? { node_id: record.node_id } : {}),
-          pid_file: gatewayPidPath(context.dataDir),
-          service,
-        },
-        null,
-        2,
-      ),
-    );
-    return 0;
+    // R2：无选择器 JSON schema 不变，仍按 default 实例输出（多实例机器视图用 list）。
+    print(JSON.stringify(legacyStatusJson(defaultEntry, context, service, now), null, 2));
+    return allLive ? 0 : 1;
   }
 
   print(ui.title(t('gateway.status.title')));
   print(ui.rule(48));
-  const rows: Array<[string, string]> = [
-    [t('gateway.status.status'), ui.ok(t('gateway.running'))],
-    [t('gateway.status.instance'), DEFAULT_GATEWAY_INSTANCE],
-    [t('gateway.status.pid'), String(record.pid)],
-    [t('gateway.status.address'), url],
-    [t('gateway.status.uptime'), formatUptime(uptimeSeconds)],
-    [t('gateway.status.version'), record.version],
-  ];
-  if (record.node_id !== undefined) rows.push([t('gateway.status.node'), record.node_id]);
-  rows.push([
-    t('gateway.status.service'),
-    service.supported
-      ? `${service.target} (${service.installed ? 'installed' : 'not installed'})`
-      : 'unsupported on this platform',
-  ]);
-  for (const [label, value] of rows) print(ui.kv(label, value, 10));
-  return 0;
+  if (entries.length === 0) {
+    print(ui.kv(t('gateway.status.status'), t('gateway.notRunning'), 10));
+    print(`  ${ui.dim(t('gateway.status.pidFile', { path: gatewayPidPath(context.dataDir) }))}`);
+    return 1;
+  }
+  for (const entry of entries) {
+    print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
+    const pidFile = entry.pidPath ?? entry.lockPath;
+    if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
+  }
+  if (entries.length >= 2) {
+    print(ui.dim(t('gateway.status.selectHint', { count: entries.length })));
+  }
+  print(ui.kv(t('gateway.status.service'), serviceLine(service), 10));
+  return allLive ? 0 : 1;
+}
+
+/** 无选择器 `gateway status --json`：保持 0.14 顶层字段，按 default 实例输出。 */
+function legacyStatusJson(
+  entry: GatewayStateEntry | undefined,
+  context: ResolvedContext,
+  service: Awaited<ReturnType<typeof serviceStatus>>,
+  now: () => number,
+): Record<string, unknown> {
+  const pidFile = entry?.pidPath ?? gatewayPidPath(context.dataDir);
+  if (entry?.record !== undefined && entry.state === 'running') {
+    const record = entry.record;
+    return {
+      instance: DEFAULT_GATEWAY_INSTANCE,
+      running: true,
+      pid: record.pid,
+      host: record.host,
+      port: record.port,
+      url: gatewayBaseUrl(record, context.config.serve?.tls !== undefined),
+      started_at: record.started_at,
+      uptime_seconds: Math.max(0, Math.floor((now() - Date.parse(record.started_at)) / 1000)),
+      version: record.version,
+      ...(record.node_id !== undefined ? { node_id: record.node_id } : {}),
+      pid_file: pidFile,
+      service,
+    };
+  }
+  return {
+    running: false,
+    pid_file: pidFile,
+    ...(entry?.state === 'stale' ? { stale: true } : {}),
+    ...(entry?.record !== undefined
+      ? { pid: entry.record.pid }
+      : entry?.lock !== undefined
+        ? { pid: entry.lock.pid }
+        : {}),
+    ...(entry?.reason !== undefined ? { reason: entry.reason } : {}),
+    service,
+  };
 }
 
 interface GatewayRpcView {
@@ -637,38 +794,34 @@ async function gatewayStatusRpc(
   const printErr = options.printErr ?? console.error;
   const json = options.json === true;
   const selector = options.selector ?? {};
+  const snapshot = await collectStateFor(context, options);
+  const entries = snapshot.entries;
   const targetOptions = {
     config: context.config,
     env: context.env,
     dataDir: context.dataDir,
-    ...(options.platform !== undefined ? { platform: options.platform } : {}),
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+    entries,
   };
   const views: GatewayRpcView[] = [];
   const instances: string[] = [];
 
   if (selector.all === true) {
-    const entries = await listGatewayPidStates(context.dataDir, {
-      ...(options.platform !== undefined ? { platform: options.platform } : {}),
-      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-    });
     for (const entry of entries) {
-      if (entry.state.kind !== 'running') continue;
+      if (entry.state !== 'running' && entry.state !== 'degraded') continue;
       instances.push(entry.instance);
     }
   } else if (selector.instance !== undefined) {
     instances.push(selector.instance);
   } else if (selector.port !== undefined) {
-    const targets = await resolveGatewayTargets(context.dataDir, selector, {
-      platform: context.platform,
-      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-    });
+    const targets = await resolveGatewayTargets(context.dataDir, selector, { entries });
     if (!targets.ok) {
       printErr(ui.err(targets.error));
       return 1;
     }
     for (const entry of targets.entries) {
-      if (entry.state.kind === 'running') instances.push(entry.instance);
+      if (entry.state === 'running' || entry.state === 'degraded') {
+        instances.push(entry.instance);
+      }
     }
   }
 
@@ -763,6 +916,17 @@ async function gatewayStatusRpc(
 }
 
 /** `gateway list [--json]`（0.14） */
+/** owner 展示/JSON 只保留非敏感字段，token 永不输出（R9）。 */
+function ownerView(owner: GatewayStateOwner): Record<string, unknown> {
+  return {
+    pid: owner.pid,
+    host: owner.host,
+    port: owner.port,
+    tenant_id: owner.tenant_id,
+    started_at: owner.started_at,
+  };
+}
+
 export async function gatewayList(
   options: GatewayCommandDeps & { json?: boolean } = {},
 ): Promise<number> {
@@ -770,17 +934,32 @@ export async function gatewayList(
   const print = options.print ?? console.log;
   const json = options.json === true;
   const now = options.now ?? Date.now;
-  const entries = await listGatewayPidStates(context.dataDir, {
-    platform: context.platform,
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-  });
+  const snapshot = await collectStateFor(context, options);
+  const entries = snapshot.entries;
 
   if (json) {
     print(
       JSON.stringify(
         {
           as_of: new Date(now()).toISOString(),
-          instances: entries.map((entry) => instanceStatusJson(entry, context.config, now)),
+          instances: entries.map((entry) => ({
+            ...instanceStatusJson(entry, context.config, now),
+            state: entry.state,
+            ...(entry.lock !== undefined
+              ? {
+                  lock: {
+                    pid: entry.lock.pid,
+                    started_at: entry.lock.started_at,
+                    host: entry.lock.host,
+                  },
+                }
+              : {}),
+            ...(entry.owner !== undefined ? { owner: ownerView(entry.owner) } : {}),
+          })),
+          ...(snapshot.owners.length > 0
+            ? { owners: snapshot.owners.map((owner) => ownerView(owner)) }
+            : {}),
+          ...(snapshot.hub !== undefined ? { hub: snapshot.hub } : {}),
         },
         null,
         2,
@@ -791,23 +970,41 @@ export async function gatewayList(
 
   print(ui.title(t('gateway.list.title')));
   print(ui.rule(48));
-  if (entries.length === 0) {
+  if (entries.length === 0 && snapshot.owners.length === 0 && snapshot.hub === undefined) {
     print(ui.info(t('gateway.list.empty')));
     return 0;
   }
   for (const entry of entries) {
-    const status = instanceStatusJson(entry, context.config, now);
-    const running = status.running === true;
-    const detail = running
-      ? `${status.pid}  ${String(status.url)}`
-      : entry.state.kind === 'stale'
-        ? `stale (${entry.state.reason})`
-        : entry.state.kind === 'invalid'
-          ? `invalid (${entry.state.reason})`
-          : 'not running';
-    print(ui.kv(entry.instance, `${running ? ui.ok(t('gateway.running')) : detail}`, 12));
-    if (running) print(`  ${ui.dim(String(detail))}`);
-    print(`  ${ui.dim(entry.path)}`);
+    print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
+    if (entry.pidPath !== undefined) print(`  ${ui.dim(entry.pidPath)}`);
+    if (entry.lockPath !== undefined) print(`  ${ui.dim(`lock ${entry.lockPath}`)}`);
+    if (entry.owner !== undefined) {
+      print(
+        `  ${ui.dim(
+          `owner pid ${entry.owner.pid} ${entry.owner.host}:${entry.owner.port} tenant ${entry.owner.tenant_id}`,
+        )}`,
+      );
+    }
+  }
+  for (const owner of snapshot.owners) {
+    print(
+      ui.kv(
+        t('gateway.list.owner'),
+        `pid ${owner.pid} ${owner.host}:${owner.port} tenant ${owner.tenant_id}`,
+        12,
+      ),
+    );
+  }
+  if (snapshot.hub !== undefined) {
+    const hub = snapshot.hub;
+    const detail =
+      hub.state === 'running'
+        ? `running${hub.record !== undefined ? ` pid ${hub.record.pid}` : ''}${hub.record?.url !== undefined ? ` ${hub.record.url}` : ''}`
+        : `${hub.state}${hub.reason !== undefined ? ` (${hub.reason})` : ''}`;
+    print(
+      ui.kv(t('gateway.list.hub'), hub.state === 'running' ? ui.ok(detail) : ui.warn(detail), 12),
+    );
+    print(`  ${ui.dim(hub.path)}`);
   }
   return 0;
 }
@@ -821,10 +1018,8 @@ export async function reloadGatewayCommand(
   const printErr = options.printErr ?? console.error;
   const selector = options.selector ?? {};
 
-  const targets = await resolveGatewayTargets(context.dataDir, selector, {
-    platform: context.platform,
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-  });
+  const entries = (await collectStateFor(context, options)).entries;
+  const targets = await resolveGatewayTargets(context.dataDir, selector, { entries });
   if (!targets.ok) {
     printErr(ui.err(targets.error));
     return 1;
@@ -843,10 +1038,10 @@ export async function reloadGatewayCommand(
 
   let failed = false;
   for (const entry of running) {
-    if (entry.state.kind !== 'running') continue;
+    if (entry.record === undefined) continue;
     const prefix = running.length > 1 ? `[${entry.instance}] ` : '';
     const result = await reloadGateway({
-      record: entry.state.record,
+      record: entry.record,
       token,
       ...(options.scopes !== undefined ? { scopes: options.scopes } : {}),
       tls: context.config.serve?.tls !== undefined,
@@ -898,10 +1093,8 @@ async function startDaemonCommand(
   const warning = webDistWarning(await inspectWebDist(staticDir ? { staticDir } : {}));
   if (warning) printErr(ui.warn(warning));
 
-  const duplicate = await duplicateExplicitNodeId(context.dataDir, instance, context.config, {
-    platform: context.platform,
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-  });
+  const snapshot = await collectStateFor(context, options);
+  const duplicate = duplicateExplicitNodeId(snapshot.entries, instance, context.config);
   if (duplicate !== undefined) {
     printErr(
       ui.err(
@@ -916,18 +1109,21 @@ async function startDaemonCommand(
     dataDir: context.dataDir,
     instance,
     logPath,
+    state: snapshot,
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
     ...(options.exclusive === true ? { exclusive: true } : {}),
     ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
     ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
-    platform: context.platform,
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
   });
 
   if (result.ok) {
     const url = gatewayBaseUrl(result.record, context.config.serve?.tls !== undefined);
-    print(ui.ok(t('gateway.started', { pid: result.record.pid, url })));
+    if (result.unconfirmed === true) {
+      print(ui.warn(t('gateway.startedUnconfirmed', { pid: result.record.pid })));
+    } else {
+      print(ui.ok(t('gateway.started', { pid: result.record.pid, url })));
+    }
     print(ui.dim(t('gateway.logPath', { path: result.logPath })));
     return 0;
   }
@@ -940,6 +1136,8 @@ async function startDaemonCommand(
         }),
       ),
     );
+  } else if (result.error === 'state_unknown') {
+    printErr(ui.err(t('gateway.status.unknown')));
   } else {
     printErr(ui.err(t('gateway.startFailed', { detail: result.message })));
     printErr(ui.dim(t('gateway.logPath', { path: result.logPath })));
@@ -1013,38 +1211,37 @@ async function restartDaemonCommand(
 ): Promise<number> {
   const context = await resolveContext(deps);
   const printErr = deps.printErr ?? console.error;
-  const targets = await resolveGatewayTargets(context.dataDir, command, {
-    platform: context.platform,
-    ...(deps.runCommand !== undefined ? { runCommand: deps.runCommand } : {}),
-  });
+  // 停前快照：instance/port/host 原样保留（lock-only 也保留 instance）。
+  const entries = (await collectStateFor(context, deps)).entries;
+  const targets = await resolveGatewayTargets(context.dataDir, command, { entries });
   if (!targets.ok) {
     printErr(ui.err(targets.error));
     return 1;
   }
-  const running = runningTargets(targets.entries);
 
-  const stopCode = await stopGateway({ ...deps, selector: command });
+  const stopCode = await stopGateway({ ...deps, selector: command, entries });
   if (stopCode !== 0) return stopCode;
 
   if (command.all === true) {
-    if (running.length === 0) return startDaemonCommand({ ...deps });
+    if (targets.entries.length === 0) return startDaemonCommand({ ...deps });
     let failed = false;
-    for (const entry of running) {
-      if (entry.state.kind !== 'running') continue;
-      const record = entry.state.record;
+    for (const entry of targets.entries) {
       const code = await startDaemonCommand({
         ...deps,
         instance: entry.instance,
-        ...(record.port !== 0 ? { port: record.port } : {}),
-        host: record.host,
+        ...(command.port !== undefined
+          ? { port: command.port }
+          : entry.record !== undefined
+            ? { port: entry.record.port }
+            : {}),
+        ...(entry.record !== undefined ? { host: entry.record.host } : {}),
       });
       if (code !== 0) failed = true;
     }
     return failed ? 1 : 0;
   }
 
-  const previous = running[0];
-  const previousRecord = previous?.state.kind === 'running' ? previous.state.record : undefined;
+  const previous = targets.entries[0];
   return startDaemonCommand({
     ...deps,
     ...(command.instance !== undefined
@@ -1054,10 +1251,10 @@ async function restartDaemonCommand(
         : {}),
     ...(command.port !== undefined
       ? { port: command.port }
-      : previousRecord !== undefined && previousRecord.port !== 0
-        ? { port: previousRecord.port }
+      : previous?.record !== undefined
+        ? { port: previous.record.port }
         : {}),
-    ...(previousRecord !== undefined ? { host: previousRecord.host } : {}),
+    ...(previous?.record !== undefined ? { host: previous.record.host } : {}),
   });
 }
 

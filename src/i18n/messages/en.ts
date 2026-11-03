@@ -198,8 +198,24 @@ export const en: Record<MessageKey, string> = {
   'gateway.status.node': 'Node',
   'gateway.status.service': 'Service',
   'gateway.status.stale': 'Stale PID file (pid {pid}, {reason}); safe to reclaim.',
-  'gateway.status.invalid': 'Unreadable PID file ({reason}); safe to reclaim.',
   'gateway.status.pidFile': 'PID file: {path}',
+  'gateway.status.starting': 'Starting (pid {pid}); not yet confirmed.',
+  'gateway.status.degraded': 'Process alive but identity not confirmed (pid {pid}): {reason}',
+  'gateway.status.unknown': 'Unable to confirm the gateway state; no files were deleted.',
+  'gateway.status.foreignHost': 'Lock belongs to another host ({host}); no files were deleted.',
+  'gateway.status.selectHint':
+    '{count} gateway instances found; use --instance, --port, or --all to choose one.',
+  'gateway.stop.starting':
+    'Gateway instance "{instance}" is still starting; try again later. No files were deleted.',
+  'gateway.stop.notGateway':
+    'Refusing to stop pid {pid}: its command line does not look like a gateway (possible PID reuse). No files were deleted.',
+  'gateway.stop.reclaimed': 'Reclaimed stale state for gateway instance "{instance}".',
+  'gateway.stop.cleanupFailed':
+    'State files for gateway (pid {pid}) could not be cleaned up: {files}',
+  'gateway.startedUnconfirmed':
+    'Gateway started (pid {pid}) but was not confirmed in time; check `vessel gateway status`.',
+  'gateway.list.owner': 'Owner',
+  'gateway.list.hub': 'Hub',
   'gateway.serviceInstallFailed': 'Service registration failed: {detail}',
   'gateway.serviceInstalled': 'Service registered ({target}): {path}',
   'gateway.serviceUninstallFailed': 'Service removal failed: {detail}',

@@ -2,7 +2,7 @@
  * `vessel agent` 的 owner 客户端（0.17 Phase A）。
  *
  * 读取 `<dataDir>/agent-owner.json` → POST 到 loopback 端点。
- * 缺失 / pid 已死 / 连不上统一抛 `agent_owner_unavailable`：
+ * 缺失 / 身份不可用 / 连不上统一抛 `agent_owner_unavailable`：
  * Phase A 不自动启动 gateway，owner 只能由交互 REPL 提供。
  *
  * @module vessel/agent-owner-client
@@ -12,9 +12,9 @@ import {
   type AgentOwnerMethod,
   type AgentOwnerRecord,
   agentOwnerPath,
+  classifyAgentOwnerRecord,
   parseAgentOwnerRecord,
 } from './agent-owner-server';
-import { isProcessAlive } from './gateway/pid';
 
 /** owner 不可用（缺失 / stale / 连接失败） */
 export class AgentOwnerUnavailableError extends Error {
@@ -44,7 +44,7 @@ export interface ResolveAgentOwnerOptions {
   isAlive?: (pid: number) => boolean;
 }
 
-/** 读取并校验 owner；pid 已死视为不可用 */
+/** 读取并校验 owner；与 server 共用同一分类（PID + boot + token 探测）。 */
 export async function resolveAgentOwner(
   dataDir: string,
   options: ResolveAgentOwnerOptions = {},
@@ -70,10 +70,13 @@ export async function resolveAgentOwner(
     throw new AgentOwnerUnavailableError(`invalid agent owner record at ${file}`);
   }
 
-  const isAlive = options.isAlive ?? isProcessAlive;
-  if (!isAlive(record.pid)) {
+  const classification = await classifyAgentOwnerRecord(
+    record,
+    options.isAlive !== undefined ? { isAlive: options.isAlive } : {},
+  );
+  if (classification.state !== 'running') {
     throw new AgentOwnerUnavailableError(
-      `agent owner pid ${record.pid} is not running (stale ${file})`,
+      `agent owner pid ${record.pid} is not usable (${classification.reason ?? classification.state}; stale ${file})`,
     );
   }
   return record;

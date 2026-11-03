@@ -14,10 +14,12 @@ import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { resolveDataDir } from './data-paths';
 import {
   type CommandRunner,
+  collectGatewayState,
   DEFAULT_GATEWAY_INSTANCE,
   type GatewayPidRecord,
+  type GatewayStateEntry,
+  type GatewayStateSnapshot,
   gatewayPidFileName,
-  listGatewayPidStates,
 } from './gateway/pid';
 import { gatewayBaseUrl } from './gateway/reload';
 import type { RpcClient } from './rpc';
@@ -40,6 +42,8 @@ export interface ControlPlaneTargetOptions {
   requestTimeoutMs?: number;
   /** 测试注入：直接使用该目标（不探测 PID / 不建 HTTP 客户端） */
   target?: ControlPlaneTarget;
+  /** 内部：已收集的状态视图（status 命令复用以避免二次扫描） */
+  entries?: GatewayStateEntry[];
 }
 
 /** 可用的 RPC 目标 */
@@ -74,36 +78,39 @@ async function readCa(path: string | undefined): Promise<string | undefined> {
 }
 
 /**
- * 解析本地 attach 的实例：default 优先；否则只有一个运行实例时用它。
- * 多实例且 default 未运行 → `multiple_instances`（提示用 --connect）。
+ * 解析本地 attach 的实例：候选为进程仍活着的 `running` / `degraded`（running 优先，
+ * default 作为同级的优先项）。多实例且无法唯一确定 → `multiple_instances`。
  */
 export function selectLocalGatewayRecord(
-  entries: Awaited<ReturnType<typeof listGatewayPidStates>>,
+  entries: GatewayStateEntry[],
 ):
   | { record: GatewayPidRecord; instance: string }
   | { error: string; code: 'no_gateway' | 'multiple_instances' } {
-  const running: Array<{ instance: string; record: GatewayPidRecord }> = [];
+  const live: Array<{ instance: string; record: GatewayPidRecord; state: string }> = [];
   for (const entry of entries) {
-    if (entry.state.kind === 'running') {
-      running.push({ instance: entry.instance, record: entry.state.record });
+    if (entry.record === undefined) continue;
+    if (entry.state === 'running' || entry.state === 'degraded') {
+      live.push({ instance: entry.instance, record: entry.record, state: entry.state });
     }
   }
-  if (running.length === 0) {
+  if (live.length === 0) {
     return {
       error:
         'No local gateway is running. Start one with `vessel gateway start`, or use `--connect <url>`.',
       code: 'no_gateway',
     };
   }
-  const preferred = running.find((entry) => entry.instance === DEFAULT_GATEWAY_INSTANCE);
+  const running = live.filter((entry) => entry.state === 'running');
+  const pool = running.length > 0 ? running : live;
+  const preferred = pool.find((entry) => entry.instance === DEFAULT_GATEWAY_INSTANCE);
   if (preferred !== undefined) return preferred;
-  if (running.length === 1) {
-    const only = running[0];
-    if (only !== undefined) return only;
+  if (pool.length === 1) {
+    const only = pool[0];
+    if (only !== undefined) return { instance: only.instance, record: only.record };
   }
   return {
     error:
-      `Multiple gateway instances are running (${running.map((entry) => entry.instance).join(', ')}). ` +
+      `Multiple gateway instances are running (${pool.map((entry) => entry.instance).join(', ')}). ` +
       'Use `--connect <url>` to choose one.',
     code: 'multiple_instances',
   };
@@ -148,10 +155,17 @@ export async function resolveControlPlaneTarget(
     };
   }
 
-  const entries = await listGatewayPidStates(dataDir, {
-    ...(options.platform !== undefined ? { platform: options.platform } : {}),
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-  });
+  let entries: GatewayStateSnapshot['entries'];
+  if (options.entries !== undefined) {
+    entries = options.entries;
+  } else {
+    const token = resolveGatewayToken(config, env);
+    entries = (
+      await collectGatewayState(dataDir, {
+        ...(token !== undefined ? { token } : {}),
+      })
+    ).entries;
+  }
 
   async function localTarget(instance: string, record: GatewayPidRecord) {
     const token = resolveGatewayToken(config, env) ?? '';
@@ -186,14 +200,18 @@ export async function resolveControlPlaneTarget(
 
   if (options.instance !== undefined) {
     const match = entries.find((entry) => entry.instance === options.instance);
-    if (match === undefined || match.state.kind !== 'running') {
+    if (
+      match === undefined ||
+      match.record === undefined ||
+      (match.state !== 'running' && match.state !== 'degraded')
+    ) {
       return {
         ok: false,
         error: `Gateway instance "${options.instance}" is not running.`,
         code: 'no_gateway',
       };
     }
-    return localTarget(match.instance, match.state.record);
+    return localTarget(match.instance, match.record);
   }
   const selected = selectLocalGatewayRecord(entries);
   if ('error' in selected) {
