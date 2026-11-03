@@ -86,8 +86,22 @@ export function useTeamChat({
   const detailState = useTeamStore((state) => state.details[storeKey]);
   const loadDetail = useTeamStore((state) => state.loadDetail);
   const postTeam = useTeamStore((state) => state.post);
+  // 只有显式刷新（按钮 / 全局刷新信号 / 发送后对账）才显示“正在刷新”；
+  // 4s 后台轮询复用同一 store 状态，但不应让顶部按钮每轮闪一次。
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const manualRefreshGen = useRef(0);
   const reload = () => {
-    void loadDetail(nodeKey, teamId, client, { limit, members_limit: membersLimit }, 'chat');
+    const gen = ++manualRefreshGen.current;
+    setManualRefreshing(true);
+    void loadDetail(
+      nodeKey,
+      teamId,
+      client,
+      { limit, members_limit: membersLimit },
+      'chat',
+    ).finally(() => {
+      if (manualRefreshGen.current === gen) setManualRefreshing(false);
+    });
   };
 
   usePolledAction(
@@ -265,7 +279,8 @@ export function useTeamChat({
       ? { message: detailState.error, code: detailState.code }
       : initialError;
   const firstLoading = !detail && !error;
-  const refreshing = detailState?.status === 'loading' && resourceData(detailState) !== undefined;
+  // 后台轮询不会改写这个值；只有 reload() 的请求生命周期内为 true。
+  const refreshing = manualRefreshing;
 
   return {
     team,
