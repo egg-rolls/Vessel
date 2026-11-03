@@ -41,7 +41,7 @@ export function MetricsPanel() {
         write: cache.cacheCreationText,
         prompt: cache.promptTokensText,
       })
-    : t('observe.metrics.stat.cacheUnavailableHint');
+    : t('observe.metrics.stat.cacheStreamHint');
 
   if (!hasToken) {
     return (
@@ -182,6 +182,7 @@ export function MetricsPanel() {
                 className="min-w-40 flex-1"
                 value={cache?.prefixHealthText ?? t('observe.metrics.stat.cacheUnavailable')}
                 label={t('observe.metrics.stat.cachePrefixHealth')}
+                hint={cacheHint}
               />
               <Stat
                 className="min-w-40 flex-1"

@@ -1297,8 +1297,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.metrics.stat.cacheInputShare': 'Cache input share (read / all input)',
   'observe.metrics.stat.cachePrefixHealth': 'Prefix health (read / read+write)',
   'observe.metrics.stat.cacheUnavailable': 'Unavailable',
-  'observe.metrics.stat.cacheUnavailableHint':
-    'No cache data in this batch (provider does not report it)',
+  'observe.metrics.stat.cacheStreamHint':
+    'This provider does not report cache details in streaming responses; non-streaming requests do, but Vessel streams, so cache metrics cannot be computed.',
   'observe.metrics.stat.cacheHint': 'read {read} / write {write}, {prompt} input total',
   'observe.metrics.stat.avgDuration': 'Average duration (max {max}ms)',
   'observe.metrics.stat.updatedAt': 'Updated at',

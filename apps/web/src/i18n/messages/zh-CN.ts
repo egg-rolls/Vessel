@@ -1246,7 +1246,8 @@ export const messages = {
   'observe.metrics.stat.cacheInputShare': '缓存输入占比（读 / 全部输入）',
   'observe.metrics.stat.cachePrefixHealth': '前缀健康度（读 / 读+写）',
   'observe.metrics.stat.cacheUnavailable': '不可用',
-  'observe.metrics.stat.cacheUnavailableHint': '本批事件没有缓存数据（provider 未报告）',
+  'observe.metrics.stat.cacheStreamHint':
+    'provider 未在流式响应中上报缓存明细；非流式请求可报告，Vessel 使用流式请求，因此缓存指标无法计算',
   'observe.metrics.stat.cacheHint': '读 {read} / 写 {write}，输入共 {prompt}',
   'observe.metrics.stat.avgDuration': '平均耗时（最大 {max}ms）',
   'observe.metrics.stat.updatedAt': '更新于',
