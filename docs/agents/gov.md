@@ -29,6 +29,13 @@ applies_to: [N, M]
 - 改完代码：`bun run typecheck` + `bunx @biomejs/biome ci .` 必须过。仓库无自动化测试套件；运行时正确性只有一条端到端烟测 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
 - 收口还要求：`check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run`。
 - 纯文档改动至少跑 `check-docs` 与 `version --check`；不跑全量 typecheck / 构建。
+- **职责边界**：biome 只看代码与配置，markdown 排版归 `scripts/check-docs.ts`（行数上限、
+  frontmatter、链接、INDEX）。`**/*.md` 已在 `biome.json` 的 `files.includes` 里显式排除，理由是
+  **防止将来 biome 升级（2.6.x 起 Markdown 进入 formatter）时行为漂移**，不是因为当前 md 被 biome 管。
+- **门禁工具要钉版本**：`bunx <pkg>` 在没有本地 `node_modules` 的目录会拉最新版，等于偷偷换工具
+  （biome 2.6.4 vs 仓库 pin 的 2.5.15 曾造出 147 个假 error）。先 `bun install --frozen-lockfile`，
+  或显式 `bunx <pkg>@<lock 版本>`；另外 `git archive` 出来的副本没有 `.git`，`vcs.useIgnoreFile`
+  会失效，别在那上面判红绿。
 
 ## 发布与 CI
 

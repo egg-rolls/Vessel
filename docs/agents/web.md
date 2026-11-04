@@ -14,6 +14,8 @@ applies_to: [N, M]
 
 - 新增文案同时进 `apps/web/src/i18n` 的 zh-CN 与 en 两份 catalog。
 - locale 解析：`localStorage['vessel.ui.language'] > navigator.language`；未收录 key 回退中文，但不得当成“已本地化”。
+- 门禁 `bun run scripts/check-i18n.ts` 校验两份 catalog 对齐与引用落地；`--orphans`
+  打印「catalog 有、源码零引用」的孤儿 key 报告（默认 warn，只报告；删 key 需 1 裁决）。
 
 ## 数据与交互
 

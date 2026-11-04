@@ -5,30 +5,35 @@
 
 ## 版本
 
-**0.33.0（2026-10-31）** — 未 tag、未 publish。版本号以根 `package.json` 为唯一来源；
-manifest 与 `CHANGELOG.md` 一致。
+**0.40.0（2026-11-04）** — 未 tag、未 publish、未 bump。版本号以根 `package.json` 为唯一来源；
+当前 manifest 仍是 `0.33.0`；收口时 `bun run scripts/version.ts 0.40.0`（写模式）只同步各 manifest，
+不改 `CHANGELOG.md` 与本文件，那两处由 1 手工切换（`--check 0.40.0` 在 bump 前会 exit 1，不能当前置步骤）。
+0.39（create 原语 / 会话分支）的代码已收口，是本线基线；治理面收口随 egg/UI 分支合并后的最终 main 成立。
 
 ## 已合入
 
-- **headless ask 异步**：headless / `--run` 注册 `ask_user`；提问挂起 run 并以 exit 3 退出，
-  请求持久化（`StoredInteraction.suspended`）；`attention [--json]` 离线查看，
-  `attention respond --answers` 应答，`--resume-run` 恢复并注入 `source=ask_resume`。
-  ADR-082 已追加 Errata。
-- **压缩质量**：压缩前清空旧工具输出（保留最近 5 条、配对与 system）；摘要九段模板
-  （目标/约束/已完成/进行中/阻塞/决策/相关文件/下一步/关键值）。
-- **Web 尾部拆分**：AttentionPanel 550→23、TeamsView 547→31、TeamChat 541→145、
-  TenantsView 536→183；导入路径与导出面不变。
-- **诊断页**：覆盖 doctor --deep 九类检查，标注数据来源；RPC 不可得的项标 unavailable 并写原因。
-- **门禁**：零测试文件；一次性探针 + typecheck / biome / web tsc / web build / mock smoke。
+- **文档行数门禁转绿（0.39 已完成，非本批改动）**：`docs/architecture/gateway.md` 101 → 100 行
+  （ef83a137）、`gateway-rpc.md` 103@dda00a5f → 98@1f7da374 → 99@ef83a137，
+  `bun run scripts/check-docs.ts` exit 0；0.40 本批未改这两份文件。
+- **i18n 孤儿检测（I5）**：`scripts/check-i18n.ts` 新增 I5，默认 warn + `--orphans` 全量报告；
+  gov 分支 catalog 保持 1402 键（79 孤儿，只报告）。web 线 `bf7d6c0c` + `3bdc06ce` 删 74 个后
+  catalog 1316 键、孤儿 2（`team.role.member` / `team.role.temporary`，动态拼接可达，必须保留）。
+- **biome 覆盖边界**：`**/*.md` 移出 biome 范围（markdown 排版归 `check-docs`，同时防 biome 2.6.x
+  起把 md 纳入格式化造成假红），`biome ci`（2.5.15）exit 0。
+- **基线**：0.39 的 `agents.create{from_session_id}` / `sessions.create|restart|activate` 方法表、
+  删除面与事件口径已在 current 文档中。
 
 ## 下一步
 
-- 下一轮方向待定。候选：真实 provider 下 dogfooding ask 流程、`--connect --run` 远端 ask、
-  离线 attention 跨进程锁、剩余 Web 大文件、计费/价格表、token 限额口径。
-- 已知边界：`--serve --run` 双写同一记录；resume 重放会让保留区被清空的旧工具结果重现；
-  `KEEP_RECENT_TOOL_RESULTS=5` 为模块常量。
+- **孤儿清理由 web 线收尾**：`bf7d6c0c` 删 32 个、`3bdc06ce` 再删 42 个，复测 catalog 1316 /
+  孤儿 2（两个动态拼接 key，必须保留，预期值就是 2）；清单与判定规则见
+  `docs/dev/reports/0.40/i18n-orphans.md`。
+- biome warning（`main` 上 3 条）：`chat.css:555` / `:601` 已由 web 的 `862b698c` 修掉，
+  `basic-tools/src/index.ts:284` 已由 ext 的 `ca639ff7` 豁免；随 egg/UI 分支合并后的最终 main
+  为 **0 warning**（单独合 gov 时 `main` 仍是 3 条）。
+- 收口时 bump：`scripts/version.ts 0.40.0` 只改写 manifest；本文件与 `CHANGELOG.md` 由 1 手工切换。
 
 ## 入口
 
 - 版本历史：[INDEX.md](INDEX.md)
-- 当前版本变更摘要：[../../CHANGELOG.md](../../CHANGELOG.md)
+- 当前版本变更摘要：[../../CHANGELOG.md](../../CHANGELOG.md)（收口 bump 时切到 0.40.0）
