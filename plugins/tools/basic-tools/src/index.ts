@@ -281,6 +281,7 @@ function escapeRegExp(text: string): string {
 /** 一条 denylist 路径在命令文本里可能出现的写法：`~/`、`$HOME/`、`${HOME}/`、绝对路径 */
 function deniedPathSpellings(entry: string): string[] {
   const trimmed = entry.trim();
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: `${HOME}` 在这里是**要匹配的 shell 变量字面量**（denylist 路径写法），不是模板占位符
   if (trimmed === '~') return ['~', '$HOME', '${HOME}', os.homedir()].map(normalizeCommandText);
   if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
     const suffix = trimmed.slice(2);

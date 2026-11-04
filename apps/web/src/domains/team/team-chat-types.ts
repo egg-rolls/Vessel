@@ -36,6 +36,12 @@ export interface TeamChatProps {
   teamId: string;
   /** Store key discriminator for multi-node Teams; defaults for tests / preview. */
   nodeKey?: string;
+  /** 父级节点显示名：作为页头 scope 槽（「in &lt;node&gt;」）。 */
+  nodeName?: string;
+  /** 父级即为当前连接节点：页头渲染降级的「当前」。 */
+  nodeCurrent?: boolean;
+  /** 团队被冻结：进页头 status 槽。 */
+  frozen?: boolean;
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
   events: readonly StoredEvent[];

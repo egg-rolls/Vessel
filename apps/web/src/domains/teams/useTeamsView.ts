@@ -11,6 +11,7 @@ import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useViewportWidth } from '../../app/useViewportWidth';
 import type { ActionMenuItem } from '../../components/ActionMenu';
 import { useToast } from '../../components/ToastProvider';
+import { copyText } from '../../components/ui/clipboard';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -246,6 +247,18 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
         id: 'refresh',
         label: t('common.refresh'),
         onSelect: refreshCurrent,
+      },
+      {
+        // 卡片不再常显 team_id（DESIGN-0.33.0 §4 step 3）：id 属 Detail 槽，按需复制即可。
+        id: 'copyId',
+        label: t('teams.card.copyId'),
+        onSelect: () => {
+          void copyText(team.team_id)
+            .then(() => toast.success(t('common.copied')))
+            .catch((error: unknown) => {
+              toast.error(error instanceof Error ? error.message : String(error));
+            });
+        },
       },
     ];
   };

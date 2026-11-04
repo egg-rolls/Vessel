@@ -7,18 +7,17 @@
  */
 import { useEffect, useState } from 'react';
 import { formatRoute, type Route } from '../../app/router';
-import { Badge } from '../../components/ui';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
-import { t, useLocale } from '../../i18n';
+import { useLocale } from '../../i18n';
 import { resourceData } from '../../state/useResource';
 import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { agentBodyHash, agentDetailHash } from '../agents/agent-url';
+import { useNodeNames } from '../nodes/useNodeNames';
 import { TeamChat } from '../team/TeamChat';
 import { TeamEditView } from './TeamEditView';
-import { TeamNodeBadge } from './TeamNodeBadge';
 import { isTeamEditHash } from './team-url';
 
 type TeamsDetailRoute = Extract<Route, { domain: 'teams'; teamId: string }>;
@@ -52,6 +51,7 @@ export function TeamDetailRoute({
   );
 
   const nodeKey = nodeKeyOf(node);
+  const nodeNames = useNodeNames();
   const summaryState = useTeamStore(
     (state) => state.details[teamDetailKey(nodeKey, route.teamId, 'summary')],
   );
@@ -115,14 +115,13 @@ export function TeamDetailRoute({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-      <div className="teams-detail-head">
-        <TeamNodeBadge node={node} />
-        {summary?.spawn_frozen === true && <Badge tone="warn">{t('teams.frozen')}</Badge>}
-      </div>
       <TeamChat
         key={route.teamId}
         client={control}
         hasToken={hasToken}
+        nodeName={nodeNames.get(nodeKey)}
+        nodeCurrent={node.current}
+        frozen={summary?.spawn_frozen === true}
         connectionState={node.current ? connectionState : 'open'}
         epoch={epoch}
         tenantEpoch={tenantEpoch}

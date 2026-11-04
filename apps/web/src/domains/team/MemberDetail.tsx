@@ -1,6 +1,9 @@
 /**
  * 成员详情：当前 Body + 已退役 Body + 旧 Body 只读 transcript。
  *
+ * 本组件**不渲染标题栏**：身份/作用域/状态由调用方（`AgentDetailView` 的
+ * `EntityHeader`）负责，这里只负责 Detail 槽与 Body 历史。
+ *
  * Body 历史优先服务端 `member.body_history`；只有字段缺失时才使用
  * `agent.rotated / agent.retired` 的本次页面观察值，并明确标注。
  * 提供需确认的新建 session（`sessions.create` 无来源）；不提供配置 / close 操作。
@@ -8,6 +11,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { CopyButton } from '../../components/CopyButton';
 import {
   EmptyState,
   ErrorState,
@@ -15,9 +19,8 @@ import {
   NotEnabledState,
   StaleNotice,
 } from '../../components/States';
-import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
-import { Badge, Button } from '../../components/ui';
+import { Button, KeyValueList } from '../../components/ui';
 import type { TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
@@ -31,12 +34,10 @@ import { resourceData } from '../../state/useResource';
 import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { BodyHistoryList, LiveBodiesList } from './BodyHistory';
-import { BodyTranscript } from './BodyTranscripts';
 import type { MemberDetailProps } from './member-detail-types';
 import { memberStatus } from './member-status';
 import { shortAgentId } from './mention';
 import { RoleConversionSection } from './RoleConversionSection';
-import { roleLabelKey, roleOf } from './role';
 
 export type { MemberDetailClient, MemberDetailProps } from './member-detail-types';
 
@@ -61,15 +62,11 @@ export function MemberDetail({
   teamId,
   memberId,
   nodeKey = 'local',
-  bodyId,
   events,
   onBack,
-  onBackToMember,
   onOpenSession,
   onOpenBody,
-  embedded = false,
   initialDetail,
-  initialSession,
   initialError,
 }: MemberDetailProps) {
   const storeKey = teamDetailKey(nodeKey, teamId, 'member');
@@ -129,19 +126,6 @@ export function MemberDetail({
       ? { message: detailState.error, code: detailState.code }
       : initialError;
 
-  if (bodyId) {
-    return (
-      <BodyTranscript
-        client={client}
-        hasToken={hasToken}
-        epoch={epoch}
-        bodyId={bodyId}
-        initialSession={initialSession}
-        onBackToMember={onBackToMember}
-      />
-    );
-  }
-
   if (!hasToken) {
     return (
       <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
@@ -200,83 +184,60 @@ export function MemberDetail({
     }
   };
 
-  const memberMeta = (
-    <>
-      <span className="font-mono">{member.agent_id}</span>
-      <span
-        role="img"
-        className={`size-1.5 flex-none rounded-full ${
-          member.presence === 'live' ? 'bg-success' : 'border border-faint bg-transparent'
-        }`}
-        aria-label={member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone')}
-      />
-      <StatusChip
-        status={status.chipStatus}
-        label={t(status.labelKey)}
-        title={status.titleKey ? t(status.titleKey) : undefined}
-      />
-      <Badge>{t(roleLabelKey(roleOf(member)))}</Badge>
-      <span className="text-muted">
-        {t('team.member.visibility', { visibility: member.visibility })}
-      </span>
-    </>
-  );
-
   return (
     <div className="flex min-h-0 min-w-0 flex-col">
-      {!embedded && (
-        <header className="team-chat-head">
-          <div className="min-w-0">
-            <h1 className="font-serif text-title font-semibold wrap-anywhere">{name}</h1>
-            <div className="mt-1.25 flex flex-wrap items-center gap-2 text-sm text-muted">
-              {memberMeta}
-            </div>
-          </div>
-          <div className="flex flex-none flex-wrap justify-end gap-1.5">
-            <Button onClick={onBack}>{t('breadcrumb.team.chat')}</Button>
-          </div>
-        </header>
-      )}
-
-      {embedded && (
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted">{memberMeta}</div>
-      )}
-
       {error && <StaleNotice message={t('team.error.stale')} onRetry={reload} />}
 
-      <div
-        className={
-          embedded
-            ? 'flex w-full flex-col gap-5'
-            : 'mx-auto flex w-full max-w-225 flex-col gap-5 px-8 py-5 pb-8 max-compact:px-4'
-        }
-      >
+      <div className="flex w-full flex-col gap-5">
         <section className="team-body-card rounded-md border border-line bg-surface p-4">
           <h2 className="text-md font-semibold text-ink">{t('team.member.currentBody')}</h2>
-          <dl className="team-body-meta">
-            <div>
-              <dt>{t('team.member.sessionNumber')}</dt>
-              <dd className="font-mono tabular-nums">
-                {member.epoch !== undefined
-                  ? t('team.member.sessionIndex', { n: member.epoch })
-                  : '—'}
-              </dd>
-            </div>
-            <div>
-              <dt>{t('agents.detail.session')}</dt>
-              <dd className="font-mono">{member.session_id ?? '—'}</dd>
-            </div>
-            <div>
-              <dt>{t('agents.filter.state')}</dt>
-              <dd>{t(status.labelKey)}</dd>
-            </div>
-            <div>
-              <dt>{t('agents.filter.presence')}</dt>
-              <dd>
-                {member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone')}
-              </dd>
-            </div>
-          </dl>
+          {/* Detail 槽：id / 会话 / 状态 / 可见性等事实的唯一渲染点（DESIGN-0.33.0 §1）。 */}
+          <KeyValueList
+            items={[
+              {
+                key: 'sessionNumber',
+                label: t('team.member.sessionNumber'),
+                value: (
+                  <span className="font-mono tabular-nums">
+                    {member.epoch !== undefined
+                      ? t('team.member.sessionIndex', { n: member.epoch })
+                      : '—'}
+                  </span>
+                ),
+              },
+              {
+                key: 'session',
+                label: t('agents.detail.session'),
+                value: <span className="font-mono">{member.session_id ?? '—'}</span>,
+              },
+              {
+                key: 'state',
+                label: t('agents.filter.state'),
+                value: t(status.labelKey),
+              },
+              {
+                key: 'presence',
+                label: t('agents.filter.presence'),
+                value:
+                  member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone'),
+              },
+              {
+                key: 'agentId',
+                label: t('agents.detail.agentId'),
+                value: (
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-mono">{member.agent_id}</span>
+                    <CopyButton text={member.agent_id} />
+                  </span>
+                ),
+              },
+              {
+                key: 'visibility',
+                label: t('agents.detail.visibility'),
+                value: <span className="font-mono">{member.visibility}</span>,
+              },
+            ]}
+          />
           <div className="flex flex-wrap gap-2">
             <Button
               variant="primary"

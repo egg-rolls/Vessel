@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
+import { CopyButton } from '../../components/CopyButton';
 import { Markdown } from '../../components/Markdown';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
-import { Button } from '../../components/ui';
+import { Button, EntityHeader } from '../../components/ui';
 import { formatClock, localDayKey, localDayLabel } from '../../format';
 import type { Message, SessionDetail } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -79,6 +80,8 @@ export function BodyTranscript({
   hasToken,
   epoch,
   bodyId,
+  memberName,
+  teamName,
   initialSession,
   onBackToMember,
 }: {
@@ -86,6 +89,10 @@ export function BodyTranscript({
   hasToken: boolean;
   epoch: number;
   bodyId: string;
+  /** Identity 槽：成员名（用户裁决：本屏 Identity 用成员名，不改成「第 N 次会话」）。 */
+  memberName: string;
+  /** Scope 槽：所属 Team 名（有则渲染 "in <team>"；缺省不渲染从属行）。 */
+  teamName?: string | undefined;
   initialSession?: SessionDetail;
   onBackToMember: () => void;
 }) {
@@ -100,6 +107,8 @@ export function BodyTranscript({
     resource.state.status === 'error'
       ? { message: resource.state.error, code: resource.state.code }
       : undefined;
+  // 会话名优先，缺省回落到会话 ID（后者即 bodyId，取数用）。
+  const sessionTitle = session?.title?.trim() || session?.preview?.trim() || bodyId;
 
   if (!hasToken) {
     return (
@@ -109,18 +118,16 @@ export function BodyTranscript({
 
   return (
     <div className="team-body-view flex min-h-0 min-w-0 flex-col">
-      <header className="team-chat-head">
-        <div className="min-w-0">
-          <h1 className="font-serif text-title font-semibold wrap-anywhere">
-            {t('team.member.title')}
-          </h1>
-          <div className="mt-1.25 flex flex-wrap items-center gap-2 text-sm text-muted">
-            <span className="font-mono">{bodyId}</span>
-          </div>
-        </div>
-        <div className="flex flex-none flex-wrap justify-end gap-1.5">
-          <Button onClick={onBackToMember}>{t('breadcrumb.team.member')}</Button>
-        </div>
+      {/* 四槽位（DESIGN-0.33.0 §1，用户 2026-11-04 裁决）：Identity=成员名，
+          Scope=所属 Team（有则 "in <team>"）；bodyId 属 Detail，不进头部（I4）。
+          外层 `team-body-head` 只为对齐提供 padding（与被替换的 `.team-chat-head` 同值），
+          不加 border-bottom（DESIGN.md §3 无边框体系，两页统一不给线）。 */}
+      <header className="team-body-head">
+        <EntityHeader
+          title={memberName}
+          scope={teamName ? [{ label: teamName }] : []}
+          actions={<Button onClick={onBackToMember}>{t('breadcrumb.team.member')}</Button>}
+        />
       </header>
       <div className="team-transcript-scroll pt-4">
         {!session && !error ? (
@@ -130,10 +137,21 @@ export function BodyTranscript({
             message={error?.message ?? t('team.error.loadFailed')}
             onRetry={resource.reload}
           />
-        ) : session.messages.length === 0 ? (
-          <EmptyState title={t('team.chat.empty')} />
         ) : (
-          <SessionTranscript messages={session.messages} />
+          <>
+            {/* Detail 槽：会话名（超长截断），右侧复制按钮复制的是**会话 ID**（bodyId）。 */}
+            <div className="mx-auto flex w-full max-w-180 min-w-0 items-center gap-2 text-2xs text-faint">
+              <span className="min-w-0 flex-1 truncate" title={sessionTitle}>
+                {sessionTitle}
+              </span>
+              <CopyButton text={bodyId} className="shrink-0 text-2xs" />
+            </div>
+            {session.messages.length === 0 ? (
+              <EmptyState title={t('team.chat.empty')} />
+            ) : (
+              <SessionTranscript messages={session.messages} />
+            )}
+          </>
         )}
       </div>
     </div>

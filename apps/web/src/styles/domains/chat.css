@@ -213,6 +213,22 @@
   color: var(--accent);
 }
 
+/* 失败 run：摘要保留 240 字截断，展开后显示完整错误（保留换行）。
+   两个基础块刻意放在 .stream-notice 的组合规则之前：低特异性在前，避免
+   descending specificity（biome noDescendingSpecificity）。 */
+
+.run-error {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.run-error-hint {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .stream-notice .run-error,
 .stream-notice .run-error-hint {
   flex: 1 1 100%;
@@ -550,13 +566,6 @@
   margin-top: 8px;
 }
 
-/* 失败 run：摘要保留 240 字截断，展开后显示完整错误（保留换行）。 */
-
-.run-error {
-  flex: 1 1 100%;
-  min-width: 0;
-}
-
 .run-error-summary {
   display: flex;
   gap: 8px;
@@ -596,13 +605,6 @@
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.run-error-hint {
-  flex: 1 1 100%;
-  margin: 0;
-  font-size: 11px;
-  color: var(--muted);
 }
 
 .run-output {

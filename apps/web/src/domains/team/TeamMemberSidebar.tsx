@@ -114,24 +114,14 @@ export function TeamMemberSidebar({
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="min-w-0 truncate text-sm">{name}</span>
                   <Badge className="flex-none">{t(roleLabelKey(roleOf(member)))}</Badge>
-                  <span
-                    role="img"
-                    className={`size-1.5 flex-none rounded-full ${
-                      member.presence === 'live'
-                        ? 'bg-success'
-                        : 'border border-faint bg-transparent'
-                    }`}
-                    aria-label={
-                      member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone')
-                    }
-                  />
+                  {/* 一个事实一个渲染点：presence 只由 StatusChip 表达，不再同时画圆点
+                      （DESIGN-0.33.0 §4 step 5）。chip 有文本，圆点只有颜色。 */}
                   <StatusChip
                     status={status.chipStatus}
                     label={t(status.labelKey)}
                     title={status.titleKey ? t(status.titleKey) : undefined}
                   />
                 </span>
-                <span className="truncate text-2xs text-faint">{t(status.labelKey)}</span>
               </button>
               {attention > 0 && sessionId && (
                 <button

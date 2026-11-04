@@ -19,13 +19,15 @@ import { useTeamChat } from './useTeamChat';
 export type { TeamChatClient, TeamChatProps } from './team-chat-types';
 
 export function TeamChat(props: TeamChatProps) {
+  // 页头 scope/status 槽来自路由层，不经 useTeamChat 派生。
+  const { nodeName, nodeCurrent, frozen } = props;
   const {
     team,
     teamId,
     archived,
     members,
     memberTotal,
-    onlineCount,
+
     membersOpen,
     setMembersOpen,
     narrow,
@@ -87,9 +89,9 @@ export function TeamChat(props: TeamChatProps) {
         team={team}
         teamId={teamId}
         archived={archived}
-        membersShown={members.length}
-        memberTotal={memberTotal}
-        onlineCount={onlineCount}
+        nodeName={nodeName}
+        nodeCurrent={nodeCurrent}
+        frozen={frozen}
         membersOpen={membersOpen}
         onToggleMembers={() => setMembersOpen((value) => !value)}
         onBackToList={onBackToList}

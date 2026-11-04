@@ -1,7 +1,12 @@
 /**
- * 单个 Team 卡片：名称 / id / 成员 / 在线 / 描述 / 归档标记 + 右侧 ActionMenu。
+ * 单个 Team 卡片：名称 / 成员 / 在线 / 归档标记 + 右侧 ActionMenu。
+ *
+ * id 与描述不进卡片（DESIGN-0.33.0 §4 step 3）：
+ * - `team_id` 属 Detail 槽 —— 需要时走 ActionMenu「复制团队 ID」，不再常显占一行；
+ * - 可选描述会让卡高在 2/4 行之间跳动，破坏列表的等高扫描。
  */
 import { ActionMenu, type ActionMenuItem } from '../../components/ActionMenu';
+import { Badge } from '../../components/ui';
 import type { NodeView } from '../../gateway/NodeProvider';
 import type { TeamSummary } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -24,13 +29,8 @@ export function TeamCard({ node, team, menuItems, onOpen }: TeamCardProps) {
       >
         <span className="flex items-center justify-between gap-2">
           <span className="min-w-0 truncate font-semibold">{team.name || team.team_id}</span>
-          {team.archived_at !== undefined && (
-            <span className="whitespace-nowrap rounded-full bg-warn-soft px-2 py-0.5 text-xs text-warn">
-              {t('teams.card.archived')}
-            </span>
-          )}
+          {team.archived_at !== undefined && <Badge tone="warn">{t('teams.card.archived')}</Badge>}
         </span>
-        <span className="wrap-anywhere font-mono text-xs text-faint">{team.team_id}</span>
         <span className="flex flex-wrap gap-3 text-sm text-muted">
           <span>{t('teams.card.members', { members: team.member_count })}</span>
           <span>
@@ -39,9 +39,6 @@ export function TeamCard({ node, team, menuItems, onOpen }: TeamCardProps) {
               : '—'}
           </span>
         </span>
-        {team.description && (
-          <span className="line-clamp-2 text-sm text-muted">{team.description}</span>
-        )}
       </button>
       <ActionMenu
         className="teams-card-menu"

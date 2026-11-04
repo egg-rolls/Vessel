@@ -12,6 +12,11 @@ export {
   type DataTableProps,
 } from './DataTable';
 export {
+  EntityHeader,
+  type EntityHeaderProps,
+  type EntityScopeItem,
+} from './EntityHeader';
+export {
   Field,
   type FieldProps,
   Input,

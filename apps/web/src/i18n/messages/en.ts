@@ -6,6 +6,11 @@ import type { messages as zhMessages } from './zh-CN';
  */
 export const messages: Record<keyof typeof zhMessages, string> = {
   // Navigation
+  // Shared wording for the L2 EntityHeader (scope relation + current-node marker).
+  'entity.scopeIn': 'in',
+  'entity.currentNode': 'current',
+  'entity.details': 'Details',
+  'entity.unnamed': 'Unnamed',
   'nav.domain.chat': 'Sessions',
   'nav.domain.runs': 'Runs',
   'nav.domain.integrations': 'Integrations',
@@ -23,13 +28,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.closeSessions': 'Close session list',
   'nav.collapseNav': 'Collapse sidebar',
   'nav.expandNav': 'Expand sidebar',
-  'nav.collapsed': 'Collapse',
   'nav.jumpToMain': 'Skip to main content',
   'webBuild.outdated': 'The console was updated in the background; reload to load the new version.',
   'webBuild.reload': 'Reload',
   'nav.more': 'More',
   'nav.moreSheet': 'More navigation',
-  'nav.connection': 'Connection',
   'nav.connectionNamed': 'Connection: {value}',
   'nav.conn.online': 'online',
   'nav.conn.connecting': 'Connecting…',
@@ -48,7 +51,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.status.hubJoined': 'Joined hub',
   'nav.status.hubNotConfigured': 'Hub not configured',
   'nav.tenant': 'Tenant',
-  'nav.tenantCurrent': 'Current tenant',
   'nav.tenantChipTitle': 'Current tenant; click to view or switch',
   'nav.connStatusTitle': 'Gateway connection status; click to open connection settings',
   'nav.tenantNamed': 'Tenant {tenant}',
@@ -87,9 +89,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Dev proxy auth is enabled: connecting to the same-origin gateway forwarded by the Vite dev server. No token is stored in the browser.',
 
   // Multi-node（S9.4）
-  'settings.multinode.title': 'Multi-node (read-only)',
-  'settings.multinode.desc':
-    'Store a separate human token (gateway / team token) per node and aggregate attention and Teams read-only. Peer tokens cannot read attention.',
   'settings.multinode.name': 'Name',
   'settings.multinode.namePlaceholder': 'e.g. office-gw',
   'settings.multinode.url': 'Gateway URL',
@@ -98,20 +97,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.multinode.tokenPlaceholder': 'gateway / team token',
   'settings.multinode.add': 'Add node',
   'settings.multinode.added': 'Added node {name}',
-  'settings.multinode.remove': 'Remove',
-  'settings.multinode.current': 'Current connection',
-  'settings.multinode.healthOk': 'Online',
-  'settings.multinode.healthError': 'Status unavailable',
-  'settings.multinode.healthLoading': 'Loading status…',
-  'settings.multinode.loadTeams': 'Load Teams',
-  'settings.multinode.teamsLoading': 'Loading Teams…',
-  'settings.multinode.teamsEmpty': 'No Teams',
-  'settings.multinode.teamsError': 'Failed to load Teams',
-  'settings.multinode.noNodes': 'No extra nodes yet.',
   'settings.multinode.storageHint':
     'Name, URL and token are kept in sessionStorage only; tokens are never echoed after adding.',
-  'settings.multinode.hubHint':
-    'Hub is for discovery only; this view never consumes the hub directory or proxies data through it.',
   'settings.multinode.error.name_required': 'Enter a node name',
   'settings.multinode.error.name_duplicate': 'A node with this name already exists',
   'settings.multinode.error.url_invalid': 'Enter a valid gateway URL',
@@ -137,7 +124,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'language.short.en': 'EN',
 
   // Common
-  'common.save': 'Save',
   'common.cancel': 'Cancel',
   'common.close': 'Close',
   'common.confirm': 'Confirm',
@@ -146,7 +132,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'common.retry': 'Retry',
   'common.refresh': 'Refresh',
   'common.loadFailed': 'Failed to load',
-  'common.tenant': 'Tenant',
 
   // Permission / ask / reasoning stream (0.11.1)
   'permission.busy': 'Submitting…',
@@ -166,13 +151,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.bar.summary': '{count} pending request(s) in other sessions',
   'pending.bar.unresolved': 'Owning session not found',
   // 0.17: AppShell panel for other-session / unattributed requests
-  'pending.inline.title': 'Pending requests in this session',
-  'pending.inline.desc':
-    'These requests have no matching run card in the timeline; you can act on them here.',
-  'pending.count': '{count} pending',
-  'pending.agent': 'agent {id}',
-  'pending.run': 'run {id}',
-  'pending.session': 'session {id}',
   // 0.18: the Composer slot has three mutually exclusive states; pending requests are serial.
   'chat.prompt.label': 'Conversation input slot',
   'chat.composer.input': 'Message input',
@@ -209,7 +187,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'resize.sessions': 'Resize session list',
   'resize.chat': 'Resize conversation',
   // 0.18 H2 / 0.27: expired interactions only keep a one-shot toast; details live in Observe.
-  'interaction.orphaned.toast': '{count} earlier requests are no longer valid',
   'chat.reasoning.summary': 'Thinking',
   // 0.17: placeholder while a run is running but has no visible content
   'chat.run.waiting': 'Generating…',
@@ -454,22 +431,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // Team (0.19 S6). Technical terms (agent / run / session / gateway / token /
   // @ / Team / workspace) and error codes stay untranslated.
 
-  'team.list.title': 'Teams',
-  'team.list.description':
-    'Agents bound to a workspace create Teams implicitly; this view is read-only.',
   'team.list.search': 'Search Teams',
-  'team.list.empty': 'No Teams yet',
-  'team.list.emptyFiltered': 'No Team matches "{query}"',
   'team.list.clearSearch': 'Clear search',
-  'team.list.memberCount': '{count} members',
-  'team.list.onlineCount': 'Online (visible) {count}',
-  'team.list.onlineUnknown': 'Online (visible) —',
-  'team.list.lastActivity': 'Last active {time}',
-  'team.list.open': 'Open',
-  'team.list.workspace': 'workspace',
 
   'team.chat.members': 'Members',
-  'team.chat.onlineCount': '{count} online (visible)',
   'team.chat.empty': 'No messages yet',
   'team.chat.emptyHint': 'Mention a member with @ to notify that agent.',
   'team.chat.loadEarlier': 'Load earlier',
@@ -477,8 +442,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.chat.refresh': 'Refresh',
   'team.chat.refreshing': 'Refreshing…',
   'team.chat.backToList': 'Back to Teams',
-  'team.chat.descriptionLabel': 'Description',
-  'team.chat.memberWindow': 'Showing {shown} of {total} members',
   'team.chat.loadMoreMembers': 'Load more members',
   'team.chat.membersCapped': 'Only the first {shown} of {total} members are shown',
 
@@ -493,7 +456,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.mention.title': 'Mention members',
   'team.mention.empty': 'No matching members',
   'team.mention.hint': 'Only present members of this Team are suggested',
-  'team.mention.selected': 'Selected {name}',
   'team.mention.remove': 'Remove {name}',
 
   'team.message.you': 'You',
@@ -536,10 +498,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.delivery.error': 'Delivery failed',
   'team.delivery.retry': 'Send again',
   'team.delivery.retryHint': 'This writes a new log entry',
-  'team.delivery.reconcile': 'Refresh to reconcile',
   'team.delivery.failed': 'Send failed',
 
-  'team.state.created': 'Created',
   'team.state.idle': 'Idle',
   'team.state.running': 'Working',
   'team.state.waitingPermission': 'Waiting for approval',
@@ -569,13 +529,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.member.retiredBodies': 'Past sessions',
   'team.member.sessionNumber': 'Session',
   'team.member.sessionIndex': 'Session {n}',
-  'team.member.session': 'session {session}',
   'team.member.startedAt': 'Started {time}',
   'team.member.retiredAt': 'Retired {time}',
   'team.member.observedAt': 'Observed {time}',
   'team.member.empty': 'No past sessions',
   'team.member.viewTranscript': 'View read-only transcript',
-  'team.member.visibility': 'Visibility {visibility}',
   'team.member.observedOnly':
     'Observed during this page session; after a refresh only the current session is shown.',
   'team.member.currentSession': 'View current session',
@@ -595,8 +553,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.member.rotate.error.invalid':
     'Invalid parameters for the new session. Refresh and try again.',
   'team.member.rotate.error.quota': 'Session quota is exhausted; cannot create a new session.',
-  'team.member.peer': 'member',
-  'team.member.contractor': 'temporary',
   'team.role.member': 'member',
   'team.role.temporary': 'temporary',
   'team.role.label': 'Role',
@@ -622,9 +578,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.a11y.memberList': 'Member list',
   'team.a11y.mentionList': 'Mention suggestions',
   'team.a11y.deliveryQueued': 'Delivery queued',
-  'team.a11y.openMembers': 'Open member list',
   'team.a11y.closeMembers': 'Close member list',
-  'team.a11y.bodyHistory': 'Session history',
 
   // 0.24 / 0.25 network IA: navigation / breadcrumbs
   'nav.domain.hub': 'Hub',
@@ -642,14 +596,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.teams.agent': 'Teams › Agent',
   'breadcrumb.agents': 'Agents',
 
-  'common.create': 'Create',
   'common.edit': 'Edit',
   'common.archive': 'Archive',
   'common.remove': 'Remove',
   'common.copy': 'Copy',
   'common.copied': 'Copied',
   'common.all': 'All',
-  'common.derived': 'Derived',
 
   // Hub
   'hub.title': 'Hub',
@@ -688,16 +640,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Nodes
   'nodes.title': 'Nodes',
-  'nodes.description': 'Health, gateway instance, Teams and Agents per node.',
   'nodes.empty': 'No reachable node',
-  'nodes.emptyHint': 'Connect a gateway under Settings → Connection first.',
-  'nodes.picker.title': 'Choose a node',
   'nodes.notFound': 'Node is not in this page’s node list',
   'nodes.notFoundHint': 'It may have been removed; go back and choose another node.',
   'nodes.back': 'All nodes',
-  'nodes.current': 'Current node',
   'nodes.section.health': 'Health',
-  'nodes.section.instance': 'Gateway instance',
   'nodes.section.dataPlane': 'Data plane',
   'nodes.field.nodeId': 'node_id',
   'nodes.field.status': 'Status',
@@ -715,28 +662,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nodes.health.loading': 'Loading…',
   'nodes.dataPlane.direct': 'direct (health.get reachable)',
   'nodes.dataPlane.unreachable': 'unreachable (health.get failed)',
-  'nodes.dataPlane.derived':
-    'Derived from reachability; the hub directory data_plane is not exposed to the Web UI.',
-  'nodes.incarnation.missing': 'Only readable on the current WS node',
-  'nodes.teams.title': 'Teams',
   'nodes.teams.create': 'Create Team',
-  'nodes.teams.empty': 'This node has no Team yet',
-  'nodes.teams.emptyHint': 'Create Team needs an absolute workspace path.',
   'nodes.teams.archived': 'Archived',
-  'nodes.teams.archive': 'Archive',
-  'nodes.teams.edit': 'Edit',
   'nodes.teams.archiveTitle': 'Archive Team?',
   'nodes.teams.archiveBody':
     'An archived Team is read-only (no post / dispatch / member add); logs and history are kept. It is rejected while present members remain.',
-  'nodes.agents.title': 'Agents',
-  'nodes.agents.empty': 'This node has no Agent yet',
-  'nodes.agents.groupCount': '{count} members',
-  'nodes.error.notFound': 'Node not found',
-  'nodes.error.forbidden': 'This token cannot read the node',
-  'nodes.error.notEnabled': 'This node does not expose teams.*',
-  'nodes.error.noToken': 'No token for this node',
-  'nodes.error.noTokenReason':
-    'Write operations need the node’s human token; add it under Settings → Connection.',
 
   // Team form (Node panel)
   'team.form.createTitle': 'Create Team',
@@ -750,21 +680,18 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.form.submitEdit': 'Save',
   'team.form.createFailed': 'Create failed',
   'team.form.updateFailed': 'Update failed',
-  'team.form.deduped': 'Workspace already has a Team: {team}',
   'team.form.forbidden': 'This token cannot create / update Teams.',
   'team.form.archivedReadonly': 'Archived Teams are read-only.',
 
   // Teams (cross-node)
   'teams.title': 'Teams',
-  'teams.description': 'Teams across every connected node; open one to chat.',
   'teams.empty': 'No Team yet',
-  'teams.emptyHint': 'Create one from a Nodes panel, or check that AgentService is enabled.',
   'teams.filter.node': 'Node',
   'teams.filter.all': 'All nodes',
   'teams.card.archived': 'Archived',
+  'teams.card.copyId': 'Copy team ID',
   'teams.card.members': '{members} members',
   'teams.card.online': '{online} online',
-  'teams.card.principal': 'Principal {principal}',
   'teams.card.open': 'Open chat',
   'teams.detail.emptyTitle': 'Open a team first',
   'teams.detail.emptyDesc': 'Pick a team from the list to chat with its members.',
@@ -772,9 +699,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'teams.partialError': 'Some nodes failed to list Teams',
   'teams.error.forbidden': 'This token cannot read Teams on that node',
   'teams.error.notEnabled': 'That node does not expose teams.*',
-  'teams.error.noToken': 'That node has no token',
   'teams.chat.archived': 'Archived',
-  'teams.chat.archivedHint': 'Archived Team is read-only; logs stay readable.',
   'teams.freeze': 'Freeze spawning',
   'teams.unfreeze': 'Unfreeze spawning',
   'teams.frozen': 'Frozen',
@@ -783,10 +708,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Agents (global)
   'agents.title': 'Agents',
-  'agents.description': 'Global view of every node’s Team roster.',
   'agents.staleNode': 'Showing last successful data',
   'agents.empty': 'No Agent yet',
-  'agents.emptyHint': 'Agents come only from each node’s present Team roster.',
   'agents.filter.node': 'Node',
   'agents.filter.team': 'Team',
   'agents.filter.state': 'State',
@@ -794,16 +717,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'agents.filter.all': 'All',
   'agents.filter.clear': 'Clear filters',
   'agents.count': 'Showing {shown} / {total}',
-  'agents.column.agent': 'Agent',
-  'agents.column.node': 'Node',
-  'agents.column.team': 'Team',
-  'agents.column.state': 'State',
-  'agents.column.presence': 'Presence',
   'agents.presence.live': 'live',
   'agents.presence.gone': 'gone',
   'agents.partialErrors': '{count} Team details failed to load',
   'agents.loadingRosters': 'Aggregating node rosters…',
-  'breadcrumb.team.chat': 'Team chat',
   'breadcrumb.team.member': 'Member',
   'hub.add.title': 'Add node',
   'hub.add.description':
@@ -893,7 +810,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'common.configureConnection': 'Configure connection',
   'common.clearSearch': 'Clear search',
   'common.clearFilters': 'Clear filters',
-  'common.disconnected': 'Disconnected',
   'common.writesDisabled': 'Disconnected; writes are disabled.',
   'common.staleData': 'Update failed; showing the last data: {detail}',
   'common.notConnected': 'Not connected to a gateway',
@@ -969,7 +885,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'palette.toast.reconnecting': 'Reconnecting to the gateway',
   'palette.toast.tenantSwitched': 'Tenant switched; selection and event buffer cleared',
   'app.announce.run': 'Run {id} {status}',
-  'app.closeError': 'Dismiss error',
   'app.openConnection': 'Open connection settings',
   'app.retryNow': 'Retry now',
   'app.connectionSettings': 'Connection settings',
@@ -1218,12 +1133,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'integrations.tools.onlyConfirm': 'Confirmation required ({count})',
   'integrations.tools.empty': 'The gateway has not registered any tools.',
   'integrations.tools.noMatch': 'No tools match.',
-  'integrations.tools.needsConfirm': 'Confirmation is required before calling',
-  'integrations.tools.badgeConfirm': 'Confirm',
   'integrations.tools.openDetails': 'Open details for {name}',
   'integrations.tools.dialogLabel': 'Tool details: {name}',
-  'integrations.tools.expand': 'Expand details for {name}',
-  'integrations.tools.collapse': 'Collapse details for {name}',
   'integrations.tools.details': 'Tool details',
   'integrations.tools.schema': 'Input schema',
   'integrations.tools.stale': 'Disconnected; showing the last loaded tool catalog.',
@@ -1250,9 +1161,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'integrations.tools.policyChecking': 'Checking gateway capabilities…',
   'integrations.tools.policyUnsupported': 'Requires a newer gateway.',
   'integrations.tools.policyLoadFailed': 'Could not read the permission config: {detail}',
-  'integrations.tools.policyReadOnly': 'Read-only; always allowed.',
-  'integrations.tools.policyNotConfigurable':
-    'This tool does not ask for approval; no policy to set.',
   'integrations.mcp.globalDesc':
     'The MCP control plane is gateway-global (default tenant) and does not follow tenant switches.',
   'integrations.mcp.currentTenant': ' Current tenant: {tenant}.',

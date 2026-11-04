@@ -122,7 +122,7 @@ export function TeamComposer({
           <legend className="sr-only">{t('team.mention.title')}</legend>
           {mentions.map((chip) => (
             <span
-              className="inline-flex items-center gap-1 rounded-full border border-line-strong bg-accent-soft py-px pr-1 pl-2 text-xs text-accent-ink"
+              className="inline-flex items-center gap-1 rounded-full bg-sunken py-px pr-1 pl-2 text-xs text-muted"
               key={chip.agentId}
             >
               <span aria-hidden="true">@</span>

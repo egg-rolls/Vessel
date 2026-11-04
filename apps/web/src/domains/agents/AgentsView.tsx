@@ -32,7 +32,7 @@ import { AgentCreateDialog } from './AgentCreateDialog';
 import { AgentDetailView } from './AgentDetailView';
 import { AgentEditView } from './AgentEditView';
 import { AgentListRow } from './AgentListRow';
-import { filterAgentsByQuery } from './agent-search';
+import { agentDisplayName, filterAgentsByQuery } from './agent-search';
 import {
   type AgentHashTarget,
   agentBodyHash,
@@ -238,6 +238,8 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
           hasToken={hasTokenFor(targetNode)}
           epoch={epoch}
           bodyId={target.bodyId}
+          memberName={agentDisplayName(targetAgent.member)}
+          teamName={targetAgent.team?.name?.trim() || undefined}
           onBackToMember={() => openAgent(target.nodeKey, target.agentId)}
         />
       );

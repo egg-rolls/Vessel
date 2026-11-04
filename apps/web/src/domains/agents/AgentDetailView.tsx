@@ -7,10 +7,9 @@
  */
 import { useState } from 'react';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
-import { PageHeader } from '../../components/PageHeader';
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
-import { Button, KeyValueList, Section } from '../../components/ui';
+import { Badge, Button, EntityHeader, KeyValueList, Section } from '../../components/ui';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -18,6 +17,7 @@ import type { RosterAgent } from '../../gateway/team-roster';
 import { t, useLocale } from '../../i18n';
 import { useNodeNames } from '../nodes/useNodeNames';
 import { MemberDetail } from '../team/MemberDetail';
+import { memberStatus } from '../team/member-status';
 import { roleLabelKey, roleOf } from '../team/role';
 import { agentErrorText } from './agent-errors';
 import { agentDisplayName } from './agent-search';
@@ -41,7 +41,7 @@ export function AgentDetailView({
 }) {
   useLocale();
   const toast = useToast();
-  const { tenantId, epoch, tenantEpoch } = useConnection();
+  const { epoch, tenantEpoch } = useConnection();
   const { teamControl, hasTokenFor } = useNodes();
   const snapshot = useEventSnapshot();
   const nodeNames = useNodeNames();
@@ -51,6 +51,7 @@ export function AgentDetailView({
   const member = agent.member;
   const displayName = agentDisplayName(member);
   const alreadyLeft = member.membership === 'left';
+  const status = memberStatus(member);
 
   const confirmClose = async () => {
     setClosing(true);
@@ -73,9 +74,25 @@ export function AgentDetailView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader
+      {/* 四槽位：Identity=agent 名；Scope=team（近）· node（远）；Status=状态 chip + 角色 Badge。
+          id / workspace / 计数一律不进头部（DESIGN-0.33.0 §1 I4）。 */}
+      <EntityHeader
         title={displayName}
-        tenantId={tenantId}
+        scope={[
+          ...(agent.team ? [{ label: agent.team.name || agent.team.team_id }] : []),
+          { label: nodeNames.get(nodeKeyOf(node)) ?? '—' },
+        ]}
+        current={node.current}
+        status={
+          <>
+            <StatusChip
+              status={status.chipStatus}
+              label={t(status.labelKey)}
+              title={status.titleKey ? t(status.titleKey) : undefined}
+            />
+            <Badge>{t(roleLabelKey(roleOf(member)))}</Badge>
+          </>
+        }
         actions={
           <>
             <Button onClick={onEdit} disabled={alreadyLeft}>
@@ -98,7 +115,6 @@ export function AgentDetailView({
       <div className="mt-5 flex flex-col gap-4">
         {agent.team ? (
           <MemberDetail
-            embedded
             client={teamControl(node)}
             hasToken={hasTokenFor(node)}
             epoch={epoch}
@@ -108,7 +124,6 @@ export function AgentDetailView({
             nodeKey={nodeKeyOf(node)}
             events={node.current ? snapshot.entries : []}
             onBack={onBack}
-            onBackToMember={onBack}
             onOpenSession={onOpenSession}
             onOpenBody={onOpenBody}
           />

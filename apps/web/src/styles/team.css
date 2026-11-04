@@ -52,6 +52,14 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* body transcript 页头：只提供与 `.team-chat-head` / `.team-transcript-scroll`
+   相同的水平节奏（padding），不加分隔线（DESIGN.md §3 无边框体系）。
+   Identity 槽由 EntityHeader 负责，这里不承载排版语义。 */
+.team-body-head {
+  flex: none;
+  padding: 14px clamp(16px, 4vw, 32px);
+}
+
 .team-chat-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -167,27 +175,7 @@
   border-radius: var(--radius-sm);
 }
 
-/* ── 成员详情：数据表与 680 历史条目 ─────────────────── */
-
-.team-body-meta {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px 16px;
-  margin: 12px 0 14px;
-}
-
-.team-body-meta dt {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-  color: var(--faint);
-}
-
-.team-body-meta dd {
-  margin: 2px 0 0;
-  overflow-wrap: anywhere;
-}
+/* ── 成员详情：680 历史条目 ───────────────────────────── */
 
 .team-body-history-item {
   display: flex;

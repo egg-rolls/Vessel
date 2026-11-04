@@ -1,14 +1,22 @@
-import { Button } from '../../components/ui';
+import { Badge, Button, EntityHeader } from '../../components/ui';
 import type { TeamSummary } from '../../gateway/types';
 import { t } from '../../i18n';
 
 export interface TeamChatHeaderProps {
   team: TeamSummary | undefined;
+  /**
+   * 已不进 Identity 槽（DESIGN-0.33.0 I4「id 0 命中」）：缺名时标题走
+   * `entity.unnamed` 占位，team_id 的可达性由 ActionMenu「复制团队 ID」承担。
+   * 保留在签名里是为了不让调用方跟着改。
+   */
   teamId: string;
   archived: boolean;
-  membersShown: number;
-  memberTotal: number;
-  onlineCount: number;
+  /** 父级节点显示名（scope 槽）；缺省则不渲染从属行。 */
+  nodeName?: string;
+  /** 父级就是当前连接的节点。 */
+  nodeCurrent?: boolean;
+  /** 团队被冻结（status 槽，与 archived 并列）。 */
+  frozen?: boolean;
   membersOpen: boolean;
   onToggleMembers: () => void;
   onBackToList: () => void;
@@ -19,11 +27,10 @@ export interface TeamChatHeaderProps {
 
 export function TeamChatHeader({
   team,
-  teamId,
   archived,
-  membersShown,
-  memberTotal,
-  onlineCount,
+  nodeName,
+  nodeCurrent = false,
+  frozen = false,
   membersOpen,
   onToggleMembers,
   onBackToList,
@@ -33,47 +40,38 @@ export function TeamChatHeader({
 }: TeamChatHeaderProps) {
   return (
     <header className="team-chat-head">
-      <div className="min-w-0">
-        <h1 className="font-serif text-title font-semibold wrap-anywhere">
-          {team?.name || teamId}
-        </h1>
-        <div className="mt-1.25 flex flex-wrap items-center gap-2 text-sm text-muted">
-          <span className="font-mono text-2xs text-faint">{teamId}</span>
-          {team?.workspace && (
-            <span className="max-w-80 truncate font-mono" title={team.workspace}>
-              {team.workspace}
-            </span>
-          )}
-          <span>
-            {t('team.chat.descriptionLabel')}: {team?.description || '—'}
-          </span>
-          {archived && (
-            <span className="rounded-full bg-warn-soft px-2 py-0.5 text-xs text-warn">
-              {t('teams.chat.archived')}
-              <span className="text-xs text-faint"> {t('teams.chat.archivedHint')}</span>
-            </span>
-          )}
-          <span>{t('team.chat.memberWindow', { shown: membersShown, total: memberTotal })}</span>
-          <span>{t('team.chat.onlineCount', { count: onlineCount })}</span>
-        </div>
-      </div>
-      <div className="flex flex-none flex-wrap justify-end gap-1.5">
-        <Button
-          id="team-members-toggle"
-          className="team-chat-members-toggle hidden max-wide:inline-flex"
-          aria-expanded={membersOpen}
-          aria-controls="team-members"
-          onClick={onToggleMembers}
-        >
-          {membersOpen ? t('team.a11y.closeMembers') : t('team.chat.members')}
-        </Button>
-        <Button className="team-chat-back hidden max-wide:inline-flex" onClick={onBackToList}>
-          {t('team.chat.backToList')}
-        </Button>
-        <Button onClick={onRefresh} disabled={!hasToken || refreshing}>
-          {refreshing ? t('team.chat.refreshing') : t('team.chat.refresh')}
-        </Button>
-      </div>
+      <EntityHeader
+        title={team?.name?.trim() || t('entity.unnamed')}
+        scope={nodeName ? [{ label: nodeName }] : []}
+        current={nodeCurrent}
+        status={
+          archived || frozen ? (
+            <>
+              {archived && <Badge tone="warn">{t('teams.chat.archived')}</Badge>}
+              {frozen && <Badge tone="warn">{t('teams.frozen')}</Badge>}
+            </>
+          ) : undefined
+        }
+        actions={
+          <>
+            <Button
+              id="team-members-toggle"
+              className="team-chat-members-toggle hidden max-wide:inline-flex"
+              aria-expanded={membersOpen}
+              aria-controls="team-members"
+              onClick={onToggleMembers}
+            >
+              {membersOpen ? t('team.a11y.closeMembers') : t('team.chat.members')}
+            </Button>
+            <Button className="team-chat-back hidden max-wide:inline-flex" onClick={onBackToList}>
+              {t('team.chat.backToList')}
+            </Button>
+            <Button onClick={onRefresh} disabled={!hasToken || refreshing}>
+              {refreshing ? t('team.chat.refreshing') : t('team.chat.refresh')}
+            </Button>
+          </>
+        }
+      />
     </header>
   );
 }

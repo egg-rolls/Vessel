@@ -7,6 +7,7 @@
  * - 本组件只负责展示与转发，不维护队列 / 不自动切换会话。
  */
 import { useMemo } from 'react';
+import { Badge } from '../../components/ui';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -155,9 +156,7 @@ export function TeamPendingBar({
             >
               <div className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">
                 <span className="font-medium text-ink">{memberLabel(member)}</span>
-                <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-accent-ink">
-                  {t('team.pending.ask')}
-                </span>
+                <Badge tone="warn">{t('team.pending.ask')}</Badge>
                 {preview && (
                   <span className="min-w-0 flex-1 truncate text-faint" title={preview}>
                     {preview}

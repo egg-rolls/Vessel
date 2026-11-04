@@ -11,7 +11,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Badge, Button, SearchInput } from '../../components/ui';
+import { Button, SearchInput } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
@@ -237,7 +237,12 @@ function NodeRow({
       <div className="flex min-w-0 flex-1 basis-55 flex-col gap-0.5">
         <span className="inline-flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
           {displayName}
-          {node.current && <Badge tone="accent">{t('nodes.current')}</Badge>}
+          {node.current && (
+            <span className="text-2xs text-faint" title={t('entity.currentNode')}>
+              <span aria-hidden="true">· </span>
+              {t('entity.currentNode')}
+            </span>
+          )}
         </span>
         <span className="min-w-0 wrap-anywhere font-mono text-xs text-faint">
           {displayGatewayUrl(node.url, pageOrigin())}

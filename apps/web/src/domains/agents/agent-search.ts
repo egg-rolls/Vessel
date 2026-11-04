@@ -5,6 +5,7 @@
  */
 import type { RosterAgent } from '../../gateway/team-roster';
 import type { TeamMember } from '../../gateway/types';
+import { t } from '../../i18n';
 
 /** 超过 8 位时截断，与 Team 域的短 id 约定一致。 */
 export function shortAgentId(agentId: string): string {
@@ -13,7 +14,9 @@ export function shortAgentId(agentId: string): string {
 
 export function agentDisplayName(member: Pick<TeamMember, 'name' | 'agent_id'>): string {
   const name = member.name?.trim();
-  return name && name.length > 0 ? name : shortAgentId(member.agent_id);
+  // Identity 槽不允许放 id 片段（DESIGN-0.33.0 I4「id 0 命中」）：缺名时给占位词，
+  // id 的去处是详情页的 KeyValueList（可复制），不是标题。
+  return name && name.length > 0 ? name : t('entity.unnamed');
 }
 
 /** 名称或完整 id 命中即可（显示的是短 id，但搜索接受完整 id）。 */
