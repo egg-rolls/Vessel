@@ -4,12 +4,7 @@
  * UI 每次只发一条；`results[0].ok === false` 必须按失败处理，
  * 不能把批量响应当成成功，也不能吞掉服务端 error。
  */
-import type {
-  AgentBatchResponse,
-  AgentRotateResponse,
-  AgentRotateSuccess,
-  AgentSummary,
-} from './types';
+import type { AgentBatchResponse, AgentSummary } from './types';
 
 export class AgentActionResultError extends Error {
   constructor(
@@ -34,19 +29,4 @@ export function unwrapAgentResult(body: AgentBatchResponse): AgentSummary {
     );
   }
   return first.agent ?? {};
-}
-
-/** `agents.rotate` 单条目；失败保留 code（body_not_live / member_stale / active_run）。 */
-export function unwrapAgentRotate(body: AgentRotateResponse): AgentRotateSuccess {
-  const first = body?.results?.[0];
-  if (!first) {
-    throw new AgentActionResultError('invalid_response', 'agents.rotate returned no results');
-  }
-  if (!first.ok) {
-    throw new AgentActionResultError(
-      first.code ?? 'internal',
-      first.error ?? 'Agent rotate failed',
-    );
-  }
-  return first;
 }

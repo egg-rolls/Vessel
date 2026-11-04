@@ -22,9 +22,7 @@ export type PrefixChangeReason =
   | 'session_switch'
   | 'branch'
   | 'resume'
-  | 'context_trim'
-  // 0.37：消息撤回（删除尾部历史）也是一次显式前缀失效。
-  | 'rewind';
+  | 'context_trim';
 
 /** 一次守卫检查的输入 */
 export interface PromptPrefixCheckInput {

@@ -76,6 +76,8 @@ const SYSTEM_CONTENT: Record<TeamSystemEvent, string> = {
   archive: 'agent archived',
   rotate: 'agent rotated body',
   budget_override: 'budget limit overridden',
+  create: 'agent created',
+  // 旧日志只读；新代码不再写 `system_event:'fork'`。
   fork: 'agent forked',
   // retract 的 tombstone 由 retract() 自己写（content 为空，UI 按 system_event 渲染）；
   // 这里只满足 Record 完整性，不会被 systemEventFor 选中。
@@ -1494,12 +1496,18 @@ export class DefaultTeamService implements AgentTeamService {
   private systemEventFor(event: AgentEvent): TeamSystemEvent | undefined {
     switch (event.type) {
       case 'agent.spawned':
+        // CREATE-0.39：有来源的创建（公共 seeded create / 内部 dispatch 自动创建）
+        // 必须派生 `create`，不能退化成 `join`。
+        return event.source_agent_id !== undefined || event.from_session_id !== undefined
+          ? 'create'
+          : 'join';
       case 'agent.rejoined':
         return 'join';
       case 'agent.closed':
         return this.archiveInFlight.has(event.agent_id) ? 'archive' : 'leave';
       case 'agent.rotated':
         return 'rotate';
+      // 旧日志只读；新代码不再写 `agent.forked`。
       case 'agent.forked':
         return 'fork';
       default:

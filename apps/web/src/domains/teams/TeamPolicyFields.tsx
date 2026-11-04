@@ -224,16 +224,16 @@ export function TeamPolicyFields({ idPrefix, form, errors, onChange }: TeamPolic
       </fieldset>
 
       <Field
-        label={t('team.form.policyAllowFork')}
-        htmlFor={id('allow-fork')}
-        hint={t('team.form.policyAllowForkHint')}
+        label={t('team.form.policyAllowAutoCreate')}
+        htmlFor={id('allow-auto-create')}
+        hint={t('team.form.policyAllowAutoCreateHint')}
       >
         <input
-          id={id('allow-fork')}
+          id={id('allow-auto-create')}
           type="checkbox"
           className="h-4 w-4 accent-accent"
-          checked={form.allowFork}
-          onChange={(event) => onChange({ allowFork: event.target.checked })}
+          checked={form.allowAutoCreate}
+          onChange={(event) => onChange({ allowAutoCreate: event.target.checked })}
         />
       </Field>
     </div>

@@ -27,8 +27,8 @@ import { useChatTranscript } from './useChatTranscript';
 
 type ChatRoute = Extract<Route, { domain: 'chat' }>;
 
-/** 待确认的历史消息操作：keepMessages 是 `sessions.get` 的 session.messages 下标。 */
-interface RewindTarget {
+/** 待确认的历史消息分支操作：keepMessages 是 `sessions.get` 的 session.messages 下标。 */
+interface CreateTarget {
   kind: 'edit' | 'retry';
   sessionId: string;
   keepMessages: number;
@@ -55,7 +55,6 @@ export function ChatView({
 }) {
   const {
     client,
-    eventStore,
     hasToken,
     connectionState,
     epoch,
@@ -87,8 +86,8 @@ export function ChatView({
   const pendingNewSessions = useRef(new Set<string>());
   const compact = useViewportWidth() <= RAIL_MAX_WIDTH;
   const [composerFocus, setComposerFocus] = useState(0);
-  const [rewindTarget, setRewindTarget] = useState<RewindTarget | null>(null);
-  const [rewinding, setRewinding] = useState(false);
+  const [createTarget, setCreateTarget] = useState<CreateTarget | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const drawerRef = useDrawerA11y({
     open: sessionsOpen,
@@ -211,50 +210,65 @@ export function ChatView({
   const stopHandler =
     connected && runningGroup ? () => void submitApi.handleCancel(runningGroup) : undefined;
 
-  // 编辑 / 重试都会删除历史：先确认，确认后 rewind → 丢实时事件 → reload → 回填或重发。
-  const openRewind = (kind: RewindTarget['kind'], keepMessages: number, text: string) => {
+  // 编辑 / 重试不再截断历史：先确认，确认后从源 session 前缀创建新 session
+  // （`sessions.create{from_session_id, keep_messages}`），源 session 保留只读。
+  const openCreate = (kind: CreateTarget['kind'], keepMessages: number, text: string) => {
     if (!selectedId) return;
-    setRewindTarget({ kind, sessionId: selectedId, keepMessages, text });
+    setCreateTarget({ kind, sessionId: selectedId, keepMessages, text });
   };
   const handleEditMessage = (keepMessages: number, text: string) => {
-    openRewind('edit', keepMessages, text);
+    openCreate('edit', keepMessages, text);
   };
   const handleRetryMessage = (keepMessages: number, text: string) => {
-    openRewind('retry', keepMessages, text);
+    openCreate('retry', keepMessages, text);
   };
 
-  const handleConfirmRewind = async () => {
-    const target = rewindTarget;
-    if (!target || rewinding) return;
+  /**
+   * `sessions.create{from_session_id}` 要求源 session 是当前 primary。
+   * 查看历史会话时先 `sessions.activate` 把它恢复为 primary；roster 没给 primary
+   * 集合（旧 gateway）时跳过，交给服务端返回 conflict。
+   */
+  const activateSourceIfRetained = async (sessionId: string) => {
+    const primaries = sessionsApi.primarySessionIds;
+    if (primaries.size === 0 || primaries.has(sessionId)) return;
+    await client.activateSession({ session_id: sessionId });
+  };
+
+  const handleConfirmCreate = async () => {
+    const target = createTarget;
+    if (!target || creating) return;
     // 确认框打开期间切换了会话：不把旧下标发到新会话。
     if (target.sessionId !== selectedId) {
-      setRewindTarget(null);
+      setCreateTarget(null);
       return;
     }
-    setRewinding(true);
+    setCreating(true);
+    let nextSessionId: string;
     try {
-      await client.rewindSession(target.sessionId, target.keepMessages);
-      // 不等 session.rewound 回放：立即丢弃该会话的实时事件。
-      eventStore.dropSession(target.sessionId);
-      await sessionsApi.loadSessionDetail(client, target.sessionId, { epoch, force: true });
-      // 列表的 message_count / preview 也变了：后台刷新，不阻塞回填 / 重发。
+      await activateSourceIfRetained(target.sessionId);
+      const created = await client.createSession({
+        from_session_id: target.sessionId,
+        keep_messages: target.keepMessages,
+      });
+      nextSessionId = created.session_id;
+      // 新 session 已成为 primary；列表需要刷新才能显示它。
       void sessionsApi.loadSessions(client, { epoch, force: true });
     } catch (error) {
       toast.error(errorMessage(error));
-      setRewinding(false);
+      setCreating(false);
       return;
     }
-    // 服务端历史已删、detail 已重载：先收起确认框，再回填 / 重发。
-    setRewindTarget(null);
-    setRewinding(false);
+    // 源 session 保留（只读）：切到新 session 后回填 / 重发。
+    setCreateTarget(null);
+    setCreating(false);
+    navigate({ domain: 'chat', sessionId: nextSessionId });
+    submitApi.setInput(target.text);
     if (target.kind === 'edit') {
-      submitApi.setInput(target.text);
       setComposerFocus((value) => value + 1);
-      toast.success(t('chat.message.rewind.done'));
+      toast.success(t('chat.message.create.editDone'));
     } else {
       // 先回填再重发：重发失败时原文仍留在输入框。
-      submitApi.setInput(target.text);
-      await submitApi.handleRetry(target.text);
+      await submitApi.handleRetry(target.text, nextSessionId);
     }
   };
 
@@ -379,24 +393,23 @@ export function ChatView({
         />
       </section>
 
-      {rewindTarget && (
+      {createTarget && (
         <ConfirmDialog
-          danger
           title={
-            rewindTarget.kind === 'edit'
-              ? t('chat.message.rewind.editTitle')
-              : t('chat.message.rewind.retryTitle')
+            createTarget.kind === 'edit'
+              ? t('chat.message.create.editTitle')
+              : t('chat.message.create.retryTitle')
           }
           body={
-            rewindTarget.kind === 'edit'
-              ? t('chat.message.rewind.editBody')
-              : t('chat.message.rewind.retryBody')
+            createTarget.kind === 'edit'
+              ? t('chat.message.create.editBody')
+              : t('chat.message.create.retryBody')
           }
-          confirmLabel={t('chat.message.rewind.confirm')}
-          busy={rewinding}
-          onConfirm={() => void handleConfirmRewind()}
+          confirmLabel={t('chat.message.create.confirm')}
+          busy={creating}
+          onConfirm={() => void handleConfirmCreate()}
           onCancel={() => {
-            if (!rewinding) setRewindTarget(null);
+            if (!creating) setCreateTarget(null);
           }}
         />
       )}

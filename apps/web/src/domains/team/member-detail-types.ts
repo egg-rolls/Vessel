@@ -1,8 +1,8 @@
 import type {
-  AgentRotateInput,
-  AgentRotateSuccess,
   AgentSummary,
   AgentUpdateInput,
+  SessionCreateInput,
+  SessionCreateResult,
   SessionDetail,
   TeamDetail,
 } from '../../gateway/types';
@@ -12,7 +12,8 @@ import type { TeamChatClient } from './TeamChat';
 export interface MemberDetailClient extends TeamChatClient {
   getSession(sessionId: string): Promise<SessionDetail>;
   updateAgent(input: AgentUpdateInput): Promise<AgentSummary>;
-  rotateAgent(input: AgentRotateInput): Promise<AgentRotateSuccess>;
+  /** 0.39：新建 session（无来源）；旧 session 退役但保留。 */
+  createSession(input: SessionCreateInput): Promise<SessionCreateResult>;
 }
 
 export interface MemberDetailProps {

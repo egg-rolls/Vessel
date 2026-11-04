@@ -166,7 +166,8 @@ export interface PersistedAgentRecord {
   bodies?: PersistedBindingRecord[];
   /** 0.27：primary binding 的 body_id */
   primary_body_id?: string;
-  forked_from?: string;
+  /** 创建来源 agent（持久化键 `source_agent_id`；旧 `forked_from` 不识别） */
+  source_agent_id?: string;
   current_tool?: string;
   last_seen?: number;
   usage?: Usage;
@@ -285,11 +286,11 @@ export interface MemberExecutionPort {
   dispose(member: MemberExecutionMember): Promise<void> | void;
   /**
    * Stage 3（additive，可选）：当前 session 有效 SessionLease 的 fencingToken。
-   * 用于 restart/compactFork 的 conflict payload 与生命周期事件。
+   * 用于 sessions.restart / sessions.create 的 conflict payload 与生命周期事件。
    */
   sessionLeaseToken?(sessionId: string): number | undefined;
   /**
-   * Stage 3（additive，可选）：compactFork 预取新 primary 的 SessionLease。
+   * Stage 3（additive，可选）：sessions.create / restart / activate 预取新 primary 的 SessionLease。
    * `minFence` 保证新 token 高于旧 primary 释放前的 token。
    */
   ensureSessionLease?(sessionId: string, minFence?: number): Promise<LeaseGrant | undefined>;
@@ -557,6 +558,15 @@ export interface CreateMemberInput {
    * 首个绑定该 workspace 的 Agent 隐式创建 Team；无 name 时拒绝绑定。
    */
   workspace?: string;
+  /**
+   * CREATE-0.39：来源 session。传了即以该 session 的稳定 transcript 为新
+   * session 的种子；不传 = 冷建。源 agent / 源 session 零改动。
+   */
+  from_session_id?: string;
+  /** 仅 `from_session_id` 存在时合法；缺省 copy */
+  seed?: CreateSeed;
+  /** 仅 `from_session_id` 存在时合法；`sessions.get().messages` 下标 */
+  keep_messages?: number;
 }
 
 /** 批量创建（条目并行，逐条结果） */
@@ -684,10 +694,10 @@ export interface DispatchInput {
    */
   origin_team_id?: string;
   /**
-   * 0.20：本次投递是否允许在 resume 失败后 fork 新 Agent。
-   * 缺省看 team policy `allowFork`（默认关闭）；显式值覆盖 policy。
+   * 本次投递是否允许在 resume 失败后自动创建新 Agent。
+   * 缺省看 team policy `allowAutoCreate`（默认关闭）；显式值覆盖 policy。
    */
-  allow_fork?: boolean;
+  allow_auto_create?: boolean;
 }
 
 /** dispatch 结果：queued 表示已入队；rejected 是明确的业务拒绝 */
@@ -696,7 +706,7 @@ export type DispatchResult =
       status: 'queued';
       message_id: string;
       resolved_to: string;
-      resolution: 'live' | 'resumed' | 'rotating' | 'forked';
+      resolution: 'live' | 'resumed' | 'rotating' | 'created';
       /** 0.19 S4；实现始终返回，类型保持 additive */
       conversation_id?: string;
     }
@@ -705,7 +715,8 @@ export type DispatchResult =
       code:
         | 'agent_left'
         | 'resume_failed'
-        | 'fork_failed'
+        | 'auto_create_failed'
+        | 'auto_create_not_allowed'
         | 'team_full'
         | 'team_frozen'
         | 'not_visible'
@@ -715,148 +726,79 @@ export type DispatchResult =
       reason: string;
     };
 
-/**
- * rotate：Agent 换一具新 ExecutionUnit；id / name / owner / 配置不变。
- * startup_prompt 必填，作为新 ExecutionUnit 的第一条消息。
- */
-export interface RotateInput {
-  /** agent id | 当前 ExecutionUnit 的 session_id | 唯一 name */
-  to: string;
-  startup_prompt: string;
-  /** 调用者当前 ExecutionUnit 的 session；agent 工具路径必填，CLI / owner 路径缺省 */
+/** CREATE-0.39：种子方式；缺省 copy，compact 必须显式 */
+export type CreateSeed = 'copy' | 'compact';
+
+/** `sessions.create`：无来源 = 空 session；有来源 = 复制 / 压缩前缀 */
+export interface SessionCreateInput {
+  /** 无来源时必填；有来源时可省（由源推断），两者不一致 → invalid_params */
+  agent_id?: string;
+  /** 来源 session；必须是该 agent 当前 primary */
   from_session_id?: string;
-  /** 可见性判定；缺省 DEFAULT_OWNER */
-  from?: string;
-}
-
-/** rotate 结果：failed 表示旧指针保持不变 */
-export type RotateResult =
-  | {
-      status: 'rotated';
-      agent_id: string;
-      from_session_id: string;
-      to_session_id: string;
-      epoch: number;
-    }
-  | {
-      status: 'failed';
-      code:
-        | 'rotate_failed'
-        | 'agent_left'
-        | 'not_current_body'
-        | 'body_not_live'
-        | 'rotating'
-        | 'not_visible';
-      reason: string;
-    };
-
-/**
- * restart：同一 Session 原地换一具 ExecutionUnit（同 binding id，epoch+1）。
- * 旧 Binding 退役进 history，新 Binding 同 id 入主位；旧 EU 先停、新 EU 后建。
- */
-export interface RestartInput {
-  /** agent id | 当前 ExecutionUnit 的 session_id | 唯一 name */
-  to: string;
-  /** 重启后作为新 EU 首轮的输入；缺省不起新 run */
+  seed?: CreateSeed;
+  /** `sessions.get().messages` 下标；缺省全量 */
+  keep_messages?: number;
   startup_prompt?: string;
-  /** 调用者当前 ExecutionUnit 的 session；agent 工具路径必填，CLI / owner 路径缺省 */
-  from_session_id?: string;
-  /** 可见性判定；缺省 DEFAULT_OWNER */
-  from?: string;
+  /** conversation（缺省）/ both（同时做文件回滚；agent 层只透传） */
+  mode?: 'conversation' | 'both';
+  files?: { ref: string; paths: string[] };
 }
-
-/** restart 结果：failed 时旧 binding 已退役（不回滚到旧 EU） */
-export type RestartResult =
-  | {
-      status: 'restarted';
-      agent_id: string;
-      session_id: string;
-      from_epoch: number;
-      epoch: number;
-    }
-  | {
-      status: 'failed';
-      code:
-        | 'conflict'
-        | 'agent_left'
-        | 'not_current_body'
-        | 'body_not_live'
-        | 'not_visible'
-        | 'restart_failed';
-      reason: string;
-      /** conflict 时：当前 active run / 目标 session / 有效 SessionLease token */
-      run_id?: string;
-      session_id?: string;
-      lease_token?: number | null;
-      epoch?: number;
-    };
 
 /**
- * compactFork：同 Agent 新建 Session（epoch+1，成为新 primary），
- * 以父 Session transcript 的压缩副本作为子 Session 种子；父 Session / binding 不动。
+ * `sessions.create` 的内部选项（不是 wire 字段）。
+ *
+ * `allowActiveRun` 只给内置 `agent` 工具的 rotate 动作使用：工具在调用者自身的
+ * active run 内执行，必须能换体；RPC 路径不传，仍按契约返回
+ * `conflict` + `run_in_progress`。
  */
-export interface CompactForkInput {
-  /** agent id | 当前 ExecutionUnit 的 session_id | 唯一 name */
-  to: string;
-  /** 子 Session 首轮输入；缺省不起新 run */
+export interface SessionCreateInternalOptions {
+  allowActiveRun?: boolean;
+}
+
+export interface SessionCreateResult {
+  agent_id: string;
+  session_id: string;
+  /** 无来源时缺省 */
+  source_session_id?: string;
+  seed?: CreateSeed;
+  keep_messages?: number;
+  keep_projected?: number;
+  copied_messages?: number;
+  /** 新 session 恒为 primary */
+  primary: true;
+  /** 仅 mode=both（文件回滚由入口层执行） */
+  files_restored?: number;
+  files_skipped?: number;
+}
+
+/** `sessions.restart`：同一 session 换 binding（epoch+1） */
+export interface SessionRestartInput {
+  session_id: string;
+  /** 换体后首条输入；给了才起 run */
   startup_prompt?: string;
-  /** 调用者当前 ExecutionUnit 的 session */
-  from_session_id?: string;
-  /** 可见性判定；缺省 DEFAULT_OWNER */
-  from?: string;
 }
 
-/** compactFork 结果 */
-export type CompactForkResult =
-  | {
-      status: 'compact_forked';
-      agent_id: string;
-      from_session_id: string;
-      to_session_id: string;
-      epoch: number;
-    }
-  | {
-      status: 'failed';
-      code:
-        | 'conflict'
-        | 'agent_left'
-        | 'not_current_body'
-        | 'body_not_live'
-        | 'not_visible'
-        | 'compact_fork_failed';
-      reason: string;
-      /** conflict 时：当前 active run / 目标 session / 有效 SessionLease token */
-      run_id?: string;
-      session_id?: string;
-      lease_token?: number | null;
-      epoch?: number;
-    };
-
-/** fork（Agent 级）：新 Agent、空 Session、不复制 transcript */
-export interface ForkInput {
-  /** 源 agent id | session_id | 唯一 name */
-  to: string;
-  /** 新 Agent 名；缺省 `<source>-fork[-n]` */
-  name?: string;
-  /** 可见性判定；缺省 DEFAULT_OWNER */
-  from?: string;
+export interface SessionRestartResult {
+  agent_id: string;
+  session_id: string;
+  from_epoch: number;
+  epoch: number;
 }
 
-/** fork 结果（与 create 一致的对外 MemberStatus） */
-export type ForkResult =
-  | { ok: true; member: MemberStatus; from_agent_id: string }
-  | {
-      ok: false;
-      code:
-        | 'fork_not_allowed'
-        | 'fork_failed'
-        | 'agent_left'
-        | 'team_full'
-        | 'team_frozen'
-        | 'not_visible'
-        | 'unknown_member';
-      reason: string;
-    };
+/** `sessions.activate`：把 current primary 或 bindingHistory 中的 session 切回 primary */
+export interface SessionActivateInput {
+  session_id: string;
+  startup_prompt?: string;
+}
+
+export interface SessionActivateResult {
+  agent_id: string;
+  session_id: string;
+  previous_session_id: string;
+  epoch: number;
+  /** 目标本来就是当前 primary 时为 true */
+  noop: boolean;
+}
 
 /**
  * roster add（0.19 S3）：把 Agent 绑定到 Team 并恢复 present。
@@ -953,6 +895,20 @@ export interface AgentEvent {
   team_id?: string;
   /** 调用者 id（仅 `agent.spawned`；不持久化） */
   spawned_by?: string;
+  /** CREATE-0.39：`agent.spawned` 带来源时的源 agent id（wire snake_case） */
+  source_agent_id?: string;
+  /** CREATE-0.39：种子方式（有来源创建） */
+  seed?: CreateSeed;
+  /** CREATE-0.39：请求的保留边界 / 实际复制条数 */
+  keep_messages?: number;
+  copied_messages?: number;
+  keep_projected?: number;
+  /** CREATE-0.39：`session.created` 的 new / source 两侧 */
+  side?: 'new' | 'source';
+  /** CREATE-0.39：文件回滚入口（仅 sessions.create mode=both） */
+  mode?: 'conversation' | 'both';
+  files_restored?: number;
+  files_skipped?: number;
   /** 会话分组（0.19 S4；system 事件可能缺省） */
   conversation_id?: string;
   /** 本轮 usage（run.* 终态由 core 事件携带，AgentEvent 不再填） */
@@ -974,7 +930,7 @@ export interface AgentEvent {
   message_id?: string;
   /** 消息来源（queued 事件） */
   from?: string;
-  /** 事件目标（0.20 `agent.forked` / `agent.reply.dropped`；与 from 成对） */
+  /** 事件目标（`agent.create.failed` / `agent.session.activated` 等；与 from 成对） */
   to?: string;
   tool?: string;
   outcome?: TurnOutcome;
@@ -997,13 +953,13 @@ export interface AgentServiceOptions {
   /** 0.27：每 tenant 唯一调度器（必填）；执行只经 scheduler executor */
   scheduler: Scheduler;
   /**
-   * 0.34 Stage 3：compactFork 的压缩摘要器（与 tenant 上下文共用）。
+   * 0.34 Stage 3：seeded create（seed=compact）的压缩摘要器（与 tenant 上下文共用）。
    * 缺省用占位摘要；装配层应传入真实 summarizer。
    */
   summarizer?: ContextSummarizer;
   /**
-   * 0.34 S2：compactFork 的压缩预算（与 tenant 上下文共用）。
-   * 缺省时 `compactMessagesForFork` 按 1M 兜底。
+   * 0.34 S2：seeded create（seed=compact）的压缩预算（与 tenant 上下文共用）。
+   * 缺省时 `compactMessagesForSeed` 按 1M 兜底。
    */
   contextMaxTokens?: number;
   /**
@@ -1021,10 +977,16 @@ export interface AgentServiceOptions {
   /** 两级租约服务（Stage 3）；缺省无锁（纯内存测试） */
   leaseService?: LeaseServicePort;
   /**
-   * 会话事件日志（Stage 3 compactFork）：读取父 session 的 transcript、
-   * 把压缩副本写成子 session 的 `message.injected` 事件。缺省时 compactFork 失败。
+   * 会话事件日志（Stage 3 seeded create）：读取来源 session 的 transcript、
+   * 把种子写成新 session 的 `message.injected` 事件。缺省时 seeded create 失败。
    */
   eventLog?: SessionEventLogPort;
+  /**
+   * 内部 create 失败清理（不是 RPC / wire）：删除新 session 的事件日志 / 元数据。
+   * 在「事件已写、primary 切换失败」后 best-effort 调用；缺省时只记录
+   * `agent.create_cleanup_skipped`，不残留兼容分支。
+   */
+  deleteSessionData?: (sessionId: string) => Promise<void>;
   /**
    * Stage 4：成员 run durable 的 RunRecord 存储（内部装配选项，不是公开 RPC）。
    * `resumeRun` 用它按 run_id 加载记录；缺省时成员 resume 不可用。
@@ -1119,24 +1081,24 @@ export interface AgentService {
    */
   resumeRun(runId: string, opts?: RunOptions): Promise<string>;
   /**
-   * 换一具新 ExecutionUnit：旧 ExecutionUnit 跑完当前轮后退役，新 ExecutionUnit 以 startup_prompt 开始。
-   * 失败保持旧指针，不自动 fork / 重试。
+   * `sessions.create`（CREATE-0.39）：同 agent 新 session，成为唯一 primary；
+   * 无来源 = 空 session；有来源 = copy / compact 前缀。旧 primary 退役进
+   * `bindingHistory`，旧 session 必须 `activateSession` 才能再跑。
    */
-  rotate(input: RotateInput): Promise<RotateResult>;
+  createSession(
+    input: SessionCreateInput,
+    internal?: SessionCreateInternalOptions,
+  ): Promise<SessionCreateResult>;
   /**
-   * 同一 Session 原地换体：binding id 不变、epoch+1；旧 EU 先 dispose / 释放租约，
-   * 新 EU 后建。有 active run 时返回 `conflict`，不隐式取消。
+   * `sessions.restart`（CREATE-0.39）：同一 session 原地换 binding（epoch+1）；
+   * 旧 binding 退役进 `bindingHistory`；失败回滚到旧 binding。
    */
-  restart(input: RestartInput): Promise<RestartResult>;
+  restartSession(input: SessionRestartInput): Promise<SessionRestartResult>;
   /**
-   * 同 Agent 新建 Session（epoch+1、新 primary），以父 transcript 的压缩副本为种子；
-   * 父 Session / binding 不动。没有 eventLog 时返回 `compact_fork_failed`。
+   * `sessions.activate`（CREATE-0.39）：把 `bindingHistory` 中的 session 切回 primary；
+   * epoch = 当前 primary epoch + 1；目标已是 primary 时返回 `noop: true`。
    */
-  compactFork(input: CompactForkInput): Promise<CompactForkResult>;
-  /**
-   * Agent 级 fork：新 Agent、空 Session、不复制 transcript；权限 / 可见性同 `create`。
-   */
-  fork(input: ForkInput): Promise<ForkResult>;
+  activateSession(input: SessionActivateInput): Promise<SessionActivateResult>;
   /**
    * delete 前置钩子（Stage 3）：有 active run → 抛 `conflict`；否则 dispose 对应 EU、
    * 释放 binding 租约、退役 binding、清 primary 指针。未知 session 幂等返回。
@@ -1232,7 +1194,7 @@ export interface TeamRecord {
   created_at: number;
   /** S10.3 additive：归档时间（epoch ms）；存在即只读，无删除路径 */
   archived_at?: number;
-  /** 0.27 additive：冻结期间拒绝该 Team 的所有创建 / fork / reinstate */
+  /** 0.27 additive：冻结期间拒绝该 Team 的所有创建 / 自动创建 / reinstate */
   spawn_frozen?: boolean;
 }
 
@@ -1278,6 +1240,8 @@ export type TeamSystemEvent =
   | 'rotate'
   | 'archive'
   | 'budget_override'
+  | 'create'
+  /** 旧日志只读值；新代码不再写 `'fork'`。 */
   | 'fork'
   | 'retract';
 
@@ -1363,7 +1327,7 @@ export interface TeamDelivery {
   agent_id: string;
   status: 'queued' | 'rejected' | 'error';
   message_id?: string;
-  resolution?: 'live' | 'resumed' | 'rotating' | 'forked';
+  resolution?: 'live' | 'resumed' | 'rotating' | 'created';
   code?: string;
   reason?: string;
 }
@@ -1451,7 +1415,7 @@ export interface TeamAgentSendResult {
   status: 'queued' | 'rejected' | 'error';
   resolved_to?: string;
   message_id?: string;
-  resolution?: 'live' | 'resumed' | 'rotating' | 'forked';
+  resolution?: 'live' | 'resumed' | 'rotating' | 'created';
   code?: string;
   reason?: string;
   /** 是否写入了同 Team 的 mention 日志 */
@@ -1542,7 +1506,7 @@ export interface TeamBinder {
     description?: string;
     policy?: Record<string, unknown>;
   }): Promise<TeamRecord>;
-  /** 0.20 fork：只读 TeamRecord（workspace）；不存在返回 undefined */
+  /** 自动创建：只读 TeamRecord（workspace）；不存在返回 undefined */
   get(teamId: string): TeamRecord | undefined;
 }
 

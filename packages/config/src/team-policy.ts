@@ -363,12 +363,15 @@ function normalizeTeamPolicy(policy: unknown, issues: TeamPolicyIssue[]): TeamPo
 
   const result: TeamPolicy = {};
   for (const [key, value] of Object.entries(policy)) {
-    if (key === 'allowFork' || key === 'allow_fork') {
+    if (key === 'allowAutoCreate' || key === 'allow_auto_create') {
       if (typeof value !== 'boolean') {
-        issues.push({ field: 'allowFork', message: 'policy.allowFork must be a boolean' });
+        issues.push({
+          field: 'allowAutoCreate',
+          message: 'policy.allowAutoCreate must be a boolean',
+        });
         continue;
       }
-      result.allowFork = value;
+      result.allowAutoCreate = value;
       continue;
     }
     if (key === 'permission') {

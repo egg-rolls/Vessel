@@ -98,6 +98,14 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
  * `agent.restarted` / `agent.compact_forked`）不在此列，聊天窗继续显示。
  */
 export const CHAT_HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set([
+  // 0.39：session 创建 / 源退役 / primary 切换审计事件不是对话内容。
+  'session.created',
+  'session.activated',
+  'agent.session.activated',
+  // 0.39：create 失败只做审计；旧 `agent.fork.failed` 仍按旧日志渲染。
+  'agent.create.failed',
+  // 旧 fork 事件只读：web 隐藏原始 JSON 卡；`agent.compact_forked` 仍有 typed notice。
+  'agent.forked',
   // rewind 是历史删除的持久化标记，不是对话内容：永不渲染。
   'session.rewound',
   'agent.spawned',

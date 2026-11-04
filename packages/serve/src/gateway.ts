@@ -1065,6 +1065,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       sessionData: opts.sessionData,
       runStoreFor: (tenantId) => durableForTenant(tenantId)?.store,
       runtimeFor: opts.runtimeFor,
+      // CREATE-0.39：sessions.create|restart|activate 与 agents.* 共用同一注入面。
+      ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
+      ...(opts.tenants !== undefined ? { tenants: opts.tenants } : {}),
     }),
     ...createRunMethods({
       defaultTenantId,
@@ -1146,6 +1149,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       defaultTenantId,
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
       ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
+      // CREATE-0.39：`agents.create{keep_messages}` 按 `sessions.get().messages` 校验。
+      ...(opts.sessionFor !== undefined ? { sessionFor: opts.sessionFor } : {}),
     }),
     // 0.19 S3：本地 Team 控制面（canonical teams.*；additive，排在表尾）。
     ...createTeamMethods({ teams: opts.teams }),
@@ -1909,8 +1914,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       case 'run_already_running':
       case 'tenant_locked':
       case 'compact_unavailable':
-      // CONTRACT-0.37：sessions.rewind 无 runtime / 方法 → 409（与 compact 一致）。
-      case 'rewind_unavailable':
         return 409;
       case 'busy':
         return 429;

@@ -118,15 +118,17 @@ export function useChatSubmit({
 
   /**
    * 提交一段文本（发送与重试共用）：草稿态建新 agent，已有会话按 session 投递。
+   * `sessionIdOverride` 用于 edit / retry：新 session 已由 `sessions.create` 建好，
+   * 但当前路由还没切过去，不能依赖 `selectedId`。
    * 返回是否成功发起，供调用方决定是否给出「已重新发起」之类反馈。
    */
-  const submitText = async (raw: string): Promise<boolean> => {
+  const submitText = async (raw: string, sessionIdOverride?: string): Promise<boolean> => {
     const text = raw.trim();
     if (!text || submitting || !connected) return false;
     // 0.28（CONTRACT §3）：草稿态 = 一个新 agent。先 `agents.create`（只给客户端生成的
     // 唯一名）拿 `{id, session_id}`，再 `runs.start{agent_id}`；`runs.start` 失败时
     // best-effort 回收，不留空 agent。选中已有会话时按 session 投递，行为不变。
-    const targetSessionId = selectedId;
+    const targetSessionId = sessionIdOverride ?? selectedId;
     setSubmitting(true);
     try {
       let nextSessionId: string | undefined;
@@ -187,9 +189,9 @@ export function useChatSubmit({
     await submitText(input);
   };
 
-  /** 重试：把用户内容在原 session 重新提交；历史删除由调用方确认后先完成。 */
-  const handleRetry = async (text: string) => {
-    await submitText(text);
+  /** 重试：把用户内容提交到指定 session（默认当前会话）。 */
+  const handleRetry = async (text: string, sessionId?: string) => {
+    await submitText(text, sessionId);
   };
 
   // 引用保持稳定：memo(RunItems) 依赖这几个回调，避免每个 token 让全部实时项重渲染。

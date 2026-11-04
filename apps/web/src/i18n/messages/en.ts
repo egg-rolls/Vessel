@@ -521,13 +521,17 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.system.archive': 'The Team was archived',
   'team.system.rotate': '{name} started a new session',
   'team.system.rotateFailed': '{name} failed to start a new session',
-  'team.system.fork': 'agent forked',
+  'team.system.create': '{name} created a new session',
+  // Legacy log only: 0.39 writes `create`, never `fork`.
+  'team.system.fork': 'agent forked (legacy record)',
   'team.system.retract': '{name} retracted a message',
   'team.system.unknown': 'Team system event',
 
   'team.delivery.queued': 'Queued',
   'team.delivery.queuedRotating': 'Waiting for the next session',
-  'team.delivery.queuedForked': 'Forked and queued',
+  'team.delivery.queuedCreated': 'Created and queued',
+  // Legacy log only: 0.39 writes `created`, never `forked`.
+  'team.delivery.queuedForked': 'Forked and queued (legacy record)',
   'team.delivery.rejected': 'Rejected',
   'team.delivery.error': 'Delivery failed',
   'team.delivery.retry': 'Send again',
@@ -575,20 +579,22 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.member.observedOnly':
     'Observed during this page session; after a refresh only the current session is shown.',
   'team.member.currentSession': 'View current session',
-  'team.member.rotate.open': 'New context',
-  'team.member.rotate.title': 'Start a new context',
+  'team.member.rotate.open': 'New session',
+  'team.member.rotate.title': 'Start a new session',
   'team.member.rotate.description':
-    'Switches {name} to a new body. The old body is retired and its session stays read-only.',
-  'team.member.rotate.startupLabel': 'Startup prompt (first message of the new body)',
-  'team.member.rotate.confirm': 'Start new context',
-  'team.member.rotate.success': 'Started a new context for {name}',
+    'Creates a new empty session for {name} and makes it primary. The previous session is retired but kept; history is not deleted.',
+  'team.member.rotate.startupLabel': 'Startup prompt (first message of the new session)',
+  'team.member.rotate.confirm': 'Create session',
+  'team.member.rotate.success':
+    'Created a new session for {name}; the previous one is kept read-only.',
   'team.member.rotate.defaultPrompt':
     'You are {name}. Continue with your previous responsibilities and the current task.',
-  'team.member.rotate.error.bodyNotLive':
-    'This member has no live body right now. Refresh and try again.',
-  'team.member.rotate.error.memberStale': 'The member changed. Refresh and try again.',
-  'team.member.rotate.error.activeRun':
-    'This member still has a run in progress. Wait for it to finish or cancel it.',
+  'team.member.rotate.error.notFound': 'Member not found. Refresh and try again.',
+  'team.member.rotate.error.conflict':
+    'This member cannot start a new session right now (running, closed, or Team limit).',
+  'team.member.rotate.error.invalid':
+    'Invalid parameters for the new session. Refresh and try again.',
+  'team.member.rotate.error.quota': 'Session quota is exhausted; cannot create a new session.',
   'team.member.peer': 'member',
   'team.member.contractor': 'temporary',
   'team.role.member': 'member',
@@ -842,8 +848,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.form.policyFederationAccept': 'Accept',
   'team.form.policyAcceptPrincipal': 'principal (one member)',
   'team.form.policyAcceptLog': 'log (log only)',
-  'team.form.policyAllowFork': 'Allow fork',
-  'team.form.policyAllowForkHint':
+  'team.form.policyAllowAutoCreate': 'Allow auto-create',
+  'team.form.policyAllowAutoCreateHint':
     'Checked writes the key; unchecked leaves it unset (default off).',
   'teams.edit.back': 'Back to Team',
   'agents.search': 'Search agents',
@@ -1067,14 +1073,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.message.copied': 'Copied',
   'chat.message.edit': 'Edit',
   'chat.message.retry': 'Retry',
-  'chat.message.rewind.editTitle': 'Edit message',
-  'chat.message.rewind.editBody':
-    'This removes this message and everything after it, then puts the text back in the composer. This cannot be undone.',
-  'chat.message.rewind.retryTitle': 'Regenerate',
-  'chat.message.rewind.retryBody':
-    'This removes this reply and everything after it, then resends the previous user message. This cannot be undone.',
-  'chat.message.rewind.confirm': 'Continue',
-  'chat.message.rewind.done': 'Rewound',
+  'chat.message.create.editTitle': 'Edit message',
+  'chat.message.create.editBody':
+    'Creates a new session from the history before this message and puts the text back in the composer. The current session is kept read-only; history is not deleted.',
+  'chat.message.create.retryTitle': 'Regenerate',
+  'chat.message.create.retryBody':
+    'Creates a new session from the history before this reply and resends the previous user message. The current session is kept read-only; history is not deleted.',
+  'chat.message.create.confirm': 'Create session',
+  'chat.message.create.editDone': 'New session created',
 
   // Runs
   'runs.title': 'Runs',

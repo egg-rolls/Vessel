@@ -23,6 +23,8 @@ const SYSTEM_KEYS: Record<string, string> = {
   leave: 'team.system.leave',
   archive: 'team.system.archive',
   rotate: 'team.system.rotate',
+  create: 'team.system.create',
+  // 旧日志只读：0.39 起新写 `create`，不再写 `fork`。
   fork: 'team.system.fork',
   retract: 'team.system.retract',
 };
@@ -58,9 +60,12 @@ function DeliveryNotes({ deliveries }: { deliveries: readonly TeamDelivery[] }) 
           ○{' '}
           {delivery.resolution === 'rotating'
             ? t('team.delivery.queuedRotating')
-            : delivery.resolution === 'forked'
-              ? t('team.delivery.queuedForked')
-              : t('team.delivery.queued')}
+            : delivery.resolution === 'created'
+              ? t('team.delivery.queuedCreated')
+              : delivery.resolution === 'forked'
+                ? // 旧日志只读：0.39 起新写 `created`。
+                  t('team.delivery.queuedForked')
+                : t('team.delivery.queued')}
           <span className="font-mono"> · {delivery.agent_id}</span>
         </span>
       ))}

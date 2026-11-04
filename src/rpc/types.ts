@@ -34,9 +34,7 @@ export type RpcErrorCode =
   | 'run_ended'
   // 0.34 CONTRACT-0.34-context C7：sessions.compact（与 serve 侧错误码同步）。
   | 'session_not_found'
-  | 'compact_unavailable'
-  // 0.37 CONTRACT-0.37：sessions.rewind（与 serve 侧错误码同步）。
-  | 'rewind_unavailable';
+  | 'compact_unavailable';
 
 /** 成功响应 */
 export interface RpcSuccessResponse {
@@ -108,7 +106,6 @@ const RPC_ERROR_CODES = new Set<RpcErrorCode>([
   'not_supported',
   'expired',
   'run_ended',
-  'rewind_unavailable',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

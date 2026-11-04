@@ -4,17 +4,29 @@
  * @module @vessel-agent/serve
  */
 
-import type { SessionState, SessionStore } from '@vessel-agent/core';
-import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
+import { projectedKeepCount, type SessionState, type SessionStore } from '@vessel-agent/core';
+import type {
+  AgentControlLike,
+  AgentCreateSeedLike,
+  SessionActivateLikeInput,
+  SessionCreateLikeInput,
+  SessionRestartLikeInput,
+} from '../../agent-control.js';
+import {
+  isTeamScopedPrincipal,
+  RpcError,
+  type RpcMethodContext,
+  type RpcMethodDefinition,
+} from '../../rpc.js';
 import {
   MAX_SESSION_SEARCH_LIMIT,
   normalizeSearchQuery,
   parseSearchLimit,
   searchSessions,
 } from '../../session-search.js';
-import { mapTenantError } from '../../tenant.js';
+import { mapTenantError, type TenantControlLike } from '../../tenant.js';
 import { MethodError } from '../errors.js';
-import { stringParam, tenantParamSchema } from './common.js';
+import { runInProgressReason, stringParam, tenantParamSchema } from './common.js';
 import { runStateSchema, sessionInfoSchema, sessionSearchHitSchema } from './schemas.js';
 
 /** run 记录的最小读取面（gateway 只需要按 run_id 取最近一条）。 */
@@ -32,6 +44,13 @@ export interface SessionMethodsDeps {
    * 结构化读取可选 `compactContext(sessionId)`；缺省或方法缺失 = `compact_unavailable`。
    */
   runtimeFor?(tenantId: string): unknown;
+  /**
+   * CREATE-0.39：agent 控制面（app 注入 AgentService 适配器）。
+   * 缺省 = `sessions.create|restart|activate` 仍进 manifest，但 handler 返回 `not_found`。
+   */
+  agent?: AgentControlLike;
+  /** CREATE-0.39：`sessions.create` 的 tenant 配额（`tenants.checkQuota`）。 */
+  tenants?: TenantControlLike;
   sessionData?: {
     deleteSessionData(
       sessionId: string,
@@ -58,16 +77,6 @@ function optionalNumber(value: unknown): number | undefined {
 
 type CompactContextFn = (sessionId: string) => Promise<{ removed: number; remaining: number }>;
 
-type RewindContextFn = (
-  sessionId: string,
-  keepMessages: number,
-) => Promise<{ removed: number; remaining: number }>;
-
-/** 门面 / EU 以 `Error(message)` 表达的业务错误（见 CONTRACT-0.37 §3）。 */
-function rewindErrorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** `compact_unavailable` 可能以 RpcError.code 或 message 形式到达（远程 / 本地门面）。 */
 function isCompactUnavailable(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
@@ -85,6 +94,207 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   'cancelled',
   'interrupted',
 ]);
+
+// ── CREATE-0.39：sessions.create / restart / activate ──
+
+function requireSessionAgentControl(
+  control: AgentControlLike | undefined,
+  ctx: RpcMethodContext,
+): AgentControlLike {
+  if (!control || control.tenantId !== ctx.tenantId) {
+    throw new RpcError('not_found', 'Agent control is not available');
+  }
+  return control;
+}
+
+function teamScopeOf(ctx: RpcMethodContext): string | undefined {
+  return isTeamScopedPrincipal(ctx.principal) ? ctx.principal.team_id : undefined;
+}
+
+/** team-scoped token 只允许作用在同 team 成员；解析失败按 not_found 拒绝（fail-closed）。 */
+async function inTeamScope(
+  control: AgentControlLike,
+  scope: string,
+  target: string,
+): Promise<boolean> {
+  const status = await control.resolve(target).catch(() => undefined);
+  return status !== undefined && status.team_id === scope;
+}
+
+/** 兼容 schema 校验与直接调用：seed 缺省 undefined（服务按 copy）。 */
+function readCreateSeed(value: unknown): AgentCreateSeedLike | undefined {
+  if (value === undefined) return undefined;
+  if (value !== 'copy' && value !== 'compact') {
+    throw new RpcError('invalid_params', 'seed must be copy or compact');
+  }
+  return value;
+}
+
+function readKeepMessages(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new RpcError('invalid_params', 'keep_messages must be a non-negative integer');
+  }
+  return value;
+}
+
+function readSessionMode(value: unknown): 'conversation' | 'both' | undefined {
+  if (value === undefined) return undefined;
+  if (value !== 'conversation' && value !== 'both') {
+    throw new RpcError('invalid_params', 'mode must be conversation or both');
+  }
+  return value;
+}
+
+function readSessionFiles(value: unknown): { ref: string; paths: string[] } | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new RpcError('invalid_params', 'files must be an object');
+  const ref = value.ref;
+  const paths = value.paths;
+  if (typeof ref !== 'string' || ref.length === 0) {
+    throw new RpcError('invalid_params', 'files.ref must be a non-empty string');
+  }
+  if (
+    !Array.isArray(paths) ||
+    paths.length === 0 ||
+    paths.some((entry) => typeof entry !== 'string' || entry.length === 0)
+  ) {
+    throw new RpcError('invalid_params', 'files.paths must be a non-empty string array');
+  }
+  return { ref, paths: [...(paths as string[])] };
+}
+
+function agentErrorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function agentErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  return 'Agent control failed';
+}
+
+/**
+ * CREATE-0.39 §2.4 / §3.1.1 / §4.1.1：把 AgentError 业务失败映射到冻结 RPC 码。
+ *
+ * 不新增 `RpcErrorCode`：`not_visible` 用 `not_found` + `details.reason` 表达；
+ * `restart_failed` / `restart_rollback_failed` / `activate_failed` / `create_failed`
+ * 只作为 `internal` 的 message reason，不泄漏原始 `invalid_input`。
+ * r10：`run_in_progress: <runId|spawn>` 的 wire message 固定为 `run_in_progress`，
+ * 真实 runId 只进 `details.run_id`。
+ */
+function mapSessionControlError(error: unknown): never {
+  if (error instanceof RpcError) throw error;
+  const code = agentErrorCode(error);
+  const message = agentErrorMessage(error);
+
+  switch (code) {
+    case 'unknown_member':
+      if (message.includes('session_not_found')) {
+        throw new RpcError('session_not_found', 'Session not found');
+      }
+      throw new RpcError('not_found', message);
+    case 'member_not_visible':
+      throw new RpcError('not_found', message, { reason: 'not_visible' });
+    case 'invalid_input':
+      throw new RpcError('invalid_params', message);
+    case 'conflict': {
+      const running = runInProgressReason(message);
+      if (running !== undefined) {
+        throw new RpcError(
+          'conflict',
+          'run_in_progress',
+          running.runId !== undefined ? { run_id: running.runId } : undefined,
+        );
+      }
+      throw new RpcError('conflict', message);
+    }
+    case 'member_closed':
+      throw new RpcError(
+        'conflict',
+        message.includes('agent_closed') ? message : `agent_closed: ${message}`,
+      );
+    case 'team_frozen':
+    case 'team_full':
+      throw new RpcError('conflict', message.includes(code) ? message : `${code}: ${message}`);
+    case 'spawn_failed':
+      // create_failed / restart_failed / restart_rollback_failed / activate_failed
+      throw new RpcError('internal', message);
+    case 'quota_exceeded':
+      throw new RpcError('quota_exceeded', message);
+    case 'not_supported':
+    case 'invalid_params':
+    case 'not_found':
+    case 'internal':
+      throw new RpcError(code, message);
+    case 'session_not_found':
+      throw new RpcError('session_not_found', message);
+    default:
+      // 无稳定 code（或 adapter 直接 reject Error）时按 reason token 兜底。
+      if (message.includes('session_not_found')) {
+        throw new RpcError('session_not_found', 'Session not found');
+      }
+      if (message.includes('not_primary')) {
+        throw new RpcError('conflict', 'not_primary');
+      }
+      if (message.includes('run_in_progress')) {
+        const running = runInProgressReason(message) ?? {};
+        throw new RpcError(
+          'conflict',
+          'run_in_progress',
+          running.runId !== undefined ? { run_id: running.runId } : undefined,
+        );
+      }
+      if (message.includes('source_private')) {
+        throw new RpcError('invalid_params', 'source_private');
+      }
+      if (message.includes('agent_closed')) {
+        throw new RpcError('conflict', 'agent_closed');
+      }
+      throw new RpcError('internal', message);
+  }
+}
+
+const sessionCreateResultSchema = {
+  type: 'object',
+  required: ['agent_id', 'session_id', 'primary'],
+  properties: {
+    agent_id: { type: 'string' },
+    session_id: { type: 'string' },
+    source_session_id: { type: 'string' },
+    seed: { type: 'string', enum: ['copy', 'compact'] },
+    keep_messages: { type: 'integer', minimum: 0 },
+    keep_projected: { type: 'integer', minimum: 0 },
+    copied_messages: { type: 'integer', minimum: 0 },
+    primary: { type: 'boolean' },
+    files_restored: { type: 'integer', minimum: 0 },
+    files_skipped: { type: 'integer', minimum: 0 },
+  },
+};
+
+const sessionRestartResultSchema = {
+  type: 'object',
+  required: ['agent_id', 'session_id', 'from_epoch', 'epoch'],
+  properties: {
+    agent_id: { type: 'string' },
+    session_id: { type: 'string' },
+    from_epoch: { type: 'integer', minimum: 0 },
+    epoch: { type: 'integer', minimum: 0 },
+  },
+};
+
+const sessionActivateResultSchema = {
+  type: 'object',
+  required: ['agent_id', 'session_id', 'previous_session_id', 'epoch', 'noop'],
+  properties: {
+    agent_id: { type: 'string' },
+    session_id: { type: 'string' },
+    previous_session_id: { type: 'string' },
+    epoch: { type: 'integer', minimum: 0 },
+    noop: { type: 'boolean' },
+  },
+};
 
 /**
  * `sessions.get` 的线上投影：SessionState 元数据 + 最近 RunRecord（或 `legacy_run`）。
@@ -122,7 +332,8 @@ export function toSessionView(state: SessionState, latestRaw: unknown): Record<s
 }
 
 export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinition[] {
-  const { defaultTenantId, sessionFor, runStoreFor, sessionData, runtimeFor } = deps;
+  const { defaultTenantId, sessionFor, runStoreFor, sessionData, runtimeFor, agent, tenants } =
+    deps;
 
   function requireSession(tenantId: string): SessionStore {
     const resolved = sessionFor(tenantId);
@@ -337,69 +548,208 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       },
     },
     {
-      // CONTRACT-0.37：消息撤回。`keep_messages` 是 `sessions.get` 的
-      // `session.messages` 下标；删除 `[keep_messages, ...)`。
-      name: 'sessions.rewind',
+      /**
+       * `sessions.create`（CREATE-0.39 §2，write）：同一 agent 的新 session 成为
+       * 唯一 primary；无来源 = 空 session，有来源 = 复制 / 压缩前缀。
+       *
+       * `mode=both` 的 git restore 由注入的 `restoreFiles` 在切换 session 前执行；
+       * 未注入 = `not_supported`，不会静默忽略文件。
+       */
+      name: 'sessions.create',
       permission: 'write',
       params_schema: {
         type: 'object',
-        required: ['session_id', 'keep_messages'],
         properties: {
-          session_id: { type: 'string', minLength: 1 },
+          agent_id: { type: 'string', minLength: 1 },
+          from_session_id: { type: 'string', minLength: 1 },
+          seed: { type: 'string', enum: ['copy', 'compact'] },
           keep_messages: { type: 'integer', minimum: 0 },
+          startup_prompt: { type: 'string', minLength: 1 },
+          mode: { type: 'string', enum: ['conversation', 'both'] },
+          files: {
+            type: 'object',
+            required: ['ref', 'paths'],
+            properties: {
+              ref: { type: 'string', minLength: 1 },
+              paths: { type: 'array', items: { type: 'string', minLength: 1 } },
+            },
+          },
         },
       },
-      result_schema: {
-        type: 'object',
-        required: ['session_id', 'removed', 'remaining'],
-        properties: {
-          session_id: { type: 'string' },
-          removed: { type: 'integer', minimum: 0 },
-          remaining: { type: 'integer', minimum: 0 },
-        },
-      },
+      result_schema: sessionCreateResultSchema,
       handler: async (params, ctx) => {
-        const backend = requireSession(ctx.tenantId);
-        const sessionId = stringParam(params, 'session_id');
-        const state = await backend.load(sessionId);
-        if (!state) throw new RpcError('session_not_found', 'Session not found');
+        const control = requireSessionAgentControl(agent, ctx);
+        const fromSessionId = optionalString(params.from_session_id);
+        const agentId = optionalString(params.agent_id);
+        const seed = readCreateSeed(params.seed);
+        const keepMessages = readKeepMessages(params.keep_messages);
+        const startupPrompt = optionalString(params.startup_prompt);
+        const mode = readSessionMode(params.mode);
+        const files = readSessionFiles(params.files);
 
-        const keepMessages = optionalNumber(params.keep_messages);
-        if (keepMessages === undefined || !Number.isInteger(keepMessages) || keepMessages < 0) {
-          throw new RpcError('invalid_params', 'keep_messages must be a non-negative integer');
-        }
-
-        const runtime = runtimeFor?.(ctx.tenantId) as
-          | { rewindContext?: RewindContextFn }
-          | undefined;
-        const rewindContext = runtime?.rewindContext;
-        if (typeof rewindContext !== 'function') {
-          throw new RpcError('rewind_unavailable', 'Message rewind is not available');
-        }
-
-        try {
-          const result = await rewindContext.call(runtime, sessionId, keepMessages);
-          return {
-            session_id: sessionId,
-            removed: result.removed,
-            remaining: result.remaining,
-          };
-        } catch (error) {
-          // 门面 / EU 的业务错误是 `Error(message)`；内部错误不伪装成业务码。
-          const text = rewindErrorText(error);
-          if (text.includes('run_in_progress')) {
-            throw new RpcError('conflict', 'run_in_progress');
+        if (fromSessionId === undefined) {
+          if (seed !== undefined || keepMessages !== undefined) {
+            throw new RpcError('invalid_params', 'seed / keep_messages require from_session_id');
           }
-          if (text.includes('session_not_found')) {
+          if (mode !== undefined || files !== undefined) {
+            throw new RpcError('invalid_params', 'mode / files require from_session_id');
+          }
+          if (agentId === undefined) {
+            throw new RpcError('invalid_params', 'agent_id is required without from_session_id');
+          }
+        }
+        if (mode === 'both' && files === undefined) {
+          throw new RpcError('invalid_params', 'files is required when mode=both');
+        }
+
+        // CREATE-0.39 §2.2：wire `keep_messages` 是 `sessions.get().messages` 下标；
+        // agent 层 `buildSeed` 用 `projectMessages(events)` 下标（不含 base system）。
+        // 先按 wire 数组校验，再换算成投影下标传给服务；响应回填原始 wire 值。
+        let projectedKeep = keepMessages;
+        if (fromSessionId !== undefined && keepMessages !== undefined) {
+          const backend = sessionFor(ctx.tenantId);
+          if (!backend) {
+            throw new RpcError('internal', 'session store is not configured for keep_messages');
+          }
+          const state = await backend.load(fromSessionId);
+          if (state === null) throw new RpcError('session_not_found', 'Session not found');
+          const messages = state.messages ?? [];
+          if (keepMessages > messages.length) {
+            throw new RpcError(
+              'invalid_params',
+              `keep_messages out of range: ${keepMessages} > ${messages.length}`,
+            );
+          }
+          projectedKeep = projectedKeepCount(messages, keepMessages);
+        }
+
+        // team-scoped control token：只能操作同 team 的成员。
+        const scope = teamScopeOf(ctx);
+        if (scope !== undefined) {
+          const target = fromSessionId ?? agentId;
+          if (target === undefined || !(await inTeamScope(control, scope, target))) {
+            throw new RpcError('not_found', `agent not found: ${target ?? ''}`);
+          }
+        }
+
+        // 配额：复用同名 tenant 操作 `sessions.create`。
+        try {
+          await tenants?.checkQuota?.(ctx.tenantId, 'sessions.create');
+        } catch (error) {
+          mapTenantError(error);
+        }
+
+        let restored: { files_restored: number; files_skipped: number } | undefined;
+        if (mode === 'both') {
+          const restore = control.restoreFiles;
+          if (typeof restore !== 'function') {
+            throw new RpcError('not_supported', 'git restore is not available');
+          }
+          const sourceId = fromSessionId as string;
+          const source = await control.resolve(sourceId);
+          if (source === undefined) {
             throw new RpcError('session_not_found', 'Session not found');
           }
-          if (text.includes('invalid_params')) {
-            throw new RpcError('invalid_params', text);
+          try {
+            // 硬失败在 session 改动前中止；单路径失败由 asm 端口计入 files_skipped。
+            restored = await restore.call(control, {
+              agent_id: source.id,
+              session_id: sourceId,
+              files: files as { ref: string; paths: string[] },
+            });
+          } catch (error) {
+            mapSessionControlError(error);
           }
-          if (text.includes('rewind_unavailable')) {
-            throw new RpcError('rewind_unavailable', 'Message rewind is not available');
-          }
-          throw error;
+        }
+
+        const input: SessionCreateLikeInput = {
+          ...(agentId !== undefined ? { agent_id: agentId } : {}),
+          ...(fromSessionId !== undefined ? { from_session_id: fromSessionId } : {}),
+          ...(seed !== undefined ? { seed } : {}),
+          ...(projectedKeep !== undefined ? { keep_messages: projectedKeep } : {}),
+          ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
+          ...(mode !== undefined ? { mode } : {}),
+          ...(files !== undefined ? { files } : {}),
+        };
+
+        try {
+          const result = await control.createSession(input);
+          return {
+            ...result,
+            // 响应里的 keep_messages 保持 wire 语义（SessionState 下标）；
+            // keep_projected 仍是 agent 层实际使用的投影边界。
+            ...(keepMessages !== undefined ? { keep_messages: keepMessages } : {}),
+            ...(restored !== undefined
+              ? {
+                  files_restored: restored.files_restored,
+                  files_skipped: restored.files_skipped,
+                }
+              : {}),
+          };
+        } catch (error) {
+          mapSessionControlError(error);
+        }
+      },
+    },
+    {
+      /**
+       * `sessions.restart`（CREATE-0.39 §3，write）：同一 session 原地换 binding
+       * （epoch+1）；transcript / SessionState 不变。失败回滚由 agent 层保证。
+       */
+      name: 'sessions.restart',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['session_id'],
+        properties: {
+          session_id: { type: 'string', minLength: 1 },
+          startup_prompt: { type: 'string', minLength: 1 },
+        },
+      },
+      result_schema: sessionRestartResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireSessionAgentControl(agent, ctx);
+        const sessionId = stringParam(params, 'session_id');
+        const startupPrompt = optionalString(params.startup_prompt);
+        const input: SessionRestartLikeInput = {
+          session_id: sessionId,
+          ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
+        };
+        try {
+          return await control.restartSession(input);
+        } catch (error) {
+          mapSessionControlError(error);
+        }
+      },
+    },
+    {
+      /**
+       * `sessions.activate`（CREATE-0.39 §4，write）：把 primary / bindingHistory 中
+       * 的 session 切回 primary；目标已是 primary 时 `noop: true`。
+       */
+      name: 'sessions.activate',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['session_id'],
+        properties: {
+          session_id: { type: 'string', minLength: 1 },
+          startup_prompt: { type: 'string', minLength: 1 },
+        },
+      },
+      result_schema: sessionActivateResultSchema,
+      handler: async (params, ctx) => {
+        const control = requireSessionAgentControl(agent, ctx);
+        const sessionId = stringParam(params, 'session_id');
+        const startupPrompt = optionalString(params.startup_prompt);
+        const input: SessionActivateLikeInput = {
+          session_id: sessionId,
+          ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
+        };
+        try {
+          return await control.activateSession(input);
+        } catch (error) {
+          mapSessionControlError(error);
         }
       },
     },

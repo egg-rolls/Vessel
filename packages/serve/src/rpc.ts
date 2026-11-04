@@ -34,9 +34,7 @@ export type RpcErrorCode =
   | 'run_ended'
   // 0.34 CONTRACT-0.34-context C7：sessions.compact。
   | 'session_not_found'
-  | 'compact_unavailable'
-  // 0.37 CONTRACT-0.37：sessions.rewind（无 runtime / 方法）。
-  | 'rewind_unavailable';
+  | 'compact_unavailable';
 
 /** 方法权限（manifest 同名字段） */
 export type MethodPermission = 'read' | 'write' | 'admin';
@@ -246,11 +244,12 @@ const CONTROL_SCOPE_METHODS: ReadonlySet<string> = new Set([
   'teams.archive',
   // 0.27：team-scoped token 只能冻结 / 解冻自己的 team（handler 再校验 team_id）。
   'teams.spawnFrozen',
-  // 0.26：team-scoped token 只能对同 team 成员 send / dispatch / rotate
+  // 0.26：team-scoped token 只能对同 team 成员 send / dispatch
   // （handler 逐条校验 team_id；create 仍不在白名单）。
   'agents.send',
   'agents.dispatch',
-  'agents.rotate',
+  // CREATE-0.39：handler 校验 agent / 源 session 同 team。
+  'sessions.create',
   'events.subscribe',
   'interactions.list',
   'permission.respond',
@@ -448,7 +447,6 @@ function mapExternalErrorCode(code: unknown): RpcErrorCode | null {
     case 'not_supported':
     case 'expired':
     case 'run_ended':
-    case 'rewind_unavailable':
       return code;
     default:
       return null;

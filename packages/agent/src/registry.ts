@@ -83,7 +83,8 @@ export interface MemberRecord {
   teamId?: string;
   /** Binding 轮换相位；不持久化 */
   rotation: MemberRotation;
-  forkedFrom?: string;
+  /** 创建来源 agent（持久化；CREATE-0.39 `source_agent_id`） */
+  sourceAgentId?: string;
   currentTool?: string;
   lastSeen?: number;
   usage?: Usage;
@@ -142,6 +143,32 @@ function findBinding(record: MemberRecord, bindingId: string): BindingRecord | u
 /** 参与 session 寻址的 Binding session：primary 优先，否则当前 Binding，最后兼容 sessionId */
 export function currentBindingSession(record: MemberRecord): string {
   return primaryBinding(record)?.bindingId ?? record.binding?.bindingId ?? record.sessionId;
+}
+
+/** 只读反查：某 session 在该记录里的状态（CREATE-0.39 §8.8） */
+export type SessionBindingState = 'primary' | 'retiring' | 'history';
+
+/**
+ * 只读反查一个 session 在某 agent 记录里的状态；不新增持久字段。
+ *
+ * `retiringBinding` 只在进程内事务窗口存在，不作为外部可观察目标；
+ * 调用方需要对 `retiring` 与 `history` 分别决定拒绝语义。
+ */
+export function findSessionState(
+  record: MemberRecord,
+  sessionId: string,
+): SessionBindingState | undefined {
+  if (
+    record.binding?.bindingId === sessionId &&
+    record.binding.retiredAt === undefined &&
+    record.binding.primary
+  ) {
+    return 'primary';
+  }
+  if (record.retiringBinding?.bindingId === sessionId) return 'retiring';
+  if (record.bindingHistory.some((entry) => entry.session_id === sessionId)) return 'history';
+  if (record.binding?.bindingId === sessionId) return 'history';
+  return undefined;
 }
 
 /** 注册表记录 → 对外状态 */
@@ -235,7 +262,7 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
     // rotate 期间待退役的旧 Binding 写在 `body_history`，不占 `bodies[]`。
     ...(record.binding !== undefined ? { bodies: [toPersistedBinding(record.binding)] } : {}),
     ...(primary !== undefined ? { primary_body_id: primary.bindingId } : {}),
-    ...(record.forkedFrom !== undefined ? { forked_from: record.forkedFrom } : {}),
+    ...(record.sourceAgentId !== undefined ? { source_agent_id: record.sourceAgentId } : {}),
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
     ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
     ...(record.usage !== undefined ? { usage: record.usage } : {}),

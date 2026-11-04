@@ -9,16 +9,14 @@
  * @module @vessel-agent/serve
  */
 
+import { projectedKeepCount, type SessionStore } from '@vessel-agent/core';
 import type {
-  AgentCompactForkLikeInput,
   AgentControlLike,
   AgentCreateLikeInput,
+  AgentCreateSeedLike,
   AgentDispatchLikeInput,
-  AgentForkLikeInput,
   AgentLifecycleFailLike,
-  AgentRestartLikeInput,
   AgentRoleLike,
-  AgentRotateLikeInput,
   AgentSendLikeInput,
   AgentStateLike,
   AgentStatusLike,
@@ -34,7 +32,7 @@ import {
 } from '../../rpc.js';
 import type { LiveRunSnapshotLike } from '../../run-control.js';
 import type { TeamControlLike } from '../../team-control.js';
-import { stringParam } from './common.js';
+import { runInProgressReason, stringParam } from './common.js';
 import {
   agentCardSchema,
   agentInfoSchema,
@@ -60,6 +58,12 @@ export interface AgentMethodsDeps {
   agent?: AgentControlLike;
   /** 0.25：`agents.create` 用 team_id 解析 workspace；未注入时按 not_found 处理。 */
   teams?: TeamControlLike;
+  /**
+   * CREATE-0.39：`agents.create{from_session_id, keep_messages}` 的 wire 校验面。
+   * `keep_messages` 是 `sessions.get().messages`（SessionState）下标；缺省时
+   * 由 agent 层按全量投影处理。
+   */
+  sessionFor?: (tenantId: string) => SessionStore | undefined;
 }
 
 function isDefaultTenant(tenantId: string, defaultTenantId: string): boolean {
@@ -281,6 +285,115 @@ function optionalEntryString(
   return value;
 }
 
+/** CREATE-0.39：可选种子方式；缺省 undefined（由服务按 copy 处理）。 */
+function optionalCreateSeed(
+  entry: Record<string, unknown>,
+  method: string,
+): AgentCreateSeedLike | undefined {
+  const value = entry.seed;
+  if (value === undefined) return undefined;
+  if (value !== 'copy' && value !== 'compact') {
+    throw new RpcError('invalid_params', `${method}: seed must be copy or compact`);
+  }
+  return value;
+}
+
+/** CREATE-0.39：`keep_messages` 必须是 non-negative integer。 */
+function optionalKeepMessages(entry: Record<string, unknown>, method: string): number | undefined {
+  const value = entry.keep_messages;
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new RpcError('invalid_params', `${method}: keep_messages must be a non-negative integer`);
+  }
+  return value;
+}
+
+/**
+ * CREATE-0.39 §1.2：wire `keep_messages` 是 `sessions.get().messages`
+ * （SessionState）下标；agent 层 `buildSeed` 在 `projectMessages(events)` 空间
+ * 切前缀（不含 base system）。serve 边界先按 wire 数组校验，再换算投影下标。
+ */
+async function resolveProjectedKeep(
+  backend: SessionStore | undefined,
+  fromSessionId: string,
+  wireKeep: number,
+): Promise<{ projected: number } | { failure: AgentLifecycleFailLike }> {
+  if (backend === undefined) {
+    return { failure: fail('internal', 'session store is not configured for keep_messages') };
+  }
+  const state = await backend.load(fromSessionId);
+  if (state === null) {
+    return { failure: fail('not_found', `session not found: ${fromSessionId}`) };
+  }
+  const messages = state.messages ?? [];
+  if (wireKeep > messages.length) {
+    return {
+      failure: fail(
+        'invalid_params',
+        `keep_messages out of range: ${wireKeep} > ${messages.length}`,
+      ),
+    };
+  }
+  return { projected: projectedKeepCount(messages, wireKeep) };
+}
+
+/**
+ * CREATE-0.39 §1.4：把 AgentError 业务码翻成客户端可见的 item code / reason。
+ * 规则：业务拒绝不用原始 `invalid_input` / `spawn_failed` 泄漏；失败原因留在 `error`。
+ */
+function normalizeCreateFailure(item: AgentLifecycleFailLike): AgentLifecycleFailLike {
+  const text = item.error;
+  switch (item.code) {
+    case 'unknown_member':
+      return { ok: false, code: 'not_found', error: text };
+    case 'member_not_visible':
+      return { ok: false, code: 'not_visible', error: text };
+    case 'invalid_input':
+      return { ok: false, code: 'invalid_params', error: text };
+    case 'conflict': {
+      // r10：`run_in_progress: <runId|spawn>` 的 wire reason 固定为 run_in_progress；
+      // 内部 `spawn` 哨兵丢弃，真实 runId 只进结构化字段。
+      const running = runInProgressReason(text);
+      if (running !== undefined) {
+        return {
+          ok: false,
+          code: 'conflict',
+          error: 'run_in_progress',
+          ...(running.runId !== undefined ? { run_id: running.runId } : {}),
+        };
+      }
+      return { ok: false, code: 'conflict', error: text };
+    }
+    case 'member_closed':
+      return {
+        ok: false,
+        code: 'conflict',
+        error: text.includes('agent_closed') ? text : `agent_closed: ${text}`,
+      };
+    case 'team_frozen':
+    case 'team_full':
+      return {
+        ok: false,
+        code: 'conflict',
+        error: text.includes(item.code) ? text : `${item.code}: ${text}`,
+      };
+    case 'invalid_state_transition':
+    case 'body_limit':
+      return { ok: false, code: 'conflict', error: text };
+    case 'quota_exceeded':
+      return { ok: false, code: 'quota_exceeded', error: text };
+    case 'spawn_failed':
+      return { ok: false, code: 'internal', error: text };
+    case 'not_found':
+    case 'not_visible':
+    case 'invalid_params':
+    case 'internal':
+      return item;
+    default:
+      return { ok: false, code: 'internal', error: text };
+  }
+}
+
 function optionalVisibility(
   entry: Record<string, unknown>,
   method: string,
@@ -342,6 +455,8 @@ const agentLifecycleItemSchema = {
     // 失败条目
     code: { type: 'string' },
     error: { type: 'string' },
+    // r10：conflict 的 active/queued run；内部 `spawn` 哨兵不会出现在这里。
+    run_id: { type: 'string' },
   },
 };
 
@@ -410,101 +525,8 @@ const agentDispatchResultSchema = {
           status: { type: 'string', enum: ['queued'] },
           message_id: { type: 'string' },
           resolved_to: { type: 'string' },
-          resolution: { type: 'string', enum: ['live', 'resumed', 'rotating', 'forked'] },
+          resolution: { type: 'string', enum: ['live', 'resumed', 'rotating', 'created'] },
           conversation_id: { type: 'string' },
-          ...agentActionFailProperties,
-        },
-      },
-    },
-  },
-};
-
-const agentRotateResultSchema = {
-  type: 'object',
-  required: ['results'],
-  properties: {
-    results: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['ok'],
-        properties: {
-          ok: { type: 'boolean' },
-          status: { type: 'string', enum: ['rotated'] },
-          agent_id: { type: 'string' },
-          from_session_id: { type: 'string' },
-          to_session_id: { type: 'string' },
-          epoch: { type: 'integer', minimum: 0 },
-          ...agentActionFailProperties,
-        },
-      },
-    },
-  },
-};
-
-const agentRestartResultSchema = {
-  type: 'object',
-  required: ['results'],
-  properties: {
-    results: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['ok'],
-        properties: {
-          ok: { type: 'boolean' },
-          status: { type: 'string', enum: ['restarted'] },
-          agent_id: { type: 'string' },
-          session_id: { type: 'string' },
-          from_epoch: { type: 'integer', minimum: 0 },
-          epoch: { type: 'integer', minimum: 0 },
-          ...agentActionFailProperties,
-        },
-      },
-    },
-  },
-};
-
-const agentCompactForkResultSchema = {
-  type: 'object',
-  required: ['results'],
-  properties: {
-    results: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['ok'],
-        properties: {
-          ok: { type: 'boolean' },
-          status: { type: 'string', enum: ['compact_forked'] },
-          agent_id: { type: 'string' },
-          from_session_id: { type: 'string' },
-          to_session_id: { type: 'string' },
-          // conflict 时的目标 Session（父 Session）
-          session_id: { type: 'string' },
-          epoch: { type: 'integer', minimum: 0 },
-          ...agentActionFailProperties,
-        },
-      },
-    },
-  },
-};
-
-const agentForkResultSchema = {
-  type: 'object',
-  required: ['results'],
-  properties: {
-    results: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['ok'],
-        properties: {
-          ok: { type: 'boolean' },
-          status: { type: 'string', enum: ['forked'] },
-          agent_id: { type: 'string' },
-          from_agent_id: { type: 'string' },
-          session_id: { type: 'string' },
           ...agentActionFailProperties,
         },
       },
@@ -531,46 +553,7 @@ const agentDispatchEntrySchema = {
   required: ['to', 'content'],
   properties: {
     ...agentSendEntrySchema.properties,
-    allow_fork: { type: 'boolean' },
-  },
-};
-
-const agentRotateEntrySchema = {
-  type: 'object',
-  required: ['to', 'startup_prompt'],
-  properties: {
-    to: { type: 'string', minLength: 1 },
-    startup_prompt: { type: 'string', minLength: 1 },
-    from_session_id: { type: 'string', minLength: 1 },
-  },
-};
-
-const agentRestartEntrySchema = {
-  type: 'object',
-  required: ['to'],
-  properties: {
-    to: { type: 'string', minLength: 1 },
-    startup_prompt: { type: 'string', minLength: 1 },
-    from_session_id: { type: 'string', minLength: 1 },
-  },
-};
-
-const agentCompactForkEntrySchema = {
-  type: 'object',
-  required: ['to'],
-  properties: {
-    to: { type: 'string', minLength: 1 },
-    startup_prompt: { type: 'string', minLength: 1 },
-    from_session_id: { type: 'string', minLength: 1 },
-  },
-};
-
-const agentForkEntrySchema = {
-  type: 'object',
-  required: ['to'],
-  properties: {
-    to: { type: 'string', minLength: 1 },
-    name: { type: 'string', minLength: 1 },
+    allow_auto_create: { type: 'boolean' },
   },
 };
 
@@ -784,6 +767,10 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   type: 'string',
                   enum: ['private', 'team', 'tenant'],
                 },
+                // CREATE-0.39：来源 session；不传 = 冷建。
+                from_session_id: { type: 'string', minLength: 1 },
+                seed: { type: 'string', enum: ['copy', 'compact'] },
+                keep_messages: { type: 'integer', minimum: 0 },
               },
             },
           },
@@ -848,6 +835,52 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             // CLI 的 `--workspace` 是 owner 传输特权：保留显式 workspace 绑定的语义，
             // 但 gateway / Web 不能伪造主机路径（逐条拒绝）。
             const rawWorkspace = optionalEntryString(entry, 'workspace', 'agents.create');
+            // CREATE-0.39：有来源走独立分支（种子复制 / 压缩），不解析 team workspace；
+            // 结构字段由服务从源派生（identity 不传）。
+            const fromSessionId = optionalEntryString(entry, 'from_session_id', 'agents.create');
+            const seed = optionalCreateSeed(entry, 'agents.create');
+            const keepMessages = optionalKeepMessages(entry, 'agents.create');
+            if (fromSessionId !== undefined) {
+              if (rawWorkspace !== undefined) {
+                return {
+                  failure: fail('invalid_params', 'workspace is not allowed with from_session_id'),
+                };
+              }
+              let projectedKeep = keepMessages;
+              if (keepMessages !== undefined) {
+                const boundary = await resolveProjectedKeep(
+                  deps.sessionFor?.(ctx.tenantId),
+                  fromSessionId,
+                  keepMessages,
+                );
+                if ('failure' in boundary) return boundary;
+                projectedKeep = boundary.projected;
+              }
+              const name = optionalEntryString(entry, 'name', 'agents.create');
+              const model = optionalEntryString(entry, 'model', 'agents.create');
+              const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
+              const visibility = optionalVisibility(entry, 'agents.create');
+              const teamId = optionalEntryString(entry, 'team_id', 'agents.create');
+              return {
+                input: {
+                  ...(rawKind !== undefined ? { kind: rawKind } : {}),
+                  ...(teamId !== undefined ? { team_id: teamId } : {}),
+                  ...(name !== undefined ? { name } : {}),
+                  ...(model !== undefined ? { model } : {}),
+                  ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
+                  ...(visibility !== undefined ? { visibility } : {}),
+                  from_session_id: fromSessionId,
+                  ...(seed !== undefined ? { seed } : {}),
+                  ...(projectedKeep !== undefined ? { keep_messages: projectedKeep } : {}),
+                  spawnedBy: ownerId ?? 'human',
+                },
+              };
+            }
+            if (seed !== undefined || keepMessages !== undefined) {
+              return {
+                failure: fail('invalid_params', 'seed / keep_messages require from_session_id'),
+              };
+            }
             // peer / contractor 不允许 workspace（Team 绑定走 team_id）。
             if (rawKind !== undefined && rawWorkspace !== undefined) {
               return {
@@ -964,7 +997,11 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           .map((entry) => entry.input);
         if (inputs.length === 0) return mergeBatchResults(prepared, []);
         const batch = await control.create(inputs);
-        return mergeBatchResults(prepared, batch.results);
+        // CREATE-0.39 §1.4：business failures are normalized to the contract codes.
+        const normalized = batch.results.map((item) =>
+          item.ok ? item : normalizeCreateFailure(item),
+        );
+        return mergeBatchResults(prepared, normalized);
       },
     },
     {
@@ -1246,8 +1283,11 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 failure: fail('invalid_params', 'to and content must be non-empty strings'),
               };
             }
-            if (entry.allow_fork !== undefined && typeof entry.allow_fork !== 'boolean') {
-              return { failure: fail('invalid_params', 'allow_fork must be a boolean') };
+            if (
+              entry.allow_auto_create !== undefined &&
+              typeof entry.allow_auto_create !== 'boolean'
+            ) {
+              return { failure: fail('invalid_params', 'allow_auto_create must be a boolean') };
             }
             if (!(await targetInTeamScope(control, scope, to, true))) {
               return { failure: fail('not_found', `agent not found: ${to}`) };
@@ -1259,7 +1299,9 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 content,
                 from,
                 ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
-                ...(entry.allow_fork !== undefined ? { allow_fork: entry.allow_fork } : {}),
+                ...(entry.allow_auto_create !== undefined
+                  ? { allow_auto_create: entry.allow_auto_create }
+                  : {}),
               },
             };
           }),
@@ -1270,218 +1312,6 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           .map((entry) => entry.input);
         if (inputs.length === 0) return mergeBatchResults(prepared, []);
         const batch = await control.dispatch(inputs);
-        return mergeBatchResults(prepared, batch.results);
-      },
-    },
-    {
-      /**
-       * `agents.rotate`（0.26，write）：批量换 Binding。
-       *
-       * 人类路径（owner / gateway）不传 `from_session_id`，可 rotate 任意可见成员；
-       * 成员工具路径仍由 AgentService 以 `from_session_id` 收紧为只能 rotate 自己。
-       */
-      name: 'agents.rotate',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['agents'],
-        properties: {
-          agents: { type: 'array', items: agentRotateEntrySchema },
-        },
-      },
-      result_schema: agentRotateResultSchema,
-      handler: async (params, ctx) => {
-        const control = requireAgentControl(deps.agent, ctx);
-        const entries = requireObjectEntries(params, 'agents', 'agents.rotate');
-        const scope = teamScopeOf(ctx);
-        const from = actorOf(ctx);
-
-        const prepared = await Promise.all(
-          entries.map(async (entry): Promise<Prepared<AgentRotateLikeInput>> => {
-            const to = optionalEntryString(entry, 'to', 'agents.rotate');
-            const startupPrompt = optionalEntryString(entry, 'startup_prompt', 'agents.rotate');
-            if (to === undefined || startupPrompt === undefined) {
-              return {
-                failure: fail('invalid_params', 'to and startup_prompt must be non-empty strings'),
-              };
-            }
-            if (!(await targetInTeamScope(control, scope, to, true))) {
-              return { failure: fail('not_found', `agent not found: ${to}`) };
-            }
-            const fromSessionId = optionalEntryString(entry, 'from_session_id', 'agents.rotate');
-            return {
-              input: {
-                to,
-                startup_prompt: startupPrompt,
-                from,
-                ...(fromSessionId !== undefined ? { from_session_id: fromSessionId } : {}),
-              },
-            };
-          }),
-        );
-
-        const inputs = prepared
-          .filter((entry): entry is { input: AgentRotateLikeInput } => 'input' in entry)
-          .map((entry) => entry.input);
-        if (inputs.length === 0) return mergeBatchResults(prepared, []);
-        const batch = await control.rotate(inputs);
-        return mergeBatchResults(prepared, batch.results);
-      },
-    },
-    {
-      /**
-       * `agents.restart`（0.34，write）：同一 Session 复用，换新 ExecutionUnit、epoch + 1。
-       *
-       * 与 rotate 共用批量 / team-scope / 错误形状；`startup_prompt` 可选
-       * （续接同一 transcript 后的首轮输入）。
-       */
-      name: 'agents.restart',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['agents'],
-        properties: {
-          agents: { type: 'array', items: agentRestartEntrySchema },
-        },
-      },
-      result_schema: agentRestartResultSchema,
-      handler: async (params, ctx) => {
-        const control = requireAgentControl(deps.agent, ctx);
-        const entries = requireObjectEntries(params, 'agents', 'agents.restart');
-        const scope = teamScopeOf(ctx);
-        const from = actorOf(ctx);
-
-        const prepared = await Promise.all(
-          entries.map(async (entry): Promise<Prepared<AgentRestartLikeInput>> => {
-            const to = optionalEntryString(entry, 'to', 'agents.restart');
-            if (to === undefined) {
-              return { failure: fail('invalid_params', 'to must be a non-empty string') };
-            }
-            if (!(await targetInTeamScope(control, scope, to, true))) {
-              return { failure: fail('not_found', `agent not found: ${to}`) };
-            }
-            const startupPrompt = optionalEntryString(entry, 'startup_prompt', 'agents.restart');
-            const fromSessionId = optionalEntryString(entry, 'from_session_id', 'agents.restart');
-            return {
-              input: {
-                to,
-                ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
-                from,
-                ...(fromSessionId !== undefined ? { from_session_id: fromSessionId } : {}),
-              },
-            };
-          }),
-        );
-
-        const inputs = prepared
-          .filter((entry): entry is { input: AgentRestartLikeInput } => 'input' in entry)
-          .map((entry) => entry.input);
-        if (inputs.length === 0) return mergeBatchResults(prepared, []);
-        const batch = await control.restart(inputs);
-        return mergeBatchResults(prepared, batch.results);
-      },
-    },
-    {
-      /**
-       * `agents.compactFork`（0.34，write）：以父 Session 的压缩副本新建子 Session，
-       * 子 Session 成为新的 primary（epoch + 1）；父 Session / binding 不动。
-       */
-      name: 'agents.compactFork',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['agents'],
-        properties: {
-          agents: { type: 'array', items: agentCompactForkEntrySchema },
-        },
-      },
-      result_schema: agentCompactForkResultSchema,
-      handler: async (params, ctx) => {
-        const control = requireAgentControl(deps.agent, ctx);
-        const entries = requireObjectEntries(params, 'agents', 'agents.compactFork');
-        const scope = teamScopeOf(ctx);
-        const from = actorOf(ctx);
-
-        const prepared = await Promise.all(
-          entries.map(async (entry): Promise<Prepared<AgentCompactForkLikeInput>> => {
-            const to = optionalEntryString(entry, 'to', 'agents.compactFork');
-            if (to === undefined) {
-              return { failure: fail('invalid_params', 'to must be a non-empty string') };
-            }
-            if (!(await targetInTeamScope(control, scope, to, true))) {
-              return { failure: fail('not_found', `agent not found: ${to}`) };
-            }
-            const startupPrompt = optionalEntryString(
-              entry,
-              'startup_prompt',
-              'agents.compactFork',
-            );
-            const fromSessionId = optionalEntryString(
-              entry,
-              'from_session_id',
-              'agents.compactFork',
-            );
-            return {
-              input: {
-                to,
-                ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
-                from,
-                ...(fromSessionId !== undefined ? { from_session_id: fromSessionId } : {}),
-              },
-            };
-          }),
-        );
-
-        const inputs = prepared
-          .filter((entry): entry is { input: AgentCompactForkLikeInput } => 'input' in entry)
-          .map((entry) => entry.input);
-        if (inputs.length === 0) return mergeBatchResults(prepared, []);
-        const batch = await control.compactFork(inputs);
-        return mergeBatchResults(prepared, batch.results);
-      },
-    },
-    {
-      /**
-       * `agents.fork`（0.34，write）：新建空 Session 的 Agent，不复制 transcript。
-       *
-       * 权限 / 可见性按 `agents.create`：team-scoped token 不能 fork。
-       * 不加 CLI。
-       */
-      name: 'agents.fork',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['agents'],
-        properties: {
-          agents: { type: 'array', items: agentForkEntrySchema },
-        },
-      },
-      result_schema: agentForkResultSchema,
-      handler: async (params, ctx) => {
-        const control = requireAgentControl(deps.agent, ctx);
-        const entries = requireObjectEntries(params, 'agents', 'agents.fork');
-        const scope = teamScopeOf(ctx);
-        const from = actorOf(ctx);
-        if (scope !== undefined) {
-          return {
-            results: entries.map(() => fail('forbidden', 'team-scoped token cannot fork agents')),
-          };
-        }
-
-        const prepared = entries.map((entry): Prepared<AgentForkLikeInput> => {
-          const to = optionalEntryString(entry, 'to', 'agents.fork');
-          const name = optionalEntryString(entry, 'name', 'agents.fork');
-          if (to === undefined) {
-            return { failure: fail('invalid_params', 'to must be a non-empty string') };
-          }
-          return { input: { to, ...(name !== undefined ? { name } : {}), from } };
-        });
-
-        const inputs = prepared
-          .filter((entry): entry is { input: AgentForkLikeInput } => 'input' in entry)
-          .map((entry) => entry.input);
-        if (inputs.length === 0) return mergeBatchResults(prepared, []);
-        const batch = await control.fork(inputs);
         return mergeBatchResults(prepared, batch.results);
       },
     },

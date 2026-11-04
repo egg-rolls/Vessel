@@ -66,7 +66,16 @@ export interface TeamMessageLike {
   content: string;
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
-  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override' | 'fork' | 'retract';
+  /** CREATE-0.39：新写用 `create`；`fork` 只保留为旧日志只读值。 */
+  system_event?:
+    | 'join'
+    | 'leave'
+    | 'rotate'
+    | 'archive'
+    | 'budget_override'
+    | 'create'
+    | 'fork'
+    | 'retract';
   /** 撤回 tombstone 指向的目标 message_id */
   retracted_message_id?: string;
   /** 0.19 S4 会话分组；旧日志缺省 */
@@ -94,7 +103,7 @@ export interface TeamDeliveryLike {
   agent_id: string;
   status: 'queued' | 'rejected' | 'error';
   message_id?: string;
-  resolution?: 'live' | 'resumed' | 'rotating' | 'forked';
+  resolution?: 'live' | 'resumed' | 'rotating' | 'created';
   code?: string;
   reason?: string;
 }

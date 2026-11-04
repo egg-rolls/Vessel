@@ -121,3 +121,49 @@ export interface RenameSessionResult {
   session_id: string;
   title: string;
 }
+
+/**
+ * `sessions.create` 参数（CONTRACT-0.39-create §2.1）。
+ *
+ * 无来源时空建；`from_session_id` 存在时从源 session 复制前缀
+ * （`keep_messages` 是 `sessions.get().messages` 下标），可选 `seed: 'compact'`。
+ * `mode` / `files` 是已批准的可选 git restore 字段，Phase 1 无 UI 入口。
+ */
+export interface SessionCreateInput {
+  agent_id?: string;
+  from_session_id?: string;
+  seed?: 'copy' | 'compact';
+  keep_messages?: number;
+  startup_prompt?: string;
+  mode?: 'conversation' | 'both';
+  files?: { ref: string; paths: string[] };
+}
+
+/** `sessions.create` 结果；新 session 恒为 primary，源 session 退役但保留。 */
+export interface SessionCreateResult {
+  agent_id: string;
+  session_id: string;
+  source_session_id?: string;
+  seed?: 'copy' | 'compact';
+  keep_messages?: number;
+  keep_projected?: number;
+  copied_messages?: number;
+  primary: boolean;
+  files_restored?: number;
+  files_skipped?: number;
+}
+
+/** `sessions.activate` 参数（CONTRACT-0.39-create §4.1）。 */
+export interface SessionActivateInput {
+  session_id: string;
+  startup_prompt?: string;
+}
+
+/** `sessions.activate` 结果；`noop` = 目标本来就是 primary。 */
+export interface SessionActivateResult {
+  agent_id: string;
+  session_id: string;
+  previous_session_id: string;
+  epoch: number;
+  noop: boolean;
+}

@@ -91,7 +91,19 @@ export interface AgentCreateLikeInput {
   spawnedBy?: string;
   /** 同 `owner`，合成 owner 创建的成员与 owner 建立父子关系。 */
   parent_id?: string;
+  /**
+   * CREATE-0.39：来源 session。传了即以该 session 的稳定 transcript 为新
+   * agent 的种子；不传 = 冷建。源 agent / 源 session 零改动。
+   */
+  from_session_id?: string;
+  /** 仅 `from_session_id` 存在时合法；缺省 copy，compact 必须显式。 */
+  seed?: AgentCreateSeedLike;
+  /** 仅 `from_session_id` 存在时合法；`sessions.get().messages` 下标。 */
+  keep_messages?: number;
 }
+
+/** CREATE-0.39：种子方式；缺省 copy，compact 必须显式。 */
+export type AgentCreateSeedLike = 'copy' | 'compact';
 
 /** `agents.list` 的过滤条件；viewer 用于 private 可见性。 */
 export interface AgentListLikeInput {
@@ -120,47 +132,8 @@ export interface AgentDispatchLikeInput {
   to: string;
   content: string;
   conversation_id?: string;
-  allow_fork?: boolean;
-  from?: string;
-}
-
-/** `agents.rotate` 的单个条目。 */
-export interface AgentRotateLikeInput {
-  to: string;
-  startup_prompt: string;
-  from_session_id?: string;
-  from?: string;
-}
-
-/**
- * `agents.restart` 的单个条目：同一 Session 复用，换新 ExecutionUnit、epoch + 1。
- * `startup_prompt` 是续接 transcript 后的首轮输入；缺省表示不追加。
- */
-export interface AgentRestartLikeInput {
-  to: string;
-  startup_prompt?: string;
-  from_session_id?: string;
-  from?: string;
-}
-
-/**
- * `agents.compactFork` 的单个条目：以父 Session 的压缩副本为种子新建子 Session。
- * 父 Session / binding 不变；子 Session 成为新的 primary（epoch + 1）。
- */
-export interface AgentCompactForkLikeInput {
-  to: string;
-  startup_prompt?: string;
-  from_session_id?: string;
-  from?: string;
-}
-
-/**
- * `agents.fork` 的单个条目：新建空 Session 的 Agent，不复制 transcript。
- * 权限 / 可见性按 `agents.create`。
- */
-export interface AgentForkLikeInput {
-  to: string;
-  name?: string;
+  /** CREATE-0.39：resume 失败后是否自动创建。 */
+  allow_auto_create?: boolean;
   from?: string;
 }
 
@@ -236,13 +209,13 @@ export interface AgentSendBatchResultLike {
   results: AgentSendItemLike[];
 }
 
-/** `agents.dispatch` 成功条目：统一 dispatch 的结果（resolution 为 live/resumed/rotating/forked）。 */
+/** `agents.dispatch` 成功条目：统一 dispatch 的结果（resolution 为 live/resumed/rotating/created）。 */
 export interface AgentDispatchOkLike {
   ok: true;
   status: 'queued';
   message_id: string;
   resolved_to: string;
-  resolution: 'live' | 'resumed' | 'rotating' | 'forked';
+  resolution: 'live' | 'resumed' | 'rotating' | 'created';
   conversation_id?: string;
 }
 
@@ -252,67 +225,80 @@ export interface AgentDispatchBatchResultLike {
   results: AgentDispatchItemLike[];
 }
 
-/** `agents.rotate` 成功条目：Binding 已切换。 */
-export interface AgentRotateOkLike {
-  ok: true;
-  status: 'rotated';
+/** `sessions.create` 的输入（CONTRACT-0.39 §2.1）。 */
+export interface SessionCreateLikeInput {
+  /** 无来源时必填；有来源时可省（由源推断），两者不一致 → invalid_params。 */
+  agent_id?: string;
+  /** 来源 session；必须是该 agent 当前 primary。 */
+  from_session_id?: string;
+  /** 仅 `from_session_id` 存在时合法；缺省 copy。 */
+  seed?: AgentCreateSeedLike;
+  /** 仅 `from_session_id` 存在时合法；`sessions.get().messages` 下标。 */
+  keep_messages?: number;
+  /** 新 session 首条输入；给了才起 run。 */
+  startup_prompt?: string;
+  /** 缺省 conversation；仅 `from_session_id` 存在时合法。 */
+  mode?: 'conversation' | 'both';
+  /** mode=both 时必填。 */
+  files?: { ref: string; paths: string[] };
+}
+
+/** `sessions.create` 的结果（CONTRACT-0.39 §2.3）；无来源时省略 source / seed / counts。 */
+export interface SessionCreateLikeResult {
   agent_id: string;
-  from_session_id: string;
-  to_session_id: string;
-  epoch: number;
+  session_id: string;
+  source_session_id?: string;
+  seed?: AgentCreateSeedLike;
+  keep_messages?: number;
+  keep_projected?: number;
+  copied_messages?: number;
+  primary: true;
+  /** 仅 mode=both（文件回滚由入口层执行）。 */
+  files_restored?: number;
+  files_skipped?: number;
 }
 
-export type AgentRotateItemLike = AgentRotateOkLike | AgentLifecycleFailLike;
-
-export interface AgentRotateBatchResultLike {
-  results: AgentRotateItemLike[];
+/** `sessions.restart`：同一 session 换 binding（epoch+1）。 */
+export interface SessionRestartLikeInput {
+  session_id: string;
+  startup_prompt?: string;
 }
 
-/** `agents.restart` 成功条目：同一 Session，epoch 递增。 */
-export interface AgentRestartOkLike {
-  ok: true;
-  status: 'restarted';
+export interface SessionRestartLikeResult {
   agent_id: string;
   session_id: string;
   from_epoch: number;
   epoch: number;
 }
 
-export type AgentRestartItemLike = AgentRestartOkLike | AgentLifecycleFailLike;
-
-export interface AgentRestartBatchResultLike {
-  results: AgentRestartItemLike[];
-}
-
-/** `agents.compactFork` 成功条目：新建子 Session，继承压缩后的上下文。 */
-export interface AgentCompactForkOkLike {
-  ok: true;
-  status: 'compact_forked';
-  agent_id: string;
-  from_session_id: string;
-  to_session_id: string;
-  epoch: number;
-}
-
-export type AgentCompactForkItemLike = AgentCompactForkOkLike | AgentLifecycleFailLike;
-
-export interface AgentCompactForkBatchResultLike {
-  results: AgentCompactForkItemLike[];
-}
-
-/** `agents.fork` 成功条目：新建 Agent + 空 Session，不复制 transcript。 */
-export interface AgentForkOkLike {
-  ok: true;
-  status: 'forked';
-  agent_id: string;
-  from_agent_id: string;
+/** `sessions.activate`：把 primary / bindingHistory 中的 session 切回 primary。 */
+export interface SessionActivateLikeInput {
   session_id: string;
+  startup_prompt?: string;
 }
 
-export type AgentForkItemLike = AgentForkOkLike | AgentLifecycleFailLike;
+export interface SessionActivateLikeResult {
+  agent_id: string;
+  session_id: string;
+  previous_session_id: string;
+  epoch: number;
+  /** 目标本来就是当前 primary 时为 true。 */
+  noop: boolean;
+}
 
-export interface AgentForkBatchResultLike {
-  results: AgentForkItemLike[];
+/**
+ * `sessions.create{mode:'both'}` 的 git restore 入口；必须在切换 session 之前调用。
+ * 未注入 = git restore 不可用（`not_supported`）。
+ */
+export interface SessionRestoreFilesLikeInput {
+  agent_id: string;
+  session_id: string;
+  files: { ref: string; paths: string[] };
+}
+
+export interface SessionRestoreFilesLikeResult {
+  files_restored: number;
+  files_skipped: number;
 }
 
 /**
@@ -340,12 +326,18 @@ export interface AgentControlLike {
   send(inputs: AgentSendLikeInput[]): Promise<AgentSendBatchResultLike>;
   /** 批量 dispatch；条目并行，结果与输入同序。 */
   dispatch(inputs: AgentDispatchLikeInput[]): Promise<AgentDispatchBatchResultLike>;
-  /** 批量 rotate；条目并行，结果与输入同序。 */
-  rotate(inputs: AgentRotateLikeInput[]): Promise<AgentRotateBatchResultLike>;
-  /** 批量 restart（同一 Session，epoch + 1）；条目并行，结果与输入同序。 */
-  restart(inputs: AgentRestartLikeInput[]): Promise<AgentRestartBatchResultLike>;
-  /** 批量 compactFork（新 primary Session）；条目并行，结果与输入同序。 */
-  compactFork(inputs: AgentCompactForkLikeInput[]): Promise<AgentCompactForkBatchResultLike>;
-  /** 批量 fork（新 Agent + 空 Session）；条目并行，结果与输入同序。 */
-  fork(inputs: AgentForkLikeInput[]): Promise<AgentForkBatchResultLike>;
+  /**
+   * `sessions.create`（CREATE-0.39）：同 agent 新 session，成为唯一 primary。
+   * 失败以 AgentError 形状（`code` + `message`）reject，RPC 层统一映射。
+   */
+  createSession(input: SessionCreateLikeInput): Promise<SessionCreateLikeResult>;
+  /** `sessions.restart`（CREATE-0.39）：同一 session 原地换 binding（epoch+1）。 */
+  restartSession(input: SessionRestartLikeInput): Promise<SessionRestartLikeResult>;
+  /** `sessions.activate`（CREATE-0.39）：把保留 session 切回 primary。 */
+  activateSession(input: SessionActivateLikeInput): Promise<SessionActivateLikeResult>;
+  /**
+   * `sessions.create{mode:'both'}` 的文件回滚端口（asm 注入）：必须在切换 session
+   * 前执行；未注入 = git restore 不可用。
+   */
+  restoreFiles?(input: SessionRestoreFilesLikeInput): Promise<SessionRestoreFilesLikeResult>;
 }

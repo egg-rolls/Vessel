@@ -481,8 +481,8 @@ export interface TeamFederationPolicy {
 export interface TeamPolicy {
   permission?: TeamPermissionPolicy;
   budget?: TeamBudgetPolicy;
-  /** 0.20：dispatch 在 resume 失败后是否允许 fork；缺省 false（手改别名 `allow_fork`） */
-  allowFork?: boolean;
+  /** dispatch 在 resume 失败后是否允许自动创建 agent；缺省 false（手改别名 `allow_auto_create`） */
+  allowAutoCreate?: boolean;
   /** S7.2：跨节点接收策略；缺省 log。 */
   federation?: TeamFederationPolicy;
   [key: string]: unknown;

@@ -360,10 +360,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
         flags: ['--json', '--interrupt', '--message-id', '--important'],
       },
       { name: 'inbox', flags: ['--json'] },
-      { name: 'dispatch', flags: ['--json'] },
-      { name: 'rotate', flags: ['--json', '--startup'] },
-      { name: 'restart', flags: ['--json', '--startup'] },
-      { name: 'compact-fork', flags: ['--json', '--startup'] },
+      { name: 'dispatch', flags: ['--json', '--allow-auto-create'] },
       { name: 'close', flags: ['--json'] },
       {
         name: 'list',

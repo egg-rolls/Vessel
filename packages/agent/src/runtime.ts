@@ -302,7 +302,7 @@ export interface MemberRunnableAgent extends Omit<RunnableAgent, 'resumeRun'> {
   interrupt?(reason?: RunInterruptReason): void;
   /** Stage 3：当前 session 有效 SessionLease 的 fencingToken（ExecutionUnit 已实现）。 */
   sessionLeaseToken?(sessionId: string): number | undefined;
-  /** Stage 3：compactFork 预取新 primary 的 SessionLease（ExecutionUnit 已实现）。 */
+  /** Stage 3：seeded create / restart 预取新 primary 的 SessionLease（ExecutionUnit 已实现）。 */
   ensureSessionLease?(sessionId: string, minFence?: number): Promise<LeaseGrant | undefined>;
   /** 只追加上下文，不启动 turn（ExecutionUnit 已实现） */
   appendNotice?(text: string): void;

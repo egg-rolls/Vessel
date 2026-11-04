@@ -494,7 +494,17 @@ export const teamMessageSchema = {
     // 0.19 S4：人工预算 override 的系统记录；0.38：撤回 tombstone。
     system_event: {
       type: 'string',
-      enum: ['join', 'leave', 'rotate', 'archive', 'budget_override', 'fork', 'retract'],
+      enum: [
+        'join',
+        'leave',
+        'rotate',
+        'archive',
+        'budget_override',
+        // CREATE-0.39：新写为 create；`fork` 只作旧日志只读值。
+        'create',
+        'fork',
+        'retract',
+      ],
     },
     // 0.38：撤回 tombstone 指向的目标 message_id。
     retracted_message_id: { type: 'string' },
@@ -522,7 +532,7 @@ export const teamDeliverySchema = {
     agent_id: { type: 'string' },
     status: { type: 'string', enum: ['queued', 'rejected', 'error'] },
     message_id: { type: 'string' },
-    resolution: { type: 'string', enum: ['live', 'resumed', 'rotating', 'forked'] },
+    resolution: { type: 'string', enum: ['live', 'resumed', 'rotating', 'created'] },
     code: { type: 'string' },
     reason: { type: 'string' },
   },

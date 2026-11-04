@@ -4,13 +4,10 @@
  * 从 `client.ts` 拆出（S1）；行为与原单文件一致。
  */
 
-import { unwrapAgentResult, unwrapAgentRotate } from '../agent-result';
+import { unwrapAgentResult } from '../agent-result';
 import type {
   AgentBatchResponse,
   AgentCreateInput,
-  AgentRotateInput,
-  AgentRotateResponse,
-  AgentRotateSuccess,
   AgentSummary,
   AgentsTreeResponse,
   AgentUpdateInput,
@@ -48,18 +45,6 @@ export abstract class AgentsClient extends RunsClient {
   async closeAgent(agentId: string): Promise<AgentSummary> {
     return unwrapAgentResult(
       await this.rpc<AgentBatchResponse>('agents.close', { agents: [{ agent_id: agentId }] }),
-    );
-  }
-
-  /**
-   * canonical `agents.rotate`（0.26）：为成员换一具新 Body。
-   *
-   * 批量形状但 UI 每次只发一条；失败条目必须按错误处理并保留 code
-   * （`body_not_live` / `member_stale` / `active_run` 等），交给调用方做可读映射。
-   */
-  async rotateAgent(input: AgentRotateInput): Promise<AgentRotateSuccess> {
-    return unwrapAgentRotate(
-      await this.rpc<AgentRotateResponse>('agents.rotate', { agents: [input] }),
     );
   }
 }

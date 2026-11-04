@@ -74,6 +74,7 @@ function parseEntry(line: string): TeamLogEntry | null {
       systemEvent === 'rotate' ||
       systemEvent === 'archive' ||
       systemEvent === 'budget_override' ||
+      systemEvent === 'create' ||
       systemEvent === 'fork' ||
       systemEvent === 'retract'
     ) {

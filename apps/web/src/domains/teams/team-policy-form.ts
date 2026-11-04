@@ -10,7 +10,7 @@ export interface PolicyFormState {
   warningThreshold: string;
   cycleMaxRepeats: string;
   cycleCooldownSeconds: string;
-  allowFork: boolean;
+  allowAutoCreate: boolean;
   federationAccept: '' | 'principal' | 'log';
 }
 
@@ -48,7 +48,7 @@ export function emptyPolicyForm(): PolicyFormState {
     warningThreshold: '',
     cycleMaxRepeats: '',
     cycleCooldownSeconds: '',
-    allowFork: false,
+    allowAutoCreate: false,
     federationAccept: '',
   };
 }
@@ -83,7 +83,7 @@ export function policyToForm(policy: Record<string, unknown> | undefined): Polic
     warningThreshold: numberText(budget.warningThreshold),
     cycleMaxRepeats: numberText(cycle.maxRepeats),
     cycleCooldownSeconds: numberText(cycle.cooldownSeconds),
-    allowFork: policy?.allowFork === true,
+    allowAutoCreate: policy?.allowAutoCreate === true,
     federationAccept: accept === 'principal' || accept === 'log' ? accept : '',
   };
 }
@@ -209,9 +209,9 @@ export function buildPolicy(
   if (Object.keys(federation).length > 0) next.federation = federation;
   else delete next.federation;
 
-  // allowFork：勾选写 true；未勾选且原本显式 false 时保留 false，否则删除。
-  if (form.allowFork) next.allowFork = true;
-  else if (base?.allowFork !== false) delete next.allowFork;
+  // allowAutoCreate：勾选写 true；未勾选且原本显式 false 时保留 false，否则删除。
+  if (form.allowAutoCreate) next.allowAutoCreate = true;
+  else if (base?.allowAutoCreate !== false) delete next.allowAutoCreate;
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, policy: next };

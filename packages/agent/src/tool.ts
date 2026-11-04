@@ -373,8 +373,11 @@ export function createAgentTool(
           if (callerSession === undefined) {
             throw invalid('rotate requires a calling body');
           }
+          if (typeof record.startup_prompt !== 'string' || record.startup_prompt === '') {
+            throw invalid('rotate requires startup_prompt');
+          }
           // 0.31：模型发起的 rotate 一律先问人类。CLI / 人工 RPC 直接走
-          // service.rotate（不带 from_session_id），不经过这里，因此不会被询问。
+          // service.createSession，不经过这里，因此不会被询问。
           const ratio = service.contextRatio(callerSession);
           // floor：0.895 必须显示 89%（低于 90% 线），不能用 round 显示成 90%
           // 却同时说“below the 90% line”。
@@ -454,16 +457,29 @@ export function createAgentTool(
             });
           }
 
+          const caller = await service.identify(callerSession);
+          if (caller === undefined) {
+            throw invalid('rotate requires a known calling body');
+          }
           service.noteAgentEvent('agent.rotate.approved', callerSession, decisionData);
-          const result = await service.rotate({
-            to: (record.to ?? callerSession) as string,
-            startup_prompt: record.startup_prompt as string,
+          // CREATE-0.39：rotate 下沉到 sessions.create（无来源 + startup_prompt）。
+          const result = await service.createSession(
+            {
+              agent_id: caller.id,
+              startup_prompt: record.startup_prompt,
+            },
+            // 工具在调用者自身 active run 内执行；RPC 路径不传此内部选项。
+            { allowActiveRun: true },
+          );
+          const created = await service.identify(result.session_id);
+          const rotated = {
+            status: 'rotated',
+            agent_id: result.agent_id,
             from_session_id: callerSession,
-            from: ownerId,
-          });
-          return result.status === 'rotated'
-            ? `${JSON.stringify(result)}\nrotation committed; finish the current turn`
-            : JSON.stringify(result);
+            to_session_id: result.session_id,
+            epoch: created?.epoch,
+          };
+          return `${JSON.stringify(rotated)}\nrotation committed; finish the current turn`;
         }
 
         if (!isOwnerCaller && !BODY_ACTIONS.includes(action as string)) {

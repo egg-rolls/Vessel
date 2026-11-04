@@ -3,7 +3,7 @@
  *
  * Body 历史优先服务端 `member.body_history`；只有字段缺失时才使用
  * `agent.rotated / agent.retired` 的本次页面观察值，并明确标注。
- * 提供需确认的 rotate（新上下文）；不提供配置 / close 操作。
+ * 提供需确认的新建 session（`sessions.create` 无来源）；不提供配置 / close 操作。
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
@@ -40,12 +40,16 @@ import { roleLabelKey, roleOf } from './role';
 
 export type { MemberDetailClient, MemberDetailProps } from './member-detail-types';
 
-/** `agents.rotate` 的常见失败码 → 可读文案；未知错误原样返回。 */
-function rotateErrorMessage(error: unknown): string {
+/** `sessions.create` 的常见失败码 → 可读文案；未知错误原样返回。 */
+function createErrorMessage(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code;
-  if (code === 'body_not_live') return t('team.member.rotate.error.bodyNotLive');
-  if (code === 'member_stale') return t('team.member.rotate.error.memberStale');
-  if (code === 'active_run') return t('team.member.rotate.error.activeRun');
+  if (code === 'not_found' || code === 'not_visible') {
+    return t('team.member.rotate.error.notFound');
+  }
+  // 源 / 目标被占用、Team 冻结或满员、agent 已关闭：统一 conflict。
+  if (code === 'conflict') return t('team.member.rotate.error.conflict');
+  if (code === 'invalid_params') return t('team.member.rotate.error.invalid');
+  if (code === 'quota_exceeded') return t('team.member.rotate.error.quota');
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -183,14 +187,14 @@ export function MemberDetail({
     setRotating(true);
     setRotateError(null);
     try {
-      await client.rotateAgent({ to: member.agent_id, startup_prompt: prompt });
+      await client.createSession({ agent_id: member.agent_id, startup_prompt: prompt });
       toast.success(t('team.member.rotate.success', { name }));
       setRotateOpen(false);
       reload();
-      // 群聊 / 团队详情共享同一 server snapshot，rotate 后一并刷新。
+      // 群聊 / 团队详情共享同一 server snapshot，新 session 后一并刷新。
       void loadDetail(nodeKey, teamId, client, { limit: 1 }, 'chat');
     } catch (error) {
-      setRotateError(rotateErrorMessage(error));
+      setRotateError(createErrorMessage(error));
     } finally {
       setRotating(false);
     }

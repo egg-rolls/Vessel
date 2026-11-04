@@ -14,12 +14,7 @@ import {
 } from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
-import {
-  deriveSessionMeta,
-  mergeHistoryProjection,
-  projectedKeepCount,
-  projectMessages,
-} from '../session/index.js';
+import { deriveSessionMeta, mergeHistoryProjection, projectMessages } from '../session/index.js';
 import {
   type ContextCompactedReason,
   DEFAULT_COMPACT_THRESHOLD,
@@ -1696,55 +1691,6 @@ export class ExecutionUnit {
     // 手动压缩（可能发生在两次 run 之间）同样是一次显式前缀失效。
     if (removed > 0) this.pendingPrefixReason ??= 'compaction';
     return { removed, remaining, messages };
-  }
-
-  /**
-   * 0.37：消息撤回——删除 `state.messages` 中 `[keepMessages, ...)` 的全部历史。
-   *
-   * 只有无 active Run 时允许。事实事件 `session.rewound` 经瞬态 journal 先落盘，
-   * 再写截断后的 SessionState（`saveSessionState` 把 `derived_upto_seq` 覆盖到
-   * marker），下一次全量重投影按 marker 截断，不会复活已删消息。
-   *
-   * @returns `{ removed, remaining }`：删除条数与保留条数（`state.messages` 口径）
-   */
-  async rewindContext(
-    sessionId: string,
-    keepMessages: number,
-  ): Promise<{ removed: number; remaining: number }> {
-    if (this.activeRun !== undefined) throw new Error('run_in_progress');
-    if (this.session === undefined) throw new Error('rewind_unavailable');
-
-    const state = await this.session.load(sessionId);
-    if (state === null) throw new Error('session_not_found');
-
-    const messages = state.messages ?? [];
-    if (!Number.isInteger(keepMessages) || keepMessages < 0 || keepMessages > messages.length) {
-      throw new Error('invalid_params');
-    }
-
-    const kept = messages.slice(0, keepMessages);
-    const removed = messages.length - kept.length;
-    const journal = this.transientJournal('manual', sessionId);
-    journal.appendFact({
-      type: 'session.rewound',
-      run_id: 'manual',
-      data: {
-        run_id: 'manual',
-        session_id: sessionId,
-        keep_messages: keepMessages,
-        keep_projected: projectedKeepCount(messages, keepMessages),
-        removed,
-      },
-      ts: Date.now(),
-    });
-    await journal.saveSessionState({
-      ...state,
-      messages: kept,
-      updated_at: Date.now(),
-    });
-    // 下一次请求是显式前缀失效；last_run_id / status 不动（RunRecord 不在本契约内）。
-    this.pendingPrefixReason ??= 'rewind';
-    return { removed, remaining: kept.length };
   }
 
   /** 强制压缩一次（overflow 重试用）；压缩失败不覆盖 provider 原始错误。 */

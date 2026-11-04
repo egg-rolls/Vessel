@@ -1,42 +1,54 @@
 /**
- * AgentService → canonical `agents.*` 控制面适配（0.25）。
+ * AgentService → canonical `agents.*` / `sessions.*` 控制面适配（0.25 / CREATE-0.39）。
  *
  * 只做形状映射：生命周期逻辑全部在 `@vessel-agent/agent`。批量语义直接复用
- * `AgentService.new/update/close`，因此与 owner 端点完全一致（并行、失败隔离、
+ * `AgentService.create/update/close`，因此与 owner 端点完全一致（并行、失败隔离、
  * 结果保持输入顺序）。owner 端点的后续收口应复用同一适配器，而不是另写一套。
+ *
+ * CREATE-0.39：`sessions.create|restart|activate` 与 `agents.create` 的 seeded 字段
+ * 直接转发；错误保持 `AgentError` 形状，由 serve 的 `mapSessionControlError` /
+ * `normalizeCreateFailure` 翻成冻结的 RPC 码，不在这里另造一套错误码。
  *
  * @module vessel/agent-control
  */
 
+import { execFile } from 'node:child_process';
 import type { AgentService, BatchItemResult, MemberStatus } from '@vessel-agent/agent';
-import type {
-  AgentCloseBatchResultLike,
-  AgentCompactForkBatchResultLike,
-  AgentCompactForkItemLike,
-  AgentCompactForkLikeInput,
-  AgentControlLike,
-  AgentCreateLikeInput,
-  AgentDispatchBatchResultLike,
-  AgentDispatchItemLike,
-  AgentDispatchLikeInput,
-  AgentForkBatchResultLike,
-  AgentForkItemLike,
-  AgentForkLikeInput,
-  AgentLifecycleBatchResultLike,
-  AgentLifecycleFailLike,
-  AgentLifecycleItemLike,
-  AgentListLikeInput,
-  AgentRestartBatchResultLike,
-  AgentRestartItemLike,
-  AgentRestartLikeInput,
-  AgentRotateBatchResultLike,
-  AgentRotateItemLike,
-  AgentRotateLikeInput,
-  AgentSendBatchResultLike,
-  AgentSendLikeInput,
-  AgentStatusLike,
-  AgentUpdateLikeInput,
+import {
+  type AgentCloseBatchResultLike,
+  type AgentControlLike,
+  type AgentCreateLikeInput,
+  type AgentDispatchBatchResultLike,
+  type AgentDispatchItemLike,
+  type AgentDispatchLikeInput,
+  type AgentLifecycleBatchResultLike,
+  type AgentLifecycleFailLike,
+  type AgentLifecycleItemLike,
+  type AgentListLikeInput,
+  type AgentSendBatchResultLike,
+  type AgentSendLikeInput,
+  type AgentStatusLike,
+  type AgentUpdateLikeInput,
+  RpcError,
+  type SessionActivateLikeInput,
+  type SessionActivateLikeResult,
+  type SessionCreateLikeInput,
+  type SessionCreateLikeResult,
+  type SessionRestartLikeInput,
+  type SessionRestartLikeResult,
+  type SessionRestoreFilesLikeInput,
+  type SessionRestoreFilesLikeResult,
 } from '../packages/serve/src/index';
+
+/** `createAgentControl` 的内部选项（不是 wire 字段）。 */
+export interface AgentControlOptions {
+  /**
+   * CREATE-0.39 §2.1：`sessions.create{mode:'both'}` 的 git restore 需要在哪个
+   * workspace 执行。缺省 = 无法解析 workspace，`restoreFiles` 返回
+   * `not_supported`，不会静默跳过文件回滚。
+   */
+  resolveWorkspace?: (agentId: string) => Promise<string | undefined>;
+}
 
 function statusOf(status: MemberStatus): AgentStatusLike {
   return status as unknown as AgentStatusLike;
@@ -70,8 +82,79 @@ function mapLifecycle<T>(
   };
 }
 
-/** 用 app 侧的 AgentService 构造注入给 gateway 的稳定控制面。 */
-export function createAgentControl(service: AgentService, tenantId: string): AgentControlLike {
+/** 执行一次 git；非零退出时把 stderr 摘要作为错误抛出。 */
+function runGit(cwd: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'git',
+      args,
+      {
+        cwd,
+        windowsHide: true,
+        maxBuffer: 8 * 1024 * 1024,
+        // `git: 'restore' is not a git command` 这类诊断依赖 locale；固定英文便于判定。
+        env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+      },
+      (error, _stdout, stderr) => {
+        if (error !== null) {
+          const detail = stderr.trim() || error.message;
+          reject(new Error(detail));
+          return;
+        }
+        resolve();
+      },
+    );
+  });
+}
+
+/** `git restore` 子命令不可用（git < 2.23）。 */
+const GIT_RESTORE_UNAVAILABLE = /(is not a git command|unknown subcommand)/i;
+
+/** CREATE-0.39 §2.1：mode=both 的显式 git restore（在 session 切换前执行）。 */
+async function restoreFilesInWorkspace(
+  workspace: string,
+  input: SessionRestoreFilesLikeInput,
+): Promise<SessionRestoreFilesLikeResult> {
+  try {
+    await runGit(workspace, ['rev-parse', '--is-inside-work-tree']);
+  } catch (error) {
+    throw new RpcError(
+      'not_supported',
+      `git restore unavailable: ${workspace} is not a git work tree (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  try {
+    await runGit(workspace, ['rev-parse', '--verify', '--quiet', input.files.ref]);
+  } catch {
+    throw new RpcError('invalid_params', `invalid git ref: ${input.files.ref}`);
+  }
+
+  let restored = 0;
+  let skipped = 0;
+  for (const path of input.files.paths) {
+    try {
+      await runGit(workspace, ['restore', `--source=${input.files.ref}`, '--', path]);
+      restored += 1;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      // git < 2.23 没有 `restore`：必须在改任何文件 / session 前硬失败，
+      // 不得把“子命令不存在”伪装成单路径跳过。
+      if (GIT_RESTORE_UNAVAILABLE.test(detail)) {
+        throw new RpcError('not_supported', `git restore unavailable: ${detail}`);
+      }
+      // genuine 单路径失败（路径不存在 / 权限等）按 files_skipped 计数。
+      skipped += 1;
+    }
+  }
+  return { files_restored: restored, files_skipped: skipped };
+}
+
+/** 用 app 侧的 AgentService 构造注入给 gateway / owner 端点的稳定控制面。 */
+export function createAgentControl(
+  service: AgentService,
+  tenantId: string,
+  options: AgentControlOptions = {},
+): AgentControlLike {
   return {
     tenantId,
     async create(inputs: AgentCreateLikeInput[]): Promise<AgentLifecycleBatchResultLike> {
@@ -88,6 +171,12 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
           ...(input.owner !== undefined ? { owner: input.owner } : {}),
           ...(input.parent_id !== undefined ? { parentId: input.parent_id } : {}),
           ...(input.spawnedBy !== undefined ? { spawnedBy: input.spawnedBy } : {}),
+          // CREATE-0.39 §1.1：seeded create（来源 session / 种子方式 / 保留边界）。
+          ...(input.from_session_id !== undefined
+            ? { from_session_id: input.from_session_id }
+            : {}),
+          ...(input.seed !== undefined ? { seed: input.seed } : {}),
+          ...(input.keep_messages !== undefined ? { keep_messages: input.keep_messages } : {}),
         })),
       });
       return mapLifecycle(batch.results, (status) => ({
@@ -197,7 +286,9 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
             ...(input.conversation_id !== undefined
               ? { conversation_id: input.conversation_id }
               : {}),
-            ...(input.allow_fork !== undefined ? { allow_fork: input.allow_fork } : {}),
+            ...(input.allow_auto_create !== undefined
+              ? { allow_auto_create: input.allow_auto_create }
+              : {}),
           }),
         ),
       );
@@ -220,139 +311,33 @@ export function createAgentControl(service: AgentService, tenantId: string): Age
       });
       return { results };
     },
-    async rotate(inputs: AgentRotateLikeInput[]): Promise<AgentRotateBatchResultLike> {
-      const settledResults = await Promise.allSettled(
-        inputs.map((input) =>
-          service.rotate({
-            to: input.to,
-            startup_prompt: input.startup_prompt,
-            ...(input.from !== undefined ? { from: input.from } : {}),
-            ...(input.from_session_id !== undefined
-              ? { from_session_id: input.from_session_id }
-              : {}),
-          }),
-        ),
-      );
-      const results: AgentRotateItemLike[] = settledResults.map((settledResult) => {
-        if (settledResult.status === 'rejected') return failureFrom(settledResult.reason);
-        const result = settledResult.value;
-        if (result.status !== 'rotated') {
-          return { ok: false, code: result.code, error: result.reason };
-        }
-        return {
-          ok: true,
-          status: 'rotated',
-          agent_id: result.agent_id,
-          from_session_id: result.from_session_id,
-          to_session_id: result.to_session_id,
-          epoch: result.epoch,
-        };
-      });
-      return { results };
+    async createSession(input: SessionCreateLikeInput): Promise<SessionCreateLikeResult> {
+      return service.createSession(input);
     },
-    async restart(inputs: AgentRestartLikeInput[]): Promise<AgentRestartBatchResultLike> {
-      const settledResults = await Promise.allSettled(
-        inputs.map((input) =>
-          service.restart({
-            to: input.to,
-            ...(input.startup_prompt !== undefined ? { startup_prompt: input.startup_prompt } : {}),
-            ...(input.from !== undefined ? { from: input.from } : {}),
-            ...(input.from_session_id !== undefined
-              ? { from_session_id: input.from_session_id }
-              : {}),
-          }),
-        ),
-      );
-      const results: AgentRestartItemLike[] = settledResults.map((settledResult) => {
-        if (settledResult.status === 'rejected') return failureFrom(settledResult.reason);
-        const result = settledResult.value;
-        if (result.status !== 'restarted') {
-          return {
-            ok: false,
-            code: result.code,
-            error: result.reason,
-            ...(result.run_id !== undefined ? { run_id: result.run_id } : {}),
-            ...(result.session_id !== undefined ? { session_id: result.session_id } : {}),
-            ...(result.lease_token !== undefined ? { lease_token: result.lease_token } : {}),
-            ...(result.epoch !== undefined ? { epoch: result.epoch } : {}),
-          };
-        }
-        return {
-          ok: true,
-          status: 'restarted',
-          agent_id: result.agent_id,
-          session_id: result.session_id,
-          from_epoch: result.from_epoch,
-          epoch: result.epoch,
-        };
-      });
-      return { results };
+    async restartSession(input: SessionRestartLikeInput): Promise<SessionRestartLikeResult> {
+      return service.restartSession(input);
     },
-    async compactFork(
-      inputs: AgentCompactForkLikeInput[],
-    ): Promise<AgentCompactForkBatchResultLike> {
-      const settledResults = await Promise.allSettled(
-        inputs.map((input) =>
-          service.compactFork({
-            to: input.to,
-            ...(input.startup_prompt !== undefined ? { startup_prompt: input.startup_prompt } : {}),
-            ...(input.from !== undefined ? { from: input.from } : {}),
-            ...(input.from_session_id !== undefined
-              ? { from_session_id: input.from_session_id }
-              : {}),
-          }),
-        ),
-      );
-      const results: AgentCompactForkItemLike[] = settledResults.map((settledResult) => {
-        if (settledResult.status === 'rejected') return failureFrom(settledResult.reason);
-        const result = settledResult.value;
-        if (result.status !== 'compact_forked') {
-          return {
-            ok: false,
-            code: result.code,
-            error: result.reason,
-            ...(result.run_id !== undefined ? { run_id: result.run_id } : {}),
-            ...(result.session_id !== undefined ? { session_id: result.session_id } : {}),
-            ...(result.lease_token !== undefined ? { lease_token: result.lease_token } : {}),
-            ...(result.epoch !== undefined ? { epoch: result.epoch } : {}),
-          };
-        }
-        return {
-          ok: true,
-          status: 'compact_forked',
-          agent_id: result.agent_id,
-          from_session_id: result.from_session_id,
-          to_session_id: result.to_session_id,
-          epoch: result.epoch,
-        };
-      });
-      return { results };
+    async activateSession(input: SessionActivateLikeInput): Promise<SessionActivateLikeResult> {
+      return service.activateSession(input);
     },
-    async fork(inputs: AgentForkLikeInput[]): Promise<AgentForkBatchResultLike> {
-      const settledResults = await Promise.allSettled(
-        inputs.map((input) =>
-          service.fork({
-            to: input.to,
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.from !== undefined ? { from: input.from } : {}),
-          }),
-        ),
-      );
-      const results: AgentForkItemLike[] = settledResults.map((settledResult) => {
-        if (settledResult.status === 'rejected') return failureFrom(settledResult.reason);
-        const result = settledResult.value;
-        if (!result.ok) {
-          return { ok: false, code: result.code, error: result.reason };
-        }
-        return {
-          ok: true,
-          status: 'forked',
-          agent_id: result.member.id,
-          from_agent_id: result.from_agent_id,
-          session_id: result.member.session_id,
-        };
-      });
-      return { results };
+    async restoreFiles(
+      input: SessionRestoreFilesLikeInput,
+    ): Promise<SessionRestoreFilesLikeResult> {
+      const resolveWorkspace = options.resolveWorkspace;
+      if (resolveWorkspace === undefined) {
+        throw new RpcError(
+          'not_supported',
+          'git restore unavailable: workspace resolver is not configured',
+        );
+      }
+      const workspace = await resolveWorkspace(input.agent_id);
+      if (workspace === undefined) {
+        throw new RpcError(
+          'not_supported',
+          `git restore unavailable: no workspace for agent ${input.agent_id}`,
+        );
+      }
+      return restoreFilesInWorkspace(workspace, input);
     },
   };
 }

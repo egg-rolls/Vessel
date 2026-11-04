@@ -14,8 +14,9 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import type { Logger } from '@vessel-agent/core';
+import type { Logger, SessionStore } from '@vessel-agent/core';
 import { isLoopbackHostname } from '../packages/config/src/index';
+import { createSessionMethods } from '../packages/serve/src/gateway/methods/sessions';
 import {
   type AgentControlLike,
   createAgentMethods,
@@ -51,10 +52,10 @@ export type AgentOwnerMethod =
   | 'agents.close'
   | 'agents.list'
   | 'agents.dispatch'
-  | 'agents.rotate'
-  | 'agents.restart'
-  | 'agents.compactFork'
-  | 'agents.fork'
+  // CREATE-0.39：session 主键入口（CLI 人工 rotate / restart / compact-fork 已删除）。
+  | 'sessions.create'
+  | 'sessions.restart'
+  | 'sessions.activate'
   | 'teams.list'
   | 'teams.get'
   | 'teams.post'
@@ -384,6 +385,8 @@ export interface AgentOwnerServer {
 export interface StartAgentOwnerServerOptions {
   /** canonical `agents.*` 控制面（app 侧 AgentService 适配器）。 */
   control: AgentControlLike;
+  /** `sessions.create|restart|activate` 的 session 后端（serve 方法表要求）。 */
+  sessionFor?: (tenantId: string) => SessionStore | undefined;
   /** canonical `teams.*` 控制面；缺省时方法仍在表内，返回 `not_found`。 */
   teams?: TeamControlLike;
   dataDir: string;
@@ -474,10 +477,19 @@ interface OwnerRpc {
  */
 function createOwnerRpc(options: {
   control: AgentControlLike;
+  sessionFor?: (tenantId: string) => SessionStore | undefined;
   teams?: TeamControlLike;
   tenantId: string;
   ownerId: string;
 }): OwnerRpc {
+  const sessionMethods = createSessionMethods({
+    defaultTenantId: options.tenantId,
+    sessionFor: options.sessionFor ?? (() => undefined),
+    agent: options.control,
+  }).filter((method) =>
+    // CLI 只需要 session 创建 / 换体 / 切 primary；其余 sessions.* 仍走 gateway。
+    ['sessions.create', 'sessions.restart', 'sessions.activate'].includes(method.name),
+  );
   const table = defineMethods([
     ...createAgentMethods({
       registry: createAgentRegistry(),
@@ -486,6 +498,7 @@ function createOwnerRpc(options: {
       agent: options.control,
       ...(options.teams !== undefined ? { teams: options.teams } : {}),
     }),
+    ...sessionMethods,
     ...createTeamMethods({ teams: options.teams }),
   ]);
   const principal = ownerPrincipal(options.tenantId, options.ownerId);
@@ -535,6 +548,7 @@ export async function startAgentOwnerServer(
   const host = options.host ?? '127.0.0.1';
   const rpc = createOwnerRpc({
     control: options.control,
+    ...(options.sessionFor !== undefined ? { sessionFor: options.sessionFor } : {}),
     ...(options.teams !== undefined ? { teams: options.teams } : {}),
     tenantId: options.tenantId,
     ownerId,

@@ -296,8 +296,9 @@ function parseMember(value: unknown, version: number): PersistedAgentRecord | un
   );
   record.bodies = migrated.bodies;
   if (migrated.primary !== undefined) record.primary_body_id = migrated.primary;
-  const forkedFrom = optionalString(value.forked_from);
-  if (forkedFrom !== undefined) record.forked_from = forkedFrom;
+  // CREATE-0.39：只识别新键；旧 `forked_from` 不读、不迁移、不报错。
+  const sourceAgentId = optionalString(value.source_agent_id);
+  if (sourceAgentId !== undefined) record.source_agent_id = sourceAgentId;
   const currentTool = optionalString(value.current_tool);
   if (currentTool !== undefined) record.current_tool = currentTool;
   if (lastSeen !== undefined) record.last_seen = lastSeen;

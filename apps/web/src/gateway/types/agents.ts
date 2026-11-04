@@ -102,31 +102,6 @@ export interface AgentUpdateInput {
   team_id?: string;
 }
 
-/** canonical `agents.rotate` 入参；`startup_prompt` 必填且非空（ADR-092）。 */
-export interface AgentRotateInput {
-  to: string;
-  startup_prompt: string;
-}
-
-export interface AgentRotateSuccess {
-  ok: true;
-  status: 'rotated';
-  agent_id?: string;
-  from_session_id?: string;
-  to_session_id?: string;
-  epoch?: number;
-}
-
-export interface AgentRotateFailure {
-  ok: false;
-  code?: string;
-  error?: string;
-}
-
-export interface AgentRotateResponse {
-  results?: Array<AgentRotateSuccess | AgentRotateFailure>;
-}
-
 /** canonical `agents.create|update|close` 是批量形状；Web 每次只发一条。 */
 export interface AgentBatchSuccess {
   ok: true;

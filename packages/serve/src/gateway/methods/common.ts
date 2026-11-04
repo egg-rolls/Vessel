@@ -21,6 +21,23 @@ export function stringParam(params: Record<string, unknown>, key: string): strin
 }
 
 /**
+ * CREATE-0.39 r10：`run_in_progress: <runId|spawn>` 的 wire 归一。
+ *
+ * 返回 `undefined` 表示 message 不含该 reason；`runId` 只保留真实值
+ * （内部 `spawn` 哨兵与空值丢弃，绝不进 wire message）。
+ */
+export function runInProgressReason(message: string): { runId?: string } | undefined {
+  const marker = 'run_in_progress';
+  const index = message.indexOf(marker);
+  if (index === -1) return undefined;
+  const rest = message.slice(index + marker.length);
+  const match = /^\s*:\s*([^\s,;]+)/.exec(rest);
+  const raw = match?.[1];
+  const runId = raw !== undefined && raw.length > 0 && raw !== 'spawn' ? raw : undefined;
+  return runId !== undefined ? { runId } : {};
+}
+
+/**
  * checkpoint 是否属于该 tenant。
  * 未标注 tenant 的 checkpoint 视为当前 store 所属 tenant（file store 按目录隔离）。
  */

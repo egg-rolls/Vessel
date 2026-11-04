@@ -11,6 +11,10 @@ import type {
   DeleteSessionResult,
   PermissionScope,
   RenameSessionResult,
+  SessionActivateInput,
+  SessionActivateResult,
+  SessionCreateInput,
+  SessionCreateResult,
   SessionDetail,
   SessionInfo,
   SessionSearchHit,
@@ -58,14 +62,21 @@ export abstract class SessionsClient extends RpcClient {
   }
 
   /**
-   * 撤回：删除 `keepMessages` 及其后的全部历史（保留 `[0, keepMessages)`）。
-   * `keepMessages` 必须是 `sessions.get` 返回的 `session.messages` 下标。
+   * 创建 session（CONTRACT-0.39-create §2）：
+   * - 无 `from_session_id`：同 agent 的空 session；
+   * - 有 `from_session_id`：从源 session 复制 / 压缩前缀（`keep_messages` 下标），
+   *   新 session 成为 primary，**源 session 退役但保留**。
    */
-  rewindSession(
-    sessionId: string,
-    keepMessages: number,
-  ): Promise<{ session_id: string; removed: number; remaining: number }> {
-    return this.rpc('sessions.rewind', { session_id: sessionId, keep_messages: keepMessages });
+  createSession(input: SessionCreateInput): Promise<SessionCreateResult> {
+    return this.rpc<SessionCreateResult>('sessions.create', input);
+  }
+
+  /**
+   * 切换 primary（CONTRACT-0.39-create §4）：目标 session 重新可跑，
+   * 原 primary 退役进 `bindingHistory`；目标本来就是 primary 时 `noop: true`。
+   */
+  activateSession(input: SessionActivateInput): Promise<SessionActivateResult> {
+    return this.rpc<SessionActivateResult>('sessions.activate', input);
   }
 
   /** 重命名会话；后端会更新 updated_at，列表按倒序会自然跳到顶部。 */

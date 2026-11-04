@@ -87,7 +87,7 @@ function messageCapFor(config: { maxTokens?: number; maxMessages?: number }): nu
 }
 
 /**
- * 纯函数版压缩边界计算：`compactMessagesForFork` 与 `MemoryWorkingContext` 共用。
+ * 纯函数版压缩边界计算：`compactMessagesForSeed` 与 `MemoryWorkingContext` 共用。
  * 不读实例状态，返回的 `toSummarize` 是传入消息数组的对象引用。
  */
 function planCompactionForMessages(
@@ -247,8 +247,8 @@ function cloneMessage(message: Message): Message {
   };
 }
 
-/** 把一份消息数组压缩成新 Session 的种子（compactFork）；父数组/消息不被修改。 */
-export async function compactMessagesForFork(
+/** 把一份消息数组压缩成新 Session 的种子（create seed）；父数组/消息不被修改。 */
+export async function compactMessagesForSeed(
   messages: Message[],
   opts: {
     summarizer?: ContextSummarizer;

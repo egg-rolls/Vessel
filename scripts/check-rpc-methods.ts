@@ -35,8 +35,10 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'sessions.rename': 'write',
   // 0.34（CONTRACT-0.34-context C7）：手动压缩（connect / 远程）。
   'sessions.compact': 'write',
-  // 0.37（CONTRACT-0.37-message-rewind）：消息撤回（硬删除尾部历史）。
-  'sessions.rewind': 'write',
+  // 0.39（CREATE-0.39）：session 主键入口（空 / copy / compact）与 primary 切换。
+  'sessions.create': 'write',
+  'sessions.restart': 'write',
+  'sessions.activate': 'write',
   'runs.list': 'read',
   'runs.get': 'read',
   'runs.start': 'write',
@@ -49,14 +51,9 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'agents.create': 'write',
   'agents.update': 'write',
   'agents.close': 'write',
-  // 0.26：批量投递 / 换 Body；team-scoped token 只能操作同 team 成员。
+  // 0.26：批量投递；team-scoped token 只能操作同 team 成员。
   'agents.send': 'write',
   'agents.dispatch': 'write',
-  'agents.rotate': 'write',
-  // 0.34（Stage 3）：同一 Session 重启 / 压缩分叉 / Agent 级 fork；fork 不加 CLI。
-  'agents.restart': 'write',
-  'agents.compactFork': 'write',
-  'agents.fork': 'write',
   // 0.15（DECISION-030 E5）：canonical agent 树。
   'agents.tree': 'read',
   'events.list': 'read',

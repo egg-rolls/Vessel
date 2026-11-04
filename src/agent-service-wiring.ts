@@ -115,8 +115,8 @@ export interface AgentServiceWiringOptions {
    */
   leaseService?: LeaseServicePort;
   /**
-   * 0.34 Stage 3：compactFork 的压缩摘要器；与 tenant 上下文共用。
-   * 缺省时 compactFork 使用占位摘要。
+   * 0.34 Stage 3：seeded create（seed=compact）的压缩摘要器；与 tenant 上下文共用。
+   * 缺省时 `compactMessagesForSeed` 使用占位摘要。
    */
   summarizer?: ContextSummarizer;
   /**
@@ -149,6 +149,12 @@ export interface AgentServiceWiringOptions {
    * 只在 `dataDir` 存在时生效。
    */
   inboxMaxMessages?: number;
+  /**
+   * CREATE-0.39 §2.5：seeded create 失败时清理新 session 的事件日志 / 元数据。
+   * 装配层注入 core 的 session-data 删除路径；缺省时只记录
+   * `agent.create_cleanup_skipped`，会留下孤儿 session。
+   */
+  deleteSessionData?: (sessionId: string) => Promise<void>;
 }
 
 export interface AgentServiceWiring {
@@ -389,12 +395,16 @@ export async function createAgentServiceWiring(
       : {}),
     ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
     ...(options.summarizer !== undefined ? { summarizer: options.summarizer } : {}),
-    // 0.34 S2：compactFork 的压缩预算与 tenant 上下文同源。
+    // 0.34 S2：seeded create 的压缩预算与 tenant 上下文同源。
     ...(options.contextMaxTokens !== undefined
       ? { contextMaxTokens: options.contextMaxTokens }
       : {}),
-    // Stage 3：compactFork 从父 Session 事件日志重建/压缩 transcript。
+    // Stage 3：seeded create 从来源 Session 事件日志重建 / 压缩 transcript。
     ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
+    // CREATE-0.39 §2.5：新 session 写入后切换失败时删除事件日志 / 元数据。
+    ...(options.deleteSessionData !== undefined
+      ? { deleteSessionData: options.deleteSessionData }
+      : {}),
     snapshot: { enabled: true },
   });
   serviceRef = service;

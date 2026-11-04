@@ -1302,6 +1302,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(config.agent?.inboxMaxMessages !== undefined
         ? { inboxMaxMessages: config.agent.inboxMaxMessages }
         : {}),
+      // CREATE-0.39 §2.5：seeded create 的失败清理走 core 的 session-data 删除路径
+      // （先 detach 再删 event log / SessionState / RunRecord）。
+      deleteSessionData: async (sessionId: string) => {
+        await sessionControl.delete(sessionId);
+      },
     });
     // 0.27：回填本机投递端口（federation 端口的 getter 在此之后才读得到）。
     localHuman = createTeamHumanDelivery(wiring.team);
@@ -1329,7 +1334,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     nodeTokens = hubRuntime.nodeTokens;
 
     // owner 端点与 gateway 共用同一 canonical 控制面适配器。
-    const agentControlLike = createAgentControl(wiring.service, tenantId);
+    // CREATE-0.39 §2.1：mode=both 的 git restore 需要 agent 所属 Team 的 workspace。
+    const agentControlLike = createAgentControl(wiring.service, tenantId, {
+      resolveWorkspace: async (agentId: string) => {
+        const status = await wiring.service.identify(agentId);
+        const teamId = status?.team_id;
+        return teamId === undefined ? undefined : wiring.teamStore.get(teamId)?.workspace;
+      },
+    });
     // 0.34 Stage 3：CLI / TUI / gateway 的所有 delete 入口共用同一个前置钩子。
     sessionControl.setDetachSession((sessionId) => wiring.service.detachSession(sessionId));
     let ownerServer: AgentOwnerServer | undefined;
@@ -1339,6 +1351,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       try {
         ownerServer = await startAgentOwnerServer({
           control: agentControlLike,
+          sessionFor: (requestedTenant: string) =>
+            requestedTenant === tenantId ? session : undefined,
           teams: wiring.team,
           ownerId: wiring.ownerId,
           dataDir,
