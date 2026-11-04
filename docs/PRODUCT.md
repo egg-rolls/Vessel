@@ -1,19 +1,19 @@
-# Vessel 产品设计：分布式蜂巢
+# Vessel 产品设计：多 agent 运行时
 
-> 本文是产品概念模型，不是功能清单：节点、Hub、Team、Agent 如何组成一个蜂巢，
-> 三类信息素如何在它们之间流动，以及哪些已经实现、哪些只是方向。
-> 当前能力边界见 [README](../README.md#能力边界)，技术契约见
+> 本文是产品概念模型，不是功能清单：节点、Hub、Team、Agent 如何组成一个多 agent
+> 运行时，环境输入、定向消息与事件扩散如何在它们之间流动，以及哪些已经实现、
+> 哪些只是方向。当前能力边界见 [README](../README.md#能力边界)，技术契约见
 > [architecture/INDEX](architecture/INDEX.md)。
 
 ## 1. 定位
 
-Vessel 不试图做一个「更聪明的单体 Agent」。它给 Agent 一个可扩展的组织形态：
+Vessel 不试图做一个「更聪明的单体 Agent」。它给 Agent 一个可扩展的多 agent 结构：
 
-- **一个节点就是一个蜂巢。** 节点自己执行、自己授权、自己持久化。
-- **一个工作目录就是一个 Team。** Team 是蜂群，成员有名字、可见性、共享日志与预算。
-- **Agent 是个体蜂。** 身份持久，身体（Body）可替换；主 Agent 可以组建和收缩蜂群。
-- **Hub 让蜂巢彼此可见。** 它只交换目录与指针，不替节点做事。
-- **信息素决定谁看到什么、对谁说话、何时被唤醒。** 环境、定向、扩散三层分开建模。
+- **一个节点就是一个独立运行实例。** 节点自己执行、自己授权、自己持久化。
+- **一个工作目录就是一个 Team。** Team 有成员、可见性、共享日志与预算。
+- **Agent 是持久身份。** 身份持久，身体（Body）可替换；主 Agent 可以创建和关闭成员。
+- **Hub 让节点彼此可见。** 它只交换目录与指针，不替节点做事。
+- **上下文按来源分层。** 环境输入、定向消息、事件扩散三类信号分开建模。
 
 产品判断标准只有一句：**一个新节点接入后，其他节点能不能看见它、找到对的人、
 把任务递过去，并让结果回到原处。**
@@ -22,29 +22,30 @@ Vessel 不试图做一个「更聪明的单体 Agent」。它给 Agent 一个可
 
 1. **节点是权威。** 执行、权限、身份、数据都在节点上；Hub 不代理正文，也不替节点授权。
 2. **目录与正文分离。** 看见 ≠ 有权操作。Hub 只回答「谁在哪」，消息由节点之间直接投递。
-3. **工作目录是 Team 的边界。** `workspace` 是 Team 的唯一分组键；换目录就是换蜂群。
+3. **工作目录是 Team 的边界。** `workspace` 是 Team 的唯一分组键；换目录就是换 Team。
 4. **身份与身体分离。** Agent 是持久身份，Body 是 session + engine；`rotate` 换身体，不换身份。
 5. **名字是路由，不是 id。** 跨节点地址用 `<principal>@<node_id>:<team_id>`；principal 是 Team
    内的名字，wire 上不暴露 agent id。
 6. **少工具，多组合。** `bash` / `read` / `edit` 是通用原语；能用它们组合出来的能力，
    不再单开一个工具。
-7. **信息素分层。** 环境、定向、扩散三种信号分开建模；上下文只装当前 run 需要的那一层。
+7. **上下文分层。** 环境输入、定向消息、事件扩散三类信号分开建模；上下文只装当前 run
+   需要的那一层。
 
 ## 3. 概念模型
 
 | 产品概念 | 代码里的东西 | 一句话职责 |
 | --- | --- | --- |
-| 节点 / 蜂巢 | 一次 Vessel 进程，`node.json` 里的 `node_id` + 数据目录 | 执行、授权、持久化；跨节点通信的端点 |
+| 节点 | 一次 Vessel 进程，`node.json` 里的 `node_id` + 数据目录 | 执行、授权、持久化；跨节点通信的端点 |
 | Hub | `vessel hub` 目录服务，`vessel.hub/1` | 配对、节点 / Team / 成员目录、在线状态、指针；不传正文 |
-| Team / 蜂群 | `workspace` + `team_id` + roster + 日志 + policy | 一个工作目录的成员、共享日志、预算、可见性 |
-| Agent / 个体蜂 | 持久身份 + 可替换 Body | 干活、发消息、写日志、轮换身体 |
+| Team | `workspace` + `team_id` + roster + 日志 + policy | 一个工作目录的成员、共享日志、预算、可见性 |
+| Agent | 持久身份 + 可替换 Body | 干活、发消息、写日志、轮换身体 |
 | 地址 | `<principal>@<node_id>:<team_id>` | 跨节点定向投递；`human` 指向该 Team 的人类 |
 | Federation | `vessel.federation/1`，节点到节点 | 一条消息一个收件人；静态 peer allowlist |
 
 ```text
 Hub（只做目录与指针）
- ├─ node-a（蜂巢）── Team lab/ ── alice, bob
- └─ node-b（蜂巢）── Team ops/ ── carol
+ ├─ node-a ── Team lab/ ── alice, bob
+ └─ node-b ── Team ops/ ── carol
 
 alice@node-a:lab  ── federation ──▶  carol@node-b:ops
         ▲                                   │
@@ -59,8 +60,8 @@ alice@node-a:lab  ── federation ──▶  carol@node-b:ops
 ## 4. 一个任务如何流动
 
 1. 人在 `node-a` 的 `lab` 目录启动 Vessel；`lab` 是已声明的 Team（`workspace` 匹配当前目录）。
-2. 人类用 `agents.create`（`kind: peer|contractor` + `team_id`）把 `alice`、`bob` 招进 Team；root owner 也可用 `agent(hire)` 招自己的 contractor。每个成员有独立 Body 和会话。
-3. 成员用 `read` / `bash` / `edit` 读取环境信息素：文档、代码、系统状态、命令输出。
+2. 人类用 `agents.create`（`kind: peer|contractor` + `team_id`）把 `alice`、`bob` 创建进 Team；root owner 也可用 `agent(hire)` 建自己的 contractor。每个成员有独立 Body 和会话。
+3. 成员用 `read` / `bash` / `edit` 读取环境输入：文档、代码、系统状态、命令输出。
 4. 成员用 `agent(send)` 定向同步；`agent(post)` 只写 Team 日志，不唤醒任何人。
 5. 需要 `node-b` 的 `carol` 时，`alice` 发 `carol@node-b:ops`；接收侧只唤醒 `carol` 一个，不广播。
 6. 结果写回各自 Team 日志；人从 TUI / Web 时间线看到过程与终态。
@@ -68,27 +69,27 @@ alice@node-a:lab  ── federation ──▶  carol@node-b:ops
 当前版本里，第 2、4、5 步都是**显式派发**：谁做什么由主 Agent 或人决定。
 「自组织」目前指的是这些原语组合出来的工作方式，不是内建的自治规划器或任务市场。
 
-## 5. 三层信息素
+## 5. 三类上下文信号
 
 Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把三类信号折进语言空间。
 
 | 层 | 是什么 | 现在怎么流动 | 状态 |
 | --- | --- | --- | --- |
-| **环境信息素** | 文档、代码、系统状态、命令输出 | `read` / `bash` / `edit`、`@路径` 引用、skills、`AGENTS.md` | 已实现 |
-| **定向信息素** | 用户对话、工具调用、指名消息 | 当前 run 的 messages、`agent(send/post)`、Team 日志、federation 地址 | 已实现 |
-| **扩散信息素** | 微小状态变化：成员加入/离开、run/工具事件；文件变化 | 事件流、presence、Hub 目录、Web 时间线；文件级 `subscribe` | 部分：文件级显式订阅已实现；目录 / 事件订阅、自动注入未实现 |
+| **环境输入** | 文档、代码、系统状态、命令输出 | `read` / `bash` / `edit`、`@路径` 引用、skills、`AGENTS.md` | 已实现 |
+| **定向消息** | 用户对话、工具调用、指名消息 | 当前 run 的 messages、`agent(send/post)`、Team 日志、federation 地址 | 已实现 |
+| **事件扩散** | 微小状态变化：成员加入/离开、run/工具事件；文件变化 | 事件流、presence、Hub 目录、Web 时间线；文件级 `subscribe` | 部分：文件级显式订阅已实现；目录 / 事件订阅、自动注入未实现 |
 
-### 5.1 环境信息素
+### 5.1 环境输入
 
 「存在即事实」。Agent 每次主动读取：文件、命令输出、项目约定、技能文档。
 特点是**按需**——不读就不在上下文里；读了就是当前版本，没有缓存副本。
 
-### 5.2 定向信息素
+### 5.2 定向消息
 
 「谁对谁说」。用户的一轮输入、工具的调用与结果、成员之间的 `send`、跨节点地址消息。
 特点是**有明确收发者**：只进当前 run 或目标 Agent，不广播。
 
-### 5.3 扩散信息素
+### 5.3 事件扩散
 
 「变化本身」。成员上线/离线、run 开始/结束、工具调用、Hub 目录更新。
 当前这些变化进入事件流，人和 Web 控制台能看见；Agent 侧只在 `subscribe` 的**显式文件订阅**
@@ -108,7 +109,7 @@ Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把�
 产品约束不变：复用现有消息注入通道，不把订阅概念塞进 core；core 仍然只认 `RunOptions.messages`；
 不做轮询循环。
 
-## 6. 跨节点：看见与说话分开
+## 6. 跨节点：目录面与数据面分开
 
 | 平面 | 传什么 | 不传什么 | 谁负责 |
 | --- | --- | --- | --- |
@@ -139,9 +140,9 @@ Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把�
 | Hub 配对、目录、在线状态、指针 | 已实现 |
 | 跨节点按地址投递与回复（静态 peer） | 已实现 |
 | Agent 主动发现远端节点 / Team / 成员 | 部分：CLI `federation team-info`（opt-in）、Hub 目录或 `bash`；无专用发现工具 |
-| 成员 Agent 再派生 Agent（蜂群增长） | 已实现：peer / contractor 两条路径、close 人类审批、每 Team present ≤20、Team 冻结；temporary 有空闲 TTL（`agent.temporary_ttl_hours`，默认 `2`，`0` = 关闭，只回收 temporary）；无 spawn 预算 / 跨 Team 派生 |
+| 成员 Agent 再派生 Agent（成员派生） | 已实现：peer / contractor 两条路径、close 人类审批、每 Team present ≤20、Team 冻结；temporary 有空闲 TTL（`agent.temporary_ttl_hours`，默认 `2`，`0` = 关闭，只回收 temporary）；无 spawn 预算 / 跨 Team 派生 |
 | 跨节点 spawn / close / rotate / resume | 未实现 |
-| 扩散信息素订阅（文件 / 目录 / 事件 diff） | 部分：显式文件订阅（`subscribe` 插件，具体文件、run 边界短通知、按需 `inspect`）；无目录 / 事件订阅、无自动 diff 注入 |
+| 文件 / 目录 / 事件订阅与 diff 注入 | 部分：显式文件订阅（`subscribe` 插件，具体文件、run 边界短通知、按需 `inspect`）；无目录 / 事件订阅、无自动 diff 注入 |
 | 自动发现 / mesh / 中继 / 离线队列 / 跨重启 exactly-once | 未实现（暂不承诺） |
 | A2A 协议兼容 | 未实现 |
 | 自治调度（自动分工、任务市场） | 未实现（当前是显式派发） |
