@@ -78,3 +78,5 @@ interface ToolDefinition {
 
 判据只有一条：**能被其他工具替代的工具，就不该存在**。工具越多，模型的选错空间越大；真正的通用原语只有"执行一条命令"，其余都是它的特化。
 
+**API surface = prompt surface**：tool 的 name / description / inputSchema 每轮都在系统提示里，新增 tool / action / field / event 都是固定 token 税；设计评审要论证“模型必须知道它”，不能只算代码实体。能被 `bash` 或现有动作组合出来的，先不加。
+

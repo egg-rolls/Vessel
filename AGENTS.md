@@ -12,6 +12,8 @@
 - 历史决策查 ADR，当前版本查 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)；实现事实以代码为准，文档冲突时顺手改文档。
 - 读代码先 grep 定位再读片段，不整读超过 300 行的文件；一次只加载当前任务需要的文档。
 - 过程产物（计划、报告、临时脚本）不进本仓库；文档只写已实现的能力。
+- 文档 / handoff 不写死读数（写命令；确需写值带 `sha` + 时间戳）见 [gov](docs/agents/gov.md)。
+- 事件重放等价（replay 作 oracle，含 SSE `since` 续传 / 重复 / 缺口）见 [events](docs/architecture/events.md)。
 
 ## 项目是什么
 
@@ -40,6 +42,7 @@
 - 事件名一律开放字符串 `<domain>.<action>.<event>`，不新增常量 / 枚举；全异步，不写 sync-in-async；不留半成品 stub。
 - **诊断**：走 Logger（stderr），不得 `console.log` 到 stdout（stdout 只留命令结果 / JSON / UX）。
 - 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
+- **API surface = prompt surface**：新增 tool / action / field / event 都是每轮请求的固定 token 税；设计评审要论证“模型必须知道它”，不只看代码实体多少。
 
 ## 领域告诫（按路径命中）
 
@@ -57,6 +60,8 @@
 
 - 共享侧 / 个人侧分工、目录结构、角色独占路径、分支与发布规则见 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)。共享侧只放源码、长期文档与 CI。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。引用路径前先确认存在（`docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`processes/`、`legacy/` 已删除）；当前版本见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)。
+- **文档就是 prompt**：写意图与允许的例外，不写会被字面执行的绝对禁令；ADR / contract 的 `status` 与 `superseded-by` 由 `check-docs` 校验，不能只写在正文。
+- **提交可追溯**：squash / revert 提交带 `Squash-of:` / `Reverts:` / `Contract:` / `Decision:` trailer；合并以 tree-sha 为证据，不用“看起来一致”。
 
 ## 怎么跑与门禁
 
@@ -75,9 +80,16 @@ bun run scripts/version.ts --check
 bun run scripts/release-dry-run.ts
 ```
 
-仓库**没有自动化测试套件**：门禁只有 `bun run typecheck` + `bunx @biomejs/biome ci .`（加 `scripts/check-*.ts` 静态断言），运行时正确性靠一条端到端烟测 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
+仓库默认不维护通用测试套件：纯核心窄属性测试与有状态探针属于验证纪律的例外（见下）。**当前没有自动 test gate**，接入前只能一次性 / 定向运行验证；门禁只有 `bun run typecheck` + `bunx @biomejs/biome ci .`（加 `scripts/check-*.ts` 静态断言），运行时正确性靠一条端到端烟测 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
 改完代码至少跑 typecheck 与 biome；CI 异步，不作为 push 前置。收口额外门禁 `check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run` 只在用户要求或发布检查点。
 完整命令见 [README.md](README.md) 的「快速开始」；CI / 发布见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md) 与 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
+
+- **能机械判定的规则写成门禁**：不变量要有 owner（谁守）、oracle（怎么判真）与门禁层级；没有门禁的只能标成建议。
+- **不变量分两级**：硬不变量零容忍；软不变量用 baseline + delta，只要求不新增；例外必须有 owner 与到期日，不做永久 allowlist。
+- **验证分两层**：纯核心用窄属性测试；有状态外壳用不变量探针（状态矩阵 / 失败注入 / replay 等价）。不追覆盖率；“当前没有 test gate”不是不写验证的理由——每项行为变更要有针对它的证据。
+- **模型审查是 search，不是 gate**：review 产出证据、探针与契约修正；合并 / 验收结论必须落在确定性门禁上。
+- **门禁断言产物与反例**：exit 0 不够——构建类门禁还要断言产物存在（如 `apps/web/dist`），并至少做一次“改坏必须红”的负向验证。
+- **门禁分级并钉版本**：阻断级与观测级分开，warnings 收紧只在 CI 生效；工具版本以锁文件为准（`bun install --frozen-lockfile` 或 `bunx <pkg>@<lock 版本>`），不用漂移的本地版本定义基线。
 
 ## 分层与能力准入
 

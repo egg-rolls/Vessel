@@ -17,6 +17,7 @@ applies_to: [N, M]
 - 超过 300 行或 100 KB 的 current 文档按模块拆分，带 `INDEX.md` + frontmatter；模块 ≤100 行。
 - 过程产物（计划、报告、临时脚本）不进共享仓库——规则见 [DOC-MANAGEMENT.md](../DOC-MANAGEMENT.md) 与 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)；本文件不复述。
 - 文档只写已实现的能力；引用路径前先确认存在。
+- **不写死读数**：handoff / 文档写命令而不是值；确需写值时带 `sha` + 时间戳。
 
 ## 角色与路径
 
@@ -32,10 +33,10 @@ applies_to: [N, M]
 - **职责边界**：biome 只看代码与配置，markdown 排版归 `scripts/check-docs.ts`（行数上限、
   frontmatter、链接、INDEX）。`**/*.md` 已在 `biome.json` 的 `files.includes` 里显式排除，理由是
   **防止将来 biome 升级（2.6.x 起 Markdown 进入 formatter）时行为漂移**，不是因为当前 md 被 biome 管。
-- **门禁工具要钉版本**：`bunx <pkg>` 在没有本地 `node_modules` 的目录会拉最新版，等于偷偷换工具
-  （biome 2.6.4 vs 仓库 pin 的 2.5.15 曾造出 147 个假 error）。先 `bun install --frozen-lockfile`，
-  或显式 `bunx <pkg>@<lock 版本>`；另外 `git archive` 出来的副本没有 `.git`，`vcs.useIgnoreFile`
-  会失效，别在那上面判红绿。
+- 本地无 `node_modules` 时 `bunx <pkg>` 会拉最新版；`git archive` 副本没有 `.git`，`vcs.useIgnoreFile`
+  失效——先按 [AGENTS.md](../../AGENTS.md) 的锁版本规则准备环境，再判红绿。
+- 规则→门禁、两级不变量、文档即 prompt、tree-sha 可追溯等工程规则 canonical 见
+  [AGENTS.md](../../AGENTS.md)「文件与目录 / 怎么跑与门禁」；本文件只写文档侧落点。
 
 ## 发布与 CI
 

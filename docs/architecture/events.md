@@ -18,7 +18,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 **事件名一律是开放字符串字面量**（ADR-030）：不定义 `EventType` / `PermissionEvent` 之类常量，生产者和消费者直接写字符串。**命名空间 `<domain>.<action>.<event>`**，防撞名。
 
 - 加新事件 = 写字面量，零 import、零 core 变更。
-- 代价：没有编译期拼写检查，靠命名空间约定 + 集成测试兜底（断言"发布 X 后订阅者收到"）。
+- 代价：没有编译期拼写检查，靠命名空间约定 + 探针兜底（当前无自动化回归）。
 
 <a id="event-names"></a>
 
@@ -79,6 +79,8 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 ### 事件回放
 
 `MemoryEventStream` 之外，core 提供 `FileEventStore`（JSONL 一行一事件：`append` / `readRun` / `listRunIds` / `deleteRun`）与 `replayRun(store, runId, eventStream, { delayMs })`。回放经同一个 `publish()` 重新发布历史事件（保留原始 `ts`），订阅者用同一个 `subscribe()` 接收 live 与 replay，靠 `replay.started` / `replay.completed` 区分边界。
+
+**事件是 spec，回放是 oracle**：同一 session 的事件重放必须产生相同状态与投影（`rebuildMetrics` 与订阅者状态一致）；SSE 断线重连的 `since` 续传、重复与缺口纳入回放等价探针，不只测“能连上”。
 
 <a id="trace"></a>
 
