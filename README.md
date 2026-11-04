@@ -67,7 +67,7 @@ Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把�
 
 **包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/agent`（AgentService 成员能力层）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`），文档不维护副本。
 
-**语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 内可直接 `/settings language <zh-CN|en>` 切换并写回用户配置（`VESSEL_LANG` 仍最高）；TUI 界面文案走 `t()`（`packages/tui/src/i18n/`），CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 也跟随同一 locale（`src/i18n/`，zh-CN / en 各 85 个 key）；技术词、命令名、错误码与命令的数据输出不翻译。Web 控制台的壳层与 Settings 已支持 zh-CN / en（语言选择在 Settings → Appearance，存 `localStorage['vessel.ui.language']`，初始跟随 `navigator.language`）；未覆盖的功能页回退中文。详见 [CONFIG.md](docs/operations/CONFIG.md)。
+**语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 内可直接 `/settings language <zh-CN|en>` 切换并写回用户配置（`VESSEL_LANG` 仍最高）；TUI 界面文案走 `t()`（`packages/tui/src/i18n/`），CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 也跟随同一 locale（`src/i18n/`；key 数以 `bun run scripts/check-i18n.ts` 输出为准）；技术词、命令名、错误码与命令的数据输出不翻译。Web 控制台的壳层与 Settings 已支持 zh-CN / en（语言选择在 Settings → Appearance，存 `localStorage['vessel.ui.language']`，初始跟随 `navigator.language`）；未覆盖的功能页回退中文。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 
 ## 快速开始
 
@@ -188,7 +188,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 **语言空间是唯一的执行面。** Vessel 做两件事：把世界折成语言（system prompt + 消息 + 工具 schema），把语言折回世界（解析 tool_calls → 执行 → 结果折回消息）。
 
 > Kernel / Modules 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md) 与 [docs/architecture/overview.md](docs/architecture/overview.md#layering)；本小节只描述**当前已实现**的单 agent 行为。
-- **9 个接口 + 1 个循环 + 2 个插槽**：`LLMProvider` / `ContextManager` / `EventStream` / `ToolDefinition` / `SessionBackend` / `LimitChecker` / `Guardrail` / `Hook` / `Plugin` + `PluginHost`。两个插槽是**工具**（`PluginHost` 是唯一的工具注册表）与**知识**（`ContextManager`）。
+- **核心契约 + 1 个循环 + 1 个工具注册表**：`LLMProvider` / `WorkingContext` / `EventStream` / `ToolDefinition` / `SessionStore` / `LimitChecker` / `Guardrail` / `Hook` / `Plugin` + `PluginHost`。`PluginHost` 是**唯一的工具注册表**；`WorkingContext` 是每次 Run 的消息缓冲，不是可替换的「知识插槽」。契约签名见 [interfaces.md](docs/architecture/interfaces.md) 与 [state.md](docs/architecture/state.md)。
 - **core 不认识业务概念**：不认 skills、不认记忆、不认资产。任何要进语言空间的文本都经 `RunOptions.messages` 注入，core 只负责按序放进消息数组。
 
 细节见 [docs/architecture/INDEX.md](docs/architecture/INDEX.md)。
@@ -213,7 +213,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 | `ask_user`              | 交互 REPL（TTY）、gateway/serve、headless（`--run` / 管道，异步挂起）；`ui.askUser: false` 可关闭 | 向用户提问；交互入口经事件流等待回答，headless 落盘后中断 run（exit 3），人类稍后 `attention respond` + `--resume-run`                                                                                                                                         |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功                                                         | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化                                                                                                                                                                                                     |
 
-口径：默认 **4**（3 个能力工具 + `agent`）；显式 `agent.enabled: false` 为 **3**；交互 REPL、gateway/serve 与 headless 默认 **5**（+`ask_user`）；`agent.enabled: false` 时为 **4**；配置 MCP 后为 **3 + N 个 MCP 工具**。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway / headless-async; not listed here)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需要实际运行/连接后，在 REPL 用 `/mcp` 或经 gateway `GET /v1/mcp/servers` 查看。
+口径：默认工具面 = 能力工具（`bash` / `read` / `edit`）+ `agent` + `subscribe`；交互 REPL、gateway/serve 与 headless（`--run` / 管道）另注册 `ask_user`；成员 body 另注册收件箱工具 `inbox`；配置 MCP 后在上述基础上加 MCP 工具。**实际清单以 `bun run src/cli.ts --tools` 输出为准，本文不写死数量。** `--tools` 一次性命令按 headless 口径列出，不连接 MCP、也不展开 `ask_user` 与成员侧 `inbox`；需要实际运行/连接后，在 REPL 用 `/mcp` 或经 gateway `GET /v1/mcp/servers` 查看。
 
 **为什么这么少？** 这是刻意的。没有 `grep` 工具、没有 file-ops——**能被 bash 组合出来的能力，就不再单开一个工具**。MCP 不是能力工具，而是把外部工具接进 `PluginHost` 的插件（ADR-039）。工具越多，模型的选错空间越大、核心越难保持小。真正的通用原语只有一个：执行命令。其余都是它的特化。
 

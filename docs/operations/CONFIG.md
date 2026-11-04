@@ -158,7 +158,7 @@ ui:
 - **CLI 写配置**：`vessel config set ui.language <zh-CN|en> [--json]`。
 - `VESSEL_LANG` 仍高于 `config.ui.language`：显式设置环境变量时，`/settings` 与 `config set` 会写入配置，但当前显示以环境变量为准。
 - **TUI 界面文案已接入 `t()`**（zh-CN / en 两份 catalog）。命令名、工具名、错误码、provider / 模型名不翻译；命令的数据输出（会话、trace、metrics、成本等）保持英文。
-- **CLI 的 `--help`、一次性命令错误、默认空状态、demo banner 跟随同一 locale**（zh-CN / en 各 85 个 key）。命令数据输出仍为英文。
+- **CLI 的 `--help`、一次性命令错误、默认空状态、demo banner 跟随同一 locale**（zh-CN / en 两份 catalog；key 数以 `bun run scripts/check-i18n.ts` 输出为准）。命令数据输出仍为英文。
 - **Web 壳层**：`apps/web/src/i18n/` 覆盖导航、面包屑、Settings 六个 tab、Appearance 与通用按钮；locale 取 `localStorage['vessel.ui.language']` > `navigator.language`，可在 Settings → Appearance 切换并立即生效；未收录页面回退中文。Web 不是全量本地化。
 - **`ui.clearOnStart`**（默认 `true`）：TTY 进入 REPL 前写 `\x1b[2J\x1b[H` 清可视区并归位光标；设为 `false` 时保留终端历史；非 TTY / headless 不清屏。
 
@@ -278,6 +278,7 @@ agent:
   permission_mode: bridge    # bridge | allow | deny；缺省交互 bridge、headless allow
   read_only_tools: [read]    # deny 模式保留的工具
   model: gpt-4               # 可选：成员默认模型
+  temporary_ttl_hours: 2     # temporary 空闲回收 TTL；默认 2，0 = 关闭
   inbox_max_messages: 200    # 成员收件箱上限；默认 200，按最旧裁剪
   # limits / termination 缺省继承顶层；cwd 见 §2.4
 ```
@@ -290,7 +291,8 @@ agent:
 - **`agent.model` / `agent.limits` / `agent.termination`**：成员默认模型与限额；`limits` / `termination` 缺省继承顶层，不放大。
 - **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
 - **`agent.inbox_max_messages`**（0.32，默认 `200`）：每个成员持久化收件箱的消息条数上限，超出时按最旧裁剪；只影响成员收件箱（`agent` 工具投递给 busy / rotating 成员的消息），不影响会话历史。缺省不写入配置即用 200；必须是正整数。
-- **工具数（实测）**：默认 5（`bash` / `read` / `edit` / `agent` / `inbox`）；真交互 REPL（TTY）或 gateway/serve 默认 6（+`ask_user`）；显式 `agent.enabled: false` 时不启用成员 runtime，因而不注册成员工具面（root 只剩 `bash` / `read` / `edit`）。
+- **`agent.temporary_ttl_hours`**（默认 `2`，`0` = 关闭）：temporary 成员的空闲回收 TTL。只回收 `role === 'temporary'` 且仍在册的成员，`member`（含 `main`）永不回收；有在跑轮 / 排队消息 / 权限等待时跳过。回收复用 `membership='left'` + `state='closed'`，body 记录保留，可经 `reinstate` 原地复活。
+- **工具面（组成，不写死数量）**：root 默认 = 能力工具（`bash` / `read` / `edit`）+ `agent` + `subscribe`；真交互 REPL（TTY）或 gateway/serve 另加 `ask_user`；成员 body 另有收件箱工具 `inbox`（`list` / `read` / `delete` / `insert`）。显式 `agent.enabled: false` 时不启用成员 runtime，root 剩能力工具 + `subscribe`。实际清单以 `bun run src/cli.ts --tools` 输出为准（该命令不连接 MCP，也不展开 `ask_user` / `inbox`）。
 - **owner 端点**：只由交互 REPL / serve 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`--run` / headless / 管道不监听 owner 端口、不写记录，但 AgentService / TeamService 仍在进程内可用。`vessel agent create|send|dispatch|close|list [--json]` 经该记录 attach。
 - **rotate（0.19，ADR-092；0.39 改道）**：成员可调用 `agent` 工具的 `rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 `sessions.create`（空 session + `startup_prompt`）或 `sessions.restart`。原 owner 端点 `agents.rotate` 与 CLI `vessel agent rotate` 已删除。失败保持旧身体，不自动重试；`rotating` 期间消息排队。
 - **已知限制**：排队消息写入 per-agent inbox（上限 `agent.inbox_max_messages`），重启后可由模型经 `inbox` 工具读取；已开始执行的一轮仍需显式 resume；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **61**（见 §2.13）。

@@ -21,18 +21,18 @@ paths: [docs/architecture/**]
 | [context](context.md) | WorkingContext per Run、注入点、压缩与前缀不变量 | context, message, injection, compaction, self card, vessel:source, prefix, per-run | `packages/core/src/context/**`, `packages/core/src/runtime/execution-unit.ts`, `packages/core/src/session/project-messages.ts`, `packages/agent/src/runtime.ts` |
 | [interfaces](interfaces.md) | `LLMProvider` / `WorkingContext` / `EventStream` 契约 | LLMProvider, ChatRequest, WorkingContext, EventStream, types | `packages/core/src/types/provider.ts`, `context.ts`, `event.ts` |
 | [state](state.md) | `SessionStore` / `LimitChecker` / `RunRecordStore` 状态 port | session, run store, checkpoint, durable, limits, corruption | `packages/core/src/types/session.ts`, `limits.ts`, `run-record-store.ts` |
-| [tools](tools.md) | `ToolDefinition`、能力工具与权限/路径边界 | tool, bash, read, edit, permission, denylist, allowed_roots | `packages/core/src/types/tool.ts`, `plugins/tools/**` |
+| [tools](tools.md) | `ToolDefinition`、能力工具与权限/路径边界 | tool, bash, read, edit, permission, denylist, allowed_roots, inbox, subscribe | `packages/core/src/types/tool.ts`, `plugins/tools/**` |
 | [guardrails-hooks](guardrails-hooks.md) | Guardrail 四阶段与 Hook 五阶段 | guardrail, hook, replacement, tool_call, before_llm | `packages/core/src/types/guardrail.ts`, `hook.ts` |
 | [extensions](extensions.md) | Plugin / PluginHost、发现与信任边界 | plugin, plugin host, loader, discovery, trust, external, mcp, skill | `packages/core/src/types/plugin.ts`, `src/plugin-loader.ts`, `plugins/**` |
 | [config](config.md) | 配置层序、resolver 与配置块 | config, yaml, precedence, env, tenant overlay, secrets | `packages/config/**`, `src/cli-overrides.ts` |
-| [events](events.md) | 事件命名、核心事件、回放与 trace 落盘 | event, event stream, trace, replay, observability, seq | `packages/core/src/types/event.ts`, `packages/core/src/events/**` |
+| [events](events.md) | 事件命名、核心事件、回放与 trace 落盘 | event, event stream, trace, replay, observability, seq, agent.message.notified | `packages/core/src/types/event.ts`, `packages/core/src/events/**` |
 | [assembly](assembly.md) | `src/` 装配层、CLI/TUI 入口与职责边界 | bootstrap, cli, args, wiring, repl, headless | `src/**` |
 | [gateway](gateway.md) | 帧/端点、静态托管与安全、TLS、远程控制面 | gateway, websocket, sse, tls, origin, csp, remote | `packages/serve/src/**`, `src/rpc/**` |
 | [gateway-rpc](gateway-rpc.md) | 统一 RPC 方法表与 canonical agent 生命周期契约 | rpc, method, canonical, envelope, agents.create, sessions.create, sessions.restart, sessions.activate | `packages/serve/src/gateway/methods/**` |
 | [gateway-web](gateway-web.md) | 权限/ask 桥、会话切换与 Web 控制台 | web, apps/web, permission bridge, ask_user, session switch | `apps/web/**`, `packages/serve/src/gateway/**` |
 | [host](host.md) | 每 tenant 一个 Scheduler、per-node `Runtime` 无状态工厂、per-session EU、per-body 串行、resume 排队与快照 | host, scheduler, runtime, execution unit, concurrency, serial, resume, snapshot, checkpoint, cancel, queue | `packages/core/src/kernel/**`, `packages/core/src/runtime/**` |
 | [member-team](member-team.md) | AgentService、多 Body、admit/dispatch/rotate、peer/contractor、Team 与预算 | agent, member, team, body, admit, dispatch, rotate, spawn, peer, contractor, freeze, presence, roster, budget | `packages/agent/**`, `src/agent-service-wiring.ts` |
-| [agent-structure](agent-structure.md) | 成员/临时的定义、数据模型、创建路径与转换设计 | agent, member, peer, contractor, temporary, owner, create, hire, promote, demote | `packages/agent/**`, `apps/web/src/domains/agents/**`, `apps/web/src/domains/team/**` |
+| [agent-structure](agent-structure.md) | 成员/临时的定义、数据模型、创建路径与转换设计 | agent, member, peer, contractor, temporary, owner, create, hire, promote, demote, from_session_id, seed | `packages/agent/**`, `apps/web/src/domains/agents/**`, `apps/web/src/domains/team/**` |
 | [federation-hub](federation-hub.md) | hub 目录控制面与跨节点 federation 数据面 | hub, federation, peer, pairing, directory, allowlist, hop | `src/hub/**`, `src/federation-*.ts`, `packages/serve/src/gateway/**` |
 | [0.34-target](0.34-target.md)（kind: target） | 目标/迁移态：五词、附属词、分层、10 边界、C1–C4、10 裁决、4 连线、3 铁律、Stage 0–4、5 图 | target, migration, layering, agent, session, runtime, loop, run, control plane, execution unit, lease, federation | `docs/architecture/**`, `packages/core/**`, `packages/agent/**`, `src/**` |
 

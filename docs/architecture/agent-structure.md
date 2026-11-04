@@ -52,6 +52,7 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
 | `agents.create kind:'peer'` | `member`，owner=self，team 必需（`main` 走这条） |
 | `agents.create kind:'contractor'` | `temporary`，owner=雇佣者，team 可选 |
 | `agents.create` 不传 kind / owner | `temporary`，owner 缺省 `human` |
+| `agents.create{from_session_id, seed?, keep_messages?}` | 新 agent + 新 session，transcript 种子来自源 Session；源 agent / Session 零改动、仍可继续运行 |
 | `agent` 工具 `create` | `member`（调用者必须有 Team） |
 | `agent` 工具 `hire` | `temporary`（任意成员可 hire；有 Team 则继承） |
 | `teams.members add` | temporary → member |
@@ -61,6 +62,8 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
   空 Team 也可以创建 member。
 - `role` 参数只做一致性校验：与 `kind` / `owner` 推导出的角色冲突即 `invalid_input`，
   不能用它覆盖 peer 推导。
+- **有来源创建（0.39）**：`agents.create{from_session_id}` 要求源 Session 是 primary、源 agent 非 `private`、源空闲且属于 Team；新 agent 落同一 Team，owner / parent / role / kind 由源推导。
+  `workspace` 或覆盖结构字段一律 `invalid_input`；`seed` 缺省 `copy`（可选 `compact`），`keep_messages` 保留投影 transcript 前 N 条并修复 tool 配对；失败一起清理，不受「每源一个派生」限制。
 - Agents 视图合并 Team roster 与 canonical `agents.list`。Team 页只显示 member + temporary。
 - `new` 不是当前 action；`create` = peer/member，`hire` = contractor/temporary。
 

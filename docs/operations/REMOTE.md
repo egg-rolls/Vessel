@@ -1,6 +1,7 @@
-# 跨机器远程运维（0.6）
+# 跨机器远程运维
 
-> 状态：F5 跨机器远程与跨节点 team **已合入 `release/0.6`（未发布）**；0.11 起 Web 控制台壳层支持 zh-CN / en。
+> 状态：跨机器远程与跨节点 team 已实现并合入主线；当前版本与发布状态以
+> [docs/versions/CURRENT.md](../versions/CURRENT.md) 为准。0.11 起 Web 控制台壳层支持 zh-CN / en。
 > 决策边界见 [ADR-051](../adr/ADR-051-remote-control-plane.md) /
 > [ADR-052](../adr/ADR-052-cross-node-transport.md) /
 > [ADR-053](../adr/ADR-053-remote-security-baseline.md)。

@@ -91,22 +91,22 @@ Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把�
 ### 5.3 扩散信息素
 
 「变化本身」。成员上线/离线、run 开始/结束、工具调用、Hub 目录更新。
-当前这些变化进入事件流，人和 Web 控制台能看见；**Agent 侧没有订阅接口**，
-只能在下一次 run 里重新读取环境来发现变化。
+当前这些变化进入事件流，人和 Web 控制台能看见；Agent 侧只在 `subscribe` 的**显式文件订阅**
+范围内收到变更短通知（见 5.4），其余变化仍需在下一次 run 重新读取环境发现。
 
-### 5.4 订阅：下一步
+### 5.4 订阅：显式文件订阅已实现，目录 / 事件仍是方向
 
-目标行为：Agent 用工具订阅文件、目录或事件；变化在**下一个 run 开始前**以 diff 注入上下文，
-只带上次看过之后的改动。它解决的是「文件更新一次，Agent 就整读一遍，甚至读好几遍」的问题。
+当前已实现（`plugins/context/doc-subscription`）：模型用 `subscribe` 工具对**具体文件**
+执行 `add` / `remove` / `list` / `inspect`；每次 run 的第一次 LLM 请求前，`BeforeLlm` hook
+追加一条只含 `path` / `id` / `rev` / `bytes` 的尾部消息（不改写 system）；正文只在模型显式
+`inspect` 时返回（首次全文，之后 diff），并推进 `seen_rev`。订阅状态按 session 保存，未 add 不通知。
 
-产品约束（方向，尚未实现）：
+边界：只接受具体文件，**无 glob / 目录 / 自动发现**；不订阅事件；不把 diff 自动写进上下文；
+订阅失败不会让 run 失败；跨节点订阅未实现。
 
-- 复用现有消息注入通道，不把订阅概念塞进 core；core 仍然只认 `RunOptions.messages`。
-- 不做轮询循环；变化由宿主侧观察，在 run 边界投递。
-- 有大小上限与去重游标；订阅失败不能让 run 失败。
-- 跨节点订阅另算，不在第一版。
-
-当前状态：**没有 `subscribe` 工具、没有 diff 注入、没有已读游标。** Agent 只能按需重读。
+方向（尚未实现）：目录 / 事件订阅、run 边界自动 diff 注入、通用去重游标等更宽形态。
+产品约束不变：复用现有消息注入通道，不把订阅概念塞进 core；core 仍然只认 `RunOptions.messages`；
+不做轮询循环。
 
 ## 6. 跨节点：看见与说话分开
 
@@ -139,9 +139,9 @@ Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把�
 | Hub 配对、目录、在线状态、指针 | 已实现 |
 | 跨节点按地址投递与回复（静态 peer） | 已实现 |
 | Agent 主动发现远端节点 / Team / 成员 | 部分：CLI `federation team-info`（opt-in）、Hub 目录或 `bash`；无专用发现工具 |
-| 成员 Agent 再派生 Agent（蜂群增长） | 已实现：peer / contractor 两条路径、close 人类审批、每 Team present ≤20、Team 冻结；无 TTL / spawn 预算 / 跨 Team 派生 |
+| 成员 Agent 再派生 Agent（蜂群增长） | 已实现：peer / contractor 两条路径、close 人类审批、每 Team present ≤20、Team 冻结；temporary 有空闲 TTL（`agent.temporary_ttl_hours`，默认 `2`，`0` = 关闭，只回收 temporary）；无 spawn 预算 / 跨 Team 派生 |
 | 跨节点 spawn / close / rotate / resume | 未实现 |
-| 扩散信息素订阅（文件 / 目录 / 事件 diff） | 未实现（方向） |
+| 扩散信息素订阅（文件 / 目录 / 事件 diff） | 部分：显式文件订阅（`subscribe` 插件，具体文件、run 边界短通知、按需 `inspect`）；无目录 / 事件订阅、无自动 diff 注入 |
 | 自动发现 / mesh / 中继 / 离线队列 / 跨重启 exactly-once | 未实现（暂不承诺） |
 | A2A 协议兼容 | 未实现 |
 | 自治调度（自动分工、任务市场） | 未实现（当前是显式派发） |

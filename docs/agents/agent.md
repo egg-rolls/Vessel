@@ -13,9 +13,9 @@ applies_to: [N, M]
 ## AgentService 唯一
 
 - 成员能力只由 `packages/agent` 实现；权限 bridge 只有一条活路径（body 创建 / 恢复时挂桥），不得恢复第二套桥；`packages/core` 不出现 member / owner / visibility / team 概念（ADR-088 / ADR-091）。
-- 内置 `agent` 工具是唯一模型 schema：single 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`（single 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`。工具调用者的 owner / parent 固定，模型不能伪造。
-- 持久化 `role`：`single`（owner=self，无 Team）、`member`（owner=self，Team 必需）、`temporary`（owner=雇佣者，Team 可选）。`create` → member，`hire` → temporary；读取 v1 / v2 快照时按旧 owner 推断 role。
-- 不得新增 `wait` / `inbox` / `status` / `cancel`；等待语义是结束这一轮、回复作为新 turn 到达。
+- 内置 `agent` 工具是唯一模型 schema：root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`（root owner 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`。工具调用者的 owner / parent 固定，模型不能伪造。
+- 持久化 `role` 只有 `member`（owner=self，Team 必需；`main` 也是 member）与 `temporary`（owner=雇佣者，Team 可选）。0.27 的 `single` 已删除；v3 及更早快照里的 `role:'single'` 只在读取时降级为 `member` 并补绑 default Team，写回不再出现。
+- 不得新增 `wait` / `status` / `cancel`；`inbox` 已是成员收件箱工具（`list` / `read` / `delete` / `insert`），等待语义仍是结束这一轮、回复作为新 turn 到达。
 ## 派生：peer / contractor
 
 - 创建判别仍是 `kind:'peer'|'contractor'`：peer → `role:'member'`（owner=self、无 parent、必须 Team、visibility 强制 `team`）；contractor → `role:'temporary'`（owner/parent 缺省是雇佣者，有 Team 时 visibility 缺省 `team`、unbound 缺省 `private`）。
@@ -27,19 +27,19 @@ applies_to: [N, M]
 
 | 调用者 | action | 结果 |
 |---|---|---|
-| single | `hire` | `temporary`；owner / parent = single；unbound（无 `team_id`） |
+| root owner（无 Team） | `hire` | `temporary`；owner / parent = root owner；unbound（无 `team_id`） |
 | 有 Team 的成员（含 temporary） | `hire` | `temporary`；owner / parent = 调用者；`team_id` = 调用者 Team，计入 20 人上限与 `team_frozen` |
 | 无 Team 的成员（unbound temporary） | `hire` | `temporary`；owner / parent = 调用者；无 `team_id`，不计 Team 上限 |
 | 有 Team 的成员 | `create` | `member`；owner=self；无 parent；强制调用者 Team、visibility `team` |
 
 - 转换：`agents.update { role, team_id? }`；member 需要 Team，temporary 的 owner 是转换者，
-  single 清空 Team。team-scoped token 只能转本队；不要求新 Body，只追加 `vessel:notice`。
-- `hire` 对任意成员开放；single 与 unbound 成员都落 unbound 分支。`create` 只给有 Team 的成员，
-  single 只能 `hire`。action 无 `new`。
+  可在无 Team 时保持 unbound。team-scoped token 只能转本队；不要求新 Body，只追加 `vessel:notice`。
+- `hire` 对任意成员开放；root owner 与 unbound 成员都落 unbound 分支。`create` 只给有 Team 的成员，
+  root owner 只能 `hire`。action 无 `new`。
 
 ## session / Body
 
-- 一个 agent 可同时有多个 live body（`body_id ≡ session_id`，每 agent ≤20，空闲 24h 自动 retire）；`primary_body_id` 是缺省投递目标；`rotate` 只退休 primary body，其它 body 与其在途 run 不受影响。快照 `version: 4`：`bodies[]` 是唯一真相，`current_body` / `body_history` 只读兼容。
+- 每 agent **恰好一具 live body**（`body_id ≡ session_id`）；唯一例外是 rotate 的 `rotating` 窗口允许新旧两具短暂共存，窗口结束回到一具（已有 live body 且非 rotation → `body_limit`）。`primary_body_id` 是缺省投递目标；`rotate` 只退休 primary body。快照 `version: 4`：`bodies[]` 是唯一真相，`current_body` / `body_history` 只读兼容。
 - 状态机：`created|idle|running|waiting_permission|completed|failed|cancelled|closed`；`stale` 只读兼容、不得再写入；重启后非 `left` 成员为 `idle + presence='gone'`（ADR-091/092/097）。0.39 操作分离：`sessions.restart` 复用同一 Session 换 binding（epoch + 1；先 dispose 旧 ExecutionUnit，再建新 ExecutionUnit，同 key 租约 fence 递增）；`sessions.create{seed:'compact'}` 以父 Session 的压缩副本新建子 Session 并成为唯一 primary（父 Session 保留、源 binding 退役进 `bindingHistory`）；新 Agent 的冷建 / copy / compact 走 `agents.create{from_session_id?, seed?, keep_messages?}`，已有 Agent 的新 Session 走 `sessions.create`；`sessions.activate` 切回保留 session。旧 `agents.restart|compactFork|fork`、`sessions.rewind` 与 CLI `agent restart|compact-fork|rotate` 已删除。
 
 ## 投递与 Team
