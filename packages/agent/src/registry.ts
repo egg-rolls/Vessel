@@ -2,10 +2,8 @@
  * 内存成员注册表。
  *
  * 一个 registry 实例只服务一个 tenant（跨 tenant 不可见 / 不可寻址由构造边界保证）。
- * 0.39 起一个 Agent 有**恰好一个 primary** live Binding 与 0..N 个 live sibling
- * （`body_id ≡ session_id`）。`binding` 仍是 primary 槽位，`siblings` 存其余 live
- * sibling；rotate 窗口内 `retiringBinding` 暂存待退役的旧 Binding。`bindingHistory`
- * 是只追加的退役体记账（≤20 条）。
+ * 一个 Agent 恰好一具 live Binding（`body_id ≡ session_id`），唯一例外是 rotate 窗口：
+ * 此时 `retiringBinding` 暂存待退役的旧 Binding。`bindingHistory` 是只追加的退役体记账（≤20 条）。
  *
  * @module @vessel-agent/agent
  */
@@ -55,16 +53,11 @@ export interface MemberRecord {
   /** 第一具 Binding 的 session（兼容旧数据；当前 Binding 见 binding） */
   sessionId: string;
   /**
-   * primary Binding（恰一具 live）。回收 / close 后**保留记录**并标 `retiredAt`——
-   * `body_id ≡ session_id` 是续接历史的唯一钥匙，绝不删。
+   * 当前 Binding（恰一具；0.28 起不再有 N 具）。回收 / close 后**保留记录**并标
+   * `retiredAt`——`body_id ≡ session_id` 是续接历史的唯一钥匙，绝不删。
    * 只有 rotate 失败回滚这类中间态才短暂缺省。
    */
   binding?: BindingRecord;
-  /**
-   * 其余 live Binding（`primary:false`）；primary 不变，sibling 只能按自己的
-   * `bindingId` / session_id 寻址。0.39 起由 fork / sibling 创建使用。
-   */
-  siblings?: BindingRecord[];
   /**
    * rotate 窗口内待退役的旧 Binding（`rotation === 'rotating'` 期间与新 Binding 共存）。
    * 窗口结束即清空：退役后进 `bindingHistory`。
@@ -118,18 +111,17 @@ export function canTransition(from: MemberState, to: MemberState): boolean {
 }
 
 /**
- * 所有 live Binding（未退役）：primary + siblings + rotate 窗口内的 retiring。
+ * 所有 live Binding（未退役）。
  *
- * 返回顺序固定为 primary 槽位 → siblings → retiring；按 `bindingId` 去重。
- * rotate 的回滚 / flush 依赖 retiring 也出现在列表里，所以这里**保持**该语义。
+ * 0.28 起正常情况至多一具；`rotation === 'rotating'` 期间是两具（新 + 待退役），
+ * rotate 的回滚 / flush 依赖这一点，所以这里**保持**返回列表的语义不变。
  */
 export function liveBindings(record: MemberRecord): BindingRecord[] {
   const live: BindingRecord[] = [];
-  const seen = new Set<string>();
-  for (const body of [record.binding, ...(record.siblings ?? []), record.retiringBinding]) {
-    if (body === undefined || body.retiredAt !== undefined || seen.has(body.bindingId)) continue;
-    seen.add(body.bindingId);
-    live.push(body);
+  if (record.binding !== undefined && record.binding.retiredAt === undefined)
+    live.push(record.binding);
+  if (record.retiringBinding !== undefined && record.retiringBinding.retiredAt === undefined) {
+    live.push(record.retiringBinding);
   }
   return live;
 }
@@ -140,11 +132,9 @@ export function primaryBinding(record: MemberRecord): BindingRecord | undefined 
   return live.find((body) => body.primary) ?? live[0] ?? undefined;
 }
 
-/** 记录里该 id 的 Binding 槽位（primary / sibling / rotate 待退役体；含已退役） */
-export function findBinding(record: MemberRecord, bindingId: string): BindingRecord | undefined {
+/** 记录里该 id 的 Binding 槽位（当前或 rotate 窗口内的待退役体；含已退役） */
+function findBinding(record: MemberRecord, bindingId: string): BindingRecord | undefined {
   if (record.binding?.bindingId === bindingId) return record.binding;
-  const sibling = record.siblings?.find((body) => body.bindingId === bindingId);
-  if (sibling !== undefined) return sibling;
   if (record.retiringBinding?.bindingId === bindingId) return record.retiringBinding;
   return undefined;
 }
@@ -218,17 +208,6 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
           },
         ]
       : record.bindingHistory;
-  // 0.39：`bodies[]` 写 primary + 所有 live sibling。
-  // - primary 槽位即使已退役（close / TTL 后）也要写：loader 的 `bodies[]` 为空时
-  //   会按 session_id 造一具 live body，等于把已关闭成员复活；带 `retired_at` 的
-  //   记录才能保住退役状态。
-  // - rotate 窗口内的 retiring 仍按旧行为只进 body_history，避免崩溃后被 loader
-  //   复活成 sibling。
-  const persistedBodies = new Map<string, BindingRecord>();
-  if (record.binding !== undefined) persistedBodies.set(record.binding.bindingId, record.binding);
-  for (const sibling of record.siblings ?? []) {
-    if (sibling.retiredAt === undefined) persistedBodies.set(sibling.bindingId, sibling);
-  }
   return {
     id: record.id,
     session_id: record.sessionId,
@@ -252,11 +231,9 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
         }
       : {}),
     ...(history.length > 0 ? { body_history: history.slice(-MAX_BINDING_HISTORY) } : {}),
-    // 文件格式不变（v4 仍读 `bodies[]`）：写全部 live binding（primary + siblings）。
+    // 文件格式不变（v4 仍读 `bodies[]`），但 0.28 起恒写 1 项：当前 Binding。
     // rotate 期间待退役的旧 Binding 写在 `body_history`，不占 `bodies[]`。
-    ...(persistedBodies.size > 0
-      ? { bodies: [...persistedBodies.values()].map(toPersistedBinding) }
-      : {}),
+    ...(record.binding !== undefined ? { bodies: [toPersistedBinding(record.binding)] } : {}),
     ...(primary !== undefined ? { primary_body_id: primary.bindingId } : {}),
     ...(record.forkedFrom !== undefined ? { forked_from: record.forkedFrom } : {}),
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
@@ -341,13 +318,6 @@ export class MemberRegistry {
       if (record.bindingHistory.some((entry) => entry.session_id === sessionId)) return true;
       if (record.binding?.bindingId === sessionId && record.binding.retiredAt !== undefined)
         return true;
-      if (
-        record.siblings?.some(
-          (body) => body.bindingId === sessionId && body.retiredAt !== undefined,
-        )
-      ) {
-        return true;
-      }
       if (record.retiringBinding?.bindingId === sessionId) return true;
     }
     return false;
@@ -471,63 +441,20 @@ export class MemberRegistry {
   }
 
   /**
-   * 新增一个 live sibling（内部；供后续 `forkSession` 使用）。
-   *
-   * 校验：`primary:false`、bindingId 未占用且未退役。**不经过 `body_limit`**，
-   * 也不改变 primary / lease / epoch。primary 位置只能由 `addBinding` 持有。
-   */
-  addSiblingBinding(id: string, body: BindingRecord): void {
-    const record = this.byId.get(id);
-    if (!record) throw new AgentError('unknown_member', `unknown member: ${id}`);
-    if (body.primary) {
-      throw new AgentError(
-        'invalid_input',
-        `sibling binding must not be primary: ${body.bindingId}`,
-      );
-    }
-    if (body.retiredAt !== undefined) {
-      throw new AgentError('invalid_input', `sibling binding is retired: ${body.bindingId}`);
-    }
-    if (findBinding(record, body.bindingId) !== undefined) {
-      throw new AgentError('invalid_input', `duplicate body: ${body.bindingId}`);
-    }
-    if (this.bySession.get(body.bindingId) !== undefined) {
-      throw new AgentError('invalid_input', `duplicate body: ${body.bindingId}`);
-    }
-    if (record.bindingHistory.some((entry) => entry.session_id === body.bindingId)) {
-      throw new AgentError('invalid_input', `sibling binding is retired: ${body.bindingId}`);
-    }
-    record.siblings = [...(record.siblings ?? []), body];
-    this.bySession.set(body.bindingId, id);
-  }
-
-  /**
    * 退役 Binding：标 retiredAt、清 primary、从 session 索引移除、记入 `body_history`。
    *
    * body 记录**保留**（不删）：`body_id ≡ session_id` 是续接历史的唯一钥匙，
    * `reinstate` 靠原地 unretire 复活。
-   *
-   * 0.39：sibling 退役只把自己移出 `siblings`；primary 退役时若仍有 live sibling，
-   * 本切片没有定义 primary 迁移语义，直接抛 `multi_session`，由 `retireAllLive`
-   * （close / TTL / delete）统一处理。
    */
   retireBinding(id: string, bindingId: string, at: number = this.now()): BindingRecord | undefined {
     const record = this.byId.get(id);
     if (!record) return undefined;
     const body = findBinding(record, bindingId);
     if (body === undefined || body.retiredAt !== undefined) return body;
-    const isPrimary = body.primary || record.binding === body;
-    if (isPrimary && (record.siblings ?? []).some((sibling) => sibling.retiredAt === undefined)) {
-      throw new AgentError(
-        'multi_session',
-        `multi_session: cannot retire primary ${bindingId} while live siblings exist: ${record.id}`,
-      );
-    }
     body.retiredAt = at;
     body.primary = false;
     if (this.bySession.get(bindingId) === id) this.bySession.delete(bindingId);
     if (record.retiringBinding === body) delete record.retiringBinding;
-    record.siblings = (record.siblings ?? []).filter((sibling) => sibling.bindingId !== bindingId);
     this.pushBindingHistory(id, {
       session_id: body.bindingId,
       epoch: body.epoch,
@@ -535,27 +462,6 @@ export class MemberRegistry {
       retired_at: at,
     });
     return body;
-  }
-
-  /**
-   * 退役**所有** live Binding（close / TTL / delete 专用）。
-   *
-   * 顺序：siblings / retiring 先退役，primary 最后——这样 `retireBinding` 的
-   * `multi_session` 守卫不会在收口路径上误触发。退役后 `siblings` 清空、
-   * `primaryBinding` 返回 undefined；`binding` 记录保留并标 `retiredAt`（续接 /
-   * reinstate 的唯一钥匙）。
-   */
-  retireAllLive(id: string, at: number = this.now()): BindingRecord[] {
-    const record = this.byId.get(id);
-    if (!record) return [];
-    const all = liveBindings(record);
-    const primary = all.find((body) => body.primary) ?? record.binding;
-    const ordered = [...all].sort(
-      (left, right) => Number(left === primary) - Number(right === primary),
-    );
-    for (const body of ordered) this.retireBinding(id, body.bindingId, at);
-    record.siblings = [];
-    return all;
   }
 
   /**
@@ -584,10 +490,6 @@ export class MemberRegistry {
     if (this.bySession.get(bindingId) === id) this.bySession.delete(bindingId);
     if (record.retiringBinding?.bindingId === bindingId) {
       delete record.retiringBinding;
-      return;
-    }
-    if (record.siblings?.some((body) => body.bindingId === bindingId)) {
-      record.siblings = record.siblings.filter((body) => body.bindingId !== bindingId);
       return;
     }
     if (record.binding?.bindingId !== bindingId) return;

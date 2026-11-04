@@ -1070,12 +1070,7 @@ export type AgentErrorCode =
   | 'budget_unavailable'
   | 'conversation_team_mismatch'
   | 'conflict'
-  | 'body_limit'
-  /**
-   * 0.39：同一 agent 存在 live sibling 时，rotate / restart / compactFork / 普通
-   * primary retire 没有定义语义；拒绝而不是静默收敛（详见 CONTRACT-0.39 §4）。
-   */
-  | 'multi_session';
+  | 'body_limit';
 
 /** AgentService 错误；code 稳定，message 供人读 */
 export class AgentError extends Error {
