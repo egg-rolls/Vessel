@@ -1,5 +1,5 @@
 /**
- * CLI 暗金样式（0.12 DECISION-023 §2.5）。
+ * CLI 海洋绿样式（0.12 DECISION-023 §2.5）。
  *
  * 只用于一次性命令的**人类可读**输出：标题、分隔线、状态前缀、成功/失败行。
  * `--json`、路径、表格数据行保持纯文本；调用方自己决定哪些片段上色。
@@ -9,19 +9,19 @@
  * - `NO_COLOR` 未设置（按 no-color.org，任意值含空串都算设置）；
  * - `TERM !== 'dumb'`。
  *
+ * truecolor 品牌色假设深色终端；16 色终端由基础 ANSI 色（状态色 / `BOLD`）
+ * 承担语义。警告不使用黄色，改为中性 `BOLD`。
+ *
  * @module vessel/ui-style
  */
 
-/** 暗金主色（与 TUI theme 的 brand 一致） */
-export const DARK_GOLD = '#c2a273';
-/** 暗金强调色：与主色同值，强调靠 `BOLD`（与 TUI 用 `bold + theme.brand` 的做法一致） */
-export const DARK_GOLD_BRIGHT = '#c2a273';
+/** 海洋绿品牌色（与 TUI theme 的 brand 一致） */
+export const OCEAN_GREEN = '#1EFFC7';
 
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const GREEN = '\x1b[32m';
-const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
 const CYAN = '\x1b[36m';
 
@@ -40,11 +40,11 @@ export interface UiStyleOptions {
 export interface UiStyle {
   /** 是否输出 ANSI */
   readonly color: boolean;
-  /** 暗金主色 */
+  /** 海洋绿主色 */
   brand(text: string): string;
-  /** 暗金亮色 + 粗体（标题） */
+  /** 海洋绿 + 粗体（标题） */
   title(text: string): string;
-  /** 暗金亮色（分组标题） */
+  /** 海洋绿（分组标题） */
   section(text: string): string;
   ok(text: string): string;
   warn(text: string): string;
@@ -53,9 +53,9 @@ export interface UiStyle {
   dim(text: string): string;
   /** 状态符号 + 颜色：`✓` / `!` / `✗` / `·` */
   symbol(kind: StatusKind): string;
-  /** 分隔线（缺省 48 列，暗金色） */
+  /** 分隔线（缺省 48 列，海洋绿） */
   rule(width?: number): string;
-  /** 对齐的 `label  value` 行（label 暗金，value 原样） */
+  /** 对齐的 `label  value` 行（label 海洋绿，value 原样） */
   kv(label: string, value: string, width?: number): string;
 }
 
@@ -109,31 +109,30 @@ export function displayWidth(text: string): number {
 /** 构造样式器；无色时所有方法返回原文（symbol 仍返回符号）。 */
 export function createUiStyle(options: UiStyleOptions = {}): UiStyle {
   const color = shouldUseColor(options);
-  const gold = truecolor(DARK_GOLD);
-  const goldBright = truecolor(DARK_GOLD_BRIGHT);
+  const brand = truecolor(OCEAN_GREEN);
 
   const wrap = (prefix: string, text: string): string =>
     color ? `${prefix}${text}${RESET}` : text;
 
   return {
     color,
-    brand: (text) => wrap(gold, text),
-    title: (text) => wrap(`${goldBright}${BOLD}`, text),
-    section: (text) => wrap(goldBright, text),
+    brand: (text) => wrap(brand, text),
+    title: (text) => wrap(`${brand}${BOLD}`, text),
+    section: (text) => wrap(brand, text),
     ok: (text) => wrap(GREEN, text),
-    warn: (text) => wrap(YELLOW, text),
+    warn: (text) => wrap(BOLD, text),
     err: (text) => wrap(RED, text),
     info: (text) => wrap(CYAN, text),
     dim: (text) => wrap(DIM, text),
     symbol: (kind) =>
       color
-        ? `${kind === 'err' ? RED : kind === 'warn' ? YELLOW : kind === 'ok' ? GREEN : CYAN}${SYMBOLS[kind]}${RESET}`
+        ? `${kind === 'err' ? RED : kind === 'warn' ? BOLD : kind === 'ok' ? GREEN : CYAN}${SYMBOLS[kind]}${RESET}`
         : SYMBOLS[kind],
-    rule: (width = 48) => wrap(gold, '─'.repeat(Math.max(1, width))),
+    rule: (width = 48) => wrap(brand, '─'.repeat(Math.max(1, width))),
     kv: (label, value, width) => {
       const padded =
         width === undefined ? label : label + ' '.repeat(Math.max(0, width - displayWidth(label)));
-      return `${wrap(gold, padded)}  ${value}`;
+      return `${wrap(brand, padded)}  ${value}`;
     },
   };
 }

@@ -12,7 +12,7 @@
 ## 样式入口
 
 `src/index.css` 只引入 Tailwind 的 theme 与 utilities，**不启用 preflight**：现有
-Linen 视觉的 body、标题、表单默认样式仍由 `src/styles/base.css` 负责。legacy CSS
+中性色视觉的 body、标题、表单默认样式仍由 `src/styles/base.css` 负责。legacy CSS
 统一放在 `@layer legacy`，Tailwind utilities 优先级更高，因此迁移中的组件可以逐步
 去掉 legacy class，未迁移页面保持原样。
 

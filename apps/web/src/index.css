@@ -3,7 +3,7 @@
  *
  * 分层：L1 tokens → L2 ui 组件 → L3 业务页面。
  * Tailwind 只引入 theme + utilities：
- *   - 不引入 preflight，避免重置已有 Linen 视觉（body / 标题 / 表单默认样式由
+ *   - 不引入 preflight，避免重置已有中性色视觉（body / 标题 / 表单默认样式由
  *     styles/base.css 继续负责）。
  *   - legacy CSS 统一放进 `legacy` layer：Tailwind utilities 优先级更高，
  *     迁移中的组件可以逐步去掉 legacy class，未迁移页面保持原样。

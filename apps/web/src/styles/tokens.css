@@ -1,40 +1,41 @@
 /* ─────────────────────────────────────────────────────────────
-   Vessel Web · Linen tokens
-   暖中性底、细线、留白、黄铜强调色。改版只增加结构 token，不换皮。
+   Vessel Web · neutral tokens
+   黑白灰中性底、细线、留白；海洋绿 (#1EFFC7 / #0B7F66) 作强调，
+   珊瑚红 (#FF6E6E / #C0362C) 作危险色。改版只增加结构 token，不换皮。
    ───────────────────────────────────────────────────────────── */
 
 :root {
   color-scheme: light;
 
-  --bg: #f4f1ec;
-  --surface: #fbfaf7;
-  --surface-raised: #fffdfa;
-  --surface-sunken: #efece5;
-  --surface-deep: #e7e2d9;
-  --ink: #23211d;
-  --muted: #605c54;
-  --faint: #6f6a61;
-  --line: #e3ded4;
-  --line-strong: #d2cabd;
-  --accent: #866641;
-  --accent-ink: #6f5233;
-  --accent-soft: rgba(134, 102, 65, 0.1);
-  --ok: #4c5f44;
-  --ok-soft: rgba(95, 115, 87, 0.1);
-  --warn: #77541f;
-  --warn-soft: rgba(154, 116, 54, 0.1);
-  --danger: #8f4a40;
-  --danger-soft: rgba(162, 90, 80, 0.09);
-  --info: #4f5d68;
-  --info-soft: rgba(79, 93, 104, 0.1);
-  --elev-1: 0 1px 2px rgba(35, 33, 29, 0.04), 0 4px 12px rgba(35, 33, 29, 0.05);
-  --elev-2: 0 2px 4px rgba(35, 33, 29, 0.05), 0 10px 28px rgba(35, 33, 29, 0.08);
-  --elev-3: 0 4px 8px rgba(35, 33, 29, 0.06), 0 18px 48px rgba(35, 33, 29, 0.12);
-  --elev-4: 0 8px 16px rgba(35, 33, 29, 0.08), 0 28px 72px rgba(35, 33, 29, 0.16);
-  --elev-inset: inset 0 1px 2px rgba(35, 33, 29, 0.05);
-  --hover-tint: rgba(35, 33, 29, 0.04);
-  --press-tint: rgba(35, 33, 29, 0.08);
-  --scrim: rgba(20, 18, 15, 0.55);
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f1f1f2;
+  --surface-deep: #e8e8ea;
+  --ink: #101012;
+  --muted: #5c5c60;
+  --faint: #7a7a7f;
+  --line: #e4e4e7;
+  --line-strong: #d0d0d5;
+  --accent: #0b7f66;
+  --accent-ink: #086b56;
+  --accent-soft: rgba(11, 127, 102, 0.1);
+  --ok: #0b7f66;
+  --ok-soft: rgba(11, 127, 102, 0.1);
+  --warn: #4a4a4e;
+  --warn-soft: rgba(74, 74, 78, 0.1);
+  --danger: #c0362c;
+  --danger-soft: rgba(192, 54, 44, 0.09);
+  --info: #5c5c60;
+  --info-soft: rgba(92, 92, 96, 0.1);
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.05);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.05), 0 10px 28px rgba(0, 0, 0, 0.08);
+  --elev-3: 0 4px 8px rgba(0, 0, 0, 0.06), 0 18px 48px rgba(0, 0, 0, 0.12);
+  --elev-4: 0 8px 16px rgba(0, 0, 0, 0.08), 0 28px 72px rgba(0, 0, 0, 0.16);
+  --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+  --hover-tint: rgba(0, 0, 0, 0.04);
+  --press-tint: rgba(0, 0, 0, 0.08);
+  --scrim: rgba(0, 0, 0, 0.55);
 
   --font-sans:
     "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
@@ -147,27 +148,27 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #171614;
-    --surface: #1f1d1a;
-    --surface-raised: #2b2723;
-    --surface-sunken: #1a1917;
-    --surface-deep: #151412;
-    --ink: #eae6de;
-    --muted: #a49d91;
-    --faint: #928b7f;
-    --line: #332f29;
-    --line-strong: #47413a;
-    --accent: #c2a273;
-    --accent-ink: #d8bd93;
-    --accent-soft: rgba(194, 162, 115, 0.12);
-    --ok: #8fa886;
-    --ok-soft: rgba(143, 168, 134, 0.12);
-    --warn: #c9a25e;
-    --warn-soft: rgba(201, 162, 94, 0.12);
-    --danger: #d08a7e;
-    --danger-soft: rgba(208, 138, 126, 0.11);
-    --info: #93a5b3;
-    --info-soft: rgba(147, 165, 179, 0.12);
+    --bg: #0b0b0c;
+    --surface: #121214;
+    --surface-raised: #1a1a1d;
+    --surface-sunken: #0e0e10;
+    --surface-deep: #08080a;
+    --ink: #f2f2f3;
+    --muted: #a1a1a6;
+    --faint: #7e7e84;
+    --line: #242428;
+    --line-strong: #34343a;
+    --accent: #1effc7;
+    --accent-ink: #6bffd8;
+    --accent-soft: rgba(30, 255, 199, 0.12);
+    --ok: #1effc7;
+    --ok-soft: rgba(30, 255, 199, 0.12);
+    --warn: #d6d6da;
+    --warn-soft: rgba(214, 214, 218, 0.1);
+    --danger: #ff6e6e;
+    --danger-soft: rgba(255, 110, 110, 0.12);
+    --info: #a1a1a6;
+    --info-soft: rgba(161, 161, 166, 0.12);
     --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
     --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
     --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
@@ -175,33 +176,33 @@
     --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
     --hover-tint: rgba(255, 255, 255, 0.06);
     --press-tint: rgba(255, 255, 255, 0.09);
-    --scrim: rgba(0, 0, 0, 0.65);
+    --scrim: rgba(0, 0, 0, 0.7);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #171614;
-  --surface: #1f1d1a;
-  --surface-raised: #2b2723;
-  --surface-sunken: #1a1917;
-  --surface-deep: #151412;
-  --ink: #eae6de;
-  --muted: #a49d91;
-  --faint: #928b7f;
-  --line: #332f29;
-  --line-strong: #47413a;
-  --accent: #c2a273;
-  --accent-ink: #d8bd93;
-  --accent-soft: rgba(194, 162, 115, 0.12);
-  --ok: #8fa886;
-  --ok-soft: rgba(143, 168, 134, 0.12);
-  --warn: #c9a25e;
-  --warn-soft: rgba(201, 162, 94, 0.12);
-  --danger: #d08a7e;
-  --danger-soft: rgba(208, 138, 126, 0.11);
-  --info: #93a5b3;
-  --info-soft: rgba(147, 165, 179, 0.12);
+  --bg: #0b0b0c;
+  --surface: #121214;
+  --surface-raised: #1a1a1d;
+  --surface-sunken: #0e0e10;
+  --surface-deep: #08080a;
+  --ink: #f2f2f3;
+  --muted: #a1a1a6;
+  --faint: #7e7e84;
+  --line: #242428;
+  --line-strong: #34343a;
+  --accent: #1effc7;
+  --accent-ink: #6bffd8;
+  --accent-soft: rgba(30, 255, 199, 0.12);
+  --ok: #1effc7;
+  --ok-soft: rgba(30, 255, 199, 0.12);
+  --warn: #d6d6da;
+  --warn-soft: rgba(214, 214, 218, 0.1);
+  --danger: #ff6e6e;
+  --danger-soft: rgba(255, 110, 110, 0.12);
+  --info: #a1a1a6;
+  --info-soft: rgba(161, 161, 166, 0.12);
   --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
   --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
   --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
@@ -209,7 +210,7 @@
   --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
   --hover-tint: rgba(255, 255, 255, 0.06);
   --press-tint: rgba(255, 255, 255, 0.09);
-  --scrim: rgba(0, 0, 0, 0.65);
+  --scrim: rgba(0, 0, 0, 0.7);
 }
 
 @media (max-width: 680px) {

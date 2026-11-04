@@ -784,7 +784,7 @@ async function runAttention(
 }
 
 /**
- * `vessel attention`：人类输出走暗金样式，`--json` 只输出
+ * `vessel attention`：人类输出走海洋绿样式，`--json` 只输出
  * `{interactions,total,next_cursor?}`（无 ANSI）。
  */
 export async function attentionCommand(

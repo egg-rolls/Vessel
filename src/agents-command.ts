@@ -74,7 +74,7 @@ function formatAgent(agent: Record<string, unknown>): string {
   return parts.join('  ');
 }
 
-/** `vessel agents`：人类输出走暗金样式，`--json` 纯 JSON（无 ANSI）。 */
+/** `vessel agents`：人类输出走海洋绿样式，`--json` 纯 JSON（无 ANSI）。 */
 export async function agentsCommand(options: AgentsCommandOptions = {}): Promise<CommandResult> {
   const now = options.now ?? Date.now;
   const json = options.json === true;

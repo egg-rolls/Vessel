@@ -204,7 +204,7 @@ interface ListboxPosition {
 /**
  * 选择器：button 触发器 + portal 到 body 的自定义 listbox。
  *
- * 原生 `<select>` 的弹层由系统渲染，无法给 `<option>` 上 Linen 颜色；这里用
+ * 原生 `<select>` 的弹层由系统渲染，无法给 `<option>` 上设计 token 颜色；这里用
  * combobox + aria-activedescendant 模式，焦点始终留在触发器上，弹层不被 Modal
  * 的 overflow 裁剪。value / onChange / `<option>` children 的调用方式保持不变。
  */

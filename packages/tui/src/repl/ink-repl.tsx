@@ -369,7 +369,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
           });
           const notice = buildStartupNotice(facts);
           const lines = notice ? [...header, notice] : header;
-          // 启动头 / wordmark / tagline / 能力提示统一暗金品牌色（打开终端第一眼看到的文字）。
+          // 启动头 / wordmark / tagline / 能力提示统一海洋绿品牌色（打开终端第一眼看到的文字）。
           if (lines.length > 0) {
             dispatch({ type: 'appendHistoryLines', lines, tone: 'brand' });
           }

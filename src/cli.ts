@@ -135,7 +135,7 @@ const MCP_FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'evals',
 
 // ── 终端排版辅助 ─────────────────────────────────
 
-/** 对齐两列（命令 + 说明）并缩进；命令列走暗金，说明保持纯文本 */
+/** 对齐两列（命令 + 说明）并缩进；命令列走海洋绿，说明保持纯文本 */
 function align(rows: Array<[string, string]>, width: number): string {
   return rows.map(([cmd, desc]) => `  ${ui.brand(cmd.padEnd(width))}  ${desc}`).join('\n');
 }
