@@ -7,6 +7,9 @@
 5. 合并用 **squash merge**，不直接 push `main`。
 6. 发布只由维护者通过 tag `v*` 触发；贡献者不打 tag、不执行 `version.ts` 写模式。流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
 
+> 内部维护者（1）走本地 squash 到 `main` 后一次 push；外部贡献按上面的分支 + PR 流程走。
+> 两者都遵守“一个分支一个关注点”和 squash 语义。
+
 写代码前先读 [AGENTS.md](AGENTS.md)（红线与分层准入）、[docs/architecture/INDEX.md](docs/architecture/INDEX.md)（架构事实）与 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)（路径与文件归属）。
 
 发现安全漏洞见 [SECURITY.md](SECURITY.md)，勿开公开 issue。

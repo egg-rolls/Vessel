@@ -304,6 +304,7 @@ teams:
   - name: alpha                  # 可选；缺省由装配层决定
     workspace: ~/work/alpha      # 必填；归一化后精确匹配
     policy:
+      allow_auto_create: false  # dispatch resume 失败后允许自动创建；默认 false
       permission:
         unattended: deny-after   # hold（默认）| deny-after
         deny_after_seconds: 300  # deny-after 时必填，1..86400
@@ -322,7 +323,8 @@ teams:
 - 校验：必须是数组；每项对象；`workspace` 非空；归一化（展开 `~`、`path.resolve`，Windows 忽略大小写）后重复声明 → validation error；`name` 非空；`policy` 为普通对象。
 - **拼写**：规范拼写是 camelCase（`denyAfterSeconds` / `maxHops` / `maxWallClockSeconds` 等），config 对象、手改 `team.json` 与运行时都用 camelCase；YAML 可写 snake_case，loader 递归转换。手改 `team.json` 写 snake_case 不会被转换。
 - **严格校验**：`policy.permission` / `policy.budget` 内部是白名单；`allow_after` / `allowAfter` 报错（`allow-after is not supported; use hold or deny-after`），`max_cost` / `maxCost` 报错（`policy.budget.maxCost is not supported`，`Usage` 没有 cost 字段），未知键报错。`policy` 顶层其它键仍允许（S3 兼容）。
-- **默认与边界**：`permission.unattended` 缺省 `hold`；`deny_after_seconds` 只在 `deny-after` 时允许且必填；没有全局 TTL。预算挂在 team policy，**不复用** `limits.*`；未配置的维度不限，环检测默认开启（`max_repeats: 2` / `cooldown_seconds: 60`）。
+- **默认与边界**：`permission.unattended` 缺省 `hold`；`deny_after_seconds` 只在 `deny-after` 时允许且必填；没有全局权限 TTL（temporary 的空闲回收另见 `agent.temporary_ttl_hours`）。预算挂在 team policy，**不复用** `limits.*`；未配置的维度不限，环检测默认开启（`max_repeats: 2` / `cooldown_seconds: 60`）。
+- **`policy.allow_auto_create`**（0.39，默认 `false`）：`dispatch` 在目标 `gone` 且 resume 失败后，是否允许按来源自动创建 agent；也可在单次 `agents.dispatch` 条目上传 `allow_auto_create` 显式覆盖。手改 `team.json` 时 snake_case 别名同样被接受。
 - **非法值**：配置声明非法 → validation error；手改 `team.json` 的非法预算 → warning 并忽略该预算子结构（Team 仍可用）。
 - 声明只**补写缺失**的 `<dataDir>/teams/<tenant>/<team_id>/team.json`；不创建 Agent，不覆盖已有 `name` / `policy`，与已有文件冲突只 warning。
 - **默认绑定**：`create` / `hire` 无显式 workspace 时，只有带 `name` 的 Agent 才绑定；workspace 必须与声明归一化后精确相等；多个声明命中 → 不绑定 + warning。显式 `--workspace` 但无 name → `invalid_input('team binding requires a name')`。
@@ -443,7 +445,8 @@ vessel config set agent.cwd <path> [--json]
 vessel doctor [--deep] [--json]
 vessel logs tail [--json] [--lines N] [--instance <name>]
 vessel agent create [--name <n>] [--model <m>] [--visibility private|team|tenant] [--system-prompt <s>] [--json]
-vessel agent send <member> <content...> [--json]
+vessel agent send <member> <content...> [--interrupt | --message-id <id>] [--json]
+vessel agent inbox <member> [--json]
 vessel agent dispatch <to> <content...> [--json]
 vessel agent close <member...> [--json]
 vessel agent list [--state <state>] [--visibility private|team|tenant] [--json]

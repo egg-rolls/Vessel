@@ -22,7 +22,7 @@
 | `quality` | ubuntu-latest | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → Node 22 + `apps/web` `npm ci` → `bun run lint` → `bun run typecheck` → `bun run build`（无 Test step） |
 | `cross-platform` | matrix：ubuntu / windows / macos | `bun install --frozen-lockfile` → Node 22 + `apps/web` `npm ci` → `bun run typecheck`；**PR 只跑 ubuntu**，`main` / `release/**` 跑全矩阵 |
 | `web` | ubuntu-latest | `apps/web`：`npm ci` → `npm run build`（Node 22，npm cache） |
-| `architecture` | ubuntu-latest | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-web-styles.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
+| `architecture` | ubuntu-latest | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-web-styles.ts` → `scripts/check-i18n.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
 | `offline-integration` | ubuntu-latest | `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；config / trace 均用 mock 或临时目录，**不依赖外网** |
 | `tls-ca` | ubuntu-latest | **占位 job**（非 required）：只做 `bun install --frozen-lockfile`，不含 TLS/CA 断言。保留 job 名以免改动 branch protection 语义；TLS/CA 行为只能人工验收 |
 | `frontend-cors` | ubuntu-latest | **占位 job**（非 required）：只做 `bun install --frozen-lockfile`，不含 CORS 断言。同上，保留 job 名；CORS 行为只能人工验收 |
@@ -45,7 +45,7 @@
 ### 1.1 门禁口径：只有静态检查与烟测
 
 - **代码门禁**：`bun run typecheck` + `bunx @biomejs/biome ci .`（+ CI 里的 `bun run build`）。仓库没有测试框架，不存在可用的测试门禁。
-- **结构门禁**：`check-deps` / `smoke-subpaths` / `check-docs` / `check-web-styles` / `check-rpc-methods` / `check-config-sources` / `check-trace` / `version --check` / `release-dry-run`。这些是脚本断言，守架构硬边界，不是测试套件。
+- **结构门禁**：`check-deps` / `smoke-subpaths` / `check-docs` / `check-web-styles` / `check-i18n` / `check-rpc-methods` / `check-config-sources` / `check-trace` / `version --check` / `release-dry-run`。这些是脚本断言，守架构硬边界，不是测试套件。
 - **运行时正确性**：唯一自动证据是 `smoke` job 的 CLI 端到端路径（`VESSEL_MOCK=1 bun run src/cli.ts --run "hello"` 等），只在 `main` / `release/**` push 后跑。PR 不跑运行时行为。
 - 行为变更（权限、持久化、远程、Web 交互）**没有自动回归**，合并前必须人工验证并给出 `file:line` 证据；不要因为「CI 绿」就认为行为正确。
 - 两条不变量仍必须人工守：诊断只走 Logger / stderr，不 `console.log` 到 stdout；新增用户可见文案同时改 zh-CN / en 两份 catalog。

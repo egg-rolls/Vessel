@@ -2,7 +2,7 @@
 
 > 分布式蜂巢智能体框架：节点是蜂巢，Hub 让蜂巢彼此可见，Team 是按工作目录形成的蜂群，
 > Agent 是个体蜂，三类信息素决定它们看到什么、对谁说话。
-> 同时是一个可嵌入的 runtime + 参考 harness：极简核心，两个插槽，一个通用循环，填 Key 即跑。
+> 同时是一个可嵌入的 runtime + 参考 harness：极简核心，一个工具注册表，一个通用循环，填 Key 即跑。
 
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#状态)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](#许可证)
@@ -11,11 +11,11 @@
 
 Vessel 是一个**可嵌入的多 agent 平台 runtime**，也是一个**分布式蜂巢智能体框架**。
 
-单个节点内，它保持极简：单 agent loop + 9 个接口 + 2 个插槽，能力工具只有 `bash` / `read` / `edit`，其余能力由模型自己组合。TUI / CLI / Web / Gateway 是参考 harness 外壳。
+单个节点内，它保持极简：单 agent loop + 核心契约 + 一个工具注册表，能力工具只有 `bash` / `read` / `edit`，其余能力由模型自己组合。TUI / CLI / Web / Gateway 是参考 harness 外壳。
 
 多个节点之间，它不把 Agent 当成孤立的聊天机器人：每个 Vessel 进程是一个**节点（蜂巢）**，节点内按工作目录组织 **Team（蜂群）**，Team 里的 **Agent（个体蜂）** 可以创建 / 关闭成员、定向通信、轮换身体；节点通过 **Hub** 交换目录与指针，通过地址 `<principal>@<node_id>:<team_id>` 直接投递消息。
 
-> **当前边界**：单节点蜂群、成员再派生（peer / contractor）、Hub 目录、静态 peer 的跨节点定向投递已实现；自动发现、扩散信息素订阅、跨节点 Agent 生命周期仍在路上。完整拆分见 [能力边界](#能力边界) 与 [产品设计](docs/PRODUCT.md)。
+> **当前边界**：单节点蜂群、成员再派生（peer / contractor）、Hub 目录、静态 peer 的跨节点定向投递、文件级显式订阅已实现；自动发现、目录 / 事件订阅与自动注入、跨节点 Agent 生命周期仍在路上。完整拆分见 [能力边界](#能力边界) 与 [产品设计](docs/PRODUCT.md)。
 
 |                  | 单体 Agent 工具            | 多 Agent 编排框架      | Vessel                                              |
 | ---------------- | -------------------------- | ---------------------- | --------------------------------------------------- |
@@ -24,7 +24,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**，也是一个**分布�
 | **组织单位**     | 一个 Agent                 | 一张图 / 一条流程      | 节点 → Team → Agent，按工作目录形成                 |
 | **通信**         | 内部消息                   | 框架内状态传递         | 定向 `send` / Team 日志 / 跨节点地址                |
 | **跨机器**       | 外挂                       | 依赖平台               | Hub 目录 + 点对点 federation                        |
-| **核心**         | 框架式大 core              | 编排式大 core          | 9 个接口、2 个插槽、1 个循环。MIT 开源，core 可嵌入 |
+| **核心**         | 框架式大 core              | 编排式大 core          | 核心契约、1 个工具注册表、1 个循环。MIT 开源，core 可嵌入 |
 
 分层：`@vessel-agent/core`（运行时，可独立嵌入）+ `@vessel-agent/agent`（成员与 Team 能力）+ `@vessel-agent/config` / `@vessel-agent/permission` + `@vessel-agent/tui` / `@vessel-agent/serve` / `apps/web`（外壳）。形态上参考 Claude Code，但 Provider 无关、范式无关、开源。
 
@@ -50,9 +50,9 @@ Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把�
 | --- | --- | --- | --- |
 | **环境信息素** | 文档、代码、系统状态、命令输出 | `read` / `bash` / `edit`、`@路径` 引用、skills、`AGENTS.md` | 已实现 |
 | **定向信息素** | 用户对话、工具调用、指名消息 | 当前 run 的 messages、`agent(send/post)`、Team 日志、federation 地址 | 已实现 |
-| **扩散信息素** | 微小状态变化：成员加入/离开、run/工具事件；文件变化尚未观察 | 事件流、presence、Hub 目录、Web 时间线 | 部分：可观测，Agent 还不能订阅 |
+| **扩散信息素** | 微小状态变化：成员加入/离开、run/工具事件；文件变化 | 事件流、presence、Hub 目录、Web 时间线；文件级 `subscribe` | 部分：文件级显式订阅已实现；目录 / 事件订阅、自动注入未实现 |
 
-**下一步是订阅。** 目标是让 Agent 用工具订阅文件 / 目录 / 事件；变化在下一个 run 开始前以 diff 注入上下文，只带上次看过之后的改动，避免同一文件被反复整读。当前没有订阅 API，Agent 只能按需重新读取。设计边界见 [产品设计](docs/PRODUCT.md)。
+**订阅已落地一层。** `subscribe` 是默认工具，可对**具体文件**执行 `add` / `remove` / `list` / `inspect`；变更在每个 run 的第一次 LLM 请求前以短通知（`path` / `id` / `rev` / `bytes`）出现，正文只在 `inspect` 时取 diff（首次全文）。目录 / 事件订阅、run 边界自动 diff 注入与跨节点订阅仍是方向。设计边界见 [产品设计](docs/PRODUCT.md)。
 
 ## 为谁
 
@@ -210,6 +210,8 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 | 工具                    | 何时注册                                                                                      | 干什么                                                                                                                                                                                                                                                        |
 | ----------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent`                 | 默认注册；`agent.enabled: false` 关闭                                                         | 成员生命周期：root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`（root 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`。`create` 建同 Team peer，`hire` 建调用者拥有的 contractor；成员关 peer 需人类审批；`send` 走统一 dispatch，入队即返回，不等待结果，`to` 也接受跨节点地址 `<principal>@<node_id>:<team_id>`；`post` 只写 Team 日志，不通知任何 Agent |
+| `subscribe`             | 默认注册（`doc-subscription` 插件）；只接受具体文件                                           | 显式 `add` / `remove` / `list` / `inspect`；变更只在下个 run 发短通知（`path` / `id` / `rev` / `bytes`），`inspect` 取 diff（首次全文）；正文不自动进历史                                        |
+| `inbox`                 | 成员 body attach 收件箱后注册；`deny` 模式也注册（只读本地队列）                              | `list` 看 unread / pending 与摘要（含 held）；`read` 取原文并消费；`delete` 删未读且非 held；`insert` 给自己追加消息，不启动 run、不唤醒自己                                                     |
 | `ask_user`              | 交互 REPL（TTY）、gateway/serve、headless（`--run` / 管道，异步挂起）；`ui.askUser: false` 可关闭 | 向用户提问；交互入口经事件流等待回答，headless 落盘后中断 run（exit 3），人类稍后 `attention respond` + `--resume-run`                                                                                                                                         |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功                                                         | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化                                                                                                                                                                                                     |
 
@@ -450,6 +452,8 @@ transport:
 ### 已实现
 
 - **单节点 Agent 生命周期**：`create` / `hire` / `send` / `close` / `list` / `rotate` / `post`。主 Agent 可 hire contractor、关闭成员；成员 Body 可发送、写 Team 日志、轮换自己。
+- **会话分支、收件箱与三档投递（0.39 / 0.41）**：`sessions.create` / `sessions.restart` / `sessions.activate`；`agents.create{from_session_id}` 从源 transcript 新建；`inbox` 工具（`list` / `read` / `delete` / `insert`，暴露 `pending` / `held`）；`send` 三档 work / urgent（`interrupt`）/ notify（append inbox + 摘要唤醒）。
+- **temporary 回收**：`agent.temporary_ttl_hours`（默认 `2` 小时，`0` 关闭），只回收空闲 temporary，`member` 不回收。
 - **蜂群增长**：peer（同 Team 平级）与 contractor（调用者拥有）两条派生路径；成员关闭 peer 经人类审批，owner close 级联 private contractor；每 Team present ≤ 20；`teams.spawnFrozen` / `vessel team freeze|unfreeze` 可停止增长。
 - **Team**：声明后按工作目录匹配，一个工作目录一个 Team；roster、共享日志、预算、可见性、`@` 投递。
 - **Hub 目录**：配对、节点 / Team / 成员 / 在线状态、指针；支持 hub → node 拨号与 node → hub 出站（NAT）。
@@ -459,12 +463,12 @@ transport:
 ### 部分实现
 
 - **发现**：本机 roster 用 `agent(list)`；跨节点用 `vessel federation team-info`（opt-in）或 Hub 目录，也可以经 `bash` 调 CLI。没有一等公民的 Agent 发现工具。
-- **扩散信息素**：事件流与 Web 可看；Agent 侧没有订阅接口。
+- **扩散信息素**：事件流与 Web 可看；文件级显式订阅（`subscribe`）已实现；目录 / 事件订阅与自动注入未实现。
 
 ### 未实现（方向）
 
-- 跨节点 spawn / close / rotate / resume；TTL / 自动回收、spawn 预算与跨 Team 派生。
-- 扩散信息素订阅：文件 / 目录 / 事件 diff 在下一个 run 前注入。
+- 跨节点 spawn / close / rotate / resume；spawn 预算与跨 Team 派生。
+- 扩散信息素：目录 / 事件订阅、run 边界自动 diff 注入。
 
 ### 未实现（暂不承诺）
 
