@@ -1023,6 +1023,8 @@ export function reduceUiProjection(
 
     case 'update.available':
     case 'ask.user.answered':
+    case 'agent.message.notified':
+      // notify 只送达 inbox（不运行 / 不排队），投影不产生 UI 变化。
       return state;
 
     case 'unknown': {

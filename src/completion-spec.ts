@@ -357,7 +357,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       },
       {
         name: 'send',
-        flags: ['--json', '--interrupt', '--message-id', '--important'],
+        flags: ['--json', '--interrupt', '--message-id'],
       },
       { name: 'inbox', flags: ['--json'] },
       { name: 'dispatch', flags: ['--json', '--allow-auto-create'] },

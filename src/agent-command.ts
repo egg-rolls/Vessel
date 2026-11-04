@@ -121,7 +121,6 @@ function methodParams(command: AgentOwnerCommand): {
             ...(command.messageId === undefined ? { content: command.content } : {}),
             ...(command.interrupt === true ? { interrupt: true } : {}),
             ...(command.messageId !== undefined ? { message_id: command.messageId } : {}),
-            ...(command.important === true ? { important: true } : {}),
           },
         ],
       },

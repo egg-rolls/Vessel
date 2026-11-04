@@ -56,6 +56,15 @@ export interface AgentEventData extends Record<string, unknown> {
   wait_reason?: string;
 }
 
+/** agent.message.notified 载荷（0.41 notify：append 到 inbox + 摘要唤醒，不运行 / 不排队）。 */
+export interface AgentMessageNotifiedData {
+  message_id: string;
+  from: string;
+  to: string;
+  conversation_id?: string;
+  wake: boolean;
+}
+
 /** limit.blocked / agent.limit.warning 载荷（0.14.3 / 0.15） */
 export interface LimitEventData extends Record<string, unknown> {
   error_code?: string;
@@ -193,6 +202,12 @@ export type TuiEvent =
   | { type: 'agent.spawned'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.message.queued'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.message.sent'; run_id: string; data: AgentEventData; ts: number }
+  | {
+      type: 'agent.message.notified';
+      run_id: string;
+      data: AgentMessageNotifiedData;
+      ts: number;
+    }
   | { type: 'agent.closed'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.stale'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.permission.requested'; run_id: string; data: AgentEventData; ts: number }
@@ -234,6 +249,7 @@ export const KNOWN_TUI_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent.spawned',
   'agent.message.queued',
   'agent.message.sent',
+  'agent.message.notified',
   'agent.closed',
   'agent.stale',
   'agent.permission.requested',

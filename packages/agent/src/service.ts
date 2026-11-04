@@ -141,6 +141,14 @@ const TEAM_MEMBER_LIMIT = 20;
 const DEFAULT_MESSAGE_SENDER = HUMAN_PRINCIPAL;
 
 /**
+ * 0.41：idle 摘要唤醒的固定输入。**不带数字**：未读条数只由 BeforeLlm 的 notice
+ * hook 计算，避免两处来源分叉。
+ */
+const INBOX_WAKE_INPUT =
+  '[inbox] unread notifications; use the inbox tool (action="list") and read what you need. ' +
+  'Do not reply with a normal send.';
+
+/**
  * 成员名合法形状：1-64 位字母 / 数字 / `_` / `-`。
  *
  * **与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同源同义**（那边是
@@ -537,6 +545,31 @@ export class AgentServiceImpl implements AgentService {
    * `attach()` 会用固定 'run cancelled' 调 cancel，丢掉原始 reason；打断按 id 修正。
    */
   private readonly interruptReasons = new Map<string, RunInterruptReason>();
+  /** 0.41：当前处于 urgent 语义的消息 id；run terminal 时清理（被抢占者保留以重投）。 */
+  private readonly urgentMessageIds = new Set<string>();
+  /**
+   * 0.41：in-flight urgent 的消息正文（内存，非持久）。inbox append 会全局先裁
+   * consumed，active urgent 的记录可能已被裁掉；重投时优先用这里的快照，避免
+   * `reinject_missing`。与 `urgentMessageIds` 同生命周期清理。
+   */
+  private readonly urgentMessages = new Map<string, AgentMessage>();
+  /** 0.41：因后续 urgent 被取消、但消息会重投的 run id；settle 时不清理 urgent id。 */
+  private readonly interruptCancelledRunIds = new Set<string>();
+  /** 0.41：synthetic inbox 摘要唤醒 run（内存，抑制 deliverToParent）。 */
+  private readonly syntheticRunIds = new Set<string>();
+  /** 0.41：已排 / 在跑 wake 的 agent id（同一目标最多一个 pending wake）。 */
+  private readonly wakePending = new Set<string>();
+  /** 0.41：run 期间有新 notify 的 agent id；settle 后补检一次。 */
+  private readonly noticeDirty = new Set<string>();
+  /**
+   * 0.41：run id → 已计过的 cycle 边（同 run 同 from/to 只计一次）；run settle 清理。
+   * owner run 由 root runtime 直跑、AgentService 不 settle；按契约 §9 A5b option b
+   * 接受进程内小泄漏，重启清空，A5b 探针记录。不做容量淘汰（淘汰会让同 run 的边重计、
+   * 绕过冷却）。
+   */
+  private readonly runCycleEdges = new Map<string, Set<string>>();
+  /** 0.41：一次 send 调用 / messages 数组的 notify 边计数（每批最多 bump 1 次）。 */
+  private readonly notifyBatchEdges = new Map<string, Set<string>>();
   /** drain 之后不再从队列起新轮（关闭窗口内排队的消息随进程退出丢弃） */
   private draining = false;
   /** 同一源成员的 single-flight 自动创建；并发只 spawn 一个新 Agent */
@@ -1840,8 +1873,17 @@ export class AgentServiceImpl implements AgentService {
     entry.primary = false;
     entry.closing = true;
     entry.pending.length = 0;
-    for (const runId of entry.queuedRuns) this.scheduler.cancel(runId, `body retired: ${reason}`);
+    for (const runId of entry.queuedRuns) {
+      this.scheduler.cancel(runId, `body retired: ${reason}`);
+      // 被取消的 synthetic wake 不会 settle；立刻清掉它的 run / wake 标记，
+      // 否则 rotate 后同一 agent 的 notify 会被 wakePending 永远挡住。
+      this.syntheticRunIds.delete(runId);
+    }
     entry.queuedRuns.clear();
+    this.wakePending.delete(entry.agentId);
+    // 仍有 active run 时（典型是 rotate 在自己的 run 里执行）不要清 noticeDirty：
+    // 该 run 结束时 settle 还要据此补排一次 wake；提前清掉会吞掉本 run 内到达的 notify。
+    if (entry.active === undefined) this.noticeDirty.delete(entry.agentId);
     if (wasWaitingPermission) {
       // 旧 body 上等待人类的权限请求随 body 一起失效；留事件让入口侧收口交互卡。
       try {
@@ -1893,8 +1935,14 @@ export class AgentServiceImpl implements AgentService {
       this.runtime.clearPendingNotices?.(entry.agentId);
       entry.closing = true;
       entry.pending.length = 0;
-      for (const runId of entry.queuedRuns) this.scheduler.cancel(runId, 'agent closed');
+      for (const runId of entry.queuedRuns) {
+        this.scheduler.cancel(runId, 'agent closed');
+        // 同 retire：被取消的 synthetic wake 不会 settle，必须在此清标记。
+        this.syntheticRunIds.delete(runId);
+      }
       entry.queuedRuns.clear();
+      this.wakePending.delete(entry.agentId);
+      this.noticeDirty.delete(entry.agentId);
       if (entry.active !== undefined) {
         try {
           this.runtime.cancel(entry.runtimeMember);
@@ -1970,7 +2018,6 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', 'channel must be direct or team');
     }
     const strict = input.strict === true;
-    const important = input.important === true;
     // Q5：仅内部装配传入；runs.start RPC 不暴露该字段。
     const resume = input.resume === true;
 
@@ -2025,17 +2072,30 @@ export class AgentServiceImpl implements AgentService {
     //    面向 member 的投递（含 human → member）仍走 budget，与旧口径一致。
     //    投递侧只拦 hop / cycle / wall-clock / team 不一致；turns / tokens 是 turn 域，
     //    留给 turn_start 检查（block 时消息留在 body mailbox，override 后重新准入）。
-    const conversationId = this.resolveConversationId(input.conversation_id);
+    const conversationId = this.resolveConversationForDelivery(
+      input.conversation_id,
+      input.origin_session_id,
+      record,
+    );
     const originTeamId = input.origin_team_id;
     if (!this.isHumanPrincipal(record.id)) {
       const teamId = originTeamId ?? this.resolveOriginTeam(from, record);
+      const runKey =
+        input.origin_run_id ??
+        (input.origin_session_id !== undefined
+          ? this.activeRunIdForSession(input.origin_session_id)
+          : undefined);
+      const edgeSeen = this.hasRunCycleEdge(runKey, from, record.id);
       const check = this.checkDelivery(
         record,
         from,
         conversationId,
         teamId,
         originTeamId !== undefined,
+        { edge: edgeSeen ? 'skip' : 'bump' },
       );
+      // 检查通过后才记账：失败（例如 cycle 冷却中）不占边，同 run 再投会重新检查。
+      if (check.ok) this.recordRunCycleEdge(runKey, from, record.id);
       if (!check.ok && !TURN_DIMENSIONS.has(check.dimension)) {
         this.emitBudgetBlocked(record, check, {
           conversation_id: conversationId,
@@ -2044,7 +2104,7 @@ export class AgentServiceImpl implements AgentService {
           phase: 'enqueue',
           ...(teamId !== undefined ? { teamId } : {}),
         });
-        throw new AgentError(this.budgetCode(check.reason), `${check.reason}: ${check.dimension}`);
+        throw this.budgetFailureError(check, conversationId, teamId);
       }
     }
 
@@ -2073,7 +2133,6 @@ export class AgentServiceImpl implements AgentService {
           ts: message.ts,
           source: from,
           text: content,
-          ...(important ? { important: true } : {}),
         });
         const runId = this.newId();
         this.runMessageIds.set(runId, message.id);
@@ -2102,7 +2161,6 @@ export class AgentServiceImpl implements AgentService {
         ts: message.ts,
         source: from,
         text: content,
-        ...(important ? { important: true } : {}),
       });
       this.inbox.hold(record.id, message.id);
     }
@@ -2364,7 +2422,8 @@ export class AgentServiceImpl implements AgentService {
     }
 
     if (outcome === 'completed' && !handle.cancelRequested) {
-      if (!replied) {
+      // 0.41：synthetic 摘要唤醒不是真实回复；不投父级（否则会制造父 run 风暴）。
+      if (!replied && !this.syntheticRunIds.has(handle.id)) {
         await this.deliverToParent(current, result?.content, conversationId);
       }
     }
@@ -2589,9 +2648,24 @@ export class AgentServiceImpl implements AgentService {
     content: string | undefined,
   ): void {
     this.interruptReasons.delete(handle.id);
+    this.runCycleEdges.delete(handle.id);
+    // synthetic wake 结束：清 wake 标记；deliverToParent 在 settle 前已按 Set 跳过。
+    if (this.syntheticRunIds.delete(handle.id)) this.wakePending.delete(handle.agentId);
+    // 被后续 urgent 抢占的 run 不清理 urgent id：它的消息会（或已经）重投。
+    if (!this.interruptCancelledRunIds.delete(handle.id)) {
+      const messageId = this.runMessageIds.get(handle.id);
+      if (messageId !== undefined) {
+        this.urgentMessageIds.delete(messageId);
+        this.urgentMessages.delete(messageId);
+      }
+    }
     if (outcome === 'cancelled') handle.markCancelled(failure ?? 'run cancelled');
     else if (outcome === 'failed') handle.fail(failure ?? 'run failed');
     else handle.complete(content ?? '');
+    // run 结束、目标空闲且 run 期间有 notify：无条件补检一次（0 unread 由 executor 跳过）。
+    if (this.noticeDirty.has(handle.agentId)) {
+      void this.scheduleInboxWake(handle.agentId).catch(() => {});
+    }
   }
 
   /** 自动最终文本投递到父成员；父已 left / closed / gone 时显式 dropped */
@@ -2761,8 +2835,8 @@ export class AgentServiceImpl implements AgentService {
         record.content !== undefined ||
         record.from !== undefined ||
         record.interrupt !== undefined ||
-        record.message_id !== undefined ||
-        record.important !== undefined
+        record.notify !== undefined ||
+        record.message_id !== undefined
       ) {
         throw new AgentError(
           'invalid_input',
@@ -2776,29 +2850,52 @@ export class AgentServiceImpl implements AgentService {
       if (messages.length === 0) {
         throw new AgentError('invalid_input', 'messages must not be empty');
       }
-      const settled = await Promise.allSettled(
-        messages.map((entry) =>
-          isRecord(entry)
-            ? this.sendOne(entry)
-            : Promise.reject(new AgentError('invalid_input', 'messages entries must be objects')),
-        ),
-      );
-      return settleBatch(settled);
+      // 一次 messages 数组共享一个 notify 边计数 batch key（每批最多 bump 1 次）。
+      const batchKey = this.newId();
+      try {
+        const settled = await Promise.allSettled(
+          messages.map((entry) =>
+            isRecord(entry)
+              ? this.sendOne(entry, batchKey)
+              : Promise.reject(new AgentError('invalid_input', 'messages entries must be objects')),
+          ),
+        );
+        return settleBatch(settled);
+      } finally {
+        this.notifyBatchEdges.delete(batchKey);
+      }
     }
-    return this.sendOne(record);
+    const batchKey = this.newId();
+    try {
+      return await this.sendOne(record, batchKey);
+    } finally {
+      this.notifyBatchEdges.delete(batchKey);
+    }
   }
 
   /** strict send：不自动恢复 gone 成员；走同一个 admit。 */
-  private async sendOne(input: Record<string, unknown>): Promise<SendResult> {
+  private async sendOne(input: Record<string, unknown>, batchKey?: string): Promise<SendResult> {
     const to = readRequiredString(input, 'to');
     const from =
       input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(input, 'from');
     const interrupt = readOptionalBoolean(input, 'interrupt');
-    const important = readOptionalBoolean(input, 'important');
+    const notify = readOptionalBoolean(input, 'notify');
     let messageId: string | undefined;
     if (input.message_id !== undefined) messageId = readRequiredString(input, 'message_id');
+    if (interrupt && notify) {
+      throw new AgentError('invalid_input', 'conflicting_delivery');
+    }
+    if (messageId !== undefined && notify) {
+      throw new AgentError('invalid_input', 'message_id is not supported with notify');
+    }
     if (messageId !== undefined && !interrupt) {
       throw new AgentError('invalid_input', 'message_id requires interrupt: true');
+    }
+    if (
+      (interrupt || notify) &&
+      (to.includes('@') || to === HUMAN_PRINCIPAL || to.startsWith('federation:'))
+    ) {
+      throw new AgentError('invalid_input', 'unsupported_delivery');
     }
     // 指定 inbox 消息时不重复给正文；两者同时出现属于歧义输入。
     let content: string;
@@ -2816,7 +2913,7 @@ export class AgentServiceImpl implements AgentService {
     if (target.membership === 'left' || target.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${to}`);
     }
-    if (target.presence === 'gone') {
+    if (!notify && target.presence === 'gone') {
       throw new AgentError('member_stale', `member_stale: ${to}`);
     }
     if (!this.registry.canView(target, from)) {
@@ -2826,14 +2923,37 @@ export class AgentServiceImpl implements AgentService {
       input.conversation_id !== undefined
         ? readRequiredString(input, 'conversation_id')
         : undefined;
+    const originSessionId =
+      input.origin_session_id === undefined
+        ? undefined
+        : readRequiredString(input, 'origin_session_id');
+    const originRunId =
+      input.origin_run_id === undefined ? undefined : readRequiredString(input, 'origin_run_id');
+    if (notify) {
+      const outcome = await this.notifyDelivery(target, {
+        from,
+        content,
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(originSessionId !== undefined ? { originSessionId } : {}),
+        ...(batchKey !== undefined ? { batchKey } : {}),
+      });
+      return {
+        queued: false,
+        notified: true,
+        message_id: outcome.message_id,
+        wake: outcome.wake,
+        resolution: outcome.resolution,
+      };
+    }
     if (interrupt) {
       return this.sendInterrupt(target, {
         memberKey: to,
         from,
         content,
         ...(messageId !== undefined ? { messageId } : {}),
-        important,
         ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(originSessionId !== undefined ? { originSessionId } : {}),
+        ...(originRunId !== undefined ? { originRunId } : {}),
       });
     }
     const sessionId = this.registry.getBySession(to)?.id === target.id ? to : undefined;
@@ -2844,8 +2964,9 @@ export class AgentServiceImpl implements AgentService {
       from,
       channel: 'direct',
       ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+      ...(originSessionId !== undefined ? { origin_session_id: originSessionId } : {}),
+      ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
       strict: true,
-      ...(important ? { important: true } : {}),
     });
     const messageIdResult = this.runMessageIds.get(result.run_id) ?? result.run_id;
     return {
@@ -2877,13 +2998,19 @@ export class AgentServiceImpl implements AgentService {
       from: string;
       content: string;
       messageId?: string;
-      important: boolean;
       conversationId?: string;
+      originSessionId?: string;
+      originRunId?: string;
+      originTeamId?: string;
     },
-  ): Promise<SendResult> {
+  ): Promise<SendResult & { conversation_id: string }> {
     return this.withExecutionUnitOp(target.id, async () => {
       if (this.rotations.has(target.id)) {
         throw new AgentError('invalid_input', 'interrupt is not supported during rotate');
+      }
+      // urgent 不自动 resume / spawn：gone 或无 live body 直接 member_stale。
+      if (target.presence === 'gone') {
+        throw new AgentError('member_stale', `member_stale: ${target.id}`);
       }
       const sessionId =
         this.registry.getBySession(input.memberKey)?.id === target.id ? input.memberKey : undefined;
@@ -2910,6 +3037,7 @@ export class AgentServiceImpl implements AgentService {
 
       // 2. 先解析打断消息（任何非法 id 都在改动队列之前报错）。
       let interruptMessage: AgentMessage;
+      let conversationId: string;
       if (input.messageId !== undefined) {
         const stored = this.inbox?.findByIds(target.id, [input.messageId])[0];
         if (stored === undefined) {
@@ -2922,6 +3050,11 @@ export class AgentServiceImpl implements AgentService {
           throw new AgentError('invalid_input', `message_already_running: ${input.messageId}`);
         }
         const existing = entry.pending.find((message) => message.id === stored.id);
+        // 消息在 pending 时用其 conversation_id；否则用统一解析结果。
+        // （active 同 id 已在上方按 message_already_running 提前拒绝，不可达。）
+        conversationId =
+          existing?.conversation_id ??
+          this.resolveConversationForDelivery(input.conversationId, input.originSessionId, target);
         interruptMessage =
           existing ??
           ({
@@ -2932,47 +3065,98 @@ export class AgentServiceImpl implements AgentService {
             ts: this.now(),
             source: this.messageSource(stored.source),
             channel: 'direct',
-            ...(input.conversationId !== undefined
-              ? { conversation_id: input.conversationId }
-              : {}),
+            conversation_id: conversationId,
           } satisfies AgentMessage);
-        this.inbox?.hold(target.id, stored.id);
       } else {
-        const id = this.newId();
-        const message: AgentMessage = {
-          id,
+        conversationId = this.resolveConversationForDelivery(
+          input.conversationId,
+          input.originSessionId,
+          target,
+        );
+        interruptMessage = {
+          id: this.newId(),
           from: input.from,
           to: target.id,
           content: input.content,
           ts: this.now(),
           source: this.messageSource(input.from),
           channel: 'direct',
-          ...(input.conversationId !== undefined ? { conversation_id: input.conversationId } : {}),
+          conversation_id: conversationId,
         };
+      }
+
+      // 3. 预算检查必须在取消任何 run 之前：content 正常计数；message_id 只读
+      //    （不补计 hop / edge）。失败直接返回，不取消、不重投、不 unhold。
+      if (!this.isHumanPrincipal(target.id)) {
+        const teamId = input.originTeamId ?? this.resolveOriginTeam(input.from, target);
+        const originExplicit = input.originTeamId !== undefined;
+        let check: BudgetCheckResult;
+        if (input.messageId !== undefined) {
+          check = this.checkDelivery(target, input.from, conversationId, teamId, originExplicit, {
+            mode: 'read_only',
+          });
+        } else {
+          const runKey =
+            input.originRunId ??
+            (input.originSessionId !== undefined
+              ? this.activeRunIdForSession(input.originSessionId)
+              : undefined);
+          const edgeSeen = this.hasRunCycleEdge(runKey, input.from, target.id);
+          check = this.checkDelivery(target, input.from, conversationId, teamId, originExplicit, {
+            edge: edgeSeen ? 'skip' : 'bump',
+          });
+          // 检查通过后才记账：失败不占边，同 run 再投会重新 bump / 检查。
+          if (check.ok) this.recordRunCycleEdge(runKey, input.from, target.id);
+        }
+        if (!check.ok) {
+          if (!TURN_DIMENSIONS.has(check.dimension)) {
+            this.emitBudgetBlocked(target, check, {
+              conversation_id: conversationId,
+              message_id: interruptMessage.id,
+              from: input.from,
+              to: target.id,
+              phase: 'enqueue',
+              ...(teamId !== undefined ? { teamId } : {}),
+            });
+          }
+          throw this.budgetFailureError(check, conversationId, teamId);
+        }
+      }
+
+      // 4. waiting_permission / active resume 拒绝：不做任何取消 / 入队。
+      if (entry.state === 'waiting_permission') {
+        throw new AgentError('invalid_input', 'permission_pending');
+      }
+      if (entry.active !== undefined && entry.active.messageId === undefined) {
+        throw new AgentError('invalid_input', 'resume_in_progress');
+      }
+
+      // 5. 消息落到 inbox（content 新增；message_id 沿用既有记录），并 hold。
+      if (input.messageId !== undefined) {
+        this.inbox?.hold(target.id, interruptMessage.id);
+      } else {
         this.inbox?.append(target.id, {
-          id,
-          ts: message.ts,
+          id: interruptMessage.id,
+          ts: interruptMessage.ts,
           source: input.from,
           text: input.content,
-          ...(input.important ? { important: true } : {}),
         });
-        this.inbox?.hold(target.id, id);
-        interruptMessage = message;
+        this.inbox?.hold(target.id, interruptMessage.id);
       }
       if (!entry.pending.includes(interruptMessage)) entry.pending.push(interruptMessage);
       this.registry.touchBinding(target.id, entry.bindingId, this.now());
 
-      // 3. 取消尚未开始的 run，保留其消息用于按原顺序重投。
+      // 6. 取消尚未开始的 run，保留其消息用于按原顺序重投；queued resume 跳过。
       const oldMessages: AgentMessage[] = [];
       const seenMessageIds = new Set<string>();
       for (const runId of queuedRunIds) {
         const messageIdForRun = this.runMessageIds.get(runId);
-        const message =
-          messageIdForRun !== undefined
-            ? entry.pending.find((candidate) => candidate.id === messageIdForRun)
-            : undefined;
+        if (messageIdForRun === undefined) {
+          // queued resume run 没有 runMessageIds，不能安全重投：跳过、不取消。
+          continue;
+        }
+        const message = entry.pending.find((candidate) => candidate.id === messageIdForRun);
         if (message === undefined) {
-          // 状态不一致（queued run 找不到对应消息）：不取消、不重投，宁可顺序退化也不丢消息。
           this.logger.warn('agent.interrupt.queue_message_missing', {
             agent_id: target.id,
             session_id: entry.bindingId,
@@ -2988,44 +3172,331 @@ export class AgentServiceImpl implements AgentService {
           oldMessages.push(message);
         }
       }
-      // 4. 取消 active / 已进入 executor 但尚未置 active 的 run。先记原因，防止
-      //    scheduler 在 handle attach 前取消时把 reason 固定成 'run cancelled'。
+
+      // 7. 取消 active；若原消息是 urgent，则重投它（work 消息不重投）。
+      const activeMessageId = entry.active?.messageId;
+      const activeConversationId = entry.active?.conversationId;
+      const reinjected: AgentMessage[] = [];
+      if (activeMessageId !== undefined && this.urgentMessageIds.has(activeMessageId)) {
+        // 优先用内存快照：append 的 consumed-first 可能已把 active urgent 的 inbox
+        // 记录裁掉；快照保留原 id / from / content / conversation_id。
+        const remembered = this.urgentMessages.get(activeMessageId);
+        const stored = this.inbox?.findByIds(target.id, [activeMessageId])[0];
+        if (remembered !== undefined) {
+          reinjected.push(remembered);
+        } else if (stored === undefined) {
+          this.logger.warn('agent.interrupt.reinject_missing', {
+            agent_id: target.id,
+            session_id: entry.bindingId,
+            message_id: activeMessageId,
+          });
+          this.urgentMessageIds.delete(activeMessageId);
+          this.urgentMessages.delete(activeMessageId);
+        } else {
+          reinjected.push({
+            id: stored.id,
+            from: stored.source,
+            to: target.id,
+            content: stored.text,
+            ts: this.now(),
+            source: this.messageSource(stored.source),
+            channel: 'direct',
+            ...(activeConversationId !== undefined
+              ? { conversation_id: activeConversationId }
+              : { conversation_id: conversationId }),
+          });
+        }
+      }
       for (const runId of runningIds) {
         this.interruptReasons.set(runId, 'interrupt');
+        this.interruptCancelledRunIds.add(runId);
         this.scheduler.cancel(runId, 'interrupt');
       }
 
-      // 5. 同步入队：打断消息在前，旧队列随后（submit 在返回 promise 前已 push）。
-      const submissions: Array<Promise<{ runId: string; handle: RunHandle }>> = [];
-      submissions.push(this.submitMessage(target, entry, interruptMessage));
-      for (const message of oldMessages) {
-        submissions.push(this.submitMessage(target, entry, message));
+      // 8. 同步入队：新 urgent → 旧 urgent（如有）→ 旧队列原顺序。
+      for (const message of reinjected) {
+        if (!entry.pending.includes(message)) entry.pending.push(message);
       }
-      const submitted = await Promise.all(submissions);
-      submitted.forEach((item, index) => {
-        const message = index === 0 ? interruptMessage : oldMessages[index - 1];
-        if (message !== undefined) this.runMessageIds.set(item.runId, message.id);
+      const queue: AgentMessage[] = [interruptMessage, ...reinjected, ...oldMessages];
+      const submissions = queue.map((message) => ({
+        message,
+        promise: this.submitMessage(target, entry, message),
+      }));
+      // submit 在返回 promise 前已同步推入 scheduler 队列；这里再统一 await。
+      const outcomes = await Promise.allSettled(submissions.map((item) => item.promise));
+      const reinjectedIds = new Set(reinjected.map((message) => message.id));
+      let newUrgentFailed = false;
+      outcomes.forEach((outcome, index) => {
+        const item = submissions[index];
+        if (item === undefined) return;
+        if (outcome.status === 'fulfilled') {
+          this.runMessageIds.set(outcome.value.runId, item.message.id);
+          return;
+        }
+        // 队列满：submitMessage 已从 entry.pending 移除。
+        // 被抢占的 active urgent 在 inbox 里已是 consumed，unhold 不会恢复 unread，
+        // 必须删掉 consumed 记录再以同 id 重新落为 unread，否则消息丢失。
+        if (reinjectedIds.has(item.message.id)) {
+          this.restoreConsumedUnread(target.id, item.message);
+        } else {
+          // 普通 queued 消息只是 unread：unhold 保持未读即可。
+          this.inbox?.unhold(target.id, [item.message.id]);
+          this.urgentMessageIds.delete(item.message.id);
+          this.urgentMessages.delete(item.message.id);
+        }
+        if (index === 0) {
+          newUrgentFailed = true;
+        } else {
+          this.logger.warn('agent.queue.requeue_failed', {
+            agent_id: target.id,
+            session_id: entry.bindingId,
+            message_id: item.message.id,
+            error: errorText(outcome.reason),
+          });
+        }
       });
+      if (newUrgentFailed) {
+        throw new AgentError('invalid_input', 'queue_full');
+      }
+      this.urgentMessageIds.add(interruptMessage.id);
+      this.urgentMessages.set(interruptMessage.id, interruptMessage);
+      // 旧队列里的 urgent 也补内存快照，后续被抢占时同样不依赖 inbox 正文。
+      for (const item of submissions) {
+        if (
+          this.urgentMessageIds.has(item.message.id) &&
+          !this.urgentMessages.has(item.message.id)
+        ) {
+          this.urgentMessages.set(item.message.id, item.message);
+        }
+      }
       this.emitForSession('agent.message.queued', target, entry.bindingId, {
         state: target.state,
         message_id: interruptMessage.id,
         from: input.from,
-        ...(input.conversationId !== undefined ? { conversation_id: input.conversationId } : {}),
+        conversation_id: conversationId,
       });
       this.scheduleSnapshot();
 
-      const first = submitted[0];
-      if (first === undefined) {
+      const first = outcomes[0];
+      if (first === undefined || first.status !== 'fulfilled') {
         throw new AgentError('invalid_input', 'interrupt produced no run');
       }
       return {
         queued: true,
         message_id: interruptMessage.id,
         state: this.registry.get(target.id)?.state ?? target.state,
-        run_id: first.runId,
+        run_id: first.value.runId,
         session_id: entry.bindingId,
+        conversation_id: conversationId,
       };
     });
+  }
+
+  /**
+   * 被抢占的 active urgent 重投失败时把消息还原为 unread。
+   *
+   * 该消息在 run 启动时已 consumed；`unhold` 不会让 consumed 变回 unread，所以先
+   * `discard` 掉 consumed 记录，再以同 id 重新 append（缺省 rejectWhenFull:false）。
+   * 不新增 port 方法，只用现有 append / discard 组合。
+   */
+  private restoreConsumedUnread(agentId: string, message: AgentMessage): void {
+    this.inbox?.discard(agentId, [message.id]);
+    this.inbox?.append(agentId, {
+      id: message.id,
+      ts: message.ts,
+      source: message.from,
+      text: message.content,
+    });
+    this.urgentMessageIds.delete(message.id);
+    this.urgentMessages.delete(message.id);
+  }
+
+  /**
+   * 0.41 notify 内核：只追加 inbox unread（rejectWhenFull），不 hold / submit / consume。
+   * 预算走 notify 模式：不 ensure 新 conversation、只认 cycle blocked、跳过 hop /
+   * wall-clock / turns / tokens，每批最多 bump 1 次 edge。
+   */
+  private async notifyDelivery(
+    target: MemberRecord,
+    input: {
+      from: string;
+      content: string;
+      conversationId?: string;
+      originSessionId?: string;
+      originTeamId?: string;
+      batchKey?: string;
+    },
+  ): Promise<{
+    message_id: string;
+    wake: boolean;
+    resolution: 'live' | 'gone';
+    conversation_id: string;
+  }> {
+    if (input.from === target.id) {
+      throw new AgentError('invalid_input', 'self_notify');
+    }
+    if (this.inbox === undefined) {
+      throw new AgentError('invalid_input', 'inbox_unavailable');
+    }
+    const live = this.liveEntries(target.id).length > 0;
+    const canWake = this.canScheduleWake(target.id);
+    const conversationId = this.resolveConversationForDelivery(
+      input.conversationId,
+      input.originSessionId,
+      target,
+    );
+    const teamId = input.originTeamId ?? this.resolveOriginTeam(input.from, target);
+    const originExplicit = input.originTeamId !== undefined;
+    // 第一遍只做只读检查（不 bump）：append / wake 失败时就不该留下边计数。
+    const check = this.checkDelivery(target, input.from, conversationId, teamId, originExplicit, {
+      mode: 'notify',
+      edge: 'check',
+    });
+    if (!check.ok) {
+      if (!TURN_DIMENSIONS.has(check.dimension)) {
+        this.emitBudgetBlocked(target, check, {
+          conversation_id: conversationId,
+          from: input.from,
+          to: target.id,
+          phase: 'enqueue',
+          ...(teamId !== undefined ? { teamId } : {}),
+        });
+      }
+      throw this.budgetFailureError(check, conversationId, teamId);
+    }
+    const messageId = this.newId();
+    const appended = this.inbox.append(
+      target.id,
+      { id: messageId, ts: this.now(), source: input.from, text: input.content },
+      { rejectWhenFull: true },
+    );
+    if (!appended.accepted) {
+      throw new AgentError(
+        'invalid_input',
+        appended.reason === 'full' ? 'inbox_full' : 'inbox_unavailable',
+      );
+    }
+    this.noticeDirty.add(target.id);
+    const wake = canWake ? await this.scheduleInboxWake(target.id) : false;
+    // 只有“真的排了 wake”的 notify 才计边；每批最多 1 次。第二遍结果忽略：
+    // 通知已经 append，cycle 失败也不撤销（它只影响后续投递的环检测）。
+    if (wake && this.claimNotifyEdge(input.batchKey, input.from, target.id)) {
+      this.checkDelivery(target, input.from, conversationId, teamId, originExplicit, {
+        mode: 'notify',
+        edge: 'bump',
+      });
+    }
+    if (live) {
+      const entries = this.liveEntries(target.id);
+      const binding = entries.find((entry) => entry.primary) ?? entries[0];
+      if (binding !== undefined) {
+        this.emitForSession('agent.message.notified', target, binding.bindingId, {
+          message_id: messageId,
+          from: input.from,
+          to: target.id,
+          conversation_id: conversationId,
+          wake,
+        });
+      }
+    }
+    return {
+      message_id: messageId,
+      wake,
+      resolution: live ? 'live' : 'gone',
+      conversation_id: conversationId,
+    };
+  }
+
+  /** idle 摘要唤醒的前置条件（先查 liveEntries，绝不 ensure / spawn）。 */
+  private canScheduleWake(agentId: string): boolean {
+    if (this.inbox === undefined) return false;
+    if (this.wakePending.has(agentId)) return false;
+    if (this.rotations.has(agentId)) return false;
+    const entries = this.liveEntries(agentId);
+    if (entries.length === 0) return false;
+    for (const entry of entries) {
+      if (entry.active !== undefined || entry.queuedRuns.size > 0 || entry.pending.length > 0) {
+        return false;
+      }
+      if (entry.state === 'running' || entry.state === 'waiting_permission') return false;
+    }
+    return this.registry.get(agentId) !== undefined;
+  }
+
+  /**
+   * 排一次 synthetic 摘要唤醒。`wakePending` 在 await 前同步加入；无 live body /
+   * rotate / 已有 pending wake 时返回 false（不 spawn）。
+   */
+  private async scheduleInboxWake(agentId: string): Promise<boolean> {
+    if (!this.canScheduleWake(agentId)) return false;
+    const record = this.registry.get(agentId);
+    if (record === undefined) return false;
+    const entries = this.liveEntries(agentId);
+    const entry = entries.find((candidate) => candidate.primary) ?? entries[0];
+    if (entry === undefined) return false;
+    this.wakePending.add(agentId);
+    this.noticeDirty.delete(agentId);
+    try {
+      await this.submitWakeMessage(record, entry);
+      return true;
+    } catch (error) {
+      this.wakePending.delete(agentId);
+      this.noticeDirty.add(agentId);
+      this.logger.warn('agent.inbox.wake_failed', {
+        agent_id: agentId,
+        session_id: entry.bindingId,
+        error: errorText(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * synthetic wake run：无 conversation_id、不 append / hold；executor 启动时先查
+   * readable unread，为 0 直接 complete、不调模型。run id 记入 `syntheticRunIds`，
+   * deliverToParent 据此跳过（否则唤醒会制造父 run）。
+   */
+  private async submitWakeMessage(record: MemberRecord, entry: ExecutionUnitEntry): Promise<void> {
+    if (this.draining || entry.closing || entry.retired) {
+      throw new AgentError('member_closed', `member_closed: ${record.id}`);
+    }
+    const runId = this.newId();
+    const message: AgentMessage = {
+      id: this.newId(),
+      from: SYSTEM_PRINCIPAL,
+      to: record.id,
+      content: INBOX_WAKE_INPUT,
+      ts: this.now(),
+      source: 'system',
+      channel: 'direct',
+    };
+    entry.queuedRuns.add(runId);
+    this.syntheticRunIds.add(runId);
+    const task: ScheduledTask = {
+      agent: { id: record.id } as AgentHandle,
+      runId,
+      sessionId: entry.bindingId,
+      input: INBOX_WAKE_INPUT,
+      executor: async (scheduledRunId) => {
+        entry.queuedRuns.delete(scheduledRunId);
+        const readable = this.inbox?.list(record.id).unread ?? 0;
+        if (readable === 0) {
+          this.syntheticRunIds.delete(scheduledRunId);
+          this.wakePending.delete(record.id);
+          const handle = new ExecutionUnitRunHandle(scheduledRunId, record.id, entry.bindingId);
+          handle.complete('');
+          return handle;
+        }
+        return this.startExecutionUnitRun(record, entry, message, scheduledRunId, false);
+      },
+    };
+    try {
+      await this.scheduler.submit(task);
+    } catch (error) {
+      entry.queuedRuns.delete(runId);
+      this.syntheticRunIds.delete(runId);
+      throw error;
+    }
   }
 
   /** 同一 agent 的打断重排串行执行（普通 admit 不经过此锁）。 */
@@ -3047,8 +3518,58 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     const raw = input as unknown as Record<string, unknown>;
     const to = readRequiredString(raw, 'to');
-    const content = readContent(raw, 'content');
     const from = raw.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
+    const interrupt = readOptionalBoolean(raw, 'interrupt');
+    const notify = readOptionalBoolean(raw, 'notify');
+    let messageId: string | undefined;
+    if (raw.message_id !== undefined) messageId = readRequiredString(raw, 'message_id');
+    const originSessionId =
+      raw.origin_session_id === undefined
+        ? undefined
+        : readRequiredString(raw, 'origin_session_id');
+    const originRunId =
+      raw.origin_run_id === undefined ? undefined : readRequiredString(raw, 'origin_run_id');
+    const batchKey = raw.batch_key === undefined ? undefined : readRequiredString(raw, 'batch_key');
+
+    // 三档输入互斥与地址限制：在解析目标 / 产生任何副作用之前拒绝。
+    if (interrupt && notify) {
+      return { status: 'rejected', code: 'invalid_input', reason: 'conflicting_delivery' };
+    }
+    if (messageId !== undefined && notify) {
+      return {
+        status: 'rejected',
+        code: 'invalid_input',
+        reason: 'message_id is not supported with notify',
+      };
+    }
+    if (messageId !== undefined && !interrupt) {
+      return {
+        status: 'rejected',
+        code: 'invalid_input',
+        reason: 'message_id requires interrupt: true',
+      };
+    }
+    if (
+      (interrupt || notify) &&
+      (to.includes('@') || to === HUMAN_PRINCIPAL || to.startsWith('federation:'))
+    ) {
+      return { status: 'rejected', code: 'invalid_input', reason: 'unsupported_delivery' };
+    }
+    let content: string;
+    if (messageId !== undefined) {
+      if (raw.content !== undefined && raw.content !== '') {
+        if (typeof raw.content !== 'string' || raw.content.trim() !== '') {
+          return {
+            status: 'rejected',
+            code: 'invalid_input',
+            reason: 'pass either content or message_id, not both',
+          };
+        }
+      }
+      content = '';
+    } else {
+      content = readContent(raw, 'content');
+    }
 
     const target = this.resolveDispatchTarget(to, from);
     if (target === undefined || !this.registry.canView(target, from)) {
@@ -3057,13 +3578,64 @@ export class AgentServiceImpl implements AgentService {
     if (target.membership === 'left' || target.state === 'closed') {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
-    if (this.hasClosingExecutionUnit(target.id)) {
+    // notify 允许落给 closing / gone（append + wake:false）；work / urgent 仍拒绝 closing。
+    if (!notify && this.hasClosingExecutionUnit(target.id)) {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
 
-    const conversationId = this.resolveConversationId(input.conversation_id);
     const originTeamId =
       raw.origin_team_id === undefined ? undefined : readRequiredString(raw, 'origin_team_id');
+    if (notify) {
+      try {
+        const outcome = await this.notifyDelivery(target, {
+          from,
+          content,
+          ...(input.conversation_id !== undefined ? { conversationId: input.conversation_id } : {}),
+          ...(originSessionId !== undefined ? { originSessionId } : {}),
+          ...(originTeamId !== undefined ? { originTeamId } : {}),
+          ...(batchKey !== undefined ? { batchKey } : {}),
+        });
+        return {
+          status: 'notified',
+          message_id: outcome.message_id,
+          resolved_to: target.id,
+          conversation_id: outcome.conversation_id,
+          wake: outcome.wake,
+          resolution: outcome.resolution,
+        };
+      } catch (error) {
+        return this.rejectAdmit(error);
+      }
+    }
+    if (interrupt) {
+      try {
+        const result = await this.sendInterrupt(target, {
+          memberKey: to,
+          from,
+          content,
+          ...(messageId !== undefined ? { messageId } : {}),
+          ...(input.conversation_id !== undefined ? { conversationId: input.conversation_id } : {}),
+          ...(originSessionId !== undefined ? { originSessionId } : {}),
+          ...(originRunId !== undefined ? { originRunId } : {}),
+          ...(originTeamId !== undefined ? { originTeamId } : {}),
+        });
+        return {
+          status: 'queued',
+          message_id: result.message_id,
+          resolved_to: target.id,
+          resolution: 'live',
+          conversation_id: result.conversation_id,
+        };
+      } catch (error) {
+        return this.rejectAdmit(error);
+      }
+    }
+
+    const conversationId = this.resolveConversationForDelivery(
+      input.conversation_id,
+      originSessionId,
+      target,
+    );
     const boundSession = this.registry.getBySession(to)?.id === target.id ? to : undefined;
     const attempt = async (agentId: string, sessionId?: string) =>
       this.admit({
@@ -3073,6 +3645,8 @@ export class AgentServiceImpl implements AgentService {
         from,
         channel: originTeamId === undefined ? 'direct' : 'team',
         ...(originTeamId !== undefined ? { origin_team_id: originTeamId } : {}),
+        ...(originSessionId !== undefined ? { origin_session_id: originSessionId } : {}),
+        ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
         conversation_id: conversationId,
         strict: false,
       });
@@ -3144,6 +3718,12 @@ export class AgentServiceImpl implements AgentService {
     }
     if (code === 'member_closed') {
       return { status: 'rejected', code: 'agent_left', reason: errorText(error) };
+    }
+    if (code === 'member_stale') {
+      return { status: 'rejected', code: 'member_stale', reason: errorText(error) };
+    }
+    if (code === 'invalid_input') {
+      return { status: 'rejected', code: 'invalid_input', reason: errorText(error) };
     }
     if (
       code === 'budget_exceeded' ||
@@ -4396,8 +4976,12 @@ export class AgentServiceImpl implements AgentService {
     this.emitForSession(type, record, sessionId, extra);
   }
 
-  currentConversation(agentId: string): string | undefined {
-    const entries = this.liveEntries(agentId);
+  currentConversation(ref: string): string | undefined {
+    // 0.41：TeamService 传调用者 session —— 按 session 精确定位，multi-live 时
+    // 不回退到 agent 级（那会把两个 body 的会话串在一起）。post 仍传 agent id。
+    const bySession = this.registry.getBySession(ref);
+    if (bySession !== undefined) return this.conversationForSession(ref);
+    const entries = this.liveEntries(ref);
     const active = entries.find((entry) => entry.active !== undefined);
     return active?.active?.conversationId;
   }
@@ -4494,6 +5078,7 @@ export class AgentServiceImpl implements AgentService {
     conversationId: string,
     teamId?: string,
     originExplicit = false,
+    options?: { mode?: 'delivery' | 'read_only' | 'notify'; edge?: 'bump' | 'check' | 'skip' },
   ): BudgetCheckResult {
     if (this.budgetPort === undefined) return { ok: true };
     const resolvedTeamId = teamId ?? this.resolveOriginTeam(from, target);
@@ -4503,8 +5088,12 @@ export class AgentServiceImpl implements AgentService {
       ...(originExplicit ? { origin_explicit: true } : {}),
       from,
       to: target.id,
+      ...(options?.mode !== undefined ? { mode: options.mode } : {}),
+      ...(options?.edge !== undefined ? { edge: options.edge } : {}),
     });
-    if (check.ok) this.emitBudgetWarnings(target, conversationId, 'enqueue', resolvedTeamId);
+    if (check.ok && (options?.mode === undefined || options.mode === 'delivery')) {
+      this.emitBudgetWarnings(target, conversationId, 'enqueue', resolvedTeamId);
+    }
     return check;
   }
 
@@ -4796,6 +5385,110 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', 'invalid conversation_id');
     }
     return value;
+  }
+
+  /**
+   * 0.41：显式 > 调用者 session 继承 > 新建。
+   *
+   * 继承只按调用者 session 在自己的 ZU entry 上定位 active turn，**绝不回退**
+   * agent 级 `currentConversation`（multi-live 时那会把会话串到别的 body）。
+   * 跨 team 不继承；无调用者 session（RPC）不继承。
+   */
+  private resolveConversationForDelivery(
+    explicit: unknown,
+    originSessionId: string | undefined,
+    target: MemberRecord,
+  ): string {
+    if (explicit !== undefined) return this.resolveConversationId(explicit);
+    if (originSessionId !== undefined) {
+      const caller = this.registry.getBySession(originSessionId);
+      if (caller !== undefined && caller.teamId === target.teamId) {
+        const inherited = this.conversationForSession(originSessionId);
+        if (inherited !== undefined) return inherited;
+      }
+    }
+    return generateConversationId(this.newId);
+  }
+
+  /** 按 session 精确定位当前 turn 的 conversation；不跨 body 回退。 */
+  private conversationForSession(sessionId: string): string | undefined {
+    const owner = this.registry.getBySession(sessionId);
+    if (owner === undefined) return undefined;
+    return this.findEntry(owner.id, sessionId)?.active?.conversationId;
+  }
+
+  /** 按 session 定位调用者当前 active run；用于同 run edge 去重。 */
+  private activeRunIdForSession(sessionId: string): string | undefined {
+    const owner = this.registry.getBySession(sessionId);
+    if (owner === undefined) return undefined;
+    return this.findEntry(owner.id, sessionId)?.active?.runId;
+  }
+
+  /**
+   * 同一 run 内 `(from,to)` 是否已计过 cycle 边；无 run id 时永远未计（按每条计）。
+   *
+   * peek 与 record 分离：只有预算检查通过后才真正记账，首次检查失败不占边，
+   * 同一 run 再次投递会重新 bump / 检查，不会因为「先记后查」绕过冷却。
+   */
+  private hasRunCycleEdge(runKey: string | undefined, from: string, to: string): boolean {
+    if (runKey === undefined) return false;
+    return this.runCycleEdges.get(runKey)?.has(`${from}\u0000${to}`) ?? false;
+  }
+
+  /** 记一次同 run cycle 边；`hasRunCycleEdge` 为 false 时调用。 */
+  private recordRunCycleEdge(runKey: string | undefined, from: string, to: string): void {
+    if (runKey === undefined) return;
+    const edgeKey = `${from}\u0000${to}`;
+    let edges = this.runCycleEdges.get(runKey);
+    if (edges === undefined) {
+      edges = new Set();
+      this.runCycleEdges.set(runKey, edges);
+    }
+    edges.add(edgeKey);
+  }
+
+  /** notify 边计数：同一次 send / messages 批最多 1 次。返回 true 表示本次可 bump。 */
+  private claimNotifyEdge(batchKey: string | undefined, from: string, to: string): boolean {
+    if (batchKey === undefined) return true;
+    const edgeKey = `${from}\u0000${to}`;
+    let edges = this.notifyBatchEdges.get(batchKey);
+    if (edges === undefined) {
+      edges = new Set();
+      this.notifyBatchEdges.set(batchKey, edges);
+    }
+    if (edges.has(edgeKey)) return false;
+    edges.add(edgeKey);
+    return true;
+  }
+
+  /**
+   * tool 路径一次 send / messages 调用结束后的通知边清理（内部、非 wire）。
+   * TeamService.send 只透传 batch_key；同一次调用可能逐条进 dispatch，必须由
+   * 调用方在整批 await 完后统一释放，否则 Map 残留。
+   */
+  releaseNotifyBatch(batchKey: string): void {
+    this.notifyBatchEdges.delete(batchKey);
+  }
+
+  /** 预算失败的稳定错误：带 conversation / dimension / retry_after / 恢复命令。 */
+  private budgetFailureError(
+    check: Extract<BudgetCheckResult, { ok: false }>,
+    conversationId: string,
+    teamId: string | undefined,
+  ): AgentError {
+    const retry =
+      check.retry_after_ts !== undefined
+        ? `; retry after ${new Date(check.retry_after_ts).toISOString()}`
+        : '';
+    const recovery =
+      teamId !== undefined
+        ? `; recover with: vessel team budget override ${teamId} --conversation ` +
+          `${conversationId} --dimension ${check.dimension} --max unlimited`
+        : '; this conversation has no team; cooldown only';
+    return new AgentError(
+      this.budgetCode(check.reason),
+      `${check.reason}: ${check.dimension}: conversation ${conversationId}${retry}${recovery}`,
+    );
   }
 
   /**

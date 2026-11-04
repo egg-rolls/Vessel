@@ -3,12 +3,12 @@
  *
  * 路径：`<dataDir>/tenants/<tenantId>/inbox/<encodeURIComponent(agentId)>.json`，
  * 形状为
- * `{ v: 1, messages: [{ id, ts, source, summary, text, status, consumed_by_session?, important? }] }`。
+ * `{ v: 1, messages: [{ id, ts, source, summary, text, status, consumed_by_session? }] }`。
  *
  * - 每 agent 懒加载；缺失 = 空，损坏 = available=false（只记日志，不覆盖文件，读返回 []）；
  * - 有界：最多 `maxMessages`（缺省 200）条，append / load 时裁掉最旧的；
  * - `summary` 在写入时算好（trim、空白折叠、前 160 字），永不调用模型；
- * - `important` 缺省 false，加载时保留（0.32-D 预留，本切片不生产）；
+ * - 旧文件里多余的 `important` 字段解析时忽略，不迁移、不报错；
  * - `atomicWrite` 0600，单写者串行写链；append 立即入写链（写前日志，不 debounce）；
  * - `hold` 只存在内存：pending / 已排程的 run 持有；崩溃 / 重启后未读重新可读。
  *
@@ -18,6 +18,7 @@
  * @module @vessel-agent/agent
  */
 
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -46,7 +47,6 @@ export interface StoredInboxMessage {
   text: string;
   status: 'unread' | 'consumed';
   consumed_by_session?: string;
-  important?: boolean;
 }
 
 export interface AgentInboxEntryInput {
@@ -54,7 +54,6 @@ export interface AgentInboxEntryInput {
   ts: number;
   source: string;
   text: string;
-  important?: boolean;
 }
 
 export interface AgentInboxListEntry {
@@ -62,7 +61,8 @@ export interface AgentInboxListEntry {
   ts: number;
   source: string;
   summary: string;
-  important: boolean;
+  /** 当前被 pending / 已排程 run 持有；read 不可见。 */
+  held: boolean;
 }
 
 export interface AgentInboxReadSelection {
@@ -72,17 +72,60 @@ export interface AgentInboxReadSelection {
   limit?: number;
 }
 
+export interface AgentInboxAppendOptions {
+  /**
+   * true：先裁 consumed，仍满则返回 `full`（不裁 unread）；insert / notify 用。
+   * false（缺省）：先裁 consumed，仍满时继续裁最旧 unread（既有行为）。
+   */
+  rejectWhenFull?: boolean;
+}
+
+export interface AgentInboxAppendResult {
+  accepted: boolean;
+  reason?: 'unavailable' | 'full';
+}
+
+export interface AgentInboxListOptions {
+  /** true：messages 同时返回 held 的消息；unread 仍只计可读，pending 计 held ∩ unread。 */
+  includeHeld?: boolean;
+}
+
+export interface AgentInboxDiscardOptions {
+  /** true：只删 unread 且未被持有的消息；held / consumed / 未知 id 进 skipped。 */
+  onlyUnheld?: boolean;
+}
+
+export interface AgentInboxDiscardSkip {
+  id: string;
+  reason: 'held' | 'not_found' | 'consumed';
+}
+
+export interface AgentInboxDiscardResult {
+  deleted: string[];
+  skipped: AgentInboxDiscardSkip[];
+}
+
 export interface AgentInboxPort {
-  /** 落盘并计算 summary；重复 id 忽略。 */
-  append(agentId: string, message: AgentInboxEntryInput): void;
+  /** 落盘并计算 summary；重复 id 忽略。先裁 consumed，再按 options 决定是否裁 unread。 */
+  append(
+    agentId: string,
+    message: AgentInboxEntryInput,
+    options?: AgentInboxAppendOptions,
+  ): AgentInboxAppendResult;
   /** 内存态：pending / 已排程的 run 持有，list / read 跳过。 */
   hold(agentId: string, id: string): void;
   /** 单条解除持有（投递因 rotate/close 失败时保留未读）。 */
   unhold(agentId: string, ids: readonly string[]): void;
   /** rotate / retire：旧持有一并释放，旧队列重新可读。 */
   releaseHeld(agentId: string): void;
-  /** unread 且未被持有，按插入顺序；不改状态。 */
-  list(agentId: string): { unread: number; messages: AgentInboxListEntry[] };
+  /**
+   * unread 且未被持有，按插入顺序；不改状态。`includeHeld:true` 时 messages 同时
+   * 包含 held 的消息，并返回 `pending`。
+   */
+  list(
+    agentId: string,
+    options?: AgentInboxListOptions,
+  ): { unread: number; pending: number; messages: AgentInboxListEntry[] };
   /**
    * unread 且未被持有；给了 ids 按 ids 顺序，否则取最旧 limit 条；
    * 返回前把取到的消息标 consumed（`consumed_by_session=sessionId`）。
@@ -96,8 +139,15 @@ export interface AgentInboxPort {
   markConsumed(agentId: string, ids: readonly string[], sessionId: string): Promise<void>;
   /** 不做 status / hold 过滤、不改状态（0.32-D 打断按 id 定位）。 */
   findByIds(agentId: string, ids: readonly string[]): StoredInboxMessage[];
-  /** 显式投递失败：从队列移除。 */
-  discard(agentId: string, ids: readonly string[]): void;
+  /**
+   * 显式投递失败：从队列移除。缺省删除所有命中 id（含 held / consumed）；
+   * `onlyUnheld:true` 只删 unread 且未持有的消息，其余进 skipped。
+   */
+  discard(
+    agentId: string,
+    ids: readonly string[],
+    options?: AgentInboxDiscardOptions,
+  ): AgentInboxDiscardResult;
   /** 未消费且未被持有的条数。 */
   unreadCount(agentId: string): number;
   flush(): Promise<void>;
@@ -143,8 +193,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 加载放宽：`summary` / `important` 可缺失（分别从 text 派生 / 取 false），
- * 其余字段严格；任何类型不符都按损坏处理（不覆盖、不做半新半旧的内存）。
+ * 加载放宽：`summary` 可缺失（从 text 派生），其余字段严格；任何类型不符都按
+ * 损坏处理（不覆盖、不做半新半旧的内存）。未知字段（如旧版 `important`）忽略。
  */
 function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   if (!isRecord(value)) return false;
@@ -157,7 +207,6 @@ function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
     return false;
   }
   if (value.summary !== undefined && typeof value.summary !== 'string') return false;
-  if (value.important !== undefined && typeof value.important !== 'boolean') return false;
   return true;
 }
 
@@ -168,7 +217,7 @@ function isInboxFile(value: unknown): value is InboxFile {
   return value.messages.every(isStoredInboxMessage);
 }
 
-/** 规范化为内存形状：summary 缺失时派生，important 缺失时为 false。 */
+/** 规范化为内存形状：summary 缺失时派生。 */
 function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
   return {
     id: message.id,
@@ -180,7 +229,6 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
     ...(message.consumed_by_session !== undefined
       ? { consumed_by_session: message.consumed_by_session }
       : {}),
-    important: message.important === true,
   };
 }
 
@@ -215,11 +263,29 @@ export class AgentInboxStore implements AgentInboxPort {
         : DEFAULT_MAX_INBOX_MESSAGES;
   }
 
-  append(agentId: string, message: AgentInboxEntryInput): void {
+  append(
+    agentId: string,
+    message: AgentInboxEntryInput,
+    options?: AgentInboxAppendOptions,
+  ): AgentInboxAppendResult {
     const state = this.stateFor(agentId);
-    if (!state.available) return;
-    // 同一 id 只保留一条（重试 / 重复准入不制造重复消息）。
-    if (state.messages.some((existing) => existing.id === message.id)) return;
+    if (!state.available) return { accepted: false, reason: 'unavailable' };
+    // 所有路径先裁 consumed；consumed 不占 cap。拒绝 / 重复 id 路径也要把裁剪落盘。
+    const prunedConsumed = this.pruneConsumed(state);
+    // 同一 id 只保留一条（重试 / 重复准入不制造重复消息）；裁剪仍需落盘。
+    if (state.messages.some((existing) => existing.id === message.id)) {
+      if (prunedConsumed) void this.enqueueWrite(state);
+      return { accepted: true };
+    }
+    if (state.messages.length >= this.maxMessages) {
+      if (options?.rejectWhenFull === true) {
+        // 不裁 unread：显式拒绝，调用方返回 inbox_full 而不是静默丢消息。
+        if (prunedConsumed) void this.enqueueWrite(state);
+        return { accepted: false, reason: 'full' };
+      }
+      // 既有行为：consumed 裁完仍满时继续裁最旧（可能丢 unread）。
+      state.messages.splice(0, state.messages.length - this.maxMessages + 1);
+    }
     state.messages.push({
       id: message.id,
       ts: message.ts,
@@ -227,10 +293,10 @@ export class AgentInboxStore implements AgentInboxPort {
       summary: summaryOf(message.text),
       text: message.text,
       status: 'unread',
-      important: message.important === true,
     });
     this.prune(state);
     void this.enqueueWrite(state);
+    return { accepted: true };
   }
 
   hold(agentId: string, id: string): void {
@@ -246,17 +312,29 @@ export class AgentInboxStore implements AgentInboxPort {
     for (const id of ids) state.held.delete(id);
   }
 
-  list(agentId: string): { unread: number; messages: AgentInboxListEntry[] } {
+  list(
+    agentId: string,
+    options?: AgentInboxListOptions,
+  ): { unread: number; pending: number; messages: AgentInboxListEntry[] } {
     const state = this.stateFor(agentId);
-    if (!state.available) return { unread: 0, messages: [] };
-    const messages = this.readable(state).map((message) => ({
+    if (!state.available) return { unread: 0, pending: 0, messages: [] };
+    const readable = this.readable(state);
+    const includeHeld = options?.includeHeld === true;
+    const selected = includeHeld
+      ? state.messages.filter((message) => message.status === 'unread')
+      : readable;
+    const messages = selected.map((message) => ({
       id: message.id,
       ts: message.ts,
       source: message.source,
       summary: message.summary,
-      important: message.important === true,
+      held: state.held.has(message.id),
     }));
-    return { unread: messages.length, messages };
+    return {
+      unread: readable.length,
+      pending: includeHeld ? selected.length - readable.length : 0,
+      messages,
+    };
   }
 
   async read(
@@ -308,14 +386,53 @@ export class AgentInboxStore implements AgentInboxPort {
     return found;
   }
 
-  discard(agentId: string, ids: readonly string[]): void {
+  discard(
+    agentId: string,
+    ids: readonly string[],
+    options?: AgentInboxDiscardOptions,
+  ): AgentInboxDiscardResult {
     const state = this.stateFor(agentId);
-    if (!state.available) return;
-    const wanted = new Set(ids);
-    if (wanted.size === 0) return;
-    state.messages = state.messages.filter((message) => !wanted.has(message.id));
-    for (const id of wanted) state.held.delete(id);
-    void this.enqueueWrite(state);
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return { deleted: [], skipped: [] };
+    if (!state.available) {
+      return {
+        deleted: [],
+        skipped: unique.map((id) => ({ id, reason: 'not_found' as const })),
+      };
+    }
+    const wanted = new Set(unique);
+    const matched = new Map<string, StoredInboxMessage>();
+    for (const message of state.messages) {
+      if (wanted.has(message.id)) matched.set(message.id, message);
+    }
+    const onlyUnheld = options?.onlyUnheld === true;
+    const deleted: string[] = [];
+    const skipped: AgentInboxDiscardSkip[] = [];
+    for (const id of unique) {
+      const message = matched.get(id);
+      if (message === undefined) {
+        skipped.push({ id, reason: 'not_found' });
+        continue;
+      }
+      if (onlyUnheld) {
+        if (message.status === 'consumed') {
+          skipped.push({ id, reason: 'consumed' });
+          continue;
+        }
+        if (state.held.has(id)) {
+          skipped.push({ id, reason: 'held' });
+          continue;
+        }
+      }
+      deleted.push(id);
+      state.held.delete(id);
+    }
+    if (deleted.length > 0) {
+      const removed = new Set(deleted);
+      state.messages = state.messages.filter((message) => !removed.has(message.id));
+      void this.enqueueWrite(state);
+    }
+    return { deleted, skipped };
   }
 
   unreadCount(agentId: string): number {
@@ -413,6 +530,17 @@ export class AgentInboxStore implements AgentInboxPort {
     state.messages.splice(0, state.messages.length - this.maxMessages);
   }
 
+  /** 所有 append 路径的第一步：先裁 consumed（不占 cap，也不保留 hold）。返回是否有变化。 */
+  private pruneConsumed(state: AgentInboxState): boolean {
+    if (!state.messages.some((message) => message.status === 'consumed')) return false;
+    state.messages = state.messages.filter((message) => {
+      if (message.status !== 'consumed') return true;
+      state.held.delete(message.id);
+      return false;
+    });
+    return true;
+  }
+
   private enqueueWrite(state: AgentInboxState): Promise<void> {
     if (!state.available) return Promise.resolve();
     let data: string;
@@ -447,49 +575,66 @@ export class AgentInboxStore implements AgentInboxPort {
 }
 
 /** notice 的模型可见文本（只含条数与工具指引，不含正文）。 */
-function noticeContent(unread: number): string {
-  return `[inbox] ${unread} unread message(s); use the inbox tool (action="list") to view them.`;
+function noticeContent(unread: number, pending: number): string {
+  return (
+    `[inbox] ${unread} unread message(s), ${pending} pending; ` +
+    'use the inbox tool (action="list") to view them.'
+  );
 }
 
 /**
  * 成员 BeforeLlm notice hook（0.32 v2）。
  *
  * 只发一条 `vessel:notice` 尾消息提示未读条数；**不注入正文、不标 consumed**。
- * 未读 id 全部已提示过则不再重复；新消息到达（id 集合变化）时再提示一次。
+ * 按 `unread:pending:可读 id` 签名去重；签名变化（新消息、held 释放等）时再提示一次。
  */
 export function createInboxNoticeHook(options: {
   inbox: AgentInboxPort;
   agentId: string;
   isEnabled?: () => boolean;
-  onNotified?: (data: { runId: string; sessionId?: string; unread: number }) => void;
+  onNotified?: (data: {
+    runId: string;
+    sessionId?: string;
+    unread: number;
+    pending: number;
+  }) => void;
 }): Hook {
   /** 每个 hook（= 每个 body）独立；body 重建时重新开始提示。 */
-  const notifiedIds = new Set<string>();
+  // 按状态签名去重：unread/pending 变化或可读 id 集合变化都要重新提示。
+  // held 的 id 只参与 pending 计数，不单独视为“已提示正文”（held → unhold 后要再提示）。
+  let lastSignature: string | undefined;
   return {
     name: 'vessel:inbox-notice',
     type: HookType.BeforeLlm,
     async run(ctx): Promise<void> {
       if (options.isEnabled?.() === false) return;
-      const unread = options.inbox.list(options.agentId).messages;
-      if (unread.length === 0) {
-        notifiedIds.clear();
+      const { unread, pending, messages } = options.inbox.list(options.agentId, {
+        includeHeld: true,
+      });
+      if (messages.length === 0) {
+        lastSignature = undefined;
         return;
       }
-      if (unread.every((message) => notifiedIds.has(message.id))) return;
+      const readableIds = messages
+        .filter((entry) => !entry.held)
+        .map((entry) => entry.id)
+        .join(',');
+      const signature = `${unread}:${pending}:${readableIds}`;
+      if (signature === lastSignature) return;
       const message: Message = {
         role: 'user',
         name: 'vessel:notice',
-        content: noticeContent(unread.length),
+        content: noticeContent(unread, pending),
         timestamp: Date.now(),
       };
       ctx.messages = [...(ctx.messages ?? []), message];
-      notifiedIds.clear();
-      for (const entry of unread) notifiedIds.add(entry.id);
+      lastSignature = signature;
       try {
         options.onNotified?.({
           runId: ctx.run_id,
           ...(ctx.session_id !== undefined ? { sessionId: ctx.session_id } : {}),
-          unread: unread.length,
+          unread,
+          pending,
         });
       } catch {
         // 观测回调不得影响提示；事件链路的错误由调用方自己负责可见性。
@@ -501,7 +646,10 @@ export function createInboxNoticeHook(options: {
 /** `inbox` 工具的 description（模型按需读取收件箱）。 */
 const INBOX_TOOL_DESCRIPTION =
   'inspect messages queued while this agent was busy/rotating; ' +
-  'list returns unread count + summaries; read returns full text and marks them consumed.';
+  'list returns unread/pending counts + summaries (held included); ' +
+  'read returns full text and marks them consumed; ' +
+  'delete removes unread, non-held messages by id (held/consumed are skipped); ' +
+  'insert appends a message to your own inbox; it does not start a run or wake you.';
 
 function invalidInput(message: string): string {
   return JSON.stringify({ error: `invalid_input: ${message}` });
@@ -512,7 +660,8 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 成员可见的 `inbox` 工具：`list` 只看未读摘要，`read` 取原文并消费。
+ * 成员可见的 `inbox` 工具：`list` 看摘要与 pending，`read` 取原文并消费，
+ * `delete` 删除未持有的未读，`insert` 给自己追加一条消息。
  *
  * 只读本地队列，不触达工作区；`checkPermission` 恒 `allow`（deny 模式也注册）。
  * 返回 JSON 字符串；非法参数返回 `{ error: 'invalid_input: ...' }`，不抛错。
@@ -527,16 +676,20 @@ export function createInboxTool(options: {
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'read'] },
+        action: { type: 'string', enum: ['list', 'read', 'delete', 'insert'] },
         ids: {
           type: 'array',
           items: { type: 'string' },
-          description: 'read: ids returned by list',
+          description: 'read/delete: ids returned by list',
         },
         limit: {
           type: 'integer',
           minimum: 1,
           description: 'read: max messages when ids omitted (default 20)',
+        },
+        content: {
+          type: 'string',
+          description: 'insert: message text (non-empty)',
         },
       },
       required: ['action'],
@@ -544,16 +697,62 @@ export function createInboxTool(options: {
     async handler(args, ctx: ToolContext): Promise<string> {
       const input = isRecordValue(args) ? args : {};
       const action = input.action;
-      if (action !== 'list' && action !== 'read') {
-        return invalidInput('action must be "list" or "read"');
+      if (action !== 'list' && action !== 'read' && action !== 'delete' && action !== 'insert') {
+        return invalidInput('action must be "list", "read", "delete", or "insert"');
       }
+      const contentDefined = input.content !== undefined;
+      const idsDefined = input.ids !== undefined;
+      const limitDefined = input.limit !== undefined;
+
       if (action === 'list') {
-        const { unread, messages } = options.inbox.list(options.agentId);
-        return JSON.stringify({ unread, messages });
+        if (idsDefined || limitDefined || contentDefined) {
+          return invalidInput('list does not accept ids, limit, or content');
+        }
+        const { unread, pending, messages } = options.inbox.list(options.agentId, {
+          includeHeld: true,
+        });
+        return JSON.stringify({
+          unread,
+          pending,
+          messages: messages.map((message) => ({
+            id: message.id,
+            ts: message.ts,
+            source: message.source,
+            summary: message.summary,
+            held: message.held,
+          })),
+        });
+      }
+
+      if (action === 'insert') {
+        if (idsDefined) return invalidInput('insert does not accept ids');
+        if (limitDefined) return invalidInput('insert does not accept limit');
+        if (input.id !== undefined || input.source !== undefined || input.ts !== undefined) {
+          return invalidInput('insert does not accept id, source, or ts');
+        }
+        if (typeof input.content !== 'string' || input.content === '') {
+          return invalidInput('insert requires non-empty content');
+        }
+        const id = randomUUID();
+        const ts = Date.now();
+        const appended = options.inbox.append(
+          options.agentId,
+          { id, ts, source: options.agentId, text: input.content },
+          { rejectWhenFull: true },
+        );
+        await options.inbox.flush();
+        if (!appended.accepted) {
+          return JSON.stringify({
+            inserted: false,
+            error: appended.reason === 'unavailable' ? 'inbox_unavailable' : 'inbox_full',
+          });
+        }
+        const { unread, pending } = options.inbox.list(options.agentId, { includeHeld: true });
+        return JSON.stringify({ inserted: true, id, ts, unread, pending });
       }
 
       let ids: readonly string[] | undefined;
-      if (input.ids !== undefined) {
+      if (idsDefined) {
         if (
           !Array.isArray(input.ids) ||
           !input.ids.every((id): id is string => typeof id === 'string' && id !== '')
@@ -563,13 +762,26 @@ export function createInboxTool(options: {
         ids = input.ids;
       }
       let limit: number | undefined;
-      if (input.limit !== undefined) {
+      if (limitDefined) {
         if (typeof input.limit !== 'number' || !Number.isInteger(input.limit) || input.limit < 1) {
           return invalidInput('limit must be a positive integer');
         }
         limit = input.limit;
       }
 
+      if (action === 'delete') {
+        if (limitDefined) return invalidInput('delete does not accept limit');
+        if (contentDefined) return invalidInput('delete does not accept content');
+        if (ids === undefined || ids.length === 0) {
+          return invalidInput('delete requires a non-empty ids array');
+        }
+        const { deleted, skipped } = options.inbox.discard(options.agentId, ids, {
+          onlyUnheld: true,
+        });
+        return JSON.stringify({ deleted: deleted.length, skipped });
+      }
+
+      if (contentDefined) return invalidInput('read does not accept content');
       const messages = await options.inbox.read(
         options.agentId,
         {
@@ -585,7 +797,6 @@ export function createInboxTool(options: {
           ts: message.ts,
           source: message.source,
           text: message.text,
-          important: message.important === true,
         })),
       });
     },

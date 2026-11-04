@@ -259,21 +259,32 @@ export function createAgentControl(
             ? { conversation_id: input.conversation_id }
             : {}),
           ...(input.interrupt !== undefined ? { interrupt: input.interrupt } : {}),
+          ...(input.notify !== undefined ? { notify: input.notify } : {}),
           ...(input.message_id !== undefined ? { message_id: input.message_id } : {}),
-          ...(input.important !== undefined ? { important: input.important } : {}),
         })),
       });
       return {
-        results: batch.results.map((item) =>
-          item.ok
-            ? {
-                ok: true as const,
-                queued: true as const,
-                message_id: item.status.message_id,
-                state: item.status.state,
-              }
-            : failureOf(item),
-        ),
+        results: batch.results.map((item) => {
+          if (!item.ok) return failureOf(item);
+          // 0.41：SendResult 是 work/urgent（queued）与 notify（notified）的联合，
+          // 按 `queued` 显式收窄；notified 分支没有 state / run，也无私服层无法
+          // 提供的 resolved_to / conversation_id（SendResult 不携带，按可选缺省）。
+          if (item.status.queued) {
+            return {
+              ok: true as const,
+              queued: true as const,
+              message_id: item.status.message_id,
+              state: item.status.state,
+            };
+          }
+          return {
+            ok: true as const,
+            notified: true as const,
+            message_id: item.status.message_id,
+            wake: item.status.wake,
+            resolution: item.status.resolution,
+          };
+        }),
       };
     },
     async dispatch(inputs: AgentDispatchLikeInput[]): Promise<AgentDispatchBatchResultLike> {
@@ -295,8 +306,17 @@ export function createAgentControl(
       const results: AgentDispatchItemLike[] = settledResults.map((settledResult) => {
         if (settledResult.status === 'rejected') return failureFrom(settledResult.reason);
         const result = settledResult.value;
-        if (result.status !== 'queued') {
+        if (result.status === 'rejected') {
           return { ok: false, code: result.code, error: result.reason };
+        }
+        // canonical `agents.dispatch` 是 work-only（CONTRACT-0.41 §2.6）：notify
+        // 分支在这里不应出现，也不得伪装成 queued。明确报内部失败，不丢消息语义。
+        if (result.status !== 'queued') {
+          return {
+            ok: false,
+            code: 'internal',
+            error: 'agents.dispatch is work-only: unexpected notified result',
+          };
         }
         return {
           ok: true,

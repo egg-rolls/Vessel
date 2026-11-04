@@ -153,7 +153,10 @@ export class ConversationBudget implements ConversationBudgetPort {
   checkDelivery(input: BudgetDeliveryInput): BudgetCheckResult {
     if (!this.store.available) return this.unavailable();
     const now = this.now();
+    const mode = input.mode ?? 'delivery';
     const existing = this.store.get(input.conversation_id);
+    // notify：不 ensure 新 conversation；不存在就跳过全部检查、不落记录。
+    if (mode === 'notify' && existing === undefined) return { ok: true };
     if (
       input.origin_explicit === true &&
       existing?.team_id !== undefined &&
@@ -166,42 +169,52 @@ export class ConversationBudget implements ConversationBudgetPort {
     const limits = this.limitsFor(teamId);
     if (existing?.blocked !== undefined) {
       const blocked = existing.blocked;
-      return this.failed(
-        blocked.dimension,
-        blocked.reason,
-        this.currentValue(existing, blocked.dimension, now),
-        this.effectiveMax(existing, limits, blocked.dimension),
-      );
+      // notify 只被 dimension === 'cycle' 的 blocked 拦；其它维度不拦。
+      if (mode !== 'notify' || blocked.dimension === 'cycle') {
+        return this.failed(
+          blocked.dimension,
+          blocked.reason,
+          this.currentValue(existing, blocked.dimension, now),
+          this.effectiveMax(existing, limits, blocked.dimension),
+        );
+      }
     }
 
-    const hops = existing?.hops ?? 0;
-    const maxHops = this.effectiveMax(existing, limits, 'hops');
-    if (maxHops !== undefined && hops + 1 > maxHops) {
-      return this.failed('hops', 'budget_exceeded', hops, maxHops);
+    // delivery / read_only 才查 hops / wall-clock / turns / tokens。
+    // notify 跳过这些维度（只保留 cycle）。
+    if (mode !== 'notify') {
+      const hops = existing?.hops ?? 0;
+      const maxHops = this.effectiveMax(existing, limits, 'hops');
+      if (maxHops !== undefined && hops + 1 > maxHops) {
+        return this.failed('hops', 'budget_exceeded', hops, maxHops);
+      }
+
+      const created = existing?.created_at ?? now;
+      const wallClock = now - created;
+      const maxWallClock = this.effectiveMax(existing, limits, 'wall_clock');
+      if (maxWallClock !== undefined && wallClock > maxWallClock) {
+        return this.failed('wall_clock', 'budget_exceeded', wallClock, maxWallClock);
+      }
+
+      const turns = existing?.turns ?? 0;
+      const maxTurns = this.effectiveMax(existing, limits, 'turns');
+      if (maxTurns !== undefined && turns >= maxTurns) {
+        return this.failed('turns', 'budget_exceeded', turns, maxTurns);
+      }
+
+      const tokens = existing?.total_tokens ?? 0;
+      const maxTokens = this.effectiveMax(existing, limits, 'tokens');
+      if (maxTokens !== undefined && tokens >= maxTokens) {
+        return this.failed('tokens', 'budget_exceeded', tokens, maxTokens);
+      }
     }
 
-    const created = existing?.created_at ?? now;
-    const wallClock = now - created;
-    const maxWallClock = this.effectiveMax(existing, limits, 'wall_clock');
-    if (maxWallClock !== undefined && wallClock > maxWallClock) {
-      return this.failed('wall_clock', 'budget_exceeded', wallClock, maxWallClock);
-    }
-
-    const turns = existing?.turns ?? 0;
-    const maxTurns = this.effectiveMax(existing, limits, 'turns');
-    if (maxTurns !== undefined && turns >= maxTurns) {
-      return this.failed('turns', 'budget_exceeded', turns, maxTurns);
-    }
-
-    const tokens = existing?.total_tokens ?? 0;
-    const maxTokens = this.effectiveMax(existing, limits, 'tokens');
-    if (maxTokens !== undefined && tokens >= maxTokens) {
-      return this.failed('tokens', 'budget_exceeded', tokens, maxTokens);
-    }
-
+    // 边处理：bump = 检查并计数；check = 只检查；skip = 同 run 去重后整体跳过。
+    const edgeMode = input.edge ?? (mode === 'read_only' ? 'check' : 'bump');
     let edgeCount = 0;
     let resetEdge = false;
-    if (isAgentId(input.from) && isAgentId(input.to)) {
+    const hasEdge = isAgentId(input.from) && isAgentId(input.to);
+    if (edgeMode !== 'skip' && hasEdge) {
       const edge = existing?.edges.find(
         (entry) => entry.from === input.from && entry.to === input.to,
       );
@@ -212,20 +225,39 @@ export class ConversationBudget implements ConversationBudgetPort {
         if (now < retryAfter) {
           return this.failed('cycle', 'cycle_detected', edgeCount, maxRepeats, retryAfter);
         }
-        // 冷却结束：该边计数归零后重新计数
-        edgeCount = 0;
-        resetEdge = true;
+        // 冷却结束且边仍超限：
+        // - teamless 会话只重置冷却（edgeCount = 0 后重新计数）；
+        // - 有 team 时升级为持久 blocked（新 blocked 不带 retry_after_ts）。
+        const effectiveTeamId = existing?.team_id ?? input.team_id;
+        if (effectiveTeamId === undefined) {
+          edgeCount = 0;
+          resetEdge = true;
+        } else if (mode === 'delivery') {
+          if (existing !== undefined) {
+            existing.blocked = { dimension: 'cycle', reason: 'cycle_detected', at: now };
+            this.store.markDirty();
+            void this.store.force();
+          }
+          return this.failed('cycle', 'cycle_detected', edgeCount, maxRepeats);
+        } else {
+          return this.failed('cycle', 'cycle_detected', edgeCount, maxRepeats);
+        }
       }
     }
 
-    const conversation = this.store.ensure(input.conversation_id, teamId, now);
-    conversation.last_activity = now;
-    conversation.hops += 1;
-    if (isAgentId(input.from) && isAgentId(input.to)) {
+    if (mode === 'read_only') return { ok: true };
+
+    // notify 只在已有记录上计边；不存在时上面已返回。
+    const conversation = existing ?? this.store.ensure(input.conversation_id, teamId, now);
+    if (mode === 'delivery') {
+      conversation.last_activity = now;
+      conversation.hops += 1;
+    }
+    if (edgeMode === 'bump' && hasEdge) {
       this.bumpEdge(conversation, input.from, input.to, resetEdge ? 0 : edgeCount, now);
     }
     this.store.markDirty();
-    this.collectWarnings(conversation, limits, now);
+    if (mode === 'delivery') this.collectWarnings(conversation, limits, now);
     return { ok: true };
   }
 
@@ -358,6 +390,13 @@ export class ConversationBudget implements ConversationBudgetPort {
       if (conversation.blocked?.dimension === input.dimension) delete conversation.blocked;
     } else {
       delete conversation.overrides[input.dimension];
+    }
+
+    // cycle 的人工干预同时清零该 conversation 的 cycle 边，否则下一次投递仍会被
+    // 旧边计数挡住（override 只抬高上限不足以恢复）。
+    if (input.dimension === 'cycle') {
+      for (const edge of conversation.edges) edge.count = 0;
+      if (conversation.blocked?.dimension === 'cycle') delete conversation.blocked;
     }
 
     if (conversation.team_id === undefined) conversation.team_id = input.team_id;

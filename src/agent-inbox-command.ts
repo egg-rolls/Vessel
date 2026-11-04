@@ -28,7 +28,6 @@ interface InboxViewMessage {
   ts: number;
   source: string;
   status: string;
-  important: boolean;
   summary: string;
 }
 
@@ -59,7 +58,6 @@ function viewMessage(value: unknown): InboxViewMessage {
     ts: typeof entry.ts === 'number' && Number.isFinite(entry.ts) ? entry.ts : 0,
     source: typeof entry.source === 'string' ? entry.source : '',
     status: typeof entry.status === 'string' ? entry.status : '',
-    important: entry.important === true,
     summary: typeof entry.summary === 'string' ? entry.summary : '',
   };
 }
@@ -129,8 +127,7 @@ export async function runAgentInboxCommand(
   const header = `Inbox ${command.member} (${unread} unread / ${messages.length})`;
   const lines = [ui.section(header)];
   for (const message of messages) {
-    const important = message.important ? ' [!]' : '';
-    lines.push(`  ${message.status}  ${message.id}${important}  ${message.summary}`);
+    lines.push(`  ${message.status}  ${message.id}  ${message.summary}`);
   }
   return { exitCode: 0, stdout: lines.join('\n'), stderr: '' };
 }

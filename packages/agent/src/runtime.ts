@@ -632,7 +632,27 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
       'send: target agent; use the location value from the source line as-is, or a member id',
   },
   content: { type: 'string', description: 'send/post: message text' },
-  messages: { type: 'array', description: 'send: [{to, content}]' },
+  interrupt: {
+    type: 'boolean',
+    description:
+      'send: urgent — cancel the target body active run and put this message first ' +
+      '(work/queued messages are preserved; cannot combine with notify)',
+  },
+  notify: {
+    type: 'boolean',
+    description:
+      'send: append to the target inbox as unread and wake it with a summary notice; ' +
+      'does not run, queue, or cancel anything (cannot combine with interrupt)',
+  },
+  message_id: {
+    type: 'string',
+    description:
+      'send: with interrupt, deliver an existing inbox message id instead of new content',
+  },
+  messages: {
+    type: 'array',
+    description: 'send: [{to, content, interrupt?, notify?, message_id?}]',
+  },
   members: {
     type: 'array',
     description:
@@ -675,7 +695,9 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
       'your own contractor or yourself needs no approval), ' +
       'rotate (rotate your own body; startup_prompt is required), ' +
       'post (append to your team log only; nobody is notified), ' +
-      'send (dispatch a message to a member), list (list the caller-visible roster).',
+      'send (dispatch a message to a member; interrupt:true for urgent, notify:true to ' +
+      'append to the target inbox plus a summary wake), ' +
+      'list (list the caller-visible roster).',
     inputSchema: {
       ...schema,
       properties,
@@ -802,7 +824,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
           inbox,
           agentId: member.id,
           isEnabled: () => inboxState.enabled,
-          onNotified: ({ runId, unread }) => {
+          onNotified: ({ runId, unread, pending }) => {
             // 人类可见的提示：模型侧另有一条 `vessel:notice` 尾消息（不含正文）。
             events.publish({
               type: 'runtime.notice',
@@ -810,7 +832,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
               data: {
                 scope: 'inbox',
                 summary:
-                  `[inbox] ${unread} unread message(s); ` +
+                  `[inbox] ${unread} unread message(s), ${pending} pending; ` +
                   'use the inbox tool (action="list") to view them.',
                 ok: true,
               },

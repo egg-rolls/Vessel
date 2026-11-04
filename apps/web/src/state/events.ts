@@ -111,6 +111,8 @@ export const CHAT_HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent.spawned',
   'agent.message.queued',
   'agent.message.sent',
+  // 0.41 notify：只观察 inbox 送入，不是对话内容。
+  'agent.message.notified',
   'agent.closed',
   'agent.stale',
   'agent.permission.requested',

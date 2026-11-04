@@ -24,6 +24,7 @@ import {
   type MemberState,
   type MemberStatus,
   type MemberVisibility,
+  type SendResult,
   type TeamAgentSendResult,
   TeamError,
   type TeamMemberSummary,
@@ -105,16 +106,23 @@ function batchErrorText(error: unknown): string {
   return errorText(error);
 }
 
-/** dispatch / team.send 的逐条结果映射到既有 batch 形状 */
-function mapSendOutcome(
-  result: DispatchResult | TeamAgentSendResult,
-): BatchItemResult<DispatchResult | TeamAgentSendResult> {
-  if (result.status === 'queued') return { ok: true, status: result };
-  const code = result.code ?? result.status;
-  const reason = result.reason;
-  const error =
-    reason === undefined ? code : reason.startsWith(`${code}: `) ? reason : `${code}: ${reason}`;
-  return { ok: false, error };
+/** dispatch / team.send / SendResult 的逐条结果映射到既有 batch 形状 */
+type SendOutcome = DispatchResult | TeamAgentSendResult | SendResult;
+
+function mapSendOutcome(result: SendOutcome): BatchItemResult<SendOutcome> {
+  // 带 status 的是 dispatch / TeamService 的业务结果。
+  if ('status' in result) {
+    if (result.status === 'queued' || result.status === 'notified') {
+      return { ok: true, status: result };
+    }
+    const code = result.code ?? result.status;
+    const reason = result.reason;
+    const error =
+      reason === undefined ? code : reason.startsWith(`${code}: `) ? reason : `${code}: ${reason}`;
+    return { ok: false, error };
+  }
+  // SendResult 只有成功（work queued:true / notify notified:true）；失败会 throw。
+  return { ok: true, status: result };
 }
 
 /** 单条字段与 batch 字段不能同时给 */
@@ -184,6 +192,10 @@ function mapSend(record: Record<string, unknown>): Record<string, unknown> {
   const input: Record<string, unknown> = {};
   if (record.to !== undefined) input.to = record.to;
   if (record.content !== undefined) input.content = record.content;
+  // 0.41 三档：interrupt / notify 互斥；message_id 仅与 interrupt 同用。
+  if (record.interrupt !== undefined) input.interrupt = record.interrupt;
+  if (record.notify !== undefined) input.notify = record.notify;
+  if (record.message_id !== undefined) input.message_id = record.message_id;
   return input;
 }
 
@@ -233,7 +245,8 @@ export function createAgentTool(
       'hire: contractor owned by the caller (any member may hire), bound to the caller team if it ' +
       'has one. ' +
       'send: dispatch a message (live queue now, gone resume first, rotating queue for the new ' +
-      'body); returns immediately. ' +
+      'body); returns immediately. Add interrupt:true for urgent (cancel + front of queue) or ' +
+      'notify:true to append to the inbox + summary wake without running. ' +
       'post: append to the caller team log only; never notifies or wakes anyone. ' +
       'close: release member(s), idempotent. list: return the roster. ' +
       'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first; ' +
@@ -276,7 +289,27 @@ export function createAgentTool(
             'rotate: target agent',
         },
         content: { type: 'string', description: 'send/post: message text' },
-        messages: { type: 'array', description: 'send: [{to, content}]' },
+        interrupt: {
+          type: 'boolean',
+          description:
+            'send: urgent — cancel the target body active run and put this message first ' +
+            '(work/queued messages are preserved; cannot combine with notify)',
+        },
+        notify: {
+          type: 'boolean',
+          description:
+            'send: append to the target inbox as unread and wake it with a summary notice; ' +
+            'does not run, queue, or cancel anything (cannot combine with interrupt)',
+        },
+        message_id: {
+          type: 'string',
+          description:
+            'send: with interrupt, deliver an existing inbox message id instead of new content',
+        },
+        messages: {
+          type: 'array',
+          description: 'send: [{to, content, interrupt?, notify?, message_id?}]',
+        },
         member: { type: 'string', description: 'close: member id or session id' },
         startup_prompt: {
           type: 'string',
@@ -551,18 +584,35 @@ export function createAgentTool(
         if (action === 'send') {
           // owner 走统一 dispatch；成员 ExecutionUnit 用自己的 session 走 TeamService.send
           // （from 恒由入口决定，模型不能伪造）。
+          // 0.41：一批 send 生成一个 notify 边计数 key；整批 await 完后释放（内部、非 wire）。
+          const releaseNotifyBatch = (batchKey: string): void => {
+            service.releaseNotifyBatch(batchKey);
+          };
           const sendSingle = async (
             entry: unknown,
-          ): Promise<DispatchResult | TeamAgentSendResult> => {
+            batchKey?: string,
+          ): Promise<DispatchResult | TeamAgentSendResult | SendResult> => {
+            // 0.41：important 已全链路删除；显式传入按非法输入拒绝，不静默忽略。
+            if (isRecord(entry) && entry.important !== undefined) {
+              throw invalid('send does not accept important');
+            }
             const mapped = isRecord(entry) ? mapSend(entry) : {};
             const to = mapped.to as string;
             const content = mapped.content as string;
+            const interrupt = mapped.interrupt === true;
+            const notify = mapped.notify === true;
+            const messageId = typeof mapped.message_id === 'string' ? mapped.message_id : undefined;
             if (!isOwnerCaller) {
               if (options.team === undefined) throw invalid('send requires a team service');
               return options.team.send({
                 from_session_id: callerSession as string,
                 to,
                 content,
+                ...(interrupt ? { interrupt: true } : {}),
+                ...(notify ? { notify: true } : {}),
+                ...(messageId !== undefined ? { message_id: messageId } : {}),
+                origin_run_id: ctx.run_id,
+                ...(batchKey !== undefined ? { batch_key: batchKey } : {}),
               });
             }
             // owner 的会话就是人类直接看的那个 session，每轮回复的文本人类直接能看到。
@@ -574,6 +624,15 @@ export function createAgentTool(
             // 旧文案让模型「用 vessel federation post --from ...」——那是 CLI，模型没有
             // 这条工具调用可发，属于不可执行的死提示。错误消息给的替代动作必须真能用。
             if (typeof to === 'string' && (to.includes('@') || to === HUMAN_PRINCIPAL)) {
+              // 0.41：地址 / 跨节点目标不支持 urgent / notify。
+              if (interrupt || notify) {
+                return {
+                  status: 'rejected',
+                  code: 'invalid_input',
+                  reason: 'unsupported_delivery',
+                  logged: false,
+                };
+              }
               const reason =
                 to === HUMAN_PRINCIPAL
                   ? 'owner has no team: your reply text is shown to the human directly, ' +
@@ -582,24 +641,55 @@ export function createAgentTool(
                     'to reach an agent, send to its id instead of an address.';
               return { status: 'rejected', code: 'no_team', reason, logged: false };
             }
-            return service.dispatch({ to, content, from: ownerId });
+            return service.dispatch({
+              to,
+              content,
+              from: ownerId,
+              ...(interrupt ? { interrupt: true } : {}),
+              ...(notify ? { notify: true } : {}),
+              ...(messageId !== undefined ? { message_id: messageId } : {}),
+              // 内部（非 wire）：tool 路径按调用者 session 继承会话 / 按 run 去重边。
+              ...(callerSession !== undefined ? { origin_session_id: callerSession } : {}),
+              origin_run_id: ctx.run_id,
+              ...(batchKey !== undefined ? { batch_key: batchKey } : {}),
+            });
           };
 
-          if (record.messages !== undefined) {
-            assertExclusive(record, ['to', 'content'], 'messages', 'send');
-            const entries = readBatch(record, 'messages', 'send');
-            const results = await Promise.all(
-              entries.map(async (entry) => {
-                try {
-                  return mapSendOutcome(await sendSingle(entry));
-                } catch (error) {
-                  return { ok: false as const, error: batchErrorText(error) };
-                }
-              }),
-            );
-            return JSON.stringify({ results });
+          if (record.important !== undefined) {
+            throw invalid('send does not accept important');
           }
-          return JSON.stringify(await sendSingle(record));
+          if (record.messages !== undefined) {
+            // 三档 flag 是逐条投递语义：与 messages 数组同用会被静默丢弃，必须显式拒绝。
+            assertExclusive(
+              record,
+              ['to', 'content', 'interrupt', 'notify', 'message_id'],
+              'messages',
+              'send',
+            );
+            const entries = readBatch(record, 'messages', 'send');
+            // 一次 messages 数组共享一个 notify 边计数 key（内部、非 wire）。
+            const batchKey = randomUUID();
+            try {
+              const results = await Promise.all(
+                entries.map(async (entry) => {
+                  try {
+                    return mapSendOutcome(await sendSingle(entry, batchKey));
+                  } catch (error) {
+                    return { ok: false as const, error: batchErrorText(error) };
+                  }
+                }),
+              );
+              return JSON.stringify({ results });
+            } finally {
+              releaseNotifyBatch(batchKey);
+            }
+          }
+          const batchKey = randomUUID();
+          try {
+            return JSON.stringify(await sendSingle(record, batchKey));
+          } finally {
+            releaseNotifyBatch(batchKey);
+          }
         }
 
         if (action === 'post') {

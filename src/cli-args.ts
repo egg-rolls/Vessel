@@ -166,8 +166,6 @@ export type AgentCommand =
       interrupt?: boolean;
       /** 按 id 重投已有 inbox 消息；必须与 --interrupt 同用。 */
       messageId?: string;
-      /** 标记为重要消息（渲染 `[!]`）。 */
-      important?: boolean;
     }
   | { kind: 'inbox'; json: boolean; member: string }
   | {
@@ -2316,7 +2314,6 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   if (sub === 'send') {
     let json = false;
     let interrupt = false;
-    let important = false;
     let messageId: string | undefined;
     const positional: string[] = [];
     for (let i = 0; i < tail.length; i++) {
@@ -2331,10 +2328,6 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       }
       if (a === '--interrupt') {
         interrupt = true;
-        continue;
-      }
-      if (a === '--important') {
-        important = true;
         continue;
       }
       if (a === '--message-id') {
@@ -2378,7 +2371,6 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       content,
       ...(interrupt ? { interrupt: true } : {}),
       ...(messageId !== undefined ? { messageId } : {}),
-      ...(important ? { important: true } : {}),
     };
     return { ok: true, args };
   }

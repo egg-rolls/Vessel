@@ -123,8 +123,9 @@ export interface AgentSendLikeInput {
   from?: string;
   /** 0.32-D：打断当前 run，并把本次消息 / message_id 指定的 inbox 消息优先投递。 */
   interrupt?: boolean;
+  /** 0.41：只 append inbox + 摘要唤醒，不抢占、不产生普通 run；与 interrupt 互斥。 */
+  notify?: boolean;
   message_id?: string;
-  important?: boolean;
 }
 
 /** `agents.dispatch` 的单个条目。 */
@@ -195,13 +196,29 @@ export interface AgentCloseBatchResultLike {
   results: AgentCloseItemLike[];
 }
 
-/** `agents.send` 成功条目：strict send 已入队。 */
-export interface AgentSendOkLike {
+/** `agents.send` 成功条目：strict send 已入队（work / urgent）。 */
+export interface AgentSendQueuedOkLike {
   ok: true;
   queued: true;
   message_id: string;
   state: AgentStateLike;
 }
+
+/**
+ * `agents.send` 成功条目：notify 已 append（0.41）。`resolved_to` /
+ * `conversation_id` 在 serve 适配层缺省（`SendResult` 不携带），按可选处理。
+ */
+export interface AgentSendNotifiedOkLike {
+  ok: true;
+  notified: true;
+  message_id: string;
+  resolved_to?: string;
+  conversation_id?: string;
+  wake: boolean;
+  resolution: 'live' | 'gone';
+}
+
+export type AgentSendOkLike = AgentSendQueuedOkLike | AgentSendNotifiedOkLike;
 
 export type AgentSendItemLike = AgentSendOkLike | AgentLifecycleFailLike;
 

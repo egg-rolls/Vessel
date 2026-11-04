@@ -454,6 +454,21 @@ export interface BudgetDeliveryInput {
   from: string;
   to: string;
   message_id?: string;
+  /**
+   * 检查模式（0.41）：
+   * - delivery（缺省）：完整检查并计数 hop / edge / last_activity；
+   * - read_only：只查 blocked / cycle / limits，不计数、不落库（message_id urgent）；
+   * - notify：只查 cycle（以及显式 origin 的 team 一致性），不 ensure 新 conversation、
+   *   不计 hop / wall-clock / turns / tokens、不改 last_activity。
+   */
+  mode?: 'delivery' | 'read_only' | 'notify';
+  /**
+   * cycle 边处理（0.41）：
+   * - bump（缺省）：检查并计数；
+   * - check：只检查；
+   * - skip：同一 run 已计过该边时整体跳过。
+   */
+  edge?: 'bump' | 'check' | 'skip';
 }
 
 export interface BudgetTurnInput {
@@ -631,8 +646,10 @@ export interface AdmitInput {
   conversation_id?: string;
   /** agents.send 语义：不自动恢复 gone 成员；dispatch/runs.start 缺省允许 */
   strict?: boolean;
-  /** 0.32-D：写入收件箱时的重要标记（只做标记，不改变调度）。 */
-  important?: boolean;
+  /** 0.41：内部（非 wire、非持久）调用者 session；仅 tool / TeamService 填充，RPC 不填。 */
+  origin_session_id?: string;
+  /** 0.41：内部（非 wire、非持久）调用者 run；用于同 run cycle 边去重。 */
+  origin_run_id?: string;
   /**
    * Q5（仅内部装配使用，不暴露为 RPC）：本次投递按「续接已有 session」执行，
    * 调度到 `MemberExecutionPort.resumeTurn` → core `resumeSession(sessionId, input)`。
@@ -669,8 +686,8 @@ export interface SendInput {
   interrupt?: boolean;
   /** 指定要优先投递的 inbox 消息 id（无需重复 content；必须与 interrupt 同用）。 */
   message_id?: string;
-  /** 写入收件箱时的重要标记（不改变调度；`message_id` 已存在时忽略）。 */
-  important?: boolean;
+  /** 0.41：只追加 inbox unread 并发一次摘要 wake；不 hold / submit / consume。 */
+  notify?: boolean;
 }
 
 /** 批量发送 */
@@ -684,6 +701,7 @@ export interface SendBatchInput {
  */
 export interface DispatchInput {
   to: string;
+  /** urgent + message_id 时可省 / 为空：正文取自既有 inbox 消息。 */
   content: string;
   from?: string;
   /** 会话分组；缺省生成（0.19 S4） */
@@ -698,9 +716,20 @@ export interface DispatchInput {
    * 缺省看 team policy `allowAutoCreate`（默认关闭）；显式值覆盖 policy。
    */
   allow_auto_create?: boolean;
+  /** 0.41：urgent（取消 active 并重投到队首）。 */
+  interrupt?: boolean;
+  /** 0.41：只追加 inbox unread + 摘要唤醒；与 interrupt 互斥。 */
+  notify?: boolean;
+  /** 0.41：与 interrupt 同用时优先投递既有 inbox 消息。 */
+  message_id?: string;
+  /** 0.41：内部（非 wire、非持久）调用者 session / run；tool / TeamService 填充。 */
+  origin_session_id?: string;
+  origin_run_id?: string;
+  /** 0.41：内部（非 wire、非持久）一次 messages 数组的 notify 边计数 key。 */
+  batch_key?: string;
 }
 
-/** dispatch 结果：queued 表示已入队；rejected 是明确的业务拒绝 */
+/** dispatch 结果：queued 表示已入队；notified 表示 notify 成功；rejected 是明确拒绝 */
 export type DispatchResult =
   | {
       status: 'queued';
@@ -711,9 +740,19 @@ export type DispatchResult =
       conversation_id?: string;
     }
   | {
+      status: 'notified';
+      message_id: string;
+      resolved_to: string;
+      conversation_id: string;
+      wake: boolean;
+      resolution: 'live' | 'gone';
+    }
+  | {
       status: 'rejected';
       code:
         | 'agent_left'
+        | 'member_stale'
+        | 'invalid_input'
         | 'resume_failed'
         | 'auto_create_failed'
         | 'auto_create_not_allowed'
@@ -833,15 +872,28 @@ export interface ListFilter {
   parentId?: string;
 }
 
-/** 发送结果：入队即返回，不等待一轮结束 */
-export interface SendResult {
-  queued: true;
-  message_id: string;
-  state: MemberState;
-  /** 0.27 additive：本次准入的 run / body；预算 block 留在 mailbox 时仍返回 run_id */
-  run_id?: string;
-  session_id?: string;
-}
+/**
+ * 发送结果：入队即返回，不等待一轮结束。
+ *
+ * 0.41 起是联合：work / urgent 为 queued；notify 为 notified。notify 分支不带
+ * run / session；`state` 为让通用 send 消费方保持类型兼容而保留（wire additive）。
+ */
+export type SendResult =
+  | {
+      queued: true;
+      message_id: string;
+      state: MemberState;
+      /** 0.27 additive：本次准入的 run / body；预算 block 留在 mailbox 时仍返回 run_id */
+      run_id?: string;
+      session_id?: string;
+    }
+  | {
+      queued: false;
+      notified: true;
+      message_id: string;
+      wake: boolean;
+      resolution: 'live' | 'gone';
+    };
 
 /** 成员回复父级的结果 */
 export interface ReplyResult {
@@ -1066,6 +1118,11 @@ export interface AgentService {
   update(input: AgentUpdateBatchInput): Promise<BatchResult<AgentUpdateResult>>;
   send(input: SendInput): Promise<SendResult>;
   send(input: SendBatchInput): Promise<BatchResult<SendResult>>;
+  /**
+   * 0.41 内部（非 wire）：释放一次 send / messages 批的 notify 边计数 key。
+   * tool 在调用边界生成 key，整批结束后调用，避免 `notifyBatchEdges` 无界增长。
+   */
+  releaseNotifyBatch(batchKey: string): void;
   /**
    * 统一投递入口：live 直接入队；gone 先 single-flight resume；
    * rotating 入队等待；left / resume 失败返回 rejected。
@@ -1409,6 +1466,17 @@ export interface TeamAgentSendInput {
   content: string;
   /** 会话分组；缺省继承调用者当前 turn（0.19 S4） */
   conversation_id?: string;
+  /** 0.41：urgent（取消 active 并重投到队首）；与 notify 互斥。 */
+  interrupt?: boolean;
+  /** 0.41：只追加 inbox unread + 摘要唤醒。 */
+  notify?: boolean;
+  /** 0.41：与 interrupt 同用时优先投递既有 inbox 消息。 */
+  message_id?: string;
+  /** 0.41：内部（非 wire、非持久）调用者 session / run。 */
+  origin_session_id?: string;
+  origin_run_id?: string;
+  /** 0.41：内部（非 wire、非持久）一次 messages 数组的 notify 边计数 key。 */
+  batch_key?: string;
 }
 
 export interface TeamAgentSendResult {
@@ -1565,7 +1633,7 @@ export interface AgentTeamService {
   /** 未知 Team 返回 undefined；业务失败抛 TeamError */
   members(input: TeamMembersInput): Promise<TeamMembersResult | undefined>;
   /** 成员 ExecutionUnit 的 A2A send */
-  send(input: TeamAgentSendInput): Promise<TeamAgentSendResult>;
+  send(input: TeamAgentSendInput): Promise<TeamAgentSendResult | SendResult>;
   /** 成员 ExecutionUnit 的 list：有 Team 只返回同 Team  roster；无 Team 返回自己的可见成员 */
   listForCaller(sessionId: string): Promise<TeamMemberSummary[]>;
   /** body session -> 成员（含 team_id） */

@@ -501,9 +501,15 @@ const agentSendResultSchema = {
         required: ['ok'],
         properties: {
           ok: { type: 'boolean' },
+          // queued（work / urgent）与 notified（0.41 notify）两种成功条目。
           queued: { type: 'boolean' },
+          notified: { type: 'boolean' },
           message_id: { type: 'string' },
           state: { type: 'string', enum: agentStateEnum },
+          resolved_to: { type: 'string' },
+          conversation_id: { type: 'string' },
+          wake: { type: 'boolean' },
+          resolution: { type: 'string', enum: ['live', 'gone'] },
           ...agentActionFailProperties,
         },
       },
@@ -541,18 +547,23 @@ const agentSendEntrySchema = {
     to: { type: 'string', minLength: 1 },
     content: { type: 'string', minLength: 1 },
     conversation_id: { type: 'string', minLength: 1 },
-    // 0.32-D：打断 + 指定 inbox 消息 / 重要标记（additive，不新增方法）。
+    // 0.32-D：打断 + 指定 inbox 消息（additive，不新增方法）。
     interrupt: { type: 'boolean' },
+    // 0.41：notify 与 interrupt 互斥；message_id 仅与 interrupt 同用。
+    notify: { type: 'boolean' },
     message_id: { type: 'string', minLength: 1 },
-    important: { type: 'boolean' },
   },
 };
 
+// 0.41：dispatch 仍是 work-only；interrupt / message_id / notify / important
+// 都不接受（传了在 handler 里 invalid_params），不新增 notify。
 const agentDispatchEntrySchema = {
   type: 'object',
   required: ['to', 'content'],
   properties: {
-    ...agentSendEntrySchema.properties,
+    to: { type: 'string', minLength: 1 },
+    content: { type: 'string', minLength: 1 },
+    conversation_id: { type: 'string', minLength: 1 },
     allow_auto_create: { type: 'boolean' },
   },
 };
@@ -1197,12 +1208,26 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             if (entry.interrupt !== undefined && typeof entry.interrupt !== 'boolean') {
               return { failure: fail('invalid_params', 'interrupt must be a boolean') };
             }
-            if (entry.important !== undefined && typeof entry.important !== 'boolean') {
-              return { failure: fail('invalid_params', 'important must be a boolean') };
+            if (entry.notify !== undefined && typeof entry.notify !== 'boolean') {
+              return { failure: fail('invalid_params', 'notify must be a boolean') };
+            }
+            // 0.41：important 已全链路删除；显式拒绝而不是静默忽略。
+            if (entry.important !== undefined) {
+              return { failure: fail('invalid_params', 'agents.send does not accept important') };
             }
             const interrupt = entry.interrupt === true;
+            const notify = entry.notify === true;
             if (to === undefined) {
               return { failure: fail('invalid_params', 'to must be a non-empty string') };
+            }
+            // 0.41 三档：interrupt / notify 互斥；message_id 仅与 interrupt 同用。
+            if (interrupt && notify) {
+              return { failure: fail('invalid_params', 'conflicting_delivery') };
+            }
+            if (messageId !== undefined && notify) {
+              return {
+                failure: fail('invalid_params', 'message_id is not supported with notify'),
+              };
             }
             if (messageId !== undefined && !interrupt) {
               return {
@@ -1220,10 +1245,23 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   failure: fail('invalid_params', 'pass either content or message_id, not both'),
                 };
               }
+            } else if (notify) {
+              // notify 是 append 正文：必须自带 content，不能走 message_id。
+              if (content === undefined) {
+                return { failure: fail('invalid_params', 'notify requires content') };
+              }
             } else if (content === undefined) {
               return {
                 failure: fail('invalid_params', 'to and content must be non-empty strings'),
               };
+            }
+            // 0.41：三档只支持本机成员 id；地址 / 跨节点 / human 不支持，别让它
+            // 落到 scope 解析里被当成普通名字。
+            if (
+              (interrupt || notify) &&
+              (to.includes('@') || to.startsWith('federation:') || to === 'human')
+            ) {
+              return { failure: fail('invalid_params', 'unsupported_delivery') };
             }
             if (!(await targetInTeamScope(control, scope, to, false))) {
               return { failure: fail('not_found', `agent not found: ${to}`) };
@@ -1236,8 +1274,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 from,
                 ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
                 ...(interrupt ? { interrupt: true } : {}),
+                ...(notify ? { notify: true } : {}),
                 ...(messageId !== undefined ? { message_id: messageId } : {}),
-                ...(entry.important === true ? { important: true } : {}),
               },
             };
           }),
@@ -1273,6 +1311,22 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         const entries = requireObjectEntries(params, 'messages', 'agents.dispatch');
         const scope = teamScopeOf(ctx);
         const from = actorOf(ctx);
+
+        // 0.41：dispatch 保持 work-only；任何三档字段出现都整体拒绝（结构错误，
+        // 不是逐条业务失败）。
+        for (const entry of entries) {
+          if (
+            entry.interrupt !== undefined ||
+            entry.message_id !== undefined ||
+            entry.notify !== undefined ||
+            entry.important !== undefined
+          ) {
+            throw new RpcError(
+              'invalid_params',
+              'agents.dispatch does not accept interrupt/message_id/notify/important',
+            );
+          }
+        }
 
         const prepared = await Promise.all(
           entries.map(async (entry): Promise<Prepared<AgentDispatchLikeInput>> => {

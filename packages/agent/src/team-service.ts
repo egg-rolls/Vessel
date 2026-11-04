@@ -29,6 +29,7 @@ import {
   type FederationSendPort,
   MAX_MESSAGE_BYTES,
   type MemberStatus,
+  type SendResult,
   type TeamAgentSendInput,
   type TeamAgentSendResult,
   type TeamArchiveInput,
@@ -576,7 +577,7 @@ export class DefaultTeamService implements AgentTeamService {
     );
   }
 
-  async send(input: TeamAgentSendInput): Promise<TeamAgentSendResult> {
+  async send(input: TeamAgentSendInput): Promise<TeamAgentSendResult | SendResult> {
     const caller = await this.agent.identify(input.from_session_id);
     if (caller === undefined) {
       return {
@@ -587,29 +588,33 @@ export class DefaultTeamService implements AgentTeamService {
       };
     }
 
-    let content: string;
-    try {
-      content = readContent(input.content);
-    } catch (error) {
-      return {
-        status: 'error',
-        code: errorCode(error) ?? 'invalid_input',
-        reason: errorText(error),
-        logged: false,
-      };
-    }
+    const interrupt = input.interrupt === true;
+    const notify = input.notify === true;
+    const messageId = input.message_id;
 
-    let conversationId: string;
-    try {
-      // 缺省继承调用者当前 turn；没有则生成。
-      conversationId = this.resolveConversationId(input.conversation_id, caller.id);
-    } catch (error) {
-      return {
-        status: 'error',
-        code: errorCode(error) ?? 'invalid_input',
-        reason: errorText(error),
-        logged: false,
-      };
+    let content: string;
+    if (messageId !== undefined) {
+      // message_id urgent：正文取自既有 inbox 消息；content 可省 / 为空。
+      if (input.content !== undefined && input.content !== '') {
+        return {
+          status: 'error',
+          code: 'invalid_input',
+          reason: 'pass either content or message_id, not both',
+          logged: false,
+        };
+      }
+      content = '';
+    } else {
+      try {
+        content = readContent(input.content);
+      } catch (error) {
+        return {
+          status: 'error',
+          code: errorCode(error) ?? 'invalid_input',
+          reason: errorText(error),
+          logged: false,
+        };
+      }
     }
 
     // 地址形式优先于 id / session / name 解析。按段数分派（0.27）：
@@ -617,6 +622,37 @@ export class DefaultTeamService implements AgentTeamService {
     // - 2 段 → 本机，但仍是地址形态，需要拆成 principal + team 再投，不能当名字查；
     // - 1 段 → 普通 id / name 解析；裸 `human` 单独短路（它不是成员名）。
     const segments = typeof input.to === 'string' ? addressSegmentCount(input.to) : undefined;
+    // 0.41：地址 / 跨节点目标不支持 urgent / notify（1 段是普通 id / name）。
+    if (
+      (interrupt || notify) &&
+      (segments === 2 || segments === 3 || input.to === HUMAN_PRINCIPAL)
+    ) {
+      return {
+        status: 'rejected',
+        code: 'invalid_input',
+        reason: 'unsupported_delivery',
+        logged: false,
+      };
+    }
+
+    let conversationId: string;
+    try {
+      // 缺省继承调用者 session 当前 turn；跨 team 不继承；没有则生成。
+      conversationId = this.resolveConversationId(
+        input.conversation_id,
+        input.from_session_id,
+        caller.team_id,
+        caller.team_id,
+      );
+    } catch (error) {
+      return {
+        status: 'error',
+        code: errorCode(error) ?? 'invalid_input',
+        reason: errorText(error),
+        logged: false,
+      };
+    }
+
     if (segments === 3) {
       return this.sendAddress(caller, input.to, content, conversationId);
     }
@@ -640,6 +676,16 @@ export class DefaultTeamService implements AgentTeamService {
     if (!resolved.ok) return resolved.result;
     const target = resolved.target;
 
+    // 目标已知后按 target team 重新判断是否可继承调用者 session 的会话（跨 team 不继承）。
+    if (input.conversation_id === undefined) {
+      conversationId = this.resolveConversationId(
+        undefined,
+        input.from_session_id,
+        caller.team_id,
+        target?.team_id ?? caller.team_id,
+      );
+    }
+
     // Team 日志对 team 可见：private roster 成员不能作为 send 目标，直接拒绝。
     const targetStatus =
       target === undefined ? undefined : visible.find((status) => status.id === target.agent_id);
@@ -648,6 +694,18 @@ export class DefaultTeamService implements AgentTeamService {
         status: 'error',
         code: 'team_private_member',
         reason: `team_private_member: ${targetStatus.id}`,
+        logged: false,
+        conversation_id: conversationId,
+      };
+    }
+
+    // 裸名未命中本队 roster 时只能跨 team / 跨节点升级解析；那条路径不携带
+    // 三档语义，urgent / notify 一旦放过去会在升级后静默降级成普通投递，直接拒绝。
+    if (caller.team_id !== undefined && target === undefined && (interrupt || notify)) {
+      return {
+        status: 'rejected',
+        code: 'invalid_input',
+        reason: 'unsupported_delivery',
         logged: false,
         conversation_id: conversationId,
       };
@@ -670,7 +728,9 @@ export class DefaultTeamService implements AgentTeamService {
 
     let logged = false;
     // private 调用者同样不得写 Team 日志（消息本身仍可 dispatch，只是不留痕）。
+    // notify 只做 inbox 通知，不写 team mention 日志。
     if (
+      !notify &&
       target !== undefined &&
       caller.team_id !== undefined &&
       target.team_id === caller.team_id &&
@@ -707,6 +767,14 @@ export class DefaultTeamService implements AgentTeamService {
         content,
         from: caller.id,
         conversation_id: conversationId,
+        ...(interrupt ? { interrupt: true } : {}),
+        ...(notify ? { notify: true } : {}),
+        ...(messageId !== undefined ? { message_id: messageId } : {}),
+        // 内部（非 wire）：调用者 session / run 供 conversation 继承与同 run 边去重；
+        // batch_key 让一次 messages 数组的 notify 共享边计数。
+        origin_session_id: input.origin_session_id ?? input.from_session_id,
+        ...(input.origin_run_id !== undefined ? { origin_run_id: input.origin_run_id } : {}),
+        ...(input.batch_key !== undefined ? { batch_key: input.batch_key } : {}),
       });
       if (result.status === 'queued') {
         return {
@@ -716,6 +784,16 @@ export class DefaultTeamService implements AgentTeamService {
           resolution: result.resolution,
           logged,
           conversation_id: conversationId,
+        };
+      }
+      if (result.status === 'notified') {
+        // notify 直接返回 SendResult（契约 §2.6）；不混入 TeamAgentSendResult 字段。
+        return {
+          queued: false,
+          notified: true,
+          message_id: result.message_id,
+          resolution: result.resolution,
+          wake: result.wake,
         };
       }
       return {
@@ -789,17 +867,25 @@ export class DefaultTeamService implements AgentTeamService {
   }
 
   /**
-   * 显式 id 先校验；缺省优先继承当前 turn（成员 send），否则生成。
+   * 显式 id 先校验；缺省优先按调用者 session 继承当前 turn，否则生成。
+   *
+   * 0.41：继承必须按 session 精确定位（multi-live 时不回退 agent 级）；跨 team
+   * 不继承（两边都 undefined 视为相同）。
    */
-  private resolveConversationId(value: string | undefined, inheritFrom?: string): string {
+  private resolveConversationId(
+    value: string | undefined,
+    inheritFromSession?: string,
+    callerTeamId?: string,
+    targetTeamId?: string,
+  ): string {
     if (value !== undefined) {
       if (!isValidConversationId(value)) {
         throw new TeamError('invalid_input', 'invalid conversation_id');
       }
       return value;
     }
-    if (inheritFrom !== undefined) {
-      const inherited = this.agent.currentConversation(inheritFrom);
+    if (inheritFromSession !== undefined && callerTeamId === targetTeamId) {
+      const inherited = this.agent.currentConversation(inheritFromSession);
       if (inherited !== undefined) return inherited;
     }
     return generateConversationId(this.newId);
@@ -1285,12 +1371,16 @@ export class DefaultTeamService implements AgentTeamService {
           resolution: result.resolution,
         };
       }
-      return {
-        agent_id: targetId,
-        status: 'rejected',
-        code: result.code,
-        reason: result.reason,
-      };
+      if (result.status === 'rejected') {
+        return {
+          agent_id: targetId,
+          status: 'rejected',
+          code: result.code,
+          reason: result.reason,
+        };
+      }
+      // 这条路径不传 notify，dispatch 不可能返回 notified；显式标记不可达以完成收窄。
+      throw new Error('unreachable: dispatchMention does not send notify');
     } catch (error) {
       return {
         agent_id: targetId,
