@@ -80,6 +80,9 @@ const target = relay?.url ?? GATEWAY;
 const configure = relay ? relayConfigure(relay.secret) : undefined;
 
 export default defineConfig({
+  // 品牌资源只有一份：仓库根 `assets/`。Web 直接把它当 public 目录，
+  // 图标既能在 index.html 里按 `/Vessel.svg` 引用，也能被 README 用相对路径引用。
+  publicDir: join(__dirname, '../../assets'),
   plugins: [react(), tailwindcss(), writeBuildStamp()],
   define: {
     // 页面把「我是哪一次构建」编进 bundle，运行时与 `dist/build.json` 比对，

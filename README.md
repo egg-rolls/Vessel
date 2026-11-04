@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/Vessel.svg" alt="Vessel" width="96" />
+</p>
+
 # Vessel
 
 > 分布式蜂巢智能体框架：节点是蜂巢，Hub 让蜂巢彼此可见，Team 是按工作目录形成的蜂群，
