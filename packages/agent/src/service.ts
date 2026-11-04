@@ -44,6 +44,7 @@ import { generateConversationId, isValidConversationId } from './conversation-bu
 import { AgentInboxStore } from './inbox.js';
 import {
   type BindingRecord,
+  findBinding,
   liveBindings,
   type MemberRecord,
   MemberRegistry,
@@ -331,10 +332,11 @@ function toExecutionUnitStatus(entry: ExecutionUnitEntry): ExecutionUnitStatus {
 /**
  * 从快照恢复记录：engine 状态是进程内易失，重启后非 left 一律 idle + gone。
  *
- * 0.28：文件格式仍是 v4 `bodies[]`，但语义收窄为「一具 live ExecutionUnit」。存量多 body
- * 快照按 PLAN §5.3 迁移：primary 留作 `binding`，其余 live body 以
- * `retired_at = last_active_at` 进 `body_history`。**绝不在 parse 阶段 reject** ——
- * 那会把整条成员丢掉，其全部 session 不可见。
+ * 0.39：`bodies[]` 里**所有 live body 都保留**。primary 由 `primary_body_id`
+ * （缺失用 `current_body`，再缺失用第一条 live）确定；其余 live body 重建为
+ * `siblings`，**不再降级为 history**（旧实现会把 fork 出来的 sibling 静默退役）。
+ * 已退役 body 仍补进 `body_history`。**绝不在 parse 阶段 reject** —— 那会把整条
+ * 成员丢掉，其全部 session 不可见。
  */
 function recordFromStatus(status: PersistedAgentRecord, now: number): MemberRecord {
   const state: MemberState =
@@ -362,42 +364,48 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     });
   }
   const live = bodies.filter((body) => body.retiredAt === undefined);
-  const declaredPrimaryId =
-    status.primary_body_id ?? status.current_body?.session_id ?? status.session_id;
-  // primary 选取阶梯：显式指针 → primary 标记 → 最近活跃 → 第一具 live；
-  // 全 body 都已退役时退回「任意一具」（保底可寻址，见 PLAN §5.3 末条）。
+  const declaredPrimaryId = status.primary_body_id ?? status.current_body?.session_id;
+  // primary 选取阶梯（CONTRACT §2）：显式指针 → primary 标记 → 第一具 live；
+  // 全 body 都已退役时退回指针 / 任意一具（保底可寻址）。
   const chosen =
-    live.find((body) => body.bindingId === declaredPrimaryId) ??
+    (declaredPrimaryId === undefined
+      ? undefined
+      : live.find((body) => body.bindingId === declaredPrimaryId)) ??
     live.find((body) => body.primary) ??
-    [...live].sort((left, right) => right.lastActiveAt - left.lastActiveAt)[0] ??
-    bodies.find((body) => body.bindingId === declaredPrimaryId) ??
+    live[0] ??
+    (declaredPrimaryId === undefined
+      ? undefined
+      : bodies.find((body) => body.bindingId === declaredPrimaryId)) ??
     bodies[0];
   const bindingHistory = [...(status.body_history ?? [])];
   const seenHistory = new Set(bindingHistory.map((entry) => entry.session_id));
-  const retired: BindingRecord[] = [];
+  let appendedRetired = false;
   for (const body of bodies) {
-    if (body === chosen || body.retiredAt !== undefined) continue;
-    // 降级为历史的 live body：必须有 history 条目，否则 `ensureExecutionUnit` 认不出它已退役，
-    // 会被惰性 createBinding 复活成第二具 live ExecutionUnit。
+    if (body === chosen || body.retiredAt === undefined) continue;
     if (!seenHistory.has(body.bindingId)) {
       bindingHistory.push({
         session_id: body.bindingId,
         epoch: body.epoch,
         started_at: body.createdAt,
-        retired_at: body.lastActiveAt,
+        retired_at: body.retiredAt,
       });
       seenHistory.add(body.bindingId);
+      appendedRetired = true;
     }
-    retired.push(body);
   }
-  if (retired.length > 0) {
+  if (appendedRetired) {
     bindingHistory.sort((left, right) => left.retired_at - right.retired_at);
   }
+  // 其余 live body 是 sibling：保留为 live，只清 primary 标记。
+  const siblings: BindingRecord[] = live
+    .filter((body) => body !== chosen)
+    .map((body) => ({ ...body, primary: false }));
   const primary = chosen === undefined ? undefined : { ...chosen, primary: true };
   return {
     id: status.id,
     sessionId: status.session_id,
     ...(primary !== undefined ? { binding: primary } : {}),
+    ...(siblings.length > 0 ? { siblings } : {}),
     ...(status.name !== undefined ? { name: status.name } : {}),
     ...(status.parent_id !== undefined ? { parentId: status.parent_id } : {}),
     role: status.role,
@@ -1278,8 +1286,8 @@ export class AgentServiceImpl implements AgentService {
   ): Promise<{ entry: ExecutionUnitEntry; body: BindingRecord }> {
     let body: BindingRecord | undefined;
     if (requested !== undefined) {
-      if (record.binding?.bindingId === requested) body = record.binding;
-      else if (record.retiringBinding?.bindingId === requested) body = record.retiringBinding;
+      // 0.39：sibling 也必须命中；不能只看 binding / retiringBinding。
+      body = findBinding(record, requested);
       if (body !== undefined && body.retiredAt !== undefined) {
         throw new AgentError('invalid_input', `session is retired: ${requested}`);
       }
@@ -1413,6 +1421,21 @@ export class AgentServiceImpl implements AgentService {
     this.updateAgentState(record.id);
   }
 
+  /**
+   * 0.39：rotate / restart / compactFork / 普通 primary retire 都围绕
+   * primary + transient retiring 实现；存在 live sibling 时窗口内会出现 ≥3 具 live
+   * binding，语义未定义。最小安全做法是显式拒绝（CONTRACT §4），不静默收敛、
+   * 也不误退役 sibling。
+   */
+  private assertNoLiveSiblings(record: MemberRecord, operation: string): void {
+    const siblings = (record.siblings ?? []).filter((body) => body.retiredAt === undefined);
+    if (siblings.length === 0) return;
+    throw new AgentError(
+      'multi_session',
+      `multi_session: ${record.id} has ${siblings.length} live sibling session(s); ${operation} is not supported`,
+    );
+  }
+
   /** primary 晋升：最近活跃的 live body；没有则清空 */
   private promotePrimary(record: MemberRecord): void {
     const entries = this.liveEntries(record.id)
@@ -1423,10 +1446,21 @@ export class AgentServiceImpl implements AgentService {
     this.registry.setPrimaryBinding(record.id, next?.bindingId);
   }
 
-  /** 关闭 agent 的所有 body（cancel/dispose/release） */
+  /**
+   * 关闭 agent 的所有 body（cancel/dispose/release）。
+   *
+   * 0.39：不只看内存 entry —— dormant sibling 没有 entry，也必须退役。顺序为
+   * sibling（dormant + entry）先、primary 最后，最后 `retireAllLive` 兜底，
+   * 保证 `siblings` 清空且不触发 retireBinding 的 multi_session 守卫。
+   */
   private async disposeAgentBodies(record: MemberRecord): Promise<void> {
     const entries = [...(this.executionUnitRegistry.get(record.id)?.values() ?? [])];
-    for (const entry of entries) {
+    const entryIds = new Set(entries.map((entry) => entry.bindingId));
+    const isPrimaryBody = (body: BindingRecord): boolean =>
+      body.primary || record.binding?.bindingId === body.bindingId;
+    const isPrimaryEntry = (entry: ExecutionUnitEntry): boolean =>
+      entry.primary || record.binding?.bindingId === entry.bindingId;
+    const closeEntry = async (entry: ExecutionUnitEntry): Promise<void> => {
       // 0.32：body 关闭时旧 hook 立即停止读取 inbox；通知队列同时清空。
       this.runtime.disableInbox?.(entry.bindingId);
       this.runtime.clearPendingNotices?.(entry.agentId);
@@ -1450,7 +1484,22 @@ export class AgentServiceImpl implements AgentService {
       entry.primary = false;
       this.registry.retireBinding(record.id, entry.bindingId, this.now());
       await this.disposeEntry(entry);
+    };
+
+    const dormant = liveBindings(record).filter((body) => !entryIds.has(body.bindingId));
+    for (const body of dormant.filter((body) => !isPrimaryBody(body))) {
+      this.registry.retireBinding(record.id, body.bindingId, this.now());
     }
+    for (const entry of entries.filter((entry) => !isPrimaryEntry(entry))) {
+      await closeEntry(entry);
+    }
+    for (const body of dormant.filter((body) => isPrimaryBody(body))) {
+      this.registry.retireBinding(record.id, body.bindingId, this.now());
+    }
+    for (const entry of entries.filter((entry) => isPrimaryEntry(entry))) {
+      await closeEntry(entry);
+    }
+    this.registry.retireAllLive(record.id, this.now());
     // 0.32：关闭后未消费消息仍可注入；不释放 hold 会让 reinstate 的 body 永远跳过它们。
     this.inbox?.releaseHeld(record.id);
     this.executionUnitRegistry.delete(record.id);
@@ -1468,20 +1517,29 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     const record = this.registry.get(agentId);
     if (record === undefined) throw new AgentError('unknown_member', `unknown_member: ${agentId}`);
-    const entries = this.liveEntries(agentId).sort(
-      (left, right) => Number(right.primary) - Number(left.primary),
+    const entries = this.liveEntries(agentId);
+    const statuses = new Map(
+      entries.map((entry) => [entry.bindingId, toExecutionUnitStatus(entry)]),
     );
-    if (entries.length === 0) {
-      return liveBindings(record).map((body) => ({
-        session_id: body.bindingId,
-        epoch: body.epoch,
-        state: 'idle' as const,
-        primary: body.primary,
-        created_at: body.createdAt,
-        last_active_at: body.lastActiveAt,
-      }));
+    // 0.39：以 registry 的 live binding 为准 —— dormant sibling 没有内存 entry，
+    // 也必须出现在 bodies[] 里（primary:false）。
+    const bodies: ExecutionUnitStatus[] = liveBindings(record).map(
+      (body) =>
+        statuses.get(body.bindingId) ?? {
+          session_id: body.bindingId,
+          epoch: body.epoch,
+          state: 'idle' as const,
+          primary: body.primary,
+          created_at: body.createdAt,
+          last_active_at: body.lastActiveAt,
+        },
+    );
+    for (const entry of entries) {
+      if (!bodies.some((body) => body.session_id === entry.bindingId)) {
+        bodies.push(toExecutionUnitStatus(entry));
+      }
     }
-    return entries.map(toExecutionUnitStatus);
+    return bodies.sort((left, right) => Number(right.primary) - Number(left.primary));
   }
 
   /**
@@ -1965,20 +2023,16 @@ export class AgentServiceImpl implements AgentService {
    * 为 resume 取/重建**已存在** binding 的 entry。
    *
    * 不复用 `ensureExecutionUnit`：后者对未知 session 会惰性 `createBinding`，
-   * 那等于把一条旧 run 复活成新 body。resume 只允许命中当前 / rotate 窗口内
-   * 的 binding；已退役或未知 session 分别保留稳定错误 `session is retired` /
-   * `member_execution_not_found`。重启后 entry 不存在时按原 binding 重建并 spawn。
+   * 那等于把一条旧 run 复活成新 body。resume 只允许命中 primary / sibling /
+   * rotate 窗口内的 binding；已退役或未知 session 分别保留稳定错误
+   * `session is retired` / `member_execution_not_found`。重启后 entry 不存在时
+   * 按原 binding 重建并 spawn。
    */
   private async resumableEntry(
     record: MemberRecord,
     sessionId: string,
   ): Promise<ExecutionUnitEntry | undefined> {
-    const body =
-      record.binding?.bindingId === sessionId
-        ? record.binding
-        : record.retiringBinding?.bindingId === sessionId
-          ? record.retiringBinding
-          : undefined;
+    const body = findBinding(record, sessionId);
     if (body === undefined) {
       if (this.registry.isRetiredSession(sessionId)) {
         throw new AgentError('invalid_input', `session is retired: ${sessionId}`);
@@ -2233,8 +2287,11 @@ export class AgentServiceImpl implements AgentService {
       if (record.state === 'closed' || record.state === 'running') continue;
       if (record.state === 'waiting_permission') continue;
       if (this.hasNonIdleWork(record.id)) continue;
-      const body = record.binding;
-      const lastActive = Math.max(record.lastSeen ?? 0, body?.lastActiveAt ?? 0);
+      // 0.39：sibling 的活动同样算数，不能只看 primary，否则活跃 sibling 会被提前回收。
+      const lastActive = liveBindings(record).reduce(
+        (max, body) => Math.max(max, body.lastActiveAt),
+        record.lastSeen ?? 0,
+      );
       if (lastActive + this.temporaryTtlMs >= now) continue;
       await this.reclaimAgent(record, now, 'idle_ttl');
       reclaimed += 1;
@@ -2260,13 +2317,31 @@ export class AgentServiceImpl implements AgentService {
    * 审计复用 `agent.closed` + `reason`，不新增事件类型。
    */
   private async reclaimAgent(record: MemberRecord, at: number, reason: string): Promise<void> {
-    for (const entry of [...(this.executionUnitRegistry.get(record.id)?.values() ?? [])]) {
-      await this.retireExecutionUnitEntry(record, entry, reason, at);
+    const entries = [...(this.executionUnitRegistry.get(record.id)?.values() ?? [])];
+    // 0.39：所有 live binding（primary + siblings，含没有 entry 的 dormant sibling）
+    // 都按 sibling 先、primary 后的顺序退役，避免 `retireBinding` 的 multi_session
+    // 守卫在收口路径上误触发。
+    const isPrimaryBody = (body: BindingRecord): boolean =>
+      body.primary || record.binding?.bindingId === body.bindingId;
+    const orderedBodies = liveBindings(record).sort(
+      (left, right) => Number(isPrimaryBody(left)) - Number(isPrimaryBody(right)),
+    );
+    for (const body of orderedBodies) {
+      const entry = this.findEntry(record.id, body.bindingId);
+      if (entry !== undefined && !entry.retired) {
+        await this.retireExecutionUnitEntry(record, entry, reason, at);
+      } else {
+        this.registry.retireBinding(record.id, body.bindingId, at);
+      }
     }
-    // 没有内存 entry 时也要让 body 记录带上 retiredAt：body 记录永不删。
-    if (record.binding !== undefined && record.binding.retiredAt === undefined) {
-      this.registry.retireBinding(record.id, record.binding.bindingId, at);
+    // 已退役但仍有内存 entry 的残留：维持旧行为，交给 retire 路径收口。
+    for (const entry of entries) {
+      if (!orderedBodies.some((body) => body.bindingId === entry.bindingId)) {
+        await this.retireExecutionUnitEntry(record, entry, reason, at);
+      }
     }
+    // 兜底：所有 live binding（含上面未覆盖的）统一退役，primary 清空、siblings 清空。
+    this.registry.retireAllLive(record.id, at);
     record.state = 'closed';
     record.membership = 'left';
     this.registry.setPresence(record.id, 'gone');
@@ -2745,6 +2820,7 @@ export class AgentServiceImpl implements AgentService {
     ) {
       return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
+    this.assertNoLiveSiblings(target, 'rotate');
     if (this.rotations.has(target.id) || target.rotation === 'rotating') {
       return { status: 'failed', code: 'rotating', reason: `rotating: ${target.id}` };
     }
@@ -2965,6 +3041,7 @@ export class AgentServiceImpl implements AgentService {
     ) {
       return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
+    this.assertNoLiveSiblings(target, 'restart');
     if (this.rotations.has(target.id) || target.rotation === 'rotating') {
       return { status: 'failed', code: 'conflict', reason: `rotating: ${target.id}` };
     }
@@ -3145,6 +3222,7 @@ export class AgentServiceImpl implements AgentService {
     ) {
       return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
+    this.assertNoLiveSiblings(target, 'compactFork');
     if (this.rotations.has(target.id) || target.rotation === 'rotating') {
       return {
         status: 'failed',
@@ -3402,6 +3480,11 @@ export class AgentServiceImpl implements AgentService {
       }
       return;
     }
+    // 0.39：普通 retire 不允许在还有 live sibling 时退役 primary（没有定义迁移语义）。
+    // sibling 自己的 detach 不受影响。
+    if (primaryBinding(record)?.bindingId === sessionId) {
+      this.assertNoLiveSiblings(record, 'detach primary session');
+    }
     const entry = this.findEntry(record.id, sessionId);
     if (entry?.spawning !== undefined) await entry.spawning.catch(() => {});
     if (entry?.active !== undefined) {
@@ -3410,8 +3493,10 @@ export class AgentServiceImpl implements AgentService {
     if (entry !== undefined) {
       await this.retireExecutionUnitEntry(record, entry, 'session_deleted');
     } else {
+      // sibling 退役只进 history，不得重算 primary（DESIGN L5）。
+      const wasPrimary = primaryBinding(record)?.bindingId === sessionId;
       this.registry.retireBinding(record.id, sessionId);
-      this.promotePrimary(record);
+      if (wasPrimary) this.promotePrimary(record);
     }
     this.scheduleSnapshot();
     this.updateAgentState(record.id);

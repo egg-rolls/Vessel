@@ -39,7 +39,7 @@ applies_to: [N, M]
 
 ## session / Body
 
-- 一个 agent 可同时有多个 live body（`body_id ≡ session_id`，每 agent ≤20，空闲 24h 自动 retire）；`primary_body_id` 是缺省投递目标；`rotate` 只退休 primary body，其它 body 与其在途 run 不受影响。快照 `version: 4`：`bodies[]` 是唯一真相，`current_body` / `body_history` 只读兼容。
+- 一个 agent 有**恰好一个 primary live body**（`primary: true`）与 0..N 个 live **sibling**（`primary: false`，`body_id ≡ session_id`）。`primary_body_id` / `session_id` / agent 级投递永远指向 primary；sibling 只能按自己的 session_id 寻址。存在 live sibling 时 `rotate` / `restart` / `compactFork` 返回 `multi_session` 冲突，不静默收敛。close / TTL / delete 退役**所有** live body。快照 `version: 4`：`bodies[]` 写全部 live binding，`primary_body_id` 标记 primary，`current_body` / `body_history` 只读兼容；加载时其余 live body 重建为 sibling，**不得降级为 history**。
 - 状态机：`created|idle|running|waiting_permission|completed|failed|cancelled|closed`；`stale` 只读兼容、不得再写入；重启后非 `left` 成员为 `idle + presence='gone'`（ADR-091/092/097）。0.34 操作分离：`restart` 复用同一 Session（epoch + 1；先 dispose 旧 ExecutionUnit，再建新 ExecutionUnit，同 key 租约 fence 递增）；`compactFork` 以父 Session 的压缩副本新建子 Session 并成为新 primary（父 Session / binding 不动）；`fork` 新建空 Session、不复制 transcript。canonical RPC 为 `agents.restart` / `agents.compactFork` / `agents.fork`；CLI 只有 `vessel agent restart|compact-fork`，fork 不加 CLI。
 
 ## 投递与 Team
