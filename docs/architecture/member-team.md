@@ -1,7 +1,7 @@
 ---
 title: AgentService、Body 与 Team
 kind: current
-triggers: [agent, member, team, body, session, dispatch, send, rotate, fork, spawn, peer, contractor, owner, freeze, presence, membership, visibility, roster, budget]
+triggers: [agent, member, team, body, session, dispatch, send, rotate, create, spawn, peer, contractor, owner, freeze, presence, membership, visibility, roster, budget]
 paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ---
 
@@ -21,7 +21,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ## Agent 身份与 Body
 
 - **Agent 是持久身份，Body 是活执行单元**：`body_id ≡ session_id`，一个 agent 恰好一具 live body（唯一例外见「约束」的 rotate 窗口）；每个 body 有独立 `ExecutionUnit`（per-session）、独立 session 历史、独立事件流与独立 body lease。`WorkingContext` 归每次 Run（Run 开始时由 `contextFactory` 新建），不是 body 的长期字段。
-- `PersistedAgentRecord` 持久化 `membership` / `model` / `system_prompt` / `bodies[]` / `primary_body_id` / `forked_from`；`presence` / `rotation` 不落盘。`bodies[]` 是唯一真相，`primary_body_id` 是缺省投递目标；`current_body` / `body_history` 降级为旧数据的兼容视图（只读、不回写）。快照写 `version: 4`，读取兼容 v1 / v2 / v3；v3 → v4 把 `current_body` 迁成唯一 live body + primary、旧 `body_history` 迁入 `bodies[]`，首次写 v4 前备份 `.v3.bak`，失败则放弃本次写。
+- `PersistedAgentRecord` 持久化 `membership` / `model` / `system_prompt` / `bodies[]` / `primary_body_id` / `sourceAgentId`（wire / 事件 `source_agent_id`）；`presence` / `rotation` 不落盘。`bodies[]` 是唯一真相，`primary_body_id` 是缺省投递目标；`current_body` / `body_history` 降级为旧数据的兼容视图（只读、不回写）。快照写 `version: 4`，读取兼容 v1 / v2 / v3；v3 → v4 把 `current_body` 迁成唯一 live body + primary、旧 `body_history` 迁入 `bodies[]`，首次写 v4 前备份 `.v3.bak`，失败则放弃本次写。
 - `role` 只有 `member`（owner=self、Team 必需）与 `temporary`（owner=雇佣者，缺省 `human`、Team 可选）。`main` 是普通 `member`，用 `kind:'peer'` + `workspace` 创建，必须有 Team。
 
 <a id="state"></a>
@@ -43,16 +43,16 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ## 准入与投递：admit / dispatch / strict send
 
 - `AgentService.admit({ agent_id?, session_id?, content, from, channel })` 是唯一准入：resolve agent → membership / presence / visibility → 复用或创建 body → 预算 → 入该 body mailbox → 满足条件时 `scheduler.submit`。`session_id` 已绑定则以绑定为准，显式传了不同 `agent_id` 返回 `invalid_input`；未绑定归 `agent_id ?? 'main'` 并在首次发言时建 body；未传 `session_id` 用该 agent 的 primary body。
-- `dispatch`（缺省）与 strict `send` 复用同一条 admit，`to` 按 id → session_id → 唯一 name 解析。差别只有 presence：dispatch 允许确保 body / 恢复成员 presence，strict 不自动恢复（`gone` → `member_stale`）。稳定失败码：`agent_left` / `not_visible` / `resume_failed` / `body_limit`（新建 body 超上限）/ `team_full` / `team_frozen`。fork 有两个入口：`dispatch` 在 `presence === 'gone'` 且 resume 失败后按 `teams[].policy.allowFork` / 显式 `allow_fork` 尝试；canonical RPC `agents.fork`（0.34）直接新建空 Session 的 Agent（不复制 transcript，权限 / 可见性按 `agents.create`）。两者复用同一 `forkOne`，失败零写入，源记录保持不变。
+- `dispatch`（缺省）与 strict `send` 复用同一条 admit，`to` 按 id → session_id → 唯一 name 解析。差别只有 presence：dispatch 允许确保 body / 恢复成员 presence，strict 不自动恢复（`gone` → `member_stale`）。稳定失败码：`agent_left` / `not_visible` / `resume_failed` / `body_limit`（新建 body 超上限）/ `team_full` / `team_frozen`。有来源创建有两个入口：`dispatch` 在 `presence === 'gone'` 且 resume 失败后按 `teams[].policy.allowAutoCreate` / 显式 `allow_auto_create` 自动创建（`ensureCreatedOnDispatch` → `createDerivedAgent`，同一 gone 源幂等）；公共 `agents.create{from_session_id}` 按 `seed` copy / compact 建新 Agent（权限 / 可见性按 create 规则）。两者失败零写入，源记录保持不变。
 
 <a id="rotate"></a>
 
 ## rotate 与 epoch fencing
 
-- rotate 只退休 **primary body** 并新建 primary（新 session id）；同一 Agent 已有进行中的 rotate 返回 `rotating`。其它 live body 的历史、checkpoint、epoch 与在途 run 完全不受影响。模型侧 `agent` 工具只能 rotate 自己，靠 `from_session_id` 等于当前 primary body 做最终闸门。**模型发起的 rotate 还须先经人类权限确认**（0.31）：`agent` 工具发 `tool.permission.request`（`tool: agent.rotate`，带上下文比例），批准才调用 `AgentService.rotate`；拒绝或无人类通道返回 `rotate_not_needed`；CLI / 人工 RPC 不额外询问。
+- rotate 只退休 **primary body** 并新建 primary（新 session id）；同一 Agent 已有进行中的 rotate 返回 `rotating`。其它 live body 的历史、checkpoint、epoch 与在途 run 完全不受影响。模型侧 `agent` 工具只能 rotate 自己，靠 `from_session_id` 等于当前 primary body 做最终闸门。**模型发起的 rotate 还须先经人类权限确认**（0.31）：`agent` 工具发 `tool.permission.request`（`tool: agent.rotate`，带上下文比例），批准才调用 `AgentService.rotate`；拒绝或无人类通道返回 `rotate_not_needed`；`sessions.create` / `sessions.restart` RPC 不额外询问。
 - 切换顺序固定：spawn 新 body → 提交 primary（`primary_body_id`）→ 快照落盘 → 旧 primary 退休进 `body_history` → 启动嘱托入队 → `rotation = stable`。spawn 或快照失败时恢复旧 primary、dispose 新 body、返回 `rotate_failed`，不自动重试。旧 body 的轮按**该 body 自身** epoch / 退役标志 fencing：发带 `stale: true` 的配对终态与 `agent.reply.stale`，不写 state / usage、不投父队列。
 - 事件：`agent.rotate.approved` / `agent.rotate.denied` / `agent.rotating` / `agent.rotated` / `agent.rotate.failed` / `agent.retired` / `agent.reply.stale`；payload 不带启动嘱托正文，也不带确认卡片正文。**成员 durable resume（Stage 4，不新增 RPC）**：`runs.resume` 先加载 `RunRecord`；`agent_id` 命中成员时交 `AgentService.resumeRun(runId)`（经 scheduler 的 session 串行键，复用 active run 记账 / lease 续租），否则按 `session_id` 取 tenant EU 调 `EU.resumeRun(record)`。
-- **restart / compactFork（0.34，ADR-098）**：restart 复用同一 Session（`session_id` 不变），binding id 不变、`epoch + 1`；旧 binding 先退役进 history、旧 EU 先 dispose，再按同一 lease key 获取更高 fence 的新租约并新建 EU；有 active run 返回 `conflict`；事件 `agent.restarting` / `agent.restarted`。compactFork 以父 Session 的压缩副本新建子 Session 并成为新 primary（`epoch + 1`），父 Session / binding / EU 不动；事件 `agent.compact_forked`；无 `keep_turns`。两者与 rotate 一样先 binding lease 再 session lease、逆序释放；TTL / 续租由 `lease.ttlMs` / `lease.renewMs` 配置（[CONFIG](../operations/CONFIG.md)）。
+- **sessions.restart / sessions.create（0.39）**：`sessions.restart` 复用同一 Session（`session_id` 不变），binding id 不变、`epoch + 1`；旧 binding 先退役进 history、旧 EU 先 dispose，再按同一 lease key 获取更高 fence 的新租约并新建 EU；有 active run 返回 `conflict`；事件 `agent.restarting` / `agent.restarted`。`sessions.create`（空 / copy / compact）新建子 Session 并成为唯一 primary（`epoch + 1`；空 session 无源，copy / compact 时源 binding 退役进 `bindingHistory`、源不可再跑）；`agents.create{from_session_id}` 则源零改动。事件 `session.created` / `session.activated`；旧 `agent.compact_forked` 只读渲染。两者与 rotate 一样先 binding lease 再 session lease、逆序释放；TTL / 续租由 `lease.ttlMs` / `lease.renewMs` 配置（[CONFIG](../operations/CONFIG.md)）。
 
 <a id="spawn"></a>
 
@@ -61,8 +61,8 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 - `AgentService.create` 接受 `CreateMemberInput`：`kind?: 'peer' | 'contractor'` / `owner?: string | null` / `teamId?` / `spawnedBy?`。输入 `kind` 映射持久化 `role`：peer → member，contractor → temporary；无 kind 的旧请求按 temporary。
 - **member**：owner=self、无 parent、必须绑定 Team、visibility 强制 `team`。**temporary**：owner/parent 缺省为雇佣者（工具路径填调用者，service 缺省 `human`）；有 Team 时 visibility 缺省 `team`，unbound 缺省 `private`。
 - **`agent` 工具 `hire` 对任意成员开放**（含 temporary，是否有 Team 均可）：owner / parent 固定为调用者；调用者有 Team 时绑定该 `team_id`（计入上限 / 冻结），否则 unbound 且不计 Team 上限。`create`（member）仍要求调用者有 Team；`new` 不是当前 action。转换用 `agents.update { role, team_id? }`，不要求新 Body，只追加 `vessel:notice`。
-- 每 Team present 成员 ≤ 20（peer + contractor 都计入）；`create` / `hire` / `fork` / `reinstate` 增长前检查，超限 `team_full`。同 Team 的幂等 reinstate 不增长，不被冻结 / 上限拦。
-- **冻结**：`TeamRecord.spawn_frozen?` 持久化，`TeamSummary.spawn_frozen?` 回显；canonical `teams.spawnFrozen` 是唯一写路径，`teams.update` 不改。冻结期间 `create` / `hire` / 人类 `agents.create` / `fork` / `reinstate` 全部 `team_frozen`；只有 `frozen: false` 解冻。CLI 为 `vessel team freeze|unfreeze <team_id>`，team-scoped token 只能操作自己的 team。
+- 每 Team present 成员 ≤ 20（peer + contractor 都计入）；`create` / `hire` / 有来源 `agents.create` / `reinstate` 增长前检查，超限 `team_full`。同 Team 的幂等 reinstate 不增长，不被冻结 / 上限拦。
+- **冻结**：`TeamRecord.spawn_frozen?` 持久化，`TeamSummary.spawn_frozen?` 回显；canonical `teams.spawnFrozen` 是唯一写路径，`teams.update` 不改。冻结期间 `create` / `hire` / 人类 `agents.create`（含 `from_session_id`）/ `reinstate` 全部 `team_frozen`；只有 `frozen: false` 解冻。CLI 为 `vessel team freeze|unfreeze <team_id>`，team-scoped token 只能操作自己的 team。
 - **close 审批与级联**：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接 allow；成员关闭 peer 经权限 bridge 交人类审批；root owner 记录与跨 Team contractor 拒绝；无 bridge 时 ask fail closed。owner close 按 registry 原始记录级联关闭自己的 private contractor，team 可见 contractor 保持 present。**审计**：`agent.spawned` payload 带 `spawned_by`；Team join system 日志的 `from` 取 `spawned_by`；private 成员按既有规则不写 Team 日志。
 
 <a id="team"></a>

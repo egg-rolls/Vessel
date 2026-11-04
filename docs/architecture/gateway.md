@@ -84,7 +84,6 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 <a id="remote"></a>
 
 ### 远程控制面
-
 **远程客户端（CLI / TUI / headless）**
 
 > 决策见 ADR-051 / ADR-052 / ADR-053。

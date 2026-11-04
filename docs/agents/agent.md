@@ -1,7 +1,7 @@
 ---
 title: AgentService 与 Team 约定
 kind: advisory
-triggers: [agent, member, team, session, dispatch, rotate, restart, compactFork, fork, spawn, peer, contractor, owner, freeze, budget, visibility, agent tool, permission, answered_by, human, deny-after, timeout, approval]
+triggers: [agent, member, team, session, dispatch, rotate, restart, create, sessions.create, spawn, peer, contractor, owner, freeze, budget, visibility, agent tool, permission, answered_by, human, deny-after, timeout, approval]
 paths: [packages/agent/**]
 applies_to: [N, M]
 ---
@@ -19,8 +19,8 @@ applies_to: [N, M]
 ## 派生：peer / contractor
 
 - 创建判别仍是 `kind:'peer'|'contractor'`：peer → `role:'member'`（owner=self、无 parent、必须 Team、visibility 强制 `team`）；contractor → `role:'temporary'`（owner/parent 缺省是雇佣者，有 Team 时 visibility 缺省 `team`、unbound 缺省 `private`）。
-- 每 Team present 成员 ≤ 20（peer + contractor 都计入）；`create` / `hire` / `fork` / `reinstate` 增长前检查，超限必须是 `team_full`。同 Team 的幂等 reinstate 不增长，不得被上限或冻结误拦。
-- 冻结是 Team 元数据 `spawn_frozen`：冻结期间 `create` / `hire` / 人类 `agents.create` / `fork` / `reinstate` 一律 `team_frozen`；只能由 `teams.spawnFrozen false` 解冻，`teams.update` 不改该字段。
+- 每 Team present 成员 ≤ 20（peer + contractor 都计入）；`create` / `hire` / 有来源 `agents.create` / `reinstate` 增长前检查，超限必须是 `team_full`。同 Team 的幂等 reinstate 不增长，不得被上限或冻结误拦。
+- 冻结是 Team 元数据 `spawn_frozen`：冻结期间 `create` / `hire` / 人类 `agents.create`（含 `from_session_id`）/ `reinstate` 一律 `team_frozen`；只能由 `teams.spawnFrozen false` 解冻，`teams.update` 不改该字段。
 - 审计：`agent.spawned` payload 带 `spawned_by`，Team join system 日志的 `from` 取它；private 成员按既有规则不写 Team 日志。
 
 ### create / hire 矩阵
@@ -40,11 +40,11 @@ applies_to: [N, M]
 ## session / Body
 
 - 一个 agent 可同时有多个 live body（`body_id ≡ session_id`，每 agent ≤20，空闲 24h 自动 retire）；`primary_body_id` 是缺省投递目标；`rotate` 只退休 primary body，其它 body 与其在途 run 不受影响。快照 `version: 4`：`bodies[]` 是唯一真相，`current_body` / `body_history` 只读兼容。
-- 状态机：`created|idle|running|waiting_permission|completed|failed|cancelled|closed`；`stale` 只读兼容、不得再写入；重启后非 `left` 成员为 `idle + presence='gone'`（ADR-091/092/097）。0.34 操作分离：`restart` 复用同一 Session（epoch + 1；先 dispose 旧 ExecutionUnit，再建新 ExecutionUnit，同 key 租约 fence 递增）；`compactFork` 以父 Session 的压缩副本新建子 Session 并成为新 primary（父 Session / binding 不动）；`fork` 新建空 Session、不复制 transcript。canonical RPC 为 `agents.restart` / `agents.compactFork` / `agents.fork`；CLI 只有 `vessel agent restart|compact-fork`，fork 不加 CLI。
+- 状态机：`created|idle|running|waiting_permission|completed|failed|cancelled|closed`；`stale` 只读兼容、不得再写入；重启后非 `left` 成员为 `idle + presence='gone'`（ADR-091/092/097）。0.39 操作分离：`sessions.restart` 复用同一 Session 换 binding（epoch + 1；先 dispose 旧 ExecutionUnit，再建新 ExecutionUnit，同 key 租约 fence 递增）；`sessions.create{seed:'compact'}` 以父 Session 的压缩副本新建子 Session 并成为唯一 primary（父 Session 保留、源 binding 退役进 `bindingHistory`）；新 Agent 的冷建 / copy / compact 走 `agents.create{from_session_id?, seed?, keep_messages?}`，已有 Agent 的新 Session 走 `sessions.create`；`sessions.activate` 切回保留 session。旧 `agents.restart|compactFork|fork`、`sessions.rewind` 与 CLI `agent restart|compact-fork|rotate` 已删除。
 
 ## 投递与 Team
 
-- 准入唯一：`dispatch` 与 strict `send` 共用同一条 `admit`（可投性检查 → 目标 body mailbox → `scheduler.submit`）；live / rotating 入队，gone 先 single-flight resume 再入队；不得在每个入口重写状态检查或并发 spawn。fork 有两条入口：`gone + resume` 失败后按 policy / 显式 `allow_fork` 自动发生，或 canonical `agents.fork` 显式新建；rotate 失败保持旧 primary，restart / compactFork 失败零写入（ADR-091/092/097/098）。
+- 准入唯一：`dispatch` 与 strict `send` 共用同一条 `admit`（可投性检查 → 目标 body mailbox → `scheduler.submit`）；live / rotating 入队，gone 先 single-flight resume 再入队；不得在每个入口重写状态检查或并发 spawn。有来源创建有两条入口：`gone + resume` 失败后按 `teams[].policy.allowAutoCreate` / 显式 `allow_auto_create` 自动发生（`ensureCreatedOnDispatch` → `createDerivedAgent`），或公共 `agents.create{from_session_id}` 显式新建；rotate 失败保持旧 primary，`sessions.restart` / `sessions.create` 失败零写入（ADR-091/092/097/098）。
 - close 的审批在权限层完成：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接放行；成员关闭 peer 必须经 bridge 由人类审批；root owner 记录与跨 Team contractor 必须拒绝；无 bridge 时 ask 必须 fail closed。owner close 级联自己的 private contractor，team 可见 contractor 保留。
 - Team 日志不是队列：无 `@` 的 post / reply / system 绝不产生 run；`@` 必须先写日志再逐条 `admit`；`TeamService` 是唯一写入点，reply 由 `run.completed.output` 驱动、失败 / 取消写 `system` 条目。
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；team-scoped token 只能访问自己的 `team_id`，不匹配 `not_found`。

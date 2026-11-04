@@ -1,7 +1,7 @@
 ---
 title: 事件系统
 kind: current
-triggers: [event, event stream, trace, replay, observability, seq, redaction, restart, compactFork]
+triggers: [event, event stream, trace, replay, observability, seq, redaction, restart, create, session]
 paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace-wiring.ts, src/observability-wiring.ts]
 ---
 
@@ -56,7 +56,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `mcp.tool.called` / `mcp.tool.failed` | MCP 插件 → 观测 | MCP 工具调用 |
 | `channel.feishu.connected` / `channel.feishu.disconnected` / `channel.feishu.message.received` / `channel.feishu.reply.sent` / `channel.feishu.error` | 飞书插件 → 观测 | 渠道生命周期与消息 |
 | `session.saved` / `session.deleted` | core → 观测 | 会话持久化（0.5） |
-| `agent.rotating` / `agent.rotated` / `agent.restarting` / `agent.restarted` / `agent.compact_forked` | AgentService → 观测 | binding 生命周期（rotate 0.32；restart / compactFork 0.34）；payload 带 agent / session / epoch |
+| `agent.rotating` / `agent.rotated` / `agent.restarting` / `agent.restarted`；`agent.spawned`（带来源）/ `session.created` / `session.activated` / `agent.session.activated` / `agent.create.failed` | AgentService → 观测 | binding 生命周期（rotate 0.32；restart 0.34；有来源 create 0.39）；payload 带 agent / session / epoch；旧 `agent.forked` / `agent.compact_forked` / `session.forked` 只读渲染 |
 | `config.loaded` | asm → 观测 | 只记来源与键名，不记密钥值（0.5） |
 | `plugin.loaded` / `plugin.failed` | asm / core → 观测 | 插件加载（0.5） |
 | `trace.write.failed` / `trace.overflow` | core trace → 观测 | 写失败/队列溢出，标记 trace 不完整（0.5） |

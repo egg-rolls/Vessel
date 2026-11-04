@@ -291,9 +291,9 @@ agent:
 - **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
 - **`agent.inbox_max_messages`**（0.32，默认 `200`）：每个成员持久化收件箱的消息条数上限，超出时按最旧裁剪；只影响成员收件箱（`agent` 工具投递给 busy / rotating 成员的消息），不影响会话历史。缺省不写入配置即用 200；必须是正整数。
 - **工具数（实测）**：默认 5（`bash` / `read` / `edit` / `agent` / `inbox`）；真交互 REPL（TTY）或 gateway/serve 默认 6（+`ask_user`）；显式 `agent.enabled: false` 时不启用成员 runtime，因而不注册成员工具面（root 只剩 `bash` / `read` / `edit`）。
-- **owner 端点**：只由交互 REPL / serve 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`--run` / headless / 管道不监听 owner 端口、不写记录，但 AgentService / TeamService 仍在进程内可用。`vessel agent create|send|dispatch|close|list|rotate [--json]` 经该记录 attach。
-- **rotate（0.19，ADR-092）**：成员可调用 `agent.rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 owner 端点 `agent.rotate` 或 `vessel agent rotate <to> --startup <text> [--json]`。`--startup` 必填且非空；`rotated` 退出 0、`failed` 退出 1。失败保持旧身体，不自动 fork / 重试；`rotating` 期间消息排队。
-- **已知限制**：排队消息写入 per-agent inbox（上限 `agent.inbox_max_messages`），重启后可由模型经 `inbox` 工具读取；已开始执行的一轮仍需显式 resume；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **58**（见 §2.13）。
+- **owner 端点**：只由交互 REPL / serve 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`--run` / headless / 管道不监听 owner 端口、不写记录，但 AgentService / TeamService 仍在进程内可用。`vessel agent create|send|dispatch|close|list [--json]` 经该记录 attach。
+- **rotate（0.19，ADR-092；0.39 改道）**：成员可调用 `agent` 工具的 `rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 `sessions.create`（空 session + `startup_prompt`）或 `sessions.restart`。原 owner 端点 `agents.rotate` 与 CLI `vessel agent rotate` 已删除。失败保持旧身体，不自动重试；`rotating` 期间消息排队。
+- **已知限制**：排队消息写入 per-agent inbox（上限 `agent.inbox_max_messages`），重启后可由模型经 `inbox` 工具读取；已开始执行的一轮仍需显式 resume；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **61**（见 §2.13）。
 
 ### 2.12 Team 声明（0.19 S3，ADR-091；S4 增加 policy.permission / policy.budget）
 
@@ -327,7 +327,7 @@ teams:
 - 绑定后默认 visibility `team`；unbound 保持 `private`。Team 只是 roster / 只写日志 / 定向寻址的分组，**不是 cwd 或安全边界**（成员仍共享父工具 cwd）。
 - roster 由 Agent 记录的 `team_id + membership` 派生，不单独持久化；`online_count = present && presence === 'live'`；`body_history` 透传（≤20）。
 - 无 `@` 的 post / reply / system **只写日志、不产生 run**；`@` 用结构化 agent id，先写日志再 dispatch。private 成员不写日志、不可被 `@`。
-- canonical：`teams.list` / `teams.get`（read）、`teams.post` / `teams.members` / `teams.budget` / `teams.create` / `teams.update` / `teams.archive` / `teams.spawnFrozen`（write；`teams.budget` 走 `status | override`，不在 control scope 白名单）；未注入或 tenant 不匹配返回 `not_found`。canonical 总数 **58**。
+- canonical：`teams.list` / `teams.get`（read）、`teams.post` / `teams.members` / `teams.budget` / `teams.create` / `teams.update` / `teams.archive` / `teams.spawnFrozen`（write；`teams.budget` 走 `status | override`，不在 control scope 白名单）；未注入或 tenant 不匹配返回 `not_found`。canonical 总数 **61**。
 - Team CRUD（0.24）：`teams.create` 只允许 human / admin（team-scoped token 返回 `forbidden`），按 workspace 幂等复用并直接返回 `TeamSummary`；`teams.update` / `teams.archive` 允许 team-scoped token 操作自己的 team。`archive` 有 present 成员返回 `conflict`（`team_not_empty`）；归档后 post / members / budget override 返回 `conflict`（`team_archived`），日志 / session / agent 历史保留；hard delete 未实现。CLI：`vessel team create|update|archive|freeze|unfreeze`；`create` / `update` 支持 `--policy <json>` 或 `--policy-file <path>`（互斥，文件优先用于复杂策略，整体替换）。`freeze` / `unfreeze` 写 `teams.spawnFrozen`；冻结只拦该 Team 的增长（`team_frozen`），不暂停现有成员。
 - **预算运行态**：唯一写者是 `AgentService` 的 `ConversationBudget`；状态写 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、1000 条按 `last_activity` 有界淘汰、损坏 fail-closed、重启不清零）。发送侧入队前与接收侧 turn 开始各查一次，被接收侧挡下的消息留在队列。人工 override 经 `teams.budget` / owner 端点 / CLI，只能抬高或清除；`teams.budget` 不在 control scope。事件 `team.budget.warning` / `team.budget.blocked` / `team.budget.override` 必带 `team_id`。
 
@@ -360,7 +360,7 @@ hub:
 - `hub` 不接受明文 `token`，只允许 `token_env`（hub 自己的读 token）。节点 control token **只走 SecretStore**，不写 YAML / `registry.json`。
 - `allow_file_secrets`（默认 `false`）：平台 SecretStore（DPAPI / Keychain / libsecret）不可用时，只有显式 `true` 才退到 AES-256-GCM 文件；否则 fail-closed。
 - `pairing_ttl_seconds`（默认 300，范围 60–3600）：一次性配对码有效期；码只存 hash、先烧后用。
-- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后为 40，S3 + S5 + S4 合并后为 48；0.24–0.27 增加 `teams.create|update|archive|spawnFrozen` 与 `agents.*` 后总数为 **58**（57 个 domain 方法 + `events.subscribe`）。
+- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后为 40，S3 + S5 + S4 合并后为 48；此后各版本的增删以 [gateway-rpc.md](../architecture/gateway-rpc.md) 方法表为准。当前总数 **61**（60 个 domain 方法 + `events.subscribe`）。
 - **team-scoped control token**：只能访问自己的 `team_id`，不匹配返回 `not_found`；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `policy`。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**。
 - **NAT 数据面**：`direction: node` 只保证元数据 / 指针可达；没有浏览器可达地址的节点（NAT / 家庭网络）需要用户提供隧道 / 反向代理，并可用可选 `public_url` 声明节点 origin。目录的 `data_plane: direct|unreachable` 由 `public_url ?? url` 派生，只表示正文可达性；hub 不做正文中继。
 - **已知限制**：S5.1 已实现 node → hub 出站；跨节点 A2A（S7）、多 hub 联邦、hub daemon / 系统服务注册仍未实现。一个 node 进程 / data dir 只加入一个 hub。Web 当前不消费 hub 目录 / data token。
@@ -443,7 +443,6 @@ vessel logs tail [--json] [--lines N] [--instance <name>]
 vessel agent create [--name <n>] [--model <m>] [--visibility private|team|tenant] [--system-prompt <s>] [--json]
 vessel agent send <member> <content...> [--json]
 vessel agent dispatch <to> <content...> [--json]
-vessel agent rotate <to> --startup <text> [--json]
 vessel agent close <member...> [--json]
 vessel agent list [--state <state>] [--visibility private|team|tenant] [--json]
 vessel team list [--json]

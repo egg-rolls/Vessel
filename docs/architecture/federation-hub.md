@@ -91,7 +91,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 ## 不做什么
 
 - hub 不做消息正文 / 事件 / 工具结果代理，不存 transcript，不做 mTLS、多 hub 联邦或节点自动发现。
-- federation 不做 worker / agent 跨节点寻址、远程 spawn / close / rotate / resume / fork、自动中继 / mesh、离线队列 / 重试、跨重启 exactly-once、多 tenant、权限审批人。
+- federation 不做 worker / agent 跨节点寻址、远程 spawn / close / rotate / resume / create、自动中继 / mesh、离线队列 / 重试、跨重启 exactly-once、多 tenant、权限审批人。
 - federation 是传输面，不新增 canonical RPC 方法；**不做全局名字解析**（DNS / 注册表 / 名字即身份）——名字只在本地有意义。
 
 ## 指针
