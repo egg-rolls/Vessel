@@ -1,0 +1,22 @@
+/* Usage plugin styles: shared tokens + utilities, plus the iframe app shell. */
+@import "@vessel-agent/plugin-ui/styles.css";
+@source "./";
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--size-base);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100dvh;
+}
