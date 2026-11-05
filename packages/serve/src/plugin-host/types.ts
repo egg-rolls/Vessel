@@ -39,8 +39,21 @@ export type PluginRuntimeStatus =
 /** manifest 的 side 字段 */
 export type PluginSide = 'backend' | 'ui' | 'both';
 
-/** 内置导航分组（固定顺序，plugin 不可占用这些 id）。 */
-export const PLUGIN_BUILTIN_NAV = ['top', 'observe', 'settings', 'plugins'] as const;
+/**
+ * 核心导航分组 key（稳定，不随 i18n 变化）；plugin 不可占用这些 id。
+ * E6：chat / network / runs / integrations / status 也是核心分组。
+ */
+export const PLUGIN_BUILTIN_NAV = [
+  'chat',
+  'network',
+  'runs',
+  'integrations',
+  'status',
+  'top',
+  'plugins',
+  'observe',
+  'settings',
+] as const;
 
 /** 内置导航分组 id */
 export type PluginBuiltinNav = (typeof PLUGIN_BUILTIN_NAV)[number];
