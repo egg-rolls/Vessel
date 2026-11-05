@@ -24,7 +24,7 @@ export const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 export const PLUGIN_RPC_NAME_RE = /^[a-z][a-z0-9_-]*$/;
 
 export type PluginSide = 'backend' | 'ui' | 'both';
-export type PluginPageNav = 'observe' | 'settings' | 'top';
+export type PluginPageNav = 'observe' | 'settings' | 'top' | 'plugins';
 export type PluginPanelSlot = 'run-detail' | 'session-detail' | 'nav';
 
 export interface PluginPageContribution {
@@ -374,7 +374,7 @@ function readPages(value: unknown): PluginPageContribution[] {
 }
 
 function isPageNav(value: unknown): value is PluginPageNav {
-  return value === 'observe' || value === 'settings' || value === 'top';
+  return value === 'observe' || value === 'settings' || value === 'top' || value === 'plugins';
 }
 
 function isPanelSlot(value: unknown): value is PluginPanelSlot {
