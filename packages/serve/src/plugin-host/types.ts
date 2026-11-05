@@ -39,8 +39,8 @@ export type PluginRuntimeStatus =
 /** manifest 的 side 字段 */
 export type PluginSide = 'backend' | 'ui' | 'both';
 
-/** 页面导航分区 */
-export type PluginNav = 'observe' | 'settings' | 'top';
+/** 页面导航分区（0.45 增加固定 `plugins` 组，marketplace 页面使用） */
+export type PluginNav = 'observe' | 'settings' | 'top' | 'plugins';
 
 /** 静态 UI 挂载点 */
 export interface PluginStaticMount {

@@ -182,7 +182,8 @@ function validateDescriptor(input: PluginDescriptor): PluginDescriptor {
       page.nav !== undefined &&
       page.nav !== 'observe' &&
       page.nav !== 'settings' &&
-      page.nav !== 'top'
+      page.nav !== 'top' &&
+      page.nav !== 'plugins'
     ) {
       throw pluginError('plugin_manifest_invalid', 'pages[].nav is invalid.', {
         id: input.id,
