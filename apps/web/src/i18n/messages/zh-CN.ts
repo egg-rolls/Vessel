@@ -679,7 +679,6 @@ export const messages = {
   'nodes.section.health': '健康',
   'nodes.section.dataPlane': '数据面',
   'nodes.field.nodeId': 'node_id',
-  'nodes.field.status': '状态',
   'nodes.field.pid': 'PID',
   'nodes.field.startedAt': '启动时间',
   'nodes.field.endpoint': 'endpoint',

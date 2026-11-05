@@ -698,7 +698,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nodes.section.health': 'Health',
   'nodes.section.dataPlane': 'Data plane',
   'nodes.field.nodeId': 'node_id',
-  'nodes.field.status': 'Status',
   'nodes.field.pid': 'PID',
   'nodes.field.startedAt': 'Started',
   'nodes.field.endpoint': 'endpoint',
