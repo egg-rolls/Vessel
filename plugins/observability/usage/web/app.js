@@ -258,6 +258,17 @@
     }
   }
 
+  function costHint(data) {
+    const unpriced = Number(data.unpriced_requests) || 0;
+    if (data.cost === undefined && unpriced > 0) {
+      return 'No configured price for these models';
+    }
+    if (unpriced > 0) {
+      return `${unpriced} unpriced request(s); total covers priced models`;
+    }
+    return 'USD, from configured prices';
+  }
+
   function daysParam(days) {
     return days > 0 ? { days } : {};
   }
@@ -323,13 +334,7 @@
           fmtPct(data.prefix_health),
           ratioHint(data.prefix_health_unavailable, 'Cache read / (read + write)'),
         ),
-        statCard(
-          'Cost',
-          fmtCost(data.cost),
-          data.cost === undefined
-            ? 'A used model has no configured price'
-            : 'USD, from configured prices',
-        ),
+        statCard('Cost', fmtCost(data.cost), costHint(data)),
       ];
 
       const rows = (data.by_day || []).map((row) => [
@@ -339,6 +344,7 @@
         fmtInt(row.completion_tokens),
         fmtInt(row.cache_read_tokens),
         fmtInt(row.failed_runs),
+        fmtInt(row.unpriced_requests),
         fmtCost(row.cost),
       ]);
 
@@ -348,7 +354,16 @@
           'By day',
           tableWrap(
             table(
-              ['Day', 'Requests', 'Prompt', 'Completion', 'Cache read', 'Failed', 'Cost'],
+              [
+                'Day',
+                'Requests',
+                'Prompt',
+                'Completion',
+                'Cache read',
+                'Failed',
+                'Unpriced',
+                'Cost',
+              ],
               rows,
             ),
           ),

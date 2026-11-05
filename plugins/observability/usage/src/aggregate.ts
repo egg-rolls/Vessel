@@ -29,6 +29,10 @@ export interface UsageRecord {
   cache_creation_input_tokens?: number;
   duration_ms?: number;
   cost?: number;
+  /** The response's model has no configured price entry. */
+  unpriced?: boolean;
+  /** Failed runs only: true when the run died with an unanswered llm.request. */
+  in_flight?: boolean;
 }
 
 /** Token/request totals shared by Summary totals and per-day rows. */
@@ -44,6 +48,8 @@ export interface Totals {
 export interface DayBucket extends Totals {
   date: string;
   cost?: number;
+  /** Rows in this bucket whose model has no configured price. */
+  unpriced_requests: number;
 }
 
 export interface ModelBucket {
@@ -72,7 +78,10 @@ export interface SummaryResult {
   input_share_unavailable?: CacheUnavailableReason;
   prefix_health?: number;
   prefix_health_unavailable?: CacheUnavailableReason;
+  /** Sum of priced rows only; absent when no row had a configured price. */
   cost?: number;
+  /** Rows excluded from `cost` because their model has no price. */
+  unpriced_requests: number;
 }
 
 export interface LogItem {
@@ -140,30 +149,39 @@ function modelFor(settings: Settings, hint: string | undefined): string {
   return settings.default_model ?? hint ?? 'unknown';
 }
 
+interface CostResult {
+  cost?: number;
+  /** The response's model has no configured price entry. */
+  unpriced: boolean;
+}
+
 /**
- * Cost of one response, or `undefined` when the model has no price or the
- * response carried no usage at all. Cache counters are subsets of
- * `prompt_tokens`; the non-cached slice is clamped at zero so a provider that
- * reports inconsistent counters cannot produce a negative cost.
+ * Cost of one response. Cache counters are subsets of `prompt_tokens`; the
+ * non-cached slice is clamped at zero so a provider that reports inconsistent
+ * counters cannot produce a negative cost. A response without usage has no
+ * cost but is not "unpriced" — there was simply nothing to bill.
  */
-function costFor(record: UsageRecord, settings: Settings): number | undefined {
-  if (record.prompt_tokens === undefined && record.completion_tokens === undefined)
-    return undefined;
+function costFor(record: UsageRecord, settings: Settings): CostResult {
+  if (record.prompt_tokens === undefined && record.completion_tokens === undefined) {
+    return { unpriced: false };
+  }
   const price = settings.prices[record.model];
-  if (price === undefined) return undefined;
+  if (price === undefined) return { unpriced: true };
 
   const prompt = record.prompt_tokens ?? 0;
   const completion = record.completion_tokens ?? 0;
   const read = record.cache_read_input_tokens ?? 0;
   const write = record.cache_creation_input_tokens ?? 0;
   const nonCached = Math.max(0, prompt - read - write);
-  return (
-    (nonCached * price.input_per_1m +
-      read * price.cache_read_per_1m +
-      write * price.cache_write_per_1m +
-      completion * price.output_per_1m) /
-    COST_DIVISOR
-  );
+  return {
+    cost:
+      (nonCached * price.input_per_1m +
+        read * price.cache_read_per_1m +
+        write * price.cache_write_per_1m +
+        completion * price.output_per_1m) /
+      COST_DIVISOR,
+    unpriced: false,
+  };
 }
 
 function recordId(event: RawEvent): string {
@@ -171,26 +189,33 @@ function recordId(event: RawEvent): string {
 }
 
 /**
- * Fold raw events into one record per `llm.response` plus one failed record
+ * Fold raw events into one record per `llm.response`, plus one failed record
  * per `run.failed`. `llm.request` supplies the duration of the following
  * response and the Self Card model hint.
+ *
+ * A failed run is run-level, not an LLM request. It is counted in summary but
+ * only appears in Logs when it left an `llm.request` unanswered (`in_flight`);
+ * otherwise there is no request row to show.
  */
 export function buildRecords(events: RawEvent[], settings: Settings): UsageRecord[] {
   const records: UsageRecord[] = [];
-  const lastRequest = new Map<string, { ts: number; model?: string }>();
+  const pending = new Map<string, { ts: number; model?: string }>();
+  const lastHint = new Map<string, string | undefined>();
 
   for (const event of events) {
     const key = `${event.tenant}\u0000${event.run_id}`;
 
     if (event.type === 'llm.request') {
       const hint = selfCardModel(event.data);
-      lastRequest.set(key, { ts: event.ts, ...(hint !== undefined ? { model: hint } : {}) });
+      pending.set(key, { ts: event.ts, ...(hint !== undefined ? { model: hint } : {}) });
+      lastHint.set(key, hint);
       continue;
     }
 
     if (event.type === 'llm.response') {
       const usage = isRecord(event.data.usage) ? event.data.usage : undefined;
-      const request = lastRequest.get(key);
+      const request = pending.get(key);
+      pending.delete(key);
       const record: UsageRecord = {
         id: recordId(event),
         ts: event.ts,
@@ -217,22 +242,31 @@ export function buildRecords(events: RawEvent[], settings: Settings): UsageRecor
           ? { duration_ms: event.ts - request.ts }
           : {}),
       };
-      record.cost = costFor(record, settings);
+      const cost = costFor(record, settings);
+      if (cost.cost !== undefined) record.cost = cost.cost;
+      if (cost.unpriced) record.unpriced = true;
       records.push(record);
       continue;
     }
 
     if (event.type === 'run.failed') {
-      const request = lastRequest.get(key);
+      const inFlight = pending.get(key);
+      pending.delete(key);
       records.push({
         id: recordId(event),
         ts: event.ts,
         tenant: event.tenant,
         run_id: event.run_id,
-        model: modelFor(settings, request?.model),
+        model: modelFor(settings, inFlight?.model ?? lastHint.get(key)),
         status: 'failed',
         ...(optionalString(event.data.session_id) !== undefined
           ? { session_id: optionalString(event.data.session_id) }
+          : {}),
+        ...(inFlight !== undefined
+          ? {
+              in_flight: true,
+              ...(event.ts >= inFlight.ts ? { duration_ms: event.ts - inFlight.ts } : {}),
+            }
           : {}),
       });
     }
@@ -275,7 +309,8 @@ interface Counter {
   cacheWrite: number;
   cacheWriteReported: boolean;
   cost: number;
-  costMissing: boolean;
+  pricedRequests: number;
+  unpricedRequests: number;
   failedRuns: number;
 }
 
@@ -289,7 +324,8 @@ function counter(): Counter {
     cacheWrite: 0,
     cacheWriteReported: false,
     cost: 0,
-    costMissing: false,
+    pricedRequests: 0,
+    unpricedRequests: 0,
     failedRuns: 0,
   };
 }
@@ -310,10 +346,11 @@ function addRecord(target: Counter, record: UsageRecord): void {
     target.cacheWriteReported = true;
     target.cacheWrite += record.cache_creation_input_tokens;
   }
-  if (record.cost === undefined) {
-    target.costMissing = true;
-  } else {
+  if (record.cost !== undefined) {
     target.cost += record.cost;
+    target.pricedRequests += 1;
+  } else if (record.unpriced === true) {
+    target.unpricedRequests += 1;
   }
 }
 
@@ -328,9 +365,13 @@ function totalsOf(target: Counter): Totals {
   };
 }
 
+/**
+ * Sum of priced rows only. Absent when nothing in the bucket had a price, so
+ * the UI never renders `$0` for "no prices configured". Unpriced rows are
+ * reported separately via `unpriced_requests`.
+ */
 function costOf(target: Counter): number | undefined {
-  if (target.requests === 0 || target.costMissing) return undefined;
-  return target.cost;
+  return target.pricedRequests > 0 ? target.cost : undefined;
 }
 
 interface Ratios {
@@ -454,6 +495,7 @@ export function summarize(records: UsageRecord[], now: number, days?: number): S
       date,
       ...totalsOf(target),
       ...(cost !== undefined ? { cost } : {}),
+      unpriced_requests: target.unpricedRequests,
     });
   }
   byDay.sort((a, b) => b.date.localeCompare(a.date));
@@ -467,6 +509,7 @@ export function summarize(records: UsageRecord[], now: number, days?: number): S
     by_model: modelBuckets(filtered),
     ...ratios,
     ...(cost !== undefined ? { cost } : {}),
+    unpriced_requests: overall.unpricedRequests,
   };
 }
 
@@ -512,6 +555,10 @@ function toLogItem(record: UsageRecord): LogItem {
 
 export function listLogs(records: UsageRecord[], params: LogsParams): LogsResult {
   const matched = records.filter((record) => {
+    // Failed runs are run-level. They only belong in a request log when they
+    // died with an unanswered llm.request; otherwise summary is the only
+    // place they should appear.
+    if (record.status === 'failed' && record.in_flight !== true) return false;
     if (params.status !== undefined && record.status !== params.status) return false;
     if (params.session_id !== undefined && record.session_id !== params.session_id) return false;
     if (params.model !== undefined && record.model !== params.model) return false;
