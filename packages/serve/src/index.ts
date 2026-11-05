@@ -231,6 +231,7 @@ export {
 } from './node-token-control.js';
 // 0.43：体验型 plugin 宿主（CONTRACT-0.43）。
 export {
+  buildPluginCatalog,
   buildPluginEnv,
   type ChildExitInfo,
   ChildPluginProcess,
@@ -261,6 +262,13 @@ export {
   PLUGIN_RESTART_WINDOW_MS,
   PLUGIN_TIMEOUTS,
   type PluginBuiltinNav,
+  type PluginCatalogDescriptor,
+  type PluginCatalogEntry,
+  type PluginCatalogInput,
+  type PluginCatalogItem,
+  type PluginCatalogKind,
+  type PluginCatalogScope,
+  type PluginCatalogStatusEntry,
   type PluginCommandContribution,
   type PluginContributionsSnapshot,
   type PluginDependencies,

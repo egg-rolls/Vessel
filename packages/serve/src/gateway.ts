@@ -108,6 +108,7 @@ import type { McpGatewayOptions } from './mcp.js';
 import type { MetricsProvider, MetricsSnapshot } from './metrics.js';
 import {
   createHubPluginEventSource,
+  type PluginCatalogItem,
   type PluginHostManagerLike,
   type PluginReloadResult,
   pluginErrorCodeOf,
@@ -309,6 +310,11 @@ export interface GatewayOptions {
   plugins?: () => Array<{ name: string; enabled: boolean }>;
   /** 0.5 A-6.3：per-tenant plugins.list / capabilities.list；缺省回退 `plugins` */
   pluginsFor?: (tenantId: string) => Array<{ name: string; enabled: boolean }>;
+  /**
+   * 0.47：per-tenant 只读插件 catalog（CONTRACT-0.47 §1/§3）。
+   * 缺省 = `plugins.catalog` 返回空列表；asm 注入统一视图。
+   */
+  pluginCatalogFor?: (tenantId: string) => PluginCatalogItem[];
   /** metrics.reset / trace 重建 */
   metricsControl?: {
     reset?(tenantId?: string): void;
@@ -1082,6 +1088,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     methodTable: currentMethodTable,
     toolDescriptionsForTenant,
     pluginsForTenant,
+    pluginCatalogForTenant: opts.pluginCatalogFor ?? (() => []),
     ...(opts.pluginHostManager !== undefined
       ? {
           pluginsContributionsForTenant: (tenantId: string) =>

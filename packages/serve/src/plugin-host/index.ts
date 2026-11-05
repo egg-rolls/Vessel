@@ -5,6 +5,16 @@
  */
 
 export {
+  buildPluginCatalog,
+  type PluginCatalogDescriptor,
+  type PluginCatalogEntry,
+  type PluginCatalogInput,
+  type PluginCatalogItem,
+  type PluginCatalogKind,
+  type PluginCatalogScope,
+  type PluginCatalogStatusEntry,
+} from './catalog.js';
+export {
   buildPluginEnv,
   type ChildExitInfo,
   ChildPluginProcess,

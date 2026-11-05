@@ -38,6 +38,7 @@ import {
   resolveTenantPaths,
 } from '../packages/core/src/index';
 import {
+  buildPluginCatalog,
   type ConfigSnapshotLike,
   createGatewayEventHub,
   type DurableGatewayOptions,
@@ -1193,6 +1194,28 @@ async function runWithConfig(result: BootstrapResult) {
       );
     };
 
+    // 0.47：tenant 作用域的 plugins 数据源（与 gateway `pluginsFor` 同源）。
+    const pluginEntriesForTenant = (
+      tenantId: string,
+    ): Array<{ name: string; enabled: boolean }> => [
+      ...(tenantFactory?.pluginsFor(tenantId) ?? []),
+      ...pluginRuntimeEntries(),
+    ];
+
+    // 0.47：catalog 只按该 tenant 的 entries 输出，不泄露别的 tenant；
+    // descriptor 是发现结果（全局），status 只按 entry 名查找。
+    const pluginCatalogFor = (tenantId: string) =>
+      buildPluginCatalog({
+        entries: pluginEntriesForTenant(tenantId),
+        descriptors: new Map(
+          (result.bundle?.pluginLoader.list() ?? []).map((descriptor) => [
+            descriptor.name,
+            descriptor,
+          ]),
+        ),
+        statuses: pluginHostManager?.statuses() ?? [],
+      });
+
     const gatewayOptions: GatewayOptions & {
       durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
     } = {
@@ -1236,7 +1259,8 @@ async function runWithConfig(result: BootstrapResult) {
       ...(pluginsReload !== undefined ? { pluginsReload } : {}),
       // 无 tenantFactory 时也要把 child 插件纳入 plugins.list / plugin.changed。
       plugins: pluginRuntimeEntries,
-      pluginsFor: () => pluginRuntimeEntries(),
+      pluginsFor: pluginEntriesForTenant,
+      pluginCatalogFor,
       staticDir: resolveStaticDir(),
       nodeId: result.nodeId,
       nodeName: result.nodeName,
@@ -1292,14 +1316,8 @@ async function runWithConfig(result: BootstrapResult) {
             sessionFor: (tenantId: string) =>
               livenessSessionFor(tenantId) ?? tenantFactory?.sessionFor(tenantId),
             pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
-            pluginsFor: (tenantId: string) => [
-              ...(tenantFactory?.pluginsFor(tenantId) ?? []),
-              ...pluginRuntimeEntries(),
-            ],
-            plugins: () => [
-              ...(tenantFactory?.pluginsFor(result.tenantId) ?? []),
-              ...pluginRuntimeEntries(),
-            ],
+            pluginsFor: pluginEntriesForTenant,
+            plugins: () => pluginEntriesForTenant(result.tenantId),
             // 无 metrics 的 tenant 返回 undefined；gateway 已按 undefined 处理。
             metricsFor: ((tenantId: string) => {
               const metrics = tenantFactory?.metricsFor(tenantId);

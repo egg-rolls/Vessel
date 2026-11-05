@@ -6,6 +6,7 @@
 
 import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel-agent/config';
 import type { PluginHost } from '@vessel-agent/core';
+import type { PluginCatalogItem } from '../../plugin-host/catalog.js';
 import type {
   PluginListMetadata,
   PluginReloadResult,
@@ -81,6 +82,8 @@ export interface ConfigMethodsDeps {
   methodTable(): RpcMethodTable;
   toolDescriptionsForTenant(tenantId: string): Array<{ name: string; description?: string }>;
   pluginsForTenant(tenantId: string): Array<{ name: string; enabled: boolean }>;
+  /** 0.47：tenant 作用域的只读插件 catalog；缺省返回空列表。 */
+  pluginCatalogForTenant?(tenantId: string): PluginCatalogItem[];
   /** 0.43 E1：只给 enabled 的体验型 plugin 附加渲染字段（additive）。 */
   pluginsContributionsForTenant?(tenantId: string): Record<string, PluginRenderContributions>;
   /** 0.43 E10：version / mode / status 运行时元数据（additive）。 */
@@ -495,6 +498,22 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
           deps.pluginsContributionsForTenant?.(ctx.tenantId),
           deps.pluginsMetadataForTenant?.(ctx.tenantId),
         ),
+      }),
+    },
+    {
+      // 0.47：只读统一插件视图；写路径仍走 config / set-enabled。
+      name: 'plugins.catalog',
+      permission: 'read',
+      params_schema: { type: 'object' },
+      result_schema: {
+        type: 'object',
+        required: ['items'],
+        properties: {
+          items: { type: 'array' },
+        },
+      },
+      handler: (_params, ctx) => ({
+        items: deps.pluginCatalogForTenant?.(ctx.tenantId) ?? [],
       }),
     },
     {
