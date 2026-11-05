@@ -113,6 +113,7 @@ function toServeDescriptor(
             rpc: contributes.rpc.map((method) => ({
               name: method.name,
               ...(method.description !== undefined ? { description: method.description } : {}),
+              ...(method.permission !== undefined ? { permission: method.permission } : {}),
             })),
           }
         : {}),

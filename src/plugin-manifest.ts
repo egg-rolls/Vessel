@@ -100,9 +100,13 @@ export interface PluginSettingSchema {
   [key: string]: unknown;
 }
 
+/** RPC 调用权限；缺省 read（E10 只开放 read / write） */
+export type PluginRpcPermission = 'read' | 'write';
+
 export interface PluginRpcContribution {
   name: string;
   description?: string;
+  permission?: PluginRpcPermission;
 }
 
 export interface PluginPanelContribution {
@@ -622,7 +626,18 @@ function readRpc(value: unknown): PluginRpcContribution[] {
     if (seen.has(name)) fail('plugin_manifest_invalid', `duplicate rpc name "${name}"`);
     seen.add(name);
     const description = optionalString(item.description, `${field}.description`);
-    return { name, ...(description !== undefined ? { description } : {}) };
+    let permission: PluginRpcPermission = 'read';
+    if (item.permission !== undefined) {
+      if (item.permission !== 'read' && item.permission !== 'write') {
+        fail('plugin_manifest_invalid', `${field}.permission must be read | write`);
+      }
+      permission = item.permission;
+    }
+    return {
+      name,
+      ...(description !== undefined ? { description } : {}),
+      permission,
+    };
   });
 }
 

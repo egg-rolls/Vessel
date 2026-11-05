@@ -1162,12 +1162,36 @@ async function runWithConfig(result: BootstrapResult) {
     }
 
     // 0.43：`plugins.list` / `plugin.changed` 的 base 列表要含体验型 child 插件；
-    // 贡献字段由 gateway 与 manager.contributionsFor 合并。
-    const pluginRuntimeEntries = (): Array<{ name: string; enabled: boolean }> =>
-      pluginHostManager?.statuses().map((status) => ({
-        name: status.id,
-        enabled: status.enabled,
-      })) ?? [];
+    // 贡献字段由 gateway 与 manager.contributionsFor 合并。E10：附带
+    // version / mode / status（serve 的 plugins 选项类型仍是 {name,enabled}，
+    // 子类型可结构兼容，不额外造类型）。
+    const pluginRuntimeEntries = (): Array<{
+      name: string;
+      enabled: boolean;
+      version?: string;
+      mode?: string;
+      status?: string;
+    }> => {
+      const descriptors = new Map(
+        (result.bundle?.pluginLoader.getChildMods() ?? []).map((descriptor) => [
+          descriptor.name,
+          descriptor,
+        ]),
+      );
+      return (
+        pluginHostManager?.statuses().map((status) => {
+          const descriptor = descriptors.get(status.id);
+          return {
+            name: status.id,
+            enabled: status.enabled,
+            ...(descriptor !== undefined
+              ? { version: descriptor.version, mode: descriptor.mode }
+              : {}),
+            status: status.status,
+          };
+        }) ?? []
+      );
+    };
 
     const gatewayOptions: GatewayOptions & {
       durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
