@@ -89,6 +89,7 @@ export function DomainNav({
   const { pages: pluginPages, panels: pluginPanels, methodsByPlugin } = usePluginContributions();
   const topPluginPages = pagesForNav(pluginPages, 'top');
   const observePluginPages = pagesForNav(pluginPages, 'observe');
+  const pluginsPluginPages = pagesForNav(pluginPages, 'plugins');
   const settingsPluginPages = pagesForNav(pluginPages, 'settings');
   const navPanels = panelsForSlot(pluginPanels, 'nav');
   const drawer = mode === 'drawer';
@@ -300,6 +301,7 @@ export function DomainNav({
             {group.id === 'network' && pluginGroup('plugins-observe', observePluginPages)}
           </Fragment>
         ))}
+        {pluginGroup('plugins-nav', pluginsPluginPages)}
         {pluginGroup('plugins-settings', settingsPluginPages)}
       </div>
       <div

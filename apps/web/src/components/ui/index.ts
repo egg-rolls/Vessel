@@ -36,4 +36,8 @@ export {
 } from './MessageActions';
 export { SearchInput } from './SearchInput';
 export { Section, type SectionProps } from './Section';
+export {
+  SidebarEntityCard,
+  type SidebarEntityCardProps,
+} from './SidebarEntityCard';
 export { Stat, type StatProps } from './Stat';

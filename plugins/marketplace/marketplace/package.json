@@ -45,22 +45,22 @@
       "pages": [
         {
           "id": "marketplace",
-          "title": "Browse plugins",
-          "nav": "settings",
+          "title": "Plugin marketplace",
+          "nav": "plugins",
           "order": 90,
           "entry": "browse.html"
         },
         {
           "id": "marketplace-installed",
-          "title": "Installed plugins",
-          "nav": "settings",
+          "title": "My plugins",
+          "nav": "plugins",
           "order": 91,
           "entry": "installed.html"
         },
         {
           "id": "marketplace-updates",
           "title": "Plugin updates",
-          "nav": "settings",
+          "nav": "plugins",
           "order": 92,
           "entry": "updates.html"
         }

@@ -87,8 +87,8 @@ export interface RpcResponseEnvelope<T = unknown> {
   error?: { code: string; message: string; details?: unknown };
 }
 
-/** plugin 导航归属；缺省当 `top`（CONTRACT-0.43 §2.1）。 */
-export type PluginNavSlot = 'observe' | 'settings' | 'top';
+/** plugin 导航归属；缺省当 `top`（CONTRACT-0.43 §2.1；0.45 增加 `plugins`）。 */
+export type PluginNavSlot = 'observe' | 'plugins' | 'settings' | 'top';
 
 /** panel 槽位（CONTRACT-0.43 §2.6）。 */
 export type PluginPanelSlot = 'run-detail' | 'session-detail' | 'nav';

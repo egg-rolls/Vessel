@@ -28,6 +28,7 @@ export function ChannelsPanel() {
   if (!hasToken) {
     return (
       <NotEnabledState
+        variant="page"
         title={t('common.notConnected')}
         reason={t('integrations.channels.noTokenReason')}
       />
@@ -36,6 +37,7 @@ export function ChannelsPanel() {
   if (!features.includes('feishu')) {
     return (
       <NotEnabledState
+        variant="page"
         title={t('integrations.channels.disabledTitle')}
         reason={t('integrations.channels.disabledReason')}
         hint={t('integrations.channels.disabledHint')}
@@ -52,6 +54,7 @@ export function ChannelsPanel() {
     if (code === 'not_found' || code === 'channel_disabled' || code === 'forbidden') {
       return (
         <NotEnabledState
+          variant="page"
           title={t('integrations.channels.disabledTitle')}
           reason={t('integrations.channels.disabledReason')}
           hint={t('integrations.channels.disabledHint')}

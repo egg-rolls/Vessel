@@ -84,6 +84,7 @@ export function ToolsPanel() {
   if (!hasToken) {
     return (
       <NotEnabledState
+        variant="page"
         title={t('common.notConnected')}
         reason={t('integrations.tools.noTokenReason')}
       />

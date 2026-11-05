@@ -75,24 +75,36 @@ export function ErrorState({
   );
 }
 
-/** 能力未启用/无权限：原因 + 如何启用，不提供「重试」。 */
+/**
+ * 能力未启用/无权限：原因 + 如何启用，不提供「重试」。
+ * `variant="page"` 用于整页能力页：内容居中、问号放大，不改变文字颜色。
+ */
 export function NotEnabledState({
   title,
   reason,
   hint,
   action,
+  variant = 'inline',
 }: {
   title: string;
   reason?: string;
   hint?: string;
   action?: ReactNode;
+  variant?: 'inline' | 'page';
 }) {
+  const page = variant === 'page';
   return (
-    <div className={cn('state-not-enabled', stateShell)}>
-      <span className={stateIcon} aria-hidden="true">
+    <div
+      className={cn(
+        'state-not-enabled',
+        stateShell,
+        page && 'min-h-60 items-center justify-center px-6 py-12 text-center',
+      )}
+    >
+      <span className={cn(stateIcon, page && 'text-3xl')} aria-hidden="true">
         ?
       </span>
-      <p className={stateTitle}>{title}</p>
+      <p className={cn(stateTitle, page && 'text-xl')}>{title}</p>
       {reason && <p className={stateDesc}>{reason}</p>}
       {hint && <p className="font-mono text-sm text-faint">{hint}</p>}
       {action && <div className={stateAction}>{action}</div>}

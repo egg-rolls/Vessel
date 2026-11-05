@@ -32,7 +32,7 @@ export interface PluginPanelItem {
   entry: string;
 }
 
-const NAV_SLOTS: ReadonlySet<string> = new Set(['observe', 'settings', 'top']);
+const NAV_SLOTS: ReadonlySet<string> = new Set(['observe', 'plugins', 'settings', 'top']);
 const PANEL_SLOTS: ReadonlySet<string> = new Set(['run-detail', 'session-detail', 'nav']);
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const RPC_METHOD = /^[a-z][a-z0-9_-]*$/;

@@ -125,7 +125,7 @@ function NodesList({
     );
   } else {
     body = (
-      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <ul className="entity-card-grid">
         {visible.map((node) => (
           <NodeRow
             key={nodeKeyOf(node)}

@@ -6,7 +6,7 @@
  * - 可选描述会让卡高在 2/4 行之间跳动，破坏列表的等高扫描。
  */
 import { ActionMenu, type ActionMenuItem } from '../../components/ActionMenu';
-import { Badge } from '../../components/ui';
+import { Badge, SidebarEntityCard } from '../../components/ui';
 import type { NodeView } from '../../gateway/NodeProvider';
 import type { TeamSummary } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -20,31 +20,33 @@ interface TeamCardProps {
 
 export function TeamCard({ node, team, menuItems, onOpen }: TeamCardProps) {
   return (
-    <li className="teams-card">
-      <button
-        type="button"
-        className="teams-card-open"
-        title={t('teams.card.open')}
-        onClick={() => onOpen(node, team)}
-      >
-        <span className="flex items-center justify-between gap-2">
-          <span className="min-w-0 truncate font-semibold">{team.name || team.team_id}</span>
+    <SidebarEntityCard
+      as="li"
+      titleText={t('teams.card.open')}
+      onClick={() => onOpen(node, team)}
+      title={
+        <>
+          <span className="min-w-0 truncate">{team.name || team.team_id}</span>
           {team.archived_at !== undefined && <Badge tone="warn">{t('teams.card.archived')}</Badge>}
-        </span>
-        <span className="flex flex-wrap gap-3 text-sm text-muted">
+        </>
+      }
+      meta={
+        <>
           <span>{t('teams.card.members', { members: team.member_count })}</span>
           <span>
             {team.online_count !== undefined
               ? t('teams.card.online', { online: team.online_count })
               : '—'}
           </span>
-        </span>
-      </button>
-      <ActionMenu
-        className="teams-card-menu"
-        label={`${t('common.moreActions')}: ${team.name || team.team_id}`}
-        items={menuItems(node, team)}
-      />
-    </li>
+        </>
+      }
+      trailing={
+        <ActionMenu
+          className="items-center pr-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-compact:opacity-100"
+          label={`${t('common.moreActions')}: ${team.name || team.team_id}`}
+          items={menuItems(node, team)}
+        />
+      }
+    />
   );
 }

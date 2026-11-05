@@ -1,3 +1,122 @@
+/* ── 自适应实体卡片网格 ────────────────────────────────
+   min 20rem：窄容器自动降为单列，宽容器自动增加列数，不依赖固定断点。 */
+.entity-card-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  align-items: stretch;
+}
+
+/* ── 侧栏实体卡片（会话 / Team 共用外壳） ──────────────
+   hover / active / focus / radius / padding / border 只在这里定义一次。 */
+.sidebar-entity-card {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  transition:
+    background 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    box-shadow 0.16s var(--ease);
+}
+
+.sidebar-entity-card:hover {
+  border-color: var(--line);
+  background: var(--surface-hover);
+  box-shadow: var(--elev-1);
+}
+
+.sidebar-entity-card.is-active {
+  background: var(--accent-soft);
+}
+
+.sidebar-entity-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-entity-main:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-entity-card.is-static .sidebar-entity-main {
+  cursor: default;
+}
+
+.sidebar-entity-leading {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.sidebar-entity-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+
+.sidebar-entity-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.sidebar-entity-card.is-active .sidebar-entity-title {
+  color: var(--accent-ink);
+}
+
+.sidebar-entity-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-entity-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sidebar-entity-trailing {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding-right: 4px;
+}
+
 /* ── 面板 / 列表 / 表格 ───────────────────────────────── */
 
 .panel {

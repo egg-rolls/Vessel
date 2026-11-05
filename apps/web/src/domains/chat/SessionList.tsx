@@ -4,7 +4,7 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
-import { Button, Input, SearchInput } from '../../components/ui';
+import { Button, Input, SearchInput, SidebarEntityCard } from '../../components/ui';
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -230,35 +230,23 @@ export function SessionList({
         ) : (
           <>
             {showDefault && defaultSession && (
-              <div
-                className={`session-row default ${
-                  defaultSession.sessionId === selectedId ? 'active' : ''
-                }`.trim()}
-              >
-                <button
-                  type="button"
-                  className="session-main"
-                  aria-current={defaultSession.sessionId === selectedId ? 'true' : undefined}
-                  onClick={() => onSelect(defaultSession.sessionId)}
-                >
-                  <span className="session-title">
-                    <span className="session-title-text">{defaultSession.label}</span>
-                  </span>
-                  <span className="session-agent">
-                    {defaultSession.bodyCount > 1
-                      ? t('team.member.liveBodies', { count: defaultSession.bodyCount })
-                      : t('team.member.currentBody')}
-                  </span>
-                </button>
-              </div>
+              <SidebarEntityCard
+                active={defaultSession.sessionId === selectedId}
+                onClick={() => onSelect(defaultSession.sessionId)}
+                title={<span className="min-w-0 truncate">{defaultSession.label}</span>}
+                subtitle={
+                  defaultSession.bodyCount > 1
+                    ? t('team.member.liveBodies', { count: defaultSession.bodyCount })
+                    : t('team.member.currentBody')
+                }
+              />
             )}
             {draftActive && (
-              <div className="session-row draft active">
-                <div className="session-main">
-                  <span className="session-title">{t('chat.draft.title')}</span>
-                  <span className="session-preview">{t('chat.draft.meta')}</span>
-                </div>
-              </div>
+              <SidebarEntityCard
+                active
+                title={<span className="min-w-0 truncate">{t('chat.draft.title')}</span>}
+                subtitle={t('chat.draft.meta')}
+              />
             )}
             {groupSessionsByDay(sessions).map((group) => (
               <Fragment key={group.key || 'unknown'}>
@@ -281,102 +269,98 @@ export function SessionList({
                     (session.preview && session.preview !== session.title ? session.preview : '');
                   // preview 只进 title tooltip，不再占一行布局。
                   const titleTooltip = preview ? `${title} — ${preview}` : title;
+                  if (editing) {
+                    return (
+                      <div className="session-rename" key={session.session_id}>
+                        <Input
+                          ref={renameRef}
+                          value={draft}
+                          aria-label={t('chat.sessionList.idLabel')}
+                          onFocus={(event) => event.currentTarget.select()}
+                          onChange={(event) => {
+                            setDraft(event.target.value);
+                            setRenameError(null);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              void commitRename(session.session_id);
+                            } else if (event.key === 'Escape') {
+                              event.preventDefault();
+                              cancelRename();
+                            }
+                          }}
+                          onBlur={() => void commitRename(session.session_id)}
+                        />
+                        {renameError && (
+                          <span className="text-xs text-danger leading-snug" role="alert">
+                            {renameError}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  }
+                  const subtitle = agentAddress ? (
+                    agentAddress
+                  ) : primarySessionIds?.has(session.session_id) ? (
+                    <span className="text-accent-ink">{t('team.member.primaryBadge')}</span>
+                  ) : undefined;
                   return (
-                    <div
-                      className={`session-row group ${active ? 'active' : ''}`.trim()}
+                    <SidebarEntityCard
                       key={session.session_id}
-                    >
-                      {editing ? (
-                        <div className="session-rename">
-                          <Input
-                            ref={renameRef}
-                            value={draft}
-                            aria-label={t('chat.sessionList.idLabel')}
-                            onFocus={(event) => event.currentTarget.select()}
-                            onChange={(event) => {
-                              setDraft(event.target.value);
-                              setRenameError(null);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault();
-                                void commitRename(session.session_id);
-                              } else if (event.key === 'Escape') {
-                                event.preventDefault();
-                                cancelRename();
-                              }
-                            }}
-                            onBlur={() => void commitRename(session.session_id)}
-                          />
-                          {renameError && (
-                            <span className="text-xs text-danger leading-snug" role="alert">
-                              {renameError}
-                            </span>
-                          )}
-                        </div>
-                      ) : (
+                      active={active}
+                      onClick={() => onSelect(session.session_id)}
+                      leading={<StatusGlyph status={session.status} />}
+                      title={
                         <>
-                          <button
-                            type="button"
-                            className="session-main"
-                            aria-current={active ? 'true' : undefined}
-                            onClick={() => onSelect(session.session_id)}
-                          >
-                            <span className="session-title">
-                              <StatusGlyph status={session.status} />
-                              <Tooltip label={titleTooltip}>
-                                <span className="session-title-text">{title}</span>
-                              </Tooltip>
-                              {pendingCount > 0 && (
-                                <Tooltip label={t('chat.session.pending', { count: pendingCount })}>
-                                  <span className="session-pending-badge">
-                                    <span aria-hidden="true">{pendingCount}</span>
-                                    <span className="sr-only">
-                                      {t('chat.session.pending', { count: pendingCount })}
-                                    </span>
-                                  </span>
-                                </Tooltip>
-                              )}
-                            </span>
-                            {agentAddress && <span className="session-agent">{agentAddress}</span>}
-                            {!agentAddress && primarySessionIds?.has(session.session_id) && (
-                              <span className="session-agent text-accent-ink">
-                                {t('team.member.primaryBadge')}
+                          <Tooltip label={titleTooltip}>
+                            <span className="min-w-0 truncate">{title}</span>
+                          </Tooltip>
+                          {pendingCount > 0 && (
+                            <Tooltip label={t('chat.session.pending', { count: pendingCount })}>
+                              <span className="session-pending-badge">
+                                <span aria-hidden="true">{pendingCount}</span>
+                                <span className="sr-only">
+                                  {t('chat.session.pending', { count: pendingCount })}
+                                </span>
                               </span>
-                            )}
-                          </button>
-                          <ActionMenu
-                            className="items-center pr-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-compact:opacity-100"
-                            label={t('chat.sessionList.actions', { title })}
-                            items={[
-                              {
-                                id: 'rename',
-                                label: t('chat.sessionList.rename'),
-                                disabled: writesDisabled,
-                                onSelect: () => startRename(session),
-                              },
-                              {
-                                id: 'copy',
-                                label: t('chat.session.copyId'),
-                                onSelect: () => copyId(session.session_id),
-                              },
-                              {
-                                id: 'runs',
-                                label: t('chat.sessionList.viewRuns'),
-                                onSelect: () => onViewRuns(session.session_id),
-                              },
-                              {
-                                id: 'delete',
-                                label: t('chat.sessionList.delete'),
-                                danger: true,
-                                disabled: writesDisabled,
-                                onSelect: () => onDelete(session),
-                              },
-                            ]}
-                          />
+                            </Tooltip>
+                          )}
                         </>
-                      )}
-                    </div>
+                      }
+                      subtitle={subtitle}
+                      trailing={
+                        <ActionMenu
+                          className="items-center pr-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-compact:opacity-100"
+                          label={t('chat.sessionList.actions', { title })}
+                          items={[
+                            {
+                              id: 'rename',
+                              label: t('chat.sessionList.rename'),
+                              disabled: writesDisabled,
+                              onSelect: () => startRename(session),
+                            },
+                            {
+                              id: 'copy',
+                              label: t('chat.session.copyId'),
+                              onSelect: () => copyId(session.session_id),
+                            },
+                            {
+                              id: 'runs',
+                              label: t('chat.sessionList.viewRuns'),
+                              onSelect: () => onViewRuns(session.session_id),
+                            },
+                            {
+                              id: 'delete',
+                              label: t('chat.sessionList.delete'),
+                              danger: true,
+                              disabled: writesDisabled,
+                              onSelect: () => onDelete(session),
+                            },
+                          ]}
+                        />
+                      }
+                    />
                   );
                 })}
               </Fragment>

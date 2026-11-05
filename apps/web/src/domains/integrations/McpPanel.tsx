@@ -111,6 +111,7 @@ export function McpPanel() {
   if (!hasToken) {
     return (
       <NotEnabledState
+        variant="page"
         title={t('common.notConnected')}
         reason={t('integrations.mcp.noTokenReason')}
       />
@@ -119,6 +120,7 @@ export function McpPanel() {
   if (!features.includes('mcp-status')) {
     return (
       <NotEnabledState
+        variant="page"
         title={t('integrations.mcp.disabledTitle')}
         reason={t('integrations.mcp.disabledReason')}
         hint={t('integrations.mcp.disabledHint')}
@@ -167,6 +169,7 @@ export function McpPanel() {
         // 同 ChannelsPanel：`mcp_disabled` 是「没配 mcp_servers」的配置状态，不是故障。
         errorState?.code === 'mcp_disabled' || errorState?.code === 'not_found' ? (
           <NotEnabledState
+            variant="page"
             title={t('integrations.mcp.disabledTitle')}
             reason={t('integrations.mcp.disabledReason')}
             hint={t('integrations.mcp.disabledHint')}

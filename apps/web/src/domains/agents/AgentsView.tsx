@@ -302,7 +302,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     );
   } else {
     body = (
-      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <ul className="entity-card-grid">
         {filtered.map((agent) => (
           <AgentListRow
             key={`${nodeKeyOf(agent.node)}:${agent.team?.team_id ?? '-'}:${agent.member.agent_id}`}
@@ -317,19 +317,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader
-        title={t('agents.title')}
-        tenantId={tenantId}
-        actions={
-          <Button
-            variant="primary"
-            disabled={writableNodes.length === 0}
-            onClick={() => setCreateOpen(true)}
-          >
-            {t('agents.create')}
-          </Button>
-        }
-      />
+      <PageHeader title={t('agents.title')} tenantId={tenantId} />
       <div className="mt-5 flex flex-col gap-4">
         <div className="net-toolbar mt-3.5">
           <SearchInput
@@ -391,14 +379,23 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
               </option>
             ))}
           </Select>
-          <span className="ml-auto text-sm tabular-nums text-muted">
-            {t('agents.count', { shown: filtered.length, total: agents.length })}
-          </span>
-          {hasFilters && (
-            <Button size="small" onClick={clearFilters}>
-              {t('agents.filter.clear')}
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-sm tabular-nums text-muted">
+              {t('agents.count', { shown: filtered.length, total: agents.length })}
+            </span>
+            {hasFilters && (
+              <Button size="small" onClick={clearFilters}>
+                {t('agents.filter.clear')}
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              disabled={writableNodes.length === 0}
+              onClick={() => setCreateOpen(true)}
+            >
+              {t('agents.create')}
             </Button>
-          )}
+          </div>
         </div>
 
         {(failed.length > 0 || partialErrors > 0) && (
