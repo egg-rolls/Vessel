@@ -93,11 +93,11 @@
   background: var(--bg);
 }
 
-/* ── Team 输入框：0.45 起不再显示 ocean-green 焦点环 ────
-   卡片与 textarea 的 focus-within / focus-visible 环都去掉；
-   其它区域（按钮、列表行等）的焦点态保持不变。 */
+/* ── Team 输入框：只保留外层 composer 的焦点环 ──────────
+   与 Chat composer 同一口径：容器 `:focus-within` 承担 `--focus-ring`，
+   textarea 自身不画环，避免输入框与容器双层。 */
 .composer.team-composer.relative:focus-within {
-  box-shadow: var(--elev-2);
+  box-shadow: var(--elev-2), var(--focus-ring);
 }
 
 .composer.team-composer.relative textarea:focus,
