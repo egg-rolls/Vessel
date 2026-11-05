@@ -1,5 +1,5 @@
 import { Badge, Button, DataTable, type DataTableColumn } from '@vessel-agent/plugin-ui';
-import type { Translator } from '../i18n';
+import { SCOPE_MESSAGE_KEY, type Translator } from '../i18n';
 import type { InstalledItem } from '../types';
 
 /** Shared table for "My plugins" and "Updates". */
@@ -38,7 +38,7 @@ export function InstalledTable({
       hide: 'compact',
       cell: (item) => (
         <Badge tone={item.scope === 'builtin' ? 'info' : 'neutral'}>
-          {t(`scope.${item.scope}`)}
+          {t(SCOPE_MESSAGE_KEY[item.scope])}
         </Badge>
       ),
     },

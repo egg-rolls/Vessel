@@ -21,7 +21,7 @@ import { PermissionList } from '../components/Permissions';
 import { RegistryBanners } from '../components/RegistryBanners';
 import { RegistrySetup, RegistryUnreachable } from '../components/RegistrySetup';
 import { Banner, EmptyState, ErrorState, LoadingState } from '../components/States';
-import type { Translator } from '../i18n';
+import { SCOPE_MESSAGE_KEY, type Translator } from '../i18n';
 import type {
   DetailResult,
   RegistryMeta,
@@ -38,7 +38,7 @@ interface PendingInstall {
   registry?: RegistryMeta;
 }
 
-function packageItems(version: RegistryVersion): KeyValueItem[] {
+function packageItems(version: RegistryVersion, t: Translator): KeyValueItem[] {
   return [
     {
       key: 'sha256',
@@ -47,8 +47,8 @@ function packageItems(version: RegistryVersion): KeyValueItem[] {
     },
     {
       key: 'size',
-      label: 'size',
-      value: `${version.asset.size.toLocaleString('en-US')} bytes`,
+      label: t('package.size'),
+      value: t('package.bytes', { size: version.asset.size.toLocaleString('en-US') }),
     },
   ];
 }
@@ -86,7 +86,7 @@ function Disclosure({
         <h3 className="font-mono text-2xs tracking-widest text-faint uppercase">
           {t('permissions.package')}
         </h3>
-        <KeyValueList items={packageItems(version)} />
+        <KeyValueList items={packageItems(version, t)} />
       </div>
       <p className="text-sm text-muted">{t('disclosure.inactive')}</p>
     </div>
@@ -371,7 +371,10 @@ export function MarketplaceView({
             <Banner tone={installedVersion.enabled ? 'success' : 'warn'}>
               {t(
                 installedVersion.enabled ? 'disclosure.installed' : 'disclosure.installedDisabled',
-                { version: installedVersion.version, scope: installedVersion.scope },
+                {
+                  version: installedVersion.version,
+                  scope: t(SCOPE_MESSAGE_KEY[installedVersion.scope]),
+                },
               )}
             </Banner>
           ) : null}
@@ -395,7 +398,9 @@ export function MarketplaceView({
                     </div>
                     <p className="mt-1 font-mono text-xs text-muted wrap-anywhere">
                       sha256 {version.asset.sha256.slice(0, 16)}… ·{' '}
-                      {version.asset.size.toLocaleString('en-US')} bytes
+                      {t('package.bytes', {
+                        size: version.asset.size.toLocaleString('en-US'),
+                      })}
                     </p>
                     <details className="mt-1">
                       <summary className="cursor-pointer text-sm text-muted">

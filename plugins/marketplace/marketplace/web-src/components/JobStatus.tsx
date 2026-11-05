@@ -1,4 +1,4 @@
-import type { Translator } from '../i18n';
+import { PHASE_MESSAGE_KEY, type Translator } from '../i18n';
 import type { JobDto } from '../types';
 import { Banner } from './States';
 
@@ -46,12 +46,14 @@ export function JobStatus({ state, t }: { state: JobState | null; t: Translator 
   const total = job.bytes_total;
   const done = job.bytes_done;
   const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const phaseKey = PHASE_MESSAGE_KEY[job.phase];
+  const phase = phaseKey === undefined ? job.phase : t(phaseKey);
 
   return (
     <div aria-live="polite" className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p role="status" className="text-sm text-ink">
-          {t('job.running', { label: state.label, phase: job.phase })}
+          {t('job.running', { label: state.label, phase })}
         </p>
         <span className="font-mono text-xs text-muted">
           {total > 0 ? `${fmtBytes(done)} / ${fmtBytes(total)}` : ''}

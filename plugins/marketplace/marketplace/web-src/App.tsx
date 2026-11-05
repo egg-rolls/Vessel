@@ -35,6 +35,9 @@ export function App() {
     applyHostContext(host);
   }, [host]);
   useEffect(() => watchHostContext(setHost), []);
+  useEffect(() => {
+    document.title = t('app.title');
+  }, [t]);
   useEffect(() => () => api.dispose(), [api]);
 
   // Host -> plugin refresh: debounce bursts of `plugin.changed` into one reload.

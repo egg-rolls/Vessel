@@ -6,7 +6,7 @@ import { InstalledTable } from '../components/InstalledTable';
 import { RegistryBanners } from '../components/RegistryBanners';
 import { RegistryErrorNote } from '../components/RegistrySetup';
 import { Banner, EmptyState, ErrorState, LoadingState } from '../components/States';
-import type { Translator } from '../i18n';
+import { SCOPE_MESSAGE_KEY, type Translator } from '../i18n';
 import type { InstalledItem, InstalledResult, StartJobResult } from '../types';
 
 export function InstalledView({
@@ -116,7 +116,7 @@ export function InstalledView({
               name: pendingRemove.name || pendingRemove.id,
               version: pendingRemove.version,
               path: pendingRemove.path,
-              scope: pendingRemove.scope,
+              scope: t(SCOPE_MESSAGE_KEY[pendingRemove.scope]),
             })}
           </p>
         ) : null}
