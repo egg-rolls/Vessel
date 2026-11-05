@@ -449,6 +449,8 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
                 contributions: {
                   type: 'object',
                   properties: {
+                    // E5：自定义分组（v1 最多一个）。
+                    navGroups: { type: 'array', items: { type: 'object' } },
                     pages: { type: 'array', items: { type: 'object' } },
                     panels: { type: 'array', items: { type: 'object' } },
                     commands: { type: 'array', items: { type: 'object' } },

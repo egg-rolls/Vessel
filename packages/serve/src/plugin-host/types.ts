@@ -39,8 +39,46 @@ export type PluginRuntimeStatus =
 /** manifest 的 side 字段 */
 export type PluginSide = 'backend' | 'ui' | 'both';
 
-/** 页面导航分区（0.45 增加固定 `plugins` 组，marketplace 页面使用） */
-export type PluginNav = 'observe' | 'settings' | 'top' | 'plugins';
+/** 内置导航分组（固定顺序，plugin 不可占用这些 id）。 */
+export const PLUGIN_BUILTIN_NAV = ['top', 'observe', 'settings', 'plugins'] as const;
+
+/** 内置导航分组 id */
+export type PluginBuiltinNav = (typeof PLUGIN_BUILTIN_NAV)[number];
+
+/**
+ * 页面导航分区：内置分组或本 plugin 自己的 `plugin:<pluginId>`。
+ * 跨 plugin 分组由运行时校验拒绝（`plugin_manifest_invalid`）。
+ */
+export type PluginNav = PluginBuiltinNav | `plugin:${string}`;
+
+/** web 现有图标白名单（CONTRACT-0.43 §2.9；不接受任意 SVG）。 */
+export const PLUGIN_ICON_NAMES = [
+  'chat',
+  'hub',
+  'gateway',
+  'nodes',
+  'teams',
+  'agents',
+  'runs',
+  'tools',
+  'mcp',
+  'channels',
+  'plugins',
+  'observe',
+  'settings',
+] as const;
+
+/** 白名单图标名 */
+export type PluginIconName = (typeof PLUGIN_ICON_NAMES)[number];
+
+/** `contributes.navGroups[]`（v1 每个 plugin 最多一个） */
+export interface PluginNavGroup {
+  /** 必须是 `plugin:<pluginId>`。 */
+  id: string;
+  title: string;
+  icon?: PluginIconName;
+  order?: number;
+}
 
 /** 静态 UI 挂载点 */
 export interface PluginStaticMount {
@@ -55,6 +93,7 @@ export interface PluginPageContribution {
   id: string;
   title: string;
   nav?: PluginNav;
+  icon?: PluginIconName;
   order?: number;
   /** 相对 `ui.dir` 的入口文件。 */
   entry: string;
@@ -86,6 +125,8 @@ export interface PluginRpcContribution {
 
 /** `contributes`（只保留宿主需要的键） */
 export interface PluginManifestContributions {
+  /** v1 最多一个自定义分组：`plugin:<pluginId>`。 */
+  navGroups?: PluginNavGroup[];
   pages?: PluginPageContribution[];
   panels?: PluginPanelContribution[];
   commands?: PluginCommandContribution[];
@@ -137,10 +178,18 @@ export interface PluginDescriptor {
 
 /** `plugins.list` 的 E1 渲染字段（contract §2.7） */
 export interface PluginRenderContributions {
+  /** E5：自定义分组（v1 最多一个），按 order 升序。 */
+  navGroups: Array<{
+    id: string;
+    title: string;
+    icon?: PluginIconName;
+    order: number;
+  }>;
   pages: Array<{
     id: string;
     title: string;
     nav: PluginNav;
+    icon?: PluginIconName;
     order: number;
     entry: string;
     route: string;

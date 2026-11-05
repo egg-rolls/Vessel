@@ -30,6 +30,7 @@ import type {
   PluginStaticMount,
   PluginStatusEntry,
 } from './types.js';
+import { PLUGIN_BUILTIN_NAV, PLUGIN_ICON_NAMES } from './types.js';
 
 /** 重启窗口与上限（contract §3.4） */
 export const PLUGIN_RESTART_WINDOW_MS = 10 * 60 * 1000;
@@ -94,6 +95,17 @@ function isWithin(root: string, target: string): boolean {
 }
 
 /** 相对 UI 入口：拒绝绝对路径、`..`、反斜杠。 */
+function isPluginIconName(value: unknown): boolean {
+  return typeof value === 'string' && (PLUGIN_ICON_NAMES as readonly string[]).includes(value);
+}
+
+/** 内置分组，或本 plugin 自己声明的 `plugin:<id>`；跨 plugin 引用拒绝。 */
+function isValidPageNav(nav: unknown, pluginId: string, hasOwnGroup: boolean): boolean {
+  if (typeof nav !== 'string' || nav.length === 0) return false;
+  if ((PLUGIN_BUILTIN_NAV as readonly string[]).includes(nav)) return true;
+  return nav === `plugin:${pluginId}` && hasOwnGroup;
+}
+
 function isSafeRelativeEntry(entry: unknown): entry is string {
   if (typeof entry !== 'string' || entry.length === 0) return false;
   if (entry.startsWith('/') || entry.startsWith('\\')) return false;
@@ -167,6 +179,47 @@ function validateDescriptor(input: PluginDescriptor): PluginDescriptor {
     }
     rpcNames.add(method.name);
   }
+  // E5：v1 每个 plugin 最多一个自定义分组，id 必须是 `plugin:<pluginId>`。
+  const rawNavGroups = contributes.navGroups;
+  if (rawNavGroups !== undefined && !Array.isArray(rawNavGroups)) {
+    throw pluginError('plugin_manifest_invalid', 'navGroups must be an array.', { id: input.id });
+  }
+  const navGroups = rawNavGroups ?? [];
+  if (navGroups.length > 1) {
+    throw pluginError('plugin_manifest_invalid', 'At most one navGroups entry is allowed.', {
+      id: input.id,
+    });
+  }
+  const ownGroupId = `plugin:${input.id}`;
+  for (const group of navGroups) {
+    if (group.id !== ownGroupId || (PLUGIN_BUILTIN_NAV as readonly string[]).includes(group.id)) {
+      throw pluginError('plugin_manifest_invalid', 'navGroups[].id must be plugin:<pluginId>.', {
+        id: input.id,
+        group: group.id,
+      });
+    }
+    if (typeof group.title !== 'string' || group.title.length === 0) {
+      throw pluginError('plugin_manifest_invalid', 'navGroups[].title is required.', {
+        id: input.id,
+      });
+    }
+    if (group.icon !== undefined && !isPluginIconName(group.icon)) {
+      throw pluginError('plugin_manifest_invalid', 'navGroups[].icon is invalid.', {
+        id: input.id,
+        icon: group.icon,
+      });
+    }
+    if (
+      group.order !== undefined &&
+      (typeof group.order !== 'number' || !Number.isFinite(group.order))
+    ) {
+      throw pluginError('plugin_manifest_invalid', 'navGroups[].order must be a number.', {
+        id: input.id,
+      });
+    }
+  }
+  const hasOwnGroup = navGroups.some((group) => group.id === ownGroupId);
+
   for (const page of contributes.pages ?? []) {
     if (typeof page.id !== 'string' || page.id.length === 0 || typeof page.title !== 'string') {
       throw pluginError('plugin_manifest_invalid', 'pages[] requires id and title.', {
@@ -178,16 +231,16 @@ function validateDescriptor(input: PluginDescriptor): PluginDescriptor {
         id: input.id,
       });
     }
-    if (
-      page.nav !== undefined &&
-      page.nav !== 'observe' &&
-      page.nav !== 'settings' &&
-      page.nav !== 'top' &&
-      page.nav !== 'plugins'
-    ) {
+    if (page.nav !== undefined && !isValidPageNav(page.nav, input.id, hasOwnGroup)) {
       throw pluginError('plugin_manifest_invalid', 'pages[].nav is invalid.', {
         id: input.id,
         nav: page.nav,
+      });
+    }
+    if (page.icon !== undefined && !isPluginIconName(page.icon)) {
+      throw pluginError('plugin_manifest_invalid', 'pages[].icon is invalid.', {
+        id: input.id,
+        icon: page.icon,
       });
     }
     if (
@@ -928,14 +981,26 @@ export function renderContributions(
 ): PluginRenderContributions | undefined {
   const contributes = descriptor.contributes;
   if (contributes === undefined) return undefined;
-  const pages = (contributes.pages ?? []).map((page) => ({
-    id: page.id,
-    title: page.title,
-    nav: page.nav ?? 'observe',
-    order: page.order ?? 100,
-    entry: safeEntry(page.entry),
-    route: routeFor(descriptor.id, page.entry),
-  }));
+  const navGroups = (contributes.navGroups ?? [])
+    .map((group) => ({
+      id: group.id,
+      title: group.title,
+      ...(group.icon !== undefined ? { icon: group.icon } : {}),
+      order: group.order ?? 100,
+    }))
+    .sort((a, b) => a.order - b.order);
+  const pages = (contributes.pages ?? [])
+    .map((page) => ({
+      id: page.id,
+      title: page.title,
+      nav: page.nav ?? 'observe',
+      ...(page.icon !== undefined ? { icon: page.icon } : {}),
+      order: page.order ?? 100,
+      entry: safeEntry(page.entry),
+      route: routeFor(descriptor.id, page.entry),
+    }))
+    // E5：分组内页面按 order 升序；同 order 保持 manifest 顺序。
+    .sort((a, b) => a.order - b.order);
   const panels = (contributes.panels ?? []).map((panel) => ({
     slot: panel.slot,
     id: panel.id,
@@ -953,7 +1018,7 @@ export function renderContributions(
   if (pages.length === 0 && panels.length === 0 && commands.length === 0 && rpc.length === 0) {
     return undefined;
   }
-  return { pages, panels, commands, rpc };
+  return { navGroups, pages, panels, commands, rpc };
 }
 
 export { PluginHostError };

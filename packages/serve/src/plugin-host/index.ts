@@ -53,6 +53,7 @@ export {
 } from './registry.js';
 export { PLUGIN_CSP, pluginStaticId, servePluginAsset } from './static.js';
 export type {
+  PluginBuiltinNav,
   PluginCommandContribution,
   PluginContributionsSnapshot,
   PluginDependencies,
@@ -61,8 +62,10 @@ export type {
   PluginEventDto,
   PluginEventSource,
   PluginHostManagerLike,
+  PluginIconName,
   PluginManifestContributions,
   PluginNav,
+  PluginNavGroup,
   PluginPageContribution,
   PluginPanelContribution,
   PluginPermissions,
@@ -75,3 +78,4 @@ export type {
   PluginStaticMount,
   PluginStatusEntry,
 } from './types.js';
+export { PLUGIN_BUILTIN_NAV, PLUGIN_ICON_NAMES } from './types.js';
