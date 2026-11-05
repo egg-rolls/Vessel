@@ -187,9 +187,20 @@ export function buildCapabilityManifest(input: {
 /** 外部 RPC 客户端形状（与 asm `RpcDispatcher` 结构一致） */
 export type RpcDispatcher = (request: RpcRequest) => Promise<RpcResponse>;
 
+/**
+ * 动态方法源（0.43 plugin）：静态表未命中时回退到这里。
+ * 静态方法始终优先；实现必须在 `list()` 中只返回当前已注册的方法。
+ */
+export interface RpcDynamicMethodSource {
+  resolve(name: string): RpcMethodDefinition | undefined;
+  list(): RpcMethodDefinition[];
+}
+
 /** 分发器选项 */
 export interface CreateRpcDispatcherOptions {
   table: RpcMethodTable;
+  /** 可选：`plugin.<id>.<name>` 等运行期注册的方法。 */
+  dynamic?: RpcDynamicMethodSource;
   /** LocalRpcClient 使用的 principal（进程内嵌） */
   localPrincipal: RpcMethodContext['principal'];
   /** 由 gateway 提供：解析目标 tenant / all_tenants */
@@ -463,7 +474,8 @@ export function createRpcDispatcher(options: CreateRpcDispatcherOptions): RpcDis
     connection: RpcMethodContext['connection'],
   ): Promise<RpcResponse> {
     const id = typeof request.id === 'string' ? request.id : '';
-    const method = table.byName.get(request.method);
+    // 静态方法优先；动态源（plugin.*）只在静态表未命中时解析。
+    const method = table.byName.get(request.method) ?? options.dynamic?.resolve(request.method);
     if (!method) {
       return failure(id, {
         code: 'not_found',
@@ -535,13 +547,23 @@ export function createRpcDispatcher(options: CreateRpcDispatcherOptions): RpcDis
   const dispatch: RpcDispatcher = (request) =>
     dispatchFor(request, options.localPrincipal, 'local');
 
+  /** manifest 与分发同源：静态方法 + 当前动态方法（静态重名时静态胜出）。 */
+  function manifestTable(): RpcMethodTable {
+    const dynamic = options.dynamic?.list() ?? [];
+    if (dynamic.length === 0) return table;
+    return {
+      methods: [...table.methods, ...dynamic.filter((method) => !table.byName.has(method.name))],
+      byName: table.byName,
+    };
+  }
+
   return {
     dispatch,
     dispatchFor,
     manifest: () =>
       buildCapabilityManifest({
         version: options.version ?? '0.0.0',
-        table,
+        table: manifestTable(),
         ...(options.describe?.().tools !== undefined ? { tools: options.describe?.().tools } : {}),
         ...(options.describe?.().plugins !== undefined
           ? { plugins: options.describe?.().plugins }

@@ -6,6 +6,7 @@
 
 import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel-agent/config';
 import type { PluginHost } from '@vessel-agent/core';
+import type { PluginRenderContributions } from '../../plugin-host/types.js';
 import type { NodeInfo, ProtocolInfo, ToolInfo } from '../../protocol.js';
 import {
   buildCapabilityManifest,
@@ -76,6 +77,8 @@ export interface ConfigMethodsDeps {
   methodTable(): RpcMethodTable;
   toolDescriptionsForTenant(tenantId: string): Array<{ name: string; description?: string }>;
   pluginsForTenant(tenantId: string): Array<{ name: string; enabled: boolean }>;
+  /** 0.43 E1：只给 enabled 的体验型 plugin 附加渲染字段（additive）。 */
+  pluginsContributionsForTenant?(tenantId: string): Record<string, PluginRenderContributions>;
   pluginHostFor(tenantId: string): PluginHost | undefined;
   /** health.get 的实时状态。 */
   clientCount(): number;
@@ -427,12 +430,34 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
               properties: {
                 name: { type: 'string' },
                 enabled: { type: 'boolean' },
+                // 0.43 E1：additive；能力插件 / 无渲染贡献不返回。
+                contributions: {
+                  type: 'object',
+                  properties: {
+                    pages: { type: 'array', items: { type: 'object' } },
+                    panels: { type: 'array', items: { type: 'object' } },
+                    commands: { type: 'array', items: { type: 'object' } },
+                    // E1 amendment：bare RPC 方法名。
+                    rpc: { type: 'array', items: { type: 'string' } },
+                  },
+                },
               },
             },
           },
         },
       },
-      handler: (_params, ctx) => ({ plugins: deps.pluginsForTenant(ctx.tenantId) }),
+      handler: (_params, ctx) => {
+        const plugins = deps.pluginsForTenant(ctx.tenantId);
+        const contributions = deps.pluginsContributionsForTenant?.(ctx.tenantId);
+        if (contributions === undefined) return { plugins };
+        return {
+          plugins: plugins.map((plugin) => {
+            if (!plugin.enabled) return plugin;
+            const extra = contributions[plugin.name];
+            return extra !== undefined ? { ...plugin, contributions: extra } : plugin;
+          }),
+        };
+      },
     },
   ];
 }

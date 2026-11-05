@@ -105,6 +105,8 @@ import { serveStatic } from './gateway/static.js';
 import { createInteractionsRegistry } from './interactions-registry.js';
 import type { McpGatewayOptions } from './mcp.js';
 import type { MetricsProvider, MetricsSnapshot } from './metrics.js';
+import { createHubPluginEventSource, type PluginHostManagerLike } from './plugin-host/index.js';
+import { servePluginAsset } from './plugin-host/static.js';
 import {
   type ClientFrame,
   type NodeInfo,
@@ -206,6 +208,12 @@ export interface GatewayOptions {
   nodeId?: string;
   /** 静态 web 目录（可选，托管 apps/web/dist） */
   staticDir?: string;
+  /**
+   * 0.43：体验型 plugin 宿主（子进程 / 动态 RPC / 静态 UI / 事件转发）。
+   * 缺省 = 不挂载 `/plugins/*`，`plugins.list` 不带 contributions。
+   * 与 core 的能力插件 `pluginHost` 无关。
+   */
+  pluginHostManager?: PluginHostManagerLike;
   /** 请求体上限（字节，默认 1 MiB） */
   maxBodyBytes?: number;
   /**
@@ -550,6 +558,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const defaultTenantId = opts.defaultTenantId ?? DEFAULT_TENANT_ID;
   const redactor: TraceRedactor = opts.redactor ?? createDefaultTraceRedactor();
+  // 0.43：plugin 事件转发走 hub 的 raw fan-in；先过 gateway 的 redactor。
+  if (opts.pluginHostManager !== undefined) {
+    opts.pluginHostManager.attachEventSource(
+      createHubPluginEventSource(hub, { redact: (event) => redactor.redact(event as RunEvent) }),
+    );
+  }
   const localPrincipal: TenantPrincipal = resolveLocalPrincipal(opts.auth, token);
   if (opts.version !== undefined && typeof opts.version !== 'string') {
     throw new Error('version must be a string.');
@@ -1030,14 +1044,36 @@ export function startGateway(opts: GatewayOptions): Gateway {
   /** 方法表在组装完成后才有值；capabilities.list 在调用时读取。 */
   let methodTable: RpcMethodTable;
 
+  /**
+   * 0.43：capabilities / manifest 看到的表 = 静态 + 当前动态 plugin 方法。
+   * 静态重名时静态胜出（动态注册表本身不会产生静态名冲突）。
+   */
+  const currentMethodTable = (): RpcMethodTable => {
+    const dynamic = opts.pluginHostManager?.rpc.list() ?? [];
+    if (dynamic.length === 0) return methodTable;
+    return {
+      methods: [
+        ...methodTable.methods,
+        ...dynamic.filter((method) => !methodTable.byName.has(method.name)),
+      ],
+      byName: methodTable.byName,
+    };
+  };
+
   const configMethodsDeps = {
     defaultTenantId,
     version: opts.version,
     config: opts.config,
     runtimeSnapshot,
-    methodTable: () => methodTable,
+    methodTable: currentMethodTable,
     toolDescriptionsForTenant,
     pluginsForTenant,
+    ...(opts.pluginHostManager !== undefined
+      ? {
+          pluginsContributionsForTenant: (tenantId: string) =>
+            opts.pluginHostManager?.contributionsFor(tenantId) ?? {},
+        }
+      : {}),
     pluginHostFor,
     clientCount: () => sseClients.size + wsClients.size,
     latestSeq: () => hub.latestSeq,
@@ -1170,6 +1206,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   methodTable = defineMethods(rpcMethods);
   const dispatcher = createRpcDispatcher({
     table: methodTable,
+    ...(opts.pluginHostManager !== undefined ? { dynamic: opts.pluginHostManager.rpc } : {}),
     localPrincipal,
     makeContext: makeMethodContext,
     version: opts.version,
@@ -1323,7 +1360,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       return;
     }
 
-    if (!methodTable.byName.has(frame.method)) {
+    if (
+      !methodTable.byName.has(frame.method) &&
+      opts.pluginHostManager?.rpc.resolve(frame.method) === undefined
+    ) {
       // 0.4 WS 兼容：未知方法保持 method_not_allowed（HTTP RPC 用 not_found）
       sendResult(
         ws,
@@ -2193,6 +2233,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
         path === '/events' ||
         path === '/ws';
       if (!isApiPath && (req.method === 'GET' || req.method === 'HEAD')) {
+        // 0.43：plugin UI 静态路由（在门户静态目录之前；未知 id / entry 直接 404）。
+        if (path === '/plugins' || path.startsWith('/plugins/')) {
+          const pluginResponse = await servePluginAsset(
+            path,
+            opts.pluginHostManager?.staticMounts() ?? [],
+          );
+          if (pluginResponse !== null) {
+            for (const [key, value] of Object.entries(extra)) {
+              pluginResponse.headers.set(key, value);
+            }
+            return pluginResponse;
+          }
+          return errorJson('not_found', `Not found: ${path}`, 404, extra);
+        }
         const staticResponse = await serveStatic(path, opts.staticDir);
         if (staticResponse) {
           const contentType = staticResponse.headers.get('content-type') ?? '';
