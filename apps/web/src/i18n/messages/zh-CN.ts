@@ -1389,7 +1389,6 @@ export const messages = {
   'capabilities.loading': '正在读取能力清单…',
   'capabilities.noManifest': '没有能力清单',
   'capabilities.stale': '连接已断开；显示最近一次读取的能力清单。',
-  'capabilities.title': '能力清单',
   'capabilities.subtitle': '协议方法、工具，以及 gateway 运行时当前加载的插件。',
   'capabilities.methodsCount': '协议方法（read {read} / write {write} / admin {admin}）',
   'capabilities.tools': '工具',

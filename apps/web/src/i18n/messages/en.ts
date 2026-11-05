@@ -1435,7 +1435,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'capabilities.loading': 'Loading capabilities…',
   'capabilities.noManifest': 'No capability manifest',
   'capabilities.stale': 'Disconnected; showing the last loaded capability manifest.',
-  'capabilities.title': 'Capabilities',
   'capabilities.subtitle':
     'Protocol methods, tools, and the plugins currently loaded by the gateway runtime.',
   'capabilities.methodsCount': 'Protocol methods (read {read} / write {write} / admin {admin})',
