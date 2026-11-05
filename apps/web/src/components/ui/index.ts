@@ -37,7 +37,8 @@ export {
 export { SearchInput } from './SearchInput';
 export { Section, type SectionProps } from './Section';
 export {
-  SidebarEntityCard,
-  type SidebarEntityCardProps,
-} from './SidebarEntityCard';
+  type SidebarDrawerOptions,
+  SidebarShell,
+  type SidebarShellProps,
+} from './SidebarShell';
 export { Stat, type StatProps } from './Stat';

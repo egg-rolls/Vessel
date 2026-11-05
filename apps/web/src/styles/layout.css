@@ -26,13 +26,6 @@
   background: var(--surface);
 }
 
-.session-column {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
 .column-header {
   flex: none;
   display: flex;
@@ -45,25 +38,6 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--ink);
-}
-
-.session-controls {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0 14px 10px;
-}
-
-.session-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 0 8px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
 .conversation {

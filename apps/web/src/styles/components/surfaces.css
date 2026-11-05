@@ -7,114 +7,89 @@
   align-items: stretch;
 }
 
-/* ── 侧栏实体卡片（会话 / Team 共用外壳） ──────────────
-   hover / active / focus / radius / padding / border 只在这里定义一次。 */
-.sidebar-entity-card {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  flex: none;
-  width: 100%;
-  min-width: 0;
-  height: auto;
-  min-height: 44px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
-  transition:
-    background 0.16s var(--ease),
-    border-color 0.16s var(--ease),
-    box-shadow 0.16s var(--ease);
-}
-
-.sidebar-entity-card:hover {
-  border-color: var(--line);
-  background: var(--surface-hover);
-  box-shadow: var(--elev-1);
-}
-
-.sidebar-entity-card.is-active {
-  background: var(--accent-soft);
-}
-
-.sidebar-entity-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
-  color: var(--ink);
-  text-align: left;
-  cursor: pointer;
-}
-
-.sidebar-entity-main:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.sidebar-entity-card.is-static .sidebar-entity-main {
-  cursor: default;
-}
-
-.sidebar-entity-leading {
-  display: flex;
-  flex: none;
-  align-items: center;
-}
-
-.sidebar-entity-body {
-  flex: 1;
-  min-width: 0;
+/* ── 侧栏容器（会话列 / Team 列共用） ──────────────────
+   统一 header / controls / scroll / 背景 / 抽屉；卡片仍是各自组件。 */
+.sidebar-shell {
+  position: relative;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 1px;
+  min-height: 0;
+  height: 100%;
+  background: var(--surface);
 }
 
-.sidebar-entity-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.sidebar-entity-card.is-active .sidebar-entity-title {
-  color: var(--accent-ink);
-}
-
-.sidebar-entity-subtitle {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-entity-meta {
+.sidebar-head {
+  flex: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-3) var(--space-2);
 }
 
-.sidebar-entity-trailing {
+.sidebar-title {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.sidebar-actions {
+  margin-left: auto;
   display: flex;
-  flex: none;
+  flex-wrap: wrap;
   align-items: center;
-  padding-right: 4px;
+  gap: var(--space-2);
+}
+
+.sidebar-controls {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.sidebar-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+@media (max-width: 1023px) {
+  .sidebar-shell.is-drawer {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: var(--z-drawer);
+    width: min(86vw, var(--drawer-w));
+    max-height: none;
+    box-shadow: var(--elev-3);
+    visibility: hidden;
+    transform: translateX(-100%);
+    transition:
+      transform var(--motion-ui) var(--ease),
+      visibility var(--motion-ui) var(--ease);
+  }
+
+  .sidebar-shell.is-drawer.open {
+    visibility: visible;
+    transform: none;
+    transition: transform var(--motion-ui) var(--ease);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-shell.is-drawer {
+    transition-duration: 0.001ms;
+  }
 }
 
 /* ── 面板 / 列表 / 表格 ───────────────────────────────── */

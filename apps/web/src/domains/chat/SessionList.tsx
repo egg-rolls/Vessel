@@ -4,7 +4,7 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
-import { Button, Input, SearchInput, SidebarEntityCard } from '../../components/ui';
+import { Button, Input, SearchInput, SidebarShell } from '../../components/ui';
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -168,110 +168,125 @@ export function SessionList({
   };
 
   return (
-    <div className="session-column">
-      <div className="column-header">
-        <h2 className="column-title">{t('chat.sessionList.title')}</h2>
-        <Button type="button" size="small" variant="primary" className="ml-auto" onClick={onNew}>
-          {t('chat.sessionList.new')}
-        </Button>
-        {compact && (
-          <IconButton label={t('nav.closeSessions')} onClick={onCloseDrawer}>
-            ×
-          </IconButton>
-        )}
-      </div>
-
-      <div className="session-controls">
+    <SidebarShell
+      as="div"
+      title={t('chat.sessionList.title')}
+      actions={
+        <>
+          <Button type="button" size="small" variant="primary" onClick={onNew}>
+            {t('chat.sessionList.new')}
+          </Button>
+          {compact && (
+            <IconButton label={t('nav.closeSessions')} onClick={onCloseDrawer}>
+              ×
+            </IconButton>
+          )}
+        </>
+      }
+      controls={
         <SearchInput
           value={query}
           onChange={onQueryChange}
           placeholder={t('chat.sessionList.search')}
           ariaLabel={t('chat.sessionList.search')}
         />
-      </div>
-
-      <div className="session-scroll">
-        {error && sessions.length > 0 && (
-          <StaleNotice message={t('common.staleData', { detail: error })} onRetry={onRetry} />
-        )}
-        {error && sessions.length === 0 ? (
-          <ErrorState message={error} onRetry={onRetry} />
-        ) : !hasToken ? (
+      }
+    >
+      {error && sessions.length > 0 && (
+        <StaleNotice message={t('common.staleData', { detail: error })} onRetry={onRetry} />
+      )}
+      {error && sessions.length === 0 ? (
+        <ErrorState message={error} onRetry={onRetry} />
+      ) : !hasToken ? (
+        <EmptyState
+          title={t('chat.sessionList.noConnection')}
+          action={
+            <Button type="button" onClick={onOpenConnection}>
+              {t('common.configureConnection')}
+            </Button>
+          }
+        />
+      ) : loading && sessions.length === 0 ? (
+        <LoadingState label={t('chat.sessionList.loading')} />
+      ) : sessions.length === 0 && !showDefault ? (
+        query.trim() ? (
           <EmptyState
-            title={t('chat.sessionList.noConnection')}
+            title={t('chat.sessionList.noMatch', { query: query.trim() })}
             action={
-              <Button type="button" onClick={onOpenConnection}>
-                {t('common.configureConnection')}
+              <Button type="button" onClick={() => onQueryChange('')}>
+                {t('common.clearSearch')}
               </Button>
             }
           />
-        ) : loading && sessions.length === 0 ? (
-          <LoadingState label={t('chat.sessionList.loading')} />
-        ) : sessions.length === 0 && !showDefault ? (
-          query.trim() ? (
-            <EmptyState
-              title={t('chat.sessionList.noMatch', { query: query.trim() })}
-              action={
-                <Button type="button" onClick={() => onQueryChange('')}>
-                  {t('common.clearSearch')}
-                </Button>
-              }
-            />
-          ) : (
-            <EmptyState
-              title={t('chat.sessionList.empty')}
-              action={
-                <Button type="button" variant="primary" onClick={onNew}>
-                  {t('common.newSession')}
-                </Button>
-              }
-            />
-          )
         ) : (
-          <>
-            {showDefault && defaultSession && (
-              <SidebarEntityCard
-                active={defaultSession.sessionId === selectedId}
+          <EmptyState
+            title={t('chat.sessionList.empty')}
+            action={
+              <Button type="button" variant="primary" onClick={onNew}>
+                {t('common.newSession')}
+              </Button>
+            }
+          />
+        )
+      ) : (
+        <>
+          {showDefault && defaultSession && (
+            <div
+              className={`session-row default ${
+                defaultSession.sessionId === selectedId ? 'active' : ''
+              }`.trim()}
+            >
+              <button
+                type="button"
+                className="session-main"
+                aria-current={defaultSession.sessionId === selectedId ? 'true' : undefined}
                 onClick={() => onSelect(defaultSession.sessionId)}
-                title={<span className="min-w-0 truncate">{defaultSession.label}</span>}
-                subtitle={
-                  defaultSession.bodyCount > 1
+              >
+                <span className="session-title">
+                  <span className="session-title-text">{defaultSession.label}</span>
+                </span>
+                <span className="session-agent">
+                  {defaultSession.bodyCount > 1
                     ? t('team.member.liveBodies', { count: defaultSession.bodyCount })
-                    : t('team.member.currentBody')
-                }
-              />
-            )}
-            {draftActive && (
-              <SidebarEntityCard
-                active
-                title={<span className="min-w-0 truncate">{t('chat.draft.title')}</span>}
-                subtitle={t('chat.draft.meta')}
-              />
-            )}
-            {groupSessionsByDay(sessions).map((group) => (
-              <Fragment key={group.key || 'unknown'}>
-                {group.label && (
-                  <div className="session-day">
-                    <span>{group.label}</span>
-                  </div>
-                )}
-                {group.sessions.map((session) => {
-                  const active = session.session_id === selectedId;
-                  const editing = editingId === session.session_id;
-                  const title = sessionTitle(session);
-                  const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
-                  const agentAddress = agentAddresses?.get(session.session_id);
-                  const snippet = query.trim()
-                    ? searchSnippets?.get(session.session_id)
-                    : undefined;
-                  const preview =
-                    snippet ??
-                    (session.preview && session.preview !== session.title ? session.preview : '');
-                  // preview 只进 title tooltip，不再占一行布局。
-                  const titleTooltip = preview ? `${title} — ${preview}` : title;
-                  if (editing) {
-                    return (
-                      <div className="session-rename" key={session.session_id}>
+                    : t('team.member.currentBody')}
+                </span>
+              </button>
+            </div>
+          )}
+          {draftActive && (
+            <div className="session-row draft active">
+              <div className="session-main">
+                <span className="session-title">{t('chat.draft.title')}</span>
+                <span className="session-preview">{t('chat.draft.meta')}</span>
+              </div>
+            </div>
+          )}
+          {groupSessionsByDay(sessions).map((group) => (
+            <Fragment key={group.key || 'unknown'}>
+              {group.label && (
+                <div className="session-day">
+                  <span>{group.label}</span>
+                </div>
+              )}
+              {group.sessions.map((session) => {
+                const active = session.session_id === selectedId;
+                const editing = editingId === session.session_id;
+                const title = sessionTitle(session);
+                const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
+                const agentAddress = agentAddresses?.get(session.session_id);
+                const snippet = query.trim() ? searchSnippets?.get(session.session_id) : undefined;
+                const preview =
+                  snippet ??
+                  (session.preview && session.preview !== session.title ? session.preview : '');
+                // preview 只进 title tooltip，不再占一行布局。
+                const titleTooltip = preview ? `${title} — ${preview}` : title;
+                return (
+                  <div
+                    className={`session-row group ${active ? 'active' : ''}`.trim()}
+                    key={session.session_id}
+                  >
+                    {editing ? (
+                      <div className="session-rename">
                         <Input
                           ref={renameRef}
                           value={draft}
@@ -298,38 +313,37 @@ export function SessionList({
                           </span>
                         )}
                       </div>
-                    );
-                  }
-                  const subtitle = agentAddress ? (
-                    agentAddress
-                  ) : primarySessionIds?.has(session.session_id) ? (
-                    <span className="text-accent-ink">{t('team.member.primaryBadge')}</span>
-                  ) : undefined;
-                  return (
-                    <SidebarEntityCard
-                      key={session.session_id}
-                      active={active}
-                      onClick={() => onSelect(session.session_id)}
-                      leading={<StatusGlyph status={session.status} />}
-                      title={
-                        <>
-                          <Tooltip label={titleTooltip}>
-                            <span className="min-w-0 truncate">{title}</span>
-                          </Tooltip>
-                          {pendingCount > 0 && (
-                            <Tooltip label={t('chat.session.pending', { count: pendingCount })}>
-                              <span className="session-pending-badge">
-                                <span aria-hidden="true">{pendingCount}</span>
-                                <span className="sr-only">
-                                  {t('chat.session.pending', { count: pendingCount })}
-                                </span>
-                              </span>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="session-main"
+                          aria-current={active ? 'true' : undefined}
+                          onClick={() => onSelect(session.session_id)}
+                        >
+                          <span className="session-title">
+                            <StatusGlyph status={session.status} />
+                            <Tooltip label={titleTooltip}>
+                              <span className="session-title-text">{title}</span>
                             </Tooltip>
+                            {pendingCount > 0 && (
+                              <Tooltip label={t('chat.session.pending', { count: pendingCount })}>
+                                <span className="session-pending-badge">
+                                  <span aria-hidden="true">{pendingCount}</span>
+                                  <span className="sr-only">
+                                    {t('chat.session.pending', { count: pendingCount })}
+                                  </span>
+                                </span>
+                              </Tooltip>
+                            )}
+                          </span>
+                          {agentAddress && <span className="session-agent">{agentAddress}</span>}
+                          {!agentAddress && primarySessionIds?.has(session.session_id) && (
+                            <span className="session-agent text-accent-ink">
+                              {t('team.member.primaryBadge')}
+                            </span>
                           )}
-                        </>
-                      }
-                      subtitle={subtitle}
-                      trailing={
+                        </button>
                         <ActionMenu
                           className="items-center pr-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-compact:opacity-100"
                           label={t('chat.sessionList.actions', { title })}
@@ -359,20 +373,20 @@ export function SessionList({
                             },
                           ]}
                         />
-                      }
-                    />
-                  );
-                })}
-              </Fragment>
-            ))}
-            {hiddenCount > 0 && (
-              <button type="button" className="load-more" onClick={onShowMore}>
-                {t('chat.sessionList.showMore', { count: hiddenCount })}
-              </button>
-            )}
-          </>
-        )}
-      </div>
-    </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </Fragment>
+          ))}
+          {hiddenCount > 0 && (
+            <button type="button" className="load-more" onClick={onShowMore}>
+              {t('chat.sessionList.showMore', { count: hiddenCount })}
+            </button>
+          )}
+        </>
+      )}
+    </SidebarShell>
   );
 }

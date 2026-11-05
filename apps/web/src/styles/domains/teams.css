@@ -10,60 +10,51 @@
   grid-template-columns: var(--team-list-w) minmax(0, 1fr);
 }
 
-/* ── Team 栏 ─────────────────────────────────────────── */
-
-.teams-column {
-  position: relative;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-}
-
-.teams-column-head {
-  flex: none;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-4) var(--space-3) var(--space-2);
-}
-
-.teams-column-title {
-  margin: 0;
-  font-size: var(--text-body);
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.teams-column-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.teams-column-controls {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: 0 var(--space-3) var(--space-2);
-}
-
-.teams-column-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 0 var(--space-3) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
 /* ── Team 卡片 ───────────────────────────────────────── */
+
+.teams-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  transition:
+    box-shadow 120ms var(--ease),
+    border-color 120ms var(--ease);
+}
+
+.teams-card:hover {
+  border-color: var(--line);
+  background: var(--surface-hover);
+  box-shadow: var(--elev-1);
+}
+
+.teams-card-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.teams-card-open:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.teams-card-menu {
+  margin: var(--space-2) var(--space-1) 0 0;
+}
 
 .teams-grid {
   display: grid;
@@ -130,29 +121,6 @@
     display: block;
   }
 
-  .teams-column {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    z-index: var(--z-drawer);
-    width: min(86vw, var(--drawer-w));
-    max-height: none;
-    box-shadow: var(--elev-3);
-    visibility: hidden;
-    transform: translateX(-100%);
-    transition:
-      transform var(--motion-ui) var(--ease),
-      visibility var(--motion-ui) var(--ease);
-  }
-
-  .teams-column.open {
-    visibility: visible;
-    transform: none;
-    /* 打开时 visibility 立即生效，避免抽屉首个可聚焦元素 focus() 被浏览器忽略 */
-    transition: transform var(--motion-ui) var(--ease);
-  }
-
   .teams-detail-pane {
     height: 100%;
   }
@@ -165,7 +133,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .teams-column {
+  .teams-card {
     transition-duration: 0.001ms;
   }
 }

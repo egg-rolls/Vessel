@@ -4,7 +4,7 @@
  */
 import type { ReactNode } from 'react';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
-import { Button, SearchInput, Select } from '../../components/ui';
+import { Button, SearchInput, Select, SidebarShell } from '../../components/ui';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { NodeTeams } from '../../gateway/team-roster';
 import { t } from '../../i18n';
@@ -152,26 +152,21 @@ export function TeamsListColumn({ state }: TeamsListColumnProps) {
   }
 
   return (
-    <>
-      <aside
-        {...(compact ? { role: 'dialog' as const, 'aria-modal': drawerOpen } : {})}
-        ref={drawerRef}
-        id="teams-column"
-        className={`teams-column ${drawerOpen ? 'open' : ''}`.trim()}
-        aria-label={t('teams.title')}
-        inert={compact && !drawerOpen ? true : undefined}
-        aria-hidden={compact && !drawerOpen ? true : undefined}
-      >
-        <header className="teams-column-head">
-          <h2 className="teams-column-title">{t('teams.title')}</h2>
-          <div className="teams-column-actions">
-            {createButton}
-            <Button size="small" onClick={refreshCurrent} disabled={!loaded}>
-              {t('common.refresh')}
-            </Button>
-          </div>
-        </header>
-        <div className="teams-column-controls">
+    <SidebarShell
+      as="aside"
+      id="teams-column"
+      label={t('teams.title')}
+      title={t('teams.title')}
+      actions={
+        <>
+          {createButton}
+          <Button size="small" onClick={refreshCurrent} disabled={!loaded}>
+            {t('common.refresh')}
+          </Button>
+        </>
+      }
+      controls={
+        <>
           <SearchInput
             value={query}
             onChange={setQuery}
@@ -191,18 +186,21 @@ export function TeamsListColumn({ state }: TeamsListColumnProps) {
               </option>
             ))}
           </Select>
-        </div>
-        <div className="teams-column-scroll">{body}</div>
-      </aside>
-
-      {compact && drawerOpen && (
-        <button
-          type="button"
-          className="drawer-backdrop"
-          aria-label={t('common.close')}
-          onClick={() => setDrawerOpen(false)}
-        />
-      )}
-    </>
+        </>
+      }
+      shellRef={drawerRef}
+      drawer={
+        compact
+          ? {
+              open: drawerOpen,
+              onClose: () => setDrawerOpen(false),
+              closeLabel: t('common.close'),
+              backdropLabel: t('common.close'),
+            }
+          : undefined
+      }
+    >
+      {body}
+    </SidebarShell>
   );
 }
