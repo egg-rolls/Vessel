@@ -25,6 +25,7 @@ paths: [docs/architecture/**]
 | [guardrails-hooks](guardrails-hooks.md) | Guardrail 四阶段与 Hook 五阶段 | guardrail, hook, replacement, tool_call, before_llm | `packages/core/src/types/guardrail.ts`, `hook.ts` |
 | [extensions](extensions.md) | Plugin / PluginHost、发现与信任边界 | plugin, plugin host, loader, discovery, trust, external, mcp, skill | `packages/core/src/types/plugin.ts`, `src/plugin-loader.ts`, `plugins/**` |
 | [plugins](plugins.md) | 能力插件与体验插件：清单、发现、激活、信任、AI 流位置与热重载 | plugin, manifest, capability, experience, contribution, activation, reload, child process, trust | `plugins/**`, `src/plugin-loader.ts`, `packages/serve/src/plugin-host/**`, `apps/web/src/domains/plugins/**` |
+| [plugin-registry](plugin-registry.md) | GitHub 静态 registry、index.json、发布流程与 marketplace 安装/校验 | plugin, registry, marketplace, install, update, checksum, index.json, github | `plugins/marketplace/**`, `docs/architecture/plugin-registry.md` |
 | [config](config.md) | 配置层序、resolver 与配置块 | config, yaml, precedence, env, tenant overlay, secrets | `packages/config/**`, `src/cli-overrides.ts` |
 | [events](events.md) | 事件命名、核心事件、回放与 trace 落盘 | event, event stream, trace, replay, observability, seq, agent.message.notified | `packages/core/src/types/event.ts`, `packages/core/src/events/**` |
 | [assembly](assembly.md) | `src/` 装配层、CLI/TUI 入口与职责边界 | bootstrap, cli, args, wiring, repl, headless | `src/**` |

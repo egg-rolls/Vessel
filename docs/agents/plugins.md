@@ -46,4 +46,4 @@ applies_to: [N, M]
 
 ## 指针
 
-- [plugins.md](../architecture/plugins.md) · [extensions.md](../architecture/extensions.md) · [tools.md](../architecture/tools.md) · [CONFIG.md](../operations/CONFIG.md)。
+- [plugins.md](../architecture/plugins.md) · [plugin-registry.md](../architecture/plugin-registry.md) · [extensions.md](../architecture/extensions.md) · [tools.md](../architecture/tools.md) · [CONFIG.md](../operations/CONFIG.md)。

@@ -84,6 +84,7 @@ tool loop ── capability tools (prompt surface = token tax)
 ## 使用
 
 - 命令：`vessel plugin list`、`vessel plugin install <path>`、`vessel plugin enable <id>`、`vessel plugin disable <id>`。
+- Marketplace：浏览 / 安装 / 更新 / 删除走 `marketplace` 体验插件；registry、校验和与发布流程见 [plugin-registry](plugin-registry.md)。
 - 配置：`config.yaml` 的 `plugins[].config` 作为 settings 在激活时下发；只保留 manifest `contributes.settings` 声明过的键，未声明键告警丢弃，类型不符 → `plugin_config_invalid`。
 - 数据与日志：plugin 私有目录 `<dataDir>/plugins/<id>/`；stderr 写入 `<dataDir>/plugins/<id>/logs/plugin.log`（按 1 MiB 轮转）。全局 dataDir 只读，仅在 `permissions.fs` 含 `data-dir` 时下发。
 - 编写：子进程入口用 Bun 直接跑 TS，处理 `plugin.hello` / `plugin.activate` / `plugin.event` / `plugin.rpc` / `plugin.deactivate`，只写 stdout 协议帧；Web 资源放 `ui.dir`，iframe `sandbox="allow-scripts allow-forms"` + CSP，经 `vessel.plugin.rpc` postMessage 调宿主桥，不接触 gateway token。
