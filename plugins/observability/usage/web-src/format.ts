@@ -30,15 +30,26 @@ export function fmtDuration(value: number | undefined): string {
   return `${(value / 1000).toFixed(2)} s`;
 }
 
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/** Locale-independent UTC timestamp: `YYYY-MM-DD HH:mm:ssZ` (CONTRACT-0.46 §6). */
 export function fmtTime(value: number | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return MISSING;
-  return new Date(value).toLocaleString(undefined, {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return MISSING;
+  const ymd = `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+  const hms = `${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}`;
+  return `${ymd} ${hms}Z`;
+}
+
+/** Full ISO 8601 for tooltips; never renders `Invalid Date`. */
+export function fmtTimeFull(value: number | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return MISSING;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return MISSING;
+  return date.toISOString();
 }
 
 export function ratioHint(

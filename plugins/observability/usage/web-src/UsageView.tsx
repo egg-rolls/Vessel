@@ -180,11 +180,14 @@ export function UsageView({ client, refreshKey, t }: ViewProps) {
 
   return (
     <PluginPage>
-      <PluginPageHeader
-        title={t('usage.title')}
-        description={t('usage.description')}
-        actions={<RangeTabs value={range} onChange={setRange} t={t} />}
-      />
+      <PluginPageHeader title={t('usage.title')} description={t('usage.description')} />
+      <div
+        role="toolbar"
+        aria-label={t('usage.toolbar')}
+        className="flex flex-wrap items-center gap-2"
+      >
+        <RangeTabs value={range} onChange={setRange} t={t} />
+      </div>
       {state.status === 'loading' ? <LoadingState label={t('common.loading')} /> : null}
       {state.status === 'error' ? (
         <ErrorState

@@ -26,6 +26,7 @@ const EN = {
 
   'usage.title': 'Usage',
   'usage.description': 'Token usage, cache hits and cost.',
+  'usage.toolbar': 'Usage controls',
   'usage.requests': 'Requests',
   'usage.promptTokens': 'Prompt tokens',
   'usage.completionTokens': 'Completion tokens',
@@ -64,6 +65,7 @@ const EN = {
 
   'logs.title': 'Logs',
   'logs.description': 'Per-request usage and latency, newest first.',
+  'logs.toolbar': 'Log filters',
   'logs.session': 'Session',
   'logs.model': 'Model',
   'logs.status': 'Status',
@@ -116,6 +118,7 @@ const ZH: Record<MessageKey, string> = {
 
   'usage.title': '用量',
   'usage.description': 'Token 用量、缓存命中与成本概览。',
+  'usage.toolbar': '用量控件',
   'usage.requests': '请求数',
   'usage.promptTokens': 'Prompt Token',
   'usage.completionTokens': 'Completion Token',
@@ -154,6 +157,7 @@ const ZH: Record<MessageKey, string> = {
 
   'logs.title': '日志',
   'logs.description': '按时间查看每次请求的用量与延迟。',
+  'logs.toolbar': '日志筛选',
   'logs.session': '会话',
   'logs.model': '模型',
   'logs.status': '状态',
@@ -205,7 +209,7 @@ export function translator(lang: string | undefined): Translator {
   return (key, vars) => interpolate(table[key] ?? EN[key] ?? key, vars);
 }
 
-const I18N: Record<Lang, Record<MessageKey, string>> = {
+export const I18N: Record<Lang, Record<MessageKey, string>> = {
   en: EN,
   'zh-CN': ZH,
 };

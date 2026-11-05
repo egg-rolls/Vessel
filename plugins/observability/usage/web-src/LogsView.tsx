@@ -11,7 +11,7 @@ import {
 } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LogItem, LogsResult } from '../src/aggregate.js';
-import { fmtCost, fmtDuration, fmtInt, fmtTime, MISSING } from './format';
+import { fmtCost, fmtDuration, fmtInt, fmtTime, fmtTimeFull, MISSING } from './format';
 import type { Translator } from './i18n';
 import {
   EmptyState,
@@ -50,7 +50,11 @@ function toStatus(value: string): StatusFilter {
 
 function logColumns(t: Translator): readonly DataTableColumn<LogItem>[] {
   return [
-    { key: 'time', header: t('logs.th.time'), cell: (row) => fmtTime(row.ts) },
+    {
+      key: 'time',
+      header: t('logs.th.time'),
+      cell: (row) => <span title={fmtTimeFull(row.ts)}>{fmtTime(row.ts)}</span>,
+    },
     {
       key: 'status',
       header: t('logs.th.status'),
@@ -160,49 +164,44 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
 
   return (
     <PluginPage>
-      <PluginPageHeader
-        title={t('logs.title')}
-        description={t('logs.description')}
-        actions={
-          <>
-            <Field label={t('logs.session')} className="w-44">
-              <SearchInput
-                value={draft.session}
-                onChange={(session) => setDraft((value) => ({ ...value, session }))}
-                placeholder={t('logs.sessionPlaceholder')}
-                ariaLabel={t('logs.session')}
-              />
-            </Field>
-            <Field label={t('logs.model')} className="w-44">
-              <SearchInput
-                value={draft.model}
-                onChange={(model) => setDraft((value) => ({ ...value, model }))}
-                placeholder={t('logs.modelPlaceholder')}
-                ariaLabel={t('logs.model')}
-              />
-            </Field>
-            <Field label={t('logs.status')} htmlFor="logs-status" className="w-36">
-              <Select
-                id="logs-status"
-                value={draft.status}
-                onChange={(event) => {
-                  const status = toStatus(event.target.value);
-                  setDraft((value) => ({ ...value, status }));
-                }}
-                aria-label={t('logs.status')}
-              >
-                <option value="">{t('logs.allStatuses')}</option>
-                <option value="ok">{t('logs.optionOk')}</option>
-                <option value="failed">{t('logs.optionFailed')}</option>
-              </Select>
-            </Field>
-            <Button variant="primary" onClick={applyDraft}>
-              {t('common.apply')}
-            </Button>
-            <Button onClick={reload}>{t('common.refresh')}</Button>
-          </>
-        }
-      />
+      <PluginPageHeader title={t('logs.title')} description={t('logs.description')} />
+      <div role="toolbar" aria-label={t('logs.toolbar')} className="flex flex-wrap items-end gap-2">
+        <Field label={t('logs.session')} className="w-44">
+          <SearchInput
+            value={draft.session}
+            onChange={(session) => setDraft((value) => ({ ...value, session }))}
+            placeholder={t('logs.sessionPlaceholder')}
+            ariaLabel={t('logs.session')}
+          />
+        </Field>
+        <Field label={t('logs.model')} className="w-44">
+          <SearchInput
+            value={draft.model}
+            onChange={(model) => setDraft((value) => ({ ...value, model }))}
+            placeholder={t('logs.modelPlaceholder')}
+            ariaLabel={t('logs.model')}
+          />
+        </Field>
+        <Field label={t('logs.status')} htmlFor="logs-status" className="w-36">
+          <Select
+            id="logs-status"
+            value={draft.status}
+            onChange={(event) => {
+              const status = toStatus(event.target.value);
+              setDraft((value) => ({ ...value, status }));
+            }}
+            aria-label={t('logs.status')}
+          >
+            <option value="">{t('logs.allStatuses')}</option>
+            <option value="ok">{t('logs.optionOk')}</option>
+            <option value="failed">{t('logs.optionFailed')}</option>
+          </Select>
+        </Field>
+        <Button variant="primary" onClick={applyDraft}>
+          {t('common.apply')}
+        </Button>
+        <Button onClick={reload}>{t('common.refresh')}</Button>
+      </div>
 
       {loading && items.length === 0 ? <LoadingState label={t('common.loading')} /> : null}
       {error !== null && items.length === 0 ? (
