@@ -7,12 +7,17 @@ export function InstalledTable({
   items,
   t,
   busy,
+  pendingId,
+  onToggle,
   onUpdate,
   onRemove,
 }: {
   items: readonly InstalledItem[];
   t: Translator;
   busy: boolean;
+  /** Row whose `plugins[].enabled` write is in flight. */
+  pendingId: string | null;
+  onToggle: (item: InstalledItem) => void;
   onUpdate: (item: InstalledItem) => void;
   onRemove: (item: InstalledItem) => void;
 }) {
@@ -69,24 +74,47 @@ export function InstalledTable({
       key: 'actions',
       header: t('th.actions'),
       cellClassName: 'text-right',
-      cell: (item) =>
-        item.scope === 'builtin' ? null : (
+      cell: (item) => {
+        const pending = pendingId === item.id;
+        return (
           <div className="flex justify-end gap-2">
-            {item.update_available === true ? (
-              <Button size="small" variant="primary" disabled={busy} onClick={() => onUpdate(item)}>
-                {t('button.update')}
-              </Button>
-            ) : null}
             <Button
               size="small"
-              variant="dangerGhost"
-              disabled={busy}
-              onClick={() => onRemove(item)}
+              variant={item.enabled ? 'plain' : 'primary'}
+              disabled={busy || pending}
+              onClick={() => onToggle(item)}
             >
-              {t('button.remove')}
+              {pending
+                ? t('button.applying')
+                : item.enabled
+                  ? t('button.disable')
+                  : t('button.enable')}
             </Button>
+            {item.scope === 'builtin' ? null : (
+              <>
+                {item.update_available === true ? (
+                  <Button
+                    size="small"
+                    variant="primary"
+                    disabled={busy || pending}
+                    onClick={() => onUpdate(item)}
+                  >
+                    {t('button.update')}
+                  </Button>
+                ) : null}
+                <Button
+                  size="small"
+                  variant="dangerGhost"
+                  disabled={busy || pending}
+                  onClick={() => onRemove(item)}
+                >
+                  {t('button.remove')}
+                </Button>
+              </>
+            )}
           </div>
-        ),
+        );
+      },
     },
   ];
 

@@ -896,7 +896,7 @@ export interface InstallResult {
   warnings: string[];
 }
 
-async function defaultNamesFor(context: InstallContext): Promise<string[] | null> {
+export async function defaultNamesFor(context: InstallContext): Promise<string[] | null> {
   if (context.defaultPluginNames !== undefined) return context.defaultPluginNames;
   // `context.projectDir` is the host-provided cwd (Errata E4). Source plugins
   // live at `<hostCwd>/plugins/**`; installed project plugins at

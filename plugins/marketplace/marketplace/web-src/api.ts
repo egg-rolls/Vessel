@@ -98,6 +98,11 @@ export class MarketplaceApi {
     return this.call('remove', { id }, MUTATION_TIMEOUT_MS);
   }
 
+  /** Write `plugins[].enabled` in config.yaml; the host watcher applies it. */
+  setEnabled(id: string, enabled: boolean): Promise<{ ok: true; id: string; enabled: boolean }> {
+    return this.call('setEnabled', { id, enabled }, MUTATION_TIMEOUT_MS);
+  }
+
   update(id: string): Promise<StartJobResult> {
     return this.call('update', { id }, MUTATION_TIMEOUT_MS);
   }

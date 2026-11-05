@@ -207,6 +207,68 @@ export async function setPluginConfigValue(
   return { status: 'created', entries: namesOf(entries) };
 }
 
+export interface SetPluginEnabledOptions {
+  configPath: string;
+  name: string;
+  enabled: boolean;
+  /** Same materialization rule as install when `plugins:` is absent. */
+  defaultNames?: string[] | null;
+}
+
+/**
+ * Set `plugins[].enabled` for `name` (DECISION-045: config is the only source
+ * of truth for plugin switches; the host watcher applies it).
+ *
+ * - Existing list: only that entry's `enabled` changes (`config` and every
+ *   other field are preserved); a missing entry is appended because a list
+ *   that exists means unlisted plugins are disabled.
+ * - Absent list + `defaultNames`: materialize the full default set (all
+ *   enabled) and set the target, so no implicitly-enabled plugin disappears.
+ * - Absent list + no discovery: refuse (`config_write_failed`), like
+ *   {@link setPluginConfigValue}; a partial list would disable defaults.
+ */
+export async function setPluginEnabled(
+  options: SetPluginEnabledOptions,
+): Promise<{ status: 'updated' | 'created'; enabled: boolean; entries: string[] }> {
+  const root = await readConfigRoot(options.configPath);
+  const raw = root.plugins;
+  if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+    throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
+  }
+
+  if (Array.isArray(raw)) {
+    const entries = raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
+    const index = entries.findIndex((entry) => isRecord(entry) && entry.name === options.name);
+    if (index >= 0) {
+      entries[index] = {
+        ...(entries[index] as Record<string, unknown>),
+        enabled: options.enabled,
+      };
+    } else {
+      entries.push({ name: options.name, enabled: options.enabled });
+    }
+    root.plugins = entries;
+    await writeConfigRoot(options.configPath, root);
+    return { status: 'updated', enabled: options.enabled, entries: namesOf(entries) };
+  }
+
+  if (options.defaultNames === undefined || options.defaultNames === null) {
+    throw new MarketplaceError(
+      'config_write_failed',
+      'plugins: is absent and the default plugin set could not be enumerated; ' +
+        'refusing to write a partial list',
+    );
+  }
+  const names = new Set(options.defaultNames);
+  names.add(options.name);
+  const entries = [...names]
+    .sort()
+    .map((name) => ({ name, enabled: name === options.name ? options.enabled : true }));
+  root.plugins = entries;
+  await writeConfigRoot(options.configPath, root);
+  return { status: 'created', enabled: options.enabled, entries: namesOf(entries) };
+}
+
 function namesOf(entries: unknown[]): string[] {
   const names: string[] = [];
   for (const entry of entries) {

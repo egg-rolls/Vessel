@@ -18,11 +18,13 @@
 
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { setPluginEnabled } from './config.js';
 import { MarketplaceError, messageOf } from './errors.js';
 import {
   assertPluginId,
   configureRegistry,
   defaultConfigPath,
+  defaultNamesFor,
   defaultUserPluginsDir,
   type InstallContext,
   installedPlugins,
@@ -212,6 +214,20 @@ async function handleRpc(params: unknown): Promise<unknown> {
       return { items: listJobs().map(jobDto), ttl_hours: 24 };
     case 'installed':
       return installedPlugins(ctx, { force: args.force === true });
+    case 'setEnabled': {
+      // DECISION-045: the switch lives in config.yaml; the host watcher
+      // reloads plugins. No runtime toggle and no host RPC.
+      const id = requireString(args.id, 'id');
+      assertPluginId(id);
+      if (typeof args.enabled !== 'boolean') throw invalid('enabled must be a boolean');
+      const result = await setPluginEnabled({
+        configPath: ctx.configPath,
+        name: id,
+        enabled: args.enabled,
+        defaultNames: await defaultNamesFor(ctx),
+      });
+      return { ok: true, id, enabled: result.enabled };
+    }
     case 'configure': {
       // E10: persist the marketplace's own registry_url; https only, with
       // loopback http allowed for local fixtures (same rule as loading).

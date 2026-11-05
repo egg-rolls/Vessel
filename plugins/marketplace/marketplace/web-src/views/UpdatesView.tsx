@@ -30,6 +30,8 @@ export function UpdatesView({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<InstalledItem | null>(null);
+  const [pendingToggle, setPendingToggle] = useState<InstalledItem | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const load = useCallback(
     async (force: boolean) => {
@@ -61,6 +63,28 @@ export function UpdatesView({
     } catch (caught) {
       setActionError(describeError(caught, t));
     }
+  };
+
+  const applyToggle = async (item: InstalledItem) => {
+    setActionError(null);
+    setTogglingId(item.id);
+    try {
+      await api.setEnabled(item.id, !item.enabled);
+      onChanged();
+    } catch (caught) {
+      setActionError(describeError(caught, t));
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  // Disabling the marketplace itself unloads this page; confirm first.
+  const toggleItem = (item: InstalledItem) => {
+    if (item.id === 'marketplace' && item.enabled) {
+      setPendingToggle(item);
+      return;
+    }
+    void applyToggle(item);
   };
 
   const items = (data?.items ?? []).filter((item) => item.update_available === true);
@@ -104,6 +128,8 @@ export function UpdatesView({
             items={items}
             t={t}
             busy={busy}
+            pendingId={togglingId}
+            onToggle={toggleItem}
             onUpdate={(item) =>
               void onJob(`${t('button.update')} ${item.name || item.id}`, () => api.update(item.id))
             }
@@ -111,6 +137,24 @@ export function UpdatesView({
           />
         </>
       )}
+
+      <ConfirmDialog
+        open={pendingToggle !== null}
+        title={t('dialog.disableMarketplace.title')}
+        confirmLabel={t('dialog.disableMarketplace.confirm')}
+        confirmText={t('dialog.disableMarketplace.check')}
+        cancelLabel={t('button.cancel')}
+        danger
+        onCancel={() => setPendingToggle(null)}
+        onConfirm={() => {
+          if (pendingToggle === null) return;
+          const item = pendingToggle;
+          setPendingToggle(null);
+          void applyToggle(item);
+        }}
+      >
+        <p className="text-md text-ink wrap-anywhere">{t('dialog.disableMarketplace.body')}</p>
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={pendingRemove !== null}
