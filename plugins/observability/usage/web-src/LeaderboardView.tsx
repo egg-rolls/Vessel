@@ -1,4 +1,11 @@
-import { Button, DataTable, type DataTableColumn, Section } from '@vessel-agent/plugin-ui';
+import {
+  Button,
+  DataTable,
+  type DataTableColumn,
+  PluginPage,
+  PluginPageHeader,
+  Section,
+} from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { LeaderboardResult, ModelBucket } from '../src/aggregate.js';
 import { fmtCost, fmtInt } from './format';
@@ -7,7 +14,6 @@ import {
   ErrorState,
   LoadingState,
   type LoadState,
-  PageHeader,
   RangeTabs,
   type RangeValue,
   rangeParams,
@@ -57,7 +63,7 @@ function SortHeader({
   );
 }
 
-export function LeaderboardView({ client, refreshKey }: ViewProps) {
+export function LeaderboardView({ client, refreshKey, t }: ViewProps) {
   const [range, setRange] = useState<RangeValue>('30');
   const [state, setState] = useState<LoadState<LeaderboardResult>>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
@@ -121,50 +127,63 @@ export function LeaderboardView({ client, refreshKey }: ViewProps) {
     [sortDirection, sortKey, toggleSort],
   );
 
-  const columns: readonly DataTableColumn<ModelBucket>[] = [
-    {
-      key: 'model',
-      header: header('Model', 'model'),
-      cell: (row) => <span title={row.model}>{row.model}</span>,
-    },
-    {
-      key: 'requests',
-      header: header('Requests', 'requests'),
-      cell: (row) => fmtInt(row.requests),
-    },
-    {
-      key: 'tokens',
-      header: header('Tokens', 'tokens'),
-      cell: (row) => fmtInt((row.prompt_tokens ?? 0) + (row.completion_tokens ?? 0)),
-    },
-    {
-      key: 'cache_read',
-      header: header('Cache read', 'cache_read_tokens'),
-      cell: (row) => fmtInt(row.cache_read_tokens),
-    },
-    { key: 'cost', header: header('Cost', 'cost'), cell: (row) => fmtCost(row.cost) },
-  ];
+  const columns = useMemo((): readonly DataTableColumn<ModelBucket>[] => {
+    return [
+      {
+        key: 'model',
+        header: header(t('leaderboard.th.model'), 'model'),
+        cell: (row) => <span title={row.model}>{row.model}</span>,
+      },
+      {
+        key: 'requests',
+        header: header(t('leaderboard.th.requests'), 'requests'),
+        cell: (row) => fmtInt(row.requests),
+      },
+      {
+        key: 'tokens',
+        header: header(t('leaderboard.th.tokens'), 'tokens'),
+        cell: (row) => fmtInt((row.prompt_tokens ?? 0) + (row.completion_tokens ?? 0)),
+      },
+      {
+        key: 'cache_read',
+        header: header(t('leaderboard.th.cacheRead'), 'cache_read_tokens'),
+        cell: (row) => fmtInt(row.cache_read_tokens),
+      },
+      {
+        key: 'cost',
+        header: header(t('leaderboard.th.cost'), 'cost'),
+        cell: (row) => fmtCost(row.cost),
+      },
+    ];
+  }, [header, t]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <PageHeader
-        title="Leaderboard"
-        description="Models ranked by token volume in the selected range."
-        actions={<RangeTabs value={range} onChange={setRange} />}
+    <PluginPage>
+      <PluginPageHeader
+        title={t('leaderboard.title')}
+        description={t('leaderboard.description')}
+        actions={<RangeTabs value={range} onChange={setRange} t={t} />}
       />
-      {state.status === 'loading' ? <LoadingState /> : null}
-      {state.status === 'error' ? <ErrorState error={state.error} onRetry={retry} /> : null}
+      {state.status === 'loading' ? <LoadingState label={t('common.loading')} /> : null}
+      {state.status === 'error' ? (
+        <ErrorState
+          error={state.error}
+          onRetry={retry}
+          title={t('common.loadError')}
+          retryLabel={t('common.retry')}
+        />
+      ) : null}
       {state.status === 'ready' && sorted.length === 0 ? (
         <EmptyState
-          title="No model usage yet"
-          description="Run a request through Vessel. Models appear here once usage records exist."
+          title={t('leaderboard.empty.title')}
+          description={t('leaderboard.empty.description')}
         />
       ) : null}
       {sorted.length > 0 ? (
-        <Section title="Models">
+        <Section title={t('leaderboard.section')}>
           <DataTable columns={columns} rows={sorted} rowKey={(row) => row.model} />
         </Section>
       ) : null}
-    </div>
+    </PluginPage>
   );
 }

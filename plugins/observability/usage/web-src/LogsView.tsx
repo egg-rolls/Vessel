@@ -4,6 +4,8 @@ import {
   DataTable,
   type DataTableColumn,
   Field,
+  PluginPage,
+  PluginPageHeader,
   SearchInput,
   Section,
   Select,
@@ -11,14 +13,8 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LogItem, LogsResult } from '../src/aggregate.js';
 import { fmtCost, fmtDuration, fmtInt, fmtTime, MISSING } from './format';
-import {
-  EmptyState,
-  ErrorState,
-  LoadingState,
-  PageHeader,
-  toError,
-  type ViewProps,
-} from './shared';
+import type { Translator } from './i18n';
+import { EmptyState, ErrorState, LoadingState, toError, type ViewProps } from './shared';
 
 const LOG_LIMIT = 50;
 
@@ -46,35 +42,47 @@ function toStatus(value: string): StatusFilter {
   return value === 'ok' || value === 'failed' ? value : '';
 }
 
-const LOG_COLUMNS: readonly DataTableColumn<LogItem>[] = [
-  { key: 'time', header: 'Time', cell: (row) => fmtTime(row.ts) },
-  {
-    key: 'status',
-    header: 'Status',
-    cell: (row) => (
-      <Badge tone={row.status === 'failed' ? 'danger' : 'success'}>{row.status}</Badge>
-    ),
-  },
-  { key: 'model', header: 'Model', cell: (row) => <span title={row.model}>{row.model}</span> },
-  {
-    key: 'session',
-    header: 'Session',
-    cell: (row) => (
-      <span className="font-mono text-sm text-muted">{row.session_id ?? MISSING}</span>
-    ),
-  },
-  { key: 'prompt', header: 'Prompt', cell: (row) => fmtInt(row.prompt_tokens) },
-  { key: 'completion', header: 'Completion', cell: (row) => fmtInt(row.completion_tokens) },
-  {
-    key: 'cache_read',
-    header: 'Cache read',
-    cell: (row) => fmtInt(row.cache_read_input_tokens),
-  },
-  { key: 'duration', header: 'Duration', cell: (row) => fmtDuration(row.duration_ms) },
-  { key: 'cost', header: 'Cost', cell: (row) => fmtCost(row.cost) },
-];
+function logColumns(t: Translator): readonly DataTableColumn<LogItem>[] {
+  return [
+    { key: 'time', header: t('logs.th.time'), cell: (row) => fmtTime(row.ts) },
+    {
+      key: 'status',
+      header: t('logs.th.status'),
+      cell: (row) => (
+        <Badge tone={row.status === 'failed' ? 'danger' : 'success'}>
+          {row.status === 'failed' ? t('common.status.failed') : t('common.status.ok')}
+        </Badge>
+      ),
+    },
+    {
+      key: 'model',
+      header: t('logs.th.model'),
+      cell: (row) => <span title={row.model}>{row.model}</span>,
+    },
+    {
+      key: 'session',
+      header: t('logs.th.session'),
+      cell: (row) => (
+        <span className="font-mono text-sm text-muted">{row.session_id ?? MISSING}</span>
+      ),
+    },
+    { key: 'prompt', header: t('logs.th.prompt'), cell: (row) => fmtInt(row.prompt_tokens) },
+    {
+      key: 'completion',
+      header: t('logs.th.completion'),
+      cell: (row) => fmtInt(row.completion_tokens),
+    },
+    {
+      key: 'cache_read',
+      header: t('logs.th.cacheRead'),
+      cell: (row) => fmtInt(row.cache_read_input_tokens),
+    },
+    { key: 'duration', header: t('logs.th.duration'), cell: (row) => fmtDuration(row.duration_ms) },
+    { key: 'cost', header: t('logs.th.cost'), cell: (row) => fmtCost(row.cost) },
+  ];
+}
 
-export function LogsView({ client, refreshKey }: ViewProps) {
+export function LogsView({ client, refreshKey, t }: ViewProps) {
   const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS);
   const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS);
   const [pageKey, setPageKey] = useState(0);
@@ -145,29 +153,29 @@ export function LogsView({ client, refreshKey }: ViewProps) {
     applied.session.trim() !== '' || applied.model.trim() !== '' || applied.status !== '';
 
   return (
-    <div className="flex flex-col gap-4">
-      <PageHeader
-        title="Logs"
-        description="One row per LLM response, plus failed runs."
+    <PluginPage>
+      <PluginPageHeader
+        title={t('logs.title')}
+        description={t('logs.description')}
         actions={
           <>
-            <Field label="Session" className="w-44">
+            <Field label={t('logs.session')} className="w-44">
               <SearchInput
                 value={draft.session}
                 onChange={(session) => setDraft((value) => ({ ...value, session }))}
-                placeholder="Session id"
-                ariaLabel="Session id"
+                placeholder={t('logs.sessionPlaceholder')}
+                ariaLabel={t('logs.session')}
               />
             </Field>
-            <Field label="Model" className="w-44">
+            <Field label={t('logs.model')} className="w-44">
               <SearchInput
                 value={draft.model}
                 onChange={(model) => setDraft((value) => ({ ...value, model }))}
-                placeholder="Model"
-                ariaLabel="Model"
+                placeholder={t('logs.modelPlaceholder')}
+                ariaLabel={t('logs.model')}
               />
             </Field>
-            <Field label="Status" htmlFor="logs-status" className="w-36">
+            <Field label={t('logs.status')} htmlFor="logs-status" className="w-36">
               <Select
                 id="logs-status"
                 value={draft.status}
@@ -175,48 +183,58 @@ export function LogsView({ client, refreshKey }: ViewProps) {
                   const status = toStatus(event.target.value);
                   setDraft((value) => ({ ...value, status }));
                 }}
-                aria-label="Status"
+                aria-label={t('logs.status')}
               >
-                <option value="">All statuses</option>
-                <option value="ok">OK</option>
-                <option value="failed">Failed</option>
+                <option value="">{t('logs.allStatuses')}</option>
+                <option value="ok">{t('logs.optionOk')}</option>
+                <option value="failed">{t('logs.optionFailed')}</option>
               </Select>
             </Field>
             <Button variant="primary" onClick={applyDraft}>
-              Apply
+              {t('common.apply')}
             </Button>
-            <Button onClick={reload}>Refresh</Button>
+            <Button onClick={reload}>{t('common.refresh')}</Button>
           </>
         }
       />
 
-      {loading && items.length === 0 ? <LoadingState /> : null}
+      {loading && items.length === 0 ? <LoadingState label={t('common.loading')} /> : null}
       {error !== null && items.length === 0 ? (
-        <ErrorState error={error} onRetry={() => setPageKey((value) => value + 1)} />
+        <ErrorState
+          error={error}
+          onRetry={() => setPageKey((value) => value + 1)}
+          title={t('common.loadError')}
+          retryLabel={t('common.retry')}
+        />
       ) : null}
       {!loading && error === null && items.length === 0 ? (
         <EmptyState
-          title={hasFilters ? 'No matching requests' : 'No request logs yet'}
-          description="Logs are read from the persisted tenant event files."
+          title={hasFilters ? t('logs.empty.filtered') : t('logs.empty.title')}
+          description={t('logs.empty.description')}
         />
       ) : null}
 
       {items.length > 0 ? (
         <>
-          <Section title="Request log">
-            <DataTable columns={LOG_COLUMNS} rows={items} rowKey={(row) => row.id} />
+          <Section title={t('logs.section')}>
+            <DataTable columns={logColumns(t)} rows={items} rowKey={(row) => row.id} />
           </Section>
           {error !== null ? (
-            <ErrorState error={error} onRetry={loadMore} title="Could not load more logs" />
+            <ErrorState
+              error={error}
+              onRetry={loadMore}
+              title={t('common.loadMoreError')}
+              retryLabel={t('common.retry')}
+            />
           ) : cursor !== null ? (
             <div>
               <Button variant="primary" onClick={loadMore} disabled={loading}>
-                {loading ? 'Loading…' : 'Load more'}
+                {loading ? t('common.loading') : t('common.loadMore')}
               </Button>
             </div>
           ) : null}
         </>
       ) : null}
-    </div>
+    </PluginPage>
   );
 }

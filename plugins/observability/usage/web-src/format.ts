@@ -1,4 +1,5 @@
 import type { CacheUnavailableReason, SummaryResult } from '../src/aggregate.js';
+import type { Translator } from './i18n';
 
 /** Missing counters are an em dash, never 0 (CONTRACT: cache/cost semantics). */
 export const MISSING = '—';
@@ -40,30 +41,37 @@ export function fmtTime(value: number | undefined): string {
   });
 }
 
-export function ratioHint(reason: CacheUnavailableReason | undefined, fallback: string): string {
+export function ratioHint(
+  reason: CacheUnavailableReason | undefined,
+  fallback: string,
+  t: Translator,
+): string {
   switch (reason) {
     case 'no-requests':
-      return 'No requests in range';
+      return t('ratio.noRequests');
     case 'no-cache-fields':
-      return 'Provider did not report cache';
+      return t('ratio.noCacheFields');
     case 'zero-denominator':
-      return 'No cache activity in range';
+      return t('ratio.zeroDenominator');
     case 'prompt-not-inclusive':
-      return 'Cache counters exceed prompt tokens';
+      return t('ratio.promptNotInclusive');
     case 'write-not-reported':
-      return 'Cache writes were not reported';
+      return t('ratio.writeNotReported');
     default:
       return fallback;
   }
 }
 
-export function costHint(data: Pick<SummaryResult, 'cost' | 'unpriced_requests'>): string {
+export function costHint(
+  data: Pick<SummaryResult, 'cost' | 'unpriced_requests'>,
+  t: Translator,
+): string {
   const unpriced = Number(data.unpriced_requests) || 0;
   if (data.cost === undefined && unpriced > 0) {
-    return 'No configured price for these models';
+    return t('usage.costNoPrice');
   }
   if (unpriced > 0) {
-    return `${unpriced} unpriced request(s); total covers priced models`;
+    return t('usage.costPartial', { n: unpriced });
   }
-  return 'USD, from configured prices';
+  return t('usage.costHint');
 }

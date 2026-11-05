@@ -1,20 +1,39 @@
-import { PluginRpcClient } from '@vessel-agent/plugin-ui';
+import {
+  applyHostContext,
+  type HostContext,
+  PluginRpcClient,
+  readHostContext,
+  watchHostContext,
+} from '@vessel-agent/plugin-ui';
 import { useEffect, useMemo, useState } from 'react';
+import { type MessageKey, translator } from './i18n';
 import { LeaderboardView } from './LeaderboardView';
 import { LogsView } from './LogsView';
 import { UsageView } from './UsageView';
 
 export type PluginView = 'usage' | 'logs' | 'leaderboard';
 
-const PAGES: readonly { id: PluginView; label: string; file: string }[] = [
-  { id: 'usage', label: 'Usage', file: 'usage.html' },
-  { id: 'logs', label: 'Logs', file: 'logs.html' },
-  { id: 'leaderboard', label: 'Leaderboard', file: 'leaderboard.html' },
-];
+const TITLE_KEYS: Record<PluginView, MessageKey> = {
+  usage: 'usage.title',
+  logs: 'logs.title',
+  leaderboard: 'leaderboard.title',
+};
 
 export function App({ view }: { view: PluginView }) {
-  const client = useMemo(() => new PluginRpcClient(), []);
+  const [host, setHost] = useState<HostContext>(() => readHostContext());
   const [refreshKey, setRefreshKey] = useState(0);
+  const client = useMemo(() => new PluginRpcClient(), []);
+  const t = useMemo(() => translator(host.lang), [host.lang]);
+
+  useEffect(() => {
+    applyHostContext(host);
+  }, [host]);
+
+  useEffect(() => watchHostContext(setHost), []);
+
+  useEffect(() => {
+    document.title = t(TITLE_KEYS[view]);
+  }, [t, view]);
 
   useEffect(() => () => client.dispose(), [client]);
 
@@ -32,31 +51,9 @@ export function App({ view }: { view: PluginView }) {
     };
   }, [client]);
 
-  return (
-    <div className="mx-auto flex w-full max-w-[var(--content-max)] flex-col gap-4 px-5 pt-5 pb-10">
-      <nav
-        aria-label="Usage plugin"
-        className="flex flex-wrap gap-0.5 self-start rounded-full bg-sunken p-1"
-      >
-        {PAGES.map((page) => (
-          <a
-            key={page.id}
-            href={`./${page.file}`}
-            aria-current={page.id === view ? 'page' : undefined}
-            className="rounded-full px-3 py-1.5 text-sm text-muted transition-colors hover:bg-hover hover:text-ink aria-[current=page]:bg-accent-soft aria-[current=page]:text-accent-ink"
-          >
-            {page.label}
-          </a>
-        ))}
-      </nav>
-
-      {view === 'logs' ? (
-        <LogsView client={client} refreshKey={refreshKey} />
-      ) : view === 'leaderboard' ? (
-        <LeaderboardView client={client} refreshKey={refreshKey} />
-      ) : (
-        <UsageView client={client} refreshKey={refreshKey} />
-      )}
-    </div>
-  );
+  if (view === 'logs') return <LogsView client={client} refreshKey={refreshKey} t={t} />;
+  if (view === 'leaderboard') {
+    return <LeaderboardView client={client} refreshKey={refreshKey} t={t} />;
+  }
+  return <UsageView client={client} refreshKey={refreshKey} t={t} />;
 }

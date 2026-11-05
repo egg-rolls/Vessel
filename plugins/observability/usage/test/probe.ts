@@ -10,6 +10,7 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
+import { translator } from '../web-src/i18n';
 
 const pluginRoot = resolve(import.meta.dir, '..');
 const webDir = join(pluginRoot, 'web');
@@ -165,6 +166,41 @@ for (const path of sourceFiles) {
   if (colorPattern.test(text)) offenders.push(path.slice(pluginRoot.length + 1));
 }
 check('web-src uses tokens, not raw colors', offenders.length === 0, offenders.join(', '));
+
+// ── layout / language ───────────────────────────────────────────────────────
+
+const appSource = await readFile(join(srcDir, 'App.tsx'), 'utf8');
+check('App renders no cross-page tab nav', !/\bPAGES\b|<nav\b/.test(appSource));
+
+const en = translator('en');
+const zh = translator('zh-CN');
+check('en usage description', en('usage.description') === 'Token usage, cache hits and cost.');
+check('zh usage description', zh('usage.description') === 'Token 用量、缓存命中与成本概览。');
+check(
+  'en logs description',
+  en('logs.description') === 'Per-request usage and latency, newest first.',
+);
+check('zh logs description', zh('logs.description') === '按时间查看每次请求的用量与延迟。');
+check(
+  'en leaderboard description',
+  en('leaderboard.description') === 'Compare models by requests, tokens and cost.',
+);
+check(
+  'zh leaderboard description',
+  zh('leaderboard.description') === '按模型比较请求量、Token 与成本。',
+);
+check(
+  'page titles follow the host language',
+  en('usage.title') === 'Usage' && zh('usage.title') === '用量',
+);
+check('unknown languages fall back to English', translator('fr')('usage.title') === 'Usage');
+
+const cjkPattern = /[一-鿿]/;
+const componentTexts = await Promise.all(tsxSources.map(async (path) => readFile(path, 'utf8')));
+check(
+  'components contain no hardcoded Chinese',
+  !componentTexts.some((text) => cjkPattern.test(text)),
+);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exitCode = 1;

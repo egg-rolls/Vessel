@@ -1,13 +1,20 @@
-import { DataTable, type DataTableColumn, Section, Stat } from '@vessel-agent/plugin-ui';
+import {
+  DataTable,
+  type DataTableColumn,
+  PluginPage,
+  PluginPageHeader,
+  Section,
+  Stat,
+} from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { DayBucket, SummaryResult } from '../src/aggregate.js';
 import { costHint, fmtCost, fmtInt, fmtPct, ratioHint } from './format';
+import type { Translator } from './i18n';
 import {
   EmptyState,
   ErrorState,
   LoadingState,
   type LoadState,
-  PageHeader,
   RangeTabs,
   type RangeValue,
   rangeParams,
@@ -15,16 +22,30 @@ import {
   type ViewProps,
 } from './shared';
 
-const DAY_COLUMNS: readonly DataTableColumn<DayBucket>[] = [
-  { key: 'date', header: 'Day', cell: (row) => row.date },
-  { key: 'requests', header: 'Requests', cell: (row) => fmtInt(row.requests) },
-  { key: 'prompt', header: 'Prompt', cell: (row) => fmtInt(row.prompt_tokens) },
-  { key: 'completion', header: 'Completion', cell: (row) => fmtInt(row.completion_tokens) },
-  { key: 'cache_read', header: 'Cache read', cell: (row) => fmtInt(row.cache_read_tokens) },
-  { key: 'failed', header: 'Failed', cell: (row) => fmtInt(row.failed_runs) },
-  { key: 'unpriced', header: 'Unpriced', cell: (row) => fmtInt(row.unpriced_requests) },
-  { key: 'cost', header: 'Cost', cell: (row) => fmtCost(row.cost) },
-];
+function dayColumns(t: Translator): readonly DataTableColumn<DayBucket>[] {
+  return [
+    { key: 'date', header: t('usage.th.day'), cell: (row) => row.date },
+    { key: 'requests', header: t('usage.th.requests'), cell: (row) => fmtInt(row.requests) },
+    { key: 'prompt', header: t('usage.th.prompt'), cell: (row) => fmtInt(row.prompt_tokens) },
+    {
+      key: 'completion',
+      header: t('usage.th.completion'),
+      cell: (row) => fmtInt(row.completion_tokens),
+    },
+    {
+      key: 'cache_read',
+      header: t('usage.th.cacheRead'),
+      cell: (row) => fmtInt(row.cache_read_tokens),
+    },
+    { key: 'failed', header: t('usage.th.failed'), cell: (row) => fmtInt(row.failed_runs) },
+    {
+      key: 'unpriced',
+      header: t('usage.th.unpriced'),
+      cell: (row) => fmtInt(row.unpriced_requests),
+    },
+    { key: 'cost', header: t('usage.th.cost'), cell: (row) => fmtCost(row.cost) },
+  ];
+}
 
 interface StatEntry {
   key: string;
@@ -33,81 +54,77 @@ interface StatEntry {
   hint?: string;
 }
 
-function summaryStats(data: SummaryResult): StatEntry[] {
+function summaryStats(data: SummaryResult, t: Translator): StatEntry[] {
   const totals = data.totals;
   return [
     {
       key: 'requests',
-      label: 'Requests',
+      label: t('usage.requests'),
       value: fmtInt(totals.requests),
-      hint: totals.failed_runs > 0 ? `${fmtInt(totals.failed_runs)} failed run(s)` : undefined,
+      hint:
+        totals.failed_runs > 0
+          ? t('usage.failedRuns', { n: fmtInt(totals.failed_runs) })
+          : undefined,
     },
     {
       key: 'prompt',
-      label: 'Prompt tokens',
+      label: t('usage.promptTokens'),
       value: fmtInt(totals.prompt_tokens),
-      hint: 'Includes cache counters',
+      hint: t('usage.promptHint'),
     },
     {
       key: 'completion',
-      label: 'Completion tokens',
+      label: t('usage.completionTokens'),
       value: fmtInt(totals.completion_tokens),
     },
     {
       key: 'cache_read',
-      label: 'Cache read',
+      label: t('usage.cacheRead'),
       value: fmtInt(totals.cache_read_tokens),
       hint:
-        totals.cache_read_tokens === undefined
-          ? 'Not reported by provider'
-          : 'Read from the prompt cache',
+        totals.cache_read_tokens === undefined ? t('usage.cacheNotReported') : t('usage.cacheHint'),
     },
     {
       key: 'input_share',
-      label: 'Input share',
+      label: t('usage.inputShare'),
       value: fmtPct(data.input_share),
-      hint: ratioHint(data.input_share_unavailable, 'Cache read / prompt tokens'),
+      hint: ratioHint(data.input_share_unavailable, t('usage.inputShareHint'), t),
     },
     {
       key: 'prefix_health',
-      label: 'Prefix health',
+      label: t('usage.prefixHealth'),
       value: fmtPct(data.prefix_health),
-      hint: ratioHint(data.prefix_health_unavailable, 'Cache read / (read + write)'),
+      hint: ratioHint(data.prefix_health_unavailable, t('usage.prefixHealthHint'), t),
     },
     {
       key: 'cost',
-      label: 'Cost',
+      label: t('usage.cost'),
       value: fmtCost(data.cost),
-      hint: costHint(data),
+      hint: costHint(data, t),
     },
   ];
 }
 
-function UsageBody({ data }: { data: SummaryResult }) {
+function UsageBody({ data, t }: { data: SummaryResult; t: Translator }) {
   if (!data.has_data) {
-    return (
-      <EmptyState
-        title="No usage data yet"
-        description="Run a request through Vessel. Usage appears here once the event log has records in the selected range."
-      />
-    );
+    return <EmptyState title={t('usage.empty.title')} description={t('usage.empty.description')} />;
   }
 
   return (
     <>
       <div className="grid grid-cols-2 gap-3 compact:grid-cols-3 wide:grid-cols-4">
-        {summaryStats(data).map((entry) => (
+        {summaryStats(data, t).map((entry) => (
           <Stat key={entry.key} label={entry.label} value={entry.value} hint={entry.hint} />
         ))}
       </div>
-      <Section title="By day">
-        <DataTable columns={DAY_COLUMNS} rows={data.by_day} rowKey={(row) => row.date} />
+      <Section title={t('usage.byDay')}>
+        <DataTable columns={dayColumns(t)} rows={data.by_day} rowKey={(row) => row.date} />
       </Section>
     </>
   );
 }
 
-export function UsageView({ client, refreshKey }: ViewProps) {
+export function UsageView({ client, refreshKey, t }: ViewProps) {
   const [range, setRange] = useState<RangeValue>('30');
   const [state, setState] = useState<LoadState<SummaryResult>>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
@@ -132,15 +149,22 @@ export function UsageView({ client, refreshKey }: ViewProps) {
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
   return (
-    <div className="flex flex-col gap-4">
-      <PageHeader
-        title="Usage"
-        description="Requests, tokens, cache and cost from persisted run history."
-        actions={<RangeTabs value={range} onChange={setRange} />}
+    <PluginPage>
+      <PluginPageHeader
+        title={t('usage.title')}
+        description={t('usage.description')}
+        actions={<RangeTabs value={range} onChange={setRange} t={t} />}
       />
-      {state.status === 'loading' ? <LoadingState /> : null}
-      {state.status === 'error' ? <ErrorState error={state.error} onRetry={retry} /> : null}
-      {state.status === 'ready' ? <UsageBody data={state.data} /> : null}
-    </div>
+      {state.status === 'loading' ? <LoadingState label={t('common.loading')} /> : null}
+      {state.status === 'error' ? (
+        <ErrorState
+          error={state.error}
+          onRetry={retry}
+          title={t('common.loadError')}
+          retryLabel={t('common.retry')}
+        />
+      ) : null}
+      {state.status === 'ready' ? <UsageBody data={state.data} t={t} /> : null}
+    </PluginPage>
   );
 }
