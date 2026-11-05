@@ -2,8 +2,7 @@ import type { ToastApi } from '../components/ToastProvider';
 import type { ConnectionState } from '../gateway/client';
 import { t } from '../i18n';
 import type { PaletteItem } from '../state/palette';
-import { primaryRoute } from './DomainNav';
-import { DOMAINS, domainLabel, settingsTabLabel } from './nav';
+import { DOMAINS, domainLabel, primaryRoute, settingsTabLabel } from './nav';
 import { requestRefresh } from './refresh';
 import type { Route } from './router';
 

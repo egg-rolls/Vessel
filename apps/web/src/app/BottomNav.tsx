@@ -5,8 +5,7 @@ import { cn } from '../components/ui/cn';
 import { usePluginContributions } from '../domains/plugins/usePluginContributions';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
-import { primaryRoute } from './DomainNav';
-import { domainLabel, isDomainActive, type PrimaryDomain } from './nav';
+import { domainLabel, isDomainActive, type PrimaryDomain, primaryRoute } from './nav';
 import type { Route } from './router';
 
 /** 移动端常驻 3 项；编排 / Status / Observe / Settings 放进 More sheet。 */

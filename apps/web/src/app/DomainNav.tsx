@@ -1,70 +1,44 @@
-import { Fragment, type Ref } from 'react';
-import { DomainIcon } from '../components/DomainIcon';
+import { type Ref, useState } from 'react';
 import { ResizeHandle } from '../components/ResizeHandle';
-import { IconButton, Tooltip } from '../components/Tooltip';
+import { IconButton } from '../components/Tooltip';
 import { cn } from '../components/ui/cn';
 import { PluginPanelList } from '../domains/plugins/PluginPanels';
-import type { PluginNavGroupItem, PluginPageItem } from '../domains/plugins/plugin-contributions';
-import {
-  pagesForNav,
-  panelsForSlot,
-  usePluginContributions,
-} from '../domains/plugins/usePluginContributions';
+import { panelsForSlot, usePluginContributions } from '../domains/plugins/usePluginContributions';
 import { t, useLocale } from '../i18n';
 import type { NavMode } from './layout';
-import {
-  DOMAINS,
-  domainLabel,
-  isDomainActive,
-  NAV_GROUPS,
-  navGroupLabel,
-  type PrimaryDomain,
-} from './nav';
-import type { NavStatuses } from './nav-status';
+import { NavGroup } from './NavGroup';
+import { buildNavModel } from './nav-model';
 import type { Route } from './router';
 import { useNavStatus } from './useNavStatus';
 import type { PaneResizeApi } from './usePaneResize';
 
-export function primaryRoute(domain: PrimaryDomain): Route {
-  switch (domain) {
-    case 'chat':
-      return { domain: 'chat' };
-    case 'hub':
-      return { domain: 'hub' };
-    case 'gateway':
-      return { domain: 'gateway' };
-    case 'nodes':
-      return { domain: 'nodes' };
-    case 'teams':
-      return { domain: 'teams' };
-    case 'agents':
-      return { domain: 'agents' };
-    case 'runs':
-      return { domain: 'runs', tab: 'live' };
-    case 'tools':
-      return { domain: 'tools' };
-    case 'mcp':
-      return { domain: 'mcp' };
-    case 'channels':
-      return { domain: 'channels' };
-    case 'observe':
-      return { domain: 'observe', tab: 'metrics' };
+const COLLAPSED_GROUPS_KEY = 'vessel.nav.collapsed-groups';
+
+function readCollapsedGroups(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((value): value is string => typeof value === 'string'));
+  } catch {
+    return new Set();
   }
 }
 
-function domainDef(id: PrimaryDomain) {
-  const entry = DOMAINS.find((domain) => domain.id === id);
-  if (!entry) throw new Error(`unknown domain: ${id}`);
-  return entry;
+function writeCollapsedGroups(ids: ReadonlySet<string>): void {
+  try {
+    localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...ids]));
+  } catch {
+    // 隐私模式 / 配额满：本次会话内仍然生效。
+  }
 }
 
-function statusOf(domain: PrimaryDomain, statuses: NavStatuses) {
-  if (domain === 'hub') return statuses.hub;
-  if (domain === 'gateway') return statuses.gateway;
-  return null;
-}
-
-/** 展开 256px / 折叠 56px / 平板 64px rail / 移动抽屉。设置固定在底部。 */
+/**
+ * 主导航：数据驱动的 NavModel + 单一滚动区。
+ *
+ * 顶部品牌 / 收起展开 / 抽屉关闭固定；分组、条目、插件面板统一放进一个
+ * `overflow-y-auto` 滚动容器。分组头可折叠，默认展开并持久化折叠 key。
+ */
 export function DomainNav({
   route,
   navigate,
@@ -92,117 +66,32 @@ export function DomainNav({
     panels: pluginPanels,
     methodsByPlugin,
   } = usePluginContributions();
-  const topPluginPages = pagesForNav(pluginPages, 'top');
-  const observePluginPages = pagesForNav(pluginPages, 'observe');
-  const pluginsPluginPages = pagesForNav(pluginPages, 'plugins');
-  const settingsPluginPages = pagesForNav(pluginPages, 'settings');
+  const [collapsedGroups, setCollapsedGroups] = useState(readCollapsedGroups);
   const navPanels = panelsForSlot(pluginPanels, 'nav');
+  const groups = buildNavModel({ route, pluginPages, pluginNavGroups, statuses });
+
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';
   const showLabels = !collapsed;
   const showCollapseToggle = mode === 'expanded' || mode === 'collapsed';
   const collapseLabel = collapsed ? t('nav.expandNav') : t('nav.collapseNav');
   const drawerA11y = drawer ? { role: 'dialog' as const, 'aria-modal': open } : {};
-  const settingsLabel = domainLabel('settings');
-  const itemClass = cn(
-    'flex min-h-control w-full items-center rounded-sm bg-transparent text-left text-md text-muted transition-colors duration-150 hover:bg-hover hover:text-ink',
-    collapsed ? 'justify-center gap-0 px-0 py-1' : 'gap-2.5 px-3 py-1',
-  );
-  const activeClass = 'bg-accent-soft text-accent-ink hover:bg-accent-soft hover:text-accent-ink';
-  const pluginPageButton = (page: PluginPageItem) => {
-    const active =
-      route.domain === 'plugins' &&
-      route.pluginId === page.pluginId &&
-      (route.entry === undefined || route.entry === page.entry);
-    const button = (
-      <button
-        key={`${page.pluginId}:${page.id}`}
-        type="button"
-        className={cn(itemClass, active && activeClass)}
-        aria-current={active ? 'page' : undefined}
-        aria-label={page.title}
-        onClick={() => navigate({ domain: 'plugins', pluginId: page.pluginId, entry: page.entry })}
-      >
-        <span className="inline-flex flex-none">
-          <DomainIcon domain={page.icon ?? 'plugins'} />
-        </span>
-        {showLabels && (
-          <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-            {page.title}
-          </span>
-        )}
-      </button>
-    );
-    return collapsed ? (
-      <Tooltip key={`${page.pluginId}:${page.id}`} label={page.title}>
-        {button}
-      </Tooltip>
-    ) : (
-      button
-    );
+
+  const toggleGroup = (id: string) => {
+    setCollapsedGroups((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      writeCollapsedGroups(next);
+      return next;
+    });
   };
 
-  const pluginGroup = (key: string, items: readonly PluginPageItem[]) => {
-    if (items.length === 0) return null;
-    return (
-      <div className="mt-3 flex flex-col gap-0.5" key={key}>
-        {showLabels && (
-          <div className="overflow-hidden text-ellipsis whitespace-nowrap px-3 pt-1 pb-0.5 font-mono text-2xs tracking-[var(--tracking-wide)] text-faint uppercase">
-            {navGroupLabel('plugins')}
-          </div>
-        )}
-        {items.map(pluginPageButton)}
-      </div>
-    );
-  };
-
-  const customPluginGroup = (group: PluginNavGroupItem) => {
-    const items = pagesForNav(pluginPages, group.id);
-    if (items.length === 0) return null;
-    return (
-      <div
-        className="mt-3 flex flex-col gap-0.5"
-        key={`plugin-group:${group.pluginId}:${group.id}`}
-      >
-        {showLabels && (
-          <div className="flex items-center gap-2 overflow-hidden px-3 pt-1 pb-0.5 font-mono text-2xs tracking-[var(--tracking-wide)] text-faint uppercase">
-            <span className="inline-flex flex-none [&_svg]:size-3">
-              <DomainIcon domain={group.icon ?? 'plugins'} />
-            </span>
-            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-              {group.title}
-            </span>
-          </div>
-        )}
-        {items.map(pluginPageButton)}
-      </div>
-    );
-  };
-
-  const settingsActive = route.domain === 'settings';
-  const settingsButton = (
-    <button
-      type="button"
-      className={cn(itemClass, settingsActive && activeClass)}
-      aria-current={settingsActive ? 'page' : undefined}
-      aria-label={settingsLabel}
-      onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
-    >
-      <span className="inline-flex flex-none">
-        <DomainIcon domain="settings" />
-      </span>
-      {showLabels && (
-        <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-          {settingsLabel}
-        </span>
-      )}
-    </button>
-  );
   const navClass = cn(
-    'flex flex-none flex-col bg-surface',
+    'flex flex-none flex-col overflow-hidden bg-surface',
     drawer
-      ? 'fixed inset-y-0 left-0 z-[var(--z-drawer)] min-h-0 w-[min(86vw,var(--drawer-w))] overflow-y-auto overscroll-contain shadow-elev-3 transition-[transform,visibility] duration-[var(--motion-ui)] ease-[var(--ease)]'
-      : 'relative min-h-0 overflow-y-auto overscroll-contain',
+      ? 'fixed inset-y-0 left-0 z-[var(--z-drawer)] min-h-0 w-[min(86vw,var(--drawer-w))] shadow-elev-3 transition-[transform,visibility] duration-[var(--motion-ui)] ease-[var(--ease)]'
+      : 'relative min-h-0',
     drawer &&
       (open ? 'visible translate-x-0 transition-[transform]' : 'invisible -translate-x-full'),
     !drawer &&
@@ -256,99 +145,32 @@ export function DomainNav({
           )}
         </div>
       )}
-      <div className={cn('flex flex-1 flex-col gap-0.5 py-1.5', collapsed ? 'px-2' : 'px-2.5')}>
-        {pluginGroup('plugins-top', topPluginPages)}
-        {NAV_GROUPS.map((group, index) => (
-          <Fragment key={group.id}>
-            <div
-              className={cn(
-                'flex flex-col gap-0.5',
-                (index > 0 || topPluginPages.length > 0) && 'mt-3',
-              )}
-            >
-              {showLabels && (
-                <div className="overflow-hidden text-ellipsis whitespace-nowrap px-3 pt-1 pb-0.5 font-mono text-2xs tracking-[var(--tracking-wide)] text-faint uppercase">
-                  {navGroupLabel(group.id)}
-                </div>
-              )}
-              {group.domains.map((domainId) => {
-                const domain = domainDef(domainId);
-                const active = isDomainActive(route, domain.id);
-                const label = domainLabel(domain.id);
-                const status = statusOf(domain.id, statuses);
-                const statusText = status ? t(status.labelKey) : '';
-                const versionText = status?.version ? `v${status.version}` : '—';
-                const tooltip = status ? `${label} · ${statusText} · ${versionText}` : label;
-                const button = (
-                  <button
-                    key={domain.id}
-                    type="button"
-                    className={cn(itemClass, active && activeClass)}
-                    aria-current={active ? 'page' : undefined}
-                    aria-label={label}
-                    onClick={() => navigate(primaryRoute(domain.id))}
-                  >
-                    <span className="inline-flex flex-none">
-                      <DomainIcon domain={domain.id} />
-                    </span>
-                    {showLabels && (
-                      <span
-                        className={cn(
-                          'min-w-0 overflow-hidden text-ellipsis whitespace-nowrap',
-                          status && 'flex-1',
-                        )}
-                      >
-                        {label}
-                      </span>
-                    )}
-                    {showLabels && status && (
-                      <>
-                        <span
-                          className="size-1.5 flex-none rounded-full bg-faint data-[tone=ok]:bg-success data-[tone=warn]:bg-warn data-[tone=warn]:pulse-soft data-[tone=danger]:bg-danger"
-                          data-tone={status.tone}
-                          role="img"
-                          aria-label={statusText}
-                          title={statusText}
-                        />
-                        <span className="flex-none whitespace-nowrap font-mono text-2xs text-faint">
-                          {versionText}
-                        </span>
-                      </>
-                    )}
-                  </button>
-                );
-                return collapsed ? (
-                  <Tooltip key={domain.id} label={tooltip}>
-                    {button}
-                  </Tooltip>
-                ) : (
-                  button
-                );
-              })}
-            </div>
-            {group.id === 'network' && pluginGroup('plugins-observe', observePluginPages)}
-          </Fragment>
-        ))}
-        {pluginGroup('plugins-nav', pluginsPluginPages)}
-        {pluginGroup('plugins-settings', settingsPluginPages)}
-        {pluginNavGroups.map(customPluginGroup)}
-      </div>
       <div
         className={cn(
-          'flex flex-none flex-col gap-0.5 px-2.5 pt-2 pb-[calc(var(--space-2)+env(safe-area-inset-bottom))]',
-          collapsed && 'px-2',
+          'flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain py-1.5',
+          collapsed ? 'px-2' : 'px-2.5',
         )}
       >
+        {groups.map((group, index) => (
+          <NavGroup
+            key={group.id}
+            group={group}
+            collapsed={collapsed}
+            expanded={!collapsedGroups.has(group.id)}
+            onToggle={() => toggleGroup(group.id)}
+            onNavigate={navigate}
+            {...(index > 0 ? { className: 'mt-3' } : {})}
+          />
+        ))}
         {/* nav 槽位：折叠 rail 放不下 iframe，只在展开 / 抽屉宽度渲染。 */}
         {showLabels && (
           <PluginPanelList
             items={navPanels}
             methodsByPlugin={methodsByPlugin}
             dense
-            className="mb-2"
+            className="mt-2 mb-2"
           />
         )}
-        {collapsed ? <Tooltip label={settingsLabel}>{settingsButton}</Tooltip> : settingsButton}
       </div>
       {mode === 'expanded' && !panes.disabled('nav') && (
         <ResizeHandle

@@ -42,6 +42,34 @@ export const NAV_GROUPS: readonly {
   { id: 'status', domains: ['hub', 'gateway'] },
 ];
 
+/** 主导航项的默认落点（不改路由；供 NavModel / 命令面板 / 移动端共用）。 */
+export function primaryRoute(domain: PrimaryDomain): Route {
+  switch (domain) {
+    case 'chat':
+      return { domain: 'chat' };
+    case 'hub':
+      return { domain: 'hub' };
+    case 'gateway':
+      return { domain: 'gateway' };
+    case 'nodes':
+      return { domain: 'nodes' };
+    case 'teams':
+      return { domain: 'teams' };
+    case 'agents':
+      return { domain: 'agents' };
+    case 'runs':
+      return { domain: 'runs', tab: 'live' };
+    case 'tools':
+      return { domain: 'tools' };
+    case 'mcp':
+      return { domain: 'mcp' };
+    case 'channels':
+      return { domain: 'channels' };
+    case 'observe':
+      return { domain: 'observe', tab: 'metrics' };
+  }
+}
+
 export function domainLabel(domain: Domain): string {
   return t(`nav.domain.${domain}`);
 }

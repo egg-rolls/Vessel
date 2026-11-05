@@ -64,8 +64,21 @@ export interface PluginPanelItem {
   entry: string;
 }
 
-/** 内置分组；自定义分组必须严格等于 `plugin:<pluginId>`。 */
-const BUILTIN_NAV_SLOTS: ReadonlySet<string> = new Set(['observe', 'plugins', 'settings', 'top']);
+/**
+ * 内置/核心分组 key（CONTRACT-0.43 §2.10 E6）；自定义分组必须严格等于
+ * `plugin:<pluginId>`。核心 key 不能被 plugin 覆盖或重命名。
+ */
+const BUILTIN_NAV_SLOTS: ReadonlySet<string> = new Set([
+  'top',
+  'plugins',
+  'observe',
+  'settings',
+  'chat',
+  'network',
+  'runs',
+  'integrations',
+  'status',
+]);
 const NAV_ICONS: ReadonlySet<string> = new Set(PLUGIN_NAV_ICONS);
 const PANEL_SLOTS: ReadonlySet<string> = new Set(['run-detail', 'session-detail', 'nav']);
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;

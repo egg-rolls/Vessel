@@ -24,6 +24,8 @@ export const messages = {
   'nav.group.runs': '运行',
   'nav.group.plugins': '插件',
   'nav.group.observe': 'OBSERVE',
+  'nav.group.top': '顶部',
+  'nav.group.settings': '设置',
   'nav.group.integrations': 'INTEGRATIONS',
   'nav.group.status': '状态',
   'nav.mainLabel': '主导航',
