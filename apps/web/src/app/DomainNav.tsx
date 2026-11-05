@@ -3,8 +3,13 @@ import { DomainIcon } from '../components/DomainIcon';
 import { ResizeHandle } from '../components/ResizeHandle';
 import { IconButton, Tooltip } from '../components/Tooltip';
 import { cn } from '../components/ui/cn';
+import { PluginPanelList } from '../domains/plugins/PluginPanels';
 import type { PluginPageItem } from '../domains/plugins/plugin-contributions';
-import { pagesForNav, usePluginContributions } from '../domains/plugins/usePluginContributions';
+import {
+  pagesForNav,
+  panelsForSlot,
+  usePluginContributions,
+} from '../domains/plugins/usePluginContributions';
 import { t, useLocale } from '../i18n';
 import type { NavMode } from './layout';
 import {
@@ -77,10 +82,11 @@ export function DomainNav({
 }) {
   useLocale();
   const statuses = useNavStatus();
-  const { pages: pluginPages } = usePluginContributions();
+  const { pages: pluginPages, panels: pluginPanels, methodsByPlugin } = usePluginContributions();
   const topPluginPages = pagesForNav(pluginPages, 'top');
   const observePluginPages = pagesForNav(pluginPages, 'observe');
   const settingsPluginPages = pagesForNav(pluginPages, 'settings');
+  const navPanels = panelsForSlot(pluginPanels, 'nav');
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';
   const showLabels = !collapsed;
@@ -298,6 +304,15 @@ export function DomainNav({
           collapsed && 'px-2',
         )}
       >
+        {/* nav 槽位：折叠 rail 放不下 iframe，只在展开 / 抽屉宽度渲染。 */}
+        {showLabels && (
+          <PluginPanelList
+            items={navPanels}
+            methodsByPlugin={methodsByPlugin}
+            dense
+            className="mb-2"
+          />
+        )}
         {collapsed ? <Tooltip label={settingsLabel}>{settingsButton}</Tooltip> : settingsButton}
       </div>
       {mode === 'expanded' && !panes.disabled('nav') && (

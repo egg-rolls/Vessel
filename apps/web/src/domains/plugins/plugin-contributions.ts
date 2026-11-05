@@ -133,6 +133,25 @@ function byOrder(a: { order: number; title?: string; id: string }, b: typeof a):
   return a.order - b.order || (a.title ?? a.id).localeCompare(b.title ?? b.id);
 }
 
+function isPluginListItem(value: unknown): value is PluginListItem {
+  if (value === null || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.name === 'string' && typeof record.enabled === 'boolean';
+}
+
+/**
+ * `plugin.changed` 的 payload（CONTRACT-0.43 §2.8）：gateway 广播的是
+ * `plugins.list` 形状的贡献快照 `{ plugins: [...] }`。
+ * 结构不可用时返回 null，调用方应回退到 `plugins.list`。
+ */
+export function pluginsFromChangedPayload(data: unknown): PluginListItem[] | null {
+  if (Array.isArray(data)) return data.filter(isPluginListItem);
+  if (data === null || typeof data !== 'object') return null;
+  const plugins = (data as Record<string, unknown>).plugins;
+  if (!Array.isArray(plugins)) return null;
+  return plugins.filter(isPluginListItem);
+}
+
 export interface PluginInventory {
   pages: PluginPageItem[];
   panels: PluginPanelItem[];

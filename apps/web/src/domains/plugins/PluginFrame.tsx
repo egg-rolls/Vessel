@@ -98,15 +98,23 @@ export function PluginFrame({
     return () => window.removeEventListener('message', onMessage);
   }, [client, pluginId, methods, postToFrame, src]);
 
-  // host → iframe：gateway 的 `plugin.ready` 通知到达时让页面自行重取数据。
+  // host → iframe：`plugin.ready` 或热重载后的 `plugin.changed` 让页面自行重取数据。
   useEffect(() => {
     if (src === null) return;
-    let lastVersion = -1;
+    let lastVersion = eventStore.getSnapshot().version;
     return eventStore.subscribe(() => {
       const snapshot = eventStore.getSnapshot();
       if (snapshot.version === lastVersion) return;
       lastVersion = snapshot.version;
-      for (const { event } of snapshot.entries.slice(-20)) {
+      const recent = snapshot.entries.slice(-20);
+      for (let index = recent.length - 1; index >= 0; index -= 1) {
+        const event = recent[index]?.event;
+        if (!event) continue;
+        // 热重载：entry/src 可能已变化（由父级重挂载），未变时让页面刷新数据。
+        if (event.type === 'plugin.changed') {
+          postToFrame({ type: REFRESH_MESSAGE });
+          break;
+        }
         if (event.type !== 'plugin.ready') continue;
         const data = event.data;
         const owner = data.plugin_id ?? data.pluginId ?? data.id ?? data.name;
