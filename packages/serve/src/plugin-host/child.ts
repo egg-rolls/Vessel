@@ -138,6 +138,8 @@ export function buildPluginEnv(input: {
   env.VESSEL_PLUGIN_PROTOCOL = String(PLUGIN_PROTOCOL_VERSION);
   env.VESSEL_PLUGIN_DATA_DIR = input.dataDir;
   env.VESSEL_PLUGIN_CONFIG = JSON.stringify(input.settings);
+  // E4 §3.2.2：宿主进程绝对 cwd（只读元数据，不是权限授予）。
+  env.VESSEL_PLUGIN_HOST_CWD = process.cwd();
   return env;
 }
 
@@ -270,6 +272,8 @@ export class ChildPluginProcess {
           ...(fsPermissions.includes('data-dir') && this.globalDataDir !== undefined
             ? { dataDir: this.globalDataDir }
             : {}),
+          // E4 §3.2.2：宿主进程绝对 cwd；marketplace 用它推导 project scope。
+          hostCwd: process.cwd(),
           events: descriptor.contributes?.events ?? [],
         },
         this.timeouts.activate,
