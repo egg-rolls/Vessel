@@ -15,6 +15,9 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
+/* 共享 UI 包：宿主构建必须扫描包内组件用到的 utilities。 */
+@source "../../../packages/plugin-ui/src";
+
 @import "./styles/tokens.css" layer(legacy);
 @import "./styles/base.css" layer(legacy);
 @import "./styles/layout.css" layer(legacy);
@@ -38,9 +41,6 @@
 @import "./styles/domains/hub.css" layer(legacy);
 @import "./styles/domains/nodes.css" layer(legacy);
 @import "./styles/domains/teams.css" layer(legacy);
-
-/* 共享 UI 包：宿主构建必须扫描包内组件用到的 utilities。 */
-@source "../../../packages/plugin-ui/src";
 
 /*
  * L1：Tailwind theme aliases。

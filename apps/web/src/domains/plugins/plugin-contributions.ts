@@ -7,9 +7,11 @@
 import type {
   PluginContributionPage,
   PluginContributionPanel,
+  PluginI18n,
   PluginListItem,
   PluginPanelSlot,
 } from '../../gateway/types';
+import { t } from '../../i18n';
 
 /** 图标白名单（与 DomainIcon 的领域名一致；不接受任意 SVG / 任意名字）。 */
 export const PLUGIN_NAV_ICONS = [
@@ -52,6 +54,8 @@ export interface PluginNavGroupItem {
   /** `plugin:<pluginId>` */
   id: string;
   title: string;
+  /** 可选 i18n key；由该 plugin 的 i18n 字典解析。 */
+  titleKey?: string;
   icon?: PluginNavIcon;
   order: number;
 }
@@ -87,6 +91,12 @@ const NAV_ICONS: ReadonlySet<string> = new Set(PLUGIN_NAV_ICONS);
 const PANEL_SLOTS: ReadonlySet<string> = new Set(['run-detail', 'session-detail', 'nav']);
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const RPC_METHOD = /^[a-z][a-z0-9_-]*$/;
+const I18N_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const I18N_FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);
+const I18N_MAX_ENTRIES = 200;
+const I18N_MAX_VALUE = 200;
+const PLUGIN_LOCALES = ['en', 'zh-CN'] as const;
+type PluginLocale = (typeof PLUGIN_LOCALES)[number];
 
 /**
  * 图标校验：缺失返回 `undefined`；非法返回 `null`（调用方丢弃该 page/group）。
@@ -96,6 +106,66 @@ function navIconOf(value: unknown): PluginNavIcon | null | undefined {
   const name = text(value);
   if (name === '') return undefined;
   return NAV_ICONS.has(name) ? (name as PluginNavIcon) : null;
+}
+
+/** 单 locale 字典：只保留合法 key / 非空 value，限制条目数与长度。 */
+function sanitizeLocale(record: unknown): Record<string, string> {
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) return {};
+  const out: Record<string, string> = {};
+  let count = 0;
+  for (const [key, raw] of Object.entries(record as Record<string, unknown>)) {
+    if (count >= I18N_MAX_ENTRIES) break;
+    if (!I18N_KEY.test(key) || I18N_FORBIDDEN.has(key)) continue;
+    if (typeof raw !== 'string') continue;
+    const value = raw.trim();
+    if (value === '' || value.length > I18N_MAX_VALUE) continue;
+    out[key] = value;
+    count += 1;
+  }
+  return out;
+}
+
+/** 插件私有字典；空字典返回 undefined，不进入 inventory。 */
+function i18nOf(plugin: PluginListItem): PluginI18n | undefined {
+  const raw = plugin.contributions?.i18n;
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const en = sanitizeLocale((raw as PluginI18n).en);
+  const zh = sanitizeLocale((raw as PluginI18n)['zh-CN']);
+  const hasEn = Object.keys(en).length > 0;
+  const hasZh = Object.keys(zh).length > 0;
+  if (!hasEn && !hasZh) return undefined;
+  return {
+    ...(hasEn ? { en } : {}),
+    ...(hasZh ? { 'zh-CN': zh } : {}),
+  };
+}
+
+/**
+ * 插件标题解析（CONTRACT-0.43 §2.11 E9）：
+ * plugin[locale] → plugin.en → host `t(key)` → manifest title → id。
+ * 字典按 plugin 作用域保存，不合并进宿主 catalog。
+ */
+export function pluginT(
+  i18nByPlugin: ReadonlyMap<string, PluginI18n>,
+  pluginId: string,
+  key: string | undefined,
+  locale: string,
+  title?: string,
+  id?: string,
+): string {
+  const dict = i18nByPlugin.get(pluginId);
+  const trimmedKey = key?.trim() ?? '';
+  if (trimmedKey !== '' && !I18N_FORBIDDEN.has(trimmedKey)) {
+    const localeText = PLUGIN_LOCALES.includes(locale as PluginLocale)
+      ? dict?.[locale as PluginLocale]?.[trimmedKey]
+      : undefined;
+    if (localeText) return localeText;
+    const enText = dict?.en?.[trimmedKey];
+    if (enText) return enText;
+    const hostText = t(trimmedKey);
+    if (hostText !== trimmedKey) return hostText;
+  }
+  return title?.trim() || id || trimmedKey;
 }
 
 export function isEnabledPlugin(plugin: PluginListItem): boolean {
@@ -175,6 +245,7 @@ function navGroupOf(plugin: PluginListItem): PluginNavGroupItem | null {
   const raw = groups.find((group) => text(group.id) === ownId);
   if (!raw) return null;
   const title = text(raw.title) || ownId;
+  const titleKey = text(raw.titleKey);
   const icon = navIconOf(raw.icon);
   if (icon === null) return null;
   return {
@@ -182,6 +253,7 @@ function navGroupOf(plugin: PluginListItem): PluginNavGroupItem | null {
     pluginName: plugin.name,
     id: ownId,
     title,
+    ...(titleKey !== '' ? { titleKey } : {}),
     ...(icon !== undefined ? { icon } : {}),
     order: orderOf(raw.order),
   };
@@ -257,6 +329,8 @@ export interface PluginInventory {
   pages: PluginPageItem[];
   navGroups: PluginNavGroupItem[];
   panels: PluginPanelItem[];
+  /** plugin id → 私有 i18n 字典（不合并进宿主 catalog）。 */
+  i18nByPlugin: ReadonlyMap<string, PluginI18n>;
   /** plugin id → 允许 iframe 调用的 RPC 方法名（rpc ∪ commands）。 */
   methodsByPlugin: ReadonlyMap<string, ReadonlySet<string>>;
 }
@@ -266,6 +340,7 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
   const pages: PluginPageItem[] = [];
   const navGroups: PluginNavGroupItem[] = [];
   const panels: PluginPanelItem[] = [];
+  const i18nByPlugin = new Map<string, PluginI18n>();
   const methodsByPlugin = new Map<string, Set<string>>();
 
   for (const plugin of plugins) {
@@ -273,6 +348,8 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
     const contributions = plugin.contributions;
     if (!contributions) continue;
 
+    const i18n = i18nOf(plugin);
+    if (i18n !== undefined) i18nByPlugin.set(plugin.name, i18n);
     const group = navGroupOf(plugin);
     if (group !== null) navGroups.push(group);
     for (const page of contributions.pages ?? []) {
@@ -301,5 +378,5 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
   pages.sort(byOrder);
   navGroups.sort(byOrder);
   panels.sort(byOrder);
-  return { pages, navGroups, panels, methodsByPlugin };
+  return { pages, navGroups, panels, i18nByPlugin, methodsByPlugin };
 }

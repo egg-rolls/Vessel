@@ -58,17 +58,25 @@ export function DomainNav({
   navRef?: Ref<HTMLElement>;
   panes: PaneResizeApi;
 }) {
-  useLocale();
+  const locale = useLocale();
   const statuses = useNavStatus();
   const {
     pages: pluginPages,
     navGroups: pluginNavGroups,
+    i18nByPlugin,
     panels: pluginPanels,
     methodsByPlugin,
   } = usePluginContributions();
   const [collapsedGroups, setCollapsedGroups] = useState(readCollapsedGroups);
   const navPanels = panelsForSlot(pluginPanels, 'nav');
-  const groups = buildNavModel({ route, pluginPages, pluginNavGroups, statuses });
+  const groups = buildNavModel({
+    route,
+    pluginPages,
+    pluginNavGroups,
+    i18nByPlugin,
+    locale,
+    statuses,
+  });
 
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';

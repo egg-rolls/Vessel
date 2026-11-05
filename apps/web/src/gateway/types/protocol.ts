@@ -94,11 +94,19 @@ export interface RpcResponseEnvelope<T = unknown> {
  */
 export type PluginNavSlot = string;
 
+/** CONTRACT-0.43 §2.11 E9：插件私有字典（只支持 en / zh-CN）。 */
+export interface PluginI18n {
+  en?: Record<string, string>;
+  'zh-CN'?: Record<string, string>;
+}
+
 /** CONTRACT-0.43 §2.9 E5：plugin 自定义导航分组。 */
 export interface PluginNavGroupContribution {
   /** 必须是 `plugin:<pluginId>`；v1 每个 plugin 最多一个。 */
   id: string;
   title: string;
+  /** 可选 i18n key；由该 plugin 的 i18n 字典解析。 */
+  titleKey?: string;
   /** 白名单图标名；未知名由 Web normalizer 丢弃。 */
   icon?: string;
   order?: number;
@@ -137,6 +145,8 @@ export interface PluginContributionCommand {
 }
 
 export interface PluginContributions {
+  /** CONTRACT-0.43 §2.11 E9：插件私有 i18n 字典；不合并进宿主 catalog。 */
+  i18n?: PluginI18n;
   /** CONTRACT-0.43 §2.9 E5：自定义导航分组（v1 每 plugin 最多一个）。 */
   navGroups?: PluginNavGroupContribution[];
   pages?: PluginContributionPage[];

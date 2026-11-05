@@ -4,8 +4,12 @@
  * 核心 domain 与插件页面都变成 `NavGroup → NavItem` 数据项；渲染组件只消费
  * 模型，不再为每个来源写一段 JSX。匹配规则按稳定 key，不按显示名称。
  */
-import type { PluginNavGroupItem, PluginPageItem } from '../domains/plugins/plugin-contributions';
-import { t } from '../i18n';
+import {
+  type PluginNavGroupItem,
+  type PluginPageItem,
+  pluginT,
+} from '../domains/plugins/plugin-contributions';
+import type { PluginI18n } from '../gateway/types';
 import {
   domainLabel,
   isDomainActive,
@@ -63,10 +67,15 @@ function coreItem(domain: PrimaryDomain, route: Route, statuses: NavStatuses): N
   };
 }
 
-function pageItem(page: PluginPageItem, currentRoute: Route): NavItemModel {
+function pageItem(
+  page: PluginPageItem,
+  currentRoute: Route,
+  i18nByPlugin: ReadonlyMap<string, PluginI18n>,
+  locale: string,
+): NavItemModel {
   return {
     id: `plugin:${page.pluginId}:${page.id}`,
-    title: page.titleKey ? t(page.titleKey) : page.title,
+    title: pluginT(i18nByPlugin, page.pluginId, page.titleKey, locale, page.title, page.id),
     icon: page.icon ?? 'plugins',
     route: { domain: 'plugins', pluginId: page.pluginId, entry: page.entry },
     active:
@@ -76,11 +85,17 @@ function pageItem(page: PluginPageItem, currentRoute: Route): NavItemModel {
   };
 }
 
-function pagesFor(pages: readonly PluginPageItem[], nav: string, route: Route): NavItemModel[] {
+function pagesFor(
+  pages: readonly PluginPageItem[],
+  nav: string,
+  route: Route,
+  i18nByPlugin: ReadonlyMap<string, PluginI18n>,
+  locale: string,
+): NavItemModel[] {
   return pages
     .filter((page) => page.nav === nav)
     .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title))
-    .map((page) => pageItem(page, route));
+    .map((page) => pageItem(page, route, i18nByPlugin, locale));
 }
 
 /** 插件页面按 nav key 追加；核心项保持固定顺序。 */
@@ -88,11 +103,15 @@ export function buildNavModel({
   route,
   pluginPages,
   pluginNavGroups,
+  i18nByPlugin,
+  locale,
   statuses,
 }: {
   route: Route;
   pluginPages: readonly PluginPageItem[];
   pluginNavGroups: readonly PluginNavGroupItem[];
+  i18nByPlugin: ReadonlyMap<string, PluginI18n>;
+  locale: string;
   statuses: NavStatuses;
 }): NavGroupModel[] {
   const groups: NavGroupModel[] = [];
@@ -106,15 +125,17 @@ export function buildNavModel({
     icon: 'plugins',
     order: 0,
     collapsible: true,
-    items: pagesFor(pluginPages, 'top', route),
+    items: pagesFor(pluginPages, 'top', route, i18nByPlugin, locale),
   });
 
   NAV_GROUPS.forEach((group, index) => {
     const items = group.domains.map((domain) => coreItem(domain, route, statuses));
     // 旧 `observe` 槽位并入 orchestration 组；旧 `status` key 并入 core。
-    if (group.id === 'network') items.push(...pagesFor(pluginPages, 'observe', route));
-    if (group.id === 'core') items.push(...pagesFor(pluginPages, 'status', route));
-    items.push(...pagesFor(pluginPages, group.id, route));
+    if (group.id === 'network')
+      items.push(...pagesFor(pluginPages, 'observe', route, i18nByPlugin, locale));
+    if (group.id === 'core')
+      items.push(...pagesFor(pluginPages, 'status', route, i18nByPlugin, locale));
+    items.push(...pagesFor(pluginPages, group.id, route, i18nByPlugin, locale));
     push({
       id: group.id,
       title: navGroupLabel(group.id),
@@ -132,7 +153,7 @@ export function buildNavModel({
     icon: 'plugins',
     order: coreCount,
     collapsible: true,
-    items: pagesFor(pluginPages, 'plugins', route),
+    items: pagesFor(pluginPages, 'plugins', route, i18nByPlugin, locale),
   });
 
   // 自定义分组：内置组之后，按 navGroups[].order 升序。
@@ -140,11 +161,11 @@ export function buildNavModel({
     .sort((a, b) => a.order - b.order)
     .map<NavGroupModel>((group) => ({
       id: group.id,
-      title: group.title,
+      title: pluginT(i18nByPlugin, group.pluginId, group.titleKey, locale, group.title, group.id),
       icon: group.icon ?? 'plugins',
       order: group.order,
       collapsible: true,
-      items: pagesFor(pluginPages, group.id, route),
+      items: pagesFor(pluginPages, group.id, route, i18nByPlugin, locale),
     }));
   for (const group of customGroups) push(group);
 

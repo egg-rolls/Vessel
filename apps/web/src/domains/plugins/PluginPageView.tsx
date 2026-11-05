@@ -71,25 +71,15 @@ export function PluginPageView({ route }: { route: PluginsRoute }) {
     );
   })();
 
-  // 有可用插件页面时，整块内容区交给 iframe：宿主不加 padding / max-width /
-  // PageHeader，插件自己决定布局与滚动。空态 / 错误态才用带 padding 的容器。
-  if (plugin !== undefined && page !== undefined) {
-    return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden focus:outline-none">
-        <PluginFrame
-          pluginId={plugin.name}
-          entry={page.entry}
-          title={page.title}
-          methods={methodsByPlugin.get(plugin.name) ?? EMPTY_METHODS}
-          className="min-h-0 w-full flex-1"
-        />
-      </div>
-    );
-  }
-
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader title={page?.title ?? pluginId} tenantId={tenantId} />
+    <div className="flex min-h-0 flex-1 flex-col gap-3 p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
+      <PageHeader
+        title={page?.title ?? pluginId}
+        description={
+          plugin !== undefined ? t('plugins.page.description', { plugin: plugin.name }) : undefined
+        }
+        tenantId={tenantId}
+      />
       {body}
     </div>
   );
