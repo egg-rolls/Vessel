@@ -5,7 +5,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/*.md"]
+    "includes": ["**", "!**/*.md", "!plugins/*/*/web/assets"]
   },
   "formatter": {
     "enabled": true,
