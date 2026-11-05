@@ -134,10 +134,10 @@ export function buildPluginEnv(input: {
     const value = inherited[key];
     if (value !== undefined) env[key] = value;
   }
-  env.VESSEL_MOD_ID = input.descriptor.id;
-  env.VESSEL_MOD_PROTOCOL = String(PLUGIN_PROTOCOL_VERSION);
-  env.VESSEL_MOD_DATA_DIR = input.dataDir;
-  env.VESSEL_MOD_CONFIG = JSON.stringify(input.settings);
+  env.VESSEL_PLUGIN_ID = input.descriptor.id;
+  env.VESSEL_PLUGIN_PROTOCOL = String(PLUGIN_PROTOCOL_VERSION);
+  env.VESSEL_PLUGIN_DATA_DIR = input.dataDir;
+  env.VESSEL_PLUGIN_CONFIG = JSON.stringify(input.settings);
   return env;
 }
 
@@ -261,7 +261,7 @@ export class ChildPluginProcess {
         throw pluginError('plugin_activation_failed', 'plugin.hello rejected the host handshake.');
       }
       // §3.2.1：dataDir 是全局 data dir（只读），且只有声明 data-dir 权限才下发；
-      // 私有可写目录始终只经 VESSEL_MOD_DATA_DIR 提供。
+      // 私有可写目录始终只经 VESSEL_PLUGIN_DATA_DIR 提供。
       const fsPermissions = descriptor.permissions?.fs ?? [];
       const activated = await this.request(
         'plugin.activate',
