@@ -8,13 +8,7 @@ import { cn } from './cn';
  * `max-compact:px-3 pt-4 pb-7`。插件 iframe 是全空间，所以由插件自己套这一层，
  * 视觉边距才能和 Vessel 其它页面一致。
  */
-export function PluginPage({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+export function PluginPage({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div
       className={cn(
