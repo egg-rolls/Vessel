@@ -22,6 +22,11 @@ export function themeAttribute(theme: Theme): 'light' | 'dark' | null {
   return theme === 'system' ? null : theme;
 }
 
+/** 解析实际主题：system 跟随系统偏好，显式值原样返回。 */
+export function resolvedTheme(theme: Theme, systemDark: boolean): 'light' | 'dark' {
+  return theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
+}
+
 /** 应用主题；幂等，可在模块加载时调用。 */
 export function applyTheme(
   theme: Theme,

@@ -13,11 +13,14 @@ import { ErrorState, LoadingState } from '../../components/States';
 import { cn } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
+import { resolvedTheme, useTheme } from '../../state/theme';
 import { pluginFrameUrl } from './plugin-contributions';
 
 const RPC_MESSAGE = 'vessel.plugin.rpc';
 const RPC_RESULT = 'vessel.plugin.rpc.result';
 const REFRESH_MESSAGE = 'vessel.plugin.refresh';
+const THEME_MESSAGE = 'vessel.theme';
+const LANG_MESSAGE = 'vessel.lang';
 const MAX_MESSAGE_ID = 128;
 
 export interface PluginFrameContext {
@@ -48,6 +51,20 @@ export function PluginFrame({
   className?: string;
 }) {
   const locale = useLocale();
+  const { theme } = useTheme();
+  const [systemDark, setSystemDark] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia('(prefers-color-scheme: dark)');
+    const sync = () => setSystemDark(query.matches);
+    sync();
+    query.addEventListener('change', sync);
+    return () => query.removeEventListener('change', sync);
+  }, []);
+  const effectiveTheme = resolvedTheme(theme, systemDark);
   const { client, gatewayUrl, eventStore } = useConnection();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -56,20 +73,34 @@ export function PluginFrame({
 
   const contextRun = context?.run;
   const contextSession = context?.session;
+  // 初始值进 URL；后续主题 / 语言变化只发消息，不重载 iframe。
+  const initialLang = useRef(locale);
+  const initialTheme = useRef(effectiveTheme);
   const src = useMemo(
     () =>
       pluginFrameUrl(gatewayUrl, pluginId, entry, {
         run: contextRun,
         session: contextSession,
-        lang: locale,
+        lang: initialLang.current,
+        theme: initialTheme.current,
       }),
-    [gatewayUrl, pluginId, entry, contextRun, contextSession, locale],
+    [gatewayUrl, pluginId, entry, contextRun, contextSession],
   );
 
   const postToFrame = useCallback((message: unknown) => {
     // opaque sandbox 的 origin 是 "null"；接收方按 event.source 校验发送者。
     iframeRef.current?.contentWindow?.postMessage(message, '*');
   }, []);
+
+  // 主题 / 语言运行时变化：保活 iframe，只推消息。
+  useEffect(() => {
+    if (!loaded) return;
+    postToFrame({ type: THEME_MESSAGE, theme: effectiveTheme });
+  }, [effectiveTheme, loaded, postToFrame]);
+  useEffect(() => {
+    if (!loaded) return;
+    postToFrame({ type: LANG_MESSAGE, lang: locale });
+  }, [locale, loaded, postToFrame]);
 
   // iframe → host：校验 source / origin / plugin id / 方法白名单后转发 gateway。
   useEffect(() => {

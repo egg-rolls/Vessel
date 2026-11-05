@@ -76,6 +76,7 @@ declare var Node: { new (): Node; prototype: Node };
 declare var window: Window;
 declare var document: {
   body: HTMLElement;
+  documentElement: HTMLElement;
   addEventListener(
     type: string,
     listener: (event: MouseEvent) => void,

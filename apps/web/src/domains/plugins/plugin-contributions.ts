@@ -140,7 +140,12 @@ export function pluginFrameUrl(
   gatewayUrl: string,
   pluginId: string,
   entry: string,
-  context?: { run?: string; session?: string; lang?: string },
+  context?: {
+    run?: string;
+    session?: string;
+    lang?: string;
+    theme?: 'light' | 'dark';
+  },
 ): string | null {
   if (!isValidPluginId(pluginId)) return null;
   const safeEntry = safeEntryPath(entry);
@@ -156,6 +161,7 @@ export function pluginFrameUrl(
   if (context?.run) url.searchParams.set('run', context.run);
   if (context?.session) url.searchParams.set('session', context.session);
   if (context?.lang) url.searchParams.set('lang', context.lang);
+  if (context?.theme) url.searchParams.set('theme', context.theme);
   return url.toString();
 }
 

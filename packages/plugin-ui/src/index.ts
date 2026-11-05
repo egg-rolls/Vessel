@@ -10,6 +10,7 @@ export { CARD_SURFACE_CLASS } from './card-surface';
 export { cn } from './cn';
 export * from './DataTable';
 export * from './Field';
+export * from './host';
 export * from './KeyValueList';
 export * from './SearchInput';
 export * from './Section';
