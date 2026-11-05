@@ -61,9 +61,16 @@ export type PluginIconName = (typeof PLUGIN_ICON_NAMES)[number];
 export interface PluginNavGroup {
   id: string;
   title: string;
+  /** 宿主 i18n key；`title` 是 fallback */
+  titleKey?: string;
   icon?: PluginIconName;
   order?: number;
 }
+
+/** 宿主支持的 i18n locale（导航 / 共享字符串） */
+export type PluginLocale = 'en' | 'zh-CN';
+/** `contributes.i18n`：locale → (key → 文案) */
+export type PluginI18n = Partial<Record<PluginLocale, Record<string, string>>>;
 
 export type PluginPanelSlot = 'run-detail' | 'session-detail' | 'nav';
 
@@ -109,6 +116,8 @@ export interface PluginPanelContribution {
 export interface PluginContributions {
   /** 0.45：自定义导航组；每个 plugin 最多一个，id 固定 `plugin:<pluginId>` */
   navGroups?: PluginNavGroup[];
+  /** 0.45 E9：宿主 i18n 文案（en / zh-CN） */
+  i18n?: PluginI18n;
   pages?: PluginPageContribution[];
   commands?: PluginCommandContribution[];
   settings?: Record<string, PluginSettingSchema>;
@@ -455,11 +464,14 @@ function readNavGroups(value: unknown, pluginId: string): PluginNavGroup[] {
     if (seen.has(id)) fail('plugin_manifest_invalid', `duplicate nav group id "${id}"`);
     seen.add(id);
     const title = requireString(item.title, `${field}.title`);
+    const titleKey =
+      item.titleKey === undefined ? undefined : requireString(item.titleKey, `${field}.titleKey`);
     const icon = readIcon(item.icon, `${field}.icon`);
     const order = optionalNumber(item.order, `${field}.order`);
     return {
       id,
       title,
+      ...(titleKey !== undefined ? { titleKey } : {}),
       ...(icon !== undefined ? { icon } : {}),
       ...(order !== undefined ? { order } : {}),
     };
@@ -516,6 +528,63 @@ function readCommands(value: unknown): PluginCommandContribution[] {
     const title = optionalString(item.title, `${field}.title`);
     return { name, ...(title !== undefined ? { title } : {}) };
   });
+}
+
+const I18N_LOCALES: ReadonlySet<string> = new Set(['en', 'zh-CN']);
+const I18N_KEY_RE = /^[a-z0-9][a-z0-9._-]*$/;
+const I18N_FORBIDDEN_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+const I18N_MAX_KEYS = 200;
+const I18N_MAX_VALUE_LENGTH = 200;
+
+function readI18n(value: unknown): PluginI18n {
+  if (!isRecord(value)) fail('plugin_manifest_invalid', 'contributes.i18n must be an object');
+  const out: PluginI18n = {};
+  for (const [locale, dictionary] of Object.entries(value)) {
+    if (!I18N_LOCALES.has(locale)) {
+      fail(
+        'plugin_manifest_invalid',
+        `contributes.i18n.${locale} is not a supported locale (en | zh-CN)`,
+      );
+    }
+    if (!isRecord(dictionary)) {
+      fail('plugin_manifest_invalid', `contributes.i18n.${locale} must be an object`);
+    }
+    const keys = Object.keys(dictionary);
+    if (keys.length > I18N_MAX_KEYS) {
+      fail(
+        'plugin_manifest_invalid',
+        `contributes.i18n.${locale} allows at most ${I18N_MAX_KEYS} keys`,
+      );
+    }
+    const normalized: Record<string, string> = {};
+    for (const key of keys) {
+      if (!I18N_KEY_RE.test(key)) {
+        fail(
+          'plugin_manifest_invalid',
+          `contributes.i18n.${locale} key "${key}" must match ${I18N_KEY_RE.source}`,
+        );
+      }
+      if (I18N_FORBIDDEN_KEYS.has(key)) {
+        fail('plugin_manifest_invalid', `contributes.i18n.${locale} key "${key}" is reserved`);
+      }
+      const text = dictionary[key];
+      if (typeof text !== 'string' || text.trim() === '') {
+        fail(
+          'plugin_manifest_invalid',
+          `contributes.i18n.${locale}.${key} must be a non-empty string`,
+        );
+      }
+      if (text.length > I18N_MAX_VALUE_LENGTH) {
+        fail(
+          'plugin_manifest_invalid',
+          `contributes.i18n.${locale}.${key} must be at most ${I18N_MAX_VALUE_LENGTH} chars`,
+        );
+      }
+      normalized[key] = text;
+    }
+    out[locale as PluginLocale] = normalized;
+  }
+  return out;
 }
 
 function readSettings(value: unknown): Record<string, PluginSettingSchema> {
@@ -583,6 +652,7 @@ function readContributions(
 
   const out: PluginContributions = {};
   if (raw.navGroups !== undefined) out.navGroups = readNavGroups(raw.navGroups, pluginId);
+  if (raw.i18n !== undefined) out.i18n = readI18n(raw.i18n);
   if (raw.pages !== undefined) out.pages = readPages(raw.pages, pluginId);
   if (raw.commands !== undefined) out.commands = readCommands(raw.commands);
   if (raw.settings !== undefined) out.settings = readSettings(raw.settings);

@@ -76,6 +76,7 @@ function toServeDescriptor(
     activationEvents: manifest.activationEvents,
     contributes: {
       ...(contributes.navGroups !== undefined ? { navGroups: contributes.navGroups } : {}),
+      ...(contributes.i18n !== undefined ? { i18n: contributes.i18n } : {}),
       ...(contributes.pages !== undefined
         ? {
             pages: contributes.pages.map((page) => ({
