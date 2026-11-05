@@ -3,20 +3,23 @@ import type { Domain, Route } from './router';
 
 type SettingsTab = Extract<Route, { domain: 'settings' }>['tab'];
 
-export type PrimaryDomain = Exclude<Domain, 'settings'>;
+export type PrimaryDomain = Exclude<Domain, 'settings' | 'plugins'>;
 
 export interface DomainDef {
   id: Domain;
 }
 
-/** 主领域；Settings 固定在底部（D1）。label 走 i18n，随 locale 变化。 */
+/**
+ * 主领域；Settings 固定在底部（D1）。label 走 i18n，随 locale 变化。
+ * Observe 已收敛为 Diagnostics（DECISION-044 §8），默认不出现在主导航；
+ * `#/observe/*` 路由与面板保留，由 Gateway 页 / 移动端 More 提供入口。
+ */
 export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'chat' },
   { id: 'agents' },
   { id: 'teams' },
   { id: 'nodes' },
   { id: 'runs' },
-  { id: 'observe' },
   { id: 'integrations' },
   { id: 'hub' },
   { id: 'gateway' },
@@ -32,7 +35,7 @@ export const NAV_GROUPS: readonly {
 }[] = [
   { id: 'chat', domains: ['chat'] },
   { id: 'network', domains: ['agents', 'teams', 'nodes'] },
-  { id: 'observe', domains: ['runs', 'observe'] },
+  { id: 'runs', domains: ['runs'] },
   { id: 'integrations', domains: ['integrations'] },
   { id: 'status', domains: ['hub', 'gateway'] },
 ];
@@ -84,6 +87,8 @@ export function routeBreadcrumb(route: Route): string {
       return t(`breadcrumb.integrations.${route.tab}`);
     case 'observe':
       return t(`breadcrumb.observe.${route.tab}`);
+    case 'plugins':
+      return t('breadcrumb.plugins');
     case 'settings':
       return t('breadcrumb.settings', { tab: settingsTabLabel(route.tab) });
   }

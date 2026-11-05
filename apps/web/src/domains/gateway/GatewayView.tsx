@@ -7,9 +7,11 @@
  */
 import { connectionLabel } from '../../app/connection-label';
 import { useRefreshSignal } from '../../app/refresh';
+import type { Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { NotEnabledState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
+import { Button } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
@@ -25,7 +27,7 @@ function pageOrigin(): string {
   return typeof window === 'undefined' ? '' : window.location.origin;
 }
 
-export function GatewayView() {
+export function GatewayView({ navigate }: { navigate: (route: Route) => void }) {
   useLocale();
   const { client, connectionState, hasToken, epoch, tenantId, gatewayUrl } = useConnection();
   const { current } = useNodes();
@@ -102,6 +104,15 @@ export function GatewayView() {
                   {config.error}
                 </p>
               )}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button
+                  size="small"
+                  onClick={() => navigate({ domain: 'observe', tab: 'diagnostics' })}
+                >
+                  {t('nav.diagnostics')}
+                </Button>
+                <span className="text-sm text-muted">{t('gateway.diagnosticsHint')}</span>
+              </div>
             </section>
           </div>
         )}

@@ -6,6 +6,7 @@ import { HubView } from '../domains/hub/HubView';
 import { IntegrationsView } from '../domains/integrations/IntegrationsView';
 import { NodePanelView } from '../domains/nodes/NodePanelView';
 import { ObserveView } from '../domains/observe/ObserveView';
+import { PluginPageView } from '../domains/plugins/PluginPageView';
 import { RunsView } from '../domains/runs/RunsView';
 import { SettingsView } from '../domains/settings/SettingsView';
 import { TeamsView } from '../domains/teams/TeamsView';
@@ -53,13 +54,14 @@ export function ShellRouteView({
         </ToolCatalogProvider>
       )}
       {route.domain === 'hub' && <HubView />}
-      {route.domain === 'gateway' && <GatewayView />}
+      {route.domain === 'gateway' && <GatewayView navigate={navigate} />}
       {route.domain === 'nodes' && <NodePanelView route={route} navigate={navigate} />}
       {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} />}
       {route.domain === 'agents' && <AgentsView route={route} navigate={navigate} />}
       {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
       {route.domain === 'integrations' && <IntegrationsView route={route} navigate={navigate} />}
       {route.domain === 'observe' && <ObserveView route={route} navigate={navigate} />}
+      {route.domain === 'plugins' && <PluginPageView route={route} />}
       {route.domain === 'settings' && <SettingsView route={route} navigate={navigate} />}
     </>
   );

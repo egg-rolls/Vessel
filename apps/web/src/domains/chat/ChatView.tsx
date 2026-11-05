@@ -15,6 +15,7 @@ import { t } from '../../i18n';
 import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
 import { useAgentStore } from '../../stores/agentStore';
+import { PluginPanels } from '../plugins/PluginPanels';
 import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
@@ -338,6 +339,14 @@ export function ChatView({
             });
           }}
         />
+
+        {selectedId && (
+          <PluginPanels
+            slot="session-detail"
+            context={{ session: selectedId }}
+            className="flex-none px-4 pb-2"
+          />
+        )}
 
         <TranscriptWindow
           hasToken={hasToken}

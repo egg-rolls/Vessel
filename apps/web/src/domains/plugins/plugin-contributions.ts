@@ -1,0 +1,179 @@
+/**
+ * `plugins.list` 贡献点的纯函数归一化（CONTRACT-0.43 §2.1 / §2.6 / §2.7）。
+ *
+ * Web 只消费 wire 字段：不扫描目录、不读 plugin 包。旧 gateway / 能力插件
+ * 没有 `contributions` 时返回空数组，导航与挂载点自然消失。
+ */
+import type {
+  PluginContributionPage,
+  PluginContributionPanel,
+  PluginListItem,
+  PluginNavSlot,
+  PluginPanelSlot,
+} from '../../gateway/types';
+
+export interface PluginPageItem {
+  pluginId: string;
+  pluginName: string;
+  id: string;
+  title: string;
+  nav: PluginNavSlot;
+  order: number;
+  entry: string;
+}
+
+export interface PluginPanelItem {
+  pluginId: string;
+  pluginName: string;
+  slot: PluginPanelSlot;
+  id: string;
+  title?: string;
+  order: number;
+  entry: string;
+}
+
+const NAV_SLOTS: ReadonlySet<string> = new Set(['observe', 'settings', 'top']);
+const PANEL_SLOTS: ReadonlySet<string> = new Set(['run-detail', 'session-detail', 'nav']);
+const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const RPC_METHOD = /^[a-z][a-z0-9_-]*$/;
+
+export function isEnabledPlugin(plugin: PluginListItem): boolean {
+  return plugin.enabled;
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function orderOf(value: unknown, fallback = 100): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/** entry 相对 `ui.dir`；缺失时优先从 `route` 末段推导，再回退 index.html。 */
+export function pageEntry(page: PluginContributionPage): string {
+  const entry = text(page.entry);
+  if (entry !== '') return entry;
+  const route = text(page.route).split('?', 1)[0] ?? '';
+  const last = route.split('/').filter(Boolean).pop();
+  return last !== undefined && last !== '' ? last : 'index.html';
+}
+
+export function isValidPluginId(pluginId: string): boolean {
+  return PLUGIN_ID.test(pluginId);
+}
+
+/** 只允许相对路径；拒绝绝对路径、反斜杠、`.`/`..` 段（iframe 不得越界）。 */
+export function safeEntryPath(entry: string): string | null {
+  const trimmed = entry.trim();
+  if (trimmed === '' || trimmed.startsWith('/') || trimmed.includes('\\')) return null;
+  if (trimmed.includes('\0')) return null;
+  const parts = trimmed.split('/');
+  for (const part of parts) {
+    if (part === '' || part === '.' || part === '..') return null;
+  }
+  return parts.map((part) => encodeURIComponent(part)).join('/');
+}
+
+/** `#/plugins/<id>/<entry>` 的 iframe 目标；非法输入返回 null（由调用方渲染错误态）。 */
+export function pluginFrameUrl(
+  gatewayUrl: string,
+  pluginId: string,
+  entry: string,
+  context?: { run?: string; session?: string },
+): string | null {
+  if (!isValidPluginId(pluginId)) return null;
+  const safeEntry = safeEntryPath(entry);
+  if (safeEntry === null) return null;
+  const origin =
+    gatewayUrl.trim() !== ''
+      ? gatewayUrl.trim().replace(/\/+$/, '')
+      : typeof window === 'undefined'
+        ? ''
+        : window.location.origin;
+  if (origin === '') return null;
+  const url = new URL(`/plugins/${encodeURIComponent(pluginId)}/${safeEntry}`, origin);
+  if (context?.run) url.searchParams.set('run', context.run);
+  if (context?.session) url.searchParams.set('session', context.session);
+  return url.toString();
+}
+
+function pageOf(plugin: PluginListItem, page: PluginContributionPage): PluginPageItem | null {
+  const id = text(page.id);
+  const title = text(page.title) || id;
+  if (id === '' || title === '') return null;
+  const nav = text(page.nav);
+  return {
+    pluginId: plugin.name,
+    pluginName: plugin.name,
+    id,
+    title,
+    nav: NAV_SLOTS.has(nav) ? (nav as PluginNavSlot) : 'top',
+    order: orderOf(page.order),
+    entry: pageEntry(page),
+  };
+}
+
+function panelOf(plugin: PluginListItem, panel: PluginContributionPanel): PluginPanelItem | null {
+  const slot = text(panel.slot);
+  const id = text(panel.id);
+  if (!PANEL_SLOTS.has(slot) || id === '') return null;
+  const title = text(panel.title);
+  return {
+    pluginId: plugin.name,
+    pluginName: plugin.name,
+    slot: slot as PluginPanelSlot,
+    id,
+    ...(title !== '' ? { title } : {}),
+    order: orderOf(panel.order),
+    entry: text(panel.entry) || 'index.html',
+  };
+}
+
+function byOrder(a: { order: number; title?: string; id: string }, b: typeof a): number {
+  return a.order - b.order || (a.title ?? a.id).localeCompare(b.title ?? b.id);
+}
+
+export interface PluginInventory {
+  pages: PluginPageItem[];
+  panels: PluginPanelItem[];
+  /** plugin id → 允许 iframe 调用的 RPC 方法名（rpc ∪ commands）。 */
+  methodsByPlugin: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+/** 启用插件的贡献点平铺；零插件 / 旧 gateway 返回空集合。 */
+export function buildPluginInventory(plugins: readonly PluginListItem[]): PluginInventory {
+  const pages: PluginPageItem[] = [];
+  const panels: PluginPanelItem[] = [];
+  const methodsByPlugin = new Map<string, Set<string>>();
+
+  for (const plugin of plugins) {
+    if (!isEnabledPlugin(plugin) || !isValidPluginId(plugin.name)) continue;
+    const contributions = plugin.contributions;
+    if (!contributions) continue;
+
+    for (const page of contributions.pages ?? []) {
+      const item = pageOf(plugin, page);
+      if (item !== null) pages.push(item);
+    }
+    for (const panel of contributions.panels ?? []) {
+      const item = panelOf(plugin, panel);
+      if (item !== null) panels.push(item);
+    }
+
+    const methods = new Set<string>();
+    for (const rpc of contributions.rpc ?? []) {
+      const name = text(rpc.name);
+      if (RPC_METHOD.test(name)) methods.add(name);
+    }
+    // CONTRACT-0.43 §2.2：命令必须声明同名 rpc，因此命令名也是合法的桥方法名。
+    for (const command of contributions.commands ?? []) {
+      const name = text(command.name);
+      if (RPC_METHOD.test(name)) methods.add(name);
+    }
+    if (methods.size > 0) methodsByPlugin.set(plugin.name, methods);
+  }
+
+  pages.sort(byOrder);
+  panels.sort(byOrder);
+  return { pages, panels, methodsByPlugin };
+}

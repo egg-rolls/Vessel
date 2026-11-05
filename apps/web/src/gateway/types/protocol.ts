@@ -87,6 +87,55 @@ export interface RpcResponseEnvelope<T = unknown> {
   error?: { code: string; message: string; details?: unknown };
 }
 
+/** plugin 导航归属；缺省当 `top`（CONTRACT-0.43 §2.1）。 */
+export type PluginNavSlot = 'observe' | 'settings' | 'top';
+
+/** panel 槽位（CONTRACT-0.43 §2.6）。 */
+export type PluginPanelSlot = 'run-detail' | 'session-detail' | 'nav';
+
+/** `plugins.list` 的 additive 贡献点；旧 gateway 不返回。 */
+export interface PluginContributionPage {
+  id: string;
+  title: string;
+  nav?: PluginNavSlot;
+  order?: number;
+  /** 相对 `ui.dir` 的 iframe 入口；缺失时回退 index.html。 */
+  entry?: string;
+  /** 宿主可选的完整路由；仅用于从旧数据推导 entry。 */
+  route?: string;
+}
+
+export interface PluginContributionPanel {
+  slot: PluginPanelSlot;
+  id: string;
+  title?: string;
+  order?: number;
+  entry?: string;
+}
+
+export interface PluginContributionCommand {
+  name: string;
+  title?: string;
+}
+
+export interface PluginContributions {
+  pages?: PluginContributionPage[];
+  panels?: PluginContributionPanel[];
+  commands?: PluginContributionCommand[];
+  /**
+   * CONTRACT-0.43 §2.7 的 E1 只承诺 pages/panels/commands；部分 gateway 会额外
+   * 返回 rpc 白名单。Web 仅用于 postMessage 方法校验，不渲染。
+   */
+  rpc?: Array<{ name: string; description?: string }>;
+}
+
+export interface PluginListItem {
+  name: string;
+  enabled: boolean;
+  /** additive（CONTRACT-0.43 §2.7）；能力插件不返回。 */
+  contributions?: PluginContributions;
+}
+
 /** capability manifest（0.5） */
 export interface CapabilityManifest {
   version: string;
@@ -98,7 +147,7 @@ export interface CapabilityManifest {
     permission: 'read' | 'write' | 'admin';
   }>;
   tools: Array<{ name: string; description?: string }>;
-  plugins: Array<{ name: string; enabled: boolean }>;
+  plugins: Array<{ name: string; enabled: boolean; contributions?: PluginContributions }>;
 }
 
 /** gap 帧 */

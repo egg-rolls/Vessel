@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { DomainIcon } from '../components/DomainIcon';
 import { ModalShell } from '../components/Modal';
 import { cn } from '../components/ui/cn';
+import { usePluginContributions } from '../domains/plugins/usePluginContributions';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import { primaryRoute } from './DomainNav';
@@ -20,6 +21,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
   useLocale();
   const [moreOpen, setMoreOpen] = useState(false);
   const { tenantId, connectionState, hasToken } = useConnection();
+  const { pages: pluginPages } = usePluginContributions();
   const moreActive =
     route.domain === 'hub' ||
     route.domain === 'gateway' ||
@@ -27,6 +29,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
     route.domain === 'teams' ||
     route.domain === 'agents' ||
     route.domain === 'observe' ||
+    route.domain === 'plugins' ||
     route.domain === 'settings';
   const connLabel = !hasToken
     ? t('nav.conn.idle')
@@ -131,15 +134,32 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
             >
               <DomainIcon domain="gateway" /> {domainLabel('gateway')}
             </button>
+            {pluginPages.map((page) => (
+              <button
+                key={`${page.pluginId}:${page.id}`}
+                type="button"
+                className="more-item"
+                onClick={() => {
+                  setMoreOpen(false);
+                  navigate({
+                    domain: 'plugins',
+                    pluginId: page.pluginId,
+                    entry: page.entry,
+                  });
+                }}
+              >
+                <DomainIcon domain="plugins" /> {page.title}
+              </button>
+            ))}
             <button
               type="button"
               className="more-item"
               onClick={() => {
                 setMoreOpen(false);
-                navigate({ domain: 'observe', tab: 'metrics' });
+                navigate({ domain: 'observe', tab: 'diagnostics' });
               }}
             >
-              <DomainIcon domain="observe" /> {domainLabel('observe')}
+              <DomainIcon domain="observe" /> {t('nav.diagnostics')}
             </button>
             <button
               type="button"

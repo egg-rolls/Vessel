@@ -13,6 +13,8 @@ export type Route =
       tab: 'tools' | 'mcp' | 'channels';
     }
   | { domain: 'observe'; tab: 'metrics' | 'evals' | 'diagnostics' | 'attention' }
+  /** plugin 页面：`#/plugins/<id>/<entry>`（CONTRACT-0.43 §2.1）。 */
+  | { domain: 'plugins'; pluginId?: string; entry?: string }
   | { domain: 'hub' }
   | { domain: 'gateway' }
   | { domain: 'nodes'; nodeKey?: string }
@@ -114,6 +116,16 @@ export function parseRoute(hash: string): Route {
       );
       return { domain: 'observe', tab };
     }
+    case 'plugins': {
+      const pluginId = segments[1] !== undefined ? decodeSegment(segments[1]) : undefined;
+      // entry 允许子路径：`#/plugins/<id>/sub/index.html` 与编码后的单段都接受。
+      const entry = segments.length > 2 ? decodeSegment(segments.slice(2).join('/')) : undefined;
+      return {
+        domain: 'plugins',
+        ...(pluginId ? { pluginId } : {}),
+        ...(entry ? { entry } : {}),
+      };
+    }
     case 'hub':
       return { domain: 'hub' };
     case 'gateway':
@@ -186,6 +198,11 @@ export function formatRoute(route: Route): string {
       return `#/integrations/${route.tab}`;
     case 'observe':
       return `#/observe/${route.tab}`;
+    case 'plugins': {
+      if (!route.pluginId) return '#/plugins';
+      const base = `#/plugins/${encodeURIComponent(route.pluginId)}`;
+      return route.entry ? `${base}/${encodeURIComponent(route.entry)}` : base;
+    }
     case 'hub':
       return '#/hub';
     case 'gateway':

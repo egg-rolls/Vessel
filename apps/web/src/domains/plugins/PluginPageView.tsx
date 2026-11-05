@@ -1,0 +1,86 @@
+/**
+ * plugin 页面宿主（CONTRACT-0.43 §2.1 / §7）：`#/plugins/<id>/<entry>`。
+ *
+ * 页面来源只有 `plugins.list` 的 contributions；未安装 / 禁用 / 旧 gateway
+ * 时显示空态，不猜测目录。
+ */
+
+import type { Route } from '../../app/router';
+import { PageHeader } from '../../components/PageHeader';
+import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
+import { useConnection } from '../../gateway/ConnectionProvider';
+import { t, useLocale } from '../../i18n';
+import { PluginFrame } from './PluginFrame';
+import { usePluginContributions } from './usePluginContributions';
+
+type PluginsRoute = Extract<Route, { domain: 'plugins' }>;
+
+const EMPTY_METHODS: ReadonlySet<string> = new Set();
+
+export function PluginPageView({ route }: { route: PluginsRoute }) {
+  useLocale();
+  const { hasToken, tenantId } = useConnection();
+  const { plugins, pages, methodsByPlugin, state, reload } = usePluginContributions();
+
+  const pluginId = route.pluginId ?? '';
+  const plugin = plugins.find((item) => item.name === pluginId && item.enabled);
+  const page = pages.find(
+    (item) =>
+      item.pluginId === pluginId && (route.entry === undefined || item.entry === route.entry),
+  );
+
+  const body = (() => {
+    if (!hasToken) {
+      return (
+        <NotEnabledState
+          title={t('plugins.page.notConnected')}
+          reason={t('plugins.page.notConnectedReason')}
+        />
+      );
+    }
+    if (pluginId === '') {
+      return (
+        <EmptyState
+          title={t('plugins.page.notFound')}
+          description={t('plugins.page.notFoundReason')}
+        />
+      );
+    }
+    if (state.status === 'loading' && plugins.length === 0) {
+      return <LoadingState label={t('plugins.page.loading')} />;
+    }
+    if (state.status === 'error' && plugins.length === 0) {
+      return <ErrorState message={state.error} onRetry={reload} />;
+    }
+    if (plugin === undefined || page === undefined) {
+      return (
+        <EmptyState
+          title={t('plugins.page.notFound')}
+          description={t('plugins.page.notFoundReason')}
+        />
+      );
+    }
+    return (
+      <PluginFrame
+        pluginId={plugin.name}
+        entry={page.entry}
+        title={page.title}
+        methods={methodsByPlugin.get(plugin.name) ?? EMPTY_METHODS}
+        className="flex-1 min-h-0"
+      />
+    );
+  })();
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3 p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
+      <PageHeader
+        title={page?.title ?? pluginId}
+        description={
+          plugin !== undefined ? t('plugins.page.description', { plugin: plugin.name }) : undefined
+        }
+        tenantId={tenantId}
+      />
+      {body}
+    </div>
+  );
+}

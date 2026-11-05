@@ -19,6 +19,7 @@ import type {
   McpServersResponse,
   MetricsResponse,
   MetricsSnapshot,
+  PluginListItem,
   TenantInfo,
   TenantResponse,
   ToolInfo,
@@ -43,6 +44,21 @@ export abstract class IntegrationsClient extends TeamsClient {
 
   getCapabilities(): Promise<CapabilityManifest> {
     return this.rpc<CapabilityManifest>('capabilities.list');
+  }
+
+  /**
+   * `plugins.list`：只读渲染所需字段。`contributions` 是 additive（CONTRACT-0.43
+   * §2.7），旧 gateway / 能力插件不返回时按空贡献处理。
+   */
+  async listPlugins(): Promise<PluginListItem[]> {
+    try {
+      const body = await this.rpc<{ plugins?: PluginListItem[] }>('plugins.list', {});
+      return body.plugins ?? [];
+    } catch (error) {
+      if (!canFallbackToRest(error)) throw error;
+      const body = await this.request<{ plugins?: PluginListItem[] }>('plugins.list');
+      return body.plugins ?? [];
+    }
   }
 
   async getConfig(tenantId?: string): Promise<ConfigResponse> {

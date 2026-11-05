@@ -1,8 +1,10 @@
-import type { Ref } from 'react';
+import { Fragment, type Ref } from 'react';
 import { DomainIcon } from '../components/DomainIcon';
 import { ResizeHandle } from '../components/ResizeHandle';
 import { IconButton, Tooltip } from '../components/Tooltip';
 import { cn } from '../components/ui/cn';
+import type { PluginPageItem } from '../domains/plugins/plugin-contributions';
+import { pagesForNav, usePluginContributions } from '../domains/plugins/usePluginContributions';
 import { t, useLocale } from '../i18n';
 import type { NavMode } from './layout';
 import {
@@ -14,11 +16,11 @@ import {
   type PrimaryDomain,
 } from './nav';
 import type { NavStatuses } from './nav-status';
-import type { Domain, Route } from './router';
+import type { Route } from './router';
 import { useNavStatus } from './useNavStatus';
 import type { PaneResizeApi } from './usePaneResize';
 
-export function primaryRoute(domain: Exclude<Domain, 'settings'>): Route {
+export function primaryRoute(domain: PrimaryDomain): Route {
   switch (domain) {
     case 'chat':
       return { domain: 'chat' };
@@ -75,6 +77,10 @@ export function DomainNav({
 }) {
   useLocale();
   const statuses = useNavStatus();
+  const { pages: pluginPages } = usePluginContributions();
+  const topPluginPages = pagesForNav(pluginPages, 'top');
+  const observePluginPages = pagesForNav(pluginPages, 'observe');
+  const settingsPluginPages = pagesForNav(pluginPages, 'settings');
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';
   const showLabels = !collapsed;
@@ -87,6 +93,53 @@ export function DomainNav({
     collapsed ? 'justify-center gap-0 px-0 py-1' : 'gap-2.5 px-3 py-1',
   );
   const activeClass = 'bg-accent-soft text-accent-ink hover:bg-accent-soft hover:text-accent-ink';
+  const pluginPageButton = (page: PluginPageItem) => {
+    const active =
+      route.domain === 'plugins' &&
+      route.pluginId === page.pluginId &&
+      (route.entry === undefined || route.entry === page.entry);
+    const button = (
+      <button
+        key={`${page.pluginId}:${page.id}`}
+        type="button"
+        className={cn(itemClass, active && activeClass)}
+        aria-current={active ? 'page' : undefined}
+        aria-label={page.title}
+        onClick={() => navigate({ domain: 'plugins', pluginId: page.pluginId, entry: page.entry })}
+      >
+        <span className="inline-flex flex-none">
+          <DomainIcon domain="plugins" />
+        </span>
+        {showLabels && (
+          <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+            {page.title}
+          </span>
+        )}
+      </button>
+    );
+    return collapsed ? (
+      <Tooltip key={`${page.pluginId}:${page.id}`} label={page.title}>
+        {button}
+      </Tooltip>
+    ) : (
+      button
+    );
+  };
+
+  const pluginGroup = (key: string, items: readonly PluginPageItem[]) => {
+    if (items.length === 0) return null;
+    return (
+      <div className="mt-3 flex flex-col gap-0.5" key={key}>
+        {showLabels && (
+          <div className="overflow-hidden text-ellipsis whitespace-nowrap px-3 pt-1 pb-0.5 font-mono text-2xs tracking-[var(--tracking-wide)] text-faint uppercase">
+            {navGroupLabel('plugins')}
+          </div>
+        )}
+        {items.map(pluginPageButton)}
+      </div>
+    );
+  };
+
   const settingsActive = route.domain === 'settings';
   const settingsButton = (
     <button
@@ -165,69 +218,79 @@ export function DomainNav({
         </div>
       )}
       <div className={cn('flex flex-1 flex-col gap-0.5 py-1.5', collapsed ? 'px-2' : 'px-2.5')}>
+        {pluginGroup('plugins-top', topPluginPages)}
         {NAV_GROUPS.map((group, index) => (
-          <div className={cn('flex flex-col gap-0.5', index > 0 && 'mt-3')} key={group.id}>
-            {showLabels && (
-              <div className="overflow-hidden text-ellipsis whitespace-nowrap px-3 pt-1 pb-0.5 font-mono text-2xs tracking-[var(--tracking-wide)] text-faint uppercase">
-                {navGroupLabel(group.id)}
-              </div>
-            )}
-            {group.domains.map((domainId) => {
-              const domain = domainDef(domainId);
-              const active = isDomainActive(route, domain.id);
-              const label = domainLabel(domain.id);
-              const status = statusOf(domain.id, statuses);
-              const statusText = status ? t(status.labelKey) : '';
-              const versionText = status?.version ? `v${status.version}` : '—';
-              const tooltip = status ? `${label} · ${statusText} · ${versionText}` : label;
-              const button = (
-                <button
-                  key={domain.id}
-                  type="button"
-                  className={cn(itemClass, active && activeClass)}
-                  aria-current={active ? 'page' : undefined}
-                  aria-label={label}
-                  onClick={() => navigate(primaryRoute(domain.id))}
-                >
-                  <span className="inline-flex flex-none">
-                    <DomainIcon domain={domain.id} />
-                  </span>
-                  {showLabels && (
-                    <span
-                      className={cn(
-                        'min-w-0 overflow-hidden text-ellipsis whitespace-nowrap',
-                        status && 'flex-1',
-                      )}
-                    >
-                      {label}
+          <Fragment key={group.id}>
+            <div
+              className={cn(
+                'flex flex-col gap-0.5',
+                (index > 0 || topPluginPages.length > 0) && 'mt-3',
+              )}
+            >
+              {showLabels && (
+                <div className="overflow-hidden text-ellipsis whitespace-nowrap px-3 pt-1 pb-0.5 font-mono text-2xs tracking-[var(--tracking-wide)] text-faint uppercase">
+                  {navGroupLabel(group.id)}
+                </div>
+              )}
+              {group.domains.map((domainId) => {
+                const domain = domainDef(domainId);
+                const active = isDomainActive(route, domain.id);
+                const label = domainLabel(domain.id);
+                const status = statusOf(domain.id, statuses);
+                const statusText = status ? t(status.labelKey) : '';
+                const versionText = status?.version ? `v${status.version}` : '—';
+                const tooltip = status ? `${label} · ${statusText} · ${versionText}` : label;
+                const button = (
+                  <button
+                    key={domain.id}
+                    type="button"
+                    className={cn(itemClass, active && activeClass)}
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={label}
+                    onClick={() => navigate(primaryRoute(domain.id))}
+                  >
+                    <span className="inline-flex flex-none">
+                      <DomainIcon domain={domain.id} />
                     </span>
-                  )}
-                  {showLabels && status && (
-                    <>
+                    {showLabels && (
                       <span
-                        className="size-1.5 flex-none rounded-full bg-faint data-[tone=ok]:bg-success data-[tone=warn]:bg-warn data-[tone=warn]:pulse-soft data-[tone=danger]:bg-danger"
-                        data-tone={status.tone}
-                        role="img"
-                        aria-label={statusText}
-                        title={statusText}
-                      />
-                      <span className="flex-none whitespace-nowrap font-mono text-2xs text-faint">
-                        {versionText}
+                        className={cn(
+                          'min-w-0 overflow-hidden text-ellipsis whitespace-nowrap',
+                          status && 'flex-1',
+                        )}
+                      >
+                        {label}
                       </span>
-                    </>
-                  )}
-                </button>
-              );
-              return collapsed ? (
-                <Tooltip key={domain.id} label={tooltip}>
-                  {button}
-                </Tooltip>
-              ) : (
-                button
-              );
-            })}
-          </div>
+                    )}
+                    {showLabels && status && (
+                      <>
+                        <span
+                          className="size-1.5 flex-none rounded-full bg-faint data-[tone=ok]:bg-success data-[tone=warn]:bg-warn data-[tone=warn]:pulse-soft data-[tone=danger]:bg-danger"
+                          data-tone={status.tone}
+                          role="img"
+                          aria-label={statusText}
+                          title={statusText}
+                        />
+                        <span className="flex-none whitespace-nowrap font-mono text-2xs text-faint">
+                          {versionText}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                );
+                return collapsed ? (
+                  <Tooltip key={domain.id} label={tooltip}>
+                    {button}
+                  </Tooltip>
+                ) : (
+                  button
+                );
+              })}
+            </div>
+            {group.id === 'network' && pluginGroup('plugins-observe', observePluginPages)}
+          </Fragment>
         ))}
+        {pluginGroup('plugins-settings', settingsPluginPages)}
       </div>
       <div
         className={cn(

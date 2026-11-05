@@ -16,6 +16,7 @@ import { formatTimestamp } from '../../format';
 import type { DurableRunSummary, RunStatus } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { isCancellableRun, isResumableRun } from '../../state/runs';
+import { PluginPanels } from '../plugins/PluginPanels';
 import { RunTimeline } from './RunTimeline';
 import { durationLabel, exportJson, pretty } from './run-detail-format';
 import { type DetailTab, useRunTrace } from './useRunTrace';
@@ -277,6 +278,12 @@ export function RunDetail({
           )}
         </div>
       )}
+
+      <PluginPanels
+        slot="run-detail"
+        context={{ run: runId, session: sessionId }}
+        className="mt-3"
+      />
     </Section>
   );
 }
