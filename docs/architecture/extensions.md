@@ -33,13 +33,13 @@ interface PluginHost {
 }
 ```
 
-这是**唯一的扩展机制**。tenant 插件由装配层经 `installPluginsIntoHost()` 在共享 `PluginHost` 上安装一次（install 失败即构造失败，fail-fast），per-session EU 复用该 host；直接嵌入方仍可在 `ExecutionUnitOptions.plugins` 里传插件，由 `ExecutionUnit.create()` 逐个 `install`。也可直接注入 `pluginHost?: PluginHost` 替换实现。
+这是**唯一的 plugin 加载 / 清单 / 生命周期机制**。harness 可在宿主层扩展贡献面（pages / commands / settings / rpc / events / panels），不属于第二套扩展机制（[ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。tenant 插件由装配层经 `installPluginsIntoHost()` 在共享 `PluginHost` 上安装一次（install 失败即构造失败，fail-fast），per-session EU 复用该 host；直接嵌入方仍可在 `ExecutionUnitOptions.plugins` 里传插件，由 `ExecutionUnit.create()` 逐个 `install`。也可直接注入 `pluginHost?: PluginHost` 替换实现。
 
 <a id="extension-model"></a>
 
 ## 扩展模型
 
-**一个机制：`Plugin` + `PluginHost`。** core 不为任何扩展类型新增接口。三类扩展内容：
+**一个机制：`Plugin` + `PluginHost`。** core 不为任何扩展类型新增接口；harness 可在宿主层收集贡献面（pages / commands / settings / rpc / events / panels），不新增 core 注册入口（[ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。三类扩展内容：
 
 | 类型 | 是什么 | 怎么投放 |
 |---|---|---|
@@ -47,7 +47,7 @@ interface PluginHost {
 | **Skill** | 纯 markdown 文件 | **不是一条加载通道**——由前端读取，经 `RunOptions.messages` 作为消息注入（见 [runtime-api.md](runtime-api.md#messages)） |
 | **Config** | YAML 声明 | 见 [config.md](config.md#config-model) |
 
-插件能注册什么：**工具**（`registerTool`）、**Provider**（`registerProvider`）、**Guardrail**（`registerGuardrail`）、**Hook**（`registerHook`）。
+**能力插件**（in-process）能注册什么：**工具**（`registerTool`）、**Provider**（`registerProvider`）、**Guardrail**（`registerGuardrail`）、**Hook**（`registerHook`）。**体验插件**（独立子进程）不直接注册 core 类型，经 DTO 桥提供 pages / rpc / events / panels；子进程是隔离与生命周期边界，**不是安全沙箱**（[ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。
 
 **MCP**：`@vessel-agent/mcp-client` 是**插件**，不是 core 模块。配置 `mcp_servers` 后由 asm 装配层构造；工具经 `PluginHost.registerTool` 进入语言空间。stdio 与 HTTP（Streamable HTTP）两种传输；工具名默认 `mcp__<server>__<tool>`；权限默认 `ask`；单 server 失败不影响其他 server（ADR-039）。
 

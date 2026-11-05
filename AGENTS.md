@@ -37,7 +37,7 @@
 ## 核心架构红线
 
 - **core 保持小**：不出现业务概念（skills、记忆、资产、文档、代码审查、OCR、PDF、图片、向量、浏览器、IAM、计费）；`dependencies` 保持为空；重依赖只进插件包。
-- **唯一扩展机制**：一切走 `Plugin` + `PluginHost`；Module 是构造期边界，禁止 `ModuleHost` / `ModuleRegistry`。
+- **唯一 plugin 机制**：只有一个 plugin loader / manifest / 生命周期，一切经 `Plugin` + `PluginHost`；贡献面（pages / commands / settings / rpc / events / panels）由 harness 层扩展，不属于第二套扩展机制；Module 是构造期边界，禁止 `ModuleHost` / `ModuleRegistry`（[ADR-099](docs/adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。
 - 依赖方向单向 `core ← 其它`，由 `scripts/check-deps.ts` 检查；不引入 LangChain / LangGraph。
 - 事件名一律开放字符串 `<domain>.<action>.<event>`，不新增常量 / 枚举；全异步，不写 sync-in-async；不留半成品 stub。
 - **诊断**：走 Logger（stderr），不得 `console.log` 到 stdout（stdout 只留命令结果 / JSON / UX）。

@@ -12,14 +12,15 @@ applies_to: [N, M]
 
 ## 唯一扩展机制
 
-- 一切走 `Plugin` + `PluginHost`；插件对象走 `plugins` / `pluginHost` 注入，不塞进 runtime 构造函数。
-- 插件可注册 tool / provider / guardrail / hook；不新增第二套运行期扩展机制（ADR-004）。
+- 只有一个 plugin loader / manifest / 生命周期；插件对象走 `plugins` / `pluginHost` 注入，不塞进 runtime 构造函数。
+- **能力插件**（in-process）经 `PluginHost` 注册 tool / provider / guardrail / hook；**贡献面**（pages / commands / settings / rpc / events / panels）由 harness 层持有与收集，不是 core 的第二套扩展机制。
+- 不新增第二套运行期扩展机制；禁止 `ModuleHost` / `ModuleRegistry`（ADR-004 / ADR-037 / ADR-099）。
 
 <a id="discovery"></a>
 
 ## 发现顺序
 
-- 默认扫描根：`repo`（仓库 `plugins/`）→ `project`（`./.vessel/plugins`）→ `user`（`~/.vessel/plugins`）→ `node_modules`（仓库根与 cwd）；同名插件**先出现者胜出**。
+- 默认扫描根与优先级（高 → 低）：`project`（`./.vessel/plugins`）→ `user`（`~/.vessel/plugins`）→ `repo`（仓库内置 `plugins/`）→ `node_modules`（仓库根与 cwd）；同 id 冲突时高优先级胜出。覆盖内置插件需 `vessel.override: true`，否则 `plugin_id_conflict`（CONTRACT-0.43 §6）。
 - 插件目录只在进程启动时扫描一次；新增或改动插件需重启进程，`/reload` 不重扫。
 - 默认集、外部插件告警与 `VESSEL_NO_EXTERNAL_PLUGINS` 的实现见 `src/plugin-loader.ts` / `src/plugin-selection.ts`；策略与 P0-3 残余风险见 AGENTS 硬规则，本文件不复述。
 
