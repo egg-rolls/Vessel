@@ -129,6 +129,9 @@ export function createPluginHostManager(options: PluginHostAssemblyOptions): Plu
   return new PluginHostManager({
     descriptors,
     dataDir: options.dataDir,
+    // 懒激活（首次页面 / RPC 访问）时解析 settings；v1 只用 default tenant 的
+    // `plugins[].config`（tenantId 目前不参与分片，不静默混用其它 tenant 配置）。
+    settingsFor: (id, _tenantId) => pluginSettingsFor(options.config, id),
     ...(logger !== undefined
       ? {
           logger: (level, message, meta) => {
@@ -142,24 +145,35 @@ export function createPluginHostManager(options: PluginHostAssemblyOptions): Plu
   });
 }
 
+/** `activationEvents` 是否要求启动即激活 */
+function startsAtStartup(events: readonly string[] | undefined): boolean {
+  return (events ?? []).some((event) => event === 'onStartup' || event === '*');
+}
+
 /**
- * 启动时激活所有 enabled 且 inactive 的 plugin。
- *
- * 当前 serve follow-up 没有 `settingsFor(id, tenantId)` 端口，所以这里用
- * 启动配置的 `plugins[].config` 直接 activate（v1 只覆盖 default tenant）。
+ * 启动时只激活声明了 `onStartup` / `*` 的 enabled plugin。
+ * `onPage:*` / `onCommand:*` 保持 inactive，等首次页面 / RPC 访问由 serve
+ * 的 `ensureActive` 懒激活（`settingsFor` 已注入 manager）。
  * 单个 plugin 激活失败只记日志，不阻断 gateway 启动。
  */
-export async function activateEnabledPlugins(
+export async function activateStartupPlugins(
   manager: PluginHostManager,
   options: {
+    loader: Pick<PluginLoader, 'getChildMods'>;
     config: VesselConfig;
     tenantId: string;
     logger?: Logger;
   },
 ): Promise<string[]> {
+  const startup = new Set(
+    options.loader
+      .getChildMods()
+      .filter((descriptor) => startsAtStartup(descriptor.manifest?.activationEvents))
+      .map((descriptor) => descriptor.name),
+  );
   const targets = manager
     .statuses()
-    .filter((status) => status.enabled && status.status === 'inactive');
+    .filter((status) => startup.has(status.id) && status.enabled && status.status === 'inactive');
   const activated: string[] = [];
 
   await Promise.all(

@@ -7,9 +7,10 @@
  *
  * 校验失败一律 fail-closed（不加载代码），错误码见 {@link PluginErrorCode}。
  *
- * 版本范围只支持 `>=x.y.z` / `>x.y.z` / `<=x.y.z` / `<x.y.z` / `=x.y.z`，
- * 空格分隔为 AND、`||` 分隔为 OR。不支持 `^` / `~` / 部分版本（`0.43`）/
- * 预发布排序（`1.0.0-beta`）——这些会报 `plugin_manifest_invalid`。
+ * 版本范围只支持 `>=x` / `>x.y` / `<=x.y.z` 这类比较符（端点缺位补 0），
+ * 空格分隔为 AND、`||` 分隔为 OR；`x` 单独出现等同 `=x.0.0`。
+ * 不支持 `^` / `~` / 预发布排序（`1.0.0-beta`）——这些会报
+ * `plugin_manifest_invalid`。
  *
  * @module vessel/plugin-manifest
  */
@@ -202,7 +203,9 @@ interface VersionComparator {
 }
 
 const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)$/;
-const COMPARATOR_RE = /^(>=|<=|>|<|=)?(\d+\.\d+\.\d+)$/;
+/** 范围端点允许 `x` / `x.y` / `x.y.z`（缺位补 0，契约示例 `>=0.43 <0.45`） */
+const RANGE_VERSION_RE = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?$/;
+const COMPARATOR_RE = /^(>=|<=|>|<|=)?(\d+(?:\.\d+)?(?:\.\d+)?)$/;
 
 function parseSemver(value: string): SemverParts | null {
   const match = SEMVER_RE.exec(value.trim());
@@ -211,6 +214,17 @@ function parseSemver(value: string): SemverParts | null {
     major: Number(match[1]),
     minor: Number(match[2]),
     patch: Number(match[3]),
+  };
+}
+
+/** 范围端点解析：`0.43` → 0.43.0 */
+function parseRangeVersion(value: string): SemverParts | null {
+  const match = RANGE_VERSION_RE.exec(value.trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: match[2] !== undefined ? Number(match[2]) : 0,
+    patch: match[3] !== undefined ? Number(match[3]) : 0,
   };
 }
 
@@ -235,7 +249,7 @@ export function parseVersionRange(range: string): VersionComparator[][] | null {
     for (const token of trimmed.split(/\s+/)) {
       const match = COMPARATOR_RE.exec(token);
       if (!match) return null;
-      const version = parseSemver(match[2] ?? '');
+      const version = parseRangeVersion(match[2] ?? '');
       if (!version) return null;
       comparators.push({ op: (match[1] as ComparatorOperator | undefined) ?? '=', version });
     }
@@ -523,7 +537,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
   if (!parsedRange) {
     fail(
       'plugin_manifest_invalid',
-      `engines.vessel "${vesselRange}" is unsupported (use >=x.y.z <x.y.z forms)`,
+      `engines.vessel "${vesselRange}" is unsupported (use >=x.y / >=x.y.z comparator forms)`,
     );
   }
   const currentVersion = options.vesselVersion ?? readPackageVersion();

@@ -106,7 +106,7 @@ import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { setToolPolicy } from './permission-store';
 import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
-import { activateEnabledPlugins, createPluginHostManager } from './plugin-host-assembly';
+import { activateStartupPlugins, createPluginHostManager } from './plugin-host-assembly';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
 import { createRunControl } from './run-control';
@@ -865,7 +865,8 @@ async function runWithConfig(result: BootstrapResult) {
 
     const dataDir = resolveDataDir(config);
     // 0.43：体验型 plugin 宿主。v1 只用 default tenant 的配置 / settings；
-    // 启动时激活 enabled 的 child plugin（serve 侧暂无 settingsFor 端口）。
+    // 只预激活声明 `onStartup` / `*` 的 child plugin；`onPage:` / `onCommand:`
+    // 等首次页面 / RPC 访问时由 serve 的 ensureActive 懒激活。
     if (result.bundle !== undefined) {
       pluginHostManager = createPluginHostManager({
         loader: result.bundle.pluginLoader,
@@ -873,7 +874,8 @@ async function runWithConfig(result: BootstrapResult) {
         dataDir,
         logger,
       });
-      const activated = await activateEnabledPlugins(pluginHostManager, {
+      const activated = await activateStartupPlugins(pluginHostManager, {
+        loader: result.bundle.pluginLoader,
         config: liveConfig,
         tenantId: result.tenantId,
         logger,
