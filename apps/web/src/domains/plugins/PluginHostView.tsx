@@ -25,7 +25,7 @@ import {
   configureMarketplace,
   isValidRegistryUrl,
   marketplaceOf,
-  registryUrlOf,
+  prefillRegistryUrl,
 } from './plugin-host-state';
 import { usePluginContributions } from './usePluginContributions';
 
@@ -44,10 +44,15 @@ export function PluginHostView() {
   const toast = useToast();
   const { plugins, state, reload } = usePluginContributions();
   const { config, reloadConfig } = useConfigStoreApi();
-  const gatewayVersion = resourceData(config)?.version;
+  const configData = resourceData(config);
+  const gatewayVersion = configData?.version;
 
   const marketplace = useMemo(() => marketplaceOf(plugins), [plugins]);
-  const storedRegistryUrl = registryUrlOf(marketplace);
+  // registry_url 来自 config.get（config.plugins），不是 plugins.list。
+  const storedRegistryUrl = prefillRegistryUrl(
+    { plugins: configData?.plugins, config: configData?.config },
+    marketplace?.enabled === true,
+  );
   const [registryUrl, setRegistryUrl] = useState(storedRegistryUrl);
   const lastStoredUrl = useRef(storedRegistryUrl);
   const [saving, setSaving] = useState(false);

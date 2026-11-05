@@ -93,9 +93,18 @@ export interface EvalRunResponse {
   report: EvalReport;
 }
 
+/** `config.get.config.plugins[]` 条目（additive 视图）。 */
+export interface ConfigPluginEntry {
+  name: string;
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+}
+
 export interface ConfigResponse {
   schema_version: number;
   config: Record<string, unknown>;
+  /** E10 additive：部分 gateway 直接暴露 plugins 数组；也兼容 config.plugins。 */
+  plugins?: ConfigPluginEntry[];
   paths: { user: string; project: string };
   tenant_id: string;
   tenant_overlay_keys?: string[];

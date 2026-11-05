@@ -1,5 +1,10 @@
 /** Plugin Host（E10）的纯状态/校验函数，便于探针与页面共用。 */
-import type { PluginListItem } from '../../gateway/types';
+import type { ConfigPluginEntry, PluginListItem } from '../../gateway/types';
+
+export interface ConfigLike {
+  plugins?: readonly ConfigPluginEntry[];
+  config?: unknown;
+}
 
 export interface RegistryRpcClient {
   rpc<T>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -10,10 +15,34 @@ export function marketplaceOf(plugins: readonly PluginListItem[]): PluginListIte
   return plugins.find((plugin) => plugin.name === 'marketplace');
 }
 
-/** `plugins[].config.registry_url`（仅接受字符串）。 */
-export function registryUrlOf(plugin: PluginListItem | undefined): string {
+/** `plugin.config.registry_url`（仅接受字符串）。 */
+export function registryUrlOf(plugin: { config?: Record<string, unknown> } | undefined): string {
   const value = plugin?.config?.registry_url;
   return typeof value === 'string' ? value : '';
+}
+
+function pluginEntries(source: ConfigLike | undefined): readonly ConfigPluginEntry[] {
+  if (Array.isArray(source?.plugins)) return source.plugins;
+  const nested = source?.config;
+  if (nested !== null && typeof nested === 'object' && !Array.isArray(nested)) {
+    const plugins = (nested as { plugins?: unknown }).plugins;
+    if (Array.isArray(plugins)) return plugins as ConfigPluginEntry[];
+  }
+  return [];
+}
+
+/** `config.get` → marketplace 的 registry_url；支持顶层或 config.plugins。 */
+export function registryUrlFromConfig(source: ConfigLike | undefined): string {
+  const entry = pluginEntries(source).find((plugin) => plugin?.name === 'marketplace');
+  return registryUrlOf(entry);
+}
+
+/** 表单预填：marketplace 未启用时保持空串（禁用态）。 */
+export function prefillRegistryUrl(
+  source: ConfigLike | undefined,
+  marketplaceEnabled: boolean,
+): string {
+  return marketplaceEnabled ? registryUrlFromConfig(source) : '';
 }
 
 /** 仅 HTTPS；localhost / 127.0.0.1 / ::1 允许 http。空串无效。 */
