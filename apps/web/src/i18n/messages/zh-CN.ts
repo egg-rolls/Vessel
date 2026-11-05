@@ -251,6 +251,7 @@ export const messages = {
   'chat.subagents.context': '上下文 {used}/{max}',
   // 0.43: plugin pages / panels (CONTRACT-0.43 §7)
   'plugins.page.loading': '正在加载插件页面…',
+  'plugins.page.description': '由插件 {plugin} 提供。',
   'plugins.page.notConnected': '未连接 gateway',
   'plugins.page.notConnectedReason': '连接 gateway 后才能加载插件页面。',
   'plugins.page.notFound': '插件页面不可用',
@@ -1248,10 +1249,11 @@ export const messages = {
   'settings.tenants.loading': '正在读取租户…',
   'settings.tenants.noData': '没有租户数据',
   'settings.tenants.disconnected': '连接已断开；显示最近一次读取的租户列表，管理动作已禁用。',
-  'settings.tenants.title': '租户',
   'settings.tenants.new': '新建租户',
-  'settings.tenants.description':
-    '切换租户会重连 gateway 并清空当前会话选择与事件缓冲；数据不会跨租户混用。新建/更新需要 admin token。',
+  'settings.tenants.searchPlaceholder': '搜索租户 ID 或名称',
+  'settings.tenants.searchLabel': '搜索租户',
+  'settings.tenants.empty': '还没有租户',
+  'settings.tenants.noMatch': '没有匹配搜索的租户。',
   'settings.tenants.col.tenant': '租户',
   'settings.tenants.col.name': '名称',
   'settings.tenants.col.status': '状态',

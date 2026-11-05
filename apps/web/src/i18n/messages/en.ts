@@ -253,6 +253,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.subagents.context': 'Context {used}/{max}',
   // 0.43: plugin pages / panels (CONTRACT-0.43 §7)
   'plugins.page.loading': 'Loading plugin page…',
+  'plugins.page.description': 'Provided by plugin {plugin}.',
   'plugins.page.notConnected': 'Not connected',
   'plugins.page.notConnectedReason': 'Connect to the gateway to load plugin pages.',
   'plugins.page.notFound': 'Plugin page unavailable',
@@ -1293,10 +1294,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.tenants.noData': 'No tenant data',
   'settings.tenants.disconnected':
     'Disconnected; showing the last loaded tenant list. Management actions are disabled.',
-  'settings.tenants.title': 'Tenants',
   'settings.tenants.new': 'New tenant',
-  'settings.tenants.description':
-    'Switching tenants reconnects the gateway and clears the current session selection and event buffer; data never mixes across tenants. Creating/updating requires an admin token.',
+  'settings.tenants.searchPlaceholder': 'Search tenant id or name',
+  'settings.tenants.searchLabel': 'Search tenants',
+  'settings.tenants.empty': 'No tenants yet',
+  'settings.tenants.noMatch': 'No tenants match your search.',
   'settings.tenants.col.tenant': 'Tenant',
   'settings.tenants.col.name': 'Name',
   'settings.tenants.col.status': 'Status',

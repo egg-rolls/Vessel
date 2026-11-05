@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { usePaletteEntities } from '../../components/PaletteEntities';
-import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  NotEnabledState,
+  StaleNotice,
+} from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
-import { Button, Section } from '../../components/ui';
+import { Button, SearchInput } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { TenantInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -34,6 +40,7 @@ export function TenantsView() {
   const available = hasToken && features.includes('tenants');
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<TenantInfo | null>(null);
+  const [query, setQuery] = useState('');
 
   const tenantState = useTenantStore((state) => state.tenants);
   const loadTenants = useTenantStore((state) => state.loadTenants);
@@ -44,6 +51,16 @@ export function TenantsView() {
   usePolledAction(reloadTenants, { enabled: available, deps: [epoch] });
   useRefreshSignal(reloadTenants);
   const tenants = resourceData(tenantState);
+  const filteredTenants = useMemo(() => {
+    const list = tenants ?? [];
+    const needle = query.trim().toLowerCase();
+    if (!needle) return list;
+    return list.filter(
+      (tenant) =>
+        tenant.tenant_id.toLowerCase().includes(needle) ||
+        (tenant.name ?? '').toLowerCase().includes(needle),
+    );
+  }, [tenants, query]);
 
   // ConnectionProvider stays the tenant-switch authority; mirror its id here.
   useEffect(() => {
@@ -123,41 +140,53 @@ export function TenantsView() {
   const error = tenantState.status === 'error' ? tenantState.error : null;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {!connected && (
         <StaleNotice message={t('settings.tenants.disconnected')} onRetry={reloadTenants} />
       )}
       {error && (
         <StaleNotice message={t('common.staleData', { detail: error })} onRetry={reloadTenants} />
       )}
-      <Section
-        title={t('settings.tenants.title')}
-        description={t('settings.tenants.description')}
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="primary"
-              size="small"
-              disabled={!connected}
-              title={!connected ? t('common.writesDisabled') : undefined}
-              onClick={() => setCreateOpen(true)}
-            >
-              {t('settings.tenants.new')}
-            </Button>
-            <Button size="small" onClick={reloadTenants}>
-              {t('common.refresh')}
-            </Button>
-          </div>
-        }
-      >
+      <div className="net-toolbar mt-3.5">
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder={t('settings.tenants.searchPlaceholder')}
+          ariaLabel={t('settings.tenants.searchLabel')}
+          className="grow basis-60 max-w-search"
+        />
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="primary"
+            size="small"
+            disabled={!connected}
+            title={!connected ? t('common.writesDisabled') : undefined}
+            onClick={() => setCreateOpen(true)}
+          >
+            {t('settings.tenants.new')}
+          </Button>
+          <Button size="small" onClick={reloadTenants}>
+            {t('common.refresh')}
+          </Button>
+        </div>
+      </div>
+
+      {tenants.length === 0 ? (
+        <EmptyState title={t('settings.tenants.empty')} />
+      ) : filteredTenants.length === 0 ? (
+        <EmptyState
+          title={t('settings.tenants.noMatch')}
+          action={<Button onClick={() => setQuery('')}>{t('common.clearSearch')}</Button>}
+        />
+      ) : (
         <TenantsTable
-          tenants={tenants}
+          tenants={filteredTenants}
           currentTenantId={tenantId}
           connected={connected}
           onSwitch={switchTenant}
           onEdit={setEditing}
         />
-      </Section>
+      )}
 
       {createOpen && (
         <TenantCreateDialog
