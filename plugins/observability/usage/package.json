@@ -56,10 +56,23 @@
       "onCommand:summary"
     ],
     "contributes": {
+      "i18n": {
+        "en": {
+          "nav.group": "Usage",
+          "nav.usage": "Usage",
+          "nav.logs": "Logs"
+        },
+        "zh-CN": {
+          "nav.group": "用量",
+          "nav.usage": "用量",
+          "nav.logs": "请求日志"
+        }
+      },
       "navGroups": [
         {
           "id": "plugin:usage",
           "title": "Usage",
+          "titleKey": "nav.group",
           "order": 40
         }
       ],
@@ -67,6 +80,7 @@
         {
           "id": "usage",
           "title": "Usage",
+          "titleKey": "nav.usage",
           "nav": "plugin:usage",
           "icon": "observe",
           "order": 10,
@@ -75,6 +89,7 @@
         {
           "id": "logs",
           "title": "Logs",
+          "titleKey": "nav.logs",
           "nav": "plugin:usage",
           "icon": "runs",
           "order": 11,
