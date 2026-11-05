@@ -34,18 +34,41 @@ export function durationLabel(start?: number, end?: number, running = false): st
   return value < 1000 ? `${value}ms` : `${(value / 1000).toFixed(1)}s`;
 }
 
+interface CacheTokens {
+  read: number;
+  prompt: number;
+}
+
+/** 只读已有 usage 字段；任一缺失或 prompt <= 0 时不可计算。 */
+function cacheTokens(usage?: Usage): CacheTokens | undefined {
+  const read = usage?.cache_read_input_tokens;
+  const prompt = usage?.prompt_tokens;
+  if (read === undefined || prompt === undefined || prompt <= 0) return undefined;
+  return { read, prompt };
+}
+
 /**
  * 缓存命中率 = cache_read_tokens / prompt_tokens。
  *
  * 任一侧缺失（或没有 prompt）都返回 `—`：缺字段 ≠ 0% 命中。
- * 只读已有 usage 字段，不新增 wire 字段。
+ * 保留一位小数；只有 `read >= prompt` 才显示 100%，否则一位小数四舍五入
+ * 到 100.0 时夹到 99.9%（99.96% 不能显示成 100%）。
  */
 export function cacheHitRateLabel(usage?: Usage): string {
-  const read = usage?.cache_read_input_tokens;
-  const prompt = usage?.prompt_tokens;
-  if (read === undefined || prompt === undefined || prompt <= 0) return '—';
-  const rate = Math.max(0, Math.min(1, read / prompt));
-  return `${Math.round(rate * 100)}%`;
+  const tokens = cacheTokens(usage);
+  if (!tokens) return '—';
+  const rate = tokens.read / tokens.prompt;
+  if (rate >= 1) return '100%';
+  const tenths = Math.round(rate * 1000) / 10;
+  return `${Math.min(tenths, 99.9).toFixed(1)}%`;
+}
+
+/** 单元格 tooltip：精确的 `cache_read / prompt_tokens`（千分位）。 */
+export function cacheHitTitle(usage?: Usage): string | undefined {
+  const tokens = cacheTokens(usage);
+  if (!tokens) return undefined;
+  const format = new Intl.NumberFormat('en-US').format;
+  return `${format(tokens.read)} / ${format(tokens.prompt)}`;
 }
 
 /** durable checkpoint 可能带 usage；列表类型未声明时按可选读取。 */
@@ -227,7 +250,10 @@ export function RunsTable({
               header: t('runs.col.cacheHit'),
               hide: 'wide',
               cellClassName: 'font-mono tabular-nums',
-              cell: (run) => cacheHitRateLabel(usageOf(run)),
+              cell: (run) => {
+                const usage = usageOf(run);
+                return <span title={cacheHitTitle(usage)}>{cacheHitRateLabel(usage)}</span>;
+              },
             },
             {
               key: 'actions',
@@ -325,7 +351,10 @@ export function RunsTable({
               header: t('runs.col.cacheHit'),
               hide: 'wide',
               cellClassName: 'font-mono tabular-nums',
-              cell: (run) => cacheHitRateLabel(usageOf(run)),
+              cell: (run) => {
+                const usage = usageOf(run);
+                return <span title={cacheHitTitle(usage)}>{cacheHitRateLabel(usage)}</span>;
+              },
             },
             {
               key: 'updated',
