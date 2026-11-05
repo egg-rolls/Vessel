@@ -60,7 +60,7 @@
           "id": "marketplace",
           "title": "Plugins",
           "titleKey": "nav.domain.plugins",
-          "nav": "core",
+          "nav": "status",
           "entry": "index.html"
         }
       ],

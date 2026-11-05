@@ -969,12 +969,15 @@ for (const [name, mutate] of [
   const pages = pkg.vessel.contributes.pages;
   const page = pages[0];
   check('manifest: one page contribution', Array.isArray(pages) && pages.length === 1);
+  // `status` is the manifest's core-group slot: nav-model.ts merges pages with
+  // nav `status` into the Core group (hub / gateway / capabilities). `core`
+  // itself is not in PLUGIN_BUILTIN_NAV and would fail manifest validation.
   check(
-    'manifest: page is the tabbed entry',
+    'manifest: page is the tabbed core-group entry',
     page?.id === 'marketplace' &&
       page.title === 'Plugins' &&
       page.titleKey === 'nav.domain.plugins' &&
-      page.nav === 'core' &&
+      page.nav === 'status' &&
       page.entry === 'index.html',
     JSON.stringify(page),
   );
