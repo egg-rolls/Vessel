@@ -70,6 +70,8 @@ export type PluginPanelSlot = 'run-detail' | 'session-detail' | 'nav';
 export interface PluginPageContribution {
   id: string;
   title?: string;
+  /** 宿主 i18n key（web 导航标签）；`title` 是 fallback */
+  titleKey?: string;
   nav?: PluginPageNav;
   /** 0.45：导航图标，必须在 {@link PLUGIN_ICON_NAMES} 白名单内 */
   icon?: PluginIconName;
@@ -478,6 +480,8 @@ function readPages(value: unknown, pluginId: string): PluginPageContribution[] {
       fail('plugin_manifest_invalid', `${field}.entry must stay inside ui.dir`);
     }
     const title = optionalString(item.title, `${field}.title`);
+    const titleKey =
+      item.titleKey === undefined ? undefined : requireString(item.titleKey, `${field}.titleKey`);
     const order = optionalNumber(item.order, `${field}.order`);
     const nav =
       item.nav === undefined ? undefined : readPageNav(item.nav, pluginId, `${field}.nav`);
@@ -485,6 +489,7 @@ function readPages(value: unknown, pluginId: string): PluginPageContribution[] {
     return {
       id,
       ...(title !== undefined ? { title } : {}),
+      ...(titleKey !== undefined ? { titleKey } : {}),
       ...(nav !== undefined ? { nav } : {}),
       ...(icon !== undefined ? { icon } : {}),
       ...(order !== undefined ? { order } : {}),

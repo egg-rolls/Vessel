@@ -81,6 +81,7 @@ function toServeDescriptor(
             pages: contributes.pages.map((page) => ({
               id: page.id,
               title: page.title ?? page.id,
+              ...(page.titleKey !== undefined ? { titleKey: page.titleKey } : {}),
               ...(page.nav !== undefined ? { nav: page.nav } : {}),
               ...(page.icon !== undefined ? { icon: page.icon } : {}),
               ...(page.order !== undefined ? { order: page.order } : {}),
