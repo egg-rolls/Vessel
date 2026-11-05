@@ -12,6 +12,7 @@ export * from './DataTable';
 export * from './Field';
 export * from './host';
 export * from './KeyValueList';
+export * from './Page';
 export * from './SearchInput';
 export * from './Section';
 export * from './Stat';
