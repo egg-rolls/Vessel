@@ -3,6 +3,9 @@
 `apps/web` 的样式分为三层。新代码只写 L3；L1 / L2 不满足时先扩 L2，不要在各域
 重复造 primitive。
 
+跨外壳的设计系统规则（页面骨架、表格控件位置、DataTable 行距、时间戳、插件 i18n）
+见 [DESIGN.md](DESIGN.md)；本文只写 Web 侧的 token、组件与写法。
+
 | 层          | 位置                                                         | 职责                                      |
 | ----------- | ------------------------------------------------------------ | ----------------------------------------- |
 | L1 tokens   | `src/styles/tokens.css` + `src/index.css` 的 `@theme inline` | 唯一的颜色 / 圆角 / 字号 / 间距 / 阴影值  |
@@ -88,6 +91,8 @@
 | `KeyValueList`                                                                   | `components/ui/KeyValueList.tsx`     | 两列 `dl` 网格（等价旧 `.diag-list`）；`items: { label, value }[]`，value 自动断行                                                      |
 | `Stat`                                                                           | `components/ui/Stat.tsx`             | 指标块；`label` / `value` / `hint`                                                                                                                                                                        |
 | `DataTable`                                                                      | `components/ui/DataTable.tsx`        | 语义化表格；`columns`（`hide: 'wide' \| 'compact'`）/ `rows` / `rowKey` / `activeKey` / `stickyHeader`（默认 false，仅限自身有滚动容器的表格）；不做排序、分页、虚拟化                         |
+| `PageScaffold`                                                                   | `packages/plugin-ui/src/Page.tsx`    | 插件页唯一骨架：title + subtitle + content；头部不放 actions / 按钮 / 搜索 / tab / 版本号 / 计数 / 状态 chip（见 [DESIGN.md](DESIGN.md)）                                                   |
+| `TableToolbar`                                                                   | `packages/plugin-ui/src/TableToolbar.tsx` | 表格控件容器：`role="toolbar"`，放在表格正上方；筛选 / 范围 tab / 搜索 / 刷新 / 批量动作都放这里（见 [DESIGN.md](DESIGN.md)）                                                          |
 
 `StatusChip` 的 tone 只取 `muted` / `info` / `warn` / `ok` / `danger`；新增状态先加
 `STATUS_META` 与 i18n key，不要在业务页手写颜色。

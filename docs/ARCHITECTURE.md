@@ -13,4 +13,5 @@
 - 一次 run / 循环 / 消息 / 接口 → [runtime-lifecycle](architecture/runtime-lifecycle.md) · [runtime-loop](architecture/runtime-loop.md) · [runtime-api](architecture/runtime-api.md) · [interfaces](architecture/interfaces.md)
 - 工具、扩展、配置、事件 → [tools](architecture/tools.md) · [extensions](architecture/extensions.md) · [config](architecture/config.md) · [events](architecture/events.md)
 - Gateway / RPC / Web → [gateway](architecture/gateway.md) · [gateway-rpc](architecture/gateway-rpc.md) · [gateway-web](architecture/gateway-web.md)
+- UI 设计系统（页面骨架 / 表格控件 / 时间戳 / 插件 i18n） → [DESIGN.md](DESIGN.md)
 - **硬安全规则** → [AGENTS.md](../AGENTS.md)

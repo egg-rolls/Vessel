@@ -47,6 +47,7 @@
 | `AGENTS.md`                | AI 行为约定与硬规矩          | ≤150 行；不写版本状态 |
 | `README.md`                | 是什么 / 怎么跑 / 边界       | 不写版本状态     |
 | `docs/FILE-MANAGEMENT.md`  | 文件放哪里、路径归属         | 不写版本状态     |
+| `docs/DESIGN.md`           | 跨外壳设计系统规则           | 不写版本状态     |
 | `docs/WEB-UI.md`           | Web 组件与视觉约定           | 不写版本状态     |
 
 ### 3.2 硬规则
@@ -179,7 +180,7 @@ docs/
 
 | 文件                                                                               | 谁写                               |
 | ---------------------------------------------------------------------------------- | ---------------------------------- |
-| `docs/DOC-MANAGEMENT.md`、`docs/FILE-MANAGEMENT.md`、`docs/WEB-UI.md`              | `gov`                              |
+| `docs/DOC-MANAGEMENT.md`、`docs/FILE-MANAGEMENT.md`、`docs/DESIGN.md`、`docs/WEB-UI.md` | `gov`                         |
 | `docs/adr/**` 与 `docs/adr/README.md`                                              | `gov`；提案人起草，`gov` 登记索引  |
 | `docs/versions/<version>.md`、`docs/versions/INDEX.md`、`docs/versions/CURRENT.md` | 版本收口人（`1`）在合并/收口时更新 |
 | `AGENTS.md`、`README.md`                                                           | `gov` 主笔；各角色提需求           |
@@ -205,7 +206,7 @@ docs/
 
 收口前：
 - [ ] `docs/versions/CURRENT.md` ≤60 行，只有一个当前版本，无历史章节
-- [ ] `AGENTS.md` / `README.md` / `docs/FILE-MANAGEMENT.md` / `docs/WEB-UI.md` 无版本状态
+- [ ] `AGENTS.md` / `README.md` / `docs/FILE-MANAGEMENT.md` / `docs/DESIGN.md` / `docs/WEB-UI.md` 无版本状态
 - [ ] `current` 文档无 `## 0.x` / `### 0.x`、无逐版本“已实现 / 未发布”章节与“自 0.x 起”叙事
 - [ ] 拆分后的模块有 INDEX 与 frontmatter：模块 ≤100 行、INDEX ≤60 行、链接无死链
 - [ ] 检索走 INDEX 的 `triggers` / `paths`，未整读 >300 行的 `current` 文档

@@ -81,6 +81,7 @@ Vessel\                                    # 共享侧（git）
 │   │   └── ADR-<NNN>-<slug>.md            # ADR-001 ... ADR-045+
 │   ├── FILE-MANAGEMENT.md                 # 本文件：文件放哪里
 │   ├── DOC-MANAGEMENT.md                  # 文档分类、生命周期与索引
+│   ├── DESIGN.md                          # 跨外壳设计系统规则
 │   ├── WEB-UI.md                          # Web 组件与视觉约定
 │   ├── versions\                          # 版本历史（O(n)，只追加）
 │   │   ├── CURRENT.md                     # 当前态（O(1)）
@@ -133,6 +134,7 @@ Vessel\                                    # 共享侧（git）
 | `versions/CURRENT.md`     | 当前版本、已合入能力、下一步（O(1)）   | 版本收口人           |
 | `versions/INDEX.md`       | 版本索引（O(n)，新的在前）             | 版本收口人           |
 | `versions/<version>.md`   | 某个版本落了什么（O(n)，一版本一文件） | 版本收口人           |
+| `DESIGN.md`               | 跨外壳设计系统：页面骨架、表格控件、时间戳、插件 i18n | gov |
 | `WEB-UI.md`               | Web 组件与视觉约定                     | web 主笔，gov 维护   |
 | `operations/RELEASE.md`   | 怎么发版                               | gov                  |
 | `operations/CI-CD.md`     | CI / CD / 自动更新怎么跑               | gov                  |

@@ -296,6 +296,7 @@ cd apps/web && bun run build
 | [docs/architecture/INDEX.md](docs/architecture/INDEX.md)     | 技术架构：分层、循环、接口、扩展、事件、Gateway        |
 | [docs/adr/README.md](docs/adr/README.md)                     | 架构决策记录：每个关键选择的「为什么」                 |
 | [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)           | 文件放哪里、路径归属、分支与发布规则                   |
+| [docs/DESIGN.md](docs/DESIGN.md)                             | 跨外壳设计系统：页面骨架、表格控件、时间戳、插件 i18n  |
 | [docs/operations/CONFIG.md](docs/operations/CONFIG.md)       | 配置位置、优先级、tenant overlay 与密钥                |
 | [docs/operations/REMOTE.md](docs/operations/REMOTE.md)       | 跨机器远程：证书 / CA、两机配置、独立前端、故障排查    |
 | [docs/operations/TRACE.md](docs/operations/TRACE.md)         | trace 留存、脱敏与重放                                 |
