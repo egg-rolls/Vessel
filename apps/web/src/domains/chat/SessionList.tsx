@@ -263,11 +263,7 @@ export function SessionList({
           )}
           {groupSessionsByDay(sessions).map((group) => (
             <Fragment key={group.key || 'unknown'}>
-              {group.label && (
-                <div className="session-day">
-                  <span>{group.label}</span>
-                </div>
-              )}
+              {group.label && <div className="sidebar-group-label">{group.label}</div>}
               {group.sessions.map((session) => {
                 const active = session.session_id === selectedId;
                 const editing = editingId === session.session_id;

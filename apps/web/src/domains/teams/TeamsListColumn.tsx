@@ -54,6 +54,7 @@ export function TeamsListColumn({ state }: TeamsListColumnProps) {
   const createButton = (
     <Button
       variant="primary"
+      size="small"
       onClick={() => setCreateOpen(true)}
       disabled={writableNodes.length === 0}
     >
@@ -108,15 +109,11 @@ export function TeamsListColumn({ state }: TeamsListColumnProps) {
               key={nodeKeyOf(result.node)}
               aria-label={nodeNames.get(nodeKeyOf(result.node)) ?? '—'}
             >
-              {/* 分组头是祖先级（node = 列表的 scope），不是身份：降到 10.5px/muted 小写字距标签。
-                  「当前」用纯文本形态（DESIGN-0.33.0 §2），不得借用强调底 —— 那在本仓是
-                  选中/激活专用信号。只有在屏上不止一个分组时才渲染：单分组时它是常量噪声。 */}
-              <header className="flex items-center gap-2 border-b border-line pb-2">
-                <span className="text-xs font-medium tracking-wide text-muted uppercase">
-                  {nodeNames.get(nodeKeyOf(result.node)) ?? '—'}
-                </span>
+              {/* 分组头是祖先级（node = 列表的 scope），不是身份；只在多分组时显示“当前”标记。 */}
+              <header className="sidebar-group-label">
+                <span>{nodeNames.get(nodeKeyOf(result.node)) ?? '—'}</span>
                 {result.node.current && visible.length > 1 && (
-                  <span className="text-2xs text-faint" title={t('entity.currentNode')}>
+                  <span className="text-2xs" title={t('entity.currentNode')}>
                     <span aria-hidden="true">· </span>
                     {t('entity.currentNode')}
                   </span>
