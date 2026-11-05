@@ -1,9 +1,9 @@
 import {
   DataTable,
   type DataTableColumn,
-  PluginPage,
-  PluginPageHeader,
+  PageScaffold,
   Stat,
+  TableToolbar,
 } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { DayBucket, LeaderboardResult, SummaryResult } from '../src/aggregate.js';
@@ -179,15 +179,10 @@ export function UsageView({ client, refreshKey, t }: ViewProps) {
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
   return (
-    <PluginPage>
-      <PluginPageHeader title={t('usage.title')} description={t('usage.description')} />
-      <div
-        role="toolbar"
-        aria-label={t('usage.toolbar')}
-        className="flex flex-wrap items-center gap-2"
-      >
+    <PageScaffold title={t('usage.title')} subtitle={t('usage.description')}>
+      <TableToolbar label={t('usage.toolbar')}>
         <RangeTabs value={range} onChange={setRange} t={t} />
-      </div>
+      </TableToolbar>
       {state.status === 'loading' ? <LoadingState label={t('common.loading')} /> : null}
       {state.status === 'error' ? (
         <ErrorState
@@ -198,6 +193,6 @@ export function UsageView({ client, refreshKey, t }: ViewProps) {
         />
       ) : null}
       {state.status === 'ready' ? <UsageBody data={state.data} t={t} /> : null}
-    </PluginPage>
+    </PageScaffold>
   );
 }

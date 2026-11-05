@@ -1,8 +1,7 @@
 import {
   applyHostContext,
   type HostContext,
-  PluginPage,
-  PluginPageHeader,
+  PageScaffold,
   readHostContext,
   SegmentedTabs,
   type TabOption,
@@ -92,9 +91,7 @@ export function App() {
         : { title: t('updates.title'), subtitle: t('updates.subtitle') };
 
   return (
-    <PluginPage>
-      <PluginPageHeader title={heading.title} description={heading.subtitle} />
-
+    <PageScaffold title={heading.title} subtitle={heading.subtitle}>
       <SegmentedTabs
         label={t('tabs.label')}
         tabs={tabs}
@@ -131,6 +128,6 @@ export function App() {
           />
         ) : null}
       </main>
-    </PluginPage>
+    </PageScaffold>
   );
 }

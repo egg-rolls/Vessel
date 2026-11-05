@@ -1,4 +1,4 @@
-import { Button } from '@vessel-agent/plugin-ui';
+import { Button, TableToolbar } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useState } from 'react';
 import { describeError, type MarketplaceApi } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -61,11 +61,11 @@ export function InstalledView({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <TableToolbar label={t('installed.toolbar')} className="justify-end">
         <Button onClick={() => void load()} disabled={loading}>
           {t('button.refresh')}
         </Button>
-      </div>
+      </TableToolbar>
 
       <RegistryBanners registry={data?.registry} t={t} />
       {data?.registry_error !== undefined ? (

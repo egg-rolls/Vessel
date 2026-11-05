@@ -4,10 +4,10 @@ import {
   DataTable,
   type DataTableColumn,
   Field,
-  PluginPage,
-  PluginPageHeader,
+  PageScaffold,
   SearchInput,
   Select,
+  TableToolbar,
 } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LogItem, LogsResult } from '../src/aggregate.js';
@@ -163,9 +163,8 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
     applied.session.trim() !== '' || applied.model.trim() !== '' || applied.status !== '';
 
   return (
-    <PluginPage>
-      <PluginPageHeader title={t('logs.title')} description={t('logs.description')} />
-      <div role="toolbar" aria-label={t('logs.toolbar')} className="flex flex-wrap items-end gap-2">
+    <PageScaffold title={t('logs.title')} subtitle={t('logs.description')}>
+      <TableToolbar label={t('logs.toolbar')} className="items-end">
         <Field label={t('logs.session')} className="w-44">
           <SearchInput
             value={draft.session}
@@ -201,7 +200,7 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
           {t('common.apply')}
         </Button>
         <Button onClick={reload}>{t('common.refresh')}</Button>
-      </div>
+      </TableToolbar>
 
       {loading && items.length === 0 ? <LoadingState label={t('common.loading')} /> : null}
       {error !== null && items.length === 0 ? (
@@ -240,6 +239,6 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
           ) : null}
         </>
       ) : null}
-    </PluginPage>
+    </PageScaffold>
   );
 }

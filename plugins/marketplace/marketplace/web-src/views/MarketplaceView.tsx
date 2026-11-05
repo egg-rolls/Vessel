@@ -7,6 +7,7 @@ import {
   SearchInput,
   Section,
   Select,
+  TableToolbar,
 } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -204,44 +205,46 @@ export function MarketplaceView({
 
   const listView = (
     <div className="flex flex-col gap-3">
-      <form
-        className="flex flex-wrap items-end gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setApplied({ query: query.trim(), category });
-        }}
-      >
-        <SearchInput
-          value={query}
-          onChange={setQuery}
-          placeholder={t('search.placeholder')}
-          ariaLabel={t('search.aria')}
-          className="grow basis-60 max-w-search"
-        />
-        <Field label={t('category.label')} htmlFor="marketplace-filter-category" className="w-44">
-          <Select
-            id="marketplace-filter-category"
-            value={category}
-            aria-label={t('category.label')}
-            onChange={(event) => {
-              const next = event.target.value;
-              setCategory(next);
-              setApplied((current) => ({ ...current, category: next }));
-            }}
-          >
-            <option value="">{t('category.all')}</option>
-            {(data?.categories ?? []).map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Button type="submit">{t('search.submit')}</Button>
-        <Button onClick={() => void load()} disabled={loading}>
-          {t('button.refresh')}
-        </Button>
-      </form>
+      <TableToolbar label={t('browse.toolbar')}>
+        <form
+          className="flex w-full flex-wrap items-end gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setApplied({ query: query.trim(), category });
+          }}
+        >
+          <SearchInput
+            value={query}
+            onChange={setQuery}
+            placeholder={t('search.placeholder')}
+            ariaLabel={t('search.aria')}
+            className="grow basis-60 max-w-search"
+          />
+          <Field label={t('category.label')} htmlFor="marketplace-filter-category" className="w-44">
+            <Select
+              id="marketplace-filter-category"
+              value={category}
+              aria-label={t('category.label')}
+              onChange={(event) => {
+                const next = event.target.value;
+                setCategory(next);
+                setApplied((current) => ({ ...current, category: next }));
+              }}
+            >
+              <option value="">{t('category.all')}</option>
+              {(data?.categories ?? []).map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Button type="submit">{t('search.submit')}</Button>
+          <Button onClick={() => void load()} disabled={loading}>
+            {t('button.refresh')}
+          </Button>
+        </form>
+      </TableToolbar>
 
       <RegistryBanners registry={data?.registry} t={t} />
       {actionError !== null ? <Banner tone="danger">{actionError}</Banner> : null}
