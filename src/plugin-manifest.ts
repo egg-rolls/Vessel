@@ -81,7 +81,7 @@ export interface PluginPermissions {
 }
 
 export interface PluginDependency {
-  mods: string[];
+  plugins: string[];
   ordering: { after: string[]; before: string[] };
 }
 
@@ -143,7 +143,7 @@ export interface PluginManifestOptions {
   baseDir: string;
   /** 当前 Vessel 版本；缺省读根 package.json */
   vesselVersion?: string;
-  /** 已知插件 id；提供时检查 `dependencies.mods` 是否缺失 */
+  /** 已知插件 id；提供时检查 `dependencies.plugins` 是否缺失 */
   knownPluginIds?: Iterable<string>;
 }
 
@@ -494,11 +494,11 @@ function readContributions(
 }
 
 function readDependencies(raw: unknown): PluginDependency {
-  const empty: PluginDependency = { mods: [], ordering: { after: [], before: [] } };
+  const empty: PluginDependency = { plugins: [], ordering: { after: [], before: [] } };
   if (raw === undefined) return empty;
   if (!isRecord(raw)) fail('plugin_manifest_invalid', 'dependencies must be an object');
 
-  const mods = raw.mods === undefined ? [] : stringArray(raw.mods, 'dependencies.mods');
+  const plugins = raw.plugins === undefined ? [] : stringArray(raw.plugins, 'dependencies.plugins');
   let after: string[] = [];
   let before: string[] = [];
   if (raw.ordering !== undefined) {
@@ -512,7 +512,7 @@ function readDependencies(raw: unknown): PluginDependency {
       before = stringArray(raw.ordering.before, 'dependencies.ordering.before');
     }
   }
-  return { mods, ordering: { after, before } };
+  return { plugins, ordering: { after, before } };
 }
 
 // ── 入口 ────────────────────────────────────────────────────────────────────
@@ -592,7 +592,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
 
   if (options.knownPluginIds !== undefined) {
     const known = new Set(options.knownPluginIds);
-    for (const dependency of dependencies.mods) {
+    for (const dependency of dependencies.plugins) {
       if (!known.has(dependency)) {
         fail(
           'plugin_dependency_missing',

@@ -110,7 +110,7 @@ function toServeDescriptor(
     },
     permissions: manifest.permissions,
     dependencies: {
-      plugins: manifest.dependencies.mods,
+      plugins: manifest.dependencies.plugins,
       ordering: manifest.dependencies.ordering,
     },
     enabled: pluginEnabledInConfig(config, manifest.id),
