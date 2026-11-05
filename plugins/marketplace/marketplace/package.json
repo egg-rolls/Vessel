@@ -122,7 +122,7 @@
           "description": "List install/update jobs from the last 24h"
         },
         {
-          "name": "setEnabled",
+          "name": "set-enabled",
           "description": "Enable or disable a plugin by writing plugins[].enabled in config.yaml",
           "permission": "write"
         },

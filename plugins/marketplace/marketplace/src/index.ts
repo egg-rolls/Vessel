@@ -6,7 +6,8 @@
  * - `plugin.hello`      -> `{protocol: 1, ok: true}`
  * - `plugin.activate`   -> `{ok: true}` (settings parsed; registry may be unset)
  * - `plugin.event`      -> `{ok: true}` (cache is time-based, no per-event work)
- * - `plugin.rpc`        -> search / detail / install / remove / update / installed / configure
+ * - `plugin.rpc`        -> search / detail / install / remove / update / installed /
+ *                          set-enabled / configure
  * - `plugin.deactivate` -> `{ok: true}`, then exit
  * - `ping`              -> `pong`
  *
@@ -214,7 +215,7 @@ async function handleRpc(params: unknown): Promise<unknown> {
       return { items: listJobs().map(jobDto), ttl_hours: 24 };
     case 'installed':
       return installedPlugins(ctx, { force: args.force === true });
-    case 'setEnabled': {
+    case 'set-enabled': {
       // DECISION-045: the switch lives in config.yaml; the host watcher
       // reloads plugins. No runtime toggle and no host RPC.
       const id = requireString(args.id, 'id');
