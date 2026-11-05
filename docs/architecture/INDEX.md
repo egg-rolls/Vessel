@@ -24,6 +24,7 @@ paths: [docs/architecture/**]
 | [tools](tools.md) | `ToolDefinition`、能力工具与权限/路径边界 | tool, bash, read, edit, permission, denylist, allowed_roots, inbox, subscribe | `packages/core/src/types/tool.ts`, `plugins/tools/**` |
 | [guardrails-hooks](guardrails-hooks.md) | Guardrail 四阶段与 Hook 五阶段 | guardrail, hook, replacement, tool_call, before_llm | `packages/core/src/types/guardrail.ts`, `hook.ts` |
 | [extensions](extensions.md) | Plugin / PluginHost、发现与信任边界 | plugin, plugin host, loader, discovery, trust, external, mcp, skill | `packages/core/src/types/plugin.ts`, `src/plugin-loader.ts`, `plugins/**` |
+| [plugins](plugins.md) | 能力插件与体验插件：清单、发现、激活、信任、AI 流位置与热重载 | plugin, manifest, capability, experience, contribution, activation, reload, child process, trust | `plugins/**`, `src/plugin-loader.ts`, `packages/serve/src/plugin-host/**`, `apps/web/src/domains/plugins/**` |
 | [config](config.md) | 配置层序、resolver 与配置块 | config, yaml, precedence, env, tenant overlay, secrets | `packages/config/**`, `src/cli-overrides.ts` |
 | [events](events.md) | 事件命名、核心事件、回放与 trace 落盘 | event, event stream, trace, replay, observability, seq, agent.message.notified | `packages/core/src/types/event.ts`, `packages/core/src/events/**` |
 | [assembly](assembly.md) | `src/` 装配层、CLI/TUI 入口与职责边界 | bootstrap, cli, args, wiring, repl, headless | `src/**` |

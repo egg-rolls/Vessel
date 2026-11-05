@@ -7,6 +7,8 @@ paths: [packages/core/src/types/plugin.ts, src/plugin-loader.ts, src/plugin-sele
 
 # 扩展机制与插件发现
 
+> 本页只记接口契约与发现；插件分层、使用、信任模型与热重载见 [plugins](plugins.md)。
+
 <a id="plugin"></a>
 
 ### `Plugin` / `PluginHost`（`types/plugin.ts`）

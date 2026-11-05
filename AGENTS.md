@@ -29,7 +29,7 @@
 - **数据写入**：session / checkpoint 一律 `atomicWrite`，默认 `durable: true`；损坏 ≠ 不存在，抛 `SessionCorruptError`、不 unlink；一个 tenant 一个写者，锁冲突返回 `tenant_locked` / `session_locked` / `run_locked`（ADR-056/086）。
 - **单 run**：同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`；不要另写终态持久化 / 事件发布路径（ADR-054）。
 - **发布纪律**：1.0 前只做干跑，不 tag、不 publish、不 force-push；1 本地 squash 到 `main` 后直接 push，PR 只在用户明确要求时开；CI 异步，不作为 push 前置；tag `v*` 只有 1 打。
-- **插件信任**：默认加载外部插件，启动时向 stderr 告警；`VESSEL_NO_EXTERNAL_PLUGINS=1` 只加载仓库插件；显式 `plugins:` 即信任；外部插件以完整进程权限运行，P0-3 只做到缓解——不可信仓库务必 opt-out。
+- **插件信任**：内置插件（随 release 发布）可信；外部插件从项目 `./.vessel/plugins` 与用户 `~/.vessel/plugins` 发现，默认不可信，安装时必须展示其声明的 `permissions`（`fs` / `net` / `process` / `secrets` / `events` / `rpc`），未声明能力默认拒绝；体验插件跑在子进程但**不是安全沙箱**，能力插件仍在 in-process、拥有完整进程权限；`VESSEL_NO_EXTERNAL_PLUGINS=1` 只加载内置插件（ADR-099）。
 - **远程**：不默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环必须 TLS；`serve.allowed_origins` 只接受显式 http(s) origin，禁止 `*` / path / query。
 - **MCP**：MCP 工具默认不 `allow`；只按 `auto_approve_tools` 的原始工具名精确放行（ADR-039）。
 - **evals**：默认离线；真实 provider 需 `config.evals.allowNetwork` + CLI `--allow-network` 双门控。
