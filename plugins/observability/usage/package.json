@@ -53,7 +53,6 @@
     "activationEvents": [
       "onPage:usage",
       "onPage:logs",
-      "onPage:leaderboard",
       "onCommand:summary"
     ],
     "contributes": {
@@ -80,14 +79,6 @@
           "icon": "runs",
           "order": 11,
           "entry": "logs.html"
-        },
-        {
-          "id": "leaderboard",
-          "title": "Leaderboard",
-          "nav": "plugin:usage",
-          "icon": "agents",
-          "order": 12,
-          "entry": "leaderboard.html"
         }
       ],
       "commands": [

@@ -53,6 +53,7 @@ const MANIFEST = JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'ut
   vessel?: {
     entry?: string;
     ui?: { dir?: string };
+    activationEvents?: string[];
     contributes?: {
       pages?: { id: string; entry: string }[];
       rpc?: { name: string }[];
@@ -64,11 +65,14 @@ const pages = MANIFEST.vessel?.contributes?.pages ?? [];
 const expectedPages = new Map([
   ['usage', 'usage.html'],
   ['logs', 'logs.html'],
-  ['leaderboard', 'leaderboard.html'],
 ]);
 
 check('manifest keeps ui.dir = web', MANIFEST.vessel?.ui?.dir === 'web');
-check('manifest keeps the three page entries', pages.length === 3);
+check('manifest keeps the two page entries', pages.length === 2);
+check(
+  'leaderboard is no longer a page activation',
+  !(MANIFEST.vessel?.activationEvents ?? []).includes('onPage:leaderboard'),
+);
 for (const [id, entry] of expectedPages) {
   const page = pages.find((item) => item.id === id);
   check(`manifest page ${id} -> ${entry}`, page?.entry === entry);
@@ -170,7 +174,25 @@ check('web-src uses tokens, not raw colors', offenders.length === 0, offenders.j
 // ── layout / language ───────────────────────────────────────────────────────
 
 const appSource = await readFile(join(srcDir, 'App.tsx'), 'utf8');
+const usageSource = await readFile(join(srcDir, 'UsageView.tsx'), 'utf8');
+const logsSource = await readFile(join(srcDir, 'LogsView.tsx'), 'utf8');
 check('App renders no cross-page tab nav', !/\bPAGES\b|<nav\b/.test(appSource));
+check('leaderboard view removed', !(await exists(join(srcDir, 'LeaderboardView.tsx'))));
+check(
+  'leaderboard page artifact removed',
+  !(await exists(join(srcDir, 'leaderboard.html'))) &&
+    !(await exists(join(webDir, 'leaderboard.html'))),
+);
+check('usage view queries the leaderboard RPC', usageSource.includes("'leaderboard'"));
+check('usage view renders the merged model table', usageSource.includes('ModelTable'));
+check(
+  'tables have no Section wrapper',
+  !/<Section\b/.test(usageSource) && !/<Section\b/.test(logsSource),
+);
+check(
+  'tables use the TableFrame',
+  usageSource.includes('TableFrame') && logsSource.includes('TableFrame'),
+);
 
 const en = translator('en');
 const zh = translator('zh-CN');
@@ -181,14 +203,8 @@ check(
   en('logs.description') === 'Per-request usage and latency, newest first.',
 );
 check('zh logs description', zh('logs.description') === '按时间查看每次请求的用量与延迟。');
-check(
-  'en leaderboard description',
-  en('leaderboard.description') === 'Compare models by requests, tokens and cost.',
-);
-check(
-  'zh leaderboard description',
-  zh('leaderboard.description') === '按模型比较请求量、Token 与成本。',
-);
+check('en by-model heading', en('usage.byModel') === 'By model');
+check('zh by-model heading', zh('usage.byModel') === '按模型');
 check(
   'page titles follow the host language',
   en('usage.title') === 'Usage' && zh('usage.title') === '用量',

@@ -7,14 +7,20 @@ import {
   PluginPage,
   PluginPageHeader,
   SearchInput,
-  Section,
   Select,
 } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LogItem, LogsResult } from '../src/aggregate.js';
 import { fmtCost, fmtDuration, fmtInt, fmtTime, MISSING } from './format';
 import type { Translator } from './i18n';
-import { EmptyState, ErrorState, LoadingState, toError, type ViewProps } from './shared';
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  TableFrame,
+  toError,
+  type ViewProps,
+} from './shared';
 
 const LOG_LIMIT = 50;
 
@@ -216,9 +222,9 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
 
       {items.length > 0 ? (
         <>
-          <Section title={t('logs.section')}>
+          <TableFrame>
             <DataTable columns={logColumns(t)} rows={items} rowKey={(row) => row.id} />
-          </Section>
+          </TableFrame>
           {error !== null ? (
             <ErrorState
               error={error}

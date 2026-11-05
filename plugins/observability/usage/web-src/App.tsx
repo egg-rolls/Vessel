@@ -7,16 +7,14 @@ import {
 } from '@vessel-agent/plugin-ui';
 import { useEffect, useMemo, useState } from 'react';
 import { type MessageKey, translator } from './i18n';
-import { LeaderboardView } from './LeaderboardView';
 import { LogsView } from './LogsView';
 import { UsageView } from './UsageView';
 
-export type PluginView = 'usage' | 'logs' | 'leaderboard';
+export type PluginView = 'usage' | 'logs';
 
 const TITLE_KEYS: Record<PluginView, MessageKey> = {
   usage: 'usage.title',
   logs: 'logs.title',
-  leaderboard: 'leaderboard.title',
 };
 
 export function App({ view }: { view: PluginView }) {
@@ -52,8 +50,5 @@ export function App({ view }: { view: PluginView }) {
   }, [client]);
 
   if (view === 'logs') return <LogsView client={client} refreshKey={refreshKey} t={t} />;
-  if (view === 'leaderboard') {
-    return <LeaderboardView client={client} refreshKey={refreshKey} t={t} />;
-  }
   return <UsageView client={client} refreshKey={refreshKey} t={t} />;
 }

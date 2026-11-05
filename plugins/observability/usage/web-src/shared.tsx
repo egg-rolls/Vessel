@@ -5,6 +5,7 @@ import {
   SegmentedTabs,
   type TabOption,
 } from '@vessel-agent/plugin-ui';
+import type { ReactNode } from 'react';
 import type { Translator } from './i18n';
 
 export interface ViewProps {
@@ -70,6 +71,11 @@ export function LoadingState({ label }: { label: string }) {
 
 export function EmptyState({ title, description }: { title: string; description: string }) {
   return <Section title={title} description={description} />;
+}
+
+/** Minimal rounded frame for tables: no card background, heading or padding. */
+export function TableFrame({ children }: { children: ReactNode }) {
+  return <div className="overflow-hidden rounded-md">{children}</div>;
 }
 
 export function ErrorState({

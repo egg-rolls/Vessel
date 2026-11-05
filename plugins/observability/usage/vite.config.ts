@@ -115,7 +115,6 @@ export default defineConfig({
       input: {
         usage: resolve(root, 'usage.html'),
         logs: resolve(root, 'logs.html'),
-        leaderboard: resolve(root, 'leaderboard.html'),
       },
     },
   },

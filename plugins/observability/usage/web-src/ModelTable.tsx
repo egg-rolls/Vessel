@@ -1,25 +1,9 @@
-import {
-  Button,
-  DataTable,
-  type DataTableColumn,
-  PluginPage,
-  PluginPageHeader,
-  Section,
-} from '@vessel-agent/plugin-ui';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { LeaderboardResult, ModelBucket } from '../src/aggregate.js';
+import { Button, DataTable, type DataTableColumn } from '@vessel-agent/plugin-ui';
+import { useCallback, useMemo, useState } from 'react';
+import type { ModelBucket } from '../src/aggregate.js';
 import { fmtCost, fmtInt } from './format';
-import {
-  EmptyState,
-  ErrorState,
-  LoadingState,
-  type LoadState,
-  RangeTabs,
-  type RangeValue,
-  rangeParams,
-  toError,
-  type ViewProps,
-} from './shared';
+import type { Translator } from './i18n';
+import { TableFrame } from './shared';
 
 type SortKey = 'model' | 'requests' | 'tokens' | 'cache_read_tokens' | 'cost';
 type SortDirection = 'asc' | 'desc';
@@ -63,31 +47,10 @@ function SortHeader({
   );
 }
 
-export function LeaderboardView({ client, refreshKey, t }: ViewProps) {
-  const [range, setRange] = useState<RangeValue>('30');
-  const [state, setState] = useState<LoadState<LeaderboardResult>>({ status: 'loading' });
-  const [attempt, setAttempt] = useState(0);
+/** Model leaderboard table; sorting stays local. */
+export function ModelTable({ items, t }: { items: readonly ModelBucket[]; t: Translator }) {
   const [sortKey, setSortKey] = useState<SortKey>('tokens');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey / attempt are explicit refetch triggers.
-  useEffect(() => {
-    let active = true;
-    setState({ status: 'loading' });
-    void client
-      .call<LeaderboardResult>('leaderboard', rangeParams(range))
-      .then((data) => {
-        if (active) setState({ status: 'ready', data });
-      })
-      .catch((reason: unknown) => {
-        if (active) setState({ status: 'error', error: toError(reason) });
-      });
-    return () => {
-      active = false;
-    };
-  }, [client, range, refreshKey, attempt]);
-
-  const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
   const toggleSort = useCallback(
     (key: SortKey) => {
@@ -100,8 +63,6 @@ export function LeaderboardView({ client, refreshKey, t }: ViewProps) {
     },
     [sortKey],
   );
-
-  const items = state.status === 'ready' ? state.data.items : [];
 
   const sorted = useMemo(() => {
     const copy = items.slice();
@@ -158,32 +119,8 @@ export function LeaderboardView({ client, refreshKey, t }: ViewProps) {
   }, [header, t]);
 
   return (
-    <PluginPage>
-      <PluginPageHeader
-        title={t('leaderboard.title')}
-        description={t('leaderboard.description')}
-        actions={<RangeTabs value={range} onChange={setRange} t={t} />}
-      />
-      {state.status === 'loading' ? <LoadingState label={t('common.loading')} /> : null}
-      {state.status === 'error' ? (
-        <ErrorState
-          error={state.error}
-          onRetry={retry}
-          title={t('common.loadError')}
-          retryLabel={t('common.retry')}
-        />
-      ) : null}
-      {state.status === 'ready' && sorted.length === 0 ? (
-        <EmptyState
-          title={t('leaderboard.empty.title')}
-          description={t('leaderboard.empty.description')}
-        />
-      ) : null}
-      {sorted.length > 0 ? (
-        <Section title={t('leaderboard.section')}>
-          <DataTable columns={columns} rows={sorted} rowKey={(row) => row.model} />
-        </Section>
-      ) : null}
-    </PluginPage>
+    <TableFrame>
+      <DataTable columns={columns} rows={sorted} rowKey={(row) => row.model} />
+    </TableFrame>
   );
 }

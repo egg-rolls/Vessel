@@ -43,6 +43,7 @@ const EN = {
   'usage.costPartial': '{n} unpriced request(s); total covers priced models',
   'usage.costHint': 'USD, from configured prices',
   'usage.byDay': 'By day',
+  'usage.byModel': 'By model',
   'usage.empty.title': 'No usage data yet',
   'usage.empty.description':
     'Run a request through Vessel. Usage appears here once the event log has records in the selected range.',
@@ -71,7 +72,6 @@ const EN = {
   'logs.allStatuses': 'All statuses',
   'logs.optionOk': 'OK',
   'logs.optionFailed': 'Failed',
-  'logs.section': 'Request log',
   'logs.th.time': 'Time',
   'logs.th.status': 'Status',
   'logs.th.model': 'Model',
@@ -85,9 +85,6 @@ const EN = {
   'logs.empty.filtered': 'No matching requests',
   'logs.empty.description': 'Logs are read from the persisted tenant event files.',
 
-  'leaderboard.title': 'Leaderboard',
-  'leaderboard.description': 'Compare models by requests, tokens and cost.',
-  'leaderboard.section': 'Models',
   'leaderboard.th.model': 'Model',
   'leaderboard.th.requests': 'Requests',
   'leaderboard.th.tokens': 'Tokens',
@@ -136,6 +133,7 @@ const ZH: Record<MessageKey, string> = {
   'usage.costPartial': '{n} 次请求未计价；合计仅含已定价模型',
   'usage.costHint': '美元，按已配置价格计算',
   'usage.byDay': '按天',
+  'usage.byModel': '按模型',
   'usage.empty.title': '暂无用量数据',
   'usage.empty.description':
     '在 Vessel 中发起一次请求。事件日志有所选范围内的记录后，用量会显示在这里。',
@@ -164,7 +162,6 @@ const ZH: Record<MessageKey, string> = {
   'logs.allStatuses': '全部状态',
   'logs.optionOk': '成功',
   'logs.optionFailed': '失败',
-  'logs.section': '请求日志',
   'logs.th.time': '时间',
   'logs.th.status': '状态',
   'logs.th.model': '模型',
@@ -178,9 +175,6 @@ const ZH: Record<MessageKey, string> = {
   'logs.empty.filtered': '没有匹配的请求',
   'logs.empty.description': '日志来自已持久化的租户事件文件。',
 
-  'leaderboard.title': '排行榜',
-  'leaderboard.description': '按模型比较请求量、Token 与成本。',
-  'leaderboard.section': '模型',
   'leaderboard.th.model': '模型',
   'leaderboard.th.requests': '请求数',
   'leaderboard.th.tokens': 'Token',

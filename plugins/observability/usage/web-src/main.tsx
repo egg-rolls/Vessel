@@ -6,7 +6,7 @@ import './styles.css';
 // Apply theme/lang before the first paint so the iframe never flashes light.
 applyHostContext(readHostContext());
 
-const VIEWS: readonly PluginView[] = ['usage', 'logs', 'leaderboard'];
+const VIEWS: readonly PluginView[] = ['usage', 'logs'];
 
 function currentView(): PluginView {
   const value = document.body.dataset.view;
