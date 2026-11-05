@@ -86,6 +86,8 @@ export interface PluginDescriptor {
   description?: string;
   /** 模块入口的绝对路径（child 模式为 `vessel.entry` 解析后的路径） */
   entry: string;
+  /** 插件包根目录的绝对路径（child 子进程 cwd / ui.dir 基准） */
+  dir: string;
   /** 0.6.1：插件来源 */
   source: PluginSource;
   /** 0.43：in-process = 能力插件；child = 体验插件（由宿主 spawn，不经 loader import） */
@@ -197,6 +199,7 @@ function readPlugin(base: string, category: string, source: PluginSource): Plugi
         version: manifest.version,
         ...(description !== undefined ? { description } : {}),
         entry: path.resolve(base, manifest.entry),
+        dir: path.resolve(base),
         source,
         mode: 'child',
         manifest,
@@ -213,6 +216,7 @@ function readPlugin(base: string, category: string, source: PluginSource): Plugi
     version: typeof pkg.version === 'string' ? pkg.version : '0.0.0',
     ...(typeof pkg.description === 'string' ? { description: pkg.description } : {}),
     entry,
+    dir: path.resolve(base),
     source,
     mode: 'in-process',
     ...(override ? { override: true } : {}),

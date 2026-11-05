@@ -44,6 +44,7 @@ import {
   type Gateway,
   type GatewayOptions,
   type MetricsProvider,
+  type PluginHostManager,
   startGateway,
   type TenantEventHub,
 } from '../packages/serve/src/index';
@@ -105,6 +106,7 @@ import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { setToolPolicy } from './permission-store';
 import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
+import { activateEnabledPlugins, createPluginHostManager } from './plugin-host-assembly';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
 import { createRunControl } from './run-control';
@@ -670,6 +672,8 @@ async function runWithConfig(result: BootstrapResult) {
    * 的 diff 基线会一直滞后。
    */
   let liveConfig: VesselConfig = config;
+  /** 0.43：体验型 plugin 宿主（gateway 启动时构造；关闭时 stopAll）。 */
+  let pluginHostManager: PluginHostManager | undefined;
   /**
    * A2：headless 不在这里直接 `process.exit`，否则会跳过末尾的
    * gateway / tenantFactory / transport / shutdown 清理（`--serve --run`
@@ -860,6 +864,27 @@ async function runWithConfig(result: BootstrapResult) {
     }
 
     const dataDir = resolveDataDir(config);
+    // 0.43：体验型 plugin 宿主。v1 只用 default tenant 的配置 / settings；
+    // 启动时激活 enabled 的 child plugin（serve 侧暂无 settingsFor 端口）。
+    if (result.bundle !== undefined) {
+      pluginHostManager = createPluginHostManager({
+        loader: result.bundle.pluginLoader,
+        config: liveConfig,
+        dataDir,
+        logger,
+      });
+      const activated = await activateEnabledPlugins(pluginHostManager, {
+        config: liveConfig,
+        tenantId: result.tenantId,
+        logger,
+      });
+      if (activated.length > 0) {
+        logger.info('plugin.activated', {
+          plugins: activated,
+          tenant: result.tenantId,
+        });
+      }
+    }
     // 0.18：硬崩后 session 会永久停在 running（事件无终态）。启动 sweep + 读时兜底共用
     // 同一修复函数；锁活着 → 跳过，绝不误杀其它实例的活 run / resume。
     const livenessContextFor = (tenantId: string): SessionLivenessContext | undefined => {
@@ -1127,6 +1152,8 @@ async function runWithConfig(result: BootstrapResult) {
       // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
       context: ctx.context,
       pluginHost: ctx.pluginHost,
+      // 0.43：体验型 plugin 宿主（子进程 / 动态 RPC / 静态 UI / 事件转发）。
+      ...(pluginHostManager !== undefined ? { pluginHostManager } : {}),
       staticDir: resolveStaticDir(),
       nodeId: result.nodeId,
       nodeName: result.nodeName,
@@ -1282,6 +1309,9 @@ async function runWithConfig(result: BootstrapResult) {
     try {
       gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
     } catch (error) {
+      // gateway 没起来：先回收已 spawn 的 plugin 子进程。
+      await pluginHostManager?.stopAll();
+      pluginHostManager = undefined;
       if (isAddressInUse(error)) {
         // 端口被外部进程占用：退出 1，且不写 PID 文件（实例锁随 exit 释放）。
         console.error(
@@ -1394,6 +1424,9 @@ async function runWithConfig(result: BootstrapResult) {
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
   // gateway.stop() 自带 interrupt('shutdown') + 5s drain，后续关闭传 drain:false。
   activeCleanup = async () => {
+    // 0.43：先回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
+    await pluginHostManager?.stopAll();
+    pluginHostManager = undefined;
     // 先停配置监听 / 版本检查与出站 / 本地 hub，避免 gateway drain 期间继续触发热应用或重连。
     gatewayUpdateCheck?.stop();
     gatewayUpdateCheck = undefined;
@@ -1473,6 +1506,9 @@ async function runWithConfig(result: BootstrapResult) {
   // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）
   // → closeAll → shutdown；后两步 drain:false，避免重复限时等待。
   const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
+    // 0.43：先回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
+    await pluginHostManager?.stopAll();
+    pluginHostManager = undefined;
     // 先停出站 / 本地 hub，避免 gateway drain 期间继续重连或刷新目录。
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
