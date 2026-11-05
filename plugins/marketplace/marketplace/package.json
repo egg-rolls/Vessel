@@ -12,6 +12,10 @@
     "registry-template"
   ],
   "license": "MIT",
+  "scripts": {
+    "build:ui": "tsc -p tsconfig.ui.json --noEmit && vite build",
+    "typecheck:ui": "tsc -p tsconfig.ui.json --noEmit"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/egg-rolls/Vessel.git",
@@ -21,7 +25,18 @@
     "bun": ">=1.3.9"
   },
   "dependencies": {
+    "@vessel-agent/plugin-ui": "0.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
     "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.3.3",
+    "vite": "^7.0.0"
   },
   "vessel": {
     "id": "marketplace",

@@ -938,13 +938,21 @@ for (const [name, mutate] of [
 
   const webDir = join(packageDir, 'web');
   const html = await readFile(join(webDir, 'index.html'), 'utf-8');
+  check('page: index.html mounts the React root', html.includes('id="root"'));
   check(
-    'page: index.html has three tabs',
-    ['browse', 'installed', 'updates'].every((tab) => html.includes(`data-tab="${tab}"`)),
+    'page: index.html loads relative bundled assets',
+    /src="\.\/assets\/index-[\w-]+\.js"/.test(html) &&
+      /href="\.\/assets\/index-[\w-]+\.css"/.test(html),
   );
+  // The host sandbox has an opaque origin; module scripts are CORS-blocked
+  // there, so the entry must be a classic script after `#root`.
   check(
-    'page: index.html has three panels',
-    ['browse', 'installed', 'updates'].every((tab) => html.includes(`data-panel="${tab}"`)),
+    'page: classic script runs after the root node',
+    !html.includes('type="module"') &&
+      !html.includes('crossorigin') &&
+      /<div id="root"><\/div>\s*<script src="\.\/assets\/index-[\w-]+\.js"><\/script>\s*<\/body>/.test(
+        html,
+      ),
   );
   check('page: tabs are client-side, no nested iframe', !html.includes('<iframe'));
   check(
@@ -953,16 +961,54 @@ for (const [name, mutate] of [
       !(await exists(join(webDir, 'installed.html'))) &&
       !(await exists(join(webDir, 'updates.html'))),
   );
-
-  const js = await readFile(join(webDir, 'app.js'), 'utf-8');
-  // Methods the tabbed page actually drives; `jobs` is exercised via child RPC.
-  for (const method of ['search', 'detail', 'install', 'remove', 'update', 'installed', 'job']) {
-    check(`page: app.js calls rpc ${method}`, js.includes(`rpc('${method}'`));
-  }
   check(
-    'page: language comes from ?lang',
-    js.includes("get('lang')") && js.includes("'zh-CN'") && js.includes("'en'"),
+    'page: vanilla UI replaced by the build output',
+    !(await exists(join(webDir, 'app.js'))) && !(await exists(join(webDir, 'style.css'))),
   );
+
+  const assets = await readdir(join(webDir, 'assets'));
+  const jsName = assets.find((name) => /^index-[\w-]+\.js$/.test(name));
+  const cssName = assets.find((name) => /^index-[\w-]+\.css$/.test(name));
+  check('page: js bundle emitted', jsName !== undefined);
+  check('page: css bundle emitted', cssName !== undefined);
+
+  if (jsName !== undefined) {
+    const js = await readFile(join(webDir, 'assets', jsName), 'utf-8');
+    // Methods the tabbed page actually drives; `jobs` is exercised via child RPC.
+    for (const method of ['search', 'detail', 'install', 'remove', 'update', 'installed', 'job']) {
+      check(`page: bundle calls rpc ${method}`, js.includes(`"${method}"`));
+    }
+    check(
+      'page: bundle uses the host rpc bridge and refresh signal',
+      js.includes('vessel.plugin.rpc') && js.includes('vessel.plugin.refresh'),
+    );
+    check(
+      'page: language comes from ?lang',
+      js.includes('get("lang")') && js.includes('"zh-CN"') && js.includes('"en"'),
+    );
+    check(
+      'page: theme comes from ?theme / prefers-color-scheme',
+      js.includes('get("theme")') &&
+        js.includes('dataset.theme') &&
+        js.includes('prefers-color-scheme'),
+    );
+  }
+
+  if (cssName !== undefined) {
+    const css = await readFile(join(webDir, 'assets', cssName), 'utf-8');
+    check(
+      'page: css carries the shared tokens',
+      css.includes('--accent') && css.includes('--surface-raised') && css.includes('--scrim'),
+    );
+    check(
+      'page: css carries the shared utilities',
+      css.includes('.bg-raised{') && css.includes('.bg-scrim{') && css.includes('.z-modal{'),
+    );
+    check(
+      'page: css carries the dark theme',
+      css.includes('prefers-color-scheme') && css.includes('data-theme'),
+    );
+  }
 }
 
 // ── child RPC end-to-end ────────────────────────────────────────────────────

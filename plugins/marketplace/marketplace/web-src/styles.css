@@ -1,0 +1,37 @@
+/*
+ * Marketplace plugin styles.
+ *
+ * The package stylesheet already carries the Vessel tokens, the light/dark
+ * overrides, the Tailwind theme mapping and its own component scan. This file
+ * only adds the page shell; every color stays a token (`var(--*)` / utilities),
+ * never a literal.
+ */
+@import "@vessel-agent/plugin-ui/styles.css";
+
+/* The plugin's own components: scan this directory for utilities. */
+@source "./";
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--size-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
