@@ -895,6 +895,76 @@ for (const [name, mutate] of [
   );
 }
 
+// ── tabbed page entry ───────────────────────────────────────────────────────
+
+{
+  const packageDir = join(import.meta.dir, '..');
+  const pkg = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf-8')) as {
+    vessel: {
+      activationEvents: string[];
+      contributes: { pages: Array<Record<string, unknown>>; rpc: Array<{ name: string }> };
+    };
+  };
+  const pages = pkg.vessel.contributes.pages;
+  const page = pages[0];
+  check('manifest: one page contribution', Array.isArray(pages) && pages.length === 1);
+  check(
+    'manifest: page is the tabbed entry',
+    page?.id === 'marketplace' &&
+      page.title === 'Plugins' &&
+      page.titleKey === 'nav.domain.plugins' &&
+      page.nav === 'integrations' &&
+      page.entry === 'index.html',
+    JSON.stringify(page),
+  );
+  check(
+    'manifest: activation is only onPage:marketplace',
+    JSON.stringify(pkg.vessel.activationEvents) === JSON.stringify(['onPage:marketplace']),
+  );
+  check(
+    'manifest: rpc surface unchanged',
+    JSON.stringify(pkg.vessel.contributes.rpc.map((entry) => entry.name)) ===
+      JSON.stringify([
+        'search',
+        'detail',
+        'install',
+        'remove',
+        'update',
+        'installed',
+        'job',
+        'jobs',
+      ]),
+  );
+
+  const webDir = join(packageDir, 'web');
+  const html = await readFile(join(webDir, 'index.html'), 'utf-8');
+  check(
+    'page: index.html has three tabs',
+    ['browse', 'installed', 'updates'].every((tab) => html.includes(`data-tab="${tab}"`)),
+  );
+  check(
+    'page: index.html has three panels',
+    ['browse', 'installed', 'updates'].every((tab) => html.includes(`data-panel="${tab}"`)),
+  );
+  check('page: tabs are client-side, no nested iframe', !html.includes('<iframe'));
+  check(
+    'page: old standalone pages removed',
+    !(await exists(join(webDir, 'browse.html'))) &&
+      !(await exists(join(webDir, 'installed.html'))) &&
+      !(await exists(join(webDir, 'updates.html'))),
+  );
+
+  const js = await readFile(join(webDir, 'app.js'), 'utf-8');
+  // Methods the tabbed page actually drives; `jobs` is exercised via child RPC.
+  for (const method of ['search', 'detail', 'install', 'remove', 'update', 'installed', 'job']) {
+    check(`page: app.js calls rpc ${method}`, js.includes(`rpc('${method}'`));
+  }
+  check(
+    'page: language comes from ?lang',
+    js.includes("get('lang')") && js.includes("'zh-CN'") && js.includes("'en'"),
+  );
+}
+
 // ── child RPC end-to-end ────────────────────────────────────────────────────
 
 interface ChildMessage {

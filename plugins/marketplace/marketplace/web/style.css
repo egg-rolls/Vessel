@@ -64,19 +64,6 @@ body {
   margin-bottom: 22px;
 }
 
-.tabs a {
-  padding: 8px 12px;
-  color: var(--text-muted);
-  text-decoration: none;
-  border-bottom: 2px solid transparent;
-}
-
-.tabs a[aria-current="page"] {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-  font-weight: 600;
-}
-
 .page-head {
   display: flex;
   flex-wrap: wrap;
@@ -145,6 +132,23 @@ button.danger {
 button.small {
   padding: 4px 8px;
   font-size: 12px;
+}
+
+.tabs button {
+  padding: 8px 12px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tabs button[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
 }
 
 .grid {
