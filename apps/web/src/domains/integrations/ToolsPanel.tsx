@@ -153,7 +153,7 @@ export function ToolsPanel() {
               <article className="flex" key={tool.name}>
                 <button
                   type="button"
-                  className="flex min-h-control w-full items-center gap-2 rounded-md border border-transparent bg-raised px-3 py-2.5 text-left text-muted shadow-elev-1 transition-colors duration-150 hover:border-line hover:bg-surface-hover hover:shadow-elev-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface pointer-coarse:min-h-touch forced-colors:border"
+                  className="flex min-h-control w-full items-center gap-2 rounded-md border border-transparent bg-raised px-3 py-2.5 text-left text-muted transition-colors duration-150 hover:border-line hover:bg-surface-hover hover:shadow-elev-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface pointer-coarse:min-h-touch forced-colors:border"
                   aria-haspopup="dialog"
                   title={t('integrations.tools.openDetails', { name: tool.name })}
                   onClick={() => setDetail(tool)}
