@@ -23,7 +23,8 @@ const EN = {
   'browse.subtitle': 'Install from a static registry. Every package is checksum-verified.',
   'browse.toolbar': 'Marketplace controls',
   'installed.title': 'My plugins',
-  'installed.subtitle': 'Versions, scopes and updates for plugins on this machine.',
+  'installed.subtitle':
+    'Plugin packages on this machine. Built-ins need a vessel manifest; user/project installs are discovered from their directories. Built-ins cannot be removed or updated, but can still be enabled or disabled.',
   'installed.toolbar': 'Installed plugin controls',
   'updates.title': 'Updates',
   'updates.subtitle': 'Checks the configured registry for newer versions.',
@@ -54,7 +55,8 @@ const EN = {
   'state.registryEmpty': 'The registry is empty',
   'state.registryEmptyDetail': 'No plugins have been published to this registry yet.',
   'installed.empty': 'No plugins installed',
-  'installed.emptyDetail': 'Registry-installed and built-in plugins are both listed here.',
+  'installed.emptyDetail':
+    'Built-in plugins and user/project installs are listed here. Capability plugins without a vessel manifest are not shown.',
   'scope.builtin': 'Built-in',
   'scope.user': 'User',
   'scope.project': 'Project',
@@ -148,7 +150,8 @@ const ZH: Record<MessageKey, string> = {
   'browse.subtitle': '从静态插件源安装插件，每个包都会进行校验和校验。',
   'browse.toolbar': '插件市场控件',
   'installed.title': '我的插件',
-  'installed.subtitle': '本机插件的版本、作用域与更新状态。',
+  'installed.subtitle':
+    '本机插件包：内置包需带 vessel 清单；用户 / 项目安装包按目录发现。内置包不可移除或更新，仍可启停。',
   'installed.toolbar': '已安装插件控件',
   'updates.title': '更新',
   'updates.subtitle': '检查已配置的插件源是否有新版本。',
@@ -179,7 +182,8 @@ const ZH: Record<MessageKey, string> = {
   'state.registryEmpty': '插件源为空',
   'state.registryEmptyDetail': '该插件源还没有发布任何插件。',
   'installed.empty': '尚未安装插件',
-  'installed.emptyDetail': '从插件源安装的插件和内置插件都会列在这里。',
+  'installed.emptyDetail':
+    '内置插件与用户 / 项目安装的插件都会列在这里；没有 vessel 清单的能力插件不在本列表。',
   'scope.builtin': '内置',
   'scope.user': '用户',
   'scope.project': '项目',

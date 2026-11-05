@@ -197,6 +197,7 @@ export function CapabilitiesView() {
               {t('capabilities.pluginsTitle')} <Badge>{result?.plugins.length ?? 0}</Badge>
             </>
           }
+          description={t('capabilities.pluginsDescription')}
         >
           {result && result.plugins.length === 0 ? (
             <p className="text-md text-muted">{t('capabilities.noMatchPlugins')}</p>
