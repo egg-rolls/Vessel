@@ -103,7 +103,7 @@ export function DisplaySettingsFields({
           <fieldset
             key={setting.key}
             disabled={disabled}
-            className="min-w-0 rounded-md border border-line bg-raised p-3"
+            className="min-w-0 rounded-md border border-transparent bg-raised p-3 transition-colors hover:border-line hover:bg-surface-hover hover:shadow-elev-1"
           >
             <legend className="px-1 font-mono text-xs tracking-wide text-faint">
               {setting.key}

@@ -7,7 +7,8 @@
 
 import type { ReactNode } from 'react';
 import { StatusChip } from '../../components/StatusChip';
-import { Button, DataTable, Select } from '../../components/ui';
+import { Button, DataTable } from '../../components/ui';
+import { FilterPopover } from '../../components/ui/FilterPopover';
 import { formatTimestamp } from '../../format';
 import type { DurableRunSummary, RunStatus, Usage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -58,37 +59,6 @@ function shortId(id: string): string {
   return id.length > 12 ? id.slice(0, 12) : id;
 }
 
-/** 表头过滤下拉：当前值为「全部」时显示字段名，选中值只显示该值。 */
-function HeaderFilter({
-  label,
-  allValue,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  allValue: string;
-  value: string;
-  options: readonly { value: string; label: string }[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <Select
-      className="h-auto w-auto min-w-16 border-0 bg-transparent px-0 py-0 text-xs tracking-wide shadow-none hover:text-ink focus:shadow-focus"
-      value={value}
-      aria-label={label}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      <option value={allValue}>{label}</option>
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </Select>
-  );
-}
-
 export function RunsTable({
   tab,
   windowed,
@@ -131,7 +101,7 @@ export function RunsTable({
   onShowMore: () => void;
 }) {
   const statusFilter = (header: ReactNode) => (
-    <HeaderFilter
+    <FilterPopover
       label={String(header)}
       allValue="all"
       value={status}
@@ -142,10 +112,11 @@ export function RunsTable({
     />
   );
   const agentFilter = (header: ReactNode) => (
-    <HeaderFilter
+    <FilterPopover
       label={String(header)}
       allValue=""
       value={agentId}
+      searchThreshold={0}
       options={agentOptions.map((id) => ({ value: id, label: agentNames.get(id) ?? shortId(id) }))}
       onChange={onAgentIdChange}
     />

@@ -70,13 +70,18 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-1);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: var(--elev-1);
-  transition: box-shadow 120ms var(--ease);
+  transition:
+    box-shadow 120ms var(--ease),
+    border-color 120ms var(--ease);
 }
 
 .teams-card:hover {
+  border-color: var(--line);
+  background: var(--surface-hover);
   box-shadow: var(--elev-2);
 }
 

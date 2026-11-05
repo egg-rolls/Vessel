@@ -123,7 +123,7 @@ export function TeamPendingBar({
           const summary = permissionInputSummary(request.input);
           return (
             <li
-              className="flex min-w-0 flex-col gap-1.5 rounded-md border border-line bg-raised p-2.5"
+              className="flex min-w-0 flex-col gap-1.5 rounded-md border border-transparent bg-raised p-2.5 transition-colors hover:border-line hover:bg-surface-hover hover:shadow-elev-1"
               key={`perm:${request.requestId}`}
             >
               <div className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">
@@ -151,7 +151,7 @@ export function TeamPendingBar({
           const preview = askPreview(request);
           return (
             <li
-              className="flex min-w-0 flex-col gap-1.5 rounded-md border border-line bg-raised p-2.5"
+              className="flex min-w-0 flex-col gap-1.5 rounded-md border border-transparent bg-raised p-2.5 transition-colors hover:border-line hover:bg-surface-hover hover:shadow-elev-1"
               key={`ask:${request.requestId}`}
             >
               <div className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">

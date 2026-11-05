@@ -54,6 +54,7 @@
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-raised: var(--surface-raised);
+  --color-surface-hover: var(--surface-hover);
   --color-sunken: var(--surface-sunken);
   --color-deep: var(--surface-deep);
   --color-ink: var(--ink);

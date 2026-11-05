@@ -10,6 +10,8 @@
   --bg: #f7f7f8;
   --surface: #ffffff;
   --surface-raised: #ffffff;
+  /* 卡片 hover：亮色保持白色（抬起感来自阴影）/ 暗色变亮；两套值。 */
+  --surface-hover: #ffffff;
   --surface-sunken: #f1f1f2;
   --surface-deep: #e8e8ea;
   --ink: #101012;
@@ -151,6 +153,8 @@
     --bg: #0b0b0c;
     --surface: #121214;
     --surface-raised: #1a1a1d;
+    /* 卡片 hover：亮色变暗 / 暗色变亮；两套值。 */
+    --surface-hover: #313134;
     --surface-sunken: #0e0e10;
     --surface-deep: #08080a;
     --ink: #f2f2f3;
@@ -185,6 +189,8 @@
   --bg: #0b0b0c;
   --surface: #121214;
   --surface-raised: #1a1a1d;
+  /* 卡片 hover：亮色变暗 / 暗色变亮；两套值。 */
+  --surface-hover: #313134;
   --surface-sunken: #0e0e10;
   --surface-deep: #08080a;
   --ink: #f2f2f3;
