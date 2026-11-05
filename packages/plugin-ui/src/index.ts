@@ -16,4 +16,5 @@ export * from './Page';
 export * from './SearchInput';
 export * from './Section';
 export * from './Stat';
+export * from './TableToolbar';
 export * from './Tabs';

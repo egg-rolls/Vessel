@@ -44,6 +44,12 @@ const HIDE_CLASS: Record<DataTableHide, string> = {
  * 语义数据表：行 hover / 选中底色、列断点隐藏与末列换行规则。
  * 表头默认不吸顶（页面级表格会被路由滚动容器钉在顶部、遮挡页头与 tab）；
  * 只有表格自己带滚动容器时才传 `stickyHeader`。只负责展示，不含排序 / 分页 / 虚拟化。
+ *
+ * 行与行之间 1px 间隙：`border-separate` + `border-spacing-y-px`。间隙用表格
+ * 自身的 `bg-bg` 垫底、行底色放在单元格上；这样无论外层是页面底色还是
+ * `Section` 的 raised 底板，间隙都与行底色不同、始终可见（`bg-surface` 在亮色
+ * 下与 raised 同值 #ffffff，会吞掉间隙，所以不用它）。圆角落在首行（表头）与
+ * 末行的外角单元格上，容器若已 `overflow-hidden` 则是双层圆角（视觉等价）。
  */
 export function DataTable<Row>({
   columns,
@@ -54,7 +60,12 @@ export function DataTable<Row>({
   stickyHeader = false,
 }: DataTableProps<Row>) {
   return (
-    <table className={cn('w-full border-collapse bg-raised text-md', className)}>
+    <table
+      className={cn(
+        'w-full rounded-md border-separate border-spacing-y-px bg-bg text-md',
+        className,
+      )}
+    >
       <thead>
         <tr>
           {columns.map((column) => (
@@ -62,7 +73,7 @@ export function DataTable<Row>({
               key={column.key}
               scope="col"
               className={cn(
-                'h-9 bg-sunken px-2.5 py-1.5 text-left align-middle font-mono text-xs font-medium tracking-wide text-faint uppercase wrap-anywhere max-compact:px-1.5',
+                'h-9 bg-sunken px-2.5 py-1.5 text-left align-middle font-mono text-xs font-medium tracking-wide text-faint uppercase wrap-anywhere max-compact:px-1.5 first:rounded-tl-md last:rounded-tr-md',
                 stickyHeader && 'sticky top-0 z-1',
                 column.hide && HIDE_CLASS[column.hide],
               )}
@@ -73,19 +84,22 @@ export function DataTable<Row>({
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => {
+        {rows.map((row, rowIndex) => {
           const key = rowKey(row);
+          const isLastRow = rowIndex === rows.length - 1;
           return (
             <tr
               key={key}
               data-active={key === activeKey || undefined}
-              className="hover:bg-hover data-[active=true]:bg-accent-soft data-[active=true]:text-accent-ink"
+              className="group data-[active=true]:text-accent-ink"
             >
               {columns.map((column, index) => (
                 <td
                   key={column.key}
                   className={cn(
-                    'h-9 px-2.5 py-1.5 align-middle wrap-anywhere max-compact:px-1.5',
+                    'h-9 bg-raised px-2.5 py-1.5 align-middle wrap-anywhere group-hover:bg-hover group-data-[active=true]:bg-accent-soft max-compact:px-1.5',
+                    index === 0 && isLastRow && 'rounded-bl-md',
+                    index === columns.length - 1 && isLastRow && 'rounded-br-md',
                     index === columns.length - 1 && 'whitespace-nowrap max-wide:whitespace-normal',
                     column.hide && HIDE_CLASS[column.hide],
                     column.cellClassName,
