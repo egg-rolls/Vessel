@@ -112,6 +112,8 @@ export interface PluginContributionPage {
   id: string;
   title: string;
   nav?: PluginNavSlot;
+  /** 可选 i18n key；Web 导航优先用它，缺省回退 manifest title。 */
+  titleKey?: string;
   /** 白名单图标名；未知名由 Web normalizer 丢弃该页。 */
   icon?: string;
   order?: number;

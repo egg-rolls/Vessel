@@ -47,7 +47,7 @@ export function PluginFrame({
   context?: PluginFrameContext;
   className?: string;
 }) {
-  useLocale();
+  const locale = useLocale();
   const { client, gatewayUrl, eventStore } = useConnection();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -61,8 +61,9 @@ export function PluginFrame({
       pluginFrameUrl(gatewayUrl, pluginId, entry, {
         run: contextRun,
         session: contextSession,
+        lang: locale,
       }),
-    [gatewayUrl, pluginId, entry, contextRun, contextSession],
+    [gatewayUrl, pluginId, entry, contextRun, contextSession, locale],
   );
 
   const postToFrame = useCallback((message: unknown) => {

@@ -993,6 +993,7 @@ export function renderContributions(
     .map((page) => ({
       id: page.id,
       title: page.title,
+      ...(page.titleKey !== undefined ? { titleKey: page.titleKey } : {}),
       nav: page.nav ?? 'observe',
       ...(page.icon !== undefined ? { icon: page.icon } : {}),
       order: page.order ?? 100,

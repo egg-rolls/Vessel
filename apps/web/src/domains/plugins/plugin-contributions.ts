@@ -35,6 +35,8 @@ export interface PluginPageItem {
   pluginName: string;
   id: string;
   title: string;
+  /** 可选 i18n key；NavModel 优先用它。 */
+  titleKey?: string;
   /** 内置分组 id 或本 plugin 的 `plugin:<pluginId>`。 */
   nav: string;
   /** 不含未通过白名单的值。 */
@@ -138,7 +140,7 @@ export function pluginFrameUrl(
   gatewayUrl: string,
   pluginId: string,
   entry: string,
-  context?: { run?: string; session?: string },
+  context?: { run?: string; session?: string; lang?: string },
 ): string | null {
   if (!isValidPluginId(pluginId)) return null;
   const safeEntry = safeEntryPath(entry);
@@ -153,6 +155,7 @@ export function pluginFrameUrl(
   const url = new URL(`/plugins/${encodeURIComponent(pluginId)}/${safeEntry}`, origin);
   if (context?.run) url.searchParams.set('run', context.run);
   if (context?.session) url.searchParams.set('session', context.session);
+  if (context?.lang) url.searchParams.set('lang', context.lang);
   return url.toString();
 }
 
@@ -191,11 +194,13 @@ function pageOf(
   if (!BUILTIN_NAV_SLOTS.has(nav) && nav !== ownNav) return null;
   const icon = navIconOf(page.icon);
   if (icon === null) return null;
+  const titleKey = text(page.titleKey);
   return {
     pluginId: plugin.name,
     pluginName: plugin.name,
     id,
     title,
+    ...(titleKey !== '' ? { titleKey } : {}),
     nav,
     ...(icon !== undefined ? { icon } : {}),
     order: orderOf(page.order),

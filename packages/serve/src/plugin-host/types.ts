@@ -105,6 +105,8 @@ export interface PluginStaticMount {
 export interface PluginPageContribution {
   id: string;
   title: string;
+  /** i18n key（可选）；与 title 一起透传到 plugins.list contributions。 */
+  titleKey?: string;
   nav?: PluginNav;
   icon?: PluginIconName;
   order?: number;
@@ -201,6 +203,7 @@ export interface PluginRenderContributions {
   pages: Array<{
     id: string;
     title: string;
+    titleKey?: string;
     nav: PluginNav;
     icon?: PluginIconName;
     order: number;

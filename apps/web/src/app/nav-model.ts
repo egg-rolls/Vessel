@@ -5,6 +5,7 @@
  * 模型，不再为每个来源写一段 JSX。匹配规则按稳定 key，不按显示名称。
  */
 import type { PluginNavGroupItem, PluginPageItem } from '../domains/plugins/plugin-contributions';
+import { t } from '../i18n';
 import {
   domainLabel,
   isDomainActive,
@@ -65,7 +66,7 @@ function coreItem(domain: PrimaryDomain, route: Route, statuses: NavStatuses): N
 function pageItem(page: PluginPageItem, currentRoute: Route): NavItemModel {
   return {
     id: `plugin:${page.pluginId}:${page.id}`,
-    title: page.title,
+    title: page.titleKey ? t(page.titleKey) : page.title,
     icon: page.icon ?? 'plugins',
     route: { domain: 'plugins', pluginId: page.pluginId, entry: page.entry },
     active:
