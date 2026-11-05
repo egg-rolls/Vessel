@@ -251,7 +251,6 @@ export const messages = {
   'chat.subagents.context': '上下文 {used}/{max}',
   // 0.43: plugin pages / panels (CONTRACT-0.43 §7)
   'plugins.page.loading': '正在加载插件页面…',
-  'plugins.page.description': '由插件 {plugin} 提供。',
   'plugins.page.notConnected': '未连接 gateway',
   'plugins.page.notConnectedReason': '连接 gateway 后才能加载插件页面。',
   'plugins.page.notFound': '插件页面不可用',
