@@ -90,6 +90,30 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <path d="M6.5 13.5v3l3-2" />
         </svg>
       );
+    case 'tenants':
+      return (
+        <svg {...common}>
+          <circle cx="7.5" cy="7" r="2.6" />
+          <path d="M3.2 16.2c0-2.4 1.9-4.2 4.3-4.2s4.3 1.8 4.3 4.2" />
+          <circle cx="14.2" cy="8" r="1.9" />
+          <path d="M12.8 12.5c1.9.3 3.3 1.8 3.3 3.7" />
+        </svg>
+      );
+    case 'capabilities':
+      return (
+        <svg {...common}>
+          <path d="M12.2 3.2a3.8 3.8 0 0 0-4.9 4.9L3.6 11.8a1.6 1.6 0 0 0 2.2 2.2l3.7-3.7a3.8 3.8 0 0 0 4.9-4.9l-2 2-1.9-.5-.5-1.9z" />
+        </svg>
+      );
+    case 'visual':
+      return (
+        <svg {...common}>
+          <path d="M4 6h12" />
+          <path d="M4 14h12" />
+          <circle cx="8" cy="6" r="1.8" fill="var(--surface)" />
+          <circle cx="13" cy="14" r="1.8" fill="var(--surface)" />
+        </svg>
+      );
     case 'plugins':
       return (
         <svg {...common}>

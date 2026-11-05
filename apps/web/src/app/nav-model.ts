@@ -40,7 +40,8 @@ const CORE_GROUP_ICONS: Record<string, Domain> = {
   network: 'agents',
   runs: 'runs',
   integrations: 'tools',
-  status: 'hub',
+  core: 'hub',
+  settings: 'settings',
 };
 
 function statusOf(domain: PrimaryDomain, statuses: NavStatuses): NavStatusMeta | undefined {
@@ -109,8 +110,9 @@ export function buildNavModel({
 
   NAV_GROUPS.forEach((group, index) => {
     const items = group.domains.map((domain) => coreItem(domain, route, statuses));
-    // 旧 `observe` 槽位并入 orchestration 组。
+    // 旧 `observe` 槽位并入 orchestration 组；旧 `status` key 并入 core。
     if (group.id === 'network') items.push(...pagesFor(pluginPages, 'observe', route));
+    if (group.id === 'core') items.push(...pagesFor(pluginPages, 'status', route));
     items.push(...pagesFor(pluginPages, group.id, route));
     push({
       id: group.id,
@@ -130,24 +132,6 @@ export function buildNavModel({
     order: coreCount,
     collapsible: true,
     items: pagesFor(pluginPages, 'plugins', route),
-  });
-
-  push({
-    id: 'settings',
-    title: navGroupLabel('settings'),
-    icon: 'settings',
-    order: coreCount + 1,
-    collapsible: true,
-    items: [
-      {
-        id: 'settings',
-        title: domainLabel('settings'),
-        icon: 'settings',
-        route: { domain: 'settings', tab: 'connection' },
-        active: route.domain === 'settings',
-      },
-      ...pagesFor(pluginPages, 'settings', route),
-    ],
   });
 
   // 自定义分组：内置组之后，按 navGroups[].order 升序。

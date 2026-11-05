@@ -21,6 +21,7 @@ import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { useNodeNames } from '../nodes/useNodeNames';
+import { ConnectionForm } from '../settings/ConnectionForm';
 import { uptimeParts } from './gateway-state';
 
 function pageOrigin(): string {
@@ -67,6 +68,8 @@ export function GatewayView({ navigate }: { navigate: (route: Route) => void }) 
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader title={t('gateway.title')} tenantId={tenantId} />
       <div className="mt-5 flex flex-col gap-4">
+        {/* 连接表单唯一入口（0.45 IA）；无 token 时也要可编辑。 */}
+        <ConnectionForm />
         {!hasToken ? (
           <NotEnabledState title={t('gateway.noToken')} reason={t('gateway.noTokenReason')} />
         ) : (

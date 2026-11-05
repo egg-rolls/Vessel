@@ -27,6 +27,9 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
     route.domain === 'nodes' ||
     route.domain === 'teams' ||
     route.domain === 'agents' ||
+    route.domain === 'tenants' ||
+    route.domain === 'capabilities' ||
+    route.domain === 'visual' ||
     route.domain === 'mcp' ||
     route.domain === 'channels' ||
     route.domain === 'observe' ||
@@ -120,6 +123,36 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               className="more-item"
               onClick={() => {
                 setMoreOpen(false);
+                navigate(primaryRoute('tenants'));
+              }}
+            >
+              <DomainIcon domain="tenants" /> {domainLabel('tenants')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
+                navigate(primaryRoute('capabilities'));
+              }}
+            >
+              <DomainIcon domain="capabilities" /> {domainLabel('capabilities')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
+                navigate(primaryRoute('visual'));
+              }}
+            >
+              <DomainIcon domain="visual" /> {domainLabel('visual')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
                 navigate(primaryRoute('mcp'));
               }}
             >
@@ -187,7 +220,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               className="more-item"
               onClick={() => {
                 setMoreOpen(false);
-                navigate({ domain: 'settings', tab: 'connection' });
+                navigate({ domain: 'settings' });
               }}
             >
               <DomainIcon domain="settings" /> {domainLabel('settings')}

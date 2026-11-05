@@ -1,9 +1,7 @@
 import { t } from '../i18n';
 import type { Domain, Route } from './router';
 
-type SettingsTab = Extract<Route, { domain: 'settings' }>['tab'];
-
-export type PrimaryDomain = Exclude<Domain, 'settings' | 'plugins'>;
+export type PrimaryDomain = Exclude<Domain, 'plugins'>;
 
 export interface DomainDef {
   id: Domain;
@@ -19,12 +17,16 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'agents' },
   { id: 'teams' },
   { id: 'nodes' },
+  { id: 'tenants' },
   { id: 'runs' },
   { id: 'tools' },
   { id: 'mcp' },
   { id: 'channels' },
   { id: 'hub' },
   { id: 'gateway' },
+  { id: 'capabilities' },
+  { id: 'settings' },
+  { id: 'visual' },
 ];
 
 /**
@@ -36,10 +38,11 @@ export const NAV_GROUPS: readonly {
   domains: readonly PrimaryDomain[];
 }[] = [
   { id: 'chat', domains: ['chat', 'teams'] },
-  { id: 'network', domains: ['agents', 'nodes'] },
+  { id: 'network', domains: ['agents', 'nodes', 'tenants'] },
   { id: 'runs', domains: ['runs'] },
   { id: 'integrations', domains: ['tools', 'mcp', 'channels'] },
-  { id: 'status', domains: ['hub', 'gateway'] },
+  { id: 'core', domains: ['hub', 'gateway', 'capabilities'] },
+  { id: 'settings', domains: ['settings', 'visual'] },
 ];
 
 /** 主导航项的默认落点（不改路由；供 NavModel / 命令面板 / 移动端共用）。 */
@@ -65,6 +68,14 @@ export function primaryRoute(domain: PrimaryDomain): Route {
       return { domain: 'mcp' };
     case 'channels':
       return { domain: 'channels' };
+    case 'tenants':
+      return { domain: 'tenants' };
+    case 'capabilities':
+      return { domain: 'capabilities' };
+    case 'visual':
+      return { domain: 'visual' };
+    case 'settings':
+      return { domain: 'settings' };
     case 'observe':
       return { domain: 'observe', tab: 'metrics' };
   }
@@ -76,10 +87,6 @@ export function domainLabel(domain: Domain): string {
 
 export function navGroupLabel(groupId: string): string {
   return t(`nav.group.${groupId}`);
-}
-
-export function settingsTabLabel(tab: SettingsTab): string {
-  return t(`settings.tab.${tab}`);
 }
 
 export function isDomainActive(route: Route, domain: Domain): boolean {
@@ -123,7 +130,13 @@ export function routeBreadcrumb(route: Route): string {
       return t(`breadcrumb.observe.${route.tab}`);
     case 'plugins':
       return t('breadcrumb.plugins');
+    case 'tenants':
+      return t('breadcrumb.tenants');
+    case 'capabilities':
+      return t('breadcrumb.capabilities');
+    case 'visual':
+      return t('breadcrumb.visual');
     case 'settings':
-      return t('breadcrumb.settings', { tab: settingsTabLabel(route.tab) });
+      return t('breadcrumb.settings');
   }
 }

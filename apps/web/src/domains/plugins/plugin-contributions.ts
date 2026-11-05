@@ -77,6 +77,8 @@ const BUILTIN_NAV_SLOTS: ReadonlySet<string> = new Set([
   'network',
   'runs',
   'integrations',
+  'core',
+  // 0.45 旧 key：IA 已把 status 改名为 core，读侧继续接受旧值。
   'status',
 ]);
 const NAV_ICONS: ReadonlySet<string> = new Set(PLUGIN_NAV_ICONS);

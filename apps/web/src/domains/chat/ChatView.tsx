@@ -299,7 +299,7 @@ export function ChatView({
         onShowMore={sessionsApi.showMore}
         compact={compact}
         onCloseDrawer={onCloseSessions}
-        onOpenConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
+        onOpenConnection={() => navigate({ domain: 'gateway' })}
         writesDisabled={!connected}
         renameSignal={sessionsApi.renameSignal}
         sessionsOpen={sessionsOpen}
@@ -375,7 +375,7 @@ export function ChatView({
           onRetryDetail={transcriptApi.reloadDetail}
           onLoadEarlier={transcriptApi.loadEarlier}
           onCancelQueued={(runId) => void submitApi.handleCancelQueued(runId)}
-          onConfigureConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
+          onConfigureConnection={() => navigate({ domain: 'gateway' })}
           onGoChat={() => navigate({ domain: 'chat' })}
           onEditMessage={handleEditMessage}
           onRetryMessage={handleRetryMessage}
@@ -397,7 +397,7 @@ export function ChatView({
           submitting={submitApi.submitting}
           targetLabel={targetLabel}
           hasToken={hasToken}
-          onOpenConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
+          onOpenConnection={() => navigate({ domain: 'gateway' })}
           focusSignal={composerFocus}
         />
       </section>

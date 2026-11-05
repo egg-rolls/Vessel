@@ -2,20 +2,9 @@ import type { ToastApi } from '../components/ToastProvider';
 import type { ConnectionState } from '../gateway/client';
 import { t } from '../i18n';
 import type { PaletteItem } from '../state/palette';
-import { DOMAINS, domainLabel, primaryRoute, settingsTabLabel } from './nav';
+import { DOMAINS, domainLabel, primaryRoute } from './nav';
 import { requestRefresh } from './refresh';
 import type { Route } from './router';
-
-type SettingsTab = Extract<Route, { domain: 'settings' }>['tab'];
-
-export const SETTINGS_NAV: readonly { tab: SettingsTab; keywords: string[] }[] = [
-  { tab: 'connection', keywords: ['gateway', 'token', 'url', 'connect'] },
-  { tab: 'config', keywords: ['config', 'sources', 'paths'] },
-  { tab: 'capabilities', keywords: ['capabilities', 'methods', 'plugins'] },
-  { tab: 'tenants', keywords: ['tenant', 'quota', 'admin'] },
-  { tab: 'appearance', keywords: ['theme', 'dark', 'light'] },
-  { tab: 'display', keywords: ['display', 'verbosity', 'errorLevel', 'settings'] },
-];
 
 export interface PaletteItemDeps {
   hasToken: boolean;
@@ -45,22 +34,6 @@ export function buildPaletteItems({
       run: () => navigate(primaryRoute(domain.id)),
     })),
     {
-      id: 'nav-settings',
-      group: 'navigation',
-      label: t('nav.openNamed', { domain: domainLabel('settings') }),
-      keywords: ['settings', '设置'],
-      hint: t('nav.hintNavigation'),
-      run: () => navigate({ domain: 'settings', tab: 'connection' }),
-    },
-    ...SETTINGS_NAV.map((entry) => ({
-      id: `nav-settings-${entry.tab}`,
-      group: 'navigation' as const,
-      label: t('breadcrumb.settings', { tab: settingsTabLabel(entry.tab) }),
-      keywords: ['settings', entry.tab, ...entry.keywords],
-      hint: t('nav.hintSettings'),
-      run: () => navigate({ domain: 'settings', tab: entry.tab }),
-    })),
-    {
       id: 'action-new-session',
       group: 'action',
       label: t('palette.action.newSession'),
@@ -86,7 +59,7 @@ export function buildPaletteItems({
       label: t('palette.action.switchTenant'),
       keywords: ['tenant', 'switch', '租户'],
       hint: t('palette.hint.action'),
-      run: () => navigate({ domain: 'settings', tab: 'tenants' }),
+      run: () => navigate({ domain: 'tenants' }),
     },
     {
       id: 'action-connection',
@@ -94,7 +67,7 @@ export function buildPaletteItems({
       label: t('palette.action.connectionSettings'),
       keywords: ['gateway', 'token', 'url', 'connect'],
       hint: t('palette.hint.action'),
-      run: () => navigate({ domain: 'settings', tab: 'connection' }),
+      run: () => navigate({ domain: 'gateway' }),
     },
     {
       id: 'action-config',
@@ -102,7 +75,7 @@ export function buildPaletteItems({
       label: t('palette.action.viewConfig'),
       keywords: ['config', 'sources'],
       hint: t('palette.hint.action'),
-      run: () => navigate({ domain: 'settings', tab: 'config' }),
+      run: () => navigate({ domain: 'settings' }),
     },
     {
       id: 'action-capabilities',
@@ -110,7 +83,7 @@ export function buildPaletteItems({
       label: t('palette.action.viewCapabilities'),
       keywords: ['capabilities', 'methods'],
       hint: t('palette.hint.action'),
-      run: () => navigate({ domain: 'settings', tab: 'capabilities' }),
+      run: () => navigate({ domain: 'capabilities' }),
     },
     {
       id: 'action-refresh',

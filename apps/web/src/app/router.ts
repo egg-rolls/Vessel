@@ -20,10 +20,10 @@ export type Route =
   | { domain: 'teams' }
   | { domain: 'teams'; nodeKey: string; teamId: string; agentId?: string; bodyId?: string }
   | { domain: 'agents'; nodeKey?: string; teamId?: string; state?: string; presence?: string }
-  | {
-      domain: 'settings';
-      tab: 'connection' | 'config' | 'capabilities' | 'tenants' | 'appearance' | 'display';
-    };
+  | { domain: 'tenants' }
+  | { domain: 'capabilities' }
+  | { domain: 'visual' }
+  | { domain: 'settings' };
 
 export type Domain = Route['domain'];
 
@@ -32,14 +32,6 @@ export const DEFAULT_ROUTE: Route = { domain: 'chat' };
 const RUN_TABS = new Set(['live', 'durable']);
 const INTEGRATION_TABS = new Set(['tools', 'mcp', 'channels']);
 const OBSERVE_TABS = new Set(['metrics', 'evals', 'diagnostics', 'attention']);
-const SETTINGS_TABS = new Set([
-  'connection',
-  'config',
-  'capabilities',
-  'tenants',
-  'appearance',
-  'display',
-]);
 
 /** 安全解码：非法百分号编码时保留原值。 */
 function decodeSegment(value: string): string {
@@ -173,11 +165,20 @@ export function parseRoute(hash: string): Route {
         ...(presence ? { presence } : {}),
       };
     }
+    case 'tenants':
+      return { domain: 'tenants' };
+    case 'capabilities':
+      return { domain: 'capabilities' };
+    case 'visual':
+      return { domain: 'visual' };
     case 'settings': {
-      const tab = pick<
-        'connection' | 'config' | 'capabilities' | 'tenants' | 'appearance' | 'display'
-      >(segments[1] ?? query.get('tab'), SETTINGS_TABS, 'connection');
-      return { domain: 'settings', tab };
+      // 0.45 IA：旧 settings 子页作为别名跳到新的顶层页面。
+      const tab = segments[1] ?? query.get('tab');
+      if (tab === 'connection') return { domain: 'gateway' };
+      if (tab === 'tenants') return { domain: 'tenants' };
+      if (tab === 'capabilities') return { domain: 'capabilities' };
+      if (tab === 'appearance' || tab === 'display') return { domain: 'visual' };
+      return { domain: 'settings' };
     }
     default:
       return { ...DEFAULT_ROUTE };
@@ -236,8 +237,14 @@ export function formatRoute(route: Route): string {
       const suffix = query.toString();
       return suffix ? `#/agents?${suffix}` : '#/agents';
     }
+    case 'tenants':
+      return '#/tenants';
+    case 'capabilities':
+      return '#/capabilities';
+    case 'visual':
+      return '#/visual';
     case 'settings':
-      return `#/settings/${route.tab}`;
+      return '#/settings';
   }
 }
 

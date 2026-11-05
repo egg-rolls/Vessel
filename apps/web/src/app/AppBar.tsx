@@ -103,7 +103,7 @@ export function AppBar({
           type="button"
           className="group inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-transparent px-2.5 py-1 text-xs tracking-wide text-muted transition-colors duration-150 hover:bg-hover data-[state=open]:text-success data-[state=connecting]:text-warn data-[state=reconnecting]:text-warn data-[state=closed]:text-danger data-[state=error]:text-danger max-compact:px-2 pointer-coarse:min-h-touch"
           data-state={hasToken ? connectionState : 'idle'}
-          onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
+          onClick={() => navigate({ domain: 'gateway' })}
         >
           <span
             className="size-1.5 flex-none rounded-full bg-faint group-data-[state=open]:bg-success group-data-[state=connecting]:bg-warn group-data-[state=connecting]:pulse-soft group-data-[state=reconnecting]:bg-warn group-data-[state=reconnecting]:pulse-soft group-data-[state=closed]:bg-danger group-data-[state=error]:bg-danger"
@@ -117,7 +117,7 @@ export function AppBar({
         <button
           type="button"
           className="rounded-full bg-transparent px-2.5 py-1 text-xs whitespace-nowrap text-muted transition-colors duration-150 hover:bg-hover hover:text-ink max-compact:hidden pointer-coarse:min-h-touch"
-          onClick={() => navigate({ domain: 'settings', tab: 'tenants' })}
+          onClick={() => navigate({ domain: 'tenants' })}
         >
           {t('nav.tenant')} <span className="mono">{tenantId ?? '—'}</span>
         </button>

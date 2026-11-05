@@ -14,20 +14,23 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.domain.chat': 'Sessions',
   'nav.domain.runs': 'Runs',
   'nav.domain.integrations': 'Integrations',
+  'nav.domain.tenants': 'Tenants',
+  'nav.domain.capabilities': 'Capabilities',
+  'nav.domain.visual': 'Visuals',
   'nav.domain.tools': 'Tools',
   'nav.domain.mcp': 'MCP servers',
   'nav.domain.channels': 'Channels',
   'nav.domain.observe': 'Observe',
   'nav.domain.plugins': 'Plugins',
   'nav.domain.settings': 'Settings',
-  'nav.group.chat': 'CHAT',
+  'nav.group.chat': 'Chat',
   'nav.group.runs': 'RUNS',
   'nav.group.plugins': 'PLUGINS',
   'nav.group.observe': 'OBSERVE',
   'nav.group.top': 'TOP',
   'nav.group.settings': 'SETTINGS',
-  'nav.group.integrations': 'INTEGRATIONS',
-  'nav.group.status': 'STATUS',
+  'nav.group.integrations': 'Integrations',
+  'nav.group.core': 'Core',
   'nav.mainLabel': 'Main navigation',
   'nav.bottomLabel': 'Main navigation (mobile)',
   'nav.openNav': 'Open navigation',
@@ -67,7 +70,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.opened': 'Opened {path}',
   'nav.openNamed': 'Open {domain}',
   'nav.hintNavigation': 'Navigation',
-  'nav.hintSettings': 'Settings',
 
   // Breadcrumb
   'breadcrumb.chat': 'Sessions',
@@ -82,19 +84,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.plugins': 'Plugins',
   'breadcrumb.observe.metrics': 'Observe › Metrics',
   'breadcrumb.observe.evals': 'Observe › Evals',
-  'breadcrumb.settings': 'Settings › {tab}',
+  'breadcrumb.settings': 'Settings',
+  'breadcrumb.tenants': 'Tenants',
+  'breadcrumb.capabilities': 'Capabilities',
+  'breadcrumb.visual': 'Visuals',
 
   // Settings
   'settings.title': 'Settings',
-  'settings.description':
-    'Connection, nodes, config, capabilities and tenants. The connection form appears only here.',
-  'settings.tabsLabel': 'Settings sections',
-  'settings.panelLabel': 'Settings content',
-  'settings.tab.connection': 'Connection',
-  'settings.tab.config': 'Config',
-  'settings.tab.capabilities': 'Capabilities',
-  'settings.tab.tenants': 'Tenants',
-  'settings.tab.appearance': 'Appearance',
   'settings.connection.devProxyNotice':
     'Dev proxy auth is enabled: connecting to the same-origin gateway forwarded by the Vite dev server. No token is stored in the browser.',
 
@@ -405,7 +401,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.diagnostics.doctor.feishu.disabled': 'Feishu is not enabled',
   'observe.diagnostics.doctor.feishu.detail': 'app id {appId}, app secret {appSecret}',
   // 0.15: Settings → Display
-  'settings.tab.display': 'Display',
   'settings.display.title': 'Display & visibility',
   'settings.display.description':
     'Writes user config; only the listed keys are writable. Display and visibility settings apply immediately after saving.',

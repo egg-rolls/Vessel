@@ -98,7 +98,7 @@ export function AppShell() {
     reconnectAttempt,
     onDismissError: dismissError,
     onRetry: retry,
-    onOpenConnection: () => navigate({ domain: 'settings', tab: 'connection' }),
+    onOpenConnection: () => navigate({ domain: 'gateway' }),
   });
 
   const pendingSummary = pendingBarSummary(otherPending, otherAsks);

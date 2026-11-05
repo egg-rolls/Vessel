@@ -102,7 +102,7 @@ export function RunsView({
             <EmptyState
               title={t('runs.noTokenTitle')}
               action={
-                <Button onClick={() => navigate({ domain: 'settings', tab: 'connection' })}>
+                <Button onClick={() => navigate({ domain: 'gateway' })}>
                   {t('common.configureConnection')}
                 </Button>
               }
