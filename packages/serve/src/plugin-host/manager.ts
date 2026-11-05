@@ -46,6 +46,8 @@ export interface PluginHostManagerOptions {
   eventsPerSecond?: number;
   /** 事件 DTO 的额外变换（在事件源之后、白名单之前）。 */
   redact?: (event: PluginEventDto) => PluginEventDto;
+  /** 懒激活时解析 settings（缺省 `{}`）；显式 activate 的 settings 优先。 */
+  settingsFor?: (id: string, tenantId: string) => Record<string, unknown>;
   logger?: PluginLogger;
   onEventDropped?: (pluginId: string, dropped: number) => void;
   onPermissionDenied?: (pluginId: string, api: string) => void;
@@ -350,7 +352,7 @@ export class PluginHostManager implements PluginHostManagerLike {
         });
         continue;
       }
-      this.entries.set(descriptor.id, {
+      const entry: Entry = {
         descriptor,
         enabled: descriptor.enabled ?? true,
         status: (descriptor.enabled ?? true) ? 'inactive' : 'disabled',
@@ -360,7 +362,10 @@ export class PluginHostManager implements PluginHostManagerLike {
         restarts: [],
         tenantId: 'default',
         settings: {},
-      });
+      };
+      this.entries.set(descriptor.id, entry);
+      // 懒激活：RPC 定义在 enable 时就注册，首次调用 / 首次页面访问再 spawn。
+      this.registerRpc(entry);
     }
   }
 
@@ -385,7 +390,30 @@ export class PluginHostManager implements PluginHostManagerLike {
     await this.startEntry(entry, options.tenantId ?? entry.tenantId, options.settings ?? {});
   }
 
-  /** 停用但保持 enabled；下次 activationEvent 可再次激活。 */
+  /**
+   * 懒激活入口（v1）：首次页面访问 / 首次 `plugin.<id>.*` 调用触发 spawn。
+   * `activationEvents.onPage:*` / `onCommand:*` 是声明元数据，v1 不做预激活；
+   * active 时 no-op，disabled / invalid 抛契约错误。
+   */
+  async ensureActive(id: string, tenantId?: string): Promise<void> {
+    const entry = this.requireEntry(id);
+    if (!entry.enabled || entry.status === 'disabled') {
+      throw pluginError('plugin_activation_failed', `Plugin ${id} is disabled.`, { id });
+    }
+    if (entry.status === 'invalid') {
+      throw pluginError(
+        entry.error ?? 'plugin_manifest_invalid',
+        entry.message ?? 'Invalid plugin.',
+        { id },
+      );
+    }
+    if (entry.status === 'active') return;
+    const tenant = tenantId ?? entry.tenantId;
+    const settings = this.options.settingsFor?.(id, tenant) ?? {};
+    await this.startEntry(entry, tenant, settings);
+  }
+
+  /** 停用但保持 enabled；RPC 定义保留，下次访问会再次懒激活。 */
   async deactivate(id: string): Promise<void> {
     const entry = this.entries.get(id);
     if (entry === undefined) return;
@@ -395,7 +423,7 @@ export class PluginHostManager implements PluginHostManagerLike {
     }
     entry.status = entry.enabled ? 'inactive' : 'disabled';
     this.unsubscribeEvents(entry);
-    this.rpc.unregister(id);
+    // RPC 定义保留：下次页面 / RPC 访问重新懒激活（disable 才移除）。
     const child = entry.child;
     entry.child = undefined;
     if (child !== undefined) await child.terminate();
@@ -407,6 +435,7 @@ export class PluginHostManager implements PluginHostManagerLike {
     const entry = this.requireEntry(id);
     entry.enabled = false;
     await this.deactivate(id);
+    this.rpc.unregister(id);
   }
 
   /** 启用但保持懒激活。 */
@@ -417,6 +446,7 @@ export class PluginHostManager implements PluginHostManagerLike {
     if (entry.status === 'disabled') entry.status = 'inactive';
     entry.error = undefined;
     entry.message = undefined;
+    this.registerRpc(entry);
     this.publishState(entry);
   }
 
@@ -488,6 +518,17 @@ export class PluginHostManager implements PluginHostManagerLike {
     this.rpc.clear();
   }
 
+  /** 懒激活：RPC 定义在 enable 时即可被 dispatcher 解析，首次调用再 spawn。 */
+  private registerRpc(entry: Entry): void {
+    if (!entry.enabled || entry.status === 'invalid') return;
+    if (this.rpc.hasPlugin(entry.descriptor.id)) return;
+    const methods = entry.descriptor.contributes?.rpc ?? [];
+    if (methods.length === 0) return;
+    this.rpc.register(entry.descriptor.id, methods, (name, params) =>
+      this.callRpc(entry, name, params),
+    );
+  }
+
   private async startEntry(
     entry: Entry,
     tenantId: string,
@@ -529,7 +570,7 @@ export class PluginHostManager implements PluginHostManagerLike {
       ...(this.options.execPath !== undefined ? { execPath: this.options.execPath } : {}),
       ...(this.options.timeouts !== undefined ? { timeouts: this.options.timeouts } : {}),
       hooks: {
-        onExit: (info) => this.handleExit(entry, info),
+        onExit: (info) => this.handleExit(entry, child, info),
         onLog: () => {},
         onReady: () => this.options.onReady?.(descriptor.id),
         onPermissionDenied: (api) => {
@@ -545,16 +586,12 @@ export class PluginHostManager implements PluginHostManagerLike {
 
     try {
       await child.start();
-      this.rpc.register(descriptor.id, descriptor.contributes?.rpc ?? [], (name, params) =>
-        this.callRpc(entry, name, params),
-      );
       entry.status = 'active';
       entry.error = undefined;
       entry.message = undefined;
       this.subscribeEvents(entry);
       this.publishState(entry);
     } catch (error) {
-      this.rpc.unregister(descriptor.id);
       entry.child = undefined;
       entry.error = pluginErrorCodeOf(error) ?? 'plugin_activation_failed';
       entry.message = error instanceof Error ? error.message : String(error);
@@ -562,6 +599,8 @@ export class PluginHostManager implements PluginHostManagerLike {
         entry.error === 'plugin_manifest_invalid' || entry.error === 'plugin_config_invalid'
           ? 'invalid'
           : 'unhealthy';
+      // invalid 不再对外暴露 RPC；unhealthy 保留定义，下次访问可重试懒激活。
+      if (entry.status === 'invalid') this.rpc.unregister(descriptor.id);
       this.publishState(entry);
       throw error;
     }
@@ -572,6 +611,8 @@ export class PluginHostManager implements PluginHostManagerLike {
     name: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
+    // 动态 RPC 分发：首次调用 plugin.<id>.<name> 在转发前懒激活。
+    await this.ensureActive(entry.descriptor.id, entry.tenantId);
     const child = entry.child;
     if (child === undefined || entry.status !== 'active') {
       throw pluginError('plugin_activation_failed', 'Plugin is not active.', {
@@ -603,10 +644,13 @@ export class PluginHostManager implements PluginHostManagerLike {
     return entry.status;
   }
 
-  private handleExit(entry: Entry, info: ChildExitInfo): void {
+  private handleExit(entry: Entry, child: ChildPluginProcess, info: ChildExitInfo): void {
+    // 旧进程的退出可能晚于一次重新激活：只处理当前 child 的事件，
+    // 否则会把新子进程引用 / 新订阅清掉（超时 + 立即懒激活的竞态）。
+    if (entry.child !== child) return;
     entry.child = undefined;
     this.unsubscribeEvents(entry);
-    this.rpc.unregister(entry.descriptor.id);
+    // RPC 定义保留：崩溃 / 超时后下一次访问仍可懒激活（禁用时才移除）。
 
     // 宿主主动触发（deactivate / disable / 超时）：不再自动重启。
     if (info.expected) {
@@ -632,6 +676,7 @@ export class PluginHostManager implements PluginHostManagerLike {
     if (entry.restarts.length >= this.maxRestarts) {
       entry.enabled = false;
       entry.status = 'disabled';
+      this.rpc.unregister(entry.descriptor.id);
       entry.message = `Exceeded ${this.maxRestarts} restarts within ${Math.round(
         this.restartWindowMs / 60000,
       )} minutes.`;

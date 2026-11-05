@@ -191,6 +191,11 @@ export interface PluginEventSource {
  */
 export interface PluginHostManagerLike {
   readonly rpc: RpcDynamicMethodSource;
+  /**
+   * 懒激活：首次页面 / RPC 访问时调用；active 时 no-op，
+   * disabled / invalid 抛契约错误。v1 不做预激活。
+   */
+  ensureActive(id: string, tenantId?: string): Promise<void>;
   /** tenant →（plugin id → 渲染字段）；只含 enabled 的体验型 plugin。 */
   contributionsFor(tenantId: string): Record<string, PluginRenderContributions>;
   /** 当前 enabled、且声明了 ui.dir 的静态挂载。 */

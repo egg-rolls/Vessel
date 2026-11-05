@@ -51,7 +51,7 @@ export {
   PluginRpcRegistry,
   pluginRpcName,
 } from './registry.js';
-export { PLUGIN_CSP, servePluginAsset } from './static.js';
+export { PLUGIN_CSP, pluginStaticId, servePluginAsset } from './static.js';
 export type {
   PluginCommandContribution,
   PluginDependencies,

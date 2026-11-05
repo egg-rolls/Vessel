@@ -90,6 +90,11 @@ function headersFor(path: string): Record<string, string> {
   };
 }
 
+/** 静态路由里的 plugin id；非法路径 / 越界段 → null。 */
+export function pluginStaticId(pathname: string): string | null {
+  return parsePath(pathname)?.id ?? null;
+}
+
 /**
  * 返回静态响应；`null` = 非 plugin 路由或未知 plugin / entry（由 gateway 404）。
  * 调用方应先判断 `pathname.startsWith('/plugins/')`。

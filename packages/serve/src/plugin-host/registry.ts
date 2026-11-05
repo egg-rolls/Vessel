@@ -175,6 +175,11 @@ export class PluginRpcRegistry implements RpcDynamicMethodSource {
     return registration.names.length;
   }
 
+  /** 该 plugin 是否已有注册（即使方法数为 0）。 */
+  hasPlugin(pluginId: string): boolean {
+    return this.byPlugin.has(pluginId);
+  }
+
   /** 该 plugin 注册的方法名（canonical）。 */
   namesFor(pluginId: string): readonly string[] {
     return this.byPlugin.get(pluginId)?.names ?? [];

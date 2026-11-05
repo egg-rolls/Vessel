@@ -105,8 +105,12 @@ import { serveStatic } from './gateway/static.js';
 import { createInteractionsRegistry } from './interactions-registry.js';
 import type { McpGatewayOptions } from './mcp.js';
 import type { MetricsProvider, MetricsSnapshot } from './metrics.js';
-import { createHubPluginEventSource, type PluginHostManagerLike } from './plugin-host/index.js';
-import { servePluginAsset } from './plugin-host/static.js';
+import {
+  createHubPluginEventSource,
+  type PluginHostManagerLike,
+  pluginErrorCodeOf,
+} from './plugin-host/index.js';
+import { pluginStaticId, servePluginAsset } from './plugin-host/static.js';
 import {
   type ClientFrame,
   type NodeInfo,
@@ -2235,6 +2239,27 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!isApiPath && (req.method === 'GET' || req.method === 'HEAD')) {
         // 0.43：plugin UI 静态路由（在门户静态目录之前；未知 id / entry 直接 404）。
         if (path === '/plugins' || path.startsWith('/plugins/')) {
+          // 懒激活：首次页面访问在取静态资源前 spawn（v1 不预激活）。
+          const pluginId = pluginStaticId(path);
+          if (pluginId !== null && opts.pluginHostManager !== undefined) {
+            try {
+              await opts.pluginHostManager.ensureActive(pluginId, defaultTenantId);
+            } catch (error) {
+              const code = pluginErrorCodeOf(error) ?? 'plugin_activation_failed';
+              const unavailable =
+                code === 'plugin_activation_failed' ||
+                code === 'plugin_manifest_invalid' ||
+                code === 'plugin_config_invalid';
+              // 静态路由用 HTTP 语义：禁用 / 未知 404；激活期崩溃 503。
+              // 契约错误码保留在 message 前缀，响应不泄漏 payload。
+              return errorJson(
+                unavailable ? 'not_found' : 'internal',
+                `${code}: ${error instanceof Error ? error.message : String(error)}`,
+                unavailable ? 404 : 503,
+                extra,
+              );
+            }
+          }
           const pluginResponse = await servePluginAsset(
             path,
             opts.pluginHostManager?.staticMounts() ?? [],
