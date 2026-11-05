@@ -81,12 +81,12 @@ function scheduleExit(): void {
 
 /**
  * `plugin.activate.dataDir` is the global Vessel data dir. The env fallback
- * derives it from the contract's `VESSEL_MOD_DATA_DIR=<dataDir>/plugins/<id>`
+ * derives it from the contract's `VESSEL_PLUGIN_DATA_DIR=<dataDir>/plugins/<id>`
  * shape when the host omits the field.
  */
 function resolveDataDir(value: unknown): string | undefined {
   if (typeof value === 'string' && value.length > 0) return value;
-  const pluginDataDir = process.env.VESSEL_MOD_DATA_DIR;
+  const pluginDataDir = process.env.VESSEL_PLUGIN_DATA_DIR;
   if (typeof pluginDataDir === 'string' && pluginDataDir.length > 0) {
     return dirname(dirname(pluginDataDir));
   }
