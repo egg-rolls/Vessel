@@ -39,25 +39,35 @@
       "onCommand:summary"
     ],
     "contributes": {
+      "navGroups": [
+        {
+          "id": "plugin:usage",
+          "title": "Usage",
+          "order": 40
+        }
+      ],
       "pages": [
         {
           "id": "usage",
           "title": "Usage",
-          "nav": "observe",
+          "nav": "plugin:usage",
+          "icon": "observe",
           "order": 10,
           "entry": "usage.html"
         },
         {
           "id": "logs",
           "title": "Logs",
-          "nav": "observe",
+          "nav": "plugin:usage",
+          "icon": "runs",
           "order": 11,
           "entry": "logs.html"
         },
         {
           "id": "leaderboard",
           "title": "Leaderboard",
-          "nav": "observe",
+          "nav": "plugin:usage",
+          "icon": "agents",
           "order": 12,
           "entry": "leaderboard.html"
         }
