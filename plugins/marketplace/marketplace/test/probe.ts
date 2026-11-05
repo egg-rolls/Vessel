@@ -1078,7 +1078,7 @@ for (const [name, mutate] of [
     page?.id === 'marketplace' &&
       page.title === 'Plugins' &&
       page.titleKey === 'nav.domain.plugins' &&
-      page.nav === 'status' &&
+      page.nav === 'integrations' &&
       page.entry === 'index.html',
     JSON.stringify(page),
   );
