@@ -1,25 +1,19 @@
 import { useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { SegmentedTabs } from '../../components/Tabs';
-import { useToast } from '../../components/ToastProvider';
 import { Button, Stat } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
 import { cacheStatTexts } from './cache-metrics';
-import { errorMessage, isForbidden } from './errors';
 
 export function MetricsPanel() {
   const { client, connectionState, hasToken, features, epoch } = useConnection();
-  const toast = useToast();
   const connected = hasToken && connectionState === 'open';
   const available = hasToken && features.includes('metrics');
   const [source, setSource] = useState<'live' | 'trace'>('live');
-  const [confirmReset, setConfirmReset] = useState(false);
-  const [resetting, setResetting] = useState(false);
 
   const resource = useResource({
     load: () => client.getMetricsSnapshot(source),
@@ -33,7 +27,10 @@ export function MetricsPanel() {
 
   // CONTRACT-0.29 §2.2：比率是展示层派生量，不进 wire。
   const cache = useMemo(() => (metrics ? cacheStatTexts(metrics.llm) : undefined), [metrics]);
-  // 全部事件都没有缓存数据 → 「不可用」，绝不渲染 0%。
+  // 本进程还没有 LLM 响应时，缓存统计没有意义：两张卡片整体不显示，
+  // 避免把「还没请求过」误读成「provider 不支持缓存」。
+  const hasLlmResponses = metrics !== undefined && metrics.llm.requests > 0;
+  // 有响应但全部事件都没有缓存字段 → 「不可用」，绝不渲染 0%。
   // 单侧缺失时该侧画 `—`（`cacheStatTexts` 已处理），不在这里兜底成 0。
   const cacheHint = cache?.available
     ? t('observe.metrics.stat.cacheHint', {
@@ -41,7 +38,7 @@ export function MetricsPanel() {
         write: cache.cacheCreationText,
         prompt: cache.promptTokensText,
       })
-    : t('observe.metrics.stat.cacheStreamHint');
+    : t('observe.metrics.stat.cacheNoFieldsHint');
 
   if (!hasToken) {
     return (
@@ -73,24 +70,6 @@ export function MetricsPanel() {
     );
   }
 
-  const reset = async () => {
-    if (!connected) {
-      toast.error(t('observe.metrics.resetDisconnected'));
-      return;
-    }
-    setResetting(true);
-    try {
-      await client.resetMetrics();
-      toast.success(t('observe.metrics.resetSuccess'));
-      resource.reload();
-    } catch (error) {
-      toast.error(isForbidden(error) ? t('observe.metrics.resetForbidden') : errorMessage(error));
-    } finally {
-      setResetting(false);
-      setConfirmReset(false);
-    }
-  };
-
   const error = resource.state.status === 'error' ? resource.state.error : null;
 
   return (
@@ -108,15 +87,6 @@ export function MetricsPanel() {
         />
         <Button size="small" onClick={resource.reload}>
           {t('observe.metrics.refresh')}
-        </Button>
-        <Button
-          size="small"
-          variant="dangerGhost"
-          onClick={() => setConfirmReset(true)}
-          disabled={!connected || !metrics}
-          title={!connected ? t('common.writesDisabled') : undefined}
-        >
-          {t('observe.metrics.reset')}
         </Button>
       </div>
 
@@ -172,18 +142,22 @@ export function MetricsPanel() {
                   completion: metrics.llm.completion_tokens,
                 })}
               />
-              <Stat
-                className="min-w-40 flex-1"
-                value={cache?.inputShareText ?? t('observe.metrics.stat.cacheUnavailable')}
-                label={t('observe.metrics.stat.cacheInputShare')}
-                hint={cacheHint}
-              />
-              <Stat
-                className="min-w-40 flex-1"
-                value={cache?.prefixHealthText ?? t('observe.metrics.stat.cacheUnavailable')}
-                label={t('observe.metrics.stat.cachePrefixHealth')}
-                hint={cacheHint}
-              />
+              {hasLlmResponses && (
+                <>
+                  <Stat
+                    className="min-w-40 flex-1"
+                    value={cache?.inputShareText ?? t('observe.metrics.stat.cacheUnavailable')}
+                    label={t('observe.metrics.stat.cacheInputShare')}
+                    hint={cacheHint}
+                  />
+                  <Stat
+                    className="min-w-40 flex-1"
+                    value={cache?.prefixHealthText ?? t('observe.metrics.stat.cacheUnavailable')}
+                    label={t('observe.metrics.stat.cachePrefixHealth')}
+                    hint={cacheHint}
+                  />
+                </>
+              )}
               <Stat
                 className="min-w-40 flex-1"
                 value={`${Math.round(metrics.duration_ms.avg)}ms`}
@@ -208,24 +182,6 @@ export function MetricsPanel() {
           </>
         )}
       </div>
-
-      {confirmReset && (
-        <ConfirmDialog
-          title={t('observe.metrics.resetTitle')}
-          body={
-            <>
-              <p>{t('observe.metrics.resetBody')}</p>
-              <p className="text-muted">{t('observe.metrics.resetBodyHint')}</p>
-            </>
-          }
-          confirmLabel={t('observe.metrics.resetConfirm')}
-          danger
-          busy={resetting}
-          confirmDisabled={!connected}
-          onConfirm={() => void reset()}
-          onCancel={() => setConfirmReset(false)}
-        />
-      )}
     </div>
   );
 }

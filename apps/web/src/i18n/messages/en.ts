@@ -1213,20 +1213,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.metrics.traceDisabledHint':
     'Inject metrics.rebuild (event trace) into the gateway and restart.',
   'observe.metrics.switchLive': 'Switch to Live',
-  'observe.metrics.resetDisconnected': 'Disconnected; cannot reset metrics',
-  'observe.metrics.resetSuccess': 'Metrics reset',
-  'observe.metrics.resetForbidden': 'This token cannot call metrics.reset (write/admin required).',
-  'observe.metrics.resetTitle': 'Reset metrics?',
-  'observe.metrics.resetBody':
-    'Clears the counters in the current gateway process; event traces and run records are unaffected.',
-  'observe.metrics.resetBodyHint':
-    'This requires write/admin permission; an unauthorized token receives forbidden.',
-  'observe.metrics.resetConfirm': 'Reset',
   'observe.metrics.sourceLabel': 'Metrics source',
   'observe.metrics.source.live': 'Live',
   'observe.metrics.source.trace': 'Trace rebuild',
   'observe.metrics.refresh': 'Refresh',
-  'observe.metrics.reset': 'Reset metrics',
   'observe.metrics.panelLabel': 'Metrics content',
   'observe.metrics.stale':
     'Disconnected; showing the last loaded metrics snapshot. Writes are disabled.',
@@ -1240,13 +1230,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.metrics.stat.cacheInputShare': 'Cache input share (read / all input)',
   'observe.metrics.stat.cachePrefixHealth': 'Prefix health (read / read+write)',
   'observe.metrics.stat.cacheUnavailable': 'Unavailable',
-  'observe.metrics.stat.cacheStreamHint':
-    'This provider does not report cache details in streaming responses; non-streaming requests do, but Vessel streams, so cache metrics cannot be computed.',
+  'observe.metrics.stat.cacheNoFieldsHint':
+    'The provider reports no cache fields in usage (the endpoint or relay may not forward cache details).',
   'observe.metrics.stat.cacheHint': 'read {read} / write {write}, {prompt} input total',
   'observe.metrics.stat.avgDuration': 'Average duration (max {max}ms)',
   'observe.metrics.stat.updatedAt': 'Updated at',
   'observe.metrics.sourceDesc':
-    'Current source: {source}. Metrics are in-process counters, not a time series. Resetting requires write/admin permission.',
+    'Current source: {source}. Metrics are in-process counters, not a time series; retained usage history is available via `vessel metrics`.',
   'observe.evals.noTokenReason': 'Connect to read eval reports.',
   'observe.evals.disabledTitle': 'Evals are not enabled',
   'observe.evals.disabledReason': 'This gateway has no evals runner.',
