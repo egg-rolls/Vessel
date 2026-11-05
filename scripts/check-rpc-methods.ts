@@ -10,13 +10,20 @@
  * 同时断言 legacy-only 方法不进入 manifest：team.* / durable.* /
  * run.submit|get|cancel / metrics.rebuild。
  *
+ * 第二段校验插件清单（`plugins` 下各 package.json 的 `vessel` 块），复用 loader 的
+ * `validatePluginManifest`：`contributes.rpc[].name` 必须是 `PLUGIN_RPC_NAME_RE`
+ * 允许的裸名；engines / entry / contributes / permissions 的错误同样失败。
+ * loader 在运行时 fail-closed，这一步把它提前到提交前。
+ *
  * 用法：bun run scripts/check-rpc-methods.ts
  * 退出码：0 = 一致；1 = 有差异。
  */
 
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, readFile } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 import { createGatewayEventHub, createLocalRpcDispatcher } from '../packages/serve/src/index';
+import { PLUGIN_RPC_NAME_RE, validatePluginManifest } from '../src/plugin-manifest';
+import { readPackageVersion } from '../src/version';
 
 type Permission = 'read' | 'write' | 'admin';
 
@@ -108,6 +115,10 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
 const LEGACY_PREFIXES = ['team.', 'durable.'] as const;
 const LEGACY_EXACT = new Set(['run.submit', 'run.get', 'run.cancel', 'metrics.rebuild']);
 
+const PLUGINS_DIR = 'plugins';
+/** 构建产物与前端静态目录不参与清单扫描 */
+const PLUGIN_SCAN_SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', 'dist', 'web']);
+
 const BEGIN_MARKER = '<!-- rpc-methods:begin -->';
 const END_MARKER = '<!-- rpc-methods:end -->';
 const DOC_PATH = 'docs/architecture/gateway-rpc.md';
@@ -119,6 +130,28 @@ export interface MethodTableIssue {
 
 function isLegacy(method: string): boolean {
   return LEGACY_EXACT.has(method) || LEGACY_PREFIXES.some((prefix) => method.startsWith(prefix));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 递归收集 `plugins/**` 下的 package.json（跳过 node_modules / dist / web）。 */
+export async function findPluginPackageJsonFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (PLUGIN_SCAN_SKIP_DIRS.has(entry.name)) continue;
+        await walk(join(dir, entry.name));
+      } else if (entry.isFile() && entry.name === 'package.json') {
+        files.push(join(dir, entry.name));
+      }
+    }
+  }
+  await walk(join(root, PLUGINS_DIR));
+  return files.sort();
 }
 
 /** 解析 gateway-rpc 中标记表格的 `方法 | permission` 行。 */
@@ -209,14 +242,67 @@ export async function checkRpcMethods(root: string): Promise<MethodTableIssue[]>
   }
 }
 
+/**
+ * 静态校验 `plugins` 下各 package.json 的 `vessel` 块：与 loader 同一套 manifest 规则。
+ *
+ * 扫描范围与 loader 一致：无 `vessel` 块的能力插件跳过；有 `vessel.entry` 且
+ * `contributes` 是对象时做完整清单校验。`contributes.rpc[].name` 先单独检查，
+ * 以便错误定位到 `文件:contributes.rpc[i].name`，且不与完整校验重复计数。
+ */
+export async function checkPluginManifests(root: string): Promise<MethodTableIssue[]> {
+  const issues: MethodTableIssue[] = [];
+  const vesselVersion = readPackageVersion();
+  const files = await findPluginPackageJsonFiles(root);
+
+  for (const file of files) {
+    const displayPath = relative(root, file).split('\\').join('/');
+    let pkg: unknown;
+    try {
+      pkg = JSON.parse(await readFile(file, 'utf8'));
+    } catch {
+      issues.push({ message: `${displayPath}: package.json is not valid JSON` });
+      continue;
+    }
+    if (!isRecord(pkg) || !isRecord(pkg.vessel)) continue;
+
+    const vessel = pkg.vessel;
+    const contributes = isRecord(vessel.contributes) ? vessel.contributes : undefined;
+
+    const reportedRpcIndexes: number[] = [];
+    if (Array.isArray(contributes?.rpc)) {
+      contributes.rpc.forEach((entry, index) => {
+        if (!isRecord(entry) || typeof entry.name !== 'string') return;
+        if (PLUGIN_RPC_NAME_RE.test(entry.name)) return;
+        reportedRpcIndexes.push(index);
+        issues.push({
+          message: `${displayPath}: contributes.rpc[${index}].name "${entry.name}" must match ${PLUGIN_RPC_NAME_RE.source}`,
+        });
+      });
+    }
+
+    const hasEntry = typeof vessel.entry === 'string' && vessel.entry.trim() !== '';
+    if (!hasEntry || contributes === undefined) continue;
+
+    const result = validatePluginManifest(vessel, { baseDir: dirname(file), vesselVersion });
+    if (result.ok) continue;
+
+    const rpcMatch = /contributes\.rpc\[(\d+)\]\.name/.exec(result.error.message);
+    if (rpcMatch && reportedRpcIndexes.includes(Number(rpcMatch[1]))) continue;
+    issues.push({ message: `${displayPath}: [${result.error.code}] ${result.error.message}` });
+  }
+
+  return issues;
+}
+
 async function main(): Promise<void> {
-  const issues = await checkRpcMethods(process.cwd());
+  const root = process.cwd();
+  const issues = [...(await checkRpcMethods(root)), ...(await checkPluginManifests(root))];
   if (issues.length === 0) {
-    console.log('rpc method table check passed');
+    console.log('rpc method table and plugin manifest check passed');
     return;
   }
 
-  console.error(`rpc method table check failed: ${issues.length} issue(s)`);
+  console.error(`rpc / plugin manifest check failed: ${issues.length} issue(s)`);
   for (const issue of issues) {
     console.error(`  ${issue.method ? `${issue.method}: ` : ''}${issue.message}`);
   }

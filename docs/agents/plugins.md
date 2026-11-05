@@ -16,6 +16,15 @@ applies_to: [N, M]
 - **能力插件**（in-process）经 `PluginHost` 注册 tool / provider / guardrail / hook；**贡献面**（pages / commands / settings / rpc / events / panels）由 harness 层持有与收集，不是 core 的第二套扩展机制。
 - 不新增第二套运行期扩展机制；禁止 `ModuleHost` / `ModuleRegistry`（ADR-004 / ADR-037 / ADR-099）。
 
+## Manifest 门禁
+
+- `package.json.vessel.contributes.rpc[].name` 必须是裸名，匹配
+  `^[a-z][a-z0-9_-]*$`（宿主注册为 `plugin.<id>.<name>`）；清单的 engines / entry /
+  contributes / permissions 错误同样 fail-closed。
+- 提交前跑 `bun run scripts/check-rpc-methods.ts`：扫描 `plugins/**/package.json`
+  （跳过 `node_modules` / `dist` / `web`），非法清单 exit 1；gateway 方法表检查同时执行。
+  不要为历史非法名加 allowlist——改清单本身。
+
 <a id="discovery"></a>
 
 ## 发现顺序
