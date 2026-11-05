@@ -16,6 +16,12 @@ export const DEFAULT_REGISTRY_URL = 'https://egg-rolls.github.io/vessel-plugins/
 
 export type InstallScope = 'user' | 'project';
 
+/**
+ * Listing scope. Installs still target `user` / `project`; `builtin` rows are
+ * read-only source plugins discovered next to the host's project.
+ */
+export type PluginScope = InstallScope | 'builtin';
+
 export interface MarketplaceSettings {
   /** `undefined` when unset; RPCs then fail with `registry_url_missing`. */
   registryUrl?: string;

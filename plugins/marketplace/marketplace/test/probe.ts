@@ -877,6 +877,64 @@ for (const [name, mutate] of [
   check('installed: lists the plugin', item?.version === '1.1.0' && item?.scope === 'user');
 }
 
+// ── built-in listing (read-only) ────────────────────────────────────────────
+
+{
+  const repo = join(tempRoot, 'builtin-list', 'repo');
+  const builtinDir = join(repo, 'plugins', 'demo');
+  await mkdir(builtinDir, { recursive: true });
+  await writeFile(
+    join(builtinDir, 'package.json'),
+    JSON.stringify({
+      name: '@probe/demo',
+      version: '9.9.9',
+      vessel: {
+        id: 'demo',
+        name: 'Demo builtin',
+        version: '0.2.0',
+        engines: { vessel: '>=0.33.0 <0.45.0' },
+        entry: 'src/index.ts',
+      },
+    }),
+    'utf-8',
+  );
+  const context = contextFor('builtin-list', { projectRoot: repo });
+  const listed = await listInstalled(context);
+  const demo = listed.find((entry) => entry.id === 'demo');
+  check('builtin: listed from hostCwd plugins/demo', demo !== undefined);
+  check('builtin: scope is builtin', demo?.scope === 'builtin');
+  check('builtin: enabled by default', demo?.enabled === true);
+  check('builtin: version comes from the vessel manifest', demo?.version === '0.2.0');
+  check('builtin: path is the source directory', demo?.path === builtinDir);
+  await expectCode(
+    'builtin: remove is read-only',
+    () => removePlugin(context, 'demo'),
+    'builtin_readonly',
+  );
+  await expectCode(
+    'builtin: update is read-only',
+    () => updatePlugin(context, 'demo'),
+    'builtin_readonly',
+  );
+
+  // An installed copy of the same id wins over the built-in row.
+  const userDir = join(context.userPluginsDir, 'demo');
+  await mkdir(userDir, { recursive: true });
+  await writeFile(
+    join(userDir, 'package.json'),
+    JSON.stringify({
+      name: '@probe/demo-user',
+      vessel: { id: 'demo', name: 'User demo', version: '1.0.0' },
+    }),
+    'utf-8',
+  );
+  const shadowed = await listInstalled(context);
+  check(
+    'builtin: installed copy wins over builtin',
+    shadowed.find((e) => e.id === 'demo')?.scope === 'user',
+  );
+}
+
 // ── cache TTL ───────────────────────────────────────────────────────────────
 
 {
@@ -886,7 +944,10 @@ for (const [name, mutate] of [
   const second = await installedPlugins(context);
   const afterCached = indexHits.get('/index-cache.json') ?? 0;
   check('cache: second call uses the cache', afterCached - before === 1);
-  check('cache: no installed items yet', Array.isArray(first.items) && first.items.length === 0);
+  const installedItems = Array.isArray(first.items)
+    ? (first.items as Array<{ scope?: string }>).filter((item) => item.scope !== 'builtin')
+    : [];
+  check('cache: no installed items yet', installedItems.length === 0);
   check('cache: registry metadata returned', typeof second.registry === 'object');
   await installedPlugins(context, { force: true });
   check(
@@ -913,7 +974,7 @@ for (const [name, mutate] of [
     page?.id === 'marketplace' &&
       page.title === 'Plugins' &&
       page.titleKey === 'nav.domain.plugins' &&
-      page.nav === 'integrations' &&
+      page.nav === 'core' &&
       page.entry === 'index.html',
     JSON.stringify(page),
   );

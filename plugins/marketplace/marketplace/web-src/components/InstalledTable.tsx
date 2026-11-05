@@ -36,7 +36,11 @@ export function InstalledTable({
       key: 'scope',
       header: t('th.scope'),
       hide: 'compact',
-      cell: (item) => <span className="text-sm text-muted">{item.scope}</span>,
+      cell: (item) => (
+        <Badge tone={item.scope === 'builtin' ? 'info' : 'neutral'}>
+          {t(`scope.${item.scope}`)}
+        </Badge>
+      ),
     },
     {
       key: 'enabled',
@@ -65,18 +69,24 @@ export function InstalledTable({
       key: 'actions',
       header: t('th.actions'),
       cellClassName: 'text-right',
-      cell: (item) => (
-        <div className="flex justify-end gap-2">
-          {item.update_available === true ? (
-            <Button size="small" variant="primary" disabled={busy} onClick={() => onUpdate(item)}>
-              {t('button.update')}
+      cell: (item) =>
+        item.scope === 'builtin' ? null : (
+          <div className="flex justify-end gap-2">
+            {item.update_available === true ? (
+              <Button size="small" variant="primary" disabled={busy} onClick={() => onUpdate(item)}>
+                {t('button.update')}
+              </Button>
+            ) : null}
+            <Button
+              size="small"
+              variant="dangerGhost"
+              disabled={busy}
+              onClick={() => onRemove(item)}
+            >
+              {t('button.remove')}
             </Button>
-          ) : null}
-          <Button size="small" variant="dangerGhost" disabled={busy} onClick={() => onRemove(item)}>
-            {t('button.remove')}
-          </Button>
-        </div>
-      ),
+          </div>
+        ),
     },
   ];
 

@@ -5,6 +5,9 @@
 
 export type InstallScope = 'user' | 'project';
 
+/** Listing scope; `builtin` rows are read-only source plugins. */
+export type PluginScope = InstallScope | 'builtin';
+
 export interface RegistryPermissions {
   fs?: string[];
   net?: string[];
@@ -76,7 +79,7 @@ export interface SearchResult {
 export interface InstalledVersion {
   id: string;
   version: string;
-  scope: InstallScope;
+  scope: PluginScope;
   path: string;
   enabled: boolean;
 }

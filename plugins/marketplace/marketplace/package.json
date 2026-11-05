@@ -60,7 +60,7 @@
           "id": "marketplace",
           "title": "Plugins",
           "titleKey": "nav.domain.plugins",
-          "nav": "integrations",
+          "nav": "core",
           "entry": "index.html"
         }
       ],
@@ -131,7 +131,9 @@
         "data-dir",
         "user-plugins",
         "user-config",
-        "project-plugins"
+        "project-plugins",
+        "host-cwd",
+        "builtin-plugins"
       ],
       "net": [
         "github.com",

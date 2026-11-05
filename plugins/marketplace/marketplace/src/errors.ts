@@ -35,6 +35,7 @@ export type MarketplaceErrorCode =
   | 'install_failed'
   | 'config_write_failed'
   | 'not_installed'
+  | 'builtin_readonly'
   | 'remove_failed'
   | 'update_failed'
   | 'busy'
