@@ -20,6 +20,7 @@ import { gzipSync } from 'node:zlib';
 import { parse as parseYaml } from 'yaml';
 import { MarketplaceError } from '../src/errors.js';
 import {
+  configureRegistry,
   type InstallContext,
   installedPlugins,
   installPlugin,
@@ -27,7 +28,7 @@ import {
   removePlugin,
   updatePlugin,
 } from '../src/install.js';
-import { parseRegistryIndex } from '../src/registry.js';
+import { assertSecureUrl, parseRegistryIndex } from '../src/registry.js';
 import type { MarketplaceSettings } from '../src/settings.js';
 
 // ── assertions ──────────────────────────────────────────────────────────────
@@ -935,6 +936,103 @@ for (const [name, mutate] of [
   );
 }
 
+// ── configure (E10) ─────────────────────────────────────────────────────────
+
+{
+  const root = join(tempRoot, 'configure');
+  const configPath = join(root, 'config.yaml');
+  await mkdir(root, { recursive: true });
+  await writeFile(
+    configPath,
+    [
+      'session:',
+      '  backend: file',
+      'plugins:',
+      '  - name: other-plugin',
+      '    enabled: true',
+      '    config:',
+      '      keep: me',
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
+  const context = contextFor('configure', { configPath });
+  const registryUrl = 'https://example.test/index.json';
+  const result = await configureRegistry(context, registryUrl);
+  const config = await readConfig(context);
+  const entries = Array.isArray(config.plugins)
+    ? (config.plugins as Array<Record<string, unknown>>)
+    : [];
+  const marketplaceEntry = entries.find((entry) => entry.name === 'marketplace');
+  const otherEntry = entries.find((entry) => entry.name === 'other-plugin');
+  const marketplaceConfig = marketplaceEntry?.config as Record<string, unknown> | undefined;
+  const otherConfig = otherEntry?.config as Record<string, unknown> | undefined;
+  check(
+    'configure: writes plugins[].config.registry_url',
+    marketplaceConfig?.registry_url === registryUrl,
+  );
+  check('configure: reports updated', result.status === 'updated');
+  check('configure: marketplace entry is enabled', marketplaceEntry?.enabled === true);
+  check('configure: preserves the other plugin entry', otherConfig?.keep === 'me');
+  check(
+    'configure: preserves top-level settings',
+    (config.session as { backend?: string } | undefined)?.backend === 'file',
+  );
+  check('configure: updates in-memory settings', context.settings.registryUrl === registryUrl);
+  check(
+    'configure: result lists both entries',
+    result.entries.includes('marketplace') && result.entries.includes('other-plugin'),
+  );
+}
+{
+  const root = join(tempRoot, 'configure-absent');
+  const configPath = join(root, 'config.yaml');
+  await mkdir(root, { recursive: true });
+  await writeFile(configPath, 'session:\n  backend: file\n', 'utf-8');
+  const context = contextFor('configure-absent', {
+    configPath,
+    defaultPluginNames: ['base-plugin'],
+  });
+  const result = await configureRegistry(context, 'https://example.test/index.json');
+  const config = await readConfig(context);
+  const entries = Array.isArray(config.plugins)
+    ? (config.plugins as Array<Record<string, unknown>>)
+    : [];
+  check(
+    'configure: materializes defaults when plugins is absent',
+    result.status === 'created' && entries.some((entry) => entry.name === 'base-plugin'),
+  );
+  check(
+    'configure: absent list still sets registry_url',
+    (entries.find((entry) => entry.name === 'marketplace')?.config as Record<string, unknown>)
+      ?.registry_url === 'https://example.test/index.json',
+  );
+}
+{
+  check(
+    'configure: https URL accepted',
+    assertSecureUrl('https://example.test/index.json', 'registry_url').protocol === 'https:',
+  );
+  check(
+    'configure: loopback http accepted',
+    assertSecureUrl('http://127.0.0.1:9000/index.json', 'registry_url').protocol === 'http:',
+  );
+  await expectCode(
+    'configure: non-https rejected',
+    async () => {
+      assertSecureUrl('http://example.test/index.json', 'registry_url');
+    },
+    'registry_url_insecure',
+  );
+  await expectCode(
+    'configure: malformed URL rejected',
+    async () => {
+      assertSecureUrl('not a url', 'registry_url');
+    },
+    'registry_url_insecure',
+  );
+}
+
 // ── cache TTL ───────────────────────────────────────────────────────────────
 
 {
@@ -963,7 +1061,10 @@ for (const [name, mutate] of [
   const pkg = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf-8')) as {
     vessel: {
       activationEvents: string[];
-      contributes: { pages: Array<Record<string, unknown>>; rpc: Array<{ name: string }> };
+      contributes: {
+        pages: Array<Record<string, unknown>>;
+        rpc: Array<{ name: string; permission?: string }>;
+      };
     };
   };
   const pages = pkg.vessel.contributes.pages;
@@ -985,9 +1086,10 @@ for (const [name, mutate] of [
     'manifest: activation is only onPage:marketplace',
     JSON.stringify(pkg.vessel.activationEvents) === JSON.stringify(['onPage:marketplace']),
   );
+  const rpc = pkg.vessel.contributes.rpc;
   check(
-    'manifest: rpc surface unchanged',
-    JSON.stringify(pkg.vessel.contributes.rpc.map((entry) => entry.name)) ===
+    'manifest: rpc surface unchanged plus configure',
+    JSON.stringify(rpc.map((entry) => entry.name)) ===
       JSON.stringify([
         'search',
         'detail',
@@ -997,7 +1099,12 @@ for (const [name, mutate] of [
         'installed',
         'job',
         'jobs',
+        'configure',
       ]),
+  );
+  check(
+    'manifest: configure is a write RPC',
+    rpc.find((entry) => entry.name === 'configure')?.permission === 'write',
   );
 
   const webDir = join(packageDir, 'web');
@@ -1578,6 +1685,30 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
     check(
       'child: failed job writes nothing',
       !(await exists(join(home, '.vessel', 'plugins', 'probe-plugin'))),
+    );
+
+    // E10: configure through the real child RPC, writing the temp HOME config.
+    const insecure = await client
+      .request('plugin.rpc', {
+        name: 'configure',
+        params: { registry_url: 'http://example.com/index.json' },
+      })
+      .then(() => 'accepted')
+      .catch((error: Error) => error.message);
+    check('child: configure rejects non-https', insecure !== 'accepted');
+    const configured = (await client.request('plugin.rpc', {
+      name: 'configure',
+      params: { registry_url: `${base}/index.json` },
+    })) as { ok?: boolean; registry_url?: string };
+    check(
+      'child: configure returns the URL',
+      configured.ok === true && configured.registry_url === `${base}/index.json`,
+    );
+    check(
+      'child: configure wrote the temp HOME config',
+      (await readFile(join(home, '.vessel', 'config.yaml'), 'utf-8')).includes(
+        `${base}/index.json`,
+      ),
     );
 
     const bad = await client

@@ -142,6 +142,71 @@ export async function upsertPluginConfig(
   return { status: 'created', entries: namesOf(entries) };
 }
 
+export interface SetPluginConfigOptions {
+  configPath: string;
+  name: string;
+  key: string;
+  value: unknown;
+  /** Same materialization rule as install when `plugins:` is absent. */
+  defaultNames?: string[] | null;
+}
+
+/**
+ * Set one key under `plugins[].config` for `name`, preserving every other
+ * entry and top-level setting (E10: the marketplace's own `registry_url`).
+ * Atomic like {@link upsertPluginConfig}; `defaultNames` materializes the list
+ * when it does not exist yet, so no default plugin becomes disabled.
+ */
+export async function setPluginConfigValue(
+  options: SetPluginConfigOptions,
+): Promise<{ status: 'updated' | 'created'; entries: string[] }> {
+  const root = await readConfigRoot(options.configPath);
+  const raw = root.plugins;
+  if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+    throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
+  }
+
+  if (Array.isArray(raw)) {
+    const entries = raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
+    const index = entries.findIndex((entry) => isRecord(entry) && entry.name === options.name);
+    if (index >= 0) {
+      const entry = entries[index] as Record<string, unknown>;
+      const config = isRecord(entry.config) ? { ...entry.config } : {};
+      config[options.key] = options.value;
+      entries[index] = { ...entry, enabled: true, config };
+    } else {
+      entries.push({
+        name: options.name,
+        enabled: true,
+        config: { [options.key]: options.value },
+      });
+    }
+    root.plugins = entries;
+    await writeConfigRoot(options.configPath, root);
+    return { status: 'updated', entries: namesOf(entries) };
+  }
+
+  if (options.defaultNames === undefined || options.defaultNames === null) {
+    throw new MarketplaceError(
+      'config_write_failed',
+      'plugins: is absent and the default plugin set could not be enumerated; ' +
+        'refusing to write a partial list',
+    );
+  }
+  const names = new Set(options.defaultNames);
+  names.add(options.name);
+  const entries = [...names]
+    .sort()
+    .map((name) =>
+      name === options.name
+        ? { name, enabled: true, config: { [options.key]: options.value } }
+        : { name, enabled: true },
+    );
+  root.plugins = entries;
+  await writeConfigRoot(options.configPath, root);
+  return { status: 'created', entries: namesOf(entries) };
+}
+
 function namesOf(entries: unknown[]): string[] {
   const names: string[] = [];
   for (const entry of entries) {

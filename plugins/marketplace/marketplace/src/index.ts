@@ -6,7 +6,7 @@
  * - `plugin.hello`      -> `{protocol: 1, ok: true}`
  * - `plugin.activate`   -> `{ok: true}` (settings parsed; registry may be unset)
  * - `plugin.event`      -> `{ok: true}` (cache is time-based, no per-event work)
- * - `plugin.rpc`        -> search / detail / install / remove / update / installed
+ * - `plugin.rpc`        -> search / detail / install / remove / update / installed / configure
  * - `plugin.deactivate` -> `{ok: true}`, then exit
  * - `ping`              -> `pong`
  *
@@ -21,6 +21,7 @@ import { createInterface } from 'node:readline';
 import { MarketplaceError, messageOf } from './errors.js';
 import {
   assertPluginId,
+  configureRegistry,
   defaultConfigPath,
   defaultUserPluginsDir,
   type InstallContext,
@@ -32,6 +33,7 @@ import {
   updatePlugin,
 } from './install.js';
 import { createJob, getJob, jobDto, listJobs, runJob } from './jobs.js';
+import { assertSecureUrl } from './registry.js';
 import { DEFAULT_REGISTRY_URL, parseSettings } from './settings.js';
 
 const PROTOCOL_VERSION = 1;
@@ -210,6 +212,16 @@ async function handleRpc(params: unknown): Promise<unknown> {
       return { items: listJobs().map(jobDto), ttl_hours: 24 };
     case 'installed':
       return installedPlugins(ctx, { force: args.force === true });
+    case 'configure': {
+      // E10: persist the marketplace's own registry_url; https only, with
+      // loopback http allowed for local fixtures (same rule as loading).
+      const url = assertSecureUrl(
+        requireString(args.registry_url, 'registry_url'),
+        'registry_url',
+      ).toString();
+      await configureRegistry(ctx, url);
+      return { ok: true, registry_url: url };
+    }
     default:
       throw new MarketplaceError('invalid_params', `unknown rpc "${name}"`, { rpcCode: -32601 });
   }

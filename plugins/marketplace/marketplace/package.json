@@ -120,6 +120,11 @@
         {
           "name": "jobs",
           "description": "List install/update jobs from the last 24h"
+        },
+        {
+          "name": "configure",
+          "description": "Set the marketplace registry_url in config.yaml",
+          "permission": "write"
         }
       ],
       "events": [

@@ -38,6 +38,7 @@ import {
   discoverPluginNames,
   readConfigRoot,
   removePluginConfig,
+  setPluginConfigValue,
   upsertPluginConfig,
 } from './config.js';
 import { errorCodeOf, MarketplaceError, messageOf } from './errors.js';
@@ -1158,6 +1159,31 @@ export async function updatePlugin(
     });
     return { id, updated: true, from: installed.version, to: install.version, install };
   });
+}
+
+// ── configure (E10) ─────────────────────────────────────────────────────────
+
+/** The plugin's own id in `config.yaml plugins[]`. */
+const MARKETPLACE_PLUGIN_ID = 'marketplace';
+
+/**
+ * Persist the marketplace's `registry_url` under `plugins[].config` and adopt
+ * it in memory so the next RPC uses the new registry. The caller validates
+ * the URL (https, loopback http allowed); this only edits the config.
+ */
+export async function configureRegistry(
+  context: InstallContext,
+  registryUrl: string,
+): Promise<{ status: 'updated' | 'created'; entries: string[] }> {
+  const result = await setPluginConfigValue({
+    configPath: context.configPath,
+    name: MARKETPLACE_PLUGIN_ID,
+    key: 'registry_url',
+    value: registryUrl,
+    defaultNames: await defaultNamesFor(context),
+  });
+  context.settings.registryUrl = registryUrl;
+  return result;
 }
 
 // ── defaults ────────────────────────────────────────────────────────────────
