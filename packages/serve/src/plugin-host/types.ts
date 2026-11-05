@@ -158,6 +158,34 @@ export interface PluginRenderContributions {
   rpc: string[];
 }
 
+/** `plugins.reload` 的单项失败（只影响该 plugin）。 */
+export interface PluginReloadError {
+  id: string;
+  code: PluginErrorCode;
+  message: string;
+}
+
+/** `plugins.reload` 结果（CONTRACT-0.43 §2.8）。 */
+export interface PluginReloadResult {
+  added: string[];
+  removed: string[];
+  changed: string[];
+  /** reload 结束后处于 active 的 plugin id。 */
+  active: string[];
+  errors: PluginReloadError[];
+  /** 同时发现 in-process 能力插件时由 assembly 置位；不谎报已重载。 */
+  restart_required?: boolean;
+}
+
+/** `plugin.changed` 的 payload：`plugins.list` 形状的贡献快照。 */
+export interface PluginContributionsSnapshot {
+  plugins: Array<{
+    name: string;
+    enabled: boolean;
+    contributions?: PluginRenderContributions;
+  }>;
+}
+
 /** 单个 plugin 的可观测状态 */
 export interface PluginStatusEntry {
   id: string;

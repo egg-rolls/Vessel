@@ -6,7 +6,7 @@
 
 import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel-agent/config';
 import type { PluginHost } from '@vessel-agent/core';
-import type { PluginRenderContributions } from '../../plugin-host/types.js';
+import type { PluginReloadResult, PluginRenderContributions } from '../../plugin-host/types.js';
 import type { NodeInfo, ProtocolInfo, ToolInfo } from '../../protocol.js';
 import {
   buildCapabilityManifest,
@@ -79,6 +79,8 @@ export interface ConfigMethodsDeps {
   pluginsForTenant(tenantId: string): Array<{ name: string; enabled: boolean }>;
   /** 0.43 E1：只给 enabled 的体验型 plugin 附加渲染字段（additive）。 */
   pluginsContributionsForTenant?(tenantId: string): Record<string, PluginRenderContributions>;
+  /** 0.43 E3：rescan / diff / manager.reload 由 assembly 注入；缺省 not_supported。 */
+  pluginsReload?: () => Promise<PluginReloadResult>;
   pluginHostFor(tenantId: string): PluginHost | undefined;
   /** health.get 的实时状态。 */
   clientCount(): number;
@@ -411,7 +413,20 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
   ];
 }
 
-/** plugins.list（与 config 同域；单独工厂以保持方法表原顺序）。 */
+/** 合并 plugins.list 条目与 E1 贡献；gateway 广播 `plugin.changed` 也用它。 */
+export function mergePluginList(
+  plugins: Array<{ name: string; enabled: boolean }>,
+  contributions: Record<string, PluginRenderContributions> | undefined,
+): Array<{ name: string; enabled: boolean; contributions?: PluginRenderContributions }> {
+  if (contributions === undefined) return plugins;
+  return plugins.map((plugin) => {
+    if (!plugin.enabled) return plugin;
+    const extra = contributions[plugin.name];
+    return extra !== undefined ? { ...plugin, contributions: extra } : plugin;
+  });
+}
+
+/** plugins.list / plugins.reload（与 config 同域；单独工厂以保持方法表原顺序）。 */
 export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[] {
   return [
     {
@@ -446,17 +461,46 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
           },
         },
       },
-      handler: (_params, ctx) => {
-        const plugins = deps.pluginsForTenant(ctx.tenantId);
-        const contributions = deps.pluginsContributionsForTenant?.(ctx.tenantId);
-        if (contributions === undefined) return { plugins };
-        return {
-          plugins: plugins.map((plugin) => {
-            if (!plugin.enabled) return plugin;
-            const extra = contributions[plugin.name];
-            return extra !== undefined ? { ...plugin, contributions: extra } : plugin;
-          }),
-        };
+      handler: (_params, ctx) => ({
+        plugins: mergePluginList(
+          deps.pluginsForTenant(ctx.tenantId),
+          deps.pluginsContributionsForTenant?.(ctx.tenantId),
+        ),
+      }),
+    },
+    {
+      // 0.43 E3：plugin 子进程没有调用宿主 RPC 的通道，只有 gateway principal 能触发。
+      name: 'plugins.reload',
+      permission: 'write',
+      params_schema: { type: 'object' },
+      result_schema: {
+        type: 'object',
+        required: ['added', 'removed', 'changed', 'active', 'errors'],
+        properties: {
+          added: { type: 'array', items: { type: 'string' } },
+          removed: { type: 'array', items: { type: 'string' } },
+          changed: { type: 'array', items: { type: 'string' } },
+          active: { type: 'array', items: { type: 'string' } },
+          errors: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['id', 'code', 'message'],
+              properties: {
+                id: { type: 'string' },
+                code: { type: 'string' },
+                message: { type: 'string' },
+              },
+            },
+          },
+          restart_required: { type: 'boolean' },
+        },
+      },
+      handler: async () => {
+        if (deps.pluginsReload === undefined) {
+          throw new RpcError('not_supported', 'Plugin reload is not available.');
+        }
+        return deps.pluginsReload();
       },
     },
   ];

@@ -17,11 +17,14 @@ import { PluginHostError, pluginError, pluginErrorCodeOf } from './errors.js';
 import { EventRateLimiter, matchesEventFilter } from './events.js';
 import { PLUGIN_ID_PATTERN, PluginRpcRegistry, pluginRpcName } from './registry.js';
 import type {
+  PluginContributionsSnapshot,
   PluginDescriptor,
   PluginErrorCode,
   PluginEventDto,
   PluginEventSource,
   PluginHostManagerLike,
+  PluginReloadError,
+  PluginReloadResult,
   PluginRenderContributions,
   PluginRuntimeStatus,
   PluginStaticMount,
@@ -53,6 +56,8 @@ export interface PluginHostManagerOptions {
   onPermissionDenied?: (pluginId: string, api: string) => void;
   onReady?: (pluginId: string) => void;
   onStateChange?: (status: PluginStatusEntry) => void;
+  /** reload 后的 `plugin.changed` 快照；gateway 用它广播。 */
+  onChanged?: (snapshot: PluginContributionsSnapshot) => void;
   execPath?: string;
   /** 覆盖子进程协议超时（探针 / 测试用）。 */
   timeouts?: Partial<typeof PLUGIN_TIMEOUTS>;
@@ -275,6 +280,31 @@ function routeFor(pluginId: string, entry: string): string {
   return `/plugins/${pluginId}/${safeEntry(entry)}`;
 }
 
+/** 确定性序列化（key 排序），用于 descriptor 指纹。 */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** reload diff 指纹（CONTRACT-0.43 §2.8）。 */
+function descriptorFingerprint(descriptor: PluginDescriptor): string {
+  return stableStringify({
+    entry: descriptor.entry,
+    uiDir: descriptor.uiDir ?? null,
+    version: descriptor.version,
+    contributes: descriptor.contributes ?? {},
+    permissions: descriptor.permissions ?? {},
+    enabled: descriptor.enabled ?? true,
+  });
+}
+
 /**
  * 单进程内的 plugin 宿主。多个 tenant 的启用列表由 loader 决定；
  * 这里的事件订阅按激活时传入的 tenantId 建立。
@@ -352,17 +382,7 @@ export class PluginHostManager implements PluginHostManagerLike {
         });
         continue;
       }
-      const entry: Entry = {
-        descriptor,
-        enabled: descriptor.enabled ?? true,
-        status: (descriptor.enabled ?? true) ? 'inactive' : 'disabled',
-        limiter: new EventRateLimiter(this.eventsPerSecond, this.now),
-        dropped: 0,
-        denials: 0,
-        restarts: [],
-        tenantId: 'default',
-        settings: {},
-      };
+      const entry = this.makeEntry(descriptor);
       this.entries.set(descriptor.id, entry);
       // 懒激活：RPC 定义在 enable 时就注册，首次调用 / 首次页面访问再 spawn。
       this.registerRpc(entry);
@@ -411,6 +431,133 @@ export class PluginHostManager implements PluginHostManagerLike {
     const tenant = tenantId ?? entry.tenantId;
     const settings = this.options.settingsFor?.(id, tenant) ?? {};
     await this.startEntry(entry, tenant, settings);
+  }
+
+  /**
+   * 热重载 descriptors（CONTRACT-0.43 §2.8 Errata E3）。
+   *
+   * 按 id + 指纹 diff：新增 → inactive；变更 → 先 deactivate，替换 descriptor，
+   * 原先 active 的立即重新激活；删除 → deactivate、注销 RPC / 静态挂载、删条目。
+   * 单个 plugin 的失败只进 `errors[]`，不抛出、不影响其它 plugin。
+   * 不扫描目录 / 不读 config —— discovery 由 N-loader 负责。
+   */
+  async reload(descriptors: readonly PluginDescriptor[]): Promise<PluginReloadResult> {
+    const errors: PluginReloadError[] = [];
+    const normalized = new Map<string, PluginDescriptor>();
+    const seen = new Set<string>();
+
+    for (const input of descriptors) {
+      const id = typeof input?.id === 'string' ? input.id : '<invalid>';
+      seen.add(id);
+      try {
+        const descriptor = validateDescriptor(input);
+        if (normalized.has(descriptor.id)) {
+          throw pluginError('plugin_id_conflict', `Duplicate plugin id: ${descriptor.id}`, {
+            id: descriptor.id,
+          });
+        }
+        normalized.set(descriptor.id, descriptor);
+      } catch (error) {
+        errors.push({
+          id,
+          code: pluginErrorCodeOf(error) ?? 'plugin_manifest_invalid',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const added: string[] = [];
+    const removed: string[] = [];
+    const changed: string[] = [];
+
+    // 删除：新列表里连 id 都没有的条目。无效 manifest 仍保留旧条目（fail-closed）。
+    for (const id of [...this.entries.keys()]) {
+      if (seen.has(id)) continue;
+      try {
+        await this.deactivate(id);
+        this.rpc.unregister(id);
+        this.entries.delete(id);
+        removed.push(id);
+      } catch (error) {
+        errors.push({
+          id,
+          code: pluginErrorCodeOf(error) ?? 'plugin_activation_failed',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    for (const [id, descriptor] of normalized) {
+      const existing = this.entries.get(id);
+      if (existing === undefined) {
+        const entry = this.makeEntry(descriptor);
+        this.entries.set(id, entry);
+        this.registerRpc(entry);
+        added.push(id);
+        continue;
+      }
+      if (descriptorFingerprint(existing.descriptor) === descriptorFingerprint(descriptor)) {
+        continue;
+      }
+      changed.push(id);
+      const wasActive = existing.status === 'active' || existing.starting !== undefined;
+      try {
+        await this.deactivate(id);
+        existing.descriptor = descriptor;
+        existing.enabled = descriptor.enabled ?? true;
+        existing.status = existing.enabled ? 'inactive' : 'disabled';
+        existing.error = undefined;
+        existing.message = undefined;
+        this.rpc.unregister(id);
+        if (existing.enabled) this.registerRpc(existing);
+        if (wasActive && existing.enabled) {
+          const settings = this.options.settingsFor?.(id, existing.tenantId) ?? existing.settings;
+          await this.startEntry(existing, existing.tenantId, settings);
+        }
+      } catch (error) {
+        const code = pluginErrorCodeOf(error) ?? 'plugin_activation_failed';
+        existing.status = existing.enabled ? 'unhealthy' : 'disabled';
+        existing.error = code;
+        existing.message = error instanceof Error ? error.message : String(error);
+        errors.push({ id, code, message: existing.message });
+        this.publishState(existing);
+      }
+    }
+
+    const result: PluginReloadResult = {
+      added,
+      removed,
+      changed,
+      active: [...this.entries.values()]
+        .filter((entry) => entry.status === 'active')
+        .map((entry) => entry.descriptor.id)
+        .sort(),
+      errors,
+    };
+    try {
+      this.options.onChanged?.(this.contributionsSnapshot());
+    } catch {
+      // 广播失败不影响 reload 结果
+    }
+    return result;
+  }
+
+  /** `plugin.changed` 的 `plugins.list` 形状快照。 */
+  contributionsSnapshot(): PluginContributionsSnapshot {
+    const plugins = [...this.entries.values()]
+      .map((entry) => {
+        const item: PluginContributionsSnapshot['plugins'][number] = {
+          name: entry.descriptor.id,
+          enabled: entry.enabled,
+        };
+        if (entry.enabled && entry.status !== 'invalid') {
+          const contributions = renderContributions(entry.descriptor);
+          if (contributions !== undefined) item.contributions = contributions;
+        }
+        return item;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return { plugins };
   }
 
   /** 停用但保持 enabled；RPC 定义保留，下次访问会再次懒激活。 */
@@ -516,6 +663,21 @@ export class PluginHostManager implements PluginHostManagerLike {
     }
     await Promise.all(tasks);
     this.rpc.clear();
+  }
+
+  private makeEntry(descriptor: PluginDescriptor): Entry {
+    const enabled = descriptor.enabled ?? true;
+    return {
+      descriptor,
+      enabled,
+      status: enabled ? 'inactive' : 'disabled',
+      limiter: new EventRateLimiter(this.eventsPerSecond, this.now),
+      dropped: 0,
+      denials: 0,
+      restarts: [],
+      tenantId: 'default',
+      settings: {},
+    };
   }
 
   /** 懒激活：RPC 定义在 enable 时即可被 dispatcher 解析，首次调用再 spawn。 */

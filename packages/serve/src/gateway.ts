@@ -72,6 +72,7 @@ import {
   createConfigMethods,
   createPluginsMethods,
   createToolMethods,
+  mergePluginList,
 } from './gateway/methods/config.js';
 import { createEvalMethods } from './gateway/methods/evals.js';
 import { createFeishuMethods } from './gateway/methods/feishu.js';
@@ -108,6 +109,7 @@ import type { MetricsProvider, MetricsSnapshot } from './metrics.js';
 import {
   createHubPluginEventSource,
   type PluginHostManagerLike,
+  type PluginReloadResult,
   pluginErrorCodeOf,
 } from './plugin-host/index.js';
 import { pluginStaticId, servePluginAsset } from './plugin-host/static.js';
@@ -218,6 +220,13 @@ export interface GatewayOptions {
    * 与 core 的能力插件 `pluginHost` 无关。
    */
   pluginHostManager?: PluginHostManagerLike;
+  /**
+   * 0.43 E3：`plugins.reload` 的 rescan / manager.reload 实现（asm 注入）。
+   * 缺省 = `plugins.reload` 返回 not_supported；handler 成功后由 gateway 广播
+   * `plugin.changed`。若同时发现 in-process 能力插件，回调须返回
+   * `restart_required: true`（不得谎报已重载）。
+   */
+  pluginsReload?: () => Promise<PluginReloadResult>;
   /** 请求体上限（字节，默认 1 MiB） */
   maxBodyBytes?: number;
   /**
@@ -1078,6 +1087,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
             opts.pluginHostManager?.contributionsFor(tenantId) ?? {},
         }
       : {}),
+    ...(opts.pluginsReload !== undefined
+      ? {
+          pluginsReload: async () => {
+            const reload = opts.pluginsReload as () => Promise<PluginReloadResult>;
+            const result = await reload();
+            broadcastPluginChanged();
+            return result;
+          },
+        }
+      : {}),
     pluginHostFor,
     clientCount: () => sseClients.size + wsClients.size,
     latestSeq: () => hub.latestSeq,
@@ -1579,6 +1598,37 @@ export function startGateway(opts: GatewayOptions): Gateway {
       return opts.pluginsFor(tenantId) ?? [];
     }
     return opts.pluginsFor?.(tenantId) ?? opts.plugins?.() ?? [];
+  }
+
+  /** `plugins.list` 形状（含 E1 contributions）；`plugin.changed` 复用同一快照。 */
+  function pluginListPayload(tenantId: string): {
+    plugins: ReturnType<typeof mergePluginList>;
+  } {
+    return {
+      plugins: mergePluginList(
+        pluginsForTenant(tenantId),
+        opts.pluginHostManager?.contributionsFor(tenantId),
+      ),
+    };
+  }
+
+  /** 0.43 E3：reload 后向所有 tenant 流广播 `plugin.changed`（best-effort）。 */
+  function broadcastPluginChanged(): void {
+    const ts = Date.now();
+    for (const tenantId of hub.tenantIds) {
+      const stream = hub.streamFor(tenantId);
+      if (stream === undefined) continue;
+      try {
+        stream.publish({
+          type: 'plugin.changed',
+          run_id: 'plugin',
+          data: pluginListPayload(tenantId),
+          ts,
+        });
+      } catch {
+        // 广播失败不影响 reload 结果
+      }
+    }
   }
 
   // ── federation 入站与诊断事件 ──────────────────

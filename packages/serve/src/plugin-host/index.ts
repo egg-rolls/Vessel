@@ -54,6 +54,7 @@ export {
 export { PLUGIN_CSP, pluginStaticId, servePluginAsset } from './static.js';
 export type {
   PluginCommandContribution,
+  PluginContributionsSnapshot,
   PluginDependencies,
   PluginDescriptor,
   PluginErrorCode,
@@ -65,6 +66,8 @@ export type {
   PluginPageContribution,
   PluginPanelContribution,
   PluginPermissions,
+  PluginReloadError,
+  PluginReloadResult,
   PluginRenderContributions,
   PluginRpcContribution,
   PluginRuntimeStatus,

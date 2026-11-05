@@ -60,6 +60,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'events.subscribe': 'read',
   'tools.list': 'read',
   'plugins.list': 'read',
+  // CONTRACT-0.43 Errata E3：热重载体验型 plugin（write；plugin 子进程无宿主 RPC 通道）。
+  'plugins.reload': 'write',
   'metrics.get': 'read',
   'metrics.reset': 'write',
   'mcp.list': 'read',
