@@ -14,6 +14,7 @@ export function SegmentedTabs<T extends string>({
   onChange,
   panelId,
   disabled = false,
+  className,
 }: {
   label: string;
   tabs: readonly TabOption<T>[];
@@ -23,6 +24,8 @@ export function SegmentedTabs<T extends string>({
   panelId?: string;
   /** 整组只读：按钮 disabled，键盘与指针都不触发切换（用于保存中 / 不可配置）。 */
   disabled?: boolean;
+  /** 追加到 tablist 的布局类（如放进工具条时去掉默认上边距）。 */
+  className?: string;
 }) {
   const refs = useRef(new Map<T, HTMLButtonElement>());
 
@@ -31,6 +34,7 @@ export function SegmentedTabs<T extends string>({
       className={cn(
         'mt-3.5 inline-flex shrink-0 max-w-full gap-0.5 overflow-x-auto rounded-full bg-sunken p-1',
         disabled && 'opacity-45',
+        className,
       )}
       role="tablist"
       aria-label={label}

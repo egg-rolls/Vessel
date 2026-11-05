@@ -10,7 +10,7 @@ import { domainLabel, isDomainActive, type PrimaryDomain } from './nav';
 import type { Route } from './router';
 
 /** 移动端常驻 3 项；编排 / Status / Observe / Settings 放进 More sheet。 */
-const BOTTOM_DOMAINS: readonly PrimaryDomain[] = ['chat', 'runs', 'integrations'];
+const BOTTOM_DOMAINS: readonly PrimaryDomain[] = ['chat', 'runs', 'tools'];
 
 const itemClass =
   'flex min-h-14 flex-1 flex-col items-center justify-center gap-1 border-0 bg-transparent text-xs text-muted';
@@ -28,6 +28,8 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
     route.domain === 'nodes' ||
     route.domain === 'teams' ||
     route.domain === 'agents' ||
+    route.domain === 'mcp' ||
+    route.domain === 'channels' ||
     route.domain === 'observe' ||
     route.domain === 'plugins' ||
     route.domain === 'settings';
@@ -113,6 +115,26 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               }}
             >
               <DomainIcon domain="nodes" /> {domainLabel('nodes')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
+                navigate(primaryRoute('mcp'));
+              }}
+            >
+              <DomainIcon domain="mcp" /> {domainLabel('mcp')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
+                navigate(primaryRoute('channels'));
+              }}
+            >
+              <DomainIcon domain="channels" /> {domainLabel('channels')}
             </button>
             <button
               type="button"

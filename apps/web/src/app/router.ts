@@ -8,10 +8,9 @@
 export type Route =
   | { domain: 'chat'; sessionId?: string; agent?: string }
   | { domain: 'runs'; tab: 'live' | 'durable'; runId?: string; sessionId?: string }
-  | {
-      domain: 'integrations';
-      tab: 'tools' | 'mcp' | 'channels';
-    }
+  | { domain: 'tools' }
+  | { domain: 'mcp' }
+  | { domain: 'channels' }
   | { domain: 'observe'; tab: 'metrics' | 'evals' | 'diagnostics' | 'attention' }
   /** plugin 页面：`#/plugins/<id>/<entry>`（CONTRACT-0.43 §2.1）。 */
   | { domain: 'plugins'; pluginId?: string; entry?: string }
@@ -101,12 +100,13 @@ export function parseRoute(hash: string): Route {
       };
     }
     case 'integrations': {
+      // 0.45：旧合并页 `#/integrations/<tab>` 作为别名，落到拆出的顶层域。
       const tab = pick<'tools' | 'mcp' | 'channels'>(
         segments[1] ?? query.get('tab'),
         INTEGRATION_TABS,
         'tools',
       );
-      return { domain: 'integrations', tab };
+      return { domain: tab };
     }
     case 'observe': {
       const tab = pick<'metrics' | 'evals' | 'diagnostics' | 'attention'>(
@@ -194,8 +194,12 @@ export function formatRoute(route: Route): string {
       if (route.sessionId) query.set('session', route.sessionId);
       return `#/runs?${query.toString()}`;
     }
-    case 'integrations':
-      return `#/integrations/${route.tab}`;
+    case 'tools':
+      return '#/tools';
+    case 'mcp':
+      return '#/mcp';
+    case 'channels':
+      return '#/channels';
     case 'observe':
       return `#/observe/${route.tab}`;
     case 'plugins': {

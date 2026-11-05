@@ -14,7 +14,6 @@ import {
   NotEnabledState,
   StaleNotice,
 } from '../../components/States';
-import { SegmentedTabs } from '../../components/Tabs';
 import { Button, cn } from '../../components/ui';
 import { t, useLocale } from '../../i18n';
 import { RunDetail } from './RunDetail';
@@ -53,6 +52,8 @@ export function RunsView({
     resourceError,
     loading,
     agentOptions,
+    sessionNames,
+    agentNames,
     reloadAll,
     detailResource,
     detailRun,
@@ -80,32 +81,13 @@ export function RunsView({
       ref={scrollRef}
       className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]"
     >
-      <PageHeader title={t('runs.title')} description={t('runs.description')} tenantId={tenantId} />
-      <SegmentedTabs
-        label={t('runs.sourceLabel')}
-        tabs={[
-          { id: 'live', label: t('runs.source.live') },
-          { id: 'durable', label: t('runs.source.durable') },
-        ]}
-        value={route.tab}
-        onChange={changeTab}
-        panelId="runs-panel"
-      />
+      <PageHeader title={t('runs.title')} tenantId={tenantId} />
 
       <RunsFilters
         query={query}
         onQueryChange={setQuery}
-        status={status}
-        onStatusChange={setStatus}
-        filterList={filterList}
-        agentId={agentId}
-        onAgentIdChange={setAgentId}
-        agentOptions={agentOptions}
-        sessionId={route.sessionId}
-        onClearSession={() => navigateRoute({ sessionId: undefined, runId: undefined })}
-        onClearAgent={() => setAgentId('')}
-        onRefresh={reloadAll}
-        hasToken={hasToken}
+        tab={route.tab}
+        onTabChange={changeTab}
         hidden={Boolean(route.runId)}
       />
 
@@ -188,6 +170,14 @@ export function RunsView({
                   connected={connected}
                   busy={busy}
                   activeKey={route.runId}
+                  status={status}
+                  onStatusChange={setStatus}
+                  filterList={filterList}
+                  agentId={agentId}
+                  onAgentIdChange={setAgentId}
+                  agentOptions={agentOptions}
+                  sessionNames={sessionNames}
+                  agentNames={agentNames}
                   onCancel={cancel}
                   onResume={resume}
                   onOpenRun={(runId, sessionId) => navigateRoute({ runId, sessionId: sessionId })}

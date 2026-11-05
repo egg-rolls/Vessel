@@ -92,6 +92,19 @@
   background: var(--bg);
 }
 
+/* ── Team 输入框：0.45 起不再显示 ocean-green 焦点环 ────
+   卡片与 textarea 的 focus-within / focus-visible 环都去掉；
+   其它区域（按钮、列表行等）的焦点态保持不变。 */
+.composer.team-composer.relative:focus-within {
+  box-shadow: var(--elev-2);
+}
+
+.composer.team-composer.relative textarea:focus,
+.composer.team-composer.relative textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 /* ── 消息：bubble 背景 / 失败态由这些 marker 承载 ─────── */
 
 .team-message-self {

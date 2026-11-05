@@ -20,23 +20,25 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'teams' },
   { id: 'nodes' },
   { id: 'runs' },
-  { id: 'integrations' },
+  { id: 'tools' },
+  { id: 'mcp' },
+  { id: 'channels' },
   { id: 'hub' },
   { id: 'gateway' },
 ];
 
 /**
  * 桌面侧栏分组；只影响导航展示，不改变路由。
- * 编排组顺序固定 Agents → Teams → Nodes；Status 组固定在 Settings 之前。
+ * Chat 组承载会话与团队；编排组只剩 Agents → Nodes。
  */
 export const NAV_GROUPS: readonly {
   id: string;
   domains: readonly PrimaryDomain[];
 }[] = [
-  { id: 'chat', domains: ['chat'] },
-  { id: 'network', domains: ['agents', 'teams', 'nodes'] },
+  { id: 'chat', domains: ['chat', 'teams'] },
+  { id: 'network', domains: ['agents', 'nodes'] },
   { id: 'runs', domains: ['runs'] },
-  { id: 'integrations', domains: ['integrations'] },
+  { id: 'integrations', domains: ['tools', 'mcp', 'channels'] },
   { id: 'status', domains: ['hub', 'gateway'] },
 ];
 
@@ -83,8 +85,12 @@ export function routeBreadcrumb(route: Route): string {
         : t('breadcrumb.teams.detail', { team: route.teamId });
     case 'agents':
       return t('breadcrumb.agents');
-    case 'integrations':
-      return t(`breadcrumb.integrations.${route.tab}`);
+    case 'tools':
+      return t('breadcrumb.tools');
+    case 'mcp':
+      return t('breadcrumb.mcp');
+    case 'channels':
+      return t('breadcrumb.channels');
     case 'observe':
       return t(`breadcrumb.observe.${route.tab}`);
     case 'plugins':

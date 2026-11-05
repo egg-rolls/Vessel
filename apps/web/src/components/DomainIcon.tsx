@@ -68,13 +68,26 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <path d="M9 7.4 12.6 10 9 12.6z" fill="currentColor" stroke="none" />
         </svg>
       );
-    case 'integrations':
+    case 'tools':
       return (
         <svg {...common}>
-          <rect x="3" y="3" width="5.5" height="5.5" rx="1" />
-          <rect x="11.5" y="3" width="5.5" height="5.5" rx="1" />
-          <rect x="3" y="11.5" width="5.5" height="5.5" rx="1" />
-          <rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1" />
+          <path d="M12.2 3.2a3.8 3.8 0 0 0-4.9 4.9L3.6 11.8a1.6 1.6 0 0 0 2.2 2.2l3.7-3.7a3.8 3.8 0 0 0 4.9-4.9l-2 2-1.9-.5-.5-1.9z" />
+        </svg>
+      );
+    case 'mcp':
+      return (
+        <svg {...common}>
+          <circle cx="5" cy="10" r="2.2" />
+          <circle cx="15" cy="5.5" r="2.2" />
+          <circle cx="15" cy="14.5" r="2.2" />
+          <path d="M7.1 9.2 12.9 6.3M7.1 10.8l5.8 2.9" />
+        </svg>
+      );
+    case 'channels':
+      return (
+        <svg {...common}>
+          <path d="M3.5 6.5h4l9 3.5-9 3.5h-4z" />
+          <path d="M6.5 13.5v3l3-2" />
         </svg>
       );
     case 'plugins':

@@ -41,8 +41,12 @@ export function primaryRoute(domain: PrimaryDomain): Route {
       return { domain: 'agents' };
     case 'runs':
       return { domain: 'runs', tab: 'live' };
-    case 'integrations':
-      return { domain: 'integrations', tab: 'tools' };
+    case 'tools':
+      return { domain: 'tools' };
+    case 'mcp':
+      return { domain: 'mcp' };
+    case 'channels':
+      return { domain: 'channels' };
     case 'observe':
       return { domain: 'observe', tab: 'metrics' };
   }

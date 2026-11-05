@@ -33,6 +33,13 @@ export interface Usage {
   completion_tokens?: number;
   total_tokens?: number;
   total_cost?: number;
+  /**
+   * 缓存读取 token（CONTRACT-0.29 §1.2；run usage 沿用 provider 字段名）。
+   * 省略 = provider 从未上报缓存，不能当成 0。
+   */
+  cache_read_input_tokens?: number;
+  /** 缓存写入 token；省略语义同上。 */
+  cache_creation_input_tokens?: number;
 }
 
 /** LLM 工具 Schema（对应 `llm.request.data.tools`） */

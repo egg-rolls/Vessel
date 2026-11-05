@@ -81,6 +81,18 @@
   text-overflow: ellipsis;
 }
 
+/* 新会话卡片副标题：字号更小，行高与底部内边距放宽，避免文字被行框裁切。 */
+.session-row.draft .session-main {
+  padding-top: 6px;
+  padding-bottom: 7px;
+}
+
+.session-row.draft .session-preview {
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding-bottom: 1px;
+}
+
 .session-preview mark {
   padding: 0 1px;
   border-radius: 3px;

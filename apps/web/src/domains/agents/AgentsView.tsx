@@ -345,7 +345,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
             aria-label={t('agents.filter.node')}
             onChange={(event) => navigate(withFilter(route, 'nodeKey', event.target.value))}
           >
-            <option value="">{t('agents.filter.all')}</option>
+            <option value="">{t('agents.filter.node')}</option>
             {options.nodes.map((option) => (
               <option key={option.key} value={option.key}>
                 {option.label}
@@ -358,7 +358,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
             aria-label={t('agents.filter.team')}
             onChange={(event) => navigate(withFilter(route, 'teamId', event.target.value))}
           >
-            <option value="">{t('agents.filter.all')}</option>
+            <option value="">{t('agents.filter.team')}</option>
             {options.teams.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.label}
@@ -371,7 +371,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
             aria-label={t('agents.filter.state')}
             onChange={(event) => navigate(withFilter(route, 'state', event.target.value))}
           >
-            <option value="">{t('agents.filter.all')}</option>
+            <option value="">{t('agents.filter.state')}</option>
             {options.states.map((state) => (
               <option key={state} value={state}>
                 {state}
@@ -384,7 +384,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
             aria-label={t('agents.filter.presence')}
             onChange={(event) => navigate(withFilter(route, 'presence', event.target.value))}
           >
-            <option value="">{t('agents.filter.all')}</option>
+            <option value="">{t('agents.filter.presence')}</option>
             {PRESENCE_OPTIONS.map((presence) => (
               <option key={presence} value={presence}>
                 {t(`agents.presence.${presence}`)}

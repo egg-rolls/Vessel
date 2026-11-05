@@ -3,7 +3,7 @@ import { ChatView } from '../domains/chat/ChatView';
 import { ToolCatalogProvider } from '../domains/chat/tool-catalog';
 import { GatewayView } from '../domains/gateway/GatewayView';
 import { HubView } from '../domains/hub/HubView';
-import { IntegrationsView } from '../domains/integrations/IntegrationsView';
+import { CapabilityView } from '../domains/integrations/CapabilityView';
 import { NodePanelView } from '../domains/nodes/NodePanelView';
 import { ObserveView } from '../domains/observe/ObserveView';
 import { PluginPageView } from '../domains/plugins/PluginPageView';
@@ -59,7 +59,9 @@ export function ShellRouteView({
       {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} />}
       {route.domain === 'agents' && <AgentsView route={route} navigate={navigate} />}
       {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
-      {route.domain === 'integrations' && <IntegrationsView route={route} navigate={navigate} />}
+      {(route.domain === 'tools' || route.domain === 'mcp' || route.domain === 'channels') && (
+        <CapabilityView domain={route.domain} />
+      )}
       {route.domain === 'observe' && <ObserveView route={route} navigate={navigate} />}
       {route.domain === 'plugins' && <PluginPageView route={route} />}
       {route.domain === 'settings' && <SettingsView route={route} navigate={navigate} />}

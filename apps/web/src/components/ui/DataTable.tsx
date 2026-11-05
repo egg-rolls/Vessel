@@ -13,6 +13,11 @@ export interface DataTableColumn<Row> {
   hide?: DataTableHide;
   /** 追加到 `<td>` 的类（字体 / 数值对齐等）。 */
   cellClassName?: string;
+  /**
+   * 可选：把表头标题替换为带过滤控件的渲染结果（如状态 / agent 下拉）。
+   * 不提供时保持纯文本表头；其它表格行为不变。
+   */
+  headerFilter?: (header: ReactNode) => ReactNode;
 }
 
 export interface DataTableProps<Row> {
@@ -62,7 +67,7 @@ export function DataTable<Row>({
                 column.hide && HIDE_CLASS[column.hide],
               )}
             >
-              {column.header}
+              {column.headerFilter ? column.headerFilter(column.header) : column.header}
             </th>
           ))}
         </tr>

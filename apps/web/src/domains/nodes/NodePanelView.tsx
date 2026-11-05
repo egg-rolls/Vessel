@@ -124,7 +124,7 @@ function NodesList({
     );
   } else {
     body = (
-      <ul className="flex flex-col gap-2">
+      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {visible.map((node) => (
           <NodeRow
             key={nodeKeyOf(node)}
@@ -141,15 +141,7 @@ function NodesList({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader
-        title={t('nodes.title')}
-        tenantId={tenantId}
-        actions={
-          <Button variant="primary" onClick={() => setAddOpen(true)}>
-            {t('hub.add.title')}
-          </Button>
-        }
-      />
+      <PageHeader title={t('nodes.title')} tenantId={tenantId} />
       <div className="mt-5 flex flex-col gap-4">
         {nodes.length > 0 && (
           <div className="net-toolbar mt-3.5">
@@ -160,6 +152,9 @@ function NodesList({
               ariaLabel={t('nodes.search')}
               className="grow basis-60 max-w-search"
             />
+            <Button variant="primary" className="ml-auto" onClick={() => setAddOpen(true)}>
+              {t('hub.add.title')}
+            </Button>
           </div>
         )}
         {body}
@@ -233,47 +228,53 @@ function NodeRow({
       : t('nodes.health.loading');
 
   return (
-    <li className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-line bg-raised px-4 py-3">
-      <div className="flex min-w-0 flex-1 basis-55 flex-col gap-0.5">
-        <span className="inline-flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
-          {displayName}
-          {node.current && (
-            <span className="text-2xs text-faint" title={t('entity.currentNode')}>
-              <span aria-hidden="true">· </span>
-              {t('entity.currentNode')}
-            </span>
-          )}
-        </span>
-        <span className="min-w-0 wrap-anywhere font-mono text-xs text-faint">
-          {displayGatewayUrl(node.url, pageOrigin())}
-        </span>
-      </div>
-      <StatusChip status={status} label={statusLabelValue} />
-      <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-2 text-sm tabular-nums text-muted">
-        <span>
-          <strong className="font-semibold text-ink">{summary ? summary.teams : '—'}</strong>{' '}
-          {t('nodes.field.teams')}
-        </span>
-        <span>
-          <strong className="font-semibold text-ink">{summary ? summary.agents : '—'}</strong>{' '}
-          {t('nodes.field.agents')}
-        </span>
-        <span>
-          <strong className="font-semibold text-ink">{summary ? summary.online : '—'}</strong>{' '}
-          {t('nodes.field.online')}
-        </span>
+    <li className="flex min-w-0 flex-col rounded-md border border-line bg-raised transition-colors hover:bg-hover">
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 flex-col gap-2 rounded-md px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+        onClick={onOpen}
+      >
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="inline-flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
+            {displayName}
+            {node.current && (
+              <span className="text-2xs text-faint" title={t('entity.currentNode')}>
+                <span aria-hidden="true">· </span>
+                {t('entity.currentNode')}
+              </span>
+            )}
+          </span>
+          <span className="min-w-0 wrap-anywhere font-mono text-xs text-faint">
+            {displayGatewayUrl(node.url, pageOrigin())}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm tabular-nums text-muted">
+          <StatusChip status={status} label={statusLabelValue} />
+          <span>
+            <strong className="font-semibold text-ink">{summary ? summary.teams : '—'}</strong>{' '}
+            {t('nodes.field.teams')}
+          </span>
+          <span>
+            <strong className="font-semibold text-ink">{summary ? summary.agents : '—'}</strong>{' '}
+            {t('nodes.field.agents')}
+          </span>
+          <span>
+            <strong className="font-semibold text-ink">{summary ? summary.online : '—'}</strong>{' '}
+            {t('nodes.field.online')}
+          </span>
+        </div>
         <span className="min-w-0 wrap-anywhere text-xs text-faint">{heartbeat}</span>
-      </div>
-      <div className="ml-auto inline-flex flex-none flex-wrap items-center gap-2">
-        <Button size="small" onClick={onOpen}>
-          {t('hub.nodes.open')}
+      </button>
+      {onRemove && (
+        <Button
+          size="small"
+          variant="dangerGhost"
+          className="mb-3 ml-4 self-start"
+          onClick={onRemove}
+        >
+          {t('common.remove')}
         </Button>
-        {onRemove && (
-          <Button size="small" variant="dangerGhost" onClick={onRemove}>
-            {t('common.remove')}
-          </Button>
-        )}
-      </div>
+      )}
     </li>
   );
 }

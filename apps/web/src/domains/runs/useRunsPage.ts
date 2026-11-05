@@ -11,6 +11,7 @@ import { useToast } from '../../components/ToastProvider';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
+import { flattenRoster } from '../../gateway/team-roster';
 import { t } from '../../i18n';
 import { buildRunPaletteActions } from '../../state/palette-actions';
 import {
@@ -22,8 +23,11 @@ import {
   sortLiveRuns,
   takeRuns,
 } from '../../state/runs';
+import { sessionTitle } from '../../state/sessions';
 import { resourceData, useResource } from '../../state/useResource';
+import { useAgentStore } from '../../stores/agentStore';
 import { useNodeRuns, useRunStore } from '../../stores/runStore';
+import { useSessionStore } from '../../stores/sessionStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 
 type RunsRoute = Extract<Route, { domain: 'runs' }>;
@@ -67,12 +71,25 @@ export function useRunsPage(route: RunsRoute, navigate: (route: Route) => void) 
   const [agentId, setAgentId] = useState<string>('');
   const [busy, setBusy] = useState<Set<string>>(new Set());
 
-  const { current: currentNode } = useNodes();
+  const { nodes, teamControl, current: currentNode } = useNodes();
   const nodeRuns = useNodeRuns(currentNode);
   const liveState = nodeRuns?.live;
   const durableState = nodeRuns?.durable;
   const loadRuns = useRunStore((state) => state.loadRuns);
   const nodeKey = currentNode ? nodeKeyOf(currentNode) : '';
+
+  // 可读名称：复用会话/roster 的既有加载路径，不新增 wire 字段。
+  const sessions = useSessionStore((state) => state.sessions);
+  const loadSessions = useSessionStore((state) => state.loadSessions);
+  const rosterState = useAgentStore((state) => state.roster);
+  const loadRoster = useAgentStore((state) => state.loadRoster);
+  const nodeKeys = nodes.map((node) => nodeKeyOf(node)).join(',');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: nodeKeys / epoch 是唯一加载触发条件
+  useEffect(() => {
+    if (!hasToken) return;
+    void loadSessions(client, { epoch });
+    if (nodes.length > 0) void loadRoster(nodes, teamControl);
+  }, [client, hasToken, epoch, nodeKeys]);
 
   const reloadLive = useCallback(() => {
     if (currentNode && hasToken) void loadRuns(client, currentNode, 'live');
@@ -118,6 +135,19 @@ export function useRunsPage(route: RunsRoute, navigate: (route: Route) => void) 
     }
     return [...ids].sort((a, b) => a.localeCompare(b));
   }, [route.tab, live, durable]);
+
+  const sessionNames = useMemo(
+    () => new Map(sessions.map((session) => [session.session_id, sessionTitle(session)])),
+    [sessions],
+  );
+  const agentNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const agent of flattenRoster(resourceData(rosterState) ?? [])) {
+      const name = agent.member.name?.trim();
+      if (name) names.set(agent.member.agent_id, name);
+    }
+    return names;
+  }, [rosterState]);
 
   // 切换 tab 时回到第一页与「全部」。
   // biome-ignore lint/correctness/useExhaustiveDependencies: route.tab 变化是重置条件
@@ -343,6 +373,8 @@ export function useRunsPage(route: RunsRoute, navigate: (route: Route) => void) 
     resourceError,
     loading,
     agentOptions,
+    sessionNames,
+    agentNames,
     reloadAll,
     detailResource,
     detailRun,
