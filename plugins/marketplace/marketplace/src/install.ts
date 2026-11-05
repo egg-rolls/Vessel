@@ -36,7 +36,6 @@ import {
   type ConfigRemoveResult,
   type ConfigUpdateResult,
   discoverPluginNames,
-  inferBuiltInPluginsRoot,
   readConfigRoot,
   removePluginConfig,
   upsertPluginConfig,
@@ -779,11 +778,16 @@ export interface InstallResult {
 
 async function defaultNamesFor(context: InstallContext): Promise<string[] | null> {
   if (context.defaultPluginNames !== undefined) return context.defaultPluginNames;
-  if (inferBuiltInPluginsRoot() === null) return null;
+  // `context.projectDir` is the host-provided cwd (Errata E4). Source plugins
+  // live at `<hostCwd>/plugins/**`; installed project plugins at
+  // `<hostCwd>/.vessel/plugins`. `null` means "cannot enumerate" → skip write.
   return discoverPluginNames({
     userPluginsDir: context.userPluginsDir,
     ...(context.projectDir !== undefined
-      ? { projectPluginsDir: join(context.projectDir, '.vessel', 'plugins') }
+      ? {
+          hostCwd: context.projectDir,
+          projectPluginsDir: join(context.projectDir, '.vessel', 'plugins'),
+        }
       : {}),
   });
 }

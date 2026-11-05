@@ -15,7 +15,7 @@
  * @module @vessel-agent/plugin-marketplace/config
  */
 
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -235,20 +235,46 @@ export async function scanPluginRoot(root: string): Promise<string[]> {
   return names;
 }
 
-/**
- * Plugin roots whose default-enabled entries can be enumerated:
- * - built-in plugins, when this module runs from a repository checkout;
- * - user `~/.vessel/plugins`;
- * - project `.vessel/plugins`, when the host/probe supplied a project root.
- */
-export async function discoverPluginNames(input: {
+export interface PluginDiscoveryInput {
   userPluginsDir: string;
+  /** Installed project plugins: `<hostCwd>/.vessel/plugins`. */
   projectPluginsDir?: string;
-}): Promise<string[]> {
-  const roots = [input.userPluginsDir];
+  /**
+   * Host project cwd. Source plugins live at `<hostCwd>/plugins/**` in the
+   * mandatory `plugins/<category>/<name>/` layout (CONTRACT-0.44 §3).
+   */
+  hostCwd?: string;
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Enumerate the plugins enabled by default. Returns `null` when the built-in
+ * plugin root cannot be determined: the caller must then skip the config write
+ * (CONTRACT-0.44 §3 step 7) rather than materialize a one-entry list that would
+ * disable every default plugin.
+ *
+ * Sources, in order: `<hostCwd>/plugins` (authoritative when present), an
+ * inferred repository root (legacy layouts), user plugins, project plugins.
+ */
+export async function discoverPluginNames(input: PluginDiscoveryInput): Promise<string[] | null> {
+  const builtInRoots: string[] = [];
+  if (input.hostCwd !== undefined) {
+    const hostPlugins = join(input.hostCwd, 'plugins');
+    if (await isDirectory(hostPlugins)) builtInRoots.push(hostPlugins);
+  }
+  const inferred = inferBuiltInPluginsRoot();
+  if (inferred !== null && !builtInRoots.includes(inferred)) builtInRoots.push(inferred);
+  if (builtInRoots.length === 0) return null;
+
+  const roots = [...builtInRoots, input.userPluginsDir];
   if (input.projectPluginsDir !== undefined) roots.push(input.projectPluginsDir);
-  const builtIn = inferBuiltInPluginsRoot();
-  if (builtIn !== null) roots.unshift(builtIn);
 
   const names = new Set<string>();
   for (const root of roots) {

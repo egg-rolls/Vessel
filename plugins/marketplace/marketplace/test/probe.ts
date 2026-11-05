@@ -459,6 +459,8 @@ function contextFor(
     installScope?: 'user' | 'project';
     /** Simulates the host resolving settings.project_root / HOST_CWD. */
     projectRoot?: string;
+    /** Omit `defaultPluginNames` so the installer runs real discovery. */
+    discovery?: boolean;
     limits?: InstallContext['limits'];
   } = {},
 ): InstallContext {
@@ -477,10 +479,38 @@ function contextFor(
     ...(overrides.projectRoot !== undefined ? { projectDir: overrides.projectRoot } : {}),
     configPath: overrides.configPath ?? join(root, 'config.yaml'),
     ...(overrides.limits !== undefined ? { limits: overrides.limits } : {}),
-    ...(overrides.defaultPluginNames !== undefined
-      ? { defaultPluginNames: overrides.defaultPluginNames }
-      : { defaultPluginNames: ['base-plugin'] }),
+    ...(overrides.discovery === true
+      ? {}
+      : overrides.defaultPluginNames !== undefined
+        ? { defaultPluginNames: overrides.defaultPluginNames }
+        : { defaultPluginNames: ['base-plugin'] }),
   };
+}
+
+/** A source plugin in the mandatory `plugins/<category>/<name>/` layout. */
+async function writeSourcePlugin(
+  repo: string,
+  category: string,
+  name: string,
+  id: string,
+): Promise<void> {
+  const dir = join(repo, 'plugins', category, name);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: `@probe/${name}`,
+      version: '0.1.0',
+      vessel: {
+        id,
+        name: `Probe ${id}`,
+        version: '0.1.0',
+        engines: { vessel: '>=0.33.0 <0.45.0' },
+        entry: 'src/index.ts',
+      },
+    }),
+    'utf-8',
+  );
 }
 
 async function readConfig(context: InstallContext): Promise<Record<string, unknown>> {
@@ -734,6 +764,32 @@ for (const [name, mutate] of [
     'config: skipped install still lands on disk',
     await exists(join(context.userPluginsDir, 'probe-plugin', 'package.json')),
   );
+}
+{
+  const fakeRepo = join(tempRoot, 'discovery-known', 'fake-repo');
+  await writeSourcePlugin(fakeRepo, 'demo', 'builtin-tool', 'builtin-tool');
+  const context = contextFor('discovery-known', {
+    projectRoot: fakeRepo,
+    discovery: true,
+  });
+  const result = await installPlugin(context, { id: 'probe-plugin', version: '1.0.0' });
+  check('discovery: known host root creates config', result.config.status === 'created');
+  const names = await configNames(context);
+  check(
+    'discovery: materializes host plugin defaults',
+    names.includes('builtin-tool') && names.includes('probe-plugin'),
+    names.join(','),
+  );
+}
+{
+  const context = contextFor('discovery-unknown', { discovery: true });
+  const result = await installPlugin(context, { id: 'probe-plugin', version: '1.0.0' });
+  check('discovery: unknown root skips config', result.config.status === 'skipped');
+  check(
+    'discovery: unknown root still installs',
+    await exists(join(context.userPluginsDir, 'probe-plugin', 'package.json')),
+  );
+  check('discovery: unknown root leaves no config', !(await exists(context.configPath)));
 }
 
 // ── backup / rollback ───────────────────────────────────────────────────────
@@ -998,8 +1054,9 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
 {
   const home = join(tempRoot, 'home');
   const pluginDataDir = join(home, '.vessel', 'data', 'plugins', 'marketplace');
-  const hostCwd = join(home, 'host-cwd');
+  const repoRoot = join(home, 'fake-repo');
   await mkdir(home, { recursive: true });
+  await writeSourcePlugin(repoRoot, 'demo', 'builtin-tool', 'builtin-tool');
   const entry = join(import.meta.dir, '..', 'src', 'index.ts');
   const proc: PipedSubprocess = Bun.spawn([process.execPath, entry], {
     cwd: join(import.meta.dir, '..'),
@@ -1011,7 +1068,7 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
       VESSEL_PLUGIN_PROTOCOL: '1',
       VESSEL_PLUGIN_DATA_DIR: pluginDataDir,
       VESSEL_PLUGIN_CONFIG: '{}',
-      VESSEL_PLUGIN_HOST_CWD: hostCwd,
+      VESSEL_PLUGIN_HOST_CWD: repoRoot,
     },
     stdin: 'pipe',
     stdout: 'pipe',
@@ -1080,8 +1137,8 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
       entries.some((entryValue) => entryValue.name === 'probe-plugin'),
     );
     check(
-      'child: default plugin list materialized',
-      entries.some((entryValue) => entryValue.name === 'basic-tools'),
+      'child: default plugin list materialized from hostCwd',
+      entries.some((entryValue) => entryValue.name === 'builtin-tool'),
       entries.map((entryValue) => entryValue.name).join(','),
     );
 
@@ -1166,7 +1223,7 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
     );
     check(
       'child: params.hostCwd is not the env cwd',
-      !(await exists(join(hostCwd, '.vessel', 'plugins', 'probe-plugin'))),
+      !(await exists(join(repoRoot, '.vessel', 'plugins', 'probe-plugin'))),
     );
     await removePluginVia(client, 'probe-plugin');
 
@@ -1183,7 +1240,7 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
     await installAndWait(client, { id: 'probe-plugin', version: '1.0.0' });
     check(
       'child: VESSEL_PLUGIN_HOST_CWD fallback used',
-      await exists(join(hostCwd, '.vessel', 'plugins', 'probe-plugin', 'package.json')),
+      await exists(join(repoRoot, '.vessel', 'plugins', 'probe-plugin', 'package.json')),
     );
     await removePluginVia(client, 'probe-plugin');
 
@@ -1207,20 +1264,24 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
     );
     check(
       'child: settings root is not the host cwd',
-      !(await exists(join(hostCwd, '.vessel', 'plugins', 'probe-plugin'))),
+      !(await exists(join(repoRoot, '.vessel', 'plugins', 'probe-plugin'))),
     );
     await removePluginVia(client, 'probe-plugin');
 
-    // No root at all: project install must fail, not guess.
+    // No root at all (fresh HOME): project install must fail, while a user
+    // install must still land and skip the config write (CONTRACT-0.44 §3).
+    const homeNoRoot = join(tempRoot, 'home-no-root');
+    const dataNoRoot = join(homeNoRoot, '.vessel', 'data', 'plugins', 'marketplace');
+    await mkdir(homeNoRoot, { recursive: true });
     const procNoCwd = Bun.spawn([process.execPath, entry], {
       cwd: join(import.meta.dir, '..'),
       env: {
         ...process.env,
-        HOME: home,
-        USERPROFILE: home,
+        HOME: homeNoRoot,
+        USERPROFILE: homeNoRoot,
         VESSEL_PLUGIN_ID: 'marketplace',
         VESSEL_PLUGIN_PROTOCOL: '1',
-        VESSEL_PLUGIN_DATA_DIR: pluginDataDir,
+        VESSEL_PLUGIN_DATA_DIR: dataNoRoot,
         VESSEL_PLUGIN_CONFIG: '{}',
         VESSEL_PLUGIN_HOST_CWD: '',
       },
@@ -1237,7 +1298,7 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
           vessel_version: '0.33.0',
           install_scope: 'project',
         },
-        dataDir: join(home, '.vessel', 'data'),
+        dataDir: join(homeNoRoot, '.vessel', 'data'),
         events: ['plugin.changed'],
       });
       const noRootJobId = await startInstall(clientNoCwd, {
@@ -1252,7 +1313,30 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
       );
       check(
         'child: no-root project install writes nothing',
-        !(await exists(join(home, 'host-cwd', '.vessel', 'plugins', 'probe-plugin'))),
+        !(await exists(join(homeNoRoot, '.vessel', 'plugins', 'probe-plugin'))),
+      );
+
+      await clientNoCwd.request('plugin.activate', {
+        settings: {
+          registry_url: `${base}/index.json`,
+          vessel_version: '0.33.0',
+          install_scope: 'user',
+        },
+        dataDir: join(homeNoRoot, '.vessel', 'data'),
+        events: ['plugin.changed'],
+      });
+      const skipJob = await installAndWait(clientNoCwd, {
+        id: 'probe-plugin',
+        version: '1.0.0',
+      });
+      check('child: unknown root install succeeds', skipJob.status === 'done');
+      check(
+        'child: unknown root installs to the user dir',
+        await exists(join(homeNoRoot, '.vessel', 'plugins', 'probe-plugin', 'package.json')),
+      );
+      check(
+        'child: unknown root skips config.yaml',
+        !(await exists(join(homeNoRoot, '.vessel', 'config.yaml'))),
       );
     } finally {
       await clientNoCwd.close();
