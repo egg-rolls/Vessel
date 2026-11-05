@@ -9,13 +9,15 @@
  * @module vessel/plugin-config
  */
 
-import type {
-  GuardrailConfig,
-  HookConfig,
-  PluginConfig,
-  VesselConfig,
+import {
+  type GuardrailConfig,
+  getUserConfigPath,
+  type HookConfig,
+  type PluginConfig,
+  type VesselConfig,
 } from '../packages/config/src/index';
 import type { Plugin, PluginHost, PluginInitContext } from '../packages/core/src/index';
+import { readUserConfigRoot, writeUserConfigRoot } from './ui-settings';
 
 /** core 0.6.1 的 install 形状；旧签名只用第一个参数也能工作 */
 export type PluginInstallOptions = { config?: Record<string, unknown> };
@@ -53,6 +55,57 @@ export function withPluginConfig(
     ...(plugin.init !== undefined ? { init: (ctx: PluginInitContext) => plugin.init?.(ctx) } : {}),
     ...(plugin.dispose !== undefined ? { dispose: () => plugin.dispose?.() } : {}),
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** `vessel plugin enable|disable` 的持久化选项 */
+export interface SetPluginEnabledOptions {
+  /** 用户配置文件；缺省 `~/.vessel/config.yaml` */
+  configPath?: string;
+  /**
+   * `plugins:` 尚未出现时用于物化当前默认集（避免只写一条导致其它插件失去
+   * 默认加载）。通常传 `loader.getAvailablePlugins()`。
+   */
+  allNames?: readonly string[];
+}
+
+/**
+ * 持久化单个插件的启用状态：只改 `plugins[]` 里该 name 的 `enabled`，
+ * 保留其它键与配置根对象；`plugins:` 不存在时按 `allNames` 物化默认集。
+ */
+export async function setPluginEnabled(
+  name: string,
+  enabled: boolean,
+  options: SetPluginEnabledOptions = {},
+): Promise<void> {
+  if (name.trim() === '') throw new Error('plugin name must be non-empty');
+  const configPath = options.configPath ?? getUserConfigPath();
+  const root = await readUserConfigRoot(configPath);
+  const raw = root.plugins;
+  if (raw !== undefined && !Array.isArray(raw)) {
+    throw new Error('config.yaml plugins must be an array');
+  }
+
+  const entries: unknown[] =
+    raw === undefined
+      ? (options.allNames ?? []).map((entryName) => ({
+          name: entryName,
+          enabled: entryName === name ? enabled : true,
+        }))
+      : raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
+
+  const index = entries.findIndex((entry) => isRecord(entry) && entry.name === name);
+  if (index >= 0) {
+    entries[index] = { ...(entries[index] as Record<string, unknown>), enabled };
+  } else {
+    entries.push({ name, enabled });
+  }
+
+  root.plugins = entries;
+  await writeUserConfigRoot(configPath, root);
 }
 
 /** 把声明式 guardrails / hooks 条目映射为插件配置（按 name 去重合并） */

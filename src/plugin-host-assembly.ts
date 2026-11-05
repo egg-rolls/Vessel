@@ -28,6 +28,12 @@ export interface PluginHostAssemblyOptions {
   /** `<dataDir>`；plugin 私有目录为 `<dataDir>/plugins/<id>` */
   dataDir: string;
   logger?: Logger;
+  /**
+   * per-tenant settings 解析。缺省只用 `config.plugins[].config`（单 tenant）。
+   * gateway 工厂路径传入 tenantId → 该 tenant bundle 配置的映射；找不到 bundle
+   * 时调用方显式回退到默认 tenant，不静默混用。
+   */
+  settingsFor?: (id: string, tenantId: string) => Record<string, unknown>;
   /** 探针可覆盖子进程可执行文件 */
   execPath?: string;
   timeouts?: PluginHostManagerOptions['timeouts'];
@@ -129,9 +135,10 @@ export function createPluginHostManager(options: PluginHostAssemblyOptions): Plu
   return new PluginHostManager({
     descriptors,
     dataDir: options.dataDir,
-    // 懒激活（首次页面 / RPC 访问）时解析 settings；v1 只用 default tenant 的
-    // `plugins[].config`（tenantId 目前不参与分片，不静默混用其它 tenant 配置）。
-    settingsFor: (id, _tenantId) => pluginSettingsFor(options.config, id),
+    // 懒激活（首次页面 / RPC 访问）时解析 settings。gateway 工厂路径注入
+    // tenantId → 该 tenant 配置的映射；单 tenant / 本地路径缺省用启动配置。
+    settingsFor: (id, tenantId) =>
+      options.settingsFor?.(id, tenantId) ?? pluginSettingsFor(options.config, id),
     ...(logger !== undefined
       ? {
           logger: (level, message, meta) => {

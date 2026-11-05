@@ -90,6 +90,7 @@ import {
   removeAutoApproveRule,
 } from './permission-store';
 import { declarativePluginEntries } from './plugin-config';
+import { activateStartupPlugins, createPluginHostManager } from './plugin-host-assembly';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import {
@@ -1554,9 +1555,25 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ? createRunControl(agentControl.service, bundle.scheduler, tenantId)
       : undefined;
 
+  // 0.43：本地 REPL / local run 与 gateway 共用同一体验型 plugin 宿主
+  //（懒激活 + onStartup 预激活；关闭时显式 stopAll）。
+  const localPluginHostManager = createPluginHostManager({
+    loader: bundle.pluginLoader,
+    config,
+    dataDir,
+    logger,
+  });
+  await activateStartupPlugins(localPluginHostManager, {
+    loader: bundle.pluginLoader,
+    config,
+    tenantId,
+    logger,
+  });
+
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,
     session,
+    pluginHostManager: localPluginHostManager,
     // 0.15: local RPC runs also take the session write lock.
     runtime: bundle.runtime,
     context,
@@ -1770,6 +1787,18 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         events: bundle.events,
         logger,
         step: 'agent.dispose',
+        error,
+        tenantId,
+      });
+    }
+
+    try {
+      await localPluginHostManager.stopAll();
+    } catch (error) {
+      reportShutdownFailure({
+        events: bundle.events,
+        logger,
+        step: 'plugin.stopAll',
         error,
         tenantId,
       });

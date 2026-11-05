@@ -306,6 +306,15 @@ export class PluginLoader {
     this.cached = undefined;
   }
 
+  /**
+   * 重新扫描所有发现根并返回新描述符（不重启进程）。
+   * 先丢弃缓存，保证不会拿到旧结果；已加载的插件实例不受影响。
+   */
+  rescan(): PluginDescriptor[] {
+    this.refresh();
+    return this.list();
+  }
+
   /** 全部插件（含 provider 与工厂式），按名字排序；同名先出现者胜出 */
   list(): PluginDescriptor[] {
     this.cached ??= this.scan();

@@ -66,6 +66,8 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.pluginList': 'list repo/user/project/node_modules plugins',
   'help.cmd.pluginInstall': 'install a local plugin directory into ~/.vessel/plugins',
   'help.cmd.pluginRemove': 'remove a plugin from ~/.vessel/plugins',
+  'help.cmd.pluginEnable': 'enable a plugin in ~/.vessel/config.yaml',
+  'help.cmd.pluginDisable': 'disable a plugin in ~/.vessel/config.yaml',
   'help.cmd.migrate': 'migrate (dry-run by default)',
   'help.cmd.migrateApply': 'apply the migration',
   'help.cmd.tracePrune': 'prune trace (dry-run by default)',

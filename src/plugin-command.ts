@@ -1,5 +1,5 @@
 /**
- * `vessel plugin list|install <path>|remove <name>`（0.6.1 E9）。
+ * `vessel plugin list|install <path>|remove <name>|enable <name>|disable <name>`（0.6.1 E9）。
  *
  * 只操作本地目录：安装目标固定为用户插件目录
  * `VESSEL_PLUGINS_DIR` → `~/.vessel/plugins`。不做市场、不联网、不解析依赖。
@@ -11,9 +11,9 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { loadConfig, type PluginConfig } from '../packages/config/src/index';
+import { getUserConfigPath, loadConfig, type PluginConfig } from '../packages/config/src/index';
 import type { PluginCommandArgs } from './cli-args';
-import { declarativePluginEntries } from './plugin-config';
+import { declarativePluginEntries, setPluginEnabled } from './plugin-config';
 import { defaultPluginRoots, type PluginDescriptor, PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { ui } from './ui-style';
@@ -298,6 +298,31 @@ export async function runPluginCommand(
             ? 'Restart Vessel to load it (user plugins load by default when plugins: is absent).'
             : 'Restart Vessel after enabling it in plugins:.',
         ].join('\n'),
+        stderr: '',
+      };
+    } catch (error) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  if (command.kind === 'enable' || command.kind === 'disable') {
+    if (!PLUGIN_NAME_RE.test(command.name)) {
+      return { exitCode: 1, stdout: '', stderr: `Invalid plugin name: ${command.name}` };
+    }
+    const configPath = options.userConfigPath ?? getUserConfigPath();
+    try {
+      const allNames = makeLoader(userDir).getAvailablePlugins();
+      await setPluginEnabled(command.name, command.kind === 'enable', {
+        configPath,
+        ...(allNames.length > 0 ? { allNames } : {}),
+      });
+      return {
+        exitCode: 0,
+        stdout: `${command.kind === 'enable' ? 'Enabled' : 'Disabled'} "${command.name}" in ${configPath}.\nRestart Vessel to apply.`,
         stderr: '',
       };
     } catch (error) {

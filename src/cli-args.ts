@@ -113,7 +113,9 @@ export type TraceCommandArgs = {
 export type PluginCommandArgs =
   | { kind: 'list'; json: boolean }
   | { kind: 'install'; path: string; force: boolean }
-  | { kind: 'remove'; name: string; yes: boolean };
+  | { kind: 'remove'; name: string; yes: boolean }
+  | { kind: 'enable'; name: string }
+  | { kind: 'disable'; name: string };
 
 /** `doctor` 子命令（0.6.1；0.15 增加 --deep） */
 export interface DoctorCommandArgs {
@@ -1382,6 +1384,30 @@ function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
     if (args.help) return { ok: true, args };
     if (source === undefined) return { ok: false, error: 'Missing <path> for plugin install' };
     args.pluginCommand = { kind: 'install', path: source, force };
+    return { ok: true, args };
+  }
+
+  if (sub === 'enable' || sub === 'disable') {
+    let name: string | undefined;
+    for (const a of rest.slice(1)) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for plugin ${sub}: ${a}` };
+      }
+      if (name !== undefined) {
+        return { ok: false, error: `Unexpected extra argument for plugin ${sub}: ${a}` };
+      }
+      name = a;
+    }
+    if (args.help) return { ok: true, args };
+    if (name === undefined) return { ok: false, error: `Missing <name> for plugin ${sub}` };
+    if (!PLUGIN_NAME_RE.test(name)) {
+      return { ok: false, error: `Invalid plugin name: ${name}` };
+    }
+    args.pluginCommand = { kind: sub, name };
     return { ok: true, args };
   }
 

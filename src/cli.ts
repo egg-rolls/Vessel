@@ -106,7 +106,11 @@ import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { setToolPolicy } from './permission-store';
 import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
-import { activateStartupPlugins, createPluginHostManager } from './plugin-host-assembly';
+import {
+  activateStartupPlugins,
+  createPluginHostManager,
+  pluginSettingsFor,
+} from './plugin-host-assembly';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
 import { createRunControl } from './run-control';
@@ -243,6 +247,8 @@ function printHelp(): void {
     ['vessel plugin list', t('help.cmd.pluginList')],
     ['vessel plugin install <path> [--force]', t('help.cmd.pluginInstall')],
     ['vessel plugin remove <name>', t('help.cmd.pluginRemove')],
+    ['vessel plugin enable <name>', t('help.cmd.pluginEnable')],
+    ['vessel plugin disable <name>', t('help.cmd.pluginDisable')],
   ];
   const migrate: Array<[string, string]> = [
     ['vessel migrate --from sqlite --to file-v2', t('help.cmd.migrate')],
@@ -873,6 +879,12 @@ async function runWithConfig(result: BootstrapResult) {
         config: liveConfig,
         dataDir,
         logger,
+        // 多租户：tenantId → 该 tenant bundle 的 `plugins[].config`；
+        // 未配置的 tenant 显式回退默认 tenant 配置（不静默混用）。
+        settingsFor: (id, tenantId) => {
+          const bundle = tenantFactory?.bundleFor(tenantId);
+          return pluginSettingsFor(bundle?.config ?? liveConfig, id);
+        },
       });
       const activated = await activateStartupPlugins(pluginHostManager, {
         loader: result.bundle.pluginLoader,

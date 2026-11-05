@@ -246,6 +246,8 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       { name: 'list', flags: ['--json'] },
       { name: 'install', flags: ['--force'] },
       { name: 'remove', flags: ['--yes', '-y'] },
+      { name: 'enable' },
+      { name: 'disable' },
     ],
   },
   { token: 'doctor', registryName: 'doctor', flags: ['--json', '--deep'] },

@@ -111,7 +111,7 @@ function messageOf(error: unknown): string {
 }
 
 /** 读取 YAML 根对象；不存在/空文档返回 {}；根不是对象时抛错 */
-async function readRoot(configPath: string): Promise<Record<string, unknown>> {
+export async function readUserConfigRoot(configPath: string): Promise<Record<string, unknown>> {
   let content: string;
   try {
     content = await readFile(configPath, 'utf-8');
@@ -135,7 +135,10 @@ async function readRoot(configPath: string): Promise<Record<string, unknown>> {
 }
 
 /** 原子写入（同目录临时文件 + rename）；保留文件其它内容 */
-async function writeRoot(configPath: string, root: Record<string, unknown>): Promise<void> {
+export async function writeUserConfigRoot(
+  configPath: string,
+  root: Record<string, unknown>,
+): Promise<void> {
   await mkdir(path.dirname(configPath), { recursive: true });
   const body = stringifyYaml(root, { lineWidth: 0 });
   const tmp = `${configPath}.tmp-${process.pid}-${Date.now()}`;
@@ -239,13 +242,13 @@ export async function setUserConfigValue(
   }
 
   const configPath = options.configPath ?? getUserConfigPath();
-  const root = await readRoot(configPath);
+  const root = await readUserConfigRoot(configPath);
   const existing = root[target.block];
   if (existing !== undefined && existing !== null && !isRecord(existing)) {
     throw new Error(`ui_settings_invalid_config: ${target.block} must be a YAML object`);
   }
   root[target.block] = { ...(existing ?? {}), [target.yamlKey]: value };
-  await writeRoot(configPath, root);
+  await writeUserConfigRoot(configPath, root);
 }
 
 /**

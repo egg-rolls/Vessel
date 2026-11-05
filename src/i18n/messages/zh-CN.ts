@@ -62,6 +62,8 @@ export const zhCN = {
   'help.cmd.pluginList': '列出仓库/用户/项目/node_modules 插件',
   'help.cmd.pluginInstall': '安装本地插件目录到 ~/.vessel/plugins',
   'help.cmd.pluginRemove': '从 ~/.vessel/plugins 移除插件',
+  'help.cmd.pluginEnable': '在 ~/.vessel/config.yaml 启用插件',
+  'help.cmd.pluginDisable': '在 ~/.vessel/config.yaml 停用插件',
   'help.cmd.migrate': '迁移（默认 dry-run）',
   'help.cmd.migrateApply': '执行迁移',
   'help.cmd.tracePrune': '清理 trace（默认 dry-run）',
