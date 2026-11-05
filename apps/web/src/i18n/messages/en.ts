@@ -253,7 +253,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.subagents.context': 'Context {used}/{max}',
   // 0.43: plugin pages / panels (CONTRACT-0.43 §7)
   'plugins.page.loading': 'Loading plugin page…',
-  'plugins.page.description': 'Provided by plugin {plugin}.',
   'plugins.page.notConnected': 'Not connected',
   'plugins.page.notConnectedReason': 'Connect to the gateway to load plugin pages.',
   'plugins.page.notFound': 'Plugin page unavailable',

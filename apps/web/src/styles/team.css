@@ -36,6 +36,7 @@
 /* ── 群聊：1023 抽屉布局依赖 ──────────────────────────── */
 
 .team-chat {
+  height: 100%;
   min-width: 0;
   min-height: 0;
   display: flex;
