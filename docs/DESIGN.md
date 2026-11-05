@@ -6,11 +6,15 @@
 
 ## 1. 页面骨架
 
-所有顶层页面固定为三段：**title / subtitle / content**。
+所有顶层页面固定为三段：**title / subtitle / content**，由
+`PageScaffold`（`packages/plugin-ui/src/Page.tsx`）实现。
+**宿主页面与插件页面共用这一个组件**，不在各自的代码里复制第二套。
 
 - title：页面唯一 `h1`，`font-serif text-title font-semibold leading-tight tracking-wide
-  text-ink`（Web 的 `PageHeader` 与插件页的 `PageScaffold` 逐字一致）。
+  text-ink`。
 - subtitle：一句话用途说明，`max-w-prose text-md leading-normal text-muted`。
+- title → subtitle 间距：`PageScaffold` 与其迁移前的 `PluginPageHeader`、Web
+  `PageHeader` 统一为 `gap-2.5`（10px）；使用既有间距刻度，不新增 token。
 - content：`mt-5 flex flex-col gap-5`。
 
 **标题行只放标题与说明。** 以下内容一律属于 content 区，不得放进 title / subtitle：
@@ -23,8 +27,28 @@
 
 版本、计数、状态这类元数据放在 content 的 stat 行、Section header 或表格工具栏里。
 
-路径：`packages/plugin-ui/src/Page.tsx`（`PageScaffold`）、
-`apps/web/src/components/PageHeader.tsx`、`apps/web/src/domains/settings/PageFrame.tsx`。
+路径：
+
+- `PageScaffold`：`packages/plugin-ui/src/Page.tsx`，从包入口导出，宿主直接消费。
+- Web 的 `PageFrame`（`apps/web/src/domains/settings/PageFrame.tsx`）只是
+  **路由级滚动容器 + `PageScaffold`**，不自己写标题。
+- `PageHeader`（`apps/web/src/components/PageHeader.tsx`，内部经
+  `components/ui/EntityHeader.tsx` 渲染）与 `EntityHeader` 只保留给实体详情页的
+  身份 / 状态场景；标题行同样不得放 `actions`，详情页动作下移到内容区第一行，
+  不新增第二套 header。
+
+### 1.1 适用范围与迁移
+
+- 宿主页面：`hub / gateway / pluginHost / nodes / agents / runs / tools / mcp /
+  channels / observe / plugins（空态）/ tenants / capabilities / visual / settings`
+  统一用 `PageScaffold(title, subtitle, children)`；有表格的，控件用
+  `TableToolbar` 放在表格上方。
+- **排除**：`apps/web/src/domains/{chat,teams,team}/**` 不在骨架迁移范围内。
+- 实体详情页：保留 `EntityHeader` 的身份 / 状态语义，但把 `actions` 从标题行
+  下移到内容区第一行。
+- 插件页面：`plugins/observability/usage/**`、`plugins/marketplace/marketplace/**`
+  改用 `PageScaffold` + `TableToolbar`；迁移完删除 `PluginPageHeader`，以及不再
+  被引用的 `PluginPage`。插件同样不得在 header 放 actions。
 
 ## 2. 表格控件位置
 
@@ -72,9 +96,27 @@
 
 路径：`scripts/check-i18n.ts`、`plugins/**/web-src/i18n.ts`。
 
-## 6. 指针
+## 6. Design Lab
+
+设计系统的活样例与验收页，同时是 `PageScaffold` 的参考实现。
+
+- 路由：`#/designLab`，导航挂在「设置」组；label en `Design Lab` /
+  zh `设计实验室`。
+- 位置：`apps/web/src/domains/design/**`。
+- **Tokens**：颜色、字号、间距、圆角、阴影、字体。颜色与数值通过
+  `getComputedStyle(document.documentElement).getPropertyValue('--...')`
+  运行时读取 CSS 变量，**不在页面里硬编码 token 值**。
+- **Components**：`PageScaffold`（含 title / subtitle 间距）、`TableToolbar`、
+  `DataTable`（1px 行间隙 + 圆角样例）、Button 变体、Badge tone、Section、
+  Field / Input / Select、Stat、KeyValueList、SegmentedTabs、States。
+- 每个示例带名称与说明，en / zh 双语文案。
+- 静态页面：不依赖 gateway token；不新增 token / RPC / 配置键。
+- 页面自身必须用 `PageScaffold`。
+
+## 7. 指针
 
 - 冻结契约：`CONTRACT-0.46-ui-shell`（UI shell / table / i18n）。
 - 组件：`packages/plugin-ui/src/Page.tsx`、`TableToolbar.tsx`、`DataTable.tsx`。
+- Design Lab：`apps/web/src/domains/design/**`、路由 `#/designLab`。
 - Web 组件与 token：`docs/WEB-UI.md`。
 - 插件文案与宿主参数：`docs/agents/plugins.md`、`docs/architecture/plugins.md`。
