@@ -1,3 +1,4 @@
+import { TableToolbar } from '@vessel-agent/plugin-ui';
 import { useEffect, useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { usePaletteEntities } from '../../components/PaletteEntities';
@@ -147,7 +148,7 @@ export function TenantsView() {
       {error && (
         <StaleNotice message={t('common.staleData', { detail: error })} onRetry={reloadTenants} />
       )}
-      <div className="net-toolbar mt-3.5">
+      <TableToolbar label={t('settings.tenants.searchLabel')}>
         <SearchInput
           value={query}
           onChange={setQuery}
@@ -169,7 +170,7 @@ export function TenantsView() {
             {t('common.refresh')}
           </Button>
         </div>
-      </div>
+      </TableToolbar>
 
       {tenants.length === 0 ? (
         <EmptyState title={t('settings.tenants.empty')} />

@@ -1,3 +1,4 @@
+import { TableToolbar } from '@vessel-agent/plugin-ui';
 import { useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
@@ -108,7 +109,7 @@ export function CapabilitiesView() {
             v{manifest.version} · schema {manifest.config_schema_version}
           </span>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <TableToolbar label={t('capabilities.searchLabel')}>
           <SearchInput
             value={query}
             onChange={setQuery}
@@ -123,7 +124,7 @@ export function CapabilitiesView() {
                 ? result?.tools.length
                 : result?.plugins.length}
           </Badge>
-        </div>
+        </TableToolbar>
       </div>
 
       {tab === 'methods' &&

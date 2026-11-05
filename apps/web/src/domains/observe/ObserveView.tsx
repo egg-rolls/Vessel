@@ -5,11 +5,10 @@
  * tab 切换时的 scrollTop 重置保留在本容器。
  */
 
+import { PageScaffold, TableToolbar } from '@vessel-agent/plugin-ui';
 import { useRef } from 'react';
 import type { Route } from '../../app/router';
-import { PageHeader } from '../../components/PageHeader';
 import { SegmentedTabs } from '../../components/Tabs';
-import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import { AttentionPanel } from './AttentionPanel';
 import { DiagnosticsView } from './DiagnosticsView';
@@ -36,7 +35,6 @@ export function ObserveView({
   navigate: (route: Route) => void;
 }) {
   useLocale();
-  const { tenantId } = useConnection();
   // 本页是 Observe 唯一的滚动容器（`main` 是 `overflow-hidden`，路由变化的
   // `window.scrollTo` 重置不到它）。切 tab 时重置 scrollTop，避免沿用上一页的位置。
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -47,31 +45,30 @@ export function ObserveView({
   return (
     <div
       ref={scrollRef}
-      className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]"
+      className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain"
     >
-      <PageHeader
-        title={t('observe.title')}
-        description={t('observe.description')}
-        tenantId={tenantId}
-      />
-      <SegmentedTabs
-        label={t('observe.tabsLabel')}
-        tabs={observeTabs()}
-        value={route.tab}
-        onChange={changeTab}
-        panelId="observe-panel"
-      />
-      <div
-        className="mt-5 flex flex-col gap-4"
-        id="observe-panel"
-        role="tabpanel"
-        aria-label={t('observe.panelLabel')}
-      >
-        {route.tab === 'metrics' && <MetricsPanel />}
-        {route.tab === 'evals' && <EvalsPanel />}
-        {route.tab === 'diagnostics' && <DiagnosticsView />}
-        {route.tab === 'attention' && <AttentionPanel navigate={navigate} />}
-      </div>
+      <PageScaffold title={t('observe.title')} subtitle={t('observe.description')}>
+        <TableToolbar label={t('observe.tabsLabel')}>
+          <SegmentedTabs
+            label={t('observe.tabsLabel')}
+            tabs={observeTabs()}
+            value={route.tab}
+            onChange={changeTab}
+            panelId="observe-panel"
+          />
+        </TableToolbar>
+        <div
+          className="flex flex-col gap-4"
+          id="observe-panel"
+          role="tabpanel"
+          aria-label={t('observe.panelLabel')}
+        >
+          {route.tab === 'metrics' && <MetricsPanel />}
+          {route.tab === 'evals' && <EvalsPanel />}
+          {route.tab === 'diagnostics' && <DiagnosticsView />}
+          {route.tab === 'attention' && <AttentionPanel navigate={navigate} />}
+        </div>
+      </PageScaffold>
     </div>
   );
 }

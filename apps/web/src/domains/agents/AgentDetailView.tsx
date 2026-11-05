@@ -5,6 +5,7 @@
  * 无 Team 归属时退回键值信息。数据复用 Agents 列表已加载的 roster。
  * Close 走警告确认，并严格处理 `{results:[{ok:false}]}` 的失败。
  */
+import { TableToolbar } from '@vessel-agent/plugin-ui';
 import { useState } from 'react';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { StatusChip } from '../../components/StatusChip';
@@ -93,25 +94,23 @@ export function AgentDetailView({
             <Badge>{t(roleLabelKey(roleOf(member)))}</Badge>
           </>
         }
-        actions={
-          <>
-            <Button onClick={onEdit} disabled={alreadyLeft}>
-              {t('common.edit')}
-            </Button>
-            <Button
-              variant="dangerGhost"
-              disabled={alreadyLeft}
-              onClick={() => {
-                setCloseError(null);
-                setCloseOpen(true);
-              }}
-            >
-              {t('agents.close')}
-            </Button>
-            <Button onClick={onBack}>{t('agents.back')}</Button>
-          </>
-        }
       />
+      <TableToolbar label={t('agents.detailActions')} className="mt-3">
+        <Button onClick={onEdit} disabled={alreadyLeft}>
+          {t('common.edit')}
+        </Button>
+        <Button
+          variant="dangerGhost"
+          disabled={alreadyLeft}
+          onClick={() => {
+            setCloseError(null);
+            setCloseOpen(true);
+          }}
+        >
+          {t('agents.close')}
+        </Button>
+        <Button onClick={onBack}>{t('agents.back')}</Button>
+      </TableToolbar>
       <div className="mt-5 flex flex-col gap-4">
         {agent.team ? (
           <MemberDetail

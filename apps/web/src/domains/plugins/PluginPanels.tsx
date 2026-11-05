@@ -47,7 +47,7 @@ export function PluginPanelList({
               title={label}
               methods={methodsByPlugin.get(item.pluginId) ?? EMPTY_METHODS}
               context={context}
-              className={dense ? 'mt-1 h-[140px]' : 'mt-2 h-[320px]'}
+              className={dense ? 'mt-1 h-35' : 'mt-2 h-80'}
             />
           </section>
         );

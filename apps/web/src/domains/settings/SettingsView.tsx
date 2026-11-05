@@ -6,7 +6,7 @@ import { PageFrame } from './PageFrame';
 export function SettingsView() {
   useLocale();
   return (
-    <PageFrame title={t('settings.title')}>
+    <PageFrame title={t('settings.title')} subtitle={t('settings.subtitle')}>
       <ConfigView />
     </PageFrame>
   );

@@ -1,3 +1,4 @@
+import { TableToolbar } from '@vessel-agent/plugin-ui';
 import { useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { JsonView } from '../../components/JsonView';
@@ -108,7 +109,7 @@ export function ToolsPanel() {
       {error && tools.length > 0 && (
         <StaleNotice message={t('common.staleData', { detail: error })} onRetry={resource.reload} />
       )}
-      <div className="flex flex-wrap items-center gap-2">
+      <TableToolbar label={t('integrations.tools.searchLabel')}>
         <SearchInput
           value={query}
           onChange={setQuery}
@@ -129,7 +130,7 @@ export function ToolsPanel() {
         <span className="ml-1.5 inline-block rounded-full bg-sunken px-1.5 py-0.5 font-mono text-xs text-muted">
           {filtered.length}/{tools.length}
         </span>
-      </div>
+      </TableToolbar>
       {tools.length === 0 ? (
         <EmptyState title={t('integrations.tools.empty')} />
       ) : filtered.length === 0 ? (

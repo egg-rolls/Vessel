@@ -5,8 +5,8 @@
  * - 节点列表、配对 / join 命令、Web 连接与 token 管理归 Nodes（DECISION-041）；
  * - hub 没有独立健康 RPC，也不代理正文。
  */
+import { PageScaffold } from '@vessel-agent/plugin-ui';
 import { useRefreshSignal } from '../../app/refresh';
-import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { useConnection } from '../../gateway/ConnectionProvider';
@@ -24,7 +24,7 @@ const STATE_KEYS: Record<HubState, string> = {
 
 export function HubView() {
   useLocale();
-  const { hasToken, tenantId } = useConnection();
+  const { hasToken } = useConnection();
 
   const { config, reloadConfig } = useConfigStoreApi();
   useRefreshSignal(reloadConfig);
@@ -37,9 +37,8 @@ export function HubView() {
   const version = configData?.version;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader title={t('hub.title')} tenantId={tenantId} />
-      <div className="mt-5 flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+      <PageScaffold title={t('hub.title')} subtitle={t('hub.subtitle')}>
         {!hasToken ? (
           <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
         ) : configError ? (
@@ -87,7 +86,7 @@ export function HubView() {
             </section>
           </div>
         )}
-      </div>
+      </PageScaffold>
     </div>
   );
 }

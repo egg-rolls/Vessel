@@ -23,6 +23,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.domain.observe': 'Observe',
   'nav.domain.plugins': 'Plugins',
   'nav.domain.settings': 'Settings',
+  'nav.domain.designLab': 'Design Lab',
   'nav.group.chat': 'Chat',
   'nav.group.runs': 'RUNS',
   'nav.group.plugins': 'PLUGINS',
@@ -119,6 +120,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.tenants': 'Tenants',
   'breadcrumb.capabilities': 'Capabilities',
   'breadcrumb.visual': 'Visuals',
+  'breadcrumb.designLab': 'Design Lab',
 
   // Settings
   'settings.title': 'Settings',
@@ -1514,4 +1516,106 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.error.durable_disabled': 'Durable runs are not enabled.',
   'gateway.error.mcp_disabled': 'MCP is not enabled.',
   'gateway.error.evals_disabled': 'Evals are not enabled.',
+
+  // Design Lab (0.46 §10.5): static living reference for tokens / components.
+  'designLab.title': 'Design Lab',
+  'designLab.subtitle':
+    'Living samples of host tokens and standard components; all values are read at runtime.',
+  'designLab.tokens.title': 'Tokens',
+  'designLab.tokens.subtitle':
+    'Colors, type, spacing, radii, shadows and fonts come straight from the active theme.',
+  'designLab.tokens.runtimeNote':
+    'Values are read from getComputedStyle(document.documentElement) under the active theme and refresh when you switch light/dark.',
+  'designLab.tokens.colors': 'Colors',
+  'designLab.tokens.typography': 'Type scale',
+  'designLab.tokens.spacing': 'Spacing',
+  'designLab.tokens.radii': 'Radii',
+  'designLab.tokens.shadows': 'Shadows',
+  'designLab.tokens.fonts': 'Fonts',
+  'designLab.components.title': 'Components',
+  'designLab.components.subtitle':
+    'Standard page skeleton and host components; every sample maps directly to a page.',
+  'designLab.demo.typeSample': 'Type Aa 123',
+  'designLab.sample.pageScaffold.name': 'PageScaffold',
+  'designLab.sample.pageScaffold.desc':
+    'Title, subtitle and content; the page header holds only those two lines.',
+  'designLab.sample.toolbar.name': 'TableToolbar',
+  'designLab.sample.toolbar.desc':
+    'Control strip directly above a table or Section: filters, search and batch actions.',
+  'designLab.sample.dataTable.name': 'DataTable',
+  'designLab.sample.dataTable.desc':
+    'A 1px gap between rows lets the page background through; the table keeps a small outer radius.',
+  'designLab.sample.buttons.name': 'Button',
+  'designLab.sample.buttons.desc':
+    'Every variant: plain, primary, danger, dangerGhost, link and chip.',
+  'designLab.sample.badges.name': 'Badge',
+  'designLab.sample.badges.desc': 'Every tone: neutral, accent, info, warn, danger and success.',
+  'designLab.sample.section.name': 'Section',
+  'designLab.sample.section.desc': 'Raised panel with a title, description and optional actions.',
+  'designLab.sample.form.name': 'Field / Input / Select',
+  'designLab.sample.form.desc':
+    'Field labels, input wells and selects; focus uses the focus ring, never a border.',
+  'designLab.sample.stat.name': 'Stat',
+  'designLab.sample.stat.desc': 'Metric block: a mono value with a muted label.',
+  'designLab.sample.keyValue.name': 'KeyValueList',
+  'designLab.sample.keyValue.desc': 'Two-column definition list with wrapping values.',
+  'designLab.sample.tabs.name': 'SegmentedTabs',
+  'designLab.sample.tabs.desc': 'In-domain tabs with arrow-key navigation.',
+  'designLab.sample.states.name': 'States',
+  'designLab.sample.states.desc': 'Unified empty, loading and error states.',
+  'designLab.demo.pageScaffold.title': 'Sample page',
+  'designLab.demo.pageScaffold.subtitle': 'The header holds only a title and subtitle.',
+  'designLab.demo.pageScaffold.body':
+    'Content starts below the header; PageScaffold owns the spacing.',
+  'designLab.demo.toolbar.label': 'Sample table toolbar',
+  'designLab.demo.toolbar.placeholder': 'Filter rows',
+  'designLab.demo.toolbar.refresh': 'Refresh',
+  'designLab.demo.table.name': 'Name',
+  'designLab.demo.table.status': 'Status',
+  'designLab.demo.table.owner': 'Owner',
+  'designLab.demo.section.title': 'Section title',
+  'designLab.demo.section.description':
+    'Description: one surface per region, never a card inside a card.',
+  'designLab.demo.section.body':
+    'Spacing groups content under the header; there are no divider lines.',
+  'designLab.demo.form.name': 'Name',
+  'designLab.demo.form.namePlaceholder': 'e.g. nightly-report',
+  'designLab.demo.form.nameHint': 'The control well uses --surface-sunken.',
+  'designLab.demo.form.mode': 'Mode',
+  'designLab.demo.form.fast': 'Fast',
+  'designLab.demo.form.thorough': 'Thorough',
+  'designLab.demo.stat.runs': 'Active runs',
+  'designLab.demo.stat.runsHint': 'Last 5 minutes',
+  'designLab.demo.stat.agents': 'Online agents',
+  'designLab.demo.stat.agentsHint': 'Current node',
+  'designLab.demo.keyValue.gateway': 'Gateway',
+  'designLab.demo.keyValue.tenant': 'Tenant',
+  'designLab.demo.keyValue.protocol': 'Protocol',
+  'designLab.demo.tabs.label': 'Sample tabs',
+  'designLab.demo.tabs.overview': 'Overview',
+  'designLab.demo.tabs.details': 'Details',
+  'designLab.demo.tabs.history': 'History',
+  'designLab.demo.states.emptyTitle': 'No runs yet',
+  'designLab.demo.states.emptyDesc': 'Start a conversation and runs will appear here.',
+  'designLab.demo.states.loading': 'Loading samples…',
+  'designLab.demo.states.error': 'Request failed; check the gateway connection.',
+
+  // 0.46 top-level page subtitles (the header holds only title and subtitle)
+  'hub.subtitle': 'Hub identity, version, and how this node participates in a hub.',
+  'gateway.subtitle':
+    'The gateway this browser is connected to: endpoint, node identity, version, and uptime.',
+  'pluginHost.subtitle':
+    'Marketplace runtime status and the registry this host loads plugins from.',
+  'nodes.subtitle': 'Nodes this gateway can reach, with health and workload counts.',
+  'nodes.detailActions': 'Node actions',
+  'agents.subtitle': 'Agents across connected nodes, with their team, state, and presence.',
+  'agents.edit.subtitle': "Change this agent's name, model, and system prompt.",
+  'agents.detailActions': 'Agent actions',
+  'runs.subtitle': 'Live and recoverable runs from every connected node.',
+  'integrations.tools.subtitle': 'Tools the model can call, with their approval policy.',
+  'integrations.mcp.subtitle': 'MCP servers this gateway connects to, and their tool availability.',
+  'integrations.channels.subtitle': 'External channel connectivity and message delivery status.',
+  'tenants.subtitle': 'Tenants on this gateway, with status, quota, and usage.',
+  'visual.subtitle': 'Theme, language, motion, and display preferences for this browser.',
+  'settings.subtitle': 'The resolved configuration and where each value comes from.',
 };

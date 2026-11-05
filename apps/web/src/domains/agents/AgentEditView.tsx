@@ -4,11 +4,10 @@
  * name 立即生效；model / system_prompt 从下一个 Body 生效。Web 没有读取当前
  * model / system prompt 的稳定字段，因此这两项留空表示不修改，不伪造现值。
  */
+import { PageScaffold, TableToolbar } from '@vessel-agent/plugin-ui';
 import { type FormEvent, useState } from 'react';
-import { PageHeader } from '../../components/PageHeader';
 import { useToast } from '../../components/ToastProvider';
 import { Button, Field, Input, Section, Textarea } from '../../components/ui';
-import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { RosterAgent } from '../../gateway/team-roster';
@@ -31,7 +30,6 @@ export function AgentEditView({
 }) {
   useLocale();
   const toast = useToast();
-  const { tenantId } = useConnection();
   const { teamControl } = useNodes();
   const nodeNames = useNodeNames();
   const member = agent.member;
@@ -81,13 +79,11 @@ export function AgentEditView({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader
-        title={t('agents.edit.title')}
-        tenantId={tenantId}
-        actions={<Button onClick={onBack}>{t('agents.back')}</Button>}
-      />
-      <div className="mt-5 flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+      <PageScaffold title={t('agents.edit.title')} subtitle={t('agents.edit.subtitle')}>
+        <TableToolbar label={t('agents.detailActions')}>
+          <Button onClick={onBack}>{t('agents.back')}</Button>
+        </TableToolbar>
         <Section>
           <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
             {nodeNames.get(nodeKeyOf(node)) ?? '—'}
@@ -154,7 +150,7 @@ export function AgentEditView({
             </div>
           </form>
         </Section>
-      </div>
+      </PageScaffold>
     </div>
   );
 }

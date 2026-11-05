@@ -1,3 +1,4 @@
+import { TableToolbar } from '@vessel-agent/plugin-ui';
 import { useCallback, useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { CopyButton } from '../../components/CopyButton';
@@ -124,7 +125,7 @@ export function ConfigView() {
           </Badge>
         }
       >
-        <div className="flex flex-wrap items-center gap-2">
+        <TableToolbar label={t('config.searchLabel')}>
           <SearchInput
             value={query}
             onChange={setQuery}
@@ -132,7 +133,7 @@ export function ConfigView() {
             ariaLabel={t('config.searchLabel')}
             className="grow basis-60 max-w-search"
           />
-        </div>
+        </TableToolbar>
         {entries.length === 0 ? (
           <p className="mt-1.5 text-md text-muted">{t('config.empty')}</p>
         ) : filteredEntries.length === 0 ? (

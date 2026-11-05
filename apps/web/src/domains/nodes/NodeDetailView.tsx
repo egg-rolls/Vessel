@@ -4,12 +4,12 @@
  * node_id 只在 Advanced details 出现一次；标题用人类可读展示名。
  * Team CRUD 已移到 Teams 域，本页不再写入。
  */
+import { PageScaffold, TableToolbar } from '@vessel-agent/plugin-ui';
 import { useEffect } from 'react';
 import type { Route } from '../../app/router';
-import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Button, KeyValueList, Section } from '../../components/ui';
+import { Button, EntityHeader, KeyValueList, Section } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
@@ -27,7 +27,7 @@ export function NodeDetailView({
   navigate: (route: Route) => void;
 }) {
   useLocale();
-  const { tenantId, hello } = useConnection();
+  const { hello } = useConnection();
   const { nodes, fetchHealth } = useNodes();
   const node = nodes.find((item) => nodeKeyOf(item) === nodeKey);
   const health = useNodeStore((state) => state.health);
@@ -44,9 +44,8 @@ export function NodeDetailView({
 
   if (!node) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-        <PageHeader title={t('nodes.title')} tenantId={tenantId} />
-        <div className="mt-5 flex flex-col gap-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+        <PageScaffold title={t('nodes.title')}>
           <NotEnabledState
             title={t('nodes.notFound')}
             reason={t('nodes.notFoundHint')}
@@ -56,7 +55,7 @@ export function NodeDetailView({
               </Button>
             }
           />
-        </div>
+        </PageScaffold>
       </div>
     );
   }
@@ -86,34 +85,28 @@ export function NodeDetailView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader
+      <EntityHeader
         title={displayName}
-        tenantId={tenantId}
-        actions={
-          <>
-            <Button
-              onClick={() => {
-                window.location.hash = teamsForNodeHash(nodeKey);
-              }}
-            >
-              {t('nodes.viewTeams')}
-            </Button>
-            <Button onClick={() => navigate({ domain: 'agents', nodeKey })}>
-              {t('nodes.viewAgents')}
-            </Button>
-            <Button onClick={() => navigate({ domain: 'nodes' })}>{t('nodes.back')}</Button>
-          </>
-        }
+        current={node.current}
+        status={<StatusChip status={status} label={statusLabel} />}
       />
+      <TableToolbar label={t('nodes.detailActions')} className="mt-3">
+        <Button
+          onClick={() => {
+            window.location.hash = teamsForNodeHash(nodeKey);
+          }}
+        >
+          {t('nodes.viewTeams')}
+        </Button>
+        <Button onClick={() => navigate({ domain: 'agents', nodeKey })}>
+          {t('nodes.viewAgents')}
+        </Button>
+        <Button onClick={() => navigate({ domain: 'nodes' })}>{t('nodes.back')}</Button>
+      </TableToolbar>
       <div className="mt-5 flex flex-col gap-4">
         <Section title={t('nodes.section.health')}>
           <KeyValueList
             items={[
-              {
-                key: 'status',
-                label: t('nodes.field.status'),
-                value: <StatusChip status={status} label={statusLabel} />,
-              },
               {
                 key: 'dataPlane',
                 label: t('nodes.section.dataPlane'),

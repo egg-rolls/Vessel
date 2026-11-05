@@ -5,8 +5,8 @@
  * 时显示空态，不猜测目录。
  */
 
+import { PageScaffold } from '@vessel-agent/plugin-ui';
 import type { Route } from '../../app/router';
-import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
@@ -19,7 +19,7 @@ const EMPTY_METHODS: ReadonlySet<string> = new Set();
 
 export function PluginPageView({ route }: { route: PluginsRoute }) {
   useLocale();
-  const { hasToken, tenantId } = useConnection();
+  const { hasToken } = useConnection();
   const { plugins, pages, methodsByPlugin, state, reload } = usePluginContributions();
 
   const pluginId = route.pluginId ?? '';
@@ -39,12 +39,7 @@ export function PluginPageView({ route }: { route: PluginsRoute }) {
       );
     }
     if (pluginId === '') {
-      return (
-        <EmptyState
-          title={t('plugins.page.notFound')}
-          description={t('plugins.page.notFoundReason')}
-        />
-      );
+      return <EmptyState title={t('plugins.page.notFound')} />;
     }
     if (state.status === 'loading' && plugins.length === 0) {
       return <LoadingState label={t('plugins.page.loading')} />;
@@ -53,12 +48,7 @@ export function PluginPageView({ route }: { route: PluginsRoute }) {
       return <ErrorState message={state.error} onRetry={reload} />;
     }
     if (plugin === undefined || page === undefined) {
-      return (
-        <EmptyState
-          title={t('plugins.page.notFound')}
-          description={t('plugins.page.notFoundReason')}
-        />
-      );
+      return <EmptyState title={t('plugins.page.notFound')} />;
     }
     return (
       <PluginFrame
@@ -87,10 +77,18 @@ export function PluginPageView({ route }: { route: PluginsRoute }) {
     );
   }
 
+  // 空态才解释「为什么没有页面」；加载 / 错误态由 body 自己说明。
+  const loadingOrError =
+    (state.status === 'loading' || state.status === 'error') && plugins.length === 0;
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader title={page?.title ?? pluginId} tenantId={tenantId} />
-      {body}
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+      <PageScaffold
+        title={page?.title ?? t('nav.domain.plugins')}
+        subtitle={hasToken && !loadingOrError ? t('plugins.page.notFoundReason') : undefined}
+      >
+        {body}
+      </PageScaffold>
     </div>
   );
 }

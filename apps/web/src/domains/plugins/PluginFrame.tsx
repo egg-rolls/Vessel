@@ -168,7 +168,7 @@ export function PluginFrame({
   }
 
   return (
-    <div className={cn('relative min-h-0', className ?? 'h-[360px]')}>
+    <div className={cn('relative min-h-0', className ?? 'h-90')}>
       {!loaded && failed === null && <LoadingState label={t('plugins.frame.loading')} rows={3} />}
       {failed !== null && <ErrorState message={failed} onRetry={retry} />}
       <iframe

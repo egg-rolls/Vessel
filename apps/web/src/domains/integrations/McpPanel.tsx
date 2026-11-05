@@ -1,3 +1,4 @@
+import { TableToolbar } from '@vessel-agent/plugin-ui';
 import { useCallback, useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { usePaletteEntities } from '../../components/PaletteEntities';
@@ -146,7 +147,7 @@ export function McpPanel() {
           onRetry={resource.reload}
         />
       )}
-      <div className="flex flex-wrap items-center gap-2">
+      <TableToolbar label={t('nav.domain.mcp')}>
         <Badge>
           {t('integrations.mcp.counts', { total: servers.length, failed: failed.length })}
         </Badge>
@@ -163,7 +164,7 @@ export function McpPanel() {
         <Button size="small" onClick={resource.reload}>
           {t('common.refresh')}
         </Button>
-      </div>
+      </TableToolbar>
 
       {error && servers.length === 0 ? (
         // 同 ChannelsPanel：`mcp_disabled` 是「没配 mcp_servers」的配置状态，不是故障。

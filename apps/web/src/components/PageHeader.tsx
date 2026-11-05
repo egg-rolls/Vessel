@@ -13,6 +13,9 @@ import { EntityHeader } from './ui';
  *
  * **不显示当前租户**：`AppBar` 的右侧已经在全局显示它（`nav.tenant`），
  * 每个页面再挂一枚 chip 是重复信息。
+ *
+ * 0.46：顶层页统一迁移到 `PageScaffold`；本组件只保留给 teams 的既有调用点
+ * （`TeamEditView` 等）。非 teams 的页面不得再新增调用。
  */
 export function PageHeader({
   title,
@@ -22,14 +25,18 @@ export function PageHeader({
   title: string;
   description?: ReactNode;
   /**
-   * 已不渲染（见上方说明）。保留在签名里是为了不让 16 个调用方跟着改；
-   * 删它要级联改 11 个文件的 props，收益不抵 churn。
+   * 已不渲染（见上方说明）。保留在签名里是为了不让 teams 的调用方跟着改；
+   * 删它要级联改调用点的 props，收益不抵 churn。
    */
   tenantId?: string | null;
+  /**
+   * @deprecated 0.46：标题行只放标题与说明。控件（动作 / 筛选 / tab / 搜索）
+   * 属于 content 区，应放进 `TableToolbar` 或 Section header。
+   */
   actions?: ReactNode;
 }) {
   return (
-    <header className="flex flex-col gap-1.5">
+    <header className="flex flex-col gap-2.5">
       <EntityHeader title={title} actions={actions} />
       {description && (
         <div className="max-w-prose text-md leading-normal text-muted">{description}</div>

@@ -5,6 +5,7 @@
  * 会话过滤只保留路由参数，不再占顶部 chip。
  */
 
+import { TableToolbar } from '@vessel-agent/plugin-ui';
 import { SegmentedTabs } from '../../components/Tabs';
 import { cn, SearchInput } from '../../components/ui';
 import { t } from '../../i18n';
@@ -25,7 +26,7 @@ export function RunsFilters({
   hidden: boolean;
 }) {
   return (
-    <div className={cn('mt-3.5 flex flex-wrap items-center gap-3', hidden && 'max-wide:hidden')}>
+    <TableToolbar label={t('runs.searchLabel')} className={cn(hidden && 'max-wide:hidden')}>
       <SearchInput
         value={query}
         onChange={onQueryChange}
@@ -44,6 +45,6 @@ export function RunsFilters({
         onChange={onTabChange}
         panelId="runs-panel"
       />
-    </div>
+    </TableToolbar>
   );
 }

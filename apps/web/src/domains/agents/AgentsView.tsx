@@ -6,9 +6,9 @@
  * - 详情 / 编辑是 `#/agents/<nodeKey>/<agentId>[/edit]`，查询串保留列表过滤；
  * - 名称优先，缺失回退短 id；原始 agent_id 只在 Advanced details 出现。
  */
+import { PageScaffold, TableToolbar } from '@vessel-agent/plugin-ui';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { formatRoute, type Route } from '../../app/router';
-import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
 import { Button, SearchInput, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
@@ -83,7 +83,7 @@ function filterQueryOf(route: AgentRoute): string {
 
 export function AgentsView({ route, navigate }: AgentsViewProps) {
   useLocale();
-  const { epoch, tenantEpoch, tenantId } = useConnection();
+  const { epoch, tenantEpoch } = useConnection();
   const { nodes, teamControl, hasTokenFor } = useNodes();
   const nodeNames = useNodeNames();
   const [query, setQuery] = useState('');
@@ -163,8 +163,10 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
 
   if (!anyNodeToken) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-        <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+        <PageScaffold title={t('agents.title')} subtitle={t('agents.subtitle')}>
+          <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
+        </PageScaffold>
       </div>
     );
   }
@@ -174,14 +176,13 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     const targetNode = nodes.find((node) => nodeKeyOf(node) === target.nodeKey);
     if (!targetNode) {
       return (
-        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-          <PageHeader title={t('agents.title')} tenantId={tenantId} />
-          <div className="mt-5 flex flex-col gap-4">
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+          <PageScaffold title={t('agents.title')} subtitle={t('agents.subtitle')}>
             <NotEnabledState
               title={t('agents.error.nodeMissing')}
               action={<Button onClick={backToList}>{t('agents.back')}</Button>}
             />
-          </div>
+          </PageScaffold>
         </div>
       );
     }
@@ -193,20 +194,18 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
 
     if (!loaded) {
       return (
-        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-          <PageHeader title={t('agents.title')} tenantId={tenantId} />
-          <div className="mt-5 flex flex-col gap-4">
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+          <PageScaffold title={t('agents.title')} subtitle={t('agents.subtitle')}>
             <LoadingState label={t('agents.loadingRosters')} rows={2} />
-          </div>
+          </PageScaffold>
         </div>
       );
     }
 
     if (!targetAgent) {
       return (
-        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-          <PageHeader title={t('agents.title')} tenantId={tenantId} />
-          <div className="mt-5 flex flex-col gap-4">
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+          <PageScaffold title={t('agents.title')} subtitle={t('agents.subtitle')}>
             {roster && !roster.ok ? (
               <NotEnabledState title={t('teams.error.notEnabled')} reason={nodeErrorText(roster)} />
             ) : (
@@ -215,7 +214,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
                 action={<Button onClick={backToList}>{t('agents.back')}</Button>}
               />
             )}
-          </div>
+          </PageScaffold>
         </div>
       );
     }
@@ -269,11 +268,10 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   // ── 列表 ────────────────────────────────────────────
   if (nodes.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-        <PageHeader title={t('agents.title')} tenantId={tenantId} />
-        <div className="mt-5 flex flex-col gap-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+        <PageScaffold title={t('agents.title')} subtitle={t('agents.subtitle')}>
           <EmptyState title={t('agents.empty')} />
-        </div>
+        </PageScaffold>
       </div>
     );
   }
@@ -316,10 +314,9 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader title={t('agents.title')} tenantId={tenantId} />
-      <div className="mt-5 flex flex-col gap-4">
-        <div className="net-toolbar mt-3.5">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+      <PageScaffold title={t('agents.title')} subtitle={t('agents.subtitle')}>
+        <TableToolbar label={t('agents.search')}>
           <SearchInput
             value={query}
             onChange={setQuery}
@@ -396,7 +393,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
               {t('agents.create')}
             </Button>
           </div>
-        </div>
+        </TableToolbar>
 
         {(failed.length > 0 || partialErrors > 0) && (
           <div className="flex flex-col gap-2">
@@ -427,7 +424,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
         )}
 
         {body}
-      </div>
+      </PageScaffold>
 
       {createOpen && (
         <AgentCreateDialog

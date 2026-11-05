@@ -2,8 +2,8 @@
  * Plugin Host（E10）：宿主页面，不属于插件贡献页，marketplace 禁用时仍可见。
  * 展示 marketplace 运行时元数据，并提供 registry_url（write RPC）配置。
  */
+import { PageScaffold } from '@vessel-agent/plugin-ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
 import {
@@ -39,7 +39,7 @@ const STATUS_TONE: Record<PluginRuntimeStatus, BadgeTone> = {
 
 export function PluginHostView() {
   useLocale();
-  const { client, hasToken, connectionState, tenantId } = useConnection();
+  const { client, hasToken, connectionState } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const toast = useToast();
   const { plugins, state, reload } = usePluginContributions();
@@ -87,23 +87,21 @@ export function PluginHostView() {
 
   if (!hasToken) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-        <PageHeader title={t('nav.domain.pluginHost')} tenantId={tenantId} />
-        <div className="mt-5">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+        <PageScaffold title={t('nav.domain.pluginHost')} subtitle={t('pluginHost.subtitle')}>
           <NotEnabledState
             variant="page"
             title={t('common.notConnected')}
             reason={t('pluginHost.noTokenReason')}
           />
-        </div>
+        </PageScaffold>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader title={t('nav.domain.pluginHost')} tenantId={tenantId} />
-      <div className="mt-5 flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+      <PageScaffold title={t('nav.domain.pluginHost')} subtitle={t('pluginHost.subtitle')}>
         {!connected && plugins.length === 0 ? (
           <NotEnabledState
             variant="page"
@@ -203,7 +201,7 @@ export function PluginHostView() {
             </Section>
           </>
         )}
-      </div>
+      </PageScaffold>
     </div>
   );
 }

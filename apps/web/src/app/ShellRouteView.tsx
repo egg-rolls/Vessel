@@ -1,6 +1,7 @@
 import { AgentsView } from '../domains/agents/AgentsView';
 import { ChatView } from '../domains/chat/ChatView';
 import { ToolCatalogProvider } from '../domains/chat/tool-catalog';
+import { DesignLabView } from '../domains/design/DesignLabView';
 import { GatewayView } from '../domains/gateway/GatewayView';
 import { HubView } from '../domains/hub/HubView';
 import { CapabilityView } from '../domains/integrations/CapabilityView';
@@ -70,6 +71,7 @@ export function ShellRouteView({
       {route.domain === 'tenants' && <TenantsPage />}
       {route.domain === 'capabilities' && <CapabilitiesPage />}
       {route.domain === 'visual' && <VisualPage />}
+      {route.domain === 'designLab' && <DesignLabView />}
       {route.domain === 'settings' && <SettingsView />}
     </>
   );

@@ -24,6 +24,7 @@ export type Route =
   | { domain: 'tenants' }
   | { domain: 'capabilities' }
   | { domain: 'visual' }
+  | { domain: 'designLab' }
   | { domain: 'settings' };
 
 export type Domain = Route['domain'];
@@ -174,6 +175,8 @@ export function parseRoute(hash: string): Route {
       return { domain: 'capabilities' };
     case 'visual':
       return { domain: 'visual' };
+    case 'designLab':
+      return { domain: 'designLab' };
     case 'settings': {
       // 0.45 IA：旧 settings 子页作为别名跳到新的顶层页面。
       const tab = segments[1] ?? query.get('tab');
@@ -248,6 +251,8 @@ export function formatRoute(route: Route): string {
       return '#/capabilities';
     case 'visual':
       return '#/visual';
+    case 'designLab':
+      return '#/designLab';
     case 'settings':
       return '#/settings';
   }

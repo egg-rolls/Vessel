@@ -5,10 +5,10 @@
  * （Team / Agent / 在线计数）；一个节点失败不影响其它节点。
  * 详情只读：健康与实例信息 + Teams / Agents 跳转，不再承载 Team CRUD。
  */
+import { PageScaffold, TableToolbar } from '@vessel-agent/plugin-ui';
 import { type ReactNode, useMemo, useState } from 'react';
 import type { Route } from '../../app/router';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
-import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { Button, SearchInput } from '../../components/ui';
@@ -42,23 +42,20 @@ const NODE_TEAMS_POLL_MS = 20_000;
 
 export function NodePanelView({ route, navigate }: NodePanelViewProps) {
   useLocale();
-  const { tenantId } = useConnection();
   const { nodes } = useNodes();
 
   if (route.nodeKey !== undefined) {
     return <NodeDetailView nodeKey={route.nodeKey} navigate={navigate} />;
   }
 
-  return <NodesList nodes={nodes} tenantId={tenantId} navigate={navigate} />;
+  return <NodesList nodes={nodes} navigate={navigate} />;
 }
 
 function NodesList({
   nodes,
-  tenantId,
   navigate,
 }: {
   nodes: readonly NodeView[];
-  tenantId: string | null;
   navigate: (route: Route) => void;
 }) {
   useLocale();
@@ -141,11 +138,10 @@ function NodesList({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
-      <PageHeader title={t('nodes.title')} tenantId={tenantId} />
-      <div className="mt-5 flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
+      <PageScaffold title={t('nodes.title')} subtitle={t('nodes.subtitle')}>
         {nodes.length > 0 && (
-          <div className="net-toolbar mt-3.5">
+          <TableToolbar label={t('nodes.search')}>
             <SearchInput
               value={query}
               onChange={setQuery}
@@ -156,10 +152,10 @@ function NodesList({
             <Button variant="primary" className="ml-auto" onClick={() => setAddOpen(true)}>
               {t('hub.add.title')}
             </Button>
-          </div>
+          </TableToolbar>
         )}
         {body}
-      </div>
+      </PageScaffold>
 
       {addOpen && <AddNodeDialog onClose={() => setAddOpen(false)} />}
 

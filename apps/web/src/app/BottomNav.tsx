@@ -31,6 +31,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
     route.domain === 'tenants' ||
     route.domain === 'capabilities' ||
     route.domain === 'visual' ||
+    route.domain === 'designLab' ||
     route.domain === 'mcp' ||
     route.domain === 'channels' ||
     route.domain === 'observe' ||
@@ -148,6 +149,16 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               }}
             >
               <DomainIcon domain="visual" /> {domainLabel('visual')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
+                navigate(primaryRoute('designLab'));
+              }}
+            >
+              <DomainIcon domain="designLab" /> {domainLabel('designLab')}
             </button>
             <button
               type="button"

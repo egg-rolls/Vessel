@@ -9,7 +9,7 @@ import { TenantsView } from './TenantsView';
 export function TenantsPage() {
   useLocale();
   return (
-    <PageFrame title={t('nav.domain.tenants')}>
+    <PageFrame title={t('nav.domain.tenants')} subtitle={t('tenants.subtitle')}>
       <TenantsView />
     </PageFrame>
   );
@@ -27,7 +27,7 @@ export function CapabilitiesPage() {
 export function VisualPage() {
   useLocale();
   return (
-    <PageFrame title={t('nav.domain.visual')}>
+    <PageFrame title={t('nav.domain.visual')} subtitle={t('visual.subtitle')}>
       <AppearanceView />
       <DisplaySettingsView />
     </PageFrame>

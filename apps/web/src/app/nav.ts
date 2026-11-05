@@ -28,6 +28,7 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'capabilities' },
   { id: 'settings' },
   { id: 'visual' },
+  { id: 'designLab' },
 ];
 
 /**
@@ -43,7 +44,7 @@ export const NAV_GROUPS: readonly {
   { id: 'runs', domains: ['runs', 'tenants'] },
   { id: 'integrations', domains: ['capabilities', 'tools', 'mcp', 'channels'] },
   { id: 'core', domains: ['hub', 'gateway', 'pluginHost'] },
-  { id: 'settings', domains: ['settings', 'visual'] },
+  { id: 'settings', domains: ['settings', 'visual', 'designLab'] },
 ];
 
 /** 主导航项的默认落点（不改路由；供 NavModel / 命令面板 / 移动端共用）。 */
@@ -77,6 +78,8 @@ export function primaryRoute(domain: PrimaryDomain): Route {
       return { domain: 'capabilities' };
     case 'visual':
       return { domain: 'visual' };
+    case 'designLab':
+      return { domain: 'designLab' };
     case 'settings':
       return { domain: 'settings' };
     case 'observe':
@@ -141,6 +144,8 @@ export function routeBreadcrumb(route: Route): string {
       return t('breadcrumb.capabilities');
     case 'visual':
       return t('breadcrumb.visual');
+    case 'designLab':
+      return t('breadcrumb.designLab');
     case 'settings':
       return t('breadcrumb.settings');
   }

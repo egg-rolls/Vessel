@@ -122,6 +122,15 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <circle cx="13" cy="14" r="1.8" fill="var(--surface)" />
         </svg>
       );
+    case 'designLab':
+      return (
+        <svg {...common}>
+          <path d="M10 3.2a6.8 6.8 0 1 0 0 13.6h1.4a1.6 1.6 0 0 0 1.6-1.6c0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.1 0-.9.7-1.6 1.6-1.6h1.8a3.6 3.6 0 0 0 3.6-3.6C18.2 5.1 14.6 3.2 10 3.2Z" />
+          <circle cx="6.6" cy="8.1" r="0.9" fill="currentColor" stroke="none" />
+          <circle cx="9.6" cy="5.9" r="0.9" fill="currentColor" stroke="none" />
+          <circle cx="13" cy="6.7" r="0.9" fill="currentColor" stroke="none" />
+        </svg>
+      );
     case 'plugins':
       return (
         <svg {...common}>
