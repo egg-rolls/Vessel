@@ -1,0 +1,118 @@
+{
+  "name": "@vessel-agent/plugin-usage",
+  "version": "0.1.0",
+  "description": "Usage, logs and model leaderboard for Vessel",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "web"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/egg-rolls/Vessel.git",
+    "directory": "plugins/observability/usage"
+  },
+  "engines": {
+    "bun": ">=1.3.9"
+  },
+  "vessel": {
+    "id": "usage",
+    "name": "Usage",
+    "version": "0.1.0",
+    "engines": {
+      "vessel": ">=0.43 <0.45"
+    },
+    "description": "Usage, logs and model leaderboard",
+    "side": "both",
+    "entry": "src/index.ts",
+    "ui": {
+      "dir": "web"
+    },
+    "activationEvents": [
+      "onPage:usage",
+      "onPage:logs",
+      "onPage:leaderboard",
+      "onCommand:summary"
+    ],
+    "contributes": {
+      "pages": [
+        {
+          "id": "usage",
+          "title": "Usage",
+          "nav": "observe",
+          "order": 10,
+          "entry": "usage.html"
+        },
+        {
+          "id": "logs",
+          "title": "Logs",
+          "nav": "observe",
+          "order": 11,
+          "entry": "logs.html"
+        },
+        {
+          "id": "leaderboard",
+          "title": "Leaderboard",
+          "nav": "observe",
+          "order": 12,
+          "entry": "leaderboard.html"
+        }
+      ],
+      "commands": [
+        {
+          "name": "summary",
+          "title": "Usage summary"
+        }
+      ],
+      "settings": {
+        "prices": {
+          "type": "object",
+          "description": "USD per 1M tokens, keyed by model id"
+        }
+      },
+      "rpc": [
+        {
+          "name": "summary",
+          "description": "Aggregated usage"
+        },
+        {
+          "name": "logs",
+          "description": "Paginated request logs"
+        },
+        {
+          "name": "leaderboard",
+          "description": "Usage by model"
+        }
+      ],
+      "events": [
+        "llm.response",
+        "llm.request",
+        "run.failed"
+      ]
+    },
+    "permissions": {
+      "fs": [
+        "data-dir"
+      ],
+      "net": [],
+      "process": false,
+      "secrets": false,
+      "events": [
+        "llm.response",
+        "llm.request",
+        "run.failed"
+      ]
+    },
+    "dependencies": {
+      "plugins": [],
+      "ordering": {
+        "after": [],
+        "before": []
+      }
+    }
+  }
+}
