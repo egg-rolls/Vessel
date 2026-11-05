@@ -13,6 +13,10 @@
  * 无需改代码、无需构建步骤。默认导出须是 `Plugin`（含 `install()`）。
  *
  * 插件目录在进程启动时扫描一次（结果缓存），安装/移除后需重启进程。
+ *
+ * 0.43：`package.json.vessel` 清单（`src/plugin-manifest.ts`）把体验插件标记为
+ * `mode: 'child'`——它们由宿主在子进程运行，**不得**被 in-process loader import。
+ * 清单同时存在于旧 `.vessel/plugins/` 与 legacy `.vessel/mods/` 根下。
  */
 
 import * as fs from 'node:fs';
@@ -20,6 +24,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Plugin } from '../packages/core/src/index';
+import {
+  type PluginManifest,
+  PluginManifestValidationError,
+  validatePluginManifest,
+} from './plugin-manifest';
 
 const PLUGINS_DIR = fileURLToPath(new URL('../plugins', import.meta.url));
 
@@ -41,6 +50,17 @@ export const FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'eval
 
 /** 插件来源 */
 export type PluginSource = 'repo' | 'user' | 'project' | 'node_modules';
+
+/** 运行模式：能力插件 in-process；体验插件（vessel 清单 + entry + contributes）child */
+export type PluginMode = 'in-process' | 'child';
+
+/** child 模式发现优先级（CONTRACT-0.43 §6：project > user > 内置） */
+const SOURCE_PRIORITY: Record<PluginSource, number> = {
+  project: 3,
+  user: 2,
+  repo: 1,
+  node_modules: 0,
+};
 
 /** 扫描根 */
 export interface PluginRoot {
@@ -64,10 +84,16 @@ export interface PluginDescriptor {
   category: string;
   version: string;
   description?: string;
-  /** 模块入口的绝对路径 */
+  /** 模块入口的绝对路径（child 模式为 `vessel.entry` 解析后的路径） */
   entry: string;
   /** 0.6.1：插件来源 */
   source: PluginSource;
+  /** 0.43：in-process = 能力插件；child = 体验插件（由宿主 spawn，不经 loader import） */
+  mode: PluginMode;
+  /** 0.43：child 模式的 `package.json.vessel` 清单 */
+  manifest?: PluginManifest;
+  /** 0.43：in-process 插件覆盖同 id 内置插件时，package.json 的 `vessel.override` */
+  override?: boolean;
 }
 
 /** 读取目录下的子目录名；目录不存在返回空 */
@@ -114,30 +140,83 @@ function resolveEntry(base: string, pkg: Record<string, unknown>): string | null
   return null;
 }
 
+const warnedManifestFailures = new Set<string>();
+
+/** 清单校验失败：告警一次，且不加载代码（fail-closed） */
+function warnManifestFailure(base: string, error: PluginManifestValidationError): void {
+  const key = `${error.code}:${base}`;
+  if (warnedManifestFailures.has(key)) return;
+  warnedManifestFailures.add(key);
+  console.warn(`[${error.code}] ${base}: ${error.message}`);
+}
+
 /** 读取单个插件目录；不合格返回 null */
 function readPlugin(base: string, category: string, source: PluginSource): PluginDescriptor | null {
   const pkgPath = path.join(base, 'package.json');
   if (!fs.existsSync(pkgPath)) return null;
 
+  let pkg: Record<string, unknown>;
   try {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as Record<string, unknown>;
-    const entry = resolveEntry(base, pkg);
-    if (!entry) return null;
-    const rawName = typeof pkg.name === 'string' ? pkg.name : '';
-    const shortName = rawName.replace(/^@[^/]+\//, '') || path.basename(base);
-    if (source === 'node_modules' && NON_PLUGIN_PACKAGES.has(shortName)) return null;
-    return {
-      name: shortName,
-      category,
-      version: typeof pkg.version === 'string' ? pkg.version : '0.0.0',
-      ...(typeof pkg.description === 'string' ? { description: pkg.description } : {}),
-      entry,
-      source,
-    };
+    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as Record<string, unknown>;
   } catch {
     // 坏的 package.json，跳过
     return null;
   }
+  if (!isRecord(pkg)) return null;
+
+  const rawName = typeof pkg.name === 'string' ? pkg.name : '';
+  const shortName = rawName.replace(/^@[^/]+\//, '') || path.basename(base);
+  if (source === 'node_modules' && NON_PLUGIN_PACKAGES.has(shortName)) return null;
+
+  // 体验插件：vessel.entry + contributes 同时存在时才走 child 模式。
+  const vessel = isRecord(pkg.vessel) ? pkg.vessel : undefined;
+  const hasChildEntry = typeof vessel?.entry === 'string' && vessel.entry.trim() !== '';
+  if (vessel !== undefined && hasChildEntry) {
+    if (vessel.contributes !== undefined && !isRecord(vessel.contributes)) {
+      warnManifestFailure(
+        base,
+        new PluginManifestValidationError(
+          'plugin_manifest_invalid',
+          'contributes must be an object',
+        ),
+      );
+      return null;
+    }
+    if (isRecord(vessel.contributes)) {
+      const result = validatePluginManifest(vessel, { baseDir: base });
+      if (!result.ok) {
+        warnManifestFailure(base, result.error);
+        return null;
+      }
+      const manifest = result.manifest;
+      const description =
+        manifest.description ?? (typeof pkg.description === 'string' ? pkg.description : undefined);
+      return {
+        name: manifest.id,
+        category,
+        version: manifest.version,
+        ...(description !== undefined ? { description } : {}),
+        entry: path.resolve(base, manifest.entry),
+        source,
+        mode: 'child',
+        manifest,
+      };
+    }
+  }
+
+  const entry = resolveEntry(base, pkg);
+  if (!entry) return null;
+  const override = vessel?.override === true;
+  return {
+    name: shortName,
+    category,
+    version: typeof pkg.version === 'string' ? pkg.version : '0.0.0',
+    ...(typeof pkg.description === 'string' ? { description: pkg.description } : {}),
+    entry,
+    source,
+    mode: 'in-process',
+    ...(override ? { override: true } : {}),
+  };
 }
 
 /** 扫描一个根；支持 category/flat/auto 三种布局 */
@@ -173,6 +252,9 @@ export function defaultPluginRoots(repoDir: string = PLUGINS_DIR): PluginRoot[] 
     { dir: repoDir, source: 'repo', layout: 'category' },
     { dir: path.join(process.cwd(), '.vessel', 'plugins'), source: 'project', layout: 'auto' },
     { dir: path.join(os.homedir(), '.vessel', 'plugins'), source: 'user', layout: 'auto' },
+    // legacy / optional：旧 mod 目录仍可发现（CONTRACT-0.43 §6）；对外统一叫 plugin。
+    { dir: path.join(process.cwd(), '.vessel', 'mods'), source: 'project', layout: 'auto' },
+    { dir: path.join(os.homedir(), '.vessel', 'mods'), source: 'user', layout: 'auto' },
     {
       dir: path.join(repoRoot, 'node_modules', '@vessel-agent'),
       source: 'node_modules',
@@ -226,28 +308,45 @@ export class PluginLoader {
     return this.cached;
   }
 
+  /** 0.43：child 模式（体验插件）描述符；由宿主 spawn，不经 in-process import */
+  getChildMods(): PluginDescriptor[] {
+    return this.list().filter((descriptor) => descriptor.mode === 'child');
+  }
+
+  /** 0.43：in-process（能力插件）描述符 */
+  getInProcessPlugins(): PluginDescriptor[] {
+    return this.list().filter((descriptor) => descriptor.mode === 'in-process');
+  }
+
   /** LLM provider 插件名 */
   getProviders(): string[] {
     return this.list()
-      .filter((d) => d.category === 'provider')
-      .map((d) => d.name);
+      .filter(
+        (descriptor) => descriptor.mode === 'in-process' && descriptor.category === 'provider',
+      )
+      .map((descriptor) => descriptor.name);
   }
 
-  /** 可直接 `load()` 的插件名：排除 provider（单独装配）与工厂式插件 */
+  /** 可直接 `load()` 的插件名：排除 provider（单独装配）、工厂式与 child 插件 */
   getAvailablePlugins(): string[] {
     return this.list()
-      .filter((d) => d.category !== 'provider' && !FACTORY_PLUGINS.has(d.name))
-      .map((d) => d.name);
+      .filter(
+        (descriptor) =>
+          descriptor.mode === 'in-process' &&
+          descriptor.category !== 'provider' &&
+          !FACTORY_PLUGINS.has(descriptor.name),
+      )
+      .map((descriptor) => descriptor.name);
   }
 
   /**
    * 原样加载插件模块（不要求 default 是 Plugin）。
    * 工厂式插件（如 `@vessel-agent/mcp-client` 的 `createMcpPlugin`）由装配层自行构造。
-   * 未知插件或 import 失败返回 null。
+   * child 插件（体验插件）不得 import；未知插件或 import 失败返回 null。
    */
   async loadModule(name: string): Promise<unknown | null> {
     const descriptor = this.list().find((d) => d.name === name);
-    if (!descriptor) return null;
+    if (!descriptor || descriptor.mode === 'child') return null;
 
     try {
       return await import(pathToFileURL(descriptor.entry).href);
@@ -257,10 +356,14 @@ export class PluginLoader {
     }
   }
 
-  /** 加载插件；未知插件、或默认导出不是 Plugin 时返回 null */
-  async load(name: string): Promise<Plugin | null> {
+  /**
+   * 加载 in-process 插件；未知插件、child 插件、或默认导出不是 Plugin 时返回
+   * null / undefined（child 插件返回 undefined，表示「不是 in-process 模块」）。
+   */
+  async load(name: string): Promise<Plugin | null | undefined> {
     const descriptor = this.list().find((d) => d.name === name);
     if (!descriptor) return null;
+    if (descriptor.mode === 'child') return undefined;
 
     try {
       const mod = (await import(pathToFileURL(descriptor.entry).href)) as { default?: unknown };
@@ -278,14 +381,68 @@ export class PluginLoader {
 
   private scan(): PluginDescriptor[] {
     const byName = new Map<string, PluginDescriptor>();
+    const inProcessCandidates = new Map<string, PluginDescriptor[]>();
+    const childCandidates = new Map<string, PluginDescriptor[]>();
+
+    const collect = (
+      target: Map<string, PluginDescriptor[]>,
+      descriptor: PluginDescriptor,
+    ): void => {
+      const list = target.get(descriptor.name) ?? [];
+      list.push(descriptor);
+      target.set(descriptor.name, list);
+    };
 
     for (const root of this.roots) {
       for (const descriptor of scanRoot(root)) {
-        // 仓库内插件优先；用户/项目/node_modules 同名不覆盖内置插件。
-        if (!byName.has(descriptor.name)) byName.set(descriptor.name, descriptor);
+        collect(descriptor.mode === 'child' ? childCandidates : inProcessCandidates, descriptor);
       }
+    }
+
+    // 两种模式统一优先级（CONTRACT-0.43 §6）：project > user > 内置 > node_modules。
+    // 同 id 高优先级胜出；覆盖内置插件必须在 package.json 声明 `vessel.override: true`。
+    for (const [id, candidates] of inProcessCandidates) {
+      byName.set(id, resolveSourceConflict(id, candidates));
+    }
+
+    // 同 id 同时是 in-process 与 child 时保持确定性：保留 in-process 并告警。
+    for (const [id, candidates] of childCandidates) {
+      const winner = resolveSourceConflict(id, candidates);
+      const existing = byName.get(id);
+      if (existing !== undefined) {
+        console.warn(
+          `[plugin_id_conflict] "${id}" is both an in-process plugin (${existing.source}) and a child plugin (${winner.source}); keeping the in-process plugin.`,
+        );
+        continue;
+      }
+      byName.set(id, winner);
     }
 
     return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
+}
+
+/** 同 id 冲突：高优先级胜出；覆盖内置插件必须显式 override */
+function resolveSourceConflict(id: string, candidates: PluginDescriptor[]): PluginDescriptor {
+  const sorted = [...candidates].sort(
+    (a, b) => (SOURCE_PRIORITY[b.source] ?? 0) - (SOURCE_PRIORITY[a.source] ?? 0),
+  );
+  const first = sorted[0];
+  if (first === undefined) throw new Error(`no candidates for plugin "${id}"`);
+  let winner = first;
+  const builtin = sorted.find((descriptor) => descriptor.source === 'repo');
+  const overrides = winner.manifest?.override === true || winner.override === true;
+  if (builtin !== undefined && winner.source !== 'repo' && !overrides) {
+    console.warn(
+      `[plugin_id_conflict] plugin "${id}" from ${winner.source} overrides a built-in without "vessel.override": true; keeping the built-in.`,
+    );
+    winner = builtin;
+  } else if (sorted.length > 1) {
+    const shadowed = sorted
+      .filter((descriptor) => descriptor !== winner)
+      .map((descriptor) => descriptor.source)
+      .join(', ');
+    console.warn(`[plugin_id_conflict] plugin "${id}" from ${winner.source} shadows ${shadowed}.`);
+  }
+  return winner;
 }

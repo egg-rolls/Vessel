@@ -14,7 +14,7 @@ import * as path from 'node:path';
 import { loadConfig, type PluginConfig } from '../packages/config/src/index';
 import type { PluginCommandArgs } from './cli-args';
 import { declarativePluginEntries } from './plugin-config';
-import { defaultPluginRoots, PluginLoader } from './plugin-loader';
+import { defaultPluginRoots, type PluginDescriptor, PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { ui } from './ui-style';
 
@@ -50,6 +50,37 @@ export function resolveUserPluginsDir(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 0.43：child 插件的贡献点摘要（只用于列表展示；完整清单走 --json） */
+function contributionSummary(descriptor: PluginDescriptor): Record<string, number> {
+  const contributes = descriptor.manifest?.contributes;
+  if (contributes === undefined) return {};
+  const summary: Record<string, number> = {};
+  if (contributes.pages !== undefined) summary.pages = contributes.pages.length;
+  if (contributes.commands !== undefined) summary.commands = contributes.commands.length;
+  if (contributes.settings !== undefined) {
+    summary.settings = Object.keys(contributes.settings).length;
+  }
+  if (contributes.rpc !== undefined) summary.rpc = contributes.rpc.length;
+  if (contributes.events !== undefined) summary.events = contributes.events.length;
+  if (contributes.panels !== undefined) summary.panels = contributes.panels.length;
+  return summary;
+}
+
+function formatContributions(summary: Record<string, number>): string {
+  const entries = Object.entries(summary);
+  return entries.length === 0 ? '-' : entries.map(([name, count]) => `${name}:${count}`).join(' ');
+}
+
+/**
+ * child 插件的启用状态：未写 `plugins:` 时缺省启用；写了则只启用显式条目。
+ * 与 in-process 插件共用同一 `plugins[]` 配置形状。
+ */
+function pluginEnabledByConfig(name: string, configured: PluginConfig[] | undefined): boolean {
+  if (configured === undefined) return true;
+  const entry = configured.find((candidate) => candidate.name === name);
+  return entry !== undefined && entry.enabled !== false;
 }
 
 /** 从 plugin 目录的 package.json 读取短名；不合法返回错误 */
@@ -161,14 +192,22 @@ export async function runPluginCommand(
   if (command.kind === 'list') {
     try {
       const loader = makeLoader(userDir);
-      const { names } = await readEnabledNames(options);
+      const { names, configured } = await readEnabledNames(options);
       const rows = loader.list().map((descriptor) => ({
+        // 0.43：child 插件的用户可见 id 来自清单；in-process 插件仍用包短名。
+        id: descriptor.name,
         name: descriptor.name,
         version: descriptor.version,
         category: descriptor.category,
         source: descriptor.source,
+        mode: descriptor.mode,
         entry: descriptor.entry,
-        enabled: names.has(descriptor.name),
+        // child 插件不在 in-process selection 名单里：按配置（缺省启用）判断。
+        enabled:
+          descriptor.mode === 'child'
+            ? pluginEnabledByConfig(descriptor.name, configured)
+            : names.has(descriptor.name),
+        contributions: contributionSummary(descriptor),
       }));
 
       if (command.json) {
@@ -185,13 +224,14 @@ export async function runPluginCommand(
       const nameWidth = Math.max(4, ...rows.map((row) => row.name.length));
       const sourceWidth = Math.max(6, ...rows.map((row) => row.source.length));
       const categoryWidth = Math.max(8, ...rows.map((row) => row.category.length));
+      const modeWidth = Math.max(4, ...rows.map((row) => row.mode.length));
       const lines = [
         ui.section(`Plugins (${rows.length}; user dir: ${userDir}):`),
-        `  ${'NAME'.padEnd(nameWidth)}  ${'SOURCE'.padEnd(sourceWidth)}  ${'CATEGORY'.padEnd(categoryWidth)}  ${'VERSION'.padEnd(8)}  ENABLED`,
+        `  ${'NAME'.padEnd(nameWidth)}  ${'SOURCE'.padEnd(sourceWidth)}  ${'MODE'.padEnd(modeWidth)}  ${'CATEGORY'.padEnd(categoryWidth)}  ${'VERSION'.padEnd(8)}  ENABLED  CONTRIBUTIONS`,
       ];
       for (const row of rows) {
         lines.push(
-          `  ${row.name.padEnd(nameWidth)}  ${row.source.padEnd(sourceWidth)}  ${row.category.padEnd(categoryWidth)}  ${row.version.padEnd(8)}  ${row.enabled ? 'yes' : 'no'}`,
+          `  ${row.name.padEnd(nameWidth)}  ${row.source.padEnd(sourceWidth)}  ${row.mode.padEnd(modeWidth)}  ${row.category.padEnd(categoryWidth)}  ${row.version.padEnd(8)}  ${row.enabled ? 'yes' : 'no'}  ${formatContributions(row.contributions)}`,
         );
       }
       return { exitCode: 0, stdout: lines.join('\n'), stderr: '' };

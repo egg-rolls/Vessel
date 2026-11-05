@@ -55,8 +55,10 @@ export function resolvePluginSelection(
 
   if (configured === undefined) {
     // 默认集：排除调试插件与工厂式插件；opt-out 时只保留仓库内插件。
+    // 0.43：child 插件（体验插件）由宿主 spawn，不进入 in-process 装载名单。
     const defaults = descriptors.filter(
       (descriptor) =>
+        descriptor.mode === 'in-process' &&
         descriptor.category !== 'provider' &&
         !FACTORY_PLUGINS.has(descriptor.name) &&
         descriptor.name !== 'hook-logging' &&
@@ -99,8 +101,12 @@ export function resolvePluginSelection(
   }
 
   // 工厂式插件由 bootstrap 按专用配置显式构造，不能经 PluginLoader 加载。
+  // child 插件即使被显式写进 plugins: 也不走 in-process 装载。
+  const modeByName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor.mode]));
   return {
-    names: [...selected.keys()].filter((name) => !FACTORY_PLUGINS.has(name)),
+    names: [...selected.keys()].filter(
+      (name) => !FACTORY_PLUGINS.has(name) && modeByName.get(name) !== 'child',
+    ),
     external,
   };
 }

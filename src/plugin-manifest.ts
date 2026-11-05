@@ -1,0 +1,619 @@
+/**
+ * Plugin manifest — `package.json.vessel`（CONTRACT-0.43 §1）。
+ *
+ * 一个包同时是「能力插件」（in-process `Plugin`）还是「体验插件」（child process）
+ * 由清单决定：带 `vessel.entry` + `vessel.contributes` 的包是 child 模式，其余仍是
+ * 现有 in-process 插件。两种模式共用同一清单 / 发现 / 安装生命周期。
+ *
+ * 校验失败一律 fail-closed（不加载代码），错误码见 {@link PluginErrorCode}。
+ *
+ * 版本范围只支持 `>=x.y.z` / `>x.y.z` / `<=x.y.z` / `<x.y.z` / `=x.y.z`，
+ * 空格分隔为 AND、`||` 分隔为 OR。不支持 `^` / `~` / 部分版本（`0.43`）/
+ * 预发布排序（`1.0.0-beta`）——这些会报 `plugin_manifest_invalid`。
+ *
+ * @module vessel/plugin-manifest
+ */
+
+import * as path from 'node:path';
+import { readPackageVersion } from './version';
+
+/** 清单 id：`[a-z0-9][a-z0-9-]{1,63}` */
+export const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+/** `contributes.rpc[].name`：宿主注册为 `plugin.<id>.<name>`，不允许带点 */
+export const PLUGIN_RPC_NAME_RE = /^[a-z][a-z0-9_-]*$/;
+
+export type PluginSide = 'backend' | 'ui' | 'both';
+export type PluginPageNav = 'observe' | 'settings' | 'top';
+export type PluginPanelSlot = 'run-detail' | 'session-detail' | 'nav';
+
+export interface PluginPageContribution {
+  id: string;
+  title?: string;
+  nav?: PluginPageNav;
+  order?: number;
+  /** 相对 `ui.dir` 的静态入口 */
+  entry: string;
+}
+
+export interface PluginCommandContribution {
+  name: string;
+  title?: string;
+}
+
+/** settings 只声明 JSON Schema 子集；宿主 v1 不自动渲染表单 */
+export interface PluginSettingSchema {
+  type?: string;
+  description?: string;
+  default?: unknown;
+  [key: string]: unknown;
+}
+
+export interface PluginRpcContribution {
+  name: string;
+  description?: string;
+}
+
+export interface PluginPanelContribution {
+  slot: PluginPanelSlot;
+  id: string;
+  /** 相对 `ui.dir` 的静态入口 */
+  entry: string;
+  order?: number;
+}
+
+export interface PluginContributions {
+  pages?: PluginPageContribution[];
+  commands?: PluginCommandContribution[];
+  settings?: Record<string, PluginSettingSchema>;
+  rpc?: PluginRpcContribution[];
+  events?: string[];
+  panels?: PluginPanelContribution[];
+}
+
+export interface PluginPermissions {
+  fs: string[];
+  net: string[];
+  process: boolean;
+  secrets: boolean;
+  events: string[];
+  rpc: string[];
+}
+
+export interface PluginDependency {
+  mods: string[];
+  ordering: { after: string[]; before: string[] };
+}
+
+/** 规范化后的清单（缺省值已补齐） */
+export interface PluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  engines: { vessel: string };
+  description?: string;
+  side: PluginSide;
+  entry: string;
+  ui?: { dir: string };
+  activationEvents: string[];
+  contributes?: PluginContributions;
+  permissions: PluginPermissions;
+  dependencies: PluginDependency;
+  /** 显式允许覆盖同 id 的内置插件 */
+  override?: boolean;
+}
+
+/** CONTRACT-0.43 §8 错误码（plugin_* 命名） */
+export type PluginErrorCode =
+  | 'plugin_manifest_invalid'
+  | 'plugin_id_conflict'
+  | 'plugin_version_incompatible'
+  | 'plugin_dependency_missing'
+  | 'plugin_cycle'
+  | 'plugin_activation_failed'
+  | 'plugin_timeout'
+  | 'plugin_crashed'
+  | 'plugin_payload_too_large'
+  | 'plugin_permission_denied'
+  | 'plugin_rpc_denied'
+  | 'plugin_config_invalid'
+  | 'plugin_event_dropped';
+
+/** 清单解析 / 校验阶段可能产生的错误码 */
+export type PluginManifestErrorCode =
+  | 'plugin_manifest_invalid'
+  | 'plugin_id_conflict'
+  | 'plugin_version_incompatible'
+  | 'plugin_dependency_missing'
+  | 'plugin_cycle'
+  | 'plugin_config_invalid';
+
+export class PluginManifestValidationError extends Error {
+  readonly code: PluginManifestErrorCode;
+
+  constructor(code: PluginManifestErrorCode, message: string) {
+    super(message);
+    this.name = 'PluginManifestValidationError';
+    this.code = code;
+  }
+}
+
+export interface PluginManifestOptions {
+  /** mod / 插件包目录；用于 entry / ui.dir 越界检查 */
+  baseDir: string;
+  /** 当前 Vessel 版本；缺省读根 package.json */
+  vesselVersion?: string;
+  /** 已知插件 id；提供时检查 `dependencies.mods` 是否缺失 */
+  knownPluginIds?: Iterable<string>;
+}
+
+export type PluginManifestValidation =
+  | { ok: true; manifest: PluginManifest }
+  | { ok: false; error: PluginManifestValidationError };
+
+function fail(code: PluginManifestErrorCode, message: string): never {
+  throw new PluginManifestValidationError(code, message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    fail('plugin_manifest_invalid', `${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') fail('plugin_manifest_invalid', `${field} must be a string`);
+  return value;
+}
+
+function optionalNumber(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    fail('plugin_manifest_invalid', `${field} must be a finite number`);
+  }
+  return value;
+}
+
+function stringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) {
+    fail('plugin_manifest_invalid', `${field} must be an array of strings`);
+  }
+  return value.map((item, index) => requireString(item, `${field}[${index}]`));
+}
+
+// ── semver（最小实现） ──────────────────────────────────────────────────────
+
+interface SemverParts {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+type ComparatorOperator = '>=' | '<=' | '>' | '<' | '=';
+
+interface VersionComparator {
+  op: ComparatorOperator;
+  version: SemverParts;
+}
+
+const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)$/;
+const COMPARATOR_RE = /^(>=|<=|>|<|=)?(\d+\.\d+\.\d+)$/;
+
+function parseSemver(value: string): SemverParts | null {
+  const match = SEMVER_RE.exec(value.trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+/** 是否为支持的完整 semver（`x.y.z`） */
+export function isValidSemver(value: string): boolean {
+  return parseSemver(value) !== null;
+}
+
+function compareSemver(a: SemverParts, b: SemverParts): number {
+  if (a.major !== b.major) return a.major - b.major;
+  if (a.minor !== b.minor) return a.minor - b.minor;
+  return a.patch - b.patch;
+}
+
+/** 解析版本范围；不支持的语法返回 null（调用方报 plugin_manifest_invalid） */
+export function parseVersionRange(range: string): VersionComparator[][] | null {
+  const alternatives: VersionComparator[][] = [];
+  for (const alternative of range.split('||')) {
+    const trimmed = alternative.trim();
+    if (trimmed === '') return null;
+    const comparators: VersionComparator[] = [];
+    for (const token of trimmed.split(/\s+/)) {
+      const match = COMPARATOR_RE.exec(token);
+      if (!match) return null;
+      const version = parseSemver(match[2] ?? '');
+      if (!version) return null;
+      comparators.push({ op: (match[1] as ComparatorOperator | undefined) ?? '=', version });
+    }
+    alternatives.push(comparators);
+  }
+  return alternatives.length > 0 ? alternatives : null;
+}
+
+function satisfiesComparator(version: SemverParts, comparator: VersionComparator): boolean {
+  const delta = compareSemver(version, comparator.version);
+  switch (comparator.op) {
+    case '>=':
+      return delta >= 0;
+    case '<=':
+      return delta <= 0;
+    case '>':
+      return delta > 0;
+    case '<':
+      return delta < 0;
+    default:
+      return delta === 0;
+  }
+}
+
+/** `version` 是否满足 `range`；范围语法不支持时返回 false */
+export function satisfiesVersionRange(version: string, range: string): boolean {
+  const parsedVersion = parseSemver(version);
+  const parsedRange = parseVersionRange(range);
+  if (!parsedVersion || !parsedRange) return false;
+  return parsedRange.some((alternative) =>
+    alternative.every((comparator) => satisfiesComparator(parsedVersion, comparator)),
+  );
+}
+
+// ── 路径与事件白名单 ────────────────────────────────────────────────────────
+
+/** entry / ui.dir 必须留在包目录内 */
+function isContainedPath(baseDir: string, value: string): boolean {
+  if (value.trim() === '' || path.isAbsolute(value)) return false;
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(base, value);
+  const relative = path.relative(base, resolved);
+  return (
+    relative !== '' &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+/** 相对 ui.dir 的静态入口：不允许绝对路径 / `..` 越界 */
+function isSafeRelativePath(value: string): boolean {
+  if (value.trim() === '' || path.isAbsolute(value)) return false;
+  const normalized = path.normalize(value);
+  return normalized !== '.' && normalized !== '..' && !normalized.startsWith(`..${path.sep}`);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** `llm.*` 这类权限模式匹配事件名 */
+function globMatches(pattern: string, value: string): boolean {
+  const regexp = new RegExp(`^${escapeRegExp(pattern).replace(/\\\*/g, '.*')}$`);
+  return regexp.test(value);
+}
+
+// ── 权限 / 贡献点 ───────────────────────────────────────────────────────────
+
+function readPermissions(raw: unknown): PluginPermissions {
+  if (raw === undefined) {
+    return { fs: [], net: [], process: false, secrets: false, events: [], rpc: [] };
+  }
+  if (!isRecord(raw)) fail('plugin_manifest_invalid', 'permissions must be an object');
+
+  const fs = raw.fs === undefined ? [] : stringArray(raw.fs, 'permissions.fs');
+  const net = raw.net === undefined ? [] : stringArray(raw.net, 'permissions.net');
+  const events = raw.events === undefined ? [] : stringArray(raw.events, 'permissions.events');
+  const rpc = raw.rpc === undefined ? [] : stringArray(raw.rpc, 'permissions.rpc');
+
+  const process =
+    raw.process === undefined ? false : readBoolean(raw.process, 'permissions.process');
+  const secrets =
+    raw.secrets === undefined ? false : readBoolean(raw.secrets, 'permissions.secrets');
+
+  return { fs, net, process, secrets, events, rpc };
+}
+
+function readBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') fail('plugin_manifest_invalid', `${field} must be a boolean`);
+  return value;
+}
+
+function readPages(value: unknown): PluginPageContribution[] {
+  if (!Array.isArray(value)) fail('plugin_manifest_invalid', 'contributes.pages must be an array');
+  const seen = new Set<string>();
+  return value.map((item, index) => {
+    const field = `contributes.pages[${index}]`;
+    if (!isRecord(item)) fail('plugin_manifest_invalid', `${field} must be an object`);
+    const id = requireString(item.id, `${field}.id`);
+    if (seen.has(id)) fail('plugin_manifest_invalid', `duplicate page id "${id}"`);
+    seen.add(id);
+    const entry = requireString(item.entry, `${field}.entry`);
+    if (!isSafeRelativePath(entry)) {
+      fail('plugin_manifest_invalid', `${field}.entry must stay inside ui.dir`);
+    }
+    const title = optionalString(item.title, `${field}.title`);
+    const order = optionalNumber(item.order, `${field}.order`);
+    let nav: PluginPageNav | undefined;
+    if (item.nav !== undefined) {
+      if (!isPageNav(item.nav)) fail('plugin_manifest_invalid', `${field}.nav is invalid`);
+      nav = item.nav;
+    }
+    return {
+      id,
+      ...(title !== undefined ? { title } : {}),
+      ...(nav !== undefined ? { nav } : {}),
+      ...(order !== undefined ? { order } : {}),
+      entry,
+    };
+  });
+}
+
+function isPageNav(value: unknown): value is PluginPageNav {
+  return value === 'observe' || value === 'settings' || value === 'top';
+}
+
+function isPanelSlot(value: unknown): value is PluginPanelSlot {
+  return value === 'run-detail' || value === 'session-detail' || value === 'nav';
+}
+
+function readCommands(value: unknown): PluginCommandContribution[] {
+  if (!Array.isArray(value)) {
+    fail('plugin_manifest_invalid', 'contributes.commands must be an array');
+  }
+  const seen = new Set<string>();
+  return value.map((item, index) => {
+    const field = `contributes.commands[${index}]`;
+    if (!isRecord(item)) fail('plugin_manifest_invalid', `${field} must be an object`);
+    const name = requireString(item.name, `${field}.name`);
+    if (seen.has(name)) fail('plugin_manifest_invalid', `duplicate command name "${name}"`);
+    seen.add(name);
+    const title = optionalString(item.title, `${field}.title`);
+    return { name, ...(title !== undefined ? { title } : {}) };
+  });
+}
+
+function readSettings(value: unknown): Record<string, PluginSettingSchema> {
+  if (!isRecord(value)) fail('plugin_manifest_invalid', 'contributes.settings must be an object');
+  const out: Record<string, PluginSettingSchema> = {};
+  for (const [key, schema] of Object.entries(value)) {
+    if (key.trim() === '') fail('plugin_manifest_invalid', 'settings keys must be non-empty');
+    if (!isRecord(schema)) {
+      fail('plugin_manifest_invalid', `contributes.settings.${key} must be an object`);
+    }
+    if (schema.type !== undefined && typeof schema.type !== 'string') {
+      fail('plugin_manifest_invalid', `contributes.settings.${key}.type must be a string`);
+    }
+    if (schema.description !== undefined && typeof schema.description !== 'string') {
+      fail('plugin_manifest_invalid', `contributes.settings.${key}.description must be a string`);
+    }
+    out[key] = { ...schema };
+  }
+  return out;
+}
+
+function readRpc(value: unknown): PluginRpcContribution[] {
+  if (!Array.isArray(value)) fail('plugin_manifest_invalid', 'contributes.rpc must be an array');
+  const seen = new Set<string>();
+  return value.map((item, index) => {
+    const field = `contributes.rpc[${index}]`;
+    if (!isRecord(item)) fail('plugin_manifest_invalid', `${field} must be an object`);
+    const name = requireString(item.name, `${field}.name`);
+    if (!PLUGIN_RPC_NAME_RE.test(name)) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field}.name "${name}" must match ${PLUGIN_RPC_NAME_RE.source}`,
+      );
+    }
+    if (seen.has(name)) fail('plugin_manifest_invalid', `duplicate rpc name "${name}"`);
+    seen.add(name);
+    const description = optionalString(item.description, `${field}.description`);
+    return { name, ...(description !== undefined ? { description } : {}) };
+  });
+}
+
+function readPanels(value: unknown): PluginPanelContribution[] {
+  if (!Array.isArray(value)) fail('plugin_manifest_invalid', 'contributes.panels must be an array');
+  return value.map((item, index) => {
+    const field = `contributes.panels[${index}]`;
+    if (!isRecord(item)) fail('plugin_manifest_invalid', `${field} must be an object`);
+    if (!isPanelSlot(item.slot)) fail('plugin_manifest_invalid', `${field}.slot is invalid`);
+    const id = requireString(item.id, `${field}.id`);
+    const entry = requireString(item.entry, `${field}.entry`);
+    if (!isSafeRelativePath(entry)) {
+      fail('plugin_manifest_invalid', `${field}.entry must stay inside ui.dir`);
+    }
+    const order = optionalNumber(item.order, `${field}.order`);
+    return { slot: item.slot, id, entry, ...(order !== undefined ? { order } : {}) };
+  });
+}
+
+function readContributions(
+  raw: unknown,
+  permissions: PluginPermissions,
+): PluginContributions | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw)) fail('plugin_manifest_invalid', 'contributes must be an object');
+
+  const out: PluginContributions = {};
+  if (raw.pages !== undefined) out.pages = readPages(raw.pages);
+  if (raw.commands !== undefined) out.commands = readCommands(raw.commands);
+  if (raw.settings !== undefined) out.settings = readSettings(raw.settings);
+  if (raw.rpc !== undefined) out.rpc = readRpc(raw.rpc);
+  if (raw.events !== undefined) {
+    out.events = stringArray(raw.events, 'contributes.events');
+  }
+  if (raw.panels !== undefined) out.panels = readPanels(raw.panels);
+
+  // 命令执行走 rpc：每个 command 必须有同名 rpc 方法（CONTRACT §2.2）。
+  const rpcNames = new Set((out.rpc ?? []).map((entry) => entry.name));
+  for (const command of out.commands ?? []) {
+    if (!rpcNames.has(command.name)) {
+      fail(
+        'plugin_manifest_invalid',
+        `contributes.commands "${command.name}" must have a matching contributes.rpc entry`,
+      );
+    }
+  }
+
+  // 订阅事件必须是 permissions.events 的子集（支持 `llm.*` 前缀模式）。
+  for (const event of out.events ?? []) {
+    if (!permissions.events.some((pattern) => globMatches(pattern, event))) {
+      fail(
+        'plugin_manifest_invalid',
+        `contributes.events "${event}" is not allowed by permissions.events`,
+      );
+    }
+  }
+
+  return out;
+}
+
+function readDependencies(raw: unknown): PluginDependency {
+  const empty: PluginDependency = { mods: [], ordering: { after: [], before: [] } };
+  if (raw === undefined) return empty;
+  if (!isRecord(raw)) fail('plugin_manifest_invalid', 'dependencies must be an object');
+
+  const mods = raw.mods === undefined ? [] : stringArray(raw.mods, 'dependencies.mods');
+  let after: string[] = [];
+  let before: string[] = [];
+  if (raw.ordering !== undefined) {
+    if (!isRecord(raw.ordering)) {
+      fail('plugin_manifest_invalid', 'dependencies.ordering must be an object');
+    }
+    if (raw.ordering.after !== undefined) {
+      after = stringArray(raw.ordering.after, 'dependencies.ordering.after');
+    }
+    if (raw.ordering.before !== undefined) {
+      before = stringArray(raw.ordering.before, 'dependencies.ordering.before');
+    }
+  }
+  return { mods, ordering: { after, before } };
+}
+
+// ── 入口 ────────────────────────────────────────────────────────────────────
+
+/** 解析并校验清单；失败抛 {@link PluginManifestValidationError} */
+export function parsePluginManifest(raw: unknown, options: PluginManifestOptions): PluginManifest {
+  if (!isRecord(raw)) fail('plugin_manifest_invalid', 'vessel manifest must be an object');
+
+  const id = requireString(raw.id, 'id');
+  if (!PLUGIN_ID_RE.test(id)) {
+    fail('plugin_manifest_invalid', `id "${id}" must match ${PLUGIN_ID_RE.source}`);
+  }
+  const name = requireString(raw.name, 'name');
+  const version = requireString(raw.version, 'version');
+  if (!isValidSemver(version)) {
+    fail('plugin_manifest_invalid', `version "${version}" is not a full semver (x.y.z)`);
+  }
+
+  if (!isRecord(raw.engines)) fail('plugin_manifest_invalid', 'engines must be an object');
+  const vesselRange = requireString(raw.engines.vessel, 'engines.vessel');
+  const parsedRange = parseVersionRange(vesselRange);
+  if (!parsedRange) {
+    fail(
+      'plugin_manifest_invalid',
+      `engines.vessel "${vesselRange}" is unsupported (use >=x.y.z <x.y.z forms)`,
+    );
+  }
+  const currentVersion = options.vesselVersion ?? readPackageVersion();
+  const current = parseSemver(currentVersion);
+  if (
+    current &&
+    !parsedRange.some((alternative) =>
+      alternative.every((comparator) => satisfiesComparator(current, comparator)),
+    )
+  ) {
+    fail(
+      'plugin_version_incompatible',
+      `plugin "${id}" requires vessel ${vesselRange}, current ${currentVersion}`,
+    );
+  }
+
+  const entry = requireString(raw.entry, 'entry');
+  if (!isContainedPath(options.baseDir, entry)) {
+    fail('plugin_manifest_invalid', 'entry must stay inside the plugin directory');
+  }
+
+  let side: PluginSide = 'both';
+  if (raw.side !== undefined) {
+    if (raw.side !== 'backend' && raw.side !== 'ui' && raw.side !== 'both') {
+      fail('plugin_manifest_invalid', 'side must be backend | ui | both');
+    }
+    side = raw.side;
+  }
+
+  const description = optionalString(raw.description, 'description');
+
+  let ui: { dir: string } | undefined;
+  if (raw.ui !== undefined) {
+    if (!isRecord(raw.ui)) fail('plugin_manifest_invalid', 'ui must be an object');
+    const dir = requireString(raw.ui.dir, 'ui.dir');
+    if (!isContainedPath(options.baseDir, dir)) {
+      fail('plugin_manifest_invalid', 'ui.dir must stay inside the plugin directory');
+    }
+    ui = { dir };
+  }
+
+  const activationEvents =
+    raw.activationEvents === undefined ? [] : stringArray(raw.activationEvents, 'activationEvents');
+
+  const permissions = readPermissions(raw.permissions);
+  const contributes = readContributions(raw.contributes, permissions);
+  const dependencies = readDependencies(raw.dependencies);
+
+  if (raw.override !== undefined && typeof raw.override !== 'boolean') {
+    fail('plugin_manifest_invalid', 'override must be a boolean');
+  }
+
+  if (options.knownPluginIds !== undefined) {
+    const known = new Set(options.knownPluginIds);
+    for (const dependency of dependencies.mods) {
+      if (!known.has(dependency)) {
+        fail(
+          'plugin_dependency_missing',
+          `plugin "${id}" depends on missing plugin "${dependency}"`,
+        );
+      }
+    }
+  }
+
+  return {
+    id,
+    name,
+    version,
+    engines: { vessel: vesselRange },
+    ...(description !== undefined ? { description } : {}),
+    side,
+    entry,
+    ...(ui !== undefined ? { ui } : {}),
+    activationEvents,
+    ...(contributes !== undefined ? { contributes } : {}),
+    permissions,
+    dependencies,
+    ...(raw.override === true ? { override: true } : {}),
+  };
+}
+
+/** 非抛出版本：解析 / 校验失败返回 `{ ok: false, error }` */
+export function validatePluginManifest(
+  raw: unknown,
+  options: PluginManifestOptions,
+): PluginManifestValidation {
+  try {
+    return { ok: true, manifest: parsePluginManifest(raw, options) };
+  } catch (error) {
+    if (error instanceof PluginManifestValidationError) return { ok: false, error };
+    throw error;
+  }
+}
