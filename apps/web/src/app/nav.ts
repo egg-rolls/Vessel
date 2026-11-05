@@ -40,8 +40,8 @@ export const NAV_GROUPS: readonly {
   { id: 'chat', domains: ['chat', 'teams'] },
   { id: 'network', domains: ['agents', 'nodes'] },
   { id: 'runs', domains: ['runs', 'tenants'] },
-  { id: 'integrations', domains: ['tools', 'mcp', 'channels'] },
-  { id: 'core', domains: ['hub', 'gateway', 'capabilities'] },
+  { id: 'integrations', domains: ['capabilities', 'tools', 'mcp', 'channels'] },
+  { id: 'core', domains: ['hub', 'gateway'] },
   { id: 'settings', domains: ['settings', 'visual'] },
 ];
 
