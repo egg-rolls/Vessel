@@ -79,7 +79,7 @@ tool loop ── capability tools (prompt surface = token tax)
 
 - 体验插件可热重载：gateway 监听 project / user 插件目录与 `config.yaml` 的 `plugins:` 段，变更去抖 300ms；按 `id` diff，新增为 inactive，变更先 deactivate 再替换 descriptor（原 active 的重新激活），删除则 deactivate、注销 RPC 与静态路由。
 - 能力插件是 in-process 模块，v1 不做真正卸载：改动后必须重启进程；`plugins.reload` 返回 `restart_required`，不谎报已重载。
-- `plugins.reload`（`write` / `admin`）返回 `{added, removed, changed, active, errors[], restart_required?}`；每次 reload 广播 `plugin.changed`（`plugins.list` 贡献快照），Web 重新拉取并增删导航 / 页面。
+- `plugins.reload`（permission `write`）返回 `{added, removed, changed, active, errors[], restart_required?}`；每次 reload 广播 `plugin.changed`（`plugins.list` 贡献快照），Web 重新拉取并增删导航 / 页面。
 
 ## 使用
 

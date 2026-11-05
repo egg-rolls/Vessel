@@ -7,9 +7,8 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 
 # 统一 RPC 方法表
 <a id="rpc-methods"></a>
-
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get|sources|set`；`sessions.list|get|search|delete|rename|compact|create|restart|activate`；`runs.list|get|start|cancel|resume`；`agents.list|get|tree` / `agents.create|update|close|send|dispatch`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get|reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond` / `permissions.setToolPolicy`；`interactions.list`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（admin-only，缺省 `not_supported`）；`teams.list|get|post|retract|members|budget` / `teams.create|update|archive|spawnFrozen`；`auth.exchange|revoke|tokens`。permission 以表格为准。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get|sources|set`；`sessions.list|get|search|delete|rename|compact|create|restart|activate`；`runs.list|get|start|cancel|resume`；`agents.list|get|tree` / `agents.create|update|close|send|dispatch`；`events.list|subscribe`；`tools.list`；`plugins.list|reload`；`metrics.get|reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond` / `permissions.setToolPolicy`；`interactions.list`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（admin-only，缺省 `not_supported`）；`teams.list|get|post|retract|members|budget` / `teams.create|update|archive|spawnFrozen`；`auth.exchange|revoke|tokens`。permission 以表格为准。
 <!-- rpc-methods:begin -->
 | 方法 | permission |
 |---|---|
@@ -44,6 +43,7 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 | `events.subscribe` | read |
 | `tools.list` | read |
 | `plugins.list` | read |
+| `plugins.reload` | write |
 | `metrics.get` | read |
 | `metrics.reset` | write |
 | `mcp.list` | read |
