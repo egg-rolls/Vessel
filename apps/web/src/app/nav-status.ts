@@ -10,6 +10,7 @@
  */
 import type { HubInfo } from '../domains/hub/hub-state';
 import type { ConnectionState } from '../gateway/client';
+import type { PluginListItem } from '../gateway/types';
 
 export type NavStatusTone = 'ok' | 'warn' | 'danger' | 'muted';
 
@@ -64,7 +65,35 @@ export function hubNavStatus(
   };
 }
 
+/**
+ * 插件宿主状态点：版本取 `plugins.list` 里 marketplace 条目的 `version`。
+ * 缺失条目 / 未启用 / 未知状态一律 muted；unhealthy / invalid 才算 danger。
+ */
+export function pluginHostNavStatus(marketplace: PluginListItem | undefined): NavStatusMeta {
+  const base = marketplace?.version !== undefined ? { version: marketplace.version } : {};
+  if (!marketplace) {
+    return { tone: 'muted', labelKey: 'nav.status.unknown', ...base };
+  }
+  if (!marketplace.enabled) {
+    return { tone: 'muted', labelKey: 'pluginHost.enabled.off', ...base };
+  }
+  switch (marketplace.status) {
+    case 'active':
+      return { tone: 'ok', labelKey: 'pluginHost.status.active', ...base };
+    case 'unhealthy':
+    case 'invalid':
+      return { tone: 'danger', labelKey: `pluginHost.status.${marketplace.status}`, ...base };
+    case 'disabled':
+      return { tone: 'muted', labelKey: 'pluginHost.status.disabled', ...base };
+    case 'inactive':
+      return { tone: 'muted', labelKey: 'pluginHost.status.inactive', ...base };
+    default:
+      return { tone: 'muted', labelKey: 'nav.status.unknown', ...base };
+  }
+}
+
 export interface NavStatuses {
   hub: NavStatusMeta;
   gateway: NavStatusMeta;
+  pluginHost: NavStatusMeta;
 }

@@ -18,7 +18,7 @@ export function TenantsPage() {
 export function CapabilitiesPage() {
   useLocale();
   return (
-    <PageFrame title={t('nav.domain.capabilities')}>
+    <PageFrame title={t('nav.domain.capabilities')} subtitle={t('capabilities.subtitle')}>
       <CapabilitiesView />
     </PageFrame>
   );

@@ -52,6 +52,7 @@ const CORE_GROUP_ICONS: Record<string, Domain> = {
 function statusOf(domain: PrimaryDomain, statuses: NavStatuses): NavStatusMeta | undefined {
   if (domain === 'hub') return statuses.hub;
   if (domain === 'gateway') return statuses.gateway;
+  if (domain === 'pluginHost') return statuses.pluginHost;
   return undefined;
 }
 

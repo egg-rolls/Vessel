@@ -73,16 +73,9 @@ export function CapabilitiesView() {
           onRetry={reloadCapabilities}
         />
       )}
-      <Section
-        title={t('capabilities.title')}
-        actions={
-          <span className="font-mono text-md text-muted">
-            v{manifest.version} · schema {manifest.config_schema_version}
-          </span>
-        }
-      >
+      <div className="flex flex-col gap-3">
         {counts && (
-          <div className="my-3 flex flex-wrap gap-2.5">
+          <div className="flex flex-wrap gap-2.5">
             <Stat
               className="min-w-40 flex-1"
               value={counts.methods}
@@ -104,13 +97,18 @@ export function CapabilitiesView() {
             />
           </div>
         )}
-        <SegmentedTabs
-          label={t('capabilities.tabsLabel')}
-          tabs={tabs}
-          value={tab}
-          onChange={setTab}
-        />
-        <div className="mt-3.5 flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <SegmentedTabs
+            label={t('capabilities.tabsLabel')}
+            tabs={tabs}
+            value={tab}
+            onChange={setTab}
+          />
+          <span className="font-mono text-md text-muted">
+            v{manifest.version} · schema {manifest.config_schema_version}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
           <SearchInput
             value={query}
             onChange={setQuery}
@@ -126,7 +124,7 @@ export function CapabilitiesView() {
                 : result?.plugins.length}
           </Badge>
         </div>
-      </Section>
+      </div>
 
       {tab === 'methods' &&
         (methodGroups.length === 0 ? (

@@ -93,7 +93,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pluginHost.field.version': 'Version',
   'pluginHost.field.mode': 'Mode',
   'pluginHost.field.plugins': 'Plugins',
-  'pluginHost.field.gatewayVersion': 'Gateway',
   'pluginHost.enabled.on': 'Enabled',
   'pluginHost.enabled.off': 'Disabled',
   'pluginHost.status.active': 'Active',
@@ -1437,6 +1436,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'capabilities.noManifest': 'No capability manifest',
   'capabilities.stale': 'Disconnected; showing the last loaded capability manifest.',
   'capabilities.title': 'Capabilities',
+  'capabilities.subtitle':
+    'Protocol methods, tools, and the plugins currently loaded by the gateway runtime.',
   'capabilities.methodsCount': 'Protocol methods (read {read} / write {write} / admin {admin})',
   'capabilities.tools': 'Tools',
   'capabilities.pluginsEnabled': 'Enabled plugins',

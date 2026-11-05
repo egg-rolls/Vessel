@@ -45,7 +45,6 @@ export function PluginHostView() {
   const { plugins, state, reload } = usePluginContributions();
   const { config, reloadConfig } = useConfigStoreApi();
   const configData = resourceData(config);
-  const gatewayVersion = configData?.version;
 
   const marketplace = useMemo(() => marketplaceOf(plugins), [plugins]);
   // registry_url 来自 config.get（config.plugins），不是 plugins.list。
@@ -154,10 +153,6 @@ export function PluginHostView() {
                     {
                       label: t('pluginHost.field.plugins'),
                       value: plugins.length,
-                    },
-                    {
-                      label: t('pluginHost.field.gatewayVersion'),
-                      value: gatewayVersion ? `v${gatewayVersion}` : '—',
                     },
                   ]}
                 />
