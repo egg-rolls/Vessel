@@ -8,18 +8,50 @@ import type {
   PluginContributionPage,
   PluginContributionPanel,
   PluginListItem,
-  PluginNavSlot,
   PluginPanelSlot,
 } from '../../gateway/types';
+
+/** 图标白名单（与 DomainIcon 的领域名一致；不接受任意 SVG / 任意名字）。 */
+export const PLUGIN_NAV_ICONS = [
+  'chat',
+  'hub',
+  'gateway',
+  'nodes',
+  'teams',
+  'agents',
+  'runs',
+  'tools',
+  'mcp',
+  'channels',
+  'plugins',
+  'observe',
+  'settings',
+] as const;
+
+export type PluginNavIcon = (typeof PLUGIN_NAV_ICONS)[number];
 
 export interface PluginPageItem {
   pluginId: string;
   pluginName: string;
   id: string;
   title: string;
-  nav: PluginNavSlot;
+  /** 内置分组 id 或本 plugin 的 `plugin:<pluginId>`。 */
+  nav: string;
+  /** 不含未通过白名单的值。 */
+  icon?: PluginNavIcon;
   order: number;
   entry: string;
+}
+
+/** CONTRACT-0.43 §2.9 E5：已校验的自定义导航分组。 */
+export interface PluginNavGroupItem {
+  pluginId: string;
+  pluginName: string;
+  /** `plugin:<pluginId>` */
+  id: string;
+  title: string;
+  icon?: PluginNavIcon;
+  order: number;
 }
 
 export interface PluginPanelItem {
@@ -32,10 +64,22 @@ export interface PluginPanelItem {
   entry: string;
 }
 
-const NAV_SLOTS: ReadonlySet<string> = new Set(['observe', 'plugins', 'settings', 'top']);
+/** 内置分组；自定义分组必须严格等于 `plugin:<pluginId>`。 */
+const BUILTIN_NAV_SLOTS: ReadonlySet<string> = new Set(['observe', 'plugins', 'settings', 'top']);
+const NAV_ICONS: ReadonlySet<string> = new Set(PLUGIN_NAV_ICONS);
 const PANEL_SLOTS: ReadonlySet<string> = new Set(['run-detail', 'session-detail', 'nav']);
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const RPC_METHOD = /^[a-z][a-z0-9_-]*$/;
+
+/**
+ * 图标校验：缺失返回 `undefined`；非法返回 `null`（调用方丢弃该 page/group）。
+ * 只接受白名单，不把任意字符串传给渲染层。
+ */
+function navIconOf(value: unknown): PluginNavIcon | null | undefined {
+  const name = text(value);
+  if (name === '') return undefined;
+  return NAV_ICONS.has(name) ? (name as PluginNavIcon) : null;
+}
 
 export function isEnabledPlugin(plugin: PluginListItem): boolean {
   return plugin.enabled;
@@ -97,17 +141,48 @@ export function pluginFrameUrl(
   return url.toString();
 }
 
-function pageOf(plugin: PluginListItem, page: PluginContributionPage): PluginPageItem | null {
+/**
+ * 自定义分组：只接受 `plugin:<pluginId>` 且每个 plugin 最多一个。
+ * 非法 id / 非法 icon 返回 null（整组丢弃，不影响其它 plugin）。
+ */
+function navGroupOf(plugin: PluginListItem): PluginNavGroupItem | null {
+  const ownId = `plugin:${plugin.name}`;
+  const groups = plugin.contributions?.navGroups ?? [];
+  const raw = groups.find((group) => text(group.id) === ownId);
+  if (!raw) return null;
+  const title = text(raw.title) || ownId;
+  const icon = navIconOf(raw.icon);
+  if (icon === null) return null;
+  return {
+    pluginId: plugin.name,
+    pluginName: plugin.name,
+    id: ownId,
+    title,
+    ...(icon !== undefined ? { icon } : {}),
+    order: orderOf(raw.order),
+  };
+}
+
+function pageOf(
+  plugin: PluginListItem,
+  page: PluginContributionPage,
+  ownNav: string | undefined,
+): PluginPageItem | null {
   const id = text(page.id);
   const title = text(page.title) || id;
   if (id === '' || title === '') return null;
-  const nav = text(page.nav);
+  const nav = text(page.nav) || 'top';
+  // 只允许内置分组或本 plugin 已声明的 `plugin:<pluginId>`；跨 plugin 引用丢弃。
+  if (!BUILTIN_NAV_SLOTS.has(nav) && nav !== ownNav) return null;
+  const icon = navIconOf(page.icon);
+  if (icon === null) return null;
   return {
     pluginId: plugin.name,
     pluginName: plugin.name,
     id,
     title,
-    nav: NAV_SLOTS.has(nav) ? (nav as PluginNavSlot) : 'top',
+    nav,
+    ...(icon !== undefined ? { icon } : {}),
     order: orderOf(page.order),
     entry: pageEntry(page),
   };
@@ -154,6 +229,7 @@ export function pluginsFromChangedPayload(data: unknown): PluginListItem[] | nul
 
 export interface PluginInventory {
   pages: PluginPageItem[];
+  navGroups: PluginNavGroupItem[];
   panels: PluginPanelItem[];
   /** plugin id → 允许 iframe 调用的 RPC 方法名（rpc ∪ commands）。 */
   methodsByPlugin: ReadonlyMap<string, ReadonlySet<string>>;
@@ -162,6 +238,7 @@ export interface PluginInventory {
 /** 启用插件的贡献点平铺；零插件 / 旧 gateway 返回空集合。 */
 export function buildPluginInventory(plugins: readonly PluginListItem[]): PluginInventory {
   const pages: PluginPageItem[] = [];
+  const navGroups: PluginNavGroupItem[] = [];
   const panels: PluginPanelItem[] = [];
   const methodsByPlugin = new Map<string, Set<string>>();
 
@@ -170,8 +247,10 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
     const contributions = plugin.contributions;
     if (!contributions) continue;
 
+    const group = navGroupOf(plugin);
+    if (group !== null) navGroups.push(group);
     for (const page of contributions.pages ?? []) {
-      const item = pageOf(plugin, page);
+      const item = pageOf(plugin, page, group?.id);
       if (item !== null) pages.push(item);
     }
     for (const panel of contributions.panels ?? []) {
@@ -193,6 +272,7 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
   }
 
   pages.sort(byOrder);
+  navGroups.sort(byOrder);
   panels.sort(byOrder);
-  return { pages, panels, methodsByPlugin };
+  return { pages, navGroups, panels, methodsByPlugin };
 }

@@ -87,8 +87,22 @@ export interface RpcResponseEnvelope<T = unknown> {
   error?: { code: string; message: string; details?: unknown };
 }
 
-/** plugin 导航归属；缺省当 `top`（CONTRACT-0.43 §2.1；0.45 增加 `plugins`）。 */
-export type PluginNavSlot = 'observe' | 'plugins' | 'settings' | 'top';
+/**
+ * plugin 导航归属；缺省当 `top`（CONTRACT-0.43 §2.1）。
+ * 0.45 E5：内置分组 `top/observe/settings/plugins` 之外，页面可引用本 plugin 的
+ * `plugin:<pluginId>` 自定义分组，因此类型放开为 string（由 normalizer 校验）。
+ */
+export type PluginNavSlot = string;
+
+/** CONTRACT-0.43 §2.9 E5：plugin 自定义导航分组。 */
+export interface PluginNavGroupContribution {
+  /** 必须是 `plugin:<pluginId>`；v1 每个 plugin 最多一个。 */
+  id: string;
+  title: string;
+  /** 白名单图标名；未知名由 Web normalizer 丢弃。 */
+  icon?: string;
+  order?: number;
+}
 
 /** panel 槽位（CONTRACT-0.43 §2.6）。 */
 export type PluginPanelSlot = 'run-detail' | 'session-detail' | 'nav';
@@ -98,6 +112,8 @@ export interface PluginContributionPage {
   id: string;
   title: string;
   nav?: PluginNavSlot;
+  /** 白名单图标名；未知名由 Web normalizer 丢弃该页。 */
+  icon?: string;
   order?: number;
   /** 相对 `ui.dir` 的 iframe 入口；缺失时回退 index.html。 */
   entry?: string;
@@ -119,6 +135,8 @@ export interface PluginContributionCommand {
 }
 
 export interface PluginContributions {
+  /** CONTRACT-0.43 §2.9 E5：自定义导航分组（v1 每 plugin 最多一个）。 */
+  navGroups?: PluginNavGroupContribution[];
   pages?: PluginContributionPage[];
   panels?: PluginContributionPanel[];
   commands?: PluginContributionCommand[];

@@ -4,7 +4,7 @@ import { ResizeHandle } from '../components/ResizeHandle';
 import { IconButton, Tooltip } from '../components/Tooltip';
 import { cn } from '../components/ui/cn';
 import { PluginPanelList } from '../domains/plugins/PluginPanels';
-import type { PluginPageItem } from '../domains/plugins/plugin-contributions';
+import type { PluginNavGroupItem, PluginPageItem } from '../domains/plugins/plugin-contributions';
 import {
   pagesForNav,
   panelsForSlot,
@@ -86,7 +86,12 @@ export function DomainNav({
 }) {
   useLocale();
   const statuses = useNavStatus();
-  const { pages: pluginPages, panels: pluginPanels, methodsByPlugin } = usePluginContributions();
+  const {
+    pages: pluginPages,
+    navGroups: pluginNavGroups,
+    panels: pluginPanels,
+    methodsByPlugin,
+  } = usePluginContributions();
   const topPluginPages = pagesForNav(pluginPages, 'top');
   const observePluginPages = pagesForNav(pluginPages, 'observe');
   const pluginsPluginPages = pagesForNav(pluginPages, 'plugins');
@@ -119,7 +124,7 @@ export function DomainNav({
         onClick={() => navigate({ domain: 'plugins', pluginId: page.pluginId, entry: page.entry })}
       >
         <span className="inline-flex flex-none">
-          <DomainIcon domain="plugins" />
+          <DomainIcon domain={page.icon ?? 'plugins'} />
         </span>
         {showLabels && (
           <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
@@ -144,6 +149,29 @@ export function DomainNav({
         {showLabels && (
           <div className="overflow-hidden text-ellipsis whitespace-nowrap px-3 pt-1 pb-0.5 font-mono text-2xs tracking-[var(--tracking-wide)] text-faint uppercase">
             {navGroupLabel('plugins')}
+          </div>
+        )}
+        {items.map(pluginPageButton)}
+      </div>
+    );
+  };
+
+  const customPluginGroup = (group: PluginNavGroupItem) => {
+    const items = pagesForNav(pluginPages, group.id);
+    if (items.length === 0) return null;
+    return (
+      <div
+        className="mt-3 flex flex-col gap-0.5"
+        key={`plugin-group:${group.pluginId}:${group.id}`}
+      >
+        {showLabels && (
+          <div className="flex items-center gap-2 overflow-hidden px-3 pt-1 pb-0.5 font-mono text-2xs tracking-[var(--tracking-wide)] text-faint uppercase">
+            <span className="inline-flex flex-none [&_svg]:size-3">
+              <DomainIcon domain={group.icon ?? 'plugins'} />
+            </span>
+            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+              {group.title}
+            </span>
           </div>
         )}
         {items.map(pluginPageButton)}
@@ -303,6 +331,7 @@ export function DomainNav({
         ))}
         {pluginGroup('plugins-nav', pluginsPluginPages)}
         {pluginGroup('plugins-settings', settingsPluginPages)}
+        {pluginNavGroups.map(customPluginGroup)}
       </div>
       <div
         className={cn(
