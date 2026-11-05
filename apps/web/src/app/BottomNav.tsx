@@ -24,6 +24,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
   const moreActive =
     route.domain === 'hub' ||
     route.domain === 'gateway' ||
+    route.domain === 'pluginHost' ||
     route.domain === 'nodes' ||
     route.domain === 'teams' ||
     route.domain === 'agents' ||
@@ -187,6 +188,16 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               }}
             >
               <DomainIcon domain="gateway" /> {domainLabel('gateway')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
+                navigate(primaryRoute('pluginHost'));
+              }}
+            >
+              <DomainIcon domain="pluginHost" /> {domainLabel('pluginHost')}
             </button>
             {pluginPages.map((page) => (
               <button

@@ -16,6 +16,7 @@ export type Route =
   | { domain: 'plugins'; pluginId?: string; entry?: string }
   | { domain: 'hub' }
   | { domain: 'gateway' }
+  | { domain: 'pluginHost' }
   | { domain: 'nodes'; nodeKey?: string }
   | { domain: 'teams' }
   | { domain: 'teams'; nodeKey: string; teamId: string; agentId?: string; bodyId?: string }
@@ -128,6 +129,8 @@ export function parseRoute(hash: string): Route {
       return { domain: 'hub' };
     case 'gateway':
       return { domain: 'gateway' };
+    case 'plugin-host':
+      return { domain: 'pluginHost' };
     case 'nodes': {
       const nodeKey = segments[1] !== undefined ? decodeSegment(segments[1]) : undefined;
       return nodeKey ? { domain: 'nodes', nodeKey } : { domain: 'nodes' };
@@ -218,6 +221,8 @@ export function formatRoute(route: Route): string {
       return '#/hub';
     case 'gateway':
       return '#/gateway';
+    case 'pluginHost':
+      return '#/plugin-host';
     case 'nodes':
       return route.nodeKey ? `#/nodes/${encodeURIComponent(route.nodeKey)}` : '#/nodes';
     case 'teams': {

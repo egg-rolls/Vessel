@@ -24,6 +24,7 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'channels' },
   { id: 'hub' },
   { id: 'gateway' },
+  { id: 'pluginHost' },
   { id: 'capabilities' },
   { id: 'settings' },
   { id: 'visual' },
@@ -41,7 +42,7 @@ export const NAV_GROUPS: readonly {
   { id: 'network', domains: ['agents', 'nodes'] },
   { id: 'runs', domains: ['runs', 'tenants'] },
   { id: 'integrations', domains: ['capabilities', 'tools', 'mcp', 'channels'] },
-  { id: 'core', domains: ['hub', 'gateway'] },
+  { id: 'core', domains: ['hub', 'gateway', 'pluginHost'] },
   { id: 'settings', domains: ['settings', 'visual'] },
 ];
 
@@ -54,6 +55,8 @@ export function primaryRoute(domain: PrimaryDomain): Route {
       return { domain: 'hub' };
     case 'gateway':
       return { domain: 'gateway' };
+    case 'pluginHost':
+      return { domain: 'pluginHost' };
     case 'nodes':
       return { domain: 'nodes' };
     case 'teams':
@@ -109,6 +112,8 @@ export function routeBreadcrumb(route: Route): string {
       return t('breadcrumb.hub');
     case 'gateway':
       return t('breadcrumb.gateway');
+    case 'pluginHost':
+      return t('breadcrumb.pluginHost');
     case 'nodes':
       return route.nodeKey
         ? t('breadcrumb.nodes.detail', { node: route.nodeKey })

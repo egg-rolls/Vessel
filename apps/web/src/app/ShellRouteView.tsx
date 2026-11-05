@@ -6,6 +6,7 @@ import { HubView } from '../domains/hub/HubView';
 import { CapabilityView } from '../domains/integrations/CapabilityView';
 import { NodePanelView } from '../domains/nodes/NodePanelView';
 import { ObserveView } from '../domains/observe/ObserveView';
+import { PluginHostView } from '../domains/plugins/PluginHostView';
 import { PluginPageView } from '../domains/plugins/PluginPageView';
 import { RunsView } from '../domains/runs/RunsView';
 import { CapabilitiesPage, TenantsPage, VisualPage } from '../domains/settings/NavPages';
@@ -56,6 +57,7 @@ export function ShellRouteView({
       )}
       {route.domain === 'hub' && <HubView />}
       {route.domain === 'gateway' && <GatewayView navigate={navigate} />}
+      {route.domain === 'pluginHost' && <PluginHostView />}
       {route.domain === 'nodes' && <NodePanelView route={route} navigate={navigate} />}
       {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} />}
       {route.domain === 'agents' && <AgentsView route={route} navigate={navigate} />}

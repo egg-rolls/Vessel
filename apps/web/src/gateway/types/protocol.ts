@@ -157,12 +157,21 @@ export interface PluginContributions {
    * Web 仅用于 postMessage 方法校验，不渲染。旧 gateway 可能仍发 `{name}` 对象，
    * 读侧容忍该形状。
    */
-  rpc?: Array<string | { name?: string; description?: string }>;
+  rpc?: Array<string | { name?: string; description?: string; permission?: 'read' | 'write' }>;
 }
+
+export type PluginRuntimeMode = 'in-process' | 'child';
+export type PluginRuntimeStatus = 'inactive' | 'active' | 'unhealthy' | 'disabled' | 'invalid';
 
 export interface PluginListItem {
   name: string;
   enabled: boolean;
+  /** E10 additive runtime metadata；旧 gateway 缺省。 */
+  version?: string;
+  mode?: PluginRuntimeMode;
+  status?: PluginRuntimeStatus;
+  /** plugin 私有配置快照（E10；marketplace 用 registry_url）。 */
+  config?: Record<string, unknown>;
   /** additive（CONTRACT-0.43 §2.7）；能力插件不返回。 */
   contributions?: PluginContributions;
 }
