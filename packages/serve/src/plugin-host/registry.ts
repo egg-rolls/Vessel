@@ -130,9 +130,9 @@ export class PluginRpcRegistry implements RpcDynamicMethodSource {
       if (this.byName.has(fullName)) {
         throw pluginError('plugin_id_conflict', `RPC method already registered: ${fullName}`);
       }
-      // 运行期复检：loader 注入的 JS 对象可能绕过 TS 联合类型。
+      // 运行期复检：manifest 只允许 read / write（E10）。
       const permission = method.permission ?? 'read';
-      if (permission !== 'read' && permission !== 'write' && permission !== 'admin') {
+      if (permission !== 'read' && permission !== 'write') {
         throw pluginError(
           'plugin_manifest_invalid',
           `Invalid rpc permission: ${String(permission)}`,

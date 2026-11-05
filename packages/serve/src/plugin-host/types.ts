@@ -144,8 +144,8 @@ export interface PluginRpcContribution {
   /** 只能是 `[a-z][a-z0-9_-]*`；宿主拼接为 `plugin.<id>.<name>`。 */
   name: string;
   description?: string;
-  /** 调用方权限；缺省 read（contract §2.4：仍走 gateway 权限）。 */
-  permission?: 'read' | 'write' | 'admin';
+  /** 调用方权限；缺省 read（contract §2.4 / §2.12 E10）。 */
+  permission?: 'read' | 'write';
 }
 
 /** `contributes`（只保留宿主需要的键） */
@@ -266,11 +266,28 @@ export interface PluginContributionsSnapshot {
   }>;
 }
 
+/** 插件运行模式（E10 元数据）。 */
+export type PluginMode = 'in-process' | 'child';
+
+/** `plugins.list[].status` 允许的对外值（不含瞬态 starting/stopped）。 */
+export type PluginListStatus = 'inactive' | 'active' | 'unhealthy' | 'disabled' | 'invalid';
+
+/** `plugins.list` 每项的运行时元数据（additive）。 */
+export interface PluginListMetadata {
+  version?: string;
+  mode?: PluginMode;
+  status?: PluginListStatus;
+}
+
 /** 单个 plugin 的可观测状态 */
 export interface PluginStatusEntry {
   id: string;
   status: PluginRuntimeStatus;
   enabled: boolean;
+  /** manifest version（E10）。 */
+  version?: string;
+  /** 体验型 plugin 在宿主内始终是 child（E10）。 */
+  mode?: PluginMode;
   /** 最近一次失败码；成功启动 / 停止后清理。 */
   error?: PluginErrorCode;
   /** 最近一次失败的说明（不含密钥 / 事件正文）。 */
@@ -299,6 +316,8 @@ export interface PluginEventSource {
  */
 export interface PluginHostManagerLike {
   readonly rpc: RpcDynamicMethodSource;
+  /** 运行时状态；gateway 用 version/mode/status 填充 plugins.list 元数据。 */
+  statuses(): PluginStatusEntry[];
   /**
    * 懒激活：首次页面 / RPC 访问时调用；active 时 no-op，
    * disabled / invalid 抛契约错误。v1 不做预激活。

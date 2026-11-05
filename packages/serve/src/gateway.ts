@@ -111,6 +111,7 @@ import {
   type PluginHostManagerLike,
   type PluginReloadResult,
   pluginErrorCodeOf,
+  pluginListMetadata,
 } from './plugin-host/index.js';
 import { pluginStaticId, servePluginAsset } from './plugin-host/static.js';
 import {
@@ -1085,6 +1086,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ? {
           pluginsContributionsForTenant: (tenantId: string) =>
             opts.pluginHostManager?.contributionsFor(tenantId) ?? {},
+          pluginsMetadataForTenant: () => pluginMetadata(),
         }
       : {}),
     ...(opts.pluginsReload !== undefined
@@ -1608,8 +1610,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
       plugins: mergePluginList(
         pluginsForTenant(tenantId),
         opts.pluginHostManager?.contributionsFor(tenantId),
+        pluginMetadata(),
       ),
     };
+  }
+
+  /** E10：manager 的 version / mode / status（与 plugins.list 同源）。 */
+  function pluginMetadata(): ReturnType<typeof pluginListMetadata> {
+    return pluginListMetadata(opts.pluginHostManager?.statuses() ?? []);
   }
 
   /** 0.43 E3：reload 后向所有 tenant 流广播 `plugin.changed`（best-effort）。 */

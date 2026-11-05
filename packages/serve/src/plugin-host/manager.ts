@@ -23,6 +23,8 @@ import type {
   PluginEventDto,
   PluginEventSource,
   PluginHostManagerLike,
+  PluginListMetadata,
+  PluginListStatus,
   PluginReloadError,
   PluginReloadResult,
   PluginRenderContributions,
@@ -241,6 +243,17 @@ function validateDescriptor(input: PluginDescriptor): PluginDescriptor {
   const rpcNames = new Set<string>();
   for (const method of contributes.rpc ?? []) {
     pluginRpcName(input.id, method.name);
+    if (
+      method.permission !== undefined &&
+      method.permission !== 'read' &&
+      method.permission !== 'write'
+    ) {
+      throw pluginError('plugin_manifest_invalid', 'rpc[].permission must be read or write.', {
+        id: input.id,
+        method: method.name,
+        permission: method.permission,
+      });
+    }
     if (rpcNames.has(method.name)) {
       throw pluginError('plugin_manifest_invalid', `Duplicate plugin rpc: ${method.name}`, {
         id: input.id,
@@ -1032,6 +1045,8 @@ export class PluginHostManager implements PluginHostManagerLike {
       id: entry.descriptor.id,
       status: entry.status,
       enabled: entry.enabled,
+      ...(entry.descriptor.version.length > 0 ? { version: entry.descriptor.version } : {}),
+      mode: 'child',
       ...(entry.error !== undefined ? { error: entry.error } : {}),
       ...(entry.message !== undefined ? { message: entry.message } : {}),
       events_dropped: entry.dropped,
@@ -1050,6 +1065,37 @@ export class PluginHostManager implements PluginHostManagerLike {
     }
     return entry;
   }
+}
+
+/** 运行期状态 → `plugins.list[].status`（瞬态 starting/stopped 归一为 inactive）。 */
+export function toPluginListStatus(status: PluginRuntimeStatus): PluginListStatus {
+  switch (status) {
+    case 'active':
+      return 'active';
+    case 'unhealthy':
+      return 'unhealthy';
+    case 'disabled':
+      return 'disabled';
+    case 'invalid':
+      return 'invalid';
+    default:
+      return 'inactive';
+  }
+}
+
+/** `plugins.list` / `plugin.changed` 共用元数据映射。 */
+export function pluginListMetadata(
+  statuses: readonly PluginStatusEntry[],
+): Record<string, PluginListMetadata> {
+  const output: Record<string, PluginListMetadata> = {};
+  for (const status of statuses) {
+    output[status.id] = {
+      ...(status.version !== undefined ? { version: status.version } : {}),
+      ...(status.mode !== undefined ? { mode: status.mode } : {}),
+      status: toPluginListStatus(status.status),
+    };
+  }
+  return output;
 }
 
 /** 只返回可渲染字段（contract §2.7）；能力插件 / 无 UI 贡献 → undefined。 */

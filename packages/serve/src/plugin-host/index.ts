@@ -42,7 +42,9 @@ export {
   PluginHostManager,
   type PluginHostManagerOptions,
   type PluginLogger,
+  pluginListMetadata,
   renderContributions,
+  toPluginListStatus,
 } from './manager.js';
 export {
   PLUGIN_ID_PATTERN,
@@ -64,8 +66,11 @@ export type {
   PluginHostManagerLike,
   PluginI18n,
   PluginIconName,
+  PluginListMetadata,
+  PluginListStatus,
   PluginLocale,
   PluginManifestContributions,
+  PluginMode,
   PluginNav,
   PluginNavGroup,
   PluginPageContribution,

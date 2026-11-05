@@ -6,7 +6,11 @@
 
 import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel-agent/config';
 import type { PluginHost } from '@vessel-agent/core';
-import type { PluginReloadResult, PluginRenderContributions } from '../../plugin-host/types.js';
+import type {
+  PluginListMetadata,
+  PluginReloadResult,
+  PluginRenderContributions,
+} from '../../plugin-host/types.js';
 import type { NodeInfo, ProtocolInfo, ToolInfo } from '../../protocol.js';
 import {
   buildCapabilityManifest,
@@ -79,6 +83,8 @@ export interface ConfigMethodsDeps {
   pluginsForTenant(tenantId: string): Array<{ name: string; enabled: boolean }>;
   /** 0.43 E1：只给 enabled 的体验型 plugin 附加渲染字段（additive）。 */
   pluginsContributionsForTenant?(tenantId: string): Record<string, PluginRenderContributions>;
+  /** 0.43 E10：version / mode / status 运行时元数据（additive）。 */
+  pluginsMetadataForTenant?(tenantId: string): Record<string, PluginListMetadata>;
   /** 0.43 E3：rescan / diff / manager.reload 由 assembly 注入；缺省 not_supported。 */
   pluginsReload?: () => Promise<PluginReloadResult>;
   pluginHostFor(tenantId: string): PluginHost | undefined;
@@ -413,16 +419,27 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
   ];
 }
 
-/** 合并 plugins.list 条目与 E1 贡献；gateway 广播 `plugin.changed` 也用它。 */
+/** `plugins.list` 单项（E1 贡献 + E10 元数据；旧客户端可忽略新字段）。 */
+export interface PluginListEntry extends PluginListMetadata {
+  name: string;
+  enabled: boolean;
+  contributions?: PluginRenderContributions;
+}
+
+/** 合并 plugins.list 条目、E1 贡献与 E10 元数据；`plugin.changed` 也用它。 */
 export function mergePluginList(
   plugins: Array<{ name: string; enabled: boolean }>,
   contributions: Record<string, PluginRenderContributions> | undefined,
-): Array<{ name: string; enabled: boolean; contributions?: PluginRenderContributions }> {
-  if (contributions === undefined) return plugins;
+  metadata: Record<string, PluginListMetadata> | undefined,
+): PluginListEntry[] {
+  if (contributions === undefined && metadata === undefined) return plugins;
   return plugins.map((plugin) => {
-    if (!plugin.enabled) return plugin;
-    const extra = contributions[plugin.name];
-    return extra !== undefined ? { ...plugin, contributions: extra } : plugin;
+    const extraMeta = metadata?.[plugin.name];
+    const base =
+      extraMeta !== undefined ? { ...plugin, ...extraMeta } : (plugin as PluginListEntry);
+    if (!base.enabled) return base;
+    const extra = contributions?.[base.name];
+    return extra !== undefined ? { ...base, contributions: extra } : base;
   });
 }
 
@@ -445,6 +462,13 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
               properties: {
                 name: { type: 'string' },
                 enabled: { type: 'boolean' },
+                // 0.43 E10：additive 运行时元数据。
+                version: { type: 'string' },
+                mode: { type: 'string', enum: ['in-process', 'child'] },
+                status: {
+                  type: 'string',
+                  enum: ['inactive', 'active', 'unhealthy', 'disabled', 'invalid'],
+                },
                 // 0.43 E1：additive；能力插件 / 无渲染贡献不返回。
                 contributions: {
                   type: 'object',
@@ -469,6 +493,7 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
         plugins: mergePluginList(
           deps.pluginsForTenant(ctx.tenantId),
           deps.pluginsContributionsForTenant?.(ctx.tenantId),
+          deps.pluginsMetadataForTenant?.(ctx.tenantId),
         ),
       }),
     },
