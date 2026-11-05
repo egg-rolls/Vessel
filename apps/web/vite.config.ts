@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin, type ProxyOptions } from 'vite';
@@ -79,10 +79,25 @@ const relay =
 const target = relay?.url ?? GATEWAY;
 const configure = relay ? relayConfigure(relay.secret) : undefined;
 
+const PLUGIN_UI_SRC = resolve(__dirname, '../../packages/plugin-ui/src');
+
 export default defineConfig({
   // 品牌资源只有一份：仓库根 `assets/`。Web 直接把它当 public 目录，
   // 图标既能在 index.html 里按 `/Vessel.svg` 引用，也能被 README 用相对路径引用。
   publicDir: join(__dirname, '../../assets'),
+  resolve: {
+    // 顺序重要：styles.css 必须先于包根匹配，否则会被当成目录 index。
+    alias: [
+      {
+        find: '@vessel-agent/plugin-ui/styles.css',
+        replacement: resolve(PLUGIN_UI_SRC, 'styles.css'),
+      },
+      {
+        find: '@vessel-agent/plugin-ui',
+        replacement: resolve(PLUGIN_UI_SRC, 'index.ts'),
+      },
+    ],
+  },
   plugins: [react(), tailwindcss(), writeBuildStamp()],
   define: {
     // 页面把「我是哪一次构建」编进 bundle，运行时与 `dist/build.json` 比对，

@@ -6,6 +6,12 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "moduleDetection": "force",
+    // 共享 UI 包按 workspace 源码消费，不经过 node_modules 复制。
+    "baseUrl": ".",
+    "paths": {
+      "@vessel-agent/plugin-ui": ["../../packages/plugin-ui/src/index.ts"],
+      "@vessel-agent/plugin-ui/*": ["../../packages/plugin-ui/src/*"]
+    },
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

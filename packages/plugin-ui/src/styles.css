@@ -1,0 +1,351 @@
+/* Shared UI package styles: tokens + Tailwind theme mapping + minimal base. */
+@layer theme, base, legacy, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@source "./";
+
+/* Minimal base: the subset of the host preflight these components need. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+  color: inherit;
+}
+button {
+  border: 0;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+*:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Vessel Web · neutral tokens
+   黑白灰中性底、细线、留白；海洋绿 (#1EFFC7 / #0B7F66) 作强调，
+   珊瑚红 (#FF6E6E / #C0362C) 作危险色。改版只增加结构 token，不换皮。
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  /* 卡片 hover：亮色保持白色（抬起感来自阴影）/ 暗色变亮；两套值。 */
+  --surface-hover: #ffffff;
+  --surface-sunken: #f1f1f2;
+  --surface-deep: #e8e8ea;
+  --ink: #101012;
+  --muted: #5c5c60;
+  --faint: #7a7a7f;
+  --line: #e4e4e7;
+  --line-strong: #d0d0d5;
+  --accent: #0b7f66;
+  --accent-ink: #086b56;
+  --accent-soft: rgba(11, 127, 102, 0.1);
+  --ok: #0b7f66;
+  --ok-soft: rgba(11, 127, 102, 0.1);
+  --warn: #4a4a4e;
+  --warn-soft: rgba(74, 74, 78, 0.1);
+  --danger: #c0362c;
+  --danger-soft: rgba(192, 54, 44, 0.09);
+  --info: #5c5c60;
+  --info-soft: rgba(92, 92, 96, 0.1);
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.05);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.05), 0 10px 28px rgba(0, 0, 0, 0.08);
+  --elev-3: 0 4px 8px rgba(0, 0, 0, 0.06), 0 18px 48px rgba(0, 0, 0, 0.12);
+  --elev-4: 0 8px 16px rgba(0, 0, 0, 0.08), 0 28px 72px rgba(0, 0, 0, 0.16);
+  --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+  --hover-tint: rgba(0, 0, 0, 0.04);
+  --press-tint: rgba(0, 0, 0, 0.08);
+  --scrim: rgba(0, 0, 0, 0.55);
+
+  --font-sans:
+    "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --font-serif:
+    "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif SC", Georgia, serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+
+  /* 原值别名：供 index.css 的 @theme inline 引用（避免同名自引用）。 */
+  --shape-xs: 6px;
+  --shape-sm: 8px;
+  --shape-md: 12px;
+  --shape-lg: 16px;
+  --shape-xl: 20px;
+
+  --radius-xs: var(--shape-xs);
+  --radius-sm: var(--shape-sm);
+  --radius-md: var(--shape-md);
+  --radius-lg: var(--shape-lg);
+  --radius-xl: var(--shape-xl);
+  --radius-pill: 999px;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* 原值别名：供 index.css 的 @theme inline 引用（避免同名自引用）。 */
+  --size-2xs: 10px;
+  --size-xs: 10.5px;
+  --size-sm: 11.5px;
+  --size-md: 12.5px;
+  --size-base: 14px;
+  --size-lg: 16px;
+  --size-xl: 19px;
+  --size-2xl: 22px;
+
+  --text-xs: var(--size-2xs);
+  --text-sm: var(--size-sm);
+  --text-body: var(--size-base);
+  --text-title: var(--size-2xl);
+
+  --appbar-h: 56px;
+  --nav-w: 256px;
+  --nav-w-collapsed: 56px;
+  --nav-w-rail: 64px;
+  --sessions-w: 280px;
+  --team-list-w: 280px;
+  --team-list-w-compact: 240px;
+  --team-members-w: 272px;
+  --team-members-w-compact: 240px;
+  --team-avatar: 28px;
+  --team-notice-max: 720px;
+  --team-list-max-w: 960px;
+  --team-member-max-w: 900px;
+  --message-max-w: 640px;
+  --content-max: 1440px;
+
+  /* 覆盖层 / 面板的语义宽度与高度 */
+  --drawer-w: 320px;
+  --palette-w: 680px;
+  --modal-w-sm: 420px;
+  --modal-w-md: 620px;
+  --modal-w-lg: 760px;
+  --modal-max-h: 780px;
+  --panel-max-h: 420px;
+  --search-max-w: 420px;
+  --select-min-w: 128px;
+
+  --row-h-session: 56px;
+  --row-h-tool: 36px;
+  --control-h: 32px;
+  --tracking-wide: 0.08em;
+  --motion-ui: 200ms;
+
+  /* 底部槽结构尺度 */
+  --dock-gap: 16px;
+  --dock-safe-bottom: env(safe-area-inset-bottom);
+  --dock-width: 860px;
+  --transcript-min-h: 120px;
+  --bottom-nav-h: 0px;
+  --composer-input-max-h: min(34dvh, 200px);
+  --dock-max-h: min(
+    56dvh,
+    520px,
+    calc(
+      var(--vvh, 100dvh) -
+      var(--appbar-h) -
+      var(--transcript-min-h) -
+      var(--bottom-nav-h, 0px) -
+      var(--dock-gap) -
+      var(--dock-safe-bottom)
+    )
+  );
+  --touch-target: 44px;
+
+  /* 层级：nav < drawer/scrim < modal/palette < toast。drawer 内打开的确认框必须在抽屉之上。 */
+  --z-drawer: 60;
+  --z-modal: 70;
+  --z-palette: 75;
+  --z-toast: 80;
+  --z-tooltip: 90;
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0b0b0c;
+    --surface: #121214;
+    --surface-raised: #1a1a1d;
+    /* 卡片 hover：亮色变暗 / 暗色变亮；两套值。 */
+    --surface-hover: #313134;
+    --surface-sunken: #0e0e10;
+    --surface-deep: #08080a;
+    --ink: #f2f2f3;
+    --muted: #a1a1a6;
+    --faint: #7e7e84;
+    --line: #242428;
+    --line-strong: #34343a;
+    --accent: #1effc7;
+    --accent-ink: #6bffd8;
+    --accent-soft: rgba(30, 255, 199, 0.12);
+    --ok: #1effc7;
+    --ok-soft: rgba(30, 255, 199, 0.12);
+    --warn: #d6d6da;
+    --warn-soft: rgba(214, 214, 218, 0.1);
+    --danger: #ff6e6e;
+    --danger-soft: rgba(255, 110, 110, 0.12);
+    --info: #a1a1a6;
+    --info-soft: rgba(161, 161, 166, 0.12);
+    --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
+    --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
+    --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
+    --elev-4: 0 8px 16px rgba(0, 0, 0, 0.45), 0 28px 72px rgba(0, 0, 0, 0.55);
+    --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+    --hover-tint: rgba(255, 255, 255, 0.06);
+    --press-tint: rgba(255, 255, 255, 0.09);
+    --scrim: rgba(0, 0, 0, 0.7);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b0b0c;
+  --surface: #121214;
+  --surface-raised: #1a1a1d;
+  /* 卡片 hover：亮色变暗 / 暗色变亮；两套值。 */
+  --surface-hover: #313134;
+  --surface-sunken: #0e0e10;
+  --surface-deep: #08080a;
+  --ink: #f2f2f3;
+  --muted: #a1a1a6;
+  --faint: #7e7e84;
+  --line: #242428;
+  --line-strong: #34343a;
+  --accent: #1effc7;
+  --accent-ink: #6bffd8;
+  --accent-soft: rgba(30, 255, 199, 0.12);
+  --ok: #1effc7;
+  --ok-soft: rgba(30, 255, 199, 0.12);
+  --warn: #d6d6da;
+  --warn-soft: rgba(214, 214, 218, 0.1);
+  --danger: #ff6e6e;
+  --danger-soft: rgba(255, 110, 110, 0.12);
+  --info: #a1a1a6;
+  --info-soft: rgba(161, 161, 166, 0.12);
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
+  --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
+  --elev-4: 0 8px 16px rgba(0, 0, 0, 0.45), 0 28px 72px rgba(0, 0, 0, 0.55);
+  --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  --hover-tint: rgba(255, 255, 255, 0.06);
+  --press-tint: rgba(255, 255, 255, 0.09);
+  --scrim: rgba(0, 0, 0, 0.7);
+}
+
+@media (max-width: 680px) {
+  :root {
+    --dock-gap: 8px;
+    --dock-safe-bottom: 0;
+    --bottom-nav-h: 57px;
+  }
+}
+
+@theme inline {
+  /* 间距：tokens 的 4px 基准；p-1 = 4px，p-4 = 16px。 */
+  --spacing: var(--space-1);
+  --spacing-control: var(--control-h);
+  --spacing-touch: var(--touch-target);
+
+  /* 颜色 */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--surface-raised);
+  --color-surface-hover: var(--surface-hover);
+  --color-sunken: var(--surface-sunken);
+  --color-deep: var(--surface-deep);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--ok);
+  --color-success-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-hover: var(--hover-tint);
+  --color-press: var(--press-tint);
+  --color-scrim: var(--scrim);
+
+  /* 圆角：values 仍来自 tokens.css（--shape-* 为原值）。 */
+  --radius-xs: var(--shape-xs);
+  --radius-sm: var(--shape-sm);
+  --radius-md: var(--shape-md);
+  --radius-lg: var(--shape-lg);
+  --radius-xl: var(--shape-xl);
+
+  /* 字号：values 仍来自 tokens.css（--size-* 为原值）。 */
+  --text-2xs: var(--size-2xs);
+  --text-2xs--line-height: 1.5;
+  --text-xs: var(--size-xs);
+  --text-xs--line-height: 1.45;
+  --text-sm: var(--size-sm);
+  --text-sm--line-height: 1.5;
+  --text-md: var(--size-md);
+  --text-md--line-height: 1.5;
+  --text-base: var(--size-base);
+  --text-base--line-height: 1.6;
+  --text-lg: var(--size-lg);
+  --text-lg--line-height: 1.4;
+  --text-xl: var(--size-xl);
+  --text-xl--line-height: 1.35;
+  --text-2xl: var(--size-2xl);
+  --text-2xl--line-height: 1.3;
+  --text-body: var(--size-base);
+  --text-body--line-height: 1.6;
+  --text-title: var(--size-2xl);
+  --text-title--line-height: 1.3;
+
+  /* 字体族：沿用 tokens 的 --font-* 变量（同名，不需要再映射）。 */
+
+  /* 阴影 / 焦点环 */
+  --shadow-elev-1: var(--elev-1);
+  --shadow-elev-2: var(--elev-2);
+  --shadow-elev-3: var(--elev-3);
+  --shadow-elev-4: var(--elev-4);
+  --shadow-elev-inset: var(--elev-inset);
+  --shadow-focus: var(--focus-ring);
+
+  /* 断点：与 legacy 的 680px 小屏 / 1023px 宽屏断点对齐。 */
+  --breakpoint-compact: 680px;
+  --breakpoint-wide: 1023px;
+
+  /* 语义宽度 */
+  --container-search: var(--search-max-w);
+  --container-prose: 72ch;
+  --container-palette: var(--palette-w);
+  --container-modal-sm: var(--modal-w-sm);
+  --container-modal-md: var(--modal-w-md);
+  --container-modal-lg: var(--modal-w-lg);
+
+  /* 层级 */
+  --z-index-drawer: var(--z-drawer);
+  --z-index-modal: var(--z-modal);
+  --z-index-palette: var(--z-palette);
+  --z-index-toast: var(--z-toast);
+  --z-index-tooltip: var(--z-tooltip);
+}
