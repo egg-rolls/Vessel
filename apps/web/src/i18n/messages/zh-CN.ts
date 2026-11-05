@@ -74,9 +74,6 @@ export const messages = {
   'breadcrumb.runs.durable': '可恢复',
   'breadcrumb.runs.detail': '运行 › {tab}',
   'breadcrumb.runs.detailRun': '运行 › {tab} › 详情',
-  'breadcrumb.integrations.tools': '能力 › 工具',
-  'breadcrumb.integrations.mcp': '能力 › MCP 服务',
-  'breadcrumb.integrations.channels': '能力 › 渠道',
   'breadcrumb.tools': '工具',
   'breadcrumb.mcp': 'MCP 服务',
   'breadcrumb.channels': '渠道',
@@ -604,7 +601,6 @@ export const messages = {
   'common.remove': '移除',
   'common.copy': '复制',
   'common.copied': '已复制',
-  'common.all': '全部',
 
   // Hub
   'hub.title': '面板核心',
@@ -718,7 +714,6 @@ export const messages = {
   'agents.filter.team': '团队',
   'agents.filter.state': '状态',
   'agents.filter.presence': '在线状态',
-  'agents.filter.all': '全部',
   'agents.filter.clear': '清除过滤',
   'agents.count': '显示 {shown} / {total}',
   'agents.presence.live': '在线',
@@ -729,7 +724,6 @@ export const messages = {
   'hub.add.title': '添加节点',
   'hub.add.description': '在另一台机器上执行以下命令完成配对或加入；Web 不代管 hub token。',
   'hub.nodes.heartbeat': '心跳 {time}',
-  'hub.nodes.open': '打开节点',
   'hub.remove.title': '移除节点？',
   'hub.remove.body': '仅从当前浏览器的连接列表移除，并清除该节点的 token；不会停止节点本身。',
   'nodes.search': '搜索节点',
@@ -991,8 +985,6 @@ export const messages = {
 
   // Runs
   'runs.title': '运行',
-  'runs.description':
-    'Live 是当前 gateway 进程内的执行（内存，最多约 200 条）；可恢复来自持久运行记录。',
   'runs.sourceLabel': '运行来源',
   'runs.source.live': 'Live（进程内）',
   'runs.source.durable': '可恢复',
@@ -1005,12 +997,6 @@ export const messages = {
   'runs.filter.interrupted': '已中断',
   'runs.searchPlaceholder': '搜索 run id / session / 输出 / 错误',
   'runs.searchLabel': '搜索运行',
-  'runs.statusLegend': '按状态过滤运行',
-  'runs.clearSessionFilter': '清除会话过滤',
-  'runs.sessionChip': '会话 {session}',
-  'runs.clearAgentFilter': '清除 Agent 过滤',
-  'runs.agentChip': 'Agent {agent}',
-  'runs.filterByAgent': '按 Agent 过滤',
   'runs.noTokenTitle': '连接 gateway 后显示运行。',
   'runs.durableDisabledTitle': '可恢复运行未启用',
   'runs.durableDisabledReason': '此 gateway 没有启用持久运行恢复。',
@@ -1110,13 +1096,6 @@ export const messages = {
   'runs.detail.loadMoreFailed': '加载更多事件失败：{detail}',
 
   // Integrations
-  'integrations.title': '能力',
-  'integrations.description': '这个 gateway 实际能做什么：工具、MCP 服务与渠道。',
-  'integrations.tabsLabel': '能力分区',
-  'integrations.panelLabel': '能力内容',
-  'integrations.tab.tools': '工具',
-  'integrations.tab.mcp': 'MCP 服务',
-  'integrations.tab.channels': '渠道',
   'integrations.tools.noTokenReason': '连接后才能读取工具目录。',
   'integrations.tools.loading': '正在读取工具…',
   'integrations.tools.searchPlaceholder': '搜索工具名称或描述',

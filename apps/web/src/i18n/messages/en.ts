@@ -74,9 +74,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.runs.durable': 'Recoverable',
   'breadcrumb.runs.detail': 'Runs › {tab}',
   'breadcrumb.runs.detailRun': 'Runs › {tab} › Details',
-  'breadcrumb.integrations.tools': 'Integrations › Tools',
-  'breadcrumb.integrations.mcp': 'Integrations › MCP servers',
-  'breadcrumb.integrations.channels': 'Integrations › Channels',
   'breadcrumb.tools': 'Tools',
   'breadcrumb.mcp': 'MCP servers',
   'breadcrumb.channels': 'Channels',
@@ -624,7 +621,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'common.remove': 'Remove',
   'common.copy': 'Copy',
   'common.copied': 'Copied',
-  'common.all': 'All',
 
   // Hub
   'hub.title': 'Hub',
@@ -738,7 +734,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'agents.filter.team': 'Team',
   'agents.filter.state': 'State',
   'agents.filter.presence': 'Presence',
-  'agents.filter.all': 'All',
   'agents.filter.clear': 'Clear filters',
   'agents.count': 'Showing {shown} / {total}',
   'agents.presence.live': 'live',
@@ -750,7 +745,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'hub.add.description':
     'Run these commands on the other machine to pair or join; the Web does not manage hub tokens.',
   'hub.nodes.heartbeat': 'Heartbeat {time}',
-  'hub.nodes.open': 'Open node',
   'hub.remove.title': 'Remove node?',
   'hub.remove.body':
     'Removes it from this browser’s connection list and clears its token; the node keeps running.',
@@ -1023,8 +1017,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Runs
   'runs.title': 'Runs',
-  'runs.description':
-    'Live runs execute inside the current gateway process (in memory, about 200 max); Recoverable comes from persisted run records.',
   'runs.sourceLabel': 'Run source',
   'runs.source.live': 'Live (in process)',
   'runs.source.durable': 'Recoverable',
@@ -1037,12 +1029,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'runs.filter.interrupted': 'Interrupted',
   'runs.searchPlaceholder': 'Search run id / session / output / error',
   'runs.searchLabel': 'Search runs',
-  'runs.statusLegend': 'Filter runs by status',
-  'runs.clearSessionFilter': 'Clear session filter',
-  'runs.sessionChip': 'Session {session}',
-  'runs.clearAgentFilter': 'Clear agent filter',
-  'runs.agentChip': 'Agent {agent}',
-  'runs.filterByAgent': 'Filter by agent',
   'runs.noTokenTitle': 'Connect to a gateway to see runs.',
   'runs.durableDisabledTitle': 'Recoverable runs are not enabled',
   'runs.durableDisabledReason': 'This gateway does not have durable run recovery enabled.',
@@ -1144,13 +1130,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'runs.detail.loadMoreFailed': 'Failed to load more events: {detail}',
 
   // Integrations
-  'integrations.title': 'Capabilities',
-  'integrations.description': 'What this gateway can do: tools, MCP servers, and channels.',
-  'integrations.tabsLabel': 'Capability sections',
-  'integrations.panelLabel': 'Capabilities content',
-  'integrations.tab.tools': 'Tools',
-  'integrations.tab.mcp': 'MCP servers',
-  'integrations.tab.channels': 'Channels',
   'integrations.tools.noTokenReason': 'Connect to read the tool catalog.',
   'integrations.tools.loading': 'Loading tools…',
   'integrations.tools.searchPlaceholder': 'Search tool name or description',
