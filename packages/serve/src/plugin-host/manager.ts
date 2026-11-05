@@ -30,7 +30,13 @@ import type {
   PluginStaticMount,
   PluginStatusEntry,
 } from './types.js';
-import { PLUGIN_BUILTIN_NAV, PLUGIN_ICON_NAMES } from './types.js';
+import {
+  PLUGIN_BUILTIN_NAV,
+  PLUGIN_I18N_LOCALES,
+  PLUGIN_ICON_NAMES,
+  type PluginI18n,
+  type PluginLocale,
+} from './types.js';
 
 /** 重启窗口与上限（contract §3.4） */
 export const PLUGIN_RESTART_WINDOW_MS = 10 * 60 * 1000;
@@ -99,6 +105,68 @@ function isPluginIconName(value: unknown): boolean {
   return typeof value === 'string' && (PLUGIN_ICON_NAMES as readonly string[]).includes(value);
 }
 
+const I18N_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const I18N_FORBIDDEN_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+const I18N_MAX_KEYS = 200;
+const I18N_MAX_VALUE_CHARS = 200;
+
+/**
+ * 校验并复制插件私有 i18n（CONTRACT-0.43 §2.11 E9）。
+ * 只允许 en / zh-CN；拒绝原型污染键；返回新的普通对象，不把调用方的
+ * 对象引用带进 contributions。
+ */
+function normalizeI18n(raw: unknown, pluginId: string): PluginI18n | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw pluginError('plugin_manifest_invalid', 'contributes.i18n must be an object.', {
+      id: pluginId,
+    });
+  }
+  const output: PluginI18n = {};
+  for (const [locale, dictionary] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(PLUGIN_I18N_LOCALES as readonly string[]).includes(locale)) {
+      throw pluginError('plugin_manifest_invalid', `Unsupported i18n locale: ${locale}`, {
+        id: pluginId,
+        locale,
+      });
+    }
+    if (typeof dictionary !== 'object' || dictionary === null || Array.isArray(dictionary)) {
+      throw pluginError('plugin_manifest_invalid', 'i18n locale must be an object.', {
+        id: pluginId,
+        locale,
+      });
+    }
+    const entries = Object.entries(dictionary as Record<string, unknown>);
+    if (entries.length > I18N_MAX_KEYS) {
+      throw pluginError('plugin_manifest_invalid', 'i18n locale has too many keys.', {
+        id: pluginId,
+        locale,
+        count: entries.length,
+      });
+    }
+    const clean: Record<string, string> = {};
+    for (const [key, value] of entries) {
+      if (I18N_FORBIDDEN_KEYS.has(key) || !I18N_KEY_PATTERN.test(key)) {
+        throw pluginError('plugin_manifest_invalid', `Invalid i18n key: ${key}`, {
+          id: pluginId,
+          locale,
+          key,
+        });
+      }
+      if (typeof value !== 'string' || value.length === 0 || value.length > I18N_MAX_VALUE_CHARS) {
+        throw pluginError('plugin_manifest_invalid', `Invalid i18n value for key: ${key}`, {
+          id: pluginId,
+          locale,
+          key,
+        });
+      }
+      clean[key] = value;
+    }
+    output[locale as PluginLocale] = clean;
+  }
+  return output;
+}
+
 /** 内置分组，或本 plugin 自己声明的 `plugin:<id>`；跨 plugin 引用拒绝。 */
 function isValidPageNav(nav: unknown, pluginId: string, hasOwnGroup: boolean): boolean {
   if (typeof nav !== 'string' || nav.length === 0) return false;
@@ -160,6 +228,7 @@ function validateDescriptor(input: PluginDescriptor): PluginDescriptor {
   }
 
   const contributes = input.contributes ?? {};
+  const i18n = normalizeI18n(contributes.i18n, input.id);
   const permissions = input.permissions ?? {};
   const events = contributes.events ?? [];
   if (events.length > 0 && !eventSubsetOfPermissions(events, permissions.events ?? [])) {
@@ -269,6 +338,14 @@ function validateDescriptor(input: PluginDescriptor): PluginDescriptor {
     ...input,
     pluginDir,
     entry,
+    ...(input.contributes !== undefined
+      ? {
+          contributes: {
+            ...contributes,
+            ...(i18n !== undefined ? { i18n } : {}),
+          },
+        }
+      : {}),
     ...(uiDir !== undefined ? { uiDir } : {}),
   };
 }
@@ -985,6 +1062,7 @@ export function renderContributions(
     .map((group) => ({
       id: group.id,
       title: group.title,
+      ...(group.titleKey !== undefined ? { titleKey: group.titleKey } : {}),
       ...(group.icon !== undefined ? { icon: group.icon } : {}),
       order: group.order ?? 100,
     }))
@@ -1019,7 +1097,14 @@ export function renderContributions(
   if (pages.length === 0 && panels.length === 0 && commands.length === 0 && rpc.length === 0) {
     return undefined;
   }
-  return { navGroups, pages, panels, commands, rpc };
+  return {
+    navGroups,
+    pages,
+    panels,
+    commands,
+    rpc,
+    ...(contributes.i18n !== undefined ? { i18n: contributes.i18n } : {}),
+  };
 }
 
 export { PluginHostError };

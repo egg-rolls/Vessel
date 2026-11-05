@@ -84,11 +84,21 @@ export const PLUGIN_ICON_NAMES = [
 /** 白名单图标名 */
 export type PluginIconName = (typeof PLUGIN_ICON_NAMES)[number];
 
+/** 支持的插件私有 i18n locale（CONTRACT-0.43 §2.11 E9）。 */
+export const PLUGIN_I18N_LOCALES = ['en', 'zh-CN'] as const;
+
+export type PluginLocale = (typeof PLUGIN_I18N_LOCALES)[number];
+
+/** 插件私有字典：按 locale 保存，不合并宿主 catalog。 */
+export type PluginI18n = Partial<Record<PluginLocale, Record<string, string>>>;
+
 /** `contributes.navGroups[]`（v1 每个 plugin 最多一个） */
 export interface PluginNavGroup {
   /** 必须是 `plugin:<pluginId>`。 */
   id: string;
   title: string;
+  /** i18n key（可选）；title 仍是 fallback。 */
+  titleKey?: string;
   icon?: PluginIconName;
   order?: number;
 }
@@ -140,6 +150,8 @@ export interface PluginRpcContribution {
 
 /** `contributes`（只保留宿主需要的键） */
 export interface PluginManifestContributions {
+  /** 插件私有字典；只允许 en / zh-CN。 */
+  i18n?: PluginI18n;
   /** v1 最多一个自定义分组：`plugin:<pluginId>`。 */
   navGroups?: PluginNavGroup[];
   pages?: PluginPageContribution[];
@@ -197,9 +209,12 @@ export interface PluginRenderContributions {
   navGroups: Array<{
     id: string;
     title: string;
+    titleKey?: string;
     icon?: PluginIconName;
     order: number;
   }>;
+  /** 校验后的插件私有字典（原样透传；插件作用域，不合并宿主 catalog）。 */
+  i18n?: PluginI18n;
   pages: Array<{
     id: string;
     title: string;

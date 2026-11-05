@@ -62,7 +62,9 @@ export type {
   PluginEventDto,
   PluginEventSource,
   PluginHostManagerLike,
+  PluginI18n,
   PluginIconName,
+  PluginLocale,
   PluginManifestContributions,
   PluginNav,
   PluginNavGroup,
@@ -78,4 +80,8 @@ export type {
   PluginStaticMount,
   PluginStatusEntry,
 } from './types.js';
-export { PLUGIN_BUILTIN_NAV, PLUGIN_ICON_NAMES } from './types.js';
+export {
+  PLUGIN_BUILTIN_NAV,
+  PLUGIN_I18N_LOCALES,
+  PLUGIN_ICON_NAMES,
+} from './types.js';
