@@ -1,0 +1,35 @@
+name: validate-registry
+
+on:
+  pull_request:
+    paths:
+      - index.json
+      - plugins/**
+      - validate.mjs
+      - .github/workflows/validate.yml
+  push:
+    branches:
+      - main
+    paths:
+      - index.json
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      # Stable Vessel line the registry targets; bump when the stable line moves.
+      VESSEL_STABLE: "0.33.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate index.json, checksums and sizes
+        run: node validate.mjs index.json

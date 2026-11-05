@@ -1,0 +1,156 @@
+{
+  "name": "@vessel-agent/plugin-marketplace",
+  "version": "0.1.0",
+  "description": "Plugin marketplace for Vessel: browse, install and update plugins from a static GitHub registry",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "web",
+    "registry-template"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/egg-rolls/Vessel.git",
+    "directory": "plugins/marketplace"
+  },
+  "engines": {
+    "bun": ">=1.3.9"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  },
+  "vessel": {
+    "id": "marketplace",
+    "name": "Marketplace",
+    "version": "0.1.0",
+    "engines": {
+      "vessel": ">=0.33.0 <0.45.0"
+    },
+    "description": "Browse, install and update Vessel plugins from a static registry",
+    "side": "both",
+    "entry": "src/index.ts",
+    "ui": {
+      "dir": "web"
+    },
+    "activationEvents": [
+      "onPage:marketplace",
+      "onPage:marketplace-installed",
+      "onPage:marketplace-updates"
+    ],
+    "contributes": {
+      "pages": [
+        {
+          "id": "marketplace",
+          "title": "Browse plugins",
+          "nav": "settings",
+          "order": 90,
+          "entry": "browse.html"
+        },
+        {
+          "id": "marketplace-installed",
+          "title": "Installed plugins",
+          "nav": "settings",
+          "order": 91,
+          "entry": "installed.html"
+        },
+        {
+          "id": "marketplace-updates",
+          "title": "Plugin updates",
+          "nav": "settings",
+          "order": 92,
+          "entry": "updates.html"
+        }
+      ],
+      "settings": {
+        "registry_url": {
+          "type": "string",
+          "description": "HTTPS URL of the static registry index.json (required)"
+        },
+        "proxy": {
+          "type": "string",
+          "description": "Optional HTTP(S) proxy for registry and asset downloads"
+        },
+        "install_scope": {
+          "type": "string",
+          "default": "user",
+          "description": "user (~/.vessel/plugins) or project (<project>/.vessel/plugins)"
+        },
+        "project_root": {
+          "type": "string",
+          "description": "Absolute project root for install_scope: project; falls back to VESSEL_PLUGIN_HOST_CWD"
+        },
+        "allow_prerelease": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow installing versions with a semver prerelease tag"
+        }
+      },
+      "rpc": [
+        {
+          "name": "search",
+          "description": "Search the registry index"
+        },
+        {
+          "name": "detail",
+          "description": "Full metadata for one plugin"
+        },
+        {
+          "name": "install",
+          "description": "Download, verify and install a plugin"
+        },
+        {
+          "name": "remove",
+          "description": "Uninstall a plugin and its config entry"
+        },
+        {
+          "name": "update",
+          "description": "Install the newest compatible version"
+        },
+        {
+          "name": "installed",
+          "description": "List installed plugins and updates"
+        },
+        {
+          "name": "job",
+          "description": "Poll one install/update job"
+        },
+        {
+          "name": "jobs",
+          "description": "List install/update jobs from the last 24h"
+        }
+      ],
+      "events": [
+        "plugin.changed"
+      ]
+    },
+    "permissions": {
+      "fs": [
+        "data-dir",
+        "user-plugins",
+        "user-config",
+        "project-plugins"
+      ],
+      "net": [
+        "github.com",
+        "*.githubusercontent.com",
+        "*.github.io"
+      ],
+      "process": false,
+      "secrets": false,
+      "events": [
+        "plugin.changed"
+      ]
+    },
+    "dependencies": {
+      "plugins": [],
+      "ordering": {
+        "after": [],
+        "before": []
+      }
+    }
+  }
+}

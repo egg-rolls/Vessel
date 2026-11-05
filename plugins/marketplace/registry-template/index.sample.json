@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "updated_at": "2026-11-05T00:00:00Z",
+  "plugins": [
+    {
+      "id": "example-usage",
+      "name": "Example Usage",
+      "summary": "Usage and token statistics",
+      "description": "Plain-text or Markdown-ish description shown in the marketplace detail page.",
+      "category": "observability",
+      "tags": ["usage", "tokens"],
+      "repo": "https://github.com/egg-rolls/vessel-plugin-example-usage",
+      "homepage": "https://github.com/egg-rolls/vessel-plugin-example-usage",
+      "latest": "0.1.0",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "engines": { "vessel": ">=0.33.0 <0.45.0" },
+          "asset": {
+            "url": "https://github.com/egg-rolls/vessel-plugin-example-usage/releases/download/v0.1.0/example-usage-0.1.0.tgz",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "size": 12345
+          },
+          "permissions": {
+            "fs": ["data-dir"],
+            "net": [],
+            "events": ["llm.response"]
+          },
+          "contributes": {
+            "pages": ["usage"],
+            "rpc": ["summary"]
+          },
+          "published_at": "2026-11-05T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "example-tools",
+      "name": "Example Tools",
+      "summary": "A second sample entry with two versions",
+      "category": "tools",
+      "tags": ["tools"],
+      "repo": "https://github.com/egg-rolls/vessel-plugin-example-tools",
+      "latest": "0.2.0",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "engines": { "vessel": ">=0.33.0 <0.45.0" },
+          "asset": {
+            "url": "https://github.com/egg-rolls/vessel-plugin-example-tools/releases/download/v0.1.0/example-tools-0.1.0.tgz",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "size": 23456
+          },
+          "permissions": { "fs": [], "net": [], "events": [] },
+          "published_at": "2026-10-01T00:00:00Z"
+        },
+        {
+          "version": "0.2.0",
+          "engines": { "vessel": ">=0.33.0 <0.45.0" },
+          "asset": {
+            "url": "https://github.com/egg-rolls/vessel-plugin-example-tools/releases/download/v0.2.0/example-tools-0.2.0.tgz",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "size": 24680
+          },
+          "permissions": { "fs": [], "net": [], "events": [] },
+          "published_at": "2026-11-01T00:00:00Z"
+        }
+      ]
+    }
+  ]
+}

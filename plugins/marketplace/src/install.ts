@@ -1,0 +1,1034 @@
+/**
+ * Install / remove / update / list.
+ *
+ * CONTRACT-0.44 §3 installation flow, in order:
+ *   1. registry snapshot (cached, see registry.ts)
+ *   2. download the release asset to a temp dir, `<= 50 MiB`
+ *   3. byte-for-byte `size` + `sha256` verification
+ *   4. safe USTAR extraction (tar.ts: no absolute paths / `..` / links / bombs)
+ *   5. `package.json.vessel` id+version+engines verification
+ *   6. target `~/.vessel/plugins/<id>` or `<project>/.vessel/plugins/<id>`,
+ *      backup existing to `<id>.bak-<ts>`, rollback on any failure
+ *   7. `plugins[]` config entry (`enabled: true`); no spawn, the watcher reloads
+ *
+ * The installer is exported separately from the RPC layer so the probe can
+ * inject temp roots and never touch the real `~/.vessel`.
+ *
+ * @module @vessel-agent/plugin-marketplace/install
+ */
+
+import { createHash } from 'node:crypto';
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { gunzipSync } from 'node:zlib';
+import {
+  type ConfigRemoveResult,
+  type ConfigUpdateResult,
+  discoverPluginNames,
+  inferBuiltInPluginsRoot,
+  readConfigRoot,
+  removePluginConfig,
+  upsertPluginConfig,
+} from './config.js';
+import { errorCodeOf, MarketplaceError, messageOf } from './errors.js';
+import {
+  assertSecureUrl,
+  findPlugin,
+  findVersion,
+  isPrereleaseVersion,
+  loadRegistry,
+  newestVersion,
+  type RegistryPlugin,
+  type RegistrySnapshot,
+  type RegistryVersion,
+  summarizePlugin,
+} from './registry.js';
+import { compareVersionStrings, satisfiesVersionRange } from './semver.js';
+import type { InstallScope, MarketplaceSettings } from './settings.js';
+import {
+  DEFAULT_ARCHIVE_LIMITS,
+  extractEntries,
+  parseTarEntries,
+  stripCommonRoot,
+  type TarEntry,
+} from './tar.js';
+
+export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+
+export interface InstallLimits {
+  maxDownloadBytes: number;
+  maxExtractBytes: number;
+  maxEntries: number;
+}
+
+export const DEFAULT_INSTALL_LIMITS: InstallLimits = {
+  maxDownloadBytes: MAX_DOWNLOAD_BYTES,
+  maxExtractBytes: DEFAULT_ARCHIVE_LIMITS.maxExtractBytes,
+  maxEntries: DEFAULT_ARCHIVE_LIMITS.maxEntries,
+};
+
+export interface InstallContext {
+  settings: MarketplaceSettings;
+  /** Plugin-private dir `<globalDataDir>/plugins/marketplace`. */
+  dataDir: string;
+  globalDataDir?: string;
+  /** `~/.vessel/plugins` (host discovery root; no category level). */
+  userPluginsDir: string;
+  /**
+   * Absolute project root from `settings.project_root` or the host-injected
+   * `VESSEL_PLUGIN_HOST_CWD` (Errata E4). Never inferred from cwd.
+   */
+  projectDir?: string;
+  /** `~/.vessel/config.yaml`. */
+  configPath: string;
+  limits?: Partial<InstallLimits>;
+  fetchImpl?: typeof fetch;
+  now?: () => number;
+  ttlMs?: number;
+  /**
+   * Plugin ids enabled by default, used only when materializing an absent
+   * `plugins:` list. `null` explicitly skips the write. When omitted, discovery
+   * runs and skips if the built-in plugin root is unknown.
+   */
+  defaultPluginNames?: string[] | null;
+}
+
+interface InFlight {
+  promise: Promise<unknown>;
+}
+
+const inFlight = new Map<string, InFlight>();
+
+async function withLock<T>(key: string, run: () => Promise<T>): Promise<T> {
+  if (inFlight.has(key)) {
+    throw new MarketplaceError('busy', `another ${key} operation is in progress`);
+  }
+  const entry: InFlight = { promise: run() };
+  inFlight.set(key, entry);
+  try {
+    return (await entry.promise) as T;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+function limitsOf(context: InstallContext): InstallLimits {
+  return { ...DEFAULT_INSTALL_LIMITS, ...(context.limits ?? {}) };
+}
+
+export function registryCachePath(context: InstallContext): string {
+  return join(context.dataDir, 'cache', 'index.json');
+}
+
+function snapshot(context: InstallContext, force = false): Promise<RegistrySnapshot> {
+  return loadRegistry({
+    settings: context.settings,
+    cachePath: registryCachePath(context),
+    ...(context.fetchImpl !== undefined ? { fetchImpl: context.fetchImpl } : {}),
+    ...(context.now !== undefined ? { now: context.now } : {}),
+    ...(context.ttlMs !== undefined ? { ttlMs: context.ttlMs } : {}),
+    force,
+  });
+}
+
+function registryMeta(snapshotValue: RegistrySnapshot): Record<string, unknown> {
+  return {
+    url: snapshotValue.url,
+    trusted: snapshotValue.trusted,
+    stale: snapshotValue.stale,
+    fetched_at: snapshotValue.fetchedAt,
+    ...(snapshotValue.index.updated_at !== undefined
+      ? { updated_at: snapshotValue.index.updated_at }
+      : {}),
+  };
+}
+
+function parseOptionalText(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new MarketplaceError('invalid_params', `${field} must be a string`, { rpcCode: -32602 });
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+// ── queries ─────────────────────────────────────────────────────────────────
+
+export interface SearchParams {
+  query?: string;
+  category?: string;
+}
+
+interface InstalledVersion {
+  id: string;
+  version: string;
+  scope: InstallScope;
+  path: string;
+  enabled: boolean;
+}
+
+export interface InstalledItem extends InstalledVersion {
+  name: string;
+  latest?: string;
+  update_available?: boolean;
+  engines?: { vessel?: string };
+}
+
+export async function searchPlugins(
+  context: InstallContext,
+  params: SearchParams,
+): Promise<Record<string, unknown>> {
+  const query = parseOptionalText(params.query, 'query');
+  const category = parseOptionalText(params.category, 'category');
+  const registry = await snapshot(context);
+  const installed = await installedVersionMap(context);
+
+  const needle = query?.toLowerCase();
+  const items = registry.index.plugins
+    .filter((plugin) => {
+      if (category !== undefined) {
+        if ((plugin.category ?? '').toLowerCase() !== category.toLowerCase()) return false;
+      }
+      if (needle === undefined) return true;
+      const haystack = [
+        plugin.id,
+        plugin.name,
+        plugin.summary ?? '',
+        plugin.description ?? '',
+        plugin.category ?? '',
+        ...(plugin.tags ?? []),
+      ]
+        .join('\n')
+        .toLowerCase();
+      return haystack.includes(needle);
+    })
+    .map((plugin) => {
+      const current = installed.get(plugin.id);
+      const newest = newestVersion(plugin, context.settings.allowPrerelease);
+      return {
+        ...summarizePlugin(plugin),
+        ...(current !== undefined ? { installed_version: current.version } : {}),
+        ...(newest !== undefined &&
+        current !== undefined &&
+        compareVersionStrings(newest.version, current.version) > 0
+          ? { update_available: true }
+          : {}),
+      };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  const categories = [
+    ...new Set(registry.index.plugins.map((plugin) => plugin.category).filter(Boolean)),
+  ].sort();
+
+  return { registry: registryMeta(registry), items, total: items.length, categories };
+}
+
+export async function pluginDetail(
+  context: InstallContext,
+  id: string,
+): Promise<Record<string, unknown>> {
+  assertPluginId(id);
+  const registry = await snapshot(context);
+  const plugin = findPlugin(registry.index, id);
+  if (plugin === undefined) {
+    throw new MarketplaceError('plugin_not_found', `plugin "${id}" is not in the registry`);
+  }
+  const installed = (await installedVersionMap(context)).get(id);
+  return {
+    registry: registryMeta(registry),
+    plugin: { ...plugin, versions: plugin.versions.map((version) => ({ ...version })) },
+    ...(installed !== undefined ? { installed } : {}),
+  };
+}
+
+async function readPackageSummary(
+  dir: string,
+): Promise<{ id: string; name: string; version: string; engines?: { vessel?: string } } | null> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(join(dir, 'package.json'), 'utf-8'));
+  } catch {
+    return null;
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const pkg = raw as Record<string, unknown>;
+  const vessel =
+    typeof pkg.vessel === 'object' && pkg.vessel !== null && !Array.isArray(pkg.vessel)
+      ? (pkg.vessel as Record<string, unknown>)
+      : undefined;
+  const id =
+    typeof vessel?.id === 'string' && vessel.id !== ''
+      ? vessel.id
+      : typeof pkg.name === 'string'
+        ? pkg.name.replace(/^@[^/]+\//, '')
+        : undefined;
+  const version =
+    typeof vessel?.version === 'string'
+      ? vessel.version
+      : typeof pkg.version === 'string'
+        ? pkg.version
+        : '0.0.0';
+  if (id === undefined || id === '') return null;
+  const name = typeof vessel?.name === 'string' && vessel.name !== '' ? vessel.name : id;
+  const engines =
+    typeof vessel?.engines === 'object' && vessel.engines !== null
+      ? (vessel.engines as { vessel?: string })
+      : undefined;
+  return { id, name, version, ...(engines !== undefined ? { engines } : {}) };
+}
+
+async function pluginDirs(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    return entries
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          !entry.name.startsWith('.') &&
+          !entry.name.includes('.bak-') &&
+          !entry.name.includes('.removing-'),
+      )
+      .map((entry) => join(root, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+function configuredEntry(
+  configured: unknown[] | undefined,
+  name: string,
+): Record<string, unknown> | undefined {
+  return configured?.find(
+    (candidate) =>
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      (candidate as Record<string, unknown>).name === name,
+  ) as Record<string, unknown> | undefined;
+}
+
+async function readConfiguredPlugins(context: InstallContext): Promise<unknown[] | undefined> {
+  const config = await readConfigRoot(context.configPath).catch(
+    (): Record<string, unknown> => ({}),
+  );
+  return Array.isArray(config.plugins) ? config.plugins : undefined;
+}
+
+function installedRoots(context: InstallContext): Array<{ root: string; scope: InstallScope }> {
+  const roots: Array<{ root: string; scope: InstallScope }> = [];
+  if (context.projectDir !== undefined) {
+    roots.push({ root: join(context.projectDir, '.vessel', 'plugins'), scope: 'project' });
+  }
+  roots.push({ root: context.userPluginsDir, scope: 'user' });
+  return roots;
+}
+
+async function installedVersionMap(
+  context: InstallContext,
+): Promise<Map<string, InstalledVersion>> {
+  const configured = await readConfiguredPlugins(context);
+  const result = new Map<string, InstalledVersion>();
+  for (const { root, scope } of installedRoots(context)) {
+    for (const dir of await pluginDirs(root)) {
+      const summary = await readPackageSummary(dir);
+      if (summary === null || result.has(summary.id)) continue;
+      const entry = configuredEntry(configured, summary.id);
+      result.set(summary.id, {
+        id: summary.id,
+        version: summary.version,
+        scope,
+        path: dir,
+        enabled: entry === undefined || entry.enabled !== false,
+      });
+    }
+  }
+  return result;
+}
+
+export async function listInstalled(context: InstallContext): Promise<InstalledItem[]> {
+  const configured = await readConfiguredPlugins(context);
+  const items: InstalledItem[] = [];
+  const seen = new Set<string>();
+  for (const { root, scope } of installedRoots(context)) {
+    for (const dir of await pluginDirs(root)) {
+      const summary = await readPackageSummary(dir);
+      if (summary === null || seen.has(summary.id)) continue;
+      seen.add(summary.id);
+      const entry = configuredEntry(configured, summary.id);
+      items.push({
+        id: summary.id,
+        name: summary.name,
+        version: summary.version,
+        scope,
+        path: dir,
+        enabled: entry === undefined || entry.enabled !== false,
+        ...(summary.engines !== undefined ? { engines: summary.engines } : {}),
+      });
+    }
+  }
+  return items.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export async function installedPlugins(
+  context: InstallContext,
+  options: { force?: boolean } = {},
+): Promise<Record<string, unknown>> {
+  const listed = await listInstalled(context);
+  let registry: RegistrySnapshot | undefined;
+  let registryError: string | undefined;
+  try {
+    registry = await snapshot(context, options.force === true);
+  } catch (error) {
+    registryError = messageOf(error);
+  }
+
+  const items = listed.map((item) => {
+    if (registry === undefined) return item;
+    const plugin = findPlugin(registry.index, item.id);
+    if (plugin === undefined) return item;
+    const newest = newestVersion(plugin, context.settings.allowPrerelease);
+    if (newest === undefined) return item;
+    return {
+      ...item,
+      latest: newest.version,
+      update_available: compareVersionStrings(newest.version, item.version) > 0,
+    };
+  });
+
+  return {
+    ...(registry !== undefined ? { registry: registryMeta(registry) } : {}),
+    ...(registryError !== undefined ? { registry_error: registryError } : {}),
+    items,
+    total: items.length,
+  };
+}
+
+// ── target selection ────────────────────────────────────────────────────────
+
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+
+export function assertPluginId(id: string): void {
+  if (!PLUGIN_ID_RE.test(id)) {
+    throw new MarketplaceError('invalid_params', `invalid plugin id "${id}"`, { rpcCode: -32602 });
+  }
+}
+
+export interface InstallTarget {
+  dir: string;
+  scope: InstallScope;
+  root: string;
+}
+
+export function resolveInstallTarget(
+  context: InstallContext,
+  id: string,
+  scope: InstallScope = context.settings.installScope,
+): InstallTarget {
+  assertPluginId(id);
+  if (scope === 'project') {
+    // Errata E4: settings.project_root or the host's VESSEL_PLUGIN_HOST_CWD
+    // only. Never guess from cwd: the child cwd is the plugin package dir.
+    if (context.projectDir === undefined || context.projectDir.trim() === '') {
+      throw new MarketplaceError(
+        'install_failed',
+        'project installs require project_root in settings or VESSEL_PLUGIN_HOST_CWD ' +
+          'from the host; use install_scope: user to install under ~/.vessel/plugins',
+      );
+    }
+    if (!isAbsolute(context.projectDir)) {
+      throw new MarketplaceError(
+        'install_failed',
+        `project_root must be an absolute path, got "${context.projectDir}"`,
+      );
+    }
+    const root = join(context.projectDir, '.vessel', 'plugins');
+    return { dir: join(root, id), scope, root };
+  }
+  return { dir: join(context.userPluginsDir, id), scope, root: context.userPluginsDir };
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (errorCodeOf(error) === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/** Existing target, preferring the configured scope, then the other scope. */
+async function findInstalledTarget(
+  context: InstallContext,
+  id: string,
+): Promise<InstallTarget | undefined> {
+  const preferred = resolveInstallTarget(context, id);
+  if (await pathExists(preferred.dir)) return preferred;
+  const otherScope: InstallScope = preferred.scope === 'user' ? 'project' : 'user';
+  const other = resolveInstallTarget(context, id, otherScope);
+  return (await pathExists(other.dir)) ? other : undefined;
+}
+
+// ── download + verify ───────────────────────────────────────────────────────
+
+interface DownloadedAsset {
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+async function downloadAsset(
+  context: InstallContext,
+  version: RegistryVersion,
+  directory: string,
+  progress?: (phase: 'downloading' | 'verifying', done: number, total: number) => void,
+): Promise<DownloadedAsset> {
+  const limits = limitsOf(context);
+  const asset = version.asset;
+  assertSecureUrl(asset.url, `asset.url for ${version.version}`);
+
+  const init: RequestInit & { proxy?: string } = {
+    headers: { accept: 'application/octet-stream', 'user-agent': 'vessel-marketplace/0.1' },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(120_000),
+  };
+  if (context.settings.proxy !== undefined) init.proxy = context.settings.proxy;
+
+  const fetchImpl = context.fetchImpl ?? fetch;
+  let response: Response;
+  try {
+    response = await fetchImpl(asset.url, init);
+  } catch (error) {
+    throw new MarketplaceError(
+      'registry_fetch_failed',
+      `could not download ${version.version}: ${messageOf(error)}`,
+    );
+  }
+  if (!response.ok) {
+    throw new MarketplaceError(
+      'registry_fetch_failed',
+      `asset download returned HTTP ${response.status}`,
+    );
+  }
+  if (response.url) assertSecureUrl(response.url, 'asset redirect');
+
+  const declared = Number(response.headers.get('content-length') ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > limits.maxDownloadBytes) {
+    throw new MarketplaceError(
+      'asset_too_large',
+      `asset is larger than ${limits.maxDownloadBytes} bytes`,
+    );
+  }
+
+  const chunks: Uint8Array[] = [];
+  const hash = createHash('sha256');
+  let total = 0;
+  if (response.body !== null) {
+    const reader = response.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > limits.maxDownloadBytes) {
+          await reader.cancel().catch(() => {});
+          throw new MarketplaceError(
+            'asset_too_large',
+            `asset is larger than ${limits.maxDownloadBytes} bytes`,
+          );
+        }
+        hash.update(value);
+        chunks.push(value);
+        progress?.('downloading', total, asset.size);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  progress?.('verifying', total, asset.size);
+  if (total !== asset.size) {
+    throw new MarketplaceError(
+      'size_mismatch',
+      `asset size mismatch: expected ${asset.size}, received ${total}`,
+      { data: { expected: asset.size, actual: total } },
+    );
+  }
+  const digest = hash.digest('hex').toLowerCase();
+  if (digest !== asset.sha256.toLowerCase()) {
+    throw new MarketplaceError(
+      'checksum_mismatch',
+      'asset sha256 does not match the registry index',
+      { data: { expected: asset.sha256, actual: digest } },
+    );
+  }
+
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const path = join(directory, `${sanitizeFileName(version.version)}.tgz`);
+  await writeFile(path, output, { mode: 0o600 });
+  return { path, size: total, sha256: digest };
+}
+
+function sanitizeFileName(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+function gunzipArchive(compressed: Uint8Array, limits: InstallLimits): Uint8Array {
+  let tarBytes: Uint8Array;
+  try {
+    tarBytes = gunzipSync(compressed, { maxOutputLength: limits.maxExtractBytes + 1 });
+  } catch (error) {
+    const code = errorCodeOf(error);
+    const message = messageOf(error);
+    if (code === 'ERR_BUFFER_TOO_LARGE' || /maxOutputLength/i.test(message)) {
+      throw new MarketplaceError(
+        'archive_too_large',
+        `archive expands beyond ${limits.maxExtractBytes} bytes`,
+      );
+    }
+    throw new MarketplaceError('archive_invalid', 'asset is not a valid gzip stream');
+  }
+  if (tarBytes.byteLength > limits.maxExtractBytes) {
+    throw new MarketplaceError(
+      'archive_too_large',
+      `archive expands beyond ${limits.maxExtractBytes} bytes`,
+    );
+  }
+  return tarBytes;
+}
+
+// ── manifest verification ───────────────────────────────────────────────────
+
+export interface VesselManifest {
+  id: string;
+  name: string;
+  version: string;
+  entry: string;
+  engines?: { vessel?: string };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export async function readVesselManifest(
+  directory: string,
+  registryId: string,
+  registryVersion: string,
+  vesselVersion: string | undefined,
+): Promise<{ manifest: VesselManifest; warnings: string[] }> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(join(directory, 'package.json'), 'utf-8'));
+  } catch {
+    throw new MarketplaceError('manifest_invalid', 'package.json is missing or not valid JSON');
+  }
+  if (!isRecord(raw)) {
+    throw new MarketplaceError('manifest_invalid', 'package.json must be an object');
+  }
+  const vessel = raw.vessel;
+  if (!isRecord(vessel)) {
+    throw new MarketplaceError('manifest_invalid', 'package.json has no vessel manifest');
+  }
+  const id = vessel.id;
+  const name = vessel.name;
+  const version = vessel.version;
+  const entry = vessel.entry;
+  if (typeof id !== 'string' || id === '') {
+    throw new MarketplaceError('manifest_invalid', 'vessel.id is required');
+  }
+  if (typeof name !== 'string' || name === '') {
+    throw new MarketplaceError('manifest_invalid', 'vessel.name is required');
+  }
+  if (typeof version !== 'string' || version === '') {
+    throw new MarketplaceError('manifest_invalid', 'vessel.version is required');
+  }
+  if (typeof entry !== 'string' || entry === '') {
+    throw new MarketplaceError('manifest_invalid', 'vessel.entry is required');
+  }
+
+  if (id !== registryId) {
+    throw new MarketplaceError(
+      'manifest_mismatch',
+      `manifest id "${id}" does not match registry id "${registryId}"`,
+    );
+  }
+  if (version !== registryVersion) {
+    throw new MarketplaceError(
+      'manifest_mismatch',
+      `manifest version "${version}" does not match registry version "${registryVersion}"`,
+    );
+  }
+
+  const base = resolve(directory);
+  const entryPath = resolve(base, entry);
+  const rel = relative(base, entryPath);
+  if (isAbsolute(entry) || rel === '' || rel === '..' || rel.startsWith(`..${sep}`)) {
+    throw new MarketplaceError('manifest_invalid', 'vessel.entry must stay inside the plugin');
+  }
+  if (!(await pathExists(entryPath))) {
+    throw new MarketplaceError('manifest_invalid', `vessel.entry "${entry}" does not exist`);
+  }
+
+  const warnings: string[] = [];
+  let engines: { vessel?: string } | undefined;
+  if (isRecord(vessel.engines)) {
+    const range = vessel.engines.vessel;
+    if (typeof range === 'string') {
+      engines = { vessel: range };
+      if (vesselVersion !== undefined) {
+        if (!satisfiesVersionRange(vesselVersion, range)) {
+          throw new MarketplaceError(
+            'version_incompatible',
+            `plugin requires vessel ${range}, current ${vesselVersion}`,
+          );
+        }
+      } else {
+        // The loader resolves the running Vessel version; until the host
+        // supplies one, record that install-time verification was skipped.
+        warnings.push('engines_unverified');
+      }
+    }
+  }
+
+  return { manifest: { id, name, version, entry, ...(engines ? { engines } : {}) }, warnings };
+}
+
+// ── filesystem helpers ──────────────────────────────────────────────────────
+
+async function uniqueSibling(parent: string, base: string): Promise<string> {
+  let candidate = join(parent, base);
+  let counter = 1;
+  while (await pathExists(candidate)) {
+    counter += 1;
+    candidate = join(parent, `${base}-${counter}`);
+  }
+  return candidate;
+}
+
+/** Rename, falling back to copy+delete across filesystems (EXDEV). */
+async function moveDir(source: string, destination: string): Promise<void> {
+  try {
+    await rename(source, destination);
+  } catch (error) {
+    if (errorCodeOf(error) !== 'EXDEV') throw error;
+    await cp(source, destination, { recursive: true, errorOnExist: true });
+    await rm(source, { recursive: true, force: true });
+  }
+}
+
+async function verifyStaging(
+  context: InstallContext,
+  pluginId: string,
+  version: RegistryVersion,
+  staging: string,
+): Promise<string[]> {
+  const verified = await readVesselManifest(
+    staging,
+    pluginId,
+    version.version,
+    context.settings.vesselVersion,
+  );
+  return verified.warnings;
+}
+
+// ── install ─────────────────────────────────────────────────────────────────
+
+/** Progress events consumed by the job poller. */
+export interface InstallProgress {
+  phase: 'resolving' | 'downloading' | 'verifying' | 'extracting' | 'installing' | 'configuring';
+  bytesDone?: number;
+  bytesTotal?: number;
+}
+
+export type ProgressReporter = (progress: InstallProgress) => void;
+
+export interface InstallParams {
+  id: string;
+  version?: string;
+  /** Overrides `settings.install_scope` (used by update to stay in place). */
+  scope?: InstallScope;
+  /** Background-job progress sink (CONTRACT-0.44 §3 async install). */
+  onProgress?: ProgressReporter;
+}
+
+export interface InstallResult {
+  id: string;
+  version: string;
+  scope: InstallScope;
+  path: string;
+  config: ConfigUpdateResult;
+  warnings: string[];
+}
+
+async function defaultNamesFor(context: InstallContext): Promise<string[] | null> {
+  if (context.defaultPluginNames !== undefined) return context.defaultPluginNames;
+  if (inferBuiltInPluginsRoot() === null) return null;
+  return discoverPluginNames({
+    userPluginsDir: context.userPluginsDir,
+    ...(context.projectDir !== undefined
+      ? { projectPluginsDir: join(context.projectDir, '.vessel', 'plugins') }
+      : {}),
+  });
+}
+
+function selectVersion(
+  plugin: RegistryPlugin,
+  requested: string | undefined,
+  allowPrerelease: boolean,
+): RegistryVersion {
+  if (requested !== undefined) {
+    const found = findVersion(plugin, requested);
+    if (found === undefined) {
+      throw new MarketplaceError(
+        'version_not_found',
+        `version "${requested}" is not published for ${plugin.id}`,
+      );
+    }
+    if (isPrereleaseVersion(found.version) && !allowPrerelease) {
+      throw new MarketplaceError(
+        'prerelease_not_allowed',
+        `version "${found.version}" is a prerelease; enable allow_prerelease`,
+      );
+    }
+    return found;
+  }
+  const newest = newestVersion(plugin, allowPrerelease);
+  if (newest === undefined) {
+    throw new MarketplaceError('version_not_found', `no installable version for ${plugin.id}`);
+  }
+  return newest;
+}
+
+async function installLocked(
+  context: InstallContext,
+  params: InstallParams,
+): Promise<InstallResult> {
+  const progress = params.onProgress;
+  progress?.({ phase: 'resolving' });
+  const registry = await snapshot(context);
+  const plugin = findPlugin(registry.index, params.id);
+  if (plugin === undefined) {
+    throw new MarketplaceError('plugin_not_found', `plugin "${params.id}" is not in the registry`);
+  }
+  const version = selectVersion(plugin, params.version, context.settings.allowPrerelease);
+  const target = resolveInstallTarget(context, params.id, params.scope);
+  const limits = limitsOf(context);
+
+  await mkdir(context.dataDir, { recursive: true, mode: 0o700 });
+  const temporaryDir = await mkdtemp(join(context.dataDir, 'tmp-'));
+  try {
+    progress?.({ phase: 'downloading', bytesDone: 0, bytesTotal: version.asset.size });
+    const downloaded = await downloadAsset(context, version, temporaryDir, (phase, done, total) => {
+      progress?.({ phase, bytesDone: done, bytesTotal: total });
+    });
+    progress?.({ phase: 'extracting', bytesDone: downloaded.size, bytesTotal: version.asset.size });
+    const compressed = new Uint8Array(await readFile(downloaded.path));
+    const tarBytes = gunzipArchive(compressed, limits);
+    const entries: TarEntry[] = stripCommonRoot(parseTarEntries(tarBytes, limits));
+    const staging = join(temporaryDir, 'staging');
+    await extractEntries(entries, staging);
+    // Manifest id/version/engines verification is part of extraction validation.
+    const warnings = await verifyStaging(context, plugin.id, version, staging);
+
+    progress?.({ phase: 'installing', bytesDone: downloaded.size, bytesTotal: version.asset.size });
+    await mkdir(target.root, { recursive: true, mode: 0o700 });
+    let backup: string | undefined;
+    if (await pathExists(target.dir)) {
+      const stamp = (context.now ?? Date.now)();
+      backup = await uniqueSibling(target.root, `${params.id}.bak-${stamp}`);
+      await rename(target.dir, backup);
+    }
+
+    try {
+      await moveDir(staging, target.dir);
+    } catch (error) {
+      if (backup !== undefined) await rename(backup, target.dir).catch(() => {});
+      throw new MarketplaceError(
+        'install_failed',
+        `could not place the plugin directory (${errorCodeOf(error) ?? messageOf(error)})`,
+      );
+    }
+
+    progress?.({
+      phase: 'configuring',
+      bytesDone: downloaded.size,
+      bytesTotal: version.asset.size,
+    });
+    let config: ConfigUpdateResult;
+    try {
+      config = await upsertPluginConfig({
+        configPath: context.configPath,
+        name: params.id,
+        defaultNames: await defaultNamesFor(context),
+      });
+    } catch (error) {
+      await rm(target.dir, { recursive: true, force: true }).catch(() => {});
+      if (backup !== undefined) await rename(backup, target.dir).catch(() => {});
+      throw error instanceof MarketplaceError
+        ? error
+        : new MarketplaceError('config_write_failed', messageOf(error));
+    }
+
+    const allWarnings = [...warnings];
+    if (backup !== undefined) {
+      try {
+        await rm(backup, { recursive: true, force: true });
+      } catch {
+        allWarnings.push('backup_cleanup_failed');
+      }
+    }
+    return {
+      id: params.id,
+      version: version.version,
+      scope: target.scope,
+      path: target.dir,
+      config,
+      warnings: allWarnings,
+    };
+  } finally {
+    await rm(temporaryDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+export async function installPlugin(
+  context: InstallContext,
+  params: InstallParams,
+): Promise<InstallResult> {
+  assertPluginId(params.id);
+  return withLock(params.id, () => installLocked(context, params));
+}
+
+// ── remove ──────────────────────────────────────────────────────────────────
+
+export interface RemoveResult {
+  id: string;
+  removed: boolean;
+  path: string;
+  scope: InstallScope;
+  config: ConfigRemoveResult;
+  warnings: string[];
+}
+
+export async function removePlugin(context: InstallContext, id: string): Promise<RemoveResult> {
+  assertPluginId(id);
+  return withLock(id, async () => {
+    const target = await findInstalledTarget(context, id);
+    if (target === undefined) {
+      throw new MarketplaceError('not_installed', `plugin "${id}" is not installed`);
+    }
+
+    const stamp = (context.now ?? Date.now)();
+    const backup = await uniqueSibling(target.root, `${id}.removing-${stamp}`);
+    await rename(target.dir, backup);
+
+    let config: ConfigRemoveResult;
+    try {
+      config = await removePluginConfig(context.configPath, id);
+    } catch (error) {
+      await rename(backup, target.dir).catch(() => {});
+      throw error instanceof MarketplaceError
+        ? error
+        : new MarketplaceError('remove_failed', messageOf(error));
+    }
+
+    try {
+      await rm(backup, { recursive: true, force: true });
+    } catch (error) {
+      await rename(backup, target.dir).catch(() => {});
+      await upsertPluginConfig({
+        configPath: context.configPath,
+        name: id,
+        defaultNames: context.defaultPluginNames,
+      }).catch(() => {});
+      throw new MarketplaceError(
+        'remove_failed',
+        `could not delete the plugin directory (${errorCodeOf(error) ?? messageOf(error)})`,
+      );
+    }
+
+    return {
+      id,
+      removed: true,
+      path: target.dir,
+      scope: target.scope,
+      config,
+      warnings: ['deactivation_deferred_to_watcher'],
+    };
+  });
+}
+
+// ── update ──────────────────────────────────────────────────────────────────
+
+export interface UpdateResult {
+  id: string;
+  updated: boolean;
+  from: string;
+  to: string;
+  install?: InstallResult;
+}
+
+export interface UpdateOptions {
+  onProgress?: ProgressReporter;
+}
+
+export async function updatePlugin(
+  context: InstallContext,
+  id: string,
+  options: UpdateOptions = {},
+): Promise<UpdateResult> {
+  assertPluginId(id);
+  options.onProgress?.({ phase: 'resolving' });
+  return withLock(id, async () => {
+    const installed = (await installedVersionMap(context)).get(id);
+    if (installed === undefined) {
+      throw new MarketplaceError('not_installed', `plugin "${id}" is not installed`);
+    }
+    const registry = await snapshot(context);
+    const plugin = findPlugin(registry.index, id);
+    if (plugin === undefined) {
+      throw new MarketplaceError('plugin_not_found', `plugin "${id}" is not in the registry`);
+    }
+    const newest = newestVersion(plugin, context.settings.allowPrerelease);
+    if (newest === undefined) {
+      throw new MarketplaceError('version_not_found', `no installable version for ${id}`);
+    }
+    if (compareVersionStrings(newest.version, installed.version) <= 0) {
+      return { id, updated: false, from: installed.version, to: installed.version };
+    }
+
+    const install = await installLocked(context, {
+      id,
+      version: newest.version,
+      scope: installed.scope,
+      ...(options.onProgress !== undefined ? { onProgress: options.onProgress } : {}),
+    });
+    return { id, updated: true, from: installed.version, to: install.version, install };
+  });
+}
+
+// ── defaults ────────────────────────────────────────────────────────────────
+
+export function defaultUserPluginsDir(): string {
+  return join(homedir(), '.vessel', 'plugins');
+}
+
+export function defaultConfigPath(): string {
+  return join(homedir(), '.vessel', 'config.yaml');
+}
