@@ -1,7 +1,7 @@
 ---
 title: Plugin 架构：能力插件与体验插件
 kind: current
-triggers: [plugin, plugin host, manifest, contribution, capability plugin, experience plugin, activation, reload, child process, trust]
+triggers: [plugin, plugin host, manifest, contribution, capability plugin, experience plugin, activation, reload, child process, trust, catalog, vessel.catalog]
 paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, apps/web/src/domains/plugins/**]
 ---
 
@@ -80,6 +80,9 @@ tool loop ── capability tools (prompt surface = token tax)
 - 体验插件可热重载：gateway 监听 project / user 插件目录与 `config.yaml` 的 `plugins:` 段，变更去抖 300ms；按 `id` diff，新增为 inactive，变更先 deactivate 再替换 descriptor（原 active 的重新激活），删除则 deactivate、注销 RPC 与静态路由。
 - 能力插件是 in-process 模块，v1 不做真正卸载：改动后必须重启进程；`plugins.reload` 返回 `restart_required`，不谎报已重载。
 - `plugins.reload`（permission `write`）返回 `{added, removed, changed, active, errors[], restart_required?}`；每次 reload 广播 `plugin.changed`（`plugins.list` 贡献快照），Web 重新拉取并增删导航 / 页面。
+- **catalog**：`plugins.catalog`（read）返回 `{items}`；每项含 `id/name/version/scope/kind/mode/enabled/supportsToggle/restartRequired/status?/path/entry?/manifest?`。`scope` 是发现来源（builtin/user/project/node_modules）；`kind` 推导：in-process+builtin→builtin，child+非 builtin→marketplace，其余非 builtin→dynamic；`supportsToggle` v1 恒 true，`restartRequired = mode==='in-process'`，`status` 取 plugin host manager（无 manager 则缺省）；不含密钥 / registry 更新信息。
+- 宿主在 iframe 加载完成与每次 `plugin.changed` 后调用 `plugins.catalog`，经 `postMessage` 推送 `{ type: 'vessel.catalog', items }`；插件 UI 以最后一条为准，iframe → 宿主方法面不变。
+- Marketplace 只消费 `vessel.catalog` 渲染「我的插件」，不再本地扫描 `package.json.vessel`；`updates` 仍查 registry。旧 gateway / 推送失败显示「catalog 不可用」，不保留 A′ 本地扫描 fallback。
 
 ## 使用
 
