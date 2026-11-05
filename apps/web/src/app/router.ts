@@ -108,6 +108,12 @@ export function parseRoute(hash: string): Route {
       );
       return { domain: tab };
     }
+    case 'tools':
+      return { domain: 'tools' };
+    case 'mcp':
+      return { domain: 'mcp' };
+    case 'channels':
+      return { domain: 'channels' };
     case 'observe': {
       const tab = pick<'metrics' | 'evals' | 'diagnostics' | 'attention'>(
         segments[1] ?? query.get('tab'),

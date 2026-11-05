@@ -6,6 +6,7 @@
  */
 import { StatusChip } from '../../components/StatusChip';
 import { Badge } from '../../components/ui';
+import { CARD_SURFACE_CLASS } from '../../components/ui/card-surface';
 import type { RosterAgent } from '../../gateway/team-roster';
 import { t } from '../../i18n';
 import { roleLabelKey, roleOf } from '../team/role';
@@ -26,11 +27,7 @@ export function AgentListRow({
     member.presence === 'live' ? t('agents.presence.live') : t('agents.presence.gone');
   return (
     <li className="min-w-0">
-      <button
-        type="button"
-        className="flex h-full w-full min-w-0 cursor-pointer flex-col gap-2 rounded-md border border-line bg-raised px-4 py-3 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-        onClick={onOpen}
-      >
+      <button type="button" className={CARD_SURFACE_CLASS} onClick={onOpen}>
         <span className="flex min-w-0 items-start justify-between gap-2">
           <span className="flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
             {name}

@@ -12,6 +12,7 @@ import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, LoadingState } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { Button, SearchInput } from '../../components/ui';
+import { CARD_SURFACE_CLASS } from '../../components/ui/card-surface';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
@@ -228,12 +229,8 @@ function NodeRow({
       : t('nodes.health.loading');
 
   return (
-    <li className="flex min-w-0 flex-col rounded-md border border-line bg-raised transition-colors hover:bg-hover">
-      <button
-        type="button"
-        className="flex min-w-0 flex-1 flex-col gap-2 rounded-md px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-        onClick={onOpen}
-      >
+    <li className="min-w-0">
+      <button type="button" className={CARD_SURFACE_CLASS} onClick={onOpen}>
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="inline-flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
             {displayName}
@@ -266,12 +263,7 @@ function NodeRow({
         <span className="min-w-0 wrap-anywhere text-xs text-faint">{heartbeat}</span>
       </button>
       {onRemove && (
-        <Button
-          size="small"
-          variant="dangerGhost"
-          className="mb-3 ml-4 self-start"
-          onClick={onRemove}
-        >
+        <Button size="small" variant="dangerGhost" className="mt-1.5 ml-4" onClick={onRemove}>
           {t('common.remove')}
         </Button>
       )}
