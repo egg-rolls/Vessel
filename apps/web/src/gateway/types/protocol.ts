@@ -141,10 +141,11 @@ export interface PluginContributions {
   panels?: PluginContributionPanel[];
   commands?: PluginContributionCommand[];
   /**
-   * CONTRACT-0.43 §2.7 的 E1 只承诺 pages/panels/commands；部分 gateway 会额外
-   * 返回 rpc 白名单。Web 仅用于 postMessage 方法校验，不渲染。
+   * CONTRACT-0.43 E1：canonical 是裸方法名字符串数组（`["summary","logs"]`）。
+   * Web 仅用于 postMessage 方法校验，不渲染。旧 gateway 可能仍发 `{name}` 对象，
+   * 读侧容忍该形状。
    */
-  rpc?: Array<{ name: string; description?: string }>;
+  rpc?: Array<string | { name?: string; description?: string }>;
 }
 
 export interface PluginListItem {

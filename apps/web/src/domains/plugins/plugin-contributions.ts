@@ -260,7 +260,8 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
 
     const methods = new Set<string>();
     for (const rpc of contributions.rpc ?? []) {
-      const name = text(rpc.name);
+      // E1 canonical: bare method name string; legacy `{name}` objects tolerated.
+      const name = typeof rpc === 'string' ? text(rpc) : text(rpc.name);
       if (RPC_METHOD.test(name)) methods.add(name);
     }
     // CONTRACT-0.43 §2.2：命令必须声明同名 rpc，因此命令名也是合法的桥方法名。
