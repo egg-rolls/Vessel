@@ -95,8 +95,12 @@ for (const [id, file] of expectedPages) {
   check(`${file} mounts #root`, html.includes('id="root"'));
   check(`${file} sets data-view="${id}"`, html.includes(`data-view="${id}"`));
   check(
-    `${file} loads a built module`,
-    /<script[^>]+type="module"[^>]+src="\.\/assets\//.test(html),
+    `${file} loads a classic script before </body>`,
+    /<script src="\.\/assets\/[^"]+"><\/script><\/body>/.test(html),
+  );
+  check(
+    `${file} has no module script or crossorigin`,
+    !html.includes('type="module"') && !html.includes('crossorigin'),
   );
 
   // Every relative asset referenced by the page must exist.
@@ -125,6 +129,11 @@ const js = (
 check('bundle keeps the RPC wire type', js.includes('vessel.plugin.rpc'));
 check('bundle keeps the refresh message', js.includes('vessel.plugin.refresh'));
 check('bundle no longer ships the vanilla UI', !js.includes('data-page="usage"'));
+const esmSyntax =
+  /(^|[\n;])\s*(?:import|export)\s*[{*(]/.test(js) ||
+  /(^|[^\w$.])import\s*\(/.test(js) ||
+  /\bimport\.meta\b/.test(js);
+check('bundle is classic-script safe (no ESM syntax)', !esmSyntax);
 
 check('legacy app.js removed', !(await exists(join(webDir, 'app.js'))));
 check('legacy style.css removed', !(await exists(join(webDir, 'style.css'))));
