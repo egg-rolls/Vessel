@@ -16,6 +16,7 @@ import type { Logger } from '../packages/core/src/index';
 import {
   PluginHostManager,
   type PluginHostManagerOptions,
+  type PluginReloadResult,
   type PluginDescriptor as ServePluginDescriptor,
 } from '../packages/serve/src/index';
 import type { PluginDescriptor as LoaderPluginDescriptor, PluginLoader } from './plugin-loader';
@@ -150,6 +151,52 @@ export function createPluginHostManager(options: PluginHostAssemblyOptions): Plu
     ...(options.execPath !== undefined ? { execPath: options.execPath } : {}),
     ...(options.timeouts !== undefined ? { timeouts: options.timeouts } : {}),
   });
+}
+
+/** 重新扫描的 loader 端口（`rescan()` 返回最新描述符） */
+export interface PluginReloaderOptions {
+  loader: Pick<PluginLoader, 'rescan' | 'list'>;
+  manager: PluginHostManager;
+  /** 每次 reload 读取当前活配置（enabled / settings / dependencies 可能已变） */
+  getConfig: () => VesselConfig;
+}
+
+/** in-process 能力插件无法热重载：指纹变化时 `restart_required=true` */
+function inProcessFingerprint(descriptors: readonly LoaderPluginDescriptor[]): string {
+  return descriptors
+    .filter((descriptor) => descriptor.mode === 'in-process')
+    .map((descriptor) => `${descriptor.name}@${descriptor.version}:${descriptor.dir}`)
+    .sort()
+    .join('|');
+}
+
+/**
+ * 创建共享 `reloadPlugins()`：`loader.rescan()` → 用当前配置重建 child
+ * descriptor → `manager.reload(descriptors)`。
+ *
+ * 不重启进程；in-process 能力插件若发生变化，结果带 `restart_required`，
+ * 不谎报已重载。
+ */
+export function createPluginReloader(
+  options: PluginReloaderOptions,
+): () => Promise<PluginReloadResult> {
+  let baseline = inProcessFingerprint(options.loader.list());
+
+  return async (): Promise<PluginReloadResult> => {
+    const descriptors = options.loader.rescan();
+    const next = inProcessFingerprint(descriptors);
+    const restartRequired = next !== baseline;
+    baseline = next;
+
+    const config = options.getConfig();
+    const childDescriptors = descriptors
+      .filter((descriptor) => descriptor.mode === 'child')
+      .map((descriptor) => toServeDescriptor(descriptor, config));
+
+    const result = await options.manager.reload(childDescriptors);
+    if (restartRequired) result.restart_required = true;
+    return result;
+  };
 }
 
 /** `activationEvents` 是否要求启动即激活 */

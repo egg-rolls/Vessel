@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { getUserConfigPath, loadConfig, type PluginConfig } from '../packages/config/src/index';
 import type { PluginCommandArgs } from './cli-args';
+import { resolveControlPlaneTarget } from './control-plane-target';
 import { declarativePluginEntries, setPluginEnabled } from './plugin-config';
 import { defaultPluginRoots, type PluginDescriptor, PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
@@ -50,6 +51,27 @@ export function resolveUserPluginsDir(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * best-effort：配置落盘后让运行中的 gateway 立即 `plugins.reload`。
+ * 没有 gateway / 多实例 / 连接失败都返回 false，绝不让 CLI 失败。
+ */
+async function requestGatewayPluginReload(options: PluginCommandOptions): Promise<boolean> {
+  try {
+    const resolved = await resolveControlPlaneTarget({
+      ...(options.env !== undefined ? { env: options.env } : {}),
+    });
+    if (!resolved.ok) return false;
+    try {
+      await resolved.target.request('plugins.reload');
+      return true;
+    } finally {
+      await resolved.target.close();
+    }
+  } catch {
+    return false;
+  }
 }
 
 /** 0.43：child 插件的贡献点摘要（只用于列表展示；完整清单走 --json） */
@@ -320,9 +342,14 @@ export async function runPluginCommand(
         configPath,
         ...(allNames.length > 0 ? { allNames } : {}),
       });
+      const reloaded = await requestGatewayPluginReload(options);
       return {
         exitCode: 0,
-        stdout: `${command.kind === 'enable' ? 'Enabled' : 'Disabled'} "${command.name}" in ${configPath}.\nRestart Vessel to apply.`,
+        stdout: `${command.kind === 'enable' ? 'Enabled' : 'Disabled'} "${command.name}" in ${configPath}.\n${
+          reloaded
+            ? 'Running gateway reloaded its plugins.'
+            : 'No gateway reload (restart Vessel or rely on the plugin watcher).'
+        }`,
         stderr: '',
       };
     } catch (error) {

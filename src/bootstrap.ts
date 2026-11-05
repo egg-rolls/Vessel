@@ -90,9 +90,14 @@ import {
   removeAutoApproveRule,
 } from './permission-store';
 import { declarativePluginEntries } from './plugin-config';
-import { activateStartupPlugins, createPluginHostManager } from './plugin-host-assembly';
+import {
+  activateStartupPlugins,
+  createPluginHostManager,
+  createPluginReloader,
+} from './plugin-host-assembly';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { startPluginWatch } from './plugin-watch';
 import {
   createHttpRpcClient,
   createLocalRpcClient,
@@ -1569,11 +1574,28 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tenantId,
     logger,
   });
+  const reloadLocalPlugins = createPluginReloader({
+    loader: bundle.pluginLoader,
+    manager: localPluginHostManager,
+    getConfig: () => config,
+  });
+  // 0.43 E3：本地模式同样监听项目/用户插件目录与 config，变更即 rescan + reload。
+  const localPluginWatch = startPluginWatch({
+    onChange: ({ paths }) => {
+      void reloadLocalPlugins().catch((error) => {
+        logger.warn('plugin.reload.failed', {
+          error: error instanceof Error ? error.message : String(error),
+          paths,
+        });
+      });
+    },
+  });
 
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,
     session,
     pluginHostManager: localPluginHostManager,
+    pluginsReload: reloadLocalPlugins,
     // 0.15: local RPC runs also take the session write lock.
     runtime: bundle.runtime,
     context,
@@ -1790,6 +1812,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         error,
         tenantId,
       });
+    }
+
+    try {
+      localPluginWatch.close();
+    } catch {
+      // watcher 关闭失败不阻断关停。
     }
 
     try {

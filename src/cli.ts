@@ -45,6 +45,7 @@ import {
   type GatewayOptions,
   type MetricsProvider,
   type PluginHostManager,
+  type PluginReloadResult,
   startGateway,
   type TenantEventHub,
 } from '../packages/serve/src/index';
@@ -109,8 +110,10 @@ import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config'
 import {
   activateStartupPlugins,
   createPluginHostManager,
+  createPluginReloader,
   pluginSettingsFor,
 } from './plugin-host-assembly';
+import { type PluginWatchHandle, startPluginWatch } from './plugin-watch';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
 import { createRunControl } from './run-control';
@@ -680,6 +683,10 @@ async function runWithConfig(result: BootstrapResult) {
   let liveConfig: VesselConfig = config;
   /** 0.43：体验型 plugin 宿主（gateway 启动时构造；关闭时 stopAll）。 */
   let pluginHostManager: PluginHostManager | undefined;
+  /** 0.43 E3：`plugins.reload` 的 rescan + manager.reload 实现。 */
+  let pluginsReload: (() => Promise<PluginReloadResult>) | undefined;
+  /** 0.43：项目/用户插件目录与 config 变更监听（关闭时停止）。 */
+  let pluginWatch: PluginWatchHandle | undefined;
   /**
    * A2：headless 不在这里直接 `process.exit`，否则会跳过末尾的
    * gateway / tenantFactory / transport / shutdown 清理（`--serve --run`
@@ -898,6 +905,32 @@ async function runWithConfig(result: BootstrapResult) {
           tenant: result.tenantId,
         });
       }
+
+      // 0.43 E3：`plugins.reload` = 重新读配置 → rescan → manager.reload。
+      // 先 reloadVesselConfig 让 config.yaml 的 enable/disable 立即进入 liveConfig。
+      const rescanAndReload = createPluginReloader({
+        loader: result.bundle.pluginLoader,
+        manager: pluginHostManager,
+        getConfig: () => liveConfig,
+      });
+      pluginsReload = async (): Promise<PluginReloadResult> => {
+        await reloadVesselConfig();
+        return rescanAndReload();
+      };
+
+      // 目录 / config 变更 → 300ms 去抖后执行同一 reload（gateway 会广播 plugin.changed）。
+      pluginWatch = startPluginWatch({
+        onChange: ({ paths }) => {
+          const reload = pluginsReload;
+          if (reload === undefined) return;
+          void reload().catch((error) => {
+            logger.warn('plugin.reload.failed', {
+              error: error instanceof Error ? error.message : String(error),
+              paths,
+            });
+          });
+        },
+      });
     }
     // 0.18：硬崩后 session 会永久停在 running（事件无终态）。启动 sweep + 读时兜底共用
     // 同一修复函数；锁活着 → 跳过，绝不误杀其它实例的活 run / resume。
@@ -1128,6 +1161,14 @@ async function runWithConfig(result: BootstrapResult) {
       logger.warn('config.watch.unavailable', { path: hotApplyConfigPath });
     }
 
+    // 0.43：`plugins.list` / `plugin.changed` 的 base 列表要含体验型 child 插件；
+    // 贡献字段由 gateway 与 manager.contributionsFor 合并。
+    const pluginRuntimeEntries = (): Array<{ name: string; enabled: boolean }> =>
+      pluginHostManager?.statuses().map((status) => ({
+        name: status.id,
+        enabled: status.enabled,
+      })) ?? [];
+
     const gatewayOptions: GatewayOptions & {
       durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
     } = {
@@ -1168,6 +1209,10 @@ async function runWithConfig(result: BootstrapResult) {
       pluginHost: ctx.pluginHost,
       // 0.43：体验型 plugin 宿主（子进程 / 动态 RPC / 静态 UI / 事件转发）。
       ...(pluginHostManager !== undefined ? { pluginHostManager } : {}),
+      ...(pluginsReload !== undefined ? { pluginsReload } : {}),
+      // 无 tenantFactory 时也要把 child 插件纳入 plugins.list / plugin.changed。
+      plugins: pluginRuntimeEntries,
+      pluginsFor: () => pluginRuntimeEntries(),
       staticDir: resolveStaticDir(),
       nodeId: result.nodeId,
       nodeName: result.nodeName,
@@ -1223,8 +1268,14 @@ async function runWithConfig(result: BootstrapResult) {
             sessionFor: (tenantId: string) =>
               livenessSessionFor(tenantId) ?? tenantFactory?.sessionFor(tenantId),
             pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
-            pluginsFor: (tenantId: string) => tenantFactory?.pluginsFor(tenantId) ?? [],
-            plugins: () => tenantFactory?.pluginsFor(result.tenantId) ?? [],
+            pluginsFor: (tenantId: string) => [
+              ...(tenantFactory?.pluginsFor(tenantId) ?? []),
+              ...pluginRuntimeEntries(),
+            ],
+            plugins: () => [
+              ...(tenantFactory?.pluginsFor(result.tenantId) ?? []),
+              ...pluginRuntimeEntries(),
+            ],
             // 无 metrics 的 tenant 返回 undefined；gateway 已按 undefined 处理。
             metricsFor: ((tenantId: string) => {
               const metrics = tenantFactory?.metricsFor(tenantId);
@@ -1323,7 +1374,9 @@ async function runWithConfig(result: BootstrapResult) {
     try {
       gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
     } catch (error) {
-      // gateway 没起来：先回收已 spawn 的 plugin 子进程。
+      // gateway 没起来：先停 watcher 并回收已 spawn 的 plugin 子进程。
+      pluginWatch?.close();
+      pluginWatch = undefined;
       await pluginHostManager?.stopAll();
       pluginHostManager = undefined;
       if (isAddressInUse(error)) {
@@ -1438,7 +1491,9 @@ async function runWithConfig(result: BootstrapResult) {
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
   // gateway.stop() 自带 interrupt('shutdown') + 5s drain，后续关闭传 drain:false。
   activeCleanup = async () => {
-    // 0.43：先回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
+    // 0.43：先停 watcher 并回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
+    pluginWatch?.close();
+    pluginWatch = undefined;
     await pluginHostManager?.stopAll();
     pluginHostManager = undefined;
     // 先停配置监听 / 版本检查与出站 / 本地 hub，避免 gateway drain 期间继续触发热应用或重连。
@@ -1520,7 +1575,9 @@ async function runWithConfig(result: BootstrapResult) {
   // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）
   // → closeAll → shutdown；后两步 drain:false，避免重复限时等待。
   const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
-    // 0.43：先回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
+    // 0.43：先停 watcher 并回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
+    pluginWatch?.close();
+    pluginWatch = undefined;
     await pluginHostManager?.stopAll();
     pluginHostManager = undefined;
     // 先停出站 / 本地 hub，避免 gateway drain 期间继续重连或刷新目录。
