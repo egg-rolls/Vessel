@@ -75,12 +75,14 @@ function toServeDescriptor(
     ...(uiDir !== undefined ? { uiDir } : {}),
     activationEvents: manifest.activationEvents,
     contributes: {
+      ...(contributes.navGroups !== undefined ? { navGroups: contributes.navGroups } : {}),
       ...(contributes.pages !== undefined
         ? {
             pages: contributes.pages.map((page) => ({
               id: page.id,
               title: page.title ?? page.id,
               ...(page.nav !== undefined ? { nav: page.nav } : {}),
+              ...(page.icon !== undefined ? { icon: page.icon } : {}),
               ...(page.order !== undefined ? { order: page.order } : {}),
               entry: page.entry,
             })),

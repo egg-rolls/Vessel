@@ -24,13 +24,46 @@ export const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 export const PLUGIN_RPC_NAME_RE = /^[a-z][a-z0-9_-]*$/;
 
 export type PluginSide = 'backend' | 'ui' | 'both';
-export type PluginPageNav = 'observe' | 'settings' | 'top' | 'plugins';
+
+/** 内置导航组（宿主固定，不可被 mod 覆盖） */
+export type PluginBuiltInNav = 'observe' | 'settings' | 'top' | 'plugins';
+/** 页面导航组：内置组，或该 plugin 自己的 `plugin:<pluginId>` 自定义组 */
+export type PluginPageNav = PluginBuiltInNav | `plugin:${string}`;
+
+/** 0.45 图标白名单（宿主渲染的子集） */
+export const PLUGIN_ICON_NAMES = [
+  'chat',
+  'hub',
+  'gateway',
+  'nodes',
+  'teams',
+  'agents',
+  'runs',
+  'tools',
+  'mcp',
+  'channels',
+  'plugins',
+  'observe',
+  'settings',
+] as const;
+export type PluginIconName = (typeof PLUGIN_ICON_NAMES)[number];
+
+/** 自定义导航组；id 必须等于 `plugin:<pluginId>`，每个 plugin 最多一个 */
+export interface PluginNavGroup {
+  id: string;
+  title: string;
+  icon?: PluginIconName;
+  order?: number;
+}
+
 export type PluginPanelSlot = 'run-detail' | 'session-detail' | 'nav';
 
 export interface PluginPageContribution {
   id: string;
   title?: string;
   nav?: PluginPageNav;
+  /** 0.45：导航图标，必须在 {@link PLUGIN_ICON_NAMES} 白名单内 */
+  icon?: PluginIconName;
   order?: number;
   /** 相对 `ui.dir` 的静态入口 */
   entry: string;
@@ -63,6 +96,8 @@ export interface PluginPanelContribution {
 }
 
 export interface PluginContributions {
+  /** 0.45：自定义导航组；每个 plugin 最多一个，id 固定 `plugin:<pluginId>` */
+  navGroups?: PluginNavGroup[];
   pages?: PluginPageContribution[];
   commands?: PluginCommandContribution[];
   settings?: Record<string, PluginSettingSchema>;
@@ -343,7 +378,74 @@ function readBoolean(value: unknown, field: string): boolean {
   return value;
 }
 
-function readPages(value: unknown): PluginPageContribution[] {
+const BUILT_IN_NAVS: ReadonlySet<string> = new Set(['observe', 'settings', 'top', 'plugins']);
+
+function isBuiltInNav(value: unknown): value is PluginBuiltInNav {
+  return typeof value === 'string' && BUILT_IN_NAVS.has(value);
+}
+
+function readIcon(value: unknown, field: string): PluginIconName | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !(PLUGIN_ICON_NAMES as readonly string[]).includes(value)) {
+    fail(
+      'plugin_manifest_invalid',
+      `${field} "${String(value)}" is not in the icon whitelist (${PLUGIN_ICON_NAMES.join(', ')})`,
+    );
+  }
+  return value as PluginIconName;
+}
+
+/** page.nav：内置组，或该 plugin 自己的 `plugin:<pluginId>`；跨 plugin 引用非法 */
+function readPageNav(value: unknown, pluginId: string, field: string): PluginPageNav {
+  if (isBuiltInNav(value)) return value;
+  if (typeof value === 'string' && value.startsWith('plugin:')) {
+    const own = `plugin:${pluginId}`;
+    if (value !== own) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field} "${value}" references another plugin's nav group (expected "${own}")`,
+      );
+    }
+    return value as PluginPageNav;
+  }
+  fail('plugin_manifest_invalid', `${field} is invalid (built-in nav or "plugin:${pluginId}")`);
+}
+
+/** navGroups：每个 plugin 最多一个，id 固定 `plugin:<pluginId>`，内置 id 保留 */
+function readNavGroups(value: unknown, pluginId: string): PluginNavGroup[] {
+  if (!Array.isArray(value)) {
+    fail('plugin_manifest_invalid', 'contributes.navGroups must be an array');
+  }
+  if (value.length > 1) {
+    fail('plugin_manifest_invalid', 'contributes.navGroups allows at most one group per plugin');
+  }
+  const seen = new Set<string>();
+  return value.map((item, index) => {
+    const field = `contributes.navGroups[${index}]`;
+    if (!isRecord(item)) fail('plugin_manifest_invalid', `${field} must be an object`);
+    const id = requireString(item.id, `${field}.id`);
+    if (isBuiltInNav(id)) {
+      fail('plugin_manifest_invalid', `${field}.id "${id}" is a reserved built-in nav group`);
+    }
+    const own = `plugin:${pluginId}`;
+    if (id !== own) {
+      fail('plugin_manifest_invalid', `${field}.id must equal "${own}"`);
+    }
+    if (seen.has(id)) fail('plugin_manifest_invalid', `duplicate nav group id "${id}"`);
+    seen.add(id);
+    const title = requireString(item.title, `${field}.title`);
+    const icon = readIcon(item.icon, `${field}.icon`);
+    const order = optionalNumber(item.order, `${field}.order`);
+    return {
+      id,
+      title,
+      ...(icon !== undefined ? { icon } : {}),
+      ...(order !== undefined ? { order } : {}),
+    };
+  });
+}
+
+function readPages(value: unknown, pluginId: string): PluginPageContribution[] {
   if (!Array.isArray(value)) fail('plugin_manifest_invalid', 'contributes.pages must be an array');
   const seen = new Set<string>();
   return value.map((item, index) => {
@@ -358,23 +460,18 @@ function readPages(value: unknown): PluginPageContribution[] {
     }
     const title = optionalString(item.title, `${field}.title`);
     const order = optionalNumber(item.order, `${field}.order`);
-    let nav: PluginPageNav | undefined;
-    if (item.nav !== undefined) {
-      if (!isPageNav(item.nav)) fail('plugin_manifest_invalid', `${field}.nav is invalid`);
-      nav = item.nav;
-    }
+    const nav =
+      item.nav === undefined ? undefined : readPageNav(item.nav, pluginId, `${field}.nav`);
+    const icon = readIcon(item.icon, `${field}.icon`);
     return {
       id,
       ...(title !== undefined ? { title } : {}),
       ...(nav !== undefined ? { nav } : {}),
+      ...(icon !== undefined ? { icon } : {}),
       ...(order !== undefined ? { order } : {}),
       entry,
     };
   });
-}
-
-function isPageNav(value: unknown): value is PluginPageNav {
-  return value === 'observe' || value === 'settings' || value === 'top' || value === 'plugins';
 }
 
 function isPanelSlot(value: unknown): value is PluginPanelSlot {
@@ -455,12 +552,14 @@ function readPanels(value: unknown): PluginPanelContribution[] {
 function readContributions(
   raw: unknown,
   permissions: PluginPermissions,
+  pluginId: string,
 ): PluginContributions | undefined {
   if (raw === undefined) return undefined;
   if (!isRecord(raw)) fail('plugin_manifest_invalid', 'contributes must be an object');
 
   const out: PluginContributions = {};
-  if (raw.pages !== undefined) out.pages = readPages(raw.pages);
+  if (raw.navGroups !== undefined) out.navGroups = readNavGroups(raw.navGroups, pluginId);
+  if (raw.pages !== undefined) out.pages = readPages(raw.pages, pluginId);
   if (raw.commands !== undefined) out.commands = readCommands(raw.commands);
   if (raw.settings !== undefined) out.settings = readSettings(raw.settings);
   if (raw.rpc !== undefined) out.rpc = readRpc(raw.rpc);
@@ -583,7 +682,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
     raw.activationEvents === undefined ? [] : stringArray(raw.activationEvents, 'activationEvents');
 
   const permissions = readPermissions(raw.permissions);
-  const contributes = readContributions(raw.contributes, permissions);
+  const contributes = readContributions(raw.contributes, permissions, id);
   const dependencies = readDependencies(raw.dependencies);
 
   if (raw.override !== undefined && typeof raw.override !== 'boolean') {
