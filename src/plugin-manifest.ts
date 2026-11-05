@@ -25,8 +25,17 @@ export const PLUGIN_RPC_NAME_RE = /^[a-z][a-z0-9_-]*$/;
 
 export type PluginSide = 'backend' | 'ui' | 'both';
 
-/** 内置导航组（宿主固定，不可被 mod 覆盖） */
-export type PluginBuiltInNav = 'observe' | 'settings' | 'top' | 'plugins';
+/** 内置导航组（宿主固定，不可被 mod 覆盖）：core 组 + plugins 组 */
+export type PluginBuiltInNav =
+  | 'chat'
+  | 'network'
+  | 'runs'
+  | 'integrations'
+  | 'status'
+  | 'observe'
+  | 'settings'
+  | 'top'
+  | 'plugins';
 /** 页面导航组：内置组，或该 plugin 自己的 `plugin:<pluginId>` 自定义组 */
 export type PluginPageNav = PluginBuiltInNav | `plugin:${string}`;
 
@@ -378,7 +387,17 @@ function readBoolean(value: unknown, field: string): boolean {
   return value;
 }
 
-const BUILT_IN_NAVS: ReadonlySet<string> = new Set(['observe', 'settings', 'top', 'plugins']);
+const BUILT_IN_NAVS: ReadonlySet<string> = new Set([
+  'chat',
+  'network',
+  'runs',
+  'integrations',
+  'status',
+  'observe',
+  'settings',
+  'top',
+  'plugins',
+]);
 
 function isBuiltInNav(value: unknown): value is PluginBuiltInNav {
   return typeof value === 'string' && BUILT_IN_NAVS.has(value);
