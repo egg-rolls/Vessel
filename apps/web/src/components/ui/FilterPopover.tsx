@@ -242,7 +242,7 @@ export function FilterPopover({
         ref={triggerRef}
         type="button"
         className={cn(
-          '-mx-2 inline-flex max-w-full items-center gap-1 rounded-sm px-2 py-1 text-left text-xs font-mono tracking-wide text-faint uppercase transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+          '-mx-2 inline-flex max-w-full appearance-none items-center gap-1 rounded-sm border-0 bg-transparent px-2 py-1 text-left text-xs font-mono tracking-wide text-inherit uppercase transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
           className,
         )}
         role="combobox"
