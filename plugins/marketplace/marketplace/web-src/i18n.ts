@@ -45,7 +45,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     'state.registryEmptyDetail': 'No plugins have been published to this registry yet.',
     'installed.empty': 'No plugins installed',
     'installed.emptyDetail':
-      'Plugins installed from the registry appear here. Built-in plugins are not listed.',
+      'Plugins installed from the registry appear here; built-in plugins are not listed.',
     'updates.none': 'Everything is up to date',
     'updates.noneDetail': 'No installed plugin has a newer version in the registry.',
     'updates.error': 'Could not check for updates',
@@ -88,6 +88,16 @@ const I18N: Record<Lang, Record<string, string>> = {
     'registry.custom.banner': 'Custom registry: {url}. Treat it as untrusted content.',
     'registry.stale': 'Showing a cached registry index (refresh failed).',
     'registry.unavailable': 'Registry unavailable: {message}',
+    'setup.title': 'Connect a registry',
+    'setup.missing': 'registry_url is not set for this plugin.',
+    'setup.hint':
+      'Add this under plugins[].config in {path}, then save. The gateway hot-reloads plugins; restart if it does not.',
+    'setup.unreachable': 'Could not reach the registry',
+    'setup.url': 'Configured registry: {url}',
+    'setup.defaultNote':
+      'Default registry: {url}. Set registry_url in plugins[].config to use it or your own index.',
+    'setup.customHint':
+      'Set a custom registry under plugins[].config (registry_url), then save and retry.',
     'job.running': '{label} — {phase}',
     'job.failed': 'Job failed',
     'job.timeout': 'The job did not finish in time.',
@@ -173,6 +183,15 @@ const I18N: Record<Lang, Record<string, string>> = {
     'registry.custom.banner': '自定义 registry：{url}。请视为不可信内容。',
     'registry.stale': '显示缓存的 registry 索引（刷新失败）。',
     'registry.unavailable': 'Registry 不可用：{message}',
+    'setup.title': '连接 registry',
+    'setup.missing': '该插件尚未设置 registry_url。',
+    'setup.hint':
+      '把上面的配置加到 {path} 的 plugins[].config 后保存；gateway 会热重载插件，未生效时请重启。',
+    'setup.unreachable': '无法访问 registry',
+    'setup.url': '配置的 registry：{url}',
+    'setup.defaultNote':
+      '默认 registry：{url}。在 plugins[].config 设置 registry_url 可使用它或你自己的索引。',
+    'setup.customHint': '在 plugins[].config（registry_url）设置自定义 registry，保存后重试。',
     'job.running': '{label} — {phase}',
     'job.failed': '任务失败',
     'job.timeout': '任务未能及时完成。',

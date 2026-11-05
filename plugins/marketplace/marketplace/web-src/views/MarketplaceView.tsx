@@ -9,10 +9,17 @@ import {
   Select,
 } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { describeError, type MarketplaceApi } from '../api';
+import {
+  describeError,
+  type MarketplaceApi,
+  type RegistryFailure,
+  registryFailureOf,
+  urlInMessage,
+} from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { PermissionList } from '../components/Permissions';
 import { RegistryBanners } from '../components/RegistryBanners';
+import { RegistrySetup, RegistryUnreachable } from '../components/RegistrySetup';
 import { Banner, EmptyState, ErrorState, LoadingState } from '../components/States';
 import type { Translator } from '../i18n';
 import type {
@@ -105,6 +112,7 @@ export function MarketplaceView({
   const [data, setData] = useState<Awaited<ReturnType<MarketplaceApi['search']>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [registryFailure, setRegistryFailure] = useState<RegistryFailure | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -125,10 +133,14 @@ export function MarketplaceView({
       const result = await api.search(applied);
       if (requestRef.current !== request) return;
       setData(result);
+      setRegistryFailure(null);
       setActionError(null);
     } catch (caught) {
       if (requestRef.current !== request) return;
       setError(describeError(caught, t));
+      setRegistryFailure(
+        registryFailureOf(caught instanceof Error ? caught.message : String(caught)),
+      );
       setData(null);
     } finally {
       if (requestRef.current === request) setLoading(false);
@@ -236,6 +248,15 @@ export function MarketplaceView({
 
       {loading ? (
         <LoadingState label={t('state.loading')} />
+      ) : registryFailure === 'missing' ? (
+        <RegistrySetup t={t} onRetry={() => void load()} />
+      ) : registryFailure === 'unreachable' ? (
+        <RegistryUnreachable
+          message={error ?? ''}
+          url={urlInMessage(error ?? '')}
+          t={t}
+          onRetry={() => void load()}
+        />
       ) : error !== null ? (
         <ErrorState message={error} retryLabel={t('button.retry')} onRetry={() => void load()} />
       ) : data !== null && data.items.length === 0 ? (

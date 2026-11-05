@@ -983,6 +983,12 @@ for (const [name, mutate] of [
       js.includes('vessel.plugin.rpc') && js.includes('vessel.plugin.refresh'),
     );
     check(
+      'page: bundle ships the registry setup state',
+      js.includes('Connect a registry') &&
+        js.includes('registry_url:') &&
+        js.includes('plugins[].config'),
+    );
+    check(
       'page: language comes from ?lang',
       js.includes('get("lang")') && js.includes('"zh-CN"') && js.includes('"en"'),
     );

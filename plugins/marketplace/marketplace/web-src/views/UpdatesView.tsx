@@ -4,6 +4,7 @@ import { describeError, type MarketplaceApi } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { InstalledTable } from '../components/InstalledTable';
 import { RegistryBanners } from '../components/RegistryBanners';
+import { RegistryErrorNote } from '../components/RegistrySetup';
 import { Banner, EmptyState, ErrorState, LoadingState } from '../components/States';
 import type { Translator } from '../i18n';
 import type { InstalledItem, InstalledResult, StartJobResult } from '../types';
@@ -75,7 +76,7 @@ export function UpdatesView({
 
       <RegistryBanners registry={data?.registry} t={t} />
       {data?.registry_error !== undefined ? (
-        <Banner tone="warn">{t('registry.unavailable', { message: data.registry_error })}</Banner>
+        <RegistryErrorNote message={data.registry_error} t={t} />
       ) : null}
       {actionError !== null ? <Banner tone="danger">{actionError}</Banner> : null}
 

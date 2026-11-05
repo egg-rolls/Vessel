@@ -1,6 +1,8 @@
 import {
   applyHostContext,
   type HostContext,
+  PluginPage,
+  PluginPageHeader,
   readHostContext,
   SegmentedTabs,
   type TabOption,
@@ -87,11 +89,8 @@ export function App() {
         : { title: t('updates.title'), subtitle: t('updates.subtitle') };
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-title font-semibold text-ink">{heading.title}</h1>
-        <p className="text-sm text-muted">{heading.subtitle}</p>
-      </header>
+    <PluginPage>
+      <PluginPageHeader title={heading.title} description={heading.subtitle} />
 
       <SegmentedTabs
         label={t('tabs.label')}
@@ -129,6 +128,6 @@ export function App() {
           />
         ) : null}
       </main>
-    </div>
+    </PluginPage>
   );
 }

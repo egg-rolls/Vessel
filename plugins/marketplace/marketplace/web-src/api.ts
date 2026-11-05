@@ -43,6 +43,25 @@ export function describeError(error: unknown, t: Translator): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export type RegistryFailure = 'missing' | 'unreachable';
+
+/**
+ * The host bridge forwards only the child's error message (the stable
+ * `data.code` is dropped), so classify on the wording the child emits.
+ * `registry_url_missing` is a setup state, everything else registry-shaped
+ * means the configured index could not be reached.
+ */
+export function registryFailureOf(message: string): RegistryFailure | null {
+  if (/registry_url is not configured|registry_url_missing/i.test(message)) return 'missing';
+  if (/registry|could not fetch|http \d{3}/i.test(message)) return 'unreachable';
+  return null;
+}
+
+/** Show the configured URL when the fetch error happens to carry it. */
+export function urlInMessage(message: string): string | undefined {
+  return message.match(/https?:\/\/[^\s"'<>]+/)?.[0];
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
