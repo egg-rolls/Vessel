@@ -1464,6 +1464,20 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'capabilities.noMatchPlugins': 'No plugin matches.',
   'capabilities.enabled': 'enabled',
   'capabilities.disabled': 'disabled',
+  'capabilities.col.plugin': 'Plugin',
+  'capabilities.col.scope': 'Scope',
+  'capabilities.col.mode': 'Mode',
+  'capabilities.col.state': 'State',
+  'capabilities.col.restart': 'Takes effect',
+  'capabilities.scope.builtin': 'built-in',
+  'capabilities.scope.user': 'user',
+  'capabilities.scope.project': 'project',
+  'capabilities.scope.node_modules': 'node_modules',
+  'capabilities.mode.in-process': 'in-process',
+  'capabilities.mode.child': 'child',
+  'capabilities.restartRequired': 'After restart',
+  'capabilities.catalogUnavailable':
+    'Plugin catalog is unavailable; showing the runtime plugin snapshot from the capability manifest (no local directory scan).',
 
   // Gateway / URL / protocol
   'gateway.url.wildcard': 'Wildcard gateway addresses are not supported',

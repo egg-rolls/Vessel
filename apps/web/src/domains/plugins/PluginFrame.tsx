@@ -14,7 +14,9 @@ import { cn } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import { resolvedTheme, useTheme } from '../../state/theme';
+import { isCatalogRequest, pushPluginCatalog } from './plugin-catalog';
 import { pluginFrameUrl } from './plugin-contributions';
+import { PLUGIN_CHANGED_DEBOUNCE_MS } from './usePluginContributions';
 
 const RPC_MESSAGE = 'vessel.plugin.rpc';
 const RPC_RESULT = 'vessel.plugin.rpc.result';
@@ -92,6 +94,17 @@ export function PluginFrame({
     iframeRef.current?.contentWindow?.postMessage(message, '*');
   }, []);
 
+  // CONTRACT-0.47 §2：只有 catalog 成功返回时才推送；失败 / 旧 gateway 不发，
+  // 也不伪造空数组。generation guard 防止旧响应覆盖新一轮结果。
+  const catalogGeneration = useRef(0);
+  const pushCatalog = useCallback(async () => {
+    const generation = ++catalogGeneration.current;
+    await pushPluginCatalog(client, (message) => {
+      if (generation !== catalogGeneration.current) return;
+      postToFrame(message);
+    });
+  }, [client, postToFrame]);
+
   // 主题 / 语言运行时变化：保活 iframe，只推消息。
   useEffect(() => {
     if (!loaded) return;
@@ -108,7 +121,14 @@ export function PluginFrame({
     const frameOrigin = new URL(src).origin;
     const inFlight = new Set<string>();
     const onMessage = (event: MessageEvent) => {
-      if (event.source !== iframeRef.current?.contentWindow) return;
+      const frameWindow = iframeRef.current?.contentWindow;
+      // CONTRACT-0.47 §2：首帧握手。onLoad 的推送可能早于插件 useEffect，
+      // 插件监听挂载后发请求，宿主收到即再推；来源不符的消息静默丢弃。
+      if (isCatalogRequest(event, { window: frameWindow, origin: frameOrigin })) {
+        void pushCatalog();
+        return;
+      }
+      if (event.source !== frameWindow) return;
       if (event.origin !== 'null' && event.origin !== frameOrigin) return;
       const data: unknown = event.data;
       if (data === null || typeof data !== 'object') return;
@@ -128,13 +148,14 @@ export function PluginFrame({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [client, pluginId, methods, postToFrame, src]);
+  }, [client, pluginId, methods, postToFrame, pushCatalog, src]);
 
   // host → iframe：`plugin.ready` 或热重载后的 `plugin.changed` 让页面自行重取数据。
   useEffect(() => {
     if (src === null) return;
     let lastVersion = eventStore.getSnapshot().version;
-    return eventStore.subscribe(() => {
+    let catalogTimer: number | undefined;
+    const unsubscribe = eventStore.subscribe(() => {
       const snapshot = eventStore.getSnapshot();
       if (snapshot.version === lastVersion) return;
       lastVersion = snapshot.version;
@@ -145,6 +166,11 @@ export function PluginFrame({
         // 热重载：entry/src 可能已变化（由父级重挂载），未变时让页面刷新数据。
         if (event.type === 'plugin.changed') {
           postToFrame({ type: REFRESH_MESSAGE });
+          // catalog 与贡献点对账共用 200ms 去抖；只推最后一条。
+          window.clearTimeout(catalogTimer);
+          catalogTimer = window.setTimeout(() => {
+            void pushCatalog();
+          }, PLUGIN_CHANGED_DEBOUNCE_MS);
           break;
         }
         if (event.type !== 'plugin.ready') continue;
@@ -155,7 +181,11 @@ export function PluginFrame({
         break;
       }
     });
-  }, [eventStore, pluginId, postToFrame, src]);
+    return () => {
+      unsubscribe();
+      window.clearTimeout(catalogTimer);
+    };
+  }, [eventStore, pluginId, postToFrame, pushCatalog, src]);
 
   const retry = useCallback(() => {
     setFailed(null);
@@ -185,6 +215,8 @@ export function PluginFrame({
         onLoad={() => {
           setLoaded(true);
           setFailed(null);
+          // iframe 脚本已执行、消息监听已就绪；此时推 catalog。
+          void pushCatalog();
         }}
         onError={() => setFailed(t('plugins.frame.loadError'))}
       />

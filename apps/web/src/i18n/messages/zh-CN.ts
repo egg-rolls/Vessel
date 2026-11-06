@@ -1418,6 +1418,20 @@ export const messages = {
   'capabilities.noMatchPlugins': '没有匹配的插件。',
   'capabilities.enabled': '已启用',
   'capabilities.disabled': '已停用',
+  'capabilities.col.plugin': '插件',
+  'capabilities.col.scope': '来源',
+  'capabilities.col.mode': '运行方式',
+  'capabilities.col.state': '状态',
+  'capabilities.col.restart': '生效方式',
+  'capabilities.scope.builtin': '内置',
+  'capabilities.scope.user': '用户',
+  'capabilities.scope.project': '项目',
+  'capabilities.scope.node_modules': 'node_modules',
+  'capabilities.mode.in-process': '进程内',
+  'capabilities.mode.child': '子进程',
+  'capabilities.restartRequired': '重启后生效',
+  'capabilities.catalogUnavailable':
+    '插件 catalog 不可用；显示能力清单中的运行时插件快照（未扫描本机插件目录）。',
 
   // Gateway / URL / protocol
   'gateway.url.wildcard': '不支持通配符 gateway 地址',

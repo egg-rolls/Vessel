@@ -1,8 +1,57 @@
 /** Settings → Capabilities 的纯选择器：三个 tab、搜索与计数。 */
-import type { CapabilityManifest } from '../gateway/types';
+import type {
+  CapabilityManifest,
+  PluginCatalogItem,
+  PluginCatalogKind,
+  PluginCatalogScope,
+  PluginRuntimeMode,
+  PluginRuntimeStatus,
+} from '../gateway/types';
 import { t } from '../i18n';
 
 export type CapabilityTab = 'methods' | 'tools' | 'plugins';
+
+/**
+ * CONTRACT-0.47 §5：catalog 与 `manifest.plugins` 回退的统一渲染行。
+ * catalog 行带 scope/mode/restartRequired；旧 gateway 回退行只有 name/enabled。
+ */
+export interface CatalogPluginRow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  version?: string;
+  scope?: PluginCatalogScope;
+  kind?: PluginCatalogKind;
+  mode?: PluginRuntimeMode;
+  restartRequired?: boolean;
+  status?: PluginRuntimeStatus;
+}
+
+/** catalog 主路径：字段原样透传，不在前端推导 kind / restartRequired。 */
+export function catalogRowsFromItems(items: readonly PluginCatalogItem[]): CatalogPluginRow[] {
+  return items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    enabled: item.enabled,
+    version: item.version,
+    scope: item.scope,
+    kind: item.kind,
+    mode: item.mode,
+    restartRequired: item.restartRequired,
+    ...(item.status !== undefined ? { status: item.status } : {}),
+  }));
+}
+
+/** catalog 不可用时的回退：同一运行时源的 name/enabled，不扫描磁盘。 */
+export function catalogRowsFromManifest(
+  plugins: readonly CapabilityManifest['plugins'][number][],
+): CatalogPluginRow[] {
+  return plugins.map((plugin) => ({
+    id: plugin.name,
+    name: plugin.name,
+    enabled: plugin.enabled,
+  }));
+}
 
 export const CAPABILITY_TABS: readonly { id: CapabilityTab; labelKey: string }[] = [
   { id: 'methods', labelKey: 'capabilities.tab.methods' },
@@ -20,12 +69,15 @@ export interface CapabilityCounts {
   admin: number;
 }
 
-export function capabilityCounts(manifest: CapabilityManifest): CapabilityCounts {
+export function capabilityCounts(
+  manifest: CapabilityManifest,
+  plugins: readonly CatalogPluginRow[],
+): CapabilityCounts {
   const counts: CapabilityCounts = {
     methods: manifest.methods.length,
     tools: manifest.tools.length,
-    plugins: manifest.plugins.length,
-    enabledPlugins: manifest.plugins.filter((plugin) => plugin.enabled).length,
+    plugins: plugins.length,
+    enabledPlugins: plugins.filter((plugin) => plugin.enabled).length,
     read: 0,
     write: 0,
     admin: 0,
@@ -45,7 +97,7 @@ export interface CapabilityResult {
   tab: CapabilityTab;
   methods: CapabilityManifest['methods'];
   tools: CapabilityManifest['tools'];
-  plugins: CapabilityManifest['plugins'];
+  plugins: CatalogPluginRow[];
 }
 
 function needleOf(query: string | undefined): string {
@@ -55,6 +107,7 @@ function needleOf(query: string | undefined): string {
 /** 只过滤当前 tab，返回全部 tab 的空数组，便于 UI 共用渲染。 */
 export function filterCapabilities(
   manifest: CapabilityManifest,
+  pluginRows: readonly CatalogPluginRow[],
   { tab, query }: CapabilityFilter,
 ): CapabilityResult {
   const needle = needleOf(query);
@@ -73,7 +126,12 @@ export function filterCapabilities(
       : [];
   const plugins =
     tab === 'plugins'
-      ? manifest.plugins.filter((plugin) => !needle || plugin.name.toLowerCase().includes(needle))
+      ? pluginRows.filter(
+          (plugin) =>
+            !needle ||
+            plugin.name.toLowerCase().includes(needle) ||
+            plugin.id.toLowerCase().includes(needle),
+        )
       : [];
   return { tab, methods, tools, plugins };
 }

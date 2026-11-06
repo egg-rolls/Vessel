@@ -4,22 +4,26 @@ import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { SegmentedTabs } from '../../components/Tabs';
 import { Badge, DataTable, SearchInput, Section, Stat } from '../../components/ui';
+import { fetchPluginCatalog } from '../../domains/plugins/plugin-catalog';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import {
   CAPABILITY_TABS,
   type CapabilityTab,
+  type CatalogPluginRow,
   capabilityCounts,
   capabilityTabLabel,
+  catalogRowsFromItems,
+  catalogRowsFromManifest,
   filterCapabilities,
   groupMethodsByPermission,
 } from '../../state/capabilities';
-import { resourceData } from '../../state/useResource';
+import { resourceData, useResource } from '../../state/useResource';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
 export function CapabilitiesView() {
   useLocale();
-  const { connectionState, hasToken } = useConnection();
+  const { client, connectionState, hasToken, epoch, tenantId } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const [tab, setTab] = useState<CapabilityTab>('methods');
   const [query, setQuery] = useState('');
@@ -28,13 +32,30 @@ export function CapabilitiesView() {
     config: false,
     capabilities: true,
   });
+  // CONTRACT-0.47 §5：插件 tab / 计数以 catalog 为主数据源；
+  // catalog 不可用时回退 `manifest.plugins`（同一运行时源），不扫盘。
+  const catalog = useResource({
+    load: () => fetchPluginCatalog(client),
+    enabled: hasToken && connectionState === 'open',
+    deps: [epoch, tenantId, connectionState],
+  });
 
   useRefreshSignal(reloadCapabilities);
+  useRefreshSignal(catalog.reload);
   const manifest = resourceData(capabilities);
-  const counts = useMemo(() => (manifest ? capabilityCounts(manifest) : null), [manifest]);
+  const catalogItems = catalog.state.status === 'success' ? catalog.state.data : undefined;
+  const catalogUnavailable = catalog.state.status === 'success' && catalogItems === null;
+  const pluginRows = useMemo<CatalogPluginRow[]>(() => {
+    if (Array.isArray(catalogItems)) return catalogRowsFromItems(catalogItems);
+    return manifest ? catalogRowsFromManifest(manifest.plugins) : [];
+  }, [catalogItems, manifest]);
+  const counts = useMemo(
+    () => (manifest ? capabilityCounts(manifest, pluginRows) : null),
+    [manifest, pluginRows],
+  );
   const result = useMemo(
-    () => (manifest ? filterCapabilities(manifest, { tab, query }) : null),
-    [manifest, tab, query],
+    () => (manifest ? filterCapabilities(manifest, pluginRows, { tab, query }) : null),
+    [manifest, pluginRows, tab, query],
   );
   const methodGroups = useMemo(
     () => (result ? groupMethodsByPermission(result.methods) : []),
@@ -73,6 +94,9 @@ export function CapabilitiesView() {
           message={t('common.staleData', { detail: capabilities.error })}
           onRetry={reloadCapabilities}
         />
+      )}
+      {catalogUnavailable && (
+        <StaleNotice message={t('capabilities.catalogUnavailable')} onRetry={catalog.reload} />
       )}
       <div className="flex flex-col gap-3">
         {counts && (
@@ -202,16 +226,64 @@ export function CapabilitiesView() {
           {result && result.plugins.length === 0 ? (
             <p className="text-md text-muted">{t('capabilities.noMatchPlugins')}</p>
           ) : (
-            <ul className="plain-list">
-              {result?.plugins.map((plugin) => (
-                <li key={plugin.name}>
-                  <span className="font-mono">{plugin.name}</span>
-                  <span className={`perm-badge ${plugin.enabled ? 'perm-read' : ''}`}>
-                    {plugin.enabled ? t('capabilities.enabled') : t('capabilities.disabled')}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <DataTable
+              columns={[
+                {
+                  key: 'plugin',
+                  header: t('capabilities.col.plugin'),
+                  cell: (plugin) => (
+                    <>
+                      <span className="font-mono">{plugin.name}</span>
+                      {plugin.version && (
+                        <span className="ml-1.5 text-sm text-muted">{plugin.version}</span>
+                      )}
+                    </>
+                  ),
+                },
+                {
+                  key: 'scope',
+                  header: t('capabilities.col.scope'),
+                  hide: 'compact',
+                  cell: (plugin) =>
+                    plugin.scope ? <Badge>{t(`capabilities.scope.${plugin.scope}`)}</Badge> : '—',
+                },
+                {
+                  key: 'mode',
+                  header: t('capabilities.col.mode'),
+                  hide: 'wide',
+                  cell: (plugin) =>
+                    plugin.mode ? (
+                      <Badge tone={plugin.mode === 'in-process' ? 'neutral' : 'info'}>
+                        {t(`capabilities.mode.${plugin.mode}`)}
+                      </Badge>
+                    ) : (
+                      '—'
+                    ),
+                },
+                {
+                  key: 'state',
+                  header: t('capabilities.col.state'),
+                  cell: (plugin) => (
+                    <Badge tone={plugin.enabled ? 'success' : 'neutral'}>
+                      {t(plugin.enabled ? 'capabilities.enabled' : 'capabilities.disabled')}
+                    </Badge>
+                  ),
+                },
+                {
+                  key: 'restart',
+                  header: t('capabilities.col.restart'),
+                  hide: 'compact',
+                  cell: (plugin) =>
+                    plugin.restartRequired ? (
+                      <Badge tone="warn">{t('capabilities.restartRequired')}</Badge>
+                    ) : (
+                      '—'
+                    ),
+                },
+              ]}
+              rows={result?.plugins ?? []}
+              rowKey={(plugin) => plugin.id}
+            />
           )}
         </Section>
       )}

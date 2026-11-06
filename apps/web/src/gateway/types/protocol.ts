@@ -163,6 +163,36 @@ export interface PluginContributions {
 export type PluginRuntimeMode = 'in-process' | 'child';
 export type PluginRuntimeStatus = 'inactive' | 'active' | 'unhealthy' | 'disabled' | 'invalid';
 
+/** CONTRACT-0.47 §3：插件发现来源。 */
+export type PluginCatalogScope = 'builtin' | 'user' | 'project' | 'node_modules';
+/** CONTRACT-0.47 §3：builtin / 外部体验插件 / 外部能力插件。 */
+export type PluginCatalogKind = 'builtin' | 'marketplace' | 'dynamic';
+
+/**
+ * CONTRACT-0.47 §3：`plugins.catalog` 的只读条目。
+ * 前端不推导字段；`kind` / `restartRequired` 以 gateway 返回值为准。
+ */
+export interface PluginCatalogItem {
+  id: string;
+  name: string;
+  version: string;
+  scope: PluginCatalogScope;
+  kind: PluginCatalogKind;
+  mode: PluginRuntimeMode;
+  enabled: boolean;
+  supportsToggle: boolean;
+  restartRequired: boolean;
+  status?: PluginRuntimeStatus;
+  path: string;
+  entry?: string;
+  /** child 插件清单；字段随插件类型变化，前端只透传不解释。 */
+  manifest?: Record<string, unknown>;
+}
+
+export interface PluginCatalogResponse {
+  items: PluginCatalogItem[];
+}
+
 export interface PluginListItem {
   name: string;
   enabled: boolean;
