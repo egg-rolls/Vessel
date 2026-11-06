@@ -7,7 +7,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 
 # 部署拓扑：公司 / 平台 / 团队（目标态）
 
-> **目标 / 迁移态，非现态。** 决策见 [ADR-100](../adr/ADR-100-node-company-topology.md)（proposed）；
+> **目标 / 迁移态，非现态。** 决策见 [ADR-100](../adr/ADR-100-node-company-topology.md)（accepted）；
 > 插件扩展面见 [plugins](plugins.md)。**共享侧文档是唯一真源**；个人侧 design / contract /
 > plan 仅作过程记录，不作为实现依据，也不从本文反向链接。
 > **一句话：一个 Vessel 实例 = 一家公司；运行在哪家公司就属于哪家公司，服务所有公司才属于 Platform。**
@@ -16,7 +16,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 
 | 维度 | 当前态 | 目标态 |
 |---|---|---|
-| 实例 / tenant | 一个 gateway 可服务多个 tenant（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)） | 一实例一公司 |
+| 实例 / tenant | 一个 gateway 可服务多个 tenant（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)） | 一实例一公司；tenant 抽象移除 |
 | Workspace | 仍作 Team 的目录键（[PRODUCT](../PRODUCT.md)） | 公司占用的数据目录；Team 是公司内部门 |
 | 插件安装 | 发现根 project / user / repo / node_modules（[plugins](plugins.md)） | 按 workspace 安装 / 启用 |
 | Hub | 本地 hub 由 gateway 同进程启动（[federation-hub](federation-hub.md)） | Platform 独立服务 |
@@ -48,7 +48,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 - 多公司 = 多 Workspace / Node，不是同一 node 里的多个客户 tenant。
 - Team 是公司内的使用范围，不是所有权级别；部门专用能力仍是公司安装 + Team policy 限制。
 - Agent / Session 只组合当前公司启用的能力。
-- `tenant` 当前是真实的运行时隔离机制（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)）；目标态一实例一公司，tenant 与公司的收敛待裁决。本拓扑不 supersede ADR-049。
+- `tenant` 当前是真实的运行时隔离机制（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)）；目标态**移除 tenant 抽象**，数据/token/配置/事件/插件直接属于 node。移除是独立迁移，需先清点存储布局、token、事件、插件设置与 Hub/federation 绑定面；迁移完成前保留 default-tenant 过渡边界。
 
 ## 实体映射
 
@@ -72,7 +72,8 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 - 默认是 Workspace plugin；只有**服务所有公司的基础设施**才是 Platform plugin。
 - 只服务一家公司 → Workspace；公司之间 / 社区基础设施 → Platform。
 - 一个包可以同时声明两种归属，但安装、启用、数据按归属分开。
-- 当前发现根是 project / user / repo / node_modules（见 [plugins](plugins.md)）；Workspace 安装是目标态。安装根（`<workspace>/.vessel/plugins` 还是用户级共享包 + per-workspace 启用）随收敛裁决，不预判目录布局。
+- 当前发现根是 project / user / repo / node_modules（见 [plugins](plugins.md)）；Workspace 安装是目标态。
+- 目标安装根：`<workspace>/.vessel/plugins/<id>/`，**每个插件是独立包、独立版本、独立更新**；不使用“共享包 + per-workspace 启用”作为默认模型。包缓存可用于下载复用，但安装副本与版本以 workspace 为准。
 - 当前 registry 是静态 GitHub，没有市场服务端；若未来做 marketplace 后端，才归 Platform。
 - Team 不安装、不拥有插件；它只通过 tool policy 决定谁能用哪些能力。
 - catalog 的 `scope` 字段表示发现来源（builtin/user/project/node_modules），不是本节的归属级，不要混用。
@@ -110,7 +111,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 
 ## 指针
 
-- [ADR-100](../adr/ADR-100-node-company-topology.md)（proposed）· [ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)
+- [ADR-100](../adr/ADR-100-node-company-topology.md)（accepted）· [ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)
 - 相关模块：[plugins](plugins.md) · [extensions](extensions.md) · [gateway](gateway.md) · [federation-hub](federation-hub.md) · [config](config.md)
 - **唯一真源**：本文 + ADR-100 固定归属模型；实现收敛后把 `kind` 转 current、ADR 转
   accepted。个人侧只保留过程记录，不复制规则。

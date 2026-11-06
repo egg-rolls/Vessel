@@ -1,7 +1,7 @@
 ---
 adr: 100
 title: 节点即公司：Platform / Workspace / Team / Agent 拓扑
-status: proposed
+status: accepted
 date: 2026-11-06
 related: [49, 93, 99]
 tags: [topology, company, workspace, platform, team, plugin, hub, ownership, tenancy]
@@ -38,10 +38,15 @@ tags: [topology, company, workspace, platform, team, plugin, hub, ownership, ten
   7. **Hub 属于 Platform。** Hub 本体是服务多家公司的独立服务；UI / CLI / 配置页
      可以是可选的薄 Platform plugin surface，但 Hub runtime 不寄生在某家公司的
      gateway，也不做成 Workspace plugin。Federation 数据面仍是节点直连。
-  8. **tenant 的现状与目标。** 当前 `tenant` 是真实的运行时隔离机制（ADR-049），
-     一个 gateway 可服务多个 tenant；目标态是一实例一公司，tenant 与公司的收敛
-     方式待裁决。本 ADR 不 supersede ADR-049。0.48 仍保留 default-tenant 403
-     作为单公司 / 遗留安全边界；移除与否待收敛，不在 0.48 改已冻结契约。
+  8. **tenant 抽象最终移除。** 目标态不存在 tenant 抽象：一个 node 就是一家公司，
+     数据、token、配置、事件、插件都直接属于该 node。当前实现仍保留 tenant 作为
+     运行时隔离机制（ADR-049）；移除是独立迁移，必须先做存储布局、token、事件、
+     插件设置与 Hub/federation 绑定面的清点与迁移探针，不得在本 ADR 里直接拆。
+     迁移完成前，0.48 保留 default-tenant 403 作为过渡边界；迁移后删除该限制。
+  9. **插件包独立、按 workspace 安装。** Workspace plugin 是独立包
+     （`<workspace>/.vessel/plugins/<id>/`），版本独立、更新独立；不用“共享包 +
+     per-workspace 启用”作为默认模型。包缓存可用于下载复用，但安装副本与版本以
+     workspace 为准。
 
 - **备选**：
   - (a) 多客户 SaaS / 客户级租户与计费——与「一个用户串联自己的应用」的产品方向相反，

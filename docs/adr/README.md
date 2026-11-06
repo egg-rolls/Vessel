@@ -114,7 +114,7 @@
 | 097 | 0.27 统一 agent/body 模型：单执行路径与多 Body | accepted | 2026-10-26 | agent, body, scheduler, run, session, snapshot | [ADR-097-unified-agent-body-model.md](ADR-097-unified-agent-body-model.md) |
 | 098 | 术语与分层：Agent / Session / Runtime / Loop / Run | proposed | 2026-11-01 | agent, session, runtime, loop, run, layering, terminology, control-plane, lease, migration | [ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md](ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；目标架构见 [0.34-target.md](../architecture/0.34-target.md) |
 | 099 | Plugin 贡献面分层与信任模型 | accepted | 2026-11-05 | plugin, extension, contribution, trust | [ADR-099-plugin-contribution-surfaces-and-trust.md](ADR-099-plugin-contribution-surfaces-and-trust.md) |
-| 100 | 节点即公司：Platform / Workspace / Team / Agent 拓扑 | proposed | 2026-11-06 | topology, company, workspace, platform, team, plugin, hub | [ADR-100-node-company-topology.md](ADR-100-node-company-topology.md) |
+| 100 | 节点即公司：Platform / Workspace / Team / Agent 拓扑 | accepted | 2026-11-06 | topology, company, workspace, platform, team, plugin, hub | [ADR-100-node-company-topology.md](ADR-100-node-company-topology.md) |
 
 ## 编写约定
 
