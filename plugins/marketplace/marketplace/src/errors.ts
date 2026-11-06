@@ -34,6 +34,7 @@ export type MarketplaceErrorCode =
   | 'version_incompatible'
   | 'install_failed'
   | 'config_write_failed'
+  | 'config_locked'
   | 'not_installed'
   | 'remove_failed'
   | 'update_failed'

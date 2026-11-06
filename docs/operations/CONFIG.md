@@ -405,6 +405,17 @@ lease:
 - 除默认值外不在代码里硬编码；配置后由 ExecutionUnit 续租使用。
 - **仅单节点本地**：租约文件在 `<dataDir>/.locks/leases/**`，不做多节点 / 集群共识，不可当分布式锁用；跨节点迁移/接管靠 TTL 过期 + fencing token。同一 `dataDir` 多进程可用，但依赖本地文件系统语义（原子 `wx` / rename）。
 
+### 2.17 `config.yaml` 写锁（0.47，CONTRACT-0.47）
+
+- **锁文件**：`${configPath}.lock`，与配置文件同目录；内容 `{ token, pid, acquiredAt }`，`0600`，以 `open(..., 'wx')` 原子创建。
+- **受保护写入口**：只包裹「读 → 改 → 写」段。host 侧为 `src/plugin-config.ts` 的 `setPluginEnabled` 与 `src/ui-settings.ts` 的 `setUserConfigValue`（`vessel config set` / `/settings` / gateway 配置写入都经由后者）；marketplace 侧为 `upsertPluginConfig` / `setPluginConfigValue` / `setPluginEnabled` / `removePluginConfig`。下载、解压、安装/卸载目录操作与只读加载不在锁内。
+- **stale 与 timeout**：锁文件超过 15s 未更新视为持有进程已崩溃，可被接管（Windows 上 unlink 遇 `EPERM` / `EBUSY` 会短暂重试）；等待超过 5s 抛 `config_locked`，调用方必须看到该错误，不得静默丢写。持锁进程崩溃时锁最多滞留约 15s。
+- **接管守卫**：stale 清理先原子创建 `${configPath}.lock.reclaim`（`{ token, pid, acquiredAt }`），只有守卫持有者能删除 stale 锁，删除前在守卫内重读 mtime；守卫自身超过 2s 视为崩溃可清理。没有守卫时两个接管者会交错 unlink/create，晚到的 unlink 会删掉对方刚建的新锁。
+- **同进程**：同一配置路径的写者按顺序串行；同一异步上下文内嵌套进入同一路径直接抛 `config_locked: nested lock`，不会排队成死锁。
+- **已知限制**：守卫自身的 stale 清理仍是 best-effort（直接 unlink）；只有在守卫持有者于毫秒级窗口内崩溃、且多个进程同时清理守卫时才可能重开一层同类竞态，实测 K=32×20 未复现。
+- **手动编辑不在锁内**：直接用编辑器改 `config.yaml` 不参与该协议，可能与进程内的读改写竞争；协议只能约束经由上述入口的写入。
+- 不新增配置键、CLI 命令、RPC 或事件；锁仅依赖本地文件系统语义，不做跨主机锁。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：

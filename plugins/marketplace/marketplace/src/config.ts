@@ -19,6 +19,7 @@ import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { withConfigLock } from './config-lock.js';
 import { errorCodeOf, MarketplaceError, messageOf } from './errors.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -105,41 +106,43 @@ export interface UpsertConfigOptions {
 export async function upsertPluginConfig(
   options: UpsertConfigOptions,
 ): Promise<ConfigUpdateResult> {
-  const root = await readConfigRoot(options.configPath);
-  const raw = root.plugins;
-  if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
-    throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
-  }
-
-  if (Array.isArray(raw)) {
-    const entries = raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
-    const index = entries.findIndex((entry) => isRecord(entry) && entry.name === options.name);
-    if (index >= 0) {
-      entries[index] = { ...(entries[index] as Record<string, unknown>), enabled: true };
-    } else {
-      entries.push({ name: options.name, enabled: true });
+  return withConfigLock(options.configPath, async () => {
+    const root = await readConfigRoot(options.configPath);
+    const raw = root.plugins;
+    if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+      throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
     }
+
+    if (Array.isArray(raw)) {
+      const entries = raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
+      const index = entries.findIndex((entry) => isRecord(entry) && entry.name === options.name);
+      if (index >= 0) {
+        entries[index] = { ...(entries[index] as Record<string, unknown>), enabled: true };
+      } else {
+        entries.push({ name: options.name, enabled: true });
+      }
+      root.plugins = entries;
+      await writeConfigRoot(options.configPath, root);
+      return { status: 'updated', entries: namesOf(entries) };
+    }
+
+    if (options.defaultNames === undefined || options.defaultNames === null) {
+      return {
+        status: 'skipped',
+        entries: [],
+        reason:
+          'plugins: is absent and the default plugin set could not be enumerated; ' +
+          'left untouched so other plugins stay enabled',
+      };
+    }
+
+    const names = new Set(options.defaultNames);
+    names.add(options.name);
+    const entries = [...names].sort().map((name) => ({ name, enabled: true }));
     root.plugins = entries;
     await writeConfigRoot(options.configPath, root);
-    return { status: 'updated', entries: namesOf(entries) };
-  }
-
-  if (options.defaultNames === undefined || options.defaultNames === null) {
-    return {
-      status: 'skipped',
-      entries: [],
-      reason:
-        'plugins: is absent and the default plugin set could not be enumerated; ' +
-        'left untouched so other plugins stay enabled',
-    };
-  }
-
-  const names = new Set(options.defaultNames);
-  names.add(options.name);
-  const entries = [...names].sort().map((name) => ({ name, enabled: true }));
-  root.plugins = entries;
-  await writeConfigRoot(options.configPath, root);
-  return { status: 'created', entries: namesOf(entries) };
+    return { status: 'created', entries: namesOf(entries) };
+  });
 }
 
 export interface SetPluginConfigOptions {
@@ -160,51 +163,53 @@ export interface SetPluginConfigOptions {
 export async function setPluginConfigValue(
   options: SetPluginConfigOptions,
 ): Promise<{ status: 'updated' | 'created'; entries: string[] }> {
-  const root = await readConfigRoot(options.configPath);
-  const raw = root.plugins;
-  if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
-    throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
-  }
-
-  if (Array.isArray(raw)) {
-    const entries = raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
-    const index = entries.findIndex((entry) => isRecord(entry) && entry.name === options.name);
-    if (index >= 0) {
-      const entry = entries[index] as Record<string, unknown>;
-      const config = isRecord(entry.config) ? { ...entry.config } : {};
-      config[options.key] = options.value;
-      entries[index] = { ...entry, enabled: true, config };
-    } else {
-      entries.push({
-        name: options.name,
-        enabled: true,
-        config: { [options.key]: options.value },
-      });
+  return withConfigLock(options.configPath, async () => {
+    const root = await readConfigRoot(options.configPath);
+    const raw = root.plugins;
+    if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+      throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
     }
+
+    if (Array.isArray(raw)) {
+      const entries = raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
+      const index = entries.findIndex((entry) => isRecord(entry) && entry.name === options.name);
+      if (index >= 0) {
+        const entry = entries[index] as Record<string, unknown>;
+        const config = isRecord(entry.config) ? { ...entry.config } : {};
+        config[options.key] = options.value;
+        entries[index] = { ...entry, enabled: true, config };
+      } else {
+        entries.push({
+          name: options.name,
+          enabled: true,
+          config: { [options.key]: options.value },
+        });
+      }
+      root.plugins = entries;
+      await writeConfigRoot(options.configPath, root);
+      return { status: 'updated', entries: namesOf(entries) };
+    }
+
+    if (options.defaultNames === undefined || options.defaultNames === null) {
+      throw new MarketplaceError(
+        'config_write_failed',
+        'plugins: is absent and the default plugin set could not be enumerated; ' +
+          'refusing to write a partial list',
+      );
+    }
+    const names = new Set(options.defaultNames);
+    names.add(options.name);
+    const entries = [...names]
+      .sort()
+      .map((name) =>
+        name === options.name
+          ? { name, enabled: true, config: { [options.key]: options.value } }
+          : { name, enabled: true },
+      );
     root.plugins = entries;
     await writeConfigRoot(options.configPath, root);
-    return { status: 'updated', entries: namesOf(entries) };
-  }
-
-  if (options.defaultNames === undefined || options.defaultNames === null) {
-    throw new MarketplaceError(
-      'config_write_failed',
-      'plugins: is absent and the default plugin set could not be enumerated; ' +
-        'refusing to write a partial list',
-    );
-  }
-  const names = new Set(options.defaultNames);
-  names.add(options.name);
-  const entries = [...names]
-    .sort()
-    .map((name) =>
-      name === options.name
-        ? { name, enabled: true, config: { [options.key]: options.value } }
-        : { name, enabled: true },
-    );
-  root.plugins = entries;
-  await writeConfigRoot(options.configPath, root);
-  return { status: 'created', entries: namesOf(entries) };
+    return { status: 'created', entries: namesOf(entries) };
+  });
 }
 
 export interface SetPluginEnabledOptions {
@@ -230,43 +235,45 @@ export interface SetPluginEnabledOptions {
 export async function setPluginEnabled(
   options: SetPluginEnabledOptions,
 ): Promise<{ status: 'updated' | 'created'; enabled: boolean; entries: string[] }> {
-  const root = await readConfigRoot(options.configPath);
-  const raw = root.plugins;
-  if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
-    throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
-  }
-
-  if (Array.isArray(raw)) {
-    const entries = raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
-    const index = entries.findIndex((entry) => isRecord(entry) && entry.name === options.name);
-    if (index >= 0) {
-      entries[index] = {
-        ...(entries[index] as Record<string, unknown>),
-        enabled: options.enabled,
-      };
-    } else {
-      entries.push({ name: options.name, enabled: options.enabled });
+  return withConfigLock(options.configPath, async () => {
+    const root = await readConfigRoot(options.configPath);
+    const raw = root.plugins;
+    if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+      throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
     }
+
+    if (Array.isArray(raw)) {
+      const entries = raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
+      const index = entries.findIndex((entry) => isRecord(entry) && entry.name === options.name);
+      if (index >= 0) {
+        entries[index] = {
+          ...(entries[index] as Record<string, unknown>),
+          enabled: options.enabled,
+        };
+      } else {
+        entries.push({ name: options.name, enabled: options.enabled });
+      }
+      root.plugins = entries;
+      await writeConfigRoot(options.configPath, root);
+      return { status: 'updated', enabled: options.enabled, entries: namesOf(entries) };
+    }
+
+    if (options.defaultNames === undefined || options.defaultNames === null) {
+      throw new MarketplaceError(
+        'config_write_failed',
+        'plugins: is absent and the default plugin set could not be enumerated; ' +
+          'refusing to write a partial list',
+      );
+    }
+    const names = new Set(options.defaultNames);
+    names.add(options.name);
+    const entries = [...names]
+      .sort()
+      .map((name) => ({ name, enabled: name === options.name ? options.enabled : true }));
     root.plugins = entries;
     await writeConfigRoot(options.configPath, root);
-    return { status: 'updated', enabled: options.enabled, entries: namesOf(entries) };
-  }
-
-  if (options.defaultNames === undefined || options.defaultNames === null) {
-    throw new MarketplaceError(
-      'config_write_failed',
-      'plugins: is absent and the default plugin set could not be enumerated; ' +
-        'refusing to write a partial list',
-    );
-  }
-  const names = new Set(options.defaultNames);
-  names.add(options.name);
-  const entries = [...names]
-    .sort()
-    .map((name) => ({ name, enabled: name === options.name ? options.enabled : true }));
-  root.plugins = entries;
-  await writeConfigRoot(options.configPath, root);
-  return { status: 'created', enabled: options.enabled, entries: namesOf(entries) };
+    return { status: 'created', enabled: options.enabled, entries: namesOf(entries) };
+  });
 }
 
 function namesOf(entries: unknown[]): string[] {
@@ -287,20 +294,22 @@ export async function removePluginConfig(
   configPath: string,
   name: string,
 ): Promise<ConfigRemoveResult> {
-  const root = await readConfigRoot(configPath);
-  const raw = root.plugins;
-  if (raw === undefined || raw === null) return { status: 'skipped', entries: [] };
-  if (!Array.isArray(raw)) {
-    throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
-  }
+  return withConfigLock(configPath, async () => {
+    const root = await readConfigRoot(configPath);
+    const raw = root.plugins;
+    if (raw === undefined || raw === null) return { status: 'skipped', entries: [] };
+    if (!Array.isArray(raw)) {
+      throw new MarketplaceError('config_write_failed', 'config.yaml plugins must be an array');
+    }
 
-  const entries = raw.filter((entry) => !(isRecord(entry) && entry.name === name));
-  if (entries.length === raw.length) return { status: 'absent', entries: namesOf(raw) };
+    const entries = raw.filter((entry) => !(isRecord(entry) && entry.name === name));
+    if (entries.length === raw.length) return { status: 'absent', entries: namesOf(raw) };
 
-  if (entries.length === 0) delete root.plugins;
-  else root.plugins = entries;
-  await writeConfigRoot(configPath, root);
-  return { status: 'removed', entries: namesOf(entries) };
+    if (entries.length === 0) delete root.plugins;
+    else root.plugins = entries;
+    await writeConfigRoot(configPath, root);
+    return { status: 'removed', entries: namesOf(entries) };
+  });
 }
 
 // ── plugin-name discovery (only used when materializing `plugins:`) ──────────

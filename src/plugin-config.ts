@@ -17,6 +17,7 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import type { Plugin, PluginHost, PluginInitContext } from '../packages/core/src/index';
+import { withConfigLock } from './config-lock';
 import { readUserConfigRoot, writeUserConfigRoot } from './ui-settings';
 
 /** core 0.6.1 的 install 形状；旧签名只用第一个参数也能工作 */
@@ -83,29 +84,31 @@ export async function setPluginEnabled(
 ): Promise<void> {
   if (name.trim() === '') throw new Error('plugin name must be non-empty');
   const configPath = options.configPath ?? getUserConfigPath();
-  const root = await readUserConfigRoot(configPath);
-  const raw = root.plugins;
-  if (raw !== undefined && !Array.isArray(raw)) {
-    throw new Error('config.yaml plugins must be an array');
-  }
+  await withConfigLock(configPath, async () => {
+    const root = await readUserConfigRoot(configPath);
+    const raw = root.plugins;
+    if (raw !== undefined && !Array.isArray(raw)) {
+      throw new Error('config.yaml plugins must be an array');
+    }
 
-  const entries: unknown[] =
-    raw === undefined
-      ? (options.allNames ?? []).map((entryName) => ({
-          name: entryName,
-          enabled: entryName === name ? enabled : true,
-        }))
-      : raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
+    const entries: unknown[] =
+      raw === undefined
+        ? (options.allNames ?? []).map((entryName) => ({
+            name: entryName,
+            enabled: entryName === name ? enabled : true,
+          }))
+        : raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
 
-  const index = entries.findIndex((entry) => isRecord(entry) && entry.name === name);
-  if (index >= 0) {
-    entries[index] = { ...(entries[index] as Record<string, unknown>), enabled };
-  } else {
-    entries.push({ name, enabled });
-  }
+    const index = entries.findIndex((entry) => isRecord(entry) && entry.name === name);
+    if (index >= 0) {
+      entries[index] = { ...(entries[index] as Record<string, unknown>), enabled };
+    } else {
+      entries.push({ name, enabled });
+    }
 
-  root.plugins = entries;
-  await writeUserConfigRoot(configPath, root);
+    root.plugins = entries;
+    await writeUserConfigRoot(configPath, root);
+  });
 }
 
 /** 把声明式 guardrails / hooks 条目映射为插件配置（按 name 去重合并） */

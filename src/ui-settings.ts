@@ -18,6 +18,7 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { getUserConfigPath, type UiStatusBars } from '../packages/config/src/index';
+import { withConfigLock } from './config-lock';
 import { type Locale, resolveLocale } from './i18n';
 
 /** 支持的 UI 语言（与 CLI / TUI catalog 一致） */
@@ -242,13 +243,15 @@ export async function setUserConfigValue(
   }
 
   const configPath = options.configPath ?? getUserConfigPath();
-  const root = await readUserConfigRoot(configPath);
-  const existing = root[target.block];
-  if (existing !== undefined && existing !== null && !isRecord(existing)) {
-    throw new Error(`ui_settings_invalid_config: ${target.block} must be a YAML object`);
-  }
-  root[target.block] = { ...(existing ?? {}), [target.yamlKey]: value };
-  await writeUserConfigRoot(configPath, root);
+  await withConfigLock(configPath, async () => {
+    const root = await readUserConfigRoot(configPath);
+    const existing = root[target.block];
+    if (existing !== undefined && existing !== null && !isRecord(existing)) {
+      throw new Error(`ui_settings_invalid_config: ${target.block} must be a YAML object`);
+    }
+    root[target.block] = { ...(existing ?? {}), [target.yamlKey]: value };
+    await writeUserConfigRoot(configPath, root);
+  });
 }
 
 /**
