@@ -20,13 +20,18 @@
  */
 
 import { existsSync } from 'node:fs';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildConfigSnapshot,
+  checkPlatformTokenConflict,
+  DEFAULT_GATEWAY_OPTIONS,
   getUserConfigPath,
   isLoopbackHostname,
   loadConfig,
   resolveEffectiveApiKey,
+  resolveGatewayNodePorts,
+  resolvePlatformToken,
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
@@ -45,9 +50,11 @@ import {
   type Gateway,
   type GatewayOptions,
   type MetricsProvider,
+  type PlatformGateway,
   type PluginHostManager,
   type PluginReloadResult,
   startGateway,
+  startPlatformGateway,
   type TenantEventHub,
 } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/repl/ink-repl';
@@ -67,6 +74,7 @@ import {
   deriveGatewayInstance,
   isForegroundGatewayCommand,
   prepareForegroundGatewayStart,
+  printSplitModePortError,
   resolveGatewayTargets,
   stopGateway,
   writeForegroundGatewayPid,
@@ -106,6 +114,7 @@ import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
+import { isForegroundNodeCommand } from './node-command';
 import { setToolPolicy } from './permission-store';
 import { runPluginCliCommand } from './plugin-cli-command';
 import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
@@ -208,6 +217,10 @@ function printHelp(): void {
     ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],
     ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
     ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],
+    ['vessel node start [--daemon]', t('help.cmd.nodeStart')],
+    ['vessel node status [--json] [--rpc]', t('help.cmd.nodeStatus')],
+    ['vessel node stop', t('help.cmd.nodeStop')],
+    ['vessel node reload [--scope config,plugins]', t('help.cmd.nodeReload')],
   ];
   const hub: Array<[string, string]> = [
     ['vessel hub start [--host H] [--port N] [--allow-remote]', t('help.cmd.hubStart')],
@@ -336,14 +349,33 @@ function printHelp(): void {
 }
 
 /**
+ * Web UI 构建产物目录（不判断是否存在）。`VESSEL_STATIC_DIR` 覆盖默认路径；
+ * 0.49：拆分模式的 Gateway 宿主在这里 fail-fast，`--serve` legacy 仍按旧行为。
+ */
+function resolveWebDistDir(): string {
+  return (
+    process.env.VESSEL_STATIC_DIR ?? fileURLToPath(new URL('../apps/web/dist', import.meta.url))
+  );
+}
+
+/**
  * Web 控制台静态目录：`VESSEL_STATIC_DIR` 覆盖；否则用仓库内 `apps/web/dist`。
  * 目录不存在时不传（gateway 不托管静态站点）。
  */
 function resolveStaticDir(): string | undefined {
   const fromEnv = process.env.VESSEL_STATIC_DIR;
   if (fromEnv) return fromEnv;
-  const dist = fileURLToPath(new URL('../apps/web/dist', import.meta.url));
+  const dist = resolveWebDistDir();
   return existsSync(dist) ? dist : undefined;
+}
+
+/** host:port → http origin（通配地址归一到回环；IPv6 加方括号）。 */
+function listenOrigin(host: string, port: number): string {
+  let normalized = host.trim();
+  if (normalized === '0.0.0.0') normalized = '127.0.0.1';
+  else if (normalized === '::' || normalized === '[::]') normalized = '[::1]';
+  else if (normalized.includes(':') && !normalized.startsWith('[')) normalized = `[${normalized}]`;
+  return `http://${normalized}:${port}`;
 }
 
 /**
@@ -439,7 +471,16 @@ if (demoRequested) {
 const foregroundGateway = args.gateway !== null && isForegroundGatewayCommand(args.gateway);
 let foregroundGatewayLock: GatewayInstanceLock | undefined;
 let foregroundGatewayInstance: string = DEFAULT_GATEWAY_INSTANCE;
+/** 0.49 G1：`gateway start/restart` 前台 = platform + node 同进程双监听。 */
+let splitGatewayMode = false;
+/** 0.49 G1：`node start` 前台 = 只起 Node API 监听。 */
+let nodeOnlyMode = false;
+/** 平台监听（`gateway start --port/--host` 或 restart 的历史记录）。 */
+let splitPlatformPort: number | undefined;
+let splitPlatformHost: string | undefined;
+
 if (foregroundGateway && args.gateway !== null) {
+  splitGatewayMode = true;
   const gatewayArgs = args.gateway;
   let targetInstance =
     gatewayArgs.kind === 'start' || gatewayArgs.kind === 'restart'
@@ -449,7 +490,7 @@ if (foregroundGateway && args.gateway !== null) {
   let targetHost = gatewayArgs.kind === 'start' ? gatewayArgs.host : undefined;
 
   if (gatewayArgs.kind === 'restart') {
-    // 停前快照：保留 instance；有 PID 记录时原样保留 port/host（port 0 也保持）。
+    // 停前快照：保留 instance；有 PID 记录时原样保留 platform port/host（port 0 也保持）。
     const { config } = await loadConfig();
     const dataDir = resolveDataDir(config);
     const token = resolveGatewayToken(config);
@@ -478,10 +519,59 @@ if (foregroundGateway && args.gateway !== null) {
   foregroundGatewayLock = prepared.lock;
   foregroundGatewayInstance = prepared.instance;
   process.once('exit', () => foregroundGatewayLock?.releaseSync());
-  // 端口/主机缺省沿用 serve 配置；显式 flag 才进 CLI 覆盖层。
-  args.servePort = targetPort ?? DEFAULT_SERVE_PORT;
-  args.servePortExplicit = gatewayArgs.kind === 'start' ? gatewayArgs.port !== undefined : true;
-  if (targetHost !== undefined) args.serveHost = targetHost;
+
+  // CONTRACT §9：`VESSEL_LEGACY_SERVE=1` 只用于迁移期，强制回旧组合进程
+  // （单监听、node 宿主 UI）。`--port/--host` 仍按旧语义指向该 node 监听。
+  if (process.env.VESSEL_LEGACY_SERVE === '1') {
+    splitGatewayMode = false;
+    args.servePort = targetPort ?? DEFAULT_SERVE_PORT;
+    args.servePortExplicit = gatewayArgs.kind === 'start' ? gatewayArgs.port !== undefined : true;
+    if (targetHost !== undefined) args.serveHost = targetHost;
+  } else {
+    // `--port/--host` 指向 **platform**；node 监听由 `serve.port` 决定（缺省 8644）。
+    splitPlatformPort = targetPort;
+    splitPlatformHost = targetHost;
+    const { config: nodeConfig } = await loadConfig();
+    // 0.49 G1（1 裁定）：拆分模式拒绝 0 端口（registry/CORS/pid 依赖固定端口），
+    // 含显式 `--port 0`（它会 bind 临时端口，破坏 registry/CORS/pid 的稳定性）。
+    const portError = printSplitModePortError(
+      nodeConfig,
+      'gateway',
+      (line) => console.error(ui.err(line)),
+      targetPort,
+    );
+    if (portError !== null) process.exit(portError);
+    args.servePort = resolveGatewayNodePorts(nodeConfig, 'gateway').nodePort;
+    args.servePortExplicit = true;
+
+    // 拆分路径要求已构建的 WebUI：fail-fast，不做阻塞式自动构建（CONTRACT §5.1）。
+    const distDir = resolveWebDistDir();
+    if (!existsSync(path.join(distDir, 'index.html'))) {
+      console.error(ui.err(t('gateway.webDistMissing', { path: distDir })));
+      process.exit(1);
+    }
+  }
+} else if (args.node !== null && isForegroundNodeCommand(args.node)) {
+  nodeOnlyMode = true;
+  const { config: nodeConfig } = await loadConfig();
+  // 0.49 G1（1 裁定）：独立 node 模式同样拒绝 0 端口。
+  const portError = printSplitModePortError(nodeConfig, 'node', (line) =>
+    console.error(ui.err(line)),
+  );
+  if (portError !== null) process.exit(portError);
+  const prepared = await prepareForegroundGatewayStart({
+    instance: DEFAULT_GATEWAY_INSTANCE,
+    config: nodeConfig,
+  });
+  if (!prepared.ok) {
+    console.error(ui.err(prepared.error));
+    process.exit(1);
+  }
+  foregroundGatewayLock = prepared.lock;
+  foregroundGatewayInstance = prepared.instance;
+  process.once('exit', () => foregroundGatewayLock?.releaseSync());
+  args.servePort = resolveGatewayNodePorts(nodeConfig, 'gateway').nodePort;
+  args.servePortExplicit = true;
 } else if (args.servePort !== null) {
   // `--serve` 是 default 实例的前台别名：先准备（运行中拒绝 + 实例锁），
   // 修复 0.12 直接覆盖 gateway.pid 的问题。
@@ -496,9 +586,9 @@ if (foregroundGateway && args.gateway !== null) {
   foregroundGatewayInstance = prepared.instance;
   process.once('exit', () => foregroundGatewayLock?.releaseSync());
 }
-// 启动诊断：静态产物缺失/过期时自动重建（`VESSEL_NO_WEB_AUTOBUILD=1` 关闭）；
-// 重建失败只告警，不改退出码，继续以现有产物提供服务。
-if (foregroundGateway || args.servePort !== null) {
+// legacy `--serve` 启动诊断：静态产物缺失/过期时自动重建（`VESSEL_NO_WEB_AUTOBUILD=1`
+// 关闭）。0.49 拆分路径（gateway start / node start）不做阻塞式自动构建。
+if (args.servePort !== null && !splitGatewayMode && !nodeOnlyMode) {
   const status = await ensureWebDist({ warn: (line) => console.error(ui.warn(line)) });
   const warning = webDistWarning(status);
   if (warning) console.error(ui.warn(warning));
@@ -783,6 +873,21 @@ async function runWithConfig(result: BootstrapResult) {
 
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
   let gateway: Gateway | null = null;
+  /**
+   * 0.49 G1：拆分模式下的平台监听。与 node 在同一进程，但独立 `Bun.serve`；
+   * 任一监听失败都要回滚另一个（PID 只在两者都就绪后写）。
+   */
+  let platformGateway: PlatformGateway | undefined;
+  let platformListen: { host: string; port: number } | undefined;
+  /**
+   * 0.49 G1：关闭 platform 监听（独立 `Bun.serve`）。先置空再 stop，
+   * 失败路径与正常关闭路径重复调用也不会二次 stop。
+   */
+  const stopPlatformGateway = async (): Promise<void> => {
+    const current = platformGateway;
+    platformGateway = undefined;
+    await current?.stop().catch(() => undefined);
+  };
   /** CONTRACT-hot-apply §2：用户配置监听（关闭时取消，不泄漏句柄）。 */
   let configWatch: ConfigWatchHandle | undefined;
   /** gateway 侧版本检查；与热应用共用 runtime.notice 通路。 */
@@ -1270,7 +1375,8 @@ async function runWithConfig(result: BootstrapResult) {
       plugins: pluginRuntimeEntries,
       pluginsFor: pluginEntriesForTenant,
       pluginCatalogFor,
-      staticDir: resolveStaticDir(),
+      // 0.49 G1：拆分模式 node 不宿 WebUI（staticDir 只在 Gateway 启动路径解析）。
+      ...(splitGatewayMode || nodeOnlyMode ? {} : { staticDir: resolveStaticDir() }),
       nodeId: result.nodeId,
       nodeName: result.nodeName,
       auth: authResult.auth,
@@ -1422,10 +1528,91 @@ async function runWithConfig(result: BootstrapResult) {
         : {}),
     });
 
+    // 0.49 G1：先起 platform，再起 node；任一失败回滚已起监听。
+    // PID 只在两个监听都就绪后写（本块之后）；此处失败不留下 PID/锁残留。
+    if (splitGatewayMode) {
+      const platformHostname = (
+        splitPlatformHost ??
+        config.gateway?.hostname ??
+        DEFAULT_GATEWAY_OPTIONS.hostname
+      ).trim();
+      const platformPort =
+        splitPlatformPort ?? config.gateway?.port ?? DEFAULT_GATEWAY_OPTIONS.port;
+      const platformToken = resolvePlatformToken(config, process.env);
+      const nodeToken = resolveGatewayToken(config, process.env);
+      const conflict = checkPlatformTokenConflict({ platformToken, nodeToken });
+      if (conflict !== null) {
+        // 错误体不回显任一 token。
+        console.error(
+          `${conflict}: gateway.token and the effective node token ` +
+            '(serve.token/serve.admin_token/VESSEL_GATEWAY_TOKEN) must differ.',
+        );
+        await result.shutdown();
+        process.exit(1);
+      }
+      if (platformPort !== 0 && platformPort === resolved.options.port) {
+        console.error(
+          `port_conflict: platform port ${platformPort} and node port ` +
+            `${resolved.options.port} must differ; refusing to silently rebind.`,
+        );
+        await result.shutdown();
+        process.exit(1);
+      }
+
+      const nodeOrigin = listenOrigin(resolved.options.hostname, resolved.options.port);
+      const loopbackPair =
+        isLoopbackHostname(platformHostname) && isLoopbackHostname(resolved.options.hostname);
+
+      try {
+        platformGateway = startPlatformGateway({
+          port: platformPort,
+          hostname: platformHostname,
+          ...(platformToken !== undefined ? { platformToken } : {}),
+          ...(config.gateway?.allowedOrigins !== undefined
+            ? { allowedOrigins: config.gateway.allowedOrigins }
+            : {}),
+          // 非回环 peer 一律只用显式配置，禁止自动信任（PLAN §7.6）。
+          nodeOrigins: loopbackPair ? [nodeOrigin] : [],
+          staticDir: resolveWebDistDir(),
+          nodes: [
+            {
+              nodeId: result.nodeId,
+              name: result.nodeName,
+              apiUrl: nodeOrigin,
+              version: gatewayOptions.version,
+            },
+          ],
+          resolveNodeCredential: () => resolveGatewayToken(config, process.env),
+          version: gatewayOptions.version,
+        });
+      } catch (error) {
+        console.error(
+          `Platform gateway failed to start: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        await result.shutdown();
+        process.exit(1);
+      }
+
+      platformListen = { host: platformHostname, port: platformGateway.port };
+      if (loopbackPair) {
+        // 仅回环 co-located origin 自动追加进 node 的有效 allowlist。
+        const platformOrigin = listenOrigin(platformHostname, platformGateway.port);
+        const existing = gatewayOptions.allowedOrigins ?? [];
+        if (!existing.includes(platformOrigin)) {
+          gatewayOptions.allowedOrigins = [...existing, platformOrigin];
+        }
+      }
+    }
+
     try {
       gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
     } catch (error) {
-      // gateway 没起来：先停 watcher 并回收已 spawn 的 plugin 子进程。
+      // node 没起来：回滚已起的 platform 监听，再停 watcher 并回收 plugin 子进程。
+      await platformGateway?.stop().catch(() => undefined);
+      platformGateway = undefined;
+      platformListen = undefined;
       pluginWatch?.close();
       pluginWatch = undefined;
       await pluginHostManager?.stopAll();
@@ -1456,8 +1643,10 @@ async function runWithConfig(result: BootstrapResult) {
     try {
       await writeForegroundGatewayPid({
         dataDir,
-        host: resolved.options.hostname,
-        port: gateway.port,
+        // 契约 §2.1：gateway 模式的 PID `port` = platform 端口；node start / legacy
+        // `--serve` 记录实际 node 端口（node stop 依赖该记录区分托管关系）。
+        host: platformListen?.host ?? resolved.options.hostname,
+        port: platformListen?.port ?? gateway.port,
         version: gatewayOptions.version,
         instance: foregroundGatewayInstance,
         ...(foregroundGatewayLock !== undefined
@@ -1471,6 +1660,7 @@ async function runWithConfig(result: BootstrapResult) {
         (error instanceof Error ? error.message : String(error));
       if (foregroundGateway) {
         console.error(message);
+        await platformGateway?.stop().catch(() => undefined);
         await result.shutdown();
         process.exit(1);
       }
@@ -1556,6 +1746,8 @@ async function runWithConfig(result: BootstrapResult) {
     hubNodeOutbound = undefined;
     await localHub?.stop();
     localHub = undefined;
+    // 0.49 G1：先停独立的 platform 监听，再关闭 node / tenant。
+    await stopPlatformGateway();
     await shutdownServeStack({
       gateway,
       closeTenants: async (options) => {
@@ -1636,6 +1828,8 @@ async function runWithConfig(result: BootstrapResult) {
     hubNodeOutbound = undefined;
     await localHub?.stop();
     localHub = undefined;
+    // 0.49 G1：SIGINT/SIGTERM 与正常返回路径同样要关闭 platform 监听。
+    await stopPlatformGateway();
     await shutdownServeStack({
       gateway,
       closeTransport: async () => {},

@@ -366,6 +366,24 @@ export interface ServeConfig {
   pluginHttp?: PluginHttpLimitsConfig;
 }
 
+/**
+ * 0.49：平台 Gateway 配置（与 `serve` 的 node 配置分区，不共享 token 键）。
+ * YAML 键：`gateway.port / hostname / token / token_env / allowed_origins`。
+ * 平台 token 是静态 bearer；G1 不铸造、不哈希、不落盘。
+ */
+export interface GatewayConfig {
+  /** 平台监听端口（默认 8642） */
+  port?: number;
+  /** 平台监听地址（默认 127.0.0.1） */
+  hostname?: string;
+  /** 平台静态 bearer token（优先级高于 tokenEnv） */
+  token?: string;
+  /** 从该环境变量读取平台 token（token 未设置时生效） */
+  tokenEnv?: string;
+  /** 平台静态宿主的浏览器 Origin allowlist（规则同 serve.allowedOrigins） */
+  allowedOrigins?: string[];
+}
+
 /** Transport 配置（0.2；0.22.1 只剩 in-process） */
 export interface TransportConfig {
   kind?: 'in-process';
@@ -677,6 +695,8 @@ export interface VesselConfig {
   durable?: DurableConfig;
   /** 0.3：gateway 监听与 TLS */
   serve?: ServeConfig;
+  /** 0.49：平台 Gateway（与 node 侧 serve 分区） */
+  gateway?: GatewayConfig;
   /** S5：hub 控制面 */
   hub?: HubConfig;
   /** 0.4：eval harness */

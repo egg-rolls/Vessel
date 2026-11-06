@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useToast } from '../../components/ToastProvider';
 import { Button, Field, Input, KeyValueList, Section } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
@@ -25,12 +25,28 @@ function stateLabel(state: string): string {
   }
 }
 
-/** Settings → Connection：gateway URL / token 唯一入口（顶栏不再放表单）。 */
+function modeLabel(mode: 'pending' | 'platform' | 'legacy'): string {
+  if (mode === 'platform') return t('connection.modePlatform');
+  if (mode === 'legacy') return t('connection.modeLegacy');
+  return t('connection.modePending');
+}
+
+/**
+ * Settings → Connection：平台 URL / 平台 token /（可选）node token 唯一入口。
+ *
+ * 0.49：平台 token 只进 sessionStorage 平台槽；node token 由
+ * `platform.nodes.credentials` 或此处的可选输入提供，key 优先 node_id。
+ * 页面由 legacy `--serve` 提供时，本表单退回旧的 node URL + node token 语义。
+ */
 export function ConnectionForm() {
   useLocale();
   const {
-    gatewayUrl,
-    token,
+    platformUrl,
+    platformToken,
+    nodeUrl,
+    nodeToken,
+    mode,
+    platformError,
     devProxyAuth,
     gatewayError,
     tokenError,
@@ -40,6 +56,7 @@ export function ConnectionForm() {
     tenantId,
     epoch,
     closeCode,
+    hasToken,
     connect,
     disconnect,
     retry,
@@ -48,23 +65,35 @@ export function ConnectionForm() {
   const { current } = useNodes();
   const nodeNames = useNodeNames();
   const toast = useToast();
-  const [urlDraft, setUrlDraft] = useState(gatewayUrl);
-  const [tokenDraft, setTokenDraft] = useState(token);
+  const legacy = mode === 'legacy';
+  const [urlDraft, setUrlDraft] = useState(platformUrl);
+  const [tokenDraft, setTokenDraft] = useState(platformToken);
+  const [nodeTokenDraft, setNodeTokenDraft] = useState('');
 
-  const urlError = gatewayError;
+  // legacy 回退后 token 槽换成旧 `vessel.token`；只在模式切换时同步一次。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mode 是唯一同步触发器
+  useEffect(() => {
+    if (mode === 'legacy') setTokenDraft(nodeToken);
+  }, [mode]);
+
+  const urlError = gatewayError ?? platformError;
 
   const submit = () => {
     // 地址/token 未变化且已连接时，按「重新连接」处理，而不是无操作。
     if (
       connectionState === 'open' &&
-      urlDraft.trim() === gatewayUrl &&
-      tokenDraft.trim() === token
+      urlDraft.trim() === platformUrl &&
+      tokenDraft.trim() === platformToken &&
+      nodeTokenDraft.trim() === ''
     ) {
       retry();
       toast.info(t('connection.reconnecting'));
       return;
     }
-    if (connect({ gatewayUrl: urlDraft, token: tokenDraft })) {
+    const options = legacy
+      ? { platformUrl: urlDraft, token: tokenDraft }
+      : { platformUrl: urlDraft, token: tokenDraft, nodeToken: nodeTokenDraft };
+    if (connect(options)) {
       toast.info(t('connection.connecting'));
     }
   };
@@ -79,7 +108,7 @@ export function ConnectionForm() {
       >
         <div className="form-grid">
           <Field
-            label="Gateway URL"
+            label={legacy ? t('connection.nodeUrl') : t('connection.platformUrl')}
             htmlFor="connection-url"
             error={
               !devProxyAuth && urlError ? (
@@ -89,7 +118,7 @@ export function ConnectionForm() {
             hint={
               <span className="font-mono">
                 {t('connection.current', {
-                  url: displayGatewayUrl(gatewayUrl, window.location.origin),
+                  url: displayGatewayUrl(legacy ? nodeUrl : platformUrl, window.location.origin),
                 })}
               </span>
             }
@@ -98,7 +127,7 @@ export function ConnectionForm() {
               id="connection-url"
               invalid={!devProxyAuth && Boolean(urlError)}
               value={
-                devProxyAuth ? displayGatewayUrl(gatewayUrl, window.location.origin) : urlDraft
+                devProxyAuth ? displayGatewayUrl(platformUrl, window.location.origin) : urlDraft
               }
               onChange={(event) => {
                 if (devProxyAuth) return;
@@ -121,7 +150,7 @@ export function ConnectionForm() {
 
           {!devProxyAuth && (
             <Field
-              label="Token"
+              label={legacy ? t('connection.nodeToken') : t('connection.platformToken')}
               htmlFor="connection-token"
               error={tokenError ? <span id="connection-token-error">{tokenError}</span> : undefined}
             >
@@ -134,10 +163,37 @@ export function ConnectionForm() {
                   setTokenDraft(event.target.value);
                   clearTokenError();
                 }}
-                placeholder={t('connection.tokenPlaceholder')}
+                placeholder={
+                  legacy
+                    ? t('connection.nodeTokenPlaceholder')
+                    : t('connection.platformTokenPlaceholder')
+                }
                 spellCheck={false}
                 autoComplete="off"
                 aria-describedby={tokenError ? 'connection-token-error' : undefined}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    submit();
+                  }
+                }}
+              />
+            </Field>
+          )}
+
+          {!devProxyAuth && !legacy && (
+            <Field label={t('connection.nodeTokenOptional')} htmlFor="connection-node-token">
+              <Input
+                id="connection-node-token"
+                type="password"
+                value={nodeTokenDraft}
+                onChange={(event) => {
+                  setNodeTokenDraft(event.target.value);
+                  clearTokenError();
+                }}
+                placeholder={t('connection.nodeTokenPlaceholder')}
+                spellCheck={false}
+                autoComplete="off"
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
                     event.preventDefault();
@@ -155,7 +211,7 @@ export function ConnectionForm() {
               {connectionState === 'open' ? t('connection.reconnect') : t('connection.connect')}
             </Button>
           )}
-          <Button onClick={retry} disabled={!token.trim() || connectionState === 'open'}>
+          <Button onClick={retry} disabled={connectionState === 'open' || !hasToken}>
             {t('connection.retryNow')}
           </Button>
           {!devProxyAuth && (
@@ -164,9 +220,10 @@ export function ConnectionForm() {
               onClick={() => {
                 disconnect();
                 setTokenDraft('');
+                setNodeTokenDraft('');
                 toast.info(t('connection.disconnected'));
               }}
-              disabled={!token.trim()}
+              disabled={!hasToken}
             >
               {t('connection.disconnect')}
             </Button>
@@ -176,6 +233,11 @@ export function ConnectionForm() {
         {lastError && (
           <p className="form-error" role="alert">
             {lastError}
+          </p>
+        )}
+        {platformError && (
+          <p className="form-error" role="alert">
+            {platformError}
           </p>
         )}
       </Section>
@@ -189,11 +251,25 @@ export function ConnectionForm() {
               value: stateLabel(connectionState),
             },
             {
-              key: 'gateway',
-              label: 'Gateway',
+              key: 'mode',
+              label: t('connection.mode'),
+              value: modeLabel(mode),
+            },
+            {
+              key: 'platform',
+              label: t('connection.platformUrl'),
               value: (
                 <span className="font-mono">
-                  {displayGatewayUrl(gatewayUrl, window.location.origin)}
+                  {displayGatewayUrl(platformUrl, window.location.origin)}
+                </span>
+              ),
+            },
+            {
+              key: 'node-url',
+              label: t('connection.nodeUrl'),
+              value: (
+                <span className="font-mono">
+                  {displayGatewayUrl(nodeUrl, window.location.origin)}
                 </span>
               ),
             },

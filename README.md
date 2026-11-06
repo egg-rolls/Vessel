@@ -107,13 +107,16 @@ vessel --session <id> --run "..."    # 续接指定会话
 ### Web 控制台
 
 ```bash
-VESSEL_MOCK=1 vessel --serve 8642   # 终端打印 token（前台）
-vessel gateway start --daemon       # 后台常驻
-cd apps/web && bun run build        # 生产：gateway 同源托管 dist
+vessel gateway start --daemon       # 平台 8642 + Node API 8644（同进程）
+vessel node start --daemon          # 只起 Node API（缺省 8644）
+vessel gateway status --json        # 两个监听的状态
+vessel node status --json
+cd apps/web && npm ci && npm run build  # 生产：Platform Gateway 托管 dist
 bun run dev:web                     # 开发：http://127.0.0.1:5173
+VESSEL_MOCK=1 vessel --serve 8642   # legacy 单监听（保留至 G5）
 ```
 
-打开控制台后把终端里的 token 粘到 URL fragment（`#token=...`）；token 随后转入 `sessionStorage`。支持运行提交 / 取消、事件时间线、会话列表、工具列表、run 内联权限卡片、`ask_user` 表单、Team 列表 / 群聊 / 成员侧栏 / `@` 补全 / Body 历史。
+打开控制台后把平台 token 粘到 URL fragment（`#token=...`），它只进 `sessionStorage`；本地 node 的生效凭据由 `platform.nodes.credentials` 自动交付（回环匿名时为空）。支持运行提交 / 取消、事件时间线、会话列表、工具列表、run 内联权限卡片、`ask_user` 表单、Team 列表 / 群聊 / 成员侧栏 / `@` 补全 / Body 历史。
 
 ### Headless 提问（退出码 3）
 

@@ -9,6 +9,7 @@
 
 export * from './types/agents';
 export * from './types/integrations';
+export * from './types/platform';
 export * from './types/protocol';
 export * from './types/runs';
 export * from './types/sessions';

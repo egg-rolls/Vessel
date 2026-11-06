@@ -67,7 +67,7 @@ export function PluginFrame({
     return () => query.removeEventListener('change', sync);
   }, []);
   const effectiveTheme = resolvedTheme(theme, systemDark);
-  const { client, gatewayUrl, eventStore } = useConnection();
+  const { client, nodeUrl, eventStore } = useConnection();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -80,13 +80,13 @@ export function PluginFrame({
   const initialTheme = useRef(effectiveTheme);
   const src = useMemo(
     () =>
-      pluginFrameUrl(gatewayUrl, pluginId, entry, {
+      pluginFrameUrl(nodeUrl, pluginId, entry, {
         run: contextRun,
         session: contextSession,
         lang: initialLang.current,
         theme: initialTheme.current,
       }),
-    [gatewayUrl, pluginId, entry, contextRun, contextSession],
+    [nodeUrl, pluginId, entry, contextRun, contextSession],
   );
 
   const postToFrame = useCallback((message: unknown) => {

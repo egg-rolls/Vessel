@@ -24,17 +24,7 @@ import { isForbidden } from './tenantsShared';
 
 /** Settings → Tenants：只有 tenants.list 成功（admin）才显示管理动作。 */
 export function TenantsView() {
-  const {
-    client,
-    connectionState,
-    hasToken,
-    features,
-    epoch,
-    tenantId,
-    gatewayUrl,
-    token,
-    connect,
-  } = useConnection();
+  const { client, connectionState, hasToken, features, epoch, tenantId, connect } = useConnection();
   useLocale();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
@@ -75,14 +65,14 @@ export function TenantsView() {
             tenants,
             currentTenantId: tenantId,
             switchTenant: (nextTenantId) => {
-              const ok = connect({ gatewayUrl, token, tenantId: nextTenantId });
+              const ok = connect({ tenantId: nextTenantId });
               if (ok) {
                 toast.info(t('settings.tenants.switching', { tenant: nextTenantId }));
               }
             },
           })
         : [],
-    [tenants, tenantId, connect, gatewayUrl, token, toast],
+    [tenants, tenantId, connect, toast],
   );
   usePaletteEntities('settings-tenants', paletteActions);
 
@@ -134,7 +124,7 @@ export function TenantsView() {
       toast.error(t('settings.tenants.switchDisabled'));
       return;
     }
-    const ok = connect({ gatewayUrl, token, tenantId: tenant.tenant_id });
+    const ok = connect({ tenantId: tenant.tenant_id });
     if (ok) toast.info(t('settings.tenants.switching', { tenant: tenant.tenant_id }));
   };
 

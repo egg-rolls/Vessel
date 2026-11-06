@@ -218,12 +218,27 @@ export type GatewayHealthProbe = (target: {
   token: string;
   timeoutMs: number;
 }) => Promise<GatewayHealthIdentity | undefined>;
+/**
+ * 0.49 G1：平台监听身份探针。
+ *
+ * gateway 拆分模式下 PID 记录的 port 是 **platform** 端口（契约 §2.1），
+ * 平台没有 node RPC（`/v1/rpc` = 404），因此 `health.get` 身份探针拿不到
+ * node identity。平台 `/health` 返回 `{status:'ok', role:'platform'}`，用它
+ * 做确定性回退：进程仍活且该端口自报平台角色 → 视为 running。
+ */
+export type GatewayPlatformProbe = (target: {
+  baseUrl: string;
+  timeoutMs: number;
+}) => Promise<boolean>;
+
 export interface ClassifyGatewayRecordOptions {
   token?: string;
   timeoutMs?: number;
   now?: number;
   bootTime?: number;
   probe?: GatewayHealthProbe;
+  /** 0.49：node RPC 身份探针不可用时的平台角色回退；缺省内置实现。 */
+  platformProbe?: GatewayPlatformProbe;
   fetch?: typeof fetch;
 }
 function toEpochMs(value: string | number): number | undefined {
@@ -272,6 +287,23 @@ function createHealthProbe(fetchImpl?: typeof fetch): GatewayHealthProbe {
     }
   };
 }
+/** 平台 `/health` 角色探针（GET；不发送 token）。 */
+function createPlatformProbe(fetchImpl?: typeof fetch): GatewayPlatformProbe {
+  return async (target) => {
+    try {
+      const impl = fetchImpl ?? fetch;
+      const response = await impl(`${target.baseUrl}/health`, {
+        signal: AbortSignal.timeout(target.timeoutMs),
+      });
+      if (!response.ok) return false;
+      const body: unknown = await response.json();
+      return isRecord(body) && body.role === 'platform' && body.status === 'ok';
+    } catch {
+      return false;
+    }
+  };
+}
+
 export async function classifyGatewayRecord(
   record: GatewayPidRecord,
   options: ClassifyGatewayRecordOptions = {},
@@ -284,19 +316,31 @@ export async function classifyGatewayRecord(
   }
   const probeHost = resolveProbeHost(record.host);
   if (probeHost === undefined) return { state: 'degraded', reason: 'non-loopback', record };
+  const baseUrl = `http://${probeHost}:${record.port}`;
+  const timeoutMs = options.timeoutMs ?? 500;
+  const platformProbe = options.platformProbe ?? createPlatformProbe(options.fetch);
+  const isPlatform = (): Promise<boolean> => platformProbe({ baseUrl, timeoutMs });
   const token = options.token;
-  if (token === undefined || token === '') return { state: 'degraded', reason: 'no-token', record };
+  if (token === undefined || token === '') {
+    // gateway 拆分模式没有 node RPC token 也能确认平台监听。
+    if (await isPlatform()) return { state: 'running', record };
+    return { state: 'degraded', reason: 'no-token', record };
+  }
   let identity: GatewayHealthIdentity | undefined;
   try {
     identity = await (options.probe ?? createHealthProbe(options.fetch))({
-      baseUrl: `http://${probeHost}:${record.port}`,
+      baseUrl,
       token,
-      timeoutMs: options.timeoutMs ?? 500,
+      timeoutMs,
     });
   } catch {
+    if (await isPlatform()) return { state: 'running', record };
     return { state: 'degraded', reason: 'unreachable', record };
   }
-  if (identity === undefined) return { state: 'degraded', reason: 'unreachable', record };
+  if (identity === undefined) {
+    if (await isPlatform()) return { state: 'running', record };
+    return { state: 'degraded', reason: 'unreachable', record };
+  }
   const startedMs = toEpochMs(record.started_at);
   const matches =
     identity.pid === record.pid &&

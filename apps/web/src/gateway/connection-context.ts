@@ -1,6 +1,6 @@
 import { createContext } from 'react';
 import type { EventStore } from '../state/event-store';
-import type { ConnectionState, GatewayClient } from './client';
+import type { ConnectionState, GatewayClient } from './node';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -9,14 +9,22 @@ import type {
   PermissionScope,
 } from './types';
 
+/** 连接模式：pending = 平台探测中；legacy = 页面由旧 `--serve` 宿主提供。 */
+export type ConnectionMode = 'pending' | 'platform' | 'legacy';
+
 export interface ConnectionOptions {
-  gatewayUrl: string;
-  token: string;
-  /** admin 切换租户时传；reconnect 会带 tenant_id。 */
+  /** 平台 origin；空串 = 页面同源。 */
+  platformUrl?: string;
+  /** 平台 token；legacy 回退时等旧 node token。 */
+  token?: string;
+  /** 平台模式下可选手填 node token（覆盖 credentials）。 */
+  nodeToken?: string;
+  /** 只切换 node 连接的 tenant（不改 URL / token）。 */
   tenantId?: string;
 }
 
 export interface ConnectionContextValue {
+  /** node 客户端（`/v1/rpc`、`/v1/events`）。 */
   client: GatewayClient;
   eventStore: EventStore;
   connectionState: ConnectionState;
@@ -24,8 +32,18 @@ export interface ConnectionContextValue {
   tenantId: string | null;
   features: string[];
   nodeLabel: string;
-  gatewayUrl: string;
-  token: string;
+  /** 平台 origin；空串 = 页面同源。 */
+  platformUrl: string;
+  /** 当前 node origin；空串 = 同源（legacy）。 */
+  nodeUrl: string;
+  /** 平台 token 槽（sessionStorage）。 */
+  platformToken: string;
+  /** 当前 node token；空串 + anonymous = node 回环匿名。 */
+  nodeToken: string;
+  mode: ConnectionMode;
+  /** 平台探测 / 凭据错误；401 时 UI 必须提示输入平台 token。 */
+  platformError: string | null;
+  /** 是否具备连接 node 的条件（有 token，或 credentials 明确 mode:'none'）。 */
   hasToken: boolean;
   /** 是否由开发代理注入鉴权（占位 token，不持久化、不展示）。 */
   devProxyAuth: boolean;

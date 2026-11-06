@@ -43,11 +43,16 @@ export const en: Record<MessageKey, string> = {
     'start in the foreground; --daemon detaches to gateway.log; --instance names it',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
   'help.cmd.gatewayStop': 'graceful SIGTERM stop (process termination on Windows)',
-  'help.cmd.gatewayStatus': 'pid/port/uptime/version/service state',
+  'help.cmd.gatewayStatus':
+    'pid/port/uptime/version/service state (--rpc is deprecated; use node status --rpc)',
   'help.cmd.gatewayRestart': 'stop then start (keeps --daemon)',
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',
+  'help.cmd.nodeStart': 'start only the Node API (default 8644; shares the gateway instance lock)',
+  'help.cmd.nodeStatus': 'show the Node API listener and health (--rpc for health/queue)',
+  'help.cmd.nodeStop': 'stop only the Node API; gateway-managed nodes point to gateway stop',
+  'help.cmd.nodeReload': 'hot-reload Node API config (same operation as gateway reload)',
   'help.cmd.eval': 'offline evaluation',
   'help.cmd.evalOut': 'write evaluation JSON / choose the report path',
   'help.cmd.feishu': 'attach the Feishu channel (usable with gateway start / REPL)',
@@ -191,6 +196,14 @@ export const en: Record<MessageKey, string> = {
   'gateway.reloaded': 'Reloaded: {scopes}',
   'gateway.requiresRestart':
     'Requires a restart to take effect: {scopes} (run `vessel gateway restart`)',
+  // ── node (0.49 G1) ──
+  'node.started': 'Node API started (pid {pid}): {url}',
+  'node.running': 'Node API is running: {url}',
+  'node.notRunning': 'Node API is not running.',
+  'node.stopped': 'Node API stopped (pid {pid}).',
+  'node.managedByGateway':
+    'This node is managed by the gateway process; run `vessel gateway stop` to stop the whole process (including the platform listener).',
+  'node.reloadNoNode': 'Node API is not running; start it with `vessel node start`.',
   'gateway.status.title': 'Vessel Gateway',
   'gateway.status.status': 'Status',
   'gateway.status.pid': 'PID',

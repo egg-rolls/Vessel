@@ -29,6 +29,7 @@ import {
   type NodeDraft,
   type NodeDraftCheck,
   type NodeDraftError,
+  nodeTokenIdentity,
   readNodeToken,
   readStoredNodes,
   removeNodeToken,
@@ -78,7 +79,7 @@ function pageProtocol(): string {
 const NODE_HEALTH_POLL_MS = 15_000;
 
 export function NodeProvider({ children }: { children: ReactNode }) {
-  const { client, token, gatewayUrl, hello, hasToken, epoch } = useConnection();
+  const { client, nodeToken: token, nodeUrl, hello, hasToken, epoch } = useConnection();
   const tokenRef = useRef(token);
   tokenRef.current = token;
 
@@ -93,13 +94,13 @@ export function NodeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    useNodeStore.getState().setConnection({ hasToken, hello, gatewayUrl });
-  }, [hasToken, hello, gatewayUrl]);
+    useNodeStore.getState().setConnection({ hasToken, hello, nodeUrl });
+  }, [hasToken, hello, nodeUrl]);
 
-  /** 当前节点用实时连接 token；额外节点读各自的 sessionStorage key。 */
+  /** 当前节点用实时连接 token；额外节点读各自的 sessionStorage key（node_id 优先）。 */
   const tokenFor = useCallback((node: NodeConfig): string | undefined => {
     if ((node as NodeView).current) return tokenRef.current;
-    return readNodeToken(node.name) ?? undefined;
+    return readNodeToken(nodeTokenIdentity(node)) ?? undefined;
   }, []);
 
   const fetchHealth = useCallback(
@@ -132,7 +133,7 @@ export function NodeProvider({ children }: { children: ReactNode }) {
       const config: NodeConfig = { name: check.value.name, url: check.value.url };
       const next = [...readStoredNodes().filter((node) => node.name !== config.name), config];
       writeStoredNodes(next);
-      storeNodeToken(config.name, check.value.token);
+      storeNodeToken(nodeTokenIdentity(config), check.value.token);
       useNodeStore.getState().addExtra(config);
       return { ok: true };
     },
@@ -140,7 +141,8 @@ export function NodeProvider({ children }: { children: ReactNode }) {
   );
 
   const removeNode = useCallback((name: string) => {
-    removeNodeToken(name);
+    const target = readStoredNodes().find((node) => node.name === name);
+    removeNodeToken(target ? nodeTokenIdentity(target) : name);
     const next = readStoredNodes().filter((node) => node.name !== name);
     writeStoredNodes(next);
     useNodeStore.getState().removeExtra(name);
@@ -160,13 +162,17 @@ export function NodeProvider({ children }: { children: ReactNode }) {
   const teamControl = useCallback(
     (node: NodeView): TeamControl => {
       if (node.current) return client;
-      return createRemoteTeamControl(node, () => readNodeToken(node.name) ?? undefined);
+      return createRemoteTeamControl(
+        node,
+        () => readNodeToken(nodeTokenIdentity(node)) ?? undefined,
+      );
     },
     [client],
   );
 
   const hasTokenFor = useCallback(
-    (node: NodeView): boolean => (node.current ? hasToken : readNodeToken(node.name) !== null),
+    (node: NodeView): boolean =>
+      node.current ? hasToken : readNodeToken(nodeTokenIdentity(node)) !== null,
     [hasToken],
   );
 

@@ -12,6 +12,7 @@ applies_to: [N, M]
 
 ## RPC
 
+- 0.49 G1：`vessel gateway start` 同进程双监听——Platform Gateway（8642；`/platform/rpc` 只读 allowlist + 静态宿主）与 Node API（`serve.port`，缺省 8644；`/v1/rpc`、WS/SSE、插件）。平台侧不得 import `gateway/methods/**` 或 node runtime；node 不得 import `platform/**`；由 `check-deps` D7–D9 守。`vessel node` 只操作 Node API；legacy `--serve` 保持单监听 8642。
 - 新 RPC 方法进 `packages/serve/src/gateway/methods/<domain>.ts` 并导出 `createXxxMethods`，由 `gateway.ts` 展开；不要把方法表回灌 `gateway.ts`。
 - 新增 canonical 方法必须发 addendum，并同时写 `result_schema`；方法清单与冻结项见 [gateway-rpc.md](../architecture/gateway-rpc.md#rpc-methods)（ADR-059/066）。
 

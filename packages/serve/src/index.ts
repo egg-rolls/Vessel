@@ -98,6 +98,7 @@ export {
   normalizeFeishuStatus,
 } from './feishu.js';
 export {
+  type CspExtensionSources,
   corsHeaders,
   hostAllowed,
   isWildcardHostname,
@@ -229,6 +230,18 @@ export {
   type PairingTokenPair,
   type RevokeTokenResult,
 } from './node-token-control.js';
+export {
+  type PlatformAuthMode,
+  type PlatformAuthResult,
+  type PlatformGateway,
+  type PlatformGatewayOptions,
+  type PlatformNodeDescriptor,
+  type PlatformNodeStatus,
+  type PlatformNodeSummary,
+  type PlatformRpcErrorCode,
+  type PlatformRpcMethod,
+  startPlatformGateway,
+} from './platform/index.js';
 // 0.43：体验型 plugin 宿主（CONTRACT-0.43）。
 export {
   buildPluginCatalog,

@@ -28,11 +28,7 @@ interface NodeStoreState {
   health: Record<string, NodeHealthEntry>;
   selectedKey: string | null;
   /** Bridge from ConnectionProvider: current node identity / token availability. */
-  setConnection: (input: {
-    hasToken: boolean;
-    hello: HelloInfo | null;
-    gatewayUrl: string;
-  }) => void;
+  setConnection: (input: { hasToken: boolean; hello: HelloInfo | null; nodeUrl: string }) => void;
   setExtras: (extras: readonly NodeConfig[]) => void;
   addExtra: (config: NodeConfig) => void;
   removeExtra: (name: string) => void;
@@ -55,15 +51,15 @@ function extraViews(extras: readonly NodeConfig[]): NodeView[] {
 function currentView(input: {
   hasToken: boolean;
   hello: HelloInfo | null;
-  gatewayUrl: string;
+  nodeUrl: string;
 }): NodeView | null {
   if (!input.hasToken) return null;
   const info = input.hello?.node;
   const name =
-    info?.name?.trim() || info?.node_id || displayGatewayUrl(input.gatewayUrl, pageOrigin());
+    info?.name?.trim() || info?.node_id || displayGatewayUrl(input.nodeUrl, pageOrigin());
   return {
     name,
-    url: input.gatewayUrl,
+    url: input.nodeUrl,
     ...(info?.node_id ? { nodeId: info.node_id } : {}),
     current: true,
   };

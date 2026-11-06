@@ -9,9 +9,10 @@
  * 浏览器默认同源（gateway 托管 dist，或 Vite proxy）；也可在运行时指定远端 gateway
  * （见 gatewayUrl.ts）。跨 Origin 时 gateway 必须配置 `serve.allowed_origins`。
  *
- * S1：实现按域拆到 `./client/*`；本文件只做 barrel，导出面与拆分前一致。
+ * 0.49 G1：node 客户端实现已迁到 `./node/*`；本文件只做兼容 barrel，
+ * 导出面与拆分前一致。平台客户端在 `./platform/**`，两者互不 import。
  */
 
-export { GatewayClient } from './client/index';
-export type { ConnectionState, EventMeta } from './client/protocol';
-export { GatewayHttpError } from './client/protocol';
+export { GatewayClient } from './node/index';
+export type { ConnectionState, EventMeta } from './node/protocol';
+export { GatewayHttpError } from './node/protocol';

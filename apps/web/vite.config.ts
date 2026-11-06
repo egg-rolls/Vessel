@@ -49,14 +49,20 @@ function writeBuildStamp(): Plugin {
   };
 }
 
-// 生产：gateway 托管 dist（同源，无 CORS）。
+// 生产：Platform Gateway 托管 dist（同源，无 CORS）。
+// 0.49 双入口：
+//   - `/platform` → 平台 gateway（默认 8642，`/platform/rpc`）；
+//   - `/v1`       → node API（默认 8644，`/v1/rpc`、`/v1/events` WS）；
+//   - `/health`   → node（legacy/同源 node 连接的预探）。
 // 开发：`bun run dev:web` 会起一个只绑回环的 dev relay，由它注入 token：
 //   - REST/SSE 覆盖 Authorization；
 //   - WS 首帧 {kind:'auth'} 替换 token（http-proxy 改不了帧）。
 // 因此 Vite 本身不读取、不传递任何 token，只拿 relay 地址 + 每次运行的 secret。
-// 没有 relay 时保持旧行为：直连 127.0.0.1:8642。
+// relay 只服务 node 侧（`/v1`、`/health`），平台 RPC 直连。
 // 注意 changeOrigin:false——保留原始 Host；relay 会按需移除。
-const GATEWAY = process.env.VESSEL_GATEWAY_URL ?? 'http://127.0.0.1:8642';
+const PLATFORM =
+  process.env.VESSEL_PLATFORM_URL ?? process.env.VESSEL_GATEWAY_URL ?? 'http://127.0.0.1:8642';
+const NODE = process.env.VESSEL_NODE_URL ?? 'http://127.0.0.1:8644';
 const RELAY_URL = process.env.VESSEL_DEV_RELAY_URL;
 const RELAY_SECRET = process.env.VESSEL_DEV_RELAY_SECRET;
 const RELAY_HEADER = 'x-vessel-dev-relay';
@@ -76,7 +82,7 @@ const relay =
     ? { url: RELAY_URL, secret: RELAY_SECRET }
     : null;
 
-const target = relay?.url ?? GATEWAY;
+const nodeTarget = relay?.url ?? NODE;
 const configure = relay ? relayConfigure(relay.secret) : undefined;
 
 const PLUGIN_UI_SRC = resolve(__dirname, '../../packages/plugin-ui/src');
@@ -107,8 +113,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/v1': { target, ws: true, changeOrigin: false, configure },
-      '/health': { target, changeOrigin: false, configure },
+      // 平台入口：独立监听；不经过 dev relay（平台 token 是静态 bearer）。
+      '/platform': { target: PLATFORM, changeOrigin: false },
+      // node 入口：WS + legacy 回退。
+      '/v1': { target: nodeTarget, ws: true, changeOrigin: false, configure },
+      '/health': { target: nodeTarget, changeOrigin: false, configure },
     },
   },
 });

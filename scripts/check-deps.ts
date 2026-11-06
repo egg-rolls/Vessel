@@ -10,6 +10,13 @@
  *   D4  kernel 只依赖 types/ 与 kernel/ 内部；具体实现仅允许显式白名单（DECISION-007 F5）
  *   D5  非 core 的 workspace 包不得相对 import core 内部；core 不得反向依赖它们
  *   D6  packages/core 的 subpath exports 只能指向 index.ts（不暴露内部实现文件）
+ *   D7  packages/serve/src/platform/** 的相对 import 只允许解析到 platform/** 或精确白名单
+ *       gateway/auth.ts、gateway/static.ts、rpc.ts；其余 serve 模块（含 gateway.ts、barrel、
+ *       tenant 等）一律违规。node:/外部包 import 不受限制
+ *   D8  packages/serve/src 内非 platform/** 文件不得 import / export-from platform/** 或包
+ *       barrel src/index.ts（barrel 自身豁免扫描）
+ *   D9  apps/web/src/gateway/platform/** 与 apps/web/src/gateway/node/** 互不 import
+ *       （共享类型放 gateway/types*）
  *
  * 用法：bun run scripts/check-deps.ts
  * 退出码：0 = 无违规；1 = 有违规。
@@ -19,7 +26,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 
-export type RuleId = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6';
+export type RuleId = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9';
 
 export interface Violation {
   rule: RuleId;
@@ -50,6 +57,34 @@ const CORE_MODULES = [
   'types',
 ] as const;
 const CORE_MODULE_SET = new Set<string>(CORE_MODULES);
+
+const SERVE_SRC = 'packages/serve/src';
+const SERVE_PLATFORM = `${SERVE_SRC}/platform`;
+const SERVE_GATEWAY = `${SERVE_SRC}/gateway`;
+const SERVE_PUBLIC_BARREL = `${SERVE_SRC}/index.ts`;
+
+/**
+ * D7 精确白名单（CONTRACT-0.49 §8、PLAN-0.49-g1 §6）：platform 只能复用
+ * gateway/auth.ts、gateway/static.ts（不含方法表的 HTTP 工具）与 rpc.ts（协议类型）。
+ * 其余任何相对 import 都视为触达 node runtime。
+ */
+const PLATFORM_SHARED_ALLOWED: ReadonlySet<string> = new Set([
+  `${SERVE_GATEWAY}/auth.ts`,
+  `${SERVE_GATEWAY}/static.ts`,
+  `${SERVE_SRC}/rpc.ts`,
+]);
+
+/**
+ * D8 例外仅限 barrel 自身：包 barrel 需要为组合根
+ * （src/cli.ts / src/gateway-command.ts / src/bootstrap.ts）re-export 平台入口。
+ * 组合根本身位于 src/，不在 D7-D9 的扫描范围；其他 serve 文件 import/export-from
+ * barrel 会把平台入口重新带回 node runtime，必须判红。
+ */
+const SERVE_PUBLIC_SURFACE: ReadonlySet<string> = new Set([SERVE_PUBLIC_BARREL]);
+
+const WEB_GATEWAY_SRC = 'apps/web/src/gateway';
+const WEB_PLATFORM = `${WEB_GATEWAY_SRC}/platform`;
+const WEB_NODE = `${WEB_GATEWAY_SRC}/node`;
 
 /**
  * D4 受控白名单（DECISION-007 F5）：kernel 可为默认值 import 这些具体实现，
@@ -352,6 +387,85 @@ export async function checkDependencies(root: string): Promise<Violation[]> {
     }
   }
 
+  // D7：platform 的相对 import 只能是 platform 自身或精确白名单；其余一律触达 node runtime。
+  const platformFiles = await collectFiles(root, `${SERVE_PLATFORM}/**/*.ts`);
+  for (const file of platformFiles) {
+    const source = await readFile(join(root, file), 'utf8');
+
+    for (const ref of parseImports(source)) {
+      const { specifier, line } = ref;
+      // node:/bun 内置与外部包不参与边界判定。
+      if (!isRelative(specifier)) continue;
+
+      const resolved = resolveRelative(file, specifier);
+      const allowed = isWithin(resolved, SERVE_PLATFORM) || PLATFORM_SHARED_ALLOWED.has(resolved);
+
+      addIf(violations, !allowed, {
+        rule: 'D7',
+        file,
+        line,
+        specifier,
+        resolved,
+        message:
+          'platform 的相对 import 只允许 platform/** 或 gateway/auth.ts、gateway/static.ts、rpc.ts',
+      });
+    }
+  }
+
+  // D8：node runtime 不得直接 import platform/**，也不得经包 barrel 间接拉回平台入口。
+  const serveFiles = await collectFiles(root, `${SERVE_SRC}/**/*.ts`);
+  for (const file of serveFiles) {
+    if (isWithin(file, SERVE_PLATFORM)) continue;
+    if (SERVE_PUBLIC_SURFACE.has(file)) continue;
+    const source = await readFile(join(root, file), 'utf8');
+
+    for (const ref of parseImports(source)) {
+      if (!isRelative(ref.specifier)) continue;
+      const resolved = resolveRelative(file, ref.specifier);
+      const resolvesToPlatform = isWithin(resolved, SERVE_PLATFORM);
+      const resolvesToBarrel = resolved === SERVE_PUBLIC_BARREL;
+
+      addIf(violations, resolvesToPlatform || resolvesToBarrel, {
+        rule: 'D8',
+        file,
+        line: ref.line,
+        specifier: ref.specifier,
+        resolved,
+        message: resolvesToBarrel
+          ? 'node runtime 不得经包 barrel 反向 import 平台导出'
+          : 'node runtime 不得反向 import platform/**（平台模块只由组合根装配）',
+      });
+    }
+  }
+
+  // D9：web 平台客户端与 node 客户端互不 import；共享类型走 gateway/types*。
+  const webSides = [
+    {
+      files: await collectFiles(root, `${WEB_PLATFORM}/**/*.ts`),
+      other: WEB_NODE,
+      label: 'platform',
+    },
+    { files: await collectFiles(root, `${WEB_NODE}/**/*.ts`), other: WEB_PLATFORM, label: 'node' },
+  ] as const;
+  for (const { files, other, label } of webSides) {
+    for (const file of files) {
+      const source = await readFile(join(root, file), 'utf8');
+
+      for (const ref of parseImports(source)) {
+        if (!isRelative(ref.specifier)) continue;
+        const resolved = resolveRelative(file, ref.specifier);
+        addIf(violations, isWithin(resolved, other), {
+          rule: 'D9',
+          file,
+          line: ref.line,
+          specifier: ref.specifier,
+          resolved,
+          message: `web ${label} 客户端不得 import 另一侧连接模块（共享类型放 gateway/types）`,
+        });
+      }
+    }
+  }
+
   return violations;
 }
 
@@ -400,7 +514,7 @@ async function main(): Promise<void> {
 
   if (unknown.length === 0) {
     console.log(
-      `dependency check passed (D1-D6)${known.length > 0 ? ` with ${known.length} known exception(s)` : ''}`,
+      `dependency check passed (D1-D9)${known.length > 0 ? ` with ${known.length} known exception(s)` : ''}`,
     );
     return;
   }

@@ -49,6 +49,18 @@ export type GatewayCommand =
   | { kind: 'install-service'; target?: GatewayInstallTarget }
   | { kind: 'uninstall-service' };
 
+/**
+ * `vessel node` 子命令（0.49 G1）。
+ *
+ * node 命名空间只操作 Node API 监听与共享的实例 PID/锁；端口由
+ * `serve.port`（缺省 8644）决定，不新增 `--node-port`。
+ */
+export type NodeCommand =
+  | { kind: 'start'; daemon: boolean }
+  | { kind: 'status'; json: boolean; rpc: boolean }
+  | { kind: 'stop' }
+  | { kind: 'reload'; scopes?: string[] };
+
 export interface EvalCommand {
   target: string;
   json: boolean;
@@ -408,6 +420,8 @@ export interface CliArgs {
   exclusive: boolean;
   /** 0.12：`vessel gateway ...` */
   gateway: GatewayCommand | null;
+  /** 0.49 G1：`vessel node ...` */
+  node: NodeCommand | null;
   /** 0.14：`vessel status [--json]` */
   statusCommand: { json: boolean } | null;
   /** 0.14：`vessel agents [--json]` */
@@ -482,6 +496,7 @@ export function parseArgs(argv: string[]): ParseResult {
     dataDirArg: null,
     exclusive: false,
     gateway: null,
+    node: null,
     statusCommand: null,
     agentsCommand: null,
     agentCommand: null,
@@ -525,6 +540,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'gateway' && i === 0) {
       return parseGatewayArgs(argv.slice(1), args);
+    }
+    if (a === 'node' && i === 0) {
+      return parseNodeArgs(argv.slice(1), args);
     }
     if (a === 'status' && i === 0) {
       return parseStatusArgs(argv.slice(1), args);
@@ -1893,6 +1911,128 @@ function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
       return parseGatewayUninstallService(tail, args);
     default:
       return { ok: false, error: `Unknown gateway subcommand: ${sub}` };
+  }
+}
+
+// ── 0.49 G1 node 子命令 ───────────────────────────────
+
+/** `node start [--daemon]` */
+function parseNodeStart(rest: string[], args: CliArgs): ParseResult {
+  let daemon = false;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--daemon') {
+      daemon = true;
+      continue;
+    }
+    if (a === '--exclusive') {
+      args.exclusive = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for node start: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.node = { kind: 'start', daemon };
+  return { ok: true, args };
+}
+
+/** `node status [--json] [--rpc]` */
+function parseNodeStatus(rest: string[], args: CliArgs): ParseResult {
+  let json = false;
+  let rpc = false;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--rpc') {
+      rpc = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for node status: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.node = { kind: 'status', json, rpc };
+  return { ok: true, args };
+}
+
+/** `node stop` */
+function parseNodeStop(rest: string[], args: CliArgs): ParseResult {
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for node stop: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.node = { kind: 'stop' };
+  return { ok: true, args };
+}
+
+/** `node reload [--scope config,plugins]` */
+function parseNodeReload(rest: string[], args: CliArgs): ParseResult {
+  let scopes: string[] | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--scope') {
+      const value = readFlagValue(rest, i, '--scope');
+      if (!value.ok) return value;
+      const parsed = parseReloadScopes(value.value);
+      if (parsed === null) {
+        return {
+          ok: false,
+          error: `Invalid --scope: ${value.value} (expected e.g. config,plugins)`,
+        };
+      }
+      scopes = [...new Set([...(scopes ?? []), ...parsed])];
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for node reload: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.node = { kind: 'reload', ...(scopes !== undefined ? { scopes } : {}) };
+  return { ok: true, args };
+}
+
+/** `node <subcommand>` 分发 */
+function parseNodeArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub === undefined) {
+    return {
+      ok: false,
+      error: 'Missing node subcommand (start|status|stop|reload)',
+    };
+  }
+
+  const tail = rest.slice(1);
+  switch (sub) {
+    case 'start':
+      return parseNodeStart(tail, args);
+    case 'status':
+      return parseNodeStatus(tail, args);
+    case 'stop':
+      return parseNodeStop(tail, args);
+    case 'reload':
+      return parseNodeReload(tail, args);
+    default:
+      return { ok: false, error: `Unknown node subcommand: ${sub}` };
   }
 }
 

@@ -15,6 +15,7 @@ import type {
   EvalsConfig,
   FederationConfig,
   FeishuConfig,
+  GatewayConfig,
   HubConfig,
   ObservabilityConfig,
   ServeConfig,
@@ -1145,6 +1146,75 @@ export function validateServeSettings(
   return errors;
 }
 
+/**
+ * 0.49：校验平台 gateway 块（CONTRACT-0.49 §3.1）。
+ * 与 serve 分区：不复用字段；origin 规则复用 `allowedOriginError`。
+ * token 值永不写入 error / message。
+ */
+function validateGatewaySettings(
+  gateway: GatewayConfig,
+  errors: ConfigValidationError[] = [],
+): ConfigValidationError[] {
+  const { port, hostname, token, tokenEnv, allowedOrigins } = gateway as Record<string, unknown>;
+
+  if (port !== undefined) {
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) {
+      errors.push({
+        path: 'gateway.port',
+        message: 'gateway.port must be an integer between 0 and 65535',
+        value: port,
+      });
+    }
+  }
+
+  if (hostname !== undefined) {
+    const invalid =
+      typeof hostname !== 'string' ||
+      hostname.trim() === '' ||
+      /\s/.test(hostname) ||
+      hostname.includes('/') ||
+      hostname.includes('://');
+    if (invalid) {
+      errors.push({
+        path: 'gateway.hostname',
+        message: 'gateway.hostname must be a host name or IP address (no scheme or path)',
+        value: hostname,
+      });
+    }
+  }
+
+  if (token !== undefined && (typeof token !== 'string' || token.trim() === '')) {
+    // 不把 token 值放进 error
+    errors.push({ path: 'gateway.token', message: 'gateway.token must be a non-empty string' });
+  }
+
+  validateEnvName('gateway.tokenEnv', tokenEnv, errors);
+
+  if (allowedOrigins !== undefined) {
+    if (!Array.isArray(allowedOrigins)) {
+      errors.push({
+        path: 'gateway.allowedOrigins',
+        message: 'gateway.allowedOrigins must be an array of origins',
+      });
+    } else {
+      allowedOrigins.forEach((origin, index) => {
+        const message =
+          typeof origin === 'string' ? allowedOriginError(origin) : 'origin must be a string';
+        if (message !== null) {
+          errors.push({
+            path: `gateway.allowedOrigins[${index}]`,
+            message: `gateway.allowedOrigins[${index}] ${message}`,
+            // origin 不是密钥，可回显
+            value: origin,
+          });
+        }
+      });
+    }
+  }
+
+  return errors;
+}
+
 /** 展开 `~` 并解析为绝对路径（用于 hub data dir 冲突检查）。 */
 function comparablePath(value: string): string {
   const expanded =
@@ -1492,6 +1562,7 @@ export function findExplicitSecretPaths(config: Record<string, unknown>, prefix 
   check(config.feishu, 'appSecret', 'feishu.appSecret');
   check(config.serve, 'token', 'serve.token');
   check(config.serve, 'adminToken', 'serve.adminToken');
+  check(config.gateway, 'token', 'gateway.token');
   check(config.transport, 'token', 'transport.token');
   check(config.connect, 'token', 'connect.token');
   if (isPlainObject(config.serve) && isPlainObject(config.serve.tokens)) {
@@ -2434,6 +2505,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     validateServeSettings(config.serve, errors);
   }
 
+  // 校验 gateway（0.49；平台侧，与 serve 分区）
+  if (config.gateway !== undefined) {
+    if (!isPlainObject(config.gateway)) {
+      errors.push({ path: 'gateway', message: 'gateway must be an object' });
+    } else {
+      validateGatewaySettings(config.gateway as GatewayConfig, errors);
+    }
+  }
+
   // 校验 hub（S5；data dir 必须独立）
   if (config.hub !== undefined) {
     if (!isPlainObject(config.hub)) {
@@ -2603,6 +2683,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'adminTokenEnv',
     'pluginHttp',
   ],
+  gateway: ['port', 'hostname', 'token', 'tokenEnv', 'allowedOrigins'],
   connect: ['token', 'tokenEnv', 'caFile'],
   attention: ['nodes'],
   hub: [
@@ -2747,6 +2828,7 @@ export const KNOWN_CONFIG_KEYS = [
   'mcpServers',
   'durable',
   'serve',
+  'gateway',
   'hub',
   'evals',
   'feishu',

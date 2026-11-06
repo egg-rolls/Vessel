@@ -30,7 +30,7 @@ function pageOrigin(): string {
 
 export function GatewayView({ navigate }: { navigate: (route: Route) => void }) {
   useLocale();
-  const { client, connectionState, hasToken, epoch, tenantId, gatewayUrl } = useConnection();
+  const { client, connectionState, hasToken, epoch, tenantId, nodeUrl } = useConnection();
   const { current } = useNodes();
 
   const { config, reloadConfig } = useConfigStoreApi();
@@ -83,7 +83,7 @@ export function GatewayView({ navigate }: { navigate: (route: Route) => void }) 
                 <dd>{connectionLabel(connectionState)}</dd>
                 <dt>{t('gateway.field.endpoint')}</dt>
                 <dd className="mono">
-                  {healthData?.node.endpoint || displayGatewayUrl(gatewayUrl, pageOrigin())}
+                  {healthData?.node.endpoint || displayGatewayUrl(nodeUrl, pageOrigin())}
                 </dd>
                 <dt>{t('gateway.field.node')}</dt>
                 <dd>{nodeName}</dd>

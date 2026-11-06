@@ -9,20 +9,24 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { useToast } from '../components/ToastProvider';
+import { t } from '../i18n';
 import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import { useInteractionStore } from '../stores/interactionStore';
-import { type ConnectionState, GatewayClient } from './client';
+import { bootstrapPlatform } from './bootstrap';
 import {
   ConnectionContext,
   type ConnectionContextValue,
+  type ConnectionMode,
   type ConnectionOptions,
 } from './connection-context';
 import { createConnectionHandlers } from './connection-handlers';
-import { computeInitialConnection, TOKEN_KEY } from './connection-initial';
+import { computeInitialConnection, LEGACY_TOKEN_KEY } from './connection-initial';
 import { SubmitGuard } from './interactions';
-import { discoverLocalGatewayToken, shouldAttemptLocalConnect } from './local-connect';
+import { type ConnectionState, GatewayClient } from './node';
+import { nodeTokenIdentity, storeNodeToken } from './nodes';
+import { PlatformClient, type PlatformRpcError } from './platform';
 import type { HelloInfo } from './types';
-import { GATEWAY_URL_KEY } from './url';
+import { checkGatewayUrl } from './url';
 import { useConnectionControls } from './use-connection-controls';
 import { useInteractionHydration } from './use-interaction-hydration';
 import { useInteractionResponses } from './use-interaction-responses';
@@ -31,19 +35,59 @@ import { useReportConnectError } from './use-report-connect-error';
 export type { PermissionRequest, PermissionScope } from './types';
 export type { ConnectionContextValue, ConnectionOptions };
 
+/** token 消费必须在路由初始化前完成，所以放在模块加载期。 */
 const initialConnection = computeInitialConnection();
-const initialSeed = initialConnection.seed;
-const initialGateway = initialConnection.gateway;
+
+/** node registry 的 `api_url` 归一化为 origin；服务端值可信，失败时原样使用。 */
+function normalizeNodeOrigin(raw: string): string {
+  const check = checkGatewayUrl(raw, window.location.protocol);
+  return check.ok ? check.value : raw.trim().replace(/\/+$/, '');
+}
+
+function platformErrorMessage(error: PlatformRpcError): string {
+  if (error.status === 401 || error.code === 'platform_unauthorized') {
+    return t('gateway.platform.tokenRequired');
+  }
+  if (error.code === 'no_nodes') return t('gateway.platform.noNodes');
+  if (error.code === 'network') {
+    return t('gateway.connection.unreachable', { detail: error.message });
+  }
+  if (error.status === 403) {
+    return t('gateway.connection.originRejected', { detail: error.message });
+  }
+  return error.message;
+}
+
+interface NodeIdentity {
+  nodeId?: string;
+  name?: string;
+}
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
   const eventStore = useMemo(() => new EventStore(), []);
-  const [token, setToken] = useState(initialSeed.token);
+
+  // 平台槽：URL 语义 = 平台 origin（空串 = 页面同源）；token 只进 sessionStorage。
+  const [platformUrl, setPlatformUrl] = useState(initialConnection.platformUrl);
+  const [platformToken, setPlatformToken] = useState(initialConnection.platformToken);
+  const [platformError, setPlatformError] = useState<string | null>(
+    initialConnection.platformUrlError,
+  );
+  const [urlInvalid, setUrlInvalid] = useState(initialConnection.platformUrlError !== null);
+  // node 槽：URL 来自平台 registry（或 legacy 同源）；token 来自 credentials / 手填。
+  const [nodeUrl, setNodeUrl] = useState<string | null>(null);
+  const [nodeToken, setNodeToken] = useState('');
+  const [anonymousNode, setAnonymousNode] = useState(false);
+  const [nodeIdentity, setNodeIdentity] = useState<NodeIdentity | null>(null);
+  const [mode, setMode] = useState<ConnectionMode>('pending');
+  const [bootstrapSeq, setBootstrapSeq] = useState(0);
+
   // 进程内常量：初始化后不再切换模式（切模式需要刷新页面）。
-  const { devProxyAuth } = initialSeed;
+  const { devProxyAuth } = initialConnection;
   const [targetTenantId, setTargetTenantId] = useState<string | undefined>();
-  const [gatewayUrl, setGatewayUrl] = useState(initialGateway.url);
-  const [gatewayError, setGatewayError] = useState<string | null>(initialGateway.error);
+  const [gatewayError, setGatewayError] = useState<string | null>(
+    initialConnection.platformUrlError,
+  );
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
@@ -62,52 +106,106 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const settledRef = useRef(new Map<string, number>());
   /** hydration 世代：只有最新一次请求能落地。 */
   const hydrationGenerationRef = useRef(0);
+  /** legacy 回退候选 token：旧 `vessel.token` 槽。 */
+  const legacyTokenRef = useRef(initialConnection.legacyNodeToken);
+  /** 用户手填的 node token；平台 bootstrap 时优先于 credentials。 */
+  const manualNodeTokenRef = useRef('');
 
-  const client = useMemo(() => new GatewayClient(gatewayUrl), [gatewayUrl]);
+  const client = useMemo(() => new GatewayClient(nodeUrl ?? ''), [nodeUrl]);
   const tenantIdRef = useRef<string | null>(null);
   tenantIdRef.current = tenantId;
-  const tokenRef = useRef(token);
-  tokenRef.current = token;
-  const gatewayUrlRef = useRef(gatewayUrl);
-  gatewayUrlRef.current = gatewayUrl;
-  /** 本机自动连接只尝试一次（也覆盖 React 双调用）。 */
-  const localConnectTriedRef = useRef(false);
-  const hasToken = token.trim().length > 0;
+  const nodeTokenRef = useRef(nodeToken);
+  nodeTokenRef.current = nodeToken;
+  const canConnect = nodeUrl !== null && (nodeToken.trim() !== '' || anonymousNode);
+  const hasToken = canConnect;
 
-  // 0.35：本机 WebUI 自动连接。挂载后只探测一次；失败静默回退到手动表单。
+  /**
+   * 平台引导（契约 §5.2）：whoami → nodes.list → credentials → node 直连。
+   * `/platform/rpc` 不存在（legacy `--serve` 页面）时回退同源 node 连接；
+   * 401 等鉴权错误不静默回退，必须让用户输入平台 token。
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrapSeq 是显式重新引导触发器
   useEffect(() => {
-    if (localConnectTriedRef.current) return;
-    localConnectTriedRef.current = true;
-    const context = {
-      hostname: window.location.hostname,
-      origin: window.location.origin,
-      token: tokenRef.current,
-      storedUrl: localStorage.getItem(GATEWAY_URL_KEY) ?? '',
-      devProxyAuth,
-    };
-    if (!shouldAttemptLocalConnect(context)) return;
-    void discoverLocalGatewayToken({ context }).then((found) => {
-      if (found === null) return;
-      // 探测期间用户可能已手动连接 / 输入 token：不覆盖。
-      if (tokenRef.current.trim() !== '') return;
-      const savedUrl = (localStorage.getItem(GATEWAY_URL_KEY) ?? '').trim();
-      if (savedUrl === '') {
-        // 没有用户保存的地址：把目标对齐到 token 来源（同源或默认本机 gateway）。
-        const current = gatewayUrlRef.current;
-        if (found.gatewayUrl === '') {
-          if (current !== '' && current !== window.location.origin) setGatewayUrl('');
-        } else if (current !== found.gatewayUrl) {
-          setGatewayUrl(found.gatewayUrl);
+    if (urlInvalid) {
+      setMode('platform');
+      setConnectionState('error');
+      return;
+    }
+    // dev relay 只代理 node 侧（`/v1`、`/health`）；代理模式下不探测平台，
+    // 直接走同源 node + 占位 token 的旧流程。
+    if (initialConnection.devProxyAuth) {
+      setMode('legacy');
+      setNodeIdentity(null);
+      setNodeUrl(platformUrl);
+      setNodeToken(legacyTokenRef.current);
+      setAnonymousNode(false);
+      setPlatformError(null);
+      return;
+    }
+    let cancelled = false;
+    setConnectionState('connecting');
+    setPlatformError(null);
+    const platformClient = new PlatformClient(platformUrl, platformToken);
+    void bootstrapPlatform(platformClient, manualNodeTokenRef.current)
+      .then((result) => {
+        if (cancelled) return;
+        if (result.kind === 'legacy') {
+          // 旧 token 流程：显式输入的平台 token 在 legacy 页面等价于 node token。
+          const explicit = platformToken.trim();
+          const legacyToken = explicit !== '' ? explicit : legacyTokenRef.current;
+          if (explicit !== '') {
+            sessionStorage.setItem(LEGACY_TOKEN_KEY, explicit);
+            legacyTokenRef.current = explicit;
+          }
+          setMode('legacy');
+          setNodeIdentity(null);
+          setNodeUrl(platformUrl);
+          setNodeToken(legacyToken);
+          setAnonymousNode(false);
+          setPlatformError(null);
+          return;
         }
-      }
-      // token 仍只进 sessionStorage，不落 localStorage / URL / 日志。
-      sessionStorage.setItem(TOKEN_KEY, found.token);
-      setTokenError(null);
-      setGatewayError(null);
-      setLastError(null);
-      setToken(found.token);
-    });
-  }, []);
+        if (result.kind === 'error') {
+          setMode('platform');
+          setNodeUrl(null);
+          setPlatformError(platformErrorMessage(result.error));
+          setConnectionState('error');
+          return;
+        }
+
+        const { connection } = result;
+        const identity: NodeIdentity = {
+          nodeId: connection.node.node_id,
+          name: connection.node.name,
+        };
+        if (connection.nodeToken !== '') {
+          storeNodeToken(
+            nodeTokenIdentity({ name: connection.node.name, nodeId: connection.node.node_id }),
+            connection.nodeToken,
+          );
+        }
+        setMode('platform');
+        setNodeIdentity(identity);
+        setNodeUrl(normalizeNodeOrigin(connection.node.api_url));
+        setNodeToken(connection.nodeToken);
+        setAnonymousNode(connection.anonymous);
+        setPlatformError(
+          connection.credentialsError !== null && connection.nodeToken === ''
+            ? t('gateway.platform.credentialsUnavailable')
+            : null,
+        );
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setMode('platform');
+        setNodeUrl(null);
+        setPlatformError(error instanceof Error ? error.message : String(error));
+        setConnectionState('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [platformUrl, platformToken, bootstrapSeq, urlInvalid]);
 
   const recordSettled = useCallback((requestId: string) => {
     if (!requestId) return;
@@ -126,7 +224,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     client,
     recordSettled,
     settledRef,
-    tokenRef,
+    tokenRef: nodeTokenRef,
     tenantIdRef,
     hydrationGenerationRef,
   });
@@ -138,10 +236,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setLastError,
   );
 
-  // WS 生命周期：token / URL / 显式 connect 变化时重建订阅；断线指数退避。
+  // WS 生命周期：node URL / token / 显式 connect 变化时重建订阅；断线指数退避。
   // biome-ignore lint/correctness/useExhaustiveDependencies: connectSeq 是显式重连触发器
   useEffect(() => {
-    if (!token.trim()) {
+    if (!canConnect) {
       client.close();
       eventStore.reset(0);
       setConnectionState('idle');
@@ -156,7 +254,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
     return createConnectionHandlers({
       client,
-      token,
+      token: nodeToken,
       targetTenantId,
       eventStore,
       toast,
@@ -177,7 +275,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     });
   }, [
     client,
-    token,
+    nodeToken,
+    canConnect,
     connectSeq,
     targetTenantId,
     eventStore,
@@ -196,19 +295,26 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const { connect, disconnect, retry } = useConnectionControls({
     client,
     eventStore,
-    token,
-    gatewayUrl,
-    connectionState,
-    tokenRef,
+    nodeToken,
+    mode,
+    nodeIdentity,
+    canConnect,
     tenantIdRef,
     reportConnectError,
-    setGatewayUrl,
+    setPlatformUrl,
+    setPlatformToken,
     setGatewayError,
+    setPlatformError,
+    setUrlInvalid,
+    setBootstrapSeq,
+    setNodeToken,
+    setAnonymousNode,
     setTokenError,
     setLastError,
     setTargetTenantId,
-    setToken,
     setConnectSeq,
+    manualNodeTokenRef,
+    legacyTokenRef,
   });
 
   const { respondPermission, respondAsk } = useInteractionResponses({
@@ -228,8 +334,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       tenantId,
       features: hello?.protocol.features ?? [],
       nodeLabel: hello?.node.name ?? hello?.node.node_id?.slice(0, 12) ?? '',
-      gatewayUrl,
-      token,
+      platformUrl,
+      nodeUrl: nodeUrl ?? '',
+      platformToken,
+      nodeToken,
+      mode,
+      platformError,
       hasToken,
       devProxyAuth,
       gatewayError,
@@ -259,8 +369,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       connectionState,
       hello,
       tenantId,
-      gatewayUrl,
-      token,
+      platformUrl,
+      nodeUrl,
+      platformToken,
+      nodeToken,
+      mode,
+      platformError,
       hasToken,
       gatewayError,
       tokenError,

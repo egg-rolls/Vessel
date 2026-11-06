@@ -8,6 +8,7 @@ import type {
   DurableConfig,
   EvalsConfig,
   FeishuConfig,
+  GatewayConfig,
   LeaseConfig,
   McpServerConfig,
   ObservabilityConfig,
@@ -97,6 +98,17 @@ export const DEFAULT_SERVE_OPTIONS: Required<
   hostname: '127.0.0.1',
   port: 8642,
   allowRemote: false,
+};
+
+/**
+ * 0.49：平台 gateway 默认值。
+ * 不写入 DEFAULT_CONFIG：未配置 `gateway` 时由组合根使用这些值。
+ * `DEFAULT_SERVE_OPTIONS.port` 仍是 8642（legacy `--serve`）；拆分模式的 node 8644
+ * 由 `resolveGatewayNodePorts` 按 mode 计算。
+ */
+export const DEFAULT_GATEWAY_OPTIONS: Required<Pick<GatewayConfig, 'hostname' | 'port'>> = {
+  hostname: '127.0.0.1',
+  port: 8642,
 };
 
 /**

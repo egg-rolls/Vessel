@@ -12,6 +12,7 @@ export {
   DEFAULT_DURABLE_OPTIONS,
   DEFAULT_EVALS_OPTIONS,
   DEFAULT_FEISHU_OPTIONS,
+  DEFAULT_GATEWAY_OPTIONS,
   DEFAULT_LEASE_OPTIONS,
   DEFAULT_MCP_SERVER_OPTIONS,
   DEFAULT_OBSERVABILITY_OPTIONS,
@@ -24,6 +25,11 @@ export {
   defaultModelForProvider,
   PROVIDER_DEFAULT_MODELS,
 } from './defaults.js';
+export {
+  checkPlatformTokenConflict,
+  resolveGatewayNodePorts,
+  resolvePlatformToken,
+} from './gateway.js';
 export {
   applyLayerWithSources,
   type ConfigLoadResult,

@@ -278,6 +278,16 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     ],
   },
   {
+    token: 'node',
+    registryName: 'node',
+    subcommands: [
+      { name: 'start', flags: ['--daemon', '--exclusive'] },
+      { name: 'status', flags: ['--json', '--rpc'] },
+      { name: 'stop' },
+      { name: 'reload', flags: ['--scope'], flagValues: { '--scope': ['config', 'plugins'] } },
+    ],
+  },
+  {
     token: 'hub',
     registryName: 'hub',
     subcommands: [

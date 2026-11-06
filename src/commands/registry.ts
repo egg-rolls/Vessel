@@ -28,6 +28,7 @@ import { runHubCommand } from '../hub-command';
 import { applyLocale } from '../i18n';
 import { logsCommand } from '../logs-command';
 import { migrateCommand } from '../migrate-command';
+import { isForegroundNodeCommand, runNodeCommand } from '../node-command';
 import { runPluginCommand } from '../plugin-command';
 import { runResumeList } from '../resume-command';
 import { statusCommand } from '../status-command';
@@ -269,6 +270,16 @@ export const cliCommands: readonly CliCommand[] = [
       const command = args.gateway;
       if (command === null) return 1;
       return runGatewayCommand(command, { exclusive: args.exclusive });
+    },
+  },
+  {
+    name: 'node',
+    // 前台 node start 由 cli.ts 接进 serve 管线；这里只处理一次性子命令。
+    match: (args) => args.node !== null && !isForegroundNodeCommand(args.node),
+    run: async (args) => {
+      const command = args.node;
+      if (command === null) return 1;
+      return runNodeCommand(command);
     },
   },
   {

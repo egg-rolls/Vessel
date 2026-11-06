@@ -1,7 +1,8 @@
 /**
- * Gateway 连接 / 传输层：WS 生命周期、帧处理、请求应答与监听器。
+ * Node 连接 / 传输层：WS 生命周期、帧处理、请求应答与监听器。
  *
- * 从 `client.ts` 拆出（S1）；行为与原单文件一致。
+ * 0.49 G1：这是 node 客户端（`/v1/rpc`、`/v1/events`）；平台客户端在
+ * 平台客户端目录，两者互不 import。
  */
 
 import { t } from '../../i18n';
@@ -151,8 +152,9 @@ export abstract class ProtocolClient {
    * tenantId 仅对 admin principal 生效（非 admin 传其它 tenant 会被 4403 关闭）。
    */
   connect(token: string, since = 0, tenantId?: string): Promise<void> {
+    // 0.49：空 token 合法——平台 `credentials` 返回 `mode:'none'` 时，node 走
+    // 回环匿名语义；是否接受由 node 服务端鉴权决定（WS 4401 会如实回报）。
     const tk = token.trim();
-    if (!tk) return Promise.reject(new Error(t('gateway.client.tokenRequired')));
     if (this.state === 'open') return Promise.resolve();
     if (this.state === 'connecting' && this.connectResolve) {
       return new Promise<void>((resolve, reject) => {

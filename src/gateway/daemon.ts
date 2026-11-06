@@ -43,6 +43,11 @@ export interface StartDaemonOptions {
   checkDuplicate?: boolean;
   /** 0.15：把全局 `--exclusive` 传给子进程 */
   exclusive?: boolean;
+  /**
+   * 0.49 G1：前台子命令族。`gateway`（缺省）或 `node`；两者复用同一
+   * PID/实例锁形状，`node` 只启动 Node API 监听。
+   */
+  command?: 'gateway' | 'node';
   platform?: NodeJS.Platform;
   runCommand?: CommandRunner;
   /** 调用方已收集的状态快照；缺省自行 collect。 */
@@ -93,13 +98,17 @@ export function buildDaemonArgv(options: {
   port?: number;
   host?: string;
   exclusive?: boolean;
+  command?: 'gateway' | 'node';
 }): string[] {
   return [
     options.execPath,
     options.entryPath,
-    'gateway',
+    options.command ?? 'gateway',
     'start',
-    ...(options.instance !== undefined ? ['--instance', options.instance] : []),
+    // `node start` 只支持 `[--daemon]`；实例固定为 default（共享同一 PID/锁）。
+    ...(options.instance !== undefined && (options.command ?? 'gateway') === 'gateway'
+      ? ['--instance', options.instance]
+      : []),
     ...(options.port !== undefined ? ['--port', String(options.port)] : []),
     ...(options.host !== undefined ? ['--host', options.host] : []),
     ...(options.exclusive === true ? ['--exclusive'] : []),
@@ -173,10 +182,11 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
   const argv = buildDaemonArgv({
     execPath,
     entryPath,
-    ...(instance !== undefined ? { instance } : {}),
+    ...(options.instance !== undefined ? { instance: options.instance } : {}),
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
     ...(options.exclusive === true ? { exclusive: true } : {}),
+    ...(options.command !== undefined ? { command: options.command } : {}),
   });
   const spawn = options.spawn ?? Bun.spawn;
   const sleep = options.sleep ?? defaultSleep;

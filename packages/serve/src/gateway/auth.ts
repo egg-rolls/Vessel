@@ -99,10 +99,25 @@ export function normalizeAllowedOrigins(raw: string[] | undefined): string[] {
 }
 
 /**
- * HTML CSP：connect-src 只放同源 Host 与显式 allowlist，不再使用裸 `ws:` / `wss:`。
- * 其余指令保持 0.5 的基线。
+ * CSP 扩展源：0.49 平台入口用它允许嵌入 node 插件 iframe / 跨源连接。
+ * 不传扩展源时输出与旧版逐字一致。
  */
-export function buildContentSecurityPolicy(req: Request, allowedOrigins: string[]): string {
+export interface CspExtensionSources {
+  /** 额外允许被嵌入的 frame 源（如 node origin）。 */
+  frameSrc?: string[];
+  /** 额外允许连接的源；自动补 ws/wss 变体。 */
+  connectSrc?: string[];
+}
+
+/**
+ * HTML CSP：connect-src 只放同源 Host 与显式 allowlist，不再使用裸 `ws:` / `wss:`。
+ * 其余指令保持 0.5 的基线；`extend` 缺省时输出逐字不变。
+ */
+export function buildContentSecurityPolicy(
+  req: Request,
+  allowedOrigins: string[],
+  extend?: CspExtensionSources,
+): string {
   const sources = new Set<string>(["'self'"]);
   const rawHost = req.headers.get('host');
   // Host 会进入 CSP 指令；只接受常规 host[:port] 字符，防止指令注入。
@@ -120,10 +135,30 @@ export function buildContentSecurityPolicy(req: Request, allowedOrigins: string[
       // normalizeAllowedOrigins 已校验；防御性跳过非法值。
     }
   }
+  for (const origin of extend?.connectSrc ?? []) {
+    try {
+      const url = new URL(origin);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+      sources.add(url.origin);
+      sources.add(`${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`);
+    } catch {
+      // 防御性跳过非法值；调用方应先 normalizeAllowedOrigins。
+    }
+  }
+  const frameSources = new Set<string>();
+  for (const origin of extend?.frameSrc ?? []) {
+    try {
+      const url = new URL(origin);
+      if (url.protocol === 'http:' || url.protocol === 'https:') frameSources.add(url.origin);
+    } catch {
+      // 防御性跳过非法值。
+    }
+  }
+  const frameDirective = frameSources.size > 0 ? `frame-src ${[...frameSources].join(' ')}; ` : '';
   return (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
     `img-src 'self' data:; font-src 'self'; connect-src ${[...sources].join(' ')}; ` +
-    "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    `object-src 'none'; base-uri 'self'; ${frameDirective}frame-ancestors 'none'`
   );
 }
 

@@ -205,9 +205,14 @@ export function safeEntryPath(entry: string): string | null {
   return parts.map((part) => encodeURIComponent(part)).join('/');
 }
 
-/** `#/plugins/<id>/<entry>` 的 iframe 目标；非法输入返回 null（由调用方渲染错误态）。 */
+/**
+ * `#/plugins/<id>/<entry>` 的 iframe 目标；非法输入返回 null（由调用方渲染错误态）。
+ *
+ * 0.49：第一个参数是 **node origin**（`/plugins/*` 由 node 宿主提供），不再使用
+ * 平台 origin；空串 = 页面同源（legacy `--serve`）。
+ */
 export function pluginFrameUrl(
-  gatewayUrl: string,
+  nodeOrigin: string,
   pluginId: string,
   entry: string,
   context?: {
@@ -221,8 +226,8 @@ export function pluginFrameUrl(
   const safeEntry = safeEntryPath(entry);
   if (safeEntry === null) return null;
   const origin =
-    gatewayUrl.trim() !== ''
-      ? gatewayUrl.trim().replace(/\/+$/, '')
+    nodeOrigin.trim() !== ''
+      ? nodeOrigin.trim().replace(/\/+$/, '')
       : typeof window === 'undefined'
         ? ''
         : window.location.origin;

@@ -36,7 +36,7 @@ export interface DoctorCheckInput {
   configError?: string;
   capabilitiesError?: string;
   healthError?: string;
-  gatewayUrl: string;
+  nodeUrl: string;
   connected: boolean;
 }
 
@@ -297,7 +297,7 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
   } else {
     const serve = asRecord(configRoot.serve);
     const port = serve?.port;
-    const endpoint = input.health?.node.endpoint ?? input.gatewayUrl;
+    const endpoint = input.health?.node.endpoint ?? input.nodeUrl;
     if (typeof port !== 'number') {
       checks.push({
         name: 'serve_port',
@@ -342,7 +342,7 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
       name: 'attach',
       status: 'ok',
       source: 'health.get',
-      detail: `${node.endpoint || input.gatewayUrl} (${node.role}, ${node.status}, pid ${node.pid})`,
+      detail: `${node.endpoint || input.nodeUrl} (${node.role}, ${node.status}, pid ${node.pid})`,
     });
   } else {
     checks.push({

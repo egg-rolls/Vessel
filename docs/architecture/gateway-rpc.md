@@ -7,6 +7,7 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 
 # 统一 RPC 方法表
 <a id="rpc-methods"></a>
+- **0.49 入口**：本文方法表属 **Node API**，入口 `POST /v1/rpc`（node 端口，缺省 8644）。Platform Gateway 的 `POST /platform/rpc` 是独立的只读 allowlist（`platform.nodes.list|get|credentials`、`platform.whoami`、`platform.health.get`），**不复用**本表、不透传到 node dispatcher。
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
 - **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get|sources|set`；`sessions.list|get|search|delete|rename|compact|create|restart|activate`；`runs.list|get|start|cancel|resume`；`agents.list|get|tree` / `agents.create|update|close|send|dispatch`；`events.list|subscribe`；`tools.list`；`plugins.list|reload|catalog`；`metrics.get|reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond` / `permissions.setToolPolicy`；`interactions.list`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（admin-only，缺省 `not_supported`）；`teams.list|get|post|retract|members|budget` / `teams.create|update|archive|spawnFrozen`；`auth.exchange|revoke|tokens`。permission 以表格为准。
 <!-- rpc-methods:begin -->
@@ -77,7 +78,6 @@ paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 | `auth.tokens` | admin |
 <!-- rpc-methods:end -->
 当前方法计数与演进历史见 `docs/versions/0.24.0.md`–`0.26.2.md`；契约以本表为准。新增 canonical 方法必须发 addendum，并同时写 `result_schema`（ADR-066）。`plugins.catalog`（read）按 tenant 返回（与 `plugins.list` 同源），`params: {}`、`result: { items: PluginCatalogItem[] }`；只读插件目录，不写 config、不访问网络、不触发 reload、不查 registry。
-
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。**HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留既有路径、请求/响应体、状态码与错误码。
 - **events**：`events.list` 支持 `run_id` / `since_seq` / `since_ts` / `types` / `type_prefix` / `limit`（默认 50、最大 500），按 `(seq ?? ts)` 升序。`events.subscribe` 支持 `since`（gateway wire seq）/ `since_ts` / `run_id` / `types` / `all_tenants`（仅 admin）。RPC 回调为 `{ method: 'events.event', params: RunEvent }`；WS 旧 `{ kind: 'event', event }` 不变。
 - **manifest**：`capabilities.list` 返回 `{ version, config_schema_version: 1, methods: [{ name, params_schema?, result_schema?, permission }], tools, plugins }`；只含 canonical 方法。manifest 按 `ctx.tenantId` 生成，tools / plugins 取 `pluginHostFor` / `pluginsFor`（缺省回退全局）。

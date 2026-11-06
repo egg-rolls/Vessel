@@ -2453,8 +2453,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
           for (const [key, value] of Object.entries(extra)) staticResponse.headers.set(key, value);
           return staticResponse;
         }
-        // 配了 staticDir 就没有「未知非 API 路径」可回落——直接 404，不要求 token。
-        if (opts.staticDir) return errorJson('not_found', `Not found: ${path}`, 404, extra);
+        // 非 API 的 GET/HEAD 不进入鉴权链：配了 staticDir（legacy `--serve`）时
+        // 静态未命中可直接 404；拆分模式 node 不宿 WebUI（staticDir 置空），
+        // `/`、SPA 与未知非 API 路径同样确定性 404，不要求 token（CONTRACT-0.49 §2.2/§5.1）。
+        return errorJson('not_found', `Not found: ${path}`, 404, extra);
       }
 
       // DECISION-020 §R1.8：token 不进 URL（SSE EventSource 例外见上）。

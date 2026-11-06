@@ -3,7 +3,8 @@
  *
  * 冻结约束：
  * - 每个节点使用显式人类 token（gateway / team token）；peer token 不能读取 attention。
- * - token 只写 sessionStorage（独立 key），绝不进入元数据 JSON / localStorage / URL / 日志 / React 返回值。
+ * - 0.49：token key 优先 `node_id`，缺失回退 name；只写 sessionStorage（独立 key），
+ *   绝不进入元数据 JSON / localStorage / URL / 日志 / React 返回值。
  * - hub 只用于发现；本模块不消费 hub 目录，也绝不经 hub 代理数据。
  * - 只复用既有 canonical RPC（interactions.list / health.get / teams.list），不新增方法。
  */
@@ -55,8 +56,13 @@ export class NodeRpcError extends Error {
   }
 }
 
-export function nodeTokenKey(name: string): string {
-  return `${NODE_TOKEN_PREFIX}${name}`;
+/** 0.49：node token key 优先 `node_id`，缺失回退展示名（改名不丢 token）。 */
+export function nodeTokenIdentity(node: Pick<NodeConfig, 'name' | 'nodeId'>): string {
+  return node.nodeId ?? node.name;
+}
+
+export function nodeTokenKey(identity: string): string {
+  return `${NODE_TOKEN_PREFIX}${identity}`;
 }
 
 function pageProtocol(): string {
@@ -154,32 +160,33 @@ export function writeStoredNodes(nodes: readonly NodeConfig[]): void {
   }
 }
 
-export function storeNodeToken(name: string, token: string): void {
+/** `identity` 由 `nodeTokenIdentity()` 提供（node_id 优先）。 */
+export function storeNodeToken(identity: string, token: string): void {
   const store = sessionStore();
   if (!store) return;
   try {
-    store.setItem(nodeTokenKey(name), token);
+    store.setItem(nodeTokenKey(identity), token);
   } catch {
     // 忽略存储失败；token 不会退回 localStorage。
   }
 }
 
-export function readNodeToken(name: string): string | null {
+export function readNodeToken(identity: string): string | null {
   const store = sessionStore();
   if (!store) return null;
   try {
-    const token = store.getItem(nodeTokenKey(name));
+    const token = store.getItem(nodeTokenKey(identity));
     return token?.trim() ? token : null;
   } catch {
     return null;
   }
 }
 
-export function removeNodeToken(name: string): void {
+export function removeNodeToken(identity: string): void {
   const store = sessionStore();
   if (!store) return;
   try {
-    store.removeItem(nodeTokenKey(name));
+    store.removeItem(nodeTokenKey(identity));
   } catch {
     // 忽略存储失败。
   }
@@ -206,7 +213,9 @@ interface NodeRpcEnvelope<T> {
 
 /**
  * 单节点 JSON-RPC（POST /v1/rpc + Bearer）。
- * `token` 由调用方注入当前连接 token；缺省读该节点的 sessionStorage token。
+ * `token` 由调用方注入当前连接 token；缺省读该节点的 sessionStorage token
+ * （node_id 优先）。token 为空时不发 Authorization——平台 credentials
+ * `mode:'none'` 时 node 走回环匿名语义，是否接受由服务端判定。
  */
 export async function fetchNodeRpc<T = unknown>(
   node: NodeConfig,
@@ -214,17 +223,15 @@ export async function fetchNodeRpc<T = unknown>(
   params?: unknown,
   token?: string,
 ): Promise<T> {
-  const bearer = token?.trim() || readNodeToken(node.name) || '';
-  if (!bearer) throw new NodeRpcError('unauthorized', 'missing node token');
+  const bearer = token?.trim() || readNodeToken(nodeTokenIdentity(node)) || '';
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (bearer !== '') headers.Authorization = `Bearer ${bearer}`;
 
   let response: Response;
   try {
     response = await fetch(`${baseUrl(node.url)}/v1/rpc`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${bearer}`,
-      },
+      headers,
       body: JSON.stringify({
         v: 1,
         id: crypto.randomUUID(),

@@ -1,9 +1,13 @@
 /**
- * 运行时 gateway URL 解析与校验（纯函数，便于单测）。
+ * 运行时 URL 解析与校验（纯函数，便于单测）。
  *
- * 优先级：localStorage > VITE_GATEWAY_URL > 空串（同源）。
- * 只接受 scheme://host[:port]；拒绝 path/query/hash/userinfo 与 wildcard。
- * 非回环必须 https；HTTPS 页面拒绝 http（mixed content）。
+ * 0.49：`localStorage['vessel.gateway-url']` 语义 = **平台 origin**；
+ * 空串 = 页面同源。node URL 来自 `platform.nodes.list` 的 `api_url`，
+ * 不从这里解析。函数名保留 `Gateway` 以维持既有 import 面。
+ *
+ * 优先级：localStorage > 空串（同源）。只接受 scheme://host[:port]；
+ * 拒绝 path/query/hash/userinfo 与 wildcard。非回环必须 https；
+ * HTTPS 页面拒绝 http（mixed content）。
  */
 
 import { t } from '../i18n';
@@ -75,6 +79,8 @@ export function checkGatewayUrl(raw: string, pageProtocol = 'http:'): GatewayUrl
 
 /**
  * 首次加载的候选值：localStorage > 构建期 env > 同源。
+ * 0.49 的平台路径传入 `env = undefined`（平台 URL 只来自 localStorage 或同源）；
+ * 保留 env 参数供既有调用方/测试使用。
  * 命中候选后不静默回退，非法值原样报错，方便用户修正。
  */
 export function resolveInitialGatewayUrl(

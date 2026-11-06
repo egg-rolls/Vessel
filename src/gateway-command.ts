@@ -13,8 +13,15 @@
  */
 
 import * as path from 'node:path';
-import { loadConfig, type VesselConfig } from '../packages/config/src/index';
+import {
+  type ConfigValidationError,
+  DEFAULT_SERVE_OPTIONS,
+  loadConfig,
+  resolveGatewayNodePorts,
+  type VesselConfig,
+} from '../packages/config/src/index';
 import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
+import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
 import { expandHome, resolveDataDir } from './data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
@@ -50,6 +57,7 @@ import {
   uninstallService,
 } from './gateway/service';
 import { t } from './i18n';
+import { createHttpRpcClient } from './rpc/http-client';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
@@ -119,6 +127,62 @@ export function deriveGatewayInstance(instance?: string, port?: number): string 
   return DEFAULT_GATEWAY_INSTANCE;
 }
 
+function splitModePortFailure(path: string, label: string): ConfigValidationError {
+  return {
+    path,
+    message:
+      `${label}=0 is not allowed in split mode: split mode requires a fixed port ` +
+      '(registry/CORS/pid depend on it); a stable port is required. ' +
+      'Set an explicit non-zero port.',
+  };
+}
+
+/**
+ * 0.49 G1（1 裁定）：拆分模式显式拒绝 0 端口。
+ *
+ * - `gateway` 模式：`gateway.port`、`serve.port` 与显式 `--port 0` 都必须非 0；
+ * - `node` 模式：`serve.port` 必须非 0（独立 node 不使用 `gateway.port`，无 `--port`）；
+ * - legacy `--serve` / `VESSEL_LEGACY_SERVE=1` 不调用（仍允许 0 = 系统分配）。
+ */
+export function splitModePortError(
+  config: VesselConfig,
+  mode: 'gateway' | 'node',
+  explicitPort?: number,
+): ConfigValidationError | null {
+  if (mode === 'gateway' && explicitPort === 0) {
+    return splitModePortFailure('gateway.port', '--port');
+  }
+  const checks: Array<{ path: string; value: number | undefined }> =
+    mode === 'gateway'
+      ? [
+          { path: 'gateway.port', value: config.gateway?.port },
+          { path: 'serve.port', value: config.serve?.port },
+        ]
+      : [{ path: 'serve.port', value: config.serve?.port }];
+  for (const check of checks) {
+    if (check.value === 0) {
+      return splitModePortFailure(check.path, check.path);
+    }
+  }
+  return null;
+}
+
+/**
+ * 打印拆分模式端口错误（复用 config 错误格式），返回退出码 2；无错误返回 null。
+ * 调用方据此在 spawn / bind 前 fail-fast。
+ */
+export function printSplitModePortError(
+  config: VesselConfig,
+  mode: 'gateway' | 'node',
+  printErr: (line: string) => void = (line) => console.error(line),
+  explicitPort?: number,
+): number | null {
+  const error = splitModePortError(config, mode, explicitPort);
+  if (error === null) return null;
+  printErr(formatConfigErrors([error]));
+  return 2;
+}
+
 /** `config.hub.dataDir` 分流时的 hub 目录；缺省交给 collect 用 `<dataDir>/hub`。 */
 function configuredHubDataDir(config: VesselConfig): string | undefined {
   const configured = config.hub?.dataDir;
@@ -153,6 +217,97 @@ function entryPid(entry: GatewayStateEntry): number | undefined {
 /** 进程仍被该记录占用（身份未确认也算占用，只是不可自动回收）。 */
 function entryOccupied(entry: GatewayStateEntry): boolean {
   return entry.state === 'running' || entry.state === 'degraded' || entry.state === 'starting';
+}
+
+/** node 监听描述（0.49 G1：`serve.port` 显式值，否则 8644）。 */
+export interface NodeListenInfo {
+  host: string;
+  port: number;
+  url: string;
+}
+
+export function nodeListenFromConfig(config: VesselConfig): NodeListenInfo {
+  const host = (config.serve?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname).trim();
+  const { nodePort } = resolveGatewayNodePorts(config, 'gateway');
+  const url = gatewayBaseUrl(
+    {
+      pid: 0,
+      started_at: new Date(0).toISOString(),
+      host,
+      port: nodePort,
+      version: '0',
+    },
+    config.serve?.tls !== undefined,
+  );
+  return { host, port: nodePort, url };
+}
+
+/**
+ * 读取任意 PID 记录指向端口的 `/health`（GET，不发送 token）。
+ * 0.49 G1：gateway 拆分模式的记录 host/port 是 **platform** 监听。
+ */
+export async function probeHttpHealth(
+  record: GatewayPidRecord,
+  timeoutMs = 800,
+  tls = false,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const response = await fetch(`${gatewayBaseUrl(record, tls)}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return undefined;
+    const body: unknown = await response.json();
+    return isRecordValue(body) ? body : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** platform `/health` 的 `role` 是 CLI 区分平台监听与 node 监听的可判定字段。 */
+export async function isPlatformRecord(record: GatewayPidRecord): Promise<boolean> {
+  const health = await probeHttpHealth(record);
+  return health?.role === 'platform';
+}
+
+/**
+ * 0.49 G1：`gateway status --rpc` 是 node 侧 alias。PID 记录在 gateway 模式下指向
+ * platform 时，把本地 target 换成 node 端口（否则 `/v1/rpc` 会落到平台 404）。
+ */
+async function adoptNodeTarget(
+  target: ControlPlaneTarget,
+  config: VesselConfig,
+): Promise<ControlPlaneTarget> {
+  if (target.record === undefined || !(await isPlatformRecord(target.record))) return target;
+  const listen = nodeListenFromConfig(config);
+  const token = resolveGatewayToken(config, process.env) ?? '';
+  await target.close().catch(() => undefined);
+  const client = createHttpRpcClient({
+    baseUrl: listen.url,
+    token,
+    subscribe: false,
+    requestTimeoutMs: 10_000,
+  });
+  return {
+    kind: 'local',
+    baseUrl: listen.url,
+    token,
+    ...(target.instance !== undefined ? { instance: target.instance } : {}),
+    record: target.record,
+    request: (method, params) => client.request(method, params),
+    close: () => client.close(),
+  };
+}
+
+/** 0.49 G1：标出由 platform 监听的实例，用于展示 platform + node 两个监听。 */
+async function platformInstances(entries: GatewayStateEntry[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (entry.record === undefined) return;
+      if (await isPlatformRecord(entry.record)) found.add(entry.instance);
+    }),
+  );
+  return found;
 }
 
 /** 选择器解析结果 */
@@ -545,6 +700,7 @@ function instanceStatusJson(
   entry: GatewayStateEntry,
   config: VesselConfig,
   now: () => number,
+  platform = false,
 ): Record<string, unknown> {
   const record = entry.record;
   const pidFile = entry.pidPath ?? entry.lockPath ?? '';
@@ -563,6 +719,7 @@ function instanceStatusJson(
       version: record.version,
       ...(record.node_id !== undefined ? { node_id: record.node_id } : {}),
       pid_file: pidFile,
+      ...(platform ? { node: nodeListenFromConfig(config) } : {}),
       ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
     };
   }
@@ -641,6 +798,8 @@ export async function gatewayStatus(
   servicePromise?.catch(() => undefined);
   const snapshot = await collectStateFor(context, options);
   const entries = snapshot.entries;
+  // 0.49 G1：`gateway start` 的记录 host/port 是 platform 监听；附带 node 监听展示。
+  const platforms = await platformInstances(entries);
 
   if (useSelection) {
     const targets = await resolveGatewayTargets(context.dataDir, selector, {
@@ -659,7 +818,9 @@ export async function gatewayStatus(
         JSON.stringify(
           {
             as_of: new Date(now()).toISOString(),
-            instances: selected.map((entry) => instanceStatusJson(entry, context.config, now)),
+            instances: selected.map((entry) =>
+              instanceStatusJson(entry, context.config, now, platforms.has(entry.instance)),
+            ),
           },
           null,
           2,
@@ -675,6 +836,9 @@ export async function gatewayStatus(
     }
     for (const entry of selected) {
       print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
+      if (platforms.has(entry.instance)) {
+        print(`  ${ui.dim(`node ${nodeListenFromConfig(context.config).url}`)}`);
+      }
       const pidFile = entry.pidPath ?? entry.lockPath;
       if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
     }
@@ -688,7 +852,19 @@ export async function gatewayStatus(
 
   if (json) {
     // R2：无选择器 JSON schema 不变，仍按 default 实例输出（多实例机器视图用 list）。
-    print(JSON.stringify(legacyStatusJson(defaultEntry, context, service, now), null, 2));
+    print(
+      JSON.stringify(
+        legacyStatusJson(
+          defaultEntry,
+          context,
+          service,
+          now,
+          defaultEntry !== undefined && platforms.has(defaultEntry.instance),
+        ),
+        null,
+        2,
+      ),
+    );
     return allLive ? 0 : 1;
   }
 
@@ -701,6 +877,9 @@ export async function gatewayStatus(
   }
   for (const entry of entries) {
     print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
+    if (platforms.has(entry.instance)) {
+      print(`  ${ui.dim(`node ${nodeListenFromConfig(context.config).url}`)}`);
+    }
     const pidFile = entry.pidPath ?? entry.lockPath;
     if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
   }
@@ -717,6 +896,7 @@ function legacyStatusJson(
   context: ResolvedContext,
   service: Awaited<ReturnType<typeof serviceStatus>>,
   now: () => number,
+  platform = false,
 ): Record<string, unknown> {
   const pidFile = entry?.pidPath ?? gatewayPidPath(context.dataDir);
   if (entry?.record !== undefined && entry.state === 'running') {
@@ -733,6 +913,7 @@ function legacyStatusJson(
       version: record.version,
       ...(record.node_id !== undefined ? { node_id: record.node_id } : {}),
       pid_file: pidFile,
+      ...(platform ? { node: nodeListenFromConfig(context.config) } : {}),
       service,
     };
   }
@@ -845,10 +1026,11 @@ async function gatewayStatusRpc(
       }
       return 1;
     }
+    const target = await adoptNodeTarget(resolved.target, resolved.config);
     try {
-      views.push(await collectRpcView(resolved.target, resolved.target.instance ?? 'default'));
+      views.push(await collectRpcView(target, target.instance ?? 'default'));
     } finally {
-      await resolved.target.close().catch(() => undefined);
+      await target.close().catch(() => undefined);
     }
   } else {
     for (const instance of instances) {
@@ -862,10 +1044,11 @@ async function gatewayStatusRpc(
         });
         continue;
       }
+      const target = await adoptNodeTarget(resolved.target, resolved.config);
       try {
-        views.push(await collectRpcView(resolved.target, instance));
+        views.push(await collectRpcView(target, instance));
       } finally {
-        await resolved.target.close().catch(() => undefined);
+        await target.close().catch(() => undefined);
       }
     }
   }
@@ -944,6 +1127,7 @@ export async function gatewayList(
   const now = options.now ?? Date.now;
   const snapshot = await collectStateFor(context, options);
   const entries = snapshot.entries;
+  const platforms = await platformInstances(entries);
 
   if (json) {
     print(
@@ -951,7 +1135,7 @@ export async function gatewayList(
         {
           as_of: new Date(now()).toISOString(),
           instances: entries.map((entry) => ({
-            ...instanceStatusJson(entry, context.config, now),
+            ...instanceStatusJson(entry, context.config, now, platforms.has(entry.instance)),
             state: entry.state,
             ...(entry.lock !== undefined
               ? {
@@ -984,6 +1168,9 @@ export async function gatewayList(
   }
   for (const entry of entries) {
     print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
+    if (platforms.has(entry.instance)) {
+      print(`  ${ui.dim(`node ${nodeListenFromConfig(context.config).url}`)}`);
+    }
     if (entry.pidPath !== undefined) print(`  ${ui.dim(entry.pidPath)}`);
     if (entry.lockPath !== undefined) print(`  ${ui.dim(`lock ${entry.lockPath}`)}`);
     if (entry.owner !== undefined) {
@@ -1038,18 +1225,22 @@ export async function reloadGatewayCommand(
     return 1;
   }
 
-  const token = resolveGatewayToken(context.config, context.env);
-  if (token === undefined) {
-    printErr(ui.err(t('gateway.noToken')));
-    return 1;
-  }
+  // 0.49 G1（PLAN §9.1 裁决 2）：`gateway reload` 兼容主命令，实际调用 Node API
+  // 现有的 `gateway.reload` RPC（node 端口 + node token）。无显式 node token 时
+  // 按 node 回环匿名语义发送无 Authorization 请求，不在此提前失败。
+  const nodeListen = nodeListenFromConfig(context.config);
+  const token = resolveGatewayToken(context.config, context.env) ?? '';
 
   let failed = false;
   for (const entry of running) {
     if (entry.record === undefined) continue;
     const prefix = running.length > 1 ? `[${entry.instance}] ` : '';
+    // gateway 拆分模式下 PID 记录指向 platform；reload 必须打到 node 端口。
+    const record = (await isPlatformRecord(entry.record))
+      ? { ...entry.record, host: nodeListen.host, port: nodeListen.port }
+      : entry.record;
     const result = await reloadGateway({
-      record: entry.record,
+      record,
       token,
       ...(options.scopes !== undefined ? { scopes: options.scopes } : {}),
       tls: context.config.serve?.tls !== undefined,
@@ -1091,6 +1282,18 @@ async function startDaemonCommand(
   const context = await resolveContext(options);
   const print = options.print ?? console.log;
   const printErr = options.printErr ?? console.error;
+  // 0.49 G1：父进程在 spawn 前拒绝 0 端口（含显式 `--port 0`），避免 daemon
+  // 只留日志。legacy 逃生口（VESSEL_LEGACY_SERVE=1）仍允许系统分配。
+  const portError =
+    context.env.VESSEL_LEGACY_SERVE === '1'
+      ? null
+      : printSplitModePortError(
+          context.config,
+          'gateway',
+          (line) => printErr(ui.err(line)),
+          options.port,
+        );
+  if (portError !== null) return portError;
   const instance = deriveGatewayInstance(options.instance, options.port);
   const logPath = options.daemonLog ?? options.logPath ?? gatewayLogPath(context.dataDir, instance);
 

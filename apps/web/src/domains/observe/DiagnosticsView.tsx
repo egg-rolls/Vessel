@@ -57,7 +57,7 @@ function mcpTone(status: McpServerState): 'success' | 'danger' | 'neutral' {
 
 export function DiagnosticsView() {
   useLocale();
-  const { client, connectionState, hasToken, epoch, gatewayUrl } = useConnection();
+  const { client, connectionState, hasToken, epoch, nodeUrl } = useConnection();
   const { current } = useNodes();
   const connected = hasToken && connectionState === 'open';
   const loadDiagnostics = useRunStore((state) => state.loadDiagnostics);
@@ -162,7 +162,7 @@ export function DiagnosticsView() {
         health={healthState}
         capabilities={capabilities}
         mcp={mcp.state}
-        gatewayUrl={gatewayUrl}
+        nodeUrl={nodeUrl}
         connected={connected}
         onRefresh={refreshAll}
       />

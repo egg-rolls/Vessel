@@ -30,7 +30,7 @@ export interface DoctorChecksSectionProps {
   health: ResourceState<HealthResponse> | undefined;
   capabilities: ResourceState<CapabilityManifest>;
   mcp: ResourceState<McpServerStatus[]>;
-  gatewayUrl: string;
+  nodeUrl: string;
   connected: boolean;
   onRefresh: () => void;
 }
@@ -41,7 +41,7 @@ export function DoctorChecksSection({
   health,
   capabilities,
   mcp,
-  gatewayUrl,
+  nodeUrl,
   connected,
   onRefresh,
 }: DoctorChecksSectionProps) {
@@ -61,7 +61,7 @@ export function DoctorChecksSection({
     configError: config.status === 'error' ? config.error : undefined,
     capabilitiesError: capabilities.status === 'error' ? capabilities.error : undefined,
     healthError: health?.status === 'error' ? health.error : undefined,
-    gatewayUrl,
+    nodeUrl,
     connected,
   });
 
