@@ -1,7 +1,7 @@
 ---
 title: 架构索引
 kind: current
-triggers: [architecture, runtime, gateway, config, event, tool, plugin, session, rpc, web, host, scheduler, member, team, federation, hub]
+triggers: [architecture, runtime, gateway, config, event, tool, plugin, session, rpc, web, host, scheduler, member, team, federation, hub, topology, company, workspace, platform, owner, guest]
 paths: [docs/architecture/**]
 ---
 
@@ -36,6 +36,7 @@ paths: [docs/architecture/**]
 | [member-team](member-team.md) | AgentService、单 Body、admit/dispatch/rotate、peer/contractor、Team 与预算 | agent, member, team, body, admit, dispatch, rotate, spawn, peer, contractor, freeze, presence, roster, budget | `packages/agent/**`, `src/agent-service-wiring.ts` |
 | [agent-structure](agent-structure.md) | 成员/临时的定义、数据模型、创建路径与转换设计 | agent, member, peer, contractor, temporary, owner, create, hire, promote, demote, from_session_id, seed | `packages/agent/**`, `apps/web/src/domains/agents/**`, `apps/web/src/domains/team/**` |
 | [federation-hub](federation-hub.md) | hub 目录控制面与跨节点 federation 数据面 | hub, federation, peer, pairing, directory, allowlist, hop | `src/hub/**`, `src/federation-*.ts`, `packages/serve/src/gateway/**` |
+| [topology](topology.md)（kind: target） | 公司拓扑：三轴（代码 / 运行时 / 状态）、四层（Platform / Workspace / Team / Agent）、插件归属、Hub 属 Platform | topology, company, workspace, platform, team, plugin scope, ownership, tenant, guest | `src/hub/**`, `src/plugin-loader.ts`, `packages/serve/src/plugin-host/**`, `plugins/**` |
 | [0.34-target](0.34-target.md)（kind: target） | 目标/迁移态：五词、附属词、分层、10 边界、C1–C4、10 裁决、4 连线、3 铁律、Stage 0–4、5 图 | target, migration, layering, agent, session, runtime, loop, run, control plane, execution unit, lease, federation | `docs/architecture/**`, `packages/core/**`, `packages/agent/**`, `src/**` |
 
 ## 主题入口
@@ -43,3 +44,4 @@ paths: [docs/architecture/**]
 - **host / scheduler / checkpoint** → [host](host.md) · [runtime-lifecycle](runtime-lifecycle.md#run) · [state](state.md#run-store)
 - **member / team / agent / body** → [member-team](member-team.md) · [gateway-rpc](gateway-rpc.md#agent-lifecycle) · [docs/agents/agent.md](../agents/agent.md)
 - **federation / hub / attention / 跨节点** → [federation-hub](federation-hub.md) · [gateway](gateway.md#remote) · [REMOTE.md](../operations/REMOTE.md)
+- **拓扑 / 公司 / 插件归属 / Hub 边界** → [topology](topology.md) · [plugins](plugins.md)

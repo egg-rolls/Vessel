@@ -18,6 +18,10 @@ Vessel 不试图做一个「更聪明的单体 Agent」。它给 Agent 一个可
 产品判断标准只有一句：**一个新节点接入后，其他节点能不能看见它、找到对的人、
 把任务递过去，并让结果回到原处。**
 
+> **拓扑口径（proposed）**：一个 Vessel 实例 = 一家公司；Team 是公司内的部门。
+> 现行实现仍用 `workspace` 作为 Team 的目录键；公司 / 部门两层的收敛见
+> [architecture/topology](architecture/topology.md) 与 [ADR-100](adr/ADR-100-node-company-topology.md)。
+
 ## 2. 设计公理
 
 1. **节点是权威。** 执行、权限、身份、数据都在节点上；Hub 不代理正文，也不替节点授权。

@@ -15,6 +15,7 @@ paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, app
 - **能力插件**（capability）：in-process，`install(host)` 往 `PluginHost` 注册 tool / provider / guardrail / hook，直接影响 run 与模型输入。
 - **体验插件**（experience）：独立子进程，只经换行分隔的 JSON-RPC / DTO 与宿主通信，贡献 pages / commands / settings / rpc / events / panels；UI 在独立 origin 的 iframe 中运行。
 - 两者同名 plugin、同一份清单与发现规则；差别只在执行位置与贡献面，不在扩展机制。贡献面由 harness（`packages/serve`、`apps/web`、CLI 装配层）收集，core 不感知。
+- **归属级**：默认 Workspace plugin（一家公司）；Platform plugin 仅服务所有公司的基础设施（Hub / registry / marketplace 后端）。Team 是使用范围，不拥有插件。见 [topology](topology.md#插件归属)。
 
 ## Manifest（`package.json.vessel`）
 

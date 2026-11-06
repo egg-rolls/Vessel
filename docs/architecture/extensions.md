@@ -36,6 +36,7 @@ interface PluginHost {
 ```
 
 这是**唯一的 plugin 加载 / 清单 / 生命周期机制**。harness 可在宿主层扩展贡献面（pages / commands / settings / rpc / events / panels），不属于第二套扩展机制（[ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。tenant 插件由装配层经 `installPluginsIntoHost()` 在共享 `PluginHost` 上安装一次（install 失败即构造失败，fail-fast），per-session EU 复用该 host；直接嵌入方仍可在 `ExecutionUnitOptions.plugins` 里传插件，由 `ExecutionUnit.create()` 逐个 `install`。也可直接注入 `pluginHost?: PluginHost` 替换实现。
+> 归属级（Workspace / Platform）见 [topology](topology.md#插件归属)；本段描述的是现态 tenant 安装路径。
 
 <a id="extension-model"></a>
 
