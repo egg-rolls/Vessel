@@ -45,6 +45,8 @@ const LANG_MESSAGE = 'vessel.lang';
 const RPC_MESSAGE = 'vessel.plugin.rpc';
 const RPC_RESULT = 'vessel.plugin.rpc.result';
 const REFRESH_MESSAGE = 'vessel.plugin.refresh';
+const CATALOG_MESSAGE = 'vessel.catalog';
+const CATALOG_REQUEST_MESSAGE = 'vessel.catalog.request';
 
 function hostWindow(): HostWindow | undefined {
   return typeof window === 'undefined' ? undefined : (window as unknown as HostWindow);
@@ -129,6 +131,32 @@ export function watchHostContext(onChange?: (context: HostContext) => void): () 
     onChange?.(current);
   };
   scope.addEventListener('message', onMessage);
+  return () => scope.removeEventListener?.('message', onMessage);
+}
+
+/**
+ * Host → plugin plugin-catalog push (`vessel.catalog`). The host sends the
+ * list after the iframe loads and again after `plugin.changed`. Only the
+ * `items` array is validated here; the plugin owns the item shape.
+ *
+ * CONTRACT-0.47 §2 first-frame handshake: the host's onLoad push can race
+ * ahead of React's `useEffect`, so once the listener is live we ask the host
+ * for one more push. The host accepts the request only from the current
+ * iframe's `contentWindow`.
+ * Returns a cleanup function.
+ */
+export function watchHostCatalog<T = unknown>(listener: (items: readonly T[]) => void): () => void {
+  const scope = hostWindow();
+  if (!scope?.addEventListener) return () => {};
+  const onMessage = (event: HostMessageEvent) => {
+    const data = event.data;
+    if (data === null || typeof data !== 'object') return;
+    const message = data as Record<string, unknown>;
+    if (message.type !== CATALOG_MESSAGE || !Array.isArray(message.items)) return;
+    listener(message.items as readonly T[]);
+  };
+  scope.addEventListener('message', onMessage);
+  scope.parent?.postMessage?.({ type: CATALOG_REQUEST_MESSAGE }, '*');
   return () => scope.removeEventListener?.('message', onMessage);
 }
 

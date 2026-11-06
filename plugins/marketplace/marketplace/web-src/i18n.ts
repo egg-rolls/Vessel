@@ -6,7 +6,7 @@
  * `Record<MessageKey, string>`, so a missing or extra key is a typecheck error.
  */
 
-import type { PluginScope } from './types';
+import type { CatalogScope } from './types';
 
 export type Lang = 'en' | 'zh-CN';
 
@@ -24,7 +24,7 @@ const EN = {
   'browse.toolbar': 'Marketplace controls',
   'installed.title': 'My plugins',
   'installed.subtitle':
-    'Plugin packages on this machine. Built-ins need a vessel manifest; user/project installs are discovered from their directories. Built-ins cannot be removed or updated, but can still be enabled or disabled.',
+    'Plugin packages on this machine, as reported by the gateway catalog. Built-ins cannot be removed or updated, but can still be enabled or disabled.',
   'installed.toolbar': 'Installed plugin controls',
   'updates.title': 'Updates',
   'updates.subtitle': 'Checks the configured registry for newer versions.',
@@ -57,9 +57,13 @@ const EN = {
   'installed.empty': 'No plugins installed',
   'installed.emptyDetail':
     'Built-in plugins and user/project installs are listed here. Capability plugins without a vessel manifest are not shown.',
+  'catalog.unavailable': 'Plugin catalog unavailable',
+  'catalog.unavailableDetail':
+    'The gateway did not send a plugin catalog. This page does not scan local packages; update the gateway or restart it.',
   'scope.builtin': 'Built-in',
   'scope.user': 'User',
   'scope.project': 'Project',
+  'scope.node_modules': 'Node modules',
   'updates.none': 'Everything is up to date',
   'updates.noneDetail': 'No installed plugin has a newer version in the registry.',
   'updates.error': 'Could not check for updates',
@@ -74,6 +78,7 @@ const EN = {
   'th.actions': 'Actions',
   'badge.enabled': 'enabled',
   'badge.disabled': 'disabled',
+  'badge.restartRequired': 'restart to apply',
   'badge.installed': 'installed',
   'badge.latest': 'latest',
   'section.versions': 'Versions',
@@ -150,8 +155,7 @@ const ZH: Record<MessageKey, string> = {
   'browse.subtitle': '从静态插件源安装插件，每个包都会进行校验和校验。',
   'browse.toolbar': '插件市场控件',
   'installed.title': '我的插件',
-  'installed.subtitle':
-    '本机插件包：内置包需带 vessel 清单；用户 / 项目安装包按目录发现。内置包不可移除或更新，仍可启停。',
+  'installed.subtitle': '本机插件包，来自 gateway 推送的插件目录。内置包不可移除或更新，仍可启停。',
   'installed.toolbar': '已安装插件控件',
   'updates.title': '更新',
   'updates.subtitle': '检查已配置的插件源是否有新版本。',
@@ -184,9 +188,13 @@ const ZH: Record<MessageKey, string> = {
   'installed.empty': '尚未安装插件',
   'installed.emptyDetail':
     '内置插件与用户 / 项目安装的插件都会列在这里；没有 vessel 清单的能力插件不在本列表。',
+  'catalog.unavailable': '插件目录不可用',
+  'catalog.unavailableDetail':
+    'gateway 未推送插件目录。本页不会回退扫描本机插件包；请升级或重启 gateway。',
   'scope.builtin': '内置',
   'scope.user': '用户',
   'scope.project': '项目',
+  'scope.node_modules': 'node_modules',
   'updates.none': '全部为最新',
   'updates.noneDetail': '插件源中没有已安装插件的新版本。',
   'updates.error': '无法检查更新',
@@ -201,6 +209,7 @@ const ZH: Record<MessageKey, string> = {
   'th.actions': '操作',
   'badge.enabled': '已启用',
   'badge.disabled': '已停用',
+  'badge.restartRequired': '重启后生效',
   'badge.installed': '已安装',
   'badge.latest': '最新',
   'section.versions': '版本',
@@ -272,7 +281,8 @@ export const SCOPE_MESSAGE_KEY = {
   builtin: 'scope.builtin',
   user: 'scope.user',
   project: 'scope.project',
-} as const satisfies Record<PluginScope, MessageKey>;
+  node_modules: 'scope.node_modules',
+} as const satisfies Record<CatalogScope, MessageKey>;
 
 /** Child job phases are wire strings; unknown phases fall back to the raw value. */
 export const PHASE_MESSAGE_KEY: Record<string, MessageKey> = {

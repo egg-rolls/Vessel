@@ -1,8 +1,8 @@
 import { Badge, Button, DataTable, type DataTableColumn } from '@vessel-agent/plugin-ui';
 import { SCOPE_MESSAGE_KEY, type Translator } from '../i18n';
-import type { InstalledItem } from '../types';
+import type { CatalogRow } from '../types';
 
-/** Shared table for "My plugins" and "Updates". */
+/** Shared table for "My plugins" and "Updates"; rows come from the catalog. */
 export function InstalledTable({
   items,
   t,
@@ -12,16 +12,16 @@ export function InstalledTable({
   onUpdate,
   onRemove,
 }: {
-  items: readonly InstalledItem[];
+  items: readonly CatalogRow[];
   t: Translator;
   busy: boolean;
   /** Row whose `plugins[].enabled` write is in flight. */
   pendingId: string | null;
-  onToggle: (item: InstalledItem) => void;
-  onUpdate: (item: InstalledItem) => void;
-  onRemove: (item: InstalledItem) => void;
+  onToggle: (item: CatalogRow) => void;
+  onUpdate: (item: CatalogRow) => void;
+  onRemove: (item: CatalogRow) => void;
 }) {
-  const columns: DataTableColumn<InstalledItem>[] = [
+  const columns: DataTableColumn<CatalogRow>[] = [
     {
       key: 'plugin',
       header: t('th.plugin'),
@@ -76,12 +76,18 @@ export function InstalledTable({
       cellClassName: 'text-right',
       cell: (item) => {
         const pending = pendingId === item.id;
+        // Built-ins ship with the host; they are never installed or updated by
+        // the marketplace (CONTRACT-0.47 §4).
+        const readOnly = item.scope === 'builtin' || item.kind === 'builtin';
         return (
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {item.restartRequired ? (
+              <span className="text-xs text-muted">{t('badge.restartRequired')}</span>
+            ) : null}
             <Button
               size="small"
               variant={item.enabled ? 'plain' : 'primary'}
-              disabled={busy || pending}
+              disabled={busy || pending || !item.supportsToggle}
               onClick={() => onToggle(item)}
             >
               {pending
@@ -90,7 +96,7 @@ export function InstalledTable({
                   ? t('button.disable')
                   : t('button.enable')}
             </Button>
-            {item.scope === 'builtin' ? null : (
+            {readOnly ? null : (
               <>
                 {item.update_available === true ? (
                   <Button

@@ -1,55 +1,43 @@
 import { Button, TableToolbar } from '@vessel-agent/plugin-ui';
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { describeError, type MarketplaceApi } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { InstalledTable } from '../components/InstalledTable';
 import { RegistryBanners } from '../components/RegistryBanners';
 import { RegistryErrorNote } from '../components/RegistrySetup';
-import { Banner, EmptyState, ErrorState, LoadingState } from '../components/States';
+import { Banner, EmptyState } from '../components/States';
 import { SCOPE_MESSAGE_KEY, type Translator } from '../i18n';
-import type { InstalledItem, InstalledResult, StartJobResult } from '../types';
+import type { CatalogRow, RegistryMeta, StartJobResult } from '../types';
 
 export function InstalledView({
   api,
   t,
-  refreshToken,
   busy,
   onJob,
+  catalogAvailable,
+  rows,
+  registry,
+  registryError,
+  onRefresh,
   onChanged,
 }: {
   api: MarketplaceApi;
   t: Translator;
-  refreshToken: number;
   busy: boolean;
   onJob: (label: string, start: () => Promise<StartJobResult>) => Promise<void>;
+  catalogAvailable: boolean;
+  rows: readonly CatalogRow[];
+  registry?: RegistryMeta;
+  registryError?: string;
+  onRefresh: () => void;
   onChanged: () => void;
 }) {
-  const [data, setData] = useState<InstalledResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [pendingRemove, setPendingRemove] = useState<InstalledItem | null>(null);
-  const [pendingToggle, setPendingToggle] = useState<InstalledItem | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<CatalogRow | null>(null);
+  const [pendingToggle, setPendingToggle] = useState<CatalogRow | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setData(await api.installed());
-    } catch (caught) {
-      setError(describeError(caught, t));
-    } finally {
-      setLoading(false);
-    }
-  }, [api, t]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `refreshToken` is an explicit host-refresh trigger, not a value the effect reads.
-  useEffect(() => {
-    void load();
-  }, [load, refreshToken]);
-
-  const removeItem = async (item: InstalledItem) => {
+  const removeItem = async (item: CatalogRow) => {
     setActionError(null);
     try {
       await api.remove(item.id);
@@ -59,7 +47,7 @@ export function InstalledView({
     }
   };
 
-  const applyToggle = async (item: InstalledItem) => {
+  const applyToggle = async (item: CatalogRow) => {
     setActionError(null);
     setTogglingId(item.id);
     try {
@@ -73,7 +61,7 @@ export function InstalledView({
   };
 
   // Disabling the marketplace itself unloads this page; confirm first.
-  const toggleItem = (item: InstalledItem) => {
+  const toggleItem = (item: CatalogRow) => {
     if (item.id === 'marketplace' && item.enabled) {
       setPendingToggle(item);
       return;
@@ -81,31 +69,23 @@ export function InstalledView({
     void applyToggle(item);
   };
 
-  const items = data?.items ?? [];
-
   return (
     <div className="flex flex-col gap-3">
       <TableToolbar label={t('installed.toolbar')} className="justify-end">
-        <Button onClick={() => void load()} disabled={loading}>
-          {t('button.refresh')}
-        </Button>
+        <Button onClick={onRefresh}>{t('button.refresh')}</Button>
       </TableToolbar>
 
-      <RegistryBanners registry={data?.registry} t={t} />
-      {data?.registry_error !== undefined ? (
-        <RegistryErrorNote message={data.registry_error} t={t} />
-      ) : null}
+      <RegistryBanners registry={registry} t={t} />
+      {registryError !== undefined ? <RegistryErrorNote message={registryError} t={t} /> : null}
       {actionError !== null ? <Banner tone="danger">{actionError}</Banner> : null}
 
-      {loading ? (
-        <LoadingState label={t('state.loading')} />
-      ) : error !== null ? (
-        <ErrorState message={error} retryLabel={t('button.retry')} onRetry={() => void load()} />
-      ) : items.length === 0 ? (
+      {!catalogAvailable ? (
+        <EmptyState title={t('catalog.unavailable')} detail={t('catalog.unavailableDetail')} />
+      ) : rows.length === 0 ? (
         <EmptyState title={t('installed.empty')} detail={t('installed.emptyDetail')} />
       ) : (
         <InstalledTable
-          items={items}
+          items={rows}
           t={t}
           busy={busy}
           pendingId={togglingId}

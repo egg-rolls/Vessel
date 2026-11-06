@@ -22,5 +22,5 @@
       "@vessel-agent/plugin-ui/*": ["../../../packages/plugin-ui/src/*"]
     }
   },
-  "include": ["web-src"]
+  "include": ["web-src", "test/ui-probe.tsx"]
 }

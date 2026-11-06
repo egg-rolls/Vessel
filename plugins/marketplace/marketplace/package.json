@@ -110,8 +110,8 @@
           "description": "Install the newest compatible version"
         },
         {
-          "name": "installed",
-          "description": "List installed plugins and updates"
+          "name": "updates",
+          "description": "Look up registry versions for catalog plugin ids"
         },
         {
           "name": "job",

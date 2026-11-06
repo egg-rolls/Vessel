@@ -9,7 +9,8 @@ import {
   Select,
   TableToolbar,
 } from '@vessel-agent/plugin-ui';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { compareVersionStrings } from '../../src/semver.js';
 import {
   describeError,
   type MarketplaceApi,
@@ -24,6 +25,7 @@ import { RegistrySetup, RegistryUnreachable } from '../components/RegistrySetup'
 import { Banner, EmptyState, ErrorState, LoadingState } from '../components/States';
 import { SCOPE_MESSAGE_KEY, type Translator } from '../i18n';
 import type {
+  CatalogItem,
   DetailResult,
   RegistryMeta,
   RegistryPermissions,
@@ -100,12 +102,14 @@ export function MarketplaceView({
   refreshToken,
   busy,
   onJob,
+  catalog,
 }: {
   api: MarketplaceApi;
   t: Translator;
   refreshToken: number;
   busy: boolean;
   onJob: (label: string, start: () => Promise<StartJobResult>) => Promise<void>;
+  catalog: readonly CatalogItem[] | null;
 }) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
@@ -124,6 +128,13 @@ export function MarketplaceView({
 
   const [pending, setPending] = useState<PendingInstall | null>(null);
   const requestRef = useRef(0);
+
+  // The child no longer scans install dirs; installed state comes from the
+  // host catalog push (CONTRACT-0.47 §4).
+  const installedById = useMemo(
+    () => new Map((catalog ?? []).map((item) => [item.id, item])),
+    [catalog],
+  );
 
   const load = useCallback(async () => {
     const request = requestRef.current + 1;
@@ -277,52 +288,57 @@ export function MarketplaceView({
         />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {(data?.items ?? []).map((item) => (
-            <article
-              key={item.id}
-              className="flex min-w-0 flex-col gap-2 rounded-md bg-raised px-4 py-3 shadow-elev-1"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <h3 className="text-md font-semibold text-ink wrap-anywhere">
-                    {item.name || item.id}
-                  </h3>
-                  <p className="font-mono text-xs text-muted">{item.id}</p>
+          {(data?.items ?? []).map((item) => {
+            const installed = installedById.get(item.id);
+            const installedVersion = installed?.version;
+            const updateAvailable =
+              installedVersion !== undefined &&
+              compareVersionStrings(item.latest, installedVersion) > 0;
+            return (
+              <article
+                key={item.id}
+                className="flex min-w-0 flex-col gap-2 rounded-md bg-raised px-4 py-3 shadow-elev-1"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h3 className="text-md font-semibold text-ink wrap-anywhere">
+                      {item.name || item.id}
+                    </h3>
+                    <p className="font-mono text-xs text-muted">{item.id}</p>
+                  </div>
+                  {installedVersion !== undefined ? (
+                    <Badge tone={updateAvailable ? 'warn' : 'success'}>
+                      {t('badge.installed')} {installedVersion}
+                    </Badge>
+                  ) : (
+                    <Badge>{item.latest}</Badge>
+                  )}
                 </div>
-                {item.installed_version !== undefined ? (
-                  <Badge tone={item.update_available === true ? 'warn' : 'success'}>
-                    {t('badge.installed')} {item.installed_version}
-                  </Badge>
-                ) : (
-                  <Badge>{item.latest}</Badge>
-                )}
-              </div>
-              <p className="text-md text-muted wrap-anywhere">
-                {item.summary ?? item.description ?? ''}
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {item.category ? <Badge>{item.category}</Badge> : null}
-                {(item.tags ?? []).slice(0, 5).map((tag) => (
-                  <Badge key={tag}>{tag}</Badge>
-                ))}
-              </div>
-              <div className="mt-auto flex flex-wrap justify-end gap-2 pt-1">
-                <Button onClick={() => setDetailId(item.id)}>{t('button.details')}</Button>
-                <Button variant="primary" disabled={busy} onClick={() => void quickInstall(item)}>
-                  {item.installed_version !== undefined
-                    ? t('button.reinstall')
-                    : t('button.install')}
-                </Button>
-              </div>
-            </article>
-          ))}
+                <p className="text-md text-muted wrap-anywhere">
+                  {item.summary ?? item.description ?? ''}
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {item.category ? <Badge>{item.category}</Badge> : null}
+                  {(item.tags ?? []).slice(0, 5).map((tag) => (
+                    <Badge key={tag}>{tag}</Badge>
+                  ))}
+                </div>
+                <div className="mt-auto flex flex-wrap justify-end gap-2 pt-1">
+                  <Button onClick={() => setDetailId(item.id)}>{t('button.details')}</Button>
+                  <Button variant="primary" disabled={busy} onClick={() => void quickInstall(item)}>
+                    {installedVersion !== undefined ? t('button.reinstall') : t('button.install')}
+                  </Button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
     </div>
   );
 
   const versions = detail !== null ? [...detail.plugin.versions].reverse() : [];
-  const installedVersion = detail?.installed;
+  const detailInstalled = detail !== null ? installedById.get(detail.plugin.id) : undefined;
 
   const detailView = (
     <div className="flex flex-col gap-3">
@@ -370,13 +386,13 @@ export function MarketplaceView({
             ) : null}
           </div>
 
-          {installedVersion !== undefined ? (
-            <Banner tone={installedVersion.enabled ? 'success' : 'warn'}>
+          {detailInstalled !== undefined ? (
+            <Banner tone={detailInstalled.enabled ? 'success' : 'warn'}>
               {t(
-                installedVersion.enabled ? 'disclosure.installed' : 'disclosure.installedDisabled',
+                detailInstalled.enabled ? 'disclosure.installed' : 'disclosure.installedDisabled',
                 {
-                  version: installedVersion.version,
-                  scope: t(SCOPE_MESSAGE_KEY[installedVersion.scope]),
+                  version: detailInstalled.version,
+                  scope: t(SCOPE_MESSAGE_KEY[detailInstalled.scope]),
                 },
               )}
             </Banner>
@@ -395,7 +411,7 @@ export function MarketplaceView({
                       {version.version === detail.plugin.latest ? (
                         <Badge tone="success">{t('badge.latest')}</Badge>
                       ) : null}
-                      {version.version === installedVersion?.version ? (
+                      {version.version === detailInstalled?.version ? (
                         <Badge>{t('badge.installed')}</Badge>
                       ) : null}
                     </div>

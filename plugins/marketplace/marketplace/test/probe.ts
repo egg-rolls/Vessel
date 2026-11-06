@@ -7,7 +7,7 @@
  *   oversize download/extract, existing-id backup + rollback, remove, config
  *   write (existing list / materialize / skip), update, cache TTL, and a full
  *   child-process RPC round trip (hello → activate → search → install →
- *   installed → remove → deactivate).
+ *   updates → remove → deactivate).
  *
  * Run: bun run plugins/marketplace/test/probe.ts  (from the repo root)
  */
@@ -22,9 +22,8 @@ import { MarketplaceError } from '../src/errors.js';
 import {
   configureRegistry,
   type InstallContext,
-  installedPlugins,
   installPlugin,
-  listInstalled,
+  pluginUpdates,
   removePlugin,
   updatePlugin,
 } from '../src/install.js';
@@ -716,11 +715,6 @@ for (const [name, mutate] of [
     'project scope: installs under <project>/.vessel/plugins',
     await exists(join(projectRoot, '.vessel', 'plugins', 'probe-plugin', 'package.json')),
   );
-  const listed = await listInstalled(context);
-  check(
-    'project scope: listing reports project',
-    listed.find((entry) => entry.id === 'probe-plugin')?.scope === 'project',
-  );
 }
 {
   const context = contextFor('project-no-root', { installScope: 'project' });
@@ -873,66 +867,32 @@ for (const [name, mutate] of [
   check('update: disk version is 1.1.0', version === '1.1.0');
   const again = await updatePlugin(context, 'probe-plugin');
   check('update: idempotent when current', again.updated === false);
-  const listed = await listInstalled(context);
-  const item = listed.find((entry) => entry.id === 'probe-plugin');
-  check('installed: lists the plugin', item?.version === '1.1.0' && item?.scope === 'user');
+  const lookup = (await pluginUpdates(context, ['probe-plugin'])) as {
+    items?: Array<{ id?: string; latest?: string }>;
+    registry?: unknown;
+  };
+  const item = lookup.items?.find((entry) => entry.id === 'probe-plugin');
+  check('updates: reports the registry latest', item?.latest === '1.1.0', JSON.stringify(item));
+  check('updates: registry metadata returned', typeof lookup.registry === 'object');
 }
 
 // ── built-in listing (read-only) ────────────────────────────────────────────
 
 {
+  // Built-ins are no longer discovered in the child process; the host catalog
+  // marks them readonly for the UI. The RPC still refuses a non-install id.
   const repo = join(tempRoot, 'builtin-list', 'repo');
-  const builtinDir = join(repo, 'plugins', 'demo');
-  await mkdir(builtinDir, { recursive: true });
-  await writeFile(
-    join(builtinDir, 'package.json'),
-    JSON.stringify({
-      name: '@probe/demo',
-      version: '9.9.9',
-      vessel: {
-        id: 'demo',
-        name: 'Demo builtin',
-        version: '0.2.0',
-        engines: { vessel: '>=0.33.0 <0.45.0' },
-        entry: 'src/index.ts',
-      },
-    }),
-    'utf-8',
-  );
+  await mkdir(join(repo, 'plugins', 'demo'), { recursive: true });
   const context = contextFor('builtin-list', { projectRoot: repo });
-  const listed = await listInstalled(context);
-  const demo = listed.find((entry) => entry.id === 'demo');
-  check('builtin: listed from hostCwd plugins/demo', demo !== undefined);
-  check('builtin: scope is builtin', demo?.scope === 'builtin');
-  check('builtin: enabled by default', demo?.enabled === true);
-  check('builtin: version comes from the vessel manifest', demo?.version === '0.2.0');
-  check('builtin: path is the source directory', demo?.path === builtinDir);
   await expectCode(
     'builtin: remove is read-only',
     () => removePlugin(context, 'demo'),
-    'builtin_readonly',
+    'not_installed',
   );
   await expectCode(
     'builtin: update is read-only',
     () => updatePlugin(context, 'demo'),
-    'builtin_readonly',
-  );
-
-  // An installed copy of the same id wins over the built-in row.
-  const userDir = join(context.userPluginsDir, 'demo');
-  await mkdir(userDir, { recursive: true });
-  await writeFile(
-    join(userDir, 'package.json'),
-    JSON.stringify({
-      name: '@probe/demo-user',
-      vessel: { id: 'demo', name: 'User demo', version: '1.0.0' },
-    }),
-    'utf-8',
-  );
-  const shadowed = await listInstalled(context);
-  check(
-    'builtin: installed copy wins over builtin',
-    shadowed.find((e) => e.id === 'demo')?.scope === 'user',
+    'not_installed',
   );
 }
 
@@ -1038,20 +998,17 @@ for (const [name, mutate] of [
 {
   const context = contextFor('cache', { registryPath: '/index-cache.json' });
   const before = indexHits.get('/index-cache.json') ?? 0;
-  const first = await installedPlugins(context);
-  const second = await installedPlugins(context);
+  const first = (await pluginUpdates(context, ['probe-plugin'])) as {
+    items?: Array<{ id?: string; latest?: string }>;
+  };
+  const second = (await pluginUpdates(context, ['probe-plugin'])) as { registry?: unknown };
   const afterCached = indexHits.get('/index-cache.json') ?? 0;
   check('cache: second call uses the cache', afterCached - before === 1);
-  const installedItems = Array.isArray(first.items)
-    ? (first.items as Array<{ scope?: string }>).filter((item) => item.scope !== 'builtin')
-    : [];
-  check('cache: no installed items yet', installedItems.length === 0);
-  check('cache: registry metadata returned', typeof second.registry === 'object');
-  await installedPlugins(context, { force: true });
   check(
-    'cache: force bypasses the cache',
-    (indexHits.get('/index-cache.json') ?? 0) - before === 2,
+    'cache: updates returns the registry latest',
+    first.items?.find((item) => item.id === 'probe-plugin')?.latest === '1.1.0',
   );
+  check('cache: registry metadata returned', typeof second.registry === 'object');
 }
 
 // ── tabbed page entry ───────────────────────────────────────────────────────
@@ -1096,9 +1053,10 @@ for (const [name, mutate] of [
         'install',
         'remove',
         'update',
-        'installed',
+        'updates',
         'job',
         'jobs',
+        'set-enabled',
         'configure',
       ]),
   );
@@ -1146,7 +1104,7 @@ for (const [name, mutate] of [
   if (jsName !== undefined) {
     const js = await readFile(join(webDir, 'assets', jsName), 'utf-8');
     // Methods the tabbed page actually drives; `jobs` is exercised via child RPC.
-    for (const method of ['search', 'detail', 'install', 'remove', 'update', 'installed', 'job']) {
+    for (const method of ['search', 'detail', 'install', 'remove', 'update', 'updates', 'job']) {
       check(`page: bundle calls rpc ${method}`, js.includes(`"${method}"`));
     }
     check(
@@ -1435,14 +1393,16 @@ async function removePluginVia(client: ChildClient, id: string): Promise<void> {
       entries.map((entryValue) => entryValue.name).join(','),
     );
 
-    const installed = (await client.request('plugin.rpc', { name: 'installed', params: {} })) as {
-      items?: Array<{ id?: string; version?: string; update_available?: boolean }>;
+    const updates = (await client.request('plugin.rpc', {
+      name: 'updates',
+      params: { ids: ['probe-plugin'] },
+    })) as {
+      items?: Array<{ id?: string; latest?: string }>;
+      registry?: unknown;
     };
-    const item = installed.items?.find((entryValue) => entryValue.id === 'probe-plugin');
-    check(
-      'child: installed reports update',
-      item?.version === '1.0.0' && item?.update_available === true,
-    );
+    const item = updates.items?.find((entryValue) => entryValue.id === 'probe-plugin');
+    check('child: updates reports the registry latest', item?.latest === '1.1.0');
+    check('child: updates returns registry metadata', typeof updates.registry === 'object');
 
     const updateStarted = (await client.request('plugin.rpc', {
       name: 'update',

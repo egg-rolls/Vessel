@@ -18,25 +18,14 @@
  */
 
 import { createHash } from 'node:crypto';
-import {
-  cp,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import {
   type ConfigRemoveResult,
   type ConfigUpdateResult,
   discoverPluginNames,
-  readConfigRoot,
   removePluginConfig,
   setPluginConfigValue,
   upsertPluginConfig,
@@ -55,7 +44,7 @@ import {
   summarizePlugin,
 } from './registry.js';
 import { compareVersionStrings, satisfiesVersionRange } from './semver.js';
-import type { InstallScope, MarketplaceSettings, PluginScope } from './settings.js';
+import type { InstallScope, MarketplaceSettings } from './settings.js';
 import {
   DEFAULT_ARCHIVE_LIMITS,
   extractEntries,
@@ -170,21 +159,6 @@ export interface SearchParams {
   category?: string;
 }
 
-interface InstalledVersion {
-  id: string;
-  version: string;
-  scope: PluginScope;
-  path: string;
-  enabled: boolean;
-}
-
-export interface InstalledItem extends InstalledVersion {
-  name: string;
-  latest?: string;
-  update_available?: boolean;
-  engines?: { vessel?: string };
-}
-
 export async function searchPlugins(
   context: InstallContext,
   params: SearchParams,
@@ -192,7 +166,6 @@ export async function searchPlugins(
   const query = parseOptionalText(params.query, 'query');
   const category = parseOptionalText(params.category, 'category');
   const registry = await snapshot(context);
-  const installed = await installedVersionMap(context);
 
   const needle = query?.toLowerCase();
   const items = registry.index.plugins
@@ -213,19 +186,7 @@ export async function searchPlugins(
         .toLowerCase();
       return haystack.includes(needle);
     })
-    .map((plugin) => {
-      const current = installed.get(plugin.id);
-      const newest = newestVersion(plugin, context.settings.allowPrerelease);
-      return {
-        ...summarizePlugin(plugin),
-        ...(current !== undefined ? { installed_version: current.version } : {}),
-        ...(newest !== undefined &&
-        current !== undefined &&
-        compareVersionStrings(newest.version, current.version) > 0
-          ? { update_available: true }
-          : {}),
-      };
-    })
+    .map((plugin) => summarizePlugin(plugin))
     .sort((left, right) => left.name.localeCompare(right.name));
 
   const categories = [
@@ -245,291 +206,62 @@ export async function pluginDetail(
   if (plugin === undefined) {
     throw new MarketplaceError('plugin_not_found', `plugin "${id}" is not in the registry`);
   }
-  const installed = (await installedVersionMap(context)).get(id);
   return {
     registry: registryMeta(registry),
     plugin: { ...plugin, versions: plugin.versions.map((version) => ({ ...version })) },
-    ...(installed !== undefined ? { installed } : {}),
   };
 }
 
-async function readPackageSummary(
-  dir: string,
-): Promise<{ id: string; name: string; version: string; engines?: { vessel?: string } } | null> {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(await readFile(join(dir, 'package.json'), 'utf-8'));
-  } catch {
-    return null;
-  }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
-  const pkg = raw as Record<string, unknown>;
-  const vessel =
-    typeof pkg.vessel === 'object' && pkg.vessel !== null && !Array.isArray(pkg.vessel)
-      ? (pkg.vessel as Record<string, unknown>)
-      : undefined;
-  const id =
-    typeof vessel?.id === 'string' && vessel.id !== ''
-      ? vessel.id
-      : typeof pkg.name === 'string'
-        ? pkg.name.replace(/^@[^/]+\//, '')
-        : undefined;
-  const version =
-    typeof vessel?.version === 'string'
-      ? vessel.version
-      : typeof pkg.version === 'string'
-        ? pkg.version
-        : '0.0.0';
-  if (id === undefined || id === '') return null;
-  const name = typeof vessel?.name === 'string' && vessel.name !== '' ? vessel.name : id;
-  const engines =
-    typeof vessel?.engines === 'object' && vessel.engines !== null
-      ? (vessel.engines as { vessel?: string })
-      : undefined;
-  return { id, name, version, ...(engines !== undefined ? { engines } : {}) };
-}
-
-type PackageSummary = {
-  id: string;
-  name: string;
-  version: string;
-  engines?: { vessel?: string };
-};
-
-/** Built-ins must carry a vessel manifest; a plain package.json is not one. */
-async function readVesselSummary(dir: string): Promise<PackageSummary | null> {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(await readFile(join(dir, 'package.json'), 'utf-8'));
-  } catch {
-    return null;
-  }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
-  const pkg = raw as Record<string, unknown>;
-  const vessel =
-    typeof pkg.vessel === 'object' && pkg.vessel !== null && !Array.isArray(pkg.vessel)
-      ? (pkg.vessel as Record<string, unknown>)
-      : undefined;
-  if (vessel === undefined) return null;
-  const id = typeof vessel.id === 'string' && vessel.id !== '' ? vessel.id : undefined;
-  const version =
-    typeof vessel.version === 'string' && vessel.version !== '' ? vessel.version : undefined;
-  if (id === undefined || version === undefined) return null;
-  const name =
-    typeof vessel.name === 'string' && vessel.name !== ''
-      ? vessel.name
-      : typeof pkg.name === 'string' && pkg.name !== ''
-        ? pkg.name
-        : id;
-  const engines =
-    typeof vessel.engines === 'object' && vessel.engines !== null
-      ? (vessel.engines as { vessel?: string })
-      : undefined;
-  return { id, name, version, ...(engines !== undefined ? { engines } : {}) };
-}
-
-async function pluginDirs(root: string): Promise<string[]> {
-  try {
-    const entries = await readdir(root, { withFileTypes: true });
-    return entries
-      .filter(
-        (entry) =>
-          entry.isDirectory() &&
-          !entry.name.startsWith('.') &&
-          !entry.name.includes('.bak-') &&
-          !entry.name.includes('.removing-'),
-      )
-      .map((entry) => join(root, entry.name));
-  } catch {
-    return [];
-  }
-}
-
-function configuredEntry(
-  configured: unknown[] | undefined,
-  name: string,
-): Record<string, unknown> | undefined {
-  return configured?.find(
-    (candidate) =>
-      typeof candidate === 'object' &&
-      candidate !== null &&
-      (candidate as Record<string, unknown>).name === name,
-  ) as Record<string, unknown> | undefined;
-}
-
-async function readConfiguredPlugins(context: InstallContext): Promise<unknown[] | undefined> {
-  const config = await readConfigRoot(context.configPath).catch(
-    (): Record<string, unknown> => ({}),
-  );
-  return Array.isArray(config.plugins) ? config.plugins : undefined;
-}
-
-function installedRoots(context: InstallContext): Array<{ root: string; scope: InstallScope }> {
-  const roots: Array<{ root: string; scope: InstallScope }> = [];
-  if (context.projectDir !== undefined) {
-    roots.push({ root: join(context.projectDir, '.vessel', 'plugins'), scope: 'project' });
-  }
-  roots.push({ root: context.userPluginsDir, scope: 'user' });
-  return roots;
-}
-
 /**
- * `<repo>/plugins` when this plugin runs from the Vessel source tree
- * (`<repo>/plugins/marketplace/marketplace/src/install.ts`). Undefined for a
- * marketplace installed under `~/.vessel/plugins`, whose `../../..` is not a
- * plugins root.
+ * Read one existing install target's version (used by update to decide whether
+ * a newer version exists). The target path is derived from the id; this is not
+ * a directory scan.
  */
-async function inferBuiltInPluginsRoot(): Promise<string | undefined> {
-  const candidate = resolve(import.meta.dir, '../../..');
-  if (basename(candidate) !== 'plugins') return undefined;
+async function readInstalledVersion(dir: string): Promise<string | undefined> {
   try {
-    const raw: unknown = JSON.parse(
-      await readFile(join(dirname(candidate), 'package.json'), 'utf-8'),
-    );
+    const raw: unknown = JSON.parse(await readFile(join(dir, 'package.json'), 'utf-8'));
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
-    return (raw as { name?: unknown }).name === 'vessel-agent' ? candidate : undefined;
+    const pkg = raw as Record<string, unknown>;
+    const vessel =
+      typeof pkg.vessel === 'object' && pkg.vessel !== null && !Array.isArray(pkg.vessel)
+        ? (pkg.vessel as Record<string, unknown>)
+        : undefined;
+    if (typeof vessel?.version === 'string' && vessel.version !== '') return vessel.version;
+    return typeof pkg.version === 'string' && pkg.version !== '' ? pkg.version : undefined;
   } catch {
     return undefined;
   }
 }
 
 /**
- * Read-only source plugins: `<hostCwd>/plugins` first, then the inferred repo
- * root. Both layouts are accepted (`<name>/package.json` and
- * `<category>/<name>/package.json`), matching the loader's `auto` scan.
+ * Registry-only update check for the ids the host pushed in `vessel.catalog`.
+ * Never reads plugin directories. `update_available` needs the installed
+ * version, which is part of the catalog, so the caller derives it from
+ * `latest`; the field stays optional here for forward compatibility.
  */
-async function builtinPluginPackages(
+export async function pluginUpdates(
   context: InstallContext,
-): Promise<Array<{ dir: string; summary: PackageSummary }>> {
-  const roots: string[] = [];
-  const addRoot = (value: string) => {
-    const resolved = resolve(value);
-    if (!roots.some((root) => resolve(root) === resolved)) roots.push(value);
-  };
-  if (context.projectDir !== undefined && context.projectDir.trim() !== '') {
-    addRoot(join(context.projectDir, 'plugins'));
-  }
-  const inferred = await inferBuiltInPluginsRoot();
-  if (inferred !== undefined) addRoot(inferred);
-
-  const found: Array<{ dir: string; summary: PackageSummary }> = [];
-  const seen = new Set<string>();
-  const consider = async (dir: string): Promise<boolean> => {
-    const summary = await readVesselSummary(dir);
-    if (summary === null) return false;
-    const resolved = resolve(dir);
-    if (!seen.has(resolved)) {
-      seen.add(resolved);
-      found.push({ dir, summary });
-    }
-    return true;
-  };
-  for (const root of roots) {
-    for (const child of await pluginDirs(root)) {
-      if (await consider(child)) continue;
-      for (const nested of await pluginDirs(child)) await consider(nested);
-    }
-  }
-  return found;
-}
-
-async function isBuiltinPlugin(context: InstallContext, id: string): Promise<boolean> {
-  return (await builtinPluginPackages(context)).some((entry) => entry.summary.id === id);
-}
-
-async function installedVersionMap(
-  context: InstallContext,
-): Promise<Map<string, InstalledVersion>> {
-  const configured = await readConfiguredPlugins(context);
-  const result = new Map<string, InstalledVersion>();
-  for (const { root, scope } of installedRoots(context)) {
-    for (const dir of await pluginDirs(root)) {
-      const summary = await readPackageSummary(dir);
-      if (summary === null || result.has(summary.id)) continue;
-      const entry = configuredEntry(configured, summary.id);
-      result.set(summary.id, {
-        id: summary.id,
-        version: summary.version,
-        scope,
-        path: dir,
-        enabled: entry === undefined || entry.enabled !== false,
-      });
-    }
-  }
-  return result;
-}
-
-export async function listInstalled(context: InstallContext): Promise<InstalledItem[]> {
-  const configured = await readConfiguredPlugins(context);
-  const items: InstalledItem[] = [];
-  const seen = new Set<string>();
-  for (const { root, scope } of installedRoots(context)) {
-    for (const dir of await pluginDirs(root)) {
-      const summary = await readPackageSummary(dir);
-      if (summary === null || seen.has(summary.id)) continue;
-      seen.add(summary.id);
-      const entry = configuredEntry(configured, summary.id);
-      items.push({
-        id: summary.id,
-        name: summary.name,
-        version: summary.version,
-        scope,
-        path: dir,
-        enabled: entry === undefined || entry.enabled !== false,
-        ...(summary.engines !== undefined ? { engines: summary.engines } : {}),
-      });
-    }
-  }
-  // Built-ins last: an installed user/project copy wins the id.
-  for (const { dir, summary } of await builtinPluginPackages(context)) {
-    if (seen.has(summary.id)) continue;
-    seen.add(summary.id);
-    const entry = configuredEntry(configured, summary.id);
-    items.push({
-      id: summary.id,
-      name: summary.name,
-      version: summary.version,
-      scope: 'builtin',
-      path: dir,
-      enabled: entry === undefined || entry.enabled !== false,
-      ...(summary.engines !== undefined ? { engines: summary.engines } : {}),
-    });
-  }
-  return items.sort((left, right) => left.id.localeCompare(right.id));
-}
-
-export async function installedPlugins(
-  context: InstallContext,
-  options: { force?: boolean } = {},
+  ids: readonly string[],
 ): Promise<Record<string, unknown>> {
-  const listed = await listInstalled(context);
   let registry: RegistrySnapshot | undefined;
   let registryError: string | undefined;
   try {
-    registry = await snapshot(context, options.force === true);
+    registry = await snapshot(context);
   } catch (error) {
     registryError = messageOf(error);
   }
-
-  const items = listed.map((item) => {
-    // Built-ins are read-only and never come from the marketplace.
-    if (item.scope === 'builtin' || registry === undefined) return item;
-    const plugin = findPlugin(registry.index, item.id);
-    if (plugin === undefined) return item;
+  const unique = [...new Set(ids)];
+  const items = unique.map((id) => {
+    if (registry === undefined) return { id };
+    const plugin = findPlugin(registry.index, id);
+    if (plugin === undefined) return { id };
     const newest = newestVersion(plugin, context.settings.allowPrerelease);
-    if (newest === undefined) return item;
-    return {
-      ...item,
-      latest: newest.version,
-      update_available: compareVersionStrings(newest.version, item.version) > 0,
-    };
+    return newest === undefined ? { id } : { id, latest: newest.version };
   });
-
   return {
     ...(registry !== undefined ? { registry: registryMeta(registry) } : {}),
     ...(registryError !== undefined ? { registry_error: registryError } : {}),
     items,
-    total: items.length,
   };
 }
 
@@ -1055,12 +787,8 @@ export async function removePlugin(context: InstallContext, id: string): Promise
   return withLock(id, async () => {
     const target = await findInstalledTarget(context, id);
     if (target === undefined) {
-      if (await isBuiltinPlugin(context, id)) {
-        throw new MarketplaceError(
-          'builtin_readonly',
-          `plugin "${id}" is built in and read-only; it is not managed by the marketplace`,
-        );
-      }
+      // Built-ins live in the host's plugin roots, never under the install
+      // roots this RPC manages; the catalog marks them readonly for the UI.
       throw new MarketplaceError('not_installed', `plugin "${id}" is not installed`);
     }
 
@@ -1126,14 +854,10 @@ export async function updatePlugin(
   assertPluginId(id);
   options.onProgress?.({ phase: 'resolving' });
   return withLock(id, async () => {
-    const installed = (await installedVersionMap(context)).get(id);
-    if (installed === undefined) {
-      if (await isBuiltinPlugin(context, id)) {
-        throw new MarketplaceError(
-          'builtin_readonly',
-          `plugin "${id}" is built in and read-only; it is not managed by the marketplace`,
-        );
-      }
+    const target = await findInstalledTarget(context, id);
+    const installedVersion =
+      target !== undefined ? await readInstalledVersion(target.dir) : undefined;
+    if (target === undefined || installedVersion === undefined) {
       throw new MarketplaceError('not_installed', `plugin "${id}" is not installed`);
     }
     const registry = await snapshot(context);
@@ -1145,19 +869,17 @@ export async function updatePlugin(
     if (newest === undefined) {
       throw new MarketplaceError('version_not_found', `no installable version for ${id}`);
     }
-    if (compareVersionStrings(newest.version, installed.version) <= 0) {
-      return { id, updated: false, from: installed.version, to: installed.version };
+    if (compareVersionStrings(newest.version, installedVersion) <= 0) {
+      return { id, updated: false, from: installedVersion, to: installedVersion };
     }
 
     const install = await installLocked(context, {
       id,
       version: newest.version,
-      // `installedVersionMap` only carries user/project rows (built-ins are
-      // rejected above), so this narrowing is total.
-      scope: installed.scope === 'project' ? 'project' : 'user',
+      scope: target.scope,
       ...(options.onProgress !== undefined ? { onProgress: options.onProgress } : {}),
     });
-    return { id, updated: true, from: installed.version, to: install.version, install };
+    return { id, updated: true, from: installedVersion, to: install.version, install };
   });
 }
 

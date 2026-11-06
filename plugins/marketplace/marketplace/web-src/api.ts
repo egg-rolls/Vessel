@@ -6,14 +6,7 @@
  */
 import { PluginRpcClient } from '@vessel-agent/plugin-ui';
 import type { Translator } from './i18n';
-import type {
-  DetailResult,
-  InstalledItem,
-  InstalledResult,
-  JobDto,
-  SearchResult,
-  StartJobResult,
-} from './types';
+import type { DetailResult, JobDto, SearchResult, StartJobResult, UpdatesResult } from './types';
 
 const READ_TIMEOUT_MS = 15_000;
 const MUTATION_TIMEOUT_MS = 120_000;
@@ -107,8 +100,9 @@ export class MarketplaceApi {
     return this.call('update', { id }, MUTATION_TIMEOUT_MS);
   }
 
-  installed(force = false): Promise<InstalledResult> {
-    return this.call('installed', force ? { force: true } : {}, READ_TIMEOUT_MS);
+  /** Registry-only lookup for catalog ids (CONTRACT-0.47 §4). */
+  updates(ids: readonly string[]): Promise<UpdatesResult> {
+    return this.call('updates', { ids }, READ_TIMEOUT_MS);
   }
 
   job(jobId: string): Promise<JobDto> {
@@ -156,9 +150,4 @@ export class MarketplaceApi {
       );
     });
   }
-}
-
-/** Narrow an installed row for the update action. */
-export function canUpdate(item: InstalledItem): boolean {
-  return item.update_available === true;
 }

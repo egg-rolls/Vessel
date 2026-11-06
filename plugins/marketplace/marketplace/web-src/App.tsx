@@ -5,13 +5,15 @@ import {
   readHostContext,
   SegmentedTabs,
   type TabOption,
+  watchHostCatalog,
   watchHostContext,
 } from '@vessel-agent/plugin-ui';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { describeError, MarketplaceApi, MarketplaceUiError } from './api';
+import { mergeCatalogRows } from './catalog';
 import { type JobState, JobStatus } from './components/JobStatus';
 import { translator } from './i18n';
-import type { StartJobResult } from './types';
+import type { CatalogItem, CatalogRow, StartJobResult, UpdatesResult } from './types';
 import { InstalledView } from './views/InstalledView';
 import { MarketplaceView } from './views/MarketplaceView';
 import { UpdatesView } from './views/UpdatesView';
@@ -26,6 +28,13 @@ export function App() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [jobState, setJobState] = useState<JobState | null>(null);
   const [busy, setBusy] = useState(false);
+  // CONTRACT-0.47 §2: the gateway pushes the catalog; `null` means it never
+  // arrived (old gateway) and the plugin-owned views show an empty state.
+  const [catalog, setCatalog] = useState<readonly CatalogItem[] | null>(null);
+  const [updates, setUpdates] = useState<UpdatesResult | null>(null);
+  const [updatesLoading, setUpdatesLoading] = useState(false);
+  const [updatesError, setUpdatesError] = useState<string | null>(null);
+  const updatesRequest = useRef(0);
 
   const api = useMemo(() => new MarketplaceApi(), []);
   const t = useMemo(() => translator(host.lang), [host.lang]);
@@ -34,6 +43,7 @@ export function App() {
     applyHostContext(host);
   }, [host]);
   useEffect(() => watchHostContext(setHost), []);
+  useEffect(() => watchHostCatalog<CatalogItem>((items) => setCatalog(items)), []);
   useEffect(() => {
     document.title = t('app.title');
   }, [t]);
@@ -53,6 +63,46 @@ export function App() {
   }, [api]);
 
   const bumpRefresh = useCallback(() => setRefreshToken((value) => value + 1), []);
+
+  // Registry lookup for the catalog ids. The child never scans disk; the
+  // installed version lives in the catalog row.
+  const loadUpdates = useCallback(async () => {
+    if (catalog === null) {
+      setUpdates(null);
+      setUpdatesError(null);
+      setUpdatesLoading(false);
+      return;
+    }
+    const request = updatesRequest.current + 1;
+    updatesRequest.current = request;
+    setUpdatesLoading(true);
+    setUpdatesError(null);
+    // Built-ins ship with the host and are never updated by the marketplace.
+    const ids = catalog
+      .filter((item) => item.scope !== 'builtin' && item.kind !== 'builtin')
+      .map((item) => item.id);
+    try {
+      const result: UpdatesResult = ids.length === 0 ? { items: [] } : await api.updates(ids);
+      if (updatesRequest.current !== request) return;
+      setUpdates(result);
+    } catch (caught) {
+      if (updatesRequest.current !== request) return;
+      setUpdatesError(describeError(caught, t));
+      setUpdates(null);
+    } finally {
+      if (updatesRequest.current === request) setUpdatesLoading(false);
+    }
+  }, [api, catalog, t]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `refreshToken` is an explicit host-refresh trigger, not a value the effect reads.
+  useEffect(() => {
+    void loadUpdates();
+  }, [loadUpdates, refreshToken]);
+
+  const rows = useMemo<CatalogRow[]>(
+    () => (catalog === null ? [] : mergeCatalogRows(catalog, updates)),
+    [catalog, updates],
+  );
 
   const runJob = useCallback(
     async (label: string, start: () => Promise<StartJobResult>) => {
@@ -105,15 +155,26 @@ export function App() {
 
       <main id="marketplace-panel" role="tabpanel" aria-labelledby={`marketplace-panel-tab-${tab}`}>
         {tab === 'browse' ? (
-          <MarketplaceView api={api} t={t} refreshToken={refreshToken} busy={busy} onJob={runJob} />
-        ) : null}
-        {tab === 'installed' ? (
-          <InstalledView
+          <MarketplaceView
             api={api}
             t={t}
             refreshToken={refreshToken}
             busy={busy}
             onJob={runJob}
+            catalog={catalog}
+          />
+        ) : null}
+        {tab === 'installed' ? (
+          <InstalledView
+            api={api}
+            t={t}
+            busy={busy}
+            onJob={runJob}
+            catalogAvailable={catalog !== null}
+            rows={rows}
+            registry={updates?.registry}
+            registryError={updates?.registry_error}
+            onRefresh={bumpRefresh}
             onChanged={bumpRefresh}
           />
         ) : null}
@@ -121,9 +182,15 @@ export function App() {
           <UpdatesView
             api={api}
             t={t}
-            refreshToken={refreshToken}
             busy={busy}
             onJob={runJob}
+            catalogAvailable={catalog !== null}
+            rows={rows}
+            updatesLoading={updatesLoading}
+            updatesError={updatesError}
+            registry={updates?.registry}
+            registryError={updates?.registry_error}
+            onRefresh={bumpRefresh}
             onChanged={bumpRefresh}
           />
         ) : null}
