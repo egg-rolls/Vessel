@@ -17,6 +17,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 | 维度 | 当前态 | 目标态 |
 |---|---|---|
 | 实例 / tenant | 一个 gateway 可服务多个 tenant（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)） | 一实例一公司；tenant 抽象移除 |
+| Gateway / Node | `serve` 同进程做 node API + WebUI 宿主 | Platform Gateway（平台入口）+ Node API（公司）分离（[ADR-101](../adr/ADR-101-platform-gateway-and-node-api.md)） |
 | Workspace | 仍作 Team 的目录键（[PRODUCT](../PRODUCT.md)） | 公司占用的数据目录；Team 是公司内部门 |
 | 插件安装 | 发现根 project / user / repo / node_modules（[plugins](plugins.md)） | 按 workspace 安装 / 启用 |
 | Hub | 本地 hub 由 gateway 同进程启动（[federation-hub](federation-hub.md)） | Platform 独立服务 |
@@ -41,8 +42,8 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 
 | 层 | 内容 | 谁拥有 | 复用 |
 |---|---|---|---|
-| **Platform** | Vessel 更新、内置插件、Hub / registry / marketplace 后端（若做）等共享基础设施 | 社区 | 所有公司共享 |
-| **Workspace / Company** | 插件安装与启用、connections、团队、配置、数据目录 | owner | 公司内复用 |
+| **Platform** | Platform Gateway、WebUI/TUI 宿主、node registry、平台认证、Hub / registry / marketplace 后端（若做） | 社区 | 所有公司共享 |
+| **Workspace / Company** | Node API、runtime、插件安装与启用、connections、团队、配置、数据目录 | owner | 公司内复用 |
 | **Team** | 部门、成员、工具策略、协作范围 | owner / 部门负责人 | 使用公司能力，不拥有插件 |
 | **Agent / Session** | 员工身份、一次工作 / 对话 | owner | 引用公司能力与连接 |
 
@@ -50,14 +51,15 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 - Team 是公司内的使用范围，不是所有权级别；部门专用能力仍是公司安装 + Team policy 限制。
 - Agent / Session 只组合当前公司启用的能力。
 
-### Console（跨层，不是归属层）
+### Console（Gateway 的 UI surface）
 
-- **WebUI / TUI 是平台级视图客户端**：可以连接多个 node gateway，按 node 分别持有 token。
-- 多节点数据由 Console 直接调 `<node.url>/v1/rpc`（per-node token），不是本地
-  gateway 代理；每个 gateway 仍是 company-level 权威。
-- Console 不拥有 node 状态；token 只存客户端存储（Web 用 sessionStorage）。
-- 如果未来做“服务端聚合控制台”，它是新的 Platform 服务，另开契约；不要把它
-  塞进某个公司的 gateway。
+- **WebUI / TUI 由 Platform Gateway 提供宿主**；它们不是独立的归属层。
+- Gateway 提供 node registry / 平台认证；UI 用平台 token 访问 Gateway，
+  用 per-node token 访问各 Node API。
+- 多节点数据来自 Gateway 的 node registry + 各 Node API；初期可由 UI 直连
+  Node API，后续可加 Gateway 代理，不改变归属。
+- Node 仍是公司级权威；Gateway 不拥有公司 runtime 数据。
+- 不在某个 Node 的进程里挂平台 UI；UI 宿主属于 Gateway。
 
 - `tenant` 当前是真实的运行时隔离机制（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)）；目标态**移除 tenant 抽象**，数据/token/配置/事件/插件直接属于 node。移除是独立迁移，需先清点存储布局、token、事件、插件设置与 Hub/federation 绑定面；迁移完成前保留 default-tenant 过渡边界。
 
@@ -65,8 +67,9 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 
 | 实体 | 代码 / 包 | 运行时 | 状态 / 凭据 |
 |---|---|---|---|
-| **Gateway** | Platform | 每公司一个 | 公司 |
-| **Console（WebUI/TUI）** | Platform | 客户端；可连多个 node | per-node token（客户端存储） |
+| **Platform Gateway** | Platform | 平台级；托管多个 Node | node registry / 平台 token |
+| **Node API** | Platform | 每公司一个 | 公司 runtime / 数据 / per-node token |
+| **Console（WebUI/TUI）** | Platform | 由 Gateway 提供 | 平台 token + 各 node token |
 | **Runtime / Agent / Team / Session** | Platform | 公司内 | 公司 |
 | **Plugin** | 作者发布，默认 Workspace 安装 | 公司内（Platform plugin 例外） | 公司；Platform plugin 属社区 |
 | **Connection** | 连接器插件 | 公司内 | 公司（per workspace，不复制 token） |
@@ -92,10 +95,12 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 
 ## 访问模型
 
+- **双 token**：平台用户 token 认证 Platform Gateway（node registry/UI/平台操作）；
+  per-node token 认证 Node API（公司数据）。Gateway 维护 node registry 与 token 分发。
 - 不区分 guest：拿到 node 访问权的人就是 owner。
-- 有 token = 全权；插件不做 owner / guest 可见性过滤。
+- 有 node token = 全权；插件不做 owner / guest 可见性过滤。
 - 这里的 owner 指 node 访问者，不是 Agent 记录里的 `owner_id` 或成员归属。
-- 安全含义：token 等于公司钥匙；撤销只能换 token。未来若做只读访客，另开角色模型。
+- 安全含义：node token 等于公司钥匙；撤销只能换 token。未来若做只读访客，另开角色模型。
 
 ## 复用机制
 
@@ -123,7 +128,9 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 
 ## 指针
 
-- [ADR-100](../adr/ADR-100-node-company-topology.md)（accepted）· [ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)
+- [ADR-100](../adr/ADR-100-node-company-topology.md)（accepted）·
+  [ADR-101](../adr/ADR-101-platform-gateway-and-node-api.md)（accepted）·
+  [ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)
 - 相关模块：[plugins](plugins.md) · [extensions](extensions.md) · [gateway](gateway.md) · [federation-hub](federation-hub.md) · [config](config.md)
 - **唯一真源**：本文 + ADR-100 固定归属模型；实现收敛后把 `kind` 转 current、ADR 转
   accepted。个人侧只保留过程记录，不复制规则。

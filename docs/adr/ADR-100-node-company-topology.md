@@ -79,3 +79,7 @@ tags: [topology, company, workspace, platform, team, plugin, hub, ownership, ten
   [ADR-093](ADR-093-hub-control-plane.md) ·
   [ADR-099](ADR-099-plugin-contribution-surfaces-and-trust.md)。
   实现口径见 [topology](../architecture/topology.md)。
+
+> 2026-11-06 Errata：Gateway 角色由 [ADR-101](ADR-101-platform-gateway-and-node-api.md)
+> 细化——Platform Gateway 是平台级入口，Node API 才是公司级 runtime；本文
+> “Gateway = Platform code + Company runtime” 应读作旧的 Node API 语义。
