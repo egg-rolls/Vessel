@@ -5,12 +5,24 @@ triggers: [topology, company, workspace, platform, team, plugin scope, ownership
 paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plugins/**, docs/architecture/topology.md]
 ---
 
-# 部署拓扑：公司 / 平台 / 团队
+# 部署拓扑：公司 / 平台 / 团队（目标态）
 
 > **目标 / 迁移态，非现态。** 决策见 [ADR-100](../adr/ADR-100-node-company-topology.md)（proposed）；
 > 插件扩展面见 [plugins](plugins.md)。**共享侧文档是唯一真源**；个人侧 design / contract /
 > plan 仅作过程记录，不作为实现依据，也不从本文反向链接。
 > **一句话：一个 Vessel 实例 = 一家公司；运行在哪家公司就属于哪家公司，服务所有公司才属于 Platform。**
+
+## 当前态 vs 目标态
+
+| 维度 | 当前态 | 目标态 |
+|---|---|---|
+| 实例 / tenant | 一个 gateway 可服务多个 tenant（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)） | 一实例一公司 |
+| Workspace | 仍作 Team 的目录键（[PRODUCT](../PRODUCT.md)） | 公司占用的数据目录；Team 是公司内部门 |
+| 插件安装 | 发现根 project / user / repo / node_modules（[plugins](plugins.md)） | 按 workspace 安装 / 启用 |
+| Hub | 本地 hub 由 gateway 同进程启动（[federation-hub](federation-hub.md)） | Platform 独立服务 |
+| 访问模型 | token / role / visibility 现态 | 不区分 guest；node 访问权即 owner |
+
+目标是固定产品与归属模型；实现收敛另开裁决，不把目标态写成 current 事实。
 
 ## 三个轴
 
@@ -36,7 +48,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 - 多公司 = 多 Workspace / Node，不是同一 node 里的多个客户 tenant。
 - Team 是公司内的使用范围，不是所有权级别；部门专用能力仍是公司安装 + Team policy 限制。
 - Agent / Session 只组合当前公司启用的能力。
-- `tenant` 是运行时的数据隔离标签（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)），不是客户 / owner 层；与「一实例一公司」的收敛待裁决（见 ADR-100）。
+- `tenant` 当前是真实的运行时隔离机制（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)）；目标态一实例一公司，tenant 与公司的收敛待裁决。本拓扑不 supersede ADR-049。
 
 ## 实体映射
 
@@ -48,7 +60,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 | **Connection** | 连接器插件 | 公司内 | 公司（per workspace，不复制 token） |
 | **Hub / Federation** | Platform | Hub 服务多家公司；Federation 节点直连 | Hub 目录 / token 属社区；正文不落 Hub |
 
-- **Connection** 是公司级外部软件关系（OAuth / token / 配置，如 GitHub、Gmail、文件、MCP、渠道）；不要与 `ConnectionProvider`（模型连接）混淆。
+- **Connection**（目标态一级实体）：workspace 级外部账号 / 资源绑定（OAuth / token / 配置，如 GitHub、Gmail、文件、MCP、渠道）；与 React 的 `ConnectionProvider` 同名异义。
 
 ## 插件归属
 
@@ -60,7 +72,8 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 - 默认是 Workspace plugin；只有**服务所有公司的基础设施**才是 Platform plugin。
 - 只服务一家公司 → Workspace；公司之间 / 社区基础设施 → Platform。
 - 一个包可以同时声明两种归属，但安装、启用、数据按归属分开。
-- 安装根（`<workspace>/.vessel/plugins` 还是用户级共享包 + per-workspace 启用）仍待裁决；本文只固定归属级，不预判目录布局。
+- 当前发现根是 project / user / repo / node_modules（见 [plugins](plugins.md)）；Workspace 安装是目标态。安装根（`<workspace>/.vessel/plugins` 还是用户级共享包 + per-workspace 启用）随收敛裁决，不预判目录布局。
+- 当前 registry 是静态 GitHub，没有市场服务端；若未来做 marketplace 后端，才归 Platform。
 - Team 不安装、不拥有插件；它只通过 tool policy 决定谁能用哪些能力。
 - catalog 的 `scope` 字段表示发现来源（builtin/user/project/node_modules），不是本节的归属级，不要混用。
 

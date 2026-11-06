@@ -28,7 +28,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 - 两个方向共用协议 `vessel.hub/1`，帧内 `dialer: 'hub' | 'node'` 标明发起方：
   - hub → node：hub 作为 WSS 客户端拨号节点的 `/v1/hub/control`。
   - node → hub：节点主动拨号 `${hub.url}/v1/hub/node-control`，因此节点只需监听回环，不必开放入站端口。
-- 本地 hub：gateway 在 `<dataDir>/hub` 启动同进程目录服务，只监听回环；`hub.autoStart` 缺省 true，显式 false 关闭，不自动 join / 配对。目标是 Hub 属 Platform 独立服务（[topology](topology.md) / [ADR-100](../adr/ADR-100-node-company-topology.md)）；本机同进程 hub 是现态。
+- 本地 hub：当前由 gateway 在 `<dataDir>/hub` 启动同进程目录服务，只监听回环；`hub.autoStart` 缺省 true，显式 false 关闭，不自动 join / 配对。目标态见 [topology](topology.md)（Platform 独立服务）。
 - 同一 pairing 只保留一条活动连接，新连接接管；hub 重启时 node-dial 记录不拨号，等待节点重连。
 
 <a id="pairing"></a>

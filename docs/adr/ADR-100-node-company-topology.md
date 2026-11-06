@@ -28,7 +28,8 @@ tags: [topology, company, workspace, platform, team, plugin, hub, ownership, ten
   4. **插件默认 Workspace 级。** Workspace plugin 增强一家公司，安装、启用、配置与
      数据按 workspace 隔离；只有服务所有公司的基础设施（Hub、registry、marketplace
      后端（若做）等）才是 Platform plugin。一个包可同时声明两种归属，但按归属分别
-     安装与启用。
+     安装与启用。当前 registry 是静态 GitHub、没有市场服务端；后端的 Platform 归属
+     是未来项。
   5. **Team 是使用范围，不是所有权。** Team 不安装、不拥有插件；部门专用能力仍是
      公司级安装，用 tool policy 限定谁能用。Agent / Session 只组合当前公司启用的能力。
   6. **不区分 guest。** 拿到 node 访问权的人就是 owner；有 token 即全权，插件不做
@@ -37,10 +38,10 @@ tags: [topology, company, workspace, platform, team, plugin, hub, ownership, ten
   7. **Hub 属于 Platform。** Hub 本体是服务多家公司的独立服务；UI / CLI / 配置页
      可以是可选的薄 Platform plugin surface，但 Hub runtime 不寄生在某家公司的
      gateway，也不做成 Workspace plugin。Federation 数据面仍是节点直连。
-  8. **tenant 不是客户层。** `tenant` 保留为运行时数据隔离标签（ADR-049）；
-     本 ADR 固定的是产品与归属模型，不 supersede ADR-049 的隔离机制。两者如何收敛
-     （例如一实例只运营一个 tenant）留待实施裁决。已冻结的 HTTP 契约仍按 default
-     tenant 暴露（`CONTRACT-0.48`）；取消该限制需要另开契约，不在本 ADR 内生效。
+  8. **tenant 的现状与目标。** 当前 `tenant` 是真实的运行时隔离机制（ADR-049），
+     一个 gateway 可服务多个 tenant；目标态是一实例一公司，tenant 与公司的收敛
+     方式待裁决。本 ADR 不 supersede ADR-049。0.48 仍保留 default-tenant 403
+     作为单公司 / 遗留安全边界；移除与否待收敛，不在 0.48 改已冻结契约。
 
 - **备选**：
   - (a) 多客户 SaaS / 客户级租户与计费——与「一个用户串联自己的应用」的产品方向相反，
