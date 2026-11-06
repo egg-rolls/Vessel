@@ -117,6 +117,64 @@ export interface PluginPanelContribution {
   order?: number;
 }
 
+/** 0.48 M1：`contributes.http[].method`（CONTRACT-0.48 §2） */
+export type PluginHttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS';
+/** 0.48 M1：HTTP 鉴权口径；缺省 `required` */
+export type PluginHttpAuth = 'required' | 'none' | 'plugin';
+/** 0.48 M1：HTTP 权限范围；缺省 `read` */
+export type PluginHttpScope = 'read' | 'write' | 'admin';
+/** 0.48 M1：`stream` 跳过 `maxResponseBytes`，只受 idle timeout 约束 */
+export type PluginHttpResponseMode = 'buffered' | 'stream';
+
+/**
+ * 0.48 M1：插件 HTTP 路由声明（CONTRACT-0.48 §2）。
+ *
+ * 路由由插件自己的 loopback 服务处理，因此没有 `handler`；`id` 只用于
+ * 授权 / 冲突 / 审计。限额只能收紧宿主默认，实际 clamp 由宿主做。
+ */
+export interface PluginHttpContribution {
+  id: string;
+  method: PluginHttpMethod;
+  /** 绝对路径；支持 `:name` 单段参数 */
+  path: string;
+  auth: PluginHttpAuth;
+  scope: PluginHttpScope;
+  responseMode: PluginHttpResponseMode;
+  timeoutMs?: number;
+  maxBodyBytes?: number;
+  maxResponseBytes?: number;
+}
+
+/** 0.48 M2：CLI args 允许的 JSON Schema `type` 子集 */
+export type PluginCliArgType = 'object' | 'string' | 'number' | 'integer' | 'boolean' | 'array';
+
+/** 0.48 M2：CLI args 的 JSON Schema 子集（CONTRACT-0.48 §4） */
+export interface PluginCliArgsSchema {
+  type?: PluginCliArgType;
+  description?: string;
+  default?: unknown;
+  enum?: unknown[];
+  required?: string[];
+  properties?: Record<string, PluginCliArgsSchema>;
+  additionalProperties?: boolean;
+  items?: PluginCliArgsSchema;
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
+}
+
+/** 0.48 M2：插件 CLI 命令声明；`handler` 必须是 `contributes.rpc` 里的裸名 */
+export interface PluginCliContribution {
+  /** 首段必须等于 plugin id；插件不得覆盖内置命令 */
+  path: string[];
+  description?: string;
+  args?: PluginCliArgsSchema;
+  handler: string;
+}
+
 export interface PluginContributions {
   /** 0.45：自定义导航组；每个 plugin 最多一个，id 固定 `plugin:<pluginId>` */
   navGroups?: PluginNavGroup[];
@@ -128,6 +186,10 @@ export interface PluginContributions {
   rpc?: PluginRpcContribution[];
   events?: string[];
   panels?: PluginPanelContribution[];
+  /** 0.48 M1：宿主 loopback 反代的 HTTP 路由 */
+  http?: PluginHttpContribution[];
+  /** 0.48 M2：经 rpc handler 执行的 CLI 命令 */
+  cli?: PluginCliContribution[];
 }
 
 export interface PluginPermissions {
@@ -204,6 +266,18 @@ export interface PluginManifestOptions {
   vesselVersion?: string;
   /** 已知插件 id；提供时检查 `dependencies.plugins` 是否缺失 */
   knownPluginIds?: Iterable<string>;
+  /**
+   * 0.48 M1：宿主保留的 HTTP 路由。条目使用与 `contributes.http[].path` 相同的
+   * 语法；末尾 `/*` 表示前缀子树（如 `/v1/*`）。提供时，形状相同的插件路由、
+   * 或落在保留前缀下的插件路由校验失败。不提供时只做结构校验（assembly 后续传入）。
+   */
+  reservedHttpRoutes?: Iterable<string>;
+  /**
+   * 0.48 M2：宿主内置 CLI 命令名。提供时插件 id 不得占用这些名字
+   * （`contributes.cli[].path[0]` 必须等于 plugin id，因此同时覆盖 CLI 命名空间）。
+   * 不提供时只做结构校验（CLI 后续传入）。
+   */
+  reservedCliNames?: Iterable<string>;
 }
 
 export type PluginManifestValidation =
@@ -657,10 +731,430 @@ function readPanels(value: unknown): PluginPanelContribution[] {
   });
 }
 
+// ── 0.48 扩展面：HTTP 路由 / CLI 命令 ─────────────────────────────────────
+
+const PLUGIN_HTTP_METHODS: readonly PluginHttpMethod[] = [
+  'GET',
+  'HEAD',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
+  'OPTIONS',
+];
+const PLUGIN_HTTP_AUTHS: readonly PluginHttpAuth[] = ['required', 'none', 'plugin'];
+const PLUGIN_HTTP_SCOPES: readonly PluginHttpScope[] = ['read', 'write', 'admin'];
+const PLUGIN_HTTP_RESPONSE_MODES: readonly PluginHttpResponseMode[] = ['buffered', 'stream'];
+
+/** 静态段允许字符（DESIGN-0.48 §3.1）：`[A-Za-z0-9._~/-]`，参数段另支持 `:` */
+const HTTP_STATIC_SEGMENT_RE = /^[A-Za-z0-9._~-]+$/;
+/** `:name` 单段参数；name 以字母开头 */
+const HTTP_PARAM_SEGMENT_RE = /^:[A-Za-z][A-Za-z0-9_]*$/;
+const CLI_PATH_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+const CLI_ARG_TYPES: readonly PluginCliArgType[] = [
+  'object',
+  'string',
+  'number',
+  'integer',
+  'boolean',
+  'array',
+];
+/** 只接受这些 JSON Schema 关键字；其余一律视为越界 */
+const CLI_ARG_ALLOWED_KEYS: ReadonlySet<string> = new Set([
+  'type',
+  'description',
+  'default',
+  'enum',
+  'required',
+  'properties',
+  'additionalProperties',
+  'items',
+  'minimum',
+  'maximum',
+  'minLength',
+  'maxLength',
+  'minItems',
+  'maxItems',
+]);
+const CLI_ARG_RESERVED_NAMES: ReadonlySet<string> = new Set(['help', 'version', '__proto__']);
+const CLI_ARG_MAX_DEPTH = 8;
+
+function readEnum<T extends string>(value: unknown, allowed: readonly T[], field: string): T {
+  if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) {
+    fail('plugin_manifest_invalid', `${field} must be one of: ${allowed.join(' | ')}`);
+  }
+  return value as T;
+}
+
+function optionalFiniteNumber(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    fail('plugin_manifest_invalid', `${field} must be a finite number`);
+  }
+  return value;
+}
+
+function optionalNonNegativeInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    fail('plugin_manifest_invalid', `${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+/** 限额字段只校验正整数；能否放宽由宿主 clamp（CONTRACT-0.48 §2） */
+function optionalPositiveInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    fail('plugin_manifest_invalid', `${field} must be a positive integer`);
+  }
+  return value;
+}
+
+/**
+ * 解析插件 / 保留路由路径，返回参数名归一化后的形状（参数段 → `:`）。
+ *
+ * 规则：绝对路径；禁止空段、`.` / `..`、query / fragment、通配 `*`；
+ * 参数必须是 `:name` 单段且同一路由内不重复。静态段与参数段形状不同，
+ * 因此 `/hub/directory` 与 `/hub/:id` 不冲突（静态段优先的注册语义由宿主实现）。
+ */
+function parseHttpRoutePath(value: string, field: string): string {
+  if (!value.startsWith('/')) {
+    fail('plugin_manifest_invalid', `${field} must be an absolute path starting with "/"`);
+  }
+  if (value.includes('?') || value.includes('#')) {
+    fail('plugin_manifest_invalid', `${field} must not contain a query or fragment`);
+  }
+  if (value.includes('*')) {
+    fail('plugin_manifest_invalid', `${field} must not contain wildcards`);
+  }
+  if (value === '/') return '/';
+  if (value.endsWith('/')) {
+    fail('plugin_manifest_invalid', `${field} must not contain an empty segment`);
+  }
+
+  const params = new Set<string>();
+  const shape: string[] = [];
+  const segments = value.slice(1).split('/');
+  for (const segment of segments) {
+    if (segment === '') {
+      fail('plugin_manifest_invalid', `${field} must not contain an empty segment`);
+    }
+    if (segment === '.' || segment === '..') {
+      fail('plugin_manifest_invalid', `${field} must not contain "." or ".." segments`);
+    }
+    if (segment.startsWith(':')) {
+      if (!HTTP_PARAM_SEGMENT_RE.test(segment)) {
+        fail(
+          'plugin_manifest_invalid',
+          `${field} segment "${segment}" must be a ":name" single-segment parameter`,
+        );
+      }
+      const name = segment.slice(1);
+      if (params.has(name)) {
+        fail('plugin_manifest_invalid', `${field} repeats parameter ":${name}"`);
+      }
+      params.add(name);
+      shape.push(':');
+      continue;
+    }
+    if (!HTTP_STATIC_SEGMENT_RE.test(segment)) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field} segment "${segment}" must match ${HTTP_STATIC_SEGMENT_RE.source}`,
+      );
+    }
+    shape.push(segment);
+  }
+  return `/${shape.join('/')}`;
+}
+
+interface ReservedHttpRoutes {
+  /** 精确形状 */
+  exact: ReadonlySet<string>;
+  /** 前缀子树基底（不含末尾 `/`） */
+  prefixes: readonly string[];
+}
+
+/** 保留路由：精确条目 + `/*` 后缀前缀条目；从宿主路由表派生，不手写 */
+function readReservedHttpRoutes(
+  value: Iterable<string> | undefined,
+): ReservedHttpRoutes | undefined {
+  if (value === undefined) return undefined;
+  const exact = new Set<string>();
+  const prefixes: string[] = [];
+  let index = 0;
+  for (const route of value) {
+    if (route.endsWith('/*')) {
+      const base = route.slice(0, -2);
+      prefixes.push(base === '' ? '/' : parseHttpRoutePath(base, `reservedHttpRoutes[${index}]`));
+    } else {
+      exact.add(parseHttpRoutePath(route, `reservedHttpRoutes[${index}]`));
+    }
+    index += 1;
+  }
+  return { exact, prefixes };
+}
+
+function isReservedHttpRoute(shape: string, reserved: ReservedHttpRoutes): boolean {
+  if (reserved.exact.has(shape)) return true;
+  return reserved.prefixes.some(
+    (prefix) => prefix === '/' || shape === prefix || shape.startsWith(`${prefix}/`),
+  );
+}
+
+function readHttp(
+  value: unknown,
+  reserved: ReservedHttpRoutes | undefined,
+): PluginHttpContribution[] {
+  if (!Array.isArray(value)) fail('plugin_manifest_invalid', 'contributes.http must be an array');
+  const seenIds = new Set<string>();
+  const seenRoutes = new Set<string>();
+  return value.map((item, index) => {
+    const field = `contributes.http[${index}]`;
+    if (!isRecord(item)) fail('plugin_manifest_invalid', `${field} must be an object`);
+
+    const id = requireString(item.id, `${field}.id`);
+    if (seenIds.has(id)) fail('plugin_manifest_invalid', `duplicate http id "${id}"`);
+    seenIds.add(id);
+
+    const method = readEnum(item.method, PLUGIN_HTTP_METHODS, `${field}.method`);
+    const routePath = requireString(item.path, `${field}.path`);
+    const shape = parseHttpRoutePath(routePath, `${field}.path`);
+    const routeKey = `${method} ${shape}`;
+    if (seenRoutes.has(routeKey)) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field} duplicates another route (same method and path shape: ${routeKey})`,
+      );
+    }
+    seenRoutes.add(routeKey);
+    if (reserved !== undefined && isReservedHttpRoute(shape, reserved)) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field}.path "${routePath}" conflicts with a reserved host route`,
+      );
+    }
+
+    const auth =
+      item.auth === undefined
+        ? 'required'
+        : readEnum(item.auth, PLUGIN_HTTP_AUTHS, `${field}.auth`);
+    const scope =
+      item.scope === undefined
+        ? 'read'
+        : readEnum(item.scope, PLUGIN_HTTP_SCOPES, `${field}.scope`);
+    const responseMode =
+      item.responseMode === undefined
+        ? 'buffered'
+        : readEnum(item.responseMode, PLUGIN_HTTP_RESPONSE_MODES, `${field}.responseMode`);
+
+    const timeoutMs = optionalPositiveInteger(item.timeoutMs, `${field}.timeoutMs`);
+    const maxBodyBytes = optionalPositiveInteger(item.maxBodyBytes, `${field}.maxBodyBytes`);
+    const maxResponseBytes = optionalPositiveInteger(
+      item.maxResponseBytes,
+      `${field}.maxResponseBytes`,
+    );
+
+    return {
+      id,
+      method,
+      path: routePath,
+      auth,
+      scope,
+      responseMode,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
+      ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
+    };
+  });
+}
+
+function isJsonPrimitive(value: unknown): boolean {
+  return (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  );
+}
+
+function validateCliArgName(name: string, field: string): void {
+  if (name.startsWith('-')) {
+    fail('plugin_manifest_invalid', `${field} "${name}" must not start with "-"`);
+  }
+  if (CLI_ARG_RESERVED_NAMES.has(name)) {
+    fail('plugin_manifest_invalid', `${field} "${name}" is reserved`);
+  }
+}
+
+/** 校验 CLI args 的 JSON Schema 子集；越界关键字 / 类型一律 fail-closed */
+function readCliArgsSchema(value: unknown, field: string, depth = 0): PluginCliArgsSchema {
+  if (depth > CLI_ARG_MAX_DEPTH) {
+    fail(
+      'plugin_manifest_invalid',
+      `${field} is nested too deeply (max depth ${CLI_ARG_MAX_DEPTH})`,
+    );
+  }
+  if (!isRecord(value)) fail('plugin_manifest_invalid', `${field} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!CLI_ARG_ALLOWED_KEYS.has(key)) {
+      fail('plugin_manifest_invalid', `${field}.${key} is not in the CLI args schema subset`);
+    }
+  }
+
+  const out: PluginCliArgsSchema = {};
+  if (value.type !== undefined) out.type = readEnum(value.type, CLI_ARG_TYPES, `${field}.type`);
+  if (value.description !== undefined) {
+    if (typeof value.description !== 'string') {
+      fail('plugin_manifest_invalid', `${field}.description must be a string`);
+    }
+    out.description = value.description;
+  }
+  if (value.default !== undefined) out.default = value.default;
+
+  if (value.enum !== undefined) {
+    if (!Array.isArray(value.enum) || value.enum.length === 0) {
+      fail('plugin_manifest_invalid', `${field}.enum must be a non-empty array`);
+    }
+    value.enum.forEach((entry, index) => {
+      if (!isJsonPrimitive(entry)) {
+        fail(
+          'plugin_manifest_invalid',
+          `${field}.enum[${index}] must be a string, number, boolean, or null`,
+        );
+      }
+    });
+    out.enum = [...value.enum];
+  }
+
+  if (value.required !== undefined) {
+    if (!Array.isArray(value.required)) {
+      fail('plugin_manifest_invalid', `${field}.required must be an array of strings`);
+    }
+    out.required = value.required.map((name, index) => {
+      const text = requireString(name, `${field}.required[${index}]`);
+      validateCliArgName(text, `${field}.required[${index}]`);
+      return text;
+    });
+  }
+
+  if (value.properties !== undefined) {
+    if (!isRecord(value.properties)) {
+      fail('plugin_manifest_invalid', `${field}.properties must be an object`);
+    }
+    const properties: Record<string, PluginCliArgsSchema> = {};
+    for (const [name, schema] of Object.entries(value.properties)) {
+      validateCliArgName(name, `${field}.properties`);
+      properties[name] = readCliArgsSchema(schema, `${field}.properties.${name}`, depth + 1);
+    }
+    out.properties = properties;
+  }
+
+  if (value.additionalProperties !== undefined) {
+    if (typeof value.additionalProperties !== 'boolean') {
+      fail('plugin_manifest_invalid', `${field}.additionalProperties must be a boolean`);
+    }
+    out.additionalProperties = value.additionalProperties;
+  }
+
+  if (value.items !== undefined) {
+    out.items = readCliArgsSchema(value.items, `${field}.items`, depth + 1);
+  }
+
+  const minimum = optionalFiniteNumber(value.minimum, `${field}.minimum`);
+  const maximum = optionalFiniteNumber(value.maximum, `${field}.maximum`);
+  if (minimum !== undefined && maximum !== undefined && minimum > maximum) {
+    fail('plugin_manifest_invalid', `${field}.minimum must not exceed maximum`);
+  }
+  if (minimum !== undefined) out.minimum = minimum;
+  if (maximum !== undefined) out.maximum = maximum;
+
+  const minLength = optionalNonNegativeInteger(value.minLength, `${field}.minLength`);
+  const maxLength = optionalNonNegativeInteger(value.maxLength, `${field}.maxLength`);
+  if (minLength !== undefined && maxLength !== undefined && minLength > maxLength) {
+    fail('plugin_manifest_invalid', `${field}.minLength must not exceed maxLength`);
+  }
+  if (minLength !== undefined) out.minLength = minLength;
+  if (maxLength !== undefined) out.maxLength = maxLength;
+
+  const minItems = optionalNonNegativeInteger(value.minItems, `${field}.minItems`);
+  const maxItems = optionalNonNegativeInteger(value.maxItems, `${field}.maxItems`);
+  if (minItems !== undefined && maxItems !== undefined && minItems > maxItems) {
+    fail('plugin_manifest_invalid', `${field}.minItems must not exceed maxItems`);
+  }
+  if (minItems !== undefined) out.minItems = minItems;
+  if (maxItems !== undefined) out.maxItems = maxItems;
+
+  return out;
+}
+
+function readCli(
+  value: unknown,
+  pluginId: string,
+  rpcNames: ReadonlySet<string>,
+): PluginCliContribution[] {
+  if (!Array.isArray(value)) fail('plugin_manifest_invalid', 'contributes.cli must be an array');
+  const seenPaths = new Set<string>();
+  return value.map((item, index) => {
+    const field = `contributes.cli[${index}]`;
+    if (!isRecord(item)) fail('plugin_manifest_invalid', `${field} must be an object`);
+
+    const rawPath = item.path;
+    if (!Array.isArray(rawPath) || rawPath.length === 0) {
+      fail('plugin_manifest_invalid', `${field}.path must be a non-empty array`);
+    }
+    const cliPath = rawPath.map((segment, segmentIndex) => {
+      const text = requireString(segment, `${field}.path[${segmentIndex}]`);
+      if (!CLI_PATH_SEGMENT_RE.test(text)) {
+        fail(
+          'plugin_manifest_invalid',
+          `${field}.path[${segmentIndex}] "${text}" must match ${CLI_PATH_SEGMENT_RE.source}`,
+        );
+      }
+      return text;
+    });
+    if (cliPath[0] !== pluginId) {
+      fail('plugin_manifest_invalid', `${field}.path[0] must equal plugin id "${pluginId}"`);
+    }
+    const pathKey = cliPath.join(' ');
+    if (seenPaths.has(pathKey)) {
+      fail('plugin_manifest_invalid', `duplicate cli path "${pathKey}"`);
+    }
+    seenPaths.add(pathKey);
+
+    const description = optionalString(item.description, `${field}.description`);
+    const handler = requireString(item.handler, `${field}.handler`);
+    if (!PLUGIN_RPC_NAME_RE.test(handler)) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field}.handler "${handler}" must match ${PLUGIN_RPC_NAME_RE.source}`,
+      );
+    }
+    if (!rpcNames.has(handler)) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field}.handler "${handler}" must have a matching contributes.rpc entry`,
+      );
+    }
+
+    const args =
+      item.args === undefined ? undefined : readCliArgsSchema(item.args, `${field}.args`);
+    return {
+      path: cliPath,
+      ...(description !== undefined ? { description } : {}),
+      ...(args !== undefined ? { args } : {}),
+      handler,
+    };
+  });
+}
+
 function readContributions(
   raw: unknown,
   permissions: PluginPermissions,
   pluginId: string,
+  options: PluginManifestOptions,
 ): PluginContributions | undefined {
   if (raw === undefined) return undefined;
   if (!isRecord(raw)) fail('plugin_manifest_invalid', 'contributes must be an object');
@@ -676,9 +1170,14 @@ function readContributions(
     out.events = stringArray(raw.events, 'contributes.events');
   }
   if (raw.panels !== undefined) out.panels = readPanels(raw.panels);
+  if (raw.http !== undefined) {
+    out.http = readHttp(raw.http, readReservedHttpRoutes(options.reservedHttpRoutes));
+  }
 
   // 命令执行走 rpc：每个 command 必须有同名 rpc 方法（CONTRACT §2.2）。
   const rpcNames = new Set((out.rpc ?? []).map((entry) => entry.name));
+  // CLI 命令也经 rpc 执行：handler 必须是已声明的裸方法名（CONTRACT-0.48 §2）。
+  if (raw.cli !== undefined) out.cli = readCli(raw.cli, pluginId, rpcNames);
   for (const command of out.commands ?? []) {
     if (!rpcNames.has(command.name)) {
       fail(
@@ -790,8 +1289,13 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
   const activationEvents =
     raw.activationEvents === undefined ? [] : stringArray(raw.activationEvents, 'activationEvents');
 
+  // 插件 id 就是 CLI 命名空间首段：不得占用内置命令名（CONTRACT-0.48 §2）。
+  if (options.reservedCliNames !== undefined && new Set(options.reservedCliNames).has(id)) {
+    fail('plugin_manifest_invalid', `id "${id}" conflicts with a built-in CLI command`);
+  }
+
   const permissions = readPermissions(raw.permissions);
-  const contributes = readContributions(raw.contributes, permissions, id);
+  const contributes = readContributions(raw.contributes, permissions, id, options);
   const dependencies = readDependencies(raw.dependencies);
 
   if (raw.override !== undefined && typeof raw.override !== 'boolean') {

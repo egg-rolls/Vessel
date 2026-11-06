@@ -13,6 +13,9 @@
  * 第二段校验插件清单（`plugins` 下各 package.json 的 `vessel` 块），复用 loader 的
  * `validatePluginManifest`：`contributes.rpc[].name` 必须是 `PLUGIN_RPC_NAME_RE`
  * 允许的裸名；engines / entry / contributes / permissions 的错误同样失败。
+ * 0.48 起同一个校验器也覆盖 `contributes.http` / `contributes.cli`（路径形状、
+ * 路由冲突、CLI handler 指向 rpc、args JSON Schema 子集）；错误消息自带
+ * `contributes.<surface>[i].<field>` 定位，这里统一拼上 `文件: ` 前缀。
  * loader 在运行时 fail-closed，这一步把它提前到提交前。
  *
  * 用法：bun run scripts/check-rpc-methods.ts
