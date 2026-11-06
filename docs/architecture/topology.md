@@ -21,6 +21,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 | 插件安装 | 发现根 project / user / repo / node_modules（[plugins](plugins.md)） | 按 workspace 安装 / 启用 |
 | Hub | 本地 hub 由 gateway 同进程启动（[federation-hub](federation-hub.md)） | Platform 独立服务 |
 | 访问模型 | token / role / visibility 现态 | 不区分 guest；node 访问权即 owner |
+| 多节点视图 | WebUI/TUI 直接调各 node 的 `/v1/rpc`（per-node token） | 保持 Console 聚合；gateway 仍是公司级，不升级为平台服务 |
 
 目标是固定产品与归属模型；实现收敛另开裁决，不把目标态写成 current 事实。
 
@@ -48,6 +49,16 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 - 多公司 = 多 Workspace / Node，不是同一 node 里的多个客户 tenant。
 - Team 是公司内的使用范围，不是所有权级别；部门专用能力仍是公司安装 + Team policy 限制。
 - Agent / Session 只组合当前公司启用的能力。
+
+### Console（跨层，不是归属层）
+
+- **WebUI / TUI 是平台级视图客户端**：可以连接多个 node gateway，按 node 分别持有 token。
+- 多节点数据由 Console 直接调 `<node.url>/v1/rpc`（per-node token），不是本地
+  gateway 代理；每个 gateway 仍是 company-level 权威。
+- Console 不拥有 node 状态；token 只存客户端存储（Web 用 sessionStorage）。
+- 如果未来做“服务端聚合控制台”，它是新的 Platform 服务，另开契约；不要把它
+  塞进某个公司的 gateway。
+
 - `tenant` 当前是真实的运行时隔离机制（[ADR-049](../adr/ADR-049-multi-tenant-isolation.md)）；目标态**移除 tenant 抽象**，数据/token/配置/事件/插件直接属于 node。移除是独立迁移，需先清点存储布局、token、事件、插件设置与 Hub/federation 绑定面；迁移完成前保留 default-tenant 过渡边界。
 
 ## 实体映射
@@ -55,6 +66,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 | 实体 | 代码 / 包 | 运行时 | 状态 / 凭据 |
 |---|---|---|---|
 | **Gateway** | Platform | 每公司一个 | 公司 |
+| **Console（WebUI/TUI）** | Platform | 客户端；可连多个 node | per-node token（客户端存储） |
 | **Runtime / Agent / Team / Session** | Platform | 公司内 | 公司 |
 | **Plugin** | 作者发布，默认 Workspace 安装 | 公司内（Platform plugin 例外） | 公司；Platform plugin 属社区 |
 | **Connection** | 连接器插件 | 公司内 | 公司（per workspace，不复制 token） |

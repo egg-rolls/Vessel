@@ -47,6 +47,10 @@ tags: [topology, company, workspace, platform, team, plugin, hub, ownership, ten
      （`<workspace>/.vessel/plugins/<id>/`），版本独立、更新独立；不用“共享包 +
      per-workspace 启用”作为默认模型。包缓存可用于下载复用，但安装副本与版本以
      workspace 为准。
+  10. **Console 是平台级视图，不是 Platform 服务。** WebUI / TUI 可以连接多个
+      node gateway，按 node 持有 token，并直接调用各 node 的 `/v1/rpc`；多节点
+      可见性来自 Console 聚合，不来自本地 gateway 代理。每个 gateway 仍是
+      company-level 权威；服务端聚合控制台若需要，另开 Platform 服务契约。
 
 - **备选**：
   - (a) 多客户 SaaS / 客户级租户与计费——与「一个用户串联自己的应用」的产品方向相反，

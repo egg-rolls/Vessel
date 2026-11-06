@@ -10,7 +10,7 @@ paths: [packages/serve/src/**, packages/serve/src/gateway/**, src/serve-auth.ts,
 
 <a id="protocol"></a>
 
-`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。gateway 只读取注入的 `TenantEventHub`，由 hub 对各 tenant 的运行时流 fan-in（ADR-089）。`apps/web` 是配套的浏览器控制台。
+`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。gateway 只读取注入的 `TenantEventHub`，由 hub 对各 tenant 的运行时流 fan-in（ADR-089）。`apps/web` 是配套的浏览器控制台；它可连接多个 node 并直接调各 node 的 `/v1/rpc`（per-node token），这是 Console 聚合，不是平台级 gateway（[topology](topology.md#console跨层不是归属层)）。
 
 ### 协议 `vessel.gateway/1`
 
