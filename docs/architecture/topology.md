@@ -8,7 +8,8 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 # 部署拓扑：公司 / 平台 / 团队
 
 > **目标 / 迁移态，非现态。** 决策见 [ADR-100](../adr/ADR-100-node-company-topology.md)（proposed）；
-> 插件扩展面见个人侧 `DESIGN-0.48-plugin-extension-surfaces.md` 与 `CONTRACT-0.48-plugin-http-cli.md`。
+> 插件扩展面见 [plugins](plugins.md)。**共享侧文档是唯一真源**；个人侧 design / contract /
+> plan 仅作过程记录，不作为实现依据，也不从本文反向链接。
 > **一句话：一个 Vessel 实例 = 一家公司；运行在哪家公司就属于哪家公司，服务所有公司才属于 Platform。**
 
 ## 三个轴
@@ -85,7 +86,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 - Hub 服务多家公司，属于 Platform；公司可以独立运行，需要跨公司协作时才接入。
 - 形态：**Platform 独立服务 + 可选薄 Platform plugin surface**（UI / CLI / 配置页）；
   不是 Workspace plugin，不把 Hub runtime 寄生在某家公司的 gateway。
-- 实现见 [federation-hub](federation-hub.md)；抽取计划见个人侧 `PLAN-hub-as-platform-plugin.md`。
+- 实现见 [federation-hub](federation-hub.md)；抽取立项后另开 ADR / 计划，本文只固定边界。
 
 ## 非目标
 
@@ -97,6 +98,6 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 ## 指针
 
 - [ADR-100](../adr/ADR-100-node-company-topology.md)（proposed）· [ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)
-- 设计 / 契约（个人侧）：`docs/dev/plans/DESIGN-plugin-topology.md`、
-  `docs/dev/plans/DESIGN-0.48-plugin-extension-surfaces.md`、`docs/dev/plans/CONTRACT-0.48-plugin-http-cli.md`。
 - 相关模块：[plugins](plugins.md) · [extensions](extensions.md) · [gateway](gateway.md) · [federation-hub](federation-hub.md) · [config](config.md)
+- **唯一真源**：本文 + ADR-100 固定归属模型；实现收敛后把 `kind` 转 current、ADR 转
+  accepted。个人侧只保留过程记录，不复制规则。
