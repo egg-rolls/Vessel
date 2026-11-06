@@ -407,6 +407,21 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
   { token: '--resume-run', registryName: 'resume-run-list' },
 ];
 
+/**
+ * 内置顶层命令 token（不含 `--flag` 形式的入口 flag）。
+ *
+ * 插件 CLI 命名空间（`vessel <plugin> ...`）不得占用这些名字，
+ * 否则会遮蔽内置命令（CONTRACT-0.48 §4）；manifest 校验与预解析共用这份列表。
+ */
+export function builtinCommandTokens(): string[] {
+  const tokens: string[] = [];
+  for (const command of COMPLETION_COMMANDS) {
+    if (command.token.startsWith('-')) continue;
+    if (!tokens.includes(command.token)) tokens.push(command.token);
+  }
+  return tokens;
+}
+
 /** 顶层候选词（命令 token + 全局 flags，去重保序） */
 export function topLevelWords(): string[] {
   const words = new Set<string>();

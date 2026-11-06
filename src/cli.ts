@@ -107,6 +107,7 @@ import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-di
 import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { setToolPolicy } from './permission-store';
+import { runPluginCliCommand } from './plugin-cli-command';
 import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
 import {
   activateStartupPlugins,
@@ -367,6 +368,11 @@ installProcessErrorHandlers({
 });
 
 // ── argv 解析 ────────────────────────────────────
+
+// 0.48 M2：插件 CLI 命名空间预解析（`vessel <plugin> ...`）。内置命令优先：
+// 首 token 是内置命令 / flag / 不是已发现的插件时，原样回落到 parseArgs。
+const pluginCli = await runPluginCliCommand(process.argv.slice(2));
+if (pluginCli.handled) process.exit(pluginCli.exitCode);
 
 const parsed = parseArgs(process.argv.slice(2));
 if (!parsed.ok) {
