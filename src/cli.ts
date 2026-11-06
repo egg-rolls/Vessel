@@ -1255,7 +1255,10 @@ async function runWithConfig(result: BootstrapResult) {
       context: ctx.context,
       pluginHost: ctx.pluginHost,
       // 0.43：体验型 plugin 宿主（子进程 / 动态 RPC / 静态 UI / 事件转发）。
-      ...(pluginHostManager !== undefined ? { pluginHostManager } : {}),
+      // 0.48 M1：同一 manager 提供插件 HTTP 路由匹配 / endpoint 解析。
+      ...(pluginHostManager !== undefined
+        ? { pluginHostManager, pluginHttp: pluginHostManager }
+        : {}),
       ...(pluginsReload !== undefined ? { pluginsReload } : {}),
       // 无 tenantFactory 时也要把 child 插件纳入 plugins.list / plugin.changed。
       plugins: pluginRuntimeEntries,

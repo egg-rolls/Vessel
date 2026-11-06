@@ -17,6 +17,7 @@ import {
   PluginHostManager,
   type PluginHostManagerOptions,
   type PluginReloadResult,
+  resolvePluginHttpLimits,
   type PluginDescriptor as ServePluginDescriptor,
 } from '../packages/serve/src/index';
 import type { PluginDescriptor as LoaderPluginDescriptor, PluginLoader } from './plugin-loader';
@@ -64,6 +65,9 @@ function toServeDescriptor(
   const pluginDir = descriptor.dir;
   const uiDir = manifest.ui !== undefined ? path.resolve(pluginDir, manifest.ui.dir) : undefined;
   const contributes = manifest.contributes ?? {};
+  // 0.48 M1：manifest 已校验 http 声明（含宿主保留路由）；serve 侧再做一次
+  // 结构复检 + 限额收紧 + 跨插件冲突判定。
+  const http = manifest.contributes?.http;
 
   return {
     id: manifest.id,
@@ -74,6 +78,8 @@ function toServeDescriptor(
     pluginDir,
     ...(uiDir !== undefined ? { uiDir } : {}),
     activationEvents: manifest.activationEvents,
+    // 内置插件（repo 源）可信；外部插件默认只能 auth: required。
+    builtin: descriptor.source === 'repo',
     contributes: {
       ...(contributes.navGroups !== undefined ? { navGroups: contributes.navGroups } : {}),
       ...(contributes.i18n !== undefined ? { i18n: contributes.i18n } : {}),
@@ -119,6 +125,7 @@ function toServeDescriptor(
         : {}),
       ...(contributes.events !== undefined ? { events: contributes.events } : {}),
       ...(contributes.settings !== undefined ? { settings: contributes.settings } : {}),
+      ...(http !== undefined ? { http } : {}),
     },
     permissions: manifest.permissions,
     dependencies: {
@@ -145,6 +152,8 @@ export function createPluginHostManager(options: PluginHostAssemblyOptions): Plu
     // tenantId → 该 tenant 配置的映射；单 tenant / 本地路径缺省用启动配置。
     settingsFor: (id, tenantId) =>
       options.settingsFor?.(id, tenantId) ?? pluginSettingsFor(options.config, id),
+    // 0.48 M1：serve.pluginHttp → 归一化宿主限额；manifest 只能收紧。
+    httpLimits: resolvePluginHttpLimits(options.config.serve?.pluginHttp),
     ...(logger !== undefined
       ? {
           logger: (level, message, meta) => {

@@ -110,9 +110,12 @@ import {
   createHubPluginEventSource,
   type PluginCatalogItem,
   type PluginHostManagerLike,
+  type PluginHttpHostLike,
+  type PluginHttpMatch,
   type PluginReloadResult,
   pluginErrorCodeOf,
   pluginListMetadata,
+  proxyPluginHttpRequest,
 } from './plugin-host/index.js';
 import { pluginStaticId, servePluginAsset } from './plugin-host/static.js';
 import {
@@ -222,6 +225,11 @@ export interface GatewayOptions {
    * 与 core 的能力插件 `pluginHost` 无关。
    */
   pluginHostManager?: PluginHostManagerLike;
+  /**
+   * 0.48 M1：插件 HTTP 反代 provider（CONTRACT-0.48 §3）。
+   * assembly 注入 `PluginHostManager`；缺省 = 插件 HTTP 面关闭。
+   */
+  pluginHttp?: PluginHttpHostLike;
   /**
    * 0.43 E3：`plugins.reload` 的 rescan / manager.reload 实现（asm 注入）。
    * 缺省 = `plugins.reload` 返回 not_supported；handler 成功后由 gateway 广播
@@ -1476,6 +1484,90 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return headerPrincipal(req) !== null;
   }
 
+  /** 插件 HTTP 并发计数（key = pluginId:routeId）；按路由限额 fail-closed。 */
+  const pluginHttpActive = new Map<string, number>();
+
+  /**
+   * 0.48 M1：插件 HTTP 反代（CONTRACT-0.48 §3）。
+   *
+   * - `auth: required` 走宿主 principal + scope；其余 auth 仅内置插件（路由表已校验）；
+   * - 0.48 只对 default tenant 暴露，非 default → 403，不进入插件；
+   * - disabled → 404，unhealthy / invalid / 无 endpoint → 503。
+   */
+  async function handlePluginHttpRoute(
+    req: Request,
+    url: URL,
+    match: PluginHttpMatch,
+    extra: Record<string, string>,
+  ): Promise<Response> {
+    const provider = opts.pluginHttp;
+    if (provider === undefined || match.kind !== 'match') {
+      return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
+    }
+    const { route } = match;
+    let tenantId = defaultTenantId;
+    if (route.auth === 'required') {
+      const principal = principalForRequest(req, url, url.pathname);
+      if (principal === null) {
+        return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
+      }
+      tenantId = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
+      if (tenantId !== defaultTenantId) {
+        return errorJson(
+          'forbidden',
+          'Plugin HTTP routes are only available on the default tenant',
+          403,
+          extra,
+        );
+      }
+      if (!hasPermission(principal.role, route.scope)) {
+        return errorJson('forbidden', `Requires ${route.scope} permission`, 403, extra);
+      }
+    } else {
+      // none / plugin：只在提供了宿主凭据且指向非 default tenant 时拒绝。
+      const principal = headerPrincipal(req);
+      if (principal !== null) {
+        const principalTenant = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
+        if (principalTenant !== defaultTenantId) {
+          return errorJson(
+            'forbidden',
+            'Plugin HTTP routes are only available on the default tenant',
+            403,
+            extra,
+          );
+        }
+      }
+    }
+
+    const key = `${route.pluginId}:${route.id}`;
+    const active = pluginHttpActive.get(key) ?? 0;
+    if (route.limits.maxConnections !== null && active >= route.limits.maxConnections) {
+      return errorJson('busy', 'Plugin HTTP connection limit reached', 503, extra);
+    }
+    pluginHttpActive.set(key, active + 1);
+    try {
+      const resolution = await provider.resolve(route.pluginId, tenantId);
+      if (resolution.kind === 'disabled') {
+        return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
+      }
+      if (resolution.kind === 'unavailable') {
+        return errorJson('internal', 'Plugin HTTP surface is unavailable', 503, extra);
+      }
+      return await proxyPluginHttpRequest({
+        request: req,
+        url,
+        route,
+        target: resolution.target,
+        tenantId,
+        cors: extra,
+      });
+    } finally {
+      const remaining = (pluginHttpActive.get(key) ?? 1) - 1;
+      if (remaining <= 0) pluginHttpActive.delete(key);
+      else pluginHttpActive.set(key, remaining);
+    }
+  }
+
   /** 方法级 tenant 作用域（admin 可显式跨 tenant） */
   function makeMethodContext(
     method: RpcMethodDefinition,
@@ -2291,6 +2383,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
         });
         if (!upgraded) return errorJson('invalid_request', 'WebSocket upgrade failed', 400, extra);
         return;
+      }
+
+      // 0.48 M1：插件 HTTP 路由。插入点在 Host/Origin/protocol 与宿主路由之后、
+      // 静态 SPA 之前；插件路径永不进入 serveStatic。冲突时路由表为空。
+      if (opts.pluginHttp !== undefined) {
+        const pluginMatch = opts.pluginHttp.match(req.method, path);
+        if (pluginMatch.kind === 'invalid') {
+          return errorJson('invalid_request', 'Invalid request path', 400, extra);
+        }
+        if (pluginMatch.kind === 'match') {
+          return handlePluginHttpRoute(req, url, pluginMatch, extra);
+        }
       }
 
       // 静态 web 公开（GET/HEAD；API 路径不参与）

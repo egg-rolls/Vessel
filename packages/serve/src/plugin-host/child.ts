@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import type { FileSink } from 'bun';
 import { ensurePayload, jsonByteLength, MAX_PLUGIN_MESSAGE_BYTES } from './dto.js';
 import { type PluginHostError, pluginError, pluginErrorCodeOf } from './errors.js';
+import { normalizePluginHttpEndpoint } from './http.js';
 import type { PluginDescriptor, PluginErrorCode, PluginEventDto } from './types.js';
 
 /** 协议版本（contract §3） */
@@ -74,6 +75,11 @@ export interface ChildProcessOptions {
   execPath?: string;
   hooks?: ChildProcessHooks;
   timeouts?: Partial<typeof PLUGIN_TIMEOUTS>;
+  /**
+   * 0.48 M1：本次 spawn 的内部 HTTP token；只经 `plugin.activate` 参数下发，
+   * 不进 env（env 会被插件的子进程继承）。
+   */
+  httpToken?: string;
 }
 
 interface PendingRequest {
@@ -198,6 +204,9 @@ export class ChildPluginProcess {
   private readonly hooks: ChildProcessHooks;
   private readonly timeouts: typeof PLUGIN_TIMEOUTS;
   private readonly logFile: PluginLogFile;
+  private readonly httpToken?: string;
+  /** 插件在 `plugin.activate` 回包里自报的 loopback endpoint。 */
+  private reportedHttpEndpoint?: string;
 
   private proc?: ReturnType<typeof Bun.spawn>;
   private stdin?: FileSink;
@@ -219,6 +228,12 @@ export class ChildPluginProcess {
     this.hooks = options.hooks ?? {};
     this.timeouts = { ...PLUGIN_TIMEOUTS, ...options.timeouts };
     this.logFile = new PluginLogFile(options.dataDir);
+    this.httpToken = options.httpToken;
+  }
+
+  /** 插件自报的 loopback endpoint；未声明 / 未上报时为 undefined。 */
+  get httpEndpoint(): string | undefined {
+    return this.reportedHttpEndpoint;
   }
 
   /** 启动子进程并完成握手 / 激活；失败时杀进程并抛错。 */
@@ -265,6 +280,7 @@ export class ChildPluginProcess {
       // §3.2.1：dataDir 是全局 data dir（只读），且只有声明 data-dir 权限才下发；
       // 私有可写目录始终只经 VESSEL_PLUGIN_DATA_DIR 提供。
       const fsPermissions = descriptor.permissions?.fs ?? [];
+      const declaredHttp = (descriptor.contributes?.http ?? []).length > 0;
       const activated = await this.request(
         'plugin.activate',
         {
@@ -275,6 +291,8 @@ export class ChildPluginProcess {
           // E4 §3.2.2：宿主进程绝对 cwd；marketplace 用它推导 project scope。
           hostCwd: process.cwd(),
           events: descriptor.contributes?.events ?? [],
+          // 0.48 M1：token 只经握手参数下发，不放 env。
+          ...(declaredHttp && this.httpToken !== undefined ? { httpToken: this.httpToken } : {}),
         },
         this.timeouts.activate,
       );
@@ -284,6 +302,18 @@ export class ChildPluginProcess {
           'plugin_activation_failed',
           `plugin.activate failed${typeof remote === 'string' && remote ? `: ${remote}` : ''}.`,
         );
+      }
+      if (declaredHttp) {
+        const endpoint = normalizePluginHttpEndpoint(activated.httpEndpoint);
+        if (endpoint === null) {
+          // fail-closed：声明了 http 却没给出合法回环 endpoint，插件不可用。
+          throw pluginError(
+            'plugin_manifest_invalid',
+            'Plugin declares contributes.http but plugin.activate returned no valid loopback httpEndpoint.',
+            { plugin: descriptor.id },
+          );
+        }
+        this.reportedHttpEndpoint = endpoint;
       }
     } catch (error) {
       this.exitCode = pluginErrorCodeOf(error) ?? 'plugin_activation_failed';

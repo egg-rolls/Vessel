@@ -321,6 +321,19 @@ export interface TenantConfig {
   tenants?: Record<string, TenantSettings>;
 }
 
+/**
+ * 0.48 M1：插件 HTTP 反代限额（CONTRACT-0.48 §3.4）。
+ *
+ * 字段缺省用宿主默认值；`null` 表示该维度不限制。
+ */
+export interface PluginHttpLimitsConfig {
+  maxBodyBytes?: number | null;
+  maxResponseBytes?: number | null;
+  timeoutMs?: number | null;
+  idleTimeoutMs?: number | null;
+  maxConnections?: number | null;
+}
+
 /** serve 配置（0.3；默认回环 + 明文） */
 export interface ServeConfig {
   /** 监听地址（默认 127.0.0.1） */
@@ -346,6 +359,11 @@ export interface ServeConfig {
   adminTokenEnv?: string;
   /** TLS 证书对 */
   tls?: ServeTlsConfig;
+  /**
+   * 0.48 M1：插件 HTTP 反代限额。
+   * manifest 的 per-route 限额只能收紧这里的值。
+   */
+  pluginHttp?: PluginHttpLimitsConfig;
 }
 
 /** Transport 配置（0.2；0.22.1 只剩 in-process） */

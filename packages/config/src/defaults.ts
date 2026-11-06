@@ -11,6 +11,7 @@ import type {
   LeaseConfig,
   McpServerConfig,
   ObservabilityConfig,
+  PluginHttpLimitsConfig,
   SchedulerConfig,
   ServeConfig,
   TraceConfig,
@@ -96,6 +97,18 @@ export const DEFAULT_SERVE_OPTIONS: Required<
   hostname: '127.0.0.1',
   port: 8642,
   allowRemote: false,
+};
+
+/**
+ * 0.48 M1：插件 HTTP 反代默认限额（CONTRACT-0.48 §3.4）。
+ * 不写入 DEFAULT_CONFIG：未配置时由 serve 归一化时使用这些值。
+ */
+export const DEFAULT_PLUGIN_HTTP_LIMITS: Required<PluginHttpLimitsConfig> = {
+  maxBodyBytes: 1024 * 1024,
+  maxResponseBytes: 1024 * 1024,
+  timeoutMs: 10_000,
+  idleTimeoutMs: 30_000,
+  maxConnections: 64,
 };
 
 /**

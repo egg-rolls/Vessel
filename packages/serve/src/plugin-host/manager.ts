@@ -9,12 +9,27 @@
  * @module @vessel-agent/serve/plugin-host
  */
 
+import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { type ChildExitInfo, ChildPluginProcess, type PLUGIN_TIMEOUTS } from './child.js';
 import { jsonDtoViolation } from './dto.js';
 import { PluginHostError, pluginError, pluginErrorCodeOf } from './errors.js';
 import { EventRateLimiter, matchesEventFilter } from './events.js';
+import {
+  buildPluginHttpRouteTable,
+  isHostReservedPath,
+  matchPluginHttpRoute,
+  normalizePluginHttpDeclarations,
+  type PluginHttpHostLike,
+  type PluginHttpLimits,
+  type PluginHttpMatch,
+  type PluginHttpResolution,
+  type PluginHttpRoute,
+  type PluginHttpRouteConflict,
+  type PluginHttpTarget,
+  resolvePluginHttpLimits,
+} from './http.js';
 import { PLUGIN_ID_PATTERN, PluginRpcRegistry, pluginRpcName } from './registry.js';
 import type {
   PluginContributionsSnapshot,
@@ -74,6 +89,10 @@ export interface PluginHostManagerOptions {
   maxRestarts?: number;
   restartDelayMs?: number;
   now?: () => number;
+  /** 0.48 M1：宿主默认 HTTP 限额；manifest 只能收紧。 */
+  httpLimits?: PluginHttpLimits;
+  /** 0.48 M1：宿主保留路径判定（缺省 `isHostReservedPath`）。 */
+  httpReservedPath?: (pathname: string) => boolean;
 }
 
 interface Entry {
@@ -92,6 +111,8 @@ interface Entry {
   starting?: Promise<void>;
   tenantId: string;
   settings: Record<string, unknown>;
+  /** 本次 spawn 的插件 HTTP endpoint + 内部 token；非 active 时清空。 */
+  httpEndpoint?: PluginHttpTarget;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -202,7 +223,11 @@ function eventSubsetOfPermissions(
 }
 
 /** descriptor 复检；loader 已校验过一遍，这里 fail-closed 防注入。 */
-function validateDescriptor(input: PluginDescriptor): PluginDescriptor {
+function validateDescriptor(
+  input: PluginDescriptor,
+  hostLimits: PluginHttpLimits = resolvePluginHttpLimits(),
+  isReservedPath: (pathname: string) => boolean = isHostReservedPath,
+): PluginDescriptor {
   if (typeof input.id !== 'string' || !PLUGIN_ID_PATTERN.test(input.id)) {
     throw pluginError('plugin_manifest_invalid', `Invalid plugin id: ${String(input.id)}`);
   }
@@ -347,6 +372,24 @@ function validateDescriptor(input: PluginDescriptor): PluginDescriptor {
     }
   }
 
+  // 0.48 M1：HTTP 声明在 descriptor 复检阶段归一化；非法 → 插件 invalid。
+  const http = normalizePluginHttpDeclarations(
+    input.id,
+    contributes.http,
+    input.builtin === true,
+    hostLimits,
+  );
+  for (const declaration of http) {
+    // 保留路由冲突只让该插件的 HTTP 面失效（插件 invalid），不拖垮其它插件。
+    if (isReservedPath(declaration.path)) {
+      throw pluginError(
+        'plugin_manifest_invalid',
+        `contributes.http[${declaration.id}].path conflicts with a host-reserved route: ${declaration.path}`,
+        { id: input.id, route: declaration.id, path: declaration.path },
+      );
+    }
+  }
+
   return {
     ...input,
     pluginDir,
@@ -356,6 +399,7 @@ function validateDescriptor(input: PluginDescriptor): PluginDescriptor {
           contributes: {
             ...contributes,
             ...(i18n !== undefined ? { i18n } : {}),
+            ...(http.length > 0 ? { http } : {}),
           },
         }
       : {}),
@@ -446,6 +490,7 @@ function descriptorFingerprint(descriptor: PluginDescriptor): string {
     contributes: descriptor.contributes ?? {},
     permissions: descriptor.permissions ?? {},
     enabled: descriptor.enabled ?? true,
+    builtin: descriptor.builtin ?? false,
   });
 }
 
@@ -453,7 +498,7 @@ function descriptorFingerprint(descriptor: PluginDescriptor): string {
  * 单进程内的 plugin 宿主。多个 tenant 的启用列表由 loader 决定；
  * 这里的事件订阅按激活时传入的 tenantId 建立。
  */
-export class PluginHostManager implements PluginHostManagerLike {
+export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostLike {
   readonly rpc = new PluginRpcRegistry();
 
   private readonly entries = new Map<string, Entry>();
@@ -466,6 +511,9 @@ export class PluginHostManager implements PluginHostManagerLike {
   private readonly restartDelayMs: number;
   private eventSource?: PluginEventSource;
   private readonly options: PluginHostManagerOptions;
+  private readonly httpLimits: PluginHttpLimits;
+  private httpRoutes: readonly PluginHttpRoute[] = [];
+  private httpConflicts: readonly PluginHttpRouteConflict[] = [];
 
   constructor(options: PluginHostManagerOptions) {
     this.options = options;
@@ -483,11 +531,16 @@ export class PluginHostManager implements PluginHostManagerLike {
     this.maxRestarts = options.maxRestarts ?? PLUGIN_MAX_RESTARTS;
     this.restartDelayMs = options.restartDelayMs ?? 0;
     this.eventSource = options.eventSource;
+    this.httpLimits = options.httpLimits ?? resolvePluginHttpLimits();
 
     for (const input of options.descriptors) {
       let descriptor: PluginDescriptor;
       try {
-        descriptor = validateDescriptor(input);
+        descriptor = validateDescriptor(
+          input,
+          this.httpLimits,
+          this.options.httpReservedPath ?? isHostReservedPath,
+        );
       } catch (error) {
         const id = typeof input.id === 'string' ? input.id : '<invalid>';
         const status: PluginStatusEntry = {
@@ -531,6 +584,7 @@ export class PluginHostManager implements PluginHostManagerLike {
       // 懒激活：RPC 定义在 enable 时就注册，首次调用 / 首次页面访问再 spawn。
       this.registerRpc(entry);
     }
+    this.rebuildHttpRoutes();
   }
 
   /** 按需激活（activationEvents 命中后由 loader 调用）。 */
@@ -594,7 +648,11 @@ export class PluginHostManager implements PluginHostManagerLike {
       const id = typeof input?.id === 'string' ? input.id : '<invalid>';
       seen.add(id);
       try {
-        const descriptor = validateDescriptor(input);
+        const descriptor = validateDescriptor(
+          input,
+          this.httpLimits,
+          this.options.httpReservedPath ?? isHostReservedPath,
+        );
         if (normalized.has(descriptor.id)) {
           throw pluginError('plugin_id_conflict', `Duplicate plugin id: ${descriptor.id}`, {
             id: descriptor.id,
@@ -668,6 +726,9 @@ export class PluginHostManager implements PluginHostManagerLike {
       }
     }
 
+    // 路由表在每次 reload 后重建；冲突时整体 fail-closed。
+    this.rebuildHttpRoutes();
+
     const result: PluginReloadResult = {
       added,
       removed,
@@ -717,6 +778,7 @@ export class PluginHostManager implements PluginHostManagerLike {
     // RPC 定义保留：下次页面 / RPC 访问重新懒激活（disable 才移除）。
     const child = entry.child;
     entry.child = undefined;
+    entry.httpEndpoint = undefined;
     if (child !== undefined) await child.terminate();
     this.publishState(entry);
   }
@@ -785,6 +847,45 @@ export class PluginHostManager implements PluginHostManagerLike {
     return entry !== undefined ? this.statusOf(entry) : undefined;
   }
 
+  /** 0.48 M1：插件 HTTP 路由匹配；冲突 / 无路由 → `none`。 */
+  match(method: string, pathname: string): PluginHttpMatch {
+    return matchPluginHttpRoute(this.httpRoutes, method, pathname);
+  }
+
+  /** 0.48 M1：路由冲突（非空时路由表为空，HTTP 面 fail-closed）。 */
+  conflicts(): readonly PluginHttpRouteConflict[] {
+    return this.httpConflicts;
+  }
+
+  /** 本次 spawn 的 endpoint + token；仅 active 时可用。 */
+  httpEndpointFor(id: string): PluginHttpTarget | undefined {
+    const entry = this.entries.get(id);
+    if (entry === undefined || entry.status !== 'active') return undefined;
+    return entry.httpEndpoint;
+  }
+
+  /**
+   * 0.48 M1：解析插件 HTTP 目标。首次访问按需激活（与页面 / RPC 一致）。
+   * disabled → 404；invalid / unhealthy / 无 endpoint → 503；只有 active → ready。
+   */
+  async resolve(pluginId: string, tenantId: string): Promise<PluginHttpResolution> {
+    const entry = this.entries.get(pluginId);
+    if (entry === undefined) return { kind: 'disabled' };
+    if (!entry.enabled || entry.status === 'disabled') return { kind: 'disabled' };
+    if (entry.status === 'invalid') return { kind: 'unavailable' };
+    try {
+      await this.ensureActive(pluginId, tenantId);
+    } catch {
+      // 激活失败已写入 entry.status；disabled / invalid 走不同 HTTP 语义。
+      // 读 helper 防止 TS 把前面的收窄当成不变。
+      if (!entry.enabled || this.statusNow(entry) === 'disabled') return { kind: 'disabled' };
+      return { kind: 'unavailable' };
+    }
+    const target = entry.httpEndpoint;
+    if (entry.status !== 'active' || target === undefined) return { kind: 'unavailable' };
+    return { kind: 'ready', target };
+  }
+
   /** 被 deny 的宿主 API 次数（探针 / 诊断）。 */
   denialsFor(id: string): number {
     return this.entries.get(id)?.denials ?? 0;
@@ -802,11 +903,41 @@ export class PluginHostManager implements PluginHostManagerLike {
       this.rpc.unregister(entry.descriptor.id);
       const child = entry.child;
       entry.child = undefined;
+      entry.httpEndpoint = undefined;
       if (child !== undefined) tasks.push(child.terminate());
       entry.status = entry.enabled ? 'inactive' : 'disabled';
     }
     await Promise.all(tasks);
     this.rpc.clear();
+  }
+
+  /** 0.48 M1：按当前 descriptor 重建 HTTP 路由表；冲突 → 整体 fail-closed。 */
+  private rebuildHttpRoutes(): void {
+    // invalid 条目的 descriptor 可能是校验失败后的兜底值（保留原始 http 声明），
+    // 不能进入路由表，否则一个坏插件会把整个 HTTP 面拖成冲突态。
+    const inputs = [...this.entries.values()]
+      .filter((entry) => entry.status !== 'invalid')
+      .map((entry) => ({
+        pluginId: entry.descriptor.id,
+        builtin: entry.descriptor.builtin === true,
+        declarations: entry.descriptor.contributes?.http,
+      }))
+      .filter((input) => input.declarations !== undefined);
+    const table = buildPluginHttpRouteTable(
+      inputs,
+      this.httpLimits,
+      this.options.httpReservedPath ?? isHostReservedPath,
+    );
+    this.httpRoutes = table.routes;
+    this.httpConflicts = table.conflicts;
+    if (table.conflicts.length > 0) {
+      this.logger('error', 'plugin http surface disabled: route conflicts', {
+        conflicts: table.conflicts.map(
+          (conflict) =>
+            `${conflict.pluginId}:${conflict.routeId ?? '?'}:${conflict.reason}:${conflict.path ?? ''}`,
+        ),
+      });
+    }
   }
 
   private makeEntry(descriptor: PluginDescriptor): Entry {
@@ -867,6 +998,11 @@ export class PluginHostManager implements PluginHostManagerLike {
 
     const dataDir = join(this.dataDir, 'plugins', descriptor.id);
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
+    // 每次 spawn 轮换内部 HTTP token；只经 activate 参数下发。
+    const httpToken =
+      (descriptor.contributes?.http ?? []).length > 0
+        ? randomBytes(32).toString('base64url')
+        : undefined;
     const child = new ChildPluginProcess({
       descriptor,
       settings,
@@ -875,6 +1011,7 @@ export class PluginHostManager implements PluginHostManagerLike {
       globalDataDir: this.dataDir,
       ...(this.options.execPath !== undefined ? { execPath: this.options.execPath } : {}),
       ...(this.options.timeouts !== undefined ? { timeouts: this.options.timeouts } : {}),
+      ...(httpToken !== undefined ? { httpToken } : {}),
       hooks: {
         onExit: (info) => this.handleExit(entry, child, info),
         onLog: () => {},
@@ -895,10 +1032,15 @@ export class PluginHostManager implements PluginHostManagerLike {
       entry.status = 'active';
       entry.error = undefined;
       entry.message = undefined;
+      entry.httpEndpoint =
+        child.httpEndpoint !== undefined && httpToken !== undefined
+          ? { url: child.httpEndpoint, token: httpToken }
+          : undefined;
       this.subscribeEvents(entry);
       this.publishState(entry);
     } catch (error) {
       entry.child = undefined;
+      entry.httpEndpoint = undefined;
       entry.error = pluginErrorCodeOf(error) ?? 'plugin_activation_failed';
       entry.message = error instanceof Error ? error.message : String(error);
       entry.status =
@@ -955,6 +1097,7 @@ export class PluginHostManager implements PluginHostManagerLike {
     // 否则会把新子进程引用 / 新订阅清掉（超时 + 立即懒激活的竞态）。
     if (entry.child !== child) return;
     entry.child = undefined;
+    entry.httpEndpoint = undefined;
     this.unsubscribeEvents(entry);
     // RPC 定义保留：崩溃 / 超时后下一次访问仍可懒激活（禁用时才移除）。
 

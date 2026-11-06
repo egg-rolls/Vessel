@@ -47,6 +47,33 @@ export {
   preparePluginEvent,
 } from './events.js';
 export {
+  buildPluginHttpRouteTable,
+  isHostReservedPath,
+  matchPluginHttpRoute,
+  normalizePluginHttpDeclarations,
+  normalizePluginHttpEndpoint,
+  PLUGIN_HTTP_METHODS,
+  PLUGIN_HTTP_RESERVED_PATHS,
+  PLUGIN_HTTP_RESERVED_PREFIXES,
+  type PluginHttpAuth,
+  type PluginHttpConflictReason,
+  type PluginHttpDeclaration,
+  type PluginHttpHostLike,
+  type PluginHttpLimits,
+  type PluginHttpMatch,
+  type PluginHttpMethod,
+  type PluginHttpResolution,
+  type PluginHttpResponseMode,
+  type PluginHttpRoute,
+  type PluginHttpRouteConflict,
+  type PluginHttpRouteInput,
+  type PluginHttpRouteTable,
+  type PluginHttpScope,
+  type PluginHttpSegment,
+  type PluginHttpTarget,
+  resolvePluginHttpLimits,
+} from './http.js';
+export {
   PLUGIN_MAX_RESTARTS,
   PLUGIN_RESTART_WINDOW_MS,
   PluginHostManager,
@@ -56,6 +83,10 @@ export {
   renderContributions,
   toPluginListStatus,
 } from './manager.js';
+export {
+  type PluginHttpProxyOptions,
+  proxyPluginHttpRequest,
+} from './proxy.js';
 export {
   PLUGIN_ID_PATTERN,
   PLUGIN_METHOD_NAME_PATTERN,

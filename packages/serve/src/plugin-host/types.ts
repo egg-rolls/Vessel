@@ -9,6 +9,7 @@
  */
 
 import type { RpcDynamicMethodSource } from '../rpc.js';
+import type { PluginHttpDeclaration } from './http.js';
 
 /** 错误码（CONTRACT-0.43 §8；日志 / 状态用，不是 RPC 信封 code） */
 export type PluginErrorCode =
@@ -160,6 +161,8 @@ export interface PluginManifestContributions {
   rpc?: PluginRpcContribution[];
   events?: string[];
   settings?: Record<string, unknown>;
+  /** 0.48 M1：插件 HTTP 路由声明（CONTRACT-0.48 §2）。 */
+  http?: PluginHttpDeclaration[];
 }
 
 /** `permissions` */
@@ -201,6 +204,8 @@ export interface PluginDescriptor {
   dependencies?: PluginDependencies;
   /** 初始启用状态；缺省 true。 */
   enabled?: boolean;
+  /** 内置插件（随 release 发布，可信）；`auth: none/plugin` 只允许内置。 */
+  builtin?: boolean;
 }
 
 /** `plugins.list` 的 E1 渲染字段（contract §2.7） */

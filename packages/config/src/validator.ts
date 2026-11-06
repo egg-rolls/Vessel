@@ -902,6 +902,49 @@ function hubUrlError(value: string): string | null {
   return null;
 }
 
+const PLUGIN_HTTP_LIMIT_KEYS = [
+  'maxBodyBytes',
+  'maxResponseBytes',
+  'timeoutMs',
+  'idleTimeoutMs',
+  'maxConnections',
+] as const;
+
+/** 0.48 M1：`serve.pluginHttp` 限额校验；`null` = 不限制。 */
+function validatePluginHttpLimits(value: unknown, errors: ConfigValidationError[]): void {
+  if (value === undefined) return;
+  if (!isPlainObject(value)) {
+    errors.push({
+      path: 'serve.pluginHttp',
+      message: 'serve.pluginHttp must be a mapping',
+      value,
+    });
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!(PLUGIN_HTTP_LIMIT_KEYS as readonly string[]).includes(key)) {
+      errors.push({
+        path: `serve.pluginHttp.${key}`,
+        message: `serve.pluginHttp.${key} is not a known limit`,
+      });
+    }
+  }
+  for (const key of PLUGIN_HTTP_LIMIT_KEYS) {
+    const raw = value[key];
+    if (raw === undefined || raw === null) continue;
+    const minimum = key === 'maxBodyBytes' || key === 'maxResponseBytes' ? 0 : 1;
+    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < minimum) {
+      errors.push({
+        path: `serve.pluginHttp.${key}`,
+        message:
+          `serve.pluginHttp.${key} must be ${minimum === 0 ? 'a non-negative' : 'a positive'} ` +
+          'integer, or null for unlimited',
+        value: raw,
+      });
+    }
+  }
+}
+
 /**
  * 校验 serve 块（schema 层；文件存在性由启动前检查）。
  * 非回环必须 `allowRemote: true`；TLS 必须 cert/key 成对。
@@ -972,6 +1015,9 @@ export function validateServeSettings(
       });
     }
   }
+
+  // 0.48 M1：插件 HTTP 反代限额（CONTRACT-0.48 §3.4）。
+  validatePluginHttpLimits((serve as Record<string, unknown>).pluginHttp, errors);
 
   if (
     typeof hostname === 'string' &&
@@ -2555,6 +2601,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'tokens',
     'adminToken',
     'adminTokenEnv',
+    'pluginHttp',
   ],
   connect: ['token', 'tokenEnv', 'caFile'],
   attention: ['nodes'],
