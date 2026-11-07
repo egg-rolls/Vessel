@@ -16,11 +16,14 @@ import { type ChildExitInfo, ChildPluginProcess, type PLUGIN_TIMEOUTS } from './
 import { jsonDtoViolation } from './dto.js';
 import { PluginHostError, pluginError, pluginErrorCodeOf } from './errors.js';
 import { EventRateLimiter, matchesEventFilter } from './events.js';
+import type { PluginExposeConfig } from './expose.js';
 import {
   buildPluginHttpRouteTable,
   isHostReservedPath,
+  isPluginHttpPathReserved,
   matchPluginHttpRoute,
   normalizePluginHttpDeclarations,
+  type PluginHttpAuditEvent,
   type PluginHttpHostLike,
   type PluginHttpLimits,
   type PluginHttpMatch,
@@ -28,6 +31,8 @@ import {
   type PluginHttpRoute,
   type PluginHttpRouteConflict,
   type PluginHttpTarget,
+  type PluginWebSocketAccounting,
+  type PluginWebSocketHandle,
   resolvePluginHttpLimits,
 } from './http.js';
 import { PLUGIN_ID_PATTERN, PluginRpcRegistry, pluginRpcName } from './registry.js';
@@ -93,6 +98,32 @@ export interface PluginHostManagerOptions {
   httpLimits?: PluginHttpLimits;
   /** 0.48 M1：宿主保留路径判定（缺省 `isHostReservedPath`）。 */
   httpReservedPath?: (pathname: string) => boolean;
+  /** 0.48 M4：按插件 id 读取 config `plugins[].expose`；builtin 忽略。 */
+  exposeFor?: (pluginId: string) => PluginExposeConfig | undefined;
+}
+
+/** 0.48 M3：WS 连接计数（只进日志 / 诊断，不新增 RPC）。 */
+export interface PluginWebSocketStats {
+  active: number;
+  total: number;
+  rejected: number;
+  framesIn: number;
+  framesOut: number;
+  bytesIn: number;
+  bytesOut: number;
+  lastCloseCode?: number;
+}
+
+function emptyWebSocketStats(): PluginWebSocketStats {
+  return {
+    active: 0,
+    total: 0,
+    rejected: 0,
+    framesIn: 0,
+    framesOut: 0,
+    bytesIn: 0,
+    bytesOut: 0,
+  };
 }
 
 interface Entry {
@@ -381,7 +412,10 @@ function validateDescriptor(
   );
   for (const declaration of http) {
     // 保留路由冲突只让该插件的 HTTP 面失效（插件 invalid），不拖垮其它插件。
-    if (isReservedPath(declaration.path)) {
+    // 0.48 M4：外部插件在自己的 `/plugins/<own-id>/` 命名空间内豁免保留前缀。
+    if (
+      isPluginHttpPathReserved(input.id, input.builtin === true, declaration.path, isReservedPath)
+    ) {
       throw pluginError(
         'plugin_manifest_invalid',
         `contributes.http[${declaration.id}].path conflicts with a host-reserved route: ${declaration.path}`,
@@ -514,6 +548,55 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
   private readonly httpLimits: PluginHttpLimits;
   private httpRoutes: readonly PluginHttpRoute[] = [];
   private httpConflicts: readonly PluginHttpRouteConflict[] = [];
+  /** 0.48 M4：builtin 的 `expose` 被忽略时只告警一次。 */
+  private readonly warnedBuiltinExpose = new Set<string>();
+  /** 0.48 M3：pluginId → 打开的客户端 WS。 */
+  private readonly wsConnections = new Map<string, Set<PluginWebSocketHandle>>();
+  private readonly wsStats = new Map<string, PluginWebSocketStats>();
+
+  /** 0.48 M3：WS 登记 / 计数器 / 审计（gateway 经 `PluginHttpHostLike` 使用）。 */
+  readonly webSockets: PluginWebSocketAccounting = {
+    register: (pluginId, handle) => {
+      let set = this.wsConnections.get(pluginId);
+      if (set === undefined) {
+        set = new Set<PluginWebSocketHandle>();
+        this.wsConnections.set(pluginId, set);
+      }
+      set.add(handle);
+      const stats = this.statsFor(pluginId);
+      stats.active += 1;
+      stats.total += 1;
+      let registered = true;
+      return () => {
+        if (!registered) return;
+        registered = false;
+        set.delete(handle);
+        if (set.size === 0) this.wsConnections.delete(pluginId);
+      };
+    },
+    frame: (pluginId, direction, bytes) => {
+      const stats = this.statsFor(pluginId);
+      if (direction === 'in') {
+        stats.framesIn += 1;
+        stats.bytesIn += bytes;
+      } else {
+        stats.framesOut += 1;
+        stats.bytesOut += bytes;
+      }
+    },
+    closed: (pluginId, code) => {
+      const stats = this.statsFor(pluginId);
+      stats.active = Math.max(0, stats.active - 1);
+      stats.lastCloseCode = code;
+    },
+    rejected: (pluginId) => {
+      this.statsFor(pluginId).rejected += 1;
+    },
+    audit: (event: PluginHttpAuditEvent) => {
+      // 结构化审计只进 logger；不含 header / body / token / query。
+      this.logger('warn', event.event, { ...event.data });
+    },
+  };
 
   constructor(options: PluginHostManagerOptions) {
     this.options = options;
@@ -679,6 +762,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
         await this.deactivate(id);
         this.rpc.unregister(id);
         this.entries.delete(id);
+        this.wsStats.delete(id);
         removed.push(id);
       } catch (error) {
         errors.push({
@@ -774,6 +858,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
       entry.restartTimer = undefined;
     }
     entry.status = entry.enabled ? 'inactive' : 'disabled';
+    // 0.48 M3：先下线 WS（不再接受新 upgrade），再退订 / terminate（§4.6）。
+    this.closeWebSockets(id, 1001, 'plugin_unavailable');
     this.unsubscribeEvents(entry);
     // RPC 定义保留：下次页面 / RPC 访问重新懒激活（disable 才移除）。
     const child = entry.child;
@@ -789,6 +875,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     entry.enabled = false;
     await this.deactivate(id);
     this.rpc.unregister(id);
+    // 0.48 M4：enable/disable 立即重算 effective HTTP 路由（§6.2）。
+    this.rebuildHttpRoutes();
   }
 
   /** 启用但保持懒激活。 */
@@ -800,6 +888,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     entry.error = undefined;
     entry.message = undefined;
     this.registerRpc(entry);
+    this.rebuildHttpRoutes();
     this.publishState(entry);
   }
 
@@ -852,9 +941,14 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return matchPluginHttpRoute(this.httpRoutes, method, pathname);
   }
 
-  /** 0.48 M1：路由冲突（非空时路由表为空，HTTP 面 fail-closed）。 */
+  /** 0.48 M1/M4：全部冲突（plugin 级只影响该插件；surface 级整体 fail-closed）。 */
   conflicts(): readonly PluginHttpRouteConflict[] {
     return this.httpConflicts;
+  }
+
+  /** 0.48 M4：effective 跨插件冲突导致整个 HTTP 面 fail-closed。 */
+  httpSurfaceDisabled(): boolean {
+    return this.httpConflicts.some((conflict) => conflict.scope === 'surface');
   }
 
   /** 本次 spawn 的 endpoint + token；仅 active 时可用。 */
@@ -891,10 +985,18 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return this.entries.get(id)?.denials ?? 0;
   }
 
+  /** 0.48 M3：WS 计数快照（只供日志 / 诊断，不暴露 RPC）。 */
+  webSocketStats(pluginId: string): PluginWebSocketStats | undefined {
+    const stats = this.wsStats.get(pluginId);
+    return stats !== undefined ? { ...stats } : undefined;
+  }
+
   /** 幂等关闭全部子进程与订阅。 */
   async stopAll(): Promise<void> {
     const tasks: Array<Promise<void>> = [];
     for (const entry of this.entries.values()) {
+      // 0.48 M3：先关 WS 再 terminate（§4.6）。
+      this.closeWebSockets(entry.descriptor.id, 1001, 'plugin_unavailable');
       if (entry.restartTimer !== undefined) {
         clearTimeout(entry.restartTimer);
         entry.restartTimer = undefined;
@@ -911,17 +1013,74 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     this.rpc.clear();
   }
 
-  /** 0.48 M1：按当前 descriptor 重建 HTTP 路由表；冲突 → 整体 fail-closed。 */
+  /** 0.48 M3：关闭某插件的全部客户端 WS（幂等；句柄自行保证只关一次）。 */
+  private closeWebSockets(pluginId: string, code: number, reason: string): void {
+    const connections = this.wsConnections.get(pluginId);
+    if (connections === undefined) return;
+    for (const handle of [...connections]) {
+      try {
+        handle.close(code, reason);
+      } catch {
+        // 连接已结束
+      }
+    }
+  }
+
+  private statsFor(pluginId: string): PluginWebSocketStats {
+    let stats = this.wsStats.get(pluginId);
+    if (stats === undefined) {
+      stats = emptyWebSocketStats();
+      this.wsStats.set(pluginId, stats);
+    }
+    return stats;
+  }
+
+  /**
+   * 0.48 M1/M4：按当前 descriptor + `expose` 重建 effective HTTP 路由表。
+   * - invalid / disabled 插件不进入；
+   * - plugin 级冲突只排除该插件，surface 级冲突整体 fail-closed。
+   */
   private rebuildHttpRoutes(): void {
     // invalid 条目的 descriptor 可能是校验失败后的兜底值（保留原始 http 声明），
     // 不能进入路由表，否则一个坏插件会把整个 HTTP 面拖成冲突态。
     const inputs = [...this.entries.values()]
-      .filter((entry) => entry.status !== 'invalid')
-      .map((entry) => ({
-        pluginId: entry.descriptor.id,
-        builtin: entry.descriptor.builtin === true,
-        declarations: entry.descriptor.contributes?.http,
-      }))
+      .filter((entry) => entry.enabled && entry.status !== 'invalid')
+      .map((entry) => {
+        const expose = this.options.exposeFor?.(entry.descriptor.id);
+        // builtin 忽略 expose（CONTRACT-0.48 §5.2），只提示一次。
+        if (
+          expose !== undefined &&
+          entry.descriptor.builtin === true &&
+          !this.warnedBuiltinExpose.has(entry.descriptor.id)
+        ) {
+          this.warnedBuiltinExpose.add(entry.descriptor.id);
+          this.logger('warn', 'plugin.expose.ignored', {
+            plugin: entry.descriptor.id,
+            reason: 'builtin',
+          });
+        }
+        // 未知 expose id → warning + 忽略（CONTRACT-0.48 §5.1 / §5.3），不拒绝插件。
+        if (expose !== undefined && entry.descriptor.builtin !== true) {
+          const declared = new Set(
+            (entry.descriptor.contributes?.http ?? []).map((route) => route.id),
+          );
+          for (const id of expose.http ?? []) {
+            if (!declared.has(id)) {
+              this.logger('warn', 'plugin.expose.unknown_id', {
+                plugin: entry.descriptor.id,
+                surface: 'http',
+                id,
+              });
+            }
+          }
+        }
+        return {
+          pluginId: entry.descriptor.id,
+          builtin: entry.descriptor.builtin === true,
+          declarations: entry.descriptor.contributes?.http,
+          ...(expose !== undefined ? { expose } : {}),
+        };
+      })
       .filter((input) => input.declarations !== undefined);
     const table = buildPluginHttpRouteTable(
       inputs,
@@ -931,12 +1090,17 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     this.httpRoutes = table.routes;
     this.httpConflicts = table.conflicts;
     if (table.conflicts.length > 0) {
-      this.logger('error', 'plugin http surface disabled: route conflicts', {
+      const fields = {
         conflicts: table.conflicts.map(
           (conflict) =>
-            `${conflict.pluginId}:${conflict.routeId ?? '?'}:${conflict.reason}:${conflict.path ?? ''}`,
+            `${conflict.scope}:${conflict.pluginId}:${conflict.routeId ?? '?'}:${conflict.reason}:${conflict.path ?? ''}`,
         ),
-      });
+      };
+      if (table.conflicts.some((conflict) => conflict.scope === 'surface')) {
+        this.logger('error', 'plugin http surface disabled: effective route conflicts', fields);
+      } else {
+        this.logger('warn', 'plugin http declarations rejected', fields);
+      }
     }
   }
 
@@ -1098,6 +1262,12 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     if (entry.child !== child) return;
     entry.child = undefined;
     entry.httpEndpoint = undefined;
+    // 0.48 M3：插件退出 / 崩溃 → 关闭该插件全部客户端 WS（不自动重连）。
+    this.closeWebSockets(
+      entry.descriptor.id,
+      info.expected ? 1001 : 1011,
+      info.expected ? 'plugin_unavailable' : 'plugin_crashed',
+    );
     this.unsubscribeEvents(entry);
     // RPC 定义保留：崩溃 / 超时后下一次访问仍可懒激活（禁用时才移除）。
 

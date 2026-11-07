@@ -92,7 +92,10 @@ export type ProtocolErrorCode =
   // 0.13：权限/交互请求已过期或已取消（DECISION-024 §2.2）。
   | 'expired'
   // 0.13 Addendum A：run 已结束 / 重启后找不到 run。
-  | 'run_ended';
+  | 'run_ended'
+  // 0.48 M3：插件 WS 路由形态错误（CONTRACT-0.48 §3.3）。
+  | 'upgrade_required'
+  | 'upgrade_not_allowed';
 
 export interface ProtocolError {
   code: ProtocolErrorCode;

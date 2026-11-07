@@ -39,8 +39,10 @@ const ARCH_DIR = 'docs/architecture';
 const AGENTS_DIR = 'docs/agents';
 const DOC_KINDS = new Set(['current', 'advisory', 'target']);
 const APPLIES_TO = new Set(['N', 'M']);
-const ARCH_MODULE_LINE_LIMIT = 100;
-const ADVISORY_LINE_LIMIT = 60;
+// 0.48 M3/M4 added the WS upgrade and expose/catalog surfaces. One-time bump:
+// keep the new normative content and examples; do not delete fields to pass.
+const ARCH_MODULE_LINE_LIMIT = 110;
+const ADVISORY_LINE_LIMIT = 70;
 const TARGET_MODULE_LINE_LIMIT = 600;
 const DOC_INDEX_LINE_LIMIT = 60;
 const ADR_DIR = 'docs/adr';

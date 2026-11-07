@@ -185,7 +185,11 @@ function readPlugin(base: string, category: string, source: PluginSource): Plugi
       return null;
     }
     if (isRecord(vessel.contributes)) {
-      const result = validatePluginManifest(vessel, { baseDir: base });
+      const result = validatePluginManifest(vessel, {
+        baseDir: base,
+        // 0.48 M4：外部插件的 HTTP 面只能占用自己的 `/plugins/<id>/` 命名空间。
+        external: source !== 'repo',
+      });
       if (!result.ok) {
         warnManifestFailure(base, result.error);
         return null;

@@ -27,6 +27,11 @@ export interface PluginHostAssemblyOptions {
   loader: Pick<PluginLoader, 'getChildMods'>;
   /** 活配置；`plugins[].config` 即该 plugin 的 settings */
   config: VesselConfig;
+  /**
+   * 读取当前活配置（可选）。提供时 `expose` 授权随 reload / config watcher 变化；
+   * 缺省回退到 `config`（启动快照）。
+   */
+  getConfig?: () => VesselConfig;
   /** `<dataDir>`；plugin 私有目录为 `<dataDir>/plugins/<id>` */
   dataDir: string;
   logger?: Logger;
@@ -146,6 +151,11 @@ export function createPluginHostManager(options: PluginHostAssemblyOptions): Plu
     .map((descriptor) => toServeDescriptor(descriptor, options.config));
   const logger = options.logger;
   return new PluginHostManager({
+    // 0.48 M4：`plugins[].expose` 只做 allow/deny；builtin 由 descriptor 提供。
+    exposeFor: (id) => {
+      const config = options.getConfig?.() ?? options.config;
+      return config.plugins?.find((plugin) => plugin.name === id)?.expose;
+    },
     descriptors,
     dataDir: options.dataDir,
     // 懒激活（首次页面 / RPC 访问）时解析 settings。gateway 工厂路径注入

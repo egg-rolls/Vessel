@@ -25,6 +25,7 @@ applies_to: [N, M]
 - 所有 transient 提示 / banner / 交互摘要统一经 AppBar 中心 `MessageBar`；`ToastProvider`
   只提供 API，不渲染，禁止新增 fixed toast / 浮层（见 [WEB-UI.md](../WEB-UI.md) 硬规则 7）。
 - 不用 `backdrop-filter` 做层级；层级靠边框与阴影表达（ADR-072/082）。
+- `plugins.catalog` 的 `declaredSurface` / `effectiveSurface` 是只读摘要（HTTP `id`/`method`/`path`，CLI `path`/`description`）。Marketplace 只展示两者差异；不据此写 config、不新增 RPC；外部插件授权提示指向 `config.yaml` 的 `expose`。
 
 ## T1 单公司兼容期（隐藏 tenant 入口）
 

@@ -47,21 +47,36 @@ export {
   preparePluginEvent,
 } from './events.js';
 export {
+  isCliCommandExposed,
+  isHttpRouteExposed,
+  type PluginExposeConfig,
+  type PluginSurfaceCliEntry,
+  type PluginSurfaceHttpEntry,
+  type PluginSurfaceSummary,
+  resolveEffectiveSurface,
+  surfaceSummaryFromManifest,
+} from './expose.js';
+export {
   buildPluginHttpRouteTable,
   isHostReservedPath,
+  isPluginHttpPathReserved,
   matchPluginHttpRoute,
   normalizePluginHttpDeclarations,
   normalizePluginHttpEndpoint,
   PLUGIN_HTTP_METHODS,
   PLUGIN_HTTP_RESERVED_PATHS,
   PLUGIN_HTTP_RESERVED_PREFIXES,
+  type PluginHttpAuditEvent,
   type PluginHttpAuth,
   type PluginHttpConflictReason,
+  type PluginHttpConflictScope,
   type PluginHttpDeclaration,
+  type PluginHttpDisconnectAudit,
   type PluginHttpHostLike,
   type PluginHttpLimits,
   type PluginHttpMatch,
   type PluginHttpMethod,
+  type PluginHttpRequestAudit,
   type PluginHttpResolution,
   type PluginHttpResponseMode,
   type PluginHttpRoute,
@@ -71,6 +86,9 @@ export {
   type PluginHttpScope,
   type PluginHttpSegment,
   type PluginHttpTarget,
+  type PluginHttpUpgrade,
+  type PluginWebSocketAccounting,
+  type PluginWebSocketHandle,
   resolvePluginHttpLimits,
 } from './http.js';
 export {
@@ -79,6 +97,7 @@ export {
   PluginHostManager,
   type PluginHostManagerOptions,
   type PluginLogger,
+  type PluginWebSocketStats,
   pluginListMetadata,
   renderContributions,
   toPluginListStatus,
@@ -131,3 +150,13 @@ export {
   PLUGIN_I18N_LOCALES,
   PLUGIN_ICON_NAMES,
 } from './types.js';
+export {
+  mapPluginWsCloseCode,
+  PLUGIN_WS_HIGH_WATER_BYTES,
+  PLUGIN_WS_MAX_CLOSE_REASON_BYTES,
+  type PluginWsClient,
+  PluginWsConnection,
+  type PluginWsConnectionOptions,
+  type PluginWsUpstream,
+  truncatePluginWsReason,
+} from './ws-proxy.js';

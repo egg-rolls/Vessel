@@ -24,6 +24,9 @@ applies_to: [N, M]
 - 提交前跑 `bun run scripts/check-rpc-methods.ts`：扫描 `plugins/**/package.json`
   （跳过 `node_modules` / `dist` / `web`），非法清单 exit 1；gateway 方法表检查同时执行。
   不要为历史非法名加 allowlist——改清单本身。
+- 0.48 M4：外部插件（`source !== 'repo'`）的 HTTP path 必须是 `/plugins/<own-id>/<段>`；
+  route / CLI command 需 `plugins[].expose` 显式授权（builtin 忽略），CLI 未授权 / config
+  失败按未命中；冲突两级见 [plugins.md](../architecture/plugins.md#扩展面授权expose)。
 
 <a id="discovery"></a>
 
@@ -48,8 +51,7 @@ applies_to: [N, M]
 
 ## MCP / evals / skills
 
-- MCP 的默认 deny 与放行规则见 AGENTS 硬规则；实现按原始工具名精确匹配（ADR-039）。
-- evals 的离线双门控见 AGENTS 硬规则；运行器与报告见 ADR-043。
+- MCP 的默认 deny / 放行规则（原始工具名精确匹配，ADR-039）与 evals 的离线双门控（ADR-043）见 AGENTS 硬规则。
 - skills 就是文件，经消息进来；不写 harness 层的扫描 / 解析 / 注入通道。
 - `team_*` / `delegate_task` 已删除；evals / feishu / MCP 只做插件，不进 core（ADR-043/044/090）。
 

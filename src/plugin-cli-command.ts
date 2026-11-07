@@ -21,6 +21,13 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+  type ConfigLoadResult,
+  DEFAULT_TENANT_ID,
+  loadConfig,
+  type PluginExposeConfig,
+} from '../packages/config/src/index';
+import { isCliCommandExposed } from '../packages/serve/src/index';
 import { builtinCommandTokens } from './completion-spec';
 import {
   type ResolveControlPlaneTargetResult,
@@ -60,6 +67,8 @@ export interface PluginCliCommandOptions {
   resolveTarget?: () => Promise<ResolveControlPlaneTargetResult>;
   stdout?: (text: string) => void;
   stderr?: (text: string) => void;
+  /** 探针注入：替换配置加载（外部插件 `expose.cli` 过滤；缺省 `loadConfig`）。 */
+  loadConfig?: () => Promise<ConfigLoadResult>;
 }
 
 interface PluginCliEntry {
@@ -133,9 +142,31 @@ function revalidateEntry(
   const result = validatePluginManifest(raw, {
     baseDir: entry.descriptor.dir,
     reservedCliNames: reserved,
+    external: entry.descriptor.source !== 'repo',
   });
   if (!result.ok) return { ok: false, code: result.error.code, error: result.error.message };
   return { ok: true, manifest: result.manifest };
+}
+
+/**
+ * 0.48 M4：外部插件的 CLI 授权。config 加载 / 校验失败 → undefined（fail-closed，
+ * 该外部插件视为未命中；内置命令不受影响）。
+ */
+async function readPluginCliExpose(
+  pluginId: string,
+  options: PluginCliCommandOptions,
+): Promise<{ expose?: PluginExposeConfig; tenantId: string } | undefined> {
+  try {
+    const loaded = await (options.loadConfig ?? loadConfig)();
+    if (loaded.validation.errors.length > 0) return undefined;
+    const config = loaded.config.plugins?.find((plugin) => plugin.name === pluginId);
+    return {
+      ...(config?.expose !== undefined ? { expose: config.expose } : {}),
+      tenantId: loaded.tenantId,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /** 命令路径 = 首 token 之后的连续非 flag token；其余交给 args 解析 */
@@ -554,7 +585,36 @@ export async function runPluginCliCommand(
     writeErr(ui.err(`${revalidated.code}: ${revalidated.error}`));
     return { handled: true, exitCode: 1 };
   }
-  const commands = revalidated.manifest.contributes?.cli ?? [];
+  let commands = revalidated.manifest.contributes?.cli ?? [];
+  let tenantId = DEFAULT_TENANT_ID;
+
+  // 0.48 M4：builtin 直接允许；外部插件懒加载 config，只保留 `expose.cli`。
+  if (entry.descriptor.source !== 'repo') {
+    const loaded = await readPluginCliExpose(entry.manifest.id, options);
+    if (loaded === undefined) return { handled: false, exitCode: 0 };
+    tenantId = loaded.tenantId;
+    const allowed = new Set(loaded.expose?.cli ?? []);
+    const declared = new Set(commands.map((command) => command.path.join('.')));
+    for (const id of allowed) {
+      if (!declared.has(id)) {
+        try {
+          createCliLogger().warn('plugin.expose.unknown_id', {
+            plugin: entry.manifest.id,
+            surface: 'cli',
+            id,
+          });
+        } catch {
+          // 告警不得改变命令语义
+        }
+      }
+    }
+    // 授权谓词只有 expose.ts 一份；CLI / catalog 不允许内联复制。
+    commands = commands.filter((command) =>
+      isCliCommandExposed(loaded.expose, command.path.join('.'), false),
+    );
+    // 没有生效的外部命令 → 按未命中回落 `parseArgs`，不暴露插件存在性。
+    if (commands.length === 0) return { handled: false, exitCode: 0 };
+  }
 
   const { tail, rest } = splitCommandPath(argv.slice(1));
   const wantsHelp = rest.includes('--help') || rest.includes('-h');
@@ -600,6 +660,7 @@ export async function runPluginCliCommand(
     return { handled: true, exitCode: 1 };
   }
 
+  const invokeStartedAt = Date.now();
   let resolved: ResolveControlPlaneTargetResult;
   try {
     resolved =
@@ -614,28 +675,25 @@ export async function runPluginCliCommand(
     writeErr('Hint: start one with `vessel gateway start`.');
     audit({
       plugin: entry.manifest.id,
-      command: command.path.join(' '),
-      handler: command.handler,
-      argKeys: Object.keys(parsed.value),
-      ok: false,
-      error: 'gateway_unavailable',
+      command: command.path.join('.'),
+      outcome: 'gateway_unavailable',
+      durationMs: Date.now() - invokeStartedAt,
+      tenant: tenantId,
     });
     return { handled: true, exitCode: 1 };
   }
 
   const method = `plugin.${entry.manifest.id}.${command.handler}`;
-  const startedAt = Date.now();
   try {
     const result = await resolved.target.request(method, parsed.value);
     const text = truncate(renderResult(result), PLUGIN_CLI_MAX_STDOUT_BYTES);
     if (text !== '') writeOut(text);
     audit({
       plugin: entry.manifest.id,
-      command: command.path.join(' '),
-      handler: command.handler,
-      argKeys: Object.keys(parsed.value),
-      ok: true,
-      durationMs: Date.now() - startedAt,
+      command: command.path.join('.'),
+      outcome: 'ok',
+      durationMs: Date.now() - invokeStartedAt,
+      tenant: tenantId,
     });
     return { handled: true, exitCode: 0 };
   } catch (error) {
@@ -643,12 +701,10 @@ export async function runPluginCliCommand(
     writeErr(ui.err(`plugin_cli_failed: ${message}`));
     audit({
       plugin: entry.manifest.id,
-      command: command.path.join(' '),
-      handler: command.handler,
-      argKeys: Object.keys(parsed.value),
-      ok: false,
-      error: 'plugin_cli_failed',
-      durationMs: Date.now() - startedAt,
+      command: command.path.join('.'),
+      outcome: 'error',
+      durationMs: Date.now() - invokeStartedAt,
+      tenant: tenantId,
     });
     return { handled: true, exitCode: 1 };
   } finally {

@@ -909,6 +909,7 @@ const PLUGIN_HTTP_LIMIT_KEYS = [
   'timeoutMs',
   'idleTimeoutMs',
   'maxConnections',
+  'maxFrameBytes',
 ] as const;
 
 /** 0.48 M1：`serve.pluginHttp` 限额校验；`null` = 不限制。 */
@@ -1883,6 +1884,59 @@ export function validateAttentionSettings(
 }
 
 /**
+ * 0.48 M4：`plugins[].expose` 只允许 `http` / `cli` 两个键，值为非空字符串数组；
+ * 不接受 `true` 简写，重复 id 视为配置错误（CONTRACT-0.48 §5.1）。
+ */
+function validatePluginExpose(path: string, value: unknown, errors: ConfigValidationError[]): void {
+  if (!isPlainObject(value)) {
+    errors.push({
+      path,
+      message: `${path} must be an object with optional http/cli arrays`,
+      value,
+    });
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== 'http' && key !== 'cli') {
+      errors.push({
+        path: `${path}.${key}`,
+        message: `${path}.${key} is not supported (allowed: http, cli)`,
+        value: key,
+      });
+    }
+  }
+  for (const key of ['http', 'cli'] as const) {
+    const list = value[key];
+    if (list === undefined) continue;
+    const listPath = `${path}.${key}`;
+    if (!Array.isArray(list)) {
+      errors.push({ path: listPath, message: `${listPath} must be an array of ids`, value: list });
+      continue;
+    }
+    const seen = new Set<string>();
+    for (const [index, id] of list.entries()) {
+      if (typeof id !== 'string' || id.trim() === '') {
+        errors.push({
+          path: `${listPath}.${index}`,
+          message: `${listPath}[${index}] must be a non-empty string`,
+          value: id,
+        });
+        continue;
+      }
+      if (seen.has(id)) {
+        errors.push({
+          path: `${listPath}.${index}`,
+          message: `duplicate expose id "${id}"`,
+          value: id,
+        });
+        continue;
+      }
+      seen.add(id);
+    }
+  }
+}
+
+/**
  * 校验 Vessel 配置。所有字段为 camelCase（ADR-019）。
  * @param config 配置对象
  * @returns 校验结果
@@ -2265,6 +2319,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         }
         if (plugin.config !== undefined && !isPlainObject(plugin.config)) {
           errors.push({ path: `${prefix}.config`, message: 'plugin config must be an object' });
+        }
+        if (plugin.expose !== undefined) {
+          validatePluginExpose(`${prefix}.expose`, plugin.expose, errors);
         }
       }
     }

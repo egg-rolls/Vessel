@@ -16,6 +16,23 @@ export type CatalogMode = 'in-process' | 'child';
 
 export type CatalogStatus = 'active' | 'inactive' | 'unhealthy' | 'disabled' | 'invalid';
 
+/** Extension surface summary in the host catalog (CONTRACT-0.48 §8.1). */
+export interface CatalogSurfaceHttpRoute {
+  id: string;
+  method: string;
+  path: string;
+}
+
+export interface CatalogSurfaceCliCommand {
+  path: string[];
+  description?: string;
+}
+
+export interface CatalogSurfaceSummary {
+  http: CatalogSurfaceHttpRoute[];
+  cli: CatalogSurfaceCliCommand[];
+}
+
 /** One `PluginCatalogItem` pushed by the host (`vessel.catalog`). */
 export interface CatalogItem {
   id: string;
@@ -31,6 +48,10 @@ export interface CatalogItem {
   path: string;
   entry?: string;
   manifest?: unknown;
+  /** Declared extension surface; absent when the plugin declares none. */
+  declaredSurface?: CatalogSurfaceSummary;
+  /** Declared ∩ enabled ∩ config.expose; present only with `declaredSurface`. */
+  effectiveSurface?: CatalogSurfaceSummary;
 }
 
 /** `updates` result row: registry latest for one catalog id. */

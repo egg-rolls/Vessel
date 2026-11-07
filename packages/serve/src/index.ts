@@ -258,6 +258,7 @@ export {
   ensureJsonDto,
   ensurePayload,
   type HubEventSourceOptions,
+  isCliCommandExposed,
   isDeniedHostApi,
   isHostReservedPath,
   jsonByteLength,

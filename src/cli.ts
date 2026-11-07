@@ -29,6 +29,7 @@ import {
   getUserConfigPath,
   isLoopbackHostname,
   loadConfig,
+  type PluginExposeConfig,
   resolveEffectiveApiKey,
   resolveGatewayNodePorts,
   resolvePlatformToken,
@@ -997,6 +998,8 @@ async function runWithConfig(result: BootstrapResult) {
       pluginHostManager = createPluginHostManager({
         loader: result.bundle.pluginLoader,
         config: liveConfig,
+        // 0.48 M4：expose 授权随 config watcher / reload 重新读取。
+        getConfig: () => liveConfig,
         dataDir,
         logger,
         // 多租户：tenantId → 该 tenant bundle 的 `plugins[].config`；
@@ -1316,8 +1319,14 @@ async function runWithConfig(result: BootstrapResult) {
 
     // 0.47：catalog 只按该 tenant 的 entries 输出，不泄露别的 tenant；
     // descriptor 是发现结果（全局），status 只按 entry 名查找。
-    const pluginCatalogFor = (tenantId: string) =>
-      buildPluginCatalog({
+    // 0.48 M4：注入 config `expose` 与 manager 的 surface 级冲突状态。
+    const pluginCatalogFor = (tenantId: string) => {
+      const expose = new Map<string, PluginExposeConfig>();
+      for (const plugin of liveConfig.plugins ?? []) {
+        if (plugin.expose !== undefined) expose.set(plugin.name, plugin.expose);
+      }
+      const httpSurfaceDisabled = pluginHostManager?.httpSurfaceDisabled() === true;
+      return buildPluginCatalog({
         entries: pluginEntriesForTenant(tenantId),
         descriptors: new Map(
           (result.bundle?.pluginLoader.list() ?? []).map((descriptor) => [
@@ -1326,7 +1335,10 @@ async function runWithConfig(result: BootstrapResult) {
           ]),
         ),
         statuses: pluginHostManager?.statuses() ?? [],
+        ...(expose.size > 0 ? { expose } : {}),
+        ...(httpSurfaceDisabled ? { httpSurfaceDisabled } : {}),
       });
+    };
 
     const gatewayOptions: GatewayOptions & {
       durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;

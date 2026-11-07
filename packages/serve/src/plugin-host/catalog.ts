@@ -10,6 +10,12 @@
  * @module @vessel-agent/serve/plugin-host/catalog
  */
 
+import {
+  type PluginExposeConfig,
+  type PluginSurfaceSummary,
+  resolveEffectiveSurface,
+  surfaceSummaryFromManifest,
+} from './expose.js';
 import { toPluginListStatus } from './manager.js';
 import type { PluginListStatus, PluginMode, PluginRuntimeStatus } from './types.js';
 
@@ -48,6 +54,10 @@ export interface PluginCatalogInput {
   entries: readonly PluginCatalogEntry[];
   descriptors: ReadonlyMap<string, PluginCatalogDescriptor>;
   statuses?: readonly PluginCatalogStatusEntry[];
+  /** CONTRACT-0.48 §8.2：按插件名索引的 config `expose` 授权。 */
+  expose?: ReadonlyMap<string, PluginExposeConfig>;
+  /** CONTRACT-0.48 §6.2 / §8.2：manager 判定 HTTP 面 conflict fail-closed。 */
+  httpSurfaceDisabled?: boolean;
 }
 
 /** 宿主输出的统一插件视图（CONTRACT-0.47 §3）。 */
@@ -69,6 +79,10 @@ export interface PluginCatalogItem {
   entry?: string;
   /** child 插件清单；原样透传，不内联 update / registry 信息。 */
   manifest?: unknown;
+  /** CONTRACT-0.48 §8.1：manifest 声明面摘要；未声明 / in-process 时缺省。 */
+  declaredSurface?: PluginSurfaceSummary;
+  /** 声明 ∩ enabled ∩ expose；只在 `declaredSurface` 存在时出现（可为空数组）。 */
+  effectiveSurface?: PluginSurfaceSummary;
 }
 
 function toCatalogScope(source: PluginCatalogDescriptor['source']): PluginCatalogScope {
@@ -125,6 +139,24 @@ export function buildPluginCatalog(input: PluginCatalogInput): PluginCatalogItem
     const scope = toCatalogScope(descriptor.source);
     const rawStatus = statusById.get(entry.name);
 
+    // CONTRACT-0.48 §8.2：in-process / 无 manifest → 两字段都缺省；
+    // effective 只在 declared 存在时出现（数组可为空）。
+    const declaredSurface = surfaceSummaryFromManifest(descriptor.manifest);
+    const expose = input.expose?.get(entry.name);
+    const effectiveSurface =
+      declaredSurface === undefined
+        ? undefined
+        : resolveEffectiveSurface({
+            declared: declaredSurface,
+            builtin: descriptor.source === 'repo',
+            // invalid 插件的声明不进路由表，effective 也必须为空（§8.2）。
+            enabled: entry.enabled && rawStatus !== 'invalid',
+            ...(expose !== undefined ? { expose } : {}),
+            ...(input.httpSurfaceDisabled !== undefined
+              ? { httpSurfaceDisabled: input.httpSurfaceDisabled }
+              : {}),
+          });
+
     items.push({
       id: descriptor.name,
       name: displayName(descriptor),
@@ -139,6 +171,8 @@ export function buildPluginCatalog(input: PluginCatalogInput): PluginCatalogItem
       path: descriptor.dir,
       ...(descriptor.entry !== undefined ? { entry: descriptor.entry } : {}),
       ...(descriptor.manifest !== undefined ? { manifest: descriptor.manifest } : {}),
+      ...(declaredSurface !== undefined ? { declaredSurface } : {}),
+      ...(effectiveSurface !== undefined ? { effectiveSurface } : {}),
     });
   }
 

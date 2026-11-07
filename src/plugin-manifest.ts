@@ -125,6 +125,8 @@ export type PluginHttpAuth = 'required' | 'none' | 'plugin';
 export type PluginHttpScope = 'read' | 'write' | 'admin';
 /** 0.48 M1：`stream` 跳过 `maxResponseBytes`，只受 idle timeout 约束 */
 export type PluginHttpResponseMode = 'buffered' | 'stream';
+/** 0.48 M3：升级路由类型；v1 只支持 `websocket`（缺省 = 非升级路由） */
+export type PluginHttpUpgrade = 'websocket';
 
 /**
  * 0.48 M1：插件 HTTP 路由声明（CONTRACT-0.48 §2）。
@@ -143,6 +145,14 @@ export interface PluginHttpContribution {
   timeoutMs?: number;
   maxBodyBytes?: number;
   maxResponseBytes?: number;
+  /** 0.48 M3：声明为 WS 升级路由；method 必须是 GET。 */
+  upgrade?: PluginHttpUpgrade;
+  /** 0.48 M3：WS 应用帧 idle；只能收紧宿主默认（30s）。 */
+  idleTimeoutMs?: number;
+  /** 0.48 M3：WS 单帧上限；只能收紧宿主默认（1 MiB）。 */
+  maxFrameBytes?: number;
+  /** 0.48 M3：并发连接上限（HTTP 在途 + 打开的 WS）。 */
+  maxConnections?: number;
 }
 
 /** 0.48 M2：CLI args 允许的 JSON Schema `type` 子集 */
@@ -266,6 +276,12 @@ export interface PluginManifestOptions {
   vesselVersion?: string;
   /** 已知插件 id；提供时检查 `dependencies.plugins` 是否缺失 */
   knownPluginIds?: Iterable<string>;
+  /**
+   * 0.48 M4：外部插件（非 `repo` 源）。提供为 true 时，`contributes.http[].path`
+   * 必须落在 `/plugins/<own-id>/<至少一个非空段>` 命名空间内（CONTRACT-0.48 §6.1）。
+   * 缺省 false（内置插件沿用 M1 规则）。
+   */
+  external?: boolean;
   /**
    * 0.48 M1：宿主保留的 HTTP 路由。条目使用与 `contributes.http[].path` 相同的
    * 语法；末尾 `/*` 表示前缀子树（如 `/v1/*`）。提供时，形状相同的插件路由、
@@ -745,6 +761,7 @@ const PLUGIN_HTTP_METHODS: readonly PluginHttpMethod[] = [
 const PLUGIN_HTTP_AUTHS: readonly PluginHttpAuth[] = ['required', 'none', 'plugin'];
 const PLUGIN_HTTP_SCOPES: readonly PluginHttpScope[] = ['read', 'write', 'admin'];
 const PLUGIN_HTTP_RESPONSE_MODES: readonly PluginHttpResponseMode[] = ['buffered', 'stream'];
+const PLUGIN_HTTP_UPGRADES: readonly PluginHttpUpgrade[] = ['websocket'];
 
 /** 静态段允许字符（DESIGN-0.48 §3.1）：`[A-Za-z0-9._~/-]`，参数段另支持 `:` */
 const HTTP_STATIC_SEGMENT_RE = /^[A-Za-z0-9._~-]+$/;
@@ -907,6 +924,8 @@ function isReservedHttpRoute(shape: string, reserved: ReservedHttpRoutes): boole
 function readHttp(
   value: unknown,
   reserved: ReservedHttpRoutes | undefined,
+  pluginId: string,
+  external: boolean,
 ): PluginHttpContribution[] {
   if (!Array.isArray(value)) fail('plugin_manifest_invalid', 'contributes.http must be an array');
   const seenIds = new Set<string>();
@@ -930,7 +949,16 @@ function readHttp(
       );
     }
     seenRoutes.add(routeKey);
-    if (reserved !== undefined && isReservedHttpRoute(shape, reserved)) {
+    // 0.48 M4：外部插件只能占用自己的 `/plugins/<own-id>/` 命名空间。
+    const ownPrefix = `/plugins/${pluginId}/`;
+    const ownNamespace = external && shape.startsWith(ownPrefix) && shape.length > ownPrefix.length;
+    if (external && !ownNamespace) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field}.path "${routePath}" must match /plugins/${pluginId}/<segment>`,
+      );
+    }
+    if (reserved !== undefined && !ownNamespace && isReservedHttpRoute(shape, reserved)) {
       fail(
         'plugin_manifest_invalid',
         `${field}.path "${routePath}" conflicts with a reserved host route`,
@@ -945,10 +973,30 @@ function readHttp(
       item.scope === undefined
         ? 'read'
         : readEnum(item.scope, PLUGIN_HTTP_SCOPES, `${field}.scope`);
-    const responseMode =
+    const responseModeRaw =
       item.responseMode === undefined
-        ? 'buffered'
+        ? undefined
         : readEnum(item.responseMode, PLUGIN_HTTP_RESPONSE_MODES, `${field}.responseMode`);
+
+    // 0.48 M3：升级路由 fail-closed（CONTRACT-0.48 §3.2）。
+    const upgrade =
+      item.upgrade === undefined
+        ? undefined
+        : readEnum(item.upgrade, PLUGIN_HTTP_UPGRADES, `${field}.upgrade`);
+    if (upgrade !== undefined) {
+      if (method !== 'GET') {
+        fail('plugin_manifest_invalid', `${field}.upgrade requires method "GET"`);
+      }
+      // 显式 buffered 与 WS 升级冲突；缺省按 stream 归一化（§3.1）。
+      if (responseModeRaw === 'buffered') {
+        fail(
+          'plugin_manifest_invalid',
+          `${field}.responseMode must not be "buffered" for upgrades`,
+        );
+      }
+    }
+    const responseMode =
+      upgrade !== undefined ? (responseModeRaw ?? 'stream') : (responseModeRaw ?? 'buffered');
 
     const timeoutMs = optionalPositiveInteger(item.timeoutMs, `${field}.timeoutMs`);
     const maxBodyBytes = optionalPositiveInteger(item.maxBodyBytes, `${field}.maxBodyBytes`);
@@ -956,6 +1004,9 @@ function readHttp(
       item.maxResponseBytes,
       `${field}.maxResponseBytes`,
     );
+    const idleTimeoutMs = optionalPositiveInteger(item.idleTimeoutMs, `${field}.idleTimeoutMs`);
+    const maxFrameBytes = optionalPositiveInteger(item.maxFrameBytes, `${field}.maxFrameBytes`);
+    const maxConnections = optionalPositiveInteger(item.maxConnections, `${field}.maxConnections`);
 
     return {
       id,
@@ -967,6 +1018,10 @@ function readHttp(
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
       ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
+      ...(upgrade !== undefined ? { upgrade } : {}),
+      ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
+      ...(maxFrameBytes !== undefined ? { maxFrameBytes } : {}),
+      ...(maxConnections !== undefined ? { maxConnections } : {}),
     };
   });
 }
@@ -1171,7 +1226,12 @@ function readContributions(
   }
   if (raw.panels !== undefined) out.panels = readPanels(raw.panels);
   if (raw.http !== undefined) {
-    out.http = readHttp(raw.http, readReservedHttpRoutes(options.reservedHttpRoutes));
+    out.http = readHttp(
+      raw.http,
+      readReservedHttpRoutes(options.reservedHttpRoutes),
+      pluginId,
+      options.external === true,
+    );
   }
 
   // 命令执行走 rpc：每个 command 必须有同名 rpc 方法（CONTRACT §2.2）。

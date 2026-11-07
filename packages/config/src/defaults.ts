@@ -121,6 +121,7 @@ export const DEFAULT_PLUGIN_HTTP_LIMITS: Required<PluginHttpLimitsConfig> = {
   timeoutMs: 10_000,
   idleTimeoutMs: 30_000,
   maxConnections: 64,
+  maxFrameBytes: 1024 * 1024,
 };
 
 /**

@@ -1,6 +1,7 @@
 import { Badge, Button, DataTable, type DataTableColumn } from '@vessel-agent/plugin-ui';
 import { SCOPE_MESSAGE_KEY, type Translator } from '../i18n';
 import type { CatalogRow } from '../types';
+import { SurfaceList } from './Permissions';
 
 /** Shared table for "My plugins" and "Updates"; rows come from the catalog. */
 export function InstalledTable({
@@ -55,6 +56,25 @@ export function InstalledTable({
           {item.enabled ? t('badge.enabled') : t('badge.disabled')}
         </Badge>
       ),
+    },
+    {
+      key: 'surface',
+      header: t('th.surface'),
+      hide: 'compact',
+      cell: (item) =>
+        item.declaredSurface === undefined ? (
+          <span className="text-sm text-muted">—</span>
+        ) : (
+          <details className="text-sm">
+            <summary className="cursor-pointer text-muted">{t('surface.details')}</summary>
+            <SurfaceList
+              declared={item.declaredSurface}
+              effective={item.effectiveSurface}
+              builtin={item.scope === 'builtin' || item.kind === 'builtin'}
+              t={t}
+            />
+          </details>
+        ),
     },
     {
       key: 'latest',

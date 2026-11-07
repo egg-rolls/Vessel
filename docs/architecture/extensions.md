@@ -91,6 +91,8 @@ class PluginLoader {
 
 **来源与优先级**：默认扫描根为 `repo`（仓库 `plugins/`）→ `project`（`./.vessel/plugins`）→ `user`（`~/.vessel/plugins`）→ `node_modules`（仓库根与 cwd 的 `node_modules/@vessel-agent/*`，跳过非插件库包）。同名插件**先出现者胜出**，因此仓库覆盖项目、项目覆盖用户。
 
+**体验插件的外部命名空间与授权（0.48）**：child 插件（`source !== 'repo'`）的 `contributes.http[].path` 必须落在 `/plugins/<own-id>/` 命名空间内；HTTP route / CLI command 还需在 `plugins[].expose` 显式授权，内置插件不受 `expose` 影响。有效面与冲突语义见 [plugins.md](plugins.md#扩展面授权expose)。
+
 **默认集与信任边界**：`plugins` 配置缺省时，默认集加载全部可用插件——包括 project / user / node_modules 来源的外部插件。启动时由 `bootstrap` / `--tools` / `doctor` 向 **stderr** 打印一次外部插件告警（数量、名称、来源），告警不进入 stdout / JSON。设置 `VESSEL_NO_EXTERNAL_PLUGINS=1`（或 `true`）后，默认集只加载 `source === 'repo'` 的插件；显式 `plugins:` 列表仍可加载指定外部插件（显式即信任）。外部插件以完整进程权限运行，且早于任何工具权限判定，因此 **P0-3 只做到缓解（MITIGATED），不是已关闭的信任边界**；不可信仓库应使用 opt-out。
 
 **加能力就是放一个文件夹。** `bash` 工具在，写文件 + 跑命令本身就是模型能做的事——这就是不再需要「声明式工具」「用户目录工具扫描」「运行时注册表」的原因。

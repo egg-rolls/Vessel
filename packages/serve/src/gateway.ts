@@ -112,7 +112,9 @@ import {
   type PluginHostManagerLike,
   type PluginHttpHostLike,
   type PluginHttpMatch,
+  type PluginHttpRoute,
   type PluginReloadResult,
+  PluginWsConnection,
   pluginErrorCodeOf,
   pluginListMetadata,
   proxyPluginHttpRequest,
@@ -437,6 +439,8 @@ interface WsData {
    * 不进入 `wsClients`，因此不会收到 RunEvent。
    */
   hubControl?: HubControlConnectionState;
+  /** 0.48 M3：插件 WS 连接；存在时该 WS 不进入 `wsClients`。 */
+  pluginWs?: PluginWsConnection;
 }
 
 type Ws = import('bun').ServerWebSocket<WsData>;
@@ -735,6 +739,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const sseClients = new Map<SseController, SseClientState>();
   const wsClients = new Set<Ws>();
+  /** 0.48 M3：插件 WS（独立于事件连接；shutdown 时一并关闭）。 */
+  const pluginWsClients = new Set<Ws>();
 
   /** S5：token 吊销时关闭 live WS；HTTP 请求不缓存 principal，无需处理。 */
   function closeByTokenId(tokenId: string): number {
@@ -1483,32 +1489,112 @@ export function startGateway(opts: GatewayOptions): Gateway {
   /** 插件 HTTP 并发计数（key = pluginId:routeId）；按路由限额 fail-closed。 */
   const pluginHttpActive = new Map<string, number>();
 
+  /** 0.48 M3：插件请求审计（CONTRACT-0.48 §4.8；不含 header/body/token/query）。 */
+  function auditPluginRequest(
+    provider: PluginHttpHostLike,
+    route: PluginHttpRoute,
+    method: string,
+    kind: 'http' | 'ws',
+    outcome: string,
+    status: number,
+    startedAt: number,
+    tenantId: string,
+  ): void {
+    provider.webSockets?.audit({
+      event: 'plugin.http.request',
+      data: {
+        plugin: route.pluginId,
+        route: route.id,
+        method,
+        kind,
+        outcome,
+        status,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        tenant: tenantId,
+      },
+    });
+  }
+
+  function httpOutcome(status: number): string {
+    if (status < 400) return 'ok';
+    if (status === 400) return 'invalid';
+    if (status === 401) return 'unauthorized';
+    if (status === 403) return 'forbidden';
+    if (status === 404) return 'disabled';
+    if (status === 503) return 'unavailable';
+    return 'error';
+  }
+
   /**
-   * 0.48 M1：插件 HTTP 反代（CONTRACT-0.48 §3）。
+   * 0.48 M1/M3：插件 HTTP / WS 反代（CONTRACT-0.48 §3 / §4）。
    *
+   * - 形态检查（§3.3）在鉴权前：普通请求命中 upgrade 路由 → 400；反之亦然；
    * - `auth: required` 走宿主 principal + scope；其余 auth 仅内置插件（路由表已校验）；
    * - 0.48 只对 default tenant 暴露，非 default → 403，不进入插件；
-   * - disabled → 404，unhealthy / invalid / 无 endpoint → 503。
+   * - disabled → 404，unhealthy / invalid / 无 endpoint → 503；
+   * - R6：`await resolve()` 后再 `srv.upgrade()`（Bun 1.3.9 实测允许）。
    */
   async function handlePluginHttpRoute(
     req: Request,
     url: URL,
     match: PluginHttpMatch,
     extra: Record<string, string>,
-  ): Promise<Response> {
+    srv: { upgrade(req: Request, options?: { data?: WsData }): boolean },
+  ): Promise<Response | undefined> {
     const provider = opts.pluginHttp;
     if (provider === undefined || match.kind !== 'match') {
       return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
     }
     const { route } = match;
+    const startedAt = Date.now();
+    const isUpgradeRequest = (req.headers.get('upgrade') ?? '').toLowerCase() === 'websocket';
+    const requestKind: 'http' | 'ws' = isUpgradeRequest ? 'ws' : 'http';
+
+    // §3.3 形态检查：升级请求命中非 upgrade 路由 / 普通请求命中 upgrade 路由。
+    if (route.upgrade !== isUpgradeRequest) {
+      auditPluginRequest(
+        provider,
+        route,
+        req.method,
+        requestKind,
+        'invalid',
+        400,
+        startedAt,
+        defaultTenantId,
+      );
+      return route.upgrade
+        ? errorJson('upgrade_required', 'WebSocket upgrade required', 400, extra)
+        : errorJson('upgrade_not_allowed', 'WebSocket upgrade is not allowed', 400, extra);
+    }
+
     let tenantId = defaultTenantId;
     if (route.auth === 'required') {
       const principal = principalForRequest(req, url, url.pathname);
       if (principal === null) {
+        auditPluginRequest(
+          provider,
+          route,
+          req.method,
+          requestKind,
+          'unauthorized',
+          401,
+          startedAt,
+          tenantId,
+        );
         return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
       }
       tenantId = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
       if (tenantId !== defaultTenantId) {
+        auditPluginRequest(
+          provider,
+          route,
+          req.method,
+          requestKind,
+          'forbidden',
+          403,
+          startedAt,
+          tenantId,
+        );
         return errorJson(
           'forbidden',
           'Plugin HTTP routes are only available on the default tenant',
@@ -1517,6 +1603,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
         );
       }
       if (!hasPermission(principal.role, route.scope)) {
+        auditPluginRequest(
+          provider,
+          route,
+          req.method,
+          requestKind,
+          'forbidden',
+          403,
+          startedAt,
+          tenantId,
+        );
         return errorJson('forbidden', `Requires ${route.scope} permission`, 403, extra);
       }
     } else {
@@ -1525,6 +1621,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (principal !== null) {
         const principalTenant = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
         if (principalTenant !== defaultTenantId) {
+          auditPluginRequest(
+            provider,
+            route,
+            req.method,
+            requestKind,
+            'forbidden',
+            403,
+            startedAt,
+            principalTenant,
+          );
           return errorJson(
             'forbidden',
             'Plugin HTTP routes are only available on the default tenant',
@@ -1538,29 +1644,113 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const key = `${route.pluginId}:${route.id}`;
     const active = pluginHttpActive.get(key) ?? 0;
     if (route.limits.maxConnections !== null && active >= route.limits.maxConnections) {
+      if (route.upgrade) provider.webSockets?.rejected(route.pluginId);
+      auditPluginRequest(
+        provider,
+        route,
+        req.method,
+        requestKind,
+        'busy',
+        503,
+        startedAt,
+        tenantId,
+      );
       return errorJson('busy', 'Plugin HTTP connection limit reached', 503, extra);
     }
     pluginHttpActive.set(key, active + 1);
-    try {
-      const resolution = await provider.resolve(route.pluginId, tenantId);
-      if (resolution.kind === 'disabled') {
-        return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
-      }
-      if (resolution.kind === 'unavailable') {
-        return errorJson('internal', 'Plugin HTTP surface is unavailable', 503, extra);
-      }
-      return await proxyPluginHttpRequest({
-        request: req,
-        url,
-        route,
-        target: resolution.target,
-        tenantId,
-        cors: extra,
-      });
-    } finally {
+
+    let handedOff = false;
+    const releaseSlot = (): void => {
       const remaining = (pluginHttpActive.get(key) ?? 1) - 1;
       if (remaining <= 0) pluginHttpActive.delete(key);
       else pluginHttpActive.set(key, remaining);
+    };
+
+    try {
+      const resolution = await provider.resolve(route.pluginId, tenantId);
+      if (resolution.kind === 'disabled') {
+        auditPluginRequest(
+          provider,
+          route,
+          req.method,
+          requestKind,
+          'disabled',
+          404,
+          startedAt,
+          tenantId,
+        );
+        return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
+      }
+      if (resolution.kind === 'unavailable') {
+        auditPluginRequest(
+          provider,
+          route,
+          req.method,
+          requestKind,
+          'unavailable',
+          503,
+          startedAt,
+          tenantId,
+        );
+        return errorJson('internal', 'Plugin HTTP surface is unavailable', 503, extra);
+      }
+
+      if (!route.upgrade) {
+        const response = await proxyPluginHttpRequest({
+          request: req,
+          url,
+          route,
+          target: resolution.target,
+          tenantId,
+          cors: extra,
+        });
+        auditPluginRequest(
+          provider,
+          route,
+          req.method,
+          'http',
+          httpOutcome(response.status),
+          response.status,
+          startedAt,
+          tenantId,
+        );
+        return response;
+      }
+
+      // M3：先 resolve 再 upgrade（R6 已实测允许）；连接关闭时才归还槽位。
+      const connection = new PluginWsConnection({
+        route,
+        target: resolution.target,
+        tenantId,
+        path: `${url.pathname}${url.search}`,
+        headers: req.headers,
+        releaseSlot,
+        accounting: provider.webSockets,
+      });
+      const upgraded = srv.upgrade(req, {
+        data: {
+          authed: true,
+          tenantId,
+          allTenants: false,
+          since: 0,
+          alive: true,
+          backpressure: new ClientBackpressure({
+            high: WS_BACKPRESSURE_HIGH,
+            low: WS_BACKPRESSURE_LOW,
+          }),
+          pluginWs: connection,
+        },
+      });
+      if (!upgraded) {
+        provider.webSockets?.rejected(route.pluginId);
+        auditPluginRequest(provider, route, req.method, 'ws', 'invalid', 400, startedAt, tenantId);
+        return errorJson('invalid_request', 'WebSocket upgrade failed', 400, extra);
+      }
+      handedOff = true;
+      auditPluginRequest(provider, route, req.method, 'ws', 'accepted', 101, startedAt, tenantId);
+      return undefined;
+    } finally {
+      if (!handedOff) releaseSlot();
     }
   }
 
@@ -2389,7 +2579,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           return errorJson('invalid_request', 'Invalid request path', 400, extra);
         }
         if (pluginMatch.kind === 'match') {
-          return handlePluginHttpRoute(req, url, pluginMatch, extra);
+          return handlePluginHttpRoute(req, url, pluginMatch, extra, srv);
         }
       }
 
@@ -2710,6 +2900,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     websocket: {
       data: {} as WsData,
       open(ws) {
+        if (ws.data.pluginWs !== undefined) {
+          pluginWsClients.add(ws);
+          ws.data.pluginWs.begin(ws);
+          return;
+        }
         if (ws.data.hubControl !== undefined) {
           hubControlRoute.open(ws);
           return;
@@ -2726,13 +2921,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
         timer.unref?.();
       },
       message(ws, message) {
+        if (ws.data.pluginWs !== undefined) {
+          ws.data.pluginWs.message(message);
+          return;
+        }
         if (ws.data.hubControl !== undefined) {
           hubControlRoute.message(ws, message);
           return;
         }
         void handleWsMessage(ws, message);
       },
-      close(ws) {
+      close(ws, code, reason) {
+        if (ws.data.pluginWs !== undefined) {
+          pluginWsClients.delete(ws);
+          ws.data.pluginWs.clientClose(code, reason);
+          return;
+        }
         if (ws.data.hubControl !== undefined) {
           hubControlRoute.close(ws);
           return;
@@ -2741,6 +2945,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
         wsClients.delete(ws);
       },
       pong(ws) {
+        if (ws.data.pluginWs !== undefined) {
+          ws.data.pluginWs.pong();
+          return;
+        }
         if (ws.data.hubControl !== undefined) {
           hubControlRoute.pong(ws);
           return;
@@ -2806,6 +3014,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
     wsClients.clear();
   }
 
+  /** 0.48 M3：关闭全部插件 WS（独立于事件连接）。 */
+  function closePluginWsClients(): void {
+    for (const ws of pluginWsClients) {
+      try {
+        ws.close(1001, 'server stopping');
+      } catch (error) {
+        reportStopError('close plugin websocket', error);
+      }
+    }
+    pluginWsClients.clear();
+  }
+
   function closeSseClients<T>(clients: Map<SseController, T>): void {
     for (const ctrl of clients.keys()) {
       try {
@@ -2835,6 +3055,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     unsubscribeTokenRevoke?.();
     closeWsClients();
+    closePluginWsClients();
     hubControlRoute.stop();
     closeSseClients(sseClients);
 

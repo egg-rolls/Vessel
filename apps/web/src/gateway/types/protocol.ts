@@ -168,6 +168,23 @@ export type PluginCatalogScope = 'builtin' | 'user' | 'project' | 'node_modules'
 /** CONTRACT-0.47 §3：builtin / 外部体验插件 / 外部能力插件。 */
 export type PluginCatalogKind = 'builtin' | 'marketplace' | 'dynamic';
 
+/** CONTRACT-0.48 §8.1：catalog 扩展面摘要（只放 id/method/path，不放 handler）。 */
+export interface PluginSurfaceHttpEntry {
+  id: string;
+  method: string;
+  path: string;
+}
+
+export interface PluginSurfaceCliEntry {
+  path: string[];
+  description?: string;
+}
+
+export interface PluginSurfaceSummary {
+  http: PluginSurfaceHttpEntry[];
+  cli: PluginSurfaceCliEntry[];
+}
+
 /**
  * CONTRACT-0.47 §3：`plugins.catalog` 的只读条目。
  * 前端不推导字段；`kind` / `restartRequired` 以 gateway 返回值为准。
@@ -187,6 +204,10 @@ export interface PluginCatalogItem {
   entry?: string;
   /** child 插件清单；字段随插件类型变化，前端只透传不解释。 */
   manifest?: Record<string, unknown>;
+  /** CONTRACT-0.48 §8.1：manifest 声明面；没有声明 / in-process 时缺省。 */
+  declaredSurface?: PluginSurfaceSummary;
+  /** 声明 ∩ enabled ∩ config.expose；只在 `declaredSurface` 存在时出现。 */
+  effectiveSurface?: PluginSurfaceSummary;
 }
 
 export interface PluginCatalogResponse {

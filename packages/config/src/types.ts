@@ -115,11 +115,24 @@ export interface ContextConfig {
   compactThreshold?: number;
 }
 
+/**
+ * 0.48 M4：外部插件扩展面授权（CONTRACT-0.48 §5）。
+ * 只做 allow/deny；路由 / 命令定义仍只来自 manifest。
+ */
+export interface PluginExposeConfig {
+  /** `contributes.http[].id`；不接受 `true` 简写。 */
+  http?: string[];
+  /** `contributes.cli[].path.join('.')`。 */
+  cli?: string[];
+}
+
 /** 插件配置 */
 export interface PluginConfig {
   name: string;
   enabled?: boolean;
   config?: Record<string, unknown>;
+  /** 0.48 M4：manifest 声明面的显式授权；内置插件忽略，外部插件缺省全关。 */
+  expose?: PluginExposeConfig;
 }
 
 /** 自动更新配置 */
@@ -332,6 +345,8 @@ export interface PluginHttpLimitsConfig {
   timeoutMs?: number | null;
   idleTimeoutMs?: number | null;
   maxConnections?: number | null;
+  /** 0.48 M3：WS 单帧上限（默认 1 MiB；每路由只能收紧）。 */
+  maxFrameBytes?: number | null;
 }
 
 /** serve 配置（0.3；默认回环 + 明文） */
