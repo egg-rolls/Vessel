@@ -406,6 +406,11 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     ],
   },
   { token: 'errors', registryName: 'errors', flags: ['--json', '--limit'] },
+  {
+    token: 'dev',
+    registryName: 'dev',
+    subcommands: [{ name: 'reset', flags: ['--yes', '--dry-run', '--json', '--data-dir'] }],
+  },
   { token: '--help', registryName: null },
   { token: '--version', registryName: null },
   { token: '--tools', registryName: 'tools' },

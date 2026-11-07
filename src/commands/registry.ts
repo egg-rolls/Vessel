@@ -20,6 +20,7 @@ import {
   configShowCommand,
 } from '../config-command';
 import { resolveDataDir } from '../data-paths';
+import { runDevCommand } from '../dev-command';
 import { doctorCommand } from '../doctor-command';
 import { errorsCommand } from '../errors-command';
 import { runEvalCommand } from '../eval-command';
@@ -321,6 +322,15 @@ export const cliCommands: readonly CliCommand[] = [
       const command = args.attentionCommand;
       if (command === null) return 1;
       return printCommandResult(await attentionCommand(command));
+    },
+  },
+  {
+    name: 'dev',
+    match: (args) => args.devCommand !== null,
+    run: async (args) => {
+      const command = args.devCommand;
+      if (command === null) return 1;
+      return printCommandResult(await runDevCommand(command));
     },
   },
   {

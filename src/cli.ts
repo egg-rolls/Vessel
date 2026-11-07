@@ -270,7 +270,10 @@ function printHelp(): void {
     ['vessel migrate --from file-v1 --to file-v2 --apply', t('help.cmd.migrateApply')],
     ['vessel trace prune --dry-run', t('help.cmd.tracePrune')],
   ];
-  const debug: Array<[string, string]> = [['VESSEL_MOCK=1 vessel --run "x"', t('help.cmd.mock')]];
+  const debug: Array<[string, string]> = [
+    ['VESSEL_MOCK=1 vessel --run "x"', t('help.cmd.mock')],
+    ['vessel dev reset [--yes] [--dry-run] [--json]', t('help.cmd.devReset')],
+  ];
   const meta: Array<[string, string]> = [
     ['vessel doctor [--deep]', t('help.cmd.doctor')],
     ['vessel logs tail [--json] [--lines N]', t('help.cmd.logsTail')],

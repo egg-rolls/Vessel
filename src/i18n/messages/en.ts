@@ -365,4 +365,28 @@ export const en: Record<MessageKey, string> = {
   // ── completion (0.18) ──
   'completion.usage': 'Usage: vessel completion <bash|zsh|fish|powershell>',
   'completion.unknownShell': 'Unknown shell "{shell}".',
+
+  // ── dev (0.49) ──
+  'help.cmd.devReset': 'dev-only: wipe the data directory contents (requires --yes)',
+  'dev.reset.usage': 'Usage: vessel dev reset [--yes] [--dry-run] [--json]',
+  'dev.reset.helpYes': '--yes       confirm deletion (without it: print the target and exit 2)',
+  'dev.reset.helpDryRun': '--dry-run   list top-level entries and size only',
+  'dev.reset.helpJson': '--json      emit {dataDir, removed, dryRun, bytes}',
+  'dev.reset.helpSafety':
+    'Safety: refuses home / filesystem root / repository root / depth < 2; refuses when a configured port answers /health with 200 (run `vessel gateway stop` first); only entries inside the data directory are removed.',
+  'dev.reset.empty': '(empty)',
+  'dev.reset.hubOutside':
+    'Note: hub.dataDir is outside the data directory and was not removed: {path}',
+  'dev.reset.dangerous': 'Refusing to wipe {path}: dangerous root ({reason}).',
+  'dev.reset.gatewayRunning':
+    'Refusing to wipe: port {port} answered /health with 200, so the gateway is still running; run `vessel gateway stop` first.',
+  'dev.reset.notDirectory': 'Refusing to wipe: {path} is not a directory.',
+  'dev.reset.target': 'Data directory to wipe: {path}',
+  'dev.reset.confirmHint':
+    'Nothing removed; re-run with --yes to confirm (or use --dry-run first).',
+  'dev.reset.dryRunTitle': 'dry-run: would wipe {path}',
+  'dev.reset.total': '{count} top-level entries, {bytes}.',
+  'dev.reset.partialFailure': 'Some entries could not be removed from {path}:',
+  'dev.reset.notEmpty': '{path} is still not empty after the wipe ({count} entries remain).',
+  'dev.reset.removed': 'Wiped {path} (removed {count} top-level entries, {bytes}).',
 };

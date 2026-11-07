@@ -7,6 +7,7 @@
 
 import { allowedOriginError } from '../packages/config/src/index';
 import { type CompletionCommandArgs, isCompletionShell } from './completion-spec';
+import type { DevCommandArgs } from './dev-command';
 import { parseFederationAddress } from './federation-address';
 
 /** `--serve` 省略端口时的默认值 */
@@ -413,6 +414,8 @@ export interface CliArgs {
   completionCommand: CompletionCommandArgs | null;
   /** 0.22 S9.1：`vessel attention [respond]` */
   attentionCommand: AttentionCommandArgs | null;
+  /** 0.49：`vessel dev reset [--yes] [--dry-run] [--json]` */
+  devCommand: DevCommandArgs | null;
 }
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -477,6 +480,7 @@ export function parseArgs(argv: string[]): ParseResult {
     errorsCommand: null,
     completionCommand: null,
     attentionCommand: null,
+    devCommand: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -546,6 +550,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'completion' && i === 0) {
       return parseCompletionArgs(argv.slice(1), args);
+    }
+    if (a === 'dev' && i === 0) {
+      return parseDevArgs(argv.slice(1), args);
     }
 
     switch (a) {
@@ -1456,6 +1463,59 @@ function parseCompletionArgs(rest: string[], args: CliArgs): ParseResult {
     shell: isCompletionShell(requested) ? requested : null,
     requested,
   };
+  return { ok: true, args };
+}
+
+/**
+ * `dev reset [--yes] [--dry-run] [--json]`（0.49）。
+ *
+ * `dev` / `dev reset --help` 走 dev 专用帮助（不置 `args.help`，否则 `cli.ts`
+ * 会在命令分派前打印全局 help）。`dev` 在 i===0 提前返回，所以这里自行接受
+ * `--data-dir`；`cli.ts` 随后会把它镜像到 VESSEL_DATA_DIR。
+ */
+function parseDevArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.devCommand = { kind: 'help' };
+    return { ok: true, args };
+  }
+  if (sub !== 'reset') {
+    return { ok: false, error: `Unknown dev subcommand: ${sub}` };
+  }
+
+  let yes = false;
+  let dryRun = false;
+  let json = false;
+  for (let i = 1; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--yes') {
+      yes = true;
+      continue;
+    }
+    if (a === '--dry-run') {
+      dryRun = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--help' || a === '-h') {
+      args.devCommand = { kind: 'help' };
+      return { ok: true, args };
+    }
+    if (a === '--data-dir') {
+      const value = rest[i + 1];
+      if (value === undefined || value.startsWith('-') || value.trim() === '') {
+        return { ok: false, error: 'Missing value for --data-dir' };
+      }
+      args.dataDirArg = value;
+      i++;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for dev reset: ${a}` };
+  }
+  args.devCommand = { kind: 'reset', yes, dryRun, json };
   return { ok: true, args };
 }
 

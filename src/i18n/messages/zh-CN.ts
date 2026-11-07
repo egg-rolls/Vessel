@@ -349,6 +349,28 @@ export const zhCN = {
   'attention.nodeFailed': '{name}: 失败 {error}',
   'attention.nodesSummary': '节点：{ok} 成功，{failed} 失败。',
 
+  // ── dev（0.49）──
+  'help.cmd.devReset': '开发期重置：清空数据目录内容（dev-only；需 --yes）',
+  'dev.reset.usage': '用法：vessel dev reset [--yes] [--dry-run] [--json]',
+  'dev.reset.helpYes': '--yes       确认删除（缺省只打印目标并 exit 2）',
+  'dev.reset.helpDryRun': '--dry-run   只列出顶层条目与大小，不删除',
+  'dev.reset.helpJson': '--json      输出 {dataDir, removed, dryRun, bytes}',
+  'dev.reset.helpSafety':
+    '安全护栏：拒绝 home / 文件系统根 / 仓库根 / 深度 < 2；配置端口 /health 返回 200 时拒绝（先 vessel gateway stop）；只删数据目录内的条目。',
+  'dev.reset.empty': '（空）',
+  'dev.reset.hubOutside': '提示：hub.dataDir 不在数据目录内，未删除：{path}',
+  'dev.reset.dangerous': '拒绝清空 {path}：危险根（{reason}）。',
+  'dev.reset.gatewayRunning':
+    '拒绝清空：端口 {port} 的 /health 返回 200，gateway 仍在运行；先执行 `vessel gateway stop`。',
+  'dev.reset.notDirectory': '拒绝清空：{path} 不是目录。',
+  'dev.reset.target': '将清空数据目录：{path}',
+  'dev.reset.confirmHint': '未删除；确认后加 --yes 重试（或先 --dry-run 查看）。',
+  'dev.reset.dryRunTitle': 'dry-run：将清空 {path}',
+  'dev.reset.total': '共 {count} 个顶层条目，{bytes}。',
+  'dev.reset.partialFailure': '清空 {path} 时部分条目失败：',
+  'dev.reset.notEmpty': '清空后 {path} 仍非空（剩余 {count} 项）。',
+  'dev.reset.removed': '已清空 {path}（删除 {count} 个顶层条目，{bytes}）。',
+
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',
   'completion.unknownShell': '未知 shell "{shell}"。',
