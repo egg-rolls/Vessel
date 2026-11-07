@@ -4,7 +4,7 @@
  * trace 落盘冒烟检查（0.5）。
  *
  * 在临时 `VESSEL_DATA_DIR` 中跑一次 mock headless run，断言：
- *   - `<data>/tenants/<id>/events/<run_id>.jsonl` 存在；
+ *   - `<data>/events/<run_id>.jsonl` 存在；
  *   - 每行是 JSON；落盘事件带 seq 且严格递增；
  *   - 含 run.started / run.completed，tenant_id 正确；
  *   - 假 API Key 不出现在 trace；无 trace.overflow；
@@ -68,12 +68,16 @@ export async function checkTrace(root: string): Promise<string[]> {
   const project = join(base, 'project');
   const dataDir = join(base, 'data');
   await mkdir(home, { recursive: true });
+  await mkdir(join(home, '.vessel'), { recursive: true });
   await mkdir(project, { recursive: true });
   await mkdir(dataDir, { recursive: true });
 
+  // 0.49 单公司语义：--tenant 被忽略，单 id 只由 tenant.default 决定。
+  await writeFile(join(home, '.vessel', 'config.yaml'), `tenant:\n  default: ${TENANT}\n`, 'utf8');
+
   try {
     const proc = Bun.spawn({
-      cmd: [process.execPath, join(root, 'src/cli.ts'), '--run', 'hello', '--tenant', TENANT],
+      cmd: [process.execPath, join(root, 'src/cli.ts'), '--run', 'hello'],
       cwd: project,
       env: cleanEnv(home, dataDir),
       stdout: 'pipe',
@@ -88,7 +92,8 @@ export async function checkTrace(root: string): Promise<string[]> {
       return [`mock run failed (exit ${exitCode}): ${stdout}\n${stderr}`];
     }
 
-    const traceRoot = join(dataDir, 'tenants', TENANT, 'events');
+    // 0.49 T2：单公司存储迁移后 trace 直接落在 dataDir 根下。
+    const traceRoot = join(dataDir, 'events');
     let files: string[] = [];
     try {
       files = await listJsonl(traceRoot);

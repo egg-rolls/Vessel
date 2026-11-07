@@ -6,7 +6,8 @@
  * 通过真实 CLI 运行 `vessel config show --sources --json`，在临时 HOME /
  * 项目目录中验证：
  *   env > tenant overlay > project > user > default
- *   CLI tenant 选择 > VESSEL_TENANT
+ *   单公司 id：tenant.default → 唯一 tenants 键 → default；
+ *   --tenant / VESSEL_TENANT 只产生 ignored warning
  *   `_env` 三态：显式值 / env 可用 / env 缺失报错
  *   项目 YAML 出现密钥 -> exit 1
  *
@@ -191,12 +192,13 @@ export async function checkConfigSources(root: string): Promise<string[]> {
     );
   }
 
+  // 0.49 单公司语义：单 id 由 tenant.default 决定，--tenant 不再选择 tenant。
   const overlay = await runShow(root, {
     user: [
       'provider:',
       '  model: user-model',
       'tenant:',
-      '  default: default',
+      '  default: acme',
       '  tenants:',
       '    acme:',
       '      config:',
@@ -205,7 +207,6 @@ export async function checkConfigSources(root: string): Promise<string[]> {
       '',
     ].join('\n'),
     project: 'provider:\n  model: project-model\n',
-    args: ['--tenant', 'acme'],
   });
   if (overlay.snapshot === undefined) {
     issues.push(`tenant overlay case failed: ${overlay.stderr}`);
@@ -276,6 +277,7 @@ export async function checkConfigSources(root: string): Promise<string[]> {
     issues.push('project secret case should exit 1');
   }
 
+  // 0.49 单公司语义：--tenant / VESSEL_TENANT 被忽略，只 warning，不影响单 id。
   const cliTenant = await runShow(root, {
     env: { VESSEL_TENANT: 'env-tenant' },
     args: ['--tenant', 'cli-tenant'],
@@ -283,7 +285,34 @@ export async function checkConfigSources(root: string): Promise<string[]> {
   if (cliTenant.snapshot === undefined) {
     issues.push(`cli tenant case failed: ${cliTenant.stderr}`);
   } else {
-    expectEqual(issues, 'cli tenant override', cliTenant.snapshot.tenant_id, 'cli-tenant');
+    expectEqual(issues, 'cli tenant override', cliTenant.snapshot.tenant_id, 'default');
+    for (const ignored of ['cli-tenant', 'env-tenant']) {
+      if (!cliTenant.stderr.includes(ignored)) {
+        issues.push(
+          `cli tenant case stderr should warn about ignored ${ignored}: ${cliTenant.stderr}`,
+        );
+      }
+    }
+  }
+
+  // 多键且无 default → 配置错误，不猜测单 id。
+  const ambiguousTenant = await runShow(root, {
+    user: [
+      'tenant:',
+      '  tenants:',
+      '    acme:',
+      '      config: {}',
+      '    beta:',
+      '      config: {}',
+      '',
+    ].join('\n'),
+  });
+  if (ambiguousTenant.exitCode === 0) {
+    issues.push('ambiguous tenant case should exit 1');
+  } else if (!ambiguousTenant.stderr.includes('多个键')) {
+    issues.push(
+      `ambiguous tenant case stderr should mention multiple keys: ${ambiguousTenant.stderr}`,
+    );
   }
 
   return issues;

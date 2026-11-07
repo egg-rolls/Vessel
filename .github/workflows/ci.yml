@@ -306,6 +306,17 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
+      # apps/web 通过 vite alias / tsconfig paths 直接消费
+      # packages/plugin-ui/src，其 react / clsx / tailwind-merge 依赖由
+      # workspace 安装提供；没有 root bun install 时这些裸导入无法解析。
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
       - name: Install dependencies
         working-directory: apps/web
         run: npm ci
