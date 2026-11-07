@@ -10,9 +10,6 @@ import type { VesselConfig } from '../packages/config/src/index';
 import type {
   AgentControlLike,
   FederationGatewayOptions,
-  HubControlLike,
-  HubTeamScopeLike,
-  NodeTokenControlLike,
   TeamControlLike,
 } from '../packages/serve/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
@@ -48,12 +45,6 @@ export interface GatewayControlPlaneOptions {
   evalsEnabled?: boolean;
   /** 测试注入口 */
   loader?: PluginLoader;
-  /** S5：hub 目录投影（gateway `hubControl` 选项）。 */
-  hubControl?: HubControlLike;
-  /** S5：节点动态 token 认证面（gateway `nodeTokens` 选项）。 */
-  nodeTokens?: NodeTokenControlLike;
-  /** S5：session → team 归属（gateway `hubTeamScope` 选项）。 */
-  teamScope?: HubTeamScopeLike;
   /**
    * S7：节点身份（`resolveNodeId()` 的结果）。
    * 仅当 `config.federation.enabled !== false`（缺省开启）且本字段存在时注入 federation。
@@ -86,11 +77,6 @@ export function buildGatewayControlPlane(
   if (options.agentControl) controlPlane.agent = options.agentControl;
 
   if (options.feishuFor) controlPlane.feishuFor = options.feishuFor;
-
-  // S5：未提供时不出现在返回对象里（与 metrics / feishu 一致）。
-  if (options.hubControl) controlPlane.hubControl = options.hubControl;
-  if (options.nodeTokens) controlPlane.nodeTokens = options.nodeTokens;
-  if (options.teamScope) controlPlane.hubTeamScope = options.teamScope;
 
   // S7：缺省开启；显式 `federation.enabled: false` 才不注入。缺 token 的 peer
   // 由 resolver 丢弃（fail closed）；这里不打印 token / env，也不因缺失 token 报错。

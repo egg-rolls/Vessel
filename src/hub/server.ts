@@ -39,15 +39,7 @@ import {
 } from './inbound-control.js';
 import { normalizeNodeUrl } from './node-url.js';
 import type { HubRegistry } from './registry.js';
-import {
-  type HubNodeInboundDeps,
-  type HubNodeRecord,
-  type HubTokenBrokerLike,
-  type IssuedHubNodeToken,
-  pairingIdFor,
-  pairingSecretKey,
-  type SecretStore,
-} from './types.js';
+import { type HubNodeInboundDeps, type IssuedHubNodeToken, pairingIdFor } from './types.js';
 
 /** 请求体上限 */
 export const HUB_MAX_BODY_BYTES = 1024 * 1024;
@@ -60,22 +52,11 @@ export const HUB_DEFAULT_PORT = 8643;
 const WS_PING_INTERVAL_MS = 15_000;
 /** WS 首帧 auth 超时。 */
 const WS_AUTH_TIMEOUT_MS = 5_000;
-/** 配对请求超时。 */
-const PAIRING_REQUEST_TIMEOUT_MS = 10_000;
 /** 目录变化广播 debounce（与 registry 写合并节奏一致）。 */
 const DIRECTORY_BROADCAST_DEBOUNCE_MS = 250;
-/** join 失败限流：每个 IP 每分钟允许的失败次数（与 hub-pairing 一致）。 */
+/** join 失败限流：每个 IP 每分钟允许的失败次数。 */
 const JOIN_RATE_LIMIT_WINDOW_MS = 60_000;
 const JOIN_RATE_LIMIT_MAX_FAILURES = 5;
-
-export interface HubNodeConnection {
-  close(): void | Promise<void>;
-}
-
-export type HubConnectNode = (
-  record: HubNodeRecord,
-  viewToken: string,
-) => HubNodeConnection | undefined | Promise<HubNodeConnection | undefined>;
 
 export interface HubServerPointerInput {
   node_id: string;
@@ -89,9 +70,6 @@ export interface CreateHubServerOptions {
   config: HubConfig;
   hubId: string;
   registry: HubRegistry;
-  secretStore: SecretStore;
-  tokenBroker?: HubTokenBrokerLike;
-  connectNode?: HubConnectNode;
   /** 提供时启用 `POST /v1/hub/join` 与 `GET /v1/hub/node-control`；缺省 404。 */
   nodeControl?: HubNodeInboundDeps;
   logger?: Logger;
@@ -268,49 +246,9 @@ function bearerToken(request: Request): string | undefined {
   return match?.[1];
 }
 
-interface ParsedPairing {
-  node_id: string;
-  tenant_id: string;
-  pairing_id: string;
-  view_token: string;
-  exchange_token: string;
-}
-
-function parseIssuedToken(
-  value: unknown,
-  scope: 'view' | 'exchange',
-): { token: string } | undefined {
-  if (!isRecord(value)) return undefined;
-  if (!isNonEmptyString(value.token) || !isNonEmptyString(value.token_id)) return undefined;
-  if (value.scope !== scope) return undefined;
-  return { token: value.token };
-}
-
-/** 配对响应必须是 PairingTokenPair（node_id / tenant_id / pairing_id / view / exchange）。 */
-function parsePairingResponse(value: unknown): ParsedPairing | undefined {
-  if (!isRecord(value)) return undefined;
-  const nodeId = value.node_id;
-  const tenantId = value.tenant_id;
-  const pairingId = value.pairing_id;
-  if (!isNonEmptyString(nodeId) || !isNonEmptyString(tenantId) || !isNonEmptyString(pairingId)) {
-    return undefined;
-  }
-  if (pairingId !== pairingIdFor(nodeId, tenantId)) return undefined;
-  const view = parseIssuedToken(value.view, 'view');
-  const exchange = parseIssuedToken(value.exchange, 'exchange');
-  if (!view || !exchange) return undefined;
-  return {
-    node_id: nodeId,
-    tenant_id: tenantId,
-    pairing_id: pairingId,
-    view_token: view.token,
-    exchange_token: exchange.token,
-  };
-}
-
 /** 创建 hub 服务；配置非法时同步抛错（fail-closed）。 */
 export function createHubServer(options: CreateHubServerOptions): HubServer {
-  const { config, hubId, registry, secretStore, tokenBroker, connectNode, logger } = options;
+  const { config, hubId, registry, logger } = options;
   const nodeControl = options.nodeControl;
   const inbound: HubNodeInbound | undefined =
     nodeControl !== undefined ? createHubNodeInbound(nodeControl) : undefined;
@@ -322,13 +260,6 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         })
       : undefined;
   const clock = options.now ?? Date.now;
-
-  if (config.direction !== undefined && config.direction !== 'hub') {
-    throw configError(
-      'hub_direction_unsupported',
-      `hub.direction "${config.direction}" is not supported in S5`,
-    );
-  }
 
   const hostname = config.listen?.hostname ?? HUB_DEFAULT_HOSTNAME;
   if (!isNonEmptyString(hostname) || hostname.includes('/')) {
@@ -378,7 +309,6 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
 
   const wsClients = new Set<Ws>();
   const nodeClients = new Set<Ws>();
-  const connections = new Map<string, HubNodeConnection>();
   /** join 端点每 IP 失败窗口；单进程内存，不做持久化。 */
   const joinFailures = new Map<string, { count: number; resetAt: number }>();
   let directoryRevision = 0;
@@ -513,155 +443,6 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     scheduleDirectoryBroadcast();
   });
 
-  /** 从节点响应里拿到的 token 只进 SecretStore，永不出现在日志 / 响应 / 目录。 */
-  async function handleAddNode(
-    srv: import('bun').Server<HubWsData>,
-    request: Request,
-    extra: Record<string, string>,
-  ): Promise<Response> {
-    if (!isLoopbackPeer(srv, request)) {
-      return errorResponse('forbidden', 'loopback peers only', 403, extra);
-    }
-    const body = await readJsonBody(request, extra);
-    if (!body.ok) return body.response;
-    if (!isRecord(body.value)) {
-      return errorResponse('invalid_request', 'body must be an object', 400, extra);
-    }
-
-    const rawUrl = body.value.url;
-    const code = body.value.code;
-    if (!isNonEmptyString(rawUrl) || !isNonEmptyString(code)) {
-      return errorResponse('invalid_request', 'url and code are required', 400, extra);
-    }
-    const direction = body.value.direction;
-    if (direction !== undefined && direction !== 'hub') {
-      return errorResponse('invalid_request', 'direction must be "hub"', 400, extra);
-    }
-    const alias = body.value.alias;
-    if (alias !== undefined && !isNonEmptyString(alias)) {
-      return errorResponse('invalid_request', 'alias must be a non-empty string', 400, extra);
-    }
-    const caFile = body.value.ca_file;
-    if (caFile !== undefined && !isNonEmptyString(caFile)) {
-      return errorResponse('invalid_request', 'ca_file must be a non-empty string', 400, extra);
-    }
-
-    let url: string;
-    try {
-      url = normalizeNodeUrl(rawUrl);
-    } catch (error) {
-      return errorResponse(
-        'invalid_request',
-        error instanceof Error ? error.message : 'invalid node url',
-        400,
-        extra,
-      );
-    }
-
-    let ca: string | undefined;
-    if (caFile !== undefined) {
-      try {
-        ca = await Bun.file(caFile).text();
-      } catch {
-        return errorResponse('invalid_request', 'cannot read ca_file', 400, extra);
-      }
-      if (ca.trim() === '') {
-        return errorResponse('invalid_request', 'ca_file is empty', 400, extra);
-      }
-    }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PAIRING_REQUEST_TIMEOUT_MS);
-    (timer as { unref?: () => void }).unref?.();
-    const init: RequestInit & { tls?: { ca: string } } = {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        protocol: HUB_PROTOCOL,
-        code,
-        hub_id: hubId,
-        direction: 'hub',
-        scope: 'view',
-      }),
-      signal: controller.signal,
-    };
-    if (ca !== undefined) init.tls = { ca };
-
-    let pairing: ParsedPairing | undefined;
-    try {
-      const response = await fetch(`${url}/v1/hub/pair`, init as RequestInit);
-      if (!response.ok) {
-        return errorResponse('pairing_failed', `node returned ${response.status}`, 502, extra);
-      }
-      pairing = parsePairingResponse(await response.json());
-    } catch (error) {
-      const aborted = isRecord(error) && error.name === 'AbortError';
-      logger?.warn('hub.server.pairing_failed', {
-        node_id: 'unknown',
-        reason: aborted ? 'timeout' : 'network',
-      });
-      return errorResponse('pairing_failed', 'node unreachable or invalid response', 502, extra);
-    } finally {
-      clearTimeout(timer);
-    }
-
-    if (!pairing) {
-      return errorResponse('pairing_failed', 'invalid pairing response', 502, extra);
-    }
-
-    // 同一 pairing 不能同时有两种方向；node-dial 记录必须先 remove。
-    const existing = registry.get(pairing.pairing_id);
-    if (existing !== undefined && (existing.direction ?? 'hub') !== 'hub') {
-      return errorResponse(
-        'pairing_exists_other_direction',
-        'pairing already exists with direction "node"',
-        409,
-        extra,
-      );
-    }
-
-    await secretStore.set(pairingSecretKey(pairing.pairing_id, 'view'), pairing.view_token);
-    await secretStore.set(pairingSecretKey(pairing.pairing_id, 'exchange'), pairing.exchange_token);
-
-    const record: HubNodeRecord = {
-      pairing_id: pairing.pairing_id,
-      node_id: pairing.node_id,
-      tenant_id: pairing.tenant_id,
-      url,
-      status: 'connecting',
-      truncated: false,
-      counts: { teams: 0, agents: 0, live_agents: 0 },
-      teams: [],
-      agents: [],
-      ...(alias !== undefined ? { alias } : {}),
-      ...(caFile !== undefined ? { ca_file: caFile } : {}),
-    };
-    registry.upsert(record);
-
-    if (connectNode) {
-      try {
-        const connection = await connectNode(record, pairing.view_token);
-        if (connection) connections.set(pairing.pairing_id, connection);
-      } catch (error) {
-        // 配对已成功；连接失败保留目录记录（status=connecting），由调用方重试。
-        logger?.warn('hub.server.connect_failed', {
-          pairing_id: pairing.pairing_id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    return jsonResponse(
-      200,
-      {
-        pairing_id: pairing.pairing_id,
-        node_id: pairing.node_id,
-        tenant_id: pairing.tenant_id,
-      },
-      extra,
-    );
-  }
-
   async function handleRemoveNode(
     srv: import('bun').Server<HubWsData>,
     request: Request,
@@ -674,42 +455,18 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     const existing = registry.get(pairingId);
     if (!existing) return errorResponse('not_found', 'pairing not found', 404, extra);
 
-    // node-dial：先关闭入站 WS、吊销 hub 签发的 node token，再走通用清理。
-    if ((existing.direction ?? 'hub') === 'node') {
-      inbound?.closeByPairing(pairingId);
-      if (nodeControl !== undefined) {
-        try {
-          await nodeControl.credentials.revokePairing(pairingId);
-        } catch (error) {
-          // 吊销失败不得删目录：token 仍有效，节点可能重新连回来。
-          logger?.warn('hub.server.revoke_failed', {
-            pairing_id: pairingId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return errorResponse('revoke_failed', 'failed to revoke node token', 500, extra);
-        }
-      }
-    }
-
-    const connection = connections.get(pairingId);
-    connections.delete(pairingId);
-    if (connection) {
+    // node-dial：先关闭入站 WS、吊销 hub 签发的 node token，再删除目录记录。
+    inbound?.closeByPairing(pairingId);
+    if (nodeControl !== undefined) {
       try {
-        await connection.close();
-      } catch {
-        // best-effort：连接已断也继续清理
-      }
-    }
-
-    for (const kind of ['view', 'exchange'] as const) {
-      try {
-        await secretStore.delete(pairingSecretKey(pairingId, kind));
+        await nodeControl.credentials.revokePairing(pairingId);
       } catch (error) {
-        logger?.warn('hub.server.secret_delete_failed', {
+        // 吊销失败不得删目录：token 仍有效，节点可能重新连回来。
+        logger?.warn('hub.server.revoke_failed', {
           pairing_id: pairingId,
-          kind,
           error: error instanceof Error ? error.message : String(error),
         });
+        return errorResponse('revoke_failed', 'failed to revoke node token', 500, extra);
       }
     }
 
@@ -717,69 +474,6 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     return jsonResponse(200, { ok: true, pairing_id: pairingId }, extra);
   }
 
-  async function handleDataToken(
-    srv: import('bun').Server<HubWsData>,
-    request: Request,
-    extra: Record<string, string>,
-  ): Promise<Response> {
-    if (!readAuthorized(srv, request)) {
-      return errorResponse('unauthorized', 'missing or invalid token', 401, extra);
-    }
-    if (!tokenBroker) {
-      return errorResponse('not_supported', 'token broker is not configured', 501, extra);
-    }
-    const body = await readJsonBody(request, extra);
-    if (!body.ok) return body.response;
-    if (!isRecord(body.value)) {
-      return errorResponse('invalid_request', 'body must be an object', 400, extra);
-    }
-    const pairingId = body.value.pairing_id;
-    const teamId = body.value.team_id;
-    if (!isNonEmptyString(pairingId) || !isNonEmptyString(teamId)) {
-      return errorResponse('invalid_request', 'pairing_id and team_id are required', 400, extra);
-    }
-    const ttl = body.value.ttl_s;
-    if (ttl !== undefined && (typeof ttl !== 'number' || !Number.isFinite(ttl) || ttl <= 0)) {
-      return errorResponse('invalid_request', 'ttl_s must be a positive number', 400, extra);
-    }
-
-    const record = registry.get(pairingId);
-    if (!record) return errorResponse('not_found', 'pairing not found', 404, extra);
-
-    // node-dial 且没有可达 URL 时，数据面不可达；不要尝试拨号。
-    const nodeUrl = record.public_url ?? record.url;
-    if (nodeUrl === undefined) {
-      return errorResponse(
-        'data_plane_unreachable',
-        'node has no browser-reachable url; configure a tunnel or public_url',
-        409,
-        extra,
-      );
-    }
-
-    try {
-      const token = await tokenBroker.exchangeForTeam({
-        pairing_id: record.pairing_id,
-        node_id: record.node_id,
-        url: nodeUrl,
-        team_id: teamId,
-        ...(ttl !== undefined ? { ttl_s: ttl } : {}),
-        ...(record.ca_file !== undefined ? { ca_file: record.ca_file } : {}),
-      });
-      return jsonResponse(200, token, extra);
-    } catch (error) {
-      logger?.warn('hub.server.data_token_failed', {
-        pairing_id: pairingId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return errorResponse('exchange_failed', 'token exchange failed', 502, extra);
-    }
-  }
-
-  /**
-   * `POST /v1/hub/join`（S5.1）：node 用 hub 生成的一次性 code 换 node token。
-   * 只返回白名单字段；token 明文只出现一次。错误文案不泄漏实现细节。
-   */
   async function handleJoin(request: Request, extra: Record<string, string>): Promise<Response> {
     if (nodeControl === undefined) {
       return errorResponse('not_found', 'not found', 404, extra);
@@ -828,15 +522,6 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     }
 
     const pairingId = pairingIdFor(nodeId, tenantId);
-    const existing = registry.get(pairingId);
-    if (existing !== undefined && (existing.direction ?? 'hub') !== 'node') {
-      return errorResponse(
-        'pairing_exists_other_direction',
-        'pairing already exists with direction "hub"',
-        409,
-        extra,
-      );
-    }
 
     try {
       await nodeControl.joinStore.consume({
@@ -1056,14 +741,6 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
           return errorResponse('method_not_allowed', 'method not allowed', 405, extra);
         }
 
-        if (path === '/v1/hub/nodes' && request.method === 'POST') {
-          return handleAddNode(srv, request, extra);
-        }
-
-        if (path === '/v1/hub/data-token' && request.method === 'POST') {
-          return handleDataToken(srv, request, extra);
-        }
-
         return errorResponse('not_found', 'not found', 404, extra);
       } catch (error) {
         logger?.error('hub.server.request_failed', {
@@ -1230,14 +907,6 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       }
       nodeClients.clear();
       joinFailures.clear();
-      for (const connection of connections.values()) {
-        try {
-          await connection.close();
-        } catch {
-          // best-effort
-        }
-      }
-      connections.clear();
       await server.stop(true);
     },
   };

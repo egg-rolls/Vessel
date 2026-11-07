@@ -17,6 +17,8 @@
  *       barrel src/index.ts（barrel 自身豁免扫描）
  *   D9  apps/web/src/gateway/platform/** 与 apps/web/src/gateway/node/** 互不 import
  *       （共享类型放 gateway/types*）
+ *   D10 src/hub 下所有 .ts 只能 import hub 内部、白名单相对路径与白名单包；
+ *       @vessel-agent/serve 只允许 Hub 协议 / 帧 / 传输符号（CONTRACT-0.49 §11）。
  *
  * 用法：bun run scripts/check-deps.ts
  * 退出码：0 = 无违规；1 = 有违规。
@@ -26,7 +28,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 
-export type RuleId = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9';
+export type RuleId = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10';
 
 export interface Violation {
   rule: RuleId;
@@ -85,6 +87,70 @@ const SERVE_PUBLIC_SURFACE: ReadonlySet<string> = new Set([SERVE_PUBLIC_BARREL])
 const WEB_GATEWAY_SRC = 'apps/web/src/gateway';
 const WEB_PLATFORM = `${WEB_GATEWAY_SRC}/platform`;
 const WEB_NODE = `${WEB_GATEWAY_SRC}/node`;
+
+const HUB_SRC = 'src/hub';
+
+/**
+ * D10 相对 import 白名单（CONTRACT-0.49 §11）：只允许通用 app utility，
+ * 不允许任何 node runtime / CLI / gateway 模块。路径按无扩展名形式登记；
+ * `.ts` / `.js` 后缀在比较时归一化。
+ */
+const HUB_ALLOWED_RELATIVE: ReadonlySet<string> = new Set([
+  'src/data-paths',
+  'src/node-identity',
+  'src/gateway/pid',
+  'src/rpc/index',
+  'packages/config/src/index',
+]);
+
+/** D10 裸包白名单：node/bun 内置之外只允许这三个 workspace 包。 */
+const HUB_ALLOWED_PACKAGES: ReadonlySet<string> = new Set([
+  '@vessel-agent/core',
+  '@vessel-agent/config',
+  '@vessel-agent/serve',
+]);
+
+/**
+ * D10：`@vessel-agent/serve` 只允许 Hub 协议 / 帧 / 传输符号。
+ * 任何 gateway / runtime / platform 符号都视为 Hub 重新依赖 node runtime。
+ */
+const HUB_SERVE_SYMBOLS: ReadonlySet<string> = new Set([
+  'HUB_PROTOCOL',
+  'HUB_NODE_CONTROL_PATH',
+  'HubControlLike',
+  'HubControlChange',
+  'HubNodeSnapshotInput',
+  'HubAgentMeta',
+  'HubTeamMeta',
+  'HubPingFrame',
+  'HubPointerFrame',
+  'HubPointerReason',
+  'decodeHubFrame',
+  'isHubProtocol',
+  'isLoopbackHostname',
+  'hostAllowed',
+  'originAllowed',
+  'corsHeaders',
+  'normalizeAllowedOrigins',
+  'loadTlsMaterial',
+  'HUB_MAX_AGENTS',
+  'HUB_MAX_TEAMS',
+]);
+
+function isAllowedHubServeSymbol(symbol: string): boolean {
+  return (
+    HUB_SERVE_SYMBOLS.has(symbol) ||
+    /^buildHub[A-Za-z]+Frame$/.test(symbol) ||
+    /^parseHub[A-Za-z]+Frame$/.test(symbol) ||
+    // 兼容 parseHubAgentMeta / parseHubPointerReason / parseHubTeamMeta 等非 Frame 解析器。
+    /^parseHub(?:AgentMeta|PointerReason|TeamMeta)$/.test(symbol)
+  );
+}
+
+function isAllowedHubRelative(resolved: string): boolean {
+  const normalized = resolved.endsWith('.ts') ? resolved.slice(0, -3) : resolved;
+  return HUB_ALLOWED_RELATIVE.has(normalized);
+}
 
 /**
  * D4 受控白名单（DECISION-007 F5）：kernel 可为默认值 import 这些具体实现，
@@ -466,6 +532,62 @@ export async function checkDependencies(root: string): Promise<Violation[]> {
     }
   }
 
+  // D10：Hub 边界。src/hub/** 只能 import hub 内部、白名单相对路径与白名单包；
+  // @vessel-agent/serve 只允许协议 / 帧 / 传输符号。白名单式，未列出即违规。
+  const hubFiles = await collectFiles(root, `${HUB_SRC}/**/*.ts`);
+  for (const file of hubFiles) {
+    const source = await readFile(join(root, file), 'utf8');
+
+    for (const ref of parseImports(source)) {
+      const { specifier, line } = ref;
+
+      if (isRelative(specifier)) {
+        const resolved = resolveRelative(file, specifier);
+        const allowed = isWithin(resolved, HUB_SRC) || isAllowedHubRelative(resolved);
+
+        addIf(violations, !allowed, {
+          rule: 'D10',
+          file,
+          line,
+          specifier,
+          resolved,
+          message:
+            'src/hub/** 只能 import hub 内部或白名单相对路径（data-paths / node-identity / gateway/pid / rpc/index / packages/config）',
+        });
+        continue;
+      }
+
+      if (isBuiltin(specifier)) continue;
+
+      if (!HUB_ALLOWED_PACKAGES.has(specifier)) {
+        addIf(violations, true, {
+          rule: 'D10',
+          file,
+          line,
+          specifier,
+          message: 'src/hub/** 只允许 node:/bun 内置与 @vessel-agent/{core,config,serve}',
+        });
+        continue;
+      }
+
+      if (specifier !== '@vessel-agent/serve') continue;
+
+      const symbols = namedSymbols(ref.clause);
+      const forbidden =
+        symbols === null ? [] : [...symbols].filter((s) => !isAllowedHubServeSymbol(s));
+      addIf(violations, symbols === null || symbols.size === 0 || forbidden.length > 0, {
+        rule: 'D10',
+        file,
+        line,
+        specifier,
+        message:
+          forbidden.length > 0
+            ? `@vessel-agent/serve 只允许 Hub 协议/帧/传输符号；违规符号: ${forbidden.join(', ')}`
+            : '@vessel-agent/serve 必须具名 import Hub 协议/帧/传输符号',
+      });
+    }
+  }
+
   return violations;
 }
 
@@ -514,7 +636,7 @@ async function main(): Promise<void> {
 
   if (unknown.length === 0) {
     console.log(
-      `dependency check passed (D1-D9)${known.length > 0 ? ` with ${known.length} known exception(s)` : ''}`,
+      `dependency check passed (D1-D10)${known.length > 0 ? ` with ${known.length} known exception(s)` : ''}`,
     );
     return;
   }

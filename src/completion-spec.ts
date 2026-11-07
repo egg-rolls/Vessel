@@ -290,6 +290,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
   {
     token: 'hub',
     registryName: 'hub',
+    // 顺序与 help 一致：service → node client。
     subcommands: [
       {
         name: 'start',
@@ -297,21 +298,15 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       },
       { name: 'directory', flags: ['--hub-url', '--token-env', '--json'] },
       { name: 'watch', flags: ['--hub-url', '--token-env'] },
-      { name: 'pair', flags: ['--data-dir', '--tenant', '--ttl'] },
       { name: 'join-code', flags: ['--data-dir', '--tenant', '--ttl', '--json'] },
+      {
+        name: 'node',
+        flags: ['--hub-url', '--json'],
+      },
       {
         name: 'join',
         flags: ['--code', '--code-env', '--tenant', '--public-url', '--ca', '--data-dir', '--json'],
       },
-      {
-        name: 'node',
-        flags: ['--code', '--alias', '--ca', '--hub-url', '--json'],
-      },
-      {
-        name: 'token',
-        flags: ['--team', '--ttl', '--admin-token-env', '--token-id', '--json'],
-      },
-      { name: 'data-token', flags: ['--team', '--hub-url', '--token-env', '--ttl'] },
     ],
   },
   { token: 'status', registryName: 'status', flags: ['--json'] },

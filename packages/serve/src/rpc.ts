@@ -243,7 +243,6 @@ export const ROLE_RANK: Record<MethodPermission, number> = { read: 1, write: 2, 
  * rank 语义不变。不新增 role 字符串，也不改 `ROLE_RANK`。
  */
 const VIEW_SCOPE_METHODS: ReadonlySet<string> = new Set(['health.get', 'capabilities.list']);
-const EXCHANGE_SCOPE_METHODS: ReadonlySet<string> = new Set(['auth.exchange']);
 const CONTROL_SCOPE_METHODS: ReadonlySet<string> = new Set([
   'health.get',
   'capabilities.list',
@@ -273,7 +272,7 @@ function scopeAllowlist(scope: PrincipalScope | undefined): ReadonlySet<string> 
     case 'view':
       return VIEW_SCOPE_METHODS;
     case 'exchange':
-      return EXCHANGE_SCOPE_METHODS;
+      return VIEW_SCOPE_METHODS;
     case 'control':
       return CONTROL_SCOPE_METHODS;
     default:

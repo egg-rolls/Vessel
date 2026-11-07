@@ -1,18 +1,14 @@
 /**
  * Hub 进程共享契约（S5）。
  *
- * 这里只放 registry / secret / token broker 的纯类型，避免 Wave 1 的
- * M 之间互相 import 实现文件。
+ * 这里只放 registry / secret / join / node credential 的纯类型，避免实现文件
+ * 之间互相 import。
  *
  * @module vessel/hub/types
  */
 
 import type { Logger } from '@vessel-agent/core';
-import type {
-  HubAgentMeta,
-  HubPointerReason,
-  HubTeamMeta,
-} from '../../packages/serve/src/hub-control.js';
+import type { HubAgentMeta, HubPointerReason, HubTeamMeta } from '@vessel-agent/serve';
 
 /** 一个配对 = (node_id, tenant_id)；同一 node 可以有多个 pairing。 */
 export function pairingIdFor(nodeId: string, tenantId: string): string {
@@ -80,38 +76,6 @@ export interface SecretStore {
   get(key: string): Promise<string | undefined>;
   set(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
-}
-
-/** SecretStore key：每个 pairing 两条。 */
-export function pairingSecretKey(pairingId: string, kind: 'view' | 'exchange'): string {
-  return `pairing:${pairingId}:${kind}`;
-}
-
-/** 浏览器拿到的一次性短期 data token（hub 不持久化）。 */
-export interface HubDataToken {
-  node_id: string;
-  pairing_id: string;
-  team_id: string;
-  url: string;
-  token: string;
-  token_id: string;
-  expires_at: number;
-  scope: 'control';
-}
-
-/**
- * hub 用 exchange token 向节点换短期 control token。
- * 实现见 `src/hub/token-broker.ts`（M-I5）。
- */
-export interface HubTokenBrokerLike {
-  exchangeForTeam(input: {
-    pairing_id: string;
-    node_id: string;
-    url: string;
-    team_id: string;
-    ttl_s?: number;
-    ca_file?: string;
-  }): Promise<HubDataToken>;
 }
 
 /** `<hubDataDir>/hub-join.json`：hub 生成的一次性 join code（只存 hash）。 */

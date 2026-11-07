@@ -132,6 +132,8 @@ export {
 export { createTeamMethods, type TeamMethodsDeps } from './gateway/methods/teams.js';
 export type { Gateway, GatewayOptions, GatewayReconfigureOptions } from './gateway.js';
 export { isLoopbackHostname, startGateway } from './gateway.js';
+// hub-control 共享类型：`HubControlLike` / `HubAgentMeta` / `HubTeamMeta` / `HubPointerReason`
+// 供 node → hub outbound snapshot；`HubTeamScopeLike` 供 interactions。节点入站路由已在 H5 删除。
 export {
   HUB_MAX_AGENTS,
   HUB_MAX_TEAMS,
@@ -216,20 +218,6 @@ export {
   type MetricsSnapshot,
   normalizeMetricsSnapshot,
 } from './metrics.js';
-export {
-  CONTROL_TOKEN_DEFAULT_TTL_S,
-  CONTROL_TOKEN_MAX_TTL_S,
-  type ExchangeTokenInput,
-  type IssuedNodeToken,
-  type MintPairingTokensInput,
-  type NodeTokenAuthenticator,
-  type NodeTokenControlLike,
-  type NodeTokenMeta,
-  type NodeTokenScope,
-  PAIRING_TOKEN_TTL_MS,
-  type PairingTokenPair,
-  type RevokeTokenResult,
-} from './node-token-control.js';
 export {
   type PlatformAuthMode,
   type PlatformAuthResult,

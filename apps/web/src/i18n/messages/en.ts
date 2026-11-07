@@ -60,8 +60,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.status.error': 'Error',
   'nav.status.offline': 'Not connected',
   'nav.status.unknown': 'Unknown',
-  'nav.status.hubLocal': 'Local hub running',
-  'nav.status.hubJoined': 'Joined hub',
+  'nav.status.hubConnected': 'Hub connected',
+  'nav.status.hubUnauthorized': 'Hub token rejected',
+  'nav.status.hubIncompatible': 'Hub protocol incompatible',
+  'nav.status.hubNetwork': 'Hub unreachable',
   'nav.status.hubNotConfigured': 'Hub not configured',
   'nav.tenant': 'Tenant',
   'nav.tenantChipTitle': 'Current tenant; click to view or switch',
@@ -655,18 +657,57 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Hub
   'hub.title': 'Hub',
-  'hub.field.state': 'State',
-  'hub.field.version': 'Version',
-  'hub.state.notConfigured': 'Not configured',
-  'hub.state.local': 'Local hub',
-  'hub.state.joined': 'Joined hub',
-  'hub.config.autoStart': 'Auto start',
-  'hub.config.direction': 'Direction',
-  'hub.config.url': 'Hub URL',
-  'hub.config.listen': 'Listen',
-  'hub.config.on': 'on',
-  'hub.config.off': 'off',
-  'hub.error.forbidden': 'This token cannot read the configuration',
+  'hub.subtitle':
+    'Direct browser view of a Hub directory. Pairing and token management stay in Nodes / CLI.',
+  'hub.connect.title': 'Connect to a Hub',
+  'hub.connect.description':
+    'Enter the Hub service URL and its read token. The token is kept in this browser tab only.',
+  'hub.connect.url': 'Hub URL',
+  'hub.connect.urlHint':
+    'Use the Hub origin (for example http://127.0.0.1:8643). This page origin is {origin}; add it to the Hub hub.allowedOrigins value.',
+  'hub.connect.token': 'Hub read token',
+  'hub.connect.tokenHint':
+    'Optional for a loopback Hub, required remotely. A saved token is never shown again.',
+  'hub.connect.tokenPlaceholder': 'Hub read token',
+  'hub.connect.submit': 'Connect',
+  'hub.connect.connecting': 'Checking…',
+  'hub.connect.clear': 'Clear connection',
+  'hub.connect.error.invalid': 'Enter a valid http(s) Hub URL without path, query, or credentials.',
+  'hub.connect.error.mixed': 'This page is served over HTTPS, so the Hub URL must use https.',
+  'hub.connect.error.origin':
+    'Cannot reach the Hub. Check the URL and that the Hub hub.allowedOrigins includes {origin}.',
+  'hub.connect.error.http': 'The Hub rejected the connection. Check the Hub URL and token.',
+  'hub.directory.loading': 'Loading Hub directory…',
+  'hub.directory.title': 'Directory',
+  'hub.directory.description': 'Hub {hub} at {url}. Metadata only; the Hub does not proxy content.',
+  'hub.directory.empty': 'No nodes in this Hub directory yet',
+  'hub.directory.emptyHint':
+    'Join a node with `vessel hub join`; this page only displays the directory.',
+  'hub.directory.connecting': 'Connecting to the Hub for live updates…',
+  'hub.directory.reconnecting': 'Hub connection lost; reconnecting…',
+  'hub.directory.pointer': 'Node {node} has updates.',
+  'hub.directory.col.name': 'Node',
+  'hub.directory.col.status': 'Status',
+  'hub.directory.col.teams': 'Teams',
+  'hub.directory.col.agents': 'Agents',
+  'hub.directory.col.liveAgents': 'Live agents',
+  'hub.directory.col.lastSeen': 'Last seen',
+  'hub.directory.col.dataPlane': 'Data plane',
+  'hub.directory.dataPlane.direct': 'direct',
+  'hub.directory.dataPlane.unreachable': 'control only',
+  'hub.node.status.connecting': 'Connecting',
+  'hub.node.status.healthy': 'Healthy',
+  'hub.node.status.unreachable': 'Unreachable',
+  'hub.node.status.incompatible': 'Incompatible',
+  'hub.node.status.unauthorized': 'Unauthorized',
+  'hub.node.status.identityMismatch': 'Identity mismatch',
+  'hub.error.unauthorized': 'Hub token rejected',
+  'hub.error.unauthorizedReason':
+    'The saved Hub read token is invalid or expired. Enter a new one.',
+  'hub.error.incompatible': 'Hub protocol is not compatible',
+  'hub.error.incompatibleReason': 'This page speaks vessel.hub/1. Update the Hub or the Platform.',
+  'hub.error.origin':
+    'Cannot reach the Hub at this address. Confirm the URL and that the Hub hub.allowedOrigins includes {origin}.',
 
   // Gateway
   'gateway.title': 'Gateway',
@@ -1632,7 +1673,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.demo.states.error': 'Request failed; check the gateway connection.',
 
   // 0.46 top-level page subtitles (the header holds only title and subtitle)
-  'hub.subtitle': 'Hub identity, version, and how this node participates in a hub.',
   'gateway.subtitle':
     'The gateway this browser is connected to: endpoint, node identity, version, and uptime.',
   'pluginHost.subtitle':

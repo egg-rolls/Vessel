@@ -1235,9 +1235,9 @@ function isNonEmptyStringValue(value: unknown): value is string {
 /**
  * 校验 hub 块（S5；schema 层，文件存在性由启动前检查）。
  *
- * `direction: 'hub'` 为 hub 进程（拨号节点）；`direction: 'node'` 为 gateway 出站加入
- * hub（S5.1）。非回环必须同时满足 `allowRemote=true`、TLS cert/key 成对、非空
- * `tokenEnv`（fail-closed）。node 角色的 `url` / `caFile` / `joinCodeEnv` 只在出现时校验。
+ * `direction: 'node'` 为 gateway 出站加入 hub（S5.1）。非回环必须同时满足
+ * `allowRemote=true`、TLS cert/key 成对、非空 `tokenEnv`（fail-closed）。
+ * node 角色的 `url` / `caFile` / `joinCodeEnv` 只在出现时校验。
  */
 export function validateHubSettings(
   hub: HubConfig,
@@ -1247,7 +1247,6 @@ export function validateHubSettings(
   const {
     dataDir,
     direction,
-    autoStart,
     url,
     caFile,
     joinCodeEnv,
@@ -1280,19 +1279,11 @@ export function validateHubSettings(
     }
   }
 
-  if (direction !== undefined && direction !== 'hub' && direction !== 'node') {
+  if (direction !== undefined && direction !== 'node') {
     errors.push({
       path: 'hub.direction',
-      message: 'hub.direction must be "hub" or "node"',
+      message: 'hub.direction must be "node"',
       value: direction,
-    });
-  }
-
-  if (autoStart !== undefined && typeof autoStart !== 'boolean') {
-    errors.push({
-      path: 'hub.autoStart',
-      message: 'hub.autoStart must be a boolean',
-      value: autoStart,
     });
   }
 
@@ -2744,7 +2735,6 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   connect: ['token', 'tokenEnv', 'caFile'],
   attention: ['nodes'],
   hub: [
-    'autoStart',
     'dataDir',
     'direction',
     'url',

@@ -1,8 +1,7 @@
 /**
  * Hub 侧一次性 join code `<hubDataDir>/hub-join.json`（S5.1）。
  *
- * 与 S5 的 `src/hub-pairing.ts` 镜像但所有权相反：hub 生成 code，node 消费。
- * 因此这里不复用 `writePairingFile` / `consumePairingCode`（它们硬编码 node 侧
+ * hub 生成 code，node 消费。这里不复用 node 侧配对实现（它硬编码 node 侧
  * 路径与 tenant 语义），只复用 code 生成与 TTL 常量。
  *
  * - 文件只存 `sha256(code)`；明文 code 只在 `issue()` 返回值中出现一次。
@@ -23,7 +22,7 @@ import {
   PAIRING_DEFAULT_TTL_S,
   PAIRING_MAX_TTL_S,
   PAIRING_MIN_TTL_S,
-} from '../hub-pairing';
+} from './pairing-code';
 import {
   type HubJoinConsumeResult,
   type HubJoinFile,

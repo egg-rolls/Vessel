@@ -1,6 +1,7 @@
-/** Status 导航组的 React 绑定：轮询 config 以刷新版本与 hub 三态。 */
-import { hubInfoFromConfig } from '../domains/hub/hub-state';
+/** Status 导航组的 React 绑定：config 只用于版本；Hub 状态来自 Hub 页直连快照。 */
+import { useSyncExternalStore } from 'react';
 import { useConnection } from '../gateway/ConnectionProvider';
+import { getHubNavStatus, subscribeHubNavStatus } from '../gateway/platform/hub-storage';
 import type { PluginListItem } from '../gateway/types';
 import { resourceData } from '../state/useResource';
 import { useConfigStoreApi } from '../stores/useConfigStoreApi';
@@ -15,19 +16,14 @@ import {
 export function useNavStatus(plugins: readonly PluginListItem[]): NavStatuses {
   const { connectionState, hasToken } = useConnection();
   const { config } = useConfigStoreApi({ pollMs: 60_000 });
+  const hubStatus = useSyncExternalStore(subscribeHubNavStatus, getHubNavStatus, getHubNavStatus);
 
   const data = resourceData(config);
   const gateway = gatewayNavStatus(connectionState, hasToken);
   const version = data?.version;
-  const hub = hubNavStatus(
-    data ? hubInfoFromConfig(data.config) : undefined,
-    gateway,
-    hasToken,
-    version,
-  );
   const marketplace = plugins.find((plugin) => plugin.name === 'marketplace');
   return {
-    hub,
+    hub: hubNavStatus(hubStatus),
     gateway: version !== undefined ? { ...gateway, version } : gateway,
     pluginHost: pluginHostNavStatus(marketplace),
   };

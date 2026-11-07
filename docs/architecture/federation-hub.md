@@ -15,7 +15,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 
 | 平面 | 方向 | 传什么 | 不传什么 |
 |---|---|---|---|
-| hub 控制面 | hub ↔ node 常驻 WSS | 节点 / team / 成员目录、在线状态、指针 | 消息正文、事件、工具结果 |
+| hub 控制面 | node → hub 常驻 WSS（节点出站） | 节点 / team / 成员目录、在线状态、指针 | 消息正文、事件、工具结果 |
 | federation 数据面 | node → node | 按 team / principal 寻址的一条消息 | agent id 列表、权限、transcript |
 
 节点仍是唯一执行与授权权威；hub 不判断 team 成员资格、不批准权限、不代表用户身份。浏览器渲染所需数据由客户端直连节点拉取。
@@ -24,22 +24,20 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 
 ## Hub 进程与连接方向
 
-- hub 是 **app 层独立前台进程**，实现在 `src/hub/`，不新增可发布 package，也不进 `packages/core` / `packages/agent` / `packages/serve`。节点侧只提供 `/v1/hub/control` 与 `/v1/hub/pair`。
-- 两个方向共用协议 `vessel.hub/1`，帧内 `dialer: 'hub' | 'node'` 标明发起方：
-  - hub → node：hub 作为 WSS 客户端拨号节点的 `/v1/hub/control`。
-  - node → hub：节点主动拨号 `${hub.url}/v1/hub/node-control`，因此节点只需监听回环，不必开放入站端口。
-- 本地 hub：当前由 gateway 在 `<dataDir>/hub` 启动同进程目录服务，只监听回环；`hub.autoStart` 缺省 true，显式 false 关闭，不自动 join / 配对。目标态见 [topology](topology.md)（Platform 独立服务）。
-- 同一 pairing 只保留一条活动连接，新连接接管；hub 重启时 node-dial 记录不拨号，等待节点重连。
+- hub 是 **app 层独立前台进程**（`vessel hub start`），实现在 `src/hub/`，不新增可发布 package，也不进 `packages/core` / `packages/agent` / `packages/serve`。gateway 不启动本地 hub；节点侧不提供 `/v1/hub/control` 与 `POST /v1/hub/pair`。
+- 只有 **node → hub** 一个方向：节点作为 WSS 客户端主动拨号 `${hub.url}/v1/hub/node-control`，hub 是 acceptor；协议 `vessel.hub/1` 帧内 `dialer: 'node'` 标明发起方。节点只需监听回环，不必开放入站端口。
+- 同一 pairing 只保留一条活动连接，新连接接管；hub 重启时等待节点重连，不反向拨号节点。
+- 默认 data dir 仍是 `<dataDir>/hub`；独立部署 / 多公司必须显式设 `hub.dataDir`，且必须与 gateway 的 `dataDir` 不同。只有 Hub 进程读写 `<hubDataDir>/**`。
 
 <a id="pairing"></a>
 
 ## 配对、join code 与 token
 
-- `POST /v1/hub/pair`：节点生成一次性配对码，hub 用码换 `view` + `exchange` token；码只存 `sha256`、默认 5 分钟、消费时先原子写 `used_at`。
-- `vessel hub join-code`：hub 生成一次性 join code（默认 300 秒、只存 hash），节点用 `vessel hub join <hub-url> --code` 换 hub 签发的 `node` token。
-- scope：`view | exchange | control | admin | node`，映射到既有 `read / write / admin` 方法与白名单，不新增 role 字符串。`exchange` 只能调用 `auth.exchange`，且结果固定 `control`。
-- token 绑定 `hub_id`（node token 还绑定 `node_id` / `tenant_id`）；首帧身份或绑定不一致一律 4401 关闭，防止 A hub 的 token 被 B hub 复用。
-- 明文只在签发响应出现一次；hub 侧凭据走 `SecretStore`，节点侧只存 `sha256(token)`。文件回退适配器只有 `hub.allow_file_secrets: true` 才启用，否则 fail-closed。
+- `vessel hub join-code`：hub 生成一次性 join code（默认 300 秒、只存 hash），节点用 `vessel hub join <hub-url> --code` 经 `POST /v1/hub/join` 换 hub 签发的 token。
+- token 只有 `scope: node`，绑定 `hub_id` / `node_id` / `tenant_id`；首帧身份或绑定不一致一律 4401 关闭，防止 A hub 的 token 被 B hub 复用。
+- 明文只在签发响应出现一次；hub 只持久化 `sha256(token)` 到 `<hubDataDir>/node-tokens.json`，节点把明文 token 存入 SecretStore；任何文件 / 日志 / 事件不出现 token。
+- 节点侧 SecretStore 的文件回退适配器只有 `hub.allow_file_secrets: true` 才启用，否则 fail-closed；Hub 自身的读 token 由 `hub.tokenEnv` 提供，不回显。
+- 旧 hub → node 拨号、节点侧 hub 入站路由与 scoped `view` / `exchange` token 已移除；调用 `hub pair` / `hub node add` / `hub token *` / `hub data-token` 会失败并提示改用 `vessel hub join-code` / `vessel hub join`。
 
 <a id="directory"></a>
 
@@ -98,3 +96,4 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 
 - [gateway.md](gateway.md#remote) · [gateway-rpc.md](gateway-rpc.md) · [assembly.md](assembly.md#assembly) · [REMOTE.md](../operations/REMOTE.md) · [CONFIG.md](../operations/CONFIG.md)
 - 决策：[ADR-093](../adr/ADR-093-hub-control-plane.md) · [ADR-094](../adr/ADR-094-federation-team-to-team.md) · [ADR-052](../adr/ADR-052-cross-node-transport.md) · [ADR-067](../adr/ADR-067-cross-node-dedup-keys.md) · [ADR-053](../adr/ADR-053-remote-security-baseline.md)
+- ADR-093 的 hub → node 拨号方向已由当前实现移除；ADR 正文 errata 由 gov 后续补，本文不作为 ADR 修订。

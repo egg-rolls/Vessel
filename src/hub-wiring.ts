@@ -1,11 +1,10 @@
 /**
  * 节点侧 hub 控制面装配（S5）。
  *
- * 把 `AgentService` 投影成 `HubControlLike` / `HubTeamScopeLike`：
+ * 把 `AgentService` 投影成 `HubControlLike`：
  * - snapshot 只白名单投影（agent / team 元数据），不透传 session / model / prompt / usage；
  * - subscribe 把成员生命周期事件映射成 `agent.state` 指针；
- * - team 归属经结构化可选读取（S3 未合入时 `team_id` 不存在，unbound 成员不进目录）；
- * - node token 控制面由 `createNodeTokenControl` 持有。
+ * - team 归属经结构化可选读取（S3 未合入时 `team_id` 不存在，unbound 成员不进目录）。
  *
  * @module vessel/hub-wiring
  */
@@ -26,10 +25,7 @@ import {
   type HubNodeSnapshotInput,
   type HubPointerInput,
   type HubTeamMeta,
-  type HubTeamScopeLike,
-  type NodeTokenControlLike,
 } from '../packages/serve/src/index';
-import { createNodeTokenControl } from './node-token-control';
 
 /** 成员生命周期事件 → 目录变化（开放字符串，不新增常量导出）。 */
 const AGENT_STATE_EVENTS = new Set([
@@ -77,24 +73,11 @@ export interface CreateHubControlOptions {
   ownerId?: string;
 }
 
-export interface CreateTeamScopeOptions {
-  service: AgentService;
-  logger?: Logger;
-  /** 与 `createHubControl` 一致：private 可见性判定使用的 viewer。 */
-  ownerId?: string;
-}
+export interface CreateHubRuntimeOptions extends CreateHubControlOptions {}
 
-export interface CreateHubRuntimeOptions extends CreateHubControlOptions {
-  dataDir: string;
-  tenantId: string;
-  nodeId: string;
-}
-
-/** hub 控制面 + team 归属 + 节点 token 控制面的装配结果。 */
+/** hub 控制面装配结果。 */
 export interface HubRuntime {
   hubControl: HubControlLike;
-  teamScope: HubTeamScopeLike;
-  nodeTokens: NodeTokenControlLike;
 }
 
 function errorMessage(error: unknown): string {
@@ -154,26 +137,6 @@ function projectTeam(entry: unknown, lastActive: number | undefined): HubTeamMet
   }
   if (lastActive !== undefined) team.last_active = lastActive;
   return team;
-}
-
-function memberSessionIds(member: MemberStatus): string[] {
-  const sessions: string[] = [];
-  const record = member as {
-    session_id?: unknown;
-    current_body?: { session_id?: unknown };
-    body_history?: unknown;
-  };
-  const base = readString(record.session_id);
-  if (base !== undefined) sessions.push(base);
-  const current = readString(record.current_body?.session_id);
-  if (current !== undefined) sessions.push(current);
-  if (Array.isArray(record.body_history)) {
-    for (const entry of record.body_history) {
-      const session = readString((entry as { session_id?: unknown } | null)?.session_id);
-      if (session !== undefined) sessions.push(session);
-    }
-  }
-  return sessions;
 }
 
 /**
@@ -340,62 +303,7 @@ export function createHubControl(options: CreateHubControlOptions): HubControlLi
   return { snapshot, subscribe };
 }
 
-/**
- * team-scoped token 的 session → team 归属缓存。
- *
- * `teamForSession` 是同步接口：缓存由 `service.list()` 在后台填充；
- * 未命中时再触发一次刷新（不阻塞调用方，未知 session 返回 undefined）。
- */
-export function createTeamScope(options: CreateTeamScopeOptions): HubTeamScopeLike {
-  const viewer = options.ownerId ?? DEFAULT_OWNER;
-  const bySession = new Map<string, string>();
-  let refreshing: Promise<void> | undefined;
-
-  const refresh = (): Promise<void> => {
-    if (refreshing !== undefined) return refreshing;
-    refreshing = (async () => {
-      try {
-        const members = await options.service.list({ viewer });
-        bySession.clear();
-        for (const member of members) {
-          const teamId = readTeamId(member);
-          if (teamId === undefined) continue;
-          for (const sessionId of memberSessionIds(member)) bySession.set(sessionId, teamId);
-        }
-      } catch (error) {
-        options.logger?.warn('hub.team_scope.refresh_failed', { error: errorMessage(error) });
-      } finally {
-        refreshing = undefined;
-      }
-    })();
-    return refreshing;
-  };
-
-  void refresh();
-
-  return {
-    teamForSession(sessionId: string): string | undefined {
-      const teamId = bySession.get(sessionId);
-      if (teamId === undefined) void refresh();
-      return teamId;
-    },
-  };
-}
-
-/** 装配 hub 控制面、team 归属与节点 token 控制面。 */
+/** 装配 hub 控制面。 */
 export async function createHubRuntime(options: CreateHubRuntimeOptions): Promise<HubRuntime> {
-  const hubControl = createHubControl(options);
-  const teamScope = createTeamScope({
-    service: options.service,
-    ...(options.ownerId !== undefined ? { ownerId: options.ownerId } : {}),
-    ...(options.logger !== undefined ? { logger: options.logger } : {}),
-  });
-  const nodeTokens = await createNodeTokenControl({
-    dataDir: options.dataDir,
-    tenantId: options.tenantId,
-    nodeId: options.nodeId,
-    ...(options.logger !== undefined ? { logger: options.logger } : {}),
-    ...(options.now !== undefined ? { now: options.now } : {}),
-  });
-  return { hubControl, teamScope, nodeTokens };
+  return { hubControl: createHubControl(options) };
 }

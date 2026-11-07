@@ -1,15 +1,13 @@
 /**
  * Hub 进程装配（S5）。
  *
- * 只负责把 registry / secret store / token broker / control client / HTTP 服务
+ * 只负责把 registry / secret store（node token）/ node credentials / HTTP 服务
  * 接在一起；配置校验、CLI 参数解析和网络协议分别留在各自模块。
  *
  * - hub data dir 必须与 gateway data dir 不同（`hub_data_dir_conflict`）；
- * - 启动时按 registry 记录恢复 view token 并重连；`direction:'node'` 的记录只标
- *   `unreachable` 等待节点重连，不读 view token、不拨号；
+ * - 启动时只把 registry 里的旧记录标 `unreachable`，等待节点重连；不读 view token、不拨号；
  * - 两个入站端口工厂（join / credentials）同时注入时才装配 `nodeControl`；
- * - registry 删除 pairing 时同步关闭 control client；
- * - `stop()` 幂等：关连接 → 停服务 → flush 目录。
+ * - `stop()` 幂等：停服务 → flush 目录。
  *
  * @module vessel/hub/runtime
  */
@@ -18,7 +16,6 @@ import * as fs from 'node:fs';
 import { mkdir, open } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Logger } from '@vessel-agent/core';
-import type { HubControlChange, HubNodeSnapshotInput } from '@vessel-agent/serve';
 import type { HubConfig, VesselConfig } from '../../packages/config/src/index';
 import { expandHome, resolveDataDir } from '../data-paths';
 import {
@@ -29,14 +26,6 @@ import {
   readGatewayStateFile,
 } from '../gateway/pid';
 import { resolveNodeId } from '../node-identity';
-import {
-  createHubControlClient,
-  type HubControlClient,
-  type HubControlClientOptions,
-  type HubControlPointer,
-  type HubControlSnapshot,
-  type HubControlStatus,
-} from './control-client';
 import { createHubJoinStore } from './join-store';
 import { createHubNodeCredentialStore } from './node-credential-store';
 import {
@@ -45,30 +34,18 @@ import {
   type HubNodePatch,
   type HubRegistry,
 } from './registry';
-import { type CreateSecretStoreOptions, createSecretStore } from './secret-store';
-import {
-  type CreateHubServerOptions,
-  createHubServer,
-  type HubConnectNode,
-  type HubNodeConnection,
-  type HubServer,
-} from './server';
+import { type CreateHubServerOptions, createHubServer, type HubServer } from './server';
 import { createHubSnapshotPolicy } from './snapshot-policy';
-import { createHubTokenBroker, type HubTokenBrokerOptions } from './token-broker';
-import {
-  type HubJoinStoreLike,
-  type HubNodeCredentialStoreLike,
-  type HubNodeInboundDeps,
-  type HubNodeInboundHooks,
-  type HubNodeJoinedInput,
-  type HubNodePointer,
-  type HubNodeRecord,
-  type HubNodeSnapshot,
-  type HubNodeStatus,
-  type HubTokenBrokerLike,
-  pairingIdFor,
-  pairingSecretKey,
-  type SecretStore,
+import type {
+  HubJoinStoreLike,
+  HubNodeCredentialStoreLike,
+  HubNodeInboundDeps,
+  HubNodeInboundHooks,
+  HubNodeJoinedInput,
+  HubNodePointer,
+  HubNodeRecord,
+  HubNodeSnapshot,
+  HubNodeStatus,
 } from './types';
 
 /**
@@ -84,9 +61,6 @@ export function defaultHubDataDir(config: VesselConfig): string {
 /** 单实例独占锁文件名（S10.2，位于 hub data dir 根）。 */
 export const HUB_LOCK_FILE = 'hub.lock';
 
-/** 本机节点目录刷新合并窗口。 */
-const LOCAL_NODE_REFRESH_MS = 250;
-
 /** 不可解析 hub.lock 的宽限（E3）。 */
 const HUB_UNPARSEABLE_GRACE_MS = 5_000;
 
@@ -101,27 +75,11 @@ export interface HubLockFile {
 export interface HubRuntimeFactories {
   resolveHubId?: (options: { dataDir: string; logger?: Logger }) => Promise<string>;
   createRegistry?: (options: CreateHubRegistryOptions) => HubRegistry;
-  createSecretStore?: (options: CreateSecretStoreOptions) => SecretStore;
-  createTokenBroker?: (options: HubTokenBrokerOptions) => HubTokenBrokerLike;
-  createControlClient?: (options: HubControlClientOptions) => HubControlClient;
   createServer?: (options: CreateHubServerOptions) => HubServer;
   /** hub 侧 join code 端口；与 `createNodeCredentials` 同时提供才启用入站。 */
   createJoinStore?: () => HubJoinStoreLike;
   /** hub 侧 node token 端口；与 `createJoinStore` 同时提供才启用入站。 */
   createNodeCredentials?: () => Promise<HubNodeCredentialStoreLike>;
-}
-
-/**
- * 同进程本机节点投影（S10.2）。
- *
- * gateway 与 hub 同进程时用它把自身目录写进 registry；只存白名单元数据，
- * 不携带消息正文。
- */
-export interface HubLocalNodeInput {
-  nodeId: string;
-  tenantId: string;
-  snapshot(): Promise<HubNodeSnapshotInput>;
-  subscribe?(listener: (change: HubControlChange) => void): () => void;
 }
 
 export interface StartHubRuntimeOptions {
@@ -133,8 +91,6 @@ export interface StartHubRuntimeOptions {
   logger?: Logger;
   now?: () => number;
   factories?: HubRuntimeFactories;
-  /** 提供时注册本机节点目录记录并跟随变化刷新。 */
-  localNode?: HubLocalNodeInput;
   /** hub data dir 独占锁；默认 true（测试可显式关闭）。 */
   singleInstance?: boolean;
 }
@@ -156,10 +112,6 @@ export class HubRuntimeError extends Error {
     this.name = 'HubRuntimeError';
     this.code = code;
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function errnoCode(error: unknown): unknown {
@@ -351,14 +303,6 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   const clock = options.now ?? Date.now;
   const factories = options.factories ?? {};
 
-  const direction = config.hub?.direction;
-  if (direction !== undefined && direction !== 'hub') {
-    throw new HubRuntimeError(
-      'unsupported_direction',
-      `hub.direction "${direction}" is not supported in S5`,
-    );
-  }
-
   const dataDir = resolveHubDataDir(config, options.dataDir);
 
   const resolveHub =
@@ -376,25 +320,9 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   });
   await registry.load();
 
-  const createSecrets = factories.createSecretStore ?? createSecretStore;
-  const secretStore = createSecrets({
-    dataDir,
-    allowFileSecrets: config.hub?.allowFileSecrets === true,
-    ...(logger ? { logger } : {}),
-  });
-
-  const createBroker = factories.createTokenBroker ?? createHubTokenBroker;
-  const tokenBroker = createBroker({ secretStore, now: clock });
-
-  const createClient = factories.createControlClient ?? createHubControlClient;
-  const clients = new Map<string, HubControlClient>();
   let server: HubServer | undefined;
   let lock: HubLockHandle | undefined;
   let stopped = false;
-  let unsubscribeRegistry: (() => void) | undefined;
-  let unsubscribeLocalNode: (() => void) | undefined;
-  let localNodeTimer: ReturnType<typeof setTimeout> | undefined;
-  let localNodeChain: Promise<void> = Promise.resolve();
 
   /** registry.patch 会忽略 undefined；这里补上“清空 last_error”。 */
   function patchRecord(pairingId: string, patch: HubNodePatch): HubNodeRecord | undefined {
@@ -407,40 +335,6 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     const copy: HubNodeRecord = { ...current };
     delete copy.last_error;
     return registry.upsert(copy);
-  }
-
-  function onSnapshot(pairingId: string, snapshot: HubControlSnapshot): void {
-    patchRecord(pairingId, {
-      status: 'healthy',
-      name: snapshot.name,
-      last_seen: snapshot.observed_at,
-      incarnation: snapshot.incarnation,
-      revision: snapshot.revision,
-      truncated: snapshot.truncated,
-      counts: snapshot.counts,
-      teams: snapshot.teams,
-      agents: snapshot.agents,
-      last_error: undefined,
-    });
-    server?.publishDirectory();
-  }
-
-  function onPointer(pointer: HubControlPointer): void {
-    server?.publishPointer({
-      node_id: pointer.node_id,
-      team_id: pointer.team_id,
-      reason: pointer.reason,
-      request_id: pointer.request_id,
-      ts: pointer.ts,
-    });
-  }
-
-  function onStatus(pairingId: string, status: HubControlStatus): void {
-    patchRecord(
-      pairingId,
-      status === 'healthy' ? { status, last_error: undefined } : { status, last_error: status },
-    );
-    server?.publishDirectory();
   }
 
   // ---- node → hub 入站 hooks（S5.1）----
@@ -551,40 +445,6 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     onAuthenticated,
   };
 
-  function closeClient(pairingId: string): void {
-    const client = clients.get(pairingId);
-    if (client === undefined) return;
-    clients.delete(pairingId);
-    client.close();
-  }
-
-  /** 建立一条 control 连接；同 pairing 的旧连接先关闭。 */
-  const connectNode: HubConnectNode = (
-    record: HubNodeRecord,
-    viewToken: string,
-  ): HubNodeConnection | undefined => {
-    // node 拨号的 pairing 由入站连接管理；hub 不反向拨号。
-    if (record.direction === 'node') return undefined;
-    closeClient(record.pairing_id);
-    const client = createClient({
-      record,
-      viewToken,
-      hubId,
-      ...(logger ? { logger } : {}),
-      now: clock,
-      onSnapshot: (snapshot) => onSnapshot(record.pairing_id, snapshot),
-      onPointer,
-      onStatus: (status) => onStatus(record.pairing_id, status),
-    });
-    clients.set(record.pairing_id, client);
-    return {
-      close(): void {
-        client.close();
-        if (clients.get(record.pairing_id) === client) clients.delete(record.pairing_id);
-      },
-    };
-  };
-
   // 默认装配真实 join / credential 端口；测试可注入 fake。
   const createJoinStore =
     factories.createJoinStore ?? (() => createHubJoinStore({ dataDir, hubId, now: clock }));
@@ -611,9 +471,6 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     config: (config.hub ?? {}) as HubConfig,
     hubId,
     registry,
-    secretStore,
-    tokenBroker,
-    connectNode,
     ...(logger ? { logger } : {}),
     now: clock,
     nodeControl,
@@ -637,128 +494,19 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     throw error;
   }
 
-  // 启动恢复：上次的 healthy 不可信，先全部标 unreachable；再逐条读 view token。
-  // node 拨号的记录不读 secret、不拨号，等待节点重连。
+  // 启动恢复：上次的 healthy 不可信，先全部标 unreachable，等待节点重连。
+  // 旧 hub→node 记录已无法反拨，标 disconnected；节点重新 join 后会覆盖。
   let directoryChanged = false;
   for (const record of registry.list()) {
-    if (record.direction === 'node') {
-      patchRecord(record.pairing_id, {
-        status: 'unreachable',
-        last_error: 'waiting_for_node',
-      });
-    } else {
-      patchRecord(record.pairing_id, { status: 'unreachable', last_error: 'reconnecting' });
-    }
+    patchRecord(
+      record.pairing_id,
+      record.direction === 'node'
+        ? { status: 'unreachable', last_error: 'waiting_for_node' }
+        : { status: 'unreachable', last_error: 'disconnected' },
+    );
     directoryChanged = true;
   }
-  for (const record of registry.list()) {
-    if (record.direction === 'node') continue;
-    let viewToken: string | undefined;
-    try {
-      viewToken = await secretStore.get(pairingSecretKey(record.pairing_id, 'view'));
-    } catch (error) {
-      logger?.warn('hub.runtime.secret_read_failed', {
-        pairing_id: record.pairing_id,
-        error: errorMessage(error),
-      });
-      patchRecord(record.pairing_id, { status: 'unreachable', last_error: 'secret_store_error' });
-      directoryChanged = true;
-      continue;
-    }
-    if (viewToken === undefined || viewToken === '') {
-      patchRecord(record.pairing_id, { status: 'unauthorized', last_error: 'unauthorized' });
-      directoryChanged = true;
-      continue;
-    }
-    try {
-      connectNode(record, viewToken);
-    } catch (error) {
-      logger?.warn('hub.runtime.connect_failed', {
-        pairing_id: record.pairing_id,
-        error: errorMessage(error),
-      });
-      patchRecord(record.pairing_id, { status: 'unreachable', last_error: 'connect_failed' });
-      directoryChanged = true;
-    }
-  }
   if (directoryChanged) server.publishDirectory();
-
-  // S10.2：同进程本机节点目录记录。只写白名单元数据（counts / teams / agents），
-  // 不落消息正文；没有 localNode 时行为不变。
-  const localNode = options.localNode;
-
-  function applyLocalNodeSnapshot(input: HubNodeSnapshotInput): void {
-    if (localNode === undefined) return;
-    registry.upsert({
-      pairing_id: pairingIdFor(localNode.nodeId, localNode.tenantId),
-      node_id: localNode.nodeId,
-      tenant_id: localNode.tenantId,
-      ...(typeof input.name === 'string' && input.name !== '' ? { name: input.name } : {}),
-      direction: 'node',
-      status: 'healthy',
-      last_seen: clock(),
-      truncated: input.truncated,
-      counts: input.counts,
-      teams: input.teams,
-      agents: input.agents,
-    });
-    server?.publishDirectory();
-  }
-
-  function refreshLocalNode(): Promise<void> {
-    if (localNode === undefined) return Promise.resolve();
-    localNodeChain = localNodeChain
-      .then(async () => {
-        if (stopped) return;
-        let input: HubNodeSnapshotInput;
-        try {
-          input = await localNode.snapshot();
-        } catch (error) {
-          logger?.warn('hub.runtime.local_snapshot_failed', { error: errorMessage(error) });
-          return;
-        }
-        if (stopped) return;
-        applyLocalNodeSnapshot(input);
-      })
-      .catch(() => undefined);
-    return localNodeChain;
-  }
-
-  function scheduleLocalRefresh(): void {
-    if (localNodeTimer !== undefined) return;
-    localNodeTimer = setTimeout(() => {
-      localNodeTimer = undefined;
-      void refreshLocalNode();
-    }, LOCAL_NODE_REFRESH_MS);
-    (localNodeTimer as { unref?: () => void }).unref?.();
-  }
-
-  if (localNode !== undefined) {
-    try {
-      unsubscribeLocalNode = localNode.subscribe?.((change) => {
-        if (stopped) return;
-        if (change.directoryChanged === true) scheduleLocalRefresh();
-        for (const pointer of change.pointers ?? []) {
-          server?.publishPointer({
-            node_id: localNode.nodeId,
-            team_id: pointer.team_id,
-            reason: pointer.reason,
-            ...(pointer.request_id !== undefined ? { request_id: pointer.request_id } : {}),
-            ts: pointer.ts,
-          });
-        }
-      });
-    } catch (error) {
-      logger?.warn('hub.runtime.local_subscribe_failed', { error: errorMessage(error) });
-    }
-    // 先订阅再取首次快照，避免两者之间的目录变化被漏掉。
-    await refreshLocalNode();
-  }
-
-  unsubscribeRegistry = registry.subscribe((event) => {
-    if (event.type !== 'remove') return;
-    closeClient(event.pairing_id);
-  });
 
   const runtime: HubRuntime = {
     hubId,
@@ -767,16 +515,6 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
-      if (localNodeTimer !== undefined) {
-        clearTimeout(localNodeTimer);
-        localNodeTimer = undefined;
-      }
-      unsubscribeLocalNode?.();
-      unsubscribeLocalNode = undefined;
-      unsubscribeRegistry?.();
-      unsubscribeRegistry = undefined;
-      for (const client of clients.values()) client.close();
-      clients.clear();
       try {
         await server?.stop();
       } finally {

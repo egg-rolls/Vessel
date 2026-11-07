@@ -28,19 +28,12 @@ import {
 } from './hub/runtime';
 import { type CreateSecretStoreOptions, createSecretStore } from './hub/secret-store';
 import type { HubNodeState, SecretStore } from './hub/types';
-import {
-  PAIRING_DEFAULT_TTL_S,
-  PAIRING_MAX_TTL_S,
-  PAIRING_MIN_TTL_S,
-  writePairingFile,
-} from './hub-pairing';
 import { t } from './i18n';
 import { resolveNodeId } from './node-identity';
 import { ui } from './ui-style';
 
 const DEFAULT_HUB_PORT = 8643;
 const REQUEST_TIMEOUT_MS = 10_000;
-const DEFAULT_ADMIN_TOKEN_ENV = 'VESSEL_ADMIN_TOKEN';
 /** `hub join` 等首个 healthy 状态的上限（R1 裁决）。 */
 const JOIN_STATUS_TIMEOUT_MS = 10_000;
 const JOIN_STATUS_POLL_MS = 250;
@@ -187,7 +180,6 @@ function resolveEnvToken(deps: HubCommandDeps, envName: string): string {
   return value;
 }
 
-/** `--token-env` > `config.hub.tokenEnv`；未配置时返回 undefined（回环可匿名）。 */
 function resolveHubToken(
   deps: HubCommandDeps,
   config: VesselConfig,
@@ -279,39 +271,6 @@ async function requestJson(
   return body;
 }
 
-async function callNodeRpc(
-  deps: HubCommandDeps,
-  nodeUrl: string,
-  method: string,
-  params: Record<string, unknown>,
-  adminToken: string,
-): Promise<unknown> {
-  const body = {
-    v: 1,
-    id: crypto.randomUUID(),
-    method,
-    params,
-  };
-  const envelope = await requestJson(deps, `${normalizeNodeUrl(nodeUrl)}/v1/rpc`, {
-    method: 'POST',
-    token: adminToken,
-    body,
-  });
-  if (!isRecord(envelope)) {
-    throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
-  }
-  if (envelope.ok === true) {
-    if (!('result' in envelope)) {
-      throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
-    }
-    return envelope.result;
-  }
-  if (envelope.ok === false) {
-    throw responseFailure(200, envelope);
-  }
-  throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
-}
-
 function nodeLines(body: unknown): string[] {
   if (!isRecord(body) || !Array.isArray(body.nodes)) {
     throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
@@ -343,39 +302,6 @@ function nodeLines(body: unknown): string[] {
 
 function formatDirectory(body: unknown): string {
   return nodeLines(body).join('\n');
-}
-
-function formatIssuedToken(result: unknown): string {
-  if (!isRecord(result)) {
-    throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
-  }
-  const lines: string[] = [];
-  for (const key of ['token', 'token_id', 'scope', 'team_id', 'expires_at'] as const) {
-    const value = result[key];
-    if (value !== undefined) lines.push(`${key}  ${String(value)}`);
-  }
-  return lines.join('\n');
-}
-
-function formatTokenList(result: unknown): string {
-  if (!Array.isArray(result)) {
-    throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
-  }
-  if (result.length === 0) return ui.dim(t('hub.empty.tokens'));
-  const lines = [ui.dim('token_id  scope  team_id  expires_at  revoked_at')];
-  for (const entry of result) {
-    if (!isRecord(entry)) continue;
-    lines.push(
-      [
-        String(entry.token_id ?? '-'),
-        String(entry.scope ?? '-'),
-        String(entry.team_id ?? '-'),
-        String(entry.expires_at ?? '-'),
-        String(entry.revoked_at ?? '-'),
-      ].join('  '),
-    );
-  }
-  return lines.join('\n');
 }
 
 function withHubOverrides(config: VesselConfig, command: Extract<HubCommand, { kind: 'start' }>) {
@@ -559,40 +485,6 @@ async function watchCommand(
   });
 }
 
-function pairingDataDir(
-  command: Extract<HubCommand, { kind: 'pair' }>,
-  deps: HubCommandDeps,
-  config: VesselConfig,
-): string {
-  if (command.dataDir !== undefined) return path.resolve(expandHome(command.dataDir));
-  return deps.dataDir ?? resolveDataDir(config, deps.env ?? process.env);
-}
-
-function clampPairingTtl(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) return PAIRING_DEFAULT_TTL_S;
-  return Math.min(PAIRING_MAX_TTL_S, Math.max(PAIRING_MIN_TTL_S, Math.floor(value)));
-}
-
-async function pairCommand(
-  command: Extract<HubCommand, { kind: 'pair' }>,
-  deps: HubCommandDeps,
-  config: VesselConfig,
-): Promise<number> {
-  const now = deps.now ?? Date.now;
-  const tenantId = command.tenant ?? config.tenant?.default ?? 'default';
-  const ttl = command.ttl ?? config.hub?.pairingTtlSeconds;
-  const code = await writePairingFile({
-    dataDir: pairingDataDir(command, deps, config),
-    tenantId,
-    ...(ttl !== undefined ? { ttlSeconds: ttl } : {}),
-    now: now(),
-  });
-  output(deps, ui.ok(`pairing code: ${code}`));
-  output(deps, `expires at: ${new Date(now() + clampPairingTtl(ttl) * 1000).toISOString()}`);
-  return 0;
-}
-
-/** hub 侧 data dir：显式 `--data-dir` > `config.hub.dataDir` > `<dataDir>/hub`。 */
 function hubJoinCodeDataDir(config: VesselConfig, explicit?: string): string {
   const configured = explicit ?? config.hub?.dataDir;
   return configured === undefined
@@ -878,31 +770,6 @@ async function joinCommand(
   return 0;
 }
 
-async function nodeAddCommand(
-  command: Extract<HubCommand, { kind: 'node-add' }>,
-  deps: HubCommandDeps,
-  config: VesselConfig,
-): Promise<number> {
-  const baseUrl = resolveHubUrl(command.hubUrl, config);
-  const body = await requestJson(deps, `${baseUrl}/v1/hub/nodes`, {
-    method: 'POST',
-    body: {
-      url: command.url,
-      code: command.code,
-      direction: 'hub',
-      ...(command.alias !== undefined ? { alias: command.alias } : {}),
-      ...(command.ca !== undefined ? { ca_file: command.ca } : {}),
-    },
-  });
-  if (!isRecord(body) || typeof body.pairing_id !== 'string' || typeof body.node_id !== 'string') {
-    throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
-  }
-  output(deps, `pairing_id  ${body.pairing_id}`);
-  output(deps, `node_id  ${body.node_id}`);
-  if (typeof body.tenant_id === 'string') output(deps, `tenant_id  ${body.tenant_id}`);
-  return 0;
-}
-
 async function nodeListCommand(
   command: Extract<HubCommand, { kind: 'node-list' }>,
   deps: HubCommandDeps,
@@ -929,96 +796,6 @@ async function nodeRemoveCommand(
   return 0;
 }
 
-async function tokenExchangeCommand(
-  command: Extract<HubCommand, { kind: 'token-exchange' }>,
-  deps: HubCommandDeps,
-): Promise<number> {
-  const adminEnv = command.adminTokenEnv ?? DEFAULT_ADMIN_TOKEN_ENV;
-  const adminToken = resolveEnvToken(deps, adminEnv);
-  const result = await callNodeRpc(
-    deps,
-    command.nodeUrl,
-    'auth.exchange',
-    {
-      team_id: command.teamId,
-      ...(command.ttl !== undefined ? { ttl_s: command.ttl } : {}),
-    },
-    adminToken,
-  );
-  output(deps, command.json ? JSON.stringify(result, null, 2) : formatIssuedToken(result));
-  return 0;
-}
-
-async function tokenRevokeCommand(
-  command: Extract<HubCommand, { kind: 'token-revoke' }>,
-  deps: HubCommandDeps,
-): Promise<number> {
-  const adminEnv = command.adminTokenEnv ?? DEFAULT_ADMIN_TOKEN_ENV;
-  const adminToken = resolveEnvToken(deps, adminEnv);
-  const result = await callNodeRpc(
-    deps,
-    command.nodeUrl,
-    'auth.revoke',
-    { token_id: command.tokenId },
-    adminToken,
-  );
-  if (!isRecord(result)) {
-    throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
-  }
-  output(deps, ui.ok(`revoked ${String(result.token_id ?? command.tokenId)}`));
-  if (result.revoked_at !== undefined) {
-    output(deps, `revoked_at  ${String(result.revoked_at)}`);
-  }
-  return 0;
-}
-
-async function tokenListCommand(
-  command: Extract<HubCommand, { kind: 'token-list' }>,
-  deps: HubCommandDeps,
-): Promise<number> {
-  const adminEnv = command.adminTokenEnv ?? DEFAULT_ADMIN_TOKEN_ENV;
-  const adminToken = resolveEnvToken(deps, adminEnv);
-  const result = await callNodeRpc(deps, command.nodeUrl, 'auth.tokens', {}, adminToken);
-  output(deps, command.json ? JSON.stringify(result, null, 2) : formatTokenList(result));
-  return 0;
-}
-
-async function dataTokenCommand(
-  command: Extract<HubCommand, { kind: 'data-token' }>,
-  deps: HubCommandDeps,
-  config: VesselConfig,
-): Promise<number> {
-  const baseUrl = resolveHubUrl(command.hubUrl, config);
-  const token = resolveHubToken(deps, config, command.tokenEnv);
-  const body = await requestJson(deps, `${baseUrl}/v1/hub/data-token`, {
-    method: 'POST',
-    token,
-    body: {
-      pairing_id: command.pairingId,
-      team_id: command.teamId,
-      ...(command.ttl !== undefined ? { ttl_s: command.ttl } : {}),
-    },
-  });
-  if (!isRecord(body) || typeof body.token !== 'string') {
-    throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
-  }
-  for (const key of [
-    'pairing_id',
-    'node_id',
-    'team_id',
-    'url',
-    'token',
-    'token_id',
-    'scope',
-    'expires_at',
-  ]) {
-    const value = body[key];
-    if (value !== undefined) output(deps, `${key}  ${String(value)}`);
-  }
-  return 0;
-}
-
-/** 执行一个 hub 子命令；错误转 stderr + exit 1。 */
 export async function runHubCommand(
   command: HubCommand,
   deps: HubCommandDeps = {},
@@ -1039,26 +816,14 @@ export async function runHubCommand(
         return await directoryCommand(command.hubUrl, command.tokenEnv, command.json, deps, config);
       case 'watch':
         return await watchCommand(command, deps, config);
-      case 'pair':
-        return await pairCommand(command, deps, config);
       case 'join-code':
         return await joinCodeCommand(command, deps, config);
       case 'join':
         return await joinCommand(command, deps, config);
-      case 'node-add':
-        return await nodeAddCommand(command, deps, config);
       case 'node-list':
         return await nodeListCommand(command, deps, config);
       case 'node-remove':
         return await nodeRemoveCommand(command, deps, config);
-      case 'token-exchange':
-        return await tokenExchangeCommand(command, deps);
-      case 'token-revoke':
-        return await tokenRevokeCommand(command, deps);
-      case 'token-list':
-        return await tokenListCommand(command, deps);
-      case 'data-token':
-        return await dataTokenCommand(command, deps, config);
     }
   } catch (error) {
     outputErr(deps, errorText(error));

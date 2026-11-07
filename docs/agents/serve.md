@@ -37,10 +37,15 @@ applies_to: [N, M]
 - 远程 opt-in / TLS / Origin 的规则见 AGENTS 硬安全规则；实现上 `serve.allowed_origins` 归一化为 `URL.origin`，HTTP 与 WS upgrade 共用同一判定。token 不进 WS URL / query；首帧 `auth` 5s 内未合法即关闭 4401；非 admin 指定其它 tenant → 4403。
 - `/v1/local/token` 是本机便利端点，不是远程能力：只对回环 socket + 回环 Host + 同源（或无 Origin）返回**显式 legacy gateway token**（`serve.token` / `token_env` / `VESSEL_GATEWAY_TOKEN`）；`serve.tokens`-only 与未配置均 404，不带 CORS 头、不暴露自动生成的临时 token、不写日志。证书 / Origin / 客户端步骤见 [REMOTE.md](../operations/REMOTE.md)，契约见 [gateway.md](../architecture/gateway.md#protocol)。
 
+## Hub 控制面（独立服务）
+
+- Hub 是独立前台进程 `vessel hub start`（`src/hub/**`）；gateway 不启动本地 hub。唯一方向 node → hub：节点出站拨号 `${hub.url}/v1/hub/node-control`，只监听回环；节点侧无 `/v1/hub/control` / `/v1/hub/pair`。保留 `vessel hub join-code` / `vessel hub join`、`POST /v1/hub/join`、`/v1/hub/directory`、`/v1/hub/events`；Hub 只存 node token 的 `sha256`，节点明文进 SecretStore（`hub.allow_file_secrets` 属节点侧）。
+- `auth.exchange|revoke|tokens`、`hub pair` / `hub node add` / `hub token *` / `hub data-token`、`hub.autoStart` 与 `hub.direction: 'hub'` 已删除（只保留 `hub.direction: 'node'`）；ADR-093 的 hub → node 方向已移除，errata 由 gov 后续。细节见 [federation-hub.md](../architecture/federation-hub.md)。
+
 ## tenant 事件与权限应答
 
 - `respondPermission` / `respondAsk` 只能发布到该 tenant 的运行时事件流；流不存在返回 `run_ended`，不得回退共享流或两边都发。权限记录持久化到 `interactions-<tenant>.json`（`0600` + `atomicWrite`），pending 不 TTL 清扫、有界清理也不淘汰 pending；重复应答幂等 / `conflict` / `orphaned`（ADR-079 Addendum）。
-- `TenantEventHub` 是唯一事件面：不得重新引入 `sharedEvents`、tenant→shared 桥或单流 `GatewayOptions.events`；`hub` 不暴露 `publish`、不代理 / 不持久化消息正文、不存 pending；本地 hub 只监听 `127.0.0.1`，`hub.lock` 单实例，不自动 join / 配对（ADR-089/093）。跨节点去重键含 `node` / `incarnation` / `run_id`（缺失写 `-`），消息键含 `from` + gateway `tenant`；代际变化或 seq 回退只清该来源节点（ADR-067）。
+- `TenantEventHub` 是唯一事件面：不得重新引入 `sharedEvents`、tenant→shared 桥或单流 `GatewayOptions.events`；Hub（独立进程）不暴露 `publish`、不代理 / 不持久化消息正文、不存 pending（ADR-089）。跨节点去重键含 `node` / `incarnation` / `run_id`（缺失写 `-`），消息键含 `from` + gateway `tenant`；代际变化或 seq 回退只清该来源节点（ADR-067）。
 
 ## 关闭与 gateway 生命周期
 

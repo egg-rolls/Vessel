@@ -1,89 +1,81 @@
 /**
- * Hub 状态页（0.25）：只展示 hub 自身状态与版本。
+ * Hub 页（0.49 H4）：内置 Platform 页面，只展示 Hub 目录/状态。
  *
- * - 状态来自 `config.get` 的 `hub` 段；版本来自同结果的 additive `version`；
- * - 节点列表、配对 / join 命令、Web 连接与 token 管理归 Nodes（DECISION-041）；
- * - hub 没有独立健康 RPC，也不代理正文。
+ * - Hub 由用户显式填写 URL + read token 后浏览器直连；页面不代理正文；
+ * - 节点配对 / join / token 管理仍归 Nodes 与 CLI（DECISION-041）；
+ * - 旧 `config.get.hub` 推导已下线：状态只来自 Hub client。
  */
-import { PageScaffold } from '@vessel-agent/plugin-ui';
-import { useRefreshSignal } from '../../app/refresh';
-import { ErrorState, LoadingState, NotEnabledState } from '../../components/States';
-import { StatusChip } from '../../components/StatusChip';
-import { useConnection } from '../../gateway/ConnectionProvider';
-import { t, useLocale } from '../../i18n';
-import { resourceData } from '../../state/useResource';
-import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
-import { type HubState, hubInfoFromConfig } from './hub-state';
 
-/** HubState → i18n key 片段（catalog 用 notConfigured 驼峰）。 */
-const STATE_KEYS: Record<HubState, string> = {
-  not_configured: 'notConfigured',
-  local: 'local',
-  joined: 'joined',
-};
+import { PageScaffold } from '@vessel-agent/plugin-ui';
+import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
+import { Button } from '../../components/ui';
+import { t, useLocale } from '../../i18n';
+import { HubConnectForm } from './HubConnectForm';
+import { HubDirectory } from './HubDirectory';
+import { useHubDirectory } from './useHubDirectory';
 
 export function HubView() {
   useLocale();
-  const { hasToken } = useConnection();
-
-  const { config, reloadConfig } = useConfigStoreApi();
-  useRefreshSignal(reloadConfig);
-
-  const configData = resourceData(config);
-  const configError = config.status === 'error' && !configData ? config : null;
-  const hubInfo = hubInfoFromConfig(configData?.config);
-  const stateKey = STATE_KEYS[hubInfo.state];
-  const stateLabel = t(`hub.state.${stateKey}`);
-  const version = configData?.version;
+  const hub = useHubDirectory();
+  const origin = window.location.origin;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
       <PageScaffold title={t('hub.title')} subtitle={t('hub.subtitle')}>
-        {!hasToken ? (
-          <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
-        ) : configError ? (
-          configError.code === 'forbidden' ? (
-            <NotEnabledState title={t('hub.error.forbidden')} />
+        {hub.status === 'loading' ? (
+          <LoadingState label={t('hub.directory.loading')} />
+        ) : hub.status === 'connected' || hub.status === 'empty' ? (
+          hub.directory !== null ? (
+            <HubDirectory
+              directory={hub.directory}
+              url={hub.url}
+              live={hub.live}
+              reconnecting={hub.reconnecting}
+              pointer={hub.pointer}
+              onDisconnect={hub.disconnect}
+              onRetry={hub.retry}
+            />
           ) : (
-            <ErrorState message={configError.error} onRetry={reloadConfig} />
+            <EmptyState
+              title={t('hub.directory.empty')}
+              description={t('hub.directory.emptyHint')}
+            />
           )
-        ) : !configData ? (
-          <LoadingState label={t('common.loading')} />
+        ) : hub.status === 'incompatible' ? (
+          <NotEnabledState
+            title={t('hub.error.incompatible')}
+            reason={t('hub.error.incompatibleReason')}
+            action={
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={hub.retry}>{t('common.retry')}</Button>
+                <Button onClick={hub.disconnect}>{t('hub.connect.clear')}</Button>
+              </div>
+            }
+          />
+        ) : hub.status === 'network' ? (
+          <ErrorState
+            message={t('hub.error.origin', { origin })}
+            onRetry={hub.retry}
+            action={<Button onClick={hub.disconnect}>{t('hub.connect.clear')}</Button>}
+          />
         ) : (
-          <div className="hub-view">
-            <section className="panel hub-status">
-              <dl className="diag-list">
-                <dt>{t('hub.field.state')}</dt>
-                <dd>
-                  <StatusChip
-                    status={hubInfo.state === 'not_configured' ? 'disabled' : 'connected'}
-                    label={stateLabel}
-                  />
-                </dd>
-                <dt>{t('hub.field.version')}</dt>
-                <dd className="mono">{version ? `v${version}` : '—'}</dd>
-                <dt>{t('hub.config.autoStart')}</dt>
-                <dd>{hubInfo.autoStart ? t('hub.config.on') : t('hub.config.off')}</dd>
-                {hubInfo.direction && (
-                  <>
-                    <dt>{t('hub.config.direction')}</dt>
-                    <dd className="mono">{hubInfo.direction}</dd>
-                  </>
-                )}
-                {hubInfo.url && (
-                  <>
-                    <dt>{t('hub.config.url')}</dt>
-                    <dd className="mono">{hubInfo.url}</dd>
-                  </>
-                )}
-                {hubInfo.listen && (
-                  <>
-                    <dt>{t('hub.config.listen')}</dt>
-                    <dd className="mono">{hubInfo.listen}</dd>
-                  </>
-                )}
-              </dl>
-            </section>
+          <div className="flex flex-col gap-3">
+            {hub.status === 'unauthorized' && (
+              <NotEnabledState
+                title={t('hub.error.unauthorized')}
+                reason={t('hub.error.unauthorizedReason')}
+              />
+            )}
+            <HubConnectForm
+              defaultUrl={hub.url}
+              connecting={hub.connecting}
+              error={hub.connectError}
+              canClear={hub.url !== ''}
+              onSubmit={(url, token) => {
+                void hub.connect({ url, token });
+              }}
+              onClear={hub.disconnect}
+            />
           </div>
         )}
       </PageScaffold>

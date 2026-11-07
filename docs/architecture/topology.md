@@ -20,7 +20,7 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 | Gateway / Node | `serve` 同进程做 node API + WebUI 宿主 | Platform Gateway（平台入口）+ Node API（公司）分离（[ADR-101](../adr/ADR-101-platform-gateway-and-node-api.md)） |
 | Workspace | 仍作 Team 的目录键（[PRODUCT](../PRODUCT.md)） | 公司占用的数据目录；Team 是公司内部门 |
 | 插件安装 | 发现根 project / user / repo / node_modules（[plugins](plugins.md)） | 按 workspace 安装 / 启用 |
-| Hub | 本地 hub 由 gateway 同进程启动（[federation-hub](federation-hub.md)） | Platform 独立服务 |
+| Hub | 独立 `vessel hub start` 进程；gateway 不启动本地 hub，节点出站接入（[federation-hub](federation-hub.md)） | Platform 独立服务（独立进程，不寄生公司 gateway） |
 | 访问模型 | token / role / visibility 现态 | 不区分 guest；node 访问权即 owner |
 | 多节点视图 | WebUI/TUI 直接调各 node 的 `/v1/rpc`（per-node token） | 保持 Console 聚合；gateway 仍是公司级，不升级为平台服务 |
 
@@ -122,7 +122,8 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 - Hub 服务多家公司，属于 Platform；公司可以独立运行，需要跨公司协作时才接入。
 - 形态：**Platform 独立服务 + 可选薄 Platform plugin surface**（UI / CLI / 配置页）；
   不是 Workspace plugin，不把 Hub runtime 寄生在某家公司的 gateway。
-- 实现见 [federation-hub](federation-hub.md)；抽取立项后另开 ADR / 计划，本文只固定边界。
+- 当前实现为 `vessel hub start` 独立前台进程（`src/hub/**`）：gateway 不启动本地 hub，
+  节点只出站拨号 Hub；见 [federation-hub](federation-hub.md)。本文只固定边界。
 
 ## 非目标
 
@@ -136,6 +137,8 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 - [ADR-100](../adr/ADR-100-node-company-topology.md)（accepted）·
   [ADR-101](../adr/ADR-101-platform-gateway-and-node-api.md)（accepted）·
   [ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)
+- Hub：[ADR-093](../adr/ADR-093-hub-control-plane.md)（ADR 的 hub → node 拨号方向
+  已由当前实现移除，errata 由 gov 后续）。
 - 相关模块：[plugins](plugins.md) · [extensions](extensions.md) · [gateway](gateway.md) · [federation-hub](federation-hub.md) · [config](config.md)
 - **唯一真源**：本文 + ADR-100 固定归属模型；实现收敛后把 `kind` 转 current、ADR 转
   accepted。个人侧只保留过程记录，不复制规则。

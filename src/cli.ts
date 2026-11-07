@@ -110,7 +110,6 @@ import {
   registerRuntimeNoticeHook,
 } from './hot-apply-assembly';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
-import { type LocalHubHandle, startLocalHub } from './hub-local';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
@@ -223,23 +222,20 @@ function printHelp(): void {
     ['vessel node stop', t('help.cmd.nodeStop')],
     ['vessel node reload [--scope config,plugins]', t('help.cmd.nodeReload')],
   ];
-  const hub: Array<[string, string]> = [
+  // hub 命令按 service / node client 分组。
+  const hubService: Array<[string, string]> = [
     ['vessel hub start [--host H] [--port N] [--allow-remote]', t('help.cmd.hubStart')],
     ['vessel hub directory [--hub-url URL] [--json]', t('help.cmd.hubDirectory')],
     ['vessel hub watch [--hub-url URL]', t('help.cmd.hubWatch')],
-    ['vessel hub pair [--tenant ID] [--ttl N]', t('help.cmd.hubPair')],
     [
       'vessel hub join-code [--data-dir DIR] [--tenant ID] [--ttl N] [--json]',
       t('help.cmd.hubJoinCode'),
     ],
-    ['vessel hub join [<hub-url>] --code <CODE> [--data-dir DIR]', t('help.cmd.hubJoin')],
-    ['vessel hub node add <url> --code <CODE>', t('help.cmd.hubNodeAdd')],
     ['vessel hub node list [--json]', t('help.cmd.hubNodeList')],
     ['vessel hub node remove <pairing_id>', t('help.cmd.hubNodeRemove')],
-    ['vessel hub token exchange <node-url> --team <id>', t('help.cmd.hubTokenExchange')],
-    ['vessel hub token revoke <node-url> --token-id <id>', t('help.cmd.hubTokenRevoke')],
-    ['vessel hub token list <node-url>', t('help.cmd.hubTokenList')],
-    ['vessel hub data-token <pairing_id> --team <id>', t('help.cmd.hubDataToken')],
+  ];
+  const hubNode: Array<[string, string]> = [
+    ['vessel hub join [<hub-url>] --code <CODE> [--data-dir DIR]', t('help.cmd.hubJoin')],
   ];
   const capability: Array<[string, string]> = [
     ['vessel eval <suite>', t('help.cmd.eval')],
@@ -293,7 +289,8 @@ function printHelp(): void {
       ...session,
       ...headless,
       ...gateway,
-      ...hub,
+      ...hubService,
+      ...hubNode,
       ...capability,
       ...config,
       ...tenant,
@@ -322,8 +319,11 @@ function printHelp(): void {
       `  ${ui.section(t('help.section.gateway'))}`,
       align(gateway, width),
       '',
-      `  ${ui.section(t('help.section.hub'))}`,
-      align(hub, width),
+      `  ${ui.section(t('help.section.hubService'))}`,
+      align(hubService, width),
+      '',
+      `  ${ui.section(t('help.section.hubNode'))}`,
+      align(hubNode, width),
       '',
       `  ${ui.section(t('help.section.capability'))}`,
       align(capability, width),
@@ -904,8 +904,6 @@ async function runWithConfig(result: BootstrapResult) {
   })();
   /** S5.1：node → hub 出站；仅在 `hub.direction: node` 时启动。 */
   let hubNodeOutbound: StartedHubNodeOutbound | undefined;
-  /** S10.2：gateway 同进程本地 hub（回环）；`hub.autoStart !== false` 时启动。 */
-  let localHub: LocalHubHandle | undefined;
   /** A-6：--serve 时除 bootstrap 默认 tenant 外的执行面 */
   let tenantFactory: TenantRuntimeFactory | undefined;
   /** 0.18：tenant 事件流的唯一扇入面（shared 流已删除）。 */
@@ -930,7 +928,6 @@ async function runWithConfig(result: BootstrapResult) {
     const authResult = resolveGatewayAuth(config, {
       hostname: resolved.options.hostname,
       allowRemote: resolved.options.allowRemote,
-      ...(result.agent?.nodeTokens !== undefined ? { tokenStore: result.agent.nodeTokens } : {}),
     });
     if (!authResult.ok) {
       console.error(authResult.error);
@@ -1529,10 +1526,6 @@ async function runWithConfig(result: BootstrapResult) {
       ...(result.agent?.team ? { teams: result.agent.team } : {}),
       // 0.25：canonical agents.create|update|close（同一 AgentService 适配器）。
       ...(result.agent?.control ? { agentControl: result.agent.control } : {}),
-      // S5：hub 目录投影 / 动态 token / session→team 归属。
-      ...(result.agent?.hubControl ? { hubControl: result.agent.hubControl } : {}),
-      ...(result.agent?.nodeTokens ? { nodeTokens: result.agent.nodeTokens } : {}),
-      ...(result.agent?.teamScope ? { teamScope: result.agent.teamScope } : {}),
       // 0.5.4 P2-1：非 default tenant 使用自己的 feishu 实例。
       // 只对工厂已构造 bundle 的 tenant 返回；未配置 / 未启用 → undefined。
       ...(tenantFactory
@@ -1712,34 +1705,6 @@ async function runWithConfig(result: BootstrapResult) {
         }
       }
     }
-
-    // S10.2：gateway 同进程本地 hub。失败只告警，gateway 继续运行。
-    if (result.agent?.hubControl !== undefined) {
-      try {
-        localHub = await startLocalHub({
-          config,
-          gatewayDataDir: dataDir,
-          nodeId: result.nodeId,
-          tenantId: result.tenantId,
-          hubControl: result.agent.hubControl,
-          logger,
-        });
-        if (localHub.status === 'started') {
-          logger.info('hub.local.started', { url: localHub.url });
-        } else if (localHub.status === 'reused') {
-          logger.info('hub.local.reused', { reason: localHub.reason ?? 'hub_already_running' });
-        } else {
-          logger.info('hub.local.skipped', { reason: localHub.reason ?? 'unknown' });
-        }
-      } catch (error) {
-        logger.warn('hub.local.start_failed', {
-          node_id: result.nodeId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } else if (config.hub?.autoStart !== false && config.hub?.direction !== 'node') {
-      logger.warn('hub.local.no_agent_projection', { node_id: result.nodeId });
-    }
   }
 
   if (gateway) {
@@ -1754,15 +1719,13 @@ async function runWithConfig(result: BootstrapResult) {
     pluginWatch = undefined;
     await pluginHostManager?.stopAll();
     pluginHostManager = undefined;
-    // 先停配置监听 / 版本检查与出站 / 本地 hub，避免 gateway drain 期间继续触发热应用或重连。
+    // 先停配置监听 / 版本检查与出站，避免 gateway drain 期间继续触发热应用或重连。
     gatewayUpdateCheck?.stop();
     gatewayUpdateCheck = undefined;
     configWatch?.close();
     configWatch = undefined;
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
-    await localHub?.stop();
-    localHub = undefined;
     // 0.49 G1：先停独立的 platform 监听，再关闭 node / tenant。
     await stopPlatformGateway();
     await shutdownServeStack({
@@ -1840,11 +1803,9 @@ async function runWithConfig(result: BootstrapResult) {
     pluginWatch = undefined;
     await pluginHostManager?.stopAll();
     pluginHostManager = undefined;
-    // 先停出站 / 本地 hub，避免 gateway drain 期间继续重连或刷新目录。
+    // 先停出站，避免 gateway drain 期间继续重连或刷新目录。
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
-    await localHub?.stop();
-    localHub = undefined;
     // 0.49 G1：SIGINT/SIGTERM 与正常返回路径同样要关闭 platform 监听。
     await stopPlatformGateway();
     await shutdownServeStack({

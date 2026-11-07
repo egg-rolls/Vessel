@@ -1,13 +1,12 @@
 /**
  * Hub snapshot 新旧判定（S5 / S5.1）。
  *
- * 规则与 S5 `control-client.ts` 完全一致：
+ * 规则：
  * - `hello.incarnation` 变化 → 下一个 snapshot 无条件接受，并重置 revision 比较；
  * - 同一 incarnation 下 `revision <= lastRevision` 的 snapshot 丢弃；
  * - 空字符串 incarnation 不参与变化判定。
  *
- * 抽成纯策略，hub → node 的 client 与 node → hub 的 inbound receiver 共用，
- * 避免两个方向对旧包的处理出现漂移。
+ * 抽成纯策略，供 node → hub 的 inbound receiver 使用。
  *
  * @module vessel/hub/snapshot-policy
  */
