@@ -74,6 +74,12 @@ function optionalString(value: unknown, field: string): string | undefined {
   return value.trim();
 }
 
+/** Search filters treat an empty or blank string as "not provided". */
+function optionalSearchText(value: unknown, field: string): string | undefined {
+  if (typeof value === 'string' && value.trim() === '') return undefined;
+  return optionalString(value, field);
+}
+
 function scheduleExit(): void {
   if (exitScheduled) return;
   exitScheduled = true;
@@ -163,8 +169,8 @@ async function handleRpc(params: unknown): Promise<unknown> {
 
   switch (name) {
     case 'search': {
-      const query = optionalString(args.query, 'query');
-      const category = optionalString(args.category, 'category');
+      const query = optionalSearchText(args.query, 'query');
+      const category = optionalSearchText(args.category, 'category');
       return searchPlugins(ctx, {
         ...(query !== undefined ? { query } : {}),
         ...(category !== undefined ? { category } : {}),

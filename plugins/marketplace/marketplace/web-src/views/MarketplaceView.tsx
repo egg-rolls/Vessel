@@ -142,7 +142,12 @@ export function MarketplaceView({
     setLoading(true);
     setError(null);
     try {
-      const result = await api.search(applied);
+      // Empty filters are omitted; the RPC treats them as "not provided".
+      const params = {
+        ...(applied.query !== '' ? { query: applied.query } : {}),
+        ...(applied.category !== '' ? { category: applied.category } : {}),
+      };
+      const result = await api.search(params);
       if (requestRef.current !== request) return;
       setData(result);
       setRegistryFailure(null);
