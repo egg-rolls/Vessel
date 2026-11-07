@@ -10,9 +10,9 @@
 
 import { loadConfig } from '../packages/config/src/index';
 import { type PruneTraceResult, resolveTenantPaths } from '../packages/core/src/index';
+import { formatConfigErrors } from './config-error-format';
 import { resolveDataDir } from './data-paths';
 import { acquireTenantLock, TenantLockError } from './tenant-lock';
-import { resolveTenantId } from './tenant-resolution';
 import { pruneTenantTrace } from './trace-wiring';
 
 type EnvMap = Record<string, string | undefined>;
@@ -51,18 +51,31 @@ export async function tracePruneCommand(
   options: TracePruneCommandOptions = {},
 ): Promise<TraceCommandResult> {
   const env = options.env ?? process.env;
-  const { config } = await loadConfig({
+  // 0.49 T1：单 id 只来自 loadConfig()；`--tenant` 作为被忽略来源传入，
+  // 由 loader 统一产出 warning（C0/C2/C8）。
+  const {
+    config,
+    tenantId,
+    validation,
+    paths: configPaths,
+  } = await loadConfig({
     configPath: options.configPath,
     userConfigPath: options.userConfigPath,
     env,
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   });
 
-  const tenant = resolveTenantId({ explicit: options.tenantId, env, config });
-  if (!tenant.ok) {
-    return { exitCode: 2, stdout: '', stderr: tenant.error };
+  // C1 规则 1/4：配置错误时不得静默落到 tenantId 继续执行。
+  if (validation.errors.length > 0) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: formatConfigErrors(validation.errors, { paths: configPaths }),
+    };
   }
+  for (const warning of validation.warnings) console.warn(`⚠ ${warning.message}`);
 
-  const tenantPaths = resolveTenantPaths(resolveDataDir(config, env), tenant.tenantId);
+  const tenantPaths = resolveTenantPaths(resolveDataDir(config, env), tenantId);
   const dryRun = options.dryRun === true;
 
   let lock: Awaited<ReturnType<typeof acquireTenantLock>> | undefined;
@@ -70,7 +83,7 @@ export async function tracePruneCommand(
     try {
       lock = await acquireTenantLock({
         tenantDir: tenantPaths.root,
-        tenantId: tenant.tenantId,
+        tenantId,
         ...(options.now ? { now: options.now } : {}),
         ...(options.hostname ? { hostname: options.hostname } : {}),
         ...(options.pid ? { pid: options.pid } : {}),

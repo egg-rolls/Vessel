@@ -22,12 +22,14 @@ import type {
   ConfigValidationResult,
   ConfigValidationWarning,
   ProviderConfig,
+  TenantConfig,
   UserConfig,
   VesselConfig,
 } from './types.js';
 import { deepMerge } from './utils.js';
 import {
   findExplicitSecretPaths,
+  isValidTenantId,
   TENANT_OVERLAY_ALLOWED_KEYS,
   validateConfig,
 } from './validator.js';
@@ -526,6 +528,68 @@ function firstNonEmpty(...values: (string | undefined)[]): string | undefined {
   return undefined;
 }
 
+interface SingleTenantResolution {
+  tenantId: string;
+  /** false 表示 C1 规则 1/2/4 命中配置错误，单 id 不可用 */
+  resolved: boolean;
+  errors: ConfigValidationError[];
+}
+
+/**
+ * C1 单公司 id 解析（唯一实现，只由 loadConfig 调用）。
+ *
+ * 输入是已合并 user/project 的 `config.tenant`；`options.tenantId` 与
+ * `VESSEL_TENANT` 不参与。顺序：非空 `tenant.default` → 唯一的 `tenant.tenants`
+ * 键 → `DEFAULT_TENANT_ID`；多键且无 default 视为配置错误，不猜测。
+ */
+function resolveSingleTenantId(tenant: TenantConfig | undefined): SingleTenantResolution {
+  const errors: ConfigValidationError[] = [];
+  const rawDefault = tenant?.default;
+  // 与旧 firstNonEmpty 一致：default 先 trim 再使用（" acme " 等价 "acme"）；
+  // 非字符串（YAML 类型错误）交给 validator 报错，不参与解析。
+  const defaultId = typeof rawDefault === 'string' ? rawDefault.trim() : undefined;
+  const hasDefault = defaultId !== undefined && defaultId !== '';
+  const tenants = isRecord(tenant?.tenants) ? tenant.tenants : undefined;
+  const keys = tenants ? Object.keys(tenants) : [];
+
+  // 规则 1：非空 default 唯一命中；非法时走配置错误出口，不落到后续规则。
+  if (hasDefault) {
+    if (!isValidTenantId(defaultId)) {
+      errors.push({
+        path: 'tenant',
+        message: `无法确定单公司 id：tenant.default "${defaultId}" 不是合法的 tenant id`,
+        value: defaultId,
+      });
+    }
+    return { tenantId: defaultId, resolved: errors.length === 0, errors };
+  }
+
+  // 规则 2：恰好一个 tenants 键。
+  if (keys.length === 1) {
+    const only = keys[0] as string;
+    if (!isValidTenantId(only)) {
+      errors.push({
+        path: 'tenant',
+        message: `无法确定单公司 id：tenant.tenants 中唯一的 id "${only}" 不是合法的 tenant id`,
+        value: only,
+      });
+    }
+    return { tenantId: only, resolved: errors.length === 0, errors };
+  }
+
+  // 规则 4：多键且无 default → 配置错误。
+  if (keys.length >= 2) {
+    errors.push({
+      path: 'tenant',
+      message: '无法确定单公司 id：tenant.tenants 有多个键且未设置 tenant.default',
+    });
+    return { tenantId: DEFAULT_TENANT_ID, resolved: false, errors };
+  }
+
+  // 规则 3：缺失或为空。
+  return { tenantId: DEFAULT_TENANT_ID, resolved: true, errors };
+}
+
 /**
  * 加载配置（综合加载）
  * 优先级：CLI flag > env (VESSEL_*) > tenant overlay > vessel.yaml >
@@ -582,14 +646,43 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   preErrors.push(...resolvedProject.errors);
   preErrors.push(...projectSecretErrors(rawProject));
 
-  // 4. 解析 tenant id（CLI > VESSEL_TENANT > config.tenant.default > default）
-  //    VESSEL_TENANT 不写入 config。
-  const tenantId =
-    firstNonEmpty(options.tenantId, env[`${envPrefix}TENANT`], config.tenant?.default) ??
-    DEFAULT_TENANT_ID;
+  // 4. 解析单公司 id（C1；输入为已合并的 user/project config.tenant）。
+  //    options.tenantId / VESSEL_TENANT 不参与解析，只在 C2 产生 warning。
+  const resolution = resolveSingleTenantId(config.tenant);
+  const tenantId = resolution.tenantId;
+  if (resolution.errors.length > 0) preErrors.push(...resolution.errors);
 
-  // 5. tenant overlay（只覆盖 project/user；env/CLI 仍在其后入层）
-  const overlay = config.tenant?.tenants?.[tenantId]?.config;
+  if (resolution.resolved) {
+    // C2：显式来源（--tenant / VESSEL_TENANT）被忽略时各记一条 warning。
+    const explicitSources: Array<{ label: string; value: string | undefined }> = [
+      { label: '--tenant', value: firstNonEmpty(options.tenantId) },
+      { label: `${envPrefix}TENANT`, value: firstNonEmpty(env[`${envPrefix}TENANT`]) },
+    ];
+    for (const source of explicitSources) {
+      if (source.value !== undefined && source.value !== tenantId) {
+        preWarnings.push({
+          path: 'tenant',
+          message: `Ignoring ${source.label} tenant id "${source.value}": this node serves single tenant "${tenantId}".`,
+          value: source.value,
+        });
+      }
+    }
+
+    // C2：非单 id 的 tenant 设置不加载，只 warning 列出被忽略 id。
+    const ignoredTenants = isRecord(config.tenant?.tenants)
+      ? Object.keys(config.tenant.tenants).filter((id) => id !== tenantId)
+      : [];
+    if (ignoredTenants.length > 0) {
+      preWarnings.push({
+        path: 'tenant',
+        message: `Ignoring tenant settings for non-single tenants: ${ignoredTenants.join(', ')} (single tenant: "${tenantId}").`,
+      });
+    }
+  }
+
+  // 5. tenant overlay（只覆盖 project/user；env/CLI 仍在其后入层）。
+  //    只有成功解析出单 id 时才应用其 overlay；非单 id 的一律不加载。
+  const overlay = resolution.resolved ? config.tenant?.tenants?.[tenantId]?.config : undefined;
   if (overlay && isRecord(overlay)) {
     const overlayPath = `tenant.tenants.${tenantId}.config`;
     const resolvedOverlay = resolveEnvRefsInLayer(overlay as Partial<VesselConfig>, env);

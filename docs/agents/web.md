@@ -26,6 +26,12 @@ applies_to: [N, M]
   只提供 API，不渲染，禁止新增 fixed toast / 浮层（见 [WEB-UI.md](../WEB-UI.md) 硬规则 7）。
 - 不用 `backdrop-filter` 做层级；层级靠边框与阴影表达（ADR-072/082）。
 
+## T1 单公司兼容期（隐藏 tenant 入口）
+
+- 不路由 / 不导航 `tenants` 页面、AppBar tenant chip、nav / palette / BottomNav 以及 tenant switch / reset 入口；文件与类型保留并标 `defer-T4`，T1 只隐藏入口。
+- `ConnectionProvider` 从 `health.get`（或 `config.sources`）读取 `<单 id>` 后固定为只读；不调用 `tenants.*`，不向数据面发送非单 id `tenant_id`。
+- 旧 Web 客户端仍发 legacy `tenant_id` 时由 serve 数据面兼容；页面保持可连接、可聊天。
+
 ## 指针
 
 - [gateway-web.md](../architecture/gateway-web.md) · [WEB-UI.md](../WEB-UI.md) · [CONFIG.md](../operations/CONFIG.md)。

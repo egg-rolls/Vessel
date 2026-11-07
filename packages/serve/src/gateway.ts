@@ -148,7 +148,6 @@ import type { TeamControlLike } from './team-control.js';
 import {
   type ConfigGatewayOptionsLike,
   DEFAULT_TENANT_ID,
-  eventVisible,
   extractToken,
   type GatewayAuthLike,
   resolveLocalPrincipal,
@@ -900,7 +899,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   function wsAccepts(ws: Ws, event: RunEvent): boolean {
-    if (!eventVisible(event, ws.data.tenantId, ws.data.allTenants)) return false;
+    // 0.49 C5：读取端不按 tenant_id 过滤（单公司）。legacy id 的旧事件原样可见；
+    // `all_tenants` 仍被接受，但不再参与可见性判断。
     if (ws.data.runId !== undefined && event.run_id !== ws.data.runId) return false;
     if (ws.data.types !== undefined && !ws.data.types.includes(event.type)) return false;
     // S5：control token 只接收映射到本 team 的事件；无法判定 → 丢弃。
@@ -964,12 +964,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     for (const [ctrl, state] of [...sseClients]) {
       // 回放期间由 pull 驱动，避免新事件插到历史事件前面。
       if (state.replay) continue;
-      if (
-        state.tenantId !== undefined &&
-        !eventVisible(item.event, state.tenantId, state.allTenants === true)
-      ) {
-        continue;
-      }
+      // 0.49 C5：SSE 读取端不做 tenant 过滤；`accepts` 只保留 run_id / types。
       if (state.accepts && !state.accepts(item.event)) continue;
       sendGatedSse(ctrl, state, item.seq, sseFrame);
     }
@@ -1200,7 +1195,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createMetricsMethods(observabilityMethodsDeps),
     ...createMcpMethods({ mcp: opts.mcp }),
     ...createTraceMethods(observabilityMethodsDeps),
-    ...createTenantMethods({ tenants: opts.tenants }),
+    ...createTenantMethods({ tenants: opts.tenants, singleTenantId: defaultTenantId }),
     ...createInteractionMethods({
       // 0.27：交互状态唯一来源是 interactions registry（执行引擎已删除）。
       respondPermission: (requestId, decision, remember, tenantId, scope, actor) =>
@@ -1313,6 +1308,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         opts.auth,
         typeof frame.token === 'string' ? frame.token : null,
         token,
+        defaultTenantId,
       );
       if (!principal) {
         ws.close(4401, 'unauthorized');
@@ -1471,13 +1467,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function principalForRequest(req: Request, url: URL, path: string): TenantPrincipal | null {
     const queryToken = queryTokenAllowed(req, path) ? url.searchParams.get('token') : null;
     const raw = extractToken(req.headers.get('authorization'), queryToken);
-    return resolvePrincipal(opts.auth, raw, token);
+    return resolvePrincipal(opts.auth, raw, token, defaultTenantId);
   }
 
   /** 只认 Authorization 头的请求（健康检查等非 EventSource 端点）。 */
   function headerPrincipal(req: Request): TenantPrincipal | null {
     const raw = extractToken(req.headers.get('authorization'), null);
-    return resolvePrincipal(opts.auth, raw, token);
+    return resolvePrincipal(opts.auth, raw, token, defaultTenantId);
   }
 
   function authorized(req: Request): boolean {
@@ -2498,6 +2494,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
         const since = parseSince(url.searchParams.get('since'));
         const sseTenantId = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
+        // 0.49 C5：`all_tenants` 继续接受，但单公司模式下对可见性无效果。
         const sseAllTenants =
           url.searchParams.get('all_tenants') === '1' && principal.role === 'admin';
         const sseRunId = url.searchParams.get('run_id') ?? undefined;
@@ -2506,7 +2503,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           .map((item) => item.trim())
           .filter((item) => item.length > 0);
         const accepts = (event: RunEvent): boolean => {
-          if (!eventVisible(event, sseTenantId, sseAllTenants)) return false;
+          // 0.49 C5：不按 tenant_id 过滤；run_id / types 过滤保留。
           if (sseRunId !== undefined && event.run_id !== sseRunId) return false;
           if (sseTypes.length > 0 && !sseTypes.includes(event.type)) return false;
           return true;

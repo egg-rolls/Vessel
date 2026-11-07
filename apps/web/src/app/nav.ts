@@ -17,7 +17,7 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'agents' },
   { id: 'teams' },
   { id: 'nodes' },
-  { id: 'tenants' },
+  // Tenants 入口隐藏（CONTRACT-0.49 C7；文件与类型保留，defer-T4）。
   { id: 'runs' },
   { id: 'tools' },
   { id: 'mcp' },
@@ -41,7 +41,7 @@ export const NAV_GROUPS: readonly {
 }[] = [
   { id: 'chat', domains: ['chat', 'teams'] },
   { id: 'network', domains: ['agents', 'nodes'] },
-  { id: 'runs', domains: ['runs', 'tenants'] },
+  { id: 'runs', domains: ['runs'] },
   { id: 'integrations', domains: ['capabilities', 'tools', 'mcp', 'channels'] },
   { id: 'core', domains: ['hub', 'gateway', 'pluginHost'] },
   { id: 'settings', domains: ['settings', 'visual', 'designLab'] },

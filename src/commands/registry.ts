@@ -184,7 +184,12 @@ export const cliCommands: readonly CliCommand[] = [
     run: async (args) => {
       const command = args.tenantCommand;
       if (command === null) return 1;
-      const base = { dataDir: await resolveCommandDataDir(), json: command.json };
+      const base = {
+        dataDir: await resolveCommandDataDir(),
+        json: command.json,
+        // 0.49 T1：全局 --tenant 只透传给 loadConfig（忽略 + warning），不参与解析。
+        ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+      };
       const result =
         command.kind === 'list'
           ? await tenantListCommand(base)

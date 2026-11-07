@@ -12,6 +12,7 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { loadConfig } from '../packages/config/src/index';
 import {
   assertTenantId,
   atomicWrite,
@@ -20,6 +21,7 @@ import {
   type TenantPaths,
 } from '../packages/core/src/index';
 import type { TenantControlLike, TenantInfo, TenantQuota } from '../packages/serve/src/index';
+import { formatConfigErrors } from './config-error-format';
 import { TenantLockError, withTenantLock } from './tenant-lock';
 import { ui } from './ui-style';
 
@@ -48,11 +50,46 @@ export interface TenantCommandResult {
 export interface TenantCommandOptions {
   /** 全局数据根（已展开的绝对路径） */
   dataDir: string;
+  /**
+   * 0.49 T1：单公司 id。调用方通常从 `loadConfig().tenantId` 取得；
+   * 缺省时本模块自行读取（不复制解析规则）。
+   */
+  singleTenantId?: string;
+  /**
+   * 0.49 T1：`--tenant` 的显式来源，只透传给 `loadConfig()` 以产生
+   * “接受但忽略”的 warning；不参与单 id 解析。
+   */
+  tenantId?: string;
   json?: boolean;
   now?: () => number;
   hostname?: string;
   pid?: number;
   isPidAlive?: (pid: number) => boolean;
+}
+
+/** 0.49 T1：唯一单 id 来源是 loadConfig()（C0）。 */
+type SingleTenantResolution =
+  | { ok: true; tenantId: string }
+  | { ok: false; result: TenantCommandResult };
+
+async function resolveSingleTenantId(
+  options: TenantCommandOptions,
+): Promise<SingleTenantResolution> {
+  if (options.singleTenantId !== undefined) {
+    return { ok: true, tenantId: options.singleTenantId };
+  }
+  const loaded = await loadConfig(
+    options.tenantId !== undefined ? { tenantId: options.tenantId } : {},
+  );
+  // C1 规则 1/4：配置错误时不得静默落到 tenantId 继续执行。
+  if (loaded.validation.errors.length > 0) {
+    return {
+      ok: false,
+      result: errorResult(1, formatConfigErrors(loaded.validation.errors, { paths: loaded.paths })),
+    };
+  }
+  for (const warning of loaded.validation.warnings) console.warn(`⚠ ${warning.message}`);
+  return { ok: true, tenantId: loaded.tenantId };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,10 +98,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorResult(exitCode: number, message: string): TenantCommandResult {
   return { exitCode, stdout: '', stderr: message };
-}
-
-function tenantsRoot(dataDir: string): string {
-  return join(dataDir, 'tenants');
 }
 
 /** 从未知 JSON 规范化为 TenantMeta；非法返回 undefined */
@@ -89,9 +122,17 @@ async function readMeta(paths: TenantPaths): Promise<TenantMeta | undefined> {
   }
 }
 
+/** 未落盘 meta 的 created_at：进程启动时间（模块加载时取一次）。 */
+const SYNTHESIZED_CREATED_AT = Date.now();
+
 /** 目录存在但没有 meta 时的展示值（不写盘） */
 function synthesizedMeta(tenantId: string): TenantMeta {
-  return { tenant_id: tenantId, name: tenantId, created_at: 0, status: 'active' };
+  return {
+    tenant_id: tenantId,
+    name: tenantId,
+    created_at: SYNTHESIZED_CREATED_AT,
+    status: 'active',
+  };
 }
 
 function formatMeta(meta: TenantMeta): string {
@@ -134,30 +175,6 @@ async function withLock(
   }
 }
 
-/** 扫描 tenants/* 并补齐缺失 meta（不写盘） */
-async function listTenantMetas(dataDir: string): Promise<TenantMeta[]> {
-  let entries: string[];
-  try {
-    const dirents = await readdir(tenantsRoot(dataDir), { withFileTypes: true });
-    entries = dirents.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-  } catch {
-    entries = [];
-  }
-
-  const tenants: TenantMeta[] = [];
-  for (const id of entries) {
-    try {
-      assertTenantId(id);
-    } catch {
-      continue; // 非 tenant 目录（损坏/临时目录）跳过
-    }
-    const paths = resolveTenantPaths(dataDir, id);
-    tenants.push((await readMeta(paths)) ?? synthesizedMeta(id));
-  }
-  tenants.sort((a, b) => a.tenant_id.localeCompare(b.tenant_id));
-  return tenants;
-}
-
 /** 读取单个 tenant；目录不存在返回 undefined */
 async function getTenantMeta(dataDir: string, tenantId: string): Promise<TenantMeta | undefined> {
   const paths = resolveTenantPaths(dataDir, tenantId);
@@ -169,7 +186,13 @@ async function getTenantMeta(dataDir: string, tenantId: string): Promise<TenantM
 export async function tenantListCommand(
   options: TenantCommandOptions,
 ): Promise<TenantCommandResult> {
-  const tenants = await listTenantMetas(options.dataDir);
+  // 0.49 T1（C8）：只回单 id，不列 legacy 目录（legacy 目录只在启动 warning 出现）。
+  const single = await resolveSingleTenantId(options);
+  if (!single.ok) return single.result;
+  const singleTenantId = single.tenantId;
+  const meta =
+    (await getTenantMeta(options.dataDir, singleTenantId)) ?? synthesizedMeta(singleTenantId);
+  const tenants = [meta];
 
   if (options.json) {
     return { exitCode: 0, stdout: JSON.stringify(tenants), stderr: '' };
@@ -194,10 +217,15 @@ export async function tenantGetCommand(
     return errorResult(2, error instanceof TenantIdError ? error.message : String(error));
   }
 
-  const meta = await getTenantMeta(options.dataDir, tenantId);
-  if (!meta) {
+  // 0.49 T1（C8）：非单 id → not_found；单 id → info（目录缺失时给合成值）。
+  const single = await resolveSingleTenantId(options);
+  if (!single.ok) return single.result;
+  const singleTenantId = single.tenantId;
+  if (tenantId !== singleTenantId) {
     return errorResult(1, `not_found: tenant "${tenantId}"`);
   }
+
+  const meta = (await getTenantMeta(options.dataDir, tenantId)) ?? synthesizedMeta(tenantId);
 
   if (options.json) {
     return { exitCode: 0, stdout: JSON.stringify(meta), stderr: '' };
@@ -207,37 +235,14 @@ export async function tenantGetCommand(
 
 /** `vessel tenant create <id> [--name <name>] [--json]` */
 export async function tenantCreateCommand(
-  tenantId: string,
+  _tenantId: string,
   options: TenantCommandOptions & { name?: string },
 ): Promise<TenantCommandResult> {
-  try {
-    assertTenantId(tenantId);
-  } catch (error) {
-    return errorResult(2, error instanceof TenantIdError ? error.message : String(error));
-  }
-
-  const paths = resolveTenantPaths(options.dataDir, tenantId);
-  if (existsSync(paths.root)) {
-    return errorResult(1, `conflict: tenant "${tenantId}" already exists`);
-  }
-
-  return withLock(options.dataDir, tenantId, options, async () => {
-    if (existsSync(paths.tenant_file)) {
-      return errorResult(1, `conflict: tenant "${tenantId}" already exists`);
-    }
-    const meta: TenantMeta = {
-      tenant_id: tenantId,
-      name: options.name ?? tenantId,
-      created_at: (options.now ?? Date.now)(),
-      status: 'active',
-    };
-    await atomicWrite(paths.tenant_file, `${JSON.stringify(meta, null, 2)}\n`, {
-      ensureDir: true,
-    });
-    return options.json
-      ? { exitCode: 0, stdout: JSON.stringify(meta), stderr: '' }
-      : { exitCode: 0, stdout: ui.ok(`created tenant "${tenantId}"`), stderr: '' };
-  });
+  // 先走单 id 解析，让被忽略的 --tenant warning / 配置错误按 C1/C2 生效；
+  // 0.49 T1（C6/C8）：单公司模式不允许创建 tenant，且不写盘。
+  const single = await resolveSingleTenantId(options);
+  if (!single.ok) return single.result;
+  return errorResult(1, 'forbidden: single-company mode does not allow creating tenants');
 }
 
 /** `vessel tenant update <id> [--status active|disabled] [--name <name>] [--json]` */
@@ -249,6 +254,14 @@ export async function tenantUpdateCommand(
     assertTenantId(tenantId);
   } catch (error) {
     return errorResult(2, error instanceof TenantIdError ? error.message : String(error));
+  }
+
+  // 0.49 T1（C8）：非单 id → not_found；单 id 保持现有 update 语义。
+  const single = await resolveSingleTenantId(options);
+  if (!single.ok) return single.result;
+  const singleTenantId = single.tenantId;
+  if (tenantId !== singleTenantId) {
+    return errorResult(1, `not_found: tenant "${tenantId}"`);
   }
 
   const paths = resolveTenantPaths(options.dataDir, tenantId);
@@ -282,6 +295,8 @@ export interface ConfiguredTenant {
 }
 
 export interface CreateTenantControlOptions {
+  /** 0.49 T1：单公司 id（来自 `loadConfig().tenantId`）。 */
+  singleTenantId: string;
   /**
    * 已合并配置中的 tenant 定义。配置是 status/quota 的权威来源
    * （A-3 §10.4）；tenant.json 只在配置缺失时兜底。
@@ -289,7 +304,7 @@ export interface CreateTenantControlOptions {
   configured?: Record<string, ConfiguredTenant>;
 }
 
-/** 配置定义 → TenantMeta（created_at=0 表示未落盘） */
+/** 配置定义 → TenantMeta（created_at 用进程启动时间，表示未落盘） */
 function configuredMeta(
   tenantId: string,
   entry: ConfiguredTenant | undefined,
@@ -298,7 +313,7 @@ function configuredMeta(
   return {
     tenant_id: tenantId,
     name: entry.name ?? tenantId,
-    created_at: 0,
+    created_at: SYNTHESIZED_CREATED_AT,
     status: entry.status ?? 'active',
     ...(entry.quota ? { quota: { ...entry.quota } } : {}),
   };
@@ -404,7 +419,7 @@ function mergeMeta(
 }
 
 function tenantControlError(
-  code: 'not_found' | 'conflict' | 'invalid_params',
+  code: 'not_found' | 'conflict' | 'invalid_params' | 'forbidden',
   message: string,
 ): Error {
   return Object.assign(new Error(`${code}: ${message}`), { code });
@@ -462,8 +477,9 @@ async function enforceStorage(
 /** `GatewayOptions.tenants` 的 asm 适配（0.5 无 purge） */
 export function createTenantControl(
   dataDir: string,
-  options: CreateTenantControlOptions = {},
+  options: CreateTenantControlOptions,
 ): TenantControlLike {
+  const singleTenantId = options.singleTenantId;
   const configured = options.configured ?? {};
   const configuredFor = (tenantId: string): TenantMeta | undefined =>
     configuredMeta(tenantId, configured[tenantId]);
@@ -521,68 +537,32 @@ export function createTenantControl(
     },
 
     async list(): Promise<TenantInfo[]> {
-      const byId = new Map<string, TenantMeta>();
-      for (const meta of await listTenantMetas(dataDir)) byId.set(meta.tenant_id, meta);
-      for (const tenantId of Object.keys(configured)) {
-        try {
-          assertTenantId(tenantId);
-        } catch {
-          continue;
-        }
-        const merged = mergeMeta(byId.get(tenantId), configuredFor(tenantId));
-        if (merged) byId.set(tenantId, merged);
-      }
-      return [...byId.values()]
-        .sort((a, b) => a.tenant_id.localeCompare(b.tenant_id))
-        .map(toTenantInfo);
+      // 0.49 T1（C6）：管理面永远只有单 id 一项；legacy 目录只在启动 warning 出现。
+      const meta = (await resolveMeta(singleTenantId)) ?? synthesizedMeta(singleTenantId);
+      return [toTenantInfo(meta)];
     },
 
     async get(tenantId: string): Promise<TenantInfo | null> {
-      const meta = await resolveMeta(tenantId);
-      return meta ? toTenantInfo(meta) : null;
+      if (tenantId !== singleTenantId) return null;
+      const meta = (await resolveMeta(singleTenantId)) ?? synthesizedMeta(singleTenantId);
+      return toTenantInfo(meta);
     },
 
     async create(
-      tenantId: string,
-      options: { name?: string; quota?: TenantQuota } = {},
+      _tenantId: string,
+      _options: { name?: string; quota?: TenantQuota } = {},
     ): Promise<TenantInfo> {
-      try {
-        assertTenantId(tenantId);
-      } catch {
-        throw tenantControlError('invalid_params', `invalid tenant id "${tenantId}"`);
-      }
-      const paths = resolveTenantPaths(dataDir, tenantId);
-      if (existsSync(paths.root) || configuredFor(tenantId)) {
-        throw tenantControlError('conflict', `tenant "${tenantId}" already exists`);
-      }
-
-      return withTenantLock({ tenantDir: paths.root, tenantId }, async () => {
-        if (existsSync(paths.tenant_file)) {
-          throw tenantControlError('conflict', `tenant "${tenantId}" already exists`);
-        }
-        const quota = options.quota !== undefined ? quotaFromWire(options.quota) : undefined;
-        const meta: TenantMeta = {
-          tenant_id: tenantId,
-          name: options.name ?? tenantId,
-          created_at: Date.now(),
-          status: 'active',
-          ...(quota ? { quota } : {}),
-        };
-        await atomicWrite(paths.tenant_file, `${JSON.stringify(meta, null, 2)}\n`, {
-          ensureDir: true,
-        });
-        return toTenantInfo(meta);
-      });
+      // 0.49 T1（C6）：单公司模式不允许创建 tenant；不写盘。
+      throw tenantControlError('forbidden', 'single-company mode does not allow creating tenants');
     },
 
     async update(
       tenantId: string,
       patch: { name?: string; status?: 'active' | 'disabled'; quota?: TenantQuota },
     ): Promise<TenantInfo> {
-      try {
-        assertTenantId(tenantId);
-      } catch {
-        throw tenantControlError('invalid_params', `invalid tenant id "${tenantId}"`);
+      // 0.49 T1（C6）：非单 id → not_found；单 id 保持现有 update 语义。
+      if (tenantId !== singleTenantId) {
+        throw tenantControlError('not_found', `tenant "${tenantId}"`);
       }
       const paths = resolveTenantPaths(dataDir, tenantId);
       if (!(await resolveMeta(tenantId))) {

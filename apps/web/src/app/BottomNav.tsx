@@ -19,7 +19,7 @@ const activeClass = 'rounded-sm bg-accent-soft text-accent-ink';
 export function BottomNav({ route, navigate }: { route: Route; navigate: (route: Route) => void }) {
   useLocale();
   const [moreOpen, setMoreOpen] = useState(false);
-  const { tenantId, connectionState, hasToken } = useConnection();
+  const { connectionState, hasToken } = useConnection();
   const { pages: pluginPages } = usePluginContributions();
   const moreActive =
     route.domain === 'hub' ||
@@ -28,7 +28,6 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
     route.domain === 'nodes' ||
     route.domain === 'teams' ||
     route.domain === 'agents' ||
-    route.domain === 'tenants' ||
     route.domain === 'capabilities' ||
     route.domain === 'visual' ||
     route.domain === 'designLab' ||
@@ -119,16 +118,6 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               }}
             >
               <DomainIcon domain="nodes" /> {domainLabel('nodes')}
-            </button>
-            <button
-              type="button"
-              className="more-item"
-              onClick={() => {
-                setMoreOpen(false);
-                navigate(primaryRoute('tenants'));
-              }}
-            >
-              <DomainIcon domain="tenants" /> {domainLabel('tenants')}
             </button>
             <button
               type="button"
@@ -250,7 +239,6 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
           </div>
           <div className="more-meta">
             <span>{t('nav.connectionNamed', { value: connLabel })}</span>
-            <span className="mono">{t('nav.tenantNamed', { tenant: tenantId ?? '—' })}</span>
           </div>
         </ModalShell>
       )}

@@ -26,6 +26,9 @@ paths: [src/hub/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, plu
 
 目标是固定产品与归属模型；实现收敛另开裁决，不把目标态写成 current 事实。
 
+> **T1 单公司兼容期**：内部继续保留 tenant 字段与 `<dataDir>/tenants/<id>/**` 布局；T1 只把行为收敛到本 node 单 id（解析、RPC 作用域、事件流、CLI / Web 入口），不迁移、不删除目录，不删除 `tenant_id` 字段或 `tenants.*` RPC。
+> Hub / federation wire、`pairing_id` 与 node token 文件格式在 T1 不变；多公司仍是多 node。
+
 ## 三个轴
 
 判断归属先拆三个轴，不要用一个词同时回答三个问题。

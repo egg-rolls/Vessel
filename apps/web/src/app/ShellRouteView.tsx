@@ -10,7 +10,7 @@ import { ObserveView } from '../domains/observe/ObserveView';
 import { PluginHostView } from '../domains/plugins/PluginHostView';
 import { PluginPageView } from '../domains/plugins/PluginPageView';
 import { RunsView } from '../domains/runs/RunsView';
-import { CapabilitiesPage, TenantsPage, VisualPage } from '../domains/settings/NavPages';
+import { CapabilitiesPage, VisualPage } from '../domains/settings/NavPages';
 import { SettingsView } from '../domains/settings/SettingsView';
 import { TeamsView } from '../domains/teams/TeamsView';
 import type { ConnectionState, GatewayClient } from '../gateway/client';
@@ -68,7 +68,6 @@ export function ShellRouteView({
       )}
       {route.domain === 'observe' && <ObserveView route={route} navigate={navigate} />}
       {route.domain === 'plugins' && <PluginPageView route={route} />}
-      {route.domain === 'tenants' && <TenantsPage />}
       {route.domain === 'capabilities' && <CapabilitiesPage />}
       {route.domain === 'visual' && <VisualPage />}
       {route.domain === 'designLab' && <DesignLabView />}

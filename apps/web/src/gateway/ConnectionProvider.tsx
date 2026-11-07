@@ -84,7 +84,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   // 进程内常量：初始化后不再切换模式（切模式需要刷新页面）。
   const { devProxyAuth } = initialConnection;
-  const [targetTenantId, setTargetTenantId] = useState<string | undefined>();
   const [gatewayError, setGatewayError] = useState<string | null>(
     initialConnection.platformUrlError,
   );
@@ -93,6 +92,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
   const [hello, setHello] = useState<HelloInfo | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
+  /** 单公司：一旦由 health.get 解析出来就只读固定，切换入口已隐藏。 */
+  const singleTenantIdRef = useRef<string | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [epoch, setEpoch] = useState(0);
   const [tenantEpoch, setTenantEpoch] = useState(0);
@@ -245,6 +246,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setConnectionState('idle');
       setHello(null);
       setTenantId(null);
+      singleTenantIdRef.current = null;
       useInteractionStore.getState().reset();
       settledRef.current.clear();
       hydrationGenerationRef.current += 1;
@@ -255,7 +257,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     return createConnectionHandlers({
       client,
       token: nodeToken,
-      targetTenantId,
       eventStore,
       toast,
       settledRef,
@@ -278,7 +279,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     nodeToken,
     canConnect,
     connectSeq,
-    targetTenantId,
     eventStore,
     reportConnectError,
     recordSettled,
@@ -291,6 +291,39 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     if (!hasToken) return;
     void hydrateInteractions();
   }, [epoch, hasToken, hydrateInteractions]);
+
+  // node 变化后重新解析单 id；同一 node 生命周期内保持只读。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: client 是 node 变化的稳定标识
+  useEffect(() => {
+    singleTenantIdRef.current = null;
+    setTenantId(null);
+  }, [client]);
+
+  /**
+   * CONTRACT-0.49 C7：单公司 id 只从 `health.get` 取一次，之后只读固定；
+   * 不再调用 `tenants.*`，也不再向数据面发送切换得到的 tenant_id。
+   * hello 已带回同一个值，这里以 health 为准做确认；旧 gateway 若缺字段则保留 hello 值。
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch 是 hello 后的确认触发器
+  useEffect(() => {
+    if (!hasToken || connectionState !== 'open') return;
+    if (singleTenantIdRef.current !== null) return;
+    let cancelled = false;
+    void client
+      .getTenantId()
+      .then((id) => {
+        if (cancelled || !id) return;
+        if (singleTenantIdRef.current !== null) return;
+        singleTenantIdRef.current = id;
+        setTenantId(id);
+      })
+      .catch(() => {
+        // 旧 gateway 无 health tenant_id：保留 hello 提供的值。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, connectionState, hasToken, epoch]);
 
   const { connect, disconnect, retry } = useConnectionControls({
     client,
@@ -311,7 +344,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setAnonymousNode,
     setTokenError,
     setLastError,
-    setTargetTenantId,
     setConnectSeq,
     manualNodeTokenRef,
     legacyTokenRef,

@@ -54,14 +54,6 @@ export function buildPaletteItems({
       run: () => navigate({ domain: 'runs', tab: 'durable' }),
     },
     {
-      id: 'action-tenant',
-      group: 'action',
-      label: t('palette.action.switchTenant'),
-      keywords: ['tenant', 'switch', '租户'],
-      hint: t('palette.hint.action'),
-      run: () => navigate({ domain: 'tenants' }),
-    },
-    {
       id: 'action-connection',
       group: 'action',
       label: t('palette.action.connectionSettings'),

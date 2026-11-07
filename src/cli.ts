@@ -962,6 +962,7 @@ async function runWithConfig(result: BootstrapResult) {
 
       tenantFactory = await createTenantRuntimeFactory({
         config,
+        tenantId: result.tenantId,
         runtime: result.executionRuntime,
         ...(result.bundle ? { seededTenants: [result.bundle] } : {}),
         useMock,
@@ -1425,6 +1426,7 @@ async function runWithConfig(result: BootstrapResult) {
             // A6-13：tenants.get/list/create/update 的数据源。
             // A6-14：配置的 status/quota 是权威来源，tenant.json 兜底。
             tenants: createTenantControl(dataDir, {
+              singleTenantId: result.tenantId,
               ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
             }),
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),

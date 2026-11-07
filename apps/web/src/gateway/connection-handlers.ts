@@ -16,12 +16,12 @@ interface Current<T> {
 export interface ConnectionHandlerDeps {
   client: GatewayClient;
   token: string;
-  targetTenantId: string | undefined;
+  /** 单公司 id（health/hello 解析，只读）；未解析前不发送 tenant_id。 */
+  tenantIdRef: Current<string | null>;
   eventStore: EventStore;
   toast: ToastApi;
   settledRef: Current<Map<string, number>>;
   hydrationGenerationRef: Current<number>;
-  tenantIdRef: Current<string | null>;
   recordSettled: (requestId: string) => void;
   reportConnectError: (error: unknown) => void;
   setConnectionState: Dispatch<SetStateAction<ConnectionState>>;
@@ -43,7 +43,6 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   const {
     client,
     token,
-    targetTenantId,
     eventStore,
     toast,
     settledRef,
@@ -154,7 +153,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
       setLastError(null);
       // 旧连接的在途帧由 client 的 socket identity 检查丢弃。
       void client
-        .restart(token, seqPlan.since, tenantIdRef.current ?? targetTenantId)
+        .restart(token, seqPlan.since, tenantIdRef.current ?? undefined)
         .catch(reportConnectError);
       return;
     }
@@ -183,7 +182,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     // 缺口里的终态事件（如 permission.response）已经丢了：按协议从 to_seq 重连，
     // 借 hello → epoch → hydrateInteractions 用服务端 pending 收敛本地卡片。
     void client
-      .restart(token, gap.to_seq, tenantIdRef.current ?? targetTenantId)
+      .restart(token, gap.to_seq, tenantIdRef.current ?? undefined)
       .catch(reportConnectError);
   });
 
@@ -216,7 +215,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   probeThenConnect(
     client,
     token,
-    () => ({ since: 0, tenantId: targetTenantId }),
+    () => ({ since: 0, tenantId: tenantIdRef.current ?? undefined }),
     reportConnectError,
   );
 

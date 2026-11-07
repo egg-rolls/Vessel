@@ -28,7 +28,7 @@ export function AppBar({
   center?: ReactNode;
 }) {
   useLocale();
-  const { connectionState, tenantId, hasToken } = useConnection();
+  const { connectionState, hasToken } = useConnection();
   const connLabel = hasToken ? connectionLabel(connectionState) : t('nav.conn.idle');
   const drawerToggle = onToggleSessions
     ? {
@@ -110,16 +110,6 @@ export function AppBar({
             aria-hidden="true"
           />
           <span className="max-compact:hidden">{connLabel}</span>
-        </button>
-      </Tooltip>
-
-      <Tooltip label={t('nav.tenantChipTitle')}>
-        <button
-          type="button"
-          className="rounded-full bg-transparent px-2.5 py-1 text-xs whitespace-nowrap text-muted transition-colors duration-150 hover:bg-hover hover:text-ink max-compact:hidden pointer-coarse:min-h-touch"
-          onClick={() => navigate({ domain: 'tenants' })}
-        >
-          {t('nav.tenant')} <span className="mono">{tenantId ?? '—'}</span>
         </button>
       </Tooltip>
     </header>

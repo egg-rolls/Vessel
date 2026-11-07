@@ -299,7 +299,8 @@ export function createHubControlRoute(deps: HubControlRouteDeps): HubControlRout
       return;
     }
 
-    const principal = resolvePrincipal(deps.auth, token, deps.legacyToken);
+    // R5：hub 控制面保留 token 记录绑定；null = 不收敛到单 id。
+    const principal = resolvePrincipal(deps.auth, token, deps.legacyToken, null);
     if (principal === null) {
       closeWith(ws, 4401, 'unauthorized');
       return;

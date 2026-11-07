@@ -9,7 +9,7 @@ paths: [packages/serve/src/**, packages/serve/src/gateway/**, src/serve-auth.ts,
 > 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
 <a id="protocol"></a>
 
-`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。gateway 只读取注入的 `TenantEventHub`，由 hub 对各 tenant 的运行时流 fan-in（ADR-089）。`apps/web` 是配套的浏览器控制台；它可连接多个 node 并直接调各 node 的 `/v1/rpc`（per-node token），这是 Console 聚合，不是平台级 gateway（[topology](topology.md)）。
+`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。gateway 只读取注入的 `TenantEventHub`，由 hub 对各 tenant 的运行时流 fan-in（ADR-089）。`apps/web` 是配套的浏览器控制台；它可连接多个 node 并直接调各 node 的 `/v1/rpc`（per-node token），这是 Console 聚合，不是平台级 gateway（[topology](topology.md)）。**T1 单公司兼容期**：内部继续保留 tenant 字段与 `<dataDir>/tenants/<id>/**` 布局，只把行为收敛到本 node 单 id；hub / federation wire、`pairing_id`、`x-vessel-tenant` 头与 node token 文件格式不变。
 **0.49 G1 现态**：`vessel gateway start` 在同一进程启动 **Platform Gateway**（默认 `127.0.0.1:8642`；静态宿主 + `/health` + `/platform/rpc` 只读 allowlist）与 **Node API**（`serve.port`，缺省 `8644`；`/v1/*`、WS/SSE、插件 HTTP/静态）。两者路由表与认证链物理分离；平台 token 与 node token 互不通用。`vessel node start/status/stop/reload` 只操作 Node API。legacy `vessel --serve` 仍是单监听 8642、node 宿主 UI（保留至 G5）。边界契约见 `CONTRACT-0.49-gateway-node.md`；目标态（多 node / 远端）见 [ADR-101](../adr/ADR-101-platform-gateway-and-node-api.md)。
 
 ### 协议 `vessel.gateway/1`

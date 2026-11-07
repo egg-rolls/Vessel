@@ -3,6 +3,9 @@ import type { Route } from './router';
 /**
  * 切换租户时必须丢弃的 UI 状态（纯数据，便于回归测试）。
  *
+ * CONTRACT-0.49 C7：T1 单公司下已无切换入口，本计划不会触发；
+ * 文件与类型保留，defer-T4。
+ *
  * 事件缓冲由 ConnectionProvider 重置；业务 resource 由 AppShell 的 main key
  * 重新挂载；这里列出外壳层需要显式清空的项。
  */

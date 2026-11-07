@@ -19,7 +19,10 @@ export interface ConnectionOptions {
   token?: string;
   /** 平台模式下可选手填 node token（覆盖 credentials）。 */
   nodeToken?: string;
-  /** 只切换 node 连接的 tenant（不改 URL / token）。 */
+  /**
+   * 只切换 node 连接的 tenant（不改 URL / token）。
+   * CONTRACT-0.49 C7：T1 入口已隐藏，该字段保留但被忽略（defer-T4）。
+   */
   tenantId?: string;
 }
 

@@ -340,7 +340,8 @@ export async function runTenantCommand(args: string[], ctx: ReplContext): Promis
     }
     try {
       const raw = await ctx.rpc.request<unknown>('tenants.list');
-      const tenants = readTenantList(raw);
+      // 0.49 T1（C7）：只展示单 id；管理面 C6 也只回一项，这里做防御性过滤。
+      const tenants = readTenantList(raw).filter((tenant) => tenant.tenant_id === currentTenantId);
       return {
         handled: true,
         output: formatTenantList(tenants, currentTenantId),

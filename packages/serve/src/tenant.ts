@@ -126,23 +126,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** CONTRACT-0.49 C4：每个 legacy tenant id 只 warning 一次，避免老客户端刷日志。 */
+const warnedLegacyTenantIds = new Set<string>();
+
 /** 判断 principal 是否为跨 tenant admin（`tenant_id:'*'`） */
 export function isWildcardPrincipal(principal: TenantPrincipal): boolean {
   return principal.tenant_id === '*';
 }
 
 /**
- * 解析本次请求的目标 tenant（A-3 §10.4）。
+ * 解析本次请求的目标 tenant（CONTRACT-0.49 C4 单公司兼容期）。
  *
- * - 非 admin 指定其它 tenant → forbidden；
- * - admin（含 wildcard）可显式指定；
- * - wildcard 未指定时落到 default tenant；
- * - `all_tenants` 只有 admin 且显式为 true 才生效。
+ * - `tenant_id` 缺失 → 单 id；
+ * - `tenant_id` 格式合法（无论等于 / 不等于单 id）→ 一律单 id；
+ *   不等于时写一条 warning，**不抛 `forbidden`**（legacy 客户端兼容）；
+ * - `tenant_id` 格式非法 → `invalid_params`（不变）；
+ * - `all_tenants` 接受但无数据面效果；事件读取是否过滤由 M2b 的调用点决定。
  */
 export function resolveTenantScope(
   principal: TenantPrincipal,
   params: Record<string, unknown>,
-  defaultTenantId: string = DEFAULT_TENANT_ID,
+  singleTenantId: string = DEFAULT_TENANT_ID,
 ): { tenantId: string; allTenants: boolean } {
   const requestedRaw = params.tenant_id;
   if (requestedRaw !== undefined && typeof requestedRaw !== 'string') {
@@ -153,17 +157,18 @@ export function resolveTenantScope(
     if (!TENANT_ID_PATTERN.test(requested)) {
       throw new RpcError('invalid_params', 'tenant_id has an invalid format');
     }
-    if (principal.role !== 'admin' && requested !== principal.tenant_id) {
-      throw new RpcError('forbidden', 'Cross-tenant access is not allowed');
+    if (requested !== singleTenantId && !warnedLegacyTenantIds.has(requested)) {
+      warnedLegacyTenantIds.add(requested);
+      console.warn(
+        `[vessel] tenant.legacy_id_ignored requested=${requested} single=${singleTenantId}`,
+      );
     }
   }
 
   const isAdmin = principal.role === 'admin';
-  const tenantId =
-    requested ?? (isWildcardPrincipal(principal) ? defaultTenantId : principal.tenant_id);
   const allTenants = params.all_tenants === true && isAdmin;
 
-  return { tenantId, allTenants };
+  return { tenantId: singleTenantId, allTenants };
 }
 
 /** 事件的 tenant 归属；缺失视为 default（A-3 §10.3） */
@@ -178,28 +183,38 @@ export function eventVisible(event: RunEvent, tenantId: string, allTenants: bool
   return eventTenantId(event) === tenantId;
 }
 
-/** 从 token 解析 principal；未注入 auth 时按 0.4 单 token 语义 */
+/**
+ * 从 token 解析 principal；未注入 auth 时按 0.4 单 token 语义。
+ *
+ * 第 4 参必填，调用方必须对 tenant 归属表态：
+ * - `string`（单 id）：所有 token principal（含 wildcard admin）的 `tenant_id`
+ *   一律收敛为该 id，role 不变（CONTRACT-0.49 C3）；
+ * - `null`：保持 token 记录的原 tenant_id。**只允许 hub 控制面**（R5 hub 例外，
+ *   T3 才收敛），其它调用方一律传单 id。
+ */
 export function resolvePrincipal(
   auth: GatewayAuthLike | undefined,
   token: string | null,
   legacyToken: string,
+  singleTenantId: string | null,
 ): TenantPrincipal | null {
+  let principal: TenantPrincipal | null = null;
   if (auth) {
-    const principal = auth.authenticate(token);
-    if (principal !== null) {
+    const authenticated = auth.authenticate(token);
+    if (authenticated !== null) {
       // S5：保留 additive scope / team_id / token_id / hub_id，不在这里丢掉。
-      return { ...principal };
+      principal = { ...authenticated };
+    } else if (token !== null && token === legacyToken) {
+      // 0.4 兼容：gateway 自动生成/本地 token 仍按 admin 接受；
+      // asm 未把生成值写回 auth 时不能回归。
+      principal = { tenant_id: DEFAULT_TENANT_ID, role: 'admin' };
     }
-    // 0.4 兼容：gateway 自动生成/本地 token 仍按 default/admin 接受；
-    // asm 未把生成值写回 auth 时不能回归。
-    if (token !== null && token === legacyToken) {
-      return { tenant_id: DEFAULT_TENANT_ID, role: 'admin' };
-    }
-    return null;
+  } else if (token !== null && token !== '' && token === legacyToken) {
+    // 未注入 auth = 0.4 单 token 模式：仍要求匹配 gateway token（测试/旧调用方）。
+    principal = { tenant_id: DEFAULT_TENANT_ID, role: 'admin' };
   }
-  // 未注入 auth = 0.4 单 token 模式：仍要求匹配 gateway token（测试/旧调用方）。
-  if (token === null || token === '') return null;
-  return token === legacyToken ? { tenant_id: DEFAULT_TENANT_ID, role: 'admin' } : null;
+  if (principal === null) return null;
+  return singleTenantId === null ? principal : { ...principal, tenant_id: singleTenantId };
 }
 
 /** 本地 dispatcher 的 principal（LocalRpcClient） */

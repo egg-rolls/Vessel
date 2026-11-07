@@ -5,6 +5,7 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
+import { readdir } from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   type AgentService,
@@ -923,6 +924,28 @@ export function resolveDefaultTeamWorkspace(
 }
 
 /**
+ * 0.49 T1（C12）：列出 `<dataDir>/tenants/*` 中非单 id 的目录。
+ *
+ * 只读目录名；不读取内容、不删除、不迁移、不重命名，也不阻塞启动。
+ */
+async function warnUnmigratedTenantDirs(dataDir: string, singleTenantId: string): Promise<void> {
+  let entries: string[];
+  try {
+    const dirents = await readdir(path.join(dataDir, 'tenants'), { withFileTypes: true });
+    entries = dirents.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (name === singleTenantId) continue;
+    console.warn(
+      `⚠ tenant directory "${name}" is not the single company id; ` +
+        'it was left untouched (no migration in this release).',
+    );
+  }
+}
+
+/**
  * 引导应用启动
  */
 export async function bootstrap(options: BootstrapOptions = {}): Promise<BootstrapResult> {
@@ -972,6 +995,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ? path.join(resolvedDataDir, options.dataDirSubdir)
     : resolvedDataDir;
   const tenantPaths = resolveTenantPaths(dataDir, tenantId);
+
+  // 0.49 T1（C12）：启动时只 warning 非单 id 目录，不改磁盘布局（C9）。
+  await warnUnmigratedTenantDirs(dataDir, tenantId);
 
   // 节点身份（0.25）：node_id 唯一来源（U3）：host.node_id > <dataDir>/node.json > 首次生成；
   // 展示名：host.node_name > 文件 name > hostname 派生。transport / PeerInfo 共用 nodeId。
@@ -1634,6 +1660,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       },
     },
     tenants: createTenantControl(dataDir, {
+      singleTenantId: tenantId,
       ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
     }),
     plugins: () => plugins.map((plugin) => ({ name: plugin.name, enabled: true })),

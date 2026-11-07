@@ -228,11 +228,6 @@ export interface TenantRuntimeBundle {
   close(options?: { drain?: boolean }): Promise<void>;
 }
 
-/** 内部：锁所有权 */
-function nonEmpty(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined;
-}
-
 function tenantSessionsDbPath(tenantRoot: string): string {
   return join(tenantRoot, 'sessions.db');
 }
@@ -1392,6 +1387,11 @@ export interface TenantRuntimeFactoryOptions {
    * 工厂新建的其它 tenant 共用；profile 按 tenant 注册）。
    */
   runtime: Runtime;
+  /**
+   * 0.49 T1：唯一单公司 id（来自 `loadConfig().tenantId`）。工厂只构造该 id
+   * 的执行面；多 tenant 枚举分支保留到 T3。
+   */
+  tenantId: string;
   /** 基础配置（用于 data_dir / tenant 列表） */
   config: VesselConfig;
   configPath?: string;
@@ -1445,18 +1445,6 @@ export interface TenantRuntimeFactory {
   refreshPlugins(): void;
   /** `drain: false`：调用方已 await gateway.stop()（已做 interrupt + 5s 等待） */
   closeAll(options?: { drain?: boolean }): Promise<void>;
-}
-
-/** `status` 缺省视为 active；包含显式 default tenant（隐式配置）。 */
-export function listActiveTenantIds(config: VesselConfig): string[] {
-  const configured = config.tenant?.tenants ?? {};
-  const ids = Object.entries(configured)
-    .filter(([, settings]) => settings.status !== 'disabled')
-    .map(([id]) => id);
-  const fallback = nonEmpty(config.tenant?.default) ?? 'default';
-  const fallbackSettings = configured[fallback];
-  if (fallbackSettings?.status !== 'disabled' && !ids.includes(fallback)) ids.push(fallback);
-  return ids;
 }
 
 /** 载入一个 tenant 的合并配置；禁用 tenant 返回 null。 */
@@ -1513,7 +1501,8 @@ export async function createTenantRuntimeFactory(
   const writeTrace = options.writeTrace ?? true;
 
   try {
-    const activeIds = listActiveTenantIds(options.config);
+    // 0.49 T1（C0/C2）：只构造单 id 执行面；不再从 config.tenant.* 推导列表。
+    const activeIds = [options.tenantId];
     const loadedTenants = new Map<
       string,
       {

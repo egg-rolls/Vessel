@@ -14,7 +14,6 @@ import {
   normalizeMetricsSnapshot,
 } from '../../metrics.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
-import { eventVisible } from '../../tenant.js';
 import { capToolEvent } from '../../tool-events.js';
 import { tenantParamSchema } from './common.js';
 import { metricsSnapshotSchema, runEventSchema } from './schemas.js';
@@ -62,7 +61,7 @@ export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDe
           events: { type: 'array', items: runEventSchema },
         },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         if (!trace?.readEvents) throw new RpcError('not_found', 'Trace reader is not available');
         if (params.types !== undefined && params.type_prefix !== undefined) {
           throw new RpcError('invalid_params', 'types and type_prefix are mutually exclusive');
@@ -79,12 +78,11 @@ export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDe
           if (params[key] !== undefined) filter[key] = params[key];
         }
         try {
-          const events = await trace.readEvents(filter, ctx.tenantId);
+          // CONTRACT-0.49 C5：读取端不按 tenant_id 过滤（旧事件含 legacy id 原样可见）。
+          const events = await trace.readEvents(filter);
           return {
             // 读路径与实时流一致：先脱敏，再按 8 KiB 裁剪工具参数/结果。
-            events: events
-              .filter((event) => eventVisible(event, ctx.tenantId, ctx.allTenants))
-              .map((event) => capToolEvent(redactor ? redactor.redact(event) : event)),
+            events: events.map((event) => capToolEvent(redactor ? redactor.redact(event) : event)),
           };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

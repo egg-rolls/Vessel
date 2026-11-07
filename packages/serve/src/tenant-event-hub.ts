@@ -5,7 +5,7 @@
  * 每个 tenant 的 runtimeEvents 通过 `register()` 接入。hub **不提供 publish**，
  * 业务代码只能写自己的 tenant 流。
  *
- * - `subscribe()`：原始 fan-in（interactions registry），事件缺 `tenant_id` 时补齐（克隆）；
+ * - `subscribe()`：原始 fan-in（interactions registry），事件写入注册时的 tenant id（克隆）；
  * - `subscribeSequenced()`：`map`（脱敏 / 裁剪）之后、分配单调 `seq` 的事件；
  * - `since()` / `gapFor()` / `latestSeq` / `oldestSeq`：供 WS / SSE 回放。
  *
@@ -61,7 +61,7 @@ export interface TenantEventHub {
   streamFor(tenantId: string): EventStream | undefined;
   readonly tenantIds: readonly string[];
 
-  /** 原始 fan-in：事件缺 `tenant_id` 时补齐（克隆），不改原对象。 */
+  /** 原始 fan-in：事件写入注册时的 tenant id（克隆），不改原对象。 */
   subscribe(handler: (event: RunEvent) => void): Unsubscribe;
   /** `map` + 序号后的 fan-in。 */
   subscribeSequenced(handler: (item: SeqEvent) => void): Unsubscribe;
@@ -86,9 +86,14 @@ function reportHubError(action: string, error: unknown): void {
   );
 }
 
+/**
+ * 0.49 C5：单公司模式下运行时只注册一条流，事件统一写入注册时传入的单 id
+ * （不是仅补齐缺失字段）。旧事件仍留在各自来源（持久化 / 回放）中，读取端不做
+ * tenant 过滤，因此 legacy id 不会被隐藏。
+ */
 function withTenantId(event: RunEvent, tenantId: string): RunEvent {
   const current = (event as { tenant_id?: unknown }).tenant_id;
-  if (typeof current === 'string' && current.length > 0) return event;
+  if (current === tenantId) return event;
   return { ...event, tenant_id: tenantId };
 }
 

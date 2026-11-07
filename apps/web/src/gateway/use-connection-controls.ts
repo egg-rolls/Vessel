@@ -36,7 +36,6 @@ export interface ConnectionControlsDeps {
   setAnonymousNode: Dispatch<SetStateAction<boolean>>;
   setTokenError: Dispatch<SetStateAction<string | null>>;
   setLastError: Dispatch<SetStateAction<string | null>>;
-  setTargetTenantId: Dispatch<SetStateAction<string | undefined>>;
   setConnectSeq: Dispatch<SetStateAction<number>>;
   manualNodeTokenRef: Current<string>;
   legacyTokenRef: Current<string>;
@@ -67,7 +66,6 @@ export function useConnectionControls({
   setAnonymousNode,
   setTokenError,
   setLastError,
-  setTargetTenantId,
   setConnectSeq,
   manualNodeTokenRef,
   legacyTokenRef,
@@ -93,7 +91,6 @@ export function useConnectionControls({
         else sessionStorage.removeItem(PLATFORM_TOKEN_KEY);
         setPlatformUrl(urlCheck.value);
         setPlatformToken(nextToken);
-        setTargetTenantId(undefined);
         setUrlInvalid(false);
         setGatewayError(null);
         setPlatformError(null);
@@ -125,12 +122,8 @@ export function useConnectionControls({
         return true;
       }
 
-      if (options.tenantId !== undefined) {
-        setTargetTenantId(options.tenantId);
-        setConnectSeq((value) => value + 1);
-        return true;
-      }
-
+      // CONTRACT-0.49 C7：T1 不再提供切换 tenant 的入口；
+      // `ConnectionOptions.tenantId` 类型保留（defer-T4），此处忽略。
       return false;
     },
     [mode, nodeIdentity],
@@ -148,7 +141,6 @@ export function useConnectionControls({
     manualNodeTokenRef.current = '';
     setNodeToken('');
     setAnonymousNode(false);
-    setTargetTenantId(undefined);
     client.close();
     eventStore.reset(0);
   }, [client, eventStore, mode, nodeIdentity]);
