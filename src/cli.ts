@@ -36,11 +36,11 @@ import {
 } from '../packages/config/src/index';
 import {
   type EventStream,
+  pathsForTenant,
   pruneTrace,
   type ReadTraceOptions,
   readTraceEvents,
   rebuildMetrics,
-  resolveTenantPaths,
 } from '../packages/core/src/index';
 import {
   buildPluginCatalog,
@@ -1444,7 +1444,7 @@ async function runWithConfig(result: BootstrapResult) {
             trace: {
               readEvents: (filter: Record<string, unknown>, tenantId?: string) =>
                 readTraceEvents(
-                  resolveTenantPaths(dataDir, tenantId ?? result.tenantId).events_dir,
+                  pathsForTenant(dataDir, tenantId ?? result.tenantId, result.tenantId).events_dir,
                   filter as ReadTraceOptions,
                 ),
               prune: (params: Record<string, unknown>) => {
@@ -1453,13 +1453,16 @@ async function runWithConfig(result: BootstrapResult) {
                     ? params.tenant_id
                     : result.tenantId;
                 // 工厂已持有该 tenant 的写锁，不能再嵌套获取。
-                return pruneTrace(resolveTenantPaths(dataDir, requestedTenant).events_dir, {
-                  ...(typeof params.older_than_days === 'number'
-                    ? { retentionDays: params.older_than_days }
-                    : {}),
-                  ...(typeof params.max_runs === 'number' ? { maxRuns: params.max_runs } : {}),
-                  ...(typeof params.max_bytes === 'number' ? { maxBytes: params.max_bytes } : {}),
-                });
+                return pruneTrace(
+                  pathsForTenant(dataDir, requestedTenant, result.tenantId).events_dir,
+                  {
+                    ...(typeof params.older_than_days === 'number'
+                      ? { retentionDays: params.older_than_days }
+                      : {}),
+                    ...(typeof params.max_runs === 'number' ? { maxRuns: params.max_runs } : {}),
+                    ...(typeof params.max_bytes === 'number' ? { maxBytes: params.max_bytes } : {}),
+                  },
+                );
               },
             },
             sessionData: {
@@ -1481,7 +1484,7 @@ async function runWithConfig(result: BootstrapResult) {
             },
             metricsControl: {
               rebuild: (tenantId: string) =>
-                rebuildMetrics(resolveTenantPaths(dataDir, tenantId).events_dir),
+                rebuildMetrics(pathsForTenant(dataDir, tenantId, result.tenantId).events_dir),
               // A6-09：只重置该 tenant 的 collector；无 metrics 的 tenant → not_found。
               reset: (tenantId?: string) => {
                 const id = tenantId ?? result.tenantId;

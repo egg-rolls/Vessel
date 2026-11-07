@@ -9,10 +9,10 @@
  */
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
-import { readTraceEvents, resolveTenantPaths } from '../packages/core/src/index';
+import { readTraceEvents, type TenantPaths } from '../packages/core/src/index';
 import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTargetOptions, resolveControlPlaneTarget } from './control-plane-target';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir, resolveReadonlyTenantPaths } from './data-paths';
 import { t } from './i18n';
 import { RpcClientError } from './rpc';
 import { ui } from './ui-style';
@@ -217,8 +217,18 @@ export async function errorsCommand(options: ErrorsCommandOptions = {}): Promise
       await resolved.target.close().catch(() => undefined);
     }
   } else {
-    const traceDir = resolveTenantPaths(dataDir, tenantId).events_dir;
-    rawEvents = await readTraceEvents(traceDir, { types, limit: READ_LIMIT });
+    // 0.49 T2（C10）：只读入口按状态选布局；迁移中拒绝读半迁移数据。
+    let tenantPaths: TenantPaths;
+    try {
+      tenantPaths = await resolveReadonlyTenantPaths(dataDir, tenantId);
+    } catch (error) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+      };
+    }
+    rawEvents = await readTraceEvents(tenantPaths.events_dir, { types, limit: READ_LIMIT });
   }
 
   const events = sortNewestFirst(

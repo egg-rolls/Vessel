@@ -53,7 +53,7 @@ import {
   type RunRecordStore,
   type Runtime,
   type RuntimePermissionConfig,
-  resolveTenantPaths,
+  resolveSingleTenantPaths,
   type Scheduler,
   type SelfCardOptions,
   SessionEventLog,
@@ -1471,7 +1471,8 @@ export async function loadTenantRuntimeConfig(
     );
   }
   if (loaded.config.tenant?.tenants?.[tenantId]?.status === 'disabled') return null;
-  const tenantPaths = resolveTenantPaths(
+  // 0.49 T2（C1/C14）：单 id 执行面使用根布局；调用方已完成启动迁移。
+  const tenantPaths = resolveSingleTenantPaths(
     options.dataDir ?? resolveDataDir(loaded.config),
     tenantId,
   );

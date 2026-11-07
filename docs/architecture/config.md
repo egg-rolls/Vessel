@@ -32,7 +32,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 
 单 id 由 `loadConfig()` 唯一解析（复用 `tenantId` 返回字段），按序：① `tenant.default` 非空 → `isValidTenantId` 校验后使用，非法即配置错误、不回落；② 否则 `tenant.tenants` 恰有 1 个键 → 用该键（同校验，非法即配置错误）；③ 否则 `tenant.tenants` 缺失/为空 → `DEFAULT_TENANT_ID`（`default`）；④ 否则多键且无 `default` → 配置错误、启动失败，不猜测、不取第一个键。
 `--tenant` / explicit `options.tenantId` 与 `VESSEL_TENANT` 不参与解析，非空且不等于单 id 时只写一条 `path: 'tenant'` warning；非单 id 条目不加载其 overlay / `quota` / `tools`，启动时用一条 warning 列出被忽略的 id；`<data_dir>/tenants/*` 中每个非单 id 目录输出一条 warning（不读取/删除/迁移/重命名）；单 id 条目的 overlay / quota / tools 继续生效。validator 仍接受旧多 tenant 配置，schema 删除属 T4。
-
+`data_dir` 仍是全局根；单 id 数据落在 `<data_dir>/{sessions,runs,events,inbox}/`、`sessions.db`、`tenant.json`，不再有 `<data_dir>/tenants/<id>/`。`durable.path` 未显式配置时取 `<data_dir>/runs`；显式值仍优先。`agents/<id>.json`、`conversations/<id>.json`、`teams/<id>/**`、`interactions-<id>.json` 仍为 root-keyed，保留到 T4。
 ### 配置块
 
 | 键 | 说明 |

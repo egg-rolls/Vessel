@@ -7,11 +7,11 @@
  */
 
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
-import { type LLMProvider, resolveTenantPaths, type TenantPaths } from '../packages/core/src/index';
+import type { LLMProvider, TenantPaths } from '../packages/core/src/index';
 import type { EvalCommand } from './cli-args';
 import { formatConfigErrors } from './config-error-format';
 import type { EvalReport } from './control-plane-types';
-import { resolveDataDir } from './data-paths';
+import { ensureWriteTenantPaths, resolveDataDir } from './data-paths';
 import { executeEvalSuite } from './eval-wiring';
 import { createEventStream } from './observability-wiring';
 import { PluginLoader } from './plugin-loader';
@@ -99,11 +99,15 @@ export async function runEvalCommand(
     }
   }
 
-  // 0.5：报告与 trace 落到 tenant 目录；eval.run.* 事件经 events 进入 trace。
-  const tenantPaths: TenantPaths = resolveTenantPaths(
-    options.dataDir ?? resolveDataDir(config),
-    tenantId,
-  );
+  // 0.49 T2（C9/C13）：写前先完成布局迁移，报告与 trace 落到根布局；
+  // eval.run.* 事件经根 events/ 进入 trace。
+  let tenantPaths: TenantPaths;
+  try {
+    tenantPaths = await ensureWriteTenantPaths(options.dataDir ?? resolveDataDir(config), tenantId);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
   // eval 写 tenant trace / 报告：与 migrate / tenant / trace prune 一致走 exclusive。
   let tenantLock: TenantLock | undefined;
   try {

@@ -185,6 +185,7 @@
       "name": "@vessel-agent/plugin-usage",
       "version": "0.1.0",
       "dependencies": {
+        "@vessel-agent/core": "0.33.0",
         "@vessel-agent/plugin-ui": "0.1.0",
         "react": "^19.1.0",
         "react-dom": "^19.1.0",

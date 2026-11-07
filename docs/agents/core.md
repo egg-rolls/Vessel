@@ -43,11 +43,16 @@ applies_to: [N, M]
 - 默认 `session.backend: file`；保留 sqlite；检测到 legacy 数据只提示 `vessel migrate`，不自动迁移。
 - `context.maxTokens` 默认 1M；`context.compactThreshold` 默认 0.85 且是应用层唯一来源（core 兜底同值）；`provider.maxTokens` 是单次输出上限（ADR-064）。
 
-## T1 单公司兼容期（边界）
+## T2 单公司存储（根布局）
 
-- core 不改 `packages/core/src/tenant/**`：`resolveTenantId` / `tenantRootPath` / `resolveTenantPaths` 的签名、逃逸校验与 `<dataDir>/tenants/<id>/**` 布局保持不变。
-- 单 id 解析的唯一实现是 `packages/config` 的 `loadConfig()`；core 的纯函数不参与 T1 收敛，也不复制第二套优先级链。
-- 非单 id 目录的 warning 由装配层在 `resolveDataDir` 之后扫描；core 不读取、删除、迁移或重命名这些目录。
+- `packages/core/src/tenant/**` 新增 `resolveSingleTenantPaths(dataDir, tenantId?)` 与
+  `pathsForTenant(dataDir, tenantId, singleId)`：单 id 解析到 `<dataDir>/**`，非单 id
+  永远解析到旧树 `<dataDir>/tenants/<id>/**`。旧 `resolveTenantPaths` 保留给迁移、
+  非单 id 与回滚。
+- 迁移引擎在装配层 `src/tenant-layout-migration.ts`（状态机、preflight、staging/journal、
+  前滚/回滚、marker）；core 只提供纯路径函数，不做 I/O、迁移或锁。
+- 只读入口按布局状态选旧树/根布局；写只写根布局；非单 id 目录在写模式启动时由迁移
+  preflight 显式中止（不读、不删、不自动打包）。
 
 ## 指针
 

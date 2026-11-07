@@ -5,7 +5,6 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
-import { readdir } from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   type AgentService,
@@ -28,6 +27,7 @@ import {
   MemorySessionStore,
   MemoryWorkingContext,
   type Message,
+  pathsForTenant,
   pruneTrace,
   type ReadTraceOptions,
   type RunEvent,
@@ -37,7 +37,6 @@ import {
   Runtime,
   readTraceEvents,
   rebuildMetrics,
-  resolveTenantPaths,
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
@@ -66,7 +65,7 @@ import {
   waitForConnectedRun,
 } from './connect-run-wait';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir, resolveReadonlyTenantPaths, resolveSingleTenantPaths } from './data-paths';
 import {
   type DurableRunHandleLike,
   type DurableRunsControlLike,
@@ -117,6 +116,7 @@ import {
   type LocalMemberTarget,
 } from './team-human-delivery';
 import { createTenantControl } from './tenant-command';
+import { ensureTenantLayout, TenantLayoutMigrationError } from './tenant-layout-migration';
 import {
   acquireTenantLock,
   type TenantLock,
@@ -924,24 +924,21 @@ export function resolveDefaultTeamWorkspace(
 }
 
 /**
- * 0.49 T1（C12）：列出 `<dataDir>/tenants/*` 中非单 id 的目录。
- *
- * 只读目录名；不读取内容、不删除、不迁移、不重命名，也不阻塞启动。
+ * 0.49 T2（C14）：本地写模式在解析 dataDir/sid 之后、任何本地写入（node.json、
+ * 锁、store）之前执行布局判定与迁移。connect 模式不迁移；只读入口按 C10 选布局。
  */
-async function warnUnmigratedTenantDirs(dataDir: string, singleTenantId: string): Promise<void> {
-  let entries: string[];
+async function migrateTenantLayoutBeforeWrites(
+  dataDir: string,
+  singleTenantId: string,
+): Promise<void> {
   try {
-    const dirents = await readdir(path.join(dataDir, 'tenants'), { withFileTypes: true });
-    entries = dirents.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    if (name === singleTenantId) continue;
-    console.warn(
-      `⚠ tenant directory "${name}" is not the single company id; ` +
-        'it was left untouched (no migration in this release).',
-    );
+    await ensureTenantLayout({ dataDir, singleTenantId, apply: true });
+  } catch (error) {
+    if (error instanceof TenantLayoutMigrationError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
   }
 }
 
@@ -994,10 +991,30 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const dataDir = options.dataDirSubdir
     ? path.join(resolvedDataDir, options.dataDirSubdir)
     : resolvedDataDir;
-  const tenantPaths = resolveTenantPaths(dataDir, tenantId);
+  const connectUrl = options.connect ?? process.env.VESSEL_CONNECT;
+  const connectMode = typeof connectUrl === 'string' && connectUrl.trim() !== '';
+  const localWrites = options.acquireLock === true || options.dataDir !== undefined;
+  const writeMode = !connectMode && localWrites;
 
-  // 0.49 T1（C12）：启动时只 warning 非单 id 目录，不改磁盘布局（C9）。
-  await warnUnmigratedTenantDirs(dataDir, tenantId);
+  // 0.49 T2（C14）：本地写模式先完成布局迁移，再触碰 node.json / 锁 / store。
+  // connect 只读不迁移；只读入口（无写意图）按 C10 选择布局。
+  if (writeMode) {
+    await migrateTenantLayoutBeforeWrites(dataDir, tenantId);
+  }
+  let tenantPaths: TenantPaths;
+  if (writeMode) {
+    tenantPaths = resolveSingleTenantPaths(dataDir, tenantId);
+  } else {
+    try {
+      tenantPaths = await resolveReadonlyTenantPaths(dataDir, tenantId);
+    } catch (error) {
+      if ((error as { code?: unknown }).code === 'layout_migration_incomplete') {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      throw error;
+    }
+  }
 
   // 节点身份（0.25）：node_id 唯一来源（U3）：host.node_id > <dataDir>/node.json > 首次生成；
   // 展示名：host.node_name > 文件 name > hostname 派生。transport / PeerInfo 共用 nodeId。
@@ -1009,8 +1026,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   const nodeId = nodeIdentity.nodeId;
   const nodeName = nodeIdentity.name;
-  const connectUrl = options.connect ?? process.env.VESSEL_CONNECT;
-  const connectMode = typeof connectUrl === 'string' && connectUrl.trim() !== '';
 
   // connect 模式：不获取写锁、不写本地 store/trace；配置仍加载用于 tenant/token 选择。
   if (connectMode) {
@@ -1077,7 +1092,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // 启动 prune：best-effort，失败只 warn（无写意图时不触碰磁盘）。
-  const localWrites = options.acquireLock === true || options.dataDir !== undefined;
   // 交互 REPL 的首帧不能被 prune 阻塞：留到 bootstrap 末尾用 timer 调度（S4 §2.2）。
   // headless / serve 没有首帧指标，保持 await，避免改变其生命周期语义。
   const pruneAfterFirstFrame = localWrites && options.interactive === true;
@@ -1670,7 +1684,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         ? { reset: () => (metrics as unknown as { reset: () => void }).reset() }
         : {}),
       rebuild: (requestedTenant: string) =>
-        rebuildMetrics(resolveTenantPaths(dataDir, requestedTenant).events_dir),
+        rebuildMetrics(pathsForTenant(dataDir, requestedTenant, tenantId).events_dir),
     },
     trace: {
       // A-6 §13.3：web 传 ctx.tenantId；本地 dispatcher 按 tenant 路由。
@@ -1678,7 +1692,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         const eventsDir =
           requestedTenant === undefined || requestedTenant === tenantId
             ? tenantPaths.events_dir
-            : resolveTenantPaths(dataDir, requestedTenant).events_dir;
+            : pathsForTenant(dataDir, requestedTenant, tenantId).events_dir;
         return readTraceEvents(eventsDir, filter as ReadTraceOptions);
       },
       prune: (params: Record<string, unknown>) => {
@@ -1686,7 +1700,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           typeof params.tenant_id === 'string' && params.tenant_id !== ''
             ? params.tenant_id
             : tenantId;
-        const paths = resolveTenantPaths(dataDir, requestedTenant);
+        const paths = pathsForTenant(dataDir, requestedTenant, tenantId);
         const pruneOptions = {
           ...(typeof params.older_than_days === 'number'
             ? { retentionDays: params.older_than_days }

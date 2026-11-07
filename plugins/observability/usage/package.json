@@ -25,6 +25,7 @@
     "probe": "bun run test/probe.ts"
   },
   "dependencies": {
+    "@vessel-agent/core": "0.33.0",
     "@vessel-agent/plugin-ui": "0.1.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

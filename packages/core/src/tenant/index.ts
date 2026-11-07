@@ -13,6 +13,8 @@ export {
 } from './resolve-tenant.js';
 export {
   encodeSessionDirName,
+  pathsForTenant,
+  resolveSingleTenantPaths,
   resolveTenantPaths,
   sessionDirPath,
   sessionEventsFilePath,

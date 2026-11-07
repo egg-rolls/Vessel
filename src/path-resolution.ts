@@ -50,7 +50,7 @@ export function resolveAgentCwd(config: VesselConfig): string | undefined {
 
 /** tenant 最终路径选项（A-3 §10.7：插件不得自行追加 tenants/<id>） */
 export interface TenantPathOptions {
-  /** tenant 根目录（`<data_dir>/tenants/<id>`） */
+  /** tenant 根目录（0.49 T2 起为 `<data_dir>`；旧布局下为 `<data_dir>/tenants/<id>`） */
   tenantDir?: string;
 }
 

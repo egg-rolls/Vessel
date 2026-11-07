@@ -18,12 +18,15 @@ import {
   resolveEffectiveApiKey,
   type VesselConfig,
 } from '../packages/config/src/index';
+import { resolveSingleTenantPaths } from '../packages/core/src/index';
 import type { DoctorCommandArgs } from './cli-args';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
 import { resolveDataDir, resolveTenantPaths } from './data-paths';
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { inspectTenantLayout, preflightTenantLayoutMigration } from './tenant-layout-migration';
+import type { TenantLayoutStatus } from './tenant-layout-state';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
 
@@ -106,6 +109,128 @@ function sessionStoragePath(config: VesselConfig, tenantRoot: string): string {
   return config.session?.storagePath ?? path.join(tenantRoot, 'sessions');
 }
 
+/** 布局条目摘要：`sessions(dir, 12f/1.2KiB)` */
+function formatLayoutEntry(entry: {
+  rel: string;
+  kind: 'dir' | 'file';
+  files: number;
+  bytes: number;
+  unknown?: boolean;
+}): string {
+  return `${entry.rel}(${entry.kind}, ${entry.files}f/${entry.bytes}B${entry.unknown === true ? ', unknown' : ''})`;
+}
+
+/** 只读状态判定结果；失败不抛给 doctor */
+type LayoutLookup = { ok: true; status: TenantLayoutStatus } | { ok: false; message: string };
+
+async function loadTenantLayoutStatus(dataDir: string, tenantId: string): Promise<LayoutLookup> {
+  try {
+    return { ok: true, status: await inspectTenantLayout(dataDir, tenantId) };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * 0.49 T2：报告单公司根布局（C3）与迁移计划。
+ *
+ * 只读：不迁移、不拿写锁、不打开 SQLite；迁移执行归 `bootstrap()`（C14）。
+ */
+async function tenantLayoutCheck(
+  dataDir: string,
+  tenantId: string,
+  lookup: LayoutLookup,
+): Promise<Check> {
+  if (!lookup.ok) {
+    return {
+      name: 'tenant_layout',
+      status: 'fail',
+      message: `state=unknown: ${lookup.message}`,
+    };
+  }
+  const status = lookup.status;
+  const located = `data_dir=${status.locations.data_dir}`;
+
+  if (status.state === 'blocked') {
+    // C3：写模式启动会 exit 1；doctor 只报告，不读取半迁移数据。
+    return {
+      name: 'tenant_layout',
+      status: 'fail',
+      message: `state=blocked reason=${status.reason ?? 'unknown'} ${located} (write mode will refuse to start)`,
+    };
+  }
+
+  if (status.state === 'root') {
+    const marker = status.marker_exists === true ? 'marker' : 'adopted (no marker)';
+    return {
+      name: 'tenant_layout',
+      status: 'ok',
+      message: `state=root ${marker} ${located}`,
+    };
+  }
+
+  if (status.state === 'migrating') {
+    const journal = status.journal;
+    const total = journal?.entries.length ?? 0;
+    const pending = journal?.entries.filter((entry) => entry.status !== 'done').length ?? 0;
+    return {
+      name: 'tenant_layout',
+      status: 'warn',
+      message:
+        `state=migrating phase=${journal?.phase ?? 'unknown'} ` +
+        `pending=${pending}/${total} journal=${status.locations.journal_file}`,
+    };
+  }
+
+  if (status.state === 'fresh') {
+    return {
+      name: 'tenant_layout',
+      status: 'info',
+      message: `state=fresh ${located} (no tenant data yet)`,
+    };
+  }
+
+  // legacy：只读 preflight（apply:false）给出待迁移条目与阻塞项（C5）。
+  let preflight: Awaited<ReturnType<typeof preflightTenantLayoutMigration>>;
+  try {
+    preflight = await preflightTenantLayoutMigration({
+      dataDir,
+      singleTenantId: tenantId,
+      apply: false,
+    });
+  } catch (error) {
+    return {
+      name: 'tenant_layout',
+      status: 'fail',
+      message: `state=legacy preflight failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (!preflight.ok) {
+    const blockers = preflight.issues.map((issue) => `[${issue.code}] ${issue.message}`).join('; ');
+    // 活 gateway / 活 tenant 锁是升级前的正常状态：停掉后下次启动自动迁移，不算失败。
+    const busyOnly =
+      preflight.issues.length > 0 &&
+      preflight.issues.every((issue) => issue.code === 'layout_migration_busy');
+    return {
+      name: 'tenant_layout',
+      status: busyOnly ? 'warn' : 'fail',
+      message: busyOnly
+        ? `state=legacy ${located} migration deferred (gateway/tenant lock active); ` +
+          `stop it and the migration runs on next start: ${blockers}`
+        : `state=legacy ${located} migration blocked: ${blockers}`,
+    };
+  }
+  const entries = preflight.entries.map(formatLayoutEntry).join(', ');
+  const unknown = preflight.entries.filter((entry) => entry.unknown).length;
+  return {
+    name: 'tenant_layout',
+    status: 'info',
+    message:
+      `state=legacy ${located} pending migration on next start; ` +
+      `entries(${preflight.entries.length}${unknown > 0 ? `, ${unknown} unknown` : ''}): ${entries || 'none'}`,
+  };
+}
+
 /** 执行 doctor */
 export async function doctorCommand(options: DoctorOptions): Promise<DoctorCommandResult> {
   const checks: Check[] = [];
@@ -152,11 +277,30 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     message: `${dataDir}${fs.existsSync(dataDir) ? '' : ' (will be created)'}`,
   });
 
-  const tenantPaths = resolveTenantPaths(dataDir, tenantId);
+  // 0.49 T2：根布局状态 + 迁移计划（只读；迁移执行归 bootstrap）。
+  const layout = await loadTenantLayoutStatus(dataDir, tenantId);
+  checks.push(await tenantLayoutCheck(dataDir, tenantId, layout));
+
   const backend = config.session?.backend ?? 'file';
   if (backend === 'memory') {
     checks.push({ name: 'session', status: 'info', message: 'backend=memory (no persistence)' });
+  } else if (
+    !layout.ok ||
+    layout.status.state === 'migrating' ||
+    layout.status.state === 'blocked'
+  ) {
+    // 半迁移/阻塞：不猜路径，迁移完成后由单公司根布局接管。
+    checks.push({
+      name: 'session',
+      status: 'info',
+      message: `backend=${backend} layout=${layout.ok ? layout.status.state : 'unknown'} (session path undecided until layout is resolved)`,
+    });
   } else {
+    // legacy → 旧树；root/fresh → 单公司根布局（C1）。
+    const tenantPaths =
+      layout.status.state === 'legacy'
+        ? resolveTenantPaths(dataDir, tenantId)
+        : resolveSingleTenantPaths(dataDir, tenantId);
     const storage = sessionStoragePath(config, tenantPaths.root);
     checks.push({
       name: 'session',

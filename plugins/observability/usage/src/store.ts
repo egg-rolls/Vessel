@@ -1,7 +1,8 @@
 /**
  * Persisted tenant event reader for the Usage plugin.
  *
- * Source of truth is the trace written by the host:
+ * Source of truth is the trace written by the host. 0.49 T2 root layout is
+ * `<dataDir>/events/<run>.jsonl`; pre-migration legacy layout is
  * `<dataDir>/tenants/<tenant>/events/<run>.jsonl`. This module is read-only;
  * it never creates, appends, or deletes files.
  *
@@ -15,6 +16,7 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { resolveSingleTenantPaths } from '@vessel-agent/core';
 
 /** Settings handed to the plugin in `plugin.activate`. */
 export interface Settings {
@@ -145,6 +147,43 @@ export function isSafeTenantId(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== '.' && value !== '..';
 }
 
+/**
+ * 0.49 T2：marker 或根 `events/` 存在即视为已迁移到单公司根布局。
+ * 与宿主 C3 判定同口径；插件只读，不迁移。
+ */
+async function hasRootLayout(dataDir: string): Promise<boolean> {
+  try {
+    await stat(join(dataDir, '.layout.json'));
+    return true;
+  } catch {
+    // marker 缺失时看根 events/（C3.4 收养旧写入）
+  }
+  try {
+    return (await stat(join(dataDir, 'events'))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** 根布局的单公司 id：`tenant.json.tenant_id` → marker `source_tenant`。 */
+async function readRootTenantId(dataDir: string): Promise<string | undefined> {
+  const candidates: Array<[string, string]> = [
+    ['tenant.json', 'tenant_id'],
+    ['.layout.json', 'source_tenant'],
+  ];
+  for (const [file, key] of candidates) {
+    try {
+      const raw: unknown = JSON.parse(await readFile(join(dataDir, file), 'utf8'));
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
+      const value = (raw as Record<string, unknown>)[key];
+      if (typeof value === 'string' && isSafeTenantId(value)) return value;
+    } catch {
+      // 缺文件/损坏：继续下一个来源
+    }
+  }
+  return undefined;
+}
+
 function parseLine(line: string, tenant: string, lineNumber: number): RawEvent | undefined {
   if (line.trim() === '') return undefined;
   let parsed: unknown;
@@ -191,8 +230,14 @@ export class EventStore {
     this.cache.clear();
   }
 
-  /** Tenant ids under `<dataDir>/tenants`, sorted; missing dir yields `[]`. */
+  /**
+   * Tenant ids to read. 0.49 T2 root layout → the single company id
+   * (`tenant.json` / marker; fallback `default`); legacy → `<dataDir>/tenants/*`.
+   */
   async listTenants(dataDir: string): Promise<string[]> {
+    if (await hasRootLayout(dataDir)) {
+      return [(await readRootTenantId(dataDir)) ?? 'default'];
+    }
     let entries: import('node:fs').Dirent[];
     try {
       entries = await readdir(join(dataDir, 'tenants'), { withFileTypes: true });
@@ -209,9 +254,11 @@ export class EventStore {
     return tenants;
   }
 
-  /** Load one tenant's events from all `events/*.jsonl` files. */
+  /** Load events from all `events/*.jsonl` files; root or legacy layout. */
   async loadTenant(dataDir: string, tenant: string): Promise<RawEvent[]> {
-    const dir = join(dataDir, 'tenants', tenant, 'events');
+    const dir = (await hasRootLayout(dataDir))
+      ? resolveSingleTenantPaths(dataDir).events_dir
+      : join(dataDir, 'tenants', tenant, 'events');
     let names: string[];
     try {
       names = await readdir(dir);

@@ -17,11 +17,10 @@ import { join } from 'node:path';
 import {
   atomicWrite,
   type RunRecord,
-  resolveTenantPaths,
   type SessionState,
   type TenantPaths,
 } from '../packages/core/src/index';
-import { expandHome } from './data-paths';
+import { ensureWriteTenantPaths, expandHome, resolveSingleTenantPaths } from './data-paths';
 import { acquireTenantLock, TenantLockError } from './tenant-lock';
 
 /** 迁移源类型 */
@@ -426,8 +425,12 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
     throw new MigrateError('invalid_source', `unsupported --to: ${String(options.to)}`);
   }
 
-  const tenantPaths: TenantPaths = resolveTenantPaths(options.dataDir, options.tenantId);
   const apply = options.apply === true;
+  // 0.49 T2（C9/C14）：只有真实写入（apply）才先完成布局迁移；dry-run 只预览
+  // 根目标（`resolveSingleTenantPaths`），不迁移、不写盘。
+  const tenantPaths: TenantPaths = apply
+    ? await ensureWriteTenantPaths(options.dataDir, options.tenantId)
+    : resolveSingleTenantPaths(options.dataDir, options.tenantId);
   const sessions = emptyCounts();
   const runs = emptyCounts();
 

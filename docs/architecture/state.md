@@ -6,8 +6,7 @@ paths: [packages/core/src/types/session.ts, packages/core/src/types/limits.ts, p
 ---
 
 # 状态与持久化接口
-> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
-
+> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。**0.49 T2**：单 id 的 session / run / trace 根为 `<dataDir>/{sessions,runs,events}`（旧树只用于迁移窗口、非单 id 与回滚）；写只写根布局，只读入口按状态选布局，不做逐文件双读。T2 成功后无 CLI 回滚：停所有写进程 → 按 `.layout.json` / journal entries 反向移动到 `<dataDir>/tenants/<sid>/` → 删 marker；不新增命令。
 <a id="session"></a>
 
 ### `SessionStore`（`types/session.ts`）

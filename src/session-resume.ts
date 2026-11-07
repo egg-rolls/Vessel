@@ -11,10 +11,13 @@
  * @module vessel/session-resume
  */
 
+import { Database } from 'bun:sqlite';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ConfigLoadOptions, VesselConfig } from '../packages/config/src/index';
 import { loadConfig } from '../packages/config/src/index';
-import type { SessionInfo, SessionStore } from '../packages/core/src/index';
-import { resolveDataDir, resolveTenantPaths } from './data-paths';
+import type { SessionInfo, SessionStore, TenantPaths } from '../packages/core/src/index';
+import { ensureWriteTenantPaths, resolveDataDir, resolveReadonlyTenantPaths } from './data-paths';
 import { createSessionStore } from './session-factory';
 
 /** 列表展示上限 */
@@ -29,8 +32,29 @@ interface OpenedSession {
   close: () => void;
 }
 
-/** 打开当前配置/tenant 对应的会话后端 */
-async function openLocalSession(options: LocalSessionOptions): Promise<OpenedSession> {
+interface LocalLayout {
+  config: VesselConfig;
+  tenantId: string;
+  paths: TenantPaths;
+}
+
+interface SqliteSessionListRow {
+  session_id: string;
+  title: string | null;
+  preview: string | null;
+  status: string;
+  started_at: number;
+  updated_at: number;
+  message_count: number;
+  branch: string | null;
+  tenant_id: string | null;
+}
+
+/** 读公共配置并选布局；`list` 只读选布局，`write` 先迁移。 */
+async function resolveLocalLayout(
+  options: LocalSessionOptions,
+  mode: 'write' | 'list',
+): Promise<LocalLayout> {
   const loaded = await loadConfig(options);
   if (loaded.validation.errors.length > 0) {
     const details = loaded.validation.errors.map((error) => error.message).join('; ');
@@ -41,19 +65,99 @@ async function openLocalSession(options: LocalSessionOptions): Promise<OpenedSes
   }
 
   const dataDir = resolveDataDir(loaded.config);
-  const paths = resolveTenantPaths(dataDir, loaded.tenantId);
-  const backend = createSessionStore(loaded.config.session, {
-    tenantSessionsDir: paths.sessions_dir,
-    tenantSessionsDbPath: `${paths.root}/sessions.db`,
-    tenantId: loaded.tenantId,
+  // 0.49 T2（C14 r7）：`-c` / `-r <id>` 是写意图续接，先迁移；`-r` 无 id 的纯列表
+  // 只按布局选择读旧/根，不迁移、不建 marker/staging。
+  const paths =
+    mode === 'list'
+      ? await resolveReadonlyTenantPaths(dataDir, loaded.tenantId)
+      : await ensureWriteTenantPaths(dataDir, loaded.tenantId);
+  return { config: loaded.config, tenantId: loaded.tenantId, paths };
+}
+
+/** 打开当前配置/tenant 对应的会话后端（写意图）。 */
+async function openLocalSession(options: LocalSessionOptions): Promise<OpenedSession> {
+  const layout = await resolveLocalLayout(options, 'write');
+  const backend = createSessionStore(layout.config.session, {
+    tenantSessionsDir: layout.paths.sessions_dir,
+    tenantSessionsDbPath: `${layout.paths.root}/sessions.db`,
+    tenantId: layout.tenantId,
   });
 
   return {
     backend,
-    config: loaded.config,
-    tenantId: loaded.tenantId,
+    config: layout.config,
+    tenantId: layout.tenantId,
     close: () => backend.close?.(),
   };
+}
+
+/**
+ * 0.49 T2（F1）：只读列表不构造 `SQLiteSessionStore`。sqlite 用 readonly 连接
+ * 直接查 `sessions` 表；文件不存在/无表返回空，不创建 DB/WAL/shm。
+ */
+function listSqliteSessionsReadonly(layout: LocalLayout): SessionInfo[] {
+  const explicit = layout.config.session?.storagePath;
+  const dbPath =
+    explicit !== undefined && explicit.trim() !== ''
+      ? explicit
+      : join(layout.paths.root, 'sessions.db');
+  if (dbPath === ':memory:' || !existsSync(dbPath)) return [];
+
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
+      .get() as { name?: string } | null;
+    if (table?.name !== 'sessions') return [];
+
+    const query = `
+      SELECT session_id,
+             COALESCE(title, '') AS title,
+             COALESCE(preview, '') AS preview,
+             status,
+             started_at,
+             COALESCE(updated_at, started_at) AS updated_at,
+             json_array_length(messages) AS message_count,
+             branch,
+             tenant_id
+      FROM sessions
+      WHERE json_array_length(messages) > 0
+        AND COALESCE(tenant_id, 'default') = ?
+      ORDER BY updated_at DESC, session_id ASC
+    `;
+    const rows = db.prepare(query).all(layout.tenantId) as SqliteSessionListRow[];
+    return rows.map((row) => ({
+      session_id: row.session_id,
+      title: row.title ?? '',
+      preview: row.preview ?? '',
+      status: row.status,
+      started_at: row.started_at,
+      updated_at: row.updated_at,
+      message_count: row.message_count,
+      ...(row.branch !== null ? { branch: row.branch } : {}),
+      ...(row.tenant_id !== null ? { tenant_id: row.tenant_id } : {}),
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+/** 只读列表：memory 空；sqlite readonly；file 走现有 FileSessionStore 列表。 */
+async function listSessionsForLayout(layout: LocalLayout): Promise<SessionInfo[]> {
+  const backend = layout.config.session?.backend ?? 'file';
+  if (backend === 'memory') return [];
+  if (backend === 'sqlite') return listSqliteSessionsReadonly(layout);
+
+  const store = createSessionStore(layout.config.session, {
+    tenantSessionsDir: layout.paths.sessions_dir,
+    tenantSessionsDbPath: `${layout.paths.root}/sessions.db`,
+    tenantId: layout.tenantId,
+  });
+  try {
+    return await store.listRich();
+  } finally {
+    store.close?.();
+  }
 }
 
 /** updated_at 倒序、同值 session_id 升序 */
@@ -128,18 +232,17 @@ export async function resumeSession(
   }
 }
 
-/** `-r/--resume`（无 id）：列出当前 tenant 的会话 */
+/** `-r/--resume`（无 id）：只读列出当前 tenant 的会话 */
 export async function runSessionList(options: LocalSessionOptions = {}): Promise<number> {
-  let opened: OpenedSession | undefined;
   try {
-    opened = await openLocalSession(options);
-    if (opened.config.session?.backend === 'memory') {
+    const layout = await resolveLocalLayout(options, 'list');
+    if ((layout.config.session?.backend ?? 'file') === 'memory') {
       console.log('Memory session backend keeps no sessions across processes.');
       return 0;
     }
-    const sessions = sortByRecency(await opened.backend.listRich());
+    const sessions = sortByRecency(await listSessionsForLayout(layout));
     if (sessions.length === 0) {
-      console.log(`No sessions for tenant "${opened.tenantId}".`);
+      console.log(`No sessions for tenant "${layout.tenantId}".`);
       return 0;
     }
 
@@ -167,7 +270,5 @@ export async function runSessionList(options: LocalSessionOptions = {}): Promise
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;
-  } finally {
-    opened?.close();
   }
 }

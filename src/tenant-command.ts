@@ -1,8 +1,8 @@
 /**
  * `vessel tenant list|get|create|update`（0.5 E17 / PLAN §7.6）
  *
- * - 元数据：`<data_dir>/tenants/<id>/tenant.json`
- * - list 扫描目录；缺失 meta 的目录补齐展示（不写盘）
+ * - 元数据：单 id 为 `<data_dir>/tenant.json`（0.49 T2）；非单 id 仍走旧 resolver
+ * - list 只回单 id；缺失 meta 时给合成展示（不写盘）
  * - create / update 写前加 tenant 单写者锁
  * - 0.5 不提供物理删除
  *
@@ -16,12 +16,18 @@ import { loadConfig } from '../packages/config/src/index';
 import {
   assertTenantId,
   atomicWrite,
-  resolveTenantPaths,
+  pathsForTenant,
   TenantIdError,
   type TenantPaths,
 } from '../packages/core/src/index';
 import type { TenantControlLike, TenantInfo, TenantQuota } from '../packages/serve/src/index';
 import { formatConfigErrors } from './config-error-format';
+import { resolveReadonlyTenantPaths, resolveSingleTenantPaths } from './data-paths';
+import {
+  ensureTenantLayout,
+  TenantLayoutMigrationError,
+  type TenantLayoutResult,
+} from './tenant-layout-migration';
 import { TenantLockError, withTenantLock } from './tenant-lock';
 import { ui } from './ui-style';
 
@@ -151,10 +157,11 @@ function formatMeta(meta: TenantMeta): string {
 async function withLock(
   dataDir: string,
   tenantId: string,
+  singleTenantId: string,
   options: TenantCommandOptions,
   action: () => Promise<TenantCommandResult>,
 ): Promise<TenantCommandResult> {
-  const paths = resolveTenantPaths(dataDir, tenantId);
+  const paths = pathsForTenant(dataDir, tenantId, singleTenantId);
   try {
     return await withTenantLock(
       {
@@ -175,9 +182,18 @@ async function withLock(
   }
 }
 
-/** 读取单个 tenant；目录不存在返回 undefined */
-async function getTenantMeta(dataDir: string, tenantId: string): Promise<TenantMeta | undefined> {
-  const paths = resolveTenantPaths(dataDir, tenantId);
+/**
+ * 读取单个 tenant；目录不存在返回 undefined。
+ *
+ * 0.49 T2（C10）：只读入口按状态选布局（legacy → 旧树；root/fresh → 根；
+ * migrating/blocked 抛错），不迁移、不看根 `tenant.json` 替旧树。
+ */
+async function getTenantMeta(
+  dataDir: string,
+  tenantId: string,
+  singleTenantId: string,
+): Promise<TenantMeta | undefined> {
+  const paths = await resolveReadonlyTenantPaths(dataDir, singleTenantId);
   if (!existsSync(paths.root)) return undefined;
   return (await readMeta(paths)) ?? synthesizedMeta(tenantId);
 }
@@ -190,8 +206,14 @@ export async function tenantListCommand(
   const single = await resolveSingleTenantId(options);
   if (!single.ok) return single.result;
   const singleTenantId = single.tenantId;
-  const meta =
-    (await getTenantMeta(options.dataDir, singleTenantId)) ?? synthesizedMeta(singleTenantId);
+  let meta: TenantMeta;
+  try {
+    meta =
+      (await getTenantMeta(options.dataDir, singleTenantId, singleTenantId)) ??
+      synthesizedMeta(singleTenantId);
+  } catch (error) {
+    return errorResult(1, error instanceof Error ? error.message : String(error));
+  }
   const tenants = [meta];
 
   if (options.json) {
@@ -225,7 +247,13 @@ export async function tenantGetCommand(
     return errorResult(1, `not_found: tenant "${tenantId}"`);
   }
 
-  const meta = (await getTenantMeta(options.dataDir, tenantId)) ?? synthesizedMeta(tenantId);
+  let meta: TenantMeta;
+  try {
+    meta =
+      (await getTenantMeta(options.dataDir, tenantId, singleTenantId)) ?? synthesizedMeta(tenantId);
+  } catch (error) {
+    return errorResult(1, error instanceof Error ? error.message : String(error));
+  }
 
   if (options.json) {
     return { exitCode: 0, stdout: JSON.stringify(meta), stderr: '' };
@@ -264,12 +292,27 @@ export async function tenantUpdateCommand(
     return errorResult(1, `not_found: tenant "${tenantId}"`);
   }
 
-  const paths = resolveTenantPaths(options.dataDir, tenantId);
-  if (!existsSync(paths.root)) {
+  // 0.49 T2：写前先完成布局迁移（migrating 可前滚），再写根 `tenant.json`。
+  let layout: TenantLayoutResult;
+  try {
+    layout = await ensureTenantLayout({
+      dataDir: options.dataDir,
+      singleTenantId,
+      apply: true,
+    });
+  } catch (error) {
+    if (error instanceof TenantLayoutMigrationError) {
+      return errorResult(1, error.message);
+    }
+    throw error;
+  }
+  const paths = resolveSingleTenantPaths(options.dataDir, singleTenantId);
+  // 保持旧语义：完全没有公司数据时 update 仍是 not_found（不凭空造 tenant.json）。
+  if (layout.state === 'fresh' && !existsSync(paths.tenant_file)) {
     return errorResult(1, `not_found: tenant "${tenantId}"`);
   }
 
-  return withLock(options.dataDir, tenantId, options, async () => {
+  return withLock(options.dataDir, tenantId, singleTenantId, options, async () => {
     const meta = (await readMeta(paths)) ?? synthesizedMeta(tenantId);
     const updated: TenantMeta = {
       ...meta,
@@ -486,7 +529,7 @@ export function createTenantControl(
 
   /** tenant.json（若目录存在）与配置定义合并；配置优先。 */
   const resolveMeta = async (tenantId: string): Promise<TenantMeta | undefined> => {
-    const paths = resolveTenantPaths(dataDir, tenantId);
+    const paths = pathsForTenant(dataDir, tenantId, singleTenantId);
     const disk = existsSync(paths.root)
       ? ((await readMeta(paths)) ?? synthesizedMeta(tenantId))
       : undefined;
@@ -501,7 +544,7 @@ export function createTenantControl(
       const meta = await resolveMeta(tenantId);
       const quota = meta?.quota;
       if (!quota) return;
-      const paths = resolveTenantPaths(dataDir, tenantId);
+      const paths = pathsForTenant(dataDir, tenantId, singleTenantId);
       const now = Date.now();
 
       if (operation === 'runs.start' || operation === 'runs.concurrent') {
@@ -564,7 +607,7 @@ export function createTenantControl(
       if (tenantId !== singleTenantId) {
         throw tenantControlError('not_found', `tenant "${tenantId}"`);
       }
-      const paths = resolveTenantPaths(dataDir, tenantId);
+      const paths = pathsForTenant(dataDir, tenantId, singleTenantId);
       if (!(await resolveMeta(tenantId))) {
         throw tenantControlError('not_found', `tenant "${tenantId}"`);
       }

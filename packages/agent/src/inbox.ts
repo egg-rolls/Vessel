@@ -1,7 +1,7 @@
 /**
  * 按 agent_id 的持久化收件箱（0.32 切片 A，契约 v2）。
  *
- * 路径：`<dataDir>/tenants/<tenantId>/inbox/<encodeURIComponent(agentId)>.json`，
+ * 路径：`<dataDir>/inbox/<encodeURIComponent(agentId)>.json`（0.49 T2 根布局），
  * 形状为
  * `{ v: 1, messages: [{ id, ts, source, summary, text, status, consumed_by_session? }] }`。
  *
@@ -176,8 +176,9 @@ interface AgentInboxState {
   available: boolean;
 }
 
-export function inboxPath(dataDir: string, tenantId: string, agentId: string): string {
-  return join(dataDir, 'tenants', tenantId, 'inbox', `${encodeURIComponent(agentId)}.json`);
+export function inboxPath(dataDir: string, _tenantId: string, agentId: string): string {
+  // 0.49 T2（C13/R4）：单公司 inbox 位于数据根；只改路径推导，业务语义不变。
+  return join(dataDir, 'inbox', `${encodeURIComponent(agentId)}.json`);
 }
 
 /** 写入时计算摘要：trim、空白折叠、前 160 字，截断加 `…`。 */

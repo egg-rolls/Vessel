@@ -9,9 +9,9 @@
  */
 
 import { loadConfig } from '../packages/config/src/index';
-import { type PruneTraceResult, resolveTenantPaths } from '../packages/core/src/index';
+import type { PruneTraceResult } from '../packages/core/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { resolveDataDir } from './data-paths';
+import { ensureWriteTenantPaths, resolveDataDir, resolveReadonlyTenantPaths } from './data-paths';
 import { acquireTenantLock, TenantLockError } from './tenant-lock';
 import { pruneTenantTrace } from './trace-wiring';
 
@@ -75,8 +75,21 @@ export async function tracePruneCommand(
   }
   for (const warning of validation.warnings) console.warn(`⚠ ${warning.message}`);
 
-  const tenantPaths = resolveTenantPaths(resolveDataDir(config, env), tenantId);
   const dryRun = options.dryRun === true;
+  // 0.49 T2（C12/C14）：真实 prune 前先完成布局迁移（只作用根 events/，永不
+  // prune 旧树或 staging）；dry-run 是只读，按 C10 选当前布局，只统计不迁移。
+  let tenantPaths: Awaited<ReturnType<typeof ensureWriteTenantPaths>>;
+  try {
+    tenantPaths = dryRun
+      ? await resolveReadonlyTenantPaths(resolveDataDir(config, env), tenantId)
+      : await ensureWriteTenantPaths(resolveDataDir(config, env), tenantId);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: error instanceof Error ? error.message : String(error),
+    };
+  }
 
   let lock: Awaited<ReturnType<typeof acquireTenantLock>> | undefined;
   if (!dryRun) {

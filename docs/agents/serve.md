@@ -54,7 +54,7 @@ applies_to: [N, M]
 - 数据面忽略 `tenant_id`：`resolveTenantScope` 一律返回 `<单 id>`；缺失或 legacy id 不返回 `forbidden`（不等于单 id 时写一次 warning），格式非法仍 `invalid_params`，`all_tenants` 接受但无效果。
 - token / principal 继续接受旧 `tenantId` 与 wildcard admin；principal 统一 `<单 id>`、role 不变，per-tenant 回调只可能收到 `<单 id>`（非单 id 分支保留但不可达）。
 - 事件面只注册 `<单 id>` 一条流、读取不按 `tenant_id` 过滤；事件 DTO 与持久化记录仍保留 `tenant_id`（T5 才删）。管理面 `tenants.*` 收敛单 id，`create` 返回 `forbidden`。
-
+- 0.49 T2：serve 仍不持有/透传 tenantPaths（`packages/serve/src` 0 引用）；单 id 根布局由 asm 注入，`interactions-<id>.json` 仍 root-keyed（defer-T4）。
 ## 指针
 
 - [gateway.md](../architecture/gateway.md) · [gateway-rpc.md](../architecture/gateway-rpc.md) · [REMOTE.md](../operations/REMOTE.md) · [CONFIG.md](../operations/CONFIG.md)。

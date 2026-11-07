@@ -128,8 +128,10 @@ export {
 export {
   assertTenantId,
   encodeSessionDirName,
+  pathsForTenant,
   type ResolveTenantIdInput,
   type ResolveTenantInput,
+  resolveSingleTenantPaths,
   resolveTenant,
   resolveTenantId,
   resolveTenantPaths,
