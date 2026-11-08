@@ -8,8 +8,8 @@ import { type FeishuGatewayOptions, normalizeFeishuStatus } from '../../feishu.j
 import type { RpcMethodDefinition } from '../../rpc.js';
 
 export interface FeishuMethodsDeps {
-  /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found。 */
-  requireFeishu(tenantId: string): FeishuGatewayOptions;
+  /** 未配置 → 0.4 not_found。 */
+  requireFeishu(): FeishuGatewayOptions;
 }
 
 export function createFeishuMethods(deps: FeishuMethodsDeps): RpcMethodDefinition[] {
@@ -18,10 +18,7 @@ export function createFeishuMethods(deps: FeishuMethodsDeps): RpcMethodDefinitio
     {
       name: 'feishu.status',
       permission: 'read',
-      params_schema: {
-        type: 'object',
-        properties: { tenant_id: { type: 'string' } },
-      },
+      params_schema: { type: 'object' },
       result_schema: {
         type: 'object',
         required: ['channel'],
@@ -39,8 +36,8 @@ export function createFeishuMethods(deps: FeishuMethodsDeps): RpcMethodDefinitio
           },
         },
       },
-      handler: (_params, ctx) => {
-        const feishu = requireFeishu(ctx.tenantId);
+      handler: () => {
+        const feishu = requireFeishu();
         return { channel: normalizeFeishuStatus(feishu.status()) };
       },
     },

@@ -18,20 +18,6 @@ export type StatusKind =
   | 'disabled'
   | 'unavailable';
 
-/** tenant 元数据（0.5） */
-export interface TenantInfo {
-  tenant_id: string;
-  name?: string;
-  status: 'active' | 'disabled';
-  created_at: number;
-  quota?: Record<string, number>;
-  usage?: Record<string, number>;
-}
-
-export interface TenantResponse {
-  tenant: TenantInfo;
-}
-
 /** 网关错误信封 */
 export interface GatewayErrorBody {
   error: { code: string; message: string };
@@ -72,8 +58,6 @@ export interface HelloInfo {
   node: NodeInfo;
   from_seq: number;
   latest_seq: number;
-  /** 0.5：token 解析出的 tenant（additive） */
-  tenant_id?: string;
   /** 0.24 additive：进程 incarnation；仅当前 WS 节点可读。 */
   incarnation?: string;
 }
@@ -280,7 +264,6 @@ export interface HealthResponse {
   protocol: ProtocolInfo;
   node: NodeInfo;
   started_at: number;
-  tenant_id: string;
   /** 0.15 E6：旧 gateway 可能缺省。 */
   runtime?: RuntimeHealth;
 }

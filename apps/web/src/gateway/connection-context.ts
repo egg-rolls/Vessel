@@ -21,11 +21,6 @@ export interface ConnectionOptions {
   token?: string;
   /** 平台模式下可选手填 node token（覆盖 credentials）。 */
   nodeToken?: string;
-  /**
-   * 只切换 node 连接的 tenant（不改 URL / token）。
-   * CONTRACT-0.49 C7：T1 入口已隐藏，该字段保留但被忽略（defer-T4）。
-   */
-  tenantId?: string;
 }
 
 export interface ConnectionContextValue {
@@ -34,7 +29,6 @@ export interface ConnectionContextValue {
   eventStore: EventStore;
   connectionState: ConnectionState;
   hello: HelloInfo | null;
-  tenantId: string | null;
   features: string[];
   nodeLabel: string;
   /** 平台 origin；空串 = 页面同源。 */
@@ -66,8 +60,6 @@ export interface ConnectionContextValue {
   reconnectAttempt: number;
   /** 每次成功 hello 递增；资源用它作为刷新依赖。 */
   epoch: number;
-  /** tenant 变化递增；Chat 用它清空选择。 */
-  tenantEpoch: number;
   stale: boolean;
   /** 最近一次 WS close code（诊断用；重连开始时清空）。 */
   closeCode: number | null;

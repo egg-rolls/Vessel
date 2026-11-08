@@ -31,12 +31,9 @@ export interface TeamMethodsDeps {
   teams?: TeamControlLike;
 }
 
-/** 未注入 / tenant 不匹配都按 `not_found` 处理（不泄漏跨 tenant 存在性）。 */
-function requireTeamControl(
-  teams: TeamControlLike | undefined,
-  ctx: RpcMethodContext,
-): TeamControlLike {
-  if (!teams || teams.tenantId !== ctx.tenantId) {
+/** 未注入按 `not_found` 处理。 */
+function requireTeamControl(teams: TeamControlLike | undefined): TeamControlLike {
+  if (!teams) {
     throw new RpcError('not_found', 'Team control is not available');
   }
   return teams;
@@ -77,7 +74,6 @@ function redactTeamSummary(team: TeamSummaryLike): TeamSummaryLike {
   return {
     team_id: team.team_id,
     name: team.name,
-    tenant_id: team.tenant_id,
     member_count: team.member_count,
     online_count: team.online_count,
     created_at: team.created_at,
@@ -193,7 +189,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       result_schema: teamSummarySchema,
       handler: async (params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           if (teamScopeOf(ctx) !== undefined) {
             throw new RpcError('forbidden', 'team-scoped token cannot create teams');
           }
@@ -229,7 +225,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       result_schema: teamSummarySchema,
       handler: async (params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           const teamId = stringParam(params, 'team_id');
           assertTeamScope(teamScopeOf(ctx), teamId);
           const name = optionalString(params, 'name');
@@ -259,7 +255,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       result_schema: teamSummarySchema,
       handler: async (params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           const teamId = stringParam(params, 'team_id');
           assertTeamScope(teamScopeOf(ctx), teamId);
           return await control.archive({ team_id: teamId });
@@ -282,7 +278,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       result_schema: teamSummarySchema,
       handler: async (params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           const teamId = stringParam(params, 'team_id');
           assertTeamScope(teamScopeOf(ctx), teamId);
           if (typeof params.frozen !== 'boolean') {
@@ -307,7 +303,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       },
       handler: async (_params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           // owner 传输带 viewer（private 可见）；gateway 无 viewer，沿用 TeamService 过滤。
           const viewer = ctx.principal.agent_id;
           const listed = await control.list(viewer !== undefined ? { viewer } : undefined);
@@ -339,7 +335,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       result_schema: teamDetailSchema,
       handler: async (params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           const teamId = stringParam(params, 'team_id');
           const scope = teamScopeOf(ctx);
           assertTeamScope(scope, teamId);
@@ -386,7 +382,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       result_schema: teamPostResultSchema,
       handler: async (params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           const teamId = stringParam(params, 'team_id');
           assertTeamScope(teamScopeOf(ctx), teamId);
           const content = stringParam(params, 'content');
@@ -421,7 +417,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       result_schema: teamRetractResultSchema,
       handler: async (params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           const teamId = stringParam(params, 'team_id');
           assertTeamScope(teamScopeOf(ctx), teamId);
           const messageId = stringParam(params, 'message_id');
@@ -446,7 +442,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       result_schema: teamMembersResultSchema,
       handler: async (params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           const teamId = stringParam(params, 'team_id');
           // control scope 不在 dispatcher 白名单里能到 members，但这里仍做纵深防御。
           assertTeamScope(teamScopeOf(ctx), teamId);
@@ -495,7 +491,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       result_schema: teamBudgetResultSchema,
       handler: async (params, ctx) => {
         try {
-          const control = requireTeamControl(teams, ctx);
+          const control = requireTeamControl(teams);
           if (typeof control.budget !== 'function') {
             throw new RpcError('not_found', 'Team budget is not available');
           }

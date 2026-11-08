@@ -36,7 +36,7 @@ export interface TeamEditViewProps {
 
 export function TeamEditView({ node, teamId, onBack, onSaved }: TeamEditViewProps) {
   useLocale();
-  const { epoch, tenantEpoch, tenantId } = useConnection();
+  const { epoch } = useConnection();
   const { teamControl, hasTokenFor } = useNodes();
   const control = teamControl(node);
   const hasToken = hasTokenFor(node);
@@ -54,7 +54,7 @@ export function TeamEditView({ node, teamId, onBack, onSaved }: TeamEditViewProp
     () => {
       void loadDetail(nodeKey, teamId, control, { limit: 1, members_limit: 1 }, 'summary');
     },
-    { enabled: hasToken, deps: [epoch, tenantEpoch, nodeKey, teamId] },
+    { enabled: hasToken, deps: [epoch, nodeKey, teamId] },
   );
   const detail = resourceData(detailState);
 
@@ -88,7 +88,6 @@ export function TeamEditView({ node, teamId, onBack, onSaved }: TeamEditViewProp
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[var(--content-max)]">
       <PageHeader
         title={detail?.team.name || teamId}
-        tenantId={tenantId}
         actions={<Button onClick={onBack}>{t('teams.edit.back')}</Button>}
       />
       <div className="mt-5 flex flex-col gap-4">{body}</div>

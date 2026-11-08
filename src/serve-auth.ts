@@ -1,13 +1,12 @@
 /**
  * gateway token → principal（0.5 E16 / A-3 §10.4、A-4 §11.5）
  *
- * 映射（冻结）：
- * - `serve.token` → default/admin（0.4 兼容）
- * - `serve.tokens` map → 条目 {tenantId, role}（仅客户端凭据）
- * - `serve.adminToken` → tenant "*" / admin
- * - 无 token + 回环 → default/admin（anonymous）
+ * 映射（0.49 T4：单执行面，principal 不再携带 tenant）：
+ * - `serve.tokens` map → 条目 {role}（仅客户端凭据）
+ * - `serve.token` → admin（0.4 兼容）
+ * - 无 token + 回环 → admin（anonymous）
  * - 已配置 token 但未带 → null（401）
- * - 非回环 + 无 gateway/admin token → 拒绝启动（仅 serve.tokens 不够）
+ * - 非回环 + 无 gateway token → 拒绝启动（仅 serve.tokens 不够）
  * - 回环 + 仅 serve.tokens → 允许启动；in-process dispatcher 用第一个
  *   token 的 role（最小权限），HTTP 客户端仍必须带 token
  *
@@ -26,15 +25,18 @@ import {
 
 type EnvMap = Record<string, string | undefined>;
 
+/** token → principal（tenant 维度已在 0.49 T4 删除） */
+export type GatewayPrincipal = Omit<Principal, 'tenant_id'>;
+
 /** gateway 鉴权面（web 消费） */
 export interface GatewayAuth {
   /** 是否配置了任何 token；配置后缺 token → 401 */
   configured: boolean;
   /** 旧单 token（web 可继续用现有校验） */
   legacyToken?: string;
-  authenticate(token: string | null): Principal | null;
+  authenticate(token: string | null): GatewayPrincipal | null;
   /** 无 token + 回环时的匿名 principal */
-  anonymous?: Principal;
+  anonymous?: GatewayPrincipal;
 }
 
 /** resolveGatewayAuth 选项 */
@@ -51,7 +53,7 @@ export type ResolveGatewayAuthResult =
 
 interface TokenCandidate {
   token: string;
-  principal: Principal;
+  principal: GatewayPrincipal;
 }
 
 function nonEmpty(value: unknown): string | undefined {
@@ -77,30 +79,16 @@ export function resolveGatewayAuth(
   const env = options.env ?? process.env;
   const candidates: TokenCandidate[] = [];
 
-  // 多租户 token map（键是原始 token，原样保留）
+  // 客户端 token map（键是原始 token，原样保留）
   const tokens = config.serve?.tokens;
   if (tokens) {
     for (const [token, entry] of Object.entries(tokens)) {
       if (token === '') continue;
       candidates.push({
         token,
-        principal: {
-          tenant_id: entry.tenantId ?? 'default',
-          role: resolveRole(entry.role),
-        },
+        principal: { role: resolveRole(entry.role) },
       });
     }
-  }
-
-  // 跨 tenant admin token（显式值优先，其次 admin_token_env）
-  const adminToken =
-    nonEmpty(config.serve?.adminToken) ??
-    nonEmpty(config.serve?.adminTokenEnv ? env[config.serve.adminTokenEnv] : undefined);
-  if (adminToken !== undefined) {
-    candidates.push({
-      token: adminToken,
-      principal: { tenant_id: '*', role: 'admin' },
-    });
   }
 
   // 旧单 token：serve.token > serve.token_env > VESSEL_GATEWAY_TOKEN。
@@ -113,27 +101,27 @@ export function resolveGatewayAuth(
   if (legacyToken !== undefined) {
     candidates.push({
       token: legacyToken,
-      principal: { tenant_id: 'default', role: 'admin' },
+      principal: { role: 'admin' },
     });
   }
 
   const configured = candidates.length > 0;
   const loopback = isLoopbackHostname(options.hostname);
-  const hasGatewayToken = legacyToken !== undefined || adminToken !== undefined;
+  const hasGatewayToken = legacyToken !== undefined;
 
-  // 非回环必须有 gateway/admin token；serve.tokens 只是客户端凭据，
-  // 不能让“仅 tenant token”的 remote gateway 启动。
+  // 非回环必须有 gateway token；serve.tokens 只是客户端凭据，
+  // 不能让“仅客户端 token”的 remote gateway 启动。
   if (!loopback && !hasGatewayToken) {
     return {
       ok: false,
       error: configured
-        ? 'gateway_requires_token: non-loopback gateway requires serve.token or serve.admin_token; serve.tokens entries are client credentials only'
+        ? 'gateway_requires_token: non-loopback gateway requires serve.token; serve.tokens entries are client credentials only'
         : 'gateway_requires_token: refusing to start a non-loopback gateway without a token',
     };
   }
 
-  const anonymous: Principal | undefined =
-    !configured && loopback ? { tenant_id: 'default', role: 'admin' } : undefined;
+  const anonymous: GatewayPrincipal | undefined =
+    !configured && loopback ? { role: 'admin' } : undefined;
 
   /**
    * 回环 + 仅 serve.tokens：网关仍要求客户端带 token（anonymous 不设置），
@@ -150,7 +138,7 @@ export function resolveGatewayAuth(
     configured,
     ...(localLegacyToken !== undefined ? { legacyToken: localLegacyToken } : {}),
     ...(anonymous ? { anonymous } : {}),
-    authenticate(token: string | null): Principal | null {
+    authenticate(token: string | null): GatewayPrincipal | null {
       if (token === null || token === '') {
         return anonymous ?? null;
       }

@@ -1241,7 +1241,6 @@ export interface TeamRecord {
   /** slug(workspace basename)；创建后不可变 */
   team_id: string;
   name: string;
-  tenant_id: string;
   /** 归一化绝对路径；Team 的唯一 workspace 来源 */
   workspace: string;
   /** 自由文本：这个 Team 是什么、找谁、怎么用（0.21 additive） */
@@ -1359,7 +1358,6 @@ export interface TeamMemberSummary {
 export interface TeamSummary {
   team_id: string;
   name: string;
-  tenant_id: string;
   workspace: string;
   /** 0.21 additive */
   description?: string;

@@ -26,8 +26,6 @@ export type PermissionScope = 'once' | 'session' | 'always';
 /** 待答权限请求 */
 export interface PendingPermission {
   run_id: string;
-  /** 请求产生时绑定的 tenant；应答必须来自同一 tenant（P0-1） */
-  tenant_id: string;
   tool: string;
   input: unknown;
   ts: number;
@@ -72,8 +70,6 @@ export interface AskRespondResult {
 /** 待答 ask 请求（legacy 只读视图，由 interactionRecords 派生）。 */
 export interface PendingAsk {
   run_id: string;
-  /** 请求产生时绑定的 tenant；应答必须来自同一 tenant（P0-1） */
-  tenant_id: string;
   ts: number;
   session_id?: string;
   parent_session_id?: string;
@@ -87,8 +83,9 @@ export interface InteractionsRegistryOptions {
    * 单运行时事件流：权限 / ask 应答直接投递到这里。
    * 找不到流说明 run 已结束，应答返回 `run_ended`。
    */
-  tenantEventsFor: () => EventStream | undefined;
-  defaultTenantId: string;
+  eventsFor: () => EventStream | undefined;
+  /** 单 id：只用于交互记录文件名（R1 路径形状不变）。 */
+  singleTenantId: string;
   /** 交互持久化目录；缺省 = 不落盘。 */
   interactionsDir?: string;
   /**
@@ -115,16 +112,10 @@ export interface InteractionsRegistry {
     requestId: string,
     decision: 'allow' | 'deny',
     remember: boolean,
-    tenantId?: string,
     scope?: PermissionScope,
     actor?: InteractionActor,
   ): PermissionRespondResult;
-  respondAsk(
-    requestId: string,
-    answers: unknown[],
-    tenantId?: string,
-    actor?: InteractionActor,
-  ): AskRespondResult;
+  respondAsk(requestId: string, answers: unknown[], actor?: InteractionActor): AskRespondResult;
 }
 
 /** 记录上限（防止长时间进程无界增长）；淘汰只碰非 pending。 */
@@ -171,7 +162,7 @@ function readAnsweredBy(value: unknown): 'human' | 'policy' | undefined {
 export function createInteractionsRegistry(
   options: InteractionsRegistryOptions,
 ): InteractionsRegistry {
-  const { tenantEventsFor, defaultTenantId } = options;
+  const { eventsFor, singleTenantId } = options;
 
   /** 内存 pending 权限索引；真相源是 `interactionRecords`。 */
   const pendingPermissions = new Map<string, PendingPermission>();
@@ -200,34 +191,24 @@ export function createInteractionsRegistry(
   }
 
   /**
-   * 每个 tenant 的落盘串行链（0.33）。
+   * 落盘串行链（0.33）。
    *
-   * `save` 是 fire-and-forget；同一 tenant 的并发 atomicWrite 可能乱序落盘，
-   * 让较早的快照（例如 `suspended` 之前的 ask）覆盖较新的状态。按 tenant
-   * 串行化后，最后一次调用的快照一定最后落盘。
+   * `save` 是 fire-and-forget；并发 atomicWrite 可能乱序落盘，
+   * 让较早的快照（例如 `suspended` 之前的 ask）覆盖较新的状态。串行化后，
+   * 最后一次调用的快照一定最后落盘。
    */
-  const persistChains = new Map<string, Promise<void>>();
+  let persistChain: Promise<void> = Promise.resolve();
 
-  /** 重写某个 tenant 的全部记录；写失败只记 stderr（RPC 不因此失败）。 */
-  function persistTenant(tenantId: string): void {
+  /** 重写交互记录文件；写失败只记 stderr（RPC 不因此失败）。 */
+  function persist(): void {
     const store = interactionsStore;
     if (!store) return;
-    const records = [...interactionRecords.values()]
-      .filter((record) => record.tenant_id === tenantId)
-      .sort((a, b) => a.created_at - b.created_at);
-    const previous = persistChains.get(tenantId) ?? Promise.resolve();
-    const next = previous
+    const records = [...interactionRecords.values()].sort((a, b) => a.created_at - b.created_at);
+    const next = persistChain
       .catch(() => undefined)
-      .then(() => store.save(tenantId, records))
+      .then(() => store.save(singleTenantId, records))
       .catch(() => undefined);
-    persistChains.set(tenantId, next);
-    void next.finally(() => {
-      if (persistChains.get(tenantId) === next) persistChains.delete(tenantId);
-    });
-  }
-
-  function persistTenants(tenantIds: ReadonlySet<string>): void {
-    for (const tenantId of tenantIds) persistTenant(tenantId);
+    persistChain = next;
   }
 
   /**
@@ -241,7 +222,7 @@ export function createInteractionsRegistry(
   function hydrateInteractions(): void {
     if (!interactionsStore) return;
     const pendingStatus = options.hydratePendingAs ?? 'orphaned';
-    const changedTenants = new Set<string>();
+    let changed = false;
     for (const loaded of interactionsStore.loadAllSync()) {
       // 0.33：headless 挂起的 ask（suspended）即使重启后也要保持 pending，
       // 否则人类永远答不了、--resume-run 也拿不到答案。
@@ -252,29 +233,21 @@ export function createInteractionsRegistry(
         loaded.status === 'pending' && !keepPending
           ? { ...loaded, status: 'orphaned' as StoredInteractionStatus }
           : loaded;
-      if (record.status !== loaded.status) changedTenants.add(record.tenant_id);
+      if (record.status !== loaded.status) changed = true;
       interactionRecords.set(record.requestId, record);
     }
-    persistTenants(changedTenants);
+    if (changed) persist();
   }
 
   hydrateInteractions();
 
-  /** 应答投递目标：只能是该 tenant 的运行时流（工具 / 权限策略正在等它）。 */
-  function answerStreamFor(tenantId: string): EventStream {
-    const stream = tenantEventsFor();
+  /** 应答投递目标：单运行时流（工具 / 权限策略正在等它）。 */
+  function answerStream(): EventStream {
+    const stream = eventsFor();
     if (stream === undefined) {
-      throw new RpcError('run_ended', `Tenant event stream is no longer available: ${tenantId}`, {
-        tenant_id: tenantId,
-      });
+      throw new RpcError('run_ended', 'Runtime event stream is no longer available');
     }
     return stream;
-  }
-
-  /** 事件归属 tenant：事件自带优先，否则 default。没有 run 记录映射。 */
-  function eventTenantId(event: RunEvent): string {
-    if (event.tenant_id !== undefined && event.tenant_id.length > 0) return event.tenant_id;
-    return defaultTenantId;
   }
 
   /** 直接发布到流上的应答（TUI / policy 定时器）也要落审计；不重新发布。 */
@@ -324,7 +297,7 @@ export function createInteractionsRegistry(
     pendingPermissions.delete(requestId);
     suspendedAskIds.delete(requestId);
     rememberRecord({ ...record, status: 'answered' as const, answer });
-    persistTenant(record.tenant_id);
+    persist();
   }
 
   function handleEvent(event: RunEvent): void {
@@ -333,7 +306,6 @@ export function createInteractionsRegistry(
       const requestId = nonEmptyString(data.requestId);
       if (requestId !== undefined) {
         const requestTs = eventTs(event);
-        const tenantId = eventTenantId(event);
         const tool = typeof data.tool === 'string' ? data.tool : 'tool';
         const sessionId = nonEmptyString(data.session_id);
         const toolCallId = nonEmptyString(data.tool_call_id);
@@ -348,7 +320,6 @@ export function createInteractionsRegistry(
             : undefined;
         pendingPermissions.set(requestId, {
           run_id: event.run_id,
-          tenant_id: tenantId,
           tool,
           input: data.input,
           ts: requestTs,
@@ -363,7 +334,6 @@ export function createInteractionsRegistry(
         rememberRecord({
           requestId,
           run_id: event.run_id,
-          tenant_id: tenantId,
           kind: 'permission',
           ...(agentId !== undefined ? { agent_id: agentId } : {}),
           ...(teamId !== undefined ? { team_id: teamId } : {}),
@@ -375,7 +345,7 @@ export function createInteractionsRegistry(
           created_at: requestTs,
           status: 'pending',
         });
-        persistTenant(tenantId);
+        persist();
       }
       return;
     }
@@ -383,7 +353,6 @@ export function createInteractionsRegistry(
       const data = isRecord(event.data) ? event.data : {};
       const requestId = nonEmptyString(data.requestId);
       if (requestId !== undefined) {
-        const tenantId = eventTenantId(event);
         const sessionId = nonEmptyString(data.session_id);
         const parentSessionId = nonEmptyString(data.parent_session_id);
         const agentId = nonEmptyString(data.agent_id);
@@ -392,7 +361,6 @@ export function createInteractionsRegistry(
         rememberRecord({
           requestId,
           run_id: event.run_id,
-          tenant_id: tenantId,
           kind: 'ask',
           ...(agentId !== undefined ? { agent_id: agentId } : {}),
           ...(teamId !== undefined ? { team_id: teamId } : {}),
@@ -404,7 +372,7 @@ export function createInteractionsRegistry(
           created_at: eventTs(event),
           status: 'pending',
         });
-        persistTenant(tenantId);
+        persist();
       }
       return;
     }
@@ -424,7 +392,7 @@ export function createInteractionsRegistry(
           record.suspended !== true
         ) {
           rememberRecord({ ...record, suspended: true });
-          persistTenant(record.tenant_id);
+          persist();
         }
       }
       return;
@@ -440,16 +408,14 @@ export function createInteractionsRegistry(
     ) {
       // run 终态：该 run 的 pending（permission + ask）全部转 orphaned；
       // 迟到应答返回 run_ended，不再假装可以继续。
-      const terminalTenants = new Set<string>();
       for (const [id, record] of interactionRecords) {
         if (record.status !== 'pending' || record.run_id !== event.run_id) continue;
         // headless ask 的 run 以 interrupted 收口：请求仍然有效，保留 pending。
         if ((record.kind ?? 'permission') === 'ask' && suspendedAskIds.has(id)) continue;
         pendingPermissions.delete(id);
         rememberRecord({ ...record, status: 'orphaned' as StoredInteractionStatus });
-        terminalTenants.add(record.tenant_id);
       }
-      persistTenants(terminalTenants);
+      persist();
     }
   }
 
@@ -457,7 +423,6 @@ export function createInteractionsRegistry(
     requestId: string,
     decision: 'allow' | 'deny',
     remember: boolean,
-    tenantId?: string,
     scope?: PermissionScope,
     actor?: InteractionActor,
   ): PermissionRespondResult {
@@ -466,15 +431,11 @@ export function createInteractionsRegistry(
     const attribution: InteractionActor = actor ?? { answered_by: 'human' };
     const pending = pendingPermissions.get(requestId);
     if (pending !== undefined) {
-      // P0-1：应答必须与请求产生时的 tenant 一致。
-      if (tenantId !== undefined && pending.tenant_id !== tenantId) {
-        throw new RpcError('not_found', `Permission request not found: ${requestId}`);
-      }
       const record = interactionRecords.get(requestId);
       const now = Date.now();
       const latency = Math.max(0, now - (record?.created_at ?? pending.ts));
       // 先投递；流缺失抛 run_ended，pending 保持不变（迟到的流仍可重试）。
-      answerStreamFor(pending.tenant_id).publish({
+      answerStream().publish({
         type: 'tool.permission.response',
         run_id: pending.run_id,
         data: {
@@ -491,14 +452,12 @@ export function createInteractionsRegistry(
           ...(record?.team_id !== undefined ? { team_id: record.team_id } : {}),
         },
         ts: now,
-        tenant_id: pending.tenant_id,
       });
       pendingPermissions.delete(requestId);
       rememberRecord({
         ...(record ?? {
           requestId,
           run_id: pending.run_id,
-          tenant_id: pending.tenant_id,
           kind: 'permission' as const,
           tool: pending.tool,
           input: pending.input,
@@ -516,7 +475,7 @@ export function createInteractionsRegistry(
           latency_ms: latency,
         },
       });
-      persistTenant(pending.tenant_id);
+      persist();
       return {
         ok: true,
         decision,
@@ -537,9 +496,6 @@ export function createInteractionsRegistry(
     // 幂等：首次应答生效，重复应答返回上次结果（不发布新事件）。
     const record = interactionRecords.get(requestId);
     if (record !== undefined) {
-      if (tenantId !== undefined && record.tenant_id !== tenantId) {
-        throw new RpcError('not_found', `Permission request not found: ${requestId}`);
-      }
       if (record.status === 'answered' && record.answer !== undefined) {
         if (record.answer.decision !== decision) {
           throw new RpcError(
@@ -584,7 +540,6 @@ export function createInteractionsRegistry(
   function respondAsk(
     requestId: string,
     answers: unknown[],
-    tenantId?: string,
     actor?: InteractionActor,
   ): AskRespondResult {
     const attribution: InteractionActor = actor ?? { answered_by: 'human' };
@@ -592,15 +547,11 @@ export function createInteractionsRegistry(
     if (record === undefined || (record.kind ?? 'permission') !== 'ask') {
       throw new RpcError('not_found', `Ask request not found: ${requestId}`);
     }
-    // P0-1：应答必须与请求产生时的 tenant 一致。
-    if (tenantId !== undefined && record.tenant_id !== tenantId) {
-      throw new RpcError('not_found', `Ask request not found: ${requestId}`);
-    }
     if (record.status === 'pending') {
       const now = Date.now();
       const latency = Math.max(0, now - record.created_at);
-      // 直接投递到该 tenant 的运行时流（ask_user 工具在那里等待）。
-      answerStreamFor(record.tenant_id).publish({
+      // 直接投递到单运行时流（ask_user 工具在那里等待）。
+      answerStream().publish({
         type: 'ask.user.answered',
         run_id: record.run_id,
         data: {
@@ -615,7 +566,6 @@ export function createInteractionsRegistry(
           ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
         },
         ts: now,
-        tenant_id: record.tenant_id,
       });
       rememberRecord({
         ...record,
@@ -631,7 +581,7 @@ export function createInteractionsRegistry(
         },
       });
       suspendedAskIds.delete(requestId);
-      persistTenant(record.tenant_id);
+      persist();
       return {
         ok: true,
         answered_by: attribution.answered_by,
@@ -676,7 +626,6 @@ export function createInteractionsRegistry(
       if ((record.kind ?? 'permission') !== 'ask' || record.status !== 'pending') continue;
       view.set(requestId, {
         run_id: record.run_id,
-        tenant_id: record.tenant_id,
         ts: record.created_at,
         ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
         ...(record.parent_session_id !== undefined

@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
 
 /**
- * 配置来源与优先级矩阵检查（0.5）。
+ * 配置来源与优先级矩阵检查（0.5；0.49 T4 更新）。
  *
  * 通过真实 CLI 运行 `vessel config show --sources --json`，在临时 HOME /
  * 项目目录中验证：
- *   env > tenant overlay > project > user > default
- *   单公司 id：tenant.default → 唯一 tenants 键 → default；
- *   --tenant / VESSEL_TENANT 只产生 ignored warning
+ *   env > project > user > default
  *   `_env` 三态：显式值 / env 可用 / env 缺失报错
  *   项目 YAML 出现密钥 -> exit 1
+ *   0.49 T4（R4）：旧 tenant 块 / token tenantId / adminToken 启动 fail-fast，
+ *   错误逐项列出键与修复提示（不自动降级）
  *
  * 用法：bun run scripts/check-config-sources.ts
  * 退出码：0 = 全部通过；1 = 有失败。
@@ -22,8 +22,6 @@ import { join } from 'node:path';
 interface Snapshot {
   config: Record<string, unknown>;
   sources: Record<string, string>;
-  tenant_id?: string;
-  tenant_overlay_keys?: string[];
 }
 
 interface CaseOptions {
@@ -192,36 +190,19 @@ export async function checkConfigSources(root: string): Promise<string[]> {
     );
   }
 
-  // 0.49 单公司语义：单 id 由 tenant.default 决定，--tenant 不再选择 tenant。
-  const overlay = await runShow(root, {
-    user: [
-      'provider:',
-      '  model: user-model',
-      'tenant:',
-      '  default: acme',
-      '  tenants:',
-      '    acme:',
-      '      config:',
-      '        provider:',
-      '          model: overlay-model',
-      '',
-    ].join('\n'),
-    project: 'provider:\n  model: project-model\n',
+  // 0.49 T4：serve.tokens 仍接受，但条目只允许 role。
+  const tokenEntry = await runShow(root, {
+    user: 'serve:\n  tokens:\n    client-token:\n      role: admin\n',
   });
-  if (overlay.snapshot === undefined) {
-    issues.push(`tenant overlay case failed: ${overlay.stderr}`);
+  if (tokenEntry.snapshot === undefined) {
+    issues.push(`serve.tokens role case failed: ${tokenEntry.stderr}`);
   } else {
     expectEqual(
       issues,
-      'tenant overlay provider.model value',
-      nested(overlay.snapshot.config, 'provider.model'),
-      'overlay-model',
+      'serve.tokens role value',
+      nested(tokenEntry.snapshot.config, 'serve.tokens.<set>.role'),
+      'admin',
     );
-    if (!overlay.snapshot.tenant_overlay_keys?.includes('provider.model')) {
-      issues.push(
-        `tenant overlay keys missing provider.model: ${JSON.stringify(overlay.snapshot.tenant_overlay_keys)}`,
-      );
-    }
   }
 
   const envSet = await runShow(root, {
@@ -277,42 +258,66 @@ export async function checkConfigSources(root: string): Promise<string[]> {
     issues.push('project secret case should exit 1');
   }
 
-  // 0.49 单公司语义：--tenant / VESSEL_TENANT 被忽略，只 warning，不影响单 id。
-  const cliTenant = await runShow(root, {
-    env: { VESSEL_TENANT: 'env-tenant' },
-    args: ['--tenant', 'cli-tenant'],
+  // 0.49 T4（R4）：旧 `tenant:` 块启动 fail-fast，逐项给修复提示。
+  const oldTenantBlock = await runShow(root, {
+    user: 'tenant:\n  default: acme\n',
   });
-  if (cliTenant.snapshot === undefined) {
-    issues.push(`cli tenant case failed: ${cliTenant.stderr}`);
+  if (oldTenantBlock.exitCode === 0) {
+    issues.push('tenant block case should exit 1 (R4 fail-fast)');
   } else {
-    expectEqual(issues, 'cli tenant override', cliTenant.snapshot.tenant_id, 'default');
-    for (const ignored of ['cli-tenant', 'env-tenant']) {
-      if (!cliTenant.stderr.includes(ignored)) {
+    for (const expected of ['tenant', 'removed in 0.49', 'Fix: delete']) {
+      if (!oldTenantBlock.stderr.includes(expected)) {
         issues.push(
-          `cli tenant case stderr should warn about ignored ${ignored}: ${cliTenant.stderr}`,
+          `tenant block stderr should include ${JSON.stringify(expected)}: ${oldTenantBlock.stderr}`,
         );
       }
     }
   }
 
-  // 多键且无 default → 配置错误，不猜测单 id。
-  const ambiguousTenant = await runShow(root, {
+  // 0.49 T4（R4）：serve.tokens[*].tenantId 启动 fail-fast，错误不回显 token。
+  const oldTokenTenant = await runShow(root, {
     user: [
-      'tenant:',
-      '  tenants:',
-      '    acme:',
-      '      config: {}',
-      '    beta:',
-      '      config: {}',
+      'serve:',
+      '  tokens:',
+      '    client-token:',
+      '      role: admin',
+      '      tenant_id: acme',
       '',
     ].join('\n'),
   });
-  if (ambiguousTenant.exitCode === 0) {
-    issues.push('ambiguous tenant case should exit 1');
-  } else if (!ambiguousTenant.stderr.includes('多个键')) {
-    issues.push(
-      `ambiguous tenant case stderr should mention multiple keys: ${ambiguousTenant.stderr}`,
-    );
+  if (oldTokenTenant.exitCode === 0) {
+    issues.push('serve.tokens tenantId case should exit 1 (R4 fail-fast)');
+  } else {
+    for (const expected of ['serve.tokens.<entry#1>.tenantId', 'Fix: delete the tenantId']) {
+      if (!oldTokenTenant.stderr.includes(expected)) {
+        issues.push(
+          `serve.tokens tenantId stderr should include ${JSON.stringify(expected)}: ${oldTokenTenant.stderr}`,
+        );
+      }
+    }
+    if (oldTokenTenant.stderr.includes('client-token')) {
+      issues.push('serve.tokens tenantId error must not echo the token key');
+    }
+  }
+
+  // 0.49 T4（R4）：adminToken / adminTokenEnv 启动 fail-fast。
+  const oldAdminToken = await runShow(root, {
+    user: 'serve:\n  admin_token: legacy-admin\n',
+  });
+  if (oldAdminToken.exitCode === 0) {
+    issues.push('serve.adminToken case should exit 1 (R4 fail-fast)');
+  } else if (!oldAdminToken.stderr.includes('serve.adminToken')) {
+    issues.push(`serve.adminToken stderr should mention the key: ${oldAdminToken.stderr}`);
+  }
+
+  // VESSEL_TENANT 不再参与解析：设置它不会改变解析结果或触发 tenant 警告。
+  const envTenant = await runShow(root, {
+    env: { VESSEL_TENANT: 'env-tenant' },
+  });
+  if (envTenant.snapshot === undefined) {
+    issues.push(`VESSEL_TENANT ignored case failed: ${envTenant.stderr}`);
+  } else if (envTenant.stderr.includes('env-tenant')) {
+    issues.push(`VESSEL_TENANT should not be parsed anymore: ${envTenant.stderr}`);
   }
 
   return issues;

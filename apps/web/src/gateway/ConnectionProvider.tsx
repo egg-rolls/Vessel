@@ -105,12 +105,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [lastError, setLastError] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
   const [hello, setHello] = useState<HelloInfo | null>(null);
-  const [tenantId, setTenantId] = useState<string | null>(null);
-  /** 单公司：一旦由 health.get 解析出来就只读固定，切换入口已隐藏。 */
-  const singleTenantIdRef = useRef<string | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [epoch, setEpoch] = useState(0);
-  const [tenantEpoch, setTenantEpoch] = useState(0);
   // 交互的唯一真相源：本 Provider 只写 store，面板直接或经 context 读同一份数据。
   const permissions = useInteractionStore((state) => state.permissions);
   const asks = useInteractionStore((state) => state.asks);
@@ -132,8 +128,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const platformNodeIdsRef = useRef<Set<string>>(new Set());
 
   const client = useMemo(() => new GatewayClient(nodeUrl ?? ''), [nodeUrl]);
-  const tenantIdRef = useRef<string | null>(null);
-  tenantIdRef.current = tenantId;
   const nodeTokenRef = useRef(nodeToken);
   nodeTokenRef.current = nodeToken;
   const canConnect = nodeUrl !== null && (nodeToken.trim() !== '' || anonymousNode);
@@ -302,7 +296,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     recordSettled,
     settledRef,
     tokenRef: nodeTokenRef,
-    tenantIdRef,
     hydrationGenerationRef,
   });
 
@@ -321,8 +314,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       eventStore.reset(0);
       setConnectionState('idle');
       setHello(null);
-      setTenantId(null);
-      singleTenantIdRef.current = null;
       useInteractionStore.getState().reset();
       settledRef.current.clear();
       hydrationGenerationRef.current += 1;
@@ -336,18 +327,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       eventStore,
       toast,
       settledRef,
-      hydrationGenerationRef,
-      tenantIdRef,
       recordSettled,
       reportConnectError,
       setConnectionState,
       setHello,
-      setTenantId,
       setReconnectAttempt,
       setTokenError,
       setGatewayError,
       setLastError,
-      setTenantEpoch,
       setEpoch,
     });
   }, [
@@ -368,39 +355,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     void hydrateInteractions();
   }, [epoch, hasToken, hydrateInteractions]);
 
-  // node 变化后重新解析单 id；同一 node 生命周期内保持只读。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: client 是 node 变化的稳定标识
-  useEffect(() => {
-    singleTenantIdRef.current = null;
-    setTenantId(null);
-  }, [client]);
-
-  /**
-   * CONTRACT-0.49 C7：单公司 id 只从 `health.get` 取一次，之后只读固定；
-   * 不再调用 `tenants.*`，也不再向数据面发送切换得到的 tenant_id。
-   * hello 已带回同一个值，这里以 health 为准做确认；旧 gateway 若缺字段则保留 hello 值。
-   */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch 是 hello 后的确认触发器
-  useEffect(() => {
-    if (!hasToken || connectionState !== 'open') return;
-    if (singleTenantIdRef.current !== null) return;
-    let cancelled = false;
-    void client
-      .getTenantId()
-      .then((id) => {
-        if (cancelled || !id) return;
-        if (singleTenantIdRef.current !== null) return;
-        singleTenantIdRef.current = id;
-        setTenantId(id);
-      })
-      .catch(() => {
-        // 旧 gateway 无 health tenant_id：保留 hello 提供的值。
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, connectionState, hasToken, epoch]);
-
   const { connect, disconnect, retry } = useConnectionControls({
     client,
     eventStore,
@@ -408,7 +362,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     mode,
     nodeIdentity,
     canConnect,
-    tenantIdRef,
     reportConnectError,
     setPlatformUrl,
     setPlatformToken,
@@ -439,7 +392,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       eventStore,
       connectionState,
       hello,
-      tenantId,
       features: hello?.protocol.features ?? [],
       nodeLabel: hello?.node.name ?? hello?.node.node_id?.slice(0, 12) ?? '',
       platformUrl,
@@ -459,7 +411,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       lastError,
       reconnectAttempt,
       epoch,
-      tenantEpoch,
       stale: hello !== null && connectionState !== 'open',
       closeCode: client.closedWithCode,
       permissions,
@@ -480,7 +431,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       eventStore,
       connectionState,
       hello,
-      tenantId,
       platformUrl,
       nodeUrl,
       platformToken,
@@ -497,7 +447,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       lastError,
       reconnectAttempt,
       epoch,
-      tenantEpoch,
       permissions,
       asks,
       hydrateInteractions,

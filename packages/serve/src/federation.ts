@@ -34,9 +34,6 @@ export const FEDERATION_DEFAULT_MEMBERS_LIMIT = 20;
 /** team-info `members_limit` 上界。 */
 export const FEDERATION_MEMBERS_LIMIT_MAX = 100;
 
-/** 接收侧固定 tenant（v1 不做多 tenant federation）。 */
-const FEDERATION_TENANT = 'default';
-
 /** 去重容量：进程内 LRU，不声称跨重启 exactly-once。 */
 const DEDUPE_LIMIT = 1024;
 
@@ -99,9 +96,9 @@ export interface FederationGatewayOptions {
 export interface FederationRouteOptions {
   /** 未注入或 `enabled !== true` → 端点返回 404。 */
   federation?: FederationGatewayOptions;
-  /** 目标 Team 控制面（default tenant）；未注入 → 404 `team_not_found`。 */
+  /** 目标 Team 控制面；未注入 → 404 `team_not_found`。 */
   teams?: TeamControlLike;
-  /** 诊断事件出口（gateway 注入 `publishTeamEvent`，投 default tenant 流）。 */
+  /** 诊断事件出口（gateway 注入 `publishTeamEvent`）。 */
   publish?: (type: string, data: Record<string, unknown>) => void;
 }
 
@@ -625,7 +622,7 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
           return errorJson('federation_unknown_team', 'Team not found', 404, extra);
         }
         const teamInfoControl = options.teams;
-        if (!teamInfoControl || teamInfoControl.tenantId !== FEDERATION_TENANT) {
+        if (!teamInfoControl) {
           return errorJson('federation_unknown_team', 'Team not found', 404, extra);
         }
         let directoryTeam: TeamDetailLike | undefined;
@@ -785,9 +782,9 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         );
       }
 
-      // 10. 目标 Team：v1 固定 default tenant；未注入 / 不存在 → 404。
+      // 10. 目标 Team：未注入 / 不存在 → 404。
       const teams = options.teams;
-      if (!teams || teams.tenantId !== FEDERATION_TENANT) {
+      if (!teams) {
         publish('federation.rejected', {
           direction: 'in',
           code: 'team_not_found',

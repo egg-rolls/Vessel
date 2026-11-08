@@ -83,7 +83,7 @@ function filterQueryOf(route: AgentRoute): string {
 
 export function AgentsView({ route, navigate }: AgentsViewProps) {
   useLocale();
-  const { epoch, tenantEpoch } = useConnection();
+  const { epoch } = useConnection();
   const { nodes, teamControl, hasTokenFor } = useNodes();
   const nodeNames = useNodeNames();
   const [query, setQuery] = useState('');
@@ -116,7 +116,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     {
       enabled: anyNodeToken && nodes.length > 0,
       pollMs: ROSTER_POLL_MS,
-      deps: [epoch, tenantEpoch, nodeKeys],
+      deps: [epoch, nodeKeys],
     },
   );
 

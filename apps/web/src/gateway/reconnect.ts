@@ -24,7 +24,6 @@ export function classifyCloseCode(code: number): CloseClassification {
 
 export interface ConnectTarget {
   since: number;
-  tenantId: string | undefined;
 }
 
 /** 先探 /health，成功后再建 WS；target 在 probe 落地后才求值。 */
@@ -36,9 +35,6 @@ export function probeThenConnect(
 ): void {
   void client
     .probeHealth()
-    .then(() => {
-      const { since, tenantId } = target();
-      return client.connect(token, since, tenantId);
-    })
+    .then(() => client.connect(token, target().since))
     .catch(onError);
 }

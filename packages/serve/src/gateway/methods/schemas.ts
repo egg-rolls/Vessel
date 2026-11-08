@@ -55,7 +55,6 @@ export const runStatusSchema = {
     preview: { type: 'string' },
     iteration: { type: 'integer' },
     updated_at: { type: 'number' },
-    tenant_id: { type: 'string' },
   },
 };
 
@@ -79,7 +78,6 @@ export const runStateSchema = {
     preview: { type: 'string' },
     updated_at: { type: 'number' },
     branch: { type: 'string' },
-    tenant_id: { type: 'string' },
   },
 };
 
@@ -106,7 +104,6 @@ export const sessionInfoSchema = {
     // 以下可选字段在真实 session 文件中可能是 null 或缺失；校验器不支持
     // nullable/union，故不声明类型（任意值通过），required 与其余字段仍受约束。
     branch: {},
-    tenant_id: {},
   },
 };
 
@@ -237,19 +234,6 @@ export const runtimeSnapshotSchema = {
   },
 };
 
-export const tenantInfoSchema = {
-  type: 'object',
-  required: ['tenant_id', 'status', 'created_at'],
-  properties: {
-    tenant_id: { type: 'string' },
-    name: { type: 'string' },
-    status: { type: 'string', enum: ['active', 'disabled'] },
-    created_at: { type: 'number' },
-    quota: { type: 'object' },
-    usage: { type: 'object' },
-  },
-};
-
 export const runEventSchema = {
   type: 'object',
   required: ['type', 'run_id', 'data', 'ts'],
@@ -259,7 +243,6 @@ export const runEventSchema = {
     data: { type: 'object' },
     ts: { type: 'number' },
     seq: { type: 'integer' },
-    tenant_id: { type: 'string' },
     node_id: { type: 'string' },
   },
 };
@@ -382,11 +365,10 @@ export const evalReportSchema = {
 /** teams.list / teams.get 的 `team`（TeamSummary）。 */
 export const teamSummarySchema = {
   type: 'object',
-  required: ['team_id', 'name', 'tenant_id', 'member_count', 'online_count', 'created_at'],
+  required: ['team_id', 'name', 'member_count', 'online_count', 'created_at'],
   properties: {
     team_id: { type: 'string' },
     name: { type: 'string' },
-    tenant_id: { type: 'string' },
     workspace: { type: 'string' },
     policy: { type: 'object' },
     // 0.21：Team 描述（additive）。

@@ -53,7 +53,6 @@ export function ConnectionForm() {
     lastError,
     connectionState,
     hello,
-    tenantId,
     epoch,
     closeCode,
     hasToken,
@@ -291,11 +290,6 @@ export function ConnectionForm() {
                   {current ? (nodeNames.get(nodeKeyOf(current)) ?? '—') : '—'}
                 </span>
               ),
-            },
-            {
-              key: 'tenant',
-              label: t('connection.tenant'),
-              value: <span className="font-mono">{tenantId ?? '—'}</span>,
             },
             {
               key: 'latestSeq',

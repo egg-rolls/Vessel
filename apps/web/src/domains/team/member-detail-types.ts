@@ -20,7 +20,6 @@ export interface MemberDetailProps {
   client: MemberDetailClient;
   hasToken: boolean;
   epoch: number;
-  tenantEpoch: number;
   teamId: string;
   memberId: string;
   /** Store key discriminator for multi-node Teams; defaults for tests / preview. */

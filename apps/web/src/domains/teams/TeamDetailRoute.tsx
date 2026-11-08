@@ -32,16 +32,8 @@ export function TeamDetailRoute({
   navigate: (route: Route) => void;
 }) {
   useLocale();
-  const {
-    connectionState,
-    epoch,
-    tenantEpoch,
-    permissions,
-    asks,
-    responding,
-    respondPermission,
-    respondAsk,
-  } = useConnection();
+  const { connectionState, epoch, permissions, asks, responding, respondPermission, respondAsk } =
+    useConnection();
   const { teamControl, hasTokenFor } = useNodes();
   const snapshot = useEventSnapshot();
   const control = teamControl(node);
@@ -63,7 +55,7 @@ export function TeamDetailRoute({
     () => {
       void loadDetail(nodeKey, route.teamId, control, { limit: 1, members_limit: 1 }, 'summary');
     },
-    { enabled: hasToken, deps: [epoch, tenantEpoch, nodeKey, route.teamId] },
+    { enabled: hasToken, deps: [epoch, nodeKey, route.teamId] },
   );
   const summary = resourceData(summaryState)?.team;
 
@@ -124,7 +116,6 @@ export function TeamDetailRoute({
         frozen={summary?.spawn_frozen === true}
         connectionState={node.current ? connectionState : 'open'}
         epoch={epoch}
-        tenantEpoch={tenantEpoch}
         teamId={route.teamId}
         nodeKey={nodeKey}
         permissions={currentPermissions}

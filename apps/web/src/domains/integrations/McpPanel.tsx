@@ -22,7 +22,7 @@ function errorMessage(error: unknown): string {
 }
 
 export function McpPanel() {
-  const { client, connectionState, hasToken, features, epoch, tenantId } = useConnection();
+  const { client, connectionState, hasToken, features, epoch } = useConnection();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
   const available = hasToken && features.includes('mcp-status');
@@ -136,9 +136,6 @@ export function McpPanel() {
     <div className="flex flex-col gap-6">
       <p className="mt-1.5 max-w-prose text-md leading-relaxed text-muted">
         {t('integrations.mcp.globalDesc')}
-        {tenantId && tenantId !== 'default'
-          ? t('integrations.mcp.currentTenant', { tenant: tenantId })
-          : ''}
       </p>
       {!connected && servers.length > 0 && <StaleNotice message={t('integrations.mcp.stale')} />}
       {error && servers.length > 0 && (

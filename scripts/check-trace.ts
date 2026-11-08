@@ -6,7 +6,7 @@
  * 在临时 `VESSEL_DATA_DIR` 中跑一次 mock headless run，断言：
  *   - `<data>/events/<run_id>.jsonl` 存在；
  *   - 每行是 JSON；落盘事件带 seq 且严格递增；
- *   - 含 run.started / run.completed，tenant_id 正确；
+ *   - 含 run.started / run.completed（tenant_id 归 T5/M9，本检查不再断言）；
  *   - 假 API Key 不出现在 trace；无 trace.overflow；
  *   - `readTraceEvents` 能回读、跳过损坏行，默认 limit 生效。
  *
@@ -19,7 +19,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type RunEvent, readTraceEvents } from '../packages/core/src/index';
 
-const TENANT = 'govtrace';
 const SECRET = 'sk-test-secret-do-not-log';
 
 async function listJsonl(dir: string): Promise<string[]> {
@@ -72,9 +71,7 @@ export async function checkTrace(root: string): Promise<string[]> {
   await mkdir(project, { recursive: true });
   await mkdir(dataDir, { recursive: true });
 
-  // 0.49 单公司语义：--tenant 被忽略，单 id 只由 tenant.default 决定。
-  await writeFile(join(home, '.vessel', 'config.yaml'), `tenant:\n  default: ${TENANT}\n`, 'utf8');
-
+  // 0.49 T4：tenant 配置块已删除；单公司 id 是内部常量，无需写配置。
   try {
     const proc = Bun.spawn({
       cmd: [process.execPath, join(root, 'src/cli.ts'), '--run', 'hello'],
@@ -131,14 +128,6 @@ export async function checkTrace(root: string): Promise<string[]> {
     }
     if (!events.some((event) => event.type === 'run.completed')) {
       issues.push('trace missing run.completed');
-    }
-    for (const event of events) {
-      if (event.tenant_id !== TENANT) {
-        issues.push(
-          `event ${event.type} tenant_id=${String(event.tenant_id)} (expected ${TENANT})`,
-        );
-        break;
-      }
     }
     const byRun = new Map<string, RunEvent[]>();
     for (const event of events) {

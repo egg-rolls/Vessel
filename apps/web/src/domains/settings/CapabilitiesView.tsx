@@ -23,7 +23,7 @@ import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
 export function CapabilitiesView() {
   useLocale();
-  const { client, connectionState, hasToken, epoch, tenantId } = useConnection();
+  const { client, connectionState, hasToken, epoch } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const [tab, setTab] = useState<CapabilityTab>('methods');
   const [query, setQuery] = useState('');
@@ -37,7 +37,7 @@ export function CapabilitiesView() {
   const catalog = useResource({
     load: () => fetchPluginCatalog(client),
     enabled: hasToken && connectionState === 'open',
-    deps: [epoch, tenantId, connectionState],
+    deps: [epoch, connectionState],
   });
 
   useRefreshSignal(reloadCapabilities);

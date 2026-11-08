@@ -5,6 +5,9 @@
  * 页面消费的字段，不新增 wire 字段。
  */
 
+/** 必须与 `@vessel-agent/serve` 的 `HUB_PROTOCOL` 一致；旧 v1 peer 显式失败。 */
+export const HUB_PROTOCOL = 'vessel.hub/2' as const;
+
 export type HubNodeStatus =
   | 'connecting'
   | 'healthy'
@@ -23,9 +26,7 @@ export interface HubNodeCounts {
 }
 
 export interface HubNodeRecord {
-  pairing_id: string;
   node_id: string;
-  tenant_id: string;
   name?: string;
   alias?: string;
   url?: string;
@@ -58,7 +59,7 @@ export interface HubHealth {
 export interface HubHelloFrame {
   v: 1;
   kind: 'hello';
-  protocol: string;
+  protocol: typeof HUB_PROTOCOL;
   dialer: string;
   hub_id: string;
   revision?: number;
@@ -68,7 +69,7 @@ export interface HubHelloFrame {
 export interface HubPointerFrame {
   v: 1;
   kind: 'pointer';
-  protocol: string;
+  protocol: typeof HUB_PROTOCOL;
   dialer: string;
   node_id: string;
   hub_id: string;
@@ -83,4 +84,6 @@ export type HubServerEvent =
   | { kind: 'hello'; hubId: string; revision?: number }
   | { kind: 'directory'; directory: HubDirectory }
   | { kind: 'pointer'; pointer: HubPointerFrame }
-  | { kind: 'ping' };
+  | { kind: 'ping' }
+  /** 帧里的协议不是 `vessel.hub/2`：按现有 `incompatible` 面显式失败。 */
+  | { kind: 'incompatible' };

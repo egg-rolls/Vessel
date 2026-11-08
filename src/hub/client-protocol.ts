@@ -1,5 +1,5 @@
 /**
- * Hub 目录客户端协议帧（S5 / `vessel.hub/1`）。
+ * Hub 目录客户端协议帧（S5 / `vessel.hub/2`）。
  *
  * `/v1/hub/events` 面向目录客户端（Web / CLI watch），与节点控制的
  * `HubHelloFrame` / `HubSnapshotFrame` 不同：hub 不是节点，也不建模 tenant，

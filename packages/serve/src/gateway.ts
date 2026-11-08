@@ -62,7 +62,6 @@ import { createAgentMethods } from './gateway/methods/agents.js';
 export type { GatewayReloadResult } from './gateway/methods/admin.js';
 
 import type { AgentControlLike } from './agent-control.js';
-import { checkpointBelongsToTenant } from './gateway/methods/common.js';
 import {
   createConfigMethods,
   createPluginsMethods,
@@ -85,7 +84,6 @@ import {
 import { createRunMethods } from './gateway/methods/runs.js';
 import { createSessionMethods } from './gateway/methods/sessions.js';
 import { createTeamMethods } from './gateway/methods/teams.js';
-import { createTenantMethods } from './gateway/methods/tenants.js';
 import {
   flushSseGap,
   pumpSseReplay,
@@ -148,9 +146,6 @@ import {
   type GatewayAuthLike,
   resolveLocalPrincipal,
   resolvePrincipal,
-  resolveTenantScope,
-  TENANT_ID_PATTERN,
-  type TenantControlLike,
   type TenantPrincipal,
 } from './tenant.js';
 import type { TenantEventHub } from './tenant-event-hub.js';
@@ -263,8 +258,6 @@ export interface GatewayOptions {
   version?: string;
   /** 已脱敏配置快照（asm ConfigSnapshot） */
   config?: ConfigGatewayOptionsLike;
-  /** tenant registry / quota（asm 注入） */
-  tenants?: TenantControlLike;
   /**
    * 0.19 S3：本地 Team 控制面（app 注入 AgentTeamService）。
    * 缺省 = `teams.*` 仍进 manifest，但 handler 返回 `not_found`。
@@ -289,13 +282,13 @@ export interface GatewayOptions {
   pluginCatalog?: () => PluginCatalogItem[];
   /** metrics.reset / trace 重建 */
   metricsControl?: {
-    reset?(tenantId?: string): void;
-    rebuild?(tenantId: string): Promise<MetricsSnapshot>;
+    reset?(): void;
+    rebuild?(): Promise<MetricsSnapshot>;
   };
   /** trace 读取 / prune（core readTraceEvents / pruneTrace，由 asm 注入） */
   trace?: {
     prune?(options: Record<string, unknown>): Promise<unknown>;
-    readEvents?(filter: Record<string, unknown>, tenantId?: string): Promise<RunEvent[]>;
+    readEvents?(filter: Record<string, unknown>): Promise<RunEvent[]>;
   };
   /**
    * 0.12 `gateway.reload`：配置 / 插件 / 权限 / 工具 / MCP 热应用实现（asm 注入）。
@@ -309,10 +302,7 @@ export interface GatewayOptions {
   permissions?: PermissionsControl;
   /** core deleteSessionData，由 asm 注入 */
   sessionData?: {
-    deleteSessionData(
-      sessionId: string,
-      tenantId?: string,
-    ): Promise<{
+    deleteSessionData(sessionId: string): Promise<{
       sessions_deleted: number;
       runs_deleted: number;
       events_deleted: number;
@@ -324,7 +314,7 @@ export interface GatewayOptions {
    * `createGatewayEventHub({ redactor })`。
    */
   redactor?: TraceRedactor;
-  /** 缺省 tenant（wildcard admin 未指定时使用） */
+  /** 内部单 id（路径 / 配置视图用；不是 wire 字段） */
   defaultTenantId?: string;
   /**
    * 内部：只构建方法表/引擎，不调用 `Bun.serve`。
@@ -381,8 +371,6 @@ interface WsData {
   backpressure: ClientBackpressure;
   /** 0.5：token 解析出的 principal；未鉴权时为 undefined */
   principal?: TenantPrincipal;
-  tenantId: string;
-  allTenants: boolean;
   /** events.subscribe 过滤 */
   runId?: string;
   types?: string[];
@@ -631,7 +619,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (feishuChannel) features.push('feishu');
   if (opts.metrics) features.push('metrics');
   if (opts.config) features.push('config');
-  if (opts.tenants) features.push('tenants');
   const protocolInfo: ProtocolInfo = {
     name: 'vessel.gateway',
     version: PROTOCOL_VERSION,
@@ -660,11 +647,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * 它只消费 `run.*` 事件并维护 pending / answered / orphaned。
    */
   const interactions = createInteractionsRegistry({
-    tenantEventsFor: () => hub.stream(),
-    defaultTenantId,
+    eventsFor: () => hub.stream(),
+    singleTenantId: defaultTenantId,
     ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
   });
-  /** 注册表的请求观察面：原始 tenant 事件（hub 隔离订阅者异常）。 */
+  /** 注册表的请求观察面：原始事件（hub 隔离订阅者异常）。 */
   const unsubscribeInteractions = hub.subscribe((event) => {
     interactions.handleEvent(event);
   });
@@ -682,14 +669,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const pluginHost = (): PluginHost | undefined => opts.pluginHost ?? runtime?.pluginHost;
 
   /**
-   * 节点公开信息。运行态字段按 tenant 派生：`status` / `current_run_id` /
-   * `current_session_id` 只反映该 tenant 的 active run，`capabilities.tools`
-   * 只来自该 tenant 的 plugin host。无 tenant 上下文（如匿名健康检查）时
-   * 一律按空闲 / 空工具面处理，不回落到全局或 default tenant。
-   * `node_id` / `pid` / `started_at` / `endpoint` / `role` 是进程级字段，可共享。
+   * 节点公开信息（单执行面）：运行态与工具面都来自本进程唯一 runtime /
+   * plugin host。`node_id` / `pid` / `started_at` / `endpoint` / `role` 是进程级字段。
    */
-  const nodeInfo = (tenantId?: string): NodeInfo => {
-    const snapshot = tenantId === undefined ? undefined : runtimeSnapshot();
+  const nodeInfo = (): NodeInfo => {
+    const snapshot = runtimeSnapshot();
     const scheduler =
       typeof snapshot?.scheduler === 'object' && snapshot.scheduler !== null
         ? (snapshot.scheduler as Record<string, unknown>)
@@ -709,12 +693,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       typeof current?.session_id === 'string' ? current.session_id : undefined;
 
     let tools: string[] = [];
-    if (tenantId !== undefined) {
-      try {
-        tools = (pluginHost()?.listTools() ?? []).map((tool) => tool.name);
-      } catch {
-        tools = [];
-      }
+    try {
+      tools = (pluginHost()?.listTools() ?? []).map((tool) => tool.name);
+    } catch {
+      tools = [];
     }
 
     return {
@@ -748,11 +730,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     });
   }
 
-  function helloFrame(fromSeq: number, tenantId?: string): ServerFrame {
+  function helloFrame(fromSeq: number): ServerFrame {
     // 求值顺序与原实现一致：latest → ts → node → oldest。
     const latestSeq = hub.latestSeq;
     const ts = Date.now();
-    const node = nodeInfo(tenantId);
+    const node = nodeInfo();
     return buildHelloFrame({
       nodeId,
       protocol: protocolInfo,
@@ -761,7 +743,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       fromSeq,
       latestSeq,
       oldestSeq: hub.oldestSeq,
-      tenantId,
       ts,
     });
   }
@@ -836,7 +817,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   function replayTo(ws: Ws): void {
     wsClients.add(ws);
-    sendFrame(ws, helloFrame(ws.data.since, ws.data.tenantId));
+    sendFrame(ws, helloFrame(ws.data.since));
     replayEventsTo(ws);
   }
 
@@ -986,22 +967,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // tenants → interactions → evals → feishu → gateway。
     ...createConfigMethods(configMethodsDeps),
     ...createSessionMethods({
-      defaultTenantId,
       sessionFor: () => session,
       sessionData: opts.sessionData,
       runStoreFor: () => opts.durable?.store,
       compactRuntime: () => runtime,
       // CREATE-0.39：sessions.create|restart|activate 与 agents.* 共用同一注入面。
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
-      ...(opts.tenants !== undefined ? { tenants: opts.tenants } : {}),
     }),
     ...createRunMethods({
       defaultTenantId,
       runControl: () => opts.runControl,
       requireRunControl: () => requireRunControl(),
       durable: () => opts.durable,
-      tenants: opts.tenants,
-      activeCount: () => liveRuns().length,
       reserveResume,
       releaseResume,
     }),
@@ -1016,8 +993,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
           since_ts: { type: 'integer', minimum: 0 },
           run_id: { type: 'string' },
           types: { type: 'array', items: { type: 'string' } },
-          all_tenants: { type: 'boolean' },
-          tenant_id: { type: 'string' },
         },
       },
       result_schema: {
@@ -1039,9 +1014,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           from_seq: since + 1,
           latest_seq: hub.latestSeq,
           mode,
-          ...(ctx.connection === 'http'
-            ? { stream_url: `/v1/events?since=${since}${ctx.allTenants ? '&all_tenants=1' : ''}` }
-            : {}),
+          ...(ctx.connection === 'http' ? { stream_url: `/v1/events?since=${since}` } : {}),
         };
       },
     },
@@ -1050,13 +1023,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createMetricsMethods(observabilityMethodsDeps),
     ...createMcpMethods({ mcp: opts.mcp }),
     ...createTraceMethods(observabilityMethodsDeps),
-    ...createTenantMethods({ tenants: opts.tenants, singleTenantId: defaultTenantId }),
     ...createInteractionMethods({
       // 0.27：交互状态唯一来源是 interactions registry（执行引擎已删除）。
-      respondPermission: (requestId, decision, remember, tenantId, scope, actor) =>
-        interactions.respondPermission(requestId, decision, remember, tenantId, scope, actor),
-      respondAsk: (requestId, answers, tenantId, actor) =>
-        interactions.respondAsk(requestId, answers, tenantId, actor),
+      respondPermission: (requestId, decision, remember, scope, actor) =>
+        interactions.respondPermission(requestId, decision, remember, scope, actor),
+      respondAsk: (requestId, answers, actor) => interactions.respondAsk(requestId, answers, actor),
       interactions: {
         interactionRecords: interactions.interactionRecords,
         pendingPermissions: interactions.pendingPermissions,
@@ -1064,14 +1035,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       },
     }),
     ...createEvalMethods({ evals: opts.evals }),
-    ...createFeishuMethods({ requireFeishu: () => requireFeishu() }),
+    ...createFeishuMethods({ requireFeishu }),
     // 0.12：追加在表尾，不改变既有方法顺序（DECISION-023 §2.3）。
     ...createAdminMethods({ reload: opts.reload }),
     // 0.14 P0：agents 注册表（additive，排在表尾）。
     ...createAgentMethods({
       registry: agentRegistry,
       liveRuns,
-      defaultTenantId,
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
       ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
       // CREATE-0.39：`agents.create{keep_messages}` 按 `sessions.get().messages` 校验。
@@ -1081,7 +1051,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createTeamMethods({ teams: opts.teams }),
     // CONTRACT-hot-apply §7：permissions.setToolPolicy（additive，排在表尾）。
     ...createPermissionsMethods({
-      defaultTenantId,
       ...(opts.permissions !== undefined ? { permissions: opts.permissions } : {}),
       pluginHost,
     }),
@@ -1157,36 +1126,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
         opts.auth,
         typeof frame.token === 'string' ? frame.token : null,
         token,
-        defaultTenantId,
       );
       if (!principal) {
         ws.close(4401, 'unauthorized');
         return;
       }
-      // 0.6：admin 可在 auth 首帧显式指定 tenant；非 admin 只能使用 token principal。
-      const rawTenant = frame.tenant_id;
-      if (rawTenant !== undefined && typeof rawTenant !== 'string') {
-        ws.close(4400, 'invalid tenant');
-        return;
-      }
-      const requestedTenant =
-        typeof rawTenant === 'string' && rawTenant.trim() !== '' ? rawTenant.trim() : undefined;
-      if (requestedTenant !== undefined && !TENANT_ID_PATTERN.test(requestedTenant)) {
-        ws.close(4400, 'invalid tenant');
-        return;
-      }
-      if (
-        requestedTenant !== undefined &&
-        principal.role !== 'admin' &&
-        requestedTenant !== principal.tenant_id
-      ) {
-        ws.close(4403, 'forbidden tenant');
-        return;
-      }
       ws.data.authed = true;
       ws.data.principal = principal;
-      ws.data.tenantId =
-        requestedTenant ?? (principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id);
       if (ws.data.authTimer) clearTimeout(ws.data.authTimer);
       if (typeof frame.since === 'number' && frame.since > 0) ws.data.since = frame.since;
       replayTo(ws);
@@ -1293,7 +1239,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ws.data.types = Array.isArray(params.types)
       ? params.types.filter((item): item is string => typeof item === 'string')
       : undefined;
-    ws.data.allTenants = params.all_tenants === true && ws.data.principal?.role === 'admin';
     replayEventsTo(ws);
   }
 
@@ -1312,13 +1257,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function principalForRequest(req: Request, url: URL, path: string): TenantPrincipal | null {
     const queryToken = queryTokenAllowed(req, path) ? url.searchParams.get('token') : null;
     const raw = extractToken(req.headers.get('authorization'), queryToken);
-    return resolvePrincipal(opts.auth, raw, token, defaultTenantId);
+    return resolvePrincipal(opts.auth, raw, token);
   }
 
   /** 只认 Authorization 头的请求（健康检查等非 EventSource 端点）。 */
   function headerPrincipal(req: Request): TenantPrincipal | null {
     const raw = extractToken(req.headers.get('authorization'), null);
-    return resolvePrincipal(opts.auth, raw, token, defaultTenantId);
+    return resolvePrincipal(opts.auth, raw, token);
   }
 
   function authorized(req: Request): boolean {
@@ -1474,8 +1419,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const upgraded = srv.upgrade(req, {
         data: {
           authed: true,
-          tenantId: defaultTenantId,
-          allTenants: false,
           since: 0,
           alive: true,
           backpressure: new ClientBackpressure({
@@ -1498,18 +1441,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  /** 方法级 tenant 作用域（admin 可显式跨 tenant） */
+  /** 方法级上下文（单执行面，无 tenant 作用域） */
   function makeMethodContext(
-    method: RpcMethodDefinition,
-    params: Record<string, unknown>,
+    _method: RpcMethodDefinition,
+    _params: Record<string, unknown>,
     principal: TenantPrincipal,
     connection: RpcMethodContext['connection'],
   ): RpcMethodContext {
-    const scope = resolveTenantScope(principal, params, defaultTenantId);
     return {
       principal,
-      tenantId: scope.tenantId,
-      allTenants: method.name === 'events.subscribe' ? scope.allTenants : false,
       isAdmin: principal.role === 'admin',
       connection,
     };
@@ -1519,31 +1459,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function requireRunControl(): RunControlLike {
     if (opts.runControl !== undefined) return opts.runControl;
     throw new RpcError('forbidden', 'No runtime configured', { legacy_code: 'no_runtime' });
-  }
-
-  /**
-   * durable 端点的目标 tenant：admin 可用 query `tenant_id` 或
-   * `X-Vessel-Tenant` 头显式跨 tenant；其余沿用 principal 作用域。
-   * 与 RPC `runs.resume` 的 `ctx.tenantId`（resolveTenantScope）保持一致。
-   */
-  function durableScope(
-    req: Request,
-    url: URL,
-    principal: TenantPrincipal,
-    extra: Record<string, string>,
-  ): { tenantId: string } | Response {
-    const queryTenant = url.searchParams.get('tenant_id');
-    const headerTenant = req.headers.get('x-vessel-tenant');
-    if (queryTenant !== null && headerTenant !== null && queryTenant !== headerTenant) {
-      return errorJson(
-        'invalid_request',
-        'tenant_id in query and X-Vessel-Tenant header must match',
-        400,
-        extra,
-      );
-    }
-    const requested = queryTenant ?? headerTenant;
-    return restTenantScope(principal, requested === null ? {} : { tenant_id: requested }, extra);
   }
 
   /** 飞书渠道未配置 → 0.4 not_found */
@@ -1627,11 +1542,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     publish: publishFederationEvent,
   });
 
-  /** 去重键里的 tenant：admin 通配 principal 落到 default（与 gateway 其余作用域一致）。 */
-  function effectiveTenantId(principal: TenantPrincipal): string {
-    return principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
-  }
-
   // ── 0.3 durable / MCP 端点 ─────────────────────
 
   /** core RunResumeError / 注入错误 → HTTP；未知 code 一律 500 */
@@ -1686,20 +1596,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/durable' && !path.startsWith('/v1/durable/')) return null;
-    // P0-2/P1：durable 端点沿用请求作用域（admin 可显式指定）；store 是单执行面的。
-    const scope = durableScope(req, url, principal, extra);
-    if (scope instanceof Response) return scope;
-    const tenantId = scope.tenantId;
+    // P0-2/P1：durable store 是单执行面的。
     const durable = opts.durable;
     const missingStore = (): Response =>
-      tenantId !== defaultTenantId
-        ? errorJson(
-            'forbidden',
-            `Durable runs are not configured for tenant: ${tenantId}`,
-            403,
-            extra,
-          )
-        : errorJson('durable_disabled', 'Durable runs are not enabled', 503, extra);
+      errorJson('durable_disabled', 'Durable runs are not enabled', 503, extra);
 
     if (path === '/v1/durable/runs') {
       if (req.method !== 'GET') {
@@ -1731,11 +1631,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
             : (
                 await Promise.all(statuses.map((status) => durable.store.list({ ...base, status })))
               ).flat();
-        const runs = sortCheckpoints(
-          dedupeCheckpoints(
-            checkpoints.filter((checkpoint) => checkpointBelongsToTenant(checkpoint, tenantId)),
-          ),
-        )
+        const runs = sortCheckpoints(dedupeCheckpoints(checkpoints))
           .slice(0, limit)
           .map(toRunSummary);
         return json({ runs }, 200, extra);
@@ -1751,7 +1647,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
       if (!durable) return missingStore();
       if (!durable.resume) {
-        if (tenantId !== defaultTenantId) return missingStore();
         return errorJson(
           'durable_disabled',
           'Durable resume is not available in this mode',
@@ -1793,10 +1688,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!checkpoint) {
         resumedRuns.delete(runId);
         return errorJson('run_not_found', `Run not found: ${runId}`, 404, extra);
-      }
-      if (!checkpointBelongsToTenant(checkpoint, tenantId)) {
-        resumedRuns.delete(runId);
-        return errorJson('forbidden', `Run does not belong to tenant: ${tenantId}`, 403, extra);
       }
       if (!isResumableStatus(checkpoint.status)) {
         resumedRuns.delete(runId);
@@ -1845,32 +1736,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const methodNotAllowed = (extra: Record<string, string>): Response =>
     errorJson('method_not_allowed', 'Method not allowed', 405, extra);
 
-  /** REST 适配：解析 query/body 的 tenant_id；错误转 HTTP */
-  function restTenantScope(
-    principal: TenantPrincipal,
-    params: Record<string, unknown>,
-    extra: Record<string, string>,
-  ): { tenantId: string } | Response {
-    try {
-      const scope = resolveTenantScope(principal, params, defaultTenantId);
-      return { tenantId: scope.tenantId };
-    } catch (error) {
-      if (error instanceof RpcError) {
-        if (error.code === 'forbidden') return errorJson('forbidden', error.message, 403, extra);
-        if (error.code === 'invalid_params') {
-          return errorJson('invalid_request', error.message, 400, extra);
-        }
-      }
-      return errorJson('internal', 'Gateway operation failed', 500, extra);
-    }
-  }
-
-  /** query 中的 tenant_id（仅供 admin 跨 tenant） */
-  function tenantQuery(url: URL): Record<string, unknown> {
-    const raw = url.searchParams.get('tenant_id');
-    return raw === null ? {} : { tenant_id: raw };
-  }
-
   /** `/v1/metrics`：只读快照 */
   async function handleMetrics(
     req: Request,
@@ -1893,7 +1758,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   /** `/v1/channels/feishu`：只读状态，凭据二次掩码 */
   async function handleFeishu(
     req: Request,
-    url: URL,
     path: string,
     extra: Record<string, string>,
     principal: TenantPrincipal,
@@ -1901,7 +1765,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (path !== '/v1/channels/feishu') return null;
     if (req.method !== 'GET') return methodNotAllowed(extra);
     try {
-      return json(await callMethod('feishu.status', tenantQuery(url), principal), 200, extra);
+      return json(await callMethod('feishu.status', {}, principal), 200, extra);
     } catch (error) {
       if (error instanceof LegacyRpcError && error.code === 'not_found') {
         return errorJson('channel_disabled', 'Feishu channel is not enabled', 503, extra);
@@ -2148,14 +2012,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
           latest_seq: hub.latestSeq,
         };
         if (path === '/health') return json(base, 200, extra);
-        // 健康响应的 node 字段按该请求的 principal 作用域过滤；无凭据时为
-        // 匿名请求，不暴露任何 tenant 的运行态与工具面。
-        const principal = headerPrincipal(req);
         return json(
           {
             ...base,
             protocol: protocolInfo,
-            node: nodeInfo(principal ? effectiveTenantId(principal) : undefined),
+            node: nodeInfo(),
             started_at: startedAt,
           },
           200,
@@ -2218,8 +2079,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
         const upgraded = srv.upgrade(req, {
           data: {
             authed: false,
-            tenantId: defaultTenantId,
-            allTenants: false,
             since: parseSince(url.searchParams.get('since')),
             alive: true,
             backpressure: new ClientBackpressure({
@@ -2336,7 +2195,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // 0.4：metrics / feishu / evals（未注入 → 稳定错误码）
       const metricsResponse = await handleMetrics(req, path, extra, principal);
       if (metricsResponse) return metricsResponse;
-      const feishuResponse = await handleFeishu(req, url, path, extra, principal);
+      const feishuResponse = await handleFeishu(req, path, extra, principal);
       if (feishuResponse) return feishuResponse;
       const evalsResponse = await handleEvals(req, url, path, extra, principal);
       if (evalsResponse) return evalsResponse;
@@ -2344,10 +2203,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // SSE：只读事件流（EventSource 无法带 header，使用 ?token=）
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
         const since = parseSince(url.searchParams.get('since'));
-        const sseTenantId = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
-        // 0.49 C5：`all_tenants` 继续接受，但单公司模式下对可见性无效果。
-        const sseAllTenants =
-          url.searchParams.get('all_tenants') === '1' && principal.role === 'admin';
         const sseRunId = url.searchParams.get('run_id') ?? undefined;
         const sseTypes = (url.searchParams.get('types') ?? '')
           .split(',')
@@ -2373,18 +2228,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
                 unacked: 0,
                 encodeGap: (gap) => `data: ${JSON.stringify(gapFrame(gap))}\n\n`,
                 onClose: () => sseClients.delete(ctrl),
-                tenantId: sseTenantId,
-                allTenants: sseAllTenants,
                 accepts,
               };
               state = clientState;
               sseClients.set(ctrl, clientState);
               writeSse(ctrl, clientState, 'retry: 3000\n\n');
-              writeSse(
-                ctrl,
-                clientState,
-                `data: ${JSON.stringify(helloFrame(since, sseTenantId))}\n\n`,
-              );
+              writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(since))}\n\n`);
               const gap = hub.gapFor(since);
               if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
               clientState.replay = {

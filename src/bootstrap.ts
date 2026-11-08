@@ -62,7 +62,12 @@ import {
   waitForConnectedRun,
 } from './connect-run-wait';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import { resolveDataDir, resolveReadonlyTenantPaths, resolveSingleTenantPaths } from './data-paths';
+import {
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveReadonlyTenantPaths,
+  resolveSingleTenantPaths,
+} from './data-paths';
 import {
   type DurableRunHandleLike,
   type DurableRunsControlLike,
@@ -112,7 +117,6 @@ import {
   type LocalHumanTarget,
   type LocalMemberTarget,
 } from './team-human-delivery';
-import { createTenantControl } from './tenant-command';
 import { ensureTenantLayout, TenantLayoutMigrationError } from './tenant-layout-migration';
 import { withTenantLock } from './tenant-lock';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
@@ -945,10 +949,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const loaded = await loadConfig({
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
-    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
     ...(cliOverrides !== undefined ? { cliOverrides } : {}),
   });
-  const { config, validation, tenantId, paths: configPaths } = loaded;
+  const { config, validation, tenantId: configTenantId, paths: configPaths } = loaded;
 
   if (!useMock && validation.errors.length > 0) {
     console.error(formatConfigErrors(validation.errors, { paths: configPaths }));
@@ -959,16 +962,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     for (const w of validation.warnings) console.warn(`⚠ ${w.message}`);
   }
 
-  // ── tenant / data_dir / connect（0.5）───────────
-  if (config.tenant?.tenants?.[tenantId]?.status === 'disabled') {
-    console.error(`forbidden: tenant "${tenantId}" is disabled`);
-    process.exit(1);
-  }
-
+  // ── data_dir / connect（0.5；0.49 T4 删除 tenant 块）───────────
   const resolvedDataDir = options.dataDir ?? resolveDataDir(config);
   const dataDir = options.dataDirSubdir
     ? path.join(resolvedDataDir, options.dataDirSubdir)
     : resolvedDataDir;
+  // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准（T4 删除 config tenant 块后
+  // `loadConfig()` 恒为 `default`）；fresh 数据根没有该文件时仍回 `default`。
+  const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
   const connectUrl = options.connect ?? process.env.VESSEL_CONNECT;
   const connectMode = typeof connectUrl === 'string' && connectUrl.trim() !== '';
   // connect 是唯一只读入口；其余入口（run / REPL / serve / feishu）都写本地
@@ -1009,7 +1010,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // connect 模式：不获取写锁、不写本地 store/trace；配置仍加载用于 tenant/token 选择。
   if (connectMode) {
-    // 只有 CLI / env 显式选择 tenant 才覆盖 token principal；config.tenant.default 不算。
+    // 只有调用方 / env 显式传入 tenant 才覆盖 token principal（config 已无 tenant 块）。
     const tenantExplicit =
       options.tenantId !== undefined || (process.env.VESSEL_TENANT ?? '').trim() !== '';
     return bootstrapConnect({
@@ -1133,7 +1134,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tenantPaths,
     configSources: loaded.sources,
     configPaths: loaded.paths,
-    tenantOverlayKeys: loaded.tenantOverlayKeys,
     useMock,
     ...(options.mockScenario !== undefined ? { mockScenario: options.mockScenario } : {}),
     headless,
@@ -1533,7 +1533,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   // 0.18：本地模式只有一个 tenant 流；dispatcher 与 gateway 共用同一个 hub。
   const localEventHub = createGatewayEventHub({
-    streams: [{ tenantId, stream: runtimeEvents }],
+    stream: runtimeEvents,
     // 0.18：live 与 trace 同源（bundle.redactor 已是 core+ext 组合实例）。
     redactor: bundle.redactor,
   });
@@ -1596,13 +1596,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           sources: loaded.sources,
           paths: loaded.paths,
           tenantId,
-          tenantOverlayKeys: loaded.tenantOverlayKeys,
         }) as unknown as ConfigSnapshotLike,
     },
-    tenants: createTenantControl(dataDir, {
-      singleTenantId: tenantId,
-      ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
-    }),
     plugins: () => plugins.map((plugin) => ({ name: plugin.name, enabled: true })),
     ...(metrics ? { metrics: () => metrics.snapshot() } : {}),
     metricsControl: {

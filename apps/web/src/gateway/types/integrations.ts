@@ -106,7 +106,6 @@ export interface ConfigResponse {
   /** E10 additive：部分 gateway 直接暴露 plugins 数组；也兼容 config.plugins。 */
   plugins?: ConfigPluginEntry[];
   paths: { user: string; project: string };
-  tenant_id: string;
   tenant_overlay_keys?: string[];
   /**
    * 0.25 additive：进程版本。旧 gateway 不返回该字段，UI 必须按可选处理
@@ -118,7 +117,6 @@ export interface ConfigResponse {
 /** config.sources（0.5） */
 export interface ConfigSourcesResponse {
   sources: Record<string, string>;
-  tenant_id?: string;
   tenant_overlay_keys?: string[];
 }
 

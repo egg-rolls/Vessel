@@ -23,7 +23,6 @@ export interface UseSessionDeleteOptions {
   durableFeature: boolean;
   connected: boolean;
   epoch: number;
-  tenantId: string | null;
   selectedId: string | null;
   loadSessions: (client: GatewayClient, options?: SessionLoadOptions) => Promise<void>;
   navigate: (route: Route) => void;
@@ -38,7 +37,6 @@ export function useSessionDelete({
   durableFeature,
   connected,
   epoch,
-  tenantId,
   selectedId,
   loadSessions,
   navigate,
@@ -113,8 +111,8 @@ export function useSessionDelete({
       // 草稿态没有本地 session id（0.27），删除只可能在真实会话行上发生。
       const next = selectionAfterDelete(selectedId, null, deleteTarget.session_id);
       const storage = browserSessionStorage();
-      if (readLastSession(storage, tenantId) === deleteTarget.session_id) {
-        clearLastSession(storage, tenantId);
+      if (readLastSession(storage) === deleteTarget.session_id) {
+        clearLastSession(storage);
       }
       removeSessionLocal(deleteTarget.session_id);
       setDeleteTarget(null);

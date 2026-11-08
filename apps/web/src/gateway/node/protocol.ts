@@ -147,11 +147,8 @@ export abstract class ProtocolClient {
     }
   }
 
-  /**
-   * 建立 WS 并完成首帧鉴权；resolve 时机是收到 hello。
-   * tenantId 仅对 admin principal 生效（非 admin 传其它 tenant 会被 4403 关闭）。
-   */
-  connect(token: string, since = 0, tenantId?: string): Promise<void> {
+  /** 建立 WS 并完成首帧鉴权；resolve 时机是收到 hello。 */
+  connect(token: string, since = 0): Promise<void> {
     // 0.49：空 token 合法——平台 `credentials` 返回 `mode:'none'` 时，node 走
     // 回环匿名语义；是否接受由 node 服务端鉴权决定（WS 4401 会如实回报）。
     const tk = token.trim();
@@ -196,7 +193,6 @@ export abstract class ProtocolClient {
             kind: 'auth',
             token: tk,
             since,
-            ...(tenantId !== undefined && tenantId !== '' ? { tenant_id: tenantId } : {}),
           }),
         );
       });
@@ -232,9 +228,9 @@ export abstract class ProtocolClient {
    * 丢弃当前连接并以指定 since 重新建连。
    * 与 `connect` 不同：即使 state 已是 open 也会强制重建（seq 回退重放）。
    */
-  restart(token: string, since = 0, tenantId?: string): Promise<void> {
+  restart(token: string, since = 0): Promise<void> {
     this.close();
-    return this.connect(token, since, tenantId);
+    return this.connect(token, since);
   }
 
   private failConnect(message: string): void {
@@ -260,8 +256,6 @@ export abstract class ProtocolClient {
           node: frame.node,
           from_seq: frame.from_seq,
           latest_seq: frame.latest_seq,
-          // 0.5 hello 携带 token 解析出的 tenant；丢掉会让 tenant 徽章/切换失准。
-          ...(frame.tenant_id !== undefined ? { tenant_id: frame.tenant_id } : {}),
         };
         this.setState('open');
         const resolve = this.connectResolve;

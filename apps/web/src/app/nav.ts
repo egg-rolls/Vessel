@@ -17,7 +17,6 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'agents' },
   { id: 'teams' },
   { id: 'nodes' },
-  // Tenants 入口隐藏（CONTRACT-0.49 C7；文件与类型保留，defer-T4）。
   { id: 'runs' },
   { id: 'tools' },
   { id: 'mcp' },
@@ -72,8 +71,6 @@ export function primaryRoute(domain: PrimaryDomain): Route {
       return { domain: 'mcp' };
     case 'channels':
       return { domain: 'channels' };
-    case 'tenants':
-      return { domain: 'tenants' };
     case 'capabilities':
       return { domain: 'capabilities' };
     case 'visual':
@@ -138,8 +135,6 @@ export function routeBreadcrumb(route: Route): string {
       return t(`breadcrumb.observe.${route.tab}`);
     case 'plugins':
       return t('breadcrumb.plugins');
-    case 'tenants':
-      return t('breadcrumb.tenants');
     case 'capabilities':
       return t('breadcrumb.capabilities');
     case 'visual':

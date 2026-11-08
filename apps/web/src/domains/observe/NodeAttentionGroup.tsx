@@ -39,7 +39,7 @@ export function NodeAttentionGroup({
   navigate: (route: Route) => void;
 }) {
   useLocale();
-  const { hasToken, epoch, tenantEpoch, tenantId } = useConnection();
+  const { hasToken, epoch } = useConnection();
   const { fetchAttention } = useNodes();
   const [more, setMore] = useState<{
     items: ListedInteraction[];
@@ -48,22 +48,20 @@ export function NodeAttentionGroup({
   const [moreError, setMoreError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
-  /** 每个节点自己的分页身份；切节点 / 状态 / tenant / epoch / 手动刷新都重置。 */
-  const pageKey = `${node.name}:${epoch}:${tenantEpoch}:${tenantId ?? ''}:${status}:${refreshSeq}`;
+  /** 每个节点自己的分页身份；切节点 / 状态 / epoch / 手动刷新都重置。 */
+  const pageKey = `${node.name}:${epoch}:${status}:${refreshSeq}`;
   const pageKeyRef = useRef(pageKey);
   pageKeyRef.current = pageKey;
 
-  const tenantParam = tenantId ? { tenant_id: tenantId } : {};
   const resource = useResource({
     load: () =>
       fetchAttention(node, {
         status,
         limit: ATTENTION_PAGE_SIZE,
         order: 'newest',
-        ...tenantParam,
       }),
     enabled: hasToken,
-    deps: [node.name, node.url, epoch, tenantEpoch, tenantId, status, refreshSeq],
+    deps: [node.name, node.url, epoch, status, refreshSeq],
   });
   useRefreshSignal(() => {
     setMore(null);
@@ -108,7 +106,6 @@ export function NodeAttentionGroup({
         limit: ATTENTION_PAGE_SIZE,
         order: 'newest',
         cursor: nextCursor,
-        ...tenantParam,
       });
       if (pageKeyRef.current !== keyAtStart) return;
       setMore((prev) => ({

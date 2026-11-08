@@ -59,7 +59,6 @@ export interface ConfigInitOptions {
 export interface ConfigShowOptions {
   sources?: boolean;
   json?: boolean;
-  tenantId?: string;
   configPath?: string;
   userConfigPath?: string;
   env?: EnvMap;
@@ -270,14 +269,13 @@ export async function configSetCommand(
   return { exitCode: 0, stdout: ui.ok(`${key} = ${String(parsed)} (${target})`), stderr: '' };
 }
 
-/** `vessel config show [--sources] [--json] [--tenant <id>]` */
+/** `vessel config show [--sources] [--json]` */
 export async function configShowCommand(
   options: ConfigShowOptions = {},
 ): Promise<ConfigCommandResult> {
   const result = await loadConfig({
     configPath: options.configPath,
     userConfigPath: options.userConfigPath,
-    tenantId: options.tenantId,
     env: options.env ?? process.env,
   });
 
@@ -298,7 +296,6 @@ export async function configShowCommand(
     sources: result.sources,
     paths: result.paths,
     tenantId: result.tenantId,
-    tenantOverlayKeys: result.tenantOverlayKeys,
   });
 
   if (options.json) {
@@ -316,9 +313,6 @@ export async function configShowCommand(
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, source]) => `${key}: ${source}`);
     stdout += `\n# sources\n${lines.join('\n')}\n`;
-    if (snapshot.tenant_overlay_keys && snapshot.tenant_overlay_keys.length > 0) {
-      stdout += `\n# tenant overlay keys\n${snapshot.tenant_overlay_keys.join('\n')}\n`;
-    }
   }
 
   return { exitCode: 0, stdout, stderr: warningText };

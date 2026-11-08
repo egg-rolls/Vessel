@@ -17,7 +17,12 @@ import { join } from 'node:path';
 import type { ConfigLoadOptions, VesselConfig } from '../packages/config/src/index';
 import { loadConfig } from '../packages/config/src/index';
 import type { SessionInfo, SessionStore, TenantPaths } from '../packages/core/src/index';
-import { ensureWriteTenantPaths, resolveDataDir, resolveReadonlyTenantPaths } from './data-paths';
+import {
+  ensureWriteTenantPaths,
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveReadonlyTenantPaths,
+} from './data-paths';
 import { createSessionStore } from './session-factory';
 
 /** 列表展示上限 */
@@ -65,13 +70,15 @@ async function resolveLocalLayout(
   }
 
   const dataDir = resolveDataDir(loaded.config);
+  // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
+  const tenantId = resolveEffectiveTenantId(loaded.tenantId, dataDir);
   // 0.49 T2（C14 r7）：`-c` / `-r <id>` 是写意图续接，先迁移；`-r` 无 id 的纯列表
   // 只按布局选择读旧/根，不迁移、不建 marker/staging。
   const paths =
     mode === 'list'
-      ? await resolveReadonlyTenantPaths(dataDir, loaded.tenantId)
-      : await ensureWriteTenantPaths(dataDir, loaded.tenantId);
-  return { config: loaded.config, tenantId: loaded.tenantId, paths };
+      ? await resolveReadonlyTenantPaths(dataDir, tenantId)
+      : await ensureWriteTenantPaths(dataDir, tenantId);
+  return { config: loaded.config, tenantId, paths };
 }
 
 /** 打开当前配置/tenant 对应的会话后端（写意图）。 */

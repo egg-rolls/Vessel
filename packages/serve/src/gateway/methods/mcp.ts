@@ -58,18 +58,17 @@ export function createMcpMethods(deps: McpMethodsDeps): RpcMethodDefinition[] {
       },
       result_schema: {
         type: 'object',
-        required: ['ok', 'tenant_id'],
+        required: ['ok'],
         properties: {
           ok: { type: 'boolean' },
-          tenant_id: { type: 'string' },
         },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         if (!mcp?.reconnect) {
           throw new RpcError('not_found', 'MCP reconnect is not available');
         }
         await mcp.reconnect(stringParam(params, 'name'));
-        return { ok: true, tenant_id: ctx.tenantId };
+        return { ok: true };
       },
     },
   ];

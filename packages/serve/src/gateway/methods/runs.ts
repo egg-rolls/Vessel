@@ -20,8 +20,8 @@ import {
 } from '../../durable.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import type { LiveRunSnapshotLike, RunControlLike } from '../../run-control.js';
-import { mapTenantError, type TenantControlLike } from '../../tenant.js';
-import { checkpointBelongsToTenant, stringParam } from './common.js';
+import { mapTenantError } from '../../tenant.js';
+import { stringParam } from './common.js';
 import { runStatusSchema } from './schemas.js';
 
 export interface RunMethodsDeps {
@@ -31,9 +31,6 @@ export interface RunMethodsDeps {
   /** 同 `runControl`，但缺失时按 `requireRuntime` 语义抛错。 */
   requireRunControl(): RunControlLike;
   durable(): DurableGatewayOptions | undefined;
-  tenants?: TenantControlLike;
-  /** 已受理（queued + running）的 run 数，quota 同步检查用。 */
-  activeCount(): number;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
 }
@@ -98,42 +95,8 @@ function recencyOf(run: Record<string, unknown>): number {
 }
 
 export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
-  const {
-    defaultTenantId,
-    runControl,
-    requireRunControl,
-    durable,
-    tenants,
-    activeCount,
-    reserveResume,
-    releaseResume,
-  } = deps;
-
-  async function checkQuota(
-    tenantId: string,
-    operation: 'runs.start' | 'sessions.create',
-  ): Promise<void> {
-    try {
-      await tenants?.checkQuota?.(tenantId, operation);
-    } catch (error) {
-      mapTenantError(error);
-    }
-  }
-
-  async function enforceConcurrentQuota(tenantId: string): Promise<void> {
-    let limit: number | undefined;
-    try {
-      limit = (await tenants?.get(tenantId))?.quota?.max_concurrent_runs;
-    } catch (error) {
-      mapTenantError(error);
-    }
-    if (limit !== undefined && activeCount() >= limit) {
-      throw new RpcError('quota_exceeded', `max_concurrent_runs exceeded for tenant ${tenantId}`, {
-        tenant_id: tenantId,
-        limit,
-      });
-    }
-  }
+  const { defaultTenantId, runControl, requireRunControl, durable, reserveResume, releaseResume } =
+    deps;
 
   /** live 命中（snapshot 里同 id 的 queued / running）。 */
   function findLive(runId: string): LiveRunSnapshotLike | undefined {
@@ -222,23 +185,16 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         required: ['run'],
         properties: { run: runStatusSchema },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         const runId = stringParam(params, 'run_id');
         const live = findLive(runId);
         if (live !== undefined) return { run: liveRunStatus(live) };
         const durableStore = durable();
         if (!durableStore) {
-          if (ctx.tenantId !== defaultTenantId) {
-            throw new RpcError(
-              'forbidden',
-              `Durable runs are not configured for tenant: ${ctx.tenantId}`,
-            );
-          }
           throw new RpcError('not_found', `Run not found: ${runId}`);
         }
-        // durable 页签覆盖所有 body；tenant 校验在下一行统一做。
         const checkpoint = await durableStore.store.load(runId);
-        if (!checkpoint || !checkpointBelongsToTenant(checkpoint, ctx.tenantId)) {
+        if (!checkpoint) {
           throw new RpcError('not_found', `Run not found: ${runId}`);
         }
         return { run: normalizeDurableRun(checkpoint as unknown as Record<string, unknown>) };
@@ -254,7 +210,6 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           input: { type: 'string', minLength: 1 },
           session_id: { type: 'string' },
           agent_id: { type: 'string', minLength: 1 },
-          tenant_id: { type: 'string' },
         },
       },
       result_schema: {
@@ -271,10 +226,8 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           session_id: { type: 'string' },
         },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         const control = requireRunControl();
-        await enforceConcurrentQuota(ctx.tenantId);
-        await checkQuota(ctx.tenantId, 'runs.start');
         const agentId = typeof params.agent_id === 'string' ? params.agent_id : undefined;
         const requestedSession =
           typeof params.session_id === 'string' ? params.session_id : undefined;
@@ -311,26 +264,20 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         required: ['cancelled'],
         properties: { cancelled: { type: 'boolean' } },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         const runId = stringParam(params, 'run_id');
         const control = runControl();
         if (control === undefined) {
-          if (ctx.tenantId !== defaultTenantId) {
-            throw new RpcError(
-              'forbidden',
-              `Tenant run control is not configured: ${ctx.tenantId}`,
-            );
-          }
           throw new RpcError('not_found', `Run not found: ${runId}`);
         }
-        // 先按 snapshot 判存在（跨 tenant 一律 not_found，不泄漏存在性）。
+        // 先按 snapshot 判存在，不泄漏不存在的 run。
         const target = liveRunsOf(control).find((run) => run.run_id === runId);
         if (target === undefined) throw new RpcError('not_found', `Run not found: ${runId}`);
         const cancelled = await control.cancel(runId);
         // scheduler 不会为 queued-cancel 产出 core 事件，也就没有 RunRecord；
         // 补一条终态 RunRecord，否则该 run 会从列表消失。
         if (target.status === 'queued') {
-          await writeQueuedCancelledRecord(ctx.tenantId, target);
+          await writeQueuedCancelledRecord(defaultTenantId, target);
         }
         return { cancelled };
       },
@@ -351,15 +298,9 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           status: { type: 'string', enum: ['queued'] },
         },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         const durableStore = durable();
         if (!durableStore?.store || !durableStore.resume) {
-          if (ctx.tenantId !== defaultTenantId) {
-            throw new RpcError(
-              'forbidden',
-              `Durable runs are not configured for tenant: ${ctx.tenantId}`,
-            );
-          }
           throw new RpcError('not_found', 'Durable resume is not available');
         }
         const runId = stringParam(params, 'run_id');
@@ -378,10 +319,6 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         if (!checkpoint) {
           releaseResume(runId);
           throw new RpcError('not_found', `Run not found: ${runId}`);
-        }
-        if (!checkpointBelongsToTenant(checkpoint, ctx.tenantId)) {
-          releaseResume(runId);
-          throw new RpcError('forbidden', `Run does not belong to tenant: ${ctx.tenantId}`);
         }
         if (!isResumableStatus(checkpoint.status)) {
           releaseResume(runId);

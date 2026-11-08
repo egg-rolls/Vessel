@@ -43,14 +43,10 @@ import {
 export interface AgentMethodsDeps {
   registry: AgentRegistry;
   /**
-   * 0.27：某 tenant 的 live run 快照（唯一来源 = `RunControlLike.snapshot()`
+   * 0.27：单执行面的 live run 快照（唯一来源 = `RunControlLike.snapshot()`
    * 的 queued + running）；serve 不再持有 run 记录或队列。
-   *
-   * 需要 tenant 参数：`LiveRunSnapshotLike` 不带 tenant_id（snapshot 本身按
-   * tenant 取），返回合并列表会把别的 tenant 的 agent 泄漏给当前调用方。
    */
-  liveRuns: (tenantId: string) => readonly LiveRunSnapshotLike[];
-  defaultTenantId: string;
+  liveRuns: () => readonly LiveRunSnapshotLike[];
   /**
    * 0.25：agent 生命周期控制面（app 注入 AgentService 适配器）。
    * 缺省 = `agents.create|update|close` 仍进 manifest，但 handler 返回 `not_found`。
@@ -64,10 +60,6 @@ export interface AgentMethodsDeps {
    * 由 agent 层按全量投影处理。
    */
   sessionStore?: () => SessionStore | undefined;
-}
-
-function isDefaultTenant(tenantId: string, defaultTenantId: string): boolean {
-  return tenantId === defaultTenantId;
 }
 
 /**
@@ -85,28 +77,18 @@ function isHumanAdmin(ctx: RpcMethodContext): boolean {
   return ctx.principal.role === 'admin' && ctx.principal.agent_id === undefined;
 }
 
-/** 事件派生条目按 tenant 过滤；无 tenant 的历史事件只归 default。 */
-function derivedVisible(entry: AgentRegistryEntry, tenantId: string, isDefault: boolean): boolean {
-  if (isDefault) {
-    return entry.tenant_id === undefined || entry.tenant_id === tenantId;
-  }
-  return entry.tenant_id === tenantId;
-}
-
-function collectAgents(deps: AgentMethodsDeps, tenantId: string): Map<string, AgentRegistryEntry> {
-  const isDefault = isDefaultTenant(tenantId, deps.defaultTenantId);
+function collectAgents(deps: AgentMethodsDeps): Map<string, AgentRegistryEntry> {
   const merged = new Map<string, AgentRegistryEntry>();
 
   // 1. 事件派生（最完整：parent/depth/task/session/usage）。
   for (const entry of deps.registry.list()) {
-    if (!derivedVisible(entry, tenantId, isDefault)) continue;
     merged.set(entry.id, { ...entry });
   }
 
   // 2. live run 快照：补齐根 agent 与队列位置。
   // 0.27：id 用 `agent_id`（不再借用 core run id），状态 / 队列位 / session
   // 全部来自 scheduler snapshot。
-  for (const run of deps.liveRuns(tenantId)) {
+  for (const run of deps.liveRuns()) {
     if (merged.has(run.agent_id)) continue;
     merged.set(run.agent_id, {
       id: run.agent_id,
@@ -127,10 +109,6 @@ function collectAgents(deps: AgentMethodsDeps, tenantId: string): Map<string, Ag
     if (entry.session_id === undefined) continue;
     const usage = deps.registry.contextUsage(entry.session_id);
     if (!usage) continue;
-    const usageVisible = isDefault
-      ? usage.tenant_id === undefined || usage.tenant_id === tenantId
-      : usage.tenant_id === tenantId;
-    if (!usageVisible) continue;
     if (usage.used !== undefined) entry.context_used = usage.used;
     if (usage.max !== undefined) entry.context_max = usage.max;
   }
@@ -201,12 +179,9 @@ function publicAgentCard(
 
 // ── 0.25：canonical agent 生命周期（批量契约） ──
 
-/** 未注入 / tenant 不匹配都按 `not_found` 处理（不泄漏跨 tenant 存在性）。 */
-function requireAgentControl(
-  agent: AgentControlLike | undefined,
-  ctx: RpcMethodContext,
-): AgentControlLike {
-  if (!agent || agent.tenantId !== ctx.tenantId) {
+/** 未注入按 `not_found` 处理。 */
+function requireAgentControl(agent: AgentControlLike | undefined): AgentControlLike {
+  if (!agent) {
     throw new RpcError('not_found', 'Agent control is not available');
   }
   return agent;
@@ -591,7 +566,7 @@ async function visibleAgents(
   const sessionId = filters.sessionId;
   const stateArg = filters.state as AgentStateLike | undefined;
   const visibilityArg = filters.visibility;
-  const agentServiceAvailable = deps.agent !== undefined && deps.agent.tenantId === ctx.tenantId;
+  const agentServiceAvailable = deps.agent !== undefined;
 
   // 合成 owner principal 携带 agent id：按 viewer 从 AgentService 列出成员，
   // private 可见性与 CLI `vessel agent list` 的语义保持不变。
@@ -607,7 +582,7 @@ async function visibleAgents(
       .map(publicMember);
   }
 
-  const agents = [...collectAgents(deps, ctx.tenantId).values()]
+  const agents = [...collectAgents(deps).values()]
     .filter((entry) => sessionId === undefined || entry.session_id === sessionId)
     .filter((entry) => filters.state === undefined || entry.state === filters.state)
     .map(publicAgent);
@@ -714,10 +689,10 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           as_of: { type: 'number' },
         },
       },
-      handler: (params, ctx) => {
+      handler: (params) => {
         const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
         const state = typeof params.state === 'string' ? params.state : undefined;
-        const entries = [...collectAgents(deps, ctx.tenantId).values()].filter(
+        const entries = [...collectAgents(deps).values()].filter(
           (entry) =>
             (sessionId === undefined || entry.session_id === sessionId) &&
             (state === undefined || entry.state === state),
@@ -789,7 +764,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
       },
       result_schema: agentLifecycleResultSchema,
       handler: async (params, ctx) => {
-        const control = requireAgentControl(deps.agent, ctx);
+        const control = requireAgentControl(deps.agent);
         const entries = requireAgentEntries(params, 'agents.create');
         const scope = teamScopeOf(ctx);
         // 合成 owner principal：新成员归属 / 父子关系沿用 owner 语义。
@@ -807,7 +782,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           teamId: string,
           teamControl: TeamControlLike | undefined,
         ): Promise<string | undefined> => {
-          if (!teamControl || teamControl.tenantId !== ctx.tenantId) {
+          if (!teamControl) {
             return Promise.resolve(undefined);
           }
           const cached = teamWorkspaces.get(teamId);
@@ -826,13 +801,12 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           const cached = teamChecks.get(teamId);
           if (cached !== undefined) return cached;
           const teamControl = deps.teams;
-          const pending =
-            !teamControl || teamControl.tenantId !== ctx.tenantId
-              ? Promise.resolve(false)
-              : teamControl
-                  .get(teamId)
-                  .then((detail) => detail !== undefined)
-                  .catch(() => false);
+          const pending = !teamControl
+            ? Promise.resolve(false)
+            : teamControl
+                .get(teamId)
+                .then((detail) => detail !== undefined)
+                .catch(() => false);
           teamChecks.set(teamId, pending);
           return pending;
         };
@@ -1055,7 +1029,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
       },
       result_schema: agentLifecycleResultSchema,
       handler: async (params, ctx) => {
-        const control = requireAgentControl(deps.agent, ctx);
+        const control = requireAgentControl(deps.agent);
         const entries = requireAgentEntries(params, 'agents.update');
         const scope = teamScopeOf(ctx);
 
@@ -1149,7 +1123,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
       },
       result_schema: agentLifecycleResultSchema,
       handler: async (params, ctx) => {
-        const control = requireAgentControl(deps.agent, ctx);
+        const control = requireAgentControl(deps.agent);
         const entries = requireAgentEntries(params, 'agents.close');
         const scope = teamScopeOf(ctx);
 
@@ -1195,7 +1169,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
       },
       result_schema: agentSendResultSchema,
       handler: async (params, ctx) => {
-        const control = requireAgentControl(deps.agent, ctx);
+        const control = requireAgentControl(deps.agent);
         const entries = requireObjectEntries(params, 'messages', 'agents.send');
         const scope = teamScopeOf(ctx);
         const from = actorOf(ctx);
@@ -1307,7 +1281,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
       },
       result_schema: agentDispatchResultSchema,
       handler: async (params, ctx) => {
-        const control = requireAgentControl(deps.agent, ctx);
+        const control = requireAgentControl(deps.agent);
         const entries = requireObjectEntries(params, 'messages', 'agents.dispatch');
         const scope = teamScopeOf(ctx);
         const from = actorOf(ctx);

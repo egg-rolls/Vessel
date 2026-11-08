@@ -34,9 +34,6 @@ export interface SseClientState {
   encodeGap: (gap: EventGap) => string;
   replay?: SseReplayState;
   onClose?: () => void;
-  /** 0.5 tenant 过滤；undefined = 不过滤（team/MCP legacy 流） */
-  tenantId?: string;
-  allTenants?: boolean;
   /** 可选事件过滤（events.subscribe run_id / types） */
   accepts?: (event: RunEvent) => boolean;
 }

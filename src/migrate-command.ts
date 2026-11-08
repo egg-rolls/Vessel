@@ -9,7 +9,7 @@
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir, resolveEffectiveTenantId } from './data-paths';
 import { MigrateError, type MigrateResult, migrate } from './migrate';
 
 type EnvMap = Record<string, string | undefined>;
@@ -26,7 +26,6 @@ export interface MigrateCommandOptions {
   from: string;
   to: string;
   apply?: boolean;
-  tenantId?: string;
   source?: string;
   runsSource?: string;
   json?: boolean;
@@ -75,18 +74,16 @@ export async function migrateCommand(
   }
 
   const env = options.env ?? process.env;
-  // 0.49 T1：单 id 只来自 loadConfig()；`--tenant` 作为被忽略来源传入，
-  // 由 loader 统一产出 warning（C0/C2/C8）。
+  // 0.49 T4：单 id 只来自 loadConfig()。
   const {
     config,
-    tenantId,
+    tenantId: configTenantId,
     validation,
     paths: configPaths,
   } = await loadConfig({
     configPath: options.configPath,
     userConfigPath: options.userConfigPath,
     env,
-    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   });
 
   // C1 规则 1/4：配置错误时不得静默落到 tenantId 继续执行。
@@ -99,12 +96,15 @@ export async function migrateCommand(
   }
   for (const warning of validation.warnings) console.warn(`⚠ ${warning.message}`);
 
+  // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
+  const dataDir = resolveDataDir(config, env);
+  const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
   try {
     const result = await migrate({
       from: options.from,
       to: options.to,
       tenantId,
-      dataDir: resolveDataDir(config, env),
+      dataDir,
       source: options.source ?? defaultSource(options.from, config),
       ...(options.runsSource ? { runsSource: options.runsSource } : {}),
       apply: options.apply === true,

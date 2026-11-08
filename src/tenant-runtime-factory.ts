@@ -15,13 +15,7 @@
 
 import { join } from 'node:path';
 import { deriveSessionMeta } from '@vessel-agent/core/session';
-import {
-  type ConfigSources,
-  isTenantToolAllowed,
-  resolveTenantToolPolicy,
-  type TenantToolPolicy,
-  type VesselConfig,
-} from '../packages/config/src/index';
+import { type ConfigSources, type VesselConfig } from '../packages/config/src/index';
 import {
   type ContextSummarizer,
   createDefaultTraceRedactor,
@@ -29,8 +23,6 @@ import {
   createSessionBreaker,
   type EventStream,
   estimateTokens,
-  type Guardrail,
-  type Hook,
   InProcessScheduler,
   installPluginsIntoHost,
   type LLMProvider,
@@ -41,19 +33,15 @@ import {
   noopLogger,
   type Plugin,
   type PluginHost,
-  type PluginInstallScope,
-  type ProviderFactory,
   projectMessages,
   type RunnableAgent,
   type RunRecordStore,
   type Runtime,
   type RuntimePermissionConfig,
   type Scheduler,
-  type SelfCardOptions,
   SessionEventLog,
   type SessionStore,
   type TenantPaths,
-  type ToolDefinition,
   type TraceRedactor,
 } from '../packages/core/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
@@ -209,90 +197,6 @@ export interface TenantRuntimeBundle {
 
 function tenantSessionsDbPath(tenantRoot: string): string {
   return join(tenantRoot, 'sessions.db');
-}
-
-/**
- * 0.18（DECISION-032 §1）：tenant 工具策略的 PluginHost 包装器。
- *
- * 只在注册边界过滤工具：被拒绝的工具既不进 `listTools()` / `getTool()`，
- * 也不会被模型看到或执行。provider / hook / guardrail / 插件生命周期不变；
- * `beginPluginInstall` 原样转发，安装失败回滚继续生效。
- */
-export class TenantToolHost implements PluginHost {
-  private readonly inner: PluginHost;
-  private readonly policy: TenantToolPolicy | undefined;
-  /** 仅在内部 host 支持回滚时暴露；未支持时不冒充 */
-  beginPluginInstall?: (pluginName: string) => PluginInstallScope;
-
-  constructor(inner: PluginHost, policy?: TenantToolPolicy) {
-    this.inner = inner;
-    this.policy = policy;
-    const begin = inner.beginPluginInstall?.bind(inner);
-    if (begin) {
-      this.beginPluginInstall = (pluginName: string): PluginInstallScope => begin(pluginName);
-    }
-  }
-
-  registerTool(def: ToolDefinition): void {
-    if (!isTenantToolAllowed(def.name, this.policy)) return;
-    this.inner.registerTool(def);
-  }
-
-  /**
-   * 转发注销（热应用 tools applier 用）：内层宿主不支持时返回 false，
-   * 由 applier 按“不可热移除”降级，不在这里抛错。
-   */
-  unregisterTool(name: string): boolean {
-    return this.inner.unregisterTool?.(name) ?? false;
-  }
-
-  registerProvider(name: string, factory: ProviderFactory): void {
-    this.inner.registerProvider(name, factory);
-  }
-
-  registerGuardrail(guardrail: Guardrail): void {
-    this.inner.registerGuardrail(guardrail);
-  }
-
-  registerHook(hook: Hook): void {
-    this.inner.registerHook(hook);
-  }
-
-  getTool(name: string): ToolDefinition | undefined {
-    return this.inner.getTool(name);
-  }
-
-  getProvider(name: string): ProviderFactory | undefined {
-    return this.inner.getProvider(name);
-  }
-
-  getGuardrails(): Guardrail[] {
-    return this.inner.getGuardrails();
-  }
-
-  getHooks(): Hook[] {
-    return this.inner.getHooks();
-  }
-
-  listTools(): ToolDefinition[] {
-    return this.inner.listTools();
-  }
-
-  listProviders(): string[] {
-    return this.inner.listProviders();
-  }
-}
-
-/** Self Card 的工具面只减不增：与 tenant policy 求交集（`src/self-card.ts` 不动）。 */
-function withTenantToolPolicy(
-  card: SelfCardOptions,
-  policy: TenantToolPolicy | undefined,
-): SelfCardOptions {
-  if (!policy) return card;
-  return {
-    ...card,
-    tools: card.tools.filter((name) => isTenantToolAllowed(name, policy)),
-  };
 }
 
 /**
@@ -614,8 +518,6 @@ export async function buildTenantRuntime(
   options: BuildTenantRuntimeOptions,
 ): Promise<TenantRuntimeBundle> {
   const { tenantId, config, tenantPaths } = options;
-  // 0.18（DECISION-032 §1）：本 tenant 的工具策略在注册边界生效。
-  const toolPolicy = resolveTenantToolPolicy(config, tenantId);
   const useMock = options.useMock ?? false;
   const headless = options.headless ?? false;
   const loader = options.loader ?? new PluginLoader();
@@ -801,8 +703,8 @@ export async function buildTenantRuntime(
 
   // ── Stage 4：tenant 范围内只安装一次插件 ──────────
   // 插件安装原本在 ExecutionUnit 构造内；改成 per-session EU 后，同一 tenant 的
-  // 多个 EU 共享一个 tenant PluginHost，安装/init/dispose 只发生一次。
-  const finalPluginHost = new TenantToolHost(new MemoryPluginHost(), toolPolicy);
+  // 多个 EU 共享一个 PluginHost，安装/init/dispose 只发生一次。
+  const finalPluginHost = new MemoryPluginHost();
   const installedPlugins = await installPluginsIntoHost({
     host: finalPluginHost,
     plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
@@ -846,14 +748,10 @@ export async function buildTenantRuntime(
     journalFactory,
   });
 
-  // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）；
-  // 0.18：tenant policy 只减不增。
-  const selfCard = withTenantToolPolicy(
-    ownerSelfCard(config, providerModel, {
-      askUser: options.registerAskUser === true,
-    }),
-    toolPolicy,
-  );
+  // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）。
+  const selfCard = ownerSelfCard(config, providerModel, {
+    askUser: options.registerAskUser === true,
+  });
 
   /** 本 bundle 已服务过的 session（关闭时逐个 retire）。 */
   const servedSessionIds = new Set<string>();

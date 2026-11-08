@@ -5,7 +5,8 @@
  * - 不 import node 客户端目录，不复用 node WS 客户端的握手 / token 语义。
  * - token 只在内存与 `Authorization` 头 / WS auth 帧里；不进 URL / query / 日志。
  * - `/health` 免鉴权；`/v1/hub/directory` 仅非回环带 Bearer（回环可匿名）；
- *   `/v1/hub/events` 首帧认证 `{v:1,kind:'auth',protocol:'vessel.hub/1',token?}`。
+ *   `/v1/hub/events` 首帧认证 `{v:1,kind:'auth',protocol:'vessel.hub/2',token?}`；
+ *   旧 `vessel.hub/1` peer 由现有 `incompatible` 错误面显式失败。
  * - 数据层负责：connect（health + directory）、WS auth、错误分类、
  *   401/403/4401 清 token 并停重连、5xx/网络 1s..30s 退避。
  *
@@ -14,21 +15,21 @@
 
 import { isLoopbackHostname } from '../url';
 import { defaultHubStorage, type HubStorage } from './hub-storage';
-import type {
-  HubDirectory,
-  HubHealth,
-  HubNodeCounts,
-  HubNodeRecord,
-  HubNodeStatus,
-  HubPointerFrame,
-  HubServerEvent,
+import {
+  HUB_PROTOCOL,
+  type HubDirectory,
+  type HubHealth,
+  type HubNodeCounts,
+  type HubNodeRecord,
+  type HubNodeStatus,
+  type HubPointerFrame,
+  type HubServerEvent,
 } from './hub-types';
 
 const REQUEST_TIMEOUT_MS = 10_000;
 export const HUB_RECONNECT_MIN_MS = 1_000;
 export const HUB_RECONNECT_MAX_MS = 30_000;
 export const HUB_POINTER_TTL_MS = 4_000;
-const HUB_PROTOCOL = 'vessel.hub/1';
 const EVENTS_PATH = '/v1/hub/events';
 const DIRECTORY_PATH = '/v1/hub/directory';
 const HEALTH_PATH = '/health';
@@ -160,11 +161,9 @@ function parseCounts(value: unknown): HubNodeCounts {
 
 function parseNode(value: unknown): HubNodeRecord | null {
   if (!isRecord(value)) return null;
-  const pairingId = text(value.pairing_id);
   const nodeId = text(value.node_id);
-  const tenantId = text(value.tenant_id);
   const status = text(value.status);
-  if (!pairingId || !nodeId || !tenantId || !status || !NODE_STATUSES.has(status)) return null;
+  if (!nodeId || !status || !NODE_STATUSES.has(status)) return null;
 
   const dataPlane =
     value.data_plane === 'direct' || value.data_plane === 'unreachable'
@@ -174,9 +173,7 @@ function parseNode(value: unknown): HubNodeRecord | null {
     value.direction === 'hub' || value.direction === 'node' ? value.direction : undefined;
 
   return {
-    pairing_id: pairingId,
     node_id: nodeId,
-    tenant_id: tenantId,
     status: status as HubNodeStatus,
     truncated: value.truncated === true,
     counts: parseCounts(value.counts),
@@ -211,7 +208,7 @@ function parsePointer(value: Record<string, unknown>): HubPointerFrame | null {
   return {
     v: 1,
     kind: 'pointer',
-    protocol: text(value.protocol) ?? HUB_PROTOCOL,
+    protocol: HUB_PROTOCOL,
     dialer: text(value.dialer) ?? 'hub',
     node_id: nodeId,
     hub_id: hubId,
@@ -231,6 +228,10 @@ export function parseHubServerEvent(raw: string): HubServerEvent | null {
     return null;
   }
   if (!isRecord(value) || value.v !== 1) return null;
+  // 旧 v1 peer 显式失败，而不是静默忽略整个目录。
+  if (typeof value.protocol === 'string' && value.protocol !== HUB_PROTOCOL) {
+    return { kind: 'incompatible' };
+  }
   switch (value.kind) {
     case 'hello': {
       const hubId = text(value.hub_id);
@@ -332,6 +333,14 @@ export function openHubEvents(
             next.send(
               JSON.stringify({ v: 1, kind: 'pong', protocol: HUB_PROTOCOL, dialer: 'hub' }),
             );
+          }
+          break;
+        case 'incompatible':
+          handlers.onIncompatible?.();
+          try {
+            next.close(4400, 'incompatible');
+          } catch {
+            // 已关闭 / 不可关闭：错误面已由 onIncompatible 表达。
           }
           break;
       }
@@ -574,6 +583,8 @@ export class HubSession {
     try {
       const directory = await new HubClient({ baseUrl, token, deps: this.deps }).directory();
       if (epoch !== this.epoch || this.stopped) return;
+      // 协议不兼容已判定：目录成功也不得把 incompatible 覆盖成 connected。
+      if (this.state.status === 'incompatible') return;
       this.patch({
         directory,
         status: directory.nodes.length === 0 ? 'empty' : 'connected',

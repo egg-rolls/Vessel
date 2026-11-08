@@ -6,7 +6,10 @@
  * 加载器自动将 YAML 的 snake_case 键递归映射为 camelCase。
  *
  * 0.5 优先级（DECISION-010 §2.4 / §11.4）：
- * CLI > VESSEL_* env > tenant overlay > project > user > default
+ * CLI > VESSEL_* env > project > user > default
+ *
+ * 0.49 T4：tenant 块 / overlay / 单 id 输入已删除；解析结果 `tenantId` 是内部
+ * 单公司常量（C0），不再是用户可配置维度。
  */
 
 import * as os from 'node:os';
@@ -22,30 +25,23 @@ import type {
   ConfigValidationResult,
   ConfigValidationWarning,
   ProviderConfig,
-  TenantConfig,
   UserConfig,
   VesselConfig,
 } from './types.js';
 import { deepMerge } from './utils.js';
-import {
-  findExplicitSecretPaths,
-  isValidTenantId,
-  TENANT_OVERLAY_ALLOWED_KEYS,
-  validateConfig,
-} from './validator.js';
+import { findExplicitSecretPaths, validateConfig } from './validator.js';
 
 type EnvMap = Record<string, string | undefined>;
 
-/** 配置加载结果（0.5：新增 sources / paths / tenantId / tenantOverlayKeys） */
+/** 配置加载结果（0.5：sources / paths / tenantId；0.49 T4 删除 tenantOverlayKeys） */
 export interface ConfigLoadResult {
   config: VesselConfig;
   validation: ConfigValidationResult;
-  /** 叶子键（camelCase 点路径）→ 来源；tenant overlay 命中的键不在此处 */
+  /** 叶子键（camelCase 点路径）→ 来源 */
   sources: ConfigSources;
   paths: { user: string; project: string };
+  /** 内部单公司 id（C0：供路径段 / principal 使用，不是用户可配置维度） */
   tenantId: string;
-  /** tenant overlay 命中的叶子键 */
-  tenantOverlayKeys: string[];
 }
 
 /** 类型守卫：判断值是否为纯对象（非 null、非数组） */
@@ -95,12 +91,10 @@ function convertKeys(
 }
 
 /**
- * 需要原样保留键名的 map 路径（0.5 扩展到 serve.tokens / tenant.tenants 等）：
+ * 需要原样保留键名的 map 路径（0.5）：
  * - mcpServers 第一层：server 名
  * - mcpServers.<name>.env / .headers：环境变量 / HTTP 头名
  * - serve.tokens：token 原文
- * - tenant.tenants：tenant id（允许 `_`）
- * - tenant.tenants.<id>.mcpServers 及其 env / headers
  */
 export function preserveConfigMapKeys(path: string[], _key: string): boolean {
   if (path[0] === 'mcpServers') {
@@ -108,14 +102,6 @@ export function preserveConfigMapKeys(path: string[], _key: string): boolean {
     return path.length === 3 && (path[2] === 'env' || path[2] === 'headers');
   }
   if (path[0] === 'serve' && path.length === 2 && path[1] === 'tokens') return true;
-  if (path[0] === 'tenant') {
-    if (path.length === 2 && path[1] === 'tenants') return true;
-    const inTenant = path.length >= 5 && path[1] === 'tenants' && path[3] === 'mcpServers';
-    if (!inTenant) return false;
-    // tenant.tenants.<id>.mcpServers.<name> 的下一层是 server 名
-    if (path.length === 4) return true;
-    return path.length === 6 && (path[5] === 'env' || path[5] === 'headers');
-  }
   return false;
 }
 
@@ -396,65 +382,6 @@ function applyLayerRecord(
   }
 }
 
-/** 应用 tenant overlay：记录命中键；覆盖的叶子从基础 sources 中移除。 */
-function applyOverlayRecord(
-  target: Record<string, unknown>,
-  overlay: Record<string, unknown>,
-  overlayKeys: string[],
-  sources: ConfigSources,
-  prefix: string,
-): void {
-  for (const [key, value] of Object.entries(overlay)) {
-    if (value === undefined) continue;
-    const fullPath = joinPath(prefix, key);
-    const current = target[key];
-
-    if (isRecord(value)) {
-      if (isRecord(current)) {
-        applyOverlayRecord(current, value, overlayKeys, sources, fullPath);
-      } else {
-        const created: Record<string, unknown> = {};
-        target[key] = created;
-        applyOverlayRecord(created, value, overlayKeys, sources, fullPath);
-      }
-      continue;
-    }
-
-    removeSourcePrefix(sources, fullPath);
-    target[key] = structuredClone(value);
-    overlayKeys.push(fullPath);
-  }
-}
-
-/** 去掉 overlay 内的 null（null 不进入合并，由校验报错） */
-function stripNulls(value: unknown): unknown {
-  if (value === null) return undefined;
-  if (Array.isArray(value)) {
-    const items = value.filter((item) => item !== null);
-    return items.length === value.length ? value : items;
-  }
-  if (!isRecord(value)) return value;
-  const result: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    const stripped = stripNulls(child);
-    if (stripped !== undefined) result[key] = stripped;
-  }
-  return result;
-}
-
-/** overlay 只合并白名单内的块；tools/quota 由 tenant 层单独消费。 */
-function sanitizeTenantOverlay(overlay: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const key of TENANT_OVERLAY_ALLOWED_KEYS) {
-    if (key === 'tools' || key === 'quota') continue;
-    const value = overlay[key];
-    if (value === undefined) continue;
-    const stripped = stripNulls(value);
-    if (stripped !== undefined) result[key] = stripped;
-  }
-  return result;
-}
-
 /** 用户配置中出现的 legacy provider 键（snake_case 名称，用于 warning）。 */
 function legacyProviderKeys(user: Record<string, unknown>): string[] {
   const keys: string[] = [];
@@ -508,11 +435,6 @@ function fullUserLayer(user: Record<string, unknown>): Record<string, unknown> {
   return layer;
 }
 
-function prefixErrors(errors: ConfigValidationError[], prefix: string): ConfigValidationError[] {
-  if (prefix === '') return errors;
-  return errors.map((error) => ({ ...error, path: joinPath(prefix, error.path) }));
-}
-
 /** 项目层显式密钥 → error（A-3 §10.6；消息不带值） */
 function projectSecretErrors(layer: Record<string, unknown>): ConfigValidationError[] {
   return findExplicitSecretPaths(layer).map((path) => ({
@@ -521,81 +443,11 @@ function projectSecretErrors(layer: Record<string, unknown>): ConfigValidationEr
   }));
 }
 
-function firstNonEmpty(...values: (string | undefined)[]): string | undefined {
-  for (const value of values) {
-    if (typeof value === 'string' && value.trim() !== '') return value;
-  }
-  return undefined;
-}
-
-interface SingleTenantResolution {
-  tenantId: string;
-  /** false 表示 C1 规则 1/2/4 命中配置错误，单 id 不可用 */
-  resolved: boolean;
-  errors: ConfigValidationError[];
-}
-
-/**
- * C1 单公司 id 解析（唯一实现，只由 loadConfig 调用）。
- *
- * 输入是已合并 user/project 的 `config.tenant`；`options.tenantId` 与
- * `VESSEL_TENANT` 不参与。顺序：非空 `tenant.default` → 唯一的 `tenant.tenants`
- * 键 → `DEFAULT_TENANT_ID`；多键且无 default 视为配置错误，不猜测。
- */
-function resolveSingleTenantId(tenant: TenantConfig | undefined): SingleTenantResolution {
-  const errors: ConfigValidationError[] = [];
-  const rawDefault = tenant?.default;
-  // 与旧 firstNonEmpty 一致：default 先 trim 再使用（" acme " 等价 "acme"）；
-  // 非字符串（YAML 类型错误）交给 validator 报错，不参与解析。
-  const defaultId = typeof rawDefault === 'string' ? rawDefault.trim() : undefined;
-  const hasDefault = defaultId !== undefined && defaultId !== '';
-  const tenants = isRecord(tenant?.tenants) ? tenant.tenants : undefined;
-  const keys = tenants ? Object.keys(tenants) : [];
-
-  // 规则 1：非空 default 唯一命中；非法时走配置错误出口，不落到后续规则。
-  if (hasDefault) {
-    if (!isValidTenantId(defaultId)) {
-      errors.push({
-        path: 'tenant',
-        message: `无法确定单公司 id：tenant.default "${defaultId}" 不是合法的 tenant id`,
-        value: defaultId,
-      });
-    }
-    return { tenantId: defaultId, resolved: errors.length === 0, errors };
-  }
-
-  // 规则 2：恰好一个 tenants 键。
-  if (keys.length === 1) {
-    const only = keys[0] as string;
-    if (!isValidTenantId(only)) {
-      errors.push({
-        path: 'tenant',
-        message: `无法确定单公司 id：tenant.tenants 中唯一的 id "${only}" 不是合法的 tenant id`,
-        value: only,
-      });
-    }
-    return { tenantId: only, resolved: errors.length === 0, errors };
-  }
-
-  // 规则 4：多键且无 default → 配置错误。
-  if (keys.length >= 2) {
-    errors.push({
-      path: 'tenant',
-      message: '无法确定单公司 id：tenant.tenants 有多个键且未设置 tenant.default',
-    });
-    return { tenantId: DEFAULT_TENANT_ID, resolved: false, errors };
-  }
-
-  // 规则 3：缺失或为空。
-  return { tenantId: DEFAULT_TENANT_ID, resolved: true, errors };
-}
-
 /**
  * 加载配置（综合加载）
- * 优先级：CLI flag > env (VESSEL_*) > tenant overlay > vessel.yaml >
- *         ~/.vessel/config.yaml > 安全默认
+ * 优先级：CLI flag > env (VESSEL_*) > vessel.yaml > ~/.vessel/config.yaml > 安全默认
  * @param options 加载选项
- * @returns 配置对象、校验结果、来源与 tenant 信息
+ * @returns 配置对象、校验结果、来源与内部单公司 id
  */
 export async function loadConfig(options: ConfigLoadOptions = {}): Promise<ConfigLoadResult> {
   const env: EnvMap = options.env ?? process.env;
@@ -604,7 +456,6 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const userPath = options.userConfigPath ?? getUserConfigPath();
 
   const sources: ConfigSources = {};
-  const overlayKeys: string[] = [];
   const preErrors: ConfigValidationError[] = [];
   const preWarnings: ConfigValidationWarning[] = [];
 
@@ -646,66 +497,18 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   preErrors.push(...resolvedProject.errors);
   preErrors.push(...projectSecretErrors(rawProject));
 
-  // 4. 解析单公司 id（C1；输入为已合并的 user/project config.tenant）。
-  //    options.tenantId / VESSEL_TENANT 不参与解析，只在 C2 产生 warning。
-  const resolution = resolveSingleTenantId(config.tenant);
-  const tenantId = resolution.tenantId;
-  if (resolution.errors.length > 0) preErrors.push(...resolution.errors);
+  // 4. 单公司 id：T4 删除 tenant 块 / --tenant / VESSEL_TENANT 输入后，
+  //    解析结果固定为内部常量（C0），仅供路径段与 principal 使用。
+  const tenantId = DEFAULT_TENANT_ID;
 
-  if (resolution.resolved) {
-    // C2：显式来源（--tenant / VESSEL_TENANT）被忽略时各记一条 warning。
-    const explicitSources: Array<{ label: string; value: string | undefined }> = [
-      { label: '--tenant', value: firstNonEmpty(options.tenantId) },
-      { label: `${envPrefix}TENANT`, value: firstNonEmpty(env[`${envPrefix}TENANT`]) },
-    ];
-    for (const source of explicitSources) {
-      if (source.value !== undefined && source.value !== tenantId) {
-        preWarnings.push({
-          path: 'tenant',
-          message: `Ignoring ${source.label} tenant id "${source.value}": this node serves single tenant "${tenantId}".`,
-          value: source.value,
-        });
-      }
-    }
-
-    // C2：非单 id 的 tenant 设置不加载，只 warning 列出被忽略 id。
-    const ignoredTenants = isRecord(config.tenant?.tenants)
-      ? Object.keys(config.tenant.tenants).filter((id) => id !== tenantId)
-      : [];
-    if (ignoredTenants.length > 0) {
-      preWarnings.push({
-        path: 'tenant',
-        message: `Ignoring tenant settings for non-single tenants: ${ignoredTenants.join(', ')} (single tenant: "${tenantId}").`,
-      });
-    }
-  }
-
-  // 5. tenant overlay（只覆盖 project/user；env/CLI 仍在其后入层）。
-  //    只有成功解析出单 id 时才应用其 overlay；非单 id 的一律不加载。
-  const overlay = resolution.resolved ? config.tenant?.tenants?.[tenantId]?.config : undefined;
-  if (overlay && isRecord(overlay)) {
-    const overlayPath = `tenant.tenants.${tenantId}.config`;
-    const resolvedOverlay = resolveEnvRefsInLayer(overlay as Partial<VesselConfig>, env);
-    preErrors.push(...prefixErrors(resolvedOverlay.errors, overlayPath));
-
-    const sanitized = sanitizeTenantOverlay(resolvedOverlay.layer as Record<string, unknown>);
-    applyOverlayRecord(
-      config as unknown as Record<string, unknown>,
-      sanitized,
-      overlayKeys,
-      sources,
-      '',
-    );
-  }
-
-  // 6. env 层（source=env）
+  // 5. env 层（source=env）
   const envConfig = loadConfigFromEnv(envPrefix, env);
   const resolvedEnv = resolveEnvRefsInLayer(envConfig, env);
   applyLayerWithSources(config, resolvedEnv.layer, 'env', sources);
   for (const key of Object.keys(resolvedEnv.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedEnv.errors);
 
-  // 7. CLI 层（source=cli）：`defaults`（deprecated）先应用，`cliOverrides` 覆盖。
+  // 6. CLI 层（source=cli）：`defaults`（deprecated）先应用，`cliOverrides` 覆盖。
   for (const cliLayer of [options.defaults, options.cliOverrides]) {
     if (!cliLayer) continue;
     const resolvedCli = resolveEnvRefsInLayer(cliLayer, env);
@@ -714,7 +517,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
     preErrors.push(...resolvedCli.errors);
   }
 
-  // 8. provider-aware 默认 model：只给已知 provider 补默认。
+  // 7. provider-aware 默认 model：只给已知 provider 补默认。
   if (config.provider && !config.provider.model) {
     const fallback = defaultModelForProvider(config.provider.name ?? 'openai');
     if (fallback) {
@@ -723,7 +526,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
     }
   }
 
-  // 9. 校验配置（含未知键、项目密钥、overlay 白名单）
+  // 8. 校验配置（含未知键、项目密钥、已删除的 tenant 键 fail-fast）
   const validation = validateConfig(config);
   if (preErrors.length > 0) {
     validation.errors.push(...preErrors);
@@ -737,7 +540,6 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
     sources,
     paths: { user: userPath, project: projectPath },
     tenantId,
-    tenantOverlayKeys: overlayKeys,
   };
 }
 

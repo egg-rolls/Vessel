@@ -14,7 +14,7 @@ import {
   type ControlPlaneTargetOptions,
   resolveControlPlaneTarget,
 } from './control-plane-target';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir, resolveEffectiveTenantId } from './data-paths';
 import {
   collectGatewayState,
   type GatewayStateEntry,
@@ -188,6 +188,8 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
   }
 
   const dataDir = options.dataDir ?? resolveDataDir(config, env);
+  // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
+  tenantId = resolveEffectiveTenantId(tenantId, dataDir);
   const collectState = options.collectState ?? collectGatewayState;
   const token = resolveGatewayToken(config, env);
   const snapshot: GatewayStateSnapshot = await collectState(dataDir, {

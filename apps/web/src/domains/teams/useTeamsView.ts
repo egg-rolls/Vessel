@@ -43,7 +43,7 @@ export interface TeamsViewProps {
 export function useTeamsView({ route, navigate }: TeamsViewProps) {
   useLocale();
   const toast = useToast();
-  const { epoch, tenantEpoch } = useConnection();
+  const { epoch } = useConnection();
   const { nodes, teamControl, hasTokenFor } = useNodes();
   const nodeNames = useNodeNames();
   const compact = useViewportWidth() <= RAIL_MAX_WIDTH;
@@ -92,7 +92,7 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     {
       enabled: anyNodeToken && nodes.length > 0,
       pollMs: TEAMS_POLL_MS,
-      deps: [epoch, tenantEpoch, nodeKeys],
+      deps: [epoch, nodeKeys],
     },
   );
 

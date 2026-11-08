@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageBar, type MessageBarItem } from '../components/MessageBar';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { useToast, useToastFeed } from '../components/ToastProvider';
@@ -7,7 +7,6 @@ import {
   pendingBarTarget,
   pendingPermissionsOutsideView,
 } from '../domains/chat/pending-permissions';
-import { browserSessionStorage, clearLastSession } from '../domains/chat/session-selection';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
@@ -24,7 +23,6 @@ import { ShellOverlays } from './ShellOverlays';
 import { ShellRouteView } from './ShellRouteView';
 import { shellNoticeItems } from './shellNoticeItems';
 import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
-import { tenantResetPlan } from './tenant-reset';
 import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
 import { useOutdatedBuild } from './useOutdatedBuild';
@@ -41,8 +39,6 @@ export function AppShell() {
   const {
     connectionState,
     hasToken,
-    tenantId,
-    tenantEpoch,
     eventStore,
     lastError,
     tokenError,
@@ -154,9 +150,6 @@ export function AppShell() {
     enabled: navMode === 'drawer',
     returnFocusId: 'nav-toggle',
   });
-  const tenantEpochRef = useRef(tenantEpoch);
-  const tenantClearEpochRef = useRef(tenantEpoch);
-
   const registerEntities = useCallback((source: string, items: readonly PaletteItem[]) => {
     setEntityMap((prev) => {
       if (items.length === 0) {
@@ -177,28 +170,6 @@ export function AppShell() {
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
-
-  // layout effect 先于 ChatView 的 passive 记录 effect：避免旧会话写进新 tenant key。
-  useLayoutEffect(() => {
-    if (tenantEpoch === tenantClearEpochRef.current) return;
-    tenantClearEpochRef.current = tenantEpoch;
-    // 新 tenant 不自动恢复旧选择；存储 key 本身也按 tenant 隔离。
-    clearLastSession(browserSessionStorage(), tenantId);
-  }, [tenantEpoch, tenantId]);
-
-  // 切 tenant：清空选择后回到 Chat 空态（事件缓冲已在 ConnectionProvider 重置）。
-  useEffect(() => {
-    if (tenantEpoch === tenantEpochRef.current) return;
-    tenantEpochRef.current = tenantEpoch;
-    const plan = tenantResetPlan();
-    if (plan.closeSessionsDrawer) setChatSessionsOpen(false);
-    if (plan.clearPendingAction) setPendingAction(null);
-    if (plan.closePalette) setPaletteOpen(false);
-    // 旧租户的实体（会话/run/MCP）不能留在命令面板里。
-    if (plan.clearPaletteEntities) setEntityMap(new Map());
-    navigate(plan.route);
-    toast.info(t('palette.toast.tenantSwitched'));
-  }, [tenantEpoch, navigate, toast]);
 
   // 无显式偏好时，跨 1200 边界自动切换默认展开/折叠。
   useEffect(() => {
@@ -363,9 +334,7 @@ export function AppShell() {
             navRef={navDrawerRef}
             panes={panes}
           />
-          {/* tenant 变化时整块重挂载：旧租户的 resource 缓存、会话副本与选中项全部丢弃。 */}
           <main
-            key={tenantEpoch}
             id="main"
             ref={mainRef}
             className="flex min-h-0 min-w-0 flex-auto flex-col overflow-hidden focus:outline-none"

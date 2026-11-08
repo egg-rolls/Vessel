@@ -8,16 +8,18 @@
  * @module vessel/data-paths
  */
 
+import { readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_DATA_DIR, type VesselConfig } from '../packages/config/src/index';
 import {
+  assertTenantId,
   resolveSingleTenantPaths as resolveCoreSingleTenantPaths,
   resolveTenantPaths as resolveCoreTenantPaths,
   type TenantPaths,
 } from '../packages/core/src/index';
 import { ensureTenantLayout } from './tenant-layout-migration';
-import { detectTenantLayoutState } from './tenant-layout-state';
+import { detectTenantLayoutState, parseLayoutMarker } from './tenant-layout-state';
 
 /** 展开开头的 `~`（支持 `~`、`~/x`、`~\x`） */
 export function expandHome(input: string): string {
@@ -43,6 +45,106 @@ export function resolveDataDir(
 ): string {
   const configured = nonEmpty(config.dataDir) ?? nonEmpty(env.VESSEL_DATA_DIR);
   return path.resolve(expandHome(configured ?? DEFAULT_DATA_DIR));
+}
+
+/** T2 迁移后保留在根布局的单 id 数据文件（`<dataDir>/tenant.json`）。 */
+const PERSISTED_TENANT_FILE = 'tenant.json';
+/** T2 迁移 marker；仅在 `tenant.json` 不存在时作为 T4 过渡 fallback。 */
+const LAYOUT_MARKER_FILE = '.layout.json';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** `tenant.json` 存在但损坏 / 形状非法：fail-fast，不静默回退 default。 */
+function invalidPersistedTenantFile(file: string, detail: string): Error {
+  return new Error(
+    `invalid tenant.json at ${file}: ${detail}; refusing to fall back to the default tenant id`,
+  );
+}
+
+/**
+ * 读取 T2 迁移 marker 的单 id（仅 `tenant.json` 不存在时调用）。
+ * marker 缺失/不可解析 → undefined；不写文件。
+ */
+function readMarkerTenantId(dataDir: string): string | undefined {
+  const markerPath = path.join(dataDir, LAYOUT_MARKER_FILE);
+  let raw: string;
+  try {
+    raw = readFileSync(markerPath, 'utf8');
+  } catch {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const marker = parseLayoutMarker(parsed);
+  if (marker === null) return undefined;
+  try {
+    return assertTenantId(marker.source_tenant);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 读取持久化的单 id（只读；不创建/不修改文件）。
+ *
+ * 优先级（T4 R1 errata）：
+ * 1. `<dataDir>/tenant.json` 的 `tenant_id`（T2 冻结形状）；
+ * 2. 仅当 `tenant.json` **不存在**时，`<dataDir>/.layout.json` 的 `source_tenant`
+ *    （T2 迁移 marker；T5 随迁移层删除，只是 T4 过渡）；
+ * 3. 都没有 → undefined（调用方回落 `loadConfig()` 的 `default`）。
+ *
+ * `tenant.json` 存在但不可读 / JSON 损坏 / `tenant_id` 非法 → 抛错 fail-fast，
+ * 不静默回退 default（避免指向错误路径、像数据丢失）。
+ */
+export function readPersistedTenantId(dataDir: string): string | undefined {
+  const tenantPath = path.join(dataDir, PERSISTED_TENANT_FILE);
+  let raw: string;
+  try {
+    raw = readFileSync(tenantPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return readMarkerTenantId(dataDir);
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw invalidPersistedTenantFile(tenantPath, `cannot read file: ${detail}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw invalidPersistedTenantFile(tenantPath, `invalid JSON: ${detail}`);
+  }
+  if (!isRecord(parsed)) {
+    throw invalidPersistedTenantFile(tenantPath, 'expected a JSON object');
+  }
+  const value = parsed.tenant_id;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw invalidPersistedTenantFile(tenantPath, 'expected a non-empty string "tenant_id"');
+  }
+  try {
+    return assertTenantId(value);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw invalidPersistedTenantFile(tenantPath, `invalid tenant_id: ${detail}`);
+  }
+}
+
+/**
+ * 生效的单 id：持久化来源优先，否则用 `loadConfig()` 的解析结果。
+ *
+ * T4 删除 config `tenant` 块后解析结果恒为内部常量 `default`；真实单 id 来自
+ * `<dataDir>/tenant.json` 或（仅当其不存在时）`.layout.json` 的 `source_tenant`
+ * （R1：路径文件名段保持原样）。fresh 数据根两者都没有时回 `default`。
+ */
+export function resolveEffectiveTenantId(configTenantId: string, dataDir: string): string {
+  return readPersistedTenantId(dataDir) ?? configTenantId;
 }
 
 /** 按 tenant 派生冻结目录布局（委托 core；旧树语义）。 */

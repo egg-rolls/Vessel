@@ -266,7 +266,6 @@ export interface NodeAttentionParams {
   limit?: number;
   order?: 'oldest' | 'newest';
   cursor?: string;
-  tenant_id?: string;
 }
 
 /** `interactions.list` 只读分页；返回形状与 GatewayClient 一致。 */

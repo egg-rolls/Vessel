@@ -9,7 +9,7 @@
  * 约定：
  * - 命令 token / flag 是命令行上的字面量；`registryName` 对应注册表里的 `name`，
  *   入口处直接处理的命令（`demo` / `--help` / `--version`）为 `null`。
- * - 这里不写动态值（session / tenant / agent id）：那些交给各 shell 的默认补全。
+ * - 这里不写动态值（session / agent id）：那些交给各 shell 的默认补全。
  *
  * @module vessel/completion-spec
  */
@@ -76,7 +76,6 @@ export const GLOBAL_FLAGS: readonly string[] = [
   '--allow-remote',
   '--tls-cert',
   '--tls-key',
-  '--tenant',
   '--data-dir',
   '--connect',
   '--connect-token',
@@ -102,7 +101,6 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--serve-host',
   '--tls-cert',
   '--tls-key',
-  '--tenant',
   '--data-dir',
   '--config',
   '--connect',
@@ -210,34 +208,20 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       { name: 'path', flags: ['--json'] },
       { name: 'init', flags: ['--json', '--force'] },
-      { name: 'show', flags: ['--json', '--sources', '--tenant'] },
+      { name: 'show', flags: ['--json', '--sources'] },
       { name: 'set', flags: ['--json'] },
-    ],
-  },
-  {
-    token: 'tenant',
-    registryName: 'tenant',
-    subcommands: [
-      { name: 'list', flags: ['--json'] },
-      { name: 'get', flags: ['--json'] },
-      { name: 'create', flags: ['--json', '--name'] },
-      {
-        name: 'update',
-        flags: ['--json', '--name', '--status'],
-        flagValues: { '--status': ['active', 'disabled'] },
-      },
     ],
   },
   {
     token: 'migrate',
     registryName: 'migrate',
-    flags: ['--from', '--to', '--apply', '--json', '--tenant', '--source'],
+    flags: ['--from', '--to', '--apply', '--json', '--source'],
     flagValues: { '--from': ['sqlite', 'file-v1'], '--to': ['file-v2'] },
   },
   {
     token: 'trace',
     registryName: 'trace',
-    subcommands: [{ name: 'prune', flags: ['--dry-run', '--json', '--tenant'] }],
+    subcommands: [{ name: 'prune', flags: ['--dry-run', '--json'] }],
   },
   {
     token: 'plugin',
@@ -304,14 +288,14 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       },
       { name: 'directory', flags: ['--hub-url', '--token-env', '--json'] },
       { name: 'watch', flags: ['--hub-url', '--token-env'] },
-      { name: 'join-code', flags: ['--data-dir', '--tenant', '--ttl', '--json'] },
+      { name: 'join-code', flags: ['--data-dir', '--ttl', '--json'] },
       {
         name: 'node',
         flags: ['--hub-url', '--json'],
       },
       {
         name: 'join',
-        flags: ['--code', '--code-env', '--tenant', '--public-url', '--ca', '--data-dir', '--json'],
+        flags: ['--code', '--code-env', '--public-url', '--ca', '--data-dir', '--json'],
       },
     ],
   },

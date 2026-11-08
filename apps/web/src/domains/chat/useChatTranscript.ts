@@ -36,7 +36,6 @@ export interface UseChatTranscriptOptions {
   epoch: number;
   selectedId: string | null;
   routeAgentId: string | undefined;
-  tenantId: string | null;
   snapshot: EventStoreSnapshot;
   runtimeVisibility: RuntimeVisibility;
   sessions: readonly SessionInfo[];
@@ -68,7 +67,6 @@ export function useChatTranscript({
   epoch,
   selectedId,
   routeAgentId,
-  tenantId,
   snapshot,
   runtimeVisibility,
   sessions,
@@ -171,8 +169,8 @@ export function useChatTranscript({
   useEffect(() => {
     if (hydrateError !== NOT_FOUND_MESSAGE || !selectedId) return;
     const storage = browserSessionStorage();
-    if (readLastSession(storage, tenantId) === selectedId) clearLastSession(storage, tenantId);
-  }, [hydrateError, selectedId, tenantId]);
+    if (readLastSession(storage) === selectedId) clearLastSession(storage);
+  }, [hydrateError, selectedId]);
 
   const visibleGroups = useMemo(() => {
     if (!selectedId) return [];

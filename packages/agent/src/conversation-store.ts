@@ -56,7 +56,6 @@ export interface StoredConversation {
 
 export interface ConversationStoreFile {
   v: 1;
-  tenant_id: string;
   conversations: StoredConversation[];
 }
 
@@ -134,10 +133,9 @@ function isStoredConversation(value: unknown): value is StoredConversation {
   return true;
 }
 
-function isStoreFile(value: unknown, tenantId: string): value is ConversationStoreFile {
+function isStoreFile(value: unknown): value is ConversationStoreFile {
   if (!isRecord(value)) return false;
   if (value.v !== CONVERSATION_STORE_VERSION) return false;
-  if (value.tenant_id !== tenantId) return false;
   if (!Array.isArray(value.conversations)) return false;
   return value.conversations.every(isStoredConversation);
 }
@@ -168,7 +166,6 @@ export class ConversationStore {
   /** 损坏或不可读时为 false；此后不写文件，判定返回 budget_unavailable */
   readonly available: boolean;
 
-  private readonly tenantId: string;
   private readonly logger: Logger;
   private readonly debounceMs: number;
   private readonly conversations = new Map<string, StoredConversation>();
@@ -184,7 +181,6 @@ export class ConversationStore {
     if (typeof options.tenantId !== 'string' || options.tenantId === '') {
       throw new Error('ConversationStore requires a non-empty tenantId');
     }
-    this.tenantId = options.tenantId;
     this.logger = options.logger ?? noopLogger;
     this.debounceMs = options.debounceMs ?? CONVERSATION_WRITE_DEBOUNCE_MS;
     this.path = conversationsPath(options.dataDir, options.tenantId);
@@ -295,7 +291,6 @@ export class ConversationStore {
   private snapshotFile(): ConversationStoreFile {
     return {
       v: CONVERSATION_STORE_VERSION,
-      tenant_id: this.tenantId,
       conversations: [...this.conversations.values()].map(cloneConversation),
     };
   }
@@ -341,7 +336,7 @@ export class ConversationStore {
       });
       return false;
     }
-    if (!isStoreFile(parsed, this.tenantId)) {
+    if (!isStoreFile(parsed)) {
       this.logger.error('conversation_budget.corrupt', { path: this.path });
       return false;
     }

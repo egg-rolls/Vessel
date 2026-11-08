@@ -2,8 +2,8 @@
  * 事件扇入面（0.18；0.49 T3 收敛为单执行面）。
  *
  * gateway 的序号、环形缓冲、广播、agent registry 都从本 hub 读取；
- * 单运行时的 runtimeEvents 作为构造数据接入（0.49 T3：`streams` 只承载一条流，
- * T4 再收敛成单 `stream`）。hub **不提供 publish**，业务代码只能写运行时流。
+ * 单运行时的 runtimeEvents 作为构造数据接入（0.49 T4：单 `stream`）。
+ * hub **不提供 publish**，业务代码只能写运行时流。
  *
  * - `subscribe()`：原始 fan-in（interactions registry），事件写入构造时的单 id（克隆）；
  * - `subscribeSequenced()`：`map`（脱敏 / 裁剪）之后、分配单调 `seq` 的事件；
@@ -27,11 +27,8 @@ import { capToolEvent } from './tool-events.js';
 
 /** hub 选项 */
 export interface TenantEventHubOptions {
-  /**
-   * 单运行时的构造数据（0.49 C3 过渡）：T3 只承载一条流，
-   * T4 改为单 `stream` 并删除 `tenantId` 戳记。
-   */
-  streams?: readonly { tenantId: string; stream: EventStream }[];
+  /** 单运行时流（0.49 C3 / T4：单执行面只有一条流）。 */
+  stream?: EventStream;
   /**
    * 环形缓冲容量（默认 10000）。0 / 缺省 = 默认值；非法值抛错。
    * 与 gateway 旧语义一致：0 不表示“无上限”。
@@ -55,7 +52,7 @@ export interface TenantEventHub {
   /** 单运行时流；未配置 / 已关闭时 undefined。 */
   stream(): EventStream | undefined;
 
-  /** 原始 fan-in：事件写入构造时的单 id（克隆），不改原对象。 */
+  /** 原始 fan-in：事件原样分发，不改原对象。 */
   subscribe(handler: (event: RunEvent) => void): Unsubscribe;
   /** `map` + 序号后的 fan-in。 */
   subscribeSequenced(handler: (item: SeqEvent) => void): Unsubscribe;
@@ -89,14 +86,9 @@ export function createTenantEventHub(options: TenantEventHubOptions): TenantEven
   const capacity = configuredHistory === 0 ? DEFAULT_MAX_HISTORY : configuredHistory;
   const buffer = new SeqEventBuffer(capacity);
 
-  /**
-   * 0.49 C3：单执行面只有一条流。旧事件仍留在各自来源（持久化 / 回放）中，
-   * 读取端不做 tenant 过滤，因此 legacy id 不会被隐藏。
-   */
-  if ((options.streams?.length ?? 0) > 1) {
-    throw new Error('TenantEventHub accepts a single runtime stream (CONTRACT-0.49 C3).');
-  }
-  const source = options.streams?.[0];
+  // 0.49 C3 / T4：单执行面只有一条流。旧事件仍留在各自来源（持久化 / 回放）中，
+  // 读取端不做 tenant 过滤，因此 legacy id 不会被隐藏。
+  const source = options.stream;
   const rawHandlers = new Set<(event: RunEvent) => void>();
   const sequencedHandlers = new Set<(item: SeqEvent) => void>();
   let closed = false;
@@ -151,12 +143,8 @@ export function createTenantEventHub(options: TenantEventHubOptions): TenantEven
 
   let sourceUnsubscribe: Unsubscribe | undefined;
   if (source !== undefined) {
-    const { tenantId } = source;
-    sourceUnsubscribe = source.stream.subscribe((event) => {
-      // 0.49 C3：单值戳记（不是仅补齐缺失字段）；T4 删除该字段。
-      const current = (event as { tenant_id?: unknown }).tenant_id;
-      fanIn(current === tenantId ? event : { ...event, tenant_id: tenantId });
-    });
+    // 0.49 T4：不戳记 tenant_id；事件原样扇入。
+    sourceUnsubscribe = source.subscribe(fanIn);
   }
 
   function close(): void {
@@ -173,7 +161,7 @@ export function createTenantEventHub(options: TenantEventHubOptions): TenantEven
   }
 
   return {
-    stream: () => source?.stream,
+    stream: () => source,
     subscribe,
     subscribeSequenced,
     since: (seq) => buffer.since(seq),

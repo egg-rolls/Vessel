@@ -39,7 +39,6 @@ export interface StoredInteractionAnswer {
 export interface StoredInteraction {
   requestId: string;
   run_id: string;
-  tenant_id: string;
   kind?: StoredInteractionKind;
   agent_id?: string;
   team_id?: string;
@@ -108,7 +107,6 @@ function parseRecord(value: unknown): StoredInteraction | null {
   const {
     requestId,
     run_id,
-    tenant_id,
     kind,
     agent_id,
     team_id,
@@ -124,7 +122,6 @@ function parseRecord(value: unknown): StoredInteraction | null {
     typeof requestId !== 'string' ||
     requestId.length === 0 ||
     typeof run_id !== 'string' ||
-    typeof tenant_id !== 'string' ||
     typeof tool !== 'string' ||
     typeof created_at !== 'number' ||
     !Number.isFinite(created_at)
@@ -141,7 +138,6 @@ function parseRecord(value: unknown): StoredInteraction | null {
   return {
     requestId,
     run_id,
-    tenant_id,
     kind: kind === 'ask' ? 'ask' : 'permission',
     ...(agentId !== undefined ? { agent_id: agentId } : {}),
     ...(teamId !== undefined ? { team_id: teamId } : {}),

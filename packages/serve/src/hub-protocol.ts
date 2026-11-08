@@ -1,5 +1,5 @@
 /**
- * Hub control 协议 `vessel.hub/1`（S5）。
+ * Hub control 协议 `vessel.hub/2`（S5）。
  *
  * 只承载节点 / Team / Agent 元数据与指针；不承载 RunEvent、消息正文、
  * 工具参数或权限输入。
@@ -12,7 +12,8 @@
 
 import type { HubAgentMeta, HubPointerReason, HubTeamMeta } from './hub-control.js';
 
-export const HUB_PROTOCOL = 'vessel.hub/1' as const;
+/** 0.49 T4：删除 tenant 绑定后 bump；旧 peer（vessel.hub/1）显式 `unsupported`。 */
+export const HUB_PROTOCOL = 'vessel.hub/2' as const;
 
 /** 节点出站（S5.1）的入站端点。 */
 export const HUB_NODE_CONTROL_PATH = '/v1/hub/node-control' as const;
@@ -29,8 +30,6 @@ export interface HubAuthFrame {
   hub_id: string;
   /** dialer === 'node' 时必填；hub dialer 保持缺省。 */
   node_id?: string;
-  /** dialer === 'node' 时必填。 */
-  tenant_id?: string;
   /** dialer === 'node' 时必填；节点进程代际。 */
   incarnation?: string;
 }
@@ -57,7 +56,6 @@ export interface HubHelloFrame {
   incarnation?: string;
   /** node 目录 revision；仅 node acceptor 提供。 */
   revision?: number;
-  tenant_id?: string;
 }
 
 export interface HubSnapshotFrame {

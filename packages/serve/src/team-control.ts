@@ -12,7 +12,6 @@
 export interface TeamSummaryLike {
   team_id: string;
   name: string;
-  tenant_id: string;
   /** team-scoped control token 不含此字段（白名单脱敏）。 */
   workspace?: string;
   /** 0.21 additive：自由文本描述 */

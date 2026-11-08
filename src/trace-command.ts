@@ -1,5 +1,5 @@
 /**
- * `vessel trace prune [--dry-run] [--json] [--tenant <id>]`（0.5 E17 / PLAN §5.2）
+ * `vessel trace prune [--dry-run] [--json]`（0.5 E17 / PLAN §5.2）
  *
  * - 解析 data_dir / tenant / trace 配置；
  * - 真实删除前获取 tenant 锁（dry-run 只读，不加锁）；
@@ -11,7 +11,12 @@
 import { loadConfig } from '../packages/config/src/index';
 import type { PruneTraceResult } from '../packages/core/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { ensureWriteTenantPaths, resolveDataDir, resolveReadonlyTenantPaths } from './data-paths';
+import {
+  ensureWriteTenantPaths,
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveReadonlyTenantPaths,
+} from './data-paths';
 import { acquireTenantLock, TenantLockError } from './tenant-lock';
 import { pruneTenantTrace } from './trace-wiring';
 
@@ -28,7 +33,6 @@ export interface TraceCommandResult {
 export interface TracePruneCommandOptions {
   dryRun?: boolean;
   json?: boolean;
-  tenantId?: string;
   configPath?: string;
   userConfigPath?: string;
   env?: EnvMap;
@@ -51,18 +55,16 @@ export async function tracePruneCommand(
   options: TracePruneCommandOptions = {},
 ): Promise<TraceCommandResult> {
   const env = options.env ?? process.env;
-  // 0.49 T1：单 id 只来自 loadConfig()；`--tenant` 作为被忽略来源传入，
-  // 由 loader 统一产出 warning（C0/C2/C8）。
+  // 0.49 T4：单 id 只来自 loadConfig()。
   const {
     config,
-    tenantId,
+    tenantId: configTenantId,
     validation,
     paths: configPaths,
   } = await loadConfig({
     configPath: options.configPath,
     userConfigPath: options.userConfigPath,
     env,
-    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   });
 
   // C1 规则 1/4：配置错误时不得静默落到 tenantId 继续执行。
@@ -76,13 +78,16 @@ export async function tracePruneCommand(
   for (const warning of validation.warnings) console.warn(`⚠ ${warning.message}`);
 
   const dryRun = options.dryRun === true;
+  // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
+  const dataDir = resolveDataDir(config, env);
+  const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
   // 0.49 T2（C12/C14）：真实 prune 前先完成布局迁移（只作用根 events/，永不
   // prune 旧树或 staging）；dry-run 是只读，按 C10 选当前布局，只统计不迁移。
   let tenantPaths: Awaited<ReturnType<typeof ensureWriteTenantPaths>>;
   try {
     tenantPaths = dryRun
-      ? await resolveReadonlyTenantPaths(resolveDataDir(config, env), tenantId)
-      : await ensureWriteTenantPaths(resolveDataDir(config, env), tenantId);
+      ? await resolveReadonlyTenantPaths(dataDir, tenantId)
+      : await ensureWriteTenantPaths(dataDir, tenantId);
   } catch (error) {
     return {
       exitCode: 1,

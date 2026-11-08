@@ -65,24 +65,18 @@ export {
   type TeamPolicyIssue,
   validateTeamPolicy,
 } from './team-policy.js';
-export {
-  isTenantToolAllowed,
-  resolveTenantToolPolicy,
-  type TenantToolPolicy,
-} from './tenant-tools.js';
 export * from './types.js';
 export { deepMerge } from './utils.js';
 export {
   allowedOriginError,
   findExplicitSecretPaths,
+  findRemovedTenantConfigKeys,
   findUnknownKeys,
   findUnknownNestedKeys,
   isLoopbackHostname,
-  isValidTenantId,
   KNOWN_BLOCK_KEYS,
   KNOWN_CONFIG_KEYS,
-  TENANT_OVERLAY_ALLOWED_KEYS,
-  TENANT_OVERLAY_FORBIDDEN_KEYS,
+  type RemovedTenantConfigKey,
   type UnknownNestedKey,
   validateConfig,
   validateHubSettings,

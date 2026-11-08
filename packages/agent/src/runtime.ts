@@ -952,11 +952,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
           const forwarded: RunEvent = RUN_TERMINAL_EVENTS.has(event.type)
             ? withMemberIdentity(event, member)
             : event;
-          const scoped: RunEvent =
-            this.tenantId !== undefined && forwarded.tenant_id === undefined
-              ? { ...forwarded, tenant_id: this.tenantId }
-              : forwarded;
-          parentEvents.publish(scoped);
+          parentEvents.publish(forwarded);
         }),
       );
     }
@@ -1347,13 +1343,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
           this.notifyPermissionState(member.id, member.session_id, 'waiting');
         }
         const data = bridgeRequestData(event, member);
-        const forwarded: RunEvent = {
-          ...event,
-          data,
-          ...(this.tenantId !== undefined && event.tenant_id === undefined
-            ? { tenant_id: this.tenantId }
-            : {}),
-        };
+        const forwarded: RunEvent = { ...event, data };
         parentEvents.publish(forwarded);
         if (requestId !== undefined) {
           this.scheduleDenyAfter(member, entry, requestId, kind, forwarded);
@@ -1477,13 +1467,11 @@ export class MemberExecutionHost implements MemberExecutionPort {
                 policy: 'deny_after',
                 reason: 'deny_after',
               };
-        const tenantId = forwarded.tenant_id ?? this.tenantId;
         const response: RunEvent = {
           type: kind === 'ask' ? 'ask.user.answered' : 'tool.permission.response',
           run_id: forwarded.run_id,
           data: responseData,
           ts: Date.now(),
-          ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
         };
         entry.events.publish(response);
         this.parentEvents?.publish(response);

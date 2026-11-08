@@ -34,12 +34,14 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-/** 某个 tenant 的全部交互记录（按创建时间排序）。 */
-export function loadTenantRecords(dir: string, tenantId: string): StoredInteraction[] {
-  return new InteractionsStore(dir)
-    .loadAllSync()
-    .filter((record) => record.tenant_id === tenantId)
-    .sort((a, b) => a.created_at - b.created_at);
+/**
+ * 交互目录里的全部记录（按创建时间排序）。
+ *
+ * 0.49 T4：单执行面只有一份 `interactions-<sid>.json`，记录不再带 tenant；
+ * `tenantId` 参数保留给调用方（文件路径仍按单 id 选择）。
+ */
+export function loadTenantRecords(dir: string, _tenantId: string): StoredInteraction[] {
+  return new InteractionsStore(dir).loadAllSync().sort((a, b) => a.created_at - b.created_at);
 }
 
 /** 该 run 已由人类回答的 ask（resume 注入的唯一数据源）。 */
@@ -84,7 +86,6 @@ export async function persistAskRequest(options: {
   const record: StoredInteraction = {
     requestId: options.requestId,
     run_id: options.runId,
-    tenant_id: options.tenantId,
     kind: 'ask',
     ...(options.sessionId !== undefined ? { session_id: options.sessionId } : {}),
     tool: 'ask_user',
@@ -246,27 +247,24 @@ export function createOfflineAttentionTarget(options: {
 } {
   const stream = discardedStream();
   const interactions = createInteractionsRegistry({
-    tenantEventsFor: () => stream,
-    defaultTenantId: options.tenantId,
+    eventsFor: () => stream,
+    singleTenantId: options.tenantId,
     interactionsDir: options.dir,
     // 文件里的 pending 可能属于一个 interrupted 的 headless run：仍可回答。
     hydratePendingAs: 'pending',
   });
   const methods = createInteractionMethods({
-    respondPermission: (requestId, decision, remember, tenantId, scope, actor) =>
-      interactions.respondPermission(requestId, decision, remember, tenantId, scope, actor),
-    respondAsk: (requestId, answers, tenantId, actor) =>
-      interactions.respondAsk(requestId, answers, tenantId, actor),
+    respondPermission: (requestId, decision, remember, scope, actor) =>
+      interactions.respondPermission(requestId, decision, remember, scope, actor),
+    respondAsk: (requestId, answers, actor) => interactions.respondAsk(requestId, answers, actor),
     interactions,
   });
   const byName = new Map<string, RpcMethodDefinition>(
     methods.map((method) => [method.name, method]),
   );
   const ctx: RpcMethodContext = {
-    principal: { tenant_id: options.tenantId, role: 'admin' },
-    tenantId: options.tenantId,
+    principal: { role: 'admin' },
     isAdmin: true,
-    allTenants: false,
     connection: 'local',
   };
 
@@ -292,9 +290,9 @@ export function createOfflineAttentionTarget(options: {
     if (method === 'ask.respond' || method === 'permission.respond') {
       // registry 的落盘是 fire-and-forget；离线命令可能在写完成前退出，
       // 这里按同一份内存状态再同步 await 一次，保证回答不丢。
-      const records = [...interactions.interactionRecords.values()]
-        .filter((record) => record.tenant_id === options.tenantId)
-        .sort((a, b) => a.created_at - b.created_at);
+      const records = [...interactions.interactionRecords.values()].sort(
+        (a, b) => a.created_at - b.created_at,
+      );
       await new InteractionsStore(options.dir).save(options.tenantId, records);
     }
     return result as T;

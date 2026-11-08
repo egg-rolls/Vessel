@@ -15,7 +15,12 @@ import type {
   VesselConfig,
 } from './types.js';
 
-/** buildConfigSnapshot 输入 */
+/**
+ * buildConfigSnapshot 输入。
+ *
+ * 0.49 T4：`tenantId` / `tenantOverlayKeys` 仅为 src/cli.ts 过渡调用保留
+ * （M5 独占路径，本切片不写）；快照不再输出 tenant 字段。
+ */
 export interface BuildConfigSnapshotInput {
   config: VesselConfig;
   sources: ConfigSources;
@@ -73,9 +78,5 @@ export function buildConfigSnapshot(input: BuildConfigSnapshotInput): ConfigSnap
     config: redactConfig(input.config),
     sources: redactSourcePaths(input.sources),
     paths: { user: input.paths.user, project: input.paths.project },
-    ...(input.tenantId !== undefined ? { tenant_id: input.tenantId } : {}),
-    ...(input.tenantOverlayKeys && input.tenantOverlayKeys.length > 0
-      ? { tenant_overlay_keys: [...input.tenantOverlayKeys] }
-      : {}),
   };
 }

@@ -34,7 +34,7 @@ export interface ConfigStoreApi {
 }
 
 export function useConfigStoreApi(options: UseConfigStoreOptions = {}): ConfigStoreApi {
-  const { client, hasToken, epoch, tenantId } = useConnection();
+  const { client, hasToken, epoch } = useConnection();
   const loadConfigEnabled = options.config !== false;
   const loadCapabilitiesEnabled = options.capabilities === true;
   const loadSourcesEnabled = options.sources === true;
@@ -46,8 +46,8 @@ export function useConfigStoreApi(options: UseConfigStoreOptions = {}): ConfigSt
 
   useEffect(() => {
     if (!hasToken || !loadConfigEnabled) return;
-    void useConfigStore.getState().loadConfig(client, { tenantId: tenantId ?? undefined, epoch });
-  }, [client, epoch, hasToken, loadConfigEnabled, tenantId]);
+    void useConfigStore.getState().loadConfig(client, { epoch });
+  }, [client, epoch, hasToken, loadConfigEnabled]);
 
   usePolledAction(
     () => {
@@ -63,35 +63,31 @@ export function useConfigStoreApi(options: UseConfigStoreOptions = {}): ConfigSt
   usePolledAction(
     () => {
       if (!hasToken) return;
-      void useConfigStore.getState().loadSources(client, { tenantId: tenantId ?? undefined });
+      void useConfigStore.getState().loadSources(client);
     },
     {
       enabled: hasToken && loadSourcesEnabled,
-      deps: [epoch, hasToken, tenantId ?? ''],
+      deps: [epoch, hasToken],
     },
   );
 
   usePolledAction(
     () => {
       if (!hasToken) return;
-      void useConfigStore
-        .getState()
-        .loadConfig(client, { tenantId: tenantId ?? undefined, epoch, force: true });
+      void useConfigStore.getState().loadConfig(client, { epoch, force: true });
     },
     {
       enabled: hasToken && loadConfigEnabled && pollMs !== undefined,
       ...(pollMs !== undefined ? { pollMs } : {}),
-      deps: [epoch, hasToken, tenantId ?? ''],
+      deps: [epoch, hasToken],
     },
   );
 
   const reloadConfigAsync = useCallback(async (): Promise<ConfigResponse | undefined> => {
     if (!hasToken) return undefined;
-    await useConfigStore
-      .getState()
-      .loadConfig(client, { tenantId: tenantId ?? undefined, epoch, force: true });
+    await useConfigStore.getState().loadConfig(client, { epoch, force: true });
     return resourceData(useConfigStore.getState().config);
-  }, [client, epoch, hasToken, tenantId]);
+  }, [client, epoch, hasToken]);
 
   const reloadConfig = useCallback(() => {
     void reloadConfigAsync();
@@ -99,10 +95,8 @@ export function useConfigStoreApi(options: UseConfigStoreOptions = {}): ConfigSt
 
   const reloadSources = useCallback(() => {
     if (!hasToken) return;
-    void useConfigStore
-      .getState()
-      .loadSources(client, { tenantId: tenantId ?? undefined, force: true });
-  }, [client, hasToken, tenantId]);
+    void useConfigStore.getState().loadSources(client, { force: true });
+  }, [client, hasToken]);
 
   const reloadCapabilities = useCallback(() => {
     if (!hasToken) return;

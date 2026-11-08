@@ -74,7 +74,8 @@ export interface AgentOwnerRecord {
   token: string;
   /** ISO-8601 */
   started_at: string;
-  tenant_id: string;
+  /** 0.49 T4：tenant 维度已删除；旧记录字段不再要求、不再写入。 */
+  tenant_id?: string;
 }
 
 /** 端点错误：code 稳定，供 CLI / 日志映射 */
@@ -102,15 +103,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** 校验并解析 owner 记录；字段非法返回 null */
 export function parseAgentOwnerRecord(raw: unknown): AgentOwnerRecord | null {
   if (!isRecord(raw)) return null;
-  const { pid, host, port, token, started_at, tenant_id } = raw;
+  const { pid, host, port, token, started_at } = raw;
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return null;
   if (typeof host !== 'string' || host.trim() === '') return null;
   if (!isLoopbackHostname(host.trim().toLowerCase())) return null;
   if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) return null;
   if (typeof token !== 'string' || token === '') return null;
   if (typeof started_at !== 'string' || Number.isNaN(Date.parse(started_at))) return null;
-  if (typeof tenant_id !== 'string' || tenant_id === '') return null;
-  return { pid, host, port, token, started_at, tenant_id };
+  return { pid, host, port, token, started_at };
 }
 
 /** 读取记录；缺失 / 损坏返回 null（不探测进程） */
@@ -390,6 +390,10 @@ export interface StartAgentOwnerServerOptions {
   /** canonical `teams.*` 控制面；缺省时方法仍在表内，返回 `not_found`。 */
   teams?: TeamControlLike;
   dataDir: string;
+  /**
+   * 0.49 T4：内部单 id 保留在调用方（bootstrap）过渡；owner server 不再使用，
+   * 也不再写入 owner 记录。
+   */
   tenantId: string;
   /** 合成 principal 的 sender / viewer；缺省 `main`（root owner）。 */
   ownerId?: string;
@@ -434,8 +438,8 @@ function headerToken(request: Request): string | undefined {
 }
 
 /** owner 传输的合成 principal：admin 作用域 + owner agent id 作为 sender/viewer。 */
-function ownerPrincipal(tenantId: string, ownerId: string): RpcMethodContext['principal'] {
-  return { tenant_id: tenantId, role: 'admin', scope: 'admin', agent_id: ownerId };
+function ownerPrincipal(ownerId: string): RpcMethodContext['principal'] {
+  return { role: 'admin', scope: 'admin', agent_id: ownerId };
 }
 
 /** canonical 错误码 → HTTP 状态（保持 owner 端点此前的业务语义）。 */
@@ -479,11 +483,9 @@ function createOwnerRpc(options: {
   control: AgentControlLike;
   sessionFor?: () => SessionStore | undefined;
   teams?: TeamControlLike;
-  tenantId: string;
   ownerId: string;
 }): OwnerRpc {
   const sessionMethods = createSessionMethods({
-    defaultTenantId: options.tenantId,
     sessionFor: options.sessionFor ?? (() => undefined),
     agent: options.control,
   }).filter((method) =>
@@ -494,22 +496,19 @@ function createOwnerRpc(options: {
     ...createAgentMethods({
       registry: createAgentRegistry(),
       liveRuns: () => [],
-      defaultTenantId: options.tenantId,
       agent: options.control,
       ...(options.teams !== undefined ? { teams: options.teams } : {}),
     }),
     ...sessionMethods,
     ...createTeamMethods({ teams: options.teams }),
   ]);
-  const principal = ownerPrincipal(options.tenantId, options.ownerId);
+  const principal = ownerPrincipal(options.ownerId);
   const dispatcher = createRpcDispatcher({
     table,
     localPrincipal: principal,
     makeContext: (_method, _params, resolved) => ({
       principal: resolved,
-      tenantId: resolved.tenant_id,
       isAdmin: true,
-      allTenants: false,
       connection: 'local',
     }),
   });
@@ -550,7 +549,6 @@ export async function startAgentOwnerServer(
     control: options.control,
     ...(options.sessionFor !== undefined ? { sessionFor: options.sessionFor } : {}),
     ...(options.teams !== undefined ? { teams: options.teams } : {}),
-    tenantId: options.tenantId,
     ownerId,
   });
 
@@ -638,7 +636,6 @@ export async function startAgentOwnerServer(
     port: server.port ?? options.port ?? 0,
     token,
     started_at: new Date().toISOString(),
-    tenant_id: options.tenantId,
   };
 
   try {

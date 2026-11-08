@@ -24,8 +24,6 @@ export interface StartupNoticeInput {
   interruptedRuns: DurableRunSummary[] | null;
   /** 0.4：null = 未注入 / 查询失败 / 未连接 */
   feishu?: FeishuStatusLike | null;
-  /** 0.5：当前 tenant；default / 缺失时不显示 */
-  tenantId?: string | null;
 }
 
 /** 纯函数：生成启动横幅（null = 不输出） */
@@ -36,10 +34,6 @@ export function buildStartupNotice(input: StartupNoticeInput): string | null {
   const segments: string[] = [];
   const hints: string[] = [];
 
-  if (input.tenantId && input.tenantId !== 'default') {
-    segments.push(t('startup.notice.tenant', { id: input.tenantId }));
-    hints.push('/tenant');
-  }
   if (mcpCount > 0) {
     segments.push(
       t(mcpCount === 1 ? 'startup.notice.mcpOne' : 'startup.notice.mcpOther', { count: mcpCount }),
@@ -66,7 +60,6 @@ export interface StartupFacts {
   mcpServers: McpServerSummary[] | null;
   interruptedRuns: DurableRunSummary[] | null;
   feishu: FeishuStatusLike | null;
-  tenantId: string | null;
 }
 
 /**
@@ -92,7 +85,6 @@ export async function loadStartupFacts(ctx: ReplContext): Promise<StartupFacts> 
     mcpServers,
     interruptedRuns,
     feishu: feishuStatus,
-    tenantId: ctx.tenant?.tenant_id ?? null,
   };
 }
 
@@ -103,6 +95,5 @@ export async function loadStartupNotice(ctx: ReplContext): Promise<string | null
     mcpServers: facts.mcpServers,
     interruptedRuns: facts.interruptedRuns,
     feishu: facts.feishu,
-    ...(facts.tenantId ? { tenantId: facts.tenantId } : {}),
   });
 }

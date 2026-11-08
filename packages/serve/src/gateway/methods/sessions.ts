@@ -24,9 +24,9 @@ import {
   parseSearchLimit,
   searchSessions,
 } from '../../session-search.js';
-import { mapTenantError, type TenantControlLike } from '../../tenant.js';
+import { mapTenantError } from '../../tenant.js';
 import { MethodError } from '../errors.js';
-import { runInProgressReason, stringParam, tenantParamSchema } from './common.js';
+import { runInProgressReason, stringParam } from './common.js';
 import { runStateSchema, sessionInfoSchema, sessionSearchHitSchema } from './schemas.js';
 
 /** run 记录的最小读取面（gateway 只需要按 run_id 取最近一条）。 */
@@ -35,7 +35,6 @@ export interface SessionRunLookup {
 }
 
 export interface SessionMethodsDeps {
-  defaultTenantId: string;
   sessionFor(): SessionStore | undefined;
   /** 最近 RunRecord 的读取面；缺省时 `sessions.get` 只用 `legacy_run` 投影。 */
   runStoreFor?(): SessionRunLookup | undefined;
@@ -49,8 +48,6 @@ export interface SessionMethodsDeps {
    * 缺省 = `sessions.create|restart|activate` 仍进 manifest，但 handler 返回 `not_found`。
    */
   agent?: AgentControlLike;
-  /** CREATE-0.39：`sessions.create` 的 tenant 配额（`tenants.checkQuota`）。 */
-  tenants?: TenantControlLike;
   sessionData?: {
     deleteSessionData(
       sessionId: string,
@@ -97,11 +94,8 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
 
 // ── CREATE-0.39：sessions.create / restart / activate ──
 
-function requireSessionAgentControl(
-  control: AgentControlLike | undefined,
-  ctx: RpcMethodContext,
-): AgentControlLike {
-  if (!control || control.tenantId !== ctx.tenantId) {
+function requireSessionAgentControl(control: AgentControlLike | undefined): AgentControlLike {
+  if (!control) {
     throw new RpcError('not_found', 'Agent control is not available');
   }
   return control;
@@ -327,34 +321,23 @@ export function toSessionView(state: SessionState, latestRaw: unknown): Record<s
     ...(state.preview !== undefined ? { preview: state.preview } : {}),
     updated_at: updatedAt,
     ...(branch !== undefined ? { branch } : {}),
-    ...(state.tenant_id !== undefined ? { tenant_id: state.tenant_id } : {}),
   };
 }
 
 export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinition[] {
-  const { defaultTenantId, sessionFor, runStoreFor, sessionData, compactRuntime, agent, tenants } =
-    deps;
+  const { sessionFor, runStoreFor, sessionData, compactRuntime, agent } = deps;
 
-  function requireSession(tenantId: string): SessionStore {
+  function requireSession(): SessionStore {
     const resolved = sessionFor();
     if (!resolved) {
-      if (tenantId !== defaultTenantId) {
-        throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
-      }
       throw new RpcError('not_found', 'No session backend configured');
     }
     return resolved;
   }
 
-  async function listSessions(
-    tenantId: string = defaultTenantId,
-  ): Promise<{ sessions: unknown[] }> {
+  async function listSessions(): Promise<{ sessions: unknown[] }> {
     const backend = sessionFor();
     if (!backend) {
-      // 非 default tenant 未注入 session 后端 → 明确的 forbidden；default 保持旧语义。
-      if (tenantId !== defaultTenantId) {
-        throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
-      }
       throw new MethodError('no_session', 'No session backend configured');
     }
     return { sessions: await backend.listRich() };
@@ -364,7 +347,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
     {
       name: 'sessions.list',
       permission: 'read',
-      params_schema: tenantParamSchema,
+      params_schema: { type: 'object' },
       result_schema: {
         type: 'object',
         required: ['sessions'],
@@ -372,7 +355,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           sessions: { type: 'array', items: sessionInfoSchema },
         },
       },
-      handler: (_params, ctx) => listSessions(ctx.tenantId),
+      handler: () => listSessions(),
     },
     {
       name: 'sessions.get',
@@ -387,8 +370,8 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         required: ['session'],
         properties: { session: runStateSchema },
       },
-      handler: async (params, ctx) => {
-        const backend = requireSession(ctx.tenantId);
+      handler: async (params) => {
+        const backend = requireSession();
         const state = await backend.load(stringParam(params, 'session_id'));
         if (!state) throw new RpcError('not_found', 'Session not found');
         const runStore = runStoreFor?.();
@@ -417,7 +400,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           sessions: { type: 'array', items: sessionSearchHitSchema },
         },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         const query = normalizeSearchQuery(params.query);
         if (query === null) {
           throw new RpcError('invalid_params', 'query must be 1..256 characters');
@@ -429,7 +412,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
             `limit must be an integer between 1 and ${MAX_SESSION_SEARCH_LIMIT}`,
           );
         }
-        const backend = requireSession(ctx.tenantId);
+        const backend = requireSession();
         try {
           return { sessions: await searchSessions(backend, query, limit) };
         } catch (error) {
@@ -454,15 +437,12 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           events_deleted: { type: 'integer' },
         },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         if (!sessionData) {
           throw new RpcError('internal', 'deleteSessionData is not configured');
         }
         try {
-          return await sessionData.deleteSessionData(
-            stringParam(params, 'session_id'),
-            ctx.tenantId,
-          );
+          return await sessionData.deleteSessionData(stringParam(params, 'session_id'));
         } catch (error) {
           mapTenantError(error);
         }
@@ -487,8 +467,8 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           title: { type: 'string' },
         },
       },
-      handler: async (params, ctx) => {
-        const backend = requireSession(ctx.tenantId);
+      handler: async (params) => {
+        const backend = requireSession();
         const sessionId = stringParam(params, 'session_id');
         const title = stringParam(params, 'title');
         const state = await backend.load(sessionId);
@@ -516,8 +496,8 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           reason: { type: 'string', enum: ['manual'] },
         },
       },
-      handler: async (params, ctx) => {
-        const backend = requireSession(ctx.tenantId);
+      handler: async (params) => {
+        const backend = requireSession();
         const sessionId = stringParam(params, 'session_id');
         const state = await backend.load(sessionId);
         if (!state) throw new RpcError('session_not_found', 'Session not found');
@@ -576,7 +556,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       },
       result_schema: sessionCreateResultSchema,
       handler: async (params, ctx) => {
-        const control = requireSessionAgentControl(agent, ctx);
+        const control = requireSessionAgentControl(agent);
         const fromSessionId = optionalString(params.from_session_id);
         const agentId = optionalString(params.agent_id);
         const seed = readCreateSeed(params.seed);
@@ -628,13 +608,6 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           if (target === undefined || !(await inTeamScope(control, scope, target))) {
             throw new RpcError('not_found', `agent not found: ${target ?? ''}`);
           }
-        }
-
-        // 配额：复用同名 tenant 操作 `sessions.create`。
-        try {
-          await tenants?.checkQuota?.(ctx.tenantId, 'sessions.create');
-        } catch (error) {
-          mapTenantError(error);
         }
 
         let restored: { files_restored: number; files_skipped: number } | undefined;
@@ -705,8 +678,8 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         },
       },
       result_schema: sessionRestartResultSchema,
-      handler: async (params, ctx) => {
-        const control = requireSessionAgentControl(agent, ctx);
+      handler: async (params) => {
+        const control = requireSessionAgentControl(agent);
         const sessionId = stringParam(params, 'session_id');
         const startupPrompt = optionalString(params.startup_prompt);
         const input: SessionRestartLikeInput = {
@@ -736,8 +709,8 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         },
       },
       result_schema: sessionActivateResultSchema,
-      handler: async (params, ctx) => {
-        const control = requireSessionAgentControl(agent, ctx);
+      handler: async (params) => {
+        const control = requireSessionAgentControl(agent);
         const sessionId = stringParam(params, 'session_id');
         const startupPrompt = optionalString(params.startup_prompt);
         const input: SessionActivateLikeInput = {

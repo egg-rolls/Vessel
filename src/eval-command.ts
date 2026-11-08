@@ -11,7 +11,7 @@ import type { LLMProvider, TenantPaths } from '../packages/core/src/index';
 import type { EvalCommand } from './cli-args';
 import { formatConfigErrors } from './config-error-format';
 import type { EvalReport } from './control-plane-types';
-import { ensureWriteTenantPaths, resolveDataDir } from './data-paths';
+import { ensureWriteTenantPaths, resolveDataDir, resolveEffectiveTenantId } from './data-paths';
 import { executeEvalSuite } from './eval-wiring';
 import { createEventStream } from './observability-wiring';
 import { PluginLoader } from './plugin-loader';
@@ -24,8 +24,6 @@ export interface EvalCommandOptions {
   useMock?: boolean;
   configPath?: string;
   userConfigPath?: string;
-  /** 0.5：全局 `--tenant` / VESSEL_TENANT 已由 CLI 传入 */
-  tenantId?: string;
   /** 0.5：测试注入 data_dir */
   dataDir?: string;
   /** 测试注入口 */
@@ -67,9 +65,8 @@ export async function runEvalCommand(
   const loadOptions: ConfigLoadOptions = {
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
-    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   };
-  const { config, validation, tenantId, paths } = await loadConfig(loadOptions);
+  const { config, validation, tenantId: configTenantId, paths } = await loadConfig(loadOptions);
   sendWarnings(validation.warnings);
   if (validation.errors.length > 0) {
     console.error(formatConfigErrors(validation.errors, { paths }));
@@ -101,9 +98,12 @@ export async function runEvalCommand(
 
   // 0.49 T2（C9/C13）：写前先完成布局迁移，报告与 trace 落到根布局；
   // eval.run.* 事件经根 events/ 进入 trace。
+  // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
+  const dataDir = options.dataDir ?? resolveDataDir(config);
+  const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
   let tenantPaths: TenantPaths;
   try {
-    tenantPaths = await ensureWriteTenantPaths(options.dataDir ?? resolveDataDir(config), tenantId);
+    tenantPaths = await ensureWriteTenantPaths(dataDir, tenantId);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;

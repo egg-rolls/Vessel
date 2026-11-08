@@ -131,7 +131,7 @@ export function HubDirectory({
               },
             ]}
             rows={directory.nodes}
-            rowKey={(node) => node.pairing_id}
+            rowKey={(node) => node.node_id}
           />
         )}
       </Section>

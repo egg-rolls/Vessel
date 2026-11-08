@@ -234,7 +234,7 @@ function resolveMcpMap(
   }
 }
 
-/** 解析一个配置对象内的简单 `_env` 字段（含 tenant overlay 前缀）。 */
+/** 解析一个配置对象内的简单 `_env` 字段。 */
 function resolveSimpleSecrets(
   config: Record<string, unknown>,
   prefix: string,
@@ -274,7 +274,6 @@ function resolveSimpleSecrets(
   if (isRecord(serve)) {
     const servePath = joinPath(prefix, 'serve');
     resolvePair(serve, 'token', 'tokenEnv', servePath, env, errors, resolved);
-    resolvePair(serve, 'adminToken', 'adminTokenEnv', servePath, env, errors, resolved);
   }
 
   // 0.6：connect.token_env → connect.token
@@ -284,7 +283,7 @@ function resolveSimpleSecrets(
   }
 }
 
-/** 解析一个配置对象内的 mcpServers（含 tenant overlay 前缀）。 */
+/** 解析一个配置对象内的 mcpServers。 */
 function resolveMcpServers(
   config: Record<string, unknown>,
   prefix: string,
@@ -307,9 +306,8 @@ function resolveMcpServers(
  * 按层解析 `_env` 间接引用，返回新 layer（入参不被修改）。
  *
  * 支持：
- * - `apiKey` / `provider.apiKey` / `feishu.appSecret` / `serve.token` / `serve.adminToken`
+ * - `apiKey` / `provider.apiKey` / `feishu.appSecret` / `serve.token`
  * - `mcpServers.<name>.env.<KEY>` 与 `.headers.<Header>`
- * - tenant overlay：`tenant.tenants.<id>.config.*` 内的同名路径
  */
 export function resolveEnvRefsInLayer(
   layer: Partial<VesselConfig>,
@@ -321,10 +319,6 @@ export function resolveEnvRefsInLayer(
 
   resolveSimpleSecrets(cloned, '', env, errors, resolved);
   resolveMcpServers(cloned, '', env, errors, resolved);
-
-  // 注意：不解析 `tenant.tenants.<id>.config` 内的 `_env`。
-  // overlay 必须保持 `_env` 原样，validator 才能执行“tenant 密钥只允许 _env”；
-  // 选中 tenant 时由 loader 单独解析该 overlay（A-4 §11.4 / A6-23）。
 
   return { layer: cloned as Partial<VesselConfig>, errors, resolved };
 }
@@ -346,13 +340,12 @@ function endsWithPath(path: string[], suffix: string[]): boolean {
   return suffix.every((segment, index) => path[offset + index] === segment);
 }
 
-/** 固定密钥字段（含 tenant overlay 内的同名路径）。 */
+/** 固定密钥字段。 */
 const FIXED_SECRET_PATHS: readonly string[][] = [
   ['apiKey'],
   ['provider', 'apiKey'],
   ['feishu', 'appSecret'],
   ['serve', 'token'],
-  ['serve', 'adminToken'],
   ['transport', 'token'],
   ['connect', 'token'],
 ];
@@ -391,7 +384,7 @@ function isSensitiveKey(key: string): boolean {
   );
 }
 
-/** serve.tokens 特例：永不输出 token 键或值，tenant/role 保留。 */
+/** serve.tokens 特例：永不输出 token 键或值，role 保留。 */
 function redactServeTokens(value: unknown): unknown {
   if (!isRecord(value)) return '<unset>';
   const entries = Object.values(value);
@@ -451,7 +444,7 @@ function redactNode(node: unknown, path: string[]): unknown {
  * 返回脱敏后的配置副本。
  *
  * 固定字段（apiKey / provider.apiKey / feishu.appSecret / serve.token /
- * serve.adminToken / transport.token / MCP env+headers 值）输出 `<set>` / `<unset>`；
+ * transport.token / MCP env+headers 值）输出 `<set>` / `<unset>`；
  * `serve.tokens` 输出按 entry 的 `<set>`，永不输出 token 键或值。
  */
 export function redactConfig(config: VesselConfig): VesselConfig {

@@ -17,7 +17,6 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
   invalid_request: 'gateway.error.invalid_request',
   conflict: 'gateway.error.conflict',
   quota_exceeded: 'gateway.error.quota_exceeded',
-  tenant_locked: 'gateway.error.tenant_locked',
   rate_limited: 'gateway.error.rate_limited',
   timeout: 'gateway.error.timeout',
   unsupported_protocol: 'gateway.error.unsupported_protocol',

@@ -266,8 +266,6 @@ export type {
   RpcErrorLike,
   RpcEventNotificationLike,
   TenantInfoLike,
-  TenantQuotaLike,
-  TenantSummaryLike,
 } from './repl-context.js';
 export {
   buildBanner,

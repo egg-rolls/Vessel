@@ -58,7 +58,6 @@ export function MemberDetail({
   client,
   hasToken,
   epoch,
-  tenantEpoch,
   teamId,
   memberId,
   nodeKey = 'local',
@@ -86,7 +85,7 @@ export function MemberDetail({
     () => {
       void loadDetail(nodeKey, teamId, client, { limit: 1 }, 'member');
     },
-    { enabled: hasToken, pollMs: 4_000, deps: [epoch, tenantEpoch, teamId, nodeKey] },
+    { enabled: hasToken, pollMs: 4_000, deps: [epoch, teamId, nodeKey] },
   );
 
   // 回退历史只读事件；页面内同步派生，刷新后自然丢弃。

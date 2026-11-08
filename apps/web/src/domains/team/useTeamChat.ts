@@ -41,7 +41,6 @@ export function useTeamChat({
   hasToken,
   connectionState,
   epoch,
-  tenantEpoch,
   teamId,
   nodeKey = 'local',
   permissions,
@@ -120,7 +119,7 @@ export function useTeamChat({
     {
       enabled: hasToken,
       pollMs: TEAM_POLL_MS,
-      deps: [epoch, tenantEpoch, teamId, limit, membersLimit, nodeKey],
+      deps: [epoch, teamId, limit, membersLimit, nodeKey],
     },
   );
   const reloadRef = useRef(reload);

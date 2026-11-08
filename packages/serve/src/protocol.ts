@@ -121,8 +121,6 @@ export type ServerFrame =
       from_seq: number;
       /** 服务端当前最新 seq；无事件时为 0 */
       latest_seq: number;
-      /** 0.5：token 解析出的目标 tenant（additive） */
-      tenant_id?: string;
     }
   | {
       v: 1;
@@ -162,10 +160,6 @@ export type ClientFrame =
       token: string;
       role?: 'console';
       since?: number;
-      /**
-       * 0.6：admin 可显式覆盖 tenant；非 admin 只能使用 token principal
-       */
-      tenant_id?: string;
       /** 0.9：客户端进程代际（additive；网关不据此做鉴权或去重） */
       incarnation?: string;
     }

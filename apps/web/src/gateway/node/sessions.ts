@@ -97,7 +97,6 @@ export abstract class SessionsClient extends RpcClient {
       run_id?: string;
       status?: 'pending' | 'answered' | 'orphaned';
       limit?: number;
-      tenant_id?: string;
     } = {},
   ): Promise<ListedInteraction[]> {
     const page = await this.listInteractionsPage(params);
@@ -117,7 +116,6 @@ export abstract class SessionsClient extends RpcClient {
       limit?: number;
       order?: 'oldest' | 'newest';
       cursor?: string;
-      tenant_id?: string;
     } = {},
   ): Promise<ListedInteractionPage> {
     const body = await this.rpc<{

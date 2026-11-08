@@ -32,7 +32,6 @@ export interface TeamChatProps {
   hasToken: boolean;
   connectionState: string;
   epoch: number;
-  tenantEpoch: number;
   teamId: string;
   /** Store key discriminator for multi-node Teams; defaults for tests / preview. */
   nodeKey?: string;

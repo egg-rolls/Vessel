@@ -1,5 +1,5 @@
 /**
- * Integrations / 观测域方法：tools、config、tenants、health、metrics、MCP、Feishu、evals。
+ * Integrations / 观测域方法：tools、config、health、metrics、MCP、Feishu、evals。
  *
  * 从 `client.ts` 拆出（S1）；行为与原单文件一致。
  */
@@ -20,8 +20,6 @@ import type {
   MetricsResponse,
   MetricsSnapshot,
   PluginListItem,
-  TenantInfo,
-  TenantResponse,
   ToolInfo,
   ToolPolicy,
   ToolPolicyResult,
@@ -61,18 +59,12 @@ export abstract class IntegrationsClient extends TeamsClient {
     }
   }
 
-  async getConfig(tenantId?: string): Promise<ConfigResponse> {
-    return this.rpc<ConfigResponse>(
-      'config.get',
-      tenantId !== undefined ? { tenant_id: tenantId } : {},
-    );
+  async getConfig(): Promise<ConfigResponse> {
+    return this.rpc<ConfigResponse>('config.get', {});
   }
 
-  async getConfigSources(tenantId?: string): Promise<ConfigSourcesResponse> {
-    return this.rpc<ConfigSourcesResponse>(
-      'config.sources',
-      tenantId !== undefined ? { tenant_id: tenantId } : {},
-    );
+  async getConfigSources(): Promise<ConfigSourcesResponse> {
+    return this.rpc<ConfigSourcesResponse>('config.sources', {});
   }
 
   /** 0.15：只写服务端白名单键；未注入 writer 时返回 not_found。 */
@@ -99,47 +91,8 @@ export abstract class IntegrationsClient extends TeamsClient {
     return this.rpc<GatewayReloadResult>('gateway.reload', { scopes });
   }
 
-  async listTenants(): Promise<TenantInfo[]> {
-    const body = await this.rpc<{ tenants?: TenantInfo[] }>('tenants.list');
-    return body.tenants ?? [];
-  }
-
-  async createTenant(
-    tenantId: string,
-    options: { name?: string; quota?: Record<string, number> } = {},
-  ): Promise<TenantInfo> {
-    const body = await this.rpc<TenantResponse>('tenants.create', {
-      tenant_id: tenantId,
-      ...(options.name !== undefined ? { name: options.name } : {}),
-      ...(options.quota !== undefined ? { quota: options.quota } : {}),
-    });
-    return body.tenant;
-  }
-
-  async updateTenant(
-    tenantId: string,
-    options: {
-      name?: string;
-      status?: 'active' | 'disabled';
-      quota?: Record<string, number>;
-    } = {},
-  ): Promise<TenantInfo> {
-    const body = await this.rpc<TenantResponse>('tenants.update', {
-      tenant_id: tenantId,
-      ...(options.name !== undefined ? { name: options.name } : {}),
-      ...(options.status !== undefined ? { status: options.status } : {}),
-      ...(options.quota !== undefined ? { quota: options.quota } : {}),
-    });
-    return body.tenant;
-  }
-
   async getHealth(): Promise<HealthResponse> {
     return this.rpc<HealthResponse>('health.get');
-  }
-
-  async getTenantId(): Promise<string | undefined> {
-    const body = await this.rpc<{ tenant_id?: string }>('health.get');
-    return body.tenant_id;
   }
 
   /** metrics：优先 canonical `metrics.get`（可带 source），旧 gateway 回退 REST。 */
@@ -166,8 +119,8 @@ export abstract class IntegrationsClient extends TeamsClient {
     return this.rpc<{ ok: boolean }>('metrics.reset', {});
   }
 
-  reconnectMcp(name: string): Promise<{ ok: boolean; tenant_id: string }> {
-    return this.rpc<{ ok: boolean; tenant_id: string }>('mcp.reconnect', { name });
+  reconnectMcp(name: string): Promise<{ ok: boolean }> {
+    return this.rpc<{ ok: boolean }>('mcp.reconnect', { name });
   }
 
   runEval(suite: string): Promise<EvalReport> {

@@ -1,5 +1,5 @@
 /**
- * `vessel.hub/1` 帧解析 / 构造（S5 / S5.1）。
+ * `vessel.hub/2` 帧解析 / 构造（S5 / S5.1）。
  *
  * 只处理元数据帧；不解析 RunEvent、消息正文或工具参数。这里集中放纯函数，
  * 让 hub → node 与 node → hub 两个方向共用同一套校验，避免接受逻辑漂移。
@@ -38,7 +38,6 @@ export type HubFrameParse<T> =
 export interface HubFrameIdentity {
   hub_id?: string;
   node_id?: string;
-  tenant_id?: string;
 }
 
 export interface HubEnvelope {
@@ -110,7 +109,6 @@ function identityMatches(
   if (expect === undefined) return true;
   if (expect.hub_id !== undefined && frame.hub_id !== expect.hub_id) return false;
   if (expect.node_id !== undefined && frame.node_id !== expect.node_id) return false;
-  if (expect.tenant_id !== undefined && frame.tenant_id !== expect.tenant_id) return false;
   return true;
 }
 
@@ -135,11 +133,10 @@ export function parseHubAuthFrame(
     hub_id: frame.hub_id,
   };
   if (nonEmptyString(frame.node_id)) parsed.node_id = frame.node_id;
-  if (nonEmptyString(frame.tenant_id)) parsed.tenant_id = frame.tenant_id;
   if (nonEmptyString(frame.incarnation)) parsed.incarnation = frame.incarnation;
-  // node dialer 必须自带身份，否则 hub 无法绑定 pairing。
+  // node dialer 必须自带身份，否则 hub 无法绑定连接。
   if (parsed.dialer === 'node') {
-    if (parsed.node_id === undefined || parsed.tenant_id === undefined) {
+    if (parsed.node_id === undefined) {
       return { ok: false, reason: 'invalid' };
     }
   }
@@ -171,7 +168,6 @@ export function parseHubHelloFrame(
   if (finiteNumber(frame.revision) && frame.revision >= 0) {
     parsed.revision = Math.floor(frame.revision);
   }
-  if (nonEmptyString(frame.tenant_id)) parsed.tenant_id = frame.tenant_id;
   return { ok: true, frame: parsed };
 }
 
@@ -313,7 +309,6 @@ export function buildHubAuthFrame(input: {
   token: string;
   hubId: string;
   nodeId?: string;
-  tenantId?: string;
   incarnation?: string;
 }): HubAuthFrame {
   const frame: HubAuthFrame = {
@@ -325,7 +320,6 @@ export function buildHubAuthFrame(input: {
     hub_id: input.hubId,
   };
   if (input.nodeId !== undefined) frame.node_id = input.nodeId;
-  if (input.tenantId !== undefined) frame.tenant_id = input.tenantId;
   if (input.incarnation !== undefined) frame.incarnation = input.incarnation;
   return frame;
 }
@@ -337,7 +331,6 @@ export function buildHubHelloFrame(input: {
   nodeId?: string;
   incarnation?: string;
   revision?: number;
-  tenantId?: string;
 }): HubHelloFrame {
   const frame: HubHelloFrame = {
     v: 1,
@@ -349,7 +342,6 @@ export function buildHubHelloFrame(input: {
   if (input.nodeId !== undefined) frame.node_id = input.nodeId;
   if (input.incarnation !== undefined) frame.incarnation = input.incarnation;
   if (input.revision !== undefined) frame.revision = input.revision;
-  if (input.tenantId !== undefined) frame.tenant_id = input.tenantId;
   return frame;
 }
 

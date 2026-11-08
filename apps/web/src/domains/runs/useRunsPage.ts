@@ -55,8 +55,7 @@ function errorMessage(error: unknown): string {
 }
 
 export function useRunsPage(route: RunsRoute, navigate: (route: Route) => void) {
-  const { client, connectionState, hasToken, features, epoch, tenantId, eventStore } =
-    useConnection();
+  const { client, connectionState, hasToken, features, epoch, eventStore } = useConnection();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
   const durableAvailable = hasToken && features.includes('durable-resume');
@@ -351,7 +350,6 @@ export function useRunsPage(route: RunsRoute, navigate: (route: Route) => void) 
     !knownDurable;
 
   return {
-    tenantId,
     hasToken,
     connected,
     durableAvailable,

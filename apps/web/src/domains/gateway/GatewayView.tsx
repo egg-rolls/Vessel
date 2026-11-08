@@ -30,14 +30,14 @@ function pageOrigin(): string {
 
 export function GatewayView({ navigate }: { navigate: (route: Route) => void }) {
   useLocale();
-  const { client, connectionState, hasToken, epoch, tenantId, nodeUrl } = useConnection();
+  const { client, connectionState, hasToken, epoch, nodeUrl } = useConnection();
   const { current } = useNodes();
 
   const { config, reloadConfig } = useConfigStoreApi();
   const health = useResource({
     load: () => client.getHealth(),
     enabled: hasToken,
-    deps: [epoch, tenantId],
+    deps: [epoch],
     pollMs: 15_000,
   });
   useRefreshSignal(() => {

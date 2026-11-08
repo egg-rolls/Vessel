@@ -88,9 +88,8 @@ export class RpcError extends Error {
 
 /** 单次分发的上下文 */
 export interface RpcMethodContext {
-  /** 由 token 解析出的 principal；tenant_id 可为 '*'（admin token） */
+  /** 由 token 解析出的 principal（0.49 T4：无 tenant 维度） */
   principal: {
-    tenant_id: string;
     role: MethodPermission;
     /** S5：动态 token 的 scope；静态 token 缺省 */
     scope?: PrincipalScope;
@@ -108,11 +107,7 @@ export interface RpcMethodContext {
      */
     agent_id?: string;
   };
-  /** 本次请求实际作用的目标 tenant（admin 可显式指定） */
-  tenantId: string;
   isAdmin: boolean;
-  /** admin 显式 all_tenants（仅 events.subscribe 使用） */
-  allTenants: boolean;
   connection: 'http' | 'ws' | 'local';
 }
 
@@ -203,7 +198,7 @@ export interface CreateRpcDispatcherOptions {
   dynamic?: RpcDynamicMethodSource;
   /** LocalRpcClient 使用的 principal（进程内嵌） */
   localPrincipal: RpcMethodContext['principal'];
-  /** 由 gateway 提供：解析目标 tenant / all_tenants */
+  /** 由 gateway 提供：组装单次分发上下文 */
   makeContext: (
     method: RpcMethodDefinition,
     params: Record<string, unknown>,

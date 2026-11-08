@@ -42,6 +42,7 @@ export type WebSocketFactory = (url: string, tls?: { ca: string }) => WebSocketL
 /** 连接建立后由 gateway `hello` 提供的信息 */
 export interface RpcHelloInfo {
   nodeId?: string;
+  /** 0.49 T4：wire 已无 tenant；字段仅为 CLI 显示兼容保留，后续切片删除。 */
   tenantId?: string;
   latestSeq?: number;
 }
@@ -209,7 +210,7 @@ function textOf(data: unknown): string | undefined {
 
 type GatewayFrame =
   | { kind: 'notification'; notification: RpcEventNotification }
-  | { kind: 'hello'; nodeId?: string; tenantId?: string; latestSeq?: number }
+  | { kind: 'hello'; nodeId?: string; latestSeq?: number }
   | { kind: 'event'; seq?: number; event: unknown }
   | { kind: 'gap'; toSeq?: number }
   | { kind: 'ping' };
@@ -242,7 +243,6 @@ export function parseGatewayFrame(data: unknown): GatewayFrame | undefined {
       return {
         kind: 'hello',
         ...(typeof parsed.node_id === 'string' ? { nodeId: parsed.node_id } : {}),
-        ...(typeof parsed.tenant_id === 'string' ? { tenantId: parsed.tenant_id } : {}),
         ...(typeof parsed.latest_seq === 'number' ? { latestSeq: parsed.latest_seq } : {}),
       };
     case 'event':
@@ -357,7 +357,6 @@ export function createHttpRpcClient(options: HttpRpcClientOptions): HttpRpcClien
         attempt = 0;
         options.onHello?.({
           ...(frame.nodeId !== undefined ? { nodeId: frame.nodeId } : {}),
-          ...(frame.tenantId !== undefined ? { tenantId: frame.tenantId } : {}),
           ...(frame.latestSeq !== undefined ? { latestSeq: frame.latestSeq } : {}),
         });
         // gateway 重启 / 缓冲区清空：seq 回退，重置从 0 重放。

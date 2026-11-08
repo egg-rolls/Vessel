@@ -277,9 +277,8 @@ export type PrincipalRole = 'read' | 'write' | 'admin';
 /** S5：节点动态 token 的 scope（additive；静态 token 缺省） */
 export type PrincipalScope = 'view' | 'exchange' | 'control' | 'admin';
 
-/** 由 token 解析出的 principal（A-3 §10.4 冻结：snake_case tenant_id） */
+/** 由 token 解析出的 principal（A-3 §10.4；0.49 T4 删除 tenant 维度） */
 export interface Principal {
-  tenant_id: string;
   role: PrincipalRole;
   /** S5：动态 token 的 scope；静态 token 缺省 */
   scope?: PrincipalScope;
@@ -293,7 +292,6 @@ export interface Principal {
 
 /** serve token 条目（A-3 §10.4；键为原始 token，永不打印） */
 export interface ServeTokenEntry {
-  tenantId?: string;
   role?: PrincipalRole;
 }
 
@@ -310,28 +308,6 @@ export interface TraceConfig {
    * 默认 false：实时事件仍发布，只是不写 trace（避免 trace 体积随流式输出暴涨）。
    */
   includeStreamChunks?: boolean;
-}
-
-/** tenant 级设置 */
-export interface TenantSettings {
-  name?: string;
-  status?: 'active' | 'disabled';
-  quota?: {
-    maxSessions?: number;
-    maxRunsPerDay?: number;
-    maxConcurrentRuns?: number;
-    maxStorageBytes?: number;
-  };
-  tools?: { allow?: string[]; deny?: string[] };
-  /** tenant 覆盖层；白名单见 DECISION-010 §11.4 */
-  config?: Partial<VesselConfig>;
-}
-
-/** tenant 配置块 */
-export interface TenantConfig {
-  default?: string;
-  /** 键必须匹配 ^[a-z0-9][a-z0-9_-]{0,63}$ */
-  tenants?: Record<string, TenantSettings>;
 }
 
 /**
@@ -366,12 +342,8 @@ export interface ServeConfig {
   token?: string;
   /** 从该环境变量读取 token */
   tokenEnv?: string;
-  /** A-3：token → { tenantId, role }；键为原始 token，必须原样保留 */
+  /** A-3：token → { role }；键为原始 token，必须原样保留 */
   tokens?: Record<string, ServeTokenEntry>;
-  /** A-3：跨 tenant admin；tenantId = '*' */
-  adminToken?: string;
-  /** 从该环境变量读取 adminToken */
-  adminTokenEnv?: string;
   /** TLS 证书对 */
   tls?: ServeTlsConfig;
   /**
@@ -597,9 +569,6 @@ export interface ConfigSnapshot {
   /** 基础层来源（敏感路径已脱敏） */
   sources: RedactedConfigSources;
   paths: { user: string; project: string };
-  tenant_id?: string;
-  /** tenant overlay 命中的叶子键；不伪造第 6 种 source */
-  tenant_overlay_keys?: string[];
 }
 
 /** 权限配置（0.6.1；交互确认与免确认规则） */
@@ -675,10 +644,8 @@ export interface VesselConfig {
   apiKey?: string;
   /** 从该环境变量读取 apiKey（同层显式 apiKey 优先） */
   apiKeyEnv?: string;
-  /** 全局数据根；tenant overlay 不得覆盖 */
+  /** 全局数据根 */
   dataDir?: string;
-  /** 多租户配置 */
-  tenant?: TenantConfig;
   /** trace 配置；缺省消费 DEFAULT_TRACE_OPTIONS */
   trace?: TraceConfig;
   provider?: ProviderConfig;
@@ -734,8 +701,6 @@ export interface ConfigLoadOptions {
   userConfigPath?: string;
   /** 环境变量前缀（默认 VESSEL_） */
   envPrefix?: string;
-  /** CLI/调用方显式 tenant id（高于 VESSEL_TENANT 与 config.tenant.default） */
-  tenantId?: string;
   /** 环境变量来源；缺省 process.env（便于测试注入） */
   env?: Record<string, string | undefined>;
   /**

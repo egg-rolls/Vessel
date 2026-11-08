@@ -42,7 +42,7 @@ export function AgentDetailView({
 }) {
   useLocale();
   const toast = useToast();
-  const { epoch, tenantEpoch } = useConnection();
+  const { epoch } = useConnection();
   const { teamControl, hasTokenFor } = useNodes();
   const snapshot = useEventSnapshot();
   const nodeNames = useNodeNames();
@@ -117,7 +117,6 @@ export function AgentDetailView({
             client={teamControl(node)}
             hasToken={hasTokenFor(node)}
             epoch={epoch}
-            tenantEpoch={tenantEpoch}
             teamId={agent.team.team_id}
             memberId={member.agent_id}
             nodeKey={nodeKeyOf(node)}

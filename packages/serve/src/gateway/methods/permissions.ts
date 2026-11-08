@@ -36,8 +36,6 @@ export interface PermissionsControl {
 }
 
 export interface PermissionsMethodsDeps {
-  /** 只有 default tenant 能改写用户级 YAML（与 `config.set` 同一约束）。 */
-  defaultTenantId: string;
   /** 缺省 → `not_supported`。 */
   permissions?: PermissionsControl;
   /** `tools.list` 的同一宿主来源；用于工具存在性校验。 */
@@ -104,14 +102,7 @@ export function createPermissionsMethods(deps: PermissionsMethodsDeps): RpcMetho
           never_auto_approve: { type: 'array', items: { type: 'string' } },
         },
       },
-      handler: async (params, ctx) => {
-        // 用户配置是进程级文件；非 default tenant 不得跨租户改写。
-        if (ctx.tenantId !== deps.defaultTenantId) {
-          throw new RpcError(
-            'forbidden',
-            'permissions.setToolPolicy is only available for the default tenant',
-          );
-        }
+      handler: async (params) => {
         const control = deps.permissions;
         if (control === undefined) {
           throw new RpcError('not_supported', 'Permission policy write is not available');

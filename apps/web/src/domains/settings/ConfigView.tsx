@@ -13,7 +13,7 @@ import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
 export function ConfigView() {
   useLocale();
-  const { connectionState, hasToken, features, tenantId } = useConnection();
+  const { connectionState, hasToken, features } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const [query, setQuery] = useState('');
 
@@ -84,11 +84,6 @@ export function ConfigView() {
               key: 'schema',
               label: t('config.schemaVersion'),
               value: <span className="font-mono">{data.config.schema_version}</span>,
-            },
-            {
-              key: 'tenant',
-              label: t('config.tenant'),
-              value: <span className="font-mono">{data.config.tenant_id || tenantId || '—'}</span>,
             },
             {
               key: 'userPath',

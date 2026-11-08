@@ -8,6 +8,7 @@
  */
 
 import * as path from 'node:path';
+import { HUB_PROTOCOL } from '@vessel-agent/serve';
 import { isLoopbackHostname, loadConfig, type VesselConfig } from '../packages/config/src/index';
 import type { HubCommand } from './cli-args';
 import { expandHome, resolveDataDir } from './data-paths';
@@ -276,7 +277,7 @@ function nodeLines(body: unknown): string[] {
     throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
   }
   if (body.nodes.length === 0) return [ui.dim(t('hub.empty.nodes'))];
-  const lines = [ui.dim('pairing_id  node_id  status  teams  agents  last_seen')];
+  const lines = [ui.dim('node_id  status  teams  agents  last_seen')];
   for (const node of body.nodes) {
     if (!isRecord(node)) continue;
     const counts = isRecord(node.counts) ? node.counts : {};
@@ -287,14 +288,7 @@ function nodeLines(body: unknown): string[] {
         ? new Date(node.last_seen).toISOString()
         : '-';
     lines.push(
-      [
-        String(node.pairing_id ?? '-'),
-        String(node.node_id ?? '-'),
-        String(node.status ?? '-'),
-        teams,
-        agents,
-        lastSeen,
-      ].join('  '),
+      [String(node.node_id ?? '-'), String(node.status ?? '-'), teams, agents, lastSeen].join('  '),
     );
   }
   return lines;
@@ -443,7 +437,7 @@ async function watchCommand(
         JSON.stringify({
           v: 1,
           kind: 'auth',
-          protocol: 'vessel.hub/1',
+          protocol: HUB_PROTOCOL,
           dialer: 'hub',
           ...(token !== undefined ? { token } : {}),
         }),
@@ -499,11 +493,9 @@ async function joinCodeCommand(
 ): Promise<number> {
   const dataDir = hubJoinCodeDataDir(config, command.dataDir);
   const hubId = await resolveNodeId({ dataDir });
-  const tenantId = command.tenant ?? config.tenant?.default ?? 'default';
   const ttl = command.ttl ?? config.hub?.pairingTtlSeconds;
   const store = createHubJoinStore({ dataDir, hubId });
   const issued = await store.issue({
-    tenant_id: tenantId,
     ...(ttl !== undefined ? { ttl_s: ttl } : {}),
   });
 
@@ -515,7 +507,6 @@ async function joinCodeCommand(
           code: issued.code,
           expires_at: issued.expires_at,
           hub_id: hubId,
-          tenant_id: tenantId,
         },
         null,
         2,
@@ -561,36 +552,25 @@ function resolveJoinCode(
 interface JoinResponse {
   hub_id: string;
   node_id: string;
-  tenant_id: string;
-  pairing_id: string;
   token: string;
   token_id: string;
   expires_at: number;
 }
 
-/** 校验 join 响应白名单字段；tenant 不匹配单独报 `tenant_mismatch`。 */
-function parseJoinResponse(body: unknown, nodeId: string, tenantId: string): JoinResponse {
+/** 校验 join 响应白名单字段。 */
+function parseJoinResponse(body: unknown, nodeId: string): JoinResponse {
   if (!isRecord(body) || body.scope !== 'node') throw invalidResponse();
   const hubId = body.hub_id;
-  const responseTenant = body.tenant_id;
-  const pairingId = body.pairing_id;
   const token = body.token;
   const tokenId = body.token_id;
   const expiresAt = body.expires_at;
   if (typeof hubId !== 'string' || hubId === '') throw invalidResponse();
-  if (typeof responseTenant !== 'string' || responseTenant === '') throw invalidResponse();
-  if (responseTenant !== tenantId) {
-    throw new HubCommandFailure('tenant_mismatch', t('hub.error.tenantMismatch'));
-  }
-  if (pairingId !== `${nodeId}:${tenantId}`) throw invalidResponse();
   if (typeof token !== 'string' || token === '') throw invalidResponse();
   if (typeof tokenId !== 'string' || tokenId === '') throw invalidResponse();
   if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) throw invalidResponse();
   return {
     hub_id: hubId,
     node_id: nodeId,
-    tenant_id: responseTenant,
-    pairing_id: pairingId,
     token,
     token_id: tokenId,
     expires_at: expiresAt,
@@ -671,7 +651,6 @@ async function joinCommand(
       : {}),
     dataDir,
   });
-  const tenantId = command.tenant ?? config.tenant?.default ?? 'default';
   const publicUrl =
     command.publicUrl !== undefined ? normalizeJoinPublicUrl(command.publicUrl) : undefined;
 
@@ -690,15 +669,14 @@ async function joinCommand(
   const body = await requestJson(deps, `${hubUrl}/v1/hub/join`, {
     method: 'POST',
     body: {
-      protocol: 'vessel.hub/1',
+      protocol: HUB_PROTOCOL,
       code,
       node_id: nodeId,
-      tenant_id: tenantId,
       ...(publicUrl !== undefined ? { public_url: publicUrl } : {}),
     },
     ...(tls !== undefined ? { tls } : {}),
   });
-  const joined = parseJoinResponse(body, nodeId, tenantId);
+  const joined = parseJoinResponse(body, nodeId);
 
   // R1 写入顺序：先写 SecretStore token，再写 hub-node.json；state 失败删除 token。
   const createSecrets = deps.createSecretStore ?? createSecretStore;
@@ -715,8 +693,6 @@ async function joinCommand(
     hub_url: hubUrl,
     hub_id: joined.hub_id,
     node_id: nodeId,
-    tenant_id: tenantId,
-    pairing_id: joined.pairing_id,
     token_id: joined.token_id,
     expires_at: joined.expires_at,
     joined_at: (deps.now ?? Date.now)(),
@@ -746,9 +722,7 @@ async function joinCommand(
           ok: true,
           joined: outcome.joined,
           hub_id: joined.hub_id,
-          pairing_id: joined.pairing_id,
           node_id: nodeId,
-          tenant_id: tenantId,
           state_file: stateFile,
           ...(outcome.status !== undefined ? { status: outcome.status.status } : {}),
         },
@@ -760,7 +734,7 @@ async function joinCommand(
   }
 
   if (outcome.joined) {
-    output(deps, ui.ok(t('hub.join.joined', { hub: joined.hub_id, pairing: joined.pairing_id })));
+    output(deps, ui.ok(t('hub.join.joined', { hub: joined.hub_id, pairing: nodeId })));
   } else {
     output(deps, ui.info(t('hub.join.saved')));
     if (outcome.status !== undefined) {

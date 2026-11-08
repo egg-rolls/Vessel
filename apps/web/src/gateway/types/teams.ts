@@ -15,7 +15,6 @@ export interface TeamBodyHistoryEntry {
 export interface TeamSummary {
   team_id: string;
   name: string;
-  tenant_id: string;
   /** 旧 gateway / 缺失 workspace 的 Team 不返回该字段；UI 显示 —。 */
   workspace?: string;
   /** 0.21 additive：展示字段；缺失时 UI 显示 —。 */

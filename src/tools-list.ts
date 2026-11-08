@@ -12,13 +12,12 @@ import {
   createAgentTool,
   createMemberExecutionHost,
 } from '@vessel-agent/agent';
-import { loadConfig, resolveTenantToolPolicy } from '../packages/config/src/index';
+import { loadConfig } from '../packages/config/src/index';
 import { InProcessScheduler, MemoryPluginHost, Runtime } from '../packages/core/src/index';
 import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
-import { TenantToolHost } from './tenant-runtime-factory';
 
 export interface ToolSummary {
   name: string;
@@ -52,12 +51,7 @@ export async function listTools(): Promise<ToolsListing> {
   const pluginNames = selection.names;
 
   const pluginConfigs = buildPluginConfigMap(config.plugins, declarative, resolveAgentCwd(config));
-  // 0.18（DECISION-032 §1.5/§1.7）：`--tools` 与运行期同一过滤边界，
-  // 插件工具与 agent 工具都走包装器。
-  const host = new TenantToolHost(
-    new MemoryPluginHost(),
-    resolveTenantToolPolicy(config, tenantId),
-  );
+  const host = new MemoryPluginHost();
   for (const name of pluginNames) {
     const plugin = await loader.load(name);
     if (plugin) {

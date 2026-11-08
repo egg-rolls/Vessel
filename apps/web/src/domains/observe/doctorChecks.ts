@@ -154,7 +154,6 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
     const session = asRecord(configRoot.session);
     const backend = nonEmpty(session?.backend) ?? 'file';
     const storagePath = nonEmpty(session?.storagePath);
-    const tenant = input.config?.tenant_id ?? input.health?.tenant_id ?? 'default';
     if (backend === 'memory') {
       checks.push({
         name: 'session',
@@ -165,7 +164,7 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
     } else {
       const leaf = backend === 'sqlite' ? 'sessions.db' : 'sessions';
       const base = nonEmpty(configRoot.dataDir) ?? DEFAULT_DATA_DIR;
-      const path = storagePath ?? `${base}/tenants/${tenant}/${leaf}`;
+      const path = storagePath ?? `${base}/${leaf}`;
       const derived = storagePath ? '' : ` (${t('observe.diagnostics.doctor.session.derived')})`;
       checks.push({
         name: 'session',

@@ -27,7 +27,7 @@ import { type AttentionStatus, interactionRoute } from './attention-shared';
 /** 单节点：与 0.22 的收件箱行为一致。 */
 export function SingleNodeAttention({ navigate }: { navigate: (route: Route) => void }) {
   useLocale();
-  const { hasToken, epoch, tenantEpoch, tenantId } = useConnection();
+  const { hasToken, epoch } = useConnection();
   const { current: node, fetchAttention } = useNodes();
   const [status, setStatus] = useState<AttentionStatus>('pending');
   /** 加载更多得到的后续页（只存追加部分）。 */
@@ -38,12 +38,11 @@ export function SingleNodeAttention({ navigate }: { navigate: (route: Route) => 
   const [moreError, setMoreError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
-  /** 分页身份：切状态 / tenant / epoch / 节点后，旧的在途“加载更多”不得落地。 */
-  const pageKey = `${epoch}:${tenantEpoch}:${tenantId ?? ''}:${status}:${node?.name ?? ''}`;
+  /** 分页身份：切状态 / epoch / 节点后，旧的在途“加载更多”不得落地。 */
+  const pageKey = `${epoch}:${status}:${node?.name ?? ''}`;
   const pageKeyRef = useRef(pageKey);
   pageKeyRef.current = pageKey;
 
-  const tenantParam = tenantId ? { tenant_id: tenantId } : {};
   const resource = useResource({
     load: () =>
       node
@@ -51,11 +50,10 @@ export function SingleNodeAttention({ navigate }: { navigate: (route: Route) => 
             status,
             limit: ATTENTION_PAGE_SIZE,
             order: 'newest',
-            ...tenantParam,
           })
         : Promise.reject(new Error('no current node')),
     enabled: hasToken && node !== null,
-    deps: [epoch, tenantEpoch, tenantId, status, node?.name ?? ''],
+    deps: [epoch, status, node?.name ?? ''],
   });
   // 手动 Refresh 与全局刷新都丢掉追加页 / cursor，避免已答行残留在 more 里。
   const refreshAll = useCallback(() => {
@@ -65,12 +63,12 @@ export function SingleNodeAttention({ navigate }: { navigate: (route: Route) => 
   }, [resource.reload]);
   useRefreshSignal(refreshAll);
 
-  // 状态 / tenant / epoch 变化：丢掉上一轮追加的页，从第一页重新开始。
+  // 状态 / epoch 变化：丢掉上一轮追加的页，从第一页重新开始。
   // biome-ignore lint/correctness/useExhaustiveDependencies: 这些键就是分页身份
   useEffect(() => {
     setMore(null);
     setMoreError(null);
-  }, [epoch, tenantEpoch, tenantId, status]);
+  }, [epoch, status]);
 
   // 分页身份变化后，旧请求的数据在 effect 落地前必须先隐藏，避免串状态。
   const [settledKey, setSettledKey] = useState(pageKey);
@@ -105,7 +103,6 @@ export function SingleNodeAttention({ navigate }: { navigate: (route: Route) => 
         limit: ATTENTION_PAGE_SIZE,
         order: 'newest',
         cursor: nextCursor,
-        ...tenantParam,
       });
       if (pageKeyRef.current !== keyAtStart) return;
       setMore((prev) => ({

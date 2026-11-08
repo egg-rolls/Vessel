@@ -24,7 +24,6 @@ export interface ConnectionControlsDeps {
   mode: ConnectionMode;
   nodeIdentity: NodeIdentity | null;
   canConnect: boolean;
-  tenantIdRef: Current<string | null>;
   reportConnectError: (error: unknown) => void;
   setPlatformUrl: Dispatch<SetStateAction<string>>;
   setPlatformToken: Dispatch<SetStateAction<string>>;
@@ -54,7 +53,6 @@ export function useConnectionControls({
   mode,
   nodeIdentity,
   canConnect,
-  tenantIdRef,
   reportConnectError,
   setPlatformUrl,
   setPlatformToken,
@@ -122,8 +120,6 @@ export function useConnectionControls({
         return true;
       }
 
-      // CONTRACT-0.49 C7：T1 不再提供切换 tenant 的入口；
-      // `ConnectionOptions.tenantId` 类型保留（defer-T4），此处忽略。
       return false;
     },
     [mode, nodeIdentity],
@@ -154,7 +150,7 @@ export function useConnectionControls({
     probeThenConnect(
       client,
       nodeToken,
-      () => ({ since: eventStore.currentSeq, tenantId: tenantIdRef.current ?? undefined }),
+      () => ({ since: eventStore.currentSeq }),
       reportConnectError,
     );
   }, [client, eventStore, nodeToken, canConnect, reportConnectError]);

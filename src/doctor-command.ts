@@ -21,7 +21,7 @@ import {
 import { resolveSingleTenantPaths } from '../packages/core/src/index';
 import type { DoctorCommandArgs } from './cli-args';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
-import { resolveDataDir, resolveTenantPaths } from './data-paths';
+import { resolveDataDir, resolveEffectiveTenantId, resolveTenantPaths } from './data-paths';
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
@@ -243,7 +243,10 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
     env,
   });
-  const { config, validation, tenantId, paths } = loaded;
+  const { config, validation, tenantId: configTenantId, paths } = loaded;
+  const dataDir = resolveDataDir(config, env);
+  // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
+  const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
 
   checks.push({
     name: 'config',
@@ -269,7 +272,6 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     message: `${config.provider?.name ?? 'openai'} / ${config.provider?.model ?? '<no model>'} / api key ${key ? '<set>' : '<unset>'}`,
   });
 
-  const dataDir = resolveDataDir(config, env);
   const dataStatus = writeTargetStatus(dataDir);
   checks.push({
     name: 'data_dir',

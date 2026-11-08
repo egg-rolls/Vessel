@@ -15,7 +15,6 @@ export const en: Record<MessageKey, string> = {
   'startup.summary.mcp': 'MCP {count}',
   'startup.summary.runs': 'runs {count}',
   'startup.summary.feishu': 'feishu',
-  'startup.notice.tenant': 'Tenant: {id}',
   'startup.notice.mcpOne': 'MCP: {count} server',
   'startup.notice.mcpOther': 'MCP: {count} servers',
   'startup.notice.runOne': '{count} interrupted run',
@@ -535,7 +534,6 @@ export const en: Record<MessageKey, string> = {
   'command.metrics.description': 'Show runtime metrics (live or rebuilt from trace)',
   'command.runs.description': 'Durable runs: list / resume',
   'command.sessions.description': 'Deprecated: use /resume',
-  'command.tenant.description': 'Show current tenant, list tenants, or print restart guidance',
   'command.trace.description': 'Show run events from trace (replay)',
   'command.agents.description': 'Subagents: list / inspect (from the event stream)',
   'command.status.description':

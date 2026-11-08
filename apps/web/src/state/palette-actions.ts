@@ -4,7 +4,7 @@
  * 只生成 action 组；破坏性动作带 `danger` + `confirm`，由 AppShell 弹确认框。
  * 数量有上限，避免 recent 列表把面板撑爆。
  */
-import type { DurableRunSummary, McpServerStatus, RunStatus, TenantInfo } from '../gateway/types';
+import type { DurableRunSummary, McpServerStatus, RunStatus } from '../gateway/types';
 import { t } from '../i18n';
 import type { PaletteItem } from './palette';
 import { isCancellableRun, isResumableRun } from './runs';
@@ -105,30 +105,5 @@ export function buildMcpPaletteActions({
       keywords: ['mcp', 'reconnect', 'failed', server.name],
       hint: 'MCP',
       run: () => reconnect(server.name),
-    }));
-}
-
-export interface TenantPaletteActionsOptions {
-  tenants: readonly TenantInfo[];
-  currentTenantId: string | null;
-  switchTenant: (tenantId: string) => void;
-}
-
-export function buildTenantPaletteActions({
-  tenants,
-  currentTenantId,
-  switchTenant,
-}: TenantPaletteActionsOptions): PaletteItem[] {
-  return tenants
-    .filter((tenant) => tenant.tenant_id !== currentTenantId && tenant.status === 'active')
-    .map((tenant) => ({
-      id: `tenant-switch-${tenant.tenant_id}`,
-      group: 'action' as const,
-      label: t('palette.action.switchTenantNamed', {
-        name: tenant.name?.trim() || tenant.tenant_id,
-      }),
-      keywords: ['tenant', 'switch', tenant.tenant_id],
-      hint: t('palette.hint.tenant'),
-      run: () => switchTenant(tenant.tenant_id),
     }));
 }

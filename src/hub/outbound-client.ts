@@ -1,5 +1,5 @@
 /**
- * Node → Hub 出站控制客户端（S5.1 / `vessel.hub/1`）。
+ * Node → Hub 出站控制客户端（S5.1 / `vessel.hub/2`）。
  *
  * - 节点主动拨号 `${hubUrl}/v1/hub/node-control`（`dialer: 'node'`）；
  * - open 后首帧 `auth`（node token + hub/node/tenant 身份 + 进程 incarnation）；
@@ -7,7 +7,7 @@
  * - 订阅 `HubControlLike`：目录变化 250ms debounce 快照；指针立即转发；
  * - 收到 `ping` 回 `pong`；任何帧重置 30s idle；断线 1s→30s 退避 + 抖动；
  * - 4401 / 401 → `unauthorized` 停止重连；4400 / 400 → `incompatible` 停止重连；
- * - 只处理 `vessel.hub/1` 的六种元数据帧，绝不解析 RunEvent / 正文。
+ * - 只处理 `vessel.hub/2` 的六种元数据帧，绝不解析 RunEvent / 正文。
  *
  * @module vessel/hub/outbound-client
  */
@@ -47,7 +47,8 @@ export interface HubNodeOutboundOptions {
   hubControl: HubControlLike;
   hubId: string;
   nodeId: string;
-  tenantId: string;
+  /** 内部单 id：仅用于 hubControl 注入面；不是 wire 字段。 */
+  singleTenantId: string;
   /** hub 基址 origin（http/https，无路径）。 */
   hubUrl: string;
   /** CA 路径；缺省回退 `state.ca_file`。 */
@@ -116,7 +117,7 @@ function nodeControlUrl(hubUrl: string): string {
 export function createHubNodeOutboundClient(
   options: HubNodeOutboundOptions,
 ): HubNodeOutboundClient {
-  const { hubControl, hubId, nodeId, tenantId, logger } = options;
+  const { hubControl, hubId, nodeId, singleTenantId, logger } = options;
   const clock = options.now ?? Date.now;
   const helloTimeoutMs = options.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
@@ -235,7 +236,7 @@ export function createHubNodeOutboundClient(
     if (closed || halted || socket !== current || readySocket !== current) return;
     let input: Awaited<ReturnType<HubControlLike['snapshot']>>;
     try {
-      input = await hubControl.snapshot(tenantId);
+      input = await hubControl.snapshot(singleTenantId);
     } catch (error) {
       logger?.warn('hub.node.snapshot_failed', {
         node_id: nodeId,
@@ -298,7 +299,7 @@ export function createHubNodeOutboundClient(
   function ensureSubscribed(): void {
     if (unsubscribe !== undefined) return;
     try {
-      unsubscribe = hubControl.subscribe(tenantId, handleChange);
+      unsubscribe = hubControl.subscribe(singleTenantId, handleChange);
     } catch (error) {
       logger?.warn('hub.node.subscribe_failed', {
         node_id: nodeId,
@@ -370,7 +371,6 @@ export function createHubNodeOutboundClient(
           token: options.token,
           hubId,
           nodeId,
-          tenantId,
           incarnation: PROCESS_INCARNATION,
         }),
       );

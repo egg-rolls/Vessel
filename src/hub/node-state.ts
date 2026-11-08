@@ -15,7 +15,7 @@
 import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '@vessel-agent/core';
-import { type HubNodeState, type HubNodeStatus, pairingIdFor } from './types.js';
+import type { HubNodeState, HubNodeStatus } from './types.js';
 
 /** `HubNodeState` 文件名（gateway data dir 根）。 */
 export const HUB_NODE_STATE_FILE = 'hub-node.json';
@@ -89,20 +89,15 @@ function parseState(value: unknown): HubNodeState | undefined {
   const hubUrl = value.hub_url;
   const hubId = value.hub_id;
   const nodeId = value.node_id;
-  const tenantId = value.tenant_id;
-  const pairingId = value.pairing_id;
   const tokenId = value.token_id;
   if (
     !isNonEmptyString(hubUrl) ||
     !isNonEmptyString(hubId) ||
     !isNonEmptyString(nodeId) ||
-    !isNonEmptyString(tenantId) ||
-    !isNonEmptyString(pairingId) ||
     !isNonEmptyString(tokenId)
   ) {
     return undefined;
   }
-  if (pairingId !== pairingIdFor(nodeId, tenantId)) return undefined;
   if (!isFiniteNumber(value.expires_at) || !isFiniteNumber(value.joined_at)) {
     return undefined;
   }
@@ -112,8 +107,6 @@ function parseState(value: unknown): HubNodeState | undefined {
     hub_url: hubUrl,
     hub_id: hubId,
     node_id: nodeId,
-    tenant_id: tenantId,
-    pairing_id: pairingId,
     token_id: tokenId,
     expires_at: value.expires_at,
     joined_at: value.joined_at,
@@ -135,8 +128,6 @@ function toFileState(state: HubNodeState): HubNodeState {
     hub_url: state.hub_url,
     hub_id: state.hub_id,
     node_id: state.node_id,
-    tenant_id: state.tenant_id,
-    pairing_id: state.pairing_id,
     token_id: state.token_id,
     expires_at: state.expires_at,
     joined_at: state.joined_at,

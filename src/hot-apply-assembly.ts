@@ -14,7 +14,6 @@
  */
 
 import type { VesselConfig } from '../packages/config/src/index';
-import { resolveTenantToolPolicy } from '../packages/config/src/index';
 import type {
   PluginHost,
   RuntimePermissionConfig,
@@ -27,7 +26,7 @@ import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import type { RuntimeNoticeBus } from './runtime-notice';
 import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from './runtime-notice-hook';
-import { resolveRuntimePermission, TenantToolHost } from './tenant-runtime-factory';
+import { resolveRuntimePermission } from './tenant-runtime-factory';
 
 /**
  * 权限规则解析：直接复用 bootstrap 的 `resolveRuntimePermission`，不另写一份，
@@ -125,10 +124,7 @@ export async function assemblePluginTools(options: {
     resolveAgentCwd(options.config),
   );
   const exclude = options.excludePlugins ?? new Set<string>();
-  const host: PluginHost = new TenantToolHost(
-    new MemoryPluginHost(),
-    resolveTenantToolPolicy(options.config, options.tenantId),
-  );
+  const host: PluginHost = new MemoryPluginHost();
   const names: string[] = [];
   for (const name of selection.names) {
     if (exclude.has(name)) continue;

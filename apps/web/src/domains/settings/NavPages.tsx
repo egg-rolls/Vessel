@@ -1,19 +1,9 @@
-/** 从 Settings 拆出的三个顶层页面：Tenants / Capabilities / Visual。 */
+/** 从 Settings 拆出的两个顶层页面：Capabilities / Visual。 */
 import { t, useLocale } from '../../i18n';
 import { AppearanceView } from './AppearanceView';
 import { CapabilitiesView } from './CapabilitiesView';
 import { DisplaySettingsView } from './DisplaySettingsView';
 import { PageFrame } from './PageFrame';
-import { TenantsView } from './TenantsView';
-
-export function TenantsPage() {
-  useLocale();
-  return (
-    <PageFrame title={t('nav.domain.tenants')} subtitle={t('tenants.subtitle')}>
-      <TenantsView />
-    </PageFrame>
-  );
-}
 
 export function CapabilitiesPage() {
   useLocale();

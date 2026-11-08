@@ -23,8 +23,6 @@ export function resolveGatewayToken(
   return (
     nonEmpty(config.serve?.token) ??
     nonEmpty(config.serve?.tokenEnv ? env[config.serve.tokenEnv] : undefined) ??
-    nonEmpty(config.serve?.adminToken) ??
-    nonEmpty(config.serve?.adminTokenEnv ? env[config.serve.adminTokenEnv] : undefined) ??
     nonEmpty(env.VESSEL_GATEWAY_TOKEN) ??
     nonEmpty(config.transport?.token)
   );

@@ -29,7 +29,6 @@ export const AGENT_SNAPSHOT_VERSION = 4;
 /** 快照文件形状（v4；v1 / v2 的 members 读时按 owner 推断 role） */
 export interface AgentSnapshotFile {
   version: number;
-  tenant_id: string;
   updated_at: number;
   members: PersistedAgentRecord[];
 }
@@ -325,7 +324,6 @@ export class AgentSnapshotStore {
 
   constructor(
     private readonly filePath: string,
-    private readonly tenantId: string,
     options: {
       throttleMs?: number;
       mode?: number;
@@ -510,7 +508,6 @@ export class AgentSnapshotStore {
     if (!(await this.ensureSourceBackup())) return false;
     const file: AgentSnapshotFile = {
       version: AGENT_SNAPSHOT_VERSION,
-      tenant_id: this.tenantId,
       updated_at: this.now(),
       members,
     };

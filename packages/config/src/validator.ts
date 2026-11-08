@@ -19,10 +19,7 @@ import type {
   HubConfig,
   ObservabilityConfig,
   ServeConfig,
-  ServeTokenEntry,
   TeamConfigInput,
-  TenantConfig,
-  TenantSettings,
   TerminationConfig,
   TraceConfig,
   UsageLimitsConfig,
@@ -31,9 +28,6 @@ import type {
 
 /** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
 const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
-/** tenant id 字符集（DECISION-010 §2.5） */
-const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 /** 合法环境变量名（_env 间接引用） */
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
@@ -956,8 +950,10 @@ export function validateServeSettings(
   serve: ServeConfig,
   errors: ConfigValidationError[] = [],
 ): ConfigValidationError[] {
-  const { hostname, port, allowRemote, tls, token, tokenEnv, tokens, adminToken, adminTokenEnv } =
-    serve as Record<string, unknown>;
+  const { hostname, port, allowRemote, tls, token, tokenEnv, tokens } = serve as Record<
+    string,
+    unknown
+  >;
 
   if (hostname !== undefined) {
     const invalid =
@@ -1055,17 +1051,10 @@ export function validateServeSettings(
   }
 
   validateEnvName('serve.tokenEnv', tokenEnv, errors);
-  validateEnvName('serve.adminTokenEnv', adminTokenEnv, errors);
 
   if (token !== undefined && (typeof token !== 'string' || token.trim() === '')) {
     // 不把 token 值放进 error
     errors.push({ path: 'serve.token', message: 'serve.token must be a non-empty string' });
-  }
-  if (adminToken !== undefined && (typeof adminToken !== 'string' || adminToken.trim() === '')) {
-    errors.push({
-      path: 'serve.adminToken',
-      message: 'serve.adminToken must be a non-empty string',
-    });
   }
 
   if (tokens !== undefined) {
@@ -1088,30 +1077,15 @@ export function validateServeSettings(
           });
           continue;
         }
-        const entry = rawEntry as ServeTokenEntry;
-        if (entry.role !== undefined && !['read', 'write', 'admin'].includes(entry.role)) {
+        const entry = rawEntry as { role?: unknown };
+        if (
+          entry.role !== undefined &&
+          !['read', 'write', 'admin'].includes(entry.role as string)
+        ) {
           errors.push({
             path: 'serve.tokens.<entry>.role',
             message: 'serve.tokens role must be "read", "write", or "admin"',
           });
-        }
-        if (entry.tenantId !== undefined) {
-          if (typeof entry.tenantId !== 'string') {
-            errors.push({
-              path: 'serve.tokens.<entry>.tenantId',
-              message: 'serve.tokens tenantId must be a string',
-            });
-          } else if (entry.tenantId !== '*' && !isValidTenantId(entry.tenantId)) {
-            errors.push({
-              path: 'serve.tokens.<entry>.tenantId',
-              message: 'serve.tokens tenantId must be a valid tenant id or "*"',
-            });
-          } else if (entry.tenantId === '*' && entry.role !== 'admin') {
-            errors.push({
-              path: 'serve.tokens.<entry>.tenantId',
-              message: 'serve.tokens tenantId "*" requires role "admin"',
-            });
-          }
         }
       }
     }
@@ -1486,13 +1460,6 @@ export function validateHubSettings(
   return errors;
 }
 
-/** tenant id 是否合法（除正则外显式拒绝路径穿越） */
-export function isValidTenantId(value: string): boolean {
-  if (value === '.' || value === '..') return false;
-  if (value.includes('/') || value.includes('\\') || value.includes('\0')) return false;
-  return TENANT_ID_RE.test(value);
-}
-
 /** 校验 `_env` 字段：空串视为未设置（交给解析层），其余必须匹配环境变量名 */
 function validateEnvName(path: string, value: unknown, errors: ConfigValidationError[]): void {
   if (value === undefined || value === '') return;
@@ -1503,41 +1470,6 @@ function validateEnvName(path: string, value: unknown, errors: ConfigValidationE
     });
   }
 }
-
-/** tenant overlay 允许的顶层块（DECISION-010 §11.4） */
-export const TENANT_OVERLAY_ALLOWED_KEYS: readonly string[] = [
-  'provider',
-  'agent',
-  'context',
-  'limits',
-  'termination',
-  'session',
-  'permission',
-  'plugins',
-  'evals',
-  'feishu',
-  'tools',
-  'mcpServers',
-  'host',
-  'scheduler',
-  'lease',
-  'transport',
-  'quota',
-];
-
-/** tenant overlay 明确禁止的块（全局或安全相关） */
-export const TENANT_OVERLAY_FORBIDDEN_KEYS: readonly string[] = [
-  'dataDir',
-  'trace',
-  'serve',
-  'hub',
-  'connect',
-  'attention',
-  'tenant',
-  'update',
-  // 0.19 S3：Team 声明是全局配置，tenant overlay 不开放。
-  'teams',
-];
 
 /** 顶层密钥字段（YAML camelCase 路径）；只返回路径，不返回任何值。 */
 export function findExplicitSecretPaths(config: Record<string, unknown>, prefix = ''): string[] {
@@ -1553,7 +1485,6 @@ export function findExplicitSecretPaths(config: Record<string, unknown>, prefix 
   check(config.provider, 'apiKey', 'provider.apiKey');
   check(config.feishu, 'appSecret', 'feishu.appSecret');
   check(config.serve, 'token', 'serve.token');
-  check(config.serve, 'adminToken', 'serve.adminToken');
   check(config.gateway, 'token', 'gateway.token');
   check(config.transport, 'token', 'transport.token');
   check(config.connect, 'token', 'connect.token');
@@ -1563,14 +1494,66 @@ export function findExplicitSecretPaths(config: Record<string, unknown>, prefix 
   return found;
 }
 
-/** 递归找出 overlay 内的 null（不允许进入合并），返回路径 */
-function findNullPaths(value: unknown, path: string[]): string[] {
-  if (value === null) return [path.join('.')];
-  if (Array.isArray(value)) {
-    return value.flatMap((item, index) => findNullPaths(item, [...path, String(index)]));
+/** 0.49 T4（R4）：已删除的 tenant 配置键 → 启动 fail-fast。 */
+export interface RemovedTenantConfigKey {
+  path: string;
+  /** 逐项修复提示；不回显 token 值 */
+  message: string;
+}
+
+/**
+ * 找出 T4 删除的 tenant 配置键（R4）。
+ *
+ * 这些键不再被静默忽略：旧配置与旧 token 映射必须由用户显式删除，否则启动
+ * 失败并逐项给出修复提示。token 键是密钥，不在 path / message 里回显。
+ */
+export function findRemovedTenantConfigKeys(
+  config: Record<string, unknown>,
+): RemovedTenantConfigKey[] {
+  const removed: RemovedTenantConfigKey[] = [];
+
+  if (Object.hasOwn(config, 'tenant')) {
+    removed.push({
+      path: 'tenant',
+      message:
+        'The "tenant" configuration block was removed in 0.49: this node serves a single company. ' +
+        'Fix: delete the whole "tenant:" block (tenant.default / tenant.tenants / overlay / quota are no longer read).',
+    });
   }
-  if (!isPlainObject(value)) return [];
-  return Object.entries(value).flatMap(([key, child]) => findNullPaths(child, [...path, key]));
+
+  const serve = isPlainObject(config.serve) ? config.serve : undefined;
+  if (serve === undefined) return removed;
+
+  if (Object.hasOwn(serve, 'adminToken')) {
+    removed.push({
+      path: 'serve.adminToken',
+      message:
+        'serve.adminToken was removed in 0.49. ' +
+        'Fix: delete serve.adminToken and put the admin client token under serve.tokens as `<token>: { role: admin }`.',
+    });
+  }
+  if (Object.hasOwn(serve, 'adminTokenEnv')) {
+    removed.push({
+      path: 'serve.adminTokenEnv',
+      message:
+        'serve.adminTokenEnv was removed in 0.49. ' +
+        'Fix: delete serve.adminTokenEnv and put the admin client token under serve.tokens as `<token>: { role: admin }`.',
+    });
+  }
+
+  if (isPlainObject(serve.tokens)) {
+    Object.values(serve.tokens).forEach((entry, index) => {
+      if (!isPlainObject(entry) || !Object.hasOwn(entry, 'tenantId')) return;
+      removed.push({
+        path: `serve.tokens.<entry#${index + 1}>.tenantId`,
+        message:
+          'serve.tokens[*].tenantId was removed in 0.49: every token belongs to this node. ' +
+          'Fix: delete the tenantId key from the token entry and keep only role.',
+      });
+    });
+  }
+
+  return removed;
 }
 
 /** 校验 trace 块（0.5） */
@@ -1618,157 +1601,6 @@ function validateTrace(trace: TraceConfig, errors: ConfigValidationError[]): voi
       message: 'trace.includeStreamChunks must be a boolean',
       value: includeStreamChunks,
     });
-  }
-}
-
-const TENANT_SETTINGS_KEYS = ['name', 'status', 'quota', 'tools', 'config'];
-const TENANT_QUOTA_KEYS = ['maxSessions', 'maxRunsPerDay', 'maxConcurrentRuns', 'maxStorageBytes'];
-
-/** 校验 tenant 块与 overlay 白名单（0.5） */
-function validateTenant(tenant: TenantConfig, errors: ConfigValidationError[]): void {
-  if (tenant.default !== undefined) {
-    if (typeof tenant.default !== 'string' || !isValidTenantId(tenant.default)) {
-      errors.push({
-        path: 'tenant.default',
-        message: 'tenant.default must match ^[a-z0-9][a-z0-9_-]{0,63}$',
-        value: tenant.default,
-      });
-    }
-  }
-
-  if (tenant.tenants === undefined) return;
-  if (!isPlainObject(tenant.tenants)) {
-    errors.push({
-      path: 'tenant.tenants',
-      message: 'tenant.tenants must be a mapping of tenant id to settings',
-    });
-    return;
-  }
-
-  for (const [id, rawSettings] of Object.entries(tenant.tenants)) {
-    const settingsPath = `tenant.tenants.${id}`;
-    if (!isValidTenantId(id)) {
-      errors.push({
-        path: settingsPath,
-        message: 'tenant id must match ^[a-z0-9][a-z0-9_-]{0,63}$',
-      });
-    }
-    if (!isPlainObject(rawSettings)) {
-      errors.push({ path: settingsPath, message: 'tenant settings must be an object' });
-      continue;
-    }
-
-    const settings = rawSettings as TenantSettings;
-    for (const key of Object.keys(rawSettings)) {
-      if (!TENANT_SETTINGS_KEYS.includes(key)) {
-        errors.push({
-          path: `${settingsPath}.${key}`,
-          message: `Unknown tenant setting "${key}"`,
-        });
-      }
-    }
-
-    if (settings.name !== undefined && typeof settings.name !== 'string') {
-      errors.push({ path: `${settingsPath}.name`, message: 'tenant name must be a string' });
-    }
-    if (
-      settings.status !== undefined &&
-      settings.status !== 'active' &&
-      settings.status !== 'disabled'
-    ) {
-      errors.push({
-        path: `${settingsPath}.status`,
-        message: 'tenant status must be "active" or "disabled"',
-        value: settings.status,
-      });
-    }
-
-    if (settings.quota !== undefined) {
-      if (!isPlainObject(settings.quota)) {
-        errors.push({ path: `${settingsPath}.quota`, message: 'tenant quota must be an object' });
-      } else {
-        for (const [key, value] of Object.entries(settings.quota)) {
-          if (!TENANT_QUOTA_KEYS.includes(key)) {
-            errors.push({
-              path: `${settingsPath}.quota.${key}`,
-              message: `Unknown tenant quota key "${key}"`,
-            });
-          } else if (!Number.isInteger(value) || (value as number) < 0) {
-            errors.push({
-              path: `${settingsPath}.quota.${key}`,
-              message: 'tenant quota values must be non-negative integers',
-              value,
-            });
-          }
-        }
-      }
-    }
-
-    if (settings.tools !== undefined) {
-      const tools = settings.tools as Record<string, unknown>;
-      if (!isPlainObject(tools)) {
-        errors.push({ path: `${settingsPath}.tools`, message: 'tenant tools must be an object' });
-      } else {
-        for (const [listKey, list] of Object.entries(tools)) {
-          if (listKey !== 'allow' && listKey !== 'deny') {
-            errors.push({
-              path: `${settingsPath}.tools.${listKey}`,
-              message: `Unknown tenant tools key "${listKey}"`,
-            });
-          } else if (!Array.isArray(list) || list.some((item) => typeof item !== 'string')) {
-            errors.push({
-              path: `${settingsPath}.tools.${listKey}`,
-              message: `tenant tools.${listKey} must be an array of strings`,
-            });
-          }
-        }
-      }
-    }
-
-    if (settings.config !== undefined) {
-      const overlay = settings.config as unknown;
-      const overlayPath = `${settingsPath}.config`;
-      if (!isPlainObject(overlay)) {
-        errors.push({ path: overlayPath, message: 'tenant config overlay must be an object' });
-        continue;
-      }
-
-      for (const nullPath of findNullPaths(overlay, [])) {
-        errors.push({
-          path: `${overlayPath}.${nullPath}`,
-          message: 'null is not allowed in a tenant config overlay',
-        });
-      }
-
-      for (const key of Object.keys(overlay)) {
-        if (TENANT_OVERLAY_ALLOWED_KEYS.includes(key)) continue;
-        errors.push({
-          path: `${overlayPath}.${key}`,
-          message: TENANT_OVERLAY_FORBIDDEN_KEYS.includes(key)
-            ? `"${key}" is not allowed in a tenant config overlay`
-            : `Unknown tenant overlay key "${key}"`,
-        });
-      }
-
-      for (const secretPath of findExplicitSecretPaths(overlay, overlayPath)) {
-        errors.push({
-          path: secretPath,
-          message: 'Tenant overlay may contain secrets only via the _env form',
-        });
-      }
-
-      validateEnvName(`${overlayPath}.apiKeyEnv`, overlay.apiKeyEnv, errors);
-      validateEnvName(
-        `${overlayPath}.provider.apiKeyEnv`,
-        isPlainObject(overlay.provider) ? overlay.provider.apiKeyEnv : undefined,
-        errors,
-      );
-      validateEnvName(
-        `${overlayPath}.feishu.appSecretEnv`,
-        isPlainObject(overlay.feishu) ? overlay.feishu.appSecretEnv : undefined,
-        errors,
-      );
-    }
   }
 }
 
@@ -1936,8 +1768,18 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   const errors: ConfigValidationError[] = [];
   const warnings: ConfigValidationWarning[] = [];
 
+  // 0.49 T4（R4）：已删除的 tenant 键先给出逐项修复提示，并跳过通用未知键报错。
+  const removedTenantKeys = findRemovedTenantConfigKeys(
+    config as unknown as Record<string, unknown>,
+  );
+  const removedTenantPaths = new Set(removedTenantKeys.map((entry) => entry.path));
+  for (const { path, message } of removedTenantKeys) {
+    errors.push({ path, message });
+  }
+
   // 未知键（0.5）：顶层与已知块内都按 error 处理。
   for (const key of findUnknownKeys(config, KNOWN_CONFIG_KEYS)) {
+    if (removedTenantPaths.has(key)) continue;
     const suggestion = closestKey(key, KNOWN_CONFIG_KEYS);
     errors.push({
       path: key,
@@ -1950,6 +1792,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   for (const { path, key, block } of findUnknownNestedKeys(
     config as unknown as Record<string, unknown>,
   )) {
+    if (removedTenantPaths.has(path)) continue;
     const candidates = KNOWN_BLOCK_KEYS[block] ?? [];
     const suggestion = closestKey(key, [...candidates]);
     errors.push({
@@ -2600,14 +2443,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 0.5 tenant / trace
-  if (config.tenant !== undefined) {
-    if (!isPlainObject(config.tenant)) {
-      errors.push({ path: 'tenant', message: 'tenant must be an object' });
-    } else {
-      validateTenant(config.tenant, errors);
-    }
-  }
+  // 校验 0.5 trace（tenant 块已在 0.49 T4 删除，旧配置由 R4 fail-fast 拦截）
   if (config.trace !== undefined) {
     if (!isPlainObject(config.trace)) {
       errors.push({ path: 'trace', message: 'trace must be an object' });
@@ -2727,8 +2563,6 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'token',
     'tokenEnv',
     'tokens',
-    'adminToken',
-    'adminTokenEnv',
     'pluginHttp',
   ],
   gateway: ['port', 'hostname', 'token', 'tokenEnv', 'allowedOrigins'],
@@ -2773,7 +2607,6 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'errorLevel',
     'askUser',
   ],
-  tenant: ['default', 'tenants'],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
 };
 
@@ -2853,7 +2686,6 @@ export const KNOWN_CONFIG_KEYS = [
   'apiKey',
   'apiKeyEnv',
   'dataDir',
-  'tenant',
   'trace',
   'provider',
   'agent',

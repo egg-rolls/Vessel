@@ -108,14 +108,12 @@ export async function startHubNodeOutbound(
   const writeStatus = createStatusWriter(dataDir, logger);
   let helloAt: number | undefined;
 
-  // 节点身份 / tenant 必须与 join 时一致；否则 token 绑定必然失败。
-  if (state.node_id !== nodeId || state.tenant_id !== tenantId) {
+  // 节点身份必须与 join 时一致；否则 token 绑定必然失败。
+  if (state.node_id !== nodeId) {
     await writeStatus('unauthorized', 'identity_mismatch', helloAt);
     logger?.warn('hub.node.identity_mismatch', {
       state_node_id: state.node_id,
       node_id: nodeId,
-      state_tenant_id: state.tenant_id,
-      tenant_id: tenantId,
     });
     return { status: 'skipped', reason: 'identity_mismatch', ...noop };
   }
@@ -144,7 +142,7 @@ export async function startHubNodeOutbound(
     hubControl,
     hubId: state.hub_id,
     nodeId,
-    tenantId,
+    singleTenantId: tenantId,
     hubUrl: state.hub_url,
     ...(state.ca_file !== undefined
       ? { caFile: state.ca_file }

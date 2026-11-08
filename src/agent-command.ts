@@ -33,8 +33,6 @@ type AgentOwnerCommand = Exclude<AgentCommand, { kind: 'inbox' }>;
 
 export interface AgentCommandOptions {
   dataDir: string;
-  /** 显式 `--tenant`；与 owner 记录的 tenant 不一致时拒绝 */
-  tenantId?: string;
   /** 测试注入 */
   isAlive?: (pid: number) => boolean;
   fetchImpl?: typeof fetch;
@@ -223,14 +221,6 @@ export async function runAgentCommand(
     });
   } catch (error) {
     return failure(error);
-  }
-
-  if (options.tenantId !== undefined && options.tenantId !== record.tenant_id) {
-    return {
-      exitCode: 1,
-      stdout: '',
-      stderr: `agent_owner_tenant_mismatch: owner serves tenant "${record.tenant_id}", not "${options.tenantId}"`,
-    };
   }
 
   const { method, params } = methodParams(command);

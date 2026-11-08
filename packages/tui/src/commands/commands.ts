@@ -53,7 +53,6 @@ import {
 } from './sessions-command.js';
 import { settingsCommand } from './settings-command.js';
 import { statusCommand } from './status-command.js';
-import { tenantCommand } from './tenant-command.js';
 import { traceCommand } from './trace-command.js';
 
 // ── 类型 ──────────────────────────────────────────
@@ -266,7 +265,6 @@ export function createCommands(): CommandRegistry {
   reg.register(capabilitiesCommand());
   reg.register(configCommand());
   reg.register(settingsCommand());
-  reg.register(tenantCommand());
   reg.register(traceCommand());
   reg.register(sessionsCommand());
   reg.register(contextCommand());

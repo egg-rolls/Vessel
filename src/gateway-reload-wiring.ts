@@ -76,8 +76,6 @@ const RESTART_FIELDS: readonly RestartField[] = [
     read: (config) => ({
       token: config.serve?.token,
       tokenEnv: config.serve?.tokenEnv,
-      adminToken: config.serve?.adminToken,
-      adminTokenEnv: config.serve?.adminTokenEnv,
       tokens: config.serve?.tokens,
     }),
   },

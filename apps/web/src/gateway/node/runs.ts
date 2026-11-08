@@ -82,7 +82,7 @@ export abstract class RunsClient extends SessionsClient {
   /** 当前 gateway 进程内的 live runs（内存，无分页）。 */
   /** 0.27：`runs.list` 支持 agent / session 维度过滤（agent_id 为 additive 参数）。 */
   async listRuns(
-    params: { session_id?: string; agent_id?: string; status?: string; tenant_id?: string } = {},
+    params: { session_id?: string; agent_id?: string; status?: string } = {},
   ): Promise<RunStatus[]> {
     const body = await this.rpc<RunsResponse>('runs.list', params);
     return body.runs ?? [];

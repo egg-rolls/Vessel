@@ -79,10 +79,6 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'mcp.list': 'read',
   'mcp.reconnect': 'write',
   'trace.prune': 'admin',
-  'tenants.list': 'admin',
-  'tenants.get': 'read',
-  'tenants.create': 'admin',
-  'tenants.update': 'admin',
   'permission.respond': 'write',
   'ask.respond': 'write',
   // CONTRACT-hot-apply §7：工具确认策略三档写回（用户 YAML 的两个数组）。

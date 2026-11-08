@@ -5,8 +5,8 @@
  * 路径与 tenant 语义），只复用 code 生成与 TTL 常量。
  *
  * - 文件只存 `sha256(code)`；明文 code 只在 `issue()` 返回值中出现一次。
- * - 消费顺序固定：hash → 未使用 → 未过期 → `hub_id` → `tenant_id`。
- * - 成功时**先原子写 `used_at` / `node_id` / `pairing_id` 再返回**。
+ * - 消费顺序固定：hash → 未使用 → 未过期 → `hub_id`。
+ * - 成功时**先原子写 `used_at` / `node_id` 再返回**。
  * - 单进程 single-flight：同一文件的并发消费串行执行，同一 code 只成功一次。
  * - 文件缺失 → `pairing_not_found`（不是发现端点）；损坏 → `hub_join_corrupt`。
  *
@@ -23,13 +23,7 @@ import {
   PAIRING_MAX_TTL_S,
   PAIRING_MIN_TTL_S,
 } from './pairing-code';
-import {
-  type HubJoinConsumeResult,
-  type HubJoinFile,
-  type HubJoinIssue,
-  type HubJoinStoreLike,
-  pairingIdFor,
-} from './types';
+import type { HubJoinConsumeResult, HubJoinFile, HubJoinIssue, HubJoinStoreLike } from './types';
 
 /** join code 文件名（hub data dir 根）。 */
 export const HUB_JOIN_FILE = 'hub-join.json';
@@ -53,7 +47,6 @@ export type HubJoinErrorCode =
   | 'pairing_invalid'
   | 'pairing_used'
   | 'pairing_expired'
-  | 'tenant_mismatch'
   | 'hub_join_corrupt';
 
 function joinError(code: HubJoinErrorCode, reason: string): Error {
@@ -119,10 +112,6 @@ function parseJoinFile(raw: string, path: string): HubJoinFile {
   }
   const hubId = parsed.hub_id;
   if (!isNonEmptyString(hubId)) throw joinError('hub_join_corrupt', `${path}: invalid hub_id`);
-  const tenantId = parsed.tenant_id;
-  if (!isNonEmptyString(tenantId)) {
-    throw joinError('hub_join_corrupt', `${path}: invalid tenant_id`);
-  }
   const expiresAt = parsed.expires_at;
   if (!isFiniteNumber(expiresAt)) {
     throw joinError('hub_join_corrupt', `${path}: invalid expires_at`);
@@ -135,21 +124,15 @@ function parseJoinFile(raw: string, path: string): HubJoinFile {
   if (nodeId !== undefined && !isNonEmptyString(nodeId)) {
     throw joinError('hub_join_corrupt', `${path}: invalid node_id`);
   }
-  const pairingId = parsed.pairing_id;
-  if (pairingId !== undefined && !isNonEmptyString(pairingId)) {
-    throw joinError('hub_join_corrupt', `${path}: invalid pairing_id`);
-  }
 
   const file: HubJoinFile = {
     v: 1,
     code_hash: codeHash,
     hub_id: hubId,
-    tenant_id: tenantId,
     expires_at: expiresAt,
   };
   if (usedAt !== undefined) file.used_at = usedAt;
   if (nodeId !== undefined) file.node_id = nodeId;
-  if (pairingId !== undefined) file.pairing_id = pairingId;
   return file;
 }
 
@@ -191,7 +174,7 @@ export function createHubJoinStore(options: CreateHubJoinStoreOptions): HubJoinS
   const path = hubJoinPath(options.dataDir);
   const now = options.now ?? Date.now;
 
-  async function issue(input: { tenant_id: string; ttl_s?: number }): Promise<HubJoinIssue> {
+  async function issue(input: { ttl_s?: number }): Promise<HubJoinIssue> {
     const issuedAt = now();
     const ttlSeconds = clampTtl(input.ttl_s);
     const code = createPairingCode();
@@ -199,7 +182,6 @@ export function createHubJoinStore(options: CreateHubJoinStoreOptions): HubJoinS
       v: 1,
       code_hash: hashJoinCode(code),
       hub_id: options.hubId,
-      tenant_id: input.tenant_id,
       expires_at: issuedAt + ttlSeconds * 1000,
     };
     await atomicWrite(path, `${JSON.stringify(file, null, 2)}\n`, {
@@ -213,7 +195,6 @@ export function createHubJoinStore(options: CreateHubJoinStoreOptions): HubJoinS
     code: string;
     hub_id: string;
     node_id: string;
-    tenant_id: string;
   }): Promise<HubJoinConsumeResult> {
     const normalized = normalizeJoinCode(input.code);
     if (normalized === null) {
@@ -241,16 +222,11 @@ export function createHubJoinStore(options: CreateHubJoinStoreOptions): HubJoinS
       if (current.hub_id !== input.hub_id) {
         throw joinError('pairing_invalid', 'hub_id does not match');
       }
-      if (current.tenant_id !== input.tenant_id) {
-        throw joinError('tenant_mismatch', 'tenant does not match');
-      }
 
-      const pairingId = pairingIdFor(input.node_id, input.tenant_id);
       const updated: HubJoinFile = {
         ...current,
         used_at: consumedAt,
         node_id: input.node_id,
-        pairing_id: pairingId,
       };
       await atomicWrite(path, `${JSON.stringify(updated, null, 2)}\n`, {
         mode: 0o600,
@@ -258,9 +234,7 @@ export function createHubJoinStore(options: CreateHubJoinStoreOptions): HubJoinS
       });
       return {
         hub_id: current.hub_id,
-        tenant_id: current.tenant_id,
         node_id: input.node_id,
-        pairing_id: pairingId,
       };
     });
   }

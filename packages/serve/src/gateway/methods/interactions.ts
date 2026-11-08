@@ -44,7 +44,6 @@ export interface InteractionMethodsDeps {
     requestId: string,
     decision: 'allow' | 'deny',
     remember: boolean,
-    tenantId?: string,
     scope?: PermissionScope,
     actor?: {
       answered_by: 'human' | 'policy';
@@ -54,7 +53,6 @@ export interface InteractionMethodsDeps {
   respondAsk(
     requestId: string,
     answers: unknown[],
-    tenantId?: string,
     actor?: {
       answered_by: 'human' | 'policy';
       answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
@@ -132,15 +130,14 @@ const interactionItemSchema = {
 };
 
 /**
- * 合并内存与磁盘记录后按 tenant 过滤。
+ * 合并内存与磁盘记录。
  *
  * 优先级：`interactionRecords`（引擎并集，进程内状态最新）> `pendingPermissions`
  * > `pendingAsks`。同一 requestId 只保留第一条。
  */
-function collectInteractions(sources: InteractionSources, tenantId: string): ListedInteraction[] {
+function collectInteractions(sources: InteractionSources): ListedInteraction[] {
   const merged = new Map<string, ListedInteraction>();
   for (const record of sources.interactionRecords.values()) {
-    if (record.tenant_id !== tenantId) continue;
     const kind = record.kind ?? 'permission';
     merged.set(record.requestId, {
       kind,
@@ -161,7 +158,7 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
     });
   }
   for (const [requestId, pending] of sources.pendingPermissions) {
-    if (pending.tenant_id !== tenantId || merged.has(requestId)) continue;
+    if (merged.has(requestId)) continue;
     merged.set(requestId, {
       kind: 'permission',
       request_id: requestId,
@@ -178,7 +175,7 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
     });
   }
   for (const [requestId, ask] of sources.pendingAsks) {
-    if (ask.tenant_id !== tenantId || merged.has(requestId)) continue;
+    if (merged.has(requestId)) continue;
     merged.set(requestId, {
       kind: 'ask',
       request_id: requestId,
@@ -314,7 +311,6 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           remember: { type: 'boolean' },
           scope: { type: 'string', enum: ['once', 'session', 'always'] },
           answered_via: { type: 'string', enum: ['rpc', 'cli'] },
-          tenant_id: { type: 'string' },
         },
       },
       result_schema: {
@@ -349,7 +345,6 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           rawRequestId,
           decision,
           params.remember === true,
-          ctx.tenantId,
           rawScope as PermissionScope | undefined,
           {
             answered_by: 'human',
@@ -368,7 +363,6 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           request_id: { type: 'string', minLength: 1 },
           answers: { type: 'array' },
           answered_via: { type: 'string', enum: ['rpc', 'cli'] },
-          tenant_id: { type: 'string' },
         },
       },
       result_schema: {
@@ -390,7 +384,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         }
         const requestId = stringParam(params, 'request_id');
         assertTeamAccess(requestId, ctx.principal);
-        return respondAsk(requestId, answers, ctx.tenantId, {
+        return respondAsk(requestId, answers, {
           answered_by: 'human',
           answered_via: params.answered_via === 'cli' ? 'cli' : 'rpc',
         });
@@ -410,7 +404,6 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           limit: { type: 'integer', minimum: 1, maximum: MAX_LIST_LIMIT },
           order: { type: 'string', enum: ['oldest', 'newest'] },
           cursor: { type: 'string' },
-          tenant_id: { type: 'string' },
         },
       },
       result_schema: {
@@ -450,7 +443,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         if (cursor !== undefined && cursor.order !== order) {
           throw new RpcError('invalid_params', 'invalid cursor');
         }
-        let items = collectInteractions(interactions, ctx.tenantId).filter(
+        let items = collectInteractions(interactions).filter(
           (item) =>
             (rawStatus === undefined || item.status === rawStatus) &&
             (sessionId === undefined || item.session_id === sessionId) &&

@@ -39,12 +39,9 @@ interface ConfigStoreState {
   capabilitiesLoadedFor: LoadedFor | null;
   loadConfig: (
     client: GatewayClient,
-    options?: { tenantId?: string; epoch?: number; force?: boolean },
+    options?: { epoch?: number; force?: boolean },
   ) => Promise<void>;
-  loadSources: (
-    client: GatewayClient,
-    options?: { tenantId?: string; force?: boolean },
-  ) => Promise<void>;
+  loadSources: (client: GatewayClient, options?: { force?: boolean }) => Promise<void>;
   loadCapabilities: (client: GatewayClient, options?: { force?: boolean }) => Promise<void>;
   /** Reflect a successful policy write locally; cards + dialog share this state. */
   applyPermissionLists: (lists: PermissionArrays) => void;
@@ -63,8 +60,8 @@ function clientKey(client: GatewayClient): number {
   return id;
 }
 
-function configKey(client: GatewayClient, tenantId: string | undefined, epoch: number): string {
-  return `${clientKey(client)}|${tenantId ?? ''}|${epoch}`;
+function configKey(client: GatewayClient, epoch: number): string {
+  return `${clientKey(client)}|${epoch}`;
 }
 
 let configInFlight: { key: string; promise: Promise<void> } | null = null;
@@ -88,8 +85,8 @@ export const useConfigStore = create<ConfigStoreState>()((set, get) => {
     capabilitiesLoadedFor: null,
 
     loadConfig: async (client, options = {}) => {
-      const { tenantId, epoch = 0, force = false } = options;
-      const key = configKey(client, tenantId, epoch);
+      const { epoch = 0, force = false } = options;
+      const key = configKey(client, epoch);
       const current = get();
       if (!force && current.configLoadedFor?.key === key) return;
       if (configInFlight?.key === key) return configInFlight.promise;
@@ -99,7 +96,7 @@ export const useConfigStore = create<ConfigStoreState>()((set, get) => {
       set({ config: resetResource(previous) });
       const promise = (async () => {
         try {
-          const data = await client.getConfig(tenantId);
+          const data = await client.getConfig();
           if (!isCurrentGeneration('config', generation)) return;
           set({ config: storeSuccess(data), configLoadedFor: { key } });
         } catch (error) {
@@ -115,8 +112,8 @@ export const useConfigStore = create<ConfigStoreState>()((set, get) => {
     },
 
     loadSources: async (client, options = {}) => {
-      const { tenantId, force = false } = options;
-      const key = configKey(client, tenantId, 0);
+      const { force = false } = options;
+      const key = configKey(client, 0);
       const current = get();
       if (!force && current.sourcesLoadedFor?.key === key) return;
       if (sourcesInFlight?.key === key) return sourcesInFlight.promise;
@@ -126,7 +123,7 @@ export const useConfigStore = create<ConfigStoreState>()((set, get) => {
       set({ sources: resetResource(previous) });
       const promise = (async () => {
         try {
-          const data = await client.getConfigSources(tenantId);
+          const data = await client.getConfigSources();
           if (!isCurrentGeneration('config:sources', generation)) return;
           set({ sources: storeSuccess(data), sourcesLoadedFor: { key } });
         } catch (error) {

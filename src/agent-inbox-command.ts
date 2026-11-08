@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inboxPath } from '@vessel-agent/agent';
+import { loadConfig } from '../packages/config/src/index';
 import type { CommandResult } from './agent-command';
 import {
   AgentOwnerRequestError,
@@ -17,12 +18,12 @@ import {
   resolveAgentOwner,
 } from './agent-owner-client';
 import type { AgentCommand } from './cli-args';
+import { resolveEffectiveTenantId } from './data-paths';
 import { detectTenantLayoutState } from './tenant-layout-state';
 import { ui } from './ui-style';
 
 export interface AgentInboxCommandOptions {
   dataDir: string;
-  tenantId?: string;
 }
 
 interface InboxViewMessage {
@@ -70,15 +71,16 @@ export async function runAgentInboxCommand(
   options: AgentInboxCommandOptions,
 ): Promise<CommandResult> {
   let tenantId: string;
-  if (options.tenantId !== undefined) {
-    tenantId = options.tenantId;
-  } else {
-    try {
-      const record = await resolveAgentOwner(options.dataDir);
-      tenantId = record.tenant_id;
-    } catch (error) {
-      return failure(error);
-    }
+  try {
+    const record = await resolveAgentOwner(options.dataDir);
+    // 0.49 T4：owner 记录不再写 tenant；单 id 从配置解析结果取（C0）。
+    // 0.49 R1：持久化 `<dataDir>/tenant.json` 的单 id 优先。
+    tenantId = resolveEffectiveTenantId(
+      record.tenant_id ?? (await loadConfig()).tenantId,
+      options.dataDir,
+    );
+  } catch (error) {
+    return failure(error);
   }
 
   // 0.49 T2（C10/C13）：只读命令按布局选 inbox 路径，不做双读。

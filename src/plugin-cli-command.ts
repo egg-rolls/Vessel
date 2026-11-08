@@ -33,6 +33,7 @@ import {
   type ResolveControlPlaneTargetResult,
   resolveControlPlaneTarget,
 } from './control-plane-target';
+import { resolveDataDir, resolveEffectiveTenantId } from './data-paths';
 import { createCliLogger } from './logging';
 import {
   defaultPluginRoots,
@@ -160,9 +161,11 @@ async function readPluginCliExpose(
     const loaded = await (options.loadConfig ?? loadConfig)();
     if (loaded.validation.errors.length > 0) return undefined;
     const config = loaded.config.plugins?.find((plugin) => plugin.name === pluginId);
+    // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
+    const dataDir = resolveDataDir(loaded.config, options.env ?? process.env);
     return {
       ...(config?.expose !== undefined ? { expose: config.expose } : {}),
-      tenantId: loaded.tenantId,
+      tenantId: resolveEffectiveTenantId(loaded.tenantId, dataDir),
     };
   } catch {
     return undefined;

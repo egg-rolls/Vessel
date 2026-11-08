@@ -11,6 +11,7 @@
 import { createInterface } from 'node:readline/promises';
 import {
   type AttentionNodeConfig,
+  DEFAULT_TENANT_ID,
   loadConfig,
   type VesselConfig,
 } from '../../packages/config/src/index';
@@ -38,7 +39,7 @@ import {
   type ControlPlaneTargetOptions,
   resolveControlPlaneTarget,
 } from '../control-plane-target';
-import { resolveDataDir } from '../data-paths';
+import { resolveDataDir, resolveEffectiveTenantId } from '../data-paths';
 import { parseFederationAddress } from '../federation-address';
 import { t } from '../i18n';
 import { resolveInteractionsDir } from '../interactions-dir';
@@ -159,7 +160,6 @@ function pageParams(
     status: input.status,
     limit: input.limit,
     ...(teamId !== undefined ? { teamId } : {}),
-    ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
     ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
     ...(command.order !== undefined ? { order: command.order } : {}),
     ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
@@ -792,14 +792,14 @@ export async function attentionCommand(
   options: AttentionCommandOptions = {},
 ): Promise<CommandResult> {
   try {
-    // tenant 只用于离线模式；显式传入 config 时按配置默认值兜底。
+    // tenant 只用于离线模式；显式传入 config 时没有 loadConfig 解析结果。
     const loaded =
       options.config !== undefined
         ? undefined
         : await loadConfig({ env: options.env ?? process.env });
     const config = options.config ?? loaded?.config ?? ({} as VesselConfig);
-    // 离线模式必须尊重 `--tenant`，否则 acme 的 ask 在默认 tenant 下永远查不到。
-    const tenantId = command.tenantId ?? loaded?.tenantId ?? config.tenant?.default ?? 'default';
+    // 离线模式使用配置解析出的单 id（C0）；持久化 `<dataDir>/tenant.json` 优先（R1）。
+    const configTenantId = loaded?.tenantId ?? DEFAULT_TENANT_ID;
     const configured = configuredAttentionNodes(config);
 
     if (command.allNodes) {
@@ -844,7 +844,6 @@ export async function attentionCommand(
       ...(command.connectUrl !== undefined ? { connectUrl: command.connectUrl } : {}),
       ...(command.connectToken !== undefined ? { connectToken: command.connectToken } : {}),
       ...(command.caFile !== undefined ? { caFile: command.caFile } : {}),
-      ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
     });
     if (!resolved.ok) {
       // 0.33 A：没有本地 gateway 时，headless ask 的请求仍在
@@ -858,6 +857,7 @@ export async function attentionCommand(
         options.instance === undefined;
       if (canFallBackOffline) {
         const dataDir = options.dataDir ?? resolveDataDir(config, options.env ?? process.env);
+        const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
         const dir = resolveInteractionsDir(dataDir);
         const offline = createOfflineAttentionTarget({ dir, tenantId, nodeId: 'local' });
         try {

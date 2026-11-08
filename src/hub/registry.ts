@@ -5,7 +5,7 @@
  * - 0600 atomicWrite + 250ms debounce；
  * - 文件缺失 = 空目录；损坏 / `v !== 1` / 字段非法 → `hub_registry_corrupt`
  *   fail-closed，不静默覆盖；
- * - 主键 `pairing_id = node_id:tenant_id`，同一 node 可有多个 pairing；
+ * - 主键 `node_id`（0.49 T4：删除 tenant 绑定）；
  * - `direction` 缺省按 `'hub'` 读；`data_plane` 由 `public_url ?? url` 派生；
  * - 只存元数据（teams / agents 白名单），禁止字段不会落盘；
  * - 写前强制 `HUB_MAX_TEAMS` / `HUB_MAX_AGENTS` 上限并置 `truncated`。
@@ -27,13 +27,12 @@ import {
   parseHubAgentMeta,
   parseHubTeamMeta,
 } from '@vessel-agent/serve';
-import {
-  type HubDataPlane,
-  type HubNodeDirection,
-  type HubNodeRecord,
-  type HubNodeStatus,
-  type HubRegistryFile,
-  pairingIdFor,
+import type {
+  HubDataPlane,
+  HubNodeDirection,
+  HubNodeRecord,
+  HubNodeStatus,
+  HubRegistryFile,
 } from './types.js';
 
 /** registry 文件名（hub data dir 根） */
@@ -45,7 +44,7 @@ export const HUB_REGISTRY_DEBOUNCE_MS = 250;
 /** 目录事件；只带主键，不带记录内容。 */
 export interface HubRegistryEvent {
   type: 'upsert' | 'patch' | 'remove';
-  pairing_id: string;
+  node_id: string;
 }
 
 export type HubRegistryListener = (event: HubRegistryEvent) => void;
@@ -60,8 +59,8 @@ export interface CreateHubRegistryOptions {
   debounceMs?: number;
 }
 
-/** 可修改字段；主键与 node/tenant 身份不可 patch。 */
-export type HubNodePatch = Partial<Omit<HubNodeRecord, 'pairing_id' | 'node_id' | 'tenant_id'>>;
+/** 可修改字段；主键与 node 身份不可 patch。 */
+export type HubNodePatch = Partial<Omit<HubNodeRecord, 'node_id'>>;
 
 export interface HubRegistry {
   /** 读取并校验 registry 文件；缺失为空目录，损坏抛 `hub_registry_corrupt`。 */
@@ -70,13 +69,13 @@ export interface HubRegistry {
   snapshot(): HubRegistryFile;
   /** 全量记录（深拷贝）。 */
   list(): HubNodeRecord[];
-  get(pairingId: string): HubNodeRecord | undefined;
-  /** 写入/替换一条记录（按 pairing_id）；返回落库后的深拷贝。 */
+  get(nodeId: string): HubNodeRecord | undefined;
+  /** 写入/替换一条记录（按 node_id）；返回落库后的深拷贝。 */
   upsert(record: HubNodeRecord): HubNodeRecord;
   /** 局部更新；记录不存在返回 undefined。 */
-  patch(pairingId: string, patch: HubNodePatch): HubNodeRecord | undefined;
+  patch(nodeId: string, patch: HubNodePatch): HubNodeRecord | undefined;
   /** 删除；返回被删除记录（不存在返回 undefined）。 */
-  remove(pairingId: string): HubNodeRecord | undefined;
+  remove(nodeId: string): HubNodeRecord | undefined;
   /** 取消 debounce 并等待当前写队列落盘。写失败只记日志。 */
   flush(): Promise<void>;
   /** 订阅目录变更；返回取消函数。 */
@@ -141,13 +140,10 @@ function errnoCode(error: unknown): unknown {
 function parseNodeRecord(value: unknown): HubNodeRecord | undefined {
   if (!isRecord(value)) return undefined;
 
-  const pairingId = value.pairing_id;
   const nodeId = value.node_id;
-  const tenantId = value.tenant_id;
-  if (!isNonEmptyString(pairingId) || !isNonEmptyString(nodeId) || !isNonEmptyString(tenantId)) {
+  if (!isNonEmptyString(nodeId)) {
     return undefined;
   }
-  if (pairingId !== pairingIdFor(nodeId, tenantId)) return undefined;
 
   // 旧文件缺 `direction` 按 hub 读；写时总是写入。
   let direction: HubNodeDirection = 'hub';
@@ -217,9 +213,7 @@ function parseNodeRecord(value: unknown): HubNodeRecord | undefined {
   }
 
   const record: HubNodeRecord = {
-    pairing_id: pairingId,
     node_id: nodeId,
-    tenant_id: tenantId,
     direction,
     data_plane: dataPlane,
     status: status as HubNodeStatus,
@@ -353,10 +347,10 @@ class HubRegistryImpl implements HubRegistry {
       if (!record) {
         throw new HubRegistryCorruptError(this.path, 'invalid node record');
       }
-      if (next.has(record.pairing_id)) {
-        throw new HubRegistryCorruptError(this.path, 'duplicate pairing_id');
+      if (next.has(record.node_id)) {
+        throw new HubRegistryCorruptError(this.path, 'duplicate node_id');
       }
-      next.set(record.pairing_id, applyBounds(record));
+      next.set(record.node_id, applyBounds(record));
     }
 
     this.nodes.clear();
@@ -377,8 +371,8 @@ class HubRegistryImpl implements HubRegistry {
     return [...this.nodes.values()].map((record) => clone(record));
   }
 
-  get(pairingId: string): HubNodeRecord | undefined {
-    const record = this.nodes.get(pairingId);
+  get(nodeId: string): HubNodeRecord | undefined {
+    const record = this.nodes.get(nodeId);
     return record ? clone(record) : undefined;
   }
 
@@ -388,15 +382,15 @@ class HubRegistryImpl implements HubRegistry {
       throw new Error('hub_registry_invalid_record: record does not match HubNodeRecord');
     }
     const bounded = applyBounds(parsed);
-    this.nodes.set(bounded.pairing_id, bounded);
+    this.nodes.set(bounded.node_id, bounded);
     this.updatedAt = this.clock();
-    this.emit({ type: 'upsert', pairing_id: bounded.pairing_id });
+    this.emit({ type: 'upsert', node_id: bounded.node_id });
     this.scheduleWrite();
     return clone(bounded);
   }
 
-  patch(pairingId: string, patch: HubNodePatch): HubNodeRecord | undefined {
-    const existing = this.nodes.get(pairingId);
+  patch(nodeId: string, patch: HubNodePatch): HubNodeRecord | undefined {
+    const existing = this.nodes.get(nodeId);
     if (!existing) return undefined;
 
     const merged: Record<string, unknown> = { ...existing };
@@ -404,9 +398,7 @@ class HubRegistryImpl implements HubRegistry {
       if (value !== undefined) merged[key] = value;
     }
     // 主键与身份字段不可经 patch 改写。
-    merged.pairing_id = existing.pairing_id;
     merged.node_id = existing.node_id;
-    merged.tenant_id = existing.tenant_id;
 
     // url / public_url 变化时重新派生 data_plane；显式提供的 data_plane 优先。
     const patchHasDataPlane = patch.data_plane !== undefined;
@@ -418,19 +410,19 @@ class HubRegistryImpl implements HubRegistry {
       throw new Error('hub_registry_invalid_record: patch produces an invalid record');
     }
     const bounded = applyBounds(parsed);
-    this.nodes.set(pairingId, bounded);
+    this.nodes.set(nodeId, bounded);
     this.updatedAt = this.clock();
-    this.emit({ type: 'patch', pairing_id: pairingId });
+    this.emit({ type: 'patch', node_id: nodeId });
     this.scheduleWrite();
     return clone(bounded);
   }
 
-  remove(pairingId: string): HubNodeRecord | undefined {
-    const existing = this.nodes.get(pairingId);
+  remove(nodeId: string): HubNodeRecord | undefined {
+    const existing = this.nodes.get(nodeId);
     if (!existing) return undefined;
-    this.nodes.delete(pairingId);
+    this.nodes.delete(nodeId);
     this.updatedAt = this.clock();
-    this.emit({ type: 'remove', pairing_id: pairingId });
+    this.emit({ type: 'remove', node_id: nodeId });
     this.scheduleWrite();
     return clone(existing);
   }
@@ -456,7 +448,7 @@ class HubRegistryImpl implements HubRegistry {
         listener(event);
       } catch (error) {
         this.logger?.warn('hub.registry.listener_failed', {
-          pairing_id: event.pairing_id,
+          node_id: event.node_id,
           error: error instanceof Error ? error.message : String(error),
         });
       }

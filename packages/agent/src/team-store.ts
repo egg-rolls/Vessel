@@ -131,7 +131,7 @@ function cloneRecord(record: TeamRecord): TeamRecord {
 
 /**
  * S10.3：只应用可变字段。`undefined` 保留，`null` 清除可选项，policy 整体替换（克隆）。
- * v / team_id / tenant_id / workspace / created_at 不接受补丁。
+ * v / team_id / workspace / created_at 不接受补丁。
  */
 function applyTeamUpdate(record: TeamRecord, patch: TeamUpdatePatch): TeamRecord {
   const next = cloneRecord(record);
@@ -145,14 +145,13 @@ function applyTeamUpdate(record: TeamRecord, patch: TeamUpdatePatch): TeamRecord
 }
 
 /** 严格校验一份 `team.json`；非法返回 null（调用方 warning 后跳过） */
-function parseTeamRecord(raw: string, dirName: string, tenantId: string): TeamRecord | null {
+function parseTeamRecord(raw: string, dirName: string): TeamRecord | null {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed.v !== 1) return null;
     if (typeof parsed.team_id !== 'string' || parsed.team_id === '') return null;
     if (parsed.team_id !== dirName) return null;
     if (typeof parsed.name !== 'string') return null;
-    if (typeof parsed.tenant_id !== 'string' || parsed.tenant_id !== tenantId) return null;
     if (typeof parsed.workspace !== 'string' || parsed.workspace === '') return null;
     if (
       typeof parsed.policy !== 'object' ||
@@ -166,7 +165,6 @@ function parseTeamRecord(raw: string, dirName: string, tenantId: string): TeamRe
       v: 1,
       team_id: parsed.team_id,
       name: parsed.name,
-      tenant_id: parsed.tenant_id,
       workspace: parsed.workspace,
       policy: parsed.policy as Record<string, unknown>,
       created_at: parsed.created_at,
@@ -493,7 +491,7 @@ export class FileTeamStore implements TeamStore {
         this.markCorrupt(entry.name, path, errorMessage(error));
         continue;
       }
-      const record = parseTeamRecord(raw, entry.name, this.tenantId);
+      const record = parseTeamRecord(raw, entry.name);
       if (!record) {
         this.markCorrupt(entry.name, path);
         continue;
@@ -537,7 +535,6 @@ export class FileTeamStore implements TeamStore {
       v: 1,
       team_id: teamId,
       name,
-      tenant_id: this.tenantId,
       workspace,
       policy: { ...(input.policy ?? {}) },
       created_at: this.nowFn(),

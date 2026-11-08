@@ -12,23 +12,21 @@ export interface InteractionHydrationDeps {
   recordSettled: (requestId: string) => void;
   settledRef: Current<Map<string, number>>;
   tokenRef: Current<string>;
-  tenantIdRef: Current<string | null>;
   hydrationGenerationRef: Current<number>;
 }
 
 /**
  * 从 `interactions.list` 补回刷新 / 重连 / 选会话后丢失的卡片。
  *
- * 并行拉 pending + orphaned（都显式带 hello tenant）；orphaned 只作终态集合
- * 移除旧卡片，不再渲染本地列表，也不弹 toast（历史失效只在 Observe → Attention）。
- * 任何失败都只影响本轮 hydration，不阻塞。
+ * 并行拉 pending + orphaned；orphaned 只作终态集合移除旧卡片，不再渲染本地列表，
+ * 也不弹 toast（历史失效只在 Observe → Attention）。任何失败都只影响本轮
+ * hydration，不阻塞。
  */
 export function useInteractionHydration({
   client,
   recordSettled,
   settledRef,
   tokenRef,
-  tenantIdRef,
   hydrationGenerationRef,
 }: InteractionHydrationDeps): () => Promise<void> {
   // biome-ignore lint/correctness/useExhaustiveDependencies: refs 与 useRef 一样稳定
@@ -36,16 +34,13 @@ export function useInteractionHydration({
     if (client.connectionState !== 'open') return;
     const tokenAtStart = tokenRef.current;
     if (!tokenAtStart.trim()) return;
-    const tenantAtStart = tenantIdRef.current ?? undefined;
     const clientAtStart = client;
     const generation = hydrationGenerationRef.current + 1;
     hydrationGenerationRef.current = generation;
     const stillCurrent = () =>
       hydrationGenerationRef.current === generation &&
       client === clientAtStart &&
-      tokenRef.current === tokenAtStart &&
-      (tenantIdRef.current ?? undefined) === tenantAtStart;
-    const tenantParam = tenantAtStart !== undefined ? { tenant_id: tenantAtStart } : {};
+      tokenRef.current === tokenAtStart;
 
     // 本轮 fetch 前本地已有的 id：只对它们做“服务端已无该 pending”的收敛，
     // fetch 期间新到的实时请求不在列表快照里，不能被误删。
@@ -55,8 +50,8 @@ export function useInteractionHydration({
     ];
 
     const [pendingResult, orphanedResult] = await Promise.allSettled([
-      client.listInteractionsPage({ status: 'pending', limit: 100, ...tenantParam }),
-      client.listInteractions({ status: 'orphaned', limit: 100, ...tenantParam }),
+      client.listInteractionsPage({ status: 'pending', limit: 100 }),
+      client.listInteractions({ status: 'orphaned', limit: 100 }),
     ]);
     if (!stillCurrent()) return;
 

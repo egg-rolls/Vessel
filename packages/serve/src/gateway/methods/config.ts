@@ -20,7 +20,7 @@ import {
   type RpcMethodTable,
 } from '../../rpc.js';
 import type { ConfigGatewayOptionsLike } from '../../tenant.js';
-import { stringParam, tenantParamSchema } from './common.js';
+import { stringParam } from './common.js';
 import { runtimeSnapshotSchema, stringListSchema } from './schemas.js';
 
 /** `config.set` 可写键（与 CLI `vessel config set` 的白名单一致）。 */
@@ -95,7 +95,7 @@ export interface ConfigMethodsDeps {
   clientCount(): number;
   latestSeq(): number;
   protocolInfo: ProtocolInfo;
-  nodeInfo(tenantId?: string): NodeInfo;
+  nodeInfo(): NodeInfo;
   startedAt: number;
 }
 
@@ -127,16 +127,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
       params_schema: { type: 'object' },
       result_schema: {
         type: 'object',
-        required: [
-          'status',
-          'clients',
-          'latest_seq',
-          'protocol',
-          'node',
-          'started_at',
-          'tenant_id',
-          'runtime',
-        ],
+        required: ['status', 'clients', 'latest_seq', 'protocol', 'node', 'started_at', 'runtime'],
         properties: {
           status: { type: 'string', enum: ['ok'] },
           clients: { type: 'integer' },
@@ -187,20 +178,18 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
             },
           },
           started_at: { type: 'number' },
-          tenant_id: { type: 'string' },
           /** 0.15 E6：active run 与 scheduler 快照。 */
           runtime: runtimeSnapshotSchema,
         },
       },
-      handler: (_params, ctx) => {
+      handler: () => {
         return {
           status: 'ok',
           clients: clientCount(),
           latest_seq: latestSeq(),
           protocol: protocolInfo,
-          node: nodeInfo(ctx.tenantId),
+          node: nodeInfo(),
           started_at: startedAt,
-          tenant_id: ctx.tenantId,
           runtime: runtimeSnapshot(),
         };
       },
@@ -263,10 +252,10 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
     {
       name: 'config.get',
       permission: 'read',
-      params_schema: tenantParamSchema,
+      params_schema: { type: 'object' },
       result_schema: {
         type: 'object',
-        required: ['schema_version', 'config', 'paths', 'tenant_id', 'version'],
+        required: ['schema_version', 'config', 'paths', 'version'],
         properties: {
           schema_version: { type: 'integer' },
           version: { type: 'string' },
@@ -279,12 +268,10 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
               project: { type: 'string' },
             },
           },
-          tenant_id: { type: 'string' },
-          tenant_overlay_keys: stringListSchema,
         },
       },
-      handler: async (_params, ctx) => {
-        const snapshot = await configControl().snapshot(ctx.tenantId);
+      handler: async () => {
+        const snapshot = await configControl().snapshot(deps.defaultTenantId);
         return {
           schema_version: snapshot.schema_version,
           // Web 的 Hub / Gateway 状态位需要版本号；与 capabilities.list 同源。
@@ -294,10 +281,6 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           config: redactConfig(snapshot.config as VesselConfig),
           // A-5 §12.2：TUI 需要展示 user/project 路径
           paths: snapshot.paths ?? { user: '', project: '' },
-          tenant_id: snapshot.tenant_id ?? ctx.tenantId,
-          ...(snapshot.tenant_overlay_keys
-            ? { tenant_overlay_keys: snapshot.tenant_overlay_keys }
-            : {}),
         };
       },
     },
@@ -322,11 +305,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           value: {},
         },
       },
-      handler: async (params, ctx) => {
-        // 用户配置是进程级的；非 default tenant 不得跨租户改写。
-        if (ctx.tenantId !== deps.defaultTenantId) {
-          throw new RpcError('forbidden', 'config.set is only available for the default tenant');
-        }
+      handler: async (params) => {
         const control = configControl();
         if (typeof control.set !== 'function') {
           throw new RpcError('not_found', 'Config write is not available');
@@ -334,7 +313,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
         const key = stringParam(params, 'key');
         const value = normalizeConfigValue(key, params.value);
         try {
-          await control.set({ tenantId: ctx.tenantId, key, value });
+          await control.set({ tenantId: deps.defaultTenantId, key, value });
         } catch (error) {
           if (error instanceof RpcError) throw error;
           throw new RpcError(
@@ -348,25 +327,19 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
     {
       name: 'config.sources',
       permission: 'read',
-      params_schema: tenantParamSchema,
+      params_schema: { type: 'object' },
       result_schema: {
         type: 'object',
-        required: ['sources', 'tenant_id'],
+        required: ['sources'],
         properties: {
           sources: { type: 'object' },
-          tenant_id: { type: 'string' },
-          tenant_overlay_keys: stringListSchema,
         },
       },
-      handler: async (_params, ctx) => {
-        const snapshot = await configControl().snapshot(ctx.tenantId);
+      handler: async () => {
+        const snapshot = await configControl().snapshot(deps.defaultTenantId);
         return {
           // DECISION-020 §R1.1：sources 键可能含 serve.tokens.<token>.*。
           sources: redactSourcePaths(snapshot.sources),
-          tenant_id: snapshot.tenant_id ?? ctx.tenantId,
-          ...(snapshot.tenant_overlay_keys
-            ? { tenant_overlay_keys: snapshot.tenant_overlay_keys }
-            : {}),
         };
       },
     },
@@ -393,7 +366,7 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
     {
       name: 'tools.list',
       permission: 'read',
-      params_schema: tenantParamSchema,
+      params_schema: { type: 'object' },
       result_schema: {
         type: 'object',
         required: ['tools'],

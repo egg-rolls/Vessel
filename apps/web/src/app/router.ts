@@ -21,7 +21,6 @@ export type Route =
   | { domain: 'teams' }
   | { domain: 'teams'; nodeKey: string; teamId: string; agentId?: string; bodyId?: string }
   | { domain: 'agents'; nodeKey?: string; teamId?: string; state?: string; presence?: string }
-  | { domain: 'tenants' }
   | { domain: 'capabilities' }
   | { domain: 'visual' }
   | { domain: 'designLab' }
@@ -169,9 +168,6 @@ export function parseRoute(hash: string): Route {
         ...(presence ? { presence } : {}),
       };
     }
-    case 'tenants':
-      // CONTRACT-0.49 C7：Tenants 页面不再可达（路由与类型保留，defer-T4）。
-      return { ...DEFAULT_ROUTE };
     case 'capabilities':
       return { domain: 'capabilities' };
     case 'visual':
@@ -182,7 +178,6 @@ export function parseRoute(hash: string): Route {
       // 0.45 IA：旧 settings 子页作为别名跳到新的顶层页面。
       const tab = segments[1] ?? query.get('tab');
       if (tab === 'connection') return { domain: 'gateway' };
-      // `?tab=tenants` 别名随 C7 一并失效，落到 Settings 根。
       if (tab === 'capabilities') return { domain: 'capabilities' };
       if (tab === 'appearance' || tab === 'display') return { domain: 'visual' };
       return { domain: 'settings' };
@@ -246,9 +241,6 @@ export function formatRoute(route: Route): string {
       const suffix = query.toString();
       return suffix ? `#/agents?${suffix}` : '#/agents';
     }
-    case 'tenants':
-      // Route 类型保留（defer-T4）；T1 不会构造到该分支。
-      return '#/tenants';
     case 'capabilities':
       return '#/capabilities';
     case 'visual':

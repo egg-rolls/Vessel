@@ -129,7 +129,6 @@ import {
 } from './session-liveness';
 import { resolveContinueSessionId, resumeSession, runSessionList } from './session-resume';
 import { shutdownServeStack } from './shutdown-sequence';
-import { createTenantControl } from './tenant-command';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
@@ -223,10 +222,7 @@ function printHelp(): void {
     ['vessel hub start [--host H] [--port N] [--allow-remote]', t('help.cmd.hubStart')],
     ['vessel hub directory [--hub-url URL] [--json]', t('help.cmd.hubDirectory')],
     ['vessel hub watch [--hub-url URL]', t('help.cmd.hubWatch')],
-    [
-      'vessel hub join-code [--data-dir DIR] [--tenant ID] [--ttl N] [--json]',
-      t('help.cmd.hubJoinCode'),
-    ],
+    ['vessel hub join-code [--data-dir DIR] [--ttl N] [--json]', t('help.cmd.hubJoinCode')],
     ['vessel hub node list [--json]', t('help.cmd.hubNodeList')],
     ['vessel hub node remove <pairing_id>', t('help.cmd.hubNodeRemove')],
   ];
@@ -240,18 +236,11 @@ function printHelp(): void {
   ];
   const config: Array<[string, string]> = [
     ['vessel --data-dir <path> ...', t('help.cmd.dataDir')],
-    ['vessel --tenant <id> ...', t('help.cmd.tenant')],
     ['vessel --connect <url> --connect-token <t> --ca <pem> ...', t('help.cmd.connect')],
     ['vessel config path', t('help.cmd.configPath')],
     ['vessel config init', t('help.cmd.configInit')],
     ['vessel config show --sources', t('help.cmd.configShow')],
     ['vessel config set <key> <value>', t('help.cmd.configSet')],
-  ];
-  const tenant: Array<[string, string]> = [
-    ['vessel tenant list', t('help.cmd.tenantList')],
-    ['vessel tenant get <id>', t('help.cmd.tenantGet')],
-    ['vessel tenant create <id>', t('help.cmd.tenantCreate')],
-    ['vessel tenant update <id> --status disabled', t('help.cmd.tenantUpdate')],
   ];
   const plugins: Array<[string, string]> = [
     ['vessel plugin list', t('help.cmd.pluginList')],
@@ -291,7 +280,6 @@ function printHelp(): void {
       ...hubNode,
       ...capability,
       ...config,
-      ...tenant,
       ...plugins,
       ...migrate,
       ...debug,
@@ -328,9 +316,6 @@ function printHelp(): void {
       '',
       `  ${ui.section(t('help.section.config'))}`,
       align(config, width),
-      '',
-      `  ${ui.section(t('help.section.tenant'))}`,
-      align(tenant, width),
       '',
       `  ${ui.section(t('help.section.plugins'))}`,
       align(plugins, width),
@@ -594,11 +579,7 @@ if (args.resumeArg === '') {
     console.error(t('cli.resumeNeedsLocalStore'));
     process.exit(2);
   }
-  process.exit(
-    await runSessionList({
-      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-    }),
-  );
+  process.exit(await runSessionList({}));
 }
 const { runArg, pipeMode, sessionArg, servePort, resumeRunArg } = args;
 
@@ -613,9 +594,7 @@ if (args.continueArg) {
   if (connectConfigured) {
     continueLatest = true;
   } else {
-    const resolved = await resolveContinueSessionId({
-      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-    });
+    const resolved = await resolveContinueSessionId({});
     if (!resolved.ok) {
       console.error(resolved.error);
       process.exit(1);
@@ -627,9 +606,7 @@ if (args.continueArg) {
   // `resumeSession`（Q5），connect 由远端 `runs.start` 处理（不新增 RPC）。
   resumeSessionId = args.resumeArg;
   if (!connectConfigured) {
-    const checked = await resumeSession(args.resumeArg, {
-      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-    });
+    const checked = await resumeSession(args.resumeArg, {});
     if (!checked.ok) {
       console.error(checked.error);
       process.exit(1);
@@ -681,7 +658,6 @@ const initialResult = await bootstrap({
   ...(nodeConfigPath !== undefined ? { configPath: nodeConfigPath } : {}),
   ...(continueLatest ? { continueLatest: true } : {}),
   ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
-  ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
   ...(args.connectArg !== null
     ? { connect: args.connectArg }
     : process.env.VESSEL_CONNECT !== undefined
@@ -726,7 +702,6 @@ if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
       interactive,
       registerAskUser: askUserClient,
       cliOverrides,
-      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
       ...(args.connectArg !== null
         ? { connect: args.connectArg }
         : process.env.VESSEL_CONNECT !== undefined
@@ -783,12 +758,11 @@ async function runWithConfig(result: BootstrapResult) {
    */
   let headlessExitCode: number | undefined;
 
-  // 0.6 A4：connect 模式下展示远端 node/tenant。headless 写 stderr，避免污染 stdout。
+  // 0.6 A4：connect 模式下展示远端 node。headless 写 stderr，避免污染 stdout。
   if (result.remote) {
     const node = result.remote.nodeId ?? 'unknown';
     const line = t('cli.remoteGateway', {
       node,
-      tenant: result.remote.tenantId,
       endpoint: result.remote.endpoint,
     });
     if (headless) console.error(line);
@@ -834,7 +808,6 @@ async function runWithConfig(result: BootstrapResult) {
         printSuspendedAsk(
           suspendedAsk,
           resolveInteractionsDir(resolveDataDir(config), foregroundGatewayInstance),
-          result.tenantId,
         );
         exitCode = HEADLESS_ASK_SUSPENDED_EXIT_CODE;
       } else {
@@ -929,7 +902,7 @@ async function runWithConfig(result: BootstrapResult) {
 
     // 0.18：单流是唯一事件面；live hub 与 trace 同源（bundle.redactor 已组合 ext）。
     eventHub = createGatewayEventHub({
-      streams: [{ tenantId: result.tenantId, stream: gatewayBundle.runtimeEvents }],
+      stream: gatewayBundle.runtimeEvents,
       redactor: gatewayBundle.redactor,
     });
 
@@ -1349,12 +1322,6 @@ async function runWithConfig(result: BootstrapResult) {
         : {}),
       // 单执行面的 RPC 数据源：config / trace / session 数据 / metrics。
       defaultTenantId: result.tenantId,
-      // A6-13：tenants.get/list/create/update 的数据源（T4 删除）。
-      // A6-14：配置的 status/quota 是权威来源，tenant.json 兜底。
-      tenants: createTenantControl(dataDir, {
-        singleTenantId: result.tenantId,
-        ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
-      }),
       config: tenantConfigControl,
       trace: {
         readEvents: (filter: Record<string, unknown>) =>

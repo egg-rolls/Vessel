@@ -89,12 +89,6 @@ function parseRecord(raw: unknown, path: string, index: number): HubNodeTokenRec
   const nodeId = raw.node_id;
   if (!isNonEmptyString(nodeId)) throw corrupt(path, `tokens[${index}].node_id invalid`);
 
-  const tenantId = raw.tenant_id;
-  if (!isNonEmptyString(tenantId)) throw corrupt(path, `tokens[${index}].tenant_id invalid`);
-
-  const pairingId = raw.pairing_id;
-  if (!isNonEmptyString(pairingId)) throw corrupt(path, `tokens[${index}].pairing_id invalid`);
-
   const issuedBy = raw.issued_by;
   if (!isNonEmptyString(issuedBy)) throw corrupt(path, `tokens[${index}].issued_by invalid`);
 
@@ -115,8 +109,6 @@ function parseRecord(raw: unknown, path: string, index: number): HubNodeTokenRec
     scope: 'node',
     hub_id: hubId,
     node_id: nodeId,
-    tenant_id: tenantId,
-    pairing_id: pairingId,
     issued_by: issuedBy,
     created_at: createdAt,
     expires_at: expiresAt,
@@ -202,8 +194,6 @@ export async function createHubNodeCredentialStore(
   async function issue(input: {
     hub_id: string;
     node_id: string;
-    tenant_id: string;
-    pairing_id: string;
     ttl_ms?: number;
   }): Promise<IssuedHubNodeToken> {
     return enqueue(async () => {
@@ -216,8 +206,6 @@ export async function createHubNodeCredentialStore(
         scope: 'node',
         hub_id: input.hub_id,
         node_id: input.node_id,
-        tenant_id: input.tenant_id,
-        pairing_id: input.pairing_id,
         issued_by: 'join',
         created_at: issuedAt,
         expires_at: expiresAt,
@@ -233,8 +221,6 @@ export async function createHubNodeCredentialStore(
         scope: 'node',
         hub_id: record.hub_id,
         node_id: record.node_id,
-        tenant_id: record.tenant_id,
-        pairing_id: record.pairing_id,
       };
     });
   }
@@ -261,12 +247,12 @@ export async function createHubNodeCredentialStore(
     });
   }
 
-  async function revokePairing(pairingId: string, exceptTokenId?: string): Promise<number> {
+  async function revokeNode(nodeId: string, exceptTokenId?: string): Promise<number> {
     return enqueue(async () => {
       const revokedAt = now();
       const changedIds: string[] = [];
       const next = records.map((record) => {
-        if (record.pairing_id !== pairingId || record.revoked_at !== undefined) return record;
+        if (record.node_id !== nodeId || record.revoked_at !== undefined) return record;
         if (exceptTokenId !== undefined && record.token_id === exceptTokenId) return record;
         changedIds.push(record.token_id);
         return { ...record, revoked_at: revokedAt };
@@ -293,5 +279,5 @@ export async function createHubNodeCredentialStore(
     };
   }
 
-  return { issue, authenticate, revoke, revokePairing, list, onRevoke };
+  return { issue, authenticate, revoke, revokeNode, list, onRevoke };
 }

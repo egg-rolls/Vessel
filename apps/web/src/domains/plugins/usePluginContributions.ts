@@ -30,11 +30,11 @@ export interface PluginContributionsState extends PluginInventory {
 }
 
 export function usePluginContributions(): PluginContributionsState {
-  const { client, connectionState, hasToken, epoch, tenantId, eventStore } = useConnection();
+  const { client, connectionState, hasToken, epoch, eventStore } = useConnection();
   const resource = useResource({
     load: () => client.listPlugins(),
     enabled: hasToken && connectionState === 'open',
-    deps: [epoch, tenantId],
+    deps: [epoch],
   });
   const reloadRef = useRef(resource.reload);
   reloadRef.current = resource.reload;

@@ -79,7 +79,6 @@ export interface HelloFrameInput {
   fromSeq: number;
   latestSeq: number;
   oldestSeq: number;
-  tenantId?: string;
   ts?: number;
 }
 
@@ -97,7 +96,6 @@ export function helloFrame(input: HelloFrameInput): ServerFrame {
     incarnation: input.incarnation,
     from_seq: latestSeq === 0 ? 0 : Math.max(input.fromSeq + 1, input.oldestSeq),
     latest_seq: latestSeq,
-    ...(input.tenantId !== undefined ? { tenant_id: input.tenantId } : {}),
   };
 }
 

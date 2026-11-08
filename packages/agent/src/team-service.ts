@@ -1615,7 +1615,6 @@ function toTeamSummary(record: TeamRecord, memberCount: number, onlineCount: num
   return {
     team_id: record.team_id,
     name: record.name,
-    tenant_id: record.tenant_id,
     workspace: record.workspace,
     ...(record.description !== undefined ? { description: record.description } : {}),
     policy: record.policy,

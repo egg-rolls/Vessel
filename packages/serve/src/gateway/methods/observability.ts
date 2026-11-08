@@ -15,7 +15,6 @@ import {
 } from '../../metrics.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import { capToolEvent } from '../../tool-events.js';
-import { tenantParamSchema } from './common.js';
 import { metricsSnapshotSchema, runEventSchema } from './schemas.js';
 
 export interface ObservabilityMethodsDeps {
@@ -23,11 +22,11 @@ export interface ObservabilityMethodsDeps {
   redactor?: TraceRedactor;
   trace?: {
     prune?(options: Record<string, unknown>): Promise<unknown>;
-    readEvents?(filter: Record<string, unknown>, tenantId?: string): Promise<RunEvent[]>;
+    readEvents?(filter: Record<string, unknown>): Promise<RunEvent[]>;
   };
   metricsControl?: {
-    reset?(tenantId?: string): void;
-    rebuild?(tenantId: string): Promise<MetricsSnapshot>;
+    reset?(): void;
+    rebuild?(): Promise<MetricsSnapshot>;
   };
   metrics?: MetricsProvider;
 }
@@ -48,8 +47,6 @@ export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDe
           types: { type: 'array', items: { type: 'string' } },
           type_prefix: { type: 'string' },
           limit: { type: 'integer', minimum: 0, maximum: 500 },
-          all_tenants: { type: 'boolean' },
-          tenant_id: { type: 'string' },
         },
       },
       result_schema: {
@@ -111,7 +108,6 @@ export function createMetricsMethods(deps: ObservabilityMethodsDeps): RpcMethodD
         type: 'object',
         properties: {
           source: { type: 'string', enum: ['live', 'trace'] },
-          tenant_id: { type: 'string' },
         },
       },
       result_schema: {
@@ -122,13 +118,13 @@ export function createMetricsMethods(deps: ObservabilityMethodsDeps): RpcMethodD
           source: { type: 'string', enum: ['live', 'trace'] },
         },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         const source = params.source === 'trace' ? 'trace' : 'live';
         if (source === 'trace') {
           if (!metricsControl?.rebuild) {
             throw new RpcError('not_found', 'Trace metrics rebuild is not available');
           }
-          const snapshot = await metricsControl.rebuild(ctx.tenantId);
+          const snapshot = await metricsControl.rebuild();
           return { metrics: normalizeMetricsSnapshot(snapshot), source };
         }
         const provider = metricsProvider();
@@ -139,17 +135,17 @@ export function createMetricsMethods(deps: ObservabilityMethodsDeps): RpcMethodD
     {
       name: 'metrics.reset',
       permission: 'write',
-      params_schema: tenantParamSchema,
+      params_schema: { type: 'object' },
       result_schema: {
         type: 'object',
         required: ['ok'],
         properties: { ok: { type: 'boolean' } },
       },
-      handler: (_params, ctx) => {
+      handler: () => {
         if (!metricsControl?.reset) {
           throw new RpcError('not_found', 'Metrics reset is not available');
         }
-        metricsControl.reset(ctx.tenantId);
+        metricsControl.reset();
         return { ok: true };
       },
     },
@@ -169,7 +165,6 @@ export function createTraceMethods(deps: ObservabilityMethodsDeps): RpcMethodDef
           older_than_days: { type: 'integer', minimum: 0 },
           max_runs: { type: 'integer', minimum: 0 },
           max_bytes: { type: 'integer', minimum: 0 },
-          tenant_id: { type: 'string' },
         },
       },
       result_schema: {
@@ -181,9 +176,9 @@ export function createTraceMethods(deps: ObservabilityMethodsDeps): RpcMethodDef
           deleted_bytes: { type: 'integer' },
         },
       },
-      handler: async (params, ctx) => {
+      handler: async (params) => {
         if (!trace?.prune) throw new RpcError('not_found', 'Trace prune is not available');
-        return trace.prune({ ...params, tenant_id: ctx.tenantId });
+        return trace.prune(params);
       },
     },
   ];

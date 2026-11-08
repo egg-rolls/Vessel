@@ -34,12 +34,6 @@ import { runPluginCommand } from '../plugin-command';
 import { runResumeList } from '../resume-command';
 import { statusCommand } from '../status-command';
 import { runTeamCommand } from '../team-command';
-import {
-  tenantCreateCommand,
-  tenantGetCommand,
-  tenantListCommand,
-  tenantUpdateCommand,
-} from '../tenant-command';
 import { listTools } from '../tools-list';
 import { tracePruneCommand } from '../trace-command';
 import { ui } from '../ui-style';
@@ -80,7 +74,7 @@ export async function applyCommandLocale(): Promise<void> {
   }
 }
 
-/** tenant 命令的数据根（本地命令，不 bootstrap） */
+/** 本地命令的数据根（不 bootstrap） */
 async function resolveCommandDataDir(): Promise<string> {
   const { config } = await loadConfig();
   return resolveDataDir(config);
@@ -134,10 +128,7 @@ export const cliCommands: readonly CliCommand[] = [
   {
     name: 'resume-run-list',
     match: (args) => args.resumeRunArg === '',
-    run: async (args) =>
-      runResumeList({
-        ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-      }),
+    run: async () => runResumeList({}),
   },
   {
     name: 'eval',
@@ -147,7 +138,6 @@ export const cliCommands: readonly CliCommand[] = [
       if (command === null) return 1;
       return runEvalCommand(command, {
         useMock: ctx.useMock,
-        ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
       });
     },
   },
@@ -174,39 +164,8 @@ export const cliCommands: readonly CliCommand[] = [
         await configShowCommand({
           json: command.json,
           sources: command.sources,
-          ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
         }),
       );
-    },
-  },
-  {
-    name: 'tenant',
-    match: (args) => args.tenantCommand !== null,
-    run: async (args) => {
-      const command = args.tenantCommand;
-      if (command === null) return 1;
-      const base = {
-        dataDir: await resolveCommandDataDir(),
-        json: command.json,
-        // 0.49 T1：全局 --tenant 只透传给 loadConfig（忽略 + warning），不参与解析。
-        ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-      };
-      const result =
-        command.kind === 'list'
-          ? await tenantListCommand(base)
-          : command.kind === 'get'
-            ? await tenantGetCommand(command.id, base)
-            : command.kind === 'create'
-              ? await tenantCreateCommand(command.id, {
-                  ...base,
-                  ...(command.name !== undefined ? { name: command.name } : {}),
-                })
-              : await tenantUpdateCommand(command.id, {
-                  ...base,
-                  ...(command.name !== undefined ? { name: command.name } : {}),
-                  ...(command.status !== undefined ? { status: command.status } : {}),
-                });
-      return printCommandResult(result);
     },
   },
   {
@@ -221,7 +180,6 @@ export const cliCommands: readonly CliCommand[] = [
           to: command.to,
           apply: command.apply,
           json: command.json,
-          ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
           ...(command.source !== undefined ? { source: command.source } : {}),
         }),
       );
@@ -237,7 +195,6 @@ export const cliCommands: readonly CliCommand[] = [
         await tracePruneCommand({
           dryRun: command.dryRun,
           json: command.json,
-          ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
         }),
       );
     },
@@ -310,7 +267,6 @@ export const cliCommands: readonly CliCommand[] = [
           connectUrl: args.connectArg,
           connectToken: args.connectTokenArg,
           caFile: args.caArg,
-          tenantId: args.tenantArg,
         }),
       );
     },
@@ -340,11 +296,10 @@ export const cliCommands: readonly CliCommand[] = [
       const command = args.agentCommand;
       if (command === null) return 1;
       const dataDir = await resolveCommandDataDir();
-      const tenant = args.tenantArg !== null ? { tenantId: args.tenantArg } : {};
       return printCommandResult(
         command.kind === 'inbox'
-          ? await runAgentInboxCommand(command, { dataDir, ...tenant })
-          : await runAgentCommand(command, { dataDir, ...tenant }),
+          ? await runAgentInboxCommand(command, { dataDir })
+          : await runAgentCommand(command, { dataDir }),
       );
     },
   },
@@ -357,7 +312,6 @@ export const cliCommands: readonly CliCommand[] = [
       return printCommandResult(
         await runTeamCommand(command, {
           dataDir: await resolveCommandDataDir(),
-          ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
         }),
       );
     },
@@ -382,7 +336,6 @@ export const cliCommands: readonly CliCommand[] = [
           connectUrl: args.connectArg,
           connectToken: args.connectTokenArg,
           caFile: args.caArg,
-          tenantId: args.tenantArg,
         }),
       );
     },
@@ -400,7 +353,6 @@ export const cliCommands: readonly CliCommand[] = [
           connectUrl: args.connectArg,
           connectToken: args.connectTokenArg,
           caFile: args.caArg,
-          tenantId: args.tenantArg,
         }),
       );
     },

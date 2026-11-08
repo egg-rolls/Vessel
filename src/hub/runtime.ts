@@ -325,12 +325,12 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   let stopped = false;
 
   /** registry.patch 会忽略 undefined；这里补上“清空 last_error”。 */
-  function patchRecord(pairingId: string, patch: HubNodePatch): HubNodeRecord | undefined {
-    const before = registry.get(pairingId);
+  function patchRecord(nodeId: string, patch: HubNodePatch): HubNodeRecord | undefined {
+    const before = registry.get(nodeId);
     if (before === undefined) return undefined;
-    const updated = registry.patch(pairingId, patch);
+    const updated = registry.patch(nodeId, patch);
     if (patch.last_error !== undefined || before.last_error === undefined) return updated;
-    const current = registry.get(pairingId);
+    const current = registry.get(nodeId);
     if (current === undefined) return updated;
     const copy: HubNodeRecord = { ...current };
     delete copy.last_error;
@@ -339,9 +339,9 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
 
   // ---- node → hub 入站 hooks（S5.1）----
 
-  function onInboundSnapshot(pairingId: string, snapshot: HubNodeSnapshot): void {
+  function onInboundSnapshot(nodeId: string, snapshot: HubNodeSnapshot): void {
     // 跨重连的旧包必须丢弃：用 registry 里已持久化的代际 / revision 种子化。
-    const before = registry.get(pairingId);
+    const before = registry.get(nodeId);
     if (before !== undefined) {
       const policy = createHubSnapshotPolicy({
         ...(before.incarnation !== undefined ? { incarnation: before.incarnation } : {}),
@@ -349,14 +349,14 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
       });
       if (!policy.accept(snapshot.incarnation, snapshot.revision)) {
         logger?.debug?.('hub.runtime.stale_inbound_snapshot', {
-          pairing_id: pairingId,
+          node_id: nodeId,
           revision: snapshot.revision,
           last_revision: before.revision,
         });
         return;
       }
     }
-    patchRecord(pairingId, {
+    patchRecord(nodeId, {
       status: 'healthy',
       name: snapshot.name,
       last_seen: snapshot.observed_at,
@@ -381,9 +381,9 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     });
   }
 
-  function onInboundStatus(pairingId: string, status: HubNodeStatus, error?: string): void {
+  function onInboundStatus(nodeId: string, status: HubNodeStatus, error?: string): void {
     patchRecord(
-      pairingId,
+      nodeId,
       status === 'healthy'
         ? { status, last_error: undefined }
         : { status, last_error: error ?? status },
@@ -394,9 +394,7 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   /** join 成功：建立（或覆盖）direction:'node' 目录记录；data_plane 由 registry 派生。 */
   function onJoined(input: HubNodeJoinedInput): void {
     const record: HubNodeRecord = {
-      pairing_id: input.pairing_id,
       node_id: input.node_id,
-      tenant_id: input.tenant_id,
       direction: 'node',
       node_token_id: input.node_token_id,
       status: 'connecting',
@@ -415,17 +413,10 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   }
 
   /** auth 成功：registry 记录缺失时重建最小记录；已存在则绝不覆盖。 */
-  function onAuthenticated(input: {
-    pairing_id: string;
-    node_id: string;
-    tenant_id: string;
-    node_token_id: string;
-  }): void {
-    if (registry.get(input.pairing_id) !== undefined) return;
+  function onAuthenticated(input: { node_id: string; node_token_id: string }): void {
+    if (registry.get(input.node_id) !== undefined) return;
     registry.upsert({
-      pairing_id: input.pairing_id,
       node_id: input.node_id,
-      tenant_id: input.tenant_id,
       direction: 'node',
       node_token_id: input.node_token_id,
       status: 'connecting',
@@ -499,7 +490,7 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   let directoryChanged = false;
   for (const record of registry.list()) {
     patchRecord(
-      record.pairing_id,
+      record.node_id,
       record.direction === 'node'
         ? { status: 'unreachable', last_error: 'waiting_for_node' }
         : { status: 'unreachable', last_error: 'disconnected' },

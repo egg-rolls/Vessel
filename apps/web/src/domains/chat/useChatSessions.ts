@@ -3,7 +3,7 @@ import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
 import { usePaletteEntities } from '../../components/PaletteEntities';
 import { useToast } from '../../components/ToastProvider';
-import type { ConnectionState, GatewayClient } from '../../gateway/client';
+import type { GatewayClient } from '../../gateway/client';
 import type { NodeView } from '../../gateway/NodeProvider';
 import type { TeamControl } from '../../gateway/team-control';
 import type { AskUserRequest, PermissionRequest, SessionDetail } from '../../gateway/types';
@@ -47,10 +47,7 @@ function useDebounced<T>(value: T, delayMs: number): T {
 export interface UseChatSessionsOptions {
   client: GatewayClient;
   hasToken: boolean;
-  connectionState: ConnectionState;
   epoch: number;
-  tenantEpoch: number;
-  tenantId: string | null;
   selectedId: string | null;
   routeSessionId: string | undefined;
   durableFeature: boolean;
@@ -74,10 +71,7 @@ export interface UseChatSessionsOptions {
 export function useChatSessions({
   client,
   hasToken,
-  connectionState,
   epoch,
-  tenantEpoch,
-  tenantId,
   selectedId,
   routeSessionId,
   durableFeature,
@@ -148,7 +142,6 @@ export function useChatSessions({
     durableFeature,
     connected,
     epoch,
-    tenantId,
     selectedId,
     loadSessions,
     navigate,
@@ -168,7 +161,7 @@ export function useChatSessions({
       firstSessionsLoad.current = false;
       void loadSessions(client, { epoch, force });
     },
-    { enabled: hasToken, pollMs: 15_000, deps: [epoch, tenantEpoch, hasToken] },
+    { enabled: hasToken, pollMs: 15_000, deps: [epoch, hasToken] },
   );
 
   // 会话列表第二行来自 agentStore roster（Agents 域同一份数据）。
@@ -181,7 +174,7 @@ export function useChatSessions({
     {
       enabled: hasToken && nodes.length > 0,
       pollMs: ROSTER_POLL_MS,
-      deps: [epoch, tenantEpoch, hasToken, rosterNodeKeys],
+      deps: [epoch, hasToken, rosterNodeKeys],
     },
   );
 
@@ -190,7 +183,7 @@ export function useChatSessions({
     if (!hasToken) resetSessions();
   }, [hasToken, resetSessions]);
 
-  // 离开 Chat / tenant 整体重挂载后不保留上一份快照（等价于旧组件本地 state）。
+  // 离开 Chat 后不保留上一份快照（等价于旧组件本地 state）。
   useEffect(() => () => resetSessions(), [resetSessions]);
 
   /** null = 列表尚未加载（或加载失败），此时不能判定记录失效。 */
@@ -203,8 +196,8 @@ export function useChatSessions({
   // 只记录真实会话；`new` / 无选择不写。
   useEffect(() => {
     if (!selectedId) return;
-    writeLastSession(browserSessionStorage(), tenantId, selectedId);
-  }, [tenantId, selectedId]);
+    writeLastSession(browserSessionStorage(), selectedId);
+  }, [selectedId]);
 
   // 路由变成真实 id / `new` 后决策必为 keep，不会重复导航。
   useEffect(() => {
@@ -212,16 +205,9 @@ export function useChatSessions({
       setRestorePending(false);
       return;
     }
-    // 坑：sessions.list 可能先于 hello 返回；tenant 未知时读 key 会落到 default，
-    // 从而把真实 tenant 的记录判成不存在。
-    if (!tenantId) {
-      // gateway 不可达时 hello 永不返回：不要在会话区永久显示“恢复中”。
-      setRestorePending(connectionState === 'idle' || connectionState === 'connecting');
-      return;
-    }
     const decision = decideSessionRestore({
       routeSessionId,
-      storedSessionId: readLastSession(browserSessionStorage(), tenantId),
+      storedSessionId: readLastSession(browserSessionStorage()),
       knownSessionIds,
     });
     if (decision.kind === 'keep') {
@@ -238,17 +224,9 @@ export function useChatSessions({
       navigate({ domain: 'chat', sessionId: decision.sessionId });
       return;
     }
-    if (decision.clear) clearLastSession(browserSessionStorage(), tenantId);
+    if (decision.clear) clearLastSession(browserSessionStorage());
     navigate({ domain: 'chat', sessionId: 'new' });
-  }, [
-    hasToken,
-    tenantId,
-    connectionState,
-    routeSessionId,
-    knownSessionIds,
-    navigate,
-    sessionsUnavailable,
-  ]);
+  }, [hasToken, routeSessionId, knownSessionIds, navigate, sessionsUnavailable]);
 
   // 服务端全文搜索：150ms debounce 后切换；旧 gateway/失败时保持本地过滤。
   useEffect(() => {

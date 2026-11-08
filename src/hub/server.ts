@@ -1,5 +1,5 @@
 /**
- * Hub 控制面 HTTP / WS（S5 / `vessel.hub/1`）。
+ * Hub 控制面 HTTP / WS（S5 / `vessel.hub/2`）。
  *
  * 只做三件事：维护节点目录、与节点保持 control 连接、向目录客户端推
  * 指针 / 快照。**不**启动 runtime / AgentService / TenantEventHub，也**没有**
@@ -39,7 +39,7 @@ import {
 } from './inbound-control.js';
 import { normalizeNodeUrl } from './node-url.js';
 import type { HubRegistry } from './registry.js';
-import { type HubNodeInboundDeps, type IssuedHubNodeToken, pairingIdFor } from './types.js';
+import type { HubNodeInboundDeps, IssuedHubNodeToken } from './types.js';
 
 /** 请求体上限 */
 export const HUB_MAX_BODY_BYTES = 1024 * 1024;
@@ -85,7 +85,7 @@ export interface HubServer {
   /** 立即向已鉴权的事件客户端广播完整目录。 */
   publishDirectory(): void;
   /** 兼容旧名：等价 `publishDirectory()`。 */
-  publishSnapshot(pairingId: string): void;
+  publishSnapshot(nodeId: string): void;
   /** 幂等停止。 */
   stop(): Promise<void>;
 }
@@ -152,8 +152,6 @@ function joinStatus(code: unknown): number {
     case 'pairing_expired':
     case 'pairing_used':
       return 410;
-    case 'tenant_mismatch':
-      return 400;
     default:
       return 500;
   }
@@ -166,7 +164,6 @@ function joinErrorCode(code: unknown): string {
     case 'pairing_invalid':
     case 'pairing_expired':
     case 'pairing_used':
-    case 'tenant_mismatch':
     case 'hub_join_corrupt':
       return code;
     default:
@@ -185,8 +182,6 @@ function joinMessage(code: string): string {
       return 'Join code expired';
     case 'pairing_used':
       return 'Join code already used';
-    case 'tenant_mismatch':
-      return 'tenant_id does not match the join code';
     case 'hub_join_corrupt':
       return 'Hub join state is unavailable';
     default:
@@ -434,7 +429,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
   }
 
   /** 兼容旧名：目录协议下等价于 `publishDirectory()`。 */
-  function publishSnapshot(_pairingId: string): void {
+  function publishSnapshot(_nodeId: string): void {
     broadcastDirectory();
   }
 
@@ -446,32 +441,32 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
   async function handleRemoveNode(
     srv: import('bun').Server<HubWsData>,
     request: Request,
-    pairingId: string,
+    nodeId: string,
     extra: Record<string, string>,
   ): Promise<Response> {
     if (!isLoopbackPeer(srv, request)) {
       return errorResponse('forbidden', 'loopback peers only', 403, extra);
     }
-    const existing = registry.get(pairingId);
-    if (!existing) return errorResponse('not_found', 'pairing not found', 404, extra);
+    const existing = registry.get(nodeId);
+    if (!existing) return errorResponse('not_found', 'node not found', 404, extra);
 
     // node-dial：先关闭入站 WS、吊销 hub 签发的 node token，再删除目录记录。
-    inbound?.closeByPairing(pairingId);
+    inbound?.closeByNode(nodeId);
     if (nodeControl !== undefined) {
       try {
-        await nodeControl.credentials.revokePairing(pairingId);
+        await nodeControl.credentials.revokeNode(nodeId);
       } catch (error) {
         // 吊销失败不得删目录：token 仍有效，节点可能重新连回来。
         logger?.warn('hub.server.revoke_failed', {
-          pairing_id: pairingId,
+          node_id: nodeId,
           error: error instanceof Error ? error.message : String(error),
         });
         return errorResponse('revoke_failed', 'failed to revoke node token', 500, extra);
       }
     }
 
-    registry.remove(pairingId);
-    return jsonResponse(200, { ok: true, pairing_id: pairingId }, extra);
+    registry.remove(nodeId);
+    return jsonResponse(200, { ok: true, node_id: nodeId }, extra);
   }
 
   async function handleJoin(request: Request, extra: Record<string, string>): Promise<Response> {
@@ -490,14 +485,8 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
 
     const code = body.value.code;
     const nodeId = body.value.node_id;
-    const tenantId = body.value.tenant_id;
-    if (!isNonEmptyString(code) || !isNonEmptyString(nodeId) || !isNonEmptyString(tenantId)) {
-      return errorResponse(
-        'invalid_request',
-        'code, node_id and tenant_id are required',
-        400,
-        extra,
-      );
+    if (!isNonEmptyString(code) || !isNonEmptyString(nodeId)) {
+      return errorResponse('invalid_request', 'code and node_id are required', 400, extra);
     }
     const alias = body.value.alias;
     if (alias !== undefined && !isNonEmptyString(alias)) {
@@ -521,14 +510,11 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       }
     }
 
-    const pairingId = pairingIdFor(nodeId, tenantId);
-
     try {
       await nodeControl.joinStore.consume({
         code,
         hub_id: hubId,
         node_id: nodeId,
-        tenant_id: tenantId,
       });
     } catch (error) {
       const raw = isRecord(error) ? error.code : undefined;
@@ -541,32 +527,28 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       issued = await nodeControl.credentials.issue({
         hub_id: hubId,
         node_id: nodeId,
-        tenant_id: tenantId,
-        pairing_id: pairingId,
       });
     } catch (error) {
       logger?.warn('hub.server.join_issue_failed', {
-        pairing_id: pairingId,
+        node_id: nodeId,
         error: error instanceof Error ? error.message : String(error),
       });
       return errorResponse('internal', 'Join failed', 500, extra);
     }
 
-    // 重新 join：保留刚签发的 token，吊销该 pairing 的旧 token（并关闭旧连接）。
+    // 重新 join：保留刚签发的 token，吊销该 node 的旧 token（并关闭旧连接）。
     try {
-      await nodeControl.credentials.revokePairing(pairingId, issued.token_id);
+      await nodeControl.credentials.revokeNode(nodeId, issued.token_id);
     } catch (error) {
       logger?.warn('hub.server.revoke_previous_failed', {
-        pairing_id: pairingId,
+        node_id: nodeId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
 
     try {
       await nodeControl.hooks.onJoined({
-        pairing_id: pairingId,
         node_id: nodeId,
-        tenant_id: tenantId,
         node_token_id: issued.token_id,
         ...(publicUrl !== undefined ? { public_url: publicUrl } : {}),
         ...(alias !== undefined ? { alias } : {}),
@@ -574,7 +556,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     } catch (error) {
       // 目录落盘失败：撤销刚签发的 token，避免“有凭据没目录”的半成品。
       logger?.warn('hub.server.join_hook_failed', {
-        pairing_id: pairingId,
+        node_id: nodeId,
         error: error instanceof Error ? error.message : String(error),
       });
       try {
@@ -590,8 +572,6 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       {
         hub_id: hubId,
         node_id: nodeId,
-        tenant_id: tenantId,
-        pairing_id: pairingId,
         token: issued.token,
         token_id: issued.token_id,
         scope: 'node',
@@ -718,25 +698,25 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
 
         const nodeMatch = /^\/v1\/hub\/nodes\/([^/]+)$/.exec(path);
         if (nodeMatch) {
-          let pairingId: string;
+          let nodeId: string;
           try {
-            pairingId = decodeURIComponent(nodeMatch[1] ?? '');
+            nodeId = decodeURIComponent(nodeMatch[1] ?? '');
           } catch {
-            return errorResponse('invalid_request', 'invalid pairing_id', 400, extra);
+            return errorResponse('invalid_request', 'invalid node_id', 400, extra);
           }
-          if (pairingId === '') {
-            return errorResponse('invalid_request', 'invalid pairing_id', 400, extra);
+          if (nodeId === '') {
+            return errorResponse('invalid_request', 'invalid node_id', 400, extra);
           }
           if (request.method === 'GET') {
             if (!readAuthorized(srv, request)) {
               return errorResponse('unauthorized', 'missing or invalid token', 401, extra);
             }
-            const record = registry.get(pairingId);
-            if (!record) return errorResponse('not_found', 'pairing not found', 404, extra);
+            const record = registry.get(nodeId);
+            if (!record) return errorResponse('not_found', 'node not found', 404, extra);
             return jsonResponse(200, record, extra);
           }
           if (request.method === 'DELETE') {
-            return handleRemoveNode(srv, request, pairingId, extra);
+            return handleRemoveNode(srv, request, nodeId, extra);
           }
           return errorResponse('method_not_allowed', 'method not allowed', 405, extra);
         }

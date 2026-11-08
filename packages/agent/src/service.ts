@@ -636,7 +636,7 @@ export class AgentServiceImpl implements AgentService {
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
     this.snapshot =
       snapshotEnabled && dataDir !== undefined
-        ? new AgentSnapshotStore(snapshotPath(dataDir, options.tenantId), options.tenantId, {
+        ? new AgentSnapshotStore(snapshotPath(dataDir, options.tenantId), {
             ...(options.snapshot?.throttleMs !== undefined
               ? { throttleMs: options.snapshot.throttleMs }
               : {}),
@@ -5162,7 +5162,6 @@ export class AgentServiceImpl implements AgentService {
         run_id: `team:${teamId}`,
         data: payload,
         ts: payload.ts as number,
-        tenant_id: this.tenantId,
       });
     } catch (error) {
       this.logger.warn('agent.event.publish_failed', { team_id: teamId, error: errorText(error) });
@@ -5342,7 +5341,6 @@ export class AgentServiceImpl implements AgentService {
           run_id: member.id,
           data,
           ts: data.ts,
-          tenant_id: this.tenantId,
         });
       } catch (error) {
         this.logger.warn('agent.event.publish_failed', {

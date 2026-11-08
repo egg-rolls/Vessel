@@ -135,18 +135,14 @@ export function installHeadlessAskSuspend(
 }
 
 /** ask 挂起后的 stderr 指引（stdout 留结果）。 */
-export function printSuspendedAsk(ask: SuspendedAsk, dir: string, tenantId?: string): void {
-  const tenantFlag =
-    tenantId !== undefined && tenantId !== '' && tenantId !== 'default'
-      ? ` --tenant ${tenantId}`
-      : '';
+export function printSuspendedAsk(ask: SuspendedAsk, dir: string): void {
   console.error(`[vessel] ask_user request ${ask.requestId} is waiting for a human.`);
   console.error(`[vessel] run ${ask.runId} is suspended (checkpoint: interrupted).`);
   console.error(
-    `[vessel] answer: vessel attention${tenantFlag} respond ${ask.requestId} ` +
+    `[vessel] answer: vessel attention respond ${ask.requestId} ` +
       `--answers '[{"header":"...","question":"...","answer":"..."}]'`,
   );
-  console.error(`[vessel] resume: vessel --resume-run ${ask.runId}${tenantFlag}`);
+  console.error(`[vessel] resume: vessel --resume-run ${ask.runId}`);
   console.error(`[vessel] interaction records: ${dir}`);
 }
 
@@ -228,7 +224,7 @@ export async function runHeadless(
           );
           return 1;
         }
-        printSuspendedAsk(suspendedAsk, options.askChannel.dir, options.askChannel.tenantId);
+        printSuspendedAsk(suspendedAsk, options.askChannel.dir);
         return HEADLESS_ASK_SUSPENDED_EXIT_CODE;
       }
     }

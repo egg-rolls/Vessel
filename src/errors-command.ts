@@ -12,7 +12,7 @@ import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { readTraceEvents, type TenantPaths } from '../packages/core/src/index';
 import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTargetOptions, resolveControlPlaneTarget } from './control-plane-target';
-import { resolveDataDir, resolveReadonlyTenantPaths } from './data-paths';
+import { resolveDataDir, resolveEffectiveTenantId, resolveReadonlyTenantPaths } from './data-paths';
 import { t } from './i18n';
 import { RpcClientError } from './rpc';
 import { ui } from './ui-style';
@@ -172,6 +172,8 @@ export async function errorsCommand(options: ErrorsCommandOptions = {}): Promise
     };
   }
   const dataDir = options.dataDir ?? resolveDataDir(config, env);
+  // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
+  tenantId = resolveEffectiveTenantId(tenantId, dataDir);
   const types = errorTypes(config);
 
   const explicitConnect =
