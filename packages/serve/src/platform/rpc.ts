@@ -10,6 +10,7 @@
 import { RPC_VERSION, type RpcRequest } from '../rpc.js';
 import type { PlatformAuthResult } from './auth.js';
 import { PlatformNodeNotFoundError, type PlatformRegistry } from './registry.js';
+import type { PlatformNodeCredential } from './types.js';
 
 /** 平台只读方法 allowlist（契约 §2.3 冻结）。 */
 export type PlatformRpcMethod =
@@ -39,8 +40,8 @@ export type PlatformRpcErrorCode =
 export interface PlatformRpcContext {
   auth: PlatformAuthResult;
   registry: PlatformRegistry;
-  /** 组合根注入 = `resolveGatewayToken(config, env)`；只读取/透传。 */
-  resolveNodeCredential: () => string | undefined;
+  /** 组合根注入：按 node_id 读取该 node 生效凭据；只读取/透传。 */
+  resolveNodeCredential: (nodeId?: string) => PlatformNodeCredential;
   /** 平台版本（`gateway.health.get` / `/health` 共用）。 */
   version: string;
 }
@@ -162,9 +163,27 @@ export async function handlePlatformRpc(
           extra,
         );
       }
-      let token: string | undefined;
+      const params = paramsRecord(request.params);
+      if (params === null) {
+        return failure(id, 'invalid_params', 'params must be an object', 400, extra);
+      }
+      const requestedNodeId = params.node_id;
+      if (requestedNodeId !== undefined && typeof requestedNodeId !== 'string') {
+        return failure(id, 'invalid_params', 'node_id must be a string', 400, extra);
+      }
+      // 省略 node_id：恰好一个节点 → 该节点（G1 兼容）；多节点 → 必须指定。
+      if (requestedNodeId === undefined && ctx.registry.count() !== 1) {
+        return failure(
+          id,
+          'invalid_params',
+          'node_id is required when more than one node is registered',
+          400,
+          extra,
+        );
+      }
+      let resolved: PlatformNodeCredential;
       try {
-        token = ctx.resolveNodeCredential();
+        resolved = ctx.resolveNodeCredential(requestedNodeId);
       } catch {
         // 不回显底层错误（可能含配置细节）；不缓存、不落盘。
         return failure(
@@ -175,6 +194,10 @@ export async function handlePlatformRpc(
           extra,
         );
       }
+      if (!resolved.found) {
+        return failure(id, 'node_not_found', 'Node not found', 404, extra);
+      }
+      const token = resolved.token;
       const result =
         typeof token === 'string' && token !== ''
           ? { token, mode: 'token' as const }

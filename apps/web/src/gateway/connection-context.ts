@@ -1,6 +1,7 @@
 import { createContext } from 'react';
 import type { EventStore } from '../state/event-store';
 import type { ConnectionState, GatewayClient } from './node';
+import type { NodeSelectionFallback } from './node-selection';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -8,6 +9,7 @@ import type {
   PermissionRequest,
   PermissionScope,
 } from './types';
+import type { PlatformNodeSummary } from './types/platform';
 
 /** 连接模式：pending = 平台探测中；legacy = 页面由旧 `--serve` 宿主提供。 */
 export type ConnectionMode = 'pending' | 'platform' | 'legacy';
@@ -44,6 +46,14 @@ export interface ConnectionContextValue {
   /** 当前 node token；空串 + anonymous = node 回环匿名。 */
   nodeToken: string;
   mode: ConnectionMode;
+  /** 平台模式节点来源：`platform.nodes.list` 全量投影；legacy 模式为空。 */
+  platformNodes: readonly PlatformNodeSummary[];
+  /** 平台模式当前已连接节点的 `node_id`。 */
+  selectedNodeId: string | null;
+  /** 持久化节点失效时的可见回退状态；`fallback: null` = 未回退。 */
+  nodeSelection: { preferredNodeId: string | null; fallback: NodeSelectionFallback | null };
+  /** 平台模式显式切换节点：按 `node_id` 重新取 credentials 并直连。 */
+  selectPlatformNode: (nodeId: string) => void;
   /** 平台探测 / 凭据错误；401 时 UI 必须提示输入平台 token。 */
   platformError: string | null;
   /** 是否具备连接 node 的条件（有 token，或 credentials 明确 mode:'none'）。 */

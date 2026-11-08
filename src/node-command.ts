@@ -12,11 +12,13 @@
  * @module vessel/node-command
  */
 
+import * as path from 'node:path';
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import type { NodeCommand } from './cli-args';
 import type { ControlPlaneTarget } from './control-plane-target';
-import { resolveDataDir } from './data-paths';
+import { expandHome, resolveDataDir } from './data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
+import { readSpawnedChildren } from './gateway/node-supervisor';
 import {
   cleanupGatewayStateEntry,
   collectGatewayState,
@@ -59,9 +61,19 @@ interface ResolvedNodeContext {
   platform: NodeJS.Platform;
 }
 
-async function resolveNodeContext(deps: NodeCommandDeps): Promise<ResolvedNodeContext> {
+async function resolveNodeContext(
+  deps: NodeCommandDeps,
+  configPath?: string,
+): Promise<ResolvedNodeContext> {
   const env = deps.env ?? process.env;
-  const config = deps.config ?? (await loadConfig({ env })).config;
+  const config =
+    deps.config ??
+    (
+      await loadConfig({
+        env,
+        ...(configPath !== undefined ? { configPath } : {}),
+      })
+    ).config;
   return {
     config,
     dataDir: deps.dataDir ?? resolveDataDir(config, env),
@@ -98,8 +110,13 @@ function fakeRecord(listen: NodeListenInfo): GatewayPidRecord {
 }
 
 /** `node start --daemon`：分离子进程并等待 PID 文件（仅在两个监听就绪后写）。 */
-async function startNodeDaemonCommand(deps: NodeCommandDeps): Promise<number> {
-  const context = await resolveNodeContext(deps);
+async function startNodeDaemonCommand(
+  command: Extract<NodeCommand, { kind: 'start' }>,
+  deps: NodeCommandDeps,
+): Promise<number> {
+  const configPath =
+    command.configPath !== undefined ? path.resolve(expandHome(command.configPath)) : undefined;
+  const context = await resolveNodeContext(deps, configPath);
   const print = deps.print ?? console.log;
   const printErr = deps.printErr ?? console.error;
   // 0.49 G1（1 裁定）：父进程在 spawn 前拒绝 0 端口，避免 daemon 只留日志。
@@ -115,6 +132,7 @@ async function startNodeDaemonCommand(deps: NodeCommandDeps): Promise<number> {
     instance,
     logPath,
     command: 'node',
+    ...(configPath !== undefined ? { configPath } : {}),
   });
 
   if (result.ok) {
@@ -202,6 +220,42 @@ async function nodeStatusCommand(
   return 1;
 }
 
+function sameDataDir(a: string, b: string): boolean {
+  return path.relative(path.resolve(a), path.resolve(b)) === '';
+}
+
+/**
+ * G3b：平台进程 spawn 的本地 node 记录在 `<gatewayDataDir>/platform-children[-<instance>].json`
+ * 里。隐式节点的 dataDir == gatewayDataDir，所以 `node stop` 能读到 manifest 并
+ * 拒绝越过 `gateway stop` 直接杀子进程。
+ *
+ * 已知限制：显式 registry 节点的 dataDir 与 gatewayDataDir 不同，`node stop`
+ * 看不到 manifest；这类节点同样用 `vessel gateway stop` 停止，不新增 marker 文件。
+ */
+async function isManagedByPlatform(
+  dataDir: string,
+  record: GatewayPidRecord,
+  token: string | undefined,
+): Promise<boolean> {
+  const snapshot = await collectGatewayState(dataDir, {
+    kind: 'platform',
+    ...(token !== undefined ? { token } : {}),
+  });
+  for (const entry of snapshot.entries) {
+    if (entry.state !== 'running' && entry.state !== 'degraded' && entry.state !== 'starting') {
+      continue;
+    }
+    const children = await readSpawnedChildren(dataDir, entry.instance);
+    for (const child of children) {
+      // node_id / pid / data_dir 任一匹配即认定由该平台实例监督。
+      if (record.node_id !== undefined && child.node_id === record.node_id) return true;
+      if (child.pid === record.pid) return true;
+      if (sameDataDir(child.data_dir, dataDir)) return true;
+    }
+  }
+  return false;
+}
+
 /** `node stop`：gateway 托管 → 稳定非 0 并提示 `gateway stop`，不杀进程。 */
 async function nodeStopCommand(deps: NodeCommandDeps): Promise<number> {
   const context = await resolveNodeContext(deps);
@@ -223,9 +277,14 @@ async function nodeStopCommand(deps: NodeCommandDeps): Promise<number> {
     return 1;
   }
 
-  // 确定性判定：记录指向 platform 监听 → 该进程由 gateway 托管。
+  // 确定性判定 1（G1 legacy）：记录指向 platform 监听 → 该进程由 gateway 托管。
   const health = await probeHttpHealth(record);
   if (health?.role === 'platform') {
+    printErr(ui.err(t('node.managedByGateway')));
+    return 1;
+  }
+  // 确定性判定 2（G3b）：平台进程的 children manifest 含该 node → 由 gateway 托管。
+  if (await isManagedByPlatform(context.dataDir, record, token)) {
     printErr(ui.err(t('node.managedByGateway')));
     return 1;
   }
@@ -328,7 +387,7 @@ export async function runNodeCommand(
 ): Promise<number> {
   switch (command.kind) {
     case 'start':
-      return startNodeDaemonCommand(deps);
+      return startNodeDaemonCommand(command, deps);
     case 'status':
       return nodeStatusCommand(command, deps);
     case 'stop':

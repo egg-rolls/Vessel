@@ -114,8 +114,14 @@ export class PlatformClient {
     return Array.isArray(result?.nodes) ? result.nodes : [];
   }
 
-  credentials(): Promise<PlatformNodeCredentials> {
-    return this.rpc<PlatformNodeCredentials>('platform.nodes.credentials');
+  /**
+   * `{node_id?}`：多节点时必须带选中节点；单节点时省略以保持 G1 兼容
+   * （契约 §5：省略且多节点 → `invalid_params`）。
+   */
+  credentials(nodeId?: string): Promise<PlatformNodeCredentials> {
+    return nodeId === undefined
+      ? this.rpc<PlatformNodeCredentials>('platform.nodes.credentials')
+      : this.rpc<PlatformNodeCredentials>('platform.nodes.credentials', { node_id: nodeId });
   }
 }
 

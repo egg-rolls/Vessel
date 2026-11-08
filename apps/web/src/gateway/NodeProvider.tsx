@@ -39,10 +39,13 @@ import {
 } from './nodes';
 import { createRemoteTeamControl, type TeamControl } from './team-control';
 import type { HealthResponse, TeamSummary } from './types';
+import type { PlatformNodeStatus } from './types/platform';
 
 export interface NodeView extends NodeConfig {
   /** 是否为当前 WS 连接节点（只有它能在本页跳转会话）。 */
   current: boolean;
+  /** 平台模式：`platform.nodes.list` 的健康投影；legacy 手填节点没有该字段。 */
+  status?: PlatformNodeStatus;
 }
 
 /** addNode 只回报结果，不回传 token。 */
@@ -79,7 +82,17 @@ function pageProtocol(): string {
 const NODE_HEALTH_POLL_MS = 15_000;
 
 export function NodeProvider({ children }: { children: ReactNode }) {
-  const { client, nodeToken: token, nodeUrl, hello, hasToken, epoch } = useConnection();
+  const {
+    client,
+    nodeToken: token,
+    nodeUrl,
+    hello,
+    hasToken,
+    epoch,
+    mode,
+    platformNodes,
+    selectedNodeId,
+  } = useConnection();
   const tokenRef = useRef(token);
   tokenRef.current = token;
 
@@ -88,14 +101,32 @@ export function NodeProvider({ children }: { children: ReactNode }) {
   const current = useNodeStore((state) => state.current);
   const loadHealth = useNodeStore((state) => state.loadHealth);
 
-  // Persisted extras are read once; connection identity is mirrored on change.
-  useEffect(() => {
-    useNodeStore.getState().setExtras(readStoredNodes());
-  }, []);
+  // 平台模式：registry 是唯一节点来源；legacy 模式才读 sessionStorage 手填节点。
+  const platformViews = useMemo<NodeView[]>(
+    () =>
+      platformNodes.map((node) => ({
+        name: node.name,
+        url: node.api_url,
+        nodeId: node.node_id,
+        current: node.node_id === selectedNodeId,
+        status: node.status,
+      })),
+    [platformNodes, selectedNodeId],
+  );
 
   useEffect(() => {
+    if (mode === 'legacy') useNodeStore.getState().setExtras(readStoredNodes());
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== 'platform') return;
+    useNodeStore.getState().setPlatformNodes(platformViews);
+  }, [mode, platformViews]);
+
+  useEffect(() => {
+    if (mode === 'platform') return;
     useNodeStore.getState().setConnection({ hasToken, hello, nodeUrl });
-  }, [hasToken, hello, nodeUrl]);
+  }, [mode, hasToken, hello, nodeUrl]);
 
   /** 当前节点用实时连接 token；额外节点读各自的 sessionStorage key（node_id 优先）。 */
   const tokenFor = useCallback((node: NodeConfig): string | undefined => {
@@ -108,24 +139,31 @@ export function NodeProvider({ children }: { children: ReactNode }) {
     [tokenFor],
   );
 
-  const nodeKeys = nodes.map((node) => node.nodeId ?? node.name).join(',');
+  // 平台模式 Nodes 页只在当前节点上做 health.get；其它节点的健康来自
+  // `platform.nodes.list` 的 status（避免 N 个后台探测）。跨节点数据面
+  // （roster / teams / attention）按 node_id 从 sessionStorage 取各自 token。
+  const polledNodes = mode === 'platform' ? (current ? [current] : []) : nodes;
+  const nodeKeys = polledNodes.map((node) => node.nodeId ?? node.name).join(',');
   usePolledAction(
     () => {
-      if (nodes.length > 0) void loadHealth(nodes, fetchHealth);
+      if (polledNodes.length > 0) void loadHealth(polledNodes, fetchHealth);
     },
     {
-      enabled: nodes.length > 0,
+      enabled: polledNodes.length > 0,
       pollMs: NODE_HEALTH_POLL_MS,
-      deps: [epoch, hasToken, nodeKeys],
+      deps: [epoch, hasToken, nodeKeys, mode, selectedNodeId],
     },
   );
 
   const refresh = useCallback(() => {
+    if (mode === 'platform') return;
     useNodeStore.getState().setExtras(readStoredNodes());
-  }, []);
+  }, [mode]);
 
   const addNode = useCallback(
     (draft: NodeDraft): NodeAddResult => {
+      // 平台模式节点只由 Gateway registry 提供，不合并手填节点。
+      if (mode === 'platform') return { ok: false };
       const check: NodeDraftCheck = validateNodeDraft(draft, nodes, pageProtocol());
       if (!check.ok || !check.value) {
         return { ok: false, ...(check.error ? { error: check.error } : {}) };
@@ -137,16 +175,20 @@ export function NodeProvider({ children }: { children: ReactNode }) {
       useNodeStore.getState().addExtra(config);
       return { ok: true };
     },
-    [nodes],
+    [mode, nodes],
   );
 
-  const removeNode = useCallback((name: string) => {
-    const target = readStoredNodes().find((node) => node.name === name);
-    removeNodeToken(target ? nodeTokenIdentity(target) : name);
-    const next = readStoredNodes().filter((node) => node.name !== name);
-    writeStoredNodes(next);
-    useNodeStore.getState().removeExtra(name);
-  }, []);
+  const removeNode = useCallback(
+    (name: string) => {
+      if (mode === 'platform') return;
+      const target = readStoredNodes().find((node) => node.name === name);
+      removeNodeToken(target ? nodeTokenIdentity(target) : name);
+      const next = readStoredNodes().filter((node) => node.name !== name);
+      writeStoredNodes(next);
+      useNodeStore.getState().removeExtra(name);
+    },
+    [mode],
+  );
 
   const fetchAttention = useCallback(
     (node: NodeView, params: NodeAttentionParams = {}) =>

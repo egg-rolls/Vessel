@@ -23,9 +23,15 @@ import { createConnectionHandlers } from './connection-handlers';
 import { computeInitialConnection, LEGACY_TOKEN_KEY } from './connection-initial';
 import { SubmitGuard } from './interactions';
 import { type ConnectionState, GatewayClient } from './node';
-import { nodeTokenIdentity, storeNodeToken } from './nodes';
+import {
+  type NodeSelectionFallback,
+  readSelectedNodeId,
+  writeSelectedNodeId,
+} from './node-selection';
+import { nodeTokenIdentity, removeNodeToken, storeNodeToken } from './nodes';
 import { PlatformClient, type PlatformRpcError } from './platform';
 import type { HelloInfo } from './types';
+import type { PlatformNodeSummary } from './types/platform';
 import { checkGatewayUrl } from './url';
 import { useConnectionControls } from './use-connection-controls';
 import { useInteractionHydration } from './use-interaction-hydration';
@@ -81,6 +87,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [nodeIdentity, setNodeIdentity] = useState<NodeIdentity | null>(null);
   const [mode, setMode] = useState<ConnectionMode>('pending');
   const [bootstrapSeq, setBootstrapSeq] = useState(0);
+  // 平台节点来源与选择（G3c）：nodes.list 是唯一来源，选中值就是 node_id。
+  const [platformNodes, setPlatformNodes] = useState<PlatformNodeSummary[]>([]);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [nodeSelection, setNodeSelection] = useState<{
+    preferredNodeId: string | null;
+    fallback: NodeSelectionFallback | null;
+  }>({ preferredNodeId: null, fallback: null });
+  const [selectionSeq, setSelectionSeq] = useState(0);
 
   // 进程内常量：初始化后不再切换模式（切模式需要刷新页面）。
   const { devProxyAuth } = initialConnection;
@@ -111,6 +125,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const legacyTokenRef = useRef(initialConnection.legacyNodeToken);
   /** 用户手填的 node token；平台 bootstrap 时优先于 credentials。 */
   const manualNodeTokenRef = useRef('');
+  /** 平台模式期望 node_id：刷新恢复（要求 up）或用户显式切换（不要求 up）。 */
+  const preferredNodeIdRef = useRef<string | null>(readSelectedNodeId());
+  const requirePreferredUpRef = useRef(true);
+  /** 上一次 registry 的 node_id 集合：用于清理已消失节点的 token 槽。 */
+  const platformNodeIdsRef = useRef<Set<string>>(new Set());
 
   const client = useMemo(() => new GatewayClient(nodeUrl ?? ''), [nodeUrl]);
   const tenantIdRef = useRef<string | null>(null);
@@ -125,10 +144,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
    * `/platform/rpc` 不存在（legacy `--serve` 页面）时回退同源 node 连接；
    * 401 等鉴权错误不静默回退，必须让用户输入平台 token。
    */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrapSeq 是显式重新引导触发器
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrapSeq / selectionSeq 是显式重新引导触发器
   useEffect(() => {
     if (urlInvalid) {
       setMode('platform');
+      setPlatformNodes([]);
+      setSelectedNodeId(null);
       setConnectionState('error');
       return;
     }
@@ -136,6 +157,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     // 直接走同源 node + 占位 token 的旧流程。
     if (initialConnection.devProxyAuth) {
       setMode('legacy');
+      setPlatformNodes([]);
+      setSelectedNodeId(null);
       setNodeIdentity(null);
       setNodeUrl(platformUrl);
       setNodeToken(legacyTokenRef.current);
@@ -147,7 +170,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setConnectionState('connecting');
     setPlatformError(null);
     const platformClient = new PlatformClient(platformUrl, platformToken);
-    void bootstrapPlatform(platformClient, manualNodeTokenRef.current)
+    void bootstrapPlatform(platformClient, {
+      preferredNodeId: preferredNodeIdRef.current,
+      requirePreferredUp: requirePreferredUpRef.current,
+      manualNodeToken: manualNodeTokenRef.current,
+    })
       .then((result) => {
         if (cancelled) return;
         if (result.kind === 'legacy') {
@@ -159,6 +186,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
             legacyTokenRef.current = explicit;
           }
           setMode('legacy');
+          setPlatformNodes([]);
+          setSelectedNodeId(null);
           setNodeIdentity(null);
           setNodeUrl(platformUrl);
           setNodeToken(legacyToken);
@@ -168,6 +197,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         }
         if (result.kind === 'error') {
           setMode('platform');
+          setPlatformNodes([]);
+          setSelectedNodeId(null);
           setNodeUrl(null);
           setPlatformError(platformErrorMessage(result.error));
           setConnectionState('error');
@@ -179,13 +210,42 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           nodeId: connection.node.node_id,
           name: connection.node.name,
         };
-        if (connection.nodeToken !== '') {
-          storeNodeToken(
-            nodeTokenIdentity({ name: connection.node.name, nodeId: connection.node.node_id }),
-            connection.nodeToken,
-          );
+        // 每个节点按 node_id 分槽写 sessionStorage；选中节点写“生效 token”
+        // （可能来自手填覆盖），其它节点写各自 credentials 结果。
+        // token 不落 localStorage / URL / 日志。生效 token 为空（mode:'none' /
+        // 该节点凭据失败 / 手填被清空）时必须移除旧槽，避免 tokenFor /
+        // hasTokenFor 继续使用过期凭据。
+        const nameById = new Map(connection.nodes.map((item) => [item.node_id, item.name]));
+        const currentIds = new Set(connection.nodes.map((item) => item.node_id));
+        for (const credential of connection.nodeCredentials) {
+          const identity = nodeTokenIdentity({
+            name: nameById.get(credential.node_id) ?? credential.node_id,
+            nodeId: credential.node_id,
+          });
+          const effectiveToken =
+            credential.node_id === connection.node.node_id
+              ? connection.nodeToken
+              : credential.token;
+          if (effectiveToken === '') {
+            removeNodeToken(identity);
+            continue;
+          }
+          storeNodeToken(identity, effectiveToken);
         }
+        // registry 中已消失的节点：清掉本页此前见过的 registry 节点的 token 槽。
+        for (const previous of platformNodeIdsRef.current) {
+          if (currentIds.has(previous)) continue;
+          removeNodeToken(nodeTokenIdentity({ name: previous, nodeId: previous }));
+        }
+        platformNodeIdsRef.current = currentIds;
+        // 选中值落 sessionStorage（key = node_id），刷新后按它恢复。
+        preferredNodeIdRef.current = connection.node.node_id;
+        requirePreferredUpRef.current = true;
+        writeSelectedNodeId(connection.node.node_id);
         setMode('platform');
+        setPlatformNodes(connection.nodes);
+        setSelectedNodeId(connection.node.node_id);
+        setNodeSelection(connection.selection);
         setNodeIdentity(identity);
         setNodeUrl(normalizeNodeOrigin(connection.node.api_url));
         setNodeToken(connection.nodeToken);
@@ -199,6 +259,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       .catch((error: unknown) => {
         if (cancelled) return;
         setMode('platform');
+        setPlatformNodes([]);
+        setSelectedNodeId(null);
         setNodeUrl(null);
         setPlatformError(error instanceof Error ? error.message : String(error));
         setConnectionState('error');
@@ -206,7 +268,21 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [platformUrl, platformToken, bootstrapSeq, urlInvalid]);
+  }, [platformUrl, platformToken, bootstrapSeq, urlInvalid, selectionSeq]);
+
+  /**
+   * 平台模式显式切换节点：持久化 node_id → 重新走 list/credentials → 直连。
+   * URL / token / 健康随同一次 bootstrap 结果切换；不回退到旧节点。
+   */
+  const selectPlatformNode = useCallback((nodeId: string) => {
+    const trimmed = nodeId.trim();
+    if (trimmed === '') return;
+    // 用户手填 token 只属于旧选择；切换后按新节点的 credentials 取凭据。
+    manualNodeTokenRef.current = '';
+    preferredNodeIdRef.current = trimmed;
+    requirePreferredUpRef.current = false;
+    setSelectionSeq((value) => value + 1);
+  }, []);
 
   const recordSettled = useCallback((requestId: string) => {
     if (!requestId) return;
@@ -371,6 +447,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       platformToken,
       nodeToken,
       mode,
+      platformNodes,
+      selectedNodeId,
+      nodeSelection,
+      selectPlatformNode,
       platformError,
       hasToken,
       devProxyAuth,
@@ -406,6 +486,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       platformToken,
       nodeToken,
       mode,
+      platformNodes,
+      selectedNodeId,
+      nodeSelection,
+      selectPlatformNode,
       platformError,
       hasToken,
       gatewayError,

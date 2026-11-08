@@ -30,6 +30,8 @@ interface NodeStoreState {
   /** Bridge from ConnectionProvider: current node identity / token availability. */
   setConnection: (input: { hasToken: boolean; hello: HelloInfo | null; nodeUrl: string }) => void;
   setExtras: (extras: readonly NodeConfig[]) => void;
+  /** 平台模式：`platform.nodes.list` 是唯一节点来源，替换 extras / current。 */
+  setPlatformNodes: (nodes: readonly NodeView[]) => void;
   addExtra: (config: NodeConfig) => void;
   removeExtra: (name: string) => void;
   select: (nodeKey: string | null) => void;
@@ -87,6 +89,15 @@ export const useNodeStore = create<NodeStoreState>()((set, get) => ({
     set({
       extras: views,
       nodes: current ? [current, ...views] : [...views],
+    });
+  },
+
+  setPlatformNodes: (nodes) => {
+    const views = nodes.map((node) => ({ ...node }));
+    set({
+      extras: [],
+      nodes: views,
+      current: views.find((node) => node.current) ?? null,
     });
   },
 

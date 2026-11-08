@@ -19,6 +19,7 @@ import {
   classifyGatewayRecord,
   DEFAULT_GATEWAY_INSTANCE,
   deleteRecordIfOwned,
+  type GatewayStateKind,
   isBeforeBoot,
   normalizeGatewayInstance,
   isProcessAlive as pidIsAlive,
@@ -58,6 +59,8 @@ export class GatewayInstanceLockedError extends Error {
 export interface AcquireGatewayInstanceLockOptions {
   dataDir: string;
   instance?: string;
+  /** 0.49 G3b：缺省 node（`gateway-<instance>.lock`）；platform 读 `platform-<instance>.lock`。 */
+  kind?: GatewayStateKind;
   now?: () => number;
   hostname?: string;
   pid?: number;
@@ -77,9 +80,14 @@ export interface GatewayInstanceLock {
 }
 
 /** 锁文件路径 */
-export function gatewayInstanceLockPath(dataDir: string, instance?: string): string {
+export function gatewayInstanceLockPath(
+  dataDir: string,
+  instance?: string,
+  kind?: GatewayStateKind,
+): string {
   const name = normalizeGatewayInstance(instance);
-  return path.join(dataDir, `gateway-${name}.lock`);
+  const prefix = kind === 'platform' ? 'platform' : 'gateway';
+  return path.join(dataDir, `${prefix}-${name}.lock`);
 }
 
 function isLockInfo(value: unknown): value is GatewayInstanceLockInfo {
@@ -117,13 +125,14 @@ async function lockIsStale(
   instance: string,
   info: GatewayInstanceLockInfo,
   alive: (pid: number) => boolean,
+  kind?: GatewayStateKind,
 ): Promise<boolean> {
   if (isBeforeBoot(info.started_at)) return true;
   if (!alive(info.pid)) return true;
   // 本进程遗留的旧锁（同 pid 不同 started_at）可直接回收。
   if (info.pid === process.pid) return true;
 
-  const record = await readGatewayPidRecord(dataDir, instance);
+  const record = await readGatewayPidRecord(dataDir, instance, kind);
   if (record === null) return false;
   if (record.pid !== info.pid) return false;
   const classification = await classifyGatewayRecord(record);
@@ -138,12 +147,13 @@ export async function acquireGatewayInstanceLock(
 ): Promise<GatewayInstanceLock> {
   const instance = normalizeGatewayInstance(options.instance);
   const dataDir = options.dataDir;
+  const kind = options.kind;
   const now = options.now ?? Date.now;
   const pid = options.pid ?? process.pid;
   const host = options.hostname ?? os.hostname();
   const alive = options.isPidAlive ?? pidIsAlive;
   const graceMs = options.unparseableGraceMs ?? UNPARSEABLE_GRACE_MS;
-  const filePath = gatewayInstanceLockPath(dataDir, instance);
+  const filePath = gatewayInstanceLockPath(dataDir, instance, kind);
   const startedAt = now();
   const body = `${JSON.stringify({ pid, started_at: startedAt, host }, null, 2)}\n`;
 
@@ -218,7 +228,7 @@ export async function acquireGatewayInstanceLock(
       // E6：foreign-host 永不回收。
       throw new GatewayInstanceLockedError(instance, info);
     }
-    if (!(await lockIsStale(dataDir, instance, info, alive))) {
+    if (!(await lockIsStale(dataDir, instance, info, alive, kind))) {
       throw new GatewayInstanceLockedError(instance, info);
     }
     const deleted = await deleteRecordIfOwned(

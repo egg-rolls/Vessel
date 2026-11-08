@@ -17,6 +17,7 @@ import { nodeKeyOf } from '../../gateway/nodes';
 import { t, useLocale } from '../../i18n';
 import { nodeHealthEntry, useNodeStore } from '../../stores/nodeStore';
 import { teamsForNodeHash } from '../teams/team-url';
+import { nodeStatusKind, nodeStatusLabel } from './node-status';
 import { useNodeNames } from './useNodeNames';
 
 export function NodeDetailView({
@@ -27,7 +28,8 @@ export function NodeDetailView({
   navigate: (route: Route) => void;
 }) {
   useLocale();
-  const { hello } = useConnection();
+  const { hello, mode, selectPlatformNode } = useConnection();
+  const platformMode = mode === 'platform';
   const { nodes, fetchHealth } = useNodes();
   const node = nodes.find((item) => nodeKeyOf(item) === nodeKey);
   const health = useNodeStore((state) => state.health);
@@ -61,22 +63,22 @@ export function NodeDetailView({
   }
 
   const displayName = displayNames.get(nodeKey) ?? '—';
-  const status = healthData ? 'connected' : healthError ? 'unreachable' : 'pending';
-  const statusLabel = healthData
-    ? t('nodes.health.ok')
-    : healthError
-      ? t('nodes.health.error')
-      : t('nodes.health.loading');
+  const status = nodeStatusKind(entry, node);
+  const statusLabel = nodeStatusLabel(entry, node);
   const dataPlane = healthData
     ? t('nodes.dataPlane.direct')
     : healthError
       ? t('nodes.dataPlane.unreachable')
-      : t('nodes.health.loading');
+      : node.status !== undefined
+        ? statusLabel
+        : t('nodes.health.loading');
   const heartbeat = healthData
     ? formatTimestamp(entry?.updatedAt) || '—'
     : healthError
       ? t('nodes.health.error')
-      : t('nodes.health.loading');
+      : node.status !== undefined
+        ? statusLabel
+        : t('nodes.health.loading');
   const reloadHealth = () => {
     if (node) void useNodeStore.getState().loadHealth([node], fetchHealth);
   };
@@ -91,6 +93,16 @@ export function NodeDetailView({
         status={<StatusChip status={status} label={statusLabel} />}
       />
       <TableToolbar label={t('nodes.detailActions')} className="mt-3">
+        {platformMode && !node.current && (
+          <Button
+            variant="primary"
+            onClick={() => {
+              if (node.nodeId) selectPlatformNode(node.nodeId);
+            }}
+          >
+            {t('nodes.select')}
+          </Button>
+        )}
         <Button
           onClick={() => {
             window.location.hash = teamsForNodeHash(nodeKey);

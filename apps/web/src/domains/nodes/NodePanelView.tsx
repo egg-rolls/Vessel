@@ -25,6 +25,7 @@ import { usePolledAction } from '../../stores/usePolledAction';
 import { AddNodeDialog } from './AddNodeDialog';
 import { matchesNodeQuery } from './display-names';
 import { NodeDetailView } from './NodeDetailView';
+import { nodeStatusKind, nodeStatusLabel } from './node-status';
 import { useNodeNames } from './useNodeNames';
 
 type NodesRoute = Extract<Route, { domain: 'nodes' }>;
@@ -60,6 +61,8 @@ function NodesList({
 }) {
   useLocale();
   const { removeNode } = useNodes();
+  const { mode, nodeSelection, selectPlatformNode } = useConnection();
+  const platformMode = mode === 'platform';
   const health = useNodeStore((state) => state.health);
   const [query, setQuery] = useState('');
   const [addOpen, setAddOpen] = useState(false);
@@ -72,13 +75,15 @@ function NodesList({
     nodes.length > 0 &&
     nodes.every((node) => {
       const entry = nodeHealthEntry(health, node);
-      return entry?.health !== undefined || entry?.error !== undefined;
+      // 平台节点可能只有 `nodes.list.status`（非当前节点不做 health.get 探测）。
+      return entry?.health !== undefined || entry?.error !== undefined || node.status !== undefined;
     });
   const entryByKey = useMemo(
     () => new Map(entries.map((entry) => [nodeKeyOf(entry.node), entry])),
     [entries],
   );
   const displayNames = useNodeNames();
+  const currentNode = nodes.find((node) => node.current);
 
   const visible = useMemo(
     () =>
@@ -93,7 +98,9 @@ function NodesList({
 
   let body: ReactNode;
   if (nodes.length === 0) {
-    body = (
+    body = platformMode ? (
+      <EmptyState title={t('nodes.platform.empty')} />
+    ) : (
       <EmptyState
         title={t('nodes.empty')}
         action={
@@ -129,8 +136,17 @@ function NodesList({
             node={node}
             displayName={displayNames.get(nodeKeyOf(node)) ?? '—'}
             entry={entryByKey.get(nodeKeyOf(node))}
+            platformMode={platformMode}
             onOpen={() => openNode(node)}
-            {...(node.current ? {} : { onRemove: () => setRemoveTarget(node) })}
+            {...(node.current
+              ? {}
+              : platformMode
+                ? {
+                    onSelect: () => {
+                      if (node.nodeId) selectPlatformNode(node.nodeId);
+                    },
+                  }
+                : { onRemove: () => setRemoveTarget(node) })}
           />
         ))}
       </ul>
@@ -140,6 +156,13 @@ function NodesList({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
       <PageScaffold title={t('nodes.title')} subtitle={t('nodes.subtitle')}>
+        {platformMode && nodeSelection.fallback !== null && currentNode && (
+          <p className="mb-3 text-sm text-warn" role="status">
+            {t(`nodes.selection.fallback.${nodeSelection.fallback}`, {
+              node: displayNames.get(nodeKeyOf(currentNode)) ?? currentNode.name,
+            })}
+          </p>
+        )}
         {nodes.length > 0 && (
           <TableToolbar label={t('nodes.search')}>
             <SearchInput
@@ -149,9 +172,11 @@ function NodesList({
               ariaLabel={t('nodes.search')}
               className="grow basis-60 max-w-search"
             />
-            <Button variant="primary" className="ml-auto" onClick={() => setAddOpen(true)}>
-              {t('hub.add.title')}
-            </Button>
+            {!platformMode && (
+              <Button variant="primary" className="ml-auto" onClick={() => setAddOpen(true)}>
+                {t('hub.add.title')}
+              </Button>
+            )}
           </TableToolbar>
         )}
         {body}
@@ -180,14 +205,18 @@ function NodeRow({
   node,
   displayName,
   entry,
+  platformMode,
   onOpen,
   onRemove,
+  onSelect,
 }: {
   node: NodeView;
   displayName: string;
   entry: NodeHealthEntry | undefined;
+  platformMode: boolean;
   onOpen: () => void;
   onRemove?: () => void;
+  onSelect?: () => void;
 }) {
   useLocale();
   const { epoch } = useConnection();
@@ -195,11 +224,17 @@ function NodeRow({
   const key = nodeKeyOf(node);
   const listState = useTeamListState(node);
   const loadList = useTeamStore((state) => state.loadList);
+  // Nodes 列表只为当前节点轮询 teams.list；其它节点的健康/状态由 nodes.list
+  // 提供，跨节点页面按需用各自 token 拉取，避免 N 个后台轮询。
   usePolledAction(
     () => {
       void loadList(node, teamControl(node));
     },
-    { enabled: true, pollMs: NODE_TEAMS_POLL_MS, deps: [epoch, key] },
+    {
+      enabled: !platformMode || node.current,
+      pollMs: NODE_TEAMS_POLL_MS,
+      deps: [epoch, key],
+    },
   );
   const teams = teamListData(listState)?.teams;
   const summary = teams
@@ -210,19 +245,15 @@ function NodeRow({
       }
     : null;
 
-  const status = entry?.health ? 'connected' : entry?.error ? 'unreachable' : 'pending';
-  const statusLabelValue = entry?.health
-    ? t('nodes.health.ok')
-    : entry?.error
-      ? t('nodes.health.error')
-      : t('nodes.health.loading');
+  const status = nodeStatusKind(entry, node);
+  const statusLabelValue = nodeStatusLabel(entry, node);
   const heartbeat = entry?.health
     ? t('hub.nodes.heartbeat', {
         time: formatTimestamp(entry.updatedAt) || t('nodes.health.loading'),
       })
     : entry?.error
       ? t('nodes.health.error')
-      : t('nodes.health.loading');
+      : '';
 
   return (
     <li className="min-w-0">
@@ -243,24 +274,35 @@ function NodeRow({
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm tabular-nums text-muted">
           <StatusChip status={status} label={statusLabelValue} />
-          <span>
-            <strong className="font-semibold text-ink">{summary ? summary.teams : '—'}</strong>{' '}
-            {t('nodes.field.teams')}
-          </span>
-          <span>
-            <strong className="font-semibold text-ink">{summary ? summary.agents : '—'}</strong>{' '}
-            {t('nodes.field.agents')}
-          </span>
-          <span>
-            <strong className="font-semibold text-ink">{summary ? summary.online : '—'}</strong>{' '}
-            {t('nodes.field.online')}
-          </span>
+          {(!platformMode || node.current) && (
+            <>
+              <span>
+                <strong className="font-semibold text-ink">{summary ? summary.teams : '—'}</strong>{' '}
+                {t('nodes.field.teams')}
+              </span>
+              <span>
+                <strong className="font-semibold text-ink">{summary ? summary.agents : '—'}</strong>{' '}
+                {t('nodes.field.agents')}
+              </span>
+              <span>
+                <strong className="font-semibold text-ink">{summary ? summary.online : '—'}</strong>{' '}
+                {t('nodes.field.online')}
+              </span>
+            </>
+          )}
         </div>
-        <span className="min-w-0 wrap-anywhere text-xs text-faint">{heartbeat}</span>
+        {heartbeat !== '' && (
+          <span className="min-w-0 wrap-anywhere text-xs text-faint">{heartbeat}</span>
+        )}
       </button>
       {onRemove && (
         <Button size="small" variant="dangerGhost" className="mt-1.5 ml-4" onClick={onRemove}>
           {t('common.remove')}
+        </Button>
+      )}
+      {onSelect && (
+        <Button size="small" className="mt-1.5 ml-4" onClick={onSelect}>
+          {t('nodes.select')}
         </Button>
       )}
     </li>

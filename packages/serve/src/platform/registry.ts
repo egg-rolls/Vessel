@@ -34,6 +34,10 @@ interface ProbeResult {
   version?: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function healthUrl(apiUrl: string): string | null {
   try {
     const base = apiUrl.endsWith('/') ? apiUrl : `${apiUrl}/`;
@@ -57,12 +61,10 @@ async function probeHealth(descriptor: PlatformNodeDescriptor): Promise<ProbeRes
     let version = descriptor.version;
     try {
       const body: unknown = await response.json();
-      if (
-        typeof body === 'object' &&
-        body !== null &&
-        typeof (body as { version?: unknown }).version === 'string'
-      ) {
-        version = (body as { version: string }).version;
+      // CONTRACT §4.5：平台监听也可能落在该端口；带 `role:"platform"` 的不是 node。
+      if (isRecord(body) && body.role === 'platform') return { status: 'down' };
+      if (isRecord(body) && typeof body.version === 'string') {
+        version = body.version;
       }
     } catch {
       // 忽略非 JSON 响应；descriptor.version 作为回退。

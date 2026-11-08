@@ -30,6 +30,12 @@ export interface InspectProcessOptions {
   readCmdline?: (pid: number) => Promise<string | undefined>;
 }
 export const DEFAULT_GATEWAY_INSTANCE = 'default';
+/**
+ * 0.49 G3b（CONTRACT §4.6）：平台进程与 node 进程各自读写独立的状态文件族。
+ * - `node`（缺省，G1 兼容）：`gateway.pid` / `gateway-<instance>.lock`
+ * - `platform`：`platform.pid` / `platform-<instance>.lock`
+ */
+export type GatewayStateKind = 'node' | 'platform';
 const GATEWAY_INSTANCE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export function isValidGatewayInstance(value: string): boolean {
   return value === DEFAULT_GATEWAY_INSTANCE || GATEWAY_INSTANCE_RE.test(value);
@@ -42,12 +48,21 @@ export function normalizeGatewayInstance(instance?: string): string {
   }
   return trimmed;
 }
-export function gatewayPidFileName(instance?: string): string {
+export function gatewayPidFileName(instance?: string, kind?: GatewayStateKind): string {
+  // CONTRACT §4.6（FROZEN r4）：PID 与锁都按实例命名，与
+  // `gatewayPidFileName` / `gatewayInstanceLockPath` 的既有约定一致。
+  // - platform：默认 `platform.pid`，命名 `platform-<instance>.pid`
+  // - node：默认 `gateway.pid`，命名 `gateway-<instance>.pid`
   const name = normalizeGatewayInstance(instance);
-  return name === DEFAULT_GATEWAY_INSTANCE ? 'gateway.pid' : `gateway-${name}.pid`;
+  const prefix = kind === 'platform' ? 'platform' : 'gateway';
+  return name === DEFAULT_GATEWAY_INSTANCE ? `${prefix}.pid` : `${prefix}-${name}.pid`;
 }
-export function gatewayPidPath(dataDir: string, instance?: string): string {
-  return path.join(dataDir, gatewayPidFileName(instance));
+export function gatewayPidPath(
+  dataDir: string,
+  instance?: string,
+  kind?: GatewayStateKind,
+): string {
+  return path.join(dataDir, gatewayPidFileName(instance, kind));
 }
 export const COMMAND_TIMEOUT_MS = 3000;
 export const PROCESS_PROBE_TIMEOUT_MS = 2_000;
@@ -159,9 +174,10 @@ export async function inspectProcess(
 export async function readGatewayPidRecord(
   dataDir: string,
   instance?: string,
+  kind?: GatewayStateKind,
 ): Promise<GatewayPidRecord | null> {
   try {
-    const raw = await readFile(gatewayPidPath(dataDir, instance), 'utf8');
+    const raw = await readFile(gatewayPidPath(dataDir, instance, kind), 'utf8');
     return parseGatewayPid(JSON.parse(raw));
   } catch {
     return null;
@@ -171,12 +187,13 @@ export async function writeGatewayPid(
   dataDir: string,
   record: GatewayPidRecord,
   instance?: string,
+  kind?: GatewayStateKind,
 ): Promise<void> {
   const name = normalizeGatewayInstance(instance ?? record.instance);
-  const filePath = gatewayPidPath(dataDir, name);
+  const filePath = gatewayPidPath(dataDir, name, kind);
   const dir = path.dirname(filePath);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `.${gatewayPidFileName(name)}.${process.pid}.${Date.now()}.tmp`);
+  const tmp = path.join(dir, `.${gatewayPidFileName(name, kind)}.${process.pid}.${Date.now()}.tmp`);
   const base: GatewayPidRecord = {
     pid: record.pid,
     started_at: record.started_at,
@@ -478,6 +495,8 @@ export interface CollectGatewayStateOptions extends ClassifyGatewayRecordOptions
   graceMs?: number;
   startingGraceMs?: number;
   reclaimRetentionMs?: number;
+  /** 0.49 G3b：读哪一族状态文件；缺省 node（G1 兼容）。 */
+  kind?: GatewayStateKind;
   /** 内部探针 seam：health 探测并发度；不持久化、不进配置、不对用户暴露。 */
   concurrency?: number;
 }
@@ -559,18 +578,24 @@ export async function collectGatewayState(
   }
   const pids = new Map<string, string>();
   const locks = new Map<string, string>();
+  // CONTRACT §4.6（FROZEN r4）：PID 与锁都按实例命名。
+  const prefix = options.kind === 'platform' ? 'platform' : 'gateway';
+  const defaultPidName = `${prefix}.pid`;
+  const namedRe = new RegExp(`^${prefix}-(.+)\\.(pid|lock)$`);
   for (const name of names) {
     if (name.startsWith('.') || name.includes('.reclaim-')) continue;
-    if (name === 'gateway.pid') {
-      pids.set('default', path.join(dataDir, name));
+    if (name === defaultPidName) {
+      pids.set(DEFAULT_GATEWAY_INSTANCE, path.join(dataDir, name));
       continue;
     }
-    const match = /^gateway-(.+)\.(pid|lock)$/.exec(name);
+    const match = namedRe.exec(name);
     if (match === null) continue;
     const instance = match[1] ?? '';
     if (!isValidGatewayInstance(instance)) continue;
     if (match[2] === 'lock') locks.set(instance, path.join(dataDir, name));
-    else if (instance !== 'default') pids.set(instance, path.join(dataDir, name));
+    else if (instance !== DEFAULT_GATEWAY_INSTANCE) {
+      pids.set(instance, path.join(dataDir, name));
+    }
   }
   const instances = [...new Set([...pids.keys(), ...locks.keys()])].sort((a, b) =>
     a === 'default' ? -1 : b === 'default' ? 1 : a < b ? -1 : 1,

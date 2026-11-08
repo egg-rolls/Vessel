@@ -16,6 +16,7 @@ import {
   cleanupGatewayStateEntry,
   collectGatewayState,
   type GatewayPidRecord,
+  type GatewayStateKind,
   type GatewayStateSnapshot,
   gatewayPidPath,
   isProcessAlive,
@@ -46,6 +47,13 @@ export interface StartDaemonOptions {
    * PID/实例锁形状，`node` 只启动 Node API 监听。
    */
   command?: 'gateway' | 'node';
+  /** 0.49 G3a：`node start --config <path>` 透传给分离子进程。 */
+  configPath?: string;
+  /**
+   * 0.49 G3b：等待哪一族 PID 文件。缺省按命令推断：`node` → node；
+   * `gateway` → platform（`VESSEL_LEGACY_SERVE=1` 时仍为 node）。
+   */
+  stateKind?: GatewayStateKind;
   platform?: NodeJS.Platform;
   runCommand?: CommandRunner;
   /** 调用方已收集的状态快照；缺省自行 collect。 */
@@ -76,6 +84,28 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * 启动失败/超时时的子进程回滚（0.49 G3b）。平台进程若被硬终止（Windows 无
+ * POSIX 信号），已 spawn 的 node 子进程会留在 runtime manifest 里；由父进程
+ * 复核 manifest 后清理，避免孤儿。动态 import 避免 daemon ↔ supervisor 静态环。
+ */
+async function rollbackSpawnedChildren(
+  dataDir: string,
+  instance: string | undefined,
+  stateKind: GatewayStateKind,
+): Promise<void> {
+  if (stateKind !== 'platform') return;
+  try {
+    const { stopSpawnedChildren } = await import('./node-supervisor');
+    await stopSpawnedChildren({
+      gatewayDataDir: dataDir,
+      ...(instance !== undefined ? { instance } : {}),
+    });
+  } catch {
+    // 回滚尽力而为；不覆盖原始启动失败原因。
+  }
+}
+
 /** 读日志尾部（缺省最后 4KB / 10 行），用于失败提示 */
 export async function tailLog(logPath: string, maxLines = 10): Promise<string> {
   try {
@@ -96,18 +126,23 @@ export function buildDaemonArgv(options: {
   port?: number;
   host?: string;
   command?: 'gateway' | 'node';
+  /** 0.49 G3a：仅 `node start` 接受 `--config`。 */
+  configPath?: string;
 }): string[] {
   return [
     options.execPath,
     options.entryPath,
     options.command ?? 'gateway',
     'start',
-    // `node start` 只支持 `[--daemon]`；实例固定为 default（共享同一 PID/锁）。
+    // `node start` 只支持 `[--daemon] [--config]`；实例固定为 default（共享同一 PID/锁）。
     ...(options.instance !== undefined && (options.command ?? 'gateway') === 'gateway'
       ? ['--instance', options.instance]
       : []),
     ...(options.port !== undefined ? ['--port', String(options.port)] : []),
     ...(options.host !== undefined ? ['--host', options.host] : []),
+    ...(options.configPath !== undefined && (options.command ?? 'gateway') === 'node'
+      ? ['--config', options.configPath]
+      : []),
   ];
 }
 
@@ -116,11 +151,17 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
   const instance = options.instance;
   const normalizedInstance = normalizeGatewayInstance(instance);
   const logPath = options.logPath ?? gatewayLogPath(options.dataDir, instance);
+  const stateKind: GatewayStateKind =
+    options.stateKind ??
+    ((options.command ?? 'gateway') === 'node' || process.env.VESSEL_LEGACY_SERVE === '1'
+      ? 'node'
+      : 'platform');
 
   if (options.checkDuplicate !== false) {
     // 消费统一状态视图：running/degraded/starting 拒绝且不删；stale 条件清理；
     // unknown/foreign-host 拒绝且不删。
-    const state = options.state ?? (await collectGatewayState(options.dataDir));
+    const state =
+      options.state ?? (await collectGatewayState(options.dataDir, { kind: stateKind }));
     const entry = state.entries.find((item) => item.instance === normalizedInstance);
     if (entry !== undefined) {
       const pid = entry.record?.pid ?? entry.lock?.pid;
@@ -182,6 +223,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
     ...(options.command !== undefined ? { command: options.command } : {}),
+    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
   });
   const spawn = options.spawn ?? Bun.spawn;
   const sleep = options.sleep ?? defaultSleep;
@@ -208,13 +250,14 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
 
   const deadline = Date.now() + (options.waitMs ?? DEFAULT_WAIT_MS);
   while (Date.now() < deadline) {
-    const record = await readGatewayPidRecord(options.dataDir, instance);
+    const record = await readGatewayPidRecord(options.dataDir, instance, stateKind);
     if (record && record.pid === child.pid && isProcessAlive(record.pid)) {
       await handle.close().catch(() => undefined);
       return { ok: true, record, logPath };
     }
     if (child.exitCode !== null) {
       await handle.close().catch(() => undefined);
+      await rollbackSpawnedChildren(options.dataDir, instance, stateKind);
       const tail = await tailLog(logPath);
       return {
         ok: false,
@@ -235,17 +278,18 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
   await handle.close().catch(() => undefined);
 
   // 超时后对账：PID 文件已出现且进程仍活 → 视为已启动但未确认，留给用户查看。
-  const raced = await readGatewayPidRecord(options.dataDir, instance);
+  const raced = await readGatewayPidRecord(options.dataDir, instance, stateKind);
   if (raced !== null && raced.pid === child.pid && isProcessAlive(raced.pid)) {
     return { ok: true, record: raced, logPath, unconfirmed: true };
   }
 
+  await rollbackSpawnedChildren(options.dataDir, instance, stateKind);
   const tail = await tailLog(logPath);
   return {
     ok: false,
     error: 'timeout',
     message:
-      `gateway did not write ${gatewayPidPath(options.dataDir, instance)} within ` +
+      `gateway did not write ${gatewayPidPath(options.dataDir, instance, stateKind)} within ` +
       `${options.waitMs ?? DEFAULT_WAIT_MS}ms` +
       (tail ? `\n${tail}` : ''),
     logPath,

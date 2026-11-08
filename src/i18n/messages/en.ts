@@ -49,6 +49,10 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',
+  'help.cmd.gatewayNodesList': 'list local nodes from nodes.json with health (never prints tokens)',
+  'help.cmd.gatewayNodesAdd': 'register a local node; takes effect on the next gateway start',
+  'help.cmd.gatewayNodesRemove':
+    'remove a node from nodes.json; takes effect on the next gateway start',
   'help.cmd.nodeStart': 'start only the Node API (default 8644; shares the gateway instance lock)',
   'help.cmd.nodeStatus': 'show the Node API listener and health (--rpc for health/queue)',
   'help.cmd.nodeStop': 'stop only the Node API; gateway-managed nodes point to gateway stop',

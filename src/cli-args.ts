@@ -57,10 +57,27 @@ export type GatewayCommand =
  * `serve.port`（缺省 8644）决定，不新增 `--node-port`。
  */
 export type NodeCommand =
-  | { kind: 'start'; daemon: boolean }
+  | { kind: 'start'; daemon: boolean; configPath?: string }
   | { kind: 'status'; json: boolean; rpc: boolean }
   | { kind: 'stop' }
   | { kind: 'reload'; scopes?: string[] };
+
+/**
+ * `vessel gateway nodes` 子命令（0.49 G3a）。
+ *
+ * registry 属平台：`add/remove` 只写 `nodes.json`，不启动 / 停止进程；
+ * `--data-dir` 是 **node** 的数据目录，不是全局 `--data-dir`。
+ */
+export type GatewayNodesCommand =
+  | { kind: 'list'; json: boolean }
+  | {
+      kind: 'add';
+      name: string;
+      dataDir: string;
+      configPath: string;
+      autoStart: boolean;
+    }
+  | { kind: 'remove'; name: string };
 
 export interface EvalCommand {
   target: string;
@@ -392,6 +409,8 @@ export interface CliArgs {
   dataDirArg: string | null;
   /** 0.12：`vessel gateway ...` */
   gateway: GatewayCommand | null;
+  /** 0.49 G3：`vessel gateway nodes ...`（registry 管理；与一次性 gateway 命令互斥） */
+  gatewayNodes: GatewayNodesCommand | null;
   /** 0.49 G1：`vessel node ...` */
   node: NodeCommand | null;
   /** 0.14：`vessel status [--json]` */
@@ -469,6 +488,7 @@ export function parseArgs(argv: string[]): ParseResult {
     logsCommand: null,
     dataDirArg: null,
     gateway: null,
+    gatewayNodes: null,
     node: null,
     statusCommand: null,
     agentsCommand: null,
@@ -1860,6 +1880,122 @@ function parseGatewayReload(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
+// ── 0.49 G3a gateway nodes 子命令 ─────────────────────
+
+/** `gateway nodes list [--json]` */
+function parseGatewayNodesList(rest: string[], args: CliArgs): ParseResult {
+  let json = false;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for gateway nodes list: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.gatewayNodes = { kind: 'list', json };
+  return { ok: true, args };
+}
+
+/** `gateway nodes add <name> --data-dir <dir> --config <path> [--no-auto-start]` */
+function parseGatewayNodesAdd(rest: string[], args: CliArgs): ParseResult {
+  let name: string | undefined;
+  let dataDir: string | undefined;
+  let configPath: string | undefined;
+  let autoStart = true;
+
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = readFlagValue(rest, i, '--data-dir');
+      if (!value.ok) return value;
+      dataDir = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--config') {
+      const value = readFlagValue(rest, i, '--config');
+      if (!value.ok) return value;
+      configPath = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--no-auto-start') {
+      autoStart = false;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for gateway nodes add: ${a}` };
+    }
+    if (name !== undefined) {
+      return { ok: false, error: `gateway nodes add accepts one node name: ${name}, ${a}` };
+    }
+    name = a;
+  }
+  if (args.help) return { ok: true, args };
+  if (name === undefined) return { ok: false, error: 'Missing node name for gateway nodes add' };
+  if (dataDir === undefined)
+    return { ok: false, error: 'Missing --data-dir for gateway nodes add' };
+  if (configPath === undefined) {
+    return { ok: false, error: 'Missing --config for gateway nodes add' };
+  }
+  args.gatewayNodes = { kind: 'add', name, dataDir, configPath, autoStart };
+  return { ok: true, args };
+}
+
+/** `gateway nodes remove <name>` */
+function parseGatewayNodesRemove(rest: string[], args: CliArgs): ParseResult {
+  let name: string | undefined;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for gateway nodes remove: ${a}` };
+    }
+    if (name !== undefined) {
+      return { ok: false, error: `gateway nodes remove accepts one node name: ${name}, ${a}` };
+    }
+    name = a;
+  }
+  if (args.help) return { ok: true, args };
+  if (name === undefined) return { ok: false, error: 'Missing node name for gateway nodes remove' };
+  args.gatewayNodes = { kind: 'remove', name };
+  return { ok: true, args };
+}
+
+/** `gateway nodes <list|add|remove>` */
+function parseGatewayNodes(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub === undefined) {
+    return { ok: false, error: 'Missing gateway nodes subcommand (list|add|remove)' };
+  }
+  const tail = rest.slice(1);
+  switch (sub) {
+    case 'list':
+      return parseGatewayNodesList(tail, args);
+    case 'add':
+      return parseGatewayNodesAdd(tail, args);
+    case 'remove':
+      return parseGatewayNodesRemove(tail, args);
+    default:
+      return { ok: false, error: `Unknown gateway nodes subcommand: ${sub}` };
+  }
+}
+
 /** `gateway install-service [--systemd|--launchd|--schtasks]` */
 function parseGatewayInstallService(rest: string[], args: CliArgs): ParseResult {
   let target: GatewayInstallTarget | undefined;
@@ -1909,7 +2045,7 @@ function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
       ok: false,
       error:
         'Missing gateway subcommand ' +
-        '(start|stop|status|list|restart|reload|install-service|uninstall-service)',
+        '(start|stop|status|list|restart|reload|nodes|install-service|uninstall-service)',
     };
   }
 
@@ -1923,6 +2059,8 @@ function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
       return parseGatewayStatus(tail, args);
     case 'list':
       return parseGatewayList(tail, args);
+    case 'nodes':
+      return parseGatewayNodes(tail, args);
     case 'restart':
       return parseGatewayRestart(tail, args);
     case 'reload':
@@ -1938,10 +2076,12 @@ function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
 
 // ── 0.49 G1 node 子命令 ───────────────────────────────
 
-/** `node start [--daemon]` */
+/** `node start [--daemon] [--config <path>]` */
 function parseNodeStart(rest: string[], args: CliArgs): ParseResult {
   let daemon = false;
-  for (const a of rest) {
+  let configPath: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
     if (a === '--help' || a === '-h') {
       args.help = true;
       continue;
@@ -1950,10 +2090,17 @@ function parseNodeStart(rest: string[], args: CliArgs): ParseResult {
       daemon = true;
       continue;
     }
+    if (a === '--config') {
+      const value = readFlagValue(rest, i, '--config');
+      if (!value.ok) return value;
+      configPath = value.value;
+      i = value.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for node start: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.node = { kind: 'start', daemon };
+  args.node = { kind: 'start', daemon, ...(configPath !== undefined ? { configPath } : {}) };
   return { ok: true, args };
 }
 

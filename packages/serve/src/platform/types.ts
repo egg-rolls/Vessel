@@ -6,13 +6,20 @@
  * @module @vessel-agent/serve/platform/types
  */
 
-/** 平台侧注入的 node 描述；G1 恰好一个 co-located node。 */
+/** 平台侧注入的 node 描述；G3 起一个平台可注入多个本地 node。 */
 export interface PlatformNodeDescriptor {
   nodeId: string;
   name: string;
   apiUrl: string;
   version?: string;
 }
+
+/**
+ * 组合根按 `node_id` 解析 node 生效凭据的结果（0.49 G3b）。
+ * `found:false` = registry 无该 node，RPC 映射为 `node_not_found`；
+ * `found:true` 且无 token = 该 node 走回环匿名（返回 `{token:null,mode:'none'}`）。
+ */
+export type PlatformNodeCredential = { found: true; token?: string } | { found: false };
 
 /** registry 投影的健康态；不持久化。 */
 export type PlatformNodeStatus = 'up' | 'down' | 'unknown';
@@ -44,10 +51,13 @@ export interface PlatformGatewayOptions {
   nodeOrigins: string[];
   /** `apps/web/dist`；启动时必须存在 `index.html`。 */
   staticDir: string;
-  /** G1 恰好一个。 */
+  /** registry 中全部本地 node（`auto_start:false` 也注入，只做健康展示）。 */
   nodes: PlatformNodeDescriptor[];
-  /** 组合根 = `resolveGatewayToken(config, env)`；只读取/透传。 */
-  resolveNodeCredential: () => string | undefined;
+  /**
+   * 组合根按 node_id 解析该 node 生效 token；只读取/透传，不生成、不缓存、不落盘。
+   * 省略 nodeId 表示调用方已确认恰好一个节点（RPC 层负责多节点 `invalid_params`）。
+   */
+  resolveNodeCredential: (nodeId?: string) => PlatformNodeCredential;
   version?: string;
 }
 

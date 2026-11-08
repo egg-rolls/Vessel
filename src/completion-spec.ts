@@ -104,6 +104,7 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--tls-key',
   '--tenant',
   '--data-dir',
+  '--config',
   '--connect',
   '--connect-token',
   '--ca',
@@ -266,6 +267,12 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       { name: 'stop', flags: ['--timeout', '--instance', '--port', '--all'] },
       { name: 'status', flags: ['--json', '--rpc', '--instance', '--port', '--all'] },
       { name: 'list', flags: ['--json'] },
+      {
+        // 三级子命令（list/add/remove）不能由当前两级 spec 表达；这里挂出
+        // `gateway nodes` 及其 flags，第三词交给各 shell 的默认补全。
+        name: 'nodes',
+        flags: ['--json', '--data-dir', '--config', '--no-auto-start'],
+      },
       { name: 'restart', flags: ['--daemon', '--instance', '--port', '--all'] },
       {
         name: 'reload',
@@ -280,7 +287,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     token: 'node',
     registryName: 'node',
     subcommands: [
-      { name: 'start', flags: ['--daemon'] },
+      { name: 'start', flags: ['--daemon', '--config'] },
       { name: 'status', flags: ['--json', '--rpc'] },
       { name: 'stop' },
       { name: 'reload', flags: ['--scope'], flagValues: { '--scope': ['config', 'plugins'] } },

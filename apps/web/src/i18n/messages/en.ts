@@ -751,6 +751,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nodes.health.ok': 'Reachable',
   'nodes.health.error': 'Unreachable',
   'nodes.health.loading': 'Loading…',
+  'nodes.health.unknown': 'Unknown',
+  'nodes.select': 'Connect to this node',
+  'nodes.platform.empty': 'No nodes are registered on this Gateway',
+  'nodes.selection.fallback.missing':
+    'The node selected last time is no longer registered; connected to {node} instead.',
+  'nodes.selection.fallback.down':
+    'The node selected last time is down; connected to {node} instead.',
   'nodes.dataPlane.direct': 'direct (health.get reachable)',
   'nodes.dataPlane.unreachable': 'unreachable (health.get failed)',
   'nodes.teams.create': 'Create Team',

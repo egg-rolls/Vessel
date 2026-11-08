@@ -12,14 +12,19 @@
  * @module vessel/gateway-command
  */
 
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import {
   type ConfigValidationError,
+  checkPlatformTokenConflict,
+  DEFAULT_GATEWAY_OPTIONS,
   DEFAULT_SERVE_OPTIONS,
   loadConfig,
   resolveGatewayNodePorts,
+  resolvePlatformToken,
   type VesselConfig,
 } from '../packages/config/src/index';
+import { startPlatformGateway } from '../packages/serve/src/index';
 import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
 import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
@@ -31,6 +36,15 @@ import {
   GatewayInstanceLockedError,
 } from './gateway/instance-lock';
 import {
+  assertNodeDataDirMatches,
+  loadNodeRegistry,
+  type NodeRegistryEntry,
+  NodeRegistryError,
+  resolveNodeIdForRegistryAdd,
+  synthesizeImplicitNode,
+} from './gateway/node-registry';
+import { type LocalNodeSpec, NodeSupervisor, stopSpawnedChildren } from './gateway/node-supervisor';
+import {
   type CommandRunner,
   cleanupGatewayStateEntry,
   collectGatewayState,
@@ -39,6 +53,7 @@ import {
   deleteRecordIfOwnedSync,
   type GatewayPidRecord,
   type GatewayStateEntry,
+  type GatewayStateKind,
   type GatewayStateOwner,
   type GatewayStateSnapshot,
   gatewayPidPath,
@@ -56,6 +71,7 @@ import {
   serviceStatus,
   uninstallService,
 } from './gateway/service';
+import { HUB_DEFAULT_PORT } from './hub/server';
 import { t } from './i18n';
 import { createHttpRpcClient } from './rpc/http-client';
 import { resolveGatewayToken } from './transport-factory';
@@ -82,6 +98,18 @@ export interface GatewayCommandDeps {
   rpcTarget?: ControlPlaneTarget;
   /** 内部计数探针注入；缺省 collectGatewayState。 */
   collectState?: typeof collectGatewayState;
+  /**
+   * 0.49 G3b：读哪一族状态文件。gateway 命令缺省 platform；
+   * legacy `VESSEL_LEGACY_SERVE=1` 下退回 node。
+   */
+  stateKind?: GatewayStateKind;
+}
+
+function gatewayStateKind(
+  options: Pick<GatewayCommandDeps, 'stateKind'>,
+  env: Record<string, string | undefined>,
+): GatewayStateKind {
+  return options.stateKind ?? (env.VESSEL_LEGACY_SERVE === '1' ? 'node' : 'platform');
 }
 
 interface ResolvedContext {
@@ -190,7 +218,7 @@ function configuredHubDataDir(config: VesselConfig): string | undefined {
 /** 单一读入口：命令层统一从这里取状态快照。 */
 async function collectStateFor(
   context: ResolvedContext,
-  deps: Pick<GatewayCommandDeps, 'collectState'> = {},
+  deps: Pick<GatewayCommandDeps, 'collectState' | 'stateKind'> = {},
 ): Promise<GatewayStateSnapshot> {
   const collect = deps.collectState ?? collectGatewayState;
   const token = resolveGatewayToken(context.config, context.env);
@@ -198,6 +226,7 @@ async function collectStateFor(
   return collect(context.dataDir, {
     ...(token !== undefined ? { token } : {}),
     ...(hubDataDir !== undefined ? { hubDataDir } : {}),
+    kind: gatewayStateKind(deps, context.env),
   });
 }
 
@@ -265,6 +294,85 @@ export async function probeHttpHealth(
 export async function isPlatformRecord(record: GatewayPidRecord): Promise<boolean> {
   const health = await probeHttpHealth(record);
   return health?.role === 'platform';
+}
+
+/** `gateway status` 的本地节点投影（0.49 G3b；只读、无 token）。 */
+export interface LocalNodeStatusView {
+  node_id: string;
+  name: string;
+  api_url: string;
+  status: 'up' | 'down' | 'unknown';
+  auto_start: boolean;
+}
+
+/** 从 registry（或隐式单节点）解析本地节点的地址与健康；不读 token。 */
+async function localNodeStatusViews(
+  config: VesselConfig,
+  env: Record<string, string | undefined>,
+  gatewayDataDir: string,
+): Promise<LocalNodeStatusView[]> {
+  const load = await loadNodeRegistry(gatewayDataDir).catch(() => null);
+  if (load === null) return [];
+  const entries: NodeRegistryEntry[] =
+    load.kind === 'ready'
+      ? load.registry.nodes
+      : [await synthesizeImplicitNode({ config, dataDir: gatewayDataDir })];
+
+  return Promise.all(
+    entries.map(async (entry): Promise<LocalNodeStatusView> => {
+      const autoStart = entry.auto_start;
+      if (entry.config_path === undefined) {
+        const listen = nodeListenFromConfig(config);
+        const health = await probeHttpHealth({
+          pid: 0,
+          started_at: new Date(0).toISOString(),
+          host: listen.host,
+          port: listen.port,
+          version: '0',
+        });
+        return {
+          node_id: entry.node_id,
+          name: entry.name,
+          api_url: listen.url,
+          status: health !== undefined && health.role !== 'platform' ? 'up' : 'down',
+          auto_start: autoStart,
+        };
+      }
+      try {
+        const loaded = await loadConfig({
+          configPath: entry.config_path,
+          env: { ...env, VESSEL_DATA_DIR: entry.data_dir },
+        });
+        const listen = nodeListenFromConfig(loaded.config);
+        const health = await probeHttpHealth(
+          {
+            pid: 0,
+            started_at: new Date(0).toISOString(),
+            host: listen.host,
+            port: listen.port,
+            version: '0',
+          },
+          800,
+          loaded.config.serve?.tls !== undefined,
+        );
+        return {
+          node_id: entry.node_id,
+          name: entry.name,
+          api_url: listen.url,
+          status: health !== undefined && health.role !== 'platform' ? 'up' : 'down',
+          auto_start: autoStart,
+        };
+      } catch {
+        return {
+          node_id: entry.node_id,
+          name: entry.name,
+          api_url: '',
+          status: 'unknown',
+          auto_start: autoStart,
+        };
+      }
+    }),
+  );
 }
 
 /**
@@ -497,10 +605,13 @@ export async function writeForegroundGatewayPid(options: {
   version?: string;
   nodeId?: string;
   instance?: string;
+  /** 0.49 G3b：缺省 node（`gateway.pid`）；platform 写 `platform.pid`。 */
+  kind?: GatewayStateKind;
   /** 与实例锁共享的 started_at（epoch ms）；缺省取当前时间。 */
   startedAt?: number;
 }): Promise<void> {
   const instance = normalizeGatewayInstance(options.instance);
+  const kind = options.kind ?? 'node';
   const record: GatewayPidRecord = {
     pid: process.pid,
     started_at: new Date(options.startedAt ?? Date.now()).toISOString(),
@@ -510,9 +621,9 @@ export async function writeForegroundGatewayPid(options: {
     ...(options.nodeId !== undefined ? { node_id: options.nodeId } : {}),
     ...(instance !== DEFAULT_GATEWAY_INSTANCE ? { instance } : {}),
   };
-  await writeGatewayPid(options.dataDir, record, instance);
+  await writeGatewayPid(options.dataDir, record, instance, kind);
   process.once('exit', () =>
-    deleteRecordIfOwnedSync(gatewayPidPath(options.dataDir, instance), {
+    deleteRecordIfOwnedSync(gatewayPidPath(options.dataDir, instance, kind), {
       pid: process.pid,
       started_at: record.started_at,
     }),
@@ -548,12 +659,42 @@ export async function stopGateway(
     return 1;
   }
 
-  if (targets.entries.length === 0) {
-    print(ui.info(t('gateway.notRunning')));
-    return 0;
+  let failed = false;
+
+  // 0.49 G3b（CONTRACT §4.3）：只终止本 Gateway spawn 的子进程。
+  // 子进程先停，再停平台；adopt/external 不在 manifest 中，天然不受影响。
+  if (gatewayStateKind(options, context.env) === 'platform') {
+    const selectorSpecified =
+      selector.instance !== undefined || selector.port !== undefined || selector.all === true;
+    const instances =
+      selector.all === true
+        ? null
+        : targets.entries.length > 0
+          ? [...new Set(targets.entries.map((entry) => entry.instance))]
+          : selectorSpecified
+            ? [normalizeGatewayInstance(selector.instance)]
+            : null;
+    const cleanupTargets = instances ?? [undefined];
+    for (const instance of cleanupTargets) {
+      const result = await stopSpawnedChildren({
+        gatewayDataDir: context.dataDir,
+        ...(instance === undefined || selector.all === true
+          ? { allInstances: true }
+          : { instance }),
+        platform: context.platform,
+        ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+        ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      });
+      if (result.failed > 0) failed = true;
+    }
   }
 
-  let failed = false;
+  if (targets.entries.length === 0) {
+    print(ui.info(t('gateway.notRunning')));
+    return failed ? 1 : 0;
+  }
+
   for (const entry of targets.entries) {
     if (entry.state === 'stale') {
       // 确认 stale：条件清理 pid/lock/owner，不杀进程。
@@ -702,7 +843,8 @@ function instanceStatusJson(
 ): Record<string, unknown> {
   const record = entry.record;
   const pidFile = entry.pidPath ?? entry.lockPath ?? '';
-  const tls = config.serve?.tls !== undefined;
+  // 平台监听只有 http；node 监听才可能带 serve.tls。
+  const tls = !platform && config.serve?.tls !== undefined;
   if (record !== undefined) {
     const uptimeSeconds = Math.floor((now() - Date.parse(record.started_at)) / 1000);
     return {
@@ -798,6 +940,25 @@ export async function gatewayStatus(
   const entries = snapshot.entries;
   // 0.49 G1：`gateway start` 的记录 host/port 是 platform 监听；附带 node 监听展示。
   const platforms = await platformInstances(entries);
+  const stateKind = gatewayStateKind(options, context.env);
+  // 0.49 G3b：多节点投影只读 registry + 各 node 健康；不含 token。
+  const nodeViews =
+    stateKind === 'platform'
+      ? await localNodeStatusViews(context.config, context.env, context.dataDir)
+      : [];
+  let printedNodeViews = false;
+  const printNodeViews = (): void => {
+    if (printedNodeViews || nodeViews.length === 0) return;
+    printedNodeViews = true;
+    for (const node of nodeViews) {
+      print(
+        `  ${ui.dim(
+          `node ${node.name}  ${node.api_url || '-'}  ${node.status}` +
+            (node.auto_start ? '' : '  (auto_start: false)'),
+        )}`,
+      );
+    }
+  };
 
   if (useSelection) {
     const targets = await resolveGatewayTargets(context.dataDir, selector, {
@@ -834,9 +995,7 @@ export async function gatewayStatus(
     }
     for (const entry of selected) {
       print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
-      if (platforms.has(entry.instance)) {
-        print(`  ${ui.dim(`node ${nodeListenFromConfig(context.config).url}`)}`);
-      }
+      if (platforms.has(entry.instance)) printNodeViews();
       const pidFile = entry.pidPath ?? entry.lockPath;
       if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
     }
@@ -858,6 +1017,8 @@ export async function gatewayStatus(
           service,
           now,
           defaultEntry !== undefined && platforms.has(defaultEntry.instance),
+          nodeViews,
+          stateKind,
         ),
         null,
         2,
@@ -870,14 +1031,18 @@ export async function gatewayStatus(
   print(ui.rule(48));
   if (entries.length === 0) {
     print(ui.kv(t('gateway.status.status'), t('gateway.notRunning'), 10));
-    print(`  ${ui.dim(t('gateway.status.pidFile', { path: gatewayPidPath(context.dataDir) }))}`);
+    print(
+      `  ${ui.dim(
+        t('gateway.status.pidFile', {
+          path: gatewayPidPath(context.dataDir, undefined, stateKind),
+        }),
+      )}`,
+    );
     return 1;
   }
   for (const entry of entries) {
     print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
-    if (platforms.has(entry.instance)) {
-      print(`  ${ui.dim(`node ${nodeListenFromConfig(context.config).url}`)}`);
-    }
+    if (platforms.has(entry.instance)) printNodeViews();
     const pidFile = entry.pidPath ?? entry.lockPath;
     if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
   }
@@ -895,8 +1060,10 @@ function legacyStatusJson(
   service: Awaited<ReturnType<typeof serviceStatus>>,
   now: () => number,
   platform = false,
+  nodes: LocalNodeStatusView[] = [],
+  stateKind: GatewayStateKind = 'node',
 ): Record<string, unknown> {
-  const pidFile = entry?.pidPath ?? gatewayPidPath(context.dataDir);
+  const pidFile = entry?.pidPath ?? gatewayPidPath(context.dataDir, undefined, stateKind);
   if (entry?.record !== undefined && entry.state === 'running') {
     const record = entry.record;
     return {
@@ -905,13 +1072,14 @@ function legacyStatusJson(
       pid: record.pid,
       host: record.host,
       port: record.port,
-      url: gatewayBaseUrl(record, context.config.serve?.tls !== undefined),
+      url: gatewayBaseUrl(record, stateKind === 'node' && context.config.serve?.tls !== undefined),
       started_at: record.started_at,
       uptime_seconds: Math.max(0, Math.floor((now() - Date.parse(record.started_at)) / 1000)),
       version: record.version,
       ...(record.node_id !== undefined ? { node_id: record.node_id } : {}),
       pid_file: pidFile,
       ...(platform ? { node: nodeListenFromConfig(context.config) } : {}),
+      ...(platform && nodes.length > 0 ? { nodes } : {}),
       service,
     };
   }
@@ -1292,6 +1460,7 @@ async function startDaemonCommand(
           options.port,
         );
   if (portError !== null) return portError;
+  const stateKind = gatewayStateKind(options, context.env);
   const instance = deriveGatewayInstance(options.instance, options.port);
   const logPath = options.daemonLog ?? options.logPath ?? gatewayLogPath(context.dataDir, instance);
 
@@ -1319,6 +1488,10 @@ async function startDaemonCommand(
     instance,
     logPath,
     state: snapshot,
+    stateKind,
+    // 平台要等每个 auto_start 节点就绪后才写 PID；节点 readiness 上限 20s，
+    // 父进程等待必须覆盖“启动失败 → 平台回滚退出”的路径，避免过早硬杀。
+    ...(stateKind === 'platform' ? { waitMs: 60_000 } : {}),
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
     ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
@@ -1326,7 +1499,11 @@ async function startDaemonCommand(
   });
 
   if (result.ok) {
-    const url = gatewayBaseUrl(result.record, context.config.serve?.tls !== undefined);
+    // 平台监听只有 http（platform server 不带 TLS）。
+    const url = gatewayBaseUrl(
+      result.record,
+      stateKind === 'node' && context.config.serve?.tls !== undefined,
+    );
     if (result.unconfirmed === true) {
       print(ui.warn(t('gateway.startedUnconfirmed', { pid: result.record.pid })));
     } else {
@@ -1466,6 +1643,540 @@ async function restartDaemonCommand(
   });
 }
 
+// ── 0.49 G3b：平台专用前台启动（gateway start/restart）──────────────
+//
+// 平台进程只做平台监听 + 本地 node 子进程监督；**不**加载 node runtime /
+// tenant 锁 / plugin host / node 监听。`gateway start --daemon` 的父进程
+// 通过 `platform.pid` 确认启动完成。
+
+/** 与 `src/gateway/node-supervisor.ts` 共享的运行参数（组合根解析结果）。 */
+interface ResolvedLocalNode {
+  entry: NodeRegistryEntry;
+  config: VesselConfig;
+  listen: NodeListenInfo;
+  token?: string;
+  apiUrl: string;
+}
+
+/** node 配置 / 身份 / 端口校验失败（错误体不含 token）。 */
+class LocalNodeStartError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'LocalNodeStartError';
+    this.code = code;
+  }
+}
+
+function normalizeOriginHost(host: string): string {
+  const normalized = host.trim();
+  if (normalized === '0.0.0.0') return '127.0.0.1';
+  if (normalized === '::' || normalized === '[::]') return '[::1]';
+  if (normalized.includes(':') && !normalized.startsWith('[')) return `[${normalized}]`;
+  return normalized;
+}
+
+function nodeOriginOf(host: string, port: number, tls: boolean): string {
+  return `${tls ? 'https' : 'http'}://${normalizeOriginHost(host)}:${port}`;
+}
+
+async function preparePlatformStart(options: {
+  config: VesselConfig;
+  dataDir: string;
+  env: Record<string, string | undefined>;
+  instance: string;
+  collectState?: typeof collectGatewayState;
+}): Promise<{ ok: true; lock: GatewayInstanceLock } | { ok: false; error: string }> {
+  const token = resolveGatewayToken(options.config, options.env);
+  const snapshot = await (options.collectState ?? collectGatewayState)(options.dataDir, {
+    kind: 'platform',
+    ...(token !== undefined ? { token } : {}),
+  });
+  const entry = findStateEntry(snapshot.entries, options.instance);
+  if (entry !== undefined && entryOccupied(entry)) {
+    return {
+      ok: false,
+      error: t('gateway.alreadyRunningPid', { pid: entryPid(entry) ?? 0 }),
+    };
+  }
+  if (entry !== undefined && (entry.state === 'unknown' || entry.state === 'foreign-host')) {
+    return {
+      ok: false,
+      error:
+        entry.state === 'unknown'
+          ? t('gateway.status.unknown')
+          : t('gateway.status.foreignHost', { host: entry.lock?.host ?? '' }),
+    };
+  }
+  if (entry !== undefined && entry.state === 'stale') {
+    await cleanupGatewayStateEntry(options.dataDir, entry).catch(() => undefined);
+  }
+  // CONTRACT §4.6（FROZEN r4）：同实例重复启动仍由
+  // `platform-<instance>.lock` 拦截；不同实例各有 PID/锁，不新增全局拒绝。
+  try {
+    const lock = await acquireGatewayInstanceLock({
+      dataDir: options.dataDir,
+      instance: options.instance,
+      kind: 'platform',
+    });
+    return { ok: true, lock };
+  } catch (error) {
+    if (error instanceof GatewayInstanceLockedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+}
+
+/**
+ * 解析 registry 中全部本地 node：每节点独立 config / data_dir / identity / port /
+ * token。隐式单节点不触发平台 token 冲突（CONTRACT §3 / §9）；端口冲突、身份
+ * 不一致、config 不可读一律 fail-fast。
+ */
+async function resolveLocalNodes(options: {
+  config: VesselConfig;
+  env: Record<string, string | undefined>;
+  gatewayDataDir: string;
+  platformPort: number;
+  platformToken?: string;
+}): Promise<ResolvedLocalNode[]> {
+  let load: Awaited<ReturnType<typeof loadNodeRegistry>>;
+  try {
+    load = await loadNodeRegistry(options.gatewayDataDir);
+  } catch (error) {
+    if (error instanceof NodeRegistryError) {
+      throw new LocalNodeStartError(error.code, error.message);
+    }
+    throw error;
+  }
+
+  const entries: NodeRegistryEntry[] =
+    load.kind === 'ready'
+      ? load.registry.nodes
+      : [
+          await synthesizeImplicitNode({
+            config: options.config,
+            dataDir: options.gatewayDataDir,
+          }),
+        ];
+
+  const seenPorts = new Map<number, string>();
+  const resolved: ResolvedLocalNode[] = [];
+
+  for (const entry of entries) {
+    const implicit = entry.config_path === undefined;
+    let nodeConfig: VesselConfig;
+    let token: string | undefined;
+    let listen: NodeListenInfo;
+
+    if (implicit) {
+      // 隐式单节点：全局配置 + G1 同 token 行为（允许与平台同源）。
+      nodeConfig = options.config;
+      token = resolveGatewayToken(options.config, options.env);
+      listen = nodeListenFromConfig(options.config);
+    } else {
+      const configPath = entry.config_path as string;
+      const loaded = await loadConfig({
+        configPath,
+        env: { ...options.env, VESSEL_DATA_DIR: entry.data_dir },
+      });
+      if (loaded.validation.errors.length > 0) {
+        const first = loaded.validation.errors[0];
+        const detail = first !== undefined ? `${first.path}: ${first.message}` : 'invalid config';
+        throw new LocalNodeStartError(
+          'registry_invalid',
+          `node "${entry.name}": config validation failed: ${detail}`,
+        );
+      }
+      nodeConfig = loaded.config;
+      try {
+        assertNodeDataDirMatches({
+          dataDir: entry.data_dir,
+          nodeConfig,
+          env: options.env,
+        });
+        const identity = await resolveNodeIdForRegistryAdd({
+          nodeConfig,
+          dataDir: entry.data_dir,
+        });
+        if (identity !== entry.node_id) {
+          throw new LocalNodeStartError(
+            'node_identity_mismatch',
+            `node "${entry.name}": registry node_id ${entry.node_id} does not match the node identity (${identity})`,
+          );
+        }
+      } catch (error) {
+        if (error instanceof LocalNodeStartError) throw error;
+        if (error instanceof NodeRegistryError) {
+          throw new LocalNodeStartError(error.code, `node "${entry.name}": ${error.message}`);
+        }
+        throw error;
+      }
+      token = resolveGatewayToken(nodeConfig, options.env);
+      listen = nodeListenFromConfig(nodeConfig);
+
+      // 仅显式 registry 节点受平台 token 冲突约束。
+      const conflict = checkPlatformTokenConflict({
+        platformToken: options.platformToken,
+        nodeToken: token,
+      });
+      if (conflict !== null) {
+        throw new LocalNodeStartError(
+          'platform_token_conflict',
+          `node "${entry.name}" uses the same effective token as the platform gateway`,
+        );
+      }
+    }
+
+    const nodePort = listen.port;
+    if (!Number.isInteger(nodePort) || nodePort <= 0) {
+      throw new LocalNodeStartError(
+        'node_port_conflict',
+        `node "${entry.name}": serve.port must be a fixed non-zero port`,
+      );
+    }
+    if (options.platformPort !== 0 && nodePort === options.platformPort) {
+      throw new LocalNodeStartError(
+        'node_port_conflict',
+        `node "${entry.name}": port ${nodePort} conflicts with the platform gateway port`,
+      );
+    }
+    if (nodePort === HUB_DEFAULT_PORT) {
+      throw new LocalNodeStartError(
+        'node_port_conflict',
+        `node "${entry.name}": port ${nodePort} conflicts with the Hub default port`,
+      );
+    }
+    const otherName = seenPorts.get(nodePort);
+    if (otherName !== undefined) {
+      throw new LocalNodeStartError(
+        'node_port_conflict',
+        `node "${entry.name}": port ${nodePort} conflicts with node "${otherName}"`,
+      );
+    }
+    seenPorts.set(nodePort, entry.name);
+
+    resolved.push({
+      entry,
+      config: nodeConfig,
+      listen,
+      ...(token !== undefined ? { token } : {}),
+      apiUrl: nodeOriginOf(listen.host, nodePort, nodeConfig.serve?.tls !== undefined),
+    });
+  }
+
+  return resolved;
+}
+
+function waitForTerminationSignal(): Promise<void> {
+  return new Promise((resolve) => {
+    const stop = (): void => {
+      process.off('SIGINT', stop);
+      process.off('SIGTERM', stop);
+      resolve();
+    };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+  });
+}
+
+export interface PlatformGatewayForegroundOptions {
+  command: Extract<GatewayCommand, { kind: 'start' | 'restart' }>;
+  /** 已构建的 WebUI 目录（必须含 `index.html`）。 */
+  staticDir: string;
+  env?: Record<string, string | undefined>;
+  /** `--data-dir` 显式覆盖（高于 env/config）。 */
+  dataDirOverride?: string;
+  platform?: NodeJS.Platform;
+  version?: string;
+  print?: (line: string) => void;
+  printErr?: (line: string) => void;
+  spawn?: typeof Bun.spawn;
+  sleep?: (ms: number) => Promise<void>;
+  runCommand?: CommandRunner;
+  readinessTimeoutMs?: number;
+  stopTimeoutMs?: number;
+  /** 测试 seam：等待退出；缺省等待 SIGINT/SIGTERM。 */
+  waitForStop?: () => Promise<void>;
+}
+
+/**
+ * 平台专用前台入口：`vessel gateway start/restart`（非 legacy）。
+ *
+ * 不进入 bootstrap / serve 管线，因此不会加载 node runtime、tenant 锁、
+ * plugin host 或 node 监听。启动顺序：平台 bind → spawn auto_start 节点 →
+ * 等待每个节点的 `gateway.pid` + `/health` → 写 `platform.pid`。
+ * 任一节点失败 → 停已 spawn 子进程并停平台，不写平台 PID。
+ */
+export async function runPlatformGatewayForeground(
+  options: PlatformGatewayForegroundOptions,
+): Promise<number> {
+  const env = options.env ?? process.env;
+  const print = options.print ?? console.log;
+  const printErr = options.printErr ?? console.error;
+  const platform = options.platform ?? process.platform;
+  const version = options.version ?? readPackageVersion();
+
+  let config: VesselConfig;
+  try {
+    const loaded = await loadConfig({
+      env,
+      ...(options.dataDirOverride !== undefined
+        ? { cliOverrides: { dataDir: options.dataDirOverride } }
+        : {}),
+    });
+    if (loaded.validation.errors.length > 0) {
+      printErr(formatConfigErrors(loaded.validation.errors));
+      return 2;
+    }
+    config = loaded.config;
+  } catch (error) {
+    printErr(ui.err(`config_load_failed: ${errorMessage(error)}`));
+    return 1;
+  }
+  const dataDir = resolveDataDir(config, env);
+
+  const command = options.command;
+  let targetInstance = command.instance;
+  let targetPort = command.kind === 'start' ? command.port : undefined;
+  let targetHost = command.kind === 'start' ? command.host : undefined;
+
+  if (command.kind === 'restart') {
+    const entries = (await collectGatewayState(dataDir, { kind: 'platform' })).entries;
+    const targets = await resolveGatewayTargets(dataDir, command, { entries });
+    if (!targets.ok) {
+      printErr(ui.err(targets.error));
+      return 1;
+    }
+    const previous = targets.entries[0];
+    if (previous !== undefined) {
+      targetInstance = previous.instance;
+      if (previous.record !== undefined) {
+        targetPort = previous.record.port;
+        targetHost = previous.record.host;
+      }
+    }
+    const stopCode = await stopGateway({
+      config,
+      dataDir,
+      env,
+      platform,
+      version,
+      selector: command,
+      entries,
+      stateKind: 'platform',
+      print,
+      printErr,
+      timeoutMs: 10_000,
+    });
+    if (stopCode !== 0) return stopCode;
+  }
+
+  const portError = printSplitModePortError(
+    config,
+    'gateway',
+    (line) => printErr(ui.err(line)),
+    command.kind === 'start' ? command.port : undefined,
+  );
+  if (portError !== null) return portError;
+
+  const instance = deriveGatewayInstance(targetInstance, targetPort);
+
+  // CONTRACT §4.6（FROZEN r4）已知限制：隐式节点与平台共用 dataDir 的
+  // `gateway.pid` / `gateway-default.lock`。同 dataDir 已有另一个存活平台实例时
+  // fail-fast（`implicit_node_conflict`），只读检查，不碰对方的 PID/锁。
+  // 显式 registry 共享同一 dataDir 的多平台实例属于未支持形态（不新增固定 PID
+  // workaround；见 §4.6）。
+  let implicitNode = false;
+  try {
+    implicitNode = (await loadNodeRegistry(dataDir)).kind === 'missing';
+  } catch (error) {
+    if (error instanceof NodeRegistryError) {
+      printErr(ui.err(`${error.code}: ${error.message}`));
+      return 1;
+    }
+    throw error;
+  }
+  if (implicitNode) {
+    const probeToken = resolvePlatformToken(config, env);
+    const snapshot = await collectGatewayState(dataDir, {
+      kind: 'platform',
+      ...(probeToken !== undefined ? { token: probeToken } : {}),
+    });
+    const other = snapshot.entries.find(
+      (entry) => entry.instance !== instance && entryOccupied(entry),
+    );
+    if (other !== undefined) {
+      printErr(
+        ui.err(
+          `implicit_node_conflict: platform instance "${other.instance}" is already running in ${dataDir}; ` +
+            'implicit nodes share gateway.pid/gateway-default.lock. Stop it or register explicit nodes.',
+        ),
+      );
+      return 1;
+    }
+  }
+
+  const prepared = await preparePlatformStart({ config, dataDir, env, instance });
+  if (!prepared.ok) {
+    printErr(ui.err(prepared.error));
+    return 1;
+  }
+  const lock = prepared.lock;
+
+  let platformGateway: ReturnType<typeof startPlatformGateway> | undefined;
+  let supervisor: NodeSupervisor | undefined;
+  try {
+    const platformHostname = (
+      targetHost ??
+      config.gateway?.hostname ??
+      DEFAULT_GATEWAY_OPTIONS.hostname
+    ).trim();
+    const platformPort = targetPort ?? config.gateway?.port ?? DEFAULT_GATEWAY_OPTIONS.port;
+    const platformToken = resolvePlatformToken(config, env);
+
+    if (!existsSync(path.join(options.staticDir, 'index.html'))) {
+      printErr(ui.err(t('gateway.webDistMissing', { path: options.staticDir })));
+      return 1;
+    }
+
+    let nodes: ResolvedLocalNode[];
+    try {
+      nodes = await resolveLocalNodes({
+        config,
+        env,
+        gatewayDataDir: dataDir,
+        platformPort,
+        ...(platformToken !== undefined ? { platformToken } : {}),
+      });
+    } catch (error) {
+      if (error instanceof LocalNodeStartError || error instanceof NodeRegistryError) {
+        printErr(ui.err(`${error.code}: ${error.message}`));
+        return 1;
+      }
+      printErr(ui.err(`node_start_failed: ${errorMessage(error)}`));
+      return 1;
+    }
+
+    const credentials = new Map<string, string | undefined>(
+      nodes.map((node) => [node.entry.node_id, node.token]),
+    );
+    const singleNodeId = nodes.length === 1 ? nodes[0]?.entry.node_id : undefined;
+
+    try {
+      platformGateway = startPlatformGateway({
+        port: platformPort,
+        hostname: platformHostname,
+        ...(platformToken !== undefined ? { platformToken } : {}),
+        ...(config.gateway?.allowedOrigins !== undefined
+          ? { allowedOrigins: config.gateway.allowedOrigins }
+          : {}),
+        nodeOrigins: [...new Set(nodes.map((node) => node.apiUrl))],
+        staticDir: options.staticDir,
+        nodes: nodes.map((node) => ({
+          nodeId: node.entry.node_id,
+          name: node.entry.name,
+          apiUrl: node.apiUrl,
+        })),
+        resolveNodeCredential: (nodeId?: string) => {
+          const id = nodeId ?? singleNodeId;
+          if (id === undefined || !credentials.has(id)) return { found: false };
+          const token = credentials.get(id);
+          return token !== undefined ? { found: true, token } : { found: true };
+        },
+        version,
+      });
+    } catch (error) {
+      printErr(ui.err(`Platform gateway failed to start: ${errorMessage(error)}`));
+      return 1;
+    }
+
+    supervisor = new NodeSupervisor({
+      gatewayDataDir: dataDir,
+      instance,
+      env,
+      platform,
+      ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
+      ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+      ...(options.readinessTimeoutMs !== undefined
+        ? { readinessTimeoutMs: options.readinessTimeoutMs }
+        : {}),
+      ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
+    });
+    const specs: LocalNodeSpec[] = nodes.map((node) => ({
+      nodeId: node.entry.node_id,
+      name: node.entry.name,
+      dataDir: node.entry.data_dir,
+      apiUrl: node.apiUrl,
+      host: node.listen.host,
+      port: node.listen.port,
+      ...(node.entry.config_path !== undefined ? { configPath: node.entry.config_path } : {}),
+      ...(node.token !== undefined ? { token: node.token } : {}),
+      autoStart: node.entry.auto_start,
+    }));
+    const started = await supervisor.start(specs);
+    if (!started.ok) {
+      printErr(ui.err(`${started.code}: ${started.message}`));
+      await platformGateway?.stop().catch(() => undefined);
+      platformGateway = undefined;
+      return 1;
+    }
+
+    try {
+      await writeForegroundGatewayPid({
+        dataDir,
+        host: platformHostname,
+        port: platformGateway.port,
+        version,
+        instance,
+        kind: 'platform',
+        startedAt: lock.startedAt,
+      });
+    } catch (error) {
+      printErr(
+        ui.err(
+          `failed to write ${gatewayPidPath(dataDir, instance, 'platform')}: ` +
+            errorMessage(error),
+        ),
+      );
+      await supervisor.stop().catch(() => undefined);
+      await platformGateway?.stop().catch(() => undefined);
+      platformGateway = undefined;
+      return 1;
+    }
+
+    print(
+      ui.ok(
+        t('gateway.started', {
+          pid: process.pid,
+          url: nodeOriginOf(platformHostname, platformGateway.port, false),
+        }),
+      ),
+    );
+    for (const node of nodes) {
+      print(
+        ui.dim(
+          `node ${node.entry.name}  ${node.apiUrl}` +
+            (node.entry.auto_start ? '' : '  (auto_start: false)'),
+        ),
+      );
+    }
+
+    await (options.waitForStop ?? waitForTerminationSignal)();
+    await supervisor.stop().catch(() => undefined);
+    await platformGateway?.stop().catch(() => undefined);
+    platformGateway = undefined;
+    return 0;
+  } finally {
+    // 失败路径也必须释放平台实例锁；PID 只在全部就绪后写入。
+    await supervisor?.stop().catch(() => undefined);
+    await platformGateway?.stop().catch(() => undefined);
+    await lock.release().catch(() => undefined);
+  }
+}
+
 /** 执行一次性 gateway 子命令，返回退出码 */
 export async function runGatewayCommand(
   command: GatewayCommand,
@@ -1505,6 +2216,8 @@ export async function runGatewayCommand(
 }
 
 /** 前台 `start`/`restart` 是否由 cli.ts 处理（其余进一次性注册表） */
-export function isForegroundGatewayCommand(command: GatewayCommand): boolean {
+export function isForegroundGatewayCommand(
+  command: GatewayCommand,
+): command is Extract<GatewayCommand, { kind: 'start' | 'restart' }> {
   return (command.kind === 'start' || command.kind === 'restart') && command.daemon === false;
 }
