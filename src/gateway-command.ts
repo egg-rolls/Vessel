@@ -80,8 +80,6 @@ export interface GatewayCommandDeps {
   printErr?: (line: string) => void;
   /** 0.15 测试注入：`status --rpc` 直接使用该 RPC 目标 */
   rpcTarget?: ControlPlaneTarget;
-  /** 0.15：daemon 子进程透传 `--exclusive` */
-  exclusive?: boolean;
   /** 内部计数探针注入；缺省 collectGatewayState。 */
   collectState?: typeof collectGatewayState;
 }
@@ -1323,7 +1321,6 @@ async function startDaemonCommand(
     state: snapshot,
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
-    ...(options.exclusive === true ? { exclusive: true } : {}),
     ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
     ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
   });

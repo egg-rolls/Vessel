@@ -310,9 +310,9 @@ export interface PluginEventDto {
   data: Record<string, unknown>;
 }
 
-/** 可注入的 per-tenant 事件源（gateway hub / 测试 fake） */
+/** 可注入的单流事件源（gateway hub / 测试 fake） */
 export interface PluginEventSource {
-  subscribe(tenantId: string, handler: (event: PluginEventDto) => void): () => void;
+  subscribe(handler: (event: PluginEventDto) => void): () => void;
 }
 
 /**
@@ -327,9 +327,9 @@ export interface PluginHostManagerLike {
    * 懒激活：首次页面 / RPC 访问时调用；active 时 no-op，
    * disabled / invalid 抛契约错误。v1 不做预激活。
    */
-  ensureActive(id: string, tenantId?: string): Promise<void>;
-  /** tenant →（plugin id → 渲染字段）；只含 enabled 的体验型 plugin。 */
-  contributionsFor(tenantId: string): Record<string, PluginRenderContributions>;
+  ensureActive(id: string): Promise<void>;
+  /** plugin id → 渲染字段；只含 enabled 的体验型 plugin。 */
+  contributionsFor(): Record<string, PluginRenderContributions>;
   /** 当前 enabled、且声明了 ui.dir 的静态挂载。 */
   staticMounts(): PluginStaticMount[];
   /** 由 gateway 用 hub 构造的事件源注入；替换旧源并重订阅 active plugin。 */

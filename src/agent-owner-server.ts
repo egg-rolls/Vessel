@@ -386,7 +386,7 @@ export interface StartAgentOwnerServerOptions {
   /** canonical `agents.*` 控制面（app 侧 AgentService 适配器）。 */
   control: AgentControlLike;
   /** `sessions.create|restart|activate` 的 session 后端（serve 方法表要求）。 */
-  sessionFor?: (tenantId: string) => SessionStore | undefined;
+  sessionFor?: () => SessionStore | undefined;
   /** canonical `teams.*` 控制面；缺省时方法仍在表内，返回 `not_found`。 */
   teams?: TeamControlLike;
   dataDir: string;
@@ -477,7 +477,7 @@ interface OwnerRpc {
  */
 function createOwnerRpc(options: {
   control: AgentControlLike;
-  sessionFor?: (tenantId: string) => SessionStore | undefined;
+  sessionFor?: () => SessionStore | undefined;
   teams?: TeamControlLike;
   tenantId: string;
   ownerId: string;

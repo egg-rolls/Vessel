@@ -78,7 +78,6 @@ export const GLOBAL_FLAGS: readonly string[] = [
   '--tls-key',
   '--tenant',
   '--data-dir',
-  '--exclusive',
   '--connect',
   '--connect-token',
   '--ca',
@@ -262,7 +261,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       {
         name: 'start',
-        flags: ['--daemon', '--instance', '--port', '--host', '--log', '--exclusive'],
+        flags: ['--daemon', '--instance', '--port', '--host', '--log'],
       },
       { name: 'stop', flags: ['--timeout', '--instance', '--port', '--all'] },
       { name: 'status', flags: ['--json', '--rpc', '--instance', '--port', '--all'] },
@@ -281,7 +280,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     token: 'node',
     registryName: 'node',
     subcommands: [
-      { name: 'start', flags: ['--daemon', '--exclusive'] },
+      { name: 'start', flags: ['--daemon'] },
       { name: 'status', flags: ['--json', '--rpc'] },
       { name: 'stop' },
       { name: 'reload', flags: ['--scope'], flagValues: { '--scope': ['config', 'plugins'] } },

@@ -41,7 +41,7 @@ export interface PermissionsMethodsDeps {
   /** 缺省 → `not_supported`。 */
   permissions?: PermissionsControl;
   /** `tools.list` 的同一宿主来源；用于工具存在性校验。 */
-  pluginHostFor(tenantId: string): PluginHost | undefined;
+  pluginHost(): PluginHost | undefined;
 }
 
 function stringParam(params: Record<string, unknown>, key: string): string {
@@ -118,7 +118,7 @@ export function createPermissionsMethods(deps: PermissionsMethodsDeps): RpcMetho
         }
         const tool = stringParam(params, 'tool');
         const policy = policyParam(params);
-        assertKnownTool(tool, deps.pluginHostFor(ctx.tenantId));
+        assertKnownTool(tool, deps.pluginHost());
         let written: ToolPolicyWriteResult;
         try {
           written = control.setToolPolicy({ tool, policy });

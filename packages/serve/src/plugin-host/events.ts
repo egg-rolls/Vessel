@@ -1,7 +1,7 @@
 /**
  * 事件转发（CONTRACT-0.43 §2.5）。
  *
- * - 注入 per-tenant `PluginEventSource`（gateway 用 hub 适配，测试用 fake）；
+ * - 注入单流 `PluginEventSource`（gateway 用 hub 适配，测试用 fake）；
  * - `contributes.events` 白名单支持精确与 `prefix.*` 通配；
  * - 每 plugin 默认 200 事件/秒，超出丢弃并计数（`plugin_event_dropped`）；
  * - DTO 转换时按键名脱敏，超限事件直接丢弃。
@@ -78,7 +78,7 @@ export class EventRateLimiter {
 }
 
 /**
- * 把 gateway hub 的原始 fan-in 适配为 per-tenant plugin 事件源。
+ * 把 gateway hub 的原始 fan-in 适配为单流 plugin 事件源。
  *
  * hub 的 raw 订阅不带 `map`（脱敏 / 摘要）；这里应用注入的 redactor，
  * 再交给 manager 做白名单、限流与 DTO 化。
@@ -88,13 +88,12 @@ export function createHubPluginEventSource(
   options: HubEventSourceOptions = {},
 ): PluginEventSource {
   return {
-    subscribe(tenantId, handler) {
+    subscribe(handler) {
       return hub.subscribe((raw) => {
         if (!isRecord(raw)) return;
-        if (raw.tenant_id !== tenantId) return;
         const redacted = options.redact !== undefined ? options.redact(raw) : raw;
         if (!isRecord(redacted)) return;
-        // 保留 tenant_id 不会进入 plugin DTO：toPluginEventDto 只取 type/ts/data。
+        // tenant_id 不进入 plugin DTO：toPluginEventDto 只取 type/ts/data。
         const dto = toPluginEventDto(redacted);
         if (dto === null) return;
         handler(dto);

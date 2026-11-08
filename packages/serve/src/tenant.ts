@@ -8,7 +8,6 @@
  */
 
 import type { PrincipalScope } from '@vessel-agent/config';
-import type { RunEvent } from '@vessel-agent/core';
 import { RpcError } from './rpc.js';
 
 /** 角色（A-3 冻结） */
@@ -169,18 +168,6 @@ export function resolveTenantScope(
   const allTenants = params.all_tenants === true && isAdmin;
 
   return { tenantId: singleTenantId, allTenants };
-}
-
-/** 事件的 tenant 归属；缺失视为 default（A-3 §10.3） */
-export function eventTenantId(event: RunEvent): string {
-  const raw = (event as { tenant_id?: unknown }).tenant_id;
-  return typeof raw === 'string' && raw.length > 0 ? raw : DEFAULT_TENANT_ID;
-}
-
-/** 事件是否应发给该连接 */
-export function eventVisible(event: RunEvent, tenantId: string, allTenants: boolean): boolean {
-  if (allTenants) return true;
-  return eventTenantId(event) === tenantId;
 }
 
 /**

@@ -3,7 +3,7 @@
  *
  * 只转发已经在路由表里的请求；所有安全边界由宿主执行：
  * - 剥离客户端 `Authorization` / `Cookie` / `X-Vessel-*` / `X-Forwarded-*`；
- * - `Host` 改写为插件回环地址，只注入内部 token + tenant；
+ * - `Host` 改写为插件回环地址，只注入内部 token；
  * - 请求 / 响应 body、总超时、流式 idle、并发连接上限；
  * - 响应头 allowlist，禁止 `Set-Cookie` 与 CORS 头。
  *
@@ -19,7 +19,6 @@ export interface PluginHttpProxyOptions {
   url: URL;
   route: PluginHttpRoute;
   target: PluginHttpTarget;
-  tenantId: string;
   /** gateway 已算好的同源 CORS 头；插件响应不得自带 CORS。 */
   cors?: Record<string, string>;
 }
@@ -170,7 +169,6 @@ async function readLimitedBody(
 function forwardRequestHeaders(
   request: Request,
   target: PluginHttpTarget,
-  tenantId: string,
   body: Uint8Array | undefined,
 ): Headers {
   const headers = new Headers();
@@ -183,7 +181,6 @@ function forwardRequestHeaders(
   const host = new URL(target.url).host;
   headers.set('host', host);
   headers.set('x-vessel-plugin-token', target.token);
-  headers.set('x-vessel-tenant', tenantId);
   if (body !== undefined) headers.set('content-length', String(body.byteLength));
   return headers;
 }
@@ -243,7 +240,7 @@ function streamBody(
  * `responseMode: 'stream'` 跳过响应体上限，只用 idle timeout 约束。
  */
 export async function proxyPluginHttpRequest(options: PluginHttpProxyOptions): Promise<Response> {
-  const { request, url, route, target, tenantId, cors } = options;
+  const { request, url, route, target, cors } = options;
   const limits = route.limits;
   const deadline = limits.timeoutMs !== null ? Date.now() + limits.timeoutMs : null;
   const controller = new AbortController();
@@ -274,7 +271,7 @@ export async function proxyPluginHttpRequest(options: PluginHttpProxyOptions): P
         ? undefined
         : await readLimitedBody(request.body, limits.maxBodyBytes, null, deadline);
 
-    const headers = forwardRequestHeaders(request, target, tenantId, body);
+    const headers = forwardRequestHeaders(request, target, body);
     const upstreamUrl = `${target.url}${url.pathname}${url.search}`;
 
     // idle 计时从发出请求开始：等首字节（响应头）同样算“没有数据”。

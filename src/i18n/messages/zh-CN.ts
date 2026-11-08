@@ -76,7 +76,6 @@ export const zhCN = {
   'help.cmd.doctor': '本机配置/环境自检（--deep 查询 gateway）',
   'help.cmd.logsTail': '查看 gateway 日志尾部',
   'help.cmd.dataDir': '覆盖全局数据目录',
-  'help.cmd.exclusive': '强制 tenant 单写者锁',
   'help.cmd.resumeRunList': '列出可恢复的 interrupted run',
   'help.cmd.updateCheck': '检查新版本（只提示，不自替换）',
   'help.cmd.updateBeta': '检查预发布通道',

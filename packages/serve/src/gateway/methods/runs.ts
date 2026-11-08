@@ -18,7 +18,7 @@ import {
   isResumableStatus,
   previewOf,
 } from '../../durable.js';
-import { RpcError, type RpcMethodContext, type RpcMethodDefinition } from '../../rpc.js';
+import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import type { LiveRunSnapshotLike, RunControlLike } from '../../run-control.js';
 import { mapTenantError, type TenantControlLike } from '../../tenant.js';
 import { checkpointBelongsToTenant, stringParam } from './common.js';
@@ -26,17 +26,14 @@ import { runStatusSchema } from './schemas.js';
 
 export interface RunMethodsDeps {
   defaultTenantId: string;
-  /**
-   * per-tenant run 控制面；default 用 `runControl`，其它 tenant 只走
-   * `runControlFor`（缺失不回退 default）。
-   */
-  runControlFor(tenantId: string): RunControlLike | undefined;
-  /** 同 `runControlFor`，但缺失时按 `requireRuntime` 语义抛错。 */
-  requireRunControl(tenantId: string): RunControlLike;
-  durableForTenant(tenantId: string): DurableGatewayOptions | undefined;
+  /** 单执行面的 run 控制面（缺失不回退）。 */
+  runControl(): RunControlLike | undefined;
+  /** 同 `runControl`，但缺失时按 `requireRuntime` 语义抛错。 */
+  requireRunControl(): RunControlLike;
+  durable(): DurableGatewayOptions | undefined;
   tenants?: TenantControlLike;
   /** 已受理（queued + running）的 run 数，quota 同步检查用。 */
-  activeCount(tenantId: string): number;
+  activeCount(): number;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
 }
@@ -103,9 +100,9 @@ function recencyOf(run: Record<string, unknown>): number {
 export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
   const {
     defaultTenantId,
-    runControlFor,
+    runControl,
     requireRunControl,
-    durableForTenant,
+    durable,
     tenants,
     activeCount,
     reserveResume,
@@ -130,7 +127,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
     } catch (error) {
       mapTenantError(error);
     }
-    if (limit !== undefined && activeCount(tenantId) >= limit) {
+    if (limit !== undefined && activeCount() >= limit) {
       throw new RpcError('quota_exceeded', `max_concurrent_runs exceeded for tenant ${tenantId}`, {
         tenant_id: tenantId,
         limit,
@@ -138,9 +135,9 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
     }
   }
 
-  /** live 命中（该 tenant 的 snapshot 里同 id 的 queued / running）。 */
-  function findLive(tenantId: string, runId: string): LiveRunSnapshotLike | undefined {
-    const control = runControlFor(tenantId);
+  /** live 命中（snapshot 里同 id 的 queued / running）。 */
+  function findLive(runId: string): LiveRunSnapshotLike | undefined {
+    const control = runControl();
     if (control === undefined) return undefined;
     return liveRunsOf(control).find((run) => run.run_id === runId);
   }
@@ -150,28 +147,20 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
    * 按 `run_id` 去重、live 优先；`updated_at ?? started_at ?? 0` 倒序。
    * `agent_id` / `session_id` / `status` 过滤可组合。
    */
-  async function listRuns(
-    ctx: RpcMethodContext,
-    filters: { sessionId?: string; status?: string; agentId?: string },
-  ): Promise<Array<Record<string, unknown>>> {
-    const control = runControlFor(ctx.tenantId);
-    const durable = durableForTenant(ctx.tenantId);
-    if (control === undefined && durable === undefined) {
-      // 旧语义：非 default tenant 无任何运行面 → forbidden；default 返回空。
-      if (ctx.tenantId !== defaultTenantId) {
-        throw new RpcError(
-          'forbidden',
-          `Durable runs are not configured for tenant: ${ctx.tenantId}`,
-        );
-      }
-      return [];
-    }
+  async function listRuns(filters: {
+    sessionId?: string;
+    status?: string;
+    agentId?: string;
+  }): Promise<Array<Record<string, unknown>>> {
+    const control = runControl();
+    const durableStore = durable();
+    if (control === undefined && durableStore === undefined) return [];
 
     const live = control === undefined ? [] : liveRunsOf(control).map(liveRunStatus);
     const checkpoints =
-      durable === undefined
+      durableStore === undefined
         ? []
-        : (await durable.store.list()).map((checkpoint) =>
+        : (await durableStore.store.list()).map((checkpoint) =>
             normalizeDurableRun(checkpoint as unknown as Record<string, unknown>),
           );
 
@@ -213,8 +202,8 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           runs: { type: 'array', items: runStatusSchema },
         },
       },
-      handler: (params, ctx) =>
-        listRuns(ctx, {
+      handler: (params) =>
+        listRuns({
           ...(typeof params.session_id === 'string' ? { sessionId: params.session_id } : {}),
           ...(typeof params.status === 'string' ? { status: params.status } : {}),
           ...(typeof params.agent_id === 'string' ? { agentId: params.agent_id } : {}),
@@ -235,10 +224,10 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
       },
       handler: async (params, ctx) => {
         const runId = stringParam(params, 'run_id');
-        const live = findLive(ctx.tenantId, runId);
+        const live = findLive(runId);
         if (live !== undefined) return { run: liveRunStatus(live) };
-        const durable = durableForTenant(ctx.tenantId);
-        if (!durable) {
+        const durableStore = durable();
+        if (!durableStore) {
           if (ctx.tenantId !== defaultTenantId) {
             throw new RpcError(
               'forbidden',
@@ -248,7 +237,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           throw new RpcError('not_found', `Run not found: ${runId}`);
         }
         // durable 页签覆盖所有 body；tenant 校验在下一行统一做。
-        const checkpoint = await durable.store.load(runId);
+        const checkpoint = await durableStore.store.load(runId);
         if (!checkpoint || !checkpointBelongsToTenant(checkpoint, ctx.tenantId)) {
           throw new RpcError('not_found', `Run not found: ${runId}`);
         }
@@ -283,7 +272,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         },
       },
       handler: async (params, ctx) => {
-        const control = requireRunControl(ctx.tenantId);
+        const control = requireRunControl();
         await enforceConcurrentQuota(ctx.tenantId);
         await checkQuota(ctx.tenantId, 'runs.start');
         const agentId = typeof params.agent_id === 'string' ? params.agent_id : undefined;
@@ -324,7 +313,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
       },
       handler: async (params, ctx) => {
         const runId = stringParam(params, 'run_id');
-        const control = runControlFor(ctx.tenantId);
+        const control = runControl();
         if (control === undefined) {
           if (ctx.tenantId !== defaultTenantId) {
             throw new RpcError(
@@ -363,8 +352,8 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         },
       },
       handler: async (params, ctx) => {
-        const durable = durableForTenant(ctx.tenantId);
-        if (!durable?.store || !durable.resume) {
+        const durableStore = durable();
+        if (!durableStore?.store || !durableStore.resume) {
           if (ctx.tenantId !== defaultTenantId) {
             throw new RpcError(
               'forbidden',
@@ -379,9 +368,9 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
             legacy_code: 'run_already_running',
           });
         }
-        let checkpoint: Awaited<ReturnType<typeof durable.store.load>>;
+        let checkpoint: Awaited<ReturnType<typeof durableStore.store.load>>;
         try {
-          checkpoint = await durable.store.load(runId);
+          checkpoint = await durableStore.store.load(runId);
         } catch (error) {
           releaseResume(runId);
           mapTenantError(error);
@@ -401,7 +390,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           });
         }
         try {
-          await durable.resume(runId);
+          await durableStore.resume(runId);
         } catch (error) {
           releaseResume(runId);
           const code = (error as { code?: unknown }).code;
@@ -429,7 +418,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
     tenantId: string,
     run: LiveRunSnapshotLike,
   ): Promise<void> {
-    const store = durableForTenant(tenantId)?.store;
+    const store = durable()?.store;
     const save = store?.save;
     if (store === undefined || typeof save !== 'function') return;
     const now = Date.now();

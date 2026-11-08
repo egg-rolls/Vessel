@@ -79,7 +79,7 @@ export interface PluginHostManagerOptions {
   /** 事件 DTO 的额外变换（在事件源之后、白名单之前）。 */
   redact?: (event: PluginEventDto) => PluginEventDto;
   /** 懒激活时解析 settings（缺省 `{}`）；显式 activate 的 settings 优先。 */
-  settingsFor?: (id: string, tenantId: string) => Record<string, unknown>;
+  settingsFor?: (id: string) => Record<string, unknown>;
   logger?: PluginLogger;
   onEventDropped?: (pluginId: string, dropped: number) => void;
   onPermissionDenied?: (pluginId: string, api: string) => void;
@@ -140,7 +140,6 @@ interface Entry {
   restarts: number[];
   restartTimer?: ReturnType<typeof setTimeout>;
   starting?: Promise<void>;
-  tenantId: string;
   settings: Record<string, unknown>;
   /** 本次 spawn 的插件 HTTP endpoint + 内部 token；非 active 时清空。 */
   httpEndpoint?: PluginHttpTarget;
@@ -529,8 +528,8 @@ function descriptorFingerprint(descriptor: PluginDescriptor): string {
 }
 
 /**
- * 单进程内的 plugin 宿主。多个 tenant 的启用列表由 loader 决定；
- * 这里的事件订阅按激活时传入的 tenantId 建立。
+ * 单进程内的 plugin 宿主（0.49 T3：单执行面）。启用列表由 loader 决定；
+ * 事件订阅只有一条运行时流。
  */
 export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostLike {
   readonly rpc = new PluginRpcRegistry();
@@ -646,7 +645,6 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
           dropped: 0,
           denials: 0,
           restarts: [],
-          tenantId: 'default',
           settings: {},
         });
         continue;
@@ -670,11 +668,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     this.rebuildHttpRoutes();
   }
 
-  /** 按需激活（activationEvents 命中后由 loader 调用）。 */
-  async activate(
-    id: string,
-    options: { tenantId?: string; settings?: Record<string, unknown> } = {},
-  ): Promise<void> {
+  /** 按需激活（activationEvents 命中后由 loader 调用）；settings 单份。 */
+  async activate(id: string, options: { settings?: Record<string, unknown> } = {}): Promise<void> {
     const entry = this.requireEntry(id);
     if (!entry.enabled) {
       throw pluginError('plugin_activation_failed', `Plugin ${id} is disabled.`, { id });
@@ -688,7 +683,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
         },
       );
     }
-    await this.startEntry(entry, options.tenantId ?? entry.tenantId, options.settings ?? {});
+    await this.startEntry(entry, options.settings ?? {});
   }
 
   /**
@@ -696,7 +691,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
    * `activationEvents.onPage:*` / `onCommand:*` 是声明元数据，v1 不做预激活；
    * active 时 no-op，disabled / invalid 抛契约错误。
    */
-  async ensureActive(id: string, tenantId?: string): Promise<void> {
+  async ensureActive(id: string): Promise<void> {
     const entry = this.requireEntry(id);
     if (!entry.enabled || entry.status === 'disabled') {
       throw pluginError('plugin_activation_failed', `Plugin ${id} is disabled.`, { id });
@@ -709,9 +704,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
       );
     }
     if (entry.status === 'active') return;
-    const tenant = tenantId ?? entry.tenantId;
-    const settings = this.options.settingsFor?.(id, tenant) ?? {};
-    await this.startEntry(entry, tenant, settings);
+    const settings = this.options.settingsFor?.(id) ?? {};
+    await this.startEntry(entry, settings);
   }
 
   /**
@@ -797,8 +791,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
         this.rpc.unregister(id);
         if (existing.enabled) this.registerRpc(existing);
         if (wasActive && existing.enabled) {
-          const settings = this.options.settingsFor?.(id, existing.tenantId) ?? existing.settings;
-          await this.startEntry(existing, existing.tenantId, settings);
+          const settings = this.options.settingsFor?.(id) ?? existing.settings;
+          await this.startEntry(existing, settings);
         }
       } catch (error) {
         const code = pluginErrorCodeOf(error) ?? 'plugin_activation_failed';
@@ -902,8 +896,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     }
   }
 
-  /** tenant →（id → 渲染字段）；只含 enabled 的体验型 plugin。 */
-  contributionsFor(_tenantId: string): Record<string, PluginRenderContributions> {
+  /** id → 渲染字段（单视图）；只含 enabled 的体验型 plugin。 */
+  contributionsFor(): Record<string, PluginRenderContributions> {
     const output: Record<string, PluginRenderContributions> = {};
     for (const entry of this.entries.values()) {
       if (!entry.enabled || entry.status === 'invalid') continue;
@@ -962,13 +956,13 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
    * 0.48 M1：解析插件 HTTP 目标。首次访问按需激活（与页面 / RPC 一致）。
    * disabled → 404；invalid / unhealthy / 无 endpoint → 503；只有 active → ready。
    */
-  async resolve(pluginId: string, tenantId: string): Promise<PluginHttpResolution> {
+  async resolve(pluginId: string): Promise<PluginHttpResolution> {
     const entry = this.entries.get(pluginId);
     if (entry === undefined) return { kind: 'disabled' };
     if (!entry.enabled || entry.status === 'disabled') return { kind: 'disabled' };
     if (entry.status === 'invalid') return { kind: 'unavailable' };
     try {
-      await this.ensureActive(pluginId, tenantId);
+      await this.ensureActive(pluginId);
     } catch {
       // 激活失败已写入 entry.status；disabled / invalid 走不同 HTTP 语义。
       // 读 helper 防止 TS 把前面的收窄当成不变。
@@ -1114,7 +1108,6 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
       dropped: 0,
       denials: 0,
       restarts: [],
-      tenantId: 'default',
       settings: {},
     };
   }
@@ -1130,14 +1123,10 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     );
   }
 
-  private async startEntry(
-    entry: Entry,
-    tenantId: string,
-    settingsInput: Record<string, unknown>,
-  ): Promise<void> {
+  private async startEntry(entry: Entry, settingsInput: Record<string, unknown>): Promise<void> {
     if (entry.status === 'active') return;
     if (entry.starting !== undefined) return entry.starting;
-    const task = this.doStart(entry, tenantId, settingsInput);
+    const task = this.doStart(entry, settingsInput);
     entry.starting = task;
     try {
       await task;
@@ -1146,11 +1135,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     }
   }
 
-  private async doStart(
-    entry: Entry,
-    tenantId: string,
-    settingsInput: Record<string, unknown>,
-  ): Promise<void> {
+  private async doStart(entry: Entry, settingsInput: Record<string, unknown>): Promise<void> {
     const descriptor = entry.descriptor;
     const settings = filterSettings(descriptor, settingsInput, (message, meta) => {
       this.logger('warn', message, meta);
@@ -1188,7 +1173,6 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
       },
     });
     entry.child = child;
-    entry.tenantId = tenantId;
     entry.settings = settings;
 
     try {
@@ -1224,7 +1208,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     params: Record<string, unknown>,
   ): Promise<unknown> {
     // 动态 RPC 分发：首次调用 plugin.<id>.<name> 在转发前懒激活。
-    await this.ensureActive(entry.descriptor.id, entry.tenantId);
+    await this.ensureActive(entry.descriptor.id);
     const child = entry.child;
     if (child === undefined || entry.status !== 'active') {
       throw pluginError('plugin_activation_failed', 'Plugin is not active.', {
@@ -1309,7 +1293,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     entry.restarts.push(now);
     entry.restartTimer = setTimeout(() => {
       entry.restartTimer = undefined;
-      void this.startEntry(entry, entry.tenantId, entry.settings).catch(() => {
+      void this.startEntry(entry, entry.settings).catch(() => {
         // 启动失败已写入状态；不再无限重试
       });
     }, this.restartDelayMs);
@@ -1320,7 +1304,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     if (source === undefined || entry.unsubscribe !== undefined) return;
     const patterns = entry.descriptor.contributes?.events ?? [];
     if (patterns.length === 0) return;
-    entry.unsubscribe = source.subscribe(entry.tenantId, (event) => {
+    entry.unsubscribe = source.subscribe((event) => {
       const transformed = this.options.redact !== undefined ? this.options.redact(event) : event;
       if (!matchesEventFilter(transformed.type, patterns)) return;
       const dtoViolation = jsonDtoViolation(transformed, 'event');

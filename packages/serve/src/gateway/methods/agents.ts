@@ -63,7 +63,7 @@ export interface AgentMethodsDeps {
    * `keep_messages` 是 `sessions.get().messages`（SessionState）下标；缺省时
    * 由 agent 层按全量投影处理。
    */
-  sessionFor?: (tenantId: string) => SessionStore | undefined;
+  sessionStore?: () => SessionStore | undefined;
 }
 
 function isDefaultTenant(tenantId: string, defaultTenantId: string): boolean {
@@ -860,7 +860,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
               let projectedKeep = keepMessages;
               if (keepMessages !== undefined) {
                 const boundary = await resolveProjectedKeep(
-                  deps.sessionFor?.(ctx.tenantId),
+                  deps.sessionStore?.(),
                   fromSessionId,
                   keepMessages,
                 );

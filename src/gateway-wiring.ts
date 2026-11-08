@@ -17,11 +17,6 @@ import { latestEvalReport } from './eval-wiring';
 import { resolveFederationOptions } from './federation-config';
 import { PluginLoader } from './plugin-loader';
 
-/** gateway `feishu` 注入面（与 packages/serve FeishuGatewayOptions 结构一致） */
-export interface FeishuControlPlaneLike {
-  status(): ReturnType<FeishuChannelLike['status']>;
-}
-
 export interface GatewayControlPlaneOptions {
   config: VesselConfig;
   metrics?: MetricsControlLike;
@@ -36,11 +31,6 @@ export interface GatewayControlPlaneOptions {
    * 未提供时方法仍在 manifest 中，handler 返回 not_found。
    */
   agentControl?: AgentControlLike;
-  /**
-   * 0.5.4 P2-1：按请求 tenant 解析控制面。
-   * 仅返回已构造 bundle 的 tenant；未配置 / 未启用时返回 undefined。
-   */
-  feishuFor?: (tenantId: string) => FeishuControlPlaneLike | undefined;
   /** 默认取 config.evals.enabled（缺省开启） */
   evalsEnabled?: boolean;
   /** 测试注入口 */
@@ -75,8 +65,6 @@ export function buildGatewayControlPlane(
   if (options.teams) controlPlane.teams = options.teams;
   // 0.25：canonical `agents.create|update|close`（生产装配始终存在，除 agent 关闭）。
   if (options.agentControl) controlPlane.agent = options.agentControl;
-
-  if (options.feishuFor) controlPlane.feishuFor = options.feishuFor;
 
   // S7：缺省开启；显式 `federation.enabled: false` 才不注入。缺 token 的 peer
   // 由 resolver 丢弃（fail closed）；这里不打印 token / env，也不因缺失 token 报错。

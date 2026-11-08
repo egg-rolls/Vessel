@@ -80,7 +80,6 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.doctor': 'local config/environment self-check (--deep queries the gateway)',
   'help.cmd.logsTail': 'tail gateway logs',
   'help.cmd.dataDir': 'override the global data directory',
-  'help.cmd.exclusive': 'force the tenant single-writer lock',
   'help.cmd.resumeRunList': 'list resumable interrupted runs',
   'help.cmd.updateCheck': 'check for a new version (notify only, no self-replace)',
   'help.cmd.updateBeta': 'check the beta channel',

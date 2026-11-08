@@ -84,10 +84,10 @@ export interface PendingAsk {
 /** 注册表选项。 */
 export interface InteractionsRegistryOptions {
   /**
-   * tenant 运行时事件流：权限 / ask 应答直接投递到这里。
-   * 找不到流说明 tenant / run 已结束，应答返回 `run_ended`。
+   * 单运行时事件流：权限 / ask 应答直接投递到这里。
+   * 找不到流说明 run 已结束，应答返回 `run_ended`。
    */
-  tenantEventsFor: (tenantId: string) => EventStream | undefined;
+  tenantEventsFor: () => EventStream | undefined;
   defaultTenantId: string;
   /** 交互持久化目录；缺省 = 不落盘。 */
   interactionsDir?: string;
@@ -262,7 +262,7 @@ export function createInteractionsRegistry(
 
   /** 应答投递目标：只能是该 tenant 的运行时流（工具 / 权限策略正在等它）。 */
   function answerStreamFor(tenantId: string): EventStream {
-    const stream = tenantEventsFor(tenantId);
+    const stream = tenantEventsFor();
     if (stream === undefined) {
       throw new RpcError('run_ended', `Tenant event stream is no longer available: ${tenantId}`, {
         tenant_id: tenantId,

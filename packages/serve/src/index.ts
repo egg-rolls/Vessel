@@ -403,8 +403,6 @@ export {
   type ConfigGatewayOptionsLike,
   type ConfigSnapshotLike,
   DEFAULT_TENANT_ID,
-  eventTenantId,
-  eventVisible,
   extractToken,
   type GatewayAuthLike,
   isWildcardPrincipal,
@@ -428,6 +426,5 @@ export {
   type GatewayEventHubOptions,
   type TenantEventHub,
   type TenantEventHubOptions,
-  type TenantEventSource,
 } from './tenant-event-hub.js';
 export { capToolEvent, capToolPayload, TOOL_EVENT_PAYLOAD_LIMIT } from './tool-events.js';

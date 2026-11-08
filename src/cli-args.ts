@@ -390,8 +390,6 @@ export interface CliArgs {
   logsCommand: LogsCommandArgs | null;
   /** 0.15：全局 `--data-dir <path>`；null = 未指定 */
   dataDirArg: string | null;
-  /** 0.15：全局 `--exclusive` 强制 tenant 单写者锁 */
-  exclusive: boolean;
   /** 0.12：`vessel gateway ...` */
   gateway: GatewayCommand | null;
   /** 0.49 G1：`vessel node ...` */
@@ -470,7 +468,6 @@ export function parseArgs(argv: string[]): ParseResult {
     doctorCommand: null,
     logsCommand: null,
     dataDirArg: null,
-    exclusive: false,
     gateway: null,
     node: null,
     statusCommand: null,
@@ -679,9 +676,6 @@ export function parseArgs(argv: string[]): ParseResult {
         i++;
         break;
       }
-      case '--exclusive':
-        args.exclusive = true;
-        break;
       case '--connect': {
         const next = argv[i + 1];
         if (next === undefined || next.startsWith('-') || next.trim() === '') {
@@ -1654,11 +1648,6 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
       command.daemon = true;
       continue;
     }
-    if (a === '--exclusive') {
-      // 0.15：daemon 父进程把全局 flag 透传给子进程。
-      args.exclusive = true;
-      continue;
-    }
     if (a === '--instance') {
       const value = readFlagValue(rest, i, '--instance');
       if (!value.ok) return value;
@@ -1959,10 +1948,6 @@ function parseNodeStart(rest: string[], args: CliArgs): ParseResult {
     }
     if (a === '--daemon') {
       daemon = true;
-      continue;
-    }
-    if (a === '--exclusive') {
-      args.exclusive = true;
       continue;
     }
     return { ok: false, error: `Unknown argument for node start: ${a}` };

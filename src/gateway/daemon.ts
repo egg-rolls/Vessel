@@ -41,8 +41,6 @@ export interface StartDaemonOptions {
   execPath?: string;
   /** 重复启动检查（缺省 true） */
   checkDuplicate?: boolean;
-  /** 0.15：把全局 `--exclusive` 传给子进程 */
-  exclusive?: boolean;
   /**
    * 0.49 G1：前台子命令族。`gateway`（缺省）或 `node`；两者复用同一
    * PID/实例锁形状，`node` 只启动 Node API 监听。
@@ -97,7 +95,6 @@ export function buildDaemonArgv(options: {
   instance?: string;
   port?: number;
   host?: string;
-  exclusive?: boolean;
   command?: 'gateway' | 'node';
 }): string[] {
   return [
@@ -111,7 +108,6 @@ export function buildDaemonArgv(options: {
       : []),
     ...(options.port !== undefined ? ['--port', String(options.port)] : []),
     ...(options.host !== undefined ? ['--host', options.host] : []),
-    ...(options.exclusive === true ? ['--exclusive'] : []),
   ];
 }
 
@@ -185,7 +181,6 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
     ...(options.instance !== undefined ? { instance: options.instance } : {}),
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
-    ...(options.exclusive === true ? { exclusive: true } : {}),
     ...(options.command !== undefined ? { command: options.command } : {}),
   });
   const spawn = options.spawn ?? Bun.spawn;

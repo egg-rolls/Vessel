@@ -37,7 +37,6 @@ import {
 } from '../packages/config/src/index';
 import {
   type EventStream,
-  pathsForTenant,
   pruneTrace,
   type ReadTraceOptions,
   readTraceEvents,
@@ -47,10 +46,8 @@ import {
   buildPluginCatalog,
   type ConfigSnapshotLike,
   createGatewayEventHub,
-  type DurableGatewayOptions,
   type Gateway,
   type GatewayOptions,
-  type MetricsProvider,
   type PlatformGateway,
   type PluginHostManager,
   type PluginReloadResult,
@@ -66,7 +63,6 @@ import { sanitizeConfigForSnapshot } from './config-snapshot';
 import { type ConfigWatchHandle, startConfigWatch, toConfigReloadOutcome } from './config-watch';
 import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
-import { createDurableFor } from './durable-wiring';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import type { GatewayInstanceLock } from './gateway/instance-lock';
 import { collectGatewayState, DEFAULT_GATEWAY_INSTANCE } from './gateway/pid';
@@ -139,7 +135,6 @@ import {
 import { resolveContinueSessionId, resumeSession, runSessionList } from './session-resume';
 import { shutdownServeStack } from './shutdown-sequence';
 import { createTenantControl } from './tenant-command';
-import { createTenantRuntimeFactory, type TenantRuntimeFactory } from './tenant-runtime-factory';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
@@ -244,7 +239,6 @@ function printHelp(): void {
   ];
   const config: Array<[string, string]> = [
     ['vessel --data-dir <path> ...', t('help.cmd.dataDir')],
-    ['vessel --exclusive ...', t('help.cmd.exclusive')],
     ['vessel --tenant <id> ...', t('help.cmd.tenant')],
     ['vessel --connect <url> --connect-token <t> --ca <pem> ...', t('help.cmd.connect')],
     ['vessel config path', t('help.cmd.configPath')],
@@ -686,8 +680,6 @@ const initialResult = await bootstrap({
   headless,
   interactive,
   registerAskUser: askUserClient,
-  acquireLock: true,
-  exclusive: args.exclusive,
   cliOverrides,
   ...(continueLatest ? { continueLatest: true } : {}),
   ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
@@ -735,8 +727,6 @@ if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
       headless,
       interactive,
       registerAskUser: askUserClient,
-      acquireLock: true,
-      exclusive: args.exclusive,
       cliOverrides,
       ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
       ...(args.connectArg !== null
@@ -790,8 +780,8 @@ async function runWithConfig(result: BootstrapResult) {
   let pluginWatch: PluginWatchHandle | undefined;
   /**
    * A2：headless 不在这里直接 `process.exit`，否则会跳过末尾的
-   * gateway / tenantFactory / transport / shutdown 清理（`--serve --run`
-   * 会残留 tenant `.lock`）。只记录退出码，统一走公共清理后再退出。
+   * gateway / transport / shutdown 清理（`--serve --run` 会残留监听与
+   * session 锁）。只记录退出码，统一走公共清理后再退出。
    */
   let headlessExitCode: number | undefined;
 
@@ -907,9 +897,7 @@ async function runWithConfig(result: BootstrapResult) {
   })();
   /** S5.1：node → hub 出站；仅在 `hub.direction: node` 时启动。 */
   let hubNodeOutbound: StartedHubNodeOutbound | undefined;
-  /** A-6：--serve 时除 bootstrap 默认 tenant 外的执行面 */
-  let tenantFactory: TenantRuntimeFactory | undefined;
-  /** 0.18：tenant 事件流的唯一扇入面（shared 流已删除）。 */
+  /** 0.18：事件流的唯一扇入面（shared 流已删除）。 */
   let eventHub: TenantEventHub | undefined;
   if (servePort !== null) {
     // CLI flag 已由 loader 合并进 config.serve；这里只做补全与校验。
@@ -947,42 +935,20 @@ async function runWithConfig(result: BootstrapResult) {
       );
     }
 
-    // A-6 §13.2：为每个 active tenant 构建独立执行面；默认 tenant 复用 bootstrap bundle。
-    // 每个 tenant 持有自己的 writer lock；任一失败由工厂回滚并让进程退出。
-    try {
-      // 0.18：tenant 运行时流是唯一事件面。bootstrap 的默认 tenant bundle 由这里注册；
-      // 其余 tenant 由工厂在构建时注册。
-      eventHub = createGatewayEventHub({
-        ...(result.bundle
-          ? { streams: [{ tenantId: result.tenantId, stream: result.bundle.runtimeEvents }] }
-          : {}),
-        // 0.18：live hub 与 trace 同源；bundle.redactor 已是 core+ext 组合实例。
-        // 缺 bundle 是不可达的理论路径，保留 hub 默认 redactor。
-        ...(result.bundle ? { redactor: result.bundle.redactor } : {}),
-      });
-
-      tenantFactory = await createTenantRuntimeFactory({
-        config,
-        tenantId: result.tenantId,
-        runtime: result.executionRuntime,
-        ...(result.bundle ? { seededTenants: [result.bundle] } : {}),
-        useMock,
-        mockScenario,
-        headless,
-        nodeId: result.nodeId,
-        // 0.15：非 default tenant 同样注册 ask_user；每个 tenant 的 ui.askUser 再单独关闭。
-        registerAskUser: askUserClient,
-        ...(args.exclusive ? { exclusive: true } : {}),
-        hub: eventHub,
-        // 0.18：所有 tenant 共用 default bundle 的 ext 实例（trace 与 live 同源）。
-        ...(result.bundle?.extRedactor ? { redactor: result.bundle.extRedactor } : {}),
-        logger,
-      });
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
+    // T3 C1：唯一执行面 = bootstrap 构造的 bundle；缺失是启动错误，
+    // 不得回退到任何工厂或重新构造。
+    const gatewayBundle = result.bundle;
+    if (gatewayBundle === undefined) {
+      console.error('Gateway execution plane is not initialized.');
       await result.shutdown();
       process.exit(1);
     }
+
+    // 0.18：单流是唯一事件面；live hub 与 trace 同源（bundle.redactor 已组合 ext）。
+    eventHub = createGatewayEventHub({
+      streams: [{ tenantId: result.tenantId, stream: gatewayBundle.runtimeEvents }],
+      redactor: gatewayBundle.redactor,
+    });
 
     if (eventHub === undefined) {
       console.error('Gateway event hub is not initialized.');
@@ -995,6 +961,8 @@ async function runWithConfig(result: BootstrapResult) {
     // 只预激活声明 `onStartup` / `*` 的 child plugin；`onPage:` / `onCommand:`
     // 等首次页面 / RPC 访问时由 serve 的 ensureActive 懒激活。
     if (result.bundle !== undefined) {
+      // C4：settings 唯一来源是启动 bundle 的 `plugins[].config`（不回退 liveConfig）。
+      const startupConfig = result.bundle.config;
       pluginHostManager = createPluginHostManager({
         loader: result.bundle.pluginLoader,
         config: liveConfig,
@@ -1002,12 +970,7 @@ async function runWithConfig(result: BootstrapResult) {
         getConfig: () => liveConfig,
         dataDir,
         logger,
-        // 多租户：tenantId → 该 tenant bundle 的 `plugins[].config`；
-        // 未配置的 tenant 显式回退默认 tenant 配置（不静默混用）。
-        settingsFor: (id, tenantId) => {
-          const bundle = tenantFactory?.bundleFor(tenantId);
-          return pluginSettingsFor(bundle?.config ?? liveConfig, id);
-        },
+        settingsFor: (id) => pluginSettingsFor(startupConfig, id),
       });
       const activated = await activateStartupPlugins(pluginHostManager, {
         loader: result.bundle.pluginLoader,
@@ -1050,63 +1013,34 @@ async function runWithConfig(result: BootstrapResult) {
     }
     // 0.18：硬崩后 session 会永久停在 running（事件无终态）。启动 sweep + 读时兜底共用
     // 同一修复函数；锁活着 → 跳过，绝不误杀其它实例的活 run / resume。
-    const livenessContextFor = (tenantId: string): SessionLivenessContext | undefined => {
-      const bundle =
-        tenantFactory?.bundleFor(tenantId) ??
-        (tenantId === result.tenantId ? result.bundle : undefined);
-      if (!bundle) return undefined;
-      return {
-        tenantDir: bundle.tenantPaths.root,
-        session: bundle.session,
-        ...(bundle.eventLog ? { eventLog: bundle.eventLog } : {}),
-        ...(bundle.runStore ? { runStore: bundle.runStore } : {}),
-        logger,
-      };
+    const livenessContext: SessionLivenessContext = {
+      tenantDir: gatewayBundle.tenantPaths.root,
+      session: gatewayBundle.session,
+      ...(gatewayBundle.eventLog ? { eventLog: gatewayBundle.eventLog } : {}),
+      ...(gatewayBundle.runStore ? { runStore: gatewayBundle.runStore } : {}),
+      logger,
     };
-    const livenessSessionFor = (tenantId: string) => {
-      const livenessContext = livenessContextFor(tenantId);
-      return livenessContext !== undefined
-        ? withLivenessRepair(livenessContext.session, livenessContext)
-        : undefined;
-    };
-    for (const tenantId of tenantFactory?.tenantIds() ?? []) {
-      const livenessContext = livenessContextFor(tenantId);
-      if (!livenessContext) continue;
-      const sweep = await reconcileStaleSessions(livenessContext);
-      if (sweep.repaired.length > 0 || sweep.errors.length > 0) {
-        logger.warn('session liveness sweep', {
-          tenant_id: tenantId,
-          repaired: sweep.repaired.length,
-          errors: sweep.errors.length,
-        });
-      }
+    const livenessSession = withLivenessRepair(livenessContext.session, livenessContext);
+    const sweep = await reconcileStaleSessions(livenessContext);
+    if (sweep.repaired.length > 0 || sweep.errors.length > 0) {
+      logger.warn('session liveness sweep', {
+        tenant_id: result.tenantId,
+        repaired: sweep.repaired.length,
+        errors: sweep.errors.length,
+      });
     }
-    // 0.6.1 P0-2：非 default tenant 只走 per-tenant runStore；
-    // default tenant 由上面的 `durable` 提供（gateway 优先 opts.durable）。
-    const durableFor = createDurableFor(tenantFactory, result.tenantId);
     // 0.15：serve 的 config.set 写回面（对象变量避免对 ConfigGatewayOptionsLike 的
     // 多余属性检查；serve 合入 0.15 后该字段会被正式识别）。
     const tenantConfigControl = {
-      snapshot: (tenantId: string): ConfigSnapshotLike => {
-        const bundle = tenantFactory?.bundleFor(tenantId) ?? result.bundle;
-        if (!bundle) {
-          throw Object.assign(new Error(`forbidden: tenant "${tenantId}" is not configured`), {
-            code: 'forbidden',
-          });
-        }
-        return buildConfigSnapshot({
-          // A6-10：不向当前 tenant 暴露其它 tenant 的 overlay。
-          // 默认 tenant 读活配置，写回 / 热应用后 `config.get` 立即反映新策略；
-          // 非默认 tenant 仍读各自 bundle 的配置。
-          config: sanitizeConfigForSnapshot(
-            tenantId === result.tenantId ? liveConfig : bundle.config,
-          ),
-          sources: bundle.configSources,
-          paths: bundle.configPaths ?? { user: '', project: 'vessel.yaml' },
-          tenantId,
-          tenantOverlayKeys: bundle.tenantOverlayKeys,
-        }) as unknown as ConfigSnapshotLike;
-      },
+      snapshot: (): ConfigSnapshotLike =>
+        buildConfigSnapshot({
+          // 单执行面：默认 tenant 读活配置，写回 / 热应用后 `config.get` 立即反映新策略。
+          config: sanitizeConfigForSnapshot(liveConfig),
+          sources: gatewayBundle.configSources,
+          paths: gatewayBundle.configPaths ?? { user: '', project: 'vessel.yaml' },
+          tenantId: result.tenantId,
+          tenantOverlayKeys: gatewayBundle.tenantOverlayKeys,
+        }) as unknown as ConfigSnapshotLike,
       set: createGatewayConfigSet({ defaultTenantId: result.tenantId }),
     };
     // ── 热应用（CONTRACT-hot-apply）────────────────
@@ -1132,15 +1066,11 @@ async function runWithConfig(result: BootstrapResult) {
     });
     registerRuntimeNoticeHook(ctx.pluginHost, noticeBus);
 
-    /** 存活 runtime 的集合：owner（bundle / ctx）+ 每个 tenant bundle。 */
+    /** 存活 runtime 的集合：单执行面的 owner（bundle / ctx）。 */
     const liveTargets = (): PermissionApplyTarget[] =>
       collectPermissionTargets({
         runtime: ctx.runtime,
-        bundleRuntime: result.bundle?.runtime,
-        tenantRuntimes: () => [
-          ...(tenantFactory?.tenantIds() ?? []).map((id) => tenantFactory?.runtimeFor(id)),
-          ...(tenantFactory?.tenantIds() ?? []).map((id) => tenantFactory?.bundleFor(id)?.runtime),
-        ],
+        bundleRuntime: gatewayBundle.runtime,
       });
 
     const permissionState: PermissionApplierState = {
@@ -1241,8 +1171,7 @@ async function runWithConfig(result: BootstrapResult) {
       currentConfig: () => liveConfig,
       reloadConfig: reloadVesselConfig,
       refreshPlugins: () => {
-        tenantFactory?.refreshPlugins();
-        result.bundle?.pluginLoader.refresh();
+        gatewayBundle.pluginLoader.refresh();
       },
       appliers: reloadAppliers,
     });
@@ -1289,10 +1218,9 @@ async function runWithConfig(result: BootstrapResult) {
       status?: string;
     }> => {
       const descriptors = new Map(
-        (result.bundle?.pluginLoader.getChildMods() ?? []).map((descriptor) => [
-          descriptor.name,
-          descriptor,
-        ]),
+        gatewayBundle.pluginLoader
+          .getChildMods()
+          .map((descriptor) => [descriptor.name, descriptor]),
       );
       return (
         pluginHostManager?.statuses().map((status) => {
@@ -1309,30 +1237,35 @@ async function runWithConfig(result: BootstrapResult) {
       );
     };
 
-    // 0.47：tenant 作用域的 plugins 数据源（与 gateway `pluginsFor` 同源）。
-    const pluginEntriesForTenant = (
-      tenantId: string,
-    ): Array<{ name: string; enabled: boolean }> => [
-      ...(tenantFactory?.pluginsFor(tenantId) ?? []),
+    // 0.47：单执行面的 plugins 数据源（与 gateway `plugins` 同源）。
+    const bundlePluginEntries = (): Array<{ name: string; enabled: boolean }> => {
+      const loaded = new Set(gatewayBundle.plugins.map((plugin) => plugin.name));
+      const listed = gatewayBundle.plugins.map((plugin) => ({ name: plugin.name, enabled: true }));
+      // 配置里显式 disabled 的插件不加载，但仍要出现在 plugins.list 中。
+      for (const configured of gatewayBundle.config.plugins ?? []) {
+        if (configured.enabled === false && !loaded.has(configured.name)) {
+          listed.push({ name: configured.name, enabled: false });
+        }
+      }
+      return listed;
+    };
+    const pluginEntries = (): Array<{ name: string; enabled: boolean }> => [
+      ...bundlePluginEntries(),
       ...pluginRuntimeEntries(),
     ];
 
-    // 0.47：catalog 只按该 tenant 的 entries 输出，不泄露别的 tenant；
-    // descriptor 是发现结果（全局），status 只按 entry 名查找。
+    // 0.47：catalog 单视图；descriptor 是发现结果（全局），status 只按 entry 名查找。
     // 0.48 M4：注入 config `expose` 与 manager 的 surface 级冲突状态。
-    const pluginCatalogFor = (tenantId: string) => {
+    const pluginCatalog = () => {
       const expose = new Map<string, PluginExposeConfig>();
       for (const plugin of liveConfig.plugins ?? []) {
         if (plugin.expose !== undefined) expose.set(plugin.name, plugin.expose);
       }
       const httpSurfaceDisabled = pluginHostManager?.httpSurfaceDisabled() === true;
       return buildPluginCatalog({
-        entries: pluginEntriesForTenant(tenantId),
+        entries: pluginEntries(),
         descriptors: new Map(
-          (result.bundle?.pluginLoader.list() ?? []).map((descriptor) => [
-            descriptor.name,
-            descriptor,
-          ]),
+          gatewayBundle.pluginLoader.list().map((descriptor) => [descriptor.name, descriptor]),
         ),
         statuses: pluginHostManager?.statuses() ?? [],
         ...(expose.size > 0 ? { expose } : {}),
@@ -1340,9 +1273,7 @@ async function runWithConfig(result: BootstrapResult) {
       });
     };
 
-    const gatewayOptions: GatewayOptions & {
-      durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
-    } = {
+    const gatewayOptions: GatewayOptions = {
       // capabilities.list 需要真实版本；缺省会退化为 0.0.0。
       version: readPackageVersion(),
       // 0.13 Addendum A：权限交互持久化目录（serve 负责文件格式与原子写）。
@@ -1372,8 +1303,8 @@ async function runWithConfig(result: BootstrapResult) {
       },
       hub: eventHub,
       // 0.18：events.list 的二次脱敏与 live hub / trace 同源（ext 幂等）。
-      ...(result.bundle ? { redactor: result.bundle.redactor } : {}),
-      session: livenessSessionFor(result.tenantId) ?? ctx.session,
+      redactor: gatewayBundle.redactor,
+      session: livenessSession ?? ctx.session,
       runtime,
       // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
       context: ctx.context,
@@ -1384,10 +1315,9 @@ async function runWithConfig(result: BootstrapResult) {
         ? { pluginHostManager, pluginHttp: pluginHostManager }
         : {}),
       ...(pluginsReload !== undefined ? { pluginsReload } : {}),
-      // 无 tenantFactory 时也要把 child 插件纳入 plugins.list / plugin.changed。
-      plugins: pluginRuntimeEntries,
-      pluginsFor: pluginEntriesForTenant,
-      pluginCatalogFor,
+      // 单执行面的插件清单：bundle 插件 + 体验型 child 插件。
+      plugins: pluginEntries,
+      pluginCatalog,
       // 0.49 G1：拆分模式 node 不宿 WebUI（staticDir 只在 Gateway 启动路径解析）。
       ...(splitGatewayMode || nodeOnlyMode ? {} : { staticDir: resolveStaticDir() }),
       nodeId: result.nodeId,
@@ -1429,92 +1359,46 @@ async function runWithConfig(result: BootstrapResult) {
             ),
           }
         : {}),
-      // A-6 §13.3：per-tenant 执行面 / 插件 / trace / session 数据 / 配置。
-      ...(tenantFactory
-        ? {
-            defaultTenantId: result.tenantId,
-            // 0.6.1：per-tenant durable（缺失 → 非 default tenant 403）。
-            durableFor,
-            // A6-13：tenants.get/list/create/update 的数据源。
-            // A6-14：配置的 status/quota 是权威来源，tenant.json 兜底。
-            tenants: createTenantControl(dataDir, {
-              singleTenantId: result.tenantId,
-              ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
-            }),
-            runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
-            sessionFor: (tenantId: string) =>
-              livenessSessionFor(tenantId) ?? tenantFactory?.sessionFor(tenantId),
-            pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
-            pluginsFor: pluginEntriesForTenant,
-            plugins: () => pluginEntriesForTenant(result.tenantId),
-            // 无 metrics 的 tenant 返回 undefined；gateway 已按 undefined 处理。
-            metricsFor: ((tenantId: string) => {
-              const metrics = tenantFactory?.metricsFor(tenantId);
-              return metrics ? () => metrics.snapshot() : undefined;
-            }) as unknown as (tenantId: string) => MetricsProvider,
-            config: tenantConfigControl,
-            trace: {
-              readEvents: (filter: Record<string, unknown>, tenantId?: string) =>
-                readTraceEvents(
-                  pathsForTenant(dataDir, tenantId ?? result.tenantId, result.tenantId).events_dir,
-                  filter as ReadTraceOptions,
-                ),
-              prune: (params: Record<string, unknown>) => {
-                const requestedTenant =
-                  typeof params.tenant_id === 'string' && params.tenant_id !== ''
-                    ? params.tenant_id
-                    : result.tenantId;
-                // 工厂已持有该 tenant 的写锁，不能再嵌套获取。
-                return pruneTrace(
-                  pathsForTenant(dataDir, requestedTenant, result.tenantId).events_dir,
-                  {
-                    ...(typeof params.older_than_days === 'number'
-                      ? { retentionDays: params.older_than_days }
-                      : {}),
-                    ...(typeof params.max_runs === 'number' ? { maxRuns: params.max_runs } : {}),
-                    ...(typeof params.max_bytes === 'number' ? { maxBytes: params.max_bytes } : {}),
-                  },
-                );
-              },
-            },
-            sessionData: {
-              deleteSessionData: async (sessionId: string, tenantId?: string) => {
-                const resolvedTenant = tenantId ?? result.tenantId;
-                const bundle =
-                  tenantFactory?.bundleFor(resolvedTenant) ??
-                  (resolvedTenant === result.tenantId ? result.bundle : undefined);
-                if (!bundle) {
-                  throw Object.assign(
-                    new Error(`forbidden: tenant "${resolvedTenant}" is not configured`),
-                    { code: 'forbidden' },
-                  );
-                }
-                // 0.34 Stage 3：sessionControl.delete 内部先 detach（冲突抛 conflict）；
-                // 其它 tenant 只有执行面，没有 binding/EU 需要 detach。
-                return bundle.sessionControl.delete(sessionId);
-              },
-            },
-            metricsControl: {
-              rebuild: (tenantId: string) =>
-                rebuildMetrics(pathsForTenant(dataDir, tenantId, result.tenantId).events_dir),
-              // A6-09：只重置该 tenant 的 collector；无 metrics 的 tenant → not_found。
-              reset: (tenantId?: string) => {
-                const id = tenantId ?? result.tenantId;
-                const metrics =
-                  tenantFactory?.metricsFor(id) ??
-                  (id === result.tenantId ? result.metrics : undefined);
-                const reset = (metrics as { reset?: () => void } | undefined)?.reset;
-                if (typeof reset !== 'function') {
-                  throw Object.assign(
-                    new Error(`not_found: metrics are not available for tenant "${id}"`),
-                    { code: 'not_found' },
-                  );
-                }
-                reset.call(metrics);
-              },
-            },
+      // 单执行面的 RPC 数据源：config / trace / session 数据 / metrics。
+      defaultTenantId: result.tenantId,
+      // A6-13：tenants.get/list/create/update 的数据源（T4 删除）。
+      // A6-14：配置的 status/quota 是权威来源，tenant.json 兜底。
+      tenants: createTenantControl(dataDir, {
+        singleTenantId: result.tenantId,
+        ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
+      }),
+      config: tenantConfigControl,
+      trace: {
+        readEvents: (filter: Record<string, unknown>) =>
+          readTraceEvents(gatewayBundle.tenantPaths.events_dir, filter as ReadTraceOptions),
+        prune: (params: Record<string, unknown>) =>
+          pruneTrace(gatewayBundle.tenantPaths.events_dir, {
+            ...(typeof params.older_than_days === 'number'
+              ? { retentionDays: params.older_than_days }
+              : {}),
+            ...(typeof params.max_runs === 'number' ? { maxRuns: params.max_runs } : {}),
+            ...(typeof params.max_bytes === 'number' ? { maxBytes: params.max_bytes } : {}),
+          }),
+      },
+      sessionData: {
+        // 0.34 Stage 3：sessionControl.delete 内部先 detach；冲突（active run /
+        // 活 SessionLease）直接抛 `conflict`，不做任何删除。
+        deleteSessionData: (sessionId: string) => gatewayBundle.sessionControl.delete(sessionId),
+      },
+      metricsControl: {
+        rebuild: () => rebuildMetrics(gatewayBundle.tenantPaths.events_dir),
+        reset: () => {
+          const metrics = gatewayBundle.metrics;
+          const reset = (metrics as { reset?: () => void } | undefined)?.reset;
+          if (typeof reset !== 'function') {
+            throw Object.assign(
+              new Error(`not_found: metrics are not available for tenant "${result.tenantId}"`),
+              { code: 'not_found' },
+            );
           }
-        : {}),
+          reset.call(metrics);
+        },
+      },
     };
 
     // 0.4 控制面：web 的 GatewayOptions 尚未合入本分支，用 Object.assign 注入
@@ -1529,16 +1413,6 @@ async function runWithConfig(result: BootstrapResult) {
       ...(result.agent?.team ? { teams: result.agent.team } : {}),
       // 0.25：canonical agents.create|update|close（同一 AgentService 适配器）。
       ...(result.agent?.control ? { agentControl: result.agent.control } : {}),
-      // 0.5.4 P2-1：非 default tenant 使用自己的 feishu 实例。
-      // 只对工厂已构造 bundle 的 tenant 返回；未配置 / 未启用 → undefined。
-      ...(tenantFactory
-        ? {
-            feishuFor: (tenantId: string) => {
-              const feishu = tenantFactory?.bundleFor(tenantId)?.feishu;
-              return feishu ? { status: () => feishu.status() } : undefined;
-            },
-          }
-        : {}),
     });
 
     // 0.49 G1：先起 platform，再起 node；任一失败回滚已起监听。
@@ -1733,8 +1607,7 @@ async function runWithConfig(result: BootstrapResult) {
     await stopPlatformGateway();
     await shutdownServeStack({
       gateway,
-      closeTenants: async (options) => {
-        await tenantFactory?.closeAll(options);
+      closeTenants: async () => {
         eventHub?.close();
         eventHub = undefined;
       },
@@ -1815,8 +1688,7 @@ async function runWithConfig(result: BootstrapResult) {
       gateway,
       closeTransport: async () => {},
       ...(beforeClose ? { beforeClose } : {}),
-      closeTenants: async (options) => {
-        await tenantFactory?.closeAll(options);
+      closeTenants: async () => {
         eventHub?.close();
         eventHub = undefined;
       },

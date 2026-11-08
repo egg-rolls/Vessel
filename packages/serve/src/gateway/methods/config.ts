@@ -76,21 +76,21 @@ export interface ConfigMethodsDeps {
   defaultTenantId: string;
   version?: string;
   config?: ConfigGatewayOptionsLike;
-  /** health.get 的 runtime 快照（0.15 E6）。 */
-  runtimeSnapshot(tenantId: string): Record<string, unknown>;
+  /** health.get 的 runtime 快照（0.15 E6；单执行面）。 */
+  runtimeSnapshot(): Record<string, unknown>;
   /** 方法表在组装完成后才有值；handler 调用时解析。 */
   methodTable(): RpcMethodTable;
-  toolDescriptionsForTenant(tenantId: string): Array<{ name: string; description?: string }>;
-  pluginsForTenant(tenantId: string): Array<{ name: string; enabled: boolean }>;
-  /** 0.47：tenant 作用域的只读插件 catalog；缺省返回空列表。 */
-  pluginCatalogForTenant?(tenantId: string): PluginCatalogItem[];
+  toolDescriptions(): Array<{ name: string; description?: string }>;
+  plugins(): Array<{ name: string; enabled: boolean }>;
+  /** 0.47：只读插件 catalog（单视图）；缺省返回空列表。 */
+  pluginCatalog?(): PluginCatalogItem[];
   /** 0.43 E1：只给 enabled 的体验型 plugin 附加渲染字段（additive）。 */
-  pluginsContributionsForTenant?(tenantId: string): Record<string, PluginRenderContributions>;
+  pluginsContributions?(): Record<string, PluginRenderContributions>;
   /** 0.43 E10：version / mode / status 运行时元数据（additive）。 */
-  pluginsMetadataForTenant?(tenantId: string): Record<string, PluginListMetadata>;
+  pluginsMetadata?(): Record<string, PluginListMetadata>;
   /** 0.43 E3：rescan / diff / manager.reload 由 assembly 注入；缺省 not_supported。 */
   pluginsReload?: () => Promise<PluginReloadResult>;
-  pluginHostFor(tenantId: string): PluginHost | undefined;
+  pluginHost(): PluginHost | undefined;
   /** health.get 的实时状态。 */
   clientCount(): number;
   latestSeq(): number;
@@ -105,8 +105,8 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
     version,
     config,
     methodTable,
-    toolDescriptionsForTenant,
-    pluginsForTenant,
+    toolDescriptions,
+    plugins,
     clientCount,
     latestSeq,
     protocolInfo,
@@ -201,7 +201,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           node: nodeInfo(ctx.tenantId),
           started_at: startedAt,
           tenant_id: ctx.tenantId,
-          runtime: runtimeSnapshot(ctx.tenantId),
+          runtime: runtimeSnapshot(),
         };
       },
     },
@@ -252,12 +252,12 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           },
         },
       },
-      handler: (_params, ctx) =>
+      handler: () =>
         buildCapabilityManifest({
           version: version ?? '0.0.0',
           table: methodTable(),
-          tools: toolDescriptionsForTenant(ctx.tenantId),
-          plugins: pluginsForTenant(ctx.tenantId),
+          tools: toolDescriptions(),
+          plugins: plugins(),
         }),
     },
     {
@@ -375,14 +375,10 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
 
 /** tools.list（与 config 同域；单独工厂以保持方法表原顺序）。 */
 export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[] {
-  const { defaultTenantId, pluginHostFor } = deps;
+  const { pluginHost } = deps;
 
-  function toolsPayload(tenantId: string = defaultTenantId): { tools: ToolInfo[] } {
-    const host = pluginHostFor(tenantId);
-    if (tenantId !== defaultTenantId && !host) {
-      throw new RpcError('forbidden', `Tenant plugin host is not configured: ${tenantId}`);
-    }
-    const tools = host?.listTools() ?? [];
+  function toolsPayload(): { tools: ToolInfo[] } {
+    const tools = pluginHost()?.listTools() ?? [];
     return {
       tools: tools.map((tool) => ({
         name: tool.name,
@@ -417,7 +413,7 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
           },
         },
       },
-      handler: (_params, ctx) => toolsPayload(ctx.tenantId),
+      handler: () => toolsPayload(),
     },
   ];
 }
@@ -492,11 +488,11 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
           },
         },
       },
-      handler: (_params, ctx) => ({
+      handler: () => ({
         plugins: mergePluginList(
-          deps.pluginsForTenant(ctx.tenantId),
-          deps.pluginsContributionsForTenant?.(ctx.tenantId),
-          deps.pluginsMetadataForTenant?.(ctx.tenantId),
+          deps.plugins(),
+          deps.pluginsContributions?.(),
+          deps.pluginsMetadata?.(),
         ),
       }),
     },
@@ -512,8 +508,8 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
           items: { type: 'array' },
         },
       },
-      handler: (_params, ctx) => ({
-        items: deps.pluginCatalogForTenant?.(ctx.tenantId) ?? [],
+      handler: () => ({
+        items: deps.pluginCatalog?.() ?? [],
       }),
     },
     {

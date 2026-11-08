@@ -275,7 +275,7 @@ export const cliCommands: readonly CliCommand[] = [
     run: async (args) => {
       const command = args.gateway;
       if (command === null) return 1;
-      return runGatewayCommand(command, { exclusive: args.exclusive });
+      return runGatewayCommand(command);
     },
   },
   {

@@ -1,11 +1,11 @@
 /**
- * Tenant 事件扇入面（0.18）：tenant 运行时事件流是唯一事实源。
+ * 事件扇入面（0.18；0.49 T3 收敛为单执行面）。
  *
  * gateway 的序号、环形缓冲、广播、agent registry 都从本 hub 读取；
- * 每个 tenant 的 runtimeEvents 通过 `register()` 接入。hub **不提供 publish**，
- * 业务代码只能写自己的 tenant 流。
+ * 单运行时的 runtimeEvents 作为构造数据接入（0.49 T3：`streams` 只承载一条流，
+ * T4 再收敛成单 `stream`）。hub **不提供 publish**，业务代码只能写运行时流。
  *
- * - `subscribe()`：原始 fan-in（interactions registry），事件写入注册时的 tenant id（克隆）；
+ * - `subscribe()`：原始 fan-in（interactions registry），事件写入构造时的单 id（克隆）；
  * - `subscribeSequenced()`：`map`（脱敏 / 裁剪）之后、分配单调 `seq` 的事件；
  * - `since()` / `gapFor()` / `latestSeq` / `oldestSeq`：供 WS / SSE 回放。
  *
@@ -25,16 +25,13 @@ import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js'
 import { summarizeBroadcastEvent } from './event-summary.js';
 import { capToolEvent } from './tool-events.js';
 
-/** 注册到 hub 的 tenant 流 */
-export interface TenantEventSource {
-  tenantId: string;
-  stream: EventStream;
-}
-
 /** hub 选项 */
 export interface TenantEventHubOptions {
-  /** 初始注册的 tenant 流；后续可用 `register()` 追加。 */
-  streams?: readonly TenantEventSource[];
+  /**
+   * 单运行时的构造数据（0.49 C3 过渡）：T3 只承载一条流，
+   * T4 改为单 `stream` 并删除 `tenantId` 戳记。
+   */
+  streams?: readonly { tenantId: string; stream: EventStream }[];
   /**
    * 环形缓冲容量（默认 10000）。0 / 缺省 = 默认值；非法值抛错。
    * 与 gateway 旧语义一致：0 不表示“无上限”。
@@ -55,13 +52,10 @@ export interface GatewayEventHubOptions extends Omit<TenantEventHubOptions, 'map
 
 /** 事件扇入面（无 publish） */
 export interface TenantEventHub {
-  /** 幂等注册：同 tenant + 同 stream = no-op；同 tenant + 不同 stream 抛错。 */
-  register(tenantId: string, stream: EventStream): Unsubscribe;
-  /** 该 tenant 的运行时流；未注册 / 已关闭时 undefined。 */
-  streamFor(tenantId: string): EventStream | undefined;
-  readonly tenantIds: readonly string[];
+  /** 单运行时流；未配置 / 已关闭时 undefined。 */
+  stream(): EventStream | undefined;
 
-  /** 原始 fan-in：事件写入注册时的 tenant id（克隆），不改原对象。 */
+  /** 原始 fan-in：事件写入构造时的单 id（克隆），不改原对象。 */
   subscribe(handler: (event: RunEvent) => void): Unsubscribe;
   /** `map` + 序号后的 fan-in。 */
   subscribeSequenced(handler: (item: SeqEvent) => void): Unsubscribe;
@@ -72,7 +66,7 @@ export interface TenantEventHub {
   readonly latestSeq: number;
   readonly oldestSeq: number;
 
-  /** 退订所有来源与订阅者、清空缓冲；幂等。关闭后 register / subscribe 抛错。 */
+  /** 退订来源与订阅者、清空缓冲；幂等。关闭后 subscribe 抛错。 */
   close(): void;
 }
 
@@ -86,17 +80,6 @@ function reportHubError(action: string, error: unknown): void {
   );
 }
 
-/**
- * 0.49 C5：单公司模式下运行时只注册一条流，事件统一写入注册时传入的单 id
- * （不是仅补齐缺失字段）。旧事件仍留在各自来源（持久化 / 回放）中，读取端不做
- * tenant 过滤，因此 legacy id 不会被隐藏。
- */
-function withTenantId(event: RunEvent, tenantId: string): RunEvent {
-  const current = (event as { tenant_id?: unknown }).tenant_id;
-  if (current === tenantId) return event;
-  return { ...event, tenant_id: tenantId };
-}
-
 /** 创建事件扇入面 */
 export function createTenantEventHub(options: TenantEventHubOptions): TenantEventHub {
   const configuredHistory = options.maxHistory ?? DEFAULT_MAX_HISTORY;
@@ -106,14 +89,14 @@ export function createTenantEventHub(options: TenantEventHubOptions): TenantEven
   const capacity = configuredHistory === 0 ? DEFAULT_MAX_HISTORY : configuredHistory;
   const buffer = new SeqEventBuffer(capacity);
 
-  /** 同一 EventStream 可被多个 tenant 复用（测试 / 单 runtime 多 tenant）：只订阅一次。 */
-  interface StreamSubscription {
-    unsubscribe: Unsubscribe;
-    /** 注册顺序；首个 tenant 用于补齐事件缺失的 tenant_id。 */
-    tenants: string[];
+  /**
+   * 0.49 C3：单执行面只有一条流。旧事件仍留在各自来源（持久化 / 回放）中，
+   * 读取端不做 tenant 过滤，因此 legacy id 不会被隐藏。
+   */
+  if ((options.streams?.length ?? 0) > 1) {
+    throw new Error('TenantEventHub accepts a single runtime stream (CONTRACT-0.49 C3).');
   }
-  const tenantStreams = new Map<string, EventStream>();
-  const streamSubscriptions = new Map<EventStream, StreamSubscription>();
+  const source = options.streams?.[0];
   const rawHandlers = new Set<(event: RunEvent) => void>();
   const sequencedHandlers = new Set<(item: SeqEvent) => void>();
   let closed = false;
@@ -122,12 +105,10 @@ export function createTenantEventHub(options: TenantEventHubOptions): TenantEven
     if (closed) throw new Error(`TenantEventHub is closed; cannot ${action}.`);
   }
 
-  function fanIn(tenantId: string, event: RunEvent): void {
-    const stamped = withTenantId(event, tenantId);
-
+  function fanIn(event: RunEvent): void {
     for (const handler of [...rawHandlers]) {
       try {
-        handler(stamped);
+        handler(event);
       } catch (error) {
         reportHubError('raw subscriber', error);
       }
@@ -136,7 +117,7 @@ export function createTenantEventHub(options: TenantEventHubOptions): TenantEven
     let prepared: RunEvent;
     try {
       // map 必须返回新事件；这里不克隆第二次，避免掩盖原地修改。
-      prepared = options.map(stamped);
+      prepared = options.map(event);
     } catch (error) {
       reportHubError('map', error);
       return;
@@ -150,46 +131,6 @@ export function createTenantEventHub(options: TenantEventHubOptions): TenantEven
         reportHubError('sequenced subscriber', error);
       }
     }
-  }
-
-  function register(tenantId: string, stream: EventStream): Unsubscribe {
-    assertOpen('register');
-    if (!tenantId) throw new Error('TenantEventHub tenantId is required.');
-    const existing = tenantStreams.get(tenantId);
-    if (existing) {
-      if (existing === stream) return () => {};
-      throw new Error(`TenantEventHub already registered a different stream for "${tenantId}".`);
-    }
-
-    tenantStreams.set(tenantId, stream);
-    let subscription = streamSubscriptions.get(stream);
-    if (subscription) {
-      subscription.tenants.push(tenantId);
-    } else {
-      const entry: StreamSubscription = { tenants: [tenantId], unsubscribe: () => {} };
-      entry.unsubscribe = stream.subscribe((event) => {
-        // 复用同一 stream 时，用首个注册的 tenant 补齐缺失的 tenant_id。
-        fanIn(entry.tenants[0] as string, event);
-      });
-      streamSubscriptions.set(stream, entry);
-      subscription = entry;
-    }
-
-    return () => {
-      if (tenantStreams.get(tenantId) !== stream) return;
-      tenantStreams.delete(tenantId);
-      const current = streamSubscriptions.get(stream);
-      if (!current) return;
-      const index = current.tenants.indexOf(tenantId);
-      if (index >= 0) current.tenants.splice(index, 1);
-      if (current.tenants.length > 0) return;
-      streamSubscriptions.delete(stream);
-      try {
-        current.unsubscribe();
-      } catch (error) {
-        reportHubError('unregister', error);
-      }
-    };
   }
 
   function subscribe(handler: (event: RunEvent) => void): Unsubscribe {
@@ -208,32 +149,31 @@ export function createTenantEventHub(options: TenantEventHubOptions): TenantEven
     };
   }
 
+  let sourceUnsubscribe: Unsubscribe | undefined;
+  if (source !== undefined) {
+    const { tenantId } = source;
+    sourceUnsubscribe = source.stream.subscribe((event) => {
+      // 0.49 C3：单值戳记（不是仅补齐缺失字段）；T4 删除该字段。
+      const current = (event as { tenant_id?: unknown }).tenant_id;
+      fanIn(current === tenantId ? event : { ...event, tenant_id: tenantId });
+    });
+  }
+
   function close(): void {
     if (closed) return;
     closed = true;
-    for (const subscription of streamSubscriptions.values()) {
-      try {
-        subscription.unsubscribe();
-      } catch (error) {
-        reportHubError('close source', error);
-      }
+    try {
+      sourceUnsubscribe?.();
+    } catch (error) {
+      reportHubError('close source', error);
     }
-    streamSubscriptions.clear();
-    tenantStreams.clear();
+    sourceUnsubscribe = undefined;
     rawHandlers.clear();
     sequencedHandlers.clear();
   }
 
-  for (const source of options.streams ?? []) {
-    register(source.tenantId, source.stream);
-  }
-
   return {
-    register,
-    streamFor: (tenantId) => tenantStreams.get(tenantId),
-    get tenantIds() {
-      return [...tenantStreams.keys()];
-    },
+    stream: () => source?.stream,
     subscribe,
     subscribeSequenced,
     since: (seq) => buffer.since(seq),

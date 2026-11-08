@@ -53,7 +53,6 @@ export interface PluginWsUpstream {
 export interface PluginWsConnectionOptions {
   route: PluginHttpRoute;
   target: PluginHttpTarget;
-  tenantId: string;
   /** 客户端请求的 pathname + query，原样转给插件。 */
   path: string;
   /** 原始请求头；由本模块按 §4.3 清洗后转发。 */
@@ -85,11 +84,7 @@ const DROP_UPGRADE_HEADERS: ReadonlySet<string> = new Set([
   'sec-websocket-version',
 ]);
 
-function upstreamHeaders(
-  original: Headers,
-  target: PluginHttpTarget,
-  tenantId: string,
-): Record<string, string> {
+function upstreamHeaders(original: Headers, target: PluginHttpTarget): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [name, value] of original) {
     const lower = name.toLowerCase();
@@ -99,7 +94,6 @@ function upstreamHeaders(
   }
   // Host 由 WS 客户端按回环 URL 设置；插件看到的不是客户端 Host。
   headers['x-vessel-plugin-token'] = target.token;
-  headers['x-vessel-tenant'] = tenantId;
   return headers;
 }
 
@@ -206,11 +200,7 @@ export class PluginWsConnection {
 
     let upstream: PluginWsUpstream;
     try {
-      const headers = upstreamHeaders(
-        this.options.headers,
-        this.options.target,
-        this.options.tenantId,
-      );
+      const headers = upstreamHeaders(this.options.headers, this.options.target);
       const url = toWsUrl(this.options.target.url, this.options.path);
       upstream =
         this.options.connect !== undefined

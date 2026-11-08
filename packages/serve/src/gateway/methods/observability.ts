@@ -19,7 +19,6 @@ import { tenantParamSchema } from './common.js';
 import { metricsSnapshotSchema, runEventSchema } from './schemas.js';
 
 export interface ObservabilityMethodsDeps {
-  defaultTenantId: string;
   /** 与实时流相同的出站脱敏器（0.15 E6）。 */
   redactor?: TraceRedactor;
   trace?: {
@@ -31,7 +30,6 @@ export interface ObservabilityMethodsDeps {
     rebuild?(tenantId: string): Promise<MetricsSnapshot>;
   };
   metrics?: MetricsProvider;
-  metricsFor?: (tenantId: string) => MetricsProvider;
 }
 
 /** events.list */
@@ -98,11 +96,11 @@ export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDe
 
 /** metrics.get / metrics.reset */
 export function createMetricsMethods(deps: ObservabilityMethodsDeps): RpcMethodDefinition[] {
-  const { defaultTenantId, metricsControl, metrics, metricsFor } = deps;
+  const { metricsControl, metrics } = deps;
 
-  function metricsProvider(tenantId: string): MetricsProvider | undefined {
-    if (tenantId === defaultTenantId) return metrics;
-    return metricsFor?.(tenantId);
+  /** 单执行面的 live metrics provider。 */
+  function metricsProvider(): MetricsProvider | undefined {
+    return metrics;
   }
 
   return [
@@ -133,7 +131,7 @@ export function createMetricsMethods(deps: ObservabilityMethodsDeps): RpcMethodD
           const snapshot = await metricsControl.rebuild(ctx.tenantId);
           return { metrics: normalizeMetricsSnapshot(snapshot), source };
         }
-        const provider = metricsProvider(ctx.tenantId);
+        const provider = metricsProvider();
         if (!provider) throw new RpcError('not_found', 'Metrics are not available');
         return { metrics: normalizeMetricsSnapshot(provider()), source };
       },

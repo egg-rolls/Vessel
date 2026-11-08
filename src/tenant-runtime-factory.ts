@@ -7,12 +7,8 @@
  * Stage 4：bundle 不持长期 WorkingContext / ExecutionUnit；profile 注册到传入的
  * per-node `Runtime`，`bundle.runtime` 是按 session 解析 EU 的门面。
  *
- * `createTenantRuntimeFactory()` 为 `--serve` 预构建全部 active tenant：
- * - 每个 tenant 独立 EventStream，构建时注册进 gateway 的 `TenantEventHub`；
- * - trace / metrics 只订阅本 tenant 流；
- * - 每个 tenant 持有自己的 writer lock；启动失败回滚已获取的锁。
- *
- * 本地单 tenant 模式复用 `buildTenantRuntime()`，只是只创建一个 bundle。
+ * 一个 node 恰好构造一个 bundle（`--serve` 与本地模式共用），它是唯一执行面：
+ * 单 EventStream / SessionStore / PluginHost / MetricsControl / scheduler。
  *
  * @module vessel/tenant-runtime-factory
  */
@@ -22,7 +18,6 @@ import { deriveSessionMeta } from '@vessel-agent/core/session';
 import {
   type ConfigSources,
   isTenantToolAllowed,
-  loadConfig,
   resolveTenantToolPolicy,
   type TenantToolPolicy,
   type VesselConfig,
@@ -53,7 +48,6 @@ import {
   type RunRecordStore,
   type Runtime,
   type RuntimePermissionConfig,
-  resolveSingleTenantPaths,
   type Scheduler,
   type SelfCardOptions,
   SessionEventLog,
@@ -62,14 +56,8 @@ import {
   type ToolDefinition,
   type TraceRedactor,
 } from '../packages/core/src/index';
-import type { TenantEventHub } from '../packages/serve/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import { resolveDataDir } from './data-paths';
-import {
-  assertUniqueFeishuAppIds,
-  createFeishuFromConfig,
-  stopFeishuChannel,
-} from './feishu-wiring';
+import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { FileLeaseService } from './lease-service';
 import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
@@ -91,7 +79,6 @@ import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionStore } from './session-factory';
 import { withSessionWriteLock } from './session-lock-runtime';
 import { reportShutdownFailure } from './shutdown-report';
-import { acquireTenantLock, type TenantLock, type TenantLockMode } from './tenant-lock';
 import {
   composeTraceRedactors,
   installTrace,
@@ -117,11 +104,6 @@ export interface BuildTenantRuntimeOptions {
   configPaths?: { user: string; project: string };
   /** tenant overlay 命中的叶子键（config snapshot） */
   tenantOverlayKeys?: string[];
-  /** 已持有的锁；缺省且 acquireLock=true 时由本函数获取并负责释放 */
-  lock?: TenantLock;
-  acquireLock?: boolean;
-  /** tenant 锁模式；缺省 file/memory 后端 shared，sqlite 后端 exclusive */
-  lockMode?: TenantLockMode;
   /** session 写锁（0.15）；缺省 memory 后端关闭，其余开启 */
   sessionLocks?: boolean;
   /**
@@ -166,8 +148,6 @@ export interface BuildTenantRuntimeOptions {
    * 缺省时渠道 `start()` 保持显式失败（禁止静默降级）。
    */
   resolveFeishuService?: () => unknown;
-  /** 0.18：tenant 事件扇入面；每个 tenant 的运行时流在构建时注册。 */
-  hub?: TenantEventHub;
 }
 
 /** 一个 tenant 的完整执行面 */
@@ -220,7 +200,6 @@ export interface TenantRuntimeBundle {
   mcpPlugin?: McpPluginLike;
   mcp?: McpControl;
   feishu?: FeishuChannelLike;
-  lock?: TenantLock;
   /**
    * 幂等关闭。`drain: false` 用于调用方已先 `await gateway.stop()` 的场景：
    * gateway 已完成 interrupt('shutdown') + 5s 等待，避免重复限时等待。
@@ -643,717 +622,682 @@ export async function buildTenantRuntime(
   const logger = options.logger ?? noopLogger;
 
   const backend = config.session?.backend ?? 'file';
-  const lockMode =
-    options.lockMode ?? (backend === 'sqlite' ? ('exclusive' as const) : ('shared' as const));
-  let ownedLock: TenantLock | undefined;
-  if (options.lock === undefined && options.acquireLock === true) {
-    ownedLock = await acquireTenantLock({
-      tenantDir: tenantPaths.root,
-      tenantId,
-      mode: lockMode,
-      ...(options.clock ? { now: options.clock } : {}),
-    });
-  }
-  const lock = options.lock ?? ownedLock;
-
-  try {
-    if (options.pruneTrace === true) {
-      try {
-        await pruneTenantTrace({ config, tenantPaths });
-      } catch (error) {
-        console.warn(
-          `⚠ Failed to prune trace for tenant "${tenantId}": ${
-            error instanceof Error ? error.message : error
-          }`,
-        );
-      }
+  if (options.pruneTrace === true) {
+    try {
+      await pruneTenantTrace({ config, tenantPaths });
+    } catch (error) {
+      console.warn(
+        `⚠ Failed to prune trace for tenant "${tenantId}": ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
     }
+  }
 
-    // ADR-098 C2：SessionLease 接管 session 级写排他；memory 后端或无写意图时缺省
-    // 不创建（EU / 事件日志端口缺省为 no-op，行为等同现状）。
-    const leaseConfig = (config as { lease?: { ttlMs?: number; renewMs?: number } }).lease;
-    const sessionLocksEnabled = options.sessionLocks ?? backend !== 'memory';
-    const leaseService = sessionLocksEnabled
-      ? new FileLeaseService({
-          tenantDir: tenantPaths.root,
+  // ADR-098 C2：SessionLease 接管 session 级写排他；memory 后端或无写意图时缺省
+  // 不创建（EU / 事件日志端口缺省为 no-op，行为等同现状）。
+  const leaseConfig = (config as { lease?: { ttlMs?: number; renewMs?: number } }).lease;
+  const sessionLocksEnabled = options.sessionLocks ?? backend !== 'memory';
+  const leaseService = sessionLocksEnabled
+    ? new FileLeaseService({
+        tenantDir: tenantPaths.root,
+        tenantId,
+        ...(leaseConfig?.ttlMs !== undefined ? { ttlMs: leaseConfig.ttlMs } : {}),
+        ...(leaseConfig?.renewMs !== undefined ? { renewMs: leaseConfig.renewMs } : {}),
+        logger,
+      })
+    : undefined;
+
+  const runStore = createRunRecordStore(config, {
+    tenantRunsDir: tenantPaths.runs_dir,
+    tenantId,
+  });
+  const resolvedProvider = await createProvider(config, loader, useMock, options.mockScenario);
+  const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
+
+  const summarizer = createContextSummarizer(provider, providerModel);
+  // R7：熔断按 session 分桶；owner / 成员共享同一份计数，`force` 由 core 传入。
+  const summarizerForSession =
+    summarizer !== undefined ? createSessionBreaker(summarizer) : undefined;
+  const events = createEventStream(config);
+  // 0.27（spec §5.1）：每 tenant 唯一 scheduler，装配层只在此处构造。
+  // 所有 body / owner / 成员的执行都经它的 executor，不再有第二套队列。
+  // 未配置项沿用 core 缺省（无并发上限 / 队列 100 / per-body 串行），符合 spec §5.1「默认无上限」。
+  // 注意：`DEFAULT_SCHEDULER_OPTIONS.maxConcurrency` 仍是 1（0.2 遗留），这里**不用**它兜底。
+  const scheduler = new InProcessScheduler({
+    ...(config.scheduler?.maxConcurrency !== undefined
+      ? { maxConcurrency: config.scheduler.maxConcurrency }
+      : {}),
+    ...(config.scheduler?.maxQueueSize !== undefined
+      ? { maxQueueSize: config.scheduler.maxQueueSize }
+      : {}),
+    ...(config.scheduler?.perBodySerial !== undefined
+      ? { perBodySerial: config.scheduler.perBodySerial }
+      : {}),
+    events,
+    tenantId,
+  });
+
+  // 0.10 R2-18：只跟踪真实在跑的 run（包装 `ExecutionUnit.run/resume`），
+  // 不从事件推断——测试 / gateway 也会发布合成的 run.started，按事件跟踪会让
+  // shutdown 白等 5s。
+  const activeRuns = new Set<string>();
+  let activeRunSeq = 0;
+  const trackActive = <T>(promise: Promise<T>): Promise<T> => {
+    activeRunSeq += 1;
+    const token = `inflight-${activeRunSeq}`;
+    activeRuns.add(token);
+    void promise
+      .finally(() => {
+        activeRuns.delete(token);
+      })
+      .catch(() => {
+        // 原 promise 的拒绝由调用方处理；这里只为清理跟踪标记
+      });
+    return promise;
+  };
+
+  // 事件流由 cli 的 `createGatewayEventHub({ streams: [...] })` 直接消费，
+  // bundle 不再向 hub 注册（T3 单流）。
+  const session = createSessionStore(config.session, {
+    tenantSessionsDir: tenantPaths.sessions_dir,
+    tenantSessionsDbPath: tenantSessionsDbPath(tenantPaths.root),
+    tenantId,
+  });
+  // 0.18：事件日志按 tenant 的 sessions 目录落盘（`sessions/<id>/events.ndjson`）。
+  // 仅在本地写意图 + 持久化后端时创建；memory 后端/只读执行面保持零磁盘写入。
+  const eventLog =
+    options.writeTrace === true && backend !== 'memory'
+      ? new SessionEventLog({
+          dir: tenantPaths.sessions_dir,
           tenantId,
-          ...(leaseConfig?.ttlMs !== undefined ? { ttlMs: leaseConfig.ttlMs } : {}),
-          ...(leaseConfig?.renewMs !== undefined ? { renewMs: leaseConfig.renewMs } : {}),
           logger,
+          // ADR-098 C2：旧 fencing token 拒绝 append；读路径不校验。
+          ...(leaseService !== undefined
+            ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
+            : {}),
         })
       : undefined;
+  const sessionControl = createSessionControl({
+    session,
+    paths: tenantPaths,
+    events,
+    tenantId,
+    ...(runStore ? { runStore } : {}),
+    ...(eventLog ? { eventLog } : {}),
+  });
 
-    const runStore = createRunRecordStore(config, {
-      tenantRunsDir: tenantPaths.runs_dir,
-      tenantId,
-    });
-    const resolvedProvider = await createProvider(config, loader, useMock, options.mockScenario);
-    const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
+  // ── 插件 ──────────────────────────────────────
+  const declarativePlugins = declarativePluginEntries(config);
+  /** E1：插件名 → 安装配置（显式 plugins[].config 覆盖声明式条目） */
+  const pluginConfigs = buildPluginConfigMap(
+    config.plugins,
+    declarativePlugins,
+    resolveAgentCwd(config),
+  );
+  const pluginSelection = resolvePluginSelection(
+    loader,
+    config.plugins,
+    Boolean(process.env.VESSEL_DEBUG),
+    declarativePlugins,
+  );
+  // 默认集里的外部插件以完整进程权限运行：启动时告警一次（stderr）。
+  warnExternalPluginsOnce(pluginSelection.external);
+  const defaultPluginNames = pluginSelection.names;
 
-    const summarizer = createContextSummarizer(provider, providerModel);
-    // R7：熔断按 session 分桶；owner / 成员共享同一份计数，`force` 由 core 传入。
-    const summarizerForSession =
-      summarizer !== undefined ? createSessionBreaker(summarizer) : undefined;
-    const events = createEventStream(config);
-    // 0.27（spec §5.1）：每 tenant 唯一 scheduler，装配层只在此处构造。
-    // 所有 body / owner / 成员的执行都经它的 executor，不再有第二套队列。
-    // 未配置项沿用 core 缺省（无并发上限 / 队列 100 / per-body 串行），符合 spec §5.1「默认无上限」。
-    // 注意：`DEFAULT_SCHEDULER_OPTIONS.maxConcurrency` 仍是 1（0.2 遗留），这里**不用**它兜底。
-    const scheduler = new InProcessScheduler({
-      ...(config.scheduler?.maxConcurrency !== undefined
-        ? { maxConcurrency: config.scheduler.maxConcurrency }
-        : {}),
-      ...(config.scheduler?.maxQueueSize !== undefined
-        ? { maxQueueSize: config.scheduler.maxQueueSize }
-        : {}),
-      ...(config.scheduler?.perBodySerial !== undefined
-        ? { perBodySerial: config.scheduler.perBodySerial }
-        : {}),
-      events,
-      tenantId,
-    });
-
-    // 0.10 R2-18：只跟踪真实在跑的 run（包装 `ExecutionUnit.run/resume`），
-    // 不从事件推断——测试 / gateway 也会发布合成的 run.started，按事件跟踪会让
-    // shutdown 白等 5s。
-    const activeRuns = new Set<string>();
-    let activeRunSeq = 0;
-    const trackActive = <T>(promise: Promise<T>): Promise<T> => {
-      activeRunSeq += 1;
-      const token = `inflight-${activeRunSeq}`;
-      activeRuns.add(token);
-      void promise
-        .finally(() => {
-          activeRuns.delete(token);
-        })
-        .catch(() => {
-          // 原 promise 的拒绝由调用方处理；这里只为清理跟踪标记
-        });
-      return promise;
-    };
-
-    // 0.18：本 tenant 的运行时流注册进 gateway 的事件扇入面。
-    const unregisterHub = options.hub?.register(tenantId, events);
-
-    const session = createSessionStore(config.session, {
-      tenantSessionsDir: tenantPaths.sessions_dir,
-      tenantSessionsDbPath: tenantSessionsDbPath(tenantPaths.root),
-      tenantId,
-    });
-    // 0.18：事件日志按 tenant 的 sessions 目录落盘（`sessions/<id>/events.ndjson`）。
-    // 仅在本地写意图 + 持久化后端时创建；memory 后端/只读执行面保持零磁盘写入。
-    const eventLog =
-      options.writeTrace === true && backend !== 'memory'
-        ? new SessionEventLog({
-            dir: tenantPaths.sessions_dir,
-            tenantId,
-            logger,
-            // ADR-098 C2：旧 fencing token 拒绝 append；读路径不校验。
-            ...(leaseService !== undefined
-              ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
-              : {}),
-          })
-        : undefined;
-    const sessionControl = createSessionControl({
-      session,
-      paths: tenantPaths,
-      events,
-      tenantId,
-      ...(runStore ? { runStore } : {}),
-      ...(eventLog ? { eventLog } : {}),
-    });
-
-    // ── 插件 ──────────────────────────────────────
-    const declarativePlugins = declarativePluginEntries(config);
-    /** E1：插件名 → 安装配置（显式 plugins[].config 覆盖声明式条目） */
-    const pluginConfigs = buildPluginConfigMap(
-      config.plugins,
-      declarativePlugins,
-      resolveAgentCwd(config),
-    );
-    const pluginSelection = resolvePluginSelection(
-      loader,
-      config.plugins,
-      Boolean(process.env.VESSEL_DEBUG),
-      declarativePlugins,
-    );
-    // 默认集里的外部插件以完整进程权限运行：启动时告警一次（stderr）。
-    warnExternalPluginsOnce(pluginSelection.external);
-    const defaultPluginNames = pluginSelection.names;
-
-    const plugins: Plugin[] = [];
-    const pluginLoadEvents: Array<{
-      type: 'plugin.loaded' | 'plugin.failed';
-      data: Record<string, unknown>;
-    }> = [];
-    for (const name of defaultPluginNames) {
-      const descriptor = loader.list().find((candidate) => candidate.name === name);
-      const category = descriptor?.category ?? 'unknown';
-      const plugin = await loader.load(name);
-      if (plugin) {
-        // E1：配置在 install 时透传（host 路径直接传；非 host 路径见 ExecutionUnit）。
-        plugins.push(plugin);
-        pluginLoadEvents.push({
-          type: 'plugin.loaded',
-          data: {
-            name: plugin.name,
-            category,
-            version: plugin.version ?? descriptor?.version ?? '',
-            tenant_id: tenantId,
-          },
-        });
-      } else {
-        pluginLoadEvents.push({
-          type: 'plugin.failed',
-          data: { name, category, reason: 'load_failed', tenant_id: tenantId },
-        });
-      }
-    }
-
-    // 0.15：ui.askUser=false 按 tenant 关闭（overlay 生效）；无客户端入口不会传 true。
-    if (options.registerAskUser === true && config.ui?.askUser !== false) {
-      const { createAskUserTool } = await import('../packages/tui/src/renderer/ask-user');
-      plugins.push({
-        name: 'ask-user',
-        version: '0.1.0',
-        description: 'Ask-user interactive tool (ADR-029)',
-        install(host) {
-          host.registerTool(createAskUserTool());
+  const plugins: Plugin[] = [];
+  const pluginLoadEvents: Array<{
+    type: 'plugin.loaded' | 'plugin.failed';
+    data: Record<string, unknown>;
+  }> = [];
+  for (const name of defaultPluginNames) {
+    const descriptor = loader.list().find((candidate) => candidate.name === name);
+    const category = descriptor?.category ?? 'unknown';
+    const plugin = await loader.load(name);
+    if (plugin) {
+      // E1：配置在 install 时透传（host 路径直接传；非 host 路径见 ExecutionUnit）。
+      plugins.push(plugin);
+      pluginLoadEvents.push({
+        type: 'plugin.loaded',
+        data: {
+          name: plugin.name,
+          category,
+          version: plugin.version ?? descriptor?.version ?? '',
+          tenant_id: tenantId,
         },
       });
-    }
-    // runtime 共用的 resolved 权限配置（0.8.2 Wave 2B1）。
-    const permission = resolveRuntimePermission(config, headless);
-
-    // ── Runtime ───────────────────────────────────
-    const limits = config.limits ?? {};
-    const termination = {
-      maxIterations: config.termination?.maxIterations,
-      maxRuntimeSeconds: config.termination?.maxRuntimeSeconds,
-    };
-    const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
-
-    const contextFactory = () => new MemoryWorkingContext(contextConfigFor(config, summarizer));
-
-    // ── Stage 4：tenant 范围内只安装一次插件 ──────────
-    // 插件安装原本在 ExecutionUnit 构造内；改成 per-session EU 后，同一 tenant 的
-    // 多个 EU 共享一个 tenant PluginHost，安装/init/dispose 只发生一次。
-    const finalPluginHost = new TenantToolHost(new MemoryPluginHost(), toolPolicy);
-    const installedPlugins = await installPluginsIntoHost({
-      host: finalPluginHost,
-      plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
-      publish: (event) => events.publish(event),
-      logger,
-    });
-
-    // 铁律 1：持久端口只到 Runtime 工厂层；EU 经 journal 写入。
-    // 成员 run 与 tenant run 共用同一工厂 → 成员 run 同样写 RunRecord。
-    const journalFactory = createRunJournalFactory({
-      ...(eventLog !== undefined ? { eventLog } : {}),
-      session,
-      ...(runStore !== undefined ? { runStore } : {}),
-      ...(leaseService !== undefined
-        ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
-        : {}),
-      tenantId,
-      logger,
-    });
-
-    options.runtime.registerProfile({
-      tenantId,
-      providerFactory: () => provider,
-      model: providerModel,
-      // 插件已由装配层安装到共享 host；EU 不重复安装。
-      plugins: [],
-      pluginHostFactory: () => finalPluginHost,
-      limits,
-      termination,
-      // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
-      includeReasoning: includeReasoningFor(config),
-      context: {
-        ...(config.context?.maxTokens !== undefined ? { maxTokens: config.context.maxTokens } : {}),
-        ...(config.context?.autoCompact !== undefined
-          ? { autoCompact: config.context.autoCompact }
-          : {}),
-        summarizer,
-      },
-      systemPrompt,
-      permission,
-      journalFactory,
-    });
-
-    // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）；
-    // 0.18：tenant policy 只减不增。
-    const selfCard = withTenantToolPolicy(
-      ownerSelfCard(config, providerModel, {
-        askUser: options.registerAskUser === true,
-      }),
-      toolPolicy,
-    );
-
-    /** 本 bundle 已服务过的 session（关闭时逐个 retire）。 */
-    const servedSessionIds = new Set<string>();
-
-    const executionUnitFor = (sessionId: string) =>
-      options.runtime.getOrCreateExecutionUnit({
-        tenantId,
-        sessionId,
-        events,
-        session,
-        ...(eventLog !== undefined ? { eventLog } : {}),
-        ...(leaseService !== undefined ? { leaseService } : {}),
-        pluginHost: finalPluginHost,
-        plugins: [],
-        // tenant EU 仍用完整 context 配置（maxMessages / compactThreshold 不进 profile 形状）；
-        // profile 的 `context` 只是成员路径的缺省值。
-        contextFactory: () =>
-          new MemoryWorkingContext(
-            contextConfigFor(config, summarizerForSession?.(sessionId) ?? summarizer),
-          ),
-        overrides: { selfCard },
+    } else {
+      pluginLoadEvents.push({
+        type: 'plugin.failed',
+        data: { name, category, reason: 'load_failed', tenant_id: tenantId },
       });
+    }
+  }
 
-    /**
-     * C6：idle session（无 live EU）的等价瞬态压缩路径。
-     * 不启动 Run、不注入用户消息；从事件日志/缓存播种，压缩后经 transient journal
-     * 写 `message.compaction` 与 SessionState，下一次 run/resume 直接读压缩后的缓存。
-     */
-    const compactIdleSession = async (
-      sessionId: string,
-    ): Promise<{ removed: number; remaining: number; messages: Message[] }> => {
-      const state = await session.load(sessionId);
-      if (state === null) throw new Error('compact_unavailable');
-      const workingContext = new MemoryWorkingContext(
-        contextConfigFor(config, summarizerForSession?.(sessionId) ?? summarizer),
-      );
-      workingContext.setSessionId(sessionId);
-      let history: Message[] = state.messages ?? [];
-      if (eventLog !== undefined) {
-        await eventLog.flush(sessionId);
-        const stored = await eventLog.read(sessionId);
-        if (stored.length > 0) history = projectMessages(stored);
-      }
-      if (
-        !history.some(
-          (message) => message.role === 'system' && message.compaction_summary !== true,
-        ) &&
-        systemPrompt !== ''
-      ) {
-        workingContext.add({ role: 'system', content: systemPrompt, timestamp: Date.now() });
-      }
-      for (const message of history) workingContext.add(message);
-      const removed = workingContext.compactAsync
-        ? await workingContext.compactAsync()
-        : workingContext.compact();
-      const remaining = workingContext.messages.length;
-      const messages = workingContext.messages;
-      if (removed > 0) {
-        const journal = journalFactory.transient({ runId: 'manual', events, sessionId });
-        const report = workingContext.lastCompaction;
-        const summary = [...messages]
-          .reverse()
-          .find((message) => message.role === 'system' && message.compaction_summary === true);
-        const ts = summary?.timestamp ?? Date.now();
+  // 0.15：ui.askUser=false 按 tenant 关闭（overlay 生效）；无客户端入口不会传 true。
+  if (options.registerAskUser === true && config.ui?.askUser !== false) {
+    const { createAskUserTool } = await import('../packages/tui/src/renderer/ask-user');
+    plugins.push({
+      name: 'ask-user',
+      version: '0.1.0',
+      description: 'Ask-user interactive tool (ADR-029)',
+      install(host) {
+        host.registerTool(createAskUserTool());
+      },
+    });
+  }
+  // runtime 共用的 resolved 权限配置（0.8.2 Wave 2B1）。
+  const permission = resolveRuntimePermission(config, headless);
+
+  // ── Runtime ───────────────────────────────────
+  const limits = config.limits ?? {};
+  const termination = {
+    maxIterations: config.termination?.maxIterations,
+    maxRuntimeSeconds: config.termination?.maxRuntimeSeconds,
+  };
+  const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
+
+  const contextFactory = () => new MemoryWorkingContext(contextConfigFor(config, summarizer));
+
+  // ── Stage 4：tenant 范围内只安装一次插件 ──────────
+  // 插件安装原本在 ExecutionUnit 构造内；改成 per-session EU 后，同一 tenant 的
+  // 多个 EU 共享一个 tenant PluginHost，安装/init/dispose 只发生一次。
+  const finalPluginHost = new TenantToolHost(new MemoryPluginHost(), toolPolicy);
+  const installedPlugins = await installPluginsIntoHost({
+    host: finalPluginHost,
+    plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
+    publish: (event) => events.publish(event),
+    logger,
+  });
+
+  // 铁律 1：持久端口只到 Runtime 工厂层；EU 经 journal 写入。
+  // 成员 run 与 tenant run 共用同一工厂 → 成员 run 同样写 RunRecord。
+  const journalFactory = createRunJournalFactory({
+    ...(eventLog !== undefined ? { eventLog } : {}),
+    session,
+    ...(runStore !== undefined ? { runStore } : {}),
+    ...(leaseService !== undefined
+      ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
+      : {}),
+    tenantId,
+    logger,
+  });
+
+  options.runtime.registerProfile({
+    tenantId,
+    providerFactory: () => provider,
+    model: providerModel,
+    // 插件已由装配层安装到共享 host；EU 不重复安装。
+    plugins: [],
+    pluginHostFactory: () => finalPluginHost,
+    limits,
+    termination,
+    // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
+    includeReasoning: includeReasoningFor(config),
+    context: {
+      ...(config.context?.maxTokens !== undefined ? { maxTokens: config.context.maxTokens } : {}),
+      ...(config.context?.autoCompact !== undefined
+        ? { autoCompact: config.context.autoCompact }
+        : {}),
+      summarizer,
+    },
+    systemPrompt,
+    permission,
+    journalFactory,
+  });
+
+  // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）；
+  // 0.18：tenant policy 只减不增。
+  const selfCard = withTenantToolPolicy(
+    ownerSelfCard(config, providerModel, {
+      askUser: options.registerAskUser === true,
+    }),
+    toolPolicy,
+  );
+
+  /** 本 bundle 已服务过的 session（关闭时逐个 retire）。 */
+  const servedSessionIds = new Set<string>();
+
+  const executionUnitFor = (sessionId: string) =>
+    options.runtime.getOrCreateExecutionUnit({
+      tenantId,
+      sessionId,
+      events,
+      session,
+      ...(eventLog !== undefined ? { eventLog } : {}),
+      ...(leaseService !== undefined ? { leaseService } : {}),
+      pluginHost: finalPluginHost,
+      plugins: [],
+      // tenant EU 仍用完整 context 配置（maxMessages / compactThreshold 不进 profile 形状）；
+      // profile 的 `context` 只是成员路径的缺省值。
+      contextFactory: () =>
+        new MemoryWorkingContext(
+          contextConfigFor(config, summarizerForSession?.(sessionId) ?? summarizer),
+        ),
+      overrides: { selfCard },
+    });
+
+  /**
+   * C6：idle session（无 live EU）的等价瞬态压缩路径。
+   * 不启动 Run、不注入用户消息；从事件日志/缓存播种，压缩后经 transient journal
+   * 写 `message.compaction` 与 SessionState，下一次 run/resume 直接读压缩后的缓存。
+   */
+  const compactIdleSession = async (
+    sessionId: string,
+  ): Promise<{ removed: number; remaining: number; messages: Message[] }> => {
+    const state = await session.load(sessionId);
+    if (state === null) throw new Error('compact_unavailable');
+    const workingContext = new MemoryWorkingContext(
+      contextConfigFor(config, summarizerForSession?.(sessionId) ?? summarizer),
+    );
+    workingContext.setSessionId(sessionId);
+    let history: Message[] = state.messages ?? [];
+    if (eventLog !== undefined) {
+      await eventLog.flush(sessionId);
+      const stored = await eventLog.read(sessionId);
+      if (stored.length > 0) history = projectMessages(stored);
+    }
+    if (
+      !history.some(
+        (message) => message.role === 'system' && message.compaction_summary !== true,
+      ) &&
+      systemPrompt !== ''
+    ) {
+      workingContext.add({ role: 'system', content: systemPrompt, timestamp: Date.now() });
+    }
+    for (const message of history) workingContext.add(message);
+    const removed = workingContext.compactAsync
+      ? await workingContext.compactAsync()
+      : workingContext.compact();
+    const remaining = workingContext.messages.length;
+    const messages = workingContext.messages;
+    if (removed > 0) {
+      const journal = journalFactory.transient({ runId: 'manual', events, sessionId });
+      const report = workingContext.lastCompaction;
+      const summary = [...messages]
+        .reverse()
+        .find((message) => message.role === 'system' && message.compaction_summary === true);
+      const ts = summary?.timestamp ?? Date.now();
+      journal.appendFact({
+        type: 'context.compacted',
+        run_id: 'manual',
+        data: {
+          run_id: 'manual',
+          session_id: sessionId,
+          removed,
+          remaining,
+          reason: 'manual',
+          ...(report?.degraded !== undefined ? { degraded: report.degraded } : {}),
+        },
+        ts,
+      });
+      if (summary !== undefined) {
+        const cleared = report?.cleared_tool_call_ids ?? [];
         journal.appendFact({
-          type: 'context.compacted',
+          type: 'message.compaction',
           run_id: 'manual',
           data: {
             run_id: 'manual',
             session_id: sessionId,
             removed,
             remaining,
+            kept: messages.filter((message) => message.role !== 'system').length,
             reason: 'manual',
+            message: { ...summary, timestamp: ts },
+            ...(cleared.length > 0 ? { cleared_tool_call_ids: cleared } : {}),
             ...(report?.degraded !== undefined ? { degraded: report.degraded } : {}),
           },
           ts,
         });
-        if (summary !== undefined) {
-          const cleared = report?.cleared_tool_call_ids ?? [];
-          journal.appendFact({
-            type: 'message.compaction',
-            run_id: 'manual',
-            data: {
-              run_id: 'manual',
-              session_id: sessionId,
-              removed,
-              remaining,
-              kept: messages.filter((message) => message.role !== 'system').length,
-              reason: 'manual',
-              message: { ...summary, timestamp: ts },
-              ...(cleared.length > 0 ? { cleared_tool_call_ids: cleared } : {}),
-              ...(report?.degraded !== undefined ? { degraded: report.degraded } : {}),
-            },
-            ts,
-          });
-        }
-        await journal.saveSessionState({ ...state, messages, updated_at: Date.now() });
       }
-      return { removed, remaining, messages };
-    };
-
-    // Stage 4：bundle.runtime 是 per-session 门面，不再是单个长期存活的 EU。
-    // `id` / `applyPermissionRules` 让既有热应用装配（按结构解析 live runtime）继续命中
-    // 本 tenant 已建的 EU，不新增公开 RPC/事件。
-    const executionFacade: RunnableAgent & {
-      readonly id: string;
-      applyPermissionRules(rules: RuntimePermissionConfig): void;
-      /** C6：手动压缩；有 live EU 用 EU，idle session 走等价瞬态路径。 */
-      compactContext?(
-        sessionId: string,
-      ): Promise<{ removed: number; remaining: number; messages?: Message[] }>;
-    } = {
-      id: `tenant:${tenantId}`,
-      events,
-      pluginHost: finalPluginHost,
-      applyPermissionRules(rules) {
-        for (const sessionId of servedSessionIds) {
-          options.runtime.getExecutionUnit({ tenantId, sessionId })?.applyPermissionRules(rules);
-        }
-      },
-      async compactContext(sessionId) {
-        // C6：有 live EU（含成员 EU）走 EU；idle session 走等价瞬态路径，
-        // 不为它新造 EU（避免 agentId 绑定冲突与目录残留）。
-        const unit = options.runtime.getExecutionUnit({ tenantId, sessionId });
-        if (unit !== undefined) return unit.compactContext(sessionId);
-        return compactIdleSession(sessionId);
-      },
-      async run(input, sessionId, opts) {
-        const targetSession = sessionId ?? options.sessionId ?? 'default';
-        servedSessionIds.add(targetSession);
-        const unit = await executionUnitFor(targetSession);
-        return trackActive(unit.run(input, targetSession, opts));
-      },
-      async resumeRun(runId, opts) {
-        if (runStore === undefined) throw new Error(`durable_disabled: ${runId}`);
-        const record = await runStore.load(runId);
-        if (record === null) throw new Error(`run_not_found: ${runId}`);
-        servedSessionIds.add(record.session_id);
-        const unit = await executionUnitFor(record.session_id);
-        // 调用方负责按 agent_id 路由；门面只处理 tenant EU。
-        return trackActive(unit.resumeRun(record, opts));
-      },
-      async resumeSession(sessionId, input, opts) {
-        servedSessionIds.add(sessionId);
-        const unit = await executionUnitFor(sessionId);
-        return trackActive(unit.resumeSession(sessionId, input, opts));
-      },
-      async dispose() {
-        // 生命周期归 ControlPlane（bundle.close 逐个 retire）；门面不销毁共享 EU。
-      },
-    };
-
-    // 0.15：run/resumeRun 的跨进程写锁。memory 后端不落盘，无需锁。
-    const lockedRuntime = withSessionWriteLock(executionFacade, {
-      tenantDir: tenantPaths.root,
-      enabled: options.sessionLocks ?? backend !== 'memory',
-    });
-
-    // ── Trace ─────────────────────────────────────
-    const extRedactor = options.redactor ?? (await loadRedactSecrets(loader));
-    const redactor = composeTraceRedactors(createDefaultTraceRedactor(), extRedactor);
-    const trace =
-      options.writeTrace === true
-        ? installTrace({
-            events,
-            config,
-            tenantPaths,
-            tenantId,
-            ...(extRedactor ? { redactor: extRedactor } : {}),
-            ...(options.traceFactory ? { factory: options.traceFactory } : {}),
-          })
-        : undefined;
-
-    // asm 事件：不含值、不含密钥。
-    try {
-      const nowTs = options.clock ?? Date.now;
-      events.publish({
-        type: 'config.loaded',
-        run_id: 'config',
-        data: {
-          sources: [...new Set(Object.values(options.configSources ?? {}))],
-          keys: Object.keys(config),
-          tenant_id: tenantId,
-        },
-        ts: nowTs(),
-      });
-      for (const event of pluginLoadEvents) {
-        events.publish({ type: event.type, run_id: 'plugins', data: event.data, ts: nowTs() });
-      }
-    } catch {
-      // 事件投递失败不阻断启动
+      await journal.saveSessionState({ ...state, messages, updated_at: Date.now() });
     }
+    return { removed, remaining, messages };
+  };
 
-    // ── MCP ───────────────────────────────────────
-    let mcpPlugin: McpPluginLike | undefined;
-    let mcpControl: McpControl | undefined;
-    if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
-      const wiring = await installMcp(
-        {
-          config,
-          events,
-          tenantId,
-          loader,
-          ...(options.loadMcpModule ? { loadModule: options.loadMcpModule } : {}),
-        },
-        finalPluginHost,
-      );
-      if (wiring) {
-        mcpPlugin = wiring.plugin;
-        mcpControl = wiring.control;
-      }
-    }
-
-    // ── Feishu / Metrics ───────────────
-    const feishuChannel = await createFeishuFromConfig({
-      config,
-      provider,
-      model: providerModel,
-      pluginHost: finalPluginHost,
-      session,
-      events,
-      tenantId,
-      env: {},
-      ...(runStore ? { runStore } : {}),
-      contextFactory,
-      ...(options.feishuTransport !== undefined ? { transport: options.feishuTransport } : {}),
-      ...(options.resolveFeishuTeamId !== undefined
-        ? { resolveTeamId: options.resolveFeishuTeamId }
-        : {}),
-      ...(options.resolveFeishuService !== undefined
-        ? { resolveService: options.resolveFeishuService }
-        : {}),
-      loader,
-      ...(options.loadFeishuModule ? { loadModule: options.loadFeishuModule } : {}),
-    });
-
-    const metrics = createMetricsCollector(events, config, options.metricsFactory);
-
-    // ── C4：AI 命名（ControlPlane 元数据写，与 sessions.rename 同一 save 路径） ──
-    // 订阅本 tenant 事件流（含成员转发事件）；fire-and-forget，失败只 warn，
-    // 不阻塞 run 终态，也不写 SessionEventLog。
-    const titleGenerationInFlight = new Set<string>();
-    const generateSessionTitle = async (sessionId: string): Promise<void> => {
-      try {
-        const state = await session.load(sessionId);
-        if (state === null) return;
-        const messages = state.messages ?? [];
-        const derivedTitle = deriveSessionMeta(messages).title;
-        // 人工 title 永不被覆盖；AI 已写过（不等于派生标题）则不再生成。
-        if (state.title !== undefined && state.title !== derivedTitle) return;
-        const input = firstUserInputForTitle(messages);
-        if (input === undefined) return;
-        const response = await provider.chat({
-          model: providerModel,
-          messages: [
-            { role: 'system', content: SESSION_TITLE_SYSTEM_PROMPT },
-            { role: 'user', content: input },
-          ],
-          max_tokens: 64,
-          temperature: 0.2,
-          signal: AbortSignal.timeout(5000),
-        });
-        const title = sanitizeGeneratedTitle(response.content);
-        if (title === '') return;
-        // 生成窗口内可能人工 rename / 已有另一次命名：写前重读，保住人工标题。
-        const current = await session.load(sessionId);
-        if (current === null) return;
-        const currentDerived = deriveSessionMeta(current.messages ?? []).title;
-        if (current.title !== undefined && current.title !== currentDerived) return;
-        await session.save({ ...current, title, updated_at: Date.now() });
-        events.publish({
-          type: 'session.titled',
-          run_id: 'session',
-          data: { session_id: sessionId, title },
-          ts: Date.now(),
-        });
-      } catch (error) {
-        logger.warn('session title generation failed', {
-          session_id: sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    };
-    const unsubscribeTitles = events.subscribe((event) => {
-      if (event.type !== 'run.completed') return;
-      if (providerName === 'mock') return;
-      const data = event.data as Record<string, unknown>;
-      const sessionId = typeof data.session_id === 'string' ? data.session_id : undefined;
-      if (sessionId === undefined) return;
-      if (titleGenerationInFlight.has(sessionId)) return;
-      titleGenerationInFlight.add(sessionId);
-      void generateSessionTitle(sessionId).finally(() => {
-        titleGenerationInFlight.delete(sessionId);
-      });
-    });
-
-    let closed = false;
-    const SHUTDOWN_DRAIN_TIMEOUT_MS = 5000;
-
-    /** 关闭失败统一出口：logger.error + `shutdown.failed`（不阻断后续步骤） */
-    const report = (step: string, error: unknown): void => {
-      reportShutdownFailure({
-        events,
-        logger,
-        step,
-        error,
-        tenantId,
-        ...(options.clock ? { now: options.clock } : {}),
-      });
-    };
-
-    /**
-     * 0.10 R2-18：有在跑 run 时先 `interrupt('shutdown')`（checkpoint 落 interrupted，
-     * 可 `--resume-run`），限时等待终态；超时记录 warning 后继续关闭。
-     */
-    const drain = async (): Promise<void> => {
-      try {
-        await drainActiveRuns({
-          activeRuns,
-          logger,
-          tenantId,
-          timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
-          interrupt: (reason: 'shutdown') => {
-            // Stage 4：每个 session 一个 EU；逐个软中断（checkpoint 落 interrupted）。
-            for (const sessionId of servedSessionIds) {
-              options.runtime.getExecutionUnit({ tenantId, sessionId })?.interrupt?.(reason);
-            }
-          },
-        });
-      } catch (error) {
-        report('runtime.interrupt', error);
-      }
-    };
-
-    const close = async (closeOptions: { drain?: boolean } = {}): Promise<void> => {
-      if (closed) return;
-      closed = true;
-
-      // 先中断 / 等待在跑 run，再进入关闭顺序。
-      // serve 路径已由 gateway.stop() 完成 drain，调用方传 drain:false 避免二次 5s。
-      if (closeOptions.drain !== false) await drain();
-
-      // 关闭顺序：feishu → metrics → MCP → runtime → trace
-      // → runStore → session。全部 await，异常逐段隔离，后续步骤仍会执行。
-      // 0.9：MCP 是工厂式插件，不在 runtime 的 `plugins` 数组里，
-      // `ExecutionUnit.dispose()` 触达不到；它的 dispose() 只是 close() 的
-      // 幂等别名（ext 0.9），因此这里保留显式 close —— 不要为接 dispose
-      // 而改安装顺序（DECISION-019 A）。
-      await stopFeishuChannel(feishuChannel, (error) => report('feishu.stop', error));
-
-      disposeMetrics(metrics);
-
-      if (mcpPlugin) {
-        try {
-          await mcpPlugin.close();
-        } catch (error) {
-          report('mcp.close', error);
-        }
-      }
-
-      // Stage 4：per-session EU 由 Runtime 目录持有；逐个 retire（dispose + 移出目录）。
-      // retire 幂等；单条失败不阻断其余条目与后续关闭步骤。
+  // Stage 4：bundle.runtime 是 per-session 门面，不再是单个长期存活的 EU。
+  // `id` / `applyPermissionRules` 让既有热应用装配（按结构解析 live runtime）继续命中
+  // 本 tenant 已建的 EU，不新增公开 RPC/事件。
+  const executionFacade: RunnableAgent & {
+    readonly id: string;
+    applyPermissionRules(rules: RuntimePermissionConfig): void;
+    /** C6：手动压缩；有 live EU 用 EU，idle session 走等价瞬态路径。 */
+    compactContext?(
+      sessionId: string,
+    ): Promise<{ removed: number; remaining: number; messages?: Message[] }>;
+  } = {
+    id: `tenant:${tenantId}`,
+    events,
+    pluginHost: finalPluginHost,
+    applyPermissionRules(rules) {
       for (const sessionId of servedSessionIds) {
-        try {
-          await options.runtime.retireExecutionUnit({ tenantId, sessionId });
-        } catch (error) {
-          report('runtime.retire', error);
-        }
+        options.runtime.getExecutionUnit({ tenantId, sessionId })?.applyPermissionRules(rules);
       }
-      servedSessionIds.clear();
+    },
+    async compactContext(sessionId) {
+      // C6：有 live EU（含成员 EU）走 EU；idle session 走等价瞬态路径，
+      // 不为它新造 EU（避免 agentId 绑定冲突与目录残留）。
+      const unit = options.runtime.getExecutionUnit({ tenantId, sessionId });
+      if (unit !== undefined) return unit.compactContext(sessionId);
+      return compactIdleSession(sessionId);
+    },
+    async run(input, sessionId, opts) {
+      const targetSession = sessionId ?? options.sessionId ?? 'default';
+      servedSessionIds.add(targetSession);
+      const unit = await executionUnitFor(targetSession);
+      return trackActive(unit.run(input, targetSession, opts));
+    },
+    async resumeRun(runId, opts) {
+      if (runStore === undefined) throw new Error(`durable_disabled: ${runId}`);
+      const record = await runStore.load(runId);
+      if (record === null) throw new Error(`run_not_found: ${runId}`);
+      servedSessionIds.add(record.session_id);
+      const unit = await executionUnitFor(record.session_id);
+      // 调用方负责按 agent_id 路由；门面只处理 tenant EU。
+      return trackActive(unit.resumeRun(record, opts));
+    },
+    async resumeSession(sessionId, input, opts) {
+      servedSessionIds.add(sessionId);
+      const unit = await executionUnitFor(sessionId);
+      return trackActive(unit.resumeSession(sessionId, input, opts));
+    },
+    async dispose() {
+      // 生命周期归 ControlPlane（bundle.close 逐个 retire）；门面不销毁共享 EU。
+    },
+  };
 
-      // 插件在 EU 之外安装（tenant host 共享），随 bundle 关闭一起 dispose。
-      try {
-        await installedPlugins.dispose();
-      } catch (error) {
-        report('runtime.plugin.dispose', error);
-      }
+  // 0.15：run/resumeRun 的跨进程写锁。memory 后端不落盘，无需锁。
+  const lockedRuntime = withSessionWriteLock(executionFacade, {
+    tenantDir: tenantPaths.root,
+    enabled: options.sessionLocks ?? backend !== 'memory',
+  });
 
-      if (trace) {
-        try {
-          await trace.flush();
-        } catch (error) {
-          report('trace.flush', error);
-        }
-        try {
-          await trace.close();
-        } catch (error) {
-          report('trace.close', error);
-        }
-      }
+  // ── Trace ─────────────────────────────────────
+  const extRedactor = options.redactor ?? (await loadRedactSecrets(loader));
+  const redactor = composeTraceRedactors(createDefaultTraceRedactor(), extRedactor);
+  const trace =
+    options.writeTrace === true
+      ? installTrace({
+          events,
+          config,
+          tenantPaths,
+          tenantId,
+          ...(extRedactor ? { redactor: extRedactor } : {}),
+          ...(options.traceFactory ? { factory: options.traceFactory } : {}),
+        })
+      : undefined;
 
-      await closeRunRecordStore(runStore, (error) => report('runStore.close', error));
+  // asm 事件：不含值、不含密钥。
+  try {
+    const nowTs = options.clock ?? Date.now;
+    events.publish({
+      type: 'config.loaded',
+      run_id: 'config',
+      data: {
+        sources: [...new Set(Object.values(options.configSources ?? {}))],
+        keys: Object.keys(config),
+        tenant_id: tenantId,
+      },
+      ts: nowTs(),
+    });
+    for (const event of pluginLoadEvents) {
+      events.publish({ type: event.type, run_id: 'plugins', data: event.data, ts: nowTs() });
+    }
+  } catch {
+    // 事件投递失败不阻断启动
+  }
 
-      if (eventLog) {
-        try {
-          await eventLog.close();
-        } catch (error) {
-          report('eventLog.close', error);
-        }
-      }
+  // ── MCP ───────────────────────────────────────
+  let mcpPlugin: McpPluginLike | undefined;
+  let mcpControl: McpControl | undefined;
+  if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+    const wiring = await installMcp(
+      {
+        config,
+        events,
+        tenantId,
+        loader,
+        ...(options.loadMcpModule ? { loadModule: options.loadMcpModule } : {}),
+      },
+      finalPluginHost,
+    );
+    if (wiring) {
+      mcpPlugin = wiring.plugin;
+      mcpControl = wiring.control;
+    }
+  }
 
-      try {
-        session.close?.();
-      } catch (error) {
-        report('session.close', error);
-      }
+  // ── Feishu / Metrics ───────────────
+  const feishuChannel = await createFeishuFromConfig({
+    config,
+    provider,
+    model: providerModel,
+    pluginHost: finalPluginHost,
+    session,
+    events,
+    tenantId,
+    env: {},
+    ...(runStore ? { runStore } : {}),
+    contextFactory,
+    ...(options.feishuTransport !== undefined ? { transport: options.feishuTransport } : {}),
+    ...(options.resolveFeishuTeamId !== undefined
+      ? { resolveTeamId: options.resolveFeishuTeamId }
+      : {}),
+    ...(options.resolveFeishuService !== undefined
+      ? { resolveService: options.resolveFeishuService }
+      : {}),
+    loader,
+    ...(options.loadFeishuModule ? { loadModule: options.loadFeishuModule } : {}),
+  });
 
-      unsubscribeTitles();
-      unregisterHub?.();
+  const metrics = createMetricsCollector(events, config, options.metricsFactory);
 
-      if (ownedLock) {
-        try {
-          await ownedLock.release();
-        } catch (error) {
-          report('tenantLock.release', error);
-        }
-      }
-    };
+  // ── C4：AI 命名（ControlPlane 元数据写，与 sessions.rename 同一 save 路径） ──
+  // 订阅本 tenant 事件流（含成员转发事件）；fire-and-forget，失败只 warn，
+  // 不阻塞 run 终态，也不写 SessionEventLog。
+  const titleGenerationInFlight = new Set<string>();
+  const generateSessionTitle = async (sessionId: string): Promise<void> => {
+    try {
+      const state = await session.load(sessionId);
+      if (state === null) return;
+      const messages = state.messages ?? [];
+      const derivedTitle = deriveSessionMeta(messages).title;
+      // 人工 title 永不被覆盖；AI 已写过（不等于派生标题）则不再生成。
+      if (state.title !== undefined && state.title !== derivedTitle) return;
+      const input = firstUserInputForTitle(messages);
+      if (input === undefined) return;
+      const response = await provider.chat({
+        model: providerModel,
+        messages: [
+          { role: 'system', content: SESSION_TITLE_SYSTEM_PROMPT },
+          { role: 'user', content: input },
+        ],
+        max_tokens: 64,
+        temperature: 0.2,
+        signal: AbortSignal.timeout(5000),
+      });
+      const title = sanitizeGeneratedTitle(response.content);
+      if (title === '') return;
+      // 生成窗口内可能人工 rename / 已有另一次命名：写前重读，保住人工标题。
+      const current = await session.load(sessionId);
+      if (current === null) return;
+      const currentDerived = deriveSessionMeta(current.messages ?? []).title;
+      if (current.title !== undefined && current.title !== currentDerived) return;
+      await session.save({ ...current, title, updated_at: Date.now() });
+      events.publish({
+        type: 'session.titled',
+        run_id: 'session',
+        data: { session_id: sessionId, title },
+        ts: Date.now(),
+      });
+    } catch (error) {
+      logger.warn('session title generation failed', {
+        session_id: sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  const unsubscribeTitles = events.subscribe((event) => {
+    if (event.type !== 'run.completed') return;
+    if (providerName === 'mock') return;
+    const data = event.data as Record<string, unknown>;
+    const sessionId = typeof data.session_id === 'string' ? data.session_id : undefined;
+    if (sessionId === undefined) return;
+    if (titleGenerationInFlight.has(sessionId)) return;
+    titleGenerationInFlight.add(sessionId);
+    void generateSessionTitle(sessionId).finally(() => {
+      titleGenerationInFlight.delete(sessionId);
+    });
+  });
 
-    return {
-      tenantId,
-      config,
-      tenantPaths,
-      configSources: options.configSources ?? {},
-      ...(options.configPaths ? { configPaths: options.configPaths } : {}),
-      tenantOverlayKeys: options.tenantOverlayKeys ?? [],
-      provider,
-      providerName,
-      providerModel,
-      providerBaseUrl,
+  let closed = false;
+  const SHUTDOWN_DRAIN_TIMEOUT_MS = 5000;
+
+  /** 关闭失败统一出口：logger.error + `shutdown.failed`（不阻断后续步骤） */
+  const report = (step: string, error: unknown): void => {
+    reportShutdownFailure({
       events,
-      runtimeEvents: events,
-      session,
-      pluginHost: finalPluginHost,
-      scheduler,
-      runtime: lockedRuntime,
-      ...(leaseService !== undefined ? { leaseService } : {}),
-      summarizer,
-      ...(summarizerForSession !== undefined ? { summarizerForSession } : {}),
-      ...(runStore ? { runStore } : {}),
-      ...(eventLog ? { eventLog } : {}),
-      ...(trace ? { trace } : {}),
-      ...(metrics ? { metrics } : {}),
-      redactor,
-      ...(extRedactor ? { extRedactor } : {}),
-      sessionControl,
-      pluginLoader: loader,
-      plugins,
-      ...(mcpPlugin ? { mcpPlugin } : {}),
-      ...(mcpControl ? { mcp: mcpControl } : {}),
-      ...(feishuChannel ? { feishu: feishuChannel } : {}),
-      ...(lock ? { lock } : {}),
-      close,
-    };
-  } catch (error) {
-    if (ownedLock) {
+      logger,
+      step,
+      error,
+      tenantId,
+      ...(options.clock ? { now: options.clock } : {}),
+    });
+  };
+
+  /**
+   * 0.10 R2-18：有在跑 run 时先 `interrupt('shutdown')`（checkpoint 落 interrupted，
+   * 可 `--resume-run`），限时等待终态；超时记录 warning 后继续关闭。
+   */
+  const drain = async (): Promise<void> => {
+    try {
+      await drainActiveRuns({
+        activeRuns,
+        logger,
+        tenantId,
+        timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
+        interrupt: (reason: 'shutdown') => {
+          // Stage 4：每个 session 一个 EU；逐个软中断（checkpoint 落 interrupted）。
+          for (const sessionId of servedSessionIds) {
+            options.runtime.getExecutionUnit({ tenantId, sessionId })?.interrupt?.(reason);
+          }
+        },
+      });
+    } catch (error) {
+      report('runtime.interrupt', error);
+    }
+  };
+
+  const close = async (closeOptions: { drain?: boolean } = {}): Promise<void> => {
+    if (closed) return;
+    closed = true;
+
+    // 先中断 / 等待在跑 run，再进入关闭顺序。
+    // serve 路径已由 gateway.stop() 完成 drain，调用方传 drain:false 避免二次 5s。
+    if (closeOptions.drain !== false) await drain();
+
+    // 关闭顺序：feishu → metrics → MCP → runtime → trace
+    // → runStore → session。全部 await，异常逐段隔离，后续步骤仍会执行。
+    // 0.9：MCP 是工厂式插件，不在 runtime 的 `plugins` 数组里，
+    // `ExecutionUnit.dispose()` 触达不到；它的 dispose() 只是 close() 的
+    // 幂等别名（ext 0.9），因此这里保留显式 close —— 不要为接 dispose
+    // 而改安装顺序（DECISION-019 A）。
+    await stopFeishuChannel(feishuChannel, (error) => report('feishu.stop', error));
+
+    disposeMetrics(metrics);
+
+    if (mcpPlugin) {
       try {
-        await ownedLock.release();
-      } catch {
-        // best-effort
+        await mcpPlugin.close();
+      } catch (error) {
+        report('mcp.close', error);
       }
     }
-    throw error;
-  }
+
+    // Stage 4：per-session EU 由 Runtime 目录持有；逐个 retire（dispose + 移出目录）。
+    // retire 幂等；单条失败不阻断其余条目与后续关闭步骤。
+    for (const sessionId of servedSessionIds) {
+      try {
+        await options.runtime.retireExecutionUnit({ tenantId, sessionId });
+      } catch (error) {
+        report('runtime.retire', error);
+      }
+    }
+    servedSessionIds.clear();
+
+    // 插件在 EU 之外安装（tenant host 共享），随 bundle 关闭一起 dispose。
+    try {
+      await installedPlugins.dispose();
+    } catch (error) {
+      report('runtime.plugin.dispose', error);
+    }
+
+    if (trace) {
+      try {
+        await trace.flush();
+      } catch (error) {
+        report('trace.flush', error);
+      }
+      try {
+        await trace.close();
+      } catch (error) {
+        report('trace.close', error);
+      }
+    }
+
+    await closeRunRecordStore(runStore, (error) => report('runStore.close', error));
+
+    if (eventLog) {
+      try {
+        await eventLog.close();
+      } catch (error) {
+        report('eventLog.close', error);
+      }
+    }
+
+    try {
+      session.close?.();
+    } catch (error) {
+      report('session.close', error);
+    }
+
+    unsubscribeTitles();
+  };
+
+  return {
+    tenantId,
+    config,
+    tenantPaths,
+    configSources: options.configSources ?? {},
+    ...(options.configPaths ? { configPaths: options.configPaths } : {}),
+    tenantOverlayKeys: options.tenantOverlayKeys ?? [],
+    provider,
+    providerName,
+    providerModel,
+    providerBaseUrl,
+    events,
+    runtimeEvents: events,
+    session,
+    pluginHost: finalPluginHost,
+    scheduler,
+    runtime: lockedRuntime,
+    ...(leaseService !== undefined ? { leaseService } : {}),
+    summarizer,
+    ...(summarizerForSession !== undefined ? { summarizerForSession } : {}),
+    ...(runStore ? { runStore } : {}),
+    ...(eventLog ? { eventLog } : {}),
+    ...(trace ? { trace } : {}),
+    ...(metrics ? { metrics } : {}),
+    redactor,
+    ...(extRedactor ? { extRedactor } : {}),
+    sessionControl,
+    pluginLoader: loader,
+    plugins,
+    ...(mcpPlugin ? { mcpPlugin } : {}),
+    ...(mcpControl ? { mcp: mcpControl } : {}),
+    ...(feishuChannel ? { feishu: feishuChannel } : {}),
+    close,
+  };
 }
 
 /** ext redact-secrets 的结构镜像 */
@@ -1375,262 +1319,5 @@ async function loadRedactSecrets(loader: PluginLoader): Promise<TraceRedactor | 
       `⚠ Failed to load redact-secrets: ${error instanceof Error ? error.message : String(error)}`,
     );
     return undefined;
-  }
-}
-
-// ── 多租户工厂（--serve） ─────────────────────────
-
-/** 工厂注入 */
-export interface TenantRuntimeFactoryOptions {
-  /**
-   * Stage 4：per-node Runtime（bootstrap 构造，serve 的 default tenant 与
-   * 工厂新建的其它 tenant 共用；profile 按 tenant 注册）。
-   */
-  runtime: Runtime;
-  /**
-   * 0.49 T1：唯一单公司 id（来自 `loadConfig().tenantId`）。工厂只构造该 id
-   * 的执行面；多 tenant 枚举分支保留到 T3。
-   */
-  tenantId: string;
-  /** 基础配置（用于 data_dir / tenant 列表） */
-  config: VesselConfig;
-  configPath?: string;
-  userConfigPath?: string;
-  dataDir?: string;
-  useMock?: boolean;
-  /** mock 场景（仅 useMock）；逐 tenant 透传 */
-  mockScenario?: MockScenarioName;
-  headless?: boolean;
-  /**
-   * 0.15：是否为每个 tenant 注册 ask_user（gateway / serve 有可交互客户端时为 true）。
-   * 每个 tenant 的 `ui.askUser: false` 仍会单独关闭。
-   */
-  registerAskUser?: boolean;
-  loader?: PluginLoader;
-  nodeId: string;
-  /** 0.18：所有 tenant 运行时流的扇入面 */
-  hub?: TenantEventHub;
-  metricsFactory?: MetricsFactory;
-  traceFactory?: TraceRecorderFactory;
-  redactor?: TraceRedactor;
-  /** 诊断 logger（0.10 R2-14）；所有 tenant 共用同一 stderr sink */
-  logger?: Logger;
-  clock?: () => number;
-  /** 默认 true：serve 为每个 active tenant 持锁 */
-  acquireLocks?: boolean;
-  /** 0.15：`--exclusive` 强制全部 tenant 用单写者锁 */
-  exclusive?: boolean;
-  /** 默认 true：serve 安装每 tenant trace */
-  writeTrace?: boolean;
-  /**
-   * 已由 bootstrap 构建的 tenant（serve 的默认 tenant）。
-   * 工厂不重复构建、不关闭；调用方负责其生命周期。
-   */
-  seededTenants?: TenantRuntimeBundle[];
-  loadMcpModule?: () => Promise<unknown | null>;
-  loadFeishuModule?: () => Promise<unknown | null>;
-}
-
-/** 工厂（启动完成后访问器是同步的，匹配 gateway 的注入面） */
-export interface TenantRuntimeFactory {
-  /** 已成功构建的 tenant id */
-  tenantIds(): string[];
-  runtimeFor(tenantId: string): RunnableAgent | undefined;
-  sessionFor(tenantId: string): SessionStore | undefined;
-  pluginHostFor(tenantId: string): PluginHost | undefined;
-  metricsFor(tenantId: string): MetricsControlLike | undefined;
-  pluginsFor(tenantId: string): Array<{ name: string; enabled: boolean }> | undefined;
-  bundleFor(tenantId: string): TenantRuntimeBundle | undefined;
-  /** 0.12：清空所有 tenant 的插件扫描缓存（下次 list() 重新扫描） */
-  refreshPlugins(): void;
-  /** `drain: false`：调用方已 await gateway.stop()（已做 interrupt + 5s 等待） */
-  closeAll(options?: { drain?: boolean }): Promise<void>;
-}
-
-/** 载入一个 tenant 的合并配置；禁用 tenant 返回 null。 */
-export async function loadTenantRuntimeConfig(
-  tenantId: string,
-  options: Pick<TenantRuntimeFactoryOptions, 'configPath' | 'userConfigPath' | 'dataDir'>,
-): Promise<{
-  config: VesselConfig;
-  sources: ConfigSources;
-  tenantPaths: TenantPaths;
-  paths: { user: string; project: string };
-  tenantOverlayKeys: string[];
-} | null> {
-  const loaded = await loadConfig({
-    tenantId,
-    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
-    ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
-  });
-  if (loaded.validation.errors.length > 0) {
-    throw new Error(
-      `tenant "${tenantId}" config invalid: ${loaded.validation.errors
-        .map((error) => error.message)
-        .join('; ')}`,
-    );
-  }
-  if (loaded.config.tenant?.tenants?.[tenantId]?.status === 'disabled') return null;
-  // 0.49 T2（C1/C14）：单 id 执行面使用根布局；调用方已完成启动迁移。
-  const tenantPaths = resolveSingleTenantPaths(
-    options.dataDir ?? resolveDataDir(loaded.config),
-    tenantId,
-  );
-  return {
-    config: loaded.config,
-    sources: loaded.sources,
-    tenantPaths,
-    paths: loaded.paths,
-    tenantOverlayKeys: loaded.tenantOverlayKeys,
-  };
-}
-
-/**
- * 预构建全部 active tenant；任一 tenant 失败 → 释放已建 bundle 的锁并抛出。
- * 同一 app_id 跨 tenant → 装配期拒绝启动（A-6 §13.4）。
- */
-export async function createTenantRuntimeFactory(
-  options: TenantRuntimeFactoryOptions,
-): Promise<TenantRuntimeFactory> {
-  const bundles = new Map<string, TenantRuntimeBundle>();
-  const owned = new Set<string>();
-  for (const seeded of options.seededTenants ?? []) {
-    bundles.set(seeded.tenantId, seeded);
-  }
-  const loader = options.loader ?? new PluginLoader();
-  const acquireLocks = options.acquireLocks ?? true;
-  const writeTrace = options.writeTrace ?? true;
-
-  try {
-    // 0.49 T1（C0/C2）：只构造单 id 执行面；不再从 config.tenant.* 推导列表。
-    const activeIds = [options.tenantId];
-    const loadedTenants = new Map<
-      string,
-      {
-        config: VesselConfig;
-        sources: ConfigSources;
-        tenantPaths: TenantPaths;
-        paths: { user: string; project: string };
-        tenantOverlayKeys: string[];
-      }
-    >();
-
-    for (const tenantId of activeIds) {
-      const seeded = bundles.get(tenantId);
-      if (seeded) {
-        // 不重新加载：bootstrap 可能已合并首启向导写入的内存配置。
-        loadedTenants.set(tenantId, {
-          config: seeded.config,
-          sources: seeded.configSources,
-          tenantPaths: seeded.tenantPaths,
-          paths: seeded.configPaths ?? { user: '', project: 'vessel.yaml' },
-          tenantOverlayKeys: seeded.tenantOverlayKeys,
-        });
-        continue;
-      }
-      const loaded = await loadTenantRuntimeConfig(tenantId, options);
-      if (!loaded) continue;
-      loadedTenants.set(tenantId, loaded);
-    }
-
-    assertUniqueFeishuAppIds(
-      [...loadedTenants.entries()].map(([tenantId, loaded]) => ({
-        tenantId,
-        config: loaded.config,
-      })),
-    );
-
-    for (const [tenantId, loaded] of loadedTenants) {
-      // serve 的默认 tenant 已由 bootstrap 构建。
-      if (bundles.has(tenantId)) continue;
-      const bundle = await buildTenantRuntime({
-        tenantId,
-        runtime: options.runtime,
-        config: loaded.config,
-        tenantPaths: loaded.tenantPaths,
-        configSources: loaded.sources,
-        configPaths: loaded.paths,
-        tenantOverlayKeys: loaded.tenantOverlayKeys,
-        acquireLock: acquireLocks,
-        ...(options.exclusive === true ? { lockMode: 'exclusive' as const } : {}),
-        writeTrace,
-        pruneTrace: writeTrace,
-        ...(options.useMock !== undefined ? { useMock: options.useMock } : {}),
-        ...(options.mockScenario !== undefined ? { mockScenario: options.mockScenario } : {}),
-        ...(options.headless !== undefined ? { headless: options.headless } : {}),
-        ...(options.registerAskUser !== undefined
-          ? { registerAskUser: options.registerAskUser }
-          : {}),
-        loader,
-        nodeId: options.nodeId,
-        ...(options.hub ? { hub: options.hub } : {}),
-        ...(options.metricsFactory ? { metricsFactory: options.metricsFactory } : {}),
-        ...(options.traceFactory ? { traceFactory: options.traceFactory } : {}),
-        ...(options.redactor ? { redactor: options.redactor } : {}),
-        ...(options.logger ? { logger: options.logger } : {}),
-        ...(options.clock ? { clock: options.clock } : {}),
-        ...(options.loadMcpModule ? { loadMcpModule: options.loadMcpModule } : {}),
-        ...(options.loadFeishuModule ? { loadFeishuModule: options.loadFeishuModule } : {}),
-      });
-      bundles.set(tenantId, bundle);
-      owned.add(tenantId);
-    }
-
-    let closed = false;
-    return {
-      tenantIds: () => [...bundles.keys()],
-      runtimeFor: (tenantId) => bundles.get(tenantId)?.runtime,
-      sessionFor: (tenantId) => bundles.get(tenantId)?.session,
-      pluginHostFor: (tenantId) => bundles.get(tenantId)?.pluginHost,
-      metricsFor: (tenantId) => bundles.get(tenantId)?.metrics,
-      pluginsFor: (tenantId) => {
-        const bundle = bundles.get(tenantId);
-        if (!bundle) return undefined;
-        const loaded = new Set(bundle.plugins.map((plugin) => plugin.name));
-        const listed = bundle.plugins.map((plugin) => ({ name: plugin.name, enabled: true }));
-        // 配置里显式 disabled 的插件不加载，但仍要出现在 plugins.list 中。
-        for (const configured of bundle.config.plugins ?? []) {
-          if (configured.enabled === false && !loaded.has(configured.name)) {
-            listed.push({ name: configured.name, enabled: false });
-          }
-        }
-        return listed;
-      },
-      bundleFor: (tenantId) => bundles.get(tenantId),
-      refreshPlugins: () => {
-        const loaders = new Set<PluginLoader>([loader]);
-        for (const bundle of bundles.values()) loaders.add(bundle.pluginLoader);
-        for (const pluginLoader of loaders) pluginLoader.refresh();
-      },
-      closeAll: async (closeOptions: { drain?: boolean } = {}) => {
-        if (closed) return;
-        closed = true;
-        // 逆序关闭本工厂构建的 tenant；seed 由调用方关闭。
-        const entries = [...bundles.entries()].filter(([id]) => owned.has(id)).reverse();
-        for (const [, bundle] of entries) {
-          try {
-            await bundle.close(closeOptions);
-          } catch (error) {
-            console.warn(
-              `⚠ Failed to close tenant "${bundle.tenantId}": ${
-                error instanceof Error ? error.message : error
-              }`,
-            );
-          }
-        }
-        bundles.clear();
-        owned.clear();
-      },
-    };
-  } catch (error) {
-    for (const [id, bundle] of [...bundles.entries()].reverse()) {
-      if (!owned.has(id)) continue;
-      try {
-        await bundle.close();
-      } catch {
-        // best-effort rollback
-      }
-    }
-    throw error;
   }
 }

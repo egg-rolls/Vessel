@@ -176,16 +176,11 @@ export interface GatewayOptions {
   /** 运行时（可选）——运行控制端点；结构类型 RunnableAgent（A10），不要断言成 ExecutionUnit */
   runtime?: RunnableAgent;
   /**
-   * 0.27：default tenant 的 run 控制面（app 侧适配 AgentService / scheduler）。
+   * 0.27：run 控制面（app 侧适配 AgentService / scheduler）。
    * live 只读 `snapshot()`；`runs.start` / `runs.cancel` 只调 `start` / `cancel`。
    * 缺省 = `runs.*` 无 live 面（只剩 durable）。
    */
   runControl?: RunControlLike;
-  /**
-   * 0.27：非 default tenant 的 run 控制面工厂。
-   * **绝不回退** `runControl`（否则跨租户执行 / 读快照）。
-   */
-  runControlFor?: (tenantId: string) => RunControlLike | undefined;
   /** 上下文管理器（可选）——会话切换时 clear，修跨会话串历史 */
   context?: WorkingContext;
   /** 工具宿主（可选）——缺省读 runtime.pluginHost */
@@ -253,24 +248,12 @@ export interface GatewayOptions {
   tls?: { certFile: string; keyFile: string };
   /** durable run 查询/恢复注入；缺省 = durable 端点关闭 */
   durable?: DurableGatewayOptions;
-  /**
-   * 0.6.1 P0-2：per-tenant durable store。
-   * default tenant 先用 `durable`，再 fallback 本工厂；
-   * 非 default tenant 只走本工厂，缺失时返回 forbidden（绝不回退全局 store）。
-   */
-  durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
   /** MCP server 状态注入；缺省 = MCP 端点关闭 */
   mcp?: McpGatewayOptions;
   /** metrics 快照注入；缺省 = `/v1/metrics` 返回 metrics_disabled */
   metrics?: MetricsProvider;
   /** 飞书渠道状态注入；缺省 = `/v1/channels/feishu` 返回 channel_disabled */
   feishu?: FeishuGatewayOptions;
-  /**
-   * 0.5.4：per-tenant 飞书渠道。
-   * default tenant 先用 `feishu`，再 fallback 本工厂；
-   * 非 default tenant 只走本工厂，绝不回退全局实例。
-   */
-  feishuFor?: (tenantId: string) => FeishuGatewayOptions | undefined;
   /** evals 最近报告注入；缺省 = `/v1/evals/latest` 返回 eval_not_found */
   evals?: EvalsGatewayOptions;
   // ── 0.5 RPC / 多租户（全部可选；0.4 调用方不传即旧行为） ──
@@ -297,22 +280,18 @@ export interface GatewayOptions {
    * 缺省 / `enabled: false` = `/v1/federation/messages` 返回 404。
    */
   federation?: FederationGatewayOptions;
-  /** plugins.list 数据源（全局） */
+  /** plugins.list / capabilities.list 数据源（单视图） */
   plugins?: () => Array<{ name: string; enabled: boolean }>;
-  /** 0.5 A-6.3：per-tenant plugins.list / capabilities.list；缺省回退 `plugins` */
-  pluginsFor?: (tenantId: string) => Array<{ name: string; enabled: boolean }>;
   /**
-   * 0.47：per-tenant 只读插件 catalog（CONTRACT-0.47 §1/§3）。
-   * 缺省 = `plugins.catalog` 返回空列表；asm 注入统一视图。
+   * 0.47：只读插件 catalog（CONTRACT-0.47 §1/§3；0.49 T3 单视图）。
+   * 缺省 = `plugins.catalog` 返回空列表。
    */
-  pluginCatalogFor?: (tenantId: string) => PluginCatalogItem[];
+  pluginCatalog?: () => PluginCatalogItem[];
   /** metrics.reset / trace 重建 */
   metricsControl?: {
     reset?(tenantId?: string): void;
     rebuild?(tenantId: string): Promise<MetricsSnapshot>;
   };
-  /** 可选 per-tenant live metrics；缺省 default tenant 用 `metrics` */
-  metricsFor?: (tenantId: string) => MetricsProvider;
   /** trace 读取 / prune（core readTraceEvents / pruneTrace，由 asm 注入） */
   trace?: {
     prune?(options: Record<string, unknown>): Promise<unknown>;
@@ -345,10 +324,6 @@ export interface GatewayOptions {
    * `createGatewayEventHub({ redactor })`。
    */
   redactor?: TraceRedactor;
-  /** per-tenant 执行面（A-3 §10.4） */
-  runtimeFor?: (tenantId: string) => RunnableAgent | undefined;
-  sessionFor?: (tenantId: string) => SessionStore | undefined;
-  pluginHostFor?: (tenantId: string) => PluginHost | undefined;
   /** 缺省 tenant（wildcard admin 未指定时使用） */
   defaultTenantId?: string;
   /**
@@ -520,7 +495,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     hub === undefined ||
     typeof hub.subscribe !== 'function' ||
     typeof hub.subscribeSequenced !== 'function' ||
-    typeof hub.register !== 'function'
+    typeof hub.stream !== 'function'
   ) {
     throw new Error('hub must be a TenantEventHub.');
   }
@@ -611,9 +586,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.feishu !== undefined && typeof opts.feishu.status !== 'function') {
     throw new Error('feishu.status must be a function.');
   }
-  if (opts.feishuFor !== undefined && typeof opts.feishuFor !== 'function') {
-    throw new Error('feishuFor must be a function.');
-  }
   if (opts.evals !== undefined && typeof opts.evals.latest !== 'function') {
     throw new Error('evals.latest must be a function.');
   }
@@ -654,9 +626,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.mcp) features.push('mcp-status');
   if (tlsMaterial) features.push('tls');
   if (opts.evals) features.push('evals');
-  // 能力位表达 per-gateway/default-tenant 的真实可用性，而不是「resolver 存在」；
-  // 非 default tenant 的 channel 仍由 feishuForTenant 按请求解析，不受这里影响。
-  const feishuChannel = opts.feishu ?? opts.feishuFor?.(defaultTenantId);
+  // 能力位表达单执行面的真实可用性，而不是「resolver 存在」。
+  const feishuChannel = opts.feishu;
   if (feishuChannel) features.push('feishu');
   if (opts.metrics) features.push('metrics');
   if (opts.config) features.push('config');
@@ -689,7 +660,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * 它只消费 `run.*` 事件并维护 pending / answered / orphaned。
    */
   const interactions = createInteractionsRegistry({
-    tenantEventsFor: (tenantId) => hub.streamFor(tenantId),
+    tenantEventsFor: () => hub.stream(),
     defaultTenantId,
     ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
   });
@@ -718,7 +689,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * `node_id` / `pid` / `started_at` / `endpoint` / `role` 是进程级字段，可共享。
    */
   const nodeInfo = (tenantId?: string): NodeInfo => {
-    const snapshot = tenantId === undefined ? undefined : runtimeSnapshot(tenantId);
+    const snapshot = tenantId === undefined ? undefined : runtimeSnapshot();
     const scheduler =
       typeof snapshot?.scheduler === 'object' && snapshot.scheduler !== null
         ? (snapshot.scheduler as Record<string, unknown>)
@@ -740,7 +711,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     let tools: string[] = [];
     if (tenantId !== undefined) {
       try {
-        tools = (pluginHostFor(tenantId)?.listTools() ?? []).map((tool) => tool.name);
+        tools = (pluginHost()?.listTools() ?? []).map((tool) => tool.name);
       } catch {
         tools = [];
       }
@@ -897,8 +868,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * 0.27：运行态只读控制面 snapshot（scheduler 是唯一 live 事实源）。
    * 形状与原 engine 版一致；`active_run_id` = 首个 running run。
    */
-  function runtimeSnapshot(tenantId: string): Record<string, unknown> {
-    const control = runControlForTenant(tenantId);
+  function runtimeSnapshot(): Record<string, unknown> {
+    const control = opts.runControl;
     if (control === undefined) return emptyRuntimeSnapshot();
     let snapshot: RunControlSnapshotLike;
     try {
@@ -936,9 +907,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
     };
   }
 
-  /** 该 tenant 的 live run（queued + running）；无控制面 = 空。 */
-  function liveRunsFor(tenantId: string): LiveRunSnapshotLike[] {
-    const control = runControlForTenant(tenantId);
+  /** live run（queued + running）；无控制面 = 空。 */
+  function liveRuns(): LiveRunSnapshotLike[] {
+    const control = opts.runControl;
     if (control === undefined) return [];
     try {
       const snapshot = control.snapshot();
@@ -976,14 +947,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     config: opts.config,
     runtimeSnapshot,
     methodTable: currentMethodTable,
-    toolDescriptionsForTenant,
-    pluginsForTenant,
-    pluginCatalogForTenant: opts.pluginCatalogFor ?? (() => []),
+    toolDescriptions,
+    plugins,
+    pluginCatalog: opts.pluginCatalog ?? (() => []),
     ...(opts.pluginHostManager !== undefined
       ? {
-          pluginsContributionsForTenant: (tenantId: string) =>
-            opts.pluginHostManager?.contributionsFor(tenantId) ?? {},
-          pluginsMetadataForTenant: () => pluginMetadata(),
+          pluginsContributions: () => opts.pluginHostManager?.contributionsFor() ?? {},
+          pluginsMetadata: () => pluginMetadata(),
         }
       : {}),
     ...(opts.pluginsReload !== undefined
@@ -996,7 +966,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           },
         }
       : {}),
-    pluginHostFor,
+    pluginHost,
     clientCount: () => sseClients.size + wsClients.size,
     latestSeq: () => hub.latestSeq,
     protocolInfo,
@@ -1004,12 +974,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     startedAt,
   };
   const observabilityMethodsDeps = {
-    defaultTenantId,
     redactor,
     trace: opts.trace,
     metricsControl: opts.metricsControl,
     metrics: opts.metrics,
-    metricsFor: opts.metricsFor,
   };
 
   const rpcMethods: RpcMethodDefinition[] = [
@@ -1019,21 +987,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createConfigMethods(configMethodsDeps),
     ...createSessionMethods({
       defaultTenantId,
-      sessionFor,
+      sessionFor: () => session,
       sessionData: opts.sessionData,
-      runStoreFor: (tenantId) => durableForTenant(tenantId)?.store,
-      runtimeFor: opts.runtimeFor,
+      runStoreFor: () => opts.durable?.store,
+      compactRuntime: () => runtime,
       // CREATE-0.39：sessions.create|restart|activate 与 agents.* 共用同一注入面。
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
       ...(opts.tenants !== undefined ? { tenants: opts.tenants } : {}),
     }),
     ...createRunMethods({
       defaultTenantId,
-      runControlFor: runControlForTenant,
-      requireRunControl,
-      durableForTenant,
+      runControl: () => opts.runControl,
+      requireRunControl: () => requireRunControl(),
+      durable: () => opts.durable,
       tenants: opts.tenants,
-      activeCount: (tenantId) => liveRunsFor(tenantId).length,
+      activeCount: () => liveRuns().length,
       reserveResume,
       releaseResume,
     }),
@@ -1096,18 +1064,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
       },
     }),
     ...createEvalMethods({ evals: opts.evals }),
-    ...createFeishuMethods({ requireFeishu }),
+    ...createFeishuMethods({ requireFeishu: () => requireFeishu() }),
     // 0.12：追加在表尾，不改变既有方法顺序（DECISION-023 §2.3）。
     ...createAdminMethods({ reload: opts.reload }),
     // 0.14 P0：agents 注册表（additive，排在表尾）。
     ...createAgentMethods({
       registry: agentRegistry,
-      liveRuns: liveRunsFor,
+      liveRuns,
       defaultTenantId,
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
       ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
       // CREATE-0.39：`agents.create{keep_messages}` 按 `sessions.get().messages` 校验。
-      ...(opts.sessionFor !== undefined ? { sessionFor: opts.sessionFor } : {}),
+      ...(session !== undefined ? { sessionStore: () => session } : {}),
     }),
     // 0.19 S3：本地 Team 控制面（canonical teams.*；additive，排在表尾）。
     ...createTeamMethods({ teams: opts.teams }),
@@ -1115,7 +1083,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createPermissionsMethods({
       defaultTenantId,
       ...(opts.permissions !== undefined ? { permissions: opts.permissions } : {}),
-      pluginHostFor,
+      pluginHost,
     }),
   ];
 
@@ -1127,9 +1095,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
     makeContext: makeMethodContext,
     version: opts.version,
     describe: () => ({
-      // gateway.manifest() 是默认 tenant 的兼容入口（asm local dispatcher 在用）
-      tools: toolDescriptionsForTenant(defaultTenantId),
-      plugins: pluginsForTenant(defaultTenantId),
+      // gateway.manifest() 是 asm local dispatcher 的只读兼容入口（单执行面）。
+      tools: toolDescriptions(),
+      plugins: plugins(),
     }),
     // 结果校验只在 VESSEL_VALIDATE_RESULTS=1 时触发；事件 payload 只含 method/path。
     onResultInvalid: ({ method, path }) => {
@@ -1321,10 +1289,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const params =
       raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     if (typeof params.since === 'number' && params.since >= 0) ws.data.since = params.since;
-    // 仅 dispatcher 成功后到达这里：非 admin 的跨 tenant 请求已在上游返回 forbidden。
-    if (typeof params.tenant_id === 'string' && params.tenant_id !== '') {
-      ws.data.tenantId = params.tenant_id;
-    }
     ws.data.runId = typeof params.run_id === 'string' ? params.run_id : undefined;
     ws.data.types = Array.isArray(params.types)
       ? params.types.filter((item): item is string => typeof item === 'string')
@@ -1373,7 +1337,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     outcome: string,
     status: number,
     startedAt: number,
-    tenantId: string,
   ): void {
     provider.webSockets?.audit({
       event: 'plugin.http.request',
@@ -1385,7 +1348,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
         outcome,
         status,
         durationMs: Math.max(0, Date.now() - startedAt),
-        tenant: tenantId,
       },
     });
   }
@@ -1405,7 +1367,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
    *
    * - 形态检查（§3.3）在鉴权前：普通请求命中 upgrade 路由 → 400；反之亦然；
    * - `auth: required` 走宿主 principal + scope；其余 auth 仅内置插件（路由表已校验）；
-   * - 0.48 只对 default tenant 暴露，非 default → 403，不进入插件；
+   * - 0.49 T3：单执行面，不再有 default-tenant 403；
    * - disabled → 404，unhealthy / invalid / 无 endpoint → 503；
    * - R6：`await resolve()` 后再 `srv.upgrade()`（Bun 1.3.9 实测允许）。
    */
@@ -1427,22 +1389,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     // §3.3 形态检查：升级请求命中非 upgrade 路由 / 普通请求命中 upgrade 路由。
     if (route.upgrade !== isUpgradeRequest) {
-      auditPluginRequest(
-        provider,
-        route,
-        req.method,
-        requestKind,
-        'invalid',
-        400,
-        startedAt,
-        defaultTenantId,
-      );
+      auditPluginRequest(provider, route, req.method, requestKind, 'invalid', 400, startedAt);
       return route.upgrade
         ? errorJson('upgrade_required', 'WebSocket upgrade required', 400, extra)
         : errorJson('upgrade_not_allowed', 'WebSocket upgrade is not allowed', 400, extra);
     }
 
-    let tenantId = defaultTenantId;
     if (route.auth === 'required') {
       const principal = principalForRequest(req, url, url.pathname);
       if (principal === null) {
@@ -1454,65 +1406,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
           'unauthorized',
           401,
           startedAt,
-          tenantId,
         );
         return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
       }
-      tenantId = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
-      if (tenantId !== defaultTenantId) {
-        auditPluginRequest(
-          provider,
-          route,
-          req.method,
-          requestKind,
-          'forbidden',
-          403,
-          startedAt,
-          tenantId,
-        );
-        return errorJson(
-          'forbidden',
-          'Plugin HTTP routes are only available on the default tenant',
-          403,
-          extra,
-        );
-      }
       if (!hasPermission(principal.role, route.scope)) {
-        auditPluginRequest(
-          provider,
-          route,
-          req.method,
-          requestKind,
-          'forbidden',
-          403,
-          startedAt,
-          tenantId,
-        );
+        auditPluginRequest(provider, route, req.method, requestKind, 'forbidden', 403, startedAt);
         return errorJson('forbidden', `Requires ${route.scope} permission`, 403, extra);
-      }
-    } else {
-      // none / plugin：只在提供了宿主凭据且指向非 default tenant 时拒绝。
-      const principal = headerPrincipal(req);
-      if (principal !== null) {
-        const principalTenant = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
-        if (principalTenant !== defaultTenantId) {
-          auditPluginRequest(
-            provider,
-            route,
-            req.method,
-            requestKind,
-            'forbidden',
-            403,
-            startedAt,
-            principalTenant,
-          );
-          return errorJson(
-            'forbidden',
-            'Plugin HTTP routes are only available on the default tenant',
-            403,
-            extra,
-          );
-        }
       }
     }
 
@@ -1520,16 +1419,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const active = pluginHttpActive.get(key) ?? 0;
     if (route.limits.maxConnections !== null && active >= route.limits.maxConnections) {
       if (route.upgrade) provider.webSockets?.rejected(route.pluginId);
-      auditPluginRequest(
-        provider,
-        route,
-        req.method,
-        requestKind,
-        'busy',
-        503,
-        startedAt,
-        tenantId,
-      );
+      auditPluginRequest(provider, route, req.method, requestKind, 'busy', 503, startedAt);
       return errorJson('busy', 'Plugin HTTP connection limit reached', 503, extra);
     }
     pluginHttpActive.set(key, active + 1);
@@ -1542,31 +1432,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     };
 
     try {
-      const resolution = await provider.resolve(route.pluginId, tenantId);
+      const resolution = await provider.resolve(route.pluginId);
       if (resolution.kind === 'disabled') {
-        auditPluginRequest(
-          provider,
-          route,
-          req.method,
-          requestKind,
-          'disabled',
-          404,
-          startedAt,
-          tenantId,
-        );
+        auditPluginRequest(provider, route, req.method, requestKind, 'disabled', 404, startedAt);
         return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
       }
       if (resolution.kind === 'unavailable') {
-        auditPluginRequest(
-          provider,
-          route,
-          req.method,
-          requestKind,
-          'unavailable',
-          503,
-          startedAt,
-          tenantId,
-        );
+        auditPluginRequest(provider, route, req.method, requestKind, 'unavailable', 503, startedAt);
         return errorJson('internal', 'Plugin HTTP surface is unavailable', 503, extra);
       }
 
@@ -1576,7 +1448,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
           url,
           route,
           target: resolution.target,
-          tenantId,
           cors: extra,
         });
         auditPluginRequest(
@@ -1587,7 +1458,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
           httpOutcome(response.status),
           response.status,
           startedAt,
-          tenantId,
         );
         return response;
       }
@@ -1596,7 +1466,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const connection = new PluginWsConnection({
         route,
         target: resolution.target,
-        tenantId,
         path: `${url.pathname}${url.search}`,
         headers: req.headers,
         releaseSlot,
@@ -1605,7 +1474,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const upgraded = srv.upgrade(req, {
         data: {
           authed: true,
-          tenantId,
+          tenantId: defaultTenantId,
           allTenants: false,
           since: 0,
           alive: true,
@@ -1618,11 +1487,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
       });
       if (!upgraded) {
         provider.webSockets?.rejected(route.pluginId);
-        auditPluginRequest(provider, route, req.method, 'ws', 'invalid', 400, startedAt, tenantId);
+        auditPluginRequest(provider, route, req.method, 'ws', 'invalid', 400, startedAt);
         return errorJson('invalid_request', 'WebSocket upgrade failed', 400, extra);
       }
       handedOff = true;
-      auditPluginRequest(provider, route, req.method, 'ws', 'accepted', 101, startedAt, tenantId);
+      auditPluginRequest(provider, route, req.method, 'ws', 'accepted', 101, startedAt);
       return undefined;
     } finally {
       if (!handedOff) releaseSlot();
@@ -1646,52 +1515,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     };
   }
 
-  /**
-   * 0.27：per-tenant run 控制面。default 用 `runControl`，其它 tenant **只用**
-   * `runControlFor`（绝不回退 default，否则跨租户执行 / 读快照）。
-   */
-  function runControlForTenant(tenantId: string): RunControlLike | undefined {
-    if (tenantId === defaultTenantId) return opts.runControl;
-    return opts.runControlFor?.(tenantId);
-  }
-
-  /** 同 `requireRuntime` 的错误码语义（非 default → forbidden；default 带 legacy_code）。 */
-  function requireRunControl(tenantId: string): RunControlLike {
-    const resolved = runControlForTenant(tenantId);
-    if (resolved !== undefined) return resolved;
-    if (tenantId !== defaultTenantId) {
-      throw new RpcError('forbidden', `Tenant runtime is not configured: ${tenantId}`);
-    }
+  /** 单执行面的 run 控制面；缺失保持 0.4 `no_runtime` 语义。 */
+  function requireRunControl(): RunControlLike {
+    if (opts.runControl !== undefined) return opts.runControl;
     throw new RpcError('forbidden', 'No runtime configured', { legacy_code: 'no_runtime' });
-  }
-
-  function sessionFor(tenantId: string): SessionStore | undefined {
-    if (tenantId === defaultTenantId) return session;
-    return opts.sessionFor?.(tenantId);
-  }
-
-  function pluginHostFor(tenantId: string): PluginHost | undefined {
-    if (tenantId === defaultTenantId) return pluginHost();
-    return opts.pluginHostFor?.(tenantId);
-  }
-
-  /** per-tenant 飞书渠道；非 default 绝不回退全局实例 */
-  function feishuForTenant(tenantId: string): FeishuGatewayOptions | undefined {
-    if (tenantId === defaultTenantId) {
-      return opts.feishu ?? opts.feishuFor?.(tenantId);
-    }
-    return opts.feishuFor?.(tenantId);
-  }
-
-  /**
-   * P0-2：durable store 也按 tenant 解析。
-   * 非 default tenant 绝不回退全局 store（否则跨租户读/恢复）。
-   */
-  function durableForTenant(tenantId: string): DurableGatewayOptions | undefined {
-    if (tenantId === defaultTenantId) {
-      return opts.durable ?? opts.durableFor?.(tenantId);
-    }
-    return opts.durableFor?.(tenantId);
   }
 
   /**
@@ -1719,33 +1546,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return restTenantScope(principal, requested === null ? {} : { tenant_id: requested }, extra);
   }
 
-  /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found */
-  function requireFeishu(tenantId: string): FeishuGatewayOptions {
-    const resolved = feishuForTenant(tenantId);
-    if (resolved !== undefined) return resolved;
-    if (tenantId !== defaultTenantId) {
-      throw new RpcError('forbidden', `Feishu channel is not configured for tenant: ${tenantId}`);
-    }
+  /** 飞书渠道未配置 → 0.4 not_found */
+  function requireFeishu(): FeishuGatewayOptions {
+    if (opts.feishu !== undefined) return opts.feishu;
     throw new RpcError('not_found', 'Feishu channel is not enabled');
   }
 
-  /** A-6.3：capabilities.list 的 tools；未注入 per-tenant 时回退全局 host */
-  function toolDescriptionsForTenant(
-    tenantId: string,
-  ): Array<{ name: string; description?: string }> {
-    // A6-24：一旦注入 pluginHostFor，非 default tenant 未命中时返回空，
-    // 不得回退全局 host（否则 tenant b 会看到 default 的 tools）。
-    // 只有未注入 pluginHostFor 的单 tenant / legacy 路径才回退全局。
-    let host: PluginHost | undefined;
-    if (tenantId === defaultTenantId) {
-      host = pluginHost();
-    } else if (opts.pluginHostFor) {
-      host = opts.pluginHostFor(tenantId);
-    } else {
-      host = pluginHost();
-    }
+  /** capabilities.list 的 tools（单执行面的 plugin host） */
+  function toolDescriptions(): Array<{ name: string; description?: string }> {
     try {
-      return (host?.listTools() ?? []).map((tool) => ({
+      return (pluginHost()?.listTools() ?? []).map((tool) => ({
         name: tool.name,
         ...(tool.description ? { description: tool.description } : {}),
       }));
@@ -1754,22 +1564,19 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  /** A-6.3：per-tenant plugins；只有未注入 pluginsFor 时才回退全局 `plugins` */
-  function pluginsForTenant(tenantId: string): Array<{ name: string; enabled: boolean }> {
-    if (tenantId !== defaultTenantId && opts.pluginsFor) {
-      return opts.pluginsFor(tenantId) ?? [];
-    }
-    return opts.pluginsFor?.(tenantId) ?? opts.plugins?.() ?? [];
+  /** 单视图 plugins.list 数据源。 */
+  function plugins(): Array<{ name: string; enabled: boolean }> {
+    return opts.plugins?.() ?? [];
   }
 
   /** `plugins.list` 形状（含 E1 contributions）；`plugin.changed` 复用同一快照。 */
-  function pluginListPayload(tenantId: string): {
+  function pluginListPayload(): {
     plugins: ReturnType<typeof mergePluginList>;
   } {
     return {
       plugins: mergePluginList(
-        pluginsForTenant(tenantId),
-        opts.pluginHostManager?.contributionsFor(tenantId),
+        plugins(),
+        opts.pluginHostManager?.contributionsFor(),
         pluginMetadata(),
       ),
     };
@@ -1780,33 +1587,27 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return pluginListMetadata(opts.pluginHostManager?.statuses() ?? []);
   }
 
-  /** 0.43 E3：reload 后向所有 tenant 流广播 `plugin.changed`（best-effort）。 */
+  /** 0.43 E3：reload 后向单运行时流广播 `plugin.changed`（best-effort）。 */
   function broadcastPluginChanged(): void {
-    const ts = Date.now();
-    for (const tenantId of hub.tenantIds) {
-      const stream = hub.streamFor(tenantId);
-      if (stream === undefined) continue;
-      try {
-        stream.publish({
-          type: 'plugin.changed',
-          run_id: 'plugin',
-          data: pluginListPayload(tenantId),
-          ts,
-        });
-      } catch {
-        // 广播失败不影响 reload 结果
-      }
+    const stream = hub.stream();
+    if (stream === undefined) return;
+    try {
+      stream.publish({
+        type: 'plugin.changed',
+        run_id: 'plugin',
+        data: pluginListPayload(),
+        ts: Date.now(),
+      });
+    } catch {
+      // 广播失败不影响 reload 结果
     }
   }
 
   // ── federation 入站与诊断事件 ──────────────────
 
-  /**
-   * 诊断事件（0.18）：投 <default tenant> 流，保持既有“只有 default 可见”的行为。
-   * tenant 流不存在时直接丢弃——诊断失败不得影响主流程。
-   */
+  /** 诊断事件：投单运行时流；流不存在时直接丢弃——诊断失败不得影响主流程。 */
   function publishDiagnostic(type: string, runId: string, data: Record<string, unknown>): void {
-    const stream = hub.streamFor(defaultTenantId);
+    const stream = hub.stream();
     if (!stream) return;
     try {
       stream.publish({ type, run_id: runId, data, ts: Date.now() });
@@ -1885,12 +1686,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/durable' && !path.startsWith('/v1/durable/')) return null;
-    // P0-2/P1：durable 端点按 tenant 作用域；admin 可显式指定，非 default
-    // tenant 只走 per-tenant store。
+    // P0-2/P1：durable 端点沿用请求作用域（admin 可显式指定）；store 是单执行面的。
     const scope = durableScope(req, url, principal, extra);
     if (scope instanceof Response) return scope;
     const tenantId = scope.tenantId;
-    const durable = durableForTenant(tenantId);
+    const durable = opts.durable;
     const missingStore = (): Response =>
       tenantId !== defaultTenantId
         ? errorJson(
@@ -2459,7 +2259,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           const pluginId = pluginStaticId(path);
           if (pluginId !== null && opts.pluginHostManager !== undefined) {
             try {
-              await opts.pluginHostManager.ensureActive(pluginId, defaultTenantId);
+              await opts.pluginHostManager.ensureActive(pluginId);
             } catch (error) {
               const code = pluginErrorCodeOf(error) ?? 'plugin_activation_failed';
               const unavailable =

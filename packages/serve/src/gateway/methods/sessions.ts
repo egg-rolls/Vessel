@@ -36,14 +36,14 @@ export interface SessionRunLookup {
 
 export interface SessionMethodsDeps {
   defaultTenantId: string;
-  sessionFor(tenantId: string): SessionStore | undefined;
+  sessionFor(): SessionStore | undefined;
   /** 最近 RunRecord 的读取面；缺省时 `sessions.get` 只用 `legacy_run` 投影。 */
-  runStoreFor?(tenantId: string): SessionRunLookup | undefined;
+  runStoreFor?(): SessionRunLookup | undefined;
   /**
-   * CONTRACT-0.34-context C7：仅服务 `sessions.compact` 的 per-tenant 执行面。
+   * CONTRACT-0.34-context C7：仅服务 `sessions.compact` 的执行面。
    * 结构化读取可选 `compactContext(sessionId)`；缺省或方法缺失 = `compact_unavailable`。
    */
-  runtimeFor?(tenantId: string): unknown;
+  compactRuntime?(): unknown;
   /**
    * CREATE-0.39：agent 控制面（app 注入 AgentService 适配器）。
    * 缺省 = `sessions.create|restart|activate` 仍进 manifest，但 handler 返回 `not_found`。
@@ -332,11 +332,11 @@ export function toSessionView(state: SessionState, latestRaw: unknown): Record<s
 }
 
 export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinition[] {
-  const { defaultTenantId, sessionFor, runStoreFor, sessionData, runtimeFor, agent, tenants } =
+  const { defaultTenantId, sessionFor, runStoreFor, sessionData, compactRuntime, agent, tenants } =
     deps;
 
   function requireSession(tenantId: string): SessionStore {
-    const resolved = sessionFor(tenantId);
+    const resolved = sessionFor();
     if (!resolved) {
       if (tenantId !== defaultTenantId) {
         throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
@@ -349,9 +349,9 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
   async function listSessions(
     tenantId: string = defaultTenantId,
   ): Promise<{ sessions: unknown[] }> {
-    const backend = sessionFor(tenantId);
+    const backend = sessionFor();
     if (!backend) {
-      // 非 default tenant 未注入 sessionFor → 明确的 forbidden；default 保持旧语义。
+      // 非 default tenant 未注入 session 后端 → 明确的 forbidden；default 保持旧语义。
       if (tenantId !== defaultTenantId) {
         throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
       }
@@ -391,7 +391,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const backend = requireSession(ctx.tenantId);
         const state = await backend.load(stringParam(params, 'session_id'));
         if (!state) throw new RpcError('not_found', 'Session not found');
-        const runStore = runStoreFor?.(ctx.tenantId);
+        const runStore = runStoreFor?.();
         const latest =
           runStore !== undefined && state.last_run_id !== undefined
             ? await runStore.load(state.last_run_id)
@@ -522,9 +522,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const state = await backend.load(sessionId);
         if (!state) throw new RpcError('session_not_found', 'Session not found');
 
-        const runtime = runtimeFor?.(ctx.tenantId) as
-          | { compactContext?: CompactContextFn }
-          | undefined;
+        const runtime = compactRuntime?.() as { compactContext?: CompactContextFn } | undefined;
         const compactContext = runtime?.compactContext;
         if (typeof compactContext !== 'function') {
           throw new RpcError('compact_unavailable', 'Context compaction is not available');
@@ -607,7 +605,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // 先按 wire 数组校验，再换算成投影下标传给服务；响应回填原始 wire 值。
         let projectedKeep = keepMessages;
         if (fromSessionId !== undefined && keepMessages !== undefined) {
-          const backend = sessionFor(ctx.tenantId);
+          const backend = sessionFor();
           if (!backend) {
             throw new RpcError('internal', 'session store is not configured for keep_messages');
           }

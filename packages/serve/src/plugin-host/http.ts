@@ -162,7 +162,6 @@ export interface PluginHttpRequestAudit {
   /** HTTP 状态；WS 成功升级为 101。 */
   status: number;
   durationMs: number;
-  tenant: string;
 }
 
 /** `plugin.http.disconnect` 审计（reason 只记分类，不记原文）。 */
@@ -203,7 +202,7 @@ export interface PluginWebSocketAccounting {
  */
 export interface PluginHttpHostLike {
   match(method: string, pathname: string): PluginHttpMatch;
-  resolve(pluginId: string, tenantId: string): Promise<PluginHttpResolution>;
+  resolve(pluginId: string): Promise<PluginHttpResolution>;
   conflicts(): readonly PluginHttpRouteConflict[];
   /** 0.48 M3：WS 登记 / 计数器 / 审计；缺省 = 不记账。 */
   readonly webSockets?: PluginWebSocketAccounting;

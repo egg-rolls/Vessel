@@ -27,7 +27,6 @@ import {
   MemorySessionStore,
   MemoryWorkingContext,
   type Message,
-  pathsForTenant,
   pruneTrace,
   type ReadTraceOptions,
   type RunEvent,
@@ -115,13 +114,7 @@ import {
 } from './team-human-delivery';
 import { createTenantControl } from './tenant-command';
 import { ensureTenantLayout, TenantLayoutMigrationError } from './tenant-layout-migration';
-import {
-  acquireTenantLock,
-  type TenantLock,
-  TenantLockError,
-  type TenantLockMode,
-  withTenantLock,
-} from './tenant-lock';
+import { withTenantLock } from './tenant-lock';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
@@ -187,13 +180,6 @@ export interface BootstrapOptions {
   tenantId?: string;
   /** 0.5：tenant id 来源（CLI / env）；由调用方标注，缺省按解析结果 */
   tenantSource?: 'cli' | 'env';
-  /**
-   * 0.5：是否获取 tenant 写锁。默认 false（由调用方按写意图传入）；
-   * CLI 的 run/REPL/serve/feishu 入口传 true。
-   */
-  acquireLock?: boolean;
-  /** 0.15：`--exclusive` 强制 tenant 单写者锁（默认 file 后端 shared） */
-  exclusive?: boolean;
   /** 0.5：`--connect <url>` / VESSEL_CONNECT；设置时不加锁、不写本地 store */
   connect?: string;
   /** 0.6：`--connect-token`（最高优先级；不回显） */
@@ -242,7 +228,7 @@ export interface BootstrapResult {
   runtime: RunnableAgent;
   /**
    * Stage 4：本 node 的 Runtime（tenant profile 注册表 + per-session EU 目录）。
-   * `--serve` 的 TenantRuntimeFactory 复用它；connect 模式不会用到。
+   * 唯一的执行面由 `bundle` 持有；connect 模式不会用到。
    */
   executionRuntime: Runtime;
   ctx: ReplContext;
@@ -252,8 +238,6 @@ export interface BootstrapResult {
   tenantPaths: TenantPaths;
   /** 0.6：connect 模式下远端 gateway 的 tenant / node（来自 health.get） */
   remote?: { tenantId: string; nodeId?: string; endpoint: string };
-  /** 0.5：非 connect 且请求写时持有 */
-  tenantLock?: TenantLock;
   /** 0.5 A-6：本地 tenant 的执行面；connect 模式为 undefined */
   bundle?: TenantRuntimeBundle;
   /**
@@ -987,7 +971,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     : resolvedDataDir;
   const connectUrl = options.connect ?? process.env.VESSEL_CONNECT;
   const connectMode = typeof connectUrl === 'string' && connectUrl.trim() !== '';
-  const localWrites = options.acquireLock === true || options.dataDir !== undefined;
+  // connect 是唯一只读入口；其余入口（run / REPL / serve / feishu）都写本地
+  // store / trace。tenant writer lock 已随单执行面收敛删除（T3 C2）。
+  const localWrites = !connectMode;
   const writeMode = !connectMode && localWrites;
 
   // 0.49 T2（C14）：本地写模式先完成布局迁移，再触碰 node.json / 锁 / store。
@@ -1057,33 +1043,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     process.exit(configErrorExitCode);
   }
 
-  // ── tenant 写锁（0.5；0.15 双层锁）──────────────
-  // 默认由调用方按写意图传入 acquireLock；connect 模式已在上面短路。
-  // file / memory 后端 shared（多实例共存），sqlite 或 --exclusive 走单写者。
+  // T3 C2：runtime/boot 不再获取 tenant writer lock。session/run 锁与
+  // SessionLease 仍在执行面内部保证单写者；CLI 写意图锁保留到 T4/T5。
   const sessionBackend = config.session?.backend ?? 'file';
-  const tenantLockMode: TenantLockMode =
-    options.exclusive === true || sessionBackend === 'sqlite' ? 'exclusive' : 'shared';
-  let tenantLock: TenantLock | undefined;
-  if (options.acquireLock === true) {
-    try {
-      tenantLock = await acquireTenantLock({
-        tenantDir: tenantPaths.root,
-        tenantId,
-        mode: tenantLockMode,
-        ...(options.clock ? { now: options.clock } : {}),
-      });
-    } catch (error) {
-      if (error instanceof TenantLockError) {
-        console.error(error.message);
-        process.exit(1);
-      }
-      throw error;
-    }
-    // exit 兜底：同步释放（仅持有锁的真实写入口注册）。
-    process.once('exit', () => {
-      tenantLock?.releaseSync();
-    });
-  }
 
   // 启动 prune：best-effort，失败只 warn（无写意图时不触碰磁盘）。
   // 交互 REPL 的首帧不能被 prune 阻塞：留到 bootstrap 末尾用 timer 调度（S4 §2.2）。
@@ -1172,7 +1134,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     configSources: loaded.sources,
     configPaths: loaded.paths,
     tenantOverlayKeys: loaded.tenantOverlayKeys,
-    ...(tenantLock ? { lock: tenantLock } : {}),
     useMock,
     ...(options.mockScenario !== undefined ? { mockScenario: options.mockScenario } : {}),
     headless,
@@ -1385,8 +1346,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       try {
         ownerServer = await startAgentOwnerServer({
           control: agentControlLike,
-          sessionFor: (requestedTenant: string) =>
-            requestedTenant === tenantId ? session : undefined,
+          sessionFor: () => session,
           teams: wiring.team,
           ownerId: wiring.ownerId,
           dataDir,
@@ -1630,32 +1590,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     nodeName,
     defaultTenantId: tenantId,
     config: {
-      snapshot: async (requestedTenant: string): Promise<ConfigSnapshotLike> => {
-        if (requestedTenant === tenantId) {
-          return buildConfigSnapshot({
-            config: sanitizeConfigForSnapshot(config),
-            sources: loaded.sources,
-            paths: loaded.paths,
-            tenantId,
-            tenantOverlayKeys: loaded.tenantOverlayKeys,
-          }) as unknown as ConfigSnapshotLike;
-        }
-        const other = await loadConfig({
-          ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
-          ...(options.userConfigPath !== undefined
-            ? { userConfigPath: options.userConfigPath }
-            : {}),
-          tenantId: requestedTenant,
-          ...(cliOverrides !== undefined ? { cliOverrides } : {}),
-        });
-        return buildConfigSnapshot({
-          config: sanitizeConfigForSnapshot(other.config),
-          sources: other.sources,
-          paths: other.paths,
-          tenantId: other.tenantId,
-          tenantOverlayKeys: other.tenantOverlayKeys,
-        }) as unknown as ConfigSnapshotLike;
-      },
+      snapshot: async (): Promise<ConfigSnapshotLike> =>
+        buildConfigSnapshot({
+          config: sanitizeConfigForSnapshot(config),
+          sources: loaded.sources,
+          paths: loaded.paths,
+          tenantId,
+          tenantOverlayKeys: loaded.tenantOverlayKeys,
+        }) as unknown as ConfigSnapshotLike,
     },
     tenants: createTenantControl(dataDir, {
       singleTenantId: tenantId,
@@ -1667,24 +1609,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(typeof (metrics as unknown as { reset?: unknown })?.reset === 'function'
         ? { reset: () => (metrics as unknown as { reset: () => void }).reset() }
         : {}),
-      rebuild: (requestedTenant: string) =>
-        rebuildMetrics(pathsForTenant(dataDir, requestedTenant, tenantId).events_dir),
+      rebuild: () => rebuildMetrics(tenantPaths.events_dir),
     },
     trace: {
-      // A-6 §13.3：web 传 ctx.tenantId；本地 dispatcher 按 tenant 路由。
-      readEvents: (filter: Record<string, unknown>, requestedTenant?: string) => {
-        const eventsDir =
-          requestedTenant === undefined || requestedTenant === tenantId
-            ? tenantPaths.events_dir
-            : pathsForTenant(dataDir, requestedTenant, tenantId).events_dir;
-        return readTraceEvents(eventsDir, filter as ReadTraceOptions);
-      },
+      readEvents: (filter: Record<string, unknown>) =>
+        readTraceEvents(tenantPaths.events_dir, filter as ReadTraceOptions),
       prune: (params: Record<string, unknown>) => {
-        const requestedTenant =
-          typeof params.tenant_id === 'string' && params.tenant_id !== ''
-            ? params.tenant_id
-            : tenantId;
-        const paths = pathsForTenant(dataDir, requestedTenant, tenantId);
         const pruneOptions = {
           ...(typeof params.older_than_days === 'number'
             ? { retentionDays: params.older_than_days }
@@ -1692,35 +1622,21 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           ...(typeof params.max_runs === 'number' ? { maxRuns: params.max_runs } : {}),
           ...(typeof params.max_bytes === 'number' ? { maxBytes: params.max_bytes } : {}),
         };
-        return withTenantLock({ tenantDir: paths.root, tenantId: requestedTenant }, () =>
-          pruneTrace(paths.events_dir, pruneOptions),
+        // R7=B：in-process 写意图锁保留到 T5（不是 runtime/boot 生产者）。
+        return withTenantLock({ tenantDir: tenantPaths.root, tenantId }, () =>
+          pruneTrace(tenantPaths.events_dir, pruneOptions),
         );
       },
     },
     sessionData: {
-      // A-6 §13.3：本地模式只有当前 tenant 的 session backend。
-      deleteSessionData: (sessionId: string, requestedTenant?: string) => {
-        if (requestedTenant !== undefined && requestedTenant !== tenantId) {
-          return Promise.reject(
-            Object.assign(
-              new Error(`forbidden: tenant "${requestedTenant}" is not available in local mode`),
-              { code: 'forbidden' },
-            ),
-          );
-        }
-        return withTenantLock({ tenantDir: tenantPaths.root, tenantId }, async () => {
+      deleteSessionData: (sessionId: string) =>
+        withTenantLock({ tenantDir: tenantPaths.root, tenantId }, async () => {
           // 0.34 Stage 3：sessionControl.delete 内部先 detach；冲突（active run /
           // 活 SessionLease）直接抛 `conflict`，不做任何删除。
           return sessionControl.delete(sessionId);
-        });
-      },
+        }),
     },
     redactor: bundle.redactor,
-    runtimeFor: (requestedTenant: string) =>
-      requestedTenant === tenantId ? bundle.runtime : undefined,
-    sessionFor: (requestedTenant: string) => (requestedTenant === tenantId ? session : undefined),
-    pluginHostFor: (requestedTenant: string) =>
-      requestedTenant === tenantId ? finalPluginHost : undefined,
     ...(runStore
       ? {
           durable: {
@@ -1882,10 +1798,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
 
     // bundle 关闭顺序：feishu → metrics → MCP → runtime
-    // → trace → runStore → session；锁由 bootstrap 在最后释放。
+    // → trace → runStore → session；session 写锁由 bootstrap 在最后释放。
     await bundle.close(shutdownOptions);
 
-    // 锁最后释放（session 写锁先于 tenant 锁）。
     if (processSessionLock) {
       try {
         await processSessionLock.release();
@@ -1894,19 +1809,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           events: bundle.events,
           logger,
           step: 'sessionLock.release',
-          error,
-          tenantId,
-        });
-      }
-    }
-    if (tenantLock) {
-      try {
-        await tenantLock.release();
-      } catch (error) {
-        reportShutdownFailure({
-          events: bundle.events,
-          logger,
-          step: 'tenantLock.release',
           error,
           tenantId,
         });
@@ -2010,7 +1912,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tenantPaths,
     bundle,
     ...(agentControl !== undefined ? { agent: agentControl } : {}),
-    ...(tenantLock ? { tenantLock } : {}),
     ...(trace ? { trace } : {}),
     sessionControl,
     nodeId,

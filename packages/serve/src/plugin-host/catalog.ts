@@ -1,7 +1,7 @@
 /**
  * Plugin catalog —— 宿主统一插件视图（CONTRACT-0.47 §3）。
  *
- * 纯函数：只读 `entries`（tenant 作用域的 plugins.list 数据源）、`descriptors`
+ * 纯函数：只读 `entries`（单视图的 plugins.list 数据源）、`descriptors`
  * （loader 发现结果）与 `statuses`（plugin host manager），推导 catalog 字段。
  * 不写 config、不访问网络、不读盘；缺 descriptor 的 entry 跳过，不伪造。
  *
@@ -25,7 +25,7 @@ export type PluginCatalogScope = 'builtin' | 'user' | 'project' | 'node_modules'
 /** builtin：随宿主发布；marketplace：外部安装的体验插件；dynamic：外部能力插件 */
 export type PluginCatalogKind = 'builtin' | 'marketplace' | 'dynamic';
 
-/** `plugins.list` 的条目（tenant 作用域；catalog 与它同源）。 */
+/** `plugins.list` 的条目（单视图；catalog 与它同源）。 */
 export interface PluginCatalogEntry {
   name: string;
   enabled: boolean;
@@ -113,12 +113,12 @@ function compareId(a: PluginCatalogItem, b: PluginCatalogItem): number {
 }
 
 /**
- * 由 tenant entries 推导 catalog。
+ * 由单视图 entries 推导 catalog。
  *
  * - entries 顺序不影响输出（按 id 稳定排序）；
  * - 同名 entry 只输出一次；
  * - 缺 descriptor 的 entry 跳过（不伪造 path / version）；
- * - status 只在该 tenant entry 名下查找；缺失时省略。
+ * - status 只在 entry 名下查找；缺失时省略。
  */
 export function buildPluginCatalog(input: PluginCatalogInput): PluginCatalogItem[] {
   const statusById = new Map<string, PluginRuntimeStatus>();
