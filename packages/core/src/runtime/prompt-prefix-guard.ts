@@ -78,10 +78,7 @@ function serializeMessage(message: Message): string {
 export class PromptPrefixGuard {
   private readonly snapshots = new Map<string, PromptSnapshot>();
 
-  constructor(
-    private readonly events?: EventStream,
-    private readonly tenantId?: string,
-  ) {}
+  constructor(private readonly events?: EventStream) {}
 
   check(input: PromptPrefixCheckInput): PromptPrefixCheckResult {
     const previous = this.snapshots.get(input.sessionId);
@@ -166,7 +163,6 @@ export class PromptPrefixGuard {
         tools_changed: toolsChanged,
       },
       ts: Date.now(),
-      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     });
   }
 }

@@ -29,11 +29,7 @@ export {
   deleteSessionData,
   SessionDeleteConflictError,
 } from './delete-session.js';
-export {
-  FileSessionStore,
-  type FileSessionStoreOptions,
-  SessionCorruptError,
-} from './file-backend.js';
+export { FileSessionStore, SessionCorruptError } from './file-backend.js';
 export {
   mergeHistoryProjection,
   type ProjectableEvent,
@@ -59,7 +55,4 @@ export {
   MemorySessionStore,
   toSessionInfo,
 } from './session-store.js';
-export {
-  SQLiteSessionStore,
-  type SQLiteSessionStoreOptions,
-} from './sqlite-backend.js';
+export { SQLiteSessionStore } from './sqlite-backend.js';

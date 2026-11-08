@@ -42,7 +42,7 @@ const STABLE_ERROR_CODES = [
   'unauthorized',
   'forbidden',
   'invalid_params',
-  'tenant_locked',
+  'data_locked',
   'quota_exceeded',
   'conflict',
   'internal',
@@ -169,11 +169,11 @@ export function classifyError(error: unknown): ClassifiedError {
           message: msg,
           hint: t('error.hint.genericNotFound'),
         };
-      case 'tenant_locked':
+      case 'data_locked':
         return {
           category: 'conflict',
           message: msg,
-          hint: t('error.hint.tenantLocked'),
+          hint: t('error.hint.dataLocked'),
         };
       case 'quota_exceeded':
         return {

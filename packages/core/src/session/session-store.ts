@@ -43,7 +43,6 @@ export function toSessionInfo(state: SessionState): SessionInfo {
     updated_at: state.updated_at,
     message_count: messages.length,
     branch: state.created_on_branch,
-    tenant_id: state.tenant_id,
   };
 }
 

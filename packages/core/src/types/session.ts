@@ -26,7 +26,6 @@ export interface SessionState {
   session_id: string;
   title?: string;
   preview?: string;
-  tenant_id?: string;
   created_at: number;
   updated_at: number;
   created_on_branch?: string;
@@ -52,8 +51,6 @@ export interface SessionInfo {
   message_count: number;
   /** 会话创建时的 git branch */
   branch?: string;
-  /** 0.5：所属 tenant；缺省视为 `default` */
-  tenant_id?: string;
 }
 
 /** Session 元数据存储 port（只收发 SessionState；不含事件日志） */

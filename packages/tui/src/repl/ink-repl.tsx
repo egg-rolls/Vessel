@@ -361,7 +361,6 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
             summary: {
               model: ctx.provider.model,
               sessionId: ctx.currentSessionId,
-              ...(ctx.tenant ? { tenantId: ctx.tenant.tenant_id } : {}),
               mcpCount: facts.mcpServers?.length ?? 0,
               interruptedRuns: facts.interruptedRuns?.length ?? 0,
               feishuConnected: facts.feishu?.connected ?? false,
@@ -1512,7 +1511,6 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
           bashCount={runtimeCounters.bash}
           subagentCount={runtimeCounters.subagents}
           currentSessionId={state.currentSessionId}
-          {...(ctx.tenant?.tenant_id ? { tenantId: ctx.tenant.tenant_id } : {})}
           queuedCount={ui.queuedInput.length}
           queuePreviewVisible={ui.queuedInput.length > 0}
         />

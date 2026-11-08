@@ -30,10 +30,6 @@ import { deriveSessionMeta, toSessionInfo } from './session-store.js';
  * 存储格式：`{basePath}/{encodeURIComponent(session_id)}.json`
  * 旧数据（未编码文件名）在 load 时回退读取。
  */
-export interface FileSessionStoreOptions {
-  /** 配置后：写入补齐 tenant_id，读取过滤其它 tenant 的会话 */
-  tenantId?: string;
-}
 
 /** 会话文件存在但不可读/不是合法 JSON（0.8.1 损坏检测） */
 export class SessionCorruptError extends Error {
@@ -59,13 +55,6 @@ function isNotFound(error: unknown): boolean {
 
 /** 单个文件的读取结果；ENOENT 之外的可读/解析错误直接抛 SessionCorruptError */
 type ReadStateResult = { found: true; state: SessionState } | { found: false };
-
-/** 归属 tenant：缺失记 default；非对象 JSON 不读取字段 */
-function ownerOf(value: unknown): string {
-  if (typeof value !== 'object' || value === null) return 'default';
-  const tenantId = (value as { tenant_id?: unknown }).tenant_id;
-  return tenantId === undefined || tenantId === null ? 'default' : String(tenantId);
-}
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
@@ -106,7 +95,6 @@ function toSessionState(value: unknown): SessionState {
     updated_at: updatedAt,
     title: optionalString(raw.title),
     preview: optionalString(raw.preview),
-    tenant_id: optionalString(raw.tenant_id),
     created_on_branch: optionalString(raw.created_on_branch) ?? optionalString(raw.branch),
     messages: Array.isArray(raw.messages) ? (raw.messages as Message[]) : undefined,
     derived_upto_seq: optionalNumber(raw.derived_upto_seq),
@@ -118,7 +106,6 @@ function toSessionState(value: unknown): SessionState {
 
 export class FileSessionStore implements SessionStore {
   private readonly basePath: string;
-  private readonly tenantId?: string;
   /** 目录创建只做一次（失败后可重试） */
   private dirReady?: Promise<void>;
   /** 同一 session 的写入串行化；值为永不 reject 的 tail */
@@ -127,9 +114,8 @@ export class FileSessionStore implements SessionStore {
   /**
    * @param basePath 会话文件存储目录，默认 `.vessel/sessions`
    */
-  constructor(basePath = '.vessel/sessions', options: FileSessionStoreOptions = {}) {
+  constructor(basePath = '.vessel/sessions') {
     this.basePath = basePath;
-    this.tenantId = options.tenantId;
   }
 
   /**
@@ -188,16 +174,14 @@ export class FileSessionStore implements SessionStore {
   async load(sessionId: string): Promise<SessionState | null> {
     const primaryPath = this.filePath(sessionId);
     const primary = await this.readStateFile(primaryPath);
-    if (primary.found) {
-      return this.isForeign(primary.state) ? null : primary.state;
-    }
+    if (primary.found) return primary.state;
 
     const legacyPath = this.legacyFilePath(sessionId);
     if (legacyPath === undefined || legacyPath === primaryPath) return null;
 
     const legacy = await this.readStateFile(legacyPath);
     if (!legacy.found) return null;
-    return this.isForeign(legacy.state) ? null : legacy.state;
+    return legacy.state;
   }
 
   /** 读取并解析单个状态文件；ENOENT 以外一律视为损坏 */
@@ -248,78 +232,30 @@ export class FileSessionStore implements SessionStore {
   private async writeSession(sessionId: string, state: SessionState): Promise<void> {
     await this.ensureDir();
 
-    const effective = this.applyTenant(state);
-    await this.assertWritableOwner(sessionId);
-
-    const messages = effective.messages ?? [];
+    const messages = state.messages ?? [];
     const meta = deriveSessionMeta(messages);
-    const title = effective.title ?? meta.title;
-    const preview = effective.preview ?? meta.preview;
-    const updatedAt = effective.updated_at ?? Date.now();
+    const title = state.title ?? meta.title;
+    const preview = state.preview ?? meta.preview;
+    const updatedAt = state.updated_at ?? Date.now();
 
     const disk = {
-      session_id: effective.session_id,
+      session_id: state.session_id,
       title,
       preview,
-      tenant_id: effective.tenant_id,
-      created_at: effective.created_at,
+      created_at: state.created_at,
       updated_at: updatedAt,
-      started_at: effective.created_at,
-      completed_at: effective.legacy_run?.completed_at,
-      status: effective.status,
-      usage: effective.legacy_run?.usage,
-      error: effective.legacy_run?.error,
-      branch: effective.created_on_branch,
-      run_id: effective.last_run_id,
+      started_at: state.created_at,
+      completed_at: state.legacy_run?.completed_at,
+      status: state.status,
+      usage: state.legacy_run?.usage,
+      error: state.legacy_run?.error,
+      branch: state.created_on_branch,
+      run_id: state.last_run_id,
       messages,
-      derived_upto_seq: effective.derived_upto_seq,
+      derived_upto_seq: state.derived_upto_seq,
     };
 
     await atomicWrite(this.filePath(sessionId), JSON.stringify(disk, null, 2));
-  }
-
-  /** 写入前补齐/校验 tenant_id；跨 tenant 直接抛错 */
-  private applyTenant(state: SessionState): SessionState {
-    if (this.tenantId === undefined) return state;
-    if (state.tenant_id !== undefined && state.tenant_id !== this.tenantId) {
-      throw new Error(`tenant_mismatch: session ${state.session_id} belongs to ${state.tenant_id}`);
-    }
-    return state.tenant_id === this.tenantId ? state : { ...state, tenant_id: this.tenantId };
-  }
-
-  /** 读取时过滤其它 tenant 的会话（缺省视为 default） */
-  private isForeign(state: SessionState): boolean {
-    if (this.tenantId === undefined) return false;
-    if (typeof state !== 'object' || state === null) return true;
-    return (state.tenant_id ?? 'default') !== this.tenantId;
-  }
-
-  /**
-   * 写前校验磁盘归属：primary 存在时只认它；primary 缺失才查 legacy
-   * （否则新建 primary 会永久遮蔽他人 legacy 会话）。
-   * 损坏文件由 readStateFile 抛 SessionCorruptError，不覆盖。
-   */
-  private async assertWritableOwner(sessionId: string): Promise<void> {
-    if (this.tenantId === undefined) return;
-
-    const primaryPath = this.filePath(sessionId);
-    const primary = await this.readStateFile(primaryPath);
-    if (primary.found) {
-      if (this.isForeign(primary.state)) {
-        throw new Error(
-          `tenant_mismatch: session ${sessionId} belongs to ${ownerOf(primary.state)}`,
-        );
-      }
-      return;
-    }
-
-    const legacyPath = this.legacyFilePath(sessionId);
-    if (legacyPath === undefined || legacyPath === primaryPath) return;
-
-    const legacy = await this.readStateFile(legacyPath);
-    if (legacy.found && this.isForeign(legacy.state)) {
-      throw new Error(`tenant_mismatch: session ${sessionId} belongs to ${ownerOf(legacy.state)}`);
-    }
   }
 
   /**
@@ -376,25 +312,10 @@ export class FileSessionStore implements SessionStore {
 
   /**
    * 列出所有会话 ID
-   *
-   * tenant 模式下逐 id `load()`：只返回本 tenant 的会话，损坏项跳过
-   * （与 listRich 的降级一致），其它错误上抛。非 tenant 原样返回。
    * @returns 会话 ID 数组（去后缀 .json 并解码）
    */
   async list(): Promise<string[]> {
-    const ids = await this.scanIds();
-    if (this.tenantId === undefined) return ids;
-
-    const visible: string[] = [];
-    for (const id of ids) {
-      try {
-        if ((await this.load(id)) !== null) visible.push(id);
-      } catch (error) {
-        if (error instanceof SessionCorruptError) continue;
-        throw error;
-      }
-    }
-    return visible;
+    return this.scanIds();
   }
 
   /**

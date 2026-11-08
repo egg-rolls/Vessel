@@ -32,7 +32,6 @@ export interface ToolPipelineDeps {
   permission: PermissionPolicy;
   guardrails: GuardrailRunner;
   hooks: HookRunner;
-  tenantId?: string;
 }
 
 /** 可选阶段开关；默认全开。调用方已在外层处理的阶段可关闭，避免重复。 */
@@ -254,7 +253,6 @@ export interface ToolPipelineFactoryDeps {
   events: EventStream;
   /** 默认权限策略（未声明 checkPermission 的工具） */
   permission?: RuntimePermissionConfig;
-  tenantId?: string;
 }
 
 /**
@@ -267,9 +265,8 @@ export function createToolPipelineFor(deps: ToolPipelineFactoryDeps): ToolPipeli
   return createToolPipeline({
     pluginHost: deps.pluginHost,
     events: deps.events,
-    permission: new PermissionPolicy(deps.events, deps.permission, deps.tenantId),
-    guardrails: new GuardrailRunner(deps.pluginHost, deps.events, deps.tenantId),
-    hooks: new HookRunner(deps.pluginHost, deps.events, deps.tenantId),
-    ...(deps.tenantId !== undefined ? { tenantId: deps.tenantId } : {}),
+    permission: new PermissionPolicy(deps.events, deps.permission),
+    guardrails: new GuardrailRunner(deps.pluginHost, deps.events),
+    hooks: new HookRunner(deps.pluginHost, deps.events),
   });
 }

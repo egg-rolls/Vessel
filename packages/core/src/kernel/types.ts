@@ -218,8 +218,6 @@ export interface SchedulerOptions {
   perBodySerial?: boolean;
   /** 0.15 E4：队列事件发布流；缺省不发（只读观测，不改变调度） */
   events?: EventStream;
-  /** 0.15 E4：事件 tenant 盖章；缺省不写 */
-  tenantId?: string;
 }
 
 /**

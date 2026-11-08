@@ -11,13 +11,8 @@
 import { loadConfig } from '../packages/config/src/index';
 import type { PruneTraceResult } from '../packages/core/src/index';
 import { formatConfigErrors } from './config-error-format';
-import {
-  ensureWriteTenantPaths,
-  resolveDataDir,
-  resolveEffectiveTenantId,
-  resolveReadonlyTenantPaths,
-} from './data-paths';
-import { acquireTenantLock, TenantLockError } from './tenant-lock';
+import { acquireDataLock, DataLockError } from './data-lock';
+import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
 import { pruneTenantTrace } from './trace-wiring';
 
 type EnvMap = Record<string, string | undefined>;
@@ -81,13 +76,10 @@ export async function tracePruneCommand(
   // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
   const dataDir = resolveDataDir(config, env);
   const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
-  // 0.49 T2（C12/C14）：真实 prune 前先完成布局迁移（只作用根 events/，永不
-  // prune 旧树或 staging）；dry-run 是只读，按 C10 选当前布局，只统计不迁移。
-  let tenantPaths: Awaited<ReturnType<typeof ensureWriteTenantPaths>>;
+  // 0.49 T5（C6）：只读根布局；非根布局数据 fail-fast。
+  let tenantPaths: ReturnType<typeof resolveSingleTenantPaths>;
   try {
-    tenantPaths = dryRun
-      ? await resolveReadonlyTenantPaths(dataDir, tenantId)
-      : await ensureWriteTenantPaths(dataDir, tenantId);
+    tenantPaths = resolveSingleTenantPaths(dataDir, tenantId);
   } catch (error) {
     return {
       exitCode: 1,
@@ -96,19 +88,18 @@ export async function tracePruneCommand(
     };
   }
 
-  let lock: Awaited<ReturnType<typeof acquireTenantLock>> | undefined;
+  let lock: Awaited<ReturnType<typeof acquireDataLock>> | undefined;
   if (!dryRun) {
     try {
-      lock = await acquireTenantLock({
-        tenantDir: tenantPaths.root,
-        tenantId,
+      lock = await acquireDataLock({
+        dataDir: tenantPaths.root,
         ...(options.now ? { now: options.now } : {}),
         ...(options.hostname ? { hostname: options.hostname } : {}),
         ...(options.pid ? { pid: options.pid } : {}),
         ...(options.isPidAlive ? { isPidAlive: options.isPidAlive } : {}),
       });
     } catch (error) {
-      if (error instanceof TenantLockError) {
+      if (error instanceof DataLockError) {
         return { exitCode: 1, stdout: '', stderr: error.message };
       }
       return {

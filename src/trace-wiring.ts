@@ -4,7 +4,6 @@
  * - `trace.enabled === false` 或 `trace.level === 'off'` → 零副作用；
  * - seq 由 core FileTraceRecorder 落盘时分配，asm 不自行分配；
  * - redactor 组合：core 默认 → 注入的 ext redactor（幂等）；
- * - tenant_id 缺失时补齐（缺省语义为 default 由调用方传入的 tenantId 决定）；
  * - 启动 prune / shutdown flush 由 bootstrap 调用本 control。
  *
  * @module vessel/trace-wiring
@@ -62,7 +61,6 @@ export interface InstallTraceOptions {
   events: EventStream;
   config: VesselConfig;
   tenantPaths: TenantPaths;
-  tenantId: string;
   /** ext redact-secrets 等更严格的实现；在 core 默认之后执行 */
   redactor?: TraceRedactor;
   factory?: TraceRecorderFactory;
@@ -166,7 +164,7 @@ export function installTrace(options: InstallTraceOptions): TraceControl | undef
   let recorder: TraceRecorderLike;
 
   if (options.factory) {
-    // 自定义 recorder 没有内置订阅：wiring 负责 tenant_id、脱敏与终态 flush。
+    // 自定义 recorder 没有内置订阅：wiring 负责脱敏与终态 flush。
     recorder = options.factory({
       dir,
       level: trace.level,
@@ -186,10 +184,8 @@ export function installTrace(options: InstallTraceOptions): TraceControl | undef
         // 自定义 recorder 与 core recorder 保持同一默认：流式分片默认不落盘。
         if (!trace.includeStreamChunks && event.type === 'llm.stream.chunk') return;
 
-        const withTenant: RunEvent =
-          event.tenant_id === undefined ? { ...event, tenant_id: options.tenantId } : event;
         try {
-          recorder.append(redactor.redact(withTenant));
+          recorder.append(redactor.redact(event));
           written += 1;
         } catch {
           failed += 1;
@@ -201,13 +197,12 @@ export function installTrace(options: InstallTraceOptions): TraceControl | undef
       }),
     );
   } else {
-    // core recorder 自己订阅、插 tenant_id、分配 seq、脱敏、终态 flush。
+    // core recorder 自己订阅、分配 seq、脱敏、终态 flush。
     recorder = new FileTraceRecorder({
       dir,
       level: trace.level,
       redactor,
       events: options.events,
-      tenantId: options.tenantId,
       includeStreamChunks: trace.includeStreamChunks,
     });
     unsubscribes.push(

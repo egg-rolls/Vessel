@@ -1838,7 +1838,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         return 405;
       case 'conflict':
       case 'run_already_running':
-      case 'tenant_locked':
+      case 'data_locked':
       case 'compact_unavailable':
         return 409;
       case 'busy':

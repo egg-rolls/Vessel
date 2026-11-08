@@ -62,7 +62,6 @@ interface AttachView {
   url: string;
   instance?: string;
   node_id?: string;
-  tenant_id?: string;
   status?: string;
   clients?: number;
   latest_seq?: number;
@@ -132,9 +131,6 @@ function attachView(
     url: target.baseUrl,
     ...(target.instance !== undefined ? { instance: target.instance } : {}),
     ...(pickString(node, 'node_id') !== undefined ? { node_id: pickString(node, 'node_id') } : {}),
-    ...(pickString(health, 'tenant_id') !== undefined
-      ? { tenant_id: pickString(health, 'tenant_id') }
-      : {}),
     ...(pickString(node, 'status') !== undefined ? { status: pickString(node, 'status') } : {}),
     ...(pickNumber(health, 'clients') !== undefined
       ? { clients: pickNumber(health, 'clients') }
@@ -223,9 +219,7 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
   let attachError: string | undefined;
   if (targetResult.ok) {
     try {
-      const health = await targetResult.target.request<unknown>('health.get', {
-        tenant_id: tenantId,
-      });
+      const health = await targetResult.target.request<unknown>('health.get');
       attach = attachView(targetResult.target, isRecord(health) ? health : undefined);
     } catch (error) {
       attachError = error instanceof Error ? error.message : String(error);
@@ -244,7 +238,6 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
   const payload = {
     as_of: new Date(now()).toISOString(),
     version: options.version ?? readPackageVersion(),
-    tenant_id: tenantId,
     data_dir: dataDir,
     provider: {
       ...(config.provider?.name !== undefined ? { name: config.provider.name } : {}),

@@ -66,9 +66,8 @@ export interface CreateSessionControlOptions {
   session: SessionStore;
   paths: TenantPaths;
   runStore?: RunRecordStore;
-  /** 传入后 core 会发 `session.deleted`（带 tenant_id 与计数） */
+  /** 传入后 core 会发 `session.deleted`（带计数） */
   events?: EventStream;
-  tenantId?: string;
   /** 0.18：删除会话时同目录清理事件日志（events.ndjson + index.json） */
   eventLog?: SessionEventLog;
   /**
@@ -87,7 +86,6 @@ function defaultDeleteSessionData(
     paths: TenantPaths;
     runStore?: RunRecordStore;
     events?: EventStream;
-    tenantId?: string;
     eventLog?: SessionEventLog;
   },
 ): Promise<DeleteSessionDataResult> {
@@ -96,7 +94,6 @@ function defaultDeleteSessionData(
     traceDir: opts.paths.events_dir,
     ...(opts.runStore ? { runStore: opts.runStore } : {}),
     ...(opts.events ? { events: opts.events } : {}),
-    ...(opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {}),
     ...(opts.eventLog ? { eventLog: opts.eventLog } : {}),
   });
 }
@@ -127,7 +124,6 @@ export function createSessionControl(options: CreateSessionControlOptions): Sess
         paths: options.paths,
         ...(options.runStore ? { runStore: options.runStore } : {}),
         ...(options.events ? { events: options.events } : {}),
-        ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
         ...(options.eventLog ? { eventLog: options.eventLog } : {}),
       });
     },

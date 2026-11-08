@@ -67,14 +67,14 @@ export class QuotaExceededError extends Error {
   }
 }
 
-/** 写锁冲突；asm/core 可抛出同 code 错误（T4 保留 `tenant_locked` 错误码，R7=B） */
-export class TenantLockedError extends Error {
-  readonly code = 'tenant_locked' as const;
+/** data-dir 写锁冲突；asm/core 可抛出同 code 错误（0.49 T5 中性命名） */
+export class DataLockedError extends Error {
+  readonly code = 'data_locked' as const;
   readonly details?: unknown;
 
   constructor(message: string, details?: unknown) {
     super(message);
-    this.name = 'TenantLockedError';
+    this.name = 'DataLockedError';
     if (details !== undefined) this.details = details;
   }
 }
@@ -132,13 +132,13 @@ export function extractToken(
   return null;
 }
 
-/** 把 asm/core 的锁 / quota 错误映射为冻结 RPC 错误码 */
+/** 把 asm/core 的 data-lock / quota / conflict 错误映射为冻结 RPC 错误码 */
 export function mapTenantError(error: unknown): never {
   const code = (error as { code?: unknown }).code;
-  if (code === 'tenant_locked') {
+  if (code === 'data_locked') {
     throw new RpcError(
-      'tenant_locked',
-      error instanceof Error ? error.message : 'Tenant is locked',
+      'data_locked',
+      error instanceof Error ? error.message : 'Data directory is locked',
       (error as { details?: unknown }).details,
     );
   }

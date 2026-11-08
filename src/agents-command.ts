@@ -86,9 +86,7 @@ export async function agentsCommand(options: AgentsCommandOptions = {}): Promise
   const target = resolved.target;
   let result: unknown;
   try {
-    result = await target.request('agents.list', {
-      ...(options.tenantId != null ? { tenant_id: options.tenantId } : {}),
-    });
+    result = await target.request('agents.list', {});
   } catch (error) {
     if (
       error instanceof RpcClientError &&

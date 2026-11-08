@@ -49,7 +49,6 @@ const CODE_META: Readonly<
   agent_not_found: { category: 'internal', retryable: false, phase: 'input' },
   session_corrupt: { category: 'internal', retryable: false, phase: 'input' },
   atomic_write_failed: { category: 'internal', retryable: true, phase: 'checkpoint' },
-  invalid_tenant_id: { category: 'config', retryable: false, phase: 'input' },
   conflict: { category: 'internal', retryable: false, phase: 'input' },
   limit_blocked: { category: 'internal', retryable: false, phase: 'run' },
 };

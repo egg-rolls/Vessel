@@ -232,7 +232,7 @@ export const zhCN = {
   // ── status / agents / errors（0.14）──
   'status.title': 'Vessel 状态',
   'status.version': '版本',
-  'status.tenant': 'Tenant',
+  'status.tenant': '标识',
   'status.dataDir': '数据目录',
   'status.provider': 'Provider',
   'status.attach': '连接',
@@ -273,7 +273,6 @@ export const zhCN = {
   'hub.error.hubUrlMissing': '请指定 hub URL 或设置 hub.url。',
   'hub.error.httpsRequired': '非回环 hub URL 必须使用 https。',
   'hub.error.invalidPublicUrl': '无效的 public URL。',
-  'hub.error.tenantMismatch': 'hub 为其它 tenant 签发了 token。',
   'hub.join.joined': '已加入 {hub}（{pairing}）',
   'hub.join.saved': '已保存；gateway 将在下次启动时连接',
   'hub.join.lastStatus': '状态：{status}',

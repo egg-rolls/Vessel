@@ -17,12 +17,7 @@ import { join } from 'node:path';
 import type { ConfigLoadOptions, VesselConfig } from '../packages/config/src/index';
 import { loadConfig } from '../packages/config/src/index';
 import type { SessionInfo, SessionStore, TenantPaths } from '../packages/core/src/index';
-import {
-  ensureWriteTenantPaths,
-  resolveDataDir,
-  resolveEffectiveTenantId,
-  resolveReadonlyTenantPaths,
-} from './data-paths';
+import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
 import { createSessionStore } from './session-factory';
 
 /** 列表展示上限 */
@@ -55,11 +50,8 @@ interface SqliteSessionListRow {
   tenant_id: string | null;
 }
 
-/** 读公共配置并选布局；`list` 只读选布局，`write` 先迁移。 */
-async function resolveLocalLayout(
-  options: LocalSessionOptions,
-  mode: 'write' | 'list',
-): Promise<LocalLayout> {
+/** 读公共配置并解析根布局；非根布局数据 fail-fast。 */
+async function resolveLocalLayout(options: LocalSessionOptions): Promise<LocalLayout> {
   const loaded = await loadConfig(options);
   if (loaded.validation.errors.length > 0) {
     const details = loaded.validation.errors.map((error) => error.message).join('; ');
@@ -72,18 +64,14 @@ async function resolveLocalLayout(
   const dataDir = resolveDataDir(loaded.config);
   // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
   const tenantId = resolveEffectiveTenantId(loaded.tenantId, dataDir);
-  // 0.49 T2（C14 r7）：`-c` / `-r <id>` 是写意图续接，先迁移；`-r` 无 id 的纯列表
-  // 只按布局选择读旧/根，不迁移、不建 marker/staging。
-  const paths =
-    mode === 'list'
-      ? await resolveReadonlyTenantPaths(dataDir, tenantId)
-      : await ensureWriteTenantPaths(dataDir, tenantId);
+  // 0.49 T5（C6）：写意图续接与只读列表都只读根布局。
+  const paths = resolveSingleTenantPaths(dataDir, tenantId);
   return { config: loaded.config, tenantId, paths };
 }
 
 /** 打开当前配置/tenant 对应的会话后端（写意图）。 */
 async function openLocalSession(options: LocalSessionOptions): Promise<OpenedSession> {
-  const layout = await resolveLocalLayout(options, 'write');
+  const layout = await resolveLocalLayout(options);
   const backend = createSessionStore(layout.config.session, {
     tenantSessionsDir: layout.paths.sessions_dir,
     tenantSessionsDbPath: `${layout.paths.root}/sessions.db`,
@@ -142,7 +130,6 @@ function listSqliteSessionsReadonly(layout: LocalLayout): SessionInfo[] {
       updated_at: row.updated_at,
       message_count: row.message_count,
       ...(row.branch !== null ? { branch: row.branch } : {}),
-      ...(row.tenant_id !== null ? { tenant_id: row.tenant_id } : {}),
     }));
   } finally {
     db.close();
@@ -242,7 +229,7 @@ export async function resumeSession(
 /** `-r/--resume`（无 id）：只读列出当前 tenant 的会话 */
 export async function runSessionList(options: LocalSessionOptions = {}): Promise<number> {
   try {
-    const layout = await resolveLocalLayout(options, 'list');
+    const layout = await resolveLocalLayout(options);
     if ((layout.config.session?.backend ?? 'file') === 'memory') {
       console.log('Memory session backend keeps no sessions across processes.');
       return 0;

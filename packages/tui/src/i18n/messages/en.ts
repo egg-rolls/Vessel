@@ -11,7 +11,8 @@ export const en: Record<MessageKey, string> = {
   'startup.bannerShort': 'VESSEL · Agent Harness',
   'startup.summary.model': 'model {model}',
   'startup.summary.session': 'session {id}',
-  'startup.summary.tenant': 'tenant {id}',
+  'startup.summary.tenant': 'identity {id}',
+  'status.tenant': 'identity {id}',
   'startup.summary.mcp': 'MCP {count}',
   'startup.summary.runs': 'runs {count}',
   'startup.summary.feishu': 'feishu',
@@ -35,7 +36,6 @@ export const en: Record<MessageKey, string> = {
   'status.bash': 'bash {count}',
   'status.subagents': 'sub {count}',
   'status.sessionEntry': 'sess {id} · Ctrl+R',
-  'status.tenant': 'tenant {id}',
   'status.queued': 'queue {count}',
   'layout.lowHeight':
     'Terminal height is low (<15 rows); live output is hidden. Resize to see streaming output.',
@@ -301,15 +301,14 @@ export const en: Record<MessageKey, string> = {
     'Feishu channel is not connected; check the last error in /feishu.',
   'error.hint.channelAuthFailed': 'Invalid Feishu app_id/app_secret; check env vars or config.',
   'error.hint.unauthorized': 'Missing or invalid credentials; check token config.',
-  'error.hint.forbidden':
-    'Tenant isolation or role permission denied; verify tenant and permissions, then retry.',
+  'error.hint.forbidden': 'Permission denied; verify role permissions, then retry.',
   'error.hint.invalidParams':
     'Invalid command arguments; use /help or the command usage for the expected format.',
   'error.hint.genericNotFound': 'Target not found; use /runs or /sessions to list available items.',
-  'error.hint.tenantLocked':
-    'Another writer holds this tenant; connect to the gateway with --connect <url>, or stop the other process.',
+  'error.hint.dataLocked':
+    'Another writer holds the data directory; connect to the gateway with --connect <url>, or stop the other process.',
   'error.hint.quotaExceeded':
-    'Tenant quota exceeded; clean up sessions/runs or raise the quota, then retry.',
+    'Quota exceeded; clean up sessions/runs or raise the quota, then retry.',
   'error.hint.conflict':
     'State conflict (already running/finished/active runs); check the current state first.',
   'error.hint.internal': 'Internal server error; retry later or check the gateway logs.',
@@ -449,7 +448,6 @@ export const en: Record<MessageKey, string> = {
   'status.permissionsValueNoTools': '{auto} auto-approve · {pending} pending',
   'status.queueValue': '{count} input queued',
   'status.version': 'v{version}',
-  'status.instanceTenant': 'tenant {tenant}',
   'status.pid': 'pid {pid}',
   'status.uptime': 'up {uptime}',
   'status.rpc': 'rpc',

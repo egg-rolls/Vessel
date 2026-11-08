@@ -28,14 +28,7 @@ import {
   summarize,
   type UsageRecord,
 } from './aggregate.js';
-import {
-  EventStore,
-  isRecord,
-  isSafeTenantId,
-  parseSettings,
-  type RawEvent,
-  type Settings,
-} from './store.js';
+import { EventStore, isRecord, parseSettings, type RawEvent, type Settings } from './store.js';
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_LOG_LIMIT = 50;
@@ -123,22 +116,15 @@ function parseStatus(value: unknown): 'ok' | 'failed' | undefined {
   throw invalid("status must be 'ok' or 'failed'");
 }
 
-async function loadRecords(tenant?: string): Promise<UsageRecord[]> {
+async function loadRecords(): Promise<UsageRecord[]> {
   if (dataDir === undefined) throw new RpcError(-32000, 'plugin is not activated');
-  if (tenant !== undefined && !isSafeTenantId(tenant)) throw invalid('tenant is not a safe id');
-
-  const tenants = tenant !== undefined ? [tenant] : await store.listTenants(dataDir);
-  const events: RawEvent[] = [];
-  for (const id of tenants) {
-    events.push(...(await store.loadTenant(dataDir, id)));
-  }
+  const events: RawEvent[] = await store.loadEvents(dataDir);
   return buildRecords(events, settings);
 }
 
 async function handleSummary(params: Record<string, unknown>): Promise<SummaryResult> {
   const days = parseOptionalDays(params.days);
-  const tenant = parseOptionalString(params.tenant, 'tenant');
-  return summarize(await loadRecords(tenant), Date.now(), days);
+  return summarize(await loadRecords(), Date.now(), days);
 }
 
 async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> {

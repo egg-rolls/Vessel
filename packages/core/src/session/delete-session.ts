@@ -45,7 +45,6 @@ export interface DeleteSessionDataOptions {
   /** tenant 的 events/ 目录；提供时同步删除 `<run>.jsonl` */
   traceDir?: string;
   events?: EventStream;
-  tenantId?: string;
   /**
    * 0.18：会话事件日志。提供时删除 `sessions/<id>/` 整个目录
    * （events.ndjson + index.json），并先关闭写句柄（Windows 必需）。
@@ -69,7 +68,7 @@ export async function deleteSessionData(
     throw new Error('invalid_session_id: session_id must be a non-empty string');
   }
 
-  const { session, runStore, traceDir, events, tenantId, eventLog } = options;
+  const { session, runStore, traceDir, events, eventLog } = options;
 
   // 0.18：先读一次会话（损坏时抛 SessionCorruptError，不静默删除），
   // 用于区分「真正存在」与「不存在」——后者 sessions_deleted 必须为 0。
@@ -153,7 +152,6 @@ export async function deleteSessionData(
           events_deleted: eventsDeleted,
         },
         ts: Date.now(),
-        ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
       });
     } catch {
       // 事件投递失败不改变删除结果

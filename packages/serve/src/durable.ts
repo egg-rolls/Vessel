@@ -82,8 +82,6 @@ export interface DurableCheckpointLike {
   /** 0.27：queued-cancel 补写的终态 RunRecord 会带 `created_at`。 */
   created_at?: number;
   updated_at: number;
-  /** 0.5：所属 tenant；缺省视为 default */
-  tenant_id?: string;
 }
 
 /** store 的最小结构面（core RunRecordStore 结构满足） */

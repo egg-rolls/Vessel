@@ -69,7 +69,6 @@ export class PermissionPolicy {
   constructor(
     private events: EventStream,
     config?: RuntimePermissionConfig,
-    private readonly tenantId?: string,
     emit?: (event: RunEvent) => void,
   ) {
     this.emit = emit ?? ((event) => this.events.publish(event));
@@ -186,7 +185,6 @@ export class PermissionPolicy {
           source: ctx.source ?? 'runtime',
         },
         ts,
-        ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
       });
       const decided = (await this.waitForDecision(tool, requestId, ctx)) as
         | { decision?: 'allow' | 'deny' | 'ask'; allowed?: boolean; remember?: boolean }

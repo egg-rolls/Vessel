@@ -50,8 +50,6 @@ export interface RunRecord {
   fencing_token?: number;
   created_at: number;
   updated_at: number;
-  /** 0.5：所属 tenant；缺省视为 `default` */
-  tenant_id?: string;
   /** 本次 run 的 git branch */
   branch?: string;
   metadata?: Record<string, unknown>;

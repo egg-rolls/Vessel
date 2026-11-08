@@ -129,7 +129,6 @@ export class InProcessScheduler implements InternalScheduler {
   private readonly perBodySerial: boolean;
   /** 0.15 E4：队列事件发布流；缺省不发 */
   private readonly events?: EventStream;
-  private readonly tenantId?: string;
   private completed = 0;
   private failed = 0;
   private cancelled = 0;
@@ -145,7 +144,6 @@ export class InProcessScheduler implements InternalScheduler {
     this.maxQueueSize = Math.max(1, options.maxQueueSize ?? 100);
     this.perBodySerial = options.perBodySerial ?? true;
     this.events = options.events;
-    this.tenantId = options.tenantId;
   }
 
   async submit(task: ScheduledTask): Promise<RunHandle> {
@@ -348,7 +346,6 @@ export class InProcessScheduler implements InternalScheduler {
         since: entry.enqueuedAt,
       },
       ts: Date.now(),
-      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     });
   }
 

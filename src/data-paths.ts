@@ -1,25 +1,24 @@
 /**
- * data_dir 与 tenant 目录布局适配（0.5 E15 / DECISION-010 §2.1）
+ * data_dir 与 tenant 路径解析（0.49 T5：只保留根布局）
  *
  * - data_dir 取值：config.dataDir → VESSEL_DATA_DIR → DEFAULT_DATA_DIR；
  * - `~` 展开；相对路径按 cwd 解析；
+ * - 0.49 T5 起只支持根布局 `<dataDir>/**`；`<dataDir>/tenants/**` 非空即 fail-fast，
+ *   不读 / 不迁 / 不移 / 不删 / 不写 marker/journal；
  * - 布局只由 core 的 TenantPaths 决定，asm 不复制。
  *
  * @module vessel/data-paths
  */
 
-import { readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_DATA_DIR, type VesselConfig } from '../packages/config/src/index';
 import {
   assertTenantId,
   resolveSingleTenantPaths as resolveCoreSingleTenantPaths,
-  resolveTenantPaths as resolveCoreTenantPaths,
   type TenantPaths,
 } from '../packages/core/src/index';
-import { ensureTenantLayout } from './tenant-layout-migration';
-import { detectTenantLayoutState, parseLayoutMarker } from './tenant-layout-state';
 
 /** 展开开头的 `~`（支持 `~`、`~/x`、`~\x`） */
 export function expandHome(input: string): string {
@@ -47,10 +46,8 @@ export function resolveDataDir(
   return path.resolve(expandHome(configured ?? DEFAULT_DATA_DIR));
 }
 
-/** T2 迁移后保留在根布局的单 id 数据文件（`<dataDir>/tenant.json`）。 */
+/** 根布局的单 id 数据文件（`<dataDir>/tenant.json`）。 */
 const PERSISTED_TENANT_FILE = 'tenant.json';
-/** T2 迁移 marker；仅在 `tenant.json` 不存在时作为 T4 过渡 fallback。 */
-const LAYOUT_MARKER_FILE = '.layout.json';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -64,42 +61,11 @@ function invalidPersistedTenantFile(file: string, detail: string): Error {
 }
 
 /**
- * 读取 T2 迁移 marker 的单 id（仅 `tenant.json` 不存在时调用）。
- * marker 缺失/不可解析 → undefined；不写文件。
- */
-function readMarkerTenantId(dataDir: string): string | undefined {
-  const markerPath = path.join(dataDir, LAYOUT_MARKER_FILE);
-  let raw: string;
-  try {
-    raw = readFileSync(markerPath, 'utf8');
-  } catch {
-    return undefined;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-  const marker = parseLayoutMarker(parsed);
-  if (marker === null) return undefined;
-  try {
-    return assertTenantId(marker.source_tenant);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * 读取持久化的单 id（只读；不创建/不修改文件）。
  *
- * 优先级（T4 R1 errata）：
- * 1. `<dataDir>/tenant.json` 的 `tenant_id`（T2 冻结形状）；
- * 2. 仅当 `tenant.json` **不存在**时，`<dataDir>/.layout.json` 的 `source_tenant`
- *    （T2 迁移 marker；T5 随迁移层删除，只是 T4 过渡）；
- * 3. 都没有 → undefined（调用方回落 `loadConfig()` 的 `default`）。
- *
- * `tenant.json` 存在但不可读 / JSON 损坏 / `tenant_id` 非法 → 抛错 fail-fast，
+ * 0.49 T5：唯一来源是 `<dataDir>/tenant.json` 的 `tenant_id`（T2 冻结形状）。
+ * 文件缺失 → undefined（调用方回落 `loadConfig()` 的 `default`）。
+ * 存在但不可读 / JSON 损坏 / `tenant_id` 非法 → 抛错 fail-fast（错误含路径），
  * 不静默回退 default（避免指向错误路径、像数据丢失）。
  */
 export function readPersistedTenantId(dataDir: string): string | undefined {
@@ -108,9 +74,7 @@ export function readPersistedTenantId(dataDir: string): string | undefined {
   try {
     raw = readFileSync(tenantPath, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return readMarkerTenantId(dataDir);
-    }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     const detail = error instanceof Error ? error.message : String(error);
     throw invalidPersistedTenantFile(tenantPath, `cannot read file: ${detail}`);
   }
@@ -139,76 +103,163 @@ export function readPersistedTenantId(dataDir: string): string | undefined {
 /**
  * 生效的单 id：持久化来源优先，否则用 `loadConfig()` 的解析结果。
  *
- * T4 删除 config `tenant` 块后解析结果恒为内部常量 `default`；真实单 id 来自
- * `<dataDir>/tenant.json` 或（仅当其不存在时）`.layout.json` 的 `source_tenant`
- * （R1：路径文件名段保持原样）。fresh 数据根两者都没有时回 `default`。
+ * T4 删除 config `tenant` 块后解析结果恒为内部常量 `default`；真实单 id 只来自
+ * `<dataDir>/tenant.json`（R1：路径文件名段保持原样）。fresh 数据根没有该文件时
+ * 回 `default`，且不落盘。
  */
 export function resolveEffectiveTenantId(configTenantId: string, dataDir: string): string {
   return readPersistedTenantId(dataDir) ?? configTenantId;
 }
 
-/** 按 tenant 派生冻结目录布局（委托 core；旧树语义）。 */
-export function resolveTenantPaths(dataDir: string, tenantId: string): TenantPaths {
-  return resolveCoreTenantPaths(dataDir, tenantId);
+/** 0.49 T5 后仍存在非根布局数据（`<dataDir>/tenants/**`）。 */
+export interface NonRootLayoutError extends Error {
+  code: 'non_root_layout';
+  tenants_dir: string;
+  entries: number;
+  bytes: number;
 }
 
-/**
- * 单公司根布局 `<dataDir>/**`（0.49 T2 C1/C9）。
- *
- * 写模式与已迁移的读取一律走这里；调用方必须已确定 `tenantId` 是单公司 id。
- */
-export function resolveSingleTenantPaths(dataDir: string, tenantId: string): TenantPaths {
-  return resolveCoreSingleTenantPaths(dataDir, tenantId);
+interface TreeMeasure {
+  entries: number;
+  bytes: number;
 }
 
-/** 只读入口布局判定失败（C10：不读半迁移数据）。 */
-export interface TenantLayoutReadError extends Error {
-  code: 'layout_migration_incomplete';
-  state: 'migrating' | 'blocked';
+/** 递归统计条目数与字节数（只读；不跟随 symlink）。 */
+function measureTree(dir: string): TreeMeasure {
+  const measure: TreeMeasure = { entries: 0, bytes: 0 };
+  const stack: string[] = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop() as string;
+    let names: string[];
+    try {
+      names = readdirSync(current);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      measure.entries += 1;
+      const child = path.join(current, name);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(child);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        measure.bytes += stat.size;
+      } else if (stat.isDirectory()) {
+        stack.push(child);
+      } else if (stat.isFile()) {
+        measure.bytes += stat.size;
+      }
+    }
+  }
+  return measure;
 }
 
-function layoutReadError(dataDir: string, state: 'migrating' | 'blocked'): TenantLayoutReadError {
+function nonRootLayoutError(
+  targetPath: string,
+  measure: TreeMeasure,
+  firstEntry: string | undefined,
+  detail: string,
+): NonRootLayoutError {
+  const sample =
+    firstEntry === undefined ? '' : ` (first entry "${path.join(targetPath, firstEntry)}")`;
   return Object.assign(
     new Error(
-      `layout_migration_incomplete: layout under "${dataDir}" is ${state}; refusing to read partial data`,
+      `non_root_layout: ${detail} found at "${targetPath}"${sample}: ` +
+        `${measure.entries} entries, ${measure.bytes} bytes; ` +
+        'this build only supports the root layout — archive or migrate this data before starting',
     ),
-    { code: 'layout_migration_incomplete' as const, state },
+    {
+      code: 'non_root_layout' as const,
+      tenants_dir: targetPath,
+      entries: measure.entries,
+      bytes: measure.bytes,
+    },
   );
 }
 
-/**
- * 只读入口的布局选择（0.49 T2 C10）：
- *
- * - `legacy` → 旧树（`<dataDir>/tenants/<sid>`），不构造 SQLite、不拿写锁；
- * - `migrating` / `blocked` → 中止（不读半迁移数据）；
- * - `root` / `fresh` → 根布局。
- *
- * 同一进程只用一种布局，不做逐文件 union 双读。
- */
-export async function resolveReadonlyTenantPaths(
-  dataDir: string,
-  singleTenantId: string,
-): Promise<TenantPaths> {
-  const status = await detectTenantLayoutState(dataDir, singleTenantId);
-  if (status.state === 'migrating' || status.state === 'blocked') {
-    throw layoutReadError(dataDir, status.state);
+/** 旧树 `<dataDir>/tenants/*`：非空即拒绝（空目录允许）。 */
+function assertNoLegacyTenantData(dataDir: string): void {
+  const tenantsDir = path.join(dataDir, 'tenants');
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(tenantsDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
   }
-  if (status.state === 'legacy') return resolveCoreTenantPaths(dataDir, singleTenantId);
-  return resolveCoreSingleTenantPaths(dataDir, singleTenantId);
+  if (!stat.isDirectory()) {
+    throw nonRootLayoutError(
+      tenantsDir,
+      { entries: 1, bytes: stat.size },
+      undefined,
+      'legacy tenant data',
+    );
+  }
+  const names = readdirSync(tenantsDir);
+  if (names.length === 0) return;
+  throw nonRootLayoutError(tenantsDir, measureTree(tenantsDir), names[0], 'legacy tenant data');
 }
 
 /**
- * 写模式布局（0.49 T2 C9/C14）：先 `ensureTenantLayout({apply:true})`（含
- * `migrating` 前滚恢复），成功后再返回根布局。
- *
- * 所有单 id 本地写命令（bootstrap / tenant update / eval / trace prune /
- * migrate / `-c`/`-r` 续接）统一走这里，避免在 legacy 树上先写根造成冲突。
- * 失败抛 `TenantLayoutMigrationError`（blocked/冲突等稳定 code）。
+ * T2 迁移中断残留 `<dataDir>/.t2-migrating-*`：journal 可能含唯一数据副本。
+ * 任一非空 → 拒绝（空目录 / 不存在允许）。
  */
-export async function ensureWriteTenantPaths(
-  dataDir: string,
-  singleTenantId: string,
-): Promise<TenantPaths> {
-  await ensureTenantLayout({ dataDir, singleTenantId, apply: true });
-  return resolveCoreSingleTenantPaths(dataDir, singleTenantId);
+function assertNoMigrationStaging(dataDir: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(dataDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  for (const name of names) {
+    if (!name.startsWith('.t2-migrating-')) continue;
+    const target = path.join(dataDir, name);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    if (!stat.isDirectory()) {
+      throw nonRootLayoutError(
+        target,
+        { entries: 1, bytes: stat.size },
+        undefined,
+        'incomplete migration staging',
+      );
+    }
+    const inner = readdirSync(target);
+    if (inner.length === 0) continue;
+    throw nonRootLayoutError(target, measureTree(target), inner[0], 'incomplete migration staging');
+  }
+}
+
+/**
+ * 0.49 T5 启动守卫（C6）：
+ * - `<dataDir>/tenants/<sid>` 或任何非空 `<dataDir>/tenants/*`；
+ * - 任何非空 `<dataDir>/.t2-migrating-*`（T2 迁移中断残留）。
+ *
+ * 命中 → 抛 `non_root_layout`（错误含路径、条目数、字节数）。
+ * 只读：不读被拒数据的内容、不迁、不移、不删、不写 marker/journal。
+ * 空目录 / 不存在允许。
+ */
+export function assertRootTenantLayout(dataDir: string): void {
+  assertNoLegacyTenantData(dataDir);
+  assertNoMigrationStaging(dataDir);
+}
+
+/**
+ * 单公司根布局 `<dataDir>/**`（0.49 T2 C1 / T5 C6）。
+ *
+ * 写模式与只读入口统一走这里；调用方必须已确定 `tenantId` 是单公司 id。
+ * 非根布局数据存在时 fail-fast。
+ */
+export function resolveSingleTenantPaths(dataDir: string, tenantId: string): TenantPaths {
+  assertRootTenantLayout(dataDir);
+  return resolveCoreSingleTenantPaths(dataDir, tenantId);
 }

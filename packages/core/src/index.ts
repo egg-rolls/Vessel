@@ -121,25 +121,17 @@ export {
   type SessionEventLogOptions,
   type SessionLogIndex,
   SQLiteSessionStore,
-  type SQLiteSessionStoreOptions,
   sessionLogDirExists,
 } from './session/index.js';
-// 多租户（0.5 F4：tenant 解析与目录布局）
+// tenant id 校验与单公司根布局（0.49 T5：旧布局解析已删除）
 export {
   assertTenantId,
   encodeSessionDirName,
-  pathsForTenant,
-  type ResolveTenantIdInput,
-  type ResolveTenantInput,
   resolveSingleTenantPaths,
-  resolveTenant,
-  resolveTenantId,
-  resolveTenantPaths,
   sessionDirPath,
   sessionEventsFilePath,
   sessionIndexFilePath,
   type TenantPaths,
-  tenantRootPath,
 } from './tenant/index.js';
 // Transport（0.2 R3a-core：进程内实现）
 export { InProcessTransport, type InProcessTransportOptions } from './transport/index.js';

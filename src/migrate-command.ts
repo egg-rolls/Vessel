@@ -56,7 +56,6 @@ function formatCounts(result: MigrateResult): string {
   return [
     `mode: ${result.dry_run ? 'dry-run' : 'apply'}`,
     `from: ${result.from} -> ${result.to}`,
-    `tenant: ${result.tenant_id}`,
     line('sessions', result.sessions),
     line('runs', result.runs),
   ].join('\n');

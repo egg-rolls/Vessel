@@ -185,7 +185,7 @@ export type RpcErrorCodeLike =
   | 'forbidden'
   | 'not_found'
   | 'invalid_params'
-  | 'tenant_locked'
+  | 'data_locked'
   | 'quota_exceeded'
   | 'conflict'
   | 'internal';
@@ -213,9 +213,8 @@ export interface RpcClientLike {
   subscribe(handler: (notification: RpcEventNotificationLike) => void): () => void;
 }
 
-/** 启动时解析出的 tenant（只用于展示；不参与数据访问） */
+/** 启动时解析出的数据根（不参与 tenant 选择） */
 export interface TenantInfoLike {
-  tenant_id: string;
   data_dir?: string;
 }
 

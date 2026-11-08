@@ -454,7 +454,7 @@ export function statusForRpcCode(code: string): number {
     case 'invalid_params':
       return 400;
     case 'conflict':
-    case 'tenant_locked':
+    case 'data_locked':
     case 'run_ended':
       return 409;
     case 'quota_exceeded':

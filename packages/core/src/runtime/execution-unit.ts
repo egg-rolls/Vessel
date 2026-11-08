@@ -110,7 +110,6 @@ function createRunRecord(args: {
   sessionId: string;
   createdAt: number;
   agentId?: string;
-  tenantId?: string;
   branch?: string;
 }): RunRecord {
   return {
@@ -121,7 +120,6 @@ function createRunRecord(args: {
     updated_at: args.createdAt,
     metadata: { tool_calls_count: 0 },
     ...(args.agentId !== undefined ? { agent_id: args.agentId } : {}),
-    ...(args.tenantId !== undefined ? { tenant_id: args.tenantId } : {}),
     ...(args.branch !== undefined ? { branch: args.branch } : {}),
   };
 }
@@ -335,7 +333,6 @@ export class ExecutionUnit {
   private lastContextRatioValue?: number;
   private readonly boundAgentId?: string;
   /** 0.5：tenant；事件 / SessionState / RunRecord 在缺失时补齐 */
-  private readonly tenantId?: string;
   /** 0.11.1：是否发布 reasoning 流式增量（默认 false） */
   private readonly includeReasoning: boolean;
   /** 成功安装的插件句柄（安装顺序；dispose 逆序，0.9） */
@@ -390,7 +387,6 @@ export class ExecutionUnit {
     this.selfCard = opts.selfCard;
     this.contextPressureHint = opts.contextPressureHint;
     this.boundAgentId = opts.agentId;
-    this.tenantId = opts.tenantId;
     this.includeReasoning = opts.includeReasoning === true;
     this.eventLog = opts.eventLog;
     this.leaseService = opts.leaseService;
@@ -415,22 +411,18 @@ export class ExecutionUnit {
 
     // 编排器（ADR-033）：权限策略 / guardrail / hook 各自独立，ExecutionUnit 只协调。
     // 0.18：权限请求经 runtime 的 publishEvent，才能保证先落盘再发布。
-    this.permissionPolicy = new PermissionPolicy(
-      this.events,
-      opts.permission,
-      opts.tenantId,
-      (event) => this.publishEvent(event),
+    this.permissionPolicy = new PermissionPolicy(this.events, opts.permission, (event) =>
+      this.publishEvent(event),
     );
-    this.guardrails = new GuardrailRunner(this.pluginHost, this.events, opts.tenantId);
-    this.hooks = new HookRunner(this.pluginHost, this.events, opts.tenantId);
-    this.prefixGuard = new PromptPrefixGuard(this.events, opts.tenantId);
+    this.guardrails = new GuardrailRunner(this.pluginHost, this.events);
+    this.hooks = new HookRunner(this.pluginHost, this.events);
+    this.prefixGuard = new PromptPrefixGuard(this.events);
     this.toolPipeline = createToolPipeline({
       pluginHost: this.pluginHost,
       events: this.events,
       permission: this.permissionPolicy,
       guardrails: this.guardrails,
       hooks: this.hooks,
-      ...(opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {}),
     });
   }
 
@@ -775,7 +767,6 @@ export class ExecutionUnit {
         sessionId,
         createdAt: now,
         ...(this.boundAgentId !== undefined ? { agentId: this.boundAgentId } : {}),
-        ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
         ...(branch !== undefined ? { branch } : {}),
       }),
       // 0.14 P0：错误 envelope 的阶段来源；输入 guardrail / 进入 loop 后会被更新。
@@ -840,7 +831,6 @@ export class ExecutionUnit {
       sessionId: execution.sessionId,
       events: this.events,
       ...(this.boundAgentId !== undefined ? { agentId: this.boundAgentId } : {}),
-      ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
       ...(execution.branch !== undefined ? { branch: execution.branch } : {}),
       ...(fencingToken !== undefined ? { fencingToken } : {}),
     });
@@ -1336,7 +1326,6 @@ export class ExecutionUnit {
       runRecord.updated_at = record.updated_at;
       runRecord.branch = execution.branch;
       runRecord.agent_id = record.agent_id ?? this.boundAgentId;
-      runRecord.tenant_id = this.tenantId ?? record.tenant_id;
       runRecord.metadata = record.metadata ?? runRecord.metadata;
       if (lease !== undefined) runRecord.fencing_token = lease.fencingToken;
 
@@ -1383,10 +1372,6 @@ export class ExecutionUnit {
         execution.branch,
         Date.now(),
       );
-      // 会话文件缺失时，tenant 权威回退到 RunRecord 的启动快照。
-      if (sessionState.tenant_id === undefined && record.tenant_id !== undefined) {
-        sessionState.tenant_id = record.tenant_id;
-      }
       // 0.18：先发布 run.resumed，再落盘；否则 derived_upto_seq 会漏掉
       // 这条事件（legacy RunRecord 复用 session 时尤其明显）。
       this.publishEvent({
@@ -2356,7 +2341,6 @@ export class ExecutionUnit {
       preview: deriveSessionMeta(execution.workingContext.messages).preview,
     };
     record.agent_id = this.boundAgentId ?? record.agent_id;
-    record.tenant_id = this.tenantId ?? record.tenant_id;
     record.branch = branch;
     if (error !== undefined) record.error = error;
     else delete record.error;
@@ -2562,7 +2546,7 @@ export class ExecutionUnit {
 
   /**
    * 构造本次 run 的 SessionState 壳：
-   * 保留既有 title / preview / created_at / created_on_branch / tenant_id，
+   * 保留既有 title / preview / created_at / created_on_branch，
    * 覆盖 status / last_run_id / updated_at；messages 在保存时由窗口投影补齐。
    */
   private createSessionState(
@@ -2572,13 +2556,11 @@ export class ExecutionUnit {
     branch: string | undefined,
     now: number,
   ): SessionState {
-    const tenantId = this.tenantId ?? stored?.tenant_id;
     const createdOnBranch = stored?.created_on_branch ?? branch;
     return {
       session_id: sessionId,
       ...(stored?.title !== undefined ? { title: stored.title } : {}),
       ...(stored?.preview !== undefined ? { preview: stored.preview } : {}),
-      ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
       created_at: stored?.created_at ?? now,
       updated_at: now,
       ...(createdOnBranch !== undefined ? { created_on_branch: createdOnBranch } : {}),

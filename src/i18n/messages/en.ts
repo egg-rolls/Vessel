@@ -246,7 +246,7 @@ export const en: Record<MessageKey, string> = {
   // ── status / agents / errors (0.14) ──
   'status.title': 'Vessel Status',
   'status.version': 'Version',
-  'status.tenant': 'Tenant',
+  'status.tenant': 'Identity',
   'status.dataDir': 'Data',
   'status.provider': 'Provider',
   'status.attach': 'Attach',
@@ -287,7 +287,6 @@ export const en: Record<MessageKey, string> = {
   'hub.error.hubUrlMissing': 'Specify the hub URL or set hub.url.',
   'hub.error.httpsRequired': 'Non-loopback hub URLs require https.',
   'hub.error.invalidPublicUrl': 'Invalid public URL.',
-  'hub.error.tenantMismatch': 'The hub issued a token for a different tenant.',
   'hub.join.joined': 'joined {hub} ({pairing})',
   'hub.join.saved': 'saved; gateway will connect on next start',
   'hub.join.lastStatus': 'status: {status}',

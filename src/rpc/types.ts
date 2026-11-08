@@ -22,7 +22,7 @@ export type RpcErrorCode =
   | 'forbidden'
   | 'not_found'
   | 'invalid_params'
-  | 'tenant_locked'
+  | 'data_locked'
   | 'quota_exceeded'
   | 'conflict'
   | 'internal'
@@ -99,7 +99,7 @@ const RPC_ERROR_CODES = new Set<RpcErrorCode>([
   'forbidden',
   'not_found',
   'invalid_params',
-  'tenant_locked',
+  'data_locked',
   'quota_exceeded',
   'conflict',
   'internal',

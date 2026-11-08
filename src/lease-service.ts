@@ -58,7 +58,7 @@ export interface LeaseFileRecord {
 }
 
 export interface FileLeaseServiceOptions {
-  /** tenant 根目录（`resolveTenantPaths(...).root`） */
+  /** 数据根目录（`resolveSingleTenantPaths(...).root`） */
   tenantDir: string;
   tenantId: string;
   /** 租约 TTL；缺省 30000 */

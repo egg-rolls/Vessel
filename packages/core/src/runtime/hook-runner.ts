@@ -25,7 +25,6 @@ export class HookRunner {
   constructor(
     private host: PluginHost,
     private events?: EventStream,
-    private readonly tenantId?: string,
   ) {}
 
   async run(type: HookType, ctx: HookContext): Promise<HookResult> {
@@ -95,7 +94,6 @@ export class HookRunner {
       run_id: runId,
       data,
       ts: Date.now(),
-      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     });
   }
 }

@@ -8,7 +8,6 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { inboxPath } from '@vessel-agent/agent';
 import { loadConfig } from '../packages/config/src/index';
 import type { CommandResult } from './agent-command';
@@ -18,8 +17,7 @@ import {
   resolveAgentOwner,
 } from './agent-owner-client';
 import type { AgentCommand } from './cli-args';
-import { resolveEffectiveTenantId } from './data-paths';
-import { detectTenantLayoutState } from './tenant-layout-state';
+import { assertRootTenantLayout, resolveEffectiveTenantId } from './data-paths';
 import { ui } from './ui-style';
 
 export interface AgentInboxCommandOptions {
@@ -83,21 +81,11 @@ export async function runAgentInboxCommand(
     return failure(error);
   }
 
-  // 0.49 T2（C10/C13）：只读命令按布局选 inbox 路径，不做双读。
+  // 0.49 T5（C6）：只读根布局；非根布局数据 fail-fast。
   let path: string;
   try {
-    const status = await detectTenantLayoutState(options.dataDir, tenantId);
-    if (status.state === 'migrating' || status.state === 'blocked') {
-      return {
-        exitCode: 1,
-        stdout: '',
-        stderr: `layout_migration_incomplete: layout is ${status.state}; refusing to read partial data`,
-      };
-    }
-    path =
-      status.state === 'legacy'
-        ? join(status.locations.legacy_dir, 'inbox', `${encodeURIComponent(command.member)}.json`)
-        : inboxPath(options.dataDir, tenantId, command.member);
+    assertRootTenantLayout(options.dataDir);
+    path = inboxPath(options.dataDir, tenantId, command.member);
   } catch (error) {
     return { exitCode: 1, stdout: '', stderr: `agent_inbox_error: ${errorText(error)}` };
   }
@@ -133,7 +121,6 @@ export async function runAgentInboxCommand(
       stdout: JSON.stringify(
         {
           agent_id: command.member,
-          tenant_id: tenantId,
           unread,
           total: messages.length,
           messages,

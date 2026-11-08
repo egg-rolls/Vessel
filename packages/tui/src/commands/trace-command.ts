@@ -30,7 +30,6 @@ export interface TraceEventLike {
   data?: Record<string, unknown>;
   ts?: number;
   seq?: number;
-  tenant_id?: string;
 }
 
 export interface TraceOptions {
@@ -155,7 +154,6 @@ export function readTraceEvents(value: unknown): TraceEventLike[] {
       ...(isRecord(item.data) ? { data: item.data } : {}),
       ...(typeof item.ts === 'number' ? { ts: item.ts } : {}),
       ...(typeof item.seq === 'number' ? { seq: item.seq } : {}),
-      ...(typeof item.tenant_id === 'string' ? { tenant_id: item.tenant_id } : {}),
     }));
 }
 

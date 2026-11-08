@@ -577,7 +577,6 @@ export class AgentServiceImpl implements AgentService {
   /** 进行中的 rotate（agentId → 旧 / 新 ExecutionUnit）；只在内存 */
   private readonly rotations = new Map<string, RotationState>();
   private readonly listeners = new Set<AgentEventListener>();
-  private readonly tenantId: string;
   private readonly eventStream: EventStream | undefined;
   private readonly defaultModel: string | undefined;
   /** `create` 未显式指定 owner 时的默认 owner；不持久化 */
@@ -610,7 +609,6 @@ export class AgentServiceImpl implements AgentService {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
     this.logger = options.logger ?? noopLogger;
-    this.tenantId = options.tenantId;
     this.eventStream = options.events;
     this.defaultModel = options.defaultModel;
     this.defaultOwner = options.ownerId ?? DEFAULT_OWNER;
@@ -5235,7 +5233,7 @@ export class AgentServiceImpl implements AgentService {
       await sleep(25);
     }
     if (active()) {
-      this.logger.warn('agent.drain.timeout', { tenant_id: this.tenantId });
+      this.logger.warn('agent.drain.timeout', {});
       return 'timeout';
     }
     return 'interrupted';

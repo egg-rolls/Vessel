@@ -5,7 +5,7 @@
  * - 默认 dry-run；`apply` 才写，且写前获取 tenant 锁；
  * - 源只读：绝不创建/修改/删除源；
  * - 幂等：目标已存在同 session_id / run_id → skipped，不覆盖；
- * - 目标写入走 core atomicWrite，并补 tenant_id。
+ * - 目标写入走 core atomicWrite。
  *
  * @module vessel/migrate
  */
@@ -20,8 +20,8 @@ import {
   type SessionState,
   type TenantPaths,
 } from '../packages/core/src/index';
-import { ensureWriteTenantPaths, expandHome, resolveSingleTenantPaths } from './data-paths';
-import { acquireTenantLock, TenantLockError } from './tenant-lock';
+import { acquireDataLock, DataLockError } from './data-lock';
+import { expandHome, resolveSingleTenantPaths } from './data-paths';
 
 /** 迁移源类型 */
 export type MigrateFrom = 'sqlite' | 'file-v1';
@@ -41,7 +41,6 @@ export interface MigrateCounts {
 export interface MigrateResult {
   from: MigrateFrom;
   to: MigrateTo;
-  tenant_id: string;
   dry_run: boolean;
   sessions: MigrateCounts;
   runs: MigrateCounts;
@@ -68,7 +67,7 @@ export interface MigrateOptions {
 
 /** 迁移失败 */
 export class MigrateError extends Error {
-  readonly code: 'source_not_found' | 'invalid_source' | 'tenant_locked';
+  readonly code: 'source_not_found' | 'invalid_source' | 'data_locked';
 
   constructor(code: MigrateError['code'], message: string) {
     super(`${code}: ${message}`);
@@ -110,24 +109,15 @@ function isUsage(value: unknown): value is RunRecord['usage'] {
   );
 }
 
-/** 源 tenant（缺省 = 0.4 legacy，归属由调用方补） */
-function sourceTenantOf(value: Record<string, unknown>): string | undefined {
-  return typeof value.tenant_id === 'string' && value.tenant_id !== ''
-    ? value.tenant_id
-    : undefined;
-}
-
 interface SessionCandidate {
   session: SessionState;
   /** 旧顶层 run 字段拆出的 RunRecord；无可用 run 字段时为 undefined */
   run?: RunRecord;
-  /** 源数据自带的 tenant；undefined = 0.4 legacy */
-  sourceTenantId?: string;
 }
 
 /**
  * 规范化旧 session JSON/sqlite 行（旧 `RunState`）：拆成 `SessionState` + `RunRecord`。
- * 非法返回 undefined。保留源 tenant_id，不在此处改写归属。
+ * 非法返回 undefined。
  */
 function normalizeLegacySession(value: unknown): SessionCandidate | undefined {
   if (!isRecord(value)) return undefined;
@@ -141,7 +131,6 @@ function normalizeLegacySession(value: unknown): SessionCandidate | undefined {
     return undefined;
   }
 
-  const sourceTenantId = sourceTenantOf(value);
   const startedAt = value.started_at;
   const updatedAt = typeof value.updated_at === 'number' ? value.updated_at : startedAt;
   const completedAt = typeof value.completed_at === 'number' ? value.completed_at : undefined;
@@ -166,7 +155,6 @@ function normalizeLegacySession(value: unknown): SessionCandidate | undefined {
     updated_at: updatedAt,
     ...(typeof value.title === 'string' ? { title: value.title } : {}),
     ...(typeof value.preview === 'string' ? { preview: value.preview } : {}),
-    ...(sourceTenantId !== undefined ? { tenant_id: sourceTenantId } : {}),
     ...(branch !== undefined ? { created_on_branch: branch } : {}),
     messages: value.messages as SessionState['messages'],
     ...(derivedUptoSeq !== undefined ? { derived_upto_seq: derivedUptoSeq } : {}),
@@ -185,19 +173,13 @@ function normalizeLegacySession(value: unknown): SessionCandidate | undefined {
     ...(typeof value.error === 'string' ? { error: value.error } : {}),
     ...(branch !== undefined ? { branch } : {}),
     ...(derivedUptoSeq !== undefined ? { event_cursor: derivedUptoSeq } : {}),
-    ...(sourceTenantId !== undefined ? { tenant_id: sourceTenantId } : {}),
   };
 
-  return {
-    session,
-    run: record,
-    ...(sourceTenantId !== undefined ? { sourceTenantId } : {}),
-  };
+  return { session, run: record };
 }
 
 interface RunRecordCandidate {
   record: RunRecord;
-  sourceTenantId?: string;
 }
 
 /** 规范化旧 RunCheckpoint；非法返回 undefined。旧 `messages` 收进只读兼容字段。 */
@@ -213,7 +195,6 @@ function normalizeRunRecord(value: unknown): RunRecordCandidate | undefined {
     return undefined;
   }
 
-  const sourceTenantId = sourceTenantOf(value);
   return {
     record: {
       run_id: value.run_id,
@@ -230,9 +211,7 @@ function normalizeRunRecord(value: unknown): RunRecordCandidate | undefined {
       ...(Array.isArray(value.messages)
         ? { legacy_messages: value.messages as NonNullable<RunRecord['legacy_messages']> }
         : {}),
-      ...(sourceTenantId !== undefined ? { tenant_id: sourceTenantId } : {}),
     },
-    ...(sourceTenantId !== undefined ? { sourceTenantId } : {}),
   };
 }
 
@@ -242,7 +221,6 @@ function toStoredSession(state: SessionState): Record<string, unknown> {
     session_id: state.session_id,
     title: state.title,
     preview: state.preview,
-    tenant_id: state.tenant_id,
     created_at: state.created_at,
     updated_at: state.updated_at,
     started_at: state.created_at,
@@ -261,17 +239,6 @@ function toStoredSession(state: SessionState): Record<string, unknown> {
 function toStoredRunRecord(record: RunRecord): Record<string, unknown> {
   const { legacy_messages, ...rest } = record;
   return { ...rest, messages: legacy_messages ?? [] };
-}
-
-/** legacy（无 tenant）补目标 tenant；源 tenant 不同则返回 undefined（foreign → skipped） */
-function assignTenant<T extends { tenant_id?: string }>(
-  value: T,
-  sourceTenantId: string | undefined,
-  targetTenantId: string,
-): T | undefined {
-  if (sourceTenantId !== undefined && sourceTenantId !== targetTenantId) return undefined;
-  if (sourceTenantId !== undefined) return value;
-  return { ...value, tenant_id: targetTenantId };
 }
 
 /** 写入一个目标文件；返回 migrated / skipped */
@@ -320,8 +287,6 @@ function readSqliteSessions(sourcePath: string, counts: MigrateCounts): SessionC
           preview: row.preview ?? undefined,
           updated_at: row.updated_at ?? undefined,
           branch: row.branch ?? undefined,
-          // 0.5 源库可能已有 tenant_id；0.4 旧库没有该列 → undefined
-          tenant_id: row.tenant_id ?? undefined,
         });
         if (!candidate) {
           counts.invalid += 1;
@@ -426,18 +391,14 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
   }
 
   const apply = options.apply === true;
-  // 0.49 T2（C9/C14）：只有真实写入（apply）才先完成布局迁移；dry-run 只预览
-  // 根目标（`resolveSingleTenantPaths`），不迁移、不写盘。
-  const tenantPaths: TenantPaths = apply
-    ? await ensureWriteTenantPaths(options.dataDir, options.tenantId)
-    : resolveSingleTenantPaths(options.dataDir, options.tenantId);
+  // 0.49 T5（C6）：只写根布局；非根布局数据 fail-fast（dry-run 同样拒绝）。
+  const tenantPaths: TenantPaths = resolveSingleTenantPaths(options.dataDir, options.tenantId);
   const sessions = emptyCounts();
   const runs = emptyCounts();
 
   const result: MigrateResult = {
     from: options.from,
     to: 'file-v2',
-    tenant_id: options.tenantId,
     dry_run: !apply,
     sessions,
     runs,
@@ -454,20 +415,20 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
       ? await readFileV1Runs(options.runsSource ?? defaultRunsSource(), runs)
       : [];
 
-  let lock: Awaited<ReturnType<typeof acquireTenantLock>> | undefined;
+  let lock: Awaited<ReturnType<typeof acquireDataLock>> | undefined;
   if (apply) {
     try {
-      lock = await acquireTenantLock({
-        tenantDir: tenantPaths.root,
-        tenantId: options.tenantId,
+      lock = await acquireDataLock({
+        dataDir: tenantPaths.root,
         ...(options.now ? { now: options.now } : {}),
         ...(options.hostname ? { hostname: options.hostname } : {}),
         ...(options.pid ? { pid: options.pid } : {}),
         ...(options.isPidAlive ? { isPidAlive: options.isPidAlive } : {}),
       });
     } catch (error) {
-      if (error instanceof TenantLockError) {
-        throw new MigrateError('tenant_locked', error.message);
+      if (error instanceof DataLockError) {
+        const detail = error.message.replace(/^data_locked:\s*/, '');
+        throw new MigrateError('data_locked', detail);
       }
       throw error;
     }
@@ -483,14 +444,8 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
         sessions.invalid += 1;
         continue;
       }
-      // 源已有 tenant：不同归属 → skipped，绝不改写。legacy 无 tenant 才补目标值。
-      const state = assignTenant(candidate.session, candidate.sourceTenantId, options.tenantId);
-      if (!state) {
-        sessions.skipped += 1;
-        continue;
-      }
       const target = join(tenantPaths.sessions_dir, `${encoded}.json`);
-      const outcome = await writeIfAbsent(target, toStoredSession(state), apply);
+      const outcome = await writeIfAbsent(target, toStoredSession(candidate.session), apply);
       sessions[outcome] += 1;
 
       // 旧 session 顶层 run 字段 → 独立 RunRecord（或仅在 session 里留 legacy_run）。
@@ -502,13 +457,8 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
         runs.invalid += 1;
         continue;
       }
-      const record = assignTenant(derived, candidate.sourceTenantId, options.tenantId);
-      if (!record) {
-        runs.skipped += 1;
-        continue;
-      }
       const runTarget = join(tenantPaths.runs_dir, `${encodedRun}.json`);
-      const runOutcome = await writeIfAbsent(runTarget, toStoredRunRecord(record), apply);
+      const runOutcome = await writeIfAbsent(runTarget, toStoredRunRecord(derived), apply);
       runs[runOutcome] += 1;
     }
 
@@ -518,13 +468,8 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
         runs.invalid += 1;
         continue;
       }
-      const payload = assignTenant(candidate.record, candidate.sourceTenantId, options.tenantId);
-      if (!payload) {
-        runs.skipped += 1;
-        continue;
-      }
       const target = join(tenantPaths.runs_dir, `${encoded}.json`);
-      const outcome = await writeIfAbsent(target, toStoredRunRecord(payload), apply);
+      const outcome = await writeIfAbsent(target, toStoredRunRecord(candidate.record), apply);
       runs[outcome] += 1;
     }
   } finally {

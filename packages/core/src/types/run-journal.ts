@@ -20,7 +20,6 @@ export interface RunJournalIdentity {
   /** 该 EU 的观察流；journal 在 append 成功后向它发布（per-EU，不共享） */
   events: EventStream;
   agentId?: string;
-  tenantId?: string;
   branch?: string;
   /** 当前 SessionLease 的 fencing token（append / checkpoint 校验用） */
   fencingToken?: number;
@@ -68,6 +67,5 @@ export interface RunJournalFactoryOptions {
   runStore?: RunRecordStore;
   /** ADR-098 C2：fencing 校验回调（不持 LeaseService） */
   fenceOf?: (kind: LeaseKind, key: string) => Promise<number>;
-  tenantId?: string;
   logger?: Logger;
 }

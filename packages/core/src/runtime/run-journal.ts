@@ -79,16 +79,15 @@ export class SessionRunJournal implements RunJournal {
   ) {}
 
   appendFact(event: RunEvent, persistData?: unknown): void {
-    const stamped = this.stampTenant(event);
     if (
       !this.deps.eventLog ||
-      NON_PERSISTED_EVENT_TYPES.has(stamped.type) ||
-      !this.shouldPersistSessionEvent(stamped)
+      NON_PERSISTED_EVENT_TYPES.has(event.type) ||
+      !this.shouldPersistSessionEvent(event)
     ) {
-      this.publishRaw(stamped);
+      this.publishRaw(event);
       return;
     }
-    this.enqueuePersistedEvent(stamped, true, persistData);
+    this.enqueuePersistedEvent(event, true, persistData);
   }
 
   appendObserved(event: RunEvent): void {
@@ -143,7 +142,6 @@ export class SessionRunJournal implements RunJournal {
         message_count: 0,
       },
       ts: Date.now(),
-      ...(this.tenantId() !== undefined ? { tenant_id: this.tenantId() } : {}),
     });
   }
 
@@ -166,7 +164,6 @@ export class SessionRunJournal implements RunJournal {
         message_count: state.messages?.length ?? 0,
       },
       ts: Date.now(),
-      ...(this.tenantId() !== undefined ? { tenant_id: this.tenantId() } : {}),
     });
   }
 
@@ -181,18 +178,6 @@ export class SessionRunJournal implements RunJournal {
     } catch {
       return undefined;
     }
-  }
-
-  private tenantId(): string | undefined {
-    const fromIdentity = 'tenantId' in this.identity ? this.identity.tenantId : undefined;
-    return fromIdentity ?? this.deps.tenantId;
-  }
-
-  private stampTenant(event: RunEvent): RunEvent {
-    const tenantId = this.tenantId();
-    return tenantId !== undefined && event.tenant_id === undefined
-      ? { ...event, tenant_id: tenantId }
-      : event;
   }
 
   /** 能否确定该事件属于某个 session（不能时就只发布、不落盘） */
@@ -272,7 +257,6 @@ export class SessionRunJournal implements RunJournal {
           error: errorText(error),
         },
         ts: Date.now(),
-        ...(this.tenantId() !== undefined ? { tenant_id: this.tenantId() } : {}),
       });
     } catch {
       // 事件投递失败不得影响 run

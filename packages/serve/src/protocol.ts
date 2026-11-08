@@ -86,7 +86,7 @@ export type ProtocolErrorCode =
   // 0.5 RPC / 多租户（DECISION-010 A-3 §10.2）
   | 'forbidden'
   | 'invalid_params'
-  | 'tenant_locked'
+  | 'data_locked'
   | 'quota_exceeded'
   | 'conflict'
   // 0.13：权限/交互请求已过期或已取消（DECISION-024 §2.2）。

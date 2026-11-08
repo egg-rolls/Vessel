@@ -980,7 +980,6 @@ async function runWithConfig(result: BootstrapResult) {
     const sweep = await reconcileStaleSessions(livenessContext);
     if (sweep.repaired.length > 0 || sweep.errors.length > 0) {
       logger.warn('session liveness sweep', {
-        tenant_id: result.tenantId,
         repaired: sweep.repaired.length,
         errors: sweep.errors.length,
       });

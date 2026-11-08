@@ -78,13 +78,7 @@ export interface ExecutionUnitRequest {
   overrides?: Partial<
     Pick<
       ExecutionUnitOptions,
-      | 'model'
-      | 'systemPrompt'
-      | 'permission'
-      | 'selfCard'
-      | 'contextPressureHint'
-      | 'agentId'
-      | 'tenantId'
+      'model' | 'systemPrompt' | 'permission' | 'selfCard' | 'contextPressureHint' | 'agentId'
     >
   >;
 }
@@ -201,7 +195,6 @@ export class Runtime {
   ): ExecutionUnitOptions {
     const overrides = req.overrides;
     const agentId = req.agentId ?? overrides?.agentId;
-    const tenantId = overrides?.tenantId ?? req.tenantId;
     const systemPrompt = overrides?.systemPrompt ?? profile.systemPrompt;
     const permission = overrides?.permission ?? profile.permission;
     return {
@@ -224,7 +217,6 @@ export class Runtime {
           ? { pluginHost: profile.pluginHostFactory() }
           : {}),
       ...(agentId !== undefined ? { agentId } : {}),
-      ...(tenantId !== undefined ? { tenantId } : {}),
       ...(req.includeReasoning !== undefined
         ? { includeReasoning: req.includeReasoning }
         : profile.includeReasoning !== undefined

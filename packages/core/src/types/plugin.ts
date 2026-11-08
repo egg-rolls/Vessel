@@ -155,8 +155,6 @@ export interface ExecutionUnitOptions {
   journalFactory: RunJournalFactory;
   /** 可选：写入 checkpoint.agent_id（Host 注入成员 id；单 agent 可缺省） */
   agentId?: string;
-  /** 0.5：所属 tenant；事件 / SessionState / RunRecord 在缺失时补齐 */
-  tenantId?: string;
   /**
    * 0.11.1：是否把思维的流式增量（`reasoning_delta`）经 `llm.stream.chunk` 发布。
    * 默认 false（显式 opt-in）；false 时请求 / 事件与 0.11.0 完全一致。

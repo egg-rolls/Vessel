@@ -15,7 +15,7 @@
 
 import { join } from 'node:path';
 import { deriveSessionMeta } from '@vessel-agent/core/session';
-import { type ConfigSources, type VesselConfig } from '../packages/config/src/index';
+import type { ConfigSources, VesselConfig } from '../packages/config/src/index';
 import {
   type ContextSummarizer,
   createDefaultTraceRedactor,
@@ -483,7 +483,6 @@ export async function drainActiveRuns(options: DrainActiveRunsOptions): Promise<
   if (options.activeRuns.size === 0) return 'idle';
   if (!options.interrupt) {
     options.logger.warn('shutdown drain: no interrupt hook for active runs', {
-      tenant_id: options.tenantId,
       runs: options.activeRuns.size,
     });
     return 'unsupported';
@@ -502,7 +501,6 @@ export async function drainActiveRuns(options: DrainActiveRunsOptions): Promise<
   }
   if (options.activeRuns.size > 0) {
     options.logger.warn('shutdown drain timed out', {
-      tenant_id: options.tenantId,
       runs: [...options.activeRuns],
     });
     return 'timeout';
@@ -577,7 +575,6 @@ export async function buildTenantRuntime(
       ? { perBodySerial: config.scheduler.perBodySerial }
       : {}),
     events,
-    tenantId,
   });
 
   // 0.10 R2-18：只跟踪真实在跑的 run（包装 `ExecutionUnit.run/resume`），
@@ -624,7 +621,6 @@ export async function buildTenantRuntime(
     session,
     paths: tenantPaths,
     events,
-    tenantId,
     ...(runStore ? { runStore } : {}),
     ...(eventLog ? { eventLog } : {}),
   });
@@ -665,13 +661,12 @@ export async function buildTenantRuntime(
           name: plugin.name,
           category,
           version: plugin.version ?? descriptor?.version ?? '',
-          tenant_id: tenantId,
         },
       });
     } else {
       pluginLoadEvents.push({
         type: 'plugin.failed',
-        data: { name, category, reason: 'load_failed', tenant_id: tenantId },
+        data: { name, category, reason: 'load_failed' },
       });
     }
   }
@@ -721,7 +716,6 @@ export async function buildTenantRuntime(
     ...(leaseService !== undefined
       ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
       : {}),
-    tenantId,
     logger,
   });
 
@@ -919,7 +913,6 @@ export async function buildTenantRuntime(
           events,
           config,
           tenantPaths,
-          tenantId,
           ...(extRedactor ? { redactor: extRedactor } : {}),
           ...(options.traceFactory ? { factory: options.traceFactory } : {}),
         })
@@ -934,7 +927,6 @@ export async function buildTenantRuntime(
       data: {
         sources: [...new Set(Object.values(options.configSources ?? {}))],
         keys: Object.keys(config),
-        tenant_id: tenantId,
       },
       ts: nowTs(),
     });

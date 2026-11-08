@@ -77,7 +77,6 @@ export interface StatusSnapshot {
   lastCompaction?: CompactionSnapshot;
   instance: {
     version?: string;
-    tenantId: string;
     pid: number;
     uptimeMs: number;
     rpc: boolean;
@@ -266,7 +265,6 @@ export function buildStatusSnapshot(
     ...(lastCompaction !== undefined ? { lastCompaction } : {}),
     instance: {
       ...(ctx.version !== undefined ? { version: ctx.version } : {}),
-      tenantId: ctx.tenant?.tenant_id ?? 'default',
       pid: process.pid,
       uptimeMs: Math.floor(process.uptime() * 1000),
       rpc: ctx.rpc !== undefined,
@@ -389,7 +387,6 @@ export function formatStatusSnapshot(snapshot: StatusSnapshot): string {
     snapshot.instance.version !== undefined
       ? t('status.version', { version: snapshot.instance.version })
       : undefined,
-    t('status.instanceTenant', { tenant: snapshot.instance.tenantId }),
     t('status.pid', { pid: snapshot.instance.pid }),
     t('status.uptime', { uptime: formatDuration(snapshot.instance.uptimeMs) }),
     snapshot.instance.rpc ? t('status.rpc') : t('status.embedded'),

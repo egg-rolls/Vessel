@@ -402,6 +402,7 @@ export type {
 export {
   type ConfigGatewayOptionsLike,
   type ConfigSnapshotLike,
+  DataLockedError,
   DEFAULT_TENANT_ID,
   extractToken,
   type GatewayAuthLike,
@@ -409,7 +410,6 @@ export {
   QuotaExceededError,
   resolveLocalPrincipal,
   resolvePrincipal,
-  TenantLockedError,
   type TenantPrincipal,
   type TenantRole,
 } from './tenant.js';

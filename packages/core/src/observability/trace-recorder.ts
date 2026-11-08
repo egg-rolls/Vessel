@@ -84,8 +84,6 @@ export interface FileTraceRecorderOptions {
   redactor?: TraceRedactor;
   /** 提供则自动订阅 */
   events?: EventStream;
-  /** 写入前为缺失 tenant_id 的事件补齐 */
-  tenantId?: string;
   /** 收到 run 终态后 flush；默认 true */
   flushOnTerminal?: boolean;
   /** 每 run 队列上限；默认 10000；0 = 不限 */
@@ -150,7 +148,6 @@ function projectMetadata(event: RunEvent): RunEvent {
     data,
     ts: event.ts,
     ...(event.seq !== undefined ? { seq: event.seq } : {}),
-    ...(event.tenant_id !== undefined ? { tenant_id: event.tenant_id } : {}),
   };
 }
 
@@ -163,7 +160,6 @@ export class FileTraceRecorder implements TraceRecorder {
   private readonly dir: string;
   private readonly level: TraceLevel;
   private readonly redactor: TraceRedactor;
-  private readonly tenantId?: string;
   private readonly flushOnTerminal: boolean;
   private readonly maxPendingEvents: number;
   private readonly includeStreamChunks: boolean;
@@ -179,7 +175,6 @@ export class FileTraceRecorder implements TraceRecorder {
     this.dir = options.dir;
     this.level = options.level ?? 'full';
     this.redactor = options.redactor ?? createDefaultTraceRedactor();
-    this.tenantId = options.tenantId;
     this.flushOnTerminal = options.flushOnTerminal ?? true;
     this.maxPendingEvents = resolveMaxPending(options.maxPendingEvents);
     this.includeStreamChunks = options.includeStreamChunks ?? false;
@@ -347,19 +342,14 @@ export class FileTraceRecorder implements TraceRecorder {
   }
 
   private prepare(event: RunEvent, state: RunTraceState): RunEvent {
-    const withTenant =
-      this.tenantId !== undefined && event.tenant_id === undefined
-        ? { ...event, tenant_id: this.tenantId }
-        : event;
-
     const supplied =
-      typeof withTenant.seq === 'number' && Number.isFinite(withTenant.seq)
-        ? Math.floor(withTenant.seq)
+      typeof event.seq === 'number' && Number.isFinite(event.seq)
+        ? Math.floor(event.seq)
         : undefined;
     const seq = supplied !== undefined && supplied > state.lastSeq ? supplied : state.lastSeq + 1;
     state.lastSeq = seq;
 
-    const sequenced: RunEvent = { ...withTenant, seq };
+    const sequenced: RunEvent = { ...event, seq };
     const redacted = this.redactor.redact(sequenced);
     return this.level === 'metadata' ? projectMetadata(redacted) : redacted;
   }
@@ -434,7 +424,6 @@ export class FileTraceRecorder implements TraceRecorder {
       run_id: runId,
       data: { dropped: state.dropped },
       ts: this.now(),
-      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     };
     try {
       await this.ensureDir();
@@ -469,7 +458,6 @@ export class FileTraceRecorder implements TraceRecorder {
           ...(reason !== undefined ? { reason } : {}),
         },
         ts: now,
-        ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
       });
     } catch {
       // 事件投递失败不再向上抛

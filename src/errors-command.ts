@@ -12,7 +12,7 @@ import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { readTraceEvents, type TenantPaths } from '../packages/core/src/index';
 import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTargetOptions, resolveControlPlaneTarget } from './control-plane-target';
-import { resolveDataDir, resolveEffectiveTenantId, resolveReadonlyTenantPaths } from './data-paths';
+import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
 import { t } from './i18n';
 import { RpcClientError } from './rpc';
 import { ui } from './ui-style';
@@ -196,7 +196,6 @@ export async function errorsCommand(options: ErrorsCommandOptions = {}): Promise
       const result = await resolved.target.request('events.list', {
         types,
         limit: READ_LIMIT,
-        tenant_id: tenantId,
       });
       rawEvents = eventArray(result);
     } catch (error) {
@@ -219,10 +218,10 @@ export async function errorsCommand(options: ErrorsCommandOptions = {}): Promise
       await resolved.target.close().catch(() => undefined);
     }
   } else {
-    // 0.49 T2（C10）：只读入口按状态选布局；迁移中拒绝读半迁移数据。
+    // 0.49 T5（C6）：只读根布局；非根布局数据 fail-fast。
     let tenantPaths: TenantPaths;
     try {
-      tenantPaths = await resolveReadonlyTenantPaths(dataDir, tenantId);
+      tenantPaths = resolveSingleTenantPaths(dataDir, tenantId);
     } catch (error) {
       return {
         exitCode: 1,
@@ -241,7 +240,6 @@ export async function errorsCommand(options: ErrorsCommandOptions = {}): Promise
 
   const payload = {
     as_of: new Date(now()).toISOString(),
-    tenant_id: tenantId,
     error_level: config.ui?.errorLevel ?? 'user',
     count: events.length,
     events,

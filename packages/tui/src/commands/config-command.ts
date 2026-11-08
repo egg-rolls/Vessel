@@ -22,7 +22,6 @@ export interface ConfigSnapshotLike {
   config: Record<string, unknown>;
   sources?: Record<string, unknown>;
   paths?: { user?: string; project?: string };
-  tenant_id?: string;
   tenant_overlay_keys?: string[];
   validation?: {
     errors?: Array<{ path?: string; message?: string }>;
@@ -68,7 +67,6 @@ export function readConfigSnapshot(value: unknown): ConfigSnapshotLike | null {
           },
         }
       : {}),
-    ...(typeof value.tenant_id === 'string' ? { tenant_id: value.tenant_id } : {}),
     ...(Array.isArray(value.tenant_overlay_keys)
       ? {
           tenant_overlay_keys: value.tenant_overlay_keys.filter(
@@ -150,8 +148,6 @@ export function formatConfigSummary(snapshot: ConfigSnapshotLike): string {
   const provider = isRecord(config.provider) ? config.provider : {};
   const session = isRecord(config.session) ? config.session : {};
   const trace = isRecord(config.trace) ? config.trace : {};
-  const tenant =
-    snapshot.tenant_id ?? (isRecord(config.tenant) ? String(config.tenant.default ?? '-') : '-');
 
   const lines: string[] = [];
   const errors = readErrors(snapshot);
@@ -161,7 +157,7 @@ export function formatConfigSummary(snapshot: ConfigSnapshotLike): string {
     lines.push('');
   }
 
-  lines.push(`Config (schema_version ${snapshot.schema_version ?? '-'}, tenant ${tenant})`);
+  lines.push(`Config (schema_version ${snapshot.schema_version ?? '-'})`);
   lines.push(`  provider.name:      ${displayValue(provider.name)}`);
   lines.push(`  provider.model:     ${displayValue(provider.model)}`);
   lines.push(`  provider.baseUrl:   ${displayValue(provider.baseUrl)}`);
@@ -287,8 +283,6 @@ export function buildConfigDetailView(
   const provider = isRecord(config.provider) ? config.provider : {};
   const session = isRecord(config.session) ? config.session : {};
   const trace = isRecord(config.trace) ? config.trace : {};
-  const tenant =
-    snapshot.tenant_id ?? (isRecord(config.tenant) ? String(config.tenant.default ?? '-') : '-');
   const errors = readErrors(snapshot);
   const warnings = snapshot.validation?.warnings ?? [];
 
@@ -305,7 +299,7 @@ export function buildConfigDetailView(
     return {
       kind: 'detail',
       title: 'Config paths',
-      badge: { text: `tenant ${tenant}`, tone: 'info' },
+      badge: { text: 'paths', tone: 'info' },
       key: 'paths',
       sections: [pathsSection],
       actions: configDetailActions('path'),
@@ -354,7 +348,7 @@ export function buildConfigDetailView(
     kind: 'detail',
     title: 'Config',
     badge: {
-      text: `schema ${snapshot.schema_version ?? '-'} · tenant ${tenant}`,
+      text: `schema ${snapshot.schema_version ?? '-'}`,
       tone: errors.length > 0 ? 'danger' : warnings.length > 0 ? 'warn' : 'info',
     },
     key: 'detail',

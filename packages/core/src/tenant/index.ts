@@ -3,19 +3,10 @@
  * @module @vessel-agent/core/tenant
  */
 
-export {
-  assertTenantId,
-  type ResolveTenantIdInput,
-  type ResolveTenantInput,
-  resolveTenant,
-  resolveTenantId,
-  tenantRootPath,
-} from './resolve-tenant.js';
+export { assertTenantId } from './resolve-tenant.js';
 export {
   encodeSessionDirName,
-  pathsForTenant,
   resolveSingleTenantPaths,
-  resolveTenantPaths,
   sessionDirPath,
   sessionEventsFilePath,
   sessionIndexFilePath,

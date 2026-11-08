@@ -14,7 +14,7 @@ import type { EventStream, Logger } from '../packages/core/src/index';
 export interface ShutdownFailureInput {
   events?: EventStream;
   logger: Logger;
-  /** 清理步骤名，如 `trace.flush` / `tenantLock.release` */
+  /** 清理步骤名，如 `trace.flush` / `lease.release` */
   step: string;
   error: unknown;
   tenantId?: string;
@@ -25,7 +25,6 @@ export interface ShutdownFailureInput {
 export function reportShutdownFailure(input: ShutdownFailureInput): string {
   const message = input.error instanceof Error ? input.error.message : String(input.error);
   const data: Record<string, unknown> = { step: input.step, error: message };
-  if (input.tenantId !== undefined) data.tenant_id = input.tenantId;
 
   try {
     input.events?.publish({

@@ -106,7 +106,6 @@ export function createRuntimeNoticeBus(options: RuntimeNoticeBusOptions = {}): R
         run_id: options.runId ?? 'runtime',
         data: { ...notice },
         ts,
-        ...(options.tenantId !== undefined ? { tenant_id: options.tenantId } : {}),
       });
     } catch {
       // 订阅者异常不影响热应用结果

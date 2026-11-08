@@ -22,7 +22,7 @@ export type RpcErrorCode =
   | 'forbidden'
   | 'not_found'
   | 'invalid_params'
-  | 'tenant_locked'
+  | 'data_locked'
   | 'quota_exceeded'
   | 'conflict'
   | 'internal'
@@ -445,7 +445,7 @@ function mapExternalErrorCode(code: unknown): RpcErrorCode | null {
     case 'forbidden':
     case 'not_found':
     case 'invalid_params':
-    case 'tenant_locked':
+    case 'data_locked':
     case 'quota_exceeded':
     case 'conflict':
     case 'internal':

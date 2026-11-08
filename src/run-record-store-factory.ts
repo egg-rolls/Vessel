@@ -71,7 +71,6 @@ export function createRunRecordStore(
   if (options.backend === 'memory') return new MemoryRunRecordStore();
   return new FileRunRecordStore({
     dir: resolveRunStorePath(options.path),
-    ...(opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {}),
   });
 }
 

@@ -16,7 +16,7 @@ export const RPC_ERROR_CODES: readonly RpcErrorCodeLike[] = [
   'forbidden',
   'not_found',
   'invalid_params',
-  'tenant_locked',
+  'data_locked',
   'quota_exceeded',
   'conflict',
   'internal',

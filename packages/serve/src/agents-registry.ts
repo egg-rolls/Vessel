@@ -34,7 +34,6 @@ export interface AgentRegistryEntry {
   started_at?: number;
   completed_at?: number;
   last_error?: string;
-  tenant_id?: string;
   /** 0.15 E3/E8 additive：Host 快照或事件带来的节点与队列信息。 */
   node_id?: string;
   queue_position?: number;
@@ -60,7 +59,6 @@ export interface AgentRegistryFilter {
 export interface AgentContextUsage {
   used?: number;
   max?: number;
-  tenant_id?: string;
 }
 
 export interface AgentRegistry {
@@ -171,9 +169,6 @@ export function createAgentRegistry(): AgentRegistry {
     }
     if (seed.completed_at !== undefined) entry.completed_at = seed.completed_at;
     if (seed.last_error !== undefined) entry.last_error = seed.last_error;
-    if (seed.tenant_id !== undefined && entry.tenant_id === undefined) {
-      entry.tenant_id = seed.tenant_id;
-    }
     if (seed.node_id !== undefined && entry.node_id === undefined) entry.node_id = seed.node_id;
     if (seed.queue_position !== undefined) entry.queue_position = seed.queue_position;
     if (seed.wait_reason !== undefined) entry.wait_reason = seed.wait_reason;
@@ -203,7 +198,6 @@ export function createAgentRegistry(): AgentRegistry {
       last_seen: event.ts,
       ...(entered && position !== undefined ? { queue_position: position } : {}),
       ...(entered && waitReason !== undefined ? { wait_reason: waitReason } : {}),
-      ...(event.tenant_id !== undefined ? { tenant_id: event.tenant_id } : {}),
     });
     if (!entered) {
       const entry = entries.get(agentId);
@@ -234,14 +228,12 @@ export function createAgentRegistry(): AgentRegistry {
     contextUsages.set(sessionId, {
       ...(nextUsed !== undefined ? { used: nextUsed } : {}),
       ...(nextMax !== undefined ? { max: nextMax } : {}),
-      ...(event.tenant_id !== undefined ? { tenant_id: event.tenant_id } : {}),
     });
   }
 
   function ingest(event: RunEvent): void {
     const type = event.type;
     const data = isRecord(event.data) ? event.data : {};
-    const tenantId = event.tenant_id;
 
     if (type === 'context.changed' || type === 'context.pressure') {
       ingestContext(event, data);
@@ -285,7 +277,6 @@ export function createAgentRegistry(): AgentRegistry {
         started_at: event.ts,
         last_seen: event.ts,
         ...(event.node_id !== undefined ? { node_id: event.node_id } : {}),
-        ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
       });
       return;
     }
@@ -306,7 +297,6 @@ export function createAgentRegistry(): AgentRegistry {
         ...(failure !== undefined ? { last_error: failure } : {}),
         ...(usage !== undefined ? { usage } : {}),
         ...(artifactRefsOf(data) !== undefined ? { artifact_refs: artifactRefsOf(data) } : {}),
-        ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
       });
       // 终态清理：不留运行中的工具与成功前的旧错误。
       entry.current_tool = undefined;
@@ -328,7 +318,6 @@ export function createAgentRegistry(): AgentRegistry {
         state: 'running',
         last_seen: event.ts,
         ...(session !== undefined ? { session_id: session } : {}),
-        ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
       });
       return;
     }
@@ -344,7 +333,6 @@ export function createAgentRegistry(): AgentRegistry {
         last_seen: event.ts,
         ...(session !== undefined ? { session_id: session } : {}),
         ...(usage !== undefined ? { usage } : {}),
-        ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
       });
       entry.current_tool = undefined;
       if (type === 'subagent.run.completed') entry.last_error = undefined;
@@ -362,7 +350,6 @@ export function createAgentRegistry(): AgentRegistry {
         last_seen: event.ts,
         ...(failure !== undefined ? { last_error: failure } : {}),
         ...(session !== undefined ? { session_id: session } : {}),
-        ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
       });
       entry.current_tool = undefined;
       return;
@@ -374,7 +361,6 @@ export function createAgentRegistry(): AgentRegistry {
         state: 'running',
         last_seen: event.ts,
         ...(toolName !== undefined ? { current_tool: toolName } : {}),
-        ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
       });
       return;
     }

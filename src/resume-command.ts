@@ -7,7 +7,7 @@
 
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { resolveDataDir, resolveEffectiveTenantId, resolveReadonlyTenantPaths } from './data-paths';
+import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
 import { previewOf } from './durable-wiring';
 import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';
 
@@ -40,13 +40,13 @@ export async function runResumeList(options: ConfigLoadOptions = {}): Promise<nu
   }
 
   // A4：与执行面一致 —— 未显式 durable.path 时使用单 id 布局的 runs 目录，
-  // 而不是回退到 `~/.vessel/runs`。只读入口按 C10 选布局。
+  // 而不是回退到 `~/.vessel/runs`。0.49 T5：只读根布局；非根布局 fail-fast。
   // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准。
   const dataDir = resolveDataDir(config);
   const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
-  let tenantPaths: Awaited<ReturnType<typeof resolveReadonlyTenantPaths>>;
+  let tenantPaths: ReturnType<typeof resolveSingleTenantPaths>;
   try {
-    tenantPaths = await resolveReadonlyTenantPaths(dataDir, tenantId);
+    tenantPaths = resolveSingleTenantPaths(dataDir, tenantId);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;

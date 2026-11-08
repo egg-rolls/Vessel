@@ -49,10 +49,7 @@ export function createSessionStore(
       ) {
         console.warn(`⚠ session.storage_path escapes tenant "${opts.tenantId}": ${explicit}`);
       }
-      return new SQLiteSessionStore(
-        explicit ?? opts.tenantSessionsDbPath ?? DEFAULT_SQLITE_PATH,
-        opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {},
-      );
+      return new SQLiteSessionStore(explicit ?? opts.tenantSessionsDbPath ?? DEFAULT_SQLITE_PATH);
     }
     default: {
       const explicit = config?.storagePath;
@@ -65,10 +62,7 @@ export function createSessionStore(
       ) {
         console.warn(`⚠ session.storage_path escapes tenant "${opts.tenantId}": ${explicit}`);
       }
-      return new FileSessionStore(
-        explicit ?? opts.tenantSessionsDir ?? DEFAULT_FILE_DIR,
-        opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {},
-      );
+      return new FileSessionStore(explicit ?? opts.tenantSessionsDir ?? DEFAULT_FILE_DIR);
     }
   }
 }

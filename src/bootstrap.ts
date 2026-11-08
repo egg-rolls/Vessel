@@ -62,12 +62,8 @@ import {
   waitForConnectedRun,
 } from './connect-run-wait';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import {
-  resolveDataDir,
-  resolveEffectiveTenantId,
-  resolveReadonlyTenantPaths,
-  resolveSingleTenantPaths,
-} from './data-paths';
+import { withDataLock } from './data-lock';
+import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
 import {
   type DurableRunHandleLike,
   type DurableRunsControlLike,
@@ -117,8 +113,6 @@ import {
   type LocalHumanTarget,
   type LocalMemberTarget,
 } from './team-human-delivery';
-import { ensureTenantLayout, TenantLayoutMigrationError } from './tenant-layout-migration';
-import { withTenantLock } from './tenant-lock';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
@@ -421,8 +415,6 @@ async function bootstrapConnect(input: {
   url: string;
   /** headless 不显示 provider banner，无需额外查询 gateway。 */
   headless: boolean;
-  /** 0.6：显式 tenant（--tenant / VESSEL_TENANT）才把 tenant_id 合并进请求。 */
-  tenantExplicit: boolean;
   /** 0.10 R2-14：诊断 logger（与 bootstrap 共用） */
   logger: Logger;
   /** 0.11：本地用户配置路径（ui.language 写回；缺省 getUserConfigPath()） */
@@ -487,39 +479,26 @@ async function bootstrapConnect(input: {
     process.exit(1);
   }
 
-  // A4：显式 --tenant / VESSEL_TENANT 时把 tenant_id 合并进每个请求；
-  // 未显式指定时由 gateway token principal 决定（不发送 tenant_id）。
-  const withTenant = (params: unknown): unknown => {
-    if (!input.tenantExplicit) return params;
-    if (isRecordValue(params)) return { ...params, tenant_id: input.tenantId };
-    return { tenant_id: input.tenantId };
-  };
   const rpc: RpcClient & { close(): Promise<void> } = {
-    request: <T = unknown>(method: string, params?: unknown) =>
-      client.request<T>(method, withTenant(params)),
+    request: <T = unknown>(method: string, params?: unknown) => client.request<T>(method, params),
     subscribe: (handler) => client.subscribe(handler),
     close: () => client.close(),
   };
 
-  // A4：远端 tenant/node 以 health.get 为准（token principal 或 admin 覆盖）。
+  // A4：远端 node 以 health.get 为准；单 id 使用本地解析结果（token principal）。
   let remote: BootstrapResult['remote'];
-  let effectiveTenantId = input.tenantId;
+  const effectiveTenantId = input.tenantId;
   try {
     const health = await rpc.request<unknown>('health.get');
     if (isRecordValue(health)) {
-      const remoteTenant =
-        typeof health.tenant_id === 'string' && health.tenant_id !== ''
-          ? health.tenant_id
-          : input.tenantId;
       const node = isRecordValue(health.node) ? health.node : undefined;
       const remoteNodeId =
         node && typeof node.node_id === 'string' && node.node_id !== '' ? node.node_id : undefined;
       remote = {
-        tenantId: remoteTenant,
+        tenantId: effectiveTenantId,
         ...(remoteNodeId !== undefined ? { nodeId: remoteNodeId } : {}),
         endpoint: connectUrl,
       };
-      effectiveTenantId = remoteTenant;
     }
   } catch {
     // 旧 gateway / 权限不足：保留本地 tenant，仅少展示 node。
@@ -785,7 +764,7 @@ async function bootstrapConnect(input: {
     },
     plugins: [],
     rpc,
-    tenant: { tenant_id: effectiveTenantId, data_dir: input.tenantPaths.root },
+    tenant: { data_dir: input.tenantPaths.root },
     config: input.config,
     // 0.11：connect 模式同样允许写本地用户配置（远端不受影响）。
     settings: createReplSettings({
@@ -906,25 +885,6 @@ export function resolveDefaultTeamWorkspace(
 }
 
 /**
- * 0.49 T2（C14）：本地写模式在解析 dataDir/sid 之后、任何本地写入（node.json、
- * 锁、store）之前执行布局判定与迁移。connect 模式不迁移；只读入口按 C10 选布局。
- */
-async function migrateTenantLayoutBeforeWrites(
-  dataDir: string,
-  singleTenantId: string,
-): Promise<void> {
-  try {
-    await ensureTenantLayout({ dataDir, singleTenantId, apply: true });
-  } catch (error) {
-    if (error instanceof TenantLayoutMigrationError) {
-      console.error(error.message);
-      process.exit(1);
-    }
-    throw error;
-  }
-}
-
-/**
  * 引导应用启动
  */
 export async function bootstrap(options: BootstrapOptions = {}): Promise<BootstrapResult> {
@@ -975,26 +935,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // connect 是唯一只读入口；其余入口（run / REPL / serve / feishu）都写本地
   // store / trace。tenant writer lock 已随单执行面收敛删除（T3 C2）。
   const localWrites = !connectMode;
-  const writeMode = !connectMode && localWrites;
 
-  // 0.49 T2（C14）：本地写模式先完成布局迁移，再触碰 node.json / 锁 / store。
-  // connect 只读不迁移；只读入口（无写意图）按 C10 选择布局。
-  if (writeMode) {
-    await migrateTenantLayoutBeforeWrites(dataDir, tenantId);
-  }
+  // 0.49 T5（C6）：只支持根布局；`<dataDir>/tenants/**` 非空 → fail-fast，
+  // 不读、不迁、不移、不删、不写 marker/journal。写模式与 connect 同口径。
   let tenantPaths: TenantPaths;
-  if (writeMode) {
+  try {
     tenantPaths = resolveSingleTenantPaths(dataDir, tenantId);
-  } else {
-    try {
-      tenantPaths = await resolveReadonlyTenantPaths(dataDir, tenantId);
-    } catch (error) {
-      if ((error as { code?: unknown }).code === 'layout_migration_incomplete') {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exit(1);
-      }
-      throw error;
-    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
 
   // 节点身份（0.25）：node_id 唯一来源（U3）：host.node_id > <dataDir>/node.json > 首次生成；
@@ -1008,11 +957,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const nodeId = nodeIdentity.nodeId;
   const nodeName = nodeIdentity.name;
 
-  // connect 模式：不获取写锁、不写本地 store/trace；配置仍加载用于 tenant/token 选择。
+  // connect 模式：不获取写锁、不写本地 store/trace；配置仍加载用于 token 选择。
   if (connectMode) {
-    // 只有调用方 / env 显式传入 tenant 才覆盖 token principal（config 已无 tenant 块）。
-    const tenantExplicit =
-      options.tenantId !== undefined || (process.env.VESSEL_TENANT ?? '').trim() !== '';
     return bootstrapConnect({
       config,
       nodeId,
@@ -1021,7 +967,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       tenantPaths,
       url: connectUrl,
       headless,
-      tenantExplicit,
       logger,
       ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
       ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
@@ -1617,15 +1562,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           ...(typeof params.max_runs === 'number' ? { maxRuns: params.max_runs } : {}),
           ...(typeof params.max_bytes === 'number' ? { maxBytes: params.max_bytes } : {}),
         };
-        // R7=B：in-process 写意图锁保留到 T5（不是 runtime/boot 生产者）。
-        return withTenantLock({ tenantDir: tenantPaths.root, tenantId }, () =>
+        // 0.49 T5：data-dir 写意图锁（中性命名）；同进程重复加锁由 withDataLock 识别。
+        return withDataLock({ dataDir: tenantPaths.root }, () =>
           pruneTrace(tenantPaths.events_dir, pruneOptions),
         );
       },
     },
     sessionData: {
       deleteSessionData: (sessionId: string) =>
-        withTenantLock({ tenantDir: tenantPaths.root, tenantId }, async () => {
+        withDataLock({ dataDir: tenantPaths.root }, async () => {
           // 0.34 Stage 3：sessionControl.delete 内部先 detach；冲突（active run /
           // 活 SessionLease）直接抛 `conflict`，不做任何删除。
           return sessionControl.delete(sessionId);
@@ -1864,7 +1809,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     provider: { name: providerName, model: providerModel, baseUrl: providerBaseUrl },
     plugins: plugins.map((p) => p.name),
     rpc: localRpcClient,
-    tenant: { tenant_id: tenantId, data_dir: tenantPaths.root },
+    tenant: { data_dir: tenantPaths.root },
     config,
     version: readPackageVersion(),
     // 0.6.1：TUI "always" 与 /permissions 的用户 YAML 写回面。

@@ -95,8 +95,7 @@ function recencyOf(run: Record<string, unknown>): number {
 }
 
 export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
-  const { defaultTenantId, runControl, requireRunControl, durable, reserveResume, releaseResume } =
-    deps;
+  const { runControl, requireRunControl, durable, reserveResume, releaseResume } = deps;
 
   /** live 命中（snapshot 里同 id 的 queued / running）。 */
   function findLive(runId: string): LiveRunSnapshotLike | undefined {
@@ -277,7 +276,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         // scheduler 不会为 queued-cancel 产出 core 事件，也就没有 RunRecord；
         // 补一条终态 RunRecord，否则该 run 会从列表消失。
         if (target.status === 'queued') {
-          await writeQueuedCancelledRecord(defaultTenantId, target);
+          await writeQueuedCancelledRecord(target);
         }
         return { cancelled };
       },
@@ -351,10 +350,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
    * session_id / created_at / tenant_id）；不写 usage / iteration /
    * event_cursor / metadata。store 无 `save` → 跳过（不报错、不建内存账本）。
    */
-  async function writeQueuedCancelledRecord(
-    tenantId: string,
-    run: LiveRunSnapshotLike,
-  ): Promise<void> {
+  async function writeQueuedCancelledRecord(run: LiveRunSnapshotLike): Promise<void> {
     const store = durable()?.store;
     const save = store?.save;
     if (store === undefined || typeof save !== 'function') return;
@@ -366,7 +362,6 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
       error: 'cancelled_while_queued',
       created_at: run.started_at ?? now,
       updated_at: now,
-      tenant_id: tenantId,
     };
     try {
       await save.call(store, record);

@@ -18,7 +18,6 @@ const COST_DIVISOR = 1_000_000;
 export interface UsageRecord {
   id: string;
   ts: number;
-  tenant: string;
   run_id: string;
   session_id?: string;
   model: string;
@@ -87,7 +86,6 @@ export interface SummaryResult {
 export interface LogItem {
   id: string;
   ts: number;
-  tenant: string;
   run_id: string;
   session_id?: string;
   model: string;
@@ -185,7 +183,7 @@ function costFor(record: UsageRecord, settings: Settings): CostResult {
 }
 
 function recordId(event: RawEvent): string {
-  return `${event.tenant}:${event.run_id}:${event.seq ?? event.line}`;
+  return `${event.run_id}:${event.seq ?? event.line}`;
 }
 
 /**
@@ -203,7 +201,7 @@ export function buildRecords(events: RawEvent[], settings: Settings): UsageRecor
   const lastHint = new Map<string, string | undefined>();
 
   for (const event of events) {
-    const key = `${event.tenant}\u0000${event.run_id}`;
+    const key = event.run_id;
 
     if (event.type === 'llm.request') {
       const hint = selfCardModel(event.data);
@@ -219,7 +217,6 @@ export function buildRecords(events: RawEvent[], settings: Settings): UsageRecor
       const record: UsageRecord = {
         id: recordId(event),
         ts: event.ts,
-        tenant: event.tenant,
         run_id: event.run_id,
         model: modelFor(settings, request?.model),
         status: 'ok',
@@ -255,7 +252,6 @@ export function buildRecords(events: RawEvent[], settings: Settings): UsageRecor
       records.push({
         id: recordId(event),
         ts: event.ts,
-        tenant: event.tenant,
         run_id: event.run_id,
         model: modelFor(settings, inFlight?.model ?? lastHint.get(key)),
         status: 'failed',
@@ -533,7 +529,6 @@ function toLogItem(record: UsageRecord): LogItem {
   return {
     id: record.id,
     ts: record.ts,
-    tenant: record.tenant,
     run_id: record.run_id,
     ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
     model: record.model,

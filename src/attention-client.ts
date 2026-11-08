@@ -111,7 +111,6 @@ export async function listInteractions(
     status: params.status,
     limit: params.limit,
     ...(params.teamId !== undefined ? { team_id: params.teamId } : {}),
-    ...(params.tenantId !== undefined ? { tenant_id: params.tenantId } : {}),
     ...(params.agentId !== undefined ? { agent_id: params.agentId } : {}),
     ...(params.order !== undefined ? { order: params.order } : {}),
     ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
