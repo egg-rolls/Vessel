@@ -1,7 +1,7 @@
 # 配置与密钥
 
 > 适用版本：0.5+。维护者：`gov`；配置语义归 `asm`。
-> 本文描述固定位置、优先级、tenant overlay 与密钥解析。架构事实见
+> 本文描述固定位置、优先级与密钥解析。架构事实见
 > [architecture/config.md](../architecture/config.md#config-model) 与 [ADR-050](../adr/ADR-050-yaml-first-config-and-secrets.md)。
 
 ## 1. 配置位置
@@ -9,41 +9,22 @@
 | 层 | 路径 | 放什么 |
 |---|---|---|
 | CLI / env | 命令行 flag、`VESSEL_*`、`.env` | 操作者覆盖与部署密钥；不是主配置 |
-| tenant overlay | `tenant.tenants.<id>.config` | 单 tenant 覆盖；不得覆盖 CLI/env |
-| 项目级 | `./vessel.yaml` | 项目行为：session、context、plugins、trace、tenant 覆盖；**禁止密钥** |
-| 用户级 | `~/.vessel/config.yaml`（Windows `%USERPROFILE%\.vessel\config.yaml`） | provider、默认模型、`data_dir`、`tenant.default` |
+| 项目级 | `./vessel.yaml` | 项目行为：session、context、plugins、trace；**禁止密钥** |
+| 用户级 | `~/.vessel/config.yaml`（Windows `%USERPROFILE%\.vessel\config.yaml`） | provider、默认模型、`data_dir` |
 | 默认值 | 代码 `DEFAULT_CONFIG` | 所有缺省值；`vessel config show` 可见 |
 
 优先级（高到低）：
 
 ```text
-CLI > env > tenant overlay > project > user > default
+CLI > env > project > user > default
 ```
 
-tenant overlay 只叠加在项目/用户之上，不能覆盖 CLI/env。`data_dir` 是全局键，tenant overlay 不得修改。
+0.49 起没有 tenant overlay，也没有 `tenant` 配置块。旧配置会被 fail-fast 并给出逐项 Fix：删除整个 `tenant:` 块、删除 `serve.tokens[*].tenantId`（只保留 `role`）、删除 `serve.adminToken` / `serve.adminTokenEnv`（改用 `serve.tokens` 的 `{ role: admin }`）。
 
 ## 2. 关键配置块
 
 ```yaml
 data_dir: ~/.vessel/data
-
-tenant:
-  default: default
-  tenants:
-    acme:
-      name: Acme
-      status: active          # active | disabled
-      quota:
-        max_sessions: 1000
-        max_runs_per_day: 5000
-        max_concurrent_runs: 2
-        max_storage_bytes: 1073741824
-      tools:
-        allow: [bash, read, edit]
-        deny: []
-      config:                 # tenant overlay；白名单见 ADR-049
-        provider:
-          model: gpt-4
 
 trace:
   enabled: true
@@ -59,22 +40,18 @@ session:
 durable:
   enabled: true
   backend: file
-  # path 缺省 <data_dir>/tenants/<tenant_id>/runs
+  # path 缺省 <data_dir>/runs
   checkpoint_every: iteration
 
 serve:
   token_env: VESSEL_GATEWAY_TOKEN
   # tokens:
-  #   "<tenant-token>": { tenant_id: acme, role: write }
-  # admin_token_env: VESSEL_ADMIN_TOKEN
+  #   "<client-token>": { role: write }
 ```
 
-tenant overlay 允许的顶层块：`provider / agent / context / limits / termination /
-session / plugins / evals / feishu / tools / mcp_servers /
-host / scheduler / transport / quota`。禁止 `data_dir / trace / serve /
-tenant / update`；未知块直接报错。合并规则：对象深合并、数组整体替换、map
-（`mcp_servers`）按 key 合并、`null` 拒绝。`plugins` 是**数组**，按整层替换，
-不按 `name` 合并。
+0.49 起没有 tenant overlay，也没有 `tenant` 配置块；未知块直接报错。合并规则：
+对象深合并、数组整体替换、map（`mcp_servers`）按 key 合并、`null` 拒绝。
+`plugins` 是**数组**，按整层替换，不按 `name` 合并。
 
 ### 2.1 0.6.1 新增配置（已实现，冻结契约见 DECISION-015）
 
@@ -97,7 +74,7 @@ plugins:
 
 session:
   backend: file
-  # storage_path: /shared/sessions   # 多 tenant 下会告警；file 后端仍按 tenant 隔离
+  # storage_path: /shared/sessions   # 显式 session 根；缺省 <data_dir>/sessions
 ```
 
 - `permission.auto_approve`（TS 字段 `autoApprove`）：`string[]`，按工具名精确匹配；TUI 权限弹窗选 `always`
@@ -120,7 +97,7 @@ vessel plugin remove <name>
 
 - 环境变量覆盖（0.6.1 新增）：`VESSEL_PLUGINS`（逗号分隔的插件名列表）、
   `VESSEL_SESSION_BACKEND`（`file|sqlite|memory`）、`VESSEL_MODEL`（覆盖
-  `provider.model`）。优先级仍为 `CLI > env > tenant overlay > project > user > default`。
+  `provider.model`）。优先级仍为 `CLI > env > project > user > default`。
 
 ### 2.2 Provider 新旧键规则（0.10）
 
@@ -186,7 +163,7 @@ ui:
 ```
 
 - **上栏**：状态、模型、context 用量 / 百分比（宽终端加进度条）、时长、压缩次数、路径 + branch。0.13 删除 `N sess`，不再每帧查询会话列表。
-- **下栏**：运行态字段 `perm ask · N auto` / `waiting <tool>`、`bash N`、`sub N`、`sess <短ID> · Ctrl+R`、tenant、queue。与上栏同宽；`<40` 列不渲染；`<18` 行默认隐藏；显示时吸收底部 hint 行（净增 2 行）。超宽按 `tenant → queue → session → sub → auto` 丢弃，`perm` / `bash` 保留。
+- **下栏**：运行态字段 `perm ask · N auto` / `waiting <tool>`、`bash N`、`sub N`、`sess <短ID> · Ctrl+R`、queue。与上栏同宽；`<40` 列不渲染；`<18` 行默认隐藏；显示时吸收底部 hint 行（净增 2 行）。超宽按 `queue → session → sub → auto` 丢弃，`perm` / `bash` 保留。
 - **快捷键**：`Ctrl+T` 切换上栏、`Ctrl+G` 切换下栏、`Ctrl+R` 打开 `/resume` picker。手动切换立即生效，并写回用户配置 `ui.status_bars`（原子写、`0600`、保留其它键）；写回失败不改变本次会话显示。
 - **优先级**：`VESSEL_STATUS_BARS` > `ui.statusBars` > 自动规则。`VESSEL_STATUS_BARS` 只作启动初值（兼容 `top,bottom` 写法），手动切换不改环境变量。
 - **CLI 写配置**：`vessel config set ui.statusBars <top|bottom|both|none> [--json]`；非法值拒绝。TUI 热键与 CLI 写的是同一个 YAML 键 `ui.status_bars`。
@@ -194,7 +171,7 @@ ui:
 ### 2.6 权限生命周期持久化（0.13，ADR-079）
 
 - **默认等待**：交互模式下应用层把默认策略设为 `ask`，请求一直等待，不受时间限制；应用层不设置 `timeoutMs`。只有宿主（core 嵌入方）显式传入正数 `RuntimePermissionConfig.timeoutMs` 才超时。
-- **持久化文件**：default 实例为 `<dataDir>/interactions-<tenant>.json`，命名实例为 `<dataDir>/instances/<instance>/interactions-<tenant>.json`（目录 `0700`），`0600` 原子写，记录 `pending` / `answered` / `orphaned`。gateway 启动时加载；重启后仍为 `pending` 的记录转 `orphaned`（本进程没有对应 run）。文件损坏 / 不可读只向 stderr 报错并按空集处理，不删除原文件。
+- **持久化文件**：default 实例为 `<dataDir>/interactions-<id>.json`，命名实例为 `<dataDir>/instances/<instance>/interactions-<id>.json`（目录 `0700`），`0600` 原子写，记录 `pending` / `answered` / `orphaned`；`<id>` 是持久化单 id（缺省 `default`），不是 wire 字段。gateway 启动时加载；重启后仍为 `pending` 的记录转 `orphaned`（本进程没有对应 run）。文件损坏 / 不可读只向 stderr 报错并按空集处理，不删除原文件。
 - **终态与幂等**：run 进入 `completed` / `failed` / `cancelled` 时，同 run 的 pending 清出并持久化为 `orphaned`。重复应答返回首次结果（`duplicate: true`）；不同决定返回 `conflict`；`orphaned` 返回 `run_ended`；不存在返回 `not_found`。有界清理只淘汰最旧的 `answered` / `orphaned`，pending 不淘汰。
 - **关联字段**：`tool.permission.request` 带 `session_id` / `tool_call_id` / `source`；只有显式超时才带 `deadline_at`。
 - **自动放行例外**：`permission.never_auto_approve`（`neverAutoApprove`）把命中的 auto 来源 allow 降级为 ask；未配置时有效值为 `['agent.close']`，使成员关闭 peer 仍走人类审批。显式 allow / deny 的工具判定不受影响；headless 无审批通道时仍 fail closed。
@@ -216,7 +193,7 @@ observability:
 - **`ui.showInternalEvents`**（默认 `false`）：TUI `/errors` 与 Web 展示内部事件；与 `verbosity: debug` 取“或”。
 - **`ui.errorLevel`**（默认 `user`）：`all` 时 `/errors` 与 `vessel errors` 追加 internal / process 级错误。
 - **`observability.showProcessErrors`**（默认 `false`）：让 `process.error` / `shutdown.failed` 等进入 `vessel errors`。
-- **`ui.ask_user`**（入口默认）：交互 REPL（TTY）或 gateway/serve 才注册；`--run` / headless / 管道不注册；显式 `false` 按入口与 tenant 关闭，显式 `true` 也不能让无客户端入口注册。提问卡内联在 Web `RunCard`，默认无限等待，由应答 / abort / run 终态收口。
+- **`ui.ask_user`**（入口默认）：交互 REPL（TTY）或 gateway/serve 才注册；`--run` / headless / 管道不注册；显式 `false` 按入口关闭，显式 `true` 也不能让无客户端入口注册。提问卡内联在 Web `RunCard`，默认无限等待，由应答 / abort / run 终态收口。
 - **校验**：枚举与布尔值非法时由 validator 拒绝，不做静默回退；四个键都支持 `vessel config set`。
 - **CLI 写配置**：`vessel config set ui.verbosity <minimal|normal|debug>`、`ui.showInternalEvents <true|false>`、`ui.errorLevel <user|all>`、`ui.askUser <true|false>`、`observability.showProcessErrors <true|false>`；与其它键一样只改用户配置、保留其它键、`0600` 原子写。
 
@@ -240,7 +217,7 @@ termination:
 - **命中行为**：`request_limit` / token / cost 与 `max_iterations` / `max_runtime` 命中时发布一次 `limit.blocked`（`error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`；`run.failed` 保留原 `error` 文本，附同一结构化的 `details`。`source` 是对应的 camelCase 配置路径（如 `limits.inputTokensLimit` / `termination.maxIterations`）；错误文本前缀分别为 `Usage limits exceeded: ...` 与 `Termination policy triggered: ...`。`max_runtime` 的 `current` 是已运行秒数（毫秒精度小数）。
 - **`tool_calls_limit` 已移除（0.31）**：不再有工具调用次数预算；旧配置里的该键被忽略、不报错。显式配置 `max_iterations` / `max_runtime_seconds` 时仍由它们兜底。
 - **成本**：core 不为内置 provider 计价，`total_cost` 默认为 0；`total_cost_limit` 只在宿主显式调用 `LimitChecker.addCost()` 后才有意义。
-- **不新增配置键**：以上键均已存在，tenant overlay 可覆盖 `limits` / `termination`。`LimitBlock.key` 固定为四个使用量 key 加 `max_iterations` / `max_runtime`。
+- **不新增配置键**：以上键均已存在，项目 / 用户层可直接覆盖 `limits` / `termination`。`LimitBlock.key` 固定为四个使用量 key 加 `max_iterations` / `max_runtime`。
 
 ### 2.9 上下文压缩行为（0.14.4，ADR-085）
 
@@ -254,18 +231,17 @@ termination:
 - **tool 配对**：保留区第一条是 `tool` 时，边界回退到对应的 `assistant(tool_calls)`，避免压缩后出现孤立 `tool`。配对完整性优先于条数上限，保留数可能略超 `max_messages`。
 - **摘要输入**：`assistant` 的工具调用渲染为 `[tool_call:<name>] <arguments>`，`tool` 结果渲染为 `[tool:<id>] <content>`；单条超过 12,000 字符截断，`reasoning_content` 不进入摘要。输入按 `min(48_000, max(2_000, floor(max_tokens / 8)))` 估算 token 分块；单块一次摘要，多块逐块 partial 后再 reduce。模板含“当前用户要求（原话）”；有旧摘要时合并而非重写；单次 provider 调用 15s 超时，输出预算 `clamp(floor(removedTokens / 8), 2048, 8192)`；per-session 连续 3 次失败熔断 10 分钟，手动 / overflow（`force`）绕过。某块失败只写占位标记并继续，全部失败时回退 `[Auto Compact: N older messages summarized. Continuing...]` 并标记 `degraded: true`，不中断 run。
 
-### 2.10 多实例锁、数据根与交互记录（0.15，ADR-086）
+### 2.10 写意图锁、数据根与交互记录（0.15 / 0.49，ADR-086）
 
-- **tenant 锁分层**：
-  - `shared`（file / memory 后端默认）：`tenants/<t>/.members/<pid>-<nonce>.json`，每进程一个租约，多个进程可共存；保证的是 session 级单写者。
-  - `exclusive`（sqlite 后端、显式 `--exclusive`、migrate / tenant / trace prune）：`tenants/<t>/.lock`，整租户单写者，冲突返回 `tenant_locked`。
-  - stale 规则：死 pid、不可解析超过 5s、跨主机超过 24h 自动回收；回收持 `<lock>.reclaim` 守卫（守卫超过 10s 可清理）。
-- **session / run 写锁**：`tenants/<t>/.locks/sessions/<sha16(session_id)>.lock` 与 `.locks/runs/<sha16(run_id)>.lock`（`0600`，内容含 `pid` / `started_at` / `host`）。同一 session 的第二个写者得到 `conflict`，消息前缀 `session_locked:`；run resume 冲突前缀 `run_locked:`。同进程重复获取用引用计数消化。
-- **tenant_id**：匹配 `^[a-z0-9][a-z0-9_-]{0,63}$`，缺省 `default`，拒绝路径穿越；缺失时按 `default` 处理。
+- **单公司 data-dir 写意图锁**（`src/data-lock.ts`）：`exclusive` 为 `<dataDir>/.lock`，`shared` 为 `<dataDir>/.members/<pid>-<nonce>.json`；锁文件 `{ pid, started_at, host }`。冲突返回 `data_locked`。stale 规则：死 pid、不可解析超过 5s、跨主机超过 24h 自动回收；回收持 `<lock>.reclaim` 守卫（守卫超过 10s 可清理）。
+- **谁取锁**：只有写意图命令（`migrate --apply`、`trace prune`、`eval`、bootstrap 的 trace prune / session 删除）获取。`--run` / REPL / gateway 启动**不取**写者锁；同一 dataDir 的第二进程仍可启动（0.49 R7=B 已知限制）。
+- **session / run 写锁**：`<dataDir>/.locks/sessions/<sha16(session_id)>.lock` 与 `.locks/runs/<sha16(run_id)>.lock`（`0600`，内容含 `pid` / `started_at` / `host`）。同一 session 的第二个写者得到 `conflict`，消息前缀 `session_locked:`；run resume 冲突前缀 `run_locked:`。同进程重复获取用引用计数消化。
+- **根布局**：数据直接位于 `<dataDir>/sessions/`、`runs/`、`events/`、`agents/`、`conversations/`、`teams/`；没有 `tenants/<id>` 层。非空 `<dataDir>/tenants/**` 或 `.t2-migrating-*` → 启动 fail-fast `non_root_layout`（错误含路径 / 条目数 / 字节数；不移动、不删除数据）。
+- **持久化单 id**：`<dataDir>/tenant.json` 的 `tenant_id` 是唯一持久来源（缺省 `default`，匹配 `^[a-z0-9][a-z0-9_-]{0,63}$`）；fresh dataDir 不落盘。损坏 / 非法 id → fail-fast，不静默回退。
 - **`--data-dir <path>`**：全局覆盖 `data_dir`，优先级 `CLI > env > config`。一次性命令（doctor / logs / gateway status 等）同样按该根目录解析。`VESSEL_DATA_DIR` 仍是 env 层写法，不要写进项目 YAML。
-- **interactions 按实例隔离**：default 实例仍写 `<dataDir>/interactions-<tenant>.json`；命名实例写 `<dataDir>/instances/<instance>/interactions-<tenant>.json`，同一 dataDir 的多实例不再互相覆盖。
+- **interactions 按实例隔离**：default 实例写 `<dataDir>/interactions-<id>.json`；命名实例写 `<dataDir>/instances/<instance>/interactions-<id>.json`，同一 dataDir 的多实例不再互相覆盖。
 - **端口占用**：`gateway start` 捕获 `EADDRINUSE` 后以 `port_in_use` 退出 1，不写 PID 文件。换 `--port` 或 `--instance`，或先停掉占用端口的进程。
-- **已知限制**：shared 锁不阻止两个进程写同一 tenant 的不同 session；跨主机 stale 判定依赖 24h 阈值与主机名，不保证时钟同步。
+- **已知限制**：写意图锁不阻止运行时写；跨主机 stale 判定依赖 24h 阈值与主机名，不保证时钟同步。
 
 ### 2.11 AgentService 与成员（0.17，ADR-088；0.19 S1/S2 修订见 ADR-091 / ADR-092）
 
@@ -285,17 +261,17 @@ agent:
 
 - **`agent.enabled`**（0.24 起默认 `true`；显式 `false` 关闭）：唯一开关。启用后注册内置 `agent` 工具（root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`，支持 batch；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`；`create` 只建同 Team peer，`hire` 建调用者拥有的 contractor），启动 AgentService / TeamService，并尝试启动 loopback owner 端点。
 - **`agent.owner_id`**（默认 `main`）：root owner（REPL 主 agent）的成员 id；owner 队列由父 turn 的 `BeforeLlm` 排空，不再另起 pump。
-- **`agent.default_visibility`**（默认 `private`）：`create` / `hire` 未显式传 `visibility` 时的成员可见性。绑定 Team 且未显式指定时缺省为 `team`（0.19 S3），unbound 保持 `private`；peer 强制 `team`，contractor 有 Team 缺省 `team`、unbound 缺省 `private`；`private` 仅 owner 可寻址，且不写 Team 日志；`team` / `tenant` 在本机同一 tenant 内等价，跨 tenant 不可寻址。
+- **`agent.default_visibility`**（默认 `private`）：`create` / `hire` 未显式传 `visibility` 时的成员可见性。绑定 Team 且未显式指定时缺省为 `team`（0.19 S3），unbound 保持 `private`；peer 强制 `team`，contractor 有 Team 缺省 `team`、unbound 缺省 `private`；`private` 仅 owner 可寻址，且不写 Team 日志；单公司下 `team` / `tenant` 等价，`tenant` 只作为正交可见性标签保留。
 - **`agent.permission_mode`**（缺省交互 `bridge`、headless `allow`）：`bridge` 把成员权限 / ask 弹到父窗口；`allow` 对成员复制到的工具一律放行；`deny` 只复制 `agent.read_only_tools`（默认 `['read']`）。无父事件流时 bridge 退化为 deny，不死等。0.19 S4 起有非空 `team_id` 的成员强制 bridge（忽略全局 `allow`），`deny` 保持只读工具不放宽。
 - **`agent.follow_replies`**（默认 `false`）：回复在下一次 `BeforeLlm` 注入父会话；不会自动开启新的父 turn。
 - **`agent.model` / `agent.limits` / `agent.termination`**：成员默认模型与限额；`limits` / `termination` 缺省继承顶层，不放大。
-- **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
+- **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；配置不再接受 `team` / `delegate` 块。
 - **`agent.inbox_max_messages`**（0.32，默认 `200`）：每个成员持久化收件箱的消息条数上限，超出时按最旧裁剪；只影响成员收件箱（`agent` 工具投递给 busy / rotating 成员的消息），不影响会话历史。缺省不写入配置即用 200；必须是正整数。
 - **`agent.temporary_ttl_hours`**（默认 `2`，`0` = 关闭）：temporary 成员的空闲回收 TTL。只回收 `role === 'temporary'` 且仍在册的成员，`member`（含 `main`）永不回收；有在跑轮 / 排队消息 / 权限等待时跳过。回收复用 `membership='left'` + `state='closed'`，body 记录保留，可经 `reinstate` 原地复活。
 - **工具面（组成，不写死数量）**：root 默认 = 能力工具（`bash` / `read` / `edit`）+ `agent` + `subscribe`；真交互 REPL（TTY）或 gateway/serve 另加 `ask_user`；成员 body 另有收件箱工具 `inbox`（`list` / `read` / `delete` / `insert`）。显式 `agent.enabled: false` 时不启用成员 runtime，root 剩能力工具 + `subscribe`。实际清单以 `bun run src/cli.ts --tools` 输出为准（该命令不连接 MCP，也不展开 `ask_user` / `inbox`）。
-- **owner 端点**：只由交互 REPL / serve 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`--run` / headless / 管道不监听 owner 端口、不写记录，但 AgentService / TeamService 仍在进程内可用。`vessel agent create|send|dispatch|close|list [--json]` 经该记录 attach。
+- **owner 端点**：只由交互 REPL / serve 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` 与内部持久 id）；只接受 loopback 与 Bearer token。`--run` / headless / 管道不监听 owner 端口、不写记录，但 AgentService / TeamService 仍在进程内可用。`vessel agent create|send|dispatch|close|list [--json]` 经该记录 attach。
 - **rotate（0.19，ADR-092；0.39 改道）**：成员可调用 `agent` 工具的 `rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 `sessions.create`（空 session + `startup_prompt`）或 `sessions.restart`。原 owner 端点 `agents.rotate` 与 CLI `vessel agent rotate` 已删除。失败保持旧身体，不自动重试；`rotating` 期间消息排队。
-- **已知限制**：排队消息写入 per-agent inbox（上限 `agent.inbox_max_messages`），重启后可由模型经 `inbox` 工具读取；已开始执行的一轮仍需显式 resume；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **61**（见 §2.13）。
+- **已知限制**：排队消息写入 per-agent inbox（上限 `agent.inbox_max_messages`），重启后可由模型经 `inbox` 工具读取；已开始执行的一轮仍需显式 resume；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 清单以 [gateway-rpc.md](../architecture/gateway-rpc.md) 方法表为准。
 
 ### 2.12 Team 声明（0.19 S3，ADR-091；S4 增加 policy.permission / policy.budget）
 
@@ -319,55 +295,44 @@ teams:
           cooldown_seconds: 60   # >= 0；缺省 60
 ```
 
-- **全局配置**；tenant overlay **不允许** `teams`（validator 拒绝，loader 丢弃）。
+- **全局配置**：`teams` 是顶层块，不属于任何 tenant；密钥字段仍禁止。
 - 校验：必须是数组；每项对象；`workspace` 非空；归一化（展开 `~`、`path.resolve`，Windows 忽略大小写）后重复声明 → validation error；`name` 非空；`policy` 为普通对象。
 - **拼写**：规范拼写是 camelCase（`denyAfterSeconds` / `maxHops` / `maxWallClockSeconds` 等），config 对象、手改 `team.json` 与运行时都用 camelCase；YAML 可写 snake_case，loader 递归转换。手改 `team.json` 写 snake_case 不会被转换。
 - **严格校验**：`policy.permission` / `policy.budget` 内部是白名单；`allow_after` / `allowAfter` 报错（`allow-after is not supported; use hold or deny-after`），`max_cost` / `maxCost` 报错（`policy.budget.maxCost is not supported`，`Usage` 没有 cost 字段），未知键报错。`policy` 顶层其它键仍允许（S3 兼容）。
 - **默认与边界**：`permission.unattended` 缺省 `hold`；`deny_after_seconds` 只在 `deny-after` 时允许且必填；没有全局权限 TTL（temporary 的空闲回收另见 `agent.temporary_ttl_hours`）。预算挂在 team policy，**不复用** `limits.*`；未配置的维度不限，环检测默认开启（`max_repeats: 2` / `cooldown_seconds: 60`）。
 - **`policy.allow_auto_create`**（0.39，默认 `false`）：`dispatch` 在目标 `gone` 且 resume 失败后，是否允许按来源自动创建 agent；也可在单次 `agents.dispatch` 条目上传 `allow_auto_create` 显式覆盖。手改 `team.json` 时 snake_case 别名同样被接受。
 - **非法值**：配置声明非法 → validation error；手改 `team.json` 的非法预算 → warning 并忽略该预算子结构（Team 仍可用）。
-- 声明只**补写缺失**的 `<dataDir>/teams/<tenant>/<team_id>/team.json`；不创建 Agent，不覆盖已有 `name` / `policy`，与已有文件冲突只 warning。
+- 声明只**补写缺失**的 `<dataDir>/teams/<id>/<team_id>/team.json`（`<id>` 为持久化单 id）；不创建 Agent，不覆盖已有 `name` / `policy`，与已有文件冲突只 warning。
 - **默认绑定**：`create` / `hire` 无显式 workspace 时，只有带 `name` 的 Agent 才绑定；workspace 必须与声明归一化后精确相等；多个声明命中 → 不绑定 + warning。显式 `--workspace` 但无 name → `invalid_input('team binding requires a name')`。
 - 绑定后默认 visibility `team`；unbound 保持 `private`。Team 只是 roster / 只写日志 / 定向寻址的分组，**不是 cwd 或安全边界**（成员仍共享父工具 cwd）。
 - roster 由 Agent 记录的 `team_id + membership` 派生，不单独持久化；`online_count = present && presence === 'live'`；`body_history` 透传（≤20）。
 - 无 `@` 的 post / reply / system **只写日志、不产生 run**；`@` 用结构化 agent id，先写日志再 dispatch。private 成员不写日志、不可被 `@`。
-- canonical：`teams.list` / `teams.get`（read）、`teams.post` / `teams.members` / `teams.budget` / `teams.create` / `teams.update` / `teams.archive` / `teams.spawnFrozen`（write；`teams.budget` 走 `status | override`，不在 control scope 白名单）；未注入或 tenant 不匹配返回 `not_found`。canonical 总数 **61**。
+- canonical：`teams.list` / `teams.get`（read）、`teams.post` / `teams.members` / `teams.budget` / `teams.create` / `teams.update` / `teams.archive` / `teams.spawnFrozen`（write；`teams.budget` 走 `status | override`，不在 control scope 白名单）；未注入返回 `not_found`。canonical 方法与总数以 [gateway-rpc.md](../architecture/gateway-rpc.md) 方法表为准。
 - Team CRUD（0.24）：`teams.create` 只允许 human / admin（team-scoped token 返回 `forbidden`），按 workspace 幂等复用并直接返回 `TeamSummary`；`teams.update` / `teams.archive` 允许 team-scoped token 操作自己的 team。`archive` 有 present 成员返回 `conflict`（`team_not_empty`）；归档后 post / members / budget override 返回 `conflict`（`team_archived`），日志 / session / agent 历史保留；hard delete 未实现。CLI：`vessel team create|update|archive|freeze|unfreeze`；`create` / `update` 支持 `--policy <json>` 或 `--policy-file <path>`（互斥，文件优先用于复杂策略，整体替换）。`freeze` / `unfreeze` 写 `teams.spawnFrozen`；冻结只拦该 Team 的增长（`team_frozen`），不暂停现有成员。
-- **预算运行态**：唯一写者是 `AgentService` 的 `ConversationBudget`；状态写 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、1000 条按 `last_activity` 有界淘汰、损坏 fail-closed、重启不清零）。发送侧入队前与接收侧 turn 开始各查一次，被接收侧挡下的消息留在队列。人工 override 经 `teams.budget` / owner 端点 / CLI，只能抬高或清除；`teams.budget` 不在 control scope。事件 `team.budget.warning` / `team.budget.blocked` / `team.budget.override` 必带 `team_id`。
+- **预算运行态**：唯一写者是 `AgentService` 的 `ConversationBudget`；状态写 `<dataDir>/conversations/<id>.json`（`0600` 原子写、1000 条按 `last_activity` 有界淘汰、损坏 fail-closed、重启不清零；`<id>` 为持久化单 id）。发送侧入队前与接收侧 turn 开始各查一次，被接收侧挡下的消息留在队列。人工 override 经 `teams.budget` / owner 端点 / CLI，只能抬高或清除；`teams.budget` 不在 control scope。事件 `team.budget.warning` / `team.budget.blocked` / `team.budget.override` 必带 `team_id`。
 
 ### 2.13 Hub 控制面（0.19 S5，ADR-093）
 
+Hub 是**独立进程**（`vessel hub start`），不随 gateway 启动；gateway 只作为 node 出站加入远端 hub（node → hub）。
+
 ```yaml
 hub:
-  auto_start: true               # 0.24：gateway 启动时同 dataDir 拉起本机 hub（回环、单实例）
-  # data_dir 缺省 <data_dir>/hub；standalone hub 与 gateway 自动 hub 共用同一目录
-  # data_dir: /srv/vessel-hub    # 显式指定；必须与全局 data_dir 不同
-  direction: hub                 # hub | node；node 为 gateway 主动出站加入远端 hub（S5.1）
+  direction: node                # 仅 node 角色：gateway 出站加入远端 hub
   url: https://hub.example:8643  # node 角色：hub 基址（join 缺省 URL；运行时 state 优先）
   ca_file: /etc/vessel/hub-ca.pem      # node 角色：hub TLS CA（可选）
   join_code_env: VESSEL_HUB_JOIN_CODE  # node 角色：join 缺 --code 时读取（可选）
-  listen: { hostname: 127.0.0.1, port: 8643 }
-  allow_remote: false
-  tls: { cert_file: ..., key_file: ... }   # 非回环必填，且 cert/key 成对
-  allowed_origins: [https://console.example]
-  token_env: VESSEL_HUB_TOKEN    # 非回环必须非空
-  allow_file_secrets: false      # true 才允许 Linux AES-GCM 文件回退
-  pairing_ttl_seconds: 300       # 60–3600
 ```
 
-- `hub` 是 **全局块**；tenant overlay 不允许。`hub.data_dir` 与全局 `data_dir` 相同 → validation error `hub_data_dir_conflict`。
-- `hub.auto_start`（0.24，默认 `true`）：gateway（`--serve` / `gateway start`）启动时在 `hub.data_dir`（缺省 `<data_dir>/hub`）启动同进程 hub，**只监听 `127.0.0.1`**，端口取 `listen.port` 否则 0；`hub.direction: node` 时跳过。standalone `vessel hub start` 使用同一默认目录，因此 gateway 会复用已运行的 hub；只有显式 `--data-dir` / `hub.data_dir` 才分叉。`<hubDataDir>/hub.lock` 保证同一 data dir 单实例，已有实例时复用；不自动 join 远端、不自动配对、不代理正文。显式 `false` 关闭。
-- `direction: hub`（默认）= hub 进程主动拨号节点；`direction: node` = gateway 出站加入远端 hub（S5.1），节点无需开放入站端口。hub 进程本身仍拒绝 `direction: node`。
+- `hub` 是**顶层块**；`hub.data_dir`（仅 hub 进程使用）与全局 `data_dir` 相同 → validation error `hub_data_dir_conflict`。
+- `direction` 只接受 `node`：gateway 出站拨号 hub，节点不需要开放入站端口。hub 进程自身由 `vessel hub start` 启动，不在 gateway 内。
 - `url` / `ca_file` / `join_code_env` 只在 node 角色使用：`url` 必须是绝对 `http(s)`、无 userinfo / path / query / hash，非回环必须 `https`；`join_code_env` 只在 `vessel hub join` 缺 `--code` 时读取。node token 明文**只走 SecretStore**。
-- `hub.data_dir` 冲突检查只适用于 **hub 进程**；node 侧状态在 gateway 的 `data_dir`（`hub-node.json` / `hub-node-status.json`），不写 `hub.data_dir`。
-- 非回环 `hub.listen.hostname` 必须 `allow_remote: true` + TLS cert/key + 非空 `token_env`；不提供 `--insecure`。
-- `hub` 不接受明文 `token`，只允许 `token_env`（hub 自己的读 token）。节点 control token **只走 SecretStore**，不写 YAML / `registry.json`。
-- `allow_file_secrets`（默认 `false`）：平台 SecretStore（DPAPI / Keychain / libsecret）不可用时，只有显式 `true` 才退到 AES-256-GCM 文件；否则 fail-closed。
-- `pairing_ttl_seconds`（默认 300，范围 60–3600）：一次性配对码有效期；码只存 hash、先烧后用。
-- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后为 40，S3 + S5 + S4 合并后为 48；此后各版本的增删以 [gateway-rpc.md](../architecture/gateway-rpc.md) 方法表为准。当前总数 **61**（60 个 domain 方法 + `events.subscribe`）。
-- **team-scoped control token**：只能访问自己的 `team_id`，不匹配返回 `not_found`；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `policy`。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**。
-- **NAT 数据面**：`direction: node` 只保证元数据 / 指针可达；没有浏览器可达地址的节点（NAT / 家庭网络）需要用户提供隧道 / 反向代理，并可用可选 `public_url` 声明节点 origin。目录的 `data_plane: direct|unreachable` 由 `public_url ?? url` 派生，只表示正文可达性；hub 不做正文中继。
-- **已知限制**：S5.1 已实现 node → hub 出站；跨节点 A2A（S7）、多 hub 联邦、hub daemon / 系统服务注册仍未实现。一个 node 进程 / data dir 只加入一个 hub。Web 当前不消费 hub 目录 / data token。
+- node 侧状态写 gateway 的 `data_dir`（`hub-node.json` / `hub-node-status.json`），不写 `hub.data_dir`。
+- hub 进程的非回环 `hub.listen.hostname` 必须 `allow_remote: true` + TLS cert/key + 非空 `token_env`；不提供 `--insecure`。
+- `hub` 不接受明文 `token`，只允许 `token_env`（hub 自己的读 token）；`allow_file_secrets`（默认 `false`）才允许在 SecretStore 不可用时回退 AES-256-GCM 文件，否则 fail-closed。`pairing_ttl_seconds`（默认 300，范围 60–3600）控制一次性 join code 有效期；码只存 hash、先烧后用。
+- 配对与 token：`vessel hub join-code` 在 hub 侧生成一次性 code，`vessel hub join` 在节点侧消费；hub 签发 `scope: node` token 并只存 `sha256`。旧 hub → node 拨号、入站、`hub pair` / `hub node add` / `hub token *` / `hub data-token` 已删除。
+- hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**；节点离线保留最后快照，只读展示。
+- **NAT 数据面**：`direction: node` 只保证元数据 / 指针可达；没有浏览器可达地址的节点需要隧道 / 反向代理，并可用 `public_url` 声明节点 origin。`data_plane: direct|unreachable` 由 `public_url ?? url` 派生，hub 不做正文中继。
+- **已知限制**：跨节点 A2A、多 hub 联邦、hub daemon / 系统服务注册仍未实现；一个 node 进程 / data dir 只加入一个 hub；Web 当前不消费 hub 目录 / data token。
 
 ### 2.14 TUI 指示器（`VESSEL_INDICATOR`，0.7）
 
@@ -423,8 +388,8 @@ lease:
 - `api_key_env`
 - `provider.api_key_env`
 - `feishu.app_secret_env`
-- `serve.token_env`
-- `serve.admin_token_env`
+- `serve.token_env`（node token）
+- `gateway.token_env`（Platform Gateway token，与 node token 分开）
 
 规则：
 
@@ -432,18 +397,19 @@ lease:
 2. `_env` 与 `VESSEL_*` 按层解析、按层合并；同层显式值 > `_env`。
 3. `VESSEL_API_KEY`（env 层）覆盖项目层 `api_key_env`；来源记为 `env`，可附 `env_ref`。
 4. 0.5 不支持 `${VAR}` 字符串插值；需要间接引用时用 `_env`。
-5. 项目 `vessel.yaml` 出现密钥 → error；tenant 的密钥字段只允许 `_env`。
+5. 项目 `vessel.yaml` 出现密钥 → error；密钥字段只允许 `_env`。
 
-token 解析顺序：`serve.tokens` → `serve.admin_token` → `serve.token` /
-`serve.token_env` → `transport.token` → `VESSEL_GATEWAY_TOKEN` → 自动生成。
-principal 映射见 [ADR-049](../adr/ADR-049-multi-tenant-isolation.md)。
+node token 解析顺序：`serve.tokens` → `serve.token` / `serve.token_env` →
+`transport.token` → `VESSEL_GATEWAY_TOKEN` → 自动生成。principal 由 token 决定：
+`serve.token` → admin；`serve.tokens` 按条目 `role`；回环无 token → admin。
+Platform Gateway token 独立，只读 `gateway.token` / `gateway.token_env`，不与 node token 互相回退。
 
 ## 4. 命令
 
 ```bash
 vessel config path [--json]
 vessel config init [--force] [--json]
-vessel config show [--sources] [--json] [--tenant <id>]
+vessel config show [--sources] [--json]
 vessel config set ui.language <zh-CN|en> [--json]
 vessel config set ui.showReasoning <true|false> [--json]
 vessel config set ui.statusBars <top|bottom|both|none> [--json]
@@ -473,25 +439,19 @@ vessel team members <team_id> add|remove <member> [--json]
 vessel hub start [--host <h>] [--port <p>] [--data-dir <hubDir>] [--allow-remote]
 vessel hub directory [--hub-url <url>] [--json]
 vessel hub watch [--hub-url <url>]
-vessel hub pair [--tenant <id>] [--ttl <s>]
-vessel hub join-code [--tenant <id>] [--ttl <s>] [--json]
-vessel hub join <hub-url> --code <CODE> [--tenant <id>] [--public-url <url>] [--ca <file>] [--json]
-vessel hub node add <url> --code <CODE> [--alias <name>]
+vessel hub join-code [--data-dir <dir>] [--ttl <s>] [--json]
+vessel hub join [<hub-url>] --code <CODE> [--public-url <url>] [--ca <file>] [--json]
 vessel hub node list [--json]
 vessel hub node remove <pairing_id>
-vessel hub token exchange <node-url> --team <team_id> [--json]
-vessel hub token revoke <node-url> --token-id <id>
-vessel hub token list <node-url> [--json]
-vessel hub data-token <pairing_id> --team <team_id> [--json]
 ```
 
 - `vessel team ...` 经 owner 端点（`from = ownerId`、viewer 可见 private）；`team post` 的 `--mention` 先在同 Team roster 内解析为 agent id，日志写成功但任一投递失败时退出 1。
 - `team create|update` 的 `--policy` / `--policy-file` 互斥；文件内容必须是 JSON 对象，整体替换 policy（不做 merge）。`team archive` 有 present 成员时退出 1（`team_not_empty`）。
-- `vessel hub ...` 管理与探针命令直连 hub / 节点；`hub pair` 在节点侧生成一次性码、`hub node add` 在 hub 侧纳入节点（hub → node）；S5.1 的 `hub join-code` 在 hub 侧生成一次性码、`hub join` 在节点侧消费（node → hub）。token 明文只在 `token exchange` / `hub join` 的响中出现一次，不写日志。
+- `vessel hub ...`：`hub start` 启动独立 hub 进程；`hub join-code` 在 hub 侧生成一次性 code，`hub join` 在节点侧消费（node → hub）；`hub directory` / `hub watch` / `hub node list|remove` 只读或吊销。token 明文只在 `hub join` 响中出现一次，不写日志。
 
-- `vessel agent ...` 经 `<dataDir>/agent-owner.json` attach 到交互 REPL 的 owner；没有 owner 时 `agent_owner_unavailable`，`--tenant` 与 owner 不一致时 `agent_owner_tenant_mismatch`。命令只做参数映射，生命周期全在 owner。
+- `vessel agent ...` 经 `<dataDir>/agent-owner.json` attach 到交互 REPL 的 owner；没有 owner 时 `agent_owner_unavailable`。命令只做参数映射，生命周期全在 owner。
 
-- `vessel --data-dir <path> ...`（全局）覆盖 `data_dir`；`--exclusive` 强制 tenant 单写者锁。两者同样适用于一次性命令。
+- `vessel --data-dir <path> ...`（全局）覆盖 `data_dir`；同样适用于一次性命令。
 - `vessel doctor --deep`：在原有本地检查之外，只读查询本地 gateway 的 `health.get` / `mcp.list`，报告 attach / runtime / MCP 实际状态；不启动 gateway、不改配置。没有本地 gateway 时记为 info，不算失败。
 - `vessel logs tail`：只读 `<dataDir>/logs/gateway.log`（default）与 `gateway-<instance>.log`（命名实例），默认 50 行，`--lines` 上限 10,000；不跟随、不轮转，日志不存在时退出 1。
 
@@ -499,15 +459,13 @@ vessel hub data-token <pairing_id> --team <team_id> [--json]
 - `config init`：把内嵌模板写到用户配置；默认不覆盖已有文件，`--force` 才覆盖。
   模板只写 `api_key_env`，不写真实密钥。
 - `config show`：输出合并后的配置；`--sources` 标注每个键来自
-  `cli | env | project | user | default`；tenant overlay 命中列在
-  `tenant_overlay_keys`。**有校验错误时 exit 1**。
+  `cli | env | project | user | default`。**有校验错误时 exit 1**。
 - `config.get` / `config.sources`（RPC）与 `config show` 一样，永不输出解析后的
   密钥值，只输出 `"<set>"` / `"<unset>"`。
 - `config.set`（RPC，0.15）：只写用户配置、只接受白名单键（`ui.language` /
   `ui.statusBars` / `ui.verbosity` / `ui.errorLevel` / `ui.showReasoning` /
   `ui.showInternalEvents` / `ui.askUser` / `observability.showProcessErrors` /
-  `agent.cwd`），值非法返回 `invalid_params`；非 default tenant 返回 `forbidden`。写入同样
-  原子、`0600`、保留其它键。
+  `agent.cwd`），值非法返回 `invalid_params`。写入同样原子、`0600`、保留其它键。
 
 ### 4.1 Gateway 生命周期与配置生效（0.12）
 
@@ -535,48 +493,55 @@ vessel gateway uninstall-service
 | 启动报未知键 | 用户配置拼写错误或使用了已删除字段 | 按错误路径修正；legacy 仅允许 `default_provider` / `default_model` / `providers` |
 | `config show` exit 1 | 配置校验失败 | 看 stderr 的 `path: message`，逐项修正 |
 | 项目 YAML 报密钥 | 项目配置出现密钥字段 | 移到用户配置的 `_env` 或 env |
-| `tenant overlay` 报禁止块 | 覆盖了 `data_dir` / `trace` / `serve` / `tenant` / `update` | 改到项目或用户层 |
+| 旧配置 fail-fast | 仍有 `tenant:` 块、`serve.tokens[*].tenantId`、`serve.adminToken` / `serve.adminTokenEnv` | 按错误里的逐项 Fix 删除或改为 `serve.tokens` 的 `{ role: admin }` |
 | token 401 | 已配置 token 但请求未带，或 token 不在 `serve.tokens` | 检查 `serve.tokens` / `serve.token` / `VESSEL_GATEWAY_TOKEN` |
-| `tenant_locked` | 另一个进程持有 exclusive tenant 锁（sqlite / `--exclusive` / 迁移） | 停掉占用进程；file 后端确认是否需要 `--exclusive`；或改用 `--connect` |
-| `session_locked` / `run_locked`（RPC `conflict`） | 另一个进程正在写同一 session / run | 停掉占用进程；锁文件在 `tenants/<t>/.locks/`，stale 规则见 §2.10 |
+| `data_locked` | 另一个进程持有同一 dataDir 的写意图锁（`migrate --apply` / `trace prune` / `eval`） | 停掉占用进程；不要删除活跃锁；或改用 `--connect` |
+| `session_locked` / `run_locked`（RPC `conflict`） | 另一个进程正在写同一 session / run | 停掉占用进程；锁文件在 `<dataDir>/.locks/`，stale 规则见 §2.10 |
+| `non_root_layout` | 存在非空 `<dataDir>/tenants/**` 或 `.t2-migrating-*` | 先归档旧数据，再在根布局启动；命令不迁移、不删除 |
 | `port_in_use` | gateway 端口已被占用 | 换 `--port` / `--instance`，或停掉占用端口的进程 |
 
-## 6. 内置多租户执行（A-6）
+## 6. 单 Node 执行面
 
-`--serve` 模式为每个已配置且 `status: active` 的 tenant 构建独立执行面：
+一个 node 恰好一份执行面；`--serve` / `vessel gateway start` 不再为多个 tenant 构建 bundle：
 
 ```text
-config（tenant overlay）/ provider / session backend / run store / context /
+config / provider / session backend / run store / context /
 plugin host + plugins / trace recorder / metrics collector / redactor / sessionControl
 ```
 
-- 每个 tenant 独立运行时事件流；事件只进入该 tenant 的 `TenantEventHub` 流，不再桥接共享流（ADR-089）。
-- 每个 active tenant 持有自己的租约：file / memory 后端为 shared `.members/` 租约（多进程共存），sqlite / `--exclusive` 为 exclusive `.lock`。启动失败必须回滚已获取的锁，shutdown 全部释放；exclusive 冲突返回 `tenant_locked`，session / run 写冲突返回 `conflict` + `session_locked` / `run_locked`。
-- `disabled` / 未配置 tenant → `forbidden`，不得创建半成品。
-- 本地 REPL / headless 仍一次只跑一个 tenant（`--tenant` 选择）；`--connect` 由远端 gateway 决定 tenant。
-- 每个 tenant bundle 还构建 feishu / MCP；插件配置按 tenant 合并，飞书 `app_id` 跨 tenant 重复会在装配期拒绝启动。
-- **状态**：ext 插件 tenant 行为、web A-6.3 接口增量（`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`）与 asm 的 per-tenant 执行接线**均已实现**。
-- **已知限制**：gateway 的飞书控制面仍只走 default tenant（A-6 §13.3 方法表未包含 per-tenant 变体）。
+- 单 `Runtime` / `EventStream` / `PluginHost` / settings / catalog / trace-metrics 根；事件只有一条流（ADR-089 / ADR-100）。
+- 写意图命令取单公司 data-dir 写意图锁；运行时不再获取写者锁。session / run 写冲突返回 `conflict` + `session_locked` / `run_locked`。
+- 本地 REPL / headless 同样只跑单公司；`--connect` 指向远端 node 的 Node API（缺省 8644）。
+- 插件配置单份：`plugins.list` / `plugins.catalog` / settings 为单视图；飞书 / MCP 不再按 tenant 合并。
+- Hub 是独立进程，不在 gateway 内；需要目录时单独 `vessel hub start`，node 用 `hub.direction: node` 出站加入。
+- **已知限制**：同一 dataDir 的第二进程可以启动（写意图锁不覆盖运行时）；跨节点 trace / 事件仍无全局聚合。
 
-## 7. 示例：多租户部署
+## 7. 示例：单 Node 部署
 
 ```yaml
 # ~/.vessel/config.yaml
 provider:
   api_key_env: VESSEL_API_KEY
 data_dir: /srv/vessel/data
-tenant:
-  default: default
 trace:
   level: metadata
   retention_days: 14
+serve:
+  token_env: VESSEL_NODE_TOKEN       # Node API token（per-node）
+gateway:
+  token_env: VESSEL_PLATFORM_TOKEN   # Platform Gateway token，与 node token 分开
 
 # ./vessel.yaml（禁止密钥）
 session:
   backend: file
 
 # .env（部署密钥）
-VESSEL_GATEWAY_TOKEN=...
-VESSEL_ADMIN_TOKEN=...
+VESSEL_NODE_TOKEN=...
+VESSEL_PLATFORM_TOKEN=...
 VESSEL_API_KEY=...
 ```
+
+- 根布局直接写 `<dataDir>/sessions`、`runs`、`events` 等；没有 `tenants/<id>` 层。
+- 一个 node 服务一个公司；平台 token 与每个 node 的 token 互不通用。
+- 需要 Hub 目录时另起 `vessel hub start`（独立 dataDir）；它不随 gateway 启动。
+- 旧 `<dataDir>/tenants/**` 或 `.t2-migrating-*` 非空会 `non_root_layout` fail-fast；需先归档。

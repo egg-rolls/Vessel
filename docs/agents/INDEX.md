@@ -15,7 +15,7 @@ paths: [docs/agents/**]
 |---|---|---|---|
 | [core](core.md) | core 边界、Module、事件命名、tool pipeline、compaction、config resolver、存储 | core, runtime, run, resume, loop, tool pipeline, event, config, compaction, limits, lock, storage | `packages/core/**`, `packages/config/**` |
 | [agent](agent.md) | AgentService、成员/team、session/body、dispatch、预算 | agent, member, team, session, dispatch, rotate, create, budget, visibility | `packages/agent/**` |
-| [serve](serve.md) | gateway/RPC/远程/tenant 事件/hub/attention | gateway, serve, rpc, remote, tls, origin, hub, tenant, attention, node_id, shutdown | `packages/serve/**`, `src/rpc/**` |
+| [serve](serve.md) | gateway/RPC/远程/事件流/hub/attention | gateway, serve, rpc, remote, tls, origin, hub, attention, node, node_id, event stream, shutdown | `packages/serve/**`, `src/rpc/**` |
 | [web](web.md) | Web i18n、token 存储、内联交互卡 | web, apps/web, i18n, locale, sessionStorage, permission card, ask_user | `apps/web/**` |
 | [tui](tui.md) | TUI + CLI 终端面文案/样式/命令注册 | tui, cli, repl, terminal, i18n, sanitize, ansi, command, help, ask_user | `packages/tui/**`, `src/i18n/**`, `src/ui-style.ts`, `src/commands/**`, `src/cli.ts` |
 | [plugins](plugins.md) | 插件发现/信任/生命周期/MCP/skills | plugin, plugin host, discovery, trust, external, dispose, mcp, skill, evals | `plugins/**`, `src/plugin-loader.ts`, `src/plugin-selection.ts` |

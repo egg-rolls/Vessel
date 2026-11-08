@@ -26,7 +26,7 @@
 - **路径边界**：`read` / `edit` / `bash cwd` 统一走 `evaluatePath`；内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）是硬 `deny`；`allowed_roots` 只把越界降级为 `ask`；`deny_paths` 只能追加；比较基于 realpath。`bash` 文本匹配是 **best-effort，不是沙箱**（ADR-055/083）。
 - **密钥**：不输出 / 不记录解析后的密钥；`app_secret` 永不打印，`app_id` 只允许前 4 位 + `***`；trace / 事件 / 日志 / `config show` 经 redactor；core 不给默认厂商 Key / Base URL / 价格（ADR-050/069）。
 - **权限**：默认无限等待，不得重新引入 120s / 固定 TTL；只有显式正数 `timeoutMs` 才超时；abort 优先于超时。只有 human / policy 能答，没有 agent 审批人，不提供 `allow-after`（ADR-077/079/091）。
-- **数据写入**：session / checkpoint 一律 `atomicWrite`，默认 `durable: true`；损坏 ≠ 不存在，抛 `SessionCorruptError`、不 unlink；一个 tenant 一个写者，锁冲突返回 `tenant_locked` / `session_locked` / `run_locked`（ADR-056/086）。
+- **数据写入**：session / checkpoint 一律 `atomicWrite`，默认 `durable: true`；损坏 ≠ 不存在，抛 `SessionCorruptError`、不 unlink；单公司 data-dir 写意图锁（`src/data-lock.ts`），冲突返回 `data_locked` / `session_locked` / `run_locked`；运行时不再获取写者锁（ADR-056/086）。
 - **单 run**：同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`；不要另写终态持久化 / 事件发布路径（ADR-054）。
 - **发布纪律**：1.0 前只做干跑，不 tag、不 publish、不 force-push；1 本地 squash 到 `main` 后直接 push，PR 只在用户明确要求时开；CI 异步，不作为 push 前置；tag `v*` 只有 1 打。
 - **插件信任**：内置插件（随 release 发布）可信；外部插件从项目 `./.vessel/plugins` 与用户 `~/.vessel/plugins` 发现，默认不可信，安装时必须展示其声明的 `permissions`（`fs` / `net` / `process` / `secrets` / `events` / `rpc`），未声明能力默认拒绝；体验插件跑在子进程但**不是安全沙箱**，能力插件仍在 in-process、拥有完整进程权限；`VESSEL_NO_EXTERNAL_PLUGINS=1` 只加载内置插件（ADR-099）。
@@ -97,4 +97,4 @@ bun run scripts/release-dry-run.ts
 
 判断“要不要动 core”：能做成 Tool（`registerTool`）/ Hook / Guardrail / 事件（开放字符串），或能由 `bash` + 模型自己组合出来 → 不进 core。单个 agent 的 tool-calling loop 仍由 per-session `ExecutionUnit` 实现，不要在 Host 再写一套 loop。
 
-**Stage 4 分层红线**：`Runtime` 只持 tenant profile 与 `(tenantId, sessionId)` EU 目录，不持 Session / Run / WorkingContext / lease / RunRecordStore；唯一 EU 构造入口是 `Runtime.getOrCreateExecutionUnit`。事实事件 / RunRecord / SessionState 只由 Run 经 `RunJournal` 写，EU 只持只读 EventLog；`WorkingContext` 每次 Run 新建。
+**Stage 4 分层红线**：`Runtime` 只持单 node profile 与内部单 id 的 `(id, sessionId)` EU 目录，不持 Session / Run / WorkingContext / lease / RunRecordStore；唯一 EU 构造入口是 `Runtime.getOrCreateExecutionUnit`。事实事件 / RunRecord / SessionState 只由 Run 经 `RunJournal` 写，EU 只持只读 EventLog；`WorkingContext` 每次 Run 新建。事件 / 配置 / RPC 不再有 tenant 维度；唯一例外是正交的 `AgentVisibility='tenant'` 与内部持久化单 id。

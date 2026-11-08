@@ -57,12 +57,12 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
 
 ## `Runtime` 与 `ExecutionUnit` 公开面
 
-`Runtime` 是 per-node 无状态工厂（只持 tenant profile 与 `(tenantId, sessionId)` EU 目录）；`ExecutionUnit` 是 per-session 长活对象。tenant 与成员都经 `getOrCreateExecutionUnit`；同 key 返回同一对象，`agentId` 不一致抛 `execution_unit_binding_conflict`。
+`Runtime` 是 per-node 无状态工厂（只持单 node profile 与 `(内部单 id, sessionId)` EU 目录）；`ExecutionUnit` 是 per-session 长活对象。主执行面与成员都经 `getOrCreateExecutionUnit`；同 key 返回同一对象，`agentId` 不一致抛 `execution_unit_binding_conflict`。
 
 | API | 语义 |
 |---|---|
-| `registerProfile(profile)` | 同 tenant 幂等；冲突抛错。profile：`tenantId` / `providerFactory` / `model` / `plugins` / `pluginHostFactory?` / `limits?` / `termination?` / `includeReasoning?` / `context{maxTokens?,autoCompact?,summarizer?}` / `systemPrompt?` / `permission?` / `journalFactory` |
-| `getOrCreateExecutionUnit(req)` | 请求：`tenantId` / `sessionId` / `agentId?` / `session?` / `events` / `eventLog?` / `leaseService?` / `bindingLease?` / `pluginHost?` / `plugins?` / `contextFactory?` / `overrides?` |
+| `registerProfile(profile)` | 同内部单 id 幂等；冲突抛错。profile：`tenantId`（内部单 id）/ `providerFactory` / `model` / `plugins` / `pluginHostFactory?` / `limits?` / `termination?` / `includeReasoning?` / `context{maxTokens?,autoCompact?,summarizer?}` / `systemPrompt?` / `permission?` / `journalFactory` |
+| `getOrCreateExecutionUnit(req)` | 请求：`tenantId`（内部单 id）/ `sessionId` / `agentId?` / `session?` / `events` / `eventLog?` / `leaseService?` / `bindingLease?` / `pluginHost?` / `plugins?` / `contextFactory?` / `overrides?` |
 | `getExecutionUnit` / `retireExecutionUnit` / `listExecutionUnits` / `profileCount` | 诊断与 ControlPlane 生命周期；retire 幂等 |
 
 ```ts
@@ -90,7 +90,7 @@ interface ExecutionUnitOptions {
 }
 ```
 
-`create()` 是异步静态工厂（插件安装 fail-fast，ADR-023）；装配层不再直接调用，tenant bundle 与成员 host 都经 `Runtime`。
+`create()` 是异步静态工厂（插件安装 fail-fast，ADR-023）；装配层不再直接调用，单 bundle 与成员 host 都经 `Runtime`。
 
 run 级状态收敛在 `Run`（`runId` / `sessionId` / `branch` / 计时 / `stats` / `workingContext`）。`run()` / `resumeRun()` 共用 `activeRun` 槽位并在首个 await 前同步占位；已有 active run 抛 `RunAlreadyRunningError`。公开 `RunnableAgent.resumeRun?(runId)` 仍是门面签名，per-session 门面负责 `runStore.load` 后调 `EU.resumeRun(record)`。
 

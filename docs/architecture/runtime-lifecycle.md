@@ -12,8 +12,8 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/run.ts]
 
 ## Runtime 与 Run 外壳
 
-- `Runtime`（`packages/core/src/runtime/runtime.ts`）是每 node 一个的无状态工厂：只持有装配期注册的 tenant profile 与 `(tenantId, sessionId)` ExecutionUnit 目录，不持 Session / Run / WorkingContext / lease / RunRecordStore。
-- `ExecutionUnit` 是 **per-session** 的长活执行单元：持 Session 引用、只读 EventLog、两级 lease、`activeRun` 与 abort。tenant 与成员两条路径都经 `Runtime.getOrCreateExecutionUnit` 取得 EU；同 `(tenantId, sessionId)` 返回同一对象，`agentId` 不一致时抛 `execution_unit_binding_conflict`。
+- `Runtime`（`packages/core/src/runtime/runtime.ts`）是每 node 一个的无状态工厂：只持有装配期注册的单 node profile 与 `(内部单 id, sessionId)` ExecutionUnit 目录，不持 Session / Run / WorkingContext / lease / RunRecordStore。
+- `ExecutionUnit` 是 **per-session** 的长活执行单元：持 Session 引用、只读 EventLog、两级 lease、`activeRun` 与 abort。主执行面与成员两条路径都经 `Runtime.getOrCreateExecutionUnit` 取得 EU；同 `(内部单 id, sessionId)` 返回同一对象，`agentId` 不一致时抛 `execution_unit_binding_conflict`。
 - `ExecutionUnit`（`packages/core/src/runtime/execution-unit.ts`）是唯一的循环实现。编排细节外推给了三个 runner：`PermissionPolicy`（权限）、`GuardrailRunner`（四阶段 guardrail）、`HookRunner`（五阶段 hook）——`ExecutionUnit` 只做协调。
 
 ### `run()`：一次请求的外壳
@@ -81,7 +81,7 @@ finalizeRun(run, sessionState, outcome):
 ## 写者（铁律 1）
 
 - 事实事件、RunRecord checkpoint、SessionState 投影全部经 `RunJournal`（`packages/core/src/runtime/run-journal.ts`）。`ExecutionUnit` 只持只读 EventLog，不再直接 `eventLog.append` / `runStore.save` / `session.save`。
-- 工厂由装配层按 tenant 构造（`createRunJournalFactory`，持有 `eventLog` / `session` / `runStore` / `fenceOf`），放进 `TenantRuntimeProfile.journalFactory`；tenant run 与成员 run 走同一条写路径。
+- 工厂由装配层按 node 构造（`createRunJournalFactory`，持有 `eventLog` / `session` / `runStore` / `fenceOf`），放进单 node profile 的 `journalFactory`；主 run 与成员 run 走同一条写路径。
 - `RunJournal` 保留 `flush → cursor → saveCheckpoint` 顺序；fencing 校验只读 `fenceOf` 回调，Run 不持 `LeaseService`。
 - `/compact` 等无 active Run 的写走 transient journal（`run_id='manual'`）；插件生命周期事件走 `run_id='plugin'`，均不在 Run 事实内。
 

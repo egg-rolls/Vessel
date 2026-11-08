@@ -73,3 +73,26 @@ tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
   与 [ADR-036](ADR-036-gateway-protocol-v1.md)（gateway 控制面）。
 - hub 只做目录 / 指针、不代理正文、授权权威在节点：以上文决策 1 / 2 / 8 / 10 为准；
   跨节点投递见 [ADR-094](ADR-094-federation-team-to-team.md)。
+
+## Errata（0.49 Hub 抽离为 Platform 服务，2026-11-08）
+
+> 只追加，不改写上文 S5 / S5.1 结论。`reports/0.49/hub-service.md`（合入 `766f9993`）
+> 与 `reports/0.49/tenant-t4-acceptance.md` 是本节依据。
+
+- **Hub 是独立 Platform 服务**：唯一入口 `vessel hub start`（前台进程，`src/hub/**`）；
+  gateway（所有 profile）不再启动本地 hub，也不读写 hub 数据目录。Hub 不寄生在任何
+  公司的 gateway 里。
+- **方向唯一：node → hub**：节点主动拨号 `${hub.url}/v1/hub/node-control`；Hub 是 WS
+  acceptor。加入流程为 Hub 生成一次性 join code、节点 `vessel hub join` 换 `scope: node`
+  token。上文 S5 的 hub → node 拨号方向已删除。
+- **已删除面**：hub → node 的 `control-client`；节点的入站 `/v1/hub/control` 与
+  `POST /v1/hub/pair`；节点签发 `view` / `exchange` / `control` token；
+  `auth.exchange` / `auth.revoke` / `auth.tokens`（RPC 调用返回 `not_found`）；
+  CLI `hub pair` / `hub node add` / `hub token *` / `hub data-token`。
+- **目录主键 / 配对键 = `node_id`**：不再使用 `node_id:tenant_id`；同一节点一条配对。
+  node token 只绑定 `hub_id` / `node_id`，不再绑定 `tenant_id`；不匹配返回 4401。
+- **保留**：`hub.tokenEnv`（Hub 服务读 token 来源）与 `hub.allowFileSecrets`（节点侧
+  SecretStore 文件回退开关）不是 legacy，保留。`hub.allowedOrigins`、join-code TTL、
+  `registry.json` 0600 原子写、incarnation/revision 快照比较均不变。
+- **数据面不变**：Hub 仍只做目录 / 指针，不代理正文；浏览器直连节点，Web 从 Hub
+  sessionStorage 读连接信息，token 不进 URL / 日志。

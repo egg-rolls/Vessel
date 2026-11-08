@@ -9,15 +9,15 @@ paths: [packages/serve/src/**, packages/serve/src/gateway/**, src/serve-auth.ts,
 > 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
 <a id="protocol"></a>
 
-`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。gateway 只读取注入的 `TenantEventHub`，由 `TenantEventHub` 对各 tenant 的运行时流 fan-in（ADR-089）。`apps/web` 是配套的浏览器控制台；它可连接多个 node 并直接调各 node 的 `/v1/rpc`（per-node token），这是 Console 聚合，不是平台级 gateway（[topology](topology.md)）。**T1 单公司兼容期**：内部继续保留 tenant 字段与 `<dataDir>/tenants/<id>/**` 布局，只把行为收敛到本 node 单 id；hub / federation wire、`pairing_id`、`x-vessel-tenant` 头与 node token 文件格式不变。
-**0.49 G1 现态**：`vessel gateway start` 在同一进程启动 **Platform Gateway**（默认 `127.0.0.1:8642`；静态宿主 + `/health` + `/platform/rpc` 只读 allowlist）与 **Node API**（`serve.port`，缺省 `8644`；`/v1/*`、WS/SSE、插件 HTTP/静态）。两者路由表与认证链物理分离；平台 token 与 node token 互不通用。`vessel node start/status/stop/reload` 只操作 Node API。legacy `vessel --serve` 仍是单监听 8642、node 宿主 UI（保留至 G5）。边界契约见 `CONTRACT-0.49-gateway-node.md`；目标态（多 node / 远端）见 [ADR-101](../adr/ADR-101-platform-gateway-and-node-api.md)。Hub 控制面不在 gateway 内：独立 `vessel hub start` 进程与节点出站拨号见 [federation-hub](federation-hub.md)；gateway 不启动本地 hub。
+`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。gateway 只读取注入的单一事件面（单公司单流，无 tenant 过滤；ADR-089/100）。`apps/web` 是配套的浏览器控制台；它可连接多个 node 并直接调各 node 的 `/v1/rpc`（per-node token），这是 Console 聚合，不是平台级 gateway（[topology](topology.md)）。
+**0.49 G1/G3 现态**：`vessel gateway start` 在同一进程启动 **Platform Gateway**（默认 `127.0.0.1:8642`；静态宿主 + `/health` + `/platform/rpc` 只读 allowlist）与 **Node API**（`serve.port`，缺省 `8644`；`/v1/*`、WS/SSE、插件 HTTP/静态）。本地多 Node 由 platform 以**独立子进程**托管，注册表为 `<dataDir>/nodes.json`（`gateway nodes list|add|remove`，已删除最后一项则回隐式单节点）；`node start --config` 可单独启动。平台路由表 / 认证链与 Node API 物理分离；平台 token 与 per-node token 互不通用，平台侧不 import node runtime，node 不 import platform（`check-deps` D7–D9）。`vessel node start/status/stop/reload` 只操作 Node API。legacy `vessel --serve` 仍是单监听 8642、node 宿主 UI（保留至 G5）。边界契约见 `CONTRACT-0.49-gateway-node.md`；目标态见 [ADR-101](../adr/ADR-101-platform-gateway-and-node-api.md)。Hub 控制面不在 gateway 内：独立 `vessel hub start` 进程与节点出站拨号见 [federation-hub](federation-hub.md)；G4 分布式与 legacy 清理（G5）未排期。
 
 ### 协议 `vessel.gateway/1`
 
 - 服务端帧：`hello`（协议/节点信息 + `from_seq` / `latest_seq`）、`event`（带 `seq`、可选 `job_id` 与 `node_id`）、`gap`（历史被截断）、`res`（方法应答）、`ping`。
 - `hello.from_seq` 是本次回放的**第一条** seq：空缓冲为 `0`；已追平时为 `since + 1`（下一条期望序号）。`latest_seq` 是当前最新 seq（空缓冲为 `0`）。
-- 客户端帧：`auth`（首帧，`{ kind: 'auth', token, since?, tenant_id? }`）、`req`（`id` + `method` + `params`）、`pong`。
-- **首帧鉴权**：token 不进 WS URL / query；连接后 5s 内未收到合法 `auth` → 关闭码 4401。admin 可在 `auth` 指定 `tenant_id`；非 admin 指定其它 tenant → 4403。
+- 客户端帧：`auth`（首帧，`{ kind: 'auth', token, since? }`）、`req`（`id` + `method` + `params`）、`pong`。
+- **首帧鉴权**：token 不进 WS URL / query；连接后 5s 内未收到合法 `auth` → 关闭码 4401。auth 不接受 `tenant_id`。
 - `seq` 由 gateway 分配；环形缓冲默认保留 10000 条。客户端记录 `lastSeq`，重连用 `?since=` 或 `auth.since` 续订；超出缓冲发 `gap`。
 - **since / pong / seq 回退**：客户端收到 `ping` 回 `pong`；收到 `gap` 用 `to_seq` 触发带 `since` 的重连；`hello.latest_seq < lastSeq` 时从 `since=0` 重新对齐。重连指数退避 1s → 30s 加 jitter；10s 未收到 `hello` 视为失败并重连；`close()` 清理全部定时器。
 - **跨节点事件**：`event.node_id` 优先于顶层 `node_id`；远端事件由 `(node_id, wire seq)` 去重后回灌。wire seq 按各节点 / 连接分配，**没有全局序**。
@@ -90,10 +90,10 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 - `--connect` / `VESSEL_CONNECT` 指向 gateway origin；非回环强制 HTTPS，token 缺失在发起网络请求前失败。
 - WS 首帧 `auth` 带 token + `since`；解析 `hello` / `event` / `gap` / `ping`，`ping` → `pong`，`gap.to_seq` 触发 `since` 重连，`hello.latest_seq < lastSeq` 从 0 重新对齐；退避 1s → 30s + jitter，10s hello 超时。
-- `health.get` 返回远端 `tenant_id` / `node_id`；CLI 在 stderr（headless）或 TUI 状态行展示；TUI 不污染 stdout。
-- connect 模式不获取本地 tenant 写锁、不写本地 store / trace；交互回路由事件流转为 `permission.respond` / `ask.respond` RPC。
+- `health.get` 返回远端 `node_id`；CLI 在 stderr（headless）或 TUI 状态行展示；TUI 不污染 stdout。
+- connect 模式不获取本地 data-dir 写意图锁、不写本地 store / trace；交互回路由事件流转为 `permission.respond` / `ask.respond` RPC。
 
-**安全收紧**：durable 端点按 principal 的 tenant 过滤并校验 `write`；事件回灌丢弃本机来源帧。见 `docs/versions/0.6.1.md`。
+**安全收紧**：durable 端点校验 `write`，按单 node（非 tenant）返回；事件回灌丢弃本机来源帧。见 `docs/versions/0.6.1.md`。
 
 - `transport.kind` 只接受 `in-process`；`loopback` / `remote` / `transport.nodes[]` 都是显式 validation error。
 - 跨节点能力只有 federation 平面（`POST /v1/federation/messages`，见 `docs/versions/0.20.0.md` 与 [ADR-094](../adr/ADR-094-federation-team-to-team.md)）；`--connect` 客户端连远端 gateway 的能力不变。

@@ -88,7 +88,7 @@
 - **自更新**：`vessel update` 只按 argv 决定形态，非 TTY 缺 `--yes` 返回 1；不在 CI 执行真实全局安装。
 - **CLI 样式**：人类可读输出走 `src/ui-style.ts`，TTY / `NO_COLOR` / `TERM=dumb` 有纯文本回退，`--json` 不带 ANSI。
 - **权限生命周期**：默认无限等待、abort → `PermissionAbortedError`、显式正数 `timeoutMs` → `PermissionTimeoutError`、`deadline_at` 条件写入、重复应答幂等 / `conflict`、run 终态 `orphaned` / `run_ended`、POSIX `0600`。
-- **权限持久化**：gateway 在 `<dataDir>/interactions-<tenant>.json` 写 `pending` / `answered` / `orphaned`；未知 `requestId` 返回 `not_found`。
+- **权限持久化**：gateway 在 `<dataDir>/interactions-<id>.json` 写 `pending` / `answered` / `orphaned`（`<id>` 是内部持久单 id，缺省 `default`，不是 wire 字段）；未知 `requestId` 返回 `not_found`。
 - **Web**：权限卡片在 run 卡片内联、跨 session 用顶部待处理条；不得重新引入全局权限遮罩。
 - **状态栏**：CJK / emoji 按显示列计算，不用 `.length` 代替。
 - **插件生命周期**：`init` 失败隔离、`dispose` 逆序、幂等与安装回滚。

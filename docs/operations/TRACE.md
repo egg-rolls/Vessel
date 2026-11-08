@@ -8,12 +8,12 @@
 ## 1. 位置与格式
 
 ```text
-<data_dir>/tenants/<tenant_id>/events/<run_id>.jsonl
+<dataDir>/events/<run_id>.jsonl
 ```
 
 - 一行一个 `RunEvent`，append-only。
-- 信封：`{ type, run_id, data, ts, seq?, tenant_id? }`。
-- 缺失 `tenant_id` 视为 `default`。
+- 信封：`{ type, run_id, data, ts, seq? }`；wire / DTO 不再有 `tenant_id`。
+- 单公司根布局：trace 直接写 `<dataDir>/events/`，没有 `tenants/<id>` 层。非空 `<dataDir>/tenants/**` 或 `.t2-migrating-*` → 启动 fail-fast `non_root_layout`（不移动、不删除数据）。
 - 写入前经过 `TraceRedactor`；写失败只计数并发 `trace.write.failed`，不阻塞事件投递。
 
 ## 2. seq 与 wire seq
@@ -33,13 +33,13 @@ trace:
   level: full          # full | metadata | off
   retention_days: 30
   max_runs: 1000
-  max_bytes: 1073741824  # 每 tenant；0 = 不限
+  max_bytes: 1073741824  # 每 data_dir；0 = 不限
 ```
 
 | 级别 | 内容 |
 |---|---|
 | `full` | 完整 payload（消息、工具参数/结果等） |
-| `metadata` | 只保留信封 `type/run_id/ts/seq/tenant_id`，以及 data 中 `status`、`tool_name`、`duration_ms`、`iterations`、`iteration`、`message_count`、`finish_reason`、`usage.prompt_tokens/completion_tokens/total_tokens/total_cost`；`error` 保留但截断 ≤500 字符，`reason` ≤200 字符；其余消息/参数/结果丢弃 |
+| `metadata` | 只保留信封 `type/run_id/ts/seq`，以及 data 中 `status`、`tool_name`、`duration_ms`、`iterations`、`iteration`、`message_count`、`finish_reason`、`usage.prompt_tokens/completion_tokens/total_tokens/total_cost`；`error` 保留但截断 ≤500 字符，`reason` ≤200 字符；其余消息/参数/结果丢弃 |
 | `off` | 不落盘 |
 
 缺省：`enabled: true`、`level: full`、30 天 / 1000 runs / 1 GiB。全量档包含用户消息
@@ -48,12 +48,12 @@ trace:
 ## 4. 留存与 prune
 
 ```bash
-vessel trace prune [--dry-run] [--json] [--tenant <id>]
+vessel trace prune [--dry-run] [--json]
 ```
 
 - 在启动时与命令执行时按 `retention_days` / `max_runs` / `max_bytes` 清理。
 - **不删除** `running` / `interrupted` run 的 trace。
-- 真实 prune 前获取 tenant 写锁；`--dry-run` 只读、不加锁。
+- 真实 prune 前获取 data-dir 写意图锁（`src/data-lock.ts`）；锁冲突返回 `data_locked`。`--dry-run` 只读、不加锁。
 - 返回 `{ deleted_runs, kept_runs, deleted_bytes }`；`--json` 输出同一形状。
 - 删除 session 时由 `deleteSessionData` 按 `session_id` 清理对应 `runs/` 与 `events/`；
   有 `running` / `interrupted` run 时返回 `conflict`。
@@ -83,7 +83,7 @@ vessel trace prune [--dry-run] [--json] [--tenant <id>]
 - 飞书回复内容
 
 POSIX 下文件权限 best-effort 0600；不是强制访问控制。需要更强隔离时，使用独立
-`data_dir` / tenant 与操作系统权限。
+`data_dir` 与操作系统权限。
 
 ## 7. 读取、重放与 metrics
 
@@ -108,20 +108,19 @@ POSIX 下文件权限 best-effort 0600；不是强制访问控制。需要更强
 | asm | `config.loaded`、`PluginLoader` 的 `plugin.loaded` / `plugin.failed` |
 | ext | `eval.*` / `feishu.*` / `mcp.*` / `subagent.*` |
 
-事件名仍是开放字符串；新增事件不需要改 core 类型。所有事件应带 `tenant_id`。
+事件名仍是开放字符串；新增事件不需要改 core 类型。
 
-## 10. 内置多租户执行（A-6）
+## 10. 单 Node 单事件流
 
-- `--serve` 为每个 active tenant 构建独立 `EventStream`；runtime 事件先进入本 tenant 流，再桥接到 gateway 共享流（事件已带 `tenant_id`，供 SSE/WS 过滤）。
-- trace recorder 只订阅本 tenant 的流，写入 `<data_dir>/tenants/<tenant_id>/events`；metrics collector 同样按 tenant 隔离。
-- gateway 为每个 active tenant 持有 writer lock；启动失败回滚、shutdown 释放；冲突 `tenant_locked`；disabled / 未配置 tenant → `forbidden`。
-- **状态**：插件侧 tenant 行为、web A-6.3 的 `trace.readEvents(filter, tenantId)` / `sessionData.deleteSessionData(sessionId, tenantId)` 与 asm 的 per-tenant 执行接线（独立 EventStream、trace 写入路由、writer lock）**均已实现**。两 tenant 的 trace / events / metrics 互不可见是 qa 验收项。
-- **已知限制**：gateway 的飞书控制面仍只走 default tenant；其事件仍带 `tenant_id` 并进入对应 tenant 的 trace。
+- 一个 node 恰好一条 bundle 级 `EventStream`；trace recorder 订阅该流并写入 `<dataDir>/events`，metrics collector 同源。
+- 运行时不获取写者锁；trace prune 等写意图操作获取 data-dir 写意图锁（`data_locked`）。
+- 插件侧不再有 tenant 维度：`plugins.list` / `plugins.catalog` / settings 为单视图。
+- **已知限制**：`trace.readEvents` / `sessionData.deleteSessionData` 仍是单根读删；没有跨节点 trace 聚合。
 
 ## 11. 运维建议
 
-- 多租户部署优先用 `trace.level: metadata` 与较短留存；需要排障时临时切 `full`。
+- 单 Node 部署优先用 `trace.level: metadata` 与较短留存；需要排障时临时切 `full`。
 - 定期跑 `vessel trace prune --dry-run` 观察增长，再执行真实 prune。
-- 不要把 trace 目录提交到版本库；不要跨 tenant 复制 trace。
+- 不要把 trace 目录提交到版本库。
 - 事故取证时先确认没有 `trace.overflow`，再引用事件计数。
-- 备份/归档 trace 时按 tenant 目录整体处理，避免跨租户混淆。
+- 备份/归档 trace 时按 `<dataDir>/events` 整体处理。

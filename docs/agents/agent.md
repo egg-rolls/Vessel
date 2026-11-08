@@ -52,7 +52,7 @@ applies_to: [N, M]
 
 ## 预算
 
-- conversation 预算挂 `teams[].policy.budget`，不复用 `limits.*`；状态写 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、损坏 fail-closed）；override 只能由人经 `teams.budget` / owner 端点 / CLI 抬高或清除。
+- conversation 预算挂 `teams[].policy.budget`，不复用 `limits.*`；状态写 `<dataDir>/conversations/<id>.json`（`0600` 原子写、损坏 fail-closed；`<id>` 是内部持久单 id，不是 wire 字段）；override 只能由人经 `teams.budget` / owner 端点 / CLI 抬高或清除。
 
 ## 指针
 

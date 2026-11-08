@@ -15,7 +15,8 @@ paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, app
 - **能力插件**（capability）：in-process，`install(host)` 往 `PluginHost` 注册 tool / provider / guardrail / hook，直接影响 run 与模型输入。
 - **体验插件**（experience）：独立子进程，只经换行分隔的 JSON-RPC / DTO 与宿主通信，贡献 pages / commands / settings / rpc / events / panels；UI 在独立 origin 的 iframe 中运行。
 - 两者同名 plugin、同一份清单与发现规则；差别只在执行位置与贡献面，不在扩展机制。贡献面由 harness（`packages/serve`、`apps/web`、CLI 装配层）收集，core 不感知。
-- **归属级**：默认 Workspace plugin（一家公司）；Platform plugin 仅服务所有公司的基础设施（Hub / registry / marketplace 后端）。Team 是使用范围，不拥有插件。见 [topology](topology.md#插件归属)。
+- **归属级**：默认 Workspace plugin（一家公司）；Platform plugin 仅服务所有公司的基础设施（Hub / registry / marketplace 后端）。Team 是使用范围，不拥有插件。Workspace 插件独立包与 Workspace=公司数据目录仍未实现（target），见 [topology](topology.md) 的「未实现 / target」表与[插件归属](topology.md#插件归属)。
+- **宿主面（0.49）**：插件 HTTP/WS 只注册在 **Node API**（`serve.port`；拆分模式缺省 8644，legacy `--serve` 仍 8642）。Platform Gateway 不承载、不反代插件路由，平台 `/plugins/*` 一律 404；插件 iframe 走 `nodeUrl`。settings 与 catalog 只有单份（不按 tenant 合并）。
 
 ## Manifest（`package.json.vessel`）
 
@@ -106,4 +107,4 @@ tool loop ── capability tools (prompt surface = token tax)
 
 ## 版本兼容
 
-- `engines.vessel` 是 semver range，必须覆盖运行中的 Vessel 版本（根 `package.json` 的 `version`；当前 0.33.0），否则 `plugin_version_incompatible` 且不加载代码。`side` 不兼容、缺依赖、依赖循环同样拒绝激活；错误码见 `vessel plugin list` 与 `<dataDir>/plugins/<id>/logs/`。
+- `engines.vessel` 是 semver range，必须覆盖运行中的 Vessel 版本（根 `package.json` 的 `version`），否则 `plugin_version_incompatible` 且不加载代码。`side` 不兼容、缺依赖、依赖循环同样拒绝激活；错误码见 `vessel plugin list` 与 `<dataDir>/plugins/<id>/logs/`。

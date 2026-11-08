@@ -24,3 +24,9 @@ tags: [storage, durability, corruption, files]
 - **后果**：每次 session / checkpoint 写入多一次文件 fsync（目录 fsync 在 Windows 上通常被跳过），写入延迟上升、掉电后的可见性更可控。损坏从“静默丢失”变为“显式错误”：`load` / `delete` 的调用方需要处理 `SessionCorruptError`，列表视图则降级跳过。全量分页让删除冲突检查的成本从固定 200 条变为 O(runs)，换掉“活动 run 被漏判后删除”的正确性风险。该加固不提供损坏自动修复、备份或 fsync 失败重试。
 
 - **关联**：ADR-040（durable run / checkpoint）、ADR-046（文件优先存储）、ADR-049（多租户隔离）；`packages/core/src/session/atomic-write.ts`、`file-backend.ts`、`run-store.ts`、`delete-session.ts`、`types/run-store.ts`。
+
+## Errata（0.49 T5，不改原结论）
+
+- **tenant 维度移除**：原文的「tenant 模式 foreign 判定」与「非 tenant 宽松语义」分支不再适用；单公司根布局下统一为中性语义。损坏检测、`SessionCorruptError`、列表降级、删除冲突分页与 `atomicWrite` 的 durable 默认值均不变。
+- **根布局**：数据直接位于 `<dataDir>/sessions` / `runs` / `events`；没有 `tenants/<tenant_id>` 层，也不再透传 `tenantId` 给 `FileRunRecordStore`。
+- **写意图锁**：写前互斥统一为 data-dir 级写意图锁（`src/data-lock.ts`），错误码 `data_locked`；运行时不获取写者锁。session / run 锁不变。

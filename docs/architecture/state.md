@@ -6,7 +6,7 @@ paths: [packages/core/src/types/session.ts, packages/core/src/types/limits.ts, p
 ---
 
 # 状态与持久化接口
-> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。**0.49 T2**：单 id 的 session / run / trace 根为 `<dataDir>/{sessions,runs,events}`（旧树只用于迁移窗口、非单 id 与回滚）；写只写根布局，只读入口按状态选布局，不做逐文件双读。T2 成功后无 CLI 回滚：停所有写进程 → 按 `.layout.json` / journal entries 反向移动到 `<dataDir>/tenants/<sid>/` → 删 marker；不新增命令。
+> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文描述现态。**0.49 T5 现态**：单公司数据根为 `<dataDir>/{sessions,runs,events}`，没有 `tenants/<id>` 层；`tenant.json` 只保存内部持久单 id，legacy sqlite `sessions.tenant_id` 列按读写兼容保留（defer-3，待独立数据迁移）。`<dataDir>/tenants/**` 非空时启动 fail-fast `non_root_layout`，不移动、不删除数据。
 <a id="session"></a>
 
 ### `SessionStore`（`types/session.ts`）
@@ -71,7 +71,6 @@ interface RunRecord {
   event_cursor?: number;
   created_at: number;
   updated_at: number;
-  tenant_id?: string;
   branch?: string;
   metadata?: Record<string, unknown>;
   /** @internal 只读兼容旧 checkpoint 的 messages */
@@ -92,8 +91,8 @@ interface RunRecordStore {
   close?(): Promise<void>;
 }
 ```
-实现：`MemoryRunRecordStore`（进程内）与 `FileRunRecordStore({ dir, tenantId? })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel-agent/core/session` 与根入口导出。**`RunRecordStore` 是 module port，不是第 10 个扩展接口**；`SessionStore`（会话壳：元数据 + messages 投影）与它正交（ADR-040）。
-（ADR-056）：`FileRunRecordStore` 接受可选的 `tenantId`。tenant 模式下 `delete(runId)` 先 `load()` 校验归属——缺失或属于其它 tenant 时直接 no-op，不 unlink 文件；与 `FileSessionStore.delete` 的 foreign 会话语义对称。装配层在 `--resume-run`、单 agent 与 per-tenant runtime 三条路径都把 `tenantId` / `tenantRunsDir` 透传到 store。
-（ADR-056）：`list` 增加可选 `offset`（过滤、排序后切片，用于 `deleteSessionData` 的全量分页冲突检查）。tenant 模式下 `FileRunRecordStore.load()` 把非 ENOENT 读取错误、JSON 解析失败与非法记录形状视为损坏并抛 `SessionCorruptError`（`code: 'session_corrupt'`）；`delete()` 让该错误向上传播，绝不删除归属未知的文件。非 tenant 模式保持宽松语义（损坏 → `null`）。
+实现：`MemoryRunRecordStore`（进程内）与 `FileRunRecordStore({ dir })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel-agent/core/session` 与根入口导出。**`RunRecordStore` 是 module port，不是第 10 个扩展接口**；`SessionStore`（会话壳：元数据 + messages 投影）与它正交（ADR-040）。
+（ADR-056）：`RunRecord` 不再有 `tenant_id`；`FileRunRecordStore` 不传 tenant，也不做 foreign tenant 归属判定。`delete(runId)` 先 `load()`；缺失直接 no-op，损坏时抛错、不 unlink。
+（ADR-056）：`list` 增加可选 `offset`（过滤、排序后切片，用于 `deleteSessionData` 的全量分页冲突检查）。`FileRunRecordStore.load()` 把非 ENOENT 读取错误、JSON 解析失败与非法记录形状视为损坏并抛 `SessionCorruptError`（`code: 'session_corrupt'`）；`delete()` 让该错误向上传播，绝不删除归属未知的文件。
 `pruneRuns(store, opts?)` helper（`PruneRunsOptions` / `PruneRunsResult`，从根入口与 `@vessel-agent/core/session` 导出），按 `status` / `older_than_ms` / `keep_latest` 清理 run；**不修改 `RunRecordStore` 接口**，也不自动调度（ADR-045）。（0.34）`FileLeaseService`（`src/lease-service.ts`）实现 `LeaseServicePort`（`binding` / `session` 两级租约，TTL + 续租 + 单调 `fencingToken`）：**仅单节点本地** `.locks/leases/**`，不做多节点 / 集群共识、**不可当分布式锁用**；跨节点迁移/接管靠 TTL 过期 + fencing，同一 `dataDir` 多进程依赖本地文件系统语义（原子 `wx` / rename）；写 `SessionEventLog` / `RunRecord` 按 `token >= currentFence` 拒绝旧 token，释放/过期使 fence 递增。
 

@@ -6,15 +6,15 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ---
 
 # AgentService、Body 与 Team
-> Stage 4 已落地：成员的执行单元由 `MemberExecutionHost` 经 per-node `Runtime.getOrCreateExecutionUnit` 取得；成员 run 与 tenant run 一样写 `RunRecord`，`runs.resume` 按 `RunRecord.agent_id` 路由回成员 EU。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+> Stage 4 已落地：成员的执行单元由 `MemberExecutionHost` 经 per-node `Runtime.getOrCreateExecutionUnit` 取得；成员 run 与主 run 一样写 `RunRecord`，`runs.resume` 按 `RunRecord.agent_id` 路由回成员 EU。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
 
 > 成员能力层的当前事实。RPC 方法形状见 [gateway-rpc.md](gateway-rpc.md#agent-lifecycle)；改动前的硬约定见 [docs/agents/agent.md](../agents/agent.md)。core 不知道 member / owner / visibility（ADR-088 / ADR-097）。
 <a id="layering"></a>
 
 ## 分层与唯一实现
 
-- `packages/agent` 是唯一成员能力实现：注册表、body registry、准入、状态机、可见性、权限 bridge 与快照都在包内；入口（REPL / CLI / Gateway / Web）只解析输入、调用 `AgentService`、渲染事件。装配在 `src/agent-service-wiring.ts`，执行经每 tenant 一个 `InProcessScheduler`。所有 agent（含 `main`）走同一条 `admit`，不得在入口或插件里复制第二套成员生命周期或第二套队列。
-- 执行内核是 `MemberExecutionHost`（`MemberExecutionHostOptions`，实现 `MemberExecutionPort`）；它不再自己构造 EU，而是用装配层注入的 per-node `Runtime` 取/建成员 EU。成员 run 的 `RunRecord` 由 tenant `journalFactory` 写入，`RunRecord.agent_id` 是 resume 路由键。
+- `packages/agent` 是唯一成员能力实现：注册表、body registry、准入、状态机、可见性、权限 bridge 与快照都在包内；入口（REPL / CLI / Gateway / Web）只解析输入、调用 `AgentService`、渲染事件。装配在 `src/agent-service-wiring.ts`，执行经每 node 一个 `InProcessScheduler`。所有 agent（含 `main`）走同一条 `admit`，不得在入口或插件里复制第二套成员生命周期或第二套队列。
+- 执行内核是 `MemberExecutionHost`（`MemberExecutionHostOptions`，实现 `MemberExecutionPort`）；它不再自己构造 EU，而是用装配层注入的 per-node `Runtime` 取/建成员 EU。成员 run 的 `RunRecord` 由单 node profile 的 `journalFactory` 写入，`RunRecord.agent_id` 是 resume 路由键。
 
 <a id="identity-body"></a>
 
@@ -51,7 +51,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 - rotate 只退休 **primary body** 并新建 primary（新 session id）；同一 Agent 已有进行中的 rotate 返回 `rotating`。`rotating` 窗口内新旧两具短暂共存；旧 primary 的历史、checkpoint、epoch 与在途 run 按自身 epoch / 退役标志 fencing，不受新 primary 影响，窗口结束后回到一具。模型侧 `agent` 工具只能 rotate 自己，靠 `from_session_id` 等于当前 primary body 做最终闸门。**模型发起的 rotate 还须先经人类权限确认**（0.31）：`agent` 工具发 `tool.permission.request`（`tool: agent.rotate`，带上下文比例），批准才调用 `AgentService.rotate`；拒绝或无人类通道返回 `rotate_not_needed`；`sessions.create` / `sessions.restart` RPC 不额外询问。
 - 切换顺序固定：spawn 新 body → 提交 primary（`primary_body_id`）→ 快照落盘 → 旧 primary 退休进 `body_history` → 启动嘱托入队 → `rotation = stable`。spawn 或快照失败时恢复旧 primary、dispose 新 body、返回 `rotate_failed`，不自动重试。旧 body 的轮按**该 body 自身** epoch / 退役标志 fencing：发带 `stale: true` 的配对终态与 `agent.reply.stale`，不写 state / usage、不投父队列。
-- 事件：`agent.rotate.approved` / `agent.rotate.denied` / `agent.rotating` / `agent.rotated` / `agent.rotate.failed` / `agent.retired` / `agent.reply.stale`；payload 不带启动嘱托正文，也不带确认卡片正文。**成员 durable resume（Stage 4，不新增 RPC）**：`runs.resume` 先加载 `RunRecord`；`agent_id` 命中成员时交 `AgentService.resumeRun(runId)`（经 scheduler 的 session 串行键，复用 active run 记账 / lease 续租），否则按 `session_id` 取 tenant EU 调 `EU.resumeRun(record)`。
+- 事件：`agent.rotate.approved` / `agent.rotate.denied` / `agent.rotating` / `agent.rotated` / `agent.rotate.failed` / `agent.retired` / `agent.reply.stale`；payload 不带启动嘱托正文，也不带确认卡片正文。**成员 durable resume（Stage 4，不新增 RPC）**：`runs.resume` 先加载 `RunRecord`；`agent_id` 命中成员时交 `AgentService.resumeRun(runId)`（经 scheduler 的 session 串行键，复用 active run 记账 / lease 续租），否则按 `session_id` 取该 session 的 EU 调 `EU.resumeRun(record)`。
 - **sessions.restart / sessions.create（0.39）**：`sessions.restart` 复用同一 Session（`session_id` 不变），binding id 不变、`epoch + 1`；旧 binding 先退役进 history、旧 EU 先 dispose，再按同一 lease key 获取更高 fence 的新租约并新建 EU；有 active run 返回 `conflict`；事件 `agent.restarting` / `agent.restarted`。`sessions.create`（空 / copy / compact）新建子 Session 并成为唯一 primary（`epoch + 1`；空 session 无源，copy / compact 时源 binding 退役进 `bindingHistory`、源不可再跑）；`agents.create{from_session_id}` 则源零改动。事件 `session.created` / `session.activated`；旧 `agent.compact_forked` 只读渲染。两者与 rotate 一样先 binding lease 再 session lease、逆序释放；TTL / 续租由 `lease.ttlMs` / `lease.renewMs` 配置（[CONFIG](../operations/CONFIG.md)）。
 
 <a id="spawn"></a>
@@ -69,9 +69,9 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## Team、可见性与预算
 
-- roster 是派生视图：`team_id + membership = present`，不单独持久化。Team 记录与日志在 `<dataDir>/teams/<tenant>/<team_id>/`；`TeamService` 是日志唯一写入点。`TeamMemberSummary.role` 区分 member/temporary，`owner` 仍指向归属（member 为 self，temporary 为雇佣者）。**Team 日志不是队列**：无 `@` 的 post / reply / system 记录只追加，不 dispatch、不产生 run；`@` 必须先写日志再逐条 admit。
+- roster 是派生视图：`team_id + membership = present`，不单独持久化。Team 记录与日志在 `<dataDir>/teams/<id>/<team_id>/`；`TeamService` 是日志唯一写入点。`TeamMemberSummary.role` 区分 member/temporary，`owner` 仍指向归属（member 为 self，temporary 为雇佣者）。**Team 日志不是队列**：无 `@` 的 post / reply / system 记录只追加，不 dispatch、不产生 run；`@` 必须先写日志再逐条 admit。
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；Team 成员强制权限 bridge，只有 human / policy 能应答。
-- conversation 预算挂 `teams[].policy.budget`，状态写 `<dataDir>/conversations/<tenant>.json`（`0600` 原子写、损坏 fail-closed）；override 只能由人抬高或清除。human 直接对话免 conversation budget；Team / agent→agent 仍走预算，被 block 的消息留在该 body mailbox，override / release 后重新准入。
+- conversation 预算挂 `teams[].policy.budget`，状态写 `<dataDir>/conversations/<id>.json`（`0600` 原子写、损坏 fail-closed）；override 只能由人抬高或清除。human 直接对话免 conversation budget；Team / agent→agent 仍走预算，被 block 的消息留在该 body mailbox，override / release 后重新准入。
 
 <a id="team-vs-sessions"></a>
 
@@ -91,7 +91,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 ## 约束
 
-- canonical `agents.*` / `teams.*` 是唯一契约。消息队列只在内存（每 body 一个 mailbox），重启丢失未处理消息；不新增持久化消息队列。成员会话会出现在 tenant `sessions.list` 中；不得把 `packages/core` 变成 member-aware。
+- canonical `agents.*` / `teams.*` 是唯一契约。消息队列只在内存（每 body 一个 mailbox），重启丢失未处理消息；不新增持久化消息队列。成员会话会出现在 `sessions.list` 中；不得把 `packages/core` 变成 member-aware。
 - **一个 agent 恰好一具 live body**（唯一例外是 rotate 窗口：新体与待退役体短暂共存）。`bodyHistory` 是只追加的退役记账（≤20）；body 记录**永不删**——`body_id ≡ session_id` 是续接历史的唯一钥匙。
 - **空闲回收是 agent 级而非 body 级**：只回收 `role === 'temporary'` 且仍在册的 agent，`member`（含 `main`）永不回收。判据读**持久化**的 `max(lastSeen, body.lastActiveAt)`，不用内存 entry（冷启动后为空，否则永不触发）。动作复用 `membership='left'` + `state='closed'`，body 记录保留并标 `retiredAt`；回收可逆——`reinstate` 原地 unretire（清 `retiredAt`、重设 primary、清 `bodyHistory` 同 id 条目、刷新 `lastSeen`）。定时 sweep 只在装配层（`setInterval` + `.unref()`，返回 `stopSweep`），`AgentService` 自身无定时器；`admit` / `list` 不再顺带 sweep（会回收调用方正要投递的目标）。节奏 `clamp(ttl / 10, 60s, 15min)`，TTL 见 `agent.temporaryTtlHours`。
 

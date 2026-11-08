@@ -3,6 +3,7 @@ adr: 100
 title: 节点即公司：Platform / Workspace / Team / Agent 拓扑
 status: accepted
 date: 2026-11-06
+supersedes: [49]
 related: [49, 93, 99]
 tags: [topology, company, workspace, platform, team, plugin, hub, ownership, tenancy]
 ---
@@ -83,3 +84,23 @@ tags: [topology, company, workspace, platform, team, plugin, hub, ownership, ten
 > 2026-11-06 Errata：Gateway 角色由 [ADR-101](ADR-101-platform-gateway-and-node-api.md)
 > 细化——Platform Gateway 是平台级入口，Node API 才是公司级 runtime；本文
 > “Gateway = Platform code + Company runtime” 应读作旧的 Node API 语义。
+
+## Addendum（0.49 收口，2026-11-08）
+
+> 只追加，不改写上文决策。本文 §8 的 tenant 收敛与 §9 的插件独立包目标现已部分落地。
+
+- **G1 已落地**（`8be78ccf`）：Platform Gateway 与 Node API 分离，同进程双监听
+  （平台 `8642` / Node `8644`）；WebUI/TUI 宿主迁到 Gateway；`vessel gateway` /
+  `vessel node` CLI 分离。细节见 [ADR-101](ADR-101-platform-gateway-and-node-api.md)。
+- **G3 已落地**（`80d93877`）：每个本地 Node 是 Gateway 的独立子进程，登记在
+  `nodes.json`；`gateway nodes list/add/remove`、`node start --config` 可用；平台面
+  只做 registry / 凭据分发，不反代 Node。G4 分布式 Node 未排期。
+- **Hub 已是独立服务**（`766f9993`）：`vessel hub start` 独立进程，仅 node → hub 出站；
+  gateway 不启动本地 hub。见 [ADR-093](ADR-093-hub-control-plane.md) 0.49 Errata。
+- **tenant 抽象已移除**（T0–T5，main `d821990d`）：一个 node 就是一家公司；数据落在根
+  布局 `<dataDir>/**`；`tenant.json` 仅保留内部持久 id 形状。本文 §8 的“当前实现仍保留
+  tenant 作为运行时隔离机制”已被此 Addendum 更新；ADR-049 由本文取代
+  （`supersedes: [49]`，ADR-049 `status: superseded`）。
+- **仍未实现 / 未排期**：§9 Workspace 插件独立包（`<workspace>/.vessel/plugins/<id>/`）
+  未实现，当前发现根仍是 project / user / repo / node_modules；Workspace = 公司数据目录
+  未实现（workspace 仍作 Team 目录键）；G4 分布式 Node 与 G5 清理未排期。

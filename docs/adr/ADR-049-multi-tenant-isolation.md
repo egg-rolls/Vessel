@@ -1,7 +1,7 @@
 ---
 adr: 49
 title: 多租户隔离与单 gateway 多 tenant
-status: accepted
+status: superseded
 date: 2026-10-18
 related: [1, 2, 5, 36, 46, 50]
 tags: [tenancy, isolation, gateway]
@@ -31,3 +31,30 @@ tags: [tenancy, isolation, gateway]
 - **scope 映射既有 role**：`view | exchange | control | admin` 只映射到既有 `read / write / admin` rank 与各 scope 的方法白名单；不新增 role 字符串，也不改 `ROLE_RANK`。tenant principal 的冻结语义（§3 / §6）不变。
 - **hub 不建模 tenant**：hub 的目录记录以 `pairing_id = node_id:tenant_id` 标识一个配对，但 hub 自身不是 tenant principal，不持有 tenant 身份，也不代理跨 tenant 正文。team 收窄仍在节点侧强制。
 - 以上均为 additive，不改变 ADR-049 §1–§10 的 tenant 隔离结论。
+
+## Errata（0.49 T0–T5 tenant 抽象移除，2026-11-08）
+
+> 只追加，不改写上文结论。本 ADR 的运行时多 tenant 模型已被
+> [ADR-100](ADR-100-node-company-topology.md) 取代（ADR-100 frontmatter
+> `supersedes: [49]`）；本 ADR `status` 为 `superseded`。单公司现态见
+> [topology](../architecture/topology.md)。
+
+- **运行时隔离已移除**：一个 node 服务一家公司；per-tenant 执行面 / 工厂 / EventStream /
+  PluginHost / quota / tenant token 不再存在；单执行面。T0–T5 已合入 main `d821990d`。
+- **存储**：数据直接落在根布局 `<dataDir>/**`；`tenants/<id>` 不再是布局。检测到非空
+  `tenants/**` 或未完成迁移暂存时 fail-fast（`non_root_layout`），不移动、不删除数据。
+- **持久 id**：`<dataDir>/tenant.json` 的 `tenant_id` 仅作为内部持久 id 形状保留（R1），
+  服务路径文件名段；文件缺失回落内部 `default`，损坏 / 非法 fail-fast。`.layout.json`
+  迁移层已删除，不再读取。
+- **锁**：「一个 tenant 一个写者」改为单公司 data-dir 写意图锁 `src/data-lock.ts`，
+  冲突错误码 `data_locked`；运行时不再获取写者锁；`tenant_locked` 已删除。
+  session / run 级锁语义不变。
+- **配置 / RPC / Web**：`tenant` 配置块、tenant overlay、`serve.tokens[*].tenantId`、
+  `adminToken`、`tenants.*` RPC、Web Tenants 页 / 导航 / 切换已删除；旧配置 fail-fast
+  并给 Fix。
+- **保留（正交或残留分类）**：`AgentVisibility='tenant'` 是可见性枚举值，与运行时
+  tenant 无关，保留。legacy sqlite 列、插件 DTO、迁移记录 / lease 字段等按 T5 residual
+  TSV 归入 `defer-2` / `defer-3`，不在本批改写。
+- 证据：`reports/0.49/tenant-t3-acceptance.md`、`tenant-t4-acceptance.md`、
+  `tenant-t5-acceptance.md`、`tenant-id-residual.tsv`（最终 71 行：tenant_id=60 / text=11；
+  keep=34 / defer-2=15 / defer-3=22）。

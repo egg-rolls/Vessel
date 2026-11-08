@@ -13,10 +13,11 @@ Vessel 不试图做一个「更聪明的单体 Agent」，也不做多客户 Saa
 
 - **一个 Node 就是一家公司。** 自己的 runtime、数据、插件、连接与 token。
 - **Platform Gateway 是平台入口。** 提供 WebUI/TUI、node registry、平台认证；
-  它不拥有任何公司的 runtime 数据。目标态由 ADR-101 固定。
+  它不拥有任何公司的 runtime 数据。拆分见 ADR-101，已实现。
 - **Team 是公司内的部门。** 产品、研发、算法、安全；有成员、策略与协作范围。
 - **Agent 是员工，Session 是一次工作/对话。** 身份持久，身体（Body）可替换。
-- **Plugin 是公司级增强。** 能力集、视觉集、管理面、组织/理念；默认按 workspace 安装。
+- **Plugin 是公司级增强。** 能力集、视觉集、管理面、组织/理念；归属为 workspace 级，
+  独立包安装仍未实现。
 - **Connection 是公司的外部关系。** GitHub、Gmail、文件、MCP、渠道；只授权一次，
   员工/部门引用，不复制 token。
 - **Hub 是公司间通讯录/邮局。** 只交换目录与指针，不替公司做事；Federation 负责投递。
@@ -27,8 +28,10 @@ Vessel 不试图做一个「更聪明的单体 Agent」，也不做多客户 Saa
 
 > **公司模型（ADR-100 / ADR-101 accepted）**：Node = 公司；Platform Gateway = 平台入口；
 > Team = 部门；Agent = 员工；Plugin = 公司增强；Hub = 公司间基础设施。
-> 当前实现仍是 `workspace` 作 Team 目录键、`serve` 同进程做 Node API + UI 宿主；
-> 目标态与收敛计划见 [architecture/topology](architecture/topology.md)、
+> 已实现：Gateway / Node 拆分（G1/G3）、Hub 独立服务、tenant 抽象移除（T0–T5）。
+> 未实现：Workspace = 公司数据目录（当前 `workspace` 仍作 Team 目录键）、
+> Workspace 插件独立包、G4 分布式 Node、G5 清理。见
+> [architecture/topology](architecture/topology.md)、
 > [ADR-100](adr/ADR-100-node-company-topology.md)、
 > [ADR-101](adr/ADR-101-platform-gateway-and-node-api.md)。
 
@@ -36,9 +39,9 @@ Vessel 不试图做一个「更聪明的单体 Agent」，也不做多客户 Saa
 
 1. **节点是权威。** 执行、权限、身份、数据都在节点上；Hub 不代理正文，也不替节点授权。
 2. **目录与正文分离。** 看见 ≠ 有权操作。Hub 只回答「谁在哪」，消息由节点之间直接投递。
-3. **Node 是公司边界，Team 是公司内的部门。** 目标态一个 node = 一家公司；
-   Team 是部门（产品/研发/算法/安全），不是工作目录。当前实现仍用 `workspace`
-   作为 Team 的目录键；公司/部门收敛另开计划。
+3. **Node 是公司边界，Team 是公司内的部门。** 一个 node = 一家公司（已实现）；
+   Team 是部门（产品/研发/算法/安全），不是工作目录。当前仍用 `workspace`
+   作为 Team 的目录键；Workspace = 公司数据目录未实现。
 4. **身份与身体分离。** Agent 是持久身份，Body 是 session + engine；`rotate` 换身体，不换身份。
 5. **名字是路由，不是 id。** 跨节点地址用 `<principal>@<node_id>:<team_id>`；principal 是 Team
    内的名字，wire 上不暴露 agent id。
@@ -52,13 +55,13 @@ Vessel 不试图做一个「更聪明的单体 Agent」，也不做多客户 Saa
 | 产品概念 | 代码里的东西 | 一句话职责 |
 | --- | --- | --- |
 | **Node（公司）** | `node.json` 里的 `node_id` + 数据目录 + runtime | 执行、授权、持久化；一家公司的边界 |
-| **Platform Gateway** | 平台入口（目标态） | WebUI/TUI 宿主、node registry、平台 token；不拥有公司 runtime |
-| **Node API** | 当前 `serve` 的 runtime/RPC 面（目标态） | 公司数据面 `/v1/rpc`、WS、SSE；per-node token |
-| **Workspace** | 公司占用的数据目录 | 数据/配置/插件安装位置；不是 Team |
-| **Hub** | `vessel hub` 目录服务，`vessel.hub/1` | 配对、节点 / Team / 成员目录、在线状态、指针；不传正文 |
+| **Platform Gateway** | 平台入口（已实现） | WebUI/TUI 宿主、node registry、平台 token；不拥有公司 runtime |
+| **Node API** | 公司 runtime/RPC 面（已实现） | 公司数据面 `/v1/rpc`、WS、SSE；per-node token |
+| **Workspace** | 公司数据目录（未实现）；当前仍作 Team 目录键 | 数据/配置/插件安装位置；不是 Team |
+| **Hub** | 独立 `vessel hub` 进程（已实现），`vessel.hub/1` | 配对、节点 / Team / 成员目录、在线状态、指针；不传正文 |
 | **Team（部门）** | `team_id` + roster + 日志 + policy | 公司内部门；成员、共享日志、预算、可见性 |
 | **Agent（员工）** | 持久身份 + 可替换 Body | 干活、发消息、写日志、轮换身体 |
-| **Plugin（增强）** | manifest + backend + surfaces | 公司级能力/视觉/管理/org pack；默认按 workspace 安装 |
+| **Plugin（增强）** | manifest + backend + surfaces | 公司级能力/视觉/管理/org pack；归属 workspace 级，独立包安装未实现 |
 | **Connection** | 连接器插件 + 凭据 | 公司外部账号/资源绑定；员工/部门引用，不复制 token |
 | **地址** | `<principal>@<node_id>:<team_id>` | 跨节点定向投递；`human` 指向该 Team 的人类 |
 | **Federation** | `vessel.federation/1`，节点到节点 | 一条消息一个收件人；静态 peer allowlist |
@@ -74,17 +77,17 @@ alice@node-a:lab  ── federation ──▶  carol@node-b:ops
 ```
 
 - Hub 让 `node-a` 看见 `node-b` 有 `ops`、`ops` 里有 `carol`；但消息不经过 Hub。
-- Hub 不自动发现节点：节点用配对码加入，或由 hub 主动拨号纳入。
-- 目标态：WebUI/TUI 由 Platform Gateway 提供；客户端用平台 token 访问 Gateway，
-  用 per-node token 访问各 Node API。当前实现仍是浏览器/CLI 直连节点自己的
-  gateway；拆分见 [ADR-101](adr/ADR-101-platform-gateway-and-node-api.md)。
+- Hub 不自动发现节点：节点用 join code 加入 Hub，方向仅 node → hub。
+- 现态：split 模式下 WebUI/TUI 由 Platform Gateway 提供；客户端用平台 token 访问
+  Gateway，用 per-node token 访问各 Node API。legacy `--serve` 单进程入口保留到 G5；
+  拆分见 [ADR-101](adr/ADR-101-platform-gateway-and-node-api.md)。
 - 这是刻意的权限边界：**看见不等于有权操作。**
 
 ## 4. 一个任务如何流动
 
-> 下面描述**当前实现**：`workspace` 作 Team 目录键、node 自带 gateway。
-> 目标态按公司模型理解：Node = 公司、Team = 部门、workspace = 公司数据目录、
-> WebUI/TUI 由 Platform Gateway 提供。
+> 下面描述**当前实现**：一个 node = 一家公司，`workspace` 仍作 Team 目录键；
+> Platform Gateway / Node API 已拆分（G1/G3），WebUI/TUI 由 Gateway 提供。
+> Workspace = 公司数据目录、Workspace 插件独立包、G4 分布式 Node 仍是目标。
 
 1. 人在 `node-a` 的 `lab` 目录启动 Vessel；`lab` 是已声明的 Team（`workspace` 匹配当前目录）。
 2. 人类用 `agents.create`（`kind: peer|contractor` + `team_id`）把 `alice`、`bob` 创建进 Team；root owner 也可用 `agent(hire)` 建自己的 contractor。每个成员有独立 Body 和会话。
@@ -164,8 +167,14 @@ Vessel 不把上下文当成一条不断膨胀的聊天记录，而是持续把�
 | --- | --- |
 | 单节点 Agent 生命周期（`create` / `hire` / `send` / `close` / `list` / `rotate` / `post`） | 已实现 |
 | Team 声明后按工作目录匹配，带 roster / 日志 / 预算 / 可见性 | 已实现 |
-| Hub 配对、目录、在线状态、指针 | 已实现 |
+| Platform Gateway / Node API 拆分（G1：同进程双监听、UI 宿主迁 Gateway、CLI 分离） | 已实现 |
+| 本地多 Node（G3：每 Node 独立子进程、`nodes.json` registry、`gateway nodes`） | 已实现 |
+| 单公司数据布局与写意图锁（tenant 抽象移除；`data_locked`） | 已实现 |
+| Hub 独立进程（`vessel hub start`）、目录、在线状态、指针；仅 node → hub | 已实现 |
 | 跨节点按地址投递与回复（静态 peer） | 已实现 |
+| Workspace 插件独立包（`<workspace>/.vessel/plugins/<id>/`，独立版本 / 更新） | 未实现 |
+| Workspace = 公司数据目录（Team 目录键迁移） | 未实现 |
+| G4 分布式 Node / G5 清理 | 未排期 |
 | Agent 主动发现远端节点 / Team / 成员 | 部分：CLI `federation team-info`（opt-in）、Hub 目录或 `bash`；无专用发现工具 |
 | 成员 Agent 再派生 Agent（成员派生） | 已实现：peer / contractor 两条路径、close 人类审批、每 Team present ≤20、Team 冻结；temporary 有空闲 TTL（`agent.temporary_ttl_hours`，默认 `2`，`0` = 关闭，只回收 temporary）；无 spawn 预算 / 跨 Team 派生 |
 | 跨节点 spawn / close / rotate / resume | 未实现 |

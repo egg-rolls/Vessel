@@ -27,11 +27,10 @@ applies_to: [N, M]
 - 不用 `backdrop-filter` 做层级；层级靠边框与阴影表达（ADR-072/082）。
 - `plugins.catalog` 的 `declaredSurface` / `effectiveSurface` 是只读摘要（HTTP `id`/`method`/`path`，CLI `path`/`description`）。Marketplace 只展示两者差异；不据此写 config、不新增 RPC；外部插件授权提示指向 `config.yaml` 的 `expose`。
 
-## T1 单公司兼容期（隐藏 tenant 入口）
+## 单公司与 node 选择
 
-- 不路由 / 不导航 `tenants` 页面、AppBar tenant chip、nav / palette / BottomNav 以及 tenant switch / reset 入口；文件与类型保留并标 `defer-T4`，T1 只隐藏入口。
-- `ConnectionProvider` 从 `health.get`（或 `config.sources`）读取 `<单 id>` 后固定为只读；不调用 `tenants.*`，不向数据面发送非单 id `tenant_id`。
-- 旧 Web 客户端仍发 legacy `tenant_id` 时由 serve 数据面兼容；页面保持可连接、可聊天。
+- 0.49 T4/T5：Tenants 页面、导航 / palette / BottomNav 入口、AppBar tenant chip、tenant switch / reset 已删除；`#/tenants` 回落默认路由。页面不再发送 `tenant_id`，也不再调用 `tenants.*`。
+- 平台 token → `/platform/rpc` 选 node（G3 `nodes.list` / `credentials`），node 连接走 `api_url`；平台 token 与 node token 分槽，legacy `--serve` 同源回退保留。
 
 ## 指针
 

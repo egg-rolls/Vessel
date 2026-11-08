@@ -83,8 +83,8 @@ vessel          # 首次启动走引导向导：API 地址、Key、模型，保�
 - **Durable run** — run 在开始、每轮 tool-call 后、结束时写 checkpoint；中断后 `--resume-run` 恢复。
 - **可观测** — 事件流（`<domain>.<action>.<event>`）、trace、metrics、Web 控制台时间线；`/v1/events?since=` 支持 `seq` 续订与 `gap` 标记。
 - **可扩展** — 插件、MCP、evals、飞书渠道；插件以目录形式放置即注册，外部插件启动时向 stderr 告警。
-- **多机** — Hub 目录、节点间 federation、远程 gateway（显式 opt-in，非回环必须 token + TLS）。
-- **多租户** — 隔离存储、配置、工具、权限、quota、trace 与 RPC。
+- **多机** — 独立 Hub 服务、节点间 federation、远程 gateway（显式 opt-in，非回环必须 token + TLS）。
+- **单公司数据根** — 一个 data dir 一个公司；成员 / Team 是使用范围，不再有 tenant 选择、隔离存储或 quota。
 
 ## 使用示例
 
@@ -121,7 +121,7 @@ VESSEL_MOCK=1 vessel --serve 8642   # legacy 单监听（保留至 G5）
 ### Headless 提问（退出码 3）
 
 `vessel --run` 中模型调用 `ask_user` 时，进程不等待人类：请求写入
-`<data_dir>/interactions-<tenant>.json`（`suspended: true`），run 的 checkpoint 落 `interrupted`，
+`<data_dir>/interactions-<id>.json`（`suspended: true`；`<id>` 是内部持久单 id，不是 wire 字段），run 的 checkpoint 落 `interrupted`，
 退出码为 **3**。
 
 ```bash
@@ -134,11 +134,11 @@ vessel --resume-run <run_id>
 
 ## 配置
 
-- 优先级：`CLI > env > tenant overlay > project > user > default`；命令 `vessel config path|init|show`。详见 [CONFIG.md](docs/operations/CONFIG.md)。
-- 默认数据根 `~/.vessel/data`（`VESSEL_DATA_DIR` 覆盖）；每个 tenant 在 `tenants/<id>/` 下独立存放 `sessions/`、`runs/`、`events/` 与 `tenant.json`。
+- 优先级：`CLI > env > project > user > default`；没有 tenant overlay / `tenant` 配置块。命令 `vessel config path|init|show`。详见 [CONFIG.md](docs/operations/CONFIG.md)。
+- 默认数据根 `~/.vessel/data`（`VESSEL_DATA_DIR` 覆盖）；单公司数据直接位于 `<data_dir>/{sessions,runs,events,inbox}/`，`tenant.json` 只保存内部持久单 id，没有 `tenants/<id>/` 层。
 - 默认 `session.backend: file`；sqlite 仍可用。旧 `.vessel/sessions.db` 不会自动迁移，见 [MIGRATION.md](docs/operations/MIGRATION.md)。
 - trace 默认开启 `full`，按 30 天 / 1000 runs / 1 GiB prune；详见 [TRACE.md](docs/operations/TRACE.md)。
-- tenant 解析：`--tenant` > `VESSEL_TENANT` > `tenant.default` > `default`；gateway 用 `serve.tokens` 发放 tenant token。
+- 没有 `--tenant` / `VESSEL_TENANT`。node token 用 `serve.tokens`（token → `{ role }`）或 legacy `serve.token`；Platform Gateway token 独立用 `gateway.token`，两者互不通用。
 - 语言：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换到英文；Web 控制台语言在 Settings → Appearance。
 
 ### 插件与 MCP
@@ -169,7 +169,7 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
         → Run（瞬时，持 WorkingContext）→ ToolCallingLoop
 ```
 
-- `Runtime` 只持 tenant profile 与 `(tenantId, sessionId)` 的 EU 目录；唯一 EU 构造入口是 `Runtime.getOrCreateExecutionUnit`。
+- `Runtime` 只持单 node profile 与 `(内部单 id, sessionId)` 的 EU 目录；唯一 EU 构造入口是 `Runtime.getOrCreateExecutionUnit`。
 - 事实事件 / `RunRecord` / `SessionState` 只由 Run 经 `RunJournal` 写；`WorkingContext` 每次 Run 新建。
 - 核心契约：`LLMProvider` / `WorkingContext` / `EventStream` / `ToolDefinition` / `SessionStore` / `LimitChecker` / `Guardrail` / `Hook` / `Plugin` / `PluginHost`。签名见 [interfaces.md](docs/architecture/interfaces.md) 与 [state.md](docs/architecture/state.md)。
 
@@ -205,7 +205,7 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 | 概念       | 代码里的东西                                          | 职责                                                                                             |
 | ---------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | **节点**   | 一次 Vessel 进程，`node.json` 的 `node_id` + 数据目录 | 独立执行、授权、持久化；是唯一权威                                                               |
-| **Hub**    | `vessel hub` 目录服务                                 | 配对、登记节点 / Team / 成员 / 在线状态、推送指针；不代理正文、不替节点授权                       |
+| **Hub**    | 独立进程 `vessel hub start`                           | 登记节点 / Team / 成员 / 在线状态、推送指针；只接受 node → hub 出站 join；不代理正文、不替节点授权 |
 | **Team**   | `workspace` + `team_id` + roster + 日志 + policy      | 一个工作目录一个 Team（声明后按 `workspace` 匹配当前目录）；共享日志、预算、可见性               |
 | **Agent**  | 持久身份 + 可替换 Body                                | 主 Agent 可 `hire` / `close` 成员；成员可 `create` / `hire` / `close` / `send` / `post` / `list` / `rotate` |
 | **地址**   | `<principal>@<node_id>:<team_id>`                     | 跨节点定向投递；`principal` 是名字，不是 agent id                                                |
@@ -214,11 +214,11 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 
 ## 多节点与远程
 
-一个 Vessel 进程 = 一个节点。Hub 只做目录与指针；真正的消息走节点到节点的 federation。**默认是本机回环**，远程与跨节点都要显式配置。
+一个 Vessel 进程 = 一个节点。Hub 是独立进程（`vessel hub start`，不随 gateway 启动），只做目录与指针；真正的消息走节点到节点的 federation。**默认是本机回环**，远程与跨节点都要显式配置。
 
 - **远程客户端**：`--connect <http(s)://origin>`（或 `VESSEL_CONNECT`）。回环允许明文；非回环必须 HTTPS + token；URL 只接受 origin。
 - **服务端**：`--serve-host` + `--allow-remote` + `--tls-cert` / `--tls-key`，或 `serve.*` 配置。
-- **Hub 目录**：`vessel hub start` 启动目录进程；`vessel hub pair` 生成一次性配对码，hub 用 `vessel hub node add <url> --code <CODE>` 纳入；支持 hub → node 与 node → hub 出站（NAT）。
+- **Hub 目录**：`vessel hub start` 独立启动目录进程；`vessel hub join-code` 生成一次性配对码，节点用 `vessel hub join <hub-url> --code <CODE>` 出站加入（NAT 友好）。只支持 node → hub；`hub pair` / `hub node add` / `hub token *` / `hub data-token` 已删除。
 - **跨节点投递**：只走 federation（`POST /v1/federation/messages`），静态 peer allowlist + `<principal>@<node_id>:<team_id>` 地址。
 - **已知限制**：没有 mDNS / 服务网格 / 自动发现 / mTLS / 全局 durable；跨节点 spawn / close / rotate / resume 未实现。
 
@@ -229,11 +229,12 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 ### 已实现
 
 - 单节点 Agent 生命周期：`create` / `hire` / `send` / `close` / `list` / `rotate` / `post`。
+- Platform Gateway（8642）+ Node API（8644）同进程双监听（G1）；本地多 Node 独立子进程 + `nodes.json` 注册表（G3）。
 - 会话分支、收件箱与三档投递：`sessions.create` / `restart` / `activate`；`inbox` 工具；`send` 的 work / urgent（`interrupt`）/ notify。
 - temporary 回收（`agent.temporary_ttl_hours`，默认 2 小时，`0` 关闭）。
 - peer（同 Team 平级）与 contractor（调用者拥有）两条派生路径；成员关闭 peer 经人类审批。
 - Team：按工作目录匹配；roster、共享日志、预算、可见性、`@` 投递；`team freeze|unfreeze` 停止增长。
-- Hub 目录：配对、节点 / Team / 成员 / 在线状态、指针；hub ↔ node 双向拨号。
+- Hub 目录：节点 / Team / 成员 / 在线状态、指针；node → hub 出站拨号（join-code / join），不接受入站。
 - 跨节点定向投递、远程控制面、Durable run、evals、飞书渠道、MCP、文件级订阅。
 
 ### 部分实现
@@ -246,7 +247,8 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 - 跨节点 spawn / close / rotate / resume；spawn 预算与跨 Team 派生。
 - 自动发现 / mesh / 中继 / 离线队列 / 跨重启 exactly-once。
 - A2A 协议兼容。
-- 多 tenant federation：当前跨节点 Team 控制面为 default / admin-only。
+- 多公司 federation：当前跨节点 Team 控制面为单公司 / admin-only。
+- G4 分布式 Node / G5 legacy `--serve` 清理 / Workspace 插件独立包 / Workspace=公司数据目录：未排期或未实现（见 [topology](docs/architecture/topology.md)）。
 - 自治调度：自动分工、任务市场。
 
 ### 明确不做
@@ -300,7 +302,7 @@ cd apps/web && bun run build
 | [docs/adr/README.md](docs/adr/README.md)                     | 架构决策记录：每个关键选择的「为什么」                 |
 | [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)           | 文件放哪里、路径归属、分支与发布规则                   |
 | [docs/DESIGN.md](docs/DESIGN.md)                             | 跨外壳设计系统：页面骨架、表格控件、时间戳、插件 i18n  |
-| [docs/operations/CONFIG.md](docs/operations/CONFIG.md)       | 配置位置、优先级、tenant overlay 与密钥                |
+| [docs/operations/CONFIG.md](docs/operations/CONFIG.md)       | 配置位置、优先级、单公司数据根与密钥                   |
 | [docs/operations/REMOTE.md](docs/operations/REMOTE.md)       | 跨机器远程：证书 / CA、两机配置、独立前端、故障排查    |
 | [docs/operations/TRACE.md](docs/operations/TRACE.md)         | trace 留存、脱敏与重放                                 |
 | [docs/operations/MIGRATION.md](docs/operations/MIGRATION.md) | sqlite / file-v1 → file-v2 迁移                        |

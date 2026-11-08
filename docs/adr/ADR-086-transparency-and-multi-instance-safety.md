@@ -50,3 +50,11 @@ tags: [observability, events, snapshot, queue, self-card, delegate, locking, mul
 - **已知限制**：`max_runtime` 预警基于 wall clock；`childrenCount` 依赖上层父子关系；`tasks.*` 重启丢失；Self Card 为估算 token 截断；嵌套 delegate 会额外创建进程内 Host；shared tenant 锁不阻止两个进程写同一个 tenant 的不同 session。
 
 - **关联**：ADR-049（多租户隔离）、ADR-080（可观察性 / 控制面 / 多实例 A）、ADR-081（Host 对等与可序列化快照）、ADR-084（限额可见性）；实现见 `packages/core/src/runtime/agent-runtime.ts`、`packages/core/src/kernel/scheduler.ts`、`plugins/tools/delegate-task/src/index.ts`、`src/tenant-lock.ts`、`src/session-lock.ts`、`packages/serve/src/gateway/methods/agents.ts`。
+
+## Errata（0.49 T5，不改原结论）
+
+- **tenant 双层锁移除**：原文的 tenant `exclusive` / `shared` 双层锁与 runtime writer lock 已随 0.49 T0–T5 删除；正文关联里的 `src/tenant-lock.ts` 已更名为 `src/data-lock.ts`。保留的写意图锁统一为 `src/data-lock.ts`（`<dataDir>/.lock` 与 `<dataDir>/.members/`），错误码 `data_locked`；锁文件 `{ pid, started_at, host }`、stale 规则与 reclaim 守卫不变。
+- **运行时不再获取写者锁**：`--run` / REPL / gateway 启动不取写意图锁；只有写意图命令取锁。同一 dataDir 第二进程可启动（已知限制，R7=B）。
+- **session / run 锁不变**：`.locks/sessions/<sha16>.lock` / `.locks/runs/<sha16>.lock` 仍按 session / run 串行，冲突前缀 `session_locked` / `run_locked`。
+- **路径与配置**：`interactions-<tenant>.json` 改为 `interactions-<id>.json`（id 为持久化单 id）；`config.set` 不再有「仅 default tenant / 非 default tenant forbidden」语义。
+- **tenant 维度移除**：`tenant_id` 不再进入事件 DTO、RPC 参数或 manifest；`AgentVisibility='tenant'` 作为正交可见性标签保留。

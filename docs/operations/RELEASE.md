@@ -114,7 +114,7 @@ gateway 生命周期与包级自更新的发布说明需要额外确认：
 权限交互与 TUI 布局的发布说明与验收需要额外确认：
 
 - **权限等待默认不超时**：release notes 不得再写「权限弹窗 120s 过期」或「超时自动失败」。权限一直等待应答 / 取消 / abort；只有宿主显式配置正数 `timeoutMs` 才超时。`ask_user` 仍是全局弹窗，继续按 `event.ts + 120s` 计算有效期。
-- **持久化文件**：gateway 在 `<dataDir>/interactions-<tenant>.json` 写 `pending` / `answered` / `orphaned`（`0600` 原子写）。发布说明可写“重启后旧请求标记为已结束 / 迟到应答返回 `run_ended`”，不得写“跨重启恢复 pending 并继续应答”。
+- **持久化文件**：gateway 在 `<dataDir>/interactions-<id>.json` 写 `pending` / `answered` / `orphaned`（`0600` 原子写；`<id>` 是内部持久单 id，不是 wire 字段）。发布说明可写“重启后旧请求标记为已结束 / 迟到应答返回 `run_ended`”，不得写“跨重启恢复 pending 并继续应答”。
 - **Web 内联权限**：权限卡片在 run 卡片内，跨 session 用顶部待处理条；`ask_user` 仍是全局弹窗。release notes 不得宣称所有交互都已内联。
 - **状态栏**：`Ctrl+T` / `Ctrl+G` / `Ctrl+R` 与新下栏在 release notes 中列出；`ui.statusBars`（YAML `status_bars`）可持久化显隐，`VESSEL_STATUS_BARS` 只作启动初值。终端 `<40` 列不显示下栏、`<18` 行默认隐藏。
 

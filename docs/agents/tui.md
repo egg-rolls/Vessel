@@ -25,7 +25,7 @@ applies_to: [N, M]
 ## ask_user 入口
 
 - 只在交互 REPL（TTY）注册；`--run` / headless / 管道不注册。
-- `ui.askUser: false` 必须能按入口与 tenant 关闭；gateway / serve 的注册见 [serve.md](serve.md)。
+- `ui.askUser: false` 必须能按入口关闭；gateway / serve 的注册见 [serve.md](serve.md)。
 
 ## 指针
 

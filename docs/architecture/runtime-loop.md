@@ -94,7 +94,7 @@ loop:
 - **thinking 模型的 `reasoning_content`**：Provider 返回后保存在 assistant 消息并随下一轮请求回传（含 `tool_calls` 轮次）；`llm.request` / `context.changed` 事件在发布前剥离该字段，TUI / 观测 / 回放看不到思维链，会话持久化保留（ADR-038）。
 - **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，默认不超时，只有显式正数 `timeoutMs` 才超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。
 - **Hook 注入只允许追加**：`Hook.run` 可返回 `HookResult`（`block` / `updatedInput`）；`additionalContext` 已弃用，动态上下文统一写 `HookContext.messages`。`systemPrompt` 只读，写入被忽略。
-- **durable checkpoint 只由 Run 经 `RunJournal` 写**（唯一写者）。装配层按 tenant 用 `createRunJournalFactory({ eventLog, session, runStore, fenceOf })` 构造工厂；tenant 与成员 `ExecutionUnit` 共用同一 profile 的 journalFactory，禁止双写（ADR-040 / ADR-098 C1）。
+- **durable checkpoint 只由 Run 经 `RunJournal` 写**（唯一写者）。装配层按 node 用 `createRunJournalFactory({ eventLog, session, runStore, fenceOf })` 构造工厂；主执行面与成员 `ExecutionUnit` 共用同一 profile 的 journalFactory，禁止双写（ADR-040 / ADR-098 C1）。
 - **单 run 守卫与唯一终态路径**见 [runtime-lifecycle.md](runtime-lifecycle.md#run) 与 [#finalize](runtime-lifecycle.md#finalize)：`activeRun` 在 await 前同步占位，第二个 run 抛 `run_already_running`；终态只经 `finalizeRun`。
 - **插件故障隔离**（ADR-054）：单个 Hook 抛错发 `hook.failed` + `hook.error` 并继续后续 hook；`OnError` 始终 best-effort；Guardrail 的 `check()` 抛错按 fail-closed 处理（`allowed:false` + `reason: 'guardrail_error'`，发 `guardrail.error`），不把原始异常冒泡成 run 失败。
 

@@ -138,7 +138,7 @@ Vessel\                                    # 共享侧（git）
 | `WEB-UI.md`               | Web 组件与视觉约定                     | web 主笔，gov 维护   |
 | `operations/RELEASE.md`   | 怎么发版                               | gov                  |
 | `operations/CI-CD.md`     | CI / CD / 自动更新怎么跑               | gov                  |
-| `operations/CONFIG.md`    | 配置位置、优先级、tenant overlay、密钥 | gov                  |
+| `operations/CONFIG.md`    | 配置位置、优先级、data-dir 写锁、密钥 | gov                  |
 | `operations/MIGRATION.md` | sqlite / file-v1 → file-v2             | gov                  |
 | `operations/TRACE.md`     | trace 留存、脱敏与重放                 | gov                  |
 

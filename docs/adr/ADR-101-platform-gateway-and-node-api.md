@@ -55,3 +55,23 @@ tags: [gateway, node, platform, console, webui, tui, auth, cli, topology]
   [ADR-093](ADR-093-hub-control-plane.md)（Hub 平台服务）·
   [ADR-099](ADR-099-plugin-contribution-surfaces-and-trust.md)。
   目标拓扑见 [topology](../architecture/topology.md)。
+
+## Addendum（0.49 落地状态，2026-11-08）
+
+> 只追加，不改写上文决策。迁移顺序 §7 的前三步已落地，分布式 Node 仍未排期。
+
+- **G1 已落地**（`8be78ccf`）：Platform Gateway 与 Node API 同进程双监听——平台默认
+  `127.0.0.1:8642`（WebUI/TUI 静态宿主、`/health`、`/platform/rpc`），Node API 走
+  `serve.port`（缺省 `8644`，`/v1/*`、WS/SSE、插件 HTTP/静态）。路由表与认证链物理分离，
+  平台 token 与 node token 互不通用。
+- **UI 宿主迁 Gateway**：WebUI 由 Gateway 提供；Node API 不再做 UI 静态宿主。多节点
+  视图由 Gateway 的 node registry + 各 Node API 数据构成。
+- **CLI 分离**：`vessel gateway ...` 管理平台，`vessel node start/status/stop/reload`
+  管理公司 Node。legacy `vessel --serve` 单进程入口仍保留，删除归 G5。
+- **G3 已落地**（`80d93877`）：每个本地 Node 是 Gateway 独立子进程，`nodes.json` 记录
+  registry（无 token）；`gateway nodes list/add/remove`、`node start --config` 可用；
+  平台只做 registry / 凭据分发，不反代 Node。已知限制：多 Node 场景下 `gateway reload`
+  无 `--scope` 仍走默认 `8644`，见 `reports/0.49/g3-acceptance.md` §13.5。
+- **未排期**：G4 分布式 Node（跨机独立进程、按 URL/token 连接）与 G5 清理（legacy
+  `--serve`、迁移期兼容面）均未排期。Workspace 插件独立包与 Workspace = 公司数据目录
+  仍未实现，见 [ADR-100](ADR-100-node-company-topology.md) Addendum。

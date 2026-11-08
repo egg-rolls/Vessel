@@ -63,7 +63,7 @@
 | 046 | 文件优先存储成为默认后端 | accepted | 2026-10-18 | storage, files, tenancy | [ADR-046-file-first-storage.md](ADR-046-file-first-storage.md) |
 | 047 | trace-first 可观测性 | accepted | 2026-10-18 | trace, observability, privacy | [ADR-047-trace-first-observability.md](ADR-047-trace-first-observability.md) |
 | 048 | 统一 RPC 方法与 capability manifest | accepted | 2026-10-18 | rpc, api, manifest | [ADR-048-unified-rpc-method-table.md](ADR-048-unified-rpc-method-table.md) |
-| 049 | 多租户隔离与单 gateway 多 tenant | accepted | 2026-10-18 | tenancy, isolation, gateway | [ADR-049-multi-tenant-isolation.md](ADR-049-multi-tenant-isolation.md) |
+| 049 | 多租户隔离与单 gateway 多 tenant | superseded | 2026-10-18 | tenancy, isolation, gateway | [ADR-049-multi-tenant-isolation.md](ADR-049-multi-tenant-isolation.md) |
 | 050 | YAML 主配置与密钥分层 | accepted | 2026-10-18 | config, secrets, yaml | [ADR-050-yaml-first-config-and-secrets.md](ADR-050-yaml-first-config-and-secrets.md) |
 | 051 | 远程控制面（非回环 HTTPS 与 token/CA） | accepted | 2026-10-19 | remote, gateway, tls, client | [ADR-051-remote-control-plane.md](ADR-051-remote-control-plane.md) |
 | 052 | 跨节点 transport 与 team 调度 | accepted | 2026-10-19 | transport, multi-node, team, events | [ADR-052-cross-node-transport.md](ADR-052-cross-node-transport.md) |

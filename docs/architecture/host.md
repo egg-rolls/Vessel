@@ -6,16 +6,16 @@ paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 ---
 
 # Scheduler 与执行面
-> Stage 4 已落地：`Runtime` 是 per-node 无状态工厂，按 `(tenantId, sessionId)` 持有/解析 `ExecutionUnit`；Scheduler 仍是每 tenant 一个、唯一执行入口。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+> Stage 4 已落地：`Runtime` 是 per-node 无状态工厂，按 `(内部单 id, sessionId)` 持有/解析 `ExecutionUnit`；Scheduler 仍是每 node 一个、唯一执行入口。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
 
-> 执行面只有一层：每个 tenant 一个 `InProcessScheduler`，所有 agent / body 的 run 都经它排队。Scheduler 不知道 member / owner / visibility；成员能力层见 [member-team.md](member-team.md)。单 run 外壳见 [runtime-lifecycle.md](runtime-lifecycle.md#run)。
+> 执行面只有一层：每个 node 一个 `InProcessScheduler`，所有 agent / body 的 run 都经它排队。Scheduler 不知道 member / owner / visibility；成员能力层见 [member-team.md](member-team.md)。单 run 外壳见 [runtime-lifecycle.md](runtime-lifecycle.md#run)。
 
 <a id="host"></a>
 
 ## 定位
 
-- `packages/core/src/kernel/scheduler.ts` 提供 `Scheduler` / `ScheduledTask` / `InProcessScheduler`。装配层每 tenant 构造一个实例并注入 `AgentService`；run 路径上没有第二层执行壳（ADR-081 / ADR-097）。
-- `packages/core/src/runtime/runtime.ts` 的 `Runtime` 是每 node 一个的**无状态工厂**：注册 tenant profile（provider / 插件引用 / loop 默认值 / journal 工厂），并按 `(tenantId, sessionId)` 解析 `ExecutionUnit`。它不做 I/O、不调度、不持 lease；EU 目录是工厂缓存，条目由 ControlPlane `retireExecutionUnit`。
+- `packages/core/src/kernel/scheduler.ts` 提供 `Scheduler` / `ScheduledTask` / `InProcessScheduler`。装配层每 node 构造一个实例并注入 `AgentService`；run 路径上没有第二层执行壳（ADR-081 / ADR-097）。
+- `packages/core/src/runtime/runtime.ts` 的 `Runtime` 是每 node 一个的**无状态工厂**：注册单 node profile（provider / 插件引用 / loop 默认值 / journal 工厂），并按 `(内部单 id, sessionId)` 解析 `ExecutionUnit`。它不做 I/O、不调度、不持 lease；EU 目录是工厂缓存，条目由 ControlPlane `retireExecutionUnit`。
 - 执行事实在每 session 的 `ExecutionUnit`：Scheduler 只负责排队、并发、取消与只读视图，不复制 `toolCallingLoop`，也不写第二套终态持久化路径。
 - 入队形态固定：`admit` 组一个 `ScheduledTask`，调度键 `session_id` 必填且等于 body id，`executor` 收到 runId 后调用该 body 的 `runtime.run`。
 
@@ -49,7 +49,7 @@ paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 
 - 队列事件是 `agent.queue.entered` / `agent.queue.left`，带 `agent_id` + `session_id`、队列位置与等待原因（`capacity` / `per_body_serial`）。
 - `SchedulerOptions`：`maxConcurrency` 缺省无上限（只有显式正整数才限制）、`maxQueueSize` 默认 100、`perBodySerial` 默认 true。队列满时 `submit` 抛错，不静默丢任务；缺省项由 Scheduler 自己兜底，装配层不传 `0` / 负数。
-- `TenantRuntimeProfile`（provider/model/插件引用/limits/termination/contextFactory 默认值/journalFactory）由装配层注册到 `Runtime`；`ExecutionUnitRequest` 只携带 per-session 与 per-binding 覆盖。Scheduler 只排队任务、不做覆盖。工具展示元数据 `ToolDefinition.display` 由 `PluginHost.listTools()` 透出，不进入 LLM schema（见 [tools.md](tools.md#tool-definition)）。
+- 单 node profile（类型仍名 `TenantRuntimeProfile`，`tenantId` 是内部单 id；provider/model/插件引用/limits/termination/contextFactory 默认值/journalFactory）由装配层注册到 `Runtime`；`ExecutionUnitRequest` 只携带 per-session 与 per-binding 覆盖。Scheduler 只排队任务、不做覆盖。工具展示元数据 `ToolDefinition.display` 由 `PluginHost.listTools()` 透出，不进入 LLM schema（见 [tools.md](tools.md#tool-definition)）。
 
 ## 约束
 

@@ -46,3 +46,12 @@ tags: [rpc, api, manifest]
 - 前端（Web）在输入防抖后调用该方法；本地 title / preview / id 过滤保留为降级路径。
 - `docs/ARCHITECTURE.md` 的 `rpc-methods` 标记表与 `scripts/check-rpc-methods.ts` 的 `EXPECTED_METHODS` 同批更新；`check-rpc-methods` 以 manifest 为准校验该条目。
 - 本 addendum 仅追加，不修改上文冻结的方法表语义。
+
+## Errata（0.49 T4/T5，不改原结论）
+
+- **方法表以 `docs/architecture/gateway-rpc.md` 的 canonical 表为准**；`tenants.list|get|create|update` 已随 T4 删除，`scripts/check-rpc-methods.ts` 的 `EXPECTED_METHODS` 同步。
+- **tenant 维度移除**：请求参数、DTO、事件与 manifest 不再有 `tenant_id`；`events.subscribe` 的 `all_tenants` 已删除；token 不再映射 tenantId，跨 tenant 读取 / `forbidden` 语义不适用。
+- **错误码改名**：`tenant_locked` → `data_locked`（同一形状/语义，HTTP 409 映射不变）。冻结集合仍含 `unauthorized` / `forbidden` / `not_found` / `invalid_params` / `quota_exceeded` / `conflict` / `internal` / `not_supported` 等；`quota_exceeded` 保留为业务限制码，不再表示 tenant 配额。
+- **连接方式**：`--connect <url>` 不取写者锁；本地运行时也不再获取写者锁。写意图锁是单公司 data-dir 级（`src/data-lock.ts`），不是 tenant 锁。
+- **session / run 锁不变**：`.locks/sessions/<sha16>.lock` 与 `.locks/runs/<sha16>.lock` 仍按 session / run 串行，冲突前缀 `session_locked` / `run_locked`；本次只改外层写意图锁的命名与范围。
+- **平台面**：Platform Gateway 的 `POST /platform/rpc` 是独立只读 allowlist（`platform.nodes.*` / `platform.whoami` / `platform.health.get`），**不进入** canonical 方法表，也不透传到 node dispatcher。

@@ -22,3 +22,12 @@ tags: [storage, files, tenancy]
 - **备选**：(a) 继续默认 sqlite——不可直接审计、tenant 分区成本高；(b) 引入索引缓存/嵌入式 KV——增加维护面，超出 0.5 规模；(c) 自动迁移旧数据——不可逆风险高。均不取。
 - **后果**：默认数据可读、可复制、可按 tenant 备份；代价是 O(N) 列表、单写者限制和 Windows rename 重试。0.5 不承诺多进程并发写同一 tenant；跨进程共享 store 的问题留到 0.6 远程方案收敛。sqlite 仍是受支持的后端。
 - **关联**：ADR-025（参考实现）、ADR-032（事件回放）、ADR-040（durable run / checkpoint）；DECISION-010 §2.1 / §2.6；Addendum A-4 §11.3 / §11.7。
+
+## Errata（0.49 T5，不改原结论）
+
+- **单写者改为中性 data-dir 写意图锁**：原「一个 tenant 一个写者」的 runtime/启动期写者锁随 tenant 维度移除；保留的写意图锁统一由 `src/data-lock.ts` 提供（`exclusive` `<dataDir>/.lock`、`shared` `<dataDir>/.members/`），错误码由 `tenant_locked` 改为 `data_locked`。锁文件形状与 stale 规则不变。
+- **运行时不再获取写者锁**：`--run` / REPL / gateway 启动本身不取该锁；只有写意图命令（`migrate --apply`、`trace prune`、`eval`、bootstrap 的 trace prune / session 删除）获取。同一 dataDir 的第二进程可以启动（0.49 R7=B 的已知限制）。
+- **根布局**：`<dataDir>/tenants/<tenant_id>/**` 随 0.49 T5 删除；现态为 `<dataDir>/sessions`、`<dataDir>/runs`、`<dataDir>/events`、`<dataDir>/tenant.json`。`durable.path` 缺省 `<dataDir>/runs`。非空 `<dataDir>/tenants/**` 或 `.t2-migrating-*` 启动 fail-fast（`non_root_layout`）。
+- **迁移命令**：`--tenant` 已删除；`vessel migrate` 保留，仅表示 0.5 存储格式迁移（`sqlite|file-v1 → file-v2`），不是 tenant 布局迁移；`--json` 不再含 `tenant_id`。
+- **tenant.json**：只作为持久化单 id 的内部形状保留；不再有 config `tenant` 块或运行时 tenant 分区。
+- **session / run 锁不变**：`.locks/sessions/<sha16>.lock` 与 `.locks/runs/<sha16>.lock` 的串行语义和 `session_locked` / `run_locked` 冲突前缀保持（见 ADR-086 Errata）。

@@ -34,7 +34,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 ## 配对、join code 与 token
 
 - `vessel hub join-code`：hub 生成一次性 join code（默认 300 秒、只存 hash），节点用 `vessel hub join <hub-url> --code` 经 `POST /v1/hub/join` 换 hub 签发的 token。
-- token 只有 `scope: node`，绑定 `hub_id` / `node_id` / `tenant_id`；首帧身份或绑定不一致一律 4401 关闭，防止 A hub 的 token 被 B hub 复用。
+- token 只有 `scope: node`，绑定 `hub_id` / `node_id`；首帧身份或绑定不一致一律 4401 关闭，防止 A hub 的 token 被 B hub 复用。
 - 明文只在签发响应出现一次；hub 只持久化 `sha256(token)` 到 `<hubDataDir>/node-tokens.json`，节点把明文 token 存入 SecretStore；任何文件 / 日志 / 事件不出现 token。
 - 节点侧 SecretStore 的文件回退适配器只有 `hub.allow_file_secrets: true` 才启用，否则 fail-closed；Hub 自身的读 token 由 `hub.tokenEnv` 提供，不回显。
 - 旧 hub → node 拨号、节点侧 hub 入站路由与 scoped `view` / `exchange` token 已移除；调用 `hub pair` / `hub node add` / `hub token *` / `hub data-token` 会失败并提示改用 `vessel hub join-code` / `vessel hub join`。
@@ -43,7 +43,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 
 ## 目录、指针与快照
 
-- 目录主键 `pairing_id = node_id:tenant_id`；`<hubDataDir>/registry.json` 以 `0600` 原子写（250ms debounce）。写入前限制 `teams ≤ 500`、`agents ≤ 2000`，超限截断并置 `truncated: true`。
+- 目录主键 `pairing_id = node_id`；`<hubDataDir>/registry.json` 以 `0600` 原子写（250ms debounce）。写入前限制 `teams ≤ 500`、`agents ≤ 2000`，超限截断并置 `truncated: true`。
 - 快照新旧按 `(incarnation, revision)`：`incarnation` 变化无条件接受并重置 revision；同一代际下 `revision <= lastRevision` 丢弃。`incarnation` 只用于比较与事件去重，不与 `node_id` 混用。
 - 节点离线时保留最后一次目录快照，只读展示；hub 不伪造在线状态。
 - 指针 payload 固定 `{node_id, team_id, request_id?, reason, ts}`，只在线推送、不持久化、不排队；消费方按 `ts` 超过 60 秒丢弃。`data_plane: 'direct' | 'unreachable'` 由 `public_url ?? url` 派生。
@@ -89,11 +89,11 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 ## 不做什么
 
 - hub 不做消息正文 / 事件 / 工具结果代理，不存 transcript，不做 mTLS、多 hub 联邦或节点自动发现。
-- federation 不做 worker / agent 跨节点寻址、远程 spawn / close / rotate / resume / create、自动中继 / mesh、离线队列 / 重试、跨重启 exactly-once、多 tenant、权限审批人。
+- federation 不做 worker / agent 跨节点寻址、远程 spawn / close / rotate / resume / create、自动中继 / mesh、离线队列 / 重试、跨重启 exactly-once、多公司、权限审批人。
 - federation 是传输面，不新增 canonical RPC 方法；**不做全局名字解析**（DNS / 注册表 / 名字即身份）——名字只在本地有意义。
 
 ## 指针
 
 - [gateway.md](gateway.md#remote) · [gateway-rpc.md](gateway-rpc.md) · [assembly.md](assembly.md#assembly) · [REMOTE.md](../operations/REMOTE.md) · [CONFIG.md](../operations/CONFIG.md)
 - 决策：[ADR-093](../adr/ADR-093-hub-control-plane.md) · [ADR-094](../adr/ADR-094-federation-team-to-team.md) · [ADR-052](../adr/ADR-052-cross-node-transport.md) · [ADR-067](../adr/ADR-067-cross-node-dedup-keys.md) · [ADR-053](../adr/ADR-053-remote-security-baseline.md)
-- ADR-093 的 hub → node 拨号方向已由当前实现移除；ADR 正文 errata 由 gov 后续补，本文不作为 ADR 修订。
+- ADR-093 的 hub → node 拨号方向已由当前实现移除；0.49 Errata 已写入 [ADR-093](../adr/ADR-093-hub-control-plane.md)（见该文 0.49 Errata 节）。
