@@ -34,11 +34,13 @@ export interface AdminMethodsDeps {
 }
 
 /**
- * 解析 `scopes`：缺省 = 全部可热重载范围；去重并保持调用方顺序。
- * schema 已先校验类型与 enum；这里兜底非数组输入。
+ * 解析 `scopes`：缺省（undefined）→ 空数组，默认集由装配层决定
+ * （`src/gateway-reload-wiring.ts` 的 `DEFAULT_SCOPES`，ADR-075：`config,plugins`）。
+ * 显式传入且未注册的 scope 仍由装配层拒绝，不静默忽略。
+ * 去重并保持调用方顺序；schema 已先校验类型与 enum，这里兜底非数组输入。
  */
 export function parseReloadScopes(value: unknown): ReloadScope[] {
-  if (value === undefined) return [...RELOAD_SCOPES];
+  if (value === undefined) return [];
   if (!Array.isArray(value)) {
     throw new RpcError('invalid_params', 'scopes must be an array');
   }
