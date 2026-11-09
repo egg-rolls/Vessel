@@ -49,6 +49,8 @@ export interface PlatformGatewayOptions {
   allowedOrigins?: string[];
   /** 用于 CSP `frame-src` / `connect-src` 的 node origin。 */
   nodeOrigins: string[];
+  /** 0.50：Hub 页浏览器直连的 Hub origin；只并入 CSP `connect-src`。 */
+  hubOrigins?: string[];
   /** `apps/web/dist`；启动时必须存在 `index.html`。 */
   staticDir: string;
   /** registry 中全部本地 node（`auto_start:false` 也注入，只做健康展示）。 */

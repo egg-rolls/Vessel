@@ -133,6 +133,19 @@ function parseHubLockRecord(raw: unknown): HubLockFile | null {
   };
 }
 
+/**
+ * 读取 `<hubDataDir>/hub.lock`（gateway 自动拉起 Hub 的 adopt / 归属复核用）。
+ * 缺失 / 损坏 / I/O 错误一律返回 null，由调用方按未运行处理。
+ */
+export async function readHubLockFile(dataDir: string): Promise<HubLockFile | null> {
+  const snapshot = await readGatewayStateFile<HubLockFile>(path.join(dataDir, HUB_LOCK_FILE), {
+    now: Date.now(),
+    graceMs: HUB_UNPARSEABLE_GRACE_MS,
+    parse: parseHubLockRecord,
+  });
+  return snapshot.kind === 'ok' ? snapshot.value : null;
+}
+
 interface HubLockHandle {
   release(): Promise<void>;
   /** process 'exit' 兜底；不抛错。 */

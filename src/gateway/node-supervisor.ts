@@ -19,11 +19,13 @@
 import { mkdir, open, readdir, readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
 import { atomicWrite } from '@vessel-agent/core';
+import { readHubLockFile } from '../hub/runtime';
 import { buildDaemonArgv } from './daemon';
 import {
   type CommandRunner,
   createCommandRunner,
   DEFAULT_GATEWAY_INSTANCE,
+  isBeforeBoot,
   isProcessAlive,
   normalizeGatewayInstance,
   readGatewayPidRecord,
@@ -49,6 +51,16 @@ export interface LocalNodeSpec {
   token?: string;
   autoStart: boolean;
 }
+
+/** 0.50：gateway 自动拉起的本地 Hub 参数。 */
+export interface LocalHubSpec {
+  /** hub data dir（`hub.dataDir` 或 `<gatewayDataDir>/hub`）。 */
+  dataDir: string;
+}
+
+export type HubSupervisorStartResult =
+  | { ok: true; adopted: boolean; url: string }
+  | { ok: false; code: string; message: string };
 
 export type SupervisedNodeState = 'up' | 'down' | 'external' | 'unknown';
 
@@ -95,6 +107,8 @@ export interface SpawnedChildRecord {
   pid: number;
   data_dir: string;
   started_at: string;
+  /** 0.50：`hub` = gateway 自动拉起的本地 Hub；缺省 = node。 */
+  kind?: 'node' | 'hub';
 }
 
 interface Manifest {
@@ -134,13 +148,14 @@ function parseManifest(raw: unknown): SpawnedChildRecord[] {
   const out: SpawnedChildRecord[] = [];
   for (const entry of raw.children) {
     if (!isRecord(entry)) continue;
-    const { node_id, name, pid, data_dir, started_at } = entry;
+    const { node_id, name, pid, data_dir, started_at, kind } = entry;
     if (typeof node_id !== 'string' || node_id === '') continue;
     if (typeof name !== 'string' || name === '') continue;
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) continue;
     if (typeof data_dir !== 'string' || data_dir === '') continue;
     if (typeof started_at !== 'string') continue;
-    out.push({ node_id, name, pid, data_dir, started_at });
+    if (kind !== undefined && kind !== 'node' && kind !== 'hub') continue;
+    out.push({ node_id, name, pid, data_dir, started_at, ...(kind !== undefined ? { kind } : {}) });
   }
   return out;
 }
@@ -210,6 +225,18 @@ async function fetchHealthJson(
   }
 }
 
+/** Hub `/health` 预检（回环对端免 token；无 Origin 头，不受 CORS 白名单限制）。 */
+async function probeHubHealth(url: string): Promise<boolean> {
+  const base = url.endsWith('/') ? url : `${url}/`;
+  const response = await fetchHealthJson(`${base}health`, { accept: 'application/json' });
+  return (
+    response.status >= 200 &&
+    response.status < 300 &&
+    isRecord(response.body) &&
+    response.body.ok === true
+  );
+}
+
 /**
  * 探测 node 健康。`/v1/health` 带 node 身份（loopback 免 token；远程需该 node
  * token）；老监听或平台监听回退 `/health`。
@@ -256,6 +283,17 @@ export async function probeNodeHealth(spec: {
 async function recordOwnsPid(record: SpawnedChildRecord): Promise<boolean> {
   if (record.started_at === '') return false;
   if (!isProcessAlive(record.pid)) return false;
+  // 0.50：Hub 的归属证据是 `<hubDataDir>/hub.lock`（pid + started_at），
+  // 不是 node 的 `gateway.pid`；手工/外部启动的 Hub 不在 manifest，天然不杀。
+  if (record.kind === 'hub') {
+    const lock = await readHubLockFile(record.data_dir);
+    return (
+      lock !== null &&
+      lock.pid === record.pid &&
+      String(lock.started_at) === record.started_at &&
+      !isBeforeBoot(lock.started_at)
+    );
+  }
   const pidRecord = await readGatewayPidRecord(record.data_dir);
   if (pidRecord === null) return false;
   if (pidRecord.pid !== record.pid) return false;
@@ -479,6 +517,122 @@ export class NodeSupervisor {
       await this.sleep(POLL_MS);
     }
     return last;
+  }
+
+  /**
+   * 0.50：gateway start 自动拉起本地 Hub。
+   *
+   * - 已有活 Hub（`hub.lock` pid 存活且非 boot 前记录）→ adopt：不 spawn、不记
+   *   manifest，外部/手工实例永不被 `gateway stop` 杀；
+   * - 否则 spawn `vessel hub start --data-dir <hubDataDir>`，等 `hub.lock` 归本
+   *   child 且 `/health` 通过后写入与 node 共用的 manifest（`kind:'hub'`）；
+   * - 失败只返回错误，由调用方 warning，不阻断 gateway。
+   */
+  async startHub(spec: LocalHubSpec): Promise<HubSupervisorStartResult> {
+    const existing = await readHubLockFile(spec.dataDir);
+    if (existing !== null && isProcessAlive(existing.pid) && !isBeforeBoot(existing.started_at)) {
+      return { ok: true, adopted: true, url: existing.url ?? '' };
+    }
+
+    const execPath = this.options.execPath ?? process.execPath;
+    const entryPath = this.options.entryPath ?? process.argv[1];
+    if (entryPath === undefined || entryPath === '') {
+      return {
+        ok: false,
+        code: 'hub_start_failed',
+        message: 'cannot resolve the vessel entry script (process.argv[1] is empty)',
+      };
+    }
+
+    // 不给 Hub 子进程设 VESSEL_DATA_DIR：它必须用 `hub.dataDir` / `<dataDir>/hub`，
+    // 与 gateway 的 dataDir 区分，否则会触发 `hub_data_dir_conflict`。
+    const argv = [execPath, entryPath, 'hub', 'start', '--data-dir', spec.dataDir];
+    const logPath = nodeLogPath(this.options.gatewayDataDir, 'hub');
+    await mkdir(path.dirname(logPath), { recursive: true, mode: 0o700 });
+
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(logPath, 'a', 0o600);
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'hub_start_failed',
+        message: `hub: cannot open log ${logPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+
+    const spawn = this.options.spawn ?? Bun.spawn;
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(argv, {
+        stdin: 'ignore',
+        stdout: handle.fd,
+        stderr: handle.fd,
+        detached: true,
+        env: {
+          ...(this.options.env ?? process.env),
+          ...(this.options.platformOrigins !== undefined && this.options.platformOrigins.length > 0
+            ? { VESSEL_PLATFORM_ORIGINS: this.options.platformOrigins.join(',') }
+            : {}),
+        },
+      });
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      return {
+        ok: false,
+        code: 'hub_start_failed',
+        message: `hub failed to spawn: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    await handle.close().catch(() => undefined);
+    child.unref?.();
+
+    const pid = child.pid;
+    // 就绪前只存在于本进程内存（started_at 未知）；失败由本进程 stop() 按 pid 回滚。
+    const record: SpawnedChildRecord = {
+      node_id: 'hub',
+      name: 'hub',
+      pid,
+      data_dir: spec.dataDir,
+      started_at: '',
+      kind: 'hub',
+    };
+    this.spawned.push(record);
+
+    const ready = await this.waitForHubReady(spec.dataDir, pid);
+    if (!ready.ok) return ready;
+    record.started_at = ready.startedAt;
+    await this.writeManifest();
+    return { ok: true, adopted: false, url: ready.url };
+  }
+
+  private async waitForHubReady(
+    dataDir: string,
+    pid: number,
+  ): Promise<
+    { ok: true; startedAt: string; url: string } | { ok: false; code: string; message: string }
+  > {
+    const timeoutMs = this.options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!isProcessAlive(pid)) {
+        return { ok: false, code: 'hub_start_failed', message: 'hub exited during startup' };
+      }
+      const lock = await readHubLockFile(dataDir);
+      if (lock !== null && lock.pid === pid && lock.url !== undefined) {
+        if (await probeHubHealth(lock.url)) {
+          return { ok: true, startedAt: String(lock.started_at), url: lock.url };
+        }
+      }
+      await this.sleep(POLL_MS);
+    }
+    return {
+      ok: false,
+      code: 'hub_start_failed',
+      message: `hub was not ready within ${timeoutMs}ms`,
+    };
   }
 
   private async spawn(spec: LocalNodeSpec): Promise<NodeSupervisorStartResult> {

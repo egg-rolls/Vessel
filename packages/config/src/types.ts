@@ -533,6 +533,8 @@ export interface HubListenConfig {
  */
 export interface HubConfig {
   dataDir?: string;
+  /** `gateway start` 是否自动拉起本地 Hub；缺省 true。`direction: 'node'` 时忽略。 */
+  autoStart?: boolean;
   direction?: 'node';
   /** node → hub 出站：hub 基址（join 的缺省 URL）。 */
   url?: string;

@@ -27,6 +27,8 @@ import {
 } from './hub-types';
 
 const REQUEST_TIMEOUT_MS = 10_000;
+/** 本地 Hub 默认端口（与 `hub.listen.port` 缺省一致）。 */
+export const DEFAULT_HUB_PORT = 8643;
 export const HUB_RECONNECT_MIN_MS = 1_000;
 export const HUB_RECONNECT_MAX_MS = 30_000;
 export const HUB_POINTER_TTL_MS = 4_000;
@@ -117,6 +119,18 @@ function isLoopbackBaseUrl(baseUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * 0.50：页面由本地平台提供且没有已存 URL 时，隐式连接同机默认 Hub。
+ * 只在回环 http 页面生效（https 页面会被 mixed content 拒绝）；非回环返回 null。
+ */
+export function implicitHubUrl(): string | null {
+  const location = globalThis.location;
+  if (location === undefined) return null;
+  if (location.protocol === 'https:') return null;
+  if (!isLoopbackHostname(location.hostname)) return null;
+  return `http://${location.hostname}:${DEFAULT_HUB_PORT}`;
 }
 
 /** HTTPS 页面拒绝 http Hub（mixed content），归入 invalid_url。 */
@@ -521,9 +535,10 @@ export class HubSession {
   constructor(options: HubSessionOptions = {}) {
     this.deps = browserHubSessionDeps(options.deps);
     const stored = this.deps.storage.read();
+    const implicitUrl = stored.url === '' ? implicitHubUrl() : null;
     this.state = {
-      status: stored.url !== '' ? 'loading' : 'unconfigured',
-      url: stored.url,
+      status: stored.url !== '' || implicitUrl !== null ? 'loading' : 'unconfigured',
+      url: stored.url !== '' ? stored.url : (implicitUrl ?? ''),
       hasToken: stored.token !== '',
       directory: null,
       pointer: null,
@@ -645,7 +660,10 @@ export class HubSession {
   }
 
   async connect(input?: HubConnectInput): Promise<HubConnectResult> {
-    const draft = input ?? this.deps.storage.read();
+    const stored = this.deps.storage.read();
+    // 0.50：无已存 URL + 回环页面 → 隐式连接同机默认 Hub（空 token）。
+    const implicitUrl = input === undefined && stored.url === '' ? implicitHubUrl() : null;
+    const draft = input ?? (implicitUrl !== null ? { url: implicitUrl, token: '' } : stored);
     const baseUrl = normalizeHubBaseUrl(draft.url);
     if (baseUrl === null || isMixedContent(baseUrl)) {
       if (input !== undefined) {
@@ -688,7 +706,9 @@ export class HubSession {
             : kind === 'unauthorized'
               ? 'unauthorized'
               : 'http';
-      this.patch({ connecting: false, connectError });
+      // 失败回到预填手动表单（隐式自动连接失败 / 用户改地址失败都一样），
+      // 不停在 loading；用户可改地址或清除后重试。
+      this.patch({ status: 'unconfigured', url: baseUrl, connecting: false, connectError });
       return { ok: false, error: kind };
     }
     if (epoch !== this.epoch || this.stopped) return { ok: false, error: 'network' };

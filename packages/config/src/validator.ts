@@ -1220,6 +1220,7 @@ export function validateHubSettings(
 ): ConfigValidationError[] {
   const {
     dataDir,
+    autoStart,
     direction,
     url,
     caFile,
@@ -1251,6 +1252,14 @@ export function validateHubSettings(
         message: 'hub_data_dir_conflict: hub.dataDir must differ from dataDir',
       });
     }
+  }
+
+  if (autoStart !== undefined && typeof autoStart !== 'boolean') {
+    errors.push({
+      path: 'hub.autoStart',
+      message: 'hub.autoStart must be a boolean',
+      value: autoStart,
+    });
   }
 
   if (direction !== undefined && direction !== 'node') {
@@ -2570,6 +2579,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   attention: ['nodes'],
   hub: [
     'dataDir',
+    'autoStart',
     'direction',
     'url',
     'caFile',

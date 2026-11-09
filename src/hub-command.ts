@@ -8,7 +8,7 @@
  */
 
 import * as path from 'node:path';
-import { HUB_PROTOCOL } from '@vessel-agent/serve';
+import { HUB_PROTOCOL, normalizeAllowedOrigins } from '@vessel-agent/serve';
 import { isLoopbackHostname, loadConfig, type VesselConfig } from '../packages/config/src/index';
 import type { HubCommand } from './cli-args';
 import { expandHome, resolveDataDir } from './data-paths';
@@ -298,7 +298,11 @@ function formatDirectory(body: unknown): string {
   return nodeLines(body).join('\n');
 }
 
-function withHubOverrides(config: VesselConfig, command: Extract<HubCommand, { kind: 'start' }>) {
+function withHubOverrides(
+  config: VesselConfig,
+  command: Extract<HubCommand, { kind: 'start' }>,
+  env: Record<string, string | undefined> = process.env,
+) {
   const hub = { ...(config.hub ?? {}) };
   if (command.host !== undefined || command.port !== undefined) {
     hub.listen = {
@@ -312,6 +316,19 @@ function withHubOverrides(config: VesselConfig, command: Extract<HubCommand, { k
     hub.tls = { certFile: command.tlsCert, keyFile: command.tlsKey };
   }
   if (command.dataDir !== undefined) hub.dataDir = command.dataDir;
+  // 0.50：平台 spawn 的 Hub 自动放行平台页面 Origin（内部 env 契约，
+  // 与 node 的 `VESSEL_PLATFORM_ORIGINS` 同一套）；手工启动不受影响。
+  const injected = (env.VESSEL_PLATFORM_ORIGINS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value !== '');
+  if (injected.length > 0) {
+    try {
+      hub.allowedOrigins = normalizeAllowedOrigins([...(hub.allowedOrigins ?? []), ...injected]);
+    } catch {
+      // 内部 env 非法不影响用户配置（与 node 的合并语义一致）。
+    }
+  }
   return { ...config, hub };
 }
 
@@ -348,7 +365,7 @@ async function startCommand(
 ): Promise<number> {
   const start = deps.startRuntime ?? startHubRuntime;
   const runtime = await start({
-    config: withHubOverrides(config, command),
+    config: withHubOverrides(config, command, deps.env ?? process.env),
     ...(command.dataDir !== undefined ? { dataDir: command.dataDir } : {}),
   });
   output(deps, ui.ok(`hub listening on ${runtime.url}`));

@@ -71,7 +71,7 @@ import {
   serviceStatus,
   uninstallService,
 } from './gateway/service';
-import { HUB_DEFAULT_PORT } from './hub/server';
+import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
 import { t } from './i18n';
 import { createHttpRpcClient } from './rpc/http-client';
 import { resolveGatewayToken } from './transport-factory';
@@ -2059,6 +2059,12 @@ export async function runPlatformGatewayForeground(
     ).trim();
     const platformPort = targetPort ?? config.gateway?.port ?? DEFAULT_GATEWAY_OPTIONS.port;
     const platformToken = resolvePlatformToken(config, env);
+    // 0.50：本地 Hub 默认随 gateway 自动拉起（`hub.auto_start: false` 关闭）。
+    // `direction: 'node'` 的 gateway 是出站加入远端 Hub，不再起一个空本地 Hub。
+    const hubConfig = config.hub;
+    const hubAutoStart = hubConfig?.autoStart !== false && hubConfig?.direction !== 'node';
+    const hubHostname = (hubConfig?.listen?.hostname ?? HUB_DEFAULT_HOSTNAME).trim();
+    const hubPort = hubConfig?.listen?.port ?? HUB_DEFAULT_PORT;
 
     if (!existsSync(path.join(options.staticDir, 'index.html'))) {
       printErr(ui.err(t('gateway.webDistMissing', { path: options.staticDir })));
@@ -2097,6 +2103,10 @@ export async function runPlatformGatewayForeground(
           ? { allowedOrigins: config.gateway.allowedOrigins }
           : {}),
         nodeOrigins: [...new Set(nodes.map((node) => node.apiUrl))],
+        // 0.50：Hub 页浏览器直连 Hub，CSP `connect-src` 必须放行 Hub origin。
+        ...(Number.isInteger(hubPort) && hubPort > 0
+          ? { hubOrigins: platformBrowserOrigins(hubHostname, hubPort) }
+          : {}),
         staticDir: options.staticDir,
         nodes: nodes.map((node) => ({
           nodeId: node.entry.node_id,
@@ -2150,6 +2160,22 @@ export async function runPlatformGatewayForeground(
       return 1;
     }
 
+    // 0.50：本地 Hub 是独立进程；启动失败只 warning，不阻断 gateway。
+    // 手工/外部启动的 Hub 走 adopt，不记 manifest（`gateway stop` 不会杀它）。
+    let hubStarted: { url: string; adopted: boolean } | undefined;
+    if (hubAutoStart) {
+      const hubDataDir =
+        hubConfig?.dataDir !== undefined
+          ? path.resolve(expandHome(hubConfig.dataDir))
+          : path.join(dataDir, 'hub');
+      const hub = await supervisor.startHub({ dataDir: hubDataDir });
+      if (hub.ok) {
+        hubStarted = { url: hub.url, adopted: hub.adopted };
+      } else {
+        printErr(ui.warn(`${hub.code}: ${hub.message}`));
+      }
+    }
+
     try {
       await writeForegroundGatewayPid({
         dataDir,
@@ -2188,6 +2214,10 @@ export async function runPlatformGatewayForeground(
             (node.entry.auto_start ? '' : '  (auto_start: false)'),
         ),
       );
+    }
+    if (hubStarted !== undefined) {
+      const detail = hubStarted.url !== '' ? hubStarted.url : 'running';
+      print(ui.dim(`hub ${detail}${hubStarted.adopted ? '  (adopted)' : ''}`));
     }
 
     await (options.waitForStop ?? waitForTerminationSignal)();

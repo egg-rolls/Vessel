@@ -74,6 +74,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
 
   const allowedOrigins = normalizeAllowedOrigins(opts.allowedOrigins);
   const nodeOrigins = normalizeAllowedOrigins(opts.nodeOrigins);
+  const hubOrigins = normalizeAllowedOrigins(opts.hubOrigins);
   const registry = createPlatformRegistry(opts.nodes);
   const version = opts.version ?? 'unknown';
   const platformToken = opts.platformToken;
@@ -152,7 +153,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
               'Content-Security-Policy',
               buildContentSecurityPolicy(req, allowedOrigins, {
                 frameSrc: nodeOrigins,
-                connectSrc: nodeOrigins,
+                connectSrc: [...nodeOrigins, ...hubOrigins],
               }),
             );
           }
