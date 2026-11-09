@@ -692,7 +692,9 @@ export async function buildTenantRuntime(
     maxIterations: config.termination?.maxIterations,
     maxRuntimeSeconds: config.termination?.maxRuntimeSeconds,
   };
-  const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
+  // 0.50：默认 system 完全由用户掌握。未配置时为空串，不注入任何内置 base system
+  // 文本；Self Card 仍由 composeRunSystemPrompt 生成。
+  const systemPrompt = config.agent?.systemPrompt ?? '';
 
   const contextFactory = () => new MemoryWorkingContext(contextConfigFor(config, summarizer));
 

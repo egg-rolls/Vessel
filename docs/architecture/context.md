@@ -28,7 +28,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 
 | 来源 | 内容 | 方式 | 位置 | 持久化 |
 |---|---|---|---|---|
-| `config.agent.systemPrompt` / 成员 `system_prompt` | 基底提示词 | `ExecutionUnit.systemPrompt` | 第一条 system | 是 |
+| `config.agent.systemPrompt` / 成员 `system_prompt` | 基底提示词（**只来自用户配置**；未配置时为空，不注入内置文案） | `ExecutionUnit.systemPrompt` | 第一条 system | 是 |
 | core `formatSelfCard` | role / parent / team / depth / model / tools / limits / context budget / how_to_ask | `composeRunSystemPrompt` | system | 是 |
 | 历史恢复 | session cache + 事件日志 | `loadStoredHistory` / `projectMessages` | 用户输入前 | 是 |
 | 用户输入 | `run(input)` | `addContext` + `user.message` | 本轮 user | 是 |
@@ -44,6 +44,8 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | 压缩 | 摘要 | `compactAsync` / `autoCompactAsync` / `compactContext` | system 之后 | 是（事件日志 + session cache） |
 
 **不注入**：Team 日志不会自动进上下文；只有 `teams.post` 里被 `@` 的成员会收到一条普通 user 消息。权限请求 / ask 事件不进上下文，只有工具结果会。
+
+**基底 system 完全由用户掌握**：只有 `config.agent.systemPrompt`（或成员 `system_prompt`）会作为基底提示词；两者都未配置时基底为空（空串跳过，不写 system 消息），runtime 不提供任何内置默认提示词。Self Card 是 runtime 元数据，仍按 `composeRunSystemPrompt` 注入（无基底时 system 只有 card）。
 
 ## 一次 run 的顺序
 

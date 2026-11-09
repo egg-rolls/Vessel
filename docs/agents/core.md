@@ -32,6 +32,7 @@ applies_to: [N, M]
 - **Runtime / ExecutionUnit 分层**：`Runtime` 是 per-node 无状态工厂（只持单 node profile 与 `(内部单 id, sessionId)` EU 目录），`ExecutionUnit` 是 per-session 长活对象；唯一 EU 构造入口是 `Runtime.getOrCreateExecutionUnit`。
 - **唯一写者**：事实事件 / RunRecord / SessionState 由 Run 经 `RunJournal` 写；`ExecutionUnit` 只持只读 EventLog（ADR-098 C1）。`WorkingContext` 归每次 Run（`contextFactory` 新建），不是 EU 的长期字段。
 - **压缩摘要**：`role: 'system'` + `compaction_summary: true`，基底 system 之后、其它消息之前，同时最多一条；应用新压缩时移除旧摘要；不得写回 `assistant`（thinking 模式需要 `reasoning_content`）。`message.compaction` 可带 `cleared_tool_call_ids` / `degraded`，恢复先按 id 写回确定性占位再按 `kept` 裁剪（ADR-083）。
+- **基底 system 无内置默认**：基底 system 只来自 `config.agent.systemPrompt` / 成员 `system_prompt`；未配置时为空并跳过 system 消息，core 不提供任何内置默认提示词。Self Card 是 runtime 元数据，仍注入。
 - **限额**：判定只经 `evaluateUsageLimits` / `evaluateTermination`（ADR-084）。`request_limit` / token / cost / `max_iterations` / `max_runtime` 命中时先发 `limit.blocked` 再抛 `LimitExceededError`；`tool_calls_limit` 是软预算——发一次 `limit.warning`，下一轮请求不提供工具，模型收尾后 run 正常 `completed`。
 - **错误 envelope 只增不改**：`run.failed` / `tool.call.failed` 保留原 `error`，新增字段只附加；不写 prompt / reasoning / 完整工具结果（ADR-080）。
 - **透明化**：事件形状冻结、快照只填已知字段、Self Card 每 run 一次、BeforeLlm 注入只增不改（ADR-086/087）。
