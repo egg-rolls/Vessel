@@ -172,7 +172,7 @@ vessel node reload [--scope config,plugins]
 vessel node stop
 ```
 
-- `gateway start`：Platform Gateway 缺省 `127.0.0.1:8642`（UI / 静态宿主 / `/platform/rpc` 只读 allowlist）+ Node API 缺省 `8644`（`/v1/*`、WS/SSE、插件 HTTP）。两者认证链与路由表分离。
+- `gateway start`：Platform Gateway 缺省 `127.0.0.1:8642`（UI / 静态宿主 / `/platform/rpc` 只读 allowlist）+ Node API 缺省 `8644`（`/v1/*`、WS/SSE、插件 HTTP）。两者认证链与路由表分离。`hub.auto_start`（默认 true）时同时拉起本地 Hub 8643；已有实例 adopt，Web Hub 页回环自动连接。
 - `vessel node start --config <path>`：用独立配置启动 standalone Node API；`gateway nodes add` 把本地 node 写入 `nodes.json`（0600 原子写，不含 token），`auto_start` 节点由 gateway 拉起。
 - 运行态以 `<dataDir>/gateway.pid`（node，G1 兼容名）与 `<dataDir>/platform.pid`（平台）为准，均 `0600`；daemon 日志在 `<dataDir>/logs/`。`status --json` 只输出 JSON。
 - 修改 TLS 证书、token、端口或 provider / model 后必须 `restart`；`reload` 会在 `requires_restart` 中列出这些字段，不能把 reload 成功当成新证书 / 新 token 已生效。

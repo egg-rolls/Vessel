@@ -320,6 +320,7 @@ Hub 是**独立进程**（`vessel hub start`），不随 gateway 启动；gatewa
 
 ```yaml
 hub:
+  auto_start: true               # gateway 启动时自动拉起本地 hub（默认 true；direction:node 忽略）
   direction: node                # 仅 node 角色：gateway 出站加入远端 hub
   url: https://hub.example:8643  # node 角色：hub 基址（join 缺省 URL；运行时 state 优先）
   ca_file: /etc/vessel/hub-ca.pem      # node 角色：hub TLS CA（可选）
@@ -327,7 +328,7 @@ hub:
 ```
 
 - `hub` 是**顶层块**；`hub.data_dir`（仅 hub 进程使用）与全局 `data_dir` 相同 → validation error `hub_data_dir_conflict`。
-- `direction` 只接受 `node`：gateway 出站拨号 hub，节点不需要开放入站端口。hub 进程自身由 `vessel hub start` 启动，不在 gateway 内。
+- `direction` 只接受 `node`：gateway 出站拨号 hub，节点不需要开放入站端口。hub 仍是独立进程；`gateway start` 在 `hub.auto_start`（默认 true）时 spawn `vessel hub start`，已有活实例 adopt；`gateway stop` 只停本次 gateway spawn 的 hub，手工启动的实例不动。`direction: node` 时网关不启动本地 hub。
 - `url` / `ca_file` / `join_code_env` 只在 node 角色使用：`url` 必须是绝对 `http(s)`、无 userinfo / path / query / hash，非回环必须 `https`；`join_code_env` 只在 `vessel hub join` 缺 `--code` 时读取。node token 明文**只走 SecretStore**。
 - node 侧状态写 gateway 的 `data_dir`（`hub-node.json` / `hub-node-status.json`），不写 `hub.data_dir`。
 - hub 进程的非回环 `hub.listen.hostname` 必须 `allow_remote: true` + TLS cert/key + 非空 `token_env`；不提供 `--insecure`。

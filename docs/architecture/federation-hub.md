@@ -24,7 +24,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 
 ## Hub 进程与连接方向
 
-- hub 是 **app 层独立前台进程**（`vessel hub start`），实现在 `src/hub/`，不新增可发布 package，也不进 `packages/core` / `packages/agent` / `packages/serve`。gateway 不启动本地 hub；节点侧不提供 `/v1/hub/control` 与 `POST /v1/hub/pair`。
+- hub 是 **app 层独立前台进程**（`vessel hub start`），实现在 `src/hub/`，不新增可发布 package，也不进 `packages/core` / `packages/agent` / `packages/serve`。0.50 起 `gateway start` 在 `hub.auto_start`（默认 true）时自动 spawn 本地 hub 子进程；已有活实例 adopt、不重复起；`gateway stop` 只停本次 gateway spawn 的 hub；`direction: node` 不启动。节点侧不提供 `/v1/hub/control` 与 `POST /v1/hub/pair`。
 - 只有 **node → hub** 一个方向：节点作为 WSS 客户端主动拨号 `${hub.url}/v1/hub/node-control`，hub 是 acceptor；协议 `vessel.hub/1` 帧内 `dialer: 'node'` 标明发起方。节点只需监听回环，不必开放入站端口。
 - 同一 pairing 只保留一条活动连接，新连接接管；hub 重启时等待节点重连，不反向拨号节点。
 - 默认 data dir 仍是 `<dataDir>/hub`；独立部署 / 多公司必须显式设 `hub.dataDir`，且必须与 gateway 的 `dataDir` 不同。只有 Hub 进程读写 `<hubDataDir>/**`。

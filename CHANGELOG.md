@@ -9,26 +9,34 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
-## [0.33.0] - 2026-10-31
+## [0.50.0] - 2026-11-09
 
-> 0.33.0（基于 0.32.0，未发布）：headless ask 异步、压缩质量、Web 尾部拆分、诊断 doctor 覆盖。
-> 完整记录见 [`docs/versions/0.33.0.md`](docs/versions/0.33.0.md)。
+> 0.50.0（基于 0.49.0，未发布）：文档/技术债清理、默认提示词交给用户、本地 Node CORS
+> 自动放行、Team/Web UI 批次。完整记录见 [`docs/versions/0.50.0.md`](docs/versions/0.50.0.md)。
 
 ### Added
 
-- **headless ask 异步**：`--run` 提问时挂起并 exit 3，`attention` 离线应答，`--resume-run` 恢复；
-  ADR-082 追加 Errata（headless 注册反转）。
-- **压缩质量**：压缩前清旧工具输出（保留配对/system/最近 5 条），摘要九段模板。
-- **诊断页**：覆盖 doctor --deep 九类检查，缺数据源标 unavailable 并写原因。
+- **DataTable 可排序列**：受控 `sortable` / `sort` / `onSortChange`；透明表头、激活方向箭头主题色。
+- **Team 页**：成员列表改为「查看成员列表」弹层 + 搜索；Team 列表宽度可拖拽（220–420，持久化）。
+- **Hub 自动启动/连接**：`gateway start` 默认拉起本地 Hub（`hub.auto_start`），Web Hub 页回环自动连接 8643。
+- **本地 Node CORS**：平台 spawn 的本地 Node 自动放行平台 Origin。
 
 ### Changed
 
-- **Web 尾部拆分**：AttentionPanel / TeamsView / TeamChat / TenantsView 拆为薄容器，
-  导入路径与导出面不变。
+- **默认系统提示词**：未配置 `agent.systemPrompt` 时不再注入内置文本（Self Card 保留）。
+- **Team 默认锚点**：TUI/gateway 共用 `<dataDir>/default`，不再按各自 cwd 建多个默认 Team。
+- **Web 外壳**：去掉 AppBar 的 Vessel 字标，路由改用字标样式；暗色表头/内容底色互换。
+- **文档/清理**：CLAUDE.md 59 行、HANDOFF-main 106 行、plans INDEX 137 行；81 计划 /
+  21 handoff / 7 notes 归档；tmp 2.2GB→126MB；ADR-098 accepted；DECISION-052/053/054/055。
+
+### Fixed
+
+- `gateway reload` 不带 `--scope` 失败；本地 Node 对平台 Origin 的 `forbidden_origin`。
+- Usage token 表头的 chip 底色。
 
 ### 验证
 
-- 一次性探针：ask、compaction、web-split parity、doctor；每线门禁全 exit 0。无测试文件。
+- 各切片静态门禁（typecheck / biome / check-* / build）exit 0；行为测试由用户手测。
 
 ## [0.32.0] - 2026-10-31
 
