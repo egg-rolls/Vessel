@@ -305,6 +305,7 @@ teams:
 - **`policy.allow_auto_create`**（0.39，默认 `false`）：`dispatch` 在目标 `gone` 且 resume 失败后，是否允许按来源自动创建 agent；也可在单次 `agents.dispatch` 条目上传 `allow_auto_create` 显式覆盖。手改 `team.json` 时 snake_case 别名同样被接受。
 - **非法值**：配置声明非法 → validation error；手改 `team.json` 的非法预算 → warning 并忽略该预算子结构（Team 仍可用）。
 - 声明只**补写缺失**的 `<dataDir>/teams/<id>/<team_id>/team.json`（`<id>` 为持久化单 id）；不创建 Agent，不覆盖已有 `name` / `policy`，与已有文件冲突只 warning。
+- **默认 Team**：交互 / serve 入口在没有声明命中、也没有配置 `agent.cwd` 时，用 `<dataDir>/default` 作为默认 Team 的 workspace（不是进程 cwd）；同一 data root 下 TUI 与 gateway 的 node 子进程因此共用一个默认 Team。显式 `agent.cwd` 优先；headless（`--run` / 管道）不走这条默认 Team，其 `main` 绑到独立的 `<dataDir>/headless` 锚点。
 - **默认绑定**：`create` / `hire` 无显式 workspace 时，只有带 `name` 的 Agent 才绑定；workspace 必须与声明归一化后精确相等；多个声明命中 → 不绑定 + warning。显式 `--workspace` 但无 name → `invalid_input('team binding requires a name')`。
 - 绑定后默认 visibility `team`；unbound 保持 `private`。Team 只是 roster / 只写日志 / 定向寻址的分组，**不是 cwd 或安全边界**（成员仍共享父工具 cwd）。
 - roster 由 Agent 记录的 `team_id + membership` 派生，不单独持久化；`online_count = present && presence === 'live'`；`body_history` 透传（≤20）。

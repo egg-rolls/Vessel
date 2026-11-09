@@ -1057,7 +1057,8 @@ export interface AgentServiceOptions {
   ownerId?: string;
   /**
    * 0.19 S3：`create` 未显式传 workspace 时的默认 workspace。
-   * 仅由“配置声明命中 agent.cwd”提供；无声明时为 undefined（保持 unbound）。
+   * 由 bootstrap 传入：配置声明命中、显式 `agent.cwd`，或同 data root 的稳定锚点
+   * （`resolveDefaultTeamAnchor`）；headless / 纯内存时为 undefined（保持 unbound）。
    */
   defaultWorkspace?: string;
   /** 0.19 S3：Team 绑定端口；缺失时 `create` 永远 unbound */

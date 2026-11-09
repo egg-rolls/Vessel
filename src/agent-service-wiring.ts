@@ -316,8 +316,9 @@ export async function createAgentServiceWiring(
   await teamStore.ready();
   await teamStore.seed(options.teamDeclarations ?? []);
 
-  // 0.28 C3：打开目录即建 Team。`defaultWorkspace` 已由 bootstrap 判定（声明命中或
-  // 交互入口的 cwd）；headless 传 undefined，这里不建，避免一次性进程留空 Team。
+  // 0.28 C3：打开目录即建 Team。`defaultWorkspace` 已由 bootstrap 判定（声明命中、
+  // `agent.cwd`，或 dataDir 派生的稳定锚点）；headless 传 undefined，这里不建，
+  // 避免一次性进程留空 Team。
   // 建失败只警告不阻断启动：Team 缺失时成员创建按原有 unbound 路径降级。
   let defaultTeam: TeamRecord | undefined;
   if (options.defaultWorkspace !== undefined) {
@@ -437,12 +438,13 @@ export async function createAgentServiceWiring(
       // `main` 是 peer member，必须有 Team（CONTRACT §2 的前置不变式）。peer 无
       // Team 会被 `create` 直接拒绝，而 `main` 不存在等于整个入口不存在。
       //
-      // `options.defaultWorkspace` 由 bootstrap 判定（声明命中，或交互入口的 cwd）。
-      // 交互入口（TUI / Web）有 defaultWorkspace：沿用它的 Team，行为不变。
-      // headless 故意传 undefined（CONTRACT §6）—— 但 §2 的「所有 agent 都属于某个
-      // Team」是无条件的：不建 Team 就没有 `main`。这里按 §2 解，并用与 cwd 无关的
-      // 固定锚点（同一 data root 只有一个），保证 headless 至多留下一个 Team。
-      // `defaultWorkspace` 存在但 ensure 失败时保持原兜底（cwd），交互路径不受影响。
+      // `options.defaultWorkspace` 由 bootstrap 判定（声明命中、`agent.cwd`，或
+      // dataDir 派生的稳定锚点）。交互 / serve 入口有 defaultWorkspace：沿用它的
+      // Team，行为不变。headless 故意传 undefined（CONTRACT §6）—— 但 §2 的「所有
+      // agent 都属于某个 Team」是无条件的：不建 Team 就没有 `main`。这里按 §2 解，
+      // 并用与 cwd 无关的固定锚点（同一 data root 只有一个），保证 headless 至多
+      // 留下一个 Team。`defaultWorkspace` 存在但 ensure 失败时保持原兜底（cwd），
+      // 只在降级路径触发，交互路径不受影响。
       const ownerWorkspace =
         defaultTeam?.workspace ??
         (options.defaultWorkspace === undefined ? headlessTeamWorkspace : process.cwd());

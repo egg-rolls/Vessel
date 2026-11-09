@@ -851,7 +851,8 @@ async function bootstrapConnect(input: {
 /**
  * 0.19 S3：配置声明 → `new` 的默认 Team workspace。
  *
- * 只做**归一化后的精确相等**匹配（不是前缀 / 祖先）；没有 `agent.cwd` 时用进程 cwd。
+ * 只做**归一化后的精确相等**匹配（不是前缀 / 祖先）；没有 `agent.cwd` 时用进程 cwd
+ * 作声明匹配键（只是匹配键，不是建 Team 的锚点；锚点见 `resolveDefaultTeamAnchor`）。
  * 0 个命中 → undefined；多个命中 → warning + undefined；恰好 1 个 → 归一化 workspace。
  */
 export function resolveDefaultTeamWorkspace(
@@ -882,6 +883,18 @@ export function resolveDefaultTeamWorkspace(
   }
   const match = matches[0];
   return match === undefined ? undefined : normalizeWorkspace(match.workspace);
+}
+
+/**
+ * 0.50：交互 / serve 入口在没有显式 `agent.cwd`、也没有声明命中时的默认 Team 锚点。
+ *
+ * 不能用 `process.cwd()`：TUI 与 gateway 的 node 子进程从不同目录启动（daemon / node
+ * spawn 都不设 cwd，子进程继承父进程 cwd），同一 data root 会因此留下多个默认 Team。
+ * 从 dataDir 派生后，两个入口归一化到同一个 workspace，`ensureForWorkspace` 幂等收敛到
+ * 一个 Team。锚点不需要目录存在（`ensureForWorkspace` 只按路径算身份，不建目录）。
+ */
+export function resolveDefaultTeamAnchor(dataDir: string): string {
+  return path.resolve(dataDir, 'default');
 }
 
 /**
@@ -1166,11 +1179,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       workspace: team.workspace,
       ...(team.policy !== undefined ? { policy: team.policy } : {}),
     }));
-    // 0.28 C3：打开目录即建 Team。声明命中优先；否则交互入口退回 agent.cwd / 进程 cwd。
-    // headless（`--run` / 管道）保持 undefined：一次性进程不该在数据目录里留空 Team。
+    // 0.28 C3：打开目录即建 Team。声明命中优先；否则交互 / serve 入口用 agent.cwd，
+    // 未配置时用 dataDir 派生的稳定锚点（不是各进程 cwd，TUI 与 gateway 的 node 子进程
+    // 因此共用同一个默认 Team）。headless（`--run` / 管道）保持 undefined：
+    // 一次性进程不该在数据目录里留空 Team。
     const defaultWorkspace =
       resolveDefaultTeamWorkspace(config, teamDeclarations, logger) ??
-      (headless ? undefined : (resolveAgentCwd(config) ?? process.cwd()));
+      (headless ? undefined : (resolveAgentCwd(config) ?? resolveDefaultTeamAnchor(dataDir)));
     // 0.27：发给人类的 send 直接写本机 Team 日志（异步委派，不阻塞 agent）。
     // Team 服务在 createAgentServiceWiring 之后才存在，这里用晚绑定 getter 回填。
     let localHuman: LocalHumanTarget | undefined;
