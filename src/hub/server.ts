@@ -74,6 +74,8 @@ export interface CreateHubServerOptions {
   nodeControl?: HubNodeInboundDeps;
   logger?: Logger;
   now?: () => number;
+  /** app 版本；`hub start` 从根 `package.json` 传入，缺省 `'unknown'`。 */
+  version?: string;
 }
 
 export interface HubServer {
@@ -255,6 +257,8 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         })
       : undefined;
   const clock = options.now ?? Date.now;
+  // 版本由服务入口（`hub start`）传入；直接构造（测试 / 嵌入方）时用占位值。
+  const version = options.version ?? 'unknown';
 
   const hostname = config.listen?.hostname ?? HUB_DEFAULT_HOSTNAME;
   if (!isNonEmptyString(hostname) || hostname.includes('/')) {
@@ -381,6 +385,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       revision: directoryRevision,
       observed_at: clock(),
       nodes: registry.list(),
+      version,
     };
   }
 
@@ -637,6 +642,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
               hub_id: hubId,
               nodes: registry.list().length,
               now: clock(),
+              version,
             },
             extra,
           );
@@ -693,7 +699,8 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
           if (!readAuthorized(srv, request)) {
             return errorResponse('unauthorized', 'missing or invalid token', 401, extra);
           }
-          return jsonResponse(200, registry.snapshot(), extra);
+          // `version` 只加在响应上，不写进 registry.json（磁盘形状保持不变）。
+          return jsonResponse(200, { ...registry.snapshot(), version }, extra);
         }
 
         const nodeMatch = /^\/v1\/hub\/nodes\/([^/]+)$/.exec(path);

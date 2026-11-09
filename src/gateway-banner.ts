@@ -50,6 +50,64 @@ function boxPanel(title: string, lines: string[], inner: number): string {
   return [top, titleRow, sep, body, bottom].join('\n');
 }
 
+/** `gateway start` 前台摘要中的节点行。 */
+export interface PlatformStartupNode {
+  name: string;
+  url: string;
+  autoStart: boolean;
+}
+
+/** 本地 Hub 的启动结果：本次 spawn / adopt 已有实例 / 关闭 / 拉起失败。 */
+export type PlatformStartupHub =
+  | { state: 'auto-started' | 'adopted'; url: string }
+  | { state: 'disabled' | 'unavailable' };
+
+/** `gateway start` 前台摘要输入（字段全部来自运行态，不打印 token）。 */
+export interface PlatformStartupInfo {
+  version: string;
+  platformUrl: string;
+  nodes: PlatformStartupNode[];
+  hub: PlatformStartupHub;
+  /** 从进程启动到摘要输出经过的毫秒数。 */
+  readyMs: number;
+  /** 已本地化的 Ctrl+C 提示；缺省不输出。 */
+  stopHint?: string;
+}
+
+function platformHubValue(hub: PlatformStartupHub): string {
+  if (hub.state === 'auto-started' || hub.state === 'adopted') {
+    return `${hub.url} (${hub.state})`;
+  }
+  return hub.state;
+}
+
+/**
+ * `gateway start` 前台 Vite 风格启动摘要（0.50）。
+ *
+ * 纯文本、无边框、无 alt-screen；URL 可直接复制。token 只给来源提示，不打印值。
+ * `--serve` 的 `renderGatewayBanner` 保持不变。
+ */
+export function renderPlatformStartup(info: PlatformStartupInfo): string {
+  const rows: Array<[string, string]> = [
+    ['Platform', info.platformUrl],
+    ...info.nodes.map((node, index): [string, string] => [
+      index === 0 ? 'Node' : '',
+      `${node.url} (${node.name})${node.autoStart ? '' : '  (auto_start: false)'}`,
+    ]),
+    ['Hub', platformHubValue(info.hub)],
+    ['Web', info.platformUrl],
+    ['Token', 'see serve.token / VESSEL_GATEWAY_TOKEN'],
+  ];
+  const labelWidth = Math.max(...rows.map(([label]) => label.length));
+  const lines = [`${ui.title('Vessel Gateway')} ${info.version}`];
+  for (const [label, value] of rows) {
+    lines.push(`${ui.dim(label.padEnd(labelWidth))}  ${value}`);
+  }
+  lines.push(ui.ok(`ready in ${info.readyMs} ms`));
+  if (info.stopHint !== undefined) lines.push('', ui.dim(info.stopHint));
+  return lines.join('\n');
+}
+
 /** --serve 启动 banner：仅展示 gateway 地址与 token 占位 */
 export function renderGatewayBanner(gateway: Gateway): string {
   const rows: Array<[string, string]> = [

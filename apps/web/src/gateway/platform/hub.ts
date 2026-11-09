@@ -209,7 +209,14 @@ export function parseHubDirectory(value: unknown): HubDirectory | null {
   if (hubId === undefined) return null;
   const updatedAt = number(value.updated_at) ?? number(value.observed_at) ?? Date.now();
   const nodes = value.nodes.map(parseNode).filter((node): node is HubNodeRecord => node !== null);
-  return { v: 1, hub_id: hubId, updated_at: updatedAt, nodes };
+  const version = text(value.version);
+  return {
+    v: 1,
+    hub_id: hubId,
+    updated_at: updatedAt,
+    nodes,
+    ...(version !== undefined ? { version } : {}),
+  };
 }
 
 function parsePointer(value: Record<string, unknown>): HubPointerFrame | null {
@@ -460,11 +467,13 @@ export class HubClient {
     if (!isRecord(body) || body.ok !== true) {
       throw new HubClientError('http', 'invalid hub health response');
     }
+    const version = text(body.version);
     return {
       ok: true,
       hub_id: text(body.hub_id) ?? '',
       nodes: number(body.nodes) ?? 0,
       now: number(body.now) ?? Date.now(),
+      ...(version !== undefined ? { version } : {}),
     };
   }
 

@@ -32,6 +32,7 @@ import type { HubNodeState, SecretStore } from './hub/types';
 import { t } from './i18n';
 import { resolveNodeId } from './node-identity';
 import { ui } from './ui-style';
+import { readPackageVersion } from './version';
 
 const DEFAULT_HUB_PORT = 8643;
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -295,7 +296,16 @@ function nodeLines(body: unknown): string[] {
 }
 
 function formatDirectory(body: unknown): string {
-  return nodeLines(body).join('\n');
+  const lines = nodeLines(body);
+  if (isRecord(body)) {
+    const hubId = typeof body.hub_id === 'string' && body.hub_id !== '' ? body.hub_id : undefined;
+    const version =
+      typeof body.version === 'string' && body.version !== '' ? body.version : undefined;
+    if (hubId !== undefined) {
+      lines.unshift(ui.dim(`hub ${hubId}${version !== undefined ? `  version ${version}` : ''}`));
+    }
+  }
+  return lines.join('\n');
 }
 
 function withHubOverrides(
@@ -367,6 +377,7 @@ async function startCommand(
   const runtime = await start({
     config: withHubOverrides(config, command, deps.env ?? process.env),
     ...(command.dataDir !== undefined ? { dataDir: command.dataDir } : {}),
+    version: readPackageVersion(),
   });
   output(deps, ui.ok(`hub listening on ${runtime.url}`));
   await waitForStop(runtime, deps);

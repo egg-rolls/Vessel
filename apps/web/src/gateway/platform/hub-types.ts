@@ -46,6 +46,8 @@ export interface HubDirectory {
   hub_id: string;
   updated_at: number;
   nodes: HubNodeRecord[];
+  /** 0.50 additive：hub app 版本；旧 hub 缺省。 */
+  version?: string;
 }
 
 /** `GET /health`：URL / CORS 连通性预检。 */
@@ -54,6 +56,8 @@ export interface HubHealth {
   hub_id: string;
   nodes: number;
   now: number;
+  /** 0.50 additive：hub app 版本；旧 hub 缺省。 */
+  version?: string;
 }
 
 export interface HubHelloFrame {

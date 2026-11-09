@@ -52,6 +52,10 @@ export function HubDirectory({
   onDisconnect(): void;
   onRetry(): void;
 }) {
+  const versionLabel =
+    directory.version !== undefined
+      ? ` · ${t('hub.directory.version', { version: directory.version })}`
+      : '';
   return (
     <div className="flex flex-col gap-3">
       {!live && (
@@ -68,7 +72,7 @@ export function HubDirectory({
 
       <Section
         title={t('hub.directory.title')}
-        description={t('hub.directory.description', { url, hub: directory.hub_id })}
+        description={`${t('hub.directory.description', { url, hub: directory.hub_id })}${versionLabel}`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button onClick={onRetry}>{t('common.retry')}</Button>

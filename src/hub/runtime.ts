@@ -93,6 +93,8 @@ export interface StartHubRuntimeOptions {
   factories?: HubRuntimeFactories;
   /** hub data dir 独占锁；默认 true（测试可显式关闭）。 */
   singleInstance?: boolean;
+  /** app 版本；由 `hub start` 从根 `package.json` 传入，缺省 `'unknown'`。 */
+  version?: string;
 }
 
 export interface HubRuntime {
@@ -477,6 +479,7 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     registry,
     ...(logger ? { logger } : {}),
     now: clock,
+    ...(options.version !== undefined ? { version: options.version } : {}),
     nodeControl,
   };
   // S10.2：同一 hub data dir 只允许一个活实例。锁先于监听端口获取，

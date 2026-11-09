@@ -71,6 +71,7 @@ import {
   serviceStatus,
   uninstallService,
 } from './gateway/service';
+import { type PlatformStartupHub, renderPlatformStartup } from './gateway-banner';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
 import { t } from './i18n';
 import { createHttpRpcClient } from './rpc/http-client';
@@ -1936,6 +1937,7 @@ export interface PlatformGatewayForegroundOptions {
 export async function runPlatformGatewayForeground(
   options: PlatformGatewayForegroundOptions,
 ): Promise<number> {
+  const startupStartedAt = performance.now();
   const env = options.env ?? process.env;
   const print = options.print ?? console.log;
   const printErr = options.printErr ?? console.error;
@@ -2199,25 +2201,48 @@ export async function runPlatformGatewayForeground(
       return 1;
     }
 
-    print(
-      ui.ok(
-        t('gateway.started', {
-          pid: process.pid,
-          url: nodeOriginOf(platformHostname, platformGateway.port, false),
-        }),
-      ),
-    );
-    for (const node of nodes) {
+    const platformUrl = nodeOriginOf(platformHostname, platformGateway.port, false);
+    // 0.50：前台 TTY 输出 Vite 风格摘要；daemon 子进程 stdout 重定向到日志
+    // （非 TTY），保持既有逐行日志不变。显式注入 `print` 的嵌入方按交互处理。
+    const interactive = options.print !== undefined || process.stdout.isTTY === true;
+    if (interactive) {
+      const hub: PlatformStartupHub =
+        hubStarted !== undefined
+          ? {
+              state: hubStarted.adopted ? 'adopted' : 'auto-started',
+              url: hubStarted.url !== '' ? hubStarted.url : 'running',
+            }
+          : hubAutoStart
+            ? { state: 'unavailable' }
+            : { state: 'disabled' };
       print(
-        ui.dim(
-          `node ${node.entry.name}  ${node.apiUrl}` +
-            (node.entry.auto_start ? '' : '  (auto_start: false)'),
-        ),
+        renderPlatformStartup({
+          version,
+          platformUrl,
+          nodes: nodes.map((node) => ({
+            name: node.entry.name,
+            url: node.apiUrl,
+            autoStart: node.entry.auto_start,
+          })),
+          hub,
+          readyMs: Math.max(0, Math.round(performance.now() - startupStartedAt)),
+          stopHint: t('cli.gatewayRunning'),
+        }),
       );
-    }
-    if (hubStarted !== undefined) {
-      const detail = hubStarted.url !== '' ? hubStarted.url : 'running';
-      print(ui.dim(`hub ${detail}${hubStarted.adopted ? '  (adopted)' : ''}`));
+    } else {
+      print(ui.ok(t('gateway.started', { pid: process.pid, url: platformUrl })));
+      for (const node of nodes) {
+        print(
+          ui.dim(
+            `node ${node.entry.name}  ${node.apiUrl}` +
+              (node.entry.auto_start ? '' : '  (auto_start: false)'),
+          ),
+        );
+      }
+      if (hubStarted !== undefined) {
+        const detail = hubStarted.url !== '' ? hubStarted.url : 'running';
+        print(ui.dim(`hub ${detail}${hubStarted.adopted ? '  (adopted)' : ''}`));
+      }
     }
 
     await (options.waitForStop ?? waitForTerminationSignal)();

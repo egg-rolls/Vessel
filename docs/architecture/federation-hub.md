@@ -47,6 +47,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 - 快照新旧按 `(incarnation, revision)`：`incarnation` 变化无条件接受并重置 revision；同一代际下 `revision <= lastRevision` 丢弃。`incarnation` 只用于比较与事件去重，不与 `node_id` 混用。
 - 节点离线时保留最后一次目录快照，只读展示；hub 不伪造在线状态。
 - 指针 payload 固定 `{node_id, team_id, request_id?, reason, ts}`，只在线推送、不持久化、不排队；消费方按 `ts` 超过 60 秒丢弃。`data_plane: 'direct' | 'unreachable'` 由 `public_url ?? url` 派生。
+- 响应形状（0.50 起 additive）：`GET /health` → `{ok, hub_id, nodes, now, version}`；`GET /v1/hub/directory` → registry 快照 `{v, hub_id, updated_at, nodes}` 加 `version`，WS `directory` 帧同样带 `version`。`version` 只出现在 HTTP / WS 响应里，不写入 `<hubDataDir>/registry.json`；旧客户端忽略该字段。
 
 <a id="federation"></a>
 

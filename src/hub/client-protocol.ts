@@ -36,6 +36,8 @@ export interface HubDirectoryFrame {
   revision: number;
   observed_at: number;
   nodes: HubNodeRecord[];
+  /** 0.50 additive：hub app 版本；旧客户端忽略。 */
+  version: string;
 }
 
 export type HubClientServerFrame = HubClientHelloFrame | HubDirectoryFrame;
