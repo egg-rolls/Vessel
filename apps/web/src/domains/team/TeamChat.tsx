@@ -146,6 +146,7 @@ export function TeamChat(props: TeamChatProps) {
           permissions={permissions}
           asks={asks}
           memberWindow={memberWindow}
+          loading={firstLoading}
           onOpenMember={openMember}
           onOpenSession={(sessionId) => {
             setMembersOpen(false);

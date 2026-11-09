@@ -6,6 +6,7 @@
  */
 import { useState } from 'react';
 import { ModalShell } from '../../components/Modal';
+import { EmptyState, LoadingState } from '../../components/States';
 import { Button, SearchInput } from '../../components/ui';
 import type { AskUserRequest, PermissionRequest, TeamMember } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -20,6 +21,8 @@ export interface TeamMembersDialogProps {
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
   memberWindow: MemberWindowFlags;
+  /** `useTeamChat` 的首次加载态；弹层打开时可能仍在拉取。 */
+  loading: boolean;
   onOpenMember: (agentId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onLoadMore: () => void;
@@ -43,6 +46,7 @@ export function TeamMembersDialog({
   permissions,
   asks,
   memberWindow,
+  loading,
   onOpenMember,
   onOpenSession,
   onLoadMore,
@@ -70,10 +74,10 @@ export function TeamMembersDialog({
         placeholder={t('team.members.search')}
         ariaLabel={t('team.members.search')}
       />
-      {filtered.length === 0 ? (
-        <p className="m-0 py-2 text-sm text-muted" role="status">
-          {t('team.members.empty')}
-        </p>
+      {loading ? (
+        <LoadingState rows={4} />
+      ) : filtered.length === 0 ? (
+        <EmptyState title={t('team.members.empty')} />
       ) : (
         <TeamMemberSidebar
           members={filtered}

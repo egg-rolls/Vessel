@@ -26,7 +26,7 @@ export const PANE_LIMITS: Record<PaneKey, { min: number; max: number; default: n
   nav: { min: 200, max: 360, default: 256 },
   sessions: { min: 220, max: 420, default: 280 },
   chat: { min: 560, max: 1200, default: 860 },
-  teamList: { min: 220, max: 480, default: 280 },
+  teamList: { min: 220, max: 420, default: 280 },
 };
 
 export const DEFAULT_PANE_LAYOUT: PaneLayout = {
