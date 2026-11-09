@@ -26,6 +26,11 @@ import { parseFrontmatter, parseStringArray } from './check-docs';
 
 /** 共享侧：相对 root，始终参与扫描。 */
 const SHARED_DOC_DIRS = ['docs/architecture', 'docs/agents'] as const;
+/**
+ * 没有 frontmatter 的共享侧目录：用标题 / 文件名 / tags 合成最小模块参与检索。
+ * 不要求给历史 ADR、版本记录和根文档补 frontmatter；这是检索兜底，不是结构门禁。
+ */
+const FALLBACK_SHARED_DIRS = ['docs/operations', 'docs/adr', 'docs/versions', '.'] as const;
 /** 个人侧：只在找到 personal base 时扫描。 */
 const PERSONAL_DOC_DIRS = ['docs/constitution', 'docs/lessons', 'docs/roles'] as const;
 const MAX_PERSONAL_DEPTH = 3;
@@ -99,9 +104,10 @@ const USAGE = `用法: bun run scripts/docs-find.ts --goal "<目标>" [--paths <
   --root <dir>      仅用于测试（默认 process.cwd()）
   --help            显示本说明
 
-扫描范围：root 的 docs/architecture、docs/agents；若 root 或其 3 层内祖先存在
-docs/constitution、docs/lessons、docs/roles，则同时扫描最近的那个 base（个人侧，
-输出路径带 ../ 前缀，可直接从 cwd 打开；找不到时静默跳过）。
+扫描范围：root 的 docs/architecture、docs/agents；docs/operations、docs/adr、
+docs/versions 与根目录文档用标题/文件名做无 frontmatter 兜底；若 root 或其 3 层内
+祖先存在 docs/constitution、docs/lessons、docs/roles，则同时扫描最近的那个 base
+（个人侧，输出路径带 ../ 前缀，可直接从 cwd 打开；找不到时静默跳过）。
 `;
 
 function tokenize(text: string): string[] {
@@ -200,6 +206,9 @@ function resolveDocDirs(root: string): DocDir[] {
     displayBase: '',
     dirs: [dir],
   }));
+  for (const dir of FALLBACK_SHARED_DIRS) {
+    if (existsSync(join(root, dir))) dirs.push({ base: root, displayBase: '', dirs: [dir] });
+  }
   let personalBase: string | null = null;
   let depth = 0;
   let candidate = root;
@@ -220,26 +229,60 @@ function resolveDocDirs(root: string): DocDir[] {
   return dirs;
 }
 
+function fallbackModule(
+  relative: string,
+  file: string,
+  text: string,
+  frontmatter: Record<string, string> | null,
+): ModuleDoc {
+  const heading = /^#{1,6}\s+(.+?)\s*$/m.exec(text)?.[1]?.trim();
+  const title = frontmatter?.title ?? heading ?? file.replace(/\.md$/, '');
+  const tags = frontmatter?.tags ? (parseStringArray(frontmatter.tags) ?? []) : [];
+  const nameTokens = file
+    .replace(/\.md$/, '')
+    .split(/[-_.\s]+/)
+    .filter(Boolean);
+  const triggers = [...new Set([...nameTokens, ...tags, ...tokenize(title)])].slice(0, 30);
+  return {
+    path: relative,
+    title,
+    kind: 'current',
+    triggers,
+    paths: [relative],
+    text,
+  };
+}
+
 async function loadModules(dirs: DocDir[]): Promise<LoadResult> {
   const modules: ModuleDoc[] = [];
   const warnings: string[] = [];
+  const fallbackDirs = new Set<string>(FALLBACK_SHARED_DIRS);
   for (const dir of dirs) {
     for (const relativeDir of dir.dirs) {
       const full = join(dir.base, relativeDir);
       if (!existsSync(full)) continue;
       const files = await readdir(full);
       const markdown = files.filter((file) => file.endsWith('.md') && file !== 'INDEX.md').sort();
+      const fallback = dir.base !== undefined && fallbackDirs.has(relativeDir);
       for (const file of markdown) {
         const relative = `${dir.displayBase}${relativeDir}/${file}`;
         const text = await readFile(join(full, file), 'utf8');
         const frontmatter = parseFrontmatter(text);
         if (!frontmatter) {
+          if (fallback) {
+            modules.push(fallbackModule(relative, file, text, null));
+            continue;
+          }
           warnings.push(`${relative}: 缺少合法 frontmatter，跳过`);
           continue;
         }
         const triggers = parseStringArray(frontmatter.triggers ?? '');
         const paths = parseStringArray(frontmatter.paths ?? '');
         if (!frontmatter.title || !frontmatter.kind || !triggers || !paths) {
+          if (fallback) {
+            modules.push(fallbackModule(relative, file, text, frontmatter));
+            continue;
+          }
           warnings.push(`${relative}: frontmatter 字段不完整，跳过`);
           continue;
         }

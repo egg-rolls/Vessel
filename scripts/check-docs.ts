@@ -19,10 +19,16 @@ import { join, posix } from 'node:path';
 const LINK_FILES = [
   'README.md',
   'AGENTS.md',
+  'CHANGELOG.md',
   'CONTRIBUTING.md',
+  'SECURITY.md',
+  'CODE_OF_CONDUCT.md',
   'docs/ARCHITECTURE.md',
   'docs/FILE-MANAGEMENT.md',
   'docs/DOC-MANAGEMENT.md',
+  'docs/PRODUCT.md',
+  'docs/DESIGN.md',
+  'docs/WEB-UI.md',
   'docs/versions/CURRENT.md',
   'docs/versions/INDEX.md',
   'docs/ADR.md',
@@ -49,6 +55,19 @@ const ADR_DIR = 'docs/adr';
 const ADR_FILE_PATTERN = /^ADR-(\d{3})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
 const ADR_STATUS = new Set(['proposed', 'accepted', 'superseded']);
 const ADR_LINK_DOCS = ['README.md', 'AGENTS.md', 'docs/ARCHITECTURE.md', 'docs/FILE-MANAGEMENT.md'];
+// ADR-001..ADR-033 引用的文件在 ADR-034 重构中删除；docs/adr/README.md 明确保留原文。
+// 这是有界例外：不新增项，新增死链必须修链接或在 README 里登记，不能静默加白名单。
+const LEGACY_ADR_LINK_TARGETS = new Set([
+  '../../role/DEVELOPER.md',
+  '../api/CORE.md',
+  '../api/EVENT-SYSTEM.md',
+  '../api/tui.md',
+  'DOC-STANDARD.md',
+  'PLUGINS.md',
+  'PRD.md',
+  'ROADMAP.md',
+  'SPEC.md',
+]);
 
 export interface DocIssue {
   file: string;
@@ -75,6 +94,15 @@ export async function checkDocs(root: string): Promise<DocIssue[]> {
 
   for (const file of await listMarkdownFiles(root, AGENTS_DIR)) {
     await checkLinks(root, `${AGENTS_DIR}/${file}`, issues);
+  }
+
+  for (const file of await listMarkdownFiles(root, ADR_DIR)) {
+    if (file === 'README.md') continue;
+    await checkLinks(root, `${ADR_DIR}/${file}`, issues, LEGACY_ADR_LINK_TARGETS);
+  }
+
+  for (const file of await listMarkdownFiles(root, 'docs/versions')) {
+    await checkLinks(root, `docs/versions/${file}`, issues);
   }
 
   await checkDocTree(root, ARCH_DIR, new Set(['current', 'target']), issues, (kind) =>
@@ -259,7 +287,12 @@ async function listMarkdownFiles(root: string, dir: string): Promise<string[]> {
   return (await readdir(full)).filter((file) => file.endsWith('.md')).sort();
 }
 
-async function checkLinks(root: string, file: string, issues: DocIssue[]): Promise<void> {
+async function checkLinks(
+  root: string,
+  file: string,
+  issues: DocIssue[],
+  skipTargets?: Set<string>,
+): Promise<void> {
   const text = await readFile(join(root, file), 'utf8');
   const lines = text.split('\n');
   let inFence = false;
@@ -278,6 +311,7 @@ async function checkLinks(root: string, file: string, issues: DocIssue[]): Promi
 
       const target = raw.split('#')[0]?.split('?')[0] ?? '';
       if (!target) continue;
+      if (skipTargets?.has(target)) continue;
 
       const resolved = posix.resolve('/', posix.dirname(file), target).replace(/^\/+/, '');
       if (!existsSync(join(root, resolved))) {

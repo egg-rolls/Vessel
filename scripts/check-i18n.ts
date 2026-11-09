@@ -52,6 +52,8 @@ import { pathToFileURL } from 'node:url';
 
 const I18N_DIR = 'apps/web/src/i18n';
 const SOURCE_DIR = 'apps/web/src';
+const TUI_I18N_DIR = 'packages/tui/src/i18n';
+const TUI_SOURCE_DIR = 'packages/tui/src';
 const BASE_LOCALE = 'zh-CN';
 const OTHER_LOCALE = 'en';
 
@@ -105,14 +107,19 @@ const T_CALL = /\bt\(/g;
 /** 参数里出现字面量就交给 QUOTED_LITERAL / TEMPLATE_LITERAL，不当动态调用。 */
 const ARGUMENT_LITERAL = /['"`]/;
 
-async function loadCatalog(root: string, locale: string): Promise<Catalog> {
-  const file = join(root, I18N_DIR, 'messages', `${locale}.ts`);
-  const mod = (await import(file)) as { messages?: Catalog };
-  const messages = mod.messages;
+async function loadCatalog(
+  root: string,
+  locale: string,
+  i18nDir = I18N_DIR,
+  exportName = 'messages',
+): Promise<Catalog> {
+  const file = join(root, i18nDir, 'messages', `${locale}.ts`);
+  const mod = (await import(file)) as Record<string, unknown>;
+  const messages = mod[exportName];
   if (messages === undefined || typeof messages !== 'object') {
-    throw new Error(`${locale} catalog 缺少 messages 导出：${file}`);
+    throw new Error(`${locale} catalog 缺少 ${exportName} 导出：${file}`);
   }
-  return messages;
+  return messages as Catalog;
 }
 
 async function collect(dir: string): Promise<string[]> {
@@ -144,11 +151,11 @@ function placeholdersOf(value: string): string {
 }
 
 /** I1 + I4：两份 catalog 对齐。 */
-export function checkCatalogs(base: Catalog, other: Catalog): Issue[] {
+export function checkCatalogs(base: Catalog, other: Catalog, i18nDir = I18N_DIR): Issue[] {
   const issues: Issue[] = [];
   const baseKeys = new Set(Object.keys(base));
   const otherKeys = new Set(Object.keys(other));
-  const dir = `${I18N_DIR}/messages`;
+  const dir = `${i18nDir}/messages`;
 
   for (const key of baseKeys) {
     if (otherKeys.has(key)) continue;
@@ -228,6 +235,17 @@ export async function checkI18n(root: string): Promise<Issue[]> {
     const source = await readFile(file, 'utf8');
     const name = relative(root, file).replaceAll('\\', '/');
     issues.push(...checkUsages(name, source, base));
+  }
+
+  // TUI 目录：同样的 I1–I4（key/placeholder 对齐、引用存在、模板前缀）。
+  const tuiBase = await loadCatalog(root, BASE_LOCALE, TUI_I18N_DIR, 'zhCN');
+  const tuiOther = await loadCatalog(root, OTHER_LOCALE, TUI_I18N_DIR, 'en');
+  issues.push(...checkCatalogs(tuiBase, tuiOther, TUI_I18N_DIR));
+  for (const file of await collect(join(root, TUI_SOURCE_DIR))) {
+    if (file.includes(messagesDir)) continue;
+    const source = await readFile(file, 'utf8');
+    const name = relative(root, file).replaceAll('\\', '/');
+    issues.push(...checkUsages(name, source, tuiBase));
   }
 
   return issues;
@@ -919,6 +937,8 @@ export function findOrphans(catalog: Catalog, index: ReferenceIndex): OrphanRepo
 /** I5 数据采集：扫源码建静态引用索引。 */
 export async function analyzeOrphans(root: string): Promise<OrphanReport> {
   const base = await loadCatalog(root, BASE_LOCALE);
+  const tuiBase = await loadCatalog(root, BASE_LOCALE, TUI_I18N_DIR, 'zhCN');
+  const merged = { ...base, ...tuiBase };
   const index = emptyReferenceIndex();
   const messagesDir = join('i18n', 'messages');
 
@@ -930,7 +950,14 @@ export async function analyzeOrphans(root: string): Promise<OrphanReport> {
     collectReferences(name, source, index);
   }
 
-  return findOrphans(base, index);
+  for (const file of await collect(join(root, TUI_SOURCE_DIR))) {
+    if (file.includes(messagesDir)) continue;
+    const source = await readFile(file, 'utf8');
+    const name = relative(root, file).replaceAll('\\', '/');
+    collectReferences(name, source, index);
+  }
+
+  return findOrphans(merged, index);
 }
 
 function formatOrphanReport(report: OrphanReport): string {

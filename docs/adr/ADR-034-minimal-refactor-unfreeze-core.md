@@ -28,7 +28,7 @@ related: [3, 4, 12, 24, 26, 28, 30]
   - 仓库里每份文档都记录代码事实，每个工具都无法被其他工具替代。
   - 代价一：模型失去了「专用工具」的强约束（grep 的 glob 语义、edit 的唯一性保证由各自 handler 自守），要靠工具 description 与 `inputSchema` 把用法讲清楚。代价二：删掉的 `/assets` `/skills` `/mcp` 三条命令与资产体系没有替代品——它们是空壳。
   - `@vessel/core` 的公开面收窄：不再导出 `MemoryToolRegistry` 与 `ToolRegistry` 类型；嵌入方若只想要简单注册表，用 `MemoryPluginHost`。
-- **关联**：**supersede ADR-017（Core 冻结）**、**supersede ADR-011（Skills 经 skills-loader 插件注入）**；使 **ADR-024（`ToolDefinition.default` 过滤）失效**（字段已删）、**部分取代 ADR-026**（`render` / `isEnabled` / `shouldDefer` / `interactive` 已删，`checkPermission` / `timeout` 保留）、**收窄 ADR-028**（保留其「运行时扫描」结论，删除 `PluginProvider` 接口与另外三套实现）；ADR-003（插件不进构造函数）、ADR-004（唯一扩展机制）、ADR-030（事件名开放字符串）不变；架构事实见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+- **关联**：**supersede ADR-017（Core 冻结）**、**supersede ADR-011（Skills 经 skills-loader 插件注入）**；使 **ADR-024（`ToolDefinition.default` 过滤）失效**（字段已删）、**部分取代 ADR-026**（`render` / `isEnabled` / `shouldDefer` / `interactive` 已删，`checkPermission` / `timeout` 保留）、**收窄 ADR-028**（保留其「运行时扫描」结论，删除 `PluginProvider` 接口与另外三套实现）；ADR-003（插件不进构造函数）、ADR-004（唯一扩展机制）、ADR-030（事件名开放字符串）不变；架构事实见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
 
 ## Addendum（0.6.1，已实现）
 

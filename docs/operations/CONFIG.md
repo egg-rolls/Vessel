@@ -1,5 +1,7 @@
 # 配置与密钥
 
+> **Reference（>300 行）**：按需检索，不要求整读；配置语义的当前事实以
+> [architecture/config.md](../architecture/config.md) 为准，本文只保留操作细节。
 > 适用版本：0.5+。维护者：`gov`；配置语义归 `asm`。
 > 本文描述固定位置、优先级与密钥解析。架构事实见
 > [architecture/config.md](../architecture/config.md#config-model) 与 [ADR-050](../adr/ADR-050-yaml-first-config-and-secrets.md)。

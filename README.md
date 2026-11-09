@@ -298,17 +298,24 @@ cd apps/web && bun run build
 | 文档                                                         | 作用                                                   |
 | ------------------------------------------------------------ | ------------------------------------------------------ |
 | [docs/PRODUCT.md](docs/PRODUCT.md)                           | 产品定位、概念模型与路线                               |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 架构总入口（重定向到模块索引与历史/决策入口）          |
 | [docs/architecture/INDEX.md](docs/architecture/INDEX.md)     | 技术架构：分层、循环、接口、扩展、事件、Gateway        |
+| [docs/agents/INDEX.md](docs/agents/INDEX.md)                 | 按路径的 agent 领域告诫索引                            |
 | [docs/adr/README.md](docs/adr/README.md)                     | 架构决策记录：每个关键选择的「为什么」                 |
 | [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)           | 文件放哪里、路径归属、分支与发布规则                   |
+| [docs/DOC-MANAGEMENT.md](docs/DOC-MANAGEMENT.md)             | 文档生命周期、拆分规则与结构门禁                       |
 | [docs/DESIGN.md](docs/DESIGN.md)                             | 跨外壳设计系统：页面骨架、表格控件、时间戳、插件 i18n  |
+| [docs/WEB-UI.md](docs/WEB-UI.md)                             | Web 控制台 UI 规范与交互约定                           |
 | [docs/operations/CONFIG.md](docs/operations/CONFIG.md)       | 配置位置、优先级、单公司数据根与密钥                   |
 | [docs/operations/REMOTE.md](docs/operations/REMOTE.md)       | 跨机器远程：证书 / CA、两机配置、独立前端、故障排查    |
 | [docs/operations/TRACE.md](docs/operations/TRACE.md)         | trace 留存、脱敏与重放                                 |
 | [docs/operations/MIGRATION.md](docs/operations/MIGRATION.md) | sqlite / file-v1 → file-v2 迁移                        |
 | [docs/operations/RELEASE.md](docs/operations/RELEASE.md)     | 发布流程                                               |
 | [docs/operations/CI-CD.md](docs/operations/CI-CD.md)         | CI / CD / 自动更新                                     |
+| [CHANGELOG.md](CHANGELOG.md)                                 | 变更记录                                               |
 | [AGENTS.md](AGENTS.md)                                       | AI 行为约定：风格、硬规矩、怎么跑、红线                |
+
+> `docs/operations/` 没有独立 `INDEX.md`，本表即其索引；新增 operations 文档必须在此登记（`check-docs` 校验）。
 
 ## 状态
 
