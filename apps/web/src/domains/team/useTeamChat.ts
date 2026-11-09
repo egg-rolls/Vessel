@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
-import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useOptionalToast } from '../../components/ToastProvider';
 import type { TeamDetail, TeamMember, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -27,8 +26,6 @@ import {
 } from './team-window';
 
 const TEAM_POLL_MS = 4_000;
-/** 与 app/layout 的 RAIL_MAX_WIDTH 一致；不直接 import 以免在 SSR 里访问 window。 */
-const NARROW_MAX_WIDTH = 1023;
 const ROSTER_RELOAD_COOLDOWN_MS = 2_000;
 const EMPTY_RESPONDING: ReadonlySet<string> = new Set();
 
@@ -67,7 +64,6 @@ export function useTeamChat({
     initialDetail ? sortMessages(initialDetail.messages) : [],
   );
   const [membersOpen, setMembersOpen] = useState(false);
-  const [narrow, setNarrow] = useState(false);
   const [retractTarget, setRetractTarget] = useState<TeamMessage | null>(null);
   const [retracting, setRetracting] = useState(false);
   const [retractError, setRetractError] = useState<string | undefined>();
@@ -79,13 +75,6 @@ export function useTeamChat({
   /** 发送期间不发起新的 `teams.get`；保持 pollMs 稳定，避免 useResource 重跑。 */
   const sendingRef = useRef(false);
   const detailRef = useRef<TeamDetail | undefined>(initialDetail);
-
-  const membersDrawerRef = useDrawerA11y({
-    open: membersOpen,
-    onClose: () => setMembersOpen(false),
-    enabled: narrow,
-    returnFocusId: 'team-members-toggle',
-  });
 
   const storeKey = teamDetailKey(nodeKey, teamId, 'chat');
   const detailState = useTeamStore((state) => state.details[storeKey]);
@@ -138,13 +127,6 @@ export function useTeamChat({
   const connected = hasToken && connectionState === 'open';
   // 归档 Team 只读：日志仍可轮询查看，但不接受新消息。
   const archived = team?.archived_at !== undefined;
-
-  useEffect(() => {
-    const update = () => setNarrow(window.innerWidth <= NARROW_MAX_WIDTH);
-    update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
-  }, []);
 
   useEffect(() => {
     return () => window.clearTimeout(rosterTimer.current);
@@ -347,8 +329,6 @@ export function useTeamChat({
     onlineCount,
     membersOpen,
     setMembersOpen,
-    narrow,
-    membersDrawerRef,
     detail,
     error,
     firstLoading,

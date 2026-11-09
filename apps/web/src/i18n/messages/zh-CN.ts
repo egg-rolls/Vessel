@@ -221,6 +221,7 @@ export const messages = {
   'resize.nav': '调整导航宽度',
   'resize.sessions': '调整会话列表宽度',
   'resize.chat': '调整会话内容宽度',
+  'resize.teams': '调整团队列表宽度',
   // 0.18 H2 / 0.27：已失效交互只保留一次 toast；详情在 Observe → Attention。
   'chat.reasoning.summary': '思考过程',
   // 0.17：运行中但暂无可见内容的占位（不隐藏失败/终态）
@@ -476,6 +477,9 @@ export const messages = {
   'team.chat.backToList': '返回 Team 列表',
   'team.chat.loadMoreMembers': '加载更多成员',
   'team.chat.membersCapped': '仅显示前 {shown} / {total} 成员',
+  'team.members.open': '查看成员列表',
+  'team.members.search': '按名字或角色搜索',
+  'team.members.empty': '没有匹配的成员',
 
   'team.composer.input': '给 Team 发消息',
   'team.composer.send': '发送',

@@ -60,7 +60,7 @@ export function ShellRouteView({
       {route.domain === 'gateway' && <GatewayView navigate={navigate} />}
       {route.domain === 'pluginHost' && <PluginHostView />}
       {route.domain === 'nodes' && <NodePanelView route={route} navigate={navigate} />}
-      {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} />}
+      {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} panes={panes} />}
       {route.domain === 'agents' && <AgentsView route={route} navigate={navigate} />}
       {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
       {(route.domain === 'tools' || route.domain === 'mcp' || route.domain === 'channels') && (

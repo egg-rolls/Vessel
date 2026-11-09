@@ -2,12 +2,13 @@ import type { CSSProperties, RefObject } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useViewportWidth } from './useViewportWidth';
 
-export type PaneKey = 'nav' | 'sessions' | 'chat';
+export type PaneKey = 'nav' | 'sessions' | 'chat' | 'teamList';
 
 export interface PaneLayout {
   nav: number;
   sessions: number;
   chat: number;
+  teamList: number;
 }
 
 export interface PaneResizeApi {
@@ -25,12 +26,14 @@ export const PANE_LIMITS: Record<PaneKey, { min: number; max: number; default: n
   nav: { min: 200, max: 360, default: 256 },
   sessions: { min: 220, max: 420, default: 280 },
   chat: { min: 560, max: 1200, default: 860 },
+  teamList: { min: 220, max: 480, default: 280 },
 };
 
 export const DEFAULT_PANE_LAYOUT: PaneLayout = {
   nav: PANE_LIMITS.nav.default,
   sessions: PANE_LIMITS.sessions.default,
   chat: PANE_LIMITS.chat.default,
+  teamList: PANE_LIMITS.teamList.default,
 };
 
 /** 每个 pane 在 shell 上对应的 CSS 变量；chat 同时驱动内容列、dock 与手柄位置。 */
@@ -42,7 +45,8 @@ function paneCssEntries(pane: PaneKey, value: number): readonly [string, string]
       ['--chat-half-w', `${value / 2}px`],
     ];
   }
-  return [[pane === 'nav' ? '--nav-w' : '--sessions-w', `${value}px`]];
+  const name = pane === 'nav' ? '--nav-w' : pane === 'sessions' ? '--sessions-w' : '--team-list-w';
+  return [[name, `${value}px`]];
 }
 
 /** 与 `navModeForWidth` 的抽屉边界一致。 */
@@ -94,13 +98,19 @@ export function parsePaneLayout(raw: string | null | undefined): PaneLayout {
     if (typeof value !== 'number' || !Number.isFinite(value)) return PANE_LIMITS[pane].default;
     return clampPane(pane, value);
   };
-  return { nav: read('nav'), sessions: read('sessions'), chat: read('chat') };
+  return {
+    nav: read('nav'),
+    sessions: read('sessions'),
+    chat: read('chat'),
+    teamList: read('teamList'),
+  };
 }
 
 export function paneCssVars(layout: PaneLayout): CSSProperties {
   return {
     '--nav-w': `${layout.nav}px`,
     '--sessions-w': `${layout.sessions}px`,
+    '--team-list-w': `${layout.teamList}px`,
     '--chat-content-w': `${layout.chat}px`,
     '--dock-width': `${layout.chat}px`,
     '--chat-half-w': `${layout.chat / 2}px`,

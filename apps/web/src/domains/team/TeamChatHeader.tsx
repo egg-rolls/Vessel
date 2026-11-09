@@ -17,8 +17,8 @@ export interface TeamChatHeaderProps {
   nodeCurrent?: boolean;
   /** 团队被冻结（status 槽，与 archived 并列）。 */
   frozen?: boolean;
-  membersOpen: boolean;
-  onToggleMembers: () => void;
+  memberTotal: number;
+  onOpenMembers: () => void;
   onBackToList: () => void;
   onRefresh: () => void;
   hasToken: boolean;
@@ -31,8 +31,8 @@ export function TeamChatHeader({
   nodeName,
   nodeCurrent = false,
   frozen = false,
-  membersOpen,
-  onToggleMembers,
+  memberTotal,
+  onOpenMembers,
   onBackToList,
   onRefresh,
   hasToken,
@@ -54,14 +54,8 @@ export function TeamChatHeader({
         }
         actions={
           <>
-            <Button
-              id="team-members-toggle"
-              className="team-chat-members-toggle hidden max-wide:inline-flex"
-              aria-expanded={membersOpen}
-              aria-controls="team-members"
-              onClick={onToggleMembers}
-            >
-              {membersOpen ? t('team.a11y.closeMembers') : t('team.chat.members')}
+            <Button id="team-members-toggle" onClick={onOpenMembers}>
+              {t('team.members.open')} ({memberTotal})
             </Button>
             <Button className="team-chat-back hidden max-wide:inline-flex" onClick={onBackToList}>
               {t('team.chat.backToList')}

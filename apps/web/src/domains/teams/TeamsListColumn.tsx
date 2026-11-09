@@ -3,6 +3,8 @@
  * 窄屏下同一栏是抽屉，附带遮罩。
  */
 import type { ReactNode } from 'react';
+import type { PaneResizeApi } from '../../app/usePaneResize';
+import { ResizeHandle } from '../../components/ResizeHandle';
 import { EmptyState, LoadingState, NotEnabledState } from '../../components/States';
 import { Button, SearchInput, Select, SidebarShell } from '../../components/ui';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -20,9 +22,10 @@ function nodeErrorText(result: NodeTeams): string {
 
 interface TeamsListColumnProps {
   state: TeamsViewState;
+  panes: PaneResizeApi;
 }
 
-export function TeamsListColumn({ state }: TeamsListColumnProps) {
+export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
   const {
     compact,
     drawerOpen,
@@ -149,55 +152,65 @@ export function TeamsListColumn({ state }: TeamsListColumnProps) {
   }
 
   return (
-    <SidebarShell
-      as="aside"
-      id="teams-column"
-      label={t('teams.title')}
-      title={t('teams.title')}
-      actions={
-        <>
-          {createButton}
-          <Button size="small" onClick={refreshCurrent} disabled={!loaded}>
-            {t('common.refresh')}
-          </Button>
-        </>
-      }
-      controls={
-        <>
-          <SearchInput
-            value={query}
-            onChange={setQuery}
-            placeholder={t('team.list.search')}
-            ariaLabel={t('team.list.search')}
-          />
-          <Select
-            className="h-control w-full py-0"
-            value={nodeFilter}
-            onChange={(event) => changeNodeFilter(event.target.value)}
-            aria-label={t('teams.filter.node')}
-          >
-            <option value="">{t('teams.filter.all')}</option>
-            {nodes.map((node) => (
-              <option key={nodeKeyOf(node)} value={nodeKeyOf(node)}>
-                {nodeNames.get(nodeKeyOf(node)) ?? '—'}
-              </option>
-            ))}
-          </Select>
-        </>
-      }
-      shellRef={drawerRef}
-      drawer={
-        compact
-          ? {
-              open: drawerOpen,
-              onClose: () => setDrawerOpen(false),
-              closeLabel: t('common.close'),
-              backdropLabel: t('common.close'),
-            }
-          : undefined
-      }
-    >
-      {body}
-    </SidebarShell>
+    <>
+      <SidebarShell
+        as="aside"
+        id="teams-column"
+        label={t('teams.title')}
+        title={t('teams.title')}
+        actions={
+          <>
+            {createButton}
+            <Button size="small" onClick={refreshCurrent} disabled={!loaded}>
+              {t('common.refresh')}
+            </Button>
+          </>
+        }
+        controls={
+          <>
+            <SearchInput
+              value={query}
+              onChange={setQuery}
+              placeholder={t('team.list.search')}
+              ariaLabel={t('team.list.search')}
+            />
+            <Select
+              className="h-control w-full py-0"
+              value={nodeFilter}
+              onChange={(event) => changeNodeFilter(event.target.value)}
+              aria-label={t('teams.filter.node')}
+            >
+              <option value="">{t('teams.filter.all')}</option>
+              {nodes.map((node) => (
+                <option key={nodeKeyOf(node)} value={nodeKeyOf(node)}>
+                  {nodeNames.get(nodeKeyOf(node)) ?? '—'}
+                </option>
+              ))}
+            </Select>
+          </>
+        }
+        shellRef={drawerRef}
+        drawer={
+          compact
+            ? {
+                open: drawerOpen,
+                onClose: () => setDrawerOpen(false),
+                closeLabel: t('common.close'),
+                backdropLabel: t('common.close'),
+              }
+            : undefined
+        }
+      >
+        {body}
+      </SidebarShell>
+      {!compact && !panes.disabled('teamList') && (
+        <ResizeHandle
+          pane="teamList"
+          api={panes}
+          label={t('resize.teams')}
+          className="resize-handle resize-handle-team-list"
+        />
+      )}
+    </>
   );
 }

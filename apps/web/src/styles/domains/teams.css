@@ -4,6 +4,7 @@
    ───────────────────────────────────────────────────────────── */
 
 .teams-workspace {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
@@ -119,6 +120,11 @@
 @media (max-width: 1023px) {
   .teams-workspace {
     display: block;
+  }
+
+  /* 列表变抽屉后没有可拖拽的列边界。 */
+  .resize-handle-team-list {
+    display: none;
   }
 
   .teams-detail-pane {

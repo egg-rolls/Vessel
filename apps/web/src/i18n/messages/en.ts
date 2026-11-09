@@ -222,6 +222,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'resize.nav': 'Resize navigation',
   'resize.sessions': 'Resize session list',
   'resize.chat': 'Resize conversation',
+  'resize.teams': 'Resize team list',
   // 0.18 H2 / 0.27: expired interactions only keep a one-shot toast; details live in Observe.
   'chat.reasoning.summary': 'Thinking',
   // 0.17: placeholder while a run is running but has no visible content
@@ -490,6 +491,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.chat.backToList': 'Back to Teams',
   'team.chat.loadMoreMembers': 'Load more members',
   'team.chat.membersCapped': 'Only the first {shown} of {total} members are shown',
+  'team.members.open': 'View member list',
+  'team.members.search': 'Search by name or role',
+  'team.members.empty': 'No matching members',
 
   'team.composer.input': 'Message the Team',
   'team.composer.send': 'Send',

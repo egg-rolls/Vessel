@@ -186,6 +186,14 @@
   margin-left: 0;
 }
 
+/* Team 列表栏：手柄中心压在 `--team-list-w` 的栅格分界上。 */
+
+.resize-handle-team-list {
+  left: var(--team-list-w);
+  right: auto;
+  transform: translateX(-50%);
+}
+
 /* 手柄随内容列右缘移动：内容列居中，右缘 = 50% + 宽度 / 2。 */
 
 .resize-handle-chat {

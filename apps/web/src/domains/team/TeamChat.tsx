@@ -11,7 +11,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { t } from '../../i18n';
 import { TeamChatHeader } from './TeamChatHeader';
 import { TeamChatMain } from './TeamChatMain';
-import { TeamChatMembersAside } from './TeamChatMembersAside';
+import { TeamMembersDialog } from './TeamMembersDialog';
 import type { TeamChatProps } from './team-chat-types';
 import { nextLimitFor, nextMembersLimitFor } from './team-window';
 import { useTeamChat } from './useTeamChat';
@@ -30,8 +30,6 @@ export function TeamChat(props: TeamChatProps) {
 
     membersOpen,
     setMembersOpen,
-    narrow,
-    membersDrawerRef,
     detail,
     error,
     firstLoading,
@@ -92,8 +90,8 @@ export function TeamChat(props: TeamChatProps) {
         nodeName={nodeName}
         nodeCurrent={nodeCurrent}
         frozen={frozen}
-        membersOpen={membersOpen}
-        onToggleMembers={() => setMembersOpen((value) => !value)}
+        memberTotal={memberTotal}
+        onOpenMembers={() => setMembersOpen(true)}
         onBackToList={onBackToList}
         onRefresh={reload}
         hasToken={hasToken}
@@ -139,23 +137,24 @@ export function TeamChat(props: TeamChatProps) {
           targetLabel={team?.name ?? teamId}
           retryHint={retryHint}
         />
+      </div>
 
-        <TeamChatMembersAside
+      {membersOpen && (
+        <TeamMembersDialog
           members={members}
           memberTotal={memberTotal}
           permissions={permissions}
           asks={asks}
-          onOpenMember={openMember}
-          onOpenSession={onOpenSession}
-          onClose={narrow ? () => setMembersOpen(false) : undefined}
-          membersOpen={membersOpen}
-          narrow={narrow}
-          drawerRef={membersDrawerRef}
           memberWindow={memberWindow}
+          onOpenMember={openMember}
+          onOpenSession={(sessionId) => {
+            setMembersOpen(false);
+            onOpenSession(sessionId);
+          }}
           onLoadMore={() => setMembersLimit(nextMembersLimitFor(membersLimit))}
-          onCloseDrawer={() => setMembersOpen(false)}
+          onClose={() => setMembersOpen(false)}
         />
-      </div>
+      )}
 
       {retractTarget && (
         <ConfirmDialog

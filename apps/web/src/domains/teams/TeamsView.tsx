@@ -11,6 +11,7 @@
  * 拆分为薄容器：状态与副作用在 `useTeamsView`，渲染在 `TeamsListColumn` /
  * `TeamsDetailPane` / `TeamsViewDialogs`。
  */
+import type { PaneResizeApi } from '../../app/usePaneResize';
 import { TeamsDetailPane } from './TeamsDetailPane';
 import { TeamsListColumn } from './TeamsListColumn';
 import { TeamsViewDialogs } from './TeamsViewDialogs';
@@ -18,12 +19,12 @@ import { type TeamsViewProps, useTeamsView } from './useTeamsView';
 
 export type { TeamsViewProps };
 
-export function TeamsView({ route, navigate }: TeamsViewProps) {
+export function TeamsView({ route, navigate, panes }: TeamsViewProps & { panes: PaneResizeApi }) {
   const state = useTeamsView({ route, navigate });
 
   return (
     <div className="teams-workspace">
-      <TeamsListColumn state={state} />
+      <TeamsListColumn state={state} panes={panes} />
       <TeamsDetailPane state={state} />
       <TeamsViewDialogs state={state} />
     </div>
