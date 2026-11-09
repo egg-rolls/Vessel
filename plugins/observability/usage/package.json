@@ -43,7 +43,7 @@
     "name": "Usage",
     "version": "0.1.0",
     "engines": {
-      "vessel": ">=0.33.0 <0.45.0"
+      "vessel": ">=0.33.0 <1.0.0"
     },
     "description": "Usage, logs and model leaderboard",
     "side": "both",

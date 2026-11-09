@@ -19,6 +19,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { satisfiesVersionRange } from '../src/plugin-manifest';
 
 const ROOT = process.cwd();
 
@@ -163,6 +164,24 @@ export async function checkVersions(root: string, expected?: string): Promise<st
 
   if (!(await changelogHasVersion(root, target))) {
     errors.push(`CHANGELOG.md: missing "## [${target}]" heading`);
+  }
+
+  // 插件 engines.vessel 必须允许当前版本；否则 loader 会静默跳过内置插件
+  // （0.50.0 bump 曾因 `>=0.33.0 <0.45.0` 让 marketplace/usage 消失）。
+  for (const manifest of manifests) {
+    if (!manifest.path.startsWith('plugins/')) continue;
+    let pkg: { vessel?: { engines?: { vessel?: unknown } } };
+    try {
+      pkg = JSON.parse(await readFile(join(root, manifest.path), 'utf8'));
+    } catch {
+      continue;
+    }
+    const range = pkg.vessel?.engines?.vessel;
+    if (typeof range === 'string' && !satisfiesVersionRange(target, range)) {
+      errors.push(
+        `${manifest.path}: vessel.engines.vessel "${range}" does not allow ${target} (plugin would be skipped)`,
+      );
+    }
   }
 
   return errors;

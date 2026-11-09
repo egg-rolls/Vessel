@@ -15,7 +15,7 @@
       "versions": [
         {
           "version": "0.1.0",
-          "engines": { "vessel": ">=0.33.0 <0.45.0" },
+          "engines": { "vessel": ">=0.33.0 <1.0.0" },
           "asset": {
             "url": "https://github.com/egg-rolls/vessel-plugin-example-usage/releases/download/v0.1.0/example-usage-0.1.0.tgz",
             "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -45,7 +45,7 @@
       "versions": [
         {
           "version": "0.1.0",
-          "engines": { "vessel": ">=0.33.0 <0.45.0" },
+          "engines": { "vessel": ">=0.33.0 <1.0.0" },
           "asset": {
             "url": "https://github.com/egg-rolls/vessel-plugin-example-tools/releases/download/v0.1.0/example-tools-0.1.0.tgz",
             "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -56,7 +56,7 @@
         },
         {
           "version": "0.2.0",
-          "engines": { "vessel": ">=0.33.0 <0.45.0" },
+          "engines": { "vessel": ">=0.33.0 <1.0.0" },
           "asset": {
             "url": "https://github.com/egg-rolls/vessel-plugin-example-tools/releases/download/v0.2.0/example-tools-0.2.0.tgz",
             "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
