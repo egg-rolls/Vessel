@@ -1,4 +1,4 @@
-import { Button, DataTable, type DataTableColumn } from '@vessel-agent/plugin-ui';
+import { DataTable, type DataTableColumn } from '@vessel-agent/plugin-ui';
 import { useCallback, useMemo, useState } from 'react';
 import type { ModelBucket } from '../src/aggregate.js';
 import { fmtCost, fmtInt } from './format';
@@ -23,43 +23,20 @@ function compare(left: number | string | undefined, right: number | string | und
   return left - right;
 }
 
-function SortHeader({
-  label,
-  active,
-  direction,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  direction: SortDirection;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      variant="chip"
-      size="small"
-      aria-pressed={active}
-      onClick={onClick}
-      className="-ml-2.5 font-mono uppercase tracking-wide"
-    >
-      {active ? `${label} ${direction === 'asc' ? '↑' : '↓'}` : label}
-    </Button>
-  );
-}
-
 /** Model leaderboard table; sorting stays local. */
 export function ModelTable({ items, t }: { items: readonly ModelBucket[]; t: Translator }) {
   const [sortKey, setSortKey] = useState<SortKey>('tokens');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   const toggleSort = useCallback(
-    (key: SortKey) => {
-      if (key === sortKey) {
+    (key: string) => {
+      const nextKey = key as SortKey;
+      if (nextKey === sortKey) {
         setSortDirection((value) => (value === 'asc' ? 'desc' : 'asc'));
         return;
       }
-      setSortKey(key);
-      setSortDirection(key === 'model' ? 'asc' : 'desc');
+      setSortKey(nextKey);
+      setSortDirection(nextKey === 'model' ? 'asc' : 'desc');
     },
     [sortKey],
   );
@@ -76,51 +53,50 @@ export function ModelTable({ items, t }: { items: readonly ModelBucket[]; t: Tra
     return copy;
   }, [items, sortKey, sortDirection]);
 
-  const header = useCallback(
-    (label: string, key: SortKey) => (
-      <SortHeader
-        label={label}
-        active={sortKey === key}
-        direction={sortDirection}
-        onClick={() => toggleSort(key)}
-      />
-    ),
-    [sortDirection, sortKey, toggleSort],
-  );
-
   const columns = useMemo((): readonly DataTableColumn<ModelBucket>[] => {
     return [
       {
         key: 'model',
-        header: header(t('leaderboard.th.model'), 'model'),
+        header: t('leaderboard.th.model'),
+        sortable: true,
         cell: (row) => <span title={row.model}>{row.model}</span>,
       },
       {
         key: 'requests',
-        header: header(t('leaderboard.th.requests'), 'requests'),
+        header: t('leaderboard.th.requests'),
+        sortable: true,
         cell: (row) => fmtInt(row.requests),
       },
       {
         key: 'tokens',
-        header: header(t('leaderboard.th.tokens'), 'tokens'),
+        header: t('leaderboard.th.tokens'),
+        sortable: true,
         cell: (row) => fmtInt((row.prompt_tokens ?? 0) + (row.completion_tokens ?? 0)),
       },
       {
-        key: 'cache_read',
-        header: header(t('leaderboard.th.cacheRead'), 'cache_read_tokens'),
+        key: 'cache_read_tokens',
+        header: t('leaderboard.th.cacheRead'),
+        sortable: true,
         cell: (row) => fmtInt(row.cache_read_tokens),
       },
       {
         key: 'cost',
-        header: header(t('leaderboard.th.cost'), 'cost'),
+        header: t('leaderboard.th.cost'),
+        sortable: true,
         cell: (row) => fmtCost(row.cost),
       },
     ];
-  }, [header, t]);
+  }, [t]);
 
   return (
     <TableFrame>
-      <DataTable columns={columns} rows={sorted} rowKey={(row) => row.model} />
+      <DataTable
+        columns={columns}
+        rows={sorted}
+        rowKey={(row) => row.model}
+        sort={{ key: sortKey, direction: sortDirection }}
+        onSortChange={toggleSort}
+      />
     </TableFrame>
   );
 }

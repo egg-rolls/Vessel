@@ -4,6 +4,23 @@
 @import "tailwindcss/utilities.css" layer(utilities);
 @source "./";
 
+/*
+ * 暗色 variant 对齐 tokens 的主题机制：系统偏好用 media query，显式选择用
+ * `[data-theme]`。插件 iframe 一定由宿主写入显式 `data-theme`；宿主自身的
+ * `system` 主题会移除属性。Tailwind 内置 `dark` 只看 media，会漏掉显式暗色。
+ * 与 apps/web/src/index.css 保持同一份定义。
+ */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]) *, :root:not([data-theme="light"])) {
+      @slot;
+    }
+  }
+  &:where(:root[data-theme="dark"] *, :root[data-theme="dark"]) {
+    @slot;
+  }
+}
+
 /* Minimal base: the subset of the host preflight these components need. */
 *,
 *::before,

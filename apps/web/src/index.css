@@ -43,6 +43,23 @@
 @source "../../../packages/plugin-ui/src";
 
 /*
+ * 暗色 variant 对齐 tokens 的主题机制（见 styles/tokens.css）：
+ * 系统偏好用 media query，显式选择用 `[data-theme]`。Tailwind 内置的
+ * `dark` 只看 `prefers-color-scheme`，会忽略显式 `data-theme="dark"`，
+ * 因此这里覆盖它（`system` 主题会移除属性，走 media 分支）。
+ */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]) *, :root:not([data-theme="light"])) {
+      @slot;
+    }
+  }
+  &:where(:root[data-theme="dark"] *, :root[data-theme="dark"]) {
+    @slot;
+  }
+}
+
+/*
  * L1：Tailwind theme aliases。
  * `inline` 让 utility 直接引用 tokens.css 的变量（例如 bg-surface →
  * background-color: var(--surface)），暗色覆盖无需再声明一套 Tailwind 变量。

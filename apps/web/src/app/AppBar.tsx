@@ -71,9 +71,8 @@ export function AppBar({
         aria-hidden="true"
         className="h-6 w-auto flex-none max-compact:h-5"
       />
-      <span className="font-serif text-xl font-semibold text-ink">Vessel</span>
       <span
-        className="overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs tracking-wide text-faint max-compact:hidden"
+        className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-serif text-xl font-semibold text-ink"
         aria-live="polite"
       >
         {routeBreadcrumb(route)}
