@@ -6,7 +6,7 @@ paths: [packages/serve/src/**, packages/serve/src/gateway/**, src/serve-auth.ts,
 ---
 
 # Gateway 协议与远程
-> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文仍描述现态。
+> Stage 4 已落地：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted）；本文正文描述现态。
 <a id="protocol"></a>
 
 `packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。gateway 只读取注入的单一事件面（单公司单流，无 tenant 过滤；ADR-089/100）。`apps/web` 是配套的浏览器控制台；它可连接多个 node 并直接调各 node 的 `/v1/rpc`（per-node token），这是 Console 聚合，不是平台级 gateway（[topology](topology.md)）。

@@ -6,7 +6,7 @@ paths: [packages/core/src/types/session.ts, packages/core/src/types/limits.ts, p
 ---
 
 # 状态与持久化接口
-> 0.34 术语与分层迁移中：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)；本文正文描述现态。**0.49 T5 现态**：单公司数据根为 `<dataDir>/{sessions,runs,events}`，没有 `tenants/<id>` 层；`tenant.json` 只保存内部持久单 id，legacy sqlite `sessions.tenant_id` 列按读写兼容保留（defer-3，待独立数据迁移）。`<dataDir>/tenants/**` 非空时启动 fail-fast `non_root_layout`，不移动、不删除数据。
+> Stage 4 已落地：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted）；本文正文描述现态。**0.49 T5 现态**：单公司数据根为 `<dataDir>/{sessions,runs,events}`，没有 `tenants/<id>` 层；`tenant.json` 只保存内部持久单 id，legacy sqlite `sessions.tenant_id` 列按读写兼容保留（defer-3，待独立数据迁移）。`<dataDir>/tenants/**` 非空时启动 fail-fast `non_root_layout`，不移动、不删除数据。
 <a id="session"></a>
 
 ### `SessionStore`（`types/session.ts`）

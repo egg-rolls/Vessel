@@ -1,7 +1,7 @@
 ---
 adr: 98
 title: 术语与分层：Agent / Session / Runtime / Loop / Run
-status: proposed
+status: accepted
 date: 2026-11-01
 related: [7, 15, 23, 33, 37, 40, 54, 81, 85, 88, 91, 92, 95, 97]
 tags: [agent, session, runtime, loop, run, layering, terminology, control-plane, lease, migration]
@@ -211,6 +211,38 @@ tags: [agent, session, runtime, loop, run, layering, terminology, control-plane,
     在其之上区分「框架 / 活对象 / 单次执行 / 迭代算法」四层。
   - **本文不 supersede 任何 ADR；旧 ADR 原文保留，与本文的差异见各 ADR 的
     `## Errata（0.34 术语与分层）` 段落。**
+
+## Addendum（0.50 落地状态，2026-11-09）
+
+本 ADR 的分层 / 术语 / C1–C4 / 连接语义 / 铁律已在 0.34–0.49 落地，故将 `status` 从
+`proposed` 改为 `accepted`。落地证据：
+
+- **Stage 4 分层**：`Runtime` 是 per-node 无状态工厂（`packages/core/src/runtime/runtime.ts:98`）；
+  `ExecutionUnit` 是 per-session 长活对象（`packages/core/src/runtime/execution-unit.ts:264`）；
+  `Run` 是瞬时执行，`WorkingContext` 每次 Run 新建（`execution-unit.ts:267`）；
+  `ToolCallingLoop` 是 Run 内闭包函数（`packages/core/src/runtime/tool-calling-loop.ts:128`）；
+  代码中已无 `AgentRuntime`。
+- **C1**：`RunRecord` 增量 checkpoint，`WorkingContext` 不落库，resume 从
+  `SessionEventLog` + cursor 重建（`docs/architecture/runtime-lifecycle.md`）。
+- **C2**：两级 lease（`BindingLease` → `SessionLease`），EU 持有并续租，Run 不持
+  `LeaseService`，fencingToken 由 EU 注入（`execution-unit.ts:366-368`）。
+- **C3**：`runToolCallingLoop` 是 Run 内闭包，不导出策略、不碰持久化
+  （`tool-calling-loop.ts:128`）。
+- **C4**：`AgentRuntime` 已改名为 `ExecutionUnit`；`Runtime` 作为无状态工厂存在。
+- **写者铁律**：事实事件 / `RunRecord` / `SessionState` 全部经 `RunJournal`；EU 只持
+  只读 EventLog（`docs/architecture/runtime-lifecycle.md`）。
+- **T3 单执行面**：一个 Node 服务一家公司，tenant 运行时抽象已移除
+  （`docs/architecture/topology.md:19`；ADR-100 / ADR-049 Errata；T0–T5）。
+  `TenantRuntimeProfile` 保留为内部单 id 类型（`runtime.ts:31`、`host.md:52`），
+  不再表示多租户隔离。
+
+**Errata（tenant 条款）**：本文 §2「LeaseService 租约带 tenant 标签」、§3「Node 内多
+tenant 共享」、§4 边界 7/8 的 tenant 表述，已被 ADR-100（node=company）与 0.49 T0–T5
+（tenant 抽象移除）取代；这些条款不再作为现态约束。其余分层与执行语义继续有效。
+
+**命名差异**：本文 §1 的 `AgentRecord` 在代码中落为 `PersistedAgentRecord` +
+`MemberRecord`（`packages/agent/src/types.ts:143`）；`RuntimeFactory` 别名未单独导出，
+代码只导出 `Runtime`（`packages/core/src/runtime/index.ts:27`）。这两项不改变语义。
 
 ## 目标架构文档
 
