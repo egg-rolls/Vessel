@@ -78,6 +78,12 @@ export interface NodeSupervisorOptions {
   runCommand?: CommandRunner;
   readinessTimeoutMs?: number;
   stopTimeoutMs?: number;
+  /**
+   * 平台页面 Origin 列表（0.50）。只注入本平台 spawn 的本地 Node 子进程
+   * （`VESSEL_PLATFORM_ORIGINS`），让 node 的 `serve.allowed_origins` 自动放行
+   * 平台 WebUI 的跨源请求；adopt/external 节点不受影响。
+   */
+  platformOrigins?: readonly string[];
   /** 测试 seam：覆盖单进程终止；返回 false 表示未确认停止（manifest 保留）。 */
   terminate?: (pid: number) => Promise<boolean>;
 }
@@ -518,7 +524,13 @@ export class NodeSupervisor {
         stdout: handle.fd,
         stderr: handle.fd,
         detached: true,
-        env: { ...(this.options.env ?? process.env), VESSEL_DATA_DIR: spec.dataDir },
+        env: {
+          ...(this.options.env ?? process.env),
+          VESSEL_DATA_DIR: spec.dataDir,
+          ...(this.options.platformOrigins !== undefined && this.options.platformOrigins.length > 0
+            ? { VESSEL_PLATFORM_ORIGINS: this.options.platformOrigins.join(',') }
+            : {}),
+        },
       });
     } catch (error) {
       await handle.close().catch(() => undefined);

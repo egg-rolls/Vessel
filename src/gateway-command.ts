@@ -1681,6 +1681,30 @@ function nodeOriginOf(host: string, port: number, tls: boolean): string {
   return `${tls ? 'https' : 'http'}://${normalizeOriginHost(host)}:${port}`;
 }
 
+/**
+ * 平台页面的浏览器 Origin 列表（0.50）：平台永远是 http 监听，回环/通配绑定下
+ * 用户可能用 `127.0.0.1` / `localhost` / `[::1]` 任一地址打开页面，三种都注入；
+ * 具体非通配 host 只注入它自己。只产出合法 `scheme://host[:port]` origin。
+ */
+function platformBrowserOrigins(host: string, port: number): string[] {
+  const normalized = host.trim().toLowerCase();
+  const loopbackish =
+    normalized === '' ||
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::1' ||
+    normalized === '[::1]' ||
+    normalized === '0.0.0.0' ||
+    normalized === '::' ||
+    normalized === '[::]';
+  if (!loopbackish) return [nodeOriginOf(host, port, false)];
+  return [
+    nodeOriginOf('127.0.0.1', port, false),
+    nodeOriginOf('localhost', port, false),
+    nodeOriginOf('::1', port, false),
+  ];
+}
+
 async function preparePlatformStart(options: {
   config: VesselConfig;
   dataDir: string;
@@ -2097,6 +2121,8 @@ export async function runPlatformGatewayForeground(
       instance,
       env,
       platform,
+      // 0.50：平台始终 http 监听；把页面 Origin 注入本地子 Node 的 CORS 白名单。
+      platformOrigins: platformBrowserOrigins(platformHostname, platformGateway.port),
       ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
       ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
       ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),

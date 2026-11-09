@@ -45,6 +45,7 @@ import {
   createGatewayEventHub,
   type Gateway,
   type GatewayOptions,
+  normalizeAllowedOrigins,
   type PluginHostManager,
   type PluginReloadResult,
   startGateway,
@@ -351,6 +352,29 @@ function resolveStaticDir(): string | undefined {
   if (fromEnv) return fromEnv;
   const dist = resolveWebDistDir();
   return existsSync(dist) ? dist : undefined;
+}
+
+/**
+ * 0.50：合并平台 spawn 注入的 Origin（内部 env 契约，不是用户配置）与
+ * `serve.allowed_origins`。注入值只接受合法 http(s) origin；解析失败时回落到
+ * 用户配置，避免内部 env 污染让 node 启动失败。
+ */
+function resolveGatewayAllowedOrigins(
+  configured: readonly string[] | undefined,
+  injected: string | undefined,
+): string[] {
+  const base = configured !== undefined ? [...configured] : [];
+  if (injected === undefined || injected.trim() === '') return base;
+  const extra = injected
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value !== '');
+  if (extra.length === 0) return base;
+  try {
+    return normalizeAllowedOrigins([...base, ...extra]);
+  } catch {
+    return base;
+  }
 }
 
 /**
@@ -1124,7 +1148,24 @@ async function runWithConfig(result: BootstrapResult) {
 
     const reloadRunner = createGatewayReloadRunner({
       // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
-      gateway: () => gateway as GatewayReconfigureTarget | null,
+      // 0.50：config reload 重建 allowedOrigins 时仍并入平台注入的 Origin，
+      // 否则用户改一次配置就会静默丢掉自动放行的平台页面 Origin。
+      gateway: () => {
+        if (gateway === null) return null;
+        const target = gateway as GatewayReconfigureTarget;
+        const reconfigure = target.reconfigure;
+        if (typeof reconfigure !== 'function') return target;
+        return {
+          reconfigure: (options) =>
+            reconfigure.call(target, {
+              ...options,
+              allowedOrigins: resolveGatewayAllowedOrigins(
+                options.allowedOrigins,
+                process.env.VESSEL_PLATFORM_ORIGINS,
+              ),
+            }),
+        };
+      },
       currentConfig: () => liveConfig,
       reloadConfig: reloadVesselConfig,
       refreshPlugins: () => {
@@ -1233,6 +1274,12 @@ async function runWithConfig(result: BootstrapResult) {
       });
     };
 
+    // 0.50：平台 spawn 的子 Node 自动并入平台页面 Origin（内部 env 契约）。
+    const allowedOrigins = resolveGatewayAllowedOrigins(
+      config.serve?.allowedOrigins,
+      process.env.VESSEL_PLATFORM_ORIGINS,
+    );
+
     const gatewayOptions: GatewayOptions = {
       // capabilities.list 需要真实版本；缺省会退化为 0.0.0。
       version: readPackageVersion(),
@@ -1288,7 +1335,7 @@ async function runWithConfig(result: BootstrapResult) {
       port: resolved.options.port,
       allowRemote: resolved.options.allowRemote,
       // 0.6 A5：CLI 覆盖已在 loader 合并；两端同名 allowed_origins。
-      ...(config.serve?.allowedOrigins ? { allowedOrigins: config.serve.allowedOrigins } : {}),
+      ...(allowedOrigins.length > 0 ? { allowedOrigins } : {}),
       ...(resolved.options.tls ? { tls: resolved.options.tls } : {}),
       ...(result.runStore
         ? {
