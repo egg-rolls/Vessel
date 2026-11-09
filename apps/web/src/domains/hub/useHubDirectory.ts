@@ -40,9 +40,11 @@ export function useHubDirectory(): HubDirectoryState {
     };
   }, [session]);
 
+  const status = snapshot.status;
+  const version = snapshot.directory?.version;
   useEffect(() => {
-    setHubNavStatus(snapshot.status);
-  }, [snapshot.status]);
+    setHubNavStatus(status, version);
+  }, [status, version]);
 
   const connect = useCallback(
     async (input: HubConnectInput): Promise<boolean> => (await session.connect(input)).ok,

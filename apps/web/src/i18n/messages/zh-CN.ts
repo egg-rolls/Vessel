@@ -657,7 +657,6 @@ export const messages = {
   'hub.directory.loading': '正在加载 Hub 目录…',
   'hub.directory.title': '目录',
   'hub.directory.description': 'Hub {hub}（{url}）；只展示元数据，Hub 不代理正文。',
-  'hub.directory.version': 'Hub 版本 {version}',
   'hub.directory.empty': '这个 Hub 目录还没有节点',
   'hub.directory.emptyHint': '用 `vessel hub join` 加入节点；本页只负责展示目录。',
   'hub.directory.connecting': '正在连接 Hub 以获取实时更新…',

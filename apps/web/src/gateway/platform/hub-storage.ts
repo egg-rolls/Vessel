@@ -128,6 +128,7 @@ export function clearHubConnection(): void {
 /**
  * 导航状态点：Hub 页直连 Hub，与 gateway 轮询无关。
  * 页面 hook 写入；未被访问过时，仅凭已存 URL 报 `unknown`（不谎报绿色）。
+ * `version` 来自 Hub directory（0.50 additive）；离开 Hub 页后保留最近已知版本。
  */
 export type HubNavStatus =
   | 'unconfigured'
@@ -139,19 +140,36 @@ export type HubNavStatus =
   | 'network'
   | 'unknown';
 
-let navStatus: HubNavStatus | null = null;
-const navListeners = new Set<() => void>();
-
-export function getHubNavStatus(): HubNavStatus {
-  if (navStatus === null) {
-    navStatus = readHubConnection().url !== '' ? 'unknown' : 'unconfigured';
-  }
-  return navStatus;
+export interface HubNavState {
+  status: HubNavStatus;
+  /** 最近一次 Hub directory 上报的版本；未知时省略。 */
+  version?: string;
 }
 
-export function setHubNavStatus(next: HubNavStatus): void {
-  if (navStatus === next) return;
-  navStatus = next;
+let navState: HubNavState | null = null;
+const navListeners = new Set<() => void>();
+
+/**
+ * 快照引用只在真实变化时替换：`useSyncExternalStore` 用 `Object.is` 比较，
+ * 每次返回新对象会无限重渲染。
+ */
+export function getHubNavStatus(): HubNavState {
+  if (navState === null) {
+    navState = { status: readHubConnection().url !== '' ? 'unknown' : 'unconfigured' };
+  }
+  return navState;
+}
+
+/**
+ * `version` 显式传入时覆盖；省略（如删除 token / 离开页面）则保留最近已知版本，
+ * 因为版本描述的是 Hub 服务本身，不随连接状态变化。
+ */
+export function setHubNavStatus(next: HubNavStatus, version?: string): void {
+  const current = getHubNavStatus();
+  const effectiveVersion = version ?? current.version;
+  if (current.status === next && current.version === effectiveVersion) return;
+  navState =
+    effectiveVersion !== undefined ? { status: next, version: effectiveVersion } : { status: next };
   for (const listener of [...navListeners]) listener();
 }
 

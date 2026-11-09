@@ -679,7 +679,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'hub.directory.loading': 'Loading Hub directory…',
   'hub.directory.title': 'Directory',
   'hub.directory.description': 'Hub {hub} at {url}. Metadata only; the Hub does not proxy content.',
-  'hub.directory.version': 'Hub version {version}',
   'hub.directory.empty': 'No nodes in this Hub directory yet',
   'hub.directory.emptyHint':
     'Join a node with `vessel hub join`; this page only displays the directory.',
