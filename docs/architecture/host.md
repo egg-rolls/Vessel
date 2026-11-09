@@ -6,7 +6,7 @@ paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 ---
 
 # Scheduler 与执行面
-> Stage 4 已落地：`Runtime` 是 per-node 无状态工厂，按 `(内部单 id, sessionId)` 持有/解析 `ExecutionUnit`；Scheduler 仍是每 node 一个、唯一执行入口。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+> Stage 4 已落地：`Runtime` 是 per-node 无状态工厂，按 `(内部单 id, sessionId)` 持有/解析 `ExecutionUnit`；Scheduler 仍是每 node 一个、唯一执行入口。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted；tenant 部分已被 ADR-100/T0–T5 取代）。
 
 > 执行面只有一层：每个 node 一个 `InProcessScheduler`，所有 agent / body 的 run 都经它排队。Scheduler 不知道 member / owner / visibility；成员能力层见 [member-team.md](member-team.md)。单 run 外壳见 [runtime-lifecycle.md](runtime-lifecycle.md#run)。
 

@@ -3,7 +3,7 @@
 > Vessel 仓库的 AI 行为约定。与代码冲突时以代码为准，并顺手改掉本文档。
 > 领域细节按路径读 `docs/agents/`；未命中时以本文件的硬安全规则为准。
 
-> 0.34 Stage 4 已落地：分层为 `Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-session）→ Run（瞬时，持 WorkingContext）→ ToolCallingLoop`；架构页正文描述该已实现状态。目标模型见 [docs/architecture/0.34-target.md](docs/architecture/0.34-target.md)，决策见 [ADR-098](docs/adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+> 0.34 Stage 4 已落地：分层为 `Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-session）→ Run（瞬时，持 WorkingContext）→ ToolCallingLoop`；架构页正文描述该已实现状态。目标模型见 [docs/architecture/0.34-target.md](docs/architecture/0.34-target.md)，决策见 [ADR-098](docs/adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted；tenant 部分已被 ADR-100/T0–T5 取代）。
 
 ## 先读什么
 

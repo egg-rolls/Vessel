@@ -6,7 +6,7 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/tool.ts]
 ---
 
 # Tool-Calling Loop
-> Stage 4 已落地：`LoopContext` 只绑定已物化的 provider / 窗口 / 工具端口，不持 lease、RunRecordStore 或 EventLog 写端口。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+> Stage 4 已落地：`LoopContext` 只绑定已物化的 provider / 窗口 / 工具端口，不持 lease、RunRecordStore 或 EventLog 写端口。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted；tenant 部分已被 ADR-100/T0–T5 取代）。
 
 <a id="loop"></a>
 

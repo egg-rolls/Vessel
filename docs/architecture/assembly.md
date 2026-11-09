@@ -6,7 +6,7 @@ paths: [src/**]
 ---
 
 # 装配层（`src/`）
-> Stage 4 已落地：`bootstrap` 每 node 构造一次 `Runtime`，单 bundle 注册 profile 并把 `bundle.runtime` 暴露为 per-session 门面；成员 host 与单 bundle 共用同一个 Runtime。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+> Stage 4 已落地：`bootstrap` 每 node 构造一次 `Runtime`，单 bundle 注册 profile 并把 `bundle.runtime` 暴露为 per-session 门面；成员 host 与单 bundle 共用同一个 Runtime。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted；tenant 部分已被 ADR-100/T0–T5 取代）。
 
 <a id="assembly"></a>
 

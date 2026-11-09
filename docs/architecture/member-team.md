@@ -6,7 +6,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ---
 
 # AgentService、Body 与 Team
-> Stage 4 已落地：成员的执行单元由 `MemberExecutionHost` 经 per-node `Runtime.getOrCreateExecutionUnit` 取得；成员 run 与主 run 一样写 `RunRecord`，`runs.resume` 按 `RunRecord.agent_id` 路由回成员 EU。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+> Stage 4 已落地：成员的执行单元由 `MemberExecutionHost` 经 per-node `Runtime.getOrCreateExecutionUnit` 取得；成员 run 与主 run 一样写 `RunRecord`，`runs.resume` 按 `RunRecord.agent_id` 路由回成员 EU。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted；tenant 部分已被 ADR-100/T0–T5 取代）。
 
 > 成员能力层的当前事实。RPC 方法形状见 [gateway-rpc.md](gateway-rpc.md#agent-lifecycle)；改动前的硬约定见 [docs/agents/agent.md](../agents/agent.md)。core 不知道 member / owner / visibility（ADR-088 / ADR-097）。
 <a id="layering"></a>

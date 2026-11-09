@@ -6,7 +6,7 @@ paths: [packages/core/src/runtime/**, packages/core/src/types/**]
 ---
 
 # 消息与运行时 API
-> Stage 4 已落地：`Runtime` 是 per-node 无状态工厂，`ExecutionUnit` 是 per-session，`WorkingContext` 归每次 Run。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)。
+> Stage 4 已落地：`Runtime` 是 per-node 无状态工厂，`ExecutionUnit` 是 per-session，`WorkingContext` 归每次 Run。目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted；tenant 部分已被 ADR-100/T0–T5 取代）。
 
 <a id="messages"></a>
 
