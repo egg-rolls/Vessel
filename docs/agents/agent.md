@@ -13,7 +13,7 @@ applies_to: [N, M]
 ## AgentService 唯一
 
 - 成员能力只由 `packages/agent` 实现；权限 bridge 只有一条活路径（body 创建 / 恢复时挂桥），不得恢复第二套桥；`packages/core` 不出现 member / owner / visibility / team 概念（ADR-088 / ADR-091）。
-- 内置 `agent` 工具是唯一模型 schema：root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `post`（root owner 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `post` / `send` / `list`。工具调用者的 owner / parent 固定，模型不能伪造。
+- 内置 `agent` 工具是唯一模型 schema：root owner 动作 `hire` / `send` / `close` / `list` / `rotate`（root owner 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `send` / `list`。Team 日志写入不在本工具内：`agent post` 已移除（它只追加日志、不投递、不唤醒，静默丢报告），需要写日志走 CLI `vessel team post`。工具调用者的 owner / parent 固定，模型不能伪造。
 - 持久化 `role` 只有 `member`（owner=self，Team 必需；`main` 也是 member）与 `temporary`（owner=雇佣者，Team 可选）。0.27 的 `single` 已删除；v3 及更早快照里的 `role:'single'` 只在读取时降级为 `member` 并补绑 default Team，写回不再出现。
 - 不得新增 `wait` / `status` / `cancel`；`inbox` 已是成员收件箱工具（`list` / `read` / `delete` / `insert`），等待语义仍是结束这一轮、回复作为新 turn 到达。
 ## 派生：peer / contractor

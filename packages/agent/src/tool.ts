@@ -27,27 +27,15 @@ import {
   type SendResult,
   type TeamAgentSendResult,
   TeamError,
-  type TeamMemberSummary,
 } from './types.js';
 
-const ACTIONS = ['create', 'hire', 'send', 'close', 'list', 'rotate', 'post'] as const;
+const ACTIONS = ['create', 'hire', 'send', 'close', 'list', 'rotate'] as const;
 
 /** root owner 可见的动作：root 没有 Team，不暴露 create（派 peer 需要 Team） */
-const OWNER_ACTIONS = ['hire', 'send', 'close', 'list', 'rotate', 'post'] as const;
+const OWNER_ACTIONS = ['hire', 'send', 'close', 'list', 'rotate'] as const;
 
 /** 成员 ExecutionUnit 可用的动作；rotate 在动作闸门之前单独处理 */
-const BODY_ACTIONS: readonly string[] = [
-  'create',
-  'hire',
-  'close',
-  'rotate',
-  'post',
-  'send',
-  'list',
-];
-
-/** TeamService 的 identify 契约注释承诺带 team_id，但 TeamMemberSummary 尚未声明；按可选读取 */
-type TeamCaller = TeamMemberSummary & { team_id?: string };
+const BODY_ACTIONS: readonly string[] = ['create', 'hire', 'close', 'rotate', 'send', 'list'];
 
 const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
 
@@ -219,7 +207,7 @@ export interface AgentToolOptions {
   ownerId?: string;
   /** root owner 自己的 session；用于区分 owner 调用与成员 ExecutionUnit 调用 */
   ownerSessionId?: string;
-  /** 成员 ExecutionUnit 的 Team 能力（post / send / list）；缺失时这些动作报错 */
+  /** 成员 ExecutionUnit 的 Team 能力（send / list）；缺失时这些动作报错 */
   team?: AgentTeamService;
   /**
    * 0.31：是否有能应答权限确认的人类通道（交互 REPL / serve；headless 为 false）。
@@ -247,11 +235,10 @@ export function createAgentTool(
       'send: dispatch a message (live queue now, gone resume first, rotating queue for the new ' +
       'body); returns immediately. Add interrupt:true for urgent (cancel + front of queue) or ' +
       'notify:true to append to the inbox + summary wake without running. ' +
-      'post: append to the caller team log only; never notifies or wakes anyone. ' +
       'close: release member(s), idempotent. list: return the roster. ' +
       'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first; ' +
       'a body may only rotate itself. ' +
-      'Bodies may use create, hire, close, rotate, post, send and list. ' +
+      'Bodies may use create, hire, close, rotate, send and list. ' +
       'Closing a peer needs human approval; closing your own contractor or yourself does not. ' +
       'Cross-node: reply to a federated from by sending to that address; from is runtime-filled ' +
       'and must not be given. ' +
@@ -262,7 +249,7 @@ export function createAgentTool(
         action: {
           type: 'string',
           enum: [...OWNER_ACTIONS],
-          description: 'hire | send | close | list | rotate | post',
+          description: 'hire | send | close | list | rotate',
         },
         name: { type: 'string', description: 'create/hire: display name' },
         model: { type: 'string', description: 'create/hire: model override' },
@@ -288,7 +275,7 @@ export function createAgentTool(
             'a local sender gets a node segment too, so send the location value back as-is; ' +
             'rotate: target agent',
         },
-        content: { type: 'string', description: 'send/post: message text' },
+        content: { type: 'string', description: 'send: message text' },
         interrupt: {
           type: 'boolean',
           description:
@@ -516,7 +503,7 @@ export function createAgentTool(
         }
 
         if (!isOwnerCaller && !BODY_ACTIONS.includes(action as string)) {
-          throw invalid('agent bodies may only use create|hire|close|rotate|post|send|list');
+          throw invalid('agent bodies may only use create|hire|close|rotate|send|list');
         }
 
         if (action === 'create' || action === 'hire') {
@@ -690,28 +677,6 @@ export function createAgentTool(
           } finally {
             releaseNotifyBatch(batchKey);
           }
-        }
-
-        if (action === 'post') {
-          if (isOwnerCaller) {
-            throw invalid('owner has no team; use vessel team post');
-          }
-          const team = options.team;
-          if (team === undefined) throw invalid('post requires a team service');
-          const sessionId = callerSession as string;
-          const caller = (await team.identify(sessionId)) as TeamCaller | undefined;
-          if (caller === undefined) throw invalid('post requires a team');
-          const teamId = caller.team_id ?? (await service.identify(sessionId))?.team_id;
-          if (teamId === undefined) throw invalid('post requires a team');
-          // 永不传 mentions：post 只写日志，不产生任何 run。
-          const conversationId = service.currentConversation?.(caller.agent_id);
-          const result = await team.post({
-            team_id: teamId,
-            content: record.content as string,
-            from: caller.agent_id,
-            ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
-          });
-          return JSON.stringify(result);
         }
 
         if (action === 'close') {
