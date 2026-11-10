@@ -722,12 +722,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
    *
    * 事件缺 `session_id` 时靠它把 run 生命周期事件归到会话订阅者；
    * 映射不到就不发（fail-closed），正文仍由 `sessions.get` 兜底。
+   * 命中时还会把归属**补进出站副本**（见 `withSessionAttribution`），
+   * 让订阅者不用自己再猜。
    */
   const runSessions = new Map<string, string>();
+  /** 归属查询连续 miss 的 run id（有界负缓存，避免每条增量重扫执行面快照）。 */
+  const unknownRunSessions = new Set<string>();
 
   function rememberRunSession(runId: unknown, sessionId: unknown): void {
     if (typeof runId !== 'string' || runId.length === 0) return;
     if (typeof sessionId !== 'string' || sessionId.length === 0) return;
+    // 归属已确定：清掉负缓存，后续 miss 回填才有机会再试一次。
+    unknownRunSessions.delete(runId);
     // Map 的插入顺序即 LRU：命中先删再插，溢出删最旧。
     if (runSessions.has(runId)) runSessions.delete(runId);
     runSessions.set(runId, sessionId);
@@ -741,6 +747,58 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function rememberEventSession(event: RunEvent): void {
     const sessionId = eventSessionId(event);
     if (sessionId !== undefined) rememberRunSession(event.run_id, sessionId);
+  }
+
+  /**
+   * 归属未命中时的**一次**只读回填（不阻塞发送路径）。
+   *
+   * LRU 只有 5000 条且**进程重启即清空**：gateway 重启时若有 run 正在跑，它的增量
+   * （流式 delta / 工具事件）会因为映射未知被 fail-closed 丢掉，直到下一个带
+   * `session_id` 的 `run.*` 事件把它补回来。这里在 miss 时读一次执行面的内存快照
+   * （`runControl.snapshot()`，同步且有界）拿 `session_id` 并回填 LRU。
+   *
+   * 约束：只读、同步、best-effort —— 拿不到就返回 undefined（调用方继续 fail-closed），
+   * 绝不把事件发送路径改成异步等待。命不中的 run id 记进有界负缓存，避免每条流式
+   * 增量都重扫一遍快照。
+   */
+  function refillRunSession(runId: string): string | undefined {
+    if (unknownRunSessions.has(runId)) return undefined;
+    const control = opts.runControl;
+    if (control === undefined) return undefined;
+    let snapshot: RunControlSnapshotLike;
+    try {
+      snapshot = control.snapshot();
+    } catch {
+      return undefined;
+    }
+    const candidates = [...(snapshot.running ?? []), ...(snapshot.queued ?? [])];
+    const hit = candidates.find((run) => run.run_id === runId);
+    const sessionId = typeof hit?.session_id === 'string' ? hit.session_id : undefined;
+    if (sessionId !== undefined) {
+      rememberRunSession(runId, sessionId);
+      return sessionId;
+    }
+    // 负缓存有界：溢出就清空，宁可多扫一次快照，也不让集合无限增长。
+    if (unknownRunSessions.size >= RUN_SESSION_MAP_LIMIT) unknownRunSessions.clear();
+    unknownRunSessions.add(runId);
+    return undefined;
+  }
+
+  /**
+   * 出站副本补齐会话归属（**只补不改**，缓冲里的原始事件不被修改）。
+   *
+   * 订阅按 `session_id` 过滤，但 `llm.stream.chunk` / `tool.call.*` 本体不带该字段：
+   * 客户端拿不到归属就无法把事件挂回会话（分组被会话窗口过滤掉，表现为「run 在跑
+   * 却看不到工具卡 / 思考 / 流式正文」）。事件自报的值永远优先（`??` 语义）；
+   * 映射未知时原样返回，`acceptsEvent` 继续 fail-closed —— 宁可不发，也不发错归属。
+   */
+  function withSessionAttribution(event: RunEvent, map: ReadonlyMap<string, string>): RunEvent {
+    if (eventSessionId(event) !== undefined) return event;
+    const mapped = map.get(event.run_id) ?? refillRunSession(event.run_id);
+    if (mapped === undefined) return event;
+    const data = event.data;
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) return event;
+    return { ...event, data: { ...(data as Record<string, unknown>), session_id: mapped } };
   }
 
   /** `runs.start` 的返回值同样能建立归属（不等 `run.started` 事件到达）。 */
@@ -934,8 +992,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   function broadcastEvent(item: SeqEvent): void {
-    const encoded = serializeEventFrame(item);
-    for (const ws of [...wsClients]) sendEventToWs(ws, item, undefined, encoded);
+    // 出站副本补会话归属（缓冲里的原始事件不变）：订阅侧按 session_id 过滤时，
+    // 流式增量 / 工具事件本来没有该字段，补齐后订阅者才能把它们挂回会话。
+    const outbound: SeqEvent = {
+      ...item,
+      event: withSessionAttribution(item.event, runSessions),
+    };
+    const encoded = serializeEventFrame(outbound);
+    for (const ws of [...wsClients]) sendEventToWs(ws, outbound, undefined, encoded);
     const sseFrame = `data: ${encoded}\n\n`;
     for (const [ctrl, state] of [...sseClients]) {
       // 回放期间由 pull 驱动，避免新事件插到历史事件前面。
@@ -1002,7 +1066,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 归属先按 seq 顺序扫描完整回放源：窗口裁剪后仍能识别 run.started。
     const replaySessions = buildRunSessions(source);
     const filtered = source.filter((item) => wsAccepts(ws, item.event, replaySessions));
-    const window = tailReplayWindow(filtered, serializeEventFrame);
+    // 编码时顺手补会话归属：客户端拿不到归属就无法把增量挂回会话。
+    const window = tailReplayWindow(filtered, (item) =>
+      serializeEventFrame({ ...item, event: withSessionAttribution(item.event, replaySessions) }),
+    );
     const ringGap = hub.gapFor(ws.data.since) ?? undefined;
     return {
       ...window,
@@ -2499,7 +2566,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
               sseReplaySessions = buildRunSessions(source);
               const window = tailReplayWindow(
                 source.filter((item) => accepts(item.event)),
-                serializeEventFrame,
+                (item) =>
+                  serializeEventFrame({
+                    ...item,
+                    event: withSessionAttribution(item.event, sseReplaySessions),
+                  }),
               );
               const fromSeq =
                 window.frames[0]?.item.seq ?? (hub.latestSeq === 0 ? 0 : hub.latestSeq + 1);

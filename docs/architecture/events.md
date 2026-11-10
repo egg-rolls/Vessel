@@ -85,6 +85,8 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 
 **gateway wire 回放**：WS/SSE 的单次回放有界——对过滤后的事件从最新往回取（≤ 1 MiB / 2000 条）；`hello.from_seq` 是本次 epoch 实际发送的第一条 seq；更早区间由 `gap` 表示不可恢复，恢复走 RPC 快照而不是无限重放。历史正文以权威存储（`sessions.get` / `teams.get`）为准。
 
+**出站归属补齐**：订阅按 `session_id` 过滤时，`llm.stream.chunk` / `tool.call.*` 这类事件本体不带该字段（只靠 gateway 的 `run_id → session_id` 映射判断该不该发）。gateway 会把归属补进**出站副本**的 `data.session_id`（`??` 语义：事件自报的值永远优先，缓冲里的原始事件不被改写）；映射未知时仍然 fail-closed 丢弃，不补字段、不改任何 `events.subscribe` 参数或 result schema。LRU 未命中时会同步读一次执行面快照回填，拿不到就继续丢（发送路径不因此变成异步等待）。所以消费方可以放心把 `data.session_id` 当作事件归属的回退依据。
+
 <a id="trace"></a>
 
 ### trace 落盘
