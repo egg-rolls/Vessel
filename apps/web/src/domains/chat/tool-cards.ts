@@ -108,6 +108,22 @@ function scalarArg(args: Record<string, unknown>, keys: readonly string[]): stri
   return undefined;
 }
 
+/** 摘要行允许用于兜底的已知参数名（不含 serve 注入的 preview / truncated）。 */
+const KNOWN_ARG_NAMES: readonly string[] = [
+  'command',
+  'cmd',
+  'script',
+  'path',
+  'file_path',
+  'pattern',
+  'query',
+  'regex',
+  'task',
+  'prompt',
+  'url',
+  'name',
+];
+
 /** Codex 式关键参数摘要：bash 命令行首行、路径、pattern、delegate task。 */
 export function toolSummary(name: string, args: unknown, maxLength = 96): string {
   const parsed = parseToolArgs(args);
@@ -128,13 +144,9 @@ export function toolSummary(name: string, args: unknown, maxLength = 96): string
     value =
       scalarArg(parsed, byTool[name] ?? []) ??
       scalarArg(parsed, ['command', 'path', 'pattern', 'query', 'task', 'url', 'name']) ??
-      Object.values(parsed)
-        .find(
-          (item): item is string | number =>
-            (typeof item === 'string' && item.trim().length > 0) ||
-            (typeof item === 'number' && Number.isFinite(item)),
-        )
-        ?.toString();
+      // 兜底只在**已知参数名**里找：`Object.values` 会把 serve 截断后塞进来的
+      // `preview` / `truncated` 当成摘要（摘要行显示预览文本，看着像别的工具的东西）。
+      scalarArg(parsed, KNOWN_ARG_NAMES);
   }
   if (!value) return '';
   // bash 只取首行；其它工具把换行压成空格，避免 header 被撑高。

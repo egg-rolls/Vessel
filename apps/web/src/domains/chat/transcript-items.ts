@@ -22,7 +22,7 @@ import type { Message, RunEvent } from '../../gateway/types';
 import type { RunGroup } from '../../state/events';
 import { buildHistoryToolItems } from './history-tools';
 import { compareTimelineEntries } from './timeline-order';
-import { foldToolItems, type ToolCardStatus } from './tool-cards';
+import { type ChatRenderItem, foldToolItems, type ToolCardStatus } from './tool-cards';
 
 export type TranscriptSpeaker = 'user' | 'assistant' | string;
 
@@ -381,11 +381,33 @@ export function buildHistoryIndex(
   return { items, userByContent, callIdsByIndex, contentByIndex, messageByIndex, callIds };
 }
 
+/**
+ * 一条 live 渲染项自带的时间（用于推算 run 分组缺 ts 时的兜底定位）。
+ *
+ * 顺序调用下最先出现的工具/思考/事件时间就是这一组「最早发生」的时刻；正文流式段
+ * 没有自身时间（它的时间等于 run 起始），所以不参与。
+ */
+function liveItemTs(item: ChatRenderItem): number | undefined {
+  if (item.kind === 'tool' || item.kind === 'reasoning') return item.startedAt;
+  if (item.kind === 'notice' || item.kind === 'event') return item.event.ts;
+  return undefined;
+}
+
 /** run 分组 → live item（只依赖 group 对象，未变化的 group 可被调用侧 memo 命中）。 */
 export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   for (const group of groups) {
-    const baseTs = group.startedAt ?? group.firstTs;
+    const folded = foldToolItems(group.items);
+    // 组的定位时间：优先 run 起始；缺失时（事件被边界回放裁掉、只剩部分条目）
+    // **用组内最早一个带时间的 item 兜底**，否则整组没有 ts → 排序规则「缺 ts 排最后」
+    // 会把旧工具卡挂到比它们更新的内容后面（用户看到的「卡沉底」）。
+    let baseTs = group.startedAt ?? group.firstTs;
+    if (baseTs === undefined) {
+      for (const item of folded) {
+        const ts = liveItemTs(item);
+        if (ts !== undefined && (baseTs === undefined || ts < baseTs)) baseTs = ts;
+      }
+    }
     const meta = {
       ...(baseTs !== undefined ? { ts: baseTs } : {}),
       ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
@@ -402,7 +424,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     }
     let textIndex = 0;
     let reasoningIndex = 0;
-    for (const item of foldToolItems(group.items)) {
+    for (const item of folded) {
       if (item.kind === 'text') {
         items.push({
           kind: 'run-text',

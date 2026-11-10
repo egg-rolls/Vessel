@@ -275,6 +275,51 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'F13 run 缺 startedAt/firstTs 但有 tool item 时间 → 排在消息之间而不是末尾',
+    why: '事件被边界回放裁掉只剩部分条目时，整组没有 ts 会沉到最底（旧工具卡挂在新内容后面）',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', '早', { timestamp: 1000 }),
+          msg('assistant', '晚', { timestamp: 2000 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r-cut',
+            // 故意不给 startedAt / firstTs：只留一条带时间（ts=1500）的工具事件
+            items: [
+              {
+                kind: 'event',
+                key: 'ev-cut',
+                event: {
+                  type: 'tool.call.started',
+                  run_id: 'r-cut',
+                  ts: 1500,
+                  data: {
+                    run_id: 'r-cut',
+                    tool_call_id: 'c-cut',
+                    tool_name: 'bash',
+                    arguments: {},
+                  },
+                },
+              },
+            ],
+          }),
+        ],
+        queued: [],
+      });
+      const keys = items.map((item) => item.key);
+      const tool = items.find((item) => item.kind === 'tool');
+      return (
+        keys.indexOf('tool:c-cut') === 1 &&
+        tool !== undefined &&
+        tool.ts === 1500 &&
+        keys.length === 3
+      );
+    },
+  },
+  {
     name: 'F11 vessel:notice 可见时生成 notice 类 item（不是 message）',
     why: '打开「显示系统信息」后它曾被渲染成用户气泡；结构化消息必须走 notice 卡',
     check: () => {
