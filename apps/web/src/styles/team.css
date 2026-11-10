@@ -35,7 +35,12 @@
 
 /* ── 群聊：1023 抽屉布局依赖 ──────────────────────────── */
 
+/* 高度链（三态共用）：`.team-chat` 参与路由列的 flex 分配，**不再只靠
+   `height: 100%`**（percentage 高度依赖父级 definite，任一环退化成内容高度，
+   transcript 就不再是滚动容器，composer 会被顶到可视区外、被 `main` 的
+   overflow:hidden 裁掉 —— 表现为「输入框与消息窗解体」）。 */
 .team-chat {
+  flex: 1 1 auto;
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -69,14 +74,21 @@
 }
 
 /* 成员栏展开：主区 minmax(0,1fr) + 常驻右列（272px / ≤1199px 240px）。
-   收起时 body 回到 flex column，全宽给 transcript。 */
+   收起时 body 回到 flex column，全宽给 transcript。
+   行高必须显式写 `minmax(0, 1fr)`：隐式 auto 行会被内容撑高（成员栏列表 /
+   transcript 越长越明显），主列与成员栏一起超出 body，底部 composer 就被裁掉。 */
 .team-chat-body.has-members {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--team-members-w);
+  grid-template-rows: minmax(0, 1fr);
 }
 
+/* 主列 = transcript + composer 的同一个 min-height:0 flex 列。
+   grid 子项没有 flex 语义，所以高度用 `height: 100%` 补齐；`min-height: 0`
+   让 transcript 能收缩并自己滚动，而不是把 composer 挤出视口。 */
 .team-chat-main {
   flex: 1 1 auto;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -227,19 +239,12 @@
 }
 
 @media (max-width: 1023px) {
-  .team-chat {
-    height: 100%;
-  }
-
-  /* 抽屉走 fixed 定位：body 退回单列，成员栏不再是 grid 第二列。 */
+  /* 抽屉走 fixed 定位：body 退回单列，成员栏不再是 grid 第二列。
+     `.team-chat-main` 的 `height: 100%` 已由基础规则提供，这里不重复。 */
   .team-chat-body,
   .team-chat-body.has-members {
     display: block;
     position: relative;
-  }
-
-  .team-chat-main {
-    height: 100%;
   }
 
   .team-members-column {
