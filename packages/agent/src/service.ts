@@ -1863,13 +1863,15 @@ export class AgentServiceImpl implements AgentService {
   ): Promise<void> {
     if (entry.retired) return;
     const wasWaitingPermission = entry.state === 'waiting_permission';
-    // 0.32：先关旧 body 的 inbox hook，再 releaseHeld —— 顺序反了旧 body 仍可能消费。
+    // 0.32：先关旧 body 的 inbox hook，再放 hold —— 顺序反了旧 body 仍可能消费。
     this.runtime.disableInbox?.(entry.bindingId);
     const wasPrimary = entry.primary || record.binding?.bindingId === entry.bindingId;
     entry.retired = true;
     entry.state = 'closed';
     entry.primary = false;
     entry.closing = true;
+    // I3（审计点 4/6）：清空 mailbox 不必先快照 id —— `held` 记的是持有者 bodyId，
+    // 收口 = 下面按 body 释放（`releaseHeldFor`）。
     entry.pending.length = 0;
     for (const runId of entry.queuedRuns) {
       this.scheduler.cancel(runId, `body retired: ${reason}`);
@@ -1898,7 +1900,8 @@ export class AgentServiceImpl implements AgentService {
       });
     }
     // 旧队列（含 hold）转为可注入；pendingNotices 不得串到新 body。
-    this.inbox?.releaseHeld(record.id);
+    // D2/I4：只放**这具 body** 的持有，多 live body 时不得顺手放出别人的在途队列。
+    this.inbox?.releaseHeldFor(record.id, entry.bindingId);
     this.runtime.clearPendingNotices?.(record.id);
     // `retireBinding` 自己记 `body_history`；这里不再重复 push，否则同一 session
     // 会在 DTO 的 body_history 里出现两次。
@@ -1956,10 +1959,11 @@ export class AgentServiceImpl implements AgentService {
       entry.state = 'closed';
       entry.primary = false;
       this.registry.retireBinding(record.id, entry.bindingId, this.now());
+      // I3（审计点 5/6）：清空 mailbox 的收口 = 按 body 释放它自己的 hold ——
+      // 关闭后未消费的消息回到 unread，reinstate 的 body 才能再注入它们。
+      this.inbox?.releaseHeldFor(record.id, entry.bindingId);
       await this.disposeEntry(entry);
     }
-    // 0.32：关闭后未消费消息仍可注入；不释放 hold 会让 reinstate 的 body 永远跳过它们。
-    this.inbox?.releaseHeld(record.id);
     this.executionUnitRegistry.delete(record.id);
   }
 
@@ -2151,17 +2155,10 @@ export class AgentServiceImpl implements AgentService {
         };
       }
     }
-    // 写前日志：先落 inbox 再进 mailbox / scheduler；held 表示本进程的 pending run 持有它。
+    // 写前日志：先落 inbox 再进 mailbox / scheduler；held 表示「某个 body 的 mailbox 已接管」。
     const inboxed = this.inbox !== undefined && internal?.startup !== true;
-    if (this.inbox !== undefined && inboxed) {
-      this.inbox.append(record.id, {
-        id: message.id,
-        ts: message.ts,
-        source: from,
-        text: content,
-      });
-      this.inbox.hold(record.id, message.id);
-    }
+    // I1：唯一的 hold 写入点（见 trackInbox）。
+    if (inboxed) this.trackInbox(record.id, message, entry.bindingId);
     entry.pending.push(message);
     this.registry.touchBinding(record.id, entry.bindingId, this.now());
     this.emitForSession('agent.message.queued', record, entry.bindingId, {
@@ -2232,10 +2229,45 @@ export class AgentServiceImpl implements AgentService {
       return { runId, handle };
     } catch (error) {
       entry.queuedRuns.delete(runId);
+      // I3（审计点 1/6）：出队**必须**收口 —— 调用方决定选哪个出口：
+      // `admitInternal` = unhold（body 已收口）或 discard（明确投递失败）；
+      // `interrupt` = restoreConsumedUnread / unhold。
       const index = entry.pending.indexOf(message);
       if (index >= 0) entry.pending.splice(index, 1);
       throw error;
     }
+  }
+
+  /**
+   * I1（唯一 hold 写入点）：写前日志 + 登记持有者 body。
+   *
+   * 所有把消息交给 body mailbox 的路径都必须经过这里：先 append（同 id 幂等，已存在
+   * 则不改状态），再 hold。**不要在别处直接调 `inbox.hold`**，否则 `held` 会重新变回
+   * 第二套独立状态（case 0 的 D1–D3）。
+   */
+  private trackInbox(agentId: string, message: AgentMessage, bodyId: string): void {
+    if (this.inbox === undefined) return;
+    this.inbox.append(agentId, {
+      id: message.id,
+      ts: message.ts,
+      source: message.from,
+      text: message.content,
+    });
+    this.inbox.hold(agentId, message.id, bodyId);
+  }
+
+  /**
+   * I2（唯一消费点）：消息真正作为本轮 run input 时收口 inbox（consumed + unhold）。
+   *
+   * 必须与「从 `entry.pending` 出队」紧邻，中间不得插入 `await` 或早返回：出队而没消费
+   * 会让这条永远停在 unread+held（谁都不再投递它）；消费而没出队会被重投一次。
+   */
+  private async consumeAsRunInput(
+    agentId: string,
+    messageId: string,
+    bodyId: string,
+  ): Promise<void> {
+    await this.inbox?.markConsumed(agentId, [messageId], bodyId);
   }
 
   private holdBlockedMessage(
@@ -2286,6 +2318,8 @@ export class AgentServiceImpl implements AgentService {
     resume = false,
   ): Promise<RunHandle> {
     if (entry.retired || entry.closing) {
+      // I3（审计点 2/6）：body 已收口 → 不出队、不消费；hold 由 retire / close 的
+      // `releaseHeldFor` 统一释放（消息回到 unread，交给新 body 注入）。
       const cancelled = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
       cancelled.markCancelled('body closed');
       return cancelled;
@@ -2294,14 +2328,14 @@ export class AgentServiceImpl implements AgentService {
     if (!this.isHumanPrincipal(record.id)) {
       const check = this.checkTurnStart(record, message, entry.bindingId);
       if (!check.ok) {
+        // I3（审计点 3/6）：预算 turn_start 阻塞 → 消息留在 `entry.pending` 且保持
+        // hold，收口 = 等 `retryHeldMessages` 重投；期间可用 read includeHeld 看到正文。
         this.holdBlockedMessage(record, entry, message, check);
         const held = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
         held.complete('');
         return held;
       }
     }
-    const index = entry.pending.indexOf(message);
-    if (index >= 0) entry.pending.splice(index, 1);
     if (conversationId !== undefined) {
       this.budgetPort?.noteTurnStarted({
         conversation_id: conversationId,
@@ -2314,6 +2348,8 @@ export class AgentServiceImpl implements AgentService {
       this.budgetPort?.clearHold?.(conversationId, record.id);
       this.emitBudgetWarnings(record, conversationId, 'turn_start');
     }
+    // D1：ensureRuntime 可能抛错，必须在「出队 + 消费」之前完成 —— 否则 body 起不来时
+    // 消息已经离开 mailbox 却仍是 unread+held（谁都不再投递它 = 黑洞）。
     await this.ensureRuntime(entry);
     entry.state = 'running';
     entry.lastActiveAt = this.now();
@@ -2328,9 +2364,12 @@ export class AgentServiceImpl implements AgentService {
     this.scheduleSnapshot();
     const handle = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
     this.bindRunCancelHandler(entry, handle);
-    // 0.32：消息真正作为 run input 开始前标记 consumed（inbox 至多注入一次）。
+    // I2 + D1：出队与消费必须紧邻，中间不得有 await / 早返回（本行到下一行是唯一窗口）。
+    // 0.32：消息真正作为 run input 开始前标记 consumed（inbox 至多注入一次）；
     // startup 消息不在 inbox 里，markConsumed 对未知 id 无操作。
-    await this.inbox?.markConsumed(record.id, [message.id], entry.bindingId);
+    const index = entry.pending.indexOf(message);
+    if (index >= 0) entry.pending.splice(index, 1);
+    await this.consumeAsRunInput(record.id, message.id, entry.bindingId);
     void this.executeExecutionUnitTurn(record, entry, message, handle, resume);
     return handle;
   }
@@ -3130,17 +3169,9 @@ export class AgentServiceImpl implements AgentService {
       }
 
       // 5. 消息落到 inbox（content 新增；message_id 沿用既有记录），并 hold。
-      if (input.messageId !== undefined) {
-        this.inbox?.hold(target.id, interruptMessage.id);
-      } else {
-        this.inbox?.append(target.id, {
-          id: interruptMessage.id,
-          ts: interruptMessage.ts,
-          source: input.from,
-          text: input.content,
-        });
-        this.inbox?.hold(target.id, interruptMessage.id);
-      }
+      // I1：统一走 trackInbox —— `message_id` 分支复用既有记录（append 同 id 幂等），
+      // 新内容分支顺带落写前日志；两条分支都只在这里登记持有者。
+      this.trackInbox(target.id, interruptMessage, entry.bindingId);
       if (!entry.pending.includes(interruptMessage)) entry.pending.push(interruptMessage);
       this.registry.touchBinding(target.id, entry.bindingId, this.now());
 
@@ -3212,6 +3243,8 @@ export class AgentServiceImpl implements AgentService {
       }
 
       // 8. 同步入队：新 urgent → 旧 urgent（如有）→ 旧队列原顺序。
+      // I3 审计：这里**只增不减**（重排而非移出），所以 hold 保持不动；真正的出队在
+      // `startExecutionUnitRun`（I2 消费）与 submit 失败分支（unhold / restoreConsumedUnread）。
       for (const message of reinjected) {
         if (!entry.pending.includes(message)) entry.pending.push(message);
       }
@@ -3231,7 +3264,7 @@ export class AgentServiceImpl implements AgentService {
           this.runMessageIds.set(outcome.value.runId, item.message.id);
           return;
         }
-        // 队列满：submitMessage 已从 entry.pending 移除。
+        // 队列满：submitMessage 已从 entry.pending 移除（I3 审计点 1/6 的 interrupt 分支）。
         // 被抢占的 active urgent 在 inbox 里已是 consumed，unhold 不会恢复 unread，
         // 必须删掉 consumed 记录再以同 id 重新落为 unread，否则消息丢失。
         if (reinjectedIds.has(item.message.id)) {
@@ -3298,6 +3331,8 @@ export class AgentServiceImpl implements AgentService {
    * 不新增 port 方法，只用现有 append / discard 组合。
    */
   private restoreConsumedUnread(agentId: string, message: AgentMessage): void {
+    // I3：这里是「重新落为 unread」的合法出口 —— 先 discard（连 consumed 一并删），
+    // 再 append 同 id（未 hold）。不要改成 unhold：unhold 恢复不了 consumed。
     this.inbox?.discard(agentId, [message.id]);
     this.inbox?.append(agentId, {
       id: message.id,
@@ -4077,7 +4112,9 @@ export class AgentServiceImpl implements AgentService {
       this.registry.setPrimaryBinding(record.id, newSessionId);
       this.registry.setRotation(record.id, 'stable');
       this.rotations.delete(record.id);
-      this.inbox?.releaseHeld(record.id);
+      // D2/I4：旧 body 的在途队列转为可注入。retire 路径已按 body 释放过一次，这里
+      // 是幂等兜底（`oldEntry` 不在内存时不会走到 retire）。
+      this.inbox?.releaseHeldFor(record.id, oldSessionId);
       this.runtime.clearPendingNotices?.(record.id);
       this.scheduleSnapshot();
       return { previousSessionId: oldSessionId, epoch: newEpoch };
@@ -4171,7 +4208,8 @@ export class AgentServiceImpl implements AgentService {
         started_at: oldBinding.createdAt,
         retired_at: this.now(),
       });
-      this.inbox?.releaseHeld(record.id);
+      // D2/I4：restart 复用同一个 session id，旧 body 记的 hold 仍以它为键，按 body 释放。
+      this.inbox?.releaseHeldFor(record.id, sessionId);
       this.runtime.clearPendingNotices?.(record.id);
       this.scheduleSnapshot();
       const flushed = await this.flushSnapshot().catch(() => false);
@@ -4331,7 +4369,8 @@ export class AgentServiceImpl implements AgentService {
       );
       this.registry.retireBinding(record.id, oldSessionId);
       this.registry.setPrimaryBinding(record.id, sessionId);
-      this.inbox?.releaseHeld(record.id);
+      // D2/I4：旧 primary body 的在途队列转为可注入；目标 body 自己的 hold 保持不动。
+      this.inbox?.releaseHeldFor(record.id, oldSessionId);
       this.runtime.clearPendingNotices?.(record.id);
       this.scheduleSnapshot();
 
@@ -5022,13 +5061,24 @@ export class AgentServiceImpl implements AgentService {
     if (entry.pending.length === 0 || entry.retired || entry.closing) return;
     const record = this.registry.get(entry.agentId);
     if (record === undefined) return;
+    // I3（审计点 6/6）：整批出队，收口 = 逐条重新 submit；submit 失败必须 unhold，
+    // 否则它会永远停在 held+unread（既不重投也读不到），这是 D3 的「预算阻塞」分支。
     const held = entry.pending.splice(0);
+    // 已在 scheduler 队列里的消息不得二次提交：`startExecutionUnitRun` 在
+    // `ensureRuntime` 期间仍把消息留在 pending（I2/D1），这里必须跳过。
+    const inFlight = new Set<string>();
+    for (const runId of entry.queuedRuns) {
+      const messageId = this.runMessageIds.get(runId);
+      if (messageId !== undefined) inFlight.add(messageId);
+    }
     void (async () => {
       for (const message of held) {
+        if (inFlight.has(message.id)) continue;
         try {
           const submitted = await this.submitMessage(record, entry, message);
           this.runMessageIds.set(submitted.runId, message.id);
         } catch (error) {
+          this.inbox?.unhold(record.id, [message.id]);
           this.logger.warn('agent.budget.retry_failed', {
             agent_id: record.id,
             session_id: entry.bindingId,

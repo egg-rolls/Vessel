@@ -10,10 +10,17 @@
  * - `summary` 在写入时算好（trim、空白折叠、前 160 字），永不调用模型；
  * - 旧文件里多余的 `important` 字段解析时忽略，不迁移、不报错；
  * - `atomicWrite` 0600，单写者串行写链；append 立即入写链（写前日志，不 debounce）；
- * - `hold` 只存在内存：pending / 已排程的 run 持有；崩溃 / 重启后未读重新可读。
+ * - `hold` 只存在内存（message id → 持有它的 body id），崩溃 / 重启后未读重新可读。
+ *
+ * **消息状态机（I1–I4，与 `AgentService` 共守）**：
+ * `append(unread)` → `hold(被某个 body 的 mailbox 接管)` → `consumed + unhold`
+ * （唯一消费点是 `markConsumed`，在消息真正成为一轮 run input 时调用）。
+ * 侧出口只有两个：`unhold`（失败 / 退役 / 预算回退 → 回到 unread）与 `discard`（明确
+ * 投递失败 → 移除）。`hold` 记录持有者 bodyId，`releaseHeldFor` 只放一个 body 的队列。
  *
  * 模型侧不再自动注入正文：`createInboxNoticeHook` 只发一条 `vessel:notice`，
- * 正文由模型调用 `createInboxTool` 的 `inbox` 工具按需读取（读即消费）。
+ * 正文由模型调用 `createInboxTool` 的 `inbox` 工具按需读取（读即消费；
+ * `includeHeld:true` 只 peek held 的正文，不消费、不取消投递）。
  *
  * @module @vessel-agent/agent
  */
@@ -61,7 +68,7 @@ export interface AgentInboxListEntry {
   ts: number;
   source: string;
   summary: string;
-  /** 当前被 pending / 已排程 run 持有；read 不可见。 */
+  /** 当前被某个 body 的 mailbox 持有（尚未成为 run input）；read 需 `includeHeld`。 */
   held: boolean;
 }
 
@@ -70,6 +77,17 @@ export interface AgentInboxReadSelection {
   ids?: readonly string[];
   /** read：未给 ids 时的条数上限，缺省 `INBOX_READ_DEFAULT_LIMIT`。 */
   limit?: number;
+  /**
+   * read：true 时连 held（已排进某次 run、尚未成为 run input）的消息一起取；
+   * 缺省 false，与 `list` 同名同义。held 条目只读出正文，**不消费、不取消投递**。
+   */
+  includeHeld?: boolean;
+}
+
+/** read 的一条结果：正文 + 当前是否仍被某个 body 持有。 */
+export interface AgentInboxReadEntry extends StoredInboxMessage {
+  /** true：这条还没成为 run input，之后会自动到达；read 它不改变投递。 */
+  held: boolean;
 }
 
 export interface AgentInboxAppendOptions {
@@ -106,36 +124,56 @@ export interface AgentInboxDiscardResult {
 }
 
 export interface AgentInboxPort {
-  /** 落盘并计算 summary；重复 id 忽略。先裁 consumed，再按 options 决定是否裁 unread。 */
+  /**
+   * I1（唯一写入点）：落盘并计算 summary；重复 id 忽略。先裁 consumed，再按 options
+   * 决定是否裁 unread。
+   *
+   * 写前日志语义：append 先于 scheduler 接管，所以被接管但尚未成为 run input 的消息
+   * 一定在库里；`consumed_by_session` 只在 `markConsumed` 时写。
+   */
   append(
     agentId: string,
     message: AgentInboxEntryInput,
     options?: AgentInboxAppendOptions,
   ): AgentInboxAppendResult;
-  /** 内存态：pending / 已排程的 run 持有，list / read 跳过。 */
-  hold(agentId: string, id: string): void;
+  /**
+   * I4（held ⊆ 被引用）：标记该消息已被**某个 body 的 mailbox 接管**、尚未成为 run input。
+   *
+   * `bodyId`（= session id）是持有者身份：`releaseHeldFor` 只释放它自己持有的消息，
+   * 多 live body 时不会误放别的 body 在途队列。`held` 只存在内存，崩溃即全部失效 →
+   * 未消费消息回到 unread 可读。
+   */
+  hold(agentId: string, id: string, bodyId: string): void;
   /** 单条解除持有（投递因 rotate/close 失败时保留未读）。 */
   unhold(agentId: string, ids: readonly string[]): void;
-  /** rotate / retire：旧持有一并释放，旧队列重新可读。 */
-  releaseHeld(agentId: string): void;
+  /** rotate / retire / close：只释放**这一个 body** 持有的消息，其队列重新可读。 */
+  releaseHeldFor(agentId: string, bodyId: string): void;
   /**
    * unread 且未被持有，按插入顺序；不改状态。`includeHeld:true` 时 messages 同时
-   * 包含 held 的消息，并返回 `pending`。
+   * 包含 held 的消息（正文仍只有 160 字 summary），并返回 `pending`。
+   *
+   * `unread` / `pending` 由 `counts()` 统一派生，与 read / notice 同一口径：
+   * `unread` 只计可读，`pending` 只计 `unread ∩ held`。
    */
   list(
     agentId: string,
     options?: AgentInboxListOptions,
   ): { unread: number; pending: number; messages: AgentInboxListEntry[] };
   /**
-   * unread 且未被持有；给了 ids 按 ids 顺序，否则取最旧 limit 条；
-   * 返回前把取到的消息标 consumed（`consumed_by_session=sessionId`）。
+   * 取正文。缺省只取 `unread 且未被持有`；`includeHeld:true` 时连 held 一起取。
+   *
+   * 消费语义（I2）：只有**未被持有**的条目会被标 consumed —— held 的正文已经排进
+   * 某次 run，read 不取消投递、不改变它的状态，只在结果里带 `held:true`。
    */
   read(
     agentId: string,
     selection: AgentInboxReadSelection,
     sessionId?: string,
-  ): Promise<StoredInboxMessage[]>;
-  /** 已排程的 run 真正开始时的消费路径。 */
+  ): Promise<AgentInboxReadEntry[]>;
+  /**
+   * I2（唯一消费点）：已排程的 run 真正开始时，把消息标 consumed 并解 hold。
+   * 这是「消息成为本轮 run input」的唯一收口。
+   */
   markConsumed(agentId: string, ids: readonly string[], sessionId: string): Promise<void>;
   /** 不做 status / hold 过滤、不改状态（0.32-D 打断按 id 定位）。 */
   findByIds(agentId: string, ids: readonly string[]): StoredInboxMessage[];
@@ -148,7 +186,7 @@ export interface AgentInboxPort {
     ids: readonly string[],
     options?: AgentInboxDiscardOptions,
   ): AgentInboxDiscardResult;
-  /** 未消费且未被持有的条数。 */
+  /** 未消费且未被持有的条数（= `counts().unread`）。 */
   unreadCount(agentId: string): number;
   flush(): Promise<void>;
 }
@@ -169,8 +207,13 @@ interface InboxFile {
 interface AgentInboxState {
   path: string;
   messages: StoredInboxMessage[];
-  /** 仅内存：被 pending / 已排程 run 持有的消息 id */
-  held: Set<string>;
+  /**
+   * 仅内存：message id → 持有它的 body id（session id）。
+   *
+   * 记 body 而不是布尔，是为了 `releaseHeldFor(agentId, bodyId)` 能只释放一个 body
+   * 的在途队列：多 live body 的成员里，A 退役不得放出 B 还在排队的消息。
+   */
+  held: Map<string, string>;
   loaded: boolean;
   /** 损坏 / 不可读时为 false：不覆盖文件，读返回 [] */
   available: boolean;
@@ -300,12 +343,16 @@ export class AgentInboxStore implements AgentInboxPort {
     return { accepted: true };
   }
 
-  hold(agentId: string, id: string): void {
-    this.stateFor(agentId).held.add(id);
+  hold(agentId: string, id: string, bodyId: string): void {
+    this.stateFor(agentId).held.set(id, bodyId);
   }
 
-  releaseHeld(agentId: string): void {
-    this.stateFor(agentId).held.clear();
+  /** I4：只释放 `bodyId` 自己持有的消息；其它 live body 的在途队列不受影响。 */
+  releaseHeldFor(agentId: string, bodyId: string): void {
+    const state = this.stateFor(agentId);
+    for (const [id, owner] of state.held) {
+      if (owner === bodyId) state.held.delete(id);
+    }
   }
 
   unhold(agentId: string, ids: readonly string[]): void {
@@ -331,24 +378,21 @@ export class AgentInboxStore implements AgentInboxPort {
       summary: message.summary,
       held: state.held.has(message.id),
     }));
-    return {
-      unread: readable.length,
-      pending: includeHeld ? selected.length - readable.length : 0,
-      messages,
-    };
+    return { ...this.counts(state), messages };
   }
 
   async read(
     agentId: string,
     selection: AgentInboxReadSelection,
     sessionId?: string,
-  ): Promise<StoredInboxMessage[]> {
+  ): Promise<AgentInboxReadEntry[]> {
     const state = this.stateFor(agentId);
     if (!state.available) return [];
-    const unread = this.readable(state);
+    // 缺省只取可读；includeHeld 时连 held 一起取（见下面的消费语义）。
+    const candidates = this.visible(state, selection.includeHeld === true);
     let picked: StoredInboxMessage[];
     if (selection.ids !== undefined) {
-      const byId = new Map(unread.map((message) => [message.id, message]));
+      const byId = new Map(candidates.map((message) => [message.id, message]));
       const seen = new Set<string>();
       picked = [];
       for (const id of selection.ids) {
@@ -359,16 +403,22 @@ export class AgentInboxStore implements AgentInboxPort {
       }
     } else {
       const limit = selection.limit ?? INBOX_READ_DEFAULT_LIMIT;
-      picked = limit > 0 ? unread.slice(0, limit) : [];
+      picked = limit > 0 ? candidates.slice(0, limit) : [];
     }
     if (picked.length === 0) return [];
-    // 先标 consumed 并落盘，再返回：at-most-once 对工具结果成立。
-    await this.consume(
-      agentId,
-      picked.map((message) => message.id),
-      sessionId,
-    );
-    return picked.map(cloneMessage);
+    // I2：只消费未被持有的条目。held 的正文已经排进某次 run —— read 不取消投递、
+    // 不改变它的状态，否则「读过的正文」与「稍后到达的 run input」会变成两次执行。
+    const consumable = picked
+      .filter((message) => !state.held.has(message.id))
+      .map((message) => message.id);
+    if (consumable.length > 0) {
+      // 先标 consumed 并落盘，再返回：at-most-once 对工具结果成立。
+      await this.consume(agentId, consumable, sessionId);
+    }
+    return picked.map((message) => ({
+      ...cloneMessage(message),
+      held: state.held.has(message.id),
+    }));
   }
 
   async markConsumed(agentId: string, ids: readonly string[], sessionId: string): Promise<void> {
@@ -439,11 +489,28 @@ export class AgentInboxStore implements AgentInboxPort {
   unreadCount(agentId: string): number {
     const state = this.stateFor(agentId);
     if (!state.available) return 0;
-    return this.readable(state).length;
+    return this.counts(state).unread;
   }
 
   async flush(): Promise<void> {
     await this.writeChain;
+  }
+
+  /**
+   * list / read / notice 共用的唯一计数口径（§0.5.6：`pending` 是派生数字，不是第二套状态）。
+   *
+   * `unread` 只计可读（模型该自己读的），`pending` 只计 `unread ∩ held`（已被某个 body
+   * 接管、会自动作为 run input 到达的）。两者互斥且 `unread + pending = unread 总数`。
+   */
+  private counts(state: AgentInboxState): { unread: number; pending: number } {
+    let unread = 0;
+    let pending = 0;
+    for (const message of state.messages) {
+      if (message.status !== 'unread') continue;
+      if (state.held.has(message.id)) pending += 1;
+      else unread += 1;
+    }
+    return { unread, pending };
   }
 
   /** unread 且未被持有，保持插入顺序。 */
@@ -451,6 +518,12 @@ export class AgentInboxStore implements AgentInboxPort {
     return state.messages.filter(
       (message) => message.status === 'unread' && !state.held.has(message.id),
     );
+  }
+
+  /** unread 全集；`includeHeld` 时连 held 一起（read 的 includeHeld 用它）。 */
+  private visible(state: AgentInboxState, includeHeld: boolean): StoredInboxMessage[] {
+    if (!includeHeld) return this.readable(state);
+    return state.messages.filter((message) => message.status === 'unread');
   }
 
   private async consume(
@@ -480,7 +553,7 @@ export class AgentInboxStore implements AgentInboxPort {
       state = {
         path: inboxPath(this.dataDir, this.tenantId, agentId),
         messages: [],
-        held: new Set(),
+        held: new Map(),
         loaded: false,
         available: true,
       };
@@ -525,10 +598,19 @@ export class AgentInboxStore implements AgentInboxPort {
     this.prune(state);
   }
 
-  /** 有界：保留最新 maxMessages 条 */
+  /**
+   * 有界：保留最新 maxMessages 条。
+   *
+   * 顺带清掉被裁消息的 hold —— `held` 现在按 body 释放（不再有 agent 级 `clear()`），
+   * 残留 id 会永久累积并违反 I4（held 必须仍被某条现存消息引用）。
+   */
   private prune(state: AgentInboxState): void {
     if (state.messages.length <= this.maxMessages) return;
     state.messages.splice(0, state.messages.length - this.maxMessages);
+    const alive = new Set(state.messages.map((message) => message.id));
+    for (const id of state.held.keys()) {
+      if (!alive.has(id)) state.held.delete(id);
+    }
   }
 
   /** 所有 append 路径的第一步：先裁 consumed（不占 cap，也不保留 hold）。返回是否有变化。 */
@@ -575,11 +657,17 @@ export class AgentInboxStore implements AgentInboxPort {
   }
 }
 
-/** notice 的模型可见文本（只含条数与工具指引，不含正文）。 */
+/**
+ * notice 的模型可见文本（只含条数与工具指引，不含正文）。
+ *
+ * 两个数字必须解释清楚，否则模型会把 pending 当成「读不到的消息」而重发（见 §1.4）：
+ * `unread` 是模型该自己读的，`pending` 是已经排好队、会自动作为下一轮输入送达的。
+ */
 function noticeContent(unread: number, pending: number): string {
   return (
-    `[inbox] ${unread} unread message(s), ${pending} pending; ` +
-    'use the inbox tool (action="list") to view them.'
+    `[inbox] ${unread} unread (yours to read), ${pending} pending ` +
+    '(already queued as your next input(s) — they arrive on their own; do not resend or redo). ' +
+    'inbox action="list" for summaries; action="read" with includeHeld:true to peek at pending ones.'
   );
 }
 
@@ -648,7 +736,10 @@ export function createInboxNoticeHook(options: {
 const INBOX_TOOL_DESCRIPTION =
   'inspect messages queued while this agent was busy/rotating; ' +
   'list returns unread/pending counts + summaries (held included); ' +
-  'read returns full text and marks them consumed; ' +
+  'unread = yours to read, pending = already queued as your next input(s), ' +
+  'they arrive on their own (do not resend or redo); ' +
+  'read returns full text and marks it consumed; read includeHeld:true also returns pending ' +
+  'messages — that does NOT cancel their delivery, so never act twice on one message; ' +
   'delete removes unread, non-held messages by id (held/consumed are skipped); ' +
   'insert appends a message to your own inbox; it does not start a run or wake you.';
 
@@ -688,6 +779,12 @@ export function createInboxTool(options: {
           minimum: 1,
           description: 'read: max messages when ids omitted (default 20)',
         },
+        includeHeld: {
+          type: 'boolean',
+          description:
+            'read: also return held messages (already queued as your next input); ' +
+            'reading them does not cancel delivery and does not mark them consumed',
+        },
         content: {
           type: 'string',
           description: 'insert: message text (non-empty)',
@@ -704,10 +801,15 @@ export function createInboxTool(options: {
       const contentDefined = input.content !== undefined;
       const idsDefined = input.ids !== undefined;
       const limitDefined = input.limit !== undefined;
+      const includeHeldDefined = input.includeHeld !== undefined;
 
       if (action === 'list') {
         if (idsDefined || limitDefined || contentDefined) {
           return invalidInput('list does not accept ids, limit, or content');
+        }
+        // list 恒含 held（只有摘要）；includeHeld 是 read 的选项，显式传入按非法输入拒绝。
+        if (includeHeldDefined) {
+          return invalidInput('list always includes held; includeHeld is a read-only option');
         }
         const { unread, pending, messages } = options.inbox.list(options.agentId, {
           includeHeld: true,
@@ -728,6 +830,7 @@ export function createInboxTool(options: {
       if (action === 'insert') {
         if (idsDefined) return invalidInput('insert does not accept ids');
         if (limitDefined) return invalidInput('insert does not accept limit');
+        if (includeHeldDefined) return invalidInput('insert does not accept includeHeld');
         if (input.id !== undefined || input.source !== undefined || input.ts !== undefined) {
           return invalidInput('insert does not accept id, source, or ts');
         }
@@ -773,6 +876,7 @@ export function createInboxTool(options: {
       if (action === 'delete') {
         if (limitDefined) return invalidInput('delete does not accept limit');
         if (contentDefined) return invalidInput('delete does not accept content');
+        if (includeHeldDefined) return invalidInput('delete does not accept includeHeld');
         if (ids === undefined || ids.length === 0) {
           return invalidInput('delete requires a non-empty ids array');
         }
@@ -783,11 +887,19 @@ export function createInboxTool(options: {
       }
 
       if (contentDefined) return invalidInput('read does not accept content');
+      let includeHeld: boolean | undefined;
+      if (includeHeldDefined) {
+        if (typeof input.includeHeld !== 'boolean') {
+          return invalidInput('includeHeld must be a boolean');
+        }
+        includeHeld = input.includeHeld;
+      }
       const messages = await options.inbox.read(
         options.agentId,
         {
           ...(ids !== undefined ? { ids } : {}),
           ...(limit !== undefined ? { limit } : {}),
+          ...(includeHeld !== undefined ? { includeHeld } : {}),
         },
         ctx.session_id,
       );
@@ -798,6 +910,8 @@ export function createInboxTool(options: {
           ts: message.ts,
           source: message.source,
           text: message.text,
+          // held:true = 还没成为 run input，稍后会自动到达；read 没有取消投递，别重复执行。
+          ...(message.held ? { held: true } : {}),
         })),
       });
     },

@@ -81,6 +81,21 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 - `run.*` 是唯一执行生命周期（payload 带 `agent_id` + `session_id`）。成功轮 team 可见成员由 `TeamService` 从 `run.completed.output` 写一条 `kind: 'reply'` 的 Team 日志；失败 / 取消轮从 `run.failed` / `run.cancelled` 写 `kind: 'system'` 条目 `turn failed: <reason>` / `turn cancelled: <reason>`，不写 reply。private 成员与被 fence 的旧 body 不写 Team 日志。同一段文本分别落在 session（上下文消息）与 Team 日志（事件记录），不是双写同一存储。
 - `conversation_id` 只是预算 / 分组键，不是 session 身份：一次 Team `@` 的所有 mention 共用同一个 `conversation_id`；未显式携带的直聊会新生成一个。不同 conversation 的消息仍累积在同一 body session 的历史里。
 
+<a id="inbox-state-machine"></a>
+
+## 收件箱与消息状态机（inbox / held / consumed）
+
+每条投递在内存 mailbox 之外还有一份**持久化收件箱**（`<dataDir>/inbox/<agent>.json`），两者是**同一条消息的两份记录**，因此状态必须只有一个真相。规则（实现见 `packages/agent/src/inbox.ts` 与 `service.ts` 的 `trackInbox` / `consumeAsRunInput`）：
+
+- **I1 唯一写入点**：`append` + `hold` 只经 `AgentService.trackInbox`，两件事成对发生。别处直接 `inbox.hold` 会重新制造第二套状态。
+- **I2 唯一消费点**：`consumed_by_session` 只在消息**真正作为一轮 run input 交给 runtime** 时写（`consumeAsRunInput` → `inbox.markConsumed`），并且与「从 `entry.pending` 出队」紧邻、中间不得插入 `await` 或早返回。出队而没消费 = 这条永远停在 `unread + held`（谁都不再投递它）；消费而没出队 = 会被重投一次。
+- **I3 无静默遗弃**：任何把消息移出 mailbox 的路径必须在 `consume` / `unhold` / `discard` 里选一个出口。六个审计点：`submitMessage` 失败（调用方选 unhold 或 discard / `restoreConsumedUnread`）、`startExecutionUnitRun` 正常出队（consume）、body 已收口早返回（不出队，由退役释放）、预算 `turn_start` 阻塞（留在 pending，等重投）、`retireExecutionUnitEntry` / `disposeAgentBodies` 清空（按 body 释放）、`retryHeldMessages` 整批出队（重新 submit，失败即 unhold）。
+- **I4 held ⊆ 被引用**：`held` 记 `message id → 持有者 bodyId`，只存在内存；释放 API 是 `releaseHeldFor(agentId, bodyId)`，**没有** agent 级释放 —— 多 live body 时 A body 退役不得放出 B body 还在排队的消息，否则「read 取走 + B 的 run 又送达」就是真·重复投递。
+
+**写前日志（WAL）与崩溃语义**：`append` 先于 scheduler 接管，所以「已被接管但尚未成为 run input」的消息一定在库里；`consumed` 只在成为 run input 时写。`held` 不落盘，**进程崩溃 / 重启后未消费的消息一律回到 `unread` 且可读**；有意的取舍是**不自动重投**（mailbox 也在内存）——它们由下一轮的 inbox notice 提示、模型自己 `inbox read` 取走。
+
+**模型可见的两个数字**（notice 与 `list` 同一口径，由 `counts()` 派生，不是两套计数）：`unread` = 可读（模型该自己读），`pending` = `unread ∩ held`（已被接管、会自动作为下一轮输入送达，**不要重发或重做**）。`inbox read` 缺省只读可读；`includeHeld:true` 连 held 一起返回正文，**只 peek、不消费、不取消投递**（正文因此可能在上下文里出现两次：一次工具结果、一次稍后的 run input）。
+
 <a id="message-source"></a>
 
 ## 来源标注与 Team 归属

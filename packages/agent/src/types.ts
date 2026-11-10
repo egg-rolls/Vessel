@@ -344,7 +344,7 @@ export interface MemberExecutionPort {
   attachInbox?(inbox: AgentInboxPort | undefined): void;
   /**
    * 0.32（additive，可选）：关闭某个旧 ExecutionUnit 的 inbox hook（rotate / retire）。
-   * 只是让 hook 不再取消息；已 hold 的队列由 `releaseHeld` 重新放出。
+   * 只是让 hook 不再取消息；已 hold 的队列由 `releaseHeldFor(agentId, bodyId)` 放出。
    */
   disableInbox?(sessionId: string): void;
   /** 0.32（additive，可选）：rotate 回滚时恢复旧 ExecutionUnit 的 inbox hook。 */

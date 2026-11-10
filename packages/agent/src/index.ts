@@ -25,6 +25,7 @@ export {
   type AgentInboxEntryInput,
   type AgentInboxListEntry,
   type AgentInboxPort,
+  type AgentInboxReadEntry,
   AgentInboxStore,
   type AgentInboxStoreOptions,
   DEFAULT_MAX_INBOX_MESSAGES,
