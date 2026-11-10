@@ -30,10 +30,18 @@ export function agentMessageSender(message: Message): string | undefined {
 export function AgentMessageCard({
   message,
   sender,
+  source,
   defaultOpen = false,
 }: {
   message: Message;
   sender: string;
+  /**
+   * A2A 来源地址（来自紧邻的 `vessel:source` 行）。
+   *
+   * 来源行不再单独成行：它被**吸入这张卡**——meta 里展示地址，正文就是消息本身，
+   * 于是同一次投递只有一张卡、不会出现「来源行 + agent 卡」两条。
+   */
+  source?: string;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
   defaultOpen?: boolean;
 }) {
@@ -48,7 +56,19 @@ export function AgentMessageCard({
           {t('chat.agentMessage.from', { name: sender })}
         </span>
       }
-      meta={clock !== '' ? clock : undefined}
+      meta={
+        source !== undefined || clock !== '' ? (
+          <>
+            {source !== undefined && (
+              <span className="max-w-48 truncate" title={source}>
+                {source}
+              </span>
+            )}
+            {source !== undefined && clock !== '' && <span aria-hidden="true"> · </span>}
+            {clock !== '' && <span>{clock}</span>}
+          </>
+        ) : undefined
+      }
       summary={message.content}
     >
       <p className="m-0 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">

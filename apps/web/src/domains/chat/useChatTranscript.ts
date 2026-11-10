@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GatewayClient } from '../../gateway/client';
 import type {
   AskUserRequest,
+  Message,
   PermissionRequest,
   SessionDetail,
   SessionInfo,
@@ -341,10 +342,20 @@ export function useChatTranscript({
   // `keep_messages` / 撤回必须是完整 `state.messages` 的绝对下标：窗口首条消息的
   // 绝对下标 + 本地下标（CONTRACT-msg-system §4.3）。
   const messageIndexOffset = selectedWindow?.start ?? 0;
+  // runtime 上下文（vessel:*）的可见性：与历史消息渲染共用同一判定。
+  // 隐藏的消息仍进 index（绝对下标 / 认领 / previous-user 依赖它们），只是不产 item。
+  const isHiddenMessage = useCallback(
+    (message: Message): boolean => {
+      const kind = runtimeMessageKind(message);
+      return kind !== undefined && !isRuntimeMessageVisible(runtimeVisibility, kind);
+    },
+    [runtimeVisibility],
+  );
+
   // 历史侧 item / 反查表按 messages 引用 memo：50ms 的流式节拍里不会重算。
   const historyIndex = useMemo(
-    () => buildHistoryIndex(transcriptMessages, messageIndexOffset),
-    [transcriptMessages, messageIndexOffset],
+    () => buildHistoryIndex(transcriptMessages, messageIndexOffset, isHiddenMessage),
+    [transcriptMessages, messageIndexOffset, isHiddenMessage],
   );
 
   // 分页状态读取放 ref：`loadEarlier` 的身份必须稳定（TranscriptWindow 用它做
@@ -383,6 +394,7 @@ export function useChatTranscript({
     pendingActive: pendingItems.length > 0,
     transcriptMessages,
     historyIndex,
+    isHiddenMessage,
     transcriptWindow,
     transcriptStart,
     messageIndexOffset,

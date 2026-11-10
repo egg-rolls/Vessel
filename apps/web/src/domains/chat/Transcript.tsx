@@ -43,6 +43,7 @@ function TranscriptMessage({
   message,
   messageIndex,
   previousUser,
+  source,
   cardsDefaultOpen,
   groupStart,
   onCopy,
@@ -54,6 +55,8 @@ function TranscriptMessage({
   messageIndex: number | undefined;
   /** 该助手消息前一条真实用户输入及其下标。 */
   previousUser?: { text: string; index: number };
+  /** A2A 消息的回信地址（由被吸收的 vessel:source 行提供）。 */
+  source?: string;
   cardsDefaultOpen: boolean;
   /** 连续同发言人的后续条目不再重复发言人头。 */
   groupStart: boolean;
@@ -74,7 +77,12 @@ function TranscriptMessage({
     const agentSender = agentMessageSender(message);
     if (agentSender !== undefined) {
       return (
-        <AgentMessageCard message={message} sender={agentSender} defaultOpen={cardsDefaultOpen} />
+        <AgentMessageCard
+          message={message}
+          sender={agentSender}
+          {...(source !== undefined ? { source } : {})}
+          defaultOpen={cardsDefaultOpen}
+        />
       );
     }
     const actions: MessageAction[] = [];
@@ -198,6 +206,7 @@ export function Transcript({
           message={message}
           messageIndex={messageIndex}
           previousUser={previousUserMessage(message, allMessages, messageIndexOffset, indexOf)}
+          {...(item.sourceText !== undefined ? { source: item.sourceText } : {})}
           cardsDefaultOpen={cardsDefaultOpen}
           groupStart={item.groupStart !== false}
           onCopy={copy}

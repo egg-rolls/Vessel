@@ -274,6 +274,83 @@ const FIXTURES: readonly Fixture[] = [
       return count(items, 'message') === 1 && count(items, 'tool') === 1;
     },
   },
+  {
+    name: 'F9 vessel:source 默认隐藏 → 不出 item；打开可见性后出现（或被吸收）',
+    why: 'runtime 上下文消息必须按可见性开关过滤；回归时它会以普通消息行呈现成第二条',
+    check: () => {
+      const messages = [
+        {
+          role: 'user' as const,
+          name: 'vessel:source',
+          content: '<from location="a@node:team" />',
+        },
+        msg('user', 'hello'),
+      ];
+      const hidden = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+        isHidden: (message) => message.name === 'vessel:source',
+      });
+      const visible = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      });
+      return count(hidden, 'message') === 1 && count(visible, 'message') === 2;
+    },
+  },
+  {
+    name: 'F10b 来源行被隐藏时，地址仍然吸进 agent 卡（信息不丢）',
+    why: '默认档 vessel:source 不显示，但用户要的是地址挂到卡上，而不是整条信息消失',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          {
+            role: 'user' as const,
+            name: 'vessel:source',
+            content: '<from location="simplify-core@n1:vessel" />',
+          },
+          { role: 'user' as const, name: 'agent:simplify-core', content: '收到' },
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+        isHidden: (message) => message.name === 'vessel:source',
+      });
+      const messages = items.filter((item) => item.kind === 'message');
+      const first = messages[0];
+      const source = first !== undefined && first.kind === 'message' ? first.sourceText : undefined;
+      return messages.length === 1 && source === 'simplify-core@n1:vessel';
+    },
+  },
+  {
+    name: 'F10 vessel:source 紧跟 agent 消息 → 被吸收，地址进 agent 卡',
+    why: '打开系统信息时也不该出现「来源行 + agent 卡」两条；地址挂到 agent 卡 meta',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          {
+            role: 'user' as const,
+            name: 'vessel:source',
+            content: '<from location="simplify-core@n1:vessel" />',
+          },
+          { role: 'user' as const, name: 'agent:simplify-core', content: '收到，我来处理' },
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      });
+      const messages = items.filter((item) => item.kind === 'message');
+      const agent = messages.find(
+        (item) => item.kind === 'message' && item.message.name !== undefined,
+      );
+      const source = agent !== undefined && agent.kind === 'message' ? agent.sourceText : undefined;
+      return messages.length === 1 && source === 'simplify-core@n1:vessel';
+    },
+  },
 ];
 
 const failures: { name: string; why: string }[] = [];

@@ -42,6 +42,11 @@ export interface MessageItem extends ItemMeta {
   kind: 'message';
   absIndex: number;
   message: Message;
+  /**
+   * A2A 来源地址：从紧邻的 vessel:source 消息吸进来的。
+   * 来源行不再单独成行，改为挂在这张 agent 卡的 meta 上。
+   */
+  sourceText?: string;
 }
 
 export interface RunInputItem extends ItemMeta {
@@ -120,6 +125,8 @@ export interface TranscriptBuildInput {
   queued: readonly QueuedInput[];
   /** 可见窗口首条消息的 ts：更早的 live item 落到末尾。 */
   windowStartTs?: number;
+  /** 历史消息是否应被隐藏（runtime 上下文可见性开关）；隐藏的仍参与下标与认领。 */
+  isHidden?: (message: Message) => boolean;
   /** 预计算的历史索引（按 messages 引用 memo）；缺省内部现算。 */
   historyIndex?: HistoryIndex;
   /** 预计算的 live item（按 group 引用 memo）；缺省内部现算。 */
@@ -156,10 +163,31 @@ function trimText(value: string | undefined): string {
   return (value ?? '').trim();
 }
 
+/** A2A 来源行的消息名（与 runtimeMessageKind 的 source 种类一致）。 */
+export const SOURCE_MESSAGE_NAME = 'vessel:source';
+
+/** 从来源行正文取地址：location="a@node:team" → a@node:team。 */
+export function sourceLocationOf(content: string): string | undefined {
+  const match = /location="([^"]+)"/.exec(content);
+  const value = match?.[1];
+  return value !== undefined && value.length > 0 ? value : undefined;
+}
+
+/** 这条消息是否 A2A 来源行。 */
+function isSourceMessage(message: Message): boolean {
+  return message.name === SOURCE_MESSAGE_NAME;
+}
+
+/** 这条消息是否 agent 发来的（agent:<alias>）。 */
+function isAgentNamed(message: Message): boolean {
+  return typeof message.name === 'string' && message.name.startsWith('agent:');
+}
+
 /** 历史窗口 → item + 反查表（只依赖 messages 与 offset，调用侧可安全 memo）。 */
 export function buildHistoryIndex(
   messages: readonly Message[],
   messageIndexOffset: number,
+  isHidden?: (message: Message) => boolean,
 ): HistoryIndex {
   const items: TranscriptItem[] = [];
   const userByContent = new Map<string, number[]>();
@@ -167,6 +195,41 @@ export function buildHistoryIndex(
   const contentByIndex = new Map<number, string>();
   const messageByIndex = new Map<number, Message>();
   const callIds = new Set<string>();
+
+  // 可见性：隐藏的消息**不产生 item**，但仍要进 messageByIndex / contentByIndex
+  // （绝对下标、认领、previous-user 都依赖它们）。
+  const hidden = new Set<number>();
+  if (isHidden !== undefined) {
+    messages.forEach((message, index) => {
+      if (isHidden(message)) hidden.add(messageIndexOffset + index);
+    });
+  }
+
+  // A2A 来源行折叠：vessel:source 之后「下一条可见消息」是 agent 消息时，来源行不再
+  // 单独成行，地址吸进那张 agent 卡（见 MessageItem.sourceText）。从后往前扫，O(n)。
+  const foldedSourceByAgent = new Map<number, string>();
+  const foldedSourceIndexes = new Set<number>();
+  let nextVisible: { absIndex: number; message: Message } | undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message === undefined) continue;
+    const absIndex = messageIndexOffset + index;
+    const isHiddenMessage = hidden.has(absIndex);
+    // 来源行的折叠与它自己是否可见无关：可见性只决定「不被吸收时它是否单独成行」，
+    // 地址始终挂到后面那张 agent 卡上（用户要的是别丢信息，而不是别显示）。
+    if (isSourceMessage(message)) {
+      if (nextVisible !== undefined && isAgentNamed(nextVisible.message)) {
+        const location = sourceLocationOf(message.content);
+        if (location !== undefined) foldedSourceByAgent.set(nextVisible.absIndex, location);
+        foldedSourceIndexes.add(absIndex);
+        continue;
+      }
+      if (!isHiddenMessage) nextVisible = { absIndex, message };
+      continue;
+    }
+    if (isHiddenMessage) continue;
+    nextVisible = { absIndex, message };
+  }
 
   // 历史工具消息：与 assistant 的 tool_calls 配对后各自成 item（tool:<callId>）。
   const historyTools = buildHistoryToolItems(messages);
@@ -181,8 +244,13 @@ export function buildHistoryIndex(
 
   messages.forEach((message, index) => {
     const absIndex = messageIndexOffset + index;
+    // 先入索引：隐藏的消息仍要支撑绝对下标 / 认领 / previous-user 回读。
     messageByIndex.set(absIndex, message);
     if (message.role === 'system') return;
+    // 隐藏（runtime 上下文按可见性开关拦掉）：不进 item，也不参与用户输入认领。
+    if (hidden.has(absIndex)) return;
+    // 被 agent 卡吸收的来源行：不单独成行。
+    if (isSourceMessage(message) && foldedSourceIndexes.has(absIndex)) return;
 
     if (message.role === 'tool') {
       const callId =
@@ -228,11 +296,13 @@ export function buildHistoryIndex(
     if (message.role === 'assistant' && !hasContent && ids.length > 0) return;
     if (!hasContent && message.role !== 'user' && !isAgentMessage) return;
 
+    const sourceText = foldedSourceByAgent.get(absIndex);
     items.push({
       kind: 'message',
       key: `msg:${absIndex}`,
       absIndex,
       message,
+      ...(sourceText !== undefined ? { sourceText } : {}),
       ...(message.timestamp !== undefined ? { ts: message.timestamp } : {}),
     });
   });
@@ -518,7 +588,9 @@ function mergeItem(previous: TranscriptItem, next: TranscriptItem): TranscriptIt
  * O(认领扫描 + 合并 + 排序)，与 50ms 的流式节拍无关的重建都发生在引用变化时。
  */
 export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptItem[] {
-  const history = input.historyIndex ?? buildHistoryIndex(input.messages, input.messageIndexOffset);
+  const history =
+    input.historyIndex ??
+    buildHistoryIndex(input.messages, input.messageIndexOffset, input.isHidden);
   const live = input.liveItems ?? buildLiveItems(input.liveGroups);
   const claims = runClaims(input.liveGroups, live);
   const { claimedAssistant, claimedUserByRun } = claimMessages(claims, history);

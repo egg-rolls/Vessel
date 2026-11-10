@@ -50,6 +50,7 @@ export function TranscriptWindow({
   transcriptWindow,
   transcriptMessages,
   historyIndex,
+  isHiddenMessage,
   messageIndexOffset,
   detailNotice,
   onDismissDetailNotice,
@@ -88,6 +89,8 @@ export function TranscriptWindow({
   transcriptMessages: readonly Message[];
   /** 历史侧 item / 反查表（调用侧按 messages 引用 memo，见 useChatTranscript）。 */
   historyIndex: HistoryIndex;
+  /** runtime 上下文可见性判定（隐藏的消息不产 item，但仍参与下标与认领）。 */
+  isHiddenMessage: (message: Message) => boolean;
   /** `transcriptMessages[0]` 在完整 `state.messages` 里的绝对下标（撤回 / 重试用）。 */
   messageIndexOffset: number;
   /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
@@ -182,6 +185,7 @@ export function TranscriptWindow({
         queued: visibleQueued,
         windowStartTs,
         historyIndex,
+        isHidden: isHiddenMessage,
       }),
     [
       transcriptMessages,
@@ -191,6 +195,7 @@ export function TranscriptWindow({
       visibleQueued,
       windowStartTs,
       historyIndex,
+      isHiddenMessage,
     ],
   );
 

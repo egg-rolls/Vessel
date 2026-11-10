@@ -370,6 +370,7 @@ export function ChatView({
             transcriptWindow={transcriptApi.transcriptWindow}
             transcriptMessages={transcriptApi.transcriptMessages}
             historyIndex={transcriptApi.historyIndex}
+            isHiddenMessage={transcriptApi.isHiddenMessage}
             messageIndexOffset={transcriptApi.messageIndexOffset}
             detailNotice={transcriptApi.detailNotice}
             onDismissDetailNotice={transcriptApi.dismissDetailNotice}
