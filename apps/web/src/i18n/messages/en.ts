@@ -445,7 +445,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.display.saveFailed': 'Save failed: {detail}',
   'settings.display.writeUnavailable': 'This gateway has no config writer; read-only.',
   'settings.display.saveUnconfirmed':
-    'Submitted {key}, but the gateway still returns the old value; restart the gateway and retry.',
+    'Submitted {key}, but the gateway still returns the old value; hot-apply usually lands within a second — if it stays inconsistent, restart the gateway and retry.',
   'settings.display.field.verbosity': 'Verbosity',
   'settings.display.field.showInternalEvents': 'Show system info (internal events)',
   'settings.display.field.showInternalEvents.hint':
@@ -472,6 +472,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.chat.loadedEarlier': 'Loaded earlier messages',
   'team.chat.historyOutOfWindow':
     'Older history is outside the local retention window; keeping what is already loaded.',
+  'team.chat.historyChanged':
+    'Earlier team history was rewritten; the newest page has been reloaded.',
   'team.chat.backToList': 'Back to Teams',
   'team.chat.loadMoreMembers': 'Load more members',
   'team.chat.membersCapped': 'Only the first {shown} of {total} members are shown',
@@ -1005,6 +1007,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.staleHistory': 'History refresh failed; showing the loaded records: {detail}',
   'chat.historyChanged':
     'Earlier history was rewritten; the older pages were reloaded from the server.',
+  'chat.earlierLoadFailed': 'Earlier messages could not be loaded; you can retry: {detail}',
   'chat.truncated':
     'Some earlier events were truncated from the in-memory buffer; open the run details for the full record.',
   'chat.toBottom': 'Back to bottom ↓',

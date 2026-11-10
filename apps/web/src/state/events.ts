@@ -88,6 +88,17 @@ export interface RunGroup {
  * `message.injected` 仍由 owner 注入（成员回复）与 `RunOptions.messages`（@file 等）生产；
  * `doc-subscription` 改为临时 `additionalContext` 后不再产生该事件。保留在这里，
  * 让所有“注入到 prompt 的上下文”默认不出现在 run 时间线。
+ *
+ * **口径契约（与 runtime-visibility 对称冻结，改动前先对账）**
+ * - 本集合是**事件侧唯一分类表**：新增「系统信息」事件加在这里，不要在渲染层
+ *   （EventRow / StreamItems）另写可见性判断。
+ * - 策略侧只有一个布尔：`showsInternalEvents(visibility)` =
+ *   `ui.showInternalEvents || verbosity === 'debug'`（ADR-080/082）。`debug` 等价于
+ *   展开内部事件是既有契约，不得从 `showsInternalEvents()` 摘掉，也不得在此另立
+ *   第二套判定；两边口径必须同源。
+ * - 判据只有一句：进集合 ⇔ 默认档隐藏（失败类 `hook.failed` / `hook.error` 仍走
+ *   `errorLevel`，永不进集合）。主内容（`llm.stream.chunk`、`tool.call.*`、
+ *   `run.*` 终态、`user.message`）**永不进集合**。
  */
 export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'context.changed',

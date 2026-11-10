@@ -108,6 +108,8 @@ export function useChatSessions({
   const sessionDetailWindow = useSessionStore((state) => state.detailWindow);
   const detailNotice = useSessionStore((state) => state.detailNotice);
   const dismissDetailNotice = useSessionStore((state) => state.dismissDetailNotice);
+  const earlierError = useSessionStore((state) => state.earlierError);
+  const dismissEarlierError = useSessionStore((state) => state.dismissEarlierError);
   const loadEarlierDetail = useSessionStore((state) => state.loadEarlier);
   const sessionDetailLoading = useSessionStore((state) => state.detailLoading);
   const sessionDetailError = useSessionStore((state) => state.detailError);
@@ -357,6 +359,8 @@ export function useChatSessions({
     selectedId && sessionDetailWindow?.sessionId === selectedId ? sessionDetailWindow : null;
   // 一次性提示同样只认当前选中项，避免切换会话时旧提示闪到新会话。
   const visibleDetailNotice = selectedId && sessionDetailId === selectedId ? detailNotice : null;
+  // 「加载更早」失败同样只认当前选中项：切会话不能让上一个会话的错误留在新会话顶部。
+  const visibleEarlierError = selectedId && sessionDetailId === selectedId ? earlierError : null;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: pendingNewSessions 是 ref，.current 读取不进依赖
   const refreshAll = useCallback(() => {
@@ -399,6 +403,8 @@ export function useChatSessions({
     detailWindow,
     detailNotice: visibleDetailNotice,
     dismissDetailNotice,
+    earlierError: visibleEarlierError,
+    dismissEarlierError,
     loadEarlierDetail,
     sessionDetailLoading,
     sessionDetailError,

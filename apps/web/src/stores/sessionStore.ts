@@ -96,6 +96,13 @@ interface SessionStoreState {
   /** session.rewound / message.compaction：丢弃更早页并重取尾页。 */
   reloadAfterHistoryChange: (client: GatewayClient, id: string) => Promise<void>;
   dismissDetailNotice: () => void;
+  /**
+   * 手动关闭“加载更早失败”提示。
+   *
+   * 生命周期由 store 兜住：成功前插 / 切会话 / 重取尾页都会把 `earlierError` 清空，
+   * 这里只负责用户主动关闭；关闭后同一错误再次发生仍会重新出现（下一次请求先置 null）。
+   */
+  dismissEarlierError: () => void;
   /** Refresh the list and the selected session detail. */
   refresh: (client: GatewayClient, options?: SessionLoadOptions) => Promise<void>;
   /** Optimistic local rename; the caller reloads (or rolls back) afterwards. */
@@ -507,6 +514,8 @@ export const useSessionStore = create<SessionStoreState>()((set, get) => ({
   },
 
   dismissDetailNotice: () => set({ detailNotice: null }),
+
+  dismissEarlierError: () => set({ earlierError: null }),
 
   refresh: async (client, options = {}) => {
     const { selectedId } = get();

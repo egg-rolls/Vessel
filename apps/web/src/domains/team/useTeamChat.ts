@@ -3,7 +3,7 @@ import { RAIL_MAX_WIDTH } from '../../app/layout';
 import { useRefreshSignal } from '../../app/refresh';
 import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useOptionalToast } from '../../components/ToastProvider';
-import { isCursorOutOfWindowError } from '../../gateway/errors';
+import { isCursorOutOfWindowError, isHistoryChangedError } from '../../gateway/errors';
 import { onRouteSnapshotInvalidated } from '../../gateway/snapshot-invalidation';
 import type { TeamDetail, TeamMember, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -88,6 +88,23 @@ export function useTeamChat({
   /** 首屏尾页的 `messages_has_more` 只采纳一次；之后只由 `before` 响应更新。 */
   const adoptedTailRef = useRef(initialDetail !== undefined);
   const earlierInFlightRef = useRef(false);
+  /** 更早页请求在途（UI 用；同步重入由 `earlierInFlightRef` 兜住）。 */
+  const [earlierLoading, setEarlierLoading] = useState(false);
+  /**
+   * 历史前缀被改写（`conflict` + `details.reason='history_changed'`）的告知。
+   *
+   * 已前插的更早页锚点失效，必须丢弃并从尾页重建：`historyReplaceRef` 让尾页合并
+   * 走「整体替换」而不是 `mergeMessages`（后者会把失效的更早页留在前面）。
+   * `historyReloadToken` 只用于让 TeamChatMain 在内容变化前抓一次滚动锚点。
+   */
+  const [historyNotice, setHistoryNotice] = useState<string | null>(null);
+  const [historyReloadToken, setHistoryReloadToken] = useState(0);
+  const historyReplaceRef = useRef(false);
+  // 切 Team 时清掉上一个 Team 的改写告知，不能跨 Team 残留。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: teamId 变化是重置条件
+  useEffect(() => {
+    setHistoryNotice(null);
+  }, [teamId]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const [retractTarget, setRetractTarget] = useState<TeamMessage | null>(null);
@@ -164,6 +181,7 @@ export function useTeamChat({
     const first = messagesRef.current[0];
     if (!first) return;
     earlierInFlightRef.current = true;
+    setEarlierLoading(true);
     void (async () => {
       try {
         const page = await client.getTeam(teamId, {
@@ -172,20 +190,32 @@ export function useTeamChat({
           members_limit: membersLimit,
         });
         const merged = mergeEarlierTeamPage(messagesRef.current, page);
+        // 页里一条新内容都没有（空页 / 全是重复）：拿同一游标再拉只会空转，直接停手。
+        const exhausted = merged.messages.length === messagesRef.current.length;
         setMessages(merged.messages);
-        hasEarlierRef.current = merged.hasMore;
-        setHasEarlier(merged.hasMore);
+        const more = merged.hasMore && !exhausted;
+        hasEarlierRef.current = more;
+        setHasEarlier(more);
       } catch (error) {
         if (isCursorOutOfWindowError(error)) {
           // 超出 64 MiB 回扫上限：停止翻页，一次性提示，保留已加载内容。
           hasEarlierRef.current = false;
           setHasEarlier(false);
           toast?.info(t('team.chat.historyOutOfWindow'));
+        } else if (isHistoryChangedError(error)) {
+          // 历史前缀被改写：行为对齐 chat —— 丢弃已前插的更早页、从尾页重建。
+          // 告知走就地 notice（不是 toast）：历史加载是就地动作，浮层会让人丢锚点。
+          // 只重取正文尾巴：不动 members / membersLimit（成员窗口是另一个查询维度）。
+          setHistoryNotice('team.chat.historyChanged');
+          setHistoryReloadToken((value) => value + 1);
+          historyReplaceRef.current = true;
+          reloadRef.current();
         } else {
           toast?.error(errorMessage(error));
         }
       } finally {
         earlierInFlightRef.current = false;
+        setEarlierLoading(false);
       }
     })();
   }, [client, teamId, membersLimit, toast]);
@@ -214,6 +244,16 @@ export function useTeamChat({
   useEffect(() => {
     const page = resourceData(detailState);
     if (!page) return;
+    const replace = historyReplaceRef.current;
+    if (replace) {
+      // 历史被改写：更早页不再可信，整段换成新尾页（members / membersLimit 不受影响）。
+      historyReplaceRef.current = false;
+      setMessages(sortMessages(page.messages));
+      const more = page.messages_has_more === true;
+      hasEarlierRef.current = more;
+      setHasEarlier(more);
+      return;
+    }
     if (page.messages.length > 0) setMessages((prev) => mergeMessages(prev, page.messages));
     if (!adoptedTailRef.current) {
       adoptedTailRef.current = true;
@@ -408,6 +448,9 @@ export function useTeamChat({
     team,
     teamId,
     archived,
+    historyNotice,
+    dismissHistoryNotice: () => setHistoryNotice(null),
+    historyReloadToken,
     members,
     memberTotal,
     onlineCount,
@@ -439,8 +482,9 @@ export function useTeamChat({
     retractError,
     reload,
     hasToken,
-    canLoadEarlier: hasEarlier,
+    hasEarlier,
     loadEarlier,
+    earlierLoading,
     memberWindow,
     membersLimit,
     setMembersLimit,

@@ -183,7 +183,18 @@ export function startConfigWatch(options: ConfigWatchOptions): ConfigWatchHandle
     });
   };
 
+  /**
+   * 立即应用一次。
+   *
+   * 0.50：先作废 pending debounce——config.set 写成功后同步调用它做「写后读自己
+   * 的写」，若不作废，同一次写入会先被 trigger 应用一遍、300ms 后又被 debounce
+   * 应用一遍（两次 apply / 两条 runtime.notice）。
+   */
   const trigger = (): Promise<void> => {
+    if (pending !== undefined) {
+      cancelSchedule(pending);
+      pending = undefined;
+    }
     chain = chain.then(runOnce, runOnce);
     return chain;
   };

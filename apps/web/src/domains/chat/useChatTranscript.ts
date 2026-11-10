@@ -49,6 +49,9 @@ export interface UseChatTranscriptOptions {
   /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
   detailNotice: string | null;
   dismissDetailNotice: () => void;
+  /** 「加载更早」最近一次失败的原始细节；null = 无。 */
+  earlierError: string | null;
+  dismissEarlierError: () => void;
   /** 本地窗口耗尽后取 `next_before` 上一页并前插。 */
   loadEarlierDetail: (
     client: GatewayClient,
@@ -89,6 +92,8 @@ export function useChatTranscript({
   detailWindow,
   detailNotice,
   dismissDetailNotice,
+  earlierError,
+  dismissEarlierError,
   loadEarlierDetail,
   sessionDetailLoading,
   sessionDetailError,
@@ -367,6 +372,8 @@ export function useChatTranscript({
     messageIndexOffset,
     detailNotice,
     dismissDetailNotice,
+    earlierError,
+    dismissEarlierError,
     hasEarlier,
     hasTranscript,
     truncated,

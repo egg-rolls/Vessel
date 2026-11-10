@@ -74,6 +74,30 @@ export class EventStore {
   private runCounts = new Map<string, number>();
   /** run_id → session_id：裁剪掉 `run.started` 后仍能把事件归属到会话。 */
   private runSessions = new Map<string, string>();
+  /**
+   * 当前事件订阅范围所属的会话（服务端按 `session_id` 过滤时为该会话 id）。
+   *
+   * **为什么需要**：`packages/serve/src/gateway.ts` 的会话订阅是「按 session_id
+   * **过滤**」而不是「给事件**盖**章」——`eventSessionId()` 只读 `data.session_id`，
+   * 缺省时靠服务端 `runSessions` LRU 命中决定发不发，命中结果不上 wire。而
+   * `llm.stream.chunk` / `tool.call.*` 天生不带 `session_id`；再加上有界回放（最新
+   * 1 MiB / 2000 条）可能把 `run.started` 挡在窗口外，客户端的分组就会拿不到
+   * sessionId，被 `useChatTranscript` 的会话窗口整段过滤（用户看到「运行中什么都没
+   * 有，跑完刷新才出现」）。
+   *
+   * **不变量**：
+   * - 只是 fallback：`push()` 的归属优先级恒为「事件自报 `session_id` >
+   *   runSessions 映射 > scopeSession」，已有显式值的条目绝不被作用域覆盖；
+   * - 只由 `SubscriptionController` 在**服务端过滤生效的会话订阅**下设置，其它范围
+   *   （run / runs / team / none）与旧 gateway 降级路径都**显式置为 undefined**；
+   * - `reset()` 保留该值（gap reset 后仍处于同一会话订阅），但订阅范围一旦变化必须
+   *   由 `setScopeSession` 立刻覆写——归属来源变了就要重算，见
+   *   `serverScopedSessionId()`。
+   *
+   * 背景见 L-041「事件缓冲不是历史」：缓冲里的条目只是某次订阅的增量快照，不能靠
+   * “谁最后写的”推断归属，必须有显式、可清除的作用域。
+   */
+  private scopeSession: string | undefined;
   private truncated = new Set<string>();
   /** 待发布到下一份快照的裁剪增量；flush 后清空。 */
   private truncatedSince = new Set<string>();
@@ -98,6 +122,19 @@ export class EventStore {
   }
 
   /**
+   * 设置「订阅范围内的会话」。**必须显式传值**（含 `undefined`）：
+   * 换会话要立刻覆写，换到 run / runs / team / none 范围要立刻清空 ——
+   * 「不设」会保留上一个会话的残留作用域，把别的会话的增量误归属过来（串台）。
+   *
+   * 只影响**之后** push 的条目；已在缓冲里的条目保留 push 时的归属，不回写。
+   * 归属来源变了就要重算，调用方见 `gateway/subscription.ts#serverScopedSessionId`。
+   */
+  setScopeSession(sessionId: string | undefined): void {
+    if (this.scopeSession === sessionId) return;
+    this.scopeSession = sessionId;
+  }
+
+  /**
    * 写入一条事件；seq 不大于已见值时忽略（回放去重）。
    * 返回是否实际写入。
    */
@@ -108,7 +145,12 @@ export class EventStore {
     // 归属会话的字段最先记住：即使本 run 的 `run.started` 之后被裁掉，仍能归属会话。
     const sessionId = eventSessionId(event);
     if (sessionId !== undefined) this.runSessions.set(runId, sessionId);
-    const owner = this.runSessions.get(runId);
+    // 归属优先级**恒为**：事件自报 `session_id` > runSessions 映射（同样来自自报）>
+    // 当前订阅作用域。scopeSession 只是 fallback —— 事件一旦自带显式归属，绝不被
+    // 作用域覆盖（否则切会话的窗口期内会把旧会话事件改判给新会话）。
+    // 作用域兜的是「有界回放把 run.started 挡在窗口外」的增量：流式 delta 与工具事件
+    // 本身没有 session_id，只能靠订阅范围归属。
+    const owner = this.runSessions.get(runId) ?? this.scopeSession;
     this.entries.push({
       event,
       seq: meta.seq,
@@ -189,7 +231,16 @@ export class EventStore {
     return removed;
   }
 
-  /** 清空缓冲（gateway 重启 / 切 tenant / gap 重新同步）。 */
+  /**
+   * 清空缓冲（gateway 重启 / 切 tenant / gap 重新同步 / 订阅 epoch 换代）。
+   *
+   * **不变量**：`scopeSession` 不随 reset 变化 —— gap reset 后仍处于同一会话订阅，
+   * 后续回放/实时增量继续按该作用域归属；只有订阅范围本身变化时才由
+   * `setScopeSession()` 覆写。reset 同时伴随筛选条件变化时，调用方必须重算作用域
+   * （见 `SubscriptionController.run`：作用域写在 `appliedKey` 短路之前，换范围必覆写）。
+   * `runSessions`（run→session 自报映射）清空：它只是本次回放窗口的派生数据，
+   * 刷新后由回放/快照重新建立；作用域不依赖它。
+   */
   reset(nextSeq = 0): void {
     this.entries = [];
     this.runCounts.clear();

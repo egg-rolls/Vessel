@@ -27,8 +27,14 @@ import { resourceData } from '../../state/useResource';
 import { useUiStore } from '../../stores/uiStore';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 
-/** config.set 之后等 gateway 回报新值的重试次数与间隔（合计约 0.5s）。 */
-const WRITE_CONFIRM_ATTEMPTS = 3;
+/**
+ * config.set 之后等 gateway 回报新值的重试次数与间隔。
+ *
+ * 实测（本机 gateway 0.50，/v1/rpc 直连）：写入立即落盘，但 config.get 服务的
+ * 是内存快照，要等文件监听热应用（debounce 300ms + reload）才更新，实测 300–800ms。
+ * 因此确认窗口必须覆盖这段时间，否则开关会在“已写入但快照还是旧值”时误判失败。
+ */
+const WRITE_CONFIRM_ATTEMPTS = 8;
 const WRITE_CONFIRM_DELAY_MS = 250;
 
 function errorMessage(error: unknown): string {
@@ -239,7 +245,15 @@ export function DisplaySettingsView() {
         title={t('settings.display.title')}
         description={t('settings.display.description')}
         actions={
-          <Button size="small" onClick={reloadConfig}>
+          <Button
+            size="small"
+            onClick={() => {
+              // 写能力只能靠一次真实写入判定；刷新给一次复位，避免 readOnly 一旦置位
+              // 就永久禁用所有控件（用户表现为“点不动/关不掉”）。
+              setReadOnly(false);
+              reloadConfig();
+            }}
+          >
             {t('settings.display.refresh')}
           </Button>
         }

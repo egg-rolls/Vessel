@@ -207,6 +207,10 @@ export function orderTimeline<T extends { ts?: number | undefined; seq?: number 
  * 去重不在这里做：`sessions.get` 已提交的内容与 live 事件的重复由
  * `isGroupPersisted`（`state/events.ts`，键 = status + input + output）与
  * `hideInput`（同 key 的 input 半边）保证只渲一份。
+ *
+ * **已知且是预期行为**：比已加载窗口更早的 failed / cancelled run（不落盘、也没有
+ * `isGroupPersisted` 能盖掉它）不会被 `sortTs` 夹取，会插回它真实的 ts 位置——也就是
+ * 会出现在历史消息中间而不是末尾。这是「按 ts 排序」的正确结果，不要当 bug 改回去。
  */
 function buildTimelineUnits(
   messages: Message[],
@@ -227,7 +231,10 @@ function buildTimelineUnits(
     const messageIndex =
       sourceIndex !== undefined && sourceIndex >= 0 ? sourceIndex + messageIndexOffset : undefined;
     units.push({
-      key: `m-${startIndex + index}`,
+      // key 用绝对消息下标（`detailWindow.start` + 窗口内下标）：游标分页前插一页时
+      // 窗口相对下标会整体平移，用它会把所有历史消息 remount 一次（展开的 details /
+      // 工具卡状态被重置）；绝对下标对同一条消息恒定。
+      key: `m-${messageIndex ?? startIndex + index}`,
       ts: message.timestamp ?? carry,
       seq: undefined,
       node: (

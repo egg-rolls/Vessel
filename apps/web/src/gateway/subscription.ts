@@ -80,6 +80,23 @@ export function buildSubscription(
   }
 }
 
+/**
+ * 本次订阅能否为事件「盖会话章」（`EventStore#scopeSession` 的取值）。
+ *
+ * 只在**服务端按 `session_id` 过滤**的 chat 订阅下返回会话 id：
+ * - 服务端过滤时事件流里只剩该会话的增量，而 `llm.stream.chunk` / `tool.call.*`
+ *   本身不带 `session_id`，有界回放（最新 1 MiB / 2000 条）还可能把 `run.started`
+ *   挡在窗口外 —— 没有作用域归属，分组就永远拿不到 sessionId，被会话窗口整段过滤。
+ * - 旧 gateway 降级（`clientSessionFilter` 有值）时事件是**未过滤**的，盖章会把别的
+ *   会话的事件误归属，因此返回 undefined，由 UI 按事件自报的 session 过滤。
+ * - `run` / `runs` / `team` / `none` 范围一律 undefined：它们不是会话订阅，
+ *   而且必须是**显式清除**而不是「不设」，否则切走页面后残留作用域会造成串台。
+ */
+export function serverScopedSessionId(built: BuiltSubscription): string | undefined {
+  if (built.clientSessionFilter !== undefined) return undefined;
+  return built.filter.session_id;
+}
+
 export class SubscriptionController {
   /** 最近一次路由请求的订阅；重连后据此重新收敛。 */
   private desired: SubscriptionScope | null = null;
@@ -177,6 +194,13 @@ export class SubscriptionController {
         currentSeq: baseSeq,
         sessionFilter: this.supportsSessionFilter(),
       });
+      // 作用域归属放在 `appliedKey` 短路之前：换会话（session 订阅换 id）与换范围
+      // （chat → runs / team / none）都必须**即时覆写**，不能靠「不设」。
+      //
+      // 为什么非要显式置空：从会话 A 切到 Runs 页后，若保留 A 的残留作用域，Runs 期间
+      // 到达的、事件本身不带 `session_id` 的条目会被误归属到 A，回到会话时表现为串台。
+      // 见 `EventStore#scopeSession` 与 L-041（事件缓冲不是历史，不能靠“谁最后写的”决定归属）。
+      this.eventStore.setScopeSession(serverScopedSessionId(built));
       const key = JSON.stringify(built.filter);
       if (key === this.appliedKey) return;
       this.appliedKey = key;

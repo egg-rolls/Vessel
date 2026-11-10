@@ -58,8 +58,12 @@ export function TeamChat(props: TeamChatProps) {
     retractError,
     reload,
     hasToken,
-    canLoadEarlier,
+    hasEarlier,
     loadEarlier,
+    earlierLoading,
+    historyNotice,
+    dismissHistoryNotice,
+    historyReloadToken,
     memberWindow,
     membersLimit,
     setMembersLimit,
@@ -108,8 +112,12 @@ export function TeamChat(props: TeamChatProps) {
           onResendMessage={resendMessage}
           onRetractMessage={requestRetract}
           onRefresh={reload}
-          canLoadEarlier={canLoadEarlier}
+          hasEarlier={hasEarlier}
+          loadingEarlier={earlierLoading}
           onLoadEarlier={loadEarlier}
+          historyNotice={historyNotice}
+          onDismissHistoryNotice={dismissHistoryNotice}
+          historyReloadToken={historyReloadToken}
           members={members}
           permissions={permissions}
           asks={asks}

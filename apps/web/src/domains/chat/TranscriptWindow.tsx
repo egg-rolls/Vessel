@@ -49,6 +49,9 @@ export function TranscriptWindow({
   messageIndexOffset,
   detailNotice,
   onDismissDetailNotice,
+  earlierError,
+  onDismissEarlierError,
+  onRetryEarlier,
   cancelledJobs,
   verbosity,
   errorLevel,
@@ -86,6 +89,10 @@ export function TranscriptWindow({
   /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
   detailNotice: string | null;
   onDismissDetailNotice: () => void;
+  /** 「加载更早」失败的原始细节；就地可关闭 notice + 重试，不用 toast。 */
+  earlierError: string | null;
+  onDismissEarlierError: () => void;
+  onRetryEarlier: () => void;
   cancelledJobs: ReadonlySet<string>;
   verbosity: Verbosity;
   errorLevel: ErrorVisibility;
@@ -257,6 +264,16 @@ export function TranscriptWindow({
 
           {detailNotice && (
             <StaleNotice message={t(detailNotice)} onDismiss={onDismissDetailNotice} />
+          )}
+
+          {/* 历史加载失败：就地可关闭 + 重试（历史加载是就地动作，弹 toast 会丢锚点）。
+              文案框架本地化，原始细节放在 detail 里，不把英文错误直接当正文。 */}
+          {earlierError && (
+            <StaleNotice
+              message={t('chat.earlierLoadFailed', { detail: earlierError })}
+              onRetry={onRetryEarlier}
+              onDismiss={onDismissEarlierError}
+            />
           )}
 
           {truncated && <StaleNotice message={t('chat.truncated')} />}

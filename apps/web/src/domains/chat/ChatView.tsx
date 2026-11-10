@@ -153,6 +153,8 @@ export function ChatView({
     detailWindow: sessionsApi.detailWindow,
     detailNotice: sessionsApi.detailNotice,
     dismissDetailNotice: sessionsApi.dismissDetailNotice,
+    earlierError: sessionsApi.earlierError,
+    dismissEarlierError: sessionsApi.dismissEarlierError,
     loadEarlierDetail: sessionsApi.loadEarlierDetail,
     sessionDetailLoading: sessionsApi.sessionDetailLoading,
     sessionDetailError: sessionsApi.sessionDetailError,
@@ -367,6 +369,14 @@ export function ChatView({
           messageIndexOffset={transcriptApi.messageIndexOffset}
           detailNotice={transcriptApi.detailNotice}
           onDismissDetailNotice={transcriptApi.dismissDetailNotice}
+          earlierError={transcriptApi.earlierError}
+          onDismissEarlierError={transcriptApi.dismissEarlierError}
+          onRetryEarlier={() => {
+            // 重试只重取「上一页」：服务端游标由窗口首条决定，失败后窗口没动，
+            // 因此直接重发同一个 before 请求（不经本地扩窗，避免白扩一页）。
+            if (!selectedId) return;
+            void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
+          }}
           cancelledJobs={submitApi.cancelledJobs}
           verbosity={transcriptApi.visibility.verbosity}
           errorLevel={transcriptApi.errorLevel}

@@ -54,6 +54,10 @@
   `sessions.get` 的 `message_limit` / `before` 分页（首屏 50 条）；Team 走
   `teams.get` 的 `before` 游标（首屏 100 条，`messages_has_more` 驱动翻页，
   超出 64 MiB 回扫窗口时提示一次后停止）。事件订阅按路由收敛到当前会话 / Team / Runs。
+  Chat 的 `hideInput` 去重只看已加载窗口：窗口外的同一条用户输入可能多显示一轮气泡。
+- **待手测**：`config.set` 写后热应用（0.50 新增 `src/config-write-apply.ts`）需要
+  新代码在跑的 gateway 才能测「写后立即 `config.get`」的收敛延迟；实现侧已单测
+  单飞行 / 上界 / 失败只 warn / 去重，真实 gateway 的 5 次 `set→get` 中位延迟待重启后补测。
 - tag / publish 待 1 收口裁决。
 
 ## 入口

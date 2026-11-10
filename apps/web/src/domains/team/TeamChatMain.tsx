@@ -39,18 +39,24 @@ import {
  * - `armed`：一次贴近顶部只触发一页，锚点补偿把 scrollTop 带离顶部后才重新武装。
  * - `anchor`：请求时记下 scrollTop / scrollHeight，新页插入 DOM 后（`useLayoutEffect`，
  *   绘制前）把高度差补进 scrollTop，视觉位置不动。
- * - 是否还有更早由服务端 `messages_has_more` 决定（`hasMore`），不再用探针探测。
+ * - 是否还有更早**只**由服务端 `messages_has_more` 决定（`hasMore`）：契约 §4.4 已把
+ *   「下一页条数没变多＝到头」的客户端探针删掉，这里不再猜测。
+ * - `loading`：`useTeamChat` 的请求在途标志。请求结束但一条也没多（失败 /
+ *   `cursor_out_of_window`）时丢掉锚点，别把随后的无关增长当成翻页来回补偿。
  * - `filledAt`：视口没被填满时滚不动、靠滚动永远触发不到更早历史，主动补一页；
  *   上一页没有带来内容增长（scrollHeight 不变）就停，避免死循环。
  */
 function useEarlierPaging({
   box,
   hasMore,
+  loading,
   scope,
   onLoadEarlier,
 }: {
   box: { current: HTMLDivElement | null };
   hasMore: boolean;
+  /** 外部请求在途：期间不重复触发。 */
+  loading: boolean;
   /** 切换 Team 时重置（切走再回来应该还能往前拉）。 */
   scope: string;
   onLoadEarlier: () => void;
@@ -70,22 +76,32 @@ function useEarlierPaging({
 
   const request = useCallback(() => {
     const element = box.current;
-    if (!element || !hasMore) return;
+    if (!element || !hasMore || loading) return;
     armed.current = false;
     anchor.current = captureScrollAnchor(element);
-    setLoadedPages((value) => value + 1);
     onLoadEarlier();
-  }, [box, hasMore, onLoadEarlier]);
+  }, [box, hasMore, loading, onLoadEarlier]);
 
   useLayoutEffect(() => {
     const element = box.current;
     if (!element) return;
     const saved = anchor.current;
     if (saved) {
-      if (restoreScrollAnchor(element, saved)) anchor.current = null;
+      if (restoreScrollAnchor(element, saved)) {
+        // 新页真的插到了上方：视口已经补偿，播报「已加载更早消息」。
+        anchor.current = null;
+        setLoadedPages((value) => value + 1);
+      } else if (!loading) {
+        // 请求已结束却一条也没多（失败 / cursor_out_of_window）：丢掉锚点。
+        anchor.current = null;
+      }
       return;
     }
-    if (!hasMore || element.scrollHeight > element.clientHeight + EARLIER_LOAD_THRESHOLD_PX) {
+    if (
+      !hasMore ||
+      loading ||
+      element.scrollHeight > element.clientHeight + EARLIER_LOAD_THRESHOLD_PX
+    ) {
       filledAt.current = null;
       return;
     }
@@ -139,9 +155,16 @@ export interface TeamChatMainProps {
   onResendMessage: (message: TeamMessage) => void;
   onRetractMessage: (message: TeamMessage) => void;
   onRefresh: () => void;
-  /** 窗口前还有更早消息：滚动到顶部附近时自动加载一页。 */
-  canLoadEarlier: boolean;
+  /** 服务端 `messages_has_more`：窗口前还有更早消息。 */
+  hasEarlier: boolean;
+  /** 更早页请求在途（`useTeamChat.loadEarlier`）：期间不重复触发。 */
+  loadingEarlier: boolean;
   onLoadEarlier: () => void;
+  /** 历史前缀被改写（`history_changed`）的就地告知（i18n key）；null = 无。 */
+  historyNotice: string | null;
+  onDismissHistoryNotice: () => void;
+  /** 每次 `history_changed` 自增：内容被整体替换前用来抓一次滚动锚点。 */
+  historyReloadToken: number;
   members: readonly TeamMember[];
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
@@ -176,8 +199,12 @@ export function TeamChatMain({
   onResendMessage,
   onRetractMessage,
   onRefresh,
-  canLoadEarlier,
+  hasEarlier,
+  loadingEarlier,
   onLoadEarlier,
+  historyNotice,
+  onDismissHistoryNotice,
+  historyReloadToken,
   members,
   permissions,
   asks,
@@ -214,10 +241,39 @@ export function TeamChatMain({
   );
   const paging = useEarlierPaging({
     box: scrollBox,
-    hasMore: canLoadEarlier,
+    hasMore: hasEarlier,
+    loading: loadingEarlier,
     scope: resetKey,
     onLoadEarlier,
   });
+
+  /**
+   * 历史被改写（`history_changed`）→ 内容整体替换：替换前抓一次锚点，替换后按高度差
+   * 回填，避免「重取尾页」把视口甩到顶部。贴底态（pinned）则维持贴底。
+   * 抓取必须在内容变化之前，因此挂在 token 变化（请求发出）而不是渲染完成后。
+   */
+  const historyAnchor = useRef<ScrollAnchor | null>(null);
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
+  useEffect(() => {
+    if (historyReloadToken === 0) return;
+    const element = scrollBox.current;
+    historyAnchor.current = element ? captureScrollAnchor(element) : null;
+  }, [historyReloadToken]);
+  useLayoutEffect(() => {
+    const saved = historyAnchor.current;
+    const element = scrollBox.current;
+    if (!saved || !element) return;
+    // 内容还没换掉（请求在途）：等下一次布局再补。
+    if (element.scrollHeight === saved.scrollHeight) return;
+    restoreScrollAnchor(element, saved);
+    historyAnchor.current = null;
+    if (pinnedRef.current) {
+      // 贴底态：历史改写后仍停在最新一条，不因为高度变化被判定为“用户上滚”。
+      element.scrollTop = element.scrollHeight;
+    }
+  });
+
   const handleScroll = () => {
     onScroll();
     paging.onScroll();
@@ -226,6 +282,9 @@ export function TeamChatMain({
   return (
     <div className="team-chat-main">
       {detail && error && <StaleNotice message={t('team.error.stale')} onRetry={onRefresh} />}
+      {historyNotice && (
+        <StaleNotice message={t(historyNotice)} onDismiss={onDismissHistoryNotice} />
+      )}
       <div
         className="team-transcript-scroll"
         ref={setScrollRef}
