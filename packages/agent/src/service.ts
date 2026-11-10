@@ -1277,7 +1277,16 @@ export class AgentServiceImpl implements AgentService {
     return { messages, keepProjected, copiedMessages: messages.length };
   }
 
-  /** 把种子写进新 session 的事件日志：session.created → message.injected × N → vessel:created。 */
+  /**
+   * 把种子写进新 session 的事件日志：message.injected × N → vessel:created → session.created。
+   *
+   * 两点取舍：
+   * - **整批非 durable + 末尾一次 fsync**：逐条 fsync 是 1.52ms/条，1814 条消息的
+   *   种子 ≈ 2.8s 全串行在 create RPC 里；改为整批写完后 `sync()` 一次。
+   *   对调用方的保证不变（返回前必已落盘），只有「写的过程中崩溃」的落盘粒度变粗。
+   * - **`session.created` 最后写**：崩溃时新会话要么不存在、要么完整，不再留下
+   *   「已创建、消息只写了一截」的半成品（该事件当前没有读取方）。
+   */
   private async writeSeedEvents(
     meta: {
       agentId: string;
@@ -1306,13 +1315,8 @@ export class AgentServiceImpl implements AgentService {
       copied_messages: meta.copiedMessages,
       ...(meta.mode !== undefined ? { mode: meta.mode } : {}),
     };
-    await eventLog.append({
-      session_id: meta.sessionId,
-      run_id: meta.sessionId,
-      type: 'session.created',
-      ts: this.now(),
-      data: baseData,
-    });
+    // 实现没有 `sync` 时不能省 fsync，否则「整批落盘」的补偿动作不存在。
+    const deferred = typeof eventLog.sync === 'function' ? { durable: false } : {};
     for (const message of seedResult.messages) {
       await eventLog.append({
         session_id: meta.sessionId,
@@ -1320,6 +1324,7 @@ export class AgentServiceImpl implements AgentService {
         type: 'message.injected',
         ts: this.now(),
         data: { message },
+        ...deferred,
       });
     }
     await eventLog.append({
@@ -1328,7 +1333,18 @@ export class AgentServiceImpl implements AgentService {
       type: 'message.injected',
       ts: this.now(),
       data: { message: createdNotice(meta) },
+      ...deferred,
     });
+    await eventLog.append({
+      session_id: meta.sessionId,
+      run_id: meta.sessionId,
+      type: 'session.created',
+      ts: this.now(),
+      data: baseData,
+      ...deferred,
+    });
+    // 返回前恢复「已落盘」保证：整批只 fsync 这一次。
+    await eventLog.sync?.(meta.sessionId);
   }
 
   /** session 级事件 best-effort 写入（事件日志缺失时静默跳过）。 */

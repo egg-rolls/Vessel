@@ -216,6 +216,114 @@ async function truncatePartialTail(path: string, size: number): Promise<number> 
 }
 
 /**
+ * 尾窗定位结果：`empty` = `since` 之后没有记录；`offset` = `since` 之后第一条记录的起始字节。
+ */
+type IncrementalStart = { kind: 'empty' } | { kind: 'offset'; offset: number };
+
+/**
+ * 把 `[offset, offset+length)` 读满（单次 read 不保证读满）。
+ * 读不满说明文件在读取期间变短了：返回 `undefined`，让调用方回退全量读，不猜。
+ */
+async function readWindow(
+  path: string,
+  offset: number,
+  length: number,
+): Promise<Buffer | undefined> {
+  const buffer = Buffer.alloc(length);
+  const handle = await open(path, 'r');
+  try {
+    let filled = 0;
+    while (filled < length) {
+      const { bytesRead } = await handle.read(buffer, filled, length - filled, offset + filled);
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    return filled === length ? buffer : undefined;
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+/**
+ * 从文件尾部回溯，定位「`seq > since` 的第一条记录」的字节偏移。
+ *
+ * 会话日志只追加（唯一写点是 append 模式的 `write`，truncate 只截崩溃残行），
+ * 所以文件尾部一定以 seq 递增的顺序收尾：读一个尾窗就能定边界，不必把整份
+ * NDJSON 从头流一遍（实测 44MB 日志：全量 202ms，增量读 164ms 却只返回 20 行）。
+ *
+ * 保守校验 —— 任一条不满足就返回 `undefined`，由调用方回退全量流读：
+ * - 只按**本 session** 的行判定：混进来的别的 session 记录 seq 属另一个序列，
+ *   跳过即可（读路径本来就会按 `session_id` 过滤）。
+ * - 本 session 能解析的行必须逐条 `seq = 下一条 - 1`。模块头已说明「轮换写者下
+ *   行序不保证与 seq 一致」；这类场景**只保证不返回错数据**，不承诺也能变快。
+ * - 边界行的 seq 必须正好等于 `since`（seq 连续），否则不猜。
+ * - 单条记录超过窗口上限（`TAIL_WINDOW_MAX`）时不猜。
+ *
+ * 判定**只认磁盘**，不读 writer 的内存游标：否则「别的进程刚追加了一条」会被
+ * 误判成「没有新事件」。
+ */
+async function findIncrementalStart(
+  path: string,
+  size: number,
+  sessionId: string,
+  since: number,
+): Promise<IncrementalStart | undefined> {
+  let window = Math.min(TAIL_WINDOW_BYTES, size);
+  for (;;) {
+    const start = Math.max(0, size - window);
+    let buffer: Buffer | undefined;
+    try {
+      buffer = await readWindow(path, start, size - start);
+    } catch (error) {
+      if (isNotFound(error)) return { kind: 'empty' };
+      throw error;
+    }
+    // 文件在读取期间被截短（残行截断/删除）：不猜，回退全量读。
+    if (buffer === undefined) return undefined;
+
+    // 从窗口末尾往前逐行解析。
+    let cursor = buffer.length; // 当前行在 buffer 内的结束位置（不含换行）
+    let expected: number | undefined; // 已确认位于边界之后的最近一条 seq
+    let sawOwn = false; // 是否已经解析到过本 session 的记录
+    let decided: IncrementalStart | undefined;
+    while (cursor > 0) {
+      let stop = cursor;
+      while (stop > 0 && buffer[stop - 1] === 0x0a) stop -= 1; // 跳过行尾换行
+      if (stop === 0) break;
+      const newline = buffer.lastIndexOf(0x0a, stop - 1);
+      if (newline === -1 && start > 0) {
+        // 窗口起点切在一条记录中间：不拼接，扩窗重来。
+        break;
+      }
+      const lineStart = newline + 1; // 0 = 这一行从窗口起点开始
+      const record = parseRecord(buffer.toString('utf8', lineStart, stop));
+      cursor = lineStart;
+      if (record === null) {
+        // 文件尾的崩溃残行（无换行结尾）解析不出记录：跳过它继续往前找，
+        // 与 `recoverLastSeq` 同一策略；出现在中间则不再猜。
+        if (!sawOwn) continue;
+        return undefined;
+      }
+      // 别的 session 的记录不参与判定（seq 是 per-session 的，混进来会假不连续）。
+      if (record.session_id !== sessionId) continue;
+      sawOwn = true;
+      if (expected !== undefined && record.seq !== expected - 1) return undefined;
+      if (record.seq <= since) {
+        // 这一行就是边界；它之后的记录都 > since（上面已逐条校验连续性）。
+        decided =
+          record.seq === since ? { kind: 'offset', offset: start + stop + 1 } : { kind: 'empty' };
+        break;
+      }
+      expected = record.seq;
+    }
+    if (decided !== undefined) return decided;
+    if (start === 0) return undefined; // 整份文件都看过了仍无结论：交给全量读
+    if (window >= TAIL_WINDOW_MAX) return undefined; // 单条记录超过窗口上限
+    window = Math.min(window * 8, size);
+  }
+}
+
+/**
  * 追加写会话事件日志。
  *
  * 读写均可在同一实例上并发调用：同 session 写入串行，读取先等待该 session
@@ -298,7 +406,10 @@ export class SessionEventLog {
       if (!handle) throw new Error('session_event_log_unavailable');
       const line = `${JSON.stringify(record)}\n`;
       const written = await handle.write(line);
-      if (this.durable) await handle.sync();
+      // `durable:false` 只用于「一批写完再统一 fsync」的批量路径（如种子消息）：
+      // 逐条 fsync 的 1.52ms 会按条数线性叠加（1814 条 ≈ 2.8s），
+      // 调用方必须在返回前调一次 `sync()` 补上落盘保证。
+      if (this.durable && input.durable !== false) await handle.sync();
       state.persistedSeq = seq;
       state.persistedCount += 1;
       state.expectedSize += written.bytesWritten;
@@ -385,7 +496,43 @@ export class SessionEventLog {
   }
 
   /**
+   * 把该 session 已入队的事件真正落到磁盘（fsync 一次）。
+   *
+   * 配合 `append({ durable: false })` 使用：批量写入时跳过逐条 fsync，
+   * 调用方在整批（含顺序上的首条事件）都写完后调用本方法一次，即可在返回前
+   * 重新获得「已落盘」保证。幂等；没有 writer 或实例本身非 durable 时为空操作。
+   */
+  async sync(sessionId: string): Promise<void> {
+    const state = this.writers.get(sessionId);
+    if (!state) {
+      await this.draining.get(sessionId)?.catch(() => {});
+      return;
+    }
+    await state.queue;
+    await state.ready.catch(() => {});
+    if (!this.durable) return;
+    if (state.handle) {
+      await state.handle.sync();
+      return;
+    }
+    // 句柄已被回收（LRU）时补一次：现开一个句柄 fsync 后关闭。
+    const handle = await open(sessionEventsFilePath(this.dir, sessionId), 'r+').catch(
+      () => undefined,
+    );
+    if (!handle) return;
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  }
+
+  /**
    * 读取事件（按 seq 升序）。
+   *
+   * 增量读（`sinceSeq`）会先从**尾部窗口**定位「`seq > sinceSeq` 的第一条记录」，
+   * 只流这一小段；定位不出来时回退整份流读，返回值与全量扫一遍完全一致。
+   *
    * @param opts.sinceSeq 排他游标：只返回 `seq > sinceSeq`
    * @param opts.limit 最大条数；缺省不限制
    */
@@ -409,6 +556,26 @@ export class SessionEventLog {
         : undefined;
     if (limit === 0) return [];
 
+    // 增量读只流「since 之后」那一段：日志只追加（见模块头），所以尾部窗口
+    // 足以定位边界；稳态（`since == 最后 seq`）连流都不开，直接返回空。
+    // 定位失败（单条记录超过窗口上限 / 行序与 seq 不一致 / 混入别的 session）
+    // 一律回退下面的全量流读 —— 只保证不会返回错数据，不承诺那里也快。
+    let startOffset = 0;
+    let size = 0;
+    try {
+      size = (await stat(path)).size;
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+    if (since !== undefined && since > 0 && size > 0) {
+      const found = await findIncrementalStart(path, size, sessionId, since);
+      if (found?.kind === 'empty') return [];
+      if (found?.kind === 'offset') {
+        if (found.offset >= size) return [];
+        startOffset = found.offset;
+      }
+    }
+
     const collected: SessionEventRecord[] = [];
     let malformed = 0;
     let foreign = 0;
@@ -427,7 +594,11 @@ export class SessionEventLog {
     };
     // 流式读取：避免把大 session 的整份 NDJSON 读进内存。
     // 设置 encoding 后 Node 的 Readable 内部用 StringDecoder，跨 chunk 的多字节字符安全。
-    const stream = createReadStream(path, { encoding: 'utf8' });
+    // `start` 从尾部窗口定位到的记录边界开始（0 表示从头，与改造前一致）。
+    const stream = createReadStream(
+      path,
+      startOffset > 0 ? { encoding: 'utf8', start: startOffset } : { encoding: 'utf8' },
+    );
     let buffer = '';
     try {
       for await (const chunk of stream) {

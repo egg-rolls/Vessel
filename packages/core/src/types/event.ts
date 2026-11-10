@@ -167,6 +167,14 @@ export interface SessionEventInput {
    * 缺省时不校验（读路径 / 旧生产者保持兼容）。
    */
   fencing_token?: number;
+  /**
+   * 单次写入是否 fsync；缺省跟随实例（`SessionEventLogOptions.durable`，默认 true）。
+   *
+   * 只用于「一批写完再统一 fsync」的批量路径（如 seeded create 的种子消息）：
+   * 传 false 后**必须**在整批结束时调用 `SessionEventLog.sync()`，否则崩溃时
+   * 这批事件可能全部停留页缓存。
+   */
+  durable?: boolean;
 }
 
 /** 落盘后的会话事件记录（`events.ndjson` 单行） */
@@ -206,6 +214,11 @@ export interface SessionEventLogPort {
   lastSeq?(sessionId: string): Promise<number | undefined>;
   /** 等待该 session（缺省全部）的写入队列排空 */
   flush(sessionId?: string): Promise<void>;
+  /**
+   * 把该 session 已入队的事件落盘（fsync）。用于 `append({ durable: false })`
+   * 的批量路径：整批写完后调用一次（实现可缺省）。
+   */
+  sync?(sessionId: string): Promise<void>;
   /** 关闭并移除该 session 的写句柄（run 结束 / idle 回收；实现可缺省） */
   release?(sessionId: string): Promise<void>;
   /** 合并写会话索引（best-effort；实现可缺省） */

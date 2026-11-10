@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { estimateMessagesTokens, estimateTokens } from '../context/index.js';
+import { estimateTokens } from '../context/index.js';
 import {
   evaluateLimitWarnings,
   evaluateTermination,
@@ -228,6 +228,13 @@ function isContextOverflowError(error: unknown): boolean {
 
 /** Self Card token 上限（0.15 E9） */
 const SELF_CARD_TOKEN_LIMIT = 400;
+
+/**
+ * 恢复历史时「补读最近一次 llm.response」的尾部窗口（按事件条数）。
+ * `llm.response` 每个请求一条，真实会话里最后一条通常距 EOF 几 KB；
+ * 窗口内找不到时回退全量读，行为与不设窗口等价。
+ */
+const LAST_REQUEST_PROBE_EVENTS = 200;
 
 /**
  * BeforeLlm 注入消息的稳定键（0.16 E5）。
@@ -1596,12 +1603,13 @@ export class ExecutionUnit {
       execution.phase = 'llm';
       // 0.18：每次请求重置部分输出；中断时把已流出的文本写进终态 partial_content。
       execution.partialContent = '';
-      // 调试元信息（0.10 R2-13）：只记数量/工具名/token 估算，绝不输出 prompt 正文
+      // 调试元信息（0.10 R2-13）：只记数量/工具名，绝不输出 prompt 正文。
+      // token 数不在这里重扫整段历史：`context.changed.token_count` 与
+      // `llm.response.usage` 已是增量缓存的真值，debug 实参无条件求值不值。
       this.logger.debug('llm request', {
         run_id: runId,
         message_count: messages.length,
         tool_names: args.tools.map((tool) => tool.function.name),
-        estimated_tokens: estimateMessagesTokens(messages),
       });
 
       // 发布 LLM 请求事件（事件里剔除 reasoning_content，避免思维链泄漏到 TUI/观测）
@@ -1649,7 +1657,6 @@ export class ExecutionUnit {
       this.logger.debug('llm call', {
         run_id: runId,
         message_count: messages.length,
-        estimated_tokens: estimateMessagesTokens(messages),
       });
 
       try {
@@ -2426,6 +2433,9 @@ export class ExecutionUnit {
 
     let events: Awaited<ReturnType<SessionEventLogPort['read']>> = [];
     let fullProjectionForReplacement = false;
+    // 日志最后的 seq：既用于一致性告警，也用于把下面「补读 llm.response」
+    // 限制在尾部窗口内。
+    let lastSeq: number | undefined;
     if (this.eventLog) {
       try {
         await this.eventLog.flush(sessionId);
@@ -2444,7 +2454,7 @@ export class ExecutionUnit {
           if (!needFullProjection) events = await this.eventLog.read(sessionId);
         }
         // 一致性校验（P2）：RunRecord 游标 / SessionState 派生游标不得超前于日志。
-        const lastSeq = await this.eventLog.lastSeq?.(sessionId);
+        lastSeq = await this.eventLog.lastSeq?.(sessionId);
         const recordCursor = record?.event_cursor;
         if (
           typeof recordCursor === 'number' &&
@@ -2478,11 +2488,23 @@ export class ExecutionUnit {
 
     // 上下文锚点只认最近一次请求的 per-request usage。增量里通常没有
     // `llm.response`（它在上一次 run 结束时已随派生游标被覆盖），
-    // 此时补读一次全量日志；压缩 / 增量读已经不是全量时都需要。
+    // 此时补读日志；压缩 / 增量读已经不是全量时都需要。
+    // 补读先只问尾部窗口：`llm.response` 每个请求一条、必然靠近 EOF（真实会话里
+    // 最后一条距文件尾只有几 KB），没必要为一个数字把整份 NDJSON 读进来。
+    // 窗口里没有（如尾部堆了大段工具结果）则回退全量读，行为与之前等价。
     let lastRequestTokens = lastRequestTokensFromEvents(events);
     if (lastRequestTokens === undefined && this.eventLog && !needFullProjection) {
       try {
-        lastRequestTokens = lastRequestTokensFromEvents(await this.eventLog.read(sessionId));
+        if (typeof lastSeq === 'number' && lastSeq > 0) {
+          lastRequestTokens = lastRequestTokensFromEvents(
+            await this.eventLog.read(sessionId, {
+              sinceSeq: Math.max(0, lastSeq - LAST_REQUEST_PROBE_EVENTS),
+            }),
+          );
+        }
+        if (lastRequestTokens === undefined) {
+          lastRequestTokens = lastRequestTokensFromEvents(await this.eventLog.read(sessionId));
+        }
       } catch (error) {
         this.logger.warn('session event log usage probe failed', {
           session_id: sessionId,
