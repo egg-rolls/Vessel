@@ -28,6 +28,12 @@
 - **Web 外壳**：去掉 AppBar 的 Vessel 字标，路由改用字标样式；暗色表头/内容底色互换。
 - **文档/清理**：CLAUDE.md 59 行、HANDOFF-main 106 行、plans INDEX 137 行；81 计划 /
   21 handoff / 7 notes 归档；tmp 2.2GB→126MB；ADR-098 accepted；DECISION-052/053/054/055。
+- **trace 写入 `llm.request` 摘要化**：完整 prompt 副本不落盘（实测占 `events/` 字节的
+  98.6%），改用与 WS 广播同一份摘要；`events.list` 不再为 99% 会被丢弃的副本付费。
+- **历史工具输出与实时统一 8 KiB 口径**：`sessions.get` 出站按 `capToolPayload` 裁剪
+  `role:'tool'` 的 content 与 assistant 工具入参；分页游标仍按裁剪前长度校验。
+- **会话列表/搜索只 parse 一遍**：搜索改 `list()` + 单次 `load()`；liveness 包装不再
+  整表二次 `listRich()`；Web 会话列表轮询 15s→60s（终态 / `session.saved` 已事件驱动）。
 
 ### Fixed
 

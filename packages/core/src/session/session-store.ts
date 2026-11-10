@@ -47,6 +47,17 @@ export function toSessionInfo(state: SessionState): SessionInfo {
 }
 
 /**
+ * 会话列表排序：`updated_at` 倒序；同值用 `session_id` 升序，避免刷新时顺序抖动。
+ *
+ * 单一实现：`listRich()` 与搜索等「自己组装 SessionInfo 列表」的路径共用，
+ * 避免同一口径在多个文件里各写一份后悄悄分叉。
+ */
+export function compareSessionInfo(a: SessionInfo, b: SessionInfo): number {
+  if (a.updated_at !== b.updated_at) return b.updated_at - a.updated_at;
+  return a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0;
+}
+
+/**
  * 内存 SessionStore 实现
  * 用于测试和开发，生产环境应使用文件或数据库存储
  */
@@ -94,10 +105,7 @@ export class MemorySessionStore implements SessionStore {
     return Array.from(this.sessions.values())
       .filter((s) => (s.messages?.length ?? 0) > 0)
       .map(toSessionInfo)
-      .sort((a, b) => {
-        if (a.updated_at !== b.updated_at) return b.updated_at - a.updated_at;
-        return a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0;
-      });
+      .sort(compareSessionInfo);
   }
 
   /**

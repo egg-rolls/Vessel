@@ -38,12 +38,17 @@ trace:
 
 | 级别 | 内容 |
 |---|---|
-| `full` | 完整 payload（消息、工具参数/结果等） |
+| `full` | 完整 payload（工具参数/结果、hook 输出、错误原文等）；**例外**：`llm.request` 的 `messages` 只落摘要（`message_count` / `token_count` / 末条消息 200 字符预览），完整副本不落盘（0.52） |
 | `metadata` | 只保留信封 `type/run_id/ts/seq`，以及 data 中 `status`、`tool_name`、`duration_ms`、`iterations`、`iteration`、`message_count`、`finish_reason`、`usage.prompt_tokens/completion_tokens/total_tokens/total_cost`；`error` 保留但截断 ≤500 字符，`reason` ≤200 字符；其余消息/参数/结果丢弃 |
 | `off` | 不落盘 |
 
 缺省：`enabled: true`、`level: full`、30 天 / 1000 runs / 1 GiB。全量档包含用户消息
 与工具参数，部署方需自行评估访问控制与留存合规。
+
+**`llm.request` 摘要化**（0.52）：每轮请求的完整 prompt 是会话历史的副本，实测占
+`events/` 字节的 98.6%，而 `events.list` 的消费者只查 error 类型。落盘时改用与 WS 广播
+同一份摘要（`summarizeLlmRequestEvent`），目录从 GB 级回到几十 MB。需要 prompt 原文时
+从会话存储（`sessions/<id>/events.ndjson`）或 `llm.response` 取。
 
 ## 4. 留存与 prune
 

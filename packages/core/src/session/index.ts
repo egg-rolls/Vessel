@@ -51,6 +51,7 @@ export {
   sessionLogDirExists,
 } from './session-event-log.js';
 export {
+  compareSessionInfo,
   deriveSessionMeta,
   MemorySessionStore,
   toSessionInfo,

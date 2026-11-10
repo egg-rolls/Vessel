@@ -420,4 +420,9 @@ export {
   type TenantEventHub,
   type TenantEventHubOptions,
 } from './tenant-event-hub.js';
-export { capToolEvent, capToolPayload, TOOL_EVENT_PAYLOAD_LIMIT } from './tool-events.js';
+export {
+  capToolEvent,
+  capToolMessages,
+  capToolPayload,
+  TOOL_EVENT_PAYLOAD_LIMIT,
+} from './tool-events.js';

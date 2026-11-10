@@ -5,10 +5,13 @@
  * gateway 在出站（redactor 之后、入 buffer 之前）统一裁剪到 8 KiB，
  * 避免大工具结果撑爆事件缓冲/浏览器。
  *
+ * 0.52：同一把尺子也用在**历史读路径**（`sessions.get` 的 `capToolMessages`），
+ * 否则「实时看到 8 KiB、刷新后看到完整」会让同一条工具结果有两种口径。
+ *
  * @module @vessel-agent/serve/tool-events
  */
 
-import type { RunEvent } from '@vessel-agent/core';
+import type { Message, RunEvent } from '@vessel-agent/core';
 
 /** 单个字段的序列化上限（UTF-8 字节） */
 export const TOOL_EVENT_PAYLOAD_LIMIT = 8 * 1024;
@@ -121,4 +124,52 @@ export function capToolEvent(event: RunEvent): RunEvent {
 
   if (!truncated) return { ...event, data };
   return { ...event, data: { ...data, truncated: true, truncated_bytes: truncatedBytes } };
+}
+
+/** 单条消息的裁剪（内部）；未超限返回原引用。 */
+function capToolMessage(message: Message): Message {
+  let next: Message | null = null;
+
+  // 工具结果消息：content 就是工具输出。
+  if (message.role === 'tool' && typeof message.content === 'string') {
+    const capped = capToolPayload(message.content);
+    if (capped.truncated) next = { ...message, content: capped.value as string };
+  }
+
+  // assistant 的工具入参：与实时 `tool.call.started.arguments` 同一口径。
+  const toolCalls = message.tool_calls;
+  if (toolCalls !== undefined && toolCalls.length > 0) {
+    let changed = false;
+    const cappedCalls = toolCalls.map((call) => {
+      const args = call.function?.arguments;
+      if (typeof args !== 'string') return call;
+      const capped = capToolPayload(args);
+      if (!capped.truncated) return call;
+      changed = true;
+      return { ...call, function: { ...call.function, arguments: capped.value as string } };
+    });
+    if (changed) next = { ...(next ?? message), tool_calls: cappedCalls };
+  }
+
+  return next ?? message;
+}
+
+/**
+ * 历史读路径裁剪（0.52）：把一批消息里的工具输出 / 工具入参裁到 8 KiB。
+ *
+ * - 与实时流同源（`capToolPayload` + `... [truncated]` 标记，文案一致）；
+ * - **不改存储**：入参通常是刚 parse 出来的 `state.messages`，返回副本；
+ * - 未截断的消息保留原引用，全部未截断时返回原数组（零分配）。
+ *
+ * 调用方注意：`sessions.get` 的分页游标用**裁剪前**的 `content.length` 校验历史一致性，
+ * 裁剪必须发生在游标计算之后（两边都用原长度才稳定）。
+ */
+export function capToolMessages(messages: readonly Message[]): Message[] {
+  let changed = false;
+  const out = messages.map((message) => {
+    const capped = capToolMessage(message);
+    if (capped !== message) changed = true;
+    return capped;
+  });
+  return changed ? out : (messages as Message[]);
 }

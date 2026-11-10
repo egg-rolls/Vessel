@@ -88,7 +88,9 @@ export function useChatSessions({
   const toast = useToast();
 
   const [query, setQuery] = useState('');
-  const debouncedQuery = useDebounced(query, 150);
+  // 服务端搜索是「每次停顿一次全量扫会话」，350ms 比 150ms 少发约 2/3 的请求
+  // 且仍在用户的正常打字节奏内（0.52）。
+  const debouncedQuery = useDebounced(query, 350);
   /** 服务端内容搜索；null = 用本地 title/preview/id 过滤兜底。 */
   const [serverSearch, setServerSearch] = useState<{
     query: string;
@@ -159,7 +161,13 @@ export function useChatSessions({
     selectSessionInStore(selectedId);
   }, [selectedId, selectSessionInStore]);
 
-  // 会话列表：有 token 就加载（重连期间走 HTTP RPC），15s 轮询；首轮走去重路径。
+  // 会话列表：有 token 就加载（重连期间走 HTTP RPC），60s 轮询；首轮走去重路径。
+  //
+  // 0.52：轮询是兜底而不是主通道——`run.completed/failed/cancelled` 与 `session.saved`
+  // 已经在 useChatTranscript 里触发 `refresh()`（它同时刷列表与 detail），
+  // 所以「自己正在聊的会话」是事件驱动的、不受这个周期影响；60s 只决定
+  // 「别的会话/别的客户端改动」最晚多久出现在列表里。每次轮询都是一次
+  // Σ会话字节 的全量 parse，所以这条线越稀越好。
   const firstSessionsLoad = useRef(true);
   usePolledAction(
     () => {
@@ -168,7 +176,7 @@ export function useChatSessions({
       firstSessionsLoad.current = false;
       void loadSessions(client, { epoch, force });
     },
-    { enabled: hasToken, pollMs: 15_000, deps: [epoch, hasToken] },
+    { enabled: hasToken, pollMs: 60_000, deps: [epoch, hasToken] },
   );
 
   // 会话列表第二行来自 agentStore roster（Agents 域同一份数据）。
@@ -238,10 +246,11 @@ export function useChatSessions({
     navigate({ domain: 'chat', sessionId: 'new' });
   }, [hasToken, routeSessionId, knownSessionIds, navigate, sessionsUnavailable]);
 
-  // 服务端全文搜索：150ms debounce 后切换；旧 gateway/失败时保持本地过滤。
+  // 服务端全文搜索：350ms debounce 后切换；旧 gateway/失败时保持本地过滤。
+  // 单字符不请求：本地 title/preview/id 过滤已经覆盖，且服务端每次都要扫全部会话。
   useEffect(() => {
     const needle = debouncedQuery.trim();
-    if (!needle || !hasToken) {
+    if (needle.length < 2 || !hasToken) {
       setServerSearch(null);
       return;
     }

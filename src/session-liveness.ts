@@ -16,14 +16,15 @@
  * @module vessel/session-liveness
  */
 
-import type {
-  Logger,
-  RunRecord,
-  RunRecordStore,
-  SessionEventLog,
-  SessionInfo,
-  SessionState,
-  SessionStore,
+import {
+  type Logger,
+  type RunRecord,
+  type RunRecordStore,
+  type SessionEventLog,
+  type SessionInfo,
+  type SessionState,
+  type SessionStore,
+  toSessionInfo,
 } from '../packages/core/src/index';
 import {
   acquireSessionLock,
@@ -303,10 +304,16 @@ export function withLivenessRepair(
     },
     async listRich(): Promise<SessionInfo[]> {
       const infos = await backend.listRich();
+      // 只为「本次真的改了状态」的会话重读，不再整表二次 listRich()。
+      // running 是对话进行中的常态（正是最需要低延迟的时刻），旧实现会把
+      // Σ会话字节 的 parse 翻倍；现在稳态下第二遍是 0 次。
+      const repaired = new Set<string>();
       for (const info of infos) {
         if (info.status !== 'running') continue;
         try {
-          await reconcileSession(info.session_id, ctx);
+          if ((await reconcileSession(info.session_id, ctx)) === 'repaired') {
+            repaired.add(info.session_id);
+          }
         } catch (error) {
           ctx.logger.warn(`session liveness: list repair failed: ${errorText(error)}`, {
             session_id: info.session_id,
@@ -314,8 +321,24 @@ export function withLivenessRepair(
           });
         }
       }
-      // 第二次读取拿到修复后的 status（backend 是唯一存储面）。
-      return backend.listRich();
+      if (repaired.size === 0) return infos;
+
+      // 修复后的 status/timestamps 以 backend 为准（它是唯一存储面）；
+      // 保持原顺序：修复只会把 updated_at 推到 now，重排会让列表在这一次读里跳动。
+      const patched: SessionInfo[] = [];
+      for (const info of infos) {
+        if (!repaired.has(info.session_id)) {
+          patched.push(info);
+          continue;
+        }
+        try {
+          const state = await backend.load(info.session_id);
+          patched.push(state !== null ? toSessionInfo(state) : info);
+        } catch {
+          patched.push(info);
+        }
+      }
+      return patched;
     },
     close(): void {
       backend.close?.();

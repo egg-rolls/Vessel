@@ -25,6 +25,7 @@ import {
   searchSessions,
 } from '../../session-search.js';
 import { mapTenantError } from '../../tenant.js';
+import { capToolMessages } from '../../tool-events.js';
 import { MethodError } from '../errors.js';
 import { runInProgressReason, stringParam } from './common.js';
 import { runStateSchema, sessionInfoSchema, sessionSearchHitSchema } from './schemas.js';
@@ -382,6 +383,9 @@ const sessionActivateResultSchema = {
  * `sessions.get` 的线上投影：SessionState 元数据 + 最近 RunRecord（或 `legacy_run`）。
  *
  * 形状保持既有 `runStateSchema`：run 字段来自 RunRecord，session 字段来自 SessionState。
+ *
+ * **不含 `messages`**（0.52）：消息要走 `capToolMessages` 裁剪后再出站，由调用方按窗口
+ * 单独拼装；放在这里等于给未来调用方留一条「整份未裁剪历史」的后门。
  */
 export function toSessionView(state: SessionState, latestRaw: unknown): Record<string, unknown> {
   const latest = isRecord(latestRaw) ? latestRaw : undefined;
@@ -399,7 +403,6 @@ export function toSessionView(state: SessionState, latestRaw: unknown): Record<s
   return {
     run_id: runId,
     session_id: state.session_id,
-    messages: state.messages ?? [],
     started_at: startedAt,
     ...(completedAt !== undefined ? { completed_at: completedAt } : {}),
     status,
@@ -500,10 +503,13 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         }
 
         const windowAnchor = start > 0 ? all[start - 1] : undefined;
+        // 0.52：出站窗口与实时流统一 8 KiB 口径（`role==='tool'` 的 content 与
+        // assistant 工具入参）。**在游标之后裁**：`next_before` 的 `length` 取自
+        // 未裁剪的 `windowAnchor.content.length`，翻页校验才不会被裁剪改写。
         return {
           session: {
             ...toSessionView(state, latest),
-            messages: all.slice(start, end),
+            messages: capToolMessages(all.slice(start, end)),
             messages_total: total,
             ...(windowAnchor !== undefined
               ? {

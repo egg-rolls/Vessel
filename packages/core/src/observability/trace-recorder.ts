@@ -5,6 +5,8 @@
  * - `append` 同步入队、立即返回；按 run 串行落盘
  * - seq 在落盘时分配并持久化，以文件尾部最大 seq 为种子（跨 resume 单调）
  * - 写前 redactor；`metadata` 档只保留白名单字段；`off` 不落盘
+ * - 0.52：`llm.request` 落盘前摘要化（丢完整 messages，保留计数/末条预览/tools），
+ *   与 WS 广播同源；否则每轮 prompt 全量副本会把 trace 撑到 GB 级
  * - 写失败发 `trace.write.failed`，绝不静默
  *
  * @module @vessel-agent/core/observability
@@ -12,6 +14,7 @@
 
 import { appendFile, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { summarizeLlmRequestEvent } from '../events/index.js';
 import type { EventStream, RunEvent, Unsubscribe } from '../types/event.js';
 import type { TraceLevel, TraceRecorder, TraceRedactor } from '../types/trace.js';
 import { createDefaultTraceRedactor } from './trace-redactor.js';
@@ -351,7 +354,10 @@ export class FileTraceRecorder implements TraceRecorder {
 
     const sequenced: RunEvent = { ...event, seq };
     const redacted = this.redactor.redact(sequenced);
-    return this.level === 'metadata' ? projectMetadata(redacted) : redacted;
+    // 0.52：`llm.request` 的完整 messages 是每轮 prompt 的全量副本（实测占 trace
+    // 字节的 98.6%），落盘前换成与 WS 广播同一份摘要；redact 在前，摘要里的预览已脱敏。
+    const summarized = summarizeLlmRequestEvent(redacted);
+    return this.level === 'metadata' ? projectMetadata(summarized) : summarized;
   }
 
   private async drain(runId: string): Promise<void> {

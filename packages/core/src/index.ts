@@ -19,10 +19,13 @@ export {
 
 // 事件流
 export {
+  BROADCAST_PREVIEW_LIMIT,
   FileEventStore,
   MemoryEventStream,
   type MemoryEventStreamOptions,
   replayRun,
+  summarizeBroadcastEvent,
+  summarizeLlmRequestEvent,
 } from './events/index.js';
 // 顶层 `RunStatus` 保持 kernel 调度语义（queued/running/...）；
 // RunRecord 的 RunStatus 经 `./session` / `./types` 子路径导出。
@@ -99,6 +102,7 @@ export {
   AtomicWriteError,
   type AtomicWriteOptions,
   atomicWrite,
+  compareSessionInfo,
   type DeleteSessionDataOptions,
   type DeleteSessionDataResult,
   deleteSessionData,
@@ -122,6 +126,7 @@ export {
   type SessionLogIndex,
   SQLiteSessionStore,
   sessionLogDirExists,
+  toSessionInfo,
 } from './session/index.js';
 // tenant id 校验与单公司根布局（0.49 T5：旧布局解析已删除）
 export {
