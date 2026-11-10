@@ -40,13 +40,16 @@ const KEEP_RECENT_MAX = 10;
  */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
+  // 按 UTF-16 码元扫，不逐字符建字符串、不跑正则：实测 1.36M 字符
+  // 正则版 26–35ms → 码元版 1.5–2.7ms（同一份文本、同一结果）。
+  // 取舍：代理对（emoji 等）按 2 个码元计，估算略偏大 —— 对 BPE 而言反而更接近实际。
   let cjk = 0;
-  let total = 0;
-  for (const char of text) {
-    total += 1;
-    if (/[一-鿿㐀-䶿]/.test(char)) cjk += 1;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    // U+4E00–U+9FFF（CJK 统一表意）+ U+3400–U+4DBF（扩展 A）
+    if ((code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3400 && code <= 0x4dbf)) cjk += 1;
   }
-  return Math.ceil((total - cjk) * 0.25 + cjk * 0.5);
+  return Math.ceil((text.length - cjk) * 0.25 + cjk * 0.5);
 }
 
 /**
