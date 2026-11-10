@@ -8,7 +8,6 @@ import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import type { TranscriptItem } from './transcript-items';
 
-
 /** 消息时钟：只作为 hover 工具栏的元信息（`<time dateTime>` 语义保留）。 */
 
 /**
@@ -74,11 +73,7 @@ function TranscriptMessage({
     const agentSender = agentMessageSender(message);
     if (agentSender !== undefined) {
       return (
-        <AgentMessageCard
-          message={message}
-          sender={agentSender}
-          defaultOpen={cardsDefaultOpen}
-        />
+        <AgentMessageCard message={message} sender={agentSender} defaultOpen={cardsDefaultOpen} />
       );
     }
     const actions: MessageAction[] = [];
@@ -182,7 +177,9 @@ export function Transcript({
       const message = item.message;
       const sourceIndex = allMessages?.indexOf(message);
       const messageIndex =
-        sourceIndex !== undefined && sourceIndex >= 0 ? sourceIndex + messageIndexOffset : undefined;
+        sourceIndex !== undefined && sourceIndex >= 0
+          ? sourceIndex + messageIndexOffset
+          : undefined;
       nodes.push(
         <TranscriptMessage
           key={item.key}

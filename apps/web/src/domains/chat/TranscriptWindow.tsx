@@ -14,8 +14,8 @@ import { NoticeRow } from './EventRow';
 import { ReasoningBlock } from './ReasoningBlock';
 import { QueuedNotice, type QueuedSubmission, UserBubble } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
-import { Transcript } from './Transcript';
 import { ToolCard } from './ToolCard';
+import { Transcript } from './Transcript';
 import { buildTranscriptItems, type HistoryIndex, type TranscriptItem } from './transcript-items';
 import { useStickyBottom } from './useStickyBottom';
 

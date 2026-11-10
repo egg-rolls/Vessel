@@ -26,10 +26,10 @@ import {
 } from '../../stores/sessionStore';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { windowTail } from '../../transcript';
-import { buildHistoryIndex } from './transcript-items';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import type { QueuedSubmission } from './StreamItems';
 import { browserSessionStorage, clearLastSession, readLastSession } from './session-selection';
+import { buildHistoryIndex } from './transcript-items';
 
 const TRANSCRIPT_WINDOW = 50;
 /** 单会话实时组上限：超出时只渲染最近这些 run，并提供运行详情入口。 */

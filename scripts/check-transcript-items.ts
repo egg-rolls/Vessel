@@ -10,12 +10,12 @@
  * 退出码：0 = 全过；1 = 有 FAIL。
  */
 
-import type { Message } from '../apps/web/src/gateway/types/sessions';
-import type { RunGroup, TimelineItem } from '../apps/web/src/state/events';
 import {
   buildTranscriptItems,
   type TranscriptItem,
 } from '../apps/web/src/domains/chat/transcript-items';
+import type { Message } from '../apps/web/src/gateway/types/sessions';
+import type { RunGroup, TimelineItem } from '../apps/web/src/state/events';
 
 function msg(role: Message['role'], content: string, extra: Partial<Message> = {}): Message {
   return { role, content, ...extra };
@@ -49,7 +49,7 @@ function textItem(text: string, key = 'text-0'): TimelineItem {
 function toolItem(callId: string, status: 'running' | 'done' | 'error'): TimelineItem {
   return {
     kind: 'event',
-    key: 'ev-' + callId,
+    key: `ev-${callId}`,
     event: {
       type: status === 'running' ? 'tool.call.started' : 'tool.call.completed',
       run_id: 'r1',
@@ -62,7 +62,7 @@ function toolItem(callId: string, status: 'running' | 'done' | 'error'): Timelin
 function noticeItem(seq: number, ts: number): TimelineItem {
   return {
     kind: 'notice',
-    key: 'notice-' + seq,
+    key: `notice-${seq}`,
     event: { type: 'context.compacted', run_id: 'session', ts, data: {} },
   };
 }
@@ -154,7 +154,12 @@ const FIXTURES: readonly Fixture[] = [
         (item) => item.kind === 'message' && item.message.role === 'user',
       );
       const unclaimedInput = items.some((item) => item.kind === 'run-input');
-      return userItems.length === 2 && userItems[0]?.key === 'msg:0' && userItems[1]?.key === 'msg:2' && !unclaimedInput;
+      return (
+        userItems.length === 2 &&
+        userItems[0]?.key === 'msg:0' &&
+        userItems[1]?.key === 'msg:2' &&
+        !unclaimedInput
+      );
     },
   },
   {
@@ -183,7 +188,12 @@ const FIXTURES: readonly Fixture[] = [
         liveGroups: [
           group({
             runId: 'r1',
-            items: [textItem('a', 'text-0'), noticeItem(1, 1200), noticeItem(2, 1300), textItem('b', 'text-1')],
+            items: [
+              textItem('a', 'text-0'),
+              noticeItem(1, 1200),
+              noticeItem(2, 1300),
+              textItem('b', 'text-1'),
+            ],
           }),
         ],
         queued: [],
@@ -191,7 +201,9 @@ const FIXTURES: readonly Fixture[] = [
       const notices = items.filter((item) => item.kind === 'notice');
       const texts = items.filter((item) => item.kind === 'run-text');
       const grouped = texts.map((item) => (item as { groupStart?: boolean }).groupStart);
-      return notices.length === 2 && grouped.length === 2 && grouped[0] === true && grouped[1] === false;
+      return (
+        notices.length === 2 && grouped.length === 2 && grouped[0] === true && grouped[1] === false
+      );
     },
   },
   {
@@ -199,9 +211,22 @@ const FIXTURES: readonly Fixture[] = [
     why: 'msg 用绝对下标，前插只改 offset',
     check: () => {
       const messages = [msg('user', 'a'), msg('assistant', 'b')];
-      const before = buildTranscriptItems({ messages, messageIndexOffset: 100, liveGroups: [], queued: [] });
-      const after = buildTranscriptItems({ messages, messageIndexOffset: 50, liveGroups: [], queued: [] });
-      return JSON.stringify(keys(before)) === JSON.stringify(['msg:100', 'msg:101']) && JSON.stringify(keys(after)) === JSON.stringify(['msg:50', 'msg:51']);
+      const before = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 100,
+        liveGroups: [],
+        queued: [],
+      });
+      const after = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 50,
+        liveGroups: [],
+        queued: [],
+      });
+      return (
+        JSON.stringify(keys(before)) === JSON.stringify(['msg:100', 'msg:101']) &&
+        JSON.stringify(keys(after)) === JSON.stringify(['msg:50', 'msg:51'])
+      );
     },
   },
   {
@@ -217,6 +242,23 @@ const FIXTURES: readonly Fixture[] = [
       const messages = items.filter((item) => item.kind === 'message');
       const input = items.some((item) => item.kind === 'run-input');
       return messages.length === 2 && input;
+    },
+  },
+  {
+    name: 'F9 早于可见窗口的 live item 保留真实 ts（不再沉到末尾）',
+    why: '夹取成 ts=undefined 会让旧卡排到新卡后面，屏幕上时间看起来倒序',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [msg('user', 'window-start', { timestamp: 5000 })],
+        messageIndexOffset: 0,
+        liveGroups: [group({ runId: 'r-old', input: 'old', startedAt: 1000 })],
+        queued: [],
+        windowStartTs: 5000,
+      });
+      const keysInOrder = keys(items);
+      // 旧的 run-input 必须排在窗口首条消息之前，且带真实 ts（不是 undefined）。
+      const oldItem = items.find((item) => item.kind === 'run-input');
+      return keysInOrder[0] === 'run:r-old:input' && oldItem !== undefined && oldItem.ts === 1000;
     },
   },
   {
@@ -247,11 +289,11 @@ for (const fixture of FIXTURES) {
 
 if (failures.length > 0) {
   for (const failure of failures) {
-    console.log('FAIL ' + failure.name);
-    console.log('     why: ' + failure.why);
+    console.log(`FAIL ${failure.name}`);
+    console.log(`     why: ${failure.why}`);
   }
-  console.error('transcript items: ' + failures.length + '/' + FIXTURES.length + ' fixture(s) FAILED');
+  console.error(`transcript items: ${failures.length}/${FIXTURES.length} fixture(s) FAILED`);
   process.exit(1);
 }
 
-console.log('transcript items: ' + FIXTURES.length + ' fixtures passed');
+console.log(`transcript items: ${FIXTURES.length} fixtures passed`);

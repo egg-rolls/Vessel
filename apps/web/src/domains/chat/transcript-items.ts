@@ -24,7 +24,6 @@ import { buildHistoryToolItems } from './history-tools';
 import { compareTimelineEntries } from './timeline-order';
 import { foldToolItems, type ToolCardStatus } from './tool-cards';
 
-
 export type TranscriptSpeaker = 'user' | 'assistant' | string;
 
 /** 排序与分组共用的信封字段。 */
@@ -196,13 +195,16 @@ export function buildHistoryIndex(
         // 这里只记录，不重复产出。
         return;
       }
-      orphanTools.push({ item: historyTools.find((tool) => tool.key === `history-tool-${index}`) ?? {
-        key: `history-tool-${index}`,
-        name: message.name ?? 'tool',
-        output: message.content,
-        status: 'neutral',
-        paired: false,
-      }, index });
+      orphanTools.push({
+        item: historyTools.find((tool) => tool.key === `history-tool-${index}`) ?? {
+          key: `history-tool-${index}`,
+          name: message.name ?? 'tool',
+          output: message.content,
+          status: 'neutral',
+          paired: false,
+        },
+        index,
+      });
       return;
     }
 
@@ -222,8 +224,7 @@ export function buildHistoryIndex(
 
     // 只有 tool_calls、没有正文的 assistant 消息不单独成 item（工具卡代表它）。
     const hasContent = trimText(message.content).length > 0;
-    const isAgentMessage =
-      typeof message.name === 'string' && message.name.startsWith('agent:');
+    const isAgentMessage = typeof message.name === 'string' && message.name.startsWith('agent:');
     if (message.role === 'assistant' && !hasContent && ids.length > 0) return;
     if (!hasContent && message.role !== 'user' && !isAgentMessage) return;
 
@@ -234,7 +235,7 @@ export function buildHistoryIndex(
       message,
       ...(message.timestamp !== undefined ? { ts: message.timestamp } : {}),
     });
-  })
+  });
 
   // 历史工具 item：优先挂在「发起调用的 assistant 消息」位置（ts 用它的 timestamp）。
   for (const [absIndex, ids] of callIdsByIndex) {
@@ -269,7 +270,7 @@ export function buildHistoryIndex(
       ...(messageByIndex.get(absIndex)?.timestamp !== undefined
         ? { ts: messageByIndex.get(absIndex)?.timestamp }
         : {}),
-    })
+    });
   }
 
   return { items, userByContent, callIdsByIndex, contentByIndex, messageByIndex, callIds };
@@ -296,7 +297,6 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     }
     let textIndex = 0;
     let reasoningIndex = 0;
-    let toolIndex = 0;
     for (const item of foldToolItems(group.items)) {
       if (item.kind === 'text') {
         items.push({
@@ -327,7 +327,10 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
       if (item.kind === 'tool') {
         items.push({
           kind: 'tool',
-          key: item.callId !== undefined ? `tool:${item.callId}` : `tool:run:${group.runId}:${item.key}`,
+          key:
+            item.callId !== undefined
+              ? `tool:${item.callId}`
+              : `tool:run:${group.runId}:${item.key}`,
           ...(item.callId !== undefined ? { callId: item.callId } : {}),
           runId: group.runId,
           name: item.name,
@@ -341,7 +344,6 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           paired: item.status !== 'running',
           ...meta,
         });
-        toolIndex += 1;
         continue;
       }
       // notice / 原始事件：逐条一个 item，不参与分组。
@@ -396,9 +398,9 @@ function runClaims(groups: readonly RunGroup[], live: readonly TranscriptItem[])
       input: trimText(group.input),
       output: trimText(group.output),
       running: group.status === 'running',
-      ...(group.startedAt ?? group.firstTs) !== undefined
+      ...((group.startedAt ?? group.firstTs) !== undefined
         ? { startTs: group.startedAt ?? group.firstTs }
-        : {},
+        : {}),
       callIds: new Set<string>(),
     });
   }
@@ -461,7 +463,6 @@ function claimMessages(
   return { claimedAssistant, claimedUserByRun };
 }
 
-
 /**
  * 同 key 合并（**身份的唯一实现**）：一个逻辑对象在多个来源里出现时只留一个 item。
  *
@@ -509,18 +510,6 @@ function mergeItem(previous: TranscriptItem, next: TranscriptItem): TranscriptIt
   return { ...previous, ...next, key: previous.key };
 }
 
-/** 窗口夹取：比可见窗口首条更早的 live item 落到末尾（排序时 ts=undefined）。 */
-function clampToWindow(ts: number | undefined, windowStartTs: number | undefined): number | undefined {
-  if (ts === undefined || windowStartTs === undefined || ts >= windowStartTs) return ts;
-  return undefined;
-}
-
-/** turn 下限：live item 不得早于「触发它的用户消息」。 */
-function turnFloor(claimedUserTs: number | undefined, running: boolean, lastUserTs: number | undefined): number | undefined {
-  if (claimedUserTs !== undefined) return claimedUserTs + 1;
-  return running && lastUserTs !== undefined ? lastUserTs + 1 : undefined;
-}
-
 /**
  * 单一 item 流（纯函数）。
  *
@@ -546,7 +535,7 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
   const items: TranscriptItem[] = [];
   for (const item of history.items) {
     if (item.kind === 'message' && claimedAssistant.has(item.absIndex)) continue;
-    items.push({ ...item, ts: clampToWindow(item.ts, input.windowStartTs) });
+    items.push(item);
   }
 
   const claimByRun = new Map(claims.map((claim) => [claim.runId, claim]));
@@ -556,20 +545,28 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     if (item.kind === 'run-input' && runId !== undefined && claimedUserByRun.has(runId)) continue;
     const claim = runId === undefined ? undefined : claimByRun.get(runId);
     if (claim === undefined) {
-      items.push({ ...item, ts: clampToWindow(item.ts, input.windowStartTs) });
+      items.push(item);
       continue;
     }
     const claimedUser = claimedUserByRun.get(claim.runId);
     const claimedUserTs =
       claimedUser === undefined ? undefined : history.messageByIndex.get(claimedUser)?.timestamp;
-    const floor = turnFloor(claimedUserTs, claim.running, lastUserTs);
-    const base = floor === undefined ? item.ts : Math.max(item.ts ?? floor, floor);
-    items.push({ ...item, ts: clampToWindow(base, input.windowStartTs) });
+    // 强下限（认领到的用户消息）总是生效：run.started 比用户消息落盘早几毫秒。
+    // 弱下限（最后一条用户消息）只在 item 自己没有 ts 时兜底 —— 否则「早于可见窗口的
+    // 旧 run 卡片」会被拽到新卡片后面，屏幕上时间看起来倒序（F9 守这一条）。
+    const strong = claimedUserTs !== undefined ? claimedUserTs + 1 : undefined;
+    const weak =
+      claim.running && item.ts === undefined && lastUserTs !== undefined
+        ? lastUserTs + 1
+        : undefined;
+    const floor = strong ?? weak;
+    const base =
+      floor === undefined ? item.ts : item.ts === undefined ? floor : Math.max(item.ts, floor);
+    items.push({ ...item, ts: base });
   }
 
   for (const queued of input.queued) {
-    const floor = turnFloor(undefined, true, lastUserTs);
-    const base = floor === undefined ? queued.submittedAt : Math.max(queued.submittedAt, floor);
+    const base = queued.submittedAt;
     items.push({
       kind: 'queued',
       key: `queued:${queued.runId}`,
@@ -579,7 +576,7 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
       ...(queued.queuePosition !== undefined ? { queuePosition: queued.queuePosition } : {}),
       cancelling: queued.cancelling,
       cancelled: queued.cancelled,
-      ts: clampToWindow(base, input.windowStartTs),
+      ts: base,
     });
   }
 
