@@ -104,3 +104,21 @@ export function useComposerDraftText(key: string): string {
 export function useComposerChips(key: string): readonly ComposerChip[] {
   return useComposerDraftStore((state) => state.drafts[key]?.chips ?? EMPTY_CHIPS);
 }
+
+/**
+ * 把草稿态（`chat:new`）的正文继承给目标会话槽。
+ *
+ * 会话页的自动恢复会在进入 `#/chat`（无 sessionId）后导航到上次的真实会话：
+ * 草稿若只留在 `chat:new`，路由一换就读不到，「换页回来草稿没了」。这里在导航前
+ * 把正文搬过去，避免丢字。目标槽已有正文时不覆盖（那份也同样是用户的字，不能丢），
+ * 此时源槽原样保留 —— 用户回到「新建会话」仍能看到它。
+ */
+export function adoptNewChatDraft(sessionId: string): void {
+  const { drafts, setText, clear } = useComposerDraftStore.getState();
+  const text = drafts[NEW_CHAT_DRAFT_KEY]?.text ?? '';
+  if (text.length === 0) return;
+  const targetKey = chatDraftKey(sessionId);
+  if ((drafts[targetKey]?.text ?? '').length > 0) return;
+  setText(targetKey, text);
+  clear(NEW_CHAT_DRAFT_KEY);
+}

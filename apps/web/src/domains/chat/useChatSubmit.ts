@@ -1,5 +1,5 @@
 import { type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { parseRoute, type Route } from '../../app/router';
+import type { Route } from '../../app/router';
 import { useToast } from '../../components/ToastProvider';
 import type { GatewayClient } from '../../gateway/client';
 import type { NodeView } from '../../gateway/NodeProvider';
@@ -58,16 +58,20 @@ export function useChatSubmit({
   const draftKey = chatDraftKey(selectedId);
   const input = useComposerDraftText(draftKey);
   const writeDraft = useComposerDraftStore((state) => state.setText);
-  // 写草稿按「实时 hash」定位，不用 `selectedId`：`navigate()` 是同步写
-  // `location.hash`，而 `route` 要等 `hashchange` 才更新；`sessions.create`（edit /
-  // 重发）会在 navigate 之后立刻回填正文，用 `selectedId` 会写进上一个会话的槽。
-  const liveDraftKey = useCallback(() => {
-    const parsed = parseRoute(window.location.hash);
-    return parsed.domain === 'chat' ? chatDraftKey(parsed.sessionId) : chatDraftKey(selectedId);
-  }, [selectedId]);
+  // 读和写共用 `chatDraftKey`：key 只由「当前会话」决定，不再看 `window.location.hash`。
+  // 早先写入按实时 hash 定位（为了 edit / 重发回填），于是 `navigate()` 与 `hashchange`
+  // 之间那一拍写下的字会落到另一个槽，用户看到的输入框与真实存的槽不是同一个。
+  // 需要「写到即将切换过去的会话」的调用方（sessions.create 的 edit / 重发）显式用
+  // `setInputForSession`，key 依旧只由 `chatDraftKey` 决定。
+  const setInputForSession = useCallback(
+    (sessionId: string | null, value: SetStateAction<string>) => {
+      writeDraft(chatDraftKey(sessionId), value);
+    },
+    [writeDraft],
+  );
   const setInput = useCallback(
-    (value: SetStateAction<string>) => writeDraft(liveDraftKey(), value),
-    [writeDraft, liveDraftKey],
+    (value: SetStateAction<string>) => writeDraft(draftKey, value),
+    [writeDraft, draftKey],
   );
   const [submitting, setSubmitting] = useState(false);
   const [queuedRuns, setQueuedRuns] = useState<QueuedSubmission[]>([]);
@@ -145,7 +149,9 @@ export function useChatSubmit({
     const text = raw.trim();
     if (!text || submitting || !connected) return false;
     // 源槽在 await 之前取：发送期间用户可能已经切走会话。
-    const sourceKey = liveDraftKey();
+    // key 与读取同源（`chatDraftKey`）：普通发送 = 当前会话；edit / 重试的正文是
+    // `setInputForSession(nextSessionId, …)` 回填到目标会话槽的，清空的也是那一槽。
+    const sourceKey = chatDraftKey(sessionIdOverride ?? selectedId);
     // 0.28（CONTRACT §3）：草稿态 = 一个新 agent。先 `agents.create`（只给客户端生成的
     // 唯一名）拿 `{id, session_id}`，再 `runs.start{agent_id}`；`runs.start` 失败时
     // best-effort 回收，不留空 agent。选中已有会话时按 session 投递，行为不变。
@@ -275,6 +281,8 @@ export function useChatSubmit({
   return {
     input,
     setInput,
+    /** 回填到指定会话的草稿槽（sessions.create 的 edit / 重发在 navigate 之后立刻用）。 */
+    setInputForSession,
     submitting,
     queuedRuns,
     cancelling,

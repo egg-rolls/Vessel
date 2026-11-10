@@ -263,7 +263,8 @@ export function ChatView({
     setCreateTarget(null);
     setCreating(false);
     navigate({ domain: 'chat', sessionId: nextSessionId });
-    submitApi.setInput(target.text);
+    // 目标会话的槽要显式指定：此时 `selectedId` 还是源会话（`hashchange` 未到）。
+    submitApi.setInputForSession(nextSessionId, target.text);
     if (target.kind === 'edit') {
       setComposerFocus((value) => value + 1);
       toast.success(t('chat.message.create.editDone'));

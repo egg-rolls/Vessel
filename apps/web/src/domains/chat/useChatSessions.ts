@@ -18,6 +18,7 @@ import {
 } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
+import { adoptNewChatDraft } from '../../stores/composerDraftStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { errorMessage } from './errors';
@@ -227,6 +228,9 @@ export function useChatSessions({
     }
     setRestorePending(false);
     if (decision.kind === 'restore') {
+      // 自动恢复不是用户点的：先把它当成「回到会话页」，把草稿态（`chat:new`）里
+      // 已经写下的正文继承到目标会话槽，否则路由一换草稿就读不到（换页丢草稿）。
+      adoptNewChatDraft(decision.sessionId);
       navigate({ domain: 'chat', sessionId: decision.sessionId });
       return;
     }
