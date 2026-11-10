@@ -9,7 +9,7 @@ import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
-import { filterTimelineItems } from './chat-visibility';
+import { filterTimelineItems, runningToolHint } from './chat-visibility';
 import { EventRow, NoticeRow } from './EventRow';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
@@ -197,13 +197,16 @@ export const RunItems = memo(function RunItems({
   const outputAlreadyShown = group.output !== undefined && inlineText.includes(group.output.trim());
   const completedOutput = group.status === 'completed' ? group.output : undefined;
   // 可见性判定只在 chat-visibility.ts 一处（history 侧共用同一规则），见该模块头注释。
+  const foldedItems = useMemo(() => foldToolItems(group.items), [group.items]);
+  const runRunning = group.status === 'running';
   const renderItems = useMemo(
-    () =>
-      filterTimelineItems(foldToolItems(group.items), {
-        verbosity,
-        running: group.status === 'running',
-      }),
-    [group.items, verbosity, group.status],
+    () => filterTimelineItems(foldedItems, { verbosity, running: runRunning }),
+    [foldedItems, verbosity, runRunning],
+  );
+  // minimal 档把工具卡整体藏掉了，用一行紧凑状态说明「正在跑某个工具」，避免看起来卡住。
+  const toolHint = useMemo(
+    () => runningToolHint(foldedItems, { verbosity, running: runRunning }),
+    [foldedItems, verbosity, runRunning],
   );
   // 只有最后一个思考块可能仍在流式输出；更早的块已经结束。
   const lastReasoningKey = useMemo(() => {
@@ -218,7 +221,12 @@ export const RunItems = memo(function RunItems({
   const liveReasoning =
     group.status === 'running' && verbosity !== 'minimal' ? group.liveReasoning : undefined;
   const showWaiting =
-    group.status === 'running' && !liveText && !group.liveReasoning && renderItems.length === 0;
+    group.status === 'running' &&
+    !liveText &&
+    !group.liveReasoning &&
+    renderItems.length === 0 &&
+    // 有工具在跑时显示的是那一行工具状态，不再叠一条「正在思考…」。
+    toolHint === undefined;
 
   return (
     <>
@@ -266,6 +274,16 @@ export const RunItems = memo(function RunItems({
       {liveText && (
         <div className="msg-assistant max-w-full">
           <div className="msg-text live-text">{liveText}</div>
+        </div>
+      )}
+      {/* minimal 档的在飞工具：一行状态（工具名 + 运行中），不带参数 / 输出；
+          工具结束或 run 结束即消失（判定见 chat-visibility#runningToolHint）。 */}
+      {toolHint && (
+        <div className="run-waiting text-muted" role="status">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent pulse-soft" aria-hidden="true" />
+          <span className="font-mono text-sm text-ink">{toolHint.name}</span>
+          <span aria-hidden="true">·</span>
+          {t('chat.tool.status.running')}
         </div>
       )}
       {showWaiting && (

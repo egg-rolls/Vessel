@@ -15,6 +15,7 @@ import {
   eventRowVisible,
   filterTimelineItems,
   historyToolVisible,
+  runningToolHint,
   toolVisible,
 } from '../apps/web/src/domains/chat/chat-visibility';
 import type { ChatRenderItem } from '../apps/web/src/domains/chat/tool-cards';
@@ -91,6 +92,36 @@ const FIXTURES: readonly Fixture[] = [
     why: 'minimal 收紧原始事件行时，错误 / 失败行仍要可见（失败永不静默）',
     check: () =>
       eventRowVisible('run.failed', 'minimal') && eventRowVisible('tool.call.failed', 'minimal'),
+  },
+  {
+    name: 'F9 minimal + 在飞工具 -> 一行状态可见',
+    why: 'minimal 隐藏了工具卡，需要一行紧凑状态说明正在跑哪个工具，否则看起来像卡住',
+    check: () => {
+      const hint = runningToolHint(liveTool('running'), { verbosity: 'minimal', running: true });
+      return hint !== undefined && hint.name === 'bash';
+    },
+  },
+  {
+    name: 'F10 minimal + 终态成功工具 -> 该行消失',
+    why: '工具结束（或 run 结束）后活动行必须消失，不能留一条「运行中」',
+    check: () =>
+      runningToolHint([tool('done')], { verbosity: 'minimal', running: true }) === undefined &&
+      runningToolHint(liveTool('running'), { verbosity: 'minimal', running: false }) === undefined,
+  },
+  {
+    name: 'F11 normal + 在飞工具 -> 不显示活动行',
+    why: 'normal 有完整工具卡，再叠一行状态是重复信息',
+    check: () =>
+      runningToolHint(liveTool('running'), { verbosity: 'normal', running: true }) === undefined,
+  },
+  {
+    name: 'F12 minimal + 失败工具 -> 不出活动行（失败卡本身可见）',
+    why: '失败工具已经以卡片形式显示，不该再补一条活动提示',
+    check: () =>
+      runningToolHint([tool('error')], { verbosity: 'minimal', running: true }) === undefined &&
+      filterTimelineItems([tool('error')], { verbosity: 'minimal', running: true }).some(
+        (item) => item.kind === 'tool',
+      ),
   },
   {
     name: 'F8 minimal + 普通事件行 -> 隐藏',

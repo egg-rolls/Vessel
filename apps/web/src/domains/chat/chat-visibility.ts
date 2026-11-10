@@ -47,6 +47,37 @@ export function eventRowVisible(type: string, verbosity: Verbosity): boolean {
   return verbosity !== 'minimal' || isErrorEventType(type);
 }
 
+/** minimal 档下「在飞工具」的一行紧凑状态（只带工具名，不含参数 / 输出）。 */
+export interface RunningToolHint {
+  key: string;
+  name: string;
+}
+
+/**
+ * minimal 档的一行状态：minimal 会把工具卡整体隐藏，没有这行会让人以为 run 卡住。
+ *
+ * 只在三个条件同时成立时返回：
+ * - verbosity 为 minimal（normal / debug 有完整卡片，不需要这一行）；
+ * - run 仍在跑（options.running；已终态就不再显示活动提示）；
+ * - 该 run 里**最后一条工具项**的 status 仍是 running（工具结束即消失；
+ *   顺序调用下它就是正在跑的那个）。
+ *
+ * 不使用新开关：它只是 minimal 档对「隐藏了工具卡」的一行补偿。
+ */
+export function runningToolHint(
+  items: readonly ChatRenderItem[],
+  options: { verbosity: Verbosity; running?: boolean },
+): RunningToolHint | undefined {
+  if (options.verbosity !== 'minimal') return undefined;
+  if (options.running !== true) return undefined;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item === undefined || item.kind !== 'tool') continue;
+    return item.status === 'running' ? { key: item.key, name: item.name } : undefined;
+  }
+  return undefined;
+}
+
 /**
  * live 的渲染项过滤：foldToolItems(group.items) 的结果 → 实际渲染项。
  *
