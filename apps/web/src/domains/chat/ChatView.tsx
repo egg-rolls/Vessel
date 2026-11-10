@@ -357,7 +357,6 @@ export function ChatView({
           hydrateError={transcriptApi.hydrateError}
           hydrating={transcriptApi.hydrating}
           hydrateStale={transcriptApi.hydrateStale}
-          truncated={transcriptApi.truncated}
           hasTranscript={transcriptApi.hasTranscript}
           hasEarlier={transcriptApi.hasEarlier}
           visibleGroups={transcriptApi.visibleGroups}

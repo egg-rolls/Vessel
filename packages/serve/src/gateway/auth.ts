@@ -110,6 +110,21 @@ export interface CspExtensionSources {
 }
 
 /**
+ * CSP source-list 不接受 IPv6 字面量（Chromium 会整条忽略并报
+ * `invalid source`）。回环绑定会同时给出 `[::1]` 变体，这里统一跳过；
+ * 页面仍可通过 `127.0.0.1` / `localhost` 访问。
+ */
+function cspSafeUrl(origin: string): URL | null {
+  try {
+    const url = new URL(origin);
+    if (url.hostname.startsWith('[')) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * HTML CSP：connect-src 只放同源 Host 与显式 allowlist，不再使用裸 `ws:` / `wss:`。
  * 其余指令保持 0.5 的基线；`extend` 缺省时输出逐字不变。
  */
@@ -122,37 +137,29 @@ export function buildContentSecurityPolicy(
   const rawHost = req.headers.get('host');
   // Host 会进入 CSP 指令；只接受常规 host[:port] 字符，防止指令注入。
   const host = rawHost && /^[A-Za-z0-9.\-:[\]]+$/.test(rawHost) ? rawHost : null;
-  if (host) {
+  // IPv6 字面量不是合法 CSP source；这类页面靠 `'self'` 覆盖同源连接。
+  if (host && !host.startsWith('[')) {
     const secure = new URL(req.url).protocol === 'https:';
     sources.add(`${secure ? 'wss' : 'ws'}://${host}`);
   }
   for (const origin of allowedOrigins) {
-    sources.add(origin);
-    try {
-      const url = new URL(origin);
-      sources.add(`${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`);
-    } catch {
-      // normalizeAllowedOrigins 已校验；防御性跳过非法值。
-    }
+    const url = cspSafeUrl(origin);
+    if (url === null) continue;
+    sources.add(url.origin);
+    sources.add(`${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`);
   }
   for (const origin of extend?.connectSrc ?? []) {
-    try {
-      const url = new URL(origin);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
-      sources.add(url.origin);
-      sources.add(`${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`);
-    } catch {
-      // 防御性跳过非法值；调用方应先 normalizeAllowedOrigins。
-    }
+    const url = cspSafeUrl(origin);
+    if (url === null) continue;
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+    sources.add(url.origin);
+    sources.add(`${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`);
   }
   const frameSources = new Set<string>();
   for (const origin of extend?.frameSrc ?? []) {
-    try {
-      const url = new URL(origin);
-      if (url.protocol === 'http:' || url.protocol === 'https:') frameSources.add(url.origin);
-    } catch {
-      // 防御性跳过非法值。
-    }
+    const url = cspSafeUrl(origin);
+    if (url === null) continue;
+    if (url.protocol === 'http:' || url.protocol === 'https:') frameSources.add(url.origin);
   }
   const frameDirective = frameSources.size > 0 ? `frame-src ${[...frameSources].join(' ')}; ` : '';
   return (

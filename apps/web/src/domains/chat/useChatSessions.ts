@@ -263,11 +263,15 @@ export function useChatSessions({
   // biome-ignore lint/correctness/useExhaustiveDependencies: pendingNewSessions 是 ref，.current 读取不进依赖
   useEffect(() => {
     if (!hasToken || !selectedId) return;
+    // 连接建立前 `!hasToken` 会 reset store（selectedId → null）；reset 不会改变
+    // 路由 prop，单独的 select effect 不会重跑，于是这里必须先重新镜像路由再加载，
+    // 否则 `loadDetail` 的 `selectedId !== id` 守卫会丢弃响应，首屏永远停在加载。
+    selectSessionInStore(selectedId);
     void loadSessionDetail(client, selectedId, {
       epoch,
       allowMissing: pendingNewSessions.current.has(selectedId),
     });
-  }, [client, epoch, hasToken, selectedId, loadSessionDetail]);
+  }, [client, epoch, hasToken, selectedId, loadSessionDetail, selectSessionInStore]);
 
   // 会话出现在列表后，404 容忍（首条消息尚未落盘）不再需要。
   // biome-ignore lint/correctness/useExhaustiveDependencies: pendingNewSessions 是 ref，.current 读取不进依赖

@@ -1,6 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { ToastApi } from '../components/ToastProvider';
-import { t } from '../i18n';
 import type { EventStore } from '../state/event-store';
 import { useInteractionStore } from '../stores/interactionStore';
 import type { ConnectionState, GatewayClient } from './client';
@@ -180,11 +179,10 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   });
 
   const offGap = client.onGap((gap) => {
-    // gap = 该区间无法从实时流恢复；不重连。恢复走 RPC 快照（§3）。
+    // gap = 该区间无法从实时流恢复；静默处理，不重连、不提示。
+    // 页面感知不到截断：正文由 sessions.get / teams.get 的权威快照补回。
     eventStore.reset(gap.to_seq);
     recovery.invalidateRouteSnapshot();
-    // 一次性提示走右下角 toast，不占顶部 banner 布局。
-    toast.info(t('gateway.connection.gap', { from: gap.from_seq, to: gap.to_seq }));
     // pending 权限 / ask 不能只依赖连接级 epoch：gap 不重连，必须显式补 hydration。
     recovery.hydrateInteractions();
   });

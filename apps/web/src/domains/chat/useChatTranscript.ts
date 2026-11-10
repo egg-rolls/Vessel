@@ -345,7 +345,6 @@ export function useChatTranscript({
   // 还有更早的分页没加载：本地窗口外还有可见消息，或服务端还有 `next_before`。
   const hasEarlier = transcriptStart > 0 || windowHasEarlier(selectedWindow);
   const hasTranscript = visibleTranscript.length > 0;
-  const truncated = visibleGroups.some((group) => snapshot.truncatedRuns.has(group.runId));
 
   return {
     visibility,
@@ -376,7 +375,6 @@ export function useChatTranscript({
     dismissEarlierError,
     hasEarlier,
     hasTranscript,
-    truncated,
     reloadDetail,
     loadEarlier,
   };

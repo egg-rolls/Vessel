@@ -37,7 +37,6 @@ export function TranscriptWindow({
   hydrateError,
   hydrating,
   hydrateStale,
-  truncated,
   hasTranscript,
   hasEarlier,
   visibleGroups,
@@ -74,7 +73,6 @@ export function TranscriptWindow({
   hydrateError: string | null;
   hydrating: boolean;
   hydrateStale: string | null;
-  truncated: boolean;
   hasTranscript: boolean;
   /** 历史窗口之外还有更早的消息（滚到顶自动前插，不再有按钮 / 提示）。 */
   hasEarlier: boolean;
@@ -275,8 +273,6 @@ export function TranscriptWindow({
               onDismiss={onDismissEarlierError}
             />
           )}
-
-          {truncated && <StaleNotice message={t('chat.truncated')} />}
 
           {/* 0.18：历史消息与实时 run 的展开项共享同一个列表，没有 run 边界；
               0.50：实时节点按 run 起始时间插进历史消息之间，不再整块追加在末尾。

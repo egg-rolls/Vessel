@@ -1008,8 +1008,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.historyChanged':
     'Earlier history was rewritten; the older pages were reloaded from the server.',
   'chat.earlierLoadFailed': 'Earlier messages could not be loaded; you can retry: {detail}',
-  'chat.truncated':
-    'Some earlier events were truncated from the in-memory buffer; open the run details for the full record.',
   'chat.toBottom': 'Back to bottom ↓',
   'chat.toast.queued': 'Queued',
   'chat.toast.cancelRequested': 'Requested cancellation of the run',
@@ -1472,7 +1470,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'The gateway rejected this Origin/Host: {detail}. For cross-origin deployments, add this site to serve.allowed_origins.',
   'gateway.connection.unreachable':
     'Cannot reach the gateway (check the address/TLS/network): {detail}. Cross-origin deployments also need serve.allowed_origins.',
-  'gateway.connection.gap': 'History was truncated ({from}–{to}); resynchronized',
   'gateway.connection.forbiddenTenant': 'Access denied (admin token required)',
   'gateway.connection.protocolMismatch':
     'Incompatible protocol version (vessel.gateway/1 required)',

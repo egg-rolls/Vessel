@@ -974,7 +974,6 @@ export const messages = {
   'chat.staleHistory': '历史刷新失败，显示已加载的记录：{detail}',
   'chat.historyChanged': '更早的历史已被改写，已从服务端重新加载更早页面。',
   'chat.earlierLoadFailed': '更早的消息没能加载，可以重试：{detail}',
-  'chat.truncated': '部分更早的事件已从内存缓冲截断；完整记录请查看运行详情。',
   'chat.toBottom': '回到底部 ↓',
   'chat.toast.queued': '已排队',
   'chat.toast.cancelRequested': '已请求取消 run',
@@ -1421,7 +1420,6 @@ export const messages = {
     'gateway 拒绝该 Origin/Host：{detail}。跨 Origin 部署需把本站加入 serve.allowed_origins。',
   'gateway.connection.unreachable':
     '无法连接 gateway（检查地址/TLS/网络）：{detail}。跨 Origin 时还需配置 serve.allowed_origins。',
-  'gateway.connection.gap': '历史事件已截断（{from}–{to}），已重新同步',
   'gateway.connection.forbiddenTenant': '无权访问（需要 admin token）',
   'gateway.connection.protocolMismatch': '协议版本不兼容（需要 vessel.gateway/1）',
   'gateway.connection.tokenRequired': '请输入 gateway token',
