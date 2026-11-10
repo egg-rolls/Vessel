@@ -88,8 +88,7 @@ export function StreamCard({
     return (
       <div
         className={classes}
-        aria-label={ariaLabel}
-        role={ariaLabel !== undefined ? 'group' : undefined}
+        {...(ariaLabel !== undefined ? { role: 'group' as const, 'aria-label': ariaLabel } : {})}
       >
         <div className="event-block-summary">{header}</div>
         {actions}

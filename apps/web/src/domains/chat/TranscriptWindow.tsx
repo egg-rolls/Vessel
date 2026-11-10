@@ -249,11 +249,7 @@ export function TranscriptWindow({
       });
       liveNodes.set(
         queuedKey,
-        <QueuedNotice
-          item={item}
-          onCancel={onCancelQueued}
-          defaultOpen={cardsDefaultOpen}
-        />,
+        <QueuedNotice item={item} onCancel={onCancelQueued} defaultOpen={cardsDefaultOpen} />,
       );
     }
   }

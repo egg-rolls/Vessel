@@ -7,9 +7,10 @@ import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
 import type { Verbosity } from '../../state/visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
-import { historyToolVisible } from './chat-visibility';
+import { historyToolVisible, reasoningVisible } from './chat-visibility';
 import { HistoryToolCard } from './HistoryToolCard';
 import { buildHistoryToolItems, type HistoryToolItem } from './history-tools';
+import { ReasoningBlock } from './ReasoningBlock';
 import {
   orderTimelineEntries,
   type TimelineEntry,
@@ -21,17 +22,11 @@ function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
 }
 
-function MessageTime({ message, block = false }: { message: Message; block?: boolean }) {
+/** 消息时钟：只作为 hover 工具栏的元信息（`<time dateTime>` 语义保留）。 */
+function MessageTime({ message }: { message: Message }) {
   const clock = formatClock(message.timestamp);
   if (!clock) return null;
-  return (
-    <time
-      className={`font-mono text-2xs tabular-nums text-faint${block ? ' mt-1 block text-right' : ''}`}
-      dateTime={new Date(message.timestamp ?? 0).toISOString()}
-    >
-      {clock}
-    </time>
-  );
+  return <time dateTime={new Date(message.timestamp ?? 0).toISOString()}>{clock}</time>;
 }
 
 /**
@@ -86,7 +81,9 @@ function TranscriptMessage({
     const paired = callId === undefined ? undefined : toolByCallId.get(callId);
     const item = paired ?? buildHistoryToolItems([message])[0];
     if (item === undefined) return null;
-    return <HistoryToolCard item={item} defaultOpen={cardsDefaultOpen} />;
+    return (
+      <HistoryToolCard item={item} defaultOpen={cardsDefaultOpen} timestamp={message.timestamp} />
+    );
   }
 
   if (message.role === 'user') {
@@ -116,11 +113,13 @@ function TranscriptMessage({
     }
     return (
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
-        <div className="msg-bubble">
-          {message.content}
-          <MessageTime message={message} block />
-        </div>
-        {actions.length > 0 && <MessageActions className="justify-end" actions={actions} />}
+        <div className="msg-bubble">{message.content}</div>
+        {/* 时间从气泡右下角搬到 hover 工具栏：与复制 / 编辑同一排。 */}
+        <MessageActions
+          className="justify-end"
+          actions={actions}
+          meta={<MessageTime message={message} />}
+        />
       </div>
     );
   }
@@ -142,34 +141,65 @@ function TranscriptMessage({
       onSelect: () => onRetry(previousUser.index, previousUser.text),
     });
   }
+  // 思考过程：历史消息里同样持久化了 reasoning_content，用运行态的同一个块渲染，
+  // 不做第二种实现（隐藏条件也共用 reasoningVisible）。历史没有 start/end 时间，
+  // 因此标题不显示耗时。
+  const reasoningText = reasoningVisible(verbosity) ? (message.reasoning_content ?? '') : '';
+  const reasoning =
+    reasoningText.trim().length > 0 ? (
+      <ReasoningBlock text={reasoningText} streaming={false} />
+    ) : null;
+
+  // 结果已落盘时，卡片渲染在 role:'tool' 消息的位置（避免同一调用出现两张卡）；
+  // 只有「有调用、无结果」才在这里补一张（历史被截断时的唯一可见锚点）。
+  const renderCall = (call: NonNullable<Message['tool_calls']>[number]) => {
+    const item = toolByCallId.get(call.id);
+    if (item?.paired === true) return null;
+    return (
+      <div className="mt-2" key={call.id}>
+        {item !== undefined ? (
+          <HistoryToolCard
+            item={item}
+            defaultOpen={cardsDefaultOpen}
+            timestamp={message.timestamp}
+          />
+        ) : (
+          <div className="flex flex-wrap items-baseline gap-2 rounded-md bg-sunken px-3 py-2 text-sm">
+            <span className="font-mono text-md">{call.function.name}</span>
+            <span className="text-muted">{truncate(call.function.arguments || '', 120)}</span>
+          </div>
+        )}
+      </div>
+    );
+  };
+  const visibleCalls = calls.filter((call) => {
+    const item = toolByCallId.get(call.id);
+    return item === undefined || !item.paired;
+  });
+
+  // 纯工具调用卡（只有 tool_calls、没有正文）：卡片自带工具名与时间，上方不再渲染
+  // 「助手 + 时间」行，也不挂一条只有时间的工具栏。没有可见内容时直接不占位。
+  // 仍保留 `.msg-assistant` 外壳：它只提供「用户 → 助手」的档位间距，不是那行标签。
+  if (message.content.trim().length === 0) {
+    if (visibleCalls.length === 0 && reasoning === null) return null;
+    return (
+      <div className="msg-assistant">
+        {reasoning}
+        {visibleCalls.map(renderCall)}
+      </div>
+    );
+  }
+
   return (
     <div className="msg-assistant group max-w-full">
-      <div className="flex flex-wrap items-baseline gap-2">
-        <div className="mb-1.5 block font-mono text-2xs tracking-widest uppercase text-faint">
-          {t('chat.role.assistant')}
-        </div>
-        <MessageTime message={message} />
+      {/* 时间已搬进下面的 hover 工具栏，这里只留发言人标签。 */}
+      <div className="mb-1.5 block font-mono text-2xs tracking-widest uppercase text-faint">
+        {t('chat.role.assistant')}
       </div>
+      {reasoning}
       {message.content && <Markdown className="msg-text" text={message.content} />}
-      {calls.map((call) => {
-        // 结果已落盘时，卡片渲染在 role:'tool' 消息的位置（避免同一调用出现两张卡）；
-        // 只有「有调用、无结果」才在这里补一张（历史被截断时的唯一可见锚点）。
-        const item = toolByCallId.get(call.id);
-        if (item !== undefined && item.paired) return null;
-        return (
-          <div className="mt-2" key={call.id}>
-            {item !== undefined ? (
-              <HistoryToolCard item={item} defaultOpen={cardsDefaultOpen} />
-            ) : (
-              <div className="flex flex-wrap items-baseline gap-2 rounded-md bg-sunken px-3 py-2 text-sm">
-                <span className="font-mono text-md">{call.function.name}</span>
-                <span className="text-muted">{truncate(call.function.arguments || '', 120)}</span>
-              </div>
-            )}
-          </div>
-        );
-      })}
-      {actions.length > 0 && <MessageActions className="mt-1" actions={actions} />}
+      {visibleCalls.map(renderCall)}
+      <MessageActions className="mt-1" actions={actions} meta={<MessageTime message={message} />} />
     </div>
   );
 }
@@ -320,7 +350,6 @@ export function Transcript({
 }) {
   const copy = useMessageCopy();
   const nodes = liveNodes ?? EMPTY_LIVE_NODES;
-  if (messages.length === 0 && live.length === 0) return null;
 
   // 历史消息 → 排序入参。key 用绝对消息下标（detailWindow.start + 窗口内下标）：
   // 游标分页前插一页时窗口相对下标会整体平移，用它会把所有历史消息 remount 一次。
@@ -349,6 +378,10 @@ export function Transcript({
     }
     return map;
   }, [historyTools]);
+
+  // 空态早退必须放在所有 hook 之后：否则列表从空到非空时 hook 数量变化会崩
+  // （useHookAtTopLevel）。
+  if (messages.length === 0 && live.length === 0) return null;
 
   const entries = orderTimelineEntries({ messages: messageInputs, live, windowStartTs });
 

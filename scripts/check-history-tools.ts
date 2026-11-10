@@ -128,12 +128,12 @@ for (const fixture of FIXTURES) {
 
 if (failures.length > 0) {
   for (const failure of failures) {
-    console.log('FAIL ' + failure.name);
-    console.log('     why:   ' + failure.why);
-    console.log('     items: ' + JSON.stringify(failure.items));
+    console.log(`FAIL ${failure.name}`);
+    console.log(`     why:   ${failure.why}`);
+    console.log(`     items: ${JSON.stringify(failure.items)}`);
   }
-  console.error('history tools: ' + failures.length + '/' + FIXTURES.length + ' fixture(s) FAILED');
+  console.error(`history tools: ${failures.length}/${FIXTURES.length} fixture(s) FAILED`);
   process.exit(1);
 }
 
-console.log('history tools: ' + FIXTURES.length + ' fixtures passed');
+console.log(`history tools: ${FIXTURES.length} fixtures passed`);

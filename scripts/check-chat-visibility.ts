@@ -144,12 +144,10 @@ for (const fixture of FIXTURES) {
 if (failures.length > 0) {
   for (const failure of failures) {
     console.log(`FAIL ${failure.name}`);
-    console.log('     why: ' + failure.why);
+    console.log(`     why: ${failure.why}`);
   }
-  console.error(
-    'chat visibility: ' + failures.length + '/' + FIXTURES.length + ' fixture(s) FAILED',
-  );
+  console.error(`chat visibility: ${failures.length}/${FIXTURES.length} fixture(s) FAILED`);
   process.exit(1);
 }
 
-console.log('chat visibility: ' + FIXTURES.length + ' fixtures passed');
+console.log(`chat visibility: ${FIXTURES.length} fixtures passed`);

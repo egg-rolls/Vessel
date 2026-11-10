@@ -48,12 +48,6 @@
   flex-direction: column;
 }
 
-/* 会话内容列左右内衬：与 `.conversation-scroll` / `.composer-area` 的
-   padding-inline 一致，手柄用它把右缘夹在列内。 */
-.conversation .content-stage {
-  --content-pad-inline: clamp(16px, 4vw, 48px);
-}
-
 .conversation-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -214,14 +208,17 @@
   flex-direction: column;
 }
 
+/* 会话内容列左右内衬：与 `.conversation-scroll` / `.composer-area` 的
+   padding-inline 一致，手柄用它把右缘夹在列内。 */
+.conversation .content-stage {
+  --content-pad-inline: clamp(16px, 4vw, 48px);
+}
+
 /* 手柄随内容列右缘移动：内容列居中，右缘 = 50% + 宽度 / 2；
    `min()` 再把右缘夹到容器内衬以内（列比内容列配置更窄时手柄不漂出列外）。
    `--chat-half-w` 由 shell 上的 `paneCssEntries('chat')` 写入，两端同源。 */
 .resize-handle-content {
-  left: min(
-    calc(50% + var(--chat-half-w, 430px)),
-    calc(100% - var(--content-pad-inline, 32px))
-  );
+  left: min(calc(50% + var(--chat-half-w, 430px)), calc(100% - var(--content-pad-inline, 32px)));
   right: auto;
   transform: translateX(-50%);
 }

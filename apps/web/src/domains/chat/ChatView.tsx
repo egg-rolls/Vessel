@@ -383,7 +383,7 @@ export function ChatView({
             }}
             cancelledJobs={submitApi.cancelledJobs}
             verbosity={transcriptApi.visibility.verbosity}
-          cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
+            cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
             errorLevel={transcriptApi.errorLevel}
             entries={snapshot.entries}
             snapshotVersion={snapshot.version}

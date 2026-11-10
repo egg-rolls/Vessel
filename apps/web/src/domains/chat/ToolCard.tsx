@@ -2,7 +2,7 @@
 import { useId, useState } from 'react';
 import { CopyButton } from '../../components/CopyButton';
 import { Button } from '../../components/ui';
-import { formatTimestamp } from '../../format';
+import { formatClock, formatTimestamp } from '../../format';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { Verbosity } from '../../state/visibility';
@@ -176,6 +176,9 @@ export function ToolCard({
   const errorText = card.error !== undefined ? valueText(card.error) : '';
   const meta = formatErrorMeta(card.errorMeta);
 
+  // 卡片头（StreamCard 的 meta 槽）只放时钟：取值见下方说明。
+  const clock = formatClock(card.startedAt);
+
   return (
     <StreamCard
       className="tool-card"
@@ -193,9 +196,9 @@ export function ToolCard({
         </>
       }
       meta={
-        card.durationMs != null ? (
-          <span className="tabular-nums">{formatDuration(card.durationMs)}</span>
-        ) : undefined
+        // 卡片头只放「这条消息发生的时间」。以前是「运行中不显示 / 结束后显示耗时」，
+        // 两套口径会让同一个位置上的数字忽然变味；耗时仍在展开体的详情里（debug）。
+        clock === '' ? undefined : <span className="tabular-nums">{clock}</span>
       }
       summary={summary.length > 0 ? summary : undefined}
       actions={
@@ -255,6 +258,12 @@ export function ToolCard({
             <dd>{card.status}</dd>
             <dt>started</dt>
             <dd>{formatTimestamp(card.startedAt)}</dd>
+            {card.durationMs !== undefined && (
+              <>
+                <dt>duration</dt>
+                <dd>{formatDuration(card.durationMs)}</dd>
+              </>
+            )}
           </dl>
         </section>
       )}

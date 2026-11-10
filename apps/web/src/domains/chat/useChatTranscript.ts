@@ -8,6 +8,7 @@ import type {
 } from '../../gateway/types';
 import { t } from '../../i18n';
 import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
+import { readDisplayValue } from '../../state/display-settings';
 import type { EventStoreSnapshot } from '../../state/event-store';
 import { isGroupPersisted, type RunGroup } from '../../state/events';
 import { EventGroupCache } from '../../state/group-cache';
@@ -23,7 +24,6 @@ import {
   SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE,
   windowHasEarlier,
 } from '../../stores/sessionStore';
-import { readDisplayValue } from '../../state/display-settings';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { windowTail } from '../../transcript';
 import { pendingForSession, pendingQueue } from './pending-permissions';
@@ -127,8 +127,10 @@ export function useChatTranscript({
   // 卡片默认开合只在这里算一次（ui.expandCards || verbosity === 'debug'），
   // 沿 props 链传给 TranscriptWindow，避免每个子组件各自 useConfigStore。
   const cardsDefaultOpen =
-    readDisplayValue(configState.status === 'success' ? configState.data : null, 'ui.expandCards') ===
-      'true' || visibility.verbosity === 'debug';
+    readDisplayValue(
+      configState.status === 'success' ? configState.data : null,
+      'ui.expandCards',
+    ) === 'true' || visibility.verbosity === 'debug';
 
   const groupCache = useRef<EventGroupCache | null>(null);
   if (!groupCache.current) groupCache.current = new EventGroupCache();

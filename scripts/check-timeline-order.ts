@@ -160,15 +160,13 @@ for (const fixture of FIXTURES) {
 
 if (failures.length > 0) {
   for (const { fixture, actual } of failures) {
-    console.log('FAIL ' + fixture.name);
-    console.log('     why:      ' + fixture.why);
-    console.log('     expected: ' + JSON.stringify(fixture.expected));
-    console.log('     actual:   ' + JSON.stringify(actual));
+    console.log(`FAIL ${fixture.name}`);
+    console.log(`     why:      ${fixture.why}`);
+    console.log(`     expected: ${JSON.stringify(fixture.expected)}`);
+    console.log(`     actual:   ${JSON.stringify(actual)}`);
   }
-  console.error(
-    'timeline order: ' + failures.length + '/' + FIXTURES.length + ' fixture(s) FAILED',
-  );
+  console.error(`timeline order: ${failures.length}/${FIXTURES.length} fixture(s) FAILED`);
   process.exit(1);
 }
 
-console.log('timeline order: ' + FIXTURES.length + ' fixtures passed');
+console.log(`timeline order: ${FIXTURES.length} fixtures passed`);

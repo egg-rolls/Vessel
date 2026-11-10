@@ -79,6 +79,15 @@ export function runningToolHint(
 }
 
 /**
+ * 思考块可见性：live 与历史共用同一档位（minimal 隐藏，normal / debug 显示）。
+ * live 侧由 `filterTimelineItems` 内联判定，历史侧（Transcript）直接调这里 ——
+ * 两处不能各写一份，否则「跑的时候能看到、结束后消失」又会回来。
+ */
+export function reasoningVisible(verbosity: Verbosity): boolean {
+  return verbosity !== 'minimal';
+}
+
+/**
  * live 的渲染项过滤：foldToolItems(group.items) 的结果 → 实际渲染项。
  *
  * options.running 传入 run 是否仍在跑，仅用于调用侧一致性（见文件头不变量），
@@ -92,7 +101,7 @@ export function filterTimelineItems(
   if (verbosity !== 'minimal') return items.slice();
   return items.filter((item) => {
     if (item.kind === 'text' || item.kind === 'notice') return true;
-    if (item.kind === 'reasoning') return false;
+    if (item.kind === 'reasoning') return reasoningVisible(verbosity);
     if (item.kind === 'tool') return toolVisible(item.status, verbosity);
     return eventRowVisible(item.event.type, verbosity);
   });

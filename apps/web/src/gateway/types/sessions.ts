@@ -30,6 +30,11 @@ export interface Message {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /**
+   * 思维链（thinking 模式）：core 持久化保留、只在展示层用。
+   * 历史里同样带着它，所以终止态也能渲染思考块（与运行态同一实现）。
+   */
+  reasoning_content?: string;
   /** 0.6.1：逐条消息时间戳（core 可能缺省；缺失时 Web 降级为不分组/不显示时间）。 */
   timestamp?: number;
 }

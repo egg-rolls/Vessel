@@ -1,21 +1,20 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useMemo } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip, StatusGlyph } from '../../components/StatusChip';
-import { Button, MessageActions, useMessageCopy } from '../../components/ui';
+import { Button, type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
-import { filterTimelineItems, runningToolHint } from './chat-visibility';
+import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
 import { EventRow, NoticeRow } from './EventRow';
+import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
-
-const REASONING_PREVIEW_LINES = 12;
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -31,71 +30,6 @@ export function runDetailHref(group: Pick<RunGroup, 'runId' | 'sessionId'>): str
   });
 }
 
-/**
- * 可折叠的思考过程块：流式期间默认展开，run 结束后自动折叠；
- * 用户手动切换后不再被自动开合打断。内容按纯文本渲染，不进入正文 Markdown。
- */
-function ReasoningBlock({
-  text,
-  streaming,
-  startedAt,
-  endedAt,
-}: {
-  text: string;
-  streaming: boolean;
-  startedAt?: number;
-  endedAt?: number;
-}) {
-  const [open, setOpen] = useState(streaming);
-  const [userToggled, setUserToggled] = useState(false);
-  const [showAll, setShowAll] = useState(false);
-
-  useEffect(() => {
-    if (!userToggled) setOpen(streaming);
-  }, [streaming, userToggled]);
-
-  const lines = text.split('\n');
-  const clamped = lines.slice(0, REASONING_PREVIEW_LINES).join('\n');
-  const clampedVisible = !showAll && lines.length > REASONING_PREVIEW_LINES;
-  const seconds =
-    startedAt !== undefined && endedAt !== undefined && endedAt > startedAt
-      ? Math.max(1, Math.round((endedAt - startedAt) / 1000))
-      : undefined;
-
-  return (
-    <details
-      className="reasoning-block"
-      open={open}
-      onToggle={(event) => {
-        const next = event.currentTarget.open;
-        if (next === open) return;
-        setUserToggled(true);
-        setOpen(next);
-      }}
-    >
-      <summary className="cursor-pointer select-none px-2.5 py-1.5 text-sm text-faint hover:text-muted">
-        {t('chat.reasoning.summary')}
-        {seconds !== undefined ? ` · ${seconds}s` : ''}
-        {streaming ? (
-          <span className="reasoning-live text-info"> · {t('chat.reasoning.live')}</span>
-        ) : null}
-      </summary>
-      <div className="px-2.5 py-2 text-md leading-relaxed whitespace-pre-wrap wrap-anywhere">
-        {clampedVisible ? clamped : text}
-      </div>
-      {lines.length > REASONING_PREVIEW_LINES && (
-        <Button
-          variant="link"
-          className="mx-2.5 mb-2 text-xs"
-          onClick={() => setShowAll((value) => !value)}
-        >
-          {showAll ? t('chat.reasoning.collapse') : t('chat.reasoning.expand')}
-        </Button>
-      )}
-    </details>
-  );
-}
-
 /** 已受理但尚未开始执行的 run（服务端 queued 阶段不发事件）。 */
 export interface QueuedSubmission {
   runId: string;
@@ -107,21 +41,22 @@ export interface QueuedSubmission {
   cancelled: boolean;
 }
 
+/** 实时气泡没有操作项：只借 MessageActions 的时间位与 hover 显隐规则。 */
+const NO_ACTIONS: readonly MessageAction[] = [];
+
 function UserBubble({ text, ts }: { text: string; ts?: number }) {
   const clock = formatClock(ts);
   return (
-    <div className="msg-user flex max-w-full justify-end">
-      <div className="msg-bubble">
-        {text}
-        {clock && (
-          <time
-            className="mt-1 block text-right font-mono text-2xs tabular-nums text-faint"
-            dateTime={new Date(ts ?? 0).toISOString()}
-          >
-            {clock}
-          </time>
-        )}
-      </div>
+    <div className="msg-user group flex max-w-full flex-col items-end gap-1">
+      <div className="msg-bubble">{text}</div>
+      {/* 与落盘后的用户气泡同一套：时间在 hover 元信息位，不在气泡里。 */}
+      <MessageActions
+        className="justify-end"
+        actions={NO_ACTIONS}
+        meta={
+          clock === '' ? undefined : <time dateTime={new Date(ts ?? 0).toISOString()}>{clock}</time>
+        }
+      />
     </div>
   );
 }
@@ -223,7 +158,7 @@ export const RunItems = memo(function RunItems({
   // 0.17：流式尾部缓冲单独渲染；minimal 只隐藏思考流，正文仍然可见。
   const liveText = group.status === 'running' ? group.liveText : undefined;
   const liveReasoning =
-    group.status === 'running' && verbosity !== 'minimal' ? group.liveReasoning : undefined;
+    group.status === 'running' && reasoningVisible(verbosity) ? group.liveReasoning : undefined;
   const showWaiting =
     group.status === 'running' &&
     !liveText &&

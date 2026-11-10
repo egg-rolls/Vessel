@@ -2,9 +2,11 @@
  * 历史工具卡：sessions.get 里 assistant tool_calls + role:'tool' 配对后的展示。
  *
  * 与运行态的 ToolCard 共用同一张 StreamCard（标题 / 单行摘要 / 可展开体），差别只有：
- * 历史没有 success / error 状态（tone=neutral、不显示 duration）；结果缺失时显式
- * 提示而不是空白。
+ * 历史没有 success / error 状态（tone=neutral）；结果缺失时显式提示而不是空白。
+ * 时间进 StreamCard 的 meta 槽（标题右侧、chevron 左侧）：历史工具消息不再有上方那行
+ * 「助手 + 时间」，信息由卡片自己带。
  */
+import { formatClock } from '../../format';
 import { t } from '../../i18n';
 import type { HistoryToolItem } from './history-tools';
 import { StreamCard } from './StreamCard';
@@ -14,14 +16,21 @@ import { useToolDescription } from './tool-catalog';
 export function HistoryToolCard({
   item,
   defaultOpen = false,
+  timestamp,
 }: {
   item: HistoryToolItem;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
   defaultOpen?: boolean;
+  /**
+   * 这条卡片对应消息的时钟：进 StreamCard 的 meta 槽（标题右侧、chevron 左侧）。
+   * 历史工具消息不再有「助手 + 时间」行，时间信息靠卡片自己带。
+   */
+  timestamp?: number;
 }) {
   const description = useToolDescription(item.name);
   const summary = toolSummary(item.name, parseToolArgs(item.args));
   const missingOutput = !item.paired || item.output === undefined;
+  const clock = formatClock(timestamp);
 
   return (
     <StreamCard
@@ -29,12 +38,17 @@ export function HistoryToolCard({
       defaultOpen={defaultOpen}
       title={
         <>
-          <span className="tool-card-glyph tone-neutral" role="img" aria-label={t('chat.tool.status.history')}>
+          <span
+            className="tool-card-glyph tone-neutral"
+            role="img"
+            aria-label={t('chat.tool.status.history')}
+          >
             ·
           </span>
           <span className="font-mono text-sm text-ink">{item.name}</span>
         </>
       }
+      meta={clock === '' ? undefined : clock}
       summary={summary.length > 0 ? summary : undefined}
     >
       <div className="flex flex-col gap-1">

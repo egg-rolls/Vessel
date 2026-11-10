@@ -260,7 +260,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.tool.descriptionUnavailable': 'Description unavailable',
   'chat.tool.status.running': 'Running',
   'chat.tool.status.history': 'From history',
-  'chat.tool.outputMissing': 'This call has no recorded output in history (it may have been truncated).',
+  'chat.tool.outputMissing':
+    'This call has no recorded output in history (it may have been truncated).',
   'chat.tool.status.done': 'Done',
   'chat.tool.status.error': 'Failed',
   'ask.title': 'Agent question',

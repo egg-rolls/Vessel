@@ -17,8 +17,8 @@ import type {
 } from '../../gateway/types';
 import { t } from '../../i18n';
 import { AskCard } from '../chat/AskCard';
-import { StreamCard } from '../chat/StreamCard';
 import { PermissionCard, serializeInput } from '../chat/PermissionCard';
+import { StreamCard } from '../chat/StreamCard';
 import { memberDisplayName, shortAgentId } from './mention';
 
 /** 摘要单行上限，避免长参数把成员名挤出可视区。 */
