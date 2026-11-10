@@ -53,6 +53,7 @@ applies_to: [N, M]
 ## 预算
 
 - conversation 预算挂 `teams[].policy.budget`，不复用 `limits.*`；状态写 `<dataDir>/conversations/<id>.json`（`0600` 原子写、损坏 fail-closed；`<id>` 是内部持久单 id，不是 wire 字段）；override 只能由人经 `teams.budget` / owner 端点 / CLI 抬高或清除。
+- 环检测是不可关闭的**窗口限速**：同一有向边在每个 `cooldownSeconds` 窗口内最多 `maxRepeats` 次，越界只拒绝当次投递并带 `retry_after`，不落持久 blocked（正常多轮 hub-and-spoke 不该被判死）；要放宽持久改 `teams[].policy.budget.cycle.maxRepeats`，`budget override` 只是单条会话的临时放行。
 
 ## 指针
 

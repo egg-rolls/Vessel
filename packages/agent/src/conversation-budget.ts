@@ -3,6 +3,9 @@
  *
  * - 限额来自 Team policy（`policyFor`），默认全部不限；环检测始终开启；
  * - 发送侧 `checkDelivery` 同步检查并预留 hop / 有向边；接收侧 `canStartTurn` 只读；
+ * - 环检测是**滑动窗口限速**：同一有向边在每个 `cooldownSeconds` 窗口内最多
+ *   `maxRepeats` 次；越界只拒绝本次投递（带 `retry_after`），**不落持久 blocked**。
+ *   按整条 conversation 生命周期累积会把正常的多轮 hub-and-spoke 判死；
  * - 所有检查由投递 / turn 开始触发，没有定时器或轮询；
  * - 人工 override 只能抬高限额或清除；状态落 `ConversationStore`。
  *
@@ -15,6 +18,7 @@ import {
   type ConversationStore,
   MAX_CONVERSATION_EDGES,
   type StoredConversation,
+  type StoredConversationEdge,
 } from './conversation-store.js';
 import { RESERVED_PRINCIPALS } from './team-address.js';
 import {
@@ -87,11 +91,6 @@ function positiveInteger(value: unknown): number | undefined {
   return floored >= 1 ? floored : undefined;
 }
 
-function nonNegative(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return value >= 0 ? value : undefined;
-}
-
 /** 运行时再校验一遍：手改 team.json 的非法值按“未配置”忽略，不让整条预算失效 */
 export function resolveBudgetLimits(policy: TeamPolicy | undefined): ResolvedLimits {
   const budget: TeamBudgetPolicy | undefined =
@@ -119,7 +118,9 @@ export function resolveBudgetLimits(policy: TeamPolicy | undefined): ResolvedLim
     ...(maxWallClockSeconds !== undefined ? { maxWallClockMs: maxWallClockSeconds * 1000 } : {}),
     warningThreshold,
     maxRepeats: positiveInteger(cycle?.maxRepeats) ?? DEFAULT_CYCLE_MAX_REPEATS,
-    cooldownMs: (nonNegative(cycle?.cooldownSeconds) ?? DEFAULT_CYCLE_COOLDOWN_SECONDS) * 1000,
+    // 窗口必须 > 0：0 会让窗口恒空 = 关掉环检测，违反「不可关闭」。手改 team.json
+    // 写成 0 / 负数按未配置忽略，回落到缺省 60s。
+    cooldownMs: (positiveInteger(cycle?.cooldownSeconds) ?? DEFAULT_CYCLE_COOLDOWN_SECONDS) * 1000,
   };
 }
 
@@ -167,10 +168,16 @@ export class ConversationBudget implements ConversationBudgetPort {
     }
     const teamId = existing?.team_id ?? input.team_id;
     const limits = this.limitsFor(teamId);
+    // 迁移（0.42）：旧版本把 cycle 越界升级成持久 blocked。cycle 现在是窗口限速，
+    // 读到旧标记就地清掉，本次投递按滑动窗口自行恢复（不动 store 版本、不加字段）。
+    if (existing?.blocked?.dimension === 'cycle') {
+      delete existing.blocked;
+      this.store.markDirty();
+    }
     if (existing?.blocked !== undefined) {
       const blocked = existing.blocked;
-      // notify 只被 dimension === 'cycle' 的 blocked 拦；其它维度不拦。
-      if (mode !== 'notify' || blocked.dimension === 'cycle') {
+      // notify 只做唤醒提示，不被 blocked 拦（cycle 已不落 blocked，见上）。
+      if (mode !== 'notify') {
         return this.failed(
           blocked.dimension,
           blocked.reason,
@@ -210,38 +217,24 @@ export class ConversationBudget implements ConversationBudgetPort {
     }
 
     // 边处理：bump = 检查并计数；check = 只检查；skip = 同 run 去重后整体跳过。
+    // 计数是滑动窗口：一条有向边的重复只在「最近一个 cooldown 窗口」内计，
+    // 即「同一有向边每个 cooldownSeconds 窗口最多 maxRepeats 次」。窗口外按 0 计，
+    // 否则 (from,to) 会在整条 conversation 生命周期里累积，把多轮往返判死。
     const edgeMode = input.edge ?? (mode === 'read_only' ? 'check' : 'bump');
     let edgeCount = 0;
-    let resetEdge = false;
     const hasEdge = isAgentId(input.from) && isAgentId(input.to);
     if (edgeMode !== 'skip' && hasEdge) {
       const edge = existing?.edges.find(
         (entry) => entry.from === input.from && entry.to === input.to,
       );
-      edgeCount = edge?.count ?? 0;
+      const cooldownMs = this.cooldownMsFor(existing, limits);
+      edgeCount = edge !== undefined && this.withinWindow(edge, now, cooldownMs) ? edge.count : 0;
       const maxRepeats = this.effectiveMax(existing, limits, 'cycle') ?? DEFAULT_CYCLE_MAX_REPEATS;
-      if (edge !== undefined && edgeCount + 1 > maxRepeats) {
-        const retryAfter = edge.last_ts + this.cooldownMsFor(existing, limits);
-        if (now < retryAfter) {
-          return this.failed('cycle', 'cycle_detected', edgeCount, maxRepeats, retryAfter);
-        }
-        // 冷却结束且边仍超限：
-        // - teamless 会话只重置冷却（edgeCount = 0 后重新计数）；
-        // - 有 team 时升级为持久 blocked（新 blocked 不带 retry_after_ts）。
-        const effectiveTeamId = existing?.team_id ?? input.team_id;
-        if (effectiveTeamId === undefined) {
-          edgeCount = 0;
-          resetEdge = true;
-        } else if (mode === 'delivery') {
-          if (existing !== undefined) {
-            existing.blocked = { dimension: 'cycle', reason: 'cycle_detected', at: now };
-            this.store.markDirty();
-            void this.store.force();
-          }
-          return this.failed('cycle', 'cycle_detected', edgeCount, maxRepeats);
-        } else {
-          return this.failed('cycle', 'cycle_detected', edgeCount, maxRepeats);
-        }
+      if (edgeCount + 1 > maxRepeats) {
+        // 只限速，不落持久 blocked：窗口滑过后下一次投递自动恢复，
+        // 不需要人工 override（永久 block 会把正常协作判死）。
+        const retryAfter = (edge?.last_ts ?? now) + cooldownMs;
+        return this.failed('cycle', 'cycle_detected', edgeCount, maxRepeats, retryAfter);
       }
     }
 
@@ -254,7 +247,8 @@ export class ConversationBudget implements ConversationBudgetPort {
       conversation.hops += 1;
     }
     if (edgeMode === 'bump' && hasEdge) {
-      this.bumpEdge(conversation, input.from, input.to, resetEdge ? 0 : edgeCount, now);
+      // baseCount = 窗口内的次数；窗口已滑过就从头计（1）。
+      this.bumpEdge(conversation, input.from, input.to, edgeCount, now);
     }
     this.store.markDirty();
     if (mode === 'delivery') this.collectWarnings(conversation, limits, now);
@@ -286,6 +280,11 @@ export class ConversationBudget implements ConversationBudgetPort {
       return this.failed('wall_clock', 'budget_exceeded', wallClock, maxWallClock);
     }
 
+    // 迁移（0.42）：同 checkDelivery —— 旧 cycle blocked 就地清掉（窗口限速自愈）。
+    if (conversation?.blocked?.dimension === 'cycle') {
+      delete conversation.blocked;
+      this.store.markDirty();
+    }
     if (conversation?.blocked !== undefined) {
       const blocked = conversation.blocked;
       return this.failed(
@@ -500,6 +499,15 @@ export class ConversationBudget implements ConversationBudgetPort {
     return limits.cooldownMs;
   }
 
+  /**
+   * 边计数是否仍在窗口内。窗口 = `cooldownSeconds`，从该边上一次成功投递起算：
+   * 这意味着「同一条有向边最多每 `cooldownMs / maxRepeats` 打一次」，而不会在
+   * 整条 conversation 生命周期内累积。
+   */
+  private withinWindow(edge: StoredConversationEdge, now: number, cooldownMs: number): boolean {
+    return now - edge.last_ts <= cooldownMs;
+  }
+
   private currentValue(
     conversation: Pick<StoredConversation, 'hops' | 'turns' | 'total_tokens' | 'created_at'>,
     dimension: BudgetDimension,
@@ -585,8 +593,11 @@ export class ConversationBudget implements ConversationBudgetPort {
     const maxRepeats =
       this.effectiveMax(conversation, limits, 'cycle') ?? DEFAULT_CYCLE_MAX_REPEATS;
     const edges: ConversationBudgetEdge[] = conversation.edges.map((edge) => {
+      // blocked_until 只在窗口内越界时给出：窗口滑过后该边自动可再用。
       const blockedUntil =
-        edge.count + 1 > maxRepeats ? edge.last_ts + limits.cooldownMs : undefined;
+        this.withinWindow(edge, now, limits.cooldownMs) && edge.count + 1 > maxRepeats
+          ? edge.last_ts + limits.cooldownMs
+          : undefined;
       return {
         from: edge.from,
         to: edge.to,

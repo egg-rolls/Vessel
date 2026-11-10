@@ -293,8 +293,8 @@ teams:
         max_wall_clock_seconds: 3600   # >= 1；缺省不限
         warning_threshold: 0.8   # 0 < x < 1；缺省 0.8
         cycle:
-          max_repeats: 2         # >= 1；缺省 2
-          cooldown_seconds: 60   # >= 0；缺省 60
+          max_repeats: 2         # 每个 cooldown 窗口内允许的重复次数，>= 1；缺省 2
+          cooldown_seconds: 60   # 滑动窗口秒数，也是越界后的重试间隔，>= 1；缺省 60
 ```
 
 - **全局配置**：`teams` 是顶层块，不属于任何 tenant；密钥字段仍禁止。
@@ -302,6 +302,7 @@ teams:
 - **拼写**：规范拼写是 camelCase（`denyAfterSeconds` / `maxHops` / `maxWallClockSeconds` 等），config 对象、手改 `team.json` 与运行时都用 camelCase；YAML 可写 snake_case，loader 递归转换。手改 `team.json` 写 snake_case 不会被转换。
 - **严格校验**：`policy.permission` / `policy.budget` 内部是白名单；`allow_after` / `allowAfter` 报错（`allow-after is not supported; use hold or deny-after`），`max_cost` / `maxCost` 报错（`policy.budget.maxCost is not supported`，`Usage` 没有 cost 字段），未知键报错。`policy` 顶层其它键仍允许（S3 兼容）。
 - **默认与边界**：`permission.unattended` 缺省 `hold`；`deny_after_seconds` 只在 `deny-after` 时允许且必填；没有全局权限 TTL（temporary 的空闲回收另见 `agent.temporary_ttl_hours`）。预算挂在 team policy，**不复用** `limits.*`；未配置的维度不限，环检测默认开启（`max_repeats: 2` / `cooldown_seconds: 60`）。
+- **环检测语义（0.42 改准）**：计的是**同一有向边（from→to）的重复**，且只在**最近一个 `cooldown_seconds` 窗口**内计 —— 即「同一有向边每 `cooldown_seconds` 秒最多 `max_repeats` 次」，窗口滑过后重新计数。越界只拒绝本次投递（错误里带 `retry after`），**不落持久 blocked**、不需要人工 override：正常的多轮 hub-and-spoke（派活 → 收报告 → 发裁决）不会因为往返次数被判死。`cooldown_seconds` 下界是 `1`（`0` 等于关掉检测，违反「不可关闭、只能调阈值」）。要放宽就配 Team policy（持久），要单条会话放行才用 `budget override`（临时，只抬高或清除）。
 - **`policy.allow_auto_create`**（0.39，默认 `false`）：`dispatch` 在目标 `gone` 且 resume 失败后，是否允许按来源自动创建 agent；也可在单次 `agents.dispatch` 条目上传 `allow_auto_create` 显式覆盖。手改 `team.json` 时 snake_case 别名同样被接受。
 - **非法值**：配置声明非法 → validation error；手改 `team.json` 的非法预算 → warning 并忽略该预算子结构（Team 仍可用）。
 - 声明只**补写缺失**的 `<dataDir>/teams/<id>/<team_id>/team.json`（`<id>` 为持久化单 id）；不创建 Agent，不覆盖已有 `name` / `policy`，与已有文件冲突只 warning。

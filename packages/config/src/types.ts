@@ -474,9 +474,9 @@ export interface TeamPermissionPolicy {
 
 /** 环检测参数；不可关闭，只能调阈值。 */
 export interface TeamBudgetCyclePolicy {
-  /** 同一有向边允许的次数；缺省 2，>= 1 */
+  /** 同一有向边在一个 `cooldownSeconds` 窗口内允许的次数；缺省 2，>= 1 */
   maxRepeats?: number;
-  /** 触发后的冷却秒数；缺省 60，>= 0 */
+  /** 滑动窗口长度（秒），也是越界后的重试间隔；缺省 60，>= 1（0 等于关掉检测） */
   cooldownSeconds?: number;
 }
 

@@ -197,10 +197,11 @@ function normalizeCycle(
     issues,
   );
   if (cooldown.present) {
+    // 下界 1：窗口 0 等于关掉环检测，违反「不可关闭、只能调阈值」。
     const value = expectInteger(
       cooldown.value,
       'budget.cycle.cooldownSeconds',
-      0,
+      1,
       undefined,
       issues,
     );

@@ -389,7 +389,7 @@ export type BudgetBlockReason =
   | 'budget_unavailable'
   | 'conversation_team_mismatch';
 
-/** 有向边计数（环检测用；最多 32 条，按 last_ts 淘汰） */
+/** 有向边计数（环检测用；最多 32 条，按 last_ts 淘汰）。`count` 是最近一个 cooldown 窗口内的次数。 */
 export interface ConversationBudgetEdge {
   from: string;
   to: string;

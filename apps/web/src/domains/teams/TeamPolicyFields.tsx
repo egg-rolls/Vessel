@@ -191,7 +191,7 @@ export function TeamPolicyFields({ idPrefix, form, errors, onChange }: TeamPolic
             <Input
               id={id('cycle-cooldown-seconds')}
               type="number"
-              min={0}
+              min={1}
               step={1}
               value={form.cycleCooldownSeconds}
               onChange={(event) => onChange({ cycleCooldownSeconds: event.target.value })}

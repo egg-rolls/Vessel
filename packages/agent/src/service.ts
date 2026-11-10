@@ -5476,11 +5476,20 @@ export class AgentServiceImpl implements AgentService {
       check.retry_after_ts !== undefined
         ? `; retry after ${new Date(check.retry_after_ts).toISOString()}`
         : '';
-    const recovery =
+    // 两条修法都给：cycle 越界通常不是单条会话该 override，而是 Team policy 的
+    // 阈值不适合当前协作形状（hub-and-spoke 每轮都会重复同一条有向边）。
+    const temporary =
       teamId !== undefined
-        ? `; recover with: vessel team budget override ${teamId} --conversation ` +
+        ? `temporary: vessel team budget override ${teamId} --conversation ` +
           `${conversationId} --dimension ${check.dimension} --max unlimited`
-        : '; this conversation has no team; cooldown only';
+        : 'this conversation has no team; cooldown only';
+    const persistent =
+      teamId !== undefined && check.dimension === 'cycle'
+        ? `; persistent: raise teams[].policy.budget.cycle.maxRepeats for ${teamId} ` +
+          `(vessel team update ${teamId} --policy ` +
+          `'{"budget":{"cycle":{"maxRepeats":8}}}'; --policy 整体替换 policy)`
+        : '';
+    const recovery = `; recover — ${temporary}${persistent}`;
     return new AgentError(
       this.budgetCode(check.reason),
       `${check.reason}: ${check.dimension}: conversation ${conversationId}${retry}${recovery}`,

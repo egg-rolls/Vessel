@@ -184,12 +184,13 @@ export function buildPolicy(
 
   // budget.cycle
   applyInteger(form.cycleMaxRepeats, 'cycleMaxRepeats', cycle, 'maxRepeats', 1, undefined, errors);
+  // 下界 1：窗口 0 等于关掉环检测（与 packages/config 校验一致）。
   applyInteger(
     form.cycleCooldownSeconds,
     'cycleCooldownSeconds',
     cycle,
     'cooldownSeconds',
-    0,
+    1,
     undefined,
     errors,
   );
