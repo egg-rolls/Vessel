@@ -261,6 +261,8 @@ export const messages = {
   'chat.tool.outputMissing': '历史里没有这次调用的输出（可能已被截断）。',
   'chat.tool.status.done': '完成',
   'chat.tool.status.error': '失败',
+  'chat.tool.duration.millis': '{value} 毫秒',
+  'chat.tool.duration.minutes': '{minutes} 分 {seconds} 秒',
   'ask.title': 'Agent 提问',
   'ask.goTo': '前往回答',
   'ask.pendingMore': '还有 {count} 个待处理',

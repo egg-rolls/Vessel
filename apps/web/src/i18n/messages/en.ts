@@ -264,6 +264,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'This call has no recorded output in history (it may have been truncated).',
   'chat.tool.status.done': 'Done',
   'chat.tool.status.error': 'Failed',
+  'chat.tool.duration.millis': '{value}ms',
+  'chat.tool.duration.minutes': '{minutes}m {seconds}s',
   'ask.title': 'Agent question',
   'ask.goTo': 'Answer',
   'ask.pendingMore': '{count} more pending',

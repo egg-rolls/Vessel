@@ -348,6 +348,12 @@ export function buildHistoryIndex(
     for (const callId of ids) {
       const tool = toolByCallId.get(callId);
       if (tool === undefined) continue;
+      // 历史没有事件流给的 duration：用「调用消息 -> 结果消息」的时间戳差推；
+      // 两端缺一就不给（卡片头宁可不显示耗时，也不回退到绝对时间）。
+      const durationMs =
+        tool.startedAt !== undefined && tool.endedAt !== undefined
+          ? Math.max(0, tool.endedAt - tool.startedAt)
+          : undefined;
       items.push({
         kind: 'tool',
         key: `tool:${callId}`,
@@ -357,6 +363,7 @@ export function buildHistoryIndex(
         ...(tool.output !== undefined ? { output: tool.output } : {}),
         status: 'done',
         startedAt: message?.timestamp ?? 0,
+        ...(durationMs !== undefined ? { durationMs } : {}),
         paired: tool.paired,
         ...(message?.timestamp !== undefined ? { ts: message.timestamp } : {}),
       });

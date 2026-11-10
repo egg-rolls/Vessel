@@ -1,8 +1,8 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { CopyButton } from '../../components/CopyButton';
 import { Button } from '../../components/ui';
-import { formatClock, formatTimestamp } from '../../format';
+import { formatDuration, formatTimestamp } from '../../format';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { Verbosity } from '../../state/visibility';
@@ -44,11 +44,6 @@ function valueText(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 interface SectionProps {
@@ -161,6 +156,19 @@ function DiffSection({ lines, path }: { lines: DiffLine[]; path?: string }) {
   );
 }
 
+/** 运行中每秒刷新一次「已跑时长」；非运行态不挂定时器（结束时用事件给的总耗时）。 */
+function useNowTicker(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    // 挂载 / 转运行态时先对齐一次，避免沿用上一次渲染的旧时间。
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [active]);
+  return now;
+}
+
 /** 工具卡：Codex 式单行 header；点击打开详情弹窗（描述 + 输入，其余分区折叠）。 */
 export function ToolCard({
   card,
@@ -178,8 +186,12 @@ export function ToolCard({
   const errorText = card.error !== undefined ? valueText(card.error) : '';
   const meta = formatErrorMeta(card.errorMeta);
 
-  // 卡片头（StreamCard 的 meta 槽）只放时钟：取值见下方说明。
-  const clock = formatClock(card.startedAt);
+  // 卡片头（StreamCard 的 meta 槽）只放**运行耗时**，运行中 / 已结束同一个口径：
+  // 运行中 = 现在 - startedAt（每秒刷新），已结束 = 事件给的总耗时。
+  // 没有耗时数据时宁可不显示，也不回退到绝对时间（用户要的是「跑了多久」）。
+  const now = useNowTicker(card.status === 'running');
+  const durationMs =
+    card.durationMs ?? (card.status === 'running' ? Math.max(0, now - card.startedAt) : undefined);
 
   return (
     <StreamCard
@@ -198,9 +210,10 @@ export function ToolCard({
         </>
       }
       meta={
-        // 卡片头只放「这条消息发生的时间」。以前是「运行中不显示 / 结束后显示耗时」，
-        // 两套口径会让同一个位置上的数字忽然变味；耗时仍在展开体的详情里（debug）。
-        clock === '' ? undefined : <span className="tabular-nums">{clock}</span>
+        // 只显示耗时（不是绝对时间）；没有数据时整块省略。
+        durationMs === undefined ? undefined : (
+          <span className="tabular-nums">{formatDuration(durationMs)}</span>
+        )
       }
       summary={summary.length > 0 ? summary : undefined}
       actions={

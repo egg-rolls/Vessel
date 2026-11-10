@@ -3,8 +3,8 @@
  *
  * sessions.get 只给 messages：assistant 的 tool_calls[] 与随后的 role:'tool'
  * 消息靠 tool_call_id 配对。运行态来自 tool.call.* 事件（有 status / duration），
- * 历史里没有状态，因此统一给 'neutral' —— 渲染层用同一张 StreamCard，只是颜色
- * 中性、不显示 duration。
+ * 历史里没有状态，因此统一给 'neutral'；耗时可以用两条消息的时间戳差推
+ * （startedAt = 调用消息时间，endedAt = 结果消息时间），卡片头据此显示运行时长。
  *
  * 退化规则（不变量：**任何一条调用都不能渲染成空白**）：
  * - 有调用、无结果（被截断 / 历史不完整）→ output: undefined + paired: false，
@@ -30,6 +30,13 @@ export interface HistoryToolItem {
   status: 'neutral';
   /** 是否找到了与调用配对的结果。 */
   paired: boolean;
+  /**
+   * 调用发出的时间（发起该 `tool_calls[]` 的 assistant 消息时间戳）。
+   * 与 `endedAt` 一起用来推历史卡片的耗时；缺一个就不显示耗时。
+   */
+  startedAt?: number;
+  /** 结果回到的时间（配对的 `role:'tool'` 消息时间戳）。 */
+  endedAt?: number;
 }
 
 /**
@@ -56,6 +63,8 @@ export function buildHistoryToolItems(messages: readonly Message[]): HistoryTool
           ...(call.function?.arguments !== undefined ? { args: call.function.arguments } : {}),
           status: 'neutral',
           paired: false,
+          // 调用时间 = 这条 assistant 消息的时间；配对到结果后补 endedAt，两者都在才有耗时。
+          ...(message.timestamp !== undefined ? { startedAt: message.timestamp } : {}),
         };
         items.push(item);
         if (callId !== undefined) byCallId.set(callId, item);
@@ -73,6 +82,8 @@ export function buildHistoryToolItems(messages: readonly Message[]): HistoryTool
     if (matched !== undefined) {
       matched.output = output;
       matched.paired = true;
+      // 结果时间 = 这条 tool 消息的时间；与 startedAt 一起推出历史卡片的耗时。
+      if (message.timestamp !== undefined) matched.endedAt = message.timestamp;
       // 调用没带 name 时用结果消息上的 name 补全（旧数据只有 tool 消息才带 name）。
       if (matched.name === 'tool' && typeof message.name === 'string' && message.name.length > 0) {
         matched.name = message.name;

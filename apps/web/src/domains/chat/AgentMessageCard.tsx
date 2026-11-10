@@ -38,8 +38,8 @@ export function AgentMessageCard({
   /**
    * A2A 来源地址（来自紧邻的 `vessel:source` 行）。
    *
-   * 来源行不再单独成行：它被**吸入这张卡**——meta 里展示地址，正文就是消息本身，
-   * 于是同一次投递只有一张卡、不会出现「来源行 + agent 卡」两条。
+   * 来源行不再单独成行：它被**吸入这张卡**——地址进展开体首行（等宽 / 可选中 / break-all），
+   * 卡片表面只留「来自 agent <alias>」。默认折叠时看不到长地址，需要时展开即可。
    */
   source?: string;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
@@ -56,21 +56,26 @@ export function AgentMessageCard({
           {t('chat.agentMessage.from', { name: sender })}
         </span>
       }
-      meta={
-        source !== undefined || clock !== '' ? (
-          <>
-            {source !== undefined && (
-              <span className="max-w-48 truncate" title={source}>
-                {source}
-              </span>
-            )}
-            {source !== undefined && clock !== '' && <span aria-hidden="true"> · </span>}
-            {clock !== '' && <span>{clock}</span>}
-          </>
-        ) : undefined
-      }
       summary={message.content}
     >
+      {(source !== undefined || clock !== '') && (
+        // 详细地址（+ 时间）只在这里出现：等宽、可整段选中、长地址按字符断行。
+        <div className="mb-1 flex flex-wrap items-baseline gap-x-2 font-mono text-2xs text-faint">
+          {source !== undefined && (
+            <span className="break-all select-all" title={source}>
+              {source}
+            </span>
+          )}
+          {clock !== '' && (
+            <time
+              className="shrink-0 tabular-nums"
+              dateTime={new Date(message.timestamp ?? 0).toISOString()}
+            >
+              {clock}
+            </time>
+          )}
+        </div>
+      )}
       <p className="m-0 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">
         {message.content}
       </p>

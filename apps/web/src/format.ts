@@ -41,6 +41,34 @@ export function formatClock(ts: number | undefined): string {
   return `${pad(date.getHours(), 2)}:${pad(date.getMinutes(), 2)}`;
 }
 
+/**
+ * 耗时（毫秒 → 短文案）：`820ms` / `1.2s` / `3m 12s` / `1h 05m`。
+ *
+ * 工具卡片的 meta 用它 —— 卡片头只说「这件事花了多久」，不说绝对时间；
+ * 运行中与已结束因此是同一个口径（运行中每秒按当前时刻重算）。
+ */
+export function formatDuration(ms: number): string {
+  const total = Math.max(0, ms);
+  // 不足 1 秒给毫秒：否则第一秒会显示成 0s。
+  if (total < 1000) {
+    return t('chat.tool.duration.millis', { value: Math.max(1, Math.round(total)) });
+  }
+  const seconds = total / 1000;
+  if (seconds < 60) return t('duration.seconds', { seconds: seconds.toFixed(1) });
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    const rest = Math.round(seconds - minutes * 60);
+    return rest > 0
+      ? t('chat.tool.duration.minutes', { minutes, seconds: rest })
+      : t('duration.minutes', { minutes });
+  }
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes - hours * 60;
+  return restMinutes > 0
+    ? t('duration.hoursMinutes', { hours, minutes: restMinutes })
+    : t('duration.hours', { hours });
+}
+
 export type RelativeTimeResult =
   | { key: 'time.justNow' }
   | { key: 'time.minutesAgo'; params: { count: number } }
