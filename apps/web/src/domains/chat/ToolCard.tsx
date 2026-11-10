@@ -1,5 +1,5 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { CopyButton } from '../../components/CopyButton';
 import { Button } from '../../components/ui';
 import { formatClock, formatTimestamp } from '../../format';
@@ -64,7 +64,9 @@ interface SectionProps {
  * 展开后超过 200KB 分段加载。保留原始换行与行首空格。
  */
 function PayloadSection({ label, value, defaultOpen = false, tone, verbosity }: SectionProps) {
-  const text = valueText(value);
+  // JSON.stringify(pretty) 对 512KiB payload 约 1ms；卡片每次重渲都会走一次（流式 20Hz），
+  // 而 value 的引用是稳定的，按引用 memo 就够了。
+  const text = useMemo(() => valueText(value), [value]);
   const [open, setOpen] = useState(defaultOpen);
   const [loadedBytes, setLoadedBytes] = useState(PAYLOAD_CHUNK_BYTES);
   const id = useId();

@@ -135,8 +135,13 @@ export function useChatSubmit({
   }, [queuedRuns, client]);
 
   // 事件流接管（run 真正开始）后移除排队占位卡片。
+  // 快照每 50ms 变一次，但队列通常是空的：没有要移除的卡片时返回同一个引用，
+  // 避免每帧都提交一次渲染（流式时聊天子树会因此 20–40 次/秒重渲）。
   useEffect(() => {
-    setQueuedRuns((prev) => prev.filter((item) => !startedRuns.has(item.runId)));
+    setQueuedRuns((prev) => {
+      const next = prev.filter((item) => !startedRuns.has(item.runId));
+      return next.length === prev.length ? prev : next;
+    });
   }, [startedRuns]);
 
   /**

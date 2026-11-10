@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, type ReactNode, useMemo } from 'react';
 import { Markdown } from '../../components/Markdown';
 import { type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock, localDayKey, localDayLabel } from '../../format';
@@ -19,9 +19,10 @@ function previousUserMessage(
   message: Message,
   allMessages: readonly Message[] | undefined,
   indexOffset: number,
+  indexOf: ReadonlyMap<Message, number>,
 ): { text: string; index: number } | undefined {
   if (message.role !== 'assistant' || !allMessages) return undefined;
-  const currentIndex = allMessages.indexOf(message);
+  const currentIndex = indexOf.get(message) ?? -1;
   if (currentIndex < 0) return undefined;
   for (let cursor = currentIndex - 1; cursor >= 0; cursor -= 1) {
     const candidate = allMessages[cursor];
@@ -156,6 +157,17 @@ export function Transcript({
   onRetryMessage: (keepMessages: number, text: string) => void;
 }) {
   const copy = useMessageCopy();
+  // 每条消息都要知道自己在完整窗口里的绝对下标；一次建表，避免每渲染 O(n) 查找
+  // （2000 条实测 2.83ms/渲染，流式 20Hz 就是 56ms/s）。
+  const indexOf = useMemo(() => {
+    const map = new Map<Message, number>();
+    const list = allMessages ?? [];
+    for (let index = 0; index < list.length; index += 1) {
+      const message = list[index];
+      if (message !== undefined) map.set(message, index);
+    }
+    return map;
+  }, [allMessages]);
   if (items.length === 0) return null;
 
   const nodes: ReactNode[] = [];
@@ -175,7 +187,7 @@ export function Transcript({
     }
     if (item.kind === 'message') {
       const message = item.message;
-      const sourceIndex = allMessages?.indexOf(message);
+      const sourceIndex = indexOf.get(message);
       const messageIndex =
         sourceIndex !== undefined && sourceIndex >= 0
           ? sourceIndex + messageIndexOffset
@@ -185,7 +197,7 @@ export function Transcript({
           key={item.key}
           message={message}
           messageIndex={messageIndex}
-          previousUser={previousUserMessage(message, allMessages, messageIndexOffset)}
+          previousUser={previousUserMessage(message, allMessages, messageIndexOffset, indexOf)}
           cardsDefaultOpen={cardsDefaultOpen}
           groupStart={item.groupStart !== false}
           onCopy={copy}

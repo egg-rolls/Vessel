@@ -232,8 +232,10 @@ export function previewPayload(
   maxLines = PREVIEW_LINES,
   maxBytes = PREVIEW_BYTES,
 ): PayloadPreview {
-  const totalLines = text === '' ? 0 : text.split('\n').length;
-  const byLines = text.split('\n').slice(0, maxLines).join('\n');
+  // 只 split 一次：以前对大 payload 会切两遍数组（512KiB 时每卡每渲染 ~1ms）。
+  const lines = text === '' ? [] : text.split('\n');
+  const totalLines = lines.length;
+  const byLines = lines.slice(0, maxLines).join('\n');
   const preview = byLines.length > maxBytes ? byLines.slice(0, maxBytes) : byLines;
   return {
     preview,

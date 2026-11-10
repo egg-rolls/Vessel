@@ -152,9 +152,26 @@ function renderEventBody(event: RunEvent) {
           </>
         );
       }
-      return <span className="text-muted">{truncate(JSON.stringify(event.data), 200)}</span>;
+      return <span className="text-muted">{truncate(jsonPreview(event.data), 200)}</span>;
     }
   }
+}
+
+/**
+ * 原始事件 data 的 JSON 预览，按对象引用缓存。
+ *
+ * 未分类事件行在流式期间每帧重渲，`JSON.stringify` 对大 payload 不便宜；
+ * `event.data` 是每次事件新造的对象、渲染期间引用稳定，WeakMap 既命中又不会泄漏。
+ */
+const jsonPreviewCache = new WeakMap<object, string>();
+
+function jsonPreview(data: unknown): string {
+  if (typeof data !== 'object' || data === null) return JSON.stringify(data) ?? String(data);
+  const cached = jsonPreviewCache.get(data);
+  if (cached !== undefined) return cached;
+  const text = JSON.stringify(data) ?? String(data);
+  jsonPreviewCache.set(data, text);
+  return text;
 }
 
 const TAG_TONE: Record<string, string> = {
