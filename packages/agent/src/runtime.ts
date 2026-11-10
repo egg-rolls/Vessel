@@ -600,6 +600,36 @@ function formatMessageSource(
   return `<from location="${escapeAttr(address)}" />`;
 }
 
+/** `name` 只允许简单标签：Provider 侧把 `name` 当标识符，空格 / 符号 / 中文都不进。 */
+function sanitizeAlias(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, '');
+}
+
+/** `node:agent` / `federation:principal@node:team` → agent / principal 段（取 id 用）。 */
+function agentIdOf(from: string): string {
+  const stripped = from.startsWith('federation:') ? from.slice('federation:'.length) : from;
+  const principal = stripped.split('@')[0] ?? stripped;
+  return principal.slice(principal.lastIndexOf(':') + 1);
+}
+
+/**
+ * A2A 输入那条 user 消息的 `name`：`agent:<alias>`。
+ *
+ * 只标「agent 发来的」：人类 / 系统来源返回 undefined，消息不带 `name`（保持 nil）。
+ * 改动只落在既有的 `Message.name`（已随 `user.message` 持久化）上——不新增字段，
+ * 也不把 `vessel:source` 重新放回可见；Web 侧据此把它渲染成 agent 消息卡。
+ *
+ * alias 用发送者显示名清洗成 `[A-Za-z0-9_-]`；没有显示名（远端 / 联邦 / 未注册）
+ * 时退回 agent 地址里的 id 前 8 位。
+ */
+function agentInputName(message: AgentMessage): string | undefined {
+  const source = message.source ?? inferMessageSource(message.from);
+  if (source !== 'agent') return undefined;
+  const named = sanitizeAlias(message.from_name ?? '');
+  const alias = named.length > 0 ? named : sanitizeAlias(agentIdOf(message.from)).slice(0, 8);
+  return alias.length > 0 ? `agent:${alias}` : undefined;
+}
+
 /** 成员不可见的工具 */
 function isExcludedTool(name: string): boolean {
   return EXCLUDED_TOOL_NAMES.has(name) || name.startsWith('team_');
@@ -1012,6 +1042,13 @@ export class MemberExecutionHost implements MemberExecutionPort {
       content: formatMessageSource(message, member.team_id, this.nodeId),
       timestamp: Date.now(),
     };
+    // A2A 输入本身带既有 `Message.name`（`agent:<alias>`）：Web 据此把它渲染成
+    // 「agent 消息卡」而不是用户自己说的话。人类 / 系统来源保持 nil —— 不带名字。
+    const inputName = agentInputName(message);
+    const userInput: string | Message =
+      inputName === undefined
+        ? message.content
+        : { role: 'user', content: message.content, name: inputName };
     try {
       const turnOptions = {
         runId,
@@ -1019,8 +1056,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
       };
       const content =
         resume && entry.runtime.resumeSession !== undefined
-          ? await entry.runtime.resumeSession(member.session_id, message.content, turnOptions)
-          : await entry.runtime.run(message.content, member.session_id, turnOptions);
+          ? await entry.runtime.resumeSession(member.session_id, userInput, turnOptions)
+          : await entry.runtime.run(userInput, member.session_id, turnOptions);
       return {
         content,
         outcome: 'completed',

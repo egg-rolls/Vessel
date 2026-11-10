@@ -5,6 +5,7 @@ import { formatClock, localDayKey, localDayLabel } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
+import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -58,6 +59,12 @@ function TranscriptMessage({
   }
 
   if (message.role === 'user') {
+    // A2A 投递：runtime 给这条输入写了 `agent:<alias>`，渲染成系统消息样的 agent 卡，
+    // 而不是「用户自己说的话」。没有 name 的历史消息继续走下面的用户气泡。
+    const agentSender = agentMessageSender(message);
+    if (agentSender !== undefined) {
+      return <AgentMessageCard message={message} sender={agentSender} />;
+    }
     const actions: MessageAction[] = [];
     if (message.content.trim().length > 0) {
       actions.push({
