@@ -6,6 +6,7 @@ import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
 import type { ErrorVisibility } from '../../state/error-visibility';
 import type { RunGroup, StoredEvent, TimelineItem } from '../../state/events';
+import { runtimeMessageKind } from '../../state/runtime-visibility';
 import type { Verbosity } from '../../state/visibility';
 import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/sessionStore';
 import { ChatWelcome } from './ChatWelcome';
@@ -175,6 +176,46 @@ export function TranscriptWindow({
   const sortTs = (ts: number | undefined): number | undefined =>
     ts === undefined || windowStartTs === undefined || ts >= windowStartTs ? ts : undefined;
 
+  /**
+   * turn 边界锚点：本轮「触发它的那条 user 消息」的时间戳。
+   *
+   * 为什么需要：core 在 `run.started`（execution-unit.ts:983）**之后**才把用户消息写进
+   * 上下文并打上 `timestamp`（同文件 :1019 调 addContext → :2271 `Date.now()`），所以 run
+   * 的起始 ts 恒小于本轮用户消息的 ts。live 节点只按 run 起始时间排序时，本轮的助手
+   * 输出（含思考提示）就会排到用户消息**上面** —— 屏幕上表现为「我这条消息跑到最底下、
+   * 思考提示悬在它上方」。
+   *
+   * 匹配顺序：① 按 `group.input` 找内容相同的最后一条真实用户消息（多轮同文取最新）；
+   * ② 匹配不上（guardrail 改写过正文）且该 run 还在跑时，用「最后一条用户消息」兜底 ——
+   * 正在跑的助手输出必然排在这条之后。已终止的 run 不参与兜底，避免把历史轮次里的
+   * 失败 / 取消卡拽到当前轮下面。
+   */
+  const userAnchors: { content: string; ts: number }[] = [];
+  for (const message of transcriptMessages) {
+    if (message.role !== 'user') continue;
+    if (message.timestamp === undefined) continue;
+    // `vessel:*` 是模型侧上下文消息，不是用户输入。
+    if (runtimeMessageKind(message) !== undefined) continue;
+    userAnchors.push({ content: message.content.trim(), ts: message.timestamp });
+  }
+  const lastUserTs = userAnchors.length > 0 ? userAnchors[userAnchors.length - 1]?.ts : undefined;
+  const turnFloorFor = (input: string | undefined, running: boolean): number | undefined => {
+    const text = input?.trim();
+    if (text !== undefined && text.length > 0) {
+      for (let index = userAnchors.length - 1; index >= 0; index -= 1) {
+        const anchor = userAnchors[index];
+        if (anchor !== undefined && anchor.content === text) return anchor.ts + 1;
+      }
+    }
+    return running && lastUserTs !== undefined ? lastUserTs + 1 : undefined;
+  };
+
+  /** live 节点的时间戳：不早于「触发它的用户消息」，其余仍按 run 起始时间。 */
+  const nodeTs = (ts: number | undefined, floor: number | undefined): number | undefined => {
+    const base = floor === undefined ? ts : Math.max(ts ?? floor, floor);
+    return sortTs(base);
+  };
+
   /** 一条事件自身的 ts（notice / raw event 都带 `event.ts`）。 */
   const itemTs = (item: TimelineItem): number | undefined =>
     item.kind === 'notice' || item.kind === 'event' ? item.event.ts : undefined;
@@ -204,7 +245,12 @@ export function TranscriptWindow({
               return [
                 {
                   key: `run-${group.runId}`,
-                  ts: sortTs(group.startedAt ?? group.firstTs),
+                  // 起始时间 + turn 下限：run.started 早于用户消息落盘，只按起始时间
+                  // 排序会把本轮输出排到用户消息上面（见 turnFloorFor 的注释）。
+                  ts: nodeTs(
+                    group.startedAt ?? group.firstTs,
+                    turnFloorFor(group.input, group.status === 'running'),
+                  ),
                   seq: group.firstSeq,
                   node: (
                     <RunItems
@@ -229,7 +275,8 @@ export function TranscriptWindow({
           }),
         ...visibleQueued.map((item) => ({
           key: `queued-${item.runId}`,
-          ts: sortTs(item.submittedAt),
+          // 排队 notice 也挂在它自己那条用户输入之后（同一 turn 边界规则）。
+          ts: nodeTs(item.submittedAt, turnFloorFor(item.input, true)),
           node: <QueuedNotice item={item} onCancel={onCancelQueued} />,
         })),
       ];
