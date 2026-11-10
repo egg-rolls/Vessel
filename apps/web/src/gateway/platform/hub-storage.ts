@@ -146,6 +146,27 @@ export interface HubNavState {
   version?: string;
 }
 
+/** 最近已知 Hub 版本的会话级缓存：版本描述服务本身，刷新后仍应可见。 */
+const HUB_VERSION_CACHE_KEY = 'vessel.web.hubVersion';
+
+function readCachedHubVersion(): string | undefined {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(HUB_VERSION_CACHE_KEY);
+    const value = raw?.trim();
+    return value !== undefined && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCachedHubVersion(version: string): void {
+  try {
+    globalThis.sessionStorage?.setItem(HUB_VERSION_CACHE_KEY, version);
+  } catch {
+    // 隐私模式 / 配额满：内存态仍然生效。
+  }
+}
+
 let navState: HubNavState | null = null;
 const navListeners = new Set<() => void>();
 
@@ -155,7 +176,9 @@ const navListeners = new Set<() => void>();
  */
 export function getHubNavStatus(): HubNavState {
   if (navState === null) {
-    navState = { status: readHubConnection().url !== '' ? 'unknown' : 'unconfigured' };
+    const status: HubNavStatus = readHubConnection().url !== '' ? 'unknown' : 'unconfigured';
+    const version = readCachedHubVersion();
+    navState = version !== undefined ? { status, version } : { status };
   }
   return navState;
 }
@@ -170,6 +193,7 @@ export function setHubNavStatus(next: HubNavStatus, version?: string): void {
   if (current.status === next && current.version === effectiveVersion) return;
   navState =
     effectiveVersion !== undefined ? { status: next, version: effectiveVersion } : { status: next };
+  if (effectiveVersion !== undefined) writeCachedHubVersion(effectiveVersion);
   for (const listener of [...navListeners]) listener();
 }
 

@@ -21,8 +21,11 @@ export function NavItem({
 }) {
   const status = item.status;
   const statusText = status ? t(status.labelKey) : '';
-  const versionText = status?.version ? `v${status.version}` : '—';
-  const tooltip = status ? `${item.title} · ${statusText} · ${versionText}` : item.title;
+  // 版本未知时**不渲染占位**：一个孤零零的 — 会被读成“坏了”，而它只表示“还没探测到”。
+  const versionText = status?.version ? `v${status.version}` : undefined;
+  const tooltip = status
+    ? [item.title, statusText, versionText].filter((part) => part !== undefined).join(' · ')
+    : item.title;
 
   const button = (
     <button
@@ -58,9 +61,11 @@ export function NavItem({
             aria-label={statusText}
             title={statusText}
           />
-          <span className="flex-none whitespace-nowrap font-mono text-2xs text-faint">
-            {versionText}
-          </span>
+          {versionText !== undefined && (
+            <span className="flex-none whitespace-nowrap font-mono text-2xs text-faint">
+              {versionText}
+            </span>
+          )}
         </>
       )}
     </button>
