@@ -74,6 +74,7 @@ import {
   type TraceControl,
   type TraceRecorderFactory,
 } from './trace-wiring';
+import { createUsagePricing } from './usage-pricing';
 
 /** 构造一个 tenant 执行面的输入 */
 export interface BuildTenantRuntimeOptions {
@@ -554,6 +555,8 @@ export async function buildTenantRuntime(
   });
   const resolvedProvider = await createProvider(config, loader, useMock, options.mockScenario);
   const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
+  // 0.51：opt-in 计价；无配置时为 undefined，total_cost 保持 0。
+  const pricing = createUsagePricing(config.pricing);
 
   const summarizer = createContextSummarizer(provider, providerModel);
   // R7：熔断按 session 分桶；owner / 成员共享同一份计数，`force` 由 core 传入。
@@ -730,6 +733,7 @@ export async function buildTenantRuntime(
     pluginHostFactory: () => finalPluginHost,
     limits,
     termination,
+    ...(pricing !== undefined ? { pricing } : {}),
     // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
     includeReasoning: includeReasoningFor(config),
     context: {

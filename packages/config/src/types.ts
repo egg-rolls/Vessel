@@ -43,6 +43,28 @@ export interface UsageLimitsConfig {
   totalCostLimit?: number;
 }
 
+/**
+ * 单个模型的价格（0.51，opt-in）。
+ *
+ * 单位：用户自己的计价货币 / 每百万 token。Vessel 不内置任何厂商价格。
+ * 缓存两项缺省时回落到 `inputPerMillion`（不猜测厂商倍率；建议显式配置）。
+ */
+export interface ModelPricingConfig {
+  /** 非缓存输入（fresh input）单价 / 百万 token */
+  inputPerMillion: number;
+  /** 输出单价 / 百万 token */
+  outputPerMillion: number;
+  /** 缓存读取单价 / 百万 token；缺省 = inputPerMillion */
+  cacheReadPerMillion?: number;
+  /** 缓存写入单价 / 百万 token；缺省 = inputPerMillion */
+  cacheWritePerMillion?: number;
+}
+
+/** 用量计价配置（0.51）；键为 provider.model 的精确值。 */
+export interface PricingConfig {
+  models: Record<string, ModelPricingConfig>;
+}
+
 /** 终止策略配置 */
 export interface TerminationConfig {
   maxIterations?: number;
@@ -663,6 +685,8 @@ export interface VesselConfig {
   hooks?: HookConfig[];
   limits?: UsageLimitsConfig;
   termination?: TerminationConfig;
+  /** 0.51：opt-in 模型价格表；配置后 `total_cost` / `total_cost_limit` 才有意义。 */
+  pricing?: PricingConfig;
   session?: SessionConfig;
   context?: ContextConfig;
   /** 0.6.1：工具权限免确认规则 */

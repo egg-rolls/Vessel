@@ -30,6 +30,11 @@ export interface MetricsSnapshot {
     cache_read_tokens?: number;
     /** 缓存写入 token 累计；缺省语义同 `cache_read_tokens` */
     cache_creation_tokens?: number;
+    /**
+     * opt-in 计价累计（0.51）。缺省 = 没有任何带 `cost` 的 `llm.response`
+     * （未配置 pricing）；有值后按每个响应的成本累加。
+     */
+    total_cost?: number;
   };
   duration_ms: { total: number; max: number; avg: number };
   updated_at: number;
@@ -173,6 +178,13 @@ export class MetricsAccumulator {
     const cacheCreation = optionalCount(usage.cache_creation_input_tokens);
     if (cacheCreation !== undefined) {
       this.llm.cache_creation_tokens = (this.llm.cache_creation_tokens ?? 0) + cacheCreation;
+    }
+
+    // 0.51：成本是装配层 opt-in 的派生字段；只有事件真的带了 `cost` 才累加，
+    // 全部缺失时保持 undefined（= 未配置价格表）。
+    const cost = optionalCount(data?.cost);
+    if (cost !== undefined) {
+      this.llm.total_cost = (this.llm.total_cost ?? 0) + cost;
     }
   }
 }

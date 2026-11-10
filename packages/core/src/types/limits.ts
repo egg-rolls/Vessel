@@ -3,6 +3,8 @@
  * @module @vessel-agent/core/limits
  */
 
+import type { Usage } from './provider.js';
+
 /** 使用量限制 */
 export interface UsageLimits {
   requestLimit?: number;
@@ -81,6 +83,22 @@ export interface UsageStats {
    * 语义同 `cacheReadTokens`：子集，缺省表示「未上报」而不是 0。
    */
   cacheCreationTokens?: number;
+}
+
+/**
+ * opt-in 用量计价端口（0.51）。
+ *
+ * 装配层按用户配置的模型价格实现；缺省不注入 → `totalCost` 保持 0，
+ * `totalCostLimit` 不生效。价格是用户自己的计价货币，Vessel 不内置价格表。
+ */
+export interface UsagePricing {
+  /**
+   * 返回某次 provider 请求的成本；该模型没有配置价格时返回 `undefined`。
+   *
+   * 实现必须按分项费率计算：非缓存输入 / cache read / cache write / output
+   * 各自单价，不能拿累计 token 数直接乘单价。
+   */
+  costOf(model: string, usage: Usage): number | undefined;
 }
 
 /** 限制检查器接口 */

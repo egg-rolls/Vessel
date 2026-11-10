@@ -81,6 +81,9 @@ export function readMetricsSnapshot(value: unknown): MetricsSnapshotLike | null 
       prompt_tokens: numberAt(raw.llm.prompt_tokens),
       completion_tokens: numberAt(raw.llm.completion_tokens),
       total_tokens: numberAt(raw.llm.total_tokens),
+      ...(typeof raw.llm.total_cost === 'number' && Number.isFinite(raw.llm.total_cost)
+        ? { total_cost: raw.llm.total_cost }
+        : {}),
     },
     duration_ms: {
       total: numberAt(isRecord(raw.duration_ms) ? raw.duration_ms.total : 0),

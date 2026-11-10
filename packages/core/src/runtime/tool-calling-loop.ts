@@ -18,6 +18,7 @@ import type {
   LimitChecker,
   TerminationPolicy,
   UsageLimits,
+  UsagePricing,
   UsageStats,
 } from '../types/limits.js';
 import type { ChatRequest, LLMResponse, Message } from '../types/provider.js';
@@ -34,6 +35,10 @@ export type LoopResult = string;
 /** Run 内一次 loop 的完整依赖面；每 run 构造一次，无跨 run 状态。 */
 export interface LoopContext {
   readonly execution: Run;
+  /** 本次请求的模型标识；计价按它查价格表。 */
+  readonly model: string;
+  /** opt-in 计价；缺省不累计 `totalCost`。 */
+  readonly pricing?: UsagePricing;
   readonly window: MessageWindowPort;
   readonly provider: ProviderPort;
   readonly tools: ToolExecutor;
@@ -268,6 +273,7 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     });
 
     // 更新 token 使用量
+    let requestCost: number | undefined;
     if (response.usage) {
       ctx.controls.limitChecker.addTokens(
         stats,
@@ -294,6 +300,9 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       ctx.window.updateRealTokens(
         (response.usage.prompt_tokens ?? 0) + (response.usage.completion_tokens ?? 0),
       );
+      // 0.51：按分项费率累计成本；无价格表 / 该模型未配置时不产生金额。
+      requestCost = ctx.pricing?.costOf(ctx.model, response.usage);
+      if (requestCost !== undefined) ctx.controls.limitChecker.addCost(stats, requestCost);
     }
 
     // 0.18：reasoning 只写入会话事件日志（resume 需要），**不进入对外发布的事件**。
@@ -306,6 +315,7 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       tool_calls: response.tool_calls,
       finish_reason: response.finish_reason,
       usage: response.usage,
+      ...(requestCost !== undefined ? { cost: requestCost } : {}),
     };
     ctx.events.emit(
       {

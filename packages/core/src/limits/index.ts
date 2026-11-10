@@ -10,6 +10,7 @@ export type {
   LimitWarning,
   TerminationPolicy,
   UsageLimits,
+  UsagePricing,
   UsageStats,
 } from '../types/limits.js';
 export {

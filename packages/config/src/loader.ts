@@ -95,6 +95,7 @@ function convertKeys(
  * - mcpServers 第一层：server 名
  * - mcpServers.<name>.env / .headers：环境变量 / HTTP 头名
  * - serve.tokens：token 原文
+ * - pricing.models：模型名（常含 `/`、`.`，不能按 snake_case 改写）
  */
 export function preserveConfigMapKeys(path: string[], _key: string): boolean {
   if (path[0] === 'mcpServers') {
@@ -102,6 +103,7 @@ export function preserveConfigMapKeys(path: string[], _key: string): boolean {
     return path.length === 3 && (path[2] === 'env' || path[2] === 'headers');
   }
   if (path[0] === 'serve' && path.length === 2 && path[1] === 'tokens') return true;
+  if (path[0] === 'pricing' && path.length === 2 && path[1] === 'models') return true;
   return false;
 }
 

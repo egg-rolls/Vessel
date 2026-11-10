@@ -139,6 +139,11 @@ export interface ExecutionUnitOptions {
   events: import('./event.js').EventStream;
   limits: import('./limits.js').UsageLimits;
   termination: import('./limits.js').TerminationPolicy;
+  /**
+   * opt-in 用量计价（0.51）。缺省不注入 → `totalCost` 保持 0；
+   * 注入后每次 provider 响应的 usage 按分项费率折算并累加。
+   */
+  pricing?: import('./limits.js').UsagePricing;
   plugins?: Plugin[];
   session?: import('./session.js').SessionStore;
   systemPrompt?: string; // 系统提示词

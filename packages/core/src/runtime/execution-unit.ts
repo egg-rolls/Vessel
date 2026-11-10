@@ -21,11 +21,23 @@ import {
   type WorkingContext,
 } from '../types/context.js';
 import type { ErrorEnvelope } from '../types/error.js';
-import type { EventStream, RunEvent, SessionEventLogPort, Unsubscribe } from '../types/event.js';
+import type {
+  EventStream,
+  RunEvent,
+  SessionEventLogPort,
+  SessionEventRecord,
+  Unsubscribe,
+} from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { HookType } from '../types/hook.js';
 import { LeaseExpiredError, type LeaseGrant, type LeaseServicePort } from '../types/lease.js';
-import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
+import type {
+  LimitChecker,
+  TerminationPolicy,
+  UsageLimits,
+  UsagePricing,
+  UsageStats,
+} from '../types/limits.js';
 import type { Logger } from '../types/logging.js';
 import type {
   ExecutionUnitOptions,
@@ -89,6 +101,31 @@ interface StoredHistory {
   sessionState: SessionState | null;
   /** 读到的会话事件条数；用于判定「会话是否存在（事件日志）」 */
   eventCount: number;
+  /**
+   * 最近一次 provider 请求的 `prompt_tokens + completion_tokens`。
+   * 来自已落盘的 `llm.response` 事实（per-request），不是 RunRecord 的累计 usage。
+   */
+  lastRequestTokens?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 从会话事件里取最近一次 `llm.response.usage` 的 per-request token 数。 */
+function lastRequestTokensFromEvents(events: readonly SessionEventRecord[]): number | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event === undefined || event.type !== 'llm.response') continue;
+    if (!isRecord(event.data)) continue;
+    const usage = event.data.usage;
+    if (!isRecord(usage)) continue;
+    const prompt = typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0;
+    const completion = typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0;
+    const total = prompt + completion;
+    if (total > 0) return total;
+  }
+  return undefined;
 }
 
 /** 新建一次 run 的 usage 统计 */
@@ -361,6 +398,8 @@ export class ExecutionUnit {
   private readonly eventLog?: SessionEventLogPort;
   /** 0.18：观察 harness 直接发布的交互事件（permission/ask response） */
   private readonly eventLogUnsubscribe?: Unsubscribe;
+  /** 0.51：opt-in 用量计价；缺省不注入 → `totalCost` 保持 0。 */
+  private readonly pricing?: UsagePricing;
   /** ADR-098 C2：注入的租约服务；缺省 no-op（行为等同现状） */
   private readonly leaseService?: LeaseServicePort;
   /** ADR-098 C2：ControlPlane 在 spawn 时授予的 BindingLease（EU 续租/释放；续租后更新） */
@@ -389,6 +428,7 @@ export class ExecutionUnit {
     this.boundAgentId = opts.agentId;
     this.includeReasoning = opts.includeReasoning === true;
     this.eventLog = opts.eventLog;
+    this.pricing = opts.pricing;
     this.leaseService = opts.leaseService;
     this.bindingLease = opts.bindingLease;
     this.logger =
@@ -950,11 +990,10 @@ export class ExecutionUnit {
     if (reuseLikeBaseline && this.lastRealTokens !== undefined) {
       execution.workingContext.updateRealTokens(this.lastRealTokens);
     } else {
-      // V4 / G4：新进程续接（或进程内窗口重建）时用最近一次 RunRecord 的
-      // usage 作为真实锚点。SessionState.legacy_run 是 latest RunRecord 的
-      // 派生镜像，已随 wake 读取，不新增字段也不额外 I/O。
-      // 注意：多请求 run 的 usage 是累计值，会偏高；单请求 run 精确。
-      this.seedRealTokensFromStoredRun(execution, stored);
+      // V4 / G4：新进程续接（或进程内窗口重建）时用最近一次 provider 请求的
+      // per-request usage 作为真实锚点（来自 `llm.response` 事件）。
+      // 不能用 RunRecord 的 usage：那是整轮累计，多请求 run 会线性放大。
+      this.seedRealTokensFromLastRequest(execution, history);
     }
 
     // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
@@ -1275,18 +1314,17 @@ export class ExecutionUnit {
   }
 
   /**
-   * V4 / G4：用最近一次 RunRecord 的 usage 恢复真实 token 锚点。
+   * V4 / G4：用最近一次 provider 请求的 per-request usage 恢复真实 token 锚点。
    *
-   * `SessionState.legacy_run` 是 latest RunRecord 的派生快照（见
-   * `finalizeSessionState`）；prompt+completion 即最后一次请求的输入与输出。
-   * 多请求 run 的 `usage` 是整轮累计，锚点会偏高；单请求 run 精确。
-   * 最后一次请求之后追加的消息由 `WorkingContext.add()` 的估算增量补齐。
+   * 取值来自已落盘的 `llm.response.usage`，**不是** RunRecord 的 `usage`：
+   * 后者是整轮累计（例如 53 轮 agentic run 可到 35M），拿它当上下文大小会让
+   * 每次新 run 都误判超预算、触发不必要的压缩，既丢历史又多一次摘要调用。
+   * 没有 provider usage 时保持无锚点，由 `WorkingContext` 的字符估算兜底。
    */
-  private seedRealTokensFromStoredRun(execution: Run, stored: SessionState | null): void {
-    const usage = stored?.legacy_run?.usage;
-    if (usage === undefined) return;
-    const total = (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
-    if (total > 0) execution.workingContext.updateRealTokens(total);
+  private seedRealTokensFromLastRequest(execution: Run, history: StoredHistory): void {
+    const total = history.lastRequestTokens;
+    if (total === undefined || total <= 0) return;
+    execution.workingContext.updateRealTokens(total);
   }
 
   /**
@@ -1364,6 +1402,7 @@ export class ExecutionUnit {
         throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
       }
       this.seedWorkingContext(execution, history);
+      this.seedRealTokensFromLastRequest(execution, history);
 
       const sessionState = this.createSessionState(
         sessionId,
@@ -1452,6 +1491,8 @@ export class ExecutionUnit {
   private createLoopContext(execution: Run, signal?: AbortSignal): LoopContext {
     return {
       execution,
+      model: this.model,
+      ...(this.pricing !== undefined ? { pricing: this.pricing } : {}),
       window: {
         addMessage: (m, id) => this.addContext(m, id),
         buildRequestMessages: (o) => this.buildRequestMessages(o, execution.workingContext),
@@ -2435,11 +2476,27 @@ export class ExecutionUnit {
       }
     }
 
+    // 上下文锚点只认最近一次请求的 per-request usage。增量里通常没有
+    // `llm.response`（它在上一次 run 结束时已随派生游标被覆盖），
+    // 此时补读一次全量日志；压缩 / 增量读已经不是全量时都需要。
+    let lastRequestTokens = lastRequestTokensFromEvents(events);
+    if (lastRequestTokens === undefined && this.eventLog && !needFullProjection) {
+      try {
+        lastRequestTokens = lastRequestTokensFromEvents(await this.eventLog.read(sessionId));
+      } catch (error) {
+        this.logger.warn('session event log usage probe failed', {
+          session_id: sessionId,
+          error: errorText(error),
+        });
+      }
+    }
+
     // 消息窗口实际覆盖到的游标：缓存游标与本次读到的最后事件 seq 的较大者。
     let cursor = typeof derived === 'number' ? derived : undefined;
     const lastReadSeq = events[events.length - 1]?.seq;
     if (typeof lastReadSeq === 'number') cursor = Math.max(cursor ?? lastReadSeq, lastReadSeq);
     const eventCount = events.length;
+    const usageField = lastRequestTokens !== undefined ? { lastRequestTokens } : {};
 
     if (cached !== undefined && !fullProjectionForReplacement) {
       const history = structuredClone(cached);
@@ -2452,6 +2509,7 @@ export class ExecutionUnit {
           ...(cursor !== undefined ? { cursor } : {}),
           sessionState,
           eventCount,
+          ...usageField,
         };
       }
       // 旧数据（无 derived）：全量投影可能与缓存重叠，按尾部重叠去重后追加。
@@ -2461,6 +2519,7 @@ export class ExecutionUnit {
         ...(cursor !== undefined ? { cursor } : {}),
         sessionState,
         eventCount,
+        ...usageField,
       };
     }
 
@@ -2472,15 +2531,16 @@ export class ExecutionUnit {
           ...(cursor !== undefined ? { cursor } : {}),
           sessionState,
           eventCount,
+          ...usageField,
         };
       }
     }
 
     // legacy 回退：旧 RunRecord.messages 优先，其次 SessionState 的历史缓存。
     if (record?.legacy_messages !== undefined && record.legacy_messages.length > 0) {
-      return { messages: record.legacy_messages, sessionState, eventCount };
+      return { messages: record.legacy_messages, sessionState, eventCount, ...usageField };
     }
-    return { messages: sessionState?.messages ?? [], sessionState, eventCount };
+    return { messages: sessionState?.messages ?? [], sessionState, eventCount, ...usageField };
   }
 
   /** 0.18：best-effort 索引更新；永不向外抛 */

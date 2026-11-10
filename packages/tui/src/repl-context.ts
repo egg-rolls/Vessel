@@ -86,7 +86,14 @@ export interface DurableRunsControl {
 export interface MetricsSnapshotLike {
   runs: { started: number; completed: number; failed: number; cancelled: number };
   tool_calls: { total: number; failed: number };
-  llm: { requests: number; prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  llm: {
+    requests: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    /** 0.51：opt-in 计价累计；缺省 = 未配置 pricing。 */
+    total_cost?: number;
+  };
   duration_ms: { total: number; max: number; avg: number };
   updated_at: number;
 }

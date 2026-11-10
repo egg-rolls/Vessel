@@ -20,6 +20,8 @@ export interface MetricsSnapshot {
     cache_read_tokens?: number;
     /** 缓存写入累计；缺省语义同 `cache_read_tokens` */
     cache_creation_tokens?: number;
+    /** opt-in 计价累计（0.51）；缺省 = 未配置 pricing。 */
+    total_cost?: number;
   };
   duration_ms: { total: number; max: number; avg: number };
   updated_at: number;
@@ -53,6 +55,11 @@ function toOptionalCount(value: unknown): number | undefined {
     : undefined;
 }
 
+/** 可选数值（成本是小数，不能 floor）；缺失 / 非法 → undefined。 */
+function toOptionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 /** 归一化 provider 返回值：缺字段按 0，非法条目丢弃，绝不抛给调用方。 */
 export function normalizeMetricsSnapshot(input: unknown): MetricsSnapshot {
   const root = isRecord(input) ? input : {};
@@ -62,6 +69,7 @@ export function normalizeMetricsSnapshot(input: unknown): MetricsSnapshot {
   const duration = isRecord(root.duration_ms) ? root.duration_ms : {};
   const cacheRead = toOptionalCount(llm.cache_read_tokens);
   const cacheCreation = toOptionalCount(llm.cache_creation_tokens);
+  const totalCost = toOptionalNumber(llm.total_cost);
   return {
     runs: {
       started: toCount(runs.started),
@@ -81,6 +89,7 @@ export function normalizeMetricsSnapshot(input: unknown): MetricsSnapshot {
       // 缺省即省略：wire 上不出现 0，调用方能区分「无数据」与「数据为 0」。
       ...(cacheRead !== undefined ? { cache_read_tokens: cacheRead } : {}),
       ...(cacheCreation !== undefined ? { cache_creation_tokens: cacheCreation } : {}),
+      ...(totalCost !== undefined ? { total_cost: totalCost } : {}),
     },
     duration_ms: {
       total: toNumber(duration.total),

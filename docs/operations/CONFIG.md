@@ -213,14 +213,25 @@ termination:
   # 默认不限制；以下均为显式 opt-in，配置后才生效
   # max_iterations: 50            # 迭代上限
   # max_runtime_seconds: 600      # 单 run 墙钟秒数上限（等待用户授权的时间不计入）
+pricing:
+  # 0.51：opt-in 模型价格表；不配置时 total_cost 恒为 0
+  # 以下数值只是示例，请按你自己的账单 / 合同填写
+  models:
+    volcengine/deepseek-flash:   # 必须与 provider.model 精确一致
+      input_per_million: 0.27    # 非缓存输入，计价货币 / 1M token
+      output_per_million: 1.10
+      cache_read_per_million: 0.027   # 缺省 = input_per_million；建议显式配置
+      cache_write_per_million: 0.3375 # 缺省 = input_per_million；建议显式配置
 ```
+
+- **`pricing.models.<model>`**（0.51，opt-in）：按 `provider.model` 精确匹配。每次 provider 响应按四项费率分别计价并累加到 `stats.totalCost`；`cache_read_per_million` / `cache_write_per_million` 缺省回落到 `input_per_million`（不猜厂商倍率，建议显式配置）。没有配置 / 模型未命中时 `total_cost` 保持 0。Vessel 不内置任何厂商价格，也不做汇率换算。
 
 - **默认值**：`limits` 与 `termination` 全部缺省，即不设单 run 累计上限；长任务靠自动压缩、模型自然停止与用户中断收口。`request_limit` / `input_tokens_limit` / `output_tokens_limit` / `total_cost_limit` / `max_iterations` / `max_runtime_seconds` 都是显式 opt-in，未配置时对应判定跳过。
 - **判定**：每轮先判终止策略（`max_iterations` / `max_runtime_seconds`），再判使用量限额；两者都按 `current >= max` 判定、首个命中生效，未配置的 key 跳过。使用量限额的检查顺序固定 request → input tokens → output tokens → total cost；终止策略先 `max_iterations`、后 `max_runtime`。同时配置 `max_iterations` 与 `request_limit` 时，两者谁先命中取决于各自取值。
 - **命中行为**：`request_limit` / token / cost 与 `max_iterations` / `max_runtime` 命中时发布一次 `limit.blocked`（`error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`；`run.failed` 保留原 `error` 文本，附同一结构化的 `details`。`source` 是对应的 camelCase 配置路径（如 `limits.inputTokensLimit` / `termination.maxIterations`）；错误文本前缀分别为 `Usage limits exceeded: ...` 与 `Termination policy triggered: ...`。`max_runtime` 的 `current` 是已运行秒数（毫秒精度小数）。
 - **`tool_calls_limit` 已移除（0.31）**：不再有工具调用次数预算；旧配置里的该键被忽略、不报错。显式配置 `max_iterations` / `max_runtime_seconds` 时仍由它们兜底。
-- **成本**：core 不为内置 provider 计价，`total_cost` 默认为 0；`total_cost_limit` 只在宿主显式调用 `LimitChecker.addCost()` 后才有意义。
-- **不新增配置键**：以上键均已存在，项目 / 用户层可直接覆盖 `limits` / `termination`。`LimitBlock.key` 固定为四个使用量 key 加 `max_iterations` / `max_runtime`。
+- **成本**：core 不内置价格；配置 `pricing.models.<provider.model>` 后，每次请求按 fresh input / cache read / cache write / output 分项计价并累加，`total_cost_limit` 才生效。没有 price 表时 `total_cost` 恒为 0，命中判定跳过。只用 `input_tokens_limit` 做成本代理会在缓存命中高的长 run 上严重误判（`prompt_tokens` 含缓存，且会随轮次累加），成本请用 `total_cost_limit`。
+- **不新增配置键**：除 0.51 的 `pricing` 外，以上键均已存在，项目 / 用户层可直接覆盖 `limits` / `termination`。`LimitBlock.key` 固定为四个使用量 key 加 `max_iterations` / `max_runtime`。
 
 ### 2.9 上下文压缩行为（0.14.4，ADR-085）
 

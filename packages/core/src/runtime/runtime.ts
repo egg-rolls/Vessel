@@ -14,7 +14,7 @@ import { noopLogger } from '../logging.js';
 import type { ContextSummarizer, WorkingContext } from '../types/context.js';
 import type { EventStream, SessionEventLogPort } from '../types/event.js';
 import type { LeaseGrant, LeaseServicePort } from '../types/lease.js';
-import type { TerminationPolicy, UsageLimits } from '../types/limits.js';
+import type { TerminationPolicy, UsageLimits, UsagePricing } from '../types/limits.js';
 import type { Logger } from '../types/logging.js';
 import type {
   ExecutionUnitOptions,
@@ -38,6 +38,8 @@ export interface TenantRuntimeProfile {
   pluginHostFactory?: () => PluginHost;
   limits?: UsageLimits;
   termination?: TerminationPolicy;
+  /** opt-in 用量计价（按模型查表）；缺省不累计 `totalCost`。 */
+  pricing?: UsagePricing;
   includeReasoning?: boolean;
   context: {
     maxTokens?: number;
@@ -205,6 +207,7 @@ export class Runtime {
       limits: req.limits ?? profile.limits ?? {},
       // 缺省不设累计上限：交互 run 靠自动压缩 / 模型自然停止 / 用户中断收口。
       termination: req.termination ?? profile.termination ?? {},
+      ...(profile.pricing !== undefined ? { pricing: profile.pricing } : {}),
       plugins: req.plugins !== undefined ? [...req.plugins] : [...profile.plugins],
       journalFactory: profile.journalFactory,
       logger: req.logger ?? this.logger,

@@ -20,11 +20,16 @@ function formatDuration(ms: number): string {
   return `${minutes}m${seconds}s`;
 }
 
-/** 纯函数：/cost 报告（无价格） */
+/** 纯函数：/cost 报告（有 pricing 配置时显示金额） */
 export function formatCostReport(snapshot: MetricsSnapshotLike): string {
+  const cost = snapshot.llm.total_cost;
+  const costLine =
+    cost !== undefined
+      ? `Cost: ${cost} (configured pricing)`
+      : 'Cost: pricing not configured (Vessel does not bundle model prices).';
   return [
     '',
-    'Cost: pricing not configured (Vessel does not bundle model prices).',
+    costLine,
     `Tokens: ${snapshot.llm.prompt_tokens} prompt + ${snapshot.llm.completion_tokens} completion = ${snapshot.llm.total_tokens} total`,
     `LLM requests: ${snapshot.llm.requests}`,
     `Duration: total ${formatDuration(snapshot.duration_ms.total)} · avg ${formatDuration(snapshot.duration_ms.avg)} · max ${formatDuration(snapshot.duration_ms.max)}`,

@@ -18,6 +18,7 @@ import type {
   GatewayConfig,
   HubConfig,
   ObservabilityConfig,
+  PricingConfig,
   ServeConfig,
   TeamConfigInput,
   TerminationConfig,
@@ -80,6 +81,64 @@ function validateLimits(
         message: `${label} must be a non-negative number`,
         value,
       });
+    }
+  }
+}
+
+/** pricing.models.<model> 的已知键（0.51） */
+const PRICING_MODEL_KEYS = [
+  'inputPerMillion',
+  'outputPerMillion',
+  'cacheReadPerMillion',
+  'cacheWritePerMillion',
+] as const;
+
+/** 校验 pricing 块（0.51：opt-in 模型价格表，单位 = 计价货币 / 百万 token） */
+function validatePricing(pricing: PricingConfig, errors: ConfigValidationError[]): void {
+  if (!isPlainObject(pricing.models)) {
+    errors.push({
+      path: 'pricing.models',
+      message: 'pricing.models must be an object keyed by provider.model',
+      value: pricing.models,
+    });
+    return;
+  }
+  for (const [model, raw] of Object.entries(pricing.models)) {
+    const prefix = `pricing.models.${model}`;
+    if (model.trim() === '') {
+      errors.push({ path: prefix, message: 'Model key must be a non-empty string' });
+      continue;
+    }
+    if (!isPlainObject(raw)) {
+      errors.push({ path: prefix, message: 'Model price must be an object', value: raw });
+      continue;
+    }
+    const required: Array<[string, string]> = [
+      ['inputPerMillion', 'Input price'],
+      ['outputPerMillion', 'Output price'],
+    ];
+    for (const [key, label] of required) {
+      const value = raw[key];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        errors.push({
+          path: `${prefix}.${key}`,
+          message: `${label} must be a non-negative number (per 1M tokens)`,
+          value,
+        });
+      }
+    }
+    for (const key of ['cacheReadPerMillion', 'cacheWritePerMillion'] as const) {
+      const value = raw[key];
+      if (
+        value !== undefined &&
+        (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+      ) {
+        errors.push({
+          path: `${prefix}.${key}`,
+          message: 'Cache price must be a non-negative number (per 1M tokens)',
+          value,
+        });
+      }
     }
   }
 }
@@ -2065,6 +2124,23 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     validateLimits('limits', config.limits, errors);
   }
 
+  // 校验 pricing（0.51；opt-in 模型价格表）
+  if (config.pricing) {
+    validatePricing(config.pricing, errors);
+  }
+  if (config.limits?.totalCostLimit !== undefined) {
+    const model = config.provider?.model;
+    const priced = model !== undefined && config.pricing?.models?.[model] !== undefined;
+    if (!priced) {
+      warnings.push({
+        path: 'limits.totalCostLimit',
+        message:
+          'totalCostLimit has no effect without pricing.models.<provider.model>; ' +
+          'configure a per-model price table to accumulate total_cost.',
+      });
+    }
+  }
+
   // 校验 termination
   if (config.termination) {
     validateTermination('termination', config.termination, errors);
@@ -2562,6 +2638,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'inboxMaxMessages',
   ],
   session: ['backend', 'storagePath', 'maxHistory'],
+  pricing: ['models'],
   permission: ['autoApprove', 'neverAutoApprove'],
   update: ['autoCheck', 'channel', 'source'],
   host: ['nodeId', 'nodeName'],
@@ -2696,6 +2773,18 @@ export function findUnknownNestedKeys(config: Record<string, unknown>): UnknownN
     }
   }
 
+  const pricingModels = isPlainObject(config.pricing) ? config.pricing.models : undefined;
+  if (isPlainObject(pricingModels)) {
+    for (const [model, price] of Object.entries(pricingModels)) {
+      if (!isPlainObject(price)) continue;
+      for (const key of Object.keys(price)) {
+        if (!(PRICING_MODEL_KEYS as readonly string[]).includes(key)) {
+          unknown.push({ path: `pricing.models.${model}.${key}`, key, block: 'pricing.models' });
+        }
+      }
+    }
+  }
+
   return unknown;
 }
 
@@ -2711,6 +2800,7 @@ export const KNOWN_CONFIG_KEYS = [
   'hooks',
   'limits',
   'termination',
+  'pricing',
   'session',
   'context',
   'permission',

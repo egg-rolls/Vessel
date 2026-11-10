@@ -286,6 +286,8 @@ export async function compactMessagesForSeed(
 
 export class MemoryWorkingContext implements WorkingContext {
   private sessionMessages: Map<string, Message[]> = new Map();
+  /** 估算 token 增量缓存（按 session）：避免 `tokenCount` 每次重扫整段历史。 */
+  private estimatedTokens: Map<string, number> = new Map();
   private currentSessionId = 'default';
   private config: ContextConfig;
   private realTokens = 0;
@@ -337,8 +339,14 @@ export class MemoryWorkingContext implements WorkingContext {
     // 真实锚点 + 尾部增量：realTokens 来自上一次 provider 响应的真实用量；
     // 响应之后新增的消息（本轮追加、工具结果）用估算补齐，下一次响应再校正。
     // 必须在同步压缩之前累加——压缩会按现有逻辑把 realTokens 归零。
+    // 估算缓存同时累加：没有真实锚点时 `tokenCount` 直接读它，避免 O(n²) 重扫。
+    const delta = estimateMessageTokens(msg);
+    this.estimatedTokens.set(
+      this.currentSessionId,
+      (this.estimatedTokens.get(this.currentSessionId) ?? 0) + delta,
+    );
     if (this.realTokens > 0) {
-      this.realTokens += estimateMessageTokens(msg);
+      this.realTokens += delta;
     }
 
     // 配置真实 summarizer 时不在 add() 里同步压缩（不能 await）：
@@ -366,10 +374,14 @@ export class MemoryWorkingContext implements WorkingContext {
   /**
    * Token 数：优先用真实锚点（上一次 provider 响应 + 其后新增消息的估算增量），
    * 没有任何真实值时才用统一估算重扫全部消息（content / tool_calls / reasoning）。
+   *
+   * 无真实锚点时读 `estimatedTokens` 增量缓存：历史播种 / 逐条重放会对每条
+   * 消息取一次 `tokenCount`，重扫整段历史会退化成 O(n²) 并阻塞事件循环
+   * （长会话下一次 run 可卡住数十秒，租约因此过期）。
    */
   get tokenCount(): number {
     if (this.realTokens > 0) return this.realTokens;
-    return estimateMessagesTokens(this.sessionMessages.get(this.currentSessionId) || []);
+    return this.estimatedTokens.get(this.currentSessionId) ?? 0;
   }
 
   /** 0.15：上下文 token 预算上限（快照 context_max 使用） */
@@ -475,17 +487,20 @@ export class MemoryWorkingContext implements WorkingContext {
 
   clear(): void {
     this.sessionMessages.set(this.currentSessionId, []);
+    this.estimatedTokens.set(this.currentSessionId, 0);
     this.realTokens = 0;
   }
 
   clearSession(sessionId: string): void {
     this.sessionMessages.set(sessionId, []);
+    this.estimatedTokens.set(sessionId, 0);
     // 清空当前会话后旧锚点已不代表其内容，必须归零；其他会话的锚点不受影响。
     if (sessionId === this.currentSessionId) this.realTokens = 0;
   }
 
   deleteSession(sessionId: string): void {
     this.sessionMessages.delete(sessionId);
+    this.estimatedTokens.delete(sessionId);
   }
 
   getSessionIds(): string[] {
@@ -523,10 +538,16 @@ export class MemoryWorkingContext implements WorkingContext {
    * @returns 本次被替换为占位的 tool_call_id（按消息顺序）
    */
   private clearOldToolResults(sessionId: string): string[] {
-    return clearOldToolResultsIn(
+    const cleared = clearOldToolResultsIn(
       this.sessionMessages.get(sessionId) ?? [],
       this.config.maxTokens ?? 1_000_000,
     );
+    // 内容被原地替换，增量缓存失效；这里重算一次，压缩是低频路径。
+    this.estimatedTokens.set(
+      sessionId,
+      estimateMessagesTokens(this.sessionMessages.get(sessionId) ?? []),
+    );
+    return cleared;
   }
 
   /** 记录一次成功压缩（C2）：单调 id 供 runtime 判重，不持久化。 */
@@ -550,6 +571,8 @@ export class MemoryWorkingContext implements WorkingContext {
     const current = this.sessionMessages.get(plan.sessionId) ?? [];
     const next = applyCompactionToMessages(current, plan.toSummarize, summaryText);
     this.sessionMessages.set(plan.sessionId, next);
+    // 移除 / 替换了消息：重建该会话的估算缓存。
+    this.estimatedTokens.set(plan.sessionId, estimateMessagesTokens(next));
     this.config.onCompact?.(plan.toSummarize.length, next.length);
   }
 
