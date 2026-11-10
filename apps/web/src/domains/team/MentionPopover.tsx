@@ -30,7 +30,7 @@ export function MentionPopover({
         {t('team.mention.title')}
       </p>
       <div
-        className="max-h-60 overflow-y-auto px-1 pb-1"
+        className="team-mention-list overflow-y-auto px-1 pb-1"
         id={listId}
         role="listbox"
         aria-label={t('team.a11y.mentionList')}

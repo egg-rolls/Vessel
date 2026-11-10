@@ -101,6 +101,13 @@
   background: var(--bg);
 }
 
+/* `@` 补全列表：弹层在文档流里（不浮层），桌面 15rem 足够；
+   矮窗口 / 多行草稿时按视口收缩 —— 否则弹层会把 textarea 和发送键顶出可视区，
+   而外层路由容器是 overflow:hidden，滚也滚不回来。 */
+.team-mention-list {
+  max-height: var(--team-mention-list-max-h);
+}
+
 /* ── Team 输入框：0.45 起不再显示 ocean-green 焦点环 ────
    卡片与 textarea 的 focus-within / focus-visible 环都去掉；
    其它区域（按钮、列表行等）的焦点态保持不变。 */

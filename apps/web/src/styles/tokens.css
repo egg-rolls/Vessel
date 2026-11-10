@@ -124,6 +124,8 @@
   --transcript-min-h: 120px;
   --bottom-nav-h: 0px;
   --composer-input-max-h: min(34dvh, 200px);
+  /* `@` 补全列表：桌面 15rem；矮窗口按视口收缩，避免把输入框 / 发送键顶出可视区。 */
+  --team-mention-list-max-h: min(15rem, 26dvh);
   --dock-max-h: min(
     56dvh,
     520px,
