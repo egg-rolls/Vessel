@@ -344,6 +344,14 @@ export interface AgentControlLike {
   /** 批量 dispatch；条目并行，结果与输入同序。 */
   dispatch(inputs: AgentDispatchLikeInput[]): Promise<AgentDispatchBatchResultLike>;
   /**
+   * 只读 inbox 视图（`agents.inbox`）。**不改状态**：不消费、不 hold / unhold。
+   * `messageIds` 非空时才带 `text`（点某条 peek 正文用），RPC 层限制一次 ≤10 条。
+   */
+  inbox?(
+    agentId: string,
+    options?: AgentInboxLikeOptions,
+  ): AgentInboxLikeResult | Promise<AgentInboxLikeResult>;
+  /**
    * `sessions.create`（CREATE-0.39）：同 agent 新 session，成为唯一 primary。
    * 失败以 AgentError 形状（`code` + `message`）reject，RPC 层统一映射。
    */
@@ -357,4 +365,30 @@ export interface AgentControlLike {
    * 前执行；未注入 = git restore 不可用。
    */
   restoreFiles?(input: SessionRestoreFilesLikeInput): Promise<SessionRestoreFilesLikeResult>;
+}
+
+/** `agents.inbox` 入参（只读）。 */
+export interface AgentInboxLikeOptions {
+  /** 缺省 true：连「已排进队列、尚未成为 run input」的 held 一起列出。 */
+  includeHeld?: boolean;
+  /** 只读正文的 id 列表（≤10）；非空时结果条目带 `text`。 */
+  messageIds?: readonly string[];
+}
+
+/** `agents.inbox` 结果条目。 */
+export interface AgentInboxLikeEntry {
+  message_id: string;
+  from: string;
+  summary: string;
+  status: 'unread' | 'held';
+  ts: number;
+  /** 仅当请求带 `messageIds` 且命中时存在。 */
+  text?: string;
+}
+
+/** `agents.inbox` 结果。 */
+export interface AgentInboxLikeResult {
+  unread: number;
+  pending: number;
+  entries: AgentInboxLikeEntry[];
 }

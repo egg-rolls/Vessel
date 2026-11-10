@@ -1111,6 +1111,27 @@ export interface AgentService {
   /** 某 agent 的 live ExecutionUnit 状态（primary 优先） */
   bodies(agentId: string): Promise<ExecutionUnitStatus[]>;
   /**
+   * 只读 inbox 快照（`agents.inbox` RPC 的唯一数据源）。
+   *
+   * 只调 `list()` / `findByIds()`：不 markConsumed、不 hold / unhold、不改持久字段。
+   * `messageIds` 非空时才带 `text`（上限由 RPC 层把关）。
+   */
+  inboxSnapshot(
+    agentId: string,
+    options?: { includeHeld?: boolean; messageIds?: readonly string[] },
+  ): {
+    unread: number;
+    pending: number;
+    entries: {
+      message_id: string;
+      from: string;
+      summary: string;
+      status: 'unread' | 'held';
+      ts: number;
+      text?: string;
+    }[];
+  };
+  /**
    * 更新名字 / model / systemPrompt；名字立即生效且保持同 Team（unbound 为 tenant）
    * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 ExecutionUnit。
    */

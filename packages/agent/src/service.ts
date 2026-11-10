@@ -2511,6 +2511,51 @@ export class AgentServiceImpl implements AgentService {
    * 不另造队列。`run_not_found` / `agent_not_found` / `member_execution_not_found`
    * 是稳定错误码。
    */
+  /**
+   * 只读 inbox 视图（`agents.inbox` RPC 的唯一数据源）。
+   *
+   * **只读**：只调用 `list()` / `findByIds()`，不 markConsumed、不 hold / unhold、
+   * 不改任何持久字段与文件格式 —— 返回正文只是把已落盘的 `text` 读出来看一眼。
+   * `messageIds` 非空时才带 `text`（最多 10 条，越界由 RPC 层拒绝）。
+   */
+  inboxSnapshot(
+    agentId: string,
+    options: { includeHeld?: boolean; messageIds?: readonly string[] } = {},
+  ): {
+    unread: number;
+    pending: number;
+    entries: {
+      message_id: string;
+      from: string;
+      summary: string;
+      status: 'unread' | 'held';
+      ts: number;
+      text?: string;
+    }[];
+  } {
+    const store = this.inbox;
+    if (store === undefined) return { unread: 0, pending: 0, entries: [] };
+    // includeHeld 固定 true：条带要看到「已排进队列、尚未成为 run input」的那些。
+    const listed = store.list(agentId, { includeHeld: options.includeHeld ?? true });
+    const wanted = options.messageIds;
+    // 只有显式点名才读正文；`findByIds` 不做 status/hold 过滤、也不改状态。
+    const bodies =
+      wanted !== undefined && wanted.length > 0 ? store.findByIds(agentId, wanted) : [];
+    const bodyById = new Map(bodies.map((entry) => [entry.id, entry.text]));
+    const entries = listed.messages.map((entry) => {
+      const text = bodyById.get(entry.id);
+      return {
+        message_id: entry.id,
+        from: entry.source,
+        summary: entry.summary,
+        status: entry.held ? ('held' as const) : ('unread' as const),
+        ts: entry.ts,
+        ...(text !== undefined ? { text } : {}),
+      };
+    });
+    return { unread: listed.unread, pending: listed.pending, entries };
+  }
+
   async resumeRun(runId: string, opts?: RunOptions): Promise<string> {
     await this.ready;
     if (this.runStore === undefined) {

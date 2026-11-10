@@ -21,6 +21,8 @@ import {
   type AgentDispatchBatchResultLike,
   type AgentDispatchItemLike,
   type AgentDispatchLikeInput,
+  type AgentInboxLikeOptions,
+  type AgentInboxLikeResult,
   type AgentLifecycleBatchResultLike,
   type AgentLifecycleFailLike,
   type AgentLifecycleItemLike,
@@ -286,6 +288,10 @@ export function createAgentControl(
           };
         }),
       };
+    },
+    inbox(agentId: string, options?: AgentInboxLikeOptions): AgentInboxLikeResult {
+      // 只读：直接转发 service 的只读快照（不消费、不改状态）。
+      return service.inboxSnapshot(agentId, options ?? {});
     },
     async dispatch(inputs: AgentDispatchLikeInput[]): Promise<AgentDispatchBatchResultLike> {
       const settledResults = await Promise.allSettled(

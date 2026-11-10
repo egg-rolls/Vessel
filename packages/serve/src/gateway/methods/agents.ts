@@ -672,6 +672,68 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
       },
     },
     {
+      name: 'agents.inbox',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['agent_id'],
+        properties: {
+          agent_id: { type: 'string', minLength: 1 },
+          include_held: { type: 'boolean' },
+          // 只读正文（点某条 peek）：一次最多 10 条，越界 invalid_params。
+          message_ids: { type: 'array', items: { type: 'string', minLength: 1 }, maxItems: 10 },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['entries', 'unread', 'pending'],
+        properties: {
+          unread: { type: 'number' },
+          pending: { type: 'number' },
+          entries: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['message_id', 'from', 'summary', 'status', 'ts'],
+              properties: {
+                message_id: { type: 'string' },
+                from: { type: 'string' },
+                summary: { type: 'string' },
+                status: { type: 'string', enum: ['unread', 'held'] },
+                ts: { type: 'number' },
+                text: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      handler: async (params, ctx) => {
+        const agentId = stringParam(params, 'agent_id');
+        // 可见性口径与 agents.list / agents.get 完全一致（visibleAgents）。
+        const agents = await visibleAgents(deps, ctx);
+        if (!agents.some((entry) => entry.id === agentId)) {
+          throw new RpcError('not_found', `agent not found: ${agentId}`, { agent_id: agentId });
+        }
+        const messageIds = Array.isArray(params.message_ids)
+          ? params.message_ids.filter((id): id is string => typeof id === 'string')
+          : undefined;
+        if (messageIds !== undefined && messageIds.length > 10) {
+          throw new RpcError('invalid_params', 'message_ids accepts at most 10 ids', {
+            count: messageIds.length,
+          });
+        }
+        const control = requireAgentControl(deps.agent);
+        if (control.inbox === undefined) {
+          throw new RpcError('not_supported', 'agent control does not expose inbox');
+        }
+        const snapshot = await control.inbox(agentId, {
+          includeHeld: params.include_held !== false,
+          ...(messageIds !== undefined && messageIds.length > 0 ? { messageIds } : {}),
+        });
+        return snapshot;
+      },
+    },
+    {
       name: 'agents.tree',
       permission: 'read',
       params_schema: {

@@ -8,6 +8,9 @@ import { unwrapAgentResult } from '../agent-result';
 import type {
   AgentBatchResponse,
   AgentCreateInput,
+  AgentInboxResponse,
+  AgentSendEntry,
+  AgentSendResponse,
   AgentSummary,
   AgentsTreeResponse,
   AgentUpdateInput,
@@ -25,6 +28,32 @@ export abstract class AgentsClient extends RunsClient {
   async listAgents(): Promise<AgentSummary[]> {
     const body = await this.rpc<{ agents?: AgentSummary[] }>('agents.list', {});
     return Array.isArray(body?.agents) ? body.agents : [];
+  }
+
+  /**
+   * 只读 inbox 视图（0.52 待处理条带）。`messageIds` 非空时结果带 `text`
+   * （一次 ≤10 条；服务端不改任何状态）。
+   */
+  inbox(params: {
+    agent_id: string;
+    include_held?: boolean;
+    message_ids?: string[];
+  }): Promise<AgentInboxResponse> {
+    return this.rpc<AgentInboxResponse>('agents.inbox', params);
+  }
+
+  /**
+   * 置顶：把既有 inbox 消息按 urgent 重投（`message_id` + `interrupt`）。
+   *
+   * 语义是「打断当前 run 并把这条排到队首」——服务端 `sendInterrupt` 会取消该 body
+   * 的 active / queued run 后按「这条 → 旧队列」重排。失败 code 由调用方映射文案。
+   */
+  async pinInboxMessage(agentId: string, messageId: string): Promise<AgentSendEntry> {
+    const body = await this.rpc<AgentSendResponse>('agents.send', {
+      messages: [{ to: agentId, message_id: messageId, interrupt: true }],
+    });
+    const entry = body?.results?.[0];
+    return entry ?? { ok: false, code: 'internal', error: 'empty result' };
   }
 
   // ── Agent CRUD（0.25；canonical `agents.create|update|close`）──

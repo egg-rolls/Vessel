@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RAIL_MAX_WIDTH } from '../../app/layout';
 import type { Route } from '../../app/router';
 import { useDrawerA11y } from '../../app/useDrawerA11y';
@@ -20,6 +20,7 @@ import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { errorMessage } from './errors';
+import { PendingStrip } from './PendingStrip';
 import { SessionRail } from './SessionRail';
 import { TranscriptWindow } from './TranscriptWindow';
 import { useChatSessions } from './useChatSessions';
@@ -206,6 +207,29 @@ export function ChatView({
         title: sessionsApi.selectedSession ? sessionTitle(sessionsApi.selectedSession) : selectedId,
       })
     : t('chat.target.new');
+
+  // 待处理条带按 agent 维度取 inbox：用会话里最小的 depth 节点（与上下文用量同口径）。
+  const stripAgentId = useMemo(() => {
+    if (!selectedId) return null;
+    const nodes = transcriptApi.sessionAgents;
+    const main = [...nodes].sort((a, b) => a.depth - b.depth)[0];
+    return main?.id ?? selectedId;
+  }, [selectedId, transcriptApi.sessionAgents]);
+
+  // 事件驱动失效：agent.message.* / run.started 出现次数变化时重取（不加轮询）。
+  const stripRefreshKey = useMemo(
+    () =>
+      snapshot.entries.reduce((count, entry) => {
+        const type = entry.event.type;
+        return type === 'agent.message.queued' ||
+          type === 'agent.message.notified' ||
+          type === 'agent.message.sent' ||
+          type === 'run.started'
+          ? count + 1
+          : count;
+      }, 0),
+    [snapshot.entries],
+  );
 
   const runningGroup = transcriptApi.runningGroup;
   const stopHandler =
@@ -398,6 +422,13 @@ export function ChatView({
             onRetryMessage={handleRetryMessage}
           />
         </div>
+
+        <PendingStrip
+          client={client}
+          agentId={stripAgentId}
+          enabled={connected && selectedId !== null}
+          refreshKey={stripRefreshKey}
+        />
 
         <ComposerSlot
           pendingItem={transcriptApi.pendingItem}

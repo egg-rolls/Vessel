@@ -10,6 +10,7 @@
  * 退出码：0 = 全过；1 = 有 FAIL。
  */
 
+import { pendingStripView } from '../apps/web/src/domains/chat/pending-strip';
 import {
   buildTranscriptItems,
   type TranscriptItem,
@@ -272,6 +273,24 @@ const FIXTURES: readonly Fixture[] = [
         queued: [],
       });
       return count(items, 'message') === 1 && count(items, 'tool') === 1;
+    },
+  },
+  {
+    name: 'F15 待处理条带：held 在前（ts 升序），其余按 ts 升序，只预览 3 条',
+    why: '条带只做稳定排序 + 折叠，不做假拖拽；held（已排队）必须排在未读之前',
+    check: () => {
+      const view = pendingStripView([
+        { message_id: 'c', from: 'a', summary: 's3', status: 'unread', ts: 300 },
+        { message_id: 'b', from: 'a', summary: 's2', status: 'held', ts: 200 },
+        { message_id: 'a', from: 'a', summary: 's1', status: 'held', ts: 100 },
+        { message_id: 'd', from: 'a', summary: 's4', status: 'unread', ts: 400 },
+      ]);
+      return (
+        view.total === 4 &&
+        view.preview.length === 3 &&
+        view.hidden === 1 &&
+        view.ordered.map((entry) => entry.message_id).join(',') === 'a,b,c,d'
+      );
     },
   },
   {

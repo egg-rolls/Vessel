@@ -119,3 +119,34 @@ export type AgentBatchEntry = AgentBatchSuccess | AgentBatchFailure;
 export interface AgentBatchResponse {
   results?: AgentBatchEntry[];
 }
+
+/** `agents.inbox` 一条只读条目（0.52 待处理条带）。 */
+export interface AgentInboxEntry {
+  message_id: string;
+  from: string;
+  summary: string;
+  status: 'unread' | 'held';
+  ts: number;
+  /** 仅当请求带 `message_ids` 且命中时存在（peek 正文，不改状态）。 */
+  text?: string;
+}
+
+export interface AgentInboxResponse {
+  unread: number;
+  pending: number;
+  entries: AgentInboxEntry[];
+}
+
+/** `agents.send` 的单条结果（置顶复用 message_id + interrupt）。 */
+export interface AgentSendEntry {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  message_id?: string;
+  queued?: boolean;
+  state?: string;
+}
+
+export interface AgentSendResponse {
+  results?: AgentSendEntry[];
+}
