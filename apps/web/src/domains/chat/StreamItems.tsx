@@ -9,6 +9,7 @@ import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
+import { filterTimelineItems } from './chat-visibility';
 import { EventRow, NoticeRow } from './EventRow';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
@@ -195,18 +196,15 @@ export const RunItems = memo(function RunItems({
     .trim();
   const outputAlreadyShown = group.output !== undefined && inlineText.includes(group.output.trim());
   const completedOutput = group.status === 'completed' ? group.output : undefined;
-  const renderItems = useMemo(() => {
-    const items = foldToolItems(group.items);
-    if (verbosity !== 'minimal') return items;
-    // minimal：只保留正文、上下文 notice、失败工具与非工具事件（失败永不静默）。
-    return items.filter(
-      (item) =>
-        item.kind === 'text' ||
-        item.kind === 'notice' ||
-        item.kind === 'event' ||
-        (item.kind === 'tool' && item.status === 'error'),
-    );
-  }, [group.items, verbosity]);
+  // 可见性判定只在 chat-visibility.ts 一处（history 侧共用同一规则），见该模块头注释。
+  const renderItems = useMemo(
+    () =>
+      filterTimelineItems(foldToolItems(group.items), {
+        verbosity,
+        running: group.status === 'running',
+      }),
+    [group.items, verbosity, group.status],
+  );
   // 只有最后一个思考块可能仍在流式输出；更早的块已经结束。
   const lastReasoningKey = useMemo(() => {
     for (let index = renderItems.length - 1; index >= 0; index -= 1) {

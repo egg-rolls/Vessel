@@ -5,7 +5,9 @@ import { formatClock, localDayKey, localDayLabel } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
+import type { Verbosity } from '../../state/visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
+import { historyToolVisible } from './chat-visibility';
 import {
   orderTimelineEntries,
   type TimelineEntry,
@@ -30,10 +32,25 @@ function MessageTime({ message, block = false }: { message: Message; block?: boo
   );
 }
 
+/**
+ * 这条历史消息是否会产生任何输出。
+ *
+ * 与  内部的分支共用同一判定：隐藏的条目既不该渲染，
+ * 也不该产生一个空的日分组头（工具消息在 minimal 下就是这种情况）。
+ */
+function messageRenders(message: Message, verbosity: Verbosity): boolean {
+  if (message.role === 'system') return false;
+  // 落盘的 tool 消息不带状态，按 done 处理（失败信息由失败 run 的 notice 承担）。
+  // 与 live 共用 historyToolVisible：不能「运行中藏、落盘后冒出来」。
+  if (message.role === 'tool') return historyToolVisible('done', verbosity);
+  return true;
+}
+
 function TranscriptMessage({
   message,
   messageIndex,
   previousUser,
+  verbosity,
   onCopy,
   onEdit,
   onRetry,
@@ -43,11 +60,13 @@ function TranscriptMessage({
   messageIndex: number | undefined;
   /** 该助手消息前一条真实用户输入及其在 `session.messages` 里的下标。 */
   previousUser?: { text: string; index: number };
+  /** 可见性档位：工具消息与 live 共用同一判定（chat-visibility）。 */
+  verbosity: Verbosity;
   onCopy: (text: string) => void;
   onEdit: (keepMessages: number, text: string) => void;
   onRetry: (keepMessages: number, text: string) => void;
 }) {
-  if (message.role === 'system') return null;
+  if (!messageRenders(message, verbosity)) return null;
 
   if (message.role === 'tool') {
     const label = message.name || message.tool_call_id || 'tool';
@@ -173,6 +192,7 @@ function renderEntries({
   liveNodes,
   messageIndexOffset,
   allMessages,
+  verbosity,
   onCopy,
   onEdit,
   onRetry,
@@ -182,6 +202,7 @@ function renderEntries({
   liveNodes: TranscriptLiveNodes;
   messageIndexOffset: number;
   allMessages: readonly Message[] | undefined;
+  verbosity: Verbosity;
   onCopy: (text: string) => void;
   onEdit: (keepMessages: number, text: string) => void;
   onRetry: (keepMessages: number, text: string) => void;
@@ -189,6 +210,14 @@ function renderEntries({
   const nodes: ReactNode[] = [];
   let lastDay: string | null = null;
   for (const entry of entries) {
+    if (entry.kind === 'message') {
+      const message = entry.messageIndex === undefined ? undefined : messages[entry.messageIndex];
+      if (message === undefined) continue;
+      // 隐藏的条目连「日分组头」也不产生，否则会出现只有分隔线的空日期。
+      if (!messageRenders(message, verbosity)) continue;
+    } else if (!liveNodes.has(entry.key)) {
+      continue;
+    }
     const day = entry.ts !== undefined ? localDayKey(entry.ts) : null;
     if (day && day !== lastDay) {
       nodes.push(
@@ -215,6 +244,7 @@ function renderEntries({
           key={entry.key}
           message={message}
           messageIndex={messageIndex}
+          verbosity={verbosity}
           previousUser={previousUserMessage(message, allMessages, messageIndexOffset)}
           onCopy={onCopy}
           onEdit={onEdit}
@@ -238,6 +268,7 @@ export function Transcript({
   live = [],
   liveNodes,
   windowStartTs,
+  verbosity = 'normal',
   onEditMessage,
   onRetryMessage,
 }: {
@@ -254,6 +285,8 @@ export function Transcript({
   liveNodes?: TranscriptLiveNodes;
   /** 可见窗口首条消息的 ts：比它更早的 live 节点落到末尾。 */
   windowStartTs?: number;
+  /** 可见性档位：历史工具消息与 live 共用同一判定（chat-visibility）。 */
+  verbosity?: Verbosity;
   /** 编辑 = 确认后删除该消息及其后历史，并把原文写回 Composer。 */
   onEditMessage: (keepMessages: number, text: string) => void;
   /** 重试 = 确认后删除该回复及其后历史，并重新发送前一条用户内容。 */
@@ -288,6 +321,7 @@ export function Transcript({
         liveNodes: nodes,
         messageIndexOffset,
         allMessages,
+        verbosity,
         onCopy: copy,
         onEdit: onEditMessage,
         onRetry: onRetryMessage,

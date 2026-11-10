@@ -333,6 +333,7 @@ export function TranscriptWindow({
               live={liveInputs}
               liveNodes={liveNodes}
               windowStartTs={windowStartTs}
+              verbosity={verbosity}
               onEditMessage={onEditMessage}
               onRetryMessage={onRetryMessage}
             />

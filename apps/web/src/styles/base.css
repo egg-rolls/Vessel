@@ -70,6 +70,14 @@ fieldset {
   box-shadow: var(--focus-ring);
 }
 
+/* 容器型焦点目标不画环：main[tabindex="-1"] 是被脚本 focus 的跳转落点，
+   环形阴影在 overflow-hidden 下只会露出贴着顶栏的一条直角主题色边，
+   并在 F11 / DevTools 切换焦点时闪现。可交互元素照旧有环。 */
+#main:focus,
+#main:focus-visible {
+  box-shadow: none;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
