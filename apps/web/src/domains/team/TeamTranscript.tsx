@@ -39,7 +39,10 @@ export function TeamTranscript({
     const day = localDayKey(message.ts);
     if (day && day !== lastDay) {
       nodes.push(
-        <div className="day-divider mt-1.5 mb-0.5" key={`day-${day}`}>
+        <div
+          className="day-divider mx-auto mt-1.5 mb-0.5 w-full max-w-[var(--chat-content-w,860px)]"
+          key={`day-${day}`}
+        >
           <span>{localDayLabel(message.ts)}</span>
         </div>,
       );

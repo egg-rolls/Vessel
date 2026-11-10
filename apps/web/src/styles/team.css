@@ -99,6 +99,9 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* 滚动条出现/消失时预留同一宽度，避免消息列整体左右抖动几像素
+     （输入卡片不在滚动区内，抖动看起来就是“歪了一下”）。 */
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
@@ -108,8 +111,8 @@
 
 .team-composer-area {
   flex: none;
+  /* 不再有上边框：输入卡片本身就是一级容器，再画一条线会把消息区与输入区切成两块。 */
   padding: 10px clamp(16px, 4vw, 32px) calc(12px + var(--dock-safe-bottom));
-  border-top: 1px solid var(--line);
   background: var(--bg);
 }
 

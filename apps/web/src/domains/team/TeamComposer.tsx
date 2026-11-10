@@ -176,7 +176,7 @@ export function TeamComposer({
       <div className="flex items-end gap-2.5">
         <AutoGrowTextarea
           ref={inputRef}
-          className="min-h-6 flex-1 resize-none overflow-y-auto rounded-md bg-sunken px-2.5 py-2 text-base leading-relaxed text-ink placeholder:text-faint focus:outline-none disabled:opacity-55"
+          className="min-h-6 flex-1 resize-none overflow-y-auto rounded-md border-0 bg-sunken px-2.5 py-2 text-base leading-relaxed text-ink placeholder:text-faint focus:outline-none disabled:opacity-55"
           rows={1}
           value={value}
           onChange={(event) => {

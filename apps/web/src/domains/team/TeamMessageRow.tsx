@@ -205,7 +205,7 @@ export function TeamMessageRow({
 
   return (
     <div
-      className={`group flex max-w-full flex-col gap-1 ${isHuman ? 'team-message-self' : 'team-message-agent'}${statusClass}`}
+      className={`group mx-auto flex w-full max-w-[var(--chat-content-w,860px)] flex-col gap-1 ${isHuman ? 'team-message-self' : 'team-message-agent'}${statusClass}`}
       data-kind={message.kind}
     >
       <div className="flex flex-wrap items-center gap-2 text-xs text-faint">

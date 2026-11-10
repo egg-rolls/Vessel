@@ -52,6 +52,8 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* 同 team：滚动条出现/消失不改变内容列宽度，输入卡片与消息列始终对齐。 */
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
