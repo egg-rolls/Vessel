@@ -166,7 +166,11 @@ export class EventGroupCache {
     // seq 回退：输入不再单调，无法用后缀做增量。
     if (entries.length > 0 && (entries[entries.length - 1]?.seq ?? 0) < this.lastSeq) return 'full';
     const survivors = firstSeqGreaterThan(entries, this.lastSeq);
-    if (survivors === this.entries.length) return 'append';
+    if (survivors === this.entries.length) {
+      // 没有新 seq 但有一条「原地变长」的条目（相邻流式增量已合进上一条）：
+      // 必须按部分重建，否则这一组会一直停在合并前的旧内容上。
+      return truncatedRuns.size > 0 ? 'partial' : 'append';
+    }
     if (survivors < this.entries.length && truncatedRuns.size > 0) return 'partial';
     // survivors > 旧长度（插入旧 seq）或旧条目消失但无裁剪信息。
     return 'full';

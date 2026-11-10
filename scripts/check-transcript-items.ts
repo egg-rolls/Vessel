@@ -12,11 +12,14 @@
 
 import { pendingStripView } from '../apps/web/src/domains/chat/pending-strip';
 import {
+  buildLiveItems,
   buildTranscriptItems,
   type TranscriptItem,
 } from '../apps/web/src/domains/chat/transcript-items';
 import type { Message } from '../apps/web/src/gateway/types/sessions';
+import { EventStore } from '../apps/web/src/state/event-store';
 import type { RunGroup, TimelineItem } from '../apps/web/src/state/events';
+import { EventGroupCache } from '../apps/web/src/state/group-cache';
 
 function msg(role: Message['role'], content: string, extra: Partial<Message> = {}): Message {
   return { role, content, ...extra };
@@ -276,6 +279,49 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'F16 长 run（数千 delta、3 段思考、多轮工具）→ 所有 reasoning 段都在且有序',
+    why: 'per-run 上限按 delta 计数会把最早的 thinking 段整段挤出（真实 run 177 轮 / 70k tokens）',
+    check: () => {
+      const store = new EventStore(0);
+      let seq = 0;
+      const push = (type: string, data: Record<string, unknown>) => {
+        seq += 1;
+        store.push({ type, run_id: 'r-long', data, ts: 1000 + seq } as never, { seq });
+      };
+      push('run.started', { run_id: 'r-long', session_id: 's1', input: 'go' });
+      for (let round = 0; round < 3; round += 1) {
+        // 每段思考 1200 个 delta：旧上限（2000/run）下第二段起就会挤掉前面的段
+        for (let index = 0; index < 1200; index += 1) {
+          push('llm.stream.chunk', {
+            run_id: 'r-long',
+            chunk: { type: 'reasoning_delta', delta: 'x' },
+          });
+        }
+        push('tool.call.started', {
+          run_id: 'r-long',
+          tool_call_id: `c${round}`,
+          tool_name: 'bash',
+          arguments: {},
+        });
+        push('tool.call.completed', {
+          run_id: 'r-long',
+          tool_call_id: `c${round}`,
+          tool_name: 'bash',
+          result: 'ok',
+          duration_ms: 1,
+        });
+      }
+      store.flush();
+      const snapshot = store.getSnapshot();
+      const cache = new EventGroupCache();
+      const groups = cache.group(snapshot.entries, false, 'user', snapshot.truncatedSince);
+      const items = buildLiveItems(groups);
+      const reasoningItems = items.filter((item) => item.kind === 'run-reasoning');
+      const tools = items.filter((item) => item.kind === 'tool');
+      return reasoningItems.length === 3 && tools.length === 3;
+    },
+  },
+  {
     name: 'F15 待处理条带：held 在前（ts 升序），其余按 ts 升序，只预览 3 条',
     why: '条带只做稳定排序 + 折叠，不做假拖拽；held（已排队）必须排在未读之前',
     check: () => {
@@ -316,7 +362,9 @@ const FIXTURES: readonly Fixture[] = [
           msg('assistant', 'done text', {
             timestamp: 1004,
             reasoning_content: 'think',
-            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } },
+            ],
           }),
           msg('tool', 'ok', { timestamp: 1005, tool_call_id: 'c1' }),
         ],

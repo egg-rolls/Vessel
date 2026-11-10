@@ -17,6 +17,11 @@ import type { StoredEvent } from './events';
 export const MAX_EVENTS_PER_RUN = 2000;
 export const MAX_EVENTS_TOTAL = 10000;
 export const NOTIFY_INTERVAL_MS = 50;
+/**
+ * 单条合并后的增量上限（字符）。超过就另起一条，避免一条条目无限变长
+ * （一个超长正文段会退化成多条条目，但仍远少于逐 delta 计数）。
+ */
+export const MAX_COALESCED_DELTA_CHARS = 16_384;
 
 /**
  * 单 run 裁剪时必须保留的锚点事件。
@@ -138,8 +143,51 @@ export class EventStore {
    * 写入一条事件；seq 不大于已见值时忽略（回放去重）。
    * 返回是否实际写入。
    */
+
+  /**
+   * 把相邻、同 run、同 kind 的流式增量并进上一条（返回 true = 已合并、不新增条目）。
+   *
+   * 只合并 `text_delta` / `reasoning_delta`，且要求**上一条就是**同 run 的同 kind 增量：
+   * 一旦中间插入工具/事件/别的 run，就不再合并（保证 buildGroup 的 flush 边界不变）。
+   * 合并后条目保持**首个 seq**，所以 text/reasoning 的段序 key 稳定；`lastSeq` 仍推进
+   * 到最新，重连回放去重语义不变。gzip 不适用：这里只动内存条目。
+   *
+   * 原地更新（同一 key 的内容变长）要让 `EventGroupCache` 重建这一组 —— 复用
+   * `truncatedSince` 通道（它本来就是「本组需要重算」的信号）。
+   */
+  private coalesceDelta(event: RunEvent, seq: number): boolean {
+    if (event.type !== 'llm.stream.chunk') return false;
+    const index = this.entries.length - 1;
+    const last = this.entries[index];
+    if (last === undefined || last.event.type !== 'llm.stream.chunk') return false;
+    if (last.event.run_id !== event.run_id) return false;
+    const prev = (last.event.data as { chunk?: { type?: string; delta?: string } }).chunk;
+    const next = (event.data as { chunk?: { type?: string; delta?: string } }).chunk;
+    if (prev === undefined || next === undefined) return false;
+    if (prev.type !== next.type) return false;
+    if (prev.type !== 'text_delta' && prev.type !== 'reasoning_delta') return false;
+    if (typeof prev.delta !== 'string' || typeof next.delta !== 'string') return false;
+    if (prev.delta.length + next.delta.length > MAX_COALESCED_DELTA_CHARS) return false;
+    const merged: RunEvent = {
+      ...last.event,
+      data: {
+        ...(last.event.data as Record<string, unknown>),
+        chunk: { ...next, delta: prev.delta + next.delta },
+      },
+    };
+    this.entries[index] = { ...last, event: merged };
+    this.lastSeq = seq;
+    this.truncatedSince.add(event.run_id);
+    this.scheduleNotify();
+    return true;
+  }
+
   push(event: RunEvent, meta: EventMeta): boolean {
     if (!Number.isFinite(meta.seq) || meta.seq <= this.lastSeq) return false;
+    // 相邻同 kind 的流式增量先合并：per-run 上限按「段」计数，而不是按 delta 计数。
+    // （真实 run 有 177 轮 / 70k completion tokens ≈ 数万 delta 事件，按 delta 计数时
+    //  上限会把**最早**的 thinking 段整段挤出去 —— 思考过程「凭空消失」的根因。）
+    if (this.coalesceDelta(event, meta.seq)) return true;
     this.lastSeq = meta.seq;
     const runId = event.run_id;
     // 归属会话的字段最先记住：即使本 run 的 `run.started` 之后被裁掉，仍能归属会话。
