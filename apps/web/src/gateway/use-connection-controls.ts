@@ -138,7 +138,7 @@ export function useConnectionControls({
     setNodeToken('');
     setAnonymousNode(false);
     client.close();
-    eventStore.reset(0);
+    eventStore.clear();
   }, [client, eventStore, mode, nodeIdentity]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refs 与 useRef 一样稳定

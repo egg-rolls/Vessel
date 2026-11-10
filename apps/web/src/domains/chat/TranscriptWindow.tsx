@@ -273,7 +273,9 @@ export function TranscriptWindow({
                 ) : undefined
               }
             />
-          ) : hydrating && !hasTranscript ? (
+          ) : hydrating && !hasTranscript && liveEntries.length === 0 ? (
+            // 只有「什么都没有」时才换成 LoadingState：重连 / 重订阅时实时内容还在，
+            // 换屏本身就是一次闪烁。
             <LoadingState label={t('chat.loadingHistory')} />
           ) : !hasTranscript &&
             visibleGroups.length === 0 &&

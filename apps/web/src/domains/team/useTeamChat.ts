@@ -100,11 +100,6 @@ export function useTeamChat({
   const [historyNotice, setHistoryNotice] = useState<string | null>(null);
   const [historyReloadToken, setHistoryReloadToken] = useState(0);
   const historyReplaceRef = useRef(false);
-  // 切 Team 时清掉上一个 Team 的改写告知，不能跨 Team 残留。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: teamId 变化是重置条件
-  useEffect(() => {
-    setHistoryNotice(null);
-  }, [teamId]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const [retractTarget, setRetractTarget] = useState<TeamMessage | null>(null);
@@ -131,6 +126,37 @@ export function useTeamChat({
 
   const storeKey = teamDetailKey(nodeKey, teamId, 'chat');
   const detailState = useTeamStore((state) => state.details[storeKey]);
+  // 切 Team / 切节点的本地状态重置（替代旧的整体 remount，见 identity 注释）。
+  /**
+   * 去「整棵子树重挂」：以前 `TeamDetailRoute` 给 `TeamChat` 加了 `key={teamId}`，
+   * 切 Team 会销毁整个群聊（滚动、已加载页、成员窗口全部重建 → 整页闪烁）。
+   * 现在改由这里在身份变化时**就地**重置本地状态，组件树不重挂。
+   *
+   * 重置项：消息/滚动分页/本地乐观发送/撤回与重试提示/改写告知；
+   * 不重置：`eventStateRef`（它按全局 wire seq 记录游标，重挂反而会重复处理旧事件）、
+   * 草稿与 chips（按 (node, team) 分槽存在 composerDraftStore 里，切回还在）。
+   */
+  const identity = `${nodeKey}:${teamId}`;
+  const identityRef = useRef(identity);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identity 变化就是重置条件（函数体只写 ref/state）
+  useEffect(() => {
+    if (identityRef.current === identity) return;
+    identityRef.current = identity;
+    const cached = resourceData(useTeamStore.getState().details[storeKey]);
+    setMessages(cached ? sortMessages(cached.messages) : []);
+    const more = cached?.messages_has_more === true;
+    hasEarlierRef.current = more;
+    setHasEarlier(more);
+    adoptedTailRef.current = cached !== undefined;
+    earlierInFlightRef.current = false;
+    setEarlierLoading(false);
+    setSends([]);
+    setRetryHint(false);
+    setRetractTarget(null);
+    setRetractError(undefined);
+    historyReplaceRef.current = false;
+    setHistoryNotice(null);
+  }, [identity]);
   const loadDetail = useTeamStore((state) => state.loadDetail);
   const postTeam = useTeamStore((state) => state.post);
   const reload = () => {

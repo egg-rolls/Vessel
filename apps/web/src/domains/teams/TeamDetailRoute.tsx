@@ -112,8 +112,9 @@ export function TeamDetailRoute({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      {/* 不挂 `key={route.teamId}`：切 Team 时整棵群聊重挂会销毁滚动位置、已加载的
+           更早页与成员窗口，表现为整页闪烁；本地状态由 `useTeamChat` 的身份重置负责。 */}
       <TeamChat
-        key={route.teamId}
         client={control}
         hasToken={hasToken}
         nodeName={nodeNames.get(nodeKey)}

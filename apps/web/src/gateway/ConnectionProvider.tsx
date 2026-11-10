@@ -343,7 +343,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!canConnect) {
       client.close();
-      eventStore.reset(0);
+      eventStore.clear();
       setConnectionState('idle');
       setHello(null);
       useInteractionStore.getState().reset();

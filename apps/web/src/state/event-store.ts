@@ -232,16 +232,65 @@ export class EventStore {
   }
 
   /**
-   * 清空缓冲（gateway 重启 / 切 tenant / gap 重新同步 / 订阅 epoch 换代）。
+   * 截断到 `nextSeq`：**保留** `seq <= nextSeq` 的条目，丢弃更新的。
    *
-   * **不变量**：`scopeSession` 不随 reset 变化 —— gap reset 后仍处于同一会话订阅，
-   * 后续回放/实时增量继续按该作用域归属；只有订阅范围本身变化时才由
-   * `setScopeSession()` 覆写。reset 同时伴随筛选条件变化时，调用方必须重算作用域
-   * （见 `SubscriptionController.run`：作用域写在 `appliedKey` 短路之前，换范围必覆写）。
-   * `runSessions`（run→session 自报映射）清空：它只是本次回放窗口的派生数据，
-   * 刷新后由回放/快照重新建立；作用域不依赖它。
+   * 用于 hello / gap 的「重新对齐游标」：有界回放会把窗口内的条目重新 `push` 上来，
+   * `push` 的 `seq <= lastSeq` 去重保证幂等，所以**不需要先清空**。先清空会让整条
+   * 时间线消失一帧再填回（用户看到的就是整页闪烁 + 滚动位置丢失 + 跳到底部）。
+   *
+   * 只在**同一订阅作用域内**调用；作用域真的变了（换会话 / 换 Team / chat→Runs）
+   * 必须用 `clear()`，否则旧范围的条目会留在屏上串台。
+   *
+   * 同步维护派生状态：条目变了就重建 `runCounts` / `runSessions`（不能留下已无条目
+   * 的 run 的过期映射），并把被丢弃条目的 run 记进 `truncatedSince` —— 末条 seq 回退
+   * 会让 `EventGroupCache` 走整表重建，`truncatedSince` 保证局部重建路径同样不留
+   * 陈旧 bucket（否则 bucket 里会留着被丢掉的尾部 item）。
+   * `scopeSession` 不变（同一作用域不变量）。
    */
-  reset(nextSeq = 0): void {
+  truncateAfter(nextSeq: number): number {
+    // entries 按 seq 升序：二分出第一条 seq > nextSeq。
+    let low = 0;
+    let high = this.entries.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if ((this.entries[mid]?.seq ?? 0) <= nextSeq) low = mid + 1;
+      else high = mid;
+    }
+    const dropped = this.entries.slice(low);
+    this.lastSeq = nextSeq;
+    if (dropped.length === 0) {
+      // 只推进了游标（没有尾部要丢）：仍然发布一次，保证快照里的 lastSeq 与内部一致。
+      this.flush();
+      return 0;
+    }
+
+    this.entries = this.entries.slice(0, low);
+    this.runCounts.clear();
+    this.runSessions.clear();
+    for (const entry of this.entries) {
+      const runId = entry.event.run_id;
+      this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
+      const owner = entry.sessionId ?? eventSessionId(entry.event);
+      if (owner !== undefined) this.runSessions.set(runId, owner);
+    }
+    for (const entry of dropped) {
+      const runId = entry.event.run_id;
+      this.truncatedSince.add(runId);
+      // 整个 run 的条目都没了：不再需要累计「被裁剪」标记。
+      if (!this.runCounts.has(runId)) this.truncated.delete(runId);
+    }
+    this.flush();
+    return dropped.length;
+  }
+
+  /**
+   * 真清空缓冲（换节点 / 断开连接 / 订阅作用域变化 / gateway 重启）。
+   *
+   * **不变量**：`scopeSession` 不随 clear 变化 —— 作用域由 `setScopeSession()` 负责，
+   * 清空只处理条目。`runSessions`（run→session 自报映射）清空：它只是当前缓冲窗口的
+   * 派生数据，重新回放/接收时重建；作用域不依赖它。
+   */
+  clear(nextSeq = 0): void {
     this.entries = [];
     this.runCounts.clear();
     this.runSessions.clear();

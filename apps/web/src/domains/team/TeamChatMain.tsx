@@ -316,9 +316,11 @@ export function TeamChatMain({
         )}
         {!hasToken ? (
           <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
-        ) : firstLoading ? (
+        ) : firstLoading && rows.length === 0 ? (
+          // 只有「一行都没有」才换成骨架：切到已缓存过的 Team 时 rows 已由
+          // `useTeamChat` 的身份重置从缓存播下，这里不该再闪一次 LoadingState。
           <LoadingState rows={3} />
-        ) : !detail ? (
+        ) : !detail && rows.length === 0 ? (
           error?.code === 'not_found' ? (
             <NotEnabledState
               title={t('team.error.notEnabled')}

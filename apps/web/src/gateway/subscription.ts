@@ -92,6 +92,27 @@ export function buildSubscription(
  * - `run` / `runs` / `team` / `none` 范围一律 undefined：它们不是会话订阅，
  *   而且必须是**显式清除**而不是「不设」，否则切走页面后残留作用域会造成串台。
  */
+/**
+ * 订阅「作用域身份」：只有范围和目标都相同才算同一作用域。
+ *
+ * 用途是决定重订阅要不要清空事件缓冲（EventStore#clear）：
+ * - 会话 A 与会话 B 互不兼容（换会话必须清）；
+ * - team / runs / none 各自独立（chat → runs 必须清）；
+ * - run 详情只关心单个 run，换 run 也要清。
+ * 同一个 key 的重复 apply（重连、gap 重对齐、feature gate 从降级升到服务端过滤）
+ * 属于「同一作用域重新订阅」，内容原地保留 —— 这是消除整页闪烁的关键。
+ */
+export function scopeIdentity(scope: SubscriptionScope): string {
+  switch (scope.kind) {
+    case 'chat':
+      return `chat:${scope.sessionId}`;
+    case 'run':
+      return `run:${scope.runId}`;
+    default:
+      return scope.kind;
+  }
+}
+
 export function serverScopedSessionId(built: BuiltSubscription): string | undefined {
   if (built.clientSessionFilter !== undefined) return undefined;
   return built.filter.session_id;
@@ -102,6 +123,8 @@ export class SubscriptionController {
   private desired: SubscriptionScope | null = null;
   /** 当前生效过滤的 key（JSON），用于跳过幂等重复订阅。 */
   private appliedKey: string | null = null;
+  /** 上一次真正生效的订阅作用域（）；变化时才清空事件缓冲。 */
+  private appliedScopeKey: string | null = null;
   /** 在途 subscribe：下一个 hello 属于订阅 epoch。 */
   private pendingHello = false;
   /** 串行化订阅请求；期间的新 scope 合并到下一轮。 */
@@ -170,6 +193,7 @@ export class SubscriptionController {
   onDisconnect(): void {
     this.pendingHello = false;
     this.appliedKey = null;
+    //  故意保留：断线重连回到同一路由时不应清空缓冲（会整页闪）。
   }
 
   /** feature gate 降级时 UI 应过滤的 session id；服务端已过滤时为 undefined。 */
@@ -201,6 +225,14 @@ export class SubscriptionController {
       // 到达的、事件本身不带 `session_id` 的条目会被误归属到 A，回到会话时表现为串台。
       // 见 `EventStore#scopeSession` 与 L-041（事件缓冲不是历史，不能靠“谁最后写的”决定归属）。
       this.eventStore.setScopeSession(serverScopedSessionId(built));
+      // **作用域真的变了才清空**（换会话 / 换 Team / chat↔runs）：旧条目属于别的范围，
+      // 留着会串台。同一作用域内的重新订阅（重连、gap 重对齐、换过滤参数）**不清空**：
+      // 内容原地保留，由 `truncateAfter` + `push` 去重把窗口补回来，屏幕上不会出现空白帧。
+      const scopeKey = scopeIdentity(scope);
+      if (this.appliedScopeKey !== null && this.appliedScopeKey !== scopeKey) {
+        this.eventStore.clear();
+      }
+      this.appliedScopeKey = scopeKey;
       const key = JSON.stringify(built.filter);
       if (key === this.appliedKey) return;
       this.appliedKey = key;

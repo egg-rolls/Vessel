@@ -79,7 +79,8 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   let disposed = false;
   let retryTimer: number | undefined;
   let attempt = 0;
-  eventStore.reset(0);
+  // 新的连接目标（token / URL / 显式重连）：旧缓冲属于上一个连接，清空。
+  eventStore.clear();
   setHello(null);
   setConnectionState('connecting');
   setReconnectAttempt(0);
@@ -165,7 +166,9 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     const subscriptionHello = subscription.consumeHello();
     // hello 是本地事件 epoch 的唯一边界：从本次实际首条 seq 之前重置。
     // 有界回放会从窗口首条开始；被跳过的区间由随后的 gap 告知。
-    eventStore.reset(Math.max(0, info.from_seq - 1));
+    // 只截断到本次 epoch 的首条之前：已有条目留在屏上，回放再把窗口补回来
+    // （旧的「先清空」会让整条时间线消失一帧 —— 整页闪烁 + 跳底）。
+    eventStore.truncateAfter(Math.max(0, info.from_seq - 1));
     setTokenError(null);
     setGatewayError(null);
     setLastError(null);
@@ -181,7 +184,8 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   const offGap = client.onGap((gap) => {
     // gap = 该区间无法从实时流恢复；静默处理，不重连、不提示。
     // 页面感知不到截断：正文由 sessions.get / teams.get 的权威快照补回。
-    eventStore.reset(gap.to_seq);
+    // 同作用域内的游标重对齐：保留 ≤ to_seq 的条目，不做整表清空。
+    eventStore.truncateAfter(gap.to_seq);
     recovery.invalidateRouteSnapshot();
     // pending 权限 / ask 不能只依赖连接级 epoch：gap 不重连，必须显式补 hydration。
     recovery.hydrateInteractions();
