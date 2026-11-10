@@ -24,7 +24,14 @@ export interface StoredEvent {
 }
 
 export type TimelineItem =
-  | { kind: 'text'; text: string; key: string }
+  | {
+      kind: 'text';
+      text: string;
+      key: string;
+      /** 首/末个 text_delta 的事件时间：这一段的真实发生时间（不是 run 起始）。 */
+      startedAt?: number;
+      endedAt?: number;
+    }
   | {
       kind: 'reasoning';
       text: string;
@@ -59,6 +66,8 @@ export interface RunGroup {
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   /** 首个事件时间（没有 run.started 时用于排序） */
   firstTs?: number;
+  /** 最后一个事件时间：尾部未闭合的正文/思考用它排序（落在自己真实发生的时刻）。 */
+  lastTs?: number;
   /**
    * 首个进入分组的条目 seq（wire 序号）。
    *
@@ -170,14 +179,24 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
   const group: RunGroup = { runId, status: 'running', hasRunEvent: false, items: [] };
   let buf = '';
   let textIndex = 0;
+  let textStartedAt: number | undefined;
+  let textEndedAt: number | undefined;
   let reasoningBuf = '';
   let reasoningIndex = 0;
   let reasoningStartedAt: number | undefined;
   let reasoningEndedAt: number | undefined;
   const flushText = () => {
     if (buf) {
-      group.items.push({ kind: 'text', text: buf, key: `text-${runId}-${textIndex++}` });
+      group.items.push({
+        kind: 'text',
+        text: buf,
+        key: `text-${runId}-${textIndex++}`,
+        ...(textStartedAt !== undefined ? { startedAt: textStartedAt } : {}),
+        ...(textEndedAt !== undefined ? { endedAt: textEndedAt } : {}),
+      });
       buf = '';
+      textStartedAt = undefined;
+      textEndedAt = undefined;
     }
   };
   const flushReasoning = () => {
@@ -212,6 +231,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
     const ev = entry.event;
     if (group.firstTs === undefined) group.firstTs = ev.ts;
     if (group.firstSeq === undefined) group.firstSeq = entry.seq;
+    if (group.lastTs === undefined || ev.ts > group.lastTs) group.lastTs = ev.ts;
     if (entry.jobId) group.jobId = entry.jobId;
     // 载荷自报 run_id 的才是 run 事件；成员事件的 run_id 是成员 id（见 hasRunEvent）。
     const payloadRunId = (ev.data as { run_id?: unknown }).run_id;
@@ -330,6 +350,8 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         if (chunk?.type === 'text_delta' && chunk.delta) {
           // 正文开始前先落盘已累积的思考段，保持时间顺序。
           flushReasoning();
+          if (textStartedAt === undefined) textStartedAt = ev.ts;
+          textEndedAt = ev.ts;
           buf += chunk.delta;
         } else if (chunk?.type === 'reasoning_delta' && chunk.delta) {
           // 思考流独立累积，绝不并入正文 Markdown。

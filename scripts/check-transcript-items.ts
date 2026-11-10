@@ -340,6 +340,60 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'F17 live 条目用自己的事件时间（不是组起始 ts）→ 历史回填后不重排',
+    why: '全披组起始 ts 会让整段 live 内容在历史到达时被拽到 turn 开头（上面一张卡、中间正文、下面更早的卡）',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'go', { timestamp: 1000 }),
+          msg('assistant', '中间答复', { timestamp: 1300 }),
+          msg('assistant', '结语', { timestamp: 1500 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r-ts',
+            input: 'go',
+            output: '结语',
+            startedAt: 1000,
+            status: 'completed',
+            items: [
+              { kind: 'reasoning', text: '想', key: 'k1', startedAt: 1100, endedAt: 1150 },
+              {
+                kind: 'event',
+                key: 'ev-tool',
+                event: {
+                  type: 'tool.call.started',
+                  run_id: 'r-ts',
+                  ts: 1200,
+                  data: {
+                    run_id: 'r-ts',
+                    tool_call_id: 'c-ts',
+                    tool_name: 'bash',
+                    arguments: {},
+                  },
+                },
+              },
+              { kind: 'text', text: '结语', key: 'k2', startedAt: 1400, endedAt: 1450 },
+            ],
+          }),
+        ],
+        queued: [],
+      });
+      const reasoning = items.find((item) => item.kind === 'run-reasoning');
+      const tool = items.find((item) => item.kind === 'tool');
+      const text = items.find((item) => item.kind === 'run-text');
+      return (
+        reasoning !== undefined &&
+        reasoning.ts === 1150 &&
+        tool !== undefined &&
+        tool.ts === 1200 &&
+        text !== undefined &&
+        text.ts === 1450
+      );
+    },
+  },
+  {
     name: 'F14 run 结束后历史回填，工具卡仍留在思考与正文之间',
     why: '历史侧工具 item 的 ts 是所属 assistant 消息时间，会把卡顶到正文之后（聚堆）',
     check: () => {

@@ -363,8 +363,8 @@ export function buildHistoryIndex(
         ...(tool.output !== undefined ? { output: tool.output } : {}),
         status: 'done',
         startedAt: message?.timestamp ?? 0,
-        ...(durationMs !== undefined ? { durationMs } : {}),
         paired: tool.paired,
+        ...(durationMs !== undefined ? { durationMs } : {}),
         ...(message?.timestamp !== undefined ? { ts: message.timestamp } : {}),
       });
     }
@@ -415,9 +415,18 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
         if (ts !== undefined && (baseTs === undefined || ts < baseTs)) baseTs = ts;
       }
     }
-    const meta = {
-      ...(baseTs !== undefined ? { ts: baseTs } : {}),
-      ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
+    // 每个 item 用**自己的事件时间**（真实发生时刻），不是组起始时间：
+    // 统一披组起始 ts 会在历史回填时把整段 live 内容拽到 turn 开头，与历史侧
+    // 的真实 ts 一对比就整段重排（用户看到的「上面一张卡、中间正文、下面更早的卡」）。
+    const seqMeta = group.firstSeq !== undefined ? { seq: group.firstSeq } : {};
+    // 组内时间**单调**：每个 item 用自己事件时间，但不允许比前一个 item 更早
+    // （时钟同毫秒/事件时间相同时用插入序，绝不因为 ts 抖动把顺序倒过来）。
+    let monotonic: number | undefined;
+    const itemTs = (own: number | undefined): number | undefined => {
+      const candidate = own ?? baseTs;
+      if (candidate === undefined) return monotonic;
+      monotonic = monotonic === undefined ? candidate : Math.max(monotonic, candidate);
+      return monotonic;
     };
     // run 的用户输入：历史里还没落盘时由它显示气泡；被历史消息认领后由 assemble 丢掉。
     if (trimText(group.input).length > 0) {
@@ -426,7 +435,8 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
         key: `run:${group.runId}:input`,
         runId: group.runId,
         text: group.input as string,
-        ...meta,
+        ...(itemTs(undefined) !== undefined ? { ts: itemTs(undefined) } : {}),
+        ...seqMeta,
       });
     }
     let textIndex = 0;
@@ -439,7 +449,11 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           runId: group.runId,
           text: item.text,
           streaming: false,
-          ...meta,
+          // 正文段用最后一个 delta 的时间（该段结束时刻）。
+          ...(itemTs(item.endedAt ?? item.startedAt) !== undefined
+            ? { ts: itemTs(item.endedAt ?? item.startedAt) }
+            : {}),
+          ...seqMeta,
         });
         textIndex += 1;
         continue;
@@ -453,7 +467,11 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           streaming: false,
           ...(item.startedAt !== undefined ? { startedAt: item.startedAt } : {}),
           ...(item.endedAt !== undefined ? { endedAt: item.endedAt } : {}),
-          ...meta,
+          // 思考段用最后一个 reasoning_delta 的时间（该段结束时刻）。
+          ...(itemTs(item.endedAt ?? item.startedAt) !== undefined
+            ? { ts: itemTs(item.endedAt ?? item.startedAt) }
+            : {}),
+          ...seqMeta,
         });
         reasoningIndex += 1;
         continue;
@@ -476,7 +494,9 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           ...(item.truncated === true ? { truncated: true } : {}),
           startedAt: item.startedAt,
           paired: item.status !== 'running',
-          ...meta,
+          // 工具卡用自己的 tool.call.started 时间（真事件时间）。
+          ...(itemTs(item.startedAt) !== undefined ? { ts: itemTs(item.startedAt) } : {}),
+          ...seqMeta,
         });
         continue;
       }
@@ -497,7 +517,8 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
         runId: group.runId,
         text: group.liveText,
         streaming: true,
-        ...meta,
+        ...(itemTs(group.lastTs) !== undefined ? { ts: itemTs(group.lastTs) } : {}),
+        ...seqMeta,
       });
     }
     if (group.liveReasoning !== undefined && group.liveReasoning.length > 0) {
@@ -507,7 +528,8 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
         runId: group.runId,
         text: group.liveReasoning,
         streaming: true,
-        ...meta,
+        ...(itemTs(group.lastTs) !== undefined ? { ts: itemTs(group.lastTs) } : {}),
+        ...seqMeta,
       });
     }
   }

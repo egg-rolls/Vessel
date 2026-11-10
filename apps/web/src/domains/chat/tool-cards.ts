@@ -21,7 +21,7 @@ export interface ToolCardView {
 }
 
 export type ChatRenderItem =
-  | { kind: 'text'; text: string; key: string }
+  | { kind: 'text'; text: string; key: string; startedAt?: number; endedAt?: number }
   | { kind: 'reasoning'; text: string; key: string; startedAt?: number; endedAt?: number }
   | { kind: 'notice'; event: RunEvent; key: string }
   | { kind: 'event'; event: RunEvent; key: string }
