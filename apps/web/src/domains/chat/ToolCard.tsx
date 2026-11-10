@@ -1,12 +1,12 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
 import { useId, useState } from 'react';
 import { CopyButton } from '../../components/CopyButton';
-import { ModalShell } from '../../components/Modal';
-import { Badge, Button } from '../../components/ui';
+import { Button } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { Verbosity } from '../../state/visibility';
+import { StreamCard } from './StreamCard';
 import {
   type DiffLine,
   editDiffOf,
@@ -28,12 +28,6 @@ const STATUS_LABEL: Record<ToolCardView['status'], string> = {
   running: 'chat.tool.status.running',
   done: 'chat.tool.status.done',
   error: 'chat.tool.status.error',
-};
-
-const STATUS_BADGE_TONE: Record<ToolCardView['status'], 'info' | 'success' | 'danger'> = {
-  running: 'info',
-  done: 'success',
-  error: 'danger',
 };
 
 const STATUS_TONE: Record<ToolCardView['status'], string> = {
@@ -169,11 +163,13 @@ function DiffSection({ lines, path }: { lines: DiffLine[]; path?: string }) {
 export function ToolCard({
   card,
   verbosity = 'normal',
+  defaultOpen = false,
 }: {
   card: ToolCardView;
   verbosity?: Verbosity;
+  /** 默认展开（ui.expandCards || verbosity === 'debug'）；用户手动开合优先。 */
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const description = useToolDescription(card.name);
   const summary = toolSummary(card.name, card.args);
   const diff = card.name === 'edit' ? editDiffOf(card.args) : null;
@@ -181,111 +177,87 @@ export function ToolCard({
   const meta = formatErrorMeta(card.errorMeta);
 
   return (
-    <div className="tool-card" data-status={card.status}>
-      <button
-        type="button"
-        className="flex min-h-9 w-full items-center gap-2 rounded-md bg-transparent px-2.5 text-left text-muted hover:bg-hover"
-        aria-haspopup="dialog"
-        onClick={() => setOpen(true)}
-      >
-        <span
-          className={`tool-card-glyph ${STATUS_TONE[card.status]}`}
-          role="img"
-          aria-label={t(STATUS_LABEL[card.status])}
-        >
-          {STATUS_GLYPH[card.status]}
-        </span>
-        <span className="flex-none font-mono text-sm text-ink">{card.name}</span>
-        {summary && (
-          <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint">{summary}</span>
-        )}
-        {card.durationMs != null && (
-          <span className="ml-auto flex-none font-mono text-xs tabular-nums text-faint">
-            {formatDuration(card.durationMs)}
+    <StreamCard
+      className="tool-card"
+      defaultOpen={defaultOpen}
+      title={
+        <>
+          <span
+            className={`tool-card-glyph ${STATUS_TONE[card.status]}`}
+            role="img"
+            aria-label={t(STATUS_LABEL[card.status])}
+          >
+            {STATUS_GLYPH[card.status]}
           </span>
-        )}
-        <span className="flex-none text-2xs text-faint" aria-hidden="true">
-          ›
+          <span className="font-mono text-sm text-ink">{card.name}</span>
+        </>
+      }
+      meta={
+        card.durationMs != null ? (
+          <span className="tabular-nums">{formatDuration(card.durationMs)}</span>
+        ) : undefined
+      }
+      summary={summary.length > 0 ? summary : undefined}
+      actions={
+        // 失败不能静默：折叠时也保留错误摘要（完整内容在展开体）。
+        card.status === 'error' && errorText ? (
+          <p className="m-0 line-clamp-3 whitespace-pre-wrap break-words px-2.5 pb-2 font-mono text-xs text-danger">
+            {errorText}
+          </p>
+        ) : undefined
+      }
+    >
+      <div className="flex flex-col gap-1">
+        <span className="font-mono text-xs uppercase tracking-wide text-faint">
+          {t('chat.tool.description')}
         </span>
-      </button>
+        <p className="m-0 text-md leading-relaxed text-muted">
+          {description ?? t('chat.tool.descriptionUnavailable')}
+        </p>
+      </div>
 
-      {/* 失败不能静默：卡片收起时也保留错误摘要（完整内容在详情弹窗）。 */}
-      {card.status === 'error' && errorText && (
-        <p className="m-0 line-clamp-3 whitespace-pre-wrap break-words px-2.5 pb-2 font-mono text-xs text-danger">
-          {errorText}
+      <PayloadSection
+        label={t('chat.tool.input')}
+        value={card.args}
+        defaultOpen
+        verbosity={verbosity}
+      />
+      <PayloadSection label={t('chat.tool.output')} value={card.result} verbosity={verbosity} />
+      {diff && <DiffSection lines={diff.lines} path={diff.path} />}
+      <PayloadSection
+        label={t('chat.tool.error')}
+        value={errorText || undefined}
+        defaultOpen={card.status === 'error'}
+        tone="error"
+        verbosity={verbosity}
+      />
+      {meta && (
+        <p className="error-meta font-mono tabular-nums">
+          {meta}
+          {card.errorMeta?.retryable === true ? ` · ${t('chat.tool.retryable')}` : ''}
         </p>
       )}
-
-      {open && (
-        <ModalShell
-          label={t('chat.tool.dialogLabel', { name: card.name })}
-          onClose={() => setOpen(false)}
-          closeLabel={t('common.close')}
-          size="md"
-        >
-          <div className="flex flex-wrap items-center gap-2 pr-8">
-            <h2 className="font-serif text-xl font-semibold text-ink">{card.name}</h2>
-            <Badge tone={STATUS_BADGE_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
-            {card.durationMs != null && (
-              <span className="font-mono text-xs tabular-nums text-faint">
-                {formatDuration(card.durationMs)}
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <span className="font-mono text-xs uppercase tracking-wide text-faint">
-              {t('chat.tool.description')}
-            </span>
-            <p className="m-0 text-md leading-relaxed text-muted">
-              {description ?? t('chat.tool.descriptionUnavailable')}
-            </p>
-          </div>
-
-          <PayloadSection
-            label={t('chat.tool.input')}
-            value={card.args}
-            defaultOpen
-            verbosity={verbosity}
-          />
-          <PayloadSection label={t('chat.tool.output')} value={card.result} verbosity={verbosity} />
-          {diff && <DiffSection lines={diff.lines} path={diff.path} />}
-          <PayloadSection
-            label={t('chat.tool.error')}
-            value={errorText || undefined}
-            defaultOpen={card.status === 'error'}
-            tone="error"
-            verbosity={verbosity}
-          />
-          {meta && (
-            <p className="error-meta font-mono tabular-nums">
-              {meta}
-              {card.errorMeta?.retryable === true ? ` · ${t('chat.tool.retryable')}` : ''}
-            </p>
-          )}
-          {card.errorMeta?.httpStatus !== undefined && (
-            <p className="error-meta font-mono tabular-nums">HTTP {card.errorMeta.httpStatus}</p>
-          )}
-          {card.truncated && <p className="text-xs text-warn">{t('chat.tool.truncated')}</p>}
-          {verbosity === 'debug' && (
-            <section className="tool-section">
-              <div className="tool-section-label">{t('chat.tool.meta')}</div>
-              <dl className="tool-meta-list font-mono tabular-nums">
-                {card.callId && (
-                  <>
-                    <dt>call</dt>
-                    <dd>{card.callId}</dd>
-                  </>
-                )}
-                <dt>status</dt>
-                <dd>{card.status}</dd>
-                <dt>started</dt>
-                <dd>{formatTimestamp(card.startedAt)}</dd>
-              </dl>
-            </section>
-          )}
-        </ModalShell>
+      {card.errorMeta?.httpStatus !== undefined && (
+        <p className="error-meta font-mono tabular-nums">HTTP {card.errorMeta.httpStatus}</p>
       )}
-    </div>
+      {card.truncated && <p className="text-xs text-warn">{t('chat.tool.truncated')}</p>}
+      {verbosity === 'debug' && (
+        <section className="tool-section">
+          <div className="tool-section-label">{t('chat.tool.meta')}</div>
+          <dl className="tool-meta-list font-mono tabular-nums">
+            {card.callId && (
+              <>
+                <dt>call</dt>
+                <dd>{card.callId}</dd>
+              </>
+            )}
+            <dt>status</dt>
+            <dd>{card.status}</dd>
+            <dt>started</dt>
+            <dd>{formatTimestamp(card.startedAt)}</dd>
+          </dl>
+        </section>
+      )}
+    </StreamCard>
   );
 }

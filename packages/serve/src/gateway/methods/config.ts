@@ -28,6 +28,7 @@ const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
   'ui.showReasoning',
   'ui.showInternalEvents',
   'ui.askUser',
+  'ui.expandCards',
   'observability.showProcessErrors',
 ]);
 

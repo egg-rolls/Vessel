@@ -20,6 +20,7 @@ export const DISPLAY_SETTINGS: readonly DisplaySettingDef[] = [
   { id: 'showProcessErrors', key: 'observability.showProcessErrors', type: 'boolean' },
   { id: 'askUser', key: 'ui.askUser', type: 'boolean' },
   { id: 'showReasoning', key: 'ui.showReasoning', type: 'boolean' },
+  { id: 'expandCards', key: 'ui.expandCards', type: 'boolean' },
   {
     id: 'statusBars',
     key: 'ui.statusBars',

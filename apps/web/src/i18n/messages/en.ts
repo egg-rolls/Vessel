@@ -258,8 +258,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.tool.showAll': 'Show all {total} lines',
   'chat.tool.description': 'Description',
   'chat.tool.descriptionUnavailable': 'Description unavailable',
-  'chat.tool.dialogLabel': 'Tool details: {name}',
   'chat.tool.status.running': 'Running',
+  'chat.tool.status.history': 'From history',
+  'chat.tool.outputMissing': 'This call has no recorded output in history (it may have been truncated).',
   'chat.tool.status.done': 'Done',
   'chat.tool.status.error': 'Failed',
   'ask.title': 'Agent question',
@@ -457,6 +458,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Registration setting: takes effect on a new connection or after a gateway restart.',
   'settings.display.booleanOn': 'Enabled',
   'settings.display.field.showReasoning': 'Show reasoning stream',
+  'settings.display.field.expandCards': 'Expand cards by default',
+  'settings.display.field.expandCards.hint':
+    'Tool, system and queued cards start expanded; permission and ask cards always do. A manual toggle on a card wins over the default.',
   'settings.display.field.statusBars': 'Status bar position',
   'settings.display.field.language': 'UI language',
 

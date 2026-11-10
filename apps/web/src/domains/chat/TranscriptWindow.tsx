@@ -54,6 +54,7 @@ export function TranscriptWindow({
   onRetryEarlier,
   cancelledJobs,
   verbosity,
+  cardsDefaultOpen,
   errorLevel,
   entries,
   snapshotVersion,
@@ -94,6 +95,8 @@ export function TranscriptWindow({
   onRetryEarlier: () => void;
   cancelledJobs: ReadonlySet<string>;
   verbosity: Verbosity;
+  /** 卡片默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
+  cardsDefaultOpen: boolean;
   errorLevel: ErrorVisibility;
   entries: readonly StoredEvent[];
   snapshotVersion: number;
@@ -183,6 +186,7 @@ export function TranscriptWindow({
     <RunItems
       group={{ ...group, items: [item], liveText: undefined, liveReasoning: undefined }}
       verbosity={verbosity}
+      cardsDefaultOpen={cardsDefaultOpen}
     />
   );
 
@@ -194,7 +198,7 @@ export function TranscriptWindow({
       if (hideReplayedLive && group.status !== 'running') continue;
       if (group.hasRunEvent) {
         // 真实 run：整段作为一个节点（正文 / 思考 / 工具卡不可拆）。
-        const runKey = 'run-' + group.runId;
+        const runKey = `run-${group.runId}`;
         const runStartTs = group.startedAt ?? group.firstTs;
         liveInputs.push({
           key: runKey,
@@ -215,34 +219,42 @@ export function TranscriptWindow({
               )
             }
             verbosity={verbosity}
+            cardsDefaultOpen={cardsDefaultOpen}
           />,
         );
         continue;
       }
       // 伪 run 组（run_id 是 runtime / session / 成员 id 等）：一条事件一个节点，
       // 各自按自己的事件时间落位；整组锚在首个事件上会让后续事件堆在最早时刻。
-      const ambientKey = 'ambient-' + group.runId;
+      const ambientKey = `ambient-${group.runId}`;
       liveInputs.push({
         key: ambientKey,
         ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
         items: group.items.map((item, index) => {
           const ts = itemTs(item);
-          return { key: index + '-' + item.key, ...(ts !== undefined ? { ts } : {}) };
+          return { key: `${index}-${item.key}`, ...(ts !== undefined ? { ts } : {}) };
         }),
       });
       group.items.forEach((item, index) => {
-        liveNodes.set(ambientKey + '#' + index + '-' + item.key, singleItemNode(group, item));
+        liveNodes.set(`${ambientKey}#${index}-${item.key}`, singleItemNode(group, item));
       });
     }
     for (const item of visibleQueued) {
-      const queuedKey = 'queued-' + item.runId;
+      const queuedKey = `queued-${item.runId}`;
       liveInputs.push({
         key: queuedKey,
         startTs: item.submittedAt,
         input: item.input,
         running: true,
       });
-      liveNodes.set(queuedKey, <QueuedNotice item={item} onCancel={onCancelQueued} />);
+      liveNodes.set(
+        queuedKey,
+        <QueuedNotice
+          item={item}
+          onCancel={onCancelQueued}
+          defaultOpen={cardsDefaultOpen}
+        />,
+      );
     }
   }
 
@@ -334,6 +346,7 @@ export function TranscriptWindow({
               liveNodes={liveNodes}
               windowStartTs={windowStartTs}
               verbosity={verbosity}
+              cardsDefaultOpen={cardsDefaultOpen}
               onEditMessage={onEditMessage}
               onRetryMessage={onRetryMessage}
             />

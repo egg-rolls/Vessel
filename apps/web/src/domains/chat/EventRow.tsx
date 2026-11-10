@@ -1,9 +1,9 @@
-import { Icon } from '../../components/ui';
 import { formatTimestamp, formatTokenCount } from '../../format';
 import type { RunEvent } from '../../gateway/types';
 import { t } from '../../i18n';
 import { errorMetaOf, formatErrorMeta } from '../../state/error-visibility';
 import { eventTag } from '../../state/events';
+import { StreamCard } from './StreamCard';
 
 export function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -288,23 +288,6 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
   }
 }
 
-/**
- * 展开 / 收起的 icon 提示：chevron 由 `details[open]` 驱动旋转。
- *
- * 可访问名保持不变——`chat.event.expand` / `chat.event.collapse` 仍作为视觉隐藏文本
- * 留在 summary 里（读屏读到的仍是「… 展开 / 收起」），icon 本身 `aria-hidden`；
- * 点击区域仍是整行 summary，焦点环由 summary 的 `:focus-visible` 提供。
- */
-function ToggleHint() {
-  return (
-    <span className="event-block-toggle">
-      <span className="event-toggle-expand sr-only">{t('chat.event.expand')}</span>
-      <span className="event-toggle-collapse sr-only">{t('chat.event.collapse')}</span>
-      <Icon name="chevron" className="event-toggle-icon" />
-    </span>
-  );
-}
-
 /** 展开区：事件元信息 + 完整原始载荷。 */
 function EventPayload({ event }: { event: RunEvent }) {
   // 运行时可能缺省 data；类型上它不可空，先落到 unknown 再判空，避免伪造 "undefined"。
@@ -327,40 +310,65 @@ function EventPayload({ event }: { event: RunEvent }) {
   );
 }
 
-export function NoticeRow({ event }: { event: RunEvent }) {
+/**
+ * 上下文生命周期 / 内部事件 → 一张语义色调卡（与工具卡同一套 StreamCard）。
+ *
+ * 折叠态只显示一行语义文案；展开后是完整载荷。默认开合听调用方的卡片开关。
+ */
+export function NoticeRow({
+  event,
+  defaultOpen = false,
+}: {
+  event: RunEvent;
+  defaultOpen?: boolean;
+}) {
   const view = noticeView(event);
-  if (!view) return <EventRow event={event} />;
+  if (!view) return <EventRow event={event} defaultOpen={defaultOpen} />;
   return (
-    <details className={`event-block notice-block ${view.tone}`}>
-      <summary className="event-block-summary">
+    <StreamCard
+      tone={view.tone}
+      defaultOpen={defaultOpen}
+      title={
         <span className="notice-block-text" role="status">
           {view.text}
         </span>
-        <ToggleHint />
-      </summary>
+      }
+    >
       <EventPayload event={event} />
-    </details>
+    </StreamCard>
   );
 }
 
-export function EventRow({ event }: { event: RunEvent }) {
+/** 原始事件行：时间 + 标签 + 单行预览，展开看完整载荷。 */
+export function EventRow({
+  event,
+  defaultOpen = false,
+}: {
+  event: RunEvent;
+  defaultOpen?: boolean;
+}) {
   const tag = eventTag(event.type);
-  const indent = tag.cls.startsWith('tag-tool-') ? ' ml-2.5 pl-3' : '';
   return (
-    <details className={`event-block${indent}`}>
-      <summary className="event-block-summary">
-        <span className="shrink-0 font-mono text-sm tabular-nums text-faint">
-          {formatTimestamp(event.ts, { withMs: true })}
-        </span>
-        <span
-          className={`shrink-0 rounded-xs bg-sunken px-1.5 font-mono text-sm leading-4 tracking-wide whitespace-nowrap ${TAG_TONE[tag.cls] ?? 'text-faint'}`}
-        >
-          {tag.label}
-        </span>
-        <span className="event-block-preview">{renderEventBody(event)}</span>
-        <ToggleHint />
-      </summary>
+    <StreamCard
+      defaultOpen={defaultOpen}
+      title={
+        <>
+          <span className="shrink-0 font-mono text-sm tabular-nums text-faint">
+            {formatTimestamp(event.ts, { withMs: true })}
+          </span>
+          <span
+            className={
+              'shrink-0 rounded-xs bg-sunken px-1.5 font-mono text-sm leading-4 tracking-wide whitespace-nowrap ' +
+              (TAG_TONE[tag.cls] ?? 'text-faint')
+            }
+          >
+            {tag.label}
+          </span>
+        </>
+      }
+      summary={renderEventBody(event)}
+    >
       <EventPayload event={event} />
-    </details>
+    </StreamCard>
   );
 }

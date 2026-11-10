@@ -175,7 +175,7 @@ export function orderTimelineEntries({
       // 伪 run 组：一条 item 一个条目，各按自己的事件时间落位。
       for (const item of items) {
         entries.push({
-          key: node.key + '#' + item.key,
+          key: `${node.key}#${item.key}`,
           kind: 'live',
           ts: clampToWindow(item.ts, windowStartTs),
           seq: node.seq,

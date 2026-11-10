@@ -174,6 +174,7 @@ export type SettableConfigKey =
   | 'ui.showInternalEvents'
   | 'ui.errorLevel'
   | 'ui.askUser'
+  | 'ui.expandCards'
   | 'observability.showProcessErrors'
   | 'agent.cwd';
 
@@ -192,6 +193,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'ui.showInternalEvents': { block: 'ui', yamlKey: 'show_internal_events' },
   'ui.errorLevel': { block: 'ui', yamlKey: 'error_level' },
   'ui.askUser': { block: 'ui', yamlKey: 'ask_user' },
+  'ui.expandCards': { block: 'ui', yamlKey: 'expand_cards' },
   'observability.showProcessErrors': {
     block: 'observability',
     yamlKey: 'show_process_errors',
@@ -217,7 +219,10 @@ export async function setUserConfigValue(
   if (key === 'ui.language' && !isUiLanguage(value)) {
     throw new Error(`invalid_language: ${JSON.stringify(value)}`);
   }
-  if (key === 'ui.showReasoning' && typeof value !== 'boolean') {
+  if (
+    (key === 'ui.showReasoning' || key === 'ui.askUser' || key === 'ui.expandCards') &&
+    typeof value !== 'boolean'
+  ) {
     throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
   }
   if (key === 'ui.statusBars' && !isUiStatusBars(value)) {

@@ -671,6 +671,13 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       value: ui.errorLevel,
     });
   }
+  if (ui.expandCards !== undefined && typeof ui.expandCards !== 'boolean') {
+    errors.push({
+      path: 'ui.expandCards',
+      message: 'ui.expandCards must be a boolean',
+      value: ui.expandCards,
+    });
+  }
   if (ui.askUser !== undefined && typeof ui.askUser !== 'boolean') {
     errors.push({
       path: 'ui.askUser',
@@ -2616,6 +2623,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'showInternalEvents',
     'errorLevel',
     'askUser',
+    'expandCards',
   ],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
 };

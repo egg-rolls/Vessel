@@ -17,6 +17,7 @@ import type {
 } from '../../gateway/types';
 import { t } from '../../i18n';
 import { AskCard } from '../chat/AskCard';
+import { StreamCard } from '../chat/StreamCard';
 import { PermissionCard, serializeInput } from '../chat/PermissionCard';
 import { memberDisplayName, shortAgentId } from './mention';
 
@@ -122,27 +123,33 @@ export function TeamPendingBar({
         {permissionRows.map(({ request, member }) => {
           const summary = permissionInputSummary(request.input);
           return (
-            <li
-              className="flex min-w-0 flex-col gap-1.5 rounded-md border border-transparent bg-raised p-2.5 transition-colors hover:border-line hover:bg-surface-hover hover:shadow-elev-1"
-              key={`perm:${request.requestId}`}
-            >
-              <div className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">
-                <span className="font-medium text-ink">{memberLabel(member)}</span>
-                <span className="rounded-full bg-warn-soft px-1.5 py-0.5 text-warn">
-                  {t('team.pending.permission')}
-                </span>
-                <span className="min-w-0 flex-1 truncate font-mono text-faint" title={summary}>
-                  {summary}
-                </span>
-              </div>
-              <PermissionCard
-                request={request}
-                busy={responding.has(request.requestId)}
-                connected={connected}
-                onDecide={(decision, scope) => {
-                  onDecidePermission?.(request.requestId, decision, scope);
-                }}
-              />
+            <li className="flex min-w-0 flex-col" key={`perm:${request.requestId}`}>
+              {/* 带可操作控件的卡片一律默认展开（不管 ui.expandCards），
+                  否则等于把待确认项藏起来。 */}
+              <StreamCard
+                className="stream-card-pending"
+                defaultOpen
+                title={
+                  <>
+                    <span className="font-sans text-xs font-medium text-ink">
+                      {memberLabel(member)}
+                    </span>
+                    <span className="rounded-full bg-warn-soft px-1.5 py-0.5 text-xs text-warn">
+                      {t('team.pending.permission')}
+                    </span>
+                  </>
+                }
+                summary={summary}
+              >
+                <PermissionCard
+                  request={request}
+                  busy={responding.has(request.requestId)}
+                  connected={connected}
+                  onDecide={(decision, scope) => {
+                    onDecidePermission?.(request.requestId, decision, scope);
+                  }}
+                />
+              </StreamCard>
             </li>
           );
         })}
@@ -150,29 +157,31 @@ export function TeamPendingBar({
         {askRows.map(({ request, member }) => {
           const preview = askPreview(request);
           return (
-            <li
-              className="flex min-w-0 flex-col gap-1.5 rounded-md border border-transparent bg-raised p-2.5 transition-colors hover:border-line hover:bg-surface-hover hover:shadow-elev-1"
-              key={`ask:${request.requestId}`}
-            >
-              <div className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">
-                <span className="font-medium text-ink">{memberLabel(member)}</span>
-                <Badge tone="warn">{t('team.pending.ask')}</Badge>
-                {preview && (
-                  <span className="min-w-0 flex-1 truncate text-faint" title={preview}>
-                    {preview}
-                  </span>
-                )}
-              </div>
-              <AskCard
-                request={request}
-                busy={responding.has(request.requestId)}
-                onSubmit={(answers) => {
-                  onRespondAsk?.(request.requestId, answers);
-                }}
-                onCancel={() => {
-                  onRespondAsk?.(request.requestId, []);
-                }}
-              />
+            <li className="flex min-w-0 flex-col" key={`ask:${request.requestId}`}>
+              <StreamCard
+                className="stream-card-pending"
+                defaultOpen
+                title={
+                  <>
+                    <span className="font-sans text-xs font-medium text-ink">
+                      {memberLabel(member)}
+                    </span>
+                    <Badge tone="warn">{t('team.pending.ask')}</Badge>
+                  </>
+                }
+                summary={preview.length > 0 ? preview : undefined}
+              >
+                <AskCard
+                  request={request}
+                  busy={responding.has(request.requestId)}
+                  onSubmit={(answers) => {
+                    onRespondAsk?.(request.requestId, answers);
+                  }}
+                  onCancel={() => {
+                    onRespondAsk?.(request.requestId, []);
+                  }}
+                />
+              </StreamCard>
             </li>
           );
         })}

@@ -8,10 +8,10 @@
  *
  * 历史消息没有 `name`（0.50 之前投递的 A2A 消息），继续按用户气泡渲染，不做回填。
  */
-import { Icon } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
+import { StreamCard } from './StreamCard';
 
 /** runtime 写入的前缀；alias 已 sanitize 成 `[A-Za-z0-9_-]`。 */
 const AGENT_MESSAGE_PREFIX = 'agent:';
@@ -27,37 +27,33 @@ export function agentMessageSender(message: Message): string | undefined {
   return alias.length > 0 ? alias : undefined;
 }
 
-export function AgentMessageCard({ message, sender }: { message: Message; sender: string }) {
+export function AgentMessageCard({
+  message,
+  sender,
+  defaultOpen = false,
+}: {
+  message: Message;
+  sender: string;
+  /** 默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
+  defaultOpen?: boolean;
+}) {
   const clock = formatClock(message.timestamp);
   return (
-    <details
-      className="event-block agent-message"
-      aria-label={t('chat.agentMessage.group', { name: sender })}
-    >
-      <summary className="event-block-summary">
-        <span className="max-w-56 shrink-0 truncate font-mono text-2xs tracking-wider text-accent">
+    <StreamCard
+      className="agent-message"
+      ariaLabel={t('chat.agentMessage.group', { name: sender })}
+      defaultOpen={defaultOpen}
+      title={
+        <span className="max-w-56 truncate font-mono text-2xs tracking-wider text-accent">
           {t('chat.agentMessage.from', { name: sender })}
         </span>
-        {clock !== '' && (
-          <time
-            className="shrink-0 font-mono text-2xs tabular-nums text-faint"
-            dateTime={new Date(message.timestamp ?? 0).toISOString()}
-          >
-            {clock}
-          </time>
-        )}
-        <span className="event-block-preview">{message.content}</span>
-        <span className="event-block-toggle">
-          <span className="event-toggle-expand sr-only">{t('chat.event.expand')}</span>
-          <span className="event-toggle-collapse sr-only">{t('chat.event.collapse')}</span>
-          <Icon name="chevron" className="event-toggle-icon" />
-        </span>
-      </summary>
-      <div className="event-block-body">
-        <p className="m-0 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">
-          {message.content}
-        </p>
-      </div>
-    </details>
+      }
+      meta={clock !== '' ? clock : undefined}
+      summary={message.content}
+    >
+      <p className="m-0 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">
+        {message.content}
+      </p>
+    </StreamCard>
   );
 }

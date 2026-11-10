@@ -11,6 +11,7 @@ import type { RunGroup } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
 import { filterTimelineItems, runningToolHint } from './chat-visibility';
 import { EventRow, NoticeRow } from './EventRow';
+import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
 
@@ -172,6 +173,7 @@ export const RunItems = memo(function RunItems({
   cancelled = false,
   hideInput = false,
   verbosity = 'normal',
+  cardsDefaultOpen = false,
 }: {
   group: RunGroup;
   /** 用户已请求取消且服务端最终报 failed 时，按取消态展示。 */
@@ -179,6 +181,8 @@ export const RunItems = memo(function RunItems({
   /** 历史消息里已经有同一条用户输入时，不再重复显示 run.input。 */
   hideInput?: boolean;
   verbosity?: Verbosity;
+  /** 卡片默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
+  cardsDefaultOpen?: boolean;
 }) {
   const copy = useMessageCopy();
   const status =
@@ -263,12 +267,19 @@ export const RunItems = memo(function RunItems({
           );
         }
         if (item.kind === 'tool') {
-          return <ToolCard key={item.key} card={item} verbosity={verbosity} />;
+          return (
+            <ToolCard
+              key={item.key}
+              card={item}
+              verbosity={verbosity}
+              defaultOpen={cardsDefaultOpen}
+            />
+          );
         }
         if (item.kind === 'notice') {
-          return <NoticeRow key={item.key} event={item.event} />;
+          return <NoticeRow key={item.key} event={item.event} defaultOpen={cardsDefaultOpen} />;
         }
-        return <EventRow key={item.key} event={item.event} />;
+        return <EventRow key={item.key} event={item.event} defaultOpen={cardsDefaultOpen} />;
       })}
       {liveReasoning && <ReasoningBlock text={liveReasoning} streaming />}
       {liveText && (
@@ -313,13 +324,21 @@ export const RunItems = memo(function RunItems({
   );
 });
 
-/** 排队：流末尾的一条轻量 notice，不占独立卡片。 */
+/**
+ * 排队：与运行态工具卡同一张 StreamCard（单行摘要折叠，长输入不撑高）。
+ *
+ * 「取消排队」是**可操作控件**：放在 actions 插槽（始终可见），不进 summary，
+ * 这样折叠状态下也能取消，且 summary 里没有可点元素。
+ */
 export function QueuedNotice({
   item,
   onCancel,
+  defaultOpen = false,
 }: {
   item: QueuedSubmission;
   onCancel: (runId: string) => void;
+  /** 默认展开（ui.expandCards || verbosity === 'debug'）；排队卡是纯信息卡。 */
+  defaultOpen?: boolean;
 }) {
   const status = item.cancelled ? 'cancelled' : 'queued';
   const position =
@@ -327,19 +346,31 @@ export function QueuedNotice({
       ? t('chat.run.queuedPosition', { position: item.queuePosition })
       : t('chat.run.queuedUnknown');
   return (
-    <div className={`stream-notice ${status}`} role="status">
-      <StatusChip status={status} label={item.cancelled ? t('chat.run.cancelled') : position} />
-      <span className="stream-notice-input">{item.input}</span>
-      {!item.cancelled && (
-        <Button
-          variant="link"
-          className="stream-notice-action"
-          onClick={() => onCancel(item.runId)}
-          disabled={item.cancelling}
-        >
-          {item.cancelling ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
-        </Button>
-      )}
-    </div>
+    <StreamCard
+      className="stream-notice"
+      defaultOpen={defaultOpen}
+      title={
+        <StatusChip status={status} label={item.cancelled ? t('chat.run.cancelled') : position} />
+      }
+      summary={item.input}
+      actions={
+        !item.cancelled ? (
+          <div className="px-2.5 pb-1">
+            <Button
+              variant="link"
+              className="stream-notice-action"
+              onClick={() => onCancel(item.runId)}
+              disabled={item.cancelling}
+            >
+              {item.cancelling ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
+            </Button>
+          </div>
+        ) : undefined
+      }
+    >
+      <p className="m-0 px-2.5 pb-2 whitespace-pre-wrap wrap-anywhere text-sm text-muted">
+        {item.input}
+      </p>
+    </StreamCard>
   );
 }

@@ -24,7 +24,7 @@ import type { Verbosity } from '../apps/web/src/state/visibility';
 function tool(status: 'running' | 'done' | 'error'): ChatRenderItem {
   return {
     kind: 'tool',
-    key: 'tool-' + status,
+    key: `tool-${status}`,
     name: 'bash',
     status,
     startedAt: 1,
@@ -143,7 +143,7 @@ for (const fixture of FIXTURES) {
 
 if (failures.length > 0) {
   for (const failure of failures) {
-    console.log('FAIL ' + failure.name);
+    console.log(`FAIL ${failure.name}`);
     console.log('     why: ' + failure.why);
   }
   console.error(

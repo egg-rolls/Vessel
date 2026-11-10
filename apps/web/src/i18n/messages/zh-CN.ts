@@ -256,8 +256,9 @@ export const messages = {
   'chat.tool.showAll': '展开全部 {total} 行',
   'chat.tool.description': '描述',
   'chat.tool.descriptionUnavailable': '描述不可用',
-  'chat.tool.dialogLabel': '工具详情：{name}',
   'chat.tool.status.running': '运行中',
+  'chat.tool.status.history': '历史记录',
+  'chat.tool.outputMissing': '历史里没有这次调用的输出（可能已被截断）。',
   'chat.tool.status.done': '完成',
   'chat.tool.status.error': '失败',
   'ask.title': 'Agent 提问',
@@ -445,6 +446,9 @@ export const messages = {
   'settings.display.field.askUser.hint': '注册类设置：保存后需新连接或重启 gateway 才生效。',
   'settings.display.booleanOn': '启用',
   'settings.display.field.showReasoning': '显示思考流',
+  'settings.display.field.expandCards': '卡片默认展开',
+  'settings.display.field.expandCards.hint':
+    '工具 / 系统消息 / 排队卡片默认展开；权限与提问卡片始终展开。某张卡片手动开合后以手动状态为准。',
   'settings.display.field.statusBars': '状态栏位置',
   'settings.display.field.language': '界面语言',
 

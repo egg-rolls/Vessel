@@ -632,6 +632,13 @@ export interface UiConfig {
    */
   statusBars?: UiStatusBars;
   /**
+   * 时间线卡片（工具 / 系统消息 / 排队）是否默认展开（YAML 键 expand_cards；默认 false）。
+   *
+   * 只有纯信息卡听这个开关；带可操作控件（权限 / ask / 确认）的卡片一律默认展开。
+   * 用户在某张卡片上手动开合后，以手动状态为准。
+   */
+  expandCards?: boolean;
+  /**
    * 是否注册 `ask_user` 工具（0.15；YAML 键 `ask_user`）。
    *
    * 默认由入口决定：交互 REPL（TTY）与 `gateway start` / `--serve` 为 true，

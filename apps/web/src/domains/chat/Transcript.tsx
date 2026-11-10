@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, type ReactNode, useMemo } from 'react';
 import { Markdown } from '../../components/Markdown';
 import { type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock, localDayKey, localDayLabel } from '../../format';
@@ -8,6 +8,8 @@ import { runtimeMessageKind } from '../../state/runtime-visibility';
 import type { Verbosity } from '../../state/visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { historyToolVisible } from './chat-visibility';
+import { HistoryToolCard } from './HistoryToolCard';
+import { buildHistoryToolItems, type HistoryToolItem } from './history-tools';
 import {
   orderTimelineEntries,
   type TimelineEntry,
@@ -51,6 +53,8 @@ function TranscriptMessage({
   messageIndex,
   previousUser,
   verbosity,
+  cardsDefaultOpen,
+  toolByCallId,
   onCopy,
   onEdit,
   onRetry,
@@ -62,6 +66,10 @@ function TranscriptMessage({
   previousUser?: { text: string; index: number };
   /** 可见性档位：工具消息与 live 共用同一判定（chat-visibility）。 */
   verbosity: Verbosity;
+  /** 卡片默认展开（ui.expandCards || verbosity === 'debug'）。 */
+  cardsDefaultOpen: boolean;
+  /** 历史工具卡（按 call id 索引）：tool 消息与缺失结果的调用共用同一份配对结果。 */
+  toolByCallId: ReadonlyMap<string, HistoryToolItem>;
   onCopy: (text: string) => void;
   onEdit: (keepMessages: number, text: string) => void;
   onRetry: (keepMessages: number, text: string) => void;
@@ -69,18 +77,16 @@ function TranscriptMessage({
   if (!messageRenders(message, verbosity)) return null;
 
   if (message.role === 'tool') {
-    const label = message.name || message.tool_call_id || 'tool';
-    return (
-      <div className="ml-0.5 max-w-full rounded-md bg-sunken px-3 py-2">
-        <div className="flex flex-wrap items-baseline gap-2">
-          <span className="mb-1 block font-mono text-2xs tracking-wider text-muted">{label}</span>
-          <MessageTime message={message} />
-        </div>
-        <pre className="m-0 max-h-56 overflow-auto whitespace-pre-wrap wrap-anywhere font-mono text-sm leading-relaxed text-muted">
-          {message.content}
-        </pre>
-      </div>
-    );
+    // 历史工具消息：与运行态同一张 StreamCard（配对结果由 Transcript 预计算）。
+    // 找不到配对（历史从中间开始）时用孤立结果兜底，输出绝不丢、也不渲染成 pre 看板。
+    const callId =
+      typeof message.tool_call_id === 'string' && message.tool_call_id.length > 0
+        ? message.tool_call_id
+        : undefined;
+    const paired = callId === undefined ? undefined : toolByCallId.get(callId);
+    const item = paired ?? buildHistoryToolItems([message])[0];
+    if (item === undefined) return null;
+    return <HistoryToolCard item={item} defaultOpen={cardsDefaultOpen} />;
   }
 
   if (message.role === 'user') {
@@ -88,7 +94,9 @@ function TranscriptMessage({
     // 而不是「用户自己说的话」。没有 name 的历史消息继续走下面的用户气泡。
     const agentSender = agentMessageSender(message);
     if (agentSender !== undefined) {
-      return <AgentMessageCard message={message} sender={agentSender} />;
+      return (
+        <AgentMessageCard message={message} sender={agentSender} defaultOpen={cardsDefaultOpen} />
+      );
     }
     const actions: MessageAction[] = [];
     if (message.content.trim().length > 0) {
@@ -143,15 +151,24 @@ function TranscriptMessage({
         <MessageTime message={message} />
       </div>
       {message.content && <Markdown className="msg-text" text={message.content} />}
-      {calls.map((call) => (
-        <div
-          className="mt-2 flex flex-wrap items-baseline gap-2 rounded-md bg-sunken px-3 py-2 text-sm"
-          key={call.id}
-        >
-          <span className="font-mono text-md">{call.function.name}</span>
-          <span className="text-muted">{truncate(call.function.arguments || '', 120)}</span>
-        </div>
-      ))}
+      {calls.map((call) => {
+        // 结果已落盘时，卡片渲染在 role:'tool' 消息的位置（避免同一调用出现两张卡）；
+        // 只有「有调用、无结果」才在这里补一张（历史被截断时的唯一可见锚点）。
+        const item = toolByCallId.get(call.id);
+        if (item !== undefined && item.paired) return null;
+        return (
+          <div className="mt-2" key={call.id}>
+            {item !== undefined ? (
+              <HistoryToolCard item={item} defaultOpen={cardsDefaultOpen} />
+            ) : (
+              <div className="flex flex-wrap items-baseline gap-2 rounded-md bg-sunken px-3 py-2 text-sm">
+                <span className="font-mono text-md">{call.function.name}</span>
+                <span className="text-muted">{truncate(call.function.arguments || '', 120)}</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
       {actions.length > 0 && <MessageActions className="mt-1" actions={actions} />}
     </div>
   );
@@ -193,6 +210,8 @@ function renderEntries({
   messageIndexOffset,
   allMessages,
   verbosity,
+  cardsDefaultOpen,
+  toolByCallId,
   onCopy,
   onEdit,
   onRetry,
@@ -203,6 +222,8 @@ function renderEntries({
   messageIndexOffset: number;
   allMessages: readonly Message[] | undefined;
   verbosity: Verbosity;
+  cardsDefaultOpen: boolean;
+  toolByCallId: ReadonlyMap<string, HistoryToolItem>;
   onCopy: (text: string) => void;
   onEdit: (keepMessages: number, text: string) => void;
   onRetry: (keepMessages: number, text: string) => void;
@@ -223,7 +244,7 @@ function renderEntries({
       nodes.push(
         <div
           className="mt-3.5 mb-2.5 flex items-center justify-center gap-2.5 py-1 font-mono text-2xs uppercase tracking-widest text-faint"
-          key={'day-' + day}
+          key={`day-${day}`}
         >
           <span>{localDayLabel(entry.ts ?? 0)}</span>
         </div>,
@@ -245,6 +266,8 @@ function renderEntries({
           message={message}
           messageIndex={messageIndex}
           verbosity={verbosity}
+          cardsDefaultOpen={cardsDefaultOpen}
+          toolByCallId={toolByCallId}
           previousUser={previousUserMessage(message, allMessages, messageIndexOffset)}
           onCopy={onCopy}
           onEdit={onEdit}
@@ -269,6 +292,7 @@ export function Transcript({
   liveNodes,
   windowStartTs,
   verbosity = 'normal',
+  cardsDefaultOpen = false,
   onEditMessage,
   onRetryMessage,
 }: {
@@ -287,6 +311,8 @@ export function Transcript({
   windowStartTs?: number;
   /** 可见性档位：历史工具消息与 live 共用同一判定（chat-visibility）。 */
   verbosity?: Verbosity;
+  /** 卡片默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
+  cardsDefaultOpen?: boolean;
   /** 编辑 = 确认后删除该消息及其后历史，并把原文写回 Composer。 */
   onEditMessage: (keepMessages: number, text: string) => void;
   /** 重试 = 确认后删除该回复及其后历史，并重新发送前一条用户内容。 */
@@ -303,13 +329,26 @@ export function Transcript({
     const absolute =
       sourceIndex !== undefined && sourceIndex >= 0 ? sourceIndex + messageIndexOffset : undefined;
     return {
-      key: 'm-' + (absolute ?? startIndex + index),
+      key: `m-${absolute ?? startIndex + index}`,
       role: message.role,
       content: message.content,
       runtimeContext: runtimeMessageKind(message) !== undefined,
       ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}),
     };
   });
+
+  // 历史工具配对只算一次：tool 消息与「有调用无结果」共用同一份结果，避免同一调用出现两张卡。
+  const historyTools = useMemo(
+    () => buildHistoryToolItems(allMessages ?? messages),
+    [allMessages, messages],
+  );
+  const toolByCallId = useMemo(() => {
+    const map = new Map<string, HistoryToolItem>();
+    for (const item of historyTools) {
+      if (item.callId !== undefined) map.set(item.callId, item);
+    }
+    return map;
+  }, [historyTools]);
 
   const entries = orderTimelineEntries({ messages: messageInputs, live, windowStartTs });
 
@@ -322,6 +361,8 @@ export function Transcript({
         messageIndexOffset,
         allMessages,
         verbosity,
+        cardsDefaultOpen,
+        toolByCallId,
         onCopy: copy,
         onEdit: onEditMessage,
         onRetry: onRetryMessage,

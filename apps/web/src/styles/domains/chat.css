@@ -551,6 +551,34 @@
   padding: 0 10px 8px;
 }
 
+.notice-block.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.notice-block.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/*
+ * 统一消息卡（StreamCard）：运行态与终止态共用一套。
+ * 标题不收缩，摘要吃剩余宽度并单行 ellipsis；语义色调复用 notice-block 家族。
+ */
+.stream-card-title {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--size-sm);
+  color: var(--ink);
+}
+
+.stream-card > summary {
+  align-items: center;
+}
+
 .notice-block.warn {
   background: var(--warn-soft);
   color: var(--warn);

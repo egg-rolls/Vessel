@@ -210,7 +210,11 @@ export async function configSetCommand(
         stderr: t('config.set.invalidVerbosity', { value }),
       };
     }
-  } else if (key === 'ui.showInternalEvents' || key === 'ui.askUser') {
+  } else if (
+    key === 'ui.showInternalEvents' ||
+    key === 'ui.askUser' ||
+    key === 'ui.expandCards'
+  ) {
     if (value !== 'true' && value !== 'false') {
       return {
         exitCode: 2,

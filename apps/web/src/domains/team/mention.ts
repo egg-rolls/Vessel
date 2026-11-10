@@ -32,7 +32,7 @@ export interface MentionChip {
 }
 
 /** `@` 前的字符像 email 本地部分 / 路径片段时，才可能是在打地址而不是 @ 人。 */
-const ADDRESS_BEFORE_AT = /[A-Za-z0-9._%+\/-]/;
+const ADDRESS_BEFORE_AT = /[A-Za-z0-9._%+/-]/;
 
 /** `@` 后出现 `.x` / `/x`：域名或路径的下半截。 */
 const ADDRESS_AFTER_AT = /[./][A-Za-z0-9]/;

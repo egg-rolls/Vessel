@@ -102,6 +102,7 @@ export type ConfigCommandArgs =
         | 'ui.showInternalEvents'
         | 'ui.errorLevel'
         | 'ui.askUser'
+        | 'ui.expandCards'
         | 'observability.showProcessErrors'
         | 'agent.cwd';
       value: string;
@@ -980,7 +981,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
       return {
         ok: false,
         error:
-          'Usage: vessel config set <ui.language|ui.showReasoning|ui.statusBars|ui.verbosity|ui.showInternalEvents|ui.errorLevel|ui.askUser|observability.showProcessErrors|agent.cwd> <value> [--json]',
+          'Usage: vessel config set <ui.language|ui.showReasoning|ui.statusBars|ui.verbosity|ui.showInternalEvents|ui.errorLevel|ui.askUser|ui.expandCards|observability.showProcessErrors|agent.cwd> <value> [--json]',
       };
     }
     const [key = '', value = ''] = positional;
@@ -992,6 +993,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
       key !== 'ui.showInternalEvents' &&
       key !== 'ui.errorLevel' &&
       key !== 'ui.askUser' &&
+      key !== 'ui.expandCards' &&
       key !== 'observability.showProcessErrors' &&
       key !== 'agent.cwd'
     ) {
@@ -1000,7 +1002,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
         error:
           `Unsupported config key: ${key} (supported: ui.language, ui.showReasoning, ` +
           'ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, ui.askUser, ' +
-          'observability.showProcessErrors, agent.cwd)',
+          'ui.expandCards, observability.showProcessErrors, agent.cwd)',
       };
     }
     if (key === 'ui.language' && value !== 'zh-CN' && value !== 'en') {
@@ -1018,6 +1020,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
     if (
       (key === 'ui.showInternalEvents' ||
         key === 'ui.askUser' ||
+        key === 'ui.expandCards' ||
         key === 'observability.showProcessErrors') &&
       value !== 'true' &&
       value !== 'false'

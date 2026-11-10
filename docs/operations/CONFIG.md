@@ -3,7 +3,7 @@
 > **Reference（>300 行）**：按需检索，不要求整读；配置语义的当前事实以
 > [architecture/config.md](../architecture/config.md) 为准，本文只保留操作细节。
 > 适用版本：0.5+。维护者：`gov`；配置语义归 `asm`。
-> 本文描述固定位置、优先级与密钥解析。架构事实见
+> 本文描述固定位置、、优先级与密钥解析。架构事实见
 > [architecture/config.md](../architecture/config.md#config-model) 与 [ADR-050](../adr/ADR-050-yaml-first-config-and-secrets.md)。
 
 ## 1. 配置位置
@@ -195,9 +195,10 @@ observability:
 - **`ui.showInternalEvents`**（默认 `false`）：TUI `/errors` 与 Web 展示内部事件；与 `verbosity: debug` 取“或”。
 - **`ui.errorLevel`**（默认 `user`）：`all` 时 `/errors` 与 `vessel errors` 追加 internal / process 级错误。
 - **`observability.showProcessErrors`**（默认 `false`）：让 `process.error` / `shutdown.failed` 等进入 `vessel errors`。
+- **`ui.expandCards`**（默认 `false`）：Web 时间线卡片（工具 / 系统消息 / 排队）是否默认展开；带可操作控件（权限 / ask / 确认）的卡片始终展开，`verbosity: debug` 等同 `true`；用户手动开合某张卡片后以手动状态为准。
 - **`ui.ask_user`**（入口默认）：交互 REPL（TTY）或 gateway/serve 才注册；`--run` / headless / 管道不注册；显式 `false` 按入口关闭，显式 `true` 也不能让无客户端入口注册。提问卡内联在 Web `RunCard`，默认无限等待，由应答 / abort / run 终态收口。
 - **校验**：枚举与布尔值非法时由 validator 拒绝，不做静默回退；四个键都支持 `vessel config set`。
-- **CLI 写配置**：`vessel config set ui.verbosity <minimal|normal|debug>`、`ui.showInternalEvents <true|false>`、`ui.errorLevel <user|all>`、`ui.askUser <true|false>`、`observability.showProcessErrors <true|false>`；与其它键一样只改用户配置、保留其它键、`0600` 原子写。
+- **CLI 写配置**：`vessel config set ui.verbosity <minimal|normal|debug>`、`ui.showInternalEvents <true|false>`、`ui.errorLevel <user|all>`、`ui.askUser <true|false>`、`ui.expandCards <true|false>`、`observability.showProcessErrors <true|false>`；与其它键一样只改用户配置、保留其它键、`0600` 原子写。
 
 ### 2.8 限额与终止（默认不限制；机制见 ADR-084，默认值自 0.35 起为 opt-in）
 
@@ -423,6 +424,7 @@ vessel config set ui.verbosity <minimal|normal|debug> [--json]
 vessel config set ui.showInternalEvents <true|false> [--json]
 vessel config set ui.errorLevel <user|all> [--json]
 vessel config set ui.askUser <true|false> [--json]
+vessel config set ui.expandCards <true|false> [--json]
 vessel config set observability.showProcessErrors <true|false> [--json]
 vessel config set agent.cwd <path> [--json]
 vessel doctor [--deep] [--json]
@@ -470,8 +472,8 @@ vessel hub node remove <pairing_id>
   密钥值，只输出 `"<set>"` / `"<unset>"`。
 - `config.set`（RPC，0.15）：只写用户配置、只接受白名单键（`ui.language` /
   `ui.statusBars` / `ui.verbosity` / `ui.errorLevel` / `ui.showReasoning` /
-  `ui.showInternalEvents` / `ui.askUser` / `observability.showProcessErrors` /
-  `agent.cwd`），值非法返回 `invalid_params`。写入同样原子、`0600`、保留其它键。
+  `ui.showInternalEvents` / `ui.askUser` / `ui.expandCards` /
+  `observability.showProcessErrors` / `agent.cwd`），值非法返回 `invalid_params`。写入同样原子、`0600`、保留其它键。
 
 ### 4.1 Gateway 生命周期与配置生效（0.12）
 
