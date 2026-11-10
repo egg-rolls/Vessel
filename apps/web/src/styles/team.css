@@ -71,22 +71,13 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* 内容列宽度手柄的定位祖先：手柄用 50% + 内容列半宽贴住内容列右缘。
-     `position: relative` 不参与 flex/grid 尺寸计算，不破坏上面的高度链。 */
-  position: relative;
-  /* 内容列左右内衬，必须与 `.team-transcript-scroll` / `.team-composer-area`
-     的 padding-inline 一致；手柄用它把右缘夹在列内。 */
-  --team-col-pad: clamp(16px, 4vw, 32px);
 }
 
-/* 内容列宽度手柄：与会话页 `.resize-handle-chat` 同一个几何（复用 `chat` pane）。
-   内容列居中，右缘 = 50% + --chat-half-w；但 `--chat-content-w` 是**会话页**的
-   可用宽度（只扣 nav/sessions），Team 页还多一条列表栏 / 成员栏，列可能比内容列
-   配置更窄，所以再用 `min()` 夹到「列右缘 - 内衬」，手柄不会漂出列外。 */
-.resize-handle-team-chat {
-  left: min(calc(50% + var(--chat-half-w, 430px)), calc(100% - var(--team-col-pad)));
-  right: auto;
-  transform: translateX(-50%);
+/* 团队内容列左右内衬：与 `.team-transcript-scroll` / `.team-composer-area` 的
+   padding-inline 一致，手柄用它把右缘夹在列内。几何本身与会话页共用
+   `layout.css` 的 `.content-stage` / `.resize-handle-content`。 */
+.team-chat .content-stage {
+  --content-pad-inline: clamp(16px, 4vw, 32px);
 }
 
 /* 成员栏展开：主区 minmax(0,1fr) + 常驻右列（272px / ≤1199px 240px）。
@@ -97,17 +88,6 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--team-members-w);
   grid-template-rows: minmax(0, 1fr);
-  /* 手柄：50% 要让回成员栏占掉的那半列；夹取上界也改成主列右缘
-     （= 100% - 成员栏宽）。≤1199 两者一起换成 compact 宽度。 */
-  --team-members-offset: calc(var(--team-members-w) / 2);
-  --team-main-right: calc(100% - var(--team-members-w));
-}
-
-.team-chat-body.has-members .resize-handle-team-chat {
-  left: min(
-    calc(50% + var(--chat-half-w, 430px) - var(--team-members-offset)),
-    calc(var(--team-main-right) - var(--team-col-pad))
-  );
 }
 
 /* 主列 = transcript + composer 的同一个 min-height:0 flex 列。
@@ -265,15 +245,12 @@
 @media (max-width: 1199px) {
   .team-chat-body.has-members {
     grid-template-columns: minmax(0, 1fr) var(--team-members-w-compact);
-    --team-members-offset: calc(var(--team-members-w-compact) / 2);
-    --team-main-right: calc(100% - var(--team-members-w-compact));
   }
 }
 
 @media (max-width: 1023px) {
   /* 抽屉走 fixed 定位：body 退回单列，成员栏不再是 grid 第二列。
-     `.team-chat-main` 的 `height: 100%` 与 body 的 `position: relative` 已由
-     基础规则提供，这里不重复。 */
+     `.team-chat-main` 的 `height: 100%` 已由基础规则提供，这里不重复。 */
   .team-chat-body,
   .team-chat-body.has-members {
     display: block;

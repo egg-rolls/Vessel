@@ -313,83 +313,88 @@ export function ChatView({
         inert={compact && sessionsOpen ? true : undefined}
       >
         <h1 className="sr-only">{t('chat.main.heading')}</h1>
-        {!panes.disabled('chat') && (
-          <ResizeHandle
-            pane="chat"
-            api={panes}
-            label={t('resize.chat')}
-            className="resize-handle resize-handle-chat"
+
+        {/* 手柄与页头 / 转录区同属 content-stage：纵范围到转录区底部为止，
+            不再纵跨整列压到输入区上（拖输入框右缘不会再被手柄抢走）。 */}
+        <div className="content-stage">
+          {!panes.disabled('chat') && (
+            <ResizeHandle
+              pane="chat"
+              api={panes}
+              label={t('resize.chat')}
+              className="resize-handle resize-handle-content"
+            />
+          )}
+
+          <ChatHeader
+            selectedId={selectedId}
+            selectedSession={sessionsApi.selectedSession}
+            sessionDetail={sessionsApi.sessionDetail}
+            contextUsage={transcriptApi.contextUsage}
+            agents={transcriptApi.sessionAgents}
+            activeAgentId={transcriptApi.activeAgent?.id}
+            draftActive={draftActive}
+            onSelectAgent={(agentId) => {
+              if (!selectedId) return;
+              navigate({
+                domain: 'chat',
+                sessionId: selectedId,
+                ...(agentId ? { agent: agentId } : {}),
+              });
+            }}
           />
-        )}
 
-        <ChatHeader
-          selectedId={selectedId}
-          selectedSession={sessionsApi.selectedSession}
-          sessionDetail={sessionsApi.sessionDetail}
-          contextUsage={transcriptApi.contextUsage}
-          agents={transcriptApi.sessionAgents}
-          activeAgentId={transcriptApi.activeAgent?.id}
-          draftActive={draftActive}
-          onSelectAgent={(agentId) => {
-            if (!selectedId) return;
-            navigate({
-              domain: 'chat',
-              sessionId: selectedId,
-              ...(agentId ? { agent: agentId } : {}),
-            });
-          }}
-        />
+          {selectedId && (
+            <PluginPanels
+              slot="session-detail"
+              context={{ session: selectedId }}
+              className="flex-none px-4 pb-2"
+            />
+          )}
 
-        {selectedId && (
-          <PluginPanels
-            slot="session-detail"
-            context={{ session: selectedId }}
-            className="flex-none px-4 pb-2"
+          <TranscriptWindow
+            hasToken={hasToken}
+            selectedId={selectedId}
+            activeAgent={transcriptApi.activeAgent}
+            draftActive={draftActive}
+            restorePending={sessionsApi.restorePending}
+            hydrateError={transcriptApi.hydrateError}
+            hydrating={transcriptApi.hydrating}
+            hydrateStale={transcriptApi.hydrateStale}
+            hasTranscript={transcriptApi.hasTranscript}
+            hasEarlier={transcriptApi.hasEarlier}
+            visibleGroups={transcriptApi.visibleGroups}
+            renderedGroups={transcriptApi.renderedGroups}
+            visibleQueued={transcriptApi.visibleQueued}
+            transcriptWindow={transcriptApi.transcriptWindow}
+            transcriptStart={transcriptApi.transcriptStart}
+            transcriptMessages={transcriptApi.transcriptMessages}
+            messageIndexOffset={transcriptApi.messageIndexOffset}
+            detailNotice={transcriptApi.detailNotice}
+            onDismissDetailNotice={transcriptApi.dismissDetailNotice}
+            earlierError={transcriptApi.earlierError}
+            onDismissEarlierError={transcriptApi.dismissEarlierError}
+            onRetryEarlier={() => {
+              // 重试只重取「上一页」：服务端游标由窗口首条决定，失败后窗口没动，
+              // 因此直接重发同一个 before 请求（不经本地扩窗，避免白扩一页）。
+              if (!selectedId) return;
+              void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
+            }}
+            cancelledJobs={submitApi.cancelledJobs}
+            verbosity={transcriptApi.visibility.verbosity}
+            errorLevel={transcriptApi.errorLevel}
+            entries={snapshot.entries}
+            snapshotVersion={snapshot.version}
+            detailSessionId={sessionsApi.sessionDetail?.session_id}
+            onRetryDetail={transcriptApi.reloadDetail}
+            onLoadEarlier={transcriptApi.loadEarlier}
+            onCancelQueued={(runId) => void submitApi.handleCancelQueued(runId)}
+            onConfigureConnection={() => navigate({ domain: 'gateway' })}
+            onGoChat={() => navigate({ domain: 'chat' })}
+            onEditMessage={handleEditMessage}
+            onRetryMessage={handleRetryMessage}
           />
-        )}
-
-        <TranscriptWindow
-          hasToken={hasToken}
-          selectedId={selectedId}
-          activeAgent={transcriptApi.activeAgent}
-          draftActive={draftActive}
-          restorePending={sessionsApi.restorePending}
-          hydrateError={transcriptApi.hydrateError}
-          hydrating={transcriptApi.hydrating}
-          hydrateStale={transcriptApi.hydrateStale}
-          hasTranscript={transcriptApi.hasTranscript}
-          hasEarlier={transcriptApi.hasEarlier}
-          visibleGroups={transcriptApi.visibleGroups}
-          renderedGroups={transcriptApi.renderedGroups}
-          visibleQueued={transcriptApi.visibleQueued}
-          transcriptWindow={transcriptApi.transcriptWindow}
-          transcriptStart={transcriptApi.transcriptStart}
-          transcriptMessages={transcriptApi.transcriptMessages}
-          messageIndexOffset={transcriptApi.messageIndexOffset}
-          detailNotice={transcriptApi.detailNotice}
-          onDismissDetailNotice={transcriptApi.dismissDetailNotice}
-          earlierError={transcriptApi.earlierError}
-          onDismissEarlierError={transcriptApi.dismissEarlierError}
-          onRetryEarlier={() => {
-            // 重试只重取「上一页」：服务端游标由窗口首条决定，失败后窗口没动，
-            // 因此直接重发同一个 before 请求（不经本地扩窗，避免白扩一页）。
-            if (!selectedId) return;
-            void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
-          }}
-          cancelledJobs={submitApi.cancelledJobs}
-          verbosity={transcriptApi.visibility.verbosity}
-          errorLevel={transcriptApi.errorLevel}
-          entries={snapshot.entries}
-          snapshotVersion={snapshot.version}
-          detailSessionId={sessionsApi.sessionDetail?.session_id}
-          onRetryDetail={transcriptApi.reloadDetail}
-          onLoadEarlier={transcriptApi.loadEarlier}
-          onCancelQueued={(runId) => void submitApi.handleCancelQueued(runId)}
-          onConfigureConnection={() => navigate({ domain: 'gateway' })}
-          onGoChat={() => navigate({ domain: 'chat' })}
-          onEditMessage={handleEditMessage}
-          onRetryMessage={handleRetryMessage}
-        />
+        </div>
 
         <ComposerSlot
           pendingItem={transcriptApi.pendingItem}

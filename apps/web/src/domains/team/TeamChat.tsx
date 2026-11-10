@@ -97,16 +97,6 @@ export function TeamChat(props: TeamChatProps) {
       />
 
       <div className={`team-chat-body ${membersOpen ? 'has-members' : ''}`.trim()}>
-        {/* 内容列宽度手柄：与会话页同一个 `chat` pane（共用 --chat-content-w）。
-            ≤1023 内容列退化成满宽，`narrow` 与 CSS 媒体查询双保险隐藏。 */}
-        {!narrow && !panes.disabled('chat') && (
-          <ResizeHandle
-            pane="chat"
-            api={panes}
-            label={t('resize.chat')}
-            className="resize-handle resize-handle-team-chat"
-          />
-        )}
         <TeamChatMain
           teamId={teamId}
           detail={detail}
@@ -145,6 +135,19 @@ export function TeamChat(props: TeamChatProps) {
           archived={archived}
           targetLabel={team?.name ?? teamId}
           retryHint={retryHint}
+          /* 内容列宽度手柄渲染进 `.content-stage`（通知 + 转录区），与会话页同一个
+             `chat` pane；≤1023 内容列退化成满宽，`narrow` + 媒体查询双保险隐藏。 */
+          overlay={
+            !narrow &&
+            !panes.disabled('chat') && (
+              <ResizeHandle
+                pane="chat"
+                api={panes}
+                label={t('resize.chat')}
+                className="resize-handle resize-handle-content resize-handle-team-chat"
+              />
+            )
+          }
         />
         {/* 常驻右列（grid 第二列）；≤1023px 同一节点是固定抽屉，
             关闭时仍需挂载以保留 `.open` 过渡与 inert/aria-hidden 语义。 */}

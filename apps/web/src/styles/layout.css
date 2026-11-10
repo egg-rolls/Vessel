@@ -48,6 +48,12 @@
   flex-direction: column;
 }
 
+/* 会话内容列左右内衬：与 `.conversation-scroll` / `.composer-area` 的
+   padding-inline 一致，手柄用它把右缘夹在列内。 */
+.conversation .content-stage {
+  --content-pad-inline: clamp(16px, 4vw, 48px);
+}
+
 .conversation-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -196,10 +202,26 @@
   transform: translateX(-50%);
 }
 
-/* 手柄随内容列右缘移动：内容列居中，右缘 = 50% + 宽度 / 2。 */
+/* 内容列宽度手柄的宿主：「信息栏 / 通知 + 转录区」的容器（输入区在它之外）。
+   会话页 `.conversation` 与团队页 `.team-chat-main` 都用这个名字 —— 手柄绝对
+   定位在它里面，`top:0; bottom:0` 的纵范围到转录区底部为止，不会盖住输入框。
+   它同时接管原来的 `flex: 1 1 auto; min-height: 0`（转录区靠它收缩滚动）。 */
+.content-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 
-.resize-handle-chat {
-  left: calc(50% + var(--chat-half-w, 430px));
+/* 手柄随内容列右缘移动：内容列居中，右缘 = 50% + 宽度 / 2；
+   `min()` 再把右缘夹到容器内衬以内（列比内容列配置更窄时手柄不漂出列外）。
+   `--chat-half-w` 由 shell 上的 `paneCssEntries('chat')` 写入，两端同源。 */
+.resize-handle-content {
+  left: min(
+    calc(50% + var(--chat-half-w, 430px)),
+    calc(100% - var(--content-pad-inline, 32px))
+  );
   right: auto;
   transform: translateX(-50%);
 }

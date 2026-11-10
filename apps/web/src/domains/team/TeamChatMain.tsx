@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   EmptyState,
@@ -181,6 +182,11 @@ export interface TeamChatMainProps {
   archived: boolean;
   targetLabel: string;
   retryHint: boolean;
+  /**
+   * 只覆盖「通知 / 页头 + 转录区」的浮层（当前是内容列宽度手柄）。
+   * 它被放进 content-stage，纵范围到转录区底部为止，不压输入区。
+   */
+  overlay?: ReactNode;
 }
 
 export function TeamChatMain({
@@ -221,6 +227,7 @@ export function TeamChatMain({
   archived,
   targetLabel,
   retryHint,
+  overlay,
 }: TeamChatMainProps) {
   // detail 到达时再 settle 一次（等布局稳定再贴底）；加载更早历史不改这个 key。
   const resetKey = teamChatResetKey(teamId, detail?.team.team_id);
@@ -281,82 +288,89 @@ export function TeamChatMain({
 
   return (
     <div className="team-chat-main">
-      {detail && error && <StaleNotice message={t('team.error.stale')} onRetry={onRefresh} />}
-      {historyNotice && (
-        <StaleNotice message={t(historyNotice)} onDismiss={onDismissHistoryNotice} />
-      )}
-      <div
-        className="team-transcript-scroll"
-        ref={setScrollRef}
-        onScroll={handleScroll}
-        {...userIntentProps}
-      >
-        {rotateFailure && (
-          <div
-            className={cn(
-              'team-notice-danger mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted',
-              'border-l-danger bg-danger-soft text-ink',
-            )}
-            role="alert"
-          >
-            <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
-              {t('team.message.systemTag')}
-            </span>
-            <span>
-              {t('team.system.rotateFailed', {
-                name: rotateFailure.agent_id
-                  ? agentLabel(rotateFailure.agent_id)
-                  : t('team.system.unknown'),
-              })}
-            </span>
-            {(rotateFailure.reason ?? rotateFailure.code) && (
-              <span className="font-mono"> {rotateFailure.reason ?? rotateFailure.code}</span>
-            )}
-          </div>
+      {/* 「通知 + 转录区」与输入区分层：宽度手柄放在这里，纵范围不跨进输入区。 */}
+      <div className="content-stage">
+        {overlay}
+        {detail && error && <StaleNotice message={t('team.error.stale')} onRetry={onRefresh} />}
+        {historyNotice && (
+          <StaleNotice message={t(historyNotice)} onDismiss={onDismissHistoryNotice} />
         )}
-        {!hasToken ? (
-          <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
-        ) : firstLoading && rows.length === 0 ? (
-          // 只有「一行都没有」才换成骨架：切到已缓存过的 Team 时 rows 已由
-          // `useTeamChat` 的身份重置从缓存播下，这里不该再闪一次 LoadingState。
-          <LoadingState rows={3} />
-        ) : !detail && rows.length === 0 ? (
-          error?.code === 'not_found' ? (
+        <div
+          className="team-transcript-scroll"
+          ref={setScrollRef}
+          onScroll={handleScroll}
+          {...userIntentProps}
+        >
+          {rotateFailure && (
+            <div
+              className={cn(
+                'team-notice-danger mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted',
+                'border-l-danger bg-danger-soft text-ink',
+              )}
+              role="alert"
+            >
+              <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
+                {t('team.message.systemTag')}
+              </span>
+              <span>
+                {t('team.system.rotateFailed', {
+                  name: rotateFailure.agent_id
+                    ? agentLabel(rotateFailure.agent_id)
+                    : t('team.system.unknown'),
+                })}
+              </span>
+              {(rotateFailure.reason ?? rotateFailure.code) && (
+                <span className="font-mono"> {rotateFailure.reason ?? rotateFailure.code}</span>
+              )}
+            </div>
+          )}
+          {!hasToken ? (
             <NotEnabledState
-              title={t('team.error.notEnabled')}
-              reason={t('team.error.notEnabledReason')}
-              hint={t('team.error.notEnabledHint')}
+              title={t('team.error.noToken')}
+              reason={t('team.error.noTokenReason')}
             />
+          ) : firstLoading && rows.length === 0 ? (
+            // 只有「一行都没有」才换成骨架：切到已缓存过的 Team 时 rows 已由
+            // `useTeamChat` 的身份重置从缓存播下，这里不该再闪一次 LoadingState。
+            <LoadingState rows={3} />
+          ) : !detail && rows.length === 0 ? (
+            error?.code === 'not_found' ? (
+              <NotEnabledState
+                title={t('team.error.notEnabled')}
+                reason={t('team.error.notEnabledReason')}
+                hint={t('team.error.notEnabledHint')}
+              />
+            ) : (
+              <ErrorState
+                message={error?.message ?? t('team.error.loadFailed')}
+                onRetry={onRefresh}
+              />
+            )
+          ) : rows.length === 0 ? (
+            <EmptyState title={t('team.chat.empty')} description={t('team.chat.emptyHint')} />
           ) : (
-            <ErrorState
-              message={error?.message ?? t('team.error.loadFailed')}
-              onRetry={onRefresh}
+            <TeamTranscript
+              messages={rows}
+              resolveMember={resolveMember}
+              resolveMemberLabel={agentLabel}
+              onViewMemberSession={(_agentId, sessionId) => onOpenSession(sessionId)}
+              onRetrySend={onRetrySend}
+              onEditMessage={onEditMessage}
+              onResendMessage={onResendMessage}
+              onRetractMessage={onRetractMessage}
             />
-          )
-        ) : rows.length === 0 ? (
-          <EmptyState title={t('team.chat.empty')} description={t('team.chat.emptyHint')} />
-        ) : (
-          <TeamTranscript
-            messages={rows}
-            resolveMember={resolveMember}
-            resolveMemberLabel={agentLabel}
-            onViewMemberSession={(_agentId, sessionId) => onOpenSession(sessionId)}
-            onRetrySend={onRetrySend}
-            onEditMessage={onEditMessage}
-            onResendMessage={onResendMessage}
-            onRetractMessage={onRetractMessage}
-          />
-        )}
+          )}
 
-        {/* 无感加载更早：不再渲染按钮 / 截断提示，只留读屏播报（不占视觉）。 */}
-        <span className="sr-only" aria-live="polite">
-          {paging.loadedPages > 0 ? t('team.chat.loadedEarlier') : ''}
-        </span>
-        {!pinned && (
-          <button type="button" className="to-bottom" onClick={scrollToBottom}>
-            {t('chat.toBottom')}
-          </button>
-        )}
+          {/* 无感加载更早：不再渲染按钮 / 截断提示，只留读屏播报（不占视觉）。 */}
+          <span className="sr-only" aria-live="polite">
+            {paging.loadedPages > 0 ? t('team.chat.loadedEarlier') : ''}
+          </span>
+          {!pinned && (
+            <button type="button" className="to-bottom" onClick={scrollToBottom}>
+              {t('chat.toBottom')}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="team-composer-area">
