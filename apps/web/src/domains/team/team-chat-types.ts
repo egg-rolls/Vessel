@@ -1,3 +1,4 @@
+import type { PaneResizeApi } from '../../app/usePaneResize';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -64,6 +65,12 @@ export interface TeamChatProps {
   membersOpen: boolean;
   /** 关闭成员栏：抽屉遮罩 / Esc / 头部 × 的 `onClose` 都走这里，不直接改 store。 */
   onCloseMembers: () => void;
+  /**
+   * 内容列宽度控件（与会话页**同一个** `chat` pane，共用
+   * `--chat-content-w` / `--chat-half-w` 与 `vessel.ui.layout.v1`，不新增键）。
+   * 手柄渲染条件与 `ChatView` 一致：`!narrow && !panes.disabled('chat')`。
+   */
+  panes: PaneResizeApi;
   /** 测试 / 预览注入，避免 SSR 依赖 effect。 */
   initialDetail?: TeamDetail;
   initialError?: { message: string; code?: string };

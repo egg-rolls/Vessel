@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import { formatRoute, type Route } from '../../app/router';
+import type { PaneResizeApi } from '../../app/usePaneResize';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -28,6 +29,7 @@ export function TeamDetailRoute({
   navigate,
   membersOpen,
   onCloseMembers,
+  panes,
 }: {
   node: NodeView;
   route: TeamsDetailRoute;
@@ -35,6 +37,8 @@ export function TeamDetailRoute({
   /** 右侧成员栏开关：状态在 `useTeamsView`，这里只透传给 `TeamChat`。 */
   membersOpen: boolean;
   onCloseMembers: () => void;
+  /** 内容列宽度控件（复用 `chat` pane）：透传给 `TeamChat` 渲染手柄。 */
+  panes: PaneResizeApi;
 }) {
   useLocale();
   const { connectionState, epoch, permissions, asks, responding, respondPermission, respondAsk } =
@@ -142,6 +146,7 @@ export function TeamDetailRoute({
         onBackToList={() => navigate({ domain: 'teams' })}
         membersOpen={membersOpen}
         onCloseMembers={onCloseMembers}
+        panes={panes}
       />
     </div>
   );

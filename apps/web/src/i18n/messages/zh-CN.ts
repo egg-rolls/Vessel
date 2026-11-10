@@ -220,7 +220,7 @@ export const messages = {
   // 0.18：分栏拖拽手柄
   'resize.nav': '调整导航宽度',
   'resize.sessions': '调整会话列表宽度',
-  'resize.chat': '调整会话内容宽度',
+  'resize.chat': '调整内容宽度',
   'resize.teams': '调整团队列表宽度',
   // 0.18 H2 / 0.27：已失效交互只保留一次 toast；详情在 Observe → Attention。
   'chat.reasoning.summary': '思考过程',

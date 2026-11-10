@@ -8,6 +8,7 @@
  * - “再次发送”只把内容填回 Composer，由用户再次确认后作为新日志。
  */
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { ResizeHandle } from '../../components/ResizeHandle';
 import { t } from '../../i18n';
 import { TeamChatHeader } from './TeamChatHeader';
 import { TeamChatMain } from './TeamChatMain';
@@ -22,7 +23,7 @@ export function TeamChat(props: TeamChatProps) {
   // 页头 scope/status 槽来自路由层，不经 useTeamChat 派生。
   const { nodeName, nodeCurrent, frozen } = props;
   // 成员栏开关由 useTeamsView 持有（入口在 Team 卡 ActionMenu）；这里只读。
-  const { membersOpen, onCloseMembers } = props;
+  const { membersOpen, onCloseMembers, panes } = props;
   const {
     team,
     teamId,
@@ -96,6 +97,16 @@ export function TeamChat(props: TeamChatProps) {
       />
 
       <div className={`team-chat-body ${membersOpen ? 'has-members' : ''}`.trim()}>
+        {/* 内容列宽度手柄：与会话页同一个 `chat` pane（共用 --chat-content-w）。
+            ≤1023 内容列退化成满宽，`narrow` 与 CSS 媒体查询双保险隐藏。 */}
+        {!narrow && !panes.disabled('chat') && (
+          <ResizeHandle
+            pane="chat"
+            api={panes}
+            label={t('resize.chat')}
+            className="resize-handle resize-handle-team-chat"
+          />
+        )}
         <TeamChatMain
           teamId={teamId}
           detail={detail}

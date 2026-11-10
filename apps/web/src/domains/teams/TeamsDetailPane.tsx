@@ -2,6 +2,7 @@
  * Team 详情 pane：无选中时的空态 / 节点缺失提示 / TeamDetailRoute；窄屏顶部带抽屉开关。
  */
 import type { ReactNode } from 'react';
+import type { PaneResizeApi } from '../../app/usePaneResize';
 import { EmptyState, NotEnabledState } from '../../components/States';
 import { Button } from '../../components/ui';
 import { t } from '../../i18n';
@@ -10,9 +11,11 @@ import type { TeamsViewState } from './useTeamsView';
 
 interface TeamsDetailPaneProps {
   state: TeamsViewState;
+  /** 内容列宽度控件：原样透传给 `TeamDetailRoute` → `TeamChat`。 */
+  panes: PaneResizeApi;
 }
 
-export function TeamsDetailPane({ state }: TeamsDetailPaneProps) {
+export function TeamsDetailPane({ state, panes }: TeamsDetailPaneProps) {
   const {
     isDetail,
     detailNode,
@@ -43,6 +46,7 @@ export function TeamsDetailPane({ state }: TeamsDetailPaneProps) {
         navigate={navigate}
         membersOpen={membersOpen}
         onCloseMembers={() => setMembersOpen(false)}
+        panes={panes}
       />
     );
   } else {

@@ -221,7 +221,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // 0.18: pane resize handles
   'resize.nav': 'Resize navigation',
   'resize.sessions': 'Resize session list',
-  'resize.chat': 'Resize conversation',
+  'resize.chat': 'Resize content width',
   'resize.teams': 'Resize team list',
   // 0.18 H2 / 0.27: expired interactions only keep a one-shot toast; details live in Observe.
   'chat.reasoning.summary': 'Thinking',

@@ -25,7 +25,7 @@ export function TeamsView({ route, navigate, panes }: TeamsViewProps & { panes: 
   return (
     <div className="teams-workspace">
       <TeamsListColumn state={state} panes={panes} />
-      <TeamsDetailPane state={state} />
+      <TeamsDetailPane state={state} panes={panes} />
       <TeamsViewDialogs state={state} />
     </div>
   );
