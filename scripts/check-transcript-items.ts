@@ -275,6 +275,52 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'F11 vessel:notice 可见时生成 notice 类 item（不是 message）',
+    why: '打开「显示系统信息」后它曾被渲染成用户气泡；结构化消息必须走 notice 卡',
+    check: () => {
+      const messages = [
+        { role: 'user' as const, name: 'vessel:notice', content: '[inbox] 3 unread, 1 pending' },
+      ];
+      const visible = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+        noticeKindOf: (message) => (message.name === 'vessel:notice' ? 'notice' : undefined),
+      });
+      const hidden = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+        isHidden: (message) => message.name === 'vessel:notice',
+        noticeKindOf: (message) => (message.name === 'vessel:notice' ? 'notice' : undefined),
+      });
+      const first = visible[0];
+      return (
+        visible.length === 1 &&
+        first !== undefined &&
+        first.kind === 'runtime-notice' &&
+        first.noticeKind === 'notice' &&
+        hidden.length === 0
+      );
+    },
+  },
+  {
+    name: 'F11b 用户自己发的 [inbox] 开头的文本仍是普通消息',
+    why: '按正文前缀猜会吞掉用户输入：这是刻意不做文本启发式的反向保护',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [msg('user', '[inbox] 这是我粘贴的日志，不是系统提示')],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      });
+      const first = items[0];
+      return items.length === 1 && first !== undefined && first.kind === 'message';
+    },
+  },
+  {
     name: 'F9 vessel:source 默认隐藏 → 不出 item；打开可见性后出现（或被吸收）',
     why: 'runtime 上下文消息必须按可见性开关过滤；回归时它会以普通消息行呈现成第二条',
     check: () => {

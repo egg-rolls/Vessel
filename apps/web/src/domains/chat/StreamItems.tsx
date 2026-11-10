@@ -285,7 +285,8 @@ export function QueuedNotice({
       : t('chat.run.queuedUnknown');
   return (
     <StreamCard
-      className="stream-notice"
+      // 宽度跟内容列一致：长输入不再把卡片撑出可见列（w-full + min-w-0 + max-w-full）。
+      className="stream-notice w-full min-w-0 max-w-full"
       defaultOpen={defaultOpen}
       title={
         <StatusChip status={status} label={item.cancelled ? t('chat.run.cancelled') : position} />
@@ -306,7 +307,7 @@ export function QueuedNotice({
         ) : undefined
       }
     >
-      <p className="m-0 px-2.5 pb-2 whitespace-pre-wrap wrap-anywhere text-sm text-muted">
+      <p className="m-0 min-w-0 px-2.5 pb-2 break-words whitespace-pre-wrap wrap-anywhere text-sm text-muted">
         {item.input}
       </p>
     </StreamCard>

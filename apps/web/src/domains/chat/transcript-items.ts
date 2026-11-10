@@ -49,6 +49,21 @@ export interface MessageItem extends ItemMeta {
   sourceText?: string;
 }
 
+/**
+ * 运行时提示（`vessel:notice` / `vessel:source` / 裸文本 `[inbox] …`）的可见形态。
+ *
+ * 它是**独立的 item kind**（不是 message）：这样它不可能落进用户气泡分支，
+ * 与 hook 通知 / 原始事件行共用 notice 卡的观感。默认档由 `isHidden` 整条隐藏。
+ */
+export interface RuntimeNoticeItem extends ItemMeta {
+  kind: 'runtime-notice';
+  /** `runtimeMessageKind` 的种类（notice / source / subscription / other …）。 */
+  noticeKind: string;
+  text: string;
+  /** 该消息的绝对下标（可回链到 sessions.get，便于将来做详情/跳转）。 */
+  absIndex?: number;
+}
+
 export interface RunInputItem extends ItemMeta {
   kind: 'run-input';
   runId: string;
@@ -106,6 +121,7 @@ export interface QueuedItem extends ItemMeta {
 
 export type TranscriptItem =
   | MessageItem
+  | RuntimeNoticeItem
   | RunInputItem
   | RunTextItem
   | RunReasoningItem
@@ -127,6 +143,8 @@ export interface TranscriptBuildInput {
   windowStartTs?: number;
   /** 历史消息是否应被隐藏（runtime 上下文可见性开关）；隐藏的仍参与下标与认领。 */
   isHidden?: (message: Message) => boolean;
+  /** 这条消息属于哪种运行时提示（vessel:* 的种类）；返回 undefined = 普通消息。 */
+  noticeKindOf?: (message: Message) => string | undefined;
   /** 预计算的历史索引（按 messages 引用 memo）；缺省内部现算。 */
   historyIndex?: HistoryIndex;
   /** 预计算的 live item（按 group 引用 memo）；缺省内部现算。 */
@@ -188,6 +206,7 @@ export function buildHistoryIndex(
   messages: readonly Message[],
   messageIndexOffset: number,
   isHidden?: (message: Message) => boolean,
+  noticeKindOf?: (message: Message) => string | undefined,
 ): HistoryIndex {
   const items: TranscriptItem[] = [];
   const userByContent = new Map<string, number[]>();
@@ -297,6 +316,22 @@ export function buildHistoryIndex(
     if (!hasContent && message.role !== 'user' && !isAgentMessage) return;
 
     const sourceText = foldedSourceByAgent.get(absIndex);
+    // 运行时提示（vessel:* 或裸文本 [inbox] …）：**独立成 notice 类 item**，
+    // 不落进 message 分支 —— 否则它会以「用户气泡」出现（用户反馈的正是这条）。
+    // 只看结构化的 name（vessel:*）：不按正文前缀猜 —— 用户可能自己粘一段以 [inbox] 开头的
+    // 文本，按文本判定会把它吞成系统提示（隐藏或渲成通知卡）。
+    const noticeKind = noticeKindOf?.(message);
+    if (noticeKind !== undefined) {
+      items.push({
+        kind: 'runtime-notice',
+        key: `notice:${absIndex}`,
+        noticeKind,
+        text: message.content,
+        absIndex,
+        ...(message.timestamp !== undefined ? { ts: message.timestamp } : {}),
+      });
+      return;
+    }
     items.push({
       kind: 'message',
       key: `msg:${absIndex}`,
@@ -590,7 +625,7 @@ function mergeItem(previous: TranscriptItem, next: TranscriptItem): TranscriptIt
 export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptItem[] {
   const history =
     input.historyIndex ??
-    buildHistoryIndex(input.messages, input.messageIndexOffset, input.isHidden);
+    buildHistoryIndex(input.messages, input.messageIndexOffset, input.isHidden, input.noticeKindOf);
   const live = input.liveItems ?? buildLiveItems(input.liveGroups);
   const claims = runClaims(input.liveGroups, live);
   const { claimedAssistant, claimedUserByRun } = claimMessages(claims, history);

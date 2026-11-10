@@ -119,7 +119,7 @@ export function TeamPendingBar({
         <span className="text-xs text-faint">{t('team.pending.hint')}</span>
       </div>
 
-      <ul className="m-0 flex max-h-80 list-none flex-col gap-2 overflow-y-auto overscroll-contain p-0">
+      <ul className="m-0 flex max-h-80 min-w-0 list-none flex-col gap-2 overflow-y-auto overflow-x-hidden overscroll-contain p-0">
         {permissionRows.map(({ request, member }) => {
           const summary = permissionInputSummary(request.input);
           return (
@@ -127,7 +127,7 @@ export function TeamPendingBar({
               {/* 带可操作控件的卡片一律默认展开（不管 ui.expandCards），
                   否则等于把待确认项藏起来。 */}
               <StreamCard
-                className="stream-card-pending"
+                className="stream-card-pending w-full min-w-0 max-w-full"
                 defaultOpen
                 title={
                   <>
@@ -159,7 +159,7 @@ export function TeamPendingBar({
           return (
             <li className="flex min-w-0 flex-col" key={`ask:${request.requestId}`}>
               <StreamCard
-                className="stream-card-pending"
+                className="stream-card-pending w-full min-w-0 max-w-full"
                 defaultOpen
                 title={
                   <>

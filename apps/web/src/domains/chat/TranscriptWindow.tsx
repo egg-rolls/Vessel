@@ -12,6 +12,7 @@ import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/ses
 import { ChatWelcome } from './ChatWelcome';
 import { NoticeRow } from './EventRow';
 import { ReasoningBlock } from './ReasoningBlock';
+import { StreamCard } from './StreamCard';
 import { QueuedNotice, type QueuedSubmission, UserBubble } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
 import { ToolCard } from './ToolCard';
@@ -51,6 +52,7 @@ export function TranscriptWindow({
   transcriptMessages,
   historyIndex,
   isHiddenMessage,
+  noticeKindOf,
   messageIndexOffset,
   detailNotice,
   onDismissDetailNotice,
@@ -91,6 +93,8 @@ export function TranscriptWindow({
   historyIndex: HistoryIndex;
   /** runtime 上下文可见性判定（隐藏的消息不产 item，但仍参与下标与认领）。 */
   isHiddenMessage: (message: Message) => boolean;
+  /** 运行时提示卡的分类（vessel:* 种类；undefined = 普通消息）。 */
+  noticeKindOf: (message: Message) => string | undefined;
   /** `transcriptMessages[0]` 在完整 `state.messages` 里的绝对下标（撤回 / 重试用）。 */
   messageIndexOffset: number;
   /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
@@ -186,6 +190,7 @@ export function TranscriptWindow({
         windowStartTs,
         historyIndex,
         isHidden: isHiddenMessage,
+        noticeKindOf,
       }),
     [
       transcriptMessages,
@@ -196,6 +201,7 @@ export function TranscriptWindow({
       windowStartTs,
       historyIndex,
       isHiddenMessage,
+      noticeKindOf,
     ],
   );
 
@@ -244,6 +250,25 @@ export function TranscriptWindow({
         );
       case 'notice':
         return <NoticeRow event={item.event} defaultOpen={cardsDefaultOpen} />;
+      case 'runtime-notice':
+        // 运行时提示（vessel:notice / source / 裸 [inbox]…）：notice 卡，不是用户气泡。
+        return (
+          <StreamCard
+            className="runtime-notice-card w-full min-w-0 max-w-full"
+            tone="info"
+            defaultOpen={cardsDefaultOpen}
+            title={
+              <span className="font-mono text-2xs tracking-wider text-accent">
+                {t('chat.notice.runtime', { kind: item.noticeKind })}
+              </span>
+            }
+            summary={item.text}
+          >
+            <p className="m-0 min-w-0 px-2.5 pb-2 break-words whitespace-pre-wrap wrap-anywhere text-sm text-muted">
+              {item.text}
+            </p>
+          </StreamCard>
+        );
       case 'queued':
         return (
           <QueuedNotice

@@ -344,6 +344,8 @@ export function useChatTranscript({
   const messageIndexOffset = selectedWindow?.start ?? 0;
   // runtime 上下文（vessel:*）的可见性：与历史消息渲染共用同一判定。
   // 隐藏的消息仍进 index（绝对下标 / 认领 / previous-user 依赖它们），只是不产 item。
+  // 只看结构化的 name（vessel:*）。**不按正文前缀猜**：用户可能自己粘一段以 [inbox] 开头的
+  // 文本，按文本判定会把它当系统提示隐藏或渲成通知卡（吞用户输入）。
   const isHiddenMessage = useCallback(
     (message: Message): boolean => {
       const kind = runtimeMessageKind(message);
@@ -351,11 +353,15 @@ export function useChatTranscript({
     },
     [runtimeVisibility],
   );
+  /** 这条消息在渲染层应作为哪种运行时提示卡（undefined = 普通消息）。 */
+  const noticeKindOf = useCallback((message: Message): string | undefined => {
+    return runtimeMessageKind(message);
+  }, []);
 
   // 历史侧 item / 反查表按 messages 引用 memo：50ms 的流式节拍里不会重算。
   const historyIndex = useMemo(
-    () => buildHistoryIndex(transcriptMessages, messageIndexOffset, isHiddenMessage),
-    [transcriptMessages, messageIndexOffset, isHiddenMessage],
+    () => buildHistoryIndex(transcriptMessages, messageIndexOffset, isHiddenMessage, noticeKindOf),
+    [transcriptMessages, messageIndexOffset, isHiddenMessage, noticeKindOf],
   );
 
   // 分页状态读取放 ref：`loadEarlier` 的身份必须稳定（TranscriptWindow 用它做
@@ -395,6 +401,7 @@ export function useChatTranscript({
     transcriptMessages,
     historyIndex,
     isHiddenMessage,
+    noticeKindOf,
     transcriptWindow,
     transcriptStart,
     messageIndexOffset,

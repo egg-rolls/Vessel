@@ -1065,6 +1065,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.restarted': 'context restarted · {session} · epoch {from} → {epoch}',
   'chat.notice.compactForked': 'context compact-forked · {from} → {to} · epoch {epoch}',
   'chat.notice.hook': 'hook · {name}',
+  'chat.notice.runtime': 'System notice · {kind}',
   // agent-to-agent message card (the user message an A2A delivery becomes)
   'chat.agentMessage.from': 'from agent {name}',
   'chat.agentMessage.group': 'Message from agent {name}',
