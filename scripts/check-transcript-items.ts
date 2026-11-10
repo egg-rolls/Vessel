@@ -275,6 +275,43 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'F14 run 结束后历史回填，工具卡仍留在思考与正文之间',
+    why: '历史侧工具 item 的 ts 是所属 assistant 消息时间，会把卡顶到正文之后（聚堆）',
+    check: () => {
+      const runGroup = group({
+        runId: 'r-order',
+        input: 'go',
+        output: 'done text',
+        startedAt: 1000,
+        status: 'completed',
+        items: [
+          { kind: 'reasoning', text: 'think', key: 'a', startedAt: 1001 },
+          toolItem('c1', 'running'),
+          toolItem('c1', 'done'),
+          textItem('done text', 't'),
+        ],
+      });
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'go', { timestamp: 999 }),
+          msg('assistant', 'done text', {
+            timestamp: 1004,
+            reasoning_content: 'think',
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+          }),
+          msg('tool', 'ok', { timestamp: 1005, tool_call_id: 'c1' }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [runGroup],
+        queued: [],
+      });
+      return (
+        items.length === 4 &&
+        items.map((item) => item.kind).join(',') === 'message,run-reasoning,tool,run-text'
+      );
+    },
+  },
+  {
     name: 'F13 run 缺 startedAt/firstTs 但有 tool item 时间 → 排在消息之间而不是末尾',
     why: '事件被边界回放裁掉只剩部分条目时，整组没有 ts 会沉到最底（旧工具卡挂在新内容后面）',
     check: () => {

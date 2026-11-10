@@ -631,7 +631,12 @@ function mergeItem(previous: TranscriptItem, next: TranscriptItem): TranscriptIt
       ...(next.error !== undefined && previous.error === undefined ? { error: next.error } : {}),
       ...(next.truncated === true ? { truncated: true } : {}),
       startedAt: next.startedAt > 0 ? next.startedAt : previous.startedAt,
-      ts: previous.ts ?? next.ts,
+      ts:
+        previous.ts === undefined
+          ? next.ts
+          : next.ts === undefined
+            ? previous.ts
+            : Math.min(previous.ts, next.ts),
     };
   }
   return { ...previous, ...next, key: previous.key };
@@ -661,9 +666,18 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     return last;
   })();
 
+  // live 已经有的工具调用，历史侧不再单独出 item：live 的插入位置与 ts 才是真实的
+  // 事件顺序（历史侧的 ts 是所属 assistant 消息的时间，会把工具卡顶到该轮正文之后，
+  // 屏幕上就变成「思考 → 正文 → 工具卡」聚堆）。
+  const liveCallIds = new Set<string>();
+  for (const item of live) {
+    if (item.kind === 'tool' && item.callId !== undefined) liveCallIds.add(item.callId);
+  }
+
   const items: TranscriptItem[] = [];
   for (const item of history.items) {
     if (item.kind === 'message' && claimedAssistant.has(item.absIndex)) continue;
+    if (item.kind === 'tool' && item.callId !== undefined && liveCallIds.has(item.callId)) continue;
     items.push(item);
   }
 
