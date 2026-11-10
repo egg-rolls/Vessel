@@ -53,6 +53,14 @@ export interface TeamChatProps {
   onOpenMember: (agentId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onBackToList: () => void;
+  /**
+   * 右侧成员栏是否展开。状态由 `useTeamsView` 持有（单一 boolean，入口在 Team 卡
+   * 的 ActionMenu），因此**切换 Team 不强制关闭**：打开成员栏后切到别的 Team，
+   * 成员栏保持展开；`≤1023px` 时同一布尔量控制固定抽屉 + 遮罩。
+   */
+  membersOpen: boolean;
+  /** 关闭成员栏：抽屉遮罩 / Esc / 头部 × 的 `onClose` 都走这里，不直接改 store。 */
+  onCloseMembers: () => void;
   /** 测试 / 预览注入，避免 SSR 依赖 effect。 */
   initialDetail?: TeamDetail;
   initialLimit?: number;

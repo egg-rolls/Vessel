@@ -53,6 +53,11 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
   );
   const [createOpen, setCreateOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  /**
+   * 成员栏开关（单一 boolean）：入口在 Team 卡 ActionMenu。
+   * 切 Team 不强制关闭——用户打开了成员栏，换 Team 时保持展开，直到再次点「收起」。
+   */
+  const [membersOpen, setMembersOpen] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<{
     node: NodeView;
     team: TeamSummary;
@@ -211,11 +216,36 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     if (compact) setDrawerOpen(false);
   };
 
+  /**
+   * 成员栏开关语义：对**当前打开的 Team** 点 = 切换开关；对**别的 Team** 点 =
+   * 先 `openTeam`（窄屏顺手收起左栏抽屉）再把成员栏打开。
+   */
+  const toggleMembers = (node: NodeView, team: TeamSummary) => {
+    const current = isDetail && route.nodeKey === nodeKeyOf(node) && route.teamId === team.team_id;
+    if (current) {
+      setMembersOpen((open) => !open);
+      return;
+    }
+    openTeam(node, team);
+    setMembersOpen(true);
+  };
+
   const menuItems = (node: NodeView, team: TeamSummary): ActionMenuItem[] => {
     const archived = team.archived_at !== undefined;
     const frozen = team.spawn_frozen === true;
     const canWrite = hasTokenFor(node) && !archived;
+    const membersShown =
+      isDetail && route.nodeKey === nodeKeyOf(node) && route.teamId === team.team_id && membersOpen;
     return [
+      {
+        // 打开 / 收起右侧成员栏（原页头「查看成员列表」按钮的入口）。
+        id: 'members',
+        label: membersShown ? t('team.members.close') : t('team.members.open'),
+        disabled: !hasTokenFor(node),
+        onSelect: () => {
+          toggleMembers(node, team);
+        },
+      },
       {
         id: 'edit',
         label: t('common.edit'),
@@ -283,6 +313,8 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     drawerOpen,
     setDrawerOpen,
     drawerRef,
+    membersOpen,
+    setMembersOpen,
     query,
     setQuery,
     nodeFilter,

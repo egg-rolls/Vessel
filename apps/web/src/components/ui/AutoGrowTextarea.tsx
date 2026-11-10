@@ -48,7 +48,14 @@ export const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowTextarea
       const element = innerRef.current;
       if (!element) return;
       element.style.height = 'auto';
-      element.style.height = `${Math.min(element.scrollHeight, resolveMaxPx(element, maxHeightVar))}px`;
+      // `box-sizing: border-box`（base.css 的 `*`）下 `height` 含边框与横向滚动条，
+      // 而 `scrollHeight` 只有内容 + 内边距：直接写 `height = scrollHeight` 会让
+      // `scrollHeight > clientHeight` 恒成立，`overflow-y: auto` 于是永远画出滚动条。
+      // 本仓不引 Tailwind preflight，`<textarea>` 保留 UA 的 1px 边框，团队输入框正好踩中。
+      // 补上 `offsetHeight - clientHeight`（边框 + 横向滚动条）再夹到 max-height。
+      const extra = element.offsetHeight - element.clientHeight;
+      const maxPx = resolveMaxPx(element, maxHeightVar);
+      element.style.height = `${Math.min(element.scrollHeight + extra, maxPx)}px`;
     }, [maxHeightVar]);
 
     useLayoutEffect(() => {

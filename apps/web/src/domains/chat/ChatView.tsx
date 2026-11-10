@@ -353,8 +353,8 @@ export function ChatView({
           hydrateStale={transcriptApi.hydrateStale}
           truncated={transcriptApi.truncated}
           hasTranscript={transcriptApi.hasTranscript}
+          hasEarlier={transcriptApi.hasEarlier}
           visibleGroups={transcriptApi.visibleGroups}
-          hiddenLiveGroups={transcriptApi.hiddenLiveGroups}
           renderedGroups={transcriptApi.renderedGroups}
           visibleQueued={transcriptApi.visibleQueued}
           transcriptWindow={transcriptApi.transcriptWindow}

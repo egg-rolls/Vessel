@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RAIL_MAX_WIDTH } from '../../app/layout';
 import { useRefreshSignal } from '../../app/refresh';
+import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useOptionalToast } from '../../components/ToastProvider';
 import type { TeamDetail, TeamMember, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -12,6 +14,12 @@ import {
   type TeamEventState,
 } from '../../state/teams';
 import { resourceData } from '../../state/useResource';
+import {
+  teamDraftKey,
+  useComposerChips,
+  useComposerDraftStore,
+  useComposerDraftText,
+} from '../../stores/composerDraftStore';
 import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { isOnlineMember } from './member-status';
@@ -49,24 +57,39 @@ export function useTeamChat({
   onOpenMember,
   onOpenSession,
   onBackToList,
+  membersOpen,
+  onCloseMembers,
   initialDetail,
   initialLimit = DEFAULT_LIMIT,
   initialError,
 }: TeamChatProps) {
   const [limit, setLimit] = useState(initialLimit);
   const [membersLimit, setMembersLimit] = useState(DEFAULT_MEMBERS_LIMIT);
-  const [draft, setDraft] = useState('');
-  const [chips, setChips] = useState<MentionChip[]>([]);
+  // 草稿 / chips 按 (node, team) 分槽缓存：切走再回来还在，只有发送成功才清。
+  const draftKey = teamDraftKey(nodeKey, teamId);
+  const draft = useComposerDraftText(draftKey);
+  const chips = useComposerChips(draftKey);
+  const writeDraft = useComposerDraftStore((state) => state.setText);
+  const writeChips = useComposerDraftStore((state) => state.setChips);
+  const clearDraft = useComposerDraftStore((state) => state.clear);
+  const setDraft = useCallback(
+    (value: string) => writeDraft(draftKey, value),
+    [writeDraft, draftKey],
+  );
+  const setChips = useCallback(
+    (next: MentionChip[]) => writeChips(draftKey, next),
+    [writeChips, draftKey],
+  );
   const [sends, setSends] = useState<LocalSend[]>([]);
   const [sending, setSending] = useState(false);
   const [retryHint, setRetryHint] = useState(false);
   const [messages, setMessages] = useState<TeamMessage[]>(() =>
     initialDetail ? sortMessages(initialDetail.messages) : [],
   );
-  const [membersOpen, setMembersOpen] = useState(false);
   const [retractTarget, setRetractTarget] = useState<TeamMessage | null>(null);
   const [retracting, setRetracting] = useState(false);
   const [retractError, setRetractError] = useState<string | undefined>();
+  const [narrow, setNarrow] = useState(false);
   const toast = useOptionalToast();
 
   const eventStateRef = useRef<TeamEventState>(createTeamEventState());
@@ -76,26 +99,21 @@ export function useTeamChat({
   const sendingRef = useRef(false);
   const detailRef = useRef<TeamDetail | undefined>(initialDetail);
 
+  // 成员栏：≥1024px 常驻右列（`enabled=false`，不介入）；≤1023px 变固定抽屉，
+  // Esc / 遮罩 / 头部 × 都通过 `onCloseMembers` 回到 `useTeamsView`。
+  // 入口在 Team 卡 ActionMenu，可选择项随菜单收起 → 不传 `returnFocusId`。
+  const membersDrawerRef = useDrawerA11y({
+    open: membersOpen,
+    onClose: onCloseMembers,
+    enabled: narrow,
+  });
+
   const storeKey = teamDetailKey(nodeKey, teamId, 'chat');
   const detailState = useTeamStore((state) => state.details[storeKey]);
   const loadDetail = useTeamStore((state) => state.loadDetail);
   const postTeam = useTeamStore((state) => state.post);
-  // 只有显式刷新（按钮 / 全局刷新信号 / 发送后对账）才显示“正在刷新”；
-  // 4s 后台轮询复用同一 store 状态，但不应让顶部按钮每轮闪一次。
-  const [manualRefreshing, setManualRefreshing] = useState(false);
-  const manualRefreshGen = useRef(0);
   const reload = () => {
-    const gen = ++manualRefreshGen.current;
-    setManualRefreshing(true);
-    void loadDetail(
-      nodeKey,
-      teamId,
-      client,
-      { limit, members_limit: membersLimit },
-      'chat',
-    ).finally(() => {
-      if (manualRefreshGen.current === gen) setManualRefreshing(false);
-    });
+    void loadDetail(nodeKey, teamId, client, { limit, members_limit: membersLimit }, 'chat');
   };
 
   usePolledAction(
@@ -127,6 +145,13 @@ export function useTeamChat({
   const connected = hasToken && connectionState === 'open';
   // 归档 Team 只读：日志仍可轮询查看，但不接受新消息。
   const archived = team?.archived_at !== undefined;
+
+  useEffect(() => {
+    const update = () => setNarrow(window.innerWidth <= RAIL_MAX_WIDTH);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
 
   useEffect(() => {
     return () => window.clearTimeout(rosterTimer.current);
@@ -252,8 +277,7 @@ export function useTeamChat({
     const mentions = mentionIds(chips);
     const started = await submitContent(content, mentions);
     if (!started) return;
-    setDraft('');
-    setChips([]);
+    clearDraft(draftKey);
     setRetryHint(false);
   };
 
@@ -307,18 +331,17 @@ export function useTeamChat({
   };
 
   const openMember = (agentId: string) => {
-    setMembersOpen(false);
+    // 成员详情是另一个域的路由；先收起成员栏，避免返回 Team 时抽屉仍开着。
+    onCloseMembers();
     onOpenMember(agentId);
   };
 
-  const { canLoadEarlier, historyLimited, visibleCount } = teamWindowFlags(limit, rows.length);
+  const { canLoadEarlier } = teamWindowFlags(limit, rows.length);
   const error =
     detailState?.status === 'error'
       ? { message: detailState.error, code: detailState.code }
       : initialError;
   const firstLoading = !detail && !error;
-  // 后台轮询不会改写这个值；只有 reload() 的请求生命周期内为 true。
-  const refreshing = manualRefreshing;
 
   return {
     team,
@@ -327,12 +350,11 @@ export function useTeamChat({
     members,
     memberTotal,
     onlineCount,
-    membersOpen,
-    setMembersOpen,
+    narrow,
+    membersDrawerRef,
     detail,
     error,
     firstLoading,
-    refreshing,
     rotateFailure,
     rows,
     resolveMember,
@@ -357,8 +379,6 @@ export function useTeamChat({
     reload,
     hasToken,
     canLoadEarlier,
-    historyLimited,
-    visibleCount,
     limit,
     setLimit,
     memberWindow,

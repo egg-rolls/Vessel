@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   EmptyState,
   ErrorState,
@@ -22,7 +23,119 @@ import type { TeamMessageView } from './TeamMessageRow';
 import { TeamPendingBar } from './TeamPendingBar';
 import { TeamTranscript } from './TeamTranscript';
 import type { TeamChatDecidePermission, TeamChatRespondAsk } from './team-chat-types';
-import { teamChatResetKey, teamFollowKey } from './team-scroll';
+import {
+  captureScrollAnchor,
+  decideEarlierProbe,
+  EARLIER_LOAD_THRESHOLD_PX,
+  type EarlierProbeState,
+  IDLE_EARLIER_PROBE,
+  isNearTop,
+  restoreScrollAnchor,
+  type ScrollAnchor,
+  settleEarlierProbe,
+  teamChatResetKey,
+  teamFollowKey,
+} from './team-scroll';
+
+/**
+ * 顶部无感加载更早：贴近顶部（< 120px）自动加载一页，加载后补回滚动锚点。
+ *
+ * - `armed`：一次贴近顶部只触发一页，锚点补偿把 scrollTop 带离顶部后才重新武装。
+ * - `anchor`：请求时记下 scrollTop / scrollHeight，新页插入 DOM 后（`useLayoutEffect`，
+ *   绘制前）把高度差补进 scrollTop，视觉位置不动。
+ * - `probe`：`teams.get` 没有 `has_more`，用「上一页回来条数没变多」判定到头，
+ *   同一条数不再白拉（`team-scroll.ts` 的纯函数，见 `decideEarlierProbe`）。
+ * - `filledAt`：视口没被填满时滚不动、靠滚动永远触发不到更早历史，主动补一页；
+ *   上一页没有带来内容增长（scrollHeight 不变）就停，避免死循环。
+ */
+function useEarlierPaging({
+  box,
+  hasMore,
+  messageCount,
+  scope,
+  onLoadEarlier,
+}: {
+  box: { current: HTMLDivElement | null };
+  hasMore: boolean;
+  /** 当前窗口里的消息条数：用来判定「下一页有没有带来新内容」。 */
+  messageCount: number;
+  /** 切换 Team 时重置（切走再回来应该还能往前拉）。 */
+  scope: string;
+  onLoadEarlier: () => void;
+}): { onScroll: () => void; loadedPages: number } {
+  const armed = useRef(true);
+  const anchor = useRef<ScrollAnchor | null>(null);
+  const filledAt = useRef<number | null>(null);
+  const probe = useRef<EarlierProbeState>(IDLE_EARLIER_PROBE);
+  const [loadedPages, setLoadedPages] = useState(0);
+
+  // 切 Team：清掉锚点 / 探针 / 武装状态，别把上一个 Team 的结论带过来。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scope 变化就是重置条件（函数体只写 ref）
+  useEffect(() => {
+    armed.current = true;
+    anchor.current = null;
+    filledAt.current = null;
+    probe.current = IDLE_EARLIER_PROBE;
+  }, [scope]);
+
+  const request = useCallback(() => {
+    const element = box.current;
+    if (!element) return;
+    const decision = decideEarlierProbe(probe.current, { hasMore, messageCount });
+    probe.current = decision.next;
+    if (!decision.probe) return;
+    armed.current = false;
+    anchor.current = captureScrollAnchor(element);
+    setLoadedPages((value) => value + 1);
+    onLoadEarlier();
+  }, [box, hasMore, messageCount, onLoadEarlier]);
+
+  useLayoutEffect(() => {
+    // 新页落地（条数变化）→ 在途标记清零，下次还能继续往前拉。
+    probe.current = settleEarlierProbe(probe.current, messageCount);
+    const element = box.current;
+    if (!element) return;
+    const saved = anchor.current;
+    if (saved) {
+      if (restoreScrollAnchor(element, saved)) anchor.current = null;
+      return;
+    }
+    if (!hasMore || element.scrollHeight > element.clientHeight + EARLIER_LOAD_THRESHOLD_PX) {
+      filledAt.current = null;
+      return;
+    }
+    if (filledAt.current === element.scrollHeight) return;
+    filledAt.current = element.scrollHeight;
+    request();
+  });
+
+  const onScroll = useCallback(() => {
+    const element = box.current;
+    if (!element) return;
+    const saved = anchor.current;
+    if (saved) {
+      // 新页还没到（高度没变）但用户已经自己滚走了：放弃这次锚定，不抢回位置。
+      if (
+        element.scrollHeight === saved.scrollHeight &&
+        Math.abs(element.scrollTop - saved.scrollTop) > 4
+      ) {
+        anchor.current = null;
+        armed.current = true;
+        return;
+      }
+      // 请求在途：不重复触发同一页。
+      return;
+    }
+    if (!isNearTop(element.scrollTop)) {
+      armed.current = true;
+      return;
+    }
+    if (!armed.current) return;
+    request();
+  }, [box, request]);
+
+  return { onScroll, loadedPages };
+}
 
 export interface TeamChatMainProps {
   /** 稳定 chat key：detail 尚未到达时也能区分会话。 */
@@ -41,10 +154,8 @@ export interface TeamChatMainProps {
   onResendMessage: (message: TeamMessage) => void;
   onRetractMessage: (message: TeamMessage) => void;
   onRefresh: () => void;
+  /** 窗口前还有更早消息：滚动到顶部附近时自动加载一页。 */
   canLoadEarlier: boolean;
-  historyLimited: boolean;
-  visibleCount: number;
-  limit: number;
   onLoadEarlier: () => void;
   members: readonly TeamMember[];
   permissions: readonly PermissionRequest[];
@@ -81,9 +192,6 @@ export function TeamChatMain({
   onRetractMessage,
   onRefresh,
   canLoadEarlier,
-  historyLimited,
-  visibleCount,
-  limit,
   onLoadEarlier,
   members,
   permissions,
@@ -104,20 +212,40 @@ export function TeamChatMain({
 }: TeamChatMainProps) {
   // detail 到达时再 settle 一次（等布局稳定再贴底）；加载更早历史不改这个 key。
   const resetKey = teamChatResetKey(teamId, detail?.team.team_id);
-  // 用“最后一条消息的身份”而不是 rows.length：loadEarlier 只在前方追加旧消息。
+  // 用“最后一条消息的身份”而不是 rows.length：自动加载更早历史只在前方追加旧消息。
   const followKey = teamFollowKey(rows);
   const { scrollRef, pinned, onScroll, scrollToBottom, userIntentProps } = useStickyBottom({
     resetKey,
     followKey,
   });
+  // 无感加载更早：滚动到顶部附近自动加载一页，并在插入后补回滚动锚点。
+  const scrollBox = useRef<HTMLDivElement | null>(null);
+  const setScrollRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      scrollBox.current = element;
+      scrollRef(element);
+    },
+    [scrollRef],
+  );
+  const paging = useEarlierPaging({
+    box: scrollBox,
+    hasMore: canLoadEarlier,
+    messageCount: rows.length,
+    scope: resetKey,
+    onLoadEarlier,
+  });
+  const handleScroll = () => {
+    onScroll();
+    paging.onScroll();
+  };
 
   return (
     <div className="team-chat-main">
       {detail && error && <StaleNotice message={t('team.error.stale')} onRetry={onRefresh} />}
       <div
         className="team-transcript-scroll"
-        ref={scrollRef}
-        onScroll={onScroll}
+        ref={setScrollRef}
+        onScroll={handleScroll}
         {...userIntentProps}
       >
         {rotateFailure && (
@@ -175,16 +303,10 @@ export function TeamChatMain({
           />
         )}
 
-        {canLoadEarlier && (
-          <button type="button" className="load-earlier self-center" onClick={onLoadEarlier}>
-            {t('team.chat.loadEarlier')}
-          </button>
-        )}
-        {detail && historyLimited && (
-          <p className="m-0 self-center font-mono text-xs text-faint" role="status">
-            {t('team.chat.historyLimited', { count: visibleCount, limit })}
-          </p>
-        )}
+        {/* 无感加载更早：不再渲染按钮 / 截断提示，只留读屏播报（不占视觉）。 */}
+        <span className="sr-only" aria-live="polite">
+          {paging.loadedPages > 0 ? t('team.chat.loadedEarlier') : ''}
+        </span>
         {!pinned && (
           <button type="button" className="to-bottom" onClick={scrollToBottom}>
             {t('chat.toBottom')}

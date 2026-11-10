@@ -31,6 +31,8 @@ export interface UseStickyBottomOptions {
 
 export interface UseStickyBottomResult {
   scrollRef: (element: HTMLDivElement | null) => void;
+  /** 当前滚动容器（程序化读取 scrollTop / scrollHeight 用，例如前插补偿）。 */
+  getElement: () => HTMLDivElement | null;
   pinned: boolean;
   onScroll: () => void;
   /** 「回到底部」：pinned + smooth；流式跟随不使用 smooth。 */
@@ -58,6 +60,8 @@ export function useStickyBottom({
   const scrollRef = useCallback((element: HTMLDivElement | null) => {
     elementRef.current = element;
   }, []);
+
+  const getElement = useCallback(() => elementRef.current, []);
 
   const controller = useCallback((): StickyBottomController | null => {
     const element = elementRef.current;
@@ -157,5 +161,5 @@ export function useStickyBottom({
     setPinned(true);
   }, [controller]);
 
-  return { scrollRef, pinned, onScroll, scrollToBottom, userIntentProps };
+  return { scrollRef, getElement, pinned, onScroll, scrollToBottom, userIntentProps };
 }

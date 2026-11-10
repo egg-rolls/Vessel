@@ -26,10 +26,15 @@ export function TeamDetailRoute({
   node,
   route,
   navigate,
+  membersOpen,
+  onCloseMembers,
 }: {
   node: NodeView;
   route: TeamsDetailRoute;
   navigate: (route: Route) => void;
+  /** 右侧成员栏开关：状态在 `useTeamsView`，这里只透传给 `TeamChat`。 */
+  membersOpen: boolean;
+  onCloseMembers: () => void;
 }) {
   useLocale();
   const { connectionState, epoch, permissions, asks, responding, respondPermission, respondAsk } =
@@ -134,6 +139,8 @@ export function TeamDetailRoute({
         }}
         onOpenSession={(sessionId) => navigate({ domain: 'chat', sessionId })}
         onBackToList={() => navigate({ domain: 'teams' })}
+        membersOpen={membersOpen}
+        onCloseMembers={onCloseMembers}
       />
     </div>
   );

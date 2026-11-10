@@ -301,6 +301,14 @@ export function useChatTranscript({
     [visibleTranscript, transcriptLimit],
   );
   const transcriptStart = visibleTranscript.length - transcriptWindow.shown.length;
+  // 前插一页更早的历史（滚动到顶自动触发）。保持引用稳定：TranscriptWindow 用它做
+  // useLayoutEffect 依赖，新身份会让锚点回填 effect 每渲染都重跑。
+  const loadEarlier = useCallback(
+    () => setTranscriptLimit((value) => value + TRANSCRIPT_WINDOW),
+    [],
+  );
+  // 还有更早的分页没加载：滚动到顶自动前插一页（无感加载，不再有按钮 / 提示）。
+  const hasEarlier = transcriptStart > 0;
   const hasTranscript = visibleTranscript.length > 0;
   const truncated = visibleGroups.some((group) => snapshot.truncatedRuns.has(group.runId));
 
@@ -326,9 +334,10 @@ export function useChatTranscript({
     transcriptMessages,
     transcriptWindow,
     transcriptStart,
+    hasEarlier,
     hasTranscript,
     truncated,
     reloadDetail,
-    loadEarlier: () => setTranscriptLimit((value) => value + TRANSCRIPT_WINDOW),
+    loadEarlier,
   };
 }

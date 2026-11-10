@@ -184,6 +184,9 @@ export const RunItems = memo(function RunItems({
     group.status === 'cancelled' || (cancelled && group.status === 'failed')
       ? 'cancelled'
       : group.status;
+  // 流式与取消态都按纯文本渲染：run 终止的瞬间不把同一段文字换成 Markdown +
+  // 操作行，避免打断（stop）时整段高度突变导致滚动区跳动。
+  const plainText = group.status === 'running' || status === 'cancelled';
   // 流式文本已经渲染在 items 里时，不再重复显示 run.completed.output。
   const inlineText = group.items
     .filter((item): item is { kind: 'text'; text: string; key: string } => item.kind === 'text')
@@ -237,12 +240,12 @@ export const RunItems = memo(function RunItems({
         if (item.kind === 'text') {
           return (
             <div className="msg-assistant group max-w-full" key={item.key}>
-              {group.status === 'running' ? (
+              {plainText ? (
                 <div className="msg-text">{item.text}</div>
               ) : (
                 <Markdown className="msg-text" text={item.text} />
               )}
-              {group.status !== 'running' && item.text.trim().length > 0 && (
+              {!plainText && item.text.trim().length > 0 && (
                 <MessageActions
                   className="mt-1"
                   actions={[

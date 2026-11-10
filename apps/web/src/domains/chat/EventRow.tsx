@@ -1,3 +1,4 @@
+import { Icon } from '../../components/ui';
 import { formatTimestamp, formatTokenCount } from '../../format';
 import type { RunEvent } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -287,12 +288,19 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
   }
 }
 
-/** 切换提示：纯 CSS 按 details 的 open 状态二选一，不引入受控状态。 */
+/**
+ * 展开 / 收起的 icon 提示：chevron 由 `details[open]` 驱动旋转。
+ *
+ * 可访问名保持不变——`chat.event.expand` / `chat.event.collapse` 仍作为视觉隐藏文本
+ * 留在 summary 里（读屏读到的仍是「… 展开 / 收起」），icon 本身 `aria-hidden`；
+ * 点击区域仍是整行 summary，焦点环由 summary 的 `:focus-visible` 提供。
+ */
 function ToggleHint() {
   return (
-    <span className="event-block-toggle" aria-hidden="true">
-      <span className="event-toggle-expand">{t('chat.event.expand')}</span>
-      <span className="event-toggle-collapse">{t('chat.event.collapse')}</span>
+    <span className="event-block-toggle">
+      <span className="event-toggle-expand sr-only">{t('chat.event.expand')}</span>
+      <span className="event-toggle-collapse sr-only">{t('chat.event.collapse')}</span>
+      <Icon name="chevron" className="event-toggle-icon" />
     </span>
   );
 }

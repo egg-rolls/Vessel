@@ -385,6 +385,17 @@ const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 /** WS 事件背压：高水位开始丢事件，低水位补 gap（DECISION-009 §10.3.5） */
 const WS_BACKPRESSURE_HIGH = 2 * 1024 * 1024;
 const WS_BACKPRESSURE_LOW = 512 * 1024;
+/**
+ * 单次回放的字节预算：只回放最近这段历史，更早的区间用 gap 跳过。
+ *
+ * 环形缓冲最多 10000 条，单条 `tool.call.completed` 可达 MB 级；长驻 gateway
+ * 一次 `since=0` 全量回放可能是数百 MB。慢客户端必然触发背压丢帧 → gap →
+ * 重连 → 再全量回放，形成永远追不上最新事件的循环。从最新往回取到预算为止，
+ * 既保证「最新消息先到」，也把单次回放压到高水位以下。
+ */
+const REPLAY_BUDGET_BYTES = 1024 * 1024;
+/** 回放条数兜底：小事件很多时按条数收口。 */
+const REPLAY_MAX_EVENTS = 2_000;
 
 const DEFAULT_PORT = 8642;
 const DEFAULT_HOSTNAME = '127.0.0.1';
@@ -809,10 +820,51 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
+  /**
+   * 有界回放窗口：从最新事件往回取，直到字节预算或条数预算用完。
+   *
+   * 返回被跳过的最后一条 seq（`skippedTo`），调用方把它和环形缓冲自身的
+   * 缺口合并成一个 gap；客户端按既有语义从 `to_seq` 重新订阅，下一轮
+   * 回放就只剩这段尾部，能立刻追到最新事件。
+   */
+  function tailReplayWindow(
+    items: readonly SeqEvent[],
+    sizeOf: (item: SeqEvent) => number,
+  ): { items: SeqEvent[]; skippedTo?: number } {
+    const kept: SeqEvent[] = [];
+    let bytes = 0;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      if (item === undefined) continue;
+      const size = sizeOf(item);
+      if (
+        kept.length > 0 &&
+        (bytes + size > REPLAY_BUDGET_BYTES || kept.length >= REPLAY_MAX_EVENTS)
+      ) {
+        break;
+      }
+      bytes += size;
+      kept.push(item);
+    }
+    kept.reverse();
+    const first = kept[0];
+    if (first === undefined) return { items: [] };
+    const oldest = items[0]?.seq;
+    if (oldest === undefined || first.seq <= oldest) return { items: kept };
+    return { items: kept, skippedTo: first.seq - 1 };
+  }
+
   function replayEventsTo(ws: Ws): void {
     const gap = hub.gapFor(ws.data.since);
-    if (gap) sendFrame(ws, gapFrame(gap));
-    for (const item of hub.since(ws.data.since)) sendEventToWs(ws, item);
+    const window = tailReplayWindow(
+      hub.since(ws.data.since).filter((item) => wsAccepts(ws, item.event)),
+      (item) => JSON.stringify(eventFrame(item)).length,
+    );
+    const gapTo = Math.max(gap?.to_seq ?? 0, window.skippedTo ?? 0);
+    if (gapTo > 0) {
+      sendFrame(ws, gapFrame({ from_seq: gap?.from_seq ?? ws.data.since + 1, to_seq: gapTo }));
+    }
+    for (const item of window.items) sendEventToWs(ws, item);
   }
 
   function replayTo(ws: Ws): void {
@@ -2235,9 +2287,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
               writeSse(ctrl, clientState, 'retry: 3000\n\n');
               writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(since))}\n\n`);
               const gap = hub.gapFor(since);
-              if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
+              const window = tailReplayWindow(
+                hub.since(since).filter((item) => accepts(item.event)),
+                (item) => JSON.stringify(eventFrame(item)).length,
+              );
+              const gapTo = Math.max(gap?.to_seq ?? 0, window.skippedTo ?? 0);
+              if (gapTo > 0) {
+                writeSse(
+                  ctrl,
+                  clientState,
+                  clientState.encodeGap({ from_seq: gap?.from_seq ?? since + 1, to_seq: gapTo }),
+                );
+              }
               clientState.replay = {
-                cursor: Math.max(since + 1, hub.oldestSeq),
+                // 有界回放：从保留窗口的第一条开始，而不是从 since 全量重放。
+                cursor: window.items[0]?.seq ?? hub.latestSeq + 1,
                 batch: SSE_REPLAY_BATCH,
                 accepts,
                 encode: (item) => `data: ${JSON.stringify(eventFrame(item))}\n\n`,

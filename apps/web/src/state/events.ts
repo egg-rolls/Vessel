@@ -14,6 +14,13 @@ export interface StoredEvent {
   event: RunEvent;
   seq: number;
   jobId?: string;
+  /**
+   * 该事件所属 run 的会话归属（EventStore 按 run 记住）。
+   *
+   * 流式增量与工具事件本身不带 `session_id`；一旦 `run.started` 被按 run 裁剪掉，
+   * 只看事件字段会让分组失去 sessionId，从而被会话窗口整段过滤。
+   */
+  sessionId?: string;
 }
 
 export type TimelineItem =
@@ -52,6 +59,13 @@ export interface RunGroup {
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   /** 首个事件时间（没有 run.started 时用于排序） */
   firstTs?: number;
+  /**
+   * 首个进入分组的条目 seq（wire 序号）。
+   *
+   * 时间线合并时同 `ts` 用它做稳定回退：事件与 `sessions.get` 消息共用一条按时间
+   * 排序的列表，毫秒级同刻只能靠 seq 决定先后，不能靠到达顺序。
+   */
+  firstSeq?: number;
   startedAt?: number;
   completedAt?: number;
   durationMs?: number;
@@ -81,6 +95,25 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'llm.request',
   'llm.response',
   'message.injected',
+  // run 生命周期的状态同步：每次 iteration 都发，默认档不该逐条落成原始事件卡。
+  'run.checkpoint',
+  'run.resumed',
+  // 进程级通知（热应用 / 版本检查）：run_id 常为 `runtime`，内容经 BeforeLlm hook
+  // 进模型上下文，聊天时间线不该每个周期多一张原始 JSON 卡。
+  'runtime.notice',
+  // trace 回放边界：只在批量回放 trace 时出现，是观测动作而不是对话内容。
+  'replay.started',
+  'replay.completed',
+  // 上下文生命周期的过程信号（水位 / 压缩 / 轮换 / 重启 / compact fork）：
+  // 仍按 typed notice 渲染，但归到「内部事件」开关下，默认档不逐轮刷行。
+  // 例外：`agent.limit.warning`（限流 / 预算预警）必须默认可见，**不要**加进来。
+  'context.pressure',
+  'context.compacted',
+  'agent.rotating',
+  'agent.rotated',
+  'agent.restarting',
+  'agent.restarted',
+  'agent.compact_forked',
   // hook.* 由 `ui.showInternalEvents` 统一控制（CONFIG 契约），失败仍走 errorLevel。
   'hook.started',
   'hook.completed',
@@ -150,7 +183,16 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
       reasoningEndedAt = undefined;
     }
   };
+  // `hook.started` / `hook.completed` 成对出现：只落一行 notice（completed 带 duration_ms），
+  // 否则每轮 LLM 调用都会多出 2 行「hook · 名字」，把时间线冲成噪声。
+  let pendingHook: { event: RunEvent; key: string; name: string } | undefined;
+  const flushPendingHook = () => {
+    if (!pendingHook) return;
+    group.items.push({ kind: 'notice', event: pendingHook.event, key: pendingHook.key });
+    pendingHook = undefined;
+  };
   const flush = () => {
+    flushPendingHook();
     flushReasoning();
     flushText();
   };
@@ -158,6 +200,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
   for (const entry of entries) {
     const ev = entry.event;
     if (group.firstTs === undefined) group.firstTs = ev.ts;
+    if (group.firstSeq === undefined) group.firstSeq = entry.seq;
     if (entry.jobId) group.jobId = entry.jobId;
     // 载荷自报 run_id 的才是 run 事件；成员事件的 run_id 是成员 id（见 hasRunEvent）。
     const payloadRunId = (ev.data as { run_id?: unknown }).run_id;
@@ -166,17 +209,23 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
     }
     // 中途连上 / run.started 已被环形缓冲裁剪时，仍按任一事件的 session_id 归属会话；
     // 否则成员 run 的实时卡片会因缺 sessionId 被会话窗口过滤掉。
+    // `entry.sessionId` 是 EventStore 按 run 记住的归属：流式增量自身不带 session_id，
+    // 只有它能兜住「run.started 被裁剪」的长 run。
     if (group.sessionId === undefined) {
-      const data = ev.data as { session_id?: unknown };
-      if (typeof data.session_id === 'string' && data.session_id.length > 0) {
-        group.sessionId = data.session_id;
+      if (entry.sessionId !== undefined && entry.sessionId.length > 0) {
+        group.sessionId = entry.sessionId;
+      } else {
+        const data = ev.data as { session_id?: unknown };
+        if (typeof data.session_id === 'string' && data.session_id.length > 0) {
+          group.sessionId = data.session_id;
+        }
       }
     }
     switch (ev.type) {
       case 'run.started': {
         const d = ev.data as { input?: string; session_id?: string };
         group.input = d.input;
-        group.sessionId = d.session_id;
+        if (d.session_id !== undefined) group.sessionId = d.session_id;
         group.startedAt = ev.ts;
         continue;
       }
@@ -239,10 +288,28 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
       case 'agent.restarting':
       case 'agent.restarted':
       case 'agent.compact_forked':
-      case 'hook.started':
-      case 'hook.completed':
       case 'hook.system_prompt_ignored':
       case 'hook.additional_context_deprecated': {
+        flush();
+        group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
+        continue;
+      }
+      // hook 成对折叠：started 先暂存，同名 completed 到达就只落 completed 那一行；
+      // 只有 started、没有 completed 时由 `flush()` 兜底落回，信息不丢。
+      case 'hook.started': {
+        flush();
+        const name = (ev.data as { hook_name?: unknown }).hook_name;
+        pendingHook = {
+          event: ev,
+          key: `notice-${entry.seq}`,
+          name: typeof name === 'string' ? name : '',
+        };
+        continue;
+      }
+      case 'hook.completed': {
+        const name = (ev.data as { hook_name?: unknown }).hook_name;
+        const paired = typeof name === 'string' && pendingHook?.name === name;
+        if (paired) pendingHook = undefined;
         flush();
         group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
         continue;
@@ -271,6 +338,8 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
   }
   // 尾部仍在流式中的缓冲不 push 成 item：运行段直接渲染 liveText/liveReasoning。
   // flush() 已清空的部分不会出现在这里，因此不会与 items 重复。
+  // 未配对的 `hook.started` 在这里落回，避免整行信息丢失。
+  flushPendingHook();
   if (reasoningBuf) group.liveReasoning = reasoningBuf;
   if (buf) group.liveText = buf;
   return group;
@@ -339,6 +408,13 @@ export function groupsForSession(groups: readonly RunGroup[], sessionId: string)
 /**
  * 已完成 run 的 live 卡片是否应隐藏（历史里已经有同一条用户输入 + 最终输出）。
  * 无法确认输出已落盘时保留卡片，避免 hydrate 失败时整个 run 消失。
+ *
+ * **去重契约（时间线合并的唯一去重键）**：`sessions.get` 的已提交消息与 ws 缓冲里的
+ * live 事件必然是同一份内容的两条来源，只允许渲染一份。判据固定为
+ * `(status === 'completed') ∧ (run.input ∈ user 消息) ∧ (run.output ⊆ assistant 消息)`；
+ * 缺任一项就保留 live 卡片（宁可重一次，也不能把 run 吞掉）。
+ * 用户输入的重复显示由 `hideInput`（TranscriptWindow）用同一 key 的 input 半边兜住；
+ * 因此**不要**在渲染层另外引入按时间/文本相似度的去重，会和这里漂移。
  */
 export function isGroupPersisted(group: RunGroup, detail: SessionDetail | null): boolean {
   if (group.status !== 'completed' || !detail) return false;

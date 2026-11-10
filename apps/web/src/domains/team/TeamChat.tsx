@@ -11,7 +11,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { t } from '../../i18n';
 import { TeamChatHeader } from './TeamChatHeader';
 import { TeamChatMain } from './TeamChatMain';
-import { TeamMembersDialog } from './TeamMembersDialog';
+import { TeamChatMembersAside } from './TeamChatMembersAside';
 import type { TeamChatProps } from './team-chat-types';
 import { nextLimitFor, nextMembersLimitFor } from './team-window';
 import { useTeamChat } from './useTeamChat';
@@ -21,6 +21,8 @@ export type { TeamChatClient, TeamChatProps } from './team-chat-types';
 export function TeamChat(props: TeamChatProps) {
   // 页头 scope/status 槽来自路由层，不经 useTeamChat 派生。
   const { nodeName, nodeCurrent, frozen } = props;
+  // 成员栏开关由 useTeamsView 持有（入口在 Team 卡 ActionMenu）；这里只读。
+  const { membersOpen, onCloseMembers } = props;
   const {
     team,
     teamId,
@@ -28,12 +30,11 @@ export function TeamChat(props: TeamChatProps) {
     members,
     memberTotal,
 
-    membersOpen,
-    setMembersOpen,
+    narrow,
+    membersDrawerRef,
     detail,
     error,
     firstLoading,
-    refreshing,
     rotateFailure,
     rows,
     resolveMember,
@@ -58,8 +59,6 @@ export function TeamChat(props: TeamChatProps) {
     reload,
     hasToken,
     canLoadEarlier,
-    historyLimited,
-    visibleCount,
     limit,
     setLimit,
     memberWindow,
@@ -90,15 +89,10 @@ export function TeamChat(props: TeamChatProps) {
         nodeName={nodeName}
         nodeCurrent={nodeCurrent}
         frozen={frozen}
-        memberTotal={memberTotal}
-        onOpenMembers={() => setMembersOpen(true)}
         onBackToList={onBackToList}
-        onRefresh={reload}
-        hasToken={hasToken}
-        refreshing={refreshing}
       />
 
-      <div className="team-chat-body">
+      <div className={`team-chat-body ${membersOpen ? 'has-members' : ''}`.trim()}>
         <TeamChatMain
           teamId={teamId}
           detail={detail}
@@ -116,9 +110,6 @@ export function TeamChat(props: TeamChatProps) {
           onRetractMessage={requestRetract}
           onRefresh={reload}
           canLoadEarlier={canLoadEarlier}
-          historyLimited={historyLimited}
-          visibleCount={visibleCount}
-          limit={limit}
           onLoadEarlier={() => setLimit(nextLimitFor(limit))}
           members={members}
           permissions={permissions}
@@ -137,25 +128,31 @@ export function TeamChat(props: TeamChatProps) {
           targetLabel={team?.name ?? teamId}
           retryHint={retryHint}
         />
+        {/* 常驻右列（grid 第二列）；≤1023px 同一节点是固定抽屉，
+            关闭时仍需挂载以保留 `.open` 过渡与 inert/aria-hidden 语义。 */}
+        {(membersOpen || narrow) && (
+          <TeamChatMembersAside
+            members={members}
+            memberTotal={memberTotal}
+            permissions={permissions}
+            asks={asks}
+            memberWindow={memberWindow}
+            loading={firstLoading}
+            membersOpen={membersOpen}
+            narrow={narrow}
+            drawerRef={membersDrawerRef}
+            onOpenMember={openMember}
+            onOpenSession={(sessionId) => {
+              // 窄屏抽屉在跳走前先收起，避免返回 Team 时抽屉仍开着。
+              if (narrow) onCloseMembers();
+              onOpenSession(sessionId);
+            }}
+            onLoadMore={() => setMembersLimit(nextMembersLimitFor(membersLimit))}
+            onClose={narrow ? onCloseMembers : undefined}
+            onCloseDrawer={onCloseMembers}
+          />
+        )}
       </div>
-
-      {membersOpen && (
-        <TeamMembersDialog
-          members={members}
-          memberTotal={memberTotal}
-          permissions={permissions}
-          asks={asks}
-          memberWindow={memberWindow}
-          loading={firstLoading}
-          onOpenMember={openMember}
-          onOpenSession={(sessionId) => {
-            setMembersOpen(false);
-            onOpenSession(sessionId);
-          }}
-          onLoadMore={() => setMembersLimit(nextMembersLimitFor(membersLimit))}
-          onClose={() => setMembersOpen(false)}
-        />
-      )}
 
       {retractTarget && (
         <ConfirmDialog

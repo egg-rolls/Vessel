@@ -433,8 +433,12 @@ export const messages = {
   'settings.display.saved': '已保存 {key}',
   'settings.display.saveFailed': '保存失败：{detail}',
   'settings.display.writeUnavailable': '该 gateway 未注入 config 写入；当前只读。',
+  'settings.display.saveUnconfirmed':
+    '已提交 {key}，但 gateway 仍返回旧值；写入可能未生效，请重启 gateway 后重试。',
   'settings.display.field.verbosity': '输出详略',
-  'settings.display.field.showInternalEvents': '显示内部事件',
+  'settings.display.field.showInternalEvents': '显示系统信息（内部事件）',
+  'settings.display.field.showInternalEvents.hint':
+    '关闭时只保留正文、工具调用、错误与权限/ask 卡片；打开后额外显示运行提示、hook / LLM 上下文等系统消息（会话里的 vessel:* 上下文消息同受此键控制）；verbosity=debug 也会显示这些系统消息。',
   'settings.display.field.errorLevel': '错误层级',
   'settings.display.field.showProcessErrors': '显示 process 错误',
   'settings.display.field.askUser': '允许 ask_user',
@@ -443,23 +447,6 @@ export const messages = {
   'settings.display.field.showReasoning': '显示思考流',
   'settings.display.field.statusBars': '状态栏位置',
   'settings.display.field.language': '界面语言',
-  'settings.display.runtimeTitle': '运行期上下文消息',
-  'settings.display.runtimeDescription':
-    '仅提供给模型的上下文消息（消息来源、运行通知、订阅通知、预算预警）。默认在会话记录中隐藏；该偏好只保存在当前浏览器。',
-  'settings.display.runtimeShowAll': '全部显示',
-  'settings.display.runtimeShowAllHint': '显示所有运行期上下文类型；单独开关仍然有效。',
-  'settings.display.runtimeKind.source': '消息来源',
-  'settings.display.runtimeKind.source.hint': '每轮用户输入的来源。',
-  'settings.display.runtimeKind.notice': '运行通知',
-  'settings.display.runtimeKind.notice.hint': '热应用与版本更新通知。',
-  'settings.display.runtimeKind.subscription': '订阅通知',
-  'settings.display.runtimeKind.subscription.hint': '订阅文档发生变化时的短通知。',
-  'settings.display.runtimeKind.limit': '预算预警',
-  'settings.display.runtimeKind.limit.hint': '上下文预算用量预警。',
-  'settings.display.runtimeKind.compaction': '压缩标记',
-  'settings.display.runtimeKind.compaction.hint': '上下文压缩标记。',
-  'settings.display.runtimeKind.other': '其他',
-  'settings.display.runtimeKind.other.hint': '未识别的 vessel:* 上下文消息。',
 
   // Team（0.19 S6）。技术词 agent / run / session / gateway / token / @ / Team /
   // workspace 与错误码保持原文。
@@ -470,14 +457,13 @@ export const messages = {
   'team.chat.members': '成员',
   'team.chat.empty': '还没有消息',
   'team.chat.emptyHint': '用 @ 提及成员才会通知对应 agent。',
-  'team.chat.loadEarlier': '加载更早',
-  'team.chat.historyLimited': '仅显示最近 {count} 条（上限 {limit}）',
-  'team.chat.refresh': '刷新',
-  'team.chat.refreshing': '正在刷新…',
+  'team.chat.loadedEarlier': '已加载更早消息',
   'team.chat.backToList': '返回 Team 列表',
   'team.chat.loadMoreMembers': '加载更多成员',
   'team.chat.membersCapped': '仅显示前 {shown} / {total} 成员',
   'team.members.open': '查看成员列表',
+  'team.members.close': '收起成员列表',
+  'team.members.matches': '匹配 {matched} / 已加载 {total}',
   'team.members.search': '按名字或角色搜索',
   'team.members.empty': '没有匹配的成员',
 
@@ -1034,7 +1020,6 @@ export const messages = {
   'chat.notice.compactForked': '上下文已压缩分叉 · {from} → {to} · epoch {epoch}',
   'chat.notice.hook': 'hook · {name}',
   'chat.role.assistant': '助手',
-  'chat.loadEarlier': '加载更早（还有 {count} 条）',
   // 0.36: 消息气泡操作组
   'chat.message.actions': '消息操作',
   'chat.message.copy': '复制',

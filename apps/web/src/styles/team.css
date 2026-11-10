@@ -68,7 +68,15 @@
   flex-direction: column;
 }
 
+/* 成员栏展开：主区 minmax(0,1fr) + 常驻右列（272px / ≤1199px 240px）。
+   收起时 body 回到 flex column，全宽给 transcript。 */
+.team-chat-body.has-members {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--team-members-w);
+}
+
 .team-chat-main {
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -166,7 +174,16 @@
   font-size: 11px;
 }
 
-/* ── 成员列表（弹层内复用） ───────────────────────────── */
+/* ── 成员侧栏：常驻右列 / 1023 抽屉布局依赖 ─────────────── */
+
+.team-members-column {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+}
 
 .team-members-head {
   padding-bottom: 8px;
@@ -196,13 +213,49 @@
 
 /* ── 响应式 ───────────────────────────────────────────── */
 
+@media (max-width: 1199px) {
+  .team-chat-body.has-members {
+    grid-template-columns: minmax(0, 1fr) var(--team-members-w-compact);
+  }
+}
+
 @media (max-width: 1023px) {
   .team-chat {
     height: 100%;
   }
 
+  /* 抽屉走 fixed 定位：body 退回单列，成员栏不再是 grid 第二列。 */
+  .team-chat-body,
+  .team-chat-body.has-members {
+    display: block;
+    position: relative;
+  }
+
   .team-chat-main {
     height: 100%;
+  }
+
+  .team-members-column {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    z-index: var(--z-drawer);
+    width: min(86vw, var(--drawer-w));
+    border-left: 1px solid var(--line);
+    box-shadow: 0 18px 48px color-mix(in srgb, var(--ink) 22%, transparent);
+    visibility: hidden;
+    transform: translateX(100%);
+    transition:
+      transform var(--motion-ui) var(--ease),
+      visibility var(--motion-ui) var(--ease);
+  }
+
+  .team-members-column.open {
+    visibility: visible;
+    transform: none;
+    /* 打开时 visibility 立即生效，避免首个可聚焦元素 focus() 被浏览器忽略 */
+    transition: transform var(--motion-ui) var(--ease);
   }
 }
 
@@ -230,5 +283,12 @@
   .team-body-history-item {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .team-members-column,
+  .team-members-column.open {
+    transition: none;
   }
 }

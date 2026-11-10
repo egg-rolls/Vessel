@@ -13,7 +13,17 @@ interface TeamsDetailPaneProps {
 }
 
 export function TeamsDetailPane({ state }: TeamsDetailPaneProps) {
-  const { isDetail, detailNode, detailRoute, navigate, compact, drawerOpen, setDrawerOpen } = state;
+  const {
+    isDetail,
+    detailNode,
+    detailRoute,
+    navigate,
+    compact,
+    drawerOpen,
+    setDrawerOpen,
+    membersOpen,
+    setMembersOpen,
+  } = state;
 
   let detail: ReactNode;
   if (!isDetail) {
@@ -26,7 +36,15 @@ export function TeamsDetailPane({ state }: TeamsDetailPaneProps) {
       </div>
     );
   } else if (detailNode && detailRoute) {
-    detail = <TeamDetailRoute node={detailNode} route={detailRoute} navigate={navigate} />;
+    detail = (
+      <TeamDetailRoute
+        node={detailNode}
+        route={detailRoute}
+        navigate={navigate}
+        membersOpen={membersOpen}
+        onCloseMembers={() => setMembersOpen(false)}
+      />
+    );
   } else {
     detail = (
       <div className="teams-detail-empty">

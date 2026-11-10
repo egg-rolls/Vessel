@@ -4,7 +4,8 @@ const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
- * 抽屉可访问性：Esc 关闭、Tab 焦点圈、打开时锁 body 滚动、关闭后焦点回到触发元素。
+ * 抽屉可访问性：Esc 关闭、Tab 焦点圈、打开时锁 body 滚动、关闭后归还焦点
+ * （`returnFocusId` 优先，否则回到打开前的 `document.activeElement`）。
  * `enabled=false`（例如桌面端抽屉变为常驻列）时不介入。
  */
 export function useDrawerA11y({
@@ -16,10 +17,17 @@ export function useDrawerA11y({
   open: boolean;
   onClose: () => void;
   enabled?: boolean;
-  returnFocusId: string;
+  /**
+   * 关闭后把焦点还给某个固定 id 的触发元素。可选：入口是 ActionMenu 这类
+   * 可收起菜单（节点随选择卸载）时给不出稳定 id，此时回退到打开前记录的
+   * `document.activeElement`；若它已从 DOM 移除（菜单收起），才落到 body。
+   */
+  returnFocusId?: string;
 }): RefObject<HTMLElement | null> {
   const containerRef = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
+  /** 打开前持有焦点的元素：没有 `returnFocusId` 时用它兜底归还焦点。 */
+  const previousFocus = useRef<HTMLElement | null>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
@@ -29,6 +37,10 @@ export function useDrawerA11y({
       return undefined;
     }
     if (open) {
+      // 先记录再抢焦点：Esc / 遮罩 / × 关闭后键盘用户要能回到原来的位置。
+      const active = document.activeElement;
+      previousFocus.current =
+        active instanceof HTMLElement && active !== document.body ? active : null;
       const first = containerRef.current?.querySelector<HTMLElement>(FOCUSABLE);
       first?.focus();
       wasOpen.current = true;
@@ -40,7 +52,11 @@ export function useDrawerA11y({
     }
     if (wasOpen.current) {
       wasOpen.current = false;
-      document.getElementById(returnFocusId)?.focus();
+      const byId = returnFocusId === undefined ? null : document.getElementById(returnFocusId);
+      const focusTarget = byId ?? previousFocus.current;
+      // 记录的元素可能已随菜单卸载：仍在文档里才聚焦，否则焦点自然回到 body。
+      if (focusTarget?.isConnected) focusTarget.focus();
+      previousFocus.current = null;
     }
     // `noImplicitReturns`：与上面的 cleanup 分支显式对齐，React 接受 undefined。
     return undefined;

@@ -254,7 +254,7 @@ P2 已迁移 Settings / Integrations / Runs / Observe / Nodes / Agents / Teams /
    | 720 | `domains/nodes.css:58`（`.net-select` 全宽、`.net-command` 两列改一列） | 否 | 681–719 是节点表单的窄桌面区间；折到 680 会让命令块在窄列里溢出，折到 1023 会过早单列。 |
    | 720 | `domains/teams.css:25`（`.teams-grid` 单列、detail head padding） | 否 | 240px 卡片网格在 681–719 仍可排两列；680 会提前变成移动布局，1023 会过早单列。 |
    | 900 | `domains/attention.css:72`（隐藏第 4 列起，改三列 grid） | 否 | 六列 attention 表格在 901–1022 仍能容纳；折到 1023 会过早隐藏 agent / team 列，折到 680 会保留溢出列。 |
-   | 1199 | `team.css:205`（`.team-chat-body` 成员栏 272→240px） | 否 | 这是成员栏宽度降档，不是抽屉切换；1023 才切抽屉（`team.css:211`）。折到 1023 会让 1024–1199 提前失去常驻成员栏。 |
+   | 1199 | `team.css:218`（`.team-chat-body.has-members` 成员栏 272→240px） | 否 | 这是成员栏宽度降档，不是抽屉切换；1023 才切抽屉（`team.css:243`）。折到 1023 会让 1024–1199 提前失去常驻成员栏。 |
    | 1023 | `layout.css`、`team.css`、`DataTable` / 页面 utilities | 是 | 已统一为 `max-wide:`。 |
    | 680 | `layout.css`、`team.css`、`base.css` 等 | 是 | 已统一为 `max-compact:`。 |
 

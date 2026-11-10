@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Route } from '../../app/router';
+import { type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { parseRoute, type Route } from '../../app/router';
 import { useToast } from '../../components/ToastProvider';
 import type { GatewayClient } from '../../gateway/client';
 import type { NodeView } from '../../gateway/NodeProvider';
@@ -7,6 +7,11 @@ import type { TeamControl } from '../../gateway/team-control';
 import { t } from '../../i18n';
 import type { EventStoreSnapshot } from '../../state/event-store';
 import { startedRunIds } from '../../state/events';
+import {
+  chatDraftKey,
+  useComposerDraftStore,
+  useComposerDraftText,
+} from '../../stores/composerDraftStore';
 import type { SessionLoadOptions } from '../../stores/sessionStore';
 import { errorMessage } from './errors';
 import { type StartInNewAgentResult, startInNewAgent } from './new-session';
@@ -49,7 +54,21 @@ export function useChatSubmit({
   pendingNewSessions,
 }: UseChatSubmitOptions) {
   const toast = useToast();
-  const [input, setInput] = useState('');
+  /** 草稿按会话分槽（`chat:new` = 草稿态）：切到别的会话再回来，正文还在。 */
+  const draftKey = chatDraftKey(selectedId);
+  const input = useComposerDraftText(draftKey);
+  const writeDraft = useComposerDraftStore((state) => state.setText);
+  // 写草稿按「实时 hash」定位，不用 `selectedId`：`navigate()` 是同步写
+  // `location.hash`，而 `route` 要等 `hashchange` 才更新；`sessions.create`（edit /
+  // 重发）会在 navigate 之后立刻回填正文，用 `selectedId` 会写进上一个会话的槽。
+  const liveDraftKey = useCallback(() => {
+    const parsed = parseRoute(window.location.hash);
+    return parsed.domain === 'chat' ? chatDraftKey(parsed.sessionId) : chatDraftKey(selectedId);
+  }, [selectedId]);
+  const setInput = useCallback(
+    (value: SetStateAction<string>) => writeDraft(liveDraftKey(), value),
+    [writeDraft, liveDraftKey],
+  );
   const [submitting, setSubmitting] = useState(false);
   const [queuedRuns, setQueuedRuns] = useState<QueuedSubmission[]>([]);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
@@ -125,6 +144,8 @@ export function useChatSubmit({
   const submitText = async (raw: string, sessionIdOverride?: string): Promise<boolean> => {
     const text = raw.trim();
     if (!text || submitting || !connected) return false;
+    // 源槽在 await 之前取：发送期间用户可能已经切走会话。
+    const sourceKey = liveDraftKey();
     // 0.28（CONTRACT §3）：草稿态 = 一个新 agent。先 `agents.create`（只给客户端生成的
     // 唯一名）拿 `{id, session_id}`，再 `runs.start{agent_id}`；`runs.start` 失败时
     // best-effort 回收，不留空 agent。选中已有会话时按 session 投递，行为不变。
@@ -154,8 +175,8 @@ export function useChatSubmit({
       }
       // 新会话可能尚未落盘：标记后 detail 404 可容忍（会话出现在列表即失效）。
       if (!targetSessionId) pendingNewSessions.current.add(nextSessionId);
-      // 只在当前输入仍是被提交的文本时清空：重试不应吞掉用户新写的草稿。
-      setInput((current) => (current.trim() === text ? '' : current));
+      // 只在源草稿仍是被提交的文本时清空：重试不应吞掉用户新写的草稿。
+      writeDraft(sourceKey, (current) => (current.trim() === text ? '' : current));
       if (!targetSessionId) navigate({ domain: 'chat', sessionId: nextSessionId });
       if (run.status === 'queued' && !startedRuns.has(run.run_id)) {
         const queuedSessionId = run.session_id ?? nextSessionId;

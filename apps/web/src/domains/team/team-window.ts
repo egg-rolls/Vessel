@@ -1,8 +1,9 @@
 /**
  * Team 消息 / 成员窗口的纯函数（无 React）。
  *
- * `teams.get` 的消息 `limit` 没有游标；这里把“加载更早”固定为
- * 100 → 200 → 500 → 1000，并如实报告是否可能被截断。
+ * `teams.get` 的消息 `limit` 没有游标；窗口按 100 → 200 → 500 → 1000 逐页放大
+ * （Web 端滚到顶部附近自动触发，无按钮）。服务端 schema 的 `limit` 上限就是 1000，
+ * 与 `MAX_LIMIT` 对齐，自动加载不会涨到被拒。
  * 成员 `members_limit` 是服务端排好序的窗口：缺省 20、每次 +80、封顶 100。
  */
 export const DEFAULT_LIMIT = 100;
@@ -14,9 +15,8 @@ export function nextLimitFor(limit: number): number {
 }
 
 export interface TeamWindowFlags {
+  /** 窗口前还有更早消息，且没到 1000 上限。 */
   canLoadEarlier: boolean;
-  historyLimited: boolean;
-  visibleCount: number;
 }
 
 /** DECISION-038 §2.3：roster 窗口缺省 20、每次 +80、封顶 100。 */
@@ -43,10 +43,9 @@ export function memberWindowFlags(shown: number, total: number, limit: number): 
 }
 
 export function teamWindowFlags(limit: number, messageCount: number): TeamWindowFlags {
+  // 没有 has_more：`messageCount >= limit` 只说明窗口被填满，可能还有更早的；
+  // 真实「到头」由 useEarlierPaging 的探针（下一页没带来内容）兜住。
   return {
     canLoadEarlier: limit < MAX_LIMIT && messageCount >= limit,
-    // 没有 has_more：只能保守地说明“可能被截断”。
-    historyLimited: limit === MAX_LIMIT || messageCount >= limit,
-    visibleCount: Math.min(messageCount, limit),
   };
 }

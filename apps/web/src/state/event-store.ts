@@ -7,6 +7,9 @@
  * - 快照对象在通知时整体替换，`entries` 也必须是新数组：消费者（ChatView / RunDetail）
  *   用 `useMemo(..., [snapshot.entries])` 派生视图，复用可变数组会让流式事件不触发重算，
  *   表现为“必须刷新才看到内容”。
+ * - **锚点事件不参与按 run 裁剪**：`run.started` / `user.message` / 终态事件承载
+ *   `session_id`、`input`、`status`，裁掉就会让整段 live run 从会话时间线消失（见
+ *   `RUN_ANCHOR_EVENT_TYPES`）。`session_id` 另外按 run 记住，裁剪后仍能归属会话。
  */
 import type { RunEvent } from '../gateway/types';
 import type { StoredEvent } from './events';
@@ -14,6 +17,23 @@ import type { StoredEvent } from './events';
 export const MAX_EVENTS_PER_RUN = 2000;
 export const MAX_EVENTS_TOTAL = 10000;
 export const NOTIFY_INTERVAL_MS = 50;
+
+/**
+ * 单 run 裁剪时必须保留的锚点事件。
+ *
+ * 流式增量（`llm.stream.chunk`）按 delta 计，一条长正文就能把同一个 run 的 2000 条
+ * 额度吃满；老实现从 run 头部逐条丢，`run.started` 一旦被丢：
+ * `group.sessionId` 变 undefined → 会话窗口按 sessionId 过滤时整段 live run 消失，
+ * 用户表现为「跑的时候看不见正文/工具卡，run 结束刷新后才一次性出现」。
+ * 这里只丢非锚点条目，并保留 run 首尾的语义事件。
+ */
+export const RUN_ANCHOR_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'run.started',
+  'user.message',
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+]);
 
 export interface EventMeta {
   seq: number;
@@ -52,6 +72,8 @@ function emptySnapshot(): EventStoreSnapshot {
 export class EventStore {
   private entries: StoredEvent[] = [];
   private runCounts = new Map<string, number>();
+  /** run_id → session_id：裁剪掉 `run.started` 后仍能把事件归属到会话。 */
+  private runSessions = new Map<string, string>();
   private truncated = new Set<string>();
   /** 待发布到下一份快照的裁剪增量；flush 后清空。 */
   private truncatedSince = new Set<string>();
@@ -82,18 +104,23 @@ export class EventStore {
   push(event: RunEvent, meta: EventMeta): boolean {
     if (!Number.isFinite(meta.seq) || meta.seq <= this.lastSeq) return false;
     this.lastSeq = meta.seq;
+    const runId = event.run_id;
+    // 归属会话的字段最先记住：即使本 run 的 `run.started` 之后被裁掉，仍能归属会话。
+    const sessionId = eventSessionId(event);
+    if (sessionId !== undefined) this.runSessions.set(runId, sessionId);
+    const owner = this.runSessions.get(runId);
     this.entries.push({
       event,
       seq: meta.seq,
+      ...(owner !== undefined ? { sessionId: owner } : {}),
       ...(meta.jobId ? { jobId: meta.jobId } : {}),
     });
-    const runId = event.run_id;
     const count = (this.runCounts.get(runId) ?? 0) + 1;
     this.runCounts.set(runId, count);
 
-    // 每 run 上限：删该 run 最旧的一条。
+    // 每 run 上限：优先丢该 run 最旧的非锚点条目（锚点见 RUN_ANCHOR_EVENT_TYPES）。
     if (count > MAX_EVENTS_PER_RUN) {
-      const index = this.entries.findIndex((entry) => entry.event.run_id === runId);
+      const index = this.oldestEvictableIndex(runId);
       if (index >= 0) this.entries.splice(index, 1);
       this.runCounts.set(runId, count - 1);
       this.truncated.add(runId);
@@ -129,14 +156,14 @@ export class EventStore {
   dropSession(sessionId: string): number {
     const runIds = new Set<string>();
     for (const entry of this.entries) {
-      if (eventSessionId(entry.event) === sessionId) runIds.add(entry.event.run_id);
+      if (this.ownerOf(entry) === sessionId) runIds.add(entry.event.run_id);
     }
     if (runIds.size === 0) return 0;
 
     const before = this.entries.length;
     const removedRunIds = new Set<string>();
     this.entries = this.entries.filter((entry) => {
-      const owner = eventSessionId(entry.event);
+      const owner = this.ownerOf(entry);
       const remove = owner === sessionId || (owner === undefined && runIds.has(entry.event.run_id));
       if (remove) removedRunIds.add(entry.event.run_id);
       return !remove;
@@ -153,7 +180,10 @@ export class EventStore {
       // 局部重建信号：bucket 里可能还留着被删条目的旧副本。
       this.truncatedSince.add(runId);
       // 已没有条目的 run 不再需要累计“被裁剪”标记。
-      if (!this.runCounts.has(runId)) this.truncated.delete(runId);
+      if (!this.runCounts.has(runId)) {
+        this.truncated.delete(runId);
+        this.runSessions.delete(runId);
+      }
     }
     this.flush();
     return removed;
@@ -163,6 +193,7 @@ export class EventStore {
   reset(nextSeq = 0): void {
     this.entries = [];
     this.runCounts.clear();
+    this.runSessions.clear();
     this.truncated.clear();
     this.truncatedSince.clear();
     this.lastSeq = nextSeq;
@@ -198,6 +229,28 @@ export class EventStore {
   destroy(): void {
     this.cancelTimer();
     this.listeners.clear();
+  }
+
+  /** 条目归属的会话：push 时记住的 run→session 优先，其次事件自报的字段。 */
+  private ownerOf(entry: StoredEvent): string | undefined {
+    return entry.sessionId ?? eventSessionId(entry.event);
+  }
+
+  /**
+   * 该 run 最旧的可裁剪条目下标。
+   *
+   * 优先返回非锚点条目；整段都是锚点时退回最旧一条（极小 run 不该卡死上限），
+   * 没有任何条目时返回 -1。
+   */
+  private oldestEvictableIndex(runId: string): number {
+    let fallback = -1;
+    for (let index = 0; index < this.entries.length; index += 1) {
+      const entry = this.entries[index];
+      if (!entry || entry.event.run_id !== runId) continue;
+      if (fallback < 0) fallback = index;
+      if (!RUN_ANCHOR_EVENT_TYPES.has(entry.event.type)) return index;
+    }
+    return fallback;
   }
 
   private scheduleNotify(): void {

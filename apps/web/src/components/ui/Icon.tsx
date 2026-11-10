@@ -2,7 +2,15 @@ import type { ReactNode } from 'react';
 import { cn } from './cn';
 
 /** 消息操作里使用的图标。只做内联 SVG，颜色继承 `currentColor`。 */
-export type IconName = 'copy' | 'edit' | 'retry' | 'resend' | 'transcript' | 'reply' | 'retract';
+export type IconName =
+  | 'copy'
+  | 'edit'
+  | 'retry'
+  | 'resend'
+  | 'transcript'
+  | 'reply'
+  | 'retract'
+  | 'chevron';
 
 const PATHS: Record<IconName, ReactNode> = {
   copy: (
@@ -48,6 +56,8 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M7.25 8.75 13.5 2.5" />
     </>
   ),
+  /** 展开 / 收起指示（details 的 summary 右侧，随 open 旋转 90°）。 */
+  chevron: <path d="M6.5 4.5 10.5 8l-4 3.5" />,
 };
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {

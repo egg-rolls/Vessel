@@ -445,12 +445,19 @@
   text-overflow: ellipsis;
 }
 
+/* 展开 / 收起：icon 化 chevron（文案退成 sr-only，保留可访问名与触控区域）。 */
+
 .event-block-toggle {
   flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
   margin-left: auto;
-  font-size: var(--size-xs);
-  white-space: nowrap;
   color: var(--faint);
+}
+
+.event-toggle-icon {
+  transition: transform 200ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .event-toggle-collapse {
@@ -463,6 +470,16 @@
 
 .event-block[open] .event-toggle-collapse {
   display: inline;
+}
+
+.event-block[open] .event-toggle-icon {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .event-toggle-icon {
+    transition-duration: 0.001ms;
+  }
 }
 
 .event-block-body {

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { Markdown } from '../../components/Markdown';
 import { type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock, localDayKey, localDayLabel } from '../../format';
@@ -146,46 +146,123 @@ function previousUserMessage(
   return undefined;
 }
 
-/** 按消息时间做本地日分组；没有 timestamp 的消息不显示分组头（降级）。 */
-function withDayGroups(
+/** 时间线节点：历史消息与实时 run 项共享同一条按时间排序的列表。 */
+export interface TranscriptLiveEntry {
+  key: string;
+  /**
+   * 该节点的起始时间（run.started / 排队提交时间）。
+   * 缺失时排在有时间戳的节点之后，并保持插入顺序。
+   */
+  ts?: number;
+  /** 同 `ts` 时的稳定回退（run 的首个 wire seq）；消息节点没有 seq，退回插入序。 */
+  seq?: number;
+  node: ReactNode;
+}
+
+interface TimelineUnit {
+  key: string;
+  ts: number | undefined;
+  seq: number | undefined;
+  node: ReactNode;
+}
+
+/**
+ * 按时间戳稳定合并节点（纯函数，便于单测）。
+ *
+ * 排序键是权威时间 `ts`，**不是到达顺序**；同 `ts` 先比 `seq`，再退回插入序
+ * （历史消息在前、实时节点在后），避免同毫秒抖动把同一条 run 的正文/工具卡拆开。
+ * 缺时间戳的节点排在有时间戳的节点之后，并彼此保持插入序（降级，不抛错）。
+ */
+export function orderTimeline<T extends { ts?: number | undefined; seq?: number | undefined }>(
+  units: readonly T[],
+): T[] {
+  return units
+    .map((unit, index) => ({ unit, index }))
+    .sort((a, b) => {
+      const at = a.unit.ts;
+      const bt = b.unit.ts;
+      if (at !== undefined && bt !== undefined && at !== bt) return at - bt;
+      // 两边都有时间戳且相等（或都缺失）→ 用 seq 回退，再退回插入序。
+      if (at === undefined && bt !== undefined) return 1;
+      if (at !== undefined && bt === undefined) return -1;
+      const aseq = a.unit.seq;
+      const bseq = b.unit.seq;
+      if (aseq !== undefined && bseq !== undefined && aseq !== bseq) return aseq - bseq;
+      return a.index - b.index;
+    })
+    .map(({ unit }) => unit);
+}
+
+/**
+ * 历史消息 + 实时 run 项 → 按时间戳合并后的节点序列。
+ *
+ * 0.18 起历史消息与实时展开项共用一个列表，但一直是「历史全部在前、实时整块追加在后」，
+ * 于是正在跑的 run（以及不会落盘的失败 / 取消 run）的事件行永远堆在最后一条消息之后。
+ * 这里按权威时间 `ts` 做稳定排序把它们插回时间线原位（同 ts 用 `seq` 回退）：
+ * - 历史消息缺 `timestamp` 时沿用前一条的时间（老数据降级），不会被甩到末尾；
+ * - 同一 run 的正文 / 工具卡属于同一个 live 节点，合并后不可能被拆到最后追加。
+ *
+ * 去重不在这里做：`sessions.get` 已提交的内容与 live 事件的重复由
+ * `isGroupPersisted`（`state/events.ts`，键 = status + input + output）与
+ * `hideInput`（同 key 的 input 半边）保证只渲一份。
+ */
+function buildTimelineUnits(
   messages: Message[],
   startIndex: number,
   allMessages: readonly Message[] | undefined,
+  live: readonly TranscriptLiveEntry[],
   onCopy: (text: string) => void,
   onEdit: (keepMessages: number, text: string) => void,
   onRetry: (keepMessages: number, text: string) => void,
-): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  let lastDay: string | null = null;
+): TimelineUnit[] {
+  const units: TimelineUnit[] = [];
+  let carry: number | undefined;
   messages.forEach((message, index) => {
+    if (message.timestamp !== undefined) carry = message.timestamp;
     // 撤回下标只认 `sessions.get` 的完整消息序列；对象不在其中时不提供撤回。
     const sourceIndex = allMessages?.indexOf(message);
     const messageIndex = sourceIndex !== undefined && sourceIndex >= 0 ? sourceIndex : undefined;
-    const day = message.timestamp !== undefined ? localDayKey(message.timestamp) : null;
+    units.push({
+      key: `m-${startIndex + index}`,
+      ts: message.timestamp ?? carry,
+      seq: undefined,
+      node: (
+        <TranscriptMessage
+          message={message}
+          messageIndex={messageIndex}
+          previousUser={previousUserMessage(message, allMessages)}
+          onCopy={onCopy}
+          onEdit={onEdit}
+          onRetry={onRetry}
+        />
+      ),
+    });
+  });
+  for (const entry of live) {
+    units.push({ key: entry.key, ts: entry.ts, seq: entry.seq, node: entry.node });
+  }
+  return orderTimeline(units);
+}
+
+/** 合并后的节点 → 渲染序列；日分组头按合并后的时间戳插入。 */
+function renderTimeline(units: readonly TimelineUnit[]): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let lastDay: string | null = null;
+  for (const unit of units) {
+    const day = unit.ts !== undefined ? localDayKey(unit.ts) : null;
     if (day && day !== lastDay) {
       nodes.push(
         <div
           className="mt-3.5 mb-2.5 flex items-center justify-center gap-2.5 py-1 font-mono text-2xs uppercase tracking-widest text-faint"
           key={`day-${day}`}
         >
-          <span>{localDayLabel(message.timestamp ?? 0)}</span>
+          <span>{localDayLabel(unit.ts ?? 0)}</span>
         </div>,
       );
       lastDay = day;
     }
-    nodes.push(
-      <TranscriptMessage
-        // biome-ignore lint/suspicious/noArrayIndexKey: 窗口切片用完整列表下标做稳定 key
-        key={`${startIndex + index}`}
-        message={message}
-        messageIndex={messageIndex}
-        previousUser={previousUserMessage(message, allMessages)}
-        onCopy={onCopy}
-        onEdit={onEdit}
-        onRetry={onRetry}
-      />,
-    );
-  });
+    nodes.push(<Fragment key={unit.key}>{unit.node}</Fragment>);
+  }
   return nodes;
 }
 
@@ -193,41 +270,32 @@ export function Transcript({
   messages,
   allMessages,
   startIndex,
-  hiddenCount,
-  onLoadEarlier,
+  live = [],
   onEditMessage,
   onRetryMessage,
-  children,
 }: {
   messages: Message[];
   /** 完整可见消息序列，用于回溯窗口外的前一条用户输入。 */
   allMessages?: readonly Message[];
   /** 窗口在完整可见消息里的起始下标，用于稳定 key。 */
   startIndex: number;
-  hiddenCount: number;
-  onLoadEarlier: () => void;
   /** 编辑 = 确认后删除该消息及其后历史，并把原文写回 Composer。 */
   onEditMessage: (keepMessages: number, text: string) => void;
   /** 重试 = 确认后删除该回复及其后历史，并重新发送前一条用户内容。 */
   onRetryMessage: (keepMessages: number, text: string) => void;
-  /** 实时 run 的展开项与排队 notice：与历史消息共享同一列表与间距。 */
-  children?: ReactNode;
+  /** 实时 run 的展开项与排队 notice：按时间戳插进历史消息之间。 */
+  live?: readonly TranscriptLiveEntry[];
 }) {
   const copy = useMessageCopy();
-  if (messages.length === 0 && !children) return null;
-  return (
-    <div className="flex flex-col gap-4 py-1.5 pb-2.5">
-      {hiddenCount > 0 && (
-        <button
-          type="button"
-          className="self-start rounded-full bg-sunken px-3 py-1.5 text-sm text-muted transition-colors duration-150 hover:bg-hover hover:text-ink"
-          onClick={onLoadEarlier}
-        >
-          {t('chat.loadEarlier', { count: hiddenCount })}
-        </button>
-      )}
-      {withDayGroups(messages, startIndex, allMessages, copy, onEditMessage, onRetryMessage)}
-      {children}
-    </div>
+  if (messages.length === 0 && live.length === 0) return null;
+  const units = buildTimelineUnits(
+    messages,
+    startIndex,
+    allMessages,
+    live,
+    copy,
+    onEditMessage,
+    onRetryMessage,
   );
+  return <div className="flex flex-col gap-4 py-1.5 pb-2.5">{renderTimeline(units)}</div>;
 }

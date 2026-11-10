@@ -444,8 +444,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.display.saved': 'Saved {key}',
   'settings.display.saveFailed': 'Save failed: {detail}',
   'settings.display.writeUnavailable': 'This gateway has no config writer; read-only.',
+  'settings.display.saveUnconfirmed':
+    'Submitted {key}, but the gateway still returns the old value; restart the gateway and retry.',
   'settings.display.field.verbosity': 'Verbosity',
-  'settings.display.field.showInternalEvents': 'Show internal events',
+  'settings.display.field.showInternalEvents': 'Show system info (internal events)',
+  'settings.display.field.showInternalEvents.hint':
+    'Off keeps only replies, tool calls, errors and permission/ask cards. On adds runtime notices, hook / LLM context and other system messages; the vessel:* transcript messages follow this key too, and verbosity=debug shows them as well.',
   'settings.display.field.errorLevel': 'Error level',
   'settings.display.field.showProcessErrors': 'Show process errors',
   'settings.display.field.askUser': 'Allow ask_user',
@@ -455,25 +459,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.display.field.showReasoning': 'Show reasoning stream',
   'settings.display.field.statusBars': 'Status bar position',
   'settings.display.field.language': 'UI language',
-  'settings.display.runtimeTitle': 'Runtime context messages',
-  'settings.display.runtimeDescription':
-    'Model-only context messages (source, notices, subscriptions, budget warnings) are hidden from transcripts by default. This preference is stored in this browser only.',
-  'settings.display.runtimeShowAll': 'Show all',
-  'settings.display.runtimeShowAllHint':
-    'Reveal every runtime context kind. Individual toggles still apply.',
-  'settings.display.runtimeKind.source': 'Source',
-  'settings.display.runtimeKind.source.hint': "Where each turn's input came from.",
-  'settings.display.runtimeKind.notice': 'Notices',
-  'settings.display.runtimeKind.notice.hint': 'Hot-apply and version update notices.',
-  'settings.display.runtimeKind.subscription': 'Subscriptions',
-  'settings.display.runtimeKind.subscription.hint':
-    'Short notices when subscribed documents change.',
-  'settings.display.runtimeKind.limit': 'Budget warnings',
-  'settings.display.runtimeKind.limit.hint': 'Context budget usage warnings.',
-  'settings.display.runtimeKind.compaction': 'Compaction',
-  'settings.display.runtimeKind.compaction.hint': 'Context compaction markers.',
-  'settings.display.runtimeKind.other': 'Other',
-  'settings.display.runtimeKind.other.hint': 'Unrecognized vessel:* context messages.',
 
   // Team (0.19 S6). Technical terms (agent / run / session / gateway / token /
   // @ / Team / workspace) and error codes stay untranslated.
@@ -484,14 +469,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.chat.members': 'Members',
   'team.chat.empty': 'No messages yet',
   'team.chat.emptyHint': 'Mention a member with @ to notify that agent.',
-  'team.chat.loadEarlier': 'Load earlier',
-  'team.chat.historyLimited': 'Showing the latest {count} messages (max {limit})',
-  'team.chat.refresh': 'Refresh',
-  'team.chat.refreshing': 'Refreshing…',
+  'team.chat.loadedEarlier': 'Loaded earlier messages',
   'team.chat.backToList': 'Back to Teams',
   'team.chat.loadMoreMembers': 'Load more members',
   'team.chat.membersCapped': 'Only the first {shown} of {total} members are shown',
   'team.members.open': 'View member list',
+  'team.members.close': 'Hide member list',
+  'team.members.matches': 'Matched {matched} of {total} loaded',
   'team.members.search': 'Search by name or role',
   'team.members.empty': 'No matching members',
 
@@ -1072,7 +1056,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.compactForked': 'context compact-forked · {from} → {to} · epoch {epoch}',
   'chat.notice.hook': 'hook · {name}',
   'chat.role.assistant': 'Assistant',
-  'chat.loadEarlier': 'Load earlier ({count} remaining)',
   // 0.36: message bubble action group
   'chat.message.actions': 'Message actions',
   'chat.message.copy': 'Copy',
