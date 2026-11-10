@@ -14,17 +14,22 @@ import { t } from '../../i18n';
 interface TeamCardProps {
   node: NodeView;
   team: TeamSummary;
+  /** 当前详情路由就是这张卡片：`accent-soft` 高亮 + `aria-current`。 */
+  active: boolean;
   menuItems: (node: NodeView, team: TeamSummary) => ActionMenuItem[];
   onOpen: (node: NodeView, team: TeamSummary) => void;
 }
 
-export function TeamCard({ node, team, menuItems, onOpen }: TeamCardProps) {
+export function TeamCard({ node, team, active, menuItems, onOpen }: TeamCardProps) {
   return (
-    <li className="teams-card">
+    // 选中态与会话侧 `.session-row.active` 同一套信号（accent-soft），
+    // 类与 aria 只加在既有节点上，DOM 结构不动。
+    <li className={`teams-card ${active ? 'active' : ''}`.trim()}>
       <button
         type="button"
         className="teams-card-open"
         title={t('teams.card.open')}
+        aria-current={active ? 'true' : undefined}
         onClick={() => onOpen(node, team)}
       >
         <span className="flex items-center justify-between gap-2">

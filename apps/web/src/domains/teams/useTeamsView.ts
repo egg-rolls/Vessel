@@ -217,12 +217,19 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
   };
 
   /**
+   * 卡片是否选中：当前详情路由的 `nodeKey + teamId` 与卡片自身一致。
+   * 列表卡片高亮、成员栏 ActionMenu 标签、成员栏开关都复用它，不新造状态；
+   * 没有详情路由（列表页）时恒为 false。
+   */
+  const isActiveTeam = (node: NodeView, team: TeamSummary) =>
+    isDetail && route.nodeKey === nodeKeyOf(node) && route.teamId === team.team_id;
+
+  /**
    * 成员栏开关语义：对**当前打开的 Team** 点 = 切换开关；对**别的 Team** 点 =
    * 先 `openTeam`（窄屏顺手收起左栏抽屉）再把成员栏打开。
    */
   const toggleMembers = (node: NodeView, team: TeamSummary) => {
-    const current = isDetail && route.nodeKey === nodeKeyOf(node) && route.teamId === team.team_id;
-    if (current) {
+    if (isActiveTeam(node, team)) {
       setMembersOpen((open) => !open);
       return;
     }
@@ -234,8 +241,7 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     const archived = team.archived_at !== undefined;
     const frozen = team.spawn_frozen === true;
     const canWrite = hasTokenFor(node) && !archived;
-    const membersShown =
-      isDetail && route.nodeKey === nodeKeyOf(node) && route.teamId === team.team_id && membersOpen;
+    const membersShown = isActiveTeam(node, team) && membersOpen;
     return [
       {
         // 打开 / 收起右侧成员栏（原页头「查看成员列表」按钮的入口）。
@@ -341,6 +347,7 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     hasSearchOrFilter,
     refreshCurrent,
     openTeam,
+    isActiveTeam,
     menuItems,
     confirmArchive,
     reloadLists,

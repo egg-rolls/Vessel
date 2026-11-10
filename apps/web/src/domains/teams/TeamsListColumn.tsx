@@ -51,6 +51,7 @@ export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
     partial,
     visible,
     openTeam,
+    isActiveTeam,
     menuItems,
   } = state;
 
@@ -138,6 +139,7 @@ export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
                       key={team.team_id}
                       node={result.node}
                       team={team}
+                      active={isActiveTeam(result.node, team)}
                       menuItems={menuItems}
                       onOpen={openTeam}
                     />

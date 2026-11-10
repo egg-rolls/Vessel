@@ -48,6 +48,18 @@
   cursor: pointer;
 }
 
+/* 选中（当前详情路由就是这张卡）：`--accent-soft` 是仓库里「选中 / 激活」的专用
+   信号，与会话侧 `.session-row.active` 同一套。写在 `:hover` / `.teams-card-open`
+   之后：选中卡悬停时底色不被 `--surface-hover` 盖掉，hover 仍靠 border + shadow
+   与选中区分；标题跟着换 `--accent-ink`（同会话侧 `.session-row.active`）。 */
+.teams-card.active {
+  background: var(--accent-soft);
+}
+
+.teams-card.active .teams-card-open {
+  color: var(--accent-ink);
+}
+
 .teams-card-open:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
