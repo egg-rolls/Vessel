@@ -368,8 +368,8 @@ export function ChatView({
             renderedGroups={transcriptApi.renderedGroups}
             visibleQueued={transcriptApi.visibleQueued}
             transcriptWindow={transcriptApi.transcriptWindow}
-            transcriptStart={transcriptApi.transcriptStart}
             transcriptMessages={transcriptApi.transcriptMessages}
+          historyIndex={transcriptApi.historyIndex}
             messageIndexOffset={transcriptApi.messageIndexOffset}
             detailNotice={transcriptApi.detailNotice}
             onDismissDetailNotice={transcriptApi.dismissDetailNotice}
@@ -381,8 +381,7 @@ export function ChatView({
               if (!selectedId) return;
               void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
             }}
-            cancelledJobs={submitApi.cancelledJobs}
-            verbosity={transcriptApi.visibility.verbosity}
+              verbosity={transcriptApi.visibility.verbosity}
             cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
             errorLevel={transcriptApi.errorLevel}
             entries={snapshot.entries}

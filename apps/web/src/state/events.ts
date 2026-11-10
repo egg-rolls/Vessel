@@ -427,6 +427,11 @@ export function groupsForSession(groups: readonly RunGroup[], sessionId: string)
  * 用户输入的重复显示由 `hideInput`（TranscriptWindow）用同一 key 的 input 半边兜住；
  * 因此**不要**在渲染层另外引入按时间/文本相似度的去重，会和这里漂移。
  */
+/**
+ * @deprecated 被  的「认领」（domains/chat/transcript-items.ts）取代：
+ * 去重改成按 key 合并同一个逻辑对象，而不是猜「这条 run 是否已落盘」。
+ * 该导出只为旧调用点保留；不要在渲染层再叠加第二套去重。
+ */
 export function isGroupPersisted(group: RunGroup, detail: SessionDetail | null): boolean {
   if (group.status !== 'completed' || !detail) return false;
   const messages: Message[] = detail.messages;

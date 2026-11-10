@@ -1,18 +1,22 @@
-import { type ReactNode, useCallback, useLayoutEffect, useRef } from 'react';
+import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
+import { Markdown } from '../../components/Markdown';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { Button } from '../../components/ui';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
 import type { ErrorVisibility } from '../../state/error-visibility';
-import type { RunGroup, StoredEvent, TimelineItem } from '../../state/events';
+import type { RunGroup, StoredEvent } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
 import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/sessionStore';
 import { ChatWelcome } from './ChatWelcome';
-import { QueuedNotice, type QueuedSubmission, RunItems } from './StreamItems';
+import { NoticeRow } from './EventRow';
+import { ReasoningBlock } from './ReasoningBlock';
+import { QueuedNotice, type QueuedSubmission, UserBubble } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
 import { Transcript } from './Transcript';
-import type { TimelineLiveInput } from './timeline-order';
+import { ToolCard } from './ToolCard';
+import { buildTranscriptItems, type HistoryIndex, type TranscriptItem } from './transcript-items';
 import { useStickyBottom } from './useStickyBottom';
 
 /** 距顶多少像素内触发前插一页。 */
@@ -44,15 +48,14 @@ export function TranscriptWindow({
   renderedGroups,
   visibleQueued,
   transcriptWindow,
-  transcriptStart,
   transcriptMessages,
+  historyIndex,
   messageIndexOffset,
   detailNotice,
   onDismissDetailNotice,
   earlierError,
   onDismissEarlierError,
   onRetryEarlier,
-  cancelledJobs,
   verbosity,
   cardsDefaultOpen,
   errorLevel,
@@ -82,8 +85,9 @@ export function TranscriptWindow({
   renderedGroups: readonly RunGroup[];
   visibleQueued: readonly QueuedSubmission[];
   transcriptWindow: { shown: Message[]; hiddenCount: number };
-  transcriptStart: number;
   transcriptMessages: readonly Message[];
+  /** 历史侧 item / 反查表（调用侧按 messages 引用 memo，见 useChatTranscript）。 */
+  historyIndex: HistoryIndex;
   /** `transcriptMessages[0]` 在完整 `state.messages` 里的绝对下标（撤回 / 重试用）。 */
   messageIndexOffset: number;
   /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
@@ -93,7 +97,6 @@ export function TranscriptWindow({
   earlierError: string | null;
   onDismissEarlierError: () => void;
   onRetryEarlier: () => void;
-  cancelledJobs: ReadonlySet<string>;
   verbosity: Verbosity;
   /** 卡片默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
   cardsDefaultOpen: boolean;
@@ -164,95 +167,97 @@ export function TranscriptWindow({
     }
   }, [transcriptWindow.shown.length, getElement, requestEarlier]);
 
-  // hydrate 期间只挡「已经在历史里的组」：重放会先把已完成的 run 刷出来，detail 到达后
-  // 再被 `isGroupPersisted` 收掉，看起来就是「闪现 + 跳跃」。
-  // **正在跑的 run 永远渲染**：它是用户此刻唯一关心的内容；旧实现按「有没有排队项」
-  // 整体隐藏 live，一旦排队项先消失，整段实时输出（工具卡 / 思考 / 正文）就被吞掉，
-  // 表现就是「只看到自己的消息」。
-  const hideReplayedLive = hydrating;
-
-  // 实时节点（run 展开项 + 排队 notice）的**位置**由 timeline-order.ts 决定：
-  // turn 锚点 / 窗口夹取 / 伪 run 拆条都是纯排序决策，统一放在那里
-  // （可被 scripts/check-timeline-order.ts 机械判定）。这里只负责把数据翻译成入参、
-  // 并给每个 key 准备渲染内容。
+  // 可见窗口首条消息的 ts：比它更早的 live item 由 buildTranscriptItems 夹到末尾
+  // （turn 锚点 / 窗口夹取 / 伪 run 拆条都在那里，由 check-timeline-order + 本模块门禁守）。
   const windowStartTs = transcriptWindow.shown[0]?.timestamp;
 
-  /** 一条事件自身的 ts（notice / raw event 都带 event.ts）。 */
-  const itemTs = (item: TimelineItem): number | undefined =>
-    item.kind === 'notice' || item.kind === 'event' ? item.event.ts : undefined;
-
-  /** 伪 run 组里一条 item 的独立渲染节点（各自按自己的 ts 落位）。 */
-  const singleItemNode = (group: RunGroup, item: TimelineItem): ReactNode => (
-    <RunItems
-      group={{ ...group, items: [item], liveText: undefined, liveReasoning: undefined }}
-      verbosity={verbosity}
-      cardsDefaultOpen={cardsDefaultOpen}
-    />
+  // 单一 item 流：历史消息、live 事件、排队提交先合成 item，再按 kind 选组件渲染。
+  // 身份 / 去重 / 排序都在 transcript-items.ts（纯函数 + 门禁），这里只做渲染映射。
+  const items = useMemo(
+    () =>
+      buildTranscriptItems({
+        messages: transcriptMessages,
+        messageIndexOffset,
+        liveGroups: activeAgent ? [] : renderedGroups,
+        queued: visibleQueued,
+        windowStartTs,
+        historyIndex,
+      }),
+    [
+      transcriptMessages,
+      messageIndexOffset,
+      activeAgent,
+      renderedGroups,
+      visibleQueued,
+      windowStartTs,
+      historyIndex,
+    ],
   );
 
-  const liveInputs: TimelineLiveInput[] = [];
-  const liveNodes = new Map<string, ReactNode>();
-
-  if (!activeAgent) {
-    for (const group of renderedGroups) {
-      if (hideReplayedLive && group.status !== 'running') continue;
-      if (group.hasRunEvent) {
-        // 真实 run：整段作为一个节点（正文 / 思考 / 工具卡不可拆）。
-        const runKey = `run-${group.runId}`;
-        const runStartTs = group.startedAt ?? group.firstTs;
-        liveInputs.push({
-          key: runKey,
-          ...(runStartTs !== undefined ? { startTs: runStartTs } : {}),
-          ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
-          ...(group.input !== undefined ? { input: group.input } : {}),
-          running: group.status === 'running',
-        });
-        liveNodes.set(
-          runKey,
-          <RunItems
-            group={group}
-            cancelled={cancelledJobs.has(group.runId)}
-            hideInput={
-              hasTranscript &&
-              transcriptMessages.some(
-                (message) => message.role === 'user' && message.content === group.input,
-              )
-            }
-            verbosity={verbosity}
-            cardsDefaultOpen={cardsDefaultOpen}
-          />,
+  const renderItem = (item: TranscriptItem): ReactNode => {
+    switch (item.kind) {
+      case 'run-input':
+        return <UserBubble text={item.text} ts={item.ts} />;
+      case 'run-text':
+        return item.streaming ? (
+          <div className="msg-assistant max-w-full">
+            <div className="msg-text live-text">{item.text}</div>
+          </div>
+        ) : (
+          <div className="msg-assistant group max-w-full">
+            <Markdown className="msg-text" text={item.text} />
+          </div>
         );
-        continue;
-      }
-      // 伪 run 组（run_id 是 runtime / session / 成员 id 等）：一条事件一个节点，
-      // 各自按自己的事件时间落位；整组锚在首个事件上会让后续事件堆在最早时刻。
-      const ambientKey = `ambient-${group.runId}`;
-      liveInputs.push({
-        key: ambientKey,
-        ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
-        items: group.items.map((item, index) => {
-          const ts = itemTs(item);
-          return { key: `${index}-${item.key}`, ...(ts !== undefined ? { ts } : {}) };
-        }),
-      });
-      group.items.forEach((item, index) => {
-        liveNodes.set(`${ambientKey}#${index}-${item.key}`, singleItemNode(group, item));
-      });
+      case 'run-reasoning':
+        return (
+          <ReasoningBlock
+            text={item.text}
+            streaming={item.streaming}
+            startedAt={item.startedAt}
+            endedAt={item.endedAt}
+          />
+        );
+      case 'tool':
+        return (
+          <ToolCard
+            card={{
+              kind: 'tool',
+              key: item.key,
+              ...(item.callId !== undefined ? { callId: item.callId } : {}),
+              name: item.name,
+              status: item.status,
+              ...(item.args !== undefined ? { args: item.args } : {}),
+              ...(item.output !== undefined ? { result: item.output } : {}),
+              ...(item.error !== undefined ? { error: item.error } : {}),
+              ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
+              ...(item.truncated === true ? { truncated: true } : {}),
+              startedAt: item.startedAt,
+            }}
+            verbosity={verbosity}
+            defaultOpen={cardsDefaultOpen}
+          />
+        );
+      case 'notice':
+        return <NoticeRow event={item.event} defaultOpen={cardsDefaultOpen} />;
+      case 'queued':
+        return (
+          <QueuedNotice
+            item={{
+              runId: item.runId,
+              input: item.input,
+              ...(item.queuePosition !== undefined ? { queuePosition: item.queuePosition } : {}),
+              submittedAt: item.submittedAt,
+              cancelling: item.cancelling,
+              cancelled: item.cancelled,
+            }}
+            onCancel={onCancelQueued}
+            defaultOpen={cardsDefaultOpen}
+          />
+        );
+      default:
+        return null;
     }
-    for (const item of visibleQueued) {
-      const queuedKey = `queued-${item.runId}`;
-      liveInputs.push({
-        key: queuedKey,
-        startTs: item.submittedAt,
-        input: item.input,
-        running: true,
-      });
-      liveNodes.set(
-        queuedKey,
-        <QueuedNotice item={item} onCancel={onCancelQueued} defaultOpen={cardsDefaultOpen} />,
-      );
-    }
-  }
+  };
 
   // 滚到顶部阈值内自动前插一页。用户手势产生的 scroll 才会触发，程序化回填不会
   // （回填把 scrollTop 推高，远离阈值）。
@@ -293,7 +298,7 @@ export function TranscriptWindow({
                 ) : undefined
               }
             />
-          ) : hydrating && !hasTranscript && liveInputs.length === 0 ? (
+          ) : hydrating && !hasTranscript && items.length === 0 ? (
             // 只有「什么都没有」时才换成 LoadingState：重连 / 重订阅时实时内容还在，
             // 换屏本身就是一次闪烁。
             <LoadingState label={t('chat.loadingHistory')} />
@@ -332,17 +337,13 @@ export function TranscriptWindow({
               0.50：实时节点按 run 起始时间插进历史消息之间，不再整块追加在末尾。
               hydrate 期间先只给 LoadingState：重放会先灌进来一批准 live 组，
               详情到达后再被 `isGroupPersisted` 收掉，看起来就是「闪现 + 跳跃」。 */}
-          {hasTranscript || (!activeAgent && liveInputs.length > 0) ? (
+          {items.length > 0 ? (
             <Transcript
-              messages={transcriptWindow.shown}
+              items={items}
               allMessages={transcriptMessages}
-              startIndex={transcriptStart}
               messageIndexOffset={messageIndexOffset}
-              live={liveInputs}
-              liveNodes={liveNodes}
-              windowStartTs={windowStartTs}
-              verbosity={verbosity}
               cardsDefaultOpen={cardsDefaultOpen}
+              renderItem={renderItem}
               onEditMessage={onEditMessage}
               onRetryMessage={onRetryMessage}
             />

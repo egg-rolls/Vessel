@@ -10,7 +10,7 @@ import { t } from '../../i18n';
 import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
 import { readDisplayValue } from '../../state/display-settings';
 import type { EventStoreSnapshot } from '../../state/event-store';
-import { isGroupPersisted, type RunGroup } from '../../state/events';
+import type { RunGroup } from '../../state/events';
 import { EventGroupCache } from '../../state/group-cache';
 import {
   isRuntimeMessageVisible,
@@ -26,6 +26,7 @@ import {
 } from '../../stores/sessionStore';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { windowTail } from '../../transcript';
+import { buildHistoryIndex } from './transcript-items';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import type { QueuedSubmission } from './StreamItems';
 import { browserSessionStorage, clearLastSession, readLastSession } from './session-selection';
@@ -204,12 +205,12 @@ export function useChatTranscript({
     if (readLastSession(storage) === selectedId) clearLastSession(storage);
   }, [hydrateError, selectedId]);
 
+  // 只按会话归属过滤；「是否已落盘」不再由这里猜 —— 去重交给
+  //  的认领（同一对象只出一个 item，见 transcript-items.ts）。
   const visibleGroups = useMemo(() => {
     if (!selectedId) return [];
-    return groups.filter(
-      (group) => group.sessionId === selectedId && !isGroupPersisted(group, sessionDetail),
-    );
-  }, [groups, selectedId, sessionDetail]);
+    return groups.filter((group) => group.sessionId === selectedId);
+  }, [groups, selectedId]);
 
   const visibleQueued = useMemo(
     () => (selectedId ? queuedRuns.filter((item) => item.sessionId === selectedId) : []),
@@ -340,6 +341,12 @@ export function useChatTranscript({
   // `keep_messages` / 撤回必须是完整 `state.messages` 的绝对下标：窗口首条消息的
   // 绝对下标 + 本地下标（CONTRACT-msg-system §4.3）。
   const messageIndexOffset = selectedWindow?.start ?? 0;
+  // 历史侧 item / 反查表按 messages 引用 memo：50ms 的流式节拍里不会重算。
+  const historyIndex = useMemo(
+    () => buildHistoryIndex(transcriptMessages, messageIndexOffset),
+    [transcriptMessages, messageIndexOffset],
+  );
+
   // 分页状态读取放 ref：`loadEarlier` 的身份必须稳定（TranscriptWindow 用它做
   // useLayoutEffect 依赖，新身份会让锚点回填 effect 每渲染都重跑）。
   const earlierStateRef = useRef({ localHidden: 0, nextBefore: undefined as string | undefined });
@@ -375,6 +382,7 @@ export function useChatTranscript({
     queueChips,
     pendingActive: pendingItems.length > 0,
     transcriptMessages,
+    historyIndex,
     transcriptWindow,
     transcriptStart,
     messageIndexOffset,

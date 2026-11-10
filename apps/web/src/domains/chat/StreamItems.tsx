@@ -44,7 +44,7 @@ export interface QueuedSubmission {
 /** 实时气泡没有操作项：只借 MessageActions 的时间位与 hover 显隐规则。 */
 const NO_ACTIONS: readonly MessageAction[] = [];
 
-function UserBubble({ text, ts }: { text: string; ts?: number }) {
+export function UserBubble({ text, ts }: { text: string; ts?: number }) {
   const clock = formatClock(ts);
   return (
     <div className="msg-user group flex max-w-full flex-col items-end gap-1">
@@ -113,7 +113,10 @@ export const RunItems = memo(function RunItems({
   group: RunGroup;
   /** 用户已请求取消且服务端最终报 failed 时，按取消态展示。 */
   cancelled?: boolean;
-  /** 历史消息里已经有同一条用户输入时，不再重复显示 run.input。 */
+  /**
+   * @deprecated 被  的认领取代：run 的用户输入现在是一个 item，
+   * 历史消息被认领后由 run-input item 让位，不再靠内容比对隐藏气泡。
+   */
   hideInput?: boolean;
   verbosity?: Verbosity;
   /** 卡片默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
