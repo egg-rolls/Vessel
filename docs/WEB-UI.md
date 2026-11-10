@@ -19,6 +19,20 @@
 统一放在 `@layer legacy`，Tailwind utilities 优先级更高，因此迁移中的组件可以逐步
 去掉 legacy class，未迁移页面保持原样。
 
+## 时间线渲染顺序（会话 / Team）
+
+排序是**纯函数**，不要在各组件里各写一套：
+
+1. **历史消息**按 `timestamp`；缺时间戳时沿用前一条（老数据降级，不甩到末尾）。
+2. **live 节点**（一条 run 的正文 + 思考 + 工具卡，整块不可拆）用 `max(run 起始 ts,
+   触发它的 user 消息 ts + 1)`——`run.started` 早于用户消息落盘，只按 run 起始时间排
+   会把本轮输出顶到用户消息上方。
+3. **伪 run 组**（`session.titled` 用常量 `session`、`runtime.notice` 用常量 `runtime`、
+   成员/插件事件用域 id）永不终态，必须**按 item 各自的事件时间**逐条落位，整组锚在
+   首个事件上会让后续系统消息全部堆在最早那个时间点。
+4. 尚未命中的兜底只有一条：**仍在 running** 的 run 允许回落到「最后一条用户消息 + 1」；
+   已终态 run 不兜底（否则历史轮次的失败/取消卡会被拽到当前轮）。
+
 ```css
 @layer theme, base, legacy, utilities;
 @import "tailwindcss/theme.css" layer(theme);

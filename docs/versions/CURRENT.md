@@ -36,6 +36,12 @@
 - **Web 消息流**：历史消息与实时事件按权威时间戳合并成一条时间线（不再把 live 组
   整块追加在末尾）；单 run 事件裁剪保留 `run.started` 等锚点，长 run 运行中可见；
   历史窗口触顶静默前插一页并保持滚动锚点（会话与 Team 一致）。
+- **时间线顺序不变量**：一条 run 的节点不得排在触发它的那条 user 消息之前
+  （`run.started` 早于 user 消息落盘，只按 run 起始时间排会把本轮输出顶到消息上方）；
+  伪 run 组（`session` / `runtime` 等常量 run_id）按 item 各自的事件时间落位，
+  不再整组锚在首个事件上。
+- **A2A 消息**：投给成员的 user 消息带 `Message.name = agent:<alias>`（人类/系统不带），
+  Web 渲染成可折叠的「来自 agent X」卡片；老消息无该标记时仍按普通气泡渲染。
 - **AI 内容**：默认系统提示词完全由用户掌握；未配置 `agent.systemPrompt` 时只注入
   Self Card，不注入内置文本。
 - **开发期清库**：`vessel dev reset [--yes] [--dry-run] [--json]`。
