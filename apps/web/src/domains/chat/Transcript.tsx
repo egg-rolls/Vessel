@@ -6,6 +6,12 @@ import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
+import {
+  orderTimelineEntries,
+  type TimelineEntry,
+  type TimelineLiveInput,
+  type TimelineMessageInput,
+} from './timeline-order';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -155,131 +161,71 @@ function previousUserMessage(
   return undefined;
 }
 
-/** 时间线节点：历史消息与实时 run 项共享同一条按时间排序的列表。 */
-export interface TranscriptLiveEntry {
-  key: string;
-  /**
-   * 该节点的起始时间（run.started / 排队提交时间）。
-   * 缺失时排在有时间戳的节点之后，并保持插入顺序。
-   */
-  ts?: number;
-  /** 同 `ts` 时的稳定回退（run 的首个 wire seq）；消息节点没有 seq，退回插入序。 */
-  seq?: number;
-  node: ReactNode;
-}
+/** live 节点：key -> 已渲染内容。排序由 timeline-order.ts 决定。 */
+export type TranscriptLiveNodes = ReadonlyMap<string, ReactNode>;
 
-interface TimelineUnit {
-  key: string;
-  ts: number | undefined;
-  seq: number | undefined;
-  node: ReactNode;
-}
+const EMPTY_LIVE_NODES: TranscriptLiveNodes = new Map();
 
-/**
- * 按时间戳稳定合并节点（纯函数，便于单测）。
- *
- * 排序键是权威时间 `ts`，**不是到达顺序**；同 `ts` 先比 `seq`，再退回插入序
- * （历史消息在前、实时节点在后），避免同毫秒抖动把同一条 run 的正文/工具卡拆开。
- * 缺时间戳的节点排在有时间戳的节点之后，并彼此保持插入序（降级，不抛错）。
- */
-export function orderTimeline<T extends { ts?: number | undefined; seq?: number | undefined }>(
-  units: readonly T[],
-): T[] {
-  return units
-    .map((unit, index) => ({ unit, index }))
-    .sort((a, b) => {
-      const at = a.unit.ts;
-      const bt = b.unit.ts;
-      if (at !== undefined && bt !== undefined && at !== bt) return at - bt;
-      // 两边都有时间戳且相等（或都缺失）→ 用 seq 回退，再退回插入序。
-      if (at === undefined && bt !== undefined) return 1;
-      if (at !== undefined && bt === undefined) return -1;
-      const aseq = a.unit.seq;
-      const bseq = b.unit.seq;
-      if (aseq !== undefined && bseq !== undefined && aseq !== bseq) return aseq - bseq;
-      return a.index - b.index;
-    })
-    .map(({ unit }) => unit);
-}
-
-/**
- * 历史消息 + 实时 run 项 → 按时间戳合并后的节点序列。
- *
- * 0.18 起历史消息与实时展开项共用一个列表，但一直是「历史全部在前、实时整块追加在后」，
- * 于是正在跑的 run（以及不会落盘的失败 / 取消 run）的事件行永远堆在最后一条消息之后。
- * 这里按权威时间 `ts` 做稳定排序把它们插回时间线原位（同 ts 用 `seq` 回退）：
- * - 历史消息缺 `timestamp` 时沿用前一条的时间（老数据降级），不会被甩到末尾；
- * - 同一 run 的正文 / 工具卡属于同一个 live 节点，合并后不可能被拆到最后追加。
- *
- * 去重不在这里做：`sessions.get` 已提交的内容与 live 事件的重复由
- * `isGroupPersisted`（`state/events.ts`，键 = status + input + output）与
- * `hideInput`（同 key 的 input 半边）保证只渲一份。
- *
- * **已知且是预期行为**：比已加载窗口更早的 failed / cancelled run（不落盘、也没有
- * `isGroupPersisted` 能盖掉它）不会被 `sortTs` 夹取，会插回它真实的 ts 位置——也就是
- * 会出现在历史消息中间而不是末尾。这是「按 ts 排序」的正确结果，不要当 bug 改回去。
- */
-function buildTimelineUnits(
-  messages: Message[],
-  startIndex: number,
-  messageIndexOffset: number,
-  allMessages: readonly Message[] | undefined,
-  live: readonly TranscriptLiveEntry[],
-  onCopy: (text: string) => void,
-  onEdit: (keepMessages: number, text: string) => void,
-  onRetry: (keepMessages: number, text: string) => void,
-): TimelineUnit[] {
-  const units: TimelineUnit[] = [];
-  let carry: number | undefined;
-  messages.forEach((message, index) => {
-    if (message.timestamp !== undefined) carry = message.timestamp;
-    // 撤回下标只认 `sessions.get` 加载的窗口 + 绝对偏移；对象不在其中时不提供撤回。
-    const sourceIndex = allMessages?.indexOf(message);
-    const messageIndex =
-      sourceIndex !== undefined && sourceIndex >= 0 ? sourceIndex + messageIndexOffset : undefined;
-    units.push({
-      // key 用绝对消息下标（`detailWindow.start` + 窗口内下标）：游标分页前插一页时
-      // 窗口相对下标会整体平移，用它会把所有历史消息 remount 一次（展开的 details /
-      // 工具卡状态被重置）；绝对下标对同一条消息恒定。
-      key: `m-${messageIndex ?? startIndex + index}`,
-      ts: message.timestamp ?? carry,
-      seq: undefined,
-      node: (
+/** 合并后的条目 → 渲染序列；日分组头按合并后的时间戳插入。 */
+function renderEntries({
+  entries,
+  messages,
+  liveNodes,
+  messageIndexOffset,
+  allMessages,
+  onCopy,
+  onEdit,
+  onRetry,
+}: {
+  entries: readonly TimelineEntry[];
+  messages: readonly Message[];
+  liveNodes: TranscriptLiveNodes;
+  messageIndexOffset: number;
+  allMessages: readonly Message[] | undefined;
+  onCopy: (text: string) => void;
+  onEdit: (keepMessages: number, text: string) => void;
+  onRetry: (keepMessages: number, text: string) => void;
+}): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let lastDay: string | null = null;
+  for (const entry of entries) {
+    const day = entry.ts !== undefined ? localDayKey(entry.ts) : null;
+    if (day && day !== lastDay) {
+      nodes.push(
+        <div
+          className="mt-3.5 mb-2.5 flex items-center justify-center gap-2.5 py-1 font-mono text-2xs uppercase tracking-widest text-faint"
+          key={'day-' + day}
+        >
+          <span>{localDayLabel(entry.ts ?? 0)}</span>
+        </div>,
+      );
+      lastDay = day;
+    }
+    if (entry.kind === 'message') {
+      const message = entry.messageIndex === undefined ? undefined : messages[entry.messageIndex];
+      if (message === undefined) continue;
+      // 撤回下标只认 sessions.get 加载的窗口 + 绝对偏移；对象不在其中时不提供撤回。
+      const sourceIndex = allMessages?.indexOf(message);
+      const messageIndex =
+        sourceIndex !== undefined && sourceIndex >= 0
+          ? sourceIndex + messageIndexOffset
+          : undefined;
+      nodes.push(
         <TranscriptMessage
+          key={entry.key}
           message={message}
           messageIndex={messageIndex}
           previousUser={previousUserMessage(message, allMessages, messageIndexOffset)}
           onCopy={onCopy}
           onEdit={onEdit}
           onRetry={onRetry}
-        />
-      ),
-    });
-  });
-  for (const entry of live) {
-    units.push({ key: entry.key, ts: entry.ts, seq: entry.seq, node: entry.node });
-  }
-  return orderTimeline(units);
-}
-
-/** 合并后的节点 → 渲染序列；日分组头按合并后的时间戳插入。 */
-function renderTimeline(units: readonly TimelineUnit[]): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  let lastDay: string | null = null;
-  for (const unit of units) {
-    const day = unit.ts !== undefined ? localDayKey(unit.ts) : null;
-    if (day && day !== lastDay) {
-      nodes.push(
-        <div
-          className="mt-3.5 mb-2.5 flex items-center justify-center gap-2.5 py-1 font-mono text-2xs uppercase tracking-widest text-faint"
-          key={`day-${day}`}
-        >
-          <span>{localDayLabel(unit.ts ?? 0)}</span>
-        </div>,
+        />,
       );
-      lastDay = day;
+      continue;
     }
-    nodes.push(<Fragment key={unit.key}>{unit.node}</Fragment>);
+    const node = liveNodes.get(entry.key);
+    if (node === undefined) continue;
+    nodes.push(<Fragment key={entry.key}>{node}</Fragment>);
   }
   return nodes;
 }
@@ -290,6 +236,8 @@ export function Transcript({
   startIndex,
   messageIndexOffset = 0,
   live = [],
+  liveNodes,
+  windowStartTs,
   onEditMessage,
   onRetryMessage,
 }: {
@@ -298,26 +246,52 @@ export function Transcript({
   allMessages?: readonly Message[];
   /** 窗口在完整可见消息里的起始下标，用于稳定 key。 */
   startIndex: number;
-  /** `allMessages[0]` 在完整 `state.messages` 里的绝对下标（`detailWindow.start`）。 */
+  /** allMessages[0] 在完整 state.messages 里的绝对下标（detailWindow.start）。 */
   messageIndexOffset?: number;
+  /** 实时节点入参（真实 run / 排队 notice / 伪 run 组），排序交给 timeline-order。 */
+  live?: readonly TimelineLiveInput[];
+  /** 实时节点的 key -> 渲染内容；缺省视为只有历史消息。 */
+  liveNodes?: TranscriptLiveNodes;
+  /** 可见窗口首条消息的 ts：比它更早的 live 节点落到末尾。 */
+  windowStartTs?: number;
   /** 编辑 = 确认后删除该消息及其后历史，并把原文写回 Composer。 */
   onEditMessage: (keepMessages: number, text: string) => void;
   /** 重试 = 确认后删除该回复及其后历史，并重新发送前一条用户内容。 */
   onRetryMessage: (keepMessages: number, text: string) => void;
-  /** 实时 run 的展开项与排队 notice：按时间戳插进历史消息之间。 */
-  live?: readonly TranscriptLiveEntry[];
 }) {
   const copy = useMessageCopy();
+  const nodes = liveNodes ?? EMPTY_LIVE_NODES;
   if (messages.length === 0 && live.length === 0) return null;
-  const units = buildTimelineUnits(
-    messages,
-    startIndex,
-    messageIndexOffset,
-    allMessages,
-    live,
-    copy,
-    onEditMessage,
-    onRetryMessage,
+
+  // 历史消息 → 排序入参。key 用绝对消息下标（detailWindow.start + 窗口内下标）：
+  // 游标分页前插一页时窗口相对下标会整体平移，用它会把所有历史消息 remount 一次。
+  const messageInputs: TimelineMessageInput[] = messages.map((message, index) => {
+    const sourceIndex = allMessages?.indexOf(message);
+    const absolute =
+      sourceIndex !== undefined && sourceIndex >= 0 ? sourceIndex + messageIndexOffset : undefined;
+    return {
+      key: 'm-' + (absolute ?? startIndex + index),
+      role: message.role,
+      content: message.content,
+      runtimeContext: runtimeMessageKind(message) !== undefined,
+      ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}),
+    };
+  });
+
+  const entries = orderTimelineEntries({ messages: messageInputs, live, windowStartTs });
+
+  return (
+    <div className="flex flex-col gap-4 py-1.5 pb-2.5">
+      {renderEntries({
+        entries,
+        messages,
+        liveNodes: nodes,
+        messageIndexOffset,
+        allMessages,
+        onCopy: copy,
+        onEdit: onEditMessage,
+        onRetry: onRetryMessage,
+      })}
+    </div>
   );
-  return <div className="flex flex-col gap-4 py-1.5 pb-2.5">{renderTimeline(units)}</div>;
 }

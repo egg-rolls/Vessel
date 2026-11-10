@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from 'react';
+import { type ReactNode, useCallback, useLayoutEffect, useRef } from 'react';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { Button } from '../../components/ui';
 import type { Message } from '../../gateway/types';
@@ -6,13 +6,13 @@ import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
 import type { ErrorVisibility } from '../../state/error-visibility';
 import type { RunGroup, StoredEvent, TimelineItem } from '../../state/events';
-import { runtimeMessageKind } from '../../state/runtime-visibility';
 import type { Verbosity } from '../../state/visibility';
 import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/sessionStore';
 import { ChatWelcome } from './ChatWelcome';
 import { QueuedNotice, type QueuedSubmission, RunItems } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
-import { Transcript, type TranscriptLiveEntry } from './Transcript';
+import { Transcript } from './Transcript';
+import type { TimelineLiveInput } from './timeline-order';
 import { useStickyBottom } from './useStickyBottom';
 
 /** 距顶多少像素内触发前插一页。 */
@@ -168,118 +168,83 @@ export function TranscriptWindow({
   // 表现就是「只看到自己的消息」。
   const hideReplayedLive = hydrating;
 
-  // 实时节点（run 展开项 + 排队 notice）按自身起始时间插进历史消息之间；
-  // 排序与日分组在 `Transcript` 内完成，这里只给出时间戳（+ 同刻回退用的 seq）与节点。
-  // 比历史窗口还早的节点（窗口外的失败 / 取消 run）不给时间戳：`Transcript` 会把它
-  // 排在末尾，避免一张陈旧 run 卡黏在窗口顶部第一条可见消息上面。
+  // 实时节点（run 展开项 + 排队 notice）的**位置**由 timeline-order.ts 决定：
+  // turn 锚点 / 窗口夹取 / 伪 run 拆条都是纯排序决策，统一放在那里
+  // （可被 scripts/check-timeline-order.ts 机械判定）。这里只负责把数据翻译成入参、
+  // 并给每个 key 准备渲染内容。
   const windowStartTs = transcriptWindow.shown[0]?.timestamp;
-  const sortTs = (ts: number | undefined): number | undefined =>
-    ts === undefined || windowStartTs === undefined || ts >= windowStartTs ? ts : undefined;
 
-  /**
-   * turn 边界锚点：本轮「触发它的那条 user 消息」的时间戳。
-   *
-   * 为什么需要：core 在 `run.started`（execution-unit.ts:983）**之后**才把用户消息写进
-   * 上下文并打上 `timestamp`（同文件 :1019 调 addContext → :2271 `Date.now()`），所以 run
-   * 的起始 ts 恒小于本轮用户消息的 ts。live 节点只按 run 起始时间排序时，本轮的助手
-   * 输出（含思考提示）就会排到用户消息**上面** —— 屏幕上表现为「我这条消息跑到最底下、
-   * 思考提示悬在它上方」。
-   *
-   * 匹配顺序：① 按 `group.input` 找内容相同的最后一条真实用户消息（多轮同文取最新）；
-   * ② 匹配不上（guardrail 改写过正文）且该 run 还在跑时，用「最后一条用户消息」兜底 ——
-   * 正在跑的助手输出必然排在这条之后。已终止的 run 不参与兜底，避免把历史轮次里的
-   * 失败 / 取消卡拽到当前轮下面。
-   */
-  const userAnchors: { content: string; ts: number }[] = [];
-  for (const message of transcriptMessages) {
-    if (message.role !== 'user') continue;
-    if (message.timestamp === undefined) continue;
-    // `vessel:*` 是模型侧上下文消息，不是用户输入。
-    if (runtimeMessageKind(message) !== undefined) continue;
-    userAnchors.push({ content: message.content.trim(), ts: message.timestamp });
-  }
-  const lastUserTs = userAnchors.length > 0 ? userAnchors[userAnchors.length - 1]?.ts : undefined;
-  const turnFloorFor = (input: string | undefined, running: boolean): number | undefined => {
-    const text = input?.trim();
-    if (text !== undefined && text.length > 0) {
-      for (let index = userAnchors.length - 1; index >= 0; index -= 1) {
-        const anchor = userAnchors[index];
-        if (anchor !== undefined && anchor.content === text) return anchor.ts + 1;
-      }
-    }
-    return running && lastUserTs !== undefined ? lastUserTs + 1 : undefined;
-  };
-
-  /** live 节点的时间戳：不早于「触发它的用户消息」，其余仍按 run 起始时间。 */
-  const nodeTs = (ts: number | undefined, floor: number | undefined): number | undefined => {
-    const base = floor === undefined ? ts : Math.max(ts ?? floor, floor);
-    return sortTs(base);
-  };
-
-  /** 一条事件自身的 ts（notice / raw event 都带 `event.ts`）。 */
+  /** 一条事件自身的 ts（notice / raw event 都带 event.ts）。 */
   const itemTs = (item: TimelineItem): number | undefined =>
     item.kind === 'notice' || item.kind === 'event' ? item.event.ts : undefined;
 
-  /** 把一条 item 拆成独立渲染节点：环境事件按自己的 ts 落位，不跟着整组走。 */
-  const singleItemEntry = (group: RunGroup, item: TimelineItem): TranscriptLiveEntry => ({
-    key: `${group.runId}-${item.key}`,
-    ts: sortTs(itemTs(item)),
-    seq: group.firstSeq,
-    node: (
-      <RunItems
-        group={{ ...group, items: [item], liveText: undefined, liveReasoning: undefined }}
-        verbosity={verbosity}
-      />
-    ),
-  });
+  /** 伪 run 组里一条 item 的独立渲染节点（各自按自己的 ts 落位）。 */
+  const singleItemNode = (group: RunGroup, item: TimelineItem): ReactNode => (
+    <RunItems
+      group={{ ...group, items: [item], liveText: undefined, liveReasoning: undefined }}
+      verbosity={verbosity}
+    />
+  );
 
-  const liveEntries: TranscriptLiveEntry[] = activeAgent
-    ? []
-    : [
-        ...renderedGroups
-          .filter((group) => !(hideReplayedLive && group.status !== 'running'))
-          .flatMap((group): TranscriptLiveEntry[] => {
-            // 真实 run（`hasRunEvent`）：整段作为一个节点，按 run 起始时间定位 ——
-            // 同一个 run 的正文 / 思考 / 工具卡必须连在一起，不能被拆散重排。
-            if (group.hasRunEvent) {
-              return [
-                {
-                  key: `run-${group.runId}`,
-                  // 起始时间 + turn 下限：run.started 早于用户消息落盘，只按起始时间
-                  // 排序会把本轮输出排到用户消息上面（见 turnFloorFor 的注释）。
-                  ts: nodeTs(
-                    group.startedAt ?? group.firstTs,
-                    turnFloorFor(group.input, group.status === 'running'),
-                  ),
-                  seq: group.firstSeq,
-                  node: (
-                    <RunItems
-                      group={group}
-                      cancelled={cancelledJobs.has(group.runId)}
-                      hideInput={
-                        hasTranscript &&
-                        transcriptMessages.some(
-                          (message) => message.role === 'user' && message.content === group.input,
-                        )
-                      }
-                      verbosity={verbosity}
-                    />
-                  ),
-                },
-              ];
+  const liveInputs: TimelineLiveInput[] = [];
+  const liveNodes = new Map<string, ReactNode>();
+
+  if (!activeAgent) {
+    for (const group of renderedGroups) {
+      if (hideReplayedLive && group.status !== 'running') continue;
+      if (group.hasRunEvent) {
+        // 真实 run：整段作为一个节点（正文 / 思考 / 工具卡不可拆）。
+        const runKey = 'run-' + group.runId;
+        const runStartTs = group.startedAt ?? group.firstTs;
+        liveInputs.push({
+          key: runKey,
+          ...(runStartTs !== undefined ? { startTs: runStartTs } : {}),
+          ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
+          ...(group.input !== undefined ? { input: group.input } : {}),
+          running: group.status === 'running',
+        });
+        liveNodes.set(
+          runKey,
+          <RunItems
+            group={group}
+            cancelled={cancelledJobs.has(group.runId)}
+            hideInput={
+              hasTranscript &&
+              transcriptMessages.some(
+                (message) => message.role === 'user' && message.content === group.input,
+              )
             }
-            // 环境事件（`run_id` 是 `runtime` / `session` / 成员 id 等伪 run）：一条事件
-            // 一个节点。它们会持续往同一个伪 run 里追加，整组只按「首次出现」定位时，
-            // 后续事件会永远停在那一个时间点——正是用户看到的「系统事件聚堆、不按时间」。
-            return group.items.map((item) => singleItemEntry(group, item));
-          }),
-        ...visibleQueued.map((item) => ({
-          key: `queued-${item.runId}`,
-          // 排队 notice 也挂在它自己那条用户输入之后（同一 turn 边界规则）。
-          ts: nodeTs(item.submittedAt, turnFloorFor(item.input, true)),
-          node: <QueuedNotice item={item} onCancel={onCancelQueued} />,
-        })),
-      ];
+            verbosity={verbosity}
+          />,
+        );
+        continue;
+      }
+      // 伪 run 组（run_id 是 runtime / session / 成员 id 等）：一条事件一个节点，
+      // 各自按自己的事件时间落位；整组锚在首个事件上会让后续事件堆在最早时刻。
+      const ambientKey = 'ambient-' + group.runId;
+      liveInputs.push({
+        key: ambientKey,
+        ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
+        items: group.items.map((item, index) => {
+          const ts = itemTs(item);
+          return { key: index + '-' + item.key, ...(ts !== undefined ? { ts } : {}) };
+        }),
+      });
+      group.items.forEach((item, index) => {
+        liveNodes.set(ambientKey + '#' + index + '-' + item.key, singleItemNode(group, item));
+      });
+    }
+    for (const item of visibleQueued) {
+      const queuedKey = 'queued-' + item.runId;
+      liveInputs.push({
+        key: queuedKey,
+        startTs: item.submittedAt,
+        input: item.input,
+        running: true,
+      });
+      liveNodes.set(queuedKey, <QueuedNotice item={item} onCancel={onCancelQueued} />);
+    }
+  }
 
   // 滚到顶部阈值内自动前插一页。用户手势产生的 scroll 才会触发，程序化回填不会
   // （回填把 scrollTop 推高，远离阈值）。
@@ -320,7 +285,7 @@ export function TranscriptWindow({
                 ) : undefined
               }
             />
-          ) : hydrating && !hasTranscript && liveEntries.length === 0 ? (
+          ) : hydrating && !hasTranscript && liveInputs.length === 0 ? (
             // 只有「什么都没有」时才换成 LoadingState：重连 / 重订阅时实时内容还在，
             // 换屏本身就是一次闪烁。
             <LoadingState label={t('chat.loadingHistory')} />
@@ -359,13 +324,15 @@ export function TranscriptWindow({
               0.50：实时节点按 run 起始时间插进历史消息之间，不再整块追加在末尾。
               hydrate 期间先只给 LoadingState：重放会先灌进来一批准 live 组，
               详情到达后再被 `isGroupPersisted` 收掉，看起来就是「闪现 + 跳跃」。 */}
-          {hasTranscript || (!activeAgent && liveEntries.length > 0) ? (
+          {hasTranscript || (!activeAgent && liveInputs.length > 0) ? (
             <Transcript
               messages={transcriptWindow.shown}
               allMessages={transcriptMessages}
               startIndex={transcriptStart}
               messageIndexOffset={messageIndexOffset}
-              live={liveEntries}
+              live={liveInputs}
+              liveNodes={liveNodes}
+              windowStartTs={windowStartTs}
               onEditMessage={onEditMessage}
               onRetryMessage={onRetryMessage}
             />
