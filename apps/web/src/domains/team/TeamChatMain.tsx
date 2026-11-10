@@ -25,14 +25,10 @@ import { TeamTranscript } from './TeamTranscript';
 import type { TeamChatDecidePermission, TeamChatRespondAsk } from './team-chat-types';
 import {
   captureScrollAnchor,
-  decideEarlierProbe,
   EARLIER_LOAD_THRESHOLD_PX,
-  type EarlierProbeState,
-  IDLE_EARLIER_PROBE,
   isNearTop,
   restoreScrollAnchor,
   type ScrollAnchor,
-  settleEarlierProbe,
   teamChatResetKey,
   teamFollowKey,
 } from './team-scroll';
@@ -43,22 +39,18 @@ import {
  * - `armed`：一次贴近顶部只触发一页，锚点补偿把 scrollTop 带离顶部后才重新武装。
  * - `anchor`：请求时记下 scrollTop / scrollHeight，新页插入 DOM 后（`useLayoutEffect`，
  *   绘制前）把高度差补进 scrollTop，视觉位置不动。
- * - `probe`：`teams.get` 没有 `has_more`，用「上一页回来条数没变多」判定到头，
- *   同一条数不再白拉（`team-scroll.ts` 的纯函数，见 `decideEarlierProbe`）。
+ * - 是否还有更早由服务端 `messages_has_more` 决定（`hasMore`），不再用探针探测。
  * - `filledAt`：视口没被填满时滚不动、靠滚动永远触发不到更早历史，主动补一页；
  *   上一页没有带来内容增长（scrollHeight 不变）就停，避免死循环。
  */
 function useEarlierPaging({
   box,
   hasMore,
-  messageCount,
   scope,
   onLoadEarlier,
 }: {
   box: { current: HTMLDivElement | null };
   hasMore: boolean;
-  /** 当前窗口里的消息条数：用来判定「下一页有没有带来新内容」。 */
-  messageCount: number;
   /** 切换 Team 时重置（切走再回来应该还能往前拉）。 */
   scope: string;
   onLoadEarlier: () => void;
@@ -66,33 +58,26 @@ function useEarlierPaging({
   const armed = useRef(true);
   const anchor = useRef<ScrollAnchor | null>(null);
   const filledAt = useRef<number | null>(null);
-  const probe = useRef<EarlierProbeState>(IDLE_EARLIER_PROBE);
   const [loadedPages, setLoadedPages] = useState(0);
 
-  // 切 Team：清掉锚点 / 探针 / 武装状态，别把上一个 Team 的结论带过来。
+  // 切 Team：清掉锚点 / 武装状态，别把上一个 Team 的结论带过来。
   // biome-ignore lint/correctness/useExhaustiveDependencies: scope 变化就是重置条件（函数体只写 ref）
   useEffect(() => {
     armed.current = true;
     anchor.current = null;
     filledAt.current = null;
-    probe.current = IDLE_EARLIER_PROBE;
   }, [scope]);
 
   const request = useCallback(() => {
     const element = box.current;
-    if (!element) return;
-    const decision = decideEarlierProbe(probe.current, { hasMore, messageCount });
-    probe.current = decision.next;
-    if (!decision.probe) return;
+    if (!element || !hasMore) return;
     armed.current = false;
     anchor.current = captureScrollAnchor(element);
     setLoadedPages((value) => value + 1);
     onLoadEarlier();
-  }, [box, hasMore, messageCount, onLoadEarlier]);
+  }, [box, hasMore, onLoadEarlier]);
 
   useLayoutEffect(() => {
-    // 新页落地（条数变化）→ 在途标记清零，下次还能继续往前拉。
-    probe.current = settleEarlierProbe(probe.current, messageCount);
     const element = box.current;
     if (!element) return;
     const saved = anchor.current;
@@ -230,7 +215,6 @@ export function TeamChatMain({
   const paging = useEarlierPaging({
     box: scrollBox,
     hasMore: canLoadEarlier,
-    messageCount: rows.length,
     scope: resetKey,
     onLoadEarlier,
   });

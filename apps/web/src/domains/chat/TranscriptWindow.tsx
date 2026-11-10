@@ -46,6 +46,9 @@ export function TranscriptWindow({
   transcriptWindow,
   transcriptStart,
   transcriptMessages,
+  messageIndexOffset,
+  detailNotice,
+  onDismissDetailNotice,
   cancelledJobs,
   verbosity,
   errorLevel,
@@ -78,6 +81,11 @@ export function TranscriptWindow({
   transcriptWindow: { shown: Message[]; hiddenCount: number };
   transcriptStart: number;
   transcriptMessages: readonly Message[];
+  /** `transcriptMessages[0]` 在完整 `state.messages` 里的绝对下标（撤回 / 重试用）。 */
+  messageIndexOffset: number;
+  /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
+  detailNotice: string | null;
+  onDismissDetailNotice: () => void;
   cancelledJobs: ReadonlySet<string>;
   verbosity: Verbosity;
   errorLevel: ErrorVisibility;
@@ -119,9 +127,10 @@ export function TranscriptWindow({
     anchorRef.current = anchor;
     window.clearTimeout(anchorTimerRef.current);
     anchorTimerRef.current = window.setTimeout(() => {
-      // 没有新消息落地（例如 detail 恰好没变化）时释放锚点，避免永久卡住。
+      // 没有新消息落地（请求失败 / detail 恰好没变化）时释放锚点，避免永久卡住。
+      // 3000ms 覆盖「加载更早」的服务端往返；本地扩窗仍在下一帧立即回填。
       if (anchorRef.current === anchor) anchorRef.current = null;
-    }, 300);
+    }, 3000);
     onLoadEarlier();
   }, [hasEarlier, getElement, onLoadEarlier]);
 
@@ -246,6 +255,10 @@ export function TranscriptWindow({
             />
           )}
 
+          {detailNotice && (
+            <StaleNotice message={t(detailNotice)} onDismiss={onDismissDetailNotice} />
+          )}
+
           {truncated && <StaleNotice message={t('chat.truncated')} />}
 
           {/* 0.18：历史消息与实时 run 的展开项共享同一个列表，没有 run 边界；
@@ -257,6 +270,7 @@ export function TranscriptWindow({
               messages={transcriptWindow.shown}
               allMessages={transcriptMessages}
               startIndex={transcriptStart}
+              messageIndexOffset={messageIndexOffset}
               live={liveEntries}
               onEditMessage={onEditMessage}
               onRetryMessage={onRetryMessage}

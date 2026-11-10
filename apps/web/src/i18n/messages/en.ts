@@ -470,6 +470,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.chat.empty': 'No messages yet',
   'team.chat.emptyHint': 'Mention a member with @ to notify that agent.',
   'team.chat.loadedEarlier': 'Loaded earlier messages',
+  'team.chat.historyOutOfWindow':
+    'Older history is outside the local retention window; keeping what is already loaded.',
   'team.chat.backToList': 'Back to Teams',
   'team.chat.loadMoreMembers': 'Load more members',
   'team.chat.membersCapped': 'Only the first {shown} of {total} members are shown',
@@ -1001,6 +1003,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.empty.noHistoryTitle': 'This session has no messages yet.',
   'chat.empty.noHistoryDesc': 'Enter a prompt below to continue this session.',
   'chat.staleHistory': 'History refresh failed; showing the loaded records: {detail}',
+  'chat.historyChanged':
+    'Earlier history was rewritten; the older pages were reloaded from the server.',
   'chat.truncated':
     'Some earlier events were truncated from the in-memory buffer; open the run details for the full record.',
   'chat.toBottom': 'Back to bottom ↓',
@@ -1459,8 +1463,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.url.path': 'Use only scheme://host[:port]; do not include a path or query',
   'gateway.url.https': 'Non-loopback gateways must use HTTPS (wss)',
   'gateway.url.mixed': 'An HTTPS page cannot connect to an http:// gateway (mixed content)',
-  'gateway.notice.seqReplay':
-    'The gateway restarted and the event sequence went backwards; replaying from the beginning',
   'gateway.connection.invalidUrl': 'Invalid gateway address',
   'gateway.connection.authFailed': 'Authentication failed: the token is invalid or expired',
   'gateway.connection.originRejected':

@@ -20,7 +20,7 @@ export type StatusKind =
 
 /** 网关错误信封 */
 export interface GatewayErrorBody {
-  error: { code: string; message: string };
+  error: { code: string; message: string; details?: unknown };
 }
 
 /** 协议信息 */
@@ -253,7 +253,7 @@ export type ServerFrame =
       ts: number;
       id: string;
       ok: false;
-      error: { code: string; message: string };
+      error: { code: string; message: string; details?: unknown };
     }
   | { v: 1; kind: 'ping'; node_id: string; ts: number };
 

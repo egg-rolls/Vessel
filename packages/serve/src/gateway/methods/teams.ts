@@ -160,6 +160,10 @@ function mapTeamError(error: unknown): never {
     throw new RpcError('not_found', message);
   }
   // S10.3：archive 的前置条件与只读状态是业务冲突，不是参数错误。
+  // S1：日志游标超出本地保留窗口。仍是 conflict，但带独立 reason 供客户端停止翻页。
+  if (code === 'cursor_out_of_window') {
+    throw new RpcError('conflict', message, { reason: code });
+  }
   // 0.38：已撤回的目标同样按 conflict（message `already_retracted`）。
   if (code === 'team_not_empty' || code === 'team_archived' || code === 'conflict') {
     throw new RpcError('conflict', message, { team_code: code });
@@ -328,6 +332,8 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
         properties: {
           team_id: { type: 'string', minLength: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 1000 },
+          // S1：稳定游标（上一页首条 message_id）；缺省 = 尾读。
+          before: { type: 'string', minLength: 1 },
           // 0.21：roster 窗口（缺省 20，最大 100）；由 Team 控制面排序 / 截断。
           members_limit: { type: 'integer', minimum: 1, maximum: 100 },
         },
@@ -340,15 +346,20 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           const scope = teamScopeOf(ctx);
           assertTeamScope(scope, teamId);
           const limit = typeof params.limit === 'number' ? params.limit : undefined;
+          const before = optionalString(params, 'before');
           const membersLimit =
             typeof params.members_limit === 'number' ? params.members_limit : undefined;
           const viewer = ctx.principal.agent_id;
           const options =
-            viewer === undefined && limit === undefined && membersLimit === undefined
+            viewer === undefined &&
+            limit === undefined &&
+            before === undefined &&
+            membersLimit === undefined
               ? undefined
               : {
                   ...(viewer !== undefined ? { viewer } : {}),
                   ...(limit !== undefined ? { limit } : {}),
+                  ...(before !== undefined ? { before } : {}),
                   ...(membersLimit !== undefined ? { members_limit: membersLimit } : {}),
                 };
           const detail = await control.get(teamId, options);

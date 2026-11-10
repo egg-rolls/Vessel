@@ -131,5 +131,11 @@ export interface TeamRetractResult {
 export interface TeamDetail {
   team: TeamSummary;
   members: TeamMember[];
+  /** 本次返回的连续日志窗口（升序）；`before` 有值时是上一页。 */
   messages: TeamMessage[];
+  /**
+   * 本次窗口之前是否还有日志。S1 additive；旧 gateway 缺失视为 false。
+   * 只有 `before` 响应可以更新翻页状态，尾页轮询不覆盖。
+   */
+  messages_has_more?: boolean;
 }

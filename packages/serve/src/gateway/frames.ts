@@ -76,16 +76,16 @@ export interface HelloFrameInput {
   node: NodeInfo;
   /** 0.9：本进程事务代际 */
   incarnation: string;
+  /**
+   * 本次 epoch 实际会发送的第一条 seq（调用方已解析）：
+   * 有回放窗口时为窗口首条；已追平为 `latestSeq + 1`；空缓冲为 `0`。
+   */
   fromSeq: number;
   latestSeq: number;
-  oldestSeq: number;
   ts?: number;
 }
 
 export function helloFrame(input: HelloFrameInput): ServerFrame {
-  const { latestSeq } = input;
-  // from_seq = 本次回放的第一条 seq；空缓冲时为 0（此时 latest_seq 也是 0）。
-  // 已追平时为 since + 1（= latest + 1），表示「下一条期望序号」。
   return {
     v: PROTOCOL_VERSION,
     kind: 'hello',
@@ -94,8 +94,8 @@ export function helloFrame(input: HelloFrameInput): ServerFrame {
     protocol: input.protocol,
     node: input.node,
     incarnation: input.incarnation,
-    from_seq: latestSeq === 0 ? 0 : Math.max(input.fromSeq + 1, input.oldestSeq),
-    latest_seq: latestSeq,
+    from_seq: input.fromSeq,
+    latest_seq: input.latestSeq,
   };
 }
 

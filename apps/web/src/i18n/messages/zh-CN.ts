@@ -458,6 +458,7 @@ export const messages = {
   'team.chat.empty': '还没有消息',
   'team.chat.emptyHint': '用 @ 提及成员才会通知对应 agent。',
   'team.chat.loadedEarlier': '已加载更早消息',
+  'team.chat.historyOutOfWindow': '更早的历史已超出本地保留窗口，保留已加载内容。',
   'team.chat.backToList': '返回 Team 列表',
   'team.chat.loadMoreMembers': '加载更多成员',
   'team.chat.membersCapped': '仅显示前 {shown} / {total} 成员',
@@ -970,6 +971,7 @@ export const messages = {
   'chat.empty.noHistoryTitle': '该会话暂无对话记录。',
   'chat.empty.noHistoryDesc': '在下方输入 prompt 继续这个会话。',
   'chat.staleHistory': '历史刷新失败，显示已加载的记录：{detail}',
+  'chat.historyChanged': '更早的历史已被改写，已从服务端重新加载更早页面。',
   'chat.truncated': '部分更早的事件已从内存缓冲截断；完整记录请查看运行详情。',
   'chat.toBottom': '回到底部 ↓',
   'chat.toast.queued': '已排队',
@@ -1411,7 +1413,6 @@ export const messages = {
   'gateway.url.path': '只填写 scheme://host[:port]，不要带路径或参数',
   'gateway.url.https': '非回环 gateway 必须使用 HTTPS（wss）',
   'gateway.url.mixed': 'HTTPS 页面不能连接 http:// gateway（mixed content）',
-  'gateway.notice.seqReplay': 'gateway 已重启，事件序号已回退，正在从头重放',
   'gateway.connection.invalidUrl': '无效的 gateway 地址',
   'gateway.connection.authFailed': '鉴权失败：token 错误或已失效',
   'gateway.connection.originRejected':

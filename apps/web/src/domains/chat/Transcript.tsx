@@ -126,13 +126,15 @@ function TranscriptMessage({
 }
 
 /**
- * 找该助手消息前一条真实用户输入及其下标。`allMessages` 是 `sessions.get` 的完整
- * 消息序列（跨窗口回溯），返回的下标直接作为 `keep_messages`；runtime 上下文消息
- * （`vessel:*`）不是用户输入，跳过。
+ * 找该助手消息前一条真实用户输入及其绝对下标。`allMessages` 是 `sessions.get`
+ * 已加载的连续窗口（跨本地窗口回溯），`indexOffset` 是该窗口首条消息在完整
+ * `state.messages` 里的绝对下标（CONTRACT-msg-system §4.3）；返回的下标直接作为
+ * `keep_messages`。runtime 上下文消息（`vessel:*`）不是用户输入，跳过。
  */
 function previousUserMessage(
   message: Message,
   allMessages: readonly Message[] | undefined,
+  indexOffset: number,
 ): { text: string; index: number } | undefined {
   if (message.role !== 'assistant' || !allMessages) return undefined;
   const currentIndex = allMessages.indexOf(message);
@@ -141,7 +143,7 @@ function previousUserMessage(
     const candidate = allMessages[cursor];
     if (candidate?.role !== 'user') continue;
     if (runtimeMessageKind(candidate) !== undefined) continue;
-    return { text: candidate.content, index: cursor };
+    return { text: candidate.content, index: cursor + indexOffset };
   }
   return undefined;
 }
@@ -209,6 +211,7 @@ export function orderTimeline<T extends { ts?: number | undefined; seq?: number 
 function buildTimelineUnits(
   messages: Message[],
   startIndex: number,
+  messageIndexOffset: number,
   allMessages: readonly Message[] | undefined,
   live: readonly TranscriptLiveEntry[],
   onCopy: (text: string) => void,
@@ -219,9 +222,10 @@ function buildTimelineUnits(
   let carry: number | undefined;
   messages.forEach((message, index) => {
     if (message.timestamp !== undefined) carry = message.timestamp;
-    // 撤回下标只认 `sessions.get` 的完整消息序列；对象不在其中时不提供撤回。
+    // 撤回下标只认 `sessions.get` 加载的窗口 + 绝对偏移；对象不在其中时不提供撤回。
     const sourceIndex = allMessages?.indexOf(message);
-    const messageIndex = sourceIndex !== undefined && sourceIndex >= 0 ? sourceIndex : undefined;
+    const messageIndex =
+      sourceIndex !== undefined && sourceIndex >= 0 ? sourceIndex + messageIndexOffset : undefined;
     units.push({
       key: `m-${startIndex + index}`,
       ts: message.timestamp ?? carry,
@@ -230,7 +234,7 @@ function buildTimelineUnits(
         <TranscriptMessage
           message={message}
           messageIndex={messageIndex}
-          previousUser={previousUserMessage(message, allMessages)}
+          previousUser={previousUserMessage(message, allMessages, messageIndexOffset)}
           onCopy={onCopy}
           onEdit={onEdit}
           onRetry={onRetry}
@@ -270,15 +274,18 @@ export function Transcript({
   messages,
   allMessages,
   startIndex,
+  messageIndexOffset = 0,
   live = [],
   onEditMessage,
   onRetryMessage,
 }: {
   messages: Message[];
-  /** 完整可见消息序列，用于回溯窗口外的前一条用户输入。 */
+  /** 已加载的完整消息窗口（未做可见性过滤），用于回溯窗口外的前一条用户输入。 */
   allMessages?: readonly Message[];
   /** 窗口在完整可见消息里的起始下标，用于稳定 key。 */
   startIndex: number;
+  /** `allMessages[0]` 在完整 `state.messages` 里的绝对下标（`detailWindow.start`）。 */
+  messageIndexOffset?: number;
   /** 编辑 = 确认后删除该消息及其后历史，并把原文写回 Composer。 */
   onEditMessage: (keepMessages: number, text: string) => void;
   /** 重试 = 确认后删除该回复及其后历史，并重新发送前一条用户内容。 */
@@ -291,6 +298,7 @@ export function Transcript({
   const units = buildTimelineUnits(
     messages,
     startIndex,
+    messageIndexOffset,
     allMessages,
     live,
     copy,

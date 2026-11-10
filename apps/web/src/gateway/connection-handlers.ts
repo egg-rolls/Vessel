@@ -6,11 +6,24 @@ import { useInteractionStore } from '../stores/interactionStore';
 import type { ConnectionState, GatewayClient } from './client';
 import { askFromEvent, interactionExpiredMessage, permissionFromEvent } from './interactions';
 import { classifyCloseCode, nextReconnectDelay, probeThenConnect } from './reconnect';
-import { planHelloSeq } from './seq-replay';
+import type { SubscriptionController } from './subscription';
 import type { HelloInfo, RunEvent } from './types';
 
 interface Current<T> {
   current: T;
+}
+
+/**
+ * gap / 历史改写后的数据层恢复钩子。
+ * 职责留在 Provider：它才有 sessionStore / hydration 的入口。
+ */
+export interface ConnectionRecoveryHooks {
+  /** gap：当前路由的权威快照已过期（§3），页面重新拉取；不重连。 */
+  invalidateRouteSnapshot: () => void;
+  /** gap：pending 权限 / ask 必须重新走 interactions.list，不能只靠连接 epoch。 */
+  hydrateInteractions: () => void;
+  /** session.rewound / message.compaction：丢弃该会话更早页并重取尾页。 */
+  onSessionHistoryChanged: (sessionId: string) => void;
 }
 
 export interface ConnectionHandlerDeps {
@@ -18,6 +31,8 @@ export interface ConnectionHandlerDeps {
   token: string;
   eventStore: EventStore;
   toast: ToastApi;
+  subscription: SubscriptionController;
+  recovery: ConnectionRecoveryHooks;
   settledRef: Current<Map<string, number>>;
   recordSettled: (requestId: string) => void;
   reportConnectError: (error: unknown) => void;
@@ -30,6 +45,14 @@ export interface ConnectionHandlerDeps {
   setEpoch: Dispatch<SetStateAction<number>>;
 }
 
+/** 事件自报的会话归属：顶层或 `data.session_id`；缺失返回 undefined。 */
+function eventSessionId(event: RunEvent): string | undefined {
+  const topLevel = (event as { session_id?: unknown }).session_id;
+  if (typeof topLevel === 'string' && topLevel.length > 0) return topLevel;
+  const value = (event.data as { session_id?: unknown }).session_id;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
 /**
  * 建立一次 WS 生命周期的订阅（事件 / hello / gap / state / close），并启动首个连接。
  * 返回的 dispose 与原 useEffect cleanup 完全一致：先解除订阅，再清定时器与连接。
@@ -40,6 +63,8 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     token,
     eventStore,
     toast,
+    subscription,
+    recovery,
     settledRef,
     recordSettled,
     reportConnectError,
@@ -102,10 +127,16 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     if (!eventStore.push(event, meta)) return;
     if (event.type === 'session.rewound') {
       // 历史已删除：立即丢掉该会话的缓冲事件（含刚 push 的 marker 本身）。
-      const sessionId = (event.data as { session_id?: unknown }).session_id;
-      if (typeof sessionId === 'string' && sessionId.length > 0) {
+      const sessionId = eventSessionId(event);
+      if (sessionId !== undefined) {
         eventStore.dropSession(sessionId);
+        recovery.onSessionHistoryChanged(sessionId);
       }
+    }
+    // compaction 替换前缀：更早页的游标锚点大概率失效，主动重取尾页。
+    if (event.type === 'message.compaction') {
+      const sessionId = eventSessionId(event);
+      if (sessionId !== undefined) recovery.onSessionHistoryChanged(sessionId);
     }
     if (event.type === 'tool.permission.request') addPermission(event);
     if (event.type === 'tool.permission.response') removeByEvent(event, false);
@@ -130,36 +161,32 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   });
 
   const offHello = client.onHello((info) => {
-    attempt = 0;
-    setReconnectAttempt(0);
-    // gateway 重启后 seq 从 1 重新计数；旧 seq 会让重放事件被永久丢弃。
-    // 不能只 reset(latest_seq) 后继续用当前连接：必须断开并以 since=0 重放。
-    const seqPlan = planHelloSeq(info.latest_seq, eventStore.currentSeq);
-    if (seqPlan.replay) {
-      eventStore.reset(seqPlan.resetTo ?? 0);
-      // 一次性提示走右下角 toast，不占顶部 banner 布局。
-      if (seqPlan.notice) toast.info(seqPlan.notice);
-      setTokenError(null);
-      setGatewayError(null);
-      setLastError(null);
-      // 旧连接的在途帧由 client 的 socket identity 检查丢弃。
-      void client.restart(token, seqPlan.since).catch(reportConnectError);
-      return;
-    }
-    setHello(info);
+    // 订阅 epoch：服务端每次成功 subscribe 都先发 hello；它只重置本地事件库，
+    // 不 bump 连接 epoch（否则切路由会无谓重拉 session / team 详情）。
+    const subscriptionHello = subscription.consumeHello();
+    // hello 是本地事件 epoch 的唯一边界：从本次实际首条 seq 之前重置。
+    // 有界回放会从窗口首条开始；被跳过的区间由随后的 gap 告知。
+    eventStore.reset(Math.max(0, info.from_seq - 1));
     setTokenError(null);
     setGatewayError(null);
     setLastError(null);
+    if (subscriptionHello) return;
+    attempt = 0;
+    setReconnectAttempt(0);
+    setHello(info);
     setEpoch((value) => value + 1);
+    // 重连后服务端回到无过滤连接：按当前路由重新收敛。
+    subscription.onConnectionHello(info.latest_seq);
   });
 
   const offGap = client.onGap((gap) => {
+    // gap = 该区间无法从实时流恢复；不重连。恢复走 RPC 快照（§3）。
     eventStore.reset(gap.to_seq);
+    recovery.invalidateRouteSnapshot();
     // 一次性提示走右下角 toast，不占顶部 banner 布局。
     toast.info(t('gateway.connection.gap', { from: gap.from_seq, to: gap.to_seq }));
-    // 缺口里的终态事件（如 permission.response）已经丢了：按协议从 to_seq 重连，
-    // 借 hello → epoch → hydrateInteractions 用服务端 pending 收敛本地卡片。
-    void client.restart(token, gap.to_seq).catch(reportConnectError);
+    // pending 权限 / ask 不能只依赖连接级 epoch：gap 不重连，必须显式补 hydration。
+    recovery.hydrateInteractions();
   });
 
   const offState = client.onState((state) => {
@@ -168,6 +195,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
 
   const offClose = client.onClose((code) => {
     if (disposed) return;
+    subscription.onDisconnect();
     const close = classifyCloseCode(code);
     if (close.kind === 'terminal') {
       if (close.tokenError !== undefined) setTokenError(close.tokenError);
@@ -181,6 +209,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     setConnectionState('reconnecting');
     retryTimer = window.setTimeout(() => {
       if (disposed) return;
+      // 重连仍用本地当前 seq 作为 since；hello 会重新对齐 epoch。
       void client.connect(token, eventStore.currentSeq).catch(reportConnectError);
     }, delay);
   });
@@ -190,6 +219,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
 
   return () => {
     disposed = true;
+    subscription.onDisconnect();
     offEvent();
     offHello();
     offGap();

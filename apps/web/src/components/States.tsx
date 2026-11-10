@@ -112,8 +112,16 @@ export function NotEnabledState({
   );
 }
 
-/** 有旧数据但更新失败/离线：不阻塞内容。 */
-export function StaleNotice({ message, onRetry }: { message: string; onRetry?: () => void }) {
+/** 有旧数据但更新失败/离线：不阻塞内容；一次性提示可传 `onDismiss` 关闭。 */
+export function StaleNotice({
+  message,
+  onRetry,
+  onDismiss,
+}: {
+  message: string;
+  onRetry?: () => void;
+  onDismiss?: () => void;
+}) {
   return (
     <div
       className="stale-notice flex flex-wrap items-center gap-2.5 rounded-sm bg-warn-soft px-3 py-2 text-sm text-warn"
@@ -126,6 +134,16 @@ export function StaleNotice({ message, onRetry }: { message: string; onRetry?: (
       {onRetry && (
         <Button variant="link" className="text-warn hover:text-warn" onClick={onRetry}>
           {t('common.refresh')}
+        </Button>
+      )}
+      {onDismiss && (
+        <Button
+          variant="link"
+          className="text-warn hover:text-warn"
+          onClick={onDismiss}
+          aria-label={t('common.closeNotice')}
+        >
+          {t('common.close')}
         </Button>
       )}
     </div>

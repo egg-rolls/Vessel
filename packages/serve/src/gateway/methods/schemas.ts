@@ -66,6 +66,9 @@ export const runStateSchema = {
     run_id: { type: 'string' },
     session_id: { type: 'string' },
     messages: { type: 'array' },
+    // S1：分页元数据（additive；旧客户端忽略）。messages_total 恒返回。
+    messages_total: { type: 'integer', minimum: 0 },
+    next_before: { type: 'string' },
     started_at: { type: 'number' },
     completed_at: { type: 'number' },
     status: {
@@ -618,6 +621,8 @@ export const teamDetailSchema = {
     team: teamSummarySchema,
     members: { type: 'array', items: teamMemberSchema },
     messages: { type: 'array', items: teamMessageSchema },
+    // S1：窗口之前是否还有日志（可选：旧控制面 / 旧传输缺省视为 false）。
+    messages_has_more: { type: 'boolean' },
   },
 };
 

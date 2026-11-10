@@ -11,12 +11,13 @@ import { toWebSocketBase } from '../url';
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error';
 
-/** REST 错误（携带 gateway 稳定 code） */
+/** REST / WS 错误（携带 gateway 稳定 code；HTTP 还带 details） */
 export class GatewayHttpError extends Error {
   constructor(
     readonly code: string,
     message: string,
     readonly status?: number,
+    readonly details?: unknown,
   ) {
     super(message);
     this.name = 'GatewayHttpError';
@@ -284,7 +285,15 @@ export abstract class ProtocolClient {
         this.pending.delete(frame.id);
         window.clearTimeout(pending.timer);
         if (frame.ok) pending.resolve(frame.result);
-        else pending.reject(new Error(`${frame.error.code}: ${frame.error.message}`));
+        else
+          pending.reject(
+            new GatewayHttpError(
+              frame.error.code,
+              `${frame.error.code}: ${frame.error.message}`,
+              undefined,
+              frame.error.details,
+            ),
+          );
         return;
       }
       case 'ping': {

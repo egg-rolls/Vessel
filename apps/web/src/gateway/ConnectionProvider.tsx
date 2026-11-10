@@ -12,6 +12,7 @@ import { useToast } from '../components/ToastProvider';
 import { t } from '../i18n';
 import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import { useInteractionStore } from '../stores/interactionStore';
+import { useSessionStore } from '../stores/sessionStore';
 import { bootstrapPlatform } from './bootstrap';
 import {
   ConnectionContext,
@@ -19,7 +20,7 @@ import {
   type ConnectionMode,
   type ConnectionOptions,
 } from './connection-context';
-import { createConnectionHandlers } from './connection-handlers';
+import { type ConnectionRecoveryHooks, createConnectionHandlers } from './connection-handlers';
 import { computeInitialConnection, LEGACY_TOKEN_KEY } from './connection-initial';
 import { SubmitGuard } from './interactions';
 import { type ConnectionState, GatewayClient } from './node';
@@ -30,6 +31,8 @@ import {
 } from './node-selection';
 import { nodeTokenIdentity, removeNodeToken, storeNodeToken } from './nodes';
 import { PlatformClient, type PlatformRpcError } from './platform';
+import { invalidateRouteSnapshots } from './snapshot-invalidation';
+import { SubscriptionController } from './subscription';
 import type { HelloInfo } from './types';
 import type { PlatformNodeSummary } from './types/platform';
 import { checkGatewayUrl } from './url';
@@ -128,6 +131,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const platformNodeIdsRef = useRef<Set<string>>(new Set());
 
   const client = useMemo(() => new GatewayClient(nodeUrl ?? ''), [nodeUrl]);
+  /** 路由级订阅控制器：每个 node 连接一个；切路由时由 S3 调 `apply`。 */
+  const subscription = useMemo(
+    () => new SubscriptionController(client, eventStore),
+    [client, eventStore],
+  );
   const nodeTokenRef = useRef(nodeToken);
   nodeTokenRef.current = nodeToken;
   const canConnect = nodeUrl !== null && (nodeToken.trim() !== '' || anonymousNode);
@@ -306,6 +314,30 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setLastError,
   );
 
+  /**
+   * gap / 历史改写后的恢复钩子（契约 §3 / §4.2）。
+   * gap 不重连：Chat 正文重取 `sessions.get` 尾页；页面级快照由 S3 注册的
+   * listener 重新拉取；pending 交互强制重新 hydration。
+   */
+  const recovery = useMemo<ConnectionRecoveryHooks>(
+    () => ({
+      invalidateRouteSnapshot: () => {
+        invalidateRouteSnapshots();
+        const session = useSessionStore.getState();
+        if (session.selectedId !== null) {
+          void session.loadDetail(client, session.selectedId, { force: true });
+        }
+      },
+      hydrateInteractions: () => {
+        void hydrateInteractions();
+      },
+      onSessionHistoryChanged: (sessionId) => {
+        void useSessionStore.getState().reloadAfterHistoryChange(client, sessionId);
+      },
+    }),
+    [client, hydrateInteractions],
+  );
+
   // WS 生命周期：node URL / token / 显式 connect 变化时重建订阅；断线指数退避。
   // biome-ignore lint/correctness/useExhaustiveDependencies: connectSeq 是显式重连触发器
   useEffect(() => {
@@ -326,6 +358,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       token: nodeToken,
       eventStore,
       toast,
+      subscription,
+      recovery,
       settledRef,
       recordSettled,
       reportConnectError,
@@ -343,6 +377,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     canConnect,
     connectSeq,
     eventStore,
+    subscription,
+    recovery,
     reportConnectError,
     recordSettled,
     toast,
@@ -390,6 +426,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     () => ({
       client,
       eventStore,
+      subscription,
       connectionState,
       hello,
       features: hello?.protocol.features ?? [],
@@ -429,6 +466,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     [
       client,
       eventStore,
+      subscription,
       connectionState,
       hello,
       platformUrl,

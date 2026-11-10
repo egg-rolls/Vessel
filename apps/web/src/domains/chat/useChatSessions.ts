@@ -105,6 +105,10 @@ export function useChatSessions({
   const sessionsLoaded = useSessionStore((state) => state.loaded);
   const sessionDetailData = useSessionStore((state) => state.detail);
   const sessionDetailId = useSessionStore((state) => state.detailId);
+  const sessionDetailWindow = useSessionStore((state) => state.detailWindow);
+  const detailNotice = useSessionStore((state) => state.detailNotice);
+  const dismissDetailNotice = useSessionStore((state) => state.dismissDetailNotice);
+  const loadEarlierDetail = useSessionStore((state) => state.loadEarlier);
   const sessionDetailLoading = useSessionStore((state) => state.detailLoading);
   const sessionDetailError = useSessionStore((state) => state.detailError);
   const rosterState = useAgentStore((state) => state.roster);
@@ -348,6 +352,11 @@ export function useChatSessions({
     selectedId && sessionDetailId === selectedId && sessionDetailData?.session_id === selectedId
       ? sessionDetailData
       : null;
+  // 窗口与 detail 一样只认当前选中项，避免切走时旧窗口的下标被用于撤回。
+  const detailWindow =
+    selectedId && sessionDetailWindow?.sessionId === selectedId ? sessionDetailWindow : null;
+  // 一次性提示同样只认当前选中项，避免切换会话时旧提示闪到新会话。
+  const visibleDetailNotice = selectedId && sessionDetailId === selectedId ? detailNotice : null;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: pendingNewSessions 是 ref，.current 读取不进依赖
   const refreshAll = useCallback(() => {
@@ -387,6 +396,10 @@ export function useChatSessions({
     selectedSession,
     sessionDetail,
     sessionDetailId,
+    detailWindow,
+    detailNotice: visibleDetailNotice,
+    dismissDetailNotice,
+    loadEarlierDetail,
     sessionDetailLoading,
     sessionDetailError,
     sessionWindow,

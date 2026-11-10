@@ -13,7 +13,7 @@ import { TeamChatHeader } from './TeamChatHeader';
 import { TeamChatMain } from './TeamChatMain';
 import { TeamChatMembersAside } from './TeamChatMembersAside';
 import type { TeamChatProps } from './team-chat-types';
-import { nextLimitFor, nextMembersLimitFor } from './team-window';
+import { nextMembersLimitFor } from './team-window';
 import { useTeamChat } from './useTeamChat';
 
 export type { TeamChatClient, TeamChatProps } from './team-chat-types';
@@ -59,8 +59,7 @@ export function TeamChat(props: TeamChatProps) {
     reload,
     hasToken,
     canLoadEarlier,
-    limit,
-    setLimit,
+    loadEarlier,
     memberWindow,
     membersLimit,
     setMembersLimit,
@@ -110,7 +109,7 @@ export function TeamChat(props: TeamChatProps) {
           onRetractMessage={requestRetract}
           onRefresh={reload}
           canLoadEarlier={canLoadEarlier}
-          onLoadEarlier={() => setLimit(nextLimitFor(limit))}
+          onLoadEarlier={loadEarlier}
           members={members}
           permissions={permissions}
           asks={asks}

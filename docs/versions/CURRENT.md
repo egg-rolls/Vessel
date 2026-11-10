@@ -50,8 +50,10 @@
   见 `docs/dev/reports/0.49/tenant-id-residual.tsv`；defer-2/3 的清理需独立兼容迁移。
 - **浏览器 14 条目视走查**未做（`docs/dev/reports/0.49/e2e-verify.md` §6）。
 - **0.50 已知限制**：Hub 自动连接只认缺省 8643；Team 成员搜索只覆盖已加载窗口；
-  存量 cwd Team 不自动删除/迁移；暗色表格互换仅在暗色生效；`teams.get` 无游标，
-  更早历史最多 1000 条（触顶静默加载，不再显示"仅显示最近 N 条"提示）。
+  存量 cwd Team 不自动删除/迁移；暗色表格互换仅在暗色生效。Chat 历史走
+  `sessions.get` 的 `message_limit` / `before` 分页（首屏 50 条）；Team 走
+  `teams.get` 的 `before` 游标（首屏 100 条，`messages_has_more` 驱动翻页，
+  超出 64 MiB 回扫窗口时提示一次后停止）。事件订阅按路由收敛到当前会话 / Team / Runs。
 - tag / publish 待 1 收口裁决。
 
 ## 入口

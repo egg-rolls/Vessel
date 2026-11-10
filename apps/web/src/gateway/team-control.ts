@@ -25,7 +25,10 @@ import type {
 
 export interface TeamControl {
   listTeams(): Promise<TeamSummary[]>;
-  getTeam(teamId: string, opts?: { limit?: number; members_limit?: number }): Promise<TeamDetail>;
+  getTeam(
+    teamId: string,
+    opts?: { limit?: number; members_limit?: number; before?: string },
+  ): Promise<TeamDetail>;
   postTeam(input: {
     team_id: string;
     content: string;
@@ -38,7 +41,10 @@ export interface TeamControl {
   retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult>;
   /** 0.27：冻结 / 解冻成员创建闸门。 */
   setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamSummary>;
-  getSession(sessionId: string): Promise<SessionDetail>;
+  getSession(
+    sessionId: string,
+    opts?: { message_limit?: number; before?: string },
+  ): Promise<SessionDetail>;
   /** canonical `agents.list`；管理面 token 会额外返回成员记录。 */
   listAgents(): Promise<AgentSummary[]>;
   /** 0.25：Agent CRUD（与 Teams 共用同一节点的控制面）。 */
@@ -67,6 +73,7 @@ export function createRemoteTeamControl(
         team_id: teamId,
         ...(opts?.limit !== undefined ? { limit: opts.limit } : {}),
         ...(opts?.members_limit !== undefined ? { members_limit: opts.members_limit } : {}),
+        ...(opts?.before !== undefined ? { before: opts.before } : {}),
       });
     },
     postTeam(input) {
@@ -87,9 +94,11 @@ export function createRemoteTeamControl(
     setSpawnFrozen(teamId, frozen) {
       return call<TeamSummary>('teams.spawnFrozen', { team_id: teamId, frozen });
     },
-    async getSession(sessionId) {
+    async getSession(sessionId, opts) {
       const body = await call<{ session?: SessionDetail }>('sessions.get', {
         session_id: sessionId,
+        ...(opts?.message_limit !== undefined ? { message_limit: opts.message_limit } : {}),
+        ...(opts?.before !== undefined ? { before: opts.before } : {}),
       });
       if (!body?.session) throw new Error(`Session not found: ${sessionId}`);
       return body.session;

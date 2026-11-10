@@ -1324,6 +1324,12 @@ export interface TeamLogEntry {
   federation?: TeamLogFederation;
 }
 
+/** `teams.get` 一页：窗口按文件顺序升序，`hasMore` 表示窗口之前是否还有日志。 */
+export interface TeamLogReadWindow {
+  entries: TeamLogEntry[];
+  hasMore: boolean;
+}
+
 /** 跨节点报文在 Team 日志上的结构化回信地址。 */
 export interface TeamLogFederation {
   /** `<principal>@<node_id>:<team_id>` */
@@ -1377,6 +1383,11 @@ export interface TeamDetail {
   team: TeamSummary;
   members: TeamMemberSummary[];
   messages: TeamLogEntry[];
+  /**
+   * 本次返回窗口之前是否还有日志。由有界回扫计算；旧传输缺省视为 false。
+   * 客户端只应在带 `before` 的响应上更新翻页状态，轮询尾页不覆盖。
+   */
+  messages_has_more?: boolean;
 }
 
 export interface TeamDelivery {
@@ -1450,6 +1461,8 @@ export interface TeamGetOptions {
   viewer?: string;
   /** 最近消息条数；缺省 100，最大 1000 */
   limit?: number;
+  /** 稳定游标：返回该 `message_id` 之前、最多 `limit` 条（不含该条）。 */
+  before?: string;
   /** roster 条数窗口（0.21）；缺省 20，最大 100；live 优先、last_seen 降序 */
   members_limit?: number;
 }
@@ -1593,6 +1606,11 @@ export interface TeamStore extends TeamBinder {
   policy(teamId: string): TeamPolicy | undefined;
   list(): TeamRecord[];
   readLog(teamId: string, options?: { limit?: number }): Promise<TeamLogEntry[]>;
+  /** 同 `readLog`，但额外返回窗口前是否还有日志（供 `teams.get` 游标翻页）。 */
+  readLogWindow(
+    teamId: string,
+    options?: { limit?: number; before?: string },
+  ): Promise<TeamLogReadWindow>;
   /** 串行追加；失败抛出 */
   appendLog(entry: TeamLogEntry): Promise<void>;
   /** 等待串行写链落盘（关闭 / 测试用） */

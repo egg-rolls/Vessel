@@ -3,12 +3,15 @@ import { RAIL_MAX_WIDTH } from '../../app/layout';
 import { useRefreshSignal } from '../../app/refresh';
 import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useOptionalToast } from '../../components/ToastProvider';
+import { isCursorOutOfWindowError } from '../../gateway/errors';
+import { onRouteSnapshotInvalidated } from '../../gateway/snapshot-invalidation';
 import type { TeamDetail, TeamMember, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
   applyTeamEvent,
   createTeamEventState,
   latestRotateFailure,
+  mergeEarlierTeamPage,
   mergeMessages,
   sortMessages,
   type TeamEventState,
@@ -26,12 +29,7 @@ import { isOnlineMember } from './member-status';
 import { type MentionChip, memberDisplayName, mentionIds, shortAgentId } from './mention';
 import type { TeamChatProps } from './team-chat-types';
 import { buildTeamRows, type LocalSend, matchWrittenMessage, shouldFetchTeam } from './team-send';
-import {
-  DEFAULT_LIMIT,
-  DEFAULT_MEMBERS_LIMIT,
-  memberWindowFlags,
-  teamWindowFlags,
-} from './team-window';
+import { DEFAULT_LIMIT, DEFAULT_MEMBERS_LIMIT, memberWindowFlags } from './team-window';
 
 const TEAM_POLL_MS = 4_000;
 const ROSTER_RELOAD_COOLDOWN_MS = 2_000;
@@ -60,10 +58,8 @@ export function useTeamChat({
   membersOpen,
   onCloseMembers,
   initialDetail,
-  initialLimit = DEFAULT_LIMIT,
   initialError,
 }: TeamChatProps) {
-  const [limit, setLimit] = useState(initialLimit);
   const [membersLimit, setMembersLimit] = useState(DEFAULT_MEMBERS_LIMIT);
   // 草稿 / chips 按 (node, team) 分槽缓存：切走再回来还在，只有发送成功才清。
   const draftKey = teamDraftKey(nodeKey, teamId);
@@ -86,6 +82,14 @@ export function useTeamChat({
   const [messages, setMessages] = useState<TeamMessage[]>(() =>
     initialDetail ? sortMessages(initialDetail.messages) : [],
   );
+  // 翻页状态：`hasEarlier` 只由首屏 / `before` 响应更新，尾页轮询不覆盖（§4.4）。
+  const [hasEarlier, setHasEarlier] = useState(initialDetail?.messages_has_more === true);
+  const hasEarlierRef = useRef(initialDetail?.messages_has_more === true);
+  /** 首屏尾页的 `messages_has_more` 只采纳一次；之后只由 `before` 响应更新。 */
+  const adoptedTailRef = useRef(initialDetail !== undefined);
+  const earlierInFlightRef = useRef(false);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const [retractTarget, setRetractTarget] = useState<TeamMessage | null>(null);
   const [retracting, setRetracting] = useState(false);
   const [retractError, setRetractError] = useState<string | undefined>();
@@ -113,20 +117,32 @@ export function useTeamChat({
   const loadDetail = useTeamStore((state) => state.loadDetail);
   const postTeam = useTeamStore((state) => state.post);
   const reload = () => {
-    void loadDetail(nodeKey, teamId, client, { limit, members_limit: membersLimit }, 'chat');
+    void loadDetail(
+      nodeKey,
+      teamId,
+      client,
+      { limit: DEFAULT_LIMIT, members_limit: membersLimit },
+      'chat',
+    );
   };
 
   usePolledAction(
     () => {
       const cached = detailRef.current;
       if (shouldFetchTeam(sendingRef.current, cached !== undefined) || !cached) {
-        void loadDetail(nodeKey, teamId, client, { limit, members_limit: membersLimit }, 'chat');
+        void loadDetail(
+          nodeKey,
+          teamId,
+          client,
+          { limit: DEFAULT_LIMIT, members_limit: membersLimit },
+          'chat',
+        );
       }
     },
     {
       enabled: hasToken,
       pollMs: TEAM_POLL_MS,
-      deps: [epoch, teamId, limit, membersLimit, nodeKey],
+      deps: [epoch, teamId, membersLimit, nodeKey],
     },
   );
   const reloadRef = useRef(reload);
@@ -137,6 +153,42 @@ export function useTeamChat({
   }, []);
   useRefreshSignal(refreshFromSignal);
   sendingRef.current = sending;
+
+  // gap / 历史改写后权威快照已过期：事件层只做失效信号，正文重取尾页。
+  // 更早页保留在本地（尾页合并不会丢掉已加载的 before 页）。
+  useEffect(() => onRouteSnapshotInvalidated(() => reloadRef.current()), []);
+
+  /** 加载更早：`before` = 当前窗口首条 `message_id`；分页标志只由本响应更新。 */
+  const loadEarlier = useCallback(() => {
+    if (!hasEarlierRef.current || earlierInFlightRef.current) return;
+    const first = messagesRef.current[0];
+    if (!first) return;
+    earlierInFlightRef.current = true;
+    void (async () => {
+      try {
+        const page = await client.getTeam(teamId, {
+          limit: DEFAULT_LIMIT,
+          before: first.message_id,
+          members_limit: membersLimit,
+        });
+        const merged = mergeEarlierTeamPage(messagesRef.current, page);
+        setMessages(merged.messages);
+        hasEarlierRef.current = merged.hasMore;
+        setHasEarlier(merged.hasMore);
+      } catch (error) {
+        if (isCursorOutOfWindowError(error)) {
+          // 超出 64 MiB 回扫上限：停止翻页，一次性提示，保留已加载内容。
+          hasEarlierRef.current = false;
+          setHasEarlier(false);
+          toast?.info(t('team.chat.historyOutOfWindow'));
+        } else {
+          toast?.error(errorMessage(error));
+        }
+      } finally {
+        earlierInFlightRef.current = false;
+      }
+    })();
+  }, [client, teamId, membersLimit, toast]);
 
   const detail = resourceData(detailState) ?? initialDetail;
   detailRef.current = detail;
@@ -158,10 +210,17 @@ export function useTeamChat({
   }, []);
 
   // 轮询结果并入本地列表；乐观项单独保存，不按内容模糊删除。
+  // 首屏尾页的 `messages_has_more` 只采纳一次；之后的尾页轮询不得覆盖翻页状态。
   useEffect(() => {
-    const incoming = resourceData(detailState)?.messages;
-    if (!incoming || incoming.length === 0) return;
-    setMessages((prev) => mergeMessages(prev, incoming));
+    const page = resourceData(detailState);
+    if (!page) return;
+    if (page.messages.length > 0) setMessages((prev) => mergeMessages(prev, page.messages));
+    if (!adoptedTailRef.current) {
+      adoptedTailRef.current = true;
+      const more = page.messages_has_more === true;
+      hasEarlierRef.current = more;
+      setHasEarlier(more);
+    }
   }, [detailState]);
 
   // `run.*` / `agent.*` 事件只让 roster + 日志失效（250ms 合并一次定向 reload）；
@@ -247,7 +306,10 @@ export function useTeamChat({
       // 响应可能丢失：重新拉一次，按 content + mentions + ts 对账。
       let written: TeamMessage | undefined;
       try {
-        const fresh = await client.getTeam(teamId, { limit, members_limit: membersLimit });
+        const fresh = await client.getTeam(teamId, {
+          limit: DEFAULT_LIMIT,
+          members_limit: membersLimit,
+        });
         setMessages((prev) => mergeMessages(prev, fresh.messages));
         written = matchWrittenMessage(fresh.messages, content, mentions, ts);
       } catch {
@@ -336,7 +398,6 @@ export function useTeamChat({
     onOpenMember(agentId);
   };
 
-  const { canLoadEarlier } = teamWindowFlags(limit, rows.length);
   const error =
     detailState?.status === 'error'
       ? { message: detailState.error, code: detailState.code }
@@ -378,9 +439,8 @@ export function useTeamChat({
     retractError,
     reload,
     hasToken,
-    canLoadEarlier,
-    limit,
-    setLimit,
+    canLoadEarlier: hasEarlier,
+    loadEarlier,
     memberWindow,
     membersLimit,
     setMembersLimit,

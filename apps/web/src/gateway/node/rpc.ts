@@ -47,16 +47,18 @@ export abstract class RpcClient extends ProtocolClient {
     if (!res.ok) {
       let code = 'internal';
       let message = `HTTP ${res.status}`;
+      let details: unknown;
       try {
         const body = (await res.json()) as GatewayErrorBody;
         if (body?.error?.code) {
           code = body.error.code;
           message = body.error.message || message;
         }
+        details = body?.error?.details;
       } catch {
         // 非 JSON 错误体：保留 HTTP 状态
       }
-      throw new GatewayHttpError(code, message, res.status);
+      throw new GatewayHttpError(code, message, res.status, details);
     }
     return (await res.json()) as T;
   }

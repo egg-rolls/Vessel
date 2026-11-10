@@ -188,10 +188,11 @@ export class DefaultTeamService implements AgentTeamService {
     const record = this.store.get(teamId);
     if (record === undefined) return undefined;
     const members = await this.rosterFor(teamId, options.viewer);
-    const messages =
-      options.limit === undefined
-        ? await this.store.readLog(teamId)
-        : await this.store.readLog(teamId, { limit: options.limit });
+    // 分页窗口由日志层计算：无 before = 尾读，有 before = 有界回扫。
+    const window = await this.store.readLogWindow(teamId, {
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      ...(options.before !== undefined ? { before: options.before } : {}),
+    });
     return {
       // 计数用完整 roster；窗口只裁剪返回的 members（DECISION-037 §7.1）。
       team: toTeamSummary(
@@ -200,7 +201,8 @@ export class DefaultTeamService implements AgentTeamService {
         members.filter((member) => member.presence === 'live').length,
       ),
       members: windowRoster(members, options.members_limit),
-      messages,
+      messages: window.entries,
+      messages_has_more: window.hasMore,
     };
   }
 

@@ -47,7 +47,18 @@ export interface SessionSearchHit {
 /** 会话详情（sessions.get 返回 `{ session: SessionState + 最近 RunRecord 投影 }`） */
 export interface SessionDetail {
   session_id: string;
+  /** 本次返回的连续消息窗口（升序）；不传分页参数时是完整的 `state.messages`。 */
   messages: Message[];
+  /**
+   * 完整 `state.messages.length`（切窗之前）。S1 additive；旧 gateway 缺失时
+   * 客户端按「本次 `messages` 就是全量」降级。
+   */
+  messages_total?: number;
+  /**
+   * 上一次响应的 `next_before` 游标；`start > 0` 时才有。旧 gateway 缺失时
+   * 分页关闭。客户端只透传，不解析游标内容。
+   */
+  next_before?: string;
   title?: string;
   preview?: string;
   started_at?: number;

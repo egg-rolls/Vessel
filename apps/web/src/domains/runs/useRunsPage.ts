@@ -11,6 +11,7 @@ import { useToast } from '../../components/ToastProvider';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
+import { onRouteSnapshotInvalidated } from '../../gateway/snapshot-invalidation';
 import { flattenRoster } from '../../gateway/team-roster';
 import { t } from '../../i18n';
 import { buildRunPaletteActions } from '../../state/palette-actions';
@@ -96,6 +97,16 @@ export function useRunsPage(route: RunsRoute, navigate: (route: Route) => void) 
   const reloadDurable = useCallback(() => {
     if (currentNode && durableAvailable) void loadRuns(client, currentNode, 'durable');
   }, [client, currentNode, durableAvailable, loadRuns]);
+
+  // gap / 历史改写后权威快照已过期：重取两段列表（契约 §3 / §4.2）。
+  useEffect(
+    () =>
+      onRouteSnapshotInvalidated(() => {
+        reloadLive();
+        reloadDurable();
+      }),
+    [reloadLive, reloadDurable],
+  );
 
   usePolledAction(reloadLive, {
     enabled: hasToken && currentNode !== null,

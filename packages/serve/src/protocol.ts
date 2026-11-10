@@ -101,6 +101,8 @@ export interface ProtocolError {
   code: ProtocolErrorCode;
   message: string;
   retryable?: boolean;
+  /** RPC 错误的结构化细节（如 `{ reason: 'history_changed' }`）；可选、additive。 */
+  details?: unknown;
 }
 
 /** 服务端 → 客户端帧 */
@@ -117,7 +119,10 @@ export type ServerFrame =
        * 远端按 `(node_id, incarnation, run_id, seq)` 去重；缺失时按 `-` 兼容。
        */
       incarnation: string;
-      /** 本次回放的第一条 seq；无事件时为 0 */
+      /**
+       * 本次 epoch 实际会发送的第一条 seq：有回放窗口时为窗口首条；
+       * 已追平为 `latest_seq + 1`；空缓冲为 0。
+       */
       from_seq: number;
       /** 服务端当前最新 seq；无事件时为 0 */
       latest_seq: number;
@@ -208,6 +213,10 @@ export interface ToolInfo {
 // - task 语义（task/result/cancel）归 ext，web 不定义。
 
 /** 构造协议错误载荷 */
-export function protocolError(code: ProtocolErrorCode, message: string): ProtocolError {
-  return { code, message };
+export function protocolError(
+  code: ProtocolErrorCode,
+  message: string,
+  details?: unknown,
+): ProtocolError {
+  return { code, message, ...(details !== undefined ? { details } : {}) };
 }

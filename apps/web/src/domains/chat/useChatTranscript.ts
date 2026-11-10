@@ -18,8 +18,11 @@ import {
 } from '../../state/runtime-visibility';
 import { resourceData, useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
-import type { SessionLoadOptions } from '../../stores/sessionStore';
-import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/sessionStore';
+import type { SessionDetailWindow, SessionLoadOptions } from '../../stores/sessionStore';
+import {
+  SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE,
+  windowHasEarlier,
+} from '../../stores/sessionStore';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { windowTail } from '../../transcript';
 import { pendingForSession, pendingQueue } from './pending-permissions';
@@ -41,6 +44,17 @@ export interface UseChatTranscriptOptions {
   sessions: readonly SessionInfo[];
   sessionDetail: SessionDetail | null;
   sessionDetailId: string | null;
+  /** `sessionDetail.messages` 的绝对窗口（CONTRACT-msg-system §4.3）。 */
+  detailWindow: SessionDetailWindow | null;
+  /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
+  detailNotice: string | null;
+  dismissDetailNotice: () => void;
+  /** 本地窗口耗尽后取 `next_before` 上一页并前插。 */
+  loadEarlierDetail: (
+    client: GatewayClient,
+    id: string,
+    options?: SessionLoadOptions,
+  ) => Promise<void>;
   sessionDetailLoading: boolean;
   sessionDetailError: string | null;
   queuedRuns: readonly QueuedSubmission[];
@@ -72,6 +86,10 @@ export function useChatTranscript({
   sessions,
   sessionDetail,
   sessionDetailId,
+  detailWindow,
+  detailNotice,
+  dismissDetailNotice,
+  loadEarlierDetail,
   sessionDetailLoading,
   sessionDetailError,
   queuedRuns,
@@ -301,14 +319,26 @@ export function useChatTranscript({
     [visibleTranscript, transcriptLimit],
   );
   const transcriptStart = visibleTranscript.length - transcriptWindow.shown.length;
-  // 前插一页更早的历史（滚动到顶自动触发）。保持引用稳定：TranscriptWindow 用它做
-  // useLayoutEffect 依赖，新身份会让锚点回填 effect 每渲染都重跑。
-  const loadEarlier = useCallback(
-    () => setTranscriptLimit((value) => value + TRANSCRIPT_WINDOW),
-    [],
-  );
-  // 还有更早的分页没加载：滚动到顶自动前插一页（无感加载，不再有按钮 / 提示）。
-  const hasEarlier = transcriptStart > 0;
+  // 分页状态只认属于当前选中会话的那一份窗口（切走时旧响应不能串到新会话）。
+  const selectedWindow =
+    detailWindow !== null && detailWindow.sessionId === selectedId ? detailWindow : null;
+  const windowNextBefore = selectedWindow?.next_before;
+  // `keep_messages` / 撤回必须是完整 `state.messages` 的绝对下标：窗口首条消息的
+  // 绝对下标 + 本地下标（CONTRACT-msg-system §4.3）。
+  const messageIndexOffset = selectedWindow?.start ?? 0;
+  // 分页状态读取放 ref：`loadEarlier` 的身份必须稳定（TranscriptWindow 用它做
+  // useLayoutEffect 依赖，新身份会让锚点回填 effect 每渲染都重跑）。
+  const earlierStateRef = useRef({ localHidden: 0, nextBefore: undefined as string | undefined });
+  earlierStateRef.current = { localHidden: transcriptStart, nextBefore: windowNextBefore };
+  const loadEarlier = useCallback(() => {
+    const { localHidden, nextBefore } = earlierStateRef.current;
+    // 先扩本地可见窗口；耗尽后（本地下标已到 0）再拉服务端上一页。
+    setTranscriptLimit((value) => value + TRANSCRIPT_WINDOW);
+    if (localHidden > 0 || nextBefore === undefined || !selectedId) return;
+    void loadEarlierDetail(client, selectedId, { epoch });
+  }, [client, epoch, loadEarlierDetail, selectedId]);
+  // 还有更早的分页没加载：本地窗口外还有可见消息，或服务端还有 `next_before`。
+  const hasEarlier = transcriptStart > 0 || windowHasEarlier(selectedWindow);
   const hasTranscript = visibleTranscript.length > 0;
   const truncated = visibleGroups.some((group) => snapshot.truncatedRuns.has(group.runId));
 
@@ -334,6 +364,9 @@ export function useChatTranscript({
     transcriptMessages,
     transcriptWindow,
     transcriptStart,
+    messageIndexOffset,
+    detailNotice,
+    dismissDetailNotice,
     hasEarlier,
     hasTranscript,
     truncated,

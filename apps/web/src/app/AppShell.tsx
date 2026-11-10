@@ -27,12 +27,15 @@ import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
 import { useOutdatedBuild } from './useOutdatedBuild';
 import { paneCssVars, usePaneResize } from './usePaneResize';
+import { useRouteSubscription } from './useRouteSubscription';
 import { useViewportWidth } from './useViewportWidth';
 
 export function AppShell() {
   const locale = useLocale();
   const { theme } = useTheme();
   const { route, navigate } = useHashRoute();
+  // 路由级订阅：Chat 会话页只回放本会话，Team / Runs 只收失效信号（契约 §4.1）。
+  useRouteSubscription(route);
   const toast = useToast();
   const toastFeed = useToastFeed();
   const outdated = useOutdatedBuild();

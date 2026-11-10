@@ -8,7 +8,7 @@
  * - 去重：`lastAppliedSeq` 防止 50ms 合批重复应用；EventStore 的 seq 去重之外再兜一层。
  * - Body 历史：优先服务端 `member.body_history`；仅字段缺失时才累积事件观察值。
  */
-import type { TeamBodyHistoryEntry, TeamMember, TeamMessage } from '../gateway/types';
+import type { TeamBodyHistoryEntry, TeamDetail, TeamMember, TeamMessage } from '../gateway/types';
 
 /** 事件观察到的已退役 Body（仅 `body_history` 缺失时使用）。 */
 export interface ObservedBody {
@@ -65,6 +65,23 @@ export function mergeMessages(
   for (const message of base) byId.set(message.message_id, message);
   for (const message of incoming) byId.set(message.message_id, message);
   return sortMessages([...byId.values()]);
+}
+
+/**
+ * 「加载更早」响应合并（CONTRACT-msg-system §4.4，数据层）。
+ *
+ * - 前插按 `message_id` 幂等去重（`mergeMessages` 已排序）；
+ * - `hasMore` **只**由 `before` 响应更新；尾页轮询不得拿它覆盖翻页状态。
+ * 组件层（S3 的 `useTeamChat`）只需保留 `before` 响应的返回值。
+ */
+export function mergeEarlierTeamPage(
+  current: readonly TeamMessage[],
+  page: Pick<TeamDetail, 'messages' | 'messages_has_more'>,
+): { messages: TeamMessage[]; hasMore: boolean } {
+  return {
+    messages: mergeMessages(current, page.messages),
+    hasMore: page.messages_has_more === true,
+  };
 }
 
 function asString(value: unknown): string | undefined {

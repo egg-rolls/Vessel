@@ -83,6 +83,8 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 
 **事件是 spec，回放是 oracle**：同一 session 的事件重放必须产生相同状态与投影（`rebuildMetrics` 与订阅者状态一致）；SSE 断线重连的 `since` 续传、重复与缺口纳入回放等价探针，不只测“能连上”。
 
+**gateway wire 回放**：WS/SSE 的单次回放有界——对过滤后的事件从最新往回取（≤ 1 MiB / 2000 条）；`hello.from_seq` 是本次 epoch 实际发送的第一条 seq；更早区间由 `gap` 表示不可恢复，恢复走 RPC 快照而不是无限重放。历史正文以权威存储（`sessions.get` / `teams.get`）为准。
+
 <a id="trace"></a>
 
 ### trace 落盘

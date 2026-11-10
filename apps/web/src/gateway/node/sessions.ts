@@ -134,16 +134,26 @@ export abstract class SessionsClient extends RpcClient {
   }
 
   /**
-   * 读取单个会话的完整状态（含 messages）。
+   * 读取单个会话状态（messages 是连续窗口）。
    * WS `sessions.get` 优先；方法不可用/超时再回退 0.5 HTTP RPC。
    * not_found 是业务结果，不触发回退。
+   *
+   * `message_limit` / `before` 是 S1 additive 参数：不传时旧行为（全量）。
+   * 旧 gateway 忽略未知参数，响应缺 `messages_total` / `next_before` 时调用方按
+   * "本次 messages 即全量" 降级。
    */
-  async getSession(sessionId: string): Promise<SessionDetail> {
+  async getSession(
+    sessionId: string,
+    opts: { message_limit?: number; before?: string } = {},
+  ): Promise<SessionDetail> {
+    const params = {
+      session_id: sessionId,
+      ...(opts.message_limit !== undefined ? { message_limit: opts.message_limit } : {}),
+      ...(opts.before !== undefined ? { before: opts.before } : {}),
+    };
     if (this.state === 'open' && this.helloInfo) {
       try {
-        const body = await this.request<{ session?: SessionDetail }>('sessions.get', {
-          session_id: sessionId,
-        });
+        const body = await this.request<{ session?: SessionDetail }>('sessions.get', params);
         const session = body.session;
         if (!session) throw new GatewayHttpError('not_found', 'Session not found');
         return { ...session, messages: normalizeMessages(session.messages) };
@@ -152,9 +162,7 @@ export abstract class SessionsClient extends RpcClient {
         // WS 不可用：继续走 HTTP RPC
       }
     }
-    const body = await this.rpc<{ session?: SessionDetail }>('sessions.get', {
-      session_id: sessionId,
-    });
+    const body = await this.rpc<{ session?: SessionDetail }>('sessions.get', params);
     const session = body.session;
     if (!session) throw new GatewayHttpError('not_found', 'Session not found');
     return { ...session, messages: normalizeMessages(session.messages) };

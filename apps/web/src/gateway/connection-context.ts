@@ -2,6 +2,7 @@ import { createContext } from 'react';
 import type { EventStore } from '../state/event-store';
 import type { ConnectionState, GatewayClient } from './node';
 import type { NodeSelectionFallback } from './node-selection';
+import type { SubscriptionController } from './subscription';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -27,6 +28,12 @@ export interface ConnectionContextValue {
   /** node 客户端（`/v1/rpc`、`/v1/events`）。 */
   client: GatewayClient;
   eventStore: EventStore;
+  /**
+   * 路由级事件订阅控制器（S2 数据层）。S3 在路由变化时调用
+   * `subscription.apply({kind:'chat', sessionId})` 等；控制器负责 feature gate
+   * 与订阅 epoch hello 的区分。
+   */
+  subscription: SubscriptionController;
   connectionState: ConnectionState;
   hello: HelloInfo | null;
   features: string[];

@@ -31,6 +31,7 @@ import {
   type TeamDeclaration,
   TeamError,
   type TeamLogEntry,
+  type TeamLogReadWindow,
   type TeamRecord,
   type TeamStore,
   type TeamUpdatePatch,
@@ -454,6 +455,15 @@ export class FileTeamStore implements TeamStore {
   async readLog(teamId: string, options: { limit?: number } = {}): Promise<TeamLogEntry[]> {
     await this.ready();
     return this.writerFor(teamId).read(options);
+  }
+
+  /** 同 `readLog`，额外返回窗口前是否还有日志（`teams.get` 游标翻页）。 */
+  async readLogWindow(
+    teamId: string,
+    options: { limit?: number; before?: string } = {},
+  ): Promise<TeamLogReadWindow> {
+    await this.ready();
+    return this.writerFor(teamId).readWindow(options);
   }
 
   /** 串行追加；失败 reject（由调用方映射 team_log_write_failed） */

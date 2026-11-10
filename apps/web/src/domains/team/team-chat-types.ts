@@ -10,7 +10,10 @@ import type {
 import type { StoredEvent } from '../../state/events';
 
 export interface TeamChatClient {
-  getTeam(teamId: string, opts?: { limit?: number; members_limit?: number }): Promise<TeamDetail>;
+  getTeam(
+    teamId: string,
+    opts?: { limit?: number; members_limit?: number; before?: string },
+  ): Promise<TeamDetail>;
   postTeam(input: {
     team_id: string;
     content: string;
@@ -63,6 +66,5 @@ export interface TeamChatProps {
   onCloseMembers: () => void;
   /** 测试 / 预览注入，避免 SSR 依赖 effect。 */
   initialDetail?: TeamDetail;
-  initialLimit?: number;
   initialError?: { message: string; code?: string };
 }

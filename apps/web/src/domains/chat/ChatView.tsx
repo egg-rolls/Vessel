@@ -150,6 +150,10 @@ export function ChatView({
     sessions: sessionsApi.sessions,
     sessionDetail: sessionsApi.sessionDetail,
     sessionDetailId: sessionsApi.sessionDetailId,
+    detailWindow: sessionsApi.detailWindow,
+    detailNotice: sessionsApi.detailNotice,
+    dismissDetailNotice: sessionsApi.dismissDetailNotice,
+    loadEarlierDetail: sessionsApi.loadEarlierDetail,
     sessionDetailLoading: sessionsApi.sessionDetailLoading,
     sessionDetailError: sessionsApi.sessionDetailError,
     queuedRuns: submitApi.queuedRuns,
@@ -360,6 +364,9 @@ export function ChatView({
           transcriptWindow={transcriptApi.transcriptWindow}
           transcriptStart={transcriptApi.transcriptStart}
           transcriptMessages={transcriptApi.transcriptMessages}
+          messageIndexOffset={transcriptApi.messageIndexOffset}
+          detailNotice={transcriptApi.detailNotice}
+          onDismissDetailNotice={transcriptApi.dismissDetailNotice}
           cancelledJobs={submitApi.cancelledJobs}
           verbosity={transcriptApi.visibility.verbosity}
           errorLevel={transcriptApi.errorLevel}

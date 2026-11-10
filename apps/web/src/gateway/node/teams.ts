@@ -21,11 +21,16 @@ export abstract class TeamsClient extends AgentsClient {
     return body.teams ?? [];
   }
 
-  getTeam(teamId: string, opts?: { limit?: number; members_limit?: number }): Promise<TeamDetail> {
+  getTeam(
+    teamId: string,
+    opts?: { limit?: number; members_limit?: number; before?: string },
+  ): Promise<TeamDetail> {
     return this.rpc<TeamDetail>('teams.get', {
       team_id: teamId,
       ...(opts?.limit !== undefined ? { limit: opts.limit } : {}),
       ...(opts?.members_limit !== undefined ? { members_limit: opts.members_limit } : {}),
+      // S1 additive：稳定游标 = 上一页首条 message_id。
+      ...(opts?.before !== undefined ? { before: opts.before } : {}),
     });
   }
 

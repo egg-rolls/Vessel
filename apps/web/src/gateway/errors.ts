@@ -45,3 +45,48 @@ export function gatewayErrorCode(text: string | null | undefined): string | null
 export function describeGatewayErrorText(text: string | null | undefined): string | null {
   return describeGatewayError(gatewayErrorCode(text));
 }
+
+/** 错误对象上的稳定 code：HTTP RPC 与 WS `res` 都可能携带。 */
+function errorCodeOf(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+function errorDetailsReasonOf(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const details = (error as { details?: unknown }).details;
+  if (typeof details !== 'object' || details === null) return null;
+  const reason = (details as { reason?: unknown }).reason;
+  return typeof reason === 'string' ? reason : null;
+}
+
+function errorTextOf(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return typeof error === 'string' ? error : '';
+}
+
+export function isConflictError(error: unknown): boolean {
+  if (errorCodeOf(error) === 'conflict') return true;
+  return gatewayErrorCode(errorTextOf(error)) === 'conflict';
+}
+
+/**
+ * `sessions.get.before` 锚点失效：历史前缀被改写（rewind / compaction）。
+ * S1 的 WS `res` 不携带 details，因此同时按 message 文本兜底。
+ */
+export function isHistoryChangedError(error: unknown): boolean {
+  if (!isConflictError(error)) return false;
+  if (errorDetailsReasonOf(error) === 'history_changed') return true;
+  return errorTextOf(error).toLowerCase().includes('history changed');
+}
+
+/**
+ * `teams.get.before` 超出本地保留窗口（64 MiB 回扫上限）。
+ * 客户端收到后停止翻页并给一次性提示，保留已加载内容。
+ */
+export function isCursorOutOfWindowError(error: unknown): boolean {
+  if (!isConflictError(error)) return false;
+  if (errorDetailsReasonOf(error) === 'cursor_out_of_window') return true;
+  return errorTextOf(error).includes('cursor_out_of_window');
+}

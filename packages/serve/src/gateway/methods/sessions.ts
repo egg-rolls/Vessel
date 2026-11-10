@@ -72,6 +72,94 @@ function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+/** `sessions.get.message_limit` 上限：与 `events.list` 的 500 对齐。 */
+const MAX_MESSAGE_LIMIT = 500;
+/** 有 `before` 但未给 `message_limit` 时的页大小。 */
+const DEFAULT_MESSAGE_LIMIT = 100;
+const MESSAGE_CURSOR_VERSION = 1;
+
+/**
+ * 历史分页游标：绝对数组下标 + 边界锚点。
+ *
+ * 不用 `derived_upto_seq` / `updated_at` 做校验：运行中追加会推进它们，
+ * 会把正常追加误判成前缀被改写。锚点只随「返回窗口之前那条消息」变化。
+ */
+interface MessageCursor {
+  /** 下一页窗口的 end（绝对下标） */
+  index: number;
+  /** `messages[index - 1].timestamp ?? -1` */
+  timestamp: number;
+  /** `messages[index - 1].content.length` */
+  length: number;
+  /** `messages[index - 1].role` */
+  role: string;
+}
+
+function encodeMessageCursor(cursor: MessageCursor): string {
+  const payload = {
+    v: MESSAGE_CURSOR_VERSION,
+    i: cursor.index,
+    t: cursor.timestamp,
+    l: cursor.length,
+    r: cursor.role,
+  };
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+/** 解析失败返回 undefined；调用方映射为 `invalid_params`。 */
+function decodeMessageCursor(raw: string): MessageCursor | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || parsed.v !== MESSAGE_CURSOR_VERSION) return undefined;
+  const { i, t, l, r } = parsed;
+  if (typeof i !== 'number' || !Number.isInteger(i) || i < 0) return undefined;
+  if (typeof t !== 'number' || !Number.isFinite(t)) return undefined;
+  if (typeof l !== 'number' || !Number.isInteger(l) || l < 0) return undefined;
+  if (typeof r !== 'string') return undefined;
+  return { index: i, timestamp: t, length: l, role: r };
+}
+
+/** `message_limit`：缺省 undefined；存在但不是 1..500 的整数 → invalid_params。 */
+function parseMessageLimit(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_MESSAGE_LIMIT
+  ) {
+    throw new RpcError(
+      'invalid_params',
+      `message_limit must be an integer between 1 and ${MAX_MESSAGE_LIMIT}`,
+    );
+  }
+  return value;
+}
+
+/** `before`：缺省 undefined；存在但不是合法游标 → invalid_params。 */
+function parseMessageCursor(value: unknown): MessageCursor | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new RpcError('invalid_params', 'before must be a non-empty cursor string');
+  }
+  const cursor = decodeMessageCursor(value);
+  if (cursor === undefined) {
+    throw new RpcError('invalid_params', 'before is not a valid cursor');
+  }
+  return cursor;
+}
+
+/** 游标锚点不再匹配：前缀被改写（compaction / rewind），客户端应重取尾页。 */
+function historyChanged(): never {
+  throw new RpcError('conflict', 'Session history changed; reload the latest page', {
+    reason: 'history_changed',
+  });
+}
+
 type CompactContextFn = (sessionId: string) => Promise<{ removed: number; remaining: number }>;
 
 /** `compact_unavailable` 可能以 RpcError.code 或 message 形式到达（远程 / 本地门面）。 */
@@ -363,7 +451,12 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       params_schema: {
         type: 'object',
         required: ['session_id'],
-        properties: { session_id: { type: 'string', minLength: 1 } },
+        properties: {
+          session_id: { type: 'string', minLength: 1 },
+          // S1：历史分页（additive）。不传 = 旧行为（全量 messages）。
+          message_limit: { type: 'integer', minimum: 1, maximum: MAX_MESSAGE_LIMIT },
+          before: { type: 'string', minLength: 1 },
+        },
       },
       result_schema: {
         type: 'object',
@@ -379,7 +472,51 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           runStore !== undefined && state.last_run_id !== undefined
             ? await runStore.load(state.last_run_id)
             : undefined;
-        return { session: toSessionView(state, latest) };
+
+        const all = state.messages ?? [];
+        const total = all.length;
+        const requestedLimit = parseMessageLimit(params.message_limit);
+        const cursor = parseMessageCursor(params.before);
+
+        let start = 0;
+        let end = total;
+        if (cursor !== undefined) {
+          // 游标不是授权凭据：session 权限链已在 load 前完成；这里只校验历史一致性。
+          const index = cursor.index;
+          if (index > total) historyChanged();
+          const anchor = all[index - 1];
+          if (anchor === undefined) historyChanged();
+          if (
+            (anchor.timestamp ?? -1) !== cursor.timestamp ||
+            anchor.content.length !== cursor.length ||
+            anchor.role !== cursor.role
+          ) {
+            historyChanged();
+          }
+          end = index;
+          start = Math.max(0, index - (requestedLimit ?? DEFAULT_MESSAGE_LIMIT));
+        } else if (requestedLimit !== undefined) {
+          start = Math.max(0, total - requestedLimit);
+        }
+
+        const windowAnchor = start > 0 ? all[start - 1] : undefined;
+        return {
+          session: {
+            ...toSessionView(state, latest),
+            messages: all.slice(start, end),
+            messages_total: total,
+            ...(windowAnchor !== undefined
+              ? {
+                  next_before: encodeMessageCursor({
+                    index: start,
+                    timestamp: windowAnchor.timestamp ?? -1,
+                    length: windowAnchor.content.length,
+                    role: windowAnchor.role,
+                  }),
+                }
+              : {}),
+          },
+        };
       },
     },
     {

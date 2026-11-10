@@ -373,6 +373,7 @@ interface WsData {
   principal?: TenantPrincipal;
   /** events.subscribe 过滤 */
   runId?: string;
+  sessionId?: string;
   types?: string[];
   /** 0.48 M3：插件 WS 连接；存在时该 WS 不进入 `wsClients`。 */
   pluginWs?: PluginWsConnection;
@@ -396,12 +397,75 @@ const WS_BACKPRESSURE_LOW = 512 * 1024;
 const REPLAY_BUDGET_BYTES = 1024 * 1024;
 /** 回放条数兜底：小事件很多时按条数收口。 */
 const REPLAY_MAX_EVENTS = 2_000;
+/** `run_id → session_id` 归属映射上限（LRU）。 */
+const RUN_SESSION_MAP_LIMIT = 5_000;
+
+/** 事件自带的 `session_id`；没有时返回 undefined。 */
+function eventSessionId(event: RunEvent): string | undefined {
+  const data = event.data;
+  if (data === null || typeof data !== 'object') return undefined;
+  const value = (data as Record<string, unknown>).session_id;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/** `types` 过滤：条目以 `*` 结尾时按前缀匹配，否则精确匹配；空数组 = 不过滤。 */
+function matchesTypeFilter(types: readonly string[] | undefined, type: string): boolean {
+  if (types === undefined || types.length === 0) return true;
+  for (const pattern of types) {
+    if (pattern.endsWith('*')) {
+      if (type.startsWith(pattern.slice(0, -1))) return true;
+    } else if (type === pattern) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 事件可见性：`run_id` / `session_id` / `types` 全部 AND。
+ *
+ * `session_id` 归属 fail-closed：既没有 `data.session_id`、映射也命不中时不发送。
+ * `runSessions` 在回放期传入本次扫描的局部映射，避免依赖被裁剪后的全局 LRU。
+ */
+function acceptsEvent(
+  event: RunEvent,
+  filter: { runId?: string; sessionId?: string; types?: readonly string[] },
+  runSessions: ReadonlyMap<string, string>,
+  fallbackSessions?: ReadonlyMap<string, string>,
+): boolean {
+  if (filter.runId !== undefined && event.run_id !== filter.runId) return false;
+  if (!matchesTypeFilter(filter.types, event.type)) return false;
+  if (filter.sessionId !== undefined) {
+    const direct = eventSessionId(event);
+    if (direct !== undefined) return direct === filter.sessionId;
+    const mapped = runSessions.get(event.run_id) ?? fallbackSessions?.get(event.run_id);
+    return mapped === filter.sessionId;
+  }
+  return true;
+}
+
+/** 按 seq 顺序扫描一段回放源，重建 run → session 局部归属。 */
+function buildRunSessions(items: readonly SeqEvent[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const item of items) {
+    const sessionId = eventSessionId(item.event);
+    if (sessionId !== undefined) map.set(item.event.run_id, sessionId);
+  }
+  return map;
+}
 
 const DEFAULT_PORT = 8642;
 const DEFAULT_HOSTNAME = '127.0.0.1';
 const DEFAULT_MAX_BODY = 1024 * 1024;
 
-const BASE_FEATURES = ['events.replay', 'permissions', 'tools', 'static', 'runs.async'];
+const BASE_FEATURES = [
+  'events.replay',
+  'events.session-filter',
+  'permissions',
+  'tools',
+  'static',
+  'runs.async',
+];
 
 /** 生成 32 字节随机令牌（base64url） */
 function generateToken(): string {
@@ -654,6 +718,40 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const pluginWsClients = new Set<Ws>();
 
   /**
+   * `run_id → session_id` 归属映射（LRU 5000）。
+   *
+   * 事件缺 `session_id` 时靠它把 run 生命周期事件归到会话订阅者；
+   * 映射不到就不发（fail-closed），正文仍由 `sessions.get` 兜底。
+   */
+  const runSessions = new Map<string, string>();
+
+  function rememberRunSession(runId: unknown, sessionId: unknown): void {
+    if (typeof runId !== 'string' || runId.length === 0) return;
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return;
+    // Map 的插入顺序即 LRU：命中先删再插，溢出删最旧。
+    if (runSessions.has(runId)) runSessions.delete(runId);
+    runSessions.set(runId, sessionId);
+    while (runSessions.size > RUN_SESSION_MAP_LIMIT) {
+      const oldest = runSessions.keys().next().value;
+      if (oldest === undefined) break;
+      runSessions.delete(oldest);
+    }
+  }
+
+  function rememberEventSession(event: RunEvent): void {
+    const sessionId = eventSessionId(event);
+    if (sessionId !== undefined) rememberRunSession(event.run_id, sessionId);
+  }
+
+  /** `runs.start` 的返回值同样能建立归属（不等 `run.started` 事件到达）。 */
+  function rememberRunsStartResult(method: string, result: unknown): void {
+    if (method !== 'runs.start') return;
+    if (result === null || typeof result !== 'object') return;
+    const record = result as Record<string, unknown>;
+    rememberRunSession(record.run_id, record.session_id);
+  }
+
+  /**
    * 0.27：交互注册表（权限 / ask）。执行、调度、run 队列都不在 gateway：
    * 它只消费 `run.*` 事件并维护 pending / answered / orphaned。
    */
@@ -742,7 +840,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   function helloFrame(fromSeq: number): ServerFrame {
-    // 求值顺序与原实现一致：latest → ts → node → oldest。
+    // fromSeq 由回放窗口解析后传入；这里只取同一时刻的 latest / node 快照。
     const latestSeq = hub.latestSeq;
     const ts = Date.now();
     const node = nodeInfo();
@@ -753,7 +851,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       incarnation,
       fromSeq,
       latestSeq,
-      oldestSeq: hub.oldestSeq,
       ts,
     });
   }
@@ -762,7 +859,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return buildGapFrame({ nodeId, gap });
   }
 
-  function sendFrame(ws: Ws, frame: ServerFrame): boolean {
+  function sendFrameText(ws: Ws, text: string): boolean {
     if (ws.readyState !== 1) {
       wsClients.delete(ws);
       return false;
@@ -773,7 +870,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       return false;
     }
     try {
-      ws.send(JSON.stringify(frame));
+      ws.send(text);
       return true;
     } catch {
       wsClients.delete(ws);
@@ -781,25 +878,54 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
+  function sendFrame(ws: Ws, frame: ServerFrame): boolean {
+    return sendFrameText(ws, JSON.stringify(frame));
+  }
+
+  /** 回放窗口预算与发送复用同一字符串，避免为算大小再序列化一次。 */
+  function serializeEventFrame(item: SeqEvent): string {
+    return JSON.stringify(eventFrame(item));
+  }
+
   function sendResult(ws: Ws, id: string, ok: boolean, result?: unknown, error?: ProtocolError) {
     sendFrame(ws, ok ? resultFrame({ nodeId, id, result }) : errorFrame({ nodeId, id, error }));
   }
 
-  function wsAccepts(ws: Ws, event: RunEvent): boolean {
-    // 0.49 C5：读取端不按 tenant_id 过滤（单公司）。legacy id 的旧事件原样可见；
-    // `all_tenants` 仍被接受，但不再参与可见性判断。
-    if (ws.data.runId !== undefined && event.run_id !== ws.data.runId) return false;
-    if (ws.data.types !== undefined && !ws.data.types.includes(event.type)) return false;
-    return true;
+  /**
+   * 0.49 C5：读取端不按 tenant_id 过滤（单公司）。legacy id 的旧事件原样可见；
+   * `all_tenants` 仍被接受，但不再参与可见性判断。
+   *
+   * `replaySessions` 是回放期按 seq 顺序扫描出的局部归属；缺省用全局 LRU。
+   */
+  function wsAccepts(
+    ws: Ws,
+    event: RunEvent,
+    replaySessions?: ReadonlyMap<string, string>,
+  ): boolean {
+    return acceptsEvent(
+      event,
+      { runId: ws.data.runId, sessionId: ws.data.sessionId, types: ws.data.types },
+      replaySessions ?? runSessions,
+      replaySessions !== undefined ? runSessions : undefined,
+    );
   }
 
-  function sendEventToWs(ws: Ws, item: SeqEvent): void {
-    if (!wsAccepts(ws, item.event)) return;
+  /**
+   * 发送一条事件；`encoded` 来自回放窗口时直接复用（不再序列化）。
+   * 背压拒收与 gap 行为与实时广播一致。
+   */
+  function sendEventToWs(
+    ws: Ws,
+    item: SeqEvent,
+    replaySessions?: ReadonlyMap<string, string>,
+    encoded?: string,
+  ): void {
+    if (!wsAccepts(ws, item.event, replaySessions)) return;
     const inflight = ws.getBufferedAmount();
     if (!ws.data.backpressure.admit(item.seq, inflight)) return;
     const gap = ws.data.backpressure.takeGap(inflight);
     if (gap) sendFrame(ws, gapFrame(gap));
-    sendFrame(ws, eventFrame(item));
+    sendFrameText(ws, encoded ?? serializeEventFrame(item));
   }
 
   function flushWsGap(ws: Ws): void {
@@ -808,8 +934,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   function broadcastEvent(item: SeqEvent): void {
-    const encoded = JSON.stringify(eventFrame(item));
-    for (const ws of [...wsClients]) sendEventToWs(ws, item);
+    const encoded = serializeEventFrame(item);
+    for (const ws of [...wsClients]) sendEventToWs(ws, item, undefined, encoded);
     const sseFrame = `data: ${encoded}\n\n`;
     for (const [ctrl, state] of [...sseClients]) {
       // 回放期间由 pull 驱动，避免新事件插到历史事件前面。
@@ -820,23 +946,30 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
+  interface ReplayFrame {
+    item: SeqEvent;
+    encoded: string;
+  }
+
   /**
    * 有界回放窗口：从最新事件往回取，直到字节预算或条数预算用完。
    *
-   * 返回被跳过的最后一条 seq（`skippedTo`），调用方把它和环形缓冲自身的
-   * 缺口合并成一个 gap；客户端按既有语义从 `to_seq` 重新订阅，下一轮
-   * 回放就只剩这段尾部，能立刻追到最新事件。
+   * 输入必须是**过滤后**的事件（session_id / run_id / types 先过滤），这样
+   * 窄订阅不会因为无关事件占满预算而拿不到自己的尾部。`encode` 的结果既用于
+   * 计算字节数也用于发送。返回被跳过的最后一条 seq（`skippedTo`），调用方把它
+   * 和环形缓冲自身的缺口合并成一个 gap。
    */
   function tailReplayWindow(
     items: readonly SeqEvent[],
-    sizeOf: (item: SeqEvent) => number,
-  ): { items: SeqEvent[]; skippedTo?: number } {
-    const kept: SeqEvent[] = [];
+    encode: (item: SeqEvent) => string,
+  ): { frames: ReplayFrame[]; skippedTo?: number } {
+    const kept: ReplayFrame[] = [];
     let bytes = 0;
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i];
       if (item === undefined) continue;
-      const size = sizeOf(item);
+      const encoded = encode(item);
+      const size = Buffer.byteLength(encoded, 'utf8');
       if (
         kept.length > 0 &&
         (bytes + size > REPLAY_BUDGET_BYTES || kept.length >= REPLAY_MAX_EVENTS)
@@ -844,33 +977,69 @@ export function startGateway(opts: GatewayOptions): Gateway {
         break;
       }
       bytes += size;
-      kept.push(item);
+      kept.push({ item, encoded });
     }
     kept.reverse();
     const first = kept[0];
-    if (first === undefined) return { items: [] };
+    if (first === undefined) return { frames: [] };
     const oldest = items[0]?.seq;
-    if (oldest === undefined || first.seq <= oldest) return { items: kept };
-    return { items: kept, skippedTo: first.seq - 1 };
+    if (oldest === undefined || first.item.seq <= oldest) return { frames: kept };
+    return { frames: kept, skippedTo: first.item.seq - 1 };
   }
 
-  function replayEventsTo(ws: Ws): void {
-    const gap = hub.gapFor(ws.data.since);
-    const window = tailReplayWindow(
-      hub.since(ws.data.since).filter((item) => wsAccepts(ws, item.event)),
-      (item) => JSON.stringify(eventFrame(item)).length,
-    );
-    const gapTo = Math.max(gap?.to_seq ?? 0, window.skippedTo ?? 0);
+  interface ReplayPlan {
+    frames: ReplayFrame[];
+    skippedTo?: number;
+    /** 环形缓冲自身的缺口（保留区之前） */
+    ringGap?: EventGap;
+    /** 本次 epoch 实际会发送的第一条 seq */
+    fromSeq: number;
+    replaySessions: Map<string, string>;
+  }
+
+  function planReplay(ws: Ws): ReplayPlan {
+    const source = hub.since(ws.data.since);
+    // 归属先按 seq 顺序扫描完整回放源：窗口裁剪后仍能识别 run.started。
+    const replaySessions = buildRunSessions(source);
+    const filtered = source.filter((item) => wsAccepts(ws, item.event, replaySessions));
+    const window = tailReplayWindow(filtered, serializeEventFrame);
+    const ringGap = hub.gapFor(ws.data.since) ?? undefined;
+    return {
+      ...window,
+      ...(ringGap !== undefined ? { ringGap } : {}),
+      fromSeq: window.frames[0]?.item.seq ?? (hub.latestSeq === 0 ? 0 : hub.latestSeq + 1),
+      replaySessions,
+    };
+  }
+
+  /** hello → gap → 有界回放。hello 已由调用方按 epoch 语义先发。 */
+  function sendReplay(ws: Ws, plan: ReplayPlan): void {
+    const gapTo = Math.max(plan.ringGap?.to_seq ?? 0, plan.skippedTo ?? 0);
     if (gapTo > 0) {
-      sendFrame(ws, gapFrame({ from_seq: gap?.from_seq ?? ws.data.since + 1, to_seq: gapTo }));
+      sendFrame(
+        ws,
+        gapFrame({ from_seq: plan.ringGap?.from_seq ?? ws.data.since + 1, to_seq: gapTo }),
+      );
     }
-    for (const item of window.items) sendEventToWs(ws, item);
+    for (const frame of plan.frames) {
+      sendEventToWs(ws, frame.item, plan.replaySessions, frame.encoded);
+    }
   }
 
+  /** 连接级 epoch：鉴权成功后发 hello，再回放。 */
   function replayTo(ws: Ws): void {
     wsClients.add(ws);
-    sendFrame(ws, helloFrame(ws.data.since));
-    replayEventsTo(ws);
+    const plan = planReplay(ws);
+    sendFrame(ws, helloFrame(plan.fromSeq));
+    sendReplay(ws, plan);
+  }
+
+  /** 订阅 epoch：每次成功的 `events.subscribe` 都重新发 hello；返回该 hello 的 from_seq。 */
+  function resubscribeTo(ws: Ws): number {
+    const plan = planReplay(ws);
+    sendFrame(ws, helloFrame(plan.fromSeq));
+    sendReplay(ws, plan);
+    return plan.fromSeq;
   }
 
   /**
@@ -879,6 +1048,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
    */
   const unsubscribe = hub.subscribeSequenced((item) => {
     const { event: safeEvent } = item;
+    // 归属先更新再广播：同一批实时事件里 session_id 订阅者不落后。
+    rememberEventSession(safeEvent);
     agentRegistry.ingest(safeEvent);
     broadcastEvent(item);
   });
@@ -1044,6 +1215,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
           since: { type: 'integer', minimum: 0 },
           since_ts: { type: 'integer', minimum: 0 },
           run_id: { type: 'string' },
+          // S1：按会话收敛（run_id 映射 + 事件自带 session_id）。
+          session_id: { type: 'string' },
+          // 条目以 `*` 结尾 = 前缀匹配；空数组等价于未提供。
           types: { type: 'array', items: { type: 'string' } },
         },
       },
@@ -1061,6 +1235,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       handler: (params, ctx) => {
         const since = typeof params.since === 'number' ? params.since : 0;
         const mode = ctx.connection === 'ws' ? 'ws' : 'stream';
+        // WS 路径由 applyWsSubscribe 用本次 epoch 实际的 hello.from_seq 覆盖后再发 res
+        // （窗口需要连接过滤，handler 里拿不到）；HTTP 路径没有 hello，返回下一期望序号。
         return {
           subscribed: true,
           from_seq: since + 1,
@@ -1227,10 +1403,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
           frame.id,
           false,
           undefined,
-          protocolError(legacyResponseCode(response.error), response.error.message),
+          protocolError(
+            legacyResponseCode(response.error),
+            response.error.message,
+            response.error.details,
+          ),
         );
         return;
       }
+      rememberRunsStartResult(legacyMethod, response.result);
       // Web `getRun` 现有契约是裸 RunStatus；canonical runs.get 返回 { run }。
       const result =
         frame.method === 'run.get' &&
@@ -1270,28 +1451,44 @@ export function startGateway(opts: GatewayOptions): Gateway {
       'ws',
     );
     if (response.ok) {
-      if (frame.method === 'events.subscribe') applyWsSubscribe(ws, frame.params);
-      sendResult(ws, frame.id, true, response.result);
+      rememberRunsStartResult(frame.method, response.result);
+      let result = response.result;
+      if (frame.method === 'events.subscribe') {
+        // res 与刚发送的 hello 使用同一个 plan：不重复计算 / 序列化回放窗口。
+        const fromSeq = applyWsSubscribe(ws, frame.params);
+        if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
+          result = { ...(result as Record<string, unknown>), from_seq: fromSeq };
+        }
+      }
+      sendResult(ws, frame.id, true, result);
     } else {
       sendResult(
         ws,
         frame.id,
         false,
         undefined,
-        protocolError(response.error.code as ProtocolError['code'], response.error.message),
+        protocolError(
+          response.error.code as ProtocolError['code'],
+          response.error.message,
+          response.error.details,
+        ),
       );
     }
   }
 
-  function applyWsSubscribe(ws: Ws, raw: unknown): void {
+  /** 应用订阅过滤并发送新的 epoch；返回本次实际会发送的第一条 seq（供 res 对齐）。 */
+  function applyWsSubscribe(ws: Ws, raw: unknown): number {
     const params =
       raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     if (typeof params.since === 'number' && params.since >= 0) ws.data.since = params.since;
     ws.data.runId = typeof params.run_id === 'string' ? params.run_id : undefined;
+    ws.data.sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
     ws.data.types = Array.isArray(params.types)
       ? params.types.filter((item): item is string => typeof item === 'string')
       : undefined;
-    replayEventsTo(ws);
+    // 空数组等价于未提供：修正旧实现「空数组拒收一切」的歧义。
+    if (ws.data.types !== undefined && ws.data.types.length === 0) ws.data.types = undefined;
+    return resubscribeTo(ws);
   }
 
   /**
@@ -1934,7 +2131,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       principal,
       'http',
     );
-    if (response.ok) return response.result;
+    if (response.ok) {
+      rememberRunsStartResult(method, response.result);
+      return response.result;
+    }
     // 0.4 兼容：default tenant 未配置 session backend 时旧路径返回 invalid_request。
     if (
       response.error.code === 'internal' &&
@@ -2006,6 +2206,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ...(record.params !== undefined ? { params: record.params } : {}),
     };
     const response: RpcResponse = await dispatcher.dispatchFor(request, principal, 'http');
+    if (response.ok) rememberRunsStartResult(request.method, response.result);
     return json(response, 200, extra);
   }
 
@@ -2256,15 +2457,23 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
         const since = parseSince(url.searchParams.get('since'));
         const sseRunId = url.searchParams.get('run_id') ?? undefined;
-        const sseTypes = (url.searchParams.get('types') ?? '')
+        const sseSessionId = url.searchParams.get('session_id') ?? undefined;
+        const typeList = (url.searchParams.get('types') ?? '')
           .split(',')
           .map((item) => item.trim())
           .filter((item) => item.length > 0);
+        // 空列表等价于未提供；条目以 `*` 结尾按前缀匹配。
+        const sseTypes = typeList.length > 0 ? typeList : undefined;
+        // 回放期局部归属（在 start 里按 seq 顺序重建）；实时事件回落到全局 LRU。
+        let sseReplaySessions: ReadonlyMap<string, string> = new Map();
         const accepts = (event: RunEvent): boolean => {
-          // 0.49 C5：不按 tenant_id 过滤；run_id / types 过滤保留。
-          if (sseRunId !== undefined && event.run_id !== sseRunId) return false;
-          if (sseTypes.length > 0 && !sseTypes.includes(event.type)) return false;
-          return true;
+          // 0.49 C5：不按 tenant_id 过滤；run_id / session_id / types 过滤保留。
+          return acceptsEvent(
+            event,
+            { runId: sseRunId, sessionId: sseSessionId, types: sseTypes },
+            sseReplaySessions,
+            runSessions,
+          );
         };
         let controller: SseController | undefined;
         let state: SseClientState | undefined;
@@ -2284,29 +2493,46 @@ export function startGateway(opts: GatewayOptions): Gateway {
               };
               state = clientState;
               sseClients.set(ctrl, clientState);
-              writeSse(ctrl, clientState, 'retry: 3000\n\n');
-              writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(since))}\n\n`);
-              const gap = hub.gapFor(since);
+
+              // 先算窗口再写 hello：hello.from_seq 必须是本次实际会发送的第一条。
+              const source = hub.since(since);
+              sseReplaySessions = buildRunSessions(source);
               const window = tailReplayWindow(
-                hub.since(since).filter((item) => accepts(item.event)),
-                (item) => JSON.stringify(eventFrame(item)).length,
+                source.filter((item) => accepts(item.event)),
+                serializeEventFrame,
               );
-              const gapTo = Math.max(gap?.to_seq ?? 0, window.skippedTo ?? 0);
+              const fromSeq =
+                window.frames[0]?.item.seq ?? (hub.latestSeq === 0 ? 0 : hub.latestSeq + 1);
+              writeSse(ctrl, clientState, 'retry: 3000\n\n');
+              writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(fromSeq))}\n\n`);
+              const ringGap = hub.gapFor(since);
+              const gapTo = Math.max(ringGap?.to_seq ?? 0, window.skippedTo ?? 0);
               if (gapTo > 0) {
                 writeSse(
                   ctrl,
                   clientState,
-                  clientState.encodeGap({ from_seq: gap?.from_seq ?? since + 1, to_seq: gapTo }),
+                  clientState.encodeGap({
+                    from_seq: ringGap?.from_seq ?? since + 1,
+                    to_seq: gapTo,
+                  }),
                 );
               }
+
+              // 窗口内已序列化，pull 时直接复用；窗口外的新事件再按需序列化。
+              const windowFrames = new Map<number, string>();
+              for (const frame of window.frames) {
+                windowFrames.set(frame.item.seq, `data: ${frame.encoded}\n\n`);
+              }
+              const cursor = window.frames[0]?.item.seq ?? hub.latestSeq + 1;
               clientState.replay = {
                 // 有界回放：从保留窗口的第一条开始，而不是从 since 全量重放。
-                cursor: window.items[0]?.seq ?? hub.latestSeq + 1,
+                cursor,
                 batch: SSE_REPLAY_BATCH,
                 accepts,
-                encode: (item) => `data: ${JSON.stringify(eventFrame(item))}\n\n`,
+                encode: (item) =>
+                  windowFrames.get(item.seq) ?? `data: ${serializeEventFrame(item)}\n\n`,
               };
-              if (clientState.replay.cursor > hub.latestSeq) clientState.replay = undefined;
+              if (cursor > hub.latestSeq) clientState.replay = undefined;
             },
             pull() {
               if (!controller || !state) return;

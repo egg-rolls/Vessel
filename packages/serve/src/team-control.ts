@@ -95,6 +95,8 @@ export interface TeamDetailLike {
   team: TeamSummaryLike;
   members: TeamMemberLike[];
   messages: TeamMessageLike[];
+  /** 窗口之前是否还有日志；旧控制面缺省视为 false。 */
+  messages_has_more?: boolean;
 }
 
 /** 单条 mention 投递结果。 */
@@ -204,7 +206,7 @@ export interface TeamControlLike {
   list(options?: { viewer?: string }): Promise<TeamSummaryLike[]>;
   get(
     teamId: string,
-    options?: { viewer?: string; limit?: number; members_limit?: number },
+    options?: { viewer?: string; limit?: number; before?: string; members_limit?: number },
   ): Promise<TeamDetailLike | undefined>;
   /**
    * 完整 roster（不受 `members_limit` 窗口影响），team-info 计数用。
