@@ -11,7 +11,8 @@ export type IconName =
   | 'transcript'
   | 'reply'
   | 'retract'
-  | 'chevron';
+  | 'chevron'
+  | 'attach';
 
 /** 纸飞机：`send`（输入框发送键）与 `resend`（重发消息）共用同一支笔形。 */
 const PLANE = (
@@ -64,6 +65,10 @@ const PATHS: Record<IconName, ReactNode> = {
   resend: PLANE,
   /** 展开 / 收起指示（details 的 summary 右侧，随 open 旋转 90°）。 */
   chevron: <path d="M6.5 4.5 10.5 8l-4 3.5" />,
+  /** 回形针：输入框工具栏「引用文件」入口。 */
+  attach: (
+    <path d="M15.01 7.74 8.58 14.17a4.2 4.2 0 0 1-5.95-5.95l6.44-6.44a2.8 2.8 0 0 1 3.96 3.96l-6.44 6.44a1.4 1.4 0 0 1-1.98-1.98l5.94-5.94" />
+  ),
 };
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {

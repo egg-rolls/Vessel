@@ -12,7 +12,7 @@
  */
 
 import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AutoGrowTextarea } from '../../components/ui';
 import type { MessageRef, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -59,6 +59,11 @@ export interface TeamComposerProps {
   refs?: readonly MessageRef[];
   /** 删除一条附件引用（下标即 refs 里的位置）。 */
   onRemoveRef?: (index: number) => void;
+  /**
+   * 加一条附件引用（现有 `addRef` 的包装）。给「引用文件」入口用；缺省时不渲染该入口
+   * （团队消息目前还没有 refs 投递路径，由调用方决定是否开启）。
+   */
+  onAddRef?: (ref: MessageRef) => boolean;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
 }
@@ -78,6 +83,7 @@ export function TeamComposer({
   disabled = false,
   refs = [],
   onRemoveRef,
+  onAddRef,
   contextUsage,
 }: TeamComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -141,6 +147,16 @@ export function TeamComposer({
     note: t('team.mention.title'),
   }));
   const refItems: ComposerAttachment[] = [...refsToAttachments(refs), ...mentionAttachments];
+
+  // 「引用文件」入口：与会话页同一份 popover，只是写到团队的草稿槽。
+  const refCount = refs.length;
+  const attach = useMemo(
+    () =>
+      onAddRef === undefined
+        ? undefined
+        : { addPath: (path: string) => onAddRef({ kind: 'file' as const, path }), refCount },
+    [onAddRef, refCount],
+  );
 
   /** 引用区删除：mention 落回既有 chips 状态，附件引用回写下标。 */
   const removeRef = (id: string) => {
@@ -209,6 +225,7 @@ export function TeamComposer({
 
       <ComposerField
         contextUsage={contextUsage}
+        attach={attach}
         primary={
           <ComposerSendButton
             label={sending ? t('team.composer.sending') : t('team.composer.send')}

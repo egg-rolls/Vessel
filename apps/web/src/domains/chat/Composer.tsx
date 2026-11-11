@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Tooltip } from '../../components/Tooltip';
 import { AutoGrowTextarea, Button } from '../../components/ui';
 import type { MessageRef } from '../../gateway/types';
@@ -39,6 +39,7 @@ export function Composer({
   stopping = false,
   refs,
   onRemoveRef,
+  onAddRef,
   contextUsage,
 }: {
   value: string;
@@ -57,11 +58,16 @@ export function Composer({
   stopping?: boolean;
   /**
    * 待发送的附件引用（只有路径，没有正文）。缺省 / 空数组时不渲染 chip 行。
-   * 状态由调用方持有：文件选择对话框与工具栏按钮由 composer-bar 那单接上。
+   * 状态由调用方持有（草稿槽）；工具栏的「引用文件」入口与文件选择共用这一份。
    */
   refs?: readonly MessageRef[];
   /** 删除一条引用（下标即 refs 里的位置）。 */
   onRemoveRef?: (index: number) => void;
+  /**
+   * 加一条引用（现有 `addRef`：本地只拦形状，路径边界在 `runs.start` 判）。
+   * 缺省时不渲染「引用文件」入口。
+   */
+  onAddRef?: (ref: MessageRef) => boolean;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
 }) {
@@ -107,6 +113,17 @@ export function Composer({
     if (index >= 0) onRemoveRef?.(index);
   };
 
+  // 「引用文件」入口的接线：粘贴路径 popover 只交路径，种类在这里固定成 file
+  // （粘贴无法判断图片 / 文档，且这一版不读内容、不上传）。
+  const refCount = refs?.length ?? 0;
+  const attach = useMemo(
+    () =>
+      onAddRef === undefined
+        ? undefined
+        : { addPath: (path: string) => onAddRef({ kind: 'file' as const, path }), refCount },
+    [onAddRef, refCount],
+  );
+
   return (
     <ChatDock>
       {/* 焦点环由 `.composer-field` 的 `:focus-within` 出（一层，标出「输入 + 工具栏」），
@@ -146,6 +163,7 @@ export function Composer({
         />
         <ComposerField
           contextUsage={contextUsage}
+          attach={attach}
           primary={
             !hasToken || !connected ? (
               <Button variant="primary" onClick={onOpenConnection}>

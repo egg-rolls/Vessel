@@ -5,7 +5,7 @@ import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useOptionalToast } from '../../components/ToastProvider';
 import { isCursorOutOfWindowError, isHistoryChangedError } from '../../gateway/errors';
 import { onRouteSnapshotInvalidated } from '../../gateway/snapshot-invalidation';
-import type { TeamDetail, TeamMember, TeamMessage } from '../../gateway/types';
+import type { MessageRef, TeamDetail, TeamMember, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
   applyTeamEvent,
@@ -22,6 +22,7 @@ import {
   useComposerChips,
   useComposerDraftStore,
   useComposerDraftText,
+  useComposerRefs,
 } from '../../stores/composerDraftStore';
 import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
@@ -74,6 +75,8 @@ export function useTeamChat({
   const writeDraft = useComposerDraftStore((state) => state.setText);
   const writeChips = useComposerDraftStore((state) => state.setChips);
   const clearDraft = useComposerDraftStore((state) => state.clear);
+  // 待发送引用（0.52）：与会话页同一份草稿槽机制，只是 key 换成 (node, team)。
+  const refs = useComposerRefs(draftKey);
   const setDraft = useCallback(
     (value: string) => writeDraft(draftKey, value),
     [writeDraft, draftKey],
@@ -81,6 +84,22 @@ export function useTeamChat({
   const setChips = useCallback(
     (next: MentionChip[]) => writeChips(draftKey, next),
     [writeChips, draftKey],
+  );
+  /**
+   * 加 / 删一条待发送引用。
+   *
+   * 形状校验在「引用文件」入口（`attach-paths`，与会话页同一套）里先做完，这里只写草稿槽；
+   * 条数上限由草稿槽自己的 `addRef` 兜底（32 条）。
+   * 注意：`teams.post` 目前**没有** refs 字段，团队消息发送不会带上这些路径
+   * （需要另一单给 teams.post 加 refs；这里的 chip 至少是按 (node, team) 分槽持久化的草稿）。
+   */
+  const addRef = useCallback(
+    (ref: MessageRef): boolean => useComposerDraftStore.getState().addRef(draftKey, ref),
+    [draftKey],
+  );
+  const removeRef = useCallback(
+    (index: number) => useComposerDraftStore.getState().removeRef(draftKey, index),
+    [draftKey],
   );
   const [sends, setSends] = useState<LocalSend[]>([]);
   const [sending, setSending] = useState(false);
@@ -507,6 +526,9 @@ export function useTeamChat({
     setDraft,
     chips,
     setChips,
+    refs,
+    addRef,
+    removeRef,
     retryHint,
     setRetryHint,
     sending,

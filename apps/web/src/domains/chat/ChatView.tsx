@@ -471,6 +471,7 @@ export function ChatView({
           focusSignal={composerFocus}
           refs={submitApi.refs}
           onRemoveRef={submitApi.removeRef}
+          onAddRef={submitApi.addRef}
           contextUsage={transcriptApi.contextUsage}
         />
       </section>

@@ -11,14 +11,27 @@ import {
   ComposerToolbar,
   contextPercent,
 } from '@vessel-agent/plugin-ui';
-import type { MouseEvent, ReactNode } from 'react';
+import {
+  type MouseEvent,
+  type ReactNode,
+  useCallback,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Button, cn, Icon } from '../../components/ui';
 import { formatTokenCount } from '../../format';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
-  COMPOSER_TOOLBAR_HOST_ACTIONS,
+  type ComposerAttachBinding,
+  ComposerAttachButton,
+  ComposerAttachPopover,
+} from './ComposerAttach';
+import {
   type ComposerToolbarHostActions,
+  composerHostActions,
   composerToolbarLabel,
   useComposerToolbarActions,
 } from './composer-toolbar';
@@ -164,6 +177,9 @@ export function ComposerSendButton({
   );
 }
 
+/** 没有宿主动作时的稳定空表（`useMemo` 依赖同一引用，不每次渲染换新对象）。 */
+export const NO_COMPOSER_TOOLBAR_HOST_ACTIONS: ComposerToolbarHostActions = {};
+
 /**
  * 底部横向工具栏：左侧扩展槽（插件贡献的按钮 + 宿主自绘控件），右侧
  * 上下文用量 + 主按钮（发送 / 配置连接）。
@@ -179,7 +195,7 @@ export function ComposerSendButton({
 export function ComposerToolbarBar({
   contextUsage,
   primary,
-  hostActions = COMPOSER_TOOLBAR_HOST_ACTIONS,
+  hostActions = NO_COMPOSER_TOOLBAR_HOST_ACTIONS,
   children,
   className,
 }: {
@@ -211,9 +227,12 @@ export function ComposerToolbarBar({
  *
  * 判据只看事件目标，不给工具栏 / 卡片套 `preventDefault` 或 `stopPropagation`，
  * 所以按钮自己的点击、tab 顺序、Enter / Space 触发都还是原样。
+ *
+ * `[role="dialog"]` 是「引用文件」popover：它挂在字段容器里，点它的标题 / 提示 /
+ * 错误行不是「我要去打字」，不能把焦点抢回输入框。
  */
 const COMPOSER_INTERACTIVE_SELECTOR =
-  'button, [role="button"], [role="option"], [role="menuitem"], [role="checkbox"], [role="switch"], [role="tab"], a[href], input, select, textarea, [contenteditable="true"]';
+  'button, [role="button"], [role="option"], [role="menuitem"], [role="checkbox"], [role="switch"], [role="tab"], [role="dialog"], a[href], input, select, textarea, [contenteditable="true"]';
 
 /**
  * 点卡片 / 工具栏 / 引用区的**空白处**时，把焦点交给同一张卡片里的 textarea。
@@ -264,14 +283,15 @@ export function focusComposerInputOnBlankClick(event: MouseEvent<HTMLElement>): 
  * {@link focusComposerInputOnBlankClick}；按钮自己的点击不被接管。
  *
  * 会话 `Composer` 与团队 `TeamComposer` 都走这里：容器 DOM 只有一份，页面只
- * 提供输入框（行为不同）与右侧主按钮。
+ * 提供输入框（行为不同）、右侧主按钮与（可选）「引用文件」的接线。
  */
 export function ComposerField({
   children,
   contextUsage,
   primary,
-  hostActions = COMPOSER_TOOLBAR_HOST_ACTIONS,
+  hostActions = NO_COMPOSER_TOOLBAR_HOST_ACTIONS,
   slot,
+  attach,
 }: {
   /** 输入框：各页自绘（Enter / IME / mention 行为留在页面里），样式共用 `.composer-input`。 */
   children: ReactNode;
@@ -283,13 +303,53 @@ export function ComposerField({
   hostActions?: ComposerToolbarHostActions;
   /** 扩展槽里宿主自绘的控件（排在插件贡献项之后）。 */
   slot?: ReactNode;
+  /**
+   * 「引用文件」入口（0.52 粘贴路径）：给了就在左侧扩展槽出宿主按钮 + popover，
+   * 并把 `attach-file` 这个宿主动作 id 接到同一个开关（插件声明同名 id 即可复用）。
+   * 缺省（还没接引用的页面）不渲染按钮 —— 不留点了没反应的死按钮。
+   */
+  attach?: ComposerAttachBinding;
 }) {
+  const [attachOpen, setAttachOpen] = useState(false);
+  const popoverId = useId();
+  const attachAnchorRef = useRef<HTMLSpanElement | null>(null);
+  // 收起后把焦点还给触发按钮：不然 popover 一卸载，键盘用户的焦点就落到 body。
+  const closeAttach = useCallback(() => {
+    setAttachOpen(false);
+    attachAnchorRef.current?.querySelector('button')?.focus();
+  }, []);
+  const toggleAttach = useCallback(() => setAttachOpen((open) => !open), []);
+  // 宿主动作表：宿主按钮与插件贡献的 `attach-file` 条目共用这一个回调。
+  const actions = useMemo(
+    () =>
+      attach === undefined
+        ? hostActions
+        : { ...hostActions, ...composerHostActions({ attachFile: toggleAttach }) },
+    [hostActions, attach, toggleAttach],
+  );
+
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: 点空白聚焦 textarea 只是鼠标便捷入口（不是「可点控件」）
     // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘流不变：Tab 直接到 textarea / 工具栏按钮，空白处不需要键盘等价键
     <div className="composer-field" onClick={focusComposerInputOnBlankClick}>
       {children}
-      <ComposerToolbarBar contextUsage={contextUsage} primary={primary} hostActions={hostActions}>
+      {attach !== undefined && attachOpen && (
+        <ComposerAttachPopover
+          id={popoverId}
+          addPath={attach.addPath}
+          refCount={attach.refCount}
+          onClose={closeAttach}
+        />
+      )}
+      <ComposerToolbarBar contextUsage={contextUsage} primary={primary} hostActions={actions}>
+        {attach !== undefined && (
+          <ComposerAttachButton
+            open={attachOpen}
+            popoverId={popoverId}
+            onClick={toggleAttach}
+            anchorRef={attachAnchorRef}
+          />
+        )}
         {slot}
       </ComposerToolbarBar>
     </div>

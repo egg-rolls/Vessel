@@ -16,15 +16,13 @@ import {
   useComposerRefs,
 } from '../../stores/composerDraftStore';
 import type { SessionLoadOptions } from '../../stores/sessionStore';
+import { ATTACH_PATH_MAX } from './attach-paths';
 import { errorMessage } from './errors';
 import { type StartInNewAgentResult, startInNewAgent } from './new-session';
 import { refsErrorText } from './refs-error';
 import type { QueuedSubmission } from './StreamItems';
 
 const QUEUE_POLL_MS = 2000;
-
-/** 单条引用路径的字符上限（与 core 的 `MESSAGE_REF_PATH_MAX` 同一口径）。 */
-const MESSAGE_REF_PATH_MAX = 4096;
 
 /** 两组引用是否同序同内容（只有 `path` / `kind` 参与比较，展示值不参与）。 */
 function sameRefs(left: readonly MessageRef[], right: readonly MessageRef[]): boolean {
@@ -279,8 +277,8 @@ export function useChatSubmit({
   const addRef = useCallback(
     (ref: MessageRef): boolean => {
       const where = chatDraftKey(selectedId);
-      if (ref.path.length > MESSAGE_REF_PATH_MAX) {
-        toast.error(t('chat.refs.reject.tooLong', { max: MESSAGE_REF_PATH_MAX }));
+      if (ref.path.length > ATTACH_PATH_MAX) {
+        toast.error(t('chat.refs.reject.tooLong', { max: ATTACH_PATH_MAX }));
         return false;
       }
       if (!/^(?:[\\/]|[A-Za-z]:[\\/])/.test(ref.path)) {

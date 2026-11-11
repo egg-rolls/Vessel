@@ -10,6 +10,7 @@ import {
 import { cn } from '../../components/ui';
 import type {
   AskUserRequest,
+  MessageRef,
   PermissionRequest,
   TeamDetail,
   TeamMember,
@@ -177,6 +178,10 @@ export interface TeamChatMainProps {
   onDraftChange: (value: string) => void;
   chips: readonly MentionChip[];
   onChipsChange: (chips: MentionChip[]) => void;
+  /** 待发送的附件引用（只有路径）；与会话页同一份草稿槽机制。 */
+  refs: readonly MessageRef[];
+  onRemoveRef: (index: number) => void;
+  onAddRef: (ref: MessageRef) => boolean;
   onSend: () => void;
   sending: boolean;
   /** 发送受理序号（每次受理自增，send / resend 共用）：变化即贴底。 */
@@ -224,6 +229,9 @@ export function TeamChatMain({
   onDraftChange,
   chips,
   onChipsChange,
+  refs,
+  onRemoveRef,
+  onAddRef,
   onSend,
   sending,
   sendTick,
@@ -393,6 +401,9 @@ export function TeamChatMain({
           onChange={onDraftChange}
           mentions={chips}
           onMentionsChange={onChipsChange}
+          refs={refs}
+          onRemoveRef={onRemoveRef}
+          onAddRef={onAddRef}
           onSend={onSend}
           sending={sending}
           hasToken={hasToken}

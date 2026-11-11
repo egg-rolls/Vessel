@@ -28,6 +28,7 @@ export function ComposerSlot({
   focusSignal,
   refs,
   onRemoveRef,
+  onAddRef,
   contextUsage,
 }: {
   pendingItem: PendingQueueItem | null;
@@ -51,6 +52,8 @@ export function ComposerSlot({
   refs?: readonly MessageRef[];
   /** 删除一条引用（下标即 refs 里的位置）。 */
   onRemoveRef?: (index: number) => void;
+  /** 加一条引用（现有 addRef）：工具栏「引用文件」入口用；缺省时不渲染该入口。 */
+  onAddRef?: (ref: MessageRef) => boolean;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
 }) {
@@ -103,6 +106,7 @@ export function ComposerSlot({
       stopping={stopping}
       refs={refs}
       onRemoveRef={onRemoveRef}
+      onAddRef={onAddRef}
       contextUsage={contextUsage}
     />
   );

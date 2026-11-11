@@ -44,6 +44,9 @@ export function TeamChat(props: TeamChatProps) {
     setDraft,
     chips,
     setChips,
+    refs,
+    addRef,
+    removeRef,
     retryHint,
     setRetryHint,
     sending,
@@ -131,6 +134,9 @@ export function TeamChat(props: TeamChatProps) {
           onDraftChange={onComposerChange}
           chips={chips}
           onChipsChange={setChips}
+          refs={refs}
+          onRemoveRef={removeRef}
+          onAddRef={addRef}
           onSend={() => void handleSend()}
           sending={sending}
           sendTick={sendTick}
