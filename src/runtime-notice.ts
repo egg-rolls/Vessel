@@ -19,8 +19,14 @@
 
 import type { EventStream } from '../packages/core/src/index';
 
-/** 通知作用域：与 `gateway.reload` 的 scope 同名（`update` 留给其它来源）。 */
-export type RuntimeNoticeScope = 'config' | 'permission' | 'tools' | 'mcp' | 'update';
+/**
+ * 通知作用域：与 `gateway.reload` 的 scope 同名（`update` / `peer` 留给其它来源）。
+ *
+ * - 热应用：`config` / `permission` / `tools` / `mcp`；
+ * - 版本检查：`update`；
+ * - 成员停下（`peer-notices.ts`）：`peer`，定向到父 session。
+ */
+export type RuntimeNoticeScope = 'config' | 'permission' | 'tools' | 'mcp' | 'update' | 'peer';
 
 /** 契约 §3 的 `runtime.notice` data 形状。 */
 export interface RuntimeNotice {
@@ -47,6 +53,19 @@ export interface StoredNotice {
   id: number;
   notice: RuntimeNotice;
   ts: number;
+  /**
+   * 定向：只注入该 session（缺省 = 所有 session 的下一轮都能看到）。
+   *
+   * 成员停下这种「只对某一个父级有意义」的通知必须定向，否则先跑起来的别的
+   * session 会把它消费掉（游标按 session 各自推进）。
+   */
+  to?: string;
+}
+
+/** `publish` 的可选投递范围（总线内部语义，不进事件 payload）。 */
+export interface RuntimeNoticeTarget {
+  /** session id；只注入该 session。缺省 = 广播给所有 session 的下一轮。 */
+  to?: string;
 }
 
 export interface RuntimeNoticeBusOptions {
@@ -79,11 +98,16 @@ function trimTo(value: string, max: number): string {
 }
 
 export interface RuntimeNoticeBus {
-  /** 入队 + 可选广播；返回入队后的通知 id。 */
-  publish(notice: RuntimeNotice): number;
+  /**
+   * 入队 + 可选广播；返回入队后的通知 id。
+   *
+   * `target.to` 指定只注入该 session（成员停下这类定向通知）；不传 = 广播给所有
+   * session 的下一轮（热应用 / 版本通知）。
+   */
+  publish(notice: RuntimeNotice, target?: RuntimeNoticeTarget): number;
   /**
    * 取出该 session 尚未消费的通知（最多 `limit` 条），并推进该 session 的游标。
-   * 不传 sessionId 时用 `_` 作为匿名游标。
+   * 不传 sessionId 时用 `_` 作为匿名游标。定向给别的 session 的通知不取。
    */
   take(sessionId: string | undefined, limit?: number): RuntimeNotice[];
   /** 已入队通知的只读快照（诊断 / 测试） */
@@ -113,12 +137,13 @@ export function createRuntimeNoticeBus(options: RuntimeNoticeBusOptions = {}): R
   };
 
   return {
-    publish(input) {
+    publish(input, target) {
       const notice = normalizeNotice(input);
       const ts = now();
       const id = nextId;
       nextId += 1;
-      retained.push({ id, notice, ts });
+      const to = target?.to;
+      retained.push({ id, notice, ts, ...(to !== undefined ? { to } : {}) });
       // 环形裁剪：只保留最近 N 条；同时把游标推进到裁剪后的最小 id 之前，
       // 避免游标落后于缓冲窗口时把旧通知反复当成「未读」。
       if (retained.length > MAX_RETAINED_NOTICES) {
@@ -131,7 +156,11 @@ export function createRuntimeNoticeBus(options: RuntimeNoticeBusOptions = {}): R
     take(sessionId, limit = 5) {
       const key = sessionId !== undefined && sessionId !== '' ? sessionId : '_';
       const cursor = cursors.get(key) ?? 0;
-      const pending = retained.filter((entry) => entry.id > cursor);
+      // 定向给别的 session 的通知对本 session 不可见（它们各自的游标仍小于该 id，
+      // 仍会在目标 session 的下一轮命中）。
+      const pending = retained.filter(
+        (entry) => entry.id > cursor && (entry.to === undefined || entry.to === key),
+      );
       if (pending.length === 0) return [];
       const selected = pending.slice(0, Math.max(0, limit));
       // 游标只推进到**已取出**的最后一条：达到 limit 时剩下的留到下一轮。

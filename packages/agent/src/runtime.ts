@@ -646,6 +646,7 @@ const MEMBER_AGENT_ACTIONS: readonly string[] = [
   'post',
   'send',
   'list',
+  'read',
 ];
 
 /** 成员侧 agent 工具的可见参数；父级 schema 有同名字段时沿用父级定义 */
@@ -653,7 +654,7 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   action: {
     type: 'string',
     enum: [...MEMBER_AGENT_ACTIONS],
-    description: 'create | hire | close | rotate | post | send | list',
+    description: 'create | hire | close | rotate | post | send | list | read',
   },
   name: { type: 'string', description: 'create/hire: display name' },
   model: { type: 'string', description: 'create/hire: model override' },
@@ -661,7 +662,8 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   to: {
     type: 'string',
     description:
-      'send: target agent; use the location value from the source line as-is, or a member id',
+      'send: target agent; use the location value from the source line as-is, or a member id; ' +
+      'read: member id, session id or name',
   },
   content: { type: 'string', description: 'send/post: message text' },
   interrupt: {
@@ -681,16 +683,15 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
     description:
       'send: with interrupt, deliver an existing inbox message id instead of new content',
   },
-  final: {
-    type: 'boolean',
-    description:
-      'send: this message is your turn final report — after it lands the run will not ' +
-      'auto-deliver its final text to your caller parent, so the report is not sent twice. ' +
-      'Leave it unset for progress updates and confirmations',
-  },
   messages: {
     type: 'array',
-    description: 'send: [{to, content, interrupt?, notify?, message_id?, final?}]',
+    description: 'send: [{to, content, interrupt?, notify?, message_id?}]',
+  },
+  limit: {
+    type: 'integer',
+    minimum: 1,
+    maximum: 50,
+    description: 'read: how many trailing messages to return (default 20, max 50)',
   },
   members: {
     type: 'array',
@@ -735,9 +736,9 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
       'rotate (rotate your own body; startup_prompt is required), ' +
       'post (append to your team log only; nobody is notified), ' +
       'send (dispatch a message to a member; interrupt:true for urgent, notify:true to ' +
-      'append to the target inbox plus a summary wake, final:true when the message is your ' +
-      'turn final report so the run does not auto-deliver its final text to your caller), ' +
-      'list (list the caller-visible roster).',
+      'append to the target inbox plus a summary wake), ' +
+      'list (list the caller-visible roster), ' +
+      'read (read the last messages of a member session; read-only, role + truncated text).',
     inputSchema: {
       ...schema,
       properties,

@@ -669,8 +669,6 @@ export interface AdmitInput {
    * 缺省 = 普通 `run`。
    */
   resume?: boolean;
-  /** 内部（非 wire、非持久）：本轮给父级的最终回报，收口不再自动回传最终文本。 */
-  final?: boolean;
 }
 
 /** 统一准入结果；`session_id` 是 body id */
@@ -742,8 +740,6 @@ export interface DispatchInput {
   origin_run_id?: string;
   /** 0.41：内部（非 wire、非持久）一次 messages 数组的 notify 边计数 key。 */
   batch_key?: string;
-  /** 内部（非 wire、非持久）：本轮给父级的最终回报，收口不再自动回传最终文本。 */
-  final?: boolean;
 }
 
 /** dispatch 结果：queued 表示已入队；notified 表示 notify 成功；rejected 是明确拒绝 */
@@ -1020,6 +1016,34 @@ export interface AgentEvent {
 /** 事件监听器；抛错会被隔离，不影响服务行为 */
 export type AgentEventListener = (event: AgentEvent) => void;
 
+/**
+ * 成员停下 / 被关闭的四种结局（装配层 peerStops 端口的载荷）。
+ */
+export type PeerStopKind = 'completed' | 'failed' | 'cancelled' | 'closed';
+
+/**
+ * 一条「成员真的停了」的变更。
+ *
+ * 由 AgentService 产出（它判「真的停了」：终态后没有新消息 / 新 run / rotate 窗口），
+ * 由装配层的 peer-notice router 转成一条定向到父 session 的 runtime.notice
+ * （scope peer）：合并、延迟窗口、每轮一条都在 router 里。
+ *
+ * peer 成员（owner=self、无 parent）没有父级，不产生变更。
+ */
+export interface PeerStopChange {
+  /** 注入目标：父成员当前 primary body 的 session id */
+  parent_session_id: string;
+  agent_id: string;
+  /** 展示名（有就用，否则用 id） */
+  name?: string;
+  kind: PeerStopKind;
+  /** 失败原因（一行原文；展示时优先取稳定 code） */
+  error?: string;
+}
+
+/** 装配层注入的成员停下通知端口；缺省不报（纯内存 / 测试）。 */
+export type PeerStopSink = (change: PeerStopChange) => void;
+
 /** AgentService 构造参数 */
 export interface AgentServiceOptions {
   /** 一个实例只服务一个 tenant */
@@ -1092,6 +1116,14 @@ export interface AgentServiceOptions {
   teamPolicy?: (teamId: string) => TeamPolicy | undefined;
   /** 0.19 S4：conversation 预算端口；缺失 = 不执行预算（测试 / 纯内存） */
   budget?: ConversationBudgetPort;
+  /**
+   * 成员停下 / 被关闭的通知端口（内部装配 / 非 wire）。
+   *
+   * 收口不再自动回传正文（deliverToParent 已删除）：「停了」这个信号改走环境信息，
+   * 由本端口交给装配层转成 runtime.notice（scope peer，定向父 session）。
+   * 缺省 undefined = 不报（纯内存测试 / 未挂通知总线的入口）。
+   */
+  peerStops?: PeerStopSink;
 }
 
 /** 稳定错误码（入口层据此映射 RPC / CLI 错误） */
@@ -1445,11 +1477,6 @@ export interface TeamDelivery {
   reason?: string;
 }
 
-/** `post` 的内部选项（非 wire）：`final` 表示本次投递是本轮给父级的最终回报。 */
-export interface TeamPostOptions {
-  final?: boolean;
-}
-
 export interface TeamPostInput {
   team_id: string;
   content: string;
@@ -1540,13 +1567,6 @@ export interface TeamAgentSendInput {
   origin_run_id?: string;
   /** 0.41：内部（非 wire、非持久）一次 messages 数组的 notify 边计数 key。 */
   batch_key?: string;
-  /**
-   * 内部（非 wire、非持久）：这次投递是「本轮给父级的最终回报」。
-   *
-   * 成功投出后把该 run 记成已最终回报，收口不再自动回传最终文本（否则同一份报告
-   * 会投两次）。缺省 false = fail-open：照常回传，宁可重复也不吞结论。
-   */
-  final?: boolean;
 }
 
 export interface TeamAgentSendResult {
@@ -1702,8 +1722,7 @@ export interface AgentTeamService {
   list(options?: TeamListOptions): Promise<TeamSummary[]>;
   get(teamId: string, options?: TeamGetOptions): Promise<TeamDetail | undefined>;
   roster(teamId: string, options?: TeamRosterOptions): Promise<TeamMemberSummary[]>;
-  /** `options.final` 是内部（非 wire）标记：本次投递是本轮给父级的最终回报 */
-  post(input: TeamPostInput, options?: TeamPostOptions): Promise<TeamPostResult>;
+  post(input: TeamPostInput): Promise<TeamPostResult>;
   /** 追加撤回 tombstone；目标必须仍在可读日志窗口内。 */
   retract(input: TeamRetractInput): Promise<TeamRetractResult>;
   /** 未知 Team 返回 undefined；业务失败抛 TeamError */

@@ -13,9 +13,11 @@ applies_to: [N, M]
 ## AgentService 唯一
 
 - 成员能力只由 `packages/agent` 实现；权限 bridge 只有一条活路径（body 创建 / 恢复时挂桥），不得恢复第二套桥；`packages/core` 不出现 member / owner / visibility / team 概念（ADR-088 / ADR-091）。
-- 内置 `agent` 工具是唯一模型 schema：root owner 动作 `hire` / `send` / `close` / `list` / `rotate`（root owner 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `send` / `list`。Team 日志写入不在本工具内：`agent post` 已移除（它只追加日志、不投递、不唤醒，静默丢报告），需要写日志走 CLI `vessel team post`。工具调用者的 owner / parent 固定，模型不能伪造。
+- 内置 `agent` 工具是唯一模型 schema：root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `read`（root owner 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `send` / `list` / `read`。Team 日志写入不在本工具内：`agent post` 已移除（它只追加日志、不投递、不唤醒，静默丢报告），需要写日志走 CLI `vessel team post`。工具调用者的 owner / parent 固定，模型不能伪造。
 - 持久化 `role` 只有 `member`（owner=self，Team 必需；`main` 也是 member）与 `temporary`（owner=雇佣者，Team 可选）。0.27 的 `single` 已删除；v3 及更早快照里的 `role:'single'` 只在读取时降级为 `member` 并补绑 default Team，写回不再出现。
 - 不得新增 `wait` / `status` / `cancel`；`inbox` 已是成员收件箱工具（`list` / `read` / `delete` / `insert`），等待语义仍是结束这一轮、回复作为新 turn 到达。
+- `read` 是**只读**的会话读取面：`to`（成员 id / session id / 名字，限调用者可见 roster）+ `limit`（缺省 20，封顶 50），返回该成员当前 primary body 会话最近 N 条消息的 `role` + 截断正文（单条 1000 字符）。数据源是父入口同一个 `SessionStore`（与 `sessions.get` RPC 同一份 `SessionState`），**不新增 RPC、不改 `sessions.get` 形状**；地址形态（含 `@`）一律拒绝。它存在的理由：收口不再自动回传正文之后，父级要原文只有这一条路（另一条是 `agents.inbox`）。
+- **成员停下通知（scope `peer`）**：成员 run 终态（`completed` / `failed` / `cancelled`）与成员被 close 时，向**父成员的 primary body session** 发一条 `runtime.notice`，模型侧照旧由 `runtime-notice-hook` 注入 `vessel:notice` 尾消息；**不再有**收口自动回传正文（旧 `deliverToParent` / `final: true` / `lastParentReply` 全部删除）。判据是「真的停了」：终态后延迟 2s（`PEER_STOP_WINDOW_MS`）再判一次，窗口内又有未读 / pending 收件箱消息、排队或在跑的 run、或在 rotate 窗口，就丢弃这次通知（不补发，下次真停时再判）；synthetic 摘要唤醒不算报告。**通知不带「有没有交报告」**（父级按「有没有收到消息」自己判断）；失败带稳定错误码（`provider_error` 之类；无 code 时截断人话），summary 一行按同错合并、成员名进 details（≤10 行）。投递语义在 `src/peer-notices.ts`：`to` 定向父 session（总线按 session 游标注入，不定向会被先跑起来的别的 session 吃掉）、窗口内合并成一条、**同一父 session 一轮（两次 run 之间）最多 1 条**。
 ## 派生：peer / contractor
 
 - 创建判别仍是 `kind:'peer'|'contractor'`：peer → `role:'member'`（owner=self、无 parent、必须 Team、visibility 强制 `team`）；contractor → `role:'temporary'`（owner/parent 缺省是雇佣者，有 Team 时 visibility 缺省 `team`、unbound 缺省 `private`）。
@@ -47,7 +49,7 @@ applies_to: [N, M]
 - 准入唯一：`dispatch` 与 strict `send` 共用同一条 `admit`（可投性检查 → 目标 body mailbox → `scheduler.submit`）；live / rotating 入队，gone 先 single-flight resume 再入队；不得在每个入口重写状态检查或并发 spawn。有来源创建有两条入口：`gone + resume` 失败后按 `teams[].policy.allowAutoCreate` / 显式 `allow_auto_create` 自动发生（`ensureCreatedOnDispatch` → `createDerivedAgent`），或公共 `agents.create{from_session_id}` 显式新建；rotate 失败保持旧 primary，`sessions.restart` / `sessions.create` 失败零写入（ADR-091/092/097/098）。
 - close 的审批在权限层完成：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接放行；成员关闭 peer 必须经 bridge 由人类审批；root owner 记录与跨 Team contractor 必须拒绝；无 bridge 时 ask 必须 fail closed。owner close 级联自己的 private contractor，team 可见 contractor 保留。
 - Team 日志不是队列：无 `@` 的 post / reply / system 绝不产生 run；`@` 必须先写日志再逐条 `admit`；`TeamService` 是唯一写入点，reply 由 `run.completed.output` 驱动、失败 / 取消写 `system` 条目。
-- 成员回报的 `final` 标记：`agent send` 可选 `final: true`，表示「这条是本轮给父级的最终回报」——成功投出后该 run 收口不再自动 `deliverToParent`（记录在 `active.lastParentReply.final`）。**用法：每次给父级的最终报告置 `final: true`；中途进度 / 确认不要置**（不带标记照常自动回传，属于 fail-open：宁可重复也不吞结论）；另一个免标记条件只是「正文与最终文本逐字相同」（不做相似度判断）。
+- 成员回报的唯一通路是**显式投递**：直接 `agent send` 给父级（或父级用 `agent read` / `agents.inbox` 自己读）。`send` 没有也不需要「本轮最终回报」这类结构标记；`final: true`、`lastParentReply`、`isSameParentReply` 与收口自动回传一并删除，不要以任何形式恢复（两份报告的重复是成员该自己避免的事，不是 runtime 该猜的内容判断）。
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；team-scoped token 只能访问自己的 `team_id`，不匹配 `not_found`。
 - `teams.create` 仅 human / admin；`archive` 拒绝 present 成员（`team_not_empty`），不提供隐式 hard delete。
 

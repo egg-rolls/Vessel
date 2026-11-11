@@ -45,6 +45,7 @@ import { generateConversationId, isValidConversationId } from './conversation-bu
 import { AgentInboxStore } from './inbox.js';
 import {
   type BindingRecord,
+  currentBindingSession,
   findSessionState,
   liveBindings,
   type MemberRecord,
@@ -106,6 +107,8 @@ import {
   type MemberStatus,
   type MemberTurnResult,
   type MemberVisibility,
+  type PeerStopChange,
+  type PeerStopKind,
   type PersistedAgentRecord,
   type ReinstateInput,
   type ReplyResult,
@@ -215,6 +218,15 @@ const TURN_DIMENSIONS: ReadonlySet<string> = new Set(['turns', 'tokens']);
  */
 const DEFAULT_TEMPORARY_TTL_HOURS = 2;
 
+/**
+ * 成员停下后的判定窗口（毫秒）：终态后等这么久再判一次，仍无新工作才报给父级。
+ *
+ * 用户裁定「停了马上又拿到下一条消息」属于噪音：一个终态紧接着又有新 run / 未读
+ * 消息 / rotate 窗口时，这次「停了」不是结论，窗口到期时直接丢弃。
+ * 同一成员同时最多一个待发判定（新终态覆盖旧的并重新计时）。
+ */
+const PEER_STOP_WINDOW_MS = 2000;
+
 /** sweep 节奏：`clamp(ttl / 10, 60s, 15min)`；不做独立配置键 */
 const SWEEP_INTERVAL_MIN_MS = 60_000;
 const SWEEP_INTERVAL_MAX_MS = 900_000;
@@ -242,16 +254,6 @@ interface ExecutionUnitEntry {
     runId: string;
     messageId?: string;
     conversationId?: string;
-    /** `reply()` 语义：本轮已显式回复父级，收口不再自动回传最终文本。 */
-    replied: boolean;
-    /**
-     * 本轮最后一次**显式投给父级**的正文（trim 后）与它是否被标成「最终回报」。
-     *
-     * 收口据此决定是否省掉自动回传：`final === true` → 不再回传；否则只有正文与最终
-     * 文本逐字相同时才不回传。中途进度 / 确认（不带 `final`）与收口结论不同，照常回传
-     * （不做前缀 / 包含 / 相似度判断）。
-     */
-    lastParentReply?: { runId: string; content: string; final: boolean };
   };
   budgetHold: Set<string>;
   closing: boolean;
@@ -307,22 +309,6 @@ type SeedMessage = Message & { origin?: string };
 interface AdmitOutcome {
   result: AdmitResult;
   message: AgentMessage;
-}
-
-/**
- * 显式回报与最终文本是否是同一份内容（只比 trim 后的全文）。
- *
- * 收口处用它决定「这次自动回传是否多余」：显式回报 = 最终文本时是同一份内容，
- * 回落成重复投递；中途进度 + 收口结论是两件事，必须都到父级。**不做**前缀 /
- * 包含 / 相似度判断 —— 那会把「进度 + 结论」误判成重复，等于静默丢结论。
- */
-function isSameParentReply(
-  last: { content: string } | undefined,
-  finalText: string | undefined,
-): boolean {
-  if (last === undefined || typeof finalText !== 'string') return false;
-  const trimmed = finalText.trim();
-  return trimmed.length > 0 && trimmed === last.content;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -586,12 +572,20 @@ export class AgentServiceImpl implements AgentService {
   private readonly urgentMessages = new Map<string, AgentMessage>();
   /** 0.41：因后续 urgent 被取消、但消息会重投的 run id；settle 时不清理 urgent id。 */
   private readonly interruptCancelledRunIds = new Set<string>();
-  /** 0.41：synthetic inbox 摘要唤醒 run（内存，抑制 deliverToParent）。 */
+  /** 0.41：synthetic inbox 摘要唤醒 run（内存；不产生父级可见的成员停下通知）。 */
   private readonly syntheticRunIds = new Set<string>();
   /** 0.41：已排 / 在跑 wake 的 agent id（同一目标最多一个 pending wake）。 */
   private readonly wakePending = new Set<string>();
   /** 0.41：run 期间有新 notify 的 agent id；settle 后补检一次。 */
   private readonly noticeDirty = new Set<string>();
+  /** 成员停下通知端口（装配层注入；缺省不报）。 */
+  private readonly peerStops: AgentServiceOptions['peerStops'];
+  /**
+   * 成员停下判定的待发定时器（agentId → timer）。
+   *
+   * 同一成员同时最多一个：新终态先 cancel 旧的再重排，避免短时间多轮收口叠出多条。
+   */
+  private readonly peerStopTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * 0.41：run id → 已计过的 cycle 边（同 run 同 from/to 只计一次）；run settle 清理。
    * owner run 由 root runtime 直跑、AgentService 不 settle；按契约 §9 A5b option b
@@ -686,6 +680,7 @@ export class AgentServiceImpl implements AgentService {
           })
         : undefined;
     if (this.inbox !== undefined) this.runtime.attachInbox?.(this.inbox);
+    this.peerStops = options.peerStops;
     this.ready = this.loadSnapshot();
   }
 
@@ -2185,7 +2180,6 @@ export class AgentServiceImpl implements AgentService {
         });
         const runId = this.newId();
         this.runMessageIds.set(runId, message.id);
-        this.noteParentReply(from, record.id, input.origin_run_id, content, input.final === true);
         this.emitForSession('agent.message.queued', record, rotation.toSessionId, {
           state: record.state,
           message_id: message.id,
@@ -2233,8 +2227,6 @@ export class AgentServiceImpl implements AgentService {
       throw error;
     }
     this.runMessageIds.set(submitted.runId, message.id);
-    // 记下本次显式回报的正文与 final 标记：收口据此判断是否该省掉自动回传。
-    this.noteParentReply(from, record.id, input.origin_run_id, content, input.final === true);
     const status = submitted.handle.status();
     const queuePosition = this.queuePositionFor(submitted.runId, status);
     return {
@@ -2407,7 +2399,6 @@ export class AgentServiceImpl implements AgentService {
       runId,
       messageId: message.id,
       ...(conversationId !== undefined ? { conversationId } : {}),
-      replied: false,
     };
     this.registry.touchBinding(record.id, entry.bindingId, entry.lastActiveAt);
     this.updateAgentState(record.id);
@@ -2463,9 +2454,7 @@ export class AgentServiceImpl implements AgentService {
         ...(result?.usage !== undefined ? { usage: result.usage } : {}),
       });
     }
-    // 先取出本轮的显式 reply 记账；随后清空 active（同 body 可继续下一轮）
-    const replied = entry.active?.replied === true;
-    const lastParentReply = entry.active?.lastParentReply;
+    // 清空 active（同 body 可继续下一轮）
     entry.active = undefined;
     entry.state = 'idle';
     entry.lastActiveAt = this.now();
@@ -2509,20 +2498,8 @@ export class AgentServiceImpl implements AgentService {
       return;
     }
 
-    if (outcome === 'completed' && !handle.cancelRequested) {
-      // 0.41：synthetic 摘要唤醒不是真实回复；不投父级（否则会制造父 run 风暴）。
-      if (!replied && !this.syntheticRunIds.has(handle.id)) {
-        // 三条抑制口径（其余一律照常回传 = fail-open）：
-        // 1. `replied`：`reply()` 语义，本轮已显式回复父级；
-        // 2. `lastParentReply.final`：显式回报自带 `final:true`（结构标记，不猜内容）；
-        // 3. 逐字相同：显式回报正文与最终文本 trim 后完全一致（不做相似度判断）。
-        const settledByFinal = lastParentReply?.final === true;
-        if (!settledByFinal && !isSameParentReply(lastParentReply, result?.content)) {
-          await this.deliverToParent(current, result?.content, conversationId);
-        }
-      }
-    }
-
+    // 0.41 之后不再有「收口自动回传正文」：成员的显式报告才是权威，父级要原文可以
+    // 用 agent read / agents.inbox 自己读；这里只更新状态并收口 handle。
     this.updateAgentState(record.id, outcome);
     this.scheduleSnapshot();
     this.settleHandle(handle, outcome, failure, result?.content);
@@ -2705,7 +2682,7 @@ export class AgentServiceImpl implements AgentService {
     }
     entry.state = 'running';
     entry.lastActiveAt = this.now();
-    entry.active = { runId, replied: false };
+    entry.active = { runId };
     this.registry.touchBinding(record.id, entry.bindingId, entry.lastActiveAt);
     this.updateAgentState(record.id);
     this.scheduleSnapshot();
@@ -2789,8 +2766,9 @@ export class AgentServiceImpl implements AgentService {
   ): void {
     this.interruptReasons.delete(handle.id);
     this.runCycleEdges.delete(handle.id);
-    // synthetic wake 结束：清 wake 标记；deliverToParent 在 settle 前已按 Set 跳过。
-    if (this.syntheticRunIds.delete(handle.id)) this.wakePending.delete(handle.agentId);
+    // synthetic wake 结束：清 wake 标记（唤醒不是真实报告，不发成员停下通知）。
+    const synthetic = this.syntheticRunIds.delete(handle.id);
+    if (synthetic) this.wakePending.delete(handle.agentId);
     // 被后续 urgent 抢占的 run 不清理 urgent id：它的消息会（或已经）重投。
     if (!this.interruptCancelledRunIds.delete(handle.id)) {
       const messageId = this.runMessageIds.get(handle.id);
@@ -2802,82 +2780,106 @@ export class AgentServiceImpl implements AgentService {
     if (outcome === 'cancelled') handle.markCancelled(failure ?? 'run cancelled');
     else if (outcome === 'failed') handle.fail(failure ?? 'run failed');
     else handle.complete(content ?? '');
+    // 成员真停了才报父级（窗口内又拿到工作就丢弃）：synthetic 唤醒不算报告。
+    if (!synthetic) this.schedulePeerStop(handle.agentId, outcome, failure);
     // run 结束、目标空闲且 run 期间有 notify：无条件补检一次（0 unread 由 executor 跳过）。
     if (this.noticeDirty.has(handle.agentId)) {
       void this.scheduleInboxWake(handle.agentId).catch(() => {});
     }
   }
 
-  /** 自动最终文本投递到父成员；父已 left / closed / gone 时显式 dropped */
-  private async deliverToParent(
-    member: MemberRecord,
-    content: string | undefined,
-    conversationId: string | undefined,
-  ): Promise<void> {
-    if (!nonEmpty(content) || !nonEmpty(member.parentId)) return;
-    const parent = this.registry.resolve(member.parentId);
-    if (!parent) return;
-    if (parent.membership === 'left' || parent.state === 'closed' || parent.presence === 'gone') {
-      const reason =
-        parent.membership === 'left'
-          ? 'parent_left'
-          : parent.state === 'closed'
-            ? 'parent_closed'
-            : 'parent_gone';
-      this.emit('agent.reply.dropped', member, { to: parent.id, reason });
-      return;
-    }
-    try {
-      await this.admitInternal({
-        content,
-        agent_id: parent.id,
-        from: member.id,
-        channel: 'direct',
-        ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
-        strict: false,
-      });
-    } catch (error) {
-      const reason = errorText(error);
-      this.logger.warn('agent.reply.drop_failed', {
-        member_id: member.id,
-        parent_id: parent.id,
-        error: reason,
-      });
-      // 0.32：投递失败不再只留日志；可见事件让入口侧能看到丢失的回复。
-      this.emit('agent.reply.drop_failed', member, { to: parent.id, reason });
-    }
+  /**
+   * 成员终态后延迟一个小窗口再判一次：真的停了才报父级（`peerStops` 端口）。
+   *
+   * 为什么延迟：用户裁定「停了马上又拿到下一条消息」不是结论。窗口内又来了新工作
+   * （新 run / 排队消息 / 未读 inbox 消息 / rotate 窗口）就丢掉这次通知，不补发 ——
+   * 下一轮真正停下时会再判一次。
+   *
+   * 同一成员同时最多一个待发判定：新终态取消旧的并重新计时（`cancelled` 之后紧接
+   * 一次重投的 `completed` 不该报两条）。
+   */
+  private schedulePeerStop(agentId: string, kind: PeerStopKind, failure: string | undefined): void {
+    if (this.peerStops === undefined) return;
+    this.cancelPeerStopTimer(agentId);
+    const timer = setTimeout(() => {
+      this.peerStopTimers.delete(agentId);
+      this.flushPeerStop(agentId, kind, failure);
+    }, PEER_STOP_WINDOW_MS);
+    // 不让这个窗口挂住进程退出（TUI / headless 一次性进程）。
+    (timer as { unref?: () => void }).unref?.();
+    this.peerStopTimers.set(agentId, timer);
+  }
+
+  private cancelPeerStopTimer(agentId: string): void {
+    const timer = this.peerStopTimers.get(agentId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.peerStopTimers.delete(agentId);
+  }
+
+  /** 窗口到期：仍无新工作才把「X 停了」交给装配层。 */
+  private flushPeerStop(agentId: string, kind: PeerStopKind, failure: string | undefined): void {
+    const member = this.registry.get(agentId);
+    if (member === undefined) return;
+    if (member.membership === 'left' || member.state === 'closed') return;
+    if (this.memberStillBusy(agentId)) return;
+    const change = this.peerStopChangeFor(member, kind, failure);
+    if (change === undefined) return;
+    this.publishPeerStop(change);
   }
 
   /**
-   * 记下「本轮最后一次显式投给父级的正文 + final 标记」，供收口处的抑制判定使用。
+   * 「真的停了」的判据：没有任何在途 / 排队 / 待读的工作，也不在 rotate 窗口。
    *
-   * 收口（`startExecutionUnitRun`）的自动回传闸门：`replied`（`reply()` 语义）为真 →
-   * 不投；`lastParentReply.final === true` → 不投；显式回报正文与最终文本 trim 后逐字
-   * 相同 → 不投。三种之外**一律照常投**（fail-open：宁可重复，绝不吞结论）。
-   *
-   * 0.41 起成员的显式回报走 `TeamService.send → AgentService.dispatch → admitInternal`，
-   * 不再经过 `reply()`（ADR-092 Errata 已记「无生产调用者」），所以这里只做记账：
-   * 不带 `final` 的显式回报（进度 / 确认）不会压掉收口结论。
-   *
-   * 只认「目标是本成员的父级」：投给 peer 不记账。只在投递**成功之后**调用：显式回报
-   * 被预算 / 可见性拒绝时不记账（fail-open）。`origin_run_id` 由 tool / dispatch 路径
-   * 给出时按它精确定位；地址形态的 send（`TeamService.post → dispatchMention`）不带该
-   * 字段，此时落到「每个 body 同时至多一个 active run」的那一具。
+   * 只读内存状态与持久化收件箱计数（`inbox.list` 不改状态），不触发 spawn / sweep。
    */
-  private noteParentReply(
-    from: string,
-    targetId: string,
-    originRunId: string | undefined,
-    content: string,
-    final: boolean,
-  ): void {
-    const sender = this.registry.get(from);
-    if (sender === undefined || sender.parentId !== targetId) return;
-    for (const entry of this.liveEntries(sender.id)) {
-      const active = entry.active;
-      if (active === undefined) continue;
-      if (originRunId !== undefined && active.runId !== originRunId) continue;
-      active.lastParentReply = { runId: active.runId, content: content.trim(), final };
+  private memberStillBusy(agentId: string): boolean {
+    // rotate 窗口内旧 body 正在退役、新 body 马上接手：此刻不是「停了」。
+    if (this.rotations.has(agentId)) return true;
+    for (const entry of this.liveEntries(agentId)) {
+      if (entry.active !== undefined) return true;
+      if (entry.queuedRuns.size > 0) return true;
+      if (entry.spawning !== undefined) return true;
+      if (entry.pending.length > 0) return true;
+      if (entry.budgetHold.size > 0) return true;
+    }
+    const counts = this.inbox?.list(agentId);
+    if (counts !== undefined && (counts.unread > 0 || counts.pending > 0)) return true;
+    return false;
+  }
+
+  /**
+   * 成员 → 变更：父 session 取父成员当前 primary body 的 session（notice 的注入目标）。
+   *
+   * 没有父级（peer 成员 / main）、父级已 left / closed 时不产生变更：没人会读它。
+   */
+  private peerStopChangeFor(
+    member: MemberRecord,
+    kind: PeerStopKind,
+    failure: string | undefined,
+  ): PeerStopChange | undefined {
+    if (!nonEmpty(member.parentId)) return undefined;
+    const parent = this.registry.get(member.parentId);
+    if (parent === undefined) return undefined;
+    if (parent.membership === 'left' || parent.state === 'closed') return undefined;
+    return {
+      parent_session_id: currentBindingSession(parent),
+      agent_id: member.id,
+      ...(member.name !== undefined ? { name: member.name } : {}),
+      kind,
+      ...(nonEmpty(failure) ? { error: failure } : {}),
+    };
+  }
+
+  private publishPeerStop(change: PeerStopChange): void {
+    try {
+      this.peerStops?.(change);
+    } catch (error) {
+      this.logger.warn('agent.peer_stop.notify_failed', {
+        member_id: change.agent_id,
+        session_id: change.parent_session_id,
+        error: errorText(error),
+      });
     }
   }
 
@@ -3623,7 +3625,7 @@ export class AgentServiceImpl implements AgentService {
   /**
    * synthetic wake run：无 conversation_id、不 append / hold；executor 启动时先查
    * readable unread，为 0 直接 complete、不调模型。run id 记入 `syntheticRunIds`，
-   * deliverToParent 据此跳过（否则唤醒会制造父 run）。
+   * 据此跳过成员停下通知（否则每次唤醒都会给父级发一条噪音）。
    */
   private async submitWakeMessage(record: MemberRecord, entry: ExecutionUnitEntry): Promise<void> {
     if (this.draining || entry.closing || entry.retired) {
@@ -3699,8 +3701,6 @@ export class AgentServiceImpl implements AgentService {
     const originRunId =
       raw.origin_run_id === undefined ? undefined : readRequiredString(raw, 'origin_run_id');
     const batchKey = raw.batch_key === undefined ? undefined : readRequiredString(raw, 'batch_key');
-    // 内部标记（非 wire）：本次投递是本轮给父级的最终回报，收口不再自动回传最终文本。
-    const final = raw.final === true;
 
     // 三档输入互斥与地址限制：在解析目标 / 产生任何副作用之前拒绝。
     if (interrupt && notify) {
@@ -3820,7 +3820,6 @@ export class AgentServiceImpl implements AgentService {
         ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
         conversation_id: conversationId,
         strict: false,
-        ...(final ? { final: true } : {}),
       });
 
     // admit 会把 presence 拉回 live，所以先捕获投递前的 presence 来区分 live / resumed。
@@ -4713,6 +4712,11 @@ export class AgentServiceImpl implements AgentService {
     member.membership = 'left';
     this.registry.setPresence(member.id, 'gone');
     this.emit('agent.closed', member, { state: 'closed', presence: 'gone' });
+    // close 是确定性的「停了」：不用窗口判定，但必须先掉尚未发出的终态通知（否则
+    // 同一成员会先报 stopped 再报 closed）。
+    this.cancelPeerStopTimer(member.id);
+    const closedNotice = this.peerStopChangeFor(member, 'closed', undefined);
+    if (closedNotice !== undefined) this.publishPeerStop(closedNotice);
     this.scheduleSnapshot();
 
     // owner close 后 private contractor 会对所有人不可见：按 registry 原始记录级联关闭。
@@ -5101,9 +5105,7 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('member_stale', `member_stale: ${parent.id}`);
     }
 
-    // 本轮已显式回复 → 抑制自动最终文本（标记当前正在跑的 body）
     const activeEntry = this.liveEntries(member.id).find((entry) => entry.active !== undefined);
-    if (activeEntry?.active !== undefined) activeEntry.active.replied = true;
     const conversationId =
       activeEntry?.active?.conversationId ?? generateConversationId(this.newId);
     const result = await this.admit({
@@ -5414,6 +5416,8 @@ export class AgentServiceImpl implements AgentService {
   async drain(options: AgentDrainOptions = {}): Promise<AgentDrainOutcome> {
     await this.ready;
     this.draining = true;
+    // 关闭窗口里不再发成员停下通知：进程正在收口，父级也读不到。
+    for (const agentId of [...this.peerStopTimers.keys()]) this.cancelPeerStopTimer(agentId);
     const active = (): boolean => {
       for (const map of this.executionUnitRegistry.values()) {
         for (const entry of map.values()) {

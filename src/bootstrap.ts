@@ -72,6 +72,7 @@ import {
   resumeError,
 } from './durable-wiring';
 import { createFederationSendPort } from './federation-send-port';
+import { registerRuntimeNoticeHook } from './hot-apply-assembly';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
 import { resolveInteractionsDir } from './interactions-dir';
@@ -82,6 +83,7 @@ import type { MockScenarioName } from './mock/scenarios';
 import { resolveNodeIdentity } from './node-identity';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
 import { resolveAgentCwd } from './path-resolution';
+import { createPeerNoticeRouter, type PeerNoticeRouter } from './peer-notices';
 import {
   addAutoApproveRule,
   listAutoApproveRules,
@@ -103,6 +105,7 @@ import {
   type RpcClient,
 } from './rpc/index';
 import { createRunControl } from './run-control';
+import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
@@ -255,6 +258,13 @@ export interface BootstrapResult {
     control: AgentControlLike;
     dispose: () => Promise<void>;
   };
+  /**
+   * 运行期通知总线（CONTRACT-hot-apply §3）：runtime.notice → 事件流 + BeforeLlm 注入。
+   *
+   * agent 装配存在时才有（hook 注册在父 PluginHost 上）；serve 壳必须复用这一个实例，
+   * 否则第二个 hook 会因注册名相同被跳过、通知永远进不了模型上下文。
+   */
+  notice?: RuntimeNoticeBus;
   /** 0.5：trace 控制面（disabled/off 或 connect 模式为 undefined） */
   trace?: TraceControl;
   /** 0.5：session rename/delete 控制面 */
@@ -1162,6 +1172,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // ── AgentService + REPL owner 端点（0.17 Phase A）──
   let agentControl: BootstrapResult['agent'];
+  /**
+   * 运行期通知总线（热应用 / 版本检查 / 成员停下共用）。
+   *
+   * 只有在 agent 装配（`finalPluginHost` 存在）时才建；CLI 的 serve 壳复用这个实例
+   * （见 `BootstrapResult.notice`），不再自己建第二个总线。
+   */
+  let noticeBus: RuntimeNoticeBus | undefined;
+  /** 成员停下通知的投递面（窗口合并 / 每轮一条 / 定向父 session）。 */
+  let peerNotices: PeerNoticeRouter | undefined;
   if (agentServiceEnabled) {
     // A3c：交互入口成员 ask 经父事件流弹现有权限卡片；headless 直接 allow。
     const memberPermissionMode: MemberPermissionMode = agentPlan.permissionMode;
@@ -1204,6 +1223,19 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             localMember: () => localMember,
           })
         : undefined;
+    // 运行期通知总线（CONTRACT-hot-apply §3）：热应用 / 版本检查 / 成员停下共用同一条
+    // 总线与同一个 BeforeLlm hook —— 两个总线会让两个 hook 争同一个注册名（后者被跳过）。
+    // 建在这里而不是 serve 壳里：TUI 入口同样要看到成员停下通知，serve 复用这一个实例。
+    noticeBus = createRuntimeNoticeBus({
+      events: runtimeEvents,
+      tenantId,
+    });
+    registerRuntimeNoticeHook(finalPluginHost, noticeBus);
+    peerNotices = createPeerNoticeRouter({
+      bus: noticeBus,
+      events: runtimeEvents,
+      logger,
+    });
     const wiring = await createAgentServiceWiring({
       // 来源行的 node 段与 federation 端口共用 nodeIdentity：federation 关掉时
       // 来源行仍要本机 node 段，不能只挂在 send port 上。
@@ -1243,6 +1275,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 0.27（spec §5.1）：每 tenant 唯一 scheduler，由 tenant bundle 构造。
       scheduler: bundle.scheduler,
       ...(config.agent?.ownerId !== undefined ? { ownerId: config.agent.ownerId } : {}),
+      // 成员停下 / 被关闭 → 定向到父 session 的一条 runtime.notice（scope peer）。
+      ...(peerNotices !== undefined ? { peerStops: peerNotices.report } : {}),
       logger,
       // 成员 ExecutionUnit 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。
       session,
@@ -1697,6 +1731,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
     unsubPermissionPersist = undefined;
 
+    // 成员停下通知：先停路由器（清窗口定时器 + 退订 run.* 事件），再拆执行面。
+    try {
+      peerNotices?.stop();
+    } catch {
+      // 退订 / 清定时器是 best-effort
+    }
+    peerNotices = undefined;
+
     // 0.17：先停 owner 端点，CLI 不再有机会在 teardown 中途入队。
     try {
       await agentControl?.dispose();
@@ -1867,6 +1909,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tenantPaths,
     bundle,
     ...(agentControl !== undefined ? { agent: agentControl } : {}),
+    // 运行期通知总线：serve 壳复用它（配置热应用 / 版本检查 / 成员停下同一条通路）。
+    ...(noticeBus !== undefined ? { notice: noticeBus } : {}),
     ...(trace ? { trace } : {}),
     sessionControl,
     nodeId,

@@ -1052,11 +1052,16 @@ async function runWithConfig(result: BootstrapResult) {
       return loaded.config;
     };
     // 事件出口：notice 同时进事件流（Web/TUI）与模型上下文（BeforeLlm hook）。
+    // 总线唯一的构造点是 bootstrap（agent 装配时建，hook 也注册在那里）：这里复用同一个
+    // 实例。自己再建一个会因为 hook 注册名相同被跳过，配置热应用的 notice 就再也进不了
+    // 模型上下文。`result.notice` 缺省（无 agent 装配的入口）时才就地新建。
     hotApplyConfigPath = getUserConfigPath();
-    const noticeBus = createRuntimeNoticeBus({
-      events: result.bundle?.runtimeEvents ?? ctx.events,
-      tenantId: result.tenantId,
-    });
+    const noticeBus =
+      result.notice ??
+      createRuntimeNoticeBus({
+        events: result.bundle?.runtimeEvents ?? ctx.events,
+        tenantId: result.tenantId,
+      });
     registerRuntimeNoticeHook(ctx.pluginHost, noticeBus);
 
     /** 存活 runtime 的集合：单执行面的 owner（bundle / ctx）。 */

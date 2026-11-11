@@ -27,6 +27,7 @@ import {
   type MemberExecutionPermissionMode,
   type MemberPermissionState,
   type MemberStatus,
+  type PeerStopSink,
   type TeamDeclaration,
   type TeamRecord,
   type TeamStore,
@@ -155,6 +156,14 @@ export interface AgentServiceWiringOptions {
    * `agent.create_cleanup_skipped`，会留下孤儿 session。
    */
   deleteSessionData?: (sessionId: string) => Promise<void>;
+  /**
+   * 成员停下 / 被关闭的通知端口（内部装配 / 非 wire）。
+   *
+   * 收口不再自动回传正文：「停了」这个信号改走 `runtime.notice`（scope peer），
+   * 由装配层（bootstrap）把一个 PeerNoticeRouter 的 report 注入到这里。
+   * 缺省 = 不报（纯内存 / 无通知总线的入口）。
+   */
+  peerStops?: PeerStopSink;
 }
 
 export interface AgentServiceWiring {
@@ -407,6 +416,7 @@ export async function createAgentServiceWiring(
       ? { deleteSessionData: options.deleteSessionData }
       : {}),
     snapshot: { enabled: true },
+    ...(options.peerStops !== undefined ? { peerStops: options.peerStops } : {}),
   });
   serviceRef = service;
 
@@ -474,6 +484,22 @@ export async function createAgentServiceWiring(
       ownerSessionId: options.sessionId,
       team,
       humanApproval: options.humanApproval === true,
+      // read 走既有 SessionStore（与 sessions.get RPC 同一份 SessionState），只读。
+      ...(options.session !== undefined
+        ? {
+            readSession: async (sessionId: string) => {
+              const state = await options.session?.load(sessionId);
+              if (state === null || state === undefined) return null;
+              // `messages` 是派生投影缓存，缺失 = 还没写过（视作空历史，不是错误）。
+              return {
+                messages: (state.messages ?? []).map((message) => ({
+                  role: message.role,
+                  content: message.content,
+                })),
+              };
+            },
+          }
+        : {}),
     }),
     startOwner,
     ownerId,

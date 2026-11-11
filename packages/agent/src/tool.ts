@@ -30,15 +30,29 @@ import {
   TeamError,
 } from './types.js';
 
-const ACTIONS = ['create', 'hire', 'send', 'close', 'list', 'rotate'] as const;
+const ACTIONS = ['create', 'hire', 'send', 'close', 'list', 'rotate', 'read'] as const;
 
 /** root owner 可见的动作：root 没有 Team，不暴露 create（派 peer 需要 Team） */
-const OWNER_ACTIONS = ['hire', 'send', 'close', 'list', 'rotate'] as const;
+const OWNER_ACTIONS = ['hire', 'send', 'close', 'list', 'rotate', 'read'] as const;
 
 /** 成员 ExecutionUnit 可用的动作；rotate 在动作闸门之前单独处理 */
-const BODY_ACTIONS: readonly string[] = ['create', 'hire', 'close', 'rotate', 'send', 'list'];
+const BODY_ACTIONS: readonly string[] = [
+  'create',
+  'hire',
+  'close',
+  'rotate',
+  'send',
+  'list',
+  'read',
+];
 
 const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
+
+/** `read` 返回的成员会话消息条数：缺省 20，封顶 50（与 sessions.get 的分页上限同量级）。 */
+const READ_MESSAGE_LIMIT_DEFAULT = 20;
+const READ_MESSAGE_LIMIT_MAX = 50;
+/** `read` 单条正文的截断长度（字符）：只够看清结论 / 摘要，不搬整段工具输出。 */
+const READ_MESSAGE_MAX_CHARS = 1000;
 
 const MEMBER_STATES: readonly MemberState[] = [
   'created',
@@ -185,7 +199,6 @@ function mapSend(record: Record<string, unknown>): Record<string, unknown> {
   if (record.interrupt !== undefined) input.interrupt = record.interrupt;
   if (record.notify !== undefined) input.notify = record.notify;
   if (record.message_id !== undefined) input.message_id = record.message_id;
-  if (record.final !== undefined) input.final = record.final;
   return input;
 }
 
@@ -223,6 +236,21 @@ function readState(value: unknown): MemberState {
   return value as MemberState;
 }
 
+/** `read` 的 limit：缺省 20，1..50（封顶而不是报错：模型不该为了一个数字失败）。 */
+function readMessageLimit(value: unknown): number {
+  if (value === undefined) return READ_MESSAGE_LIMIT_DEFAULT;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return READ_MESSAGE_LIMIT_DEFAULT;
+  return Math.min(Math.floor(parsed), READ_MESSAGE_LIMIT_MAX);
+}
+
+/** 单条正文截断（按码点，避免切坏 emoji / 中文）。 */
+function truncateText(text: string, max: number): string {
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  return `${chars.slice(0, max - 1).join('')}…`;
+}
+
 /** agent 工具选项 */
 export interface AgentToolOptions {
   /** 调用者（root owner）id；成员 owner / parent 与 list viewer 都用它 */
@@ -231,6 +259,15 @@ export interface AgentToolOptions {
   ownerSessionId?: string;
   /** 成员 ExecutionUnit 的 Team 能力（send / list）；缺失时这些动作报错 */
   team?: AgentTeamService;
+  /**
+   * `read` 的只读会话读取端口（装配层注入，与 `sessions.get` RPC 同一份 SessionState）。
+   *
+   * 不新增 RPC：只把已经落盘的会话消息读出来，供父级自己看成员报告（收口不再自动
+   * 回传正文之后，这是「父级要原文」的唯一入口）。缺省 = `read` 报不可用。
+   */
+  readSession?: (
+    sessionId: string,
+  ) => Promise<{ messages: ReadonlyArray<{ role: string; content: string }> } | null>;
   /**
    * 0.31：是否有能应答权限确认的人类通道（交互 REPL / serve；headless 为 false）。
    *
@@ -256,14 +293,14 @@ export function createAgentTool(
       'has one. ' +
       'send: dispatch a message (live queue now, gone resume first, rotating queue for the new ' +
       'body); returns immediately. Add interrupt:true for urgent (cancel + front of queue) or ' +
-      'notify:true to append to the inbox + summary wake without running. Add final:true when ' +
-      'this message is your turn final report: the run will not auto-deliver its final text to ' +
-      'your caller, so the report is not sent twice. ' +
+      'notify:true to append to the inbox + summary wake without running. ' +
       'close: release member(s), idempotent. list: return the roster. ' +
+      'read: read the last messages of a member session (read-only; role + truncated text), so ' +
+      'you can read a report yourself instead of waiting for it to be forwarded to you. ' +
       'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first, ' +
       'plus an optional title that AI naming will not overwrite; ' +
       'a body may only rotate itself. ' +
-      'Bodies may use create, hire, close, rotate, send and list. ' +
+      'Bodies may use create, hire, close, rotate, send, list and read. ' +
       'Closing a peer needs human approval; closing your own contractor or yourself does not. ' +
       'Cross-node: reply to a federated from by sending to that address; from is runtime-filled ' +
       'and must not be given. ' +
@@ -274,7 +311,7 @@ export function createAgentTool(
         action: {
           type: 'string',
           enum: [...OWNER_ACTIONS],
-          description: 'hire | send | close | list | rotate',
+          description: 'hire | send | close | list | rotate | read',
         },
         name: { type: 'string', description: 'create/hire: display name' },
         model: { type: 'string', description: 'create/hire: model override' },
@@ -298,7 +335,7 @@ export function createAgentTool(
             'send: member id or session id, or an address ' +
             '<principal>@<node_id>:<team_id> (any value containing @ is treated as an address); ' +
             'a local sender gets a node segment too, so send the location value back as-is; ' +
-            'rotate: target agent',
+            'rotate: target agent; read: member id, session id or name',
         },
         content: { type: 'string', description: 'send: message text' },
         interrupt: {
@@ -318,16 +355,15 @@ export function createAgentTool(
           description:
             'send: with interrupt, deliver an existing inbox message id instead of new content',
         },
-        final: {
-          type: 'boolean',
-          description:
-            'send: this is the final report for this turn — after it lands, the run will not ' +
-            'auto-deliver its final text to your caller parent, so the same report is not sent ' +
-            'twice. Leave it unset for progress updates and confirmations',
-        },
         messages: {
           type: 'array',
-          description: 'send: [{to, content, interrupt?, notify?, message_id?, final?}]',
+          description: 'send: [{to, content, interrupt?, notify?, message_id?}]',
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: READ_MESSAGE_LIMIT_MAX,
+          description: `read: how many trailing messages to return (default ${READ_MESSAGE_LIMIT_DEFAULT}, max ${READ_MESSAGE_LIMIT_MAX})`,
         },
         member: { type: 'string', description: 'close: member id or session id' },
         startup_prompt: {
@@ -543,7 +579,7 @@ export function createAgentTool(
         }
 
         if (!isOwnerCaller && !BODY_ACTIONS.includes(action as string)) {
-          throw invalid('agent bodies may only use create|hire|close|rotate|send|list');
+          throw invalid('agent bodies may only use create|hire|close|rotate|send|list|read');
         }
 
         if (action === 'create' || action === 'hire') {
@@ -629,8 +665,6 @@ export function createAgentTool(
             const interrupt = mapped.interrupt === true;
             const notify = mapped.notify === true;
             const messageId = typeof mapped.message_id === 'string' ? mapped.message_id : undefined;
-            // 结构标记（不是内容猜测）：这一条是本轮给父级的最终回报。
-            const finalFlag = mapped.final === true;
             if (!isOwnerCaller) {
               if (options.team === undefined) throw invalid('send requires a team service');
               return options.team.send({
@@ -640,7 +674,6 @@ export function createAgentTool(
                 ...(interrupt ? { interrupt: true } : {}),
                 ...(notify ? { notify: true } : {}),
                 ...(messageId !== undefined ? { message_id: messageId } : {}),
-                ...(finalFlag ? { final: true } : {}),
                 origin_run_id: ctx.run_id,
                 ...(batchKey !== undefined ? { batch_key: batchKey } : {}),
               });
@@ -678,7 +711,6 @@ export function createAgentTool(
               ...(interrupt ? { interrupt: true } : {}),
               ...(notify ? { notify: true } : {}),
               ...(messageId !== undefined ? { message_id: messageId } : {}),
-              ...(finalFlag ? { final: true } : {}),
               // 内部（非 wire）：tool 路径按调用者 session 继承会话 / 按 run 去重边。
               ...(callerSession !== undefined ? { origin_session_id: callerSession } : {}),
               origin_run_id: ctx.run_id,
@@ -693,7 +725,7 @@ export function createAgentTool(
             // 三档 flag 是逐条投递语义：与 messages 数组同用会被静默丢弃，必须显式拒绝。
             assertExclusive(
               record,
-              ['to', 'content', 'interrupt', 'notify', 'message_id', 'final'],
+              ['to', 'content', 'interrupt', 'notify', 'message_id'],
               'messages',
               'send',
             );
@@ -764,6 +796,73 @@ export function createAgentTool(
             filter.parentId = record.parent_id;
           }
           return JSON.stringify(await service.list(filter));
+        }
+
+        if (action === 'read') {
+          // 只读：解析目标 → 取该成员当前 primary body 的 session → 读最近 N 条消息。
+          // 不新增 RPC，也不改 sessions.get 的形状：同一份 SessionState 只读一份。
+          const target = typeof record.to === 'string' ? record.to.trim() : '';
+          if (target === '') throw invalid('read requires to');
+          // 跨节点 / 地址形态读不到对方的本地会话：显式拒绝，不猜。
+          if (target.includes('@')) {
+            throw invalid(
+              'read: only local members are readable; address targets live on another node',
+            );
+          }
+          const visible: { id: string; session_id: string; name?: string }[] = [];
+          if (!isOwnerCaller) {
+            const team = options.team;
+            if (team === undefined) throw invalid('read requires a team service');
+            for (const entry of await team.listForCaller(callerSession as string)) {
+              visible.push({
+                id: entry.agent_id,
+                session_id: entry.session_id,
+                ...(entry.name !== undefined ? { name: entry.name } : {}),
+              });
+            }
+          } else {
+            for (const entry of await service.list({ viewer: ownerId })) {
+              visible.push({
+                id: entry.id,
+                session_id: entry.session_id,
+                ...(entry.name !== undefined ? { name: entry.name } : {}),
+              });
+            }
+          }
+          const hit =
+            visible.find((entry) => entry.id === target) ??
+            visible.find((entry) => entry.session_id === target) ??
+            visible.find((entry) => entry.name === target);
+          if (hit === undefined) {
+            throw new AgentError('unknown_member', `unknown_member: ${target}`);
+          }
+          const readSession = options.readSession;
+          if (readSession === undefined) {
+            throw invalid('read: no session store is attached to this entry');
+          }
+          // 当前 primary body 的 session：rotate 之后旧 session 是历史，读新的那具。
+          const current = await service.identify(hit.id);
+          const sessionId = current?.session_id ?? hit.session_id;
+          const state = await readSession(sessionId);
+          if (state === null) {
+            throw invalid(`read: no session state for ${sessionId}`);
+          }
+          const limit = readMessageLimit(record.limit);
+          const all = state.messages;
+          const selected = all.slice(Math.max(0, all.length - limit));
+          const messages = selected.map((message) => ({
+            role: message.role,
+            content: truncateText(message.content, READ_MESSAGE_MAX_CHARS),
+          }));
+          return JSON.stringify({
+            agent_id: hit.id,
+            ...(hit.name !== undefined ? { name: hit.name } : {}),
+            session_id: sessionId,
+            state: current?.state,
+            messages_total: all.length,
+            returned: messages.length,
+            messages,
+          });
         }
 
         throw invalid(`unknown action "${String(action)}" (expected ${ACTIONS.join('|')})`);

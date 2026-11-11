@@ -36,6 +36,8 @@ export interface RuntimeNoticeHookOptions {
 /** 一条通知 → 一行文本：成功/失败都给明确前缀，模型才知道到底生没生效。 */
 export function formatNoticeLine(notice: { scope: string; summary: string; ok: boolean }): string {
   // summary 已由总线裁剪到 200 字符；这里只加作用域与结果标记。
+  // peer 通知的 `ok: false` 表示「有成员失败」，不是「热应用没生效」，不加该前缀。
+  if (notice.scope === 'peer') return `[runtime] ${notice.summary}`;
   return notice.ok ? `[runtime] ${notice.summary}` : `[runtime] (not applied) ${notice.summary}`;
 }
 

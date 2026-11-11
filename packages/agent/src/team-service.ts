@@ -44,7 +44,6 @@ import {
   type TeamMembersInput,
   type TeamMembersResult,
   type TeamPostInput,
-  type TeamPostOptions,
   type TeamPostResult,
   type TeamRecord,
   type TeamRetractInput,
@@ -300,7 +299,7 @@ export class DefaultTeamService implements AgentTeamService {
     return result;
   }
 
-  async post(input: TeamPostInput, options?: TeamPostOptions): Promise<TeamPostResult> {
+  async post(input: TeamPostInput): Promise<TeamPostResult> {
     const record = this.store.get(input.team_id);
     if (record === undefined) {
       throw new TeamError('team_not_found', `team_not_found: ${input.team_id}`);
@@ -435,7 +434,6 @@ export class DefaultTeamService implements AgentTeamService {
               from,
               conversationId,
               input.team_id,
-              options?.final === true,
             ),
       ),
     );
@@ -595,8 +593,6 @@ export class DefaultTeamService implements AgentTeamService {
     const interrupt = input.interrupt === true;
     const notify = input.notify === true;
     const messageId = input.message_id;
-    // 内部标记（非 wire）：这次投递是本轮给父级的最终回报，收口不再自动回传最终文本。
-    const final = input.final === true;
 
     let content: string;
     if (messageId !== undefined) {
@@ -660,10 +656,10 @@ export class DefaultTeamService implements AgentTeamService {
     }
 
     if (segments === 3) {
-      return this.sendAddress(caller, input.to, content, conversationId, final);
+      return this.sendAddress(caller, input.to, content, conversationId);
     }
     if (segments === 2) {
-      return this.sendLocalAddress(caller, input.to, content, conversationId, final);
+      return this.sendLocalAddress(caller, input.to, content, conversationId);
     }
     // 1 段 `human`：本机人类，写进调用者自己的 Team 日志。
     if (input.to === HUMAN_PRINCIPAL) {
@@ -673,7 +669,6 @@ export class DefaultTeamService implements AgentTeamService {
         input.to,
         content,
         conversationId,
-        final,
       );
     }
 
@@ -722,13 +717,7 @@ export class DefaultTeamService implements AgentTeamService {
     // 交给 tenant 全局 dispatch（否则会绕过 roster 解析到别的 Team）。
     if (caller.team_id !== undefined && target === undefined) {
       // 1 段裸名的查找阶梯：本 Team（上面已查）→ 本机其它 Team → 可访问节点。
-      const escalated = await this.resolveBareAgent(
-        caller,
-        input.to,
-        content,
-        conversationId,
-        final,
-      );
+      const escalated = await this.resolveBareAgent(caller, input.to, content, conversationId);
       if (escalated !== undefined) return escalated;
       return {
         status: 'error',
@@ -788,7 +777,6 @@ export class DefaultTeamService implements AgentTeamService {
         origin_session_id: input.origin_session_id ?? input.from_session_id,
         ...(input.origin_run_id !== undefined ? { origin_run_id: input.origin_run_id } : {}),
         ...(input.batch_key !== undefined ? { batch_key: input.batch_key } : {}),
-        ...(final ? { final: true } : {}),
       });
       if (result.status === 'queued') {
         return {
@@ -932,7 +920,6 @@ export class DefaultTeamService implements AgentTeamService {
     to: string,
     content: string,
     conversationId: string,
-    final?: boolean,
   ): Promise<TeamAgentSendResult | undefined> {
     const localTeams = this.store
       .list()
@@ -969,7 +956,6 @@ export class DefaultTeamService implements AgentTeamService {
         `${local.agentId}@${local.teamId}`,
         content,
         conversationId,
-        final,
       );
     }
 
@@ -992,7 +978,7 @@ export class DefaultTeamService implements AgentTeamService {
     }
     const [remote] = found.candidates;
     if (remote !== undefined) {
-      return this.sendAddress(caller, remote.address, content, conversationId, final);
+      return this.sendAddress(caller, remote.address, content, conversationId);
     }
     // 没查完就不能说「不存在」：离线 peer 会被误报成查无此人。
     if (found.timedOut) {
@@ -1022,7 +1008,6 @@ export class DefaultTeamService implements AgentTeamService {
     to: string,
     content: string,
     conversationId: string,
-    final?: boolean,
   ): Promise<TeamAgentSendResult> {
     const guard = this.addressCallerGuard(caller, conversationId);
     if (guard !== undefined) return guard;
@@ -1049,7 +1034,7 @@ export class DefaultTeamService implements AgentTeamService {
       };
     }
     if (placement.kind !== 'remote') {
-      return this.deliverLocalAddress(caller, placement, to, content, conversationId, final);
+      return this.deliverLocalAddress(caller, placement, to, content, conversationId);
     }
 
     const result = await federation.send({
@@ -1086,7 +1071,6 @@ export class DefaultTeamService implements AgentTeamService {
     to: string,
     content: string,
     conversationId: string,
-    final?: boolean,
   ): Promise<TeamAgentSendResult> {
     const guard = this.addressCallerGuard(caller, conversationId);
     if (guard !== undefined) return guard;
@@ -1102,7 +1086,6 @@ export class DefaultTeamService implements AgentTeamService {
         to,
         content,
         conversationId,
-        final,
       );
     }
     return this.deliverLocalAddress(
@@ -1111,7 +1094,6 @@ export class DefaultTeamService implements AgentTeamService {
       to,
       content,
       conversationId,
-      final,
     );
   }
 
@@ -1168,7 +1150,6 @@ export class DefaultTeamService implements AgentTeamService {
     to: string,
     content: string,
     conversationId: string,
-    final?: boolean,
   ): Promise<TeamAgentSendResult> {
     const teamId = placement.team_id ?? caller.team_id;
     if (teamId === undefined) {
@@ -1235,16 +1216,13 @@ export class DefaultTeamService implements AgentTeamService {
 
     let posted: TeamPostResult;
     try {
-      posted = await this.post(
-        {
-          team_id: teamId,
-          content,
-          from: caller.id,
-          mentions: [targetId],
-          conversation_id: conversationId,
-        },
-        { final: final === true },
-      );
+      posted = await this.post({
+        team_id: teamId,
+        content,
+        from: caller.id,
+        mentions: [targetId],
+        conversation_id: conversationId,
+      });
     } catch (error) {
       return {
         status: 'error',
@@ -1378,7 +1356,6 @@ export class DefaultTeamService implements AgentTeamService {
     from: string,
     conversationId: string,
     originTeamId?: string,
-    final?: boolean,
   ): Promise<TeamDelivery> {
     try {
       const result = await this.agent.dispatch({
@@ -1387,7 +1364,6 @@ export class DefaultTeamService implements AgentTeamService {
         from,
         conversation_id: conversationId,
         ...(originTeamId !== undefined ? { origin_team_id: originTeamId } : {}),
-        ...(final === true ? { final: true } : {}),
       });
       if (result.status === 'queued') {
         return {
