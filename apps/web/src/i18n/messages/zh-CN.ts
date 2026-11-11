@@ -961,6 +961,7 @@ export const messages = {
   'chat.sessionList.noMatch': '没有匹配“{query}”的会话。',
   'chat.sessionList.empty': '还没有会话。',
   'chat.sessionList.idLabel': '会话标题',
+  'chat.sessionList.named': '已命名：标题由你设定，自动命名不会覆盖',
   'chat.sessionList.actions': '会话 {title} 的操作',
   'chat.sessionList.rename': '重命名',
   'chat.sessionList.viewRuns': '查看运行',

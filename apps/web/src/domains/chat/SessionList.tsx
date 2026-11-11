@@ -322,6 +322,19 @@ export function SessionList({
                             <Tooltip label={titleTooltip}>
                               <span className="session-title-text">{title}</span>
                             </Tooltip>
+                            {/* 已命名（title_source='manual'）：只给字形 + tooltip，
+                                中性灰、无背景，和状态字形同级，不抢标题注意力。 */}
+                            {session.title_source === 'manual' && (
+                              <Tooltip label={t('chat.sessionList.named')}>
+                                <span
+                                  className="flex-none font-mono text-2xs leading-none text-muted"
+                                  role="img"
+                                  aria-label={t('chat.sessionList.named')}
+                                >
+                                  ✎
+                                </span>
+                              </Tooltip>
+                            )}
                             {pendingCount > 0 && (
                               <Tooltip label={t('chat.session.pending', { count: pendingCount })}>
                                 <span className="session-pending-badge">

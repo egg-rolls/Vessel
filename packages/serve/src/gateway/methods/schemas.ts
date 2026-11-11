@@ -107,6 +107,9 @@ export const sessionInfoSchema = {
     // 以下可选字段在真实 session 文件中可能是 null 或缺失；校验器不支持
     // nullable/union，故不声明类型（任意值通过），required 与其余字段仍受约束。
     branch: {},
+    // Additive (title_source): `manual` / `generated`；无标记（旧数据 / 未命名）时
+    // 该 key 不出现。封闭联合，故这里能收窄成 enum。
+    title_source: { type: 'string', enum: ['manual', 'generated'] },
   },
 };
 

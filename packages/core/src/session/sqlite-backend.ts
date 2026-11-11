@@ -15,7 +15,7 @@ import type {
   SessionStatus,
   SessionStore,
 } from '../types/session.js';
-import { deriveSessionMeta } from './session-store.js';
+import { deriveSessionMeta, normalizeTitleSource, withTitleSource } from './session-store.js';
 
 /** sessions 表完整行（SELECT * 的形状） */
 interface SessionRow {
@@ -48,6 +48,7 @@ interface SessionListRow {
   message_count: number;
   branch: string | null;
   tenant_id: string | null;
+  title_source: string | null;
 }
 
 /** 旧行顶层 run 字段 -> SessionState.legacy_run（一版兼容） */
@@ -156,10 +157,7 @@ export class SQLiteSessionStore implements SessionStore {
       created_at: row.started_at,
       updated_at: row.updated_at || row.started_at,
       title: row.title || undefined,
-      title_source:
-        row.title_source === 'manual' || row.title_source === 'generated'
-          ? row.title_source
-          : undefined,
+      title_source: normalizeTitleSource(row.title_source),
       preview: row.preview || undefined,
       created_on_branch: row.branch || undefined,
       messages: JSON.parse(row.messages) as Message[],
@@ -244,22 +242,29 @@ export class SQLiteSessionStore implements SessionStore {
              started_at,
              COALESCE(updated_at, started_at) AS updated_at,
              json_array_length(messages) AS message_count,
-             branch
+             branch,
+             title_source
       FROM sessions
       WHERE json_array_length(messages) > 0
       ORDER BY updated_at DESC, session_id ASC
     `);
     const rows = stmt.all() as SessionListRow[];
-    return rows.map((row) => ({
-      session_id: row.session_id,
-      title: row.title,
-      preview: row.preview,
-      status: row.status,
-      started_at: row.started_at,
-      updated_at: row.updated_at,
-      message_count: row.message_count,
-      branch: row.branch ?? undefined,
-    }));
+    // 唯一的 title_source 出口是 withTitleSource（与 toSessionInfo 共用）。
+    return rows.map((row) =>
+      withTitleSource(
+        {
+          session_id: row.session_id,
+          title: row.title,
+          preview: row.preview,
+          status: row.status,
+          started_at: row.started_at,
+          updated_at: row.updated_at,
+          message_count: row.message_count,
+          branch: row.branch ?? undefined,
+        },
+        row.title_source,
+      ),
+    );
   }
 
   /**

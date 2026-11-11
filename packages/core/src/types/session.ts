@@ -67,6 +67,11 @@ export interface SessionInfo {
   message_count: number;
   /** 会话创建时的 git branch */
   branch?: string;
+  /**
+   * Source marker for the stored title (additive). 缺失 = 旧数据 / AI 尚未命名，
+   * 读取方按「无标记」处理，不做派生猜测。
+   */
+  title_source?: SessionTitleSource;
 }
 
 /** Session 元数据存储 port（只收发 SessionState；不含事件日志） */

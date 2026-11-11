@@ -8,6 +8,11 @@ export interface SessionInfo {
   updated_at: number;
   message_count: number;
   branch?: string;
+  /**
+   * Additive (title_source)：标题来源。`manual` = 人显式命名过（自动命名不会覆盖）；
+   * `generated` = AI 命名；缺失 = 旧 gateway / 旧数据 / 尚未命名。
+   */
+  title_source?: 'manual' | 'generated';
 }
 
 /** 会话消息角色（与 core `Message` 对齐） */

@@ -995,6 +995,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.sessionList.noMatch': 'No session matches “{query}”.',
   'chat.sessionList.empty': 'No sessions yet.',
   'chat.sessionList.idLabel': 'Session title',
+  'chat.sessionList.named': 'Named: you set this title, so automatic naming leaves it alone',
   'chat.sessionList.actions': 'Actions for session {title}',
   'chat.sessionList.rename': 'Rename',
   'chat.sessionList.viewRuns': 'View runs',

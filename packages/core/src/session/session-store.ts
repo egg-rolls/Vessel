@@ -4,7 +4,12 @@
  */
 
 import type { Message } from '../types/provider.js';
-import type { SessionInfo, SessionState, SessionStore } from '../types/session.js';
+import type {
+  SessionInfo,
+  SessionState,
+  SessionStore,
+  SessionTitleSource,
+} from '../types/session.js';
 
 /**
  * 从首轮用户消息派生 title/preview（照搬 Hermes list_sessions_rich 的 preview 语义）。
@@ -30,11 +35,32 @@ function truncateCodePoints(value: string, limit: number): string {
   return codePoints.length <= limit ? value : codePoints.slice(0, limit).join('');
 }
 
+/**
+ * title_source 是封闭联合：JSON / SQL 上的其它值一律当「无标记」丢弃（不抛错）。
+ *
+ * 唯一实现：file / sqlite 两个后端与 `toSessionInfo` 共用，避免同一口径各写一份。
+ */
+export function normalizeTitleSource(value: unknown): SessionTitleSource | undefined {
+  return value === 'manual' || value === 'generated' ? value : undefined;
+}
+
+/**
+ * `SessionInfo.title_source` 的唯一出口：归一化 marker，有值才挂 key。
+ *
+ * 为什么单独抽一个函数：SQLite `listRich()` 直接从 SQL 行拼摘要（不解析 messages），
+ * 走不到 `toSessionInfo()`；两个出口共用本函数后，字段名的拼写与「无标记 = 线上形状不变」
+ * 只有一份。additive：无标记时返回原对象，形状与旧版完全一致。
+ */
+export function withTitleSource(info: SessionInfo, raw: unknown): SessionInfo {
+  const titleSource = normalizeTitleSource(raw);
+  return titleSource === undefined ? info : { ...info, title_source: titleSource };
+}
+
 /** SessionState -> SessionInfo 摘要（title/preview 优先用已存储值，否则派生） */
 export function toSessionInfo(state: SessionState): SessionInfo {
   const messages = state.messages ?? [];
   const derived = deriveSessionMeta(messages);
-  return {
+  const info: SessionInfo = {
     session_id: state.session_id,
     title: state.title ?? derived.title,
     preview: state.preview ?? derived.preview,
@@ -44,6 +70,7 @@ export function toSessionInfo(state: SessionState): SessionInfo {
     message_count: messages.length,
     branch: state.created_on_branch,
   };
+  return withTitleSource(info, state.title_source);
 }
 
 /**

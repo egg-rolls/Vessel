@@ -20,10 +20,14 @@ import type {
   SessionState,
   SessionStatus,
   SessionStore,
-  SessionTitleSource,
 } from '../types/session.js';
 import { atomicWrite } from './atomic-write.js';
-import { compareSessionInfo, deriveSessionMeta, toSessionInfo } from './session-store.js';
+import {
+  compareSessionInfo,
+  deriveSessionMeta,
+  normalizeTitleSource,
+  toSessionInfo,
+} from './session-store.js';
 
 /**
  * 文件 SessionStore 实现
@@ -65,11 +69,6 @@ function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
 }
 
-/** title_source is a closed union: anything else on disk is ignored (no throw). */
-function optionalTitleSource(value: unknown): SessionTitleSource | undefined {
-  return value === 'manual' || value === 'generated' ? value : undefined;
-}
-
 /** 旧 JSON 顶层 run 字段 -> SessionState.legacy_run（一版兼容） */
 function toLegacyRun(raw: Record<string, unknown>): LegacyRunSnapshot | undefined {
   const completed_at = optionalNumber(raw.completed_at);
@@ -100,7 +99,8 @@ function toSessionState(value: unknown): SessionState {
     created_at: createdAt,
     updated_at: updatedAt,
     title: optionalString(raw.title),
-    title_source: optionalTitleSource(raw.title_source),
+    // 封闭联合：磁盘上的其它值一律当「无标记」丢弃（与 sqlite / toSessionInfo 同一口径）。
+    title_source: normalizeTitleSource(raw.title_source),
     preview: optionalString(raw.preview),
     created_on_branch: optionalString(raw.created_on_branch) ?? optionalString(raw.branch),
     messages: Array.isArray(raw.messages) ? (raw.messages as Message[]) : undefined,
