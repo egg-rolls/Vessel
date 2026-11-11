@@ -34,26 +34,6 @@ export interface RunMethodsDeps {
   durable(): DurableGatewayOptions | undefined;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
-  /**
-   * 0.52：`runs.start` 的附件引用闸门（只有装配层知道路径边界）。
-   *
-   * 缺省 = 不做判定（保持旧行为）：本单之前没有任何入口会带 refs，
-   * 而拒绝策略属于 app 侧（复用 basic-tools 的 `buildPathBoundary` / `evaluatePath`）。
-   * 返回 `undefined` = 通过；返回 `{ reason }` = 硬拒（handler 折成 `invalid_params`）。
-   */
-  checkRefs?(refs: readonly MessageRef[]): RefsVerdict | undefined;
-}
-
-/**
- * 闸门结论。`reason` 是稳定码（客户端按它选文案），`path` 指向被拒的那一条。
- *
- * - `refs_invalid`：形状不合法（非绝对路径 / 超长 / 超条数）；
- * - `refs_denied`：命中 deny 目录（内置 `~/.ssh` 等，或配置 `deny_paths`）；
- * - `refs_outside_roots`：越出 `allowed_roots`（与工具读文件同一判定）。
- */
-export interface RefsVerdict {
-  reason: 'refs_invalid' | 'refs_denied' | 'refs_outside_roots';
-  path?: string;
 }
 
 /**
@@ -118,6 +98,11 @@ function recencyOf(run: Record<string, unknown>): number {
 /**
  * `runs.start.refs` → 归一后的条目（0.52）。
  *
+ * 这里**只做形状校验**：绝对路径、长度、条数、kind。路径边界（`allowed_roots` /
+ * deny 目录）**不在这里判** —— 引用是「用户想让我读这个」，提前拒等于把用户意图
+ * 丢掉；权限校验发生在模型读文件那一刻（`read` / `media` 的 `evaluatePath`），
+ * 与普通文件工具同一套。
+ *
  * params_schema 已经卡住形状；这里再截一次条数（服务端不接受比上限更宽的输入，
  * 而不是悄悄截断）——超限属于 `invalid_params`，由调用方抛出。
  */
@@ -147,6 +132,14 @@ function readRefsParam(value: unknown): MessageRef[] {
     if (typeof path !== 'string' || path.length === 0 || path.length > MESSAGE_REF_PATH_MAX) {
       throw new RpcError('invalid_params', 'refs[].path must be a non-empty string', {
         reason: 'refs_invalid',
+      });
+    }
+    // 形状：绝对路径。不用 `node:path.isAbsolute` 单判 —— 它的结果随宿主平台变
+    //（Linux 上 `C:\x` 不算绝对），而 refs 的路径来自驱动 gateway 的那台宿主。
+    if (!/^(?:[\\/]|[A-Za-z]:[\\/])/.test(path)) {
+      throw new RpcError('invalid_params', 'refs[].path must be absolute', {
+        reason: 'refs_invalid',
+        path,
       });
     }
     const ref: MessageRef = { kind, path };
@@ -300,18 +293,9 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         const agentId = typeof params.agent_id === 'string' ? params.agent_id : undefined;
         const requestedSession =
           typeof params.session_id === 'string' ? params.session_id : undefined;
-        // 附件引用闸门（0.52）：越界 / deny 目录在这里就拒，不进 user.message，
-        // 也不进 SessionState —— 引用一旦落盘就再也收不回来。
+        // 附件引用（0.52）：只校验形状就随 run 落盘；路径边界留到读文件那一刻
+        // （`read` / `media` 的 `evaluatePath`），用户引用不在这里被提前拒。
         const refs = readRefsParam(params.refs);
-        if (refs.length > 0) {
-          const verdict = deps.checkRefs?.(refs);
-          if (verdict !== undefined) {
-            throw new RpcError('invalid_params', `refs rejected: ${verdict.reason}`, {
-              reason: verdict.reason,
-              ...(verdict.path !== undefined ? { path: verdict.path } : {}),
-            });
-          }
-        }
         const result = await control.start({
           input: stringParam(params, 'input'),
           ...(agentId !== undefined ? { agent_id: agentId } : {}),

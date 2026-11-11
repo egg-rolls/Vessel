@@ -14,7 +14,6 @@
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import type {
-  MessageRef,
   PluginHost,
   RunEvent,
   RunnableAgent,
@@ -83,7 +82,7 @@ import {
   createPermissionsMethods,
   type PermissionsControl,
 } from './gateway/methods/permissions.js';
-import { createRunMethods, type RefsVerdict } from './gateway/methods/runs.js';
+import { createRunMethods } from './gateway/methods/runs.js';
 import { createSessionMethods } from './gateway/methods/sessions.js';
 import { createTeamMethods } from './gateway/methods/teams.js';
 import {
@@ -333,14 +332,6 @@ export interface GatewayOptions {
    * （`asyncAnswerDeliveries`）+ 落盘的 `answer.delivered_at`，见 `deliverAsyncAskAnswer`。
    */
   askAnswerDelivery?: (record: StoredInteraction) => Promise<boolean>;
-  /**
-   * 0.52：`runs.start` 的附件引用闸门（asm 注入；缺省 = 不判定，只透传）。
-   *
-   * 引用一旦落盘（`user.message` → SessionState）就再也收不回来，所以越界 /
-   * deny 目录必须在**准入前**拒。判定实现复用 basic-tools 的
-   * `buildPathBoundary` / `evaluatePath`，serve 只认结论（不依赖插件包）。
-   */
-  checkRefs?: (refs: readonly MessageRef[]) => RefsVerdict | undefined;
   /**
    * 内部：只构建方法表/引擎，不调用 `Bun.serve`。
    * 由 `createLocalRpcDispatcher` 使用；外部不要设置。
@@ -1469,7 +1460,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       durable: () => opts.durable,
       reserveResume,
       releaseResume,
-      ...(opts.checkRefs !== undefined ? { checkRefs: opts.checkRefs } : {}),
     }),
     ...createEventsMethods(observabilityMethodsDeps),
     {

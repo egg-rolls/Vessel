@@ -270,9 +270,11 @@ export function useChatSubmit({
   /**
    * 加一条引用（供工具栏 / 文件选择用）。
    *
-   * 这里只做**形状**拦截：绝对路径、长度、条数上限。路径边界（`allowed_roots` /
-   * deny 目录）只有服务端知道，判定发生在 `runs.start` 的准入闸门里 —— 被拒时
-   * `runs.start` 返回 `invalid_params` + 稳定 `reason`，由 `refsErrorText` 变成人话。
+   * 这里只做**形状**拦截：绝对路径、长度、条数上限（只防手误）。路径边界
+   *（`allowed_roots` / deny 目录）**不在这里判，也不在 `runs.start` 判**：引用
+   * 是用户表达意图，拦在加引用时会把意图丢掉；权限校验发生在模型读文件那一刻
+   *（`read` / `media` 的 `evaluatePath`）。`runs.start` 仍可能返回形状类的
+   * `invalid_params` + `reason`，由 `refsErrorText` 变成人话。
    */
   const addRef = useCallback(
     (ref: MessageRef): boolean => {

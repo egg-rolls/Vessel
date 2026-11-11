@@ -5,8 +5,10 @@
  * 文案在 Web 侧按 reason 选 i18n key：同一条拒绝在 CLI / TUI 上不需要一句人话，
  * 而人看到的必须是「哪个路径、为什么」。
  *
- * 三个 reason 与 `RefsVerdict` 一一对应（serve 的 `runs.start` handler）：
- * `refs_invalid` / `refs_denied` / `refs_outside_roots`。
+ * 本版本只有 `refs_invalid`（形状：非绝对路径 / 超长 / 超条数）：路径边界
+ *（deny 目录 / `allowed_roots`）**不在加引用时判**，改到模型读文件那一刻。
+ * `refs_denied` / `refs_outside_roots` 两个分支留着只为兼容旧 gateway 的响应，
+ * 当前服务端不会再发（对应的 i18n key 也还在，删 key 走 1 的裁决）。
  */
 import { t } from '../../i18n';
 

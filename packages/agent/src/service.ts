@@ -5895,8 +5895,9 @@ const REF_KINDS: ReadonlySet<string> = new Set(['file', 'image', 'document']);
 /**
  * 附件引用的形状归一（0.52）：只认 `{kind, path}` 形状，逐条丢弃其余，条数封顶。
  *
- * 这里**不做**权限判定：越界 / deny 目录由写侧闸门（`runs.start` 的 refs 闸门，
- * 复用 basic-tools 的 `buildPathBoundary` / `evaluatePath`）在准入前就拒掉。
+ * 这里**不做**权限判定，也不该做：引用是「用户想让我读这个」，加进来时就拒会把
+ * 意图丢掉。路径边界统一在**读文件那一刻**校验（`read` / `media` 的
+ * `evaluatePath`，与普通文件工具同一套）。
  * 保留这一层是为了 `dispatch` 等内部调用方也不把半成品形状带进上下文。
  */
 function normalizeRefs(value: unknown): MessageRef[] {

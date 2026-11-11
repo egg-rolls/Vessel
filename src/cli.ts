@@ -123,7 +123,6 @@ import {
 import { type PluginWatchHandle, startPluginWatch } from './plugin-watch';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
-import { createConfigRefsGate } from './refs-gate';
 import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
@@ -1215,9 +1214,6 @@ async function runWithConfig(result: BootstrapResult) {
             askAnswerDelivery: createAskAnswerDelivery(result.agent.service),
           }
         : {}),
-      // 0.52：附件引用的路径闸门（与 basic-tools 同一份 allowed_roots / deny_paths）。
-      // 读 liveConfig：热应用改的是它，闸门必须跟着变（配置指纹变了才重建边界）。
-      checkRefs: createConfigRefsGate(() => liveConfig),
       // 单执行面的 RPC 数据源：config / trace / session 数据 / metrics。
       defaultTenantId: result.tenantId,
       config: tenantConfigControl,

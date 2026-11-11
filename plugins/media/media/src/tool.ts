@@ -202,7 +202,12 @@ async function checkPath(rawPath: string, deps: MediaToolDeps): Promise<PathChec
   // 纵深防御：即使调用方绕过 checkPermission，deny 目录仍然拒绝
   const decision = evaluatePath(target, deps.boundary);
   if (decision === 'deny') {
-    return { ok: false, message: `错误：路径在敏感路径拒绝列表中：${input}` };
+    // 权限可追溯：这是路径策略的拒绝，不是文件不存在；不复述完整路径（入参里已有）。
+    return {
+      ok: false,
+      message:
+        '错误：该路径被路径策略拒绝（deny 目录 / denylist），不是文件不存在。改用允许范围内的路径，或由用户调整 deny_paths。',
+    };
   }
 
   let info: Awaited<ReturnType<typeof stat>>;

@@ -57,6 +57,16 @@ const MAX_PERSIST_BYTES = 16 * 1024 * 1024;
 /** 取消时返回的固定文本 */
 const CANCELLED_TEXT = '错误：操作已取消（cancelled）。';
 
+/**
+ * handler 侧 `deny` 的固定文本（纵深防御用；正常路径由 `checkPermission` 先拦）。
+ *
+ * 口径：说清是**路径策略**拒的、不是文件不存在 —— 否则模型会把「被策略拒」当成
+ * 「路径写错了 / 环境坏了」反复重试；且不复述完整路径（调用方的入参里已经带着它，
+ * 重复注入只是 token 税）。
+ */
+const PATH_DENIED_TEXT =
+  '错误：该路径被路径策略拒绝（deny 目录 / denylist），不是文件不存在。改用允许范围内的路径，或由用户调整 deny_paths。';
+
 /** read 允许的最大文件字节数（超过直接拒绝，提示用 bash 分块） */
 const MAX_READ_BYTES = 8 * 1024 * 1024;
 
@@ -771,7 +781,7 @@ function readFileSlice(
   // 防御性检查：即使调用方绕过 checkPermission，也绝不读取敏感路径。
   // 相对路径先按 baseCwd 解析，边界按解析后的绝对路径判定（不因 baseCwd 放宽）。
   if (evaluatePath(absolute, boundary) === 'deny') {
-    return `错误：路径在敏感路径拒绝列表中：${inputPath}`;
+    return PATH_DENIED_TEXT;
   }
   if (dependsOnBaseCwd(inputPath) && baseCwd.issue !== undefined) return baseCwd.issue;
 
@@ -898,7 +908,7 @@ function editFile(
   const absolute = resolveToolPath(baseCwd.path, inputPath);
   // 防御性检查：与 read 同一条边界；绕过 checkPermission 也不得改敏感路径
   if (evaluatePath(absolute, boundary) === 'deny') {
-    return `错误：路径在敏感路径拒绝列表中：${inputPath}`;
+    return PATH_DENIED_TEXT;
   }
   if (dependsOnBaseCwd(inputPath) && baseCwd.issue !== undefined) return baseCwd.issue;
   if (!existsSync(absolute)) return `错误：文件不存在：${inputPath}`;

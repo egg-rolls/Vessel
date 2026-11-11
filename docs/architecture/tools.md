@@ -81,6 +81,10 @@ interface ToolDefinition {
 
 **路径边界（ADR-055；`edit` 同样适用）**：`read` / `edit` / `bash cwd` 先按真实路径（`realpath`；不存在的路径取最近已存在祖先）判定，`..` 与 symlink 不能绕过。内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）命中即 `deny`；插件 `config.allowed_roots` 非空时越界为 `ask`，`config.deny_paths` 追加到内置列表。默认 `allowed_roots` 为空 = 不限制根。`bash` 只校验 `cwd`，命令本身仍可访问其它路径——这不是沙箱。
 
+**拒绝要可追溯（文案契约）**：`deny` 时工具自己返回「被路径策略拒绝（deny 目录 / denylist），不是文件不存在」，`ask` 被拒时 `PermissionPolicy` 的错误说明是**工具自己的权限判定**要求确认（`… by user (the tool's own permission check asked for confirmation)`）。两种都不复述完整路径——模型自己的入参里已经带着它，重复注入只是 token 税。
+
+**入口处不预判边界**：路径边界只在**读写的这一刻**判。上游若把路径收进数据结构（会话消息的 `Message.refs`、订阅条目、`runs.start` 的引用），那里只做形状校验（绝对路径 / 长度 / 条数 / kind）—— 用户带进来的路径是意图，提前拒等于把意图丢掉，且拒绝理由离开了它当下要读的那个文件就说不清楚。
+
 **被判死的工具，以及为什么**：
 
 | 删掉的 | 因为 |

@@ -165,7 +165,14 @@ export class PermissionPolicy {
     }
 
     if (decision === 'deny') {
-      throw new Error(`Tool "${tool.name}" execution denied by permission policy`);
+      // 归属：工具自己的 checkPermission 判的 deny（例如路径边界）要能被模型读出来，
+      // 否则它会把「被策略拒」当成「环境坏了」反复重试。前缀保持稳定短语，
+      // error-envelope 的 PERMISSION_DENIED_PATTERNS 按前缀匹配，不受影响。
+      throw new Error(
+        source === 'tool'
+          ? `Tool "${tool.name}" execution denied by permission policy (the tool's own permission check returned deny)`
+          : `Tool "${tool.name}" execution denied by permission policy`,
+      );
     }
     if (decision === 'ask') {
       const requestId = randomUUID();
@@ -191,7 +198,13 @@ export class PermissionPolicy {
         | undefined;
       const userDecision = decided?.decision ?? (decided?.allowed === false ? 'deny' : 'allow');
       if (userDecision !== 'allow') {
-        throw new Error(`Tool "${tool.name}" execution denied by user`);
+        // 同上：让模型知道这次确认是**工具自己要求**的（文件工具的越界 / 危险操作），
+        // 而不是默认策略在拦；前缀保持稳定短语供 envelope 分类。
+        throw new Error(
+          source === 'tool'
+            ? `Tool "${tool.name}" execution denied by user (the tool's own permission check asked for confirmation)`
+            : `Tool "${tool.name}" execution denied by user`,
+        );
       }
       // 用户选 "always" → 记住，后续同工具不再确认
       if (decided?.remember) {
