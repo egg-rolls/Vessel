@@ -36,6 +36,7 @@ applies_to: [N, M]
 - **限额**：判定只经 `evaluateUsageLimits` / `evaluateTermination`（ADR-084）。`request_limit` / token / cost / `max_iterations` / `max_runtime` 命中时先发 `limit.blocked` 再抛 `LimitExceededError`；`tool_calls_limit` 是软预算——发一次 `limit.warning`，下一轮请求不提供工具，模型收尾后 run 正常 `completed`。
 - **错误 envelope 只增不改**：`run.failed` / `tool.call.failed` 保留原 `error`，新增字段只附加；不写 prompt / reasoning / 完整工具结果（ADR-080）。
 - **透明化**：事件形状冻结、快照只填已知字段、Self Card 每 run 一次、BeforeLlm 注入只增不改（ADR-086/087）。
+- **provider 重试**：只有「一个增量都没流出」的传输层断开与过载（429 / 502 / 503 / 504）自动重试（指数退避 + 抖动，默认 4 次 / base 500ms / 单次封顶 8s）；`AbortSignal` 中断立即抛。判定与退避是纯函数（`runtime/provider-retry.ts`），每次重试发 `llm.retry`（内部事件层）。
 
 ## 配置与存储
 

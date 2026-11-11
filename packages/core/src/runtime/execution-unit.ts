@@ -50,6 +50,7 @@ import type {
   LLMProvider,
   LLMResponse,
   Message,
+  ProviderRetryPolicy,
   StreamChunk,
 } from '../types/provider.js';
 import type { Run, RunInterruptReason, RunOptions, StreamSegmentState } from '../types/run.js';
@@ -79,6 +80,12 @@ import {
 import { MemoryPluginHost } from './plugin-host.js';
 import { type InstalledPlugins, installPluginsIntoHost } from './plugin-install.js';
 import { type PrefixChangeReason, PromptPrefixGuard } from './prompt-prefix-guard.js';
+import {
+  classifyProviderRetry,
+  normalizeRetryPolicy,
+  retryBackoffMs,
+  sleepWithAbort,
+} from './provider-retry.js';
 import type { RunJournal, RunJournalFactory } from './run-journal.js';
 import {
   type LoopContext,
@@ -248,6 +255,22 @@ function chunkKindOf(chunk: StreamChunk): 'text' | 'reasoning' | undefined {
 }
 
 /**
+ * 该增量是否已经「流出了 assistant 的可见输出」。
+ *
+ * 用于判定能不能自动重试同一个请求：正文 / 思考已流出，重发只会让父级看到两段
+ * 重复内容；空 delta 不算（没有可见文本）。`tool_call_delta` 也算已流出——它带
+ * id / 名字 / 参数片段，重发会在时间线上出现两份调用骨架。
+ */
+function streamsAssistantOutput(chunk: StreamChunk): boolean {
+  if (chunk.type === 'tool_call_delta') return true;
+  return (
+    (chunk.type === 'text_delta' || chunk.type === 'reasoning_delta') &&
+    typeof chunk.delta === 'string' &&
+    chunk.delta.length > 0
+  );
+}
+
+/**
  * 恢复历史时「补读最近一次 llm.response」的尾部窗口（按事件条数）。
  * `llm.response` 每个请求一条，真实会话里最后一条通常距 EOF 几 KB；
  * 窗口内找不到时回退全量读，行为与不设窗口等价。
@@ -397,6 +420,8 @@ export class ExecutionUnit {
   /** 0.5：tenant；事件 / SessionState / RunRecord 在缺失时补齐 */
   /** 0.11.1：是否发布 reasoning 流式增量（默认 false） */
   private readonly includeReasoning: boolean;
+  /** 传输层 / 过载重试策略（默认 `DEFAULT_PROVIDER_RETRY_POLICY`） */
+  private readonly retryPolicy: ProviderRetryPolicy;
   /** 成功安装的插件句柄（安装顺序；dispose 逆序，0.9） */
   private plugins?: InstalledPlugins;
   /** dispose 幂等：第二次调用复用同一个 Promise，不再调用插件（0.9） */
@@ -452,6 +477,7 @@ export class ExecutionUnit {
     this.contextPressureHint = opts.contextPressureHint;
     this.boundAgentId = opts.agentId;
     this.includeReasoning = opts.includeReasoning === true;
+    this.retryPolicy = normalizeRetryPolicy(opts.retry);
     this.eventLog = opts.eventLog;
     this.pricing = opts.pricing;
     this.leaseService = opts.leaseService;
@@ -1606,10 +1632,19 @@ export class ExecutionUnit {
   }
 
   /**
-   * 调用 provider，并在 context-overflow（400）时强制压缩一次后重试一次（0.10 R2-17）。
+   * 调用 provider，并处理两类重试：
+   *
+   * - **传输层 / 过载**（socket 断开、ECONNRESET、ETIMEDOUT、`fetch failed`、undici
+   *   headers/body timeout、429 / 502 / 503 / 504）：指数退避 + 抖动后重发同一请求
+   *   （`ProviderRetryPolicy`，默认 4 次、base 500ms、单次封顶 8s）。**只有本次请求
+   *   一个增量都没流出过才重试**——已经流出正文 / 思考再重发，父级会看到两段重复文本。
+   * - **context-overflow**（400）：强制压缩一次后重试一次（0.10 R2-17）。
+   *
+   * 取消优先：`AbortSignal` 中断（用户取消 / rotate / shutdown）立即抛出，不退避、
+   * 不重试；退避期间不改 run 状态、不碰租约。
    *
    * 每次真实请求都递增 request 计数并发布 `llm.request`（重试请求看到的是压缩后的上下文）。
-   * 第二次仍失败则原样抛出，不包装 provider 错误。
+   * 重试用尽后原样抛出，不包装 provider 错误。
    *
    * 两处落盘形态：`llm.request` 的落盘副本只带元信息（`persistData`，正文留在发布
    * 副本里给 live / WS / trace）；每次请求结束都收口当前流式段落（`llm.stream.summary`）。
@@ -1626,9 +1661,11 @@ export class ExecutionUnit {
   ): Promise<LLMResponse> {
     const { runId, stats } = execution;
     let messages = args.messages;
-    let retried = false;
-    /** overflow 重试链里的第几次真实请求（1 起；写进落盘元信息，一眼看出是否重试） */
+    let overflowRetried = false;
+    /** 重试链（传输层 / overflow）里的第几次真实请求（1 起；写进落盘元信息） */
     let attempt = 1;
+    /** 本请求已用掉的传输层重试次数（跨 overflow 压缩不重置：同一条消息不该再多一轮） */
+    let transportRetries = 0;
 
     while (true) {
       // 0.14 P0：provider / 流式错误按 llm 阶段归类。
@@ -1688,6 +1725,10 @@ export class ExecutionUnit {
       const requestStartedAt = Date.now();
       this.streamSegmentState(execution).pendingTtftBase = requestStartedAt;
 
+      // 「本次请求是否已经流出过增量」：正文 / 思考 / 工具调用任一出现即置位。
+      // 置位后不再自动重发——已流出的文本重来一遍，父级时间线上就是两段重复。
+      let streamed = false;
+
       const request: ChatRequest = {
         messages,
         model: this.model,
@@ -1702,6 +1743,7 @@ export class ExecutionUnit {
         // 退化为整段返回（无 chunk 事件，无副作用）。chat() 仍返回完整 LLMResponse。
         stream: true,
         on_chunk: (chunk) => {
+          if (streamsAssistantOutput(chunk)) streamed = true;
           if (chunk.type === 'text_delta' && typeof chunk.delta === 'string') {
             execution.partialContent = `${execution.partialContent ?? ''}${chunk.delta}`;
           }
@@ -1729,8 +1771,58 @@ export class ExecutionUnit {
       } catch (error) {
         // 中断 / 失败同样收口：已流出的骨架必须留在日志里（不含正文）。
         this.flushStreamSegment(execution, args.sessionId);
-        if (retried || !isContextOverflowError(error)) throw error;
-        retried = true;
+
+        // 取消优先：中断（用户 Esc / rotate / shutdown）立即抛出，不退避、不重试。
+        if (args.signal?.aborted === true) throw error;
+
+        const decision = classifyProviderRetry(error);
+        if (decision.retryable && !streamed && transportRetries < this.retryPolicy.maxRetries) {
+          transportRetries += 1;
+          attempt += 1;
+          const backoffMs = retryBackoffMs(
+            transportRetries,
+            this.retryPolicy,
+            decision.retry_after_ms,
+          );
+          // 内部事件层（默认隐藏）：只记计数与分类，不带 prompt / 正文。
+          this.publishEvent({
+            type: 'llm.retry',
+            run_id: runId,
+            data: {
+              run_id: runId,
+              session_id: args.sessionId,
+              attempt: transportRetries,
+              backoff_ms: backoffMs,
+              ...(decision.error_code !== undefined ? { error_code: decision.error_code } : {}),
+              ...(decision.scope !== undefined ? { scope: decision.scope } : {}),
+            },
+            ts: Date.now(),
+          });
+          this.logger.warn('provider error; retrying after backoff', {
+            run_id: runId,
+            attempt: transportRetries,
+            backoff_ms: backoffMs,
+            scope: decision.scope,
+            error: errorText(error),
+          });
+          // 退避期间：不释放租约、不改 run 状态；signal 中断立即抛出。
+          await sleepWithAbort(backoffMs, args.signal);
+          continue;
+        }
+
+        if (decision.retryable) {
+          // 可重试但没重试：说清是哪条闸拦下的（已流出文本 / 次数用尽）。
+          this.logger.warn('provider error; not retried', {
+            run_id: runId,
+            streamed,
+            retries_used: transportRetries,
+            max_retries: this.retryPolicy.maxRetries,
+            error: errorText(error),
+          });
+        }
+
+        if (overflowRetried || !isContextOverflowError(error)) throw error;
+        overflowRetried = true;
         attempt += 1;
         const removed = await this.forceCompact(execution, 'overflow');
         messages = args.rebuildMessages();

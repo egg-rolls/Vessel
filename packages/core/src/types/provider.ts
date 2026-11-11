@@ -102,6 +102,24 @@ export interface LLMResponse {
   reasoning_content?: string;
 }
 
+/**
+ * 传输层重试策略（指数退避 + 抖动）。
+ *
+ * 只管「请求根本没产出内容」的失败：传输层断开与过载（429 / 502 / 503 / 504）。
+ * 鉴权 / 参数 / 上下文超长 / 内容审查不重试（重试只会重复烧钱）。
+ * 默认值见 core `DEFAULT_PROVIDER_RETRY_POLICY`；`maxRetries: 0` 关闭。
+ */
+export interface ProviderRetryPolicy {
+  /** 最多重试次数（不含首次请求）；0 = 不重试 */
+  maxRetries: number;
+  /** 首次退避毫秒数，之后逐次 x2 */
+  baseDelayMs: number;
+  /** 单次退避封顶毫秒数（`Retry-After` 也按它封顶） */
+  maxDelayMs: number;
+  /** 抖动比例 0–1：每次退避在 `delay * (1 ± jitterRatio)` 内随机，仍受 `maxDelayMs` 封顶 */
+  jitterRatio: number;
+}
+
 /** LLM Provider 接口 */
 export interface LLMProvider {
   chat(req: ChatRequest): Promise<LLMResponse>;

@@ -41,6 +41,8 @@ export interface TenantRuntimeProfile {
   /** opt-in 用量计价（按模型查表）；缺省不累计 `totalCost`。 */
   pricing?: UsagePricing;
   includeReasoning?: boolean;
+  /** 传输层 / 过载重试策略；缺省 = `DEFAULT_PROVIDER_RETRY_POLICY`（runtime/provider-retry.ts）。 */
+  retry?: import('../types/provider.js').ProviderRetryPolicy;
   context: {
     maxTokens?: number;
     autoCompact?: boolean;
@@ -74,6 +76,8 @@ export interface ExecutionUnitRequest {
   limits?: UsageLimits;
   termination?: TerminationPolicy;
   includeReasoning?: boolean;
+  /** 覆盖 profile 的传输层重试策略（成员可单独放宽 / 关闭）。 */
+  retry?: import('../types/provider.js').ProviderRetryPolicy;
   logger?: Logger;
   /** 成员 RoleAware 包装 */
   contextFactory?: (init: { sessionId: string }) => WorkingContext;
@@ -224,6 +228,11 @@ export class Runtime {
         ? { includeReasoning: req.includeReasoning }
         : profile.includeReasoning !== undefined
           ? { includeReasoning: profile.includeReasoning }
+          : {}),
+      ...(req.retry !== undefined
+        ? { retry: req.retry }
+        : profile.retry !== undefined
+          ? { retry: profile.retry }
           : {}),
       ...(overrides?.selfCard !== undefined ? { selfCard: overrides.selfCard } : {}),
       ...(overrides?.contextPressureHint !== undefined

@@ -137,6 +137,9 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'session.saved',
   'llm.request',
   'llm.response',
+  // 传输层 / 过载自动重试：一次重试一条，带 attempt / backoff_ms / 分类。
+  // 它不是失败信号（终态失败仍走 `run.failed`），默认档不该逐条刷原始 JSON 卡。
+  'llm.retry',
   // 流式**段落**摘要（不是正文、不是逐 delta）：一段 text/reasoning 结束时一条，
   // 只带段序/条数/字节/seq 跨度。落盘日志里的「思考→工具→正文」骨架靠它，
   // 聊天时间线默认档不该为每个段落多一张原始事件卡。

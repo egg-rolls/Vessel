@@ -31,6 +31,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `llm.response` | `LlmResponsePayload` | execution-unit |
 | `llm.stream.chunk` | `LlmStreamChunkPayload` | execution-unit |
 | `llm.stream.summary` | `LlmStreamSummaryPayload`（段落骨架，无正文） | execution-unit |
+| `llm.retry` | `LlmRetryPayload`（`attempt` / `backoff_ms` / `error_code` / `scope`；默认隐藏的内部事件） | execution-unit |
 | `tool.call.started` | `ToolCallStartedPayload` | execution-unit |
 | `tool.call.completed` | `ToolCallCompletedPayload` | execution-unit |
 | `tool.call.failed` | `ToolCallFailedPayload` | execution-unit |
@@ -41,8 +42,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `run.completed` | `RunCompletedPayload` | execution-unit |
 | `run.failed` | `RunFailedPayload` | execution-unit |
 | `run.cancelled` | `RunCancelledPayload` | execution-unit（0.5：仅显式用户取消；Host 中断仍发 `run.failed`） |
-| `replay.started` | `{ run_id, event_count }` | replayRun |
-| `replay.completed` | `{ run_id, event_count, duration_ms }` | replayRun |
+| `replay.started` / `replay.completed` | `{ run_id, event_count, duration_ms? }` | replayRun |
 | `run.checkpoint` | `{ run_id, session_id, status, iteration? }` | execution-unit |
 | `run.resumed` | `{ run_id, session_id, from_status, iteration }` | execution-unit |
 | `run.finalize.failed` | `{ run_id, session_id, error }` | execution-unit（0.8：终态持久化失败，保留原始 run 错误） |

@@ -166,6 +166,12 @@ export interface ExecutionUnitOptions {
    */
   includeReasoning?: boolean;
   /**
+   * 传输层 / 过载重试策略（指数退避 + 抖动）。缺省 = core
+   * `DEFAULT_PROVIDER_RETRY_POLICY`（base 500ms / x2 / 4 次 / 单次封顶 8s）；
+   * `maxRetries: 0` 关闭。只管「一个增量都没流出」的请求，见 `runtime/provider-retry.ts`。
+   */
+  retry?: Partial<import('./provider.js').ProviderRetryPolicy>;
+  /**
    * 0.10：诊断日志 sink；缺省 noop。
    * 未注入且设置了 `VESSEL_DEBUG` 时，runtime 兜底为 stderr logger（level=debug）。
    */

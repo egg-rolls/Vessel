@@ -121,6 +121,7 @@ legacy 键（仅兼容）：`default_provider` / `default_model` / `providers.<n
 4. **未知 provider + 显式 `base_url`** → 按 OpenAI-compatible 端点使用，输出一次 info（不是 warning）（**0.10 计划**）。
 5. 已注册 provider 缺 `model` → 启动失败（`provider_invalid`），不回退全局默认模型；未注册 provider 缺 `model` 同样要求显式配置。
 6. 密钥解析统一走 `provider.api_key_env` / `provider.apiKey`（见 §3）；不要写 `${VAR}` 插值。
+7. **provider 传输层重试没有配置键**：策略是 core 常量 `DEFAULT_PROVIDER_RETRY_POLICY`（base 500ms / x2 / 最多 4 次 / 单次封顶 8s / ±50% 抖动），只对「一个增量都没流出」的传输层断开与过载（429 / 502 / 503 / 504）生效，`Retry-After` 优先且同样封顶。嵌入方可经 `ExecutionUnitOptions.retry` / `TenantRuntimeProfile.retry` 覆写（`maxRetries: 0` 关闭）；新增 YAML 键要连带 config schema、validator 与装配接线，本版不做。见 [runtime-loop](../architecture/runtime-loop.md#loop)。
 
 ### 2.3 界面语言与启动清屏（`VESSEL_LANG` / `ui.language`）
 

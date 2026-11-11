@@ -10,6 +10,14 @@ export { PermissionTimeoutError } from './permission-policy.js';
 export { MemoryPluginHost } from './plugin-host.js';
 export { type InstalledPlugins, installPluginsIntoHost } from './plugin-install.js';
 export {
+  classifyProviderRetry,
+  DEFAULT_PROVIDER_RETRY_POLICY,
+  normalizeRetryPolicy,
+  type ProviderRetryDecision,
+  type ProviderRetryScope,
+  retryBackoffMs,
+} from './provider-retry.js';
+export {
   type PrefixChangeReason,
   PromptPrefixChangedError,
   type PromptPrefixCheckInput,

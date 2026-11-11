@@ -52,7 +52,7 @@ export interface LlmRequestPayload extends BaseEventPayload {
   tools_count?: number;
   /** 上下文窗口的 token 估算（增量缓存里现成的值，不重扫历史） */
   estimated_tokens?: number;
-  /** 本次请求在 overflow 重试链里的第几次（1 起；>1 = 重试） */
+  /** 本次请求在重试链（传输层 / overflow）里的第几次（1 起；>1 = 重试） */
   attempt?: number;
   temperature?: number;
   max_tokens?: number;
@@ -81,6 +81,26 @@ export interface LlmResponsePayload extends BaseEventPayload {
 export interface LlmStreamChunkPayload extends BaseEventPayload {
   run_id: string;
   chunk: StreamChunk;
+}
+
+/**
+ * Provider 传输层重试事件 payload（`llm.retry`）。
+ *
+ * 归内部事件层（默认隐藏）：一次重试一条，只记计数与分类，不带 prompt / 正文。
+ * 它不是失败信号——真正的终态失败仍由 `run.failed`（带 error envelope）承担；
+ * 重试成功时事件流里只有这条 + 新的 `llm.request`。
+ */
+export interface LlmRetryPayload extends BaseEventPayload {
+  run_id: string;
+  session_id?: string;
+  /** 第几次重试（1 起；不含首次请求） */
+  attempt: number;
+  /** 本次重试前实际等待的毫秒数（含抖动 / `Retry-After`，已封顶） */
+  backoff_ms: number;
+  /** 触发重试的错误码（`provider_network` / `provider_rate_limit` / `provider_unavailable`） */
+  error_code?: string;
+  /** 重试范围：传输层断开 / 过载 */
+  scope?: 'transport' | 'overload';
 }
 
 /**
@@ -194,6 +214,7 @@ export type EventPayload =
   | LlmRequestPayload
   | LlmResponsePayload
   | LlmStreamChunkPayload
+  | LlmRetryPayload
   | LlmStreamSummaryPayload
   | ToolCallStartedPayload
   | ToolCallCompletedPayload

@@ -32,6 +32,7 @@ loop:
     # 非纯追加且无 reason → prompt.prefix_changed；STRICT 抛 PromptPrefixChangedError
     发 llm.request（messages 在发布前剥离 reasoning_content，ADR-038）
     response = provider.chat({ messages, tools, stream: true, on_chunk → 发 llm.stream.chunk })
+    # 传输层断开 / 过载且本次请求零增量 → 退避重试（见下方「Provider 重试」）
     # response.reasoning_content（thinking 模型）由 Provider 累积；不进 on_chunk / 事件流
     累计 token 用量；context.updateRealTokens(本次 prompt_tokens + completion_tokens)
     发 llm.response
@@ -83,6 +84,15 @@ loop:
         addContext(assistant 消息，带上 response.reasoning_content)
         return response.content
 ```
+<a id="provider-retry"></a>
+### Provider 重试（传输层 / 过载）
+
+- **会重试**：`provider.chat` 抛错、且**本次请求一个增量都没流出**时的传输层断开（`socket connection was closed unexpectedly` / `other side closed` / `socket hang up` / `ECONNRESET` / `ETIMEDOUT` / `fetch failed` / undici `headers|body timeout`）与过载（HTTP 429 / 502 / 503 / 504）。重发同一请求，`llm.request.attempt` 递增，请求计数照常累加。
+- **不重试**：鉴权 / 参数 / 404 / 408 / 500 / 501 / 内容审查；context-overflow（400，走下面那段压缩重试）；任何已流出 `text_delta` / `reasoning_delta` / `tool_call_delta` 的请求（重发会让父级看到两段重复文本）；`AbortSignal` 已中断（Esc / rotate / shutdown 立即抛，不等退避）。
+- **退避**：`base 500ms × 2^(n-1)` 叠 ±50% 抖动、单次封顶 8s、最多 4 次（≈0.5 / 1 / 2 / 4s）；provider 给 `Retry-After` 时优先用它且同样封顶。退避期间不释放租约、不改 run 状态，终态仍只由 `finalizeRun` 写。
+- **可观测**：每次重试发一条 `llm.retry`（`attempt` / `backoff_ms` / `error_code` / `scope`），归内部事件层默认隐藏；它不是失败信号，重试用尽才由 `run.failed` 收口。
+- **配置**：策略常量在 `runtime/provider-retry.ts`（`DEFAULT_PROVIDER_RETRY_POLICY`）；装配层可经 `TenantRuntimeProfile.retry` / `ExecutionUnitOptions.retry` 覆写，`maxRetries: 0` 关闭。**没有 YAML 配置键**（新增键要连带 config schema / validator / 装配接线）。
+
 <a id="constraints"></a>
 ### 关键约束
 

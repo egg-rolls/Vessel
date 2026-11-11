@@ -16,7 +16,7 @@ paths: [docs/architecture/**]
 |---|---|---|---|
 | [overview](overview.md) | 三层结构、依赖方向、两个适配器与 core 边界 | layering, dependency, kernel, module, adapter, core | `packages/core/**`, `plugins/**` |
 | [runtime-lifecycle](runtime-lifecycle.md) | `Runtime` / per-session `ExecutionUnit`、`run()` / `resumeRun()` 外壳、单 run 占位、`finalizeRun` 终态与 `RunJournal` 唯一写者 | run, resume, finalize, execution, checkpoint, cancel, run_already_running, runtime, execution unit, journal | `packages/core/src/runtime/**` |
-| [runtime-loop](runtime-loop.md) | `toolCallingLoop` 骨架与关键约束 | loop, tool call, iteration, guardrail, hook, reasoning | `packages/core/src/runtime/**` |
+| [runtime-loop](runtime-loop.md) | `toolCallingLoop` 骨架、关键约束与 provider 重试 | loop, tool call, iteration, guardrail, hook, reasoning, retry, provider error | `packages/core/src/runtime/**` |
 | [runtime-api](runtime-api.md) | `RunOptions.messages` 注入语义、`Runtime` / `TenantRuntimeProfile` / `ExecutionUnitRequest` 与 `ExecutionUnit` 公开面 | RunOptions, messages, injection, runtime, tenant profile, execution unit, context, at-path | `packages/core/src/runtime/**`, `packages/core/src/types/**` |
 | [context](context.md) | WorkingContext per Run、注入点、压缩与前缀不变量 | context, message, injection, compaction, self card, vessel:source, prefix, per-run | `packages/core/src/context/**`, `packages/core/src/runtime/execution-unit.ts`, `packages/core/src/session/project-messages.ts`, `packages/agent/src/runtime.ts` |
 | [interfaces](interfaces.md) | `LLMProvider` / `WorkingContext` / `EventStream` 契约 | LLMProvider, ChatRequest, WorkingContext, EventStream, types | `packages/core/src/types/provider.ts`, `context.ts`, `event.ts` |
