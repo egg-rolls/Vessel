@@ -25,16 +25,16 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { RunEvent } from '../apps/web/src/gateway/types';
 import { isErrorEventType } from '../apps/web/src/state/error-visibility';
 import {
-  EVENT_TIERS,
   EVENT_TIER_FAMILIES,
+  EVENT_TIERS,
   type EventSpec,
   isVisibleInChat,
   tierOf,
 } from '../apps/web/src/state/event-visibility';
 import { buildGroup, type StoredEvent } from '../apps/web/src/state/events';
-import type { RunEvent } from '../apps/web/src/gateway/types';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -284,7 +284,10 @@ async function scanRoots(): Promise<string[]> {
 }
 
 function relative(file: string): string {
-  return file.slice(REPO.length + 1).split('\\').join('/');
+  return file
+    .slice(REPO.length + 1)
+    .split('\\')
+    .join('/');
 }
 
 function lineOf(text: string, index: number): number {
@@ -594,8 +597,7 @@ async function checkTeamChain(): Promise<void> {
   const rowFile = join(REPO, 'apps/web/src/domains/team/TeamMessageRow.tsx');
   const rowText = await readFile(rowFile, 'utf8');
   const keysStart = rowText.indexOf('const SYSTEM_KEYS');
-  const keysBlock =
-    keysStart < 0 ? '' : rowText.slice(keysStart, rowText.indexOf('};', keysStart));
+  const keysBlock = keysStart < 0 ? '' : rowText.slice(keysStart, rowText.indexOf('};', keysStart));
   const keys = new Set(
     [...keysBlock.matchAll(/^\s*([a-z_]+):/gm)].map((match) => match[1] as string),
   );
@@ -667,9 +669,7 @@ async function checkDocs(): Promise<void> {
 // ── 入口 ──────────────────────────────────────────────────
 
 const sites = await scanSources();
-console.log(
-  `scanned ${sites.size} event name(s) in ${(await scanRoots()).length} source root(s)`,
-);
+console.log(`scanned ${sites.size} event name(s) in ${(await scanRoots()).length} source root(s)`);
 checkUnclassified(sites);
 checkTableRot(sites);
 checkRenderFixtures();
@@ -682,4 +682,3 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log('event visibility: all checks passed');
-

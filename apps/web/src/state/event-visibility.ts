@@ -287,4 +287,3 @@ export function isVisibleInChat(type: string, options: ChatVisibility): boolean 
   const level = options.errorLevel ?? 'user';
   return level === 'all' && isErrorEventType(type) && errorLevelOf(type) === 'internal';
 }
-

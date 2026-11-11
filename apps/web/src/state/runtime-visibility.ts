@@ -18,9 +18,9 @@
  *   `agent.limit.warning` 的上下文副本（typed notice 已默认可见，再放一张卡就是同一
  *   事实的第二份）；`subscription` 是插件每轮可刷的文档变更摘要，没有 scope 语义；
  *   `compaction` 目前没有生产者（压缩走 `message.compaction` 投影），保持预留。
- * - 底层原始事件行（`runtime.notice` 等）仍归 `INTERNAL_EVENT_TYPES`：开关打开时
- *   它们**额外**出现，身份是「事件」，与消息卡片互不重叠（一条消息一条卡，一条事件
- *   一行 raw），既不互相对打也不重复渲染同一条。
+ * - 底层原始事件行（`runtime.notice` 等）归 `internal` 档（`state/event-visibility.ts`
+ *   的三档表）：开关打开时它们**额外**出现，身份是「事件」，与消息卡片互不重叠（一条
+ *   消息一条卡，一条事件一行 raw），既不互相对打也不重复渲染同一条。
  *
  * 旧 localStorage 键 vessel.web.runtimeContext 直接丢弃（不做迁移）：旧值是
  * 6 个细粒度布尔，无法无损映射到一个总开关，而默认值本来就是全关。

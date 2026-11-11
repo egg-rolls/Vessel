@@ -51,6 +51,24 @@ const ARCH_MODULE_LINE_LIMIT = 110;
 const ADVISORY_LINE_LIMIT = 70;
 const TARGET_MODULE_LINE_LIMIT = 600;
 const DOC_INDEX_LINE_LIMIT = 60;
+/**
+ * 有界例外：单文件行数上限覆盖（键 = `docs/architecture` 下的文件名）。
+ *
+ * 只有一种情况允许进这里：**该文件含一张由门禁机器解析的契约表**，拆文件会削弱
+ * 那份门禁（表被搬走、对拍失效）。现在只有 `events.md`：它的「事件可见性三档表」
+ * 是 `scripts/check-event-visibility.ts` 的对拍对象（`<!-- event-visibility:begin/end -->`），
+ * 而表本身有 114 行事件名，压不到 110 行以内。
+ *
+ * 不新增项的铁律与 `LEGACY_ADR_LINK_TARGETS` 相同：新增必须先把表拆成独立文档并
+ * 让门禁跟着搬家，不要在这里加第二个文件名。
+ */
+const ARCH_FILE_LINE_LIMIT_OVERRIDES: ReadonlyMap<string, number> = new Map([['events.md', 320]]);
+
+function archLineLimit(kind: string, file: string): number {
+  if (kind === 'target') return TARGET_MODULE_LINE_LIMIT;
+  const override = ARCH_FILE_LINE_LIMIT_OVERRIDES.get(file);
+  return override ?? ARCH_MODULE_LINE_LIMIT;
+}
 const ADR_DIR = 'docs/adr';
 const ADR_FILE_PATTERN = /^ADR-(\d{3})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
 const ADR_STATUS = new Set(['proposed', 'accepted', 'superseded']);
@@ -105,8 +123,8 @@ export async function checkDocs(root: string): Promise<DocIssue[]> {
     await checkLinks(root, `docs/versions/${file}`, issues);
   }
 
-  await checkDocTree(root, ARCH_DIR, new Set(['current', 'target']), issues, (kind) =>
-    kind === 'target' ? TARGET_MODULE_LINE_LIMIT : ARCH_MODULE_LINE_LIMIT,
+  await checkDocTree(root, ARCH_DIR, new Set(['current', 'target']), issues, (kind, file) =>
+    archLineLimit(kind, file),
   );
   await checkDocTree(root, AGENTS_DIR, new Set(['advisory']), issues, () => ADVISORY_LINE_LIMIT);
   await checkDocIndex(root, ARCH_DIR, issues);
@@ -126,7 +144,7 @@ async function checkDocTree(
   dir: string,
   expectedKinds: ReadonlySet<string>,
   issues: DocIssue[],
-  lineLimitFor: (kind: string) => number,
+  lineLimitFor: (kind: string, file: string) => number,
 ): Promise<void> {
   if (!existsSync(join(root, dir))) return;
   for (const file of await listMarkdownFiles(root, dir)) {
@@ -175,7 +193,7 @@ async function checkDocTree(
     } else if (frontmatter.applies_to !== undefined) {
       issues.push({ file: relative, line: 0, message: '非 advisory 文档不能有 applies_to' });
     }
-    const lineLimit = lineLimitFor(kind);
+    const lineLimit = lineLimitFor(kind, file);
     if (countLines(text) > lineLimit) {
       issues.push({ file: relative, line: 0, message: `文档行数超过上限 ${lineLimit}` });
     }
