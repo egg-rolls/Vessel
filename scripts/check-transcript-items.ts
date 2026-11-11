@@ -1149,10 +1149,7 @@ const FIXTURES: readonly Fixture[] = [
     why: '同毫秒落位的 live item 必须有确定先后（wire seq），不能被入参顺序左右',
     check: () => {
       const items = buildTranscriptItems({
-        messages: [
-          msg('user', 'q1', { timestamp: 1000 }),
-          msg('user', 'q2', { timestamp: 2000 }),
-        ],
+        messages: [msg('user', 'q1', { timestamp: 1000 }), msg('user', 'q2', { timestamp: 2000 })],
         messageIndexOffset: 0,
         liveGroups: [
           group({

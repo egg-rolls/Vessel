@@ -10,6 +10,13 @@ export { PermissionTimeoutError } from './permission-policy.js';
 export { MemoryPluginHost } from './plugin-host.js';
 export { type InstalledPlugins, installPluginsIntoHost } from './plugin-install.js';
 export {
+  type PrefixChangeReason,
+  PromptPrefixChangedError,
+  type PromptPrefixCheckInput,
+  type PromptPrefixCheckResult,
+  PromptPrefixGuard,
+} from './prompt-prefix-guard.js';
+export {
   classifyProviderRetry,
   DEFAULT_PROVIDER_RETRY_POLICY,
   normalizeRetryPolicy,
@@ -17,13 +24,6 @@ export {
   type ProviderRetryScope,
   retryBackoffMs,
 } from './provider-retry.js';
-export {
-  type PrefixChangeReason,
-  PromptPrefixChangedError,
-  type PromptPrefixCheckInput,
-  type PromptPrefixCheckResult,
-  PromptPrefixGuard,
-} from './prompt-prefix-guard.js';
 export {
   createRunJournalFactory,
   type RunJournal,

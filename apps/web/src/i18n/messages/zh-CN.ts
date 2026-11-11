@@ -245,8 +245,7 @@ export const messages = {
   'chat.run.failed': '运行失败',
   'chat.run.failure.aria': '运行失败详情',
   'chat.run.failure.run': '运行 {id}',
-  'chat.run.failure.fromRecord':
-    '来自会话记录：该轮的实时事件已不在缓冲区，这里只保留错误摘要。',
+  'chat.run.failure.fromRecord': '来自会话记录：该轮的实时事件已不在缓冲区，这里只保留错误摘要。',
   // 0.15：工具卡 / 思考流 / 内联提问
   'chat.reasoning.live': '流式',
   'chat.reasoning.expand': '展开全文',
