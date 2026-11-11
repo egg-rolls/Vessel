@@ -20,6 +20,7 @@ applies_to: [N, M]
 
 - `--help` / 一次性命令错误 / 默认空状态 / demo banner 走 `src/i18n/` 双 catalog；命令的数据输出保持英文。
 - 人类输出用 `src/ui-style.ts` 的 `ui`；ANSI 只在 TTY、未设 `NO_COLOR`、`TERM !== 'dumb'` 时输出；`--json`、路径与数据行保持纯文本（ADR-076）。
+- 启动横幅只在人类终端画 box（`wantsBoxBanner`：stdout 是 TTY 且允许 ANSI 且非 `--json`）；管道 / 重定向 / daemon 与平台 spawn 的子进程（stdout 指向 `<dataDir>/logs/*.log`）降级成一行 `Vessel Gateway <version> · <url>`，框线不进日志文件。
 - 新一次性 CLI 子命令进 `src/commands/registry.ts` 的 `cliCommands`，不要在 `cli.ts` 加 `if` 链（ADR-060）。
 
 ## ask_user 入口

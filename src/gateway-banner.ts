@@ -1,6 +1,14 @@
 /**
  * Gateway 启动 banner（纯 console 排版）。
  *
+ * 两层呈现（0.51）：
+ * - **人类终端**（stdout 是 TTY、允许 ANSI、非 `--json`）→ box 面板；
+ * - **其它一切**（管道 / 重定向 / daemon 子进程 / `--json` / `NO_COLOR` / `TERM=dumb`）
+ *   → 一行纯文本，不带框线。
+ *
+ * 判定唯一入口是 `wantsBoxBanner`；子进程 stdout 被重定向到
+ * `<dataDir>/logs/*.log`，因此日志文件里不会再出现 ASCII 框线。
+ *
  * 安全约束：不打印任何 token（含前缀），也不在 URL 中拼接 token。
  *
  * @module vessel/gateway-banner
@@ -8,7 +16,38 @@
 
 import { isLoopbackHostname } from '../packages/config/src/index';
 import type { Gateway } from '../packages/serve/src/index';
-import { ui } from './ui-style';
+import { shouldUseColor, ui } from './ui-style';
+
+/** banner 呈现判定输入（测试注入；缺省读进程状态与环境） */
+export interface BannerDisplayOptions {
+  /** 覆盖 TTY 检测；缺省 `process.stdout.isTTY === true` */
+  isTTY?: boolean;
+  /** 机器可读输出（`--json` / `--quiet`）：不打 box，只留一行 */
+  machine?: boolean;
+  env?: Record<string, string | undefined>;
+}
+
+/**
+ * 是否人类终端：`stdout` 是 TTY 且不是机器可读输出。
+ *
+ * daemon / `gateway start` 平台进程 spawn 的 node / hub 子进程 stdout 都指向日志文件，
+ * 这里天然判 false。
+ */
+export function isHumanTerminal(options: BannerDisplayOptions = {}): boolean {
+  if (options.machine === true) return false;
+  return options.isTTY ?? process.stdout.isTTY === true;
+}
+
+/**
+ * box 只在人类终端且允许 ANSI 时画；`NO_COLOR` / `TERM=dumb` 与 `ui` 同口径降级成一行。
+ */
+export function wantsBoxBanner(options: BannerDisplayOptions = {}): boolean {
+  if (!isHumanTerminal(options)) return false;
+  return shouldUseColor({
+    ...(options.isTTY !== undefined ? { isTTY: options.isTTY } : {}),
+    ...(options.env !== undefined ? { env: options.env } : {}),
+  });
+}
 
 /** 估算字符串在终端的显示宽度（宽字符按 2 列计） */
 function displayWidth(text: string): number {
@@ -85,7 +124,8 @@ function platformHubValue(hub: PlatformStartupHub): string {
  * `gateway start` 前台 Vite 风格启动摘要（0.50）。
  *
  * 纯文本、无边框、无 alt-screen；URL 可直接复制。token 只给来源提示，不打印值。
- * `--serve` 的 `renderGatewayBanner` 保持不变。
+ * 是否打这一份由调用方的 `isHumanTerminal()` 决定（非 TTY 走逐行日志口径）；
+ * box 版 `renderGatewayBanner` 只在 `wantsBoxBanner()` 为真时由 cli.ts 调用。
  */
 export function renderPlatformStartup(info: PlatformStartupInfo): string {
   const rows: Array<[string, string]> = [
@@ -108,7 +148,7 @@ export function renderPlatformStartup(info: PlatformStartupInfo): string {
   return lines.join('\n');
 }
 
-/** --serve 启动 banner：仅展示 gateway 地址与 token 占位 */
+/** `--serve` 启动 banner：仅展示 gateway 地址与 token 占位 */
 export function renderGatewayBanner(gateway: Gateway): string {
   const rows: Array<[string, string]> = [
     ['Gateway', gateway.url],
@@ -131,4 +171,15 @@ export function renderGatewayBanner(gateway: Gateway): string {
   });
   lines.push(padTo(''), ui.dim(hint) + padTo(hint));
   return boxPanel('Vessel Gateway', lines, inner);
+}
+
+/**
+ * 非人类终端 / `--json` / `NO_COLOR` 的降级呈现：一行纯文本，无框线、无 ANSI。
+ *
+ * 例：`Vessel Gateway 0.50.0 · http://127.0.0.1:8644`。token 仍不打印。
+ */
+export function renderGatewayBannerOneLine(gateway: Gateway, version?: string): string {
+  const head =
+    version !== undefined && version !== '' ? `Vessel Gateway ${version}` : 'Vessel Gateway';
+  return `${head} · ${gateway.url}`;
 }

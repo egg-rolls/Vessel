@@ -63,7 +63,7 @@ import { expandHome, resolveDataDir } from './data-paths';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import type { GatewayInstanceLock } from './gateway/instance-lock';
 import { collectGatewayState, DEFAULT_GATEWAY_INSTANCE } from './gateway/pid';
-import { renderGatewayBanner } from './gateway-banner';
+import { renderGatewayBanner, renderGatewayBannerOneLine, wantsBoxBanner } from './gateway-banner';
 import {
   deriveGatewayInstance,
   isForegroundGatewayCommand,
@@ -1520,7 +1520,14 @@ async function runWithConfig(result: BootstrapResult) {
   }
 
   if (gateway) {
-    console.log(`\n${renderGatewayBanner(gateway)}\n`);
+    // 0.51：box 只在人类终端打一次。非 TTY（daemon / 平台 spawn 的 node 子进程 / 管道）、
+    // `--json`、`NO_COLOR` / `TERM=dumb` 降级成一行纯文本，避免 ASCII 框线翻进
+    // `<dataDir>/logs/*.log` 并与结构化日志行交错。
+    if (wantsBoxBanner()) {
+      console.log(`\n${renderGatewayBanner(gateway)}\n`);
+    } else {
+      console.log(renderGatewayBannerOneLine(gateway, readPackageVersion()));
+    }
   }
 
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
