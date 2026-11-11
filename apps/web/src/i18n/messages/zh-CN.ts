@@ -1071,7 +1071,6 @@ export const messages = {
   'chat.refs.reject.tooMany': '单条消息最多带 {max} 个引用',
   'chat.refs.reject.invalid': '引用路径不合法：{name}',
   // 0.52：附件引用面板（粘贴路径 / 浏览 node 目录）；只产出路径，不读内容
-  'chat.attach.open': '引用文件',
   'chat.attach.title': '添加附件引用',
   'chat.attach.tab.browse': '浏览目录',
   'chat.attach.tab.paste': '粘贴路径',
@@ -1087,7 +1086,6 @@ export const messages = {
   'chat.attach.addCount': '添加 {count} 个引用',
   'chat.attach.added': '已添加 {count} 个引用',
   'chat.attach.paste.label': 'node 上的绝对路径',
-  'chat.attach.paste.placeholder': '/mnt/d/app/report.pdf',
   'chat.attach.paste.hint': '路径按跑 agent 的那台机器解析；越界路径在发送时会被拒。',
   'chat.attach.reason.invalid': '这个目录打不开（不存在或不可读）',
   'chat.attach.reason.denied': '这个目录属于受保护目录，不能浏览',
@@ -1099,12 +1097,10 @@ export const messages = {
   'composer.refs.remove': '移除 {name}',
   // 0.52：「引用文件」入口（粘贴绝对路径；不读内容、不上传）
   'composer.attach.label': '引用文件',
-  'composer.attach.title': '引用文件路径',
   'composer.attach.placeholder': '一行一个绝对路径，例如 /home/me/a.ts 或 D:\\work\\b.md',
   'composer.attach.input': '要引用的文件路径',
   'composer.attach.hint': '一行一个路径 · Ctrl/⌘+Enter 添加 · Esc 取消 · 最多 {max} 条',
   'composer.attach.add': '添加',
-  'composer.attach.cancel': '取消',
   'composer.attach.count': '已引用 {used}/{max}',
   'composer.attach.added': '已添加 {count} 条引用',
   'composer.attach.rejected': '以下 {count} 行没有添加：',

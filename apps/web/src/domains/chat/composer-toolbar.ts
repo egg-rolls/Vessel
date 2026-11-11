@@ -7,7 +7,7 @@
  * - 插件拿不到宿主回调（拿不到文件选择、拿不到路由），因此 v1 不做插件内联执行；
  *   需要「打开文件选择」这类宿主动作时，在 {@link COMPOSER_TOOLBAR_HOST_ACTIONS}
  *   里按 id 登记，插件只声明同一个 id + 文案。0.52 已登记 `attach-file`：
- *   宿主按钮与插件条目共用同一个「引用文件」popover（回调由 composer 注入，
+ *   宿主按钮与插件条目共用同一个「引用文件」弹层（回调由 composer 注入，
  *   见 {@link composerHostActions}）。
  */
 import type { ComposerToolbarAction } from '@vessel-agent/plugin-ui';
@@ -21,7 +21,7 @@ import { toolbarForSlot, usePluginContributions } from '../plugins/usePluginCont
 export type ComposerToolbarHostActions = Readonly<Record<string, (() => void) | undefined>>;
 
 /**
- * 「引用文件」的宿主动作 id（粘贴路径 popover）。
+ * 「引用文件」的宿主动作 id（打开浏览 / 粘贴弹层）。
  *
  * 插件要复用宿主行为时只声明这个 id：`contributes.toolbar: [{ slot: 'composer',
  * id: 'attach-file', label/titleKey }]`，宿主按钮与插件条目共用同一个开关回调 ——
@@ -36,7 +36,7 @@ export type ComposerToolbarHostActionId = typeof COMPOSER_TOOLBAR_ATTACH_FILE;
  * 当前宿主已接的动作 id。
  *
  * 0.52 起有 `attach-file`：宿主自己的按钮（图标 + aria-label）与插件贡献的同名条目
- * 都打开同一个粘贴路径 popover。表里只有 **id**，没有回调 —— popover 的开关状态在
+ * 都打开同一个弹层（浏览 / 粘贴）。表里只有 **id**，没有回调 —— 弹层的开关状态在
  * 各页 composer 里（per-实例），回调由 {@link composerHostActions} 组装后传给工具栏；
  * 没给回调的 id 条目会被丢弃，不渲染点了没反应的死按钮。
  */
@@ -46,7 +46,7 @@ export const COMPOSER_TOOLBAR_HOST_ACTIONS: readonly ComposerToolbarHostActionId
 
 /** composer 侧要提供的宿主动作回调（每个页面自己持有状态）。 */
 export interface ComposerHostActionHandlers {
-  /** 开关「引用文件」popover；缺省时该动作（含插件同名条目）不渲染。 */
+  /** 开关「引用文件」弹层；缺省时该动作（含插件同名条目）不渲染。 */
   attachFile?: () => void;
 }
 

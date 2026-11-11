@@ -17,7 +17,6 @@ import { sessionTitle } from '../../state/sessions';
 import { useAgentStore } from '../../stores/agentStore';
 import { asksForSession } from '../pending/cluster';
 import { PluginPanels } from '../plugins/PluginPanels';
-import { AttachBrowseLauncher } from './AttachBrowsePanel';
 import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
@@ -452,8 +451,6 @@ export function ChatView({
           refreshKey={stripRefreshKey}
         />
 
-        <AttachBrowseLauncher client={client} onAddRef={submitApi.addRef} disabled={!hasToken} />
-
         <ComposerSlot
           pendingItem={transcriptApi.pendingItem}
           pendingItems={transcriptApi.pendingItems}
@@ -475,6 +472,7 @@ export function ChatView({
           refs={submitApi.refs}
           onRemoveRef={submitApi.removeRef}
           onAddRef={submitApi.addRef}
+          client={client}
           contextUsage={transcriptApi.contextUsage}
         />
       </section>

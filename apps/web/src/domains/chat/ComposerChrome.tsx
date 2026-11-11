@@ -24,11 +24,8 @@ import { Button, cn, Icon } from '../../components/ui';
 import { formatTokenCount } from '../../format';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
-import {
-  type ComposerAttachBinding,
-  ComposerAttachButton,
-  ComposerAttachPopover,
-} from './ComposerAttach';
+import { AttachDialog } from './AttachDialog';
+import { type ComposerAttachBinding, ComposerAttachButton } from './ComposerAttach';
 import {
   type ComposerToolbarHostActions,
   composerHostActions,
@@ -228,8 +225,9 @@ export function ComposerToolbarBar({
  * 判据只看事件目标，不给工具栏 / 卡片套 `preventDefault` 或 `stopPropagation`，
  * 所以按钮自己的点击、tab 顺序、Enter / Space 触发都还是原样。
  *
- * `[role="dialog"]` 是「引用文件」popover：它挂在字段容器里，点它的标题 / 提示 /
- * 错误行不是「我要去打字」，不能把焦点抢回输入框。
+ * `[role="dialog"]` 是「引用文件」弹层（{@link AttachDialog}）：它 portal 到 body，
+ * 但 React 事件仍从字段容器这棵子树冒泡回来，点弹层的标题 / 提示 / 错误行不是
+ * 「我要去打字」，不能把焦点抢回输入框。
  */
 const COMPOSER_INTERACTIVE_SELECTOR =
   'button, [role="button"], [role="option"], [role="menuitem"], [role="checkbox"], [role="switch"], [role="tab"], [role="dialog"], a[href], input, select, textarea, [contenteditable="true"]';
@@ -304,16 +302,17 @@ export function ComposerField({
   /** 扩展槽里宿主自绘的控件（排在插件贡献项之后）。 */
   slot?: ReactNode;
   /**
-   * 「引用文件」入口（0.52 粘贴路径）：给了就在左侧扩展槽出宿主按钮 + popover，
-   * 并把 `attach-file` 这个宿主动作 id 接到同一个开关（插件声明同名 id 即可复用）。
-   * 缺省（还没接引用的页面）不渲染按钮 —— 不留点了没反应的死按钮。
+   * 「引用文件」入口（0.52）：给了就在左侧扩展槽出宿主按钮，点开 {@link AttachDialog}
+   * （浏览 / 粘贴两个 tab），并把 `attach-file` 这个宿主动作 id 接到同一个开关
+   * （插件声明同名 id 即可复用）。缺省（还没接引用的页面）不渲染按钮 ——
+   * 不留点了没反应的死按钮。
    */
   attach?: ComposerAttachBinding;
 }) {
   const [attachOpen, setAttachOpen] = useState(false);
-  const popoverId = useId();
+  const dialogId = useId();
   const attachAnchorRef = useRef<HTMLSpanElement | null>(null);
-  // 收起后把焦点还给触发按钮：不然 popover 一卸载，键盘用户的焦点就落到 body。
+  // 收起后把焦点还给触发按钮：不然弹层一卸载，键盘用户的焦点就落到 body。
   const closeAttach = useCallback(() => {
     setAttachOpen(false);
     attachAnchorRef.current?.querySelector('button')?.focus();
@@ -333,25 +332,28 @@ export function ComposerField({
     // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘流不变：Tab 直接到 textarea / 工具栏按钮，空白处不需要键盘等价键
     <div className="composer-field" onClick={focusComposerInputOnBlankClick}>
       {children}
-      {attach !== undefined && attachOpen && (
-        <ComposerAttachPopover
-          id={popoverId}
-          addPath={attach.addPath}
-          refCount={attach.refCount}
-          onClose={closeAttach}
-        />
-      )}
       <ComposerToolbarBar contextUsage={contextUsage} primary={primary} hostActions={actions}>
         {attach !== undefined && (
           <ComposerAttachButton
             open={attachOpen}
-            popoverId={popoverId}
+            dialogId={dialogId}
             onClick={toggleAttach}
             anchorRef={attachAnchorRef}
           />
         )}
         {slot}
       </ComposerToolbarBar>
+      {/* 弹层 portal 到 body，但 React 事件仍从这棵子树冒泡回来：`role="dialog"`
+          在 COMPOSER_INTERACTIVE_SELECTOR 里，所以点弹层内部不会被「点空白进输入框」抢焦点。 */}
+      {attach !== undefined && attachOpen && (
+        <AttachDialog
+          id={dialogId}
+          client={attach.client}
+          onAddRef={attach.onAddRef}
+          refCount={attach.refCount}
+          onClose={closeAttach}
+        />
+      )}
     </div>
   );
 }

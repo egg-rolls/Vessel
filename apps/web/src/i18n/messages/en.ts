@@ -1113,7 +1113,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.refs.reject.tooMany': 'A message can carry at most {max} references',
   'chat.refs.reject.invalid': 'Invalid reference path: {name}',
   // 0.52：附件引用面板（粘贴路径 / 浏览 node 目录）；只产出路径，不读内容
-  'chat.attach.open': 'Reference files',
   'chat.attach.title': 'Add attachment references',
   'chat.attach.tab.browse': 'Browse folders',
   'chat.attach.tab.paste': 'Paste path',
@@ -1129,7 +1128,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.attach.addCount': 'Add {count} references',
   'chat.attach.added': 'Added {count} reference(s)',
   'chat.attach.paste.label': 'Absolute path on the node',
-  'chat.attach.paste.placeholder': '/mnt/d/app/report.pdf',
   'chat.attach.paste.hint':
     'The path is resolved on the machine that runs the agent; out-of-bounds paths are rejected when sending.',
   'chat.attach.reason.invalid': 'This folder cannot be opened (missing or unreadable)',
@@ -1143,12 +1141,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'composer.refs.remove': 'Remove {name}',
   // 0.52: "reference files" entry (paste absolute paths; no content read, no upload)
   'composer.attach.label': 'Reference files',
-  'composer.attach.title': 'File paths to reference',
   'composer.attach.placeholder': 'One absolute path per line, e.g. /home/me/a.ts or D:\\work\\b.md',
   'composer.attach.input': 'File paths to reference',
   'composer.attach.hint': 'One path per line · Ctrl/⌘+Enter to add · Esc to cancel · at most {max}',
   'composer.attach.add': 'Add',
-  'composer.attach.cancel': 'Cancel',
   'composer.attach.count': '{used}/{max} referenced',
   'composer.attach.added': 'Added {count}',
   'composer.attach.rejected': 'These {count} line(s) were not added:',

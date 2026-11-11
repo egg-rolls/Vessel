@@ -137,6 +137,7 @@ export function TeamChat(props: TeamChatProps) {
           refs={refs}
           onRemoveRef={removeRef}
           onAddRef={addRef}
+          client={props.client}
           onSend={() => void handleSend()}
           sending={sending}
           sendTick={sendTick}

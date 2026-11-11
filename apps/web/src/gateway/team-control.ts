@@ -7,6 +7,7 @@
  */
 import { unwrapAgentResult } from './agent-result';
 import { fetchNodeRpc, type NodeConfig } from './nodes';
+import type { AttachmentListParams, AttachmentListResult } from './node/attachments';
 import type {
   AgentBatchResponse,
   AgentCreateInput,
@@ -45,6 +46,13 @@ export interface TeamControl {
   archiveTeam(teamId: string): Promise<TeamSummary>;
   /** 0.38：追加 tombstone（append-only）；目标消息由 UI 隐藏。 */
   retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult>;
+  /**
+   * 0.52：附件引用弹层的目录浏览（节点侧只读 `attachments.list`）。
+   *
+   * 与页面无关：会话页用当前节点的 `GatewayClient`，团队页用这个控制面 —— 列的是
+   * **团队所在那台节点**的目录。旧 gateway 没有这个方法时弹层降级成粘贴路径。
+   */
+  listAttachments(params?: AttachmentListParams): Promise<AttachmentListResult>;
   /** 0.27：冻结 / 解冻成员创建闸门。 */
   setSpawnFrozen(teamId: string, frozen: boolean): Promise<TeamSummary>;
   getSession(
@@ -96,6 +104,9 @@ export function createRemoteTeamControl(
     },
     retractTeam(input) {
       return call<TeamRetractResult>('teams.retract', input);
+    },
+    listAttachments(params = {}) {
+      return call<AttachmentListResult>('attachments.list', params);
     },
     setSpawnFrozen(teamId, frozen) {
       return call<TeamSummary>('teams.spawnFrozen', { team_id: teamId, frozen });

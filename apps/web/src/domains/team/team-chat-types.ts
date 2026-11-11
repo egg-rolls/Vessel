@@ -1,4 +1,5 @@
 import type { PaneResizeApi } from '../../app/usePaneResize';
+import type { AttachmentListParams, AttachmentListResult } from '../../gateway/node/attachments';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -28,6 +29,13 @@ export interface TeamChatClient {
     refs?: MessageRef[];
   }): Promise<TeamPostResult>;
   retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult>;
+  /**
+   * 0.52：附件引用弹层的目录浏览（节点侧只读 `attachments.list`）。
+   *
+   * 团队页与会话页用的是同一份弹层；列的是**这个 Team 所在节点**的目录。
+   * 旧 gateway 没有这个方法时弹层把错误显示出来，粘贴路径那条路仍可用。
+   */
+  listAttachments(params?: AttachmentListParams): Promise<AttachmentListResult>;
 }
 
 export type TeamChatDecidePermission = (

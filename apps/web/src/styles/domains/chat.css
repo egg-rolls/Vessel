@@ -1024,19 +1024,10 @@
   font-size: 10.5px;
 }
 
-/* ── 附件引用面板（0.52，attachments.list） ─────────────────
-   入口是输入框上方的一行小按钮（attach-paste 合入前本单自己的入口），
-   面板本体是弹层：面包屑 + 单层条目 + 多选。样式只用 L1 token，
-   不给弹层加第二种底色（沿用 ModalShell 的 --surface-raised）。 */
-
-.attach-entry {
-  display: flex;
-  justify-content: flex-end;
-  width: 100%;
-  max-width: var(--chat-content-w, 860px);
-  margin: 0 auto 4px;
-  padding-inline: 14px;
-}
+/* ── 附件引用弹层（0.52，attachments.list + 粘贴路径） ─────────────────
+   唯一入口是工具栏左侧的回形针（`ComposerAttach`）；弹层本体是 ModalShell：
+   浏览 tab（面包屑 + 单层条目 + 多选）与粘贴 tab（多行 textarea + 逐行错误）。
+   样式只用 L1 token，不给弹层加第二种底色（沿用 ModalShell 的 --surface-raised）。 */
 
 .attach-tabs {
   display: flex;
@@ -1202,29 +1193,6 @@
 .attach-paste-label {
   font-size: 11px;
   color: var(--muted);
-}
-
-.attach-paste-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.attach-paste-input {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.attach-paste-input:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .attach-count {

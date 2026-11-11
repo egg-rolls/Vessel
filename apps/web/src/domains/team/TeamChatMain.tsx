@@ -24,7 +24,11 @@ import { TeamComposer } from './TeamComposer';
 import type { TeamMessageView } from './TeamMessageRow';
 import { TeamPendingBar } from './TeamPendingBar';
 import { TeamTranscript } from './TeamTranscript';
-import type { TeamChatDecidePermission, TeamChatRespondAsk } from './team-chat-types';
+import type {
+  TeamChatClient,
+  TeamChatDecidePermission,
+  TeamChatRespondAsk,
+} from './team-chat-types';
 import {
   captureScrollAnchor,
   EARLIER_LOAD_THRESHOLD_PX,
@@ -182,6 +186,8 @@ export interface TeamChatMainProps {
   refs: readonly MessageRef[];
   onRemoveRef: (index: number) => void;
   onAddRef: (ref: MessageRef) => boolean;
+  /** 引用文件弹层的目录浏览数据源（本 Team 所在节点；与 `onAddRef` 一起决定是否出工具栏入口）。 */
+  client: TeamChatClient;
   onSend: () => void;
   sending: boolean;
   /** 发送受理序号（每次受理自增，send / resend 共用）：变化即贴底。 */
@@ -232,6 +238,7 @@ export function TeamChatMain({
   refs,
   onRemoveRef,
   onAddRef,
+  client,
   onSend,
   sending,
   sendTick,
@@ -404,6 +411,7 @@ export function TeamChatMain({
           refs={refs}
           onRemoveRef={onRemoveRef}
           onAddRef={onAddRef}
+          client={client}
           onSend={onSend}
           sending={sending}
           hasToken={hasToken}

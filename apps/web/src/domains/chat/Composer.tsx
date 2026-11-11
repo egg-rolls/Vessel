@@ -3,6 +3,8 @@ import { Tooltip } from '../../components/Tooltip';
 import { AutoGrowTextarea, Button } from '../../components/ui';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
+import type { AttachBrowseClient } from './AttachDialog';
+import { composerAttachBinding } from './ComposerAttach';
 import { ChatDock } from './ChatDock';
 import {
   type ComposerContextUsage,
@@ -40,6 +42,7 @@ export function Composer({
   refs,
   onRemoveRef,
   onAddRef,
+  client,
   contextUsage,
 }: {
   value: string;
@@ -68,6 +71,11 @@ export function Composer({
    * 缺省时不渲染「引用文件」入口。
    */
   onAddRef?: (ref: MessageRef) => boolean;
+  /**
+   * 「引用文件」弹层的目录浏览数据源（节点侧 `attachments.list`）。
+   * 与 `onAddRef` 一起缺一不可；两者都在才出工具栏按钮。
+   */
+  client?: AttachBrowseClient;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
 }) {
@@ -113,15 +121,12 @@ export function Composer({
     if (index >= 0) onRemoveRef?.(index);
   };
 
-  // 「引用文件」入口的接线：粘贴路径 popover 只交路径，种类在这里固定成 file
-  // （粘贴无法判断图片 / 文档，且这一版不读内容、不上传）。
+  // 「引用文件」入口的接线：弹层（浏览 / 粘贴）只交路径 + 种类，种类按扩展名粗判
+  // （`kind` 只影响 chip 的图标，不读内容、不上传）。
   const refCount = refs?.length ?? 0;
   const attach = useMemo(
-    () =>
-      onAddRef === undefined
-        ? undefined
-        : { addPath: (path: string) => onAddRef({ kind: 'file' as const, path }), refCount },
-    [onAddRef, refCount],
+    () => composerAttachBinding({ client, onAddRef, refCount }),
+    [client, onAddRef, refCount],
   );
 
   return (

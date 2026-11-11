@@ -93,6 +93,7 @@ const MODAL_WIDTH: Record<ModalSize, string> = {
 };
 
 export function ModalShell({
+  id,
   label,
   describedBy,
   onClose,
@@ -103,6 +104,8 @@ export function ModalShell({
   bodyClassName = '',
   children,
 }: {
+  /** 弹层的 DOM id：给触发按钮的 `aria-controls` 用（不传则没有 id）。 */
+  id?: string;
   label: string;
   describedBy?: string;
   onClose: () => void;
@@ -129,6 +132,7 @@ export function ModalShell({
     >
       <div
         ref={dialogRef}
+        id={id}
         className={cn(
           'modal-rise relative flex max-h-[min(86dvh,var(--modal-max-h))] w-full flex-col gap-3 overflow-hidden rounded-lg border border-line bg-raised p-5 shadow-elev-4 max-compact:p-4',
           MODAL_WIDTH[size],

@@ -16,6 +16,8 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AutoGrowTextarea } from '../../components/ui';
 import type { MessageRef, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
+import type { AttachBrowseClient } from '../chat/AttachDialog';
+import { composerAttachBinding } from '../chat/ComposerAttach';
 import {
   type ComposerContextUsage,
   ComposerField,
@@ -64,6 +66,11 @@ export interface TeamComposerProps {
    * 发送时随 `teams.post` 的 `refs` 投递给被 @ 的成员，也写进 Team 日志（时间线显 chip）。
    */
   onAddRef?: (ref: MessageRef) => boolean;
+  /**
+   * 引用文件弹层的目录浏览数据源（本 Team 所在节点；与会话页同一份 `attachments.list`）。
+   * 与 `onAddRef` 一起缺一不可：两者都在才出工具栏按钮。
+   */
+  client?: AttachBrowseClient;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
 }
@@ -84,6 +91,7 @@ export function TeamComposer({
   refs = [],
   onRemoveRef,
   onAddRef,
+  client,
   contextUsage,
 }: TeamComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -148,14 +156,11 @@ export function TeamComposer({
   }));
   const refItems: ComposerAttachment[] = [...refsToAttachments(refs), ...mentionAttachments];
 
-  // 「引用文件」入口：与会话页同一份 popover，只是写到团队的草稿槽。
+  // 「引用文件」入口：与会话页同一份绑定（浏览 / 粘贴弹层），只是写到团队的草稿槽。
   const refCount = refs.length;
   const attach = useMemo(
-    () =>
-      onAddRef === undefined
-        ? undefined
-        : { addPath: (path: string) => onAddRef({ kind: 'file' as const, path }), refCount },
-    [onAddRef, refCount],
+    () => composerAttachBinding({ client, onAddRef, refCount }),
+    [client, onAddRef, refCount],
   );
 
   /** 引用区删除：mention 落回既有 chips 状态，附件引用回写下标。 */
