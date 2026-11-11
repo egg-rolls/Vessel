@@ -18,9 +18,9 @@
  * 侧出口只有两个：`unhold`（失败 / 退役 / 预算回退 → 回到 unread）与 `discard`（明确
  * 投递失败 → 移除）。`hold` 记录持有者 bodyId，`releaseHeldFor` 只放一个 body 的队列。
  *
- * 模型侧不再自动注入正文：`createInboxNoticeHook` 只发一条 `vessel:notice`，
- * 正文由模型调用 `createInboxTool` 的 `inbox` 工具按需读取（读即消费；
- * `includeHeld:true` 只 peek held 的正文，不消费、不取消投递）。
+ * 模型侧不再自动注入正文：`createInboxNoticeHook` 只发一条 `vessel:notice` 计数行
+ * （无消息 / 计数没变就不发），正文由模型调用 `createInboxTool` 的 `inbox` 工具按需读取
+ * （读即消费；`includeHeld:true` 只 peek held 的正文，不消费、不取消投递）。
  *
  * **投递模式**（`AgentInboxDelivery`，模式属于 inbox 自己，不是入口开关）：
  * `input` = 本体作为下一轮 run input 送达；`wake` = 只唤醒 agent 自己去 read；
@@ -702,24 +702,28 @@ export class AgentInboxStore implements AgentInboxPort {
 }
 
 /**
- * notice 的模型可见文本（只含条数与工具指引，不含正文）。
+ * notice 的模型可见文本：**只有条数，一行，≤ 60 字符**（不含正文）。
  *
- * 两个数字必须解释清楚，否则模型会把 pending 当成「读不到的消息」而重发（见 §1.4）：
- * `unread` 是模型该自己读的，`pending` 是已经排好队、会自动作为下一轮输入送达的。
+ * 「`unread` 该自己读、`pending` 会自动作为下一轮输入到达（别重发 / 别重做）、用
+ * `inbox` 工具 list / read 去看」这套用法已经常驻在 `inbox` 工具的 description 里；
+ * 这条尾消息每一轮都在上下文里，只报**计数**，不复述用法（API surface = prompt surface）。
+ *
+ * `pending` 就是「已被某具 body 接管、会自动作为下一轮 run input 到达」的条数，
+ * 与 held 是同一集合（I1–I4：`hold` 只作用于未消费消息），所以不另写 `(N held)`。
  */
 function noticeContent(unread: number, pending: number): string {
-  return (
-    `[inbox] ${unread} unread (yours to read), ${pending} pending ` +
-    '(already queued as your next input(s) — they arrive on their own; do not resend or redo). ' +
-    'inbox action="list" for summaries; action="read" with includeHeld:true to peek at pending ones.'
-  );
+  if (pending > 0 && unread > 0) return `[inbox] ${pending} pending · ${unread} unread`;
+  if (pending > 0) return `[inbox] ${pending} pending`;
+  return `[inbox] ${unread} unread`;
 }
 
 /**
- * 成员 BeforeLlm notice hook（0.32 v2）。
+ * 成员 BeforeLlm notice hook（0.32 v2；0.51 起按计数去重、无消息不注入）。
  *
  * 只发一条 `vessel:notice` 尾消息提示未读条数；**不注入正文、不标 consumed**。
- * 按 `unread:pending:可读 id` 签名去重；签名变化（新消息、held 释放等）时再提示一次。
+ * 「要不要提示」只看 `(unread, pending, held)` 三个计数：与上次注入时相同就不再注入
+ * （旧口径把可读消息 id 也编进签名，于是「消费一条 + 进来一条、计数不变」也会多刷一行）。
+ * 三个计数全为 0 时**完全不注入**，不留 `0 unread` 占位。
  */
 export function createInboxNoticeHook(options: {
   inbox: AgentInboxPort;
@@ -733,9 +737,8 @@ export function createInboxNoticeHook(options: {
   }) => void;
 }): Hook {
   /** 每个 hook（= 每个 body）独立；body 重建时重新开始提示。 */
-  // 按状态签名去重：unread/pending 变化或可读 id 集合变化都要重新提示。
-  // held 的 id 只参与 pending 计数，不单独视为“已提示正文”（held → unhold 后要再提示）。
-  let lastSignature: string | undefined;
+  // `undefined` = 这具 body 还没注入过（或计数已归零），下次非零计数必注入。
+  let lastCounts: string | undefined;
   return {
     name: 'vessel:inbox-notice',
     type: HookType.BeforeLlm,
@@ -744,16 +747,18 @@ export function createInboxNoticeHook(options: {
       const { unread, pending, messages } = options.inbox.list(options.agentId, {
         includeHeld: true,
       });
-      if (messages.length === 0) {
-        lastSignature = undefined;
+      // held 与 pending 是同集合：`includeHeld:true` 只返回未消费消息，而 `hold` 也只
+      // 作用于未消费消息 ⇒ 两者恒等。签名仍按三元组写：哪天 `held` 不再等于「会自动送达」
+      // 时不会漏提示，代价只是几个数字的字符串比较。
+      let held = 0;
+      for (const entry of messages) if (entry.held) held += 1;
+      // 一条消息都没有（unread / pending / held 全 0）：不注入，也不留 `0 unread` 占位。
+      if (unread === 0 && pending === 0 && held === 0) {
+        lastCounts = undefined;
         return;
       }
-      const readableIds = messages
-        .filter((entry) => !entry.held)
-        .map((entry) => entry.id)
-        .join(',');
-      const signature = `${unread}:${pending}:${readableIds}`;
-      if (signature === lastSignature) return;
+      const counts = `${unread}:${pending}:${held}`;
+      if (counts === lastCounts) return;
       const message: Message = {
         role: 'user',
         name: 'vessel:notice',
@@ -761,7 +766,7 @@ export function createInboxNoticeHook(options: {
         timestamp: Date.now(),
       };
       ctx.messages = [...(ctx.messages ?? []), message];
-      lastSignature = signature;
+      lastCounts = counts;
       try {
         options.onNotified?.({
           runId: ctx.run_id,
