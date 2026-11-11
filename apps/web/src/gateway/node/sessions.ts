@@ -180,7 +180,12 @@ export abstract class SessionsClient extends RpcClient {
   }
 
   /** 回答 ask_user；answers=[] 表示取消 */
-  async respondAsk(requestId: string, answers: AskUserAnswer[]): Promise<void> {
-    await this.request('ask.respond', { request_id: requestId, answers });
+  async respondAsk(requestId: string, answers: AskUserAnswer[], batchId?: string): Promise<void> {
+    await this.request('ask.respond', {
+      request_id: requestId,
+      answers,
+      // additive（0.52）：待批页一次提交的批次标记 —— 同批答案合成一条消息 + 一次 run。
+      ...(batchId !== undefined && batchId !== '' ? { batch_id: batchId } : {}),
+    });
   }
 }

@@ -32,6 +32,9 @@ applies_to: [N, M]
   （`domains/chat/ask-answer.ts`，与 `packages/agent` 的 `ASK_ANSWER_INPUT_NAME` 同一字面量，
   `check-transcript-items` 对账），正文解析失败就退回普通用户气泡 —— 绝不吞正文。
   这类 ask 的 run 早已结束，卡片**不随 run 终态消失**（`interactionReducer` 的 `run-finished` 例外）。
+  待批页「一起提交」的整批答案由 gateway 合并成**一条** user 消息（前缀里逗号分隔多个
+  requestId），每行是 `header（原问题摘要）: 答案`；卡片把原问题印在答案上方，卡头摘要
+  仍是第一题的 header（不因加长而变高）。
 - 所有 transient 提示 / banner / 交互摘要统一经 AppBar 中心 `MessageBar`；`ToastProvider`
   只提供 API，不渲染，禁止新增 fixed toast / 浮层（见 [WEB-UI.md](../WEB-UI.md) 硬规则 7）。
 - 不用 `backdrop-filter` 做层级；层级靠边框与阴影表达（ADR-072/082）。

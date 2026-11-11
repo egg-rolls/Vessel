@@ -75,6 +75,8 @@ interface ToolDefinition {
 
 `async` 的答案必须是 user 消息而不是工具返回值：新一轮 run 只能由一条 user 消息开起来（resume 同理）。工具返回体因此必须让模型自己区分「已投放待批」（async 恒为此种）与「已被回答」（sync）。
 
+**同批应答合并成一次 run**：待批页「一起提交」是一次人类动作 —— 那批 `ask.respond` 带同一个 `batch_id`，装配层按 `(agent, session, batch_id)` 做 250ms 短窗口合并，整批答案成为**一条** user 消息（前缀里逗号分隔多个 requestId）并只起**一次** run。没有 `batch_id` 的应答（单条应答 / `vessel attention respond` / policy）保持一次一条。答案文本每题一行 `N. header（原问题摘要）: 答案`（问题截断 120 字符），所以隔几小时回来也知道回的是哪一问。
+
 回答入口：Web 待批页 / `vessel attention respond`（卡片带「异步」标记）。TUI 的答辩弹窗沿用既有规则——run 收口即关闭，所以 async 请求在 TUI 里答不了（用待批页）。
 
 <a id="path-boundary"></a>

@@ -5,7 +5,9 @@
  * 渲染成气泡会让人以为是自己刚发的消息（点发送的人确实不是他）。为什么也不是环境信息：
  * 它是一次真实的人类决策，属于该轮的用户输入，必须与「工具/系统提示」区分开。
  * 所以：同一张 `StreamCard`（时间线唯一卡片结构），卡头写「待批答复 · <问题摘要>」，
- * 展开体是逐题答案 + 来源 + 时间。
+ * 展开体是逐题答案 + 来源 + 时间；每行把**原问题**印在答案上方（`0.52` additive：
+ * 答案行自带 `header（原问题摘要）`），隔几小时回来也认得出回的是哪一问。同一次
+ * 「一起提交」的多条答案合并成一条消息时，卡头标记是 `#<首个 requestId> +N`。
  *
  * 数据仍是那条 user 消息（协议要求、历史一致）：本卡只换表示层，不复制、不改写正文。
  */
@@ -13,6 +15,15 @@ import { formatClock } from '../../format';
 import { t } from '../../i18n';
 import type { AskAnswerCard as AskAnswerData } from './ask-answer';
 import { StreamCard } from './StreamCard';
+
+/**
+ * 卡头右侧的排障标记：请求 id 前 8 位；同批合并的答案消息再带上 `+N`（另几个请求）。
+ */
+function cardMeta(card: AskAnswerData): string | undefined {
+  if (card.requestId === undefined) return undefined;
+  const base = `#${card.requestId.slice(0, 8)}`;
+  return card.extraRequestIds !== undefined ? `${base} +${card.extraRequestIds}` : base;
+}
 
 export function AskAnswerCard({
   card,
@@ -40,7 +51,7 @@ export function AskAnswerCard({
           <span className="max-w-56 truncate text-sm text-ink">{card.summary}</span>
         </>
       }
-      meta={card.requestId !== undefined ? `#${card.requestId.slice(0, 8)}` : undefined}
+      meta={cardMeta(card)}
       summary={card.rows[0]?.text}
     >
       {(clock !== '' || card.requestId !== undefined) && (
@@ -61,12 +72,29 @@ export function AskAnswerCard({
         {card.rows.map((row) => (
           <li
             className="min-w-0 break-words text-sm leading-relaxed text-ink"
-            key={`${row.label}\u0000${row.text}`}
+            key={`${row.label}\u0000${row.question ?? ''}\u0000${row.text}`}
           >
-            <span className="mr-1.5 font-mono text-2xs tracking-wider text-accent-ink">
-              {row.label}
-            </span>
-            <span className="whitespace-pre-wrap wrap-anywhere">{row.text}</span>
+            {row.question === undefined ? (
+              // 旧格式（只有 header）：保持原有的单行「label answer」。
+              <>
+                <span className="mr-1.5 font-mono text-2xs tracking-wider text-accent-ink">
+                  {row.label}
+                </span>
+                <span className="whitespace-pre-wrap wrap-anywhere">{row.text}</span>
+              </>
+            ) : (
+              // 新格式：折叠摘要（卡头）不变，展开体里把**原问题**印在答案上方，
+              // 隔几个小时回来也认得出答的是哪一问。
+              <>
+                <div className="mb-0.5 flex min-w-0 flex-wrap items-baseline gap-x-2">
+                  <span className="font-mono text-2xs tracking-wider text-accent-ink">
+                    {row.label}
+                  </span>
+                  <span className="min-w-0 text-2xs break-words text-muted">{row.question}</span>
+                </div>
+                <div className="whitespace-pre-wrap wrap-anywhere">{row.text}</div>
+              </>
+            )}
           </li>
         ))}
       </ul>

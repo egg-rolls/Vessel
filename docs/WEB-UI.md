@@ -100,7 +100,9 @@ class 与同一个阈值，不要给某一页复制第二份。
 1. **会话**：Composer 槽位的 `AskCard`（原同步等待语义不变），会话栏头部「待批」按钮带当前会话计数；
 2. **团队**：`TeamPendingBar`（成员会话的请求）；
 3. **本页（`#/pending`，「待批」）**：所有来源的总汇集，按 agent（无则会话、再退 run）聚簇，
-   同簇勾选后「一起提交」= 一次用户动作，每条 ask 各一次 `ask.respond`。
+   同簇勾选后「一起提交」= 一次用户动作，每条 ask 各一次 `ask.respond`（同一批带同一个
+   `batch_id`，gateway 合并成**一条** user 消息 + **一次** run；见
+   `domains/pending/usePendingBatch.ts` 与 `docs/architecture/tools.md`）。
    应答不新建 run：等待中的 `ask_user` 拿到结果后原 run 继续（见 `domains/pending/usePendingBatch.ts`）。
    挂起的 ask（headless / 超时挂起，记录带 `suspended`）没有原地等待者：那一轮 run 已以
    `interrupted` 收口，网关在应答落定后自己发起一次 resume（**同一 run id，不新建 run**）；

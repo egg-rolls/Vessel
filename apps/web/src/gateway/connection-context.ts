@@ -87,7 +87,11 @@ export interface ConnectionContextValue {
     decision: 'allow' | 'deny',
     scope?: PermissionScope,
   ) => Promise<void>;
-  respondAsk: (requestId: string, answers: AskUserAnswer[]) => Promise<void>;
+  /**
+   * 回答 ask；`batchId` = 待批页「一起提交」这一次点击的标记（additive）。
+   * 同批的多个应答带同一个 batchId 发出去，gateway 会合并成一条消息 + 一次 run。
+   */
+  respondAsk: (requestId: string, answers: AskUserAnswer[], batchId?: string) => Promise<void>;
 }
 
 export const ConnectionContext = createContext<ConnectionContextValue | null>(null);

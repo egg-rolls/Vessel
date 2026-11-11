@@ -330,8 +330,14 @@ export interface GatewayOptions {
    * 的 handler 不得再自己投一次 —— 它只等这次投递的结果去填返回体的 `delivered`。
    * 同一条运行时流上可能有多个 gateway 装配注册这条监听，去重靠进程级单飞
    * （`asyncAnswerDeliveries`）+ 落盘的 `answer.delivered_at`，见 `deliverAsyncAskAnswer`。
+   *
+   * `context.batchId` = 这次应答属于待批页的哪一次提交（记录里的 `answer.batch_id`）：
+   * 投放实现按它把同批答案合成一条消息 + 一次 run。缺省 = 单条投放（旧行为）。
    */
-  askAnswerDelivery?: (record: StoredInteraction) => Promise<boolean>;
+  askAnswerDelivery?: (
+    record: StoredInteraction,
+    context?: { batchId?: string },
+  ) => Promise<boolean>;
   /**
    * 内部：只构建方法表/引擎，不调用 `Bun.serve`。
    * 由 `createLocalRpcDispatcher` 使用；外部不要设置。
@@ -1514,7 +1520,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // 0.27：交互状态唯一来源是 interactions registry（执行引擎已删除）。
       respondPermission: (requestId, decision, remember, scope, actor) =>
         interactions.respondPermission(requestId, decision, remember, scope, actor),
-      respondAsk: (requestId, answers, actor) => interactions.respondAsk(requestId, answers, actor),
+      respondAsk: (requestId, answers, actor, context) =>
+        interactions.respondAsk(requestId, answers, actor, context),
       interactions: {
         interactionRecords: interactions.interactionRecords,
         pendingPermissions: interactions.pendingPermissions,
@@ -2221,7 +2228,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (target.agent_id === undefined || target.agent_id === '') return false;
       let delivered = false;
       try {
-        delivered = (await deliver(target)) === true;
+        // 同批合并（additive）：`answer.batch_id` 由 `ask.respond` 的 `batch_id` 落进记录，
+        // 投放实现据此把同一次提交的多个答案合成一条消息 + 一次 run。
+        const batchId = target.answer?.batch_id;
+        delivered =
+          (await deliver(target, batchId === undefined ? undefined : { batchId })) === true;
       } catch (error) {
         console.warn('[vessel] ask answer delivery failed; answer recorded only', {
           request_id: target.requestId,

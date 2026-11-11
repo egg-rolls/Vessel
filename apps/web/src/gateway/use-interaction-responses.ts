@@ -38,7 +38,7 @@ export function useInteractionResponses({
     decision: 'allow' | 'deny',
     scope?: PermissionScope,
   ) => Promise<void>;
-  respondAsk: (requestId: string, answers: AskUserAnswer[]) => Promise<void>;
+  respondAsk: (requestId: string, answers: AskUserAnswer[], batchId?: string) => Promise<void>;
 } {
   const updateResponding = useCallback((requestId: string, active: boolean) => {
     useInteractionStore.getState().setResponding(requestId, active);
@@ -83,11 +83,11 @@ export function useInteractionResponses({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: submitGuard 与 useRef 一样稳定
   const respondAsk = useCallback(
-    async (requestId: string, answers: AskUserAnswer[]) => {
+    async (requestId: string, answers: AskUserAnswer[], batchId?: string) => {
       if (!submitGuard.current.begin(requestId)) return;
       updateResponding(requestId, true);
       try {
-        await client.respondAsk(requestId, answers);
+        await client.respondAsk(requestId, answers, batchId);
         recordSettled(requestId);
         useInteractionStore.getState().dispatch({ type: 'settle', requestId });
       } catch (error) {

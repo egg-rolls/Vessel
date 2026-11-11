@@ -34,6 +34,13 @@ export interface StoredInteractionAnswer {
   policy?: 'deny_after' | 'auto_allow';
   latency_ms?: number;
   /**
+   * 0.52：这次应答属于待批页的哪一次提交（`ask.respond` 的 additive `batch_id`）。
+   *
+   * 只用于「同批答案合成一条 user 消息」的投递归组：投放实现按
+   * (agent, session, batch_id) 做短窗口合并。缺省 = 单条应答（旧行为）。
+   */
+  batch_id?: string;
+  /**
    * 0.52：async ask 的答案**已作为 user 消息投进成员 inbox**（并已起新 run）。
    *
    * 只用于幂等：同一 request 的重复应答（或进程重启后的重放）不再第二次投放。
@@ -110,6 +117,8 @@ function parseAnswer(value: unknown): StoredInteractionAnswer | undefined {
   if (typeof value.latency_ms === 'number' && Number.isFinite(value.latency_ms)) {
     answer.latency_ms = value.latency_ms;
   }
+  const batchId = nonEmptyString(value.batch_id);
+  if (batchId !== undefined) answer.batch_id = batchId;
   if (typeof value.delivered_at === 'number' && Number.isFinite(value.delivered_at)) {
     answer.delivered_at = value.delivered_at;
   }

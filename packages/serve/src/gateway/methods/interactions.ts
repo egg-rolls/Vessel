@@ -6,6 +6,7 @@
 
 import type { HubTeamScopeLike } from '../../hub-control.js';
 import type {
+  AskRespondContext,
   PendingAsk,
   PendingPermission,
   PermissionRespondResult,
@@ -57,6 +58,7 @@ export interface InteractionMethodsDeps {
       answered_by: 'human' | 'policy';
       answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
     },
+    context?: AskRespondContext,
   ): unknown;
   interactions: InteractionSources;
   /**
@@ -423,6 +425,9 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           request_id: { type: 'string', minLength: 1 },
           answers: { type: 'array' },
           answered_via: { type: 'string', enum: ['rpc', 'cli'] },
+          // additive（0.52）：待批页一次提交的批次标记。同批的多个应答会被投放层
+          // 合成一条 user 消息 + 一次 run；缺省 = 一次一条（旧行为）。
+          batch_id: { type: 'string', maxLength: 200 },
         },
       },
       result_schema: {
@@ -450,12 +455,23 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         }
         const requestId = stringParam(params, 'request_id');
         assertTeamAccess(requestId, ctx.principal);
+        // additive：待批页一次提交的 batch_id（校验失败按无批次处理，不影响应答本身）。
+        const rawBatchId = params.batch_id ?? params.batchId;
+        const batchId =
+          typeof rawBatchId === 'string' && rawBatchId.length > 0 && rawBatchId.length <= 200
+            ? rawBatchId
+            : undefined;
         // 状态迁移前的记录：只有「suspended pending」才可能在应答后需要续跑。
         const before = interactions.interactionRecords.get(requestId);
-        const result = respondAsk(requestId, answers, {
-          answered_by: 'human',
-          answered_via: params.answered_via === 'cli' ? 'cli' : 'rpc',
-        });
+        const result = respondAsk(
+          requestId,
+          answers,
+          {
+            answered_by: 'human',
+            answered_via: params.answered_via === 'cli' ? 'cli' : 'rpc',
+          },
+          batchId !== undefined ? { batch_id: batchId } : undefined,
+        );
         if (
           awaitAsyncAskDelivery !== undefined &&
           before !== undefined &&

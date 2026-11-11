@@ -44,6 +44,17 @@ export interface InteractionActor {
   answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
 }
 
+/**
+ * 0.52：应答的「来路」上下文（additive，只影响答案投放的分组）。
+ *
+ * `batch_id` = 待批页的一次提交（一簇里每条 ask 各发一次 `ask.respond`，但那是
+ * 一次人类动作）。它落进 `answer.batch_id`，投放实现按 (agent, session, batch_id)
+ * 短窗口合并成一条消息 + 一次 run；缺省 = 单条应答（旧行为）。
+ */
+export interface AskRespondContext {
+  batch_id?: string;
+}
+
 /** `permission.respond` 的结果（additive）。 */
 export interface PermissionRespondResult {
   ok: true;
@@ -127,7 +138,12 @@ export interface InteractionsRegistry {
     scope?: PermissionScope,
     actor?: InteractionActor,
   ): PermissionRespondResult;
-  respondAsk(requestId: string, answers: unknown[], actor?: InteractionActor): AskRespondResult;
+  respondAsk(
+    requestId: string,
+    answers: unknown[],
+    actor?: InteractionActor,
+    context?: AskRespondContext,
+  ): AskRespondResult;
   /**
    * 0.52：把「答案已投放」写进记录（幂等标记，`answer.delivered_at`）。
    * 返回 false = 记录不存在或还不是 answered。
@@ -601,6 +617,7 @@ export function createInteractionsRegistry(
     requestId: string,
     answers: unknown[],
     actor?: InteractionActor,
+    context?: AskRespondContext,
   ): AskRespondResult {
     const attribution: InteractionActor = actor ?? { answered_by: 'human' };
     const record = interactionRecords.get(requestId);
@@ -646,6 +663,10 @@ export function createInteractionsRegistry(
             ? { answered_via: attribution.answered_via }
             : {}),
           latency_ms: latency,
+          // 0.52：待批页一次提交的批次标记；投放实现用它把同批答案合成一条消息。
+          ...(context?.batch_id !== undefined && context.batch_id !== ''
+            ? { batch_id: context.batch_id }
+            : {}),
         });
       }
       return {

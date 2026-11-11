@@ -121,8 +121,39 @@ export async function orphanPendingAsksForRun(options: {
   return changed;
 }
 
-/** 把持久化 answers 转成模型可直接读的文本。空数组 = 人类拒绝回答。 */
-export function formatAnswersForModel(answers: unknown[]): string {
+/** 问题摘要的最大长度（模型看到的答案行里，原题只留摘要）。 */
+export const ASK_QUESTION_SUMMARY_MAX = 120;
+
+/**
+ * 问题摘要：压掉换行 / 连续空白，并把冒号换成空格。
+ *
+ * 答案行格式是 `N. label: answer`；label 里出现冒号会让「哪部分是问题、哪部分是
+ * 答案」不可分（Web 卡片按第一个冒号切分）。摘要只需要人认得出是哪一问，
+ * 因此这里牺牲标点换结构确定性。
+ */
+export function askQuestionSummary(text: string): string {
+  const flat = text
+    .replace(/\s+/g, ' ')
+    .replace(/\s*[:：]\s*/g, ' ')
+    .trim();
+  if (flat.length <= ASK_QUESTION_SUMMARY_MAX) return flat;
+  return `${flat.slice(0, ASK_QUESTION_SUMMARY_MAX)}…`;
+}
+
+/**
+ * 把持久化 answers 转成模型可直接读的文本。空数组 = 人类拒绝回答。
+ *
+ * 每行是 `N. label: answer`：label 带原问题摘要（有 header 时 `header（问题摘要）`，
+ * 没有 header 就用问题本身）。async ask 的答案可能隔几个小时才回到模型面前，
+ * 只写 header 模型无从知道答的是哪一问。
+ *
+ * `requestCount`：同一次提交里**合并**了几个 request（>1 时首行用复数 + 计数）；
+ * 缺省 = 一次一个 request（旧文本一字不改）。
+ */
+export function formatAnswersForModel(
+  answers: unknown[],
+  options?: { requestCount?: number },
+): string {
   if (answers.length === 0) {
     return 'The human declined to answer your pending ask_user request.';
   }
@@ -133,12 +164,24 @@ export function formatAnswersForModel(answers: unknown[]): string {
       const question = nonEmptyString(answer.question);
       const value =
         typeof answer.answer === 'string' ? answer.answer : JSON.stringify(answer.answer ?? '');
-      const label = header ?? question ?? `Answer ${index + 1}`;
+      const summary = question === undefined ? undefined : askQuestionSummary(question);
+      // header 缺失就用问题本身；两者都没有才退化成序号标签。
+      const label =
+        header === undefined
+          ? (summary ?? `Answer ${index + 1}`)
+          : summary === undefined || summary === header
+            ? header
+            : `${header}（${summary}）`;
       return `${index + 1}. ${label}: ${value}`;
     }
     return `${index + 1}. ${JSON.stringify(answer)}`;
   });
-  return ['Answers from the human to your pending ask_user request:', ...lines].join('\n');
+  const requestCount = options?.requestCount;
+  const intro =
+    requestCount !== undefined && requestCount > 1
+      ? `Answers from the human to your ${requestCount} pending ask_user requests:`
+      : 'Answers from the human to your pending ask_user request:';
+  return [intro, ...lines].join('\n');
 }
 
 /**
@@ -264,7 +307,8 @@ export function createOfflineAttentionTarget(options: {
   const methods = createInteractionMethods({
     respondPermission: (requestId, decision, remember, scope, actor) =>
       interactions.respondPermission(requestId, decision, remember, scope, actor),
-    respondAsk: (requestId, answers, actor) => interactions.respondAsk(requestId, answers, actor),
+    respondAsk: (requestId, answers, actor, context) =>
+      interactions.respondAsk(requestId, answers, actor, context),
     interactions,
     // 0.52：离线 attention 没有 live runtime —— async 答案只能记录，投放者是空的：
     // `() => undefined` 让 `ask.respond` 的返回体照旧带 `delivered: false`，
