@@ -15,7 +15,12 @@
  * - 流式期间默认展开，结束后自动折叠；用户手动开合后不再被自动开合打断；
  * - 历史态 streaming=false → **默认折叠**，点标题展开，没有别的东西会改写这个状态；
  * - 内容按纯文本渲染，不进入正文 Markdown；
- * - `startedAt` / `endedAt` 齐全时标题显示耗时（历史消息没有这两项，就不显示）。
+ * - `startedAt` / `endedAt` 齐全时标题显示耗时（历史消息没有这两项，就不显示）；
+ * - 动画（`styles/motion.css` 是唯一来源，本组件只挂 class）：
+ *   入场 = `.motion-appear`（`entering`，只动透明度，只播挂载那一次），
+ *   展开 / 收起 = `.motion-disclosure`（`<details>` 的尺寸过渡，原生可访问性不变）。
+ *   流式期间思考文本每 flush 增长一次，但这两种动画都按「节点首次挂载 / open 变化」跑，
+ *   不会跟着 delta 重播。
  */
 import { useEffect, useState } from 'react';
 import { Button } from '../../components/ui';
@@ -28,11 +33,17 @@ export function ReasoningBlock({
   streaming,
   startedAt,
   endedAt,
+  entering = false,
 }: {
   text: string;
   streaming: boolean;
   startedAt?: number;
   endedAt?: number;
+  /**
+   * 本块是事件流里**新追加**的一项（不是历史回填）：首次挂载时淡入一次。
+   * 判据在调用方（会话页首屏那批不算追加）；历史消息不传。
+   */
+  entering?: boolean;
 }) {
   const [open, setOpen] = useState(streaming);
   const [userToggled, setUserToggled] = useState(false);
@@ -52,7 +63,7 @@ export function ReasoningBlock({
 
   return (
     <details
-      className="reasoning-block"
+      className={`reasoning-block motion-disclosure${entering ? ' motion-appear' : ''}`}
       open={open}
       onToggle={(event) => {
         const next = event.currentTarget.open;

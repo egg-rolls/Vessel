@@ -1,0 +1,155 @@
+/* ─────────────────────────────────────────────────────────────
+   Vessel Web · motion 基座（三族可复用动画）
+
+   ## 复用契约（新组件先读这段，不要自己写 @keyframes）
+
+   1. 出现类 —— `.motion-appear` / `.motion-appear-rise`
+      用在「一项从无到有」：消息气泡、卡片、提示行。默认选 `.motion-appear`
+      （只动透明度）；只有需要一点方向感时才用 `.motion-appear-rise`
+      （淡入 + 上移 `--motion-distance`，最多 2–4px）。整块缩放会糊字，不要加 scale。
+      动画在 DOM 节点**首次挂载**时播一次：React 按稳定 key 复用节点，重渲染不会重播。
+      不要用「每次 render 改 key / 拼随机类名」伪造重复动画 —— 那会重建节点，
+      实际效果是整行重排 + 重播，比不做动画更抖。
+
+   2. 大小变化类 —— `.motion-disclosure`（`<details>` 的展开 / 收起）
+      `.motion-disclosure` 挂在 `<details>` 上，展开 / 收起做 `block-size` 过渡。原生
+      summary 的键盘操作、可达名、收起后内容不可聚焦（content-visibility）全部保留，
+      所以不要为了动画把 `<details>` 拆成 div + aria-expanded。
+      浏览器不支持 `::details-content` 时直接开合（就是今天的行为），不做假动画。
+
+      **还没有**「非 `<details>` 的自管开合面板」，因此本文件不放那套 class（无使用点的
+      代码不预留）。真有第一个使用点时照这个写，别用 max-height 猜值（内容一长就抖，
+      猜小了裁掉、猜大了拖沓）——容器 display: grid + grid-template-rows: 0fr（收起）→
+      1fr（展开，行高跟着内容长，不用量高度），状态放 data-motion-open，子项 min-height: 0
+      + overflow: clip 防止把父级重新撑开，两个方向的时长都用 --motion-slow。
+      收起时**调用方**负责给 `inert` / `hidden` —— 动画 class 不管可访问性。
+
+   3. 流式类 —— `.motion-stream`
+      挂在**流式正文的外层容器**上（就是 `AssistantText` 的 `div.msg-assistant`，
+      它里面是 `div.markdown > 块`）：正文块**首次挂载**时淡入 + blur 收敛 ——
+      也就是「先排版、后显示」。
+      只认这一层：块选择器是 `.motion-stream .markdown > *`，挂在 `.markdown` 自身
+      不匹配 —— 免得同一个块被「父级淡入 + 块淡入」两层同时动画（叠起来发虚）。
+      判据必须是「块首次挂载」。**严禁**按 delta / 定时器逐块逐字 setState 播动画：
+      流式期间每 50ms 一次 flush，任何按 delta 跑的东西都会抖。
+      块的位置与高度一次到位（只动 opacity / filter），流式期不要做高度动画。
+      段级入场与块级不叠：`AssistantText` 首帧定格一次「这条正文是流式出现还是整段出现」，
+      流式出现只挂 `.motion-stream`，整段出现才挂 `.msg-enter`。
+
+   ## Token
+   时长与缓动只认 `styles/tokens.css` 的 `--motion-fast` / `--motion-base` /
+   `--motion-slow` / `--motion-ease`；位移 `--motion-distance`、模糊 `--motion-blur`。
+   本文件与组件里都不写裸毫秒数。
+
+   ## prefers-reduced-motion
+   `styles/base.css` 末尾已经把 `animation-duration` / `transition-duration` 压到
+   `.001ms !important`：三族在那一层就静止，因为本文件的动画**都没有**
+   `animation-delay`，也没有 `animation-fill-mode: forwards` 之类会「停在非终态」的写法。
+   文件末尾再显式把三族关一次（不写 `!important`，不是绕过 base.css，只是把结果钉死），
+   其中 `::details-content` 的过渡**必须**在那里关：`*` 匹配不到伪元素，
+   base.css 那条 `!important` 压不住它。
+
+   ## 既有实现（保留，不并入本文件）
+   `.msg-enter`（styles/domains/chat.css，已改为引用本文件的 `motion-appear-rise`
+   关键帧）、`.message-chip` 的 `message-in`、`.modal` 的 `rise-in`：都是挂载一次性
+   动画，新代码不要再复制这三份。
+   ───────────────────────────────────────────────────────────── */
+
+/* ── ① 出现类 ─────────────────────────────────────────────── */
+
+/* 默认：只改透明度。没有位移，就没有「整行在动」的观感。 */
+@keyframes motion-appear {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 需要方向感时：淡入 + 4px 上移。`backwards` 只兜住「首帧还没开始」的那一下，
+   不用 forwards —— 动画结束后交还给元素自身样式。 */
+@keyframes motion-appear-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance));
+  }
+}
+
+.motion-appear {
+  animation: motion-appear var(--motion-base) var(--motion-ease) backwards;
+}
+
+.motion-appear-rise {
+  animation: motion-appear-rise var(--motion-base) var(--motion-ease) backwards;
+}
+
+/* ── ② 大小变化类 ─────────────────────────────────────────── */
+
+/* `<details>` 的展开 / 收起：过渡的是内容盒自身的 block-size（auto ↔ 0），
+   内容一开始就按最终排版渲染，长内容短内容是同一段过渡，没有「猜高度」。
+   `interpolate-size: allow-keywords` 是 `auto` 能参与过渡的前提（Chromium 129+ /
+   Safari 18.4+），只在本类上开，不改全局。 */
+@supports selector(::details-content) {
+  .motion-disclosure {
+    interpolate-size: allow-keywords;
+  }
+
+  .motion-disclosure::details-content {
+    block-size: 0;
+    /* 收起 / 展开期间裁掉溢出内容；clip 不产生新的滚动容器，clip-margin 留 4px
+       让内部控件的焦点环不被切掉。 */
+    overflow: clip;
+    overflow-clip-margin: 4px;
+    opacity: 0;
+    /* content-visibility 也要过渡：收起时它得等高度收完再隐藏，
+       否则内容在第一帧就消失，只剩容器在动。离散属性靠 allow-discrete 才能跨值过渡，
+       这里写成 longhand，避免 shorthand 里 behavior 的位置被解析器挑刺。 */
+    transition-property: block-size, opacity, content-visibility;
+    transition-duration: var(--motion-slow), var(--motion-base), var(--motion-slow);
+    transition-timing-function: var(--motion-ease);
+    transition-behavior: allow-discrete;
+  }
+
+  .motion-disclosure[open]::details-content {
+    block-size: auto;
+    opacity: 1;
+  }
+}
+
+/* ── ③ 流式类 ─────────────────────────────────────────────── */
+
+/* 正文块「先占位、再出现」：块的高度 / 位置在挂载那一帧就按最终排版落位，
+   只让透明度与 blur 收敛（不碰布局 ⇒ 不会把贴底滚动推来推去）。 */
+@keyframes motion-stream-block {
+  from {
+    opacity: 0;
+    filter: blur(var(--motion-blur));
+  }
+}
+
+/* 只认「正文外层容器」这一层：块在 `.markdown` 里。挂在 `.markdown` 自身不匹配，
+   这样同一个块永远不会被父级与自身两层动画叠着播。 */
+.motion-stream .markdown > * {
+  animation: motion-stream-block var(--motion-slow) var(--motion-ease);
+}
+
+/* ── reduced motion：三族显式静止（不加 !important，不绕过 base.css） ── */
+
+@media (prefers-reduced-motion: reduce) {
+  /* base.css 已经把 `animation-duration` / `transition-duration` 压到 `.001ms !important`；
+     这里再把「没有动画」这个结果钉死，不依赖那 1μs 的过渡/动画跑完。
+     出现类与流式类动画都是纯 opacity / filter，关掉就是终态；流式这里关的是**块选择器**
+     （`.markdown > *`），不是只关父类 —— 动画本来就挂在块上。 */
+  .motion-appear,
+  .motion-appear-rise,
+  .motion-stream .markdown > * {
+    animation: none;
+  }
+
+  /* base.css 的抑制规则是元素选择器（`*` / `*::before` / `*::after`），
+     **匹配不到 `::details-content`**：这条过渡必须在这里显式关掉，
+     否则「减少动态效果」下展开 / 收起仍在动。tie-break 靠文件内顺序在后。 */
+  .motion-disclosure::details-content {
+    transition: none;
+    block-size: auto;
+    opacity: 1;
+  }
+}

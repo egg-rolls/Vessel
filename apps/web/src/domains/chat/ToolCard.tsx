@@ -174,11 +174,14 @@ export function ToolCard({
   card,
   verbosity = 'normal',
   defaultOpen = false,
+  entering = false,
 }: {
   card: ToolCardView;
   verbosity?: Verbosity;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；用户手动开合优先。 */
   defaultOpen?: boolean;
+  /** 本卡是事件流里新追加的一项：入场只播一次（判据在调用方，见 StreamCard）。 */
+  entering?: boolean;
 }) {
   const description = useToolDescription(card.name);
   const summary = toolSummary(card.name, card.args);
@@ -197,6 +200,7 @@ export function ToolCard({
     <StreamCard
       className="tool-card"
       defaultOpen={defaultOpen}
+      entering={entering}
       title={
         <>
           <span

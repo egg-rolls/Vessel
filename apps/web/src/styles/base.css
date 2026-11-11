@@ -1,5 +1,10 @@
 /* biome-ignore-all lint/complexity/noImportantStyles: reduced-motion overrides must win */
 
+/* 动效基座（出现 / 大小变化 / 流式三族）：只在这里挂一次，别再往组件里复制 keyframes。
+   契约与用法见 styles/motion.css 的文件头。沿 base.css 落在 legacy 层，
+   排在 tokens.css 之后、各 domain 样式之前。 */
+@import "./motion.css";
+
 * {
   box-sizing: border-box;
 }

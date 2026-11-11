@@ -183,9 +183,9 @@ export type TranscriptItemRenderer = (item: TranscriptItem) => ReactNode;
 /**
  * item 流 → 消息区。
  *
- * 入场动画的边界（见 `components/ui/useEnteringItemKeys.ts` 的说明）：
- * - **live item 播**：`renderItem` 渲染的都是事件流追加进来的项（用户气泡 / agent 卡 /
- *   正文），挂载即播一次；
+ * 入场动画的边界（判据见 `TranscriptWindow` 的 `useEnteringItems`）：
+ * - **只播「追加」不播「回填」**：`renderItem` 渲染的事件流项由调用方决定要不要挂入场类
+ *   （`.msg-enter` / `.motion-appear`）；会话页在挂载 / F5 回放那一批上不播，之后的追加才播；
  * - **历史消息不播**：历史加载是「回填 / 换页」不是「追加」，而且 live 落盘后会把位置
  *   让给历史消息（`run:<runId>:input` 由 `msg:<absIndex>` 接管，key 不同 = DOM 节点
  *   重建），两边都播就是同一段正文淡入两次。

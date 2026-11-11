@@ -118,7 +118,19 @@
   --row-h-tool: 36px;
   --control-h: 32px;
   --tracking-wide: 0.08em;
-  --motion-ui: 200ms;
+
+  /* 动效：出现 / 大小变化 / 流式三族动画的唯一来源（class 见 styles/motion.css）。
+     组件里不写裸毫秒数与缓动曲线；三族都必须在 prefers-reduced-motion 下静止。 */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+  --motion-ease: var(--ease);
+  /* 出现类唯一允许的位移（2–4px）：整块缩放 / 长距离滑动都会糊字。 */
+  --motion-distance: 4px;
+  /* 流式块收敛的初始模糊。 */
+  --motion-blur: 3px;
+  /* 既有别名：抽屉 / 面板的位移时长（与 --motion-base 同值，改一处即可）。 */
+  --motion-ui: var(--motion-base);
 
   /* 底部槽结构尺度 */
   --dock-gap: 16px;

@@ -19,6 +19,9 @@
  * - summary 里不得再放可点元素（按钮 / 链接）：可操作控件放 actions 插槽
  *   （始终可见，不受折叠影响），长内容放 children；
  * - 卡片 key 由调用方给且稳定（callId / seq / 下标），运行中到终态不重挂。
+ * - 动画：入场（`entering`，只动透明度）与展开 / 收起（`<details>` 的尺寸过渡）都来自
+ *   `styles/motion.css`（`.motion-appear` / `.motion-disclosure`）；本组件只负责挂 class，
+ *   不要在这里写 keyframes 或 transition。入场靠稳定 key + 首次挂载，重渲染不重播。
  */
 import { type ReactNode, useEffect, useState } from 'react';
 import { Icon } from '../../components/ui';
@@ -52,6 +55,12 @@ export interface StreamCardProps {
   ariaLabel?: string;
   className?: string;
   /**
+   * 本卡是**首次挂载**（事件流里新追加的一项）：入场只播一次
+   * （`.motion-appear`，只动透明度，keyframes 见 styles/motion.css）。
+   * 判据由调用方给（会话页：首屏那批不算追加），本组件不自己判断。
+   */
+  entering?: boolean;
+  /**
    * 展开体。**它的有无就是「能不能展开」**：给了 = 可展开（chevron + 点击整行），
    * 没给 = 纯行头。不要为了「只有一个可展开卡」再加开关位。
    */
@@ -67,6 +76,7 @@ export function StreamCard({
   actions,
   ariaLabel,
   className,
+  entering = false,
   children,
 }: StreamCardProps) {
   // 单一判定：有展开体才渲染 `<details>` / chevron，避免「有 chevron 但展开是空的」。
@@ -79,7 +89,17 @@ export function StreamCard({
     if (!touched) setOpen(defaultOpen);
   }, [defaultOpen, touched]);
 
-  const classes = ['event-block', 'stream-card', TONE_CLASS[tone], className ?? '']
+  // 入场（只播一次）与展开 / 收起过渡各挂一个动画 class，keyframes 与契约在
+  // styles/motion.css：可展开的卡自己不用写 transition，`<details>` 的语义（键盘、
+  // 可达名、收起后内容不可聚焦）由浏览器提供，这里只补尺寸过渡。
+  const classes = [
+    'event-block',
+    'stream-card',
+    TONE_CLASS[tone],
+    className ?? '',
+    entering ? 'motion-appear' : '',
+    expandable ? 'motion-disclosure' : '',
+  ]
     .filter((part) => part.length > 0)
     .join(' ');
 
