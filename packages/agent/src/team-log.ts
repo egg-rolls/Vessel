@@ -13,6 +13,7 @@
 import { appendFile, chmod, type FileHandle, mkdir, open, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { type Logger, noopLogger } from '@vessel-agent/core';
+import { normalizeRefs } from './refs.js';
 import type { TeamLogEntry, TeamLogReadWindow } from './types.js';
 
 /** 有界读：单次最多读取的字节数（尾读窗口 / 回扫分块大小） */
@@ -102,6 +103,10 @@ function parseEntry(line: string): TeamLogEntry | null {
     if (typeof parsed.retracted_message_id === 'string' && parsed.retracted_message_id !== '') {
       entry.retracted_message_id = parsed.retracted_message_id;
     }
+    // 附件引用（0.52）：旧行没有该键 → 不赋值（`undefined`），不报错。
+    // 读侧再归一一次（丢弃坏条目 / 超条数），不因单条脏 refs 判整行为坏行。
+    const refs = normalizeRefs(parsed.refs);
+    if (refs.length > 0) entry.refs = refs;
     return entry;
   } catch {
     return null;

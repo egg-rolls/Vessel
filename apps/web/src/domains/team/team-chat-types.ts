@@ -21,8 +21,9 @@ export interface TeamChatClient {
     content: string;
     mentions?: string[];
     /**
-     * 附件引用（0.52，additive）：只有路径与种类，随 @ 投递写成成员侧 core
-     * `Message.refs`；不传 = 无引用，旧 gateway 忽略未知键。
+     * 附件引用（0.52，additive）：只有路径与种类。随 @ 投递写成成员侧 core
+     * `Message.refs`，也写进 Team 日志并回显在结果 `refs`；不传 = 无引用，
+     * 旧 gateway 忽略未知键。
      */
     refs?: MessageRef[];
   }): Promise<TeamPostResult>;

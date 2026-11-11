@@ -83,6 +83,11 @@ export interface TeamMessageLike {
   conversation_id?: string;
   /** 0.21：跨节点回信地址（additive） */
   federation?: TeamLogFederationLike;
+  /**
+   * 附件引用（0.52 additive）：与 `teams.post` 的 `refs` 同一形状，只有路径与元信息。
+   * 只在非空时出现（旧日志 / 无引用的消息没有该键）。
+   */
+  refs?: MessageRef[];
 }
 
 export interface TeamLogFederationLike {
@@ -121,6 +126,8 @@ export interface TeamPostResultLike {
   ts: number;
   /** 0.19 S4 会话分组 */
   conversation_id?: string;
+  /** 已写进 Team 日志的引用（0.52 additive；无引用时缺省）。 */
+  refs?: MessageRef[];
 }
 
 /** teams.retract 结果。 */
@@ -220,8 +227,9 @@ export interface TeamControlLike {
     content: string;
     mentions?: string[];
     /**
-     * 附件引用（0.52，additive）：只有路径与种类，随 @ 投递写成成员侧的 core
-     * `Message.refs`；**不进 Team 日志 / 回执**（见 `TeamPostInput.refs`）。
+     * 附件引用（0.52，additive）：只有路径与种类。三个去处：随 @ 投递写成成员侧的
+     * core `Message.refs`、写进 Team 日志（时间线显 chip）、回执
+     * `TeamPostResultLike.refs`（乐观更新）。
      */
     refs?: MessageRef[];
     /** 只写进日志的收件人标记（0.21 federation owner） */

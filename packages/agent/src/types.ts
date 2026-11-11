@@ -1457,6 +1457,12 @@ export interface TeamLogEntry {
   conversation_id?: string;
   /** 跨节点来源 / 目标地址（0.21 additive；只在 federation 入站日志出现） */
   federation?: TeamLogFederation;
+  /**
+   * 附件引用（0.52 additive）：与 `TeamPostInput.refs` 同一形状，**只有路径与元信息**
+   * （不存正文 / base64）。只在非空时写；旧日志没有该键 → 读成 `undefined`。
+   * 系统行（join / leave / retract 等）永不带 refs。
+   */
+  refs?: MessageRef[];
 }
 
 /** `teams.get` 一页：窗口按文件顺序升序，`hasMore` 表示窗口之前是否还有日志。 */
@@ -1550,8 +1556,8 @@ export interface TeamPostInput {
    * 附件引用（0.52，additive）：只有路径与种类，随 @ 投递写成成员侧的 core
    * `Message.refs`（成员靠 `[refs]` 环境信息行知道该用 `media.read` 读）。
    *
-   * **不进 Team 日志**：日志记「谁说了什么」，引用是这次投递的载荷；要让它出现在
-   * 团队时间线上得扩 `TeamLogEntry`（另一单）。
+   * 同时**写进 Team 日志**（`TeamLogEntry.refs`）并原样回显在 `TeamPostResult.refs`，
+   * 时间线据此显示引用 chip；系统行（seed / retract / join 等）不带。
    * 形状由 serve 的 `teams.post` handler 严格校验，这里再归一一次（丢弃坏条目）。
    */
   refs?: MessageRef[];
@@ -1566,6 +1572,8 @@ export interface TeamPostResult {
   ts: number;
   /** 本条 post 的会话分组（0.19 S4） */
   conversation_id?: string;
+  /** 已写进日志的引用（0.52 additive；无引用时该键不出现），供乐观更新直接用。 */
+  refs?: MessageRef[];
 }
 
 /** 撤回一条 Team 日志消息：只追加 tombstone，不改写 / 不级联删除。 */

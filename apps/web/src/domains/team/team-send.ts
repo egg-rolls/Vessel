@@ -6,7 +6,7 @@
  *   不能按内容自动重试；
  * - 发送期间不发新的 `teams.get`，避免乐观项与轮询结果短暂重复。
  */
-import type { TeamDelivery, TeamMessage } from '../../gateway/types';
+import type { MessageRef, TeamDelivery, TeamMessage } from '../../gateway/types';
 import { mergeMessages } from '../../state/teams';
 import type { TeamMessageView } from './TeamMessageRow';
 
@@ -32,6 +32,11 @@ export interface LocalSend {
   status: 'sending' | 'sent' | 'failed';
   error?: string;
   deliveries?: TeamDelivery[];
+  /**
+   * 本次投递的引用（0.52）：服务端日志带 `refs` 后，乐观行也照常显 chip，
+   * 不必等下一次 `teams.get` 把这条换掉。
+   */
+  refs?: readonly MessageRef[];
 }
 
 export function shouldFetchTeam(sending: boolean, hasDetail: boolean): boolean {
@@ -102,6 +107,7 @@ export function buildTeamRows(
       content: send.content,
       ts: send.ts,
       kind: send.mentions.length > 0 ? 'mention' : 'post',
+      ...(send.refs !== undefined && send.refs.length > 0 ? { refs: [...send.refs] } : {}),
     });
   }
   return mergeMessages(visible, localMessages).map((message) => {

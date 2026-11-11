@@ -310,8 +310,9 @@ export class DefaultTeamService implements AgentTeamService {
     const content = readContent(input.content);
     const from = input.from ?? DEFAULT_OWNER;
     const mentions = dedupe(input.mentions ?? []);
-    // 附件引用（0.52）：只有路径与种类，随 @ 投递写进成员侧的 core `Message.refs`。
-    // **不进日志**（日志是「谁说了什么」）也不进回执；形状归一与 dispatch 共用一份。
+    // 附件引用（0.52）：只有路径与种类。三个去处同源：成员侧的 core `Message.refs`、
+    // 本条 Team 日志的 `refs`（时间线据此显示 chip）、`TeamPostResult.refs`（乐观更新）。
+    // 形状归一与 dispatch 共用一份。
     const refs = normalizeRefs(input.refs);
     // 一次生成、所有 mention 共用；显式 id 先校验。
     const conversationId = this.resolveConversationId(input.conversation_id);
@@ -415,6 +416,8 @@ export class DefaultTeamService implements AgentTeamService {
       kind,
       conversation_id: conversationId,
       ...(input.federation !== undefined ? { federation: input.federation } : {}),
+      // 只在非空时写：旧日志没有该键，无引用的新行形状与旧行一致。
+      ...(refs.length > 0 ? { refs } : {}),
     };
     try {
       await this.store.appendLog(entry);
@@ -457,6 +460,8 @@ export class DefaultTeamService implements AgentTeamService {
       delivered,
       ts,
       conversation_id: conversationId,
+      // 回执与日志同一份（乐观更新直接用，不必等下一次 teams.get）。
+      ...(refs.length > 0 ? { refs } : {}),
     };
   }
 

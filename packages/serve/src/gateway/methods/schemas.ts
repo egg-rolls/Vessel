@@ -545,6 +545,8 @@ export const teamMessageSchema = {
         hop: { type: 'integer', minimum: 1 },
       },
     },
+    // 0.52 additive：本条日志携带的附件引用；无引用 / 旧日志缺失该键。
+    refs: { type: 'array', items: messageRefSchema },
   },
 };
 
@@ -575,6 +577,8 @@ export const teamPostResultSchema = {
     ts: { type: 'number' },
     // 0.19 S4：本次 post 的会话分组；新实现总是返回。
     conversation_id: { type: 'string' },
+    // 0.52 additive：已写进日志的引用；无引用时缺省。
+    refs: { type: 'array', items: messageRefSchema },
   },
 };
 

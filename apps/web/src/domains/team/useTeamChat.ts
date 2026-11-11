@@ -92,7 +92,8 @@ export function useTeamChat({
    * 形状校验在「引用文件」入口（`attach-paths`，与会话页同一套）里先做完，这里只写草稿槽；
    * 条数上限由草稿槽自己的 `addRef` 兜底（32 条）。
    * 发送时 `submitContent` 把它们一起交给 `teams.post`（`refs`），成功后随草稿清空；
-   * 引用只进成员的投递（core `Message.refs`），**不进 Team 日志**。
+   * 引用同源三处：成员的投递（core `Message.refs`）、Team 日志（时间线 chip）、
+   * 回执 `refs`（乐观行直接用）。
    */
   const addRef = useCallback(
     (ref: MessageRef): boolean => useComposerDraftStore.getState().addRef(draftKey, ref),
@@ -374,8 +375,8 @@ export function useTeamChat({
   /**
    * 发送正文 + mentions +（可选）附件引用；edit / resend / 普通发送共用同一条落盘路径。
    *
-   * `outgoingRefs` 由调用方给：普通发送 = 当前草稿槽里的引用；「再次发送」拿不回
-   * 历史消息的引用（Team 日志不带 refs），显式传空。
+   * `outgoingRefs` 由调用方给：普通发送 = 当前草稿槽里的引用；「再次发送」显式传空 ——
+   * 日志里虽然有 refs，但不把一次投递的载荷悄悄重放（见 `resendMessage`）。
    */
   const submitContent = async (
     rawContent: string,
@@ -387,20 +388,33 @@ export function useTeamChat({
     const localId = `${LOCAL_MESSAGE_PREFIX}${crypto.randomUUID()}`;
     const ts = Date.now();
 
-    setSends((prev) => [...prev, { localId, content, mentions, ts, status: 'sending' }]);
+    setSends((prev) => [
+      ...prev,
+      {
+        localId,
+        content,
+        mentions,
+        ts,
+        status: 'sending',
+        // 乐观行也带引用：发送中就能看到 chip，不必等 teams.get 换掉这一行。
+        ...(outgoingRefs.length > 0 ? { refs: [...outgoingRefs] } : {}),
+      },
+    ]);
     setSending(true);
     sendingRef.current = true;
     // 受理即贴底：不等 teams.get 往返 / 轮询，乐观条目一出现就在视野里。
     setSendTick((value) => value + 1);
 
     try {
-      // 引用只随这次投递走（成员侧写成 core Message.refs），**不写 Team 日志**。
+      // 引用同源三处：成员侧的 core Message.refs、Team 日志（时间线 chip）、回执 refs。
       const result = await postTeam(client, {
         team_id: teamId,
         content,
         mentions,
         ...(outgoingRefs.length > 0 ? { refs: [...outgoingRefs] } : {}),
       });
+      // 回执的 refs 是服务端归一后的那一份（旧 gateway 缺省时保留本地值）。
+      const writtenRefs = result.refs?.length ? result.refs : undefined;
       setSends((prev) =>
         prev.map((send) =>
           send.localId === localId
@@ -409,6 +423,7 @@ export function useTeamChat({
                 status: 'sent',
                 messageId: result.message_id,
                 deliveries: result.delivered,
+                ...(writtenRefs !== undefined ? { refs: writtenRefs } : {}),
               }
             : send,
         ),
@@ -480,8 +495,8 @@ export function useTeamChat({
   /**
    * resend：复用发送路径，按正文 + mentions 追加一条新日志。
    *
-   * 不带引用：Team 日志里没有 refs，「再次发送」只能复原正文与 @（与「失败重发自
-   * 同一条正文」的语义一致）；要带引用请走输入框的「引用文件」入口重新发送。
+   * 不带引用：`teams.post` 的 `refs` 与草稿槽同源，「再次发送」只复原正文与 @，
+   * 不把上一次投递的载荷悄悄重放（要带引用请走输入框的「引用文件」入口）。
    */
   const resendMessage = (message: TeamMessage) => {
     void submitContent(message.content, message.mentions);

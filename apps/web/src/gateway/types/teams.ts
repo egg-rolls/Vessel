@@ -1,4 +1,5 @@
 import type { AgentRole, ExecutionUnitStatus } from './agents';
+import type { MessageRef } from './sessions';
 
 // ── Team（0.19 S6，node-local） ─────────────────────
 // 契约来自个人侧 PLAN-0.19-s3-team 与 S6 R1；字段只增不改。
@@ -85,6 +86,11 @@ export interface TeamMessage {
   retracted_message_id?: string;
   /** 0.21 additive：federation 入站日志的回信地址；本地日志缺失。 */
   federation?: TeamMessageFederation;
+  /**
+   * 0.52 additive：本条日志携带的附件引用（只有路径与元信息）。
+   * 旧 gateway / 旧日志缺失 → 不渲染 chip，其它字段照常。
+   */
+  refs?: MessageRef[];
 }
 
 /** 跨节点报文在 Team 日志上的结构化回信地址。 */
@@ -116,6 +122,8 @@ export interface TeamPostResult {
   mentions: string[];
   delivered: TeamDelivery[];
   ts: number;
+  /** 0.52 additive：已写进日志的引用（无引用 / 旧 gateway 缺失）。 */
+  refs?: MessageRef[];
 }
 
 /** `teams.retract` 结果（0.38 append-only tombstone）。 */

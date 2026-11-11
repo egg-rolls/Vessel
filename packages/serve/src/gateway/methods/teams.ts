@@ -390,9 +390,9 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
             maxLength: 128,
             pattern: CONVERSATION_ID_PATTERN,
           },
-          // 0.52（additive）：附件引用，只随 @ 投递（不写日志）。
-          // 不传 = 无引用（旧客户端行为不变）。条数上限在 handler 里卡
-          //（校验器支持的子集没有 maxItems，声明了也不会生效）。
+          // 0.52（additive）：附件引用。随 @ 投递写进成员侧、也写进 Team 日志并回显在
+          // 回执 `refs`（时间线显 chip）。不传 = 无引用（旧客户端行为不变）。条数上限在
+          // handler 里卡（校验器支持的子集没有 maxItems，声明了也不会生效）。
           refs: { type: 'array', items: messageRefSchema },
         },
       },
