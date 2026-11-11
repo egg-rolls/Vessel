@@ -6,6 +6,13 @@
  * pre 看板，run 一结束样式就跳。
  *
  * 交互约定：
+ * - 卡头只有**一个结构**：`title` / `meta` / `summary` / chevron 四个槽，两种形态（有展开体 /
+ *   无展开体）共用同一个 `header` 节点。以前「纯行头」是一份平行 DOM（`div.event-block-summary`），
+ *   CSS 少一条就把长行撑出横向滚动条（9598c095 的回归），所以不再留第二个卡头的入口；
+ * - **能不能展开只看有没有 `children`**：有 ⇒ `<details>` + chevron（点击整行 / Enter / Space，
+ *   原生可访问）；没有 ⇒ 纯行头（不渲染 chevron，也没有可点的空展开区）。
+ *   需要「折叠一行、展开看全文」的卡（agent 消息 / 环境信息）必须给 children，
+ *   否则 summary 被 ellipsis 吃掉的那一段永远读不到；
  * - 默认开合由调用方给 defaultOpen（= ui.expandCards || verbosity === 'debug'）；
  * - 用户手动开合优先于默认值，且只活在这张卡的生命周期里（不写 localStorage，
  *   卸载即丢）—— 设置变化不打断用户正在看的那张卡；
@@ -29,23 +36,25 @@ const TONE_CLASS: Record<StreamCardTone, string> = {
 };
 
 export interface StreamCardProps {
-  /** 卡头左侧主体（工具名 / 事件标签 / 标题）。 */
+  /** 卡头左侧主体（工具名 / 事件标签 / 发送方 / 作用域）。 */
   title: ReactNode;
-  /** 标题后的轻量标记（状态徽标、时间戳）。 */
+  /** 标题后的轻量标记（状态徽标、耗时、条数、run id）。 */
   meta?: ReactNode;
   /** 折叠态的单行摘要（长内容在这里被 ellipsis 截断）。 */
   summary?: ReactNode;
-  /** 状态色调；neutral = 默认灰。 */
+  /** 状态色调；neutral = 默认灰（agent 消息卡 / 环境信息卡都是 neutral）。 */
   tone?: StreamCardTone;
   /** 默认是否展开（用户手动开合后以手动状态为准）。 */
   defaultOpen: boolean;
-  /** 是否可展开；false = 纯行（不渲染 chevron，summary 不可点）。 */
-  expandable?: boolean;
   /** 始终可见的附加区（失败摘要、取消排队等可操作控件放这里，不进 summary）。 */
   actions?: ReactNode;
   /** 卡片组的可访问名（`<details>` 本身没有名字，读屏只念“group”）。 */
   ariaLabel?: string;
   className?: string;
+  /**
+   * 展开体。**它的有无就是「能不能展开」**：给了 = 可展开（chevron + 点击整行），
+   * 没给 = 纯行头。不要为了「只有一个可展开卡」再加开关位。
+   */
   children?: ReactNode;
 }
 
@@ -55,12 +64,13 @@ export function StreamCard({
   summary,
   tone = 'neutral',
   defaultOpen,
-  expandable = true,
   actions,
   ariaLabel,
   className,
   children,
 }: StreamCardProps) {
+  // 单一判定：有展开体才渲染 `<details>` / chevron，避免「有 chevron 但展开是空的」。
+  const expandable = children !== undefined;
   const [open, setOpen] = useState(defaultOpen);
   const [touched, setTouched] = useState(false);
 

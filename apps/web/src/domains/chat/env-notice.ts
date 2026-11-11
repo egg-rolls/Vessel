@@ -15,15 +15,17 @@
  * 正文字面保留（不剥 scope 前缀）——这张卡的目的就是让用户看到上下文原文。
  *
  * 可见性不在这里判：`state/runtime-visibility.ts` 决定 `notice` 种类默认可见，
- * 本模块只负责「解析成卡片内容」与「相邻同 scope 折叠」。
+ * 本模块只负责「解析成卡片内容」与「相邻同 scope 折叠」。卡片的**样子**也不在这里：
+ * 渲染在 `EnvCard.tsx`，与「来自 agent X」卡同一张卡（用户裁决：复用 agent 卡的样式与
+ * 点击展开机制），scope 只作为卡头标签出现。
  *
  * @module web/chat/env-notice
  */
 
 /**
  * 「环境信息」的作用域词表：与 `RuntimeNoticeScope`（`src/runtime-notice.ts`）同源，
- * 外加 `peer`（成员 / 协作通知，随后端一起到）。scope 只决定色条与标签，不决定可见性：
- * 解析不出 scope 的行落到 `context`（inbox 提示、身份变更提示等无 scope 的上下文）。
+ * 外加 `peer`（成员 / 协作通知，随后端一起到）。scope 只决定卡头标签与折叠分组，
+ * 不决定可见性：解析不出 scope 的行落到 `context`（inbox 提示、身份变更提示等无 scope 的上下文）。
  */
 export const ENV_NOTICE_SCOPES = [
   'config',
@@ -107,10 +109,11 @@ function scopeOf(text: string): EnvNoticeScope {
 }
 
 /**
- * `vessel:notice` 的正文 → 卡片数据（首行 scope 决定色条）。
+ * `vessel:notice` 的正文 → 卡片数据（首行 scope 决定卡头标签与折叠分组）。
  *
- * 一次携带多条通知时按行拆开：摘要用第一行，其余进展开区，上限 `ENV_NOTICE_DETAILS_MAX`；
- * 超出的行数记进 `droppedLines`（卡片末尾提示「还有 N 行」），不静默吞掉。
+ * 一次携带多条通知时按行拆开：摘要用第一行，展开区给**全部**行（首行也在内，因为折叠态的
+ * 摘要会被 ellipsis 截断），上限 `ENV_NOTICE_DETAILS_MAX`；超出的行数记进 `droppedLines`
+ * （卡片末尾提示「还有 N 行」），不静默吞掉。
  */
 export function envNoticeCard(content: string): EnvNoticeCard | undefined {
   const all: EnvNoticeLine[] = [];
@@ -149,25 +152,4 @@ export function mergeEnvNoticeCards(head: EnvNoticeCard, next: EnvNoticeCard): E
     count: head.count + next.count,
     ...(dropped > 0 ? { droppedLines: dropped } : {}),
   };
-}
-
-/**
- * scope → 色条 class（语义色条，不新造颜色：全部走 tokens）。
- *
- * 同一色系被两个 scope 复用是刻意的：色条只做「这行属于哪个作用域」的快速辨认，
- * 六个 scope 硬凑六种颜色会引入新的语义色（WEB-UI 硬规则：颜色只来自 tokens）。
- */
-const SCOPE_BAR: Record<EnvNoticeScope, string> = {
-  config: 'border-l-accent',
-  permission: 'border-l-warn',
-  tools: 'border-l-info',
-  mcp: 'border-l-success',
-  update: 'border-l-success',
-  peer: 'border-l-accent',
-  context: 'border-l-line-strong',
-};
-
-/** 卡头左侧色条：失败优先（未生效比作用域更重要），否则按 scope。 */
-export function envNoticeBarClass(scope: EnvNoticeScope, ok: boolean): string {
-  return ok ? SCOPE_BAR[scope] : 'border-l-danger';
 }

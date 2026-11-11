@@ -432,8 +432,8 @@
   color: var(--muted);
 }
 
-/* 卡片头只有一种盒模型：可展开卡的 `<summary>` 与纯行卡（StreamCard
-   `expandable=false`）的 `<div class="event-block-summary">` 共用同一套 flex 布局。
+/* 卡片头只有一种盒模型：可展开卡的 `<summary>` 与无展开体卡（StreamCard 没有 `children`）
+   的 `<div class="event-block-summary">` 共用同一套 flex 布局。
    缺了这条，纯行头只是普通 block 容器，里面 nowrap 的 `.event-block-preview` 退化成
    inline 文本（inline 盒上的 min-width / overflow / text-overflow 全部无效），长行会
    直接越过卡片、把 `.conversation-scroll`（`overflow-y: auto` ⇒ `overflow-x` 计算为
@@ -560,7 +560,7 @@
 }
 
 /* notice 家族的头（`<summary>` 与纯行 `<div>`）共用同一内衬与语义圆点，
-   纯行卡（单行环境信息卡）不再贴着卡片边缘、也不丢身份标记。 */
+   纯行卡（失败卡没有错误原文时的那一行）不再贴着卡片边缘、也不丢身份标记。 */
 .notice-block > summary,
 .notice-block > .event-block-summary {
   padding: 6px 10px;

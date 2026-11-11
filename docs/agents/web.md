@@ -22,6 +22,10 @@ applies_to: [N, M]
 - Team 写操作只经 canonical `teams.*`；成员 add / remove 走 CLI / owner 端点，Web 不直接改 roster。
 - token 只存 `sessionStorage`，不落 `localStorage` / URL / 日志。0.49：平台 token（`#token=` 种子）与 node token 分槽；平台连接走 `/platform/rpc`（`whoami` → `nodes.list` → `credentials`），node 连接走 `api_url`；不再调用 `/v1/local/token`。legacy `--serve` 页面回退同源 node 连接。平台客户端固定 `gateway/platform/**`、node 客户端固定 `gateway/node/**`，互不 import。
 - 权限 / `ask_user` 卡片在 **Composer 槽位**（`domains/chat/PromptSlots.tsx` 的 `PermissionCard` / `AskCard`）：pending 期间替换输入框，多条由 `pendingQueue` 排序列出；不得恢复全局遮罩，也不要挪进 `RunCard` 或做成时间线条目。数据源是 `stores/interactionStore`（`gateway/connection-handlers.ts` 直接写入 + `interactions.list` hydration 补回），**不经过**时间线分组。其他端应答 / 过期 / run 终态必须收起卡片。
+- 时间线卡片只有 `StreamCard` 一张：卡头 `title` / `meta` / `summary` / chevron 一个结构，
+  `children` 的有无决定能不能展开（详见 [WEB-UI.md](../WEB-UI.md) 的「时间线只有一种卡」）。
+  环境信息卡（`domains/chat/EnvCard.tsx`）与「来自 agent X」卡必须同一套样式与展开机制，
+  不要自造卡头，也不要给某张卡单独换色 / 色条。
 - 所有 transient 提示 / banner / 交互摘要统一经 AppBar 中心 `MessageBar`；`ToastProvider`
   只提供 API，不渲染，禁止新增 fixed toast / 浮层（见 [WEB-UI.md](../WEB-UI.md) 硬规则 7）。
 - 不用 `backdrop-filter` 做层级；层级靠边框与阴影表达（ADR-072/082）。

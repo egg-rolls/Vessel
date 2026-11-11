@@ -46,6 +46,14 @@
 - **只有 `failed` 出卡**：`interrupted`（挂起 / Host 中断，可恢复）的续跑入口在运行详情页
   （`runs.resume`），不在时间线上伪装成失败；`completed` / `cancelled` 同样不出卡。
 
+**时间线只有一种卡（`StreamCard`）**：卡头是固定的四槽 —— `title`（发送方 / 作用域 /
+状态）、`meta`（耗时 / 条数 / run id）、`summary`（单行 ellipsis 摘要）、chevron；
+**有没有 `children` 决定能不能展开**（有 ⇒ `<details>` + chevron + 点击整行 + 原生可访问，
+没有 ⇒ 纯行头、不渲染 chevron）。「来自 agent X」卡、环境信息卡（`EnvCard`）、失败卡、
+工具卡、排队卡都走这一套，**不要自造第二个卡头，也不要给某张卡单独换肤**；需要单行折叠、
+点击看全文的卡必须给 `children`，否则被 ellipsis 吃掉的那段正文永远读不到。环境信息卡的
+scope 是卡头标题（与 `来自 agent X` 同级、同一组 class），不是色条或独立底色。
+
 ```css
 @layer theme, base, legacy, utilities;
 @import "tailwindcss/theme.css" layer(theme);

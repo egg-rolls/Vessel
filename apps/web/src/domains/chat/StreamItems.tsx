@@ -94,12 +94,22 @@ export function RunFailureCard({
   const hint = describeGatewayErrorText(failure.error);
   const error =
     failure.error !== undefined && failure.error.trim().length > 0 ? failure.error : undefined;
+  // 没有错误原文就不给展开体 ⇒ StreamCard 渲染成纯行头（无 chevron，不响应点击）。
+  const body =
+    error !== undefined || hint !== null || failure.source === 'session' ? (
+      <>
+        <pre className="run-error-body">{error ?? t('chat.run.noError')}</pre>
+        {hint !== null && <p className="run-error-hint">{hint}</p>}
+        {failure.source === 'session' && (
+          <p className="run-error-hint">{t('chat.run.failure.fromRecord')}</p>
+        )}
+      </>
+    ) : undefined;
   return (
     <StreamCard
       className="run-failure-card w-full min-w-0 max-w-full"
       tone="danger"
       defaultOpen={defaultOpen}
-      expandable={error !== undefined}
       ariaLabel={t('chat.run.failure.aria')}
       title={<StatusChip status="failed" label={t('chat.run.failed')} />}
       meta={
@@ -131,11 +141,7 @@ export function RunFailureCard({
         </div>
       }
     >
-      <pre className="run-error-body">{error ?? t('chat.run.noError')}</pre>
-      {hint !== null && <p className="run-error-hint">{hint}</p>}
-      {failure.source === 'session' && (
-        <p className="run-error-hint">{t('chat.run.failure.fromRecord')}</p>
-      )}
+      {body}
     </StreamCard>
   );
 }

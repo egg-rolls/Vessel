@@ -498,7 +498,7 @@ export function buildHistoryIndex(
     // 文本，按文本判定会把它吞成系统提示（隐藏或渲成通知卡）。
     const noticeKind = noticeKindOf?.(message);
     if (noticeKind !== undefined) {
-      // 环境信息（vessel:notice）：解析成卡片数据（scope 色条 / 缩略 / 展开行）。
+      // 环境信息（vessel:notice）：解析成卡片数据（scope 标签 / 缩略 / 展开行）。
       // 解析失败（空正文 / 纯空白）时 env 缺省，渲染回退成整段文本的 notice 卡。
       const env = isEnvNoticeKind(noticeKind) ? envNoticeCard(message.content) : undefined;
       items.push({
