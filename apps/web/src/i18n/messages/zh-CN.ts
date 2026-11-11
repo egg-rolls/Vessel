@@ -1071,6 +1071,8 @@ export const messages = {
   'chat.notice.restarted': '上下文已重启 · {session} · epoch {from} → {epoch}',
   'chat.notice.compactForked': '上下文已压缩分叉 · {from} → {to} · epoch {epoch}',
   'chat.notice.hook': 'hook · {name}',
+  'chat.notice.finalizeFailed': 'run 收尾失败 · 阶段 {phase} · {error}',
+  'chat.notice.guardrailError': 'guardrail 异常 · {name} · 阶段 {stage} · {error}',
   'chat.notice.runtime': '系统提示 · {kind}',
   // agent→agent 消息卡（A2A 投递进来的那条 user 消息）
   'chat.agentMessage.from': '来自 agent {name}',

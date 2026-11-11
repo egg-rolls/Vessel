@@ -289,6 +289,28 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
         }),
       };
     }
+    // 失败类 notice：错误文本 + 来源阶段（只换表示层，可见性仍归 `errorLevel`，
+    // 见 events.ts 里这两个 case 的注释）。
+    case 'run.finalize.failed': {
+      const error = typeof data.error === 'string' && data.error.length > 0 ? data.error : 'error';
+      const phase = typeof data.phase === 'string' && data.phase.length > 0 ? data.phase : 'finalize';
+      return {
+        tone: 'danger',
+        text: t('chat.notice.finalizeFailed', { phase, error: truncate(error, 240) }),
+      };
+    }
+    case 'guardrail.error': {
+      const name =
+        typeof data.guardrail_name === 'string' && data.guardrail_name.length > 0
+          ? data.guardrail_name
+          : 'guardrail';
+      const stage = typeof data.stage === 'string' && data.stage.length > 0 ? data.stage : '?';
+      const error = typeof data.error === 'string' && data.error.length > 0 ? data.error : 'error';
+      return {
+        tone: 'danger',
+        text: t('chat.notice.guardrailError', { name, stage, error: truncate(error, 240) }),
+      };
+    }
     // hook.* 是内部执行细节：折叠成一行 notice，展开仍是完整载荷。
     case 'hook.started':
     case 'hook.completed':

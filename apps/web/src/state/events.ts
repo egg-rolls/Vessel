@@ -421,6 +421,18 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
         continue;
       }
+      // 失败类：`run.finalize.failed`（终态持久化失败）与 `guardrail.error`
+      // （guardrail `check()` 抛错，fail-closed）都是**真失败**，可见性归
+      // `errorLevel`（`run.` / `guardrail.` 前缀，默认可见级）。这里只换表示层：
+      // 原始 JSON 卡 → 折叠 notice（错误文本 + 来源阶段），刻意**不**进
+      // `INTERNAL_EVENT_TYPES` / `CHAT_HIDDEN_EVENT_TYPES` —— 任何集合都在
+      // `errorLevel` 之前过滤，塞进去等于静默真失败。
+      case 'run.finalize.failed':
+      case 'guardrail.error': {
+        flush();
+        group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
+        continue;
+      }
       // hook 成对折叠：started 先暂存，同名 completed 到达就只落 completed 那一行；
       // 只有 started、没有 completed 时由 `flush()` 兜底落回，信息不丢。
       case 'hook.started': {
