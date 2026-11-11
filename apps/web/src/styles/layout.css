@@ -102,18 +102,6 @@
   overflow-wrap: anywhere;
 }
 
-.conversation-context {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-sunken);
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  line-height: 1.6;
-  white-space: nowrap;
-}
-
 .conversation-meta {
   display: flex;
   flex-wrap: wrap;
