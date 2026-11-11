@@ -996,9 +996,13 @@ export async function buildTenantRuntime(
     try {
       const state = await session.load(sessionId);
       if (state === null) return;
+      // Named on purpose (human rename / rotate title): automatic naming never
+      // touches it again. Sessions without a marker are legacy data and keep the
+      // old heuristic below, so no migration is needed.
+      if (state.title_source === 'manual') return;
       const messages = state.messages ?? [];
       const derivedTitle = deriveSessionMeta(messages).title;
-      // 人工 title 永不被覆盖；AI 已写过（不等于派生标题）则不再生成。
+      // An AI title (or any title that is not the derived one) is already there.
       if (state.title !== undefined && state.title !== derivedTitle) return;
       const input = firstUserInputForTitle(messages);
       if (input === undefined) return;
@@ -1017,9 +1021,15 @@ export async function buildTenantRuntime(
       // 生成窗口内可能人工 rename / 已有另一次命名：写前重读，保住人工标题。
       const current = await session.load(sessionId);
       if (current === null) return;
+      if (current.title_source === 'manual') return;
       const currentDerived = deriveSessionMeta(current.messages ?? []).title;
       if (current.title !== undefined && current.title !== currentDerived) return;
-      await session.save({ ...current, title, updated_at: Date.now() });
+      await session.save({
+        ...current,
+        title,
+        title_source: 'generated',
+        updated_at: Date.now(),
+      });
       events.publish({
         type: 'session.titled',
         run_id: 'session',

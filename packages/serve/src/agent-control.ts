@@ -254,6 +254,11 @@ export interface SessionCreateLikeInput {
   keep_messages?: number;
   /** 新 session 首条输入；给了才起 run。 */
   startup_prompt?: string;
+  /**
+   * Additive (title_source): human name for the new session. Stored as
+   * title_source: 'manual' so automatic naming never overwrites it.
+   */
+  title?: string;
   /** 缺省 conversation；仅 `from_session_id` 存在时合法。 */
   mode?: 'conversation' | 'both';
   /** mode=both 时必填。 */
@@ -264,6 +269,8 @@ export interface SessionCreateLikeInput {
 export interface SessionCreateLikeResult {
   agent_id: string;
   session_id: string;
+  /** Additive: echoed only when the request named the session. */
+  title?: string;
   source_session_id?: string;
   seed?: AgentCreateSeedLike;
   keep_messages?: number;

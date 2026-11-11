@@ -32,6 +32,8 @@ import {
   type Runtime,
   type RuntimePermissionConfig,
   type SelfCardOptions,
+  type SessionState,
+  type SessionTitleSource,
   type TerminationPolicy,
   type ToolDefinition,
   type Usage,
@@ -1200,6 +1202,37 @@ export class MemberExecutionHost implements MemberExecutionPort {
 
   sessionLeaseToken(sessionId: string): number | undefined {
     return this.entries.get(sessionId)?.runtime.sessionLeaseToken?.(sessionId);
+  }
+
+  /**
+   * Additive (title_source): name a session shell explicitly.
+   *
+   * Only touches the shell (title / title_source / updated_at); messages and run
+   * state stay with the Run projection. A shell already marked 'manual' is never
+   * downgraded by a 'generated' write, so a late AI pass cannot clobber a rename.
+   * Returns false when this host has no SessionStore (headless / pure memory).
+   */
+  async setSessionTitle(
+    sessionId: string,
+    title: string,
+    source: SessionTitleSource,
+  ): Promise<boolean> {
+    const store = this.session;
+    if (store === undefined) return false;
+    const stored = await store.load(sessionId);
+    if (stored?.title_source === 'manual' && source !== 'manual') return false;
+    const now = Date.now();
+    // A brand-new body has no shell yet: synthesise a name-only one. status must
+    // not be left to the backend default (SQLite stores 'running'), otherwise the
+    // liveness sweep would treat a session that never ran as a crashed run.
+    const base: SessionState = stored ?? {
+      session_id: sessionId,
+      created_at: now,
+      updated_at: now,
+      status: 'completed',
+    };
+    await store.save({ ...base, title, title_source: source, updated_at: now });
+    return true;
   }
 
   async ensureSessionLease(sessionId: string, minFence?: number): Promise<LeaseGrant | undefined> {

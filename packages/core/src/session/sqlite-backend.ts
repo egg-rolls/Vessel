@@ -28,6 +28,7 @@ interface SessionRow {
   usage: string | null;
   error: string | null;
   title: string | null;
+  title_source: string | null;
   preview: string | null;
   updated_at: number | null;
   branch: string | null;
@@ -108,6 +109,7 @@ export class SQLiteSessionStore implements SessionStore {
         usage TEXT,
         error TEXT,
         title TEXT,
+        title_source TEXT,
         preview TEXT,
         updated_at INTEGER,
         branch TEXT,
@@ -117,6 +119,8 @@ export class SQLiteSessionStore implements SessionStore {
     `);
     // ALTER TABLE 无 IF NOT EXISTS，逐列 try/catch（已存在则静默）
     this.ensureColumn('title', 'TEXT');
+    // Additive (title_source): old rows keep NULL = no marker = legacy heuristic.
+    this.ensureColumn('title_source', 'TEXT');
     this.ensureColumn('preview', 'TEXT');
     this.ensureColumn('updated_at', 'INTEGER');
     this.ensureColumn('branch', 'TEXT');
@@ -152,6 +156,10 @@ export class SQLiteSessionStore implements SessionStore {
       created_at: row.started_at,
       updated_at: row.updated_at || row.started_at,
       title: row.title || undefined,
+      title_source:
+        row.title_source === 'manual' || row.title_source === 'generated'
+          ? row.title_source
+          : undefined,
       preview: row.preview || undefined,
       created_on_branch: row.branch || undefined,
       messages: JSON.parse(row.messages) as Message[],
@@ -180,8 +188,8 @@ export class SQLiteSessionStore implements SessionStore {
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, preview, updated_at, branch, tenant_id, derived_upto_seq)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -194,6 +202,7 @@ export class SQLiteSessionStore implements SessionStore {
       state.legacy_run?.usage ? JSON.stringify(state.legacy_run.usage) : null,
       state.legacy_run?.error ?? null,
       title,
+      state.title_source ?? null,
       preview,
       updatedAt,
       state.created_on_branch ?? null,

@@ -22,6 +22,7 @@ import type {
   RuntimePermissionConfig,
   Scheduler,
   SessionEventLogPort,
+  SessionTitleSource,
   ToolDefinition,
   Usage,
 } from '@vessel-agent/core';
@@ -328,6 +329,18 @@ export interface MemberExecutionPort {
    * 无活体 / 无 token 预算时返回 undefined。
    */
   contextRatio?(sessionId: string): number | undefined;
+  /**
+   * Additive (title_source): write the shell title of one session and record where it
+   * came from. Used by sessions.create / rotate so a body can name the next session.
+   * Returns false when the port has no SessionStore (headless / pure memory) so the
+   * caller falls back to automatic naming; a title_source: 'manual' shell is never
+   * downgraded to 'generated'.
+   */
+  setSessionTitle?(
+    sessionId: string,
+    title: string,
+    source: SessionTitleSource,
+  ): Promise<boolean> | boolean;
   /**
    * 0.31（additive，可选）：该 body 的交互请求是否真能到达人类。
    *
@@ -778,6 +791,12 @@ export interface SessionCreateInput {
   /** `sessions.get().messages` 下标；缺省全量 */
   keep_messages?: number;
   startup_prompt?: string;
+  /**
+   * Additive: human title for the new session (rotate naming). Written to the new
+   * shell as title_source: 'manual'; omitted means the session keeps the derived
+   * title until automatic naming fills one in.
+   */
+  title?: string;
   /** conversation（缺省）/ both（同时做文件回滚；agent 层只透传） */
   mode?: 'conversation' | 'both';
   files?: { ref: string; paths: string[] };
@@ -797,6 +816,8 @@ export interface SessionCreateInternalOptions {
 export interface SessionCreateResult {
   agent_id: string;
   session_id: string;
+  /** Additive: echoed back only when a title was requested (title_source: manual). */
+  title?: string;
   /** 无来源时缺省 */
   source_session_id?: string;
   seed?: CreateSeed;
@@ -1719,3 +1740,10 @@ export const DEFAULT_OWNER = 'main';
 
 /** 单条消息上限（字节） */
 export const MAX_MESSAGE_BYTES = 64 * 1024;
+
+/**
+ * Additive: upper bound for an explicit session title (sessions.create / rotate).
+ * Same order of magnitude as sessions.rename (512) but short enough to stay a
+ * sidebar label; the value is documented in the rotate schema and error text.
+ */
+export const MAX_SESSION_TITLE_LENGTH = 120;

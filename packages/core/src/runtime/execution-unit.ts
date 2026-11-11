@@ -2651,6 +2651,7 @@ export class ExecutionUnit {
     return {
       session_id: sessionId,
       ...(stored?.title !== undefined ? { title: stored.title } : {}),
+      ...(stored?.title_source !== undefined ? { title_source: stored.title_source } : {}),
       ...(stored?.preview !== undefined ? { preview: stored.preview } : {}),
       created_at: stored?.created_at ?? now,
       updated_at: now,
@@ -2688,7 +2689,13 @@ export class ExecutionUnit {
     if (sessionState.status !== 'running') {
       try {
         const stored = await this.session.load(sessionState.session_id);
-        if (stored?.title !== undefined) sessionState.title = stored.title;
+        if (stored?.title !== undefined) {
+          // Adopt the stored title together with its source marker: a manual
+          // rename that landed mid-run must not be re-flagged as generated.
+          sessionState.title = stored.title;
+          if (stored.title_source !== undefined) sessionState.title_source = stored.title_source;
+          else delete sessionState.title_source;
+        }
       } catch (error) {
         this.logger.warn('session load failed before final save', {
           session_id: sessionState.session_id,

@@ -21,6 +21,7 @@ import {
   DEFAULT_OWNER,
   type DispatchResult,
   type ListFilter,
+  MAX_SESSION_TITLE_LENGTH,
   type MemberState,
   type MemberStatus,
   type MemberVisibility,
@@ -194,6 +195,26 @@ function readVisibility(value: unknown): MemberVisibility {
   return value as MemberVisibility;
 }
 
+/**
+ * rotate: optional name for the new session. Trimmed, 1..MAX_SESSION_TITLE_LENGTH
+ * chars (120). Absent = keep the old behaviour (derived title, then AI naming).
+ * A named session is marked title_source: manual, so AI naming never overwrites it.
+ */
+function readRotateTitle(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw invalid('rotate title must be a string');
+  }
+  const title = value.trim();
+  if (title === '') {
+    throw invalid('rotate title must not be empty');
+  }
+  if (Array.from(title).length > MAX_SESSION_TITLE_LENGTH) {
+    throw invalid(`rotate title exceeds ${MAX_SESSION_TITLE_LENGTH} characters`);
+  }
+  return title;
+}
+
 function readState(value: unknown): MemberState {
   if (typeof value !== 'string' || !MEMBER_STATES.includes(value as MemberState)) {
     throw invalid(`invalid state "${String(value)}"`);
@@ -236,7 +257,8 @@ export function createAgentTool(
       'body); returns immediately. Add interrupt:true for urgent (cancel + front of queue) or ' +
       'notify:true to append to the inbox + summary wake without running. ' +
       'close: release member(s), idempotent. list: return the roster. ' +
-      'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first; ' +
+      'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first, ' +
+      'plus an optional title that AI naming will not overwrite; ' +
       'a body may only rotate itself. ' +
       'Bodies may use create, hire, close, rotate, send and list. ' +
       'Closing a peer needs human approval; closing your own contractor or yourself does not. ' +
@@ -301,6 +323,11 @@ export function createAgentTool(
         startup_prompt: {
           type: 'string',
           description: 'rotate: required first message for the new body',
+        },
+        title: {
+          type: 'string',
+          maxLength: MAX_SESSION_TITLE_LENGTH,
+          description: `rotate: optional name for the new session (1-${MAX_SESSION_TITLE_LENGTH} chars); AI titling never renames a named session`,
         },
         state: {
           type: 'string',
@@ -396,6 +423,7 @@ export function createAgentTool(
           if (typeof record.startup_prompt !== 'string' || record.startup_prompt === '') {
             throw invalid('rotate requires startup_prompt');
           }
+          const rotateTitle = readRotateTitle(record.title);
           // 0.31：模型发起的 rotate 一律先问人类。CLI / 人工 RPC 直接走
           // service.createSession，不经过这里，因此不会被询问。
           const ratio = service.contextRatio(callerSession);
@@ -487,6 +515,7 @@ export function createAgentTool(
             {
               agent_id: caller.id,
               startup_prompt: record.startup_prompt,
+              ...(rotateTitle !== undefined ? { title: rotateTitle } : {}),
             },
             // 工具在调用者自身 active run 内执行；RPC 路径不传此内部选项。
             { allowActiveRun: true },
@@ -498,6 +527,7 @@ export function createAgentTool(
             from_session_id: callerSession,
             to_session_id: result.session_id,
             epoch: created?.epoch,
+            ...(result.title !== undefined ? { title: result.title } : {}),
           };
           return `${JSON.stringify(rotated)}\nrotation committed; finish the current turn`;
         }

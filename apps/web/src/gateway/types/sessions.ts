@@ -151,6 +151,11 @@ export interface SessionCreateInput {
   seed?: 'copy' | 'compact';
   keep_messages?: number;
   startup_prompt?: string;
+  /**
+   * Additive (title_source): name the new session; it is marked as named so
+   * automatic AI titling will not overwrite it. No UI entry point yet.
+   */
+  title?: string;
   mode?: 'conversation' | 'both';
   files?: { ref: string; paths: string[] };
 }
@@ -164,6 +169,8 @@ export interface SessionCreateResult {
   keep_messages?: number;
   keep_projected?: number;
   copied_messages?: number;
+  /** Additive: echoed only when the request named the session. */
+  title?: string;
   primary: boolean;
   files_restored?: number;
   files_skipped?: number;

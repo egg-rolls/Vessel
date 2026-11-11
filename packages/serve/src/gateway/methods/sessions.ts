@@ -350,6 +350,7 @@ const sessionCreateResultSchema = {
     keep_messages: { type: 'integer', minimum: 0 },
     keep_projected: { type: 'integer', minimum: 0 },
     copied_messages: { type: 'integer', minimum: 0 },
+    title: { type: 'string' },
     primary: { type: 'boolean' },
     files_restored: { type: 'integer', minimum: 0 },
     files_skipped: { type: 'integer', minimum: 0 },
@@ -616,7 +617,14 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const title = stringParam(params, 'title');
         const state = await backend.load(sessionId);
         if (!state) throw new RpcError('not_found', 'Session not found');
-        await backend.save({ ...state, title, updated_at: Date.now() });
+        // Human rename marks the title as manual: automatic AI naming must never
+        // overwrite it again (SessionState.title_source, additive).
+        await backend.save({
+          ...state,
+          title,
+          title_source: 'manual',
+          updated_at: Date.now(),
+        });
         return { session_id: sessionId, title };
       },
     },
@@ -686,6 +694,8 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           seed: { type: 'string', enum: ['copy', 'compact'] },
           keep_messages: { type: 'integer', minimum: 0 },
           startup_prompt: { type: 'string', minLength: 1 },
+          /** Additive (title_source): human name for the new session, max 120 chars. */
+          title: { type: 'string', minLength: 1, maxLength: 120 },
           mode: { type: 'string', enum: ['conversation', 'both'] },
           files: {
             type: 'object',
@@ -705,6 +715,11 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const seed = readCreateSeed(params.seed);
         const keepMessages = readKeepMessages(params.keep_messages);
         const startupPrompt = optionalString(params.startup_prompt);
+        // Additive: trimmed here; blank / over-long titles are rejected, never truncated.
+        const title = optionalString(params.title)?.trim();
+        if (title === '') {
+          throw new RpcError('invalid_params', 'title must not be blank');
+        }
         const mode = readSessionMode(params.mode);
         const files = readSessionFiles(params.files);
 
@@ -782,6 +797,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           ...(seed !== undefined ? { seed } : {}),
           ...(projectedKeep !== undefined ? { keep_messages: projectedKeep } : {}),
           ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
+          ...(title !== undefined ? { title } : {}),
           ...(mode !== undefined ? { mode } : {}),
           ...(files !== undefined ? { files } : {}),
         };

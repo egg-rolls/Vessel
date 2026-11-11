@@ -99,6 +99,7 @@ import {
   type ListFilter,
   MAX_BINDING_HISTORY,
   MAX_MESSAGE_BYTES,
+  MAX_SESSION_TITLE_LENGTH,
   type MemberExecutionMember,
   type MemberPermissionState,
   type MemberState,
@@ -3887,6 +3888,9 @@ export class AgentServiceImpl implements AgentService {
     const keepMessages = readKeepMessages(raw.keep_messages);
     const mode = readSessionMode(raw.mode);
     const files = readSessionFiles(raw.files);
+    // Additive: explicit title for the new body (rotate naming). Validated here,
+    // before any event / binding is touched, so bad input never half-creates.
+    const title = readSessionTitle(raw.title);
 
     let record: MemberRecord;
     let sourceSessionId: string | undefined;
@@ -4035,6 +4039,28 @@ export class AgentServiceImpl implements AgentService {
       });
     }
 
+    if (title !== undefined) {
+      // Name the new body before its first turn: the shell is marked
+      // title_source: 'manual', so both the derived title and the AI titler leave
+      // it alone. Best-effort like the startup prompt: a shell write failure must
+      // not undo a committed rotation.
+      try {
+        const applied = await this.runtime.setSessionTitle?.(newSessionId, title, 'manual');
+        if (applied !== true) {
+          this.logger.warn('agent.session_create.title_unavailable', {
+            agent_id: record.id,
+            session_id: newSessionId,
+          });
+        }
+      } catch (error) {
+        this.logger.warn('agent.session_create.title_failed', {
+          agent_id: record.id,
+          session_id: newSessionId,
+          error: errorText(error),
+        });
+      }
+    }
+
     const startupPrompt =
       raw.startup_prompt === undefined ? undefined : readContent(raw, 'startup_prompt');
     if (startupPrompt !== undefined) {
@@ -4064,6 +4090,7 @@ export class AgentServiceImpl implements AgentService {
     return {
       agent_id: record.id,
       session_id: newSessionId,
+      ...(title !== undefined ? { title } : {}),
       ...(sourceSessionId !== undefined
         ? {
             source_session_id: sourceSessionId,
@@ -5690,6 +5717,26 @@ function readContent(record: Record<string, unknown>, key: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return nonEmpty(value) ? value : undefined;
+}
+
+/**
+ * Additive: explicit session title (sessions.create / rotate). Trimmed, must be
+ * non-empty and at most MAX_SESSION_TITLE_LENGTH chars; nothing is silently
+ * truncated, the caller gets invalid_input instead.
+ */
+function readSessionTitle(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new AgentError('invalid_input', 'title must be a string');
+  }
+  const title = value.trim();
+  if (title === '') {
+    throw new AgentError('invalid_input', 'title must not be empty');
+  }
+  if (Array.from(title).length > MAX_SESSION_TITLE_LENGTH) {
+    throw new AgentError('invalid_input', `title exceeds ${MAX_SESSION_TITLE_LENGTH} characters`);
+  }
+  return title;
 }
 
 /** CREATE-0.39：seed 缺省 copy；其它值 invalid_input。 */
