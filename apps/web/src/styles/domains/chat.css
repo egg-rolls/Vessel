@@ -265,25 +265,21 @@
    `.msg-assistant` 与团队页的行容器上；折叠只挂**有底色气泡**（会话页 `.msg-bubble`、
    团队页 `.team-message-bubble`），别复制第二份。
 
-   入场：`.msg-enter` 只挂**本次新追加**的项上（判定见 components/ui/useEnteringItemKeys.ts
-   与会话页 live item 的口径），挂载即播一次；CSS 动画按 DOM 节点播，重渲染复用同一个
-   节点不会重播（`.message-chip` 同一个用法）。位移只有 4px：整条消息做缩放会糊字。
-   关掉动效时直接显示：没有位移、没有淡入。
+   入场：`.msg-enter` 只挂**本次新追加**的项上（会话页判定见
+   domains/chat/TranscriptWindow.tsx 的 `useEnteringItems`，Team 页见
+   components/ui/useEnteringItemKeys.ts），挂载即播一次；CSS 动画按 DOM 节点播，重渲染
+   复用同一个节点不会重播（`.message-chip` 同一个用法）。位移只有 4px：整条消息做缩放会
+   糊字。关掉动效时直接显示：没有位移、没有淡入。
+   关键帧只有一份（`motion-appear-rise`，见 styles/motion.css）：这条只做别名，
+   不要在 chat.css 里再写一份 keyframes。
 
    折叠：超过 --msg-fold-max-h 就裁到该高度（判定的唯一来源是同一个 CSS 变量，见
    components/ui/MessageFold.tsx），底部用 mask 渐隐而不是盖一层底色 —— 气泡底色有两套
    （accent-soft / sunken），盖色块要么对不上，要么再多一份变量。
    折叠只改显示：DOM 里始终是全文，复制拿到的永远是原文。 */
 
-@keyframes msg-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-}
-
 .msg-enter {
-  animation: msg-in var(--motion-ui) var(--ease);
+  animation: motion-appear-rise var(--motion-base) var(--motion-ease) backwards;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -39,6 +39,82 @@ const EARLIER_TRIGGER_PX = 200;
 const AUTO_PAGE_BUDGET = 20;
 
 /**
+ * 首屏到货多少条以内算「真的追加」（见 `useEnteringItems`）。
+ * 1–2 条覆盖「发送 → 用户气泡（+ 首段正文）」；再多就是回填 / 回放。
+ */
+const FIRST_SCREEN_APPEND_MAX = 2;
+
+interface EnteringGate {
+  /** 上次 reset 用的身份（换会话 / detail 到达）：变了就重新认「首屏」。 */
+  reset: string | null;
+  /** 已经判定过的 key。跨 reset 保留：旧 key 再出现（换会话回来、verbosity 切换）不重播。 */
+  seen: Set<string>;
+  /** 还没见过本 reset 后的第一屏有内容的列表。 */
+  first: boolean;
+  /** 判为「追加」的 key（判定一次就固化，类名不中途摘掉）。 */
+  entering: Set<string>;
+}
+
+/**
+ * 入场门（会话页）：只有**本次挂载之后新追加**的 item 才播入场动画。
+ *
+ * 为什么不直接用 `components/ui/useEnteringItemKeys`（Team 页那套）：它把「第一屏整批」
+ * 一律当历史。会话页有两处对不上：
+ * - 会话页常常是从空开始的 —— 新会话的第一条消息（用户气泡）本身就是**追加**，
+ *   按「首屏」处理会把「发送即有入场」吞掉；
+ * - F5 / 重连会带 `since: 0` 回放整段 run（gateway 的订阅回放 + `EventStore#endBackfill`
+ *   整批合并），那种**一次到货一大批**不是追加，播了就是整屏闪一下。
+ *
+ * 判据（只对本次 reset 后的第一屏生效一次）：一屏一次到货「够多」（≥3 条）⇒ 回填 / 回放，
+ * 不播；从空到 1–2 条 ⇒ 真的追加，播（新会话的第一条消息 + 首段正文就落在这个区间）。
+ * 之后出现的 key 一律算追加。
+ *
+ * 记账写在渲染期（Set 只增不改、幂等）：被 React 丢弃的渲染不会跑 effect，而写在 effect
+ * 里会让那批 key 在下一帧仍算「新追加」。判定一旦为 true 就留在节点上 —— 半路摘类名会把
+ * 播到一半的动画掐断；React 按稳定 key 复用节点，所以留下也不会重播。
+ */
+function useEnteringItems(
+  items: readonly TranscriptItem[],
+  reset: string | null,
+): (key: string) => boolean {
+  const store = useRef<EnteringGate | null>(null);
+
+  let gate = store.current;
+  if (gate === null) {
+    gate = { reset, seen: new Set(), first: true, entering: new Set() };
+    store.current = gate;
+  } else if (gate.reset !== reset) {
+    // 身份变了只重新认「首屏」：`seen` 跨 reset 保留，已经播过的 key 再出现不再播。
+    gate.reset = reset;
+    gate.first = true;
+  }
+
+  if (items.length > 0) {
+    if (gate.first) {
+      gate.first = false;
+      // 首屏到货的条数够少：那是「真的追加」（新会话的第一条消息 / 首段正文），要播。
+      // 一次落一大批才是回填 / 回放（F5、重连、切会话）。
+      if (items.length <= FIRST_SCREEN_APPEND_MAX) {
+        for (const item of items) {
+          if (gate.seen.has(item.key)) continue;
+          gate.entering.add(item.key);
+        }
+      }
+      for (const item of items) gate.seen.add(item.key);
+    } else {
+      for (const item of items) {
+        if (gate.seen.has(item.key)) continue;
+        gate.seen.add(item.key);
+        gate.entering.add(item.key);
+      }
+    }
+  }
+
+  const entering = gate.entering;
+  return (key: string) => entering.has(key);
+}
+
+/**
  * 会话滚动区：空态 / 错误态 / 历史消息 / 实时 run 与排队 notice / 子 agent。
  *
  * 吸附滚动见 `useStickyBottom`：打开/切会话等布局稳定后贴底；pinned 时跟随
@@ -234,22 +310,31 @@ export function TranscriptWindow({
     ],
   );
 
+  // 入场门：只有挂载之后**新追加**的 item 播入场（判据见 useEnteringItems 的头注释）。
+  // 历史消息（Transcript 里的 `message` item）不进门 —— 历史加载是回填，不是追加。
+  const isEntering = useEnteringItems(items, resetKey);
+
   const renderItem = (item: TranscriptItem): ReactNode => {
     switch (item.kind) {
       case 'run-input':
         // 身份在 item 建好时就定了（`sender` 来自 run.started.input_name / user.message.name）：
         // agent 投递直接用同一张 AgentMessageCard，不会先出一帧用户气泡。
-        // `entering`：这是事件流追加进来的新项，入场动画只在这里播（历史消息不播）。
+        // `entering`：事件流里追加进来的新项才播入场（历史 / 回放不播）。
         return item.sender !== undefined ? (
           <AgentMessageCard
             sender={item.sender}
             content={item.text}
             ts={item.ts}
             defaultOpen={cardsDefaultOpen}
-            entering
+            entering={isEntering(item.key)}
           />
         ) : (
-          <UserBubble text={item.text} ts={item.ts} entering refs={item.refs} />
+          <UserBubble
+            text={item.text}
+            ts={item.ts}
+            entering={isEntering(item.key)}
+            refs={item.refs}
+          />
         );
       case 'ask-answer':
         // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
@@ -260,14 +345,23 @@ export function TranscriptWindow({
         // （key 在 flush 前后不变，见 check-transcript-items 的 F2），DOM 原地复用。
         // 折叠与入场也收在 AssistantText 里（`entering` = 事件流追加的新 item；
         // 容器在 streaming 翻转前后不变，所以 `.msg-enter` 只播挂载那一次）。
-        return <AssistantText text={item.text} streaming={item.streaming} entering />;
+        return (
+          <AssistantText
+            text={item.text}
+            streaming={item.streaming}
+            entering={isEntering(item.key)}
+          />
+        );
       case 'run-reasoning':
+        // 思考卡：首次出现走 `.motion-appear`（只动透明度），展开 / 收起由
+        // ReasoningBlock 内部的 `.motion-disclosure` 负责（见 styles/motion.css）。
         return (
           <ReasoningBlock
             text={item.text}
             streaming={item.streaming}
             startedAt={item.startedAt}
             endedAt={item.endedAt}
+            entering={isEntering(item.key)}
           />
         );
       case 'tool':
@@ -288,6 +382,7 @@ export function TranscriptWindow({
             }}
             verbosity={verbosity}
             defaultOpen={cardsDefaultOpen}
+            entering={isEntering(item.key)}
           />
         );
       case 'notice':
