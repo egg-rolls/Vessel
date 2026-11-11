@@ -432,13 +432,25 @@
   color: var(--muted);
 }
 
-.event-block > summary {
+/* 卡片头只有一种盒模型：可展开卡的 `<summary>` 与纯行卡（StreamCard
+   `expandable=false`）的 `<div class="event-block-summary">` 共用同一套 flex 布局。
+   缺了这条，纯行头只是普通 block 容器，里面 nowrap 的 `.event-block-preview` 退化成
+   inline 文本（inline 盒上的 min-width / overflow / text-overflow 全部无效），长行会
+   直接越过卡片、把 `.conversation-scroll`（`overflow-y: auto` ⇒ `overflow-x` 计算为
+   auto）撑出横向滚动条。`overflow: hidden` 是兜底：卡片头永远不把滚动容器撑宽。 */
+.event-block > summary,
+.event-block > .event-block-summary {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  min-width: 0;
+  overflow: hidden;
   padding: 4px 0;
   font-size: var(--size-md);
   line-height: 1.6;
+}
+
+.event-block > summary {
   cursor: pointer;
   list-style: none;
 }
@@ -547,11 +559,15 @@
   line-height: 1.55;
 }
 
-.notice-block > summary {
+/* notice 家族的头（`<summary>` 与纯行 `<div>`）共用同一内衬与语义圆点，
+   纯行卡（单行环境信息卡）不再贴着卡片边缘、也不丢身份标记。 */
+.notice-block > summary,
+.notice-block > .event-block-summary {
   padding: 6px 10px;
 }
 
-.notice-block > summary::before {
+.notice-block > summary::before,
+.notice-block > .event-block-summary::before {
   content: "";
   flex: none;
   align-self: center;
@@ -589,6 +605,11 @@
   flex: none;
   align-items: center;
   gap: 6px;
+  /* 标题不参与收缩（不给长摘要挤扁），但要能自己换行：`max-width` 把它的
+     max-content 夹在卡片宽度内，`overflow-wrap: anywhere` 让长 mono 段 / 长链接
+     在标题里就断行，而不是把卡片（进而把滚动容器）撑宽。 */
+  max-width: 100%;
+  overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-size: var(--size-sm);
   color: var(--ink);

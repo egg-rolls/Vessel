@@ -153,8 +153,11 @@
   align-items: flex-start;
 }
 
+/* 气泡宽度只跟内容列走（与会话页 `.msg-bubble` 同一个口径：列的 78%）。
+   不要再加绝对上限：曾经是 `min(78%, var(--message-max-w))`（640px），列宽被拖到
+   约 820px 以上气泡就不再变宽 —— 内容列宽度手柄看起来像失灵。 */
 .team-message-bubble {
-  max-width: min(78%, var(--message-max-w));
+  max-width: 78%;
   padding: 8px 12px;
   border-radius: var(--radius-md);
   background: var(--surface-sunken);

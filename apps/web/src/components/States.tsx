@@ -130,7 +130,9 @@ export function StaleNotice({
       <span className="flex-none text-lg leading-none text-warn" aria-hidden="true">
         !
       </span>
-      <span>{message}</span>
+      {/* 提示正文可能带原始错误细节（长路径 / 长 URL / 长 mono 段）：在 flex 行里
+          必须能收缩并断行，否则会把承载它的滚动容器撑出横向滚动条。 */}
+      <span className="min-w-0 wrap-anywhere">{message}</span>
       {onRetry && (
         <Button variant="link" className="text-warn hover:text-warn" onClick={onRetry}>
           {t('common.refresh')}

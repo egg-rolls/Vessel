@@ -75,5 +75,8 @@ export function TeamTranscript({
     );
   }
 
-  return <div className="mx-auto flex w-full max-w-180 flex-col gap-3">{nodes}</div>;
+  // 列宽只有一层来源：每条消息行（`TeamMessageRow`）/ 日分隔各自带
+  // `max-w-[var(--chat-content-w,860px)]` + `mx-auto`，别在这里再套一层定宽
+  // （曾经是 `max-w-180` = 720px，把内容列宽度手柄顶死在 720：拖到 860 以上全无效果）。
+  return <div className="mx-auto flex w-full flex-col gap-3">{nodes}</div>;
 }
