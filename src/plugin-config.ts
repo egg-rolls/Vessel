@@ -149,6 +149,9 @@ export function declarativePluginEntries(config: VesselConfig): PluginConfig[] {
  *
  * 0.11.1（DECISION-022 §2.4）：`agentCwd` 是全局默认工作目录，只作为
  * `basic-tools` 安装配置的 `cwd` 兜底；显式/声明式插件配置里的 `cwd` 始终优先。
+ *
+ * 0.52：合并完再补一次 `media` 的路径边界回落（`allowed_roots` / `deny_paths` 优先取
+ * media 自己的，缺了才用 basic-tools 的），见 `applyPathBoundaryFallback`。
  */
 export function buildPluginConfigMap(
   configured: PluginConfig[] | undefined,
@@ -167,11 +170,61 @@ export function buildPluginConfigMap(
   if (agentCwd !== undefined && map['basic-tools']?.cwd === undefined) {
     map['basic-tools'] = { ...(map['basic-tools'] ?? {}), cwd: agentCwd };
   }
+  applyPathBoundaryFallback(map);
   return map;
 }
 
 /**
+ * 路径边界键的两组拼写。插件配置两种都认（`readStringArray(source, 'allowedRoots',
+ * 'allowed_roots')`），所以回退时**原样拷贝**命中的那个拼写，不做拼写归一。
+ */
+const PATH_BOUNDARY_KEY_GROUPS: readonly (readonly [string, string])[] = [
+  ['allowedRoots', 'allowed_roots'],
+  ['denyPaths', 'deny_paths'],
+];
+
+/**
+ * `media` 的路径边界回退到 `basic-tools` 的那份（0.52 附件引用改为读侧校验的配套）。
+ *
+ * 为什么在装配层拼：插件 `install(host, { config })` 只收到**自己那份** config
+ *（`pluginConfigs[plugin.name]`），`PluginHost` 没有 config getter、`PluginInitContext`
+ * 只有 `{ host }` —— media 插件里拿不到 basic-tools 的配置；让它自己去读
+ * `~/.vessel/config.yaml` 会变成第二套配置解析，热应用语义也会分裂。
+ *
+ * 优先级：**media 自身 > basic-tools 回落**。
+ * - media 任一个拼写存在就算「自己配了」，**包括显式空数组** —— 空数组是
+ *   「明确不限制根」的意图，不能被回退覆盖；
+ * - basic-tools 没装 / 该键没配 → 跳过，media 保持现状（空根 + 内置 denylist）；
+ * - 只回退路径边界键，media 的其它配置（阈值 / CLI 路径 / enabled）不受影响。
+ *
+ * 生效链路：media 在 `install` 时用自己的配置构造 boundary
+ * （`plugins/media/media/src/index.ts` 的 `buildPathBoundary`），而本函数是
+ * `pluginConfigs` 的唯一产地 —— 运行时装配、热应用（`assemblePluginTools`）、
+ * `--tools`、`plugin list --json` 吃的是同一份结果，改一处即全覆盖。
+ */
+function applyPathBoundaryFallback(map: Record<string, Record<string, unknown>>): void {
+  const basicTools = map['basic-tools'];
+  const media = map['media'];
+  if (basicTools === undefined || media === undefined) return;
+  const merged: Record<string, unknown> = { ...media };
+  let inherited = false;
+  for (const spellings of PATH_BOUNDARY_KEY_GROUPS) {
+    // media 自己配了（任一个拼写存在，含空数组）→ 保持原值
+    if (spellings.some((key) => merged[key] !== undefined)) continue;
+    const source = spellings.find((key) => basicTools[key] !== undefined);
+    if (source === undefined) continue;
+    merged[source] = basicTools[source];
+    inherited = true;
+  }
+  // 没有回退到任何键时保持原对象引用，避免制造无意义的新对象（配置指纹按 JSON 比）
+  if (inherited) map['media'] = merged;
+}
+
+/**
  * 取某插件的安装配置：显式 `plugins[].config` 覆盖声明式条目；都没有返回 undefined。
+ *
+ * 注意：这是**原始视图**，不套 `buildPluginConfigMap` 的 media → basic-tools 路径边界
+ * 回落。要看「实际生效的配置」用 `buildPluginConfigMap()[name]`（安装链路都走那条）。
  */
 export function pluginConfigFor(
   name: string,

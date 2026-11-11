@@ -94,11 +94,7 @@ export function MessageRefs({
         occurrence.set(ref.path, seen + 1);
         const name = refDisplayName(ref);
         return (
-          <li
-            key={`${ref.path}#${seen}`}
-            className="msg-ref"
-            title={ref.path}
-          >
+          <li key={`${ref.path}#${seen}`} className="msg-ref" title={ref.path}>
             <span className="msg-ref-icon" aria-hidden="true">
               <RefIcon kind={ref.kind} />
             </span>

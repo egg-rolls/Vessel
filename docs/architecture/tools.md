@@ -81,7 +81,7 @@ interface ToolDefinition {
 
 <a id="path-boundary"></a>
 
-**路径边界（ADR-055；`edit` 同样适用）**：`read` / `edit` / `bash cwd` 先按真实路径（`realpath`；不存在的路径取最近已存在祖先）判定，`..` 与 symlink 不能绕过。内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）命中即 `deny`；插件 `config.allowed_roots` 非空时越界为 `ask`，`config.deny_paths` 追加到内置列表。默认 `allowed_roots` 为空 = 不限制根。`bash` 只校验 `cwd`，命令本身仍可访问其它路径——这不是沙箱。
+**路径边界（ADR-055；`edit` 同样适用）**：`read` / `edit` / `bash cwd` 先按真实路径（`realpath`；不存在的路径取最近已存在祖先）判定，`..` 与 symlink 不能绕过。内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）命中即 `deny`；插件 `config.allowed_roots` 非空时越界为 `ask`，`config.deny_paths` 追加到内置列表。默认 `allowed_roots` 为空 = 不限制根。`bash` 只校验 `cwd`，命令本身仍可访问其它路径——这不是沙箱。读文件的插件（`media`）**默认继承** `basic-tools` 的 `allowed_roots` / `deny_paths`（自身配置优先，显式空数组 = 明确不限制根）：合并由装配层 `buildPluginConfigMap` 做，插件侧不重复解析配置。
 
 **拒绝要可追溯（文案契约）**：`deny` 时工具自己返回「被路径策略拒绝（deny 目录 / denylist），不是文件不存在」，`ask` 被拒时 `PermissionPolicy` 的错误说明是**工具自己的权限判定**要求确认（`… by user (the tool's own permission check asked for confirmation)`）。两种都不复述完整路径——模型自己的入参里已经带着它，重复注入只是 token 税。
 
