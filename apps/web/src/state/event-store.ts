@@ -14,9 +14,13 @@
  *   2000 条，更早那一段要由客户端带 `until_seq` 逐页拉回；页是「新→旧」到达的，而
  *   这里的时间线只接受递增 seq。所以回填期间帧先攒在暂存区，拉完再按 seq 升序一次性
  *   经 `push()` 并入 —— 去重与增量合并始终只有这一条路径。
+ * - **不产时间线产物的流式增量不进缓冲**（`tool_call_delta` / `finish` / 未识别的
+ *   chunk 子类型，判据见 `events.ts#producesTimelineItem`）：它们一条都不产 item，
+ *   却按 delta 计占 per-run 额度 —— 实测一个 run 6.1 万条 `tool_call_delta`，
+ *   约 14 次工具调用就把 2000 条额度填满，随后真正产卡的条目被逐条挤出去。
  */
 import type { RunEvent } from '../gateway/types';
-import type { StoredEvent } from './events';
+import { producesTimelineItem, type StoredEvent } from './events';
 
 export const MAX_EVENTS_PER_RUN = 2000;
 export const MAX_EVENTS_TOTAL = 10000;
@@ -125,6 +129,15 @@ export class EventStore {
   private truncated = new Set<string>();
   /** 待发布到下一份快照的裁剪增量；flush 后清空。 */
   private truncatedSince = new Set<string>();
+  /**
+   * 累计被当作「传输噪声」丢掉的流式增量条数（判据 `events.ts#producesTimelineItem`
+   * 为 false 的那些）。只为可观测：提示卡那一单要显示「本轮有 N 条事件未在实时视图
+   * 里出现」，先只暴露 getter，**不在 UI 里渲染**。
+   *
+   * **不参与** `truncated*` 语义：那两个是 `group-cache` / `useChatTranscript` 的局部
+   * 重建信号，口径不变；这里丢的东西不产 item，不该触发「本轮被裁剪」的提示。
+   */
+  private droppedNoiseCount = 0;
   private lastSeq = 0;
   private version = 0;
   private listeners = new Set<() => void>();
@@ -143,6 +156,16 @@ export class EventStore {
   /** 当前已接收的最大 seq（不等待 50ms 合批）。 */
   get currentSeq(): number {
     return this.lastSeq;
+  }
+
+  /**
+   * 累计被丢掉的传输噪声条数（本 store 实例生命周期内的累加值）。
+   *
+   * 口径见 `droppedNoiseCount`：这些条目本来就不产时间线物品，丢它们对可见内容零影响。
+   * 只读、不进快照（避免为一个观测数字让每个 50ms 合批都换一次 snapshot 对象）。
+   */
+  get droppedNoise(): number {
+    return this.droppedNoiseCount;
   }
 
   /**
@@ -211,6 +234,21 @@ export class EventStore {
       return true;
     }
     if (meta.seq <= this.lastSeq) return false;
+    // **不产时间线产物的流式增量不进缓冲**（判据唯一来源见 `events.ts#producesTimelineItem`：
+    // `buildGroup` 的 chunk 分支只认 text/reasoning，`tool_call_delta` 什么都不做、
+    // `finish` 只收口边界）。
+    //
+    // 丢它们安全：既不产 item，也不是内容权威 —— 正文/思考是 text/reasoning 增量合并出来的，
+    // 工具卡与结果由 `tool.call.*` 给，完整回答与用量由 `llm.response` 与磁盘事件日志给。
+    // 代价只有一条：运行详情的实时事件流（`useRunTrace` 的 live 部分）里少几行传输噪声。
+    // 收益是把「per-run 额度按 delta 计」这件事从根上去掉（实测 61 081 条 tool_call_delta
+    // 的 run，此前约 14 次工具调用就把 2000 条额度填满）。
+    if (!producesTimelineItem(event)) {
+      // 游标照推：这些 seq 已经「见过」，重连回放不该再讨一遍；快照不必发布（屏上没变化）。
+      this.lastSeq = meta.seq;
+      this.droppedNoiseCount += 1;
+      return true;
+    }
     // 相邻同 kind 的流式增量先合并：per-run 上限按「段」计数，而不是按 delta 计数。
     // （真实 run 有 177 轮 / 70k completion tokens ≈ 数万 delta 事件，按 delta 计数时
     //  上限会把**最早**的 thinking 段整段挤出去 —— 思考过程「凭空消失」的根因。）
@@ -505,20 +543,33 @@ export class EventStore {
   }
 
   /**
-   * 该 run 最旧的可裁剪条目下标。
+   * 该 run 最旧的**可裁剪**条目下标，分两档挑（锚点永不裁）：
    *
-   * 优先返回非锚点条目；整段都是锚点时退回最旧一条（极小 run 不该卡死上限），
+   * 1. 最旧的「**时间线上不产产物**」条目（判据 `events.ts#producesTimelineItem`，
+   *    与 `buildGroup` 的分支表同源）：丢掉它对可见内容零影响，保留价值最低；
+   * 2. 其次才是最旧的内容条目（正文段 / 思考段 / 工具卡 / notice）；
+   * 3. 整个 run 只剩锚点时退回最旧一条（极小 run 不该卡死上限）。
+   *
+   * 注意第 1 档今天几乎是空集：唯一不产产物的大户（`tool_call_delta` / `finish`）已经在
+   * `push()` 里根本不进缓冲。这一档是给**以后新增的高频无产物事件**留的护栏，
+   * 不是用来丢 internal / observe 档事件的 —— 那些在 `buildGroup` 里照样产原始事件行
+   * 或 typed notice（产物判据恒为 true），且 `agent.*` / `subagent.*` 是成员树与子 agent
+   * 面板的输入（`state/agents.ts#reduceAgents`），丢了会真的少东西。
+   *
    * 没有任何条目时返回 -1。
    */
   private oldestEvictableIndex(runId: string): number {
-    let fallback = -1;
+    let oldestAny = -1;
+    let oldestContent = -1;
     for (let index = 0; index < this.entries.length; index += 1) {
       const entry = this.entries[index];
       if (!entry || entry.event.run_id !== runId) continue;
-      if (fallback < 0) fallback = index;
-      if (!RUN_ANCHOR_EVENT_TYPES.has(entry.event.type)) return index;
+      if (oldestAny < 0) oldestAny = index;
+      if (RUN_ANCHOR_EVENT_TYPES.has(entry.event.type)) continue;
+      if (!producesTimelineItem(entry.event)) return index;
+      if (oldestContent < 0) oldestContent = index;
     }
-    return fallback;
+    return oldestContent >= 0 ? oldestContent : oldestAny;
   }
 
   private scheduleNotify(): void {
