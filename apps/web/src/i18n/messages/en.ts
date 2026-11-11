@@ -230,7 +230,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // 0.18 H2 / 0.27: expired interactions only keep a one-shot toast; details live in Observe.
   'chat.reasoning.summary': 'Thinking',
   // 0.17: placeholder while a run is running but has no visible content
-  'chat.run.waiting': 'Generating…',
   // 0.18: runs expand into the conversation stream; stop lives in the Composer.
   'chat.run.cancelling': 'Cancelling…',
   'chat.run.cancelQueue': 'Cancel queued run',
@@ -251,7 +250,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.run.failure.fromRecord':
     'From the session record: this turn’s live events are no longer buffered, so only the error summary is kept.',
   // 0.15: tool cards / reasoning stream / inline ask
-  'chat.reasoning.live': 'Streaming',
   // The single wording for "thinking is still going": the reasoning card's live label and
   // the "run started, nothing visible yet" hint share this key (one fact, one word).
   'chat.reasoning.thinking': 'Thinking…',
@@ -1179,8 +1177,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.runtime': 'System notice · {kind}',
   // Retired body / discarded reply / denied rotate: without a typed notice these three
   // would lose information the moment they are hidden.
-  'chat.notice.replyStale':
-    'reply not used · old body retired · epoch {epoch} · message {message}',
+  'chat.notice.replyStale': 'reply not used · old body retired · epoch {epoch} · message {message}',
   'chat.notice.retired': 'old body retired · {reason} · epoch {epoch} · body {body}',
   'chat.notice.rotateDenied': 'context rotate denied · {reason} · at {percent}%',
   // Types the gate cannot see (third-party plugins / upstream events / old traces):

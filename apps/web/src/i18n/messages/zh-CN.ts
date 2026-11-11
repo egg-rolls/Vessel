@@ -229,7 +229,6 @@ export const messages = {
   // 0.18 H2 / 0.27：已失效交互只保留一次 toast；详情在 Observe → Attention。
   'chat.reasoning.summary': '思考过程',
   // 0.17：运行中但暂无可见内容的占位（不隐藏失败/终态）
-  'chat.run.waiting': '正在思考…',
   // 0.18：run 展开进会话流；停止在 Composer，失败/排队是内联 notice。
   'chat.run.cancelling': '取消中…',
   'chat.run.cancelQueue': '取消排队',
@@ -248,7 +247,6 @@ export const messages = {
   'chat.run.failure.run': '运行 {id}',
   'chat.run.failure.fromRecord': '来自会话记录：该轮的实时事件已不在缓冲区，这里只保留错误摘要。',
   // 0.15：工具卡 / 思考流 / 内联提问
-  'chat.reasoning.live': '流式',
   // 「思考还在进行」的唯一说法：思考卡标题的流式小字 + 页面上「run 在跑但还没有内容」
   // 那行提示共用这一个 key（同一个事实只有一个词，两处不要各写一句）。
   'chat.reasoning.thinking': '正在思考',

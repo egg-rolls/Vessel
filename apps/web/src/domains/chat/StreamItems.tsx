@@ -366,11 +366,7 @@ export const RunItems = memo(function RunItems({
     (item) => item.kind === 'text' || item.kind === 'reasoning' || item.kind === 'tool',
   );
   const showThinking =
-    runRunning &&
-    !hasVisibleContent &&
-    !liveText &&
-    !liveReasoning &&
-    toolHint === undefined;
+    runRunning && !hasVisibleContent && !liveText && !liveReasoning && toolHint === undefined;
 
   // 「助手」发言人名挂在**这一轮的第一块**（正文或思考卡）上：一个 run 只出现一次，
   // 与历史态的 groupStart 同一口径（连续同发言人不重复）。还没 flush 成 item 的尾部

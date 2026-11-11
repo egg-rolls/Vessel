@@ -98,6 +98,15 @@ class 与同一个阈值，不要给某一页复制第二份。
   都走它，入场就收在它里面 —— 不要再手写第二份 `msg-assistant > div.msg-text`
   （流式与落盘各写一份就会在 run 结束那一刻换容器 / 重排）。**它不挂折叠**（无底色），
   见上一条口径。
+- **发言人名只有一个实现**：`AssistantSpeaker`（`domains/chat/ReasoningBlock.tsx` 导出，
+  live 与历史共用）。判据是「该 run 的第一个正文/思考项」，一个 run 只出现一次；
+  成员投递的 `AgentMessageCard` **不叠**这个名字。
+- **消息工具栏是覆盖层，不占高度**：`.msg-actions`（纯正文：`.msg-assistant` 右上角）与
+  `.reasoning-actions`（有思考卡：锚在 `.reasoning-wrap` 右上角，卡头留白处）都是
+  `position: absolute`，显隐只切 opacity（规则在 `components/ui/MessageActions.tsx`：
+  hover / `focus-within` / 触屏常显，不要在业务侧另写 hover-only）。**不要**改回
+  「正文下方一行 + `mt-1`」：那一行即使透明也占高度，hover 出现/消失会让内容位移。
+  窄屏（≤1023px）退化成下方一行（该行高度恒定，仍不位移、不压字）。
 
 ```css
 @layer theme, base, legacy, utilities;
