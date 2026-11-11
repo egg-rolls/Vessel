@@ -339,6 +339,414 @@ const FIXTURES: readonly Fixture[] = [
       );
     },
   },
+  // G1 / G2 / G3 的输入与期望逐字照做 HANDOFF-main.md 4.5「三条必过 fixture」：
+  // 不要为了方便改输入，也不要放宽期望。
+  {
+    name: 'G1 输出丢失回归：live 只有 started、历史有结果 -> 一张卡、output 取历史、status 取 live',
+    why: '客户端漏掉 tool.call.completed 时落盘输出必须还在；预过滤/合并吞掉它就是空结果卡',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'run it'),
+          msg('assistant', '', {
+            timestamp: 1001,
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } },
+            ],
+          }),
+          msg('tool', 'PERSISTED-OUTPUT', { timestamp: 1005, tool_call_id: 'c1' }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r1',
+            status: 'running',
+            input: 'run it',
+            items: [
+              {
+                kind: 'event',
+                key: 'g1-started',
+                event: {
+                  type: 'tool.call.started',
+                  run_id: 'r1',
+                  ts: 1002,
+                  data: { run_id: 'r1', tool_call_id: 'c1', tool_name: 'bash', arguments: {} },
+                },
+              },
+            ],
+          }),
+        ],
+        queued: [],
+      });
+      const cards = items.filter((item) => item.kind === 'tool');
+      const card = cards[0];
+      return (
+        cards.length === 1 &&
+        card !== undefined &&
+        card.kind === 'tool' &&
+        card.key === 'tool:c1' &&
+        card.output === 'PERSISTED-OUTPUT' &&
+        card.status === 'running' &&
+        card.paired === true
+      );
+    },
+  },
+  {
+    name: 'G2 两边都有 -> 一张卡、output 不丢、status 取 live、位置按历史（不断言 ts）',
+    why: '同一调用在 live 与 history 各出现一次时只能出一张卡；历史子序列必须等于 [user, tool]',
+    check: () => {
+      const messages = [
+        msg('user', 'go', { timestamp: 999 }),
+        msg('assistant', '', {
+          timestamp: 1001,
+          tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+        }),
+        msg('tool', 'ok', { timestamp: 1005, tool_call_id: 'c1' }),
+      ];
+      const liveGroups = [
+        group({
+          runId: 'r1',
+          status: 'completed',
+          startedAt: 1000,
+          items: [
+            {
+              kind: 'event',
+              key: 'g2-started',
+              event: {
+                type: 'tool.call.started',
+                run_id: 'r1',
+                ts: 1002,
+                data: { run_id: 'r1', tool_call_id: 'c1', tool_name: 'bash', arguments: {} },
+              },
+            },
+            {
+              kind: 'event',
+              key: 'g2-completed',
+              event: {
+                type: 'tool.call.completed',
+                run_id: 'r1',
+                ts: 1003,
+                data: {
+                  run_id: 'r1',
+                  tool_call_id: 'c1',
+                  tool_name: 'bash',
+                  result: 'ok',
+                  duration_ms: 1,
+                },
+              },
+            },
+            { kind: 'text', text: 'live tail', key: 'g2-text', startedAt: 1004, endedAt: 1004 },
+          ],
+        }),
+      ];
+      const merged = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups,
+        queued: [],
+      });
+      const historyOnly = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      });
+      const historyKeys = new Set(historyOnly.map((item) => item.key));
+      const shared = merged.filter((item) => historyKeys.has(item.key)).map((item) => item.key);
+      const cards = merged.filter((item) => item.kind === 'tool');
+      const card = cards[0];
+      return (
+        cards.length === 1 &&
+        card !== undefined &&
+        card.kind === 'tool' &&
+        card.output === 'ok' &&
+        card.status === 'done' &&
+        JSON.stringify(shared) === JSON.stringify(['msg:0', 'tool:c1'])
+      );
+    },
+  },
+  {
+    name: 'G3 多工具不回退：每个 call 一张卡、a 在 b 之前、输出各归各',
+    why: '一轮多个调用回填时不能重新聚堆或颠倒（两种位置口径下的安全网）',
+    check: () => {
+      const messages = [
+        msg('assistant', '', {
+          timestamp: 1001,
+          tool_calls: [{ id: 'a', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+        }),
+        msg('tool', 'oa', { timestamp: 1099, tool_call_id: 'a' }),
+        msg('assistant', '', {
+          timestamp: 1101,
+          tool_calls: [{ id: 'b', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+        }),
+        msg('tool', 'ob', { timestamp: 1199, tool_call_id: 'b' }),
+      ];
+      const liveGroups = [
+        group({
+          runId: 'r1',
+          status: 'completed',
+          startedAt: 1000,
+          items: [
+            {
+              kind: 'event',
+              key: 'g3-a-started',
+              event: {
+                type: 'tool.call.started',
+                run_id: 'r1',
+                ts: 1100,
+                data: { run_id: 'r1', tool_call_id: 'a', tool_name: 'bash', arguments: {} },
+              },
+            },
+            {
+              kind: 'event',
+              key: 'g3-a-completed',
+              event: {
+                type: 'tool.call.completed',
+                run_id: 'r1',
+                ts: 1101,
+                data: { run_id: 'r1', tool_call_id: 'a', tool_name: 'bash', result: 'oa' },
+              },
+            },
+            { kind: 'text', text: 'mid text', key: 'g3-text', startedAt: 1150, endedAt: 1150 },
+            {
+              kind: 'event',
+              key: 'g3-b-started',
+              event: {
+                type: 'tool.call.started',
+                run_id: 'r1',
+                ts: 1200,
+                data: { run_id: 'r1', tool_call_id: 'b', tool_name: 'bash', arguments: {} },
+              },
+            },
+            {
+              kind: 'event',
+              key: 'g3-b-completed',
+              event: {
+                type: 'tool.call.completed',
+                run_id: 'r1',
+                ts: 1201,
+                data: { run_id: 'r1', tool_call_id: 'b', tool_name: 'bash', result: 'ob' },
+              },
+            },
+          ],
+        }),
+      ];
+      const merged = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups,
+        queued: [],
+      });
+      const cards = merged.filter((item) => item.kind === 'tool');
+      const first = cards[0];
+      const second = cards[1];
+      return (
+        cards.length === 2 &&
+        first !== undefined &&
+        second !== undefined &&
+        first.kind === 'tool' &&
+        second.kind === 'tool' &&
+        first.key === 'tool:a' &&
+        second.key === 'tool:b' &&
+        first.output === 'oa' &&
+        second.output === 'ob'
+      );
+    },
+  },
+  {
+    name: 'F18 主 oracle：order(live+history) 与 order(只有 history) 的 key 序列一致',
+    why: 'live 只提供更早可见与更细粒度，不得改变最终顺序；否则 run 结束那一刻整段重排',
+    check: () => {
+      const messages = [
+        msg('user', 'go', { timestamp: 1000 }),
+        assistantCall('c1', 'bash', '{}', '第一段'),
+        toolMsg('c1', 'ok'),
+        msg('assistant', '结语', { timestamp: 1600 }),
+      ];
+      const liveGroups = [
+        group({
+          runId: 'r-ord',
+          input: 'go',
+          output: '结语',
+          startedAt: 900,
+          status: 'completed',
+          items: [
+            { kind: 'reasoning', text: '想1', key: 'k1', startedAt: 950, endedAt: 980 },
+            { kind: 'text', text: '第一段', key: 'k2', startedAt: 990, endedAt: 1010 },
+            {
+              kind: 'event',
+              key: 'ev-c1',
+              event: {
+                type: 'tool.call.started',
+                run_id: 'r-ord',
+                ts: 1050,
+                data: { run_id: 'r-ord', tool_call_id: 'c1', tool_name: 'bash', arguments: {} },
+              },
+            },
+            { kind: 'reasoning', text: '想2', key: 'k3', startedAt: 1500, endedAt: 1520 },
+            { kind: 'text', text: '结语', key: 'k4', startedAt: 1550, endedAt: 1590 },
+          ],
+        }),
+      ];
+      const merged = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups,
+        queued: [],
+      });
+      const historyOnly = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      });
+      const historyKeys = new Set(historyOnly.map((item) => item.key));
+      const shared = merged.filter((item) => historyKeys.has(item.key)).map((item) => item.key);
+      return (
+        JSON.stringify(shared) === JSON.stringify(historyOnly.map((item) => item.key)) &&
+        shared.length === historyOnly.length
+      );
+    },
+  },
+  {
+    name: 'F19 工具卡位置与 ts 取历史：同毫秒 / 更早的 live started 都不许把卡提到正文上方',
+    why: 'REVIEW 2.1-F：合并若采纳 live 的 ts（min）或倒置 push 序，同毫秒先后就改由 live 插入序决定，卡被顶到本轮正文之前',
+    check: () => {
+      const messages = [
+        // 用户消息 ts 与 live 的 started 同毫秒（1002）；assistant 的 ts（1001）是历史工具 item
+        // startedAt 的来源，故意与 live 的 started 不同值，好把「startedAt 取 live」也钉住。
+        msg('user', 'go', { timestamp: 1002 }),
+        msg('assistant', 'mid', {
+          timestamp: 1001,
+          tool_calls: [
+            { id: 'tc9', type: 'function', function: { name: 'bash', arguments: '{}' } },
+          ],
+        }),
+        msg('tool', 'ok', { timestamp: 1005, tool_call_id: 'tc9' }),
+      ];
+      const liveGroups = [
+        group({
+          runId: 'r-f19',
+          input: 'go',
+          status: 'completed',
+          startedAt: 900,
+          items: [
+            {
+              kind: 'event',
+              key: 'f19-started',
+              event: {
+                type: 'tool.call.started',
+                run_id: 'r-f19',
+                ts: 1002,
+                data: { run_id: 'r-f19', tool_call_id: 'tc9', tool_name: 'bash', arguments: {} },
+              },
+            },
+          ],
+        }),
+      ];
+      const merged = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups,
+        queued: [],
+      });
+      const historyOnly = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      });
+      const mergedKeys = merged.map((item) => item.key);
+      const tool = merged.find((item) => item.kind === 'tool');
+      return (
+        JSON.stringify(mergedKeys) === JSON.stringify(historyOnly.map((item) => item.key)) &&
+        tool !== undefined &&
+        tool.kind === 'tool' &&
+        // ts 是历史结果消息的（不是 live 的 1002，也不是 floor 后的 1003）；startedAt 才是 live 的。
+        tool.ts === 1005 &&
+        tool.startedAt === 1002
+      );
+    },
+  },
+  {
+    name: 'F20 合并内容规则：内容取历史（不被 8KiB 预览截断）、执行态取 live、兜底名不算内容',
+    why: '反过来取（output/args/name 用 live）会把截断预览当内容、把兜底名 tool 当真名；这是 HANDOFF 4.5 的内容规则',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'go', { timestamp: 1000 }),
+          // 历史这条调用没带工具名（空串 -> 兜底 'tool'），args 是 JSON 字符串。
+          msg('assistant', '', {
+            timestamp: 1001,
+            tool_calls: [
+              { id: 'cc', type: 'function', function: { name: '', arguments: '{"cmd":"ls"}' } },
+            ],
+          }),
+          msg('tool', 'FULL-OUTPUT', { timestamp: 1005, tool_call_id: 'cc' }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r20',
+            input: 'go',
+            status: 'completed',
+            startedAt: 900,
+            items: [
+              {
+                kind: 'event',
+                key: 'f20-started',
+                event: {
+                  type: 'tool.call.started',
+                  run_id: 'r20',
+                  ts: 1002,
+                  data: {
+                    run_id: 'r20',
+                    tool_call_id: 'cc',
+                    tool_name: 'bash',
+                    arguments: { cmd: 'ls' },
+                    truncated: true,
+                  },
+                },
+              },
+              {
+                kind: 'event',
+                key: 'f20-completed',
+                event: {
+                  type: 'tool.call.completed',
+                  run_id: 'r20',
+                  ts: 1003,
+                  data: {
+                    run_id: 'r20',
+                    tool_call_id: 'cc',
+                    tool_name: 'bash',
+                    result: 'PREVIEW-TRUNCATED',
+                    duration_ms: 7,
+                  },
+                },
+              },
+            ],
+          }),
+        ],
+        queued: [],
+      });
+      const cards = items.filter((item) => item.kind === 'tool');
+      const card = cards[0];
+      return (
+        cards.length === 1 &&
+        card !== undefined &&
+        card.kind === 'tool' &&
+        card.output === 'FULL-OUTPUT' &&
+        card.args === '{"cmd":"ls"}' &&
+        card.name === 'bash' &&
+        card.status === 'done' &&
+        card.durationMs === 7 &&
+        card.truncated === true &&
+        card.startedAt === 1002 &&
+        card.ts === 1005 &&
+        card.paired === true
+      );
+    },
+  },
   {
     name: 'F17 live 条目用自己的事件时间（不是组起始 ts）→ 历史回填后不重排',
     why: '全披组起始 ts 会让整段 live 内容在历史到达时被拽到 turn 开头（上面一张卡、中间正文、下面更早的卡）',
@@ -382,35 +790,65 @@ const FIXTURES: readonly Fixture[] = [
       });
       const reasoning = items.find((item) => item.kind === 'run-reasoning');
       const tool = items.find((item) => item.kind === 'tool');
-      const text = items.find((item) => item.kind === 'run-text');
+      // 最后一段正文被历史消息认领 → 它的 key 变成 msg:<abs>（位置以历史为准），
+      // 于是这里不再存在独立的 run-text item。
+      const liveText = items.find((item) => item.kind === 'run-text');
+      const claimed = items.filter((item) => item.kind === 'message' && item.key === 'msg:2');
       return (
         reasoning !== undefined &&
         reasoning.ts === 1150 &&
         tool !== undefined &&
         tool.ts === 1200 &&
-        text !== undefined &&
-        text.ts === 1450
+        liveText === undefined &&
+        claimed.length === 1
       );
     },
   },
   {
-    name: 'F14 run 结束后历史回填，工具卡仍留在思考与正文之间',
-    why: '历史侧工具 item 的 ts 是所属 assistant 消息时间，会把卡顶到正文之后（聚堆）',
+    name: 'F14 理想交错只存在于 live：落盘后按消息粒度聚合是数据边界，不是 bug',
+    why: '历史 tool 消息只带自己的 ts，介质里没有「工具在思考第几句之后」；合并取历史位置=接受聚合，不去猜交错',
     check: () => {
-      const runGroup = group({
+      // ① 只有 live：思考 -> 工具卡 -> 正文 的理想交错确实存在。
+      const liveGroup = group({
         runId: 'r-order',
-        input: 'go',
-        output: 'done text',
-        startedAt: 1000,
         status: 'completed',
+        startedAt: 1000,
         items: [
-          { kind: 'reasoning', text: 'think', key: 'a', startedAt: 1001 },
-          toolItem('c1', 'running'),
-          toolItem('c1', 'done'),
-          textItem('done text', 't'),
+          { kind: 'reasoning', text: 'think', key: 'rs', startedAt: 1001, endedAt: 1002 },
+          {
+            kind: 'event',
+            key: 'f14-started',
+            event: {
+              type: 'tool.call.started',
+              run_id: 'r-order',
+              ts: 1003,
+              data: { run_id: 'r-order', tool_call_id: 'c1', tool_name: 'bash', arguments: {} },
+            },
+          },
+          {
+            kind: 'event',
+            key: 'f14-completed',
+            event: {
+              type: 'tool.call.completed',
+              run_id: 'r-order',
+              ts: 1004,
+              data: { run_id: 'r-order', tool_call_id: 'c1', tool_name: 'bash', result: 'ok' },
+            },
+          },
+          { kind: 'text', text: 'done text', key: 'ts', startedAt: 1005, endedAt: 1006 },
         ],
       });
-      const items = buildTranscriptItems({
+      const liveOnly = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups: [liveGroup],
+        queued: [],
+      });
+      const liveKinds = liveOnly.map((item) => item.kind).join(',');
+      // ② 落盘后回填：assistant 一条消息同时带 reasoning_content 与 tool_calls（思考与正文
+      //    属于同一条消息），结果消息单独一条 -> 交错信息在落盘介质里就不存在了。
+      //    合并后必然是按消息粒度聚合的一行正文 + 一张卡；这不是 bug，别指望历史能给回交错。
+      const merged = buildTranscriptItems({
         messages: [
           msg('user', 'go', { timestamp: 999 }),
           msg('assistant', 'done text', {
@@ -423,12 +861,19 @@ const FIXTURES: readonly Fixture[] = [
           msg('tool', 'ok', { timestamp: 1005, tool_call_id: 'c1' }),
         ],
         messageIndexOffset: 0,
-        liveGroups: [runGroup],
+        liveGroups: [liveGroup],
         queued: [],
       });
+      const mergedKinds = merged.map((item) => item.kind).join(',');
+      const tool = merged.find((item) => item.kind === 'tool');
       return (
-        items.length === 4 &&
-        items.map((item) => item.kind).join(',') === 'message,run-reasoning,tool,run-text'
+        liveKinds === 'run-reasoning,tool,run-text' &&
+        mergedKinds === 'message,message,tool' &&
+        merged.every((item) => item.kind !== 'run-reasoning') &&
+        merged.every((item) => item.kind !== 'run-text') &&
+        tool !== undefined &&
+        tool.kind === 'tool' &&
+        tool.output === 'ok'
       );
     },
   },

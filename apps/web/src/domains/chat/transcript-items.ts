@@ -185,6 +185,33 @@ export interface HistoryIndex {
   callIds: Set<string>;
 }
 
+const CR = String.fromCharCode(13);
+const LF = String.fromCharCode(10);
+
+/**
+ * 文本归一化后再比较「live 与历史是否同一段」：真实回放里常只差尾空白、CRLF 或多一个空行，
+ * 直接相等判定会把重复段当成新段（正文/思考就出现两份）。
+ */
+function normalizeText(value: string | undefined): string {
+  const unified = (value ?? '')
+    .split(CR + LF)
+    .join(LF)
+    .split(CR)
+    .join(LF);
+  const out: string[] = [];
+  let blanks = 0;
+  for (const line of unified.split(LF)) {
+    const trimmed = line.trimEnd();
+    if (trimmed.length === 0) {
+      blanks += 1;
+      if (blanks > 1) continue;
+    } else {
+      blanks = 0;
+    }
+    out.push(trimmed);
+  }
+  return out.join(LF).trim();
+}
 function trimText(value: string | undefined): string {
   return (value ?? '').trim();
 }
@@ -222,6 +249,8 @@ export function buildHistoryIndex(
   const contentByIndex = new Map<number, string>();
   const messageByIndex = new Map<number, Message>();
   const callIds = new Set<string>();
+  /** 工具结果消息的时间（历史工具卡的权威 ts：结果落盘那一刻）。 */
+  const toolResultTs = new Map<string, number>();
 
   // 可见性：隐藏的消息**不产生 item**，但仍要进 messageByIndex / contentByIndex
   // （绝对下标、认领、previous-user 都依赖它们）。
@@ -285,6 +314,9 @@ export function buildHistoryIndex(
           ? message.tool_call_id
           : undefined;
       const paired = callId === undefined ? undefined : toolByCallId.get(callId);
+      if (callId !== undefined && message.timestamp !== undefined) {
+        toolResultTs.set(callId, message.timestamp);
+      }
       if (paired !== undefined) {
         // 配对成功的 tool 消息由调用侧的 item 代表（下面根据 assistant 的 tool_calls 输出），
         // 这里只记录，不重复产出。
@@ -380,7 +412,11 @@ export function buildHistoryIndex(
         startedAt: message?.timestamp ?? 0,
         paired: tool.paired,
         ...(durationMs !== undefined ? { durationMs } : {}),
-        ...(message?.timestamp !== undefined ? { ts: message.timestamp } : {}),
+        // ts 用「工具结果消息」的时间（历史侧的权威时刻）：比所属 assistant 消息的
+        // timestamp 更贴近真实发生顺序（F19/F20 守这条）。
+        ...((toolResultTs.get(callId) ?? message?.timestamp) !== undefined
+          ? { ts: toolResultTs.get(callId) ?? message?.timestamp }
+          : {}),
       });
     }
   }
@@ -640,11 +676,19 @@ function claimMessages(
 /**
  * 同 key 合并（**身份的唯一实现**）：一个逻辑对象在多个来源里出现时只留一个 item。
  *
- * 工具卡：内容（name / args / output / paired）以**历史**为准（落盘值是权威），
- * 执行态（status / duration / error / startedAt）以**live** 为准；两边都有 ts 时取更早的。
+ * 工具卡的取值规则（HANDOFF 的「合并内容规则」）：
+ * - 内容（name / args / output）：**history ∪ live，history 优先**（落盘值权威，不带 8KiB 预览
+ *   截断）；history 缺了才回落 live。`name === 'tool'` 是「不知道名字」的兜底值，不算内容。
+ * - 执行态（status / durationMs / error / truncated）：取 **live**；`paired` 取或；
+ *   `startedAt` 取 live 中 >0 者。
+ * - 位置与 ts：取 **history**（F18 主 oracle：merged 的历史子序列必须等于只有历史的序列）。
+ *
  * 其它 kind：后到者覆盖（live 是最新事实）。
  */
-function mergeByKey(items: readonly TranscriptItem[]): TranscriptItem[] {
+function mergeByKey(
+  items: readonly TranscriptItem[],
+  historyKeys?: ReadonlySet<string>,
+): TranscriptItem[] {
   const byKey = new Map<string, TranscriptItem>();
   const order: string[] = [];
   for (const item of items) {
@@ -654,36 +698,47 @@ function mergeByKey(items: readonly TranscriptItem[]): TranscriptItem[] {
       order.push(item.key);
       continue;
     }
-    byKey.set(item.key, mergeItem(previous, item));
+    byKey.set(item.key, mergeItem(previous, item, historyKeys));
   }
   return order
     .map((key) => byKey.get(key))
     .filter((item): item is TranscriptItem => item !== undefined);
 }
 
-function mergeItem(previous: TranscriptItem, next: TranscriptItem): TranscriptItem {
+/** 工具名「不知道」时的兜底值（`history-tools.ts` / `tool-cards.ts` 都用它填空）。 */
+const TOOL_NAME_FALLBACK = 'tool';
+
+function mergeItem(
+  previous: TranscriptItem,
+  next: TranscriptItem,
+  historyKeys?: ReadonlySet<string>,
+): TranscriptItem {
+  // 调用侧**先 push 全部历史 item、再 push live item**，所以同 key 时 previous 恒为历史侧、
+  // next 恒为 live 侧。位置以历史为权威，前提就是这条 push 序（REVIEW §2.1-F：反序会让
+  // 同毫秒的先后改由 live 的插入序决定）。previous 来自历史 = 它的 key 出现在历史 item 里。
+  const previousIsHistory = historyKeys?.has(previous.key) === true;
   if (previous.kind === 'tool' && next.kind === 'tool') {
+    // 内容：history ∪ live，history 优先。兜底名不算内容，所以历史是兜底值时让 live 的真名顶上。
+    const name = previous.name === TOOL_NAME_FALLBACK ? next.name : previous.name;
+    const args = previous.args !== undefined ? previous.args : next.args;
+    const output = previous.output !== undefined ? previous.output : next.output;
     return {
       ...previous,
+      name,
       ...(next.runId !== undefined ? { runId: next.runId } : {}),
+      ...(args !== undefined ? { args } : {}),
+      ...(output !== undefined ? { output } : {}),
+      // 执行态取 live（历史 item 是「已落盘」的快照，running→done 的真实态只在 live）。
       status: next.status,
-      paired: previous.paired || next.paired,
-      ...(previous.output !== undefined
-        ? { output: previous.output }
-        : next.output !== undefined
-          ? { output: next.output }
-          : {}),
-      ...(previous.args !== undefined ? { args: previous.args } : {}),
       ...(next.durationMs !== undefined ? { durationMs: next.durationMs } : {}),
-      ...(next.error !== undefined && previous.error === undefined ? { error: next.error } : {}),
+      ...(next.error !== undefined ? { error: next.error } : {}),
       ...(next.truncated === true ? { truncated: true } : {}),
       startedAt: next.startedAt > 0 ? next.startedAt : previous.startedAt,
-      ts:
-        previous.ts === undefined
-          ? next.ts
-          : next.ts === undefined
-            ? previous.ts
-            : Math.min(previous.ts, next.ts),
+      paired: previous.paired || next.paired,
+      // 时间以**历史**为准（previous 是历史侧，先入数组）：顺序的唯一权威是历史；
+      // 用 min/max 混合 live 与 history 的时间正是把顺序拉坏的根源。
+      // 「历史没有 ts」也照样沿用 undefined —— 那是「只有历史」时的排序结果，不许被 live 改写。
+      ts: previousIsHistory ? previous.ts : (previous.ts ?? next.ts),
     };
   }
   return { ...previous, ...next, key: previous.key };
@@ -713,26 +768,41 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     return last;
   })();
 
-  // live 已经有的工具调用，历史侧不再单独出 item：live 的插入位置与 ts 才是真实的
-  // 事件顺序（历史侧的 ts 是所属 assistant 消息的时间，会把工具卡顶到该轮正文之后，
-  // 屏幕上就变成「思考 → 正文 → 工具卡」聚堆）。
-  const liveCallIds = new Set<string>();
-  for (const item of live) {
-    if (item.kind === 'tool' && item.callId !== undefined) liveCallIds.add(item.callId);
-  }
+  // 没有「live 已经有这个调用就跳过历史 item」的预过滤：那会让 `mergeItem` 的工具分支
+  // 永远不可达（内容只能取 live 的 8KiB 预览），客户端漏掉 `tool.call.completed` 时
+  // 落盘输出整块丢失（G1）。历史 item 一律保留，live 的同 key item 由 mergeByKey 合并。
 
   const items: TranscriptItem[] = [];
   for (const item of history.items) {
-    // 被 live 认领的 assistant 消息整条丢弃：它的正文由 run-text 渲染、思考由
-    // run:<runId>:reasoning:<n> 渲染。历史侧的思考挂在消息 item 内部（Transcript.tsx 的
-    // TranscriptMessage），所以这一行 continue 同时丢掉了历史那一份思考 ——
-    // 「那条消息归谁渲染」=「那份思考归谁渲染」，因此不会双出。
-    if (item.kind === 'message' && claimedAssistant.has(item.absIndex)) continue;
-    if (item.kind === 'tool' && item.callId !== undefined && liveCallIds.has(item.callId)) continue;
+    // 被认领的 assistant 消息**照常保留**（位置 / key / 操作按钮都以历史为准）；
+    // 让位的是 live 侧的同文段（见下面的 claimedTexts），这样两边顺序一致。
+    // 思考同理：历史消息的 reasoning_content 由 Transcript.tsx 的 TranscriptMessage 渲染，
+    // live 侧同一份思考按内容让位（claimedReasoning），所以不会双出。
+    // 历史已落盘的调用**照常保留**：位置与 ts 由历史决定，live 只补充执行态
+    // （key 相同，`mergeByKey` 会合并）。丢掉历史这一条会让顺序与「只有 history」不一致。
     items.push(item);
   }
 
   const claimByRun = new Map(claims.map((claim) => [claim.runId, claim]));
+  // 已落盘的 assistant 参考（reasoning_content）：live 的同文思考段让位，避免重复。
+  const claimedReasoning = new Set<string>();
+  for (const message of history.messageByIndex.values()) {
+    const reasoning = (message as { reasoning_content?: string }).reasoning_content;
+    if (typeof reasoning === 'string' && reasoning.trim().length > 0) {
+      claimedReasoning.add(normalizeText(reasoning));
+    }
+  }
+  // 已落盘的 assistant 正文：live 的同文段不再单独成 item（它就是那条消息）。
+  const claimedTexts = new Set<string>();
+  for (const absIndex of claimedAssistant) {
+    const content = history.contentByIndex.get(absIndex);
+    if (content !== undefined && content.length > 0) claimedTexts.add(normalizeText(content));
+  }
+  // 每个 run 的最后一段正文（streaming 的尾巴算最后一段）。
+  const lastTextKeyByRun = new Map<string, string>();
+  for (const item of live) {
+    if (item.kind === 'run-text') lastTextKeyByRun.set(item.runId, item.key);
+  }
   for (const item of live) {
     const runId = 'runId' in item ? item.runId : undefined;
     // 用户输入已被历史消息认领：历史那条负责渲染，run 侧气泡丢弃（绝不两个气泡）。
@@ -742,6 +812,11 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
       items.push(item);
       continue;
     }
+    // 这段正文对应的 assistant 消息已经落盘 → 由历史消息负责渲染（位置、key、操作按钮
+    // 都是历史的），live 只在前者不存在时出现。**不改 key、不合并**，所以
+    // order(live+history) 的 key 序列与 order(history only) 一致。
+    if (item.kind === 'run-text' && claimedTexts.has(normalizeText(item.text))) continue;
+    if (item.kind === 'run-reasoning' && claimedReasoning.has(normalizeText(item.text))) continue;
     const claimedUser = claimedUserByRun.get(claim.runId);
     const claimedUserTs =
       claimedUser === undefined ? undefined : history.messageByIndex.get(claimedUser)?.timestamp;
@@ -774,7 +849,8 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     });
   }
 
-  const ordered = mergeByKey(items)
+  const historyKeys = new Set(history.items.map((item) => item.key));
+  const ordered = mergeByKey(items, historyKeys)
     .map((item, index) => ({ item, index }))
     .sort((a, b) => compareTimelineEntries(a.item, b.item, a.index, b.index))
     .map(({ item }) => item);
