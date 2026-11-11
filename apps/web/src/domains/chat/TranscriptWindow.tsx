@@ -176,7 +176,7 @@ export function TranscriptWindow({
   }, [transcriptWindow.shown.length, getElement, requestEarlier]);
 
   // 可见窗口首条消息的 ts：比它更早的 live item 由 buildTranscriptItems 夹到末尾
-  // （turn 锚点 / 窗口夹取 / 伪 run 拆条都在那里，由 check-timeline-order + 本模块门禁守）。
+  // （turn 锚点 / 窗口夹取 / 伪 run 拆条都在那里，由 check-transcript-items 守）。
   const windowStartTs = transcriptWindow.shown[0]?.timestamp;
 
   // 单一 item 流：历史消息、live 事件、排队提交先合成 item，再按 kind 选组件渲染。
@@ -378,7 +378,7 @@ export function TranscriptWindow({
           {/* 0.18：历史消息与实时 run 的展开项共享同一个列表，没有 run 边界；
               0.50：实时节点按 run 起始时间插进历史消息之间，不再整块追加在末尾。
               hydrate 期间先只给 LoadingState：重放会先灌进来一批准 live 组，
-              详情到达后再被 `isGroupPersisted` 收掉，看起来就是「闪现 + 跳跃」。 */}
+              详情到达后再被认领（transcript-items.ts）收掉，看起来就是「闪现 + 跳跃」。 */}
           {items.length > 0 ? (
             <Transcript
               items={items}

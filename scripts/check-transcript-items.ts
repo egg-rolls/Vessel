@@ -1045,6 +1045,175 @@ const FIXTURES: readonly Fixture[] = [
       return messages.length === 1 && source === 'simplify-core@n1:vessel';
     },
   },
+  // --- 迁移自 scripts/check-timeline-order.ts（它守护的 orderTimelineEntries 已删除） ---
+  // 旧门禁把一条 run 当作一个排序单位；单一 item 流按 item 拆开，所以这里的 key 是
+  // run:<runId>:input / run:<runId>:text:0，断言的是同一批不变量。
+  {
+    name: 'O1（原 F1）run 起始早于用户消息 → 本轮输出仍在消息之后',
+    why: 'core 先发 run.started 再给用户消息打 timestamp；只按 run 起始时间排会把本轮输出顶到用户消息上方',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [msg('user', '帮我跑 tsc', { timestamp: 1000 })],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r1',
+            input: '帮我跑 tsc',
+            startedAt: 999,
+            firstSeq: 11,
+            items: [textItem('好的', 'k1')],
+          }),
+        ],
+        queued: [],
+      });
+      const text = items.find((item) => item.kind === 'run-text');
+      return (
+        keys(items).join(',') === 'msg:0,run:r1:text:0' && text !== undefined && text.ts === 1001
+      );
+    },
+  },
+  {
+    name: 'O3a（原 F3a）running 且自己没有 ts → 回落到最后一条用户消息之后',
+    why: 'guardrail 改写正文后认领失败；仍在跑的 run 不能因此沉底（弱下限只对没有自身 ts 的 item 生效）',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('assistant', '上一轮答复', { timestamp: 900 }),
+          msg('user', 'hello', { timestamp: 1000 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [group({ runId: 'r1', input: '被改写过的输入' })],
+        queued: [],
+      });
+      const input = items.find((item) => item.kind === 'run-input');
+      return (
+        keys(items).join(',') === 'msg:0,msg:1,run:r1:input' &&
+        input !== undefined &&
+        input.ts === 1001
+      );
+    },
+  },
+  {
+    name: 'O3b（原 F3b）已终态且自己没有 ts → 不回落',
+    why: '已终态 run 不拿最后一条用户消息兜底，否则历史轮次的失败/取消卡会被拽到当前轮',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'hello', { timestamp: 1000 }),
+          msg('assistant', 'hi', { timestamp: 1500 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [group({ runId: 'r-old', input: '被改写过的输入', status: 'completed' })],
+        queued: [],
+      });
+      const input = items.find((item) => item.kind === 'run-input');
+      return (
+        keys(items).join(',') === 'msg:0,msg:1,run:r-old:input' &&
+        input !== undefined &&
+        input.ts === undefined
+      );
+    },
+  },
+  {
+    name: 'O5（原 F5，语义反转）早于窗口首条的 run 保留真实 ts，不再沉底',
+    why: '旧的窗口夹取（把更早的节点 ts 抹成 undefined 沉到末尾）已废：它会让旧卡排到新卡后面，屏幕上时间倒序',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'q1', { timestamp: 5000 }),
+          msg('assistant', 'a1', { timestamp: 5500 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'run-stale',
+            input: '很早以前的问题',
+            startedAt: 4000,
+            firstSeq: 51,
+            status: 'completed',
+          }),
+        ],
+        queued: [],
+        windowStartTs: 5000,
+      });
+      const input = items.find((item) => item.kind === 'run-input');
+      return (
+        keys(items).join(',') === 'run:run-stale:input,msg:0,msg:1' &&
+        input !== undefined &&
+        input.ts === 4000
+      );
+    },
+  },
+  {
+    name: 'O6（原 F6）同 ts 用 seq 回退，不被插入顺序左右',
+    why: '同毫秒落位的 live item 必须有确定先后（wire seq），不能被入参顺序左右',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'q1', { timestamp: 1000 }),
+          msg('user', 'q2', { timestamp: 2000 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'run-b',
+            startedAt: 2000,
+            firstSeq: 62,
+            items: [{ kind: 'text', text: 'b', key: 'kb', startedAt: 2000 }],
+          }),
+          group({
+            runId: 'run-a',
+            startedAt: 2000,
+            firstSeq: 61,
+            items: [{ kind: 'text', text: 'a', key: 'ka', startedAt: 2000 }],
+          }),
+        ],
+        queued: [],
+      });
+      return keys(items).join(',') === 'msg:0,msg:1,run:run-a:text:0,run:run-b:text:0';
+    },
+  },
+  {
+    name: 'O7（原 F7，迁移缺口）缺 timestamp 的历史消息当前沉到末尾',
+    why: '旧门禁要求缺 ts 的消息沿用前一条时间；单一 item 流不做这个 carry，msg:1 没有 ts 就排最后。补上 carry 后把这条翻成 msg:0,msg:1,msg:2 且 ts 沿用 1000。',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'q1', { timestamp: 1000 }),
+          msg('assistant', 'legacy'),
+          msg('user', 'q2', { timestamp: 2000 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [group({ runId: 'run-2', input: 'q2', startedAt: 1900, firstSeq: 71 })],
+        queued: [],
+      });
+      const legacy = items.find((item) => item.kind === 'message' && item.absIndex === 1);
+      return (
+        keys(items).join(',') === 'msg:0,msg:2,msg:1' && legacy !== undefined && legacy.ts === undefined
+      );
+    },
+  },
+  {
+    name: 'O8（原 F8，迁移缺口）vessel:* 上下文消息当前被当作 turn 锚点',
+    why: '旧门禁要求模型侧上下文（vessel:*）不参与 turn 锚点；现在最后一条 user 消息的 ts 也算它，running 且无自身 ts 的 run 被拖到它后面（3001）。修掉后把这条翻成 msg:0,run:r1:input,msg:1 且 ts 1001。',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'q1', { timestamp: 1000 }),
+          msg('user', '[inbox] 3 unread', { name: 'vessel:notice', timestamp: 3000 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [group({ runId: 'r1', input: '被改写过的输入' })],
+        queued: [],
+      });
+      const input = items.find((item) => item.kind === 'run-input');
+      return (
+        keys(items).join(',') === 'msg:0,msg:1,run:r1:input' &&
+        input !== undefined &&
+        input.ts === 3001
+      );
+    },
+  },
 ];
 
 const failures: { name: string; why: string }[] = [];

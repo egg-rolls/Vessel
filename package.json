@@ -49,7 +49,6 @@
     "check": "bunx @biomejs/biome check .",
     "check:prompt-prefix": "bun run scripts/check-prompt-prefix.ts",
     "check:web-styles": "bun run scripts/check-web-styles.ts",
-    "check:timeline-order": "bun run scripts/check-timeline-order.ts",
     "check:chat-visibility": "bun run scripts/check-chat-visibility.ts",
     "check:history-tools": "bun run scripts/check-history-tools.ts",
     "check:transcript-items": "bun run scripts/check-transcript-items.ts"

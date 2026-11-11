@@ -86,7 +86,6 @@ bun run scripts/release-dry-run.ts
 
 - **能机械判定的规则写成门禁**：不变量要有 owner（谁守）、oracle（怎么判真）与门禁层级；没有门禁的只能标成建议。
 - **不要只看退出码**：本机（WSL → Windows bun）实测 `process.exit(3)` 与未捕获异常都返回 `0`。判定一律看输出文本（`Found N error` / `FAIL` / `passed`），或把断言写进输出里；CI 的 Linux bun 才会按退出码生效。历史上因此漏过 `check-docs` 的「文档行数超上限」。
-- **Web 时间线顺序门禁**：`bun run check:timeline-order`（`scripts/check-timeline-order.ts`）。排序实现唯一在 `apps/web/src/domains/chat/timeline-order.ts`（纯函数，无 React / DOM），fixture 覆盖 turn 钳制、同文多轮、伪 run 组逐条落位、窗口夹取、同 ts 回退、缺时间戳沿用；改排序前先跑它。
 - **Web 时间线可见性门禁**：`bun run check:chat-visibility`（`scripts/check-chat-visibility.ts`）。`minimal / normal / debug` 的判定唯一在 `apps/web/src/domains/chat/chat-visibility.ts`，live 与 history 必须共用；fixture 断言「运行中与已终态判定一致」（旧 bug 是 live 藏、history 落盘后冒出来）。
 - **历史工具配对门禁**：`bun run check:history-tools`（`scripts/check-history-tools.ts`）。`apps/web/src/domains/chat/history-tools.ts` 按 `tool_call_id` 把 assistant 的 `tool_calls[]` 与 `role:'tool'` 配对；fixture 钉死「有调用无结果不得空白」「孤立结果不丢输出」。时间线卡片的唯一表示层是 `domains/chat/StreamCard.tsx`（运行态与终止态共用）。它是**唯一**被批准的测试形态（纯函数 + 可机械判定的不变量 + 能进 CI），不要照着扩成浏览器测试。
 - **不变量分两级**：硬不变量零容忍；软不变量用 baseline + delta，只要求不新增；例外必须有 owner 与到期日，不做永久 allowlist。

@@ -1,8 +1,9 @@
 /**
  * 事件模型（纯函数）：按 run_id 分组，把 `llm.stream.chunk` 的 text_delta
- * 拼成文本块、reasoning_delta 拼成独立的思考块，并在历史已落盘时抑制重复的 live 卡片。
+ * 拼成文本块、reasoning_delta 拼成独立的思考块。去重不在这里：live 与 history 的
+ * 同一个逻辑对象由 domains/chat/transcript-items.ts 的认领合并。
  */
-import type { Message, RunEvent, SessionDetail, StreamChunk } from '../gateway/types';
+import type { RunEvent, StreamChunk } from '../gateway/types';
 import {
   type ErrorMeta,
   type ErrorVisibility,
@@ -472,42 +473,6 @@ export function startedRunIds(entries: readonly StoredEvent[]): ReadonlySet<stri
     if (entry.event.type === 'run.started') ids.add(entry.event.run_id);
   }
   return ids;
-}
-
-/** 只保留属于某个会话的 run 分组。 */
-export function groupsForSession(groups: readonly RunGroup[], sessionId: string): RunGroup[] {
-  return groups.filter((group) => group.sessionId === sessionId);
-}
-
-/**
- * 已完成 run 的 live 卡片是否应隐藏（历史里已经有同一条用户输入 + 最终输出）。
- * 无法确认输出已落盘时保留卡片，避免 hydrate 失败时整个 run 消失。
- *
- * **去重契约（时间线合并的唯一去重键）**：`sessions.get` 的已提交消息与 ws 缓冲里的
- * live 事件必然是同一份内容的两条来源，只允许渲染一份。判据固定为
- * `(status === 'completed') ∧ (run.input ∈ user 消息) ∧ (run.output ⊆ assistant 消息)`；
- * 缺任一项就保留 live 卡片（宁可重一次，也不能把 run 吞掉）。
- * 用户输入的重复显示由 `hideInput`（TranscriptWindow）用同一 key 的 input 半边兜住；
- * 因此**不要**在渲染层另外引入按时间/文本相似度的去重，会和这里漂移。
- */
-/**
- * @deprecated 被  的「认领」（domains/chat/transcript-items.ts）取代：
- * 去重改成按 key 合并同一个逻辑对象，而不是猜「这条 run 是否已落盘」。
- * 该导出只为旧调用点保留；不要在渲染层再叠加第二套去重。
- */
-export function isGroupPersisted(group: RunGroup, detail: SessionDetail | null): boolean {
-  if (group.status !== 'completed' || !detail) return false;
-  const messages: Message[] = detail.messages;
-  const input = group.input?.trim();
-  const userSaved = !input || messages.some((m) => m.role === 'user' && m.content.trim() === input);
-  if (!userSaved) return false;
-  const output = group.output?.trim();
-  if (!output) return false;
-  return messages.some(
-    (m) =>
-      m.role === 'assistant' &&
-      (m.content.trim() === output || (output.length >= 8 && m.content.includes(output))),
-  );
 }
 
 /** 事件类型 → 时间线标签与颜色类名。 */
