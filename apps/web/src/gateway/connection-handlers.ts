@@ -163,16 +163,21 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   const offHello = client.onHello((info) => {
     // 订阅 epoch：服务端每次成功 subscribe 都先发 hello；它只重置本地事件库，
     // 不 bump 连接 epoch（否则切路由会无谓重拉 session / team 详情）。
-    const subscriptionHello = subscription.consumeHello();
+    //
+    // 三种 hello：连接级 / 订阅 epoch / 回填页。回填页是控制器为补更早区间自己发的
+    // `until_seq` 订阅，它既不改游标也不该 reset 连接态（那一段的游标归回填管）。
+    const helloKind = subscription.consumeHello(info);
+    if (helloKind === 'page') return;
     // hello 是本地事件 epoch 的唯一边界：从本次实际首条 seq 之前重置。
-    // 有界回放会从窗口首条开始；被跳过的区间由随后的 gap 告知。
+    // 有界回放会从窗口首条开始；被跳过的区间由随后的 gap 告知（chat 订阅另有回填）。
     // 只截断到本次 epoch 的首条之前：已有条目留在屏上，回放再把窗口补回来
     // （旧的「先清空」会让整条时间线消失一帧 —— 整页闪烁 + 跳底）。
+    // 回填期间是空操作：游标已经由 `EventStore#beginBackfill` 退到订阅起点。
     eventStore.truncateAfter(Math.max(0, info.from_seq - 1));
     setTokenError(null);
     setGatewayError(null);
     setLastError(null);
-    if (subscriptionHello) return;
+    if (helloKind === 'subscribe') return;
     attempt = 0;
     setReconnectAttempt(0);
     setHello(info);
@@ -184,6 +189,14 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   const offGap = client.onGap((gap) => {
     // gap = 该区间无法从实时流恢复；静默处理，不重连、不提示。
     // 页面感知不到截断：正文由 sessions.get / teams.get 的权威快照补回。
+    //
+    // 两种 gap 不能一视同仁：
+    // - 实时缺口（背压丢帧）：`to_seq` 在当前游标之上，退游标是对的；
+    // - 回填页/旧区间的缺口：`to_seq` 低于当前游标，退回去只会把已经收到的更新内容
+    //   截掉（刷新后尤其致命），忽略即可 —— 那一段由回填循环按 hello.from_seq 继续往
+    //   更早拉，拉不到就是环形缓冲已经淘汰。
+    if (eventStore.backfilling) return;
+    if (gap.to_seq < eventStore.currentSeq) return;
     // 同作用域内的游标重对齐：保留 ≤ to_seq 的条目，不做整表清空。
     eventStore.truncateAfter(gap.to_seq);
     recovery.invalidateRouteSnapshot();

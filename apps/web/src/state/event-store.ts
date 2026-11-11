@@ -10,6 +10,10 @@
  * - **锚点事件不参与按 run 裁剪**：`run.started` / `user.message` / 终态事件承载
  *   `session_id`、`input`、`status`，裁掉就会让整段 live run 从会话时间线消失（见
  *   `RUN_ANCHOR_EVENT_TYPES`）。`session_id` 另外按 run 记住，裁剪后仍能归属会话。
+ * - **回填暂存**（`beginBackfill` / `endBackfill`）：有界回放的窗口只有最新 1 MiB /
+ *   2000 条，更早那一段要由客户端带 `until_seq` 逐页拉回；页是「新→旧」到达的，而
+ *   这里的时间线只接受递增 seq。所以回填期间帧先攒在暂存区，拉完再按 seq 升序一次性
+ *   经 `push()` 并入 —— 去重与增量合并始终只有这一条路径。
  */
 import type { RunEvent } from '../gateway/types';
 import type { StoredEvent } from './events';
@@ -40,9 +44,20 @@ export const RUN_ANCHOR_EVENT_TYPES: ReadonlySet<string> = new Set([
   'run.cancelled',
 ]);
 
+/** run 的起点事件：回填是否已经接上「这一轮的开头」按它判。 */
+function isRunHeadEvent(type: string): boolean {
+  return type === 'run.started' || type === 'user.message';
+}
+
 export interface EventMeta {
   seq: number;
   jobId?: string;
+}
+
+/** 回填暂存的一帧（见 `EventStore#beginBackfill`）。 */
+interface HeldEvent {
+  event: RunEvent;
+  meta: EventMeta;
 }
 
 export interface EventStoreSnapshot {
@@ -103,6 +118,10 @@ export class EventStore {
    * “谁最后写的”推断归属，必须有显式、可清除的作用域。
    */
   private scopeSession: string | undefined;
+  /** 回填暂存区（见 `beginBackfill`）；非空期间 `push` 只入暂存，不动时间线。 */
+  private held: HeldEvent[] = [];
+  /** 回填游标地板；非 null = 正在回填。 */
+  private holdFloor: number | null = null;
   private truncated = new Set<string>();
   /** 待发布到下一份快照的裁剪增量；flush 后清空。 */
   private truncatedSince = new Set<string>();
@@ -183,7 +202,15 @@ export class EventStore {
   }
 
   push(event: RunEvent, meta: EventMeta): boolean {
-    if (!Number.isFinite(meta.seq) || meta.seq <= this.lastSeq) return false;
+    if (!Number.isFinite(meta.seq)) return false;
+    if (this.holdFloor !== null) {
+      // 回填期间：更早的分段还在路上，先按到达顺序攒着（`endBackfill` 会按 seq 升序
+      // 重新送进这条路径）。落在地板或更旧的帧属于回填页的职责，这里不重复收。
+      if (meta.seq <= this.holdFloor) return false;
+      this.held.push({ event, meta: { ...meta } });
+      return true;
+    }
+    if (meta.seq <= this.lastSeq) return false;
     // 相邻同 kind 的流式增量先合并：per-run 上限按「段」计数，而不是按 delta 计数。
     // （真实 run 有 177 轮 / 70k completion tokens ≈ 数万 delta 事件，按 delta 计数时
     //  上限会把**最早**的 thinking 段整段挤出去 —— 思考过程「凭空消失」的根因。）
@@ -248,7 +275,15 @@ export class EventStore {
     for (const entry of this.entries) {
       if (this.ownerOf(entry) === sessionId) runIds.add(entry.event.run_id);
     }
-    if (runIds.size === 0) return 0;
+    // 回填暂存里也可能有该会话的帧（帧先到、会话后撤回）：同一判定过滤掉。
+    const heldBefore = this.held.length;
+    if (heldBefore > 0) {
+      this.held = this.held.filter((item) => {
+        const owner = eventSessionId(item.event) ?? this.scopeSession;
+        return !(owner === sessionId || (owner === undefined && runIds.has(item.event.run_id)));
+      });
+    }
+    if (runIds.size === 0) return heldBefore - this.held.length;
 
     const before = this.entries.length;
     const removedRunIds = new Set<string>();
@@ -294,8 +329,12 @@ export class EventStore {
    * 会让 `EventGroupCache` 走整表重建，`truncatedSince` 保证局部重建路径同样不留
    * 陈旧 bucket（否则 bucket 里会留着被丢掉的尾部 item）。
    * `scopeSession` 不变（同一作用域不变量）。
+   *
+   * **回填期间是空操作**：那段时间游标由 `beginBackfill` / `endBackfill` 管理，
+   * 外侧的 hello / gap 截断会把暂存帧的落点踩坏（更早的分页还没到）。
    */
   truncateAfter(nextSeq: number): number {
+    if (this.holdFloor !== null) return 0;
     // entries 按 seq 升序：二分出第一条 seq > nextSeq。
     let low = 0;
     let high = this.entries.length;
@@ -332,14 +371,93 @@ export class EventStore {
   }
 
   /**
+   * 断线重连 / 刷新后的**回填暂存**：把游标退到 `floorSeq`（本轮订阅的 `since`，
+   * 丢掉那些会被更早分页重新送达的尾部），之后到达的帧先攒起来。
+   *
+   * 为什么必须暂存：有界回放只给最新 1 MiB / 2000 条，更早的那一段要由客户端带
+   * `until_seq` 逐页拉回；页是「新→旧」到达的，而这里的时间线只接受递增 seq。
+   * 攒完再一次性按 seq 升序并入 `push()`，去重与增量合并仍然只有这一条路径
+   * （不新增第二套合并，也不做乱序插入）。
+   *
+   * 期间 `truncateAfter` 是空操作：游标只由本方法与 `endBackfill` 推进。
+   */
+  beginBackfill(floorSeq: number): void {
+    this.truncateAfter(floorSeq);
+    this.held = [];
+    this.holdFloor = floorSeq;
+  }
+
+  /**
+   * 结束回填暂存：把攒下的帧按 seq 升序经 `push()` 并入（重复 seq 自然被忽略），
+   * 时间线从地板一路接到最新，中间不留空洞。
+   */
+  endBackfill(): void {
+    if (this.holdFloor === null) return;
+    this.holdFloor = null;
+    const held = this.held;
+    this.held = [];
+    if (held.length === 0) return;
+    held.sort((a, b) => a.meta.seq - b.meta.seq);
+    for (const item of held) this.push(item.event, item.meta);
+  }
+
+  /** 是否正处于回填暂存（分段拉取）期间。 */
+  get backfilling(): boolean {
+    return this.holdFloor !== null;
+  }
+
+  /**
+   * 回填终止判定：**最新一条事件所属 run** 的起点（`run.started`）是否已经在缓冲里
+   * （含回填暂存）。
+   *
+   * 历史由 `sessions.get` 提供，而它在 run 开始时就把本轮的用户消息写进了
+   * `SessionState.messages`；所以刷新后唯一缺的就是「当前 run 的开头」。拿到它的
+   * `run.started` 就说明重放已经接上历史，不必再往更早的分页拉。
+   *
+   * 传 `sessionId` 时只看该会话的条目：多会话节点上别的会话也在跑，不能拿它的 run
+   * 当判据（否则会跳过本会话真正缺的那一段）。
+   */
+  hasNewestRunStart(sessionId?: string): boolean {
+    const sameSession = (owner: string | undefined): boolean =>
+      sessionId === undefined || owner === sessionId;
+    let newestSeq = -1;
+    let newestRun = '';
+    for (const entry of this.entries) {
+      if (entry.seq <= newestSeq) continue;
+      if (!sameSession(this.ownerOf(entry))) continue;
+      newestSeq = entry.seq;
+      newestRun = entry.event.run_id;
+    }
+    for (const item of this.held) {
+      if (item.meta.seq <= newestSeq) continue;
+      if (!sameSession(eventSessionId(item.event) ?? this.scopeSession)) continue;
+      newestSeq = item.meta.seq;
+      newestRun = item.event.run_id;
+    }
+    if (newestRun === '') return false;
+    for (const entry of this.entries) {
+      if (entry.event.run_id !== newestRun) continue;
+      if (isRunHeadEvent(entry.event.type)) return true;
+    }
+    for (const item of this.held) {
+      if (item.event.run_id !== newestRun) continue;
+      if (isRunHeadEvent(item.event.type)) return true;
+    }
+    return false;
+  }
+
+  /**
    * 真清空缓冲（换节点 / 断开连接 / 订阅作用域变化 / gateway 重启）。
    *
    * **不变量**：`scopeSession` 不随 clear 变化 —— 作用域由 `setScopeSession()` 负责，
    * 清空只处理条目。`runSessions`（run→session 自报映射）清空：它只是当前缓冲窗口的
    * 派生数据，重新回放/接收时重建；作用域不依赖它。
+   * 回填暂存一并丢弃（作用域都变了，更早的分页也没有意义）。
    */
   clear(nextSeq = 0): void {
     this.entries = [];
+    this.held = [];
+    this.holdFloor = null;
     this.runCounts.clear();
     this.runSessions.clear();
     this.truncated.clear();
@@ -376,6 +494,8 @@ export class EventStore {
 
   destroy(): void {
     this.cancelTimer();
+    this.held = [];
+    this.holdFloor = null;
     this.listeners.clear();
   }
 

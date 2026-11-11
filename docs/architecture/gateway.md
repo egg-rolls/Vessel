@@ -19,7 +19,7 @@ paths: [packages/serve/src/**, packages/serve/src/gateway/**, src/serve-auth.ts,
 - 客户端帧：`auth`（首帧，`{ kind: 'auth', token, since? }`）、`req`（`id` + `method` + `params`）、`pong`。
 - **首帧鉴权**：token 不进 WS URL / query；连接后 5s 内未收到合法 `auth` → 关闭码 4401。auth 不接受 `tenant_id`。
 - `seq` 由 gateway 分配；环形缓冲默认保留 10000 条（只是抖动缓冲，不是历史）。客户端记录 `lastSeq`，重连用 `?since=` 或 `auth.since` 续订。
-- **有界回放与 gap**：单次回放对**过滤后**的事件从最新往回取，≤ 1 MiB / 2000 条；更早区间与环形缺口合并成一个 `gap`（`to_seq = max(环形缺口.to_seq, 窗口 skippedTo)`）。`gap` 表示该区间无法从实时流恢复；新客户端按 `eventStore.reset(to_seq)` + RPC 快照处理，不为此重连。TUI / 旧 Web 仍用 `to_seq` 重连，有界窗口下会收敛，不会形成重连风暴。
+- **有界回放与 gap**：单次回放对**过滤后**的事件从最新往回取，≤ 1 MiB / 2000 条；更早区间与环形缺口合并成一个 `gap`（`to_seq = max(环形缺口.to_seq, 窗口 skippedTo)`）。`gap` 表示该区间无法从实时流恢复；新客户端按 `eventStore.truncateAfter(to_seq)` + RPC 快照处理，不为此重连。窗口之外但仍在环形缓冲里的更早区间可带 `until_seq`（能力位 `events.replay-range`）逐页回退，每页同样受上面的预算约束。TUI / 旧 Web 仍用 `to_seq` 重连，有界窗口下会收敛，不会形成重连风暴。
 - **会话级订阅**：`events.subscribe` 支持 `session_id`，SSE 支持 `?session_id=`；事件满足 `data.session_id` 或 gateway 维护的 `run_id → session_id` 归属（内存 LRU 5000，回放期按 seq 顺序重建）才发送，归属不到则不发（fail-closed）。`types` 条目以 `*` 结尾按前缀匹配，空数组等价于未提供。空字符串 `session_id`（同空 `run_id`）按「过滤掉一切」处理，**不**等同于未提供。能力位 `events.session-filter` 用于新客户端对旧 gateway 降级。
 - **since / pong / seq 回退**：客户端收到 `ping` 回 `pong`；收到 `gap` 后重置本地事件库并按上述语义恢复；`hello.latest_seq < lastSeq` 时从 `since=0` 重新对齐。重连指数退避 1s → 30s 加 jitter；10s 未收到 `hello` 视为失败并重连；`close()` 清理全部定时器。
 - **跨节点事件**：`event.node_id` 优先于顶层 `node_id`；远端事件由 `(node_id, wire seq)` 去重后回灌。wire seq 按各节点 / 连接分配，**没有全局序**。

@@ -375,6 +375,15 @@ interface WsData {
   runId?: string;
   sessionId?: string;
   types?: string[];
+  /**
+   * 回填页上界（additive `until_seq`）：只对**下一次** subscribe epoch 生效。
+   *
+   * 有界回放从最新往回取，单次最多 1 MiB / 2000 条；客户端拿到
+   * `hello.from_seq` / `gap` 后可以带 `until_seq = from_seq - 1` 再订阅一次，
+   * 把更早的那一段单独拉回来，逐页回退直到覆盖它需要的区间。
+   * 一次性：`applyWsSubscribe` 用完即清，实时广播也不受它约束。
+   */
+  until?: number;
   /** 0.48 M3：插件 WS 连接；存在时该 WS 不进入 `wsClients`。 */
   pluginWs?: PluginWsConnection;
 }
@@ -393,6 +402,9 @@ const WS_BACKPRESSURE_LOW = 512 * 1024;
  * 一次 `since=0` 全量回放可能是数百 MB。慢客户端必然触发背压丢帧 → gap →
  * 重连 → 再全量回放，形成永远追不上最新事件的循环。从最新往回取到预算为止，
  * 既保证「最新消息先到」，也把单次回放压到高水位以下。
+ *
+ * 预算之外更早的区间不再「不可恢复」：客户端带 `until_seq` 逐页回退（能力位
+ * `events.replay-range`），每页同样受这里的预算约束 —— 分段，而不是把预算调大。
  */
 const REPLAY_BUDGET_BYTES = 1024 * 1024;
 /** 回放条数兜底：小事件很多时按条数收口。 */
@@ -460,6 +472,8 @@ const DEFAULT_MAX_BODY = 1024 * 1024;
 
 const BASE_FEATURES = [
   'events.replay',
+  // 分段回放（additive `until_seq`）：客户端可逐页拉回有界窗口之外更早的区间。
+  'events.replay-range',
   'events.session-filter',
   'permissions',
   'tools',
@@ -1061,8 +1075,34 @@ export function startGateway(opts: GatewayOptions): Gateway {
     replaySessions: Map<string, string>;
   }
 
+  /**
+   * 把环形缺口裁进 `until` 以内：回填页只说明「本次请求区间里没发出去的那段」，
+   * 不重复上报更早（不在本次请求范围）的缺口。区间整个落在缺口里时返回 undefined
+   * （本页无内容），由 `fromSeq = until + 1` 告诉调用方「这里没有可拉取的事件」。
+   */
+  function boundGap(gap: EventGap | null, until: number | undefined): EventGap | undefined {
+    if (gap === null) return undefined;
+    if (until === undefined || gap.to_seq <= until) return gap;
+    if (gap.from_seq > until) return undefined;
+    return { from_seq: gap.from_seq, to_seq: until };
+  }
+
+  /**
+   * 空窗口时的 `from_seq`：有 `until` = 「本页已覆盖到上界」（本段没有可发的事件），
+   * 否则按旧语义「已追平 = latest + 1 / 空缓冲 = 0」。
+   */
+  function emptyFromSeq(until: number | undefined): number {
+    if (until !== undefined) return until + 1;
+    return hub.latestSeq === 0 ? 0 : hub.latestSeq + 1;
+  }
+
   function planReplay(ws: Ws): ReplayPlan {
-    const source = hub.since(ws.data.since);
+    // 分段回放（additive `until_seq`）：把回放源裁成 `since < seq <= until`。
+    // 窗口仍是有界的（从 until 往回取 1 MiB / 2000 条），所以一页 = 一段更早的
+    // 历史；缺省 undefined 时与旧语义逐字节等价。
+    const until = ws.data.until;
+    const all = hub.since(ws.data.since);
+    const source = until === undefined ? all : all.filter((item) => item.seq <= until);
     // 归属先按 seq 顺序扫描完整回放源：窗口裁剪后仍能识别 run.started。
     const replaySessions = buildRunSessions(source);
     const filtered = source.filter((item) => wsAccepts(ws, item.event, replaySessions));
@@ -1070,11 +1110,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const window = tailReplayWindow(filtered, (item) =>
       serializeEventFrame({ ...item, event: withSessionAttribution(item.event, replaySessions) }),
     );
-    const ringGap = hub.gapFor(ws.data.since) ?? undefined;
+    const ringGap = boundGap(hub.gapFor(ws.data.since), until);
     return {
       ...window,
       ...(ringGap !== undefined ? { ringGap } : {}),
-      fromSeq: window.frames[0]?.item.seq ?? (hub.latestSeq === 0 ? 0 : hub.latestSeq + 1),
+      fromSeq: window.frames[0]?.item.seq ?? emptyFromSeq(until),
       replaySessions,
     };
   }
@@ -1286,6 +1326,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
           session_id: { type: 'string' },
           // 条目以 `*` 结尾 = 前缀匹配；空数组等价于未提供。
           types: { type: 'array', items: { type: 'string' } },
+          // 分段回放（additive）：只回放 `seq <= until_seq` 的区间，用于把有界窗口
+          // 之外的更早历史分页拉回。缺省 = 原语义（从 since 到最新，仍有界）。
+          until_seq: { type: 'integer', minimum: 0 },
         },
       },
       result_schema: {
@@ -1555,7 +1598,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       : undefined;
     // 空数组等价于未提供：修正旧实现「空数组拒收一切」的歧义。
     if (ws.data.types !== undefined && ws.data.types.length === 0) ws.data.types = undefined;
-    return resubscribeTo(ws);
+    // 回填页上界（additive `until_seq`）：一次性，用完即清 —— 下一次 subscribe 不带
+    // 它就回到原语义（从 since 到最新），实时广播从来不受它约束。
+    const untilParam = params.until_seq;
+    ws.data.until = typeof untilParam === 'number' && untilParam >= 0 ? untilParam : undefined;
+    const fromSeq = resubscribeTo(ws);
+    ws.data.until = undefined;
+    return fromSeq;
   }
 
   /**
@@ -2523,6 +2572,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // SSE：只读事件流（EventSource 无法带 header，使用 ?token=）
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
         const since = parseSince(url.searchParams.get('since'));
+        // 分段回放（additive，与 WS `until_seq` 同义）：只回放 `seq <= until_seq`。
+        const until = parseSince(url.searchParams.get('until_seq')) || undefined;
         const sseRunId = url.searchParams.get('run_id') ?? undefined;
         const sseSessionId = url.searchParams.get('session_id') ?? undefined;
         const typeList = (url.searchParams.get('types') ?? '')
@@ -2562,21 +2613,24 @@ export function startGateway(opts: GatewayOptions): Gateway {
               sseClients.set(ctrl, clientState);
 
               // 先算窗口再写 hello：hello.from_seq 必须是本次实际会发送的第一条。
+              // 分段回放（additive `until_seq`）：窗口终点裁到 until，窗口之后仍由
+              // pull 一路拉到最新（SSE 本来就是前向分批回放，不是「尾部窗口之后就丢」）。
               const source = hub.since(since);
-              sseReplaySessions = buildRunSessions(source);
+              const bounded =
+                until === undefined ? source : source.filter((item) => item.seq <= until);
+              sseReplaySessions = buildRunSessions(bounded);
               const window = tailReplayWindow(
-                source.filter((item) => accepts(item.event)),
+                bounded.filter((item) => accepts(item.event)),
                 (item) =>
                   serializeEventFrame({
                     ...item,
                     event: withSessionAttribution(item.event, sseReplaySessions),
                   }),
               );
-              const fromSeq =
-                window.frames[0]?.item.seq ?? (hub.latestSeq === 0 ? 0 : hub.latestSeq + 1);
+              const fromSeq = window.frames[0]?.item.seq ?? emptyFromSeq(until);
               writeSse(ctrl, clientState, 'retry: 3000\n\n');
               writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(fromSeq))}\n\n`);
-              const ringGap = hub.gapFor(since);
+              const ringGap = boundGap(hub.gapFor(since), until);
               const gapTo = Math.max(ringGap?.to_seq ?? 0, window.skippedTo ?? 0);
               if (gapTo > 0) {
                 writeSse(
