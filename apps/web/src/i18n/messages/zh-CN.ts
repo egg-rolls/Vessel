@@ -1075,6 +1075,18 @@ export const messages = {
   'chat.notice.finalizeFailed': 'run 收尾失败 · 阶段 {phase} · {error}',
   'chat.notice.guardrailError': 'guardrail 异常 · {name} · 阶段 {stage} · {error}',
   'chat.notice.runtime': '系统提示 · {kind}',
+  // 环境信息卡（vessel:notice 的默认形态）：与底层系统信息并存，但这是给人看的那种。
+  'chat.env.aria': '环境信息',
+  'chat.env.scope.config': '配置',
+  'chat.env.scope.permission': '权限',
+  'chat.env.scope.tools': '工具',
+  'chat.env.scope.mcp': 'MCP',
+  'chat.env.scope.update': '更新',
+  'chat.env.scope.peer': '成员',
+  'chat.env.scope.context': '上下文',
+  'chat.env.count': '{count} 条',
+  'chat.env.notApplied': '未生效',
+  'chat.env.moreLines': '还有 {count} 行未显示',
   // agent→agent 消息卡（A2A 投递进来的那条 user 消息）
   'chat.agentMessage.from': '来自 agent {name}',
   'chat.agentMessage.group': '来自 agent {name} 的消息',

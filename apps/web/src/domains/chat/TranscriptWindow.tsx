@@ -12,6 +12,7 @@ import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/ses
 import { AgentMessageCard } from './AgentMessageCard';
 import { ChatWelcome } from './ChatWelcome';
 import { NoticeRow } from './EventRow';
+import { envNoticeBarClass } from './env-notice';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { QueuedNotice, type QueuedSubmission, UserBubble } from './StreamItems';
@@ -262,8 +263,53 @@ export function TranscriptWindow({
         );
       case 'notice':
         return <NoticeRow event={item.event} defaultOpen={cardsDefaultOpen} />;
-      case 'runtime-notice':
-        // 运行时提示（vessel:notice / source / 裸 [inbox]…）：notice 卡，不是用户气泡。
+      case 'runtime-notice': {
+        const env = item.env;
+        if (env !== undefined) {
+          // 环境信息卡（vessel:notice）：scope 语义色条 + 一行摘要 + 最多 10 行可展开 details。
+          // 复用同一张 runtime-notice 卡（StreamCard），不引入新卡片组件。
+          return (
+            <StreamCard
+              className={`env-notice-card runtime-notice-card w-full min-w-0 max-w-full rounded-r-sm border-l-2 ${envNoticeBarClass(env.scope, env.ok)}`}
+              tone={env.ok ? 'info' : 'danger'}
+              defaultOpen={cardsDefaultOpen}
+              expandable={env.lines.length > 1}
+              ariaLabel={t('chat.env.aria')}
+              title={
+                <span className="font-mono text-2xs tracking-wider text-accent">
+                  {t(`chat.env.scope.${env.scope}`)}
+                  {!env.ok && (
+                    <span className="ml-1.5 text-danger">{t('chat.env.notApplied')}</span>
+                  )}
+                </span>
+              }
+              {...(env.count > 1 ? { meta: t('chat.env.count', { count: env.count }) } : {})}
+              summary={env.lines[0]?.text}
+            >
+              <ul className="m-0 flex shrink-0 list-none flex-col gap-1 px-2.5 pb-2">
+                {env.lines.slice(1).map((line) => (
+                  <li
+                    className="min-w-0 break-words whitespace-pre-wrap wrap-anywhere text-sm text-muted"
+                    // 行身份由 env-notice.ts 在构建/折叠时按卡内序号重编（同一张卡内唯一），
+                    // 不在渲染层用数组下标当 key。
+                    key={`${item.key}:${line.id}`}
+                  >
+                    {!line.ok && (
+                      <span className="mr-1.5 text-danger">{t('chat.env.notApplied')}</span>
+                    )}
+                    {line.text}
+                  </li>
+                ))}
+                {env.droppedLines !== undefined && (
+                  <li className="min-w-0 text-2xs text-faint">
+                    {t('chat.env.moreLines', { count: env.droppedLines })}
+                  </li>
+                )}
+              </ul>
+            </StreamCard>
+          );
+        }
+        // 其它运行时提示（vessel:source / subscription …）：沿用整段文本的 notice 卡。
         return (
           <StreamCard
             className="runtime-notice-card w-full min-w-0 max-w-full"
@@ -281,6 +327,7 @@ export function TranscriptWindow({
             </p>
           </StreamCard>
         );
+      }
       case 'queued':
         return (
           <QueuedNotice

@@ -21,6 +21,12 @@
 import type { Message, RunEvent } from '../../gateway/types';
 import type { RunGroup } from '../../state/events';
 import { agentSenderOfName } from './agent-sender';
+import {
+  type EnvNoticeCard,
+  envNoticeCard,
+  isEnvNoticeKind,
+  mergeEnvNoticeCards,
+} from './env-notice';
 import { buildHistoryToolItems } from './history-tools';
 import { compareTimelineEntries } from './timeline-order';
 import { type ChatRenderItem, foldToolItems, type ToolCardStatus } from './tool-cards';
@@ -54,7 +60,10 @@ export interface MessageItem extends ItemMeta {
  * 运行时提示（`vessel:notice` / `vessel:source` / 裸文本 `[inbox] …`）的可见形态。
  *
  * 它是**独立的 item kind**（不是 message）：这样它不可能落进用户气泡分支，
- * 与 hook 通知 / 原始事件行共用 notice 卡的观感。默认档由 `isHidden` 整条隐藏。
+ * 与 hook 通知 / 原始事件行共用 notice 卡的观感。
+ *
+ * 两种显示方式（用户裁决）：`env` 有值 = 「环境信息」卡（默认可见，`vessel:notice`，
+ * 见 `env-notice.ts`）；没有 `env` 的仍按 `isHidden` 跟随 `ui.showInternalEvents`。
  */
 export interface RuntimeNoticeItem extends ItemMeta {
   kind: 'runtime-notice';
@@ -63,6 +72,8 @@ export interface RuntimeNoticeItem extends ItemMeta {
   text: string;
   /** 该消息的绝对下标（可回链到 sessions.get，便于将来做详情/跳转）。 */
   absIndex?: number;
+  /** 环境信息卡的解析结果（scope / 摘要 / 展开行 / 折叠条数）；非 notice 没有。 */
+  env?: EnvNoticeCard;
 }
 
 export interface RunInputItem extends ItemMeta {
@@ -395,12 +406,16 @@ export function buildHistoryIndex(
     // 文本，按文本判定会把它吞成系统提示（隐藏或渲成通知卡）。
     const noticeKind = noticeKindOf?.(message);
     if (noticeKind !== undefined) {
+      // 环境信息（vessel:notice）：解析成卡片数据（scope 色条 / 缩略 / 展开行）。
+      // 解析失败（空正文 / 纯空白）时 env 缺省，渲染回退成整段文本的 notice 卡。
+      const env = isEnvNoticeKind(noticeKind) ? envNoticeCard(message.content) : undefined;
       items.push({
         kind: 'runtime-notice',
         key: `notice:${absIndex}`,
         noticeKind,
         text: message.content,
         absIndex,
+        ...(env !== undefined ? { env } : {}),
         ...(messageTs !== undefined ? { ts: messageTs } : {}),
       });
       return;
@@ -885,7 +900,37 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     .sort((a, b) => compareTimelineEntries(a.item, b.item, a.index, b.index))
     .map(({ item }) => item);
 
-  return withSpeakerRuns(ordered);
+  return foldAdjacentEnvNotices(withSpeakerRuns(ordered));
+}
+
+/**
+ * 相邻同 scope 的环境信息卡折叠成一张（卡头显示「N 条」，展开看全部行）。
+ *
+ * 为什么需要：配置热应用一次可能连着发好几条同 scope 通知，逐张卡片会把时间线刷屏。
+ * 口径与 `pending-strip` 的同源折叠一致 —— **纯展示**合并：行不删、顺序不变，
+ * 折叠后的卡仍站在**第一条**的位置（位置由该消息自己的 ts 决定，见上面的 ItemMeta）。
+ *
+ * 只折「相邻且同 scope」：中间夹了别的 item（正文 / 工具卡 / 别的 scope）就不合并，
+ * 否则会把时间线上的因果顺序讲错（一条配置通知与它之后的回复之间插了别的 scope）。
+ */
+function foldAdjacentEnvNotices(items: readonly TranscriptItem[]): TranscriptItem[] {
+  const out: TranscriptItem[] = [];
+  for (const item of items) {
+    const previous = out[out.length - 1];
+    if (
+      item.kind === 'runtime-notice' &&
+      item.env !== undefined &&
+      previous !== undefined &&
+      previous.kind === 'runtime-notice' &&
+      previous.env !== undefined &&
+      previous.env.scope === item.env.scope
+    ) {
+      out[out.length - 1] = { ...previous, env: mergeEnvNoticeCards(previous.env, item.env) };
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
 }
 
 /**

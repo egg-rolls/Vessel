@@ -1117,6 +1117,19 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.finalizeFailed': 'run finalize failed · phase {phase} · {error}',
   'chat.notice.guardrailError': 'guardrail error · {name} · phase {stage} · {error}',
   'chat.notice.runtime': 'System notice · {kind}',
+  // Environment card (the default shape of vessel:notice): coexists with raw system
+  // events, but this is the human-facing mode.
+  'chat.env.aria': 'Environment',
+  'chat.env.scope.config': 'Config',
+  'chat.env.scope.permission': 'Permission',
+  'chat.env.scope.tools': 'Tools',
+  'chat.env.scope.mcp': 'MCP',
+  'chat.env.scope.update': 'Update',
+  'chat.env.scope.peer': 'Peer',
+  'chat.env.scope.context': 'Context',
+  'chat.env.count': '{count} items',
+  'chat.env.notApplied': 'not applied',
+  'chat.env.moreLines': '{count} more lines not shown',
   // agent-to-agent message card (the user message an A2A delivery becomes)
   'chat.agentMessage.from': 'from agent {name}',
   'chat.agentMessage.group': 'Message from agent {name}',

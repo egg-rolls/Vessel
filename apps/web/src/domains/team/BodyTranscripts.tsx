@@ -12,6 +12,7 @@ import {
   useRuntimeVisibility,
 } from '../../state/runtime-visibility';
 import { resourceData, useResource } from '../../state/useResource';
+import { envNoticeBarClass, envNoticeCard, isEnvNoticeKind } from '../chat/env-notice';
 import type { MemberDetailClient } from './member-detail-types';
 
 export function SessionTranscript({ messages }: { messages: readonly Message[] }) {
@@ -46,6 +47,28 @@ export function SessionTranscript({ messages }: { messages: readonly Message[] }
             {t('team.message.systemTag')}
           </span>
           <span>{message.content}</span>
+        </div>,
+      );
+      continue;
+    }
+    // 环境信息（vessel:notice）默认可见后，这里也不能把它画成成员说的话：
+    // 与聊天时间线同一份解析（scope 色条 + 原文），只是不展开 details。
+    const env = isEnvNoticeKind(kind) ? envNoticeCard(message.content) : undefined;
+    if (env !== undefined) {
+      nodes.push(
+        <div
+          className={`flex min-w-0 flex-col gap-0.5 rounded-r-sm border-l-2 bg-sunken px-2.5 py-1.5 ${envNoticeBarClass(env.scope, env.ok)}`}
+          key={key}
+        >
+          <span className="font-mono text-2xs tracking-wider text-accent">
+            {t(`chat.env.scope.${env.scope}`)}
+            {env.count > 1 && (
+              <span className="ml-1.5 text-faint">{t('chat.env.count', { count: env.count })}</span>
+            )}
+          </span>
+          <span className="min-w-0 break-words whitespace-pre-wrap wrap-anywhere text-sm text-muted">
+            {env.lines.map((line) => line.text).join('\n')}
+          </span>
         </div>,
       );
       continue;
