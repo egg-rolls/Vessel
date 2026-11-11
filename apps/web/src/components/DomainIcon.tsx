@@ -22,6 +22,14 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <path d="M3.5 4.5h13v9h-7l-4 3v-3h-2z" />
         </svg>
       );
+    case 'pending':
+      // 收件箱：一个开口盒子 + 一条待处理横线。
+      return (
+        <svg {...common}>
+          <path d="M3.2 11.5 5.6 4.5h8.8l2.4 7v4H3.2z" />
+          <path d="M3.2 11.5h3.6l.9 1.8h4.6l.9-1.8h3.6" />
+        </svg>
+      );
     case 'hub':
       return (
         <svg {...common}>

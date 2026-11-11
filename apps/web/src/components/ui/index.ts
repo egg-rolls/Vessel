@@ -4,6 +4,7 @@ export {
 } from './AutoGrowTextarea';
 export { Badge, type BadgeProps, type BadgeTone } from './Badge';
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
+export { CountBadge, type CountBadgeProps, type CountBadgeTone } from './CountBadge';
 export { cn } from './cn';
 export {
   DataTable,

@@ -89,6 +89,7 @@ export function askFromEvent(event: RunEvent, now = Date.now()): AskUserRequest 
     questions?: unknown;
     session_id?: unknown;
     parent_session_id?: unknown;
+    team_id?: unknown;
   };
   const rawId = data.requestId ?? data.request_id;
   if (typeof rawId !== 'string' || rawId.length === 0) return null;
@@ -111,6 +112,9 @@ export function askFromEvent(event: RunEvent, now = Date.now()): AskUserRequest 
       : {}),
     ...(typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
       ? { parentSessionId: data.parent_session_id }
+      : {}),
+    ...(typeof data.team_id === 'string' && data.team_id.length > 0
+      ? { teamId: data.team_id }
       : {}),
     ...(agentId !== undefined ? { agentId } : {}),
   };

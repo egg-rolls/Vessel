@@ -1,6 +1,7 @@
 /** 主导航单项：核心 domain 与插件页面共用同一渲染。 */
 import { DomainIcon } from '../components/DomainIcon';
 import { Tooltip } from '../components/Tooltip';
+import { CountBadge } from '../components/ui';
 import { cn } from '../components/ui/cn';
 import { t } from '../i18n';
 import type { NavItemModel } from './nav-model';
@@ -23,9 +24,10 @@ export function NavItem({
   const statusText = status ? t(status.labelKey) : '';
   // 版本未知时**不渲染占位**：一个孤零零的 — 会被读成“坏了”，而它只表示“还没探测到”。
   const versionText = status?.version ? `v${status.version}` : undefined;
-  const tooltip = status
-    ? [item.title, statusText, versionText].filter((part) => part !== undefined).join(' · ')
-    : item.title;
+  const countText = item.count !== undefined ? t('nav.count', { count: item.count }) : undefined;
+  const tooltip = [item.title, statusText, countText, versionText]
+    .filter((part) => part !== undefined && part !== '')
+    .join(' · ');
 
   const button = (
     <button
@@ -46,7 +48,7 @@ export function NavItem({
         <span
           className={cn(
             'min-w-0 overflow-hidden text-ellipsis whitespace-nowrap',
-            status && 'flex-1',
+            (status !== undefined || item.count !== undefined) && 'flex-1',
           )}
         >
           {item.title}
@@ -67,6 +69,14 @@ export function NavItem({
             </span>
           )}
         </>
+      )}
+      {!collapsed && item.count !== undefined && (
+        <CountBadge
+          className="ml-auto"
+          count={item.count}
+          label={countText ?? item.title}
+          tone={item.active ? 'accent' : 'muted'}
+        />
       )}
     </button>
   );

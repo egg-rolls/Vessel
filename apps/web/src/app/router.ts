@@ -7,6 +7,8 @@
 
 export type Route =
   | { domain: 'chat'; sessionId?: string; agent?: string }
+  /** 待批（ask_user 汇集）：`#/pending[?session=<id>]`，session 只用于默认展开。 */
+  | { domain: 'pending'; sessionId?: string }
   | { domain: 'runs'; tab: 'live' | 'durable'; runId?: string; sessionId?: string }
   | { domain: 'tools' }
   | { domain: 'mcp' }
@@ -79,6 +81,11 @@ export function parseRoute(hash: string): Route {
         ...(sessionId ? { sessionId } : {}),
         ...(agent ? { agent } : {}),
       };
+    }
+    case 'pending': {
+      // 只接受 `?session=<id>` 作为默认展开提示；无值即「总的」。
+      const focus = queryText(query, 'session');
+      return { domain: 'pending', ...(focus ? { sessionId: focus } : {}) };
     }
     case 'runs': {
       const tab = pick<'live' | 'durable'>(query.get('tab'), RUN_TABS, 'live');
@@ -196,6 +203,10 @@ export function formatRoute(route: Route): string {
       const suffix = query.toString();
       const base = route.sessionId ? `#/chat/${encodeURIComponent(route.sessionId)}` : '#/chat';
       return suffix ? `${base}?${suffix}` : base;
+    }
+    case 'pending': {
+      if (!route.sessionId) return '#/pending';
+      return `#/pending?${new URLSearchParams({ session: route.sessionId }).toString()}`;
     }
     case 'runs': {
       const query = new URLSearchParams({ tab: route.tab });

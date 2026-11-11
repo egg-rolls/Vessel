@@ -15,6 +15,8 @@ export function SessionRail({
   selectedId,
   draftActive,
   pendingBySession,
+  pendingAskCount,
+  onOpenPending,
   agentAddresses,
   defaultSession,
   primarySessionIds,
@@ -45,6 +47,9 @@ export function SessionRail({
   selectedId: string | null;
   draftActive: boolean;
   pendingBySession: ReadonlyMap<string, number>;
+  /** 当前会话待回答的 ask_user 条数；0 时不渲染「待批」入口。 */
+  pendingAskCount?: number;
+  onOpenPending?: () => void;
   agentAddresses: ReadonlyMap<string, string>;
   defaultSession?: { sessionId: string; label: string; bodyCount: number };
   primarySessionIds: ReadonlySet<string>;
@@ -89,6 +94,8 @@ export function SessionRail({
           selectedId={selectedId}
           draftActive={draftActive}
           pendingBySession={pendingBySession}
+          {...(pendingAskCount !== undefined ? { pendingAskCount } : {})}
+          {...(onOpenPending !== undefined ? { onOpenPending } : {})}
           agentAddresses={agentAddresses}
           defaultSession={defaultSession}
           primarySessionIds={primarySessionIds}

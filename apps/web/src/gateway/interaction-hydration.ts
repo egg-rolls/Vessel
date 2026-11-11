@@ -141,6 +141,12 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
       requestedAt: item.created_at,
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(item.parent_session_id ? { parentSessionId: item.parent_session_id } : {}),
+      // 待批页按 agent 聚类：服务端已经给了 agent_id / team_id，这里不要丢掉，
+      // 否则刷新 / 重连后补回的卡片只能退化成按会话聚类。
+      ...(item.agent_id !== undefined && item.agent_id.length > 0
+        ? { agentId: item.agent_id }
+        : {}),
+      ...(item.team_id !== undefined && item.team_id.length > 0 ? { teamId: item.team_id } : {}),
     });
   }
 

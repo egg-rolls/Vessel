@@ -6,6 +6,7 @@
  */
 export * from './Badge';
 export * from './Button';
+export * from './CountBadge';
 export { CARD_SURFACE_CLASS } from './card-surface';
 export { cn } from './cn';
 export * from './DataTable';

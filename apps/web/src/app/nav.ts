@@ -14,6 +14,7 @@ export interface DomainDef {
  */
 export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'chat' },
+  { id: 'pending' },
   { id: 'agents' },
   { id: 'teams' },
   { id: 'nodes' },
@@ -32,13 +33,13 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
 
 /**
  * 桌面侧栏分组；只影响导航展示，不改变路由。
- * Chat 组承载会话与团队；编排组只剩 Agents → Nodes。
+ * Chat 组承载会话、待批与团队；编排组只剩 Agents → Nodes。
  */
 export const NAV_GROUPS: readonly {
   id: string;
   domains: readonly PrimaryDomain[];
 }[] = [
-  { id: 'chat', domains: ['chat', 'teams'] },
+  { id: 'chat', domains: ['chat', 'pending', 'teams'] },
   { id: 'network', domains: ['agents', 'nodes'] },
   { id: 'runs', domains: ['runs'] },
   { id: 'integrations', domains: ['capabilities', 'tools', 'mcp', 'channels'] },
@@ -51,6 +52,8 @@ export function primaryRoute(domain: PrimaryDomain): Route {
   switch (domain) {
     case 'chat':
       return { domain: 'chat' };
+    case 'pending':
+      return { domain: 'pending' };
     case 'hub':
       return { domain: 'hub' };
     case 'gateway':
@@ -101,6 +104,8 @@ export function routeBreadcrumb(route: Route): string {
   switch (route.domain) {
     case 'chat':
       return route.sessionId ? t('breadcrumb.chat.session') : t('breadcrumb.chat');
+    case 'pending':
+      return t('breadcrumb.pending');
     case 'runs': {
       const tab =
         route.tab === 'durable' ? t('breadcrumb.runs.durable') : t('breadcrumb.runs.live');

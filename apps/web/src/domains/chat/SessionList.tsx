@@ -4,7 +4,7 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
-import { Button, Input, SearchInput, SidebarShell } from '../../components/ui';
+import { Button, CountBadge, Input, SearchInput, SidebarShell } from '../../components/ui';
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -39,6 +39,8 @@ export function SessionList({
   selectedId,
   draftActive,
   pendingBySession,
+  pendingAskCount,
+  onOpenPending,
   agentAddresses,
   defaultSession,
   primarySessionIds,
@@ -67,6 +69,10 @@ export function SessionList({
   draftActive: boolean;
   /** 每个会话的待处理权限/提问数量；其他会话只显示徽标，不渲染卡片。 */
   pendingBySession?: ReadonlyMap<string, number>;
+  /** 当前会话待回答的 ask_user 条数（会话分区「待批」按钮的计数）。 */
+  pendingAskCount?: number;
+  /** 打开待批汇集页（带当前会话作为默认展开项）。 */
+  onOpenPending?: () => void;
   /** session_id → `name@node:team`；只包含显式 member 的当前节点 roster。 */
   agentAddresses?: ReadonlyMap<string, string>;
   /**
@@ -173,6 +179,17 @@ export function SessionList({
       title={t('chat.sessionList.title')}
       actions={
         <>
+          {pendingAskCount !== undefined && pendingAskCount > 0 && onOpenPending !== undefined && (
+            <Button
+              type="button"
+              size="small"
+              onClick={onOpenPending}
+              aria-label={t('pending.entry.label', { count: pendingAskCount })}
+            >
+              {t('pending.entry')}
+              <CountBadge count={pendingAskCount} />
+            </Button>
+          )}
           <Button type="button" size="small" variant="primary" onClick={onNew}>
             {t('chat.sessionList.new')}
           </Button>

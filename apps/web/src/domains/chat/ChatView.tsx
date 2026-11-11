@@ -15,6 +15,7 @@ import { t } from '../../i18n';
 import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
 import { useAgentStore } from '../../stores/agentStore';
+import { asksForSession } from '../pending/cluster';
 import { PluginPanels } from '../plugins/PluginPanels';
 import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
@@ -81,6 +82,11 @@ export function ChatView({
 
   const selectedId = route.sessionId && route.sessionId !== 'new' ? route.sessionId : null;
   const draftActive = route.sessionId === 'new';
+  // 会话分区的「待批」计数：只数本会话（含成员 bridge 的父会话归属）的 ask_user。
+  const sessionAskCount = useMemo(
+    () => asksForSession(asks, selectedId).length,
+    [asks, selectedId],
+  );
 
   // 草稿态不再本地造 session id：首次发送由 `runs.start` 解析 main primary body。
   const pendingNewSessions = useRef(new Set<string>());
@@ -306,6 +312,10 @@ export function ChatView({
         selectedId={selectedId}
         draftActive={draftActive}
         pendingBySession={sessionsApi.pendingBySession}
+        pendingAskCount={sessionAskCount}
+        onOpenPending={() =>
+          navigate({ domain: 'pending', ...(selectedId ? { sessionId: selectedId } : {}) })
+        }
         agentAddresses={sessionsApi.agentAddresses}
         defaultSession={sessionsApi.defaultSessionEntry}
         primarySessionIds={sessionsApi.primarySessionIds}

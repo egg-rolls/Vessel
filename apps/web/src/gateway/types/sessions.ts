@@ -104,6 +104,11 @@ export interface AskUserRequest {
   parentSessionId?: string;
   /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */
   agentId?: string;
+  /**
+   * 成员 bridge 请求所属 Team（`interactions.list` 的 `team_id` / 事件 `team_id`）。
+   * 用于「待批」页区分会话面与团队面；旧流缺失时按会话面处理。
+   */
+  teamId?: string;
 }
 
 /** 权限应答范围（DECISION-024 §2.1）。 */

@@ -15,6 +15,7 @@ import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
 import { DomainNav } from './DomainNav';
 import { defaultNavCollapsed, navModeForWidth } from './layout';
+import type { PrimaryDomain } from './nav';
 import { routeBreadcrumb } from './nav';
 import { readNavPreference, writeNavPreference } from './nav-preference';
 import { buildPaletteItems } from './palette-items';
@@ -82,6 +83,11 @@ export function AppShell() {
     [permissions, route],
   );
   const otherAsks = useMemo(() => pendingPermissionsOutsideView(asks, route), [asks, route]);
+  // 侧栏「待批」计数：只数 ask_user（权限通道仍独立走自己的入口）。
+  const navCounts = useMemo<Partial<Record<PrimaryDomain, number>>>(
+    () => ({ pending: asks.length }),
+    [asks],
+  );
   // compact bar 只跳会话；应答仍在目标会话的 Composer 槽位完成。
   const openPendingSession = useCallback(
     (sessionId: string) => navigate({ domain: 'chat', sessionId }),
@@ -336,6 +342,7 @@ export function AppShell() {
             onToggleCollapsed={toggleNavCollapsed}
             navRef={navDrawerRef}
             panes={panes}
+            counts={navCounts}
           />
           <main
             id="main"

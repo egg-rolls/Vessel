@@ -42,6 +42,21 @@
 
 不要改成 `@import "tailwindcss"`——那会引入 preflight 并改变既有视觉。
 
+## 待批（ask_user 汇集）
+
+`ask_user` 的待答请求有三条展示面，数据同源（`useInteractionStore` 的 pending ask），
+互不替代，不要在某一面里重复实现另一面的职责：
+
+1. **会话**：Composer 槽位的 `AskCard`（原同步等待语义不变），会话栏头部「待批」按钮带当前会话计数；
+2. **团队**：`TeamPendingBar`（成员会话的请求）；
+3. **本页（`#/pending`，「待批」）**：所有来源的总汇集，按 agent（无则会话、再退 run）聚簇，
+   同簇勾选后「一起提交」= 一次用户动作，每条 ask 各一次 `ask.respond`。
+   应答不新建 run：等待中的 `ask_user` 拿到结果后原 run 继续（见 `domains/pending/usePendingBatch.ts`）。
+
+问题正文是文本：markdown 图片语法只有同源路径 / `data:image/*` 会渲染成图片
+（CSP 是 `img-src 'self' data:`），其余与裸链接一样降级成链接。权限通道
+（`tool.permission`）仍走自己的卡片，不汇入本页。
+
 ## L1：token
 
 值只写在 `styles/tokens.css`；`index.css` 的 `@theme inline` 只做别名
@@ -85,6 +100,7 @@
 | -------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `Button`                                                                         | `components/ui/Button.tsx`           | `variant`: `plain` / `primary` / `danger` / `dangerGhost` / `link` / `chip`；`size`: `normal` / `small`；`type` 固定 `button`，forwardRef |
 | `Badge`                                                                          | `components/ui/Badge.tsx`            | 行内短标签；`tone`: `neutral` / `accent` / `info` / `warn` / `danger` / `success`                                                         |
+| `CountBadge`                                                                     | `packages/plugin-ui/src/CountBadge.tsx` | 纯数字徽标（`count` / `max` 默认 99 / `label` / `tone`: `muted` / `accent`）；`count <= 0` 渲染 `null`；默认 muted —— 计数是元信息，不抢主题色 |
 | `SearchInput`                                                                    | `components/ui/SearchInput.tsx`      | `value` + `onChange(value)` + `placeholder` + `ariaLabel`；容器可用 `className` 追加布局                                                  |
 | `cn`                                                                             | `components/ui/cn.ts`                | `clsx` + `tailwind-merge`；从 `components/ui` 导出                                                                                        |
 | `ModalShell` / `useModalA11y`                                                    | `components/Modal.tsx`               | 初始焦点、Tab 圈、Esc、关闭后归还焦点、body 滚动锁引用计数；`size`: `sm` / `md` / `lg`                                                    |

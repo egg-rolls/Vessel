@@ -7,6 +7,7 @@ import { panelsForSlot, usePluginContributions } from '../domains/plugins/usePlu
 import { t, useLocale } from '../i18n';
 import type { NavMode } from './layout';
 import { NavGroup } from './NavGroup';
+import type { PrimaryDomain } from './nav';
 import { buildNavModel } from './nav-model';
 import type { Route } from './router';
 import { useNavStatus } from './useNavStatus';
@@ -48,6 +49,7 @@ export function DomainNav({
   onToggleCollapsed,
   navRef,
   panes,
+  counts,
 }: {
   route: Route;
   navigate: (route: Route) => void;
@@ -57,6 +59,8 @@ export function DomainNav({
   onToggleCollapsed?: () => void;
   navRef?: Ref<HTMLElement>;
   panes: PaneResizeApi;
+  /** 核心项右侧计数（待批）；由外壳注入，侧栏不自己拉 pending 数据。 */
+  counts?: Partial<Record<PrimaryDomain, number>>;
 }) {
   const locale = useLocale();
   const {
@@ -77,6 +81,7 @@ export function DomainNav({
     i18nByPlugin,
     locale,
     statuses,
+    ...(counts !== undefined ? { counts } : {}),
   });
 
   const drawer = mode === 'drawer';

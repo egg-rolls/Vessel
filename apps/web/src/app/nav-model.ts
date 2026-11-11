@@ -28,6 +28,8 @@ export interface NavItemModel {
   route: Route;
   active: boolean;
   status?: NavStatusMeta;
+  /** 待处理计数（待批等）。元信息：用 muted 徽标，不抢主题色。 */
+  count?: number;
 }
 
 export interface NavGroupModel {
@@ -56,8 +58,14 @@ function statusOf(domain: PrimaryDomain, statuses: NavStatuses): NavStatusMeta |
   return undefined;
 }
 
-function coreItem(domain: PrimaryDomain, route: Route, statuses: NavStatuses): NavItemModel {
+function coreItem(
+  domain: PrimaryDomain,
+  route: Route,
+  statuses: NavStatuses,
+  counts?: Partial<Record<PrimaryDomain, number>>,
+): NavItemModel {
   const status = statusOf(domain, statuses);
+  const count = counts?.[domain];
   return {
     id: `domain:${domain}`,
     title: domainLabel(domain),
@@ -65,6 +73,7 @@ function coreItem(domain: PrimaryDomain, route: Route, statuses: NavStatuses): N
     route: primaryRoute(domain),
     active: isDomainActive(route, domain),
     ...(status ? { status } : {}),
+    ...(count !== undefined && count > 0 ? { count } : {}),
   };
 }
 
@@ -107,6 +116,7 @@ export function buildNavModel({
   i18nByPlugin,
   locale,
   statuses,
+  counts,
 }: {
   route: Route;
   pluginPages: readonly PluginPageItem[];
@@ -114,6 +124,8 @@ export function buildNavModel({
   i18nByPlugin: ReadonlyMap<string, PluginI18n>;
   locale: string;
   statuses: NavStatuses;
+  /** 核心项右侧计数（目前只有待批）；缺省不渲染徽标。 */
+  counts?: Partial<Record<PrimaryDomain, number>>;
 }): NavGroupModel[] {
   const groups: NavGroupModel[] = [];
   const push = (group: NavGroupModel) => {
@@ -130,7 +142,7 @@ export function buildNavModel({
   });
 
   NAV_GROUPS.forEach((group, index) => {
-    const items = group.domains.map((domain) => coreItem(domain, route, statuses));
+    const items = group.domains.map((domain) => coreItem(domain, route, statuses, counts));
     // 旧 `observe` 槽位并入 orchestration 组；旧 `status` key 并入 core。
     if (group.id === 'network')
       items.push(...pagesFor(pluginPages, 'observe', route, i18nByPlugin, locale));

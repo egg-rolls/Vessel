@@ -7,6 +7,7 @@ import { HubView } from '../domains/hub/HubView';
 import { CapabilityView } from '../domains/integrations/CapabilityView';
 import { NodePanelView } from '../domains/nodes/NodePanelView';
 import { ObserveView } from '../domains/observe/ObserveView';
+import { PendingView } from '../domains/pending/PendingView';
 import { PluginHostView } from '../domains/plugins/PluginHostView';
 import { PluginPageView } from '../domains/plugins/PluginPageView';
 import { RunsView } from '../domains/runs/RunsView';
@@ -57,6 +58,9 @@ export function ShellRouteView({
         </ToolCatalogProvider>
       )}
       {route.domain === 'hub' && <HubView />}
+      {route.domain === 'pending' && (
+        <PendingView {...(route.sessionId ? { sessionId: route.sessionId } : {})} />
+      )}
       {route.domain === 'gateway' && <GatewayView navigate={navigate} />}
       {route.domain === 'pluginHost' && <PluginHostView />}
       {route.domain === 'nodes' && <NodePanelView route={route} navigate={navigate} />}
