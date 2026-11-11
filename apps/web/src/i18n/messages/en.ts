@@ -240,7 +240,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.run.stopping': 'Stopping…',
   'chat.run.detail': 'View run details',
   'chat.run.noError': '(no error details)',
-  'chat.run.expand': 'Show',
   'chat.run.retryable': 'Retryable',
   'chat.run.hiddenEarlier':
     'Showing the latest {shown} runs; open run details for the earlier {hidden}.',

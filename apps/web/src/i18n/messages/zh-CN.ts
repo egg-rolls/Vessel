@@ -239,7 +239,6 @@ export const messages = {
   'chat.run.stopping': '停止中…',
   'chat.run.detail': '查看运行详情',
   'chat.run.noError': '（无错误详情）',
-  'chat.run.expand': '展开',
   'chat.run.retryable': '可重试',
   'chat.run.hiddenEarlier': '已显示最近 {shown} 个运行；更早的 {hidden} 个请在运行详情中查看。',
   // 0.52：会话时间线里的失败卡（同一次 run 只有一张）
