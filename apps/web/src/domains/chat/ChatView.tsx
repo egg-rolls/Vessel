@@ -424,6 +424,7 @@ export function ChatView({
             entries={snapshot.entries}
             snapshotVersion={snapshot.version}
             detailSessionId={sessionsApi.sessionDetail?.session_id}
+            sendTick={submitApi.sendTick}
             onRetryDetail={transcriptApi.reloadDetail}
             onLoadEarlier={transcriptApi.loadEarlier}
             onCancelQueued={(runId) => void submitApi.handleCancelQueued(runId)}

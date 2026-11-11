@@ -5,6 +5,7 @@
  * - 距底 ≤ 阈值视为 pinned；只有 pinned 时新内容才跟随。
  * - 打开 / 切换会话先等 `scrollHeight` 稳定（双帧）再贴底，避免布局未稳停半路。
  * - 跟随不做 smooth / 不堆积动画；节流由 `beginFollow` 返回的 delay 表达。
+ * - 发送被受理时强制贴底（`stickToBottom('send')`）：瞬间到位并恢复跟随，不等新内容落地。
  * - 未 pinned 时 ResizeObserver 变化不抢位置。
  */
 
@@ -12,6 +13,9 @@ export const STICKY_BOTTOM_THRESHOLD_PX = 96;
 export const STICKY_FOLLOW_INTERVAL_MS = 100;
 /** 布局一直不稳定时的兜底：最多等 ~500ms（30 帧）。 */
 export const STICKY_SETTLE_MAX_FRAMES = 30;
+
+/** 贴底的语义原因：目前只有「发送」；语义差异集中在此类型上，不在调用点分叉。 */
+export type StickyBottomReason = 'send';
 
 export interface StickyScrollBox {
   readonly scrollHeight: number;
@@ -155,6 +159,18 @@ export class StickyBottomController {
     if (!this.pinnedValue) return false;
     this.jump();
     return true;
+  }
+
+  /**
+   * 语义化贴底（「发送即贴底」）：瞬间到位并 pin，后续流式内容继续跟随。
+   *
+   * 与 `smoothToBottom` 的分工是「谁要求的」：smooth 只留给显式点击「回到底部」；
+   * 发送是用户动作、目的是看最新内容，动画反而让新内容在动画期间从视口外滑过。
+   * 走 `jump` 因此完全不用动画，`prefers-reduced-motion` 天然满足（无需额外分支）。
+   * 幂等：连续发送只是把 `scrollTop` 收敛到同一个底部，不产生二次位移。
+   */
+  stickToBottom(_reason: StickyBottomReason = 'send'): void {
+    this.jump();
   }
 
   /** 「回到底部」按钮：smooth 只用于显式点击。 */

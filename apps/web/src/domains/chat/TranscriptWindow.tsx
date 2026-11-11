@@ -37,6 +37,7 @@ const AUTO_PAGE_BUDGET = 20;
  *
  * 吸附滚动见 `useStickyBottom`：打开/切会话等布局稳定后贴底；pinned 时跟随
  * 新内容（~100ms 节流、无 smooth）；用户上滚脱离；加载更早历史不触发贴底。
+ * 发送受理（`sendTick`）是唯一会强制贴底的非内容事件：立即到位并恢复跟随。
  *
  * 历史分页是**无感**的：没有「加载更早」按钮，也没有「仅显示最近 N 条」提示；
  * 滚到顶部阈值内自动前插一页，并用 `scrollHeight` 差值回填 `scrollTop` 保住视觉锚点。
@@ -73,6 +74,7 @@ export function TranscriptWindow({
   entries,
   snapshotVersion,
   detailSessionId,
+  sendTick,
   onRetryDetail,
   onLoadEarlier,
   onCancelQueued,
@@ -126,6 +128,8 @@ export function TranscriptWindow({
   entries: readonly StoredEvent[];
   snapshotVersion: number;
   detailSessionId: string | undefined;
+  /** 发送受理序号（每次受理自增）：变化即贴底，见 `useStickyBottom` 的 `sendTick`。 */
+  sendTick: number;
   onRetryDetail: () => void;
   onLoadEarlier: () => void;
   onCancelQueued: (runId: string) => void;
@@ -142,6 +146,7 @@ export function TranscriptWindow({
     useStickyBottom({
       resetKey,
       followKey,
+      sendTick,
     });
 
   // 前插锚点：请求前记录 (scrollHeight, scrollTop)，布局落地后按高度差回填 scrollTop。

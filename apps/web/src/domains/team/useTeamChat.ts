@@ -78,6 +78,12 @@ export function useTeamChat({
   );
   const [sends, setSends] = useState<LocalSend[]>([]);
   const [sending, setSending] = useState(false);
+  /**
+   * 「发送即贴底」序号：每受理一次发送自增（send / resend 共用 `submitContent`）。
+   * TeamChatMain 把它传给 `useStickyBottom({ sendTick })` → 立即贴底并恢复跟随，
+   * 不必等 `teams.get` 轮询把新消息带回来。只是计数器，不参与发送语义。
+   */
+  const [sendTick, setSendTick] = useState(0);
   const [retryHint, setRetryHint] = useState(false);
   const [messages, setMessages] = useState<TeamMessage[]>(() =>
     initialDetail ? sortMessages(initialDetail.messages) : [],
@@ -349,6 +355,8 @@ export function useTeamChat({
     setSends((prev) => [...prev, { localId, content, mentions, ts, status: 'sending' }]);
     setSending(true);
     sendingRef.current = true;
+    // 受理即贴底：不等 teams.get 往返 / 轮询，乐观条目一出现就在视野里。
+    setSendTick((value) => value + 1);
 
     try {
       const result = await postTeam(client, { team_id: teamId, content, mentions });
@@ -496,6 +504,8 @@ export function useTeamChat({
     retryHint,
     setRetryHint,
     sending,
+    /** 发送受理序号：交给 `useStickyBottom({ sendTick })` 做发送即贴底。 */
+    sendTick,
     handleSend,
     handleRetry,
     editMessage,

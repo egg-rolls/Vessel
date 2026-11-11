@@ -47,6 +47,7 @@ export function TeamChat(props: TeamChatProps) {
     retryHint,
     setRetryHint,
     sending,
+    sendTick,
     handleSend,
     handleRetry,
     editMessage,
@@ -132,6 +133,7 @@ export function TeamChat(props: TeamChatProps) {
           onChipsChange={setChips}
           onSend={() => void handleSend()}
           sending={sending}
+          sendTick={sendTick}
           archived={archived}
           targetLabel={team?.name ?? teamId}
           retryHint={retryHint}

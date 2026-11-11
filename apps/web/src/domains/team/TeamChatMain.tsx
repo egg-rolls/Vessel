@@ -179,6 +179,8 @@ export interface TeamChatMainProps {
   onChipsChange: (chips: MentionChip[]) => void;
   onSend: () => void;
   sending: boolean;
+  /** 发送受理序号（每次受理自增，send / resend 共用）：变化即贴底。 */
+  sendTick: number;
   archived: boolean;
   targetLabel: string;
   retryHint: boolean;
@@ -224,6 +226,7 @@ export function TeamChatMain({
   onChipsChange,
   onSend,
   sending,
+  sendTick,
   archived,
   targetLabel,
   retryHint,
@@ -236,6 +239,7 @@ export function TeamChatMain({
   const { scrollRef, pinned, onScroll, scrollToBottom, userIntentProps } = useStickyBottom({
     resetKey,
     followKey,
+    sendTick,
   });
   // 无感加载更早：滚动到顶部附近自动加载一页，并在插入后补回滚动锚点。
   const scrollBox = useRef<HTMLDivElement | null>(null);

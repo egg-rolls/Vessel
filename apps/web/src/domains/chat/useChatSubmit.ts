@@ -74,6 +74,12 @@ export function useChatSubmit({
     [writeDraft, draftKey],
   );
   const [submitting, setSubmitting] = useState(false);
+  /**
+   * 「发送即贴底」序号：每受理一次发送自增（含 queued / held 的排队情况），
+   * 页面把它传给 `useStickyBottom({ sendTick })` → 立即贴底并继续跟随。
+   * 只是一个计数器，不参与提交语义。
+   */
+  const [sendTick, setSendTick] = useState(0);
   const [queuedRuns, setQueuedRuns] = useState<QueuedSubmission[]>([]);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [cancelledJobs, setCancelledJobs] = useState<Set<string>>(new Set());
@@ -162,6 +168,9 @@ export function useChatSubmit({
     // best-effort 回收，不留空 agent。选中已有会话时按 session 投递，行为不变。
     const targetSessionId = sessionIdOverride ?? selectedId;
     setSubmitting(true);
+    // 受理即贴底：不等 runs.start 往返、也不等新内容落地（排队 / held 同样贴底）。
+    // 受理后的失败只会留下「已在底部」这个无害状态，不需要回滚。
+    setSendTick((value) => value + 1);
     try {
       let nextSessionId: string | undefined;
       let run: StartInNewAgentResult['run'];
@@ -289,6 +298,8 @@ export function useChatSubmit({
     /** 回填到指定会话的草稿槽（sessions.create 的 edit / 重发在 navigate 之后立刻用）。 */
     setInputForSession,
     submitting,
+    /** 发送受理序号（每次受理自增）：交给 `useStickyBottom({ sendTick })` 做发送即贴底。 */
+    sendTick,
     queuedRuns,
     cancelling,
     cancelledJobs,

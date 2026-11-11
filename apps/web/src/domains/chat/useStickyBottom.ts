@@ -7,6 +7,7 @@ import {
   STICKY_BOTTOM_THRESHOLD_PX,
   STICKY_FOLLOW_INTERVAL_MS,
   StickyBottomController,
+  type StickyBottomReason,
 } from './sticky-bottom';
 
 /** 手势后这段时间内的 scroll 视为用户滚动（覆盖滚动动画 / 惯性）。 */
@@ -25,6 +26,15 @@ export interface UseStickyBottomOptions {
   resetKey: string | null;
   /** 新内容触发器（流式版本 / 渲染项数 / 排队数）。只在 pinned 时跟随。 */
   followKey: string;
+  /**
+   * 「发送即贴底」序号：调用方在发送**被受理**时自增（chat: `submitText`，
+   * team: `submitContent`，含排队 / 乐观发送）。序号变化 → 立即贴底并 pin，
+   * 不等新内容落地。
+   *
+   * 只有发送会动它：上滑读旧消息时，非发送产生的流式内容仍按 `followKey` 的
+   * 既有规则（未 pinned 不跟随），不打断阅读。0 / 未变化不触发。
+   */
+  sendTick?: number;
   threshold?: number;
   followIntervalMs?: number;
 }
@@ -37,6 +47,11 @@ export interface UseStickyBottomResult {
   onScroll: () => void;
   /** 「回到底部」：pinned + smooth；流式跟随不使用 smooth。 */
   scrollToBottom: () => void;
+  /**
+   * 语义化贴底（发送即贴底）：瞬间到位 + pin，后续流式继续跟随。
+   * 页面通常只管把发送受理序号传给 `sendTick`；这个方法留给需要直接触发的调用方。
+   */
+  stickToBottom: (reason?: StickyBottomReason) => void;
   /** 手势监听：展开到滚动容器上，用于区分用户滚动与程序化滚动。 */
   userIntentProps: ScrollUserIntentProps;
 }
@@ -44,6 +59,7 @@ export interface UseStickyBottomResult {
 export function useStickyBottom({
   resetKey,
   followKey,
+  sendTick = 0,
   threshold = STICKY_BOTTOM_THRESHOLD_PX,
   followIntervalMs = STICKY_FOLLOW_INTERVAL_MS,
 }: UseStickyBottomOptions): UseStickyBottomResult {
@@ -161,5 +177,37 @@ export function useStickyBottom({
     setPinned(true);
   }, [controller]);
 
-  return { scrollRef, getElement, pinned, onScroll, scrollToBottom, userIntentProps };
+  /**
+   * 发送即贴底（语义入口）。作废节流窗口里排队的跟随：这次是显式贴底，
+   * 不是「流式内容等节流」的重试，让 timer 再跳一次只会多一次同值赋值。
+   */
+  const stickToBottom = useCallback(
+    (reason: StickyBottomReason = 'send') => {
+      const active = controller();
+      if (!active) return;
+      clearFollowTimer();
+      active.stickToBottom(reason);
+      setPinned(true);
+    },
+    [controller, clearFollowTimer],
+  );
+
+  // 发送受理序号变化 → 立即贴底（不等新内容落地）。用 ref 记录已消费的序号，
+  // 组件重挂（切会话 / 抽屉）时不会因为残留序号在首帧多跳一次。
+  const consumedSendTick = useRef(sendTick);
+  useEffect(() => {
+    if (sendTick === consumedSendTick.current) return;
+    consumedSendTick.current = sendTick;
+    stickToBottom('send');
+  }, [sendTick, stickToBottom]);
+
+  return {
+    scrollRef,
+    getElement,
+    pinned,
+    onScroll,
+    scrollToBottom,
+    stickToBottom,
+    userIntentProps,
+  };
 }
