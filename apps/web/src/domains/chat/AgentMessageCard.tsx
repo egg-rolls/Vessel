@@ -1,6 +1,12 @@
 /**
- * Agent→agent 消息卡：A2A 投递进本会话的那条 user 消息（runtime 给它写了
- * `name: 'agent:<alias>'`，见 `packages/agent/src/runtime.ts` 的 `agentInputName`）。
+ * Agent→agent 消息卡：A2A 投递进本会话的那条输入。
+ *
+ * 入参与来源无关（`sender` + `content` + `ts`），历史消息与运行态首帧共用同一张卡：
+ * - 历史侧：`sessions.get` 的 `Message`（`name: 'agent:<alias>'`）；
+ * - 运行态：`run.started` 的 `input_name`（首帧就可能到，见 `state/events.ts`），
+ *   所以「先闪一帧用户气泡再变卡」不再可能——没有中间态可闪。
+ *
+ * 身份判定只在 `agent-sender.ts`（`agentSenderOfName` / `AGENT_MESSAGE_PREFIX`）一处。
  *
  * 只做展示：视觉与「系统消息 / 原始事件」同族（`.event-block` 折叠行 —— muted 单行 +
  * chevron），不是用户气泡：这条消息不是坐在键盘前的人说的。默认一行缩略（发送者 +
@@ -11,30 +17,30 @@
 import { formatClock } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
+import { agentSenderOfName } from './agent-sender';
 import { StreamCard } from './StreamCard';
-
-/** runtime 写入的前缀；alias 已 sanitize 成 `[A-Za-z0-9_-]`。 */
-const AGENT_MESSAGE_PREFIX = 'agent:';
 
 /**
  * 这条消息是否 agent 发来的；是则返回发送者 alias。
- * 只认 `agent:` 前缀：`vessel:*` 仍归 runtime 上下文的可见性开关管。
+ * 名字 → alias 的解析只在 `agent-sender.ts`，这里只做 `Message` 到 `name` 的取值。
  */
 export function agentMessageSender(message: Message): string | undefined {
-  const name = message.name;
-  if (typeof name !== 'string' || !name.startsWith(AGENT_MESSAGE_PREFIX)) return undefined;
-  const alias = name.slice(AGENT_MESSAGE_PREFIX.length);
-  return alias.length > 0 ? alias : undefined;
+  return agentSenderOfName(message.name);
 }
 
 export function AgentMessageCard({
-  message,
   sender,
+  content,
+  ts,
   source,
   defaultOpen = false,
 }: {
-  message: Message;
+  /** 发送者 alias（不含 `agent:` 前缀）。 */
   sender: string;
+  /** 正文（与 `Message.content` / `run.started.input` 同源）。 */
+  content: string;
+  /** 消息时间（Unix ms）；生命周期时间在卡片展开体里，缺省不显示。 */
+  ts?: number;
   /**
    * A2A 来源地址（来自紧邻的 `vessel:source` 行）。
    *
@@ -45,7 +51,7 @@ export function AgentMessageCard({
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
   defaultOpen?: boolean;
 }) {
-  const clock = formatClock(message.timestamp);
+  const clock = formatClock(ts);
   return (
     <StreamCard
       className="agent-message"
@@ -56,7 +62,7 @@ export function AgentMessageCard({
           {t('chat.agentMessage.from', { name: sender })}
         </span>
       }
-      summary={message.content}
+      summary={content}
     >
       {(source !== undefined || clock !== '') && (
         // 详细地址（+ 时间）只在这里出现：等宽、可整段选中、长地址按字符断行。
@@ -67,17 +73,14 @@ export function AgentMessageCard({
             </span>
           )}
           {clock !== '' && (
-            <time
-              className="shrink-0 tabular-nums"
-              dateTime={new Date(message.timestamp ?? 0).toISOString()}
-            >
+            <time className="shrink-0 tabular-nums" dateTime={new Date(ts ?? 0).toISOString()}>
               {clock}
             </time>
           )}
         </div>
       )}
       <p className="m-0 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">
-        {message.content}
+        {content}
       </p>
     </StreamCard>
   );

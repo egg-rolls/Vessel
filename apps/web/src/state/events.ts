@@ -59,6 +59,16 @@ export interface RunGroup {
    */
   hasRunEvent: boolean;
   input?: string;
+  /**
+   * 输入的身份：`Message.name`（A2A 投递是 `agent:<alias>`）。
+   *
+   * 两个来源填同一个字段，**先到的非空值赢**：`run.started` 的 `input_name`
+   * （首帧就能到，见 core `RunStartedPayload`）与 `user.message` 的 `message.name`
+   * （要过完 Input guardrail）。name 不会被 guardrail 改写，所以先到先得是安全的；
+   * 旧 gateway 两处都不带时保持 undefined —— 与今天的行为一致（首帧可能闪一下），
+   * 不做回填、不按正文猜。
+   */
+  inputName?: string;
   output?: string;
   error?: string;
   /** 0.14 additive：run.failed 的结构化错误元数据（缺字段时 undefined）。 */
@@ -254,8 +264,16 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
     }
     switch (ev.type) {
       case 'run.started': {
-        const d = ev.data as { input?: string; session_id?: string };
+        const d = ev.data as { input?: string; session_id?: string; input_name?: string };
         group.input = d.input;
+        // 首帧身份：`input_name` 与 `input` 同一次发布，渲染不会先看到「没有身份的输入」。
+        if (
+          group.inputName === undefined &&
+          typeof d.input_name === 'string' &&
+          d.input_name.length > 0
+        ) {
+          group.inputName = d.input_name;
+        }
         if (d.session_id !== undefined) group.sessionId = d.session_id;
         group.startedAt = ev.ts;
         continue;
@@ -295,6 +313,11 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
           typeof d.message === 'object' && d.message !== null && !Array.isArray(d.message)
             ? (d.message as Record<string, unknown>)
             : undefined;
+        // 同一身份的第二个来源（晚于 run.started）：先到的非空值赢，不改写已填的值。
+        if (group.inputName === undefined && message !== undefined) {
+          const name = message.name;
+          if (typeof name === 'string' && name.length > 0) group.inputName = name;
+        }
         if (
           message?.role === 'user' &&
           typeof message.content === 'string' &&

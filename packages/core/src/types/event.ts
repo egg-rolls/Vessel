@@ -16,6 +16,14 @@ export interface RunStartedPayload extends BaseEventPayload {
   run_id: string;
   session_id?: string;
   input: string;
+  /**
+   * 输入消息的 `Message.name`（additive；缺省不写）。
+   *
+   * 只为把「这条输入是谁说的」带到首帧：`user.message` 要晚一个 Input guardrail
+   * 的 await 才到，只认它的渲染首帧会把 A2A 投递先画成用户气泡、再变成卡片。
+   * `input` 仍是 guardrail 改写前的正文字符串，语义不变。
+   */
+  input_name?: string;
 }
 
 /** LLM 请求事件 payload */

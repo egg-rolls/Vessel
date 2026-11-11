@@ -9,6 +9,8 @@ import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
+import { AgentMessageCard } from './AgentMessageCard';
+import { agentSenderOfName } from './agent-sender';
 import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
 import { EventRow, NoticeRow } from './EventRow';
 import { ReasoningBlock } from './ReasoningBlock';
@@ -170,9 +172,24 @@ export const RunItems = memo(function RunItems({
     // 有工具在跑时显示的是那一行工具状态，不再叠一条「正在思考…」。
     toolHint === undefined;
 
+  // 输入的发言人：与 live item / 历史消息同一个判定（agent-sender.ts），
+  // 有 sender 就渲染 agent 卡，否则用户气泡。
+  const inputSender = agentSenderOfName(group.inputName);
+
   return (
     <>
-      {group.input && !hideInput && <UserBubble text={group.input} ts={group.startedAt} />}
+      {group.input &&
+        !hideInput &&
+        (inputSender !== undefined ? (
+          <AgentMessageCard
+            sender={inputSender}
+            content={group.input}
+            ts={group.startedAt}
+            defaultOpen={cardsDefaultOpen}
+          />
+        ) : (
+          <UserBubble text={group.input} ts={group.startedAt} />
+        ))}
       {renderItems.map((item) => {
         if (item.kind === 'reasoning') {
           return (

@@ -9,6 +9,7 @@ import type { ErrorVisibility } from '../../state/error-visibility';
 import type { RunGroup, StoredEvent } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
 import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/sessionStore';
+import { AgentMessageCard } from './AgentMessageCard';
 import { ChatWelcome } from './ChatWelcome';
 import { NoticeRow } from './EventRow';
 import { ReasoningBlock } from './ReasoningBlock';
@@ -208,7 +209,18 @@ export function TranscriptWindow({
   const renderItem = (item: TranscriptItem): ReactNode => {
     switch (item.kind) {
       case 'run-input':
-        return <UserBubble text={item.text} ts={item.ts} />;
+        // 身份在 item 建好时就定了（`sender` 来自 run.started.input_name / user.message.name）：
+        // agent 投递直接用同一张 AgentMessageCard，不会先出一帧用户气泡。
+        return item.sender !== undefined ? (
+          <AgentMessageCard
+            sender={item.sender}
+            content={item.text}
+            ts={item.ts}
+            defaultOpen={cardsDefaultOpen}
+          />
+        ) : (
+          <UserBubble text={item.text} ts={item.ts} />
+        );
       case 'run-text':
         return item.streaming ? (
           <div className="msg-assistant max-w-full">

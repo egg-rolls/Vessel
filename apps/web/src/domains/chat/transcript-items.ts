@@ -20,6 +20,7 @@
  */
 import type { Message, RunEvent } from '../../gateway/types';
 import type { RunGroup } from '../../state/events';
+import { agentSenderOfName } from './agent-sender';
 import { buildHistoryToolItems } from './history-tools';
 import { compareTimelineEntries } from './timeline-order';
 import { type ChatRenderItem, foldToolItems, type ToolCardStatus } from './tool-cards';
@@ -68,6 +69,13 @@ export interface RunInputItem extends ItemMeta {
   kind: 'run-input';
   runId: string;
   text: string;
+  /**
+   * 输入是 agent 投递时的发送者 alias（来自 `run.started.input_name` /
+   * `user.message.message.name`，判定见 `agent-sender.ts`）。
+   *
+   * 有值 ⇒ 渲染 agent 卡；无值 ⇒ 用户气泡。渲染层不再自己判身份。
+   */
+  sender?: string;
 }
 
 export interface RunTextItem extends ItemMeta {
@@ -196,9 +204,9 @@ function isSourceMessage(message: Message): boolean {
   return message.name === SOURCE_MESSAGE_NAME;
 }
 
-/** 这条消息是否 agent 发来的（agent:<alias>）。 */
+/** 这条消息是否 agent 发来的（agent:<alias>）。判定只在 agent-sender.ts 一处。 */
 function isAgentNamed(message: Message): boolean {
-  return typeof message.name === 'string' && message.name.startsWith('agent:');
+  return agentSenderOfName(message.name) !== undefined;
 }
 
 /** 历史窗口 → item + 反查表（只依赖 messages 与 offset，调用侧可安全 memo）。 */
@@ -311,7 +319,7 @@ export function buildHistoryIndex(
 
     // 只有 tool_calls、没有正文的 assistant 消息不单独成 item（工具卡代表它）。
     const hasContent = trimText(message.content).length > 0;
-    const isAgentMessage = typeof message.name === 'string' && message.name.startsWith('agent:');
+    const isAgentMessage = agentSenderOfName(message.name) !== undefined;
     if (message.role === 'assistant' && !hasContent && ids.length > 0) return;
     if (!hasContent && message.role !== 'user' && !isAgentMessage) return;
 
@@ -429,12 +437,15 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
       return monotonic;
     };
     // run 的用户输入：历史里还没落盘时由它显示气泡；被历史消息认领后由 assemble 丢掉。
+    // 身份（agent 投递）随首个事件一起到：有 sender 就是 agent 卡，渲染层不再判。
     if (trimText(group.input).length > 0) {
+      const sender = agentSenderOfName(group.inputName);
       items.push({
         kind: 'run-input',
         key: `run:${group.runId}:input`,
         runId: group.runId,
         text: group.input as string,
+        ...(sender !== undefined ? { sender } : {}),
         ...(itemTs(undefined) !== undefined ? { ts: itemTs(undefined) } : {}),
         ...seqMeta,
       });
@@ -779,6 +790,7 @@ function speakerOf(item: TranscriptItem): string | undefined {
   if (item.kind === 'run-text') return 'assistant';
   if (item.kind !== 'message') return undefined;
   const name = item.message.name;
-  if (typeof name === 'string' && name.startsWith('agent:')) return name;
+  // 身份判定复用 agent-sender.ts（发言人头 = 同一个 agent 名字）。
+  if (typeof name === 'string' && agentSenderOfName(name) !== undefined) return name;
   return item.message.role;
 }

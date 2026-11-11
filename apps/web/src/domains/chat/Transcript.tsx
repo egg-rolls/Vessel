@@ -78,8 +78,9 @@ function TranscriptMessage({
     if (agentSender !== undefined) {
       return (
         <AgentMessageCard
-          message={message}
           sender={agentSender}
+          content={message.content}
+          ts={message.timestamp}
           {...(source !== undefined ? { source } : {})}
           defaultOpen={cardsDefaultOpen}
         />

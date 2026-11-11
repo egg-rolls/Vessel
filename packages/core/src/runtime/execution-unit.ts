@@ -1026,10 +1026,19 @@ export class ExecutionUnit {
     );
 
     // 发布 Run 开始事件
+    // `input_name` 是 additive 字段：把输入 Message 的 name（A2A 投递时是
+    // `agent:<alias>`）在首帧就带出去。渲染层不必等 `user.message`（那要过完
+    // Input guardrail 的 await）才知道这条输入不是坐在键盘前的人说的。
+    // 缺省不写：普通人类输入的载荷与今天逐字节一致。
     this.publishEvent({
       type: 'run.started',
       run_id: runId,
-      data: { run_id: runId, session_id: sessionId, input: userMessage.content },
+      data: {
+        run_id: runId,
+        session_id: sessionId,
+        input: userMessage.content,
+        ...(userMessage.name !== undefined ? { input_name: userMessage.name } : {}),
+      },
       ts: Date.now(),
     });
 
