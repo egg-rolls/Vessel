@@ -48,6 +48,15 @@ const NON_PLUGIN_PACKAGES: ReadonlySet<string> = new Set([
  */
 export const FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'evals', 'feishu']);
 
+/**
+ * 只能显式启用的插件（opt-in）：`plugins:` 缺省时的默认集**不含**它们。
+ *
+ * `media` 是多模态解析器（插件内部再按 CLI 探测降级 / 不注册工具），
+ * 契约（docs/dev/plans/refs-pipeline.md §4）要求它不进默认插件集：
+ * 只在 config.yaml 的 `plugins:` 里出现才加载，避免给所有用户加工具 schema。
+ */
+export const OPT_IN_PLUGINS: ReadonlySet<string> = new Set(['media']);
+
 /** 插件来源 */
 export type PluginSource = 'repo' | 'user' | 'project' | 'node_modules';
 

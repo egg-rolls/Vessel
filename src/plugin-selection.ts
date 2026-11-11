@@ -15,7 +15,12 @@
  */
 
 import type { PluginConfig } from '../packages/config/src/index';
-import { FACTORY_PLUGINS, type PluginDescriptor, type PluginLoader } from './plugin-loader';
+import {
+  FACTORY_PLUGINS,
+  OPT_IN_PLUGINS,
+  type PluginDescriptor,
+  type PluginLoader,
+} from './plugin-loader';
 
 /** 选择结果 */
 export interface PluginSelection {
@@ -54,13 +59,15 @@ export function resolvePluginSelection(
   let external: PluginDescriptor[] = [];
 
   if (configured === undefined) {
-    // 默认集：排除调试插件与工厂式插件；opt-out 时只保留仓库内插件。
+    // 默认集：排除调试插件、工厂式插件与 opt-in 插件；opt-out 时只保留仓库内插件。
     // 0.43：child 插件（体验插件）由宿主 spawn，不进入 in-process 装载名单。
+    // 0.52：OPT_IN_PLUGINS（media）默认不加载——必须由 config.yaml 的 plugins: 显式启用。
     const defaults = descriptors.filter(
       (descriptor) =>
         descriptor.mode === 'in-process' &&
         descriptor.category !== 'provider' &&
         !FACTORY_PLUGINS.has(descriptor.name) &&
+        !OPT_IN_PLUGINS.has(descriptor.name) &&
         descriptor.name !== 'hook-logging' &&
         (!noExternal || descriptor.source === 'repo'),
     );

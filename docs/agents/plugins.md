@@ -55,6 +55,12 @@ applies_to: [N, M]
 - skills 就是文件，经消息进来；不写 harness 层的扫描 / 解析 / 注入通道。
 - `team_*` / `delegate_task` 已删除；evals / feishu / MCP 只做插件，不进 core（ADR-043/044/090）。
 
+## 多模态解析器（`media`，opt-in）
+
+- `plugins/media/media`：单个 `media` 工具（`action = read | ocr | describe`，`path` 必填，`page` / `frames` 可选）。`read` 直读文本、PDF 走 `pdftotext`；`ocr` 走 `tesseract`；`describe` 需装配层注入多模态 bridge，未配置时明确报错、不降级。路径边界复用 basic-tools 的 `evaluatePath` / `allowed_roots`；单文件 20 MiB，单次输出 32 KiB（超出标 `truncated`）。
+- **不在默认集**（`OPT_IN_PLUGINS`）：只在 `config.yaml` 显式出现才加载；`install` 阶段探测后端，`pdftotext` / `tesseract` / describe bridge 全缺时不注册工具（schema 不进 prompt）。第三方 CLI 只检测不安装。
+- 启用：`plugins: [{ name: media, config: { allowed_roots: ["~/work"] } }]`（可选 `pdftotext` / `tesseract` 指向可执行文件、`ocr_language`、`max_output_bytes` 等，只能收紧上限）。改完需重启进程（能力插件不做热卸载）。
+
 ## 指针
 
 - [plugins.md](../architecture/plugins.md) · [plugin-registry.md](../architecture/plugin-registry.md) · [extensions.md](../architecture/extensions.md) · [tools.md](../architecture/tools.md) · [CONFIG.md](../operations/CONFIG.md)。
