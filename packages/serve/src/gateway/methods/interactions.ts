@@ -64,6 +64,15 @@ export interface InteractionMethodsDeps {
    * 缺失或无法判定时，team-scoped principal 一律 fail-closed。
    */
   teamScope?: HubTeamScopeLike;
+  /**
+   * headless 挂起的 ask（`record.suspended`）被人类回答后，尝试续跑那个 run。
+   *
+   * 只在「`pending` → `answered` 这一次迁移」上调用一次（重复应答不触发）；
+   * 返回 `true` = 续跑已受理（`runs.resume` 的 202 语义），`false` = 跳过。
+   * 实现方必须自吞全部错误：续跑失败只能退化为「只记录答案」，不得让应答 RPC 失败。
+   * 缺失 = 不续跑（离线 attention / 无 durable 的装配）。
+   */
+  resumeSuspendedAsk?: (record: StoredInteraction) => boolean | Promise<boolean>;
 }
 
 /** `interactions.list` 的单条结果（Web 端消费契约）。 */
@@ -256,8 +265,27 @@ function parseListLimit(value: unknown): number {
   return value;
 }
 
+/** 记录是否是「headless 挂起、且仍在等人类」的 ask。 */
+function isSuspendedPendingAsk(record: StoredInteraction): boolean {
+  return (
+    record.status === 'pending' &&
+    record.suspended === true &&
+    (record.kind ?? 'permission') === 'ask'
+  );
+}
+
+/**
+ * 应答结果是否是「本次真的写下答案」（而不是幂等重放）。
+ * 重复应答（`duplicate`）与冲突（抛错）都不算，因此不会触发第二次续跑。
+ */
+function isFreshAnswer(result: unknown): boolean {
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) return false;
+  const record = result as Record<string, unknown>;
+  return record.ok === true && record.duplicate !== true;
+}
+
 export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMethodDefinition[] {
-  const { respondPermission, respondAsk, interactions, teamScope } = deps;
+  const { respondPermission, respondAsk, interactions, teamScope, resumeSuspendedAsk } = deps;
 
   /** 请求所属 session；记录不存在或没有 session 时返回 undefined。 */
   function sessionForRequest(requestId: string): string | undefined {
@@ -375,19 +403,43 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           answered_via: { type: 'string', enum: ['tui', 'rpc', 'cli', 'policy'] },
           latency_ms: { type: 'number' },
           team_id: { type: 'string' },
+          // 只对 headless 挂起的 ask 出现：这个答案是否让那个 run 重新跑起来。
+          // 缺省键 = 普通阻塞型 ask（应答者就在原地等，不存在续跑概念）。
+          resumed: { type: 'boolean' },
         },
       },
-      handler: (params, ctx) => {
+      handler: async (params, ctx) => {
         const answers = params.answers;
         if (!Array.isArray(answers)) {
           throw new RpcError('invalid_params', 'answers must be an array');
         }
         const requestId = stringParam(params, 'request_id');
         assertTeamAccess(requestId, ctx.principal);
-        return respondAsk(requestId, answers, {
+        // 状态迁移前的记录：只有「suspended pending」才可能在应答后需要续跑。
+        const before = interactions.interactionRecords.get(requestId);
+        const result = respondAsk(requestId, answers, {
           answered_by: 'human',
           answered_via: params.answered_via === 'cli' ? 'cli' : 'rpc',
         });
+        if (
+          resumeSuspendedAsk === undefined ||
+          before === undefined ||
+          !isSuspendedPendingAsk(before) ||
+          !isFreshAnswer(result)
+        ) {
+          return result;
+        }
+        let resumed = false;
+        try {
+          // 先把答案落定（respondAsk 已同步落记录），再尝试续跑：
+          // 续跑失败只退化为「只记录答案」，应答本身仍然成功。
+          resumed = (await resumeSuspendedAsk(before)) === true;
+        } catch {
+          resumed = false;
+        }
+        return typeof result === 'object' && result !== null
+          ? { ...(result as Record<string, unknown>), resumed }
+          : { ok: true, resumed };
       },
     },
     {

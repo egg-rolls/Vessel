@@ -44,3 +44,13 @@ tags: [ask-user, tools, gateway, cli, web, rendering, visibility, i18n]
 - **恢复投递**：`vessel --resume-run <runId>` 在 `AgentRuntime.resume` 前，把该 run 已回答的 ask 以一条 `user.message` 事件（`data.source = 'ask_resume'`）追加进 session 事件日志；答案进入下一轮 LLM 请求，重复 resume 按 `request_id` 去重。
 - **`suspended` 标记**：`StoredInteraction.suspended = true` 表示「run 已 interrupted、等待人类回答」的 ask；gateway 重启 hydrate 时这类记录保持 `pending`（仍可回答），普通 pending（权限 / 活 run 的 ask）仍转 `orphaned`。
 - **不变**：`ask.respond` 参数 / 返回形状、`ui.askUser: false` 一律关闭、交互 REPL 与 gateway/serve 的默认无限等待语义；不新增 RPC 或配置键。
+
+## Errata（2026-11-11，0.51 dev）
+
+> 本条只追加。上文「恢复投递」由人显式跑 `--resume-run` 的路径**保留**，另加一条自动入口；`ask.respond` 的参数不变，返回形状只加一个可选键。
+
+- **应答即续跑（gateway）**：`ask.respond` 命中「`status=pending` + `suspended=true`」的记录时，gateway 在该次应答落定后自己发起一次 resume，人不需要再跑 `--resume-run`。触发点只有「`pending` → `answered` 这一次迁移」：重复应答（`duplicate`）与答案冲突（`conflict`）都不触发，因此同一 request 至多续跑一次。
+- **前置（全成立才受理，否则只记录答案）**：durable 已启用且注入了 resume 适配器；checkpoint 可加载且仍是 `interrupted`（`running` = 别人在跑）；记录与 checkpoint 的 `session_id` 一致；该 session 没有 queued/running 的 live run；同一 run 没有在途的自动续跑。任何失败（`run_already_running` / `run_not_resumable` / 租约冲突 / 读盘失败）一律吞掉并只记 stderr，应答 RPC 仍然 `ok:true`。
+- **答案如何进入被恢复的 run**：不改 core resume，复用上文「恢复投递」——`startResume` 在 resume 前把已回答的 ask 作为 `data.source='ask_resume'` 的 `user.message` 事件注入 session 日志（按 `request_id` 去重）。**因此答案不是工具结果**：事件日志里那条 `ask_user` 调用在中断时已以 `Error: ask_user was cancelled.` 收口（工具不抛异常，`tool.call.completed` 照常落盘），历史里没有悬空 `tool_calls`；模型看到的是「工具被取消 + 一条带答案的 user 消息」。
+- **观测**：只复用既有事件，不新增事件类型（run 侧看到的是 `run.resumed`，ask 侧仍是 `ask.user.answered`）。`ask.respond` 新增可选返回键 `resumed`（仅挂起型 ask 出现；普通阻塞型 ask 不带该键，行为不变）。
+- **不自动续跑的两处**：离线 `vessel attention respond`（进程内没有 runtime）与没有 durable 的装配，保持「只记录答案」，恢复仍靠 `vessel --resume-run`。

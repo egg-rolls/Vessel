@@ -25,6 +25,7 @@ import { createDefaultTraceRedactor } from '@vessel-agent/core';
 import { createAgentRegistry } from './agents-registry.js';
 import { ClientBackpressure } from './backpressure.js';
 import {
+  type DurableCheckpointLike,
   type DurableGatewayOptions,
   dedupeCheckpoints,
   isResumableStatus,
@@ -97,6 +98,7 @@ import {
 } from './gateway/sse.js';
 import { serveStatic } from './gateway/static.js';
 import { createInteractionsRegistry } from './interactions-registry.js';
+import type { StoredInteraction } from './interactions-store.js';
 import type { McpGatewayOptions } from './mcp.js';
 import type { MetricsProvider, MetricsSnapshot } from './metrics.js';
 import {
@@ -1371,6 +1373,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
         pendingPermissions: interactions.pendingPermissions,
         pendingAsks: interactions.pendingAsks,
       },
+      // 0.51 dev：headless / 超时挂起的 ask 答完之后，由这里把那个 run 续跑起来
+      //（应答不再只是「被动记录」）。没有 durable 的装配保持只记录答案。
+      resumeSuspendedAsk,
     }),
     ...createEvalMethods({ evals: opts.evals }),
     ...createFeishuMethods({ requireFeishu }),
@@ -1950,6 +1955,86 @@ export function startGateway(opts: GatewayOptions): Gateway {
   /** resume 失败时释放占位；成功占位保留，重复调用一律 conflict。 */
   function releaseResume(runId: string): void {
     resumedRuns.delete(runId);
+  }
+
+  /**
+   * 在途的「挂起 ask 自动续跑」（0.51 dev）。
+   *
+   * 与 `resumedRuns` 分开：后者的语义是「本进程已受理过 `runs.resume`，后续一律
+   * conflict」，而同一个 run 会因为下一次 ask 再次挂起、需要第二次续跑（resume 保持
+   * run id 不变），所以自动路径只在「这次续跑还没跑完」期间占位，结束后释放。
+   */
+  const autoResuming = new Set<string>();
+
+  /**
+   * 该 session 现在是否已有 live run（queued / running）。
+   *
+   * 快照读不出来时按「没有」处理：单 run 的权威判据在 core，这里只是提前避开
+   * 一次注定失败的 resume（失败也已 fail-closed）。
+   */
+  function hasLiveRunForSession(sessionId: string): boolean {
+    const control = opts.runControl;
+    if (control === undefined) return false;
+    try {
+      const snapshot = control.snapshot();
+      return [...snapshot.queued, ...snapshot.running].some((run) => run.session_id === sessionId);
+    } catch {
+      // 快照读不出来时不赌：让 core 的单 run 守卫去判（那里是权威）。
+      return false;
+    }
+  }
+
+  /**
+   * headless / 超时挂起的 ask 被回答后，尝试续跑那个 run（0.51 dev）。
+   *
+   * 全部前置都成立才受理，任何一条不成立都返回 `false`（**只记录答案**，
+   * 不报错、不回滚、不重试）：
+   * 1. durable 已启用且注入了 resume 适配器；
+   * 2. checkpoint 能加载，且仍是 `interrupted`（`running` 说明别人已经在跑）；
+   * 3. 记录与 checkpoint 指向同一个 session（防串台）；
+   * 4. 该 session 没有别的 live run（同 session 并发会撞 core 的单 run 守卫）；
+   * 5. 同一 run 没有在途的自动续跑（本进程内去重）。
+   *
+   * 答案如何进入被恢复的 run 不在这里：沿用既有 `--resume-run` 路径，
+   * `startResume` 在 resume 前把已回答的 ask 作为 `source=ask_resume` 的
+   * `user.message` 事件注入 session 日志（按 `request_id` 去重，ADR-082 Errata）。
+   */
+  async function resumeSuspendedAsk(record: StoredInteraction): Promise<boolean> {
+    const durableStore = opts.durable;
+    if (durableStore?.resume === undefined) return false;
+    const runId = record.run_id;
+    if (runId === '' || autoResuming.has(runId)) return false;
+    autoResuming.add(runId);
+    try {
+      let checkpoint: DurableCheckpointLike | null = null;
+      try {
+        checkpoint = await durableStore.store.load(runId);
+      } catch (error) {
+        console.warn('[vessel] ask.respond: checkpoint load failed; answer recorded only', {
+          run_id: runId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      }
+      if (checkpoint === null) return false;
+      // 只接管「已挂起、没人跑」的 run；resume 适配器自己也会再校验一次。
+      if (checkpoint.status !== 'interrupted') return false;
+      if (record.session_id !== undefined && record.session_id !== checkpoint.session_id) {
+        return false;
+      }
+      if (hasLiveRunForSession(checkpoint.session_id)) return false;
+      await durableStore.resume(runId);
+      return true;
+    } catch (error) {
+      // fail-closed：答案已经落定，续跑失败不得冒泡到 RPC（也不重试）。
+      console.warn('[vessel] ask.respond: resume failed; answer recorded only', {
+        run_id: runId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      autoResuming.delete(runId);
+    }
   }
 
   /** `/v1/durable/*`：只读 store，不写盘、不创建 run */

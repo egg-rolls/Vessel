@@ -45,6 +45,7 @@ applies_to: [N, M]
 ## 事件与权限应答
 
 - `respondPermission` / `respondAsk` 只能发布到本 node 的单一运行时事件流；流不存在返回 `run_ended`，不得回退共享流或两边都发。权限记录持久化到 `<dataDir>/interactions-<id>.json`（`0600` + `atomicWrite`；`<id>` 是内部持久单 id，缺省 `default`，不是 wire 字段），pending 不 TTL 清扫、有界清理也不淘汰 pending；重复应答幂等 / `conflict` / `orphaned`（ADR-079 Addendum）。
+- **挂起 ask 的自动续跑**：`suspended: true` 的 ask（headless / 超时挂起）被回答后，gateway 在该次应答落定后自己发起一次 `resume`——触发点只有 `pending → answered` 这一次迁移（重复应答 / 答案冲突不触发），前置是 checkpoint 仍 `interrupted` + 同 session + 无 live run + durable 可读。任何一条不成立都 fail-closed 成「只记录答案」，不报错、不回滚；答案仍由既有 `startResume` 以 `source=ask_resume` 的 user 消息注入（ADR-082 Errata 2026-11-11）。
 - 事件面只有一条流（单公司；`TenantEventHub` 名称保留但不再按 tenant 分键）：不得重新引入 `sharedEvents`、tenant→shared 桥或多流；Hub（独立进程）不暴露 `publish`、不代理 / 不持久化消息正文、不存 pending（ADR-089）。跨节点去重键含 `node` / `incarnation` / `run_id`（缺失写 `-`），消息键含 `from`；代际变化或 seq 回退只清该来源节点（ADR-067）。
 
 ## 关闭与 gateway 生命周期
@@ -55,7 +56,7 @@ applies_to: [N, M]
 ## 节点与 attention
 
 - `node_id` 唯一来源是 `resolveNodeId()`：`config.host.nodeId` > `<dataDir>/node.json` > 首次生成并 `0600` 原子写；不得由 hostname / IP 派生；损坏抛 `node_identity_corrupt`（ADR-091）。
-- 远程 attention：permission / ask 必须在运行 agent 的节点本地应答；`vessel attention` 用 gateway / team token 直连，peer token 不能用于 attention；`answered_by` 仍只 `human | policy`；roster 排序只由 `TeamService` 产生。`ask_user` 在 gateway / serve 入口注册（`--run` / headless / 管道不注册）。
+- 远程 attention：permission / ask 必须在运行 agent 的节点本地应答；`vessel attention` 用 gateway / team token 直连，peer token 不能用于 attention；`answered_by` 仍只 `human | policy`；roster 排序只由 `TeamService` 产生。`ask_user` 在 gateway / serve 入口注册（默认无限等待）；headless / `--run` / 管道也注册，但无人可问时挂起 run（`ask.user.timeout`，checkpoint `interrupted`，退出码 3）而不是永久等待（ADR-082 Errata）。
 
 ## 指针
 

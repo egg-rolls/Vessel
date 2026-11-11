@@ -52,6 +52,9 @@
 3. **本页（`#/pending`，「待批」）**：所有来源的总汇集，按 agent（无则会话、再退 run）聚簇，
    同簇勾选后「一起提交」= 一次用户动作，每条 ask 各一次 `ask.respond`。
    应答不新建 run：等待中的 `ask_user` 拿到结果后原 run 继续（见 `domains/pending/usePendingBatch.ts`）。
+   挂起的 ask（headless / 超时挂起，记录带 `suspended`）没有原地等待者：那一轮 run 已以
+   `interrupted` 收口，网关在应答落定后自己发起一次 resume（**同一 run id，不新建 run**）；
+   续跑没成立时只记录答案，恢复走 `runs.resume` / `vessel --resume-run`（ADR-082 Errata）。
 
 问题正文是文本：markdown 图片语法只有同源路径 / `data:image/*` 会渲染成图片
 （CSP 是 `img-src 'self' data:`），其余与裸链接一样降级成链接。权限通道
