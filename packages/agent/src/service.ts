@@ -42,7 +42,7 @@ import {
   type Usage,
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
-import { AgentInboxStore, deliveryFromNotify } from './inbox.js';
+import { type AgentInboxDelivery, AgentInboxStore, deliveryFromNotify } from './inbox.js';
 import {
   type BindingRecord,
   currentBindingSession,
@@ -2185,8 +2185,8 @@ export class AgentServiceImpl implements AgentService {
         );
         const runId = this.newId();
         this.runMessageIds.set(runId, message.id);
-        this.emitForSession('agent.message.queued', record, rotation.toSessionId, {
-          state: record.state,
+        // quiet 投递：只落 inbox，不进旧队列 —— 不带 state（见 emitMessageQueued）。
+        this.emitMessageQueued(record, rotation.toSessionId, 'quiet', {
           message_id: message.id,
           from,
           ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
@@ -2208,7 +2208,7 @@ export class AgentServiceImpl implements AgentService {
     if (inboxed) this.trackInbox(record.id, message, entry.bindingId);
     entry.pending.push(message);
     this.registry.touchBinding(record.id, entry.bindingId, this.now());
-    this.emitForSession('agent.message.queued', record, entry.bindingId, {
+    this.emitMessageQueued(record, entry.bindingId, 'input', {
       state: record.state,
       message_id: message.id,
       from,
@@ -3453,7 +3453,7 @@ export class AgentServiceImpl implements AgentService {
           this.urgentMessages.set(item.message.id, item.message);
         }
       }
-      this.emitForSession('agent.message.queued', target, entry.bindingId, {
+      this.emitMessageQueued(target, entry.bindingId, 'input', {
         state: target.state,
         message_id: interruptMessage.id,
         from: input.from,
@@ -3584,7 +3584,10 @@ export class AgentServiceImpl implements AgentService {
       const entries = this.liveEntries(target.id);
       const binding = entries.find((entry) => entry.primary) ?? entries[0];
       if (binding !== undefined) {
-        this.emitForSession('agent.message.notified', target, binding.bindingId, {
+        // 同一条投递事件，`delivery: 'wake'` 就是旧 `agent.message.notified`；`to` / `wake`
+        // 保留旧载荷字段。**绝不写 state**：唤醒不入队，带 state 会让观测面把「只唤醒」
+        // 显示成 queued / running。
+        this.emitMessageQueued(target, binding.bindingId, 'wake', {
           message_id: messageId,
           from: input.from,
           to: target.id,
@@ -5536,6 +5539,34 @@ export class AgentServiceImpl implements AgentService {
       active = false;
       this.listeners.delete(listener);
     };
+  }
+
+  /**
+   * 收件箱投递事件的唯一出口：`agent.message.queued` 一条覆盖三种投递模式。
+   *
+   * `delivery: 'input'` 是唯一会被 body mailbox 接管的投递，只有它带 `state`（入队时成员
+   * 状态）；`'wake'` / `'quiet'` 不进队列、不产生 run，**不带 `state`** —— 带上就是自相
+   * 矛盾的记录，消费方（TUI / Web）会把「只唤醒 / 只落 inbox」当成一次入队。`to` / `wake`
+   * 是旧 `agent.message.notified` 载荷的保留字段，只在 wake 投递上出现。
+   *
+   * 旧事件名 `agent.message.notified` 不再发布，落盘历史仍按旧名只读可读。
+   */
+  private emitMessageQueued(
+    member: MemberRecord,
+    sessionId: string,
+    delivery: AgentInboxDelivery,
+    payload: {
+      message_id: string;
+      from: string;
+      conversation_id?: string;
+      /** 仅 input 投递：本次入队时的成员状态 */
+      state?: MemberState;
+      /** 仅 wake 投递：收件成员 id / 是否真的排了摘要唤醒（旧 notified 载荷） */
+      to?: string;
+      wake?: boolean;
+    },
+  ): void {
+    this.emitForSession('agent.message.queued', member, sessionId, { delivery, ...payload });
   }
 
   /** 发成员事件（默认用 primary ExecutionUnit 的 session）；监听器与 EventStream 异常都隔离 */

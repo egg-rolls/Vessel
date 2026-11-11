@@ -58,7 +58,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `channel.feishu.connected` / `channel.feishu.disconnected` / `channel.feishu.message.received` / `channel.feishu.reply.sent` / `channel.feishu.error` | 飞书插件 → 观测 | 渠道生命周期与消息 |
 | `session.saved` / `session.deleted` / `session.titled` | core / 装配层 → 观测 | 会话持久化（0.5）；`session.titled` payload `{ session_id, title }`，写前重读保留人工标题 |
 | `agent.rotating` / `agent.rotated` / `agent.restarting` / `agent.restarted` / `agent.retired`；`agent.spawned`（带来源）/ `session.created` / `session.activated` / `agent.session.activated` / `agent.create.failed` | AgentService → 观测 | binding 生命周期（rotate 0.32；restart 0.34；有来源 create 0.39）；payload 带 agent / session / epoch；`agent.retired` payload `{ body_id, epoch, reason }`（rotate / restart / close / 回收共用）；旧 `agent.forked` / `agent.compact_forked` / `session.forked` 只读渲染 |
-| `agent.message.queued` / `agent.message.notified` | AgentService → 观测 | 消息入队 / 收件箱 notify；`queued` payload `{ state, message_id, from, conversation_id? }`，`notified` payload `{ message_id, from, to, conversation_id?, wake }`（`wake=false` 表示只落 inbox 未排 wake） |
+| `agent.message.queued` | AgentService → 观测 | 收件箱投递，一条事件三种模式：payload `{ delivery, message_id, from, state?, to?, wake?, conversation_id? }`；`delivery: 'input'` 会进 run 队列，也只有它带 `state`；`'wake'` 只排一次摘要唤醒（带 `to` / `wake`，`wake=false` 表示没排上唤醒）；`'quiet'` 只落 inbox。唤醒 / 只落盘都不写 `state`，观测面不得把这两类当成入队。旧 `agent.message.notified` 不再发布，落盘历史只读 |
 | `config.loaded` | asm → 观测 | 只记来源与键名，不记密钥值（0.5） |
 | `plugin.loaded` / `plugin.failed` | asm / core → 观测 | 插件加载（0.5） |
 | `trace.write.failed` / `trace.overflow` | core trace → 观测 | 写失败/队列溢出，标记 trace 不完整（0.5） |

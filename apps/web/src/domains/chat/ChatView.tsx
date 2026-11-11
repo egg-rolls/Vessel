@@ -39,6 +39,18 @@ interface CreateTarget {
 }
 
 /**
+ * 会让「待处理条带」重取的事件：收件箱投递（`agent.message.*`）与 `run.started`。
+ * 投递只有一条事件（`agent.message.queued` + `delivery`）；`agent.message.notified` 是
+ * 合并前的旧名，留着只为历史日志的计数口径不变。
+ */
+const STRIP_REFRESH_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'agent.message.queued',
+  'agent.message.notified',
+  'agent.message.sent',
+  'run.started',
+]);
+
+/**
  * 聊天域容器：连接各域 hook 与子视图，负责路由导航与焦点交接。
  * 会话状态、实时内容、提交 / 排队分别见 useChatSessions / useChatTranscript /
  * useChatSubmit；渲染拆到 SessionRail / ChatHeader / TranscriptWindow / ComposerSlot。
@@ -223,17 +235,14 @@ export function ChatView({
   }, [selectedId, transcriptApi.sessionAgents]);
 
   // 事件驱动失效：agent.message.* / run.started 出现次数变化时重取（不加轮询）。
+  // 一次投递现在只落一条 `agent.message.queued`（旧日志里的 `agent.message.notified`
+  // 仍计入，历史会话的计数不会因为少一类行而漂移）。
   const stripRefreshKey = useMemo(
     () =>
-      snapshot.entries.reduce((count, entry) => {
-        const type = entry.event.type;
-        return type === 'agent.message.queued' ||
-          type === 'agent.message.notified' ||
-          type === 'agent.message.sent' ||
-          type === 'run.started'
-          ? count + 1
-          : count;
-      }, 0),
+      snapshot.entries.reduce(
+        (count, entry) => (STRIP_REFRESH_EVENT_TYPES.has(entry.event.type) ? count + 1 : count),
+        0,
+      ),
     [snapshot.entries],
   );
 

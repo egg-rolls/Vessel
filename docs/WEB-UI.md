@@ -269,17 +269,19 @@ export function ToolCard({ tone, className, ...props }: ToolCardProps) {
 - 失效交互在 hydration 后按 tenant + request id 集合只提示一次，重连不重复弹；
   详情只在 Observe → Attention 查看，Chat 内不再有失效卡片或本地忽略入口。
 
-### 0.41 notify / inbox
+### notify / inbox
 
-- `agent.message.notified` 与 `agent.message.queued` 是观察面事件：列在
-  `state/events.ts` 的 `CHAT_HIDDEN_EVENT_TYPES`，聊天时间线不渲染原始 JSON 卡；
-  notify 只 append inbox，不产生 run，也不改变对话内容。
+- `agent.message.queued` 是唯一的收件箱投递事件（`delivery: input | wake | quiet`）：
+  列在 `state/events.ts` 的 `CHAT_HIDDEN_EVENT_TYPES`，聊天时间线不渲染原始 JSON 卡；
+  唤醒 / 只落 inbox 都不产生 run，也不改变对话内容。旧名 `agent.message.notified`
+  仍留在该集合里，只为历史行不落成原始 JSON 卡。
 - 收件箱计数口径：`unread` = 可读（unread 且非 held）；`pending` = held ∩ unread；
   `messages[]` 同时含可读与 held，`held` 为布尔。`read` 只看 / 消费 non-held，
   `delete` 只删 non-held。
 - 正文只经模型侧 `inbox` 工具读取（`list` / `read` / `delete` / `insert`）；Web 当前
   不为收件箱另建面板。若将来展示摘要，held 必须走 `pending`，不能用 `unread` 代替；
-  通知事件只带 `message_id` / `from` / `to` / `conversation_id` / `wake`，不带正文。
+  通知事件只带 `delivery` / `message_id` / `from` / `to` / `conversation_id` / `wake`，
+  不带正文。
 
 ## 硬规则
 

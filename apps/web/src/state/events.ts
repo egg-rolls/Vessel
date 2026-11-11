@@ -241,10 +241,11 @@ export const CHAT_HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set([
   // 终态 `run-finished` 收起卡片，它本身只是一条审计行。
   'ask.user.timeout',
   'agent.spawned',
+  // 收件箱投递只有一条事件（`queued` + `delivery`）：入队 / 唤醒 / 只落 inbox 都是
+  // 观察面的送达记录，不是对话内容。旧名 `agent.message.notified` 只读兼容历史行。
   'agent.message.queued',
-  'agent.message.sent',
-  // 0.41 notify：只观察 inbox 送入，不是对话内容。
   'agent.message.notified',
+  'agent.message.sent',
   'agent.closed',
   'agent.stale',
   'agent.permission.requested',

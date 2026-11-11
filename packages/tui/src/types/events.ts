@@ -42,6 +42,9 @@ export interface UpdateAvailableData {
   notesUrl?: string;
 }
 
+/** `agent.message.queued` 的投递模式（缺省 = 旧落盘行，按 input 读） */
+export type AgentMessageDelivery = 'input' | 'wake' | 'quiet';
+
 /** 成员事件载荷：字段按 snake_case / camelCase 双拼读取，这里只声明常用字段。 */
 export interface AgentEventData extends Record<string, unknown> {
   agent_id?: string;
@@ -54,15 +57,14 @@ export interface AgentEventData extends Record<string, unknown> {
   tool_name?: string;
   position?: number;
   wait_reason?: string;
-}
-
-/** agent.message.notified 载荷（0.41 notify：append 到 inbox + 摘要唤醒，不运行 / 不排队）。 */
-export interface AgentMessageNotifiedData {
-  message_id: string;
-  from: string;
-  to: string;
+  /** 仅 `agent.message.queued`：本次投递模式；只有 input 会带 `state` */
+  delivery?: AgentMessageDelivery;
+  message_id?: string;
+  from?: string;
+  /** 仅 wake 投递：收件成员 id 与「是否真的排了唤醒」（旧 `agent.message.notified` 载荷） */
+  to?: string;
+  wake?: boolean;
   conversation_id?: string;
-  wake: boolean;
 }
 
 /** limit.blocked / agent.limit.warning 载荷（0.14.3 / 0.15） */
@@ -202,12 +204,11 @@ export type TuiEvent =
   | { type: 'agent.spawned'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.message.queued'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.message.sent'; run_id: string; data: AgentEventData; ts: number }
-  | {
-      type: 'agent.message.notified';
-      run_id: string;
-      data: AgentMessageNotifiedData;
-      ts: number;
-    }
+  /**
+   * 旧事件名（**只读**）：与 `agent.message.queued` 记录的是同一次投递，已不再发布；
+   * 保留联合成员是为了落盘历史仍能按名字读，而不是掉进 unknown 后被当成预算事件。
+   */
+  | { type: 'agent.message.notified'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.closed'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.stale'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.permission.requested'; run_id: string; data: AgentEventData; ts: number }
@@ -249,6 +250,7 @@ export const KNOWN_TUI_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent.spawned',
   'agent.message.queued',
   'agent.message.sent',
+  // 旧事件名只读：不再发布，只在回放落盘历史时出现（仍按已知事件读，不降级成 unknown）。
   'agent.message.notified',
   'agent.closed',
   'agent.stale',

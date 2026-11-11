@@ -16,6 +16,7 @@ import type { SessionMessageLike } from '../../commands/sessions-command.js';
 import { toolDisplayRegistry } from '../../components/ToolDisplay.js';
 import { t } from '../../i18n/index.js';
 import {
+  type AgentMessageDelivery,
   asTuiEvent,
   type RunEventLike,
   type TuiEvent,
@@ -162,6 +163,16 @@ function readNumber(data: Record<string, unknown>, ...keys: string[]): number | 
     if (typeof value === 'number' && Number.isFinite(value)) return value;
   }
   return undefined;
+}
+
+/**
+ * `agent.message.queued` 的投递模式：缺省（合并前落盘的行没有该字段）= `input`。
+ * `wake` / `quiet` 不进队列，投影不能把它们当成一次入队（否则「只唤醒」会被显示成
+ * idle / queued）。
+ */
+function messageDelivery(data: Record<string, unknown>): AgentMessageDelivery {
+  const delivery = readString(data, 'delivery');
+  return delivery === 'wake' || delivery === 'quiet' ? delivery : 'input';
 }
 
 const ERROR_CATEGORIES: ReadonlySet<string> = new Set([
@@ -867,6 +878,9 @@ export function reduceUiProjection(
     case 'agent.queue.entered':
     case 'agent.queue.left': {
       const data = event.data;
+      // 同一条 queued 事件带三种投递：wake / quiet 不是入队（不产生 run，也不带 state），
+      // 落到下面的 state 投影会把「只唤醒 / 只落 inbox」显示成 idle / queued。
+      if (event.type === 'agent.message.queued' && messageDelivery(data) !== 'input') return state;
       const agentId =
         readString(data, 'agent_id', 'agentId', 'delegate_id', 'delegateId') ?? event.run_id;
       const stateOf = readString(data, 'state');
@@ -1024,7 +1038,8 @@ export function reduceUiProjection(
     case 'update.available':
     case 'ask.user.answered':
     case 'agent.message.notified':
-      // notify 只送达 inbox（不运行 / 不排队），投影不产生 UI 变化。
+      // 旧事件名（只读）：合并前落盘的 notify 行不产生 UI 变化 —— 它只是 inbox 送达，
+      // 既没入队也没跑；新行改由 queued + delivery 表达（同上一条 case 的短路）。
       return state;
 
     case 'unknown': {

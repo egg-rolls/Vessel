@@ -379,6 +379,8 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
 
     case 'agent.message.queued': {
       if (delegateId === undefined) return nodes;
+      // 合并后同一条事件带 delivery（input / wake / quiet）：只有 input 投递带 `state`；
+      // wake / quiet 没有 state，节点状态原样保留 —— 唤醒不是入队，不能把成员刷成 idle。
       const state = memberStateOf(data);
       return updateMemberNode(nodes, event, data, delegateId, (node) => ({
         ...node,
