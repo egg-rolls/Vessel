@@ -298,10 +298,20 @@ export function buildHistoryIndex(
     }
   }
 
+  // ts carry：消息缺 timestamp（旧日志 / 迁移数据里的 assistant 段）时沿用**前一条**
+  // （本遍历方向上最近的）已知 ts。不 carry 就会按「缺 ts 排最后」沉到末尾，把一轮对话
+  // 的顺序拉反；前面没有任何已知 ts 时保持 undefined（缺省即未知，不造时间）。
+  // carry 只喂给「消息自己的 item」（message / runtime-notice）：工具卡的时间走
+  // toolResultTs / messageByIndex，认领回读（claimedUserTs）也不吃这份 carry。
+  let carriedTs: number | undefined;
+
   messages.forEach((message, index) => {
     const absIndex = messageIndexOffset + index;
     // 先入索引：隐藏的消息仍要支撑绝对下标 / 认领 / previous-user 回读。
     messageByIndex.set(absIndex, message);
+    // 隐藏 / 系统消息同样是日志里的一条：它们的 ts 就是时间轴上的前一个已知时刻。
+    if (message.timestamp !== undefined) carriedTs = message.timestamp;
+    const messageTs = message.timestamp ?? carriedTs;
     if (message.role === 'system') return;
     // 隐藏（runtime 上下文按可见性开关拦掉）：不进 item，也不参与用户输入认领。
     if (hidden.has(absIndex)) return;
@@ -375,7 +385,7 @@ export function buildHistoryIndex(
         noticeKind,
         text: message.content,
         absIndex,
-        ...(message.timestamp !== undefined ? { ts: message.timestamp } : {}),
+        ...(messageTs !== undefined ? { ts: messageTs } : {}),
       });
       return;
     }
@@ -385,7 +395,7 @@ export function buildHistoryIndex(
       absIndex,
       message,
       ...(sourceText !== undefined ? { sourceText } : {}),
-      ...(message.timestamp !== undefined ? { ts: message.timestamp } : {}),
+      ...(messageTs !== undefined ? { ts: messageTs } : {}),
     });
   });
 

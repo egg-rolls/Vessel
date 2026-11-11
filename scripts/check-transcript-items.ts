@@ -1174,8 +1174,8 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
-    name: 'O7（原 F7，迁移缺口）缺 timestamp 的历史消息当前沉到末尾',
-    why: '旧门禁要求缺 ts 的消息沿用前一条时间；单一 item 流不做这个 carry，msg:1 没有 ts 就排最后。补上 carry 后把这条翻成 msg:0,msg:1,msg:2 且 ts 沿用 1000。',
+    name: 'O7（原 F7）缺 timestamp 的历史消息沿用前一条 ts，不沉底',
+    why: '历史消息缺 ts 时沿用遍历方向上最近的一条已知 ts（这条规格原先没有实现，msg:1 无 ts 会沉到末尾）；不 carry 就把一轮对话的顺序拉反。前面没有任何已知 ts 时保持 undefined —— carry 不造时间。',
     check: () => {
       const items = buildTranscriptItems({
         messages: [
@@ -1188,8 +1188,20 @@ const FIXTURES: readonly Fixture[] = [
         queued: [],
       });
       const legacy = items.find((item) => item.kind === 'message' && item.absIndex === 1);
+      // 没有前一条可沿用（窗口首条就缺 ts）：保持 undefined——carry 不造时间。
+      const headless = buildTranscriptItems({
+        messages: [msg('assistant', 'legacy'), msg('user', 'q1', { timestamp: 1000 })],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      });
+      const first = headless.find((item) => item.kind === 'message' && item.absIndex === 0);
       return (
-        keys(items).join(',') === 'msg:0,msg:2,msg:1' && legacy !== undefined && legacy.ts === undefined
+        keys(items).join(',') === 'msg:0,msg:1,msg:2' &&
+        legacy !== undefined &&
+        legacy.ts === 1000 &&
+        first !== undefined &&
+        first.ts === undefined
       );
     },
   },
