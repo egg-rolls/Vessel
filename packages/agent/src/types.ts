@@ -669,6 +669,8 @@ export interface AdmitInput {
    * 缺省 = 普通 `run`。
    */
   resume?: boolean;
+  /** 内部（非 wire、非持久）：本轮给父级的最终回报，收口不再自动回传最终文本。 */
+  final?: boolean;
 }
 
 /** 统一准入结果；`session_id` 是 body id */
@@ -740,6 +742,8 @@ export interface DispatchInput {
   origin_run_id?: string;
   /** 0.41：内部（非 wire、非持久）一次 messages 数组的 notify 边计数 key。 */
   batch_key?: string;
+  /** 内部（非 wire、非持久）：本轮给父级的最终回报，收口不再自动回传最终文本。 */
+  final?: boolean;
 }
 
 /** dispatch 结果：queued 表示已入队；notified 表示 notify 成功；rejected 是明确拒绝 */
@@ -1441,6 +1445,11 @@ export interface TeamDelivery {
   reason?: string;
 }
 
+/** `post` 的内部选项（非 wire）：`final` 表示本次投递是本轮给父级的最终回报。 */
+export interface TeamPostOptions {
+  final?: boolean;
+}
+
 export interface TeamPostInput {
   team_id: string;
   content: string;
@@ -1531,6 +1540,13 @@ export interface TeamAgentSendInput {
   origin_run_id?: string;
   /** 0.41：内部（非 wire、非持久）一次 messages 数组的 notify 边计数 key。 */
   batch_key?: string;
+  /**
+   * 内部（非 wire、非持久）：这次投递是「本轮给父级的最终回报」。
+   *
+   * 成功投出后把该 run 记成已最终回报，收口不再自动回传最终文本（否则同一份报告
+   * 会投两次）。缺省 false = fail-open：照常回传，宁可重复也不吞结论。
+   */
+  final?: boolean;
 }
 
 export interface TeamAgentSendResult {
@@ -1686,7 +1702,8 @@ export interface AgentTeamService {
   list(options?: TeamListOptions): Promise<TeamSummary[]>;
   get(teamId: string, options?: TeamGetOptions): Promise<TeamDetail | undefined>;
   roster(teamId: string, options?: TeamRosterOptions): Promise<TeamMemberSummary[]>;
-  post(input: TeamPostInput): Promise<TeamPostResult>;
+  /** `options.final` 是内部（非 wire）标记：本次投递是本轮给父级的最终回报 */
+  post(input: TeamPostInput, options?: TeamPostOptions): Promise<TeamPostResult>;
   /** 追加撤回 tombstone；目标必须仍在可读日志窗口内。 */
   retract(input: TeamRetractInput): Promise<TeamRetractResult>;
   /** 未知 Team 返回 undefined；业务失败抛 TeamError */

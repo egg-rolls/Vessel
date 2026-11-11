@@ -78,7 +78,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 ## Team 与 body 会话：一条消息一个 run
 
 - Team `@` 路径：`TeamService.post` 先写 Team 日志（`kind: 'mention'`），再按结构化 `mentions` 逐条 `admit({ channel: 'team', origin_team_id, conversation_id })`。消息进入目标 body 的 mailbox，由该 body 的 `ExecutionUnit` 执行；assistant 文本随 `RunJournal.saveSessionState` 写入该 body session。不存在“Team 会话”与“私聊会话”两套存储，同一 body 上的所有投递共用一份历史。
-- `run.*` 是唯一执行生命周期（payload 带 `agent_id` + `session_id`）。成功轮 team 可见成员由 `TeamService` 从 `run.completed.output` 写一条 `kind: 'reply'` 的 Team 日志；失败 / 取消轮从 `run.failed` / `run.cancelled` 写 `kind: 'system'` 条目 `turn failed: <reason>` / `turn cancelled: <reason>`，不写 reply。private 成员与被 fence 的旧 body 不写 Team 日志。同一段文本分别落在 session（上下文消息）与 Team 日志（事件记录），不是双写同一存储。
+- `run.*` 是唯一执行生命周期（payload 带 `agent_id` + `session_id`）。成功轮 team 可见成员由 `TeamService` 从 `run.completed.output` 写一条 `kind: 'reply'` 的 Team 日志；失败 / 取消轮从 `run.failed` / `run.cancelled` 写 `kind: 'system'` 条目 `turn failed: <reason>` / `turn cancelled: <reason>`，不写 reply。private 成员与被 fence 的旧 body 不写 Team 日志。同一段文本分别落在 session（上下文消息）与 Team 日志（事件记录），不是双写同一存储。**显式 `agent send` 带 `final: true` 时收口不再自动回传**：一轮里成员显式投给**自己的父级**（id / name / 地址任一形态）且带该结构标记，成功投出后该 run 收口不再 `deliverToParent`（记账 `active.lastParentReply.final`，写在 `admitInternal` 的成功出口）；未带标记则照常回传（fail-open：宁可重复，绝不吞结论），唯一例外是逐字相同（正文与最终文本 trim 后完全相等时不重复投递，只比全文，不做前缀 / 包含 / 相似度）。`active.replied`（`reply()` 语义）是另一条独立闸门，无生产调用者。
 - `conversation_id` 只是预算 / 分组键，不是 session 身份：一次 Team `@` 的所有 mention 共用同一个 `conversation_id`；未显式携带的直聊会新生成一个。不同 conversation 的消息仍累积在同一 body session 的历史里。
 
 <a id="inbox-state-machine"></a>

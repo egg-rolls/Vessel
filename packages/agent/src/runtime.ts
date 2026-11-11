@@ -681,9 +681,16 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
     description:
       'send: with interrupt, deliver an existing inbox message id instead of new content',
   },
+  final: {
+    type: 'boolean',
+    description:
+      'send: this message is your turn final report — after it lands the run will not ' +
+      'auto-deliver its final text to your caller parent, so the report is not sent twice. ' +
+      'Leave it unset for progress updates and confirmations',
+  },
   messages: {
     type: 'array',
-    description: 'send: [{to, content, interrupt?, notify?, message_id?}]',
+    description: 'send: [{to, content, interrupt?, notify?, message_id?, final?}]',
   },
   members: {
     type: 'array',
@@ -728,7 +735,8 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
       'rotate (rotate your own body; startup_prompt is required), ' +
       'post (append to your team log only; nobody is notified), ' +
       'send (dispatch a message to a member; interrupt:true for urgent, notify:true to ' +
-      'append to the target inbox plus a summary wake), ' +
+      'append to the target inbox plus a summary wake, final:true when the message is your ' +
+      'turn final report so the run does not auto-deliver its final text to your caller), ' +
       'list (list the caller-visible roster).',
     inputSchema: {
       ...schema,

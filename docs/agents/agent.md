@@ -47,6 +47,7 @@ applies_to: [N, M]
 - 准入唯一：`dispatch` 与 strict `send` 共用同一条 `admit`（可投性检查 → 目标 body mailbox → `scheduler.submit`）；live / rotating 入队，gone 先 single-flight resume 再入队；不得在每个入口重写状态检查或并发 spawn。有来源创建有两条入口：`gone + resume` 失败后按 `teams[].policy.allowAutoCreate` / 显式 `allow_auto_create` 自动发生（`ensureCreatedOnDispatch` → `createDerivedAgent`），或公共 `agents.create{from_session_id}` 显式新建；rotate 失败保持旧 primary，`sessions.restart` / `sessions.create` 失败零写入（ADR-091/092/097/098）。
 - close 的审批在权限层完成：self、owner 关闭 contractor（同 owner 或同 Team）、root owner 调用直接放行；成员关闭 peer 必须经 bridge 由人类审批；root owner 记录与跨 Team contractor 必须拒绝；无 bridge 时 ask 必须 fail closed。owner close 级联自己的 private contractor，team 可见 contractor 保留。
 - Team 日志不是队列：无 `@` 的 post / reply / system 绝不产生 run；`@` 必须先写日志再逐条 `admit`；`TeamService` 是唯一写入点，reply 由 `run.completed.output` 驱动、失败 / 取消写 `system` 条目。
+- 成员回报的 `final` 标记：`agent send` 可选 `final: true`，表示「这条是本轮给父级的最终回报」——成功投出后该 run 收口不再自动 `deliverToParent`（记录在 `active.lastParentReply.final`）。**用法：每次给父级的最终报告置 `final: true`；中途进度 / 确认不要置**（不带标记照常自动回传，属于 fail-open：宁可重复也不吞结论）；另一个免标记条件只是「正文与最终文本逐字相同」（不做相似度判断）。
 - 可见性 fail closed：private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；team-scoped token 只能访问自己的 `team_id`，不匹配 `not_found`。
 - `teams.create` 仅 human / admin；`archive` 拒绝 present 成员（`team_not_empty`），不提供隐式 hard delete。
 

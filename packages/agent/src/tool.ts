@@ -185,6 +185,7 @@ function mapSend(record: Record<string, unknown>): Record<string, unknown> {
   if (record.interrupt !== undefined) input.interrupt = record.interrupt;
   if (record.notify !== undefined) input.notify = record.notify;
   if (record.message_id !== undefined) input.message_id = record.message_id;
+  if (record.final !== undefined) input.final = record.final;
   return input;
 }
 
@@ -255,7 +256,9 @@ export function createAgentTool(
       'has one. ' +
       'send: dispatch a message (live queue now, gone resume first, rotating queue for the new ' +
       'body); returns immediately. Add interrupt:true for urgent (cancel + front of queue) or ' +
-      'notify:true to append to the inbox + summary wake without running. ' +
+      'notify:true to append to the inbox + summary wake without running. Add final:true when ' +
+      'this message is your turn final report: the run will not auto-deliver its final text to ' +
+      'your caller, so the report is not sent twice. ' +
       'close: release member(s), idempotent. list: return the roster. ' +
       'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first, ' +
       'plus an optional title that AI naming will not overwrite; ' +
@@ -315,9 +318,16 @@ export function createAgentTool(
           description:
             'send: with interrupt, deliver an existing inbox message id instead of new content',
         },
+        final: {
+          type: 'boolean',
+          description:
+            'send: this is the final report for this turn — after it lands, the run will not ' +
+            'auto-deliver its final text to your caller parent, so the same report is not sent ' +
+            'twice. Leave it unset for progress updates and confirmations',
+        },
         messages: {
           type: 'array',
-          description: 'send: [{to, content, interrupt?, notify?, message_id?}]',
+          description: 'send: [{to, content, interrupt?, notify?, message_id?, final?}]',
         },
         member: { type: 'string', description: 'close: member id or session id' },
         startup_prompt: {
@@ -619,6 +629,8 @@ export function createAgentTool(
             const interrupt = mapped.interrupt === true;
             const notify = mapped.notify === true;
             const messageId = typeof mapped.message_id === 'string' ? mapped.message_id : undefined;
+            // 结构标记（不是内容猜测）：这一条是本轮给父级的最终回报。
+            const finalFlag = mapped.final === true;
             if (!isOwnerCaller) {
               if (options.team === undefined) throw invalid('send requires a team service');
               return options.team.send({
@@ -628,6 +640,7 @@ export function createAgentTool(
                 ...(interrupt ? { interrupt: true } : {}),
                 ...(notify ? { notify: true } : {}),
                 ...(messageId !== undefined ? { message_id: messageId } : {}),
+                ...(finalFlag ? { final: true } : {}),
                 origin_run_id: ctx.run_id,
                 ...(batchKey !== undefined ? { batch_key: batchKey } : {}),
               });
@@ -665,6 +678,7 @@ export function createAgentTool(
               ...(interrupt ? { interrupt: true } : {}),
               ...(notify ? { notify: true } : {}),
               ...(messageId !== undefined ? { message_id: messageId } : {}),
+              ...(finalFlag ? { final: true } : {}),
               // 内部（非 wire）：tool 路径按调用者 session 继承会话 / 按 run 去重边。
               ...(callerSession !== undefined ? { origin_session_id: callerSession } : {}),
               origin_run_id: ctx.run_id,
@@ -679,7 +693,7 @@ export function createAgentTool(
             // 三档 flag 是逐条投递语义：与 messages 数组同用会被静默丢弃，必须显式拒绝。
             assertExclusive(
               record,
-              ['to', 'content', 'interrupt', 'notify', 'message_id'],
+              ['to', 'content', 'interrupt', 'notify', 'message_id', 'final'],
               'messages',
               'send',
             );

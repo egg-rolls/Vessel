@@ -238,7 +238,21 @@ interface ExecutionUnitEntry {
   /** 已提交给 scheduler、尚未开始执行的 run */
   queuedRuns: Set<string>;
   /** 正在执行的 run（同 body 同时最多一个） */
-  active?: { runId: string; messageId?: string; conversationId?: string; replied: boolean };
+  active?: {
+    runId: string;
+    messageId?: string;
+    conversationId?: string;
+    /** `reply()` 语义：本轮已显式回复父级，收口不再自动回传最终文本。 */
+    replied: boolean;
+    /**
+     * 本轮最后一次**显式投给父级**的正文（trim 后）与它是否被标成「最终回报」。
+     *
+     * 收口据此决定是否省掉自动回传：`final === true` → 不再回传；否则只有正文与最终
+     * 文本逐字相同时才不回传。中途进度 / 确认（不带 `final`）与收口结论不同，照常回传
+     * （不做前缀 / 包含 / 相似度判断）。
+     */
+    lastParentReply?: { runId: string; content: string; final: boolean };
+  };
   budgetHold: Set<string>;
   closing: boolean;
   spawned: boolean;
@@ -293,6 +307,22 @@ type SeedMessage = Message & { origin?: string };
 interface AdmitOutcome {
   result: AdmitResult;
   message: AgentMessage;
+}
+
+/**
+ * 显式回报与最终文本是否是同一份内容（只比 trim 后的全文）。
+ *
+ * 收口处用它决定「这次自动回传是否多余」：显式回报 = 最终文本时是同一份内容，
+ * 回落成重复投递；中途进度 + 收口结论是两件事，必须都到父级。**不做**前缀 /
+ * 包含 / 相似度判断 —— 那会把「进度 + 结论」误判成重复，等于静默丢结论。
+ */
+function isSameParentReply(
+  last: { content: string } | undefined,
+  finalText: string | undefined,
+): boolean {
+  if (last === undefined || typeof finalText !== 'string') return false;
+  const trimmed = finalText.trim();
+  return trimmed.length > 0 && trimmed === last.content;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2155,6 +2185,7 @@ export class AgentServiceImpl implements AgentService {
         });
         const runId = this.newId();
         this.runMessageIds.set(runId, message.id);
+        this.noteParentReply(from, record.id, input.origin_run_id, content, input.final === true);
         this.emitForSession('agent.message.queued', record, rotation.toSessionId, {
           state: record.state,
           message_id: message.id,
@@ -2202,6 +2233,8 @@ export class AgentServiceImpl implements AgentService {
       throw error;
     }
     this.runMessageIds.set(submitted.runId, message.id);
+    // 记下本次显式回报的正文与 final 标记：收口据此判断是否该省掉自动回传。
+    this.noteParentReply(from, record.id, input.origin_run_id, content, input.final === true);
     const status = submitted.handle.status();
     const queuePosition = this.queuePositionFor(submitted.runId, status);
     return {
@@ -2430,8 +2463,9 @@ export class AgentServiceImpl implements AgentService {
         ...(result?.usage !== undefined ? { usage: result.usage } : {}),
       });
     }
-    // 先取出本轮是否已显式 reply；随后清空 active（同 body 可继续下一轮）
+    // 先取出本轮的显式 reply 记账；随后清空 active（同 body 可继续下一轮）
     const replied = entry.active?.replied === true;
+    const lastParentReply = entry.active?.lastParentReply;
     entry.active = undefined;
     entry.state = 'idle';
     entry.lastActiveAt = this.now();
@@ -2478,7 +2512,14 @@ export class AgentServiceImpl implements AgentService {
     if (outcome === 'completed' && !handle.cancelRequested) {
       // 0.41：synthetic 摘要唤醒不是真实回复；不投父级（否则会制造父 run 风暴）。
       if (!replied && !this.syntheticRunIds.has(handle.id)) {
-        await this.deliverToParent(current, result?.content, conversationId);
+        // 三条抑制口径（其余一律照常回传 = fail-open）：
+        // 1. `replied`：`reply()` 语义，本轮已显式回复父级；
+        // 2. `lastParentReply.final`：显式回报自带 `final:true`（结构标记，不猜内容）；
+        // 3. 逐字相同：显式回报正文与最终文本 trim 后完全一致（不做相似度判断）。
+        const settledByFinal = lastParentReply?.final === true;
+        if (!settledByFinal && !isSameParentReply(lastParentReply, result?.content)) {
+          await this.deliverToParent(current, result?.content, conversationId);
+        }
       }
     }
 
@@ -2804,6 +2845,39 @@ export class AgentServiceImpl implements AgentService {
       });
       // 0.32：投递失败不再只留日志；可见事件让入口侧能看到丢失的回复。
       this.emit('agent.reply.drop_failed', member, { to: parent.id, reason });
+    }
+  }
+
+  /**
+   * 记下「本轮最后一次显式投给父级的正文 + final 标记」，供收口处的抑制判定使用。
+   *
+   * 收口（`startExecutionUnitRun`）的自动回传闸门：`replied`（`reply()` 语义）为真 →
+   * 不投；`lastParentReply.final === true` → 不投；显式回报正文与最终文本 trim 后逐字
+   * 相同 → 不投。三种之外**一律照常投**（fail-open：宁可重复，绝不吞结论）。
+   *
+   * 0.41 起成员的显式回报走 `TeamService.send → AgentService.dispatch → admitInternal`，
+   * 不再经过 `reply()`（ADR-092 Errata 已记「无生产调用者」），所以这里只做记账：
+   * 不带 `final` 的显式回报（进度 / 确认）不会压掉收口结论。
+   *
+   * 只认「目标是本成员的父级」：投给 peer 不记账。只在投递**成功之后**调用：显式回报
+   * 被预算 / 可见性拒绝时不记账（fail-open）。`origin_run_id` 由 tool / dispatch 路径
+   * 给出时按它精确定位；地址形态的 send（`TeamService.post → dispatchMention`）不带该
+   * 字段，此时落到「每个 body 同时至多一个 active run」的那一具。
+   */
+  private noteParentReply(
+    from: string,
+    targetId: string,
+    originRunId: string | undefined,
+    content: string,
+    final: boolean,
+  ): void {
+    const sender = this.registry.get(from);
+    if (sender === undefined || sender.parentId !== targetId) return;
+    for (const entry of this.liveEntries(sender.id)) {
+      const active = entry.active;
+      if (active === undefined) continue;
+      if (originRunId !== undefined && active.runId !== originRunId) continue;
+      active.lastParentReply = { runId: active.runId, content: content.trim(), final };
     }
   }
 
@@ -3625,6 +3699,8 @@ export class AgentServiceImpl implements AgentService {
     const originRunId =
       raw.origin_run_id === undefined ? undefined : readRequiredString(raw, 'origin_run_id');
     const batchKey = raw.batch_key === undefined ? undefined : readRequiredString(raw, 'batch_key');
+    // 内部标记（非 wire）：本次投递是本轮给父级的最终回报，收口不再自动回传最终文本。
+    const final = raw.final === true;
 
     // 三档输入互斥与地址限制：在解析目标 / 产生任何副作用之前拒绝。
     if (interrupt && notify) {
@@ -3744,6 +3820,7 @@ export class AgentServiceImpl implements AgentService {
         ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
         conversation_id: conversationId,
         strict: false,
+        ...(final ? { final: true } : {}),
       });
 
     // admit 会把 presence 拉回 live，所以先捕获投递前的 presence 来区分 live / resumed。
