@@ -138,6 +138,24 @@ export const runStatusSchema = {
 };
 
 /** `sessions.get` 的 `session`：SessionState + 最近 RunRecord 的投影。 */
+/**
+ * 会话级上下文用量（`sessions.get.context_usage`，additive）。
+ *
+ * **整字段缺省 = 没有可用数据**（新会话还没跑过 / 尾部没有用量事件），不是 0、不是 null。
+ * `max` 缺省表示上下文窗口未知 —— 客户端据此不画比例（不假造）。
+ * `source` 只是自查字段（这个数字来自哪条事件的哪个字段），UI 不消费。
+ */
+export const contextUsageSchema = {
+  type: 'object',
+  required: ['used'],
+  properties: {
+    used: { type: 'integer', minimum: 0 },
+    max: { type: 'integer', minimum: 0 },
+    at: { type: 'number' },
+    source: { type: 'string', enum: ['pressure', 'changed', 'estimated', 'prompt'] },
+  },
+};
+
 export const runStateSchema = {
   type: 'object',
   required: ['run_id', 'session_id', 'messages', 'started_at', 'status'],
@@ -160,6 +178,8 @@ export const runStateSchema = {
     preview: { type: 'string' },
     updated_at: { type: 'number' },
     branch: { type: 'string' },
+    // Additive（会话级上下文用量，从事件日志尾窗派生）：缺省 = 没有可用数据。
+    context_usage: contextUsageSchema,
   },
 };
 

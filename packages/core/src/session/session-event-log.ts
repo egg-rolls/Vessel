@@ -90,6 +90,12 @@ const TAIL_WINDOW_BYTES = 64 * 1024;
 const TAIL_WINDOW_MAX = 4 * 1024 * 1024;
 /** 同时保持打开的 writer 上限 */
 const DEFAULT_MAX_OPEN_WRITERS = 32;
+/**
+ * `readTailMatches` 的尾窗回扫口径：首窗 64 KiB，不够就 ×4 扩窗，
+ * 最多读 {@link TAIL_MATCH_MAX_BYTES} 后放弃（**不回退全量扫盘**）。
+ */
+const TAIL_MATCH_FIRST_BYTES = 64 * 1024;
+const TAIL_MATCH_MAX_BYTES = 4 * 1024 * 1024;
 
 interface WriterState {
   sessionId: string;
@@ -321,6 +327,58 @@ async function findIncrementalStart(
     if (window >= TAIL_WINDOW_MAX) return undefined; // 单条记录超过窗口上限
     window = Math.min(window * 8, size);
   }
+}
+
+/** `readTailMatches` 的结果：命中记录（**新 → 旧**）+ 本次从磁盘读了多少字节。 */
+export interface TailMatches {
+  /** 命中的记录，按文件顺序**从新到旧**（日志只追加 ⇒ 也等于 seq 降序）。 */
+  records: SessionEventRecord[];
+  /** 本次调用实际读的字节数（缓存 / 读取成本说明用） */
+  bytesRead: number;
+}
+
+/** `readTailMatches` 选项。 */
+export interface ReadTailMatchesOptions {
+  /** 最多取几条命中（缺省 8）；命中够了就不再往前扫。 */
+  limit?: number;
+  /** 回扫字节预算（缺省 4 MiB；下限 1 字节、不会超过文件大小）。 */
+  maxBytes?: number;
+}
+
+/**
+ * 在一个尾窗内**从后往前**收集 `type ∈ types` 的本 session 记录（新 → 旧）。
+ *
+ * 只解析完整行：窗口起点切在一条记录中间时（`completeFromStart === false`），
+ * 那一行（buffer 偏移 0 起的部分）不完整，直接丢弃 —— 不拼接、不猜。
+ * 坏行 / 崩溃残行跳过（与 `recoverLastSeq` 同策略）；别的 session 的记录跳过
+ * （多写者 / 目录混用时 seq 属另一个序列）。
+ */
+function scanTailWindow(
+  buffer: Buffer,
+  completeFromStart: boolean,
+  sessionId: string,
+  types: ReadonlySet<string>,
+  limit: number,
+): SessionEventRecord[] {
+  const found: SessionEventRecord[] = [];
+  let cursor = buffer.length;
+  while (cursor > 0) {
+    let stop = cursor;
+    while (stop > 0 && buffer[stop - 1] === 0x0a) stop -= 1; // 跳过行尾换行
+    if (stop === 0) break;
+    const newline = buffer.lastIndexOf(0x0a, stop - 1);
+    // 窗口起点切在记录中间：buffer[0] 起的那一行不可信，到此为止（由调用方扩窗）。
+    if (newline === -1 && !completeFromStart) break;
+    const lineStart = newline + 1;
+    const record = parseRecord(buffer.toString('utf8', lineStart, stop));
+    cursor = lineStart;
+    if (record === null) continue;
+    if (record.session_id !== sessionId) continue;
+    if (!types.has(record.type)) continue;
+    found.push(record);
+    if (found.length >= limit) break;
+  }
+  return found;
 }
 
 /**
@@ -628,6 +686,77 @@ export class SessionEventLog {
     // 文件行序在轮换写者下不保证与 seq 一致；对外承诺按 seq 升序。
     collected.sort((a, b) => a.seq - b.seq);
     return limit !== undefined ? collected.slice(0, limit) : collected;
+  }
+
+  /**
+   * 从**文件尾部**回扫，收集 `type ∈ types` 的最近若干条事件（**新 → 旧**）。
+   *
+   * 为什么不是 `read()`：`read()` 是「从头 / 从 `sinceSeq` 往后」的正向游标语义
+   * （内部靠尾窗定位**起点**），拿它找「最后一条某类型事件」等于把整份日志流一遍
+   * —— 10MB 日志 ≈100ms。本方法只读尾窗：首窗 64 KiB，读到一个窗口足以判定后即停；
+   * 该窗内没有任何命中才 ×4 扩窗，最多读 `maxBytes`（缺省 4 MiB）。
+   *
+   * **语义边界**（调用方要按「没有数据」处理，不能当成 0）：
+   * - 只认本 session 的行；返回**文件顺序上最新的 ≤limit 条**匹配记录（日志只追加，
+   *   即 seq 降序）；
+   * - **找到第一条就停**（不再为更老的候选扩窗）：调用方只需要「最新那条可用的」；
+   * - 预算用完仍无命中 → 空数组，**不回退全量扫盘、不猜**：目标事件离尾部太远
+   *   （日志很长且最近没发生过这类事件）时，本方法宁可说「不知道」；
+   * - 尾部崩溃残行 / 坏行跳过；窗口起点切在记录中间的那一行不解析（不拼接）。
+   *
+   * 读取前等该 session 的写入队列排空，与 `read()` 同一口径（读到已落盘的数据）。
+   */
+  async readTailMatches(
+    sessionId: string,
+    types: readonly string[],
+    opts: ReadTailMatchesOptions = {},
+  ): Promise<TailMatches> {
+    const wanted = new Set(types);
+    const limit =
+      typeof opts.limit === 'number' && Number.isFinite(opts.limit)
+        ? Math.max(0, Math.floor(opts.limit))
+        : 8;
+    if (wanted.size === 0 || limit === 0) return { records: [], bytesRead: 0 };
+
+    const state = this.writers.get(sessionId);
+    if (state) {
+      await state.ready.catch(() => {});
+      await state.queue;
+    }
+    await this.draining.get(sessionId)?.catch(() => {});
+
+    const path = sessionEventsFilePath(this.dir, sessionId);
+    let size: number;
+    try {
+      size = (await stat(path)).size;
+    } catch (error) {
+      if (isNotFound(error)) return { records: [], bytesRead: 0 };
+      throw error;
+    }
+    if (size <= 0) return { records: [], bytesRead: 0 };
+
+    const requested =
+      typeof opts.maxBytes === 'number' && Number.isFinite(opts.maxBytes)
+        ? Math.floor(opts.maxBytes)
+        : TAIL_MATCH_MAX_BYTES;
+    const maxBytes = Math.max(1, Math.min(requested, size));
+    let window = Math.min(TAIL_MATCH_FIRST_BYTES, maxBytes);
+    let bytesRead = 0;
+    for (;;) {
+      const start = Math.max(0, size - window);
+      const length = size - start;
+      const buffer = await readWindow(path, start, length);
+      // 读取期间文件变短：不猜，交给调用方按「无数据」处理。
+      if (buffer === undefined) return { records: [], bytesRead };
+      bytesRead += length;
+      const records = scanTailWindow(buffer, start === 0, sessionId, wanted, limit);
+      // 找到至少一条就停：调用方只要「最新那条可用的」，为更老的候选扩窗只会白读。
+      if (records.length > 0) return { records, bytesRead };
+      if (start === 0) return { records, bytesRead }; // 整份文件都看过了
+      if (window >= maxBytes) return { records, bytesRead }; // 预算用完：不扫全盘
+      window = Math.min(window * 4, maxBytes);
+      // 已扩到「整份文件」时仍会再读一遍完整前缀：下次循环 start === 0 直接收口。
+    }
   }
 
   /** 遍历事件；不传 sessionId 时遍历所有会话目录（按目录名排序） */

@@ -109,6 +109,21 @@ export interface SessionDetail {
   error?: string;
   /** 该 run 的终态时刻（终态 status 下等于 `updated_at`）。 */
   completed_at?: number;
+  /**
+   * 会话级上下文用量（additive `sessions.get.context_usage`）：
+   * 服务端从**该会话的事件日志尾窗**派生，历史会话 / rotate 之后 / 进程重启之后
+   * 都可用（`agents.tree` 的 `context_used` 只是 live body，重启就没了）。
+   *
+   * **整字段缺省 = 没有可用数据**（新会话还没跑过），不是 0；`max` 缺省 = 上下文窗口
+   * 未知，此时不画比例（`ComposerContextMeter` 的既定口径）。`source` 是自查字段
+   * （这个数字来自哪条事件的哪个字段），UI 不消费。旧 gateway 缺失该键。
+   */
+  context_usage?: {
+    used: number;
+    max?: number;
+    at?: number;
+    source?: 'pressure' | 'changed' | 'estimated' | 'prompt';
+  };
 }
 
 /** ask_user 单个问题 */

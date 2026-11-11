@@ -38,6 +38,7 @@ import {
   type ReadTraceOptions,
   readTraceEvents,
   rebuildMetrics,
+  sessionEventsFilePath,
 } from '../packages/core/src/index';
 import {
   buildPluginCatalog,
@@ -61,6 +62,7 @@ import { buildCliConfigOverrides } from './cli-overrides';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import { type ConfigWatchHandle, startConfigWatch, toConfigReloadOutcome } from './config-watch';
 import { createWrittenConfigApplier } from './config-write-apply';
+import { createContextUsageSource } from './context-usage';
 import type { FeishuChannelLike } from './control-plane-types';
 import { expandHome, resolveDataDir } from './data-paths';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
@@ -1238,6 +1240,23 @@ async function runWithConfig(result: BootstrapResult) {
         // 活 SessionLease）直接抛 `conflict`，不做任何删除。
         deleteSessionData: (sessionId: string) => gatewayBundle.sessionControl.delete(sessionId),
       },
+      // 会话级上下文用量（additive `sessions.get.context_usage`）：从**会话事件日志
+      // 尾窗**派生，历史会话 / rotate 之后 / 进程重启之后都能恢复。内存注册表
+      // （`agents.tree` 的 `context_used`）只覆盖 live body，不能当唯一来源。
+      // `contextWindowTokens` 与 runtime 算百分比的分母同源（`config.context.maxTokens`，
+      // 缺省走 `DEFAULT_CONFIG`）；已知边界：配置是全局一个值，见 addendum。
+      ...(gatewayBundle.eventLog !== undefined
+        ? {
+            contextUsage: createContextUsageSource({
+              tail: gatewayBundle.eventLog,
+              eventsFile: (sessionId: string) =>
+                sessionEventsFilePath(gatewayBundle.tenantPaths.sessions_dir, sessionId),
+              ...(liveConfig.context?.maxTokens !== undefined
+                ? { contextWindowTokens: liveConfig.context.maxTokens }
+                : {}),
+            }),
+          }
+        : {}),
       metricsControl: {
         rebuild: () => rebuildMetrics(gatewayBundle.tenantPaths.events_dir),
         reset: () => {

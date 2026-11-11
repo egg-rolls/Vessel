@@ -158,7 +158,14 @@ export function useChatTranscript({
   const activeAgent =
     selectedId && routeAgentId ? findAgent(sessionAgents, routeAgentId) : undefined;
 
-  // 会话头上下文长度：agents.tree 主 agent 的 context_used；运行中 5s 轮询。
+  // 上下文用量：**live 优先，落盘兜底**。
+  //
+  // 1. live：`agents.tree` 主 agent 的 `context_used` / `context_max`（运行中 5s 轮询，
+  //    最新鲜）；
+  // 2. 落盘：`sessions.get.context_usage`（服务端从该会话**事件日志尾窗**派生）。
+  //    历史会话 / rotate 之后 / 进程重启之后 live 注册表是空的，只有这一份能回答
+  //    「这个会话用了多少上下文」—— 用量是会话属性，不是身体属性；
+  // 3. 两者都没有 → `undefined`（不伪造：`ComposerContextMeter` 在无数据时不渲染）。
   const sessionRunning =
     selectedId !== null &&
     (sessions.some(
@@ -187,9 +194,30 @@ export function useChatTranscript({
     ...(sessionRunning ? { pollMs: 5000 } : {}),
     deps: [selectedId, epoch, sessionRunning],
   });
-  const contextData = resourceData(contextResource.state);
-  const contextUsage =
-    selectedId && contextData?.sessionId === selectedId ? contextData : undefined;
+  const liveContextData = resourceData(contextResource.state);
+  // 只认属于当前选中会话的那一份（切会话时旧响应不能串到新会话）。
+  const liveContextUsage =
+    selectedId !== null && liveContextData != null && liveContextData.sessionId === selectedId
+      ? liveContextData
+      : undefined;
+  // 落盘兜底同样只认当前选中会话的那一份（`sessionDetailId` 是 detail 的归属标记）。
+  const persistedContextUsage =
+    selectedId !== null && sessionDetailId === selectedId
+      ? sessionDetail?.context_usage
+      : undefined;
+  const contextUsage = useMemo(() => {
+    if (liveContextUsage) {
+      const max = liveContextUsage.max ?? persistedContextUsage?.max;
+      return { used: liveContextUsage.used, ...(max !== undefined ? { max } : {}) };
+    }
+    if (persistedContextUsage) {
+      return {
+        used: persistedContextUsage.used,
+        ...(persistedContextUsage.max !== undefined ? { max: persistedContextUsage.max } : {}),
+      };
+    }
+    return undefined;
+  }, [liveContextUsage, persistedContextUsage]);
 
   // detail 只认属于当前选中项的那一份（切走时旧响应不能串到新会话）。
   const currentDetailError = sessionDetailId === selectedId ? sessionDetailError : null;

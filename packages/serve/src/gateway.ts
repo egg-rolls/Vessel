@@ -84,7 +84,7 @@ import {
   type PermissionsControl,
 } from './gateway/methods/permissions.js';
 import { createRunMethods } from './gateway/methods/runs.js';
-import { createSessionMethods } from './gateway/methods/sessions.js';
+import { createSessionMethods, type SessionContextUsagePort } from './gateway/methods/sessions.js';
 import { createTeamMethods } from './gateway/methods/teams.js';
 import {
   flushSseGap,
@@ -311,6 +311,17 @@ export interface GatewayOptions {
       events_deleted: number;
     }>;
   };
+  /**
+   * 会话级上下文用量（additive `sessions.get.context_usage`，asm 注入）。
+   *
+   * 用量是**会话属性**，不是身体属性：内存注册表（`agents-registry`）里的 live 值
+   * 在进程重启 / rotate 之后就没了，历史会话永远拿不到。装配层用 tenant 的
+   * `SessionEventLog` 做尾窗回扫（`src/context-usage.ts`）实现这个端口，serve 只
+   * 负责按「session + 事件日志尾水位」缓存并透出 —— 不拼磁盘路径、不读盘。
+   *
+   * 缺省 = `sessions.get` 不带该字段（旧行为一字不改）。
+   */
+  contextUsage?: SessionContextUsagePort;
   /**
    * 方法层（`events.list` 等）脱敏；缺省 core 默认 redactor。
    * 实时广播的脱敏由 hub 的 `map` 决定——自定义时应把同一实例传给
@@ -1465,6 +1476,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       sessionData: opts.sessionData,
       runStoreFor: () => opts.durable?.store,
       compactRuntime: () => runtime,
+      // 会话级用量（additive）：缺省不带该字段，旧装配行为不变。
+      ...(opts.contextUsage !== undefined ? { contextUsage: opts.contextUsage } : {}),
       // CREATE-0.39：sessions.create|restart|activate 与 agents.* 共用同一注入面。
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     }),
