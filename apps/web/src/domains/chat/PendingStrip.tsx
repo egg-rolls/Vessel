@@ -5,6 +5,8 @@
  * - 默认隐藏：没有待处理项时整条不渲染，不占位；
  * - 显示 `待处理 · N` + 前 3 条摘要，其余折叠；
  * - 点某条只 **peek 正文**（`agents.inbox` 带 `message_ids`，服务端不改状态）；
+ * - 相邻同源（同 `from` + 状态，正文互为前缀或一条包含另一条）折成一行、右侧显示
+ *   「N 条」，点开可看全部条目：**只影响展示**，数据与 inbox 语义不变；
  * - 唯一的写操作是「置顶并打断当前运行」（复用 `agents.send{message_id, interrupt}`），
  *   先弹确认，因为它的真实语义是取消当前 run 并把这条排到队首；
  * - 底部写明「优先级仅在本次运行期有效；重启后按到达顺序」，避免假功能观感。
@@ -29,6 +31,66 @@ function pinFailureMessage(code: string | undefined): string {
   return t('chat.pending.pinFailed.other');
 }
 
+/**
+ * 单条待处理项的一行：状态 / 来源 / 摘要（点击 peek，服务端不改状态）/ 置顶。
+ *
+ * 同源折叠组的组头复用同一行，只把摘要点击改成展开组、并在右侧显示「N 条」；
+ * 组内条目展开后仍各是一行，peek 与置顶都按**原条目**操作 —— 折叠只影响展示。
+ */
+function PendingRow({
+  entry,
+  peekId,
+  peekText,
+  onPeek,
+  onPin,
+  fold,
+}: {
+  entry: AgentInboxEntry;
+  peekId: string | null;
+  peekText: string | null;
+  onPeek: (entry: AgentInboxEntry) => void;
+  onPin: (entry: AgentInboxEntry) => void;
+  /** 组头才传：组内条数、开合状态与切换。 */
+  fold?: { count: number; open: boolean; onToggle: () => void };
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">
+        <span className="flex-none font-mono text-2xs text-faint">
+          {entry.status === 'held' ? t('chat.pending.held') : t('chat.pending.unread')}
+        </span>
+        <span className="flex-none font-mono text-2xs text-accent">{entry.from}</span>
+        <button
+          type="button"
+          className="min-w-0 flex-1 truncate text-left text-muted hover:text-ink"
+          onClick={() => (fold ? fold.onToggle() : onPeek(entry))}
+          aria-expanded={fold ? fold.open : peekId === entry.message_id}
+        >
+          {entry.summary}
+        </button>
+        {fold && (
+          <button
+            type="button"
+            className="flex-none font-mono text-2xs text-faint hover:text-ink"
+            onClick={fold.onToggle}
+            aria-expanded={fold.open}
+          >
+            {t('chat.pending.sameSource', { count: fold.count })}
+          </button>
+        )}
+        <Button variant="link" className="flex-none text-xs" onClick={() => onPin(entry)}>
+          {t('chat.pending.pin')}
+        </Button>
+      </div>
+      {peekId === entry.message_id && (
+        <p className="m-0 min-w-0 break-words whitespace-pre-wrap wrap-anywhere rounded-sm bg-raised px-2 py-1 text-xs text-muted">
+          {peekText ?? t('chat.pending.peeking')}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function PendingStrip({
   client,
   agentId,
@@ -48,6 +110,8 @@ export function PendingStrip({
   const [peekText, setPeekText] = useState<string | null>(null);
   const [pinTarget, setPinTarget] = useState<AgentInboxEntry | null>(null);
   const [pinning, setPinning] = useState(false);
+  /** 同源折叠组的展开状态（只影响展示：组内条目各自仍是真实 inbox 条目）。 */
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
 
   const resource = useResource<AgentInboxEntry[]>({
     load: async () => {
@@ -105,6 +169,16 @@ export function PendingStrip({
     }
   }, [agentId, client, pinTarget, pinning, toast]);
 
+  /** 折叠组开合：与 peek / 置顶无关，不触发任何 RPC。 */
+  const toggleGroup = useCallback((key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   if (view.total === 0) return null;
 
   return (
@@ -119,36 +193,46 @@ export function PendingStrip({
       </div>
 
       <ul className="m-0 flex min-w-0 list-none flex-col gap-1 p-0">
-        {view.preview.map((entry) => (
-          <li key={entry.message_id} className="flex min-w-0 flex-col gap-0.5">
-            <div className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">
-              <span className="flex-none font-mono text-2xs text-faint">
-                {entry.status === 'held' ? t('chat.pending.held') : t('chat.pending.unread')}
-              </span>
-              <span className="flex-none font-mono text-2xs text-accent">{entry.from}</span>
-              <button
-                type="button"
-                className="min-w-0 flex-1 truncate text-left text-muted hover:text-ink"
-                onClick={() => void peek(entry)}
-                aria-expanded={peekId === entry.message_id}
-              >
-                {entry.summary}
-              </button>
-              <Button
-                variant="link"
-                className="flex-none text-xs"
-                onClick={() => setPinTarget(entry)}
-              >
-                {t('chat.pending.pin')}
-              </Button>
-            </div>
-            {peekId === entry.message_id && (
-              <p className="m-0 min-w-0 break-words whitespace-pre-wrap wrap-anywhere rounded-sm bg-raised px-2 py-1 text-xs text-muted">
-                {peekText ?? t('chat.pending.peeking')}
-              </p>
-            )}
-          </li>
-        ))}
+        {view.preview.map((stripGroup) => {
+          const folded = stripGroup.entries.length > 1;
+          const open = folded && expandedGroups.has(stripGroup.key);
+          return (
+            <li key={stripGroup.key} className="flex min-w-0 flex-col gap-0.5">
+              <PendingRow
+                entry={stripGroup.head}
+                peekId={peekId}
+                peekText={peekText}
+                onPeek={(entry) => void peek(entry)}
+                onPin={(entry) => setPinTarget(entry)}
+                fold={
+                  folded
+                    ? {
+                        count: stripGroup.entries.length,
+                        open,
+                        onToggle: () => toggleGroup(stripGroup.key),
+                      }
+                    : undefined
+                }
+              />
+              {/* 展开后逐条列出：仍是原来那些条目，peek / 置顶按各自 message_id 操作。 */}
+              {open && (
+                <ul className="m-0 ml-2 flex min-w-0 list-none flex-col gap-1 border-l border-line pl-2">
+                  {stripGroup.entries.map((entry) => (
+                    <li key={entry.message_id} className="min-w-0">
+                      <PendingRow
+                        entry={entry}
+                        peekId={peekId}
+                        peekText={peekText}
+                        onPeek={(item) => void peek(item)}
+                        onPin={(item) => setPinTarget(item)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          );
+        })}
       </ul>
 
       {view.hidden > 0 && (

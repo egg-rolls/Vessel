@@ -1010,6 +1010,7 @@ export const messages = {
   'chat.pending.held': '已排队',
   'chat.pending.unread': '未读',
   'chat.pending.peeking': '读取中…',
+  'chat.pending.sameSource': '{count} 条',
   'chat.pending.more': '还有 {count} 条未展开',
   'chat.pending.footer': '优先级仅在本次运行期有效；重启后按到达顺序。',
   'chat.pending.pin': '置顶并打断当前运行',

@@ -1045,6 +1045,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pending.held': 'Queued',
   'chat.pending.unread': 'Unread',
   'chat.pending.peeking': 'Loading…',
+  'chat.pending.sameSource': '{count} items',
   'chat.pending.more': '{count} more not shown',
   'chat.pending.footer':
     'Priority only lasts for this run; after a restart messages follow arrival order.',
