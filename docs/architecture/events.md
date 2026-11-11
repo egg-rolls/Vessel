@@ -91,7 +91,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 
 **gateway wire 回放**：WS/SSE 的单次回放有界——对过滤后的事件从最新往回取（≤ 1 MiB / 2000 条）；`hello.from_seq` 是本次 epoch 实际发送的第一条 seq；窗口之外更早的区间带 `until_seq` 逐页回退（能力位 `events.replay-range`，每页同样受同一预算约束），已经滑出环形缓冲的部分才由 `gap` 表示不可恢复，恢复走 RPC 快照而不是无限重放。历史正文以权威存储（`sessions.get` / `teams.get`）为准。
 
-**出站归属补齐**：订阅按 `session_id` 过滤时，`llm.stream.chunk` / `tool.call.*` 这类事件本体不带该字段（只靠 gateway 的 `run_id → session_id` 映射判断该不该发）。gateway 会把归属补进**出站副本**的 `data.session_id`（`??` 语义：事件自报的值永远优先，缓冲里的原始事件不被改写）；映射未知时仍然 fail-closed 丢弃，不补字段、不改任何 `events.subscribe` 参数或 result schema。LRU 未命中时会同步读一次执行面快照回填，拿不到就继续丢（发送路径不因此变成异步等待）。所以消费方可以放心把 `data.session_id` 当作事件归属的回退依据。
+**出站归属补齐**：订阅按 `session_id` 过滤时，`llm.stream.chunk` / `tool.call.*` 这类事件本体不带该字段（只靠 gateway 的 `run_id → session_id` 映射判断该不该发）。gateway 会把归属补进**出站副本**的 `data.session_id`（`??` 语义：事件自报的值永远优先，缓冲里的原始事件不被改写）；映射未知时仍然 fail-closed 丢弃，不补字段、不改任何 `events.subscribe` 参数或 result schema。LRU 未命中时会同步读一次执行面快照回填，拿不到就继续丢（发送路径不因此变成异步等待）。所以消费方可以放心把 `data.session_id` 当作事件归属的回退依据。 **一条不变量**：判定「发给这个订阅者」与「出站副本带 session_id」必须用同一份归属解析（事件自报 > 回放期局部映射 > 全局 LRU > 执行面快照回填），且所有出站路径（实时广播 / WS 回放 / WS 回填页 / SSE 回放与窗口外 pull）走同一个序列化点，否则会出现「过滤放行、帧里却没有 session_id」的静默丢事件。
 
 <a id="trace"></a>
 

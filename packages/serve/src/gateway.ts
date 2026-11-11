@@ -446,23 +446,22 @@ function matchesTypeFilter(types: readonly string[] | undefined, type: string): 
 /**
  * 事件可见性：`run_id` / `session_id` / `types` 全部 AND。
  *
- * `session_id` 归属 fail-closed：既没有 `data.session_id`、映射也命不中时不发送。
- * `runSessions` 在回放期传入本次扫描的局部映射，避免依赖被裁剪后的全局 LRU。
+ * `session_id` 归属 fail-closed：既没有 `data.session_id`、`resolveSession` 也命不中
+ * 时不发送。
+ *
+ * `resolveSession` 必须与出站补齐（`withSessionAttribution`）是**同一个**解析结果
+ * （`gateway.ts#resolveEventSession`）：只要判定为可见，出站副本就一定带
+ * `data.session_id`，客户端不用自己再猜归属。分开维护两份映射时会出现「发得出去、
+ * 客户端却挂不回会话」的帧（回放源里没有 `run.started`、全局 LRU 却知道归属）。
  */
 function acceptsEvent(
   event: RunEvent,
   filter: { runId?: string; sessionId?: string; types?: readonly string[] },
-  runSessions: ReadonlyMap<string, string>,
-  fallbackSessions?: ReadonlyMap<string, string>,
+  resolveSession: (event: RunEvent) => string | undefined,
 ): boolean {
   if (filter.runId !== undefined && event.run_id !== filter.runId) return false;
   if (!matchesTypeFilter(filter.types, event.type)) return false;
-  if (filter.sessionId !== undefined) {
-    const direct = eventSessionId(event);
-    if (direct !== undefined) return direct === filter.sessionId;
-    const mapped = runSessions.get(event.run_id) ?? fallbackSessions?.get(event.run_id);
-    return mapped === filter.sessionId;
-  }
+  if (filter.sessionId !== undefined) return resolveSession(event) === filter.sessionId;
   return true;
 }
 
@@ -809,16 +808,41 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   /**
+   * 会话归属解析的**唯一**入口（过滤判定与出站补齐共用）。
+   *
+   * 优先级：事件自报 `data.session_id` > 回放期局部扫描映射 > 全局 LRU > 执行面
+   * 快照回填。两级映射必须都在链路里：回放源可能裁掉了 `run.started`（`since` 在
+   * run 中途、环形缓冲已把起点挤出去），此时全局 LRU / 快照仍然知道归属；反过来
+   * 回放局部映射覆盖「本进程没见过 run.started 但缓冲区里有」的极端情况。
+   *
+   * 约束：只读、同步、best-effort。命中不了一律返回 undefined（fail-closed），
+   * 调用方不许改成异步等待。
+   */
+  function resolveEventSession(
+    event: RunEvent,
+    replaySessions?: ReadonlyMap<string, string>,
+  ): string | undefined {
+    const direct = eventSessionId(event);
+    if (direct !== undefined) return direct;
+    const known = replaySessions?.get(event.run_id) ?? runSessions.get(event.run_id);
+    return known ?? refillRunSession(event.run_id);
+  }
+
+  /**
    * 出站副本补齐会话归属（**只补不改**，缓冲里的原始事件不被修改）。
    *
    * 订阅按 `session_id` 过滤，但 `llm.stream.chunk` / `tool.call.*` 本体不带该字段：
    * 客户端拿不到归属就无法把事件挂回会话（分组被会话窗口过滤掉，表现为「run 在跑
-   * 却看不到工具卡 / 思考 / 流式正文」）。事件自报的值永远优先（`??` 语义）；
-   * 映射未知时原样返回，`acceptsEvent` 继续 fail-closed —— 宁可不发，也不发错归属。
+   * 却看不到工具卡 / 思考 / 流式正文」）。归属用 `resolveEventSession` **同一份**
+   * 解析结果，保证「发得出去的帧一定带 session_id」；解析不出来时原样返回，
+   * `acceptsEvent` 继续 fail-closed —— 宁可不发，也不发错归属。
    */
-  function withSessionAttribution(event: RunEvent, map: ReadonlyMap<string, string>): RunEvent {
+  function withSessionAttribution(
+    event: RunEvent,
+    replaySessions?: ReadonlyMap<string, string>,
+  ): RunEvent {
     if (eventSessionId(event) !== undefined) return event;
-    const mapped = map.get(event.run_id) ?? refillRunSession(event.run_id);
+    const mapped = resolveEventSession(event, replaySessions);
     if (mapped === undefined) return event;
     const data = event.data;
     if (data === null || typeof data !== 'object' || Array.isArray(data)) return event;
@@ -983,6 +1007,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return JSON.stringify(eventFrame(item));
   }
 
+  /**
+   * **唯一的出站事件序列化点**（实时广播 / WS 回放 / SSE 回放共用）。
+   *
+   * 补齐只作用在出站副本上：环形缓冲里的原始事件一个字都不改（回放与落盘字节
+   * 一致）。返回补齐后的事件与它的线上字符串——过滤判定用前者、发送用后者，
+   * 两边不可能对同一个 run 得到不同的归属。
+   */
+  function outboundEventFrame(
+    item: SeqEvent,
+    replaySessions?: ReadonlyMap<string, string>,
+  ): { event: RunEvent; encoded: string } {
+    const event = withSessionAttribution(item.event, replaySessions);
+    return { event, encoded: serializeEventFrame({ ...item, event }) };
+  }
+
   function sendResult(ws: Ws, id: string, ok: boolean, result?: unknown, error?: ProtocolError) {
     sendFrame(ws, ok ? resultFrame({ nodeId, id, result }) : errorFrame({ nodeId, id, error }));
   }
@@ -991,7 +1030,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * 0.49 C5：读取端不按 tenant_id 过滤（单公司）。legacy id 的旧事件原样可见；
    * `all_tenants` 仍被接受，但不再参与可见性判断。
    *
-   * `replaySessions` 是回放期按 seq 顺序扫描出的局部归属；缺省用全局 LRU。
+   * `replaySessions` 是回放期按 seq 顺序扫描出的局部归属；缺省只用全局 LRU。
+   * 无论哪种情况都走 `resolveEventSession`（与出站补齐同源），所以「可见」等价于
+   * 「出站帧一定带 `session_id`」。
    */
   function wsAccepts(
     ws: Ws,
@@ -1001,14 +1042,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return acceptsEvent(
       event,
       { runId: ws.data.runId, sessionId: ws.data.sessionId, types: ws.data.types },
-      replaySessions ?? runSessions,
-      replaySessions !== undefined ? runSessions : undefined,
+      (target) => resolveEventSession(target, replaySessions),
     );
   }
 
   /**
    * 发送一条事件；`encoded` 来自回放窗口时直接复用（不再序列化）。
    * 背压拒收与 gap 行为与实时广播一致。
+   *
+   * 缺省 `encoded` 也会经过唯一出站序列化点（补齐后编码），不会漏掉会话归属。
    */
   function sendEventToWs(
     ws: Ws,
@@ -1021,7 +1063,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (!ws.data.backpressure.admit(item.seq, inflight)) return;
     const gap = ws.data.backpressure.takeGap(inflight);
     if (gap) sendFrame(ws, gapFrame(gap));
-    sendFrameText(ws, encoded ?? serializeEventFrame(item));
+    sendFrameText(ws, encoded ?? outboundEventFrame(item, replaySessions).encoded);
   }
 
   function flushWsGap(ws: Ws): void {
@@ -1032,13 +1074,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function broadcastEvent(item: SeqEvent): void {
     // 出站副本补会话归属（缓冲里的原始事件不变）：订阅侧按 session_id 过滤时，
     // 流式增量 / 工具事件本来没有该字段，补齐后订阅者才能把它们挂回会话。
-    const outbound: SeqEvent = {
-      ...item,
-      event: withSessionAttribution(item.event, runSessions),
-    };
-    const encoded = serializeEventFrame(outbound);
-    for (const ws of [...wsClients]) sendEventToWs(ws, outbound, undefined, encoded);
-    const sseFrame = `data: ${encoded}\n\n`;
+    // 走 `outboundEventFrame`（唯一出站序列化点），与回放帧同一份补齐。
+    const outbound = outboundEventFrame(item);
+    const attributed: SeqEvent = { ...item, event: outbound.event };
+    for (const ws of [...wsClients]) {
+      sendEventToWs(ws, attributed, undefined, outbound.encoded);
+    }
+    const sseFrame = `data: ${outbound.encoded}\n\n`;
     for (const [ctrl, state] of [...sseClients]) {
       // 回放期间由 pull 驱动，避免新事件插到历史事件前面。
       if (state.replay) continue;
@@ -1130,9 +1172,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 归属先按 seq 顺序扫描完整回放源：窗口裁剪后仍能识别 run.started。
     const replaySessions = buildRunSessions(source);
     const filtered = source.filter((item) => wsAccepts(ws, item.event, replaySessions));
-    // 编码时顺手补会话归属：客户端拿不到归属就无法把增量挂回会话。
+    // 编码时顺手补会话归属：客户端拿不到归属就无法把增量挂回会话。补齐与过滤共用
+    // `resolveEventSession`，与实时广播走同一个出站序列化点（`outboundEventFrame`）。
     const window = tailReplayWindow(filtered, (item) =>
-      serializeEventFrame({ ...item, event: withSessionAttribution(item.event, replaySessions) }),
+      outboundEventFrame(item, replaySessions).encoded,
     );
     const ringGap = boundGap(hub.gapFor(ws.data.since), until);
     return {
@@ -2739,11 +2782,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
         let sseReplaySessions: ReadonlyMap<string, string> = new Map();
         const accepts = (event: RunEvent): boolean => {
           // 0.49 C5：不按 tenant_id 过滤；run_id / session_id / types 过滤保留。
+          // 与出站补齐共用 `resolveEventSession`（见 WS 侧同款注释）。
           return acceptsEvent(
             event,
             { runId: sseRunId, sessionId: sseSessionId, types: sseTypes },
-            sseReplaySessions,
-            runSessions,
+            (target) => resolveEventSession(target, sseReplaySessions),
           );
         };
         let controller: SseController | undefined;
@@ -2774,11 +2817,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
               sseReplaySessions = buildRunSessions(bounded);
               const window = tailReplayWindow(
                 bounded.filter((item) => accepts(item.event)),
-                (item) =>
-                  serializeEventFrame({
-                    ...item,
-                    event: withSessionAttribution(item.event, sseReplaySessions),
-                  }),
+                (item) => outboundEventFrame(item, sseReplaySessions).encoded,
               );
               const fromSeq = window.frames[0]?.item.seq ?? emptyFromSeq(until);
               writeSse(ctrl, clientState, 'retry: 3000\n\n');
@@ -2807,8 +2846,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
                 cursor,
                 batch: SSE_REPLAY_BATCH,
                 accepts,
+                // 窗口外的那一段同样走唯一出站序列化点（补齐 + 编码），
+                // 不能直接 `serializeEventFrame(item)` —— 那会绕过会话归属补齐。
                 encode: (item) =>
-                  windowFrames.get(item.seq) ?? `data: ${serializeEventFrame(item)}\n\n`,
+                  windowFrames.get(item.seq) ??
+                  `data: ${outboundEventFrame(item, sseReplaySessions).encoded}\n\n`,
               };
               if (cursor > hub.latestSeq) clientState.replay = undefined;
             },

@@ -371,8 +371,19 @@ export class SubscriptionController {
       }
       // 订阅 hello 判定要回填（`startBackfill` 已退游标 + 暂存）：在这里逐页往回拉。
       // 页订阅与实时订阅共用同一个发送方（本方法），所以实时过滤不会被改成别的会话。
-      if (subscribed && this.backfillUpper !== null) {
-        await this.runBackfill(scope, built);
+      //
+      // 判据只看 `backfillUpper`，不看 `subscribed`：`startBackfill` 是在 hello
+      // 处理里被 arm 的（暂存已经生效、游标已经退到 `since`），只要它 arm 了就必须
+      // 有人 drain。漏掉这一条的唯一后果是 `holdFloor` 永久生效 —— `push()` 从此只写
+      // 暂存区、时间线停在「刚 clear 完」的空状态，用户看到的是「刷新后这次 run 一条
+      // 都不显示，之后也不再更新」，只能再刷一次页面才恢复。
+      if (this.backfillUpper !== null) {
+        if (subscribed) await this.runBackfill(scope, built);
+        else {
+          // 请求没成功（旧 gateway / 断线）：撤掉暂存，别让 `push()` 永远只写暂存区。
+          this.backfillUpper = null;
+          this.eventStore.endBackfill();
+        }
       }
       // 等待期间路由又变了：用新 scope 再跑一轮。
       if (this.desired === scope) return;
