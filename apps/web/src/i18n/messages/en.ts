@@ -220,9 +220,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'time.hoursMinutesAgo': '{count}h{minutes}m ago',
   'time.daysAgo': '{count}d ago',
   'chat.context.tokens': '{used} tokens',
-  'chat.context.of': '{used} / {max}',
-  // 圆环的 hover / 读屏文案：比例 + 已用 + 上限（紧凑格式，如「59% / 592K of 1M」）。
-  'chat.context.percentOf': '{percent}% / {used} of {max}',
+  // 圆环的 hover / 读屏文案：一位小数比例 + 已用（紧凑格式，如「59.0% / 590K」）。
+  'chat.context.percentOf': '{percent}% / {used}',
   // 0.18: pane resize handles
   'resize.nav': 'Resize navigation',
   'resize.sessions': 'Resize session list',

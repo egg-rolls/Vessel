@@ -9,7 +9,7 @@ import {
   ComposerAttachments,
   ComposerContextMeter,
   ComposerToolbar,
-  contextPercent,
+  contextPercentText,
 } from '@vessel-agent/plugin-ui';
 import {
   type MouseEvent,
@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { Tooltip } from '../../components/Tooltip';
 import { Button, cn, Icon } from '../../components/ui';
 import { formatTokenCount } from '../../format';
 import type { MessageRef } from '../../gateway/types';
@@ -35,7 +36,7 @@ import {
 } from './composer-toolbar';
 import { refDisplayName, refKindLabel } from './MessageRefs';
 
-/** 上下文用量：与会话头同一份数据（`context_used` / `context_max`）。 */
+/** 上下文用量：与 `agents.tree` 主 agent 同一份数据（`context_used` / `context_max`）。 */
 export interface ComposerContextUsage {
   used: number;
   max?: number;
@@ -112,23 +113,33 @@ export function ComposerRefsArea({
 }
 
 /**
- * 发送键左侧的上下文用量：圆环（比例）+ 原生 title（`59% / 592K of 1M`）。
+ * 发送键左侧的上下文用量：圆环（比例）+ 应用内 `Tooltip`（`59.0% / 590K`）。
  *
- * 比例 / 已用 / 上限都走紧凑格式（`formatTokenCount`：`592K` / `1.2K` / `3.4M`），
- * 百分比取整且与圆环共用 `contextPercent` 的同一份规则。
+ * 比例保留一位小数且与圆环共用 `contextPercentText` 的同一份规则（`>100` 截到
+ * `100.0`），已用值走紧凑格式（`formatTokenCount`：`590K` / `1.2M`）。
  * 用量未知（没有数据 / 非当前会话）时返回 null —— 不占位、不显示假数。
+ *
+ * `max` 未知时 `plugin-ui` 不画环、只显示已用值文本（不假造比例），这里随之退成
+ * 「只报已用」的文案。`Tooltip` 锚在圆环外层的一层 `span` 上：plugin-ui 是独立
+ * 发布包，不 import web 组件，所以悬浮层只能在 web 侧包；被包的都是非交互元素，
+ * 圆环依旧不可点击、不抢焦点。
  */
 export function ComposerUsageMeter({ usage }: { usage?: ComposerContextUsage }) {
   if (usage === undefined) return null;
   const used = formatTokenCount(usage.used);
-  const percent = contextPercent(usage.used, usage.max);
-  const max = usage.max === undefined ? undefined : formatTokenCount(usage.max);
+  const percent = contextPercentText(usage.used, usage.max);
   // 比例未知（没有 max）就只说已用，绝不补一个猜出来的百分比。
-  const title =
-    percent !== undefined && max !== undefined
-      ? t('chat.context.percentOf', { percent, used, max })
+  const label =
+    percent !== undefined
+      ? t('chat.context.percentOf', { percent, used })
       : t('chat.context.tokens', { used });
-  return <ComposerContextMeter used={usage.used} max={usage.max} title={title} text={used} />;
+  return (
+    <Tooltip label={label}>
+      <span className="inline-flex items-center">
+        <ComposerContextMeter used={usage.used} max={usage.max} title={label} text={used} />
+      </span>
+    </Tooltip>
+  );
 }
 
 /**

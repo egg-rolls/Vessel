@@ -11,7 +11,6 @@ export function ChatHeader({
   selectedId,
   selectedSession,
   sessionDetail,
-  contextUsage,
   agents,
   activeAgentId,
   draftActive,
@@ -20,7 +19,6 @@ export function ChatHeader({
   selectedId: string | null;
   selectedSession: SessionInfo | undefined;
   sessionDetail: SessionDetail | null;
-  contextUsage?: { used: number; max?: number };
   agents: readonly AgentNode[];
   activeAgentId?: string;
   draftActive: boolean;
@@ -32,7 +30,6 @@ export function ChatHeader({
         session={selectedSession ?? null}
         sessionId={selectedId}
         detail={sessionDetail}
-        contextUsage={contextUsage}
         agents={agents}
         activeAgentId={activeAgentId}
         onSelectAgent={onSelectAgent}

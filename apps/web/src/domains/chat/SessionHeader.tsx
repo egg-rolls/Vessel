@@ -2,7 +2,7 @@ import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { Tooltip } from '../../components/Tooltip';
 import { Button } from '../../components/ui';
-import { formatTimestamp, formatTokenCount } from '../../format';
+import { formatTimestamp } from '../../format';
 import type { SessionDetail, SessionInfo } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
@@ -153,13 +153,10 @@ export function SessionHeader({
   agents = [],
   activeAgentId,
   onSelectAgent,
-  contextUsage,
 }: {
   session: SessionInfo | null;
   sessionId: string;
   detail: SessionDetail | null;
-  /** 上下文用量；由 ChatView 轮询 `agents.tree` 注入。 */
-  contextUsage?: { used: number; max?: number };
   /** 0.14：当前会话的子 agent（由 `subagent.*` 事件派生）。 */
   agents?: readonly AgentNode[];
   /** `?agent=` 深链选中的子 agent。 */
@@ -171,14 +168,6 @@ export function SessionHeader({
   const tree = agentTree(agents);
   const running = agents.filter((node) => node.state === 'running').length;
   const activeChain = activeAgentId ? agentBreadcrumb(agents, activeAgentId) : [];
-  const contextLabel = contextUsage
-    ? contextUsage.max !== undefined
-      ? t('chat.context.of', {
-          used: formatTokenCount(contextUsage.used),
-          max: formatTokenCount(contextUsage.max),
-        })
-      : t('chat.context.tokens', { used: formatTokenCount(contextUsage.used) })
-    : '';
 
   const copySessionId = () => {
     if (!navigator.clipboard?.writeText) {
@@ -216,13 +205,6 @@ export function SessionHeader({
               {session ? title : truncate(title, 42)}
             </h2>
           </Tooltip>
-          {contextUsage && (
-            <Tooltip label={contextLabel}>
-              <span className="conversation-context" role="img" aria-label={contextLabel}>
-                {formatTokenCount(contextUsage.used)}
-              </span>
-            </Tooltip>
-          )}
         </div>
         {activeAgentId && (
           <nav className="subagent-breadcrumb" aria-label={t('chat.subagents.title')}>

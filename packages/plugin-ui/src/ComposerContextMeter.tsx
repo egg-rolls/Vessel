@@ -5,12 +5,14 @@ import { cn } from './cn';
  * 上下文用量指示（发送按钮左侧）。
  *
  * 默认形态是**圆环**：弧长 = `used / max`，一眼看出「还剩多少」；精确数字不进
- * 可见正文，放在原生 `title`（hover）里，同时作为 `aria-label`（读屏）——
- * 例如「59% / 592K of 1M」。纯展示：不抢焦点、不可点击，也没有任何动画
- * （因此 `prefers-reduced-motion` 下自然静止）。
+ * 可见正文，只作为 `aria-label`（读屏）——例如「59.0% / 590K」。**悬浮提示由宿主
+ * 负责**：本包不依赖任何宿主组件，所以不写原生 `title`（否则会和宿主的应用内
+ * tooltip 叠成两份），宿主拿同一条文案自己包 `Tooltip`。
+ * 纯展示：不抢焦点、不可点击，也没有任何动画（因此 `prefers-reduced-motion`
+ * 下自然静止）。
  *
- * 只做展示：数据由宿主从既有上下文来源注入（本仓库 Web 侧是会话头那份
- * `context_used` / `context_max`）。**用量未知时由宿主不渲染**；这里再兜一次
+ * 只做展示：数据由宿主从既有上下文来源注入（本仓库 Web 侧是 `agents.tree` 主 agent
+ * 的 `context_used` / `context_max`）。**用量未知时由宿主不渲染**；这里再兜一次
  * 非法值，绝不填占位假数。`max` 未知时**不画圆环**（不假造比例），退成一个
  * 紧凑的已用值文本（如 `592K`）。
  */
@@ -19,7 +21,7 @@ export interface ComposerContextMeterProps {
   used: number;
   /** 上限；缺省表示未知（不画圆环，只显示 `text`）。 */
   max?: number;
-  /** 读屏 / 悬浮明细（调用方已翻译，如「59% / 592K of 1M」）。 */
+  /** 读屏文案（调用方已翻译，如「59.0% / 590K」）；悬浮提示由宿主用同一条文案负责。 */
   title: string;
   /**
    * 已用 token 的**紧凑**文本（如 `592K` / `1.2K` / `3.4M`）。
@@ -37,15 +39,38 @@ const RING_CIRCUMFERENCE = Math.round(2 * Math.PI * RING_RADIUS * 100) / 100;
 const RING_SIZE = 18;
 
 /**
- * 用量比例（0–100 的整数百分比，超出上限截到 100）。
- *
- * `max` 未知 / 非法时返回 `undefined` —— 不猜比例。宿主构造 tooltip 文案时复用
- * 同一个函数，避免两处取整口径漂移。
+ * 已用 / 上限的真实比例（0 起、**未截断未取整**）；`max` 未知 / 非法时返回
+ * `undefined` —— 不猜比例。取整口径（整数百分比 / 一位小数文案 / 圆环弧长）都从
+ * 这一个比例派生，避免几处漂移。
  */
-export function contextPercent(used: number, max?: number): number | undefined {
+function contextFraction(used: number, max?: number): number | undefined {
   if (max === undefined || !Number.isFinite(max) || max <= 0) return undefined;
   if (!Number.isFinite(used) || used < 0) return undefined;
-  return Math.min(100, Math.round((used / max) * 100));
+  return used / max;
+}
+
+/**
+ * 用量比例（0–100 的整数百分比，超出上限截到 100）。
+ *
+ * `max` 未知 / 非法时返回 `undefined` —— 不猜比例。色阶（70 / 90）与圆环粗细都
+ * 读这个整数百分比。
+ */
+export function contextPercent(used: number, max?: number): number | undefined {
+  const fraction = contextFraction(used, max);
+  if (fraction === undefined) return undefined;
+  return Math.min(100, Math.round(fraction * 100));
+}
+
+/**
+ * 比例文案（tooltip / 读屏用）：**一位小数**，超过上限截到 `100.0`。
+ *
+ * `59.04 → '59.0'`、`59.96 → '60.0'`、`120 → '100.0'`。宿主拼 tooltip 时用它，
+ * 与圆环共用同一个比例来源（{@link contextPercent} 只是取整口径不同）。
+ */
+export function contextPercentText(used: number, max?: number): string | undefined {
+  const fraction = contextFraction(used, max);
+  if (fraction === undefined) return undefined;
+  return (Math.round(Math.min(1, fraction) * 1000) / 10).toFixed(1);
 }
 
 /** 70% 起提醒、90% 起危险：与其它用量提示同一口径。 */
@@ -105,15 +130,15 @@ export function ComposerContextMeter({
   className,
 }: ComposerContextMeterProps) {
   if (!Number.isFinite(used) || used < 0) return null;
+  const fraction = contextFraction(used, max);
   const percent = contextPercent(used, max);
   // 弧长用取整前的真实比例：59.6% 不会提前画成满格，59% 也不会少画一段。
-  const ratio = percent === undefined || max === undefined ? undefined : Math.min(1, used / max);
+  const ratio = fraction === undefined ? undefined : Math.min(1, fraction);
 
   return (
     <span
       role="img"
       aria-label={title}
-      title={title}
       className={cn('inline-flex items-center gap-1.5', toneOf(percent), className)}
     >
       {ratio !== undefined && percent !== undefined ? (

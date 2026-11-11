@@ -374,7 +374,6 @@ export function ChatView({
             selectedId={selectedId}
             selectedSession={sessionsApi.selectedSession}
             sessionDetail={sessionsApi.sessionDetail}
-            contextUsage={transcriptApi.contextUsage}
             agents={transcriptApi.sessionAgents}
             activeAgentId={transcriptApi.activeAgent?.id}
             draftActive={draftActive}
