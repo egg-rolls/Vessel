@@ -5,7 +5,7 @@
  * 日志行索引 / 过滤 / 分页窗口在 domains/runs/run-event-log.ts。
  */
 import type { RunEvent } from '../gateway/types';
-import { INTERNAL_EVENT_TYPES } from './events';
+import { tierOf } from './event-visibility';
 
 export type RunEventFilter = 'all' | 'llm' | 'tools' | 'errors' | 'internal' | 'other';
 
@@ -18,9 +18,13 @@ export const RUN_EVENT_FILTERS: readonly { id: RunEventFilter; labelKey: string 
   { id: 'other', labelKey: 'runs.detail.filter.other' },
 ];
 
-/** 默认隐藏的内部事件（含子 agent 的执行细节）。 */
+/**
+ * 默认隐藏的内部事件：从 `event-visibility.ts` 的三档表派生（`tier === 'internal'`，
+ * 含 `subagent.` 家族）。**不要**在这里另写集合：Runs 页的筛选桶与聊天窗的可见性
+ * 必须同源，否则「Runs 里算内部、聊天里算内容」的漂移会再出现。
+ */
 export function isInternalEvent(type: string): boolean {
-  return INTERNAL_EVENT_TYPES.has(type) || type.startsWith('subagent.');
+  return tierOf(type) === 'internal';
 }
 
 /** 失败/错误事件（包含 tool.call.failed 与 guardrail.blocked）。 */

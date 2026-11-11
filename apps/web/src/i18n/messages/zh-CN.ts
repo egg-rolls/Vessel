@@ -1128,6 +1128,12 @@ export const messages = {
   'chat.notice.finalizeFailed': 'run 收尾失败 · 阶段 {phase} · {error}',
   'chat.notice.guardrailError': 'guardrail 异常 · {name} · 阶段 {stage} · {error}',
   'chat.notice.runtime': '系统提示 · {kind}',
+  // 退役 / 作废回复 / rotate 被拒：三种「没有 typed notice 就等于丢信息」的事件。
+  'chat.notice.replyStale': '这次回复未被采用 · 旧身体已退役 · epoch {epoch} · 消息 {message}',
+  'chat.notice.retired': '旧身体已退役 · {reason} · epoch {epoch} · body {body}',
+  'chat.notice.rotateDenied': '上下文切换未获批 · {reason} · 水位 {percent}%',
+  // 门禁管不到的类型（第三方插件 / 上游事件 / 旧 trace）：一行折叠，绝不落裸 JSON。
+  'chat.notice.unknownEvent': '未知事件类型 · 已折叠 · {type}',
   // 环境信息卡（vessel:notice 的默认形态）：与底层系统信息并存，但这是给人看的那种。
   'chat.env.aria': '环境信息',
   'chat.env.scope.config': '配置',

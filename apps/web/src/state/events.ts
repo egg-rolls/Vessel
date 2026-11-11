@@ -4,12 +4,8 @@
  * 同一个逻辑对象由 domains/chat/transcript-items.ts 的认领合并。
  */
 import type { MessageRef, RunEvent, StreamChunk } from '../gateway/types';
-import {
-  type ErrorMeta,
-  type ErrorVisibility,
-  errorMetaOf,
-  isHiddenInternalError,
-} from './error-visibility';
+import { type ErrorMeta, type ErrorVisibility, errorMetaOf } from './error-visibility';
+import { eventSpecOf, isVisibleInChat } from './event-visibility';
 
 export interface StoredEvent {
   event: RunEvent;
@@ -110,157 +106,10 @@ export interface RunGroup {
   items: TimelineItem[];
 }
 
-/**
- * 默认隐藏的内部事件：状态同步/提示词上下文，不是用户关心的对话内容。
- *
- * `message.injected` 仍由 owner 注入（成员回复）与 `RunOptions.messages`（@file 等）生产；
- * `doc-subscription` 改为临时 `additionalContext` 后不再产生该事件。保留在这里，
- * 让所有“注入到 prompt 的上下文”默认不出现在 run 时间线。
- *
- * **口径契约（与 runtime-visibility 对称冻结，改动前先对账）**
- * - 本集合是**事件侧唯一分类表**：新增「系统信息」事件加在这里，不要在渲染层
- *   （EventRow / StreamItems）另写可见性判断。
- * - 策略侧只有一个布尔：`showsInternalEvents(visibility)` =
- *   `ui.showInternalEvents || verbosity === 'debug'`（ADR-080/082）。`debug` 等价于
- *   展开内部事件是既有契约，不得从 `showsInternalEvents()` 摘掉，也不得在此另立
- *   第二套判定；两边口径必须同源。
- * - 判据只有一句：进集合 ⇔ 默认档隐藏（失败类 `hook.failed` / `hook.error` 仍走
- *   `errorLevel`，永不进集合）。主内容（`llm.stream.chunk`、`tool.call.*`、
- *   `run.*` 终态、`user.message`）**永不进集合**。
- * - **落盘摘要跟着本集合走**：`llm.stream.summary`（流式**段落**骨架）与
- *   `llm.request` 的落盘元信息副本是「给人看日志 / 丢帧自查」的结构，不是对话内容
- *   —— 归到内部事件开关下（默认隐藏、展开可见），**不要**让它们降级成聊天里的原始
- *   JSON 卡，也不要在渲染层另写判据。它们永不成为内容权威：正文以 `llm.response` /
- *   `user.message` / `tool.*` 为准。
- * - **两个集合的分工**：本集合 = 「默认档隐藏，展开后（`ui.showInternalEvents` /
- *   `verbosity=debug`）仍以原始事件行出现」的状态同步；`CHAT_HIDDEN_EVENT_TYPES`
- *   = 「聊天窗无条件不展示」的会话 / 成员**元数据审计**（`session.created` /
- *   `session.activated` / `session.rewound` / `session.titled` …）与**已有专用 UI
- *   承接的交互事件**（`tool.permission.*` / `ask.user.*`，卡片在 Composer 槽位）。
- *   这两类的归宿只有 Observe / Runs：不要因为「它也能被 showInternal 放出来」就塞进
- *   本集合，否则打开「显示系统信息」后聊天里会重新冒出原始 JSON 卡。
+/*
+ * 可见性分类**不在这里**：唯一分类表是 `./event-visibility.ts`（三档 + 家族前缀 +
+ * `tierOf` / `isVisibleInChat`）。本文件只负责分组与渲染形态。
  */
-export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
-  'context.changed',
-  'session.saved',
-  'llm.request',
-  'llm.response',
-  // 传输层 / 过载自动重试：一次重试一条，带 attempt / backoff_ms / 分类。
-  // 它不是失败信号（终态失败仍走 `run.failed`），默认档不该逐条刷原始 JSON 卡。
-  'llm.retry',
-  // 流式**段落**摘要（不是正文、不是逐 delta）：一段 text/reasoning 结束时一条，
-  // 只带段序/条数/字节/seq 跨度。落盘日志里的「思考→工具→正文」骨架靠它，
-  // 聊天时间线默认档不该为每个段落多一张原始事件卡。
-  'llm.stream.summary',
-  'message.injected',
-  // run 生命周期的状态同步：每次 iteration 都发，默认档不该逐条落成原始事件卡。
-  'run.checkpoint',
-  'run.resumed',
-  // 进程级通知（热应用 / 版本检查）：run_id 常为 `runtime`，内容经 BeforeLlm hook
-  // 进模型上下文，聊天时间线不该每个周期多一张原始 JSON 卡。
-  'runtime.notice',
-  // trace 回放边界：只在批量回放 trace 时出现，是观测动作而不是对话内容。
-  'replay.started',
-  'replay.completed',
-  // 上下文生命周期的过程信号（水位 / 压缩 / 轮换 / 重启 / compact fork）：
-  // 仍按 typed notice 渲染，但归到「内部事件」开关下，默认档不逐轮刷行。
-  // 例外：`agent.limit.warning`（限流 / 预算预警）必须默认可见，**不要**加进来。
-  'context.pressure',
-  'context.compacted',
-  'agent.rotating',
-  'agent.rotated',
-  'agent.restarting',
-  'agent.restarted',
-  'agent.compact_forked',
-  // 上下文 / prompt / 上限的状态同步（run 内部状态变了，不是对话内容）。三条都**没有**
-  // typed notice，展开后落回原始事件行，默认档不逐轮刷行：
-  // - `message.compaction`：一次压缩的**落盘摘要镜像**（`removed` / `remaining` / `kept` /
-  //   `reason` + 摘要消息本体）。用户能行动的信号由同一次压缩先发的 `context.compacted`
-  //   （typed notice）承担，消息重建走 `projectMessages` 投影，不读时间线 —— 默认档再落一张
-  //   原始 JSON 卡就是同一事实的第二份。
-  // - `prompt.prefix_changed`：prompt 缓存前缀漂移（`diverged_at` / `system_changed` /
-  //   `tools_changed`），纯诊断信号，只用于「为什么这次请求没命中缓存」。
-  // - `limit.blocked`：硬上限（iterations / runtime / request / token / cost）触发的先行
-  //   信号，随即 run 以 `run.failed` + `limit_blocked` envelope 收口；失败正文归
-  //   `errorLevel`（`run.*` 是默认可见级），事件本级重复。
-  'message.compaction',
-  'prompt.prefix_changed',
-  'limit.blocked',
-  // hook.* 由 `ui.showInternalEvents` 统一控制（CONFIG 契约），失败仍走 errorLevel。
-  'hook.started',
-  'hook.completed',
-  'hook.system_prompt_ignored',
-  'hook.additional_context_deprecated',
-]);
-
-/**
- * 只属于观察面（Observe / Runs）的事件：聊天窗无条件不展示。
- *
- * 判据是**内容性质**，不是「默认档是否隐藏」：会话 / 成员的**元数据审计**（创建、
- * 激活、改名、rewind、删除）既不是对话内容，也没有 typed notice 承接，落成事件卡就只是
- * 一坨原始 JSON。因此本集合的成员**不受 `ui.showInternalEvents` 影响**——打开
- * 「显示系统信息」也不进聊天（`debug` 同理），只在 Observe / Runs 查看；这也是它
- * 与 `INTERNAL_EVENT_TYPES`（默认隐藏、展开可见）的分工。
- *
- * 第二类成员是**已有专用 UI 承接的交互事件**（`tool.permission.*` → `PermissionCard`、
- * `ask.user.*` → `AskCard`）：交互数据源是 `interactions.list` hydration 与
- * `connection-handlers` 的 add / settle，**不经时间线分组**，所以原始卡只是
- * requestId / decision 的重复噪声；`ask.user.timeout`（headless 等不到人）同理，
- * 卡片收起由应答事件或 run 终态负责，这条事件只是一行审计。判据仍是内容性质：
- * 聊天窗里它没有独立信息量。
- *
- * 这些事件的 `run_id` 通常是成员 / 队列入队 id 或常量伪 run id（`session` /
- * `runtime` / `config` / `plugins`），不是 run id。用显式集合而不是 `hasRunEvent`
- * 推断：成员事件将来若补上 `data.run_id`，也不能重新漏进聊天窗。lifecycle notice
- * （`agent.limit.warning` / `agent.rotating` / `agent.rotated` / `agent.restarting` /
- * `agent.restarted` / `agent.compact_forked`）不在此列，聊天窗继续显示。
- *
- * 隐藏的是**条目**而不是分组：`groupEvents` / `EventGroupCache` 在过滤阶段就丢掉这些
- * 事件，伪 run 组若因此没有任何剩余条目，整组不会进入分组表（不留空组 / 空 item）。
- */
-export const CHAT_HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set([
-  // 0.39：session 创建 / 源退役 / primary 切换审计事件不是对话内容。
-  'session.created',
-  'session.activated',
-  'agent.session.activated',
-  // 0.39：create 失败只做审计；旧 `agent.fork.failed` 仍按旧日志渲染。
-  'agent.create.failed',
-  // 旧 fork 事件只读：web 隐藏原始 JSON 卡；`agent.compact_forked` 仍有 typed notice。
-  'agent.forked',
-  // rewind 是历史删除的持久化标记，不是对话内容：永不渲染。
-  'session.rewound',
-  // AI 命名成功（`{session_id,title}`，run_id 恒为常量 `session`）是会话元数据审计：
-  // 标题已经由会话头 / 会话列表展示，聊天窗不该再落一张原始 JSON 卡。
-  'session.titled',
-  // 会话删除审计：`run_id` 是 sessionId（伪 run），载荷只有计数（sessions / runs /
-  // events）。删除结果由删除对话框与 `sessions.list` 重启后的会话列表呈现
-  // （`useSessionDelete` 走 RPC 后本地 removeSession + 跳转，不读这条事件）。
-  'session.deleted',
-  // 权限 / ask 的请求-应答是**已有交互卡的重复噪声**：卡片在 Composer 槽位
-  // （`PromptSlots` → `PermissionCard` / `AskCard`），数据源是 `interactions.list`
-  // hydration + `connection-handlers` 的 add / settle（在分组之前直接写
-  // `useInteractionStore`），**不经过**时间线分组；原始卡里只有 requestId /
-  // requestId+decision，藏掉不丢任何可交互内容。
-  'tool.permission.request',
-  'tool.permission.response',
-  'ask.user.requested',
-  'ask.user.answered',
-  // headless ask 超时：服务端标 suspended（`interactions-registry`），web 侧靠 run
-  // 终态 `run-finished` 收起卡片，它本身只是一条审计行。
-  'ask.user.timeout',
-  'agent.spawned',
-  // 收件箱投递只有一条事件（`queued` + `delivery`）：入队 / 唤醒 / 只落 inbox 都是
-  // 观察面的送达记录，不是对话内容。旧名 `agent.message.notified` 只读兼容历史行。
-  'agent.message.queued',
-  'agent.message.notified',
-  'agent.message.sent',
-  'agent.closed',
-  'agent.stale',
-  'agent.permission.requested',
-  'agent.permission.responded',
-  'agent.queue.entered',
-  'agent.queue.left',
-]);
 
 /** 单个 run 的事件序列 → 可渲染分组。 */
 export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunGroup {
@@ -439,13 +288,23 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         continue;
       }
       // 失败类：`run.finalize.failed`（终态持久化失败）与 `guardrail.error`
-      // （guardrail `check()` 抛错，fail-closed）都是**真失败**，可见性归
-      // `errorLevel`（`run.` / `guardrail.` 前缀，默认可见级）。这里只换表示层：
-      // 原始 JSON 卡 → 折叠 notice（错误文本 + 来源阶段），刻意**不**进
-      // `INTERNAL_EVENT_TYPES` / `CHAT_HIDDEN_EVENT_TYPES` —— 任何集合都在
-      // `errorLevel` 之前过滤，塞进去等于静默真失败。
+      // （guardrail `check()` 抛错，fail-closed）都是**真失败**，可见性在
+      // `event-visibility.ts` 里是 `content`（`run.` / `guardrail.` 前缀）。这里只换
+      // 表示层：原始 JSON 卡 → 折叠 notice（错误文本 + 来源阶段）。失败类永不降档
+      // （塞进默认隐藏 / observe 等于静默真失败）。
       case 'run.finalize.failed':
       case 'guardrail.error': {
+        flush();
+        group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
+        continue;
+      }
+      // 退役 / 作废回复：**有承接才允许藏**。`agent.retired` 是 `internal` + typed
+      // notice（默认档不出卡，`ui.showInternalEvents` / `debug` 时以 notice 出现 ——
+      // 它的 `reason` 在服务端 DTO 里没有，藏成「什么都不显示」就丢了「为什么换身体」）；
+      // `agent.reply.stale` 是 `content`（「那一轮回复为何作废」的唯一解释）。
+      // 两者都必须走 notice，不得落成原始 JSON 卡。
+      case 'agent.retired':
+      case 'agent.reply.stale': {
         flush();
         group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
         continue;
@@ -489,9 +348,19 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         }
         continue;
       }
-      default:
+      default: {
         flush();
-        group.items.push({ kind: 'event', event: ev, key: `ev-${entry.seq}` });
+        // **未登记类型（第三方插件 / 上游事件 / 旧 trace）绝不落裸 JSON 卡**：
+        // `tierOf` 返回 undefined 时按 `internal` 口径处理，并渲染成一条
+        // 「未知事件类型 · 已折叠」notice（展开是原始载荷，见 EventRow.noticeView）。
+        // 已登记但没有专用分支的类型（如 `guardrail.blocked`）仍走原始事件行 ——
+        // 它们的摘要由 EventRow 逐类型给出，属于「明细只能看原始事件」的那一档。
+        if (eventSpecOf(ev.type) === undefined) {
+          group.items.push({ kind: 'notice', event: ev, key: `unknown-${entry.seq}` });
+        } else {
+          group.items.push({ kind: 'event', event: ev, key: `ev-${entry.seq}` });
+        }
+      }
     }
   }
   // 尾部仍在流式中的缓冲不 push 成 item：运行段直接渲染 liveText/liveReasoning。
@@ -534,19 +403,18 @@ function refsOf(value: unknown): MessageRef[] {
 /**
  * 单条事件是否进入时间线分组。`groupEvents` 与增量缓存共用同一口径，
  * 避免两套过滤规则漂移。
+ *
+ * 判据只有 `event-visibility.ts` 的 `isVisibleInChat` 一处：`content` 恒可见、
+ * `observe` 恒不可见、`internal`（含**未登记**）只随 `showInternal` / `errorLevel: all`
+ * 放开。`showInternal` 由调用方传入 `showsInternalEvents()` 的结果
+ * （`ui.showInternalEvents || verbosity === 'debug'`）。
  */
 export function isVisibleForGrouping(
   entry: StoredEvent,
   showInternal: boolean,
   errorLevel: ErrorVisibility = 'user',
 ): boolean {
-  // 观察面事件无视 showInternal：聊天窗永远不展示，只在 Observe / Runs 可见。
-  if (CHAT_HIDDEN_EVENT_TYPES.has(entry.event.type)) return false;
-  if (!showInternal && INTERNAL_EVENT_TYPES.has(entry.event.type)) return false;
-  // 子 agent 事件属于内部执行细节：默认不按 child run_id 拆成 raw JSON 卡片。
-  if (!showInternal && entry.event.type.startsWith('subagent.')) return false;
-  if (isHiddenInternalError(entry.event.type, errorLevel, showInternal)) return false;
-  return true;
+  return isVisibleInChat(entry.event.type, { showInternal, errorLevel });
 }
 
 /**

@@ -33,6 +33,15 @@
   `vessel:*` 运行期上下文消息跟随同一个键，不再写浏览器 localStorage。默认只显式
   展示正文、思考、工具调用与错误 / 权限交互；`run.checkpoint`、`runtime.notice`、
   hook 与上下文生命周期通知归为内部事件。
+- **事件可见性三档（Web）**：`apps/web/src/state/event-visibility.ts` 是**唯一分类表**
+  （`content` / `internal` / `observe`），判据从「不在黑名单 ⇒ 可见」翻成「只有
+  `content` 恒可见」；**未登记的类型 ⇒ 按 `internal` 折叠**，渲染成一条「未知事件类型 ·
+  已折叠」notice（展开是原始载荷），**绝不落裸 JSON 卡**。`agent.retired` → `internal`
+  + typed notice（`reason` / `body_id` / `epoch` 直接取自事件 data，不加跨包 DTO）；
+  `agent.reply.stale` → `content` + typed notice；`agent.rotate.approved|denied`、
+  插件与渠道事件 → `observe`（聊天永不出现）。失败类不得进 `observe`。门禁
+  `bun run check:event-visibility`：未分类 / 表腐烂 / 事件名非字面量 / 渲染 fixture
+  （含影子对拍）/ 团队日志双链 / 文档 marker 对拍。
 - **Web 消息流**：历史消息与实时事件按权威时间戳合并成一条时间线（不再把 live 组
   整块追加在末尾）；单 run 事件裁剪保留 `run.started` 等锚点，长 run 运行中可见；
   历史窗口触顶静默前插一页并保持滚动锚点（会话与 Team 一致）。

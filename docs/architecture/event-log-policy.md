@@ -86,8 +86,11 @@ paths: [packages/core/src/runtime/run-journal.ts, packages/core/src/runtime/exec
 
 ## 可见性与消费
 
-- `llm.stream.summary` 归 `INTERNAL_EVENT_TYPES`（`apps/web/src/state/events.ts`）：默认档隐藏、
-  打开「显示系统信息」才以原始行出现；`llm.request` 本来就在该集合。
+- `llm.stream.summary` 在 `apps/web/src/state/event-visibility.ts` 的三档表里归 `internal`
+  （默认隐藏、打开「显示系统信息」/ `verbosity: debug` 才以原始行出现）；`llm.request`
+  同理。三档口径（`content` / `internal` / `observe`）与「未登记 ⇒ 按 internal 折叠成
+  notice」的兜底见 [事件系统](events.md#event-visibility)，门禁是
+  `bun run check:event-visibility`。
 - 历史回放的 `llm.request` 行只有 `tools_count` 可用于展示（`messages` 已被裁掉），
   `EventRow` 今天优先读 `message_count`、缺失时不渲染 msgs 数字，因此不会崩。
 

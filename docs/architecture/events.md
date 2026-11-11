@@ -18,7 +18,8 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 **事件名一律是开放字符串字面量**（ADR-030）：不定义 `EventType` / `PermissionEvent` 之类常量，生产者和消费者直接写字符串。**命名空间 `<domain>.<action>.<event>`**，防撞名。
 
 - 加新事件 = 写字面量，零 import、零 core 变更。
-- 代价：没有编译期拼写检查，靠命名空间约定 + 探针兜底（当前无自动化回归）。
+- 代价：没有编译期拼写检查，靠命名空间约定 + `bun run check:event-visibility` 兜底
+  （扫全仓事件名的生产点 / 消费点，未登记即 FAIL；口径见[可见性三档](#event-visibility)）。
 
 <a id="event-names"></a>
 
@@ -65,6 +66,160 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `eval.run.started` / `eval.run.completed` | evals 插件 → 观测 | eval 运行与计数（0.5） |
 
 插件可自定义任意 `<domain>.*` 事件名，无需改 core。
+
+<a id="event-visibility"></a>
+
+### 可见性三档（唯一分类表）
+
+**判据只有一句：档位由内容性质决定，不由「默认想不想藏」决定。** 唯一真相源是
+`apps/web/src/state/event-visibility.ts`（`EVENT_TIERS` + `EVENT_TIER_FAMILIES` +
+`tierOf` / `isVisibleInChat`），不要在渲染层另写可见性判断。
+
+| 档 | 含义 | 聊天时间线 | 团队日志 |
+|---|---|---|---|
+| `content` | 用户要读的对话内容（正文 / 工具 / 输入 / run 终态 / 真失败） | 恒可见 | 按 `teamLog` |
+| `internal` | run 内部状态同步与过程信号（诊断、生命周期 notice） | 默认隐藏；`ui.showInternalEvents` 或 `verbosity: debug` 时可见（`ui.errorLevel: all` 另按旧语义放出 internal 级失败） | 按 `teamLog` |
+| `observe` | 会话 / 成员元数据审计、交互卡与观察面诊断 | **恒不可见**（与开关无关，只在 Observe / Runs 看） | 按 `teamLog` |
+
+三条硬约束：
+
+1. **未登记 ⇒ 按 `internal` 处理**，并渲染成一条「未知事件类型 · 已折叠」notice
+   （展开是原始载荷），**绝不落裸 JSON 卡**。这是对门禁管不到的边界（第三方插件 /
+   上游事件 / 旧 trace）的兜底 —— 漏登记最坏只是一行折叠的内部提示。
+2. **失败类永不进 `observe`**：任何集合都在 `ui.errorLevel` 之前过滤，塞进静默档等于
+   静默真失败。`observe` 里出现 `isErrorEventType`，或 `run.` / `tool.` / `guardrail.`
+   前缀的失败类不是 `content`，`check:event-visibility` 直接 FAIL。
+3. **家族前缀必须显式登记**（`subagent.` / `tool.call.` / `mcp.` / `channel.feishu.` /
+   `eval.run.`）；不在表、也不在家族里的名字由门禁拦下。
+
+`承接` 列回答「这条事件藏掉之后，用户还能在哪看到它」：`notice` = typed notice 卡
+（`EventRow.noticeView`）、`card` = 专用卡片 / 交互卡、`team-log` = 团队日志行、
+`dto` = 成员 / 插件页的 DTO、`raw-card` = 显式保留原始事件行（只有 `guardrail.blocked`）。
+`生产者` 列 `legacy` = 本仓已无生产者、只读历史（门禁据此做「表腐烂」的反向断言：
+标了 `live` 却扫不到事件名就 FAIL）。本表的**键集**与代码一一对应
+（`bun run check:event-visibility` 的 A6 断言，缺一边即 FAIL）。
+
+<!-- event-visibility:begin -->
+| 事件名 | 档 | 承接 | 团队日志 | 生产者 |
+|---|---|---|---|---|
+| `run.started` | content | card | none | live |
+| `run.completed` | content | card | reply | live |
+| `run.failed` | content | card | system | live |
+| `run.cancelled` | content | card | system | live |
+| `run.finalize.failed` | content | notice | none | live |
+| `user.message` | content | card | none | live |
+| `llm.stream.chunk` | content | card | none | live |
+| `tool.call.started` | content | card | none | live |
+| `tool.call.completed` | content | card | none | live |
+| `tool.call.failed` | content | card | none | live |
+| `guardrail.blocked` | content | raw-card | none | live |
+| `guardrail.error` | content | notice | none | live |
+| `agent.limit.warning` | content | notice | none | live |
+| `agent.reply.stale` | content | notice | none | live |
+| `error` | internal | — | none | legacy |
+| `hook.failed` | internal | — | none | live |
+| `hook.error` | internal | — | none | live |
+| `hook.started` | internal | notice | none | live |
+| `hook.completed` | internal | notice | none | live |
+| `hook.system_prompt_ignored` | internal | notice | none | live |
+| `hook.additional_context_deprecated` | internal | notice | none | live |
+| `llm.request` | internal | — | none | live |
+| `llm.response` | internal | — | none | live |
+| `llm.stream.summary` | internal | — | none | live |
+| `llm.retry` | internal | — | none | live |
+| `run.checkpoint` | internal | — | none | live |
+| `run.resumed` | internal | — | none | live |
+| `context.changed` | internal | — | none | live |
+| `context.pressure` | internal | notice | none | live |
+| `context.compacted` | internal | notice | none | live |
+| `context.cleared_tool_result` | internal | — | none | live |
+| `message.injected` | internal | — | none | live |
+| `message.compaction` | internal | — | none | live |
+| `limit.blocked` | internal | — | none | live |
+| `prompt.prefix_changed` | internal | — | none | live |
+| `replay.started` | internal | — | none | live |
+| `replay.completed` | internal | — | none | live |
+| `session.saved` | internal | — | none | live |
+| `session.log.failed` | internal | — | none | live |
+| `process.error` | internal | — | none | live |
+| `shutdown.failed` | internal | — | none | live |
+| `trace.write.failed` | internal | — | none | live |
+| `trace.overflow` | internal | — | none | live |
+| `plugin.failed` | internal | — | none | live |
+| `plugin.init.failed` | internal | — | none | live |
+| `plugin.dispose.failed` | internal | — | none | live |
+| `runtime.notice` | internal | — | none | live |
+| `team.budget.warning` | internal | — | none | live |
+| `team.budget.blocked` | internal | — | none | live |
+| `team.budget.override` | internal | — | none | live |
+| `agent.retired` | internal | notice | none | live |
+| `agent.rotate.approved` | observe | — | none | live |
+| `agent.rotate.denied` | observe | — | none | live |
+| `agent.updated` | observe | dto | none | live |
+| `agent.role.changed` | observe | dto | none | live |
+| `agent.rejoined` | observe | dto | system | live |
+| `agent.permission.cancelled` | observe | — | none | live |
+| `agent.spawned` | observe | team-log | system | live |
+| `agent.closed` | observe | team-log | system | live |
+| `agent.message.queued` | observe | — | none | live |
+| `agent.message.notified` | observe | — | none | legacy |
+| `agent.message.sent` | observe | — | none | legacy |
+| `agent.stale` | observe | — | none | live |
+| `agent.permission.requested` | observe | — | none | legacy |
+| `agent.permission.responded` | observe | — | none | legacy |
+| `agent.session.activated` | observe | — | none | live |
+| `agent.queue.entered` | observe | — | none | live |
+| `agent.queue.left` | observe | — | none | live |
+| `agent.rotating` | internal | notice | none | legacy |
+| `agent.rotated` | internal | notice | system | legacy |
+| `agent.compact_forked` | internal | notice | none | legacy |
+| `agent.restarting` | internal | notice | none | live |
+| `agent.restarted` | internal | notice | none | live |
+| `agent.create.failed` | internal | — | none | live |
+| `agent.rotate.failed` | internal | — | none | legacy |
+| `agent.forked` | observe | team-log | system | legacy |
+| `session.created` | observe | — | none | live |
+| `session.activated` | observe | — | none | legacy |
+| `session.rewound` | observe | — | none | legacy |
+| `session.forked` | observe | — | none | legacy |
+| `session.titled` | observe | — | none | live |
+| `session.deleted` | observe | — | none | live |
+| `tool.permission.request` | observe | card | none | live |
+| `tool.permission.response` | observe | card | none | live |
+| `tool.permission.expired` | observe | card | none | legacy |
+| `ask.user.requested` | observe | card | none | live |
+| `ask.user.answered` | observe | card | none | live |
+| `ask.user.timeout` | observe | card | none | live |
+| `config.loaded` | observe | — | none | live |
+| `plugin.loaded` | observe | — | none | live |
+| `plugin.changed` | observe | — | none | live |
+| `update.available` | observe | — | none | live |
+| `rpc.result_invalid` | observe | — | none | live |
+| `federation.received` | observe | — | none | live |
+| `federation.rejected` | observe | — | none | live |
+| `guardrail.modified` | observe | — | none | legacy |
+| `mcp.server.connected` | observe | — | none | live |
+| `mcp.server.disconnected` | observe | — | none | live |
+| `mcp.resource.read` | observe | — | none | live |
+| `mcp.tool.called` | observe | — | none | live |
+| `mcp.warning` | observe | — | none | live |
+| `mcp.server.failed` | internal | — | none | live |
+| `mcp.tool.failed` | internal | — | none | live |
+| `channel.feishu.connected` | observe | — | none | live |
+| `channel.feishu.disconnected` | observe | — | none | live |
+| `channel.feishu.message.received` | observe | — | none | live |
+| `channel.feishu.reply.sent` | observe | — | none | live |
+| `channel.feishu.error` | internal | — | none | live |
+| `eval.run.started` | observe | — | none | live |
+| `eval.run.completed` | observe | — | none | live |
+| `delegate.started` | internal | — | none | legacy |
+| `delegate_task.started` | internal | — | none | legacy |
+| `delegate.completed` | internal | — | none | legacy |
+| `delegate.failed` | internal | — | none | legacy |
+<!-- event-visibility:end -->
+
+> `delegate.*` / `delegate_task.*` 是 TUI 侧去掉 `subagent.` 前缀后的消费形态（线上名是
+> `subagent.delegate.*`，由家族覆盖），本仓没有独立生产者。
 
 **思维链不进入事件流**：`llm.request` 的 messages 与 `context.changed` 的 message 在发布前剔除 `reasoning_content`（ADR-038）；`WorkingContext` 的持久化记录仍保留该字段，供下一轮请求回传。
 
