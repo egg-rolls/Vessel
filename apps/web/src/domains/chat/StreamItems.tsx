@@ -22,7 +22,7 @@ import { agentSenderOfName } from './agent-sender';
 import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
 import { EventRow, NoticeRow } from './EventRow';
 import { MessageRefs } from './MessageRefs';
-import { ReasoningBlock } from './ReasoningBlock';
+import { AssistantSpeaker, ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
@@ -95,20 +95,32 @@ const NO_ACTIONS: readonly MessageAction[] = [];
  * 有底色的气泡：实时用户气泡 `UserBubble`、历史用户气泡（`Transcript.tsx`）、团队页气泡
  * （`TeamMessageRow`，`.team-message-bubble` 有底色）。不要把 `MessageFold` 加回来 ——
  * 无底正文被裁到 400px + 渐隐没有任何视觉锚点，读者看不到「这是一段被收起的话」。
+ *
+ * 容器里另有两样**不占高度**的东西（`speaker` / `actions`）：
+ * - `speaker`：「助手」发言人名，与历史态同一个组件（`AssistantSpeaker`）；
+ * - `actions`：消息工具栏，绝对定位在 `.msg-assistant` 右上角（`.msg-actions`），
+ *   hover / focus-within 只切 opacity ⇒ 出现时正文不位移；窄屏退化成正文下方一行。
+ *   有思考卡时工具条挂在思考卡右上角（`ReasoningBlock` 的 `actions`），这里不重复。
  */
 export function AssistantText({
   text,
   streaming = false,
   actions,
   entering = false,
+  speaker = false,
 }: {
   text: string;
   /** 仍在流式收字：节流 + 未闭合块的保守降级（见 components/Markdown.tsx）。 */
   streaming?: boolean;
-  /** 操作行（复制 / 重试）；运行态不传，避免停在文字下方的一条会变的控件。 */
+  /**
+   * 这一轮的消息工具栏（复制 / 重试）。渲染成绝对定位覆盖层（`.msg-actions`），
+   * **不占正文下方的垂直空间**，hover 出现时也不会把内容顶下去。
+   */
   actions?: ReactNode;
   /** 本帧才追加进来的项：入场只播一次（判定见 `TranscriptWindow.tsx` 的 `useEnteringItems`）。 */
   entering?: boolean;
+  /** 这是这一轮助手的第一块：正文上方补「助手」发言人名（与历史态同一口径）。 */
+  speaker?: boolean;
 }) {
   // 首帧定格一次「这段正文怎么出现」（惰性初值只跑挂载那一次）：流式出现的走块级
   // `.motion-stream`，整段出现的走段级 `.msg-enter`。两者不同时生效，也不随 streaming
@@ -124,8 +136,30 @@ export function AssistantText({
         reveal === 'stream' && streaming && 'motion-stream',
       )}
     >
+      {speaker && <AssistantSpeaker />}
       <Markdown className="msg-text" text={text} streaming={streaming} />
-      {actions}
+      {actions !== undefined && <div className="msg-actions">{actions}</div>}
+    </div>
+  );
+}
+
+/**
+ * 「正在思考」：run 已经在跑、但这一轮还没有任何**可见**内容（正文 / 思考 / 工具卡）
+ * 时的那一行状态。主会话页（`TranscriptWindow`）与子 agent（`RunItems`）共用同一份。
+ *
+ * 判据由调用方给（既有的 `running` 状态 + 「有没有可见内容」），这里不设定时器、
+ * 也不猜时长：run 一进终态（completed / cancelled / failed），调用方的 running 就不再
+ * 成立，这一行随即消失。「流式中的思考卡」用的是同一个词（`chat.reasoning.thinking`）
+ * —— 同一个事实只有一个词，不要在两处各写一句。
+ *
+ * 动画只用 `styles/motion.css` 的 `.motion-appear`（只动透明度）：出现那一下不推挤
+ * 贴底滚动，也不自带方向感。
+ */
+export function ThinkingHint() {
+  return (
+    <div className="run-waiting motion-appear text-muted" role="status">
+      <span className="h-1.5 w-1.5 rounded-full bg-accent pulse-soft" aria-hidden="true" />
+      {t('chat.reasoning.thinking')}
     </div>
   );
 }
@@ -322,13 +356,32 @@ export const RunItems = memo(function RunItems({
   const liveText = group.status === 'running' ? group.liveText : undefined;
   const liveReasoning =
     group.status === 'running' && reasoningVisible(verbosity) ? group.liveReasoning : undefined;
-  const showWaiting =
-    group.status === 'running' &&
+  // 「正在思考」的判据（只有既有的 `running` 状态，没有定时器）：
+  // run 在跑、但这一轮**还没有任何可见内容**（正文 / 思考 / 工具卡）。以前这里用
+  // `!group.liveReasoning`（未经过 verbosity 过滤）判断，minimal 档把思考流藏起来后
+  // 这句话会被一起藏掉，于是「跑着却什么都看不到」—— 现在只认**实际会渲染**的那几项
+  // （`renderItems` 已经过 chat-visibility 过滤：minimal 档的工具卡不在里面）。
+  // 有工具在跑时显示的是那一行工具状态，不再叠一条「正在思考」。
+  const hasVisibleContent = renderItems.some(
+    (item) => item.kind === 'text' || item.kind === 'reasoning' || item.kind === 'tool',
+  );
+  const showThinking =
+    runRunning &&
+    !hasVisibleContent &&
     !liveText &&
-    !group.liveReasoning &&
-    renderItems.length === 0 &&
-    // 有工具在跑时显示的是那一行工具状态，不再叠一条「正在思考…」。
+    !liveReasoning &&
     toolHint === undefined;
+
+  // 「助手」发言人名挂在**这一轮的第一块**（正文或思考卡）上：一个 run 只出现一次，
+  // 与历史态的 groupStart 同一口径（连续同发言人不重复）。还没 flush 成 item 的尾部
+  // 缓冲自己带头 —— 判据是「items 里还没有正文 / 思考项」。
+  const speakerKey = useMemo(
+    () => renderItems.find((item) => item.kind === 'text' || item.kind === 'reasoning')?.key,
+    [renderItems],
+  );
+  const speakerTaken = speakerKey !== undefined;
+  const tailReasoningSpeaker = !speakerTaken && liveReasoning !== undefined;
+  const tailTextSpeaker = !speakerTaken && liveReasoning === undefined;
 
   // 输入的发言人：与 live item / 历史消息同一个判定（agent-sender.ts），
   // 有 sender 就渲染 agent 卡，否则用户气泡。
@@ -360,6 +413,7 @@ export const RunItems = memo(function RunItems({
               streaming={group.status === 'running' && item.key === lastReasoningKey}
               startedAt={item.startedAt}
               endedAt={item.endedAt}
+              speaker={item.key === speakerKey}
             />
           );
         }
@@ -369,10 +423,12 @@ export const RunItems = memo(function RunItems({
               key={item.key}
               text={item.text}
               streaming={streamingText}
+              speaker={item.key === speakerKey}
+              // 工具条是绝对定位覆盖层（`.msg-actions`，见 AssistantText 头注释）：
+              // 不再带 `mt-1`，也不占正文下方的任何高度。
               actions={
                 showActions && item.text.trim().length > 0 ? (
                   <MessageActions
-                    className="mt-1"
                     actions={[
                       {
                         id: 'copy',
@@ -401,11 +457,13 @@ export const RunItems = memo(function RunItems({
         }
         return <EventRow key={item.key} event={item.event} defaultOpen={cardsDefaultOpen} />;
       })}
-      {liveReasoning && <ReasoningBlock text={liveReasoning} streaming />}
+      {liveReasoning && (
+        <ReasoningBlock text={liveReasoning} streaming speaker={tailReasoningSpeaker} />
+      )}
       {/* 收字尾巴：**不播入场**。它不是「追加的一项」—— 每 flush 一段正文它就被摘下再挂上
           （item 落位后尾巴清空，下一个 token 又出现），播了就是反复淡入；flush 落位的那份
           由 items 里的 AssistantText 负责。助手正文本身不折叠（见 AssistantText 头注释）。 */}
-      {liveText && <AssistantText text={liveText} streaming />}
+      {liveText && <AssistantText text={liveText} streaming speaker={tailTextSpeaker} />}
       {/* minimal 档的在飞工具：一行状态（工具名 + 运行中），不带参数 / 输出；
           工具结束或 run 结束即消失（判定见 chat-visibility#runningToolHint）。 */}
       {toolHint && (
@@ -416,19 +474,15 @@ export const RunItems = memo(function RunItems({
           {t('chat.tool.status.running')}
         </div>
       )}
-      {showWaiting && (
-        <div className="run-waiting text-muted" role="status">
-          <span className="h-1.5 w-1.5 rounded-full bg-accent pulse-soft" aria-hidden="true" />
-          {t('chat.run.waiting')}
-        </div>
-      )}
+      {showThinking && <ThinkingHint />}
       {completedOutput !== undefined && !outputAlreadyShown && (
         // 同一容器：`run.completed.output` 兜底的那段正文也是助手正文（同样不折）。
+        // 它可能是一轮里唯一的内容块，那就由它带头（`speaker`）。
         <AssistantText
           text={completedOutput}
+          speaker={!speakerTaken}
           actions={
             <MessageActions
-              className="mt-1"
               actions={[
                 {
                   id: 'copy',

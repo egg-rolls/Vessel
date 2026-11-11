@@ -21,12 +21,37 @@
  *   展开 / 收起 = `.motion-disclosure`（`<details>` 的尺寸过渡，原生可访问性不变）。
  *   流式期间思考文本每 flush 增长一次，但这两种动画都按「节点首次挂载 / open 变化」跑，
  *   不会跟着 delta 重播。
+ *
+ * 卡外还有两样东西（都在 `.reasoning-wrap` 里，**不改卡片自身的盒模型**）：
+ * - `speaker`：「助手」发言人名（这一段的第一块是思考卡时才要，与历史态同一个组件）；
+ * - `actions`：这一段的消息工具栏。绝对定位贴在**卡片右上角**（`.reasoning-actions`），
+ *   不占垂直空间，所以 hover 出现 / 消失都不会推挤正文（布局说明见 chat.css）。
+ *   有思考卡时工具条只挂在这里，调用方不再在正文下方重复一份。
  */
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { Button } from '../../components/ui';
 import { t } from '../../i18n';
 
 const PREVIEW_LINES = 12;
+
+/**
+ * 「助手」发言人名（唯一实现）。
+ *
+ * 三处共用同一份标记与字号：历史消息（`Transcript.tsx` 的 `groupStart`）、
+ * live 正文（`AssistantText` 的 `speaker`）、live 思考卡（本组件的 `speaker`）。
+ * 放在本文件是因为这里是依赖链的叶子：`StreamItems` 与 `Transcript` 都已经 import
+ * 本文件，反过来放会形成循环导入。
+ *
+ * 类名照抄历史态原来那行（`mb-1.5 block font-mono text-2xs tracking-widest
+ * uppercase text-faint`）：发言人头只有一种写法，不要另造一套标签或字号。
+ */
+export function AssistantSpeaker() {
+  return (
+    <div className="mb-1.5 block font-mono text-2xs tracking-widest uppercase text-faint">
+      {t('chat.role.assistant')}
+    </div>
+  );
+}
 
 export function ReasoningBlock({
   text,
@@ -34,6 +59,8 @@ export function ReasoningBlock({
   startedAt,
   endedAt,
   entering = false,
+  speaker = false,
+  actions,
 }: {
   text: string;
   streaming: boolean;
@@ -44,6 +71,16 @@ export function ReasoningBlock({
    * 判据在调用方（会话页首屏那批不算追加）；历史消息不传。
    */
   entering?: boolean;
+  /**
+   * 本块是这一轮助手的**第一块**：卡头上方补一行「助手」发言人名。
+   * 一个 run 只出现一次（判据在调用方，与历史态的 groupStart 同一口径）。
+   */
+  speaker?: boolean;
+  /**
+   * 这一轮的消息工具栏（复制 / 重试 / 时间）。贴卡片右上角、绝对定位，**不占高度**；
+   * 窄屏（≤1023px）退化成卡片下方一行（见 chat.css 的 `.reasoning-actions`）。
+   */
+  actions?: ReactNode;
 }) {
   const [open, setOpen] = useState(streaming);
   const [userToggled, setUserToggled] = useState(false);
@@ -62,35 +99,47 @@ export function ReasoningBlock({
       : undefined;
 
   return (
-    <details
-      className={`reasoning-block motion-disclosure${entering ? ' motion-appear' : ''}`}
-      open={open}
-      onToggle={(event) => {
-        const next = event.currentTarget.open;
-        if (next === open) return;
-        setUserToggled(true);
-        setOpen(next);
-      }}
-    >
-      <summary className="cursor-pointer select-none px-2.5 py-1.5 text-sm text-faint hover:text-muted">
-        {t('chat.reasoning.summary')}
-        {seconds !== undefined ? ` · ${seconds}s` : ''}
-        {streaming ? (
-          <span className="reasoning-live text-info"> · {t('chat.reasoning.live')}</span>
-        ) : null}
-      </summary>
-      <div className="px-2.5 py-2 text-md leading-relaxed whitespace-pre-wrap wrap-anywhere">
-        {clampedVisible ? clamped : text}
-      </div>
-      {lines.length > PREVIEW_LINES && (
-        <Button
-          variant="link"
-          className="mx-2.5 mb-2 text-xs"
-          onClick={() => setShowAll((value) => !value)}
-        >
-          {showAll ? t('chat.reasoning.collapse') : t('chat.reasoning.expand')}
-        </Button>
-      )}
-    </details>
+    // `.reasoning-wrap` 只是定位上下文（`position: relative`）：卡片与工具条都在它里面，
+    // 工具条绝对定位在右上角，因此**不参与**高度计算。`group` 让 `MessageActions` 的
+    // `group-hover` 在本卡（而不是整条消息）上生效 —— live 的思考卡是顶层 item，
+    // 外面没有 `.msg-assistant` 那个 group。
+    <div className="reasoning-wrap group">
+      {speaker && <AssistantSpeaker />}
+      <details
+        className={`reasoning-block motion-disclosure${entering ? ' motion-appear' : ''}`}
+        open={open}
+        onToggle={(event) => {
+          const next = event.currentTarget.open;
+          if (next === open) return;
+          setUserToggled(true);
+          setOpen(next);
+        }}
+      >
+        <summary className="cursor-pointer select-none px-2.5 py-1.5 text-sm text-faint hover:text-muted">
+          {t('chat.reasoning.summary')}
+          {seconds !== undefined ? ` · ${seconds}s` : ''}
+          {streaming ? (
+            // 同一个事实只有一个词：流式中的思考过程就是「正在思考」，与页面顶部
+            // 0 内容时那行提示（`ThinkingHint`）共用同一个 i18n key。
+            <span className="reasoning-live text-info"> · {t('chat.reasoning.thinking')}</span>
+          ) : null}
+        </summary>
+        <div className="px-2.5 py-2 text-md leading-relaxed whitespace-pre-wrap wrap-anywhere">
+          {clampedVisible ? clamped : text}
+        </div>
+        {lines.length > PREVIEW_LINES && (
+          <Button
+            variant="link"
+            className="mx-2.5 mb-2 text-xs"
+            onClick={() => setShowAll((value) => !value)}
+          >
+            {showAll ? t('chat.reasoning.collapse') : t('chat.reasoning.expand')}
+          </Button>
+        )}
+      </details>
+      {/* 工具条在 `<details>` 之后：窄屏退化（`position: static`）时它就是卡片下方那一行，
+          宽屏时被绝对定位吸到卡头右侧 —— DOM 顺序不随断点变，键盘 Tab 顺序才稳定。 */}
+      {actions !== undefined && <div className="reasoning-actions">{actions}</div>}
+    </div>
   );
 }

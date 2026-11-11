@@ -12,7 +12,7 @@ import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { MessageRefs } from './MessageRefs';
-import { ReasoningBlock } from './ReasoningBlock';
+import { AssistantSpeaker, ReasoningBlock } from './ReasoningBlock';
 import type { TranscriptItem } from './transcript-items';
 
 /**
@@ -159,19 +159,23 @@ function TranscriptMessage({
       onSelect: () => onRetry(previousUser.index, previousUser.text),
     });
   }
+  // 消息工具栏（复制 / 重试 / 时间）：位置只有一处 —— **这一段的第一块右侧**。
+  // 有思考卡就贴在卡右上角（`ReasoningBlock` 的 `actions`），没有思考卡才落在正文
+  // 右上角（`.msg-actions`）。两种情况都是绝对定位覆盖层：hover / focus-within
+  // 只切 opacity，**不给正文增加高度、出现时也不位移**（布局说明见 chat.css）。
+  const toolbar =
+    hasMeta || actions.length > 0 ? <MessageActions actions={actions} meta={meta} /> : undefined;
   return (
     <div className="msg-assistant group max-w-full">
-      {groupStart && (
-        <div className="mb-1.5 block font-mono text-2xs tracking-widest uppercase text-faint">
-          {t('chat.role.assistant')}
-        </div>
-      )}
+      {groupStart && <AssistantSpeaker />}
       {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。 */}
-      {reasoning !== undefined && <ReasoningBlock text={reasoning} streaming={false} />}
+      {reasoning !== undefined && (
+        <ReasoningBlock text={reasoning} streaming={false} actions={toolbar} />
+      )}
       {/* 助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
       {message.content && <Markdown className="msg-text" text={message.content} />}
-      {hasMeta || actions.length > 0 ? (
-        <MessageActions className="mt-1" actions={actions} meta={meta} />
+      {reasoning === undefined && toolbar !== undefined ? (
+        <div className="msg-actions">{toolbar}</div>
       ) : null}
     </div>
   );

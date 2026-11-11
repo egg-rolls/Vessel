@@ -252,6 +252,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'From the session record: this turn’s live events are no longer buffered, so only the error summary is kept.',
   // 0.15: tool cards / reasoning stream / inline ask
   'chat.reasoning.live': 'Streaming',
+  // The single wording for "thinking is still going": the reasoning card's live label and
+  // the "run started, nothing visible yet" hint share this key (one fact, one word).
+  'chat.reasoning.thinking': 'Thinking…',
   'chat.reasoning.expand': 'Show all',
   'chat.reasoning.collapse': 'Collapse',
   'chat.tool.input': 'Input',
