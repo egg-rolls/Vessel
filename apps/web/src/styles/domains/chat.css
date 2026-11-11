@@ -932,6 +932,25 @@
   opacity: 0.55;
 }
 
+/* 底部工具栏 = 卡片自己的一条底边，不是第二张卡。
+   底色比卡片沉一层（`--surface-deep`：比输入区的 `--surface-sunken` 再沉一级，
+   但仍浅于扩展槽按钮的 `bg-sunken`，工具栏按钮的灰底因此不会消失），横向 / 下侧
+   外扩到卡片内衬之外，只保留与卡片同圆角的下两角：引用区、输入框、工具栏读成
+   同一张卡。工具栏自身不叠加阴影（层级只留卡片那一层 `--elev-2`），否则看起来
+   就是浮在卡片上的第二张卡；上边缘用一条 `--line` 细线画出来 —— 暗色下 deep 与
+   页面底色接近，边界靠这条线而不是靠第二层阴影。
+   外扩量 = 两页卡片的水平 / 底部内衬（会话卡片 `px-3.5 pb-3`，团队 `.composer`
+   的 `14px / 12px`）；两侧内衬与卡片相等 ⇒ 工具栏内容的横向位置与改动前一致，
+   点击热区与 `.composer:focus-within` 的焦点环归属都不变。 */
+.composer-toolbar-strip {
+  margin-inline: -14px;
+  margin-bottom: -12px;
+  padding: 6px 14px 12px;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: var(--surface-deep);
+}
+
 /* 0.18：pending 时用同尺寸提示卡替换 Composer；权限/提问共用同一外壳。 */
 
 .prompt-slot {

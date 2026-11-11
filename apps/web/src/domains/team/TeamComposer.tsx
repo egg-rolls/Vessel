@@ -9,12 +9,13 @@
 
 import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
 import { useEffect, useId, useRef, useState } from 'react';
-import { AutoGrowTextarea, Button } from '../../components/ui';
+import { AutoGrowTextarea } from '../../components/ui';
 import type { MessageRef, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
   type ComposerContextUsage,
   ComposerRefsArea,
+  ComposerSendButton,
   ComposerToolbarBar,
   refIndexForId,
   refsToAttachments,
@@ -296,9 +297,11 @@ export function TeamComposer({
       <ComposerToolbarBar
         contextUsage={contextUsage}
         primary={
-          <Button variant="primary" onClick={onSend} disabled={!canSend}>
-            {sending ? t('team.composer.sending') : t('team.composer.send')}
-          </Button>
+          <ComposerSendButton
+            label={sending ? t('team.composer.sending') : t('team.composer.send')}
+            disabled={!canSend}
+            onClick={onSend}
+          />
         }
       />
     </div>

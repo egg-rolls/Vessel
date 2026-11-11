@@ -1,18 +1,29 @@
 import type { ReactNode } from 'react';
 import { cn } from './cn';
 
-/** 消息操作里使用的图标。只做内联 SVG，颜色继承 `currentColor`。 */
+/** 消息操作 / 输入框里使用的图标。只做内联 SVG，颜色继承 `currentColor`。 */
 export type IconName =
   | 'copy'
   | 'edit'
   | 'retry'
+  | 'send'
   | 'resend'
   | 'transcript'
   | 'reply'
   | 'retract'
   | 'chevron';
 
+/** 纸飞机：`send`（输入框发送键）与 `resend`（重发消息）共用同一支笔形。 */
+const PLANE = (
+  <>
+    <path d="M13.5 2.5 2.5 7.25l4.75 1.5 1.5 4.75z" />
+    <path d="M7.25 8.75 13.5 2.5" />
+  </>
+);
+
 const PATHS: Record<IconName, ReactNode> = {
+  /** 输入框右下角发送键（圆形图标按钮，见 `ComposerSendButton`）。 */
+  send: PLANE,
   copy: (
     <>
       <rect x="5.25" y="5.25" width="8.5" height="8.5" rx="1.5" />
@@ -50,12 +61,7 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M5.25 3.5 2.5 6.25l2.75 2.75" />
     </>
   ),
-  resend: (
-    <>
-      <path d="M13.5 2.5 2.5 7.25l4.75 1.5 1.5 4.75z" />
-      <path d="M7.25 8.75 13.5 2.5" />
-    </>
-  ),
+  resend: PLANE,
   /** 展开 / 收起指示（details 的 summary 右侧，随 open 旋转 90°）。 */
   chevron: <path d="M6.5 4.5 10.5 8l-4 3.5" />,
 };

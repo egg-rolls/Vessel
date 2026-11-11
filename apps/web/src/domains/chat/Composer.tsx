@@ -7,6 +7,7 @@ import { ChatDock } from './ChatDock';
 import {
   type ComposerContextUsage,
   ComposerRefsArea,
+  ComposerSendButton,
   ComposerToolbarBar,
   refIndexForId,
   refsToAttachments,
@@ -167,9 +168,11 @@ export function Composer({
                 {t('common.configureConnection')}
               </Button>
             ) : (
-              <Button variant="primary" onClick={onSubmit} disabled={!canSend}>
-                {submitting ? t('chat.composer.sending') : t('chat.composer.send')}
-              </Button>
+              <ComposerSendButton
+                label={submitting ? t('chat.composer.sending') : t('chat.composer.send')}
+                disabled={!canSend}
+                onClick={onSubmit}
+              />
             )
           }
         />
