@@ -9,6 +9,7 @@ import {
   ComposerField,
   ComposerRefsArea,
   ComposerSendButton,
+  focusComposerInputOnBlankClick,
   refIndexForId,
   refsToAttachments,
 } from './ComposerChrome';
@@ -19,7 +20,9 @@ import {
  * - 上：引用区（附件 / 文档 / 引用项，受控 `refs` + `onRemoveRef`；空则不占高）；
  * - 下：{@link ComposerField} 把 textarea 与横向工具栏包成一块凹槽 —— 底色、圆角、
  *   内衬、焦点环都由容器承担，两者背景透明；
- * - textarea 行为不变：Enter 发送 / Shift+Enter 换行 / IME 保护。
+ * - textarea 行为不变：Enter 发送 / Shift+Enter 换行 / IME 保护；
+ * - 指针：点卡片留白 / 引用区留白 / 工具栏空白都把焦点交给 textarea，
+ *   按钮自己的点击不被接管（`focusComposerInputOnBlankClick`，两页共用）。
  */
 export function Composer({
   value,
@@ -107,8 +110,14 @@ export function Composer({
   return (
     <ChatDock>
       {/* 焦点环由 `.composer-field` 的 `:focus-within` 出（一层，标出「输入 + 工具栏」），
-          卡片自己不再叠加第二层环。 */}
-      <div className="w-full max-w-[var(--dock-width)] mx-auto px-3.5 pt-2.25 pb-3 rounded-lg bg-raised shadow-elev-2">
+          卡片自己不再叠加第二层环。点卡片留白（标题行 / 引用区 / 内衬）也进输入框，
+          按钮与输入框自己的点击不被接管（见 `focusComposerInputOnBlankClick`）。 */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: 点卡片留白聚焦 textarea 是鼠标便捷入口（卡片不是可点控件） */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: 键盘流不变：Tab 直接到输入框 / 按钮，留白处不需要键盘等价键 */}
+      <div
+        className="w-full max-w-[var(--dock-width)] mx-auto px-3.5 pt-2.25 pb-3 rounded-lg bg-raised shadow-elev-2"
+        onClick={focusComposerInputOnBlankClick}
+      >
         <div className="flex items-center justify-between gap-3 mb-1.5 text-xs text-faint">
           <Tooltip label={targetLabel}>
             <span className="composer-target">{targetLabel}</span>

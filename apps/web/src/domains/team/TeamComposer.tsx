@@ -6,7 +6,9 @@
  * - 发送只提交 chips 里的 `agent_id`，正文 `@name` 不参与解析；
  * - UTF-8 字节上限 64 KiB；
  * - 外观与会话页共用 `ComposerField` / `.composer-input`：卡片 > 引用区 >
- *   字段容器（textarea + 工具栏），容器接管底色 / 内衬 / 焦点环。
+ *   字段容器（textarea + 工具栏），容器接管底色 / 内衬 / 焦点环；
+ * - 点卡片 / 工具栏 / 引用区留白与工具栏空白都进输入框，按钮与 @ 候选的点击照常
+ *   （`focusComposerInputOnBlankClick`，会话页同一份）。
  */
 
 import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
@@ -19,6 +21,7 @@ import {
   ComposerField,
   ComposerRefsArea,
   ComposerSendButton,
+  focusComposerInputOnBlankClick,
   refIndexForId,
   refsToAttachments,
 } from '../chat/ComposerChrome';
@@ -151,7 +154,9 @@ export function TeamComposer({
   };
 
   return (
-    <div className="composer team-composer relative">
+    // biome-ignore lint/a11y/noStaticElementInteractions: 点卡片留白聚焦 textarea 是鼠标便捷入口（卡片不是可点控件）
+    // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘流不变：Tab 直接到输入框 / 按钮，留白处不需要键盘等价键
+    <div className="composer team-composer relative" onClick={focusComposerInputOnBlankClick}>
       <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-faint">
         <span className="min-w-0 truncate font-mono text-xs text-accent" title={targetLabel}>
           {targetLabel}

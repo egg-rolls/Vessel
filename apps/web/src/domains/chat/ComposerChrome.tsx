@@ -11,7 +11,7 @@ import {
   ComposerToolbar,
   contextPercent,
 } from '@vessel-agent/plugin-ui';
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { Button, cn, Icon } from '../../components/ui';
 import { formatTokenCount } from '../../format';
 import type { MessageRef } from '../../gateway/types';
@@ -207,6 +207,45 @@ export function ComposerToolbarBar({
 }
 
 /**
+ * 「点空白 → 进输入框」的交互元素判据：目标落在这些里面就**一律不接管**。
+ *
+ * 判据只看事件目标，不给工具栏 / 卡片套 `preventDefault` 或 `stopPropagation`，
+ * 所以按钮自己的点击、tab 顺序、Enter / Space 触发都还是原样。
+ */
+const COMPOSER_INTERACTIVE_SELECTOR =
+  'button, [role="button"], [role="option"], [role="menuitem"], [role="checkbox"], [role="switch"], [role="tab"], a[href], input, select, textarea, [contenteditable="true"]';
+
+/**
+ * 点卡片 / 工具栏 / 引用区的**空白处**时，把焦点交给同一张卡片里的 textarea。
+ *
+ * 挂载点只有两处，都是普通冒泡监听（不阻止任何默认行为，也不加 `tabIndex` / 键处理）：
+ * - {@link ComposerField} 的容器：工具栏空白与容器内衬；
+ * - 两页卡片的最外层（`Composer` / `TeamComposer`）：标题行、引用区留白 —— 卡片
+ *   已经把字段容器包在里面，所以同一次点击会先后命中两个挂载点，但都指向同一个
+ *   textarea，`focus()` 幂等，没有第二次副作用。
+ *
+ * 判据（不抢按钮、不抢已聚焦控件）：
+ * 1. `event.target` 的 `closest(COMPOSER_INTERACTIVE_SELECTOR)` 非空 → 直接返回。
+ *    按钮 / 链接 / 下拉项 / 输入框自己的点击照常，焦点留在被点的控件上（按钮拿到
+ *    自己的 `:focus-visible`，点条目照常 `onSelect`）；点空白才是「我要开始打字」。
+ * 2. 空白点击的 `target` 是容器自身或非交互子元素（工具栏 `role="toolbar"` 的
+ *    flex 缝隙、`gap`、容器内衬、卡片留白）→ 找 `event.currentTarget` 里的
+ *    textarea 并 `focus()`。
+ * 3. 输入框不存在 / 已禁用（未连接、无 token）→ 不抢焦点（禁用控件 `focus()` 也无效）。
+ *
+ * 键盘流不受影响：这里没有任何 `tabIndex` / `role` / 键处理，Tab 顺序与
+ * 输入框的 Enter / Ctrl+Enter 发送仍由各自 composer 负责。
+ */
+export function focusComposerInputOnBlankClick(event: MouseEvent<HTMLElement>): void {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  if (target.closest(COMPOSER_INTERACTIVE_SELECTOR) !== null) return;
+  const input = event.currentTarget.querySelector('textarea');
+  if (!(input instanceof HTMLTextAreaElement) || input.disabled) return;
+  input.focus();
+}
+
+/**
  * 字段容器（唯一实现）：把「输入框 + 工具栏」包成**一块**凹槽。
  *
  * 底色 = 输入框原来的底色（`--surface-sunken`），圆角 `--radius-md`，内衬
@@ -220,6 +259,9 @@ export function ComposerToolbarBar({
  *
  * 焦点环由容器 `:focus-within` 出一层，标出「输入 + 工具栏」整块；textarea
  * 自己的 outline / ring 仍然去掉，避免双层。
+ *
+ * 指针：点容器内衬 / 工具栏空白（不是按钮）时把焦点交给 textarea，见
+ * {@link focusComposerInputOnBlankClick}；按钮自己的点击不被接管。
  *
  * 会话 `Composer` 与团队 `TeamComposer` 都走这里：容器 DOM 只有一份，页面只
  * 提供输入框（行为不同）与右侧主按钮。
@@ -243,7 +285,9 @@ export function ComposerField({
   slot?: ReactNode;
 }) {
   return (
-    <div className="composer-field">
+    // biome-ignore lint/a11y/noStaticElementInteractions: 点空白聚焦 textarea 只是鼠标便捷入口（不是「可点控件」）
+    // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘流不变：Tab 直接到 textarea / 工具栏按钮，空白处不需要键盘等价键
+    <div className="composer-field" onClick={focusComposerInputOnBlankClick}>
       {children}
       <ComposerToolbarBar contextUsage={contextUsage} primary={primary} hostActions={hostActions}>
         {slot}
