@@ -20,6 +20,7 @@ import {
   QueuedNotice,
   type QueuedSubmission,
   RunFailureCard,
+  ThinkingHint,
   UserBubble,
 } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
@@ -314,6 +315,45 @@ export function TranscriptWindow({
   // 历史消息（Transcript 里的 `message` item）不进门 —— 历史加载是回填，不是追加。
   const isEntering = useEnteringItems(items, resetKey);
 
+  // 「助手」发言人名：挂在该 run **第一个**正文 / 思考项上（一个 run 只出现一次）。
+  // 与历史态的 groupStart 是同一口径：连续同发言人不重复。签名换成「这一项带头」的
+  // key 集合，渲染时 O(1) 判定，不用在 renderItem 里回头找前一项。
+  const speakerKeys = useMemo(() => {
+    const named = new Set<string>();
+    const claimed = new Set<string>();
+    for (const item of items) {
+      if (item.kind !== 'run-text' && item.kind !== 'run-reasoning') continue;
+      if (claimed.has(item.runId)) continue;
+      claimed.add(item.runId);
+      named.add(item.key);
+    }
+    return named;
+  }, [items]);
+
+  // 「正在思考」：run 已经在跑、但这一轮**还没有任何可见内容**（正文 / 思考 / 工具卡）
+  // 时的那一行状态。主会话页以前完全没有这句话 —— 只有子 agent transcript 里有，
+  // 于是「发出去还没吐字」的那几秒页面上什么都没有，只能看输入框有没有「停止」。
+  //
+  // 判据只用既有状态（`group.status === 'running'` + item 流里有没有这个 run 的内容项），
+  // 不设定时器、不猜时长：run 一进终态（completed / cancelled / failed），status 就不再是
+  // running，这一行随下一次渲染消失（三种终态都不残留）。
+  // minimal 档的工具卡是被藏起来的，不能算「已可见内容」，否则这句话会被藏起来的卡顶掉
+  // （子 agent 侧同一个坑的说明见 `RunItems` 的 showThinking）。
+  const showThinking = useMemo(() => {
+    // 子 agent 详情页讲的是另一个 run，那一侧由 `SubagentTranscript` → `RunItems` 负责。
+    if (activeAgent) return false;
+    const running = renderedGroups.filter((group) => group.status === 'running');
+    const latest = running[running.length - 1];
+    if (latest === undefined) return false;
+    return !items.some((item) => {
+      if (item.kind === 'run-text' || item.kind === 'run-reasoning') {
+        return item.runId === latest.runId;
+      }
+      if (item.kind === 'tool') return verbosity !== 'minimal' && item.runId === latest.runId;
+      return false;
+    });
+  }, [activeAgent, items, renderedGroups, verbosity]);
+
   const renderItem = (item: TranscriptItem): ReactNode => {
     switch (item.kind) {
       case 'run-input':
@@ -345,11 +385,14 @@ export function TranscriptWindow({
         // （key 在 flush 前后不变，见 check-transcript-items 的 F2），DOM 原地复用。
         // 折叠与入场也收在 AssistantText 里（`entering` = 事件流追加的新 item；
         // 容器在 streaming 翻转前后不变，所以 `.msg-enter` 只播挂载那一次）。
+        // `speaker`：这一项是该 run 的第一块内容 ⇒ 上方补「助手」发言人名
+        // （run 运行期也要看得见，历史消息那条走 Transcript 的 groupStart）。
         return (
           <AssistantText
             text={item.text}
             streaming={item.streaming}
             entering={isEntering(item.key)}
+            speaker={speakerKeys.has(item.key)}
           />
         );
       case 'run-reasoning':
@@ -362,6 +405,7 @@ export function TranscriptWindow({
             startedAt={item.startedAt}
             endedAt={item.endedAt}
             entering={isEntering(item.key)}
+            speaker={speakerKeys.has(item.key)}
           />
         );
       case 'tool':
@@ -525,6 +569,10 @@ export function TranscriptWindow({
               onRetryMessage={onRetryMessage}
             />
           ) : null}
+
+          {/* run 在跑但还没有任何可见内容：一句「正在思考」（判据见上面的 showThinking）。
+              它是会话滚动区的直接子项，排在整条 item 流之后（正在跑的 run 永远是最后一段）。 */}
+          {showThinking && <ThinkingHint />}
 
           {activeAgent && (
             <SubagentTranscript
