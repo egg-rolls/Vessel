@@ -55,5 +55,6 @@ export {
   deriveSessionMeta,
   MemorySessionStore,
   toSessionInfo,
+  withTitleSource,
 } from './session-store.js';
 export { SQLiteSessionStore } from './sqlite-backend.js';

@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import type { ConfigLoadOptions, VesselConfig } from '../packages/config/src/index';
 import { loadConfig } from '../packages/config/src/index';
 import type { SessionInfo, SessionStore, TenantPaths } from '../packages/core/src/index';
+import { withTitleSource } from '../packages/core/src/index';
 import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
 import { createSessionStore } from './session-factory';
 
@@ -47,6 +48,8 @@ interface SqliteSessionListRow {
   updated_at: number;
   message_count: number;
   branch: string | null;
+  /** additive：旧库列存在但值为 NULL = 无标记（见 withTitleSource）。 */
+  title_source: string | null;
   tenant_id: string | null;
 }
 
@@ -114,6 +117,7 @@ function listSqliteSessionsReadonly(layout: LocalLayout): SessionInfo[] {
              COALESCE(updated_at, started_at) AS updated_at,
              json_array_length(messages) AS message_count,
              branch,
+             title_source,
              tenant_id
       FROM sessions
       WHERE json_array_length(messages) > 0
@@ -121,16 +125,22 @@ function listSqliteSessionsReadonly(layout: LocalLayout): SessionInfo[] {
       ORDER BY updated_at DESC, session_id ASC
     `;
     const rows = db.prepare(query).all(layout.tenantId) as SqliteSessionListRow[];
-    return rows.map((row) => ({
-      session_id: row.session_id,
-      title: row.title ?? '',
-      preview: row.preview ?? '',
-      status: row.status,
-      started_at: row.started_at,
-      updated_at: row.updated_at,
-      message_count: row.message_count,
-      ...(row.branch !== null ? { branch: row.branch } : {}),
-    }));
+    // additive (title_source)：与 gateway 同一出口（withTitleSource，归一化 + 无标记不挂 key）。
+    return rows.map((row) =>
+      withTitleSource(
+        {
+          session_id: row.session_id,
+          title: row.title ?? '',
+          preview: row.preview ?? '',
+          status: row.status,
+          started_at: row.started_at,
+          updated_at: row.updated_at,
+          message_count: row.message_count,
+          ...(row.branch !== null ? { branch: row.branch } : {}),
+        },
+        row.title_source,
+      ),
+    );
   } finally {
     db.close();
   }

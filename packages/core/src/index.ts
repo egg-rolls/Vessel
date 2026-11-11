@@ -127,6 +127,7 @@ export {
   SQLiteSessionStore,
   sessionLogDirExists,
   toSessionInfo,
+  withTitleSource,
 } from './session/index.js';
 // tenant id 校验与单公司根布局（0.49 T5：旧布局解析已删除）
 export {

@@ -293,7 +293,8 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
     // 见 events.ts 里这两个 case 的注释）。
     case 'run.finalize.failed': {
       const error = typeof data.error === 'string' && data.error.length > 0 ? data.error : 'error';
-      const phase = typeof data.phase === 'string' && data.phase.length > 0 ? data.phase : 'finalize';
+      const phase =
+        typeof data.phase === 'string' && data.phase.length > 0 ? data.phase : 'finalize';
       return {
         tone: 'danger',
         text: t('chat.notice.finalizeFailed', { phase, error: truncate(error, 240) }),
