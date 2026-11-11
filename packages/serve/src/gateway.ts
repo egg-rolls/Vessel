@@ -59,6 +59,7 @@ import {
 } from './gateway/frames.js';
 import { createAdminMethods, type GatewayReloadResult } from './gateway/methods/admin.js';
 import { createAgentMethods } from './gateway/methods/agents.js';
+import { type AttachmentLister, createAttachmentMethods } from './gateway/methods/attachments.js';
 
 export type { GatewayReloadResult } from './gateway/methods/admin.js';
 
@@ -338,6 +339,14 @@ export interface GatewayOptions {
     record: StoredInteraction,
     context?: { batchId?: string },
   ) => Promise<boolean>;
+  /**
+   * 0.52：`attachments.list`（节点侧只读目录浏览）的列举器（asm 注入）。
+   *
+   * 缺省 = 没有可浏览的根（`entries: []` + `reason: 'refs_outside_roots'`，fail-closed）：
+   * 允许根 / deny 目录 / 符号链接解析都在装配层（复用 basic-tools 那套边界），
+   * serve 只认结论 —— 与 `checkRefs` 同一条分层理由。
+   */
+  listAttachments?: AttachmentLister;
   /**
    * 内部：只构建方法表/引擎，不调用 `Bun.serve`。
    * 由 `createLocalRpcDispatcher` 使用；外部不要设置。
@@ -1555,6 +1564,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createPermissionsMethods({
       ...(opts.permissions !== undefined ? { permissions: opts.permissions } : {}),
       pluginHost,
+    }),
+    // 0.52：附件目录浏览（只读；additive，排在表尾）。
+    // 允许根 / deny / realpath 都在装配层，serve 只出形状与稳定码。
+    ...createAttachmentMethods({
+      ...(opts.listAttachments !== undefined ? { list: opts.listAttachments } : {}),
     }),
   ];
 

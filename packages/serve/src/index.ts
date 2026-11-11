@@ -132,6 +132,17 @@ export {
   type ToolPolicy,
   type ToolPolicyWriteResult,
 } from './gateway/methods/permissions.js';
+export {
+  ATTACHMENT_LIST_DEFAULT_LIMIT,
+  ATTACHMENT_LIST_MAX_LIMIT,
+  type AttachmentLister,
+  type AttachmentListEntry,
+  type AttachmentListReason,
+  type AttachmentListRequest,
+  type AttachmentListResult,
+  type AttachmentMethodsDeps,
+  createAttachmentMethods,
+} from './gateway/methods/attachments.js';
 export { createTeamMethods, type TeamMethodsDeps } from './gateway/methods/teams.js';
 export type { Gateway, GatewayOptions, GatewayReconfigureOptions } from './gateway.js';
 export { isLoopbackHostname, startGateway } from './gateway.js';

@@ -5,9 +5,18 @@
  * /v1/events）的客户端”；平台客户端在平台客户端目录，两者互不 import。
  */
 
-import { IntegrationsClient } from './integrations';
+import { AttachmentsClient } from './attachments';
 
-export class GatewayClient extends IntegrationsClient {}
+export class GatewayClient extends AttachmentsClient {}
+
+export type {
+  AttachmentListEntry,
+  AttachmentListKind,
+  AttachmentListParams,
+  AttachmentListReason,
+  AttachmentListResult,
+} from './attachments';
+export { ATTACHMENT_LIST_LIMIT } from './attachments';
 
 export type { ConnectionState, EventMeta } from './protocol';
 export { GatewayHttpError } from './protocol';

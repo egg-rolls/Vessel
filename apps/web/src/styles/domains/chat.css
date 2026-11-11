@@ -1023,3 +1023,213 @@
   margin-left: auto;
   font-size: 10.5px;
 }
+
+/* ── 附件引用面板（0.52，attachments.list） ─────────────────
+   入口是输入框上方的一行小按钮（attach-paste 合入前本单自己的入口），
+   面板本体是弹层：面包屑 + 单层条目 + 多选。样式只用 L1 token，
+   不给弹层加第二种底色（沿用 ModalShell 的 --surface-raised）。 */
+
+.attach-entry {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: var(--chat-content-w, 860px);
+  margin: 0 auto 4px;
+  padding-inline: 14px;
+}
+
+.attach-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.attach-browse {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.attach-browse-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.attach-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 面包屑：根之后每一段都是可点的按钮，分隔符只做视觉。 */
+.attach-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-size: 11px;
+}
+
+.attach-crumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.attach-crumb-sep {
+  color: var(--faint);
+}
+
+.attach-crumb {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.attach-crumb:hover {
+  background: var(--hover-tint);
+}
+
+.attach-crumb:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* 条目列表：单层、可滚动、键盘默认顺序即视觉顺序。 */
+.attach-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 46vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.attach-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+}
+
+.attach-row-dir,
+.attach-row-file {
+  cursor: pointer;
+}
+
+.attach-row:hover {
+  background: var(--hover-tint);
+}
+
+.attach-row:focus-visible,
+.attach-row:focus-within {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.attach-row-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.attach-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-row-meta {
+  margin-left: auto;
+  flex: none;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.attach-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.attach-note-error {
+  color: var(--danger);
+}
+
+.attach-roots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.attach-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.attach-paste-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.attach-paste-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.attach-paste-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.attach-paste-input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.attach-count {
+  margin-right: auto;
+  align-self: center;
+  font-size: 11px;
+  color: var(--muted);
+}

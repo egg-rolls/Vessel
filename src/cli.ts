@@ -53,6 +53,7 @@ import {
 } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/repl/ink-repl';
 import { createAskAnswerDelivery } from './ask-answer-delivery';
+import { createConfigAttachmentLister } from './attachments-list';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
 import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli-help';
@@ -1214,6 +1215,9 @@ async function runWithConfig(result: BootstrapResult) {
             askAnswerDelivery: createAskAnswerDelivery(result.agent.service),
           }
         : {}),
+        // 0.52：attachments.list 的列举器（节点侧只读目录浏览）。与读文件工具同一份
+    // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
+      listAttachments: createConfigAttachmentLister({ getConfig: () => liveConfig }),
       // 单执行面的 RPC 数据源：config / trace / session 数据 / metrics。
       defaultTenantId: result.tenantId,
       config: tenantConfigControl,

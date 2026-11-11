@@ -54,6 +54,7 @@ import { createAgentServiceWiring } from './agent-service-wiring';
 import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
 import { createAskAnswerDelivery } from './ask-answer-delivery';
 import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from './ask-channel';
+import { createConfigAttachmentLister } from './attachments-list';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import {
@@ -1658,6 +1659,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(agentControl !== undefined
       ? { askAnswerDelivery: createAskAnswerDelivery(agentControl.service) }
       : {}),
+    // 0.52：attachments.list 的列举器（节点侧只读目录浏览）。与读文件工具同一份
+    // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
+    listAttachments: createConfigAttachmentLister({ getConfig: () => config }),
   });
   // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume`
   // 只靠 `rpc.subscribe` 等待终态；缺少 onEvent 时订阅是 no-op，命令会一直挂起。

@@ -17,6 +17,7 @@ import { sessionTitle } from '../../state/sessions';
 import { useAgentStore } from '../../stores/agentStore';
 import { asksForSession } from '../pending/cluster';
 import { PluginPanels } from '../plugins/PluginPanels';
+import { AttachBrowseLauncher } from './AttachBrowsePanel';
 import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
@@ -450,6 +451,8 @@ export function ChatView({
           enabled={connected && selectedId !== null}
           refreshKey={stripRefreshKey}
         />
+
+        <AttachBrowseLauncher client={client} onAddRef={submitApi.addRef} disabled={!hasToken} />
 
         <ComposerSlot
           pendingItem={transcriptApi.pendingItem}
