@@ -11,6 +11,7 @@ import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
+import { MessageRefs } from './MessageRefs';
 import { ReasoningBlock } from './ReasoningBlock';
 import type { TranscriptItem } from './transcript-items';
 
@@ -128,6 +129,8 @@ function TranscriptMessage({
     }
     return (
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
+        {/* 引用（只有路径）在气泡上方一行：不改正文，也不影响 copy / edit。 */}
+        <MessageRefs refs={message.refs} />
         <div className="msg-bubble">
           <MessageFold>{message.content}</MessageFold>
         </div>

@@ -1,4 +1,4 @@
-import type { AskUserAnswer, PermissionScope } from '../../gateway/types';
+import type { AskUserAnswer, MessageRef, PermissionScope } from '../../gateway/types';
 import { Composer } from './Composer';
 import { AskPrompt, PermissionPrompt, type PromptQueueChip } from './PromptSlots';
 import type { PendingQueueItem } from './pending-permissions';
@@ -25,6 +25,8 @@ export function ComposerSlot({
   hasToken,
   onOpenConnection,
   focusSignal,
+  refs,
+  onRemoveRef,
 }: {
   pendingItem: PendingQueueItem | null;
   pendingItems: readonly PendingQueueItem[];
@@ -43,6 +45,9 @@ export function ComposerSlot({
   hasToken: boolean;
   onOpenConnection: () => void;
   focusSignal: number;
+  /** 待发送的附件引用（只有路径）；权限 / ask 卡替换输入框时不显示。 */
+  refs?: readonly MessageRef[];
+  onRemoveRef?: (index: number) => void;
 }) {
   if (pendingItem && pendingItem.kind === 'permission') {
     return (
@@ -91,6 +96,8 @@ export function ComposerSlot({
       focusSignal={focusSignal}
       onStop={onStop}
       stopping={stopping}
+      refs={refs}
+      onRemoveRef={onRemoveRef}
     />
   );
 }

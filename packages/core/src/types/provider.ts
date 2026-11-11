@@ -8,6 +8,27 @@ import type { ToolCall, ToolSchema } from './tool.js';
 /** 消息角色 */
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
 
+/** 引用种类（附件引用；见 `Message.refs`） */
+export type MessageRefKind = 'file' | 'image' | 'document';
+
+/**
+ * 消息引用（附件）：**只有路径与元信息，没有正文**。
+ *
+ * 引用文件的内容不进上下文——需要读时由多模态解析器插件提供的工具按路径读，
+ * 输出受边界与字节上限约束。形状刻意保持可序列化、可审计。
+ */
+export interface MessageRef {
+  kind: MessageRefKind;
+  /** 绝对路径（宿主机本地文件）；唯一的定位信息 */
+  path: string;
+  /** 展示名（缺省取 path 的 basename） */
+  name?: string;
+  /** MIME（前端探测值，不可信，仅供展示 / 透传） */
+  mime?: string;
+  /** 字节数（前端 stat 结果，不可信，仅供展示） */
+  bytes?: number;
+}
+
 /** 消息 */
 export interface Message {
   role: MessageRole;
@@ -31,6 +52,13 @@ export interface Message {
    * 压缩摘要标记：仅 core 内部用于识别摘要（role=system）。Provider 忽略该字段。
    */
   compaction_summary?: boolean;
+  /**
+   * 附件引用（additive，可缺省）：只有路径与元信息，**不存正文 / base64**。
+   *
+   * 旧 session / 旧 gateway 没有这个字段，消费者一律按「无引用」降级；
+   * Provider 适配层忽略该字段（不参与请求体）。
+   */
+  refs?: MessageRef[];
 }
 
 /** 使用量 */

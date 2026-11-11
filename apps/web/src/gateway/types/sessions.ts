@@ -18,6 +18,23 @@ export interface SessionInfo {
 /** 会话消息角色（与 core `Message` 对齐） */
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
 
+/** 引用种类（附件引用；与 core `MessageRefKind` 对齐） */
+export type MessageRefKind = 'file' | 'image' | 'document';
+
+/**
+ * 附件引用（与 core `MessageRef` 对齐）：**只有路径与元信息，没有正文**。
+ *
+ * `mime` / `bytes` 是前端探测值（不可信），只用于展示；`path` 是宿主机绝对路径，
+ * 渲染层只显示、不解析、不读取。
+ */
+export interface MessageRef {
+  kind: MessageRefKind;
+  path: string;
+  name?: string;
+  mime?: string;
+  bytes?: number;
+}
+
 /** 工具调用（assistant 消息里的 tool_calls） */
 export interface ToolCall {
   id: string;
@@ -42,6 +59,11 @@ export interface Message {
   reasoning_content?: string;
   /** 0.6.1：逐条消息时间戳（core 可能缺省；缺失时 Web 降级为不分组/不显示时间）。 */
   timestamp?: number;
+  /**
+   * 附件引用（additive）：只有路径 + 元信息，没有正文。
+   * 旧 gateway / 旧 session 缺失该字段 → 前端按「无引用」渲染，不迁移。
+   */
+  refs?: MessageRef[];
 }
 
 /** sessions.search 的单条结果（E5 冻结形状）。 */

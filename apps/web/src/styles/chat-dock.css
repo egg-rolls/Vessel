@@ -47,6 +47,15 @@
   max-height: var(--composer-input-max-h);
 }
 
+/* 引用 chip 行：与输入卡片同宽、同一水平内衬基准（卡片自身有 px-3.5）。 */
+
+.composer-refs-row {
+  width: 100%;
+  max-width: var(--dock-width);
+  margin: 0 auto;
+  padding-bottom: 6px;
+}
+
 /* 焦点环只由 .composer:focus-within 承担，避免输入框与容器双层。 */
 
 .composer-input:focus,

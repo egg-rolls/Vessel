@@ -182,6 +182,70 @@
   padding: 0 2px;
 }
 
+/* ── 附件引用 chip 行（输入框上方 / 用户气泡上方共用） ──
+   只有路径与文件名：不显示正文、不显示大小。全路径只在 title 里。 */
+
+.msg-refs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-width: 100%;
+}
+
+/* 气泡一侧跟着消息右对齐；输入框那一侧保持左对齐。 */
+
+.msg-user > .msg-refs {
+  justify-content: flex-end;
+}
+
+.msg-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 34ch;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.msg-ref-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--faint);
+}
+
+.msg-ref-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-ref-remove {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.msg-ref-remove:hover {
+  color: var(--danger);
+}
+
 /* 角色切换比同角色消息多一档间距（16 + 8）。 */
 
 .msg-user + .msg-assistant,
