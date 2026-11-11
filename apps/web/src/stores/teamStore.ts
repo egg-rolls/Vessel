@@ -11,6 +11,7 @@ import { nodeKeyOf } from '../gateway/nodes';
 import type { TeamControl } from '../gateway/team-control';
 import { fetchNodeTeams, type NodeTeams } from '../gateway/team-roster';
 import type {
+  MessageRef,
   TeamCreateInput,
   TeamDetail,
   TeamPostResult,
@@ -51,7 +52,13 @@ interface TeamStoreState {
   ) => Promise<void>;
   post: (
     control: Pick<TeamControl, 'postTeam'>,
-    input: { team_id: string; content: string; mentions?: string[] },
+    input: {
+      team_id: string;
+      content: string;
+      mentions?: string[];
+      /** 附件引用（0.52）：随 @ 投递写成成员侧 core `Message.refs`，不写 Team 日志。 */
+      refs?: MessageRef[];
+    },
   ) => Promise<TeamPostResult>;
   update: (
     control: Pick<TeamControl, 'updateTeam'>,

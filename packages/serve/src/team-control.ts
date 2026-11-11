@@ -8,6 +8,8 @@
  * @module @vessel-agent/serve
  */
 
+import type { MessageRef } from '@vessel-agent/core';
+
 /** 团队元数据（teams.list / teams.get 的 `team`）。 */
 export interface TeamSummaryLike {
   team_id: string;
@@ -217,6 +219,11 @@ export interface TeamControlLike {
     team_id: string;
     content: string;
     mentions?: string[];
+    /**
+     * 附件引用（0.52，additive）：只有路径与种类，随 @ 投递写成成员侧的 core
+     * `Message.refs`；**不进 Team 日志 / 回执**（见 `TeamPostInput.refs`）。
+     */
+    refs?: MessageRef[];
     /** 只写进日志的收件人标记（0.21 federation owner） */
     to?: string[];
     from?: string;

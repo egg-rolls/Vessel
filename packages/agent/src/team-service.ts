@@ -14,9 +14,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { EventStream, Logger, RunEvent } from '@vessel-agent/core';
+import type { EventStream, Logger, MessageRef, RunEvent } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import { type AgentInboxDelivery, DEFAULT_INBOX_DELIVERY } from './inbox.js';
+import { normalizeRefs } from './refs.js';
 import { addressSegmentCount, HUMAN_PRINCIPAL } from './team-address.js';
 import { MAX_LOG_READ_LIMIT } from './team-log.js';
 import {
@@ -309,6 +310,9 @@ export class DefaultTeamService implements AgentTeamService {
     const content = readContent(input.content);
     const from = input.from ?? DEFAULT_OWNER;
     const mentions = dedupe(input.mentions ?? []);
+    // 附件引用（0.52）：只有路径与种类，随 @ 投递写进成员侧的 core `Message.refs`。
+    // **不进日志**（日志是「谁说了什么」）也不进回执；形状归一与 dispatch 共用一份。
+    const refs = normalizeRefs(input.refs);
     // 一次生成、所有 mention 共用；显式 id 先校验。
     const conversationId = this.resolveConversationId(input.conversation_id);
 
@@ -435,6 +439,7 @@ export class DefaultTeamService implements AgentTeamService {
               from,
               conversationId,
               input.team_id,
+              refs,
             ),
       ),
     );
@@ -1362,6 +1367,7 @@ export class DefaultTeamService implements AgentTeamService {
     from: string,
     conversationId: string,
     originTeamId?: string,
+    refs: readonly MessageRef[] = [],
   ): Promise<TeamDelivery> {
     try {
       const result = await this.agent.dispatch({
@@ -1369,6 +1375,9 @@ export class DefaultTeamService implements AgentTeamService {
         content,
         from,
         conversation_id: conversationId,
+        // 引用随投递进 admit → core `Message.refs`；没有引用时字段整个不出现
+        //（等价 `refs = []`），旧路径的 payload 一字不变。
+        ...(refs.length > 0 ? { refs: [...refs] } : {}),
         ...(originTeamId !== undefined ? { origin_team_id: originTeamId } : {}),
       });
       if (result.status === 'queued') {

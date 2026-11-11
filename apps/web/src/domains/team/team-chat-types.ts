@@ -2,6 +2,7 @@ import type { PaneResizeApi } from '../../app/usePaneResize';
 import type {
   AskUserAnswer,
   AskUserRequest,
+  MessageRef,
   PermissionRequest,
   PermissionScope,
   TeamDetail,
@@ -19,6 +20,11 @@ export interface TeamChatClient {
     team_id: string;
     content: string;
     mentions?: string[];
+    /**
+     * 附件引用（0.52，additive）：只有路径与种类，随 @ 投递写成成员侧 core
+     * `Message.refs`；不传 = 无引用，旧 gateway 忽略未知键。
+     */
+    refs?: MessageRef[];
   }): Promise<TeamPostResult>;
   retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult>;
 }

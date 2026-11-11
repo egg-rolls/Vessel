@@ -26,6 +26,7 @@ import {
 } from '../../stores/composerDraftStore';
 import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
+import { refsErrorText } from '../chat/refs-error';
 import { isOnlineMember } from './member-status';
 import { type MentionChip, memberDisplayName, mentionIds, shortAgentId } from './mention';
 import type { TeamChatProps } from './team-chat-types';
@@ -90,8 +91,8 @@ export function useTeamChat({
    *
    * 形状校验在「引用文件」入口（`attach-paths`，与会话页同一套）里先做完，这里只写草稿槽；
    * 条数上限由草稿槽自己的 `addRef` 兜底（32 条）。
-   * 注意：`teams.post` 目前**没有** refs 字段，团队消息发送不会带上这些路径
-   * （需要另一单给 teams.post 加 refs；这里的 chip 至少是按 (node, team) 分槽持久化的草稿）。
+   * 发送时 `submitContent` 把它们一起交给 `teams.post`（`refs`），成功后随草稿清空；
+   * 引用只进成员的投递（core `Message.refs`），**不进 Team 日志**。
    */
   const addRef = useCallback(
     (ref: MessageRef): boolean => useComposerDraftStore.getState().addRef(draftKey, ref),
@@ -370,8 +371,17 @@ export function useTeamChat({
   // 窗口只含前 N 个成员；在线总数用服务端完整计数，缺失才回退窗口内计数。
   const onlineCount = team?.online_count ?? members.filter(isOnlineMember).length;
 
-  /** 发送正文 + mentions；edit / resend / 普通发送共用同一条落盘路径。 */
-  const submitContent = async (rawContent: string, mentions: string[]): Promise<boolean> => {
+  /**
+   * 发送正文 + mentions +（可选）附件引用；edit / resend / 普通发送共用同一条落盘路径。
+   *
+   * `outgoingRefs` 由调用方给：普通发送 = 当前草稿槽里的引用；「再次发送」拿不回
+   * 历史消息的引用（Team 日志不带 refs），显式传空。
+   */
+  const submitContent = async (
+    rawContent: string,
+    mentions: string[],
+    outgoingRefs: readonly MessageRef[] = [],
+  ): Promise<boolean> => {
     const content = rawContent.trim();
     if (!content || sending || !hasToken || connectionState !== 'open' || archived) return false;
     const localId = `${LOCAL_MESSAGE_PREFIX}${crypto.randomUUID()}`;
@@ -384,7 +394,13 @@ export function useTeamChat({
     setSendTick((value) => value + 1);
 
     try {
-      const result = await postTeam(client, { team_id: teamId, content, mentions });
+      // 引用只随这次投递走（成员侧写成 core Message.refs），**不写 Team 日志**。
+      const result = await postTeam(client, {
+        team_id: teamId,
+        content,
+        mentions,
+        ...(outgoingRefs.length > 0 ? { refs: [...outgoingRefs] } : {}),
+      });
       setSends((prev) =>
         prev.map((send) =>
           send.localId === localId
@@ -414,13 +430,17 @@ export function useTeamChat({
       } catch {
         // 对账失败：保留 failed，交给用户“再次发送”或刷新。
       }
+      // 引用被准入闸门拒掉时给一句人话（与会话页同一份 `refsErrorText`）；
+      // 其它错误保持原样展示。
+      const failureText =
+        (outgoingRefs.length > 0 ? refsErrorText(error) : null) ?? errorMessage(error);
       setSends((prev) =>
         prev.map((send) => {
           if (send.localId !== localId) return send;
           if (written) {
             return { ...send, status: 'sent', messageId: written.message_id };
           }
-          return { ...send, status: 'failed', error: errorMessage(error) };
+          return { ...send, status: 'failed', error: failureText };
         }),
       );
       setSending(false);
@@ -436,7 +456,9 @@ export function useTeamChat({
   const handleSend = async () => {
     const content = draft.trim();
     const mentions = mentionIds(chips);
-    const started = await submitContent(content, mentions);
+    // 普通发送带上草稿槽里的引用；成功后 clearDraft 把正文 / chips / refs 一起清掉
+    //（与会话页同一语义）。
+    const started = await submitContent(content, mentions, refs);
     if (!started) return;
     clearDraft(draftKey);
     setRetryHint(false);
@@ -455,7 +477,12 @@ export function useTeamChat({
     setRetryHint(false);
   };
 
-  /** resend：复用发送路径，按正文 + mentions 追加一条新日志。 */
+  /**
+   * resend：复用发送路径，按正文 + mentions 追加一条新日志。
+   *
+   * 不带引用：Team 日志里没有 refs，「再次发送」只能复原正文与 @（与「失败重发自
+   * 同一条正文」的语义一致）；要带引用请走输入框的「引用文件」入口重新发送。
+   */
   const resendMessage = (message: TeamMessage) => {
     void submitContent(message.content, message.mentions);
   };

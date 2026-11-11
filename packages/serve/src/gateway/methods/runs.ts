@@ -11,7 +11,6 @@
  * @module @vessel-agent/serve
  */
 
-import { MESSAGE_REF_PATH_MAX, MESSAGE_REFS_MAX, type MessageRef } from '@vessel-agent/core';
 import {
   type DurableCheckpointLike,
   type DurableGatewayOptions,
@@ -23,7 +22,7 @@ import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import type { LiveRunSnapshotLike, RunControlLike } from '../../run-control.js';
 import { mapTenantError } from '../../tenant.js';
 import { stringParam } from './common.js';
-import { messageRefSchema, runStatusSchema } from './schemas.js';
+import { messageRefSchema, readRefsParam, runStatusSchema } from './schemas.js';
 
 export interface RunMethodsDeps {
   defaultTenantId: string;
@@ -93,64 +92,6 @@ function recencyOf(run: Record<string, unknown>): number {
   const started = run.started_at;
   if (typeof started === 'number' && Number.isFinite(started)) return started;
   return 0;
-}
-
-/**
- * `runs.start.refs` → 归一后的条目（0.52）。
- *
- * 这里**只做形状校验**：绝对路径、长度、条数、kind。路径边界（`allowed_roots` /
- * deny 目录）**不在这里判** —— 引用是「用户想让我读这个」，提前拒等于把用户意图
- * 丢掉；权限校验发生在模型读文件那一刻（`read` / `media` 的 `evaluatePath`），
- * 与普通文件工具同一套。
- *
- * params_schema 已经卡住形状；这里再截一次条数（服务端不接受比上限更宽的输入，
- * 而不是悄悄截断）——超限属于 `invalid_params`，由调用方抛出。
- */
-function readRefsParam(value: unknown): MessageRef[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) throw new RpcError('invalid_params', 'refs must be an array');
-  if (value.length > MESSAGE_REFS_MAX) {
-    throw new RpcError('invalid_params', `refs exceeds ${MESSAGE_REFS_MAX} items`, {
-      reason: 'refs_invalid',
-    });
-  }
-  const refs: MessageRef[] = [];
-  for (const entry of value) {
-    if (typeof entry !== 'object' || entry === null) {
-      throw new RpcError('invalid_params', 'refs entries must be objects', {
-        reason: 'refs_invalid',
-      });
-    }
-    const record = entry as Record<string, unknown>;
-    const kind = record.kind;
-    const path = record.path;
-    if (kind !== 'file' && kind !== 'image' && kind !== 'document') {
-      throw new RpcError('invalid_params', 'refs[].kind must be file|image|document', {
-        reason: 'refs_invalid',
-      });
-    }
-    if (typeof path !== 'string' || path.length === 0 || path.length > MESSAGE_REF_PATH_MAX) {
-      throw new RpcError('invalid_params', 'refs[].path must be a non-empty string', {
-        reason: 'refs_invalid',
-      });
-    }
-    // 形状：绝对路径。不用 `node:path.isAbsolute` 单判 —— 它的结果随宿主平台变
-    //（Linux 上 `C:\x` 不算绝对），而 refs 的路径来自驱动 gateway 的那台宿主。
-    if (!/^(?:[\\/]|[A-Za-z]:[\\/])/.test(path)) {
-      throw new RpcError('invalid_params', 'refs[].path must be absolute', {
-        reason: 'refs_invalid',
-        path,
-      });
-    }
-    const ref: MessageRef = { kind, path };
-    if (typeof record.name === 'string') ref.name = record.name;
-    if (typeof record.mime === 'string') ref.mime = record.mime;
-    if (typeof record.bytes === 'number' && Number.isFinite(record.bytes) && record.bytes >= 0) {
-      ref.bytes = Math.floor(record.bytes);
-    }
-    refs.push(ref);
-  }
-  return refs;
 }
 
 export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {

@@ -17,6 +17,8 @@ import {
 import type { BudgetDimensionLike, TeamControlLike, TeamSummaryLike } from '../../team-control.js';
 import { stringParam } from './common.js';
 import {
+  messageRefSchema,
+  readRefsParam,
   stringListSchema,
   teamBudgetResultSchema,
   teamDetailSchema,
@@ -388,6 +390,10 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
             maxLength: 128,
             pattern: CONVERSATION_ID_PATTERN,
           },
+          // 0.52（additive）：附件引用，只随 @ 投递（不写日志）。
+          // 不传 = 无引用（旧客户端行为不变）。条数上限在 handler 里卡
+          //（校验器支持的子集没有 maxItems，声明了也不会生效）。
+          refs: { type: 'array', items: messageRefSchema },
         },
       },
       result_schema: teamPostResultSchema,
@@ -398,6 +404,8 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           assertTeamScope(teamScopeOf(ctx), teamId);
           const content = stringParam(params, 'content');
           const conversationId = optionalString(params, 'conversation_id');
+          // 引用与 `runs.start` 同一份形状校验：只拦形状，路径边界留给读侧。
+          const refs = readRefsParam(params.refs);
           const mentions = Array.isArray(params.mentions)
             ? params.mentions.filter((item): item is string => typeof item === 'string')
             : undefined;
@@ -407,6 +415,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
             mentions,
             from: actorOf(ctx),
             ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+            ...(refs.length > 0 ? { refs } : {}),
           });
         } catch (error) {
           return mapTeamError(error);

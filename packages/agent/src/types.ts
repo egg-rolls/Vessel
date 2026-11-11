@@ -1546,6 +1546,15 @@ export interface TeamPostInput {
   conversation_id?: string;
   /** 跨节点报文元数据（0.21 additive；日志保留原文，dispatch 前置回信抬头） */
   federation?: TeamLogFederation;
+  /**
+   * 附件引用（0.52，additive）：只有路径与种类，随 @ 投递写成成员侧的 core
+   * `Message.refs`（成员靠 `[refs]` 环境信息行知道该用 `media.read` 读）。
+   *
+   * **不进 Team 日志**：日志记「谁说了什么」，引用是这次投递的载荷；要让它出现在
+   * 团队时间线上得扩 `TeamLogEntry`（另一单）。
+   * 形状由 serve 的 `teams.post` handler 严格校验，这里再归一一次（丢弃坏条目）。
+   */
+  refs?: MessageRef[];
 }
 
 export interface TeamPostResult {

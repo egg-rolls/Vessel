@@ -60,8 +60,8 @@ export interface TeamComposerProps {
   /** 删除一条附件引用（下标即 refs 里的位置）。 */
   onRemoveRef?: (index: number) => void;
   /**
-   * 加一条附件引用（现有 `addRef` 的包装）。给「引用文件」入口用；缺省时不渲染该入口
-   * （团队消息目前还没有 refs 投递路径，由调用方决定是否开启）。
+   * 加一条附件引用（现有 `addRef` 的包装）。给「引用文件」入口用；缺省时不渲染该入口。
+   * 发送时随 `teams.post` 的 `refs` 投递给被 @ 的成员（不写 Team 日志）。
    */
   onAddRef?: (ref: MessageRef) => boolean;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */

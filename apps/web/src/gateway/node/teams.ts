@@ -5,6 +5,7 @@
  */
 
 import type {
+  MessageRef,
   TeamCreateInput,
   TeamDetail,
   TeamPostResult,
@@ -38,6 +39,8 @@ export abstract class TeamsClient extends AgentsClient {
     team_id: string;
     content: string;
     mentions?: string[];
+    /** 附件引用（0.52，additive）：随 @ 投递写成成员侧 core `Message.refs`。 */
+    refs?: MessageRef[];
   }): Promise<TeamPostResult> {
     return this.rpc<TeamPostResult>('teams.post', input);
   }
