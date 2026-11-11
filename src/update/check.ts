@@ -75,6 +75,28 @@ async function resolveSourceManifestUrl(
   return picked;
 }
 
+/** 清单地址 404：还没有 Release（首次发布前 / beta 通道尚无预发布），属正常状态 */
+export class UpdateSourceMissingError extends Error {
+  readonly status = 404 as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'UpdateSourceMissingError';
+  }
+}
+
+/**
+ * 该错误是否只是「清单还没发布」（HTTP 404）。
+ *
+ * 404 是正常状态而非故障：调用方据此把它降到 debug，别每小时一条 warn；
+ * 其它网络 / 解析失败仍是 warn。字符串兜底让测试注入的普通 Error 也能识别。
+ */
+export function isUpdateSourceMissing(error: unknown): boolean {
+  if (error instanceof UpdateSourceMissingError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.startsWith('HTTP 404 ');
+}
+
 async function fetchJson(
   fetchImpl: typeof fetch,
   url: string,
@@ -90,6 +112,10 @@ async function fetchJson(
       (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0');
     if (rateLimited) {
       throw new Error(`GitHub rate limit exceeded (HTTP ${response.status}) for ${url}`);
+    }
+    if (response.status === 404) {
+      // 文案保持 "HTTP 404 for <url>"：`vessel update --check` 的报错输出不变。
+      throw new UpdateSourceMissingError(`HTTP 404 for ${url}`);
     }
     throw new Error(`HTTP ${response.status} for ${url}`);
   }

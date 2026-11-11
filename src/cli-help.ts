@@ -1,9 +1,11 @@
 /**
- * CLI 按位置 help：`vessel <cmd...> -h` / `vessel help <cmd...>`。
+ * CLI 按位置 help：`vessel <cmd...> -h` / `vessel help <cmd...>` / `vessel <group> help`。
  *
  * 目标（docker / GNU 口径）：
  * - help 在**任何位置**都先于参数校验生效（含跟在 flag 后面），命中命令即 exit 0；
  * - 只打印**当前命令**的用法，而不是整张大表；无参数时才是全局总览；
+ * - `vessel <group> help` 是 `vessel help <group>` 的词形等价写法（只对纯分组生效，
+ *   位置参数里的 `help` 不会被吞）；
  * - 纯静态：只读 `cli-help-spec.ts` + i18n catalog，不加载 config / gateway / 网络。
  *
  * 用法错误（`renderUsageError`）与命令页共用同一份规格，因此 `Try 'vessel ... --help'`
@@ -23,7 +25,7 @@ import {
 import { t } from './i18n';
 import { ui } from './ui-style';
 
-/** 识别 help 的写法（`vessel help ...` 是等价别名） */
+/** 识别 help 的写法（`vessel help ...` / `vessel <group> help` / 任意位置的 `-h`） */
 const HELP_TOKENS: ReadonlySet<string> = new Set(['-h', '--help']);
 const HELP_COMMAND = 'help';
 
@@ -84,19 +86,54 @@ function nodeSummary(node: HelpNode): string {
 
 // ── 解析 ─────────────────────────────────────────
 
-/** 请求了 help 吗？`-h/--help` 任意位置，或首 token 是 `help` */
+/**
+ * 词形 `vessel <group> help`（等价 `vessel help <group>`）里 `help` 的位置；没有则 undefined。
+ *
+ * 只在 `help` 恰好落在**纯分组**（有子命令、自身不是命令）之后时才成立：
+ * `vessel agent send main help` / `vessel team post <id> help` 里的正文 `help` 仍是位置参数，
+ * 不会被误判成 help 请求。
+ */
+function groupHelpIndex(argv: readonly string[]): number | undefined {
+  if (argv[0] === HELP_COMMAND) return undefined;
+  let node = HELP_ROOT;
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === undefined) return undefined;
+    if (HELP_TOKENS.has(token) || token.startsWith('-')) return undefined;
+    if (token === HELP_COMMAND) {
+      const isGroup = node.spec === undefined && node.children.length > 0;
+      return node.path.length > 0 && isGroup ? index : undefined;
+    }
+    const child = node.children.find((candidate) => candidate.name === token);
+    if (child === undefined) return undefined;
+    node = child;
+  }
+  return undefined;
+}
+
+/** 请求了 help 吗？`-h/--help` 任意位置、首 token 是 `help`，或 `<group> help` 词形 */
 export function isHelpRequest(argv: readonly string[]): boolean {
-  return argv[0] === HELP_COMMAND || argv.some((token) => HELP_TOKENS.has(token));
+  return (
+    argv[0] === HELP_COMMAND ||
+    argv.some((token) => HELP_TOKENS.has(token)) ||
+    groupHelpIndex(argv) !== undefined
+  );
 }
 
 /**
  * 命令路径候选：去掉 help token 后，取开头的非 flag 连续段。
  * flag 的值不会被当成命令名（`--instance foo` 之前就断开），因此不需要知道各 flag 的元数。
+ * `<group> help` 里的 `help` 只是别名 token，不参与路径；其后的 token 仍按路径解析
+ * （`vessel gateway help extra` 与 `vessel help gateway extra` 同为未知子命令）。
  */
 function commandTokens(argv: readonly string[]): string[] {
   const start = argv[0] === HELP_COMMAND ? 1 : 0;
+  const helpIndex = groupHelpIndex(argv);
   const tokens: string[] = [];
-  for (const token of argv.slice(start)) {
+  for (let index = start; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === undefined) break;
+    if (index === helpIndex) continue;
     if (HELP_TOKENS.has(token)) continue;
     if (token.startsWith('-')) break;
     tokens.push(token);

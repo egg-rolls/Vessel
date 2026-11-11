@@ -5,7 +5,8 @@
  * - 启动后延迟一次，之后每小时 tick；是否真的发网络请求仍由 24h 缓存决定；
  * - 有新版本时只发一条 `runtime.notice`（scope=update），走与热应用相同的通路：
  *   Web 事件流可见、模型经 BeforeLlm hook 在下一轮看到；
- * - 断网 / 清单损坏完全静默（只写 Logger），更新检查不制造噪音；
+ * - 断网 / 清单损坏完全静默（只写 Logger）；404（还没有 Release）降为 debug，
+ *   更新检查不制造噪音；
  * - 只读：不下载、不校验、不自替换。
  *
  * @module vessel/update/gateway-check
@@ -17,7 +18,7 @@ import type { RuntimeNoticeBus } from '../runtime-notice';
 import { readPackageVersion } from '../version';
 import { resolveUpdateChannel } from './background';
 import { readUpdateCache, shouldCheck, writeUpdateCache } from './cache';
-import { checkForUpdate } from './check';
+import { checkForUpdate, isUpdateSourceMissing } from './check';
 import { platformAssetKey, type UpdateManifest } from './manifest';
 import { type StageOutcome, stageUpdate } from './stage';
 
@@ -172,9 +173,11 @@ export function startGatewayUpdateCheck(
       }
     } catch (error) {
       // 断网 / 清单损坏：静默，只留诊断日志。更新检查不能影响 gateway。
-      logger?.warn('update.check.failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // 404 = 清单还没发布（首次发布前 / beta 尚无预发布）属正常状态 -> debug，
+      // 否则常驻进程每小时一条 warn 噪音；其它网络失败仍是 warn。
+      const fields = { error: error instanceof Error ? error.message : String(error) };
+      if (isUpdateSourceMissing(error)) logger?.debug('update.check.failed', fields);
+      else logger?.warn('update.check.failed', fields);
     } finally {
       inFlight = false;
     }

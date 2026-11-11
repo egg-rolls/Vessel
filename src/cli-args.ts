@@ -829,7 +829,13 @@ export function parseArgs(argv: string[]): ParseResult {
   return { ok: true, args };
 }
 
-/** 解析 `update` 子命令的剩余参数 */
+/**
+ * 解析 `update` 子命令的剩余参数。
+ *
+ * 互斥只发生在 `--check` 与 `--yes`（只检查 vs 跳过安装确认，语义相反）。
+ * `--channel` 与两者都相容：`--check --channel beta` 查 beta 通道
+ * （docs/FILE-MANAGEMENT.md），`--channel beta --yes` 是不确认装 beta。
+ */
 function parseUpdateArgs(rest: string[], args: CliArgs): ParseResult {
   const update: UpdateArgs = { check: false, json: false, force: false, yes: false };
 
@@ -868,6 +874,10 @@ function parseUpdateArgs(rest: string[], args: CliArgs): ParseResult {
       default:
         return { ok: false, error: `Unknown argument: ${a}` };
     }
+  }
+
+  if (update.check && update.yes) {
+    return { ok: false, error: 'Cannot combine --check and --yes' };
   }
 
   args.update = update;
@@ -1125,6 +1135,14 @@ function parseMigrateArgs(rest: string[], args: CliArgs): ParseResult {
   if (args.help) return { ok: true, args };
   if (from === undefined) return { ok: false, error: 'migrate requires --from sqlite|file-v1' };
   if (to === undefined) return { ok: false, error: 'migrate requires --to file-v2' };
+  // 取值合法性在解析层校验：与其它用法错误同一出口（stderr + exit 2 + Try 提示），
+  // 而不是进了命令层才报「usage:」（那样拿不到 Try 提示）。
+  if (from !== 'sqlite' && from !== 'file-v1') {
+    return { ok: false, error: `Invalid --from: ${from} (expected "sqlite" or "file-v1")` };
+  }
+  if (to !== 'file-v2') {
+    return { ok: false, error: `Invalid --to: ${to} (expected "file-v2")` };
+  }
 
   args.migrate = {
     from,
@@ -1231,7 +1249,10 @@ function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
       source = a;
     }
     if (args.help) return { ok: true, args };
-    if (source === undefined) return { ok: false, error: 'Missing <path> for plugin install' };
+    // 空串 / 纯空白不是合法路径：按缺参数处理（否则会带着空 path 进 loader）。
+    if (source === undefined || source.trim() === '') {
+      return { ok: false, error: 'Missing <path> for plugin install' };
+    }
     args.pluginCommand = { kind: 'install', path: source, force };
     return { ok: true, args };
   }
@@ -1282,7 +1303,9 @@ function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
       name = a;
     }
     if (args.help) return { ok: true, args };
-    if (name === undefined) return { ok: false, error: 'Missing <name> for plugin remove' };
+    if (name === undefined || name.trim() === '') {
+      return { ok: false, error: 'Missing <name> for plugin remove' };
+    }
     if (!PLUGIN_NAME_RE.test(name)) {
       return { ok: false, error: `Invalid plugin name: ${name}` };
     }
@@ -1295,7 +1318,7 @@ function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
 
 /**
  * `completion <bash|zsh|fish|powershell>`（0.18）。
- * 无参数 / 未知 shell 不在这里报解析错误：交给命令打印用法并 exit 1。
+ * 无参数 / 未知 shell 不在这里报解析错误：交给命令打印用法并 exit 2（用法错误口径）。
  */
 function parseCompletionArgs(rest: string[], args: CliArgs): ParseResult {
   if (rest[0] === '--help' || rest[0] === '-h') {
@@ -1320,14 +1343,20 @@ function parseCompletionArgs(rest: string[], args: CliArgs): ParseResult {
 /**
  * `dev reset [--yes] [--dry-run] [--json]`（0.49）。
  *
- * `dev` / `dev reset --help` 走 dev 专用帮助（不置 `args.help`，否则 `cli.ts`
- * 会在命令分派前打印全局 help）。`dev` 在 i===0 提前返回，所以这里自行接受
+ * `dev`（无子命令）/ `dev --help` 走 dev 专用帮助（不置 `args.help`，否则 `cli.ts`
+ * 会在命令分派前打印全局 help）；前者是用法错误，退出码由 `runDevCommand` 给 2。
+ * `dev` 在 i===0 提前返回，所以这里自行接受
  * `--data-dir`；`cli.ts` 随后会把它镜像到 VESSEL_DATA_DIR。
  */
 function parseDevArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
-  if (sub === undefined || sub === '--help' || sub === '-h') {
-    args.devCommand = { kind: 'help' };
+  if (sub === undefined) {
+    // 缺失子命令：仍然打帮助（文案同 `vessel dev --help`），但按用法错误 exit 2。
+    args.devCommand = { kind: 'help', missingSubcommand: true };
+    return { ok: true, args };
+  }
+  if (sub === '--help' || sub === '-h') {
+    args.devCommand = { kind: 'help', missingSubcommand: false };
     return { ok: true, args };
   }
   if (sub !== 'reset') {
@@ -1352,7 +1381,7 @@ function parseDevArgs(rest: string[], args: CliArgs): ParseResult {
       continue;
     }
     if (a === '--help' || a === '-h') {
-      args.devCommand = { kind: 'help' };
+      args.devCommand = { kind: 'help', missingSubcommand: false };
       return { ok: true, args };
     }
     if (a === '--data-dir') {

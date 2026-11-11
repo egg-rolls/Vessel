@@ -33,7 +33,13 @@ export interface DevResetArgs {
   json: boolean;
 }
 
-export type DevCommandArgs = ({ kind: 'reset' } & DevResetArgs) | { kind: 'help' };
+export type DevCommandArgs =
+  | ({ kind: 'reset' } & DevResetArgs)
+  /**
+   * 帮助页。`missingSubcommand`：裸 `vessel dev`（缺失子命令）。
+   * 文案与 `vessel dev --help` 相同，但缺失子命令属用法错误 → exit 2。
+   */
+  | { kind: 'help'; missingSubcommand: boolean };
 
 export interface DevCommandResult {
   exitCode: number;
@@ -257,7 +263,11 @@ export async function runDevCommand(
   command: DevCommandArgs,
   ctx: DevCommandContext = {},
 ): Promise<DevCommandResult> {
-  if (command.kind === 'help') return { exitCode: 0, stdout: formatHelp(), stderr: '' };
+  if (command.kind === 'help') {
+    // 裸 `vessel dev`（缺失子命令）是用法错误：帮助文案不变，退出码 2；
+    // `vessel dev --help` 仍是 0（走 cli-help 的命令/分组页）。
+    return { exitCode: command.missingSubcommand ? 2 : 0, stdout: formatHelp(), stderr: '' };
+  }
 
   const env = ctx.env ?? process.env;
   let config = ctx.config;

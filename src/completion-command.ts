@@ -2,7 +2,7 @@
  * `vessel completion <bash|zsh|fish|powershell>`（0.18）。
  *
  * 向 stdout 打印可直接 source / 加载的补全脚本；成功退出 0。
- * 无参数 / 未知 shell：用法写 stderr，退出码 1。
+ * 无参数 / 未知 shell 是用法错误（与其余 CLI 用法错误一致）：用法写 stderr，退出码 2。
  *
  * 纯静态输出：只读 `completion-spec.ts`，不加载配置、不启动 runtime、不联网。
  *
@@ -22,7 +22,7 @@ export function runCompletionCommand(command: CompletionCommandArgs): number {
         ? usage
         : `${t('completion.unknownShell', { shell: command.requested })}\n${usage}`;
     console.error(message);
-    return 1;
+    return 2;
   }
   process.stdout.write(renderCompletionScript(command.shell));
   return 0;
