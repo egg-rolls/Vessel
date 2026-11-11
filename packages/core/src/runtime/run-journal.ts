@@ -29,15 +29,28 @@ export type {
 } from '../types/run-journal.js';
 
 /**
- * 0.18：不写会话事件日志的派生/观测事件。
+ * 不写会话事件日志的派生/观测事件。
  *
- * 唯一真相源只保留事实（用户输入、LLM 响应、工具调用、权限、终态）；
- * 流式增量、请求快照、消息镜像、checkpoint 进度与插件生命周期都可重建，
- * 落盘只会放大体积并制造第二份事实。
+ * 唯一真相源只保留事实（用户输入、LLM 响应、工具调用、权限、终态）。下面这些
+ * 要么是流式/快照级的派生视图，要么自带另一份 durable 记录：
+ *
+ * - `llm.stream.chunk`：逐 token 增量，一条长正文就能把一次 run 顶到上千条。
+ *   **流式正文不落，结构落摘要**：段结束时由 `llm.stream.summary` 落一条定长骨架
+ *   （`segment_index` / `kind` / `chunk_count` / `bytes` / `first_seq` / `last_seq` /
+ *   `started_at` / `ended_at` / `ttft_ms`），不含任何正文；
+ * - `context.changed`：派生快照（每条注入上下文的全量镜像），且叙事已由
+ *   `context.pressure` / `context.compacted` 承担 —— 落盘等于同一事实两份；
+ * - `run.checkpoint`：`RunRecord` 已有 durable checkpoint（含 `event_cursor`），
+ *   日志里再写一遍是同一事实的第二份；
+ * - `session.saved` / `session.deleted` / `session.log.failed`：进程内状态同步与
+ *   写盘失败上报，落盘会递归；
+ * - `plugin.*`：进程生命周期，不进会话叙事。
+ *
+ * `llm.request` **不在**本集合里：它落盘，但只落元信息（`content_omitted: true` +
+ * 计数/配置），`messages` / `tools` 正文由 `stripRequestContent` 兜底裁掉。
  */
 const NON_PERSISTED_EVENT_TYPES: ReadonlySet<string> = new Set([
   'llm.stream.chunk',
-  'llm.request',
   'context.changed',
   'session.saved',
   'run.checkpoint',
@@ -65,6 +78,27 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 写盘侧裁剪（唯一口径）：`llm.request` 的落盘副本**永不带正文**。
+ *
+ * 只改日志副本：`publishRaw` 走的仍是调用方给的完整事件，所以 live 订阅、WS 广播
+ * （另有 `summarizeBroadcastEvent`）与 trace（另有 `summarizeLlmRequestEvent`）拿到的
+ * 内容与今天完全一致。正常路径上 producer 已经只传元信息（`persistData`），这里是
+ * 兜底：任何调用方误传完整 payload，也写不进 `events.ndjson`。
+ *
+ * 摘要永不成为内容权威：重建 messages 的路径（`projectMessages` / resume）只读
+ * `user.message` / `llm.response` / `tool.*`，读不到也不读这两类事件。
+ */
+function stripRequestContent(data: unknown): unknown {
+  if (!isRecordValue(data)) return data;
+  if (!('messages' in data) && !('tools' in data)) return data;
+  const next = { ...data };
+  delete next.messages;
+  delete next.tools;
+  next.content_omitted = true;
+  return next;
 }
 
 /** 默认 RunJournal：写 EventLog / RunRecord / SessionState，并在成功后发布。 */
@@ -212,13 +246,16 @@ export class SessionRunJournal implements RunJournal {
 
     // ADR-098 C2：随事件携带当前 SessionLease 的 fencing token（未持有则缺省）。
     const fencingToken = this.identity.fencingToken;
+    // 落盘副本：producer 给的 persistData 优先；`llm.request` 再过一道正文兜底裁剪。
+    const persistedData = persistData ?? event.data;
+    const data = event.type === 'llm.request' ? stripRequestContent(persistedData) : persistedData;
     const done = log
       .append({
         session_id: sessionId,
         run_id: event.run_id,
         type: event.type,
         ts: event.ts,
-        data: persistData ?? event.data,
+        data,
         ...(fencingToken !== undefined ? { fencing_token: fencingToken } : {}),
       })
       .then(

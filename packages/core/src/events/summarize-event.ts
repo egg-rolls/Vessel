@@ -2,13 +2,17 @@
  * 大 payload 事件摘要化（0.18 D7，0.52 下沉到 core）。
  *
  * 两个消费面共用同一份摘要口径：
- * - **WS 广播/回放**：完整 payload 仍在 raw fan-in 与 trace 中
- *   （这两类事件属于 `NON_PERSISTED_EVENT_TYPES`，不进会话事件日志），
- *   避免大消息撑爆 WS 帧与浏览器内存；
+ * - **WS 广播/回放**：完整 payload 仍在 raw fan-in 中（`llm.stream.chunk` 不进
+ *   trace，`llm.request` 的正文只活在内存事件流里），摘要避免大消息撑爆 WS 帧
+ *   与浏览器内存；
  * - **trace 落盘**（0.52）：`llm.request` 的完整 messages 是每轮 prompt 全量副本，
  *   实测占 trace 目录字节的 98.6%（1,278 条 / 1,308 MB，均值 1 MB/条），
  *   而 `events.list` 的消费者只查 error 类型。落盘时换成摘要后，
  *   目录从 GB 级回到几十 MB，`events.list` 不再为一份 99% 会被丢弃的副本付费。
+ *
+ * 注意与**会话事件日志**的口径区别：日志里 `llm.request` 落的是另一套更窄的元信息
+ * 副本（`content_omitted: true` + 计数，见 `runtime/run-journal.ts`），流式正文则由
+ * `llm.stream.summary` 的定长骨架替代。本模块只服务广播与 trace，不改日志。
  *
  * 只处理 `llm.request` 与 `context.changed`；其他事件原样返回同一引用。
  * 不修改输入对象，目标事件返回新事件。

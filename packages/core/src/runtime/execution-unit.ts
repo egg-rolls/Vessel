@@ -45,8 +45,14 @@ import type {
   RuntimePermissionConfig,
   SelfCardOptions,
 } from '../types/plugin.js';
-import type { ChatRequest, LLMProvider, LLMResponse, Message } from '../types/provider.js';
-import type { Run, RunInterruptReason, RunOptions } from '../types/run.js';
+import type {
+  ChatRequest,
+  LLMProvider,
+  LLMResponse,
+  Message,
+  StreamChunk,
+} from '../types/provider.js';
+import type { Run, RunInterruptReason, RunOptions, StreamSegmentState } from '../types/run.js';
 import type { RunRecord, RunUsage } from '../types/run-record-store.js';
 import {
   RUN_INTERRUPT_REASONS,
@@ -228,6 +234,18 @@ function isContextOverflowError(error: unknown): boolean {
 
 /** Self Card token 上限（0.15 E9） */
 const SELF_CARD_TOKEN_LIMIT = 400;
+
+/**
+ * 流式增量归哪个段落 kind（`llm.stream.summary` 用）。
+ *
+ * 与 `apps/web/src/state/events.ts` 的 buildGroup 同口径：只有 `text_delta` /
+ * `reasoning_delta` 带正文进段；`tool_call_delta` 与 `finish` 不是段落。
+ */
+function chunkKindOf(chunk: StreamChunk): 'text' | 'reasoning' | undefined {
+  if (chunk.type === 'text_delta') return 'text';
+  if (chunk.type === 'reasoning_delta') return 'reasoning';
+  return undefined;
+}
 
 /**
  * 恢复历史时「补读最近一次 llm.response」的尾部窗口（按事件条数）。
@@ -1592,6 +1610,9 @@ export class ExecutionUnit {
    *
    * 每次真实请求都递增 request 计数并发布 `llm.request`（重试请求看到的是压缩后的上下文）。
    * 第二次仍失败则原样抛出，不包装 provider 错误。
+   *
+   * 两处落盘形态：`llm.request` 的落盘副本只带元信息（`persistData`，正文留在发布
+   * 副本里给 live / WS / trace）；每次请求结束都收口当前流式段落（`llm.stream.summary`）。
    */
   private async chatWithOverflowRetry(
     execution: Run,
@@ -1606,6 +1627,8 @@ export class ExecutionUnit {
     const { runId, stats } = execution;
     let messages = args.messages;
     let retried = false;
+    /** overflow 重试链里的第几次真实请求（1 起；写进落盘元信息，一眼看出是否重试） */
+    let attempt = 1;
 
     while (true) {
       // 0.14 P0：provider / 流式错误按 llm 阶段归类。
@@ -1621,21 +1644,49 @@ export class ExecutionUnit {
         tool_names: args.tools.map((tool) => tool.function.name),
       });
 
-      // 发布 LLM 请求事件（事件里剔除 reasoning_content，避免思维链泄漏到 TUI/观测）
-      this.publishEvent({
-        type: 'llm.request',
-        run_id: runId,
-        data: {
+      // 发布 LLM 请求事件（事件里剔除 reasoning_content，避免思维链泄漏到 TUI/观测）。
+      //
+      // 落盘副本（`persistData`）只留元信息：`messages` / `tools` 正文永远不落。
+      // 发布出去的这份保持完整 —— trace 的全文策略与 WS 的 summarize 都不在此处改
+      // （F2 另单）；写盘侧还另有 RunJournal 的兜底裁剪。
+      this.publishEvent(
+        {
+          type: 'llm.request',
           run_id: runId,
-          session_id: args.sessionId,
-          messages: this.stripReasoning(messages),
-          tools: args.tools,
+          data: {
+            run_id: runId,
+            session_id: args.sessionId,
+            messages: this.stripReasoning(messages),
+            tools: args.tools,
+          },
+          ts: Date.now(),
         },
-        ts: Date.now(),
-      });
+        {
+          persistData: {
+            run_id: runId,
+            session_id: args.sessionId,
+            content_omitted: true,
+            model: this.model,
+            message_count: messages.length,
+            tools_count: args.tools.length,
+            // 增量缓存的现成值（有真实锚点就返回锚点），不在这里重扫整段历史。
+            estimated_tokens: execution.workingContext.tokenCount,
+            attempt,
+            stream: true,
+            ...(this.includeReasoning ? { include_reasoning: true } : {}),
+            // temperature / max_tokens：core 今天不设（沿用 provider 默认），因此不写；
+            // 字段已在 `LlmRequestPayload` 里预留，harness 接上时在这里补。
+          },
+        },
+      );
 
       // 增加请求计数
       this.limitChecker.incrementRequest(stats);
+
+      // 本次请求的起点：段落摘要的 ttft 以它为基准（只在本次请求的首个增量上带出，
+      // 用完即清 —— 后续段不是「第一个 token」）。
+      const requestStartedAt = Date.now();
+      this.streamSegmentState(execution).pendingTtftBase = requestStartedAt;
 
       const request: ChatRequest = {
         messages,
@@ -1654,6 +1705,8 @@ export class ExecutionUnit {
           if (chunk.type === 'text_delta' && typeof chunk.delta === 'string') {
             execution.partialContent = `${execution.partialContent ?? ''}${chunk.delta}`;
           }
+          // 段骨架在发布点顺带聚合：`llm.stream.chunk` 本体不落盘，这里只累计计数。
+          this.recordStreamChunk(execution, chunk);
           this.publishEvent({
             type: 'llm.stream.chunk',
             run_id: runId,
@@ -1669,10 +1722,16 @@ export class ExecutionUnit {
       });
 
       try {
-        return await this.provider.chat(request);
+        const response = await this.provider.chat(request);
+        // provider 未必发 `finish`；请求正常结束也要收口当前段。
+        this.flushStreamSegment(execution, args.sessionId);
+        return response;
       } catch (error) {
+        // 中断 / 失败同样收口：已流出的骨架必须留在日志里（不含正文）。
+        this.flushStreamSegment(execution, args.sessionId);
         if (retried || !isContextOverflowError(error)) throw error;
         retried = true;
+        attempt += 1;
         const removed = await this.forceCompact(execution, 'overflow');
         messages = args.rebuildMessages();
         this.logger.warn('context overflow; compacted and retrying once', {
@@ -1682,6 +1741,102 @@ export class ExecutionUnit {
         });
       }
     }
+  }
+
+  /**
+   * 取（必要时新建）本 run 的段落聚合状态。
+   *
+   * 状态挂在 `Run` 上而不是 EU 上：run 结束随 `Run` 释放，不需要清理，
+   * 也不会在两次 run 之间串号。
+   */
+  private streamSegmentState(execution: Run): StreamSegmentState {
+    execution.streamSegment ??= { nextSeq: 1, nextSegmentIndex: 0 };
+    return execution.streamSegment;
+  }
+
+  /**
+   * 流式增量 → 段落聚合（0.51）。
+   *
+   * 只在发布点累计计数：`text_delta` / `reasoning_delta` 归段，kind 切换即收口上一段；
+   * `tool_call_delta` 不断段（与 `apps/web/src/state/events.ts` 的 buildGroup 同口径），
+   * 但**占** run 内流式序号，所以段内跨度能把「有工具增量 / 有 finish」暴露出来；
+   * `finish` 收口当前段。任何分支都不缓存正文。
+   */
+  private recordStreamChunk(execution: Run, chunk: StreamChunk): void {
+    const state = this.streamSegmentState(execution);
+    const seq = state.nextSeq;
+    state.nextSeq += 1;
+
+    const kind = chunkKindOf(chunk);
+    if (kind === undefined) {
+      // tool_call_delta / finish：不进段；finish 之后本次响应不再有增量，直接收口。
+      if (chunk.type === 'finish') this.flushStreamSegment(execution);
+      return;
+    }
+
+    const delta = chunk.delta ?? '';
+    const now = Date.now();
+    let open = state.open;
+    if (open !== undefined && open.kind !== kind) {
+      this.flushStreamSegment(execution);
+      open = state.open;
+    }
+    if (open === undefined) {
+      open = {
+        kind,
+        chunkCount: 0,
+        bytes: 0,
+        firstSeq: seq,
+        lastSeq: seq,
+        startedAt: now,
+        endedAt: now,
+      };
+      // ttft 只记在「本次请求的首个增量」上；基准由请求入口写入，用完即清。
+      if (state.pendingTtftBase !== undefined) {
+        open.ttftMs = Math.max(0, now - state.pendingTtftBase);
+        state.pendingTtftBase = undefined;
+      }
+      state.open = open;
+    }
+    open.chunkCount += 1;
+    open.bytes += Buffer.byteLength(delta, 'utf8');
+    open.lastSeq = seq;
+    open.endedAt = now;
+  }
+
+  /**
+   * 收口当前流式段落：发一条**定长**的 `llm.stream.summary`（不含任何正文）。
+   *
+   * 每段只在结束时发一条 —— 这是「流式正文不落、结构落摘要」的唯一出口；
+   * 没有打开中的段时是 no-op（非流式 provider 完全不产生该事件）。
+   */
+  private flushStreamSegment(execution: Run, sessionId?: string): void {
+    const state = execution.streamSegment;
+    const open = state?.open;
+    if (state === undefined || open === undefined) return;
+    state.open = undefined;
+
+    const segmentIndex = state.nextSegmentIndex;
+    state.nextSegmentIndex += 1;
+
+    this.publishEvent({
+      type: 'llm.stream.summary',
+      run_id: execution.runId,
+      data: {
+        run_id: execution.runId,
+        session_id: sessionId ?? execution.sessionId,
+        segment_index: segmentIndex,
+        kind: open.kind,
+        chunk_count: open.chunkCount,
+        bytes: open.bytes,
+        first_seq: open.firstSeq,
+        last_seq: open.lastSeq,
+        started_at: open.startedAt,
+        ended_at: open.endedAt,
+        ...(open.ttftMs !== undefined ? { ttft_ms: open.ttftMs } : {}),
+      },
+      ts: open.endedAt,
+    });
   }
 
   /**

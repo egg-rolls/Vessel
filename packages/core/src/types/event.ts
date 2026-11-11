@@ -26,11 +26,38 @@ export interface RunStartedPayload extends BaseEventPayload {
   input_name?: string;
 }
 
-/** LLM 请求事件 payload */
+/**
+ * LLM 请求事件 payload。
+ *
+ * **两副形状**（同一事件、两个消费面）：
+ * - 发布出去的那份（live / WS / trace）保持完整：`messages` 正文 + `tools` schema；
+ * - 会话事件日志里的那份只有元信息（`content_omitted: true` + 下面这些计数），
+ *   正文一律不落盘（`RunJournal` 写盘侧裁剪，见 `runtime/run-journal.ts`）。
+ *
+ * 目的：能从落盘日志看出「这一轮发了几次请求、每次多大、带几个工具、是不是重试」，
+ * 而不必为每轮 prompt 付一份 55MB 级副本。元信息不是内容权威 —— 重建 messages 只认
+ * `llm.response` / `user.message` / `tool.*`。
+ */
 export interface LlmRequestPayload extends BaseEventPayload {
   run_id: string;
-  messages: unknown[];
+  /** 仅发布副本携带（正文；落盘副本恒缺省） */
+  messages?: unknown[];
+  /** 仅发布副本携带（工具 schema 正文；落盘副本恒缺省） */
   tools?: unknown[];
+  session_id?: string;
+  /** 落盘副本标记：`messages` / `tools` 正文已被写盘侧裁掉 */
+  content_omitted?: true;
+  model?: string;
+  message_count?: number;
+  tools_count?: number;
+  /** 上下文窗口的 token 估算（增量缓存里现成的值，不重扫历史） */
+  estimated_tokens?: number;
+  /** 本次请求在 overflow 重试链里的第几次（1 起；>1 = 重试） */
+  attempt?: number;
+  temperature?: number;
+  max_tokens?: number;
+  stream?: boolean;
+  include_reasoning?: boolean;
 }
 
 /** LLM 响应事件 payload */
@@ -54,6 +81,43 @@ export interface LlmResponsePayload extends BaseEventPayload {
 export interface LlmStreamChunkPayload extends BaseEventPayload {
   run_id: string;
   chunk: StreamChunk;
+}
+
+/**
+ * 流式段落摘要 payload（`llm.stream.summary`）。
+ *
+ * **一个段落结束时发一条，不是每个 delta 一条**，且**不含任何正文 / 思考文本**：
+ * 它只留下「思考→工具→正文」的交错骨架与「这段是否连续」的自查依据。
+ *
+ * - 段定义与既有分段同源：`llm.stream.chunk` 的 kind 切换（text ↔ reasoning）、
+ *   `finish` 增量、以及一次请求结束（含中断 / 失败）即收口当前段；
+ *   `tool_call_delta` 不断段（与 `apps/web/src/state/events.ts` 的 buildGroup 一致）。
+ * - `first_seq` / `last_seq` 是**本 run 内的流式序号**（core 侧按 `llm.stream.chunk`
+ *   发布顺序从 1 递增，`finish` / `tool_call_delta` 同样占号）。`chunk` 本身不落盘，
+ *   所以这是唯一能在日志里对账的序号：纯段落满足
+ *   `last_seq - first_seq + 1 === chunk_count`；跨度更大说明段内有非同 kind 的增量
+ *   （工具调用增量 / finish）；相邻两段的跨度之间出现空洞则是丢帧线索。
+ * - 本事件不是内容权威：任何重建 messages 的路径都不读它，正文冲突时以
+ *   `user.message` / `llm.response` / `tool.*` 为准。
+ */
+export interface LlmStreamSummaryPayload extends BaseEventPayload {
+  run_id: string;
+  session_id?: string;
+  /** run 内段序号（0 起，按摘要发出顺序递增） */
+  segment_index: number;
+  kind: 'text' | 'reasoning';
+  /** 该段实际收到的增量条数 */
+  chunk_count: number;
+  /** 该段增量的 UTF-8 字节数（只记数，不留副本） */
+  bytes: number;
+  /** 该段首个 / 末个增量在本 run 流式序号中的位置（1 起） */
+  first_seq: number;
+  last_seq: number;
+  /** 该段首个 / 末个增量的时刻 */
+  started_at: number;
+  ended_at: number;
+  /** 本次请求发出 → 该段首个增量的毫秒数；只在该次请求的首段上有值 */
+  ttft_ms?: number;
 }
 
 /** 工具调用开始事件 payload */
@@ -130,6 +194,7 @@ export type EventPayload =
   | LlmRequestPayload
   | LlmResponsePayload
   | LlmStreamChunkPayload
+  | LlmStreamSummaryPayload
   | ToolCallStartedPayload
   | ToolCallCompletedPayload
   | ToolCallFailedPayload

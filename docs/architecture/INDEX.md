@@ -28,6 +28,7 @@ paths: [docs/architecture/**]
 | [plugin-registry](plugin-registry.md) | GitHub 静态 registry、index.json、发布流程与 marketplace 安装/校验 | plugin, registry, marketplace, install, update, checksum, index.json, github | `plugins/marketplace/**`, `docs/architecture/plugin-registry.md` |
 | [config](config.md) | 配置层序、resolver 与配置块 | config, yaml, precedence, env, data-dir lock, secrets | `packages/config/**`, `src/cli-overrides.ts` |
 | [events](events.md) | 事件命名、核心事件、回放与 trace 落盘 | event, event stream, trace, replay, observability, seq, agent.message.notified | `packages/core/src/types/event.ts`, `packages/core/src/events/**` |
+| [event-log-policy](event-log-policy.md) | 会话事件日志的落盘口径：哪些不落、`llm.stream.summary` / `llm.request` 只落骨架与元信息 | event log, llm.request, stream summary, persist, resume, ttft, chunk_count | `packages/core/src/runtime/run-journal.ts`, `packages/core/src/runtime/execution-unit.ts` |
 | [assembly](assembly.md) | `src/` 装配层、CLI/TUI 入口与职责边界 | bootstrap, cli, args, wiring, repl, headless | `src/**` |
 | [gateway](gateway.md) | 帧/端点、静态托管与安全、TLS、远程控制面 | gateway, websocket, sse, tls, origin, csp, remote | `packages/serve/src/**`, `src/rpc/**` |
 | [gateway-rpc](gateway-rpc.md) | 统一 RPC 方法表与 canonical agent 生命周期契约 | rpc, method, canonical, envelope, agents.create, sessions.create, sessions.restart, sessions.activate, plugins.catalog | `packages/serve/src/gateway/methods/**` |

@@ -119,6 +119,11 @@ export interface RunGroup {
  * - 判据只有一句：进集合 ⇔ 默认档隐藏（失败类 `hook.failed` / `hook.error` 仍走
  *   `errorLevel`，永不进集合）。主内容（`llm.stream.chunk`、`tool.call.*`、
  *   `run.*` 终态、`user.message`）**永不进集合**。
+ * - **落盘摘要跟着本集合走**：`llm.stream.summary`（流式**段落**骨架）与
+ *   `llm.request` 的落盘元信息副本是「给人看日志 / 丢帧自查」的结构，不是对话内容
+ *   —— 归到内部事件开关下（默认隐藏、展开可见），**不要**让它们降级成聊天里的原始
+ *   JSON 卡，也不要在渲染层另写判据。它们永不成为内容权威：正文以 `llm.response` /
+ *   `user.message` / `tool.*` 为准。
  * - **两个集合的分工**：本集合 = 「默认档隐藏，展开后（`ui.showInternalEvents` /
  *   `verbosity=debug`）仍以原始事件行出现」的状态同步；`CHAT_HIDDEN_EVENT_TYPES`
  *   = 「聊天窗无条件不展示」的会话 / 成员**元数据审计**（`session.created` /
@@ -131,6 +136,10 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'session.saved',
   'llm.request',
   'llm.response',
+  // 流式**段落**摘要（不是正文、不是逐 delta）：一段 text/reasoning 结束时一条，
+  // 只带段序/条数/字节/seq 跨度。落盘日志里的「思考→工具→正文」骨架靠它，
+  // 聊天时间线默认档不该为每个段落多一张原始事件卡。
+  'llm.stream.summary',
   'message.injected',
   // run 生命周期的状态同步：每次 iteration 都发，默认档不该逐条落成原始事件卡。
   'run.checkpoint',

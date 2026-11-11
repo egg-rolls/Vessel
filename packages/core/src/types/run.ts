@@ -37,8 +37,56 @@ export interface Run {
    * run 中断/失败时写入终态事件的 `partial_content`；成功时忽略。
    */
   partialContent?: string;
+  /**
+   * @internal 流式段落聚合状态（`llm.stream.summary` 的唯一来源）。
+   *
+   * 只由 `ExecutionUnit` 在 `on_chunk` 里维护，段结束即清空 `open`；run 结束随
+   * `Run` 释放。它**只存计数，不存正文**，也不参与 messages 重建 —— 删掉它只会
+   * 让日志少一份骨架，不影响任何状态。
+   */
+  streamSegment?: StreamSegmentState;
   /** 本 run 的持久记录引用（可恢复进度；不新增持久字段） */
   record: RunRecord;
+}
+
+/**
+ * 一个打开中的流式段落：只有计数与时刻，**没有任何文本缓冲**。
+ */
+export interface OpenStreamSegment {
+  kind: 'text' | 'reasoning';
+  /** 该段已收到的同 kind 增量条数 */
+  chunkCount: number;
+  /** 该段增量 UTF-8 字节数 */
+  bytes: number;
+  /** 该段首个 / 末个增量的 run 内流式序号（1 起） */
+  firstSeq: number;
+  lastSeq: number;
+  startedAt: number;
+  endedAt: number;
+  /** 本次请求发出 → 该段首个增量的毫秒数（只在该次请求的首段上有值） */
+  ttftMs?: number;
+}
+
+/**
+ * 流式段落聚合状态（`Run.streamSegment`，0.51）。
+ *
+ * 存在理由：`llm.stream.chunk` 不落盘（体量），落盘日志因此看不到「流式结构」。
+ * 这里只维护**计数**，段结束时经 `RunJournal` 落一条 `llm.stream.summary`。
+ * 状态机与 `apps/web/src/state/events.ts` 的 text/reasoning 分段同源：
+ * kind 切换 / `finish` / 请求结束收口，`tool_call_delta` 不断段。
+ */
+export interface StreamSegmentState {
+  /** 下一个 chunk 的 run 内流式序号（1 起；`finish` / `tool_call_delta` 同样占号） */
+  nextSeq: number;
+  /** 已发出的摘要条数 = 下一个 `segment_index` */
+  nextSegmentIndex: number;
+  /**
+   * 本次请求发出时刻：下一次「打开新段」时算出 `ttft_ms` 后清空。
+   * 请求入口写入，保证 ttft 只属于本次请求的首个增量。
+   */
+  pendingTtftBase?: number;
+  /** 当前打开的段；`undefined` = 没有打开中的段 */
+  open?: OpenStreamSegment;
 }
 
 /**
