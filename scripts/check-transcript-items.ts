@@ -1206,8 +1206,8 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
-    name: 'O8（原 F8，迁移缺口）vessel:* 上下文消息当前被当作 turn 锚点',
-    why: '旧门禁要求模型侧上下文（vessel:*）不参与 turn 锚点；现在最后一条 user 消息的 ts 也算它，running 且无自身 ts 的 run 被拖到它后面（3001）。修掉后把这条翻成 msg:0,run:r1:input,msg:1 且 ts 1001。',
+    name: 'O8（原 F8）vessel:* 上下文消息不当 turn 锚点',
+    why: 'turn 锚点只认人说的最后一句的 ts；runtime 上下文（vessel:*）也是 role user 但不参与。算进去会把「运行中且自己没有 ts」的 run 拖到上下文消息之后（3001），实际输入在它之前（1001）。',
     check: () => {
       const items = buildTranscriptItems({
         messages: [
@@ -1219,10 +1219,20 @@ const FIXTURES: readonly Fixture[] = [
         queued: [],
       });
       const input = items.find((item) => item.kind === 'run-input');
+      // 反向断言：普通用户消息仍然是锚点（只排除 vessel:*，不是「不再用最后一条用户消息」）。
+      const plain = buildTranscriptItems({
+        messages: [msg('user', 'q1', { timestamp: 1000 }), msg('user', 'q2', { timestamp: 3000 })],
+        messageIndexOffset: 0,
+        liveGroups: [group({ runId: 'r1', input: '被改写过的输入' })],
+        queued: [],
+      });
+      const plainInput = plain.find((item) => item.kind === 'run-input');
       return (
-        keys(items).join(',') === 'msg:0,msg:1,run:r1:input' &&
+        keys(items).join(',') === 'msg:0,run:r1:input,msg:1' &&
         input !== undefined &&
-        input.ts === 3001
+        input.ts === 1001 &&
+        plainInput !== undefined &&
+        plainInput.ts === 3001
       );
     },
   },

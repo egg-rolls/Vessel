@@ -216,8 +216,24 @@ function trimText(value: string | undefined): string {
   return (value ?? '').trim();
 }
 
+/**
+ * runtime 上下文消息（模型侧上下文：来源行 / 提示 / 订阅 / 预算 / 压缩标记）的消息名前缀。
+ *
+ * 口径**必须**与 `state/runtime-visibility.ts` 的 `runtimeMessageKind` 一致（那边是权威：
+ * `vessel:` 前缀，未知后缀归 other，非前缀返回 undefined）。这里不 import 它：本模块是
+ * 纯函数（无 React / DOM / store），而 runtime-visibility 依赖 React + configStore，一旦
+ * 引入就把 zustand / React 拖进纯计算与门禁脚本。改前缀时两边必须对账 —— 门禁 O8 守这条。
+ */
+export const RUNTIME_MESSAGE_PREFIX = 'vessel:';
+
 /** A2A 来源行的消息名（与 runtimeMessageKind 的 source 种类一致）。 */
-export const SOURCE_MESSAGE_NAME = 'vessel:source';
+export const SOURCE_MESSAGE_NAME = `${RUNTIME_MESSAGE_PREFIX}source`;
+
+/** 这条消息是不是 runtime 上下文（`vessel:*`）：模型侧上下文不是 turn 锚点。 */
+export function isRuntimeContextMessage(message: Message): boolean {
+  const name = message.name;
+  return typeof name === 'string' && name.startsWith(RUNTIME_MESSAGE_PREFIX);
+}
 
 /** 从来源行正文取地址：location="a@node:team" → a@node:team。 */
 export function sourceLocationOf(content: string): string | undefined {
@@ -769,10 +785,14 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
   const claims = runClaims(input.liveGroups, live);
   const { claimedAssistant, claimedUserByRun } = claimMessages(claims, history);
 
+  // 弱下限的锚点：**人说的最后一句**的 ts。runtime 上下文（`vessel:*`）也是 role 'user'，
+  // 但它是模型侧上下文、不是 turn 锚点 —— 算进去会把「运行中且自己没有 ts」的 run 拖到
+  // 上下文消息之后（run 其实比那条提示早开始）。判定与 notice 卡 / 可见性同一口径。
   const lastUserTs = (() => {
     let last: number | undefined;
     for (const [, message] of history.messageByIndex) {
-      if (message.role !== 'user' || message.timestamp === undefined) continue;
+      if (message.role !== 'user' || isRuntimeContextMessage(message)) continue;
+      if (message.timestamp === undefined) continue;
       if (last === undefined || message.timestamp > last) last = message.timestamp;
     }
     return last;
