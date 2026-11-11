@@ -22,6 +22,7 @@ applies_to: [N, M]
 - Team 写操作只经 canonical `teams.*`；成员 add / remove 走 CLI / owner 端点，Web 不直接改 roster。
 - token 只存 `sessionStorage`，不落 `localStorage` / URL / 日志。0.49：平台 token（`#token=` 种子）与 node token 分槽；平台连接走 `/platform/rpc`（`whoami` → `nodes.list` → `credentials`），node 连接走 `api_url`；不再调用 `/v1/local/token`。legacy `--serve` 页面回退同源 node 连接。平台客户端固定 `gateway/platform/**`、node 客户端固定 `gateway/node/**`，互不 import。
 - 权限 / `ask_user` 卡片在 **Composer 槽位**（`domains/chat/PromptSlots.tsx` 的 `PermissionCard` / `AskCard`）：pending 期间替换输入框，多条由 `pendingQueue` 排序列出；不得恢复全局遮罩，也不要挪进 `RunCard` 或做成时间线条目。数据源是 `stores/interactionStore`（`gateway/connection-handlers.ts` 直接写入 + `interactions.list` hydration 补回），**不经过**时间线分组。其他端应答 / 过期 / run 终态必须收起卡片。
+- 输入框卡片是三层结构：引用区（`ComposerAttachments`，受控 `refs` + `onRemoveRef`，空数组不占高）→ textarea → 底部工具栏（`ComposerToolbar`：左侧插件扩展槽 / 宿主按钮，右侧上下文用量 + 发送键）。引用区只有**一套实现**（`domains/chat/ComposerChrome.tsx` 的 `ComposerRefsArea`）：会话页喂 `refsToAttachments(MessageRef[])`（id = path，删除回写下标，全路径进 title），团队页再把 `@` 提及 chip 并进同一行；不要再另渲染 `MessageRefs`（那只用于已发消息气泡）。会话 `domains/chat/Composer.tsx` 与团队 `domains/team/TeamComposer.tsx` 共用 `domains/chat/ComposerChrome.tsx`，不要复制第二份样式。用量未知（没有 `context_used`）时不渲染小条，不放占位假数。
 - 时间线卡片只有 `StreamCard` 一张：卡头 `title` / `meta` / `summary` / chevron 一个结构，
   `children` 的有无决定能不能展开（详见 [WEB-UI.md](../WEB-UI.md) 的「时间线只有一种卡」）。
   环境信息卡（`domains/chat/EnvCard.tsx`）、「来自 agent X」卡与「待批答复」卡

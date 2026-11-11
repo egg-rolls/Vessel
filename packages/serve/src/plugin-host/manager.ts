@@ -401,6 +401,19 @@ function validateDescriptor(
       });
     }
   }
+  // 0.51 additive：工具栏按钮是 declarative 声明，没有 entry；只校验形状与槽位。
+  for (const item of contributes.toolbar ?? []) {
+    if (typeof item.id !== 'string' || typeof item.label !== 'string') {
+      throw pluginError('plugin_manifest_invalid', 'toolbar[] requires id and label.', {
+        id: input.id,
+      });
+    }
+    if (item.slot !== 'composer') {
+      throw pluginError('plugin_manifest_invalid', 'toolbar[].slot must be "composer".', {
+        id: input.id,
+      });
+    }
+  }
 
   // 0.48 M1：HTTP 声明在 descriptor 复检阶段归一化；非法 → 插件 invalid。
   const http = normalizePluginHttpDeclarations(
@@ -1435,15 +1448,33 @@ export function renderContributions(
     name: command.name,
     title: command.title,
   }));
+  // 0.51 additive：输入框工具栏声明；没有 entry，按 order 升序。
+  const toolbar = (contributes.toolbar ?? [])
+    .map((item) => ({
+      slot: item.slot,
+      id: item.id,
+      label: item.label,
+      ...(item.titleKey !== undefined ? { titleKey: item.titleKey } : {}),
+      ...(item.icon !== undefined ? { icon: item.icon } : {}),
+      order: item.order ?? 100,
+    }))
+    .sort((a, b) => a.order - b.order);
   // E1 amendment：bare 方法名；web iframe bridge 用它做 RPC 白名单。
   const rpc = (contributes.rpc ?? []).map((method) => method.name);
-  if (pages.length === 0 && panels.length === 0 && commands.length === 0 && rpc.length === 0) {
+  if (
+    pages.length === 0 &&
+    panels.length === 0 &&
+    toolbar.length === 0 &&
+    commands.length === 0 &&
+    rpc.length === 0
+  ) {
     return undefined;
   }
   return {
     navGroups,
     pages,
     panels,
+    toolbar,
     commands,
     rpc,
     ...(contributes.i18n !== undefined ? { i18n: contributes.i18n } : {}),

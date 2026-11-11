@@ -15,6 +15,7 @@ import {
   type PluginInventory,
   type PluginPageItem,
   type PluginPanelItem,
+  type PluginToolbarItem,
   pluginsFromChangedPayload,
 } from './plugin-contributions';
 
@@ -100,4 +101,11 @@ export function panelsForSlot(
   slot: PluginPanelItem['slot'],
 ): PluginPanelItem[] {
   return panels.filter((panel) => panel.slot === slot);
+}
+
+export function toolbarForSlot(
+  toolbar: readonly PluginToolbarItem[],
+  slot: PluginToolbarItem['slot'],
+): PluginToolbarItem[] {
+  return toolbar.filter((item) => item.slot === slot);
 }

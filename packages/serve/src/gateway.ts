@@ -1174,8 +1174,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const filtered = source.filter((item) => wsAccepts(ws, item.event, replaySessions));
     // 编码时顺手补会话归属：客户端拿不到归属就无法把增量挂回会话。补齐与过滤共用
     // `resolveEventSession`，与实时广播走同一个出站序列化点（`outboundEventFrame`）。
-    const window = tailReplayWindow(filtered, (item) =>
-      outboundEventFrame(item, replaySessions).encoded,
+    const window = tailReplayWindow(
+      filtered,
+      (item) => outboundEventFrame(item, replaySessions).encoded,
     );
     const ringGap = boundGap(hub.gapFor(ws.data.since), until);
     return {

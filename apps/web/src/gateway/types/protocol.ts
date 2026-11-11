@@ -99,6 +99,26 @@ export interface PluginNavGroupContribution {
 /** panel 槽位（CONTRACT-0.43 §2.6）。 */
 export type PluginPanelSlot = 'run-detail' | 'session-detail' | 'nav';
 
+/**
+ * 输入框工具栏槽位（0.51 additive）：插件只能**声明**按钮（id + label），
+ * 点击由宿主映射成宿主回调；v1 只有会话 / 团队共用的 `composer` 一个槽位。
+ */
+export type PluginToolbarSlot = 'composer';
+
+/** `contributes.toolbar[]` 的 wire 形状（additive；旧 gateway 不返回）。 */
+export interface PluginContributionToolbar {
+  slot: PluginToolbarSlot;
+  /** 宿主映射用的稳定 id（同一 plugin 内唯一）。 */
+  id: string;
+  /** 按钮可见文字；宿主可覆盖成自己的文案。 */
+  label: string;
+  /** 可选 i18n key；由该 plugin 的私有字典解析。 */
+  titleKey?: string;
+  /** 白名单图标名；未知名由 Web normalizer 丢弃。 */
+  icon?: string;
+  order?: number;
+}
+
 /** `plugins.list` 的 additive 贡献点；旧 gateway 不返回。 */
 export interface PluginContributionPage {
   id: string;
@@ -135,6 +155,8 @@ export interface PluginContributions {
   navGroups?: PluginNavGroupContribution[];
   pages?: PluginContributionPage[];
   panels?: PluginContributionPanel[];
+  /** 输入框工具栏声明（additive）；插件只声明按钮，点击由宿主映射。 */
+  toolbar?: PluginContributionToolbar[];
   commands?: PluginContributionCommand[];
   /**
    * CONTRACT-0.43 E1：canonical 是裸方法名字符串数组（`["summary","logs"]`）。

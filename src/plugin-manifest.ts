@@ -117,6 +117,27 @@ export interface PluginPanelContribution {
   order?: number;
 }
 
+/**
+ * 输入框工具栏槽位（0.51 additive）。
+ *
+ * v1 只有会话 / 团队共用的 `composer` 一个槽位；插件只**声明**按钮，
+ * 点击由宿主按 `id` 映射成宿主回调（插件拿不到宿主回调，无法内联执行）。
+ */
+export type PluginToolbarSlot = 'composer';
+
+export interface PluginToolbarContribution {
+  slot: PluginToolbarSlot;
+  /** 宿主映射用的稳定 id；同一 plugin 内唯一。 */
+  id: string;
+  /** 按钮文字（宿主可覆盖）；必填，避免渲染无名按钮。 */
+  label: string;
+  /** 宿主 / 插件私有 i18n key；`label` 仍是 fallback。 */
+  titleKey?: string;
+  /** 白名单图标名（复用 {@link PLUGIN_ICON_NAMES}）。 */
+  icon?: PluginIconName;
+  order?: number;
+}
+
 /** 0.48 M1：`contributes.http[].method`（CONTRACT-0.48 §2） */
 export type PluginHttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS';
 /** 0.48 M1：HTTP 鉴权口径；缺省 `required` */
@@ -196,6 +217,8 @@ export interface PluginContributions {
   rpc?: PluginRpcContribution[];
   events?: string[];
   panels?: PluginPanelContribution[];
+  /** 0.51 additive：输入框工具栏声明（declarative，点击由宿主映射） */
+  toolbar?: PluginToolbarContribution[];
   /** 0.48 M1：宿主 loopback 反代的 HTTP 路由 */
   http?: PluginHttpContribution[];
   /** 0.48 M2：经 rpc handler 执行的 CLI 命令 */
@@ -606,6 +629,45 @@ function readPages(value: unknown, pluginId: string): PluginPageContribution[] {
 
 function isPanelSlot(value: unknown): value is PluginPanelSlot {
   return value === 'run-detail' || value === 'session-detail' || value === 'nav';
+}
+
+function isToolbarSlot(value: unknown): value is PluginToolbarSlot {
+  return value === 'composer';
+}
+
+/**
+ * `contributes.toolbar[]`（0.51 additive）：declarative 按钮声明。
+ *
+ * 与 panels 的区别：没有 `entry`（不挂 iframe），只声明「宿主工具栏上有一个
+ * 按钮」；点击由宿主按 id 映射，宿主没有对应动作时该按钮不会渲染。
+ */
+function readToolbar(value: unknown): PluginToolbarContribution[] {
+  if (!Array.isArray(value))
+    fail('plugin_manifest_invalid', 'contributes.toolbar must be an array');
+  const seen = new Set<string>();
+  return value.map((item, index) => {
+    const field = `contributes.toolbar[${index}]`;
+    if (!isRecord(item)) fail('plugin_manifest_invalid', `${field} must be an object`);
+    if (!isToolbarSlot(item.slot)) {
+      fail('plugin_manifest_invalid', `${field}.slot is invalid (composer)`);
+    }
+    const id = requireString(item.id, `${field}.id`);
+    if (seen.has(id)) fail('plugin_manifest_invalid', `duplicate toolbar id "${id}"`);
+    seen.add(id);
+    const label = requireString(item.label, `${field}.label`);
+    const titleKey =
+      item.titleKey === undefined ? undefined : requireString(item.titleKey, `${field}.titleKey`);
+    const icon = readIcon(item.icon, `${field}.icon`);
+    const order = optionalNumber(item.order, `${field}.order`);
+    return {
+      slot: item.slot,
+      id,
+      label,
+      ...(titleKey !== undefined ? { titleKey } : {}),
+      ...(icon !== undefined ? { icon } : {}),
+      ...(order !== undefined ? { order } : {}),
+    };
+  });
 }
 
 function readCommands(value: unknown): PluginCommandContribution[] {
@@ -1225,6 +1287,7 @@ function readContributions(
     out.events = stringArray(raw.events, 'contributes.events');
   }
   if (raw.panels !== undefined) out.panels = readPanels(raw.panels);
+  if (raw.toolbar !== undefined) out.toolbar = readToolbar(raw.toolbar);
   if (raw.http !== undefined) {
     out.http = readHttp(
       raw.http,

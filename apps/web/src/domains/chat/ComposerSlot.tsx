@@ -1,5 +1,6 @@
 import type { AskUserAnswer, MessageRef, PermissionScope } from '../../gateway/types';
 import { Composer } from './Composer';
+import type { ComposerContextUsage } from './ComposerChrome';
 import { AskPrompt, PermissionPrompt, type PromptQueueChip } from './PromptSlots';
 import type { PendingQueueItem } from './pending-permissions';
 
@@ -27,6 +28,7 @@ export function ComposerSlot({
   focusSignal,
   refs,
   onRemoveRef,
+  contextUsage,
 }: {
   pendingItem: PendingQueueItem | null;
   pendingItems: readonly PendingQueueItem[];
@@ -47,7 +49,10 @@ export function ComposerSlot({
   focusSignal: number;
   /** 待发送的附件引用（只有路径）；权限 / ask 卡替换输入框时不显示。 */
   refs?: readonly MessageRef[];
+  /** 删除一条引用（下标即 refs 里的位置）。 */
   onRemoveRef?: (index: number) => void;
+  /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
+  contextUsage?: ComposerContextUsage;
 }) {
   if (pendingItem && pendingItem.kind === 'permission') {
     return (
@@ -98,6 +103,7 @@ export function ComposerSlot({
       stopping={stopping}
       refs={refs}
       onRemoveRef={onRemoveRef}
+      contextUsage={contextUsage}
     />
   );
 }

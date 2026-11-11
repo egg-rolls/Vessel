@@ -13,7 +13,7 @@ applies_to: [N, M]
 ## 唯一扩展机制
 
 - 只有一个 plugin loader / manifest / 生命周期；插件对象走 `plugins` / `pluginHost` 注入，不塞进 runtime 构造函数。
-- **能力插件**（in-process）经 `PluginHost` 注册 tool / provider / guardrail / hook；**贡献面**（pages / commands / settings / rpc / events / panels）由 harness 层持有与收集，不是 core 的第二套扩展机制。
+- **能力插件**（in-process）经 `PluginHost` 注册 tool / provider / guardrail / hook；**贡献面**（pages / commands / settings / rpc / events / panels / toolbar）由 harness 层持有与收集，不是 core 的第二套扩展机制。`contributes.toolbar[]` 是 declarative 按钮声明（slot 只有 `composer`），点击由宿主按 `id` 映射，插件不拿宿主回调。
 - 不新增第二套运行期扩展机制；禁止 `ModuleHost` / `ModuleRegistry`（ADR-004 / ADR-037 / ADR-099）。
 
 ## Manifest 门禁

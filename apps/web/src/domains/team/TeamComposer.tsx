@@ -6,10 +6,19 @@
  * - 发送只提交 chips 里的 `agent_id`，正文 `@name` 不参与解析；
  * - UTF-8 字节上限 64 KiB。
  */
+
+import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
 import { useEffect, useId, useRef, useState } from 'react';
 import { AutoGrowTextarea, Button } from '../../components/ui';
-import type { TeamMember } from '../../gateway/types';
+import type { MessageRef, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
+import {
+  type ComposerContextUsage,
+  ComposerRefsArea,
+  ComposerToolbarBar,
+  refIndexForId,
+  refsToAttachments,
+} from '../chat/ComposerChrome';
 import { MentionPopover } from './MentionPopover';
 import {
   detectMention,
@@ -37,6 +46,15 @@ export interface TeamComposerProps {
   /** 从失败消息“再次发送”填入草稿时的提示（发送即二次确认）。 */
   retryHint?: boolean;
   disabled?: boolean;
+  /**
+   * 待发送的附件引用（只有路径，没有正文）；与会话页同一份 `MessageRef`。
+   * 缺省 / 空数组时引用区只显示 mention chip。
+   */
+  refs?: readonly MessageRef[];
+  /** 删除一条附件引用（下标即 refs 里的位置）。 */
+  onRemoveRef?: (index: number) => void;
+  /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
+  contextUsage?: ComposerContextUsage;
 }
 
 export function TeamComposer({
@@ -52,6 +70,9 @@ export function TeamComposer({
   targetLabel,
   retryHint = false,
   disabled = false,
+  refs = [],
+  onRemoveRef,
+  contextUsage,
 }: TeamComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const compositionRef = useRef(false);
@@ -106,6 +127,26 @@ export function TeamComposer({
       ? t('team.composer.disconnected')
       : t('team.composer.input');
 
+  // 引用区：@ 提及复用既有 chip 状态，和附件引用（MessageRef）同一条渲染路径。
+  const mentionAttachments: ComposerAttachment[] = mentions.map((chip) => ({
+    id: `mention:${chip.agentId}`,
+    label: chip.label,
+    kind: '@',
+    note: t('team.mention.title'),
+  }));
+  const refItems: ComposerAttachment[] = [...refsToAttachments(refs), ...mentionAttachments];
+
+  /** 引用区删除：mention 落回既有 chips 状态，附件引用回写下标。 */
+  const removeRef = (id: string) => {
+    if (id.startsWith('mention:')) {
+      const agentId = id.slice('mention:'.length);
+      onMentionsChange(mentions.filter((item) => item.agentId !== agentId));
+      return;
+    }
+    const index = refIndexForId(refs, id);
+    if (index >= 0) onRemoveRef?.(index);
+  };
+
   return (
     <div className="composer team-composer relative">
       <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-faint">
@@ -117,30 +158,15 @@ export function TeamComposer({
         </span>
       </div>
 
-      {mentions.length > 0 && (
-        <fieldset className="mb-1.5 flex min-w-0 flex-wrap gap-1.5 border-0 p-0">
-          <legend className="sr-only">{t('team.mention.title')}</legend>
-          {mentions.map((chip) => (
-            <span
-              className="inline-flex items-center gap-1 rounded-full bg-sunken py-px pr-1 pl-2 text-xs text-muted"
-              key={chip.agentId}
-            >
-              <span aria-hidden="true">@</span>
-              <span>{chip.label}</span>
-              <button
-                type="button"
-                className="cursor-pointer border-0 bg-transparent px-1 py-0.5 text-sm leading-none text-inherit"
-                aria-label={t('team.mention.remove', { name: chip.label })}
-                onClick={() =>
-                  onMentionsChange(mentions.filter((item) => item.agentId !== chip.agentId))
-                }
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </fieldset>
-      )}
+      <ComposerRefsArea
+        items={refItems}
+        onRemove={removeRef}
+        removeLabel={(item) =>
+          item.kind === '@'
+            ? t('team.mention.remove', { name: item.label })
+            : t('composer.refs.remove', { name: item.label })
+        }
+      />
 
       {popoverVisible && (
         <MentionPopover
@@ -242,7 +268,11 @@ export function TeamComposer({
               }
             }
 
-            if (event.key === 'Enter' && !event.shiftKey) {
+            if (event.key === 'Enter') {
+              // 裸 Enter 发送（既有行为），Ctrl / Cmd + Enter 为显式和弦；
+              // Shift+Enter 仍换行。
+              const chord = event.ctrlKey || event.metaKey;
+              if (!chord && event.shiftKey) return;
               event.preventDefault();
               // Safari 在 compositionend 后可能再补一个 Enter。
               if (Date.now() - compositionEndRef.current < 50) return;
@@ -262,10 +292,15 @@ export function TeamComposer({
           }
           enterKeyHint="send"
         />
-        <Button variant="primary" onClick={onSend} disabled={!canSend}>
-          {sending ? t('team.composer.sending') : t('team.composer.send')}
-        </Button>
       </div>
+      <ComposerToolbarBar
+        contextUsage={contextUsage}
+        primary={
+          <Button variant="primary" onClick={onSend} disabled={!canSend}>
+            {sending ? t('team.composer.sending') : t('team.composer.send')}
+          </Button>
+        }
+      />
     </div>
   );
 }

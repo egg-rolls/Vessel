@@ -7,9 +7,11 @@
 import type {
   PluginContributionPage,
   PluginContributionPanel,
+  PluginContributionToolbar,
   PluginI18n,
   PluginListItem,
   PluginPanelSlot,
+  PluginToolbarSlot,
 } from '../../gateway/types';
 import { t } from '../../i18n';
 
@@ -71,6 +73,23 @@ export interface PluginPanelItem {
 }
 
 /**
+ * 输入框工具栏贡献项（0.51 additive）。
+ *
+ * 插件只声明「有这么一个按钮」；点击由宿主按 `id` 映射，宿主没有对应回调时
+ * 该项被丢弃（不渲染死按钮）。因为拿不到宿主回调，v1 不支持插件内联执行。
+ */
+export interface PluginToolbarItem {
+  pluginId: string;
+  pluginName: string;
+  slot: PluginToolbarSlot;
+  id: string;
+  label: string;
+  titleKey?: string;
+  icon?: PluginNavIcon;
+  order: number;
+}
+
+/**
  * 内置/核心分组 key（CONTRACT-0.43 §2.10 E6）；自定义分组必须严格等于
  * `plugin:<pluginId>`。核心 key 不能被 plugin 覆盖或重命名。
  */
@@ -89,6 +108,8 @@ const BUILTIN_NAV_SLOTS: ReadonlySet<string> = new Set([
 ]);
 const NAV_ICONS: ReadonlySet<string> = new Set(PLUGIN_NAV_ICONS);
 const PANEL_SLOTS: ReadonlySet<string> = new Set(['run-detail', 'session-detail', 'nav']);
+/** 工具栏槽位白名单；v1 只有会话 / 团队共用的 `composer`。 */
+const TOOLBAR_SLOTS: ReadonlySet<string> = new Set(['composer']);
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const RPC_METHOD = /^[a-z][a-z0-9_-]*$/;
 const I18N_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
@@ -311,6 +332,32 @@ function byOrder(a: { order: number; title?: string; id: string }, b: typeof a):
   return a.order - b.order || (a.title ?? a.id).localeCompare(b.title ?? b.id);
 }
 
+/**
+ * 工具栏条目归一化：slot 走白名单，`label` 缺失回退 `id`；id 为空整项丢弃。
+ * 图标同样只接受领域图标白名单，不把任意字符串传进渲染层。
+ */
+function toolbarOf(
+  plugin: PluginListItem,
+  item: PluginContributionToolbar,
+): PluginToolbarItem | null {
+  const slot = text(item.slot);
+  const id = text(item.id);
+  if (!TOOLBAR_SLOTS.has(slot) || id === '') return null;
+  const icon = navIconOf(item.icon);
+  if (icon === null) return null;
+  const titleKey = text(item.titleKey);
+  return {
+    pluginId: plugin.name,
+    pluginName: plugin.name,
+    slot: slot as PluginToolbarSlot,
+    id,
+    label: text(item.label) || id,
+    ...(titleKey !== '' ? { titleKey } : {}),
+    ...(icon !== undefined ? { icon } : {}),
+    order: orderOf(item.order),
+  };
+}
+
 function isPluginListItem(value: unknown): value is PluginListItem {
   if (value === null || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
@@ -334,6 +381,8 @@ export interface PluginInventory {
   pages: PluginPageItem[];
   navGroups: PluginNavGroupItem[];
   panels: PluginPanelItem[];
+  /** 输入框工具栏声明（0.51 additive）；旧 gateway 不返回时为空数组。 */
+  toolbar: PluginToolbarItem[];
   /** plugin id → 私有 i18n 字典（不合并进宿主 catalog）。 */
   i18nByPlugin: ReadonlyMap<string, PluginI18n>;
   /** plugin id → 允许 iframe 调用的 RPC 方法名（rpc ∪ commands）。 */
@@ -345,6 +394,7 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
   const pages: PluginPageItem[] = [];
   const navGroups: PluginNavGroupItem[] = [];
   const panels: PluginPanelItem[] = [];
+  const toolbar: PluginToolbarItem[] = [];
   const i18nByPlugin = new Map<string, PluginI18n>();
   const methodsByPlugin = new Map<string, Set<string>>();
 
@@ -365,6 +415,10 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
       const item = panelOf(plugin, panel);
       if (item !== null) panels.push(item);
     }
+    for (const entry of contributions.toolbar ?? []) {
+      const item = toolbarOf(plugin, entry);
+      if (item !== null) toolbar.push(item);
+    }
 
     const methods = new Set<string>();
     for (const rpc of contributions.rpc ?? []) {
@@ -383,5 +437,6 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
   pages.sort(byOrder);
   navGroups.sort(byOrder);
   panels.sort(byOrder);
-  return { pages, navGroups, panels, i18nByPlugin, methodsByPlugin };
+  toolbar.sort(byOrder);
+  return { pages, navGroups, panels, toolbar, i18nByPlugin, methodsByPlugin };
 }

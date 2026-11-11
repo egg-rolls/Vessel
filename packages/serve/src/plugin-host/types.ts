@@ -134,6 +134,20 @@ export interface PluginPanelContribution {
   entry: string;
 }
 
+/**
+ * `contributes.toolbar[]`（0.51 additive）：输入框工具栏的 declarative 按钮。
+ *
+ * 没有 `entry`：插件不挂 iframe，只声明 id + 文案；点击由宿主按 id 映射。
+ */
+export interface PluginToolbarContribution {
+  slot: string;
+  id: string;
+  label: string;
+  titleKey?: string;
+  icon?: PluginIconName;
+  order?: number;
+}
+
 /** `contributes.commands[]` */
 export interface PluginCommandContribution {
   name: string;
@@ -157,6 +171,7 @@ export interface PluginManifestContributions {
   navGroups?: PluginNavGroup[];
   pages?: PluginPageContribution[];
   panels?: PluginPanelContribution[];
+  toolbar?: PluginToolbarContribution[];
   commands?: PluginCommandContribution[];
   rpc?: PluginRpcContribution[];
   events?: string[];
@@ -237,6 +252,15 @@ export interface PluginRenderContributions {
     order: number;
     entry: string;
     route: string;
+  }>;
+  /** 0.51 additive：输入框工具栏声明（declarative，无 entry）。 */
+  toolbar: Array<{
+    slot: string;
+    id: string;
+    label: string;
+    titleKey?: string;
+    icon?: PluginIconName;
+    order: number;
   }>;
   commands: Array<{ name: string; title: string }>;
   /** E1 amendment：bare RPC 方法名，供 web iframe bridge 做白名单。 */

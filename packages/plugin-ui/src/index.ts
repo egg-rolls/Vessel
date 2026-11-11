@@ -6,6 +6,9 @@
  */
 export * from './Badge';
 export * from './Button';
+export * from './ComposerAttachments';
+export * from './ComposerContextMeter';
+export * from './ComposerToolbar';
 export * from './CountBadge';
 export { CARD_SURFACE_CLASS } from './card-surface';
 export { cn } from './cn';

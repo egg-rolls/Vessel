@@ -4,8 +4,21 @@ import { AutoGrowTextarea, Button } from '../../components/ui';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import { ChatDock } from './ChatDock';
-import { MessageRefs } from './MessageRefs';
+import {
+  type ComposerContextUsage,
+  ComposerRefsArea,
+  ComposerToolbarBar,
+  refIndexForId,
+  refsToAttachments,
+} from './ComposerChrome';
 
+/**
+ * 会话输入框卡片：三层结构。
+ *
+ * - 上：引用区（附件 / 文档 / 引用项，受控 `refs` + `onRemoveRef`；空则不占高）；
+ * - 中：textarea（行为不变：Enter 发送 / Shift+Enter 换行 / IME 保护）；
+ * - 下：横向工具栏（左侧插件扩展槽，右侧上下文用量 + 发送键）。
+ */
 export function Composer({
   value,
   onChange,
@@ -21,6 +34,7 @@ export function Composer({
   stopping = false,
   refs,
   onRemoveRef,
+  contextUsage,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -43,6 +57,8 @@ export function Composer({
   refs?: readonly MessageRef[];
   /** 删除一条引用（下标即 refs 里的位置）。 */
   onRemoveRef?: (index: number) => void;
+  /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
+  contextUsage?: ComposerContextUsage;
 }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const mountedRef = useRef(true);
@@ -79,14 +95,15 @@ export function Composer({
       ? t('chat.composer.placeholderDisconnected')
       : t('chat.composer.placeholder');
 
+  // 引用区唯一实现：MessageRef[] → 通用 chip 行（id 用 path），删除按 path 回写下标。
+  const refItems = refsToAttachments(refs ?? []);
+  const removeRef = (id: string) => {
+    const index = refIndexForId(refs ?? [], id);
+    if (index >= 0) onRemoveRef?.(index);
+  };
+
   return (
     <ChatDock>
-      {/* 引用 chip 排在输入卡片上方：不挤占 textarea / 工具栏，也不改变卡片高度语义。 */}
-      {refs !== undefined && refs.length > 0 && (
-        <div className="composer-refs-row">
-          <MessageRefs refs={refs} onRemove={onRemoveRef} />
-        </div>
-      )}
       <div className="w-full max-w-[var(--dock-width)] mx-auto px-3.5 pt-2.25 pb-3 rounded-lg bg-raised shadow-elev-2 focus-within:shadow-[var(--elev-2),var(--focus-ring)]">
         <div className="flex items-center justify-between gap-3 mb-1.5 text-xs text-faint">
           <Tooltip label={targetLabel}>
@@ -109,6 +126,11 @@ export function Composer({
             </span>
           </span>
         </div>
+        <ComposerRefsArea
+          className="composer-refs-row"
+          items={refItems}
+          onRemove={onRemoveRef === undefined ? undefined : removeRef}
+        />
         <div className="composer-row">
           <AutoGrowTextarea
             ref={inputRef}
@@ -120,12 +142,15 @@ export function Composer({
               compositionEndRef.current = Date.now();
             }}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                // Safari 在 compositionend 后可能再补一个 Enter：时间窗内只阻止默认行为。
-                if (Date.now() - compositionEndRef.current < 50) return;
-                if (canSend) onSubmit();
-              }
+              if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+              // Ctrl / Cmd + Enter 是显式发送和弦；裸 Enter 保持既有发送行为，
+              // Shift+Enter 仍换行。三条路径共用同一个 canSend 判定。
+              const chord = event.ctrlKey || event.metaKey;
+              if (!chord && event.shiftKey) return;
+              event.preventDefault();
+              // Safari 在 compositionend 后可能再补一个 Enter：时间窗内只阻止默认行为。
+              if (Date.now() - compositionEndRef.current < 50) return;
+              if (canSend) onSubmit();
             }}
             placeholder={placeholder}
             disabled={!hasToken || !connected || submitting || disabled}
@@ -133,16 +158,21 @@ export function Composer({
             aria-label={t('chat.composer.input')}
             enterKeyHint="send"
           />
-          {!hasToken || !connected ? (
-            <Button variant="primary" onClick={onOpenConnection}>
-              {t('common.configureConnection')}
-            </Button>
-          ) : (
-            <Button variant="primary" onClick={onSubmit} disabled={!canSend}>
-              {submitting ? t('chat.composer.sending') : t('chat.composer.send')}
-            </Button>
-          )}
         </div>
+        <ComposerToolbarBar
+          contextUsage={contextUsage}
+          primary={
+            !hasToken || !connected ? (
+              <Button variant="primary" onClick={onOpenConnection}>
+                {t('common.configureConnection')}
+              </Button>
+            ) : (
+              <Button variant="primary" onClick={onSubmit} disabled={!canSend}>
+                {submitting ? t('chat.composer.sending') : t('chat.composer.send')}
+              </Button>
+            )
+          }
+        />
       </div>
     </ChatDock>
   );

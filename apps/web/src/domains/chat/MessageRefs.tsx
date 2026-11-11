@@ -84,14 +84,18 @@ export function MessageRefs({
   className?: string;
 }) {
   if (refs === undefined || refs.length === 0) return null;
+  // key 用「同一路径的第几次引用」：在渲染前建表，既不用数组下标，也不会因为
+  // 同一路径被引用多次而撞 key（列表本身不排序、不重排）。
+  const occurrence = new Map<string, number>();
   return (
     <ul className={`msg-refs ${className}`.trim()} aria-label={t('chat.refs.label')}>
       {refs.map((ref, index) => {
+        const seen = occurrence.get(ref.path) ?? 0;
+        occurrence.set(ref.path, seen + 1);
         const name = refDisplayName(ref);
         return (
           <li
-            // 同一路径可被引用多次：下标参与 key（列表本身不排序、不重排）。
-            key={`${index}-${ref.path}`}
+            key={`${ref.path}#${seen}`}
             className="msg-ref"
             title={ref.path}
           >

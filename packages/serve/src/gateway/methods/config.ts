@@ -452,6 +452,8 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
                     i18n: { type: 'object' },
                     pages: { type: 'array', items: { type: 'object' } },
                     panels: { type: 'array', items: { type: 'object' } },
+                    // 0.51 additive：输入框工具栏声明（declarative，无 entry）。
+                    toolbar: { type: 'array', items: { type: 'object' } },
                     commands: { type: 'array', items: { type: 'object' } },
                     // E1 amendment：bare RPC 方法名。
                     rpc: { type: 'array', items: { type: 'string' } },

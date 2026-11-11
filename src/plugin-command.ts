@@ -87,6 +87,7 @@ function contributionSummary(descriptor: PluginDescriptor): Record<string, numbe
   if (contributes.rpc !== undefined) summary.rpc = contributes.rpc.length;
   if (contributes.events !== undefined) summary.events = contributes.events.length;
   if (contributes.panels !== undefined) summary.panels = contributes.panels.length;
+  if (contributes.toolbar !== undefined) summary.toolbar = contributes.toolbar.length;
   return summary;
 }
 

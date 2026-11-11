@@ -110,6 +110,18 @@ function toServeDescriptor(
             })),
           }
         : {}),
+      ...(contributes.toolbar !== undefined
+        ? {
+            toolbar: contributes.toolbar.map((item) => ({
+              slot: item.slot,
+              id: item.id,
+              label: item.label,
+              ...(item.titleKey !== undefined ? { titleKey: item.titleKey } : {}),
+              ...(item.icon !== undefined ? { icon: item.icon } : {}),
+              ...(item.order !== undefined ? { order: item.order } : {}),
+            })),
+          }
+        : {}),
       ...(contributes.commands !== undefined
         ? {
             commands: contributes.commands.map((command) => ({
