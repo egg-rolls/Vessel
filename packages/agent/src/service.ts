@@ -153,6 +153,23 @@ const INBOX_WAKE_INPUT =
   'Do not reply with a normal send.';
 
 /**
+ * 唤醒输入在会话里的身份（`AgentMessage.input_name` → `Message.name`）。
+ *
+ * 唤醒不是谁说的话，而是**运行时上下文**：标成 `vessel:notice` 后，Web 的时间线
+ * （`runtime-visibility` 的 notice 种类 → 环境信息卡）与 TUI 的人类可读投影
+ * （跳过 `vessel:*`）都按环境信息处理，不再把它画成用户气泡。
+ *
+ * 用 `vessel:notice` 而不是新造一个 `vessel:inbox-wake`：`inbox` hook 每轮的
+ * `[inbox] N unread` 尾消息已经是 `vessel:notice`，唤醒就是同一件事的另一半
+ * （同一 scope 还会在 Web 里折叠成一张卡）；新名字会多出一个只有一处生产的种类，
+ * 却仍要同步 Web 的 kind 词表。
+ *
+ * **正文一个字都没改**：唤醒的判定依赖 run id（`syntheticRunIds`）与
+ * `INBOX_WAKE_INPUT` 文本，与 name 无关。
+ */
+const INBOX_WAKE_NAME = 'vessel:notice';
+
+/**
  * 成员名合法形状：1-64 位字母 / 数字 / `_` / `-`。
  *
  * **与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同源同义**（那边是
@@ -3671,6 +3688,8 @@ export class AgentServiceImpl implements AgentService {
       ts: this.now(),
       source: 'system',
       channel: 'direct',
+      // 结构化身份：唤醒是运行时上下文，不是人说的话（见 INBOX_WAKE_NAME）。
+      input_name: INBOX_WAKE_NAME,
     };
     entry.queuedRuns.add(runId);
     this.syntheticRunIds.add(runId);

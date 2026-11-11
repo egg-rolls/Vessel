@@ -10,9 +10,12 @@
  *
  * 为什么按**文本行**解析，而不是给消息加结构化字段：
  * `vessel:notice` 是契约 §3 的尾部上下文消息（`src/runtime-notice-hook.ts` 用
- * `[runtime] <summary>` 一行一条拼起来，失败再加 `(not applied)`），scope 只在文本里，
- * 且消息可能一次携带多条通知（总线单轮最多 5 条）。解析留在 Web 侧，服务端契约不动；
- * 正文字面保留（不剥 scope 前缀）——这张卡的目的就是让用户看到上下文原文。
+ * `[runtime] <summary>` 一行一条摘要拼起来，每条通知的 `details` 各占一行、行首标
+ * `  · `，失败再加 `(not applied)`），scope 只在文本里，且消息可能一次携带多条通知
+ * （总线单轮最多 5 条，总行数还有 `NOTICE_LINES_MAX` 上限）。解析留在 Web 侧，服务端
+ * 契约不动；正文字面保留（不剥 scope 前缀）——这张卡的目的就是让用户看到上下文原文。
+ * 一张卡的作用域 = **首行**（摘要）的 scope；details 行没有自己的作用域，恒为 `context`，
+ * 因此在 `peer` 卡里也只会作为「成员」卡下面的一行行明细出现。
  *
  * 可见性不在这里判：`state/runtime-visibility.ts` 决定 `notice` 种类默认可见，
  * 本模块只负责「解析成卡片内容」与「相邻同 scope 折叠」。卡片的**样子**也不在这里：
@@ -63,8 +66,14 @@ export interface EnvNoticeCard {
   droppedLines?: number;
 }
 
-/** 卡片最多渲染多少行（与契约 §3 的 details 上限一致：10 行）。 */
-export const ENV_NOTICE_DETAILS_MAX = 10;
+/**
+ * 卡片最多渲染多少行。
+ *
+ * 11 = **首行摘要 1 + 契约 §3 的 details 上限 10**：一条打满的 peer 通知正好是 11 行
+ * （`runtime-notice-hook.ts` 的 `NOTICE_DETAILS_MAX`）。取 10 会把最后一位成员的明细
+ * 挤成「还有 1 行未显示」——那不是保护，是把刚补上的信息又藏起来。
+ */
+export const ENV_NOTICE_DETAILS_MAX = 11;
 
 /** `runtimeMessageKind` 给出的种类；环境信息只看这一个 kind（vessel:notice）。 */
 export const ENV_NOTICE_KIND = 'notice';
@@ -78,6 +87,14 @@ export function isEnvNoticeKind(kind: string | undefined): boolean {
 const RUNTIME_TAG = /^\[runtime\]\s*/i;
 /** 失败标记：`formatNoticeLine` 对 `ok: false` 加的前缀。 */
 const NOT_APPLIED = /^\(not applied\)\s*/i;
+/**
+ * details 行的线格式标记（`runtime-notice-hook.ts` 的 `NOTICE_DETAIL_MARK` = `  · `）。
+ *
+ * 只剥标记本身：`·` 不是正文，剥掉后展开区每行就是作者写的那句话（列表本身没有
+ * 项目符号，留着 `·` 会变成双重符号）。**不参与 scope 判定** —— 一条 detail 的 scope
+ * 恒为兜底 `context`，卡头仍取首行 summary 的 scope（`envNoticeCard` 的 `first.scope`）。
+ */
+const DETAIL_MARK = /^·\s*/;
 /** 行首 scope 词：`config:` / `permission: ...` / `update ...`（不剥正文，只取 scope）。 */
 const SCOPE_TOKEN = /^(config|permission|tools|mcp|update|peer)\b/i;
 
@@ -86,6 +103,9 @@ export function parseEnvNoticeLine(raw: string): EnvNoticeLine | undefined {
   let text = raw.trim();
   if (text.length === 0) return undefined;
   text = text.replace(RUNTIME_TAG, '');
+  // details 行（`  · name: completed`）：剥掉线格式标记，正文照原样保留。
+  // scope 落到兜底 `context` —— 一条 detail 是首行摘要的解释，没有自己的作用域。
+  text = text.replace(DETAIL_MARK, '');
   let ok = true;
   if (NOT_APPLIED.test(text)) {
     ok = false;

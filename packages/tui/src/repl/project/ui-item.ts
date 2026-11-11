@@ -425,6 +425,9 @@ export function reduceUiProjection(
     case 'user.message': {
       const message = isRecord(event.data.message) ? event.data.message : undefined;
       if (message?.role !== 'user') return state;
+      // 运行时上下文（`vessel:*`，如 idle 唤醒输入 / 热应用尾消息）只给模型看：
+      // 不进人类可读投影（与 commands.ts / export-command.ts / 历史投影同口径）。
+      if (typeof message.name === 'string' && message.name.startsWith('vessel:')) return state;
       const text = safe(message.content);
       if (!text) return state;
       let next = closeReasoning(state, event.ts);

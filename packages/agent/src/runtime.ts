@@ -624,12 +624,28 @@ function agentIdOf(from: string): string {
 }
 
 /**
+ * 本轮输入那条 user 消息的 `name`：声明的身份优先，否则按 A2A 来源推导。
+ *
+ * - `message.input_name`：投递方**显式声明**的身份，只用于运行时合成输入（idle 唤醒 =
+ *   `vessel:notice`，见 `AgentService.INBOX_WAKE_NAME`）。上下文身份不只能从 `source`
+ *   推理出来：`startup_prompt` 与唤醒同为 system principal 投递，前者是人的正文、
+ *   后者是运行时上下文，只能由生产者说清楚。
+ * - `agent:<alias>`：A2A 投递（`agentInputName`）。
+ * - 人类 / 系统 / 联邦来源返回 undefined，消息不带 `name`（保持 nil）。
+ *
+ * 改动只落在既有的 `Message.name`（已随 `user.message` 持久化）上——不新增字段，
+ * 也不把 `vessel:source` 重新放回可见；Web / TUI 侧据此决定这条输入是「谁说的话」。
+ */
+function inputNameOf(message: AgentMessage): string | undefined {
+  const declared = message.input_name;
+  if (typeof declared === 'string' && declared.length > 0) return declared;
+  return agentInputName(message);
+}
+
+/**
  * A2A 输入那条 user 消息的 `name`：`agent:<alias>`。
  *
  * 只标「agent 发来的」：人类 / 系统来源返回 undefined，消息不带 `name`（保持 nil）。
- * 改动只落在既有的 `Message.name`（已随 `user.message` 持久化）上——不新增字段，
- * 也不把 `vessel:source` 重新放回可见；Web 侧据此把它渲染成 agent 消息卡。
- *
  * alias 用发送者显示名清洗成 `[A-Za-z0-9_-]`；没有显示名（远端 / 联邦 / 未注册）
  * 时退回 agent 地址里的 id 前 8 位。
  */
@@ -1062,11 +1078,11 @@ export class MemberExecutionHost implements MemberExecutionPort {
       content: formatMessageSource(message, member.team_id, this.nodeId),
       timestamp: Date.now(),
     };
-    // A2A 输入本身带既有 `Message.name`（`agent:<alias>`）：Web 据此把它渲染成
-    // 「agent 消息卡」而不是用户自己说的话。人类 / 系统来源保持 nil —— 不带名字。
-    // 0.52：async ask 的答案同样是 human 来源，但它需要一个身份（「待批答复」卡）。
+    // 输入本身可能带结构化身份：A2A 是 agent:<alias>（Web 渲染成 agent 消息卡），
+    // 运行时合成输入（idle 唤醒）是 vessel:notice（环境信息卡），async ask 的答案
+    // （human 来源）是 ask:answer（待批答复卡）。人类 / 系统正文来源保持 nil。
     const inputName =
-      message.origin === 'ask_answer' ? ASK_ANSWER_INPUT_NAME : agentInputName(message);
+      message.origin === 'ask_answer' ? ASK_ANSWER_INPUT_NAME : inputNameOf(message);
     const userInput: string | Message =
       inputName === undefined
         ? message.content

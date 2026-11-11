@@ -222,6 +222,18 @@ export interface AgentMessage {
    * core `Message.name` 写成 `ask:answer`，Web 渲染成「待批答复」卡而不是用户气泡。
    */
   origin?: 'ask_answer';
+  /**
+   * 这条投递在会话里应写成的 `Message.name`（内存内元数据，不落 snapshot）。
+   *
+   * 只给**运行时合成输入**用：idle 唤醒（`INBOX_WAKE_INPUT`）不是谁说的话，而是运行时
+   * 上下文，标成 `vessel:notice` 后 Web 时间线按环境信息卡渲染、TUI 的人类可读投影跳过它，
+   * 两边都不再把它画成「用户说的话」。A2A 投递不走这里（`agent:<alias>` 由 `source` +
+   * `from_name` 推导，见 `runtime.ts` 的 `agentInputName`）。
+   *
+   * **不能用 `source: 'system'` 统一推导**：`startup_prompt` 同样来自 system principal，
+   * 而那是调用方（人）写的正文，必须继续按正文渲染。
+   */
+  input_name?: string;
 }
 
 /** 传给执行内核的成员身份（不携带 registry 状态） */

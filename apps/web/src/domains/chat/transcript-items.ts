@@ -12,6 +12,8 @@
  * - tool:<callId>             工具调用（live 与 history 共用；无 callId 时 tool:run:<runId>:<key>）
  * - tool:orphan:<绝对下标>     只有结果、没有调用的历史 tool 消息
  * - notice:<item.key>         上下文 / 原始事件行
+ * - run:<runId>:input         run 的输入：人的输入（气泡）/ agent 投递（agent 卡）/
+ *                             运行时上下文输入（`vessel:*` → 环境信息卡，落盘后让位给历史）
  * - queued:<runId>            本地排队提交
  * - run:<runId>:failure       一次 run 的失败卡（事件流优先，会话记录快照兜底）
  *
@@ -81,6 +83,13 @@ export interface RuntimeNoticeItem extends ItemMeta {
   text: string;
   /** 该消息的绝对下标（可回链到 sessions.get，便于将来做详情/跳转）。 */
   absIndex?: number;
+  /**
+   * live 侧独有：这条上下文是某个 run 的**输入**（`run:<runId>:input`）。
+   *
+   * 有 runId 时它在历史落盘后让位（同一份输入由历史侧的 `notice:<下标>` 渲染），
+   * 与 `RunInputItem` 的认领口径同一条规则 —— 否则同一条输入会出现两张卡。
+   */
+  runId?: string;
   /** 环境信息卡的解析结果（scope / 摘要 / 展开行 / 折叠条数）；非 notice 没有。 */
   env?: EnvNoticeCard;
 }
@@ -359,6 +368,19 @@ export const SOURCE_MESSAGE_NAME = `${RUNTIME_MESSAGE_PREFIX}source`;
 export function isRuntimeContextMessage(message: Message): boolean {
   const name = message.name;
   return typeof name === 'string' && name.startsWith(RUNTIME_MESSAGE_PREFIX);
+}
+
+/**
+ * 消息名 → runtime 上下文种类（`vessel:notice` → `notice`）；不是 runtime 上下文返回
+ * undefined。live 侧的 run **输入**用它判身份（历史侧用 `runtimeMessageKind`）。
+ *
+ * 返回的是 `vessel:` 之后的后缀原文：渲染侧只关心「是不是 `notice`（环境信息卡）」，
+ * 未知后缀仍会渲成运行时提示卡 —— 失败方向必须是「画成上下文」而不是「画成用户气泡」。
+ */
+function runtimeContextKindOfName(name: string | undefined): string | undefined {
+  if (typeof name !== 'string' || !name.startsWith(RUNTIME_MESSAGE_PREFIX)) return undefined;
+  const suffix = name.slice(RUNTIME_MESSAGE_PREFIX.length);
+  return suffix.length > 0 ? suffix : 'other';
 }
 
 /** 从来源行正文取地址：location="a@node:team" → a@node:team。 */
@@ -648,34 +670,53 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
       monotonic = monotonic === undefined ? candidate : Math.max(monotonic, candidate);
       return monotonic;
     };
-    // run 的用户输入：历史里还没落盘时由它显示气泡；被历史消息认领后由 assemble 丢掉。
-    // 身份（agent 投递）随首个事件一起到：有 sender 就是 agent 卡，渲染层不再判。
+    // run 的输入：历史里还没落盘时由它显示气泡；被历史消息认领后由 assemble 丢掉。
+    // 身份随首个事件一起到（`run.started.input_name`）：agent 投递 = `agent:<alias>`
+    // → agent 卡；运行时合成输入 = `vessel:*` → 运行时提示卡（环境信息），绝不画成
+    // 用户气泡；两者都不是 = 人自己说的话 → 气泡。
     if (trimText(group.input).length > 0) {
-      const sender = agentSenderOfName(group.inputName);
-      // 0.52：async ask 的答案在运行态就已经知道身份（`input_name = ask:answer`），
+      const text = group.input as string;
+      const ts = itemTs(undefined);
+      const tsPart = ts !== undefined ? { ts } : {};
+      // 0.52：async ask 的答案在运行态就已知道身份（input_name = ask:answer），
       // 首帧就渲成「待批答复」卡，不会先闪一帧用户气泡。
       const askAnswer =
-        group.inputName === ASK_ANSWER_MESSAGE_NAME
-          ? askAnswerCard(group.input as string)
-          : undefined;
+        group.inputName === ASK_ANSWER_MESSAGE_NAME ? askAnswerCard(text) : undefined;
+      // 运行时合成输入（idle 唤醒等）带 vessel:* 身份：渲成运行时提示卡（环境信息卡），
+      // 绝不画成用户气泡。
+      const noticeKind = runtimeContextKindOfName(group.inputName);
       if (askAnswer !== undefined) {
         items.push({
           kind: 'ask-answer',
           key: `run:${group.runId}:input`,
           runId: group.runId,
-          text: group.input as string,
+          text,
           card: askAnswer,
-          ...(itemTs(undefined) !== undefined ? { ts: itemTs(undefined) } : {}),
+          ...tsPart,
+          ...seqMeta,
+        });
+      } else if (noticeKind !== undefined) {
+        const env = isEnvNoticeKind(noticeKind) ? envNoticeCard(text) : undefined;
+        items.push({
+          kind: 'runtime-notice',
+          key: `run:${group.runId}:input`,
+          // runId 让它在历史落盘后让位（同一条输入不出现第二张卡，见 assemble）。
+          runId: group.runId,
+          noticeKind,
+          text,
+          ...(env !== undefined ? { env } : {}),
+          ...tsPart,
           ...seqMeta,
         });
       } else {
+        const sender = agentSenderOfName(group.inputName);
         items.push({
           kind: 'run-input',
           key: `run:${group.runId}:input`,
           runId: group.runId,
-          text: group.input as string,
+          text,
           ...(sender !== undefined ? { sender } : {}),
-          ...(itemTs(undefined) !== undefined ? { ts: itemTs(undefined) } : {}),
+          ...tsPart,
           ...seqMeta,
         });
       }
@@ -1011,14 +1052,13 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
   }
   for (const item of live) {
     const runId = 'runId' in item ? item.runId : undefined;
-    // 用户输入已被历史消息认领：历史那条负责渲染，run 侧气泡丢弃（绝不两个气泡）。
-    // 「待批答复」同理（`run:<id>:input` 与 `msg:<absIndex>` 是同一个逻辑对象）。
-    if (
-      (item.kind === 'run-input' || item.kind === 'ask-answer') &&
-      item.runId !== undefined &&
-      claimedUserByRun.has(item.runId)
-    ) {
-      continue;
+    // 输入已被历史消息认领：历史那条负责渲染，run 侧那份丢弃（绝不两个气泡 / 两张卡）。
+    // 三种输入共用这条规则：人的输入（run-input）、async ask 的答案（ask-answer）、
+    // 运行时上下文输入（runtime-notice 带 runId，如 idle 唤醒的 vessel:notice）。
+    if (runId !== undefined && claimedUserByRun.has(runId)) {
+      if (item.kind === 'run-input') continue;
+      if (item.kind === 'runtime-notice') continue;
+      if (item.kind === 'ask-answer') continue;
     }
     const claim = runId === undefined ? undefined : claimByRun.get(runId);
     if (claim === undefined) {
