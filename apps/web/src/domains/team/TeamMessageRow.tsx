@@ -114,6 +114,7 @@ function SystemNotice({ message, senderLabel }: { message: TeamMessage; senderLa
 export function TeamMessageRow({
   message,
   senderLabel,
+  recipientLabels,
   canViewSession,
   onViewSession,
   onRetry,
@@ -123,6 +124,11 @@ export function TeamMessageRow({
 }: {
   message: TeamMessageView;
   senderLabel?: string;
+  /**
+   * 已解析好的 agent 收件人显示名（`to` 经 `TeamTranscript` 过滤 / 去重后逐个查 roster）。
+   * 空数组 = 不显示箭头：广播、成员回复、发给人类、或目标不是 agent。
+   */
+  recipientLabels?: readonly string[];
   canViewSession?: boolean;
   onViewSession?: () => void;
   onRetry?: () => void;
@@ -157,6 +163,8 @@ export function TeamMessageRow({
   // 人类定向消息：出站 / 入站都用 `to: ['human']` 落日志（federation 入站的 human
   // 分支与本机路径一致）。只读日志字段，不按内容猜。
   const asksHuman = !isHuman && Array.isArray(message.to) && message.to.includes('human');
+  const toLabels = recipientLabels ?? [];
+  const toExtra = toLabels.length - 1;
   const statusClass =
     message.sendStatus === 'failed'
       ? ' team-message-failed'
@@ -212,6 +220,15 @@ export function TeamMessageRow({
         <span className="font-medium text-muted">
           {isHuman ? t('team.message.you') : (senderLabel ?? message.from)}
         </span>
+        {/* agent 日志的「发给谁」：只在 `to` 有 agent 目标时出现（人类 / 广播 / 回复不显示）。
+            多目标显示第一个 + 「+N」，完整名单在 title 里；箭头与 +N 都是符号，不走 i18n。 */}
+        {toLabels.length > 0 && (
+          <span className="flex items-center gap-1" title={toLabels.join(', ')}>
+            <span aria-hidden="true">→</span>
+            <span className="font-medium text-muted">{toLabels[0]}</span>
+            {toExtra > 0 && <span className="font-mono text-2xs">+{toExtra}</span>}
+          </span>
+        )}
         {isAgent && (
           <span className="rounded-full border border-line-strong px-1.25 font-mono text-2xs text-muted">
             {t('team.message.agentTag')}
