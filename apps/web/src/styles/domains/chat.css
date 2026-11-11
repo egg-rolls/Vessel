@@ -951,6 +951,21 @@
   background: var(--surface-sunken);
 }
 
+/* 悬停整块字段容器的反馈只有这一条（两页共用），且只挂在容器上：
+   textarea 与工具栏都是 `background: transparent`，所以鼠标落在输入框文字上、
+   落在内衬 / 圆角、落在 textarea 与工具栏之间那道 `gap`、落在工具栏按钮之间的
+   缝隙 —— 命中同一个 `.composer-field:hover`，视觉**必然**一致。反过来说：
+   不给 `.composer-input:hover` 另写一份，否则「悬停输入框」与「悬停输入区缝隙」
+   就是两条规则、迟早走偏（用户原话：除按钮外的区域 hover 要和 hover 输入框一样）。
+   叠色用 `--hover-tint`（light ink 4% / dark white 6%），与列表行、`.to-bottom`
+   等同一层 hover 语言；不新增颜色变量。
+   按钮不受这条影响：它们在容器**之上**画自己的不透明 `--surface-sunken` 底 +
+   描边（`composer-controls.ts` 的 `composerIconControlClass`），本规则只改容器
+   自身的 background-image，没有后代选择器，所以按钮自己的 hover 优先级不变。 */
+.composer-field:hover {
+  background-image: linear-gradient(var(--hover-tint), var(--hover-tint));
+}
+
 .composer-field:focus-within {
   box-shadow: var(--focus-ring);
 }

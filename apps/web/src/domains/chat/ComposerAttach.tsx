@@ -14,10 +14,11 @@
  * （焦点圈 / Esc / 归还焦点 / Ctrl+⌘+Enter 添加）由 `AttachDialog` 承担。
  */
 import type { RefObject } from 'react';
-import { Button, Icon } from '../../components/ui';
+import { Button, cn, Icon } from '../../components/ui';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { AttachBrowseClient } from './AttachDialog';
+import { composerIconControlClass, composerQuietIconTone } from './composer-controls';
 
 /** 工具栏按钮的可访问名（宿主按钮与插件同名条目共用一句文案）。 */
 export function composerAttachLabel(): string {
@@ -26,6 +27,11 @@ export function composerAttachLabel(): string {
 
 /**
  * 工具栏左侧的宿主按钮：图标 + `aria-label`（没有可见文字），点击开关弹层。
+ *
+ * 外观与发送键同族：同一个 32px 正圆盒子（`composerIconControlClass`，与发送键
+ * 共用一份 class），只是色调走「次要动作」—— 静止灰色图标（`--muted`），
+ * hover 转 `--ink`（暗色主题即白、浅色主题即最深的 ink），不借主题色。
+ * 图标本身两边都是 `Icon size-4`（16px），所以对齐的是按钮盒子，不是缩图标。
  *
  * `aria-haspopup="dialog"` + `aria-expanded` + `aria-controls` 指向同一个弹层；
  * 插件贡献 `attach-file` 时走的是同一份开关回调（见 `composer-toolbar.ts`），
@@ -56,13 +62,13 @@ export function ComposerAttachButton({
       <Button
         type="button"
         variant="plain"
-        size="small"
         aria-label={label}
         title={label}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? dialogId : undefined}
         onClick={onClick}
+        className={cn(composerIconControlClass, composerQuietIconTone)}
       >
         <Icon name="attach" />
       </Button>

@@ -26,6 +26,7 @@ import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import { AttachDialog } from './AttachDialog';
 import { type ComposerAttachBinding, ComposerAttachButton } from './ComposerAttach';
+import { composerIconControlClass, composerPrimaryIconTone } from './composer-controls';
 import {
   type ComposerToolbarHostActions,
   composerHostActions,
@@ -145,9 +146,12 @@ export function ComposerUsageMeter({ usage }: { usage?: ComposerContextUsage }) 
  *   `Button` 的 tint 叠色承担，与其它按钮同一套 hover / press 语言。
  * - 可访问名走 `aria-label` + `title`（图标本身 `aria-hidden`），焦点环沿用
  *   `Button` 的 `focus-visible:ring-*`，键盘可达性与其它按钮一致。
+ *
+ * 形状层 + 三态判定只有一份（`composerIconControlClass`），工具栏的回形针
+ * （{@link ComposerAttachButton}）用的是同一个盒子、另一套色调，见
+ * `composer-controls.ts`。
  */
-const composerSendClass =
-  'size-control flex-none rounded-full border border-line-strong p-0 bg-sunken text-accent pointer-coarse:min-w-touch enabled:hover:bg-accent-soft enabled:hover:text-accent-ink disabled:text-faint disabled:opacity-100';
+const composerSendClass = cn(composerIconControlClass, composerPrimaryIconTone);
 
 /** 圆形发送键：图标按钮 + 主题色图标，两个 composer 共用这一份。 */
 export function ComposerSendButton({
