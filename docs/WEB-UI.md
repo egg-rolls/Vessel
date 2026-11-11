@@ -81,6 +81,28 @@ scope 是卡头标题（与 `来自 agent X` 同级、同一组 class），不�
 （CSP 是 `img-src 'self' data:`），其余与裸链接一样降级成链接。权限通道
 （`tool.permission`）仍走自己的卡片，不汇入本页。
 
+## UI 选择状态持久化（刷新 / 切回来回到上次打开的那一个）
+
+只记「上次打开的是哪一个」，只用 `sessionStorage`（UI 选择状态不进 `localStorage`、
+不进 URL query、不写日志），失败一律不阻塞（隐私模式 / SSR / 配额满 → 退化为
+「没有记录」）。key 与读写都收在纯模块里，不要在组件里直接摸 `sessionStorage`：
+
+| 选择面 | 记录模块 | key | 值 | 写入 / 读取 / 清除 |
+| --- | --- | --- | --- | --- |
+| 会话（`#/chat/<sessionId>`） | `domains/chat/session-selection.ts` | `vessel.chat.lastSession.v1.default` | `session_id` | 选中即写（`useChatSessions`）；无路由 id 时恢复（`decideSessionRestore`）；会话被删（`not_found`）/ 记录失效时清 |
+| 团队（`#/teams/<nodeKey>/<teamId>`） | `domains/team/team-selection.ts` | `vessel.team.lastTeam.v1.<nodeKey>` | `team_id` | 路由进入详情即写（`useTeamsView`）；`#/teams` 列表页无 `teamId` 时恢复（`decideTeamRestore`）；归档 / `not_found` / 不在已加载列表时清 |
+
+口径：
+
+1. **URL 权威**：路由里已经有 id（会话 id / `teamId`）时一律不覆盖，恢复只补「没有 id」
+   时的默认值；两者冲突时 URL 赢。
+2. **记录身份是 id**：`session_id` / `team_id`，不是名字——改名、同名都不影响；团队记录
+   带 `nodeKey` 槽位，多节点同一份 `sessionStorage` 不会串。
+3. **列表未就绪不判失效**：列表请求失败 / 还没回来时保留记录（`wait`），别把「查不到」
+   当成「被删了」。
+4. **只记一个**：团队同一时刻只有一个被打开，写入时清掉别的 node 槽位；侧栏 / 抽屉 /
+   成员栏展开态不落存储（刷新按默认关闭）。
+
 ## L1：token
 
 值只写在 `styles/tokens.css`；`index.css` 的 `@theme inline` 只做别名

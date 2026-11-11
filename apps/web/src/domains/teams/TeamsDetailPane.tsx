@@ -18,6 +18,7 @@ interface TeamsDetailPaneProps {
 export function TeamsDetailPane({ state, panes }: TeamsDetailPaneProps) {
   const {
     isDetail,
+    restorePending,
     detailNode,
     detailRoute,
     navigate,
@@ -30,7 +31,8 @@ export function TeamsDetailPane({ state, panes }: TeamsDetailPaneProps) {
 
   let detail: ReactNode;
   if (!isDetail) {
-    detail = (
+    // 「上次打开的恢复」还在判（列表未到）：先留白，别闪一句「先打开 Team」。
+    detail = restorePending ? null : (
       <div className="teams-detail-empty">
         <EmptyState
           title={t('teams.detail.emptyTitle')}

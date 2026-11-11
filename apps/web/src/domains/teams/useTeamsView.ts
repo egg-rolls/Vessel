@@ -3,7 +3,7 @@
  *
  * 纯状态逻辑，不渲染；`TeamsView` 作为薄容器，把结果分发给同目录子视图。
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RAIL_MAX_WIDTH } from '../../app/layout';
 import { requestRefresh } from '../../app/refresh';
 import type { Route } from '../../app/router';
@@ -19,9 +19,18 @@ import type { NodeTeams } from '../../gateway/team-roster';
 import type { TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { useAgentStore } from '../../stores/agentStore';
-import { teamListData, useTeamStore } from '../../stores/teamStore';
+import { teamDetailKey, teamListData, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { useNodeNames } from '../nodes/useNodeNames';
+import {
+  browserSessionStorage,
+  clearLastTeam,
+  decideTeamRestore,
+  readLastTeam,
+  readLastTeamRecord,
+  teamRecordKey,
+  writeLastTeam,
+} from '../team/team-selection';
 import { filterTeamResults } from './team-search';
 import { teamEditHash, teamNodeFilterFromHash } from './team-url';
 
@@ -65,6 +74,11 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [freezeBusy, setFreezeBusy] = useState<string | null>(null);
+  /**
+   * 「上次打开的 Team」还在判（列表未到）：详情 pane 先别显示「先打开 Team」空态，
+   * 免得恢复跟上后闪一句假话。判完（restore / 清记录）立刻落地。
+   */
+  const [restorePending, setRestorePending] = useState(false);
   const isDetail = 'teamId' in route;
   // 当前连接可以没有 token，但额外节点各自带凭据：任一节点可用即进入列表。
   const anyNodeToken = nodes.some((node) => hasTokenFor(node));
@@ -116,6 +130,34 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     if (routeTeamKey) setDrawerOpen(false);
   }, [routeTeamKey]);
 
+  /** 当前详情路由的 node / team（列表页为空串）：写入与清除记录都按这一对判断。 */
+  const detailNodeKey = isDetail ? route.nodeKey : '';
+  const detailTeamId = isDetail ? route.teamId : '';
+
+  // 选中即写：列表点击 / 深链进入 / 自动恢复最后都落到同一个详情路由，只在这一处写。
+  useEffect(() => {
+    if (!detailTeamId) return;
+    writeLastTeam(browserSessionStorage(), detailNodeKey, detailTeamId);
+  }, [detailNodeKey, detailTeamId]);
+
+  /**
+   * 团队被删（`teams.get` 返回 `not_found`）：只清记录，不改变当前错误页 ——
+   * 与会话页的 NOT_FOUND 处理同口径，避免下次进入继续恢复一个不存在的 Team。
+   */
+  const summaryKey = detailTeamId ? teamDetailKey(detailNodeKey, detailTeamId, 'summary') : '';
+  const detailSummary = useTeamStore((state) =>
+    summaryKey ? state.details[summaryKey] : undefined,
+  );
+  const detailSummaryCode = detailSummary?.status === 'error' ? detailSummary.code : undefined;
+  useEffect(() => {
+    if (!detailTeamId || detailSummaryCode !== 'not_found') return;
+    const storage = browserSessionStorage();
+    // 记录指向的正是这个已消失的 Team：清掉，别让下次进入继续恢复它。
+    if (readLastTeam(storage, detailNodeKey) === detailTeamId) {
+      clearLastTeam(storage, detailNodeKey);
+    }
+  }, [detailNodeKey, detailTeamId, detailSummaryCode]);
+
   const changeNodeFilter = (value: string) => {
     setNodeFilter(value);
     if (isDetail) return;
@@ -132,6 +174,57 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     [nodes, lists],
   );
   const loaded = nodes.length > 0 && data.length === nodes.length;
+
+  /**
+   * 已加载 Team 的身份集合（`nodeKey:teamId`）；null = 还不能判断记录是否失效
+   * （列表还没到，或有节点拉列表失败）：这时**绝不**清记录，等下一次进入重试。
+   */
+  const knownTeamKeys = useMemo<readonly string[] | null>(() => {
+    if (nodes.length === 0 || data.length !== nodes.length) return null;
+    if (data.some((item) => !item.ok)) return null;
+    return data.flatMap((item) =>
+      item.teams.map((team) => teamRecordKey(nodeKeyOf(item.node), team.team_id)),
+    );
+  }, [nodes, data]);
+
+  /**
+   * 恢复「上次打开的 Team」（口径照抄会话页 `decideSessionRestore`）：
+   * - 只在进入 Teams 域的那次挂载里判一次：之后用户点「返回列表」不会再被拽回详情，
+   *   重新进入 Teams 域 / 刷新才会恢复；
+   * - 路由已有 `teamId` 时一律 keep —— **URL 权威**，恢复只补默认值，不覆盖 URL；
+   * - 记录仍在已加载列表里 → 补上那个默认值；失效（被删 / 归档 / 无权限 / 不在
+   *   roster）→ 清记录并停在列表页（Team 页的默认态）；
+   * - 记录没就绪（列表未到 / 有节点失败）→ 不判失效，保留记录。
+   */
+  const restoreDecided = useRef(false);
+  useEffect(() => {
+    if (restoreDecided.current) return;
+    // `#/teams?node=<nodeKey>` 是「看这个节点的团队列表」的深链：URL 已表达意图，
+    // 恢复只补「什么选择都没有」的默认值，这里不插手（记录留着下次再试）。
+    if (teamNodeFilterFromHash(window.location.hash)) return;
+    const storage = browserSessionStorage();
+    const record = detailTeamId ? null : readLastTeamRecord(storage);
+    const decision = decideTeamRestore({
+      ...(detailTeamId ? { routeTeamId: detailTeamId } : {}),
+      stored: record,
+      knownTeams: detailTeamId ? null : knownTeamKeys,
+    });
+    if (decision.kind === 'wait') {
+      // 列表还在路上：详情 pane 先保持「恢复中」，不显示误导的空态。
+      setRestorePending(record !== null && data.length < nodes.length);
+      return;
+    }
+    restoreDecided.current = true;
+    setRestorePending(false);
+    if (decision.kind === 'restore') {
+      navigate({ domain: 'teams', nodeKey: decision.nodeKey, teamId: decision.teamId });
+      return;
+    }
+    if (decision.kind === 'default' && decision.clear && record) {
+      clearLastTeam(storage, record.nodeKey);
+    }
+  }, [data.length, detailTeamId, knownTeamKeys, navigate, nodes.length]);
+
   const searched = useMemo(() => filterTeamResults(data, query), [data, query]);
   const visible = useMemo(
     () => (nodeFilter ? searched.filter((item) => nodeKeyOf(item.node) === nodeFilter) : searched),
@@ -195,6 +288,11 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
       setArchiveTarget(null);
       void loadAllLists(nodes, teamControl);
       void loadRoster(nodes, teamControl);
+      // 归档即下线：记录若指向它就不能再被恢复（与会话被删后清记录同口径）。
+      const storage = browserSessionStorage();
+      if (readLastTeam(storage, nodeKey) === team.team_id) {
+        clearLastTeam(storage, nodeKey);
+      }
       if (isDetail && route.nodeKey === nodeKey && route.teamId === team.team_id) {
         navigate({ domain: 'teams' });
       } else {
@@ -314,6 +412,7 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
   return {
     navigate,
     isDetail,
+    restorePending,
     detailRoute,
     compact,
     drawerOpen,
