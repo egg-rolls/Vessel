@@ -127,9 +127,10 @@ export interface RunGroup {
  * - **两个集合的分工**：本集合 = 「默认档隐藏，展开后（`ui.showInternalEvents` /
  *   `verbosity=debug`）仍以原始事件行出现」的状态同步；`CHAT_HIDDEN_EVENT_TYPES`
  *   = 「聊天窗无条件不展示」的会话 / 成员**元数据审计**（`session.created` /
- *   `session.activated` / `session.rewound` / `session.titled` …）。审计事件的归宿
- *   只有 Observe / Runs：不要因为「它也能被 showInternal 放出来」就塞进本集合，
- *   否则打开「显示系统信息」后聊天里会重新冒出原始 JSON 卡。
+ *   `session.activated` / `session.rewound` / `session.titled` …）与**已有专用 UI
+ *   承接的交互事件**（`tool.permission.*` / `ask.user.*`，卡片在 Composer 槽位）。
+ *   这两类的归宿只有 Observe / Runs：不要因为「它也能被 showInternal 放出来」就塞进
+ *   本集合，否则打开「显示系统信息」后聊天里会重新冒出原始 JSON 卡。
  */
 export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'context.changed',
@@ -160,6 +161,20 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent.restarting',
   'agent.restarted',
   'agent.compact_forked',
+  // 上下文 / prompt / 上限的状态同步（run 内部状态变了，不是对话内容）。三条都**没有**
+  // typed notice，展开后落回原始事件行，默认档不逐轮刷行：
+  // - `message.compaction`：一次压缩的**落盘摘要镜像**（`removed` / `remaining` / `kept` /
+  //   `reason` + 摘要消息本体）。用户能行动的信号由同一次压缩先发的 `context.compacted`
+  //   （typed notice）承担，消息重建走 `projectMessages` 投影，不读时间线 —— 默认档再落一张
+  //   原始 JSON 卡就是同一事实的第二份。
+  // - `prompt.prefix_changed`：prompt 缓存前缀漂移（`diverged_at` / `system_changed` /
+  //   `tools_changed`），纯诊断信号，只用于「为什么这次请求没命中缓存」。
+  // - `limit.blocked`：硬上限（iterations / runtime / request / token / cost）触发的先行
+  //   信号，随即 run 以 `run.failed` + `limit_blocked` envelope 收口；失败正文归
+  //   `errorLevel`（`run.*` 是默认可见级），事件本级重复。
+  'message.compaction',
+  'prompt.prefix_changed',
+  'limit.blocked',
   // hook.* 由 `ui.showInternalEvents` 统一控制（CONFIG 契约），失败仍走 errorLevel。
   'hook.started',
   'hook.completed',
@@ -171,10 +186,17 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
  * 只属于观察面（Observe / Runs）的事件：聊天窗无条件不展示。
  *
  * 判据是**内容性质**，不是「默认档是否隐藏」：会话 / 成员的**元数据审计**（创建、
- * 激活、改名、rewind）既不是对话内容，也没有 typed notice 承接，落成事件卡就只是
+ * 激活、改名、rewind、删除）既不是对话内容，也没有 typed notice 承接，落成事件卡就只是
  * 一坨原始 JSON。因此本集合的成员**不受 `ui.showInternalEvents` 影响**——打开
  * 「显示系统信息」也不进聊天（`debug` 同理），只在 Observe / Runs 查看；这也是它
  * 与 `INTERNAL_EVENT_TYPES`（默认隐藏、展开可见）的分工。
+ *
+ * 第二类成员是**已有专用 UI 承接的交互事件**（`tool.permission.*` → `PermissionCard`、
+ * `ask.user.*` → `AskCard`）：交互数据源是 `interactions.list` hydration 与
+ * `connection-handlers` 的 add / settle，**不经时间线分组**，所以原始卡只是
+ * requestId / decision 的重复噪声；`ask.user.timeout`（headless 等不到人）同理，
+ * 卡片收起由应答事件或 run 终态负责，这条事件只是一行审计。判据仍是内容性质：
+ * 聊天窗里它没有独立信息量。
  *
  * 这些事件的 `run_id` 通常是成员 / 队列入队 id 或常量伪 run id（`session` /
  * `runtime` / `config` / `plugins`），不是 run id。用显式集合而不是 `hasRunEvent`
@@ -199,6 +221,22 @@ export const CHAT_HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set([
   // AI 命名成功（`{session_id,title}`，run_id 恒为常量 `session`）是会话元数据审计：
   // 标题已经由会话头 / 会话列表展示，聊天窗不该再落一张原始 JSON 卡。
   'session.titled',
+  // 会话删除审计：`run_id` 是 sessionId（伪 run），载荷只有计数（sessions / runs /
+  // events）。删除结果由删除对话框与 `sessions.list` 重启后的会话列表呈现
+  // （`useSessionDelete` 走 RPC 后本地 removeSession + 跳转，不读这条事件）。
+  'session.deleted',
+  // 权限 / ask 的请求-应答是**已有交互卡的重复噪声**：卡片在 Composer 槽位
+  // （`PromptSlots` → `PermissionCard` / `AskCard`），数据源是 `interactions.list`
+  // hydration + `connection-handlers` 的 add / settle（在分组之前直接写
+  // `useInteractionStore`），**不经过**时间线分组；原始卡里只有 requestId /
+  // requestId+decision，藏掉不丢任何可交互内容。
+  'tool.permission.request',
+  'tool.permission.response',
+  'ask.user.requested',
+  'ask.user.answered',
+  // headless ask 超时：服务端标 suspended（`interactions-registry`），web 侧靠 run
+  // 终态 `run-finished` 收起卡片，它本身只是一条审计行。
+  'ask.user.timeout',
   'agent.spawned',
   'agent.message.queued',
   'agent.message.sent',
@@ -314,6 +352,13 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         group.iterations = d.iterations;
         group.status = 'completed';
         group.completedAt = ev.ts;
+        // 同一 run 可能先收到一条 `run.failed`（典型：session-liveness 的误判
+        // `run lost`，见 src/session-liveness.ts 的 lease 探针），随后又正常
+        // `run.completed`。状态已由这里覆盖，但 error / errorMeta 不清就会永久残留
+        // —— 今天没人渲染，可只要将来出现「有 error 就提示」的判定，它就会把一条
+        // 成功的 run 报成失败。终态以最后一次为准：completed 显式清掉前面那份错误。
+        group.error = undefined;
+        group.errorMeta = undefined;
         continue;
       }
       case 'run.failed': {
