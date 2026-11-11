@@ -839,7 +839,10 @@
 .composer-input {
   flex: 1;
   min-height: 24px;
-  max-height: min(160px, 34dvh);
+  /* 上限只认令牌（tokens.css `--composer-input-max-h`）：`AutoGrowTextarea` 的自增高也按
+     同一令牌夹高度，这里再写一个 160px 的字面值只会和令牌打架（同特异性下后加载的
+     chat-dock.css 与行内 max-height 都会赢过它）。 */
+  max-height: var(--composer-input-max-h);
   padding: 8px 10px;
   border: 0;
   border-radius: var(--radius-md);

@@ -48,18 +48,21 @@ export const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowTextarea
       const element = innerRef.current;
       if (!element) return;
       element.style.height = 'auto';
-      // `box-sizing: border-box`（base.css 的 `*`）下 `height` 含边框与横向滚动条，
-      // 而 `scrollHeight` 只有内容 + 内边距：直接写 `height = scrollHeight` 会让
-      // `scrollHeight > clientHeight` 恒成立，`overflow-y: auto` 于是永远画出滚动条。
-      // 本仓不引 Tailwind preflight，`<textarea>` 保留 UA 的 1px 边框，团队输入框正好踩中。
-      // 补上 `offsetHeight - clientHeight`（边框 + 横向滚动条）再夹到 max-height。
+      // 高度必须由 `scrollHeight` 决定：`<textarea>` 的自动高度由 `rows` 决定，不随
+      // 内容长高（实测 5 行内容在 `height: auto` 下仍是一行高度），不能直接量自然高度。
+      // 但 `scrollHeight` 只有整数字节，而行高带小数：会话输入框 14px × 1.6 = 22.39px/行
+      // （内边距 8+8），1 行的真实内容高度是 38.39px，却被报成 38。把 38 写回
+      // `box-sizing: border-box`（base.css 的 `*`）的 `height`，内容盒就比那一行矮
+      // 0.39px —— 这是真的溢出，`overflow-y: auto` 于是没撑到 max-height 也能画出滚动条。
+      // 所以除了边框 / 横向滚动条（`offsetHeight - clientHeight`），再补 1px 取整余量：
+      // 写出的高度永远不低于真实内容高度，滚动条只在内容真的超过 max-height 时出现。
       const extra = element.offsetHeight - element.clientHeight;
       const maxPx = resolveMaxPx(element, maxHeightVar);
-      element.style.height = `${Math.min(element.scrollHeight + extra, maxPx)}px`;
+      element.style.height = `${Math.min(element.scrollHeight + extra + 1, maxPx)}px`;
     }, [maxHeightVar]);
 
     useLayoutEffect(() => {
-      // value 变化 → scrollHeight 变化，需重算高度。
+      // value 变化 → 内容高度变化，需重算。
       void value;
       resize();
     }, [resize, value]);
