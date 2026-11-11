@@ -168,11 +168,8 @@ function TranscriptMessage({
       )}
       {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。 */}
       {reasoning !== undefined && <ReasoningBlock text={reasoning} streaming={false} />}
-      {message.content && (
-        <MessageFold>
-          <Markdown className="msg-text" text={message.content} />
-        </MessageFold>
-      )}
+      {/* 助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
+      {message.content && <Markdown className="msg-text" text={message.content} />}
       {hasMeta || actions.length > 0 ? (
         <MessageActions className="mt-1" actions={actions} meta={meta} />
       ) : null}

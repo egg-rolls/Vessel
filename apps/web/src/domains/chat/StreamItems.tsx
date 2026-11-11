@@ -69,14 +69,16 @@ const NO_ACTIONS: readonly MessageAction[] = [];
  * 旧的 `<div className="msg-text live-text">` 已删除：`.live-text` 没有任何样式，
  * 保留它反而让流式与落盘的 class 列表不一致。
  *
- * 「唯一容器」同时承担另外两件事（都写在里层，别往调用方搬 —— 搬出去就又成了第二份
- * `msg-assistant > div.msg-text` 手写结构）：
- * - **长消息折叠**：正文包 `MessageFold streaming={streaming}`。收字期间不裁切
- *   （否则正文每长一段就折/展一次），run 落定后按同一阈值折（阈值见 tokens.css 的
- *   `--msg-fold-max-h`）。
- * - **入场动画**：`entering` 时外层加 `.msg-enter`。只给「事件流里新追加」的 item
- *   （判定见 `components/ui/useEnteringItemKeys.ts`）；容器在 streaming 翻转前后不变，
- *   所以类名只在挂载那一次生效，run 结束不会重播。
+ * 「唯一容器」还承担**入场动画**：`entering` 时外层加 `.msg-enter`（写在里层，别往调用方
+ * 搬 —— 搬出去就又成了第二份 `msg-assistant > div.msg-text` 手写结构）。只给「事件流里
+ * 新追加」的 item（判定见 `components/ui/useEnteringItemKeys.ts`）；容器在 streaming
+ * 翻转前后不变，所以类名只在挂载那一次生效，run 结束不会重播。
+ *
+ * **这里不做长消息折叠**（0.50 起收窄折叠作用面）：助手正文是 `.msg-assistant`
+ * —— 没有底色气泡包裹的纯正文，按用户裁定「有背景包裹的气泡才收」不折。折叠只留给
+ * 有底色的气泡：实时用户气泡 `UserBubble`、历史用户气泡（`Transcript.tsx`）、团队页气泡
+ * （`TeamMessageRow`，`.team-message-bubble` 有底色）。不要把 `MessageFold` 加回来 ——
+ * 无底正文被裁到 400px + 渐隐没有任何视觉锚点，读者看不到「这是一段被收起的话」。
  */
 export function AssistantText({
   text,
@@ -94,9 +96,7 @@ export function AssistantText({
 }) {
   return (
     <div className={cn('msg-assistant group max-w-full', entering && 'msg-enter')}>
-      <MessageFold streaming={streaming}>
-        <Markdown className="msg-text" text={text} streaming={streaming} />
-      </MessageFold>
+      <Markdown className="msg-text" text={text} streaming={streaming} />
       {actions}
     </div>
   );
@@ -121,7 +121,8 @@ export function UserBubble({
       )}
     >
       <div className="msg-bubble">
-        {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。 */}
+        {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。
+            只有这种**有底色气泡**（`.msg-bubble`）才折；无底正文（助手）不折。 */}
         <MessageFold>{text}</MessageFold>
       </div>
       {/* 与落盘后的用户气泡同一套：时间在 hover 元信息位，不在气泡里。 */}
@@ -371,7 +372,7 @@ export const RunItems = memo(function RunItems({
       {liveReasoning && <ReasoningBlock text={liveReasoning} streaming />}
       {/* 收字尾巴：**不播入场**。它不是「追加的一项」—— 每 flush 一段正文它就被摘下再挂上
           （item 落位后尾巴清空，下一个 token 又出现），播了就是反复淡入；flush 落位的那份
-          由 items 里的 AssistantText 负责。折叠仍按 streaming 关掉（正文还在长）。 */}
+          由 items 里的 AssistantText 负责。助手正文本身不折叠（见 AssistantText 头注释）。 */}
       {liveText && <AssistantText text={liveText} streaming />}
       {/* minimal 档的在飞工具：一行状态（工具名 + 运行中），不带参数 / 输出；
           工具结束或 run 结束即消失（判定见 chat-visibility#runningToolHint）。 */}
@@ -390,7 +391,7 @@ export const RunItems = memo(function RunItems({
         </div>
       )}
       {completedOutput !== undefined && !outputAlreadyShown && (
-        // 同一容器：`run.completed.output` 兜底的那段正文也是助手正文（长文同样要折）。
+        // 同一容器：`run.completed.output` 兜底的那段正文也是助手正文（同样不折）。
         <AssistantText
           text={completedOutput}
           actions={

@@ -23,6 +23,8 @@
 
 ### Changed
 
+- **长消息折叠只给有底色的气泡**：会话页助手正文（`AssistantText`，无底色）与
+  `AgentMessageCard` 展开体不再折叠；用户气泡与团队页气泡（有底色包裹）行为不变。
 - **默认系统提示词**：未配置 `agent.systemPrompt` 时不再注入内置文本（Self Card 保留）。
 - **Team 默认锚点**：TUI/gateway 共用 `<dataDir>/default`，不再按各自 cwd 建多个默认 Team。
 - **Web 外壳**：去掉 AppBar 的 Vessel 字标，路由改用字标样式；暗色表头/内容底色互换。

@@ -261,8 +261,9 @@
 
 /* ── 消息入场 + 长消息折叠（会话页 / 团队页共用同一套 class） ──────────
 
-   两页都只有这一份实现（`.msg-enter` / `.msg-fold*`）：会话页的 `.msg-user` /
-   `.msg-assistant` 与团队页的 `.team-message-bubble` 都挂在这套 class 上，别复制第二份。
+   两页都只有这一份实现（`.msg-enter` / `.msg-fold*`）：入场挂在会话页的 `.msg-user` /
+   `.msg-assistant` 与团队页的行容器上；折叠只挂**有底色气泡**（会话页 `.msg-bubble`、
+   团队页 `.team-message-bubble`），别复制第二份。
 
    入场：`.msg-enter` 只挂**本次新追加**的项上（判定见 components/ui/useEnteringItemKeys.ts
    与会话页 live item 的口径），挂载即播一次；CSS 动画按 DOM 节点播，重渲染复用同一个
@@ -270,8 +271,8 @@
    关掉动效时直接显示：没有位移、没有淡入。
 
    折叠：超过 --msg-fold-max-h 就裁到该高度（判定的唯一来源是同一个 CSS 变量，见
-   components/ui/MessageFold.tsx），底部用 mask 渐隐而不是盖一层底色 —— 气泡底色有三套
-   （accent-soft / sunken / 无底色），盖色块要么对不上，要么再多一份变量。
+   components/ui/MessageFold.tsx），底部用 mask 渐隐而不是盖一层底色 —— 气泡底色有两套
+   （accent-soft / sunken），盖色块要么对不上，要么再多一份变量。
    折叠只改显示：DOM 里始终是全文，复制拿到的永远是原文。 */
 
 @keyframes msg-in {

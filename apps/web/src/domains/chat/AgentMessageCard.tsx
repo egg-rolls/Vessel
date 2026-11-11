@@ -14,7 +14,7 @@
  *
  * 历史消息没有 `name`（0.50 之前投递的 A2A 消息），继续按用户气泡渲染，不做回填。
  */
-import { cn, MessageFold } from '../../components/ui';
+import { cn } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -83,13 +83,12 @@ export function AgentMessageCard({
           )}
         </div>
       )}
-      {/* 卡头已经是「单行摘要 + 展开看全文」的那一层；展开体里的正文再按同一套阈值折
-          （`MessageFold`），超长的 A2A 正文不必先滚完才能读到尾巴。 */}
-      <MessageFold>
-        <p className="m-0 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">
-          {content}
-        </p>
-      </MessageFold>
+      {/* 卡头已经是「单行摘要 + 展开看全文」的那一层，展开体里直接是全文：不再套
+          `MessageFold`（卡片有底色，但它是「卡片」不是气泡，按折叠口径
+          「有背景包裹的气泡才折」不折；两级结构仍由 StreamCard 提供）。 */}
+      <p className="m-0 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">
+        {content}
+      </p>
     </StreamCard>
   );
 }
