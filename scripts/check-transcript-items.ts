@@ -1233,6 +1233,154 @@ const FIXTURES: readonly Fixture[] = [
       );
     },
   },
+  // --- 0.52 失败卡（run-error-visible） ---
+  {
+    name: 'F21 失败卡落位：run 有正文/工具后 run.failed → run:<runId>:failure 是该 run 最后一个 item，ts 取自 run.failed',
+    why: '失败此前只活在 RunItems（子 agent 面板）里，主时间线没有任何失败信号；位置若缺 ts 或取错时刻，卡会沉到会话底部或排到本轮正文之上',
+    check: () => {
+      const store = new EventStore(0);
+      let seq = 0;
+      const push = (type: string, data: Record<string, unknown>) => {
+        seq += 1;
+        // run.failed 是第 5 条 → ts = 1005（本 fixture 断言的就是这个终态时刻）。
+        store.push({ type, run_id: 'r-fail', data, ts: 1000 + seq } as never, { seq });
+      };
+      push('run.started', { run_id: 'r-fail', session_id: 's1', input: 'go' });
+      push('llm.stream.chunk', {
+        run_id: 'r-fail',
+        chunk: { type: 'text_delta', delta: 'half answer' },
+      });
+      push('tool.call.started', {
+        run_id: 'r-fail',
+        tool_call_id: 'c1',
+        tool_name: 'bash',
+        arguments: {},
+      });
+      push('tool.call.completed', {
+        run_id: 'r-fail',
+        tool_call_id: 'c1',
+        tool_name: 'bash',
+        result: 'ok',
+        duration_ms: 1,
+      });
+      push('run.failed', {
+        run_id: 'r-fail',
+        session_id: 's1',
+        error: 'provider 429: rate limited',
+        error_code: 'rate_limited',
+        category: 'provider',
+        phase: 'llm',
+        retryable: true,
+        duration_ms: 2500,
+      });
+      store.flush();
+      const snapshot = store.getSnapshot();
+      const cache = new EventGroupCache();
+      const groups = cache.group(snapshot.entries, false, 'user', snapshot.truncatedSince);
+      const items = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups: groups,
+        queued: [],
+      });
+      const cards = items.filter((item) => item.kind === 'run-failure');
+      const card = cards[0];
+      return (
+        cards.length === 1 &&
+        card !== undefined &&
+        card.kind === 'run-failure' &&
+        card.key === 'run:r-fail:failure' &&
+        card.source === 'event' &&
+        card.error === 'provider 429: rate limited' &&
+        card.errorMeta?.code === 'rate_limited' &&
+        card.errorMeta?.retryable === true &&
+        // 终态时刻（run.failed 的 ts），不是 undefined —— 后者会被规则「缺 ts 排最后」沉底。
+        card.ts === 1005 &&
+        // 该 run 的最后一个 item：输入 → 正文 → 工具卡 → 失败卡。
+        keys(items).join(',') === 'run:r-fail:input,run:r-fail:text:0,tool:c1,run:r-fail:failure'
+      );
+    },
+  },
+  {
+    name: 'F22 快照来源与去重：只有会话快照也出卡（ts=completed_at）；同 run 只一张；failed 后 completed 不出卡',
+    why: '历史消息不带失败信息、事件缓冲有界（刷新 / 切会话后 run.failed 可能已不在回放窗口）；快照与事件流共用 run:<runId>:failure，两个来源不许出两张卡',
+    check: () => {
+      const snapshot = {
+        runId: 'r-old',
+        sessionId: 's1',
+        error: 'boom',
+        completedAt: 2000,
+        source: 'session' as const,
+      };
+      // (a) 只有会话快照：缓冲里没有这个 run 的任何分组。
+      const onlySnapshot = buildTranscriptItems({
+        messages: [
+          msg('user', 'q1', { timestamp: 1000 }),
+          msg('assistant', 'a1', { timestamp: 1500 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+        sessionFailure: snapshot,
+      });
+      // (b) 事件流里已有同 runId 的分组 → 事件流优先，只出一张。
+      const both = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r-old',
+            status: 'failed',
+            startedAt: 1000,
+            completedAt: 2000,
+            error: 'live error',
+          }),
+        ],
+        queued: [],
+        sessionFailure: snapshot,
+      });
+      // (c) failed 之后又 completed（session-liveness 误判）：终态以最后一次为准，不出卡。
+      const store = new EventStore(0);
+      let seq = 0;
+      const push = (type: string, data: Record<string, unknown>) => {
+        seq += 1;
+        store.push({ type, run_id: 'r-flap', data, ts: 3000 + seq } as never, { seq });
+      };
+      push('run.started', { run_id: 'r-flap', session_id: 's1', input: 'go' });
+      push('run.failed', { run_id: 'r-flap', error: 'run lost' });
+      push('run.completed', { run_id: 'r-flap', output: 'ok' });
+      store.flush();
+      const snapshotAfter = store.getSnapshot();
+      const cache = new EventGroupCache();
+      const flapped = buildLiveItems(
+        cache.group(snapshotAfter.entries, false, 'user', snapshotAfter.truncatedSince),
+      );
+
+      const cards = onlySnapshot.filter((item) => item.kind === 'run-failure');
+      const a = cards[0];
+      const bothCards = both.filter((item) => item.kind === 'run-failure');
+      const b = bothCards[0];
+      return (
+        // (a) 快照卡：ts 取 completed_at，落在该轮消息之后。
+        cards.length === 1 &&
+        a !== undefined &&
+        a.kind === 'run-failure' &&
+        a.key === 'run:r-old:failure' &&
+        a.source === 'session' &&
+        a.ts === 2000 &&
+        keys(onlySnapshot).join(',') === 'msg:0,msg:1,run:r-old:failure' &&
+        // (b) 同 run 恰好一张，且是事件流那条。
+        bothCards.length === 1 &&
+        b !== undefined &&
+        b.kind === 'run-failure' &&
+        b.key === 'run:r-old:failure' &&
+        b.source === 'event' &&
+        b.error === 'live error' &&
+        // (c) failed → completed 不留假失败卡。
+        flapped.every((item) => item.kind !== 'run-failure')
+      );
+    },
+  },
 ];
 
 const failures: { name: string; why: string }[] = [];
