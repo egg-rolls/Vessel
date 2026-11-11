@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { type ReactNode, memo, useMemo } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip, StatusGlyph } from '../../components/StatusChip';
@@ -46,6 +46,37 @@ export interface QueuedSubmission {
 
 /** 实时气泡没有操作项：只借 MessageActions 的时间位与 hover 显隐规则。 */
 const NO_ACTIONS: readonly MessageAction[] = [];
+
+/**
+ * 助手正文的**唯一**容器：`msg-assistant > div.markdown.msg-text`。
+ *
+ * 为什么必须只有一个：流式与落盘若各写一份外层，run 结束那一刻就会出现
+ * 「容器换了一个形态」的跳动（高度 / hover 区 / 块元素的 margin 都会变）。
+ * 现在流式（`streaming`）与非流式走完全相同的 DOM：`run-text` item 的 key 在 flush
+ * 前后不变（`run:<runId>:text:<n>`，由 check-transcript-items 的 F2 钉死），
+ * 所以结束时 React 复用同一批节点，只是把 `streaming` 从 true 翻成 false。
+ *
+ * 旧的 `<div className="msg-text live-text">` 已删除：`.live-text` 没有任何样式，
+ * 保留它反而让流式与落盘的 class 列表不一致。
+ */
+export function AssistantText({
+  text,
+  streaming = false,
+  actions,
+}: {
+  text: string;
+  /** 仍在流式收字：节流 + 未闭合块的保守降级（见 components/Markdown.tsx）。 */
+  streaming?: boolean;
+  /** 操作行（复制 / 重试）；运行态不传，避免停在文字下方的一条会变的控件。 */
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="msg-assistant group max-w-full">
+      <Markdown className="msg-text" text={text} streaming={streaming} />
+      {actions}
+    </div>
+  );
+}
 
 export function UserBubble({ text, ts }: { text: string; ts?: number }) {
   const clock = formatClock(ts);
@@ -178,9 +209,13 @@ export const RunItems = memo(function RunItems({
     group.status === 'cancelled' || (cancelled && group.status === 'failed')
       ? 'cancelled'
       : group.status;
-  // 流式与取消态都按纯文本渲染：run 终止的瞬间不把同一段文字换成 Markdown +
-  // 操作行，避免打断（stop）时整段高度突变导致滚动区跳动。
-  const plainText = group.status === 'running' || status === 'cancelled';
+  // 流式**只表示“还在收字”**，不再决定用哪种渲染：正文一律 Markdown（见 AssistantText）。
+  // 之前这里用 `plainText` 把 running / cancelled 整段降级成纯文本，于是 run 结束瞬间
+  // 整段重排；取消态更糟——文字会从 md 退回到纯文本。
+  const streamingText = group.status === 'running';
+  // 操作行只在 run 落定后出现（与之前 `!plainText` 的判定等价）：停止 / 取消时不留
+  // 一根悬在文字下方、随后会变的控件。
+  const showActions = !streamingText && status !== 'cancelled';
   // 流式文本已经渲染在 items 里时，不再重复显示 run.completed.output。
   const inlineText = group.items
     .filter((item): item is { kind: 'text'; text: string; key: string } => item.kind === 'text')
@@ -256,21 +291,25 @@ export const RunItems = memo(function RunItems({
         }
         if (item.kind === 'text') {
           return (
-            <div className="msg-assistant group max-w-full" key={item.key}>
-              {plainText ? (
-                <div className="msg-text">{item.text}</div>
-              ) : (
-                <Markdown className="msg-text" text={item.text} />
-              )}
-              {!plainText && item.text.trim().length > 0 && (
-                <MessageActions
-                  className="mt-1"
-                  actions={[
-                    { id: 'copy', label: t('chat.message.copy'), onSelect: () => copy(item.text) },
-                  ]}
-                />
-              )}
-            </div>
+            <AssistantText
+              key={item.key}
+              text={item.text}
+              streaming={streamingText}
+              actions={
+                showActions && item.text.trim().length > 0 ? (
+                  <MessageActions
+                    className="mt-1"
+                    actions={[
+                      {
+                        id: 'copy',
+                        label: t('chat.message.copy'),
+                        onSelect: () => copy(item.text),
+                      },
+                    ]}
+                  />
+                ) : undefined
+              }
+            />
           );
         }
         if (item.kind === 'tool') {
@@ -289,11 +328,7 @@ export const RunItems = memo(function RunItems({
         return <EventRow key={item.key} event={item.event} defaultOpen={cardsDefaultOpen} />;
       })}
       {liveReasoning && <ReasoningBlock text={liveReasoning} streaming />}
-      {liveText && (
-        <div className="msg-assistant max-w-full">
-          <div className="msg-text live-text">{liveText}</div>
-        </div>
-      )}
+      {liveText && <AssistantText text={liveText} streaming />}
       {/* minimal 档的在飞工具：一行状态（工具名 + 运行中），不带参数 / 输出；
           工具结束或 run 结束即消失（判定见 chat-visibility#runningToolHint）。 */}
       {toolHint && (

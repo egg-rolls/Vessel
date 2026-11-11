@@ -43,8 +43,20 @@ function startsBlock(lines: string[], index: number): boolean {
   return line.includes('|') && next !== undefined && TABLE_SEPARATOR.test(next);
 }
 
+/** 解析选项（只有流式入口需要；历史 / 落盘渲染保持默认值）。 */
+export interface MarkdownParseOptions {
+  /**
+   * 这段文本仍在流式增长（尚未落盘）。
+   *
+   * 唯一影响：**吃到了正文末尾的表格**先按纯文本降级（见下）。别的东西不解构：
+   * - 未闭合的 fenced code 本来就由下面的 `while` 吃到 EOF，正文一行不丢；
+   * - 未闭合的 `**` / `*` / `[` / `` ` `` 由 `parseInline` 原样当文本保留（不吞字、不抛错）。
+   */
+  streaming?: boolean;
+}
+
 /** 解析块级 Markdown；容忍未闭合的 fenced code（流式尾部）。 */
-export function parseMarkdown(source: string): MarkdownBlock[] {
+export function parseMarkdown(source: string, options?: MarkdownParseOptions): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/g, '\n').split('\n');
   const blocks: MarkdownBlock[] = [];
   let index = 0;
@@ -101,6 +113,7 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
 
     const next = lines[index + 1];
     if (line.includes('|') && next !== undefined && TABLE_SEPARATOR.test(next)) {
+      const tableStart = index;
       const header = splitTableRow(line);
       const rows: string[][] = [];
       index += 2;
@@ -109,6 +122,22 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
         if (row.trim() === '' || !row.includes('|')) break;
         rows.push(splitTableRow(row));
         index += 1;
+      }
+      // 流式**降级**：表格还没闭合时先按纯文本渲染。
+      //
+      // 「闭合」= 表格之后出现了别的块（哪怕只剩空行也无所谓——模型换行继续写下一行
+      // 数据时不能判成闭合，否则表格 / 纯文本会随每个 chunk 反复横跳）。
+      // 判据取「后面还有非空行」而不是「吃到了 EOF」：流式 chunk 常常正好断在换行之后。
+      //
+      // 代价：半张表期间用户看到的是一行行 `| a | b |` 原文（列宽不动）；表格写完
+      // （模型开始写下一段 / run 结束）时**一次**变成 <table>。相比直接上表，这是
+      // 更小的视觉成本：半张表每来一行都可能触发列宽重算与横向滚动条出现/消失。
+      let rest = index;
+      while (rest < lines.length && (lines[rest] ?? '').trim() === '') rest += 1;
+      if (options?.streaming === true && rest >= lines.length) {
+        blocks.push({ type: 'paragraph', text: lines.slice(tableStart, rest).join('\n') });
+        index = rest;
+        continue;
       }
       blocks.push({ type: 'table', header, rows });
       continue;

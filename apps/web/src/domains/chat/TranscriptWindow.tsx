@@ -1,5 +1,4 @@
 import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
-import { Markdown } from '../../components/Markdown';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { Button } from '../../components/ui';
 import type { Message } from '../../gateway/types';
@@ -16,7 +15,13 @@ import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
-import { QueuedNotice, type QueuedSubmission, RunFailureCard, UserBubble } from './StreamItems';
+import {
+  AssistantText,
+  QueuedNotice,
+  type QueuedSubmission,
+  RunFailureCard,
+  UserBubble,
+} from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
 import { ToolCard } from './ToolCard';
 import { Transcript } from './Transcript';
@@ -248,15 +253,10 @@ export function TranscriptWindow({
         // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
         return <AskAnswerCard card={item.card} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
       case 'run-text':
-        return item.streaming ? (
-          <div className="msg-assistant max-w-full">
-            <div className="msg-text live-text">{item.text}</div>
-          </div>
-        ) : (
-          <div className="msg-assistant group max-w-full">
-            <Markdown className="msg-text" text={item.text} />
-          </div>
-        );
+        // 正文只有一个形态：流式（`streaming`）与落盘都走 AssistantText → Markdown，
+        // 外层 class / 内层块结构完全相同；run 结束时只是 streaming 翻成 false
+        // （key 在 flush 前后不变，见 check-transcript-items 的 F2），DOM 原地复用。
+        return <AssistantText text={item.text} streaming={item.streaming} />;
       case 'run-reasoning':
         return (
           <ReasoningBlock

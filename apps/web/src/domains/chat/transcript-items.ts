@@ -127,7 +127,13 @@ export interface RunTextItem extends ItemMeta {
   kind: 'run-text';
   runId: string;
   text: string;
-  /** 这段正文是否仍在流式（决定 Markdown vs 纯文本）。 */
+  /**
+   * 这段正文是否仍在流式收字。
+   *
+   * 只影响 Markdown 的渲染策略（分档节流 + 未闭合块的保守降级，见
+   * components/Markdown.tsx）；**不再**决定 Markdown vs 纯文本 —— 流式与落盘共用
+   * 同一个组件，否则 run 结束那一刻整段会重排。
+   */
   streaming: boolean;
 }
 
