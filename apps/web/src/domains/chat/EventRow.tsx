@@ -2,6 +2,7 @@ import { formatTimestamp, formatTokenCount } from '../../format';
 import type { RunEvent } from '../../gateway/types';
 import { t } from '../../i18n';
 import { errorMetaOf, formatErrorMeta } from '../../state/error-visibility';
+import { tierOf } from '../../state/event-visibility';
 import { eventTag } from '../../state/events';
 import { StreamCard } from './StreamCard';
 
@@ -323,8 +324,49 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
           : event.type;
       return { tone: 'info', text: t('chat.notice.hook', { name }) };
     }
+    // 「旧身体这一轮回复产出过、但被 epoch fencing 丢弃」的唯一解释：团队日志对已退役
+    // Binding 的 run.completed 是**显式抑制**的，所以这段话为什么没出现，只有这里能说。
+    case 'agent.reply.stale': {
+      return {
+        tone: 'warn',
+        text: t('chat.notice.replyStale', {
+          message: shortId(data.message_id),
+          epoch: numberOf(data.epoch) ?? '?',
+        }),
+      };
+    }
+    // 旧身体退役：`reason`（rotate / restart / close / 回收）只在这条事件的 data 里
+    // （服务端 `body_history` DTO 没有这个字段），所以 notice 必须把它念出来，
+    // 不能只剩一句「已退役」。
+    case 'agent.retired': {
+      return {
+        tone: 'info',
+        text: t('chat.notice.retired', {
+          reason: typeof data.reason === 'string' && data.reason.length > 0 ? data.reason : '?',
+          epoch: numberOf(data.epoch) ?? '?',
+          body: shortId(data.body_id),
+        }),
+      };
+    }
+    // rotate 审批被拒：拒绝原因（`denied_by_human` / `no_human_channel`）与当时的
+    // 上下文水位只在这条事件的 data 里。
+    case 'agent.rotate.denied': {
+      return {
+        tone: 'warn',
+        text: t('chat.notice.rotateDenied', {
+          reason: typeof data.reason === 'string' && data.reason.length > 0 ? data.reason : '?',
+          percent: numberOf(data.context_percent) ?? '?',
+        }),
+      };
+    }
     default:
-      return null;
+      // **未登记的类型**（第三方插件 / 上游事件 / 旧 trace）：`buildGroup` 的 default
+      // 分支把它落成 notice 而不是原始事件卡，这里给出唯一的「未知事件类型 · 已折叠」
+      // 文案 —— 展开区仍是原始载荷，但时间线上绝不出现裸 JSON。
+      // 已登记但没有 typed notice 的类型返回 null，由调用方退回原始事件行（摘要逐类型给）。
+      return tierOf(event.type) === undefined
+        ? { tone: 'info', text: t('chat.notice.unknownEvent', { type: event.type }) }
+        : null;
   }
 }
 

@@ -35,6 +35,14 @@ applies_to: [N, M]
   待批页「一起提交」的整批答案由 gateway 合并成**一条** user 消息（前缀里逗号分隔多个
   requestId），每行是 `header（原问题摘要）: 答案`；卡片把原问题印在答案上方，卡头摘要
   仍是第一题的 header（不因加长而变高）。
+- 事件可见性只有一张表（`apps/web/src/state/event-visibility.ts` 的 `EVENT_TIERS`，三档
+  `content` / `internal` / `observe`）：`content` 恒可见、`observe` 恒不可见（与开关无关）、
+  `internal` 随 `ui.showInternalEvents` / `verbosity: debug`；**未登记的类型按 `internal`
+  折叠成「未知事件类型 · 已折叠」notice，绝不落裸 JSON 卡**。新增事件名先登记，并在
+  `docs/architecture/events.md` 的 `event-visibility` marker 表写一行；跑
+  `bun run check:event-visibility`（未登记 / 表腐烂（live 却扫不到）/ 家族漂移 /
+  团队日志双链漂移 / 文档与表不一致 → FAIL）。**不要在 `EventRow` / `StreamItems` /
+  `run-detail` 另写可见性判断**（`run-detail` 的 internal 桶也从 `tierOf` 派生）。
 - 所有 transient 提示 / banner / 交互摘要统一经 AppBar 中心 `MessageBar`；`ToastProvider`
   只提供 API，不渲染，禁止新增 fixed toast / 浮层（见 [WEB-UI.md](../WEB-UI.md) 硬规则 7）。
 - 不用 `backdrop-filter` 做层级；层级靠边框与阴影表达（ADR-072/082）。

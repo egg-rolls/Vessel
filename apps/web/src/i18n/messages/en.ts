@@ -1174,6 +1174,15 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.finalizeFailed': 'run finalize failed · phase {phase} · {error}',
   'chat.notice.guardrailError': 'guardrail error · {name} · phase {stage} · {error}',
   'chat.notice.runtime': 'System notice · {kind}',
+  // Retired body / discarded reply / denied rotate: without a typed notice these three
+  // would lose information the moment they are hidden.
+  'chat.notice.replyStale':
+    'reply not used · old body retired · epoch {epoch} · message {message}',
+  'chat.notice.retired': 'old body retired · {reason} · epoch {epoch} · body {body}',
+  'chat.notice.rotateDenied': 'context rotate denied · {reason} · at {percent}%',
+  // Types the gate cannot see (third-party plugins / upstream events / old traces):
+  // one collapsed line, never a raw JSON card.
+  'chat.notice.unknownEvent': 'unknown event type · collapsed · {type}',
   // Environment card (the default shape of vessel:notice): coexists with raw system
   // events, but this is the human-facing mode.
   'chat.env.aria': 'Environment',
