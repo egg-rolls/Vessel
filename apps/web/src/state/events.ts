@@ -118,6 +118,12 @@ export interface RunGroup {
  * - 判据只有一句：进集合 ⇔ 默认档隐藏（失败类 `hook.failed` / `hook.error` 仍走
  *   `errorLevel`，永不进集合）。主内容（`llm.stream.chunk`、`tool.call.*`、
  *   `run.*` 终态、`user.message`）**永不进集合**。
+ * - **两个集合的分工**：本集合 = 「默认档隐藏，展开后（`ui.showInternalEvents` /
+ *   `verbosity=debug`）仍以原始事件行出现」的状态同步；`CHAT_HIDDEN_EVENT_TYPES`
+ *   = 「聊天窗无条件不展示」的会话 / 成员**元数据审计**（`session.created` /
+ *   `session.activated` / `session.rewound` / `session.titled` …）。审计事件的归宿
+ *   只有 Observe / Runs：不要因为「它也能被 showInternal 放出来」就塞进本集合，
+ *   否则打开「显示系统信息」后聊天里会重新冒出原始 JSON 卡。
  */
 export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'context.changed',
@@ -152,13 +158,22 @@ export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 只属于观察面（Observe / Runs）的成员事件：聊天窗无条件不展示。
+ * 只属于观察面（Observe / Runs）的事件：聊天窗无条件不展示。
  *
- * 这些事件的 `run_id` 是成员 / 队列入队 id，不是 run id，落进聊天时间线只会变成
- * 与对话无关的原始 JSON 卡。用显式集合而不是 `hasRunEvent` 推断：成员事件将来
- * 若补上 `data.run_id`，也不能重新漏进聊天窗。lifecycle notice
+ * 判据是**内容性质**，不是「默认档是否隐藏」：会话 / 成员的**元数据审计**（创建、
+ * 激活、改名、rewind）既不是对话内容，也没有 typed notice 承接，落成事件卡就只是
+ * 一坨原始 JSON。因此本集合的成员**不受 `ui.showInternalEvents` 影响**——打开
+ * 「显示系统信息」也不进聊天（`debug` 同理），只在 Observe / Runs 查看；这也是它
+ * 与 `INTERNAL_EVENT_TYPES`（默认隐藏、展开可见）的分工。
+ *
+ * 这些事件的 `run_id` 通常是成员 / 队列入队 id 或常量伪 run id（`session` /
+ * `runtime` / `config` / `plugins`），不是 run id。用显式集合而不是 `hasRunEvent`
+ * 推断：成员事件将来若补上 `data.run_id`，也不能重新漏进聊天窗。lifecycle notice
  * （`agent.limit.warning` / `agent.rotating` / `agent.rotated` / `agent.restarting` /
  * `agent.restarted` / `agent.compact_forked`）不在此列，聊天窗继续显示。
+ *
+ * 隐藏的是**条目**而不是分组：`groupEvents` / `EventGroupCache` 在过滤阶段就丢掉这些
+ * 事件，伪 run 组若因此没有任何剩余条目，整组不会进入分组表（不留空组 / 空 item）。
  */
 export const CHAT_HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set([
   // 0.39：session 创建 / 源退役 / primary 切换审计事件不是对话内容。
@@ -171,6 +186,9 @@ export const CHAT_HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent.forked',
   // rewind 是历史删除的持久化标记，不是对话内容：永不渲染。
   'session.rewound',
+  // AI 命名成功（`{session_id,title}`，run_id 恒为常量 `session`）是会话元数据审计：
+  // 标题已经由会话头 / 会话列表展示，聊天窗不该再落一张原始 JSON 卡。
+  'session.titled',
   'agent.spawned',
   'agent.message.queued',
   'agent.message.sent',
