@@ -49,7 +49,7 @@ export function readLastTeamRecord(storage: Storage | null): LastTeamRecord | nu
     const slots: string[] = [];
     for (let index = 0; index < storage.length; index += 1) {
       const key = storage.key(index);
-      if (!key || !key.startsWith(LAST_TEAM_KEY_PREFIX)) continue;
+      if (!key?.startsWith(LAST_TEAM_KEY_PREFIX)) continue;
       slots.push(key);
     }
     slots.sort();
