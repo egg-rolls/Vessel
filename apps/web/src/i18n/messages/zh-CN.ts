@@ -1510,6 +1510,9 @@ export const messages = {
   'designLab.sample.buttons.desc': '全部变体：plain、primary、danger、dangerGhost、link、chip。',
   'designLab.sample.badges.name': 'Badge',
   'designLab.sample.badges.desc': '全部 tone：neutral、accent、info、warn、danger、success。',
+  'designLab.sample.statusIcons.name': '状态图标',
+  'designLab.sample.statusIcons.desc':
+    '状态图标对照：每个 StatusKind 一行，给出字形、本地化文案与 API / 配置里使用的原始状态值。会话列表只用到其中五个（会话五态），其余来自运行、节点与插件状态。颜色只是增强，语义始终由字形 + 文案承担。',
   'designLab.sample.section.name': 'Section',
   'designLab.sample.section.desc': '带标题、说明与可选动作的抬升面板。',
   'designLab.sample.form.name': 'Field / Input / Select',
@@ -1531,6 +1534,9 @@ export const messages = {
   'designLab.demo.table.name': '名称',
   'designLab.demo.table.status': '状态',
   'designLab.demo.table.owner': '负责人',
+  'designLab.demo.statusIcons.chips':
+    '完整形态（StatusChip：字形 + 文案 + 语义色底），即会话五种状态',
+  'designLab.demo.statusIcons.list': '全部状态：字形、文案、原始值（API / 配置里的字面量）',
   'designLab.demo.section.title': '区块标题',
   'designLab.demo.section.description': '说明文字：同一区域只叠一层表面。',
   'designLab.demo.section.body': '内容与标题之间用间距分组，不画分隔线。',

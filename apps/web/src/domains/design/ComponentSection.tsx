@@ -18,6 +18,8 @@ import {
 } from '@vessel-agent/plugin-ui';
 import { type ReactNode, useState } from 'react';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
+import { STATUS_META, StatusChip, StatusGlyph, statusLabel } from '../../components/StatusChip';
+import type { StatusKind } from '../../gateway/types';
 import { t } from '../../i18n';
 
 interface SampleRow {
@@ -50,6 +52,22 @@ const BADGE_TONES: readonly BadgeTone[] = [
   'danger',
   'success',
 ];
+
+/**
+ * 状态图标对照：全量清单直接遍历 `STATUS_META` 的 keys，这里不另存一份状态表。
+ * `SESSION_CHIP_SAMPLES` 只决定「哪几个放进带底色的 chip 演示行」——会话列表实际会
+ * 出现的 `SessionStatus` 五态（`packages/core/src/types/session.ts`），顺带覆盖全部
+ * tone；成员判断仍以 `STATUS_META` 为准，新增 StatusKind 会自动出现在下方全量表。
+ */
+const SESSION_CHIP_SAMPLES: readonly StatusKind[] = [
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+];
+
+const STATUS_KINDS = Object.keys(STATUS_META) as StatusKind[];
 
 const SAMPLE_TABS = [
   { id: 'overview', labelKey: 'designLab.demo.tabs.overview' },
@@ -181,6 +199,34 @@ export function ComponentSection() {
               {tone}
             </Badge>
           ))}
+        </div>
+      </Sample>
+
+      <Sample
+        name={t('designLab.sample.statusIcons.name')}
+        description={t('designLab.sample.statusIcons.desc')}
+      >
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <p className="text-sm font-medium text-ink">{t('designLab.demo.statusIcons.chips')}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              {SESSION_CHIP_SAMPLES.map((kind) => (
+                <StatusChip key={kind} status={kind} />
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <p className="text-sm font-medium text-ink">{t('designLab.demo.statusIcons.list')}</p>
+            <ul className="m-0 flex list-none flex-col gap-1 p-0">
+              {STATUS_KINDS.map((kind) => (
+                <li key={kind} className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                  <StatusGlyph status={kind} showCompleted />
+                  <span className="text-md text-ink">{statusLabel(kind)}</span>
+                  <span className="font-mono text-2xs text-faint">{kind}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       </Sample>
 

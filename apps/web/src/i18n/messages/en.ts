@@ -1021,14 +1021,17 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pending.unread': 'Unread',
   'chat.pending.peeking': 'Loading…',
   'chat.pending.more': '{count} more not shown',
-  'chat.pending.footer': 'Priority only lasts for this run; after a restart messages follow arrival order.',
+  'chat.pending.footer':
+    'Priority only lasts for this run; after a restart messages follow arrival order.',
   'chat.pending.pin': 'Pin and interrupt the current run',
   'chat.pending.pinConfirmTitle': 'Pin this message?',
   'chat.pending.pinConfirmBody':
     'Pinning moves this message to the head of the queue and immediately cancels the run that is currently executing (queued messages follow in their original order).',
   'chat.pending.pinConfirmOk': 'Pin and interrupt',
-  'chat.pending.pinDone': 'Pinned: the current run was cancelled and this message is first in line.',
-  'chat.pending.pinFailed.permission': 'This session is waiting for a permission decision; resolve it first.',
+  'chat.pending.pinDone':
+    'Pinned: the current run was cancelled and this message is first in line.',
+  'chat.pending.pinFailed.permission':
+    'This session is waiting for a permission decision; resolve it first.',
   'chat.pending.pinFailed.resume': 'This session is resuming; try again in a moment.',
   'chat.pending.pinFailed.rotate': 'This session is rotating; try again in a moment.',
   'chat.pending.pinFailed.closed': 'This member is closed, so it cannot be pinned.',
@@ -1572,6 +1575,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Every variant: plain, primary, danger, dangerGhost, link and chip.',
   'designLab.sample.badges.name': 'Badge',
   'designLab.sample.badges.desc': 'Every tone: neutral, accent, info, warn, danger and success.',
+  'designLab.sample.statusIcons.name': 'Status icons',
+  'designLab.sample.statusIcons.desc':
+    'Status cross-reference: every StatusKind as glyph, localized label and the raw status literal the API and config use. Session lists only use five of them; the rest come from runs, nodes and plugins. Color is only an enhancement, so glyph and text always carry the meaning.',
   'designLab.sample.section.name': 'Section',
   'designLab.sample.section.desc': 'Raised panel with a title, description and optional actions.',
   'designLab.sample.form.name': 'Field / Input / Select',
@@ -1595,6 +1601,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.demo.table.name': 'Name',
   'designLab.demo.table.status': 'Status',
   'designLab.demo.table.owner': 'Owner',
+  'designLab.demo.statusIcons.chips':
+    'Full form (StatusChip: glyph, text, tone background) for the five states a session can be in',
+  'designLab.demo.statusIcons.list':
+    'Every status: glyph, label, raw value (the literal the API and config use)',
   'designLab.demo.section.title': 'Section title',
   'designLab.demo.section.description':
     'Description: one surface per region, never a card inside a card.',
