@@ -99,10 +99,13 @@ export interface InteractionsRegistryOptions {
   /**
    * 0.52：async ask 拿到**第一次**答案时通知调用方（投放答案 / 起新 run）。
    *
-   * 只在 `pending → answered` 那一次迁移上触发一次：RPC 应答
-   * （`respondAsk`）与流上应答（`ask.user.answered`，TUI / policy）两条路共用
-   * 这一个出口，因此同一次答案不会被投放两次。实现方必须自吞全部错误
-   * （答案已经落定，投放失败只退化为「只记录答案」）。
+   * **投放的唯一触发点**：RPC 应答（`respondAsk`）与流上应答
+   * （`ask.user.answered`，TUI / policy）两条路共用 `settleAnswer` 这一个出口，
+   * 而出口只在「记录此刻还是 pending」的那一次迁移上通知（见 `settleAnswer`）。
+   * 装配层不要在同一个注册表上挂两份，也不要再加第二条触发路径（比如让
+   * `ask.respond` 的 handler 自己再投一次）。同一条运行时流上并存多个 gateway
+   * 装配时，重复通知由 gateway 的进程级单飞去重（`asyncAnswerDeliveries`）。
+   * 实现方必须自吞全部错误（答案已经落定，投放失败只退化为「只记录答案」）。
    */
   onAsyncAskAnswered?: (record: StoredInteraction) => void;
 }
@@ -130,6 +133,15 @@ export interface InteractionsRegistry {
    * 返回 false = 记录不存在或还不是 answered。
    */
   markAnswerDelivered(requestId: string, deliveredAt: number): boolean;
+  /**
+   * 0.52：从**持久化文件**重读一条记录（只读，不改内存、不改格式）。
+   *
+   * 用途是「跨进程 / 跨重启兜底」：`interactionRecords` 只在启动 hydrate 时与磁盘
+   * 对齐，另一个进程（或本进程重启前的自己）写下的 `answer.delivered_at` 只存在于
+   * 文件里。投放前用它确认一次「这条答案是不是已经被投过了」。
+   * 读失败 / 无 store 一律返回 undefined（不阻断投放）。
+   */
+  peekPersistedAnswer(requestId: string): StoredInteraction | undefined;
 }
 
 /** 记录上限（防止长时间进程无界增长）；淘汰只碰非 pending。 */
@@ -271,15 +283,29 @@ export function createInteractionsRegistry(
    * **async ask 的第一次答案**时通知调用方投放（0.52）。
    *
    * 两条应答路径（RPC 的 `respondAsk` 与流上的 `ask.user.answered`）都走这里，
-   * 因此同一次答案只可能投放一次：另一条路径看到的记录已经不是 `pending`。
+   * 所以这里必须自己判定「这是不是真的那一次迁移」：
+   *
+   * - 流上应答：`recordStreamResponse` 进来时已经确认过 `status === 'pending'`；
+   * - RPC 应答：`respondAsk` 先把 `ask.user.answered` publish 到流上，原始订阅者
+   *   （hub → gateway → 本注册表）**同步**走一遍这里 —— 这一次才是真迁移；publish
+   *   返回后 `respondAsk` 自己还会再 settle 一次，而它手上的 `record` 是 publish
+   *   之前的快照（状态已过期）。
+   *
+   * 不判「此刻是否仍 pending」就会对同一次答案通知两次 → 装配层收到两个投放请求
+   * （0.52 的 async 答案双投就是这么来的：单看「都进 settleAnswer」并不等于只触发
+   * 一次）。返回值 = 本次是否真的是那次迁移。
    */
-  function settleAnswer(record: StoredInteraction, answer: StoredInteractionAnswer): void {
+  function settleAnswer(record: StoredInteraction, answer: StoredInteractionAnswer): boolean {
+    const current = interactionRecords.get(record.requestId);
+    const first = current === undefined || current.status === 'pending';
     suspendedAskIds.delete(record.requestId);
     rememberRecord({ ...record, status: 'answered' as const, answer });
     persist();
+    if (!first) return false;
     if ((record.kind ?? 'permission') === 'ask' && record.mode === 'async') {
       options.onAsyncAskAnswered?.({ ...record, status: 'answered' as const, answer });
     }
+    return true;
   }
 
   /** 直接发布到流上的应答（TUI / policy 定时器）也要落审计；不重新发布。 */
@@ -585,6 +611,12 @@ export function createInteractionsRegistry(
       const now = Date.now();
       const latency = Math.max(0, now - record.created_at);
       // 直接投递到单运行时流（ask_user 工具在那里等待）。
+      //
+      // 注意（0.52）：这次 publish 是**同步**扇出的 —— 原始订阅者
+      // （hub → gateway → 本注册表）会立刻走 `recordStreamResponse` →
+      // `settleAnswer`，也就是「流上回声」这一次才是真正的 `pending → answered`
+      // 迁移。下面那次 `settleAnswer(record, …)` 用的是 publish 之前的快照，
+      // 因此它被 `settleAnswer` 内部的 pending 判定挡成幂等重放（不再通知投放）。
       answerStream().publish({
         type: 'ask.user.answered',
         run_id: record.run_id,
@@ -601,15 +633,21 @@ export function createInteractionsRegistry(
         },
         ts: now,
       });
-      settleAnswer(record, {
-        answers,
-        answered_at: now,
-        answered_by: attribution.answered_by,
-        ...(attribution.answered_via !== undefined
-          ? { answered_via: attribution.answered_via }
-          : {}),
-        latency_ms: latency,
-      });
+      // publish 之后可能已经被流上回声落定（见上）：只有记录**仍然** pending
+      // 时才需要本地收口（例如装配里没有原始订阅者）。`settleAnswer` 内部还有
+      // 同一道判定做硬保险，这里只是省掉一次重复落盘。
+      const settled = interactionRecords.get(requestId);
+      if (settled === undefined || settled.status === 'pending') {
+        settleAnswer(record, {
+          answers,
+          answered_at: now,
+          answered_by: attribution.answered_by,
+          ...(attribution.answered_via !== undefined
+            ? { answered_via: attribution.answered_via }
+            : {}),
+          latency_ms: latency,
+        });
+      }
       return {
         ok: true,
         answered_by: attribution.answered_by,
@@ -664,6 +702,26 @@ export function createInteractionsRegistry(
     return true;
   }
 
+  /**
+   * 0.52：从磁盘重读一条记录（只读；见接口注释里的跨进程用途）。
+   *
+   * 整文件读一次而不是缓存：这条路径每次 async 答案最多走一次，换「永不陈旧」。
+   * 任何读失败都当作「没有这条记录」，不阻断投放（宁可多投一次也不丢答案）。
+   */
+  function peekPersistedAnswer(requestId: string): StoredInteraction | undefined {
+    const store = interactionsStore;
+    if (store === undefined) return undefined;
+    try {
+      return store.loadAllSync().find((record) => record.requestId === requestId);
+    } catch (error) {
+      console.warn('[vessel] interactions: persisted record reload failed', {
+        request_id: requestId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
   /** pending ask 只读视图：从 interactionRecords 派生，不维护第二份状态。 */
   function pendingAskView(): Map<string, PendingAsk> {
     const view = new Map<string, PendingAsk>();
@@ -692,6 +750,7 @@ export function createInteractionsRegistry(
     respondPermission,
     respondAsk,
     markAnswerDelivered,
+    peekPersistedAnswer,
   };
 }
 

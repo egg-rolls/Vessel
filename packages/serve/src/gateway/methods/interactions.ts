@@ -74,14 +74,18 @@ export interface InteractionMethodsDeps {
    */
   resumeSuspendedAsk?: (record: StoredInteraction) => boolean | Promise<boolean>;
   /**
-   * 0.52：async ask 的答案投放（作为 user 消息进成员 inbox + 起一次新 run）。
+   * 0.52：查询一次 async 答案的**投放结果**（只读；`undefined` = 没有投放者）。
    *
    * 与 `resumeSuspendedAsk` 互斥：async 的提问 run 早已正常结束，没有可续跑的
-   * checkpoint，答案只能开新 run。只在「`pending` → `answered` 这一次迁移」上调用，
-   * 重复应答不触发；实现方必须自吞全部错误（答案已落定，投放失败只退化为只记录答案）。
-   * 缺失 = 不投放（离线 attention / 没有 live runtime 的装配）。
+   * checkpoint，答案只能开新 run。
+   *
+   * 这里**刻意不接收「投放」回调**（0.52 fix）：投放的唯一触发点是交互注册表的
+   * `pending → answered` 迁移，它在本 RPC 的 `respondAsk` 内部就已经同步跑过。
+   * 让 handler 自己再投一次 = 同一次答案两个投放者（async 答案双投的成因）。
+   * 本端口只用来等那次投放的结果，填返回体的 `delivered`。
+   * 缺失 = 不报告投放（离线 attention / 没有 live runtime 的装配，`delivered: false`）。
    */
-  deliverAsyncAskAnswer?: (record: StoredInteraction) => boolean | Promise<boolean>;
+  awaitAsyncAskDelivery?: (requestId: string) => Promise<boolean> | undefined;
 }
 
 /** `interactions.list` 的单条结果（Web 端消费契约）。 */
@@ -312,7 +316,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
     interactions,
     teamScope,
     resumeSuspendedAsk,
-    deliverAsyncAskAnswer,
+    awaitAsyncAskDelivery,
   } = deps;
 
   /** 请求所属 session；记录不存在或没有 session 时返回 undefined。 */
@@ -453,15 +457,22 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           answered_via: params.answered_via === 'cli' ? 'cli' : 'rpc',
         });
         if (
-          deliverAsyncAskAnswer !== undefined &&
+          awaitAsyncAskDelivery !== undefined &&
           before !== undefined &&
           isPendingAsk(before) &&
           before.mode === 'async' &&
           isFreshAnswer(result)
         ) {
+          // 0.52 fix：这里**不发起投放**，只等结果。
+          //
+          // 投放的唯一触发点是注册表 `pending → answered` 的迁移（`respondAsk` 里
+          // 那次 publish 同步回声就完成了），此刻在途 promise 已经在 gateway 的表里；
+          // 在这里再投一次就等于给同一次答案第二个投放者 —— async 答案双投的成因。
+          // `undefined` = 本次装配没有投放者（离线 attention），照旧回 `delivered: false`。
           let delivered = false;
           try {
-            delivered = (await deliverAsyncAskAnswer({ ...before, status: 'answered' })) === true;
+            const pending = awaitAsyncAskDelivery(requestId);
+            delivered = pending === undefined ? false : (await pending) === true;
           } catch {
             delivered = false;
           }

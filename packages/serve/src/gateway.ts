@@ -325,6 +325,12 @@ export interface GatewayOptions {
    * 由 app 侧实现成「把答案作为一条 user 消息投进该成员 inbox 并起一次新 run」
    * （`AgentService.admit`，与人在会话里发一句话同一条路径）。gateway 只负责去重与
    * 幂等标记，不认识 agent / inbox。
+   *
+   * 触发点**只有一个**：交互注册表的 `pending → answered` 迁移
+   * （`onAsyncAskAnswered`，见 `createInteractionsRegistry` 的选项）。`ask.respond`
+   * 的 handler 不得再自己投一次 —— 它只等这次投递的结果去填返回体的 `delivered`。
+   * 同一条运行时流上可能有多个 gateway 装配注册这条监听，去重靠进程级单飞
+   * （`asyncAnswerDeliveries`）+ 落盘的 `answer.delivered_at`，见 `deliverAsyncAskAnswer`。
    */
   askAnswerDelivery?: (record: StoredInteraction) => Promise<boolean>;
   /**
@@ -581,6 +587,66 @@ async function readJsonBody(
   } catch {
     return errorJson('invalid_request', 'Invalid JSON', 400, extra);
   }
+}
+
+/**
+ * 0.52：**进程级**的在途 async 答案投放表（同一条运行时流上的同一个 requestId
+ * 只允许有一次投放）。
+ *
+ * 为什么必须放在模块层而不是 gateway 闭包里：同一个进程里可以有**两个** gateway
+ * 装配，它们共用同一条 `runtimeEvents`：
+ * 1. `bootstrap()` 的本地 dispatcher（`createLocalRpcDispatcher` → `startGateway`，
+ *    TUI / 本地 REPL 用，`src/bootstrap.ts:1576`）；
+ * 2. `--serve` 的 gateway（`src/cli.ts` 的 `startGateway`）。
+ *
+ * 两者都会注入 `askAnswerDelivery`，因此都会注册 `onAsyncAskAnswered`；答案事件
+ * 一 publish 到流上，两个交互注册表**各自**同步 settle 一次、各通知一次 —— 同一份
+ * 答案拿到两个投放请求：成员 inbox 里出现两条同样的 user 消息、起两个 run
+ * （`answer.delivered_at` 只在投放**成功之后**才写，两次投放都在写之前，谁也拦不住
+ * 谁）。装配层没法「只注册一次」（两个装配都合法，且都可能单独存在：TUI 模式只有
+ * 本地 dispatcher，`--serve` 模式两者并存），所以把「同一 requestId 只投一次」钉在
+ * **进程级**：第二个调用直接拿到第一个的 promise。
+ *
+ * 跨进程 / 跨重启仍由记录里的 `answer.delivered_at` 兜底（投放前会从磁盘再确认
+ * 一次，见 `alreadyDeliveredOnDisk`）。
+ */
+const asyncAnswerDeliveries = new WeakMap<object, Map<string, Promise<boolean>>>();
+
+/** 取某条运行时流对应的投放表（同一条流 = 同一批 gateway 装配）。 */
+function asyncAnswerDeliveryTable(stream: object): Map<string, Promise<boolean>> {
+  let table = asyncAnswerDeliveries.get(stream);
+  if (table === undefined) {
+    table = new Map();
+    asyncAnswerDeliveries.set(stream, table);
+  }
+  return table;
+}
+
+/**
+ * 0.52：同一条运行时流上「能把投放标记落盘」的注册表（每个带 `interactionsDir`
+ * 的 gateway 注册一个）。
+ *
+ * 为什么单独一张表：单飞只让**一个** gateway 去投放，而它可能恰是不带
+ * `interactionsDir` 的那个装配（bootstrap 的本地 dispatcher，标记只能写内存）。
+ * `delivered_at` 是跨进程 / 跨重启的唯一依据，必须落盘 —— 所以投放成功后把标记
+ * 广播给同一条流上所有能落盘的注册表（`markAnswerDelivered` 本身幂等）。
+ */
+const asyncAnswerDeliveredWriters = new WeakMap<
+  object,
+  Set<(requestId: string, deliveredAt: number) => void>
+>();
+
+/** 登记一个标记写入者（只由带 `interactionsDir` 的 gateway 调用）。 */
+function registerAnswerDeliveredWriter(
+  stream: object,
+  writer: (requestId: string, deliveredAt: number) => void,
+): void {
+  let writers = asyncAnswerDeliveredWriters.get(stream);
+  if (writers === undefined) {
+    writers = new Set();
+    asyncAnswerDeliveredWriters.set(stream, writers);
+  }
+  writers.add(writer);
 }
 
 /** 启动本地服务网关 */
@@ -867,13 +933,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   /**
-   * 0.52：在途的 async 答案投放（同一次答案只投一次）。
+   * 0.52：在途的 async 答案投放（同一 requestId 只投一次）。
    *
-   * 同一次答案可能同时被两条路径要求投放（`ask.respond` RPC 与流上的
-   * `ask.user.answered`）；它们拿到的都是同一个 promise，因此**不会投两次**。
-   * 进程重启后的重放由记录里的 `answer.delivered_at` 兜底（已投放直接返回 true）。
+   * 表在**模块层**按运行时流共享（见文件头的 `asyncAnswerDeliveries`）：同进程里
+   * 并存的两个 gateway 装配（本地 dispatcher + `--serve`）共用一条流，因此共用
+   * 一张表 —— 这是「同一次答案只投一次」的进程内硬保证。跨进程 / 跨重启由记录里的
+   * `answer.delivered_at` 兜底（内存一份 + 投放前从磁盘重读一份）。
    */
-  const asyncAnswerDeliveries = new Map<string, Promise<boolean>>();
+  const answerDeliveries = (): Map<string, Promise<boolean>> =>
+    asyncAnswerDeliveryTable(hub.stream() ?? hub);
 
   /**
    * 0.27：交互注册表（权限 / ask）。执行、调度、run 队列都不在 gateway：
@@ -884,7 +952,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
     singleTenantId: defaultTenantId,
     ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
     // 0.52：async ask 的第一次答案 → 投放（作为 user 消息进成员 inbox + 起新 run）。
-    // 与 `ask.respond` 的投放走同一个去重实现，同一次答案只投一次。
+    //
+    // 这是**本 gateway 实例**唯一的注册点：`ask.respond` 的 handler 不再自己投，它只
+    // `awaitAsyncAskDelivery(requestId)` 读结果。但同进程里可能有两个 gateway 装配
+    // （bootstrap 的本地 dispatcher + `--serve` 的 gateway）都注册这一份 —— 所以
+    // 「同一 requestId 只投一次」由模块层的 `asyncAnswerDeliveries` 单飞保证，
+    // 见 `deliverAsyncAskAnswer`。别在这里之外再加第二条触发路径。
     ...(opts.askAnswerDelivery !== undefined
       ? { onAsyncAskAnswered: (record) => void deliverAsyncAskAnswer(record) }
       : {}),
@@ -893,6 +966,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const unsubscribeInteractions = hub.subscribe((event) => {
     interactions.handleEvent(event);
   });
+  // 0.52：本装配能把投放标记落盘时登记为「标记写入者」——单飞可能把投放交给
+  // 同进程里另一个不带 `interactionsDir` 的装配（标记只能写内存），那条路要靠
+  // 这里把 `delivered_at` 补进文件，跨进程幂等才不会失效。
+  if (opts.interactionsDir !== undefined) {
+    registerAnswerDeliveredWriter(hub.stream() ?? hub, (requestId, deliveredAt) => {
+      interactions.markAnswerDelivered(requestId, deliveredAt);
+    });
+  }
   /**
    * 0.14 P0：agents 注册表。只吃实时事件；live run 由方法层从控制面快照合并。
    * 在事件订阅处 ingest 脱敏/裁剪后的副本，与广播保持一致。
@@ -1454,7 +1535,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       resumeSuspendedAsk,
       // 0.52：async ask 的答案不走「续跑旧 run」（那个 run 早就结束了），
       // 而是把答案作为一条新 user 消息投给该成员并起一次新 run。
-      deliverAsyncAskAnswer,
+      // 注意这是**只读查询**：投放已由注册表的 `pending → answered` 迁移触发
+      // （见本函数上方的 `onAsyncAskAnswered` 注册点），handler 只等结果填 `delivered`。
+      ...(opts.askAnswerDelivery !== undefined ? { awaitAsyncAskDelivery } : {}),
     }),
     ...createEvalMethods({ evals: opts.evals }),
     ...createFeishuMethods({ requireFeishu }),
@@ -2121,21 +2204,30 @@ export function startGateway(opts: GatewayOptions): Gateway {
    *
    * 全部前置不成立时返回 `false`（**只记录答案**，不报错、不回滚、不重试）：
    * 1. app 侧注入了投放实现（`askAnswerDelivery`）；
-   * 2. 记录已 answered 且**尚未投放过**（`answer.delivered_at` 缺失）；
+   * 2. 记录已 answered 且**尚未投放过**（`answer.delivered_at` 缺失 —— 内存一份、
+   *    磁盘再确认一份，后者是跨进程 / 跨重启的那道兜底）；
    * 3. 记录带 `agent_id`（成员 bridge 补齐；没有归属就找不到投递目标）。
    *
    * 投放成功后才写 `delivered_at`：写失败只意味着下一次重复应答可能重复投递一次，
    * 而不写的话「投放 → 崩溃 → 重放」会稳定丢答案（选前者：多一条消息 vs 丢答案）。
    */
   function deliverAsyncAskAnswer(record: StoredInteraction): Promise<boolean> {
-    const existing = asyncAnswerDeliveries.get(record.requestId);
+    const requestId = record.requestId;
+    const deliveries = answerDeliveries();
+    const deliveryKey = `${defaultTenantId}:${requestId}`;
+    const existing = deliveries.get(deliveryKey);
     if (existing !== undefined) return existing;
-    const task = (async (): Promise<boolean> => {
+    // 单飞登记必须发生在任务体的**任何 await 之前**：`Promise.resolve().then(…)` 把
+    // 任务体推迟到下一个微任务，于是这里先 `set` 再让任务体开跑 —— 否则「调用方
+    // 进来时表里还没有这一条」的窗口会让第二个调用者再投一次（进程里的第二个
+    // gateway 装配就是这么进来的）。
+    const task = Promise.resolve().then(async (): Promise<boolean> => {
       const deliver = opts.askAnswerDelivery;
       if (deliver === undefined) return false;
-      const current = interactions.interactionRecords.get(record.requestId);
+      const current = interactions.interactionRecords.get(requestId);
       const target = current ?? record;
       if (target.answer?.delivered_at !== undefined) return true;
+      if (alreadyDeliveredOnDisk(requestId)) return true;
       if (target.agent_id === undefined || target.agent_id === '') return false;
       let delivered = false;
       try {
@@ -2147,16 +2239,68 @@ export function startGateway(opts: GatewayOptions): Gateway {
         });
         return false;
       }
-      if (delivered) interactions.markAnswerDelivered(target.requestId, Date.now());
+      if (delivered) markDeliveredEverywhere(target.requestId, Date.now());
       return delivered;
-    })();
-    asyncAnswerDeliveries.set(record.requestId, task);
+    });
+    deliveries.set(deliveryKey, task);
     void task.finally(() => {
-      if (asyncAnswerDeliveries.get(record.requestId) === task) {
-        asyncAnswerDeliveries.delete(record.requestId);
+      if (deliveries.get(deliveryKey) === task) {
+        deliveries.delete(deliveryKey);
       }
     });
     return task;
+  }
+
+  /**
+   * 0.52：投放成功后落 `delivered_at`（本注册表 + 同一条流上能落盘的其它注册表）。
+   *
+   * 幂等：`markAnswerDelivered` 对已有标记直接返回 true；重复写只是多一次 persist。
+   * 写失败不得让投放失败（答案已经进了成员 inbox）。
+   */
+  function markDeliveredEverywhere(requestId: string, deliveredAt: number): void {
+    interactions.markAnswerDelivered(requestId, deliveredAt);
+    const writers = asyncAnswerDeliveredWriters.get(hub.stream() ?? hub);
+    if (writers === undefined) return;
+    for (const writer of writers) {
+      try {
+        writer(requestId, deliveredAt);
+      } catch {
+        // 标记没写进去只意味着「下一次重复应答可能多投一次」，不阻断本次投放。
+      }
+    }
+  }
+
+  /**
+   * 0.52：磁盘上的 `answer.delivered_at`（跨进程兜底的唯一判据）。
+   *
+   * 内存里的 `interactionRecords` 只在启动时与文件对齐：另一个 gateway 进程（或本
+   * 进程重启前的自己）投完之后只把标记写进了文件。读不到 / 没 store 一律当作
+   * 「没投过」——宁可多投一次也不丢答案。
+   */
+  function alreadyDeliveredOnDisk(requestId: string): boolean {
+    const persisted = interactions.peekPersistedAnswer(requestId)?.answer?.delivered_at;
+    if (persisted === undefined) return false;
+    // 顺手把标记写进内存，后面的重复应答（`duplicate`）不必再读盘。
+    interactions.markAnswerDelivered(requestId, persisted);
+    return true;
+  }
+
+  /**
+   * 0.52：**只读**这一次答案的投放状态（不触发投放）。
+   *
+   * 给 `ask.respond` 的返回体填 `delivered`：投放的唯一触发点是注册表的
+   * `pending → answered` 迁移，而它在 `respondAsk` 内部（流上回声）已经同步跑过，
+   * 表里一定已经有这一条 promise。
+   * - 返回 promise：投放在途 / 已结束，等它拿真实结果；
+   * - 返回 `undefined`：这次答案没有投放者（没注入实现 / 别的装配只记录答案）。
+   */
+  function awaitAsyncAskDelivery(requestId: string): Promise<boolean> | undefined {
+    const inFlight = answerDeliveries().get(`${defaultTenantId}:${requestId}`);
+    if (inFlight !== undefined) return inFlight;
+    const record = interactions.interactionRecords.get(requestId);
+    if (record?.answer?.delivered_at !== undefined) return Promise.resolve(true);
+    if (alreadyDeliveredOnDisk(requestId)) return Promise.resolve(true);
+    return undefined;
   }
 
   /** `/v1/durable/*`：只读 store，不写盘、不创建 run */

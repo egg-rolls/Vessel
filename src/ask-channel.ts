@@ -266,9 +266,12 @@ export function createOfflineAttentionTarget(options: {
       interactions.respondPermission(requestId, decision, remember, scope, actor),
     respondAsk: (requestId, answers, actor) => interactions.respondAsk(requestId, answers, actor),
     interactions,
-    // 0.52：离线 attention 没有 live runtime —— async 答案只能记录，明确回 `false`
-    // 让 `vessel attention respond` 打出「没投出去」（不假装起了新 run）。
-    deliverAsyncAskAnswer: () => false,
+    // 0.52：离线 attention 没有 live runtime —— async 答案只能记录，投放者是空的：
+    // `() => undefined` 让 `ask.respond` 的返回体照旧带 `delivered: false`，
+    // `vessel attention respond` 因此仍打出「没投出去」（不假装起了新 run）。
+    // 注意这里不注册任何投放者：投放的唯一触发点是注册表的 `pending → answered`，
+    // 离线装配没有 `onAsyncAskAnswered`。
+    awaitAsyncAskDelivery: () => undefined,
   });
   const byName = new Map<string, RpcMethodDefinition>(
     methods.map((method) => [method.name, method]),
