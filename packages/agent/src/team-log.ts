@@ -14,7 +14,7 @@ import { appendFile, chmod, type FileHandle, mkdir, open, stat } from 'node:fs/p
 import { dirname } from 'node:path';
 import { type Logger, noopLogger } from '@vessel-agent/core';
 import { normalizeRefs } from './refs.js';
-import type { TeamLogEntry, TeamLogReadWindow } from './types.js';
+import type { TeamLogEntry, TeamLogFederation, TeamLogReadWindow } from './types.js';
 
 /** 有界读：单次最多读取的字节数（尾读窗口 / 回扫分块大小） */
 export const MAX_LOG_READ_BYTES = 8 * 1024 * 1024;
@@ -55,6 +55,37 @@ function isNotFound(error: unknown): boolean {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value !== '';
+}
+
+/**
+ * 跨节点回信地址（0.21）的形状校验：写侧一直写，读侧过去漏了回读。
+ *
+ * 四个字段缺一不可（`TeamLogFederation` 全是必填）：`from_addr` / `to_addr` /
+ * `conversation_id` 为非空 string，`hop` 为 ≥1 的整数（与 `teamMessageSchema` 的
+ * `integer / minimum: 1` 同口径，读出来的值能直接过结果校验）。
+ * 形状不对 → 返回 `undefined`，由调用方丢弃该字段（不判整行坏，与 refs 同口径）。
+ */
+function parseFederation(value: unknown): TeamLogFederation | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const fromAddr = record.from_addr;
+  const toAddr = record.to_addr;
+  const conversationId = record.conversation_id;
+  const hop = record.hop;
+  if (!isNonEmptyString(fromAddr)) return undefined;
+  if (!isNonEmptyString(toAddr)) return undefined;
+  if (!isNonEmptyString(conversationId)) return undefined;
+  if (typeof hop !== 'number' || !Number.isInteger(hop) || hop < 1) return undefined;
+  return {
+    from_addr: fromAddr,
+    to_addr: toAddr,
+    conversation_id: conversationId,
+    hop,
+  };
 }
 
 /** 宽松结构校验：坏行 / 截断行 / 非 JSON 行一律返回 null */
@@ -107,6 +138,9 @@ function parseEntry(line: string): TeamLogEntry | null {
     // 读侧再归一一次（丢弃坏条目 / 超条数），不因单条脏 refs 判整行为坏行。
     const refs = normalizeRefs(parsed.refs);
     if (refs.length > 0) entry.refs = refs;
+    // 跨节点回信地址（0.21）：旧行 / 本地行没有该键 → 不赋值；形状不对只丢这个字段。
+    const federation = parseFederation(parsed.federation);
+    if (federation !== undefined) entry.federation = federation;
     return entry;
   } catch {
     return null;

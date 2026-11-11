@@ -63,7 +63,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 ## Federation 的失败顺序与边界
 
 - 入站顺序 fail closed：enabled → peer bearer → direction → `from` 等于 peer → 严格解析 → `to.team_id` 等于本机映射 → `hop <= maxHops` → 自指环 → 本机 Team 存在 → 去重 → 写日志。拒绝无副作用，只发一次不带正文 / token 的 `federation.rejected`。
-- 落点是 Team 日志：`from` 为 `federation:<node>:<team>`，`to / mentions = []`。最多 1 个 run：`human` 只写日志；其他名字必须命中唯一 present 非 private 成员，否则 404 且零写入。
+- 落点是 Team 日志：`from` 为 `federation:<node>:<team>`，`to / mentions = []`。最多 1 个 run：`human` 只写日志；其他名字必须命中唯一 present 非 private 成员，否则 404 且零写入。入站条目在日志上带 `federation: { from_addr, to_addr, conversation_id, hop }`（回信地址，供「按地址回复」用）；`teams.get` 原样透出，团队时间线显示 `federation from <addr>` 与「按地址回复」动作。
 - `hop` 是节点间跨越次数，首次为 1；`maxHops` 1..16 缺省 4。v1 没有自动中继，hop 恒为 1，只作防御上界。
 - 去重键 `(from.node_id, from.team_id, message_id)`，进程内 LRU 1024；不声称跨重启 exactly-once。入站限流 `federation.rateLimitPerMinute` 1..600（缺省 60），超限 429、零写入。
 - 事件：`federation.received` / `federation.rejected`，payload 不带正文；出站一次性进程不发事件，结果走 CLI JSON / exit code。
