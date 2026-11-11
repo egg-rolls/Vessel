@@ -333,9 +333,13 @@ export function SessionList({
                               </Tooltip>
                             )}
                           </span>
-                          {agentAddress && <span className="session-agent">{agentAddress}</span>}
+                          {agentAddress && (
+                            <span className="session-agent session-agent-address">
+                              {agentAddress}
+                            </span>
+                          )}
                           {!agentAddress && primarySessionIds?.has(session.session_id) && (
-                            <span className="session-agent text-accent-ink">
+                            <span className="session-agent session-agent-primary">
                               {t('team.member.primaryBadge')}
                             </span>
                           )}

@@ -104,7 +104,7 @@ export function LiveBodiesList({
               key={sessionId || `body-${index}`}
             >
               <span className="font-mono">{sessionId || '—'}</span>
-              {primary && <Badge>{t('team.member.primaryBadge')}</Badge>}
+              {primary && <Badge className="text-muted">{t('team.member.primaryBadge')}</Badge>}
               {body.epoch !== undefined && (
                 <span className="text-muted tabular-nums">
                   {t('team.member.sessionIndex', { n: body.epoch })}

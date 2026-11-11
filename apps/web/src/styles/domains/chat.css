@@ -60,7 +60,8 @@
   white-space: nowrap;
 }
 
-/* 第二行：`name@node:team`，只在成员会话出现。 */
+/* 第二行元信息：默认会话行的 body 状态、成员会话的 `name@node:team` 位置、
+   以及 primary body 徽标共用这套字号 / 截断规则，颜色由下面的语义修饰类决定。 */
 .session-agent {
   min-width: 0;
   overflow: hidden;
@@ -70,6 +71,19 @@
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 有 agent 位置＝这条会话已被某个 agent / 节点接管，信息量大于「这是 primary
+   body」，所以位置用主题色强调。取 accent-ink（正文强调色）而不是 accent：
+   active 行底色是 accent-soft，accent-ink 在其上仍保持 4.5:1 以上对比度。 */
+.session-agent.session-agent-address {
+  color: var(--accent-ink);
+}
+
+/* primary body 徽标退成中性灰，与其它元信息同级；用 muted 而非更弱的 faint，
+   10px 小字仍可读（BodyHistory 的 primary Badge 同步用 muted）。 */
+.session-agent.session-agent-primary {
+  color: var(--muted);
 }
 
 .session-row.active .session-title {
