@@ -1,14 +1,25 @@
 /**
  * session liveness 对账（0.18）。
  *
- * 唯一持久归属证据是现有 session / run 写锁（pid + host + started_at）：
+ * 「写者是否还活着」有三份持久证据，按时代叠加：
+ *   1) session 写锁（0.15）：进程级长锁 / 旧版运行时；
+ *   2) run 写锁（`resumeRun()` 路径，见 session-lock-runtime）；
+ *   3) **SessionLease**（0.34 Stage 3 起 session 级排他的持有物）：
+ *      `<tenantDir>/.locks/leases/sessions/<sha16(session_id)>.lease`，
+ *      ExecutionUnit 在首个 run 前 acquire、run 落终态后才 release。
+ * 任何一份显示活写者 → `live`，什么都不写。三份都失效才认定写者已死：
  * 进程被 SIGKILL / 断电 / 原生崩溃后，session 与 index 会永久停在 `running`。
- * 本模块在读完锁状态后，用同一把 session 写锁串行修复：
+ * 本模块在读完证据后，用同一把 session 写锁串行修复：
  * 追加一条 `run.failed`（`error_code: 'process_lost'`）、落 session / index 终态，
  * 并把仍为 running 的 durable checkpoint 标为 `interrupted`（保留可 resume）。
  *
+ * 只看 (1)(2) 会漏判：0.34 Stage 3 之后正常运行的 session **不持文件锁**，
+ * 于是「status === 'running' + 两把文件锁 absent」并不等于写者已死。
+ * 判活口径（TTL / pid / 主机）不在本模块复制，全部来自 lease-service 的
+ * `isRecordHeld` 与 session-lock 的 `isStale`。
+ *
  * 幂等 / 多实例安全：
- * - 锁 live 或 unparseable（宽限内）→ 保守跳过（resume 只持 run 锁，也要看 run 锁）；
+ * - 任一份证据 live 或不可解析（宽限内）→ 保守跳过；
  * - 抢不到 session 写锁 → 另一个实例正在处理 / 活着 → 跳过；
  * - 锁内重读 session，已非 running → no-op；
  * - 已有本 run 的终态事件 → 不重复追加，只补状态与游标。
@@ -26,6 +37,7 @@ import {
   type SessionStore,
   toSessionInfo,
 } from '../packages/core/src/index';
+import { inspectSessionLease } from './lease-service';
 import {
   acquireSessionLock,
   inspectSessionLock,
@@ -52,6 +64,10 @@ export interface SessionLivenessContext {
   logger: Logger;
   now?: () => number;
   hostname?: string;
+  /**
+   * pid 存活探测；文件锁（`session-lock.isStale`）与 SessionLease（`lease-service.isRecordHeld`）
+   * 共用同一份，别让两条判活路径对同一个 pid 得出不同结论。
+   */
   isPidAlive?: (pid: number) => boolean;
 }
 
@@ -61,7 +77,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 锁探针选项（注入 now / host / pid 存活，测试与多平台一致） */
+/** 锁 / 租约探针共用选项（注入 now / host / pid 存活，测试与多平台一致） */
 function inspectOptions(ctx: SessionLivenessContext): {
   now?: () => number;
   hostname?: string;
@@ -78,7 +94,8 @@ function inspectOptions(ctx: SessionLivenessContext): {
  * 对账单个 session；永不抛出。
  *
  * - `ok`：不是 running / 锁内发现已被别人修好
- * - `live`：session 锁或 run 锁显示仍有活着的写者（含宽限内的不可解析锁）
+ * - `live`：仍有活着的写者（session 锁 / run 锁 / SessionLease 任一 live，或宽限内的
+ *   不可解析锁 / 租约文件）
  * - `repaired`：本次写入了终态
  * - `error`：任何未预期错误（已记日志）
  */
@@ -114,7 +131,16 @@ export async function reconcileSession(
       if (runLock.state === 'live' || runLock.state === 'unparseable') return 'live';
     }
 
-    // 3) 抢占 session 写锁；冲突说明别的实例正在处理。
+    // 3) 0.34 Stage 3 起 session 级排他由 SessionLease 承担：正常运行的 run 不持文件锁，
+    //    只持 `<tenantDir>/.locks/leases/sessions/<sha16(session_id)>.lease`（EU 在
+    //    run.started / 首次 SessionState 落盘之前 acquire，run 终态之后 release）。
+    //    漏掉这一步，文件锁 absent 就会被当成写者已死 → 给活 run 追加假 run.failed。
+    //    判活口径（held / TTL / pid / 主机）全部来自 lease-service，这里不做第二套时间判断；
+    //    排在文件锁之后只是顺序，三者都是 live 短路，结论相同。
+    const lease = await inspectSessionLease(ctx.tenantDir, sessionId, opts);
+    if (lease.state === 'live' || lease.state === 'unparseable') return 'live';
+
+    // 4) 抢占 session 写锁；冲突说明别的实例正在处理。
     let lock: Awaited<ReturnType<typeof acquireSessionLock>>;
     try {
       lock = await acquireSessionLock({
@@ -129,11 +155,16 @@ export async function reconcileSession(
     }
 
     try {
-      // 4) 锁内重读：并发修复 / 正常结束已抢先。
+      // 5) 锁内重读：并发修复 / 正常结束已抢先。
       const state = await ctx.session.load(sessionId);
       if (state === null || state.status !== 'running') return 'ok';
 
-      // 5) 最近 RunRecord：run 级进度只读这里，不回溯到 SessionState。
+      // 5b) 锁内复查租约：探针到抢锁之间可能来了新 run（它只取租约，不挡文件锁），
+      //     此时下面读到的 last_run_id 属于一个活 run —— 再探一次就不必靠时序运气。
+      const recheck = await inspectSessionLease(ctx.tenantDir, sessionId, opts);
+      if (recheck.state === 'live' || recheck.state === 'unparseable') return 'live';
+
+      // 6) 最近 RunRecord：run 级进度只读这里，不回溯到 SessionState。
       const runId = state.last_run_id;
       let record: RunRecord | null = null;
       if (ctx.runStore !== undefined && runId !== undefined) {
@@ -148,7 +179,7 @@ export async function reconcileSession(
         }
       }
 
-      // 6) 游标：已有本 run 的终态事件 → 不追加，只同步；否则追加一条 process_lost。
+      // 7) 游标：已有本 run 的终态事件 → 不追加，只同步；否则追加一条 process_lost。
       let cursor: number | undefined;
       if (ctx.eventLog !== undefined && runId !== undefined) {
         const records = await ctx.eventLog.read(sessionId);
@@ -181,7 +212,7 @@ export async function reconcileSession(
         cursor = state.derived_upto_seq;
       }
 
-      // 7) SessionState 终态：只写派生字段 status / updated_at / derived_upto_seq。
+      // 8) SessionState 终态：只写派生字段 status / updated_at / derived_upto_seq。
       //    updated_at 必须显式写（FileSessionStore 会复用已加载值）。
       const completedAt = now();
       const failed: SessionState = {
@@ -192,7 +223,7 @@ export async function reconcileSession(
       };
       await ctx.session.save(failed);
 
-      // 8) index 同步（best-effort 语义由调用方决定；这里失败即上报 error）。
+      // 9) index 同步（best-effort 语义由调用方决定；这里失败即上报 error）。
       if (ctx.eventLog !== undefined) {
         await ctx.eventLog.updateIndex(sessionId, {
           status: 'interrupted',
@@ -201,7 +232,7 @@ export async function reconcileSession(
         });
       }
 
-      // 9) RunRecord 受控例外（Q1）：仅 running → interrupted。
+      // 10) RunRecord 受控例外（Q1）：仅 running → interrupted。
       //    只改 status / error / error_envelope / updated_at / event_cursor；
       //    不写 usage / iteration / branch / agent_id。
       if (ctx.runStore !== undefined && record !== null && record.status === 'running') {

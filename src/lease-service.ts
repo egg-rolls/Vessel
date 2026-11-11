@@ -38,6 +38,8 @@ import {
   type LeaseServicePort,
   type Logger,
 } from '@vessel-agent/core';
+// 只读探针复用 session-lock 的不可解析宽限，避免两处各写一套时间判断而漂移。
+import { SESSION_LOCK_UNPARSEABLE_GRACE_MS } from './session-lock';
 
 /** 回收守卫文件超过该时长视为 stale */
 const LEASE_RECLAIM_GUARD_STALE_MS = 10_000;
@@ -95,6 +97,22 @@ function leaseFileName(key: string): string {
   return `${createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 16)}.lease`;
 }
 
+/**
+ * 租约文件路径（唯一命名规则）。
+ *
+ * acquire / renew / release / fenceOf 与只读探针共用它：文件名两处各写一套的话，
+ * 探针会静默看错文件，把活租约读成「不存在」。
+ */
+function leaseRecordPath(tenantDir: string, kind: LeaseKind, key: string): string {
+  return join(
+    tenantDir,
+    '.locks',
+    'leases',
+    kind === 'binding' ? 'bindings' : 'sessions',
+    leaseFileName(key),
+  );
+}
+
 function isLeaseFileRecord(value: unknown): value is LeaseFileRecord {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -113,6 +131,49 @@ function isLeaseFileRecord(value: unknown): value is LeaseFileRecord {
     typeof record.expires_at === 'number' &&
     (record.state === 'held' || record.state === 'released')
   );
+}
+
+/** 判活所需的进程身份（与 `FileLeaseService` 构造选项同源） */
+interface LeaseProbe {
+  host: string;
+  pid: number;
+  isPidAlive: (pid: number) => boolean;
+}
+
+/**
+ * 租约是否仍然有效（持有中）。
+ *
+ * 判据只有这一份，`acquire` / `reclaimAndWrite` / `fenceOf` / `validate` / 只读探针
+ * 全部走它，避免各自写一套时间判断后漂移：
+ * - `state === 'held'` 且 `expires_at > now`（时间上界就是租约自己的 TTL + 续租）；
+ * - 同主机且 pid 不是自己时，死 pid 立即视为失效（回收快路径）；
+ * - 跨主机不探测 pid：pid 命名空间不同，`process.kill(pid, 0)` 没有意义。
+ *   此时唯一的失效信号是 `expires_at`（默认 TTL 30s + 周期续租）——因此跨主机 /
+ *   pid 被复用最多让「已死」晚判一个 TTL，不会永久误判。
+ *
+ * 这是租约自己的判据，与 `session-lock.ts` 的 `isStale`（死 pid / 跨主机 24h /
+ * 不可解析 5s 宽限）分工不同：文件写锁没有过期时间，只能靠 24h 兜底；租约自带
+ * `expires_at`，不需要也不该套用 24h。两处唯一刻意不一致的是跨主机 pid 探测：
+ * `isStale` 在跨主机时仍会 `process.kill(pid, 0)`（0.15 遗留，pid 跨节点无意义），
+ * 这里只在同主机探测，跨主机交给 `expires_at`。
+ */
+function isRecordHeld(record: LeaseFileRecord, now: number, probe: LeaseProbe): boolean {
+  if (record.state !== 'held') return false;
+  if (record.expires_at <= now) return false;
+  if (record.host === probe.host && record.pid !== probe.pid && !probe.isPidAlive(record.pid)) {
+    return false;
+  }
+  return true;
+}
+
+/** 读磁盘租约记录；不存在 / 不可解析 / 形状不符一律 undefined（只读）。 */
+async function readLeaseRecord(path: string): Promise<LeaseFileRecord | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+    return isLeaseFileRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 文件租约服务：per-tenant、单节点、带 TTL / renew / fencing。 */
@@ -237,13 +298,7 @@ export class FileLeaseService implements LeaseServicePort {
   }
 
   private leasePath(kind: LeaseKind, key: string): string {
-    return join(
-      this.tenantDir,
-      '.locks',
-      'leases',
-      kind === 'binding' ? 'bindings' : 'sessions',
-      leaseFileName(key),
-    );
+    return leaseRecordPath(this.tenantDir, kind, key);
   }
 
   private makeRecord(
@@ -279,23 +334,18 @@ export class FileLeaseService implements LeaseServicePort {
     };
   }
 
-  /** 未释放且未过期；同主机死 pid 视为可回收快路径。 */
+  /** 未释放且未过期；同主机死 pid 视为可回收快路径（判据见 `isRecordHeld`）。 */
   private isHeld(record: LeaseFileRecord, now: number): boolean {
-    if (record.state !== 'held') return false;
-    if (record.expires_at <= now) return false;
-    if (record.host === this.host && record.pid !== this.pid && !this.isPidAlive(record.pid)) {
-      return false;
-    }
-    return true;
+    return isRecordHeld(record, now, {
+      host: this.host,
+      pid: this.pid,
+      isPidAlive: this.isPidAlive,
+    });
   }
 
+  /** 读磁盘记录；实现与只读探针共用 `readLeaseRecord`（形状校验只有一份）。 */
   private async readRecord(path: string): Promise<LeaseFileRecord | undefined> {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
-      return isLeaseFileRecord(parsed) ? parsed : undefined;
-    } catch {
-      return undefined;
-    }
+    return readLeaseRecord(path);
   }
 
   /** `wx` 原子创建；已存在返回 false。 */
@@ -371,4 +421,65 @@ export class FileLeaseService implements LeaseServicePort {
       throw error;
     }
   }
+}
+
+/** 只读租约探针结论（0.18 session liveness） */
+export interface LeaseInspection {
+  /**
+   * - `absent`：没有租约文件（memory 后端 / 0.34 前数据 / 没接 lease 服务的部署）
+   * - `live`：持有中、未过期、同主机 pid 活（`isRecordHeld`）
+   * - `stale`：记录可解析但不代表活写者（released / 过期 / 同主机死 pid），或不可解析已过宽限
+   * - `unparseable`：文件存在但不可解析且仍在宽限内（保守视为写入中）
+   */
+  state: 'absent' | 'live' | 'stale' | 'unparseable';
+  record?: LeaseFileRecord;
+}
+
+/**
+ * 只读检查某个 session 的 SessionLease（0.18 session liveness 对账用）。
+ *
+ * 只读：不创建 / 不改写 / 不删除文件，`acquire` / `renew` / `release` 语义不变。
+ * 存在的意义是让「谁还活着」的判据与租约服务同源：0.34 Stage 3 起 session 级排他
+ * 由 SessionLease 承担，正常运行**不持文件写锁**。
+ *
+ * 判活口径完全交给 `isRecordHeld`（与 acquire / fenceOf 同一份实现）；
+ * 时间上界用租约自己的 `expires_at`（TTL + 续租），不套用 session-lock 的跨主机 24h。
+ */
+export async function inspectSessionLease(
+  tenantDir: string,
+  sessionId: string,
+  options: {
+    now?: () => number;
+    hostname?: string;
+    pid?: number;
+    isPidAlive?: (pid: number) => boolean;
+    unparseableGraceMs?: number;
+  } = {},
+): Promise<LeaseInspection> {
+  const path = leaseRecordPath(tenantDir, 'session', sessionId);
+  const now = options.now ?? Date.now;
+
+  const record = await readLeaseRecord(path);
+  if (record !== undefined) {
+    const held = isRecordHeld(record, now(), {
+      host: options.hostname ?? os.hostname(),
+      pid: options.pid ?? process.pid,
+      isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+    });
+    return { state: held ? 'live' : 'stale', record };
+  }
+
+  // 记录读不出来时只区分「没有文件」与「有文件但坏了」：后者在宽限内保守视为
+  // 写入中（与 `inspectSessionLock` 的 unparseable 同口径），过了宽限才允许对账接管，
+  // 否则一个损坏的租约文件会永久挡住对死进程的修复。
+  let mtimeMs: number | undefined;
+  try {
+    mtimeMs = (await stat(path)).mtimeMs;
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+  }
+  if (mtimeMs === undefined) return { state: 'absent' };
+
+  const graceMs = options.unparseableGraceMs ?? SESSION_LOCK_UNPARSEABLE_GRACE_MS;
+  return { state: now() - mtimeMs > graceMs ? 'stale' : 'unparseable' };
 }
