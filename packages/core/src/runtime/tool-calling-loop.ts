@@ -21,7 +21,7 @@ import type {
   UsagePricing,
   UsageStats,
 } from '../types/limits.js';
-import type { ChatRequest, LLMResponse, Message } from '../types/provider.js';
+import type { ChatRequest, LLMResponse, Message, MessageRef } from '../types/provider.js';
 import type { Run } from '../types/run.js';
 import type { ToolCall } from '../types/tool.js';
 import type { GuardrailRunner } from './guardrail-runner.js';
@@ -39,6 +39,11 @@ export interface LoopContext {
   readonly model: string;
   /** opt-in 计价；缺省不累计 `totalCost`。 */
   readonly pricing?: UsagePricing;
+  /**
+   * 本轮输入的附件引用（0.52）：只透传给 BeforeLlm 的 `HookContext.refs`，
+   * loop 自己不读、不改、不进请求体。缺省（无引用）= 旧行为。
+   */
+  readonly inputRefs?: readonly MessageRef[];
   readonly window: MessageWindowPort;
   readonly provider: ProviderPort;
   readonly tools: ToolExecutor;
@@ -194,7 +199,13 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
 
     // CONTRACT-prefix-invariant §2：system 冻结。hook 可以读基底 system，
     // 但写入被忽略（首次写入发一次事件），system 始终是会话级基底 + Self Card。
-    const hookCtx: HookContext = { run_id: runId, session_id: sessionId };
+    // 附件引用（0.52）：只告诉 hook「本轮带哪些引用」（路径与种类），正文永不在此出现。
+    const inputRefs = ctx.inputRefs;
+    const hookCtx: HookContext = {
+      run_id: runId,
+      session_id: sessionId,
+      ...(inputRefs !== undefined && inputRefs.length > 0 ? { refs: inputRefs } : {}),
+    };
     const baseSystemPrompt = ctx.controls.getBaseSystemPrompt();
     Object.defineProperty(hookCtx, 'systemPrompt', {
       enumerable: true,

@@ -14,6 +14,7 @@ import type {
   LeaseGrant,
   LeaseServicePort,
   Logger,
+  MessageRef,
   RunEvent,
   RunInterruptReason,
   RunOptions,
@@ -234,6 +235,14 @@ export interface AgentMessage {
    * 而那是调用方（人）写的正文，必须继续按正文渲染。
    */
   input_name?: string;
+  /**
+   * 附件引用（0.52；内存内元数据，不落 snapshot）。
+   *
+   * 只有路径与种类，正文永不随消息走。执行内核把它写成 core `Message.refs`，
+   * 从而落进 `user.message` 事件与 SessionState；**inbox 副本不带它**
+   * （inbox 只存正文摘要，rotate 窗口内的消息由正文重投，引用不跟随）。
+   */
+  refs?: MessageRef[];
 }
 
 /** 传给执行内核的成员身份（不携带 registry 状态） */
@@ -670,6 +679,14 @@ export interface AgentUpdateResult {
  */
 export interface AdmitInput {
   content: string;
+  /**
+   * 附件引用（0.52，additive）：只有路径 + 元信息，**没有正文**。
+   *
+   * 随本次投递写进 core `Message.refs`，因此出现在 `user.message` 事件与
+   * SessionState 里；执行内核不读文件、不注入内容（模型靠工具按需读）。
+   * 缺省 = 无引用（`content` 是 string 的输入等价 `refs = []`）。
+   */
+  refs?: MessageRef[];
   agent_id?: string;
   session_id?: string;
   /** 缺省 `human`（人类入口）；不是 `DEFAULT_OWNER` —— 那是成员归属的缺省值 */
@@ -748,6 +765,11 @@ export interface DispatchInput {
   to: string;
   /** urgent + message_id 时可省 / 为空：正文取自既有 inbox 消息。 */
   content: string;
+  /**
+   * 附件引用（0.52，additive；内部透传，不扩 wire）：只有路径与种类。
+   * 与 `AdmitInput.refs` 同一份形状，最终都写成 core `Message.refs`。
+   */
+  refs?: MessageRef[];
   from?: string;
   /** 会话分组；缺省生成（0.19 S4） */
   conversation_id?: string;

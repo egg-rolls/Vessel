@@ -35,6 +35,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | `RunOptions.messages` | `@path` 引用、成员 `vessel:source`、技能/附件 | 调用方传入 | **用户输入前** | 是 |
 | owner 队列 | 成员回复 | `agent-owner-injection` BeforeLlm → `ctx.messages` | 本轮 user 后 | 是 |
 | `runtime.notice` | 热应用 / 版本通知 / 成员停下（scope `peer`，定向父 session） | `runtime-notice-hook` → `vessel:notice` | 尾部 | 是 |
+| 附件引用（`Message.refs`） | `[refs] N attachments: kind path, … (use media.read)`（只有路径与种类；>3 条折 `+N more`） | `refs-notice-hook`（BeforeLlm，读 `ctx.refs`）→ `vessel:notice` | 尾部 | 是（同一批引用只注入一次，变化才再注入） |
 | 文档订阅 | `<subscription-notice>` 短通知 | doc-subscription → `vessel:subscription` | 尾部 | 是 |
 | 90% 预算预警（`limits.*` / `termination.*`） | `[runtime] input_tokens_limit: 900k/1M ...` | core `publishLimitWarnings` → `vessel:limit` | 尾部 | 是 |
 | 90%–`compactThreshold` 上下文压力（默认 0.85 且自动压缩开启时不出现） | `[runtime] context_window: 900k/1M ...` 推荐 rotate | core `publishContextPressureWarning` → `vessel:limit` | 尾部 | 是 |

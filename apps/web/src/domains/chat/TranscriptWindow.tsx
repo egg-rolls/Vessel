@@ -249,7 +249,7 @@ export function TranscriptWindow({
             entering
           />
         ) : (
-          <UserBubble text={item.text} ts={item.ts} entering />
+          <UserBubble text={item.text} ts={item.ts} entering refs={item.refs} />
         );
       case 'ask-answer':
         // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。

@@ -96,6 +96,8 @@ export function createRunControl(
         ...(input.agent_id !== undefined ? { agent_id: input.agent_id } : {}),
         ...(input.session_id !== undefined ? { session_id: input.session_id } : {}),
         ...(input.resume === true ? { resume: true } : {}),
+        // 0.52：附件引用只透传，不在这里读文件 / 判边界（闸门在 runs.start handler）。
+        ...(input.refs !== undefined && input.refs.length > 0 ? { refs: input.refs } : {}),
       };
       const result = await service.admit(admit);
       const mapped: RunStartResultWithSession = {

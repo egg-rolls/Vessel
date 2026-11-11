@@ -1065,6 +1065,13 @@ export const messages = {
   'chat.refs.kind.file': '文件',
   'chat.refs.kind.image': '图片',
   'chat.refs.kind.document': '文档',
+  // 0.52：引用加入 / 发送时的拒绝文案（服务端只给稳定码，人看到的在这里）
+  'chat.refs.reject.absolute': '只能引用绝对路径：{path}',
+  'chat.refs.reject.tooLong': '引用路径超过 {max} 个字符',
+  'chat.refs.reject.tooMany': '单条消息最多带 {max} 个引用',
+  'chat.refs.reject.denied': '该路径属于受保护目录，不能引用：{name}',
+  'chat.refs.reject.outside': '该路径不在允许的目录范围内：{name}',
+  'chat.refs.reject.invalid': '引用路径不合法：{name}',
   'composer.toolbar.label': '输入框工具栏',
   'composer.refs.label': '已引用',
   'composer.refs.remove': '移除 {name}',

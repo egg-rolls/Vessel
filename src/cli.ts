@@ -102,6 +102,7 @@ import {
   collectPermissionTargets,
   type PermissionApplyTarget,
   permissionConfigFor,
+  registerRefsNoticeHook,
   registerRuntimeNoticeHook,
 } from './hot-apply-assembly';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
@@ -122,6 +123,7 @@ import {
 import { type PluginWatchHandle, startPluginWatch } from './plugin-watch';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
+import { createConfigRefsGate } from './refs-gate';
 import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
@@ -889,6 +891,8 @@ async function runWithConfig(result: BootstrapResult) {
         tenantId: result.tenantId,
       });
     registerRuntimeNoticeHook(ctx.pluginHost, noticeBus);
+    // 0.52：附件引用的环境信息行（同一 host、同一 BeforeLlm 阶段）。
+    registerRefsNoticeHook(ctx.pluginHost);
 
     /** 存活 runtime 的集合：单执行面的 owner（bundle / ctx）。 */
     const liveTargets = (): PermissionApplyTarget[] =>
@@ -1211,6 +1215,9 @@ async function runWithConfig(result: BootstrapResult) {
             askAnswerDelivery: createAskAnswerDelivery(result.agent.service),
           }
         : {}),
+      // 0.52：附件引用的路径闸门（与 basic-tools 同一份 allowed_roots / deny_paths）。
+      // 读 liveConfig：热应用改的是它，闸门必须跟着变（配置指纹变了才重建边界）。
+      checkRefs: createConfigRefsGate(() => liveConfig),
       // 单执行面的 RPC 数据源：config / trace / session 数据 / metrics。
       defaultTenantId: result.tenantId,
       config: tenantConfigControl,

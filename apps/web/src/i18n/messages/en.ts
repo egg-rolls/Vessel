@@ -1107,6 +1107,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.refs.kind.file': 'File',
   'chat.refs.kind.image': 'Image',
   'chat.refs.kind.document': 'Document',
+  // 0.52：引用加入 / 发送时的拒绝文案（服务端只给稳定码，人看到的在这里）
+  'chat.refs.reject.absolute': 'Only absolute paths can be referenced: {path}',
+  'chat.refs.reject.tooLong': 'The reference path is longer than {max} characters',
+  'chat.refs.reject.tooMany': 'A message can carry at most {max} references',
+  'chat.refs.reject.denied': 'This path is protected and cannot be referenced: {name}',
+  'chat.refs.reject.outside': 'This path is outside the allowed roots: {name}',
+  'chat.refs.reject.invalid': 'Invalid reference path: {name}',
   'composer.toolbar.label': 'Composer toolbar',
   'composer.refs.label': 'References',
   'composer.refs.remove': 'Remove {name}',

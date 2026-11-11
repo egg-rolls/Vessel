@@ -3,7 +3,7 @@
  * @module @vessel-agent/core/hooks
  */
 
-import type { Message } from './provider.js';
+import type { Message, MessageRef } from './provider.js';
 
 /** Hook 类型枚举 */
 export enum HookType {
@@ -29,6 +29,14 @@ export interface HookContext {
    * 或对象引用去重。缺省不改变请求形状。
    */
   messages?: Message[];
+  /**
+   * BeforeLlm：**本轮输入的附件引用**（0.52；`Message.refs` 里那批路径）。
+   *
+   * 只读：值来自本次 run 的用户输入消息，没有引用时该键不出现（普通会话的 hook
+   * 上下文与旧版逐字节一致）。给 hook 用是因为它拿不到上下文正文——「有附件」这件事
+   * 只能由 runtime 告诉它，hook 自己无法从 `messages` 里反查。
+   */
+  refs?: readonly MessageRef[];
   /** BeforeTool / AfterTool：当前工具名（0.6.1 P2） */
   tool?: string;
   /** BeforeTool / AfterTool：当前工具输入；BeforeTool 可经 HookResult.updatedInput 改写 */

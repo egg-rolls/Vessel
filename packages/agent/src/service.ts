@@ -23,7 +23,10 @@ import {
   type LeaseGrant,
   type LeaseServicePort,
   type Logger,
+  MESSAGE_REF_PATH_MAX,
+  MESSAGE_REFS_MAX,
   type Message,
+  type MessageRef,
   noopLogger,
   projectMessages,
   type RunEvent,
@@ -2083,6 +2086,9 @@ export class AgentServiceImpl implements AgentService {
     const resume = input.resume === true;
     // 0.52：async ask 的答案投递（见 AdmitInput.origin）。
     const fromAskAnswer = input.origin === 'ask_answer';
+    // 附件引用（0.52）：只收「绝对路径 + 已知 kind」，逐条丢弃其余；条数有上限。
+    // 越界 / deny 目录的判定属于写侧闸门（runs.start 的 refs 闸门），这里只做形状归一。
+    const refs = normalizeRefs(input.refs);
 
     // 1. session → agent/body 解析（绑定优先；矛盾输入 = invalid_input）
     let record: MemberRecord;
@@ -2187,6 +2193,8 @@ export class AgentServiceImpl implements AgentService {
       // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
       ...(senderName !== undefined ? { from_name: senderName } : {}),
       ...(fromAskAnswer ? { origin: 'ask_answer' as const } : {}),
+      // 附件引用：只有路径，随消息进执行内核 → core Message.refs（不落 inbox 副本）。
+      ...(refs.length > 0 ? { refs } : {}),
     };
     // rotate 窗口内：旧 body 即将退役，消息只落 inbox（不进旧队列、不提交），
     // 由新 body 的 hook 按「启动嘱托 → 旧队列 → 新队列」顺序注入。
@@ -3860,6 +3868,9 @@ export class AgentServiceImpl implements AgentService {
       target,
     );
     const boundSession = this.registry.getBySession(to)?.id === target.id ? to : undefined;
+    // 附件引用（0.52）：只有路径，随投递进 admit → core Message.refs。
+    // wake / urgent 两种投递不带引用（它们不写新用户消息），因此只在下面 admit 分支透传。
+    const refs = normalizeRefs(input.refs);
     const attempt = async (agentId: string, sessionId?: string) =>
       this.admit({
         content,
@@ -3871,6 +3882,7 @@ export class AgentServiceImpl implements AgentService {
         ...(originSessionId !== undefined ? { origin_session_id: originSessionId } : {}),
         ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
         conversation_id: conversationId,
+        ...(refs.length > 0 ? { refs } : {}),
         strict: false,
       });
 
@@ -5876,6 +5888,41 @@ function readContent(record: Record<string, unknown>, key: string): string {
     throw new AgentError('invalid_input', `content exceeds ${MAX_MESSAGE_BYTES} bytes`);
   }
   return value;
+}
+
+const REF_KINDS: ReadonlySet<string> = new Set(['file', 'image', 'document']);
+
+/**
+ * 附件引用的形状归一（0.52）：只认 `{kind, path}` 形状，逐条丢弃其余，条数封顶。
+ *
+ * 这里**不做**权限判定：越界 / deny 目录由写侧闸门（`runs.start` 的 refs 闸门，
+ * 复用 basic-tools 的 `buildPathBoundary` / `evaluatePath`）在准入前就拒掉。
+ * 保留这一层是为了 `dispatch` 等内部调用方也不把半成品形状带进上下文。
+ */
+function normalizeRefs(value: unknown): MessageRef[] {
+  if (!Array.isArray(value)) return [];
+  const refs: MessageRef[] = [];
+  for (const entry of value) {
+    if (refs.length >= MESSAGE_REFS_MAX) break;
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const kind = record.kind;
+    const path = record.path;
+    if (typeof kind !== 'string' || !REF_KINDS.has(kind)) continue;
+    // 只传路径：必须是绝对路径（`/…` 或盘符 / UNC），不收 URL、不收相对路径。
+    if (typeof path !== 'string' || path.length === 0 || path.length > MESSAGE_REF_PATH_MAX) {
+      continue;
+    }
+    if (!/^(?:[\\/]|[A-Za-z]:[\\/]|\\\\|~[\\/])/.test(path)) continue;
+    const ref: MessageRef = { kind: kind as MessageRef['kind'], path };
+    if (typeof record.name === 'string' && record.name.length > 0) ref.name = record.name;
+    if (typeof record.mime === 'string' && record.mime.length > 0) ref.mime = record.mime;
+    if (typeof record.bytes === 'number' && Number.isFinite(record.bytes) && record.bytes >= 0) {
+      ref.bytes = Math.floor(record.bytes);
+    }
+    refs.push(ref);
+  }
+  return refs;
 }
 
 function optionalString(value: unknown): string | undefined {

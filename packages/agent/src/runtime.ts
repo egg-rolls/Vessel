@@ -1083,10 +1083,18 @@ export class MemberExecutionHost implements MemberExecutionPort {
     // （human 来源）是 ask:answer（待批答复卡）。人类 / 系统正文来源保持 nil。
     const inputName =
       message.origin === 'ask_answer' ? ASK_ANSWER_INPUT_NAME : inputNameOf(message);
+    // 附件引用（0.52）：只有路径与种类，随 user 消息落进 `user.message` 事件与
+    // SessionState。refs 不进 `RunOptions.messages`，正文也永不在这里被读出来。
+    const refs = message.refs !== undefined && message.refs.length > 0 ? message.refs : undefined;
     const userInput: string | Message =
-      inputName === undefined
+      inputName === undefined && refs === undefined
         ? message.content
-        : { role: 'user', content: message.content, name: inputName };
+        : {
+            role: 'user',
+            content: message.content,
+            ...(inputName !== undefined ? { name: inputName } : {}),
+            ...(refs !== undefined ? { refs } : {}),
+          };
     try {
       const turnOptions = {
         runId,

@@ -8,6 +8,7 @@ import type {
   DurableRunSummary,
   DurableRunsResponse,
   EventsResponse,
+  MessageRef,
   ResumeRunResponse,
   RunEvent,
   RunResponse,
@@ -30,20 +31,32 @@ export abstract class RunsClient extends SessionsClient {
    * 新会话必须先 `agents.create` 再带 `agentId` 调这里 —— 只传 `session_id`
    * 会让未绑定的 session 落到 `main` 上长出第二具 body。
    * `agentId` 缺省时保持 0.27 行为（`/resume` 等按 session 的路径不受影响）。
+   *
+   * 0.52：`refs` 是这一轮的附件引用（只有路径）。服务端在准入前判边界，
+   * 越界 / deny 目录直接 `invalid_params`（`details.reason` 是稳定码）。
+   * 空数组与不传等价（旧 gateway 会忽略多余字段前的行为不变）。
    */
-  async submitRun(input: string, sessionId?: string, agentId?: string): Promise<RunStartResult> {
+  async submitRun(
+    input: string,
+    sessionId?: string,
+    agentId?: string,
+    refs?: readonly MessageRef[],
+  ): Promise<RunStartResult> {
     const params = {
       input,
       ...(sessionId ? { session_id: sessionId } : {}),
       ...(agentId ? { agent_id: agentId } : {}),
+      ...(refs !== undefined && refs.length > 0 ? { refs } : {}),
     };
     try {
       return await this.rpc<RunStartResult>('runs.start', params);
     } catch (error) {
       // 带 `agentId` 时**不能**回退：legacy `run.submit` 没有 agent 维度，丢掉了
       // `agent_id` 就会落到 `main` 上长出第二具 body（契约 §3 明禁，且是静默的）。
-      // 宁可在只支持 legacy 的旧 gateway 上显式失败，让用户看到真实原因。
+      // 带 `refs` 时同理：legacy 没有 refs 字段，回退等于把附件悄悄丢了（用户以为
+      // 附上了，模型却看不到）。两种情况都让用户看到真实原因。
       if (agentId) throw error;
+      if (refs !== undefined && refs.length > 0) throw error;
       if (!canFallbackToLegacyRuns(error)) throw error;
       return this.request<RunStartResult>('run.submit', {
         input,

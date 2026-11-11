@@ -8,9 +8,29 @@
  * @module @vessel-agent/serve
  */
 
+import { MESSAGE_REF_PATH_MAX } from '@vessel-agent/core';
+
 export const stringListSchema = {
   type: 'array',
   items: { type: 'string' },
+};
+
+/**
+ * 附件引用条目（0.52）：与 core `MessageRef` 对齐，**只有路径与元信息**。
+ *
+ * `mime` / `bytes` 是前端探测值（不可信），只透传；`path` 是宿主机绝对路径，
+ * 边界判定在 handler 闸门里做（schema 只保证形状）。
+ */
+export const messageRefSchema = {
+  type: 'object',
+  required: ['kind', 'path'],
+  properties: {
+    kind: { type: 'string', enum: ['file', 'image', 'document'] },
+    path: { type: 'string', minLength: 1, maxLength: MESSAGE_REF_PATH_MAX },
+    name: { type: 'string' },
+    mime: { type: 'string' },
+    bytes: { type: 'integer', minimum: 0 },
+  },
 };
 
 export const usageSchema = {

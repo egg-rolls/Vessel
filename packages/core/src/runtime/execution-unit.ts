@@ -50,6 +50,7 @@ import type {
   LLMProvider,
   LLMResponse,
   Message,
+  MessageRef,
   ProviderRetryPolicy,
   StreamChunk,
 } from '../types/provider.js';
@@ -1133,8 +1134,10 @@ export class ExecutionUnit {
       await this.saveSessionState(sessionState);
       await this.updateSessionIndexBestEffort(sessionState);
 
-      // 执行 tool-calling loop
-      const response = await runToolCallingLoop(this.createLoopContext(execution, signal));
+      // 执行 tool-calling loop（把本轮输入的引用透传给 BeforeLlm 的 hook 上下文）
+      const response = await runToolCallingLoop(
+        this.createLoopContext(execution, signal, userMessage.refs),
+      );
 
       // 统一终态：status / OnError / session / checkpoint / 事件
       await this.finalizeRun(execution, sessionState, { status: 'completed', output: response });
@@ -1548,11 +1551,16 @@ export class ExecutionUnit {
    * loop 只做算法编排；窗口、provider、工具执行、事件与控制策略全部经端口
    * 绑定回当前 `ExecutionUnit` / `execution`，不引入跨 run 状态。
    */
-  private createLoopContext(execution: Run, signal?: AbortSignal): LoopContext {
+  private createLoopContext(
+    execution: Run,
+    signal?: AbortSignal,
+    inputRefs?: readonly MessageRef[],
+  ): LoopContext {
     return {
       execution,
       model: this.model,
       ...(this.pricing !== undefined ? { pricing: this.pricing } : {}),
+      ...(inputRefs !== undefined && inputRefs.length > 0 ? { inputRefs } : {}),
       window: {
         addMessage: (m, id) => this.addContext(m, id),
         buildRequestMessages: (o) => this.buildRequestMessages(o, execution.workingContext),

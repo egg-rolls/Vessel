@@ -21,7 +21,7 @@
  * 每条消息最多被一个 run 认领；被认领的历史消息不再单独成 item（run 是权威来源）。
  * 认领失败（guardrail 改写过正文等）时两边都渲染 —— 宁可重复，绝不吞消息。
  */
-import type { Message, RunEvent } from '../../gateway/types';
+import type { Message, MessageRef, RunEvent } from '../../gateway/types';
 import type { SessionDetail } from '../../gateway/types/sessions';
 import type { ErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
@@ -98,6 +98,11 @@ export interface RunInputItem extends ItemMeta {
   kind: 'run-input';
   runId: string;
   text: string;
+  /**
+   * 这一轮的附件引用（0.52；只有路径）。来自 `user.message.message.refs`，
+   * 与落盘后气泡上方那行 chip 是同一个组件、同一份数据。
+   */
+  refs?: MessageRef[];
   /**
    * 输入是 agent 投递时的发送者 alias（来自 `run.started.input_name` /
    * `user.message.message.name`，判定见 `agent-sender.ts`）。
@@ -722,6 +727,8 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           runId: group.runId,
           text,
           ...(sender !== undefined ? { sender } : {}),
+          // 运行态气泡上方的 chip：与历史侧同一行组件，refs 到了就渲染。
+          ...(group.inputRefs !== undefined ? { refs: group.inputRefs } : {}),
           ...tsPart,
           ...seqMeta,
         });

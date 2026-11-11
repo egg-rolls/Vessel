@@ -12,6 +12,13 @@ export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
 export type MessageRefKind = 'file' | 'image' | 'document';
 
 /**
+ * `Message.refs` 的两条硬上限（条数也是 token 税）：单条消息最多 32 个引用、
+ * 单条 `path` 最多 4096 字符。写入侧（admit 闸门）与读取侧（投影）共用这两个数。
+ */
+export const MESSAGE_REFS_MAX = 32;
+export const MESSAGE_REF_PATH_MAX = 4096;
+
+/**
  * 消息引用（附件）：**只有路径与元信息，没有正文**。
  *
  * 引用文件的内容不进上下文——需要读时由多模态解析器插件提供的工具按路径读，

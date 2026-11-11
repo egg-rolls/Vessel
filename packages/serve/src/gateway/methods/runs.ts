@@ -11,6 +11,7 @@
  * @module @vessel-agent/serve
  */
 
+import { MESSAGE_REF_PATH_MAX, MESSAGE_REFS_MAX, type MessageRef } from '@vessel-agent/core';
 import {
   type DurableCheckpointLike,
   type DurableGatewayOptions,
@@ -22,7 +23,7 @@ import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import type { LiveRunSnapshotLike, RunControlLike } from '../../run-control.js';
 import { mapTenantError } from '../../tenant.js';
 import { stringParam } from './common.js';
-import { runStatusSchema } from './schemas.js';
+import { messageRefSchema, runStatusSchema } from './schemas.js';
 
 export interface RunMethodsDeps {
   defaultTenantId: string;
@@ -33,6 +34,26 @@ export interface RunMethodsDeps {
   durable(): DurableGatewayOptions | undefined;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
+  /**
+   * 0.52：`runs.start` 的附件引用闸门（只有装配层知道路径边界）。
+   *
+   * 缺省 = 不做判定（保持旧行为）：本单之前没有任何入口会带 refs，
+   * 而拒绝策略属于 app 侧（复用 basic-tools 的 `buildPathBoundary` / `evaluatePath`）。
+   * 返回 `undefined` = 通过；返回 `{ reason }` = 硬拒（handler 折成 `invalid_params`）。
+   */
+  checkRefs?(refs: readonly MessageRef[]): RefsVerdict | undefined;
+}
+
+/**
+ * 闸门结论。`reason` 是稳定码（客户端按它选文案），`path` 指向被拒的那一条。
+ *
+ * - `refs_invalid`：形状不合法（非绝对路径 / 超长 / 超条数）；
+ * - `refs_denied`：命中 deny 目录（内置 `~/.ssh` 等，或配置 `deny_paths`）；
+ * - `refs_outside_roots`：越出 `allowed_roots`（与工具读文件同一判定）。
+ */
+export interface RefsVerdict {
+  reason: 'refs_invalid' | 'refs_denied' | 'refs_outside_roots';
+  path?: string;
 }
 
 /**
@@ -92,6 +113,51 @@ function recencyOf(run: Record<string, unknown>): number {
   const started = run.started_at;
   if (typeof started === 'number' && Number.isFinite(started)) return started;
   return 0;
+}
+
+/**
+ * `runs.start.refs` → 归一后的条目（0.52）。
+ *
+ * params_schema 已经卡住形状；这里再截一次条数（服务端不接受比上限更宽的输入，
+ * 而不是悄悄截断）——超限属于 `invalid_params`，由调用方抛出。
+ */
+function readRefsParam(value: unknown): MessageRef[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new RpcError('invalid_params', 'refs must be an array');
+  if (value.length > MESSAGE_REFS_MAX) {
+    throw new RpcError('invalid_params', `refs exceeds ${MESSAGE_REFS_MAX} items`, {
+      reason: 'refs_invalid',
+    });
+  }
+  const refs: MessageRef[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new RpcError('invalid_params', 'refs entries must be objects', {
+        reason: 'refs_invalid',
+      });
+    }
+    const record = entry as Record<string, unknown>;
+    const kind = record.kind;
+    const path = record.path;
+    if (kind !== 'file' && kind !== 'image' && kind !== 'document') {
+      throw new RpcError('invalid_params', 'refs[].kind must be file|image|document', {
+        reason: 'refs_invalid',
+      });
+    }
+    if (typeof path !== 'string' || path.length === 0 || path.length > MESSAGE_REF_PATH_MAX) {
+      throw new RpcError('invalid_params', 'refs[].path must be a non-empty string', {
+        reason: 'refs_invalid',
+      });
+    }
+    const ref: MessageRef = { kind, path };
+    if (typeof record.name === 'string') ref.name = record.name;
+    if (typeof record.mime === 'string') ref.mime = record.mime;
+    if (typeof record.bytes === 'number' && Number.isFinite(record.bytes) && record.bytes >= 0) {
+      ref.bytes = Math.floor(record.bytes);
+    }
+    refs.push(ref);
+  }
+  return refs;
 }
 
 export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
@@ -209,6 +275,10 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           input: { type: 'string', minLength: 1 },
           session_id: { type: 'string' },
           agent_id: { type: 'string', minLength: 1 },
+          // 0.52（additive）：附件引用，只有路径与元信息，没有正文。
+          // 不传 = 无引用（旧客户端行为不变）。条数上限在 handler 里卡
+          //（校验器支持的子集没有 maxItems，声明了也不会生效）。
+          refs: { type: 'array', items: messageRefSchema },
         },
       },
       result_schema: {
@@ -230,10 +300,23 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         const agentId = typeof params.agent_id === 'string' ? params.agent_id : undefined;
         const requestedSession =
           typeof params.session_id === 'string' ? params.session_id : undefined;
+        // 附件引用闸门（0.52）：越界 / deny 目录在这里就拒，不进 user.message，
+        // 也不进 SessionState —— 引用一旦落盘就再也收不回来。
+        const refs = readRefsParam(params.refs);
+        if (refs.length > 0) {
+          const verdict = deps.checkRefs?.(refs);
+          if (verdict !== undefined) {
+            throw new RpcError('invalid_params', `refs rejected: ${verdict.reason}`, {
+              reason: verdict.reason,
+              ...(verdict.path !== undefined ? { path: verdict.path } : {}),
+            });
+          }
+        }
         const result = await control.start({
           input: stringParam(params, 'input'),
           ...(agentId !== undefined ? { agent_id: agentId } : {}),
           ...(requestedSession !== undefined ? { session_id: requestedSession } : {}),
+          ...(refs.length > 0 ? { refs } : {}),
         });
         // `session_id` 只能来自控制面；控制面没回传时不编造（用请求值）。
         const returnedSession = (result as { session_id?: unknown }).session_id;

@@ -6,7 +6,8 @@
  * 调用方按 run 的 systemPrompt 自行补齐）。
  *
  * 覆盖的事实事件：
- * - `user.message`           → `{role:'user', content}`（`data.message` 优先）
+ * - `user.message`           → `{role:'user', content, refs?}`（`data.message` 优先；
+ *                               `refs` 逐条宽松解析，非法项丢弃）
  * - `message.injected`       → `data.message`（BeforeLlm / RunOptions 注入）
  * - `llm.response`           → assistant（content / reasoning_content / tool_calls）
  * - `tool.call.started`      → 用来修正 assistant.tool_calls 的实际 name/arguments
@@ -24,7 +25,13 @@
  */
 
 import { formatClearedToolResult, isClearedToolResult } from '../context/index.js';
-import type { Message } from '../types/provider.js';
+import {
+  MESSAGE_REF_PATH_MAX,
+  MESSAGE_REFS_MAX,
+  type Message,
+  type MessageRef,
+  type MessageRefKind,
+} from '../types/provider.js';
 import type { ToolCall } from '../types/tool.js';
 
 /** 投影所需的最小事件形状（与 `SessionEventRecord` 结构兼容） */
@@ -57,6 +64,37 @@ function readStringArray(value: unknown): string[] {
   return result;
 }
 
+const REF_KINDS: ReadonlySet<string> = new Set<MessageRefKind>(['file', 'image', 'document']);
+
+/**
+ * 宽松解析 `Message.refs`（与 `timestamp` 同形的「能认就留、认不出就丢」）。
+ *
+ * 逐条校验、逐条丢弃：一条坏引用不能把整条消息（乃至整段历史）判成非法——
+ * 事件日志里的 refs 是写侧已经过闸门的形状，这里只防手改 / 旧版本 / 半成品数据。
+ * 条数与 `path` 长度按写侧同一上限截断，避免投影出比闸门更宽的历史。
+ */
+function asRefs(value: unknown): MessageRef[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const refs: MessageRef[] = [];
+  for (const entry of value) {
+    if (refs.length >= MESSAGE_REFS_MAX) break;
+    if (!isRecord(entry)) continue;
+    const kind = entry.kind;
+    if (typeof kind !== 'string' || !REF_KINDS.has(kind)) continue;
+    const path = readString(entry.path);
+    if (path === undefined || path.length === 0 || path.length > MESSAGE_REF_PATH_MAX) continue;
+    const ref: MessageRef = { kind: kind as MessageRefKind, path };
+    const name = readString(entry.name);
+    if (name !== undefined) ref.name = name;
+    const mime = readString(entry.mime);
+    if (mime !== undefined) ref.mime = mime;
+    const bytes = readCount(entry.bytes);
+    if (bytes !== undefined) ref.bytes = bytes;
+    refs.push(ref);
+  }
+  return refs.length > 0 ? refs : undefined;
+}
+
 /** 宽松校验一条 Message（只信结构，不做业务解释） */
 function asMessage(value: unknown): Message | null {
   if (!isRecord(value)) return null;
@@ -75,6 +113,9 @@ function asMessage(value: unknown): Message | null {
     message.timestamp = value.timestamp;
   }
   if (value.compaction_summary === true) message.compaction_summary = true;
+  // 附件引用：只有路径与元信息。不补 = 落盘后（重放 / 会话历史）引用凭空消失。
+  const refs = asRefs(value.refs);
+  if (refs !== undefined) message.refs = refs;
   return message;
 }
 
@@ -290,6 +331,8 @@ function messageSignature(message: Message): string {
       .map((call) => `${call.id}:${call.function.name}:${call.function.arguments}`)
       .join('|'),
     message.compaction_summary === true ? '1' : '0',
+    // 引用也是内容的一部分：两条只差 refs 的消息不能算同一条（否则增量合并会丢引用）。
+    (message.refs ?? []).map((ref) => `${ref.kind}:${ref.path}`).join('|'),
   ].join('\u0000');
 }
 

@@ -73,7 +73,7 @@ import {
   resumeError,
 } from './durable-wiring';
 import { createFederationSendPort } from './federation-send-port';
-import { registerRuntimeNoticeHook } from './hot-apply-assembly';
+import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './hot-apply-assembly';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
 import { resolveInteractionsDir } from './interactions-dir';
@@ -99,6 +99,7 @@ import {
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { startPluginWatch } from './plugin-watch';
+import { createConfigRefsGate } from './refs-gate';
 import {
   createHttpRpcClient,
   createLocalRpcClient,
@@ -1232,6 +1233,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       tenantId,
     });
     registerRuntimeNoticeHook(finalPluginHost, noticeBus);
+    // 0.52：附件引用的环境信息行（模型据此知道有附件、该用 media 工具读）。
+    registerRefsNoticeHook(finalPluginHost);
     peerNotices = createPeerNoticeRouter({
       bus: noticeBus,
       events: runtimeEvents,
@@ -1656,6 +1659,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(agentControl !== undefined
       ? { askAnswerDelivery: createAskAnswerDelivery(agentControl.service) }
       : {}),
+    // 0.52：附件引用的路径闸门（与 basic-tools 同一份 `allowed_roots` / `deny_paths`）。
+    // 放这里而不是 serve：边界判定属于装配层，serve 只认结论。
+    checkRefs: createConfigRefsGate(() => config),
   });
   // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume`
   // 只靠 `rpc.subscribe` 等待终态；缺少 onEvent 时订阅是 no-op，命令会一直挂起。

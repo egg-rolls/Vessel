@@ -13,6 +13,8 @@
  * @module @vessel-agent/serve
  */
 
+import type { MessageRef } from '@vessel-agent/core';
+
 /** run 状态（与 core `RunStatus` / `RunSnapshot.state` 同值）。 */
 export type RunControlStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -56,6 +58,13 @@ export interface RunStartLikeInput {
   agent_id?: string;
   /** 已绑定 body；未绑定则归 `agent_id` 并惰性创建 body。 */
   session_id?: string;
+  /**
+   * 0.52（additive）：附件引用，只有路径与元信息，没有正文。
+   *
+   * 缺省 / 空数组 = 无引用（`input` 是字符串时等价 `refs = []`）。适配层原样透传，
+   * 最终写成 core `Message.refs`；本层不读文件、不判边界（闸门在 `runs.start` handler）。
+   */
+  refs?: MessageRef[];
   /**
    * Q5（仅内部装配使用，不暴露为 `runs.start` RPC）：按续接已有 session 执行，
    * app 侧映射到 `AgentService.admit({ resume: true })`。

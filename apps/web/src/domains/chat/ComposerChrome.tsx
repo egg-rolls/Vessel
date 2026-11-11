@@ -40,21 +40,36 @@ function refKindMarker(kind: MessageRef['kind']): string {
 /**
  * `Message.refs`（只有路径）→ 引用区条目。
  *
- * 与原 `MessageRefs` 同一份信息：`id` 用 path（删除回写靠它反查下标），
- * 标签 = `name ?? basename(path)`，全路径进 `description`（hover title）。
+ * 与原 `MessageRefs` 同一份信息：`id` = `<path>#<第几次>`（同一路径可以引用两次，
+ * 删除要回写到那一条的下标），标签 = `name ?? basename(path)`，全路径进 `description`。
  */
 export function refsToAttachments(refs: readonly MessageRef[]): ComposerAttachment[] {
-  return refs.map((ref) => ({
-    id: ref.path,
-    label: refDisplayName(ref),
-    kind: refKindMarker(ref.kind),
-    note: refKindLabel(ref),
-    description: ref.path,
-  }));
+  // id 带「同一路径的第几次」：同一路径可以引用两次，删除必须回写到那一条的下标，
+  // 只靠 path 反查会永远删到第一条（渲染侧的 key 也是同一口径，见 MessageRefs）。
+  const occurrence = new Map<string, number>();
+  return refs.map((ref) => {
+    const seen = occurrence.get(ref.path) ?? 0;
+    occurrence.set(ref.path, seen + 1);
+    return {
+      id: `${ref.path}#${seen}`,
+      label: refDisplayName(ref),
+      kind: refKindMarker(ref.kind),
+      note: refKindLabel(ref.kind),
+      description: ref.path,
+    };
+  });
 }
 
-/** chip id（= path）→ refs 下标；同一路径重复引用时取第一条。 */
+/** chip id（`<path>#<第几次>`）→ refs 下标；解析不出时退回按 path 找第一条。 */
 export function refIndexForId(refs: readonly MessageRef[], id: string): number {
+  const separator = id.lastIndexOf('#');
+  if (separator > 0) {
+    const index = Number(id.slice(separator + 1));
+    const target = refs[index];
+    if (Number.isInteger(index) && target !== undefined && target.path === id.slice(0, separator)) {
+      return index;
+    }
+  }
   return refs.findIndex((ref) => ref.path === id);
 }
 

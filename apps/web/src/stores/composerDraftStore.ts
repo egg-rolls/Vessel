@@ -1,21 +1,25 @@
 /**
- * Composer 草稿缓存：输入框正文 + mention chips 按 key 保存 —— 切页面 / 切会话 / **刷新**都恢复。
+ * Composer 草稿缓存：输入框正文 + mention chips + 待发送引用按 key 保存 ——
+ * 切页面 / 切会话 / **刷新**都恢复。
  *
  * - 存储：`sessionStorage`（**不是** localStorage）。刷新同一标签页能恢复；关标签页即清，
  *   不跨标签、不跨设备、不跨重启。
  *   **隐私提醒**：草稿因此多了一份浏览器磁盘副本（会话恢复时 sessionStorage 可能被落盘），
  *   比纯内存多一处暴露面 —— 这是用户明确要求的取舍（「刷新也不该丢」）。
+ *   0.52 起待发送的**引用路径**也在这份副本里（只有路径与种类，没有正文）。
  * - key（沿用既有语义）：会话 `chat:new` / `chat:<sessionId>`，团队 `team:<nodeKey>:<teamId>`；
  * - 有界：单条正文 ≤ 32 KiB（UTF-8，超出截断保前缀）、最多**落盘** 50 个槽（按最后写入时间
  *   淘汰最旧；当前页面内存里仍保留全部）、空草稿不落盘（内存里也仍是「空即删条目」）；
+ *   引用单槽 ≤ 32 条（与 core `Message.refs` 同一上限）；
  * - 落盘节流：写动作后 debounce 300ms；`pagehide` / `beforeunload` / 页面转后台时同步 flush；
  * - SSR / 隐私模式：模块顶层不碰 storage，首次使用时懒 hydrate；读写全程 try/catch，
  *   失败静默降级成纯内存（等价于之前的行为）；
- * - stores 在下层：chips 只用结构类型，不 import `domains/**` 的 `MentionChip`；
+ * - stores 在下层：chips / refs 只用结构类型，不 import `domains/**`；
  * - 发送成功后由调用方 `clear(key)`；选择器未命中回退冻结空值
  *   （`useStore` 按 `Object.is` 比较快照，回退引用必须稳定）。
  */
 import { create } from 'zustand';
+import type { MessageRef } from '../gateway/types';
 
 /** 结构上兼容 `domains/team/mention` 的 `MentionChip`（stores 不反向依赖 domains）。 */
 export interface ComposerChip {
@@ -26,12 +30,21 @@ export interface ComposerChip {
 export interface ComposerDraft {
   readonly text: string;
   readonly chips: readonly ComposerChip[];
+  /**
+   * 待发送的附件引用（只传路径，0.52）。顺序即发送顺序，也是删除时的下标来源：
+   * 同一路径可以出现两次（两个 chip、删一个只删对应下标）。
+   */
+  readonly refs: readonly MessageRef[];
 }
 
 export const EMPTY_CHIPS: readonly ComposerChip[] = Object.freeze([]);
 
 /** 未命中 key 时的稳定引用，不能每次渲染新建。 */
-export const EMPTY_DRAFT: ComposerDraft = Object.freeze({ text: '', chips: EMPTY_CHIPS });
+export const EMPTY_DRAFT: ComposerDraft = Object.freeze({
+  text: '',
+  chips: EMPTY_CHIPS,
+  refs: Object.freeze([]) as readonly MessageRef[],
+});
 
 /** 草稿态（还没建 session）的槽位。 */
 export const NEW_CHAT_DRAFT_KEY = 'chat:new';
@@ -48,10 +61,13 @@ export function teamDraftKey(nodeKey: string, teamId: string): string {
 }
 
 /** 落盘键：一个键装所有槽（形状见 `PersistedPayload`），不按会话各用一个 storage key。 */
-const STORAGE_KEY = 'vessel.composerDraft.v1';
-const STORAGE_VERSION = 1;
+const STORAGE_KEY = 'vessel.composerDraft.v2';
+/** v2（0.52）：槽里多了待发送引用（`refs`）。v1 的旧槽整份丢弃 —— 正文另有会话可查。 */
+const STORAGE_VERSION = 2;
 /** 单条正文的 UTF-8 字节上限；超出截断保前缀（恢复后用户能看到自己写的开头）。 */
 const MAX_DRAFT_BYTES = 32 * 1024;
+/** 单槽引用条数上限：与 core `Message.refs` 同一口径（32 条）。 */
+const MAX_DRAFT_REFS = 32;
 /** 最多保留的槽数；超出按最后写入时间淘汰最旧。 */
 const MAX_SLOTS = 50;
 const PERSIST_DEBOUNCE_MS = 300;
@@ -60,6 +76,8 @@ interface PersistedSlot {
   key: string;
   text: string;
   chips: ComposerChip[];
+  /** 待发送引用（只有路径与种类）；没有引用时不写该键。 */
+  refs?: MessageRef[];
 }
 
 /** 落盘形状：数组顺序 = 由旧到新（淘汰直接切头部）。 */
@@ -126,10 +144,36 @@ function collectSlots(): PersistedSlot[] {
       key,
       text: truncateDraftText(draft.text),
       chips: draft.chips.map((chip) => ({ agentId: chip.agentId, label: chip.label })),
+      ...(draft.refs.length > 0 ? { refs: draft.refs.map((ref) => ({ ...ref })) } : {}),
     });
   }
   slots.sort((a, b) => (recency.get(a.key) ?? 0) - (recency.get(b.key) ?? 0));
   return slots.slice(-MAX_SLOTS);
+}
+
+/**
+ * 宽松解析引用：只认 `{kind, path}` 形状，逐条丢弃坏数据（与 core 投影同一口径）。
+ *
+ * 上限 `MAX_DRAFT_REFS`：条数是 token 税，落盘副本没有理由比服务端更宽。
+ */
+function parseRefs(value: unknown): MessageRef[] {
+  if (!Array.isArray(value)) return [];
+  const refs: MessageRef[] = [];
+  for (const entry of value) {
+    if (refs.length >= MAX_DRAFT_REFS) break;
+    if (!isRecord(entry)) continue;
+    const { kind, path } = entry;
+    if (kind !== 'file' && kind !== 'image' && kind !== 'document') continue;
+    if (typeof path !== 'string' || path.length === 0) continue;
+    const ref: MessageRef = { kind, path };
+    if (typeof entry.name === 'string') ref.name = entry.name;
+    if (typeof entry.mime === 'string') ref.mime = entry.mime;
+    if (typeof entry.bytes === 'number' && Number.isFinite(entry.bytes) && entry.bytes >= 0) {
+      ref.bytes = Math.floor(entry.bytes);
+    }
+    refs.push(ref);
+  }
+  return refs;
 }
 
 function parseChips(value: unknown): ComposerChip[] {
@@ -161,7 +205,11 @@ function parseDrafts(raw: string | null): Record<string, ComposerDraft> | null {
     if (!isRecord(slot)) continue;
     const { key, text } = slot;
     if (typeof key !== 'string' || key.length === 0 || typeof text !== 'string') continue;
-    const draft: ComposerDraft = { text: truncateDraftText(text), chips: parseChips(slot.chips) };
+    const draft: ComposerDraft = {
+      text: truncateDraftText(text),
+      chips: parseChips(slot.chips),
+      refs: parseRefs(slot.refs),
+    };
     if (isEmpty(draft)) continue;
     drafts[key] = draft;
   }
@@ -248,12 +296,21 @@ interface ComposerDraftState {
   /** 写正文；支持函数式更新，与 React `useState` 的 setter 同形，便于直接顶替。 */
   setText: (key: string, value: string | ((prev: string) => string)) => void;
   setChips: (key: string, chips: readonly ComposerChip[]) => void;
-  /** 发送成功后清空该 key（正文与 chips 一起）。 */
+  /** 写待发送引用（整组替换；顺序即发送顺序）。 */
+  setRefs: (key: string, refs: readonly MessageRef[]) => void;
+  /**
+   * 加一条引用（尾部追加，不查重）：同一路径两次引用就是两个 chip，
+   * 删除按下标回写，与 `MessageRefs` 的渲染口径一致。超过上限返回 `false`。
+   */
+  addRef: (key: string, ref: MessageRef) => boolean;
+  /** 删一条引用（下标即 refs 里的位置）。 */
+  removeRef: (key: string, index: number) => void;
+  /** 发送成功后清空该 key（正文、chips 与引用一起）。 */
   clear: (key: string) => void;
 }
 
 function isEmpty(draft: ComposerDraft): boolean {
-  return draft.text.length === 0 && draft.chips.length === 0;
+  return draft.text.length === 0 && draft.chips.length === 0 && draft.refs.length === 0;
 }
 
 /** 写入（或按需删除）一条草稿；空草稿删条目，避免长期挂着一堆空槽。 */
@@ -277,8 +334,12 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
     const text = typeof value === 'function' ? value(current.text) : value;
     // 同值写入不写 state（`Object.is` 短路，不触发重渲染），也不落盘。
     if (text === current.text) return;
-    // 只换正文时保留 chips 引用，chips 订阅者不因敲字重渲染。
-    const drafts = withDraft(get().drafts, key, { text, chips: current.chips });
+    // 只换正文时保留 chips / refs 引用，那两个订阅者不因敲字重渲染。
+    const drafts = withDraft(get().drafts, key, {
+      text,
+      chips: current.chips,
+      refs: current.refs,
+    });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
     else markTouched(key);
@@ -288,7 +349,58 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
   setChips: (key, chips) => {
     ensureHydrated();
     const current = get().drafts[key] ?? EMPTY_DRAFT;
-    const drafts = withDraft(get().drafts, key, { text: current.text, chips });
+    const drafts = withDraft(get().drafts, key, {
+      text: current.text,
+      chips,
+      refs: current.refs,
+    });
+    set({ drafts });
+    if (drafts[key] === undefined) forget(key);
+    else markTouched(key);
+    schedulePersist();
+  },
+
+  setRefs: (key, refs) => {
+    ensureHydrated();
+    const current = get().drafts[key] ?? EMPTY_DRAFT;
+    const capped = refs.slice(0, MAX_DRAFT_REFS);
+    const drafts = withDraft(get().drafts, key, {
+      text: current.text,
+      chips: current.chips,
+      refs: capped,
+    });
+    set({ drafts });
+    if (drafts[key] === undefined) forget(key);
+    else markTouched(key);
+    schedulePersist();
+  },
+
+  addRef: (key, ref) => {
+    ensureHydrated();
+    const current = get().drafts[key] ?? EMPTY_DRAFT;
+    if (current.refs.length >= MAX_DRAFT_REFS) return false;
+    const drafts = withDraft(get().drafts, key, {
+      text: current.text,
+      chips: current.chips,
+      refs: [...current.refs, ref],
+    });
+    set({ drafts });
+    markTouched(key);
+    schedulePersist();
+    return true;
+  },
+
+  removeRef: (key, index) => {
+    ensureHydrated();
+    const current = get().drafts[key];
+    if (current === undefined) return;
+    const refs = current.refs.filter((_, position) => position !== index);
+    if (refs.length === current.refs.length) return;
+    const drafts = withDraft(get().drafts, key, {
+      text: current.text,
+      chips: current.chips,
+      refs,
+    });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
     else markTouched(key);
@@ -319,6 +431,18 @@ export function useComposerChips(key: string): readonly ComposerChip[] {
   return useComposerDraftStore((state) => state.drafts[key]?.chips ?? EMPTY_CHIPS);
 }
 
+/** 未命中 key 时的稳定空引用（`Object.is` 比较快照，不能每次渲染新建）。 */
+const EMPTY_REFS: readonly MessageRef[] = Object.freeze([]);
+
+/** 读 key 的待发送引用；未命中回退冻结空数组（顺序即发送顺序）。 */
+export function useComposerRefs(key: string): readonly MessageRef[] {
+  ensureHydrated();
+  return useComposerDraftStore((state) => state.drafts[key]?.refs ?? EMPTY_REFS);
+}
+
+/** 引用条数上限（与 `addRef` / 落盘解析共用一份）。 */
+export const MAX_COMPOSER_REFS = MAX_DRAFT_REFS;
+
 /**
  * 把草稿态（`chat:new`）的正文继承给目标会话槽。
  *
@@ -329,11 +453,17 @@ export function useComposerChips(key: string): readonly ComposerChip[] {
  */
 export function adoptNewChatDraft(sessionId: string): void {
   ensureHydrated();
-  const { drafts, setText, clear } = useComposerDraftStore.getState();
-  const text = drafts[NEW_CHAT_DRAFT_KEY]?.text ?? '';
+  const { drafts, setText, setRefs, clear } = useComposerDraftStore.getState();
+  const source = drafts[NEW_CHAT_DRAFT_KEY];
+  const text = source?.text ?? '';
   if (text.length === 0) return;
   const targetKey = chatDraftKey(sessionId);
   if ((drafts[targetKey]?.text ?? '').length > 0) return;
   setText(targetKey, text);
+  // 引用与正文同族：草稿态攒的附件跟正文一起搬到目标会话槽（目标槽已有引用时不覆盖）。
+  const refs = source?.refs ?? EMPTY_REFS;
+  if (refs.length > 0 && (drafts[targetKey]?.refs ?? EMPTY_REFS).length === 0) {
+    setRefs(targetKey, refs);
+  }
   clear(NEW_CHAT_DRAFT_KEY);
 }

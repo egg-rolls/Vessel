@@ -21,7 +21,12 @@
  * @module web/chat/new-session
  */
 
-import type { AgentCreateInput, AgentSummary, RunStartResult } from '../../gateway/types';
+import type {
+  AgentCreateInput,
+  AgentSummary,
+  MessageRef,
+  RunStartResult,
+} from '../../gateway/types';
 
 /** 新建 agent 需要的最小控制面（`GatewayClient` 结构满足；探针可注入假实现）。 */
 export interface NewSessionAgentControl {
@@ -29,11 +34,12 @@ export interface NewSessionAgentControl {
   closeAgent(agentId: string): Promise<AgentSummary>;
 }
 
-/** `runs.start` 的薄包装（第三参数是本次投给哪个 agent）。 */
+/** `runs.start` 的薄包装（第三参数是本次投给哪个 agent；第四是这一轮的附件引用）。 */
 export type SubmitRun = (
   input: string,
   sessionId?: string,
   agentId?: string,
+  refs?: readonly MessageRef[],
 ) => Promise<RunStartResult>;
 
 /** `MEMBER_NAME_RE`（`packages/agent/src/service.ts:133`）允许的字符集。 */
@@ -78,6 +84,7 @@ export async function startInNewAgent(
   control: NewSessionAgentControl,
   submitRun: SubmitRun,
   input: string,
+  refs?: readonly MessageRef[],
   name: string = newSessionAgentName(),
 ): Promise<StartInNewAgentResult> {
   // 契约 §3 ①：只给 name —— 不传 kind（⇒ temporary）、不传 owner、不传 team。
@@ -88,7 +95,7 @@ export async function startInNewAgent(
   try {
     // 契约 §3 ②：带 agent_id。session_id 故意不传 —— 由服务端在 agent 下建 body，
     // 回填的就是这具 body 的 session。传一个客户端编的 session 会绑不上 agent。
-    const run = await submitRun(input, undefined, agentId);
+    const run = await submitRun(input, undefined, agentId, refs);
     if (!run.session_id) throw new Error('runs.start returned no session_id');
     return { agentId, sessionId: run.session_id, run };
   } catch (error) {

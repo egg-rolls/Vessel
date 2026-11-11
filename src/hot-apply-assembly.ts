@@ -24,6 +24,7 @@ import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { createRefsNoticeHook, REFS_NOTICE_HOOK } from './refs-notice-hook';
 import type { RuntimeNoticeBus } from './runtime-notice';
 import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from './runtime-notice-hook';
 import { resolveRuntimePermission } from './tenant-runtime-factory';
@@ -146,4 +147,18 @@ export function registerRuntimeNoticeHook(host: PluginHost, bus: RuntimeNoticeBu
   const existing = host.getHooks().some((hook) => hook.name === RUNTIME_NOTICE_HOOK);
   if (existing) return;
   host.registerHook(createRuntimeNoticeHook({ bus }));
+}
+
+/**
+ * 注册附件引用的环境信息行 hook（0.52，幂等）。
+ *
+ * 与 `runtime-notice` 同一处注册（同一 host、同一 BeforeLlm 阶段、同样的
+ * `vessel:notice` 尾消息）：`runtime.notice` 总线讲「发生了什么」，这里讲
+ * 「这一轮带了哪些附件」，两条消息在 Web 上都是环境信息卡。
+ * hook 自己按 session 记住上次注入的引用签名，重复 / 无引用时不产出消息。
+ */
+export function registerRefsNoticeHook(host: PluginHost): void {
+  const existing = host.getHooks().some((hook) => hook.name === REFS_NOTICE_HOOK);
+  if (existing) return;
+  host.registerHook(createRefsNoticeHook());
 }

@@ -469,6 +469,8 @@ export function ChatView({
           hasToken={hasToken}
           onOpenConnection={() => navigate({ domain: 'gateway' })}
           focusSignal={composerFocus}
+          refs={submitApi.refs}
+          onRemoveRef={submitApi.removeRef}
           contextUsage={transcriptApi.contextUsage}
         />
       </section>

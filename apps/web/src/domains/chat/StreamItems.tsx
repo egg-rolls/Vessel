@@ -12,6 +12,7 @@ import {
 } from '../../components/ui';
 import { formatClock } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
+import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
@@ -20,6 +21,7 @@ import { AgentMessageCard } from './AgentMessageCard';
 import { agentSenderOfName } from './agent-sender';
 import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
 import { EventRow, NoticeRow } from './EventRow';
+import { MessageRefs } from './MessageRefs';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
@@ -106,11 +108,14 @@ export function UserBubble({
   text,
   ts,
   entering = false,
+  refs,
 }: {
   text: string;
   ts?: number;
   /** 本帧才追加进来的项：入场只播一次（判定见 `useEnteringItemKeys`）。 */
   entering?: boolean;
+  /** 附件引用（只有路径）：气泡上方一行 chip，与落盘后的历史气泡同一组件。 */
+  refs?: readonly MessageRef[];
 }) {
   const clock = formatClock(ts);
   return (
@@ -120,6 +125,7 @@ export function UserBubble({
         entering && 'msg-enter',
       )}
     >
+      <MessageRefs refs={refs} />
       <div className="msg-bubble">
         {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。
             只有这种**有底色气泡**（`.msg-bubble`）才折；无底正文（助手）不折。 */}
@@ -317,7 +323,7 @@ export const RunItems = memo(function RunItems({
             defaultOpen={cardsDefaultOpen}
           />
         ) : (
-          <UserBubble text={group.input} ts={group.startedAt} />
+          <UserBubble text={group.input} ts={group.startedAt} refs={group.inputRefs} />
         ))}
       {renderItems.map((item) => {
         if (item.kind === 'reasoning') {

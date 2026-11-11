@@ -3,7 +3,7 @@
  * 拼成文本块、reasoning_delta 拼成独立的思考块。去重不在这里：live 与 history 的
  * 同一个逻辑对象由 domains/chat/transcript-items.ts 的认领合并。
  */
-import type { RunEvent, StreamChunk } from '../gateway/types';
+import type { MessageRef, RunEvent, StreamChunk } from '../gateway/types';
 import {
   type ErrorMeta,
   type ErrorVisibility,
@@ -70,6 +70,14 @@ export interface RunGroup {
    * 不做回填、不按正文猜。
    */
   inputName?: string;
+  /**
+   * 这一轮的附件引用（0.52；来自 `user.message` 的 `message.refs`，只有路径与种类）。
+   *
+   * 只用于运行态气泡上方的 chip：`run.started` 不带 refs（首帧还只知道文本），
+   * 等 `user.message`（过完 Input guardrail）到了再补。历史落盘后由
+   * `sessions.get` 的 `messages[].refs` 接管，两条路径渲染同一行 chip。
+   */
+  inputRefs?: MessageRef[];
   output?: string;
   error?: string;
   /** 0.14 additive：run.failed 的结构化错误元数据（缺字段时 undefined）。 */
@@ -404,6 +412,11 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         } else if (typeof d.content === 'string' && d.content.length > 0) {
           group.input = d.content;
         }
+        // 附件引用（0.52）：只有路径，宽松解析，坏条目逐条丢（与投影同一口径）。
+        if (group.inputRefs === undefined && message !== undefined) {
+          const refs = refsOf(message.refs);
+          if (refs.length > 0) group.inputRefs = refs;
+        }
         if (group.sessionId === undefined && typeof d.session_id === 'string') {
           group.sessionId = d.session_id;
         }
@@ -488,6 +501,34 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
   if (reasoningBuf) group.liveReasoning = reasoningBuf;
   if (buf) group.liveText = buf;
   return group;
+}
+
+/**
+ * 事件里的引用快照（宽松解析）：只认 `{kind, path}`，坏条目逐条丢。
+ *
+ * 与 core 投影同一口径，但 Web 不信任事件载荷（旧 gateway / 半成品数据都可能出现）；
+ * 条数上限也照抄（32 条），避免一条被手改的事件把气泡上方撑成一面墙。
+ */
+function refsOf(value: unknown): MessageRef[] {
+  if (!Array.isArray(value)) return [];
+  const refs: MessageRef[] = [];
+  for (const entry of value) {
+    if (refs.length >= 32) break;
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const kind = record.kind;
+    const path = record.path;
+    if (kind !== 'file' && kind !== 'image' && kind !== 'document') continue;
+    if (typeof path !== 'string' || path.length === 0) continue;
+    const ref: MessageRef = { kind, path };
+    if (typeof record.name === 'string') ref.name = record.name;
+    if (typeof record.mime === 'string') ref.mime = record.mime;
+    if (typeof record.bytes === 'number' && Number.isFinite(record.bytes) && record.bytes >= 0) {
+      ref.bytes = Math.floor(record.bytes);
+    }
+    refs.push(ref);
+  }
+  return refs;
 }
 
 /**
