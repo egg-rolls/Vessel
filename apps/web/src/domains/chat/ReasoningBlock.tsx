@@ -1,12 +1,19 @@
 /**
  * 思考过程块（唯一实现）：运行态（流式）与终止态（历史回填）共用。
  *
- * 以前只有运行态能渲染 reasoning_delta 拼出来的思考块，sessions.get 回填的历史消息
- * 里同样持久化着 `reasoning_content`，却没有入口渲染 —— 同一轮对话「跑的时候能看到
- * 思考、结束后消失」。这里把块独立出来，两边都用它，而不是各写一份。
+ * 两个入口，同一个组件：
+ * - 运行态：live item（run:<runId>:reasoning:<n>，以及未闭合的 liveReasoning 尾部），
+ *   由 StreamItems 与 TranscriptWindow 的 renderItem 渲染（streaming 见下）；
+ * - 历史态：sessions.get 回填消息自带的 `reasoning_content`，由 Transcript 里的
+ *   TranscriptMessage 在该条消息正文**之前**用 streaming=false 渲染。
+ *
+ * 历史态不会与运行态双出：被 live 认领的 assistant 消息在建 item 流时整条丢弃
+ * （transcript-items.ts 的 buildTranscriptItems 里对 claimedAssistant 的那次跳过），
+ * 那条消息的思考只由 run:<runId>:reasoning:<n> 负责。
  *
  * 约定沿用 live：
  * - 流式期间默认展开，结束后自动折叠；用户手动开合后不再被自动开合打断；
+ * - 历史态 streaming=false → **默认折叠**，点标题展开，没有别的东西会改写这个状态；
  * - 内容按纯文本渲染，不进入正文 Markdown；
  * - `startedAt` / `endedAt` 齐全时标题显示耗时（历史消息没有这两项，就不显示）。
  */

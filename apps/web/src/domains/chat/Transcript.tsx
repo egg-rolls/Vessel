@@ -6,7 +6,27 @@ import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
+import { ReasoningBlock } from './ReasoningBlock';
 import type { TranscriptItem } from './transcript-items';
+
+/**
+ * 这条历史消息自己要显示的思考文本（thinking 模式的 reasoning_content）。
+ *
+ * 历史侧的思考**挂在消息 item 内部**渲染，不单独造 item：
+ * - 不双出：被 live 认领的 assistant 消息在建 item 流时就被丢弃了（transcript-items.ts
+ *   的 buildTranscriptItems 里 `claimedAssistant.has(item.absIndex)` 那次 continue），
+ *   那条消息的思考由 run:<runId>:reasoning:<n> 负责；能走到这里的消息一定没有 live 来源。
+ * - 不另造 item 也就不碰排序/去重：思考跟着所属消息的时间戳走，位置固定在正文上方 ——
+ *   与 live 里「思考 item 排在正文 item 之前」是同一个顺序语义。
+ *
+ * 没有正文、也没有 tool_calls 的消息同样走这里：只渲思考块（没有空正文节点、没有空气泡）。
+ */
+function historyReasoning(message: Message): string | undefined {
+  if (message.role !== 'assistant') return undefined;
+  const text = message.reasoning_content;
+  if (typeof text !== 'string' || text.trim().length === 0) return undefined;
+  return text;
+}
 
 /** 消息时钟：只作为 hover 工具栏的元信息（`<time dateTime>` 语义保留）。 */
 
@@ -112,6 +132,8 @@ function TranscriptMessage({
   }
 
   const calls = message.tool_calls ?? [];
+  // 思考块就在这个 item 里渲：被 live 认领的消息走不到这里（见 historyReasoning）。
+  const reasoning = historyReasoning(message);
   const actions: MessageAction[] = [];
   if (message.content.trim().length > 0) {
     actions.push({
@@ -134,6 +156,8 @@ function TranscriptMessage({
           {t('chat.role.assistant')}
         </div>
       )}
+      {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。 */}
+      {reasoning !== undefined && <ReasoningBlock text={reasoning} streaming={false} />}
       {message.content && <Markdown className="msg-text" text={message.content} />}
       {hasMeta || actions.length > 0 ? (
         <MessageActions className="mt-1" actions={actions} meta={meta} />

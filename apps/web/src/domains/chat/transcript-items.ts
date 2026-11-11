@@ -319,9 +319,16 @@ export function buildHistoryIndex(
 
     // 只有 tool_calls、没有正文的 assistant 消息不单独成 item（工具卡代表它）。
     const hasContent = trimText(message.content).length > 0;
+    // 思考（thinking 模式的 reasoning_content）挂在**消息自己的 item** 上渲染（见
+    // Transcript.tsx 的 TranscriptMessage），所以带思考的消息即使没有正文也要成 item，
+    // 否则这段思考没有任何渲染入口 —— thinking 模式下「带工具调用的一轮」正文通常是空的，
+    // 照旧跳过就等于把整轮思考吞掉（用户反馈的「丢了好几个思考内容」正是这个）。
+    // 不画空气泡由渲染侧负责：没有正文时只渲思考块，不产出空正文节点。
+    const hasReasoning =
+      message.role === 'assistant' && trimText(message.reasoning_content).length > 0;
     const isAgentMessage = agentSenderOfName(message.name) !== undefined;
-    if (message.role === 'assistant' && !hasContent && ids.length > 0) return;
-    if (!hasContent && message.role !== 'user' && !isAgentMessage) return;
+    if (message.role === 'assistant' && !hasContent && ids.length > 0 && !hasReasoning) return;
+    if (!hasContent && message.role !== 'user' && !isAgentMessage && !hasReasoning) return;
 
     const sourceText = foldedSourceByAgent.get(absIndex);
     // 运行时提示（vessel:* 或裸文本 [inbox] …）：**独立成 notice 类 item**，
@@ -716,6 +723,10 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
 
   const items: TranscriptItem[] = [];
   for (const item of history.items) {
+    // 被 live 认领的 assistant 消息整条丢弃：它的正文由 run-text 渲染、思考由
+    // run:<runId>:reasoning:<n> 渲染。历史侧的思考挂在消息 item 内部（Transcript.tsx 的
+    // TranscriptMessage），所以这一行 continue 同时丢掉了历史那一份思考 ——
+    // 「那条消息归谁渲染」=「那份思考归谁渲染」，因此不会双出。
     if (item.kind === 'message' && claimedAssistant.has(item.absIndex)) continue;
     if (item.kind === 'tool' && item.callId !== undefined && liveCallIds.has(item.callId)) continue;
     items.push(item);
