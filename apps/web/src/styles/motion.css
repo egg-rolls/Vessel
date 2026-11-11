@@ -11,21 +11,30 @@
       不要用「每次 render 改 key / 拼随机类名」伪造重复动画 —— 那会重建节点，
       实际效果是整行重排 + 重播，比不做动画更抖。
 
-   2. 大小变化类 —— `.motion-disclosure`（`<details>`）/ `.motion-panel`（别的容器）
+   2. 大小变化类 —— `.motion-disclosure`（`<details>` 的展开 / 收起）
       `.motion-disclosure` 挂在 `<details>` 上，展开 / 收起做 `block-size` 过渡。原生
       summary 的键盘操作、可达名、收起后内容不可聚焦（content-visibility）全部保留，
       所以不要为了动画把 `<details>` 拆成 div + aria-expanded。
-      `.motion-panel` 给非 `<details>` 的折叠面板：`grid-template-rows: 0fr → 1fr`
-      （不要用 max-height 猜值：内容一长就抖，猜小了裁掉、猜大了拖沓）。
-      收起时**调用方**负责给 `inert` / `hidden` —— 本类只管尺寸动画，不替你管可访问性。
       浏览器不支持 `::details-content` 时直接开合（就是今天的行为），不做假动画。
 
+      **还没有**「非 `<details>` 的自管开合面板」，因此本文件不放那套 class（无使用点的
+      代码不预留）。真有第一个使用点时照这个写，别用 max-height 猜值（内容一长就抖，
+      猜小了裁掉、猜大了拖沓）——容器 display: grid + grid-template-rows: 0fr（收起）→
+      1fr（展开，行高跟着内容长，不用量高度），状态放 data-motion-open，子项 min-height: 0
+      + overflow: clip 防止把父级重新撑开，两个方向的时长都用 --motion-slow。
+      收起时**调用方**负责给 `inert` / `hidden` —— 动画 class 不管可访问性。
+
    3. 流式类 —— `.motion-stream`
-      挂在**流式正文容器**上（`.markdown` 自身，或它的外层容器都行）：正文块**首次
-      挂载**时淡入 + blur 收敛 —— 也就是「先排版、后显示」。
+      挂在**流式正文的外层容器**上（就是 `AssistantText` 的 `div.msg-assistant`，
+      它里面是 `div.markdown > 块`）：正文块**首次挂载**时淡入 + blur 收敛 ——
+      也就是「先排版、后显示」。
+      只认这一层：块选择器是 `.motion-stream .markdown > *`，挂在 `.markdown` 自身
+      不匹配 —— 免得同一个块被「父级淡入 + 块淡入」两层同时动画（叠起来发虚）。
       判据必须是「块首次挂载」。**严禁**按 delta / 定时器逐块逐字 setState 播动画：
       流式期间每 50ms 一次 flush，任何按 delta 跑的东西都会抖。
       块的位置与高度一次到位（只动 opacity / filter），流式期不要做高度动画。
+      段级入场与块级不叠：`AssistantText` 首帧定格一次「这条正文是流式出现还是整段出现」，
+      流式出现只挂 `.motion-stream`，整段出现才挂 `.msg-enter`。
 
    ## Token
    时长与缓动只认 `styles/tokens.css` 的 `--motion-fast` / `--motion-base` /
@@ -105,29 +114,6 @@
   }
 }
 
-/* 非 `<details>` 的折叠面板（自管开合的容器）：0fr → 1fr 过渡行高。
-   展开 / 收起两个方向都在这一对规则里，开关状态放在 `data-motion-open` 上。 */
-.motion-panel {
-  display: grid;
-  grid-template-rows: 0fr;
-  min-height: 0;
-  opacity: 0;
-  transition:
-    grid-template-rows var(--motion-slow) var(--motion-ease),
-    opacity var(--motion-base) var(--motion-ease);
-}
-
-.motion-panel[data-motion-open="true"] {
-  grid-template-rows: 1fr;
-  opacity: 1;
-}
-
-/* 行收缩到 0fr 时子项必须能压到 0，否则内容会把父级重新撑开。 */
-.motion-panel > * {
-  min-height: 0;
-  overflow: clip;
-}
-
 /* ── ③ 流式类 ─────────────────────────────────────────────── */
 
 /* 正文块「先占位、再出现」：块的高度 / 位置在挂载那一帧就按最终排版落位，
@@ -139,9 +125,8 @@
   }
 }
 
-/* 两种挂法都支持：`.motion-stream` 直接挂在 `.markdown` 上（块是直接子元素），
-   或挂在正文外层容器上（块在 `.markdown` 里）。 */
-.motion-stream > *,
+/* 只认「正文外层容器」这一层：块在 `.markdown` 里。挂在 `.markdown` 自身不匹配，
+   这样同一个块永远不会被父级与自身两层动画叠着播。 */
 .motion-stream .markdown > * {
   animation: motion-stream-block var(--motion-slow) var(--motion-ease);
 }
@@ -151,18 +136,12 @@
 @media (prefers-reduced-motion: reduce) {
   /* base.css 已经把 `animation-duration` / `transition-duration` 压到 `.001ms !important`；
      这里再把「没有动画」这个结果钉死，不依赖那 1μs 的过渡/动画跑完。
-     出现类与流式类动画都是纯 opacity / filter，关掉就是终态。 */
+     出现类与流式类动画都是纯 opacity / filter，关掉就是终态；流式这里关的是**块选择器**
+     （`.markdown > *`），不是只关父类 —— 动画本来就挂在块上。 */
   .motion-appear,
   .motion-appear-rise,
-  .motion-stream > *,
   .motion-stream .markdown > * {
     animation: none;
-  }
-
-  /* 面板：收起态由 0fr 行高裁掉（内容不可见），所以这里直接给终态透明度。 */
-  .motion-panel {
-    transition: none;
-    opacity: 1;
   }
 
   /* base.css 的抑制规则是元素选择器（`*` / `*::before` / `*::after`），

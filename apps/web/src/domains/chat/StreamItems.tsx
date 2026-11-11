@@ -1,4 +1,4 @@
-import { memo, type ReactNode, useMemo } from 'react';
+import { memo, type ReactNode, useMemo, useState } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip, StatusGlyph } from '../../components/StatusChip';
@@ -71,10 +71,24 @@ const NO_ACTIONS: readonly MessageAction[] = [];
  * 旧的 `<div className="msg-text live-text">` 已删除：`.live-text` 没有任何样式，
  * 保留它反而让流式与落盘的 class 列表不一致。
  *
- * 「唯一容器」还承担**入场动画**：`entering` 时外层加 `.msg-enter`（写在里层，别往调用方
- * 搬 —— 搬出去就又成了第二份 `msg-assistant > div.msg-text` 手写结构）。只给「事件流里
- * 新追加」的 item（判定见 `components/ui/useEnteringItemKeys.ts`）；容器在 streaming
- * 翻转前后不变，所以类名只在挂载那一次生效，run 结束不会重播。
+ * 「唯一容器」还承担**动画**，而且两种出现方式**互斥**（叠在一起会发虚）：
+ * - `.msg-enter`（段级：整段淡入 + 4px）只给「事件流里新追加、且一出现就是整段落定」的
+ *   item（判定见 `TranscriptWindow.tsx` 的 `useEnteringItems` / `useEnteringItemKeys`）；
+ * - `.motion-stream`（块级：正文块首次挂载时淡入 + blur 收敛，见 `styles/motion.css`）
+ *   只给**流式出现**的正文 —— 也就是用户要的「先排版、后显示」。
+ *
+ * 判定按**首帧定格**（`useState` 初值，之后 `streaming` 翻转不改判）：这段正文第一次
+ * 出现时是不是流式，决定它用哪一族。不这么做的话，run 结束时 `streaming` 翻成 false
+ * 才补上的 `.msg-enter` 会迟到地播一次淡入。`.motion-stream` 本身只在 `streaming` 期间
+ * 挂着（收字一结束就摘），免得收尾那一次解析口径变化（未闭合围栏 / 半张表格收成正式块）
+ * 造成的块重建被当成「新块」再淡入一遍。
+ *
+ * 不重播的保证：`.motion-stream` 的动画挂在 `.markdown > *` 上，而 Markdown 的块是按
+ * 下标 key 渲染的（`components/Markdown.tsx` 的 `MarkdownBlocks`：`blocks.map((block,
+ * index) => <Block key={index} …/>)`，文件头有 biome-ignore 说明），流式增长时前面的块
+ * 原地复用、只有真正新出现的块才挂新节点 ⇒ 只有新块播一次，追加文本不重播。
+ * 容器本身在 streaming 翻转前后不变（`run:<runId>:text:<n>` 在 flush 前后同 key），
+ * 所以挂类的时机也只在挂载 / 收字这两次。
  *
  * **这里不做长消息折叠**（0.50 起收窄折叠作用面）：助手正文是 `.msg-assistant`
  * —— 没有底色气泡包裹的纯正文，按用户裁定「有背景包裹的气泡才收」不折。折叠只留给
@@ -93,11 +107,23 @@ export function AssistantText({
   streaming?: boolean;
   /** 操作行（复制 / 重试）；运行态不传，避免停在文字下方的一条会变的控件。 */
   actions?: ReactNode;
-  /** 本帧才追加进来的项：入场只播一次（判定见 `useEnteringItemKeys`）。 */
+  /** 本帧才追加进来的项：入场只播一次（判定见 `TranscriptWindow.tsx` 的 `useEnteringItems`）。 */
   entering?: boolean;
 }) {
+  // 首帧定格一次「这段正文怎么出现」（惰性初值只跑挂载那一次）：流式出现的走块级
+  // `.motion-stream`，整段出现的走段级 `.msg-enter`。两者不同时生效，也不随 streaming
+  // 翻转改判 —— 否则 run 结束时才补上的 `.msg-enter` 会迟到地播一次。
+  const [reveal] = useState(() => (streaming ? 'stream' : entering ? 'enter' : 'none'));
   return (
-    <div className={cn('msg-assistant group max-w-full', entering && 'msg-enter')}>
+    <div
+      className={cn(
+        'msg-assistant group max-w-full',
+        reveal === 'enter' && 'msg-enter',
+        // 收字结束就摘类：`streaming` 翻转会让 Markdown 换一次解析口径（未闭合围栏 /
+        // 半张表格收成正式块），那一帧若有块重建，带着类就会补播一次级联淡入。
+        reveal === 'stream' && streaming && 'motion-stream',
+      )}
+    >
       <Markdown className="msg-text" text={text} streaming={streaming} />
       {actions}
     </div>

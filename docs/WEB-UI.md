@@ -54,16 +54,30 @@
 点击看全文的卡必须给 `children`，否则被 ellipsis 吃掉的那段正文永远读不到。环境信息卡的
 scope 是卡头标题（与 `来自 agent X` 同级、同一组 class），不是色条或独立底色。
 
-**消息入场与长消息折叠（会话 / Team 共用一份实现）**：样式在
-`styles/domains/chat.css`（`.msg-enter` / `.msg-fold*`），行为在
-`components/ui/MessageFold.tsx` 与 `components/ui/useEnteringItemKeys.ts`。两页共用同一套
+**动画基座（三族）+ 消息入场 + 长消息折叠（会话 / Team 共用一份实现）**：动画 class 与
+keyframes 只有一份，在 `styles/motion.css`（文件头就是复用契约：出现 / 大小变化 / 流式三族
+各用什么、哪一族禁用哪些写法），token 在 `styles/tokens.css` 的 `--motion-*`。新组件只挂
+class，**不要自己写 keyframes，也不要写裸毫秒数**。折叠的 class 在 `styles/domains/chat.css`
+（`.msg-enter` / `.msg-fold*`），折叠行为在 `components/ui/MessageFold.tsx`。两页共用同一套
 class 与同一个阈值，不要给某一页复制第二份。
 
-- **入场只播给新追加的项**：fade-in + 上移 4px（`--motion-ui`）。判据不是「挂载」而是
-  「追加」——会话页只有 live item 播，历史消息不播（历史加载是回填；且 live 落盘后由
-  `msg:<absIndex>` 接管同一段正文，两个 key 都播就是同一段话淡入两次）；Team 页由
-  `useEnteringItemKeys` 记一次「首屏那一批」，只有之后追加的行播。类名挂上后不再摘
-  （半路摘掉会把播到一半的动画掐断）；React 对稳定 key 复用 DOM 节点，所以重渲染不会重播。
+- **出现类只播给「新追加」的项**：整段出现用 `.msg-enter`（淡入 + 上移 4px，是
+  `motion-appear-rise` 的别名），卡片 / 思考块用 `.motion-appear`（只动透明度）。判据不是
+  「挂载」而是「追加」——会话页在 `domains/chat/TranscriptWindow.tsx` 的 `useEnteringItems`
+  （首屏一次到货 ≥3 条视为回填 / 回放：F5、重连、切会话都不播；1–2 条视为真追加，之后的新
+  key 一律播；历史消息 `msg:<absIndex>` 不播——历史加载是回填，且 live 落盘后由它接管同一段
+  正文，两个 key 都播就是同一段话淡入两次）；Team 页仍由
+  `components/ui/useEnteringItemKeys.ts` 记一次「首屏那一批」，只有之后追加的行播。类名挂上
+  后不再摘（半路摘掉会把播到一半的动画掐断）；React 对稳定 key 复用 DOM 节点，所以重渲染
+  不会重播。
+- **大小变化类**：卡片 / 思考块的展开 / 收起是 `.motion-disclosure`（`<details>` 内容盒的
+  `block-size` 过渡；原生 summary 的键盘与「收起后内容不可聚焦」全部保留，不要拆成
+  div + aria-expanded；不支持 `::details-content` 的浏览器直接开合）。不要用 max-height
+  猜高度。
+- **流式类**：`.motion-stream` 挂在 `AssistantText` 的外层容器上（`div.msg-assistant`，
+  选择器只认这一层），正文块首次挂载时淡入 + blur 收敛 =「先排版、后显示」。段级
+  （`.msg-enter`）与块级（`.motion-stream`）互斥、按首帧定格，同一段不叠两种动画；流式增长
+  只让**新块**播一次，追加文本不重播（Markdown 的块按下标 key 复用节点）。
 - **只有「有背景包裹的气泡」才折叠**：正文超过 `--msg-fold-max-h`（400px，阈值唯一来源）
   就裁到该高度 + 底部 mask 渐隐，气泡内中下侧给一个纯文字按钮（`展开全文 / 收起`，带
   `aria-expanded`）。折叠只改显示：DOM 里始终是全文，复制按钮走 `message.content` /
@@ -76,7 +90,9 @@ class 与同一个阈值，不要给某一页复制第二份。
   展开体（卡片有底色，但它是「卡片」不是气泡，两级结构已由 `StreamCard` 的
   「单行摘要 + chevron」提供）、历史助手正文。无底正文没有底色锚点，裁一刀读者看不出那是
   被收起的一段话。
-- **`prefers-reduced-motion` 下直接显示**：没有位移、没有淡入。
+- **`prefers-reduced-motion` 下直接显示**：三族都在 `styles/base.css` 的全局压制下静止
+  （`animation-duration` / `transition-duration` 压到 `.001ms`）；`::details-content` 那族
+  `*` 匹配不到伪元素，已在 `styles/motion.css` 末尾显式关掉。
 - **助手正文只有一个容器**：`AssistantText`（`msg-assistant > div.markdown.msg-text`，
   `domains/chat/StreamItems.tsx`）。主时间线的 `run-text`、子 agent 面板的正文与收字尾巴
   都走它，入场就收在它里面 —— 不要再手写第二份 `msg-assistant > div.msg-text`
