@@ -6,8 +6,8 @@
  * 写操作（create / update / archive）落在节点自己，必须人类 token。
  */
 import { unwrapAgentResult } from './agent-result';
-import { fetchNodeRpc, type NodeConfig } from './nodes';
 import type { AttachmentListParams, AttachmentListResult } from './node/attachments';
+import { fetchNodeRpc, type NodeConfig } from './nodes';
 import type {
   AgentBatchResponse,
   AgentCreateInput,

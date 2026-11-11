@@ -157,7 +157,7 @@ async function listDirectory(
     }
     // deny 与越界目标都不出现 —— 符号链接按 realpath 判，链接名骗不了这一关。
     if (evaluatePath(real, boundary) !== 'allow') continue;
-    let info;
+    let info: Awaited<ReturnType<typeof stat>>;
     try {
       info = await stat(real);
     } catch {

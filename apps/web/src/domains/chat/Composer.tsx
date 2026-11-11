@@ -4,8 +4,8 @@ import { AutoGrowTextarea, Button } from '../../components/ui';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { AttachBrowseClient } from './AttachDialog';
-import { composerAttachBinding } from './ComposerAttach';
 import { ChatDock } from './ChatDock';
+import { composerAttachBinding } from './ComposerAttach';
 import {
   type ComposerContextUsage,
   ComposerField,
