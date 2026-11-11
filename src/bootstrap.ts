@@ -52,6 +52,7 @@ import { createAgentControl } from './agent-control';
 import { type AgentOwnerServer, startAgentOwnerServer } from './agent-owner-server';
 import { createAgentServiceWiring } from './agent-service-wiring';
 import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
+import { createAskAnswerDelivery } from './ask-answer-delivery';
 import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from './ask-channel';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
@@ -1649,6 +1650,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // handler 按既有语义报错），不新增实体。
     ...(agentControl !== undefined
       ? { agent: agentControl.control, teams: agentControl.team, runControl: localRunControl }
+      : {}),
+    // 0.52：async ask 的答案投放（本地 REPL / 本地 dispatcher 也要能起那一次新 run）。
+    // 与 `--serve` 同一份实现：答案作为 user 消息进成员 inbox 并起新 run。
+    ...(agentControl !== undefined
+      ? { askAnswerDelivery: createAskAnswerDelivery(agentControl.service) }
       : {}),
   });
   // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume`

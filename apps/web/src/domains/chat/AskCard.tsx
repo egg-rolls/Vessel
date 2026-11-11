@@ -82,6 +82,11 @@ export function AskCard({
         <span className="ask-card-meta font-mono text-muted tabular-nums">
           run {truncate(request.runId, 16)}
         </span>
+        {request.mode === 'async' && (
+          <span className="ask-card-meta font-mono text-2xs text-accent">
+            {t('ask.asyncBadge')}
+          </span>
+        )}
         {pendingCount > 1 && (
           <span className="text-muted">{t('ask.pendingMore', { count: pendingCount - 1 })}</span>
         )}

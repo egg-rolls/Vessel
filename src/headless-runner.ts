@@ -60,7 +60,10 @@ export interface SuspendedAsk {
  *
  * 不等待人类（headless 没有进程内应答者）；`timeout` 是 core 的
  * `RunInterruptReason`，checkpoint 落 `interrupted`，`--resume-run` 可恢复。
- * 返回 `flush()`，调用方在 run 收口后 await，确保退出前文件已落盘。
+ *
+ * 0.52：`mode: 'async'` 的请求**不挂起、不中断**——工具已经返回成功，run 继续跑完；
+ * 这里只把请求落盘（仍可在待批页回答），答案要等有 live runtime 的宿主（gateway）
+ * 才能投出去，所以额外打一行 stderr 说明。返回 `flush()`，调用方在 run 收口后 await。
  */
 export function installHeadlessAskSuspend(
   events: EventStream,
@@ -93,7 +96,9 @@ export function installHeadlessAskSuspend(
             runId: request.runId,
             ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
             ...(request.questions !== undefined ? { questions: request.questions } : {}),
-            suspended: channel.suspend !== false,
+            ...(request.mode === 'async'
+              ? { mode: 'async' as const }
+              : { suspended: channel.suspend !== false }),
           });
         } catch (error) {
           persistFailed = true;
@@ -103,6 +108,15 @@ export function installHeadlessAskSuspend(
             }`,
           );
         }
+      }
+      // 0.52：async 的请求不该让 headless run 挂起 —— 工具已经返回成功，
+      // run 继续跑完；也没有 run 可续跑（答案靠 gateway 起新 run）。
+      if (request.mode === 'async') {
+        console.error(
+          `[vessel] ask_user (async) request ${request.requestId} is waiting for a human; ` +
+            'the run continues. Answer it from a running gateway (`vessel attention`) to deliver it.',
+        );
+        return;
       }
       // 明确的事件（不静默）：网关/观测可区分“等不到人类”与普通失败。
       events.publish({

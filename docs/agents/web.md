@@ -24,8 +24,13 @@ applies_to: [N, M]
 - 权限 / `ask_user` 卡片在 **Composer 槽位**（`domains/chat/PromptSlots.tsx` 的 `PermissionCard` / `AskCard`）：pending 期间替换输入框，多条由 `pendingQueue` 排序列出；不得恢复全局遮罩，也不要挪进 `RunCard` 或做成时间线条目。数据源是 `stores/interactionStore`（`gateway/connection-handlers.ts` 直接写入 + `interactions.list` hydration 补回），**不经过**时间线分组。其他端应答 / 过期 / run 终态必须收起卡片。
 - 时间线卡片只有 `StreamCard` 一张：卡头 `title` / `meta` / `summary` / chevron 一个结构，
   `children` 的有无决定能不能展开（详见 [WEB-UI.md](../WEB-UI.md) 的「时间线只有一种卡」）。
-  环境信息卡（`domains/chat/EnvCard.tsx`）与「来自 agent X」卡必须同一套样式与展开机制，
-  不要自造卡头，也不要给某张卡单独换色 / 色条。
+  环境信息卡（`domains/chat/EnvCard.tsx`）、「来自 agent X」卡与「待批答复」卡
+  （`domains/chat/AskAnswerCard.tsx`）必须同一套样式与展开机制，不要自造卡头，也不要给某张卡单独换色 / 色条。
+- async `ask_user` 的答案**是**一条 user 消息（协议要求），但人是在待批页答的：时间线上渲染成
+  「待批答复」卡而不是用户气泡。身份只看结构化的 `Message.name === 'ask:answer'`
+  （`domains/chat/ask-answer.ts`，与 `packages/agent` 的 `ASK_ANSWER_INPUT_NAME` 同一字面量，
+  `check-transcript-items` 对账），正文解析失败就退回普通用户气泡 —— 绝不吞正文。
+  这类 ask 的 run 早已结束，卡片**不随 run 终态消失**（`interactionReducer` 的 `run-finished` 例外）。
 - 所有 transient 提示 / banner / 交互摘要统一经 AppBar 中心 `MessageBar`；`ToastProvider`
   只提供 API，不渲染，禁止新增 fixed toast / 浮层（见 [WEB-UI.md](../WEB-UI.md) 硬规则 7）。
 - 不用 `backdrop-filter` 做层级；层级靠边框与阴影表达（ADR-072/082）。

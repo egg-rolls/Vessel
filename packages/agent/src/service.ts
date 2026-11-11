@@ -2064,6 +2064,8 @@ export class AgentServiceImpl implements AgentService {
     const strict = input.strict === true;
     // Q5：仅内部装配传入；runs.start RPC 不暴露该字段。
     const resume = input.resume === true;
+    // 0.52：async ask 的答案投递（见 AdmitInput.origin）。
+    const fromAskAnswer = input.origin === 'ask_answer';
 
     // 1. session → agent/body 解析（绑定优先；矛盾输入 = invalid_input）
     let record: MemberRecord;
@@ -2089,7 +2091,9 @@ export class AgentServiceImpl implements AgentService {
     }
 
     // 2. membership / presence / visibility（只按 sender 自身的可见性判定）
-    if (!this.canAdmitView(record, from)) {
+    //    0.52 例外：async ask 的答案是**成员自己提的问题**被人类回答，投递不受
+    //    「谁能驱动这个成员」的可见性闸门约束 —— 否则 private 成员的提问永远答不了。
+    if (!fromAskAnswer && !this.canAdmitView(record, from)) {
       throw new AgentError('member_not_visible', `member_not_visible: ${record.id}`);
     }
     if (record.membership === 'left' || record.state === 'closed') {
@@ -2165,6 +2169,7 @@ export class AgentServiceImpl implements AgentService {
       channel,
       // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
       ...(senderName !== undefined ? { from_name: senderName } : {}),
+      ...(fromAskAnswer ? { origin: 'ask_answer' as const } : {}),
     };
     // rotate 窗口内：旧 body 即将退役，消息只落 inbox（不进旧队列、不提交），
     // 由新 body 的 hook 按「启动嘱托 → 旧队列 → 新队列」顺序注入。

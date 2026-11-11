@@ -275,6 +275,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.tool.duration.millis': '{value}ms',
   'chat.tool.duration.minutes': '{minutes}m {seconds}s',
   'ask.title': 'Agent question',
+  'ask.asyncBadge': 'Deferred (the answer starts a new run)',
   'ask.goTo': 'Answer',
   'ask.pendingMore': '{count} more pending',
   'ask.progress': 'Question {current} of {total}',
@@ -1136,6 +1137,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.notApplied': 'not applied',
   'chat.env.moreLines': '{count} more lines not shown',
   // agent-to-agent message card (the user message an A2A delivery becomes)
+  'chat.askAnswer.title': 'Approval answer',
+  'chat.askAnswer.aria': 'Answer to a deferred question',
+  'chat.askAnswer.source': 'from approvals',
   'chat.agentMessage.from': 'from agent {name}',
   'chat.agentMessage.group': 'Message from agent {name}',
   'chat.role.assistant': 'Assistant',

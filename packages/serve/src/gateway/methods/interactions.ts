@@ -73,6 +73,15 @@ export interface InteractionMethodsDeps {
    * 缺失 = 不续跑（离线 attention / 无 durable 的装配）。
    */
   resumeSuspendedAsk?: (record: StoredInteraction) => boolean | Promise<boolean>;
+  /**
+   * 0.52：async ask 的答案投放（作为 user 消息进成员 inbox + 起一次新 run）。
+   *
+   * 与 `resumeSuspendedAsk` 互斥：async 的提问 run 早已正常结束，没有可续跑的
+   * checkpoint，答案只能开新 run。只在「`pending` → `answered` 这一次迁移」上调用，
+   * 重复应答不触发；实现方必须自吞全部错误（答案已落定，投放失败只退化为只记录答案）。
+   * 缺失 = 不投放（离线 attention / 没有 live runtime 的装配）。
+   */
+  deliverAsyncAskAnswer?: (record: StoredInteraction) => boolean | Promise<boolean>;
 }
 
 /** `interactions.list` 的单条结果（Web 端消费契约）。 */
@@ -91,6 +100,11 @@ export interface ListedInteraction {
   questions?: unknown;
   created_at: number;
   status: StoredInteractionStatus;
+  /**
+   * 0.52：ask 的语义（`async` = 投放到待批页后立即返回成功，答案稍后起新 run）。
+   * 缺省键 = sync（阻塞型），旧客户端不受影响。
+   */
+  mode?: 'sync' | 'async';
   answer?: StoredInteractionAnswer;
 }
 
@@ -121,6 +135,7 @@ const interactionItemSchema = {
     questions: {},
     created_at: { type: 'number' },
     status: { type: 'string', enum: ['pending', 'answered', 'orphaned'] },
+    mode: { type: 'string', enum: ['sync', 'async'] },
     answer: {
       type: 'object',
       required: ['answered_at'],
@@ -163,6 +178,7 @@ function collectInteractions(sources: InteractionSources): ListedInteraction[] {
       ...(kind === 'ask' ? { questions: record.input } : { input: record.input }),
       created_at: record.created_at,
       status: record.status,
+      ...(record.mode === 'async' ? { mode: 'async' as const } : {}),
       ...(record.answer !== undefined ? { answer: record.answer } : {}),
     });
   }
@@ -265,6 +281,11 @@ function parseListLimit(value: unknown): number {
   return value;
 }
 
+/** 记录是否是「仍在等人类」的 ask（sync 或 async）。 */
+function isPendingAsk(record: StoredInteraction): boolean {
+  return record.status === 'pending' && (record.kind ?? 'permission') === 'ask';
+}
+
 /** 记录是否是「headless 挂起、且仍在等人类」的 ask。 */
 function isSuspendedPendingAsk(record: StoredInteraction): boolean {
   return (
@@ -285,7 +306,14 @@ function isFreshAnswer(result: unknown): boolean {
 }
 
 export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMethodDefinition[] {
-  const { respondPermission, respondAsk, interactions, teamScope, resumeSuspendedAsk } = deps;
+  const {
+    respondPermission,
+    respondAsk,
+    interactions,
+    teamScope,
+    resumeSuspendedAsk,
+    deliverAsyncAskAnswer,
+  } = deps;
 
   /** 请求所属 session；记录不存在或没有 session 时返回 undefined。 */
   function sessionForRequest(requestId: string): string | undefined {
@@ -406,6 +434,9 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           // 只对 headless 挂起的 ask 出现：这个答案是否让那个 run 重新跑起来。
           // 缺省键 = 普通阻塞型 ask（应答者就在原地等，不存在续跑概念）。
           resumed: { type: 'boolean' },
+          // 只对 async ask 出现：答案是否已作为 user 消息投给该成员并起了一次新 run。
+          // false = 只记录了答案（没有 live runtime / 成员已关闭）。
+          delivered: { type: 'boolean' },
         },
       },
       handler: async (params, ctx) => {
@@ -421,6 +452,23 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           answered_by: 'human',
           answered_via: params.answered_via === 'cli' ? 'cli' : 'rpc',
         });
+        if (
+          deliverAsyncAskAnswer !== undefined &&
+          before !== undefined &&
+          isPendingAsk(before) &&
+          before.mode === 'async' &&
+          isFreshAnswer(result)
+        ) {
+          let delivered = false;
+          try {
+            delivered = (await deliverAsyncAskAnswer({ ...before, status: 'answered' })) === true;
+          } catch {
+            delivered = false;
+          }
+          return typeof result === 'object' && result !== null
+            ? { ...(result as Record<string, unknown>), delivered }
+            : { ok: true, delivered };
+        }
         if (
           resumeSuspendedAsk === undefined ||
           before === undefined ||

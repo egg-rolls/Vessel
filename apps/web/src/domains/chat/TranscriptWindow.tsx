@@ -10,6 +10,7 @@ import type { RunGroup, StoredEvent } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
 import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/sessionStore';
 import { AgentMessageCard } from './AgentMessageCard';
+import { AskAnswerCard } from './AskAnswerCard';
 import { ChatWelcome } from './ChatWelcome';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
@@ -243,6 +244,9 @@ export function TranscriptWindow({
         ) : (
           <UserBubble text={item.text} ts={item.ts} />
         );
+      case 'ask-answer':
+        // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
+        return <AskAnswerCard card={item.card} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
       case 'run-text':
         return item.streaming ? (
           <div className="msg-assistant max-w-full">

@@ -33,6 +33,13 @@ export interface StoredInteractionAnswer {
   /** policy 专用：deny_after | auto_allow */
   policy?: 'deny_after' | 'auto_allow';
   latency_ms?: number;
+  /**
+   * 0.52：async ask 的答案**已作为 user 消息投进成员 inbox**（并已起新 run）。
+   *
+   * 只用于幂等：同一 request 的重复应答（或进程重启后的重放）不再第二次投放。
+   * 缺省 = 尚未投放过。
+   */
+  delivered_at?: number;
 }
 
 /** 单条持久化交互记录。 */
@@ -58,6 +65,14 @@ export interface StoredInteraction {
    * 普通交互（权限 / 活 run 的 ask）不写该字段。
    */
   suspended?: boolean;
+  /**
+   * 0.52：ask 的语义。`async` = 工具已立即返回成功，答案稍后投进成员 inbox 并起新 run。
+   *
+   * 两条后果（都在 `InteractionsRegistry` 里）：run 终态与进程重启都**不得**把这个
+   * 仍 pending 的请求转 `orphaned`（提问的 run 早就结束了，请求本身仍然有效）；
+   * 答案到达时要走「投放新 run」而不是「续跑旧 run」。缺省 = sync（阻塞型）。
+   */
+  mode?: 'sync' | 'async';
   answer?: StoredInteractionAnswer;
 }
 
@@ -94,6 +109,9 @@ function parseAnswer(value: unknown): StoredInteractionAnswer | undefined {
   if (value.policy === 'deny_after' || value.policy === 'auto_allow') answer.policy = value.policy;
   if (typeof value.latency_ms === 'number' && Number.isFinite(value.latency_ms)) {
     answer.latency_ms = value.latency_ms;
+  }
+  if (typeof value.delivered_at === 'number' && Number.isFinite(value.delivered_at)) {
+    answer.delivered_at = value.delivered_at;
   }
   return answer;
 }
@@ -149,6 +167,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
     created_at,
     status,
     ...(value.suspended === true ? { suspended: true } : {}),
+    ...(value.mode === 'async' ? { mode: 'async' as const } : {}),
     ...(parsedAnswer !== undefined ? { answer: parsedAnswer } : {}),
   };
 }

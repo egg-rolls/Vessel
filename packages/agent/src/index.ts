@@ -45,6 +45,7 @@ export {
   toRuntimeMember,
 } from './registry.js';
 export {
+  ASK_ANSWER_INPUT_NAME,
   createMemberExecutionHost,
   MemberExecutionHost,
   type MemberExecutionHostOptions,

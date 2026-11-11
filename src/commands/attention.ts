@@ -310,8 +310,18 @@ async function respondOne(
     };
   }
   try {
-    await respondAsk(target, requestId, command.answers);
-    return { exitCode: 0, stdout: `OK ${requestId} answers`, stderr: '' };
+    const answered = await respondAsk(target, requestId, command.answers);
+    // 0.52：async ask 的应答可能会投放一次新 run；把结果如实打出来（缺失 = sync）。
+    const raw = typeof answered === 'object' && answered !== null ? answered : undefined;
+    const flag = raw === undefined ? undefined : (raw as { delivered?: unknown }).delivered;
+    const delivered = typeof flag === 'boolean' ? flag : undefined;
+    const suffix =
+      delivered === true
+        ? ` · ${t('attention.respond.delivered')}`
+        : delivered === false
+          ? ` · ${t('attention.respond.notDelivered')}`
+          : '';
+    return { exitCode: 0, stdout: `OK ${requestId} answers${suffix}`, stderr: '' };
   } catch (error) {
     return rpcFailure(error);
   }

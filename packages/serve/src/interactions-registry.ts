@@ -96,6 +96,15 @@ export interface InteractionsRegistryOptions {
    * 的 headless run，仍可被人类回答 → `pending`。
    */
   hydratePendingAs?: 'orphaned' | 'pending';
+  /**
+   * 0.52：async ask 拿到**第一次**答案时通知调用方（投放答案 / 起新 run）。
+   *
+   * 只在 `pending → answered` 那一次迁移上触发一次：RPC 应答
+   * （`respondAsk`）与流上应答（`ask.user.answered`，TUI / policy）两条路共用
+   * 这一个出口，因此同一次答案不会被投放两次。实现方必须自吞全部错误
+   * （答案已经落定，投放失败只退化为「只记录答案」）。
+   */
+  onAsyncAskAnswered?: (record: StoredInteraction) => void;
 }
 
 /** 交互注册表（serve 内唯一交互状态）。 */
@@ -116,6 +125,11 @@ export interface InteractionsRegistry {
     actor?: InteractionActor,
   ): PermissionRespondResult;
   respondAsk(requestId: string, answers: unknown[], actor?: InteractionActor): AskRespondResult;
+  /**
+   * 0.52：把「答案已投放」写进记录（幂等标记，`answer.delivered_at`）。
+   * 返回 false = 记录不存在或还不是 answered。
+   */
+  markAnswerDelivered(requestId: string, deliveredAt: number): boolean;
 }
 
 /** 记录上限（防止长时间进程无界增长）；淘汰只碰非 pending。 */
@@ -226,9 +240,11 @@ export function createInteractionsRegistry(
     for (const loaded of interactionsStore.loadAllSync()) {
       // 0.33：headless 挂起的 ask（suspended）即使重启后也要保持 pending，
       // 否则人类永远答不了、--resume-run 也拿不到答案。
+      // 0.52：async ask 同理 —— 它的 run 早就在工具返回后正常结束了，请求仍然有效。
       const keepPending =
         loaded.status === 'pending' &&
-        (pendingStatus === 'pending' || (loaded.kind === 'ask' && loaded.suspended === true));
+        (pendingStatus === 'pending' ||
+          (loaded.kind === 'ask' && (loaded.suspended === true || loaded.mode === 'async')));
       const record: StoredInteraction =
         loaded.status === 'pending' && !keepPending
           ? { ...loaded, status: 'orphaned' as StoredInteractionStatus }
@@ -248,6 +264,22 @@ export function createInteractionsRegistry(
       throw new RpcError('run_ended', 'Runtime event stream is no longer available');
     }
     return stream;
+  }
+
+  /**
+   * 一次 `pending → answered` 迁移的唯一收口：落记录、清索引，并在这是
+   * **async ask 的第一次答案**时通知调用方投放（0.52）。
+   *
+   * 两条应答路径（RPC 的 `respondAsk` 与流上的 `ask.user.answered`）都走这里，
+   * 因此同一次答案只可能投放一次：另一条路径看到的记录已经不是 `pending`。
+   */
+  function settleAnswer(record: StoredInteraction, answer: StoredInteractionAnswer): void {
+    suspendedAskIds.delete(record.requestId);
+    rememberRecord({ ...record, status: 'answered' as const, answer });
+    persist();
+    if ((record.kind ?? 'permission') === 'ask' && record.mode === 'async') {
+      options.onAsyncAskAnswered?.({ ...record, status: 'answered' as const, answer });
+    }
   }
 
   /** 直接发布到流上的应答（TUI / policy 定时器）也要落审计；不重新发布。 */
@@ -295,9 +327,7 @@ export function createInteractionsRegistry(
         : { decision: decision as 'allow' | 'deny', scope }),
     };
     pendingPermissions.delete(requestId);
-    suspendedAskIds.delete(requestId);
-    rememberRecord({ ...record, status: 'answered' as const, answer });
-    persist();
+    settleAnswer(record, answer);
   }
 
   function handleEvent(event: RunEvent): void {
@@ -367,6 +397,8 @@ export function createInteractionsRegistry(
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
           ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
+          // 0.52：投递语义跟着请求走；缺省不写该键 = sync（旧事件逐字节不变）。
+          ...(data.mode === 'async' ? { mode: 'async' as const } : {}),
           tool: typeof data.tool === 'string' && data.tool.length > 0 ? data.tool : 'ask_user',
           input: data.questions,
           created_at: eventTs(event),
@@ -412,6 +444,8 @@ export function createInteractionsRegistry(
         if (record.status !== 'pending' || record.run_id !== event.run_id) continue;
         // headless ask 的 run 以 interrupted 收口：请求仍然有效，保留 pending。
         if ((record.kind ?? 'permission') === 'ask' && suspendedAskIds.has(id)) continue;
+        // 0.52：async ask 的 run 在工具返回后照常收口，请求本身还没被回答 —— 保留 pending。
+        if ((record.kind ?? 'permission') === 'ask' && record.mode === 'async') continue;
         pendingPermissions.delete(id);
         rememberRecord({ ...record, status: 'orphaned' as StoredInteractionStatus });
       }
@@ -567,21 +601,15 @@ export function createInteractionsRegistry(
         },
         ts: now,
       });
-      rememberRecord({
-        ...record,
-        status: 'answered',
-        answer: {
-          answers,
-          answered_at: now,
-          answered_by: attribution.answered_by,
-          ...(attribution.answered_via !== undefined
-            ? { answered_via: attribution.answered_via }
-            : {}),
-          latency_ms: latency,
-        },
+      settleAnswer(record, {
+        answers,
+        answered_at: now,
+        answered_by: attribution.answered_by,
+        ...(attribution.answered_via !== undefined
+          ? { answered_via: attribution.answered_via }
+          : {}),
+        latency_ms: latency,
       });
-      suspendedAskIds.delete(requestId);
-      persist();
       return {
         ok: true,
         answered_by: attribution.answered_by,
@@ -619,6 +647,23 @@ export function createInteractionsRegistry(
     });
   }
 
+  /**
+   * 0.52：async 答案投放成功后写幂等标记（`answer.delivered_at`）。
+   *
+   * 只认已经 answered 的记录；返回 false 表示没有可标记的状态（记录不存在 /
+   * 还没答 / 已被别处投放）。重复应答时调用方据此跳过第二次投放。
+   */
+  function markAnswerDelivered(requestId: string, deliveredAt: number): boolean {
+    const record = interactionRecords.get(requestId);
+    if (record === undefined || record.status !== 'answered' || record.answer === undefined) {
+      return false;
+    }
+    if (record.answer.delivered_at !== undefined) return true;
+    rememberRecord({ ...record, answer: { ...record.answer, delivered_at: deliveredAt } });
+    persist();
+    return true;
+  }
+
   /** pending ask 只读视图：从 interactionRecords 派生，不维护第二份状态。 */
   function pendingAskView(): Map<string, PendingAsk> {
     const view = new Map<string, PendingAsk>();
@@ -646,6 +691,7 @@ export function createInteractionsRegistry(
     handleEvent,
     respondPermission,
     respondAsk,
+    markAnswerDelivered,
   };
 }
 

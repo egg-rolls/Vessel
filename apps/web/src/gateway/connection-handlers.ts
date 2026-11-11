@@ -154,6 +154,8 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
         if (item.runId === event.run_id) recordSettled(item.requestId);
       }
       for (const item of interactions.asks) {
+        // 0.52：async ask 不随 run 终态结算（它的 run 早就结束，请求仍然待批）。
+        if (item.mode === 'async') continue;
         if (item.runId === event.run_id) recordSettled(item.requestId);
       }
       interactions.dispatch({ type: 'run-finished', runId: event.run_id });

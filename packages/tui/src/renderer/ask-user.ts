@@ -14,12 +14,20 @@ import { t } from '../i18n/index.js';
 
 // ── 事件名与载荷 ──────────────────────────────────
 
+/** ask 的两种语义（0.52）：阻塞等答案 / 立即返回、答案事后投递。 */
+export type AskUserMode = 'sync' | 'async';
+
 /** ask.user.requested 事件载荷（TUI 订阅展示） */
 export interface AskUserRequestedData {
   requestId: string;
   questions: AskUserQuestion[];
   /** 发起提问的会话 ID */
   session_id?: string;
+  /**
+   * `async` = 工具已立即返回，答案稍后作为一条 user 消息投进该成员 inbox（并起新 run）。
+   * 缺省（不写该键）= sync，与 0.51 及之前的事件逐字节一致。
+   */
+  mode?: AskUserMode;
 }
 
 /** ask.user.answered 事件载荷（TUI 发布回答；answers 为空 = 用户取消） */
@@ -47,6 +55,12 @@ export interface AskUserQuestion {
 /** ask-user 工具输入：1-4 个问题 */
 export interface AskUserInput {
   questions: AskUserQuestion[];
+  /**
+   * 缺省 `sync`（阻塞等答案，行为和 0.51 完全一样）。
+   * `async` = 投放到人类的待批页后立即返回成功，答案稍后作为一条 user 消息
+   * 进入本成员 inbox 并起一次新 run；本次 run 不等待、不因未批而失败。
+   */
+  mode?: AskUserMode;
 }
 
 /** 单个问题的回答 */
@@ -114,14 +128,14 @@ export interface AskUserWaitOptions {
   signal?: AbortSignal;
 }
 
-/** 发请求事件 + 事件流等回答；应答 / 取消 / 显式超时三种收口 */
-async function promptFromEvents(
+/** 发布请求事件并返回 requestId（sync / async 共用同一事件，只有 `mode` 不同）。 */
+function publishAskRequest(
   events: EventStream,
   runId: string,
   questions: AskUserQuestion[],
-  wait: AskUserWaitOptions = {},
   sessionId?: string,
-): Promise<string> {
+  mode?: AskUserMode,
+): string {
   const requestId = randomUUID();
   events.publish({
     type: 'ask.user.requested',
@@ -130,9 +144,50 @@ async function promptFromEvents(
       requestId,
       questions,
       ...(sessionId !== undefined && sessionId !== '' ? { session_id: sessionId } : {}),
+      ...(mode === 'async' ? { mode: 'async' as const } : {}),
     } satisfies AskUserRequestedData,
     ts: Date.now(),
   });
+  return requestId;
+}
+
+/**
+ * async 投放：发请求事件就返回成功（不 waitFor、不因未批而失败）。
+ *
+ * 工具返回体必须让模型区分「已投放待批」与「已被回答」：这里只说投放成功、
+ * 明确告知**还没有答案**，并要求结束本轮（答案会以一条新的 user 消息到达并起新 run）。
+ * 事件带 `mode: 'async'`：待批页据此知道这个请求的 run 早已结束、仍然可答。
+ */
+function deliverAsync(
+  events: EventStream,
+  runId: string,
+  questions: AskUserQuestion[],
+  sessionId?: string,
+): string {
+  const requestId = publishAskRequest(events, runId, questions, sessionId, 'async');
+  const count = questions.length === 1 ? '1 question' : `${questions.length} questions`;
+  return [
+    `ask_user accepted (async): ${count} delivered to the human for approval (request ${requestId}).`,
+    'No answer yet — do not wait for one. The answer will arrive as a new user message and start a new run.',
+  ].join('\n');
+}
+
+/** 解析 mode；缺省 sync（旧调用方不认识这个字段，行为不变）。 */
+function normalizeMode(value: unknown): AskUserMode | string {
+  if (value === undefined) return 'sync';
+  if (value === 'sync' || value === 'async') return value;
+  return `Error: "mode" must be "sync" or "async" (got ${JSON.stringify(value)})`;
+}
+
+/** 发请求事件 + 事件流等回答；应答 / 取消 / 显式超时三种收口 */
+async function promptFromEvents(
+  events: EventStream,
+  runId: string,
+  questions: AskUserQuestion[],
+  wait: AskUserWaitOptions = {},
+  sessionId?: string,
+): Promise<string> {
+  const requestId = publishAskRequest(events, runId, questions, sessionId);
 
   try {
     const data = (await events.waitFor('ask.user.answered', {
@@ -170,11 +225,20 @@ export interface CreateAskUserToolOptions {
 export function createAskUserTool(opts: CreateAskUserToolOptions = {}): ToolDefinition {
   return {
     name: 'ask_user',
-    description: `Ask the user questions and wait for all answers. A question may offer options; the user picks one, picks several (multi_select), or types their own.
+    description: `Ask the user questions. Two delivery modes (default: sync).
+- mode "sync" (default): blocks this run until the human answers; the answers come back as this tool's result.
+- mode "async": hands the questions to the human for approval and returns immediately. The answer is NOT in the result: it arrives later as a new user message and starts a new run, so end your turn after calling it.
 Use for clarification, confirmation, or information only the user has. Not for things you can resolve yourself.`,
     inputSchema: {
       type: 'object',
       properties: {
+        mode: {
+          type: 'string',
+          enum: ['sync', 'async'],
+          description:
+            'sync (default) = wait for the answer here. async = return immediately; the answer arrives later as a new user message and starts a new run.',
+          default: 'sync',
+        },
         questions: {
           type: 'array',
           minItems: 1,
@@ -213,8 +277,13 @@ Use for clarification, confirmation, or information only the user has. Not for t
     },
     handler: async (args, ctx) => {
       const input = args as AskUserInput;
+      const mode = normalizeMode(input.mode);
+      if (mode !== 'sync' && mode !== 'async') return mode;
       const normalized = normalizeQuestions(input);
       if (typeof normalized === 'string') return normalized;
+      if (mode === 'async') {
+        return deliverAsync(ctx.events, ctx.run_id, normalized, ctx.session_id);
+      }
       return promptFromEvents(
         ctx.events,
         ctx.run_id,

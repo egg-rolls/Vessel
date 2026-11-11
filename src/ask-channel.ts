@@ -70,6 +70,8 @@ export async function persistAskRequest(options: {
   createdAt?: number;
   /** headless 挂起标记：run 的 checkpoint 是 interrupted，跨进程保留 pending。 */
   suspended?: boolean;
+  /** 0.52：`async` = 工具已立即返回，记录跨进程保留 pending（提问的 run 已正常收口）。 */
+  mode?: 'async';
 }): Promise<void> {
   const records = loadTenantRecords(options.dir, options.tenantId);
   const existing = records.find((record) => record.requestId === options.requestId);
@@ -92,6 +94,7 @@ export async function persistAskRequest(options: {
     input: options.questions,
     created_at: options.createdAt ?? Date.now(),
     status: 'pending',
+    ...(options.mode === 'async' ? { mode: 'async' as const } : {}),
     ...(options.suspended === true ? { suspended: true } : {}),
   };
   records.push(record);
@@ -109,6 +112,8 @@ export async function orphanPendingAsksForRun(options: {
   const next = records.map((record) => {
     if (record.kind !== 'ask' || record.run_id !== options.runId) return record;
     if (record.status !== 'pending') return record;
+    // 0.52：async ask 的 run 在工具返回后就收口了，请求本身仍然待批 —— 不许孤儿化。
+    if (record.mode === 'async') return record;
     changed += 1;
     return { ...record, status: 'orphaned' as const };
   });
@@ -198,6 +203,8 @@ export function askRequestFromEvent(event: RunEvent):
       runId: string;
       sessionId?: string;
       questions?: unknown;
+      /** 0.52：`async` = 工具已立即返回，run 不该因此挂起。 */
+      mode?: 'async';
     }
   | undefined {
   if (event.type !== 'ask.user.requested') return undefined;
@@ -211,6 +218,7 @@ export function askRequestFromEvent(event: RunEvent):
       ? { sessionId: nonEmptyString(data.session_id) }
       : {}),
     ...(data.questions !== undefined ? { questions: data.questions } : {}),
+    ...(data.mode === 'async' ? { mode: 'async' as const } : {}),
   };
 }
 
@@ -258,6 +266,9 @@ export function createOfflineAttentionTarget(options: {
       interactions.respondPermission(requestId, decision, remember, scope, actor),
     respondAsk: (requestId, answers, actor) => interactions.respondAsk(requestId, answers, actor),
     interactions,
+    // 0.52：离线 attention 没有 live runtime —— async 答案只能记录，明确回 `false`
+    // 让 `vessel attention respond` 打出「没投出去」（不假装起了新 run）。
+    deliverAsyncAskAnswer: () => false,
   });
   const byName = new Map<string, RpcMethodDefinition>(
     methods.map((method) => [method.name, method]),

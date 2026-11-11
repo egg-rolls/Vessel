@@ -29,6 +29,8 @@ export interface ListedInteraction {
   questions?: unknown;
   created_at: number;
   status: 'pending' | 'answered' | 'orphaned';
+  /** 0.52：`async` = 工具早已返回、请求仍然有效（回答会起新 run）。 */
+  mode?: 'sync' | 'async';
   answer?: ListedInteractionAnswer;
 }
 
@@ -147,6 +149,7 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
         ? { agentId: item.agent_id }
         : {}),
       ...(item.team_id !== undefined && item.team_id.length > 0 ? { teamId: item.team_id } : {}),
+      ...(item.mode === 'async' ? { mode: 'async' as const } : {}),
     });
   }
 
@@ -223,7 +226,11 @@ export function interactionReducer(
     }
     case 'run-finished': {
       const permissions = state.permissions.filter((item) => item.runId !== action.runId);
-      const asks = state.asks.filter((item) => item.runId !== action.runId);
+      // 0.52：async ask 的 run 结束不代表请求失效（工具早就返回了，答案还没到）——
+      // 这类卡片必须留在待批页，否则人连回答的入口都看不到。
+      const asks = state.asks.filter(
+        (item) => item.runId !== action.runId || item.mode === 'async',
+      );
       if (permissions.length === state.permissions.length && asks.length === state.asks.length) {
         return state;
       }

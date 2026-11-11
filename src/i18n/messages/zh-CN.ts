@@ -434,6 +434,10 @@ export const zhCN = {
   'attention.needsTty': '`vessel attention --interactive` 需要 TTY。',
   'attention.needsYes': '非交互环境无法确认；请加 --yes 重试。',
   'attention.summary': '已应答 {ok}，失败 {failed}，跳过 {skipped}。',
+  'attention.respond.delivered':
+    '已投放：答案作为一条 user 消息进入该成员 inbox，并起了一次新 run。',
+  'attention.respond.notDelivered':
+    '答案已记录，但没有 live runtime 可投放（异步答案需要运行中的 gateway 才能起新 run）。',
   'attention.allTruncated': '已达到 200 条交互上限；只处理前 200 条。',
   'attention.error.humanToken':
     'attention requires a human control token (gateway or team token); federation peer tokens are rejected',

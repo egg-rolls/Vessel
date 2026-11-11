@@ -448,6 +448,10 @@ export const en: Record<MessageKey, string> = {
   'attention.needsTty': '`vessel attention --interactive` requires a TTY.',
   'attention.needsYes': 'Cannot confirm in a non-interactive environment; re-run with --yes.',
   'attention.summary': 'Answered {ok}, failed {failed}, skipped {skipped}.',
+  'attention.respond.delivered':
+    'Delivered: the answer entered that member inbox as a user message and started a new run.',
+  'attention.respond.notDelivered':
+    'Answer recorded, but no live runtime could deliver it (an async answer needs a running gateway to start a new run).',
   'attention.allTruncated': 'Reached the 200 interaction limit; only the first 200 were processed.',
   'attention.error.humanToken':
     'attention requires a human control token (gateway or team token); federation peer tokens are rejected',

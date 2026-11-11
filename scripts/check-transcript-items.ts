@@ -10,6 +10,7 @@
  * 退出码：0 = 全过；1 = 有 FAIL。
  */
 
+import { ASK_ANSWER_MESSAGE_NAME } from '../apps/web/src/domains/chat/ask-answer';
 import { pendingStripView } from '../apps/web/src/domains/chat/pending-strip';
 import {
   buildLiveItems,
@@ -20,6 +21,7 @@ import type { Message } from '../apps/web/src/gateway/types/sessions';
 import { EventStore } from '../apps/web/src/state/event-store';
 import type { RunGroup, TimelineItem } from '../apps/web/src/state/events';
 import { EventGroupCache } from '../apps/web/src/state/group-cache';
+import { ASK_ANSWER_INPUT_NAME } from '../packages/agent/src/runtime';
 
 function msg(role: Message['role'], content: string, extra: Partial<Message> = {}): Message {
   return { role, content, ...extra };
@@ -1380,6 +1382,65 @@ const FIXTURES: readonly Fixture[] = [
         flapped.every((item) => item.kind !== 'run-failure')
       );
     },
+  },
+  {
+    name: 'F23 待批答复（async ask）身份：历史名 ask:answer → 一张卡；运行态同名输入被认领后让位；解析失败回退普通消息',
+    why: '答案必须是 user 消息（协议要求），但人是在待批页回答的：渲成用户气泡会让人以为是自己刚发的。身份只认 name=ask:answer；解析不出必须回退（宁可少一张卡，不能吞正文）；live 与 history 必须是同一个逻辑对象（不许一卡一气泡）',
+    check: () => {
+      const answer =
+        '[ask_user answer req-1] Answers from the human to your pending ask_user request:\n' +
+        '1. Scope: stay on the safe subset';
+      // (a) 历史侧：名字 + 可解析正文 ⇒ 一张 ask-answer 卡（不再出用户消息 item）。
+      const history = buildTranscriptItems({
+        messages: [msg('user', answer, { name: ASK_ANSWER_MESSAGE_NAME, timestamp: 2000 })],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      });
+      const card = history.find((item) => item.kind === 'ask-answer');
+      // (b) 运行态与历史同一对象：run 分组的 input_name 也是 ask:answer ⇒ live 那条被认领让位。
+      const live = buildTranscriptItems({
+        messages: [msg('user', answer, { name: ASK_ANSWER_MESSAGE_NAME, timestamp: 2000 })],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r-ask',
+            input: answer,
+            inputName: ASK_ANSWER_MESSAGE_NAME,
+            startedAt: 1990,
+          }),
+        ],
+        queued: [],
+      });
+      // (c) 名字对但正文不可解析 ⇒ 退回普通用户消息（正文不许被吞）。
+      const fallback = buildTranscriptItems({
+        messages: [
+          msg('user', 'just some text', { name: ASK_ANSWER_MESSAGE_NAME, timestamp: 2000 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      });
+      const fallbackMessage = fallback.find((item) => item.kind === 'message');
+      return (
+        card !== undefined &&
+        card.kind === 'ask-answer' &&
+        card.card.requestId === 'req-1' &&
+        card.card.rows.length === 1 &&
+        card.card.summary === 'Scope' &&
+        history.every((item) => item.kind !== 'message' || item.message.role !== 'user') &&
+        keys(live).join(',') === 'msg:0' &&
+        live.filter((item) => item.kind === 'ask-answer').length === 1 &&
+        fallbackMessage !== undefined &&
+        fallbackMessage.kind === 'message' &&
+        fallbackMessage.message.content === 'just some text'
+      );
+    },
+  },
+  {
+    name: 'F24 待批答复的字面量对账：Web 身份名与 agent 侧 Message.name 必须一致',
+    why: '两侧各写一个字面量（web 不能 import packages/agent），漂移会让卡片静默退回用户气泡 —— 没有报错，只有观感错',
+    check: () => ASK_ANSWER_MESSAGE_NAME === ASK_ANSWER_INPUT_NAME,
   },
 ];
 

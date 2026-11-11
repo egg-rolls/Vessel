@@ -319,6 +319,14 @@ export interface GatewayOptions {
   /** 内部单 id（路径 / 配置视图用；不是 wire 字段） */
   defaultTenantId?: string;
   /**
+   * 0.52：async ask 的答案投放（注入；缺省 = 只记录答案，不投放）。
+   *
+   * 由 app 侧实现成「把答案作为一条 user 消息投进该成员 inbox 并起一次新 run」
+   * （`AgentService.admit`，与人在会话里发一句话同一条路径）。gateway 只负责去重与
+   * 幂等标记，不认识 agent / inbox。
+   */
+  askAnswerDelivery?: (record: StoredInteraction) => Promise<boolean>;
+  /**
    * 内部：只构建方法表/引擎，不调用 `Bun.serve`。
    * 由 `createLocalRpcDispatcher` 使用；外部不要设置。
    * @internal
@@ -826,6 +834,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   /**
+   * 0.52：在途的 async 答案投放（同一次答案只投一次）。
+   *
+   * 同一次答案可能同时被两条路径要求投放（`ask.respond` RPC 与流上的
+   * `ask.user.answered`）；它们拿到的都是同一个 promise，因此**不会投两次**。
+   * 进程重启后的重放由记录里的 `answer.delivered_at` 兜底（已投放直接返回 true）。
+   */
+  const asyncAnswerDeliveries = new Map<string, Promise<boolean>>();
+
+  /**
    * 0.27：交互注册表（权限 / ask）。执行、调度、run 队列都不在 gateway：
    * 它只消费 `run.*` 事件并维护 pending / answered / orphaned。
    */
@@ -833,6 +850,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     eventsFor: () => hub.stream(),
     singleTenantId: defaultTenantId,
     ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
+    // 0.52：async ask 的第一次答案 → 投放（作为 user 消息进成员 inbox + 起新 run）。
+    // 与 `ask.respond` 的投放走同一个去重实现，同一次答案只投一次。
+    ...(opts.askAnswerDelivery !== undefined
+      ? { onAsyncAskAnswered: (record) => void deliverAsyncAskAnswer(record) }
+      : {}),
   });
   /** 注册表的请求观察面：原始事件（hub 隔离订阅者异常）。 */
   const unsubscribeInteractions = hub.subscribe((event) => {
@@ -1376,6 +1398,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // 0.51 dev：headless / 超时挂起的 ask 答完之后，由这里把那个 run 续跑起来
       //（应答不再只是「被动记录」）。没有 durable 的装配保持只记录答案。
       resumeSuspendedAsk,
+      // 0.52：async ask 的答案不走「续跑旧 run」（那个 run 早就结束了），
+      // 而是把答案作为一条新 user 消息投给该成员并起一次新 run。
+      deliverAsyncAskAnswer,
     }),
     ...createEvalMethods({ evals: opts.evals }),
     ...createFeishuMethods({ requireFeishu }),
@@ -2035,6 +2060,49 @@ export function startGateway(opts: GatewayOptions): Gateway {
     } finally {
       autoResuming.delete(runId);
     }
+  }
+
+  /**
+   * async ask 的答案投放：把答案作为一条 user 消息投给提问的成员，并起一次新 run。
+   *
+   * 全部前置不成立时返回 `false`（**只记录答案**，不报错、不回滚、不重试）：
+   * 1. app 侧注入了投放实现（`askAnswerDelivery`）；
+   * 2. 记录已 answered 且**尚未投放过**（`answer.delivered_at` 缺失）；
+   * 3. 记录带 `agent_id`（成员 bridge 补齐；没有归属就找不到投递目标）。
+   *
+   * 投放成功后才写 `delivered_at`：写失败只意味着下一次重复应答可能重复投递一次，
+   * 而不写的话「投放 → 崩溃 → 重放」会稳定丢答案（选前者：多一条消息 vs 丢答案）。
+   */
+  function deliverAsyncAskAnswer(record: StoredInteraction): Promise<boolean> {
+    const existing = asyncAnswerDeliveries.get(record.requestId);
+    if (existing !== undefined) return existing;
+    const task = (async (): Promise<boolean> => {
+      const deliver = opts.askAnswerDelivery;
+      if (deliver === undefined) return false;
+      const current = interactions.interactionRecords.get(record.requestId);
+      const target = current ?? record;
+      if (target.answer?.delivered_at !== undefined) return true;
+      if (target.agent_id === undefined || target.agent_id === '') return false;
+      let delivered = false;
+      try {
+        delivered = (await deliver(target)) === true;
+      } catch (error) {
+        console.warn('[vessel] ask answer delivery failed; answer recorded only', {
+          request_id: target.requestId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      }
+      if (delivered) interactions.markAnswerDelivered(target.requestId, Date.now());
+      return delivered;
+    })();
+    asyncAnswerDeliveries.set(record.requestId, task);
+    void task.finally(() => {
+      if (asyncAnswerDeliveries.get(record.requestId) === task) {
+        asyncAnswerDeliveries.delete(record.requestId);
+      }
+    });
+    return task;
   }
 
   /** `/v1/durable/*`：只读 store，不写盘、不创建 run */

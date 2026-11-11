@@ -271,6 +271,7 @@ export const messages = {
   'chat.tool.duration.millis': '{value} 毫秒',
   'chat.tool.duration.minutes': '{minutes} 分 {seconds} 秒',
   'ask.title': 'Agent 提问',
+  'ask.asyncBadge': '异步投放（回答会起一次新 run）',
   'ask.goTo': '前往回答',
   'ask.pendingMore': '还有 {count} 个待处理',
   'ask.progress': '第 {current} / {total} 题',
@@ -1092,6 +1093,9 @@ export const messages = {
   'chat.env.notApplied': '未生效',
   'chat.env.moreLines': '还有 {count} 行未显示',
   // agent→agent 消息卡（A2A 投递进来的那条 user 消息）
+  'chat.askAnswer.title': '待批答复',
+  'chat.askAnswer.aria': '待批答复（异步提问的回答）',
+  'chat.askAnswer.source': '来自待批页',
   'chat.agentMessage.from': '来自 agent {name}',
   'chat.agentMessage.group': '来自 agent {name} 的消息',
   'chat.role.assistant': '助手',

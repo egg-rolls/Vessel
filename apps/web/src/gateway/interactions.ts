@@ -90,6 +90,7 @@ export function askFromEvent(event: RunEvent, now = Date.now()): AskUserRequest 
     session_id?: unknown;
     parent_session_id?: unknown;
     team_id?: unknown;
+    mode?: unknown;
   };
   const rawId = data.requestId ?? data.request_id;
   if (typeof rawId !== 'string' || rawId.length === 0) return null;
@@ -117,6 +118,8 @@ export function askFromEvent(event: RunEvent, now = Date.now()): AskUserRequest 
       ? { teamId: data.team_id }
       : {}),
     ...(agentId !== undefined ? { agentId } : {}),
+    // 0.52：async ask 的 run 在工具返回后就结束了，卡片不能跟着 run 终态消失。
+    ...(data.mode === 'async' ? { mode: 'async' as const } : {}),
   };
 }
 

@@ -52,6 +52,7 @@ import {
   type TenantEventHub,
 } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/repl/ink-repl';
+import { createAskAnswerDelivery } from './ask-answer-delivery';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
 import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli-help';
@@ -1206,6 +1207,8 @@ async function runWithConfig(result: BootstrapResult) {
               result.bundle.scheduler,
               result.tenantId,
             ),
+            // 0.52：async ask 的答案投放（答案作为 user 消息进成员 inbox + 起新 run）。
+            askAnswerDelivery: createAskAnswerDelivery(result.agent.service),
           }
         : {}),
       // 单执行面的 RPC 数据源：config / trace / session 数据 / metrics。

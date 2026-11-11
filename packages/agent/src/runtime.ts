@@ -602,6 +602,15 @@ function formatMessageSource(
   return `<from location="${escapeAttr(address)}" />`;
 }
 
+/**
+ * async `ask_user` 答案投递的消息名（`Message.name`，随 `user.message` 持久化）。
+ *
+ * 它不是 `vessel:*`（那是**模型侧上下文**、不算 turn 锚点）：这条消息就是该轮真实的
+ * 用户输入，只是人来路不同 —— Web 据此渲染「待批答复」卡而不是用户气泡。
+ * 字面量与 `apps/web/src/domains/chat/ask-answer.ts` 必须一致（`check-transcript-items` 守）。
+ */
+export const ASK_ANSWER_INPUT_NAME = 'ask:answer';
+
 /** `name` 只允许简单标签：Provider 侧把 `name` 当标识符，空格 / 符号 / 中文都不进。 */
 function sanitizeAlias(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '');
@@ -1055,7 +1064,9 @@ export class MemberExecutionHost implements MemberExecutionPort {
     };
     // A2A 输入本身带既有 `Message.name`（`agent:<alias>`）：Web 据此把它渲染成
     // 「agent 消息卡」而不是用户自己说的话。人类 / 系统来源保持 nil —— 不带名字。
-    const inputName = agentInputName(message);
+    // 0.52：async ask 的答案同样是 human 来源，但它需要一个身份（「待批答复」卡）。
+    const inputName =
+      message.origin === 'ask_answer' ? ASK_ANSWER_INPUT_NAME : agentInputName(message);
     const userInput: string | Message =
       inputName === undefined
         ? message.content

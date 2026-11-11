@@ -25,6 +25,12 @@ import type { ErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import { agentSenderOfName } from './agent-sender';
 import {
+  ASK_ANSWER_MESSAGE_NAME,
+  type AskAnswerCard as AskAnswerData,
+  askAnswerCard,
+  isAskAnswerMessage,
+} from './ask-answer';
+import {
   type EnvNoticeCard,
   envNoticeCard,
   isEnvNoticeKind,
@@ -90,6 +96,22 @@ export interface RunInputItem extends ItemMeta {
    * 有值 ⇒ 渲染 agent 卡；无值 ⇒ 用户气泡。渲染层不再自己判身份。
    */
   sender?: string;
+}
+
+/**
+ * 「待批答复」item：async `ask_user` 的答案（0.52）。
+ *
+ * 身份来自 `Message.name === 'ask:answer'`（历史侧）与 `run.started.input_name`
+ * （运行态）；解析失败时调用方**不产出这个 kind**，退回普通用户气泡 —— 宁可少一张卡，
+ * 也不吞正文。它有 `runId` 是为了参与「run 的用户输入被历史消息认领后让位」那条规则。
+ */
+export interface AskAnswerItem extends ItemMeta {
+  kind: 'ask-answer';
+  /** 运行态来自 run 分组；历史消息没有 runId。 */
+  runId?: string;
+  /** 这条消息的完整正文（回退展示 / 复制用，与用户气泡同一份数据）。 */
+  text: string;
+  card: AskAnswerData;
 }
 
 export interface RunTextItem extends ItemMeta {
@@ -178,6 +200,7 @@ export type TranscriptItem =
   | MessageItem
   | RuntimeNoticeItem
   | RunInputItem
+  | AskAnswerItem
   | RunTextItem
   | RunReasoningItem
   | ToolItem
@@ -492,6 +515,19 @@ export function buildHistoryIndex(
     if (!hasContent && message.role !== 'user' && !isAgentMessage && !hasReasoning) return;
 
     const sourceText = foldedSourceByAgent.get(absIndex);
+    // 「待批答复」（0.52）：async ask 的答案是一条真正的 user 消息，但人是在待批页
+    // 回答的 —— 数据照旧、呈现换成卡。解析不出来就当普通用户气泡（绝不吞正文）。
+    const askAnswer = isAskAnswerMessage(message) ? askAnswerCard(message.content) : undefined;
+    if (askAnswer !== undefined) {
+      items.push({
+        kind: 'ask-answer',
+        key: `msg:${absIndex}`,
+        text: message.content,
+        card: askAnswer,
+        ...(messageTs !== undefined ? { ts: messageTs } : {}),
+      });
+      return;
+    }
     // 运行时提示（vessel:* 或裸文本 [inbox] …）：**独立成 notice 类 item**，
     // 不落进 message 分支 —— 否则它会以「用户气泡」出现（用户反馈的正是这条）。
     // 只看结构化的 name（vessel:*）：不按正文前缀猜 —— 用户可能自己粘一段以 [inbox] 开头的
@@ -616,15 +652,33 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     // 身份（agent 投递）随首个事件一起到：有 sender 就是 agent 卡，渲染层不再判。
     if (trimText(group.input).length > 0) {
       const sender = agentSenderOfName(group.inputName);
-      items.push({
-        kind: 'run-input',
-        key: `run:${group.runId}:input`,
-        runId: group.runId,
-        text: group.input as string,
-        ...(sender !== undefined ? { sender } : {}),
-        ...(itemTs(undefined) !== undefined ? { ts: itemTs(undefined) } : {}),
-        ...seqMeta,
-      });
+      // 0.52：async ask 的答案在运行态就已经知道身份（`input_name = ask:answer`），
+      // 首帧就渲成「待批答复」卡，不会先闪一帧用户气泡。
+      const askAnswer =
+        group.inputName === ASK_ANSWER_MESSAGE_NAME
+          ? askAnswerCard(group.input as string)
+          : undefined;
+      if (askAnswer !== undefined) {
+        items.push({
+          kind: 'ask-answer',
+          key: `run:${group.runId}:input`,
+          runId: group.runId,
+          text: group.input as string,
+          card: askAnswer,
+          ...(itemTs(undefined) !== undefined ? { ts: itemTs(undefined) } : {}),
+          ...seqMeta,
+        });
+      } else {
+        items.push({
+          kind: 'run-input',
+          key: `run:${group.runId}:input`,
+          runId: group.runId,
+          text: group.input as string,
+          ...(sender !== undefined ? { sender } : {}),
+          ...(itemTs(undefined) !== undefined ? { ts: itemTs(undefined) } : {}),
+          ...seqMeta,
+        });
+      }
     }
     let textIndex = 0;
     let reasoningIndex = 0;
@@ -958,7 +1012,14 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
   for (const item of live) {
     const runId = 'runId' in item ? item.runId : undefined;
     // 用户输入已被历史消息认领：历史那条负责渲染，run 侧气泡丢弃（绝不两个气泡）。
-    if (item.kind === 'run-input' && runId !== undefined && claimedUserByRun.has(runId)) continue;
+    // 「待批答复」同理（`run:<id>:input` 与 `msg:<absIndex>` 是同一个逻辑对象）。
+    if (
+      (item.kind === 'run-input' || item.kind === 'ask-answer') &&
+      item.runId !== undefined &&
+      claimedUserByRun.has(item.runId)
+    ) {
+      continue;
+    }
     const claim = runId === undefined ? undefined : claimByRun.get(runId);
     if (claim === undefined) {
       items.push(item);

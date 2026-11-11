@@ -286,6 +286,9 @@ export function PendingClusterCard({
                     {t('pending.item.include')}
                   </label>
                   <span className="font-mono tabular-nums">run {shortId(item.request.runId)}</span>
+                  {item.request.mode === 'async' && (
+                    <span className="font-mono text-accent">{t('ask.asyncBadge')}</span>
+                  )}
                   <span className="tabular-nums">{formatTimestamp(item.request.requestedAt)}</span>
                   {pendingRespond && <span>{t('pending.item.responding')}</span>}
                 </div>
