@@ -401,6 +401,8 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     registryName: 'dev',
     subcommands: [{ name: 'reset', flags: ['--yes', '--dry-run', '--json', '--data-dir'] }],
   },
+  // `vessel help [command...]`：入口处直接处理的帮助别名（不经过 registry）。
+  { token: 'help', registryName: null },
   { token: '--help', registryName: null },
   { token: '--version', registryName: null },
   { token: '--tools', registryName: 'tools' },

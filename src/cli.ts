@@ -54,6 +54,7 @@ import {
 import { startInkRepl } from '../packages/tui/src/repl/ink-repl';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
+import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli-help';
 import { buildCliConfigOverrides } from './cli-overrides';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import { type ConfigWatchHandle, startConfigWatch, toConfigReloadOutcome } from './config-watch';
@@ -144,196 +145,6 @@ import { ensureWebDist, webDistWarning } from './web-dist';
  */
 const MCP_FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'evals', 'feishu']);
 
-// ── 终端排版辅助 ─────────────────────────────────
-
-/** 对齐两列（命令 + 说明）并缩进；命令列走海洋绿，说明保持纯文本 */
-function align(rows: Array<[string, string]>, width: number): string {
-  return rows.map(([cmd, desc]) => `  ${ui.brand(cmd.padEnd(width))}  ${desc}`).join('\n');
-}
-
-/** --help 输出：分组 + 对齐列，命令保持不变；描述跟随 locale。 */
-function printHelp(): void {
-  const usage: Array<[string, string]> = [
-    ['vessel', t('help.cmd.repl')],
-    ['vessel demo', t('help.cmd.demo')],
-  ];
-  const session: Array<[string, string]> = [
-    ['vessel -c', t('help.cmd.continue')],
-    ['vessel -r <id>', t('help.cmd.resume')],
-    ['vessel -r', t('help.cmd.resumeList')],
-    ['vessel --session <id>', t('help.cmd.session')],
-  ];
-  const headless: Array<[string, string]> = [
-    ['vessel -p "<prompt>"', t('help.cmd.print')],
-    ['vessel --run @path', t('help.cmd.runFile')],
-    ['echo "..." | vessel --run', t('help.cmd.stdin')],
-    ['vessel -c --run "..."', t('help.cmd.continueRun')],
-    ['vessel --resume-run <runId>', t('help.cmd.resumeRun')],
-  ];
-  const gateway: Array<[string, string]> = [
-    ['vessel status [--json]', t('help.cmd.status')],
-    ['vessel agents [--json]', t('help.cmd.agents')],
-    ['vessel attention [--connect <url>] [--json] [--interactive]', t('help.cmd.attention')],
-    ['vessel attention [--node <name>|--all-nodes] [--json]', t('help.cmd.attentionNodes')],
-    [
-      'vessel attention respond <id> --allow|--deny|--answers <json>',
-      t('help.cmd.attentionRespond'),
-    ],
-    ['vessel team list [--json]', t('help.cmd.teamList')],
-    ['vessel team get <team_id> [--limit N]', t('help.cmd.teamGet')],
-    ['vessel team post <team_id> <content...> [--mention <name|id>]', t('help.cmd.teamPost')],
-    ['vessel team members <team_id> add|remove <member>', t('help.cmd.teamMembers')],
-    ['vessel team budget <team_id> [--conversation <id>] [--json]', t('help.cmd.teamBudget')],
-    [
-      'vessel team budget override <team_id> --conversation <id> --dimension <d> --max <n|unlimited>',
-      t('help.cmd.teamBudgetOverride'),
-    ],
-    ['vessel team freeze <team_id> [--json]', t('help.cmd.teamFreeze')],
-    ['vessel team unfreeze <team_id> [--json]', t('help.cmd.teamUnfreeze')],
-    [
-      'vessel federation post --to <principal@node:team> --from <principal@node:team> <content...>',
-      t('help.cmd.federationPost'),
-    ],
-    [
-      'vessel federation team-info --to <principal@node:team> [--members N] [--json]',
-      t('help.cmd.federationTeamInfo'),
-    ],
-    ['vessel federation peers [--json]', t('help.cmd.federationPeers')],
-    ['vessel errors [--json]', t('help.cmd.errors')],
-    ['vessel gateway start [--daemon] [--instance <name>]', t('help.cmd.gatewayStart')],
-    ['vessel gateway list [--json]', t('help.cmd.gatewayList')],
-    ['vessel gateway nodes list [--json]', t('help.cmd.gatewayNodesList')],
-    [
-      'vessel gateway nodes add <name> --data-dir <dir> --config <path> [--no-auto-start]',
-      t('help.cmd.gatewayNodesAdd'),
-    ],
-    ['vessel gateway nodes remove <name>', t('help.cmd.gatewayNodesRemove')],
-    ['vessel gateway stop [--instance <name>|--port N|--all]', t('help.cmd.gatewayStop')],
-    ['vessel gateway status [--json] [--rpc]', t('help.cmd.gatewayStatus')],
-    ['vessel gateway restart [--daemon] [--instance <name>|--all]', t('help.cmd.gatewayRestart')],
-    ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],
-    ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
-    ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],
-    ['vessel node start [--daemon] [--config <path>]', t('help.cmd.nodeStart')],
-    ['vessel node status [--json] [--rpc]', t('help.cmd.nodeStatus')],
-    ['vessel node stop', t('help.cmd.nodeStop')],
-    ['vessel node reload [--scope config,plugins]', t('help.cmd.nodeReload')],
-  ];
-  // hub 命令按 service / node client 分组。
-  const hubService: Array<[string, string]> = [
-    ['vessel hub start [--host H] [--port N] [--allow-remote]', t('help.cmd.hubStart')],
-    ['vessel hub directory [--hub-url URL] [--json]', t('help.cmd.hubDirectory')],
-    ['vessel hub watch [--hub-url URL]', t('help.cmd.hubWatch')],
-    ['vessel hub join-code [--data-dir DIR] [--ttl N] [--json]', t('help.cmd.hubJoinCode')],
-    ['vessel hub node list [--json]', t('help.cmd.hubNodeList')],
-    ['vessel hub node remove <pairing_id>', t('help.cmd.hubNodeRemove')],
-  ];
-  const hubNode: Array<[string, string]> = [
-    ['vessel hub join [<hub-url>] --code <CODE> [--data-dir DIR]', t('help.cmd.hubJoin')],
-  ];
-  const capability: Array<[string, string]> = [
-    ['vessel eval <suite>', t('help.cmd.eval')],
-    ['vessel eval <suite> --json --out <path>', t('help.cmd.evalOut')],
-    ['vessel --feishu', t('help.cmd.feishu')],
-  ];
-  const config: Array<[string, string]> = [
-    ['vessel --data-dir <path> ...', t('help.cmd.dataDir')],
-    ['vessel --connect <url> --connect-token <t> --ca <pem> ...', t('help.cmd.connect')],
-    ['vessel config path', t('help.cmd.configPath')],
-    ['vessel config init', t('help.cmd.configInit')],
-    ['vessel config show --sources', t('help.cmd.configShow')],
-    ['vessel config set <key> <value>', t('help.cmd.configSet')],
-  ];
-  const plugins: Array<[string, string]> = [
-    ['vessel plugin list', t('help.cmd.pluginList')],
-    ['vessel plugin install <path> [--force]', t('help.cmd.pluginInstall')],
-    ['vessel plugin remove <name>', t('help.cmd.pluginRemove')],
-    ['vessel plugin enable <name>', t('help.cmd.pluginEnable')],
-    ['vessel plugin disable <name>', t('help.cmd.pluginDisable')],
-  ];
-  const migrate: Array<[string, string]> = [
-    ['vessel migrate --from sqlite --to file-v2', t('help.cmd.migrate')],
-    ['vessel migrate --from file-v1 --to file-v2 --apply', t('help.cmd.migrateApply')],
-    ['vessel trace prune --dry-run', t('help.cmd.tracePrune')],
-  ];
-  const debug: Array<[string, string]> = [
-    ['VESSEL_MOCK=1 vessel --run "x"', t('help.cmd.mock')],
-    ['vessel dev reset [--yes] [--dry-run] [--json]', t('help.cmd.devReset')],
-  ];
-  const meta: Array<[string, string]> = [
-    ['vessel doctor [--deep]', t('help.cmd.doctor')],
-    ['vessel logs tail [--json] [--lines N]', t('help.cmd.logsTail')],
-    ['vessel --resume-run', t('help.cmd.resumeRunList')],
-    ['vessel update [--yes]', t('help.cmd.update')],
-    ['vessel update --check', t('help.cmd.updateCheck')],
-    ['vessel update --channel beta', t('help.cmd.updateBeta')],
-    ['vessel --version', t('help.cmd.version')],
-    ['vessel --tools', t('help.cmd.tools')],
-    ['vessel completion <shell>', t('help.cmd.completion')],
-    ['vessel --help', t('help.cmd.help')],
-  ];
-  const width = Math.max(
-    ...[
-      ...usage,
-      ...session,
-      ...headless,
-      ...gateway,
-      ...hubService,
-      ...hubNode,
-      ...capability,
-      ...config,
-      ...plugins,
-      ...migrate,
-      ...debug,
-      ...meta,
-    ].map(([cmd]) => cmd.length),
-  );
-
-  console.log(
-    [
-      ui.title(t('help.title')),
-      ui.rule(48),
-      '',
-      `  ${ui.section(t('help.section.usage'))}`,
-      align(usage, width),
-      '',
-      `  ${ui.section(t('help.section.session'))}`,
-      align(session, width),
-      '',
-      `  ${ui.section(t('help.section.headless'))}`,
-      align(headless, width),
-      `  ${ui.dim(t('help.note.askSuspended'))}`,
-      '',
-      `  ${ui.section(t('help.section.gateway'))}`,
-      align(gateway, width),
-      '',
-      `  ${ui.section(t('help.section.hubService'))}`,
-      align(hubService, width),
-      '',
-      `  ${ui.section(t('help.section.hubNode'))}`,
-      align(hubNode, width),
-      '',
-      `  ${ui.section(t('help.section.capability'))}`,
-      align(capability, width),
-      '',
-      `  ${ui.section(t('help.section.config'))}`,
-      align(config, width),
-      '',
-      `  ${ui.section(t('help.section.plugins'))}`,
-      align(plugins, width),
-      '',
-      `  ${ui.section(t('help.section.migrate'))}`,
-      align(migrate, width),
-      '',
-      `  ${ui.section(t('help.section.debug'))}`,
-      align(debug, width),
-      '',
-      `  ${ui.section(t('help.section.other'))}`,
-      align(meta, width),
-    ].join('\n'),
-  );
-}
-
 /**
  * Web UI 构建产物目录（不判断是否存在）。`VESSEL_STATIC_DIR` 覆盖默认路径；
  * 0.49：拆分模式的 Gateway 宿主在这里 fail-fast，`--serve` legacy 仍按旧行为。
@@ -403,13 +214,26 @@ installProcessErrorHandlers({
 
 // 0.48 M2：插件 CLI 命名空间预解析（`vessel <plugin> ...`）。内置命令优先：
 // 首 token 是内置命令 / flag / 不是已发现的插件时，原样回落到 parseArgs。
+// 它在首 token 是内置命令或 flag 时立即返回，因此下面的 help 早退仍然零 IO。
 const pluginCli = await runPluginCliCommand(process.argv.slice(2));
 if (pluginCli.handled) process.exit(pluginCli.exitCode);
 
+// 按位置 help：`vessel <cmd...> -h` / `vessel help <cmd...>`。
+// 必须早于 parseArgs —— `-h` 在任何位置（含跟在 flag 后面）都先于参数校验生效。
+// 全局总览与命令页都住在 src/cli-help.ts（一份声明式规格同时喂 help 与错误提示），
+// 只读静态表，不加载 config / gateway / 网络。
+const helpPlan = planCliHelp(process.argv.slice(2));
+if (helpPlan !== null) {
+  if (helpPlan.stdout !== '') console.log(helpPlan.stdout);
+  if (helpPlan.stderr !== '') console.error(helpPlan.stderr);
+  process.exit(helpPlan.exitCode);
+}
+
 const parsed = parseArgs(process.argv.slice(2));
 if (!parsed.ok) {
-  console.error(`${ui.err(parsed.error)}\n${ui.dim(t('common.helpHint'))}`);
-  // 用法/解析错误统一 exit 2（Addendum A §6），与运行期失败（exit 1）区分。
+  // 用法/解析错误统一 exit 2（Addendum A §6），与运行期失败（exit 1）区分；
+  // 提示由同一份 help 规格生成，指向用户刚敲的那条命令。
+  console.error(renderUsageError(process.argv.slice(2), parsed.error));
   process.exit(2);
 }
 const args = parsed.args;
@@ -436,8 +260,9 @@ if (useMock && !demoRequested && resolvedScenario.unknown !== undefined) {
 }
 
 // 一次性命令在 bootstrap 之前短路：不加载 config / provider / gateway。
+// help 已在入口按位置解析并早退；这里只是 `args.help` 分支的兜底（全局总览）。
 if (args.help) {
-  printHelp();
+  console.log(renderGlobalHelp());
   process.exit(0);
 }
 if (args.version) {
