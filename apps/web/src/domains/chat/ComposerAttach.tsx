@@ -31,7 +31,13 @@ export function composerAttachLabel(): string {
  * 外观与发送键同族：同一个 32px 正圆盒子（`composerIconControlClass`，与发送键
  * 共用一份 class），只是色调走「次要动作」—— 静止灰色图标（`--muted`），
  * hover 转 `--ink`（暗色主题即白、浅色主题即最深的 ink），不借主题色。
- * 图标本身两边都是 `Icon size-4`（16px），所以对齐的是按钮盒子，不是缩图标。
+ *
+ * 图标给 14px（`Icon size`）：两个按钮的盒子一样、viewBox 也一样（16），但回形针
+ * 在视框里画得比纸飞机满 —— 路径包围盒 y 1.79–14.17 / x 2.63–15.01 ≈ 12.4 见方，
+ * 纸飞机 2.5–13.5 = 11 见方，同尺寸下回形针的墨迹面积大 ~11%，看起来「更大」。
+ * 按包围盒反比缩一档：16 × 11 / 12.4 ≈ 14.2 → 取 14，实际墨迹 12.4 × 14/16 ≈ 10.8，
+ * 与纸飞机的 11 基本同占地（差 <2%，肉眼不辨）；描边 1.5 用户单位随盒子缩到
+ * 约 1.31px，顺带让次要动作的笔画比主动作略轻 —— 这正是主次该有的差。
  *
  * `aria-haspopup="dialog"` + `aria-expanded` + `aria-controls` 指向同一个弹层；
  * 插件贡献 `attach-file` 时走的是同一份开关回调（见 `composer-toolbar.ts`），
@@ -70,7 +76,7 @@ export function ComposerAttachButton({
         onClick={onClick}
         className={cn(composerIconControlClass, composerQuietIconTone)}
       >
-        <Icon name="attach" />
+        <Icon name="attach" size={14} />
       </Button>
     </span>
   );

@@ -71,11 +71,26 @@ const PATHS: Record<IconName, ReactNode> = {
   ),
 };
 
-export function Icon({ name, className }: { name: IconName; className?: string }) {
+export function Icon({
+  name,
+  size,
+  className,
+}: {
+  name: IconName;
+  /**
+   * 边长（px），缺省 16 = 今天的 `size-4`。只改图标盒子，不改 viewBox：描边
+   * （`stroke-width: 1.5` 用户单位）会随盒子等比缩放，所以缩小一档也会略微变细。
+   * 传了 size 就不再挂 `size-4`，靠内联 width/height 定尺寸 —— 调用点仍然不传
+   * className 尺寸类（40+ 处既有约定不变）。
+   */
+  size?: number;
+  className?: string;
+}) {
   return (
     <svg
       viewBox="0 0 16 16"
-      className={cn('size-4 flex-none', className)}
+      className={cn('flex-none', size === undefined && 'size-4', className)}
+      style={size === undefined ? undefined : { width: size, height: size }}
       fill="none"
       stroke="currentColor"
       strokeWidth={1.5}

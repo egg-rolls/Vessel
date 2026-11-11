@@ -946,24 +946,29 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 10px 6px;
+  /* 内衬比上一版边上各减 1px，正好抵掉新加的 1px 透明边框：容器高度由内容撑开
+     （height: auto），边框会净增 2px 总高，所以必须从内衬里让出来。逐边仍是
+     上 8 / 左右 10 / 下 6 —— 卡片总高、textarea 文字起笔位置、gap 全都不变。 */
+  padding: 7px 9px 5px;
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
 }
 
-/* 悬停整块字段容器的反馈只有这一条（两页共用），且只挂在容器上：
-   textarea 与工具栏都是 `background: transparent`，所以鼠标落在输入框文字上、
-   落在内衬 / 圆角、落在 textarea 与工具栏之间那道 `gap`、落在工具栏按钮之间的
-   缝隙 —— 命中同一个 `.composer-field:hover`，视觉**必然**一致。反过来说：
-   不给 `.composer-input:hover` 另写一份，否则「悬停输入框」与「悬停输入区缝隙」
-   就是两条规则、迟早走偏（用户原话：除按钮外的区域 hover 要和 hover 输入框一样）。
-   叠色用 `--hover-tint`（light ink 4% / dark white 6%），与列表行、`.to-bottom`
-   等同一层 hover 语言；不新增颜色变量。
-   按钮不受这条影响：它们在容器**之上**画自己的不透明 `--surface-sunken` 底 +
-   描边（`composer-controls.ts` 的 `composerIconControlClass`），本规则只改容器
-   自身的 background-image，没有后代选择器，所以按钮自己的 hover 优先级不变。 */
-.composer-field:hover {
-  background-image: linear-gradient(var(--hover-tint), var(--hover-tint));
+/* 悬停反馈只有这一条（两页共用），且只挂在容器上：由「边框转灰」表达，不动底色
+   （用户明确不要背景变灰）。textarea 与工具栏都是 `background: transparent`，
+   所以鼠标落在输入框文字上、落在内衬 / 圆角、落在 textarea 与工具栏之间那道
+   `gap`、落在工具栏按钮之间的缝隙 —— 命中同一个 `.composer-field:hover`，
+   视觉**必然**一致；不给 `.composer-input:hover` 另写第二份。
+   颜色取 `--line-strong`：就是同一格里发送键 / 回形针那两个圆的自有描边色，
+   于是「悬停这一块」读起来和「按得动的东西的轮廓」同一套语言，而不是另起一种灰。
+   对比（sunken 底 vs line-strong 边）：浅色 #f1f1f2 / #d0d0d5（约 1.28:1，一条
+   克制的内框），深色 #0e0e10 / #34343a（约 1.9:1，同样克制）—— 是「描出来」而不是
+   「染色」，不会和按钮自己的 hover 抢注意力。
+   焦点态让位：`:focus-within` 的 `--focus-ring` 画在边框外，若同时再描一圈灰边就是
+   双框；所以 hover 只在「未聚焦」时描边（`:not(:focus-within)`），聚焦后整块只留环。 */
+.composer-field:hover:not(:focus-within) {
+  border-color: var(--line-strong);
 }
 
 .composer-field:focus-within {
