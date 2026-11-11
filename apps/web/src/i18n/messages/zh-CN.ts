@@ -220,6 +220,8 @@ export const messages = {
   'time.daysAgo': '{count} 天前',
   'chat.context.tokens': '{used} tokens',
   'chat.context.of': '{used} / {max}',
+  // 圆环的 hover / 读屏文案：比例 + 已用 + 上限（紧凑格式，如「59% / 592K，上限 1M」）。
+  'chat.context.percentOf': '{percent}% / {used}，上限 {max}',
   // 0.18：分栏拖拽手柄
   'resize.nav': '调整导航宽度',
   'resize.sessions': '调整会话列表宽度',

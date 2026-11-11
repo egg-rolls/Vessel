@@ -9,6 +9,7 @@ import {
   ComposerAttachments,
   ComposerContextMeter,
   ComposerToolbar,
+  contextPercent,
 } from '@vessel-agent/plugin-ui';
 import type { ReactNode } from 'react';
 import { formatTokenCount } from '../../format';
@@ -84,19 +85,23 @@ export function ComposerRefsArea({
 }
 
 /**
- * 发送键左侧的上下文用量条。
+ * 发送键左侧的上下文用量：圆环（比例）+ 原生 title（`59% / 592K of 1M`）。
+ *
+ * 比例 / 已用 / 上限都走紧凑格式（`formatTokenCount`：`592K` / `1.2K` / `3.4M`），
+ * 百分比取整且与圆环共用 `contextPercent` 的同一份规则。
  * 用量未知（没有数据 / 非当前会话）时返回 null —— 不占位、不显示假数。
  */
 export function ComposerUsageMeter({ usage }: { usage?: ComposerContextUsage }) {
   if (usage === undefined) return null;
+  const used = formatTokenCount(usage.used);
+  const percent = contextPercent(usage.used, usage.max);
+  const max = usage.max === undefined ? undefined : formatTokenCount(usage.max);
+  // 比例未知（没有 max）就只说已用，绝不补一个猜出来的百分比。
   const title =
-    usage.max !== undefined
-      ? t('chat.context.of', {
-          used: formatTokenCount(usage.used),
-          max: formatTokenCount(usage.max),
-        })
-      : t('chat.context.tokens', { used: formatTokenCount(usage.used) });
-  return <ComposerContextMeter used={usage.used} max={usage.max} title={title} />;
+    percent !== undefined && max !== undefined
+      ? t('chat.context.percentOf', { percent, used, max })
+      : t('chat.context.tokens', { used });
+  return <ComposerContextMeter used={usage.used} max={usage.max} title={title} text={used} />;
 }
 
 /**
