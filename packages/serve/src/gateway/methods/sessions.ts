@@ -35,10 +35,60 @@ export interface SessionRunLookup {
   load(runId: string): Promise<unknown>;
 }
 
+/**
+ * 会话级上下文用量（`sessions.get.context_usage`，additive）。
+ *
+ * `used` = 该会话最近一次真实用量；`max` 缺省 = 上下文窗口未知（客户端据此不画
+ * 比例）；`at` = 那条事件的 `ts`；`source` = 这个数字是谁给的（自查用）。
+ * **整字段缺省 = 没有可用数据**，不写 0、不写 null。
+ */
+export interface SessionContextUsage {
+  used: number;
+  max?: number;
+  at?: number;
+  source?: 'pressure' | 'changed' | 'estimated' | 'prompt';
+}
+
+/**
+ * 会话级用量的注入口（装配层实现，见 `src/context-usage.ts`）。
+ *
+ * 两个方法分开是有意的：`watermark` 只是一次 `stat`，`lookup` 才是尾窗读盘。
+ * 本模块据此按**尾水位失效**（日志只追加 ⇒ 水位不变时派生结果不可能变），
+ * 不会出现「纯 TTL 到期就白读一遍」的浪费，也不会在 run 期间拿到过期值。
+ */
+export interface SessionContextUsagePort {
+  lookup(sessionId: string): Promise<SessionContextUsage | undefined>;
+  /** 事件日志尾水位（`大小:mtime`）；`undefined` = 没有日志文件。 */
+  watermark(sessionId: string): Promise<string | undefined>;
+}
+
+/**
+ * `context_usage` 的每会话缓存（键 = session + **事件日志尾水位**）。
+ *
+ * 取值时机：Web 在页面加载 / 切会话 / 重连（epoch 变化）时取一次 `sessions.get`，
+ * run 期间另有 5s 的 `agents.tree` 轮询（live 优先，见 `useChatTranscript`）；
+ * 缓存让「同一份日志被反复问」不变成反复读盘。
+ * - 水位没变 → 直接命中，**0 字节读盘**，只花一次 `stat`；
+ * - 水位变了（有新事件）→ 重读一次尾窗：正常命中 **64 KiB**；该会话尾部确实没有
+ *   用量事件时按 64K→256K→1M→4M 扩窗，一次 miss 累计最多 **≈5.3 MiB**
+ *   （见 `SessionEventLog.readTailMatches`），且不会退化成全量扫盘。
+ * 失效只按水位（不设时间 TTL）：append-only 日志上「水位相同 ⇒ 结果相同」是确定的，
+ * 时间到期只会制造一次无用读。
+ */
+const CONTEXT_USAGE_CACHE_LIMIT = 256;
+
 export interface SessionMethodsDeps {
   sessionFor(): SessionStore | undefined;
   /** 最近 RunRecord 的读取面；缺省时 `sessions.get` 只用 `legacy_run` 投影。 */
   runStoreFor?(): SessionRunLookup | undefined;
+  /**
+   * 会话级上下文用量（additive `context_usage`）：由装配层从**事件日志尾窗**派生
+   * （历史会话 / rotate 之后 / 进程重启之后都能拿到）。
+   *
+   * 缺省 = `sessions.get` 不带该字段（旧行为一字不改）。serve 不拼磁盘路径、不读盘：
+   * 读取面（`SessionEventLog` 所在的 data-dir）由 app 侧注入。
+   */
+  contextUsage?: SessionContextUsagePort;
   /**
    * CONTRACT-0.34-context C7：仅服务 `sessions.compact` 的执行面。
    * 结构化读取可选 `compactContext(sessionId)`；缺省或方法缺失 = `compact_unavailable`。
@@ -419,6 +469,67 @@ export function toSessionView(state: SessionState, latestRaw: unknown): Record<s
 export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinition[] {
   const { sessionFor, runStoreFor, sessionData, compactRuntime, agent } = deps;
 
+  // ── 会话级上下文用量（additive `context_usage`）──
+  // 缓存只按 **session + 事件日志尾水位** 失效：日志 append-only ⇒ 水位不变时
+  // 派生结果不可能变（0 字节读盘，只花一次 stat），水位变了才重读尾窗。
+  // 派生逻辑与读盘位置都在注入的 `contextUsage` 端口里 —— serve 不认识 data-dir。
+  const contextUsageCache = new Map<
+    string,
+    { watermark: string | undefined; value: SessionContextUsage | undefined }
+  >();
+
+  /** 收敛成线上形状：非法值一律当「没有数据」，不猜、不补 0。 */
+  function normalizeContextUsage(
+    raw: SessionContextUsage | undefined,
+  ): SessionContextUsage | undefined {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const used = raw.used;
+    if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) return undefined;
+    const max = raw.max;
+    const at = raw.at;
+    const source = raw.source;
+    return {
+      used: Math.floor(used),
+      ...(typeof max === 'number' && Number.isFinite(max) && max > 0
+        ? { max: Math.floor(max) }
+        : {}),
+      ...(typeof at === 'number' && Number.isFinite(at) ? { at } : {}),
+      ...(source === 'pressure' ||
+      source === 'changed' ||
+      source === 'estimated' ||
+      source === 'prompt'
+        ? { source }
+        : {}),
+    };
+  }
+
+  async function contextUsageOf(sessionId: string): Promise<SessionContextUsage | undefined> {
+    const port = deps.contextUsage;
+    if (port === undefined) return undefined;
+
+    let watermark: string | undefined;
+    let value: SessionContextUsage | undefined;
+    try {
+      watermark = await port.watermark(sessionId);
+      const cached = contextUsageCache.get(sessionId);
+      if (cached !== undefined && cached.watermark === watermark) return cached.value;
+      // 没有事件日志（水位 undefined）= 这个会话还没落过任何事件，不必再开文件。
+      value =
+        watermark === undefined ? undefined : normalizeContextUsage(await port.lookup(sessionId));
+    } catch {
+      // 用量是观测性字段：读盘 / stat 失败不能把 `sessions.get` 一起打成 internal。
+      // 按「没有数据」处理（客户端不画环），下次水位变化时自然重试。
+      return undefined;
+    }
+
+    if (!contextUsageCache.has(sessionId) && contextUsageCache.size >= CONTEXT_USAGE_CACHE_LIMIT) {
+      const oldest = contextUsageCache.keys().next().value;
+      if (oldest !== undefined) contextUsageCache.delete(oldest);
+    }
+    contextUsageCache.set(sessionId, { watermark, value });
+    return value;
+  }
+
   function requireSession(): SessionStore {
     const resolved = sessionFor();
     if (!resolved) {
@@ -504,12 +615,15 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         }
 
         const windowAnchor = start > 0 ? all[start - 1] : undefined;
+        // Additive：会话级用量（历史会话 / rotate 后 / 重启后都可用）。读不到 = 字段缺省。
+        const contextUsage = await contextUsageOf(state.session_id);
         // 0.52：出站窗口与实时流统一 8 KiB 口径（`role==='tool'` 的 content 与
         // assistant 工具入参）。**在游标之后裁**：`next_before` 的 `length` 取自
         // 未裁剪的 `windowAnchor.content.length`，翻页校验才不会被裁剪改写。
         return {
           session: {
             ...toSessionView(state, latest),
+            ...(contextUsage !== undefined ? { context_usage: contextUsage } : {}),
             messages: capToolMessages(all.slice(start, end)),
             messages_total: total,
             ...(windowAnchor !== undefined

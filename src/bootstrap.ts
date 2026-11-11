@@ -36,6 +36,7 @@ import {
   Runtime,
   readTraceEvents,
   rebuildMetrics,
+  sessionEventsFilePath,
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
@@ -63,6 +64,7 @@ import {
   waitForConnectedResumeTerminal,
   waitForConnectedRun,
 } from './connect-run-wait';
+import { createContextUsageSource } from './context-usage';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { withDataLock } from './data-lock';
 import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
@@ -1576,6 +1578,21 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,
     session,
+    // 会话级上下文用量（additive `sessions.get.context_usage`）：从会话事件日志
+    // 尾窗派生（历史会话 / rotate 后 / 重启后都可用）。`contextWindowTokens` 与
+    // runtime 算百分比的分母同源（`config.context.maxTokens`，缺省走 DEFAULT_CONFIG）。
+    ...(eventLog !== undefined
+      ? {
+          contextUsage: createContextUsageSource({
+            tail: eventLog,
+            eventsFile: (sessionId: string) =>
+              sessionEventsFilePath(tenantPaths.sessions_dir, sessionId),
+            ...(config.context?.maxTokens !== undefined
+              ? { contextWindowTokens: config.context.maxTokens }
+              : {}),
+          }),
+        }
+      : {}),
     pluginHostManager: localPluginHostManager,
     pluginsReload: reloadLocalPlugins,
     // 0.15: local RPC runs also take the session write lock.
