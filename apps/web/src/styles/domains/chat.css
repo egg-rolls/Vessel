@@ -881,9 +881,8 @@
   box-shadow: var(--elev-2);
 }
 
-.composer:focus-within {
-  box-shadow: var(--elev-2), var(--focus-ring);
-}
+/* 焦点环不在卡片上出：由 `.composer-field` 的 `:focus-within` 承担（一层环，
+   标出「输入 + 工具栏」整块）。卡片同时再出一层就和容器环叠成双层。 */
 
 .composer-target {
   min-width: 0;
@@ -895,23 +894,21 @@
   text-overflow: ellipsis;
 }
 
-.composer-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-}
-
+/* 输入框与工具栏都不自带底色 / 内衬：这一层只留排版，外观全交给
+   `.composer-field`（同一块 `--surface-sunken` 凹槽）。 */
 .composer-input {
-  flex: 1;
+  /* 纵向由 `AutoGrowTextarea` 写死 height（单行 24px）；这里 `flex: none` 让它别在
+     列向容器里被 flex 拉高 / 压扁，横向仍由容器的 align-items: stretch 撑满。 */
+  flex: none;
   min-height: 24px;
   /* 上限只认令牌（tokens.css `--composer-input-max-h`）：`AutoGrowTextarea` 的自增高也按
      同一令牌夹高度，这里再写一个 160px 的字面值只会和令牌打架（同特异性下后加载的
      chat-dock.css 与行内 max-height 都会赢过它）。 */
   max-height: var(--composer-input-max-h);
-  padding: 8px 10px;
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
+  border-radius: 0;
+  background: transparent;
   font-size: 14px;
   line-height: 1.6;
   color: var(--ink);
@@ -932,23 +929,35 @@
   opacity: 0.55;
 }
 
-/* 底部工具栏 = 卡片自己的一条底边，不是第二张卡。
-   底色比卡片沉一层（`--surface-deep`：比输入区的 `--surface-sunken` 再沉一级，
-   但仍浅于扩展槽按钮的 `bg-sunken`，工具栏按钮的灰底因此不会消失），横向 / 下侧
-   外扩到卡片内衬之外，只保留与卡片同圆角的下两角：引用区、输入框、工具栏读成
-   同一张卡。工具栏自身不叠加阴影（层级只留卡片那一层 `--elev-2`），否则看起来
-   就是浮在卡片上的第二张卡；上边缘用一条 `--line` 细线画出来 —— 暗色下 deep 与
-   页面底色接近，边界靠这条线而不是靠第二层阴影。
-   外扩量 = 两页卡片的水平 / 底部内衬（会话卡片 `px-3.5 pb-3`，团队 `.composer`
-   的 `14px / 12px`）；两侧内衬与卡片相等 ⇒ 工具栏内容的横向位置与改动前一致，
-   点击热区与 `.composer:focus-within` 的焦点环归属都不变。 */
-.composer-toolbar-strip {
-  margin-inline: -14px;
-  margin-bottom: -12px;
-  padding: 6px 14px 12px;
-  border-top: 1px solid var(--line);
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: var(--surface-deep);
+/* 字段容器：卡片里唯一一块「输入 + 工具栏」的凹槽（`ComposerField`，两页共用）。
+   底色就是输入框原来的底色（`--surface-sunken`），圆角 `--radius-md`；容器的内衬
+   同时接管了两件事 ——
+     1. 原来 textarea 的 `padding: 8px 10px` 搬到这里（`8px 10px 6px`），所以文本框的
+        文字起笔位置不变，卡片总高也不涨（上一版把工具栏外扩成条带时净增 15–16px）；
+     2. 原来工具栏的上外边距（插件 UI 的 `mt-1.5`）换成容器自己的 `gap: 8px`，
+        两者之间只有这一处间距来源。
+   里面的 textarea 与工具栏都是 `background: transparent`：容器是唯一底色，于是
+   输入区与工具栏读成同一块区域，而不是「卡片里一张小卡 + 一条独立工具栏」。
+   扩展槽按钮（插件 UI 的 `bg-sunken`）与圆形发送键保留各自的灰底，不被这一层抹平；
+   圆键还有 `--line-strong` 描边，那是它在同色凹槽上的轮廓。
+   焦点环由这一层出（`:focus-within` + `--focus-ring`）：一层环标出整块「输入 +
+   工具栏」，textarea 自身不出环（见 `.composer-input:focus`）。 */
+.composer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 6px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.composer-field:focus-within {
+  box-shadow: var(--focus-ring);
+}
+
+.composer-field > .composer-input,
+.composer-field > .composer-toolbar {
+  background: transparent;
 }
 
 /* 0.18：pending 时用同尺寸提示卡替换 Composer；权限/提问共用同一外壳。 */

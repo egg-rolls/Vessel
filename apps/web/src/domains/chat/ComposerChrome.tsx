@@ -1,5 +1,5 @@
 /**
- * 输入框卡片的三层骨架里被两页共用的两块（引用区 / 底部工具栏）。
+ * 输入框卡片的三层骨架里被两页共用的三块（引用区 / 字段容器 / 工具栏）。
  *
  * 会话 `Composer` 与团队 `TeamComposer` 都只从这里取组件，样式与无障碍语义
  * 只有一份；两页的差异（草稿、mention、发送禁用条件）留在各自的 composer 里。
@@ -168,9 +168,10 @@ export function ComposerSendButton({
  * 底部横向工具栏：左侧扩展槽（插件贡献的按钮 + 宿主自绘控件），右侧
  * 上下文用量 + 主按钮（发送 / 配置连接）。
  *
- * 视觉上它是卡片自己的底部一条（`.composer-toolbar-strip`，定义在
- * `styles/domains/chat.css`）：底色比卡片沉一层、只保留卡片的下两角，
- * 与引用区 / 输入框读成同一张卡，不另起一张浮起来的卡。
+ * 它只负责「一行控件」，视觉上**没有自己的背景**：底色由外层
+ * {@link ComposerField} 承担（`.composer-toolbar { background: transparent }`），
+ * 与输入框透出同一块凹槽。容器已经用 `gap` 接管了它与输入框之间的间距，
+ * 所以这里把插件 UI 自带的 `mt-1.5` 抵成 `mt-0` —— 间距只有一个来源。
  *
  * 键盘：工具按钮是有序的 tab stop，Enter / Space 触发；输入框的
  * Enter / Ctrl+Enter 发送路径完全留在各自 composer 里，不受工具栏影响。
@@ -198,9 +199,55 @@ export function ComposerToolbarBar({
       actions={actions}
       meta={<ComposerUsageMeter usage={contextUsage} />}
       primary={primary}
-      className={cn('composer-toolbar-strip', className)}
+      className={cn('composer-toolbar mt-0', className)}
     >
       {children}
     </ComposerToolbar>
+  );
+}
+
+/**
+ * 字段容器（唯一实现）：把「输入框 + 工具栏」包成**一块**凹槽。
+ *
+ * 底色 = 输入框原来的底色（`--surface-sunken`），圆角 `--radius-md`，内衬
+ * `8px 10px 6px` —— 容器接管了原来 textarea 的 `8px 10px` 内衬，并把工具栏的
+ * `6px` 上外边距换成容器自己的 `gap: 8px`：文本框文字位置与卡片总高都不变
+ * （见 `styles/domains/chat.css` 的 `.composer-field`）。
+ *
+ * `children` 就是输入框；textarea 与工具栏都是 `background: transparent`，所以
+ * 两者读成同一块区域，而不是「卡片里一张小卡 + 一条独立工具栏」。扩展槽按钮
+ * （`variant=plain`）与圆形发送键保留各自的灰底 / 描边，不从这一层被抹平。
+ *
+ * 焦点环由容器 `:focus-within` 出一层，标出「输入 + 工具栏」整块；textarea
+ * 自己的 outline / ring 仍然去掉，避免双层。
+ *
+ * 会话 `Composer` 与团队 `TeamComposer` 都走这里：容器 DOM 只有一份，页面只
+ * 提供输入框（行为不同）与右侧主按钮。
+ */
+export function ComposerField({
+  children,
+  contextUsage,
+  primary,
+  hostActions = COMPOSER_TOOLBAR_HOST_ACTIONS,
+  slot,
+}: {
+  /** 输入框：各页自绘（Enter / IME / mention 行为留在页面里），样式共用 `.composer-input`。 */
+  children: ReactNode;
+  /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
+  contextUsage?: ComposerContextUsage;
+  /** 右侧主按钮（发送 / 配置连接）。 */
+  primary: ReactNode;
+  /** 插件条目 id → 宿主回调。 */
+  hostActions?: ComposerToolbarHostActions;
+  /** 扩展槽里宿主自绘的控件（排在插件贡献项之后）。 */
+  slot?: ReactNode;
+}) {
+  return (
+    <div className="composer-field">
+      {children}
+      <ComposerToolbarBar contextUsage={contextUsage} primary={primary} hostActions={hostActions}>
+        {slot}
+      </ComposerToolbarBar>
+    </div>
   );
 }

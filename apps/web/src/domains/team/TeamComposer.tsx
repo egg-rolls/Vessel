@@ -4,7 +4,9 @@
  * - Enter 发送 / Shift+Enter 换行；IME composition 内不响应；
  * - `@` 补全的键盘与 ARIA 由这里处理，焦点始终留在 textarea；
  * - 发送只提交 chips 里的 `agent_id`，正文 `@name` 不参与解析；
- * - UTF-8 字节上限 64 KiB。
+ * - UTF-8 字节上限 64 KiB；
+ * - 外观与会话页共用 `ComposerField` / `.composer-input`：卡片 > 引用区 >
+ *   字段容器（textarea + 工具栏），容器接管底色 / 内衬 / 焦点环。
  */
 
 import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
@@ -14,9 +16,9 @@ import type { MessageRef, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
   type ComposerContextUsage,
+  ComposerField,
   ComposerRefsArea,
   ComposerSendButton,
-  ComposerToolbarBar,
   refIndexForId,
   refsToAttachments,
 } from '../chat/ComposerChrome';
@@ -200,10 +202,19 @@ export function TeamComposer({
         )}
       </div>
 
-      <div className="flex items-end gap-2.5">
+      <ComposerField
+        contextUsage={contextUsage}
+        primary={
+          <ComposerSendButton
+            label={sending ? t('team.composer.sending') : t('team.composer.send')}
+            disabled={!canSend}
+            onClick={onSend}
+          />
+        }
+      >
         <AutoGrowTextarea
           ref={inputRef}
-          className="min-h-6 flex-1 resize-none overflow-y-auto rounded-md border-0 bg-sunken px-2.5 py-2 text-base leading-relaxed text-ink placeholder:text-faint focus:outline-none disabled:opacity-55"
+          className="composer-input"
           rows={1}
           value={value}
           onChange={(event) => {
@@ -293,17 +304,7 @@ export function TeamComposer({
           }
           enterKeyHint="send"
         />
-      </div>
-      <ComposerToolbarBar
-        contextUsage={contextUsage}
-        primary={
-          <ComposerSendButton
-            label={sending ? t('team.composer.sending') : t('team.composer.send')}
-            disabled={!canSend}
-            onClick={onSend}
-          />
-        }
-      />
+      </ComposerField>
     </div>
   );
 }

@@ -6,19 +6,20 @@ import { t } from '../../i18n';
 import { ChatDock } from './ChatDock';
 import {
   type ComposerContextUsage,
+  ComposerField,
   ComposerRefsArea,
   ComposerSendButton,
-  ComposerToolbarBar,
   refIndexForId,
   refsToAttachments,
 } from './ComposerChrome';
 
 /**
- * 会话输入框卡片：三层结构。
+ * 会话输入框卡片：卡片 > 引用区 > 字段容器 > (textarea + 工具栏)。
  *
  * - 上：引用区（附件 / 文档 / 引用项，受控 `refs` + `onRemoveRef`；空则不占高）；
- * - 中：textarea（行为不变：Enter 发送 / Shift+Enter 换行 / IME 保护）；
- * - 下：横向工具栏（左侧插件扩展槽，右侧上下文用量 + 发送键）。
+ * - 下：{@link ComposerField} 把 textarea 与横向工具栏包成一块凹槽 —— 底色、圆角、
+ *   内衬、焦点环都由容器承担，两者背景透明；
+ * - textarea 行为不变：Enter 发送 / Shift+Enter 换行 / IME 保护。
  */
 export function Composer({
   value,
@@ -84,7 +85,7 @@ export function Composer({
       const active = document.activeElement;
       const focusLeftInput =
         active === document.body ||
-        (active instanceof Element && active.closest('.composer-row') !== null);
+        (active instanceof Element && active.closest('.composer-field') !== null);
       if (focusLeftInput && hasToken && connected && !disabled) inputRef.current?.focus();
     }
     wasSubmittingRef.current = submitting;
@@ -105,7 +106,9 @@ export function Composer({
 
   return (
     <ChatDock>
-      <div className="w-full max-w-[var(--dock-width)] mx-auto px-3.5 pt-2.25 pb-3 rounded-lg bg-raised shadow-elev-2 focus-within:shadow-[var(--elev-2),var(--focus-ring)]">
+      {/* 焦点环由 `.composer-field` 的 `:focus-within` 出（一层，标出「输入 + 工具栏」），
+          卡片自己不再叠加第二层环。 */}
+      <div className="w-full max-w-[var(--dock-width)] mx-auto px-3.5 pt-2.25 pb-3 rounded-lg bg-raised shadow-elev-2">
         <div className="flex items-center justify-between gap-3 mb-1.5 text-xs text-faint">
           <Tooltip label={targetLabel}>
             <span className="composer-target">{targetLabel}</span>
@@ -132,7 +135,22 @@ export function Composer({
           items={refItems}
           onRemove={onRemoveRef === undefined ? undefined : removeRef}
         />
-        <div className="composer-row">
+        <ComposerField
+          contextUsage={contextUsage}
+          primary={
+            !hasToken || !connected ? (
+              <Button variant="primary" onClick={onOpenConnection}>
+                {t('common.configureConnection')}
+              </Button>
+            ) : (
+              <ComposerSendButton
+                label={submitting ? t('chat.composer.sending') : t('chat.composer.send')}
+                disabled={!canSend}
+                onClick={onSubmit}
+              />
+            )
+          }
+        >
           <AutoGrowTextarea
             ref={inputRef}
             className="composer-input"
@@ -159,23 +177,7 @@ export function Composer({
             aria-label={t('chat.composer.input')}
             enterKeyHint="send"
           />
-        </div>
-        <ComposerToolbarBar
-          contextUsage={contextUsage}
-          primary={
-            !hasToken || !connected ? (
-              <Button variant="primary" onClick={onOpenConnection}>
-                {t('common.configureConnection')}
-              </Button>
-            ) : (
-              <ComposerSendButton
-                label={submitting ? t('chat.composer.sending') : t('chat.composer.send')}
-                disabled={!canSend}
-                onClick={onSubmit}
-              />
-            )
-          }
-        />
+        </ComposerField>
       </div>
     </ChatDock>
   );
