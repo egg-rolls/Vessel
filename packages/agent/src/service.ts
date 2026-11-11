@@ -42,7 +42,7 @@ import {
   type Usage,
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
-import { AgentInboxStore } from './inbox.js';
+import { AgentInboxStore, deliveryFromNotify } from './inbox.js';
 import {
   type BindingRecord,
   currentBindingSession,
@@ -576,7 +576,7 @@ export class AgentServiceImpl implements AgentService {
   private readonly syntheticRunIds = new Set<string>();
   /** 0.41：已排 / 在跑 wake 的 agent id（同一目标最多一个 pending wake）。 */
   private readonly wakePending = new Set<string>();
-  /** 0.41：run 期间有新 notify 的 agent id；settle 后补检一次。 */
+  /** 0.41：run 期间有新 wake 投递的 agent id；settle 后补检一次。 */
   private readonly noticeDirty = new Set<string>();
   /** 成员停下通知端口（装配层注入；缺省不报）。 */
   private readonly peerStops: AgentServiceOptions['peerStops'];
@@ -593,8 +593,8 @@ export class AgentServiceImpl implements AgentService {
    * 绕过冷却）。
    */
   private readonly runCycleEdges = new Map<string, Set<string>>();
-  /** 0.41：一次 send 调用 / messages 数组的 notify 边计数（每批最多 bump 1 次）。 */
-  private readonly notifyBatchEdges = new Map<string, Set<string>>();
+  /** 0.41：一次 send 调用 / messages 数组的 wake 边计数（每批最多 bump 1 次）。 */
+  private readonly wakeBatchEdges = new Map<string, Set<string>>();
   /** drain 之后不再从队列起新轮（关闭窗口内排队的消息随进程退出丢弃） */
   private draining = false;
   /** 同一源成员的 single-flight 自动创建；并发只 spawn 一个新 Agent */
@@ -1918,13 +1918,13 @@ export class AgentServiceImpl implements AgentService {
     for (const runId of entry.queuedRuns) {
       this.scheduler.cancel(runId, `body retired: ${reason}`);
       // 被取消的 synthetic wake 不会 settle；立刻清掉它的 run / wake 标记，
-      // 否则 rotate 后同一 agent 的 notify 会被 wakePending 永远挡住。
+      // 否则 rotate 后同一 agent 的 wake 投递会被 wakePending 永远挡住。
       this.syntheticRunIds.delete(runId);
     }
     entry.queuedRuns.clear();
     this.wakePending.delete(entry.agentId);
     // 仍有 active run 时（典型是 rotate 在自己的 run 里执行）不要清 noticeDirty：
-    // 该 run 结束时 settle 还要据此补排一次 wake；提前清掉会吞掉本 run 内到达的 notify。
+    // 该 run 结束时 settle 还要据此补排一次 wake；提前清掉会吞掉本 run 内到达的 wake 投递。
     if (entry.active === undefined) this.noticeDirty.delete(entry.agentId);
     if (wasWaitingPermission) {
       // 旧 body 上等待人类的权限请求随 body 一起失效；留事件让入口侧收口交互卡。
@@ -2169,15 +2169,20 @@ export class AgentServiceImpl implements AgentService {
     // rotate 窗口内：旧 body 即将退役，消息只落 inbox（不进旧队列、不提交），
     // 由新 body 的 hook 按「启动嘱托 → 旧队列 → 新队列」顺序注入。
     // 启动嘱托本身例外：它是新 body 的 run input，永不进 inbox。
+    // 投递模式 quiet：不唤醒、也不当作 run input（新 body 之后按需 read）。
     if (this.inbox !== undefined && internal?.startup !== true && this.rotations.has(record.id)) {
       const rotation = this.rotations.get(record.id);
       if (rotation !== undefined) {
-        this.inbox.append(record.id, {
-          id: message.id,
-          ts: message.ts,
-          source: from,
-          text: content,
-        });
+        this.inbox.append(
+          record.id,
+          {
+            id: message.id,
+            ts: message.ts,
+            source: from,
+            text: content,
+          },
+          { delivery: 'quiet' },
+        );
         const runId = this.newId();
         this.runMessageIds.set(runId, message.id);
         this.emitForSession('agent.message.queued', record, rotation.toSessionId, {
@@ -2286,15 +2291,22 @@ export class AgentServiceImpl implements AgentService {
    * 所有把消息交给 body mailbox 的路径都必须经过这里：先 append（同 id 幂等，已存在
    * 则不改状态），再 hold。**不要在别处直接调 `inbox.hold`**，否则 `held` 会重新变回
    * 第二套独立状态（case 0 的 D1–D3）。
+   *
+   * 投递模式恒为 `input`：这里写下的消息本体就是下一轮 run input。既有消息被
+   * urgent `message_id` 复用时，这也是把它从 quiet / wake 升级成 input 的唯一入口。
    */
   private trackInbox(agentId: string, message: AgentMessage, bodyId: string): void {
     if (this.inbox === undefined) return;
-    this.inbox.append(agentId, {
-      id: message.id,
-      ts: message.ts,
-      source: message.from,
-      text: message.content,
-    });
+    this.inbox.append(
+      agentId,
+      {
+        id: message.id,
+        ts: message.ts,
+        source: message.from,
+        text: message.content,
+      },
+      { delivery: 'input' },
+    );
     this.inbox.hold(agentId, message.id, bodyId);
   }
 
@@ -2782,7 +2794,8 @@ export class AgentServiceImpl implements AgentService {
     else handle.complete(content ?? '');
     // 成员真停了才报父级（窗口内又拿到工作就丢弃）：synthetic 唤醒不算报告。
     if (!synthetic) this.schedulePeerStop(handle.agentId, outcome, failure);
-    // run 结束、目标空闲且 run 期间有 notify：无条件补检一次（0 unread 由 executor 跳过）。
+    // run 结束、目标空闲且 run 期间有 wake 投递：无条件补检一次（0 unread 由 executor 跳过）。
+
     if (this.noticeDirty.has(handle.agentId)) {
       void this.scheduleInboxWake(handle.agentId).catch(() => {});
     }
@@ -3025,7 +3038,7 @@ export class AgentServiceImpl implements AgentService {
       if (messages.length === 0) {
         throw new AgentError('invalid_input', 'messages must not be empty');
       }
-      // 一次 messages 数组共享一个 notify 边计数 batch key（每批最多 bump 1 次）。
+      // 一次 messages 数组共享一个 wake 边计数 batch key（每批最多 bump 1 次）。
       const batchKey = this.newId();
       try {
         const settled = await Promise.allSettled(
@@ -3037,14 +3050,14 @@ export class AgentServiceImpl implements AgentService {
         );
         return settleBatch(settled);
       } finally {
-        this.notifyBatchEdges.delete(batchKey);
+        this.wakeBatchEdges.delete(batchKey);
       }
     }
     const batchKey = this.newId();
     try {
       return await this.sendOne(record, batchKey);
     } finally {
-      this.notifyBatchEdges.delete(batchKey);
+      this.wakeBatchEdges.delete(batchKey);
     }
   }
 
@@ -3054,20 +3067,22 @@ export class AgentServiceImpl implements AgentService {
     const from =
       input.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(input, 'from');
     const interrupt = readOptionalBoolean(input, 'interrupt');
-    const notify = readOptionalBoolean(input, 'notify');
+    // wire 的 notify 布尔在这里就换成 inbox 的投递模式：内部不再有 notify 开关。
+    const delivery = deliveryFromNotify(readOptionalBoolean(input, 'notify'));
+    const wakes = delivery === 'wake';
     let messageId: string | undefined;
     if (input.message_id !== undefined) messageId = readRequiredString(input, 'message_id');
-    if (interrupt && notify) {
+    if (interrupt && wakes) {
       throw new AgentError('invalid_input', 'conflicting_delivery');
     }
-    if (messageId !== undefined && notify) {
+    if (messageId !== undefined && wakes) {
       throw new AgentError('invalid_input', 'message_id is not supported with notify');
     }
     if (messageId !== undefined && !interrupt) {
       throw new AgentError('invalid_input', 'message_id requires interrupt: true');
     }
     if (
-      (interrupt || notify) &&
+      (interrupt || wakes) &&
       (to.includes('@') || to === HUMAN_PRINCIPAL || to.startsWith('federation:'))
     ) {
       throw new AgentError('invalid_input', 'unsupported_delivery');
@@ -3088,7 +3103,7 @@ export class AgentServiceImpl implements AgentService {
     if (target.membership === 'left' || target.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${to}`);
     }
-    if (!notify && target.presence === 'gone') {
+    if (!wakes && target.presence === 'gone') {
       throw new AgentError('member_stale', `member_stale: ${to}`);
     }
     if (!this.registry.canView(target, from)) {
@@ -3104,8 +3119,8 @@ export class AgentServiceImpl implements AgentService {
         : readRequiredString(input, 'origin_session_id');
     const originRunId =
       input.origin_run_id === undefined ? undefined : readRequiredString(input, 'origin_run_id');
-    if (notify) {
-      const outcome = await this.notifyDelivery(target, {
+    if (wakes) {
+      const outcome = await this.wakeDelivery(target, {
         from,
         content,
         ...(conversationId !== undefined ? { conversationId } : {}),
@@ -3471,23 +3486,30 @@ export class AgentServiceImpl implements AgentService {
   private restoreConsumedUnread(agentId: string, message: AgentMessage): void {
     // I3：这里是「重新落为 unread」的合法出口 —— 先 discard（连 consumed 一并删），
     // 再 append 同 id（未 hold）。不要改成 unhold：unhold 恢复不了 consumed。
+    // 投递模式 quiet：这条投递已经收口（scheduler 拒绝了它），不让它再被当成待送达输入；
+    // 正文留在 inbox 里，由下一轮 notice 提示、模型自己 read。
     this.inbox?.discard(agentId, [message.id]);
-    this.inbox?.append(agentId, {
-      id: message.id,
-      ts: message.ts,
-      source: message.from,
-      text: message.content,
-    });
+    this.inbox?.append(
+      agentId,
+      {
+        id: message.id,
+        ts: message.ts,
+        source: message.from,
+        text: message.content,
+      },
+      { delivery: 'quiet' },
+    );
     this.urgentMessageIds.delete(message.id);
     this.urgentMessages.delete(message.id);
   }
 
   /**
-   * 0.41 notify 内核：只追加 inbox unread（rejectWhenFull），不 hold / submit / consume。
-   * 预算走 notify 模式：不 ensure 新 conversation、只认 cycle blocked、跳过 hop /
+   * wake 投递模式的内核：只追加 inbox unread（`delivery: 'wake'`），不 hold / submit /
+   * consume；必要时再排一次 synthetic 摘要唤醒（唤醒失败也不影响已落盘的消息）。
+   * 预算走 wake 口径：不 ensure 新 conversation、只认 cycle blocked、跳过 hop /
    * wall-clock / turns / tokens，每批最多 bump 1 次 edge。
    */
-  private async notifyDelivery(
+  private async wakeDelivery(
     target: MemberRecord,
     input: {
       from: string;
@@ -3520,7 +3542,7 @@ export class AgentServiceImpl implements AgentService {
     const originExplicit = input.originTeamId !== undefined;
     // 第一遍只做只读检查（不 bump）：append / wake 失败时就不该留下边计数。
     const check = this.checkDelivery(target, input.from, conversationId, teamId, originExplicit, {
-      mode: 'notify',
+      mode: 'wake',
       edge: 'check',
     });
     if (!check.ok) {
@@ -3536,10 +3558,11 @@ export class AgentServiceImpl implements AgentService {
       throw this.budgetFailureError(check, conversationId, teamId);
     }
     const messageId = this.newId();
+    // 投递模式交给 inbox 自己：wake 不裁 unread（见 append 的模式缺省），失败即 inbox_full。
     const appended = this.inbox.append(
       target.id,
       { id: messageId, ts: this.now(), source: input.from, text: input.content },
-      { rejectWhenFull: true },
+      { delivery: 'wake' },
     );
     if (!appended.accepted) {
       throw new AgentError(
@@ -3549,11 +3572,11 @@ export class AgentServiceImpl implements AgentService {
     }
     this.noticeDirty.add(target.id);
     const wake = canWake ? await this.scheduleInboxWake(target.id) : false;
-    // 只有“真的排了 wake”的 notify 才计边；每批最多 1 次。第二遍结果忽略：
-    // 通知已经 append，cycle 失败也不撤销（它只影响后续投递的环检测）。
-    if (wake && this.claimNotifyEdge(input.batchKey, input.from, target.id)) {
+    // 只有“真的排了 wake”的投递才计边；每批最多 1 次。第二遍结果忽略：
+    // 消息已经 append，cycle 失败也不撤销（它只影响后续投递的环检测）。
+    if (wake && this.claimWakeEdge(input.batchKey, input.from, target.id)) {
       this.checkDelivery(target, input.from, conversationId, teamId, originExplicit, {
-        mode: 'notify',
+        mode: 'wake',
         edge: 'bump',
       });
     }
@@ -3691,7 +3714,9 @@ export class AgentServiceImpl implements AgentService {
     const to = readRequiredString(raw, 'to');
     const from = raw.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
     const interrupt = readOptionalBoolean(raw, 'interrupt');
-    const notify = readOptionalBoolean(raw, 'notify');
+    // wire 的 notify 布尔 ↔ inbox 的 wake 投递模式：dispatch 内部只认模式。
+    const delivery = deliveryFromNotify(readOptionalBoolean(raw, 'notify'));
+    const wakes = delivery === 'wake';
     let messageId: string | undefined;
     if (raw.message_id !== undefined) messageId = readRequiredString(raw, 'message_id');
     const originSessionId =
@@ -3703,10 +3728,10 @@ export class AgentServiceImpl implements AgentService {
     const batchKey = raw.batch_key === undefined ? undefined : readRequiredString(raw, 'batch_key');
 
     // 三档输入互斥与地址限制：在解析目标 / 产生任何副作用之前拒绝。
-    if (interrupt && notify) {
+    if (interrupt && wakes) {
       return { status: 'rejected', code: 'invalid_input', reason: 'conflicting_delivery' };
     }
-    if (messageId !== undefined && notify) {
+    if (messageId !== undefined && wakes) {
       return {
         status: 'rejected',
         code: 'invalid_input',
@@ -3721,7 +3746,7 @@ export class AgentServiceImpl implements AgentService {
       };
     }
     if (
-      (interrupt || notify) &&
+      (interrupt || wakes) &&
       (to.includes('@') || to === HUMAN_PRINCIPAL || to.startsWith('federation:'))
     ) {
       return { status: 'rejected', code: 'invalid_input', reason: 'unsupported_delivery' };
@@ -3749,16 +3774,16 @@ export class AgentServiceImpl implements AgentService {
     if (target.membership === 'left' || target.state === 'closed') {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
-    // notify 允许落给 closing / gone（append + wake:false）；work / urgent 仍拒绝 closing。
-    if (!notify && this.hasClosingExecutionUnit(target.id)) {
+    // wake 投递允许落给 closing / gone（append + wake:false）；input / urgent 仍拒绝 closing。
+    if (!wakes && this.hasClosingExecutionUnit(target.id)) {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
 
     const originTeamId =
       raw.origin_team_id === undefined ? undefined : readRequiredString(raw, 'origin_team_id');
-    if (notify) {
+    if (wakes) {
       try {
-        const outcome = await this.notifyDelivery(target, {
+        const outcome = await this.wakeDelivery(target, {
           from,
           content,
           ...(input.conversation_id !== undefined ? { conversationId: input.conversation_id } : {}),
@@ -5293,7 +5318,7 @@ export class AgentServiceImpl implements AgentService {
     conversationId: string,
     teamId?: string,
     originExplicit = false,
-    options?: { mode?: 'delivery' | 'read_only' | 'notify'; edge?: 'bump' | 'check' | 'skip' },
+    options?: { mode?: 'delivery' | 'read_only' | 'wake'; edge?: 'bump' | 'check' | 'skip' },
   ): BudgetCheckResult {
     if (this.budgetPort === undefined) return { ok: true };
     const resolvedTeamId = teamId ?? this.resolveOriginTeam(from, target);
@@ -5662,14 +5687,16 @@ export class AgentServiceImpl implements AgentService {
     edges.add(edgeKey);
   }
 
-  /** notify 边计数：同一次 send / messages 批最多 1 次。返回 true 表示本次可 bump。 */
-  private claimNotifyEdge(batchKey: string | undefined, from: string, to: string): boolean {
+  /**
+   * 唤醒排程的边计数：同一次 send / messages 批最多 1 次。返回 true 表示本次可 bump。
+   */
+  private claimWakeEdge(batchKey: string | undefined, from: string, to: string): boolean {
     if (batchKey === undefined) return true;
     const edgeKey = `${from}\u0000${to}`;
-    let edges = this.notifyBatchEdges.get(batchKey);
+    let edges = this.wakeBatchEdges.get(batchKey);
     if (edges === undefined) {
       edges = new Set();
-      this.notifyBatchEdges.set(batchKey, edges);
+      this.wakeBatchEdges.set(batchKey, edges);
     }
     if (edges.has(edgeKey)) return false;
     edges.add(edgeKey);
@@ -5677,12 +5704,12 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * tool 路径一次 send / messages 调用结束后的通知边清理（内部、非 wire）。
+   * tool 路径一次 send / messages 调用结束后的 wake 边清理（内部、非 wire）。
    * TeamService.send 只透传 batch_key；同一次调用可能逐条进 dispatch，必须由
    * 调用方在整批 await 完后统一释放，否则 Map 残留。
    */
-  releaseNotifyBatch(batchKey: string): void {
-    this.notifyBatchEdges.delete(batchKey);
+  releaseWakeBatch(batchKey: string): void {
+    this.wakeBatchEdges.delete(batchKey);
   }
 
   /** 预算失败的稳定错误：带 conversation / dimension / retry_after / 恢复命令。 */

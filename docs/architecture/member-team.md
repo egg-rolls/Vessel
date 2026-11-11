@@ -83,7 +83,7 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 
 <a id="inbox-state-machine"></a>
 
-**收件箱与消息状态机**：每条投递在内存 mailbox 之外还有一份**持久化收件箱**（`<dataDir>/inbox/<agent>.json`）——同一条消息的两份记录，状态必须只有一个真相。实现见 `packages/agent/src/inbox.ts` 与 `service.ts` 的 `trackInbox` / `consumeAsRunInput`。
+**收件箱与消息状态机**：每条投递在内存 mailbox 之外还有一份**持久化收件箱**（`<dataDir>/inbox/<agent>.json`）——同一条消息的两份记录，状态必须只有一个真相。实现见 `packages/agent/src/inbox.ts` 与 `service.ts` 的 `trackInbox` / `consumeAsRunInput`。**投递模式是 inbox 自己的概念**（`AgentInboxDelivery`，`append(msg, { delivery })`），不是某个入口的开关：`input`（缺省）消息本体作为下一轮 run input 送达；`wake`（wire 上就是 `notify: true`）只唤醒 agent 自己去 read，run input 是固定摘要串；`quiet` 只落 inbox，不唤醒也不进 run（`inbox insert`、rotate 窗口、投递失败后的恢复）。状态机 I1–I4 只描述 `input` 那条路；`wake` / `quiet` 落盘不 hold，只有被 urgent `message_id` 复用升级成 input 时才接管。
 
 - **I1 唯一写入点**：`append` + `hold` 只经 `AgentService.trackInbox` 成对发生；别处直接 `inbox.hold` 会重新制造第二套状态。 **I2 唯一消费点**：`consumed_by_session` 只在消息真正作为一轮 run input 交给 runtime 时写，且与「从 `entry.pending` 出队」紧邻、中间不得插 `await` 或早返回。出队未消费 = 永远停在 `unread + held`；消费未出队 = 会被重投一次。
 - **I3 无静默遗弃**：任何移出 mailbox 的路径必须在 `consume` / `unhold` / `discard` 里选一个出口（六个审计点：提交失败、正常出队、body 已收口早返回、预算 `turn_start` 阻塞、retire/dispose 清空、`retryHeldMessages` 重投）。

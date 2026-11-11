@@ -156,8 +156,8 @@ export class ConversationBudget implements ConversationBudgetPort {
     const now = this.now();
     const mode = input.mode ?? 'delivery';
     const existing = this.store.get(input.conversation_id);
-    // notify：不 ensure 新 conversation；不存在就跳过全部检查、不落记录。
-    if (mode === 'notify' && existing === undefined) return { ok: true };
+    // wake：不 ensure 新 conversation；不存在就跳过全部检查、不落记录。
+    if (mode === 'wake' && existing === undefined) return { ok: true };
     if (
       input.origin_explicit === true &&
       existing?.team_id !== undefined &&
@@ -176,8 +176,8 @@ export class ConversationBudget implements ConversationBudgetPort {
     }
     if (existing?.blocked !== undefined) {
       const blocked = existing.blocked;
-      // notify 只做唤醒提示，不被 blocked 拦（cycle 已不落 blocked，见上）。
-      if (mode !== 'notify') {
+      // wake 只做汇总唤醒，不被 blocked 拦（cycle 已不落 blocked，见上）。
+      if (mode !== 'wake') {
         return this.failed(
           blocked.dimension,
           blocked.reason,
@@ -188,8 +188,8 @@ export class ConversationBudget implements ConversationBudgetPort {
     }
 
     // delivery / read_only 才查 hops / wall-clock / turns / tokens。
-    // notify 跳过这些维度（只保留 cycle）。
-    if (mode !== 'notify') {
+    // wake 跳过这些维度（只保留 cycle）。
+    if (mode !== 'wake') {
       const hops = existing?.hops ?? 0;
       const maxHops = this.effectiveMax(existing, limits, 'hops');
       if (maxHops !== undefined && hops + 1 > maxHops) {
@@ -240,7 +240,7 @@ export class ConversationBudget implements ConversationBudgetPort {
 
     if (mode === 'read_only') return { ok: true };
 
-    // notify 只在已有记录上计边；不存在时上面已返回。
+    // wake 只在已有记录上计边；不存在时上面已返回。
     const conversation = existing ?? this.store.ensure(input.conversation_id, teamId, now);
     if (mode === 'delivery') {
       conversation.last_activity = now;

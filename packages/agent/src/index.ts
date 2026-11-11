@@ -22,13 +22,16 @@ export {
 } from './conversation-store.js';
 export {
   AGENT_INBOX_VERSION,
+  type AgentInboxDelivery,
   type AgentInboxEntryInput,
   type AgentInboxListEntry,
   type AgentInboxPort,
   type AgentInboxReadEntry,
   AgentInboxStore,
   type AgentInboxStoreOptions,
+  DEFAULT_INBOX_DELIVERY,
   DEFAULT_MAX_INBOX_MESSAGES,
+  deliveryFromNotify,
   INBOX_READ_DEFAULT_LIMIT,
   inboxPath,
   type StoredInboxMessage,

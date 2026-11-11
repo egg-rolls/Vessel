@@ -22,6 +22,10 @@
  * 正文由模型调用 `createInboxTool` 的 `inbox` 工具按需读取（读即消费；
  * `includeHeld:true` 只 peek held 的正文，不消费、不取消投递）。
  *
+ * **投递模式**（`AgentInboxDelivery`，模式属于 inbox 自己，不是入口开关）：
+ * `input` = 本体作为下一轮 run input 送达；`wake` = 只唤醒 agent 自己去 read；
+ * `quiet` = 只落 inbox，不唤醒也不进 run。状态机（I1–I4）只描述 `input` 那条路。
+ *
  * @module @vessel-agent/agent
  */
 
@@ -45,6 +49,31 @@ export const INBOX_READ_DEFAULT_LIMIT = 20;
 
 /** summary 的最大字符数（截断时另加 `…`）。 */
 const INBOX_SUMMARY_MAX = 160;
+
+/**
+ * inbox 的投递模式（一等概念，0.50 切片）：模式属于 **inbox**，不是某个入口的开关。
+ *
+ * - `input`（缺省）：消息进 inbox，且**其本体**作为下一轮 run input 送达（同时可被 read）；
+ * - `wake`：消息进 inbox，只唤醒 agent 自己去 read —— run input 是固定摘要串，不带正文；
+ * - `quiet`：只进 inbox：不唤醒、不作为 run input，等模型自己 read
+ *   （自述 `insert` / rotate 窗口 / 投递失败后的恢复）。
+ *
+ * 只有 `input` 会被 body mailbox 接管（`hold`）并在开始执行时 consumed；
+ * `wake` / `quiet` 落盘时不 hold。既有消息被显式升级成 input 投递（urgent 指定
+ * `message_id`）时才由 `trackInbox` 接管 —— 模式是**本次投递**的意图，不是消息的永久属性。
+ */
+export type AgentInboxDelivery = 'input' | 'wake' | 'quiet';
+
+/** 缺省投递模式：消息本体就是下一轮 run input。 */
+export const DEFAULT_INBOX_DELIVERY: AgentInboxDelivery = 'input';
+
+/**
+ * wire → 投递模式：外部契约里的 `notify: true` 只是 **wake 模式**的别名（0.41 三档），
+ * 内部一律用投递模式表达。`notify` 缺省 / false 即 `input`（消息本体作为 run input）。
+ */
+export function deliveryFromNotify(notify: boolean | undefined): AgentInboxDelivery {
+  return notify === true ? 'wake' : 'input';
+}
 
 export interface StoredInboxMessage {
   id: string;
@@ -92,8 +121,16 @@ export interface AgentInboxReadEntry extends StoredInboxMessage {
 
 export interface AgentInboxAppendOptions {
   /**
-   * true：先裁 consumed，仍满则返回 `full`（不裁 unread）；insert / notify 用。
-   * false（缺省）：先裁 consumed，仍满时继续裁最旧 unread（既有行为）。
+   * 本次投递的模式（见 `AgentInboxDelivery`）；缺省 `input`。
+   *
+   * 只影响本次 append 的裁剪策略与调用方的后续动作（要不要 hold / 起 wake run），
+   * **不落盘**：崩溃重启后一律按普通 unread 处理（有意取舍：不自动重投）。
+   */
+  delivery?: AgentInboxDelivery;
+  /**
+   * true：先裁 consumed，仍满则返回 `full`（不裁 unread）。缺省按模式派生：
+   * `wake` 缺省 true（它不产生 run input，无权驱逐将要送达的 unread），
+   * `input` / `quiet` 缺省 false（先裁 consumed，仍满时继续裁最旧 unread）。
    */
   rejectWhenFull?: boolean;
 }
@@ -127,6 +164,9 @@ export interface AgentInboxPort {
   /**
    * I1（唯一写入点）：落盘并计算 summary；重复 id 忽略。先裁 consumed，再按 options
    * 决定是否裁 unread。
+   *
+   * `options.delivery` 是 inbox 的投递模式（缺省 `input`）：`input` 由调用方随后
+   * `hold` 并提交成 run input；`wake` / `quiet` 只落盘，等被唤醒的 agent 自己 read。
    *
    * 写前日志语义：append 先于 scheduler 接管，所以被接管但尚未成为 run input 的消息
    * 一定在库里；`consumed_by_session` 只在 `markConsumed` 时写。
@@ -314,6 +354,10 @@ export class AgentInboxStore implements AgentInboxPort {
   ): AgentInboxAppendResult {
     const state = this.stateFor(agentId);
     if (!state.available) return { accepted: false, reason: 'unavailable' };
+    // 投递模式：只有 input 会被随后的 hold / submit 变成 run input；wake 只唤醒，
+    // quiet 连唤醒都没有。模式不落盘，只决定本次写入的裁剪口径。
+    const delivery = options?.delivery ?? DEFAULT_INBOX_DELIVERY;
+    const rejectWhenFull = options?.rejectWhenFull ?? delivery === 'wake';
     // 所有路径先裁 consumed；consumed 不占 cap。拒绝 / 重复 id 路径也要把裁剪落盘。
     const prunedConsumed = this.pruneConsumed(state);
     // 同一 id 只保留一条（重试 / 重复准入不制造重复消息）；裁剪仍需落盘。
@@ -322,12 +366,12 @@ export class AgentInboxStore implements AgentInboxPort {
       return { accepted: true };
     }
     if (state.messages.length >= this.maxMessages) {
-      if (options?.rejectWhenFull === true) {
+      if (rejectWhenFull) {
         // 不裁 unread：显式拒绝，调用方返回 inbox_full 而不是静默丢消息。
         if (prunedConsumed) void this.enqueueWrite(state);
         return { accepted: false, reason: 'full' };
       }
-      // 既有行为：consumed 裁完仍满时继续裁最旧（可能丢 unread）。
+      // input / quiet 的既有行为：consumed 裁完仍满时继续裁最旧（可能丢 unread）。
       state.messages.splice(0, state.messages.length - this.maxMessages + 1);
     }
     state.messages.push({
@@ -842,7 +886,8 @@ export function createInboxTool(options: {
         const appended = options.inbox.append(
           options.agentId,
           { id, ts, source: options.agentId, text: input.content },
-          { rejectWhenFull: true },
+          // quiet：自述只落自己的 inbox —— 不唤醒、不成为 run input；全满时显式拒绝。
+          { delivery: 'quiet', rejectWhenFull: true },
         );
         await options.inbox.flush();
         if (!appended.accepted) {

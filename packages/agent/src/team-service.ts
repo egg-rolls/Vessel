@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EventStream, Logger, RunEvent } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
+import { type AgentInboxDelivery, DEFAULT_INBOX_DELIVERY } from './inbox.js';
 import { addressSegmentCount, HUMAN_PRINCIPAL } from './team-address.js';
 import { MAX_LOG_READ_LIMIT } from './team-log.js';
 import {
@@ -591,7 +592,10 @@ export class DefaultTeamService implements AgentTeamService {
     }
 
     const interrupt = input.interrupt === true;
-    const notify = input.notify === true;
+    // 投递模式取代原来的 notify 布尔：内部只认 input / wake / quiet，wire 的
+    // `notify: true` 在 tool 边界已经转成 `delivery: 'wake'`。
+    const delivery: AgentInboxDelivery = input.delivery ?? DEFAULT_INBOX_DELIVERY;
+    const wakes = delivery === 'wake';
     const messageId = input.message_id;
 
     let content: string;
@@ -624,9 +628,9 @@ export class DefaultTeamService implements AgentTeamService {
     // - 2 段 → 本机，但仍是地址形态，需要拆成 principal + team 再投，不能当名字查；
     // - 1 段 → 普通 id / name 解析；裸 `human` 单独短路（它不是成员名）。
     const segments = typeof input.to === 'string' ? addressSegmentCount(input.to) : undefined;
-    // 0.41：地址 / 跨节点目标不支持 urgent / notify（1 段是普通 id / name）。
+    // 0.41：地址 / 跨节点目标不支持 urgent / wake 投递（1 段是普通 id / name）。
     if (
-      (interrupt || notify) &&
+      (interrupt || wakes) &&
       (segments === 2 || segments === 3 || input.to === HUMAN_PRINCIPAL)
     ) {
       return {
@@ -702,8 +706,8 @@ export class DefaultTeamService implements AgentTeamService {
     }
 
     // 裸名未命中本队 roster 时只能跨 team / 跨节点升级解析；那条路径不携带
-    // 三档语义，urgent / notify 一旦放过去会在升级后静默降级成普通投递，直接拒绝。
-    if (caller.team_id !== undefined && target === undefined && (interrupt || notify)) {
+    // 三档语义，urgent / wake 一旦放过去会在升级后静默降级成普通投递，直接拒绝。
+    if (caller.team_id !== undefined && target === undefined && (interrupt || wakes)) {
       return {
         status: 'rejected',
         code: 'invalid_input',
@@ -730,9 +734,9 @@ export class DefaultTeamService implements AgentTeamService {
 
     let logged = false;
     // private 调用者同样不得写 Team 日志（消息本身仍可 dispatch，只是不留痕）。
-    // notify 只做 inbox 通知，不写 team mention 日志。
+    // wake 投递只做 inbox 通知，不写 team mention 日志。
     if (
-      !notify &&
+      !wakes &&
       target !== undefined &&
       caller.team_id !== undefined &&
       target.team_id === caller.team_id &&
@@ -770,10 +774,11 @@ export class DefaultTeamService implements AgentTeamService {
         from: caller.id,
         conversation_id: conversationId,
         ...(interrupt ? { interrupt: true } : {}),
-        ...(notify ? { notify: true } : {}),
+        // wire 边界：dispatch 只认 `notify` 布尔，wake 模式在这里转回去。
+        ...(wakes ? { notify: true } : {}),
         ...(messageId !== undefined ? { message_id: messageId } : {}),
         // 内部（非 wire）：调用者 session / run 供 conversation 继承与同 run 边去重；
-        // batch_key 让一次 messages 数组的 notify 共享边计数。
+        // batch_key 让一次 messages 数组的 wake 投递共享边计数。
         origin_session_id: input.origin_session_id ?? input.from_session_id,
         ...(input.origin_run_id !== undefined ? { origin_run_id: input.origin_run_id } : {}),
         ...(input.batch_key !== undefined ? { batch_key: input.batch_key } : {}),
@@ -789,7 +794,8 @@ export class DefaultTeamService implements AgentTeamService {
         };
       }
       if (result.status === 'notified') {
-        // notify 直接返回 SendResult（契约 §2.6）；不混入 TeamAgentSendResult 字段。
+        // wake 模式直接返回 SendResult（契约 §2.6：状态名仍是 notified）；不混入
+        // TeamAgentSendResult 字段。
         return {
           queued: false,
           notified: true,
@@ -1381,7 +1387,8 @@ export class DefaultTeamService implements AgentTeamService {
           reason: result.reason,
         };
       }
-      // 这条路径不传 notify，dispatch 不可能返回 notified；显式标记不可达以完成收窄。
+      // 这条路径恒为 input 投递（不传 notify），dispatch 不可能返回 notified；
+      // 显式标记不可达以完成收窄。
       throw new Error('unreachable: dispatchMention does not send notify');
     } catch (error) {
       return {

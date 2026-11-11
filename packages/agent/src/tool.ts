@@ -9,6 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { LIMIT_WARNING_THRESHOLD, type ToolContext, type ToolDefinition } from '@vessel-agent/core';
+import { deliveryFromNotify } from './inbox.js';
 import { HUMAN_PRINCIPAL } from './team-address.js';
 import { TeamMetadataCorruptError } from './team-store.js';
 import {
@@ -196,6 +197,7 @@ function mapSend(record: Record<string, unknown>): Record<string, unknown> {
   if (record.to !== undefined) input.to = record.to;
   if (record.content !== undefined) input.content = record.content;
   // 0.41 三档：interrupt / notify 互斥；message_id 仅与 interrupt 同用。
+  // notify 是 wire 名，进 handler 后立刻变成 inbox 的投递模式（见 sendSingle）。
   if (record.interrupt !== undefined) input.interrupt = record.interrupt;
   if (record.notify !== undefined) input.notify = record.notify;
   if (record.message_id !== undefined) input.message_id = record.message_id;
@@ -647,9 +649,9 @@ export function createAgentTool(
         if (action === 'send') {
           // owner 走统一 dispatch；成员 ExecutionUnit 用自己的 session 走 TeamService.send
           // （from 恒由入口决定，模型不能伪造）。
-          // 0.41：一批 send 生成一个 notify 边计数 key；整批 await 完后释放（内部、非 wire）。
-          const releaseNotifyBatch = (batchKey: string): void => {
-            service.releaseNotifyBatch(batchKey);
+          // 0.41：一批 send 生成一个 wake 边计数 key；整批 await 完后释放（内部、非 wire）。
+          const releaseWakeBatch = (batchKey: string): void => {
+            service.releaseWakeBatch(batchKey);
           };
           const sendSingle = async (
             entry: unknown,
@@ -663,7 +665,10 @@ export function createAgentTool(
             const to = mapped.to as string;
             const content = mapped.content as string;
             const interrupt = mapped.interrupt === true;
-            const notify = mapped.notify === true;
+            // 工具参数 `notify` 是 wire 名：映射成 inbox 的投递模式再往下传，
+            // 内部（TeamService / dispatch）不再二传布尔。
+            const delivery = deliveryFromNotify(mapped.notify === true);
+            const wakes = delivery === 'wake';
             const messageId = typeof mapped.message_id === 'string' ? mapped.message_id : undefined;
             if (!isOwnerCaller) {
               if (options.team === undefined) throw invalid('send requires a team service');
@@ -672,7 +677,7 @@ export function createAgentTool(
                 to,
                 content,
                 ...(interrupt ? { interrupt: true } : {}),
-                ...(notify ? { notify: true } : {}),
+                delivery,
                 ...(messageId !== undefined ? { message_id: messageId } : {}),
                 origin_run_id: ctx.run_id,
                 ...(batchKey !== undefined ? { batch_key: batchKey } : {}),
@@ -687,8 +692,8 @@ export function createAgentTool(
             // 旧文案让模型「用 vessel federation post --from ...」——那是 CLI，模型没有
             // 这条工具调用可发，属于不可执行的死提示。错误消息给的替代动作必须真能用。
             if (typeof to === 'string' && (to.includes('@') || to === HUMAN_PRINCIPAL)) {
-              // 0.41：地址 / 跨节点目标不支持 urgent / notify。
-              if (interrupt || notify) {
+              // 0.41：地址 / 跨节点目标不支持 urgent / wake 投递。
+              if (interrupt || wakes) {
                 return {
                   status: 'rejected',
                   code: 'invalid_input',
@@ -709,7 +714,8 @@ export function createAgentTool(
               content,
               from: ownerId,
               ...(interrupt ? { interrupt: true } : {}),
-              ...(notify ? { notify: true } : {}),
+              // wire 边界：dispatch 只认 notify 布尔，wake 模式在这里转回去。
+              ...(wakes ? { notify: true } : {}),
               ...(messageId !== undefined ? { message_id: messageId } : {}),
               // 内部（非 wire）：tool 路径按调用者 session 继承会话 / 按 run 去重边。
               ...(callerSession !== undefined ? { origin_session_id: callerSession } : {}),
@@ -730,7 +736,7 @@ export function createAgentTool(
               'send',
             );
             const entries = readBatch(record, 'messages', 'send');
-            // 一次 messages 数组共享一个 notify 边计数 key（内部、非 wire）。
+            // 一次 messages 数组共享一个 wake 边计数 key（内部、非 wire）。
             const batchKey = randomUUID();
             try {
               const results = await Promise.all(
@@ -744,14 +750,14 @@ export function createAgentTool(
               );
               return JSON.stringify({ results });
             } finally {
-              releaseNotifyBatch(batchKey);
+              releaseWakeBatch(batchKey);
             }
           }
           const batchKey = randomUUID();
           try {
             return JSON.stringify(await sendSingle(record, batchKey));
           } finally {
-            releaseNotifyBatch(batchKey);
+            releaseWakeBatch(batchKey);
           }
         }
 

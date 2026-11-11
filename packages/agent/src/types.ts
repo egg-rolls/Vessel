@@ -26,7 +26,7 @@ import type {
   ToolDefinition,
   Usage,
 } from '@vessel-agent/core';
-import type { AgentInboxPort } from './inbox.js';
+import type { AgentInboxDelivery, AgentInboxPort } from './inbox.js';
 
 /** 成员状态（终态：completed / failed / cancelled / closed） */
 export type MemberState =
@@ -471,10 +471,11 @@ export interface BudgetDeliveryInput {
    * 检查模式（0.41）：
    * - delivery（缺省）：完整检查并计数 hop / edge / last_activity；
    * - read_only：只查 blocked / cycle / limits，不计数、不落库（message_id urgent）；
-   * - notify：只查 cycle（以及显式 origin 的 team 一致性），不 ensure 新 conversation、
-   *   不计 hop / wall-clock / turns / tokens、不改 last_activity。
+   * - wake：inbox 的 wake 投递模式用的口径 —— 只查 cycle（以及显式 origin 的
+   *   team 一致性），不 ensure 新 conversation、不计 hop / wall-clock / turns / tokens、
+   *   不改 last_activity。
    */
-  mode?: 'delivery' | 'read_only' | 'notify';
+  mode?: 'delivery' | 'read_only' | 'wake';
   /**
    * cycle 边处理（0.41）：
    * - bump（缺省）：检查并计数；
@@ -699,7 +700,10 @@ export interface SendInput {
   interrupt?: boolean;
   /** 指定要优先投递的 inbox 消息 id（无需重复 content；必须与 interrupt 同用）。 */
   message_id?: string;
-  /** 0.41：只追加 inbox unread 并发一次摘要 wake；不 hold / submit / consume。 */
+  /**
+   * 0.41 wire 别名： `notify: true` ≡ inbox 的 **wake 投递模式**（只追加 inbox unread
+   * 并发一次摘要 wake；不 hold / submit / consume）。内部一律转成投递模式再走链路。
+   */
   notify?: boolean;
 }
 
@@ -731,18 +735,21 @@ export interface DispatchInput {
   allow_auto_create?: boolean;
   /** 0.41：urgent（取消 active 并重投到队首）。 */
   interrupt?: boolean;
-  /** 0.41：只追加 inbox unread + 摘要唤醒；与 interrupt 互斥。 */
+  /**
+   * 0.41 wire 别名： `notify: true` ≡ inbox 的 **wake 投递模式**（只追加 inbox unread +
+   * 摘要唤醒）；与 interrupt 互斥。
+   */
   notify?: boolean;
   /** 0.41：与 interrupt 同用时优先投递既有 inbox 消息。 */
   message_id?: string;
   /** 0.41：内部（非 wire、非持久）调用者 session / run；tool / TeamService 填充。 */
   origin_session_id?: string;
   origin_run_id?: string;
-  /** 0.41：内部（非 wire、非持久）一次 messages 数组的 notify 边计数 key。 */
+  /** 0.41：内部（非 wire、非持久）一次 messages 数组的 wake 边计数 key。 */
   batch_key?: string;
 }
 
-/** dispatch 结果：queued 表示已入队；notified 表示 notify 成功；rejected 是明确拒绝 */
+/** dispatch 结果：queued 表示已入队；notified 表示 wake 投递成功；rejected 是明确拒绝 */
 export type DispatchResult =
   | {
       status: 'queued';
@@ -896,7 +903,7 @@ export interface ListFilter {
 /**
  * 发送结果：入队即返回，不等待一轮结束。
  *
- * 0.41 起是联合：work / urgent 为 queued；notify 为 notified。notify 分支不带
+ * 0.41 起是联合：work / urgent 为 queued；wake 投递（wire `notify:true`）为 notified。notified 分支不带
  * run / session；`state` 为让通用 send 消费方保持类型兼容而保留（wire additive）。
  */
 export type SendResult =
@@ -1198,10 +1205,10 @@ export interface AgentService {
   send(input: SendInput): Promise<SendResult>;
   send(input: SendBatchInput): Promise<BatchResult<SendResult>>;
   /**
-   * 0.41 内部（非 wire）：释放一次 send / messages 批的 notify 边计数 key。
-   * tool 在调用边界生成 key，整批结束后调用，避免 `notifyBatchEdges` 无界增长。
+   * 0.41 内部（非 wire）：释放一次 send / messages 批的 wake 边计数 key。
+   * tool 在调用边界生成 key，整批结束后调用，避免 `wakeBatchEdges` 无界增长。
    */
-  releaseNotifyBatch(batchKey: string): void;
+  releaseWakeBatch(batchKey: string): void;
   /**
    * 统一投递入口：live 直接入队；gone 先 single-flight resume；
    * rotating 入队等待；left / resume 失败返回 rejected。
@@ -1556,16 +1563,20 @@ export interface TeamAgentSendInput {
   content: string;
   /** 会话分组；缺省继承调用者当前 turn（0.19 S4） */
   conversation_id?: string;
-  /** 0.41：urgent（取消 active 并重投到队首）；与 notify 互斥。 */
+  /** 0.41：urgent（取消 active 并重投到队首）；与 `delivery: 'wake'` 互斥。 */
   interrupt?: boolean;
-  /** 0.41：只追加 inbox unread + 摘要唤醒。 */
-  notify?: boolean;
+  /**
+   * 内部投递模式（tool → TeamService，非 wire）：缺省 `input`（消息本体作为下一轮
+   * run input）；`wake` = 只追加 inbox unread + 摘要唤醒。wire 上的 `notify: true`
+   * 在 tool 边界转成 `wake`，不用布尔在这里二传。
+   */
+  delivery?: AgentInboxDelivery;
   /** 0.41：与 interrupt 同用时优先投递既有 inbox 消息。 */
   message_id?: string;
   /** 0.41：内部（非 wire、非持久）调用者 session / run。 */
   origin_session_id?: string;
   origin_run_id?: string;
-  /** 0.41：内部（非 wire、非持久）一次 messages 数组的 notify 边计数 key。 */
+  /** 0.41：内部（非 wire、非持久）一次 messages 数组的 wake 边计数 key。 */
   batch_key?: string;
 }
 
