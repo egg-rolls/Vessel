@@ -1,5 +1,5 @@
 /**
- * RunDetail / RunTimeline 共用的展示格式化与导出 helper。
+ * 运行详情页（RunDetailPage / RunEventLog）共用的展示格式化与导出 helper。
  */
 
 export function pretty(value: unknown): string {

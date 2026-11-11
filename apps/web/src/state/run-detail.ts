@@ -1,7 +1,8 @@
 /**
- * 运行详情的事件纯函数：分类过滤、tool call 折叠、live/trace 合并与分页。
+ * 运行详情的事件纯函数：类别划分、live/trace 合并与分页游标。
  *
  * 无 React 依赖，可直接单测。事件类型是开放字符串，未知类型归入「其它」。
+ * 日志行索引 / 过滤 / 分页窗口在 domains/runs/run-event-log.ts。
  */
 import type { RunEvent } from '../gateway/types';
 import { INTERNAL_EVENT_TYPES } from './events';
@@ -35,125 +36,6 @@ export function eventCategory(
   if (type.startsWith('tool.')) return 'tools';
   if (isErrorEvent(type)) return 'errors';
   return 'other';
-}
-
-export interface RunEventFilterOptions {
-  filter?: RunEventFilter;
-  /** 显示内部事件（context.changed / llm.request / subagent.* 等）。 */
-  showInternal?: boolean;
-  /** 类型前缀（大小写不敏感）；空串表示不过滤。 */
-  typePrefix?: string;
-}
-
-/**
- * 先按「内部事件是否显示」过滤，再按类别与类型前缀过滤。
- * 选择「内部」类别时不受开关影响，避免出现空列表却无解释。
- */
-export function filterRunEvents(
-  events: readonly RunEvent[],
-  { filter = 'all', showInternal = false, typePrefix = '' }: RunEventFilterOptions = {},
-): RunEvent[] {
-  const prefix = typePrefix.trim().toLowerCase();
-  return events.filter((event) => {
-    if (!showInternal && filter !== 'internal' && isInternalEvent(event.type)) return false;
-    if (prefix && !event.type.toLowerCase().startsWith(prefix)) return false;
-    if (filter === 'all') return true;
-    if (filter === 'internal') return isInternalEvent(event.type);
-    // 错误过滤器与工具过滤器有意重叠：tool.call.failed 两边都能查到。
-    if (filter === 'errors') return isErrorEvent(event.type);
-    if (filter === 'tools') return event.type.startsWith('tool.');
-    if (filter === 'llm') return event.type.startsWith('llm.');
-    // other：不属于上面任何一类（内部事件已在前面处理）。
-    return (
-      !isInternalEvent(event.type) &&
-      !event.type.startsWith('tool.') &&
-      !event.type.startsWith('llm.') &&
-      !isErrorEvent(event.type)
-    );
-  });
-}
-
-export interface ToolCallGroup {
-  kind: 'tool';
-  key: string;
-  toolCallId?: string;
-  name: string;
-  status: 'started' | 'completed' | 'failed';
-  started?: RunEvent;
-  ended?: RunEvent;
-  arguments?: unknown;
-  result?: unknown;
-  error?: string;
-  durationMs?: number;
-}
-
-export type RunTimelineItem = { kind: 'event'; key: string; event: RunEvent } | ToolCallGroup;
-
-interface ToolEventData {
-  tool_call_id?: unknown;
-  tool_name?: unknown;
-  arguments?: unknown;
-  result?: unknown;
-  error?: unknown;
-  duration_ms?: unknown;
-}
-
-/**
- * 把 `tool.call.started` 与后续 completed/failed 合成一行。
- * 仅按 `tool_call_id` 配对；缺少 id 或缺少 started 的事件保持独立，
- * 不猜测配对关系（trace 可能从中间开始）。
- */
-export function groupRunEvents(events: readonly RunEvent[]): RunTimelineItem[] {
-  const items: RunTimelineItem[] = [];
-  const byCallId = new Map<string, ToolCallGroup>();
-
-  for (const event of events) {
-    if (event.type.startsWith('tool.call.')) {
-      const data = event.data as ToolEventData;
-      const callId = typeof data.tool_call_id === 'string' ? data.tool_call_id : undefined;
-      const name = typeof data.tool_name === 'string' ? data.tool_name : 'tool';
-      const isStart = event.type === 'tool.call.started';
-      const existing = callId ? byCallId.get(callId) : undefined;
-
-      if (isStart) {
-        const group: ToolCallGroup = {
-          kind: 'tool',
-          key: `tool-${items.length}`,
-          name,
-          status: 'started',
-          started: event,
-          ...(callId ? { toolCallId: callId } : {}),
-          ...(data.arguments !== undefined ? { arguments: data.arguments } : {}),
-        };
-        items.push(group);
-        if (callId) byCallId.set(callId, group);
-        continue;
-      }
-
-      let group = existing;
-      if (!group) {
-        group = {
-          kind: 'tool',
-          key: `tool-${items.length}`,
-          name,
-          status: event.type === 'tool.call.completed' ? 'completed' : 'failed',
-          ...(callId ? { toolCallId: callId } : {}),
-        };
-        items.push(group);
-        if (callId) byCallId.set(callId, group);
-      }
-      group.ended = event;
-      group.status = event.type === 'tool.call.completed' ? 'completed' : 'failed';
-      if (data.result !== undefined) group.result = data.result;
-      if (typeof data.error === 'string') group.error = data.error;
-      if (typeof data.duration_ms === 'number') group.durationMs = data.duration_ms;
-      continue;
-    }
-
-    items.push({ kind: 'event', key: `event-${items.length}`, event });
-  }
-
-  return items;
 }
 
 function eventKey(event: RunEvent): string {

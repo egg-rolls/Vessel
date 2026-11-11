@@ -23,7 +23,10 @@ function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
 }
 
-/** 失败 run 的详情深链（与 RunsView 的 `#/runs?tab=live&run=…` 一致）。 */
+/**
+ * 失败 run 的详情深链：`#/runs/<runId>?session=…`（独立详情页，不再内联展开）。
+ * 与 `RunsView` 的 `useRunsPage` 同一套参数：tab 缺省 live。
+ */
 export function runDetailHref(group: Pick<RunGroup, 'runId' | 'sessionId'>): string {
   return formatRoute({
     domain: 'runs',

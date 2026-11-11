@@ -7,7 +7,7 @@
 
 import { TableToolbar } from '@vessel-agent/plugin-ui';
 import { SegmentedTabs } from '../../components/Tabs';
-import { cn, SearchInput } from '../../components/ui';
+import { SearchInput } from '../../components/ui';
 import { t } from '../../i18n';
 
 type RunTab = 'live' | 'durable';
@@ -17,16 +17,14 @@ export function RunsFilters({
   onQueryChange,
   tab,
   onTabChange,
-  hidden,
 }: {
   query: string;
   onQueryChange: (value: string) => void;
   tab: RunTab;
   onTabChange: (tab: RunTab) => void;
-  hidden: boolean;
 }) {
   return (
-    <TableToolbar label={t('runs.searchLabel')} className={cn(hidden && 'max-wide:hidden')}>
+    <TableToolbar label={t('runs.searchLabel')}>
       <SearchInput
         value={query}
         onChange={onQueryChange}

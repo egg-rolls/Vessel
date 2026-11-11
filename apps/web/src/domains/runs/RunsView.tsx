@@ -1,5 +1,8 @@
 /**
- * Runs 容器：页面头、live/durable tab、路由级滚动容器、列表状态与详情面板。
+ * Runs 容器：列表页与运行详情页两条互斥的整页分支。
+ *
+ * 详情是独立子页面（#/runs/<runId>），不再作为列表行下方的内联面板 ——
+ * 内联面板会把列表页整体拉高，日志一多就没法在同一屏里比对。
  *
  * S3：数据/副作用在 useRunsPage；过滤栏与表格拆到 RunsFilters / RunsTable。
  */
@@ -14,14 +17,18 @@ import {
   NotEnabledState,
   StaleNotice,
 } from '../../components/States';
-import { Button, cn } from '../../components/ui';
+import { Button } from '../../components/ui';
 import { t, useLocale } from '../../i18n';
-import { RunDetail } from './RunDetail';
+import { RunDetailPage } from './RunDetailPage';
 import { RunsFilters } from './RunsFilters';
 import { RunsTable } from './RunsTable';
 import { useRunsPage } from './useRunsPage';
 
 type RunsRoute = Extract<Route, { domain: 'runs' }>;
+
+/** 两个分支共用的路由级滚动容器：切页时重置 scrollTop，不沿用上一页的位置。 */
+const SCROLL_CLASS =
+  'flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain';
 
 export function RunsView({
   route,
@@ -68,25 +75,54 @@ export function RunsView({
     navigate({ ...route, ...patch });
   };
 
-  // 本页是路由级滚动容器；切 tab 时重置 scrollTop，避免沿用上一页的位置。
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const changeTab = (tab: RunsRoute['tab']) => {
     scrollRef.current?.scrollTo?.({ top: 0 });
     navigate({ domain: 'runs', tab });
   };
+  // 详情页的返回固定落回同 tab 的运行列表（带上来时的会话过滤），不读 history。
+  const backToList = () => {
+    scrollRef.current?.scrollTo?.({ top: 0 });
+    navigate({
+      domain: 'runs',
+      tab: route.tab,
+      ...(route.sessionId ? { sessionId: route.sessionId } : {}),
+    });
+  };
+
+  const runId = route.runId;
+  if (runId) {
+    return (
+      <div ref={scrollRef} className={SCROLL_CLASS}>
+        <RunDetailPage
+          runId={runId}
+          tab={route.tab}
+          run={detailRun}
+          durable={knownDurable ?? null}
+          active={activeDetail}
+          canWrite={connected}
+          connected={connected}
+          loading={detailLoading}
+          missing={detailMissing}
+          detailError={detailResource.state.status === 'error' ? detailResource.state.error : null}
+          busy={busy.has(runId)}
+          onBack={backToList}
+          onCancel={cancel}
+          onResume={resume}
+          onRetry={detailResource.reload}
+        />
+      </div>
+    );
+  }
 
   return (
-    <div
-      ref={scrollRef}
-      className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain"
-    >
+    <div ref={scrollRef} className={SCROLL_CLASS}>
       <PageScaffold title={t('runs.title')} subtitle={t('runs.subtitle')}>
         <RunsFilters
           query={query}
           onQueryChange={setQuery}
           tab={route.tab}
           onTabChange={changeTab}
-          hidden={Boolean(route.runId)}
         />
 
         <div
@@ -95,131 +131,95 @@ export function RunsView({
           role="tabpanel"
           aria-label={t('runs.title')}
         >
-          <div className={cn('flex flex-col gap-4', route.runId && 'max-wide:hidden')}>
-            {!hasToken ? (
-              <EmptyState
-                title={t('runs.noTokenTitle')}
-                action={
-                  <Button onClick={() => navigate({ domain: 'gateway' })}>
-                    {t('common.configureConnection')}
-                  </Button>
-                }
-              />
-            ) : route.tab === 'durable' && !durableAvailable ? (
-              <NotEnabledState
-                title={t('runs.durableDisabledTitle')}
-                reason={t('runs.durableDisabledReason')}
-                hint={t('runs.durableDisabledHint')}
-              />
-            ) : (
-              <>
-                {!connected && current.length > 0 && (
-                  <StaleNotice message={t('runs.disconnected')} onRetry={reloadAll} />
-                )}
-                {resourceError && current.length > 0 && (
-                  <StaleNotice
-                    message={t('common.staleData', { detail: resourceError })}
-                    onRetry={reloadAll}
-                  />
-                )}
-
-                {resourceError && current.length === 0 ? (
-                  <ErrorState message={resourceError} onRetry={reloadResource} />
-                ) : loading ? (
-                  <LoadingState label={t('runs.loading')} />
-                ) : current.length === 0 ? (
-                  <EmptyState
-                    title={t(
-                      route.tab === 'live' ? 'runs.emptyLiveTitle' : 'runs.emptyDurableTitle',
-                    )}
-                    description={t(
-                      route.tab === 'live' ? 'runs.emptyLiveDesc' : 'runs.emptyDurableDesc',
-                    )}
-                    action={
-                      route.tab === 'live' ? (
-                        <Button
-                          variant="primary"
-                          onClick={() => navigate({ domain: 'chat', sessionId: 'new' })}
-                        >
-                          {t('common.newSession')}
-                        </Button>
-                      ) : undefined
-                    }
-                  />
-                ) : filtered.length === 0 ? (
-                  <EmptyState
-                    title={t('runs.noMatchTitle')}
-                    description={t('runs.noMatchDesc')}
-                    action={
-                      <Button
-                        onClick={() => {
-                          setQuery('');
-                          setStatus('all');
-                          setAgentId('');
-                          navigateRoute({ sessionId: undefined });
-                        }}
-                      >
-                        {t('common.clearFilters')}
-                      </Button>
-                    }
-                  />
-                ) : (
-                  <RunsTable
-                    tab={route.tab}
-                    windowed={windowed}
-                    connected={connected}
-                    busy={busy}
-                    activeKey={route.runId}
-                    status={status}
-                    onStatusChange={setStatus}
-                    filterList={filterList}
-                    agentId={agentId}
-                    onAgentIdChange={setAgentId}
-                    agentOptions={agentOptions}
-                    sessionNames={sessionNames}
-                    agentNames={agentNames}
-                    onCancel={cancel}
-                    onResume={resume}
-                    onOpenRun={(runId, sessionId) => navigateRoute({ runId, sessionId: sessionId })}
-                    onOpenSession={(sessionId) => navigate({ domain: 'chat', sessionId })}
-                    onSelectAgent={setAgentId}
-                    onShowMore={() => setLimit((value) => value + 100)}
-                  />
-                )}
-              </>
-            )}
-          </div>
-
-          {route.runId &&
-            (detailMissing ? (
-              <div className="max-wide:hidden">
-                <ErrorState
-                  message={
-                    detailResource.state.status === 'error'
-                      ? detailResource.state.error
-                      : t('runs.notFound')
-                  }
-                  onRetry={detailResource.reload}
+          {!hasToken ? (
+            <EmptyState
+              title={t('runs.noTokenTitle')}
+              action={
+                <Button onClick={() => navigate({ domain: 'gateway' })}>
+                  {t('common.configureConnection')}
+                </Button>
+              }
+            />
+          ) : route.tab === 'durable' && !durableAvailable ? (
+            <NotEnabledState
+              title={t('runs.durableDisabledTitle')}
+              reason={t('runs.durableDisabledReason')}
+              hint={t('runs.durableDisabledHint')}
+            />
+          ) : (
+            <>
+              {!connected && current.length > 0 && (
+                <StaleNotice message={t('runs.disconnected')} onRetry={reloadAll} />
+              )}
+              {resourceError && current.length > 0 && (
+                <StaleNotice
+                  message={t('common.staleData', { detail: resourceError })}
+                  onRetry={reloadAll}
                 />
-              </div>
-            ) : detailLoading ? (
-              <div className="max-wide:hidden">
-                <LoadingState label={t('runs.detailLoading')} />
-              </div>
-            ) : detailRun || knownDurable ? (
-              <RunDetail
-                runId={route.runId}
-                tab={route.tab}
-                run={detailRun}
-                durable={knownDurable ?? null}
-                active={activeDetail}
-                canWrite={connected}
-                onCancel={cancel}
-                onResume={resume}
-                onClose={() => navigateRoute({ runId: undefined })}
-                busy={busy.has(route.runId)}
-              />
-            ) : null)}
+              )}
+
+              {resourceError && current.length === 0 ? (
+                <ErrorState message={resourceError} onRetry={reloadResource} />
+              ) : loading ? (
+                <LoadingState label={t('runs.loading')} />
+              ) : current.length === 0 ? (
+                <EmptyState
+                  title={t(route.tab === 'live' ? 'runs.emptyLiveTitle' : 'runs.emptyDurableTitle')}
+                  description={t(
+                    route.tab === 'live' ? 'runs.emptyLiveDesc' : 'runs.emptyDurableDesc',
+                  )}
+                  action={
+                    route.tab === 'live' ? (
+                      <Button
+                        variant="primary"
+                        onClick={() => navigate({ domain: 'chat', sessionId: 'new' })}
+                      >
+                        {t('common.newSession')}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              ) : filtered.length === 0 ? (
+                <EmptyState
+                  title={t('runs.noMatchTitle')}
+                  description={t('runs.noMatchDesc')}
+                  action={
+                    <Button
+                      onClick={() => {
+                        setQuery('');
+                        setStatus('all');
+                        setAgentId('');
+                        navigateRoute({ sessionId: undefined });
+                      }}
+                    >
+                      {t('common.clearFilters')}
+                    </Button>
+                  }
+                />
+              ) : (
+                <RunsTable
+                  tab={route.tab}
+                  windowed={windowed}
+                  connected={connected}
+                  busy={busy}
+                  status={status}
+                  onStatusChange={setStatus}
+                  filterList={filterList}
+                  agentId={agentId}
+                  onAgentIdChange={setAgentId}
+                  agentOptions={agentOptions}
+                  sessionNames={sessionNames}
+                  agentNames={agentNames}
+                  onCancel={cancel}
+                  onResume={resume}
+                  onOpenRun={(id, sessionId) => navigateRoute({ runId: id, sessionId })}
+                  onOpenSession={(sessionId) => navigate({ domain: 'chat', sessionId })}
+                  onSelectAgent={setAgentId}
+                  onShowMore={() => setLimit((value) => value + 100)}
+                />
+              )}
+            </>
+          )}
         </div>
       </PageScaffold>
     </div>

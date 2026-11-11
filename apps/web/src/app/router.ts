@@ -9,6 +9,12 @@ export type Route =
   | { domain: 'chat'; sessionId?: string; agent?: string }
   /** 待批（ask_user 汇集）：`#/pending[?session=<id>]`，session 只用于默认展开。 */
   | { domain: 'pending'; sessionId?: string }
+  /**
+   * 运行列表与运行详情页。
+   *
+   * `runId` 存在即整页详情（`#/runs/<runId>`）；缺省是列表（`#/runs?tab=…`）。
+   * 旧深链 `#/runs?tab=live&run=<id>` 仍解析成同一路由（同参数，不重定向）。
+   */
   | { domain: 'runs'; tab: 'live' | 'durable'; runId?: string; sessionId?: string }
   | { domain: 'tools' }
   | { domain: 'mcp' }
@@ -89,9 +95,10 @@ export function parseRoute(hash: string): Route {
     }
     case 'runs': {
       const tab = pick<'live' | 'durable'>(query.get('tab'), RUN_TABS, 'live');
-      // 同时接受 `#/runs/<id>` 深链。
-      const runId = query.get('run') ?? segments[1] ?? undefined;
-      const sessionId = query.get('session') ?? undefined;
+      // 详情页规范形态是 `#/runs/<id>`；`?run=<id>` 是 0.x 的旧深链接口，保留。
+      const runId =
+        segments[1] !== undefined ? decodeSegment(segments[1]) : queryText(query, 'run');
+      const sessionId = queryText(query, 'session');
       return {
         domain: 'runs',
         tab,
@@ -209,8 +216,17 @@ export function formatRoute(route: Route): string {
       return `#/pending?${new URLSearchParams({ session: route.sessionId }).toString()}`;
     }
     case 'runs': {
+      // 详情页把 run id 放进路径（可深链、可新窗口打开、可分享）；tab / session
+      // 作为同一 run 的视图参数留在 query 里。
+      if (route.runId) {
+        const query = new URLSearchParams();
+        if (route.tab !== 'live') query.set('tab', route.tab);
+        if (route.sessionId) query.set('session', route.sessionId);
+        const suffix = query.toString();
+        const base = `#/runs/${encodeURIComponent(route.runId)}`;
+        return suffix ? `${base}?${suffix}` : base;
+      }
       const query = new URLSearchParams({ tab: route.tab });
-      if (route.runId) query.set('run', route.runId);
       if (route.sessionId) query.set('session', route.sessionId);
       return `#/runs?${query.toString()}`;
     }
