@@ -54,7 +54,7 @@ export function refsToAttachments(refs: readonly MessageRef[]): ComposerAttachme
       id: `${ref.path}#${seen}`,
       label: refDisplayName(ref),
       kind: refKindMarker(ref.kind),
-      note: refKindLabel(ref.kind),
+      note: refKindLabel(ref),
       description: ref.path,
     };
   });
