@@ -74,6 +74,19 @@ export interface SessionDetail {
   started_at?: number;
   updated_at?: number;
   status?: string;
+  /**
+   * 最近一次 run 的 id（服务端 `toSessionView` 的 `run_id`：RunRecord 优先，
+   * 回退 `state.last_run_id`）。旧 gateway / 伪会话缺失。
+   *
+   * 与 `status` / `error` / `completed_at` 一起构成「会话级」终态快照：聊天时间线的
+   * 失败卡在事件缓冲里已经没有 `run.failed` 时（刷新 / 切会话 / 环形缓冲淘汰）
+   * 用它兜底，见 `domains/chat/transcript-items.ts#sessionFailureOfDetail`。
+   */
+  run_id?: string;
+  /** 该 run 的错误原文（成功 / 运行中 / 旧数据缺失）。 */
+  error?: string;
+  /** 该 run 的终态时刻（终态 status 下等于 `updated_at`）。 */
+  completed_at?: number;
 }
 
 /** ask_user 单个问题 */

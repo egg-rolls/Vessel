@@ -33,6 +33,19 @@
 4. 尚未命中的兜底只有一条：**仍在 running** 的 run 允许回落到「最后一条用户消息 + 1」；
    已终态 run 不兜底（否则历史轮次的失败/取消卡会被拽到当前轮）。
 
+**失败卡（`run-failure` item / `RunFailureCard`）**：一次失败的 run 在会话流里只出一张卡，
+身份是 `run:<runId>:failure`（与工具卡同一张 `StreamCard`，`tone=danger`）：
+
+- **位置**用它自己的终态时刻（`run.failed` 的事件 ts，兜底 `sessions.get` 的
+  `completed_at`）：必然落在该 run 最后一个 item 之后，不会因为「缺 ts 排最后」沉到
+  整个会话底部；
+- **来源两条、事件流优先**：缓冲里还有这个 run 的**任何**分组就以 `run.failed` 的
+  `error` / `errorMeta` 为准；没有时（刷新 / 切会话 / 环形缓冲淘汰）用 `sessions.get`
+  投影的最近一次 run（`run_id` / `status` / `error` / `completed_at`，**不新增 RPC**）。
+  两条共用同一个 item key，所以同 run 恰好一张卡；
+- **只有 `failed` 出卡**：`interrupted`（挂起 / Host 中断，可恢复）的续跑入口在运行详情页
+  （`runs.resume`），不在时间线上伪装成失败；`completed` / `cancelled` 同样不出卡。
+
 ```css
 @layer theme, base, legacy, utilities;
 @import "tailwindcss/theme.css" layer(theme);

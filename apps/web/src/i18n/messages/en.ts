@@ -244,6 +244,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.run.retryable': 'Retryable',
   'chat.run.hiddenEarlier':
     'Showing the latest {shown} runs; open run details for the earlier {hidden}.',
+  // 0.52: run failure card in the chat timeline (one card per failed run)
+  'chat.run.failed': 'Run failed',
+  'chat.run.failure.aria': 'Run failure details',
+  'chat.run.failure.run': 'Run {id}',
+  'chat.run.failure.fromRecord':
+    'From the session record: this turn’s live events are no longer buffered, so only the error summary is kept.',
   // 0.15: tool cards / reasoning stream / inline ask
   'chat.reasoning.live': 'Streaming',
   'chat.reasoning.expand': 'Show all',

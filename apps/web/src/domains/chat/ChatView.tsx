@@ -407,6 +407,7 @@ export function ChatView({
             isHiddenMessage={transcriptApi.isHiddenMessage}
             noticeKindOf={transcriptApi.noticeKindOf}
             messageIndexOffset={transcriptApi.messageIndexOffset}
+            sessionFailure={transcriptApi.sessionFailure}
             detailNotice={transcriptApi.detailNotice}
             onDismissDetailNotice={transcriptApi.dismissDetailNotice}
             earlierError={transcriptApi.earlierError}

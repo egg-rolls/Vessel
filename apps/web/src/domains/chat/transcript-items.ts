@@ -13,12 +13,15 @@
  * - tool:orphan:<绝对下标>     只有结果、没有调用的历史 tool 消息
  * - notice:<item.key>         上下文 / 原始事件行
  * - queued:<runId>            本地排队提交
+ * - run:<runId>:failure       一次 run 的失败卡（事件流优先，会话记录快照兜底）
  *
  * 去重 = **认领（claiming）**：按轮次顺序一对一匹配，每个 run 最多认领一条用户消息，
  * 每条消息最多被一个 run 认领；被认领的历史消息不再单独成 item（run 是权威来源）。
  * 认领失败（guardrail 改写过正文等）时两边都渲染 —— 宁可重复，绝不吞消息。
  */
 import type { Message, RunEvent } from '../../gateway/types';
+import type { SessionDetail } from '../../gateway/types/sessions';
+import type { ErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import { agentSenderOfName } from './agent-sender';
 import {
@@ -138,6 +141,39 @@ export interface QueuedItem extends ItemMeta {
   cancelled: boolean;
 }
 
+/** 失败卡的数据来源：事件流（`run.failed` 还在缓冲里）或会话记录快照（`sessions.get`）。 */
+export type RunFailureSource = 'event' | 'session';
+
+/**
+ * 一次 run 的失败（时间线上唯一的失败卡数据）。
+ *
+ * 「同 run 只一张」由 key `run:<runId>:failure` 表达，两个来源共用同一个 key：
+ * - `event`：`RunGroup` 的 `error` / `errorMeta`（`run.failed` 的原文 + 结构化 envelope）；
+ * - `session`：`sessions.get` 投影的最近一次 run（`run_id` / `status` / `error` /
+ *   `completed_at`）。**不新增 RPC**：这些字段服务端 `toSessionView` 早就在回，
+ *   只是 Web 侧类型没收。
+ *
+ * 两个来源不会同时出场：`buildTranscriptItems` 只要发现事件流里有这个 runId 的
+ * **任何**分组就以事件流为准（`source: 'event'`），见那里的去重注释。
+ */
+export interface RunFailure {
+  runId: string;
+  /** 该 run 的会话归属（运行详情深链用）。 */
+  sessionId?: string;
+  /** 错误原文；服务端没给时缺失（卡片回退「无错误详情」，不伪造文案）。 */
+  error?: string;
+  /** 结构化 envelope（只有 `run.failed` 事件带；快照路径没有）。 */
+  errorMeta?: ErrorMeta;
+  /** 终态时刻 = 失败卡的排序依据（事件 ts / 会话记录 `completed_at`）。 */
+  completedAt?: number;
+  source: RunFailureSource;
+}
+
+/** 失败卡 item：`run:<runId>:failure`。`runId` 在顶层，才能参与认领的 ts 夹取。 */
+export interface RunFailureItem extends ItemMeta, RunFailure {
+  kind: 'run-failure';
+}
+
 export type TranscriptItem =
   | MessageItem
   | RuntimeNoticeItem
@@ -146,7 +182,56 @@ export type TranscriptItem =
   | RunReasoningItem
   | ToolItem
   | NoticeItem
-  | QueuedItem;
+  | QueuedItem
+  | RunFailureItem;
+
+/**
+ * 事件流分组 → 失败卡数据（`undefined` = 这一组不是失败）。
+ *
+ * 只认 `status === 'failed'`：`run.completed` 会把 `error` 显式清掉（见
+ * `state/events.ts` 的终态覆盖注释），所以「先 failed 又 completed」的 run 不会
+ * 留下一条假的失败卡 —— 终态以最后一次为准。
+ */
+export function runFailureOfGroup(group: RunGroup): RunFailure | undefined {
+  if (group.status !== 'failed') return undefined;
+  return {
+    runId: group.runId,
+    ...(group.sessionId !== undefined ? { sessionId: group.sessionId } : {}),
+    ...(group.error !== undefined ? { error: group.error } : {}),
+    ...(group.errorMeta !== undefined ? { errorMeta: group.errorMeta } : {}),
+    ...(group.completedAt !== undefined ? { completedAt: group.completedAt } : {}),
+    source: 'event',
+  };
+}
+
+/**
+ * 会话详情（`sessions.get`）→ 失败卡数据（`undefined` = 最近一次 run 不是失败）。
+ *
+ * 为什么需要：历史（`sessions.get.messages`）里没有失败信息，事件缓冲又是有界的
+ * （最新 1 MiB / 2000 条 per run、10000 条总量），刷新页面或切会话后 `run.failed`
+ * 可能已经不在回放窗口里 —— 那时时间线上就什么都不剩了。会话投影里的最近一次 run
+ * 是**落盘的**，因此刷新后仍在。
+ *
+ * 只认 `failed`：`interrupted`（挂起 / Host 中断）是可恢复状态，续跑入口在运行详情页
+ * （`runs.resume`），不在聊天时间线上伪装成失败；`completed` / `cancelled` 同理。
+ */
+export function sessionFailureOfDetail(
+  detail: SessionDetail | null | undefined,
+): RunFailure | undefined {
+  if (detail === null || detail === undefined) return undefined;
+  if (detail.status !== 'failed') return undefined;
+  const runId = detail.run_id;
+  if (typeof runId !== 'string' || runId.length === 0) return undefined;
+  const completedAt = detail.completed_at ?? detail.updated_at;
+  const error = detail.error;
+  return {
+    runId,
+    sessionId: detail.session_id,
+    ...(typeof error === 'string' && error.length > 0 ? { error } : {}),
+    ...(typeof completedAt === 'number' && Number.isFinite(completedAt) ? { completedAt } : {}),
+    source: 'session',
+  };
+}
 
 /** 一次 build 的输入。historyIndex / liveItems 由调用侧 memo 后传入（见文件头性能说明）。 */
 export interface TranscriptBuildInput {
@@ -168,6 +253,13 @@ export interface TranscriptBuildInput {
   historyIndex?: HistoryIndex;
   /** 预计算的 live item（按 group 引用 memo）；缺省内部现算。 */
   liveItems?: readonly TranscriptItem[];
+  /**
+   * 会话记录快照里的失败（`sessions.get` 的最近一次 run，见 `sessionFailureOfDetail`）。
+   *
+   * 只在事件流里**没有**这个 runId 的任何分组时才会渲染 —— 事件流是实时事实，
+   * 快照可能比它旧（同 run 只出一张卡，事件流优先）。
+   */
+  sessionFailure?: RunFailure;
 }
 
 /** 排队提交的最小形状（与 StreamItems 的 QueuedSubmission 对齐，避免循环依赖）。 */
@@ -627,6 +719,21 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
         ...seqMeta,
       });
     }
+    // 失败卡：一条 run 只会有一张（key 与快照路径共用 `run:<runId>:failure`）。
+    // 位置 = `run.failed` 自己的事件时间（终态时刻），走 itemTs 的单调钳制，因此必然
+    // 落在该 run 最后一个 item 之后，而同一条 **真实 ts** 又不会把它拽到整个会话底部
+    // （「缺 ts 排最后」只在 completedAt 也没有时才发生，那时最后一格就是正确位置）。
+    const failure = runFailureOfGroup(group);
+    if (failure !== undefined) {
+      const failureTs = itemTs(failure.completedAt);
+      items.push({
+        kind: 'run-failure',
+        key: `run:${group.runId}:failure`,
+        ...failure,
+        ...(failureTs !== undefined ? { ts: failureTs } : {}),
+        ...seqMeta,
+      });
+    }
   }
   return items;
 }
@@ -877,6 +984,25 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     const base =
       floor === undefined ? item.ts : item.ts === undefined ? floor : Math.max(item.ts, floor);
     items.push({ ...item, ts: base });
+  }
+
+  // 会话记录快照里的失败卡：刷新 / 切会话后事件缓冲里可能已经没有 `run.failed`，
+  // 而历史消息不携带失败信息 —— 不补这一张，用户只能进运行详情才知道这一轮失败了。
+  // 去重只有一条规则：**事件流里出现这个 runId 的任何分组**（运行中 / 失败 / 已完成）
+  // ⇒ 以事件流为准，快照那条不渲染。同 run 恰好一张卡，且实时态不会被旧快照盖掉。
+  const sessionFailure = input.sessionFailure;
+  if (
+    sessionFailure !== undefined &&
+    !input.liveGroups.some((group) => group.runId === sessionFailure.runId)
+  ) {
+    items.push({
+      kind: 'run-failure',
+      key: `run:${sessionFailure.runId}:failure`,
+      ...sessionFailure,
+      // 排序依据是落盘的终态时刻：它一定晚于该轮自己的消息，因此落在末尾而不是
+      // 「缺 ts 沉底」的巧合位置。没有终态时刻时保持 undefined（= 会话末尾，正确）。
+      ...(sessionFailure.completedAt !== undefined ? { ts: sessionFailure.completedAt } : {}),
+    });
   }
 
   for (const queued of input.queued) {

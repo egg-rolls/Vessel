@@ -17,6 +17,7 @@ import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
+import { type RunFailure, runFailureOfGroup } from './transcript-items';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -63,38 +64,79 @@ export function UserBubble({ text, ts }: { text: string; ts?: number }) {
   );
 }
 
-/** 失败 run 内联成一条 notice：错误 envelope + 可展开详情 + 运行详情链接。 */
-function FailureNotice({ group }: { group: RunGroup }) {
-  const meta = formatErrorMeta(group.errorMeta);
-  const hint = describeGatewayErrorText(group.error);
+/**
+ * 一张 run 失败卡（时间线里「失败」的唯一形态）。
+ *
+ * 形态：状态 chip + 短 run id（meta）+ 240 字截断的错误摘要（折叠态）+ 展开后的完整
+ * 错误原文 / 人话提示 + 「查看运行详情」深链（actions 插槽，始终可见，折叠不影响）。
+ * 与工具卡 / 通知卡同一张 `StreamCard`（tone=danger），不再是一段 `<details>` 裸文本，
+ * 也不是原始 JSON。
+ *
+ * 数据来源两条（同 run 只有一张卡，去重在 item 流里做，见 `transcript-items.ts`）：
+ * - 事件流 `run.failed`（`runFailureOfGroup`）：有 `errorMeta`，因此能显示 code / 可重试；
+ * - 会话记录快照（`sessionFailureOfDetail`）：刷新后仍在，只有错误原文 + 终态时刻。
+ *
+ * 不做「重试 / 续跑」：这两个动作在既有能力里都有，但入口各自绑定上下文 ——
+ * 续跑要求运行记录可恢复（`runs.resume` 的 `run_not_resumable` 判定在运行详情页，
+ * 那里才有 run 的 status / checkpoint），重试是重发某条用户消息（要 keepMessages 下标）。
+ * 聊天里的失败卡没有这两样事实，硬塞按钮只会造出「点了报错」的假入口；
+ * 可操作项统一收敛到运行详情深链（与旧的内联 notice 一致）。
+ */
+export function RunFailureCard({
+  failure,
+  defaultOpen = false,
+}: {
+  failure: RunFailure;
+  /** 默认展开（ui.expandCards || verbosity === 'debug'）；用户手动开合优先。 */
+  defaultOpen?: boolean;
+}) {
+  const meta = formatErrorMeta(failure.errorMeta);
+  const hint = describeGatewayErrorText(failure.error);
+  const error =
+    failure.error !== undefined && failure.error.trim().length > 0 ? failure.error : undefined;
   return (
-    <div className="stream-notice failed" role="alert">
-      <StatusGlyph status="failed" />
-      {meta && (
-        <span className="error-meta font-mono tabular-nums">
-          {meta}
-          {group.errorMeta?.retryable === true ? ` · ${t('chat.run.retryable')}` : ''}
+    <StreamCard
+      className="run-failure-card w-full min-w-0 max-w-full"
+      tone="danger"
+      defaultOpen={defaultOpen}
+      expandable={error !== undefined}
+      ariaLabel={t('chat.run.failure.aria')}
+      title={<StatusChip status="failed" label={t('chat.run.failed')} />}
+      meta={
+        <span title={failure.runId}>
+          {t('chat.run.failure.run', { id: truncate(failure.runId, 12) })}
         </span>
-      )}
-      <details className="run-error">
-        <summary className="run-error-summary">
-          <span className="run-error-preview">
-            {group.error ? truncate(group.error, 240) : t('chat.run.noError')}
-          </span>
-          {group.error !== undefined && group.error.length > 240 && (
-            <span className="run-error-toggle">{t('chat.run.expand')}</span>
+      }
+      summary={
+        error === undefined ? (
+          t('chat.run.noError')
+        ) : (
+          <span className="text-danger">{truncate(error, 240)}</span>
+        )
+      }
+      actions={
+        <div className="flex flex-wrap items-center gap-2 px-2.5 pb-1">
+          {meta !== '' && (
+            <span className="error-meta font-mono tabular-nums">
+              {meta}
+              {failure.errorMeta?.retryable === true ? ` · ${t('chat.run.retryable')}` : ''}
+            </span>
           )}
-        </summary>
-        <pre className="run-error-body">{group.error || t('chat.run.noError')}</pre>
-      </details>
-      {hint && <p className="run-error-hint">{hint}</p>}
-      <a
-        className="ml-auto inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm bg-sunken px-2.5 py-1 text-sm tracking-wide text-ink no-underline transition-colors duration-150 tint-hover tint-press"
-        href={runDetailHref(group)}
-      >
-        {t('chat.run.detail')}
-      </a>
-    </div>
+          <a
+            className="ml-auto inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm bg-sunken px-2.5 py-1 text-sm tracking-wide text-ink no-underline transition-colors duration-150 tint-hover tint-press"
+            href={runDetailHref(failure)}
+          >
+            {t('chat.run.detail')}
+          </a>
+        </div>
+      }
+    >
+      <pre className="run-error-body">{error ?? t('chat.run.noError')}</pre>
+      {hint !== null && <p className="run-error-hint">{hint}</p>}
+      {failure.source === 'session' && (
+        <p className="run-error-hint">{t('chat.run.failure.fromRecord')}</p>
+      )}
+    </StreamCard>
   );
 }
 
@@ -103,7 +145,8 @@ function FailureNotice({ group }: { group: RunGroup }) {
  *
  * 这里不再有 RunCard / RunSection：一个 run 的输入、正文、思考、工具与错误
  * 直接展开成平铺的消息项，和 `Transcript` 的历史消息共享同一个列表与间距。
- * 失败/取消只留一条内联 notice；停止入口在底部 Composer 区域。
+ * 失败留一张 `RunFailureCard`（主时间线由 `run-failure` item 渲染，这里是子 agent
+ * transcript 的入口）；取消留一条内联 notice；停止入口在底部 Composer 区域。
  */
 export const RunItems = memo(function RunItems({
   group,
@@ -175,6 +218,9 @@ export const RunItems = memo(function RunItems({
   // 输入的发言人：与 live item / 历史消息同一个判定（agent-sender.ts），
   // 有 sender 就渲染 agent 卡，否则用户气泡。
   const inputSender = agentSenderOfName(group.inputName);
+  // 失败卡与时间线上的 `run-failure` item 是同一个组件、同一份数据（`runFailureOfGroup`）：
+  // 子 agent transcript 走这里，主时间线走 item —— 两条路径都不会为同一 run 出第二张卡。
+  const failure = status === 'failed' ? runFailureOfGroup(group) : undefined;
 
   return (
     <>
@@ -269,7 +315,7 @@ export const RunItems = memo(function RunItems({
           />
         </div>
       )}
-      {group.status === 'failed' && status === 'failed' && <FailureNotice group={group} />}
+      {failure !== undefined && <RunFailureCard failure={failure} defaultOpen={cardsDefaultOpen} />}
       {status === 'cancelled' && (
         <div className="stream-notice cancelled" role="status">
           <StatusGlyph status="cancelled" />

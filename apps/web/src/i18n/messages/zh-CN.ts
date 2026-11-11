@@ -242,6 +242,12 @@ export const messages = {
   'chat.run.expand': '展开',
   'chat.run.retryable': '可重试',
   'chat.run.hiddenEarlier': '已显示最近 {shown} 个运行；更早的 {hidden} 个请在运行详情中查看。',
+  // 0.52：会话时间线里的失败卡（同一次 run 只有一张）
+  'chat.run.failed': '运行失败',
+  'chat.run.failure.aria': '运行失败详情',
+  'chat.run.failure.run': '运行 {id}',
+  'chat.run.failure.fromRecord':
+    '来自会话记录：该轮的实时事件已不在缓冲区，这里只保留错误摘要。',
   // 0.15：工具卡 / 思考流 / 内联提问
   'chat.reasoning.live': '流式',
   'chat.reasoning.expand': '展开全文',

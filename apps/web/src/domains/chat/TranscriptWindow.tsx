@@ -15,11 +15,16 @@ import { NoticeRow } from './EventRow';
 import { envNoticeBarClass } from './env-notice';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
-import { QueuedNotice, type QueuedSubmission, UserBubble } from './StreamItems';
+import { QueuedNotice, type QueuedSubmission, RunFailureCard, UserBubble } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
 import { ToolCard } from './ToolCard';
 import { Transcript } from './Transcript';
-import { buildTranscriptItems, type HistoryIndex, type TranscriptItem } from './transcript-items';
+import {
+  buildTranscriptItems,
+  type HistoryIndex,
+  type RunFailure,
+  type TranscriptItem,
+} from './transcript-items';
 import { useStickyBottom } from './useStickyBottom';
 
 /** 距顶多少像素内触发前插一页。 */
@@ -56,6 +61,7 @@ export function TranscriptWindow({
   isHiddenMessage,
   noticeKindOf,
   messageIndexOffset,
+  sessionFailure,
   detailNotice,
   onDismissDetailNotice,
   earlierError,
@@ -99,6 +105,13 @@ export function TranscriptWindow({
   noticeKindOf: (message: Message) => string | undefined;
   /** `transcriptMessages[0]` 在完整 `state.messages` 里的绝对下标（撤回 / 重试用）。 */
   messageIndexOffset: number;
+  /**
+   * 会话记录里的最近一次失败（`sessions.get` 的 run 快照）。
+   *
+   * 历史消息不带失败信息，事件缓冲又有界 —— 刷新 / 切会话后只能靠它把「这一轮失败了」
+   * 留在时间线上；与事件流里的失败卡按 runId 去重（见 transcript-items.ts）。
+   */
+  sessionFailure?: RunFailure;
   /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
   detailNotice: string | null;
   onDismissDetailNotice: () => void;
@@ -193,6 +206,8 @@ export function TranscriptWindow({
         historyIndex,
         isHidden: isHiddenMessage,
         noticeKindOf,
+        // 子 agent 详情占位时（liveGroups 被清空）不补主会话的失败卡：那一屏讲的是另一个 run。
+        ...(activeAgent ? {} : { sessionFailure }),
       }),
     [
       transcriptMessages,
@@ -204,6 +219,7 @@ export function TranscriptWindow({
       historyIndex,
       isHiddenMessage,
       noticeKindOf,
+      sessionFailure,
     ],
   );
 
@@ -263,6 +279,9 @@ export function TranscriptWindow({
         );
       case 'notice':
         return <NoticeRow event={item.event} defaultOpen={cardsDefaultOpen} />;
+      case 'run-failure':
+        // 失败卡：文案 / 数据在 RunFailureCard（与子 agent transcript 共用同一组件）。
+        return <RunFailureCard failure={item} defaultOpen={cardsDefaultOpen} />;
       case 'runtime-notice': {
         const env = item.env;
         if (env !== undefined) {

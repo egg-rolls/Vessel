@@ -30,7 +30,7 @@ import { windowTail } from '../../transcript';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import type { QueuedSubmission } from './StreamItems';
 import { browserSessionStorage, clearLastSession, readLastSession } from './session-selection';
-import { buildHistoryIndex } from './transcript-items';
+import { buildHistoryIndex, sessionFailureOfDetail } from './transcript-items';
 
 const TRANSCRIPT_WINDOW = 50;
 /** 单会话实时组上限：超出时只渲染最近这些 run，并提供运行详情入口。 */
@@ -213,6 +213,16 @@ export function useChatTranscript({
     return groups.filter((group) => group.sessionId === selectedId);
   }, [groups, selectedId]);
 
+  /**
+   * 会话记录里的最近一次失败（`sessions.get` 的 `run_id` / `status` / `error` /
+   * `completed_at`）。
+   *
+   * 为什么需要：历史消息不携带失败信息，事件缓冲有界（刷新 / 切会话 / 被淘汰后
+   * `run.failed` 就不在回放窗口里了）。这些字段服务端早就在回，**不新增 RPC**。
+   * 与事件流失败卡按 runId 去重（事件流优先），判定在 transcript-items.ts。
+   */
+  const sessionFailure = useMemo(() => sessionFailureOfDetail(sessionDetail), [sessionDetail]);
+
   const visibleQueued = useMemo(
     () => (selectedId ? queuedRuns.filter((item) => item.sessionId === selectedId) : []),
     [queuedRuns, selectedId],
@@ -389,6 +399,7 @@ export function useChatTranscript({
     hydrateStale,
     hydrating,
     visibleGroups,
+    sessionFailure,
     renderedGroups,
     visibleQueued,
     runningGroup,
