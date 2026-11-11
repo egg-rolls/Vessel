@@ -14,6 +14,7 @@
  *
  * 历史消息没有 `name`（0.50 之前投递的 A2A 消息），继续按用户气泡渲染，不做回填。
  */
+import { cn, MessageFold } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -34,6 +35,7 @@ export function AgentMessageCard({
   ts,
   source,
   defaultOpen = false,
+  entering = false,
 }: {
   /** 发送者 alias（不含 `agent:` 前缀）。 */
   sender: string;
@@ -50,11 +52,13 @@ export function AgentMessageCard({
   source?: string;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
   defaultOpen?: boolean;
+  /** 本帧才追加进来的项：入场只播一次（判定见 `useEnteringItemKeys`）。 */
+  entering?: boolean;
 }) {
   const clock = formatClock(ts);
   return (
     <StreamCard
-      className="agent-message"
+      className={cn('agent-message', entering && 'msg-enter')}
       ariaLabel={t('chat.agentMessage.group', { name: sender })}
       defaultOpen={defaultOpen}
       title={
@@ -79,9 +83,13 @@ export function AgentMessageCard({
           )}
         </div>
       )}
-      <p className="m-0 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">
-        {content}
-      </p>
+      {/* 卡头已经是「单行摘要 + 展开看全文」的那一层；展开体里的正文再按同一套阈值折
+          （`MessageFold`），超长的 A2A 正文不必先滚完才能读到尾巴。 */}
+      <MessageFold>
+        <p className="m-0 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">
+          {content}
+        </p>
+      </MessageFold>
     </StreamCard>
   );
 }

@@ -34,6 +34,9 @@ applies_to: [N, M]
 - 所有 transient 提示 / banner / 交互摘要统一经 AppBar 中心 `MessageBar`；`ToastProvider`
   只提供 API，不渲染，禁止新增 fixed toast / 浮层（见 [WEB-UI.md](../WEB-UI.md) 硬规则 7）。
 - 不用 `backdrop-filter` 做层级；层级靠边框与阴影表达（ADR-072/082）。
+- 消息入场动画与长消息折叠只有一份实现（`components/ui/MessageFold.tsx` +
+  `useEnteringItemKeys.ts`，class 在 `styles/domains/chat.css`），会话页与 Team 页共用同一套；
+  不要给某一页复制第二份阈值、也不要各记一套「新项」。细节见 [WEB-UI.md](../WEB-UI.md)。
 - `plugins.catalog` 的 `declaredSurface` / `effectiveSurface` 是只读摘要（HTTP `id`/`method`/`path`，CLI `path`/`description`）。Marketplace 只展示两者差异；不据此写 config、不新增 RPC；外部插件授权提示指向 `config.yaml` 的 `expose`。
 
 ## 单公司与 node 选择

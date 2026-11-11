@@ -7,7 +7,13 @@
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { useOptionalToast } from '../../components/ToastProvider';
-import { Badge, type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
+import {
+  Badge,
+  type MessageAction,
+  MessageActions,
+  MessageFold,
+  useMessageCopy,
+} from '../../components/ui';
 import { formatClock } from '../../format';
 import type { TeamDelivery, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -115,6 +121,7 @@ export function TeamMessageRow({
   message,
   senderLabel,
   recipientLabels,
+  entering = false,
   canViewSession,
   onViewSession,
   onRetry,
@@ -129,6 +136,11 @@ export function TeamMessageRow({
    * 空数组 = 不显示箭头：广播、成员回复、发给人类、或目标不是 agent。
    */
   recipientLabels?: readonly string[];
+  /**
+   * 本帧才追加进来的行：挂 `.msg-enter` 播一次入场（会话页同一套 class / 同一个判定，
+   * 见 `TeamTranscript` 与 `components/ui/useEnteringItemKeys.ts`）。
+   */
+  entering?: boolean;
   canViewSession?: boolean;
   onViewSession?: () => void;
   onRetry?: () => void;
@@ -213,7 +225,7 @@ export function TeamMessageRow({
 
   return (
     <div
-      className={`group mx-auto flex w-full max-w-[var(--chat-content-w,860px)] flex-col gap-1 ${isHuman ? 'team-message-self' : 'team-message-agent'}${statusClass}`}
+      className={`group mx-auto flex w-full max-w-[var(--chat-content-w,860px)] flex-col gap-1 ${isHuman ? 'team-message-self' : 'team-message-agent'}${statusClass}${entering ? ' msg-enter' : ''}`}
       data-kind={message.kind}
     >
       <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
@@ -256,7 +268,10 @@ export function TeamMessageRow({
       </div>
 
       <div className="team-message-bubble">
-        <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
+        {/* 折叠与会话页同一套组件 / 阈值（`.msg-fold*`）：人发与 agent 回复都折。 */}
+        <MessageFold>
+          <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
+        </MessageFold>
       </div>
 
       <MessageActions className={isHuman ? 'self-end' : 'self-start'} actions={actions} />

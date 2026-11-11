@@ -10,6 +10,19 @@ import type { TeamDelivery, TeamMessage } from '../../gateway/types';
 import { mergeMessages } from '../../state/teams';
 import type { TeamMessageView } from './TeamMessageRow';
 
+/**
+ * 乐观行的本地 id 前缀（`buildTeamRows` 里 `messageId ?? localId` 的兜底）。
+ *
+ * 服务端回执到达后同一行会换成真实 `message_id`（React key 也换）——这一换是重挂，
+ * 入场动画据此判定「别播第二次」（见 `TeamTranscript`）。
+ */
+export const LOCAL_MESSAGE_PREFIX = 'local:';
+
+/** 这条消息是不是还没拿到服务端 id 的乐观行。 */
+export function isLocalMessageId(messageId: string): boolean {
+  return messageId.startsWith(LOCAL_MESSAGE_PREFIX);
+}
+
 export interface LocalSend {
   localId: string;
   messageId?: string;

@@ -28,7 +28,13 @@ import { usePolledAction } from '../../stores/usePolledAction';
 import { isOnlineMember } from './member-status';
 import { type MentionChip, memberDisplayName, mentionIds, shortAgentId } from './mention';
 import type { TeamChatProps } from './team-chat-types';
-import { buildTeamRows, type LocalSend, matchWrittenMessage, shouldFetchTeam } from './team-send';
+import {
+  buildTeamRows,
+  LOCAL_MESSAGE_PREFIX,
+  type LocalSend,
+  matchWrittenMessage,
+  shouldFetchTeam,
+} from './team-send';
 import { DEFAULT_LIMIT, DEFAULT_MEMBERS_LIMIT, memberWindowFlags } from './team-window';
 
 const TEAM_POLL_MS = 4_000;
@@ -349,7 +355,7 @@ export function useTeamChat({
   const submitContent = async (rawContent: string, mentions: string[]): Promise<boolean> => {
     const content = rawContent.trim();
     if (!content || sending || !hasToken || connectionState !== 'open' || archived) return false;
-    const localId = `local:${crypto.randomUUID()}`;
+    const localId = `${LOCAL_MESSAGE_PREFIX}${crypto.randomUUID()}`;
     const ts = Date.now();
 
     setSends((prev) => [...prev, { localId, content, mentions, ts, status: 'sending' }]);

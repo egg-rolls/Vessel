@@ -1,8 +1,8 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: parsed markdown is immutable per render; index keys are stable
 import {
   Fragment,
-  type ReactNode,
   memo,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,

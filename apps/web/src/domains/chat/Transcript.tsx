@@ -1,6 +1,11 @@
 import { Fragment, type ReactNode, useMemo } from 'react';
 import { Markdown } from '../../components/Markdown';
-import { type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
+import {
+  type MessageAction,
+  MessageActions,
+  MessageFold,
+  useMessageCopy,
+} from '../../components/ui';
 import { formatClock, localDayKey, localDayLabel } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -123,7 +128,9 @@ function TranscriptMessage({
     }
     return (
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
-        <div className="msg-bubble">{message.content}</div>
+        <div className="msg-bubble">
+          <MessageFold>{message.content}</MessageFold>
+        </div>
         {hasMeta || actions.length > 0 ? (
           <MessageActions className="justify-end" actions={actions} meta={meta} />
         ) : null}
@@ -158,7 +165,11 @@ function TranscriptMessage({
       )}
       {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。 */}
       {reasoning !== undefined && <ReasoningBlock text={reasoning} streaming={false} />}
-      {message.content && <Markdown className="msg-text" text={message.content} />}
+      {message.content && (
+        <MessageFold>
+          <Markdown className="msg-text" text={message.content} />
+        </MessageFold>
+      )}
       {hasMeta || actions.length > 0 ? (
         <MessageActions className="mt-1" actions={actions} meta={meta} />
       ) : null}
@@ -169,6 +180,16 @@ function TranscriptMessage({
 /** 一条 item → 渲染节点。非消息类由调用方给（复用各自的组件）。 */
 export type TranscriptItemRenderer = (item: TranscriptItem) => ReactNode;
 
+/**
+ * item 流 → 消息区。
+ *
+ * 入场动画的边界（见 `components/ui/useEnteringItemKeys.ts` 的说明）：
+ * - **live item 播**：`renderItem` 渲染的都是事件流追加进来的项（用户气泡 / agent 卡 /
+ *   正文），挂载即播一次；
+ * - **历史消息不播**：历史加载是「回填 / 换页」不是「追加」，而且 live 落盘后会把位置
+ *   让给历史消息（`run:<runId>:input` 由 `msg:<absIndex>` 接管，key 不同 = DOM 节点
+ *   重建），两边都播就是同一段正文淡入两次。
+ */
 export function Transcript({
   items,
   allMessages,

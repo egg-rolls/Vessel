@@ -239,15 +239,17 @@ export function TranscriptWindow({
       case 'run-input':
         // 身份在 item 建好时就定了（`sender` 来自 run.started.input_name / user.message.name）：
         // agent 投递直接用同一张 AgentMessageCard，不会先出一帧用户气泡。
+        // `entering`：这是事件流追加进来的新项，入场动画只在这里播（历史消息不播）。
         return item.sender !== undefined ? (
           <AgentMessageCard
             sender={item.sender}
             content={item.text}
             ts={item.ts}
             defaultOpen={cardsDefaultOpen}
+            entering
           />
         ) : (
-          <UserBubble text={item.text} ts={item.ts} />
+          <UserBubble text={item.text} ts={item.ts} entering />
         );
       case 'ask-answer':
         // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
@@ -256,7 +258,9 @@ export function TranscriptWindow({
         // 正文只有一个形态：流式（`streaming`）与落盘都走 AssistantText → Markdown，
         // 外层 class / 内层块结构完全相同；run 结束时只是 streaming 翻成 false
         // （key 在 flush 前后不变，见 check-transcript-items 的 F2），DOM 原地复用。
-        return <AssistantText text={item.text} streaming={item.streaming} />;
+        // 折叠与入场也收在 AssistantText 里（`entering` = 事件流追加的新 item；
+        // 容器在 streaming 翻转前后不变，所以 `.msg-enter` 只播挂载那一次）。
+        return <AssistantText text={item.text} streaming={item.streaming} entering />;
       case 'run-reasoning':
         return (
           <ReasoningBlock

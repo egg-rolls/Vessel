@@ -54,6 +54,26 @@
 点击看全文的卡必须给 `children`，否则被 ellipsis 吃掉的那段正文永远读不到。环境信息卡的
 scope 是卡头标题（与 `来自 agent X` 同级、同一组 class），不是色条或独立底色。
 
+**消息入场与长消息折叠（会话 / Team 共用一份实现）**：样式在
+`styles/domains/chat.css`（`.msg-enter` / `.msg-fold*`），行为在
+`components/ui/MessageFold.tsx` 与 `components/ui/useEnteringItemKeys.ts`。两页共用同一套
+class 与同一个阈值，不要给某一页复制第二份。
+
+- **入场只播给新追加的项**：fade-in + 上移 4px（`--motion-ui`）。判据不是「挂载」而是
+  「追加」——会话页只有 live item 播，历史消息不播（历史加载是回填；且 live 落盘后由
+  `msg:<absIndex>` 接管同一段正文，两个 key 都播就是同一段话淡入两次）；Team 页由
+  `useEnteringItemKeys` 记一次「首屏那一批」，只有之后追加的行播。类名挂上后不再摘
+  （半路摘掉会把播到一半的动画掐断）；React 对稳定 key 复用 DOM 节点，所以重渲染不会重播。
+- **长消息默认折叠**：正文超过 `--msg-fold-max-h`（400px，阈值唯一来源）就裁到该高度 +
+  底部 mask 渐隐，气泡内中下侧给一个纯文字按钮（`展开全文 / 收起`，带 `aria-expanded`）。
+  折叠只改显示：DOM 里始终是全文，复制按钮走 `message.content` / `item.text` 原文，
+  手工选中也是同一份文本。**流式中的消息不折**（正文还在长，折起来会反复折/展）。
+- **`prefers-reduced-motion` 下直接显示**：没有位移、没有淡入。
+- **助手正文只有一个容器**：`AssistantText`（`msg-assistant > div.markdown.msg-text`，
+  `domains/chat/StreamItems.tsx`）。主时间线的 `run-text`、子 agent 面板的正文与收字尾巴
+  都走它，折叠与入场就收在它里面 —— 不要再手写第二份 `msg-assistant > div.msg-text`
+  （流式与落盘各写一份就会在 run 结束那一刻换容器 / 重排）。
+
 ```css
 @layer theme, base, legacy, utilities;
 @import "tailwindcss/theme.css" layer(theme);

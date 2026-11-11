@@ -1145,6 +1145,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.role.assistant': 'Assistant',
   // 0.36: message bubble action group
   'chat.message.actions': 'Message actions',
+  // long-message fold (same toggle component on the chat and team pages)
+  'chat.message.fold.expand': 'Show full text',
+  'chat.message.fold.collapse': 'Collapse',
   'chat.message.copy': 'Copy',
   'chat.message.copied': 'Copied',
   'chat.message.edit': 'Edit',

@@ -109,6 +109,10 @@
   --panel-max-h: 420px;
   --search-max-w: 420px;
   --select-min-w: 128px;
+  /* 长消息折叠：气泡 / agent 消息卡超过这个高度就收起（CSS 裁切与 JS 判定共用这一个值）。 */
+  --msg-fold-max-h: 400px;
+  /* 折叠态底部渐隐的高度（mask 渐变，见 styles/domains/chat.css 的 .msg-fold）。 */
+  --msg-fold-fade: 44px;
 
   --row-h-session: 56px;
   --row-h-tool: 36px;

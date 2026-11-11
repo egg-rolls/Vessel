@@ -355,6 +355,7 @@ export function TeamChatMain({
           ) : (
             <TeamTranscript
               messages={rows}
+              motionResetKey={resetKey}
               resolveMember={resolveMember}
               resolveMemberLabel={agentLabel}
               onViewMemberSession={(_agentId, sessionId) => onOpenSession(sessionId)}

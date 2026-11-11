@@ -35,6 +35,7 @@ export {
   type MessageActionsProps,
   useMessageCopy,
 } from './MessageActions';
+export { MessageFold } from './MessageFold';
 export { SearchInput } from './SearchInput';
 export { Section, type SectionProps } from './Section';
 export {
@@ -43,3 +44,4 @@ export {
   type SidebarShellProps,
 } from './SidebarShell';
 export { Stat, type StatProps } from './Stat';
+export { useEnteringItemKeys } from './useEnteringItemKeys';

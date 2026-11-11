@@ -5,9 +5,11 @@
  * 完成，本组件只按 `message_id` 做 React key，不按内容去重。
  */
 import type { ReactNode } from 'react';
+import { useEnteringItemKeys } from '../../components/ui';
 import { localDayKey, localDayLabel } from '../../format';
 import type { TeamMember, TeamMessage } from '../../gateway/types';
 import { TeamMessageRow, type TeamMessageView } from './TeamMessageRow';
+import { isLocalMessageId } from './team-send';
 
 /**
  * 一条日志的 agent 收件人（消息头 `from → to` 的数据来源）。
@@ -43,6 +45,13 @@ export interface TeamTranscriptProps {
   onEditMessage?: (message: TeamMessageView) => void;
   onResendMessage?: (message: TeamMessageView) => void;
   onRetractMessage?: (message: TeamMessageView) => void;
+  /**
+   * 「这批行是哪一屏」的身份（= 团队切换 / detail 到达的 reset key）。
+   *
+   * 只用于入场动画：同一屏的第一批整屏铺开不播，之后才追加的行才播（判定见
+   * `components/ui/useEnteringItemKeys.ts`）。与滚动吸附无关，别拿它当贴底键。
+   */
+  motionResetKey?: string | null;
 }
 
 export function TeamTranscript({
@@ -54,7 +63,10 @@ export function TeamTranscript({
   onEditMessage,
   onResendMessage,
   onRetractMessage,
+  motionResetKey = null,
 }: TeamTranscriptProps) {
+  // 钩子必须在早退之前：空列表也是这一屏的一帧（首屏要等非空那一帧才记账）。
+  const isEntering = useEnteringItemKeys(messages, (message) => message.message_id, motionResetKey);
   if (messages.length === 0) return null;
 
   const nodes: ReactNode[] = [];
@@ -92,6 +104,13 @@ export function TeamTranscript({
       <TeamMessageRow
         key={message.message_id}
         message={message}
+        entering={
+          // 乐观行（`local:`）不播：回执到达后同一行会以真实 `message_id` 重挂一次，
+          // 两个 key 都播就是同一句话淡入两次。系统灰条也不播（它不是消息气泡）。
+          message.kind !== 'system' &&
+          !isLocalMessageId(message.message_id) &&
+          isEntering(message.message_id)
+        }
         senderLabel={resolveMemberLabel?.(subjectId) ?? member?.name ?? subjectId}
         recipientLabels={recipientLabels}
         canViewSession={Boolean(member && sessionId)}

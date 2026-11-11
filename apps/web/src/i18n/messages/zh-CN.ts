@@ -1101,6 +1101,9 @@ export const messages = {
   'chat.role.assistant': '助手',
   // 0.36: 消息气泡操作组
   'chat.message.actions': '消息操作',
+  // 长消息折叠（会话页与团队页共用同一个按钮组件）
+  'chat.message.fold.expand': '展开全文',
+  'chat.message.fold.collapse': '收起',
   'chat.message.copy': '复制',
   'chat.message.copied': '已复制',
   'chat.message.edit': '编辑',

@@ -1,8 +1,15 @@
-import { type ReactNode, memo, useMemo } from 'react';
+import { memo, type ReactNode, useMemo } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip, StatusGlyph } from '../../components/StatusChip';
-import { Button, type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
+import {
+  Button,
+  cn,
+  type MessageAction,
+  MessageActions,
+  MessageFold,
+  useMessageCopy,
+} from '../../components/ui';
 import { formatClock } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
 import { t } from '../../i18n';
@@ -61,31 +68,62 @@ const NO_ACTIONS: readonly MessageAction[] = [];
  *
  * 旧的 `<div className="msg-text live-text">` 已删除：`.live-text` 没有任何样式，
  * 保留它反而让流式与落盘的 class 列表不一致。
+ *
+ * 「唯一容器」同时承担另外两件事（都写在里层，别往调用方搬 —— 搬出去就又成了第二份
+ * `msg-assistant > div.msg-text` 手写结构）：
+ * - **长消息折叠**：正文包 `MessageFold streaming={streaming}`。收字期间不裁切
+ *   （否则正文每长一段就折/展一次），run 落定后按同一阈值折（阈值见 tokens.css 的
+ *   `--msg-fold-max-h`）。
+ * - **入场动画**：`entering` 时外层加 `.msg-enter`。只给「事件流里新追加」的 item
+ *   （判定见 `components/ui/useEnteringItemKeys.ts`）；容器在 streaming 翻转前后不变，
+ *   所以类名只在挂载那一次生效，run 结束不会重播。
  */
 export function AssistantText({
   text,
   streaming = false,
   actions,
+  entering = false,
 }: {
   text: string;
   /** 仍在流式收字：节流 + 未闭合块的保守降级（见 components/Markdown.tsx）。 */
   streaming?: boolean;
   /** 操作行（复制 / 重试）；运行态不传，避免停在文字下方的一条会变的控件。 */
   actions?: ReactNode;
+  /** 本帧才追加进来的项：入场只播一次（判定见 `useEnteringItemKeys`）。 */
+  entering?: boolean;
 }) {
   return (
-    <div className="msg-assistant group max-w-full">
-      <Markdown className="msg-text" text={text} streaming={streaming} />
+    <div className={cn('msg-assistant group max-w-full', entering && 'msg-enter')}>
+      <MessageFold streaming={streaming}>
+        <Markdown className="msg-text" text={text} streaming={streaming} />
+      </MessageFold>
       {actions}
     </div>
   );
 }
 
-export function UserBubble({ text, ts }: { text: string; ts?: number }) {
+export function UserBubble({
+  text,
+  ts,
+  entering = false,
+}: {
+  text: string;
+  ts?: number;
+  /** 本帧才追加进来的项：入场只播一次（判定见 `useEnteringItemKeys`）。 */
+  entering?: boolean;
+}) {
   const clock = formatClock(ts);
   return (
-    <div className="msg-user group flex max-w-full flex-col items-end gap-1">
-      <div className="msg-bubble">{text}</div>
+    <div
+      className={cn(
+        'msg-user group flex max-w-full flex-col items-end gap-1',
+        entering && 'msg-enter',
+      )}
+    >
+      <div className="msg-bubble">
+        {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。 */}
+        <MessageFold>{text}</MessageFold>
+      </div>
       {/* 与落盘后的用户气泡同一套：时间在 hover 元信息位，不在气泡里。 */}
       <MessageActions
         className="justify-end"
@@ -331,6 +369,9 @@ export const RunItems = memo(function RunItems({
         return <EventRow key={item.key} event={item.event} defaultOpen={cardsDefaultOpen} />;
       })}
       {liveReasoning && <ReasoningBlock text={liveReasoning} streaming />}
+      {/* 收字尾巴：**不播入场**。它不是「追加的一项」—— 每 flush 一段正文它就被摘下再挂上
+          （item 落位后尾巴清空，下一个 token 又出现），播了就是反复淡入；flush 落位的那份
+          由 items 里的 AssistantText 负责。折叠仍按 streaming 关掉（正文还在长）。 */}
       {liveText && <AssistantText text={liveText} streaming />}
       {/* minimal 档的在飞工具：一行状态（工具名 + 运行中），不带参数 / 输出；
           工具结束或 run 结束即消失（判定见 chat-visibility#runningToolHint）。 */}
@@ -349,15 +390,22 @@ export const RunItems = memo(function RunItems({
         </div>
       )}
       {completedOutput !== undefined && !outputAlreadyShown && (
-        <div className="msg-assistant group max-w-full">
-          <Markdown className="msg-text" text={completedOutput} />
-          <MessageActions
-            className="mt-1"
-            actions={[
-              { id: 'copy', label: t('chat.message.copy'), onSelect: () => copy(completedOutput) },
-            ]}
-          />
-        </div>
+        // 同一容器：`run.completed.output` 兜底的那段正文也是助手正文（长文同样要折）。
+        <AssistantText
+          text={completedOutput}
+          actions={
+            <MessageActions
+              className="mt-1"
+              actions={[
+                {
+                  id: 'copy',
+                  label: t('chat.message.copy'),
+                  onSelect: () => copy(completedOutput),
+                },
+              ]}
+            />
+          }
+        />
       )}
       {failure !== undefined && <RunFailureCard failure={failure} defaultOpen={cardsDefaultOpen} />}
       {status === 'cancelled' && (

@@ -195,6 +195,66 @@
   overflow-wrap: anywhere;
 }
 
+/* ── 消息入场 + 长消息折叠（会话页 / 团队页共用同一套 class） ──────────
+
+   两页都只有这一份实现（`.msg-enter` / `.msg-fold*`）：会话页的 `.msg-user` /
+   `.msg-assistant` 与团队页的 `.team-message-bubble` 都挂在这套 class 上，别复制第二份。
+
+   入场：`.msg-enter` 只挂**本次新追加**的项上（判定见 components/ui/useEnteringItemKeys.ts
+   与会话页 live item 的口径），挂载即播一次；CSS 动画按 DOM 节点播，重渲染复用同一个
+   节点不会重播（`.message-chip` 同一个用法）。位移只有 4px：整条消息做缩放会糊字。
+   关掉动效时直接显示：没有位移、没有淡入。
+
+   折叠：超过 --msg-fold-max-h 就裁到该高度（判定的唯一来源是同一个 CSS 变量，见
+   components/ui/MessageFold.tsx），底部用 mask 渐隐而不是盖一层底色 —— 气泡底色有三套
+   （accent-soft / sunken / 无底色），盖色块要么对不上，要么再多一份变量。
+   折叠只改显示：DOM 里始终是全文，复制拿到的永远是原文。 */
+
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.msg-enter {
+  animation: msg-in var(--motion-ui) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-enter {
+    animation: none;
+  }
+}
+
+.msg-fold {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.msg-fold-body {
+  min-width: 0;
+}
+
+/* 折叠态：裁切 + 底部渐隐；展开后这两条都不在，按钮仍在（见 MessageFold）。 */
+.msg-fold-body.msg-fold-clipped {
+  max-height: var(--msg-fold-max-h);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - var(--msg-fold-fade)),
+    transparent
+  );
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--msg-fold-fade)), transparent);
+}
+
+/* 气泡内中下侧的纯文字开合按钮：只定位置，视觉（link 颜色 / focus ring）由 L2 Button 给。 */
+.msg-fold-toggle {
+  align-self: center;
+  margin-top: 2px;
+}
+
 /* ── 实时内容直接铺进会话流（0.18） ───────────────────── */
 
 /* 失败 / 取消 / 排队：流里的一条轻量 notice，没有 run 容器或分割线。 */
