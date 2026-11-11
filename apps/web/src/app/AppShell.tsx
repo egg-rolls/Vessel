@@ -27,7 +27,7 @@ import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
 import { useOutdatedBuild } from './useOutdatedBuild';
-import { paneCssVars, usePaneResize } from './usePaneResize';
+import { paneCssVars, type SidePaneKey, usePaneResize } from './usePaneResize';
 import { useRouteSubscription } from './useRouteSubscription';
 import { useViewportWidth } from './useViewportWidth';
 
@@ -151,7 +151,10 @@ export function AppShell() {
   ];
 
   const viewportWidth = useViewportWidth();
-  const panes = usePaneResize();
+  // 每页的左列各是一个 pane：会话页是 sessions，团队页是 teamList。
+  // chat 的显示宽度 / 居中手柄范围按当前页那条左列推算（两者可被拖成不同宽度）。
+  const sidePane: SidePaneKey = route.domain === 'teams' ? 'teamList' : 'sessions';
+  const panes = usePaneResize(sidePane);
   const navMode = navModeForWidth(viewportWidth, navCollapsed);
   const navDrawerRef = useDrawerA11y({
     open: navDrawerOpen,

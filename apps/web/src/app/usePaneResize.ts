@@ -4,6 +4,9 @@ import { useViewportWidth } from './useViewportWidth';
 
 export type PaneKey = 'nav' | 'sessions' | 'chat' | 'teamList';
 
+/** 主内容左侧的列表列：会话页是 `sessions`，团队页是 `teamList`（互斥，宽度各自独立）。 */
+export type SidePaneKey = Extract<PaneKey, 'sessions' | 'teamList'>;
+
 export interface PaneLayout {
   nav: number;
   sessions: number;
@@ -67,9 +70,14 @@ export function applyPaneResize(pane: PaneKey, start: number, deltaX: number): n
   return clampPane(pane, start + scale * deltaX);
 }
 
-/** 扣除 nav / sessions 与左右 padding 后，对话区还能给 chat 的宽度（下限 560）。 */
-export function chatWorkspaceWidth(viewportWidth: number, nav: number, sessions: number): number {
-  return Math.max(PANE_LIMITS.chat.min, viewportWidth - nav - sessions - PANE_CHROME_W);
+/**
+ * 扣除 nav / 当前页左侧列表列与左右 padding 后，对话区还能给 chat 的宽度（下限 560）。
+ *
+ * `sideWidth` 必须是**当前路由**那条左列的宽度：会话页传 `layout.sessions`，
+ * 团队页传 `layout.teamList`。两列宽度可被各自拖动成不同值，传错会差 |sessions − teamList|。
+ */
+export function chatWorkspaceWidth(viewportWidth: number, nav: number, sideWidth: number): number {
+  return Math.max(PANE_LIMITS.chat.min, viewportWidth - nav - sideWidth - PANE_CHROME_W);
 }
 
 /** 显示用 chat 宽度：不超过持久化值、上限与当前可用区；持久化值本身不变。 */
@@ -77,9 +85,9 @@ export function fitChatWidth(
   chat: number,
   viewportWidth: number,
   nav: number,
-  sessions: number,
+  sideWidth: number,
 ): number {
-  return Math.min(chat, PANE_LIMITS.chat.max, chatWorkspaceWidth(viewportWidth, nav, sessions));
+  return Math.min(chat, PANE_LIMITS.chat.max, chatWorkspaceWidth(viewportWidth, nav, sideWidth));
 }
 
 export function parsePaneLayout(raw: string | null | undefined): PaneLayout {
@@ -142,7 +150,11 @@ function isCoarsePointer(): boolean {
   }
 }
 
-export function usePaneResize(): PaneResizeApi {
+/**
+ * @param sidePane 当前路由左列用的是哪个 pane：会话页 `sessions`，团队页 `teamList`。
+ *   chat 的可用区 / 居中手柄可用性都按它推算，传错会让手柄范围差 |sessions − teamList|。
+ */
+export function usePaneResize(sidePane: SidePaneKey): PaneResizeApi {
   const viewportWidth = useViewportWidth();
   const [layout, setLayout] = useState<PaneLayout>(readStoredLayout);
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -150,6 +162,8 @@ export function usePaneResize(): PaneResizeApi {
   layoutRef.current = layout;
   const pendingRef = useRef(new Map<PaneKey, number>());
   const frameRef = useRef<number | null>(null);
+  /** 当前页左列实际占用的宽度（不一定是 sessions）。 */
+  const sideWidth = layout[sidePane];
 
   const compact = viewportWidth <= MOBILE_MAX_WIDTH || isCoarsePointer();
 
@@ -212,14 +226,12 @@ export function usePaneResize(): PaneResizeApi {
     (pane: PaneKey) => {
       if (compact) return true;
       if (pane === 'chat') {
-        // 可用区已被 nav / sessions 吃完时，居中手柄没有可拖拽的空间。
-        return (
-          chatWorkspaceWidth(viewportWidth, layout.nav, layout.sessions) <= PANE_LIMITS.chat.min
-        );
+        // 可用区已被 nav / 当前页左列吃完时，居中手柄没有可拖拽的空间。
+        return chatWorkspaceWidth(viewportWidth, layout.nav, sideWidth) <= PANE_LIMITS.chat.min;
       }
       return viewportWidth <= PANE_LIMITS[pane].min;
     },
-    [compact, viewportWidth, layout.nav, layout.sessions],
+    [compact, viewportWidth, layout.nav, sideWidth],
   );
 
   // 移动端 / 触屏只“显示”默认布局；持久化值保留，变宽后自动恢复。
@@ -228,9 +240,9 @@ export function usePaneResize(): PaneResizeApi {
     if (compact) return DEFAULT_PANE_LAYOUT;
     return {
       ...layout,
-      chat: fitChatWidth(layout.chat, viewportWidth, layout.nav, layout.sessions),
+      chat: fitChatWidth(layout.chat, viewportWidth, layout.nav, sideWidth),
     };
-  }, [compact, viewportWidth, layout]);
+  }, [compact, viewportWidth, layout, sideWidth]);
 
   return useMemo(
     () => ({

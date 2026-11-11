@@ -145,7 +145,6 @@ button:disabled {
   --team-notice-max: 720px;
   --team-list-max-w: 960px;
   --team-member-max-w: 900px;
-  --message-max-w: 640px;
   --content-max: 1440px;
 
   /* 覆盖层 / 面板的语义宽度与高度 */
