@@ -287,10 +287,10 @@ export const messages = {
   'ask.submit': '提交',
   'ask.customPlaceholder.options': '或输入自定义回答',
   'ask.customPlaceholder.open': '输入回答',
-  // 待批（ask_user 汇集页）：来源 / 聚类 / 一起提交
+  // 待批（ask_user 汇集页）：来源 / 聚类 / 逐题回复
   'pending.title': '待批',
   'pending.subtitle':
-    '所有待回答的 ask_user 提问汇集在这里；同一个 Agent 的提问聚在一起，可以一次提交。',
+    '所有待回答的 ask_user 提问汇集在这里；同一个 Agent 的提问聚在一起，每题独立作答，可以只回复其中几题。',
   'pending.empty': '没有待批的提问',
   'pending.empty.hint': 'Agent 一提问，这里就会出现。',
   'pending.entry': '待批',
@@ -303,11 +303,14 @@ export const messages = {
   'pending.cluster.collapse': '收起',
   'pending.source.session': '会话',
   'pending.source.team': '团队',
-  'pending.item.include': '一起提交',
-  'pending.item.responding': '提交中…',
-  'pending.submit': '一起提交（{count}）',
-  'pending.submit.busy': '提交中…',
-  'pending.answerRequired': '勾选的问题都答完才能提交',
+  'pending.item.include': '回复这题',
+  'pending.item.includeAll': '全选',
+  'pending.item.responding': '回复中…',
+  'pending.submit': '回复',
+  'pending.submit.busy': '回复中…',
+  'pending.submit.count': '已选 {count} 题',
+  'pending.submit.note': '未勾选的题不会提交；这条提问一经回复即视为已答复。',
+  'pending.answerRequired': '勾了还没作答的题，回复时会被跳过',
   // 0.14: subagent tree / child transcript
   'chat.subagents.title': '子 agent',
   'chat.subagents.running': '{count} 运行中',

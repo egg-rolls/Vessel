@@ -291,10 +291,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'ask.submit': 'Submit',
   'ask.customPlaceholder.options': 'Or type a custom answer',
   'ask.customPlaceholder.open': 'Type an answer',
-  // 待批（ask_user 汇集页）：来源 / 聚类 / 一起提交
+  // 待批（ask_user 汇集页）：来源 / 聚类 / 逐题回复
   'pending.title': 'Awaiting approval',
   'pending.subtitle':
-    'Every pending ask_user question in one place. Questions from the same agent are grouped so you can submit them together.',
+    'Every pending ask_user question in one place. Questions from the same agent are grouped, and each question is answered on its own — reply to just the ones you mean.',
   'pending.empty': 'No pending questions',
   'pending.empty.hint': 'New ask_user questions show up here as soon as an agent asks.',
   'pending.entry': 'Pending',
@@ -307,11 +307,15 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.cluster.collapse': 'Collapse',
   'pending.source.session': 'Session',
   'pending.source.team': 'Team',
-  'pending.item.include': 'Include in this submit',
-  'pending.item.responding': 'Submitting…',
-  'pending.submit': 'Submit all ({count})',
-  'pending.submit.busy': 'Submitting…',
-  'pending.answerRequired': 'Answer every included question first',
+  'pending.item.include': 'Reply to this',
+  'pending.item.includeAll': 'Select all',
+  'pending.item.responding': 'Replying…',
+  'pending.submit': 'Reply',
+  'pending.submit.busy': 'Replying…',
+  'pending.submit.count': '{count} selected',
+  'pending.submit.note':
+    'Unchecked questions are not submitted; a request counts as answered once you reply.',
+  'pending.answerRequired': 'Checked questions without an answer are skipped in this reply.',
   // 0.14: subagent tree / child transcript
   'chat.subagents.title': 'Subagents',
   'chat.subagents.running': '{count} running',

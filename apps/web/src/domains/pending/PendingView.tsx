@@ -7,7 +7,7 @@
  * 三条展示面各管一段，互不替代：
  * - 会话：Composer 槽位的 AskCard（原同步等待行为不变）+ 会话栏「待批」入口；
  * - 团队：TeamPendingBar（成员会话的请求）；
- * - 本页：所有来源的总汇集，带聚类与「一起提交」。
+ * - 本页：所有来源的总汇集，带聚类与**逐题回复**（每题独立勾选，可只回复其中几题）。
  */
 import { useMemo, useState } from 'react';
 import { EmptyState } from '../../components/States';
@@ -42,7 +42,12 @@ export function PendingView({ sessionId }: { sessionId?: string }) {
   return (
     <PageFrame title={t('pending.title')} subtitle={t('pending.subtitle')}>
       {clusters.length === 0 ? (
-        <EmptyState title={t('pending.empty')} description={t('pending.empty.hint')} />
+        // 空态：内容在页内水平 + 垂直居中（复用既有 EmptyState，不自建一套）。
+        // `text-center` 由外壳继承到标题 / 说明，`min-h-60` 给出垂直居中的高度基准
+        // （与 `NotEnabledState variant="page"` 同一口径）。
+        <div className="flex min-h-60 flex-col items-center justify-center text-center">
+          <EmptyState title={t('pending.empty')} description={t('pending.empty.hint')} />
+        </div>
       ) : (
         clusters.map((cluster) => (
           <PendingClusterCard
