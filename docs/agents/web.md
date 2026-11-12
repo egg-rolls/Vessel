@@ -32,9 +32,11 @@ applies_to: [N, M]
   （`domains/chat/ask-answer.ts`，与 `packages/agent` 的 `ASK_ANSWER_INPUT_NAME` 同一字面量，
   `check-transcript-items` 对账），正文解析失败就退回普通用户气泡 —— 绝不吞正文。
   这类 ask 的 run 早已结束，卡片**不随 run 终态消失**（`interactionReducer` 的 `run-finished` 例外）。
-  待批页「一起提交」的整批答案由 gateway 合并成**一条** user 消息（前缀里逗号分隔多个
+  待批页一次「回复」的答案是**逐题可勾选**的：只投已勾选且已作答的题，同一请求内合成一次
+  `ask.respond`；由 gateway 合并成**一条** user 消息（前缀里逗号分隔多个
   requestId），每行是 `header（原问题摘要）: 答案`；卡片把原问题印在答案上方，卡头摘要
-  仍是第一题的 header（不因加长而变高）。
+  仍是第一题的 header（不因加长而变高）。**一条 ask 一经应答即整体落定**，未勾选的题随该
+  请求一起收口（服务端语义，前端不能事后补答）。
 - 事件可见性只有一张表（`apps/web/src/state/event-visibility.ts` 的 `EVENT_TIERS`，三档
   `content` / `internal` / `observe`）：`content` 恒可见、`observe` 恒不可见（与开关无关）、
   `internal` 随 `ui.showInternalEvents` / `verbosity: debug`；**未登记的类型按 `internal`
