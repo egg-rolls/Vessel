@@ -120,21 +120,40 @@ export interface AgentBatchResponse {
   results?: AgentBatchEntry[];
 }
 
-/** `agents.inbox` 一条只读条目（0.52 待处理条带）。 */
+/** `agents.inbox` 一条只读条目（0.52 待处理条带；0.53 加归属）。 */
 export interface AgentInboxEntry {
   message_id: string;
   from: string;
   summary: string;
   status: 'unread' | 'held';
   ts: number;
+  /**
+   * 归属会话（0.53 additive）：这条消息是哪个会话的下一条输入。
+   * 缺省 = 归属未知（老条目 / wake·quiet 投递）⇒ 条带一律不显示，宁可隐藏也不串台。
+   */
+  session_id?: string;
   /** 仅当请求带 `message_ids` 且命中时存在（peek 正文，不改状态）。 */
   text?: string;
 }
 
 export interface AgentInboxResponse {
+  /** 这批条目所属的 agent（0.53 additive）：取消走 `agents.recall` 时要用它。 */
+  agent_id?: string;
   unread: number;
   pending: number;
   entries: AgentInboxEntry[];
+}
+
+/** `agents.recall` 的单条跳过原因（与 `AgentInboxDiscardResult` 同形口径）。 */
+export interface AgentRecallSkip {
+  message_id: string;
+  reason: 'not_found' | 'consumed' | 'active';
+}
+
+/** `agents.recall` 结果：`deleted` 是真正从待处理集合里拿掉的条目。 */
+export interface AgentRecallResponse {
+  deleted: string[];
+  skipped?: AgentRecallSkip[];
 }
 
 /** `agents.send` 的单条结果（置顶复用 message_id + interrupt）。 */

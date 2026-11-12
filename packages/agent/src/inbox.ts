@@ -3,10 +3,12 @@
  *
  * 路径：`<dataDir>/inbox/<encodeURIComponent(agentId)>.json`（0.49 T2 根布局），
  * 形状为
- * `{ v: 1, messages: [{ id, ts, source, summary, text, status, consumed_by_session? }] }`。
+ * `{ v: 1, messages: [{ id, ts, source, summary, text, status, consumed_by_session?,
+ * session_id?, refs? }] }`。
  *
  * - 每 agent 懒加载；缺失 = 空，损坏 = available=false（只记日志，不覆盖文件，读返回 []）；
- * - 有界：最多 `maxMessages`（缺省 200）条，append / load 时裁掉最旧的；
+ * - 有界：最多 `maxMessages`（缺省 200）条，append / load 时裁掉最旧的（append 腾位置时
+ *   两级淘汰：先裁非 human 源，再裁 human 源，见 `evictForWrite`）；
  * - `summary` 在写入时算好（trim、空白折叠、前 160 字），永不调用模型；
  * - 旧文件里多余的 `important` 字段解析时忽略，不迁移、不报错；
  * - `atomicWrite` 0600，单写者串行写链；append 立即入写链（写前日志，不 debounce）；
@@ -26,6 +28,19 @@
  * `input` = 本体作为下一轮 run input 送达；`wake` = 只唤醒 agent 自己去 read；
  * `quiet` = 只落 inbox，不唤醒也不进 run。状态机（I1–I4）只描述 `input` 那条路。
  *
+ * **归属字段 `session_id`（0.53，additive）**：一句话 —— 「这条消息是哪个会话的下一轮
+ * 输入」，**只在 `input` 投递上写**（唯一写入点 `AgentService.trackInbox`）。它一箭三雕：
+ * 条带按会话过滤、进程重启后知道往哪个 session 重投、展示时可做身份前缀。
+ *
+ * `wake` / `quiet` 条目**不写** `session_id`：它们本来就不该变成 run input（`quiet` 的
+ * 典型场景是「投递失败后只留档给模型 read」），写了会让恢复路径把它们重投一次。
+ * 于是「投递意图」被编码进「字段是否存在」，不引入新的 enum / 不新增条目种类。
+ * 缺字段 = 归属未知：条带永不显示、恢复永不碰、`session_id` 过滤永不命中（宁可隐藏
+ * 也不串台），但 list / read / delete 一切照旧。
+ *
+ * **`refs`（附件引用，additive）**：只有路径与元信息，随 `input` 投递一并落盘，恢复重投
+ * 时带上，附件不丢。旧文件缺该字段照常加载（按「无引用」降级）。
+ *
  * @module @vessel-agent/agent
  */
 
@@ -38,10 +53,13 @@ import {
   HookType,
   type Logger,
   type Message,
+  type MessageRef,
   noopLogger,
   type ToolContext,
   type ToolDefinition,
 } from '@vessel-agent/core';
+import { normalizeRefs } from './refs.js';
+import { HUMAN_PRINCIPAL } from './team-address.js';
 
 export const AGENT_INBOX_VERSION = 1;
 export const DEFAULT_MAX_INBOX_MESSAGES = 200;
@@ -83,6 +101,13 @@ export interface StoredInboxMessage {
   text: string;
   status: 'unread' | 'consumed';
   consumed_by_session?: string;
+  /**
+   * 归属：这条消息是哪个会话（body）的下一轮输入。**只有 `input` 投递会写**（见模块
+   * 头注释）。缺省 = 归属未知（老文件 / 非 input 投递）⇒ 条带不显示、恢复不碰。
+   */
+  session_id?: string;
+  /** 附件引用：只有路径 + 元信息，恢复重投时原样带回（不丢附件）。 */
+  refs?: MessageRef[];
 }
 
 export interface AgentInboxEntryInput {
@@ -90,6 +115,10 @@ export interface AgentInboxEntryInput {
   ts: number;
   source: string;
   text: string;
+  /** 归属会话；**只有 `input` 投递该传**（见模块头的 `session_id` 分界）。 */
+  session_id?: string;
+  /** 附件引用（可缺省）；写入前按 `normalizeRefs` 再归一一次。 */
+  refs?: MessageRef[];
 }
 
 export interface AgentInboxListEntry {
@@ -99,6 +128,8 @@ export interface AgentInboxListEntry {
   summary: string;
   /** 当前被某个 body 的 mailbox 持有（尚未成为 run input）；read 需 `includeHeld`。 */
   held: boolean;
+  /** 归属会话（只读视图透传，条带 / 恢复据此按会话定位）；缺省 = 归属未知。 */
+  session_id?: string;
 }
 
 export interface AgentInboxReadSelection {
@@ -123,8 +154,13 @@ export interface AgentInboxAppendOptions {
   /**
    * 本次投递的模式（见 `AgentInboxDelivery`）；缺省 `input`。
    *
-   * 只影响本次 append 的裁剪策略与调用方的后续动作（要不要 hold / 起 wake run），
-   * **不落盘**：崩溃重启后一律按普通 unread 处理（有意取舍：不自动重投）。
+   * 只影响本次 append 的裁剪策略与调用方的后续动作（要不要 hold / 起 wake run）。
+   *
+   * **模式本身仍不落盘**，但 0.53 起有一个**受控的部分推翻**：`input` 投递的条目会带
+   * `session_id`（归属 + 重启恢复的唯一判据），而 `wake` / `quiet` 条目**不带** —— 于是
+   * 「这条消息该不该在重启后被重投成 run input」完全由「有没有 `session_id`」决定，
+   * 不需要第二个字段。**不要**给 `wake` / `quiet` 传 `session_id`：那等于把「只留档」的
+   * 消息交给启动恢复重新执行一次。
    */
   delivery?: AgentInboxDelivery;
   /**
@@ -167,6 +203,9 @@ export interface AgentInboxPort {
    *
    * `options.delivery` 是 inbox 的投递模式（缺省 `input`）：`input` 由调用方随后
    * `hold` 并提交成 run input；`wake` / `quiet` 只落盘，等被唤醒的 agent 自己 read。
+   *
+   * `message.session_id` 是**归属会话**，只有 `input` 投递该传（见模块头的分界）；
+   * `message.refs` 是附件引用，随条目落盘以便恢复重投时带上。
    *
    * 写前日志语义：append 先于 scheduler 接管，所以被接管但尚未成为 run input 的消息
    * 一定在库里；`consumed_by_session` 只在 `markConsumed` 时写。
@@ -277,8 +316,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 加载放宽：`summary` 可缺失（从 text 派生），其余字段严格；任何类型不符都按
- * 损坏处理（不覆盖、不做半新半旧的内存）。未知字段（如旧版 `important`）忽略。
+ * 加载放宽：`summary` 可缺失（从 text 派生）；0.53 新增的 `session_id` / `refs` 也可缺失
+ * （缺失 = 归属未知 / 无引用，老文件照常加载）。其余字段严格；任何类型不符都按损坏处理
+ * （不覆盖、不做半新半旧的内存）。未知字段（如旧版 `important`）忽略。
  */
 function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   if (!isRecord(value)) return false;
@@ -290,6 +330,11 @@ function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   if (value.consumed_by_session !== undefined && typeof value.consumed_by_session !== 'string') {
     return false;
   }
+  // additive：缺省合法，存在则必须是 string（与其它字段同口径：类型不符按损坏处理）。
+  if (value.session_id !== undefined && typeof value.session_id !== 'string') return false;
+  // refs 只校验「是数组」，条目形状在 cloneMessage 里过 `normalizeRefs`（逐条丢弃坏条目，
+  // 不因为一条坏引用把整个收件箱判成损坏）。
+  if (value.refs !== undefined && !Array.isArray(value.refs)) return false;
   if (value.summary !== undefined && typeof value.summary !== 'string') return false;
   return true;
 }
@@ -303,6 +348,8 @@ function isInboxFile(value: unknown): value is InboxFile {
 
 /** 规范化为内存形状：summary 缺失时派生。 */
 function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
+  // refs 逐条归一（写入侧已经归一过；这层只防手改文件带进半成品形状）。
+  const refs = message.refs === undefined ? [] : normalizeRefs(message.refs);
   return {
     id: message.id,
     ts: message.ts,
@@ -313,6 +360,8 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
     ...(message.consumed_by_session !== undefined
       ? { consumed_by_session: message.consumed_by_session }
       : {}),
+    ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
+    ...(refs.length > 0 ? { refs } : {}),
   };
 }
 
@@ -371,9 +420,13 @@ export class AgentInboxStore implements AgentInboxPort {
         if (prunedConsumed) void this.enqueueWrite(state);
         return { accepted: false, reason: 'full' };
       }
-      // input / quiet 的既有行为：consumed 裁完仍满时继续裁最旧（可能丢 unread）。
-      state.messages.splice(0, state.messages.length - this.maxMessages + 1);
+      // input / quiet 的既有行为：consumed 裁完仍满时继续裁最旧 —— 0.53 起分两级：
+      // 先裁「非 human 源」最旧条目，再裁 human 源。一条人写的待处理输入不该被成员之间
+      // 的投递挤掉（`splice` 无差别裁头是最容易踩到这个的地方）。
+      this.evictForWrite(state, state.messages.length - this.maxMessages + 1);
     }
+    const sessionId = message.session_id;
+    const refs = message.refs === undefined ? [] : normalizeRefs(message.refs);
     state.messages.push({
       id: message.id,
       ts: message.ts,
@@ -381,6 +434,8 @@ export class AgentInboxStore implements AgentInboxPort {
       summary: summaryOf(message.text),
       text: message.text,
       status: 'unread',
+      ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+      ...(refs.length > 0 ? { refs } : {}),
     });
     this.prune(state);
     void this.enqueueWrite(state);
@@ -421,6 +476,8 @@ export class AgentInboxStore implements AgentInboxPort {
       source: message.source,
       summary: message.summary,
       held: state.held.has(message.id),
+      // 归属只读透传：条带按会话过滤、启动恢复按会话重投都要它。
+      ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
     }));
     return { ...this.counts(state), messages };
   }
@@ -666,6 +723,32 @@ export class AgentInboxStore implements AgentInboxPort {
       return false;
     });
     return true;
+  }
+
+  /**
+   * 两级淘汰（0.53）：为「再写一条」腾位置时，**先裁非 human 源的最旧条目，再裁 human 源**。
+   *
+   * 理由：一条人写的待处理输入（`input` 投递、带 `session_id`、重启后要被执行）不该被
+   * 成员之间的投递挤掉。被裁掉的 **human 源**条目记 `agent.inbox.evicted`（warn，带
+   * `id` / `session_id` / `ts`）—— 这是用户消息真的丢了，必须能在日志里查到；非 human 源
+   * 属常规轮换，不刷日志。**不发事件**（不为纯诊断新增事件类型）。
+   */
+  private evictForWrite(state: AgentInboxState, count: number): void {
+    for (let removed = 0; removed < count; removed += 1) {
+      if (state.messages.length === 0) return;
+      const victim = state.messages.findIndex((message) => message.source !== HUMAN_PRINCIPAL);
+      const index = victim >= 0 ? victim : 0;
+      const [dropped] = state.messages.splice(index, 1);
+      if (dropped === undefined) return;
+      state.held.delete(dropped.id);
+      if (dropped.source !== HUMAN_PRINCIPAL) continue;
+      this.logger.warn('agent.inbox.evicted', {
+        path: state.path,
+        id: dropped.id,
+        ts: dropped.ts,
+        ...(dropped.session_id !== undefined ? { session_id: dropped.session_id } : {}),
+      });
+    }
   }
 
   private enqueueWrite(state: AgentInboxState): Promise<void> {

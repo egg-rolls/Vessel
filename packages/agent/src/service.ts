@@ -2343,6 +2343,13 @@ export class AgentServiceImpl implements AgentService {
    *
    * 投递模式恒为 `input`：这里写下的消息本体就是下一轮 run input。既有消息被
    * urgent `message_id` 复用时，这也是把它从 quiet / wake 升级成 input 的唯一入口。
+   *
+   * **`session_id` 的分界（0.53，写在这里而不是别处）**：只有这条路（input 投递）把
+   * `session_id = bodyId` 落进条目，因为只有这条路的消息「会变成某个会话的下一轮输入」。
+   * `wake` / `quiet` 的 append（rotate 窗口 `:2225`、notify `:3611`、`inbox insert`）**一律
+   * 不传 `session_id`** —— 那两类消息本来就不该执行，带上归属会让进程重启后的恢复扫描
+   * 把它们重投一次（把「只留档」变成「再执行一遍」）。恢复的唯一判据就是这个字段，
+   * 所以这条分界是**语义边界**，不是可选的注释。
    */
   private trackInbox(agentId: string, message: AgentMessage, bodyId: string): void {
     if (this.inbox === undefined) return;
@@ -2353,6 +2360,10 @@ export class AgentServiceImpl implements AgentService {
         ts: message.ts,
         source: message.from,
         text: message.content,
+        // 归属会话 = 接管这条消息的 body（`entry.bindingId`）。
+        session_id: bodyId,
+        // 附件引用随条目落盘：重启恢复重投时带上，附件不丢。
+        ...(message.refs !== undefined ? { refs: message.refs } : {}),
       },
       { delivery: 'input' },
     );
@@ -2600,8 +2611,14 @@ export class AgentServiceImpl implements AgentService {
    */
   inboxSnapshot(
     agentId: string,
-    options: { includeHeld?: boolean; messageIds?: readonly string[] } = {},
+    options: {
+      includeHeld?: boolean;
+      messageIds?: readonly string[];
+      /** 只返回归属这个会话的条目（等值比较；缺 `session_id` 的老条目永不命中）。 */
+      sessionId?: string;
+    } = {},
   ): {
+    agent_id: string;
     unread: number;
     pending: number;
     entries: {
@@ -2610,11 +2627,12 @@ export class AgentServiceImpl implements AgentService {
       summary: string;
       status: 'unread' | 'held';
       ts: number;
+      session_id?: string;
       text?: string;
     }[];
   } {
     const store = this.inbox;
-    if (store === undefined) return { unread: 0, pending: 0, entries: [] };
+    if (store === undefined) return { agent_id: agentId, unread: 0, pending: 0, entries: [] };
     // includeHeld 固定 true：条带要看到「已排进队列、尚未成为 run input」的那些。
     const listed = store.list(agentId, { includeHeld: options.includeHeld ?? true });
     const wanted = options.messageIds;
@@ -2622,18 +2640,24 @@ export class AgentServiceImpl implements AgentService {
     const bodies =
       wanted !== undefined && wanted.length > 0 ? store.findByIds(agentId, wanted) : [];
     const bodyById = new Map(bodies.map((entry) => [entry.id, entry.text]));
-    const entries = listed.messages.map((entry) => {
-      const text = bodyById.get(entry.id);
-      return {
-        message_id: entry.id,
-        from: entry.source,
-        summary: entry.summary,
-        status: entry.held ? ('held' as const) : ('unread' as const),
-        ts: entry.ts,
-        ...(text !== undefined ? { text } : {}),
-      };
-    });
-    return { unread: listed.unread, pending: listed.pending, entries };
+    const sessionId = options.sessionId;
+    const entries = listed.messages
+      // 归属过滤放在服务端：调用方（条带）只拿得到自己那一份，不需要在客户端猜。
+      .filter((entry) => sessionId === undefined || entry.session_id === sessionId)
+      .map((entry) => {
+        const text = bodyById.get(entry.id);
+        return {
+          message_id: entry.id,
+          from: entry.source,
+          summary: entry.summary,
+          status: entry.held ? ('held' as const) : ('unread' as const),
+          ts: entry.ts,
+          ...(entry.session_id !== undefined ? { session_id: entry.session_id } : {}),
+          ...(text !== undefined ? { text } : {}),
+        };
+      });
+    // `unread` / `pending` 保持 **agent 维度**（过滤前），它们是收件箱口径，不是会话口径。
+    return { agent_id: agentId, unread: listed.unread, pending: listed.pending, entries };
   }
 
   async resumeRun(runId: string, opts?: RunOptions): Promise<string> {

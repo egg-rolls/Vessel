@@ -676,9 +676,11 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
       permission: 'read',
       params_schema: {
         type: 'object',
-        required: ['agent_id'],
+        // `agent_id` 与 `session_id` 二选一（handler 里判）：后者由服务端反查 agent，
+        // 前端不需要自己从 roster 猜（rotate 窗口 / 退役 body 会让 roster 过期）。
         properties: {
           agent_id: { type: 'string', minLength: 1 },
+          session_id: { type: 'string', minLength: 1 },
           include_held: { type: 'boolean' },
           // 只读正文（点某条 peek）：一次最多 10 条，越界 invalid_params。
           message_ids: { type: 'array', items: { type: 'string', minLength: 1 }, maxItems: 10 },
@@ -688,6 +690,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         type: 'object',
         required: ['entries', 'unread', 'pending'],
         properties: {
+          // 反查 / 回显：前端随后用它调 `agents.recall`（条目没有 run id）。
+          agent_id: { type: 'string' },
           unread: { type: 'number' },
           pending: { type: 'number' },
           entries: {
@@ -701,6 +705,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 summary: { type: 'string' },
                 status: { type: 'string', enum: ['unread', 'held'] },
                 ts: { type: 'number' },
+                // 归属会话（0.53 additive）：缺省 = 老条目 / 非 input 投递 ⇒ 未知归属。
+                session_id: { type: 'string' },
                 text: { type: 'string' },
               },
             },
@@ -708,9 +714,31 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         },
       },
       handler: async (params, ctx) => {
-        const agentId = stringParam(params, 'agent_id');
+        // 非空的 string 才算给了（空串 / 缺省 / 类型不符一律按「没给」）。
+        const asId = (value: unknown): string | undefined =>
+          typeof value === 'string' && value !== '' ? value : undefined;
+        const requestedAgentId = asId(params.agent_id);
+        const sessionId = asId(params.session_id);
+        if (requestedAgentId === undefined && sessionId === undefined) {
+          throw new RpcError('invalid_params', 'agents.inbox requires agent_id or session_id');
+        }
         // 可见性口径与 agents.list / agents.get 完全一致（visibleAgents）。
         const agents = await visibleAgents(deps, ctx);
+        const control = requireAgentControl(deps.agent);
+        if (control.inbox === undefined) {
+          throw new RpcError('not_supported', 'agent control does not expose inbox');
+        }
+        // 只给 session 时用 `resolve()` 反查 agent（与 dispatch 寻址同一套规则）。
+        let agentId = requestedAgentId;
+        if (agentId === undefined) {
+          const resolved = await control.resolve(sessionId as string);
+          if (resolved === undefined) {
+            throw new RpcError('not_found', `session not found: ${sessionId}`, {
+              session_id: sessionId,
+            });
+          }
+          agentId = resolved.id;
+        }
         if (!agents.some((entry) => entry.id === agentId)) {
           throw new RpcError('not_found', `agent not found: ${agentId}`, { agent_id: agentId });
         }
@@ -722,15 +750,13 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             count: messageIds.length,
           });
         }
-        const control = requireAgentControl(deps.agent);
-        if (control.inbox === undefined) {
-          throw new RpcError('not_supported', 'agent control does not expose inbox');
-        }
         const snapshot = await control.inbox(agentId, {
           includeHeld: params.include_held !== false,
+          ...(sessionId !== undefined ? { sessionId } : {}),
           ...(messageIds !== undefined && messageIds.length > 0 ? { messageIds } : {}),
         });
-        return snapshot;
+        // `agent_id` 回显在结果里：条带拿到它才能调 `agents.recall`。
+        return { ...snapshot, agent_id: agentId };
       },
     },
     {

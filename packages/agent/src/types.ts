@@ -1228,12 +1228,19 @@ export interface AgentService {
    * 只读 inbox 快照（`agents.inbox` RPC 的唯一数据源）。
    *
    * 只调 `list()` / `findByIds()`：不 markConsumed、不 hold / unhold、不改持久字段。
-   * `messageIds` 非空时才带 `text`（上限由 RPC 层把关）。
+   * `messageIds` 非空时才带 `text`（上限由 RPC 层把关）。`sessionId` 非空时只返回归属
+   * 该会话的条目（等值比较；缺 `session_id` 的老条目永不命中）；结果带 `agent_id`，
+   * 前端据此调 `agents.recall`。
    */
   inboxSnapshot(
     agentId: string,
-    options?: { includeHeld?: boolean; messageIds?: readonly string[] },
+    options?: {
+      includeHeld?: boolean;
+      messageIds?: readonly string[];
+      sessionId?: string;
+    },
   ): {
+    agent_id: string;
     unread: number;
     pending: number;
     entries: {
@@ -1242,6 +1249,7 @@ export interface AgentService {
       summary: string;
       status: 'unread' | 'held';
       ts: number;
+      session_id?: string;
       text?: string;
     }[];
   };

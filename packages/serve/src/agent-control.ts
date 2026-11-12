@@ -380,6 +380,11 @@ export interface AgentInboxLikeOptions {
   includeHeld?: boolean;
   /** 只读正文的 id 列表（≤10）；非空时结果条目带 `text`。 */
   messageIds?: readonly string[];
+  /**
+   * 只返回归属这个会话的条目（0.53 additive）：等值比较，缺 `session_id` 的老条目永不命中。
+   * 条带按 `session_id === 选中会话` 取数，服务端过滤后客户端不再猜归属。
+   */
+  sessionId?: string;
 }
 
 /** `agents.inbox` 结果条目。 */
@@ -389,12 +394,16 @@ export interface AgentInboxLikeEntry {
   summary: string;
   status: 'unread' | 'held';
   ts: number;
+  /** 归属会话（0.53 additive）；缺省 = 老条目 / 非 input 投递 ⇒ 归属未知。 */
+  session_id?: string;
   /** 仅当请求带 `messageIds` 且命中时存在。 */
   text?: string;
 }
 
 /** `agents.inbox` 结果。 */
 export interface AgentInboxLikeResult {
+  /** 这批条目所属的 agent（0.53 additive）：前端据此调 `agents.recall`。 */
+  agent_id?: string;
   unread: number;
   pending: number;
   entries: AgentInboxLikeEntry[];
