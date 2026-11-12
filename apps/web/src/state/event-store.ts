@@ -1,7 +1,8 @@
 /**
  * 有界事件缓冲（ring buffer）+ 订阅。
  *
- * - 每个 run 最多 2000 条，总数最多 10000 条；超出丢弃最旧并标记 truncated。
+ * - 每个 run 最多 5000 条，总数最多 20000 条；超出丢弃最旧并标记 truncated
+ *   （口径与依据见下面两个常量的注释：条目数 ≈ 工具调用数 × 5~6，不是 token 数）。
  * - 按 seq 去重（重连回放不会产生重复卡片）。
  * - 通知节流到 ~50ms，避免每个 token 重渲染整棵树。
  * - 快照对象在通知时整体替换，`entries` 也必须是新数组：消费者（ChatView / RunDetail）
@@ -22,8 +23,33 @@
 import type { RunEvent } from '../gateway/types';
 import { producesTimelineItem, type StoredEvent } from './events';
 
-export const MAX_EVENTS_PER_RUN = 2000;
-export const MAX_EVENTS_TOTAL = 10000;
+/**
+ * 每个 run 在客户端缓冲里保留的条目上限。
+ *
+ * 口径（2026-11 实测，见 `packages/.../`.scratch/run-event-eviction 报告）：一次工具调用
+ * = 一次完整 LLM 往返 = 至少 5 条事件（tool.call.started / llm.request / llm.response /
+ * llm.stream.summary / tool.call.completed），再加上 hook 对、run.checkpoint、
+ * context.changed 等每轮固定开销。所以「工具调用数 × 5~6」就是条目数的量级。
+ *
+ * 2000 条 ≈ 300~400 次工具调用 —— 对「跑十分钟的多工具 run」只是勉强够。0.53 起抬到
+ * 5000（≈ 800~1000 次工具调用），代价是缓冲内存上界从 ~1.2 MB 抬到 ~3 MB（实测条目
+ * 均值约 600 B），flush 浅拷贝在 20 Hz 下仍是亚毫秒级。
+ *
+ * 注意：**文本 / 思考的流式增量不按 delta 计入**（`coalesceDelta` 把它们并进上一条），
+ * 不产 timeline item 的增量（`tool_call_delta` / `finish`）根本不进缓冲
+ * （`producesTimelineItem`，见 `push`）。所以这个上限量的是「真实事件条数」，
+ * 不是「token 数」。
+ */
+export const MAX_EVENTS_PER_RUN = 5000;
+/**
+ * 缓冲总量上限（跨 run 的安全网）。
+ *
+ * 客户端是**按订阅范围**收事件的（Chat 只收当前会话、Runs 只收 `run.*`、run 详情只收
+ * 单个 run；换范围时 `clear()`），所以这个数正常情况下摸不到 —— 它只是防止某个
+ * 订阅范围异常宽时把内存吃爆。与 `MAX_EVENTS_PER_RUN` 同比抬高（10000 → 20000），
+ * 保证「两个满额 run」不会被总量闸门提前裁掉。
+ */
+export const MAX_EVENTS_TOTAL = 20000;
 export const NOTIFY_INTERVAL_MS = 50;
 /**
  * 单条合并后的增量上限（字符）。超过就另起一条，避免一条条目无限变长
