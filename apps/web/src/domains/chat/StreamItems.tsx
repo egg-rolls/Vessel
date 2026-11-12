@@ -96,11 +96,13 @@ const NO_ACTIONS: readonly MessageAction[] = [];
  * （`TeamMessageRow`，`.team-message-bubble` 有底色）。不要把 `MessageFold` 加回来 ——
  * 无底正文被裁到 400px + 渐隐没有任何视觉锚点，读者看不到「这是一段被收起的话」。
  *
- * 容器里另有两样**不占高度**的东西（`speaker` / `actions`）：
+ * 容器里另有两样东西：
  * - `speaker`：「助手」发言人名，与历史态同一个组件（`AssistantSpeaker`）；
- * - `actions`：消息工具栏，绝对定位在 `.msg-assistant` 右上角（`.msg-actions`），
- *   hover / focus-within 只切 opacity ⇒ 出现时正文不位移；窄屏退化成正文下方一行。
- *   有思考卡时工具条挂在思考卡右上角（`ReasoningBlock` 的 `actions`），这里不重复。
+ * - `actions`：这一段的工具栏（复制），由调用方给成 `MessageActions`，落在正文
+ *   **下方一行、右对齐**（`mt-1 ml-auto` 在调用方那侧，见 `RunItems` 与
+ *   `TranscriptWindow`）。这里只把它摆在正文之后，不包任何定位壳子：没有覆盖层，
+ *   所以 hover / focus-within 出现时不会遮住正文（高度会变，这是旧形态的既定取舍，
+ *   见 styles/domains/chat.css 的工具栏说明）。
  */
 export function AssistantText({
   text,
@@ -113,8 +115,8 @@ export function AssistantText({
   /** 仍在流式收字：节流 + 未闭合块的保守降级（见 components/Markdown.tsx）。 */
   streaming?: boolean;
   /**
-   * 这一轮的消息工具栏（复制 / 重试）。渲染成绝对定位覆盖层（`.msg-actions`），
-   * **不占正文下方的垂直空间**，hover 出现时也不会把内容顶下去。
+   * 这一段的工具栏（复制）。调用方负责给 `MessageActions`（自带 hover / focus-within /
+   * 触屏常显的显隐规则）与 `mt-1 ml-auto` 定位。
    */
   actions?: ReactNode;
   /** 本帧才追加进来的项：入场只播一次（判定见 `TranscriptWindow.tsx` 的 `useEnteringItems`）。 */
@@ -138,7 +140,7 @@ export function AssistantText({
     >
       {speaker && <AssistantSpeaker />}
       <Markdown className="msg-text" text={text} streaming={streaming} />
-      {actions !== undefined && <div className="msg-actions">{actions}</div>}
+      {actions}
     </div>
   );
 }
@@ -420,18 +422,12 @@ export const RunItems = memo(function RunItems({
               text={item.text}
               streaming={streamingText}
               speaker={item.key === speakerKey}
-              // 工具条是绝对定位覆盖层（`.msg-actions`，见 AssistantText 头注释）：
-              // 不再带 `mt-1`，也不占正文下方的任何高度。
-              //
-              // 注意（主会话页与这里**暂不统一**，见 TranscriptWindow 的
-              // `bodyToolbarKeys`）：主时间线按 run 汇总 —— 该 run 有思考卡就不在正文上
-              // 挂工具条；子 agent 面板仍是**逐段正文**挂复制（每一段都能单独复制），
-              // 思考卡自己那个「复制思考」由 ReasoningBlock 负责，两条路径互不干扰。
-              // 统一到这里需要先决定「一整个 run 的正文」指哪一段（多段正文 / 兜底
-              // output），不在本次范围内。
+              // 工具栏在正文**下方一行、右对齐**（`mt-1 ml-auto`）：没有覆盖层，
+              // 不遮正文（显隐规则在 MessageActions 自己身上）。
               actions={
                 showActions && item.text.trim().length > 0 ? (
                   <MessageActions
+                    className="mt-1 ml-auto"
                     actions={[
                       {
                         id: 'copy',
@@ -486,6 +482,7 @@ export const RunItems = memo(function RunItems({
           speaker={!speakerTaken}
           actions={
             <MessageActions
+              className="mt-1 ml-auto"
               actions={[
                 {
                   id: 'copy',

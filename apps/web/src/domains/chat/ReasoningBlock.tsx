@@ -22,20 +22,21 @@
  *   流式期间思考文本每 flush 增长一次，但这两种动画都按「节点首次挂载 / open 变化」跑，
  *   不会跟着 delta 重播。
  *
- * 卡外还有两样东西（都在 `.reasoning-wrap` 里，**不改卡片自身的盒模型**）：
- * - `speaker`：「助手」发言人名（这一段的第一块是思考卡时才要，与历史态同一个组件）；
- * - 工具栏：绝对定位贴在**卡片右上角**（`.reasoning-actions`），不占垂直空间，
- *   所以 hover 出现 / 消失都不会推挤正文（布局说明见 chat.css）。
- *   里面是两组并排的按钮：调用方给的这一段消息工具栏（`actions`：复制正文 / 重试 / 时间）
- *   + 本组件自带的「复制思考」。有思考卡时工具条只挂在这里，调用方不再在正文右侧
- *   重复一份 —— 「一个 run 只挂一处」的判据见 `TranscriptWindow` 的 `bodyToolbarKeys`。
+ * 卡外还有一样东西：
+ * - `speaker`：「助手」发言人名（这一段的第一块是思考卡时才要，与历史态同一个组件）。
  *
- * 「复制思考」为什么由本组件自己渲染：它是卡片自身的动作（复制的是**这一张卡**的
- * 思考原文，不是整条消息），两个入口（live item / 历史消息）都拿同一份实现，不用
- * 每个调用方各拼一遍；复制实现复用 `useMessageCopy`，不另造 clipboard 调用。
+ * 卡片自己只有一个动作：卡头（`<summary>`）右侧的**「复制思考」小按钮**，复制的是
+ * 本卡的思考原文（不是整条消息）。**卡上不挂消息工具栏**（复制正文 / 重试 / 时间那一组
+ * 在正文下方一行，见 chat.css 的工具栏说明）—— 用户明确要求「去掉思考过程加的那个
+ * 工具栏」，所以这个按钮不是工具栏，只是卡自己的一个小控件，常显、可键盘聚焦。
+ *
+ * 点击细节：它在 `<summary>` 里，而点 summary 默认会开合卡片 —— 复制按钮必须
+ * `preventDefault()` + `stopPropagation()` 把这次点击吃掉，否则「复制」会顺手把卡
+ * 收起来。键盘 Enter / Space 触发的 click 走同一条处理，所以键盘也安全。
  */
-import { type ReactNode, useEffect, useState } from 'react';
-import { Button, type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
+import { useEffect, useState } from 'react';
+import { IconButton } from '../../components/Tooltip';
+import { Button, Icon, useMessageCopy } from '../../components/ui';
 import { t } from '../../i18n';
 
 const PREVIEW_LINES = 12;
@@ -60,15 +61,13 @@ export function AssistantSpeaker() {
 }
 
 /**
- * 「这里有没有思考卡」的**唯一**判据（live 与历史同用这一份，不许各写一遍）。
+ * 「这里有没有思考卡」的唯一判据（历史消息与 live item 共用这一份）。
  *
- * 两边的「有没有卡」在数据形态上不同：
  * - 历史消息：思考挂在消息自己身上（`reasoning_content`），空串 / 全空白等于没有卡；
- * - 运行态：思考是**独立的 `run-reasoning` item**，判的是该 run 有没有这样的 item
- *   （见 `TranscriptWindow` 的 `bodyToolbarKeys`）。
+ * - 运行态：思考是**独立的 `run-reasoning` item**，判的是该 run 有没有这样的 item。
  *
- * 但「算有卡」的门槛只有一条：**有非空白的思考文本**。判据从这里走，工具栏归属
- * 才不会两边分叉（一边说「有卡贴卡」、另一边说「没卡贴正文」）。
+ * 门槛只有一条：**有非空白的思考文本**。`historyReasoning`（Transcript.tsx）与
+ * 本组件的「复制思考」按钮都过这一道，所以「有没有卡」只有一个答案。
  */
 export function hasReasoningCard(text: string | undefined): text is string {
   return typeof text === 'string' && text.trim().length > 0;
@@ -81,7 +80,6 @@ export function ReasoningBlock({
   endedAt,
   entering = false,
   speaker = false,
-  actions,
 }: {
   text: string;
   streaming: boolean;
@@ -97,12 +95,6 @@ export function ReasoningBlock({
    * 一个 run 只出现一次（判据在调用方，与历史态的 groupStart 同一口径）。
    */
   speaker?: boolean;
-  /**
-   * 这一轮的消息工具栏（复制正文 / 重试 / 时间）。贴卡片右上角、绝对定位，**不占高度**；
-   * 窄屏（≤1023px）退化成卡片下方一行（见 chat.css 的 `.reasoning-actions`）。
-   * 它和本卡自带的「复制思考」并排渲染，显隐由同一个 `group-hover / focus-within` 控制。
-   */
-  actions?: ReactNode;
 }) {
   const [open, setOpen] = useState(streaming);
   const [userToggled, setUserToggled] = useState(false);
@@ -120,26 +112,13 @@ export function ReasoningBlock({
     startedAt !== undefined && endedAt !== undefined && endedAt > startedAt
       ? Math.max(1, Math.round((endedAt - startedAt) / 1000))
       : undefined;
-  // 「复制思考」复制的是本卡的思考原文；**不跟着 streaming 开关**显隐 ——
-  // 窄屏（≤1023px）时这一行是 `position: static` 的常备行，若等到落定才出现，
-  // 卡片会在 run 结束那一帧长高一截（布局位移）。行在卡在，高度恒定。
-  const reasoningActions: MessageAction[] = hasReasoningCard(text)
-    ? [
-        {
-          id: 'copy',
-          // 独立文案：这是「复制思考」，不是「复制消息」（两件事、两个 key）。
-          label: t('chat.reasoning.copy'),
-          onSelect: () => copy(text),
-        },
-      ]
-    : [];
+  const copyable = hasReasoningCard(text);
 
   return (
-    // `.reasoning-wrap` 只是定位上下文（`position: relative`）：卡片与工具条都在它里面，
-    // 工具条绝对定位在右上角，因此**不参与**高度计算。`group` 让 `MessageActions` 的
-    // `group-hover` 在本卡（而不是整条消息）上生效 —— live 的思考卡是顶层 item，
-    // 外面没有 `.msg-assistant` 那个 group。
-    <div className="reasoning-wrap group">
+    // 一层无样式的 div 只为「发言人名 + 卡片」还在一起（调用方按 flex 列排 item，
+    // 拆成两个兄弟节点会被列间距分开）。卡上没有任何绝对定位覆盖层，也不需要
+    // `position: relative` 的定位上下文。
+    <div>
       {speaker && <AssistantSpeaker />}
       <details
         className={`reasoning-block motion-disclosure${entering ? ' motion-appear' : ''}`}
@@ -159,6 +138,24 @@ export function ReasoningBlock({
             // 0 内容时那行提示（`ThinkingHint`）共用同一个 i18n key。
             <span className="reasoning-live text-info"> · {t('chat.reasoning.thinking')}</span>
           ) : null}
+          {/* 卡头右侧的「复制思考」：常显（不是 hover-only）、可键盘聚焦、带 aria-label +
+              tooltip（IconButton 三样都给）。`float-right` 让它在 summary 这一行里贴右，
+              且**不改变** summary 的块布局 —— 原生展开三角还在（不改成 flex summary）。 */}
+          {copyable && (
+            <IconButton
+              className="float-right size-5"
+              label={t('chat.reasoning.copy')}
+              onClick={(event) => {
+                // 卡头是 `<summary>`：点击默认会开合卡片。复制必须自己吃掉这次点击，
+                // 否则按一下复制就把卡收起来了（键盘 Enter / Space 也走这条路径）。
+                event.preventDefault();
+                event.stopPropagation();
+                copy(text);
+              }}
+            >
+              <Icon name="copy" size={13} />
+            </IconButton>
+          )}
         </summary>
         <div className="px-2.5 py-2 text-md leading-relaxed whitespace-pre-wrap wrap-anywhere">
           {clampedVisible ? clamped : text}
@@ -173,16 +170,6 @@ export function ReasoningBlock({
           </Button>
         )}
       </details>
-      {/* 工具条在 `<details>` 之后：窄屏退化（`position: static`）时它就是卡片下方那一行，
-          宽屏时被绝对定位吸到卡头右侧 —— DOM 顺序不随断点变，键盘 Tab 顺序才稳定。
-          两组按钮（消息工具栏 + 复制思考）同排：`.reasoning-actions` 只负责排布，
-          显隐在 MessageActions 里（hover / focus-within / 触屏常显）。 */}
-      {(actions !== undefined || reasoningActions.length > 0) && (
-        <div className="reasoning-actions">
-          {actions}
-          {reasoningActions.length > 0 && <MessageActions actions={reasoningActions} />}
-        </div>
-      )}
     </div>
   );
 }

@@ -179,10 +179,6 @@
 }
 
 .msg-assistant {
-  /* 定位上下文：消息工具栏是绝对定位覆盖层（`.msg-actions` / `.reasoning-actions`），
-     不参与高度计算 —— 这是「hover 出现时正文不位移」的前提。只加 position，
-     盒模型不动。 */
-  position: relative;
   padding: 0 2px;
 }
 
@@ -263,73 +259,17 @@
   overflow-wrap: anywhere;
 }
 
-/* ── 助手消息的工具栏：贴卡片右侧，**不占垂直空间** ─────────────────────
+/* ── 助手消息的工具栏：正文**下方一行、右对齐** ─────────────────────────
 
-   以前工具栏是正文**下面一行**（`MessageActions` 自带 `mt-1`）：那一行即使
-   opacity: 0 也占着高度，而且它是正文末尾的一个兄弟节点 —— hover 出现/消失时
-   整段内容的可用高度跟着变。现在改成**绝对定位覆盖层**：只切 opacity
-   （显隐规则仍在 `components/ui/MessageActions.tsx`：hover / `focus-within` /
-   触屏常显；键盘 Tab 到按钮时 `focus-within` 已经能让整组显现，所以这里不需要
-   再补一套 hover-only 的规则，也就不必改那个公共组件），位置不参与布局，
-   所以「出现」只可能盖住东西，不可能推挤内容。
+   位置回到旧形态：`MessageActions` 就是正文末尾的一个兄弟节点（`mt-1 ml-auto` 由
+   调用方给，见 `StreamItems.tsx` 的 `AssistantText` 与 `Transcript.tsx`），**没有任何
+   定位覆盖层**。因此这里不需要任何规则 —— `hover` / `focus-within` / 触屏常显的显隐
+   全在 `components/ui/MessageActions.tsx` 里，别在这里再写一套。
 
-   锚点有两处，规则只有一条 —— **一个 run 只挂一处，优先贴思考卡**：
-   - 有思考卡 → `.reasoning-actions`，锚在思考卡右上角（`.reasoning-wrap`）。
-     那里是卡头右侧的留白，正是用户要的「工具栏在思考过程卡片右侧」。这一组里既有
-     这一段的消息工具栏（复制正文 / 重试 / 时间），也有卡片自己的「复制思考」。
-   - 没有思考卡（纯正文 run） → `.msg-actions`，锚在 `.msg-assistant` 右上角：
-     有发言人名时落在标题行右侧，没有时落在正文第一行右侧。这是**唯一**需要
-     一层底色的地方（它在正文之上）：底色用页面背景 `--bg`，避免和字糊在一起。
-     明确的代价：hover 期间会遮住第一行末尾一小段（松开即复原）—— 换来的是
-     「不占高度、不位移」。有思考卡时不会发生这件事。
-
-   「有没有思考卡」的判据**只有一份**（`ReasoningBlock.tsx` 的 `hasReasoningCard`）：
-   live 侧按 run 的 item 流汇总（`TranscriptWindow` 的 `bodyToolbarKeys`），历史侧按
-   这条消息自己的思考文本；两边都过了同一个门槛，工具栏归属不会一边贴卡、一边贴正文。
-
-   窄屏（≤1023px，与 layout.css / teams.css 同一个断点）：右上角没有富余的横向
-   空间，退化成**今天的位置**（卡片 / 正文下方一行、右对齐）。这一行的高度是恒定的
-   （只有 opacity 在变），因此仍然不位移、也不与正文重叠 —— 退化的取舍是
-   「常备一行高度」换「不遮字」，触屏（pointer-coarse）本来就常显，正好也在这条路径上。 */
-
-.msg-actions {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-end: 0;
-  z-index: 1;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-}
-
-.reasoning-wrap {
-  position: relative;
-}
-
-.reasoning-actions {
-  position: absolute;
-  inset-block-start: var(--space-1);
-  inset-inline-end: var(--space-2);
-  z-index: 1;
-  /* 一组「消息工具栏」+ 一组「复制思考」并排：本类只管排布，显隐仍在
-     `MessageActions`（hover / `focus-within` / 触屏常显）。绝对定位 ⇒ 仍在布局之外，
-     两组的出现 / 消失都不推挤卡片与正文。 */
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-@media (max-width: 1023px) {
-  .msg-actions,
-  .reasoning-actions {
-    position: static;
-    display: flex;
-    justify-content: flex-end;
-    padding: 0 var(--space-1) var(--space-1);
-    background: none;
-  }
-}
+   明确的取舍（与「贴右侧覆盖层」相反）：这一行即使 `opacity: 0` 也占着高度，所以
+   hover 出现 / 消失时内容区的可用高度会变；换来的是**永不遮挡正文**，也没有
+   「右上角要留一层底色盖住字」的问题。思考卡上不挂工具栏，卡头只有一个独立的
+   「复制思考」小按钮（见 `ReasoningBlock.tsx` 的 summary）。 */
 
 /* ── 消息入场 + 长消息折叠（会话页 / 团队页共用同一套 class） ──────────
 
