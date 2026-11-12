@@ -18,30 +18,27 @@
 import { dirname } from 'node:path';
 import { createInterface } from 'node:readline';
 import {
-  buildRecords,
-  cutoffFor,
   type LeaderboardResult,
   type LogsParams,
   type LogsRangeInput,
   type LogsResult,
-  leaderboard,
-  listLogs,
   resolveLogsRange,
   type SourceCoverage,
   type SummaryResult,
-  summarize,
-  type UsageRecord,
 } from './aggregate.js';
-import { EventStore, isRecord, parseSettings, type Settings } from './store.js';
+import { isRecord, parseSettings, type Settings } from './store.js';
+import type { UsageQuery, UsageResult } from './query.js';
+import { WorkerQueryClient } from './worker-client.js';
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_LOG_LIMIT = 50;
 const MAX_LOG_LIMIT = 500;
 const MAX_DAYS = 3650;
 
-const store = new EventStore();
+const queries = new WorkerQueryClient();
 let settings: Settings = { prices: {} };
 let dataDir: string | undefined;
+let previousDir: string | undefined;
 let activated = false;
 let exitScheduled = false;
 
@@ -121,41 +118,30 @@ function parseStatus(value: unknown): 'ok' | 'failed' | undefined {
 }
 
 /**
- * Read the trace and fold it into records.
+ * Ask the worker (or, when there is none, this thread) for one answer.
  *
- * `range.cutoff` is the lower bound of the selected range (`cutoffFor`); it goes
- * into the *reader* so the disk window follows the selected range instead of the
- * read budget alone. `range.until` is only an ordering hint for the reader (the
- * per-record `[since, until)` filter lives in `listLogs`). `undefined` = no
- * range (whole directory, budget-bounded), which is what "All time" asks for.
+ * Everything heavy - reading session logs, folding records, aggregating, the
+ * persistent index - happens in worker.ts; the main thread only validates the
+ * parameters and hands the request over. The fallback path exists for embedders
+ * that cannot spawn a worker and is the same QueryRuntime code, so the numbers
+ * cannot differ between the two paths, only the latency.
  */
-async function loadSnapshot(range: {
-  cutoff?: number;
-  until?: number;
-} = {}): Promise<{
-  records: UsageRecord[];
-  source: SourceCoverage;
-}> {
+async function answer(query: UsageQuery): Promise<{ result: UsageResult; source: SourceCoverage }> {
   if (dataDir === undefined) throw new RpcError(-32000, 'plugin is not activated');
-  const loaded = await store.loadEvents(dataDir, range);
-  return {
-    records: buildRecords(loaded.events, settings),
-    source: {
-      truncated: loaded.truncated,
-      files_truncated: loaded.files_truncated,
-      partial_files: loaded.partial_files,
-      files_read: loaded.files_covered,
-      files_in_window: loaded.files_in_window,
-      files_total: loaded.files_total,
-    },
-  };
+  const answer = await queries.query(query, { dataDir, settings });
+  const source: SourceCoverage = { ...answer.outcome.source, worker: answer.worker };
+  return { result: answer.outcome.result, source };
 }
 
 async function handleSummary(params: Record<string, unknown>): Promise<SummaryResult> {
   const days = parseOptionalDays(params.days);
-  const now = Date.now();
-  const snapshot = await loadSnapshot({ cutoff: cutoffFor(now, days) });
-  return { ...summarize(snapshot.records, now, days), source: snapshot.source };
+  const { result, source } = await answer({
+    kind: 'summary',
+    now: Date.now(),
+    ...(days !== undefined ? { days } : {}),
+  });
+  if (result.kind !== 'summary') throw new RpcError(-32603, 'unexpected worker answer');
+  return { ...result.dto, source };
 }
 
 function parseOptionalEpoch(value: unknown, name: string): number | undefined {
@@ -199,15 +185,25 @@ async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> 
     ...(range.since !== undefined ? { since: range.since } : {}),
     ...(range.until !== undefined ? { until: range.until } : {}),
   };
-  const snapshot = await loadSnapshot({ cutoff: range.cutoff, until: range.until });
-  return { ...listLogs(snapshot.records, logsParams), source: snapshot.source };
+  const { result, source } = await answer({
+    kind: 'logs',
+    params: logsParams,
+    ...(range.cutoff !== undefined ? { cutoff: range.cutoff } : {}),
+    ...(range.until !== undefined ? { until: range.until } : {}),
+  });
+  if (result.kind !== 'logs') throw new RpcError(-32603, 'unexpected worker answer');
+  return { ...result.dto, source };
 }
 
 async function handleLeaderboard(params: Record<string, unknown>): Promise<LeaderboardResult> {
   const days = parseOptionalDays(params.days);
-  const now = Date.now();
-  const snapshot = await loadSnapshot({ cutoff: cutoffFor(now, days) });
-  return { ...leaderboard(snapshot.records, now, days), source: snapshot.source };
+  const { result, source } = await answer({
+    kind: 'leaderboard',
+    now: Date.now(),
+    ...(days !== undefined ? { days } : {}),
+  });
+  if (result.kind !== 'leaderboard') throw new RpcError(-32603, 'unexpected worker answer');
+  return { ...result.dto, source };
 }
 
 async function handleRpc(params: unknown): Promise<unknown> {
@@ -247,7 +243,12 @@ async function activate(params: Record<string, unknown>): Promise<Record<string,
   settings = parsed.settings;
   dataDir = dir;
   activated = true;
-  store.reset();
+  // A different data dir means different logs and a different index: drop the
+  // worker (its store and memo describe the old directory) and let the next
+  // query start a fresh one.
+  void queries.terminate();
+  if (previousDir !== dir) queries.fallback.reset();
+  previousDir = dir;
   log(`activated with ${Object.keys(settings.prices).length} price entries`);
   return { ok: true };
 }
@@ -275,7 +276,9 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       return { ok: true };
     case 'plugin.deactivate':
       activated = false;
-      store.reset();
+      // The worker (and with it every cache) goes away with the plugin.
+      await queries.terminate();
+      queries.fallback.reset();
       return { ok: true };
     case 'plugin.rpc':
       return handleRpc(params);
@@ -350,8 +353,7 @@ function main(): void {
 
   const stop = (): void => {
     activated = false;
-    store.reset();
-    process.exit(0);
+    void queries.terminate().finally(() => process.exit(0));
   };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);

@@ -1,18 +1,18 @@
 /**
  * Persisted event reader for the Usage plugin.
  *
- * Source of truth is the trace written by the host in the single root layout:
- * `<dataDir>/events/<run>.jsonl`. 0.49 T5 removed the pre-migration legacy
- * layout (`<dataDir>/tenants/<tenant>/events/<run>.jsonl`); this module no
- * longer reads it. This module is read-only; it never creates, appends, or
- * deletes files.
+ * Source of truth is the **session event log** the host writes per session:
+ * `<dataDir>/sessions/<sessionId>/events.ndjson`. It replaced the per-run trace
+ * (`<dataDir>/events/<run>.jsonl`) for usage: the trace carried every prompt,
+ * tool payload and stream chunk (the reference directory was 1.09 GiB over 638
+ * runs), while the session log keeps the same `llm.request` / `llm.response` /
+ * `run.completed` / `run.failed` events for 124 MiB over 134 sessions. Usage is
+ * therefore **not** computed from the trace any more: the two sources are not
+ * merged, the trace simply stopped being a usage input.
  *
- * Reading is **incremental**. A live run appends to its trace file every turn,
- * so re-reading whole files on every RPC (the 0.50 behaviour) got slower the
- * longer the log lived: the reference events directory is past 1 GiB with
- * single files up to ~90 MB, and one page open re-read and re-parsed all of it.
- * Each cached file now remembers the byte offset just past the last *complete*
- * line it consumed, and a later call reads only `[offset, size)`:
+ * Reading is **incremental**. Both logs are append-only NDJSON: each file
+ * remembers the byte offset just past the last *complete* line it consumed, and
+ * a later call reads only `[offset, size)`:
  *
  * - every line is parsed exactly once. The offset only ever advances to the end
  *   of a complete line, so no line is parsed twice and no half line is parsed;
@@ -20,17 +20,22 @@
  *   the next call. Nothing is buffered, so nothing can be lost or duplicated;
  * - a file that shrank (`size < cached size`) was truncated or rotated: its
  *   entry is dropped and the file is read from the top again;
- * - a file that vanished (`trace.prune`) drops its entry;
+ * - a file that vanished (session deleted) drops its entry;
  * - an unchanged cached file costs **zero bytes and zero parse** — that is the
  *   steady state for a re-render, pagination, or a second tab.
  *
+ * Only the four event types usage needs are kept, and each is projected down to
+ * the handful of fields the aggregate reads (`projectEventData`): a session log
+ * stores message bodies, tool arguments and run output, none of which belong in
+ * a usage record, and keeping them would re-inflate memory for nothing.
+ *
  * The **day window** decides which files matter; the byte/file budgets are only
  * a safety valve *inside* it. `loadEvents(dir, { cutoff })` considers only the
- * trace files whose mtime is at or after `cutoff` (a run file's mtime is its
- * last append, i.e. the end of the run, so every event in it is older than that
- * instant), and then filters the events themselves by `ts >= cutoff`. Without a
- * cutoff the whole directory is considered — that is the pre-window behaviour,
- * where the budget alone decides coverage.
+ * session logs whose mtime is at or after `cutoff`, and then filters the events
+ * themselves by `ts >= cutoff`. A session file is not a run file: a long session
+ * spans days, so the file-level mtime test is only a coarse sieve — the
+ * event-level filter (and, for `until`, `peekFirstTs`) is what makes the range
+ * correct.
  *
  * Inside the window, files are visited newest-mtime first and one call is
  * bounded by a byte budget and a file budget (constants below). A call that runs
@@ -50,8 +55,8 @@
  * @module @vessel-agent/plugin-usage
  */
 
-import { open, readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { type Dirent, mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { resolveSingleTenantPaths } from '@vessel-agent/core';
 
 /** Settings handed to the plugin in `plugin.activate`. */
@@ -85,6 +90,40 @@ export interface RawEvent {
 }
 
 /**
+ * One run's usage, aggregated from its request records.
+ *
+ * This is the shape the persistent index stores (`usage/index.ndjson`, one line
+ * per run) and the shape `summary` / `leaderboard` aggregate over: run-level
+ * totals are all those two pages need, and reading one small line per run beats
+ * re-reading session logs. `logs` still works from the per-request records,
+ * because a request row cannot be reconstructed from a run total.
+ *
+ * `ts_start` / `ts_end` are the first and last record of the run. A range filter
+ * uses `ts_end` — the instant the run finished — so a run that straddles
+ * midnight counts on the day it ended (see `filterRunsByDays` for why that is
+ * the only day-bucketing a run-level index can do).
+ */
+export interface RunSummary {
+  run_id: string;
+  session_id?: string;
+  model: string;
+  ts_start: number;
+  ts_end: number;
+  /** Answered requests (`llm.response` records). */
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  /** Priced requests only; absent when nothing in the run had a price. */
+  cost?: number;
+  /** Requests in this run whose model has no configured price. */
+  unpriced_requests: number;
+  /** The run ended in `run.failed`. */
+  status: 'ok' | 'failed';
+}
+
+/**
  * Which slice of the trace a call should look at.
  *
  * `cutoff` is the start of the selected range (`daysCutoff(now, days)`, or an
@@ -101,8 +140,9 @@ export interface RawEvent {
  * around the end of the requested interval. The record-level `[since, until)`
  * filter lives in `listLogs` (`aggregate.ts`).
  *
- * Either bound makes the call "range-bounded", which is what selects the larger
- * window budget (see `WINDOW_BUDGET_BYTES`).
+ * Either bound makes the call "range-bounded". The shipped limits no longer cap
+ * I/O at all (see `ReadLimits`), so a range is read whole and the range is the
+ * only thing that decides coverage.
  */
 export interface LoadOptions {
   cutoff?: number;
@@ -154,80 +194,71 @@ export interface LoadResult {
    * `FIRST_LINE_BYTES` per file and never come out of the read budget.
    */
   bytes_read: number;
+  /** First-line peeks performed by this call (0 unless `until` ruled files out). */
+  peeks: number;
 }
 
 /**
- * Event types this plugin folds into usage records (`buildRecords` reads no
- * other type). Everything else on the trace — `context.changed`, `hook.*`,
- * `tool.call.*`, `run.checkpoint` — is dropped while parsing: those lines are
- * the bulk of a trace (one `context.changed` can carry a whole prompt, and
- * lines up to ~180 KB were measured), and keeping them only inflates memory.
- * The set mirrors `vessel.contributes.events` in this plugin's package.json.
+ * Event types this plugin folds into usage records (`buildRecords`) plus the two
+ * run-level events the index/validation needs. Everything else in a session log
+ * — `tool.call.*`, `llm.stream.*`, `message.injected`, `user.message`,
+ * `run.started`, … — is dropped while parsing: tool calls alone are ~19k lines
+ * per reference directory and carry arguments/output we never bill for.
+ *
+ * `run.completed` is **not** turned into a request record (that would double
+ * count retries against the `llm.request`/`llm.response` pairing); it is kept so
+ * the reader can validate a run's paired total against the host's own
+ * `run.completed.usage` and so the index can record a run that never produced a
+ * response.
  */
 export const USAGE_EVENT_TYPES: ReadonlySet<string> = new Set([
   'llm.request',
   'llm.response',
+  'run.completed',
   'run.failed',
 ]);
 
 /**
- * One call may read this much from disk **when a day window is selected**.
+ * Per-type whitelist of `data` fields kept in memory.
  *
- * A selected range means "the real total for these N days", so the budget must
- * be large enough to hold that range instead of silently shrinking the numbers
- * (a total that quietly covers 43 of 176 runs of the last day is a lie the user
- * cannot see). The reference directory's last day is 180 files / 75 MiB on disk,
- * which bills 65.1 MiB at the 2 MiB per-file cap and reads complete in 270 ms —
- * a first estimate of 64 MiB was 1 MiB short of that, so the budget is the same
- * 96 MiB as the retention cap (`maxRetainedBytesTotal`): read at most 96 MiB,
- * retain at most 96 MiB, one number for both.
- *
- * The cap is still a cap: a range that does not fit (7 days there is 1093 MiB,
- * and a *today* window is open-ended — it grows until midnight) stays an honest
- * truncation, `files_truncated` is set, and the UI says "the newest N of M run
- * files in this range".
- *
- * The no-window path (`days` absent = "all time") keeps `maxBytesPerCall`
- * (16 MiB) instead: that is the whole history, which is unbounded by nature and
- * is expected to be a newest-first sample.
+ * A session log stores what the model said, which tools ran and each run's final
+ * output; none of that belongs to a usage record. Projecting the payload down to
+ * these keys is what keeps ~124 MiB of session logs from becoming ~124 MiB of
+ * heap (the aggregate reads exactly these fields, and the index adds nothing).
+ * Anything not listed is dropped at parse time and never retained.
  */
-export const WINDOW_BUDGET_BYTES = 96 * 1024 * 1024;
+const EVENT_DATA_FIELDS: Record<string, readonly string[]> = {
+  'llm.request': ['run_id', 'session_id', 'model', 'estimated_tokens', 'context_max', 'attempt'],
+  'llm.response': ['run_id', 'session_id', 'usage'],
+  'run.completed': ['run_id', 'session_id', 'usage', 'duration_ms', 'iterations'],
+  'run.failed': ['run_id', 'session_id', 'error', 'error_code', 'duration_ms'],
+};
+
 
 /**
  * Read budget and retention caps.
  *
- * `maxBytesPerCall` (16 MiB) is the whole I/O a single RPC may do when no day
- * window is selected ("all time", and the Logs page). The reference directory is
- * ~1.09 GiB / 210k lines; reading it whole measured 6.3 s (and 14.9 s once the
- * file cache was cold), while a 16 MiB first call measured ~0.37 s and covered
- * 49 of 614 run files (1.7k events). 16 MiB is the top of the 8–16 MiB range
- * because trace lines are large in practice — `llm.request` averages ~7.7 KB and
- * one `context.changed` can be 180 KB.
+ * Two kinds of limit live here and they exist for different reasons:
  *
- * `maxBytesPerWindowCall` (`WINDOW_BUDGET_BYTES`, 96 MiB) replaces it when a day
- * window is selected; see that constant for why.
- *
- * `maxBytesPerFile` (2 MiB) is what a single trace file may contribute per
- * call, so one outsized run cannot eat the whole window; a bigger file is read
- * from its newest 2 MiB (head dropped, flagged as partial). Subsequent appends
- * to it are still read incrementally, so only pre-existing history is lost. On
- * the reference directory 11 of last day's 180 run files exceeded 2 MiB and are
- * reported through `partial_files`.
- *
- * `maxFilesPerCall` (256) bounds per-call `stat`/parse bookkeeping for
- * directories made of thousands of tiny traces.
- *
- * `maxRetainedBytesPerFile` (4 MiB) and `maxRetainedBytesTotal` (96 MiB) bound
- * memory, and they must clear the read budget or "complete" would be an
- * illusion: reading 96 MiB and retaining only 32 MiB would evict part of the
- * very window that was just read, and the next render would re-read it (or
- * report fewer runs). Retained bytes are *usage* trace bytes only (non-usage
- * types are never retained — see `USAGE_EVENT_TYPES`), so a full window retains
- * appreciably less than it reads: last day's 65.1 MiB read retained 29.9 MiB
- * across 180 files and cost +50 MiB of heap. Worst case heap is ~0.2–0.3 GiB
- * (parsed objects are roughly 2–3× the retained bytes), bounded by the total cap
- * rather than by the number of runs on disk; before the window work it was
- * ~64–96 MiB with a 32 MiB cap.
+ * - **I/O gates** (`maxBytesPerCall` / `maxBytesPerWindowCall` / `maxBytesPerFile`
+ *   / `maxFilesPerCall`) existed to protect the host's event loop: reading and
+ *   parsing a corpus on the main thread blocks everything, so a call had to be
+ *   cut short and the shortfall reported. The reader now runs in a worker thread
+ *   (`worker.ts`), so a slow read no longer blocks anything and the gates are
+ *   **switched off** (`Infinity`): the totals must be complete, and "the newest N
+ *   of M files" is no longer an acceptable answer for a range the user asked for.
+ *   The mechanism is kept because it is also the honest fallback: a small
+ *   injection (probe, or an embedder that really must bound I/O) still truncates
+ *   and still says so.
+ * - **Memory gates** (`maxRetainedBytesPerFile` / `maxRetainedBytesTotal` /
+ *   `maxCachedFiles`) are a real limit that cannot be waved away. Retained bytes
+ *   are raw *usage-event* line bytes only — every other event type and every heavy
+ *   field (message bodies, tool arguments, run output) is dropped at parse time
+ *   (`EVENT_DATA_FIELDS`) — so the reference corpus reads 125 MiB but retains
+ *   46.8 MiB across 134 sessions (28.7k events). When a corpus does exceed the
+ *   total, whole files are evicted LRU-style and the ones that leave the current
+ *   result are reported as `partial_files`: the memory bound is real, and the
+ *   numbers say when it bit.
  */
 export interface ReadLimits {
   maxBytesPerCall: number;
@@ -240,13 +271,16 @@ export interface ReadLimits {
 }
 
 export const DEFAULT_LIMITS: ReadLimits = {
-  maxBytesPerCall: 16 * 1024 * 1024,
-  maxBytesPerWindowCall: WINDOW_BUDGET_BYTES,
-  maxBytesPerFile: 2 * 1024 * 1024,
-  maxFilesPerCall: 256,
-  maxRetainedBytesPerFile: 4 * 1024 * 1024,
-  maxRetainedBytesTotal: 96 * 1024 * 1024,
-  maxCachedFiles: 256,
+  // No I/O gates: the reader runs off the event loop (see above).
+  maxBytesPerCall: Number.POSITIVE_INFINITY,
+  maxBytesPerWindowCall: Number.POSITIVE_INFINITY,
+  maxBytesPerFile: Number.POSITIVE_INFINITY,
+  maxFilesPerCall: Number.POSITIVE_INFINITY,
+  // Memory gates stay: 192 MiB of retained usage-event bytes (~0.4-0.6 GiB heap
+  // at 2-3x), 32 MiB per file so one runaway session cannot take the whole cap.
+  maxRetainedBytesPerFile: 32 * 1024 * 1024,
+  maxRetainedBytesTotal: 192 * 1024 * 1024,
+  maxCachedFiles: 1024,
 };
 
 /** One trace file as listed on disk in a single call. */
@@ -391,6 +425,22 @@ export function parseSettings(raw: unknown): ParsedSettings {
   };
 }
 
+/**
+ * Project an event's `data` down to the fields usage reads (see
+ * `EVENT_DATA_FIELDS`). Unknown types are dropped by the caller before this runs,
+ * so a missing entry means "keep nothing".
+ */
+function projectEventData(type: string, data: Record<string, unknown>): Record<string, unknown> {
+  const fields = EVENT_DATA_FIELDS[type];
+  if (fields === undefined) return {};
+  const kept: Record<string, unknown> = {};
+  for (const field of fields) {
+    const value = data[field];
+    if (value !== undefined) kept[field] = value;
+  }
+  return kept;
+}
+
 function parseLine(line: string, lineNumber: number): RawEvent | undefined {
   if (line.trim() === '') return undefined;
   let parsed: unknown;
@@ -420,11 +470,15 @@ function parseLine(line: string, lineNumber: number): RawEvent | undefined {
     run_id: runId,
     line: lineNumber,
     ...(seq !== undefined ? { seq } : {}),
-    data,
+    data: projectEventData(parsed.type, data),
   };
 }
 
 const NEWLINE = 0x0a;
+
+/** The per-session log file inside `<dataDir>/sessions/<sessionId>/`. */
+const SESSION_LOG = 'events.ndjson';
+
 
 /** How many bytes of a file's top are read to find its first event. */
 const FIRST_LINE_BYTES = 8 * 1024;
@@ -563,6 +617,7 @@ function emptyResult(filesTotal = 0): LoadResult {
     files_in_window: 0,
     files_covered: 0,
     bytes_read: 0,
+    peeks: 0,
   };
 }
 
@@ -615,7 +670,7 @@ export class EventStore {
     // Either bound means the caller asked for a *range*, which is what selects
     // the larger window budget (a range is a "real total", not a sample).
     const bounded = cutoff !== undefined || until !== undefined;
-    const dir = resolveSingleTenantPaths(dataDir).events_dir;
+    const dir = resolveSingleTenantPaths(dataDir).sessions_dir;
     const files = await this.list(dir);
     if (files.length === 0) {
       this.cache.clear();
@@ -680,10 +735,19 @@ export class EventStore {
     // billing above when files grew since the previous call, and that growth
     // must not become an unbounded read.
     let bytesRead = 0;
+    let peeks = this.peeks;
     for (const file of window) {
       const remaining = budget - bytesRead;
       if (remaining <= 0) break;
       bytesRead += await this.refresh(file, remaining);
+    }
+    // Files that were read and then evicted by the LRU caps are a *partial* view
+    // of a file we did read, not a file we failed to read: the memory bound is a
+    // real limit, so it must show up as `partial_files` instead of pretending the
+    // file never existed. Anything else missing from the cache was unreadable.
+    const readThisCall = new Set<string>();
+    for (const file of window) {
+      if (this.cache.has(file.path)) readThisCall.add(file.path);
     }
 
     this.evict();
@@ -694,8 +758,8 @@ export class EventStore {
     for (const file of window) {
       const entry = this.cache.get(file.path);
       if (entry === undefined) {
-        // Unreadable this call (vanished, locked): the view is incomplete.
-        unreadable += 1;
+        if (readThisCall.has(file.path)) partialFiles += 1;
+        else unreadable += 1;
         continue;
       }
       if (entry.partial) partialFiles += 1;
@@ -715,6 +779,7 @@ export class EventStore {
       files_in_window: inWindow.length,
       files_covered: window.length,
       bytes_read: bytesRead,
+      peeks: this.peeks - peeks,
     };
   }
 
@@ -921,39 +986,292 @@ export class EventStore {
     }
   }
 
-  /** List `<dir>/*.jsonl`, newest mtime first (name as a stable tie-break). */
+  /**
+   * List the session logs, newest mtime first (name as a stable tie-break).
+   *
+   * Delegates to `listSessionFiles` so the reader and the index fingerprint see
+   * exactly the same file set, then forgets cache entries for files that are
+   * gone (a deleted session).
+   */
   private async list(dir: string): Promise<FileInfo[]> {
-    let names: string[];
-    try {
-      names = await readdir(dir);
-    } catch {
-      return [];
+    const files = await listSessionFiles(dir);
+    const onDisk = new Set(files.map((file) => file.path));
+    for (const path of [...this.cache.keys()]) {
+      if (!onDisk.has(path)) this.cache.delete(path);
     }
-
-    const candidates = names.filter((name) => name.endsWith('.jsonl') && !name.startsWith('.'));
-    const files: FileInfo[] = [];
-    // One `stat` per file is the dominant cost of a warm call on Windows
-    // (~0.3 ms each over 600 files), so walk the list in small parallel batches
-    // instead of awaiting one file at a time.
-    for (let index = 0; index < candidates.length; index += STAT_BATCH) {
-      const batch = candidates.slice(index, index + STAT_BATCH);
-      const infos = await Promise.all(
-        batch.map(async (name): Promise<FileInfo | undefined> => {
-          const path = join(dir, name);
-          try {
-            const info = await stat(path);
-            if (!info.isFile()) return undefined;
-            return { path, name, size: info.size, mtimeMs: info.mtimeMs };
-          } catch {
-            // Deleted between readdir and stat: forget it.
-            this.cache.delete(path);
-            return undefined;
-          }
-        }),
-      );
-      for (const info of infos) if (info !== undefined) files.push(info);
+    for (const path of [...this.firstTs.keys()]) {
+      if (!onDisk.has(path)) this.firstTs.delete(path);
     }
-    files.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
     return files;
   }
+}
+
+/**
+ * List `<sessionsDir>/<sessionId>/events.ndjson`, newest mtime first.
+ *
+ * One level deeper than the old trace directory: a session owns one file, not a
+ * run. `<sessionId>.json` (the session index) and every other entry are ignored
+ * — usage never reads session metadata.
+ */
+async function listSessionFiles(dir: string): Promise<FileInfo[]> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const names = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name);
+  const files: FileInfo[] = [];
+  // One `stat` per session is the dominant cost of a warm call on Windows
+  // (~0.3 ms each), so walk the list in small parallel batches instead of
+  // awaiting one file at a time.
+  for (let index = 0; index < names.length; index += STAT_BATCH) {
+    const batch = names.slice(index, index + STAT_BATCH);
+    const infos = await Promise.all(
+      batch.map(async (name): Promise<FileInfo | undefined> => {
+        const path = join(dir, name, SESSION_LOG);
+        try {
+          const info = await stat(path);
+          if (!info.isFile()) return undefined;
+          return { path, name, size: info.size, mtimeMs: info.mtimeMs };
+        } catch {
+          // Deleted between readdir and stat: forget it.
+          return undefined;
+        }
+      }),
+    );
+    for (const info of infos) if (info !== undefined) files.push(info);
+  }
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
+  return files;
+}
+
+// ── persistent usage index ──────────────────────────────────────────────────
+
+/**
+ * Format version of `usage/index.ndjson`. Bumping it makes every existing index
+ * stale, which is the intended upgrade path: the file is a cache, so the reader
+ * rebuilds it from the session logs instead of trying to migrate it.
+ */
+export const USAGE_INDEX_VERSION = 1;
+
+const USAGE_INDEX_DIR = 'usage';
+const USAGE_INDEX_NAME = 'index.ndjson';
+const INDEX_HEADER_KIND = 'index';
+const INDEX_ENTRY_KIND = 'run';
+
+/** Cheap fingerprint of the session logs an index was built from. */
+export interface IndexSources {
+  files: number;
+  bytes: number;
+  max_mtime: number;
+}
+
+/**
+ * Staleness check for a persisted index: `files:bytes:max_mtime`.
+ *
+ * One `stat` sweep produces it, so a reader can decide whether the index still
+ * describes the session logs on disk without parsing a single event. Any change
+ * to any session (append, new session, deleted session) changes it, and a changed
+ * fingerprint only ever costs a rebuild — the logs stay the truth.
+ */
+export function sourceSignature(sources: IndexSources): string {
+  return `${sources.files}:${sources.bytes}:${sources.max_mtime}`;
+}
+
+export interface IndexHeader {
+  kind: typeof INDEX_HEADER_KIND;
+  v: number;
+  generated_at: number;
+  runs: number;
+  sources: IndexSources;
+}
+
+export interface UsageIndex {
+  header: IndexHeader;
+  runs: RunSummary[];
+}
+
+/** The plugin's own subdirectory: `<dataDir>/usage/index.ndjson`. */
+export function usageIndexPath(dataDir: string): string {
+  return join(resolveSingleTenantPaths(dataDir).root, USAGE_INDEX_DIR, USAGE_INDEX_NAME);
+}
+
+/**
+ * Write `text` to `path` atomically: temp file in the same directory, fsync,
+ * then a rename over the target.
+ *
+ * Rename is the only atomic step, so a reader either sees the previous file or
+ * the new one, never a half-written index. Two processes writing at once both
+ * rename successfully and the loser's content is simply replaced — the index is
+ * derived data, so the cost of losing that race is one rebuild, never a wrong
+ * answer. (Core has its own helper; a plugin may not import internals, and this
+ * is the ~30 lines it takes.)
+ */
+async function writeFileAtomic(path: string, text: string): Promise<void> {
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  const handle = await open(temporary, 'w');
+  try {
+    await handle.writeFile(text, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+/**
+ * Persist one line per run plus a header carrying the format version, the build
+ * time and the source fingerprint the index was derived from.
+ *
+ * Callers must **not** write an index built from a truncated read: a partial
+ * index would then look authoritative on every later call. The fingerprint is
+ * what makes staleness detectable without re-reading a single event.
+ */
+export async function writeUsageIndex(
+  dataDir: string,
+  runs: RunSummary[],
+  sources: IndexSources,
+): Promise<void> {
+  const path = usageIndexPath(dataDir);
+  await mkdir(dirname(path), { recursive: true });
+  const header: IndexHeader = {
+    kind: INDEX_HEADER_KIND,
+    v: USAGE_INDEX_VERSION,
+    generated_at: Date.now(),
+    runs: runs.length,
+    sources,
+  };
+  const lines = [JSON.stringify(header)];
+  for (const run of runs) {
+    lines.push(JSON.stringify({ v: USAGE_INDEX_VERSION, kind: INDEX_ENTRY_KIND, ...run }));
+  }
+  await writeFileAtomic(path, `${lines.join('\n')}\n`);
+}
+
+/** One index line -> `RunSummary`; `undefined` when a required field is missing. */
+function parseIndexEntry(value: Record<string, unknown>): RunSummary | undefined {
+  const runId = value.run_id;
+  const model = value.model;
+  const tsStart = value.ts_start;
+  const tsEnd = value.ts_end;
+  const requests = value.requests;
+  const prompt = value.prompt_tokens;
+  const completion = value.completion_tokens;
+  const status = value.status;
+  if (typeof runId !== 'string' || runId === '') return undefined;
+  if (typeof model !== 'string' || model === '') return undefined;
+  if (typeof tsStart !== 'number' || typeof tsEnd !== 'number') return undefined;
+  if (typeof requests !== 'number' || typeof prompt !== 'number') return undefined;
+  if (typeof completion !== 'number') return undefined;
+  if (status !== 'ok' && status !== 'failed') return undefined;
+
+  const sessionId = value.session_id;
+  const cacheRead = value.cache_read_input_tokens;
+  const cacheWrite = value.cache_creation_input_tokens;
+  const cost = value.cost;
+  const unpriced = value.unpriced_requests;
+  return {
+    run_id: runId,
+    ...(typeof sessionId === 'string' && sessionId !== '' ? { session_id: sessionId } : {}),
+    model,
+    ts_start: tsStart,
+    ts_end: tsEnd,
+    requests,
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    ...(typeof cacheRead === 'number' ? { cache_read_input_tokens: cacheRead } : {}),
+    ...(typeof cacheWrite === 'number' ? { cache_creation_input_tokens: cacheWrite } : {}),
+    ...(typeof cost === 'number' ? { cost } : {}),
+    unpriced_requests: typeof unpriced === 'number' ? unpriced : 0,
+    status,
+  };
+}
+
+/**
+ * Read the index, or `undefined` when it is missing, unreadable, written by
+ * another format version, or corrupt.
+ *
+ * Every failure means "no index", never "no data": the caller rebuilds from the
+ * session logs (the source of truth) and overwrites the file.
+ */
+export async function readUsageIndex(dataDir: string): Promise<UsageIndex | undefined> {
+  let text: string;
+  try {
+    text = await readFile(usageIndexPath(dataDir), 'utf8');
+  } catch {
+    return undefined;
+  }
+  const lines = text.split('\n');
+  const first = lines[0];
+  if (first === undefined || first.trim() === '') return undefined;
+  let header: unknown;
+  try {
+    header = JSON.parse(first);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(header)) return undefined;
+  if (header.kind !== INDEX_HEADER_KIND) return undefined;
+  if (header.v !== USAGE_INDEX_VERSION) return undefined;
+  const sources = header.sources;
+  if (!isRecord(sources)) return undefined;
+  const files = sources.files;
+  const bytes = sources.bytes;
+  const maxMtime = sources.max_mtime;
+  const generatedAt = header.generated_at;
+  if (typeof files !== 'number' || typeof bytes !== 'number') return undefined;
+  if (typeof maxMtime !== 'number' || typeof generatedAt !== 'number') return undefined;
+
+  const runs: RunSummary[] = [];
+  for (const line of lines.slice(1)) {
+    if (line.trim() === '') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      // A torn line means a torn file: rebuild instead of serving half an index.
+      return undefined;
+    }
+    if (!isRecord(parsed) || parsed.v !== USAGE_INDEX_VERSION) return undefined;
+    const run = parseIndexEntry(parsed);
+    if (run === undefined) return undefined;
+    runs.push(run);
+  }
+  return {
+    header: {
+      kind: INDEX_HEADER_KIND,
+      v: USAGE_INDEX_VERSION,
+      generated_at: generatedAt,
+      runs: runs.length,
+      sources: { files, bytes, max_mtime: maxMtime },
+    },
+    runs,
+  };
+}
+
+/**
+ * Fingerprint the session logs without reading them: file count, total bytes and
+ * the newest mtime. One `stat` per session (~0.3 ms on Windows; 134 sessions in
+ * the reference directory), and it is what lets the reader trust a persisted
+ * index without parsing a single event.
+ */
+export async function readSessionSources(dataDir: string): Promise<IndexSources> {
+  const dir = resolveSingleTenantPaths(dataDir).sessions_dir;
+  const files = await listSessionFiles(dir);
+  let bytes = 0;
+  let maxMtime = 0;
+  for (const file of files) {
+    bytes += file.size;
+    if (file.mtimeMs > maxMtime) maxMtime = file.mtimeMs;
+  }
+  return { files: files.length, bytes, max_mtime: maxMtime };
 }

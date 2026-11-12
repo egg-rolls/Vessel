@@ -20,17 +20,33 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { extname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import {
   buildRecords,
+  buildRunSummaries,
+  completedUsages,
   cutoffFor,
   daysCutoff,
   type LogsResult,
   listLogs,
+  repriceRuns,
   resolveLogsRange,
+  summarizeRuns,
 } from '../src/aggregate.js';
 import type { RawEvent, Settings } from '../src/store.js';
-import { DEFAULT_LIMITS, EventStore, USAGE_EVENT_TYPES } from '../src/store.js';
+import {
+  DEFAULT_LIMITS,
+  EventStore,
+  type IndexSources,
+  readSessionSources,
+  readUsageIndex,
+  sourceSignature,
+  USAGE_EVENT_TYPES,
+  USAGE_INDEX_VERSION,
+  usageIndexPath,
+  writeUsageIndex,
+} from '../src/store.js';
+import { WorkerQueryClient } from '../src/worker-client.js';
 import { I18N, translator } from '../web-src/i18n';
 
 const pluginRoot = resolve(import.meta.dir, '..');
@@ -390,8 +406,21 @@ function traceLine(type: string, runId: string, pad = 0): string {
 
 async function traceDir(name: string): Promise<string> {
   const root = join(scratch, name);
-  await mkdir(join(root, 'events'), { recursive: true });
+  await mkdir(join(root, 'sessions'), { recursive: true });
   return root;
+}
+
+/** The one log file a session owns: root/sessions/(sessionId)/events.ndjson. */
+function sessionFile(dir: string, name: string): string {
+  return join(dir, 'sessions', name, 'events.ndjson');
+}
+
+/** Write one session log, creating its directory. */
+async function writeSession(dir: string, name: string, text: string): Promise<string> {
+  const path = sessionFile(dir, name);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, text);
+  return path;
 }
 
 function idsOf(events: RawEvent[]): string[] {
@@ -401,9 +430,9 @@ function idsOf(events: RawEvent[]): string[] {
 // 1. Append: one new line adds one event, and nothing is parsed twice.
 {
   const dir = await traceDir('append');
-  const file = join(dir, 'events', 'run-a.jsonl');
+  const file = sessionFile(dir, 'session-a');
   const head = traceLine('llm.request', 'run-a') + traceLine('llm.response', 'run-a');
-  await writeFile(file, head);
+  await writeSession(dir, 'session-a', head);
 
   const store = new EventStore();
   const cold = await store.loadEvents(dir);
@@ -441,11 +470,11 @@ function idsOf(events: RawEvent[]): string[] {
 // 2. Half-written line: not parsed, not lost.
 {
   const dir = await traceDir('partial');
-  const file = join(dir, 'events', 'run-b.jsonl');
+  const file = sessionFile(dir, 'session-b');
   const complete = traceLine('llm.response', 'run-b');
   const torn = traceLine('llm.response', 'run-b');
   const cut = Math.floor(torn.length / 2);
-  await writeFile(file, complete + torn.slice(0, cut));
+  await writeSession(dir, 'session-b', complete + torn.slice(0, cut));
 
   const store = new EventStore();
   const half = await store.loadEvents(dir);
@@ -469,9 +498,10 @@ function idsOf(events: RawEvent[]): string[] {
 // 3. Truncate/rotate: the offset is dropped and the file is read from the top.
 {
   const dir = await traceDir('truncate');
-  const file = join(dir, 'events', 'run-c.jsonl');
-  await writeFile(
-    file,
+  const file = sessionFile(dir, 'session-c');
+  await writeSession(
+    dir,
+    'session-c',
     traceLine('llm.response', 'run-c') +
       traceLine('llm.response', 'run-c') +
       traceLine('llm.response', 'run-c'),
@@ -480,7 +510,7 @@ function idsOf(events: RawEvent[]): string[] {
   const before = await store.loadEvents(dir);
 
   const replaced = traceLine('llm.response', 'run-c');
-  await writeFile(file, replaced);
+  await writeSession(dir, 'session-c', replaced);
   const after = await store.loadEvents(dir);
   check(
     'a shrunk file is re-read from scratch',
@@ -497,8 +527,8 @@ function idsOf(events: RawEvent[]): string[] {
 // 4. Deleted file (trace pruning): cache entry dropped, no error.
 {
   const dir = await traceDir('delete');
-  const file = join(dir, 'events', 'run-d.jsonl');
-  await writeFile(file, traceLine('llm.response', 'run-d'));
+  const file = sessionFile(dir, 'session-d');
+  await writeSession(dir, 'session-d', traceLine('llm.response', 'run-d'));
   const store = new EventStore();
   const before = await store.loadEvents(dir);
 
@@ -515,14 +545,12 @@ function idsOf(events: RawEvent[]): string[] {
 // 5. Byte budget: newest files only, unchanged cached files cost nothing.
 {
   const dir = await traceDir('budget');
-  const eventsDir = join(dir, 'events');
   const names = ['run-1', 'run-2', 'run-3', 'run-4', 'run-5'];
   let fileBytes = 0;
   for (const [index, name] of names.entries()) {
     const body = traceLine('llm.response', name, 120) + traceLine('llm.response', name, 120);
     fileBytes = Buffer.byteLength(body);
-    const path = join(eventsDir, `${name}.jsonl`);
-    await writeFile(path, body);
+    const path = await writeSession(dir, name, body);
     // Distinct mtimes so "newest first" is deterministic (run-5 is newest).
     await utimes(path, new Date(FIXTURE_MTIME), new Date(FIXTURE_MTIME + index * 1_000));
   }
@@ -555,11 +583,15 @@ function idsOf(events: RawEvent[]): string[] {
 // 6. Idempotency, plus non-usage event types staying out of the cache.
 {
   const dir = await traceDir('idempotent');
-  const file = join(dir, 'events', 'run-f.jsonl');
-  await writeFile(file, traceLine('llm.request', 'run-f') + traceLine('llm.response', 'run-f', 64));
+  const file = sessionFile(dir, 'session-f');
+  await writeSession(
+    dir,
+    'session-f',
+    traceLine('llm.request', 'run-f') + traceLine('llm.response', 'run-f', 64),
+  );
   await appendFile(file, traceLine('llm.response', 'run-f'));
   await utimes(
-    join(dir, 'events', 'run-f.jsonl'),
+    file,
     new Date(FIXTURE_MTIME),
     new Date(FIXTURE_MTIME),
   );
@@ -589,11 +621,11 @@ function idsOf(events: RawEvent[]): string[] {
 // 7. Oversized file: only its newest bytes are read, and appends stay incremental.
 {
   const dir = await traceDir('oversized');
-  const file = join(dir, 'events', 'run-g.jsonl');
+  const file = sessionFile(dir, 'session-g');
   const body: string[] = [];
   for (let index = 0; index < 40; index += 1) body.push(traceLine('llm.response', 'run-g', 200));
   const text = body.join('');
-  await writeFile(file, text);
+  await writeSession(dir, 'session-g', text);
   const size = Buffer.byteLength(text);
 
   const store = new EventStore({ ...DEFAULT_LIMITS, maxBytesPerFile: 1_024 });
@@ -645,8 +677,7 @@ function lineAt(type: string, runId: string, ts: number, pad = 0): string {
 }
 
 async function writeTrace(dir: string, name: string, text: string, mtime: number): Promise<number> {
-  const path = join(dir, 'events', `${name}.jsonl`);
-  await writeFile(path, text);
+  const path = await writeSession(dir, name, text);
   await utimes(path, new Date(mtime), new Date(mtime));
   return Buffer.byteLength(text);
 }
@@ -1003,14 +1034,19 @@ function runIds(events: RawEvent[]): string[] {
   );
 
   check(
-    'the shipped retention clears the shipped window budget',
-    DEFAULT_LIMITS.maxRetainedBytesTotal >= DEFAULT_LIMITS.maxBytesPerWindowCall,
-    `${DEFAULT_LIMITS.maxRetainedBytesTotal} vs ${DEFAULT_LIMITS.maxBytesPerWindowCall}`,
+    'the shipped memory cap is finite and reported as partial reads',
+    Number.isFinite(DEFAULT_LIMITS.maxRetainedBytesTotal) &&
+      DEFAULT_LIMITS.maxRetainedBytesTotal >= 64 * 1024 * 1024 &&
+      Number.isFinite(DEFAULT_LIMITS.maxRetainedBytesPerFile),
+    `${DEFAULT_LIMITS.maxRetainedBytesTotal} / ${DEFAULT_LIMITS.maxRetainedBytesPerFile}`,
   );
   check(
-    'the shipped budgets are 96 MiB in a window, 16 MiB for all time',
-    DEFAULT_LIMITS.maxBytesPerWindowCall === 96 * 1024 * 1024 &&
-      DEFAULT_LIMITS.maxBytesPerCall === 16 * 1024 * 1024,
+    'the shipped I/O gates are off: the reader runs in a worker, so nothing truncates',
+    DEFAULT_LIMITS.maxBytesPerCall === Number.POSITIVE_INFINITY &&
+      DEFAULT_LIMITS.maxBytesPerWindowCall === Number.POSITIVE_INFINITY &&
+      DEFAULT_LIMITS.maxBytesPerFile === Number.POSITIVE_INFINITY &&
+      DEFAULT_LIMITS.maxFilesPerCall === Number.POSITIVE_INFINITY,
+    `${DEFAULT_LIMITS.maxBytesPerCall}, ${DEFAULT_LIMITS.maxFilesPerCall}`,
   );
 }
 
@@ -1267,7 +1303,7 @@ const rangeRecords = buildRecords(
   );
   check(
     'logs hands the resolved cutoff to the reader',
-    indexSource.includes('loadSnapshot({ cutoff: range.cutoff, until: range.until })'),
+    indexSource.includes('cutoff: range.cutoff') && indexSource.includes('until: range.until'),
   );
   check(
     'logs view sends either days or a custom interval',
@@ -1386,33 +1422,33 @@ const rangeRecords = buildRecords(
 //     degrade to the old behaviour instead of dropping data.
 {
   const dir = await traceDir('peek-unknown');
-  const eventsDir = join(dir, 'events');
   const after = dayStart(0) + 3_600_000;
 
   // Empty file (no lines at all).
-  const empty = join(eventsDir, 'run-empty.jsonl');
-  await writeFile(empty, '');
+  const empty = await writeSession(dir, 'sess-empty', '');
   await utimes(empty, new Date(after), new Date(after));
 
   // First line is not JSON.
-  const torn = join(eventsDir, 'run-torn.jsonl');
-  await writeFile(torn, 'not json at all\n' + lineAt('llm.response', 'run-torn', after));
+  const torn = sessionFile(dir, 'sess-torn');
+  await writeSession(dir, 'sess-torn', `not json at all\n${lineAt('llm.response', 'run-torn', after)}`);
   await utimes(torn, new Date(after), new Date(after));
 
-  // First line carries no usable `ts`.
-  const noTs = join(eventsDir, 'run-nots.jsonl');
-  await writeFile(noTs, `${JSON.stringify({ type: 'run.start', run_id: 'run-nots' })}\n`);
+  // First line carries no usable ts.
+  const noTs = sessionFile(dir, 'sess-nots');
+  const noTsBody = `${JSON.stringify({ type: 'run.start', run_id: 'run-nots' })}\n`;
+  await writeSession(dir, 'sess-nots', noTsBody);
   await utimes(noTs, new Date(after), new Date(after));
 
   // First line is longer than the peek window (one oversized line).
-  const long = join(eventsDir, 'run-long.jsonl');
-  await writeFile(long, `${JSON.stringify({ pad: 'x'.repeat(20_000), ts: after })}\n`);
+  const long = sessionFile(dir, 'sess-long');
+  const longBody = `${JSON.stringify({ pad: 'x'.repeat(20_000), ts: after })}\n`;
+  await writeSession(dir, 'sess-long', longBody);
   await utimes(long, new Date(after), new Date(after));
 
   // A late run that *is* judgeable, to prove the unjudgeable ones were kept by
   // their own verdict and not by a blanket rule.
-  const normal = join(eventsDir, 'run-normal.jsonl');
-  await writeFile(normal, lineAt('llm.response', 'run-normal', after + 60_000));
+  const normal = sessionFile(dir, 'sess-normal');
+  await writeSession(dir, 'sess-normal', lineAt('llm.response', 'run-normal', after + 60_000));
   await utimes(normal, new Date(after), new Date(after));
 
   const until = dayStart(-5);
@@ -1441,9 +1477,9 @@ const rangeRecords = buildRecords(
 {
   const dir = await traceDir('peek-cache');
   const start = dayStart(-8) + 3_600_000;
-  const file = join(dir, 'events', 'run-grow.jsonl');
+  const file = sessionFile(dir, 'sess-grow');
   const first = lineAt('llm.request', 'run-grow', start);
-  await writeFile(file, first);
+  await writeSession(dir, 'sess-grow', first);
   // A run that started 8 days ago and is *still growing*: its mtime is recent
   // (after `until`), its first event is not — the case only a peek can judge.
   const grownOnce = dayStart(0) + 3_600_000;
@@ -1515,6 +1551,414 @@ const rangeRecords = buildRecords(
     'the peek cache is not bounded by the event-cache file cap',
     first === 4 && store.firstLinePeeks === 4,
     `peeks ${first} -> ${store.firstLinePeeks}`,
+  );
+}
+
+// ── pairing, failed runs, persistent index ──────────────────────────────────
+
+/**
+ * Usage is folded from one place: the `llm.request` <-> `llm.response` pairing
+ * (`buildRecords`). `run.completed.usage` is a run-level total that a retried run
+ * would make us count twice, so it is only ever used to *check* the pairing.
+ * These fixtures pin that, plus the two things the old trace reader got wrong for
+ * Logs: a failed run must stay visible, and the persistent index must be a cache
+ * that can always be rebuilt from the session logs.
+ */
+
+/** A session log line, as the host writes it (envelope + data). */
+function sessionEvent(
+  type: string,
+  runId: string,
+  ts: number,
+  data: Record<string, unknown> = {},
+  sessionId = 'session-x',
+): string {
+  return `${JSON.stringify({
+    v: 1,
+    session_id: sessionId,
+    run_id: runId,
+    seq: 0,
+    ts,
+    type,
+    data: { run_id: runId, session_id: sessionId, ...data },
+  })}\n`;
+}
+
+const USAGE_1 = { prompt_tokens: 1_000, completion_tokens: 100, cache_read_input_tokens: 400 };
+
+// 26. Two attempts in one run: the pairing counts both, `run.completed` nothing.
+{
+  const usage = { usage: { prompt_tokens: 1_000, completion_tokens: 100, cache_read_input_tokens: 400 } };
+  const events = buildRecords(
+    [
+      // attempt 1 (paired)
+      rawEvent('llm.request', 'run-retry', BASE_TS, { model: MODEL }),
+      rawEvent('llm.response', 'run-retry', BASE_TS + 1_400, usage),
+      // attempt 2 (paired) — a retry, not a duplicate
+      rawEvent('llm.request', 'run-retry', BASE_TS + 5_000, { model: MODEL, attempt: 2 }),
+      rawEvent('llm.response', 'run-retry', BASE_TS + 6_400, usage),
+    ],
+    NO_PRICES,
+  );
+  check('two attempts produce two request records', events.length === 2, String(events.length));
+
+  const runs = repriceRuns(buildRunSummaries(events), NO_PRICES);
+  check(
+    'the run sums its attempts once',
+    runs.length === 1 && runs[0]?.requests === 2 && runs[0]?.prompt_tokens === 2_000,
+    JSON.stringify(runs.map((run) => [run.requests, run.prompt_tokens])),
+  );
+
+  // `run.completed.usage` for the same run: used for validation only.
+  const completed = completedUsages([
+    rawEvent('run.completed', 'run-retry', BASE_TS + 9_000, {
+      usage: { prompt_tokens: 2_000, completion_tokens: 200, cache_read_input_tokens: 800 },
+      duration_ms: 9_000,
+      iterations: 2,
+    }),
+  ]);
+  const reference = completed.get('run-retry');
+  check(
+    'run.completed.usage is available as a pairing check, not as a total',
+    reference?.prompt_tokens === 2_000 && reference?.completion_tokens === 200,
+    JSON.stringify(reference),
+  );
+  check(
+    'paired totals match run.completed.usage',
+    runs[0]?.prompt_tokens === reference?.prompt_tokens &&
+      runs[0]?.completion_tokens === reference?.completion_tokens &&
+      runs[0]?.cache_read_input_tokens === reference?.cache_read_input_tokens,
+    JSON.stringify([runs[0]?.prompt_tokens, runs[0]?.completion_tokens, runs[0]?.cache_read_input_tokens]),
+  );
+}
+
+// 27. A failed run has no usage, but it is a row in Logs and a `failed_runs`
+//     count in Summary — never a silent disappearance.
+{
+  const records = buildRecords(
+    [
+      ...pairAt('run-ok', BASE_TS),
+      rawEvent('llm.request', 'run-broken', BASE_TS + 1_000, { model: MODEL }),
+      rawEvent('run.failed', 'run-broken', BASE_TS + 2_000, { error: 'provider exploded' }),
+    ],
+    NO_PRICES,
+  );
+  check('a failed run becomes a record', records.length === 2, String(records.length));
+  const failedRow = records.find((record) => record.status === 'failed');
+  check(
+    'the failed record has no counters',
+    failedRow !== undefined &&
+      failedRow.prompt_tokens === undefined &&
+      failedRow.completion_tokens === undefined,
+    JSON.stringify(failedRow),
+  );
+
+  const page = listLogs(records, { limit: 10 });
+  check(
+    'the failed run is visible in Logs',
+    page.items.length === 2 && page.items.some((item) => item.status === 'failed'),
+    page.items.map((item) => item.status).join(','),
+  );
+  const failedOnly = listLogs(records, { limit: 10, status: 'failed' });
+  check(
+    'the status filter can isolate the failed run',
+    failedOnly.items.length === 1 && failedOnly.items[0]?.run_id === 'run-broken',
+    failedOnly.items.map((item) => item.run_id).join(','),
+  );
+
+  const summary = summarizeRuns(repriceRuns(buildRunSummaries(records), NO_PRICES), BASE_TS);
+  check(
+    'a failed run adds to failed_runs but not to requests',
+    summary.totals.requests === 1 && summary.totals.failed_runs === 1,
+    JSON.stringify(summary.totals),
+  );
+  check(
+    'a failed run contributes no tokens',
+    summary.totals.prompt_tokens === 1_000,
+    String(summary.totals.prompt_tokens),
+  );
+}
+
+/** The fingerprint comparison `index.ts` makes, spelled once (shared helper). */
+function sourceSignatureOf(sources: IndexSources | undefined): string {
+  return sources === undefined ? 'none' : sourceSignature(sources);
+}
+
+// 28. The index is a cache: written, read back, invalidated by version or
+//     corruption, and rebuilt (so a deleted session disappears) from the logs.
+{
+  const dir = await traceDir('usage-index');
+  await writeSession(
+    dir,
+    'session-a',
+    sessionEvent('llm.request', 'run-a', BASE_TS, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-a', BASE_TS + 1_400, { usage: USAGE_1 }),
+  );
+  await writeSession(
+    dir,
+    'session-b',
+    sessionEvent('llm.request', 'run-b', BASE_TS + 60_000, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-b', BASE_TS + 61_400, { usage: USAGE_1 }),
+  );
+
+  const build = async () => {
+    const store = new EventStore();
+    const loaded = await store.loadEvents(dir);
+    const runs = repriceRuns(buildRunSummaries(buildRecords(loaded.events, NO_PRICES)), NO_PRICES);
+    const sources = await readSessionSources(dir);
+    return { loaded, runs, sources };
+  };
+
+  const first = await build();
+  check(
+    'the index build covers every session',
+    first.loaded.files_covered === 2 && first.runs.length === 2 && first.sources.files === 2,
+    `${first.loaded.files_covered} sessions, ${first.runs.length} runs`,
+  );
+  await writeUsageIndex(dir, first.runs, first.sources);
+
+  const readBack = await readUsageIndex(dir);
+  check(
+    'the index reads back with its version, header and run rows',
+    readBack !== undefined &&
+      readBack.header.v === USAGE_INDEX_VERSION &&
+      readBack.header.generated_at > 0 &&
+      readBack.header.sources.files === 2 &&
+      readBack.runs.length === 2,
+    JSON.stringify(readBack?.header),
+  );
+  check(
+    'index rows keep the run totals',
+    readBack?.runs.every((run) => run.requests === 1 && run.prompt_tokens === 1_000) === true,
+  );
+  check(
+    'a stored index is only trusted when the session fingerprint matches',
+    sourceSignatureOf(readBack?.header.sources) === sourceSignatureOf(await readSessionSources(dir)),
+    `${sourceSignatureOf(readBack?.header.sources)} vs ${sourceSignatureOf(await readSessionSources(dir))}`,
+  );
+
+  // Version bump: the reader must treat the file as absent, not as data.
+  const path = usageIndexPath(dir);
+  const original = await readFile(path, 'utf8');
+  const bumped = original.replace('"v":1', `"v":${USAGE_INDEX_VERSION + 1}`);
+  await writeFile(path, bumped);
+  check('a different format version is not an index', (await readUsageIndex(dir)) === undefined);
+
+  // Corruption: one torn line invalidates the whole file (a torn file is torn).
+  const torn = original.split('\n');
+  torn[1] = '{"v":1,"kind":"run",';
+  await writeFile(path, torn.join('\n'));
+  check('a corrupt index line is not an index', (await readUsageIndex(dir)) === undefined);
+
+  // A deleted session changes the fingerprint, so the index is not trusted…
+  await writeUsageIndex(dir, first.runs, first.sources);
+  await rm(join(dir, 'sessions', 'session-b'), { recursive: true, force: true });
+  const afterDelete = await readSessionSources(dir);
+  check(
+    'a deleted session changes the fingerprint (so the index is stale)',
+    sourceSignatureOf(afterDelete) !== sourceSignatureOf(first.sources) && afterDelete.files === 1,
+    `${sourceSignatureOf(afterDelete)} vs ${sourceSignatureOf(first.sources)}`,
+  );
+  // …and a rebuild from the logs drops its runs: the index is never the truth.
+  const rebuilt = await build();
+  await writeUsageIndex(dir, rebuilt.runs, rebuilt.sources);
+  const afterRebuild = await readUsageIndex(dir);
+  check(
+    'a rebuild drops the deleted session runs',
+    rebuilt.runs.length === 1 &&
+      rebuilt.runs[0]?.run_id === 'run-a' &&
+      afterRebuild?.runs.length === 1,
+    rebuilt.runs.map((run) => run.run_id).join(','),
+  );
+}
+
+// 29. A session log spans days: the file-level mtime is only a sieve, the event
+//     filter (and the first-line peek) is what keeps a range correct.
+{
+  const dir = await traceDir('cross-day-session');
+  const yesterday = dayStart(-1) + 3_600_000;
+  const today = dayStart(0) + 3_600_000;
+  await writeSession(
+    dir,
+    'session-long',
+    sessionEvent('llm.request', 'run-yday', yesterday, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-yday', yesterday + 1_400, { usage: USAGE_1 }) +
+      sessionEvent('llm.request', 'run-today', today, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-today', today + 1_400, { usage: USAGE_1 }),
+  );
+  const file = sessionFile(dir, 'session-long');
+  await utimes(file, new Date(today + 2_000), new Date(today + 2_000));
+
+  const store = new EventStore();
+  const day1 = await loadDays(store, dir, 1);
+  check(
+    'one session file, but only today is in the day window',
+    day1.files_in_window === 1 && day1.events.length === 2 && day1.files_truncated === false,
+    `${day1.files_in_window} files, ${day1.events.length} events`,
+  );
+  check(
+    'the older run in the same session is filtered by event ts',
+    runIds(day1.events).join(',') === 'run-today',
+    runIds(day1.events).join(','),
+  );
+
+  // `until` on a session whose first event is before the bound: kept (the peek
+  // says "this session starts before the range end"), and the range clamp then
+  // happens per record in `listLogs` — the reader itself only needs a lower bound.
+  const store2 = new EventStore();
+  const until = dayStart(0);
+  const bounded = await store2.loadEvents(dir, { until });
+  check(
+    'a session that straddles the range end is kept',
+    bounded.files_in_window === 1 && bounded.files_truncated === false,
+    `${bounded.files_in_window} files, truncated ${bounded.files_truncated}`,
+  );
+  const boundedRecords = buildRecords(bounded.events, NO_PRICES);
+  const boundedPage = listLogs(boundedRecords, { limit: 10, until });
+  check(
+    'the range clamp happens on records, not on the file',
+    boundedPage.items.length === 1 && boundedPage.items[0]?.run_id === 'run-yday',
+    boundedPage.items.map((item) => item.run_id).join(','),
+  );
+}
+
+// ── worker: off the event loop, and the fallback when there is none ─────────
+
+/**
+ * The reader + aggregation runs in a worker thread (worker.ts) so a few hundred
+ * milliseconds of NDJSON parsing cannot freeze the thread that answers the
+ * plugin's protocol. The same QueryRuntime code is the fallback for embedders
+ * that cannot spawn a worker, so both paths must produce identical numbers; these
+ * fixtures drive the real worker, a worker-less environment, the request queue
+ * and the idle teardown.
+ */
+{
+  const dir = await traceDir('worker');
+  const base = dayStart(-2) + 3_600_000;
+  await writeSession(
+    dir,
+    'session-w',
+    sessionEvent('llm.request', 'run-w1', base, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-w1', base + 1_400, { usage: USAGE_1 }) +
+      sessionEvent('llm.request', 'run-w2', base + 60_000, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-w2', base + 61_400, { usage: USAGE_1 }),
+  );
+  const init = { dataDir: dir, settings: NO_PRICES };
+
+  // A worker that cannot start must not break the plugin: same answer, flagged.
+  const broken = new WorkerQueryClient({
+    spawn: () => {
+      throw new Error('worker_threads unavailable in this host');
+    },
+  });
+  const fromFallback = await broken.query({ kind: 'logs', params: { limit: 10 } }, init);
+  check(
+    'a worker that cannot start falls back to the main-thread path',
+    fromFallback.worker === false &&
+      fromFallback.outcome.result.kind === 'logs' &&
+      fromFallback.outcome.result.dto.items.length === 2,
+    JSON.stringify([fromFallback.worker, fromFallback.outcome.result.kind]),
+  );
+  const fallbackAgain = await broken.query({ kind: 'summary', now: NOW }, init);
+  check(
+    'the fallback keeps answering (it is a supported path, not an error state)',
+    fallbackAgain.worker === false &&
+      fallbackAgain.outcome.result.kind === 'summary' &&
+      fallbackAgain.outcome.result.dto.totals.requests === 2,
+    JSON.stringify(fallbackAgain.outcome.result.kind),
+  );
+  check('a broken worker factory leaves usingWorker false', broken.usingWorker === false);
+
+  // The real thing.
+  const client = new WorkerQueryClient();
+  const first = await client.query({ kind: 'logs', params: { limit: 10 } }, init);
+  check(
+    'the real worker answers the query',
+    first.worker === true &&
+      first.outcome.result.kind === 'logs' &&
+      first.outcome.result.dto.items.length === 2,
+    JSON.stringify([first.worker, first.outcome.result.kind]),
+  );
+  check(
+    'the answer carries the metrics the page needs',
+    typeof first.outcome.source.duration_ms === 'number' && first.outcome.source.worker === undefined,
+    JSON.stringify(first.outcome.source),
+  );
+  check('usingWorker reports the live thread', client.usingWorker === true);
+
+  const second = await client.query({ kind: 'logs', params: { limit: 10 } }, init);
+  check(
+    'the second query is answered from the worker cache (zero event bytes)',
+    second.worker === true && second.outcome.source.bytes_read === 0,
+    String(second.outcome.source.bytes_read),
+  );
+
+  // Concurrency: three ranges at once. They queue, and every answer must be
+  // scoped to its own range (no cache or result bleed between them).
+  const cutoff3 = base + 30_000;
+  const [all, recent, window] = await Promise.all([
+    client.query({ kind: 'logs', params: { limit: 10 } }, init),
+    client.query(
+      { kind: 'logs', params: { limit: 10, since: cutoff3 }, cutoff: cutoff3 },
+      init,
+    ),
+    client.query(
+      {
+        kind: 'logs',
+        params: { limit: 10, since: base, until: cutoff3 },
+        cutoff: base,
+        until: cutoff3,
+      },
+      init,
+    ),
+  ]);
+  const runIdsOfAnswer = (answer: typeof all): string[] => {
+    if (answer.outcome.result.kind !== 'logs') return [];
+    return answer.outcome.result.dto.items.map((item) => item.run_id).sort();
+  };
+  check(
+    'three concurrent ranges all answer from the worker',
+    all.worker && recent.worker && window.worker,
+    JSON.stringify([all.worker, recent.worker, window.worker]),
+  );
+  check(
+    'each concurrent range keeps its own rows',
+    runIdsOfAnswer(all).join(',') === 'run-w1,run-w2' &&
+      runIdsOfAnswer(recent).join(',') === 'run-w2' &&
+      runIdsOfAnswer(window).join(',') === 'run-w1',
+    JSON.stringify([runIdsOfAnswer(all), runIdsOfAnswer(recent), runIdsOfAnswer(window)]),
+  );
+
+  // Idle teardown must be invisible to the next request.
+  await client.terminate();
+  check('terminate drops the thread', client.usingWorker === false);
+  const afterTerminate = await client.query({ kind: 'summary', now: NOW }, init);
+  check(
+    'a query after the thread is gone still answers',
+    afterTerminate.outcome.result.kind === 'summary' &&
+      afterTerminate.outcome.result.dto.totals.requests === 2,
+    JSON.stringify(afterTerminate.outcome.result.kind),
+  );
+  await client.terminate();
+
+  // The worker is only wired up once, in the plugin entry.
+  const entrySource = await readFile(join(pluginRoot, 'src', 'index.ts'), 'utf8');
+  const workerSource = await readFile(join(pluginRoot, 'src', 'worker.ts'), 'utf8');
+  check(
+    'the worker entry owns the runtime',
+    workerSource.includes('new QueryRuntime()') &&
+      workerSource.includes("kind: 'query'") &&
+      workerSource.includes('parentPort'),
+  );
+  check(
+    'the plugin entry routes every RPC through the worker client',
+    entrySource.includes('WorkerQueryClient') &&
+      entrySource.includes('queries.query(') &&
+      !entrySource.includes('new EventStore('),
+  );
+  check(
+    'the answer says whether a worker produced it',
+    entrySource.includes('worker: answer.worker'),
   );
 }
 
