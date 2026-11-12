@@ -12,7 +12,8 @@ export type IconName =
   | 'reply'
   | 'retract'
   | 'chevron'
-  | 'attach';
+  | 'attach'
+  | 'check';
 
 /** 纸飞机：`send`（输入框发送键）与 `resend`（重发消息）共用同一支笔形。 */
 const PLANE = (
@@ -69,6 +70,13 @@ const PATHS: Record<IconName, ReactNode> = {
   attach: (
     <path d="M15.01 7.74 8.58 14.17a4.2 4.2 0 0 1-5.95-5.95l6.44-6.44a2.8 2.8 0 0 1 3.96 3.96l-6.44 6.44a1.4 1.4 0 0 1-1.98-1.98l5.94-5.94" />
   ),
+  /**
+   * 对勾：唯一的「已完成 / 已处理」图形（排队条带的第三颗键用它）。
+   *
+   * 为什么不复用 `chevron`：那个在 StreamCard 卡头已经是展开 / 收起，同一个箭头表示
+   * 「我已处理」会被读成「展开」——而这个动作不可逆，图形语义错了代价比多一条 path 高。
+   */
+  check: <path d="M3 8.5 6.25 11.75 13 4.75" />,
 };
 
 export function Icon({

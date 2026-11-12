@@ -771,11 +771,10 @@ export function QueuedNotice({
             disabled={busy}
             onClick={() => onClaim(item.id)}
           >
-            {/* `Icon` 里没有 check（现有集只有 copy/edit/retry/send/resend/transcript/
-                reply/retract/chevron/attach），而这条带子不新增图形 ⇒ 取语义最近的
-                `chevron`（通过 / 往下走），不取 `transcript`：文档图标会被读成「看正文」，
-                对不可逆动作是假承诺。 */}
-            <Icon name="chevron" size={14} />
+            {/* 不可逆动作，图形语义不能借：`Icon` 里的 `chevron` 在 StreamCard 卡头已是
+                展开 / 收起，用在这里会被读成「展开」。所以这一颗走专门的 `check`
+                （「已处理」最直接的图形），不是临时找一个近似的。 */}
+            <Icon name="check" size={14} />
           </Button>
         )}
       </div>
