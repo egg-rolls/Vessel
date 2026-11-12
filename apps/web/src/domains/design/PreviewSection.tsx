@@ -49,12 +49,12 @@ function PreviewCard({ item }: { item: PreviewItem }) {
           className="ml-auto min-w-0 max-w-full truncate font-mono text-2xs text-faint"
           title={entry.path}
         >
-          {t('designLab.components.sourcePath')} {entry.path}
+          {t('designLab.gallery.sourcePath')} {entry.path}
         </span>
       }
     >
       <div className="rounded-sm bg-sunken p-3">
-        <PreviewBoundary message={t('designLab.components.renderError')}>
+        <PreviewBoundary message={t('designLab.gallery.renderError')}>
           <Sample />
         </PreviewBoundary>
       </div>
@@ -88,22 +88,22 @@ export function PreviewSection() {
   // 三种「空」要分清：没发现样例文件 / 还没加载完 / 过滤没命中。
   const emptyMessage =
     PREVIEW_ENTRIES.length === 0
-      ? t('designLab.components.none')
+      ? t('designLab.gallery.none')
       : library.size === 0
-        ? t('designLab.components.loading')
-        : t('designLab.components.empty');
+        ? t('designLab.gallery.loading')
+        : t('designLab.gallery.empty');
 
   return (
-    <section className="flex flex-col gap-5" aria-labelledby="design-lab-components">
+    <section className="flex flex-col gap-5" aria-labelledby="design-lab-gallery">
       <div className="flex flex-col gap-1.5">
-        <h2 id="design-lab-components" className="font-serif text-xl leading-snug text-ink">
-          {t('designLab.components.title')}
+        <h2 id="design-lab-gallery" className="font-serif text-xl leading-snug text-ink">
+          {t('designLab.gallery.title')}
         </h2>
         <p className="max-w-prose text-md leading-normal text-muted">
-          {t('designLab.components.subtitle')}
+          {t('designLab.gallery.subtitle')}
         </p>
         <p className="max-w-prose text-sm leading-normal text-muted">
-          {t('designLab.components.autoNote')}
+          {t('designLab.gallery.autoNote')}
         </p>
       </div>
 
@@ -111,11 +111,11 @@ export function PreviewSection() {
         <SearchInput
           value={query}
           onChange={setQuery}
-          placeholder={t('designLab.components.filterPlaceholder')}
-          ariaLabel={t('designLab.components.filter')}
+          placeholder={t('designLab.gallery.filterPlaceholder')}
+          ariaLabel={t('designLab.gallery.filter')}
           className="grow basis-60 max-w-search"
         />
-        <Badge tone="neutral">{t('designLab.components.count', { count: total })}</Badge>
+        <Badge tone="neutral">{t('designLab.gallery.count', { count: total })}</Badge>
       </div>
 
       {groups.length === 0 ? (
@@ -130,7 +130,7 @@ export function PreviewSection() {
                   {titleKey === undefined ? group.id : t(titleKey)}
                 </h3>
                 <span className="font-mono text-2xs text-faint">
-                  {t('designLab.components.count', { count: items.length })}
+                  {t('designLab.gallery.count', { count: items.length })}
                 </span>
               </div>
               {items.map((item) => (

@@ -119,7 +119,7 @@ function TokenCard({
               : { fontFamily: value === '—' ? undefined : value }
           }
         >
-          {t('designLab.demo.typeSample')}
+          {t('designLab.tokens.typeSample')}
         </span>
         <span className="font-mono text-2xs text-faint" title={value}>
           {name} · {value}

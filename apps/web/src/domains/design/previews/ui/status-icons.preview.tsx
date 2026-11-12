@@ -14,10 +14,10 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'StatusGlyph',
-  titleKey: 'designLab.sample.statusIcons.name',
-  descriptionKey: 'designLab.sample.statusIcons.desc',
+  titleKey: 'designLab.preview.statusIcons.title',
+  descriptionKey: 'designLab.preview.statusIcons.desc',
   group: 'ui',
-  order: 60,
+  order: 110,
 };
 
 /** 会话列表实际会出现的五态，顺带覆盖全部 tone。 */
@@ -35,7 +35,7 @@ export default function StatusIconsPreview() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
-        <p className="text-sm font-medium text-ink">{t('designLab.demo.statusIcons.chips')}</p>
+        <p className="text-sm font-medium text-ink">{t('designLab.preview.statusIcons.chips')}</p>
         <div className="flex flex-wrap items-center gap-2">
           {SESSION_SAMPLES.map((kind) => (
             <StatusChip key={kind} status={kind} />
@@ -43,7 +43,7 @@ export default function StatusIconsPreview() {
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
-        <p className="text-sm font-medium text-ink">{t('designLab.demo.statusIcons.list')}</p>
+        <p className="text-sm font-medium text-ink">{t('designLab.preview.statusIcons.list')}</p>
         <ul className="m-0 flex list-none flex-col gap-1 p-0">
           {ALL_KINDS.map((kind) => (
             <li key={kind} className="flex flex-wrap items-center gap-x-2.5 gap-y-1">

@@ -9,10 +9,10 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'Button',
-  titleKey: 'designLab.sample.buttons.name',
-  descriptionKey: 'designLab.sample.buttons.desc',
+  titleKey: 'designLab.preview.button.title',
+  descriptionKey: 'designLab.preview.button.desc',
   group: 'ui',
-  order: 40,
+  order: 10,
 };
 
 export default function ButtonPreview() {

@@ -4,44 +4,33 @@
  * 契约（新增一个样例 = 新增一个文件，**不改本目录任何代码**）：
  *
  *   文件名： apps/web/src/**\/*.preview.tsx      ← 位置随组件走，放在组件旁边最好
- *   导出：   export default 渲染用的 React 组件
+ *   导出：   export default 渲染用的 React 组件（只读：不发 RPC、不改全局状态）
  *            export const preview: PreviewMeta = { title, titleKey?, descriptionKey?, group?, order? }
+ *
+ * 文案约定：样例的可见文案全部走 i18n，键名统一在 `designLab.preview.<样例 id>.*`
+ * 下（`titleKey` / `descriptionKey` 与样例内的说明文字都是），本目录不再有
+ * `designLab.sample.*` / `designLab.demo.*` 这两种历史写法。
  *
  * 发现手段是 Vite 的 `import.meta.glob('/src/**\/*.preview.tsx', { eager: false })`：
  * 编译期把匹配到的文件列成「路径 → 动态 import 函数」的表，样例代码因此**不进首屏
- * chunk**，只有打开设计实验室时才按需拉取。
+ * chunk**，只有打开设计实验室时才按需拉取；meta 与组件在同一个模块里，加载一次就同时
+ * 拿到标题 / 说明 / 分组。
  *
  * 分组规则：
  *   1. `preview.group` 优先（值就是分组的 id，如 'chat' / 'nav' / 'overlays' / 'ui'）；
  *   2. 缺省用**所在目录名**（`.../previews/chat/queued.preview.tsx` → 'chat'）；
- *   3. 组名的中文标题来自 `PREVIEW_GROUP_RULES` 的映射表；表里没有的组直接显示 id
- *      （语言无关的目录名），所以新目录里的样例也不会被丢掉。
- *
- * ## 变体枚举契约（定论，与 token 展览馆同一条原则：不复制事实）
- *
- * **有运行时变体表的组件，预览必须枚举那张表，不许手写清单。**
- *
- * 也就是说：组件把变体名导出成运行时数组（`BUTTON_VARIANTS` / `BUTTON_SIZES` /
- * `BADGE_TONES` / `COUNT_BADGE_TONES` / `CHIP_TONES` / `COMPOSER_ICON_TONES` /
- * `NAV_STATUS_TONES` …），类型由数组派生（`type X = (typeof ARR)[number]`），
- * cva 的 variant 键集合用 `satisfies Record<X, string>` 与之双向钉住；预览里写
- * `BUTTON_VARIANTS.map(...)`。于是「加一种变体」= 只改组件一处，设计实验室自动多一格，
- * 忘了加进数组则是**编译错误**，而不是预览里静默少一格。
- *
- * 组件若确实拿不到运行时表（变体只活在 class 串 / 外部数据里，没有可导出数组），
- * 预览可以保留手写清单，但**必须加穷举守卫**——`Record<ThatVariant, true>`、
- * `Record<ThatTone, string>` 之类的类型断言，保证「新增变体却忘了更新预览」会编译报错。
- * 不允许留下「预览列表比组件少一项」这种静默漂移。
+ *   3. 组名的中文标题来自 `PREVIEW_GROUP_RULES` 的映射表（同一张表也决定组的先后）；
+ *      表里没有的组直接显示 id（语言无关的目录名），所以新目录里的样例也不会被丢掉。
  */
 import type { ComponentType } from 'react';
 import { useEffect, useState } from 'react';
 
 export interface PreviewMeta {
-  /** 组件名（语言无关，如 'QueuedNotice'）；有任何一种标题都必须能显示。 */
+  /** 组件名（语言无关，如 'QueuedNotice'）；没有 i18n key 时它就是标题。 */
   title: string;
-  /** 可选的中文/本地化标题 key（`designLab.*`），存在时优先于 title。 */
+  /** 可选本地化标题 key（`designLab.preview.*`），存在时优先于 title。 */
   titleKey?: string;
-  /** 说明的 i18n key（`designLab.*`）。 */
+  /** 说明的 i18n key（`designLab.preview.*`）。 */
   descriptionKey?: string;
   /** 分组 id；缺省 = 所在目录名。 */
   group?: string;

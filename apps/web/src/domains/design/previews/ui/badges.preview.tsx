@@ -9,10 +9,10 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'Badge',
-  titleKey: 'designLab.sample.badges.name',
-  descriptionKey: 'designLab.sample.badges.desc',
+  titleKey: 'designLab.preview.badge.title',
+  descriptionKey: 'designLab.preview.badge.desc',
   group: 'ui',
-  order: 50,
+  order: 30,
 };
 
 export default function BadgePreview() {

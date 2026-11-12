@@ -6,25 +6,25 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'TableToolbar',
-  titleKey: 'designLab.sample.toolbar.name',
-  descriptionKey: 'designLab.sample.toolbar.desc',
+  titleKey: 'designLab.preview.toolbar.title',
+  descriptionKey: 'designLab.preview.toolbar.desc',
   group: 'ui',
-  order: 20,
+  order: 40,
 };
 
 export default function TableToolbarPreview() {
   const [query, setQuery] = useState('');
   return (
-    <TableToolbar label={t('designLab.demo.toolbar.label')}>
+    <TableToolbar label={t('designLab.preview.toolbar.label')}>
       <SearchInput
         value={query}
         onChange={setQuery}
-        placeholder={t('designLab.demo.toolbar.placeholder')}
-        ariaLabel={t('designLab.demo.toolbar.placeholder')}
+        placeholder={t('designLab.preview.toolbar.placeholder')}
+        ariaLabel={t('designLab.preview.toolbar.placeholder')}
         className="grow basis-60 max-w-search"
       />
       <Button variant="plain" onClick={() => setQuery('')}>
-        {t('designLab.demo.toolbar.refresh')}
+        {t('designLab.preview.toolbar.refresh')}
       </Button>
     </TableToolbar>
   );
