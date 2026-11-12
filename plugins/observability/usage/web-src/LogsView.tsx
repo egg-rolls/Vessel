@@ -45,11 +45,20 @@ interface Filters {
   custom: CustomRange | null;
 }
 
+/**
+ * The range the Logs page opens on: last 7 days.
+ *
+ * Logs are the highest-volume view (one row per request), so the page starts
+ * scoped instead of on "all time"; the tab row still offers "All time" in one
+ * click. Usage keeps its own default — this constant is Logs-only.
+ */
+const DEFAULT_RANGE: RangeValue = '7';
+
 const EMPTY_FILTERS: Filters = {
   session: '',
   model: '',
   status: '',
-  range: '0',
+  range: DEFAULT_RANGE,
   custom: null,
 };
 
@@ -346,12 +355,14 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
       });
   }, [applied, client, cursor, loading]);
 
+  // The default range is not a "filter": an empty first load should say "no logs
+  // yet", not "no matching requests".
   const hasFilters =
     applied.session.trim() !== '' ||
     applied.model.trim() !== '' ||
     applied.status !== '' ||
     applied.custom !== null ||
-    applied.range !== '0';
+    applied.range !== DEFAULT_RANGE;
 
   return (
     <PageScaffold title={t('logs.title')} subtitle={t('logs.description')}>

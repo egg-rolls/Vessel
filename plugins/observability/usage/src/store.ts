@@ -92,13 +92,14 @@ export interface RawEvent {
  * are not returned, so the lower bound is enforced on event time rather than on
  * the read budget. Omitted means "no lower bound".
  *
- * `until` is the (exclusive) end of an explicit range. It cannot prune files —
- * a trace file's mtime is after all of its events, so a file written after
- * `until` may still hold earlier events — so it is only an **ordering hint**:
- * candidate files are visited from the one nearest `until` outwards, so the
- * budget lands on the runs around the end of the requested interval instead of
- * on whatever happens to be newest. The record-level `[since, until)` filter
- * lives in `listLogs` (`aggregate.ts`).
+ * `until` is the (exclusive) end of an explicit range. A file's mtime is after
+ * all of its events, so mtime alone cannot exclude a file written after `until`;
+ * instead the reader peeks each such file's **first line** and drops it when the
+ * run provably starts at or after `until` (`dropAfterUntil`, `peekFirstTs` — a
+ * real read of real bytes, not a heuristic). The remaining candidates are
+ * visited from the one nearest `until` outwards, so the budget lands on the runs
+ * around the end of the requested interval. The record-level `[since, until)`
+ * filter lives in `listLogs` (`aggregate.ts`).
  *
  * Either bound makes the call "range-bounded", which is what selects the larger
  * window budget (see `WINDOW_BUDGET_BYTES`).
@@ -139,11 +140,19 @@ export interface LoadResult {
   partial_files: number;
   /** Trace files present in `<dataDir>/events` (regardless of the window). */
   files_total: number;
-  /** Trace files inside the day window (`mtime >= cutoff`); `files_total` without one. */
+  /**
+   * Trace files the range actually covers: after the lower-bound filter and,
+   * with an `until` bound, after the authoritative first-line judgement
+   * (`dropAfterUntil`). `files_total` without any bound.
+   */
   files_in_window: number;
   /** Trace files this call covered (a newest-first prefix of the window). */
   files_covered: number;
-  /** Bytes actually read from disk by this call. */
+  /**
+   * Bytes read into the event cache by this call. First-line peeks (`until`
+   * bound only) are not included: they are a separate probe of at most
+   * `FIRST_LINE_BYTES` per file and never come out of the read budget.
+   */
   bytes_read: number;
 }
 
@@ -417,6 +426,61 @@ function parseLine(line: string, lineNumber: number): RawEvent | undefined {
 
 const NEWLINE = 0x0a;
 
+/** How many bytes of a file's top are read to find its first event. */
+const FIRST_LINE_BYTES = 8 * 1024;
+
+/**
+ * `ts` of the first event in a trace file, or `undefined` when it cannot be read.
+ *
+ * This is **not** a heuristic: the bytes read are the file's own first line, so
+ * the answer is the run's real start instant. It is used to prove that a file
+ * lies entirely after an `until` bound (`firstTs >= until`) and can therefore be
+ * skipped without reading it. Every failure path returns `undefined`, i.e. "no
+ * judgement" — an empty file, a first line longer than the peek window, a torn
+ * or unparsable line, a permission error. Callers must treat `undefined` as
+ * "keep the file": reading a few extra KiB is cheap, losing rows is not.
+ */
+async function peekFirstTs(path: string): Promise<number | undefined> {
+  let buffer: Buffer;
+  try {
+    buffer = await readRange(path, 0, FIRST_LINE_BYTES);
+  } catch {
+    return undefined;
+  }
+  if (buffer.length === 0) return undefined;
+  const newline = buffer.indexOf(NEWLINE);
+  // `-1`: the first line is longer than the peek window; `0`: it is empty.
+  if (newline <= 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(buffer.subarray(0, newline).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed)) return undefined;
+  const ts = parsed.ts;
+  return typeof ts === 'number' && Number.isFinite(ts) ? ts : undefined;
+}
+
+/** Cached first-event instant of one file, keyed by the size/mtime it was read at. */
+interface FirstTsEntry {
+  size: number;
+  mtimeMs: number;
+  ts: number | undefined;
+}
+
+/**
+ * How many first-event instants are kept.
+ *
+ * This cache is nothing like the event cache: one entry is a path plus three
+ * numbers (~200 bytes), so 4096 files cost well under a megabyte. It must be
+ * generous: a busy directory has far more run files than `maxCachedFiles`, and a
+ * cache smaller than the candidate set thrashes — every lookup would evict the
+ * entry the next lookup needs and re-peek all of them (measured: 466 peeks per
+ * call instead of 0).
+ */
+const MAX_FIRST_TS_ENTRIES = 4096;
+
 /**
  * How far before `cutoff` a file's mtime may sit and still be opened.
  *
@@ -513,14 +577,29 @@ export class EventStore {
   private readonly cache = new Map<string, CachedFile>();
   private readonly limits: ReadLimits;
   private clock = 0;
+  /** First-event instant per file, keyed by the size/mtime it was read at. */
+  private readonly firstTs = new Map<string, FirstTsEntry>();
+  /** First-line peeks actually performed (cache misses). Read by the probe. */
+  private peeks = 0;
 
   constructor(limits: ReadLimits = DEFAULT_LIMITS) {
     this.limits = limits;
   }
 
+  /**
+   * How many first-line peeks this store has performed from disk.
+   *
+   * Diagnostics: a peek is one small read per *file that changed*, so this
+   * counter staying flat across two range queries is the cache working.
+   */
+  get firstLinePeeks(): number {
+    return this.peeks;
+  }
+
   /** Drop cached files (called on activate/deactivate). */
   reset(): void {
     this.cache.clear();
+    this.firstTs.clear();
   }
 
   /**
@@ -543,15 +622,18 @@ export class EventStore {
       return emptyResult();
     }
 
-    // Range window. A trace file's mtime is its last append, so it is at or after
-    // every event `ts` inside it: a file older than the lower bound cannot hold
-    // an in-range event (modulo `MTIME_SLACK_MS`). There is no such trick for the
-    // upper bound — a file written after `until` can still hold earlier events —
-    // so `until` only reorders the candidates (below).
-    const inWindow =
+    // Range window, lower bound. A trace file's mtime is its last append, so it
+    // is at or after every event `ts` inside it: a file older than the lower
+    // bound cannot hold an in-range event (modulo `MTIME_SLACK_MS`).
+    const byCutoff =
       cutoff === undefined
         ? files
         : files.filter((file) => file.mtimeMs >= cutoff - MTIME_SLACK_MS);
+
+    // Range window, upper bound. mtime says nothing useful about the *start* of
+    // a run, so files written after `until` stay candidates — unless their first
+    // event already proves they are entirely after the range (`dropAfterUntil`).
+    const inWindow = until === undefined ? byCutoff : await this.dropAfterUntil(byCutoff, until);
 
     // A selected range means "the real total for these N days": it gets the
     // larger window budget so the range fits instead of being silently sampled.
@@ -589,6 +671,9 @@ export class EventStore {
     const onDisk = new Set(files.map((file) => file.path));
     for (const path of [...this.cache.keys()]) {
       if (!onDisk.has(path)) this.cache.delete(path);
+    }
+    for (const path of [...this.firstTs.keys()]) {
+      if (!onDisk.has(path)) this.firstTs.delete(path);
     }
 
     // Second budget, on bytes actually read: a window can only exceed the
@@ -634,6 +719,61 @@ export class EventStore {
   }
 
   /**
+   * Drop the candidates that provably hold nothing before `until`.
+   *
+   * A file whose mtime is at or before `until` holds only events at or before
+   * its mtime, so it is kept without any extra I/O. For the rest (files written
+   * after `until`), the first line is read: its `ts` is the run's real start, so
+   * `firstTs >= until` proves the whole file lies after the range and it is
+   * dropped **before the byte budget is spent on it**. An unreadable or
+   * unjudgeable file is kept (see `peekFirstTs`), which degrades to the older
+   * behaviour of "read it and filter its records".
+   *
+   * Results are cached by `(path, size, mtime)`: trace files are append-only, so
+   * the first line never changes and a re-render or a second range query costs
+   * zero peeks.
+   */
+  private async dropAfterUntil(files: FileInfo[], until: number): Promise<FileInfo[]> {
+    const kept: FileInfo[] = [];
+    const needPeek: FileInfo[] = [];
+    for (const file of files) {
+      if (file.mtimeMs <= until) kept.push(file);
+      else needPeek.push(file);
+    }
+
+    // Peek in small parallel batches: one open+read+close per file is otherwise
+    // the dominant cost when a whole day of runs sits after the range.
+    for (let index = 0; index < needPeek.length; index += STAT_BATCH) {
+      const batch = needPeek.slice(index, index + STAT_BATCH);
+      const peeks = await Promise.all(batch.map((file) => this.firstTimestamp(file)));
+      for (const [offset, ts] of peeks.entries()) {
+        const file = batch[offset];
+        if (file === undefined) continue;
+        // `undefined` = no judgement (keep); `ts >= until` = provably after.
+        if (ts !== undefined && ts >= until) continue;
+        kept.push(file);
+      }
+    }
+    return kept;
+  }
+
+  /** Cached first-event instant of one file; peeks only when the file changed. */
+  private async firstTimestamp(file: FileInfo): Promise<number | undefined> {
+    const cached = this.firstTs.get(file.path);
+    if (cached !== undefined && cached.size === file.size && cached.mtimeMs === file.mtimeMs) {
+      return cached.ts;
+    }
+    this.peeks += 1;
+    const ts = await peekFirstTs(file.path);
+    if (this.firstTs.size >= MAX_FIRST_TS_ENTRIES) {
+      const oldest = this.firstTs.keys().next();
+      if (oldest.done !== true) this.firstTs.delete(oldest.value);
+    }
+    this.firstTs.set(file.path, { size: file.size, mtimeMs: file.mtimeMs, ts });
+    return ts;
+  }
+
+  /**
    * Bring one file up to date and return the bytes read from disk.
    *
    * Zero bytes for an unchanged file is the whole point of the cache: the trace
@@ -659,7 +799,21 @@ export class EventStore {
     // us tell "window starts right after a newline" from "window cuts a line".
     const start = entry === undefined ? Math.max(0, file.size - limit - 1) : entry.offset;
     const want = Math.min(file.size - start, limit + 1);
-    if (want <= 0) return 0;
+    if (want <= 0) {
+      // Nothing to read (a trace file the host created but has not written yet).
+      // Record it as covered anyway: an empty file is not a file we failed to
+      // read, and `files_truncated` must not call it one.
+      this.cache.set(file.path, {
+        size: file.size,
+        offset: 0,
+        events: [],
+        retained: 0,
+        line: 0,
+        partial: false,
+        usedAt: ++this.clock,
+      });
+      return 0;
+    }
 
     let buffer: Buffer;
     try {

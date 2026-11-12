@@ -1051,7 +1051,9 @@ const rangeRecords = buildRecords(
   const cutoff = cutoffFor(NOW, 1);
   check(
     'logs and summary resolve days through one function',
-    cutoff !== undefined && cutoff === daysCutoff(NOW, 1) && cutoffFor(NOW, undefined) === undefined,
+    cutoff !== undefined &&
+      cutoff === daysCutoff(NOW, 1) &&
+      cutoffFor(NOW, undefined) === undefined,
     String(cutoff),
   );
   const day1 = listLogs(rangeRecords, { limit: 50, since: cutoff });
@@ -1238,8 +1240,15 @@ const rangeRecords = buildRecords(
   const allThree = await roomy.loadEvents(dir, { until });
   check(
     'an until-only range gets the window budget',
-    allThree.files_covered === 3 && allThree.files_truncated === false,
+    allThree.files_covered === 2 &&
+      allThree.files_in_window === 2 &&
+      allThree.files_truncated === false,
     `covered ${allThree.files_covered}/${allThree.files_in_window}`,
+  );
+  check(
+    'the run that starts after the range is not read at all',
+    allThree.events.every((event) => event.run_id !== 'run-now'),
+    runIds(allThree.events).join(','),
   );
   const unbounded = await roomy.loadEvents(dir);
   check(
@@ -1275,6 +1284,237 @@ const rangeRecords = buildRecords(
     logsSource.includes('StateLine') &&
       logsSource.includes('logs.state.loaded') &&
       logsSource.includes('logs.state.more'),
+  );
+}
+
+// ── first-line peek: an authoritative "this run is after the range" ─────────
+
+/**
+ * A file written after `until` still has to be considered — unless its own first
+ * line proves the run starts after the range. That proof is a real read of real
+ * bytes (not a guess), so it may drop the file outright and save the budget; any
+ * file whose first line cannot be judged is kept.
+ */
+
+// 20. `firstTs >= until` drops the file before it costs any bytes.
+{
+  const dir = await traceDir('peek-after');
+  const inside = dayStart(-10) + 3_600_000;
+  const before = dayStart(-3) + 3_600_000;
+  const after = dayStart(0) + 3_600_000;
+  const insideBytes = await writeTrace(
+    dir,
+    'run-inside',
+    lineAt('llm.request', 'run-inside', inside) +
+      lineAt('llm.response', 'run-inside', inside + 1_400),
+    inside + 2_000,
+  );
+  const beforeBytes = await writeTrace(
+    dir,
+    'run-after-a',
+    lineAt('llm.request', 'run-after-a', before) +
+      lineAt('llm.response', 'run-after-a', before + 1_400),
+    before + 2_000,
+  );
+  const afterBytes = await writeTrace(
+    dir,
+    'run-after-b',
+    lineAt('llm.request', 'run-after-b', after) +
+      lineAt('llm.response', 'run-after-b', after + 1_400),
+    after + 2_000,
+  );
+
+  const until = dayStart(-5);
+  const store = new EventStore({ ...DEFAULT_LIMITS, maxBytesPerFile: insideBytes + 16 });
+  const result = await store.loadEvents(dir, { until });
+  check(
+    'a run that starts after the range is not in the file window at all',
+    result.files_in_window === 1 && result.files_covered === 1,
+    `in window ${result.files_in_window}, covered ${result.files_covered}`,
+  );
+  check(
+    'the dropped file costs the budget nothing',
+    result.bytes_read === insideBytes && result.bytes_read < insideBytes + beforeBytes + afterBytes,
+    `${result.bytes_read} vs inside ${insideBytes}, other two ${beforeBytes + afterBytes}`,
+  );
+  check(
+    'only the run before the range is returned',
+    runIds(result.events).join(',') === 'run-inside',
+    runIds(result.events).join(','),
+  );
+
+  // A second call must not peek again: the first-line cache is keyed by
+  // (path, size, mtime), and an append-only trace file never changes its head.
+  const peeksAfterFirst = store.firstLinePeeks;
+  const again = await store.loadEvents(dir, { until });
+  check(
+    'a repeated range query does not peek the same files again',
+    peeksAfterFirst === 2 && store.firstLinePeeks === peeksAfterFirst && again.bytes_read === 0,
+    `peeks ${peeksAfterFirst} -> ${store.firstLinePeeks}, bytes ${again.bytes_read}`,
+  );
+}
+
+// 21. `firstTs < until` keeps the file: a run that straddles the bound.
+{
+  const dir = await traceDir('peek-straddle');
+  const starts = dayStart(-8) + 3_600_000;
+  const ends = dayStart(0) + 3_600_000;
+  await writeTrace(
+    dir,
+    'run-straddle',
+    lineAt('llm.request', 'run-straddle', starts) +
+      lineAt('llm.response', 'run-straddle', ends),
+    ends + 2_000,
+  );
+
+  const until = dayStart(-5);
+  const store = new EventStore();
+  const result = await store.loadEvents(dir, { until });
+  check(
+    'a run that starts before the range end is kept',
+    result.files_in_window === 1 && result.files_covered === 1,
+    `in window ${result.files_in_window}`,
+  );
+  check(
+    'the straddling run still yields its in-range events',
+    result.events.length > 0 && runIds(result.events).join(',') === 'run-straddle',
+    runIds(result.events).join(','),
+  );
+}
+
+// 22. No judgement is a "keep": empty, unparsable and over-long first lines all
+//     degrade to the old behaviour instead of dropping data.
+{
+  const dir = await traceDir('peek-unknown');
+  const eventsDir = join(dir, 'events');
+  const after = dayStart(0) + 3_600_000;
+
+  // Empty file (no lines at all).
+  const empty = join(eventsDir, 'run-empty.jsonl');
+  await writeFile(empty, '');
+  await utimes(empty, new Date(after), new Date(after));
+
+  // First line is not JSON.
+  const torn = join(eventsDir, 'run-torn.jsonl');
+  await writeFile(torn, 'not json at all\n' + lineAt('llm.response', 'run-torn', after));
+  await utimes(torn, new Date(after), new Date(after));
+
+  // First line carries no usable `ts`.
+  const noTs = join(eventsDir, 'run-nots.jsonl');
+  await writeFile(noTs, `${JSON.stringify({ type: 'run.start', run_id: 'run-nots' })}\n`);
+  await utimes(noTs, new Date(after), new Date(after));
+
+  // First line is longer than the peek window (one oversized line).
+  const long = join(eventsDir, 'run-long.jsonl');
+  await writeFile(long, `${JSON.stringify({ pad: 'x'.repeat(20_000), ts: after })}\n`);
+  await utimes(long, new Date(after), new Date(after));
+
+  // A late run that *is* judgeable, to prove the unjudgeable ones were kept by
+  // their own verdict and not by a blanket rule.
+  const normal = join(eventsDir, 'run-normal.jsonl');
+  await writeFile(normal, lineAt('llm.response', 'run-normal', after + 60_000));
+  await utimes(normal, new Date(after), new Date(after));
+
+  const until = dayStart(-5);
+  const store = new EventStore();
+  const result = await store.loadEvents(dir, { until });
+  check(
+    'an unjudgeable first line keeps the file (no data is dropped)',
+    result.files_in_window === 4,
+    `in window ${result.files_in_window} of 5 (run-normal is judgeable and late)`,
+  );
+  check(
+    'the unjudgeable files are still covered',
+    result.files_covered === 4 && result.files_truncated === false,
+    `covered ${result.files_covered}, truncated ${result.files_truncated}`,
+  );
+  check(
+    'the judgeable late run is the one that was dropped',
+    result.files_in_window === result.files_covered &&
+      !runIds(result.events).includes('run-normal'),
+    runIds(result.events).join(','),
+  );
+}
+
+// 23. The first-line cache is keyed by size/mtime: a file that changed is
+//     re-peeked, so "authoritative" stays true after an append.
+{
+  const dir = await traceDir('peek-cache');
+  const start = dayStart(-8) + 3_600_000;
+  const file = join(dir, 'events', 'run-grow.jsonl');
+  const first = lineAt('llm.request', 'run-grow', start);
+  await writeFile(file, first);
+  // A run that started 8 days ago and is *still growing*: its mtime is recent
+  // (after `until`), its first event is not — the case only a peek can judge.
+  const grownOnce = dayStart(0) + 3_600_000;
+  await utimes(file, new Date(grownOnce), new Date(grownOnce));
+
+  const until = dayStart(-5);
+  const store = new EventStore();
+  const kept = await store.loadEvents(dir, { until });
+  check(
+    'a straddling file is peeked once and kept',
+    kept.files_in_window === 1 && store.firstLinePeeks === 1,
+    `in window ${kept.files_in_window}, peeks ${store.firstLinePeeks}`,
+  );
+
+  await appendFile(file, lineAt('llm.response', 'run-grow', grownOnce + 60_000));
+  const grown = await store.loadEvents(dir, { until });
+  check(
+    'an appended file is re-peeked exactly once',
+    store.firstLinePeeks === 2 && grown.files_in_window === 1,
+    `peeks ${store.firstLinePeeks}, in window ${grown.files_in_window}`,
+  );
+}
+
+// 24. Shipped defaults: Logs opens on the last 7 days ("all time" still one click
+//     away), and the peek is not a heuristic — it reads the file's own first line.
+{
+  check(
+    'the logs page opens on the last 7 days by default',
+    logsSource.includes("const DEFAULT_RANGE: RangeValue = '7'") &&
+      logsSource.includes('range: DEFAULT_RANGE'),
+  );
+  check(
+    'all time is still offered as a preset',
+    sharedSource.includes("id: '0'") && sharedSource.includes("id: '1'"),
+  );
+  const storeSource = await readFile(join(pluginRoot, 'src', 'store.ts'), 'utf8');
+  check(
+    'the peek is documented as an authoritative read, not a heuristic',
+    storeSource.includes('**not** a heuristic') && storeSource.includes('dropAfterUntil'),
+  );
+  check(
+    'the peek reads the head of the file only',
+    storeSource.includes('FIRST_LINE_BYTES'),
+  );
+}
+
+// 25. The first-line cache is not tied to the event-cache file cap: sizing it by
+//     `maxCachedFiles` made every lookup evict the entry the next one needed
+//     (measurably 466 peeks per call instead of 0 on the real directory).
+{
+  const dir = await traceDir('peek-cache-size');
+  const starts = dayStart(-8);
+  for (const [index, name] of ['run-s1', 'run-s2', 'run-s3', 'run-s4'].entries()) {
+    // Recent mtime (after `until`), old first event: exactly the peek's job.
+    await writeTrace(
+      dir,
+      name,
+      lineAt('llm.request', name, starts + index * 1_000),
+      dayStart(0) + 3_600_000,
+    );
+  }
+
+  const until = dayStart(-5);
+  const store = new EventStore({ ...DEFAULT_LIMITS, maxCachedFiles: 2 });
+  await store.loadEvents(dir, { until });
+  const first = store.firstLinePeeks;
+  await store.loadEvents(dir, { until });
+  check(
+    'the peek cache is not bounded by the event-cache file cap',
+    first === 4 && store.firstLinePeeks === 4,
+    `peeks ${first} -> ${store.firstLinePeeks}`,
   );
 }
 
