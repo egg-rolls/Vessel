@@ -10,7 +10,7 @@
  * @module @vessel-agent/plugin-usage
  */
 
-import { isRecord, type RawEvent, type Settings } from './store.js';
+import { isRecord, type RawEvent, type RunSummary, type Settings } from './store.js';
 
 const COST_DIVISOR = 1_000_000;
 
@@ -231,13 +231,169 @@ function recordId(event: RawEvent): string {
 }
 
 /**
+ * Fold per-request records into one entry per run.
+ *
+ * Requests pair one-to-one with responses (`buildRecords`), so summing those
+ * pairs is the usage of the run; `run.completed.usage` is deliberately **not**
+ * added on top — a retried run would then be counted twice. Records of a run
+ * share a model in practice; the first known one wins, and `unknown` is kept
+ * rather than invented when none is known.
+ */
+export function buildRunSummaries(records: UsageRecord[]): RunSummary[] {
+  interface Acc {
+    run: RunSummary;
+    cacheReadReported: boolean;
+    cacheWriteReported: boolean;
+  }
+  const accs = new Map<string, Acc>();
+  const order: string[] = [];
+
+  for (const record of records) {
+    let acc = accs.get(record.run_id);
+    if (acc === undefined) {
+      acc = {
+        run: {
+          run_id: record.run_id,
+          model: record.model,
+          ts_start: record.ts,
+          ts_end: record.ts,
+          requests: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          unpriced_requests: 0,
+          status: 'ok',
+        },
+        cacheReadReported: false,
+        cacheWriteReported: false,
+      };
+      accs.set(record.run_id, acc);
+      order.push(record.run_id);
+    }
+    const run = acc.run;
+    if (record.session_id !== undefined) run.session_id = record.session_id;
+    if (run.model === 'unknown' && record.model !== 'unknown') run.model = record.model;
+    run.ts_start = Math.min(run.ts_start, record.ts);
+    run.ts_end = Math.max(run.ts_end, record.ts);
+
+    if (record.status === 'failed') {
+      run.status = 'failed';
+      continue;
+    }
+    run.requests += 1;
+    run.prompt_tokens += record.prompt_tokens ?? 0;
+    run.completion_tokens += record.completion_tokens ?? 0;
+    if (record.cache_read_input_tokens !== undefined) {
+      run.cache_read_input_tokens =
+        (run.cache_read_input_tokens ?? 0) + record.cache_read_input_tokens;
+      acc.cacheReadReported = true;
+    }
+    if (record.cache_creation_input_tokens !== undefined) {
+      run.cache_creation_input_tokens =
+        (run.cache_creation_input_tokens ?? 0) + record.cache_creation_input_tokens;
+      acc.cacheWriteReported = true;
+    }
+  }
+
+  // `cost` and `unpriced_requests` are deliberately left to `repriceRuns`: they
+  // are a function of the *prices in effect*, not of the events, so they must not
+  // be baked into a row that may be persisted and read back under other prices.
+  return order.map((runId) => {
+    const acc = accs.get(runId);
+    const run = acc === undefined ? undefined : acc.run;
+    if (acc === undefined || run === undefined) throw new Error('unreachable');
+    return run;
+  });
+}
+
+/**
+ * Price every run row with the prices in effect **now**.
+ *
+ * Token sums are the durable fact (events); a price table is configuration that
+ * can change at any time, so a stored `cost` may not be trusted. Cost is a linear
+ * function of a run's tokens, so recomputing it from the row is exact — no event
+ * has to be re-read — and editing a price takes effect on the next render instead
+ * of requiring an index rebuild.
+ *
+ * `unpriced_requests` counts the run's requests when its model has no price;
+ * `cost` stays absent in that case so the UI shows `—`, never `$0`.
+ */
+export function repriceRuns(runs: RunSummary[], settings: Settings): RunSummary[] {
+  return runs.map((run) => {
+    const repriced: RunSummary = { ...run };
+    delete repriced.cost;
+    const price = settings.prices[run.model];
+    const hasUsage = run.prompt_tokens > 0 || run.completion_tokens > 0;
+    if (price === undefined) {
+      repriced.unpriced_requests = hasUsage ? run.requests : 0;
+      return repriced;
+    }
+    repriced.unpriced_requests = 0;
+    if (!hasUsage) return repriced;
+    const read = run.cache_read_input_tokens ?? 0;
+    const write = run.cache_creation_input_tokens ?? 0;
+    const nonCached = Math.max(0, run.prompt_tokens - read - write);
+    repriced.cost =
+      (nonCached * price.input_per_1m +
+        read * price.cache_read_per_1m +
+        write * price.cache_write_per_1m +
+        run.completion_tokens * price.output_per_1m) /
+      COST_DIVISOR;
+    return repriced;
+  });
+}
+
+/**
+ * Paired totals of a run's `run.completed` / `run.failed` events, keyed by run
+ * id. Used to **validate** the pairing (report only — never added to a total).
+ */
+export interface CompletedUsage {
+  run_id: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  duration_ms?: number;
+  iterations?: number;
+}
+
+export function completedUsages(events: RawEvent[]): Map<string, CompletedUsage> {
+  const byRun = new Map<string, CompletedUsage>();
+  for (const event of events) {
+    if (event.type !== 'run.completed') continue;
+    const usage = isRecord(event.data.usage) ? event.data.usage : undefined;
+    const entry: CompletedUsage = { run_id: event.run_id };
+    const prompt = usage === undefined ? undefined : optionalNumber(usage.prompt_tokens);
+    const completion = usage === undefined ? undefined : optionalNumber(usage.completion_tokens);
+    const cacheRead =
+      usage === undefined ? undefined : optionalNumber(usage.cache_read_input_tokens);
+    const cacheWrite =
+      usage === undefined ? undefined : optionalNumber(usage.cache_creation_input_tokens);
+    if (prompt !== undefined) entry.prompt_tokens = prompt;
+    if (completion !== undefined) entry.completion_tokens = completion;
+    if (cacheRead !== undefined) entry.cache_read_input_tokens = cacheRead;
+    if (cacheWrite !== undefined) entry.cache_creation_input_tokens = cacheWrite;
+    const duration = optionalNumber(event.data.duration_ms);
+    const iterations = optionalNumber(event.data.iterations);
+    if (duration !== undefined) entry.duration_ms = duration;
+    if (iterations !== undefined) entry.iterations = iterations;
+    byRun.set(event.run_id, entry);
+  }
+  return byRun;
+}
+
+/**
  * Fold raw events into one record per `llm.response`, plus one failed record
  * per `run.failed`. `llm.request` supplies the duration of the following
  * response and the model attribution (its `model` field).
  *
- * A failed run is run-level, not an LLM request. It is counted in summary but
- * only appears in Logs when it left an `llm.request` unanswered (`in_flight`);
- * otherwise there is no request row to show.
+ * This pairing is the **single** source of usage: `run.completed.usage` is never
+ * added on top (a retried run would be counted twice). A request that never got
+ * a response (the run failed) leaves a `failed` record instead of a usage row —
+ * visible in Logs, absent from the token totals, because no usage was reported.
+ *
+ * A failed run is run-level, not an LLM request. It is counted in summary and
+ * appears in Logs with `status=failed` and no counters; `in_flight` marks the
+ * case where it died with an unanswered `llm.request`.
  */
 export function buildRecords(events: RawEvent[], settings: Settings): UsageRecord[] {
   const records: UsageRecord[] = [];
@@ -332,7 +488,7 @@ export function dayKey(ts: number): string {
  *
  * This is the single definition of "the selected range": `index.ts` hands it to
  * `EventStore.loadEvents({ cutoff })` so the *reader* only opens files inside
- * the range, and `filterByDays` applies the same instant to the records it
+ * the range, and `filterRunsByDays` applies the same instant to the runs it
  * produced. Both sides must use the same number or a run that ends just after
  * midnight would be read but dropped, or kept but never read.
  */
@@ -352,12 +508,6 @@ export function daysCutoff(now: number, days: number): number {
  */
 export function cutoffFor(now: number, days: number | undefined): number | undefined {
   return days === undefined ? undefined : daysCutoff(now, days);
-}
-
-export function filterByDays(records: UsageRecord[], now: number, days?: number): UsageRecord[] {
-  if (days === undefined) return records;
-  const cutoff = daysCutoff(now, days);
-  return records.filter((record) => record.ts >= cutoff);
 }
 
 /** The three range parameters `logs` accepts, already type-checked by the RPC layer. */
@@ -423,7 +573,19 @@ export function resolveLogsRange(input: LogsRangeInput, now: number): LogsRange 
   };
 }
 
-interface Counter {
+interface Ratios {
+  input_share?: number;
+  input_share_unavailable?: CacheUnavailableReason;
+  prefix_health?: number;
+  prefix_health_unavailable?: CacheUnavailableReason;
+}
+
+function totalTokens(bucket: Pick<ModelBucket, 'prompt_tokens' | 'completion_tokens'>): number {
+  return bucket.prompt_tokens + bucket.completion_tokens;
+}
+
+/** Accumulator for run-level totals (mirrors `Counter`, one level up). */
+interface RunTotals {
   requests: number;
   promptTokens: number;
   completionTokens: number;
@@ -432,12 +594,12 @@ interface Counter {
   cacheWrite: number;
   cacheWriteReported: boolean;
   cost: number;
-  pricedRequests: number;
+  pricedRuns: number;
   unpricedRequests: number;
   failedRuns: number;
 }
 
-function counter(): Counter {
+function runTotals(): RunTotals {
   return {
     requests: 0,
     promptTokens: 0,
@@ -447,37 +609,33 @@ function counter(): Counter {
     cacheWrite: 0,
     cacheWriteReported: false,
     cost: 0,
-    pricedRequests: 0,
+    pricedRuns: 0,
     unpricedRequests: 0,
     failedRuns: 0,
   };
 }
 
-function addRecord(target: Counter, record: UsageRecord): void {
-  if (record.status === 'failed') {
-    target.failedRuns += 1;
-    return;
-  }
-  target.requests += 1;
-  target.promptTokens += record.prompt_tokens ?? 0;
-  target.completionTokens += record.completion_tokens ?? 0;
-  if (record.cache_read_input_tokens !== undefined) {
+function addRun(target: RunTotals, run: RunSummary): void {
+  target.requests += run.requests;
+  target.promptTokens += run.prompt_tokens;
+  target.completionTokens += run.completion_tokens;
+  if (run.cache_read_input_tokens !== undefined) {
     target.cacheReadReported = true;
-    target.cacheRead += record.cache_read_input_tokens;
+    target.cacheRead += run.cache_read_input_tokens;
   }
-  if (record.cache_creation_input_tokens !== undefined) {
+  if (run.cache_creation_input_tokens !== undefined) {
     target.cacheWriteReported = true;
-    target.cacheWrite += record.cache_creation_input_tokens;
+    target.cacheWrite += run.cache_creation_input_tokens;
   }
-  if (record.cost !== undefined) {
-    target.cost += record.cost;
-    target.pricedRequests += 1;
-  } else if (record.unpriced === true) {
-    target.unpricedRequests += 1;
+  if (run.cost !== undefined) {
+    target.cost += run.cost;
+    target.pricedRuns += 1;
   }
+  target.unpricedRequests += run.unpriced_requests;
+  if (run.status === 'failed') target.failedRuns += 1;
 }
 
-function totalsOf(target: Counter): Totals {
+function runTotalsOf(target: RunTotals): Totals {
   return {
     requests: target.requests,
     prompt_tokens: target.promptTokens,
@@ -488,45 +646,76 @@ function totalsOf(target: Counter): Totals {
   };
 }
 
+function runCostOf(target: RunTotals): number | undefined {
+  return target.pricedRuns > 0 ? target.cost : undefined;
+}
+
 /**
- * Sum of priced rows only. Absent when nothing in the bucket had a price, so
- * the UI never renders `$0` for "no prices configured". Unpriced rows are
- * reported separately via `unpriced_requests`.
+ * Range filter for runs: a run belongs to the range its **end** falls in.
+ *
+ * `ts_end` (not `ts_start`) because the tokens were produced while the run ran
+ * and the index only keeps one instant per run; a run ends when its last record
+ * is written. The consequence is documented in the module docs: a run that
+ * straddles midnight counts, whole, on the day it finished, while `logs` filters
+ * each request by its own `ts`.
  */
-function costOf(target: Counter): number | undefined {
-  return target.pricedRequests > 0 ? target.cost : undefined;
+export function filterRunsByDays(runs: RunSummary[], now: number, days?: number): RunSummary[] {
+  const cutoff = cutoffFor(now, days);
+  if (cutoff === undefined) return runs;
+  return runs.filter((run) => run.ts_end >= cutoff);
 }
 
-interface Ratios {
-  input_share?: number;
-  input_share_unavailable?: CacheUnavailableReason;
-  prefix_health?: number;
-  prefix_health_unavailable?: CacheUnavailableReason;
-}
-
-function cacheRatios(records: UsageRecord[]): Ratios {
-  const ok = records.filter((record) => record.status === 'ok');
-  if (ok.length === 0) {
-    return { input_share_unavailable: 'no-requests', prefix_health_unavailable: 'no-requests' };
+function runBuckets(runs: RunSummary[]): ModelBucket[] {
+  const totals = new Map<string, RunTotals>();
+  for (const run of runs) {
+    // A failed run has no counters; it is a row in Logs, not a model's usage.
+    if (run.requests === 0) continue;
+    const target = totals.get(run.model) ?? runTotals();
+    addRun(target, run);
+    totals.set(run.model, target);
   }
 
+  const buckets: ModelBucket[] = [];
+  for (const [model, target] of totals) {
+    const cost = runCostOf(target);
+    buckets.push({
+      model,
+      requests: target.requests,
+      prompt_tokens: target.promptTokens,
+      completion_tokens: target.completionTokens,
+      ...(target.cacheReadReported ? { cache_read_tokens: target.cacheRead } : {}),
+      ...(target.cacheWriteReported ? { cache_creation_tokens: target.cacheWrite } : {}),
+      ...(cost !== undefined ? { cost } : {}),
+    });
+  }
+  buckets.sort(
+    (a, b) =>
+      totalTokens(b) - totalTokens(a) || b.requests - a.requests || a.model.localeCompare(b.model),
+  );
+  return buckets;
+}
+
+function runRatios(runs: RunSummary[]): Ratios {
+  const withRequests = runs.filter((run) => run.requests > 0);
+  if (withRequests.length === 0) {
+    return { input_share_unavailable: 'no-requests', prefix_health_unavailable: 'no-requests' };
+  }
   let promptTotal = 0;
   let readTotal = 0;
   let writeTotal = 0;
   let readReported = false;
   let writeReported = false;
-  for (const record of ok) {
-    promptTotal += record.prompt_tokens ?? 0;
-    if (record.cache_read_input_tokens !== undefined) {
+  for (const run of withRequests) {
+    promptTotal += run.prompt_tokens;
+    if (run.cache_read_input_tokens !== undefined) {
       readReported = true;
-      readTotal += record.cache_read_input_tokens;
+      readTotal += run.cache_read_input_tokens;
     }
-    if (record.cache_creation_input_tokens !== undefined) {
+    if (run.cache_creation_input_tokens !== undefined) {
       writeReported = true;
-      writeTotal += record.cache_creation_input_tokens;
+      writeTotal += run.cache_creation_input_tokens;
     }
   }
-
   if (!readReported && !writeReported) {
     return {
       input_share_unavailable: 'no-cache-fields',
@@ -546,9 +735,6 @@ function cacheRatios(records: UsageRecord[]): Ratios {
   } else if (promptTotal <= 0) {
     result.input_share_unavailable = 'zero-denominator';
   } else if (promptTotal < readTotal + writeTotal) {
-    // The contract requires `prompt_tokens` to include cache counters; seeing
-    // more cache than prompt means the adapter did not normalize, so any ratio
-    // would be fabricated.
     result.input_share_unavailable = 'prompt-not-inclusive';
   } else {
     result.input_share = readTotal / promptTotal;
@@ -557,9 +743,6 @@ function cacheRatios(records: UsageRecord[]): Ratios {
   if (!readReported) {
     result.prefix_health_unavailable = 'no-cache-fields';
   } else if (!writeReported) {
-    // A missing write side is not zero: treating it as zero makes the ratio
-    // collapse to 100% (read / read), which is exactly the fake reading the
-    // contract forbids.
     result.prefix_health_unavailable = 'write-not-reported';
   } else {
     result.prefix_health = readTotal / (readTotal + writeTotal);
@@ -567,69 +750,46 @@ function cacheRatios(records: UsageRecord[]): Ratios {
   return result;
 }
 
-function totalTokens(bucket: Pick<ModelBucket, 'prompt_tokens' | 'completion_tokens'>): number {
-  return bucket.prompt_tokens + bucket.completion_tokens;
-}
-
-function modelBuckets(records: UsageRecord[]): ModelBucket[] {
-  const counters = new Map<string, Counter>();
-  for (const record of records) {
-    if (record.status !== 'ok') continue;
-    const target = counters.get(record.model) ?? counter();
-    addRecord(target, record);
-    counters.set(record.model, target);
-  }
-
-  const buckets: ModelBucket[] = [];
-  for (const [model, target] of counters) {
-    buckets.push({
-      model,
-      requests: target.requests,
-      prompt_tokens: target.promptTokens,
-      completion_tokens: target.completionTokens,
-      ...(target.cacheReadReported ? { cache_read_tokens: target.cacheRead } : {}),
-      ...(target.cacheWriteReported ? { cache_creation_tokens: target.cacheWrite } : {}),
-      ...(costOf(target) !== undefined ? { cost: costOf(target) } : {}),
-    });
-  }
-  buckets.sort(
-    (a, b) =>
-      totalTokens(b) - totalTokens(a) || b.requests - a.requests || a.model.localeCompare(b.model),
-  );
-  return buckets;
-}
-
-export function summarize(records: UsageRecord[], now: number, days?: number): SummaryResult {
-  const filtered = filterByDays(records, now, days);
-  const overall = counter();
-  const dayCounters = new Map<string, Counter>();
-  for (const record of filtered) {
-    addRecord(overall, record);
-    const key = dayKey(record.ts);
-    const target = dayCounters.get(key) ?? counter();
-    addRecord(target, record);
+/**
+ * Summary page DTO, aggregated from run summaries.
+ *
+ * Runs are the unit because that is what the persistent index stores; the
+ * per-request records they came from are what `logs` pages through. Totals stay
+ * consistent between the two by construction: both are folded from the same
+ * `llm.request` ↔ `llm.response` pairing (`buildRecords`), and neither adds
+ * `run.completed.usage`.
+ */
+export function summarizeRuns(runs: RunSummary[], now: number, days?: number): SummaryResult {
+  const filtered = filterRunsByDays(runs, now, days);
+  const overall = runTotals();
+  const dayCounters = new Map<string, RunTotals>();
+  for (const run of filtered) {
+    addRun(overall, run);
+    const key = dayKey(run.ts_end);
+    const target = dayCounters.get(key) ?? runTotals();
+    addRun(target, run);
     dayCounters.set(key, target);
   }
 
   const byDay: DayBucket[] = [];
   for (const [date, target] of dayCounters) {
-    const cost = costOf(target);
+    const cost = runCostOf(target);
     byDay.push({
       date,
-      ...totalsOf(target),
+      ...runTotalsOf(target),
       ...(cost !== undefined ? { cost } : {}),
       unpriced_requests: target.unpricedRequests,
     });
   }
   byDay.sort((a, b) => b.date.localeCompare(a.date));
 
-  const ratios = cacheRatios(filtered);
-  const cost = costOf(overall);
+  const ratios = runRatios(filtered);
+  const cost = runCostOf(overall);
   return {
-    has_data: filtered.length > 0,
-    totals: totalsOf(overall),
+    has_data: filtered.some((run) => run.requests > 0 || run.status === 'failed'),
+    totals: runTotalsOf(overall),
     by_day: byDay,
-    by_model: modelBuckets(filtered),
+    by_model: runBuckets(filtered),
     ...ratios,
     ...(cost !== undefined ? { cost } : {}),
     unpriced_requests: overall.unpricedRequests,
@@ -677,10 +837,10 @@ function toLogItem(record: UsageRecord): LogItem {
 
 export function listLogs(records: UsageRecord[], params: LogsParams): LogsResult {
   const matched = records.filter((record) => {
-    // Failed runs are run-level. They only belong in a request log when they
-    // died with an unanswered llm.request; otherwise summary is the only
-    // place they should appear.
-    if (record.status === 'failed' && record.in_flight !== true) return false;
+    // A failed run is a run-level row: it has no counters (no response meant no
+    // usage was reported), but it must stay **visible** — a failed request that
+    // silently disappeared from the log would look like it never happened.
+    // `in_flight` still marks the "died with an unanswered llm.request" case.
     if (params.status !== undefined && record.status !== params.status) return false;
     if (params.session_id !== undefined && record.session_id !== params.session_id) return false;
     if (params.model !== undefined && record.model !== params.model) return false;
@@ -702,6 +862,11 @@ export function listLogs(records: UsageRecord[], params: LogsParams): LogsResult
   return { items: page.map(toLogItem), next_cursor: next };
 }
 
-export function leaderboard(records: UsageRecord[], now: number, days?: number): LeaderboardResult {
-  return { items: modelBuckets(filterByDays(records, now, days)) };
+/** Leaderboard page DTO: same run summaries, grouped by model. */
+export function leaderboardRuns(
+  runs: RunSummary[],
+  now: number,
+  days?: number,
+): LeaderboardResult {
+  return { items: runBuckets(filterRunsByDays(runs, now, days)) };
 }

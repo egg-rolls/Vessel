@@ -55,8 +55,8 @@
  * @module @vessel-agent/plugin-usage
  */
 
-import { type Dirent, open, readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { type Dirent, mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { resolveSingleTenantPaths } from '@vessel-agent/core';
 
 /** Settings handed to the plugin in `plugin.activate`. */
@@ -87,6 +87,40 @@ export interface RawEvent {
   line: number;
   seq?: number;
   data: Record<string, unknown>;
+}
+
+/**
+ * One run's usage, aggregated from its request records.
+ *
+ * This is the shape the persistent index stores (`usage/index.ndjson`, one line
+ * per run) and the shape `summary` / `leaderboard` aggregate over: run-level
+ * totals are all those two pages need, and reading one small line per run beats
+ * re-reading session logs. `logs` still works from the per-request records,
+ * because a request row cannot be reconstructed from a run total.
+ *
+ * `ts_start` / `ts_end` are the first and last record of the run. A range filter
+ * uses `ts_end` — the instant the run finished — so a run that straddles
+ * midnight counts on the day it ended (see `filterRunsByDays` for why that is
+ * the only day-bucketing a run-level index can do).
+ */
+export interface RunSummary {
+  run_id: string;
+  session_id?: string;
+  model: string;
+  ts_start: number;
+  ts_end: number;
+  /** Answered requests (`llm.response` records). */
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  /** Priced requests only; absent when nothing in the run had a price. */
+  cost?: number;
+  /** Requests in this run whose model has no configured price. */
+  unpriced_requests: number;
+  /** The run ended in `run.failed`. */
+  status: 'ok' | 'failed';
 }
 
 /**
@@ -960,48 +994,291 @@ export class EventStore {
   }
 
   /**
-   * List `<dir>/<sessionId>/events.ndjson`, newest mtime first (name as a stable
-   * tie-break).
+   * List the session logs, newest mtime first (name as a stable tie-break).
    *
-   * One level deeper than the old trace directory: a session owns one file, not
-   * a run. `<sessionId>.json` (the session index) and any other entry are
-   * ignored — usage never reads the session metadata.
+   * Delegates to `listSessionFiles` so the reader and the index fingerprint see
+   * exactly the same file set, then forgets cache entries for files that are
+   * gone (a deleted session).
    */
   private async list(dir: string): Promise<FileInfo[]> {
-    let entries: Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return [];
+    const files = await listSessionFiles(dir);
+    const onDisk = new Set(files.map((file) => file.path));
+    for (const path of [...this.cache.keys()]) {
+      if (!onDisk.has(path)) this.cache.delete(path);
     }
-
-    const names = entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-      .map((entry) => entry.name);
-    const files: FileInfo[] = [];
-    // One `stat` per session is the dominant cost of a warm call on Windows
-    // (~0.3 ms each), so walk the list in small parallel batches instead of
-    // awaiting one file at a time.
-    for (let index = 0; index < names.length; index += STAT_BATCH) {
-      const batch = names.slice(index, index + STAT_BATCH);
-      const infos = await Promise.all(
-        batch.map(async (name): Promise<FileInfo | undefined> => {
-          const path = join(dir, name, SESSION_LOG);
-          try {
-            const info = await stat(path);
-            if (!info.isFile()) return undefined;
-            return { path, name, size: info.size, mtimeMs: info.mtimeMs };
-          } catch {
-            // Deleted between readdir and stat: forget it.
-            this.cache.delete(path);
-            this.firstTs.delete(path);
-            return undefined;
-          }
-        }),
-      );
-      for (const info of infos) if (info !== undefined) files.push(info);
+    for (const path of [...this.firstTs.keys()]) {
+      if (!onDisk.has(path)) this.firstTs.delete(path);
     }
-    files.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
     return files;
   }
+}
+
+/**
+ * List `<sessionsDir>/<sessionId>/events.ndjson`, newest mtime first.
+ *
+ * One level deeper than the old trace directory: a session owns one file, not a
+ * run. `<sessionId>.json` (the session index) and every other entry are ignored
+ * — usage never reads session metadata.
+ */
+async function listSessionFiles(dir: string): Promise<FileInfo[]> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const names = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name);
+  const files: FileInfo[] = [];
+  // One `stat` per session is the dominant cost of a warm call on Windows
+  // (~0.3 ms each), so walk the list in small parallel batches instead of
+  // awaiting one file at a time.
+  for (let index = 0; index < names.length; index += STAT_BATCH) {
+    const batch = names.slice(index, index + STAT_BATCH);
+    const infos = await Promise.all(
+      batch.map(async (name): Promise<FileInfo | undefined> => {
+        const path = join(dir, name, SESSION_LOG);
+        try {
+          const info = await stat(path);
+          if (!info.isFile()) return undefined;
+          return { path, name, size: info.size, mtimeMs: info.mtimeMs };
+        } catch {
+          // Deleted between readdir and stat: forget it.
+          return undefined;
+        }
+      }),
+    );
+    for (const info of infos) if (info !== undefined) files.push(info);
+  }
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
+  return files;
+}
+
+// ── persistent usage index ──────────────────────────────────────────────────
+
+/**
+ * Format version of `usage/index.ndjson`. Bumping it makes every existing index
+ * stale, which is the intended upgrade path: the file is a cache, so the reader
+ * rebuilds it from the session logs instead of trying to migrate it.
+ */
+export const USAGE_INDEX_VERSION = 1;
+
+const USAGE_INDEX_DIR = 'usage';
+const USAGE_INDEX_NAME = 'index.ndjson';
+const INDEX_HEADER_KIND = 'index';
+const INDEX_ENTRY_KIND = 'run';
+
+/** Cheap fingerprint of the session logs an index was built from. */
+export interface IndexSources {
+  files: number;
+  bytes: number;
+  max_mtime: number;
+}
+
+/**
+ * Staleness check for a persisted index: `files:bytes:max_mtime`.
+ *
+ * One `stat` sweep produces it, so a reader can decide whether the index still
+ * describes the session logs on disk without parsing a single event. Any change
+ * to any session (append, new session, deleted session) changes it, and a changed
+ * fingerprint only ever costs a rebuild — the logs stay the truth.
+ */
+export function sourceSignature(sources: IndexSources): string {
+  return `${sources.files}:${sources.bytes}:${sources.max_mtime}`;
+}
+
+export interface IndexHeader {
+  kind: typeof INDEX_HEADER_KIND;
+  v: number;
+  generated_at: number;
+  runs: number;
+  sources: IndexSources;
+}
+
+export interface UsageIndex {
+  header: IndexHeader;
+  runs: RunSummary[];
+}
+
+/** The plugin's own subdirectory: `<dataDir>/usage/index.ndjson`. */
+export function usageIndexPath(dataDir: string): string {
+  return join(resolveSingleTenantPaths(dataDir).root, USAGE_INDEX_DIR, USAGE_INDEX_NAME);
+}
+
+/**
+ * Write `text` to `path` atomically: temp file in the same directory, fsync,
+ * then a rename over the target.
+ *
+ * Rename is the only atomic step, so a reader either sees the previous file or
+ * the new one, never a half-written index. Two processes writing at once both
+ * rename successfully and the loser's content is simply replaced — the index is
+ * derived data, so the cost of losing that race is one rebuild, never a wrong
+ * answer. (Core has its own helper; a plugin may not import internals, and this
+ * is the ~30 lines it takes.)
+ */
+async function writeFileAtomic(path: string, text: string): Promise<void> {
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  const handle = await open(temporary, 'w');
+  try {
+    await handle.writeFile(text, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+/**
+ * Persist one line per run plus a header carrying the format version, the build
+ * time and the source fingerprint the index was derived from.
+ *
+ * Callers must **not** write an index built from a truncated read: a partial
+ * index would then look authoritative on every later call. The fingerprint is
+ * what makes staleness detectable without re-reading a single event.
+ */
+export async function writeUsageIndex(
+  dataDir: string,
+  runs: RunSummary[],
+  sources: IndexSources,
+): Promise<void> {
+  const path = usageIndexPath(dataDir);
+  await mkdir(dirname(path), { recursive: true });
+  const header: IndexHeader = {
+    kind: INDEX_HEADER_KIND,
+    v: USAGE_INDEX_VERSION,
+    generated_at: Date.now(),
+    runs: runs.length,
+    sources,
+  };
+  const lines = [JSON.stringify(header)];
+  for (const run of runs) {
+    lines.push(JSON.stringify({ v: USAGE_INDEX_VERSION, kind: INDEX_ENTRY_KIND, ...run }));
+  }
+  await writeFileAtomic(path, `${lines.join('\n')}\n`);
+}
+
+/** One index line -> `RunSummary`; `undefined` when a required field is missing. */
+function parseIndexEntry(value: Record<string, unknown>): RunSummary | undefined {
+  const runId = value.run_id;
+  const model = value.model;
+  const tsStart = value.ts_start;
+  const tsEnd = value.ts_end;
+  const requests = value.requests;
+  const prompt = value.prompt_tokens;
+  const completion = value.completion_tokens;
+  const status = value.status;
+  if (typeof runId !== 'string' || runId === '') return undefined;
+  if (typeof model !== 'string' || model === '') return undefined;
+  if (typeof tsStart !== 'number' || typeof tsEnd !== 'number') return undefined;
+  if (typeof requests !== 'number' || typeof prompt !== 'number') return undefined;
+  if (typeof completion !== 'number') return undefined;
+  if (status !== 'ok' && status !== 'failed') return undefined;
+
+  const sessionId = value.session_id;
+  const cacheRead = value.cache_read_input_tokens;
+  const cacheWrite = value.cache_creation_input_tokens;
+  const cost = value.cost;
+  const unpriced = value.unpriced_requests;
+  return {
+    run_id: runId,
+    ...(typeof sessionId === 'string' && sessionId !== '' ? { session_id: sessionId } : {}),
+    model,
+    ts_start: tsStart,
+    ts_end: tsEnd,
+    requests,
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    ...(typeof cacheRead === 'number' ? { cache_read_input_tokens: cacheRead } : {}),
+    ...(typeof cacheWrite === 'number' ? { cache_creation_input_tokens: cacheWrite } : {}),
+    ...(typeof cost === 'number' ? { cost } : {}),
+    unpriced_requests: typeof unpriced === 'number' ? unpriced : 0,
+    status,
+  };
+}
+
+/**
+ * Read the index, or `undefined` when it is missing, unreadable, written by
+ * another format version, or corrupt.
+ *
+ * Every failure means "no index", never "no data": the caller rebuilds from the
+ * session logs (the source of truth) and overwrites the file.
+ */
+export async function readUsageIndex(dataDir: string): Promise<UsageIndex | undefined> {
+  let text: string;
+  try {
+    text = await readFile(usageIndexPath(dataDir), 'utf8');
+  } catch {
+    return undefined;
+  }
+  const lines = text.split('\n');
+  const first = lines[0];
+  if (first === undefined || first.trim() === '') return undefined;
+  let header: unknown;
+  try {
+    header = JSON.parse(first);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(header)) return undefined;
+  if (header.kind !== INDEX_HEADER_KIND) return undefined;
+  if (header.v !== USAGE_INDEX_VERSION) return undefined;
+  const sources = header.sources;
+  if (!isRecord(sources)) return undefined;
+  const files = sources.files;
+  const bytes = sources.bytes;
+  const maxMtime = sources.max_mtime;
+  const generatedAt = header.generated_at;
+  if (typeof files !== 'number' || typeof bytes !== 'number') return undefined;
+  if (typeof maxMtime !== 'number' || typeof generatedAt !== 'number') return undefined;
+
+  const runs: RunSummary[] = [];
+  for (const line of lines.slice(1)) {
+    if (line.trim() === '') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      // A torn line means a torn file: rebuild instead of serving half an index.
+      return undefined;
+    }
+    if (!isRecord(parsed) || parsed.v !== USAGE_INDEX_VERSION) return undefined;
+    const run = parseIndexEntry(parsed);
+    if (run === undefined) return undefined;
+    runs.push(run);
+  }
+  return {
+    header: {
+      kind: INDEX_HEADER_KIND,
+      v: USAGE_INDEX_VERSION,
+      generated_at: generatedAt,
+      runs: runs.length,
+      sources: { files, bytes, max_mtime: maxMtime },
+    },
+    runs,
+  };
+}
+
+/**
+ * Fingerprint the session logs without reading them: file count, total bytes and
+ * the newest mtime. One `stat` per session (~0.3 ms on Windows; 134 sessions in
+ * the reference directory), and it is what lets the reader trust a persisted
+ * index without parsing a single event.
+ */
+export async function readSessionSources(dataDir: string): Promise<IndexSources> {
+  const dir = resolveSingleTenantPaths(dataDir).sessions_dir;
+  const files = await listSessionFiles(dir);
+  let bytes = 0;
+  let maxMtime = 0;
+  for (const file of files) {
+    bytes += file.size;
+    if (file.mtimeMs > maxMtime) maxMtime = file.mtimeMs;
+  }
+  return { files: files.length, bytes, max_mtime: maxMtime };
 }

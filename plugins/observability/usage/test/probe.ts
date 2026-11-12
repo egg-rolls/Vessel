@@ -23,14 +23,29 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import {
   buildRecords,
+  buildRunSummaries,
+  completedUsages,
   cutoffFor,
   daysCutoff,
   type LogsResult,
   listLogs,
+  repriceRuns,
   resolveLogsRange,
+  summarizeRuns,
 } from '../src/aggregate.js';
 import type { RawEvent, Settings } from '../src/store.js';
-import { DEFAULT_LIMITS, EventStore, USAGE_EVENT_TYPES } from '../src/store.js';
+import {
+  DEFAULT_LIMITS,
+  EventStore,
+  type IndexSources,
+  readSessionSources,
+  readUsageIndex,
+  sourceSignature,
+  USAGE_EVENT_TYPES,
+  USAGE_INDEX_VERSION,
+  usageIndexPath,
+  writeUsageIndex,
+} from '../src/store.js';
 import { I18N, translator } from '../web-src/i18n';
 
 const pluginRoot = resolve(import.meta.dir, '..');
@@ -568,7 +583,11 @@ function idsOf(events: RawEvent[]): string[] {
 {
   const dir = await traceDir('idempotent');
   const file = sessionFile(dir, 'session-f');
-  await writeSession(dir, 'session-f', traceLine('llm.request', 'run-f') + traceLine('llm.response', 'run-f', 64));
+  await writeSession(
+    dir,
+    'session-f',
+    traceLine('llm.request', 'run-f') + traceLine('llm.response', 'run-f', 64),
+  );
   await appendFile(file, traceLine('llm.response', 'run-f'));
   await utimes(
     file,
@@ -1531,6 +1550,274 @@ const rangeRecords = buildRecords(
     'the peek cache is not bounded by the event-cache file cap',
     first === 4 && store.firstLinePeeks === 4,
     `peeks ${first} -> ${store.firstLinePeeks}`,
+  );
+}
+
+// ── pairing, failed runs, persistent index ──────────────────────────────────
+
+/**
+ * Usage is folded from one place: the `llm.request` <-> `llm.response` pairing
+ * (`buildRecords`). `run.completed.usage` is a run-level total that a retried run
+ * would make us count twice, so it is only ever used to *check* the pairing.
+ * These fixtures pin that, plus the two things the old trace reader got wrong for
+ * Logs: a failed run must stay visible, and the persistent index must be a cache
+ * that can always be rebuilt from the session logs.
+ */
+
+/** A session log line, as the host writes it (envelope + data). */
+function sessionEvent(
+  type: string,
+  runId: string,
+  ts: number,
+  data: Record<string, unknown> = {},
+  sessionId = 'session-x',
+): string {
+  return `${JSON.stringify({
+    v: 1,
+    session_id: sessionId,
+    run_id: runId,
+    seq: 0,
+    ts,
+    type,
+    data: { run_id: runId, session_id: sessionId, ...data },
+  })}\n`;
+}
+
+const USAGE_1 = { prompt_tokens: 1_000, completion_tokens: 100, cache_read_input_tokens: 400 };
+
+// 26. Two attempts in one run: the pairing counts both, `run.completed` nothing.
+{
+  const usage = { usage: { prompt_tokens: 1_000, completion_tokens: 100, cache_read_input_tokens: 400 } };
+  const events = buildRecords(
+    [
+      // attempt 1 (paired)
+      rawEvent('llm.request', 'run-retry', BASE_TS, { model: MODEL }),
+      rawEvent('llm.response', 'run-retry', BASE_TS + 1_400, usage),
+      // attempt 2 (paired) — a retry, not a duplicate
+      rawEvent('llm.request', 'run-retry', BASE_TS + 5_000, { model: MODEL, attempt: 2 }),
+      rawEvent('llm.response', 'run-retry', BASE_TS + 6_400, usage),
+    ],
+    NO_PRICES,
+  );
+  check('two attempts produce two request records', events.length === 2, String(events.length));
+
+  const runs = repriceRuns(buildRunSummaries(events), NO_PRICES);
+  check(
+    'the run sums its attempts once',
+    runs.length === 1 && runs[0]?.requests === 2 && runs[0]?.prompt_tokens === 2_000,
+    JSON.stringify(runs.map((run) => [run.requests, run.prompt_tokens])),
+  );
+
+  // `run.completed.usage` for the same run: used for validation only.
+  const completed = completedUsages([
+    rawEvent('run.completed', 'run-retry', BASE_TS + 9_000, {
+      usage: { prompt_tokens: 2_000, completion_tokens: 200, cache_read_input_tokens: 800 },
+      duration_ms: 9_000,
+      iterations: 2,
+    }),
+  ]);
+  const reference = completed.get('run-retry');
+  check(
+    'run.completed.usage is available as a pairing check, not as a total',
+    reference?.prompt_tokens === 2_000 && reference?.completion_tokens === 200,
+    JSON.stringify(reference),
+  );
+  check(
+    'paired totals match run.completed.usage',
+    runs[0]?.prompt_tokens === reference?.prompt_tokens &&
+      runs[0]?.completion_tokens === reference?.completion_tokens &&
+      runs[0]?.cache_read_input_tokens === reference?.cache_read_input_tokens,
+    JSON.stringify([runs[0]?.prompt_tokens, runs[0]?.completion_tokens, runs[0]?.cache_read_input_tokens]),
+  );
+}
+
+// 27. A failed run has no usage, but it is a row in Logs and a `failed_runs`
+//     count in Summary — never a silent disappearance.
+{
+  const records = buildRecords(
+    [
+      ...pairAt('run-ok', BASE_TS),
+      rawEvent('llm.request', 'run-broken', BASE_TS + 1_000, { model: MODEL }),
+      rawEvent('run.failed', 'run-broken', BASE_TS + 2_000, { error: 'provider exploded' }),
+    ],
+    NO_PRICES,
+  );
+  check('a failed run becomes a record', records.length === 2, String(records.length));
+  const failedRow = records.find((record) => record.status === 'failed');
+  check(
+    'the failed record has no counters',
+    failedRow !== undefined &&
+      failedRow.prompt_tokens === undefined &&
+      failedRow.completion_tokens === undefined,
+    JSON.stringify(failedRow),
+  );
+
+  const page = listLogs(records, { limit: 10 });
+  check(
+    'the failed run is visible in Logs',
+    page.items.length === 2 && page.items.some((item) => item.status === 'failed'),
+    page.items.map((item) => item.status).join(','),
+  );
+  const failedOnly = listLogs(records, { limit: 10, status: 'failed' });
+  check(
+    'the status filter can isolate the failed run',
+    failedOnly.items.length === 1 && failedOnly.items[0]?.run_id === 'run-broken',
+    failedOnly.items.map((item) => item.run_id).join(','),
+  );
+
+  const summary = summarizeRuns(repriceRuns(buildRunSummaries(records), NO_PRICES), BASE_TS);
+  check(
+    'a failed run adds to failed_runs but not to requests',
+    summary.totals.requests === 1 && summary.totals.failed_runs === 1,
+    JSON.stringify(summary.totals),
+  );
+  check(
+    'a failed run contributes no tokens',
+    summary.totals.prompt_tokens === 1_000,
+    String(summary.totals.prompt_tokens),
+  );
+}
+
+/** The fingerprint comparison `index.ts` makes, spelled once (shared helper). */
+function sourceSignatureOf(sources: IndexSources | undefined): string {
+  return sources === undefined ? 'none' : sourceSignature(sources);
+}
+
+// 28. The index is a cache: written, read back, invalidated by version or
+//     corruption, and rebuilt (so a deleted session disappears) from the logs.
+{
+  const dir = await traceDir('usage-index');
+  await writeSession(
+    dir,
+    'session-a',
+    sessionEvent('llm.request', 'run-a', BASE_TS, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-a', BASE_TS + 1_400, { usage: USAGE_1 }),
+  );
+  await writeSession(
+    dir,
+    'session-b',
+    sessionEvent('llm.request', 'run-b', BASE_TS + 60_000, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-b', BASE_TS + 61_400, { usage: USAGE_1 }),
+  );
+
+  const build = async () => {
+    const store = new EventStore();
+    const loaded = await store.loadEvents(dir);
+    const runs = repriceRuns(buildRunSummaries(buildRecords(loaded.events, NO_PRICES)), NO_PRICES);
+    const sources = await readSessionSources(dir);
+    return { loaded, runs, sources };
+  };
+
+  const first = await build();
+  check(
+    'the index build covers every session',
+    first.loaded.files_covered === 2 && first.runs.length === 2 && first.sources.files === 2,
+    `${first.loaded.files_covered} sessions, ${first.runs.length} runs`,
+  );
+  await writeUsageIndex(dir, first.runs, first.sources);
+
+  const readBack = await readUsageIndex(dir);
+  check(
+    'the index reads back with its version, header and run rows',
+    readBack !== undefined &&
+      readBack.header.v === USAGE_INDEX_VERSION &&
+      readBack.header.generated_at > 0 &&
+      readBack.header.sources.files === 2 &&
+      readBack.runs.length === 2,
+    JSON.stringify(readBack?.header),
+  );
+  check(
+    'index rows keep the run totals',
+    readBack?.runs.every((run) => run.requests === 1 && run.prompt_tokens === 1_000) === true,
+  );
+  check(
+    'a stored index is only trusted when the session fingerprint matches',
+    sourceSignatureOf(readBack?.header.sources) === sourceSignatureOf(await readSessionSources(dir)),
+    `${sourceSignatureOf(readBack?.header.sources)} vs ${sourceSignatureOf(await readSessionSources(dir))}`,
+  );
+
+  // Version bump: the reader must treat the file as absent, not as data.
+  const path = usageIndexPath(dir);
+  const original = await readFile(path, 'utf8');
+  const bumped = original.replace('"v":1', `"v":${USAGE_INDEX_VERSION + 1}`);
+  await writeFile(path, bumped);
+  check('a different format version is not an index', (await readUsageIndex(dir)) === undefined);
+
+  // Corruption: one torn line invalidates the whole file (a torn file is torn).
+  const torn = original.split('\n');
+  torn[1] = '{"v":1,"kind":"run",';
+  await writeFile(path, torn.join('\n'));
+  check('a corrupt index line is not an index', (await readUsageIndex(dir)) === undefined);
+
+  // A deleted session changes the fingerprint, so the index is not trusted…
+  await writeUsageIndex(dir, first.runs, first.sources);
+  await rm(join(dir, 'sessions', 'session-b'), { recursive: true, force: true });
+  const afterDelete = await readSessionSources(dir);
+  check(
+    'a deleted session changes the fingerprint (so the index is stale)',
+    sourceSignatureOf(afterDelete) !== sourceSignatureOf(first.sources) && afterDelete.files === 1,
+    `${sourceSignatureOf(afterDelete)} vs ${sourceSignatureOf(first.sources)}`,
+  );
+  // …and a rebuild from the logs drops its runs: the index is never the truth.
+  const rebuilt = await build();
+  await writeUsageIndex(dir, rebuilt.runs, rebuilt.sources);
+  const afterRebuild = await readUsageIndex(dir);
+  check(
+    'a rebuild drops the deleted session runs',
+    rebuilt.runs.length === 1 &&
+      rebuilt.runs[0]?.run_id === 'run-a' &&
+      afterRebuild?.runs.length === 1,
+    rebuilt.runs.map((run) => run.run_id).join(','),
+  );
+}
+
+// 29. A session log spans days: the file-level mtime is only a sieve, the event
+//     filter (and the first-line peek) is what keeps a range correct.
+{
+  const dir = await traceDir('cross-day-session');
+  const yesterday = dayStart(-1) + 3_600_000;
+  const today = dayStart(0) + 3_600_000;
+  await writeSession(
+    dir,
+    'session-long',
+    sessionEvent('llm.request', 'run-yday', yesterday, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-yday', yesterday + 1_400, { usage: USAGE_1 }) +
+      sessionEvent('llm.request', 'run-today', today, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-today', today + 1_400, { usage: USAGE_1 }),
+  );
+  const file = sessionFile(dir, 'session-long');
+  await utimes(file, new Date(today + 2_000), new Date(today + 2_000));
+
+  const store = new EventStore();
+  const day1 = await loadDays(store, dir, 1);
+  check(
+    'one session file, but only today is in the day window',
+    day1.files_in_window === 1 && day1.events.length === 2 && day1.files_truncated === false,
+    `${day1.files_in_window} files, ${day1.events.length} events`,
+  );
+  check(
+    'the older run in the same session is filtered by event ts',
+    runIds(day1.events).join(',') === 'run-today',
+    runIds(day1.events).join(','),
+  );
+
+  // `until` on a session whose first event is before the bound: kept (the peek
+  // says "this session starts before the range end"), and the range clamp then
+  // happens per record in `listLogs` — the reader itself only needs a lower bound.
+  const store2 = new EventStore();
+  const until = dayStart(0);
+  const bounded = await store2.loadEvents(dir, { until });
+  check(
+    'a session that straddles the range end is kept',
+    bounded.files_in_window === 1 && bounded.files_truncated === false,
+    `${bounded.files_in_window} files, truncated ${bounded.files_truncated}`,
+  );
+  const boundedRecords = buildRecords(bounded.events, NO_PRICES);
+  const boundedPage = listLogs(boundedRecords, { limit: 10, until });
+  check(
+    'the range clamp happens on records, not on the file',
+    boundedPage.items.length === 1 && boundedPage.items[0]?.run_id === 'run-yday',
+    boundedPage.items.map((item) => item.run_id).join(','),
   );
 }
 
