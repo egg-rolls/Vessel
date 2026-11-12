@@ -2,7 +2,7 @@
 title: 状态与持久化接口
 kind: current
 triggers: [session, run store, checkpoint, durable, limits, corruption, prune]
-paths: [packages/core/src/types/session.ts, packages/core/src/types/limits.ts, packages/core/src/types/run-record-store.ts]
+paths: [packages/core/src/types/session.ts, packages/core/src/types/limits.ts, packages/core/src/types/run-record-store.ts, packages/core/src/session/message-identity.ts]
 ---
 
 # 状态与持久化接口
@@ -23,6 +23,8 @@ interface SessionStore {
 ```
 
 （ADR-056）：`FileSessionStore.load()` 只在主路径 `ENOENT` 时回退 legacy；文件存在但不可读或 JSON 损坏 → 抛 `SessionCorruptError`（`code: 'session_corrupt'`，含 `path`），不再静默当成“无会话”。`delete()` 同样先 `load()`，损坏时抛错不删除；`listRich()` 对损坏文件降级跳过，单文件损坏不拖垮列表。
+
+`SessionState.messages` 的消息可以带两个 additive 身份字段（0.51）：`run_id`（这条消息属于哪个 run；用户消息归属它开启的那次 run）与 `run_segment`（同一次 run 内第几段正文，0 起，只数非空 assistant 正文）。`run_id` 在 `ExecutionUnit.addContext`（唯一同时看见消息与 runId 的写入点）盖章；`run_segment` 由 `assignMessageIdentities`（`session/message-identity.ts`）在 `RunJournal.saveSessionState` —— SessionState 的唯一写口 —— 统一补：幂等、压缩删段后不重编号、resume 由事件投影（`projectMessages`）同一函数补齐。缺字段 = 旧数据，`sessions.get` 原样透出、读侧退回按内容比较（Web 时间线据此把「实时流那段正文」与「落盘那条消息」认成同一个对象，正文被 Output guardrail 改写过也认得出）。
 
 <a id="limits"></a>
 

@@ -19,6 +19,10 @@
  * - `session.rewound`        → 把当前投影截到 `keep_projected`（0.37 消息撤回；
  *                              全量重投影时不能复活已删除的消息）
  *
+ * 消息身份（additive `run_id` / `run_segment`）：`run_id` 取自事件的 `data.run_id`，
+ * 段序由 `assignMessageIdentities` 在投影末尾统一补（与落盘漏斗同一个函数）。
+ * 缺 `run_id` 的旧事件两个字段都缺省 —— 消费端退回内容比较。
+ *
  * 不产生消息的事件（run.* / permission / context.* / limit 等）直接忽略。
  *
  * @module @vessel-agent/core/session
@@ -33,6 +37,7 @@ import {
   type MessageRefKind,
 } from '../types/provider.js';
 import type { ToolCall } from '../types/tool.js';
+import { assignMessageIdentities, withRunIdentity } from './message-identity.js';
 
 /** 投影所需的最小事件形状（与 `SessionEventRecord` 结构兼容） */
 export interface ProjectableEvent {
@@ -116,6 +121,10 @@ function asMessage(value: unknown): Message | null {
   // 附件引用：只有路径与元信息。不补 = 落盘后（重放 / 会话历史）引用凭空消失。
   const refs = asRefs(value.refs);
   if (refs !== undefined) message.refs = refs;
+  // 消息身份（additive）：事件里的消息载荷可能已经带 `run_id`（`context.changed`）；
+  // `run_segment` 一律由投影末尾的 `assignMessageIdentities` 统一补，不从载荷里信。
+  const runId = readString(value.run_id);
+  if (runId !== undefined && runId.length > 0) message.run_id = runId;
   return message;
 }
 
@@ -137,6 +146,18 @@ function asToolCalls(value: unknown): ToolCall[] | undefined {
     calls.push({ id, type: 'function', function: { name, arguments: args } });
   }
   return calls.length > 0 ? calls : undefined;
+}
+
+/**
+ * 给投影出来的消息补 `run_id`（身份取自事件载荷的 `data.run_id`）。
+ *
+ * 为什么投影也要盖：resume / 崩溃恢复走的是「事件 → 消息」这条重建路径，投影不带身份
+ * 就等于刷新之后又没有身份可用（Web 认领退回内容比较 = 本条 bug 复现）。`run_id` 是事件
+ * 自带的字段，抄进消息不改任何内容；已带身份的（`data.message.run_id`）不覆盖。
+ */
+function withEventRunId(message: Message, data: Record<string, unknown>): Message {
+  const runId = readString(data.run_id);
+  return runId === undefined ? message : withRunIdentity(message, runId);
 }
 
 /**
@@ -169,18 +190,22 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
   for (const event of list) {
     const data = dataOf(event);
     if (event.type === 'user.message') {
-      const message = asMessage(data.message) ?? {
-        role: 'user',
-        content: readString(data.content) ?? '',
-      };
+      const message = withEventRunId(
+        asMessage(data.message) ?? {
+          role: 'user',
+          content: readString(data.content) ?? '',
+        },
+        data,
+      );
       message.timestamp ??= event.ts;
       messages.push(message);
       lastAssistant = undefined;
       continue;
     }
     if (event.type === 'message.injected') {
-      const message = asMessage(data.message);
-      if (message) {
+      const raw = asMessage(data.message);
+      if (raw !== null) {
+        const message = withEventRunId(raw, data);
         message.timestamp ??= event.ts;
         messages.push(message);
         lastAssistant = undefined;
@@ -248,22 +273,28 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
             function: { name: started.name, arguments: started.arguments },
           };
         });
-        const assistant: Message = {
-          role: 'assistant',
-          content,
-          tool_calls: effective,
-          timestamp: event.ts,
-          ...(reasoning ? { reasoning_content: reasoning } : {}),
-        };
+        const assistant = withEventRunId(
+          {
+            role: 'assistant',
+            content,
+            tool_calls: effective,
+            timestamp: event.ts,
+            ...(reasoning ? { reasoning_content: reasoning } : {}),
+          },
+          data,
+        );
         messages.push(assistant);
         lastAssistant = undefined;
       } else {
-        const assistant: Message = {
-          role: 'assistant',
-          content,
-          timestamp: event.ts,
-          ...(reasoning ? { reasoning_content: reasoning } : {}),
-        };
+        const assistant = withEventRunId(
+          {
+            role: 'assistant',
+            content,
+            timestamp: event.ts,
+            ...(reasoning ? { reasoning_content: reasoning } : {}),
+          },
+          data,
+        );
         messages.push(assistant);
         lastAssistant = assistant;
       }
@@ -272,12 +303,17 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
     if (event.type === 'tool.call.completed') {
       const id = readString(data.tool_call_id);
       if (id === undefined) continue;
-      messages.push({
-        role: 'tool',
-        tool_call_id: id,
-        content: readString(data.result) ?? '',
-        timestamp: event.ts,
-      });
+      messages.push(
+        withEventRunId(
+          {
+            role: 'tool',
+            tool_call_id: id,
+            content: readString(data.result) ?? '',
+            timestamp: event.ts,
+          },
+          data,
+        ),
+      );
       lastAssistant = undefined;
       continue;
     }
@@ -286,12 +322,17 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
       if (id === undefined) continue;
       const content =
         readString(data.content) ?? `Error: ${readString(data.error) ?? 'tool call failed'}`;
-      messages.push({
-        role: 'tool',
-        tool_call_id: id,
-        content,
-        timestamp: event.ts,
-      });
+      messages.push(
+        withEventRunId(
+          {
+            role: 'tool',
+            tool_call_id: id,
+            content,
+            timestamp: event.ts,
+          },
+          data,
+        ),
+      );
       lastAssistant = undefined;
       continue;
     }
@@ -304,6 +345,10 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
     }
   }
 
+  // 消息身份（additive）：`run_id` 上面已按事件补齐，段序在这里统一补 —— 与落盘漏斗
+  // （`RunJournal.saveSessionState`）**同一个函数、同一个口径**，两条重建路径才认得出
+  // 同一段正文。旧事件没有 `run_id` 时这两个字段保持缺省（消费端退回内容比较）。
+  assignMessageIdentities(messages);
   return messages;
 }
 
@@ -320,7 +365,13 @@ export function projectedKeepCount(messages: readonly Message[], keep: number): 
   return Math.max(0, keep - (hasBaseSystem ? 1 : 0));
 }
 
-/** 消息内容签名（忽略 timestamp：事件时间与上下文写入时间会有毫秒差） */
+/**
+ * 消息内容签名（忽略 timestamp：事件时间与上下文写入时间会有毫秒差）。
+ *
+ * **也忽略 `run_id` / `run_segment`**（0.51）：那是身份不是内容。旧缓存可能没有它们、
+ * 新投影有（或反之），把身份折进签名会让「缓存 ⟺ 投影」的尾部重叠匹配整体失配 ——
+ * 后果是同一段历史被追加两遍，比丢了身份更糟。
+ */
 function messageSignature(message: Message): string {
   return [
     message.role,

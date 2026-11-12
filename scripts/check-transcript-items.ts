@@ -14,8 +14,11 @@ import { ASK_ANSWER_MESSAGE_NAME } from '../apps/web/src/domains/chat/ask-answer
 import { ownedBySession, pendingStripView } from '../apps/web/src/domains/chat/pending-strip';
 import { ROTATE_HANDOFF_MESSAGE_NAME } from '../apps/web/src/domains/chat/rotate-handoff';
 import {
+  buildHistoryIndex,
   buildTranscriptItems,
+  claimRunFactsOf,
   isCardInputMessage,
+  oneShotClaims,
   type TranscriptItem,
 } from '../apps/web/src/domains/chat/transcript-items';
 import type { RunEvent } from '../apps/web/src/gateway/types';
@@ -49,12 +52,18 @@ function group(overrides: Partial<RunGroup> & { runId: string }): RunGroup {
   };
 }
 
-function textItem(text: string, key = 'text-0', anchorSeq?: number): TimelineItem {
+function textItem(
+  text: string,
+  key = 'text-0',
+  anchorSeq?: number,
+  segmentIndex?: number,
+): TimelineItem {
   return {
     kind: 'text',
     text,
     key,
     ...(anchorSeq !== undefined ? { anchorSeq } : {}),
+    ...(segmentIndex !== undefined ? { segmentIndex } : {}),
   };
 }
 
@@ -246,6 +255,90 @@ const FIXTURES: readonly Fixture[] = [
       const messages = items.filter((item) => item.kind === 'message');
       const input = items.some((item) => item.kind === 'run-input');
       return messages.length === 2 && input;
+    },
+  },
+  {
+    name: 'F28 消息身份：流式原文 vs 落盘打码（同 run_id + 段序）→ 恰好 1 条正文 item，且以落盘为准',
+    why: '根因是「拿正文内容当代理键」：Output guardrail 在落盘前把终稿打码（1794482135404 → 179*******404），流式那份与落盘那份内容不再相等 ⇒ 旧判据认不出同一段 ⇒ live + 历史各渲一份（刷新才消失）。身份（run_id + 段序）命中时内容不同也让位；差异不吞也不喊，记进 rewrittenSegments',
+    check: () => {
+      const first = '先说结论：同意加，但我先只读一遍。';
+      const streamed = 'retired_at = 1794482135404 已经写进交接卡。';
+      const masked = 'retired_at = 179*******404 已经写进交接卡。';
+      const messages = [
+        msg('user', '把这些字段贴进交接卡', { run_id: 'r1' }),
+        msg('assistant', first, { run_id: 'r1', run_segment: 0 }),
+        msg('assistant', masked, { run_id: 'r1', run_segment: 1 }),
+      ];
+      const groups = [
+        group({
+          runId: 'r1',
+          status: 'completed',
+          input: '把这些字段贴进交接卡',
+          output: masked,
+          items: [textItem(first, 'text-r1-0', 7, 0), textItem(streamed, 'text-r1-1', 12, 1)],
+        }),
+      ];
+      const items = buildTranscriptItems({ messages, messageIndexOffset: 0, liveGroups: groups });
+      // 屏上：三条历史消息（输入 + 两段正文），一条 live 正文都不剩。
+      const bodies = items.filter((item) => item.kind === 'message' || item.kind === 'run-text');
+      const liveTexts = items.filter((item) => item.kind === 'run-text');
+      const last = items.find((item) => item.kind === 'message' && item.absIndex === 2);
+      // 留痕：认领统计必须记下「这一段按身份让位、且落盘正文被改写过」。
+      const history = buildHistoryIndex(messages, 0);
+      const stats = oneShotClaims(history, claimRunFactsOf(groups)).stats;
+      return (
+        liveTexts.length === 0 &&
+        bodies.length === 3 &&
+        last !== undefined &&
+        last.kind === 'message' &&
+        last.message.content === masked &&
+        stats.rewrittenSegments === 1 &&
+        stats.unclaimedSegments === 0
+      );
+    },
+  },
+  {
+    name: 'F29 旧数据没有 run_id → 退回内容比较（不删路径、不放松判据）',
+    why: '身份是 additive 的：旧会话 / 旧日志没有 run_id 时只能按内容认领 —— 内容相等照旧让位，内容被打码改写就照旧两份（可见、F5 可恢复）。这条 fixture 钉住「新路径没有偷偷放宽旧路径」',
+    check: () => {
+      const same = '普通答复，逐字相同。';
+      const equal = buildTranscriptItems({
+        messages: [msg('user', '问'), msg('assistant', same)],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r-old',
+            status: 'completed',
+            input: '问',
+            output: same,
+            items: [textItem(same, 'text-r-old-0', 3, 0)],
+          }),
+        ],
+      });
+      const equalBodies = equal.filter(
+        (item) => item.kind === 'message' || item.kind === 'run-text',
+      );
+      const streamed = 'retired_at = 1794482135404 已经写进交接卡。';
+      const masked = 'retired_at = 179*******404 已经写进交接卡。';
+      const rewritten = buildTranscriptItems({
+        messages: [msg('user', '贴进来'), msg('assistant', masked)],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r-old',
+            status: 'completed',
+            input: '贴进来',
+            output: masked,
+            items: [textItem(streamed, 'text-r-old-0', 5, 0)],
+          }),
+        ],
+      });
+      const rewrittenBodies = rewritten.filter(
+        (item) => item.kind === 'message' || item.kind === 'run-text',
+      );
+      // 内容相等 ⇒ 正文只出 1 份（内容认领照旧）；被改写 ⇒ 正文 2 份
+      // （旧数据没有身份时的已知降级，行为与改动前完全一致）。
+      return equalBodies.length === 2 && rewrittenBodies.length === 3;
     },
   },
   {

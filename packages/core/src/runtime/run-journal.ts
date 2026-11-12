@@ -8,6 +8,7 @@
  * @module @vessel-agent/core/runtime
  */
 
+import { assignMessageIdentities } from '../session/index.js';
 import type { RunEvent } from '../types/event.js';
 import { LeaseExpiredError } from '../types/lease.js';
 import type {
@@ -181,6 +182,11 @@ export class SessionRunJournal implements RunJournal {
 
   async saveSessionState(state: SessionState): Promise<void> {
     if (!this.deps.session) return;
+    // 消息身份（additive）：`run_segment` 只在**落盘这一处**盖章 —— 本方法是 SessionState
+    // 的唯一写口（初始保存 / checkpoint / 终态 / 手动压缩四路都经过它），一个口径、
+    // 幂等（已盖过的不重写）。它必须发生在 save 之前：读侧（`sessions.get`）拿到的
+    // 就是库里那一份，身份不在库里则刷新后依然没有身份可用。
+    if (state.messages !== undefined) assignMessageIdentities(state.messages);
     if (this.deps.eventLog) {
       // 先等待已入队事件落盘，再记录缓存覆盖到的 seq；resume 只重放之后的增量。
       await this.flush();

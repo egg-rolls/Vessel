@@ -64,6 +64,23 @@ export interface Message {
    * 旧 gateway / 旧 session 缺失该字段 → 前端按「无引用」渲染，不迁移。
    */
   refs?: MessageRef[];
+  /**
+   * 消息身份（additive）：这条消息属于哪个 run。
+   *
+   * 为什么在 wire 上要它：时间线去重（认领）以前只能拿正文内容当代理键，而落盘前的
+   * Output guardrail 会改写正文（PII 打码），于是实时那份（原文）与历史那份（打码后）
+   * 内容不等 ⇒ 同一段正文被当成两个对象渲染两遍。身份是结构化事实，内容被怎么改写
+   * 都不影响「这是同一段」。
+   *
+   * **缺失 = 旧数据 / 旧 gateway**：不做回填，客户端退回既有的「内容相等」认领路径。
+   */
+  run_id?: string;
+  /**
+   * 消息身份（additive）：同一次 run 内**第几段正文**（0 起，只数非空 assistant 正文）。
+   * 与 live 侧 `run-text` 的 `segmentIndex`（流式段序）同口径。
+   * **缺失 = 旧数据**：同上，退回内容比较。
+   */
+  run_segment?: number;
 }
 
 /** sessions.search 的单条结果（E5 冻结形状）。 */

@@ -526,6 +526,10 @@ export function useChatTranscript({
      * 与 `eventStore.droppedNoise` 同一形态：只暴露只读计数、不进渲染（本单不动 UI）；
      * 它的用途是将来「重复的线上占比被量化到用户可感知」时给「位置认领要不要打开」取数。
      * 粘住期间（同一份历史窗口、没有新 run）这些计数不增长 —— 它记的是**判定**，不是帧。
+     *
+     * 0.51：`rewrittenSegments` 是「按身份让位、但落盘正文与流式原文不同」的段数 ——
+     * 也就是「guardrail 改写被身份识别出来了」的次数。它是这条修法唯一的对外证据面
+     * （屏上只出落盘那份，差异不进 UI）。
      */
     claimStats: claimLedger.stats,
     isHiddenMessage,

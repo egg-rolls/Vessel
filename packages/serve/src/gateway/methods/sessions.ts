@@ -747,6 +747,11 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // 0.52：出站窗口与实时流统一 8 KiB 口径（`role==='tool'` 的 content 与
         // assistant 工具入参）。**在游标之后裁**：`next_before` 的 `length` 取自
         // 未裁剪的 `windowAnchor.content.length`，翻页校验才不会被裁剪改写。
+        //
+        // 消息身份（additive `run_id` / `run_segment`）**原样透出**：它们由 core 在落盘前
+        // 盖上（`RunJournal.saveSessionState`），本方法只读库里的那一份，不派生、不回填。
+        // 缺这两个字段 = 旧数据 / 旧 gateway，客户端退回内容比较（见
+        // `apps/web/src/gateway/types/sessions.ts` 的 `Message` 注释）。
         return {
           session: {
             ...toSessionView(state, latest),

@@ -25,7 +25,10 @@
  *
  * 去重 = **认领（claiming）**：按轮次顺序一对一匹配，每个 run 最多认领一条用户消息，
  * 每条消息最多被一个 run 认领；被认领的历史消息不再单独成 item（run 是权威来源）。
- * 认领失败（guardrail 改写过正文等）时两边都渲染 —— 宁可重复，绝不吞消息。
+ * 认领的键分两层：**消息身份**（落盘消息的 `run_id` + `run_segment`，live 侧的
+ * `segmentIndex`）优先 —— 它不受「正文被 Output guardrail 改写」影响，内容不同也让位，
+ * 屏上以落盘那份为准；身份缺失（旧数据）或不唯一时才退回**内容相等**，那时认不出来
+ * 就两边都渲染 —— 宁可重复，绝不吞消息。
  */
 import type { Message, MessageRef, RunEvent } from '../../gateway/types';
 import type { SessionDetail } from '../../gateway/types/sessions';
@@ -169,6 +172,14 @@ export interface RunTextItem extends ItemMeta {
   kind: 'run-text';
   runId: string;
   text: string;
+  /**
+   * 这段正文是**本 run 的第几段**（0 起，只数正文段）。
+   *
+   * 与落盘消息的 `run_segment` 同一把尺子（0.51 消息身份）：内容被 Output guardrail
+   * 改写之后，认领只能按身份认这一段（见 `ClaimSegment.segmentIndex`）。
+   * 来自 fold 的计数器而不是 items 下标 —— 交棒删段 / 折叠砍项都不会让它前移。
+   */
+  segmentIndex?: number;
   /**
    * 这段正文是否仍在流式收字。
    *
@@ -513,6 +524,22 @@ export interface HistoryIndex {
   /** 历史里出现过的 tool_call id（判断 run 是否已落盘）。 */
   callIds: Set<string>;
   /**
+   * 段身份 → 落盘正文（0.51 消息身份）：`run_id` + `run_segment` 拼出来的键。
+   *
+   * 只收**会渲染的 assistant 正文**（隐藏消息 / 空正文 / 缺身份的旧数据都不进表）——
+   * 身份认领的前提永远是「历史那份确实在屏上」，否则让位就是吞内容。
+   */
+  textBySegment: Map<string, string>;
+  /**
+   * 出现两次以上的段身份：同一个 `(run_id, run_segment)` 有两条消息 = 身份不可信。
+   *
+   * 这种数据只可能来自手改 / 半成品迁移。认领遇到它**按内容走**（既有路径），
+   * 因为按身份让位会让其中一段被永久隐藏 —— 那是唯一不可恢复的方向。
+   */
+  ambiguousSegments: Set<string>;
+  /** `run_id` → 该 run 的用户消息绝对下标（同一 run 可能有多条：注入消息 + 真实输入）。 */
+  inputsByRun: Map<string, number[]>;
+  /**
    * 认领结论（`ClaimLedger` 一次性判定 + 单调粘住的结果）。
    *
    * 为什么挂在索引上：认领**就是**「历史消息 ⇄ live run」的配对，`buildHistoryIndex`
@@ -607,6 +634,24 @@ function isAgentNamed(message: Message): boolean {
 }
 
 /**
+ * 消息身份（0.51）：`run_id` + 段序 → 一个字符串键。
+ *
+ * 为什么段序要参与：一次 run 里可能有多段正文（每次带工具调用的迭代一段），只用
+ * `run_id` 粒度太粗，会让第二轮正文去认第一轮那条消息。分隔符用不可能出现在 uuid /
+ * 数字里的 `\u0000`，避免拼接歧义。
+ */
+function textSegmentKey(runId: string | undefined, segment: number): string | undefined {
+  if (typeof runId !== 'string' || runId.length === 0) return undefined;
+  return `${runId}\u0000${segment}`;
+}
+
+/** 消息的 `run_id`（空串 / 非字符串一律当「旧数据没有身份」）。 */
+function identityRunId(message: Message): string | undefined {
+  const runId = message.run_id;
+  return typeof runId === 'string' && runId.length > 0 ? runId : undefined;
+}
+
+/**
  * 这条 user 消息是不是**一张卡**而不是人打的字：A2A 投递（`agent:<alias>` → agent 卡）
  * 与 rotate 交接嘱托（`rotate:handoff[:<epoch>]` → 交接卡）。
  *
@@ -638,6 +683,12 @@ export function buildHistoryIndex(
   const contentByIndex = new Map<number, string>();
   const messageByIndex = new Map<number, Message>();
   const callIds = new Set<string>();
+  /** 段身份 → 落盘正文（认领的结构化一侧，见 `HistoryIndex.textBySegment`）。 */
+  const textBySegment = new Map<string, string>();
+  /** 出现两次以上的段身份（同 run 同段两条消息）⇒ 身份不可信（见 `ambiguousSegments`）。 */
+  const ambiguousSegments = new Set<string>();
+  /** `run_id` → 该 run 的用户消息绝对下标（认领时要求唯一，见 `HistoryIndex.inputsByRun`）。 */
+  const inputsByRun = new Map<string, number[]>();
   /** 工具结果消息的时间（历史工具卡的权威 ts：结果落盘那一刻）。 */
   const toolResultTs = new Map<string, number>();
 
@@ -739,6 +790,13 @@ export function buildHistoryIndex(
       const list = userByContent.get(text);
       if (list === undefined) userByContent.set(text, [absIndex]);
       else list.push(absIndex);
+      // 身份：该 run 的用户消息下标（同一 run 可能有多条：注入消息 + 真实输入）。
+      const userRunId = identityRunId(message);
+      if (userRunId !== undefined) {
+        const indexes = inputsByRun.get(userRunId);
+        if (indexes === undefined) inputsByRun.set(userRunId, [absIndex]);
+        else indexes.push(absIndex);
+      }
     }
 
     const ids = (message.tool_calls ?? [])
@@ -746,7 +804,20 @@ export function buildHistoryIndex(
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
     if (ids.length > 0) callIdsByIndex.set(absIndex, ids);
     for (const id of ids) callIds.add(id);
-    if (message.role === 'assistant') contentByIndex.set(absIndex, trimText(message.content));
+    if (message.role === 'assistant') {
+      const content = trimText(message.content);
+      contentByIndex.set(absIndex, content);
+      // 身份：`(run_id, run_segment)` → 这一段正文的落盘版本（内容已被 guardrail 改写也照收）。
+      // 同一个键出现第二条 ⇒ 身份不可信（标记成冲突，退回内容认领），绝不拿它去让人让位。
+      const segment = message.run_segment;
+      if (content.length > 0 && typeof segment === 'number' && Number.isFinite(segment)) {
+        const key = textSegmentKey(message.run_id, segment);
+        if (key !== undefined) {
+          if (textBySegment.has(key)) ambiguousSegments.add(key);
+          else textBySegment.set(key, content);
+        }
+      }
+    }
 
     // 只有 tool_calls、没有正文的 assistant 消息不单独成 item（工具卡代表它）。
     const hasContent = trimText(message.content).length > 0;
@@ -867,7 +938,17 @@ export function buildHistoryIndex(
     });
   }
 
-  return { items, userByContent, callIdsByIndex, contentByIndex, messageByIndex, callIds };
+  return {
+    items,
+    userByContent,
+    callIdsByIndex,
+    contentByIndex,
+    messageByIndex,
+    callIds,
+    textBySegment,
+    ambiguousSegments,
+    inputsByRun,
+  };
 }
 
 /**
@@ -904,8 +985,14 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     // 段锚点表：`foldToolItems` 的输出是 `ChatRenderItem`（不带 anchorSeq），但 key 原样
     // 透传 —— 从 `group.items` 建一张 key → 首个 delta 的 seq 的表，段身份仍按 seq 走。
     const anchors = new Map<string, number>();
+    // 段序表（同上理由：`ChatRenderItem` 可能不带 `segmentIndex`，但 key 透传）：
+    // 身份认领要用「本 run 内第几段正文」，见 `ClaimSegment.segmentIndex`。
+    const segmentsOf = new Map<string, number>();
     for (const item of group.items) {
       if (item.anchorSeq !== undefined) anchors.set(item.key, item.anchorSeq);
+      if (item.kind === 'text' && item.segmentIndex !== undefined) {
+        segmentsOf.set(item.key, item.segmentIndex);
+      }
     }
     // 组内时间**单调**：每个 item 用自己事件时间，但不允许比前一个 item 更早
     // （时钟同毫秒/事件时间相同时用插入序，绝不因为 ts 抖动把顺序倒过来）。
@@ -988,6 +1075,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     for (const item of folded) {
       if (item.kind === 'text') {
         const anchor = anchors.get(item.key);
+        const segmentIndex = segmentsOf.get(item.key);
         items.push({
           kind: 'run-text',
           // 段身份 = 该段首个 delta 的 seq；没有锚点的手工分组退回段序（测试 / 子 agent 用）。
@@ -997,6 +1085,9 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           streaming: false,
           // 段锚点：认领让位与交棒删除都按它认这一段（见 `ItemMeta.anchorSeq`）。
           ...(anchor !== undefined ? { anchorSeq: anchor } : {}),
+          // 段序：与落盘消息的 `run_segment` 对身份用（0.51）。没有它的手工分组
+          // （测试 / 子 agent）落回下面的局部 `textIndex`，行为与之前一致。
+          segmentIndex: segmentIndex ?? textIndex,
           // 正文段用最后一个 delta 的时间（该段结束时刻）。
           ...(itemTs(item.endedAt ?? item.startedAt) !== undefined
             ? { ts: itemTs(item.endedAt ?? item.startedAt) }
@@ -1136,6 +1227,13 @@ export interface ClaimSegment {
   text: string;
   /** 该段首个 delta 的 wire seq（段身份；没有锚点的手工分组才缺）。 */
   anchorSeq?: number;
+  /**
+   * 这一段是**本 run 的第几段正文**（0 起；只有 kind='text' 有）。
+   *
+   * 与落盘消息的 `run_segment` 同一把尺子：内容被 guardrail 改写后，只有它还能证明
+   * 「live 这一段就是落盘那一条」。缺失（手工分组 / 旧事件回放）⇒ 该段只走内容认领。
+   */
+  segmentIndex?: number;
 }
 
 /**
@@ -1195,6 +1293,9 @@ function claimRunFactsOfGroup(group: RunGroup): ClaimRunFacts {
       kind: item.kind,
       text: item.text,
       ...(item.anchorSeq !== undefined ? { anchorSeq: item.anchorSeq } : {}),
+      ...(item.kind === 'text' && item.segmentIndex !== undefined
+        ? { segmentIndex: item.segmentIndex }
+        : {}),
     });
     // 正文：run.completed.output 缺失时用**已流出的第一段正文**兜底（同一段文本即可认领）。
     if (item.kind === 'text' && fallbackOutput.length === 0) fallbackOutput = item.text;
@@ -1205,6 +1306,10 @@ function claimRunFactsOfGroup(group: RunGroup): ClaimRunFacts {
       kind: 'text',
       text: group.liveText,
       ...(group.liveTextAnchorSeq !== undefined ? { anchorSeq: group.liveTextAnchorSeq } : {}),
+      // 尾巴的段序由 fold 直接给（flush 之后是同一个号，不换号）。
+      ...(group.liveTextSegmentIndex !== undefined
+        ? { segmentIndex: group.liveTextSegmentIndex }
+        : {}),
     });
   }
   if (group.liveReasoning !== undefined && group.liveReasoning.length > 0) {
@@ -1246,6 +1351,14 @@ export interface ClaimStats {
   assistantMisses: number;
   /** 终态 run 里**没让位**的正文段条数（= 潜在重复的两份渲染）。 */
   unclaimedSegments: number;
+  /**
+   * 按**身份**让位、但落盘正文与流式原文不同的段数（0.51）。
+   *
+   * 这就是「guardrail 改写被识别出来了」的痕迹：屏上展示的是落盘那份（打码后），
+   * 差异本身不吞、也不在 UI 上喊 —— 计数在这里留底，是这条路径唯一的对外证据。
+   * 身份缺失（旧数据）时不会增长（那时走内容比较）。
+   */
+  rewrittenSegments: number;
 }
 
 /**
@@ -1322,7 +1435,13 @@ export interface ClaimIdentity {
 }
 
 function emptyClaimStats(): ClaimStats {
-  return { decisions: 0, userMisses: 0, assistantMisses: 0, unclaimedSegments: 0 };
+  return {
+    decisions: 0,
+    userMisses: 0,
+    assistantMisses: 0,
+    unclaimedSegments: 0,
+    rewrittenSegments: 0,
+  };
 }
 
 interface ClaimCore {
@@ -1346,6 +1465,12 @@ interface ClaimCore {
  * ② 认领账本能证明「历史那份**确实会渲染**」（本账本：让位只发生在历史真的持有那段
  *    内容时，`stats.userMisses / assistantMisses` 是它的取数面）；
  * ③ 有 fixture 证明「位置认领 + guardrail 改写」不会让正文消失。
+ *
+ * **0.51：前置条件 ①②③ 现在由「消息身份」满足**，位置认领的近似物已经落地：落盘消息带
+ * `run_id` + `run_segment`（服务端盖章，见 core `assignMessageIdentities`），live 段带
+ * `segmentIndex`（fold 的计数器）。同一身份 ⇒ 同一段 ⇒ **内容不同也让位**（落盘权威，
+ * 被 guardrail 打码过就展示打码后的），差异记进 `stats.rewrittenSegments` 留痕。
+ * 身份缺失 / 不唯一（旧数据、注入消息与真实输入并存、撞号）⇒ 退回内容路径，**不猜**。
  */
 function computeClaimCore(
   history: HistoryIndex,
@@ -1357,6 +1482,16 @@ function computeClaimCore(
   let cursor = -Infinity;
   for (const fact of facts) {
     if (fact.input.length === 0) continue;
+    // ① 身份认领：历史里属于**这个 run** 的用户消息只有一条时，它就是这一轮的输入。
+    //    为什么要求唯一：一次 run 可以有多条 user 消息（`RunOptions.messages` 注入 +
+    //    真实输入），拿错一条就会把真正的输入藏起来，而历史那条渲染的是别的内容。
+    const byIdentity = uniqueInputOfRun(history, fact.runId, claimedUser);
+    if (byIdentity !== undefined) {
+      claimedUser.add(byIdentity);
+      claimedUserByRun.set(fact.runId, byIdentity);
+      cursor = Math.max(cursor, byIdentity);
+      continue;
+    }
     const candidates = history.userByContent.get(fact.input) ?? [];
     const target = candidates.find((index) => index >= cursor && !claimedUser.has(index));
     if (target === undefined) {
@@ -1410,23 +1545,77 @@ function computeClaimCore(
   const yieldedAnchors = new Set<number>();
   const yieldedTexts = new Set<string>();
   for (const fact of facts) {
+    // 本 run 内撞号的段序（同一个号出现两次）⇒ 这个号不可信，该号只走内容认领。
+    const tripped = repeatedSegmentIndexes(fact.segments);
+    let unclaimed = 0;
     for (const segment of fact.segments) {
       const text = normalizeText(segment.text);
       if (text.length === 0) continue;
-      const match = segment.kind === 'text' ? claimedTexts.has(text) : claimedReasonings.has(text);
-      if (!match) continue;
-      yieldedTexts.add(text);
+      const identity =
+        segment.kind === 'text'
+          ? identityOfSegment(history, fact.runId, segment, tripped)
+          : undefined;
+      const byContent =
+        segment.kind === 'text' ? claimedTexts.has(text) : claimedReasonings.has(text);
+      if (!byContent && identity === undefined) {
+        if (segment.kind === 'text') unclaimed += 1;
+        continue;
+      }
+      // 内容路径命中时把正文也记进 `yieldedTexts`（没有锚点的手工分组靠它兜底）。
+      // 身份命中**不**记正文：那会让「同一段文字」在别处也被藏起来，而身份只对本段成立。
+      if (byContent) yieldedTexts.add(text);
       if (segment.anchorSeq !== undefined) yieldedAnchors.add(segment.anchorSeq);
+      // 留痕：身份命中、但落盘正文与流式原文不同 = 这一段被 guardrail 改写过。
+      if (identity !== undefined && normalizeText(identity) !== text) stats.rewrittenSegments += 1;
     }
     // 终态 run 里没让位的正文段 = 潜在的「live + 历史」两份渲染。
     if (fact.running || fact.output.length === 0) continue;
-    for (const segment of fact.segments) {
-      if (segment.kind !== 'text') continue;
-      const text = normalizeText(segment.text);
-      if (text.length > 0 && !claimedTexts.has(text)) stats.unclaimedSegments += 1;
-    }
+    stats.unclaimedSegments += unclaimed;
   }
   return { claimedUserByRun, claimedAssistant, yieldedAnchors, yieldedTexts };
+}
+
+/**
+ * 身份认领的关键一问：这一轮（run）的输入在历史里是不是**唯一**一条 user 消息？
+ *
+ * 返回它的绝对下标；不唯一 / 没有 / 已被别的 run 认领 ⇒ undefined（调用侧退回内容认领）。
+ */
+function uniqueInputOfRun(
+  history: HistoryIndex,
+  runId: string,
+  claimedUser: ReadonlySet<number>,
+): number | undefined {
+  const indexes = history.inputsByRun.get(runId);
+  if (indexes === undefined || indexes.length !== 1) return undefined;
+  const only = indexes[0];
+  if (only === undefined || claimedUser.has(only)) return undefined;
+  return only;
+}
+
+/** 这一段正文按身份能不能认出来：返回落盘正文（用了身份就返回，否则 undefined）。 */
+function identityOfSegment(
+  history: HistoryIndex,
+  runId: string,
+  segment: ClaimSegment,
+  tripped: ReadonlySet<number>,
+): string | undefined {
+  const index = segment.segmentIndex;
+  if (index === undefined || tripped.has(index)) return undefined;
+  const key = textSegmentKey(runId, index);
+  if (key === undefined || history.ambiguousSegments.has(key)) return undefined;
+  return history.textBySegment.get(key);
+}
+
+/** 本 run 里出现两次以上的正文段序（撞号 = 身份不可信，见 `HistoryIndex.ambiguousSegments`）。 */
+function repeatedSegmentIndexes(segments: readonly ClaimSegment[]): Set<number> {
+  const seen = new Set<number>();
+  const repeated = new Set<number>();
+  for (const segment of segments) {
+    if (segment.kind !== 'text' || segment.segmentIndex === undefined) continue;
+    if (seen.has(segment.segmentIndex)) repeated.add(segment.segmentIndex);
+    else seen.add(segment.segmentIndex);
+  }
+  return repeated;
 }
 
 /**
