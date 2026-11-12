@@ -20,6 +20,9 @@ export interface StoredEvent {
   sessionId?: string;
 }
 
+/** 一次工具卡在 fold 里的形态（与 `domains/chat/tool-cards.ts` 的 `ToolCardView` 同形）。 */
+export type FoldToolStatus = 'running' | 'done' | 'error';
+
 export type TimelineItem =
   | {
       kind: 'text';
@@ -28,6 +31,14 @@ export type TimelineItem =
       /** 首/末个 text_delta 的事件时间：这一段的真实发生时间（不是 run 起始）。 */
       startedAt?: number;
       endedAt?: number;
+      /**
+       * 该段**首个** `text_delta` 的 seq —— 段的身份与排序锚点。
+       *
+       * 段序（今天）是「第几个段」；锚定到 seq 之后，一个逻辑段的生命周期内身份恒定，
+       * 回填把更早的段插进来也不会让后面的段换号（换号 = React 重挂 = 动画重播 +
+       * 认领错位）。`buildLiveItems` 用它派生 `run:<runId>:text:<anchorSeq>`。
+       */
+      anchorSeq?: number;
     }
   | {
       kind: 'reasoning';
@@ -36,10 +47,40 @@ export type TimelineItem =
       /** 首/末个 reasoning_delta 的事件时间，用于「思考过程 · Ns」。 */
       startedAt?: number;
       endedAt?: number;
+      /** 该段首个 `reasoning_delta` 的 seq（同正文段，见上）。 */
+      anchorSeq?: number;
     }
   /** 上下文生命周期事件：按语义 notice 渲染，不再落成原始事件卡。 */
-  | { kind: 'notice'; event: RunEvent; key: string }
-  | { kind: 'event'; event: RunEvent; key: string };
+  | { kind: 'notice'; event: RunEvent; key: string; anchorSeq?: number }
+  | { kind: 'event'; event: RunEvent; key: string; anchorSeq?: number }
+  /**
+   * 一次工具调用（`tool.call.started` ↔ `completed` / `failed` 在 fold 里**就地配对**）。
+   *
+   * 形状与 `domains/chat/tool-cards.ts` 的 `ToolCardView` 逐字段一致：`foldToolItems`
+   * 对 `kind !== 'event'` 本来就是 pass-through，所以配对下沉之后 `StreamItems` /
+   * `SubagentTranscript` 一行都不用改。收益是「一次调用 = 1 个 item」：状态从
+   * running → done/error 是**就地更新**（不是两行事件 + 事后配对），折叠时也不会把
+   * started / completed 拆成两半。原始事件行归 Observe / 运行详情。
+   */
+  | {
+      kind: 'tool';
+      /** 卡片 key。有 callId 时身份是 `tool:<callId>`（由 `buildLiveItems` 派生）；
+       * 没有 callId 的调用用 `ev-<seq>` 兜底（派生 `tool:run:<runId>:ev-<seq>`）。 */
+      key: string;
+      callId?: string;
+      name: string;
+      status: FoldToolStatus;
+      args?: unknown;
+      result?: unknown;
+      error?: string;
+      /** `tool.call.failed` 的结构化错误元数据。 */
+      errorMeta?: ErrorMeta;
+      durationMs?: number;
+      truncated?: boolean;
+      startedAt: number;
+      /** `tool.call.started` 的 seq（工具卡的时间线位置）。 */
+      anchorSeq?: number;
+    };
 
 export interface RunGroup {
   runId: string;
@@ -100,9 +141,17 @@ export interface RunGroup {
    * 流式期间不把每个 delta push 成 item（那会让运行段每 token 重建）；
    * 末尾未闭合的正文/思考通过 `liveText` / `liveReasoning` 直接渲染，
    * 下一个事件 `flush()` 后清空，避免与 item 重复。
+   *
+   * 物化之后尾部**仍**以这两个字段表达（`StreamItems` 的子 agent 面板读它们，本单不动
+   * 那套渲染），但身份由 `liveTextAnchorSeq` / `liveReasoningAnchorSeq` 给出：
+   * 尾部与 flush 后的同一段共用 `run:<runId>:text|reasoning:<anchorSeq>`（F2 守）。
    */
   liveText?: string;
   liveReasoning?: string;
+  /** 尾部未闭合正文段的首个 text_delta seq（段身份见 `TimelineItem.anchorSeq`）。 */
+  liveTextAnchorSeq?: number;
+  /** 尾部未闭合思考段的首个 reasoning_delta seq。 */
+  liveReasoningAnchorSeq?: number;
   items: TimelineItem[];
 }
 
@@ -124,10 +173,26 @@ export interface RunGroup {
  */
 export interface RunFold {
   readonly runId: string;
+  /** 已物化的 item 条数（上限策略据此决定折叠力度，见 `LiveItemStore`）。 */
+  readonly itemCount: number;
   /** 应用一条事件（「同一条只生效一次」由调用侧的水位保证，见 `LiveItemStore.ingest`）。 */
   apply(entry: StoredEvent): void;
   /** 当前状态 → `RunGroup` 副本（快照对象不能被后续 apply 改到）。 */
   toGroup(): RunGroup;
+  /**
+   * 把最旧的 item 折掉，只留最近 `keep` 项（item 侧上限策略，见 DESIGN.md §8.2）。
+   *
+   * 返回被折掉的条数与 seq 范围；调用侧据此渲染一张**可见的**折叠卡（条数 +
+   * 运行详情深链）。**不删除内容**：折掉的条数记在折叠卡上，原始事件仍可从运行详情看。
+   */
+  trim(keep: number): FoldTrim;
+}
+
+/** `trim()` 的结果：折掉了几条、覆盖的 seq 区间（折叠卡的 anchor 用 `fromSeq`）。 */
+export interface FoldTrim {
+  removed: number;
+  fromSeq?: number;
+  toSeq?: number;
 }
 
 export function createFold(runId: string): RunFold {
@@ -136,10 +201,13 @@ export function createFold(runId: string): RunFold {
   let textIndex = 0;
   let textStartedAt: number | undefined;
   let textEndedAt: number | undefined;
+  /** 当前未闭合正文段的首个 delta seq（段身份，见 `TimelineItem.anchorSeq`）。 */
+  let textAnchor: number | undefined;
   let reasoningBuf = '';
   let reasoningIndex = 0;
   let reasoningStartedAt: number | undefined;
   let reasoningEndedAt: number | undefined;
+  let reasoningAnchor: number | undefined;
   const flushText = () => {
     if (buf) {
       group.items.push({
@@ -148,10 +216,12 @@ export function createFold(runId: string): RunFold {
         key: `text-${runId}-${textIndex++}`,
         ...(textStartedAt !== undefined ? { startedAt: textStartedAt } : {}),
         ...(textEndedAt !== undefined ? { endedAt: textEndedAt } : {}),
+        ...(textAnchor !== undefined ? { anchorSeq: textAnchor } : {}),
       });
       buf = '';
       textStartedAt = undefined;
       textEndedAt = undefined;
+      textAnchor = undefined;
     }
   };
   const flushReasoning = () => {
@@ -162,18 +232,25 @@ export function createFold(runId: string): RunFold {
         key: `reasoning-${runId}-${reasoningIndex++}`,
         ...(reasoningStartedAt !== undefined ? { startedAt: reasoningStartedAt } : {}),
         ...(reasoningEndedAt !== undefined ? { endedAt: reasoningEndedAt } : {}),
+        ...(reasoningAnchor !== undefined ? { anchorSeq: reasoningAnchor } : {}),
       });
       reasoningBuf = '';
       reasoningStartedAt = undefined;
       reasoningEndedAt = undefined;
+      reasoningAnchor = undefined;
     }
   };
   // `hook.started` / `hook.completed` 成对出现：只落一行 notice（completed 带 duration_ms），
   // 否则每轮 LLM 调用都会多出 2 行「hook · 名字」，把时间线冲成噪声。
-  let pendingHook: { event: RunEvent; key: string; name: string } | undefined;
+  let pendingHook: { event: RunEvent; key: string; name: string; seq: number } | undefined;
   const flushPendingHook = () => {
     if (!pendingHook) return;
-    group.items.push({ kind: 'notice', event: pendingHook.event, key: pendingHook.key });
+    group.items.push({
+      kind: 'notice',
+      event: pendingHook.event,
+      key: pendingHook.key,
+      anchorSeq: pendingHook.seq,
+    });
     pendingHook = undefined;
   };
   const flush = () => {
@@ -181,6 +258,19 @@ export function createFold(runId: string): RunFold {
     flushReasoning();
     flushText();
   };
+  /**
+   * 已 started、还没有 completed / failed 的工具卡（按下标配对，就地更新）。
+   *
+   * 与 `tool-cards.ts#foldToolItems` 的 `takePending` 同口径：先按 callId 精确配，
+   * 再退到同名配对（只在 callId 缺失时）。两处解析同一份 wire 载荷，改口径要一起改。
+   */
+  const pendingTools: { index: number; callId?: string; name: string }[] = [];
+  /**
+   * callId → 卡片在 `items` 里的下标。**一次调用恒为一张卡**：即使 completed / failed
+   * 迟到（pending 已经消费掉，例如 server 发了重复的终态），也**只更新**既有卡片，
+   * 不再新开一张（否则时间线上同一调用出现两张卡，G-J 守）。
+   */
+  const toolCards = new Map<string, number>();
 
   const apply = (entry: StoredEvent): void => {
     const ev = entry.event;
@@ -302,7 +392,12 @@ export function createFold(runId: string): RunFold {
       case 'hook.system_prompt_ignored':
       case 'hook.additional_context_deprecated': {
         flush();
-        group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
+        group.items.push({
+          kind: 'notice',
+          event: ev,
+          key: `notice-${entry.seq}`,
+          anchorSeq: entry.seq,
+        });
         return;
       }
       // 失败类：`run.finalize.failed`（终态持久化失败）与 `guardrail.error`
@@ -313,7 +408,12 @@ export function createFold(runId: string): RunFold {
       case 'run.finalize.failed':
       case 'guardrail.error': {
         flush();
-        group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
+        group.items.push({
+          kind: 'notice',
+          event: ev,
+          key: `notice-${entry.seq}`,
+          anchorSeq: entry.seq,
+        });
         return;
       }
       // 退役 / 作废回复：**有承接才允许藏**。`agent.retired` 是 `internal` + typed
@@ -324,7 +424,12 @@ export function createFold(runId: string): RunFold {
       case 'agent.retired':
       case 'agent.reply.stale': {
         flush();
-        group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
+        group.items.push({
+          kind: 'notice',
+          event: ev,
+          key: `notice-${entry.seq}`,
+          anchorSeq: entry.seq,
+        });
         return;
       }
       // hook 成对折叠：started 先暂存，同名 completed 到达就只落 completed 那一行；
@@ -336,6 +441,7 @@ export function createFold(runId: string): RunFold {
           event: ev,
           key: `notice-${entry.seq}`,
           name: typeof name === 'string' ? name : '',
+          seq: entry.seq,
         };
         return;
       }
@@ -344,7 +450,79 @@ export function createFold(runId: string): RunFold {
         const paired = typeof name === 'string' && pendingHook?.name === name;
         if (paired) pendingHook = undefined;
         flush();
-        group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
+        group.items.push({
+          kind: 'notice',
+          event: ev,
+          key: `notice-${entry.seq}`,
+          anchorSeq: entry.seq,
+        });
+        return;
+      }
+      case 'tool.call.started': {
+        // 一次调用 = 1 个 item：started 建卡（status: running），completed / failed 就地改。
+        // 不再落 `ev-<seq>` 原始事件行 —— 原始事件归 Observe / 运行详情（G-J 守）。
+        flush();
+        const callId = toolCallIdOf(ev.data);
+        const callName = toolNameOf(ev.data) ?? TOOL_NAME_FALLBACK;
+        group.items.push({
+          kind: 'tool',
+          key: `ev-${entry.seq}`,
+          ...(callId !== undefined ? { callId } : {}),
+          name: callName,
+          status: 'running',
+          ...(ev.data.arguments !== undefined ? { args: ev.data.arguments } : {}),
+          ...(ev.data.truncated === true ? { truncated: true } : {}),
+          startedAt: ev.ts,
+          anchorSeq: entry.seq,
+        });
+        pendingTools.push({ index: group.items.length - 1, callId, name: callName });
+        if (callId !== undefined) toolCards.set(callId, group.items.length - 1);
+        return;
+      }
+      case 'tool.call.completed':
+      case 'tool.call.failed': {
+        flush();
+        const completed = ev.type === 'tool.call.completed';
+        const callId = toolCallIdOf(ev.data);
+        const name = toolNameOf(ev.data);
+        const durationMs = durationMsOf(ev.data);
+        const truncated = ev.data.truncated === true;
+        // 先按 pending 配对（正常时序），再按 callId 找**既有卡片**（终态迟到 / 重复）：
+        // 「一次调用恒为一张卡」是硬不变量，绝不因为一条迟到的 completed 新开一张。
+        const paired = takePendingTool(pendingTools, callId, name);
+        const existing = callId !== undefined ? (toolCards.get(callId) ?? -1) : -1;
+        const index = paired >= 0 ? paired : existing;
+        const previous = index >= 0 ? group.items[index] : undefined;
+        if (previous !== undefined && previous.kind === 'tool') {
+          // 就地更新：状态 running → done / error，内容（args / startedAt）不动。
+          group.items[index] = {
+            ...previous,
+            status: completed ? 'done' : 'error',
+            ...(previous.callId === undefined && callId !== undefined ? { callId } : {}),
+            ...(completed ? { result: ev.data.result } : {}),
+            ...(completed
+              ? {}
+              : { error: errorOf(ev.data), errorMeta: errorMetaOf(ev.data) }),
+            ...(durationMs !== undefined ? { durationMs } : {}),
+            ...(truncated ? { truncated: true } : {}),
+          };
+          return;
+        }
+        // 没有 started（客户端漏了 / 中途连上）：仍出一张卡，不丢结果。
+        group.items.push({
+          kind: 'tool',
+          key: `ev-${entry.seq}`,
+          ...(callId !== undefined ? { callId } : {}),
+          name: name ?? TOOL_NAME_FALLBACK,
+          status: completed ? 'done' : 'error',
+          ...(completed ? { result: ev.data.result } : {}),
+          ...(completed ? {} : { error: errorOf(ev.data), errorMeta: errorMetaOf(ev.data) }),
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(truncated ? { truncated: true } : {}),
+          startedAt: ev.ts,
+          anchorSeq: entry.seq,
+        });
+        if (callId !== undefined) toolCards.set(callId, group.items.length - 1);
         return;
       }
       case 'llm.stream.chunk': {
@@ -353,15 +531,20 @@ export function createFold(runId: string): RunFold {
           // 正文开始前先落盘已累积的思考段，保持时间顺序。
           flushReasoning();
           if (textStartedAt === undefined) textStartedAt = ev.ts;
+          if (textAnchor === undefined) textAnchor = entry.seq;
           textEndedAt = ev.ts;
           buf += chunk.delta;
         } else if (chunk?.type === 'reasoning_delta' && chunk.delta) {
           // 思考流独立累积，绝不并入正文 Markdown。
           flushText();
           if (reasoningStartedAt === undefined) reasoningStartedAt = ev.ts;
+          if (reasoningAnchor === undefined) reasoningAnchor = entry.seq;
           reasoningEndedAt = ev.ts;
           reasoningBuf += chunk.delta;
         } else if (chunk?.type === 'finish') {
+          // `finish` 在今天的分组里是**死分支**：`push()` 用 `producesTimelineItem`
+          // 把它挡在环外，fold 根本收不到它。保留这一行是为了「将来想用 LLM 轮次做段
+          // 边界」时只改这里 + 加 fixture，而不是把它误当成 flush 语义的一部分。
           flush();
         }
         return;
@@ -374,9 +557,19 @@ export function createFold(runId: string): RunFold {
         // 已登记但没有专用分支的类型（如 `guardrail.blocked`）仍走原始事件行 ——
         // 它们的摘要由 EventRow 逐类型给出，属于「明细只能看原始事件」的那一档。
         if (eventSpecOf(ev.type) === undefined) {
-          group.items.push({ kind: 'notice', event: ev, key: `unknown-${entry.seq}` });
+          group.items.push({
+            kind: 'notice',
+            event: ev,
+            key: `unknown-${entry.seq}`,
+            anchorSeq: entry.seq,
+          });
         } else {
-          group.items.push({ kind: 'event', event: ev, key: `ev-${entry.seq}` });
+          group.items.push({
+            kind: 'event',
+            event: ev,
+            key: `ev-${entry.seq}`,
+            anchorSeq: entry.seq,
+          });
         }
       }
     }
@@ -388,16 +581,59 @@ export function createFold(runId: string): RunFold {
     // 未配对的 `hook.started` 在快照里落回，避免整行信息丢失；**不写回** fold 状态 ——
     // 紧接着到达的同名 `hook.completed` 仍要与它配成一行（配对见 apply 的 hook 分支）。
     if (pendingHook !== undefined) {
-      snapshot.items.push({ kind: 'notice', event: pendingHook.event, key: pendingHook.key });
+      snapshot.items.push({
+        kind: 'notice',
+        event: pendingHook.event,
+        key: pendingHook.key,
+        anchorSeq: pendingHook.seq,
+      });
     }
     // 尾部仍在流式中的缓冲不 push 成 item：运行段直接渲染 liveText / liveReasoning。
     // flush() 已清空的部分不会出现在这里，因此不会与 items 重复。
-    if (reasoningBuf) snapshot.liveReasoning = reasoningBuf;
-    if (buf) snapshot.liveText = buf;
+    if (reasoningBuf) {
+      snapshot.liveReasoning = reasoningBuf;
+      if (reasoningAnchor !== undefined) snapshot.liveReasoningAnchorSeq = reasoningAnchor;
+    }
+    if (buf) {
+      snapshot.liveText = buf;
+      if (textAnchor !== undefined) snapshot.liveTextAnchorSeq = textAnchor;
+    }
     return snapshot;
   };
 
-  return { runId, apply, toGroup };
+  /** item 侧上限：折掉最旧的 item（只动本 fold，返回被折条数供调用侧做折叠卡）。 */
+  const trim = (keep: number): FoldTrim => {
+    const removed = group.items.splice(0, Math.max(0, group.items.length - Math.max(1, keep)));
+    if (removed.length === 0) return { removed: 0 };
+    // 工具卡下标整体前移；被折掉的那些丢弃 —— 它们的 completed / failed 后续会落成
+    // 「孤儿卡」（仍是一张可见的卡，不静默消失），这是折叠与配对正交的代价，可接受。
+    for (const pending of pendingTools) pending.index -= removed.length;
+    for (let index = pendingTools.length - 1; index >= 0; index -= 1) {
+      if ((pendingTools[index]?.index ?? -1) < 0) pendingTools.splice(index, 1);
+    }
+    for (const [callId, index] of [...toolCards]) {
+      const next = index - removed.length;
+      if (next < 0) toolCards.delete(callId);
+      else toolCards.set(callId, next);
+    }
+    const first = removed[0]?.anchorSeq;
+    const last = removed[removed.length - 1]?.anchorSeq;
+    return {
+      removed: removed.length,
+      ...(first !== undefined ? { fromSeq: first } : {}),
+      ...(last !== undefined ? { toSeq: last } : {}),
+    };
+  };
+
+  return {
+    runId,
+    get itemCount() {
+      return group.items.length;
+    },
+    apply,
+    toGroup,
+    trim,
+  };
 }
 
 /** 单个 run 的事件序列 → 可渲染分组（路径②：一次性重建）。 */
@@ -410,11 +646,13 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
 /*
  * ── 「这条事件在时间线上有没有产物」的唯一判据 ──────────────────────────────
  *
- * `EventStore` 用它做两件事：不产产物的流式增量**不进缓冲**，以及裁剪时**先丢**
- * 不产产物的条目（`oldestEvictableIndex` 的两档）。所以它必须与上面 `buildGroup`
- * 的分支表**同源**：这里不维护任何独立的事件名名单，只把那个 switch 的分支归属
- * 表达出来；改 `buildGroup` 的分支就要改这里（相距不到 40 行，语义由
- * `check-transcript-items` 的 fixtures 与 `buildLiveItems` 守着）。
+ * `EventStore` 用它做一件事：**不产产物的流式增量不进环**（`tool_call_delta` /
+ * `finish` / 未识别的 chunk 子类型）。所以它必须与上面 `createFold` 的分支表**同源**：
+ * 这里不维护任何独立的事件名名单，只把那个 switch 的分支归属表达出来；改 fold 的分支
+ * 就要改这里（相距不到 40 行，语义由 `check-transcript-items` / `check-live-items` 守）。
+ *
+ * 注意：它**不再**参与「裁剪时先丢谁」的排序（旧 `oldestEvictableIndex` 的两档已删）：
+ * 裁剪口径统一成「该 run 最旧的非锚点条目」，而且裁剪已经不影响渲染（I4）。
  */
 
 /**
@@ -440,6 +678,63 @@ export function producesTimelineItem(event: { type: string; data?: unknown }): b
   // 与 `buildGroup` 的两条累积分支逐字对应：必须同 kind 且有非空 delta。
   if (chunk?.type !== 'text_delta' && chunk?.type !== 'reasoning_delta') return false;
   return typeof chunk.delta === 'string' && chunk.delta.length > 0;
+}
+
+/*
+ * ── `tool.call.*` 载荷解析（宽松，与 `domains/chat/tool-cards.ts` 同口径） ──────
+ *
+ * fold 下沉配对之后，`started` / `completed` / `failed` 的字段解析在两边各有一份
+ * （`tool-cards.ts` 的 `foldToolItems` 仍服务子 agent 面板与旧 fixture）。两处读的是
+ * 同一份 wire 载荷契约，改口径必须一起改。
+ */
+
+/** 不知道工具名时的兜底值（与 `tool-cards.ts` 的 `TOOL_NAME_FALLBACK` 一致）。 */
+const TOOL_NAME_FALLBACK = 'tool';
+
+function toolCallIdOf(data: Record<string, unknown>): string | undefined {
+  const id = data.tool_call_id;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+function toolNameOf(data: Record<string, unknown>): string | undefined {
+  const name = data.tool_name;
+  return typeof name === 'string' && name.length > 0 ? name : undefined;
+}
+
+function durationMsOf(data: Record<string, unknown>): number | undefined {
+  const value = data.duration_ms;
+  return typeof value === 'number' ? value : undefined;
+}
+
+function errorOf(data: Record<string, unknown>): string {
+  const value = data.error;
+  if (typeof value === 'string') return value;
+  if (value === undefined) return '';
+  return String(value);
+}
+
+/**
+ * 从「已 started、未结束」的卡片里取一张配对（先 callId 精确，再退到同名配对）。
+ *
+ * 与 `tool-cards.ts#takePending` 同口径：`started` 没带 callId 时只能靠名字配，
+ * 但**同名不同 call 的两个调用绝不能互配**（那条判据在 name fallback 里排除）。
+ */
+function takePendingTool(
+  pending: { index: number; callId?: string; name: string }[],
+  callId: string | undefined,
+  name: string | undefined,
+): number {
+  if (callId !== undefined) {
+    const exact = pending.findIndex((entry) => entry.callId === callId);
+    const hit = exact >= 0 ? pending.splice(exact, 1)[0] : undefined;
+    if (hit !== undefined) return hit.index;
+  }
+  if (name === undefined) return -1;
+  const fallback = pending.findIndex(
+    (entry) => entry.name === name && (callId === undefined || entry.callId === undefined),
+  );
+  const hit = fallback >= 0 ? pending.splice(fallback, 1)[0] : undefined;
+  return hit?.index ?? -1;
 }
 
 /**

@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { GatewayClient } from '../../gateway/client';
+import { useConnection } from '../../gateway/ConnectionProvider';
 import type {
   AskUserRequest,
   Message,
@@ -12,7 +20,6 @@ import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
 import { readDisplayValue } from '../../state/display-settings';
 import type { EventStoreSnapshot } from '../../state/event-store';
 import type { RunGroup } from '../../state/events';
-import { EventGroupCache } from '../../state/group-cache';
 import {
   isRuntimeMessageVisible,
   type RuntimeVisibility,
@@ -134,22 +141,32 @@ export function useChatTranscript({
       'ui.expandCards',
     ) === 'true' || visibility.verbosity === 'debug';
 
-  const groupCache = useRef<EventGroupCache | null>(null);
-  if (!groupCache.current) groupCache.current = new EventGroupCache();
-
-  // 按 run 增量缓存：50ms 快照只重建受影响的 run，未变化的 RunGroup 引用不变。
-  const groups = useMemo(
-    () =>
-      groupCache.current?.group(
-        snapshot.entries,
-        showInternal,
-        errorLevel,
-        snapshot.truncatedSince,
-      ) ?? [],
-    [snapshot.entries, showInternal, errorLevel, snapshot.truncatedSince],
+  // 时间线的输入源 = 物化后的 item 流（`LiveItemStore`），**不是** `snapshot.entries`。
+  //
+  // 事件到达时 `EventStore.push` 就已经把它折进 item store（唯一写入点），这里只是
+  // 订阅它的 50ms 快照。于是缓冲裁剪 / `truncateAfter` / 回填都不会让屏上内容消失
+  // （DESIGN.md I1 / I4 / I6）。
+  // `snapshot.entries` 在本文件里只剩两个**传输面**消费者（标记逐处标明，见 tripwire）：
+  // 成员树（`reduceAgents`）与终态刷新扫描（找 `run.completed` 等触发一次 detail 刷新）。
+  const { eventStore } = useConnection();
+  const itemStore = eventStore.items;
+  const itemSnapshot = useSyncExternalStore(
+    itemStore.subscribe,
+    itemStore.getSnapshot,
+    itemStore.getSnapshot,
   );
+  const groups = itemSnapshot.groups;
+
+  // 可见性口径交给物化面：`isVisibleForGrouping` 决定「哪些事件参与段边界」，
+  // 所以它必须参与折叠而**不是**渲染时过滤；口径变化时 store 会按环里的全部事件重折叠
+  // （唯一合法的整表重算，人工、低频）。这里用 effect 同步：初帧用默认档（隐藏内部事件 /
+  // user），配置到达后一次重折叠就对上了。
+  useEffect(() => {
+    eventStore.setItemVisibility(showInternal, errorLevel);
+  }, [eventStore, showInternal, errorLevel]);
 
   // 0.14：子 agent 树与 `?agent=` 深链（纯事件派生，不新增 RPC）。
+  // transport-consumer：成员树读的是原始事件（不是时间线），见 DESIGN.md §11.9。
   const allAgents = useMemo(() => reduceAgents(snapshot.entries), [snapshot.entries]);
   const sessionAgents = useMemo(
     () => (selectedId ? agentsForSession(allAgents, selectedId) : []),
@@ -255,10 +272,14 @@ export function useChatTranscript({
     () => (selectedId ? queuedRuns.filter((item) => item.sessionId === selectedId) : []),
     [queuedRuns, selectedId],
   );
-  // 单会话实时组上限：长会话只渲染最近 200 个 run，其余指向运行详情。
-  const hiddenLiveGroups = Math.max(0, visibleGroups.length - MAX_LIVE_GROUPS);
+  // 单会话实时组上限：长会话只渲染最近 `MAX_LIVE_GROUPS` 个 run（更早的轮次仍可由历史 /
+  // 运行详情查看）。这里**不再算** `hiddenLiveGroups`：以前算了却没有渲染入口 = 静默隐藏。
+  // 真正的提示行需要新 i18n 文案与样式（本单不动 `i18n/**`），留给阶段 4；在那之前
+  // 至少不留一个「算了不用」的假变量。
   const renderedGroups: readonly RunGroup[] =
-    hiddenLiveGroups > 0 ? visibleGroups.slice(-MAX_LIVE_GROUPS) : visibleGroups;
+    visibleGroups.length > MAX_LIVE_GROUPS
+      ? visibleGroups.slice(-MAX_LIVE_GROUPS)
+      : visibleGroups;
 
   // 0.18：停止入口固定在底部 Composer 区域，只对当前会话仍在跑的 run 出现。
   // `hasRunEvent` 排除成员事件聚合出的“永不终态”分组：它们的 runId 是成员 id，
@@ -314,6 +335,7 @@ export function useChatTranscript({
   useEffect(() => {
     if (snapshot.version === lastSnapshotVersion.current) return;
     lastSnapshotVersion.current = snapshot.version;
+    // transport-consumer：这里只找「该刷新 detail 了」的信号，不派生时间线。
     const recent = snapshot.entries.slice(-40);
     const needsRefresh = recent.some(({ event }) => {
       if (

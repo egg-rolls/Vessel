@@ -7,8 +7,9 @@
  *
  * 身份命名：
  * - msg:<绝对下标>            历史消息（绝对下标 = detailWindow.start + 窗口内下标，前插不变）
- * - run:<runId>:text:<n>      一次 run 的第 n 段正文（尾部未闭合段与 flush 后是同一个 n）
- * - run:<runId>:reasoning:<n> 第 n 段思考
+ * - run:<runId>:text:<seq>    一次 run 的正文段（seq = 该段**首个** delta 的 wire seq；
+ *                             流式尾巴与 flush 后是**同一个** seq，不因分段增多而换号）
+ * - run:<runId>:reasoning:<seq> 第 n 段思考（同上，锚定首个 reasoning_delta 的 seq）
  * - tool:<callId>             工具调用（live 与 history 共用；无 callId 时 tool:run:<runId>:<key>）
  * - tool:orphan:<绝对下标>     只有结果、没有调用的历史 tool 消息
  * - notice:<item.key>         上下文 / 原始事件行
@@ -16,6 +17,10 @@
  *                             运行时上下文输入（`vessel:*` → 环境信息卡，落盘后让位给历史）
  * - queued:<runId>            本地排队提交
  * - run:<runId>:failure       一次 run 的失败卡（事件流优先，会话记录快照兜底）
+ *
+ * 段 key 为什么锚 seq 而不是段序（`text:<n>`）：段序是「第几个段」，回填把更早的一段插进来
+ * 会让后面所有段换号 → React 整段重挂（动画重播）+ 认领错位。seq 是段在 wire 上的坐标，
+ * 一个逻辑段的生命周期内恒定，且字典序 = 事件顺序 = `buildGroup` 的顺序。
  *
  * 去重 = **认领（claiming）**：按轮次顺序一对一匹配，每个 run 最多认领一条用户消息，
  * 每条消息最多被一个 run 认领；被认领的历史消息不再单独成 item（run 是权威来源）。
@@ -672,6 +677,12 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     // 统一披组起始 ts 会在历史回填时把整段 live 内容拽到 turn 开头，与历史侧
     // 的真实 ts 一对比就整段重排（用户看到的「上面一张卡、中间正文、下面更早的卡」）。
     const seqMeta = group.firstSeq !== undefined ? { seq: group.firstSeq } : {};
+    // 段锚点表：`foldToolItems` 的输出是 `ChatRenderItem`（不带 anchorSeq），但 key 原样
+    // 透传 —— 从 `group.items` 建一张 key → 首个 delta 的 seq 的表，段身份仍按 seq 走。
+    const anchors = new Map<string, number>();
+    for (const item of group.items) {
+      if (item.anchorSeq !== undefined) anchors.set(item.key, item.anchorSeq);
+    }
     // 组内时间**单调**：每个 item 用自己事件时间，但不允许比前一个 item 更早
     // （时钟同毫秒/事件时间相同时用插入序，绝不因为 ts 抖动把顺序倒过来）。
     let monotonic: number | undefined;
@@ -740,7 +751,8 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
       if (item.kind === 'text') {
         items.push({
           kind: 'run-text',
-          key: `run:${group.runId}:text:${textIndex}`,
+          // 段身份 = 该段首个 delta 的 seq；没有锚点的手工分组退回段序（测试 / 子 agent 用）。
+          key: `run:${group.runId}:text:${anchors.get(item.key) ?? textIndex}`,
           runId: group.runId,
           text: item.text,
           streaming: false,
@@ -756,7 +768,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
       if (item.kind === 'reasoning') {
         items.push({
           kind: 'run-reasoning',
-          key: `run:${group.runId}:reasoning:${reasoningIndex}`,
+          key: `run:${group.runId}:reasoning:${anchors.get(item.key) ?? reasoningIndex}`,
           runId: group.runId,
           text: item.text,
           streaming: false,
@@ -804,11 +816,12 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
         ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
       });
     }
-    // 尾部未闭合段用**当前段序**做 key：flush 之后它就是同一个 n（身份延续的关键）。
+    // 尾部未闭合段：key 用**它自己首个 delta 的 seq**（与 flush 后的同一段共用 key，
+    // 见 check-transcript-items 的 F2）。没有锚点的手工分组退回段序。
     if (group.liveText !== undefined && group.liveText.length > 0) {
       items.push({
         kind: 'run-text',
-        key: `run:${group.runId}:text:${textIndex}`,
+        key: `run:${group.runId}:text:${group.liveTextAnchorSeq ?? textIndex}`,
         runId: group.runId,
         text: group.liveText,
         streaming: true,
@@ -819,7 +832,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     if (group.liveReasoning !== undefined && group.liveReasoning.length > 0) {
       items.push({
         kind: 'run-reasoning',
-        key: `run:${group.runId}:reasoning:${reasoningIndex}`,
+        key: `run:${group.runId}:reasoning:${group.liveReasoningAnchorSeq ?? reasoningIndex}`,
         runId: group.runId,
         text: group.liveReasoning,
         streaming: true,
@@ -891,6 +904,13 @@ function runClaims(groups: readonly RunGroup[], live: readonly TranscriptItem[])
  * 一对一、按轮次顺序：每个 run 最多认领一条用户消息（同一句话连发两次时按顺序取
  * 未认领的下一条），每条消息最多被一个 run 认领；assistant 消息按 callId 子集或
  * 正文相等/包含认领，允许一个 run 认领它自己的多条迭代。
+ *
+ * ⚠️ **位置认领（按 turn 位置而不是内容认领）刻意没有打开**（main 裁决 3）：它能彻底
+ * 消掉 guardrail 改写造成的重复，但风险是**对称的** —— 位置判错就是「吞内容」，而重复
+ * 顶多让人看见两遍（I8 的方向恒为「宁可重复，绝不吞内容」）。打开它的前置条件缺一不可：
+ * ① 服务端给 turn 边界一个权威 id（今天只有 `cursor` 可猜）；
+ * ② 认领账本（`ClaimLedger`，阶段 3）能证明「历史那份**确实会渲染**」；
+ * ③ 有 fixture 证明「位置认领 + guardrail 改写」不会让正文消失。
  */
 function claimMessages(
   claims: readonly RunClaim[],

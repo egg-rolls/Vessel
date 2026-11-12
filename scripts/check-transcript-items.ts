@@ -48,8 +48,13 @@ function group(overrides: Partial<RunGroup> & { runId: string }): RunGroup {
   };
 }
 
-function textItem(text: string, key = 'text-0'): TimelineItem {
-  return { kind: 'text', text, key };
+function textItem(text: string, key = 'text-0', anchorSeq?: number): TimelineItem {
+  return {
+    kind: 'text',
+    text,
+    key,
+    ...(anchorSeq !== undefined ? { anchorSeq } : {}),
+  };
 }
 
 function toolItem(callId: string, status: 'running' | 'done' | 'error'): TimelineItem {
@@ -103,24 +108,26 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
-    name: 'F2 同一段正文：流式中 vs flush 后 → 同一个 key',
-    why: '尾部未闭合段用当前段序做 key，flush 后段序不变，所以不会重挂',
+    name: 'F2 同一段正文：流式中 vs flush 后 → 同一个 key（段身份锚定首个 delta 的 seq）',
+    why: '尾部未闭合段与 flush 后的同一段共用 anchorSeq 派生的 key，所以流式尾巴不会重挂',
     check: () => {
       const streaming = buildTranscriptItems({
         messages: [],
         messageIndexOffset: 0,
-        liveGroups: [group({ runId: 'r1', liveText: 'hello' })],
+        liveGroups: [group({ runId: 'r1', liveText: 'hello', liveTextAnchorSeq: 7 })],
         queued: [],
       });
       const flushed = buildTranscriptItems({
         messages: [],
         messageIndexOffset: 0,
-        liveGroups: [group({ runId: 'r1', items: [textItem('hello')], status: 'completed' })],
+        liveGroups: [
+          group({ runId: 'r1', items: [textItem('hello', 'text-r1-0', 7)], status: 'completed' }),
+        ],
         queued: [],
       });
       const a = streaming.find((item) => item.kind === 'run-text');
       const b = flushed.find((item) => item.kind === 'run-text');
-      return a?.key === 'run:r1:text:0' && b?.key === 'run:r1:text:0';
+      return a?.key === 'run:r1:text:7' && b?.key === 'run:r1:text:7';
     },
   },
   {
@@ -1299,7 +1306,7 @@ const FIXTURES: readonly Fixture[] = [
         // 终态时刻（run.failed 的 ts），不是 undefined —— 后者会被规则「缺 ts 排最后」沉底。
         card.ts === 1005 &&
         // 该 run 的最后一个 item：输入 → 正文 → 工具卡 → 失败卡。
-        keys(items).join(',') === 'run:r-fail:input,run:r-fail:text:0,tool:c1,run:r-fail:failure'
+        keys(items).join(',') === 'run:r-fail:input,run:r-fail:text:2,tool:c1,run:r-fail:failure'
       );
     },
   },
