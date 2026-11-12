@@ -59,6 +59,10 @@ applies_to: [N, M]
 - conversation 预算挂 `teams[].policy.budget`，不复用 `limits.*`；状态写 `<dataDir>/conversations/<id>.json`（`0600` 原子写、损坏 fail-closed；`<id>` 是内部持久单 id，不是 wire 字段）；override 只能由人经 `teams.budget` / owner 端点 / CLI 抬高或清除。
 - 环检测是不可关闭的**窗口限速**：同一有向边在每个 `cooldownSeconds` 窗口内最多 `maxRepeats` 次，越界只拒绝当次投递并带 `retry_after`，不落持久 blocked（正常多轮 hub-and-spoke 不该被判死）；要放宽持久改 `teams[].policy.budget.cycle.maxRepeats`，`budget override` 只是单条会话的临时放行。
 
+## 待处理条带的单一持久真相（0.53 addendum）
+
+- **inbox 条目两个 additive 字段**：`session_id`（= 这条消息是哪个会话的下一条输入）+ `refs`（附件引用，只有路径+元信息）。**只有 `input` 投递写 `session_id`**（唯一写入点 `trackInbox`，值 = 接管它的 `bindingId`），`wake` / `quiet` **不写** —— 带归属的条目会被启动恢复扫到并重投成 run input，给「只留档」的消息写归属等于让它再执行一遍。老文件缺字段 = 归属未知，读侧不回填、不猜归属。
+- **`agents.inbox` 入参二选一**（`agent_id` 或 `session_id`；后者服务端 `control.resolve()` 反查 agent，因为 rotate 窗口与退役 body 会让前端 roster 过期），服务端等值过滤、缺 `session_id` 的老条目永不命中；结果带可选 `session_id` 与顶层可选 `agent_id`（供 `agents.recall`）。**淘汰两级**：硬上界仍 200，腾位置先裁非 human 源最旧、再裁 human 源（人写的待处理输入不该被成员间投递挤掉），被裁的记 `agent.inbox.evicted` warn。
 ## 指针
 
 - RPC 形状：[gateway-rpc.md](../architecture/gateway-rpc.md#agent-lifecycle)；配置字段：[CONFIG.md](../operations/CONFIG.md)；决策：[ADR-095](../adr/ADR-095-agent-spawn-and-contractors.md) · [ADR-097](../adr/ADR-097-unified-agent-body-model.md)。
