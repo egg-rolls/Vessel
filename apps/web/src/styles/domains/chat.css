@@ -800,8 +800,9 @@
   content: none;
 }
 
-/* 排队中（还没真正发出去的那条）：琥珀带。全站只有这一处用 `--amber-*` 表达这种状态
-   （token 与「不是通用 warn」的理由见 tokens.css）。已取消那档不带这个修饰类，留在
+/* 排队中（还没真正发出去的那条）：琥珀带。`--amber-*` 现在承两义 —— 「未发送/排队中」
+   与导航的「正在连接」（`app/nav-status.ts` 的 `amber` 档），两者都是「还没到位」的同一个
+   语义家族；token 与「不是通用 warn」的理由见 tokens.css。已取消那档不带这个修饰类，留在
    `.notice-block` 的中性档（`--surface-sunken` + muted），不再警示 —— 取消不是「黄色警报」。 */
 
 .notice-block.stream-card-queued-waiting {
