@@ -5,6 +5,7 @@ import { StatusChip, StatusGlyph } from '../../components/StatusChip';
 import {
   Button,
   cn,
+  Icon,
   type MessageAction,
   MessageActions,
   MessageFold,
@@ -20,6 +21,7 @@ import type { Verbosity } from '../../state/visibility';
 import { AgentMessageCard } from './AgentMessageCard';
 import { agentSenderOfName } from './agent-sender';
 import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
+import { composerIconControlClass, composerQuietIconTone } from './composer-controls';
 import { EventRow, NoticeRow } from './EventRow';
 import { MessageRefs } from './MessageRefs';
 import { ReasoningBlock } from './ReasoningBlock';
@@ -51,7 +53,10 @@ export interface QueuedSubmission {
   id: string;
   input: string;
   submittedAt: number;
-  /** 取消请求在途（按钮禁用 + 文案换「取消中」）；只是本地的在途标记。 */
+  /**
+   * 写操作在途（取消排队 / 收回编辑）：两颗图标键一起禁用，取消那颗读屏名换「取消中…」。
+   * 只是本地的在途标记 —— 它是「同一条消息同时只允许一次写」的唯一实现。
+   */
   cancelling: boolean;
 }
 
@@ -626,8 +631,16 @@ export const RunItems = memo(function RunItems({
  * 卡头左侧只留**一个**状态标记：`StatusChip` 的字形（○ 排队）已经表达了状态，
  * notice 家族的身份圆点不再叠一个（见 chat.css 的 `.stream-card-queued`）。
  *
- * 「取消排队」是**可操作控件**：放在 actions 插槽（始终可见），不进 summary，
- * 这样折叠状态下也能取消，且 summary 里没有可点元素。
+ * 写操作是**可操作控件**：放在 actions 插槽（始终可见），不进 summary，这样折叠状态下
+ * 也能操作，且 summary 里没有可点元素。两颗都是**圆形图标键**（`composerIconControlClass`
+ * 的 32px 正圆 + `Icon`）—— 与输入框的发送键 / 回形针同一套形状与三态，只是色调走次要档
+ * （`composerQuietIconTone`）：卡面是琥珀底，主色调的 accent 圆在暖底上会读成「主操作」，
+ * 而这两颗都是次要动作。名字只走 `aria-label` + `title`（同一句 i18n），不再用可见文字：
+ * 卡宽要跟列一致，两个中文标签会把卡头那行挤到换行。
+ *
+ * **谁有写操作由调用方决定**（本组件只负责「给了就画」）：human 源给两颗（收回编辑 +
+ * 取消排队），agent 源一颗都不给 —— 它的回收语义是 unhold 留档（消息回到可读 unread，
+ * 模型仍能 read），把它画成一个「撤掉」的按钮就是在伪装删除。
  *
  * **身份在卡内**：卡头 `meta` 槽写「这条是谁给的」（`human:` / `<agent 名>:`），
  * 正文 `summary` 仍只放那句话 —— 读起来是「等待中　human: 说的话」。以前身份是卡外左侧
@@ -642,13 +655,25 @@ export const RunItems = memo(function RunItems({
 export function QueuedNotice({
   item,
   onCancel,
+  onEdit,
   label,
   identity,
   defaultOpen = false,
 }: {
   item: QueuedSubmission;
-  /** 取消：按**条目 id**（不是 run id —— 待处理条目没有 run）。 */
-  onCancel: (id: string) => void;
+  /**
+   * 取消：按**条目 id**（不是 run id —— 待处理条目没有 run）。
+   *
+   * 缺省 = 不给「取消排队」（agent 源：recall 对它只是 unhold 留档，画成删除就是骗人）。
+   */
+  onCancel?: (id: string) => void;
+  /**
+   * 收回编辑：按**条目 id**。缺省 = 不给这颗键（同上，只有 human 源的 recall 是真删）。
+   *
+   * 动作本身（peek 正文 → 回填草稿 → recall）在调用方：本组件不知道草稿槽在哪，
+   * 也不该知道。
+   */
+  onEdit?: (id: string) => void;
   /**
    * 卡头文案；缺省「等待中」（`chat.pending.waiting`）。
    *
@@ -670,6 +695,46 @@ export function QueuedNotice({
   // 待处理条目只有一种状态：还在等（取消成功 ⇒ 条目消失 ⇒ 整张卡消失，没有残留态）。
   const status = 'queued';
   const stateClass = 'stream-card-queued-waiting';
+  // 两颗键的公共形：形状层只取一次（与输入框的发送键 / 回形针同一份），色调走次要档。
+  const controlClass = cn(composerIconControlClass, composerQuietIconTone);
+  // 取消在途：两颗都禁用 —— 同一条消息不能同时被「收回来」和「撤掉」，那是两条写操作的竞争。
+  const busy = item.cancelling;
+  // 写操作行：一颗键都没给（agent 源）就整个不出现 —— 不留「有槽无键」的空行。
+  // 一行两颗 32px 正圆：卡片本身就是满宽块（`.notice-block`），这一行按列宽排，
+  // 小屏也不会把卡撑宽（`flex-none` + 定尺寸盒子）。
+  let actions: ReactNode = null;
+  if (onCancel !== undefined || onEdit !== undefined) {
+    actions = (
+      <div className="flex items-center gap-1.5 px-2.5 pb-1.5">
+        {onEdit !== undefined && (
+          <Button
+            variant="plain"
+            className={controlClass}
+            aria-label={t('chat.pending.edit')}
+            title={t('chat.pending.edit')}
+            disabled={busy}
+            onClick={() => onEdit(item.id)}
+          >
+            <Icon name="edit" size={14} />
+          </Button>
+        )}
+        {onCancel !== undefined && (
+          <Button
+            variant="plain"
+            className={controlClass}
+            // 名字沿用可见文字那一版的 key（`chat.run.cancelQueue` = 「取消排队」），
+            // 在途时换成「取消中…」—— 图标键没有文字态，这层反馈只能走 title / 读屏名。
+            aria-label={busy ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
+            title={busy ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
+            disabled={busy}
+            onClick={() => onCancel(item.id)}
+          >
+            <Icon name="retract" size={14} />
+          </Button>
+        )}
+      </div>
+    );
+  }
   return (
     <StreamCard
       // 卡宽跟列一致（w-full + min-w-0 + max-w-full）：短输入不缩水、长输入不撑宽。
@@ -689,13 +754,7 @@ export function QueuedNotice({
       //（tokens.css 里 amber 档的「前景 / 图标」角色，展开 chevron 同色）：meta 槽默认的
       // `text-faint` 压在 `--amber-soft` 上只有约 3.8:1，2xs 小字读不清。
       meta={identity === undefined ? undefined : <span className="text-amber">{identity}:</span>}
-      actions={
-        <div className="px-2.5 pb-1">
-          <Button variant="link" onClick={() => onCancel(item.id)} disabled={item.cancelling}>
-            {item.cancelling ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
-          </Button>
-        </div>
-      }
+      actions={actions}
     >
       {/* 正文是用户自己写的那条消息，压在琥珀底上也要读得清：用 ink，不用 muted。
           内衬由 `.notice-block > .event-block-body` 给，这里不再补 px。 */}

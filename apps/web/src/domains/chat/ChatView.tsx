@@ -182,6 +182,28 @@ export function ChatView({
     pendingWasActive.current = transcriptApi.pendingActive;
   }, [transcriptApi.pendingActive]);
 
+  /**
+   * 「收回编辑」的落点：把待处理条带 peek 到的**全文**放回本会话的草稿槽。
+   *
+   * 草稿的持有者是 `useChatSubmit`（`chatDraftKey` 的草稿 store），所以条带只认这一条
+   * 回调，不自己去碰 store。三条约束：
+   * - **只写草稿，不发送**：`setInputForSession` 只碰草稿 store；发送只发生在 Composer 的
+   *   Enter / 发送键里（这条链路上没有任何 `handleSend`）；
+   * - **不覆盖人已经写着的字**：槽非空时接在后面（换行分隔）。覆盖等于「收回一条排队、
+   *   顺手吞掉一段草稿」，那是静默的数据损失；
+   * - 焦点交给输入框（与新建会话 / edit 回填同一条 `composerFocus` 通道），收回就能改。
+   */
+  const refillDraftFromStrip = useCallback(
+    (text: string) => {
+      if (!selectedId) return;
+      submitApi.setInputForSession(selectedId, (current) =>
+        current.trim().length === 0 ? text : `${current}\n${text}`,
+      );
+      setComposerFocus((value) => value + 1);
+    },
+    [selectedId, submitApi.setInputForSession],
+  );
+
   const selectSession = (sessionId: string) => {
     navigate({ domain: 'chat', sessionId });
     onCloseSessions();
@@ -417,6 +439,7 @@ export function ChatView({
             client={client}
             epoch={epoch}
             refreshKey={submitApi.sendTick + transcriptApi.visibleGroups.length}
+            onRefillDraft={refillDraftFromStrip}
           />
         </div>
 

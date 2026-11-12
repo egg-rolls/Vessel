@@ -11,7 +11,7 @@
  */
 
 import { ASK_ANSWER_MESSAGE_NAME } from '../apps/web/src/domains/chat/ask-answer';
-import { pendingStripView } from '../apps/web/src/domains/chat/pending-strip';
+import { ownedBySession, pendingStripView } from '../apps/web/src/domains/chat/pending-strip';
 import { ROTATE_HANDOFF_MESSAGE_NAME } from '../apps/web/src/domains/chat/rotate-handoff';
 import {
   buildTranscriptItems,
@@ -291,6 +291,65 @@ const FIXTURES: readonly Fixture[] = [
         view.preview.length === 3 &&
         view.hidden === 1 &&
         view.ordered.map((entry) => entry.message_id).join(',') === 'a,b,c,d'
+      );
+    },
+  },
+  {
+    name: 'F28 条带归属：只认 session_id 等值命中（缺字段的老条目 / 别的会话一律不显示）',
+    why: 'agent 维度的 inbox 是全量的，from 只说「谁发的」；唯一能判「这是不是本会话下一条输入」的是 session_id。缺它的老条目（wake / quiet 投递）上带子就是把人家的消息串过来，宁可隐藏',
+    check: () => {
+      const inbox: { message_id: string; session_id?: string }[] = [
+        { message_id: 'own-human', session_id: 's1' },
+        // 老条目：没有归属字段（0.52 之前落盘的 / 非 input 投递）。
+        { message_id: 'legacy' },
+        // 同一个 agent 的收件箱里、发给别的会话的那条。
+        { message_id: 'other-session', session_id: 's2' },
+        // agent 源：来源不同但归属对，照样是这条会话的待处理输入。
+        { message_id: 'own-agent', session_id: 's1' },
+      ];
+      const kept = ownedBySession(inbox, 's1').map((entry) => entry.message_id);
+      return kept.join(',') === 'own-human,own-agent';
+    },
+  },
+  {
+    name: 'F29 跨源不折叠：正文互为前缀但 from 不同 → 各成一组；同源相邻仍照旧并组',
+    why: '同源折叠的语义是「同一个人说的同一件事」；把 human 源与 agent 源折进一组会把卡头那格身份变成假信息（组头只显示一条的 from）',
+    check: () => {
+      const view = pendingStripView([
+        { message_id: 'h1', from: 'human', summary: '跑一遍门禁', status: 'held', ts: 100 },
+        {
+          message_id: 'a1',
+          from: 'agent:helper',
+          summary: '跑一遍门禁',
+          status: 'held',
+          ts: 200,
+        },
+        {
+          message_id: 'a2',
+          from: 'agent:helper',
+          // 与 a1 互为前缀：同源，应该并进 a1 那一组。
+          summary: '跑一遍门禁并贴日志',
+          status: 'held',
+          ts: 300,
+        },
+        {
+          message_id: 'h2',
+          from: 'human',
+          summary: '跑一遍门禁并贴日志',
+          status: 'held',
+          ts: 400,
+        },
+      ]);
+      const shapes = view.preview.map((group) => group.entries.map((entry) => entry.message_id));
+      // 每个组的 from 必须单一（组头那格身份不能是两条不同来源凑出来的）。
+      const singleSource = view.preview.every((group) =>
+        group.entries.every((entry) => entry.from === group.head.from),
+      );
+      return (
+        view.total === 4 &&
+        shapes.length === 3 &&
+        shapes.map((ids) => ids.join('+')).join(',') === 'h1,a1+a2,h2' &&
+        singleSource
       );
     },
   },
