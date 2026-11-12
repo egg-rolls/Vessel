@@ -131,29 +131,30 @@ export function AppShell() {
 
   const pendingSummary = pendingBarSummary(otherPending, otherAsks, attribution);
   // 跳转落点由归属解析给出：普通请求 → 会话页；成员 bridge → 待批页；解析不出 → 不给跳转。
-  const pendingTarget = pendingBarTarget(pendingSummary);
+  // 落点先算成 {label, run}：闭包里不再依赖 `pendingTarget` 的类型收窄（会话 id 也一并定下来，
+  // 免得上面那条「agent 落点可以没有 sessionId」的差异漏到 onClick 里）。
+  const pendingJump = ((): { label: string; run: () => void } | null => {
+    const target = pendingBarTarget(pendingSummary);
+    if (target === null) return null;
+    if (target.domain === 'pending') {
+      const sessionId = target.sessionId;
+      return {
+        label: t('pending.bar.goPending'),
+        run: () => openPendingPage(sessionId),
+      };
+    }
+    const sessionId = target.sessionId;
+    return { label: t('permission.goTo'), run: () => openPendingSession(sessionId) };
+  })();
   const pendingItem: MessageBarItem | null = pendingSummary.earliest
     ? {
         id: 'pending-requests',
         tone: 'info',
-        text: pendingTarget
+        text: pendingJump
           ? t('pending.bar.summary', { count: pendingSummary.count })
           : `${t('pending.bar.summary', { count: pendingSummary.count })} · ${t('pending.bar.unresolved')}`,
-        ...(pendingTarget
-          ? {
-              actions: [
-                {
-                  label:
-                    pendingTarget.domain === 'pending'
-                      ? t('pending.bar.goPending')
-                      : t('permission.goTo'),
-                  onClick: () =>
-                    pendingTarget.domain === 'pending'
-                      ? openPendingPage(pendingTarget.sessionId)
-                      : openPendingSession(pendingTarget.sessionId),
-                },
-              ],
-            }
+        ...(pendingJump
+          ? { actions: [{ label: pendingJump.label, onClick: pendingJump.run }] }
           : {}),
       }
     : null;
