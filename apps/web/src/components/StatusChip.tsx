@@ -5,10 +5,23 @@ import { t } from '../i18n';
 import { Tooltip } from './Tooltip';
 import { cn } from './ui';
 
+/**
+ * 语义色 tone（**运行时数组 = 唯一事实源**）：`StatusMeta.tone` 与 `glyphOnly` 的
+ * cva 键集合都由它派生，设计实验室遍历它出图，新增一档不用改预览。
+ */
+export const STATUS_GLYPH_TONES = ['muted', 'info', 'warn', 'ok', 'danger'] as const;
+
+export type StatusGlyphTone = (typeof STATUS_GLYPH_TONES)[number];
+
+/** `chip` 的 tone 表：字形/文本胶囊的语义色，多一档 `band`（有色卡带上的不透明底）。 */
+export const CHIP_TONES = ['muted', 'info', 'warn', 'ok', 'danger', 'band'] as const;
+
+export type ChipTone = (typeof CHIP_TONES)[number];
+
 export interface StatusMeta {
   glyph: string;
   label: string;
-  tone: 'muted' | 'info' | 'warn' | 'ok' | 'danger';
+  tone: StatusGlyphTone;
 }
 
 const STATUS_LABEL_KEYS: Record<StatusKind, string> = {
@@ -64,36 +77,40 @@ const ALIASES: Record<string, StatusKind> = {
 
 const KNOWN = new Set<string>(Object.keys(STATUS_META));
 
+/**
+ * `CHIP_TONES` → class；`satisfies` 双向钉住数组与 cva 键集合（漏写 / 多写都编译报错）。
+ */
+const CHIP_TONE_CLASS = {
+  muted: 'bg-sunken text-faint',
+  info: 'bg-info-soft text-info',
+  warn: 'bg-warn-soft text-warn',
+  ok: 'bg-success-soft text-success',
+  danger: 'bg-danger-soft text-danger',
+  /** 有色卡带上的胶囊（见 `StatusChip` 的 `variant`）：不透明底 + 正文色文字。 */
+  band: 'bg-raised text-ink',
+} satisfies Record<ChipTone, string>;
+
 const chip = cva(
   'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-xs tracking-wide',
   {
-    variants: {
-      tone: {
-        muted: 'bg-sunken text-faint',
-        info: 'bg-info-soft text-info',
-        warn: 'bg-warn-soft text-warn',
-        ok: 'bg-success-soft text-success',
-        danger: 'bg-danger-soft text-danger',
-        /** 有色卡带上的胶囊（见 `StatusChip` 的 `variant`）：不透明底 + 正文色文字。 */
-        band: 'bg-raised text-ink',
-      },
-    },
+    variants: { tone: CHIP_TONE_CLASS },
     defaultVariants: { tone: 'muted' },
   },
 );
 
+/** `STATUS_GLYPH_TONES` → class（一致性守卫同上；`band` 不属于字形档，故意不在这里）。 */
+const GLYPH_TONE_CLASS = {
+  muted: 'bg-sunken text-faint',
+  info: 'bg-info-soft text-info',
+  warn: 'bg-warn-soft text-warn',
+  ok: 'bg-success-soft text-success',
+  danger: 'bg-danger-soft text-danger',
+} satisfies Record<StatusGlyphTone, string>;
+
 const glyphOnly = cva(
   'inline-flex size-4 flex-none items-center justify-center rounded-full font-mono text-2xs leading-none',
   {
-    variants: {
-      tone: {
-        muted: 'bg-sunken text-faint',
-        info: 'bg-info-soft text-info',
-        warn: 'bg-warn-soft text-warn',
-        ok: 'bg-success-soft text-success',
-        danger: 'bg-danger-soft text-danger',
-      },
-    },
+    variants: { tone: GLYPH_TONE_CLASS },
     defaultVariants: { tone: 'muted' },
   },
 );

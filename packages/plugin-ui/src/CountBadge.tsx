@@ -1,6 +1,17 @@
-import { cva, type VariantProps } from 'class-variance-authority';
+import { cva } from 'class-variance-authority';
 import type { HTMLAttributes } from 'react';
 import { cn } from './cn';
+
+/** tone 名：**运行时数组 = 唯一事实源**（类型由它派生，预览直接遍历）。 */
+export const COUNT_BADGE_TONES = ['muted', 'accent'] as const;
+
+export type CountBadgeTone = (typeof COUNT_BADGE_TONES)[number];
+
+/** tone → class；`satisfies Record<CountBadgeTone, string>` 双向钉住数组与 cva 键集合。 */
+const COUNT_BADGE_TONE_CLASS = {
+  muted: 'bg-sunken text-muted',
+  accent: 'bg-accent-soft text-accent-ink',
+} satisfies Record<CountBadgeTone, string>;
 
 /**
  * 数字徽标：只承接「有多少条」这类元信息。
@@ -11,17 +22,10 @@ import { cn } from './cn';
 const countBadge = cva(
   'inline-flex h-5 min-w-5 flex-none items-center justify-center rounded-full px-1.5 font-mono text-2xs tabular-nums leading-none',
   {
-    variants: {
-      tone: {
-        muted: 'bg-sunken text-muted',
-        accent: 'bg-accent-soft text-accent-ink',
-      },
-    },
+    variants: { tone: COUNT_BADGE_TONE_CLASS },
     defaultVariants: { tone: 'muted' },
   },
 );
-
-export type CountBadgeTone = NonNullable<VariantProps<typeof countBadge>['tone']>;
 
 export interface CountBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'> {
   count: number;

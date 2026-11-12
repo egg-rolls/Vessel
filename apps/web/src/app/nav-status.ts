@@ -37,8 +37,16 @@ import type { ConnectionState } from '../gateway/client';
 import type { HubNavStatus } from '../gateway/platform/hub-storage';
 import type { PluginListItem } from '../gateway/types';
 
+/**
+ * 四档语义的 tone 名：**运行时数组 = 唯一事实源**（类型由它派生）。
+ *
+ * `NavStatusMeta.tone` 与设计实验室的圆点图例都从这里来 —— 新增一档时图例会
+ * 自动多一行，`TONE_TOKENS` 之类的 `Record<NavStatusTone, …>` 会因缺键而编译报错。
+ */
+export const NAV_STATUS_TONES = ['accent', 'amber', 'danger', 'muted'] as const;
+
 /** 四档语义；见文件头表格。 */
-export type NavStatusTone = 'accent' | 'amber' | 'danger' | 'muted';
+export type NavStatusTone = (typeof NAV_STATUS_TONES)[number];
 
 export interface NavStatusMeta {
   tone: NavStatusTone;

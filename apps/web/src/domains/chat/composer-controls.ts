@@ -30,12 +30,31 @@
 export const composerIconControlClass =
   'size-control flex-none rounded-full border border-line-strong p-0 bg-sunken pointer-coarse:min-w-touch disabled:opacity-100';
 
-/** 主动作色调（发送）：主题色图标，hover 走 accent-soft / accent-ink。 */
-export const composerPrimaryIconTone =
-  'text-accent enabled:hover:bg-accent-soft enabled:hover:text-accent-ink disabled:text-faint';
+/**
+ * 色调档名：**运行时数组 = 唯一事实源**（类型由它派生）。
+ * 设计实验室遍历它出图（每档套同一个形状层），加一档不用改预览。
+ */
+export const COMPOSER_ICON_TONES = ['primary', 'quiet'] as const;
+
+export type ComposerIconTone = (typeof COMPOSER_ICON_TONES)[number];
 
 /**
- * 次要动作色调（回形针等）：静止灰色图标，hover 转 --ink —— 暗色主题下就是白，
- * 浅色主题下就是最深的 ink；两者都是「hover 拉对比」，与发送键同一策略，只是不借主题色。
+ * 档名 → 色调 class。`satisfies Record<ComposerIconTone, string>` 双向钉住数组与
+ * 这张表（漏写 / 多写都编译报错），所以两档色调不可能与数组漂移。
  */
-export const composerQuietIconTone = 'text-muted enabled:hover:text-ink disabled:text-faint';
+export const COMPOSER_ICON_TONE_CLASS = {
+  /** 主动作色调（发送）：主题色图标，hover 走 accent-soft / accent-ink。 */
+  primary:
+    'text-accent enabled:hover:bg-accent-soft enabled:hover:text-accent-ink disabled:text-faint',
+  /**
+   * 次要动作色调（回形针等）：静止灰色图标，hover 转 --ink —— 暗色主题下就是白，
+   * 浅色主题下就是最深的 ink；两者都是「hover 拉对比」，与发送键同一策略，只是不借主题色。
+   */
+  quiet: 'text-muted enabled:hover:text-ink disabled:text-faint',
+} satisfies Record<ComposerIconTone, string>;
+
+/** 主动作色调（发送）。 */
+export const composerPrimaryIconTone = COMPOSER_ICON_TONE_CLASS.primary;
+
+/** 次要动作色调（回形针等）。 */
+export const composerQuietIconTone = COMPOSER_ICON_TONE_CLASS.quiet;

@@ -16,6 +16,22 @@
  *   2. 缺省用**所在目录名**（`.../previews/chat/queued.preview.tsx` → 'chat'）；
  *   3. 组名的中文标题来自 `PREVIEW_GROUP_RULES` 的映射表；表里没有的组直接显示 id
  *      （语言无关的目录名），所以新目录里的样例也不会被丢掉。
+ *
+ * ## 变体枚举契约（定论，与 token 展览馆同一条原则：不复制事实）
+ *
+ * **有运行时变体表的组件，预览必须枚举那张表，不许手写清单。**
+ *
+ * 也就是说：组件把变体名导出成运行时数组（`BUTTON_VARIANTS` / `BUTTON_SIZES` /
+ * `BADGE_TONES` / `COUNT_BADGE_TONES` / `CHIP_TONES` / `COMPOSER_ICON_TONES` /
+ * `NAV_STATUS_TONES` …），类型由数组派生（`type X = (typeof ARR)[number]`），
+ * cva 的 variant 键集合用 `satisfies Record<X, string>` 与之双向钉住；预览里写
+ * `BUTTON_VARIANTS.map(...)`。于是「加一种变体」= 只改组件一处，设计实验室自动多一格，
+ * 忘了加进数组则是**编译错误**，而不是预览里静默少一格。
+ *
+ * 组件若确实拿不到运行时表（变体只活在 class 串 / 外部数据里，没有可导出数组），
+ * 预览可以保留手写清单，但**必须加穷举守卫**——`Record<ThatVariant, true>`、
+ * `Record<ThatTone, string>` 之类的类型断言，保证「新增变体却忘了更新预览」会编译报错。
+ * 不允许留下「预览列表比组件少一项」这种静默漂移。
  */
 import type { ComponentType } from 'react';
 import { useEffect, useState } from 'react';
