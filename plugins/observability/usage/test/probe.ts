@@ -659,8 +659,7 @@ function runIds(events: RawEvent[]): string[] {
     midTs + 2_000,
   );
   const todayBody =
-    lineAt('llm.request', 'run-today', newTs) +
-    lineAt('llm.response', 'run-today', newTs + 1_400);
+    lineAt('llm.request', 'run-today', newTs) + lineAt('llm.response', 'run-today', newTs + 1_400);
   await writeTrace(dir, 'run-today', todayBody, newTs + 2_000);
 
   const store = new EventStore();
@@ -676,7 +675,7 @@ function runIds(events: RawEvent[]): string[] {
     String(day1.files_total),
   );
   check(
-    'days=1 returns only today\'s events',
+    "days=1 returns only today's events",
     day1.events.length === 2 && day1.events.every((event) => event.ts >= dayStart(0)),
     `${day1.events.length} events: ${runIds(day1.events).join(',')}`,
   );
@@ -754,11 +753,7 @@ function runIds(events: RawEvent[]): string[] {
   );
 
   const back = await loadDays(store, dir, 7);
-  check(
-    '30 -> 7 re-reads zero bytes',
-    back.bytes_read === 0,
-    String(back.bytes_read),
-  );
+  check('30 -> 7 re-reads zero bytes', back.bytes_read === 0, String(back.bytes_read));
   check(
     'switching days back is idempotent',
     JSON.stringify(back.events) === JSON.stringify(seven.events) &&
