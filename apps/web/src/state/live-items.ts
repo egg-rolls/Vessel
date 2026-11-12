@@ -220,7 +220,12 @@ export class LiveItemStore implements ItemSink {
   private readonly condensed = new Map<string, CondensedSummary>();
   private readonly dirty = new Set<string>();
   private readonly listeners = new Set<() => void>();
-  private readonly stats: ItemStoreStats = { refolds: 0, replaySkipped: 0, condensed: 0 };
+  private readonly stats: ItemStoreStats = {
+    refolds: 0,
+    replaySkipped: 0,
+    condensed: 0,
+    overBudget: false,
+  };
   private snapshot: ItemStoreSnapshot = emptySnapshot();
   private version = 0;
   /** 已应用的最大 seq（单调水位，I5）：只在 `clear()` 归零。 */
@@ -409,11 +414,7 @@ export class LiveItemStore implements ItemSink {
     }
   }
 
-  private refoldRun(
-    runId: string,
-    entries: readonly StoredEvent[],
-    keepSurvivors: boolean,
-  ): void {
+  private refoldRun(runId: string, entries: readonly StoredEvent[], keepSurvivors: boolean): void {
     const previous = this.groups.get(runId);
     if (previous !== undefined) this.bases.set(runId, previous);
     const fold = createFold(runId);
