@@ -498,9 +498,11 @@ function readRequestId(data: unknown): string | undefined {
 /**
  * 转发到父流前补齐成员归属字段；已有字段不覆盖。
  *
- * 归属形状（`parent_agent_id` vs `parent_session_id` 各写各的）是 0.51 的核心不变量；
- * 它由 `scripts/check-ask-attribution.ts` 按源码对拍（`src/ask-attribution.test.ts`
- * 覆盖读侧 —— 本模块 import 了 `@vessel-agent/core`，测试进程里不好单独拉起）。
+ * 归属**只写 agent 维度**（`parent_agent_id`）是 0.51 的核心不变量：父会话 id 是
+ * 从父 agent 上溯出来的展示信息，不是这条请求的事实，多写一个键就多一处会漂移的
+ * 来源（0.19 的混用正是这么来的）。这个形状由 `scripts/check-ask-attribution.ts`
+ * 按源码对拍（`src/ask-attribution.test.ts` 覆盖读侧 —— 本模块 import 了
+ * `@vessel-agent/core`，测试进程里不好单独拉起）。
  */
 function bridgeRequestData(
   event: RunEvent,
@@ -518,16 +520,13 @@ function bridgeRequestData(
   }
   if (typeof data.session_id !== 'string') data.session_id = member.session_id;
   // 父**agent** 归属单独一个键（additive）：父子链的 agent 身份。
+  //
+  // 归属只需要 agent 这一个维度：会话维度已经由成员自己的 `session_id` 表达了，
+  // 而「父会话是谁」是读侧从 `parent_agent_id` + roster 上溯出来的**展示**信息
+  // （agent id 与会话 id 只在某具 body 上偶然相等，一旦写进事件就是第二个会漂移的
+  // 事实源）。所以这里**刻意不写** `parent_session_id`，也不再加回来。
   if (typeof data.parent_agent_id !== 'string' && member.parent_id !== undefined) {
     data.parent_agent_id = member.parent_id;
-  }
-  // `parent_session_id` 只装**真会话 id**（0.51 修正）。0.19 起这里直接写
-  // `member.parent_id`（agent id），读侧把 agent id 当会话 id 用 —— 两者只在
-  // 「该 agent 的第一具 body」上偶然相等，`main` 第一次 rotate 之后，这条请求就
-  // 再也归属不到任何会话（待批计数/跳转全错）。取不到父会话时**不写**这个键：
-  // 宁可让读侧走 roster 上溯兑底，也不写一个必然错的 id。
-  if (typeof data.parent_session_id !== 'string' && member.parent_session_id !== undefined) {
-    data.parent_session_id = member.parent_session_id;
   }
   if (data.delegate_path === undefined) {
     data.delegate_path =
