@@ -82,7 +82,8 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
   转换后同一具 live body 上开关立即翻转，下一次 run 即按新角色生效。压力提示的**文案**是
   spawn 期参数，转正后活体仍会说旧文案，因此转换时额外追加一条 `vessel:notice` 明确当前策略。
 - 向成员上下文追加 `vessel:notice`（`identity changed: old → new; owner=...; team=...`），
-  不启动 turn。Self Card 保持冻结，不改 system 前缀。
+  不启动 turn。Self Card 保持冻结，不改 system 前缀；基础信息（名字 / team / model /
+  system prompt）的变更另走 `self-card-delta`（每具 body 一条环境信息，见 [context](context.md#injection)）。
 - 事件 `agent.role.changed`。
 - Team 绑定决定 temporary ↔ member：加入 Team 且 `kind:'peer'` 变 member；
   temporary 绑定 Team 仍是 temporary。

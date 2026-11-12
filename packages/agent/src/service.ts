@@ -5377,6 +5377,11 @@ export class AgentServiceImpl implements AgentService {
       this.scheduleSnapshot();
     }
 
+    // 0.52：基础信息变了就把真值推进给活体（Self Card 不重建、body 不重建）。放在 role
+    // 转换**之后**：转换顺带改 parent / team / 权限档，一次同步就能把这三项一起带上，
+    // 下一轮变成一条环境信息；没有活体时是 no-op（下一次 spawn 直接用新记录建卡）。
+    if (changed.length > 0 || conversion !== undefined) this.syncSelfCardIdentity(target);
+
     const affectsNextBinding = changed.includes('model') || changed.includes('system_prompt');
     return {
       agent: this.statusFor(target),
@@ -5417,6 +5422,34 @@ export class AgentServiceImpl implements AgentService {
         error: errorText(error),
       });
       return 0;
+    }
+  }
+
+  /**
+   * 基础信息变更 → 活体「真值盒」（0.52）。
+   *
+   * 为什么只推进真值、不动别处：Self Card 是构造期只读快照（system 前缀的一部分），
+   * `agents.update` 改不了模型看到的那张卡；而模型「我是谁 / 用哪个 model」只能从卡里读。
+   * 于是把这件事实交给 body 自己：下一轮 BeforeLlm 的 `self-card-delta` hook 会 diff
+   * 「模型相信的值」与这里的真值，变了就注入一条 `vessel:notice` 环境信息，字段没变 /
+   * 同一变更都不再报。不重建 body、不热替换 system、不动 cwd 与工具面。
+   *
+   * 只发给 `liveEntries`：没有活体时下一次 spawn 用新记录重新建卡，本来就不需要告知。
+   * 单个 body 失败不影响其它 body，也不让 update 本身失败（身份已经落盘，回滚更贵）。
+   */
+  private syncSelfCardIdentity(target: MemberRecord): void {
+    const note = this.runtime.noteSelfCardIdentity;
+    if (note === undefined) return;
+    for (const entry of this.liveEntries(target.id)) {
+      try {
+        note.call(this.runtime, { ...toRuntimeMember(target), session_id: entry.bindingId });
+      } catch (error) {
+        this.logger.warn('agent.self_card.sync_failed', {
+          member_id: target.id,
+          session_id: entry.bindingId,
+          error: errorText(error),
+        });
+      }
     }
   }
 
@@ -5589,6 +5622,9 @@ export class AgentServiceImpl implements AgentService {
     }
 
     this.emit('agent.rejoined', target, { state: target.state, presence: target.presence });
+    // 0.52：加入 / 换 Team 同样是「基础信息变了」（team 行 + 权限档可能一起变），
+    // 有活体时按同一条环境信息通道告知；复活路径没有活体，这里自然 no-op。
+    this.syncSelfCardIdentity(target);
     this.scheduleSnapshot();
     return this.statusFor(target);
   }

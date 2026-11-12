@@ -357,6 +357,18 @@ export interface MemberExecutionPort {
    */
   applyContextPolicy?(member: MemberExecutionMember): Promise<number> | number;
   /**
+   * 0.52（additive，可选）：把「基础信息真值」推进给该成员的活体。
+   *
+   * Self Card 是构造期只读快照（system 前缀的一部分，热替换会让整段历史缓存失效），所以
+   * `agents.update` 改不了模型看到的那张卡。这里只同步真值，由该 body 的下一轮 BeforeLlm
+   * hook（`self-card-delta`）与「模型相信的值」diff 出一条 `vessel:notice` 环境信息：
+   * 变了才报、同一变更只报一次、字段没变不报。
+   *
+   * `member` 是**变更后**的身份（name / parent / team / model / system_prompt 全带）。
+   * 返回命中的 body 数；未实现的 port 由 `AgentService` 静默跳过（没有活体时本就不需要告知）。
+   */
+  noteSelfCardIdentity?(member: MemberExecutionMember): number;
+  /**
    * 0.31（additive，可选）：body 当前上下文水位（0–1）。
    *
    * 只读诊断值，供 AgentService 生成 rotate 确认文案；不落盘、不新增 RPC。

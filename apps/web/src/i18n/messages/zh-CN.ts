@@ -877,9 +877,9 @@ export const messages = {
   'agents.edit.title': '编辑智能体',
   'agents.back': '返回智能体',
   'agents.form.model': '模型',
-  'agents.form.modelHint': '从下一次会话生效；留空表示不修改。',
+  'agents.form.modelHint': '下一具 body 才用新值（rotate 或重启后）；当前 body 仍是旧值，只会收到一条环境信息告知。留空表示不修改。',
   'agents.form.systemPrompt': '系统提示词',
-  'agents.form.systemPromptHint': '从下一次会话生效；留空表示不修改。',
+  'agents.form.systemPromptHint': '下一具 body 才用新值（rotate 或重启后）；当前 body 仍是旧值，只会收到一条环境信息告知。留空表示不修改。',
   'agents.form.kind': '类型',
   'agents.form.kindPeer': '成员（需要 Team）',
   'agents.form.kindContractor': '临时（可不绑 Team）',
@@ -1150,6 +1150,10 @@ export const messages = {
   'chat.env.scope.mcp': 'MCP',
   'chat.env.scope.update': '更新',
   'chat.env.scope.peer': '成员',
+  // 0.52：Self Card 增量告知（基础信息改了，但那张卡是构造期快照 —— 见
+  // packages/agent/src/self-card-delta.ts）。标签用「基础信息」：与编辑表单的说法对齐，
+  // 一眼能看出「我刚才改的东西生效了」。
+  'chat.env.scope.selfcard': '基础信息',
   'chat.env.scope.context': '上下文',
   'chat.env.count': '{count} 条',
   'chat.env.notApplied': '未生效',
