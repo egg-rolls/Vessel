@@ -116,7 +116,7 @@
         },
         {
           "name": "logs",
-          "description": "Paginated request logs"
+          "description": "Paginated request logs (range: days | since/until, half-open)"
         },
         {
           "name": "leaderboard",
