@@ -2,7 +2,7 @@
 title: 上下文与消息注入
 kind: current
 triggers: [context, message, injection, compaction, system prompt, self card, vessel:source, notice, token, prefix, history]
-paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.ts, packages/core/src/session/project-messages.ts, packages/agent/src/runtime.ts, src/runtime-notice-hook.ts, src/agent-owner-injection.ts, plugins/context/doc-subscription/**]
+paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.ts, packages/core/src/session/project-messages.ts, packages/agent/src/runtime.ts, packages/agent/src/self-card-delta.ts, src/runtime-notice-hook.ts, src/agent-owner-injection.ts, plugins/context/doc-subscription/**]
 ---
 
 # 上下文与消息注入
@@ -35,6 +35,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | `RunOptions.messages` | `@path` 引用、成员 `vessel:source`、技能/附件 | 调用方传入 | **用户输入前** | 是 |
 | owner 队列 | 成员回复 | `agent-owner-injection` BeforeLlm → `ctx.messages` | 本轮 user 后 | 是 |
 | `runtime.notice` | 热应用 / 版本通知 / 成员停下（scope `peer`，定向父 session） | `runtime-notice-hook` → `vessel:notice` | 尾部 | 是 |
+| 基础信息变更（`agents.update` / `reinstate`） | `selfcard: N fields changed …` + 每字段一行（name / parent / team / model / system prompt / permission mode）；model / system prompt 明确写「本具 body 仍用旧值，下一具才用新值」 | `self-card-delta`（BeforeLlm，**每具 body 一个实例**）→ `vessel:notice`（Web scope `selfcard`） | 尾部 | 是（同一变更只注入一次；Self Card 本身仍是构造期快照，不热替换） |
 | 附件引用（`Message.refs`） | `[refs] N attachments: kind path, …`（只有路径与种类；>3 条折 `+N more`；尾注按 media 工具是否可用分三档：`(use media: action=…)` / 未启用时说明需启用插件 / 纯 file 批次不加尾注） | `refs-notice-hook`（BeforeLlm，读 `ctx.refs`）→ `vessel:notice` | 尾部 | 是（同一批引用只注入一次，变化才再注入） |
 | 文档订阅 | `<subscription-notice>` 短通知 | doc-subscription → `vessel:subscription` | 尾部 | 是 |
 | 90% 预算预警（`limits.*` / `termination.*`） | `[runtime] input_tokens_limit: 900k/1M ...` | core `publishLimitWarnings` → `vessel:limit` | 尾部 | 是 |
@@ -45,6 +46,8 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | 压缩 | 摘要 | `compactAsync` / `autoCompactAsync` / `compactContext` | system 之后 | 是（事件日志 + session cache） |
 
 **不注入**：Team 日志不会自动进上下文；只有 `teams.post` 里被 `@` 的成员会收到一条普通 user 消息。权限请求 / ask 事件不进上下文，只有工具结果会。
+
+**Self Card 是构造期快照（0.52）**：`agents.update` 只改 registry 记录，模型看到的 `[Self Card]` 仍是 spawn 时那张（`selfCard` / `systemPrompt` / `model` 在 `ExecutionUnit` 构造期赋值、之后只读）。因此**不热替换**那张卡，而是把变化说成环境信息：`AgentService` 把新身份推进该 body 的「真值盒」，`self-card-delta` hook 每轮 diff「模型相信的值」与它，变了才注入一条 `vessel:notice`（同一变更只报一次；字段没变 / 没变更都不注入；回滚照样报）。改名 / team / parent 立即生效、只补一句说明，model / system prompt 如实写成「本具 body 仍是旧值，下一具 body 才用新的」。
 
 **基底 system 完全由用户掌握**：只有 `config.agent.systemPrompt`（或成员 `system_prompt`）会作为基底提示词；两者都未配置时基底为空（空串跳过，不写 system 消息），runtime 不提供任何内置默认提示词。Self Card 是 runtime 元数据，仍按 `composeRunSystemPrompt` 注入（无基底时 system 只有 card）。
 
