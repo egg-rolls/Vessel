@@ -24,7 +24,7 @@ import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
-import { createRefsNoticeHook, MEDIA_TOOL_NAME, REFS_NOTICE_HOOK } from './refs-notice-hook';
+import { createRefsNoticeHook, readMediaSurface, REFS_NOTICE_HOOK } from './refs-notice-hook';
 import type { RuntimeNoticeBus } from './runtime-notice';
 import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from './runtime-notice-hook';
 import { resolveRuntimePermission } from './tenant-runtime-factory';
@@ -157,10 +157,10 @@ export function registerRuntimeNoticeHook(host: PluginHost, bus: RuntimeNoticeBu
  * 「这一轮带了哪些附件」，两条消息在 Web 上都是环境信息卡。
  * hook 自己按 session 记住上次注入的引用签名，重复 / 无引用时不产出消息。
  *
- * ## 「media 可用」的权威判据：宿主工具面，不是插件名单
+ * ## 「media 工具面」的权威判据：宿主工具面，不是插件名单
  *
- * 尾注会告诉模型「怎么读图片/文档」，所以必须只说真话。判据是
- * **`host.listTools()` 里有没有 `media` 工具**：
+ * 尾注会告诉模型「怎么读图片/文档、能点哪些 action」，所以必须只说真话。判据是
+ * **`host.listTools()` 里那个 `media` 工具的 schema**：
  * - 这正是模型看到的工具面的来源（`execution-unit` 的 `listToolSchemas()`
  *   就是 `pluginHost.listTools()`），断言与事实同源；
  * - 插件选择名单（`PluginSelection.names`）**不够**：media 进了加载集也会因为
@@ -168,15 +168,19 @@ export function registerRuntimeNoticeHook(host: PluginHost, bus: RuntimeNoticeBu
  *   （`plugins/media/media/src/index.ts`），名单说「加载了」而模型其实没有工具；
  * - 插件目录存在与否更不可用（仓库里永远有 media，用户 config 没启用就没有工具）。
  *
- * 传**实时探针**而不是注册时的布尔快照：cli 的 `tools` 热应用会在同一个 host 上
+ * 传**实时探针**而不是注册时的静态快照：cli 的 `tools` 热应用会在同一个 host 上
  * 增删插件工具（`applyTools` + `unregisterTool`），快照会立刻过期。
+ *
+ * 探针给的是**整个工具面**（`readMediaSurface`）而不只是一个布尔：尾注要点名的动作
+ * 列表也在变（media 插件按实测后端决定 schema 里 `action` 的 enum），只有从同一份
+ * `listTools()` 读，动作名才不会残留上一版后端的结果。
  */
 export function registerRefsNoticeHook(host: PluginHost): void {
   const existing = host.getHooks().some((hook) => hook.name === REFS_NOTICE_HOOK);
   if (existing) return;
   host.registerHook(
     createRefsNoticeHook({
-      mediaAvailable: () => host.listTools().some((tool) => tool.name === MEDIA_TOOL_NAME),
+      mediaSurface: () => readMediaSurface(host.listTools()),
     }),
   );
 }
