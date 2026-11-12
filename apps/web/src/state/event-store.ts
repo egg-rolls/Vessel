@@ -15,6 +15,11 @@
  *   2000 条，更早那一段要由客户端带 `until_seq` 逐页拉回；页是「新→旧」到达的，而
  *   这里的时间线只接受递增 seq。所以回填期间帧先攒在暂存区，拉完再按 seq 升序一次性
  *   经 `push()` 并入 —— 去重与增量合并始终只有这一条路径。
+ * - **存储层不做任何跨事件合并**（逐 delta 原样进环，seq 即真相）：
+ *   合并曾把相邻同 kind 的增量并进上一条并只留**首 seq**，于是 `truncateAfter` 按条目
+ *   seq 判去留、重放时又把尾巴并进同一条目 —— 用户看到「结尾正文重复」。
+ *   现在「每个 seq 可见」是硬不变量（见 `docs/dev/reports/run-tail-duplicate/REPORT.md`）；
+ *   段内合并发生在**读侧**（`events.ts` 的 fold 累积 `buf`），item 身份锚定首 delta 的 seq。
  * - **不产时间线产物的流式增量不进缓冲**（`tool_call_delta` / `finish` / 未识别的
  *   chunk 子类型，判据见 `events.ts#producesTimelineItem`）：它们一条都不产 item，
  *   却按 delta 计占 per-run 额度 —— 实测一个 run 6.1 万条 `tool_call_delta`，
@@ -35,10 +40,15 @@ import { producesTimelineItem, type StoredEvent } from './events';
  * 5000（≈ 800~1000 次工具调用），代价是缓冲内存上界从 ~1.2 MB 抬到 ~3 MB（实测条目
  * 均值约 600 B），flush 浅拷贝在 20 Hz 下仍是亚毫秒级。
  *
- * 注意：**文本 / 思考的流式增量不按 delta 计入**（`coalesceDelta` 把它们并进上一条），
- * 不产 timeline item 的增量（`tool_call_delta` / `finish`）根本不进缓冲
+ * 注意：**不产 timeline item 的增量**（`tool_call_delta` / `finish`）根本不进缓冲
  * （`producesTimelineItem`，见 `push`）。所以这个上限量的是「真实事件条数」，
  * 不是「token 数」。
+ *
+ * 0.53 起文本 / 思考的流式增量**也按 delta 计数**（存储层不再合并）：delta 洪水
+ * （一个 run 曾 6.1 万条）会把环挤到只剩尾部。这只影响**传输面**——运行详情实时日志
+ * 少几行、`hasNewestRunStart` 偶尔多拉 1~2 页；渲染侧的 item 由 `LiveItemStore` 物化，
+ * 裁剪不影响屏上内容（DESIGN.md I4）。要合并必须做成「片段级 seq 集合可见」，
+ * 见 REPORT §7 的 `fragSeqs`。
  */
 export const MAX_EVENTS_PER_RUN = 5000;
 /**
@@ -51,11 +61,6 @@ export const MAX_EVENTS_PER_RUN = 5000;
  */
 export const MAX_EVENTS_TOTAL = 20000;
 export const NOTIFY_INTERVAL_MS = 50;
-/**
- * 单条合并后的增量上限（字符）。超过就另起一条，避免一条条目无限变长
- * （一个超长正文段会退化成多条条目，但仍远少于逐 delta 计数）。
- */
-export const MAX_COALESCED_DELTA_CHARS = 16_384;
 
 /**
  * 单 run 裁剪时必须保留的锚点事件。
@@ -94,11 +99,25 @@ export interface EventStoreSnapshot {
   entries: readonly StoredEvent[];
   /** 累计被裁剪过的 run（自首次 flush 起）。 */
   truncatedRuns: ReadonlySet<string>;
-  /** 自上一次快照以来被裁剪过的 run；group-cache 用它做局部重建。 */
+  /**
+   * 自上一次快照以来被裁剪过的 run。
+   *
+   * @deprecated 渲染侧的 `EventGroupCache` 已不再是输入源（改为 `LiveItemStore` 物化 item），
+   * 裁剪**不再**需要通知渲染重算（I4 / I6）。字段暂留：`check-transcript-items` 的旧
+   * fixture 仍按它签名对拍，等它们整体迁到 `check-live-items` 后一起删。
+   */
   truncatedSince: ReadonlySet<string>;
   /** 最近一次通知时的 seq；重连/hello 判断用。 */
   lastSeq: number;
   version: number;
+}
+
+/** 传输面的可注入上限（**只给门禁 / 测试**用，生产走默认常量）。 */
+export interface EventStoreOptions {
+  /** 每个 run 的条目上限（默认 `MAX_EVENTS_PER_RUN`）。 */
+  maxEventsPerRun?: number;
+  /** 总条目上限（默认 `MAX_EVENTS_TOTAL`）。 */
+  maxEventsTotal?: number;
 }
 
 /** 事件自报的 session 归属：优先顶层字段，其次 `data.session_id`；缺失时 undefined。 */
@@ -160,8 +179,8 @@ export class EventStore {
    * 为 false 的那些）。只为可观测：提示卡那一单要显示「本轮有 N 条事件未在实时视图
    * 里出现」，先只暴露 getter，**不在 UI 里渲染**。
    *
-   * **不参与** `truncated*` 语义：那两个是 `group-cache` / `useChatTranscript` 的局部
-   * 重建信号，口径不变；这里丢的东西不产 item，不该触发「本轮被裁剪」的提示。
+   * **不参与** `truncated*` 语义（那两个是已弃用的渲染信号，见 `EventStoreSnapshot`）；
+   * 这里丢的东西不产 item，不该触发「本轮被裁剪」的提示。
    */
   private droppedNoiseCount = 0;
   private lastSeq = 0;
@@ -169,8 +188,18 @@ export class EventStore {
   private listeners = new Set<() => void>();
   private notifyTimer: ReturnType<typeof setTimeout> | undefined;
   private snapshot: EventStoreSnapshot = emptySnapshot();
+  /** 本 run 的条目上限（注入点见 `EventStoreOptions`，默认 `MAX_EVENTS_PER_RUN`）。 */
+  private readonly maxEventsPerRun: number;
+  /** 总条目上限（默认 `MAX_EVENTS_TOTAL`）。 */
+  private readonly maxEventsTotal: number;
 
-  constructor(private readonly notifyDelayMs = NOTIFY_INTERVAL_MS) {}
+  constructor(
+    private readonly notifyDelayMs = NOTIFY_INTERVAL_MS,
+    options: EventStoreOptions = {},
+  ) {
+    this.maxEventsPerRun = options.maxEventsPerRun ?? MAX_EVENTS_PER_RUN;
+    this.maxEventsTotal = options.maxEventsTotal ?? MAX_EVENTS_TOTAL;
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -208,48 +237,12 @@ export class EventStore {
   }
 
   /**
-   * 写入一条事件；seq 不大于已见值时忽略（回放去重）。
-   * 返回是否实际写入。
-   */
-
-  /**
-   * 把相邻、同 run、同 kind 的流式增量并进上一条（返回 true = 已合并、不新增条目）。
+   * 写入一条事件；seq 不大于已见值时忽略（回放去重）。返回是否实际写入。
    *
-   * 只合并 `text_delta` / `reasoning_delta`，且要求**上一条就是**同 run 的同 kind 增量：
-   * 一旦中间插入工具/事件/别的 run，就不再合并（保证 buildGroup 的 flush 边界不变）。
-   * 合并后条目保持**首个 seq**，所以 text/reasoning 的段序 key 稳定；`lastSeq` 仍推进
-   * 到最新，重连回放去重语义不变。gzip 不适用：这里只动内存条目。
-   *
-   * 原地更新（同一 key 的内容变长）要让 `EventGroupCache` 重建这一组 —— 复用
-   * `truncatedSince` 通道（它本来就是「本组需要重算」的信号）。
+   * 存储层**不合并任何事件**（逐 delta 原样进环）：合并会让条目 seq 与内容范围脱钩，
+   * 而 `truncateAfter` 按条目 seq 判去留 —— 重放时边界落在合并条目内部就是「结尾正文
+   * 重复」的根因（REPORT §0.1）。段内合并只在读侧做（`events.ts` 的 fold 累积 `buf`）。
    */
-  private coalesceDelta(event: RunEvent, seq: number): boolean {
-    if (event.type !== 'llm.stream.chunk') return false;
-    const index = this.entries.length - 1;
-    const last = this.entries[index];
-    if (last === undefined || last.event.type !== 'llm.stream.chunk') return false;
-    if (last.event.run_id !== event.run_id) return false;
-    const prev = (last.event.data as { chunk?: { type?: string; delta?: string } }).chunk;
-    const next = (event.data as { chunk?: { type?: string; delta?: string } }).chunk;
-    if (prev === undefined || next === undefined) return false;
-    if (prev.type !== next.type) return false;
-    if (prev.type !== 'text_delta' && prev.type !== 'reasoning_delta') return false;
-    if (typeof prev.delta !== 'string' || typeof next.delta !== 'string') return false;
-    if (prev.delta.length + next.delta.length > MAX_COALESCED_DELTA_CHARS) return false;
-    const merged: RunEvent = {
-      ...last.event,
-      data: {
-        ...(last.event.data as Record<string, unknown>),
-        chunk: { ...next, delta: prev.delta + next.delta },
-      },
-    };
-    this.entries[index] = { ...last, event: merged };
-    this.lastSeq = seq;
-    this.truncatedSince.add(event.run_id);
-    this.scheduleNotify();
-    return true;
-  }
-
   push(event: RunEvent, meta: EventMeta): boolean {
     if (!Number.isFinite(meta.seq)) return false;
     if (this.holdFloor !== null) {
@@ -275,10 +268,6 @@ export class EventStore {
       this.droppedNoiseCount += 1;
       return true;
     }
-    // 相邻同 kind 的流式增量先合并：per-run 上限按「段」计数，而不是按 delta 计数。
-    // （真实 run 有 177 轮 / 70k completion tokens ≈ 数万 delta 事件，按 delta 计数时
-    //  上限会把**最早**的 thinking 段整段挤出去 —— 思考过程「凭空消失」的根因。）
-    if (this.coalesceDelta(event, meta.seq)) return true;
     this.lastSeq = meta.seq;
     const runId = event.run_id;
     // 归属会话的字段最先记住：即使本 run 的 `run.started` 之后被裁掉，仍能归属会话。
@@ -299,8 +288,9 @@ export class EventStore {
     const count = (this.runCounts.get(runId) ?? 0) + 1;
     this.runCounts.set(runId, count);
 
-    // 每 run 上限：优先丢该 run 最旧的非锚点条目（锚点见 RUN_ANCHOR_EVENT_TYPES）。
-    if (count > MAX_EVENTS_PER_RUN) {
+    // 每 run 上限：丢该 run 最旧的**非锚点**条目（锚点见 `RUN_ANCHOR_EVENT_TYPES`）。
+    // 裁剪只影响传输面：屏上的 item 由 `LiveItemStore` 物化，不随环缩水（I4）。
+    if (count > this.maxEventsPerRun) {
       const index = this.oldestEvictableIndex(runId);
       if (index >= 0) this.entries.splice(index, 1);
       this.runCounts.set(runId, count - 1);
@@ -309,7 +299,7 @@ export class EventStore {
     }
 
     // 总上限：从最旧开始丢。
-    while (this.entries.length > MAX_EVENTS_TOTAL) {
+    while (this.entries.length > this.maxEventsTotal) {
       const removed = this.entries.shift();
       if (!removed) break;
       const removedRun = removed.event.run_id;
@@ -330,8 +320,9 @@ export class EventStore {
    * 归属判定：事件顶层 / `data.session_id` 等于目标会话的 run 记为目标的 run；该 run
    * 中未带 session_id 的条目一并删除。先按 session 判定而不是直接按 run_id，
    * 避免 `session.rewound` 共用 `run_id: 'manual'` 时误删其它会话的条目。
-   * 删除后重建 run 计数，并把受影响的 run 写进 `truncatedSince`：group-cache
-   * 据此做局部重建，否则同一窗口内的 partial 更新可能留下幽灵分组。
+   * 删除后重建 run 计数，并把受影响的 run 写进 `truncatedSince`（已弃用的渲染信号，
+   * 见 `EventStoreSnapshot`），同时把「语义删除」转发给物化面：rewind 之后历史真的
+   * 不存在了，item 必须跟着删（这与缓冲裁剪不同 —— 裁剪删的是传输窗口，I4/I6）。
    * 立即发布快照。返回删除的条目数。
    */
   dropSession(sessionId: string): number {
@@ -389,9 +380,9 @@ export class EventStore {
    * 必须用 `clear()`，否则旧范围的条目会留在屏上串台。
    *
    * 同步维护派生状态：条目变了就重建 `runCounts` / `runSessions`（不能留下已无条目
-   * 的 run 的过期映射），并把被丢弃条目的 run 记进 `truncatedSince` —— 末条 seq 回退
-   * 会让 `EventGroupCache` 走整表重建，`truncatedSince` 保证局部重建路径同样不留
-   * 陈旧 bucket（否则 bucket 里会留着被丢掉的尾部 item）。
+   * 的 run 的过期映射），并把被丢弃条目的 run 记进 `truncatedSince`（已弃用的渲染信号）。
+   * **这是传输面操作，不动 item**（I6）：回放靠 `push` 的 seq 去重 + 物化面的水位幂等，
+   * 所以这里既不需要、也**不许**触发整表重算。
    * `scopeSession` 不变（同一作用域不变量）。
    *
    * **回填期间是空操作**：那段时间游标由 `beginBackfill` / `endBackfill` 管理，
@@ -569,33 +560,25 @@ export class EventStore {
   }
 
   /**
-   * 该 run 最旧的**可裁剪**条目下标，分两档挑（锚点永不裁）：
+   * 该 run 最旧的**可裁剪**条目下标（锚点永不裁；整个 run 只剩锚点时退回最旧一条）。
    *
-   * 1. 最旧的「**时间线上不产产物**」条目（判据 `events.ts#producesTimelineItem`，
-   *    与 `buildGroup` 的分支表同源）：丢掉它对可见内容零影响，保留价值最低；
-   * 2. 其次才是最旧的内容条目（正文段 / 思考段 / 工具卡 / notice）；
-   * 3. 整个 run 只剩锚点时退回最旧一条（极小 run 不该卡死上限）。
-   *
-   * 注意第 1 档今天几乎是空集：唯一不产产物的大户（`tool_call_delta` / `finish`）已经在
-   * `push()` 里根本不进缓冲。这一档是给**以后新增的高频无产物事件**留的护栏，
-   * 不是用来丢 internal / observe 档事件的 —— 那些在 `buildGroup` 里照样产原始事件行
-   * 或 typed notice（产物判据恒为 true），且 `agent.*` / `subagent.*` 是成员树与子 agent
-   * 面板的输入（`state/agents.ts#reduceAgents`），丢了会真的少东西。
+   * 旧实现分两档（先丢「时间线上不产产物」的条目、再丢内容条目）。那两档现在没有意义：
+   * 唯一不产产物的大户（`tool_call_delta` / `finish`）在 `push()` 里根本不进环，
+   * 剩下的条目在 fold 里都有产物 —— 而**裁剪已经不影响渲染**（I4），口径统一成
+   * 「该 run 最旧的非锚点条目」。
    *
    * 没有任何条目时返回 -1。
    */
   private oldestEvictableIndex(runId: string): number {
     let oldestAny = -1;
-    let oldestContent = -1;
     for (let index = 0; index < this.entries.length; index += 1) {
       const entry = this.entries[index];
       if (!entry || entry.event.run_id !== runId) continue;
       if (oldestAny < 0) oldestAny = index;
       if (RUN_ANCHOR_EVENT_TYPES.has(entry.event.type)) continue;
-      if (!producesTimelineItem(entry.event)) return index;
-      if (oldestContent < 0) oldestContent = index;
+      return index;
     }
-    return oldestContent >= 0 ? oldestContent : oldestAny;
+    return oldestAny;
   }
 
   private scheduleNotify(): void {

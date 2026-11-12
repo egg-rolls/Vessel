@@ -188,6 +188,26 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'G-B2 按 per-run 上限裁剪同样不得减 item（R1 的真实路径）',
+    why: '真实触发是 delta 洪水把该 run 的额度吃满后逐条丢最旧的非锚点条目（不是 truncateAfter）',
+    check: () => {
+      const specs: EvSpec[] = [['run.started', { input: 'go' }]];
+      for (let index = 0; index < 30; index += 1) {
+        specs.push(['agent.limit.warning', { round: index }]);
+      }
+      specs.push(['run.completed', { output: 'done' }]);
+      const events = eventsOf(specs, 'r-b2');
+      const store = new EventStore(0, { maxEventsPerRun: 12 });
+      feed(store, events);
+      const items = itemsOf(groupsFromStore(store));
+      const rebuilt = itemsOf(rebuild(events));
+      if (items.length !== rebuilt.length) {
+        return `per-run 上限裁剪让 item 变少：${items.length} 项 / 重建 ${rebuilt.length} 项`;
+      }
+      return sameJson('per-run 上限裁剪后的 item 流', groupsFromStore(store), rebuild(events));
+    },
+  },
+  {
     name: 'G-C 回放幂等（hello 重放整段，改动前红灯 R2）',
     why: '重连 / hello 会把窗口内的事件重新送一遍：同 seq 只能生效一次，正文不许出现两遍',
     check: () => {

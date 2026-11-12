@@ -111,8 +111,26 @@ export interface RunGroup {
  * `tierOf` / `isVisibleInChat`）。本文件只负责分组与渲染形态。
  */
 
-/** 单个 run 的事件序列 → 可渲染分组。 */
-export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunGroup {
+/**
+ * 单个 run 的 fold（纯状态机）：把一条条事件折成 `RunGroup` + 尾部流式缓冲。
+ *
+ * **同一段代码服务两条路径**（DESIGN.md §5.1）：
+ * - 路径②（重建）：`buildGroup`（一次性喂完）/ 回填 `resume` / 冷启动重建；
+ * - 路径①（实时）：`LiveItemStore.ingest` 在事件到达时喂一条。
+ *
+ * 因此「增量折叠 == 从全量事件重建」是**结构性**结论，不是巧合 —— 改这里就是同时改两条路。
+ * `apply()` 的分支与 DESIGN.md §3.2 的「事件 → 动作」表逐行对应；`flush()` 的调用位置
+ * 逐行照搬历史实现（原 `buildGroup` 的 47 处），动它会动 item 顺序。
+ */
+export interface RunFold {
+  readonly runId: string;
+  /** 应用一条事件（「同一条只生效一次」由调用侧的水位保证，见 `LiveItemStore.ingest`）。 */
+  apply(entry: StoredEvent): void;
+  /** 当前状态 → `RunGroup` 副本（快照对象不能被后续 apply 改到）。 */
+  toGroup(): RunGroup;
+}
+
+export function createFold(runId: string): RunFold {
   const group: RunGroup = { runId, status: 'running', hasRunEvent: false, items: [] };
   let buf = '';
   let textIndex = 0;
@@ -164,7 +182,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
     flushText();
   };
 
-  for (const entry of entries) {
+  const apply = (entry: StoredEvent): void => {
     const ev = entry.event;
     if (group.firstTs === undefined) group.firstTs = ev.ts;
     if (group.firstSeq === undefined) group.firstSeq = entry.seq;
@@ -203,7 +221,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         }
         if (d.session_id !== undefined) group.sessionId = d.session_id;
         group.startedAt = ev.ts;
-        continue;
+        return;
       }
       case 'run.completed': {
         flush();
@@ -220,7 +238,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         // 成功的 run 报成失败。终态以最后一次为准：completed 显式清掉前面那份错误。
         group.error = undefined;
         group.errorMeta = undefined;
-        continue;
+        return;
       }
       case 'run.failed': {
         flush();
@@ -230,7 +248,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         group.durationMs = d.duration_ms;
         group.status = 'failed';
         group.completedAt = ev.ts;
-        continue;
+        return;
       }
       case 'run.cancelled': {
         flush();
@@ -238,7 +256,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         group.durationMs = d.duration_ms;
         group.status = 'cancelled';
         group.completedAt = ev.ts;
-        continue;
+        return;
       }
       case 'user.message': {
         // 持久化后的用户输入（可能已被 guardrail 改写）；不回退成 raw JSON 卡。
@@ -269,7 +287,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         if (group.sessionId === undefined && typeof d.session_id === 'string') {
           group.sessionId = d.session_id;
         }
-        continue;
+        return;
       }
       // 上下文生命周期：percent → pressure → compacted → rotating/rotated 的因果链，
       // 由 NoticeRow 按类型渲染，避免默认分支的原始 JSON 卡。
@@ -285,7 +303,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
       case 'hook.additional_context_deprecated': {
         flush();
         group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
-        continue;
+        return;
       }
       // 失败类：`run.finalize.failed`（终态持久化失败）与 `guardrail.error`
       // （guardrail `check()` 抛错，fail-closed）都是**真失败**，可见性在
@@ -296,7 +314,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
       case 'guardrail.error': {
         flush();
         group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
-        continue;
+        return;
       }
       // 退役 / 作废回复：**有承接才允许藏**。`agent.retired` 是 `internal` + typed
       // notice（默认档不出卡，`ui.showInternalEvents` / `debug` 时以 notice 出现 ——
@@ -307,7 +325,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
       case 'agent.reply.stale': {
         flush();
         group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
-        continue;
+        return;
       }
       // hook 成对折叠：started 先暂存，同名 completed 到达就只落 completed 那一行；
       // 只有 started、没有 completed 时由 `flush()` 兜底落回，信息不丢。
@@ -319,7 +337,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
           key: `notice-${entry.seq}`,
           name: typeof name === 'string' ? name : '',
         };
-        continue;
+        return;
       }
       case 'hook.completed': {
         const name = (ev.data as { hook_name?: unknown }).hook_name;
@@ -327,7 +345,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         if (paired) pendingHook = undefined;
         flush();
         group.items.push({ kind: 'notice', event: ev, key: `notice-${entry.seq}` });
-        continue;
+        return;
       }
       case 'llm.stream.chunk': {
         const chunk = (ev.data as { chunk?: StreamChunk }).chunk;
@@ -346,7 +364,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         } else if (chunk?.type === 'finish') {
           flush();
         }
-        continue;
+        return;
       }
       default: {
         flush();
@@ -362,14 +380,31 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         }
       }
     }
-  }
-  // 尾部仍在流式中的缓冲不 push 成 item：运行段直接渲染 liveText/liveReasoning。
-  // flush() 已清空的部分不会出现在这里，因此不会与 items 重复。
-  // 未配对的 `hook.started` 在这里落回，避免整行信息丢失。
-  flushPendingHook();
-  if (reasoningBuf) group.liveReasoning = reasoningBuf;
-  if (buf) group.liveText = buf;
-  return group;
+  };
+
+  const toGroup = (): RunGroup => {
+    // 副本：50ms 快照与后续 apply 之间不能共享可变数组 / 标量。
+    const snapshot: RunGroup = { ...group, items: [...group.items] };
+    // 未配对的 `hook.started` 在快照里落回，避免整行信息丢失；**不写回** fold 状态 ——
+    // 紧接着到达的同名 `hook.completed` 仍要与它配成一行（配对见 apply 的 hook 分支）。
+    if (pendingHook !== undefined) {
+      snapshot.items.push({ kind: 'notice', event: pendingHook.event, key: pendingHook.key });
+    }
+    // 尾部仍在流式中的缓冲不 push 成 item：运行段直接渲染 liveText / liveReasoning。
+    // flush() 已清空的部分不会出现在这里，因此不会与 items 重复。
+    if (reasoningBuf) snapshot.liveReasoning = reasoningBuf;
+    if (buf) snapshot.liveText = buf;
+    return snapshot;
+  };
+
+  return { runId, apply, toGroup };
+}
+
+/** 单个 run 的事件序列 → 可渲染分组（路径②：一次性重建）。 */
+export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunGroup {
+  const fold = createFold(runId);
+  for (const entry of entries) fold.apply(entry);
+  return fold.toGroup();
 }
 
 /*
