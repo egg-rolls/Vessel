@@ -211,4 +211,3 @@ export function preferBodyHistory(
   if (server !== null) return { source: 'server', server, observed: [] };
   return { source: 'observed', server: [], observed: [...observed] };
 }
-

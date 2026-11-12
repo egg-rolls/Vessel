@@ -68,14 +68,7 @@ export interface TeamMessageLike {
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
   /** CREATE-0.39：新写用 `create`；`fork` 只保留为旧日志只读值。 */
-  system_event?:
-    | 'join'
-    | 'leave'
-    | 'archive'
-    | 'budget_override'
-    | 'create'
-    | 'fork'
-    | 'retract';
+  system_event?: 'join' | 'leave' | 'archive' | 'budget_override' | 'create' | 'fork' | 'retract';
   /** 撤回 tombstone 指向的目标 message_id */
   retracted_message_id?: string;
   /** 0.19 S4 会话分组；旧日志缺省 */
