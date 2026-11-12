@@ -73,7 +73,11 @@ async function main(): Promise<void> {
   );
   const oneLines = one.split('\n');
   check('单字段一条明细', oneLines.length === 2, String(oneLines.length));
-  check('首行 scope 词', oneLines[0]?.startsWith('selfcard: 1 field changed') === true, oneLines[0]);
+  check(
+    '首行 scope 词',
+    oneLines[0]?.startsWith('selfcard: 1 field changed') === true,
+    oneLines[0],
+  );
   check('明细行带线格式标记', oneLines[1]?.startsWith(SELF_CARD_DELTA_DETAIL_MARK) === true);
   check(
     '改名行有旧值与新值',
@@ -169,7 +173,11 @@ async function main(): Promise<void> {
   current = identity({ name: 'Minelog-main' });
   const renamed = await runRound(hook);
   check('改名后注入一条', renamed.length === 1, String(renamed.length));
-  check('通道是 vessel:notice', renamed[0]?.name === SELF_CARD_DELTA_MESSAGE_NAME, renamed[0]?.name);
+  check(
+    '通道是 vessel:notice',
+    renamed[0]?.name === SELF_CARD_DELTA_MESSAGE_NAME,
+    renamed[0]?.name,
+  );
   check('通道是 user 消息', renamed[0]?.role === 'user', renamed[0]?.role);
   check('注入的是环境信息卡形状', renamed[0]?.content.startsWith('selfcard: ') === true);
   check('不写 system', !('systemPrompt' in (renamed[0] ?? {})));
@@ -244,7 +252,11 @@ async function main(): Promise<void> {
   const card = envNoticeCard(merged[0]?.content ?? '');
   check('Web 解析出卡片', card !== undefined);
   check('卡片 scope = selfcard', card?.scope === 'selfcard', card?.scope);
-  check('卡片首行是摘要', card?.lines[0]?.text.startsWith('selfcard: ') === true, card?.lines[0]?.text);
+  check(
+    '卡片首行是摘要',
+    card?.lines[0]?.text.startsWith('selfcard: ') === true,
+    card?.lines[0]?.text,
+  );
   check('卡片明细逐行', card?.lines.length === 4, String(card?.lines.length));
   check('明细不再带 · 标记', card?.lines[1]?.text.startsWith('·') !== true, card?.lines[1]?.text);
   check('明细不被误认成别的 scope', card?.lines[1]?.scope === 'context', card?.lines[1]?.scope);
@@ -264,4 +276,3 @@ async function main(): Promise<void> {
 }
 
 await main();
-

@@ -146,7 +146,7 @@ export function selfCardIdentityOf(
 }
 
 /** 字段 → 快照里的值（唯一映射点：diff 从这里取，不许各写一份）。 */
-function valueOf(identity: SelfCardIdentity, field: SelfCardField): string | undefined {
+function fieldValueOf(identity: SelfCardIdentity, field: SelfCardField): string | undefined {
   switch (field) {
     case 'name':
       return identity.name;
@@ -174,8 +174,8 @@ export function diffSelfCardIdentity(
 ): SelfCardChange[] {
   const changes: SelfCardChange[] = [];
   for (const field of SELF_CARD_FIELDS) {
-    const from = valueOf(reported, field);
-    const to = valueOf(current, field);
+    const from = fieldValueOf(reported, field);
+    const to = fieldValueOf(current, field);
     if (from === to) continue;
     changes.push({
       field,
@@ -204,8 +204,7 @@ const FIELD_LABELS: Readonly<Record<SelfCardField, string>> = {
  * 生效，只有模型看到的那张卡还停在旧值。写成一句真话，模型才不会拿旧 model 解释新行为。
  */
 const FIELD_APPLIES: Readonly<Record<SelfCardField, string>> = {
-  name:
-    'rename is already effective, but the `role:` line of your Self Card still shows the old name',
+  name: 'rename is already effective, but the `role:` line of your Self Card still shows the old name',
   parent: 'the `parent:` line of your Self Card is out of date',
   team: 'the `team:` line of your Self Card is out of date',
   model: 'this body keeps the old model; the next body uses the new one',
@@ -306,4 +305,3 @@ export function createSelfCardDeltaHook(options: SelfCardDeltaHookOptions): Hook
     },
   };
 }
-

@@ -877,9 +877,11 @@ export const messages = {
   'agents.edit.title': '编辑智能体',
   'agents.back': '返回智能体',
   'agents.form.model': '模型',
-  'agents.form.modelHint': '下一具 body 才用新值（rotate 或重启后）；当前 body 仍是旧值，只会收到一条环境信息告知。留空表示不修改。',
+  'agents.form.modelHint':
+    '下一具 body 才用新值（rotate 或重启后）；当前 body 仍是旧值，只会收到一条环境信息告知。留空表示不修改。',
   'agents.form.systemPrompt': '系统提示词',
-  'agents.form.systemPromptHint': '下一具 body 才用新值（rotate 或重启后）；当前 body 仍是旧值，只会收到一条环境信息告知。留空表示不修改。',
+  'agents.form.systemPromptHint':
+    '下一具 body 才用新值（rotate 或重启后）；当前 body 仍是旧值，只会收到一条环境信息告知。留空表示不修改。',
   'agents.form.kind': '类型',
   'agents.form.kindPeer': '成员（需要 Team）',
   'agents.form.kindContractor': '临时（可不绑 Team）',
