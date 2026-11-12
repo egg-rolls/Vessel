@@ -11,7 +11,19 @@
 
 ## 已合入（现态）
 
-- **0.51 已合入（三项）**：
+- **0.51 已合入（六项）**：
+  - **rotate 交接卡 + rotate 文案说真话**：`startup_prompt` 带
+    `Message.name = 'rotate:handoff:<epoch>'` ⇒ Web 渲成默认展开的「⟳ rotate 交接」卡、TUI 渲成
+    可读块（不再伪装成人类气泡）；工具结果不再写假的 `finish the current turn`，改为说明
+    「新身体已开跑、本轮剩余输出按旧 epoch 被 fence、`startup_prompt` 是唯一交接通道」。
+    同时删掉 `agent.rotating` / `agent.rotated` / `agent.rotate.failed` 三条**死类型**
+    （无生产者），ADR-092 走 Errata。
+  - **结尾正文重复（根因）**：给消息补结构化身份 `run_id` + `run_segment`（落盘漏斗与事件投影
+    共用一个幂等、续编的盖章函数），认领改成「身份优先、内容兜底」；命中同身份时 live 让位且
+    **内容不同也照让**（屏上以落盘为准）。触发源是 Output guardrail 的 PII 打码改写了落盘正文
+    （本机 652 run 中 7 个命中 ⇒ 所以是「有概率」）。
+  - **待处理条带**：放开 agent 源（只展示、不给写操作 —— agent 源取消是 unhold 留档）；
+    human 源操作改图标键，新增「收回来编辑」（peek 全文 → 写回草稿 → 再真删）。
   - **`vessel prune`**：默认 dry-run、`--yes` 才真删、真删走 `data-lock` exclusive（锁被占
     即拒绝，零删除）。三类桶互斥（trace / 终态 runs / 老且非活跃 sessions —— 锁、租约、
     可 resume 的 run 任一成立即保留），dry-run 与真删同序同集合；
@@ -100,12 +112,14 @@
 
 ## 未实现 / 下一步
 
-- **0.51 待办**：TUI 答 async ask；工具卡交棒（需历史侧 `duration_ms`）；位置认领；
-  `sessions.search` 读侧投影缓存；用量 43% unpriced。
-- **rotate 交棒缺口（0.51 进行中）**：self-rotate 的那一轮被当成「迟到的旧轮」做 epoch
-  fencing（正文落盘但不记账、notice 只带消息 id）⇒ 交接卡 + notice 改造 + 下一单在收口侧
-  解耦（`retiredDuringRunId` 判据，交棒轮正常记账；空正文也不静默）。报告：
-  `docs/dev/reports/0.51/rotate-stale.md`。
+- **0.51 待办**：TUI 答 async ask；工具卡交棒（需历史侧 `duration_ms`）；位置认领（前置已具备：
+  消息身份 `run_id` + `run_segment` 已落盘）；`sessions.search` 读侧投影缓存；用量 43% unpriced；
+  `tools.list` 按成员看真实工具面（含 `inbox`）；条带 agent 源的「unhold 留档」按钮；
+  `claimStats.rewrittenSegments` 接 diagnosics。
+- **rotate 交棒缺口（C 已做，B′ 待排）**：self-rotate 那一轮被当成「迟到的旧轮」做 epoch
+  fencing（正文落盘但不记账、notice 只带消息 id）。C 已落地（交接卡 + 文案说真话）；B′ 只做两件
+  小事 —— 收口侧 `retiredDuringRunId` 判据让交棒轮正常记账，以及**空正文不静默**（rotate 后旧轮
+  failed / 无正文也要发明确 notice）。**不再投递「结束语」**：交接由 `startup_prompt` 承担。
 - **G4 分布式 Node / G5 清理**未排期；`gateway reload` 不重载 registry。
 - **Workspace 插件独立包未实现**；Workspace = 公司数据目录仍是 target；当前 workspace 仍是 Team 目录键。
 - **T5 残留 71 行**（`tenant_id`=60 / text=11；keep=34 / defer-2=15 / defer-3=22），
