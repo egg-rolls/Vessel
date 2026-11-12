@@ -109,7 +109,7 @@
 - **待手测**：`config.set` 写后热应用（0.50 新增 `src/config-write-apply.ts`）需要
   新代码在跑的 gateway 才能测「写后立即 `config.get`」的收敛延迟；实现侧已单测
   单飞行 / 上界 / 失败只 warn / 去重，真实 gateway 的 5 次 `set→get` 中位延迟待重启后补测。
-- tag / publish 待 1 收口裁决。
+- tag / publish 等 **1.0.0**（用户决定：0.x 一律不 tag、不 publish）。
 
 ## 入口
 

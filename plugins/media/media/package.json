@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/media",
-  "version": "0.50.0",
+  "version": "0.51.0",
   "description": "Multimodal parser plugin: single media tool (read / ocr / describe) for attachment refs",
   "type": "module",
   "main": "src/index.ts",
@@ -24,8 +24,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vessel-agent/basic-tools": "0.50.0",
-    "@vessel-agent/core": "0.50.0"
+    "@vessel-agent/basic-tools": "0.51.0",
+    "@vessel-agent/core": "0.51.0"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
