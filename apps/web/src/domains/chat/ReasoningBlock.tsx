@@ -15,9 +15,12 @@
  * - 流式期间默认展开，结束后自动折叠；用户手动开合后不再被自动开合打断；
  * - 历史态 streaming=false → **默认折叠**，点标题展开，没有别的东西会改写这个状态；
  * - 内容按纯文本渲染，不进入正文 Markdown；
- * - **卡头最右是这一段的时刻**（`time`，`formatClock` 到分钟），标题 / 「正在思考」/
- *   复制按钮都在左半段。有思考卡的那一轮，消息时间就只在这里出现 —— 正文下方的
- *   `MessageActions` 不再重复渲染（判据在调用方，见 `Transcript.tsx` 与
+ * - 卡头**一行、全部左对齐**：标题（流式时带「正在思考」）→ 复制按钮 → 这一段的时刻
+ *   （`time`，`formatClock` 到分钟）。复制与时刻**静止时不显示**，只在 hover 卡头 /
+ *   键盘聚焦（`focus-within`）/ 触屏（`pointer-coarse`）时出现 —— 与正文下方
+ *   `MessageActions` 工具栏同一套显隐语言（显隐实现见 `.reasoning-actions`，chat.css）。
+ *   有思考卡的那一轮，消息时间就只在这里出现 —— 正文下方的 `MessageActions`
+ *   不再重复渲染（判据在调用方，见 `Transcript.tsx` 与
  *   `TranscriptWindow.tsx` 的「按 run 汇总」）；
  * - 动画（`styles/motion.css` 是唯一来源，本组件只挂 class）：
  *   入场 = `.motion-appear`（`entering`，只动透明度，只播挂载那一次），
@@ -30,7 +33,8 @@
  * 卡片自己只有一个动作：卡头（`<summary>`）**左侧**、紧跟标题文字的**「复制思考」小按钮**，
  * 复制的是本卡的思考原文（不是整条消息）。**卡上不挂消息工具栏**（复制正文 / 重试
  * 那一组在正文下方一行，见 chat.css 的工具栏说明）—— 用户明确要求「去掉思考过程加的那个
- * 工具栏」，所以这个按钮不是工具栏，只是卡自己的一个小控件，常显、可键盘聚焦。
+ * 工具栏」，所以这个按钮不是工具栏，只是卡自己的一个小控件：跟着时间和它同一个容器
+ * hover 显现，键盘仍然可达（聚焦即显）。
  *
  * 点击细节：它在 `<summary>` 里，而点 summary 默认会开合卡片 —— 复制按钮必须
  * `preventDefault()` + `stopPropagation()` 把这次点击吃掉，否则「复制」会顺手把卡
@@ -71,7 +75,8 @@ export function ReasoningBlock({
    */
   entering?: boolean;
   /**
-   * 这一段的时刻（ms）：`formatClock` 到分钟，渲染在卡头**最右**。
+   * 这一段的时刻（ms）：`formatClock` 到分钟，渲染在卡头**复制按钮右边**（与复制按钮
+   * 同属 hover 显现的操作组，静止时不显示）。
    * live 给 `run-reasoning` item 的 `startedAt`（这一段自己的首条 delta 时间，也是
    * 排序依据，只读），历史给该消息的 `timestamp`。缺省 / 非法时间不渲染时钟。
    */
@@ -103,45 +108,52 @@ export function ReasoningBlock({
         setOpen(next);
       }}
     >
-      {/* 卡头元素顺序（从左到右）：标题（流式时带「正在思考」）→ 复制按钮 → 时间。
-          时间必须是**最后一个元素且靠右**：`.reasoning-clock` 是行内 float-right
-          （见 chat.css 的说明）—— 不能把 `<summary>` 改成 flex，那会让 Chromium /
-          WebKit 丢掉原生展开三角。 */}
-      <summary className="cursor-pointer select-none px-2.5 py-1.5 text-sm text-faint hover:text-muted">
+      {/* 卡头元素顺序（从左到右）：标题（流式时带「正在思考」）→ 复制按钮 → 时间，
+          三者都在 `<summary>` 的行内流里、全部左对齐。不加任何「靠右」的排法
+          （既不 float 也不 ml-auto —— 见 chat.css 的说明）。
+          `<summary>` 必须保持原生 `display: list-item`：改成 flex 容器会让
+          Chromium / WebKit 丢掉 `::marker` 展开三角。 */}
+      <summary className="group cursor-pointer select-none px-2.5 py-1.5 text-sm text-faint hover:text-muted">
         {t('chat.reasoning.summary')}
         {streaming ? (
           // 同一个事实只有一个词：流式中的思考过程就是「正在思考」，与页面顶部
           // 0 内容时那行提示（`ThinkingHint`）共用同一个 i18n key。
           <span className="reasoning-live text-info"> · {t('chat.reasoning.thinking')}</span>
         ) : null}
-        {/* 「复制思考」：卡头**左侧**、跟在标题文字（流式时含「正在思考」小字）之后 ——
-            用户要它跟标题同一行左起，不贴右、也不浮动。`IconButton` 本身就是
-            inline-flex，放进 summary 的行内流即可，**summary 保持原生 list-item**
-            （展开三角还在，不拆成 flex / 不额外包壳）。`align-middle` 让它与标题文字
-            垂直居中，`ml-1` 是它与文字的间距。 */}
-        {copyable && (
-          <IconButton
-            className="ml-1 size-5 align-middle"
-            label={t('chat.reasoning.copy')}
-            onClick={(event) => {
-              // 卡头是 `<summary>`：点击默认会开合卡片。复制必须自己吃掉这次点击，
-              // 否则按一下复制就把卡收起来了（键盘 Enter / Space 也走这条路径）。
-              event.preventDefault();
-              event.stopPropagation();
-              copy(text);
-            }}
-          >
-            <Icon name="copy" size={13} />
-          </IconButton>
-        )}
-        {clock !== '' && (
-          // hover 工具栏那套（正文下方）不再重复这一段的时刻：有思考卡时时间只在这里。
-          <time
-            className="reasoning-clock font-mono text-2xs tabular-nums"
-            dateTime={new Date(time ?? 0).toISOString()}
-          >
-            {clock}
-          </time>
+        {/* 复制按钮 + 时间：**同一个容器**（`.reasoning-actions`），显隐只切 opacity
+            —— 容器始终占着行内宽度，出现 / 消失时卡头不位移（`display: none` 会让
+            后半行重排，抖）。触发条件三条，与正文下方 `MessageActions` 同源：
+            hover 卡头（`summary` 上的 `group`）/ 键盘 `focus-within` / 触屏常显
+            （`pointer-coarse`）。过渡时长在 chat.css 用 `--motion-fast` 给。
+            间距：容器 `ml-1` 与标题隔开，容器内 `gap-1` 隔开复制与时间。 */}
+        {(copyable || clock !== '') && (
+          <span className="reasoning-actions ml-1 inline-flex items-center gap-1 align-middle opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
+            {copyable && (
+              <IconButton
+                className="size-5"
+                label={t('chat.reasoning.copy')}
+                onClick={(event) => {
+                  // 卡头是 `<summary>`：点击默认会开合卡片。复制必须自己吃掉这次点击，
+                  // 否则按一下复制就把卡收起来了（键盘 Enter / Space 也走这条路径）。
+                  event.preventDefault();
+                  event.stopPropagation();
+                  copy(text);
+                }}
+              >
+                <Icon name="copy" size={13} />
+              </IconButton>
+            )}
+            {clock !== '' && (
+              // hover 工具栏那套（正文下方）不再重复这一段的时刻：有思考卡时时间只在这里。
+              // `tabular-nums` 让数字等宽（流式时时间会从 14:02 走到 14:03，不跳宽）。
+              <time
+                className="font-mono text-2xs tabular-nums"
+                dateTime={new Date(time ?? 0).toISOString()}
+              >
+                {clock}
+              </time>
+            )}
+          </span>
         )}
       </summary>
       <div className="px-2.5 py-2 text-md leading-relaxed whitespace-pre-wrap wrap-anywhere">

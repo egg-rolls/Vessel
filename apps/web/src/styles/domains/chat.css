@@ -549,17 +549,33 @@
   color: var(--info);
 }
 
-/* 思考卡头最右的时钟（`ReasoningBlock` 的 `time`）。
-   为什么是 float 而不是 `ml-auto` / flex：卡头是**原生 `<summary>`**，展开三角靠的是
-   它的 `display: list-item`。一旦把 summary 改成 flex 容器，Chromium / WebKit 会把
-   `::marker` 整个丢掉（三角消失）—— 而这里必须保留原生三角（不许拆成 div +
-   `aria-expanded`）。float 不改变 summary 的 display，又能把时钟贴到卡头右侧，
-   是这两条约束下唯一同时成立的排法。
-   `line-height: inherit` 让浮动盒与标题那一行等高，字不会顶在行首显得偏高；
-   `font-variant-numeric` 由 class `tabular-nums` 给，颜色由 `text-faint` 给。 */
-.reasoning-block > summary > .reasoning-clock {
-  float: right;
-  line-height: inherit;
+/* 思考卡头的操作组（`ReasoningBlock` 的 `.reasoning-actions`：复制按钮 + 时间）。
+
+   位置：**左对齐、紧跟标题**（标题 → 复制 → 时间，全在同一行内流里）。旧实现把时间
+   `float: right` 贴到卡头最右，那套已废弃 —— 用户要的是「时间放在复制的右边、左对齐」，
+   靠后跟着排，不靠右。
+
+   显隐：与正文下方的 `MessageActions` 工具栏**同一套语言** —— 静止时不显示，hover 卡头
+   （`<summary>` 上的 `group`）/ 键盘 `focus-within` / 触屏（`pointer-coarse`）才显现。
+   状态全在 utility 上（`opacity-0 group-hover:opacity-100 focus-within:opacity-100
+   pointer-coarse:opacity-100`），本文件只负责过渡。**只切 opacity、绝不切 display**：
+   容器始终占着行内宽度，出现时不会把标题挤一下（`display: none → inline` 会让后半行
+   重排，正是要避免的抖动）。
+
+   为什么过渡写在这里而不是用 `duration-*`：时长只认 tokens.css 的 `--motion-*`（组件里
+   不写裸毫秒），`duration-*` 是固定刻度；所以 `transition` 落在这里，显隐状态继续用上面
+   那几个既有变体。`prefers-reduced-motion` 由 base.css 末尾统一压掉，不在这里重复。
+
+   为什么不能顺手把 `<summary>` 改成 flex 来排这一行：卡头是**原生 `<summary>`**，展开
+   三角靠它的 `display: list-item`。一旦改成 flex 容器，Chromium / WebKit 会把 `::marker`
+   整个丢掉（三角消失）。所以这里保持行内流：标题是行内文字，容器是 `inline-flex`
+   （一个原子行内盒，不会被拆开），summary 的 display 一个字节都不动。
+
+   窄屏（≤1023px）长标题：**允许换行**（行内流的默认行为），不写 `nowrap`、也不加
+   `text-overflow` 省略号 —— 标题是短 i18n 词（「思考过程」），真过长时换行比裁字可读；
+   行内盒不会越出卡宽，所以卡头不会被撑出横向滚动。 */
+.reasoning-actions {
+  transition: opacity var(--motion-fast) var(--motion-ease);
 }
 
 /* 原始事件 / lifecycle notice：默认折叠，summary 一行，展开后看完整载荷。 */
