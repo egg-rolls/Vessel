@@ -23,7 +23,10 @@ export function NavItem({
   const status = item.status;
   const statusText = status ? t(status.labelKey) : '';
   // 版本未知时**不渲染占位**：一个孤零零的 — 会被读成“坏了”，而它只表示“还没探测到”。
-  const versionText = status?.version ? `v${status.version}` : undefined;
+  // 占位值 'unknown' 不渲染：hub server 在未注入 version 时会报它（src/hub/server.ts），
+  // 直接拼会显示成 vunknown。真实的 hub 服务版本由 vessel hub start 注入。
+  const versionText =
+    status?.version && status.version !== 'unknown' ? `v${status.version}` : undefined;
   const countText = item.count !== undefined ? t('nav.count', { count: item.count }) : undefined;
   const tooltip = [item.title, statusText, countText, versionText]
     .filter((part) => part !== undefined && part !== '')
