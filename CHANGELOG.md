@@ -48,6 +48,13 @@
   （正文全文不截断），TUI 渲成可读块 + simple-mode 导出，不再伪装成人类气泡。交接卡与 A2A 卡
   都不再是「前一条用户输入」，所以之后的助手回复不再提供 edit/retry 锚点（避免把 agent 写的
   正文当人的话重发）。
+- **`tools.list { agent_id }`（0.51）**：工具清单终于能按成员看**真实工具面**。不传参数逐字段
+  不变；传了就返回该成员身体实际注册的工具（含 `inbox` 这类**成员运行期注入**的工具，来源由注册
+  记录 `source: 'plugin' | 'member'` 标明，不按名字猜），并给 `surface: 'live' | 'derived'` 说明
+  是「活身体实取」还是「无活身体按同一套 `selectTools` + inbox 判定推导」（不 spawn、无副作用）。
+  数据的唯一来源是 `MemberExecutionHost.toolSurface()`：`spawn` / 工具热刷新 / 推导三条路径共用
+  同一份 `buildSurface`，所以清单不会变成第二份会腐烂的规格。未知 agent ⇒ `not_found`；适配器
+  没实现透传 ⇒ `not_supported`（`AgentControlLike.toolSurface?` 是**可选**，旧注入不炸）。
 - **待处理条带**：放开 **agent 源**（agent 维度 inbox 是全量的，串台防线早已从「来源过滤」
   换成**归属等值** `session_id`，缺归属的老条目仍一律不显示），agent 源只展示、**不给写操作**
   （它的「取消」语义是 unhold 留档，不能伪装成删除）。human 源的操作改成两颗圆形图标键：

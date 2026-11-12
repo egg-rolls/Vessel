@@ -11,7 +11,7 @@
 
 ## 已合入（现态）
 
-- **0.51 已合入（六项）**：
+- **0.51 已合入（七项）**：
   - **rotate 交接卡 + rotate 文案说真话**：`startup_prompt` 带
     `Message.name = 'rotate:handoff:<epoch>'` ⇒ Web 渲成默认展开的「⟳ rotate 交接」卡、TUI 渲成
     可读块（不再伪装成人类气泡）；工具结果不再写假的 `finish the current turn`，改为说明
@@ -33,6 +33,10 @@
     enum 读真实动作（`readMediaSurface`），三档语义不变（有真动作 / 无工具 / 读不到⇒中性）。
   - **设计实验室两缺口**：`CHIP_TONES` / `COMPOSER_ICON_TONES` 补 preview；`EntityHeader`
     尺寸档进运行时表（`ENTITY_HEADER_SIZES` + `satisfies Record<...>` 双向钉住）。
+  - **`tools.list { agent_id }`**：按成员看真实工具面（含 `inbox` 这类成员运行期注入的工具，
+    `source` 标明来源；`surface: live|derived` 区分实取与推导）。数据唯一来源是
+    `MemberExecutionHost.toolSurface()`，spawn / 热刷新 / 推导共用一份 `buildSurface`。
+    Web 侧工具面板加成员选择，工具卡描述目录按「会话 → 成员」派生自动带上 `agent_id`。
 
 - **Platform Gateway / Node API 已拆分**：Gateway 8642（平台入口、UI 宿主、`platform.*`
   只读 RPC），Node API 8644（公司 runtime/数据）；平台 token 与 per-node token 分离；
@@ -114,7 +118,7 @@
 
 - **0.51 待办**：TUI 答 async ask；工具卡交棒（需历史侧 `duration_ms`）；位置认领（前置已具备：
   消息身份 `run_id` + `run_segment` 已落盘）；`sessions.search` 读侧投影缓存；用量 43% unpriced；
-  `tools.list` 按成员看真实工具面（含 `inbox`）；条带 agent 源的「unhold 留档」按钮；
+  条带 agent 源的「unhold 留档」按钮；
   `claimStats.rewrittenSegments` 接 diagnosics。
 - **rotate 交棒缺口（C 已做，B′ 待排）**：self-rotate 那一轮被当成「迟到的旧轮」做 epoch
   fencing（正文落盘但不记账、notice 只带消息 id）。C 已落地（交接卡 + 文案说真话）；B′ 只做两件
