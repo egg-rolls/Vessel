@@ -24,7 +24,7 @@ import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
-import { createRefsNoticeHook, readMediaSurface, REFS_NOTICE_HOOK } from './refs-notice-hook';
+import { createRefsNoticeHook, REFS_NOTICE_HOOK, readMediaSurface } from './refs-notice-hook';
 import type { RuntimeNoticeBus } from './runtime-notice';
 import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from './runtime-notice-hook';
 import { resolveRuntimePermission } from './tenant-runtime-factory';
