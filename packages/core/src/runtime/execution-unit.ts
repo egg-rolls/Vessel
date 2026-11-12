@@ -1398,7 +1398,7 @@ export class ExecutionUnit {
         workingContext.add(stamped);
         return;
       }
-      this.addContext(message, execution.runId);
+      this.addContext(message, execution.runId, { stampIdentity: false });
     };
     if (
       !history.messages.some(
@@ -2707,7 +2707,17 @@ export class ExecutionUnit {
   /**
    * 加入上下文并发布 context.changed 事件（ADR-031：同步写保证关键路径可靠 + 事件观测可回放）
    */
-  private addContext(msg: Message, runId: string): void {
+  /**
+   * 加入上下文并发布 `context.changed` 事件（ADR-031：同步写保证关键路径可靠 + 事件观测可回放）
+   *
+   * `options.stampIdentity === false`：**这一条不是本轮新写的消息**（典型是 run 开始时把
+   * 历史重灌进窗口）。这种消息没有 `run_id` ≠ 它属于这一轮；给它盖章会把整个历史的归属
+   * 抹成当前 run —— 0.51 首版就是这么错的：重启后第一次运行把 538 条老消息全盖成同一个
+   * run id，段序跟着连成 0…69，而 Web 侧段序是「本 run 内第几段」，两侧永远对不上，
+   * 认领一次都没命中（重复渲染照旧）。所以重灌只发事件、不盖章；身份只属于**真正写进
+   * 这一轮**的消息。
+   */
+  private addContext(msg: Message, runId: string, options?: { stampIdentity?: boolean }): void {
     // 0.6.1 P2：逐条消息时间戳（已有值不覆盖，恢复的历史保持原时间）
     const stamped: Message = msg.timestamp === undefined ? { ...msg, timestamp: Date.now() } : msg;
     const execution = this.activeRun;
@@ -2724,7 +2734,7 @@ export class ExecutionUnit {
     // 消息身份（additive `run_id`）：这里是仓里**唯一**同时看见「消息」与「runId」的写入点。
     // 不在这里盖章，落盘后的消息就永远没有归属；而段序（`run_segment`）不在这里数
     // —— 计数器必须只有一份，见 `assignMessageIdentities`（落盘漏斗统一补）。
-    const identified = withRunIdentity(stamped, runId);
+    const identified = options?.stampIdentity === false ? stamped : withRunIdentity(stamped, runId);
     const workingContext = execution.workingContext;
     workingContext.add(identified);
     this.publishUntrackedCompaction(execution);
