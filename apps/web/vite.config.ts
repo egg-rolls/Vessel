@@ -18,7 +18,14 @@ import { defineConfig, type Plugin, type ProxyOptions } from 'vite';
 function buildStamp(): { builtAt: string; version: string; commit: string } {
   let commit = 'unknown';
   try {
-    commit = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+    // stderr 静音：在 git worktree 里 `git rev-parse` 会往 stderr 打
+    // `fatal: not a git repository: .../worktrees/<name>`（.git 是文件不是目录时
+    // 某些 git 版本的路径推断），那行噪声不该出现在构建输出里；
+    // 非 git 环境（发布 tarball）同样静默降级成 'unknown'。
+    commit = execSync('git rev-parse --short HEAD', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
   } catch {
     // 非 git 环境（发布 tarball）不阻断构建。
   }

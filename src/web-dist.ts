@@ -200,6 +200,7 @@ export function webDistWarning(
   return null;
 }
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: 去 ANSI 转义必须匹配 ESC（\u001B），范围已收窄到 CSI 序列，不是任意控制字符
 const ANSI_ESCAPE = /\u001B\[[0-9;]*[A-Za-z]/g;
 
 /**
