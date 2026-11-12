@@ -35,6 +35,7 @@ import {
   ClaimLedger,
   claimRunFactsOf,
   sessionFailureOfDetail,
+  sessionSystemContextOfDetail,
 } from './transcript-items';
 
 const TRANSCRIPT_WINDOW = 50;
@@ -264,6 +265,22 @@ export function useChatTranscript({
    */
   const sessionFailure = useMemo(() => sessionFailureOfDetail(sessionDetail), [sessionDetail]);
 
+  /**
+   * 会话记录里的「模型这一轮看到了什么系统消息」（`sessions.get.system_context`）。
+   *
+   * 为什么需要：`prompt.system_context` 是**事件**，不是消息 —— 会话页靠 live 事件流渲染
+   * 它，而事件回放只覆盖 gateway 的内存环形缓冲；刷新 / 重连没问题，**回放窗口淘汰 /
+   * 进程重启**之后事件流里就没有它了。服务端从会话事件日志尾窗派生的这一个字段是那条
+   * 路径的唯一落盘来源（`src/system-context.ts`）。
+   *
+   * 与事件流那张卡按 **hash** 去重（同 hash 只出一张），判定在 transcript-items.ts。
+   * 粒度是**最近一条**：更早轮次的卡刷新后不会回来（已知限制，与失败卡同一取舍）。
+   */
+  const sessionSystemContext = useMemo(
+    () => sessionSystemContextOfDetail(sessionDetail),
+    [sessionDetail],
+  );
+
   // 单会话实时组上限：长会话只渲染最近 `MAX_LIVE_GROUPS` 个 run（更早的轮次仍可由历史 /
   // 运行详情查看）。这里**不再算** `hiddenLiveGroups`：以前算了却没有渲染入口 = 静默隐藏。
   // 真正的提示行需要新 i18n 文案与样式（本单不动 `i18n/**`），留给阶段 4；在那之前
@@ -492,6 +509,7 @@ export function useChatTranscript({
     hydrating,
     visibleGroups,
     sessionFailure,
+    sessionSystemContext,
     renderedGroups,
     runningGroup,
     stopBusy,

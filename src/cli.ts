@@ -137,6 +137,7 @@ import {
 } from './session-liveness';
 import { resolveContinueSessionId, resumeSession, runSessionList } from './session-resume';
 import { shutdownServeStack } from './shutdown-sequence';
+import { createSystemContextSource } from './system-context';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
@@ -1276,6 +1277,15 @@ async function runWithConfig(result: BootstrapResult) {
               ...(liveConfig.context?.maxTokens !== undefined
                 ? { contextWindowTokens: liveConfig.context.maxTokens }
                 : {}),
+            }),
+            // 「模型这一轮看到了什么系统消息」（additive `sessions.get.system_context`）：
+            // 同一个 `SessionEventLog`、同一个 `sessions_dir`，只是取的是另一类事件
+            // （`prompt.system_context`）。事件不是 message，回放窗口淘汰 / 进程重启之后
+            // 只有从事件日志重新派生才能把会话页那张卡找回来。
+            systemContext: createSystemContextSource({
+              tail: gatewayBundle.eventLog,
+              eventsFile: (sessionId: string) =>
+                sessionEventsFilePath(gatewayBundle.tenantPaths.sessions_dir, sessionId),
             }),
           }
         : {}),
