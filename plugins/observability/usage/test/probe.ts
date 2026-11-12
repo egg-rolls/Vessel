@@ -21,7 +21,14 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
-import { buildRecords, daysCutoff } from '../src/aggregate.js';
+import {
+  buildRecords,
+  cutoffFor,
+  daysCutoff,
+  type LogsResult,
+  listLogs,
+  resolveLogsRange,
+} from '../src/aggregate.js';
 import type { RawEvent, Settings } from '../src/store.js';
 import { DEFAULT_LIMITS, EventStore, USAGE_EVENT_TYPES } from '../src/store.js';
 import { I18N, translator } from '../web-src/i18n';
@@ -1004,6 +1011,270 @@ function runIds(events: RawEvent[]): string[] {
     'the shipped budgets are 96 MiB in a window, 16 MiB for all time',
     DEFAULT_LIMITS.maxBytesPerWindowCall === 96 * 1024 * 1024 &&
       DEFAULT_LIMITS.maxBytesPerCall === 16 * 1024 * 1024,
+  );
+}
+
+// ── logs range: days / since / until, and range + cursor ────────────────────
+
+/**
+ * `logs` is a *paged view of a range*, so the two features have to compose: the
+ * range decides which records exist for this query, the cursor walks them
+ * newest-first. These fixtures pin the boundaries (`since` inclusive, `until`
+ * exclusive), the mutual exclusion of the two range syntaxes, and paging inside
+ * a range without repeats or gaps.
+ */
+
+/** One request/response pair at `ts`; the resulting record carries `ts + 1_400`. */
+function pairAt(runId: string, ts: number): RawEvent[] {
+  return [
+    rawEvent('llm.request', runId, ts, { model: MODEL }),
+    rawEvent('llm.response', runId, ts + 1_400, {
+      usage: { prompt_tokens: 1_000, completion_tokens: 100 },
+    }),
+  ];
+}
+
+const TODAY_TS = dayStart(0) + 60_000;
+const YDAY_TS = dayStart(-1) + 60_000;
+const OLD_TS = dayStart(-9) + 60_000;
+const rangeRecords = buildRecords(
+  [
+    ...pairAt('run-today', TODAY_TS),
+    ...pairAt('run-yday', YDAY_TS),
+    ...pairAt('run-old', OLD_TS),
+  ],
+  NO_PRICES,
+);
+
+// 15. The `days` range is the same instant summary/leaderboard use.
+{
+  const cutoff = cutoffFor(NOW, 1);
+  check(
+    'logs and summary resolve days through one function',
+    cutoff !== undefined && cutoff === daysCutoff(NOW, 1) && cutoffFor(NOW, undefined) === undefined,
+    String(cutoff),
+  );
+  const day1 = listLogs(rangeRecords, { limit: 50, since: cutoff });
+  check(
+    'days=1 shows only today\'s records',
+    day1.items.length === 1 && day1.items[0]?.run_id === 'run-today',
+    day1.items.map((item) => item.run_id).join(','),
+  );
+  const day7 = listLogs(rangeRecords, { limit: 50, since: cutoffFor(NOW, 7) });
+  check(
+    'days=7 widens to yesterday and today, never the 9-day-old run',
+    day7.items.length === 2 &&
+      day7.items.every((item) => item.run_id !== 'run-old') &&
+      day7.items.every((item) => item.ts >= (cutoffFor(NOW, 7) ?? 0)),
+    day7.items.map((item) => item.run_id).join(','),
+  );
+}
+
+// 16. since inclusive / until exclusive, and the two syntaxes never mix.
+{
+  const bound = TODAY_TS + 1_400;
+  const inclusive = listLogs(rangeRecords, { limit: 50, since: bound, until: bound + 1 });
+  check(
+    'since is inclusive (a record exactly at the bound is in)',
+    inclusive.items.length === 1 && inclusive.items[0]?.ts === bound,
+    String(inclusive.items.length),
+  );
+  const nextRange = listLogs(rangeRecords, { limit: 50, since: bound + 1 });
+  check(
+    'an adjacent range does not repeat the boundary record',
+    nextRange.items.length === 0,
+    nextRange.items.map((item) => item.run_id).join(','),
+  );
+  const exclusive = listLogs(rangeRecords, { limit: 50, until: bound });
+  check(
+    'until is exclusive (a record exactly at the bound is out)',
+    exclusive.items.every((item) => item.ts !== bound) && exclusive.items.length === 2,
+    exclusive.items.map((item) => item.ts).join(','),
+  );
+
+  const conflict = resolveLogsRange({ days: 7, since: bound }, NOW);
+  check(
+    'days together with since/until is rejected',
+    conflict.ok === false && conflict.code === 'range_conflict',
+    JSON.stringify(conflict),
+  );
+  const inverted = resolveLogsRange({ since: bound, until: bound }, NOW);
+  check(
+    'an empty or inverted interval is rejected',
+    inverted.ok === false && inverted.code === 'range_inverted',
+    JSON.stringify(inverted),
+  );
+  const custom = resolveLogsRange({ since: bound, until: bound + 10 }, NOW);
+  check(
+    'a custom interval bounds the reader on its start only',
+    custom.ok === true && custom.cutoff === bound && custom.until === bound + 10,
+    JSON.stringify(custom),
+  );
+  const untilOnly = resolveLogsRange({ until: bound }, NOW);
+  check(
+    'until alone leaves the reader unbounded below',
+    untilOnly.ok === true && untilOnly.cutoff === undefined && untilOnly.until === bound,
+    JSON.stringify(untilOnly),
+  );
+  const days = resolveLogsRange({ days: 7 }, NOW);
+  check(
+    'a days range resolves to the shared cutoff on both levels',
+    days.ok === true && days.cutoff === cutoffFor(NOW, 7) && days.since === days.cutoff,
+    JSON.stringify(days),
+  );
+}
+
+// 17. Range + cursor: every page is a window of the range, so paging cannot repeat
+//     a row, skip one, or step outside.
+{
+  const start = dayStart(-1);
+  const end = dayStart(0);
+  const events: RawEvent[] = [];
+  for (let index = 0; index < 6; index += 1) {
+    events.push(...pairAt(`run-page${index}`, start + 600_000 + index * 600_000));
+  }
+  // Three records outside the interval (before it) that must never surface.
+  events.push(...pairAt('run-before', start - 7_200_000));
+  const paged = buildRecords(events, NO_PRICES);
+  const inRange = paged
+    .filter((record) => record.ts >= start && record.ts < end)
+    .sort((a, b) => b.ts - a.ts || b.id.localeCompare(a.id));
+  check('the paging fixture has 6 in-range records', inRange.length === 6, String(inRange.length));
+
+  const seen: string[] = [];
+  let cursor: LogsResult['next_cursor'] = null;
+  let pages = 0;
+  let allInRange = true;
+  for (;;) {
+    const page = listLogs(paged, {
+      limit: 2,
+      since: start,
+      until: end,
+      ...(cursor !== null ? { before_ts: cursor.before_ts, before_id: cursor.before_id } : {}),
+    });
+    pages += 1;
+    for (const item of page.items) {
+      seen.push(item.id);
+      if (item.ts < start || item.ts >= end) allInRange = false;
+    }
+    cursor = page.next_cursor;
+    if (cursor === null) break;
+    if (pages > 10) break;
+  }
+  check('paging inside a range stays inside the range', allInRange);
+  check(
+    'paging collects every in-range record exactly once',
+    seen.length === inRange.length && new Set(seen).size === seen.length,
+    `${seen.length} rows vs ${inRange.length}, uniq ${new Set(seen).size}`,
+  );
+  check(
+    'paging returns them newest first',
+    seen.join(',') === inRange.map((record) => record.id).join(','),
+    seen.join(','),
+  );
+  check('the last page reports no cursor', pages === 3 && cursor === null, String(pages));
+
+  const exactlyFull = listLogs(paged, { limit: 6, since: start, until: end });
+  check(
+    'a page that exactly exhausts the range reports no cursor',
+    exactlyFull.items.length === 6 && exactlyFull.next_cursor === null,
+    String(exactlyFull.next_cursor === null),
+  );
+  const oneLeft = listLogs(paged, { limit: 5, since: start, until: end });
+  check(
+    'a page with a row left over reports a cursor',
+    oneLeft.items.length === 5 && oneLeft.next_cursor !== null,
+  );
+}
+
+// 18. `until` reorders the visit so a historical interval reaches its own runs
+//     instead of spending the budget on today's files.
+{
+  const dir = await traceDir('range-until');
+  const twentyDays = dayStart(-20) + 3_600_000;
+  const fiveDays = dayStart(-5) + 3_600_000;
+  const today = dayStart(0) + 3_600_000;
+  await writeTrace(
+    dir,
+    'run-20d',
+    lineAt('llm.request', 'run-20d', twentyDays) +
+      lineAt('llm.response', 'run-20d', twentyDays + 1_400),
+    twentyDays + 2_000,
+  );
+  const fiveBytes = await writeTrace(
+    dir,
+    'run-5d',
+    lineAt('llm.request', 'run-5d', fiveDays) +
+      lineAt('llm.response', 'run-5d', fiveDays + 1_400),
+    fiveDays + 2_000,
+  );
+  await writeTrace(
+    dir,
+    'run-now',
+    lineAt('llm.request', 'run-now', today) + lineAt('llm.response', 'run-now', today + 1_400),
+    today + 2_000,
+  );
+
+  const oneFile = new EventStore({
+    ...DEFAULT_LIMITS,
+    maxBytesPerCall: fiveBytes + 8,
+    maxBytesPerWindowCall: fiveBytes + 8,
+    maxBytesPerFile: fiveBytes + 16,
+  });
+  const until = dayStart(-4);
+  const nearest = await oneFile.loadEvents(dir, { until });
+  check(
+    'a budget for one file is spent on the file nearest the range end',
+    nearest.files_covered === 1 && nearest.events.every((event) => event.run_id === 'run-5d'),
+    `covered ${nearest.files_covered}: ${runIds(nearest.events).join(',')}`,
+  );
+
+  const roomy = new EventStore({
+    ...DEFAULT_LIMITS,
+    maxBytesPerCall: 64,
+    maxBytesPerWindowCall: fiveBytes * 4,
+    maxBytesPerFile: fiveBytes + 16,
+  });
+  const allThree = await roomy.loadEvents(dir, { until });
+  check(
+    'an until-only range gets the window budget',
+    allThree.files_covered === 3 && allThree.files_truncated === false,
+    `covered ${allThree.files_covered}/${allThree.files_in_window}`,
+  );
+  const unbounded = await roomy.loadEvents(dir);
+  check(
+    'without any bound the small per-call budget still applies',
+    unbounded.files_covered === 0 && unbounded.files_truncated === true,
+    `covered ${unbounded.files_covered}`,
+  );
+}
+
+// 19. Source-level wiring: one resolver, one cutoff, both controls present.
+{
+  const indexSource = await readFile(join(pluginRoot, 'src', 'index.ts'), 'utf8');
+  check(
+    'logs resolves its range through the shared resolver',
+    indexSource.includes('resolveLogsRange') && indexSource.includes('cutoffFor'),
+  );
+  check(
+    'logs hands the resolved cutoff to the reader',
+    indexSource.includes('loadSnapshot({ cutoff: range.cutoff, until: range.until })'),
+  );
+  check(
+    'logs view sends either days or a custom interval',
+    logsSource.includes('rangeParams(') &&
+      logsSource.includes('params.since') &&
+      logsSource.includes('params.until'),
+  );
+  check(
+    'logs view offers the whole preset set (today included)',
+    sharedSource.includes("id: '1'") && sharedSource.includes("id: '0'"),
+  );
+  check(
+    'logs view shows the applied range and how much is loaded',
+    logsSource.includes('StateLine') &&
+      logsSource.includes('logs.state.loaded') &&
+      logsSource.includes('logs.state.more'),
   );
 }
 
