@@ -30,7 +30,13 @@ import { windowTail } from '../../transcript';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import type { QueuedSubmission } from './StreamItems';
 import { browserSessionStorage, clearLastSession, readLastSession } from './session-selection';
-import { buildHistoryIndex, sessionFailureOfDetail } from './transcript-items';
+import {
+  buildHistoryIndex,
+  type ClaimIdentity,
+  ClaimLedger,
+  claimRunFactsOf,
+  sessionFailureOfDetail,
+} from './transcript-items';
 
 const TRANSCRIPT_WINDOW = 50;
 /** 单会话实时组上限：超出时只渲染最近这些 run，并提供运行详情入口。 */
@@ -415,6 +421,55 @@ export function useChatTranscript({
     [transcriptMessages, messageIndexOffset, isHiddenMessage, noticeKindOf],
   );
 
+  // 认领账本（DESIGN.md §4.2）：**一次性判定 + 单调粘住**，只在「历史窗口 / 连接纪元 /
+  // 选中会话」变化，或出现**新 run / 新终态 / 首次拿到输入**时重判。
+  //
+  // 为什么必须粘住：live item 的生命周期变长了（不再随环裁剪消失）。若每帧按内容重算
+  // 认领，live 正文一继续增长（或 guardrail 改写了正文）内容就不再相等 → 认领结论在两帧
+  // 之间「让位 ↔ 不让位」抖动，屏上就会出现「两份 ↔ 一份」的闪现与重复。
+  const ledgerRef = useRef<ClaimLedger | null>(null);
+  ledgerRef.current ??= new ClaimLedger();
+  const claimLedger = ledgerRef.current;
+  const claimFacts = useMemo(() => claimRunFactsOf(renderedGroups), [renderedGroups]);
+  const claimIdentity = useMemo<ClaimIdentity>(
+    () => ({
+      sessionId: selectedId,
+      epoch,
+      ...(selectedWindow?.start !== undefined ? { windowStart: selectedWindow.start } : {}),
+      ...(selectedWindow?.end !== undefined ? { windowEnd: selectedWindow.end } : {}),
+      history: historyIndex,
+    }),
+    [selectedId, epoch, selectedWindow, historyIndex],
+  );
+  // 交棒的前置（DESIGN.md §4.3）：detail 必须是**当前选中会话的、非 stale 的**那一份。
+  // 没有它，历史那份可能只是旧副本 —— 此时一件都不许交棒（屏上内容只能靠 live）。
+  const detailReady =
+    selectedId !== null &&
+    sessionDetailId === selectedId &&
+    sessionDetail !== null &&
+    currentDetailError === null;
+  const claims = claimLedger.decide(claimIdentity, {
+    history: historyIndex,
+    facts: claimFacts,
+    detailReady,
+    ...(sessionFailure !== undefined ? { failureRunId: sessionFailure.runId } : {}),
+  });
+  // 结论挂在历史索引上（`HistoryIndex.claims`）：`TranscriptWindow` 已经把这份索引传给
+  // `buildTranscriptItems`，于是装配面不用改签名就吃到同一份结论（同一帧出最终列表）。
+  const historyWithClaims = useMemo(
+    () => (historyIndex.claims === claims ? historyIndex : { ...historyIndex, claims }),
+    [historyIndex, claims],
+  );
+  // 交棒释放（DESIGN.md §8.1）：把这些「已有历史替身」的 item 移出 live 内存。
+  //
+  // 放在 post-commit effect 里（不在渲染中）：这一帧已经由历史那份渲染完，删掉的是
+  // **重复的那一份**，屏幕零变化。删不删由账本证明（`handover` 只含有替身的段 / 卡）。
+  const handover = claims.handover;
+  useEffect(() => {
+    if (!detailReady || handover.size === 0) return;
+    itemStore.release(handover);
+  }, [itemStore, handover, detailReady]);
+
   // 分页状态读取放 ref：`loadEarlier` 的身份必须稳定（TranscriptWindow 用它做
   // useLayoutEffect 依赖，新身份会让锚点回填 effect 每渲染都重跑）。
   const earlierStateRef = useRef({ localHidden: 0, nextBefore: undefined as string | undefined });
@@ -450,7 +505,16 @@ export function useChatTranscript({
     queueChips,
     pendingActive: pendingItems.length > 0,
     transcriptMessages,
-    historyIndex,
+    // 认领结论跟着历史索引一起下去（`HistoryIndex.claims`，见那里的说明）。
+    historyIndex: historyWithClaims,
+    /**
+     * 认领失败计数（diagnostics 读这里，DESIGN.md §4.2-6）。
+     *
+     * 与 `eventStore.droppedNoise` 同一形态：只暴露只读计数、不进渲染（本单不动 UI）；
+     * 它的用途是将来「重复的线上占比被量化到用户可感知」时给「位置认领要不要打开」取数。
+     * 粘住期间（同一份历史窗口、没有新 run）这些计数不增长 —— 它记的是**判定**，不是帧。
+     */
+    claimStats: claimLedger.stats,
     isHiddenMessage,
     noticeKindOf,
     transcriptWindow,

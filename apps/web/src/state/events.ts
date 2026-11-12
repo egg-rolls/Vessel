@@ -186,6 +186,17 @@ export interface RunFold {
    * 运行详情深链）。**不删除内容**：折掉的条数记在折叠卡上，原始事件仍可从运行详情看。
    */
   trim(keep: number): FoldTrim;
+  /**
+   * 交棒：把「已经有历史替身」的 item 移出本 fold（DESIGN.md §8.1）。
+   *
+   * 判据由装配面的认领账本给出（它证明历史那份**确实会渲染**），这里只按段锚点
+   * （`anchorSeq`）与 callId 精确删除：正文段 / 思考段 / 工具卡是唯一有历史替身的三种
+   * item；`notice:<key>` / `ev-<seq>` / `unknown-<seq>` 是「运行过程」，永远没有替身，
+   * 也就不可能被这里删掉（判据里根本没有它们的分支）。
+   *
+   * 返回真正删掉的条数（幂等：重复交棒同一批 key 返回 0）。
+   */
+  drop(anchors: ReadonlySet<number>, callIds: ReadonlySet<string>): number;
 }
 
 /** `trim()` 的结果：折掉了几条、覆盖的 seq 区间（折叠卡的 anchor 用 `fromSeq`）。 */
@@ -601,7 +612,8 @@ export function createFold(runId: string): RunFold {
 
   /** item 侧上限：折掉最旧的 item（只动本 fold，返回被折条数供调用侧做折叠卡）。 */
   const trim = (keep: number): FoldTrim => {
-    const removed = group.items.splice(0, Math.max(0, group.items.length - Math.max(1, keep)));
+    // `keep === 0`：连「最近 N 项」都不留（已交棒 run 的残留折叠，见 `enforceBudget` 档 3）。
+    const removed = group.items.splice(0, Math.max(0, group.items.length - Math.max(0, keep)));
     if (removed.length === 0) return { removed: 0 };
     // 工具卡下标整体前移；被折掉的那些丢弃 —— 它们的 completed / failed 后续会落成
     // 「孤儿卡」（仍是一张可见的卡，不静默消失），这是折叠与配对正交的代价，可接受。
@@ -623,6 +635,43 @@ export function createFold(runId: string): RunFold {
     };
   };
 
+  /**
+   * 交棒：按段锚点 / callId 精确删 item（见 `RunFold.drop`）。
+   *
+   * 与 `trim` 的区别：`trim` 只动队首（下标整体平移），这里动的是**任意位置**，所以
+   * `toolCards` / `pendingTools` 的下标必须逐项重映射 —— 否则「删了前面的卡片之后，
+   * 迟到的一条 `tool.call.completed` 会更新到别的卡片上」（比丢内容更糟的串卡）。
+   */
+  const drop = (anchors: ReadonlySet<number>, callIds: ReadonlySet<string>): number => {
+    if (anchors.size === 0 && callIds.size === 0) return 0;
+    const kept: typeof group.items = [];
+    /** 旧下标 → 新下标（只含留下来的）。 */
+    const moved = new Map<number, number>();
+    group.items.forEach((item, index) => {
+      const hit =
+        ((item.kind === 'text' || item.kind === 'reasoning') &&
+          item.anchorSeq !== undefined &&
+          anchors.has(item.anchorSeq)) ||
+        (item.kind === 'tool' && item.callId !== undefined && callIds.has(item.callId));
+      if (hit) return;
+      moved.set(index, kept.length);
+      kept.push(item);
+    });
+    const removed = group.items.length - kept.length;
+    if (removed === 0) return 0;
+    group.items.splice(0, group.items.length, ...kept);
+    for (const pending of pendingTools) pending.index = moved.get(pending.index) ?? -1;
+    for (let index = pendingTools.length - 1; index >= 0; index -= 1) {
+      if ((pendingTools[index]?.index ?? -1) < 0) pendingTools.splice(index, 1);
+    }
+    for (const [callId, index] of [...toolCards]) {
+      const next = moved.get(index);
+      if (next === undefined) toolCards.delete(callId);
+      else toolCards.set(callId, next);
+    }
+    return removed;
+  };
+
   return {
     runId,
     get itemCount() {
@@ -631,6 +680,7 @@ export function createFold(runId: string): RunFold {
     apply,
     toGroup,
     trim,
+    drop,
   };
 }
 

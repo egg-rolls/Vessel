@@ -41,6 +41,14 @@ export const MAX_ITEMS_TOTAL = 20000;
 export const KEEP_ITEMS_PER_RUN = 200;
 /** 总量仍然超限时的加强折叠：终态 run 只留最近这些项（仍然不删除）。 */
 export const KEEP_ITEMS_PER_RUN_URGENT = 20;
+/**
+ * 总量**第三次**超限时，给「已交棒 run 的残留」留几项（§8.2 档 3）。
+ *
+ * 0 = 只留那张折叠卡：该 run 的内容早就有历史替身了，留在 live 里的只有
+ * `notice` / `ev-` 这类运行过程行 —— 折成一张带条数的卡仍然可见、可点进运行详情，
+ * 但不再占这些行。这是唯一允许把「没有替身的东西」从屏上换成一行的场景（I9 的可见产物）。
+ */
+export const KEEP_ITEMS_RELEASED_RESIDUE = 0;
 /** 折叠卡的合成事件类型（**只存在于 Web 侧**，不上 wire、不写盘）。 */
 export const CONDENSED_EVENT_TYPE = 'vessel.ui.condensed';
 
@@ -74,6 +82,22 @@ export interface ItemSink {
   clear(): void;
 }
 
+/**
+ * 交棒请求（DESIGN.md §8.1）：**这些 item 已经有历史替身**，可以把 live 那份从内存里删掉。
+ *
+ * 只表达「按身份删哪几个 item」，不表达「这个 run 整个不要了」：
+ * - `segments`：正文 / 思考段的 `anchorSeq`（段在 wire 上的坐标，重折叠后仍不变，
+ *   所以交棒结论在同一次判定之后是持久的）；
+ * - `callIds`：工具调用的 callId（历史侧同一张卡 key 相同 `tool:<callId>`，不重挂）。
+ *
+ * `notice:<key>` / `ev-<seq>` / `unknown-<seq>` **永远不在**这里 —— 它们是「运行过程」，
+ * 没有任何历史替身，删了就是吞内容（I8 / I9）。
+ */
+export interface HandoverRequest {
+  segments: readonly number[];
+  callIds: readonly string[];
+}
+
 export interface ItemStoreStats {
   /** 按 run 重折叠次数（回填 resume / 可见性切换）。 */
   refolds: number;
@@ -81,6 +105,15 @@ export interface ItemStoreStats {
   replaySkipped: number;
   /** 被折成折叠卡的 item 条数（不是「丢掉的」——条数记在折叠卡上）。 */
   condensed: number;
+  /**
+   * 已交棒移出内存的 item 条数（DESIGN.md §8.1）。
+   *
+   * 「内存不随轮数线性增长」的可观测面：这个数随轮数增长，而 `group.items` 的
+   * 总量不增长（长会话里两者是互补的）。
+   */
+  released: number;
+  /** 发生过交棒的 run 数（终态且历史完全覆盖的轮次数）。 */
+  releasedRuns: number;
   /**
    * 总量上限已经折无可折（DESIGN.md §8.2 第 4 档）。
    *
@@ -117,7 +150,14 @@ function emptySnapshot(): ItemStoreSnapshot {
   return {
     groups: [],
     version: 0,
-    stats: { refolds: 0, replaySkipped: 0, condensed: 0, overBudget: false },
+    stats: {
+      refolds: 0,
+      replaySkipped: 0,
+      condensed: 0,
+      released: 0,
+      releasedRuns: 0,
+      overBudget: false,
+    },
   };
 }
 
@@ -210,6 +250,25 @@ function isCondensedKey(runId: string, key: string): boolean {
   return key.startsWith(`run:${runId}:condensed:`);
 }
 
+/**
+ * 这条 item 是不是「已经交给历史」的那一份（`RunFold.drop` 的同一判据）。
+ *
+ * 与 fold 内的删除逻辑必须同源：能删的只有正文段 / 思考段（按段锚点）与工具卡
+ * （按 callId）—— `notice` / `ev-` / `unknown-` 没有历史替身，永远不在这里。
+ */
+function isReleased(
+  released: { anchors: ReadonlySet<number>; callIds: ReadonlySet<string> },
+  item: TimelineItem,
+): boolean {
+  if (item.kind === 'text' || item.kind === 'reasoning') {
+    return item.anchorSeq !== undefined && released.anchors.has(item.anchorSeq);
+  }
+  if (item.kind === 'tool') {
+    return item.callId !== undefined && released.callIds.has(item.callId);
+  }
+  return false;
+}
+
 export class LiveItemStore implements ItemSink {
   private readonly folds = new Map<string, RunFold>();
   private readonly groups = new Map<string, RunGroup>();
@@ -218,12 +277,26 @@ export class LiveItemStore implements ItemSink {
   /** 重折叠前的旧组：只给 `mergeGroupScalars` 做兜底（不参与 item 合并）。 */
   private readonly bases = new Map<string, RunGroup>();
   private readonly condensed = new Map<string, CondensedSummary>();
+  /**
+   * 已交棒移出内存的 item 身份（run → 段锚点 / callId）。
+   *
+   * 为什么留一份「删过什么」而不是直接忘了：重折叠（回填 `resume` / 可见性切换）会用
+   * **环里的全量事件**把该 run 重建一遍，被交棒的段会原样回来 —— 那时屏上就会出现
+   * 「历史一份 + live 又长回来一份」。这份记录是「这个 run 的这段内容已经由历史负责」
+   * 的唯一凭据，`materialize` 据此再过滤一次。run 被 `dropSession` / `clear` 语义删除时
+   * 一起清掉（rewind 之后历史不再提供那段内容，交棒结论必须作废）。
+   */
+  private readonly released = new Map<string, { anchors: Set<number>; callIds: Set<string> }>();
+  /** 发生过交棒的 run（上限策略档 3 的输入：这些 run 的残留最该被折掉）。 */
+  private readonly releasedRuns = new Set<string>();
   private readonly dirty = new Set<string>();
   private readonly listeners = new Set<() => void>();
   private readonly stats: ItemStoreStats = {
     refolds: 0,
     replaySkipped: 0,
     condensed: 0,
+    released: 0,
+    releasedRuns: 0,
     overBudget: false,
   };
   private snapshot: ItemStoreSnapshot = emptySnapshot();
@@ -321,6 +394,43 @@ export class LiveItemStore implements ItemSink {
     this.flush();
   }
 
+  /**
+   * 交棒（DESIGN.md §8.1）：把这些 run 的「已有历史替身」的 item **移出内存**。
+   *
+   * 触发者是装配面的 post-commit effect（`useChatTranscript`）：它先用 `ClaimLedger`
+   * 证明「历史那份确实会渲染」（`handover` 只包含有替身的段 / 卡），这里才真删。
+   * 于是**屏幕上零变化**：被删的要么已经让位（历史负责渲染），要么与历史同 key
+   * 合并（工具卡）。
+   *
+   * 三条硬约束：
+   * - **只删有替身的三种 item**（正文段 / 思考段 / 工具卡，判据在 `RunFold.drop`）；
+   *   `notice` / `ev-` / `unknown-` 与失败卡永远留着 —— 失败卡不在 `items` 里（由
+   *   `group.status` / `group.error` 派生），它根本删不掉，因此「失败永远可见」不依赖这里。
+   * - **幂等**：重复交棒同一批 key 不产生第二次删除，也不多计一次 stats。
+   * - **可作废**：`dropSession` / `clear` 会连同「交棒记录」一起清掉 —— rewind 之后
+   *   历史不再提供那段内容，交棒结论必须失效，否则就是吞内容（宁可重新长出来）。
+   */
+  release(requests: ReadonlyMap<string, HandoverRequest>): void {
+    let removed = 0;
+    for (const [runId, request] of requests) {
+      const state = this.released.get(runId) ?? { anchors: new Set<number>(), callIds: new Set() };
+      for (const anchor of request.segments) state.anchors.add(anchor);
+      for (const callId of request.callIds) state.callIds.add(callId);
+      this.released.set(runId, state);
+      if (state.anchors.size === 0 && state.callIds.size === 0) continue;
+      this.releasedRuns.add(runId);
+      const fold = this.folds.get(runId);
+      // 用**累计**集合删（而不是只删这一批）：重折叠把更早交棒的段又长回来时，
+      // 这一次调用顺手把它们再删一次。
+      if (fold !== undefined) removed += fold.drop(state.anchors, state.callIds);
+      this.dirty.add(runId);
+    }
+    this.stats.released += removed;
+    this.stats.releasedRuns = this.releasedRuns.size;
+    // 交棒发生在 post-commit：立刻落地，别等下一次 50ms 节拍（屏上零变化，数据面立刻瘦身）。
+    this.flush();
+  }
+
   /** 语义删除（rewind / 作用域变化）：这些历史真的不存在了，item 跟着删。 */
   dropSession(sessionId: string, runIds: readonly string[] = []): void {
     const targets = new Set(runIds);
@@ -334,6 +444,8 @@ export class LiveItemStore implements ItemSink {
       this.kept.delete(runId);
       this.bases.delete(runId);
       this.condensed.delete(runId);
+      this.released.delete(runId);
+      this.releasedRuns.delete(runId);
       this.dirty.delete(runId);
     }
     this.structureDirty = true;
@@ -345,6 +457,8 @@ export class LiveItemStore implements ItemSink {
     this.kept.clear();
     this.bases.clear();
     this.condensed.clear();
+    this.released.clear();
+    this.releasedRuns.clear();
     this.dirty.clear();
     this.structureDirty = false;
     this.ingestedSeq = 0;
@@ -456,6 +570,12 @@ export class LiveItemStore implements ItemSink {
     if (extra.length > 0) {
       merged.items = [...extra, ...merged.items].sort(byAnchor);
     }
+    // 交棒过滤（§8.1）：重折叠会把「已经交给历史」的段按环里的事件重建回来 —— 那些
+    // item 的历史替身仍然在，屏上绝不能因此多出一份。这是 profile 面的最后一道闸。
+    const released = this.released.get(runId);
+    if (released !== undefined && merged.items.length > 0) {
+      merged.items = merged.items.filter((item) => !isReleased(released, item));
+    }
     this.groups.set(runId, merged);
   }
 
@@ -466,8 +586,9 @@ export class LiveItemStore implements ItemSink {
    * 0. 每 run 超过 `MAX_ITEMS_PER_RUN`（2000）→ 折掉最旧的、保留最近 200 项；
    * 1. 总量超过 `MAX_ITEMS_TOTAL`（20000）→ **最旧的已终态 run** 加大折叠（保留 20 项）；
    * 2. 仍超 → **最旧的 running run** 同样加大折叠（极端：单个 run 就超总量一半）；
-   * 3. 仍超 → 把**已交棒 run 的残留**（notice / ev 行）也折成该 run 仅剩的一项：这一档
-   *    要等阶段 3 的 `release` / 交棒账本落地才有数据（今天 `kept` 为空，属空操作）；
+   * 3. 仍超 → 把**已交棒 run 的残留**（notice / ev 行）折成该 run 仅剩的**一张**折叠卡
+   *    （`KEEP_ITEMS_RELEASED_RESIDUE = 0`）：这些 run 的内容全都有历史替身，留下来的
+   *    只有运行过程行，折成「本轮更早的 N 项已折叠」仍然可见、可点进运行详情（I9）；
    * 4. 仍超（病态：一条 run 的 2000 项都在跑）→ **放弃删除**，只置 `stats.overBudget`；
    *    UI 顶部提示行属阶段 4（要 i18n 文案），但「多占内存 + 一行提示」远好于
    *    「静默删掉用户正在看的内容」（I9 / G-K）。
@@ -492,6 +613,12 @@ export class LiveItemStore implements ItemSink {
         if (this.groups.get(runId)?.status !== status) continue;
         this.condense(runId, KEEP_ITEMS_PER_RUN_URGENT);
       }
+    }
+    // 档 3：已交棒 run 的残留 —— 内容早已由历史渲染，这里只剩运行过程行。
+    for (const runId of [...this.folds.keys()]) {
+      if (this.totalItems() <= this.maxItemsTotal) break;
+      if (!this.releasedRuns.has(runId)) continue;
+      this.condense(runId, KEEP_ITEMS_RELEASED_RESIDUE);
     }
     this.overBudget = this.totalItems() > this.maxItemsTotal;
   }

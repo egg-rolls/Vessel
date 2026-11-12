@@ -32,6 +32,13 @@
  *   G-I  可见性切换重折叠幂等（重折叠必须等于「一开始就是这个口径」）
  *   G-J  一次工具调用恰好一张 tool:<callId>（running → done → error 就地更新，不出 ev- 行）
  *   G-K  总量硬上界不删内容（四档折不动时只置 stats.overBudget，不许静默）
+ *   G-F  历史先到不重复（§4.3 时序 C/D：key 序列 == 只有 history）
+ *   G-F2 认领粘性（live 内容增长 / 改写不让已成立的认领失效）
+ *   G-F3 认领失败计数可读（diagnostics 取数面 + 两边都渲染）
+ *   G-L  交棒释放：屏幕零变化 + 幂等
+ *   G-L2 没有替身的 item 永不释放（notice / ev 行 / 失败卡）
+ *   G-L3 内存不随轮数线性增长（N 轮之后 live item 的数量上界）
+ *   G-L4 已交棒 run 的残留折叠（§8.2 档 3：折成一张卡，不静默）
  *   T1   渲染侧不读 EventStore.entries（I1 的文件级 tripwire）
  *
  * 用法：bun run scripts/check-live-items.ts
@@ -40,8 +47,17 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { buildLiveItems, type TranscriptItem } from '../apps/web/src/domains/chat/transcript-items';
+import {
+  buildHistoryIndex,
+  buildLiveItems,
+  buildTranscriptItems,
+  ClaimLedger,
+  claimRunFactsOf,
+  type ClaimDecision,
+  type TranscriptItem,
+} from '../apps/web/src/domains/chat/transcript-items';
 import type { RunEvent } from '../apps/web/src/gateway/types';
+import type { Message } from '../apps/web/src/gateway/types/sessions';
 import { EventStore } from '../apps/web/src/state/event-store';
 import { groupEvents, type RunGroup, type StoredEvent } from '../apps/web/src/state/events';
 import type { ItemStoreSnapshot } from '../apps/web/src/state/live-items';
@@ -132,6 +148,78 @@ function sameJson(label: string, a: unknown, b: unknown): string | null {
   const right = JSON.stringify(b);
   if (left === right) return null;
   return `${label} 两路不一致\n    live    = ${clip(left)}\n    rebuild = ${clip(right)}`;
+}
+
+// ── 认领 / 交棒 fixture 的公共脚手架（历史消息 + 账本判定 + 屏幕 key 序列） ──
+
+/** 一条已落盘的消息（只填 fixture 需要的字段）。 */
+function msg(role: Message['role'], content: string, extra: Partial<Message> = {}): Message {
+  return { role, content, ...extra };
+}
+
+/** 历史侧的「调用 + 结果」一对消息（让 `tool:<callId>` 在历史里有同一张卡）。 */
+function callPair(callId: string, name = 'bash', output = 'ok', ts = 1100): Message[] {
+  return [
+    msg('assistant', '', {
+      timestamp: ts,
+      tool_calls: [{ id: callId, type: 'function', function: { name, arguments: '{}' } }],
+    }),
+    msg('tool', output, { tool_call_id: callId, timestamp: ts + 1 }),
+  ];
+}
+
+/** 账本判定（装配面的同一段调用：身份 = 会话 + 纪元 + 历史窗口）。 */
+function decideClaims(
+  groups: readonly RunGroup[],
+  messages: readonly Message[],
+  options: { detailReady?: boolean; failureRunId?: string; ledger?: ClaimLedger } = {},
+): { history: ReturnType<typeof buildHistoryIndex>; decision: ClaimDecision; ledger: ClaimLedger } {
+  const history = buildHistoryIndex(messages, 0);
+  const ledger = options.ledger ?? new ClaimLedger();
+  const decision = ledger.decide(
+    { sessionId: 's1', epoch: 1, history },
+    {
+      history,
+      facts: claimRunFactsOf(groups),
+      detailReady: options.detailReady ?? true,
+      ...(options.failureRunId !== undefined ? { failureRunId: options.failureRunId } : {}),
+    },
+  );
+  return { history, decision, ledger };
+}
+
+/** 屏幕上的 key 序列（带认领结论；等价于装配面那一帧的最终列表）。 */
+function screenKeys(
+  groups: readonly RunGroup[],
+  messages: readonly Message[],
+  history: ReturnType<typeof buildHistoryIndex>,
+  decision: ClaimDecision,
+  sessionFailure?: Parameters<typeof buildTranscriptItems>[0]['sessionFailure'],
+): string[] {
+  return buildTranscriptItems({
+    messages,
+    messageIndexOffset: 0,
+    liveGroups: groups,
+    queued: [],
+    historyIndex: { ...history, claims: decision },
+    ...(sessionFailure !== undefined ? { sessionFailure } : {}),
+  }).map((item) => item.key);
+}
+
+/** 物化面里还剩多少条 item（交棒释放的可观测面：`fold.itemCount` 之和）。 */
+function liveItemCount(groups: readonly RunGroup[]): number {
+  return groups.reduce((total, group) => total + group.items.length, 0);
+}
+
+/** 物化面里还剩多少条**内容**项（正文 / 思考 / 工具卡 —— 有历史替身的那三类）。 */
+function contentItemCount(groups: readonly RunGroup[]): number {
+  let total = 0;
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (item.kind === 'text' || item.kind === 'reasoning' || item.kind === 'tool') total += 1;
+    }
+  }
+  return total;
 }
 
 interface Fixture {
@@ -531,6 +619,360 @@ const FIXTURES: readonly Fixture[] = [
         return `stats.condensed(${cappedSnapshot.stats.condensed}) != 折叠卡覆盖数(${coveredCount(cards)})`;
       }
       if (!cappedSnapshot.stats.overBudget) return '折完仍超限时必须置 stats.overBudget';
+      return null;
+    },
+  },
+  {
+    name: 'G-F 历史先到不重复（§4.3 时序 C/D：key 序列 == 只有 history）',
+    why: '刷新 / 回放时 detail 先到、事件后到：该 run 的内容项必须在进入 item 流之前就被判为已交棒，屏上不许出现两份',
+    check: () => {
+      const events = eventsOf(
+        [
+          ['run.started', { input: 'q1' }],
+          text('回答'),
+          text('一二'),
+          ['run.completed', { output: '回答一二' }],
+        ],
+        'r-f',
+      );
+      const store = new EventStore(0);
+      feed(store, events);
+      const groups = groupsFromStore(store);
+      const messages = [
+        msg('user', 'q1', { timestamp: 1000 }),
+        msg('assistant', '回答一二', { timestamp: 1100 }),
+      ];
+      const { history, decision } = decideClaims(groups, messages);
+      const merged = screenKeys(groups, messages, history, decision);
+      const historyOnly = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      }).map((item) => item.key);
+      const mismatch = sameJson('key 序列（live + history vs 只有 history）', merged, historyOnly);
+      if (mismatch !== null) return mismatch;
+      // 计数可读（diagnostics）：这一组内容全部认领成功，不该记失败。
+      if (decision.stats.userMisses !== 0 || decision.stats.assistantMisses !== 0) {
+        return `认领失败计数不该 > 0（user ${decision.stats.userMisses} / assistant ${decision.stats.assistantMisses}）`;
+      }
+      if (decision.yieldedAnchors.size === 0) return '正文段没有让位（历史那份已经在渲染它）';
+      return null;
+    },
+  },
+  {
+    name: 'G-F2 认领粘性：live 内容继续增长（guardrail 改写）不让已成立的认领失效',
+    why: '每帧按内容重算认领会抖动（改写后内容不等 → 认领失败 → 两份）；账本一次判定后粘住，只随历史窗口 / 新 run 失效',
+    check: () => {
+      const events = eventsOf(
+        [
+          ['run.started', { input: 'q1' }],
+          text('回复'),
+          ['run.completed', { output: '回复' }],
+        ],
+        'r-f2',
+      );
+      const store = new EventStore(0);
+      feed(store, events);
+      const original = groupsFromStore(store);
+      const messages = [
+        msg('user', 'q1', { timestamp: 1000 }),
+        msg('assistant', '回复', { timestamp: 1100 }),
+      ];
+      const history = buildHistoryIndex(messages, 0);
+      const ledger = new ClaimLedger();
+      const identity = { sessionId: 's1', epoch: 1, history };
+      const first = ledger.decide(identity, {
+        history,
+        facts: claimRunFactsOf(original),
+        detailReady: true,
+      });
+      // live 内容被改写（同一 run / 同一历史窗口 = 同一身份）：结论必须原样复用。
+      const group = original[0];
+      if (group === undefined) return '没有 live 分组';
+      const grown: RunGroup = {
+        ...group,
+        output: '改写后的回复',
+        items: group.items.map((item) =>
+          item.kind === 'text' ? { ...item, text: '改写后的回复' } : item,
+        ),
+      };
+      const second = ledger.decide(identity, {
+        history,
+        facts: claimRunFactsOf([grown]),
+        detailReady: true,
+      });
+      if (second !== first) return '同一身份下的重判改动了结论（粘性必须直接复用，不许重算）';
+      const sticky = screenKeys([grown], messages, history, second);
+      const historyOnly = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+      }).map((item) => item.key);
+      const mismatch = sameJson('粘住之后的 key 序列（vs 只有 history）', sticky, historyOnly);
+      if (mismatch !== null) return mismatch;
+      // 对照：没有账本的一次性判定在同一份（改写后的）内容上会丢掉让位 → 屏上多一份正文。
+      const withoutLedger = buildTranscriptItems({
+        messages,
+        messageIndexOffset: 0,
+        liveGroups: [grown],
+        queued: [],
+      });
+      if (!withoutLedger.some((item) => item.kind === 'run-text')) {
+        return '对照失败：一次性判定本该在改写后失去认领（说明这条 fixture 没有测到粘性）';
+      }
+      return null;
+    },
+  },
+  {
+    name: 'G-F3 认领失败计数可读（guardrail 改写 → 两边都渲染 + 计数）',
+    why: '「位置认领要不要打开」取决于重复的量级；这个计数是唯一的取数面（diagnostics），必须真的会动',
+    check: () => {
+      const events = eventsOf(
+        [
+          ['run.started', { input: '被改写过的输入' }],
+          text('答复'),
+          ['run.completed', { output: '完全不同的输出' }],
+        ],
+        'r-f3',
+      );
+      const store = new EventStore(0);
+      feed(store, events);
+      const groups = groupsFromStore(store);
+      const messages = [
+        msg('user', '原始输入', { timestamp: 1000 }),
+        msg('assistant', '落盘答复', { timestamp: 1100 }),
+      ];
+      const { history, decision } = decideClaims(groups, messages);
+      if (decision.stats.userMisses === 0) return '输入认领失败没有计数（diagnostics 取不到数）';
+      if (decision.stats.assistantMisses === 0) return '输出认领失败没有计数';
+      // 方向不变（I8）：认领失败时 live 与 history 都渲染，绝不吞内容。
+      const keys = screenKeys(groups, messages, history, decision);
+      if (!keys.includes('msg:0')) return '历史消息被吞了';
+      if (!keys.includes('run:r-f3:input')) return 'live 输入被吞了（认领失败时必须两份都渲染）';
+      return null;
+    },
+  },
+  {
+    name: 'G-L 交棒释放：屏幕零变化（交棒前后的 key 序列完全相同）',
+    why: '释放内存的全部理由是「历史那份已经在渲染」：删掉重复的那一份不许让屏上少一条、也不许多一条',
+    check: () => {
+      const events = eventsOf(
+        [
+          ['run.started', { input: 'q1' }],
+          text('回复'),
+          toolStarted('c1'),
+          toolCompleted('c1'),
+          ['run.completed', { output: '回复' }],
+        ],
+        'r-l',
+      );
+      const store = new EventStore(0);
+      feed(store, events);
+      const before = groupsFromStore(store);
+      const messages = [
+        msg('user', 'q1', { timestamp: 1000 }),
+        msg('assistant', '回复', { timestamp: 1100 }),
+        ...callPair('c1', 'bash', 'ok', 1200),
+      ];
+      const { history, decision } = decideClaims(before, messages);
+      const request = decision.handover.get('r-l');
+      if (request === undefined) return '终态且历史完全覆盖的 run 没有进交棒清单';
+      if (request.segments.length === 0) return '正文段没有交棒（它已经让位给历史了）';
+      if (!request.callIds.includes('c1')) return '工具卡没有交棒（历史里有同 key 的那张卡）';
+      const keysBefore = screenKeys(before, messages, history, decision);
+      const liveBefore = liveItemCount(before);
+      store.items.release(decision.handover);
+      const snapshot = itemSnapshotOf(store);
+      const after = [...snapshot.groups];
+      const keysAfter = screenKeys(after, messages, history, decision);
+      if (snapshot.stats.released === 0) return '交棒没有移出任何 item（内存没动）';
+      if (liveItemCount(after) >= liveBefore) {
+        return `交棒后 item 数没减少：${liveBefore} → ${liveItemCount(after)}`;
+      }
+      const mismatch = sameJson('交棒前后的屏幕 key 序列', keysAfter, keysBefore);
+      if (mismatch !== null) return mismatch;
+      // 交棒记录是持久的：再交一次同样的清单必须幂等（不多删、不多计）。
+      store.items.release(decision.handover);
+      const again = [...itemSnapshotOf(store).groups];
+      if (liveItemCount(again) !== liveItemCount(after)) return '重复交棒又删掉了 item（不幂等）';
+      if (itemSnapshotOf(store).stats.released !== snapshot.stats.released) {
+        return '重复交棒重复计数（stats.released 不是幂等的）';
+      }
+      return sameJson('幂等交棒后的 key 序列', screenKeys(again, messages, history, decision), keysBefore);
+    },
+  },
+  {
+    name: 'G-L2 没有替身的 item 永不释放（notice / ev 行 / 失败卡）',
+    why: '交棒只许删「历史确实会渲染」的那三种 item：运行过程行与失败卡删了就是吞内容（I8 / I9）',
+    check: () => {
+      // ① 终态 run 的 notice 行：正文让位、notice 没有替身 → 只删正文那一份。
+      const noticeEvents = eventsOf(
+        [
+          ['run.started', { input: 'q1' }],
+          text('回复'),
+          ['agent.limit.warning', { percent: 0.8 }],
+          ['run.completed', { output: '回复' }],
+        ],
+        'r-l2a',
+      );
+      const storeA = new EventStore(0);
+      feed(storeA, noticeEvents);
+      const groupsA = groupsFromStore(storeA);
+      const messagesA = [msg('user', 'q1', { timestamp: 1000 }), msg('assistant', '回复', { timestamp: 1100 })];
+      const a = decideClaims(groupsA, messagesA);
+      const reviewA = a.decision.handover.get('r-l2a');
+      if (reviewA === undefined) return 'notice run 没有进交棒清单';
+      storeA.items.release(a.decision.handover);
+      const afterA = [...itemSnapshotOf(storeA).groups];
+      const notices = itemsOf(afterA).filter((item) => item.key.startsWith('notice:'));
+      if (notices.length !== 1) return `notice 行被交棒删了（应剩 1 条，实际 ${notices.length}）`;
+      if (contentItemCount(afterA) !== 0) return '内容项没有交棒干净';
+
+      // ② failed 的 run：会话快照不能提供同一张卡时**一件都不许交棒**。
+      const failedEvents = eventsOf(
+        [
+          ['run.started', { input: 'q2' }],
+          text('半截回复'),
+          ['run.failed', { error: 'boom', error_code: 'rate_limited' }],
+        ],
+        'r-l2b',
+      );
+      const storeB = new EventStore(0);
+      feed(storeB, failedEvents);
+      const groupsB = groupsFromStore(storeB);
+      const messagesB = [
+        msg('user', 'q2', { timestamp: 1000 }),
+        msg('assistant', '半截回复', { timestamp: 1100 }),
+      ];
+      const withoutSnapshot = decideClaims(groupsB, messagesB);
+      if (withoutSnapshot.decision.handover.has('r-l2b')) {
+        return '失败卡没有替身（会话快照对不上）却交棒了 —— 失败可能永远看不见';
+      }
+      // ③ failed 的 run + 会话快照提供同一张卡（同 runId / 同 key）：允许交棒，
+      //    但**失败卡本身仍然在**（它不在 items 里，由 group.status 派生）。
+      const withSnapshot = decideClaims(groupsB, messagesB, { failureRunId: 'r-l2b' });
+      if (!withSnapshot.decision.handover.has('r-l2b')) {
+        return '会话快照能提供同一张卡时应当允许交棒';
+      }
+      storeB.items.release(withSnapshot.decision.handover);
+      const afterB = [...itemSnapshotOf(storeB).groups];
+      const failureKey = 'run:r-l2b:failure';
+      if (!itemsOf(afterB).some((item) => item.key === failureKey)) {
+        return '失败卡被交棒删掉了（失败必须永远可见）';
+      }
+      return null;
+    },
+  },
+  {
+    name: 'G-L3 内存不随轮数线性增长（N 轮之后 live item 的数量上界）',
+    why: '交棒的意义就是「已落盘的内容交给历史」：跑过的轮数越多，live 里剩的越只有运行过程行，而不是线性累加内容',
+    check: () => {
+      const ROUNDS = 6;
+      const store = new EventStore(0);
+      const messages: Message[] = [];
+      let seq = 0;
+      const push = (runId: string, type: string, data: Record<string, unknown>): void => {
+        seq += 1;
+        store.push({ type, run_id: runId, data, ts: 900 + seq } as never, { seq });
+      };
+      let contentEverHeld = 0;
+      for (let round = 0; round < ROUNDS; round += 1) {
+        const runId = `r-n${round}`;
+        const input = `q${round}`;
+        const answer = `回复${round}`;
+        const callId = `c${round}`;
+        push(runId, 'run.started', { run_id: runId, session_id: 's1', input });
+        push(runId, 'llm.stream.chunk', { run_id: runId, chunk: { type: 'text_delta', delta: answer } });
+        push(runId, 'tool.call.started', {
+          run_id: runId,
+          tool_call_id: callId,
+          tool_name: 'bash',
+          arguments: {},
+        });
+        push(runId, 'tool.call.completed', {
+          run_id: runId,
+          tool_call_id: callId,
+          tool_name: 'bash',
+          result: 'ok',
+          duration_ms: 1,
+        });
+        push(runId, 'agent.limit.warning', { run_id: runId, round });
+        push(runId, 'run.completed', { run_id: runId, output: answer });
+        messages.push(msg('user', input, { timestamp: 1000 + round * 10 }));
+        messages.push(
+          msg('assistant', answer, {
+            timestamp: 1001 + round * 10,
+            tool_calls: [
+              { id: callId, type: 'function', function: { name: 'bash', arguments: '{}' } },
+            ],
+          }),
+          msg('tool', 'ok', { tool_call_id: callId, timestamp: 1002 + round * 10 }),
+        );
+        const groups = groupsFromStore(store);
+        contentEverHeld += contentItemCount(groups);
+        const { decision } = decideClaims(groups, messages);
+        store.items.release(decision.handover);
+      }
+      const snapshot = itemSnapshotOf(store);
+      const groups = [...snapshot.groups];
+      // ① 内容项全部交棒（不是丢掉：它们仍在历史里，屏幕上一条不少）。
+      if (contentItemCount(groups) !== 0) {
+        return `还有 ${contentItemCount(groups)} 条内容项留在 live 里（应全部交给历史）`;
+      }
+      // ② live 里只剩「运行过程行」：每轮 1 条 notice，与内容量无关。
+      if (liveItemCount(groups) !== ROUNDS) {
+        return `live item 数 ${liveItemCount(groups)} != 轮数 ${ROUNDS}（上界 = Σ 无替身行，不随内容增长）`;
+      }
+      // ③ 释放是「转移」不是「丢」：累计交棒条数 = 曾经持有的内容项总数。
+      if (snapshot.stats.released !== contentEverHeld) {
+        return `stats.released(${snapshot.stats.released}) != 曾持有的内容项(${contentEverHeld})`;
+      }
+      if (snapshot.stats.releasedRuns !== ROUNDS) return `stats.releasedRuns(${snapshot.stats.releasedRuns}) != ${ROUNDS}`;
+      return null;
+    },
+  },
+  {
+    name: 'G-L4 已交棒 run 的残留折叠（§8.2 档 3：折成一张卡，不静默）',
+    why: '已交棒的 run 只剩运行过程行：总量再超限时把它们折成一张带条数的卡（可见、可进运行详情），绝不静默删',
+    check: () => {
+      const events = eventsOf(
+        [
+          ['run.started', { input: 'q1' }],
+          text('回复'),
+          ['run.completed', { output: '回复' }],
+          ...[...Array(30)].map((_, index) => ['agent.limit.warning', { round: index }] as EvSpec),
+        ],
+        'r-l4',
+      );
+      const fullItems = itemsOf(rebuild(events)).length;
+      const store = new EventStore(0, { maxItemsTotal: 5 });
+      const messages = [
+        msg('user', 'q1', { timestamp: 1000 }),
+        msg('assistant', '回复', { timestamp: 1100 }),
+      ];
+      // ① 先交棒（run 已终态、内容项交给历史），② 再灌 30 条运行过程行触发总量上限。
+      feed(store, events.slice(0, 3));
+      const early = groupsFromStore(store);
+      const earlyClaims = decideClaims(early, messages);
+      store.items.release(earlyClaims.decision.handover);
+      feed(store, events.slice(3));
+      const groups = groupsFromStore(store);
+      const { decision } = decideClaims(groups, messages);
+      store.items.release(decision.handover);
+      const snapshot = itemSnapshotOf(store);
+      const items = itemsOf(snapshot.groups);
+      const cards = items.filter(
+        (item) => item.kind === 'notice' && item.event.type === 'vessel.ui.condensed',
+      );
+      if (cards.length !== 1) return `折叠卡数量 ${cards.length}（同一 run 只该有一张）`;
+      // 守恒：现存 + 折叠卡覆盖 + 已交棒 == 全量（一条都不许凭空消失）。
+      const restored = items.length - cards.length + coveredCount(cards) + snapshot.stats.released;
+      if (restored !== fullItems) {
+        return `交棒 + 折叠之后内容消失了：现存 ${items.length} + 覆盖 ${coveredCount(cards)} + 交棒 ${snapshot.stats.released} != 全量 ${fullItems}`;
+      }
+      if (snapshot.stats.overBudget) return '档 3 折完之后仍置 overBudget（说明残留没被折掉）';
       return null;
     },
   },

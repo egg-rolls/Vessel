@@ -30,6 +30,7 @@ import type { Message, MessageRef, RunEvent } from '../../gateway/types';
 import type { SessionDetail } from '../../gateway/types/sessions';
 import type { ErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
+import type { HandoverRequest } from '../../state/live-items';
 import { agentSenderOfName } from './agent-sender';
 import {
   ASK_ANSWER_MESSAGE_NAME,
@@ -56,6 +57,15 @@ interface ItemMeta {
   ts?: number;
   /** 同 ts 的稳定回退（该 run 的首个 wire seq）。 */
   seq?: number;
+  /**
+   * 段 / 卡片在 wire 上的锚点 seq（= 该 item 首个事件的 seq）。
+   *
+   * 只有 live 侧有（历史消息没有 wire seq）。两个用途：
+   * - **认领让位**的精确身份：`ClaimDecision.yieldedAnchors` 按它判定这一段要不要让位
+   *   （段正文继续增长也不换号，所以让位结论一旦成立就稳定）；
+   * - **交棒删除**的精确身份：`HandoverRequest.segments` 就是这些锚点。
+   */
+  anchorSeq?: number;
   /** 连续同发言人：本条是否是这一段的开头；非消息类没有这个字段。 */
   speaker?: TranscriptSpeaker;
   groupStart?: boolean;
@@ -308,6 +318,13 @@ export interface TranscriptBuildInput {
    * 快照可能比它旧（同 run 只出一张卡，事件流优先）。
    */
   sessionFailure?: RunFailure;
+  /**
+   * 认领结论（见 `HistoryIndex.claims`；两者给一个即可，`claims` 优先）。
+   *
+   * 通常是 `undefined`：装配面把结论挂在 `historyIndex.claims` 上（那条路不用改
+   * `TranscriptWindow` 的签名）。本字段留给门禁与一次性调用直传。
+   */
+  claims?: ClaimDecision;
 }
 
 /** 排队提交的最小形状（与 StreamItems 的 QueuedSubmission 对齐，避免循环依赖）。 */
@@ -334,6 +351,18 @@ export interface HistoryIndex {
   messageByIndex: Map<number, Message>;
   /** 历史里出现过的 tool_call id（判断 run 是否已落盘）。 */
   callIds: Set<string>;
+  /**
+   * 认领结论（`ClaimLedger` 一次性判定 + 单调粘住的结果）。
+   *
+   * 为什么挂在索引上：认领**就是**「历史消息 ⇄ live run」的配对，`buildHistoryIndex`
+   * 产出的反查表正是它的输入，而这份索引是调用侧唯一已经传到装配面（`TranscriptWindow`
+   * → `buildTranscriptItems`）的历史侧对象。挂在别处（新增一层 prop）等于为了一个字段
+   * 改三个文件；放在这里，纯函数侧的读取路径与「没有账本时现算一遍」的兜底完全同构。
+   *
+   * 缺省（undefined）= 一次性路径（门禁 / 子 agent 详情）：`buildTranscriptItems` 现算
+   * 一遍同一段判据，只是不粘住。
+   */
+  claims?: ClaimDecision;
 }
 
 const CR = String.fromCharCode(13);
@@ -749,13 +778,16 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     let reasoningIndex = 0;
     for (const item of folded) {
       if (item.kind === 'text') {
+        const anchor = anchors.get(item.key);
         items.push({
           kind: 'run-text',
           // 段身份 = 该段首个 delta 的 seq；没有锚点的手工分组退回段序（测试 / 子 agent 用）。
-          key: `run:${group.runId}:text:${anchors.get(item.key) ?? textIndex}`,
+          key: `run:${group.runId}:text:${anchor ?? textIndex}`,
           runId: group.runId,
           text: item.text,
           streaming: false,
+          // 段锚点：认领让位与交棒删除都按它认这一段（见 `ItemMeta.anchorSeq`）。
+          ...(anchor !== undefined ? { anchorSeq: anchor } : {}),
           // 正文段用最后一个 delta 的时间（该段结束时刻）。
           ...(itemTs(item.endedAt ?? item.startedAt) !== undefined
             ? { ts: itemTs(item.endedAt ?? item.startedAt) }
@@ -766,12 +798,15 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
         continue;
       }
       if (item.kind === 'reasoning') {
+        const anchor = anchors.get(item.key);
         items.push({
           kind: 'run-reasoning',
-          key: `run:${group.runId}:reasoning:${anchors.get(item.key) ?? reasoningIndex}`,
+          key: `run:${group.runId}:reasoning:${anchor ?? reasoningIndex}`,
           runId: group.runId,
           text: item.text,
           streaming: false,
+          // 段锚点（同上：让位与交棒按它认这一段）。
+          ...(anchor !== undefined ? { anchorSeq: anchor } : {}),
           ...(item.startedAt !== undefined ? { startedAt: item.startedAt } : {}),
           ...(item.endedAt !== undefined ? { endedAt: item.endedAt } : {}),
           // 思考段用最后一个 reasoning_delta 的时间（该段结束时刻）。
@@ -801,6 +836,8 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           ...(item.truncated === true ? { truncated: true } : {}),
           startedAt: item.startedAt,
           paired: item.status !== 'running',
+          // 卡片的锚点（交棒时按 callId 删，这里留一份便于诊断与门禁对拍）。
+          ...(item.anchorSeq !== undefined ? { anchorSeq: item.anchorSeq } : {}),
           // 工具卡用自己的 tool.call.started 时间（真事件时间）。
           ...(itemTs(item.startedAt) !== undefined ? { ts: itemTs(item.startedAt) } : {}),
           ...seqMeta,
@@ -825,6 +862,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
         runId: group.runId,
         text: group.liveText,
         streaming: true,
+        ...(group.liveTextAnchorSeq !== undefined ? { anchorSeq: group.liveTextAnchorSeq } : {}),
         ...(itemTs(group.lastTs) !== undefined ? { ts: itemTs(group.lastTs) } : {}),
         ...seqMeta,
       });
@@ -836,6 +874,9 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
         runId: group.runId,
         text: group.liveReasoning,
         streaming: true,
+        ...(group.liveReasoningAnchorSeq !== undefined
+          ? { anchorSeq: group.liveReasoningAnchorSeq }
+          : {}),
         ...(itemTs(group.lastTs) !== undefined ? { ts: itemTs(group.lastTs) } : {}),
         ...seqMeta,
       });
@@ -859,43 +900,205 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
   return items;
 }
 
-/** run 侧认领所需的信息（callId 集合、已流出的正文、用户输入）。 */
-interface RunClaim {
+/** 一段 live 正文 / 思考（认领与交棒的最小单位）。 */
+export interface ClaimSegment {
+  kind: 'text' | 'reasoning';
+  text: string;
+  /** 该段首个 delta 的 wire seq（段身份；没有锚点的手工分组才缺）。 */
+  anchorSeq?: number;
+}
+
+/**
+ * run 侧认领事实（DESIGN.md §7.4 的 `RunFacts`）：**只从 `RunGroup` 派生**，不读
+ * `entries`、不重建 item。
+ *
+ * 为什么是 `RunGroup` 而不是 `TranscriptItem`：认领要回答的是「这一轮的内容在历史里
+ * 去哪了」，段 / 调用 / 输入 / 输出都能从 run 的 item 里读到；而组的读取路径与渲染
+ * 同源（`useChatTranscript` 的 `renderedGroups`），所以装配面判一次就够，**不用为了
+ * 判定再物化一份 item**（那正是本设计要消灭的「第二次投影」）。
+ */
+export interface ClaimRunFacts {
   runId: string;
+  status: RunGroup['status'];
+  /** 输入正文（trim 后）。空 = 这一轮没有可认领的输入。 */
   input: string;
+  /** 输出（`run.completed.output`；缺失时用已流出的第一段正文兜底）。 */
   output: string;
   running: boolean;
   startTs?: number;
-  callIds: Set<string>;
+  /** live 里出现过的工具调用 callId（有历史同 key 卡片才算有替身）。 */
+  callIds: readonly string[];
+  /** live 的正文 / 思考段，按出现顺序。 */
+  segments: readonly ClaimSegment[];
 }
 
-function runClaims(groups: readonly RunGroup[], live: readonly TranscriptItem[]): RunClaim[] {
-  const byRun = new Map<string, RunClaim>();
-  for (const group of groups) {
-    byRun.set(group.runId, {
-      runId: group.runId,
-      input: trimText(group.input),
-      output: trimText(group.output),
-      running: group.status === 'running',
-      ...((group.startedAt ?? group.firstTs) !== undefined
-        ? { startTs: group.startedAt ?? group.firstTs }
-        : {}),
-      callIds: new Set<string>(),
+/** `RunGroup[]` → 认领事实（按 run 起始时间升序 = 认领的轮次顺序）。 */
+export function claimRunFactsOf(groups: readonly RunGroup[]): ClaimRunFacts[] {
+  const facts = groups.map((group) => {
+    const cached = FACT_CACHE.get(group);
+    if (cached !== undefined) return cached;
+    const fact = claimRunFactsOfGroup(group);
+    FACT_CACHE.set(group, fact);
+    return fact;
+  });
+  return facts.sort((a, b) => (a.startTs ?? 0) - (b.startTs ?? 0));
+}
+
+/**
+ * 按 group 对象缓存事实：`RunGroup` 是**不可变快照**（`LiveItemStore.materialize` 只在
+ * 该 run 脏时换新对象），所以流式期间只有正在跑的那几个 run 需要重算 —— 装配面每帧
+ * 判一次认领的成本与「正在跑的 run 数」成正比，与历史轮数无关。
+ */
+const FACT_CACHE = new WeakMap<RunGroup, ClaimRunFacts>();
+
+function claimRunFactsOfGroup(group: RunGroup): ClaimRunFacts {
+  const callIds: string[] = [];
+  const segments: ClaimSegment[] = [];
+  let fallbackOutput = '';
+  for (const item of group.items) {
+    if (item.kind === 'tool') {
+      if (item.callId !== undefined) callIds.push(item.callId);
+      continue;
+    }
+    if (item.kind !== 'text' && item.kind !== 'reasoning') continue;
+    segments.push({
+      kind: item.kind,
+      text: item.text,
+      ...(item.anchorSeq !== undefined ? { anchorSeq: item.anchorSeq } : {}),
+    });
+    // 正文：run.completed.output 缺失时用**已流出的第一段正文**兜底（同一段文本即可认领）。
+    if (item.kind === 'text' && fallbackOutput.length === 0) fallbackOutput = item.text;
+  }
+  // 尾部仍在流式中的缓冲也算 live 内容（它同样可能已经落盘）。
+  if (group.liveText !== undefined && group.liveText.length > 0) {
+    segments.push({
+      kind: 'text',
+      text: group.liveText,
+      ...(group.liveTextAnchorSeq !== undefined ? { anchorSeq: group.liveTextAnchorSeq } : {}),
     });
   }
-  for (const item of live) {
-    if (item.kind === 'tool' && item.runId !== undefined && item.callId !== undefined) {
-      byRun.get(item.runId)?.callIds.add(item.callId);
-    }
+  if (group.liveReasoning !== undefined && group.liveReasoning.length > 0) {
+    segments.push({
+      kind: 'reasoning',
+      text: group.liveReasoning,
+      ...(group.liveReasoningAnchorSeq !== undefined
+        ? { anchorSeq: group.liveReasoningAnchorSeq }
+        : {}),
+    });
   }
-  // 正文：run.completed.output 缺失时用已流出的正文兜底（同一段文本即可认领）。
-  for (const item of live) {
-    if (item.kind !== 'run-text') continue;
-    const claim = byRun.get(item.runId);
-    if (claim === undefined || claim.output.length > 0) continue;
-    claim.output = trimText(item.text);
-  }
-  return [...byRun.values()].sort((a, b) => (a.startTs ?? 0) - (b.startTs ?? 0));
+  const startTs = group.startedAt ?? group.firstTs;
+  return {
+    runId: group.runId,
+    status: group.status,
+    input: trimText(group.input),
+    output: trimText(group.output).length > 0 ? trimText(group.output) : trimText(fallbackOutput),
+    running: group.status === 'running',
+    ...(startTs !== undefined ? { startTs } : {}),
+    callIds,
+    segments,
+  };
+}
+
+/**
+ * 认领失败 / 重复候选的**累计**计数（diagnostics 读这里 —— 它是「位置认领要不要打开」
+ * 的取数依据，见 DESIGN.md §4.2-6）。
+ *
+ * 为什么必须记：位置认领（按 turn 位置而不是内容认领）唯一要权衡的是「重复 vs 吞内容」，
+ * 而重复的量级今天没有任何数字支撑。这里把「内容对不上」按次累计，将来（加上真机样本）
+ * 才有依据判断重复是不是到了「用户可感知」的量级。
+ */
+export interface ClaimStats {
+  /** 判定次数（首次 + 每一次失效重判；账本粘住期间不增加）。 */
+  decisions: number;
+  /** 输入认领失败次数：run 有输入，但历史里找不到未被占用的同文消息。 */
+  userMisses: number;
+  /** 输出认领失败次数：run 有输出，但一条 assistant 消息都没认领上。 */
+  assistantMisses: number;
+  /** 终态 run 里**没让位**的正文段条数（= 潜在重复的两份渲染）。 */
+  unclaimedSegments: number;
+}
+
+/**
+ * 认领账本的一次判定结论（DESIGN.md §4.2）。
+ *
+ * 方向恒为「live 让位、历史永不隐藏」（I8）：这些集合只描述**live 这一份**要不要让位
+ * / 能不能移出内存，没有任何字段能让历史那份消失。所以判错最坏是「多一份」（可见、
+ * F5 可恢复），不会「少一份」（静默）。
+ */
+export interface ClaimDecision {
+  /** 已认领的用户消息：run → 绝对下标（每轮最多一条，按轮次顺序一对一）。 */
+  claimedUserByRun: ReadonlyMap<string, number>;
+  /** 已认领的 assistant 消息（绝对下标）。 */
+  claimedAssistant: ReadonlySet<number>;
+  /**
+   * 让位的 live **正文段 / 思考段**（按 `anchorSeq`）。
+   *
+   * 单调只增：live 内容继续增长**不会**让已成立的认领失效（消除「两帧之间来回让位」）。
+   * 段身份锚定首个 delta 的 seq，所以重折叠 / 回填都不换号。
+   */
+  yieldedAnchors: ReadonlySet<number>;
+  /** 让位的段正文（归一化后）：只给「没有 anchor 的手工分组」兜底。 */
+  yieldedTexts: ReadonlySet<string>;
+  /**
+   * 可以移出 live 内存的 item（按 run 分组，`HandoverRequest` 直接就是 store 的入参）。
+   *
+   * 只有「有历史替身」的段 / 工具卡会进来；`notice` / `ev-` / 失败卡永远不在。
+   */
+  handover: ReadonlyMap<string, HandoverRequest>;
+  /** 累计计数（同一次判定内不变；见 `ClaimStats`）。 */
+  stats: ClaimStats;
+}
+
+/** `ClaimLedger.decide` 的输入（历史侧 + live 侧事实 + 交棒前置条件）。 */
+export interface ClaimDecideInput {
+  /** 历史侧索引（认领的权威一侧）。 */
+  history: HistoryIndex;
+  /** live 侧事实（`claimRunFactsOf(renderedGroups)`）。 */
+  facts: readonly ClaimRunFacts[];
+  /**
+   * detail 是否已经是「当前选中会话的、非 stale 的历史」。
+   *
+   * 交棒的四个前置之一（DESIGN.md §4.3）：detail 没到 / 已经 stale 时，历史那份可能
+   * 只是旧副本，此时**一件都不许交棒**（屏上内容只能靠 live）。
+   */
+  detailReady: boolean;
+  /** 会话快照里的失败 runId（失败卡替身判据：同 runId 才算有替身）。 */
+  failureRunId?: string;
+}
+
+/**
+ * 认领账本的身份（DESIGN.md §4.2 的失效条件）。
+ *
+ * 只有这五个字段变化才**丢弃**结论重判：
+ * - `epoch` 变（重连 / 连接级 hello）；
+ * - `history` 引用变（`reloadAfterHistoryChange`：`session.rewound` / `message.compaction`
+ *   改写前缀，或 `mergeTailPage` 缩短尾部 —— 调用侧按 messages 引用 memo，所以「引用换了」
+ *   就是「窗口换了一份历史」）；
+ * - `sessionId` 变（切会话）；
+ * - `windowStart` / `windowEnd` 变（历史窗口本身换了；`loadEarlier` 前插不改绝对下标，
+ *   但窗口身份变了，重判一次最省心）。
+ *
+ * **不在**这里的东西（故意）：live 内容（正文长度 / 工具数量 / output 增长）。它们变了
+ * 不重判 —— 这正是「已成立的认领不会因 live 增长而失效」。
+ */
+export interface ClaimIdentity {
+  sessionId: string | null;
+  epoch: number;
+  windowStart?: number;
+  windowEnd?: number;
+  /** `buildHistoryIndex` 的结果（引用身份 = 「messages 窗口」的身份）。 */
+  history: HistoryIndex;
+}
+
+function emptyClaimStats(): ClaimStats {
+  return { decisions: 0, userMisses: 0, assistantMisses: 0, unclaimedSegments: 0 };
+}
+
+interface ClaimCore {
+  claimedUserByRun: Map<string, number>;
+  claimedAssistant: Set<number>;
+  yieldedAnchors: Set<number>;
+  yieldedTexts: Set<string>;
 }
 
 /**
@@ -909,44 +1112,265 @@ function runClaims(groups: readonly RunGroup[], live: readonly TranscriptItem[])
  * 消掉 guardrail 改写造成的重复，但风险是**对称的** —— 位置判错就是「吞内容」，而重复
  * 顶多让人看见两遍（I8 的方向恒为「宁可重复，绝不吞内容」）。打开它的前置条件缺一不可：
  * ① 服务端给 turn 边界一个权威 id（今天只有 `cursor` 可猜）；
- * ② 认领账本（`ClaimLedger`，阶段 3）能证明「历史那份**确实会渲染**」；
+ * ② 认领账本能证明「历史那份**确实会渲染**」（本账本：让位只发生在历史真的持有那段
+ *    内容时，`stats.userMisses / assistantMisses` 是它的取数面）；
  * ③ 有 fixture 证明「位置认领 + guardrail 改写」不会让正文消失。
  */
-function claimMessages(
-  claims: readonly RunClaim[],
+function computeClaimCore(
   history: HistoryIndex,
-): { claimedAssistant: Set<number>; claimedUserByRun: Map<string, number> } {
+  facts: readonly ClaimRunFacts[],
+  stats: ClaimStats,
+): ClaimCore {
   const claimedUser = new Set<number>();
   const claimedUserByRun = new Map<string, number>();
   let cursor = -Infinity;
-  for (const claim of claims) {
-    if (claim.input.length === 0) continue;
-    const candidates = history.userByContent.get(claim.input) ?? [];
+  for (const fact of facts) {
+    if (fact.input.length === 0) continue;
+    const candidates = history.userByContent.get(fact.input) ?? [];
     const target = candidates.find((index) => index >= cursor && !claimedUser.has(index));
-    if (target === undefined) continue;
+    if (target === undefined) {
+      // 内容对不上（guardrail 改写过正文 / 历史还没落盘）：**两边都渲染**，只计数。
+      stats.userMisses += 1;
+      continue;
+    }
     claimedUser.add(target);
-    claimedUserByRun.set(claim.runId, target);
+    claimedUserByRun.set(fact.runId, target);
     cursor = target;
   }
 
   const claimedAssistant = new Set<number>();
-  for (const claim of claims) {
-    const from = claimedUserByRun.get(claim.runId) ?? cursor;
-    if (claim.output.length === 0) continue;
+  for (const fact of facts) {
+    const from = claimedUserByRun.get(fact.runId) ?? cursor;
+    if (fact.output.length === 0) continue;
+    let hits = 0;
     for (const [absIndex, content] of history.contentByIndex) {
       if (absIndex <= from || claimedAssistant.has(absIndex)) continue;
-      if (content !== claim.output && !(content.length >= 8 && claim.output.includes(content))) {
+      if (content !== fact.output && !(content.length >= 8 && fact.output.includes(content))) {
         continue;
       }
       claimedAssistant.add(absIndex);
+      hits += 1;
     }
     for (const [absIndex, ids] of history.callIdsByIndex) {
       if (absIndex <= from || claimedAssistant.has(absIndex)) continue;
-      if (!(ids.length > 0 && ids.every((id) => claim.callIds.has(id)))) continue;
+      if (!(ids.length > 0 && ids.every((id) => fact.callIds.includes(id)))) continue;
       claimedAssistant.add(absIndex);
+      hits += 1;
+    }
+    // 一条都没认领上 = 这一轮的正文可能与历史重复（两份都渲，但记一笔）。
+    if (hits === 0) stats.assistantMisses += 1;
+  }
+
+  // 已落盘的 assistant 正文：live 的同文段让位（它就是那条消息，不许两份）。
+  const claimedTexts = new Set<string>();
+  for (const absIndex of claimedAssistant) {
+    const content = history.contentByIndex.get(absIndex);
+    if (content !== undefined && content.length > 0) claimedTexts.add(normalizeText(content));
+  }
+  // 已落盘的 assistant 思考：同样按内容让位（历史消息自己带 reasoning_content）。
+  const claimedReasonings = new Set<string>();
+  for (const message of history.messageByIndex.values()) {
+    const reasoning = (message as { reasoning_content?: string }).reasoning_content;
+    if (typeof reasoning === 'string' && reasoning.trim().length > 0) {
+      claimedReasonings.add(normalizeText(reasoning));
     }
   }
-  return { claimedAssistant, claimedUserByRun };
+
+  const yieldedAnchors = new Set<number>();
+  const yieldedTexts = new Set<string>();
+  for (const fact of facts) {
+    for (const segment of fact.segments) {
+      const text = normalizeText(segment.text);
+      if (text.length === 0) continue;
+      const match = segment.kind === 'text' ? claimedTexts.has(text) : claimedReasonings.has(text);
+      if (!match) continue;
+      yieldedTexts.add(text);
+      if (segment.anchorSeq !== undefined) yieldedAnchors.add(segment.anchorSeq);
+    }
+    // 终态 run 里没让位的正文段 = 潜在的「live + 历史」两份渲染。
+    if (fact.running || fact.output.length === 0) continue;
+    for (const segment of fact.segments) {
+      if (segment.kind !== 'text') continue;
+      const text = normalizeText(segment.text);
+      if (text.length > 0 && !claimedTexts.has(text)) stats.unclaimedSegments += 1;
+    }
+  }
+  return { claimedUserByRun, claimedAssistant, yieldedAnchors, yieldedTexts };
+}
+
+/**
+ * 交棒清单：哪些 item 已经有历史替身、可以移出 live 内存（DESIGN.md §4.3 / §8.1）。
+ *
+ * 逐 **item** 判定（不是整 run 丢弃），四个条件全部成立才进清单：
+ * 1. `detailReady`（历史是当前会话的、非 stale 的那一份）；
+ * 2. run 已终态（`running` 一律不交棒：它还会继续长）；
+ * 3. 失败卡例外：`failed` 的 run 只有当**会话快照能提供同一张卡**
+ *    （`sessionFailure.runId === run.runId`，key 相同 `run:<id>:failure`，故不重挂）
+ *    时才允许交棒 —— 否则这一轮永远留在 live 侧（一张卡的内存换「失败永远可见」）；
+ * 4. item 自己**确实有替身**：
+ *    - 正文段 / 思考段：已经让位（`yieldedAnchors`，历史那份正在渲染它）；
+ *    - 工具卡：历史里有同一个 key（`tool:<callId>`，合并后不重挂），且执行态不会被改动
+ *      （`status === 'done'` 且没有 `error` —— 否则交棒会**丢掉错误标记**）；
+ *    - `notice` / `ev-` / `unknown-`：没有替身，永远不交棒。
+ */
+function computeHandover(
+  history: HistoryIndex,
+  facts: readonly ClaimRunFacts[],
+  yieldedAnchors: ReadonlySet<number>,
+  input: ClaimDecideInput,
+): Map<string, HandoverRequest> {
+  const handover = new Map<string, HandoverRequest>();
+  if (!input.detailReady) return handover;
+  const historyKeys = new Set(history.items.map((item) => item.key));
+  for (const fact of facts) {
+    if (fact.status === 'running') continue;
+    if (fact.status === 'failed' && input.failureRunId !== fact.runId) continue;
+    const segments: number[] = [];
+    for (const segment of fact.segments) {
+      if (segment.anchorSeq === undefined) continue;
+      if (yieldedAnchors.has(segment.anchorSeq)) segments.push(segment.anchorSeq);
+    }
+    const callIds: string[] = [];
+    for (const callId of fact.callIds) {
+      // 历史侧同一张卡：key 完全相同（`tool:<callId>`），合并后位置 / 内容都由历史说了算。
+      if (!historyKeys.has(toolKeyOf(callId))) continue;
+      callIds.push(callId);
+    }
+    if (segments.length > 0 || callIds.length > 0) handover.set(fact.runId, { segments, callIds });
+  }
+  return handover;
+}
+
+/** 工具卡的 key（历史与 live 共用；与 `buildLiveItems` / `buildHistoryIndex` 同源）。 */
+function toolKeyOf(callId: string): string {
+  return `tool:${callId}`;
+}
+
+/**
+ * 一次性判定（无账本路径：门禁 / 子 agent 详情 / 缺省的 `buildTranscriptItems`）。
+ *
+ * 与账本走**同一段**判据，只是不粘住（每次调用都重新算）。它是纯函数，所以「增量 ==
+ * 重建」的对拍仍然成立。
+ */
+export function oneShotClaims(history: HistoryIndex, facts: readonly ClaimRunFacts[]): ClaimDecision {
+  const stats = emptyClaimStats();
+  stats.decisions = 1;
+  const core = computeClaimCore(history, facts, stats);
+  return {
+    ...core,
+    handover: new Map<string, HandoverRequest>(),
+    stats,
+  };
+}
+
+/**
+ * 认领账本：**一次性判定 + 单调（sticky）+ 明确失效**（DESIGN.md §4.2）。
+ *
+ * 为什么必须粘住：今天每次渲染都用内容相等重算认领，而物化之后 live item 的生命周期
+ * 变长了（不再随环裁剪消失）—— 于是 live 正文一继续增长（或 guardrail 改写正文），
+ * 内容就不再相等，认领结论在两帧之间抖动：
+ * - **重复**：认领失败 → live 与 history 各渲一份；
+ * - **闪现**：同一段内容一会儿让位一会儿不让位（key 切换 = React 重挂）。
+ *
+ * 账本把这些结论**冻结**在「历史窗口变化」这一格上：只要 `ClaimIdentity` 没变（也没有
+ * 出现新 run / 新终态），后续 live 内容怎么长都不影响已经成立的让位。
+ *
+ * 失效点（只有三个 + 两个一次性转换）：
+ * 1. `epoch` 变（重连）；
+ * 2. 历史窗口引用 / 窗口边界变（rewind / compaction / mergeTailPage）；
+ * 3. `sessionId` 变（切会话）；
+ * 4. 出现**新 run**（新的一轮必须能认领它自己的消息）；
+ * 5. run **一次性**转终态 / 第一次拿到输入（这两个转换各只发生一次，不是内容抖动）。
+ */
+export class ClaimLedger {
+  private identity: ClaimIdentity | null = null;
+  private decision: ClaimDecision | null = null;
+  private readonly seen = new Set<string>();
+  private readonly settled = new Set<string>();
+  private readonly fed = new Set<string>();
+  private readonly counters = emptyClaimStats();
+
+  /** 最近一次判定之后累计的计数（diagnostics 读这里；账本粘住时不增加）。 */
+  get stats(): ClaimStats {
+    return this.counters;
+  }
+
+  decide(identity: ClaimIdentity, input: ClaimDecideInput): ClaimDecision {
+    const invalidated = this.identity === null || !sameClaimIdentity(this.identity, identity);
+    const rerun = invalidated || this.needsRunRerun(input.facts);
+    if (!rerun && this.decision !== null) return this.decision;
+    this.counters.decisions += 1;
+    const core = computeClaimCore(input.history, input.facts, this.counters);
+    const handover = computeHandover(input.history, input.facts, core.yieldedAnchors, input);
+    const fresh: ClaimDecision = { ...core, handover, stats: this.counters };
+    // 身份没变（只是新 run / 终态 / 输入到达）：与上一次结论**取并集**，绝不撤销。
+    this.decision =
+      invalidated || this.decision === null ? fresh : unionClaimDecisions(this.decision, fresh);
+    this.identity = identity;
+    for (const fact of input.facts) {
+      this.seen.add(fact.runId);
+      if (fact.status !== 'running') this.settled.add(fact.runId);
+      if (fact.input.length > 0) this.fed.add(fact.runId);
+    }
+    return this.decision;
+  }
+
+  /** 五个一次性转换（新 run / 转终态 / 首次拿到输入）：各只触发一次，不是内容抖动。 */
+  private needsRunRerun(facts: readonly ClaimRunFacts[]): boolean {
+    for (const fact of facts) {
+      if (!this.seen.has(fact.runId)) return true;
+      if (fact.status !== 'running' && !this.settled.has(fact.runId)) return true;
+      if (fact.input.length > 0 && !this.fed.has(fact.runId)) return true;
+    }
+    return false;
+  }
+}
+
+function sameClaimIdentity(a: ClaimIdentity, b: ClaimIdentity): boolean {
+  return (
+    a.history === b.history &&
+    a.sessionId === b.sessionId &&
+    a.epoch === b.epoch &&
+    a.windowStart === b.windowStart &&
+    a.windowEnd === b.windowEnd
+  );
+}
+
+/** 单调合并：身份没变时的重判只许**加**，不许撤销已经成立的让位 / 交棒。 */
+function unionClaimDecisions(previous: ClaimDecision, fresh: ClaimDecision): ClaimDecision {
+  const claimedUserByRun = new Map(previous.claimedUserByRun);
+  for (const [runId, absIndex] of fresh.claimedUserByRun) {
+    if (!claimedUserByRun.has(runId)) claimedUserByRun.set(runId, absIndex);
+  }
+  const yieldedAnchors = new Set(previous.yieldedAnchors);
+  for (const anchor of fresh.yieldedAnchors) yieldedAnchors.add(anchor);
+  const yieldedTexts = new Set(previous.yieldedTexts);
+  for (const text of fresh.yieldedTexts) yieldedTexts.add(text);
+  const handover = new Map(previous.handover);
+  for (const [runId, request] of fresh.handover) {
+    const before = handover.get(runId);
+    handover.set(runId, {
+      segments: [...new Set([...(before?.segments ?? []), ...request.segments])],
+      callIds: [...new Set([...(before?.callIds ?? []), ...request.callIds])],
+    });
+  }
+  return {
+    claimedUserByRun,
+    claimedAssistant: new Set([...previous.claimedAssistant, ...fresh.claimedAssistant]),
+    yieldedAnchors,
+    yieldedTexts,
+    handover,
+    stats: fresh.stats,
+  };
+}
+
+/** 这一段 live 正文 / 思考是否已经让位给历史（锚点优先，缺锚点时回落内容）。 */
+function isYielded(
+  decision: ClaimDecision,
+  item: { kind: string; text: string; anchorSeq?: number },
+): boolean {
+  if (item.anchorSeq !== undefined && decision.yieldedAnchors.has(item.anchorSeq)) return true;
+  return decision.yieldedTexts.has(normalizeText(item.text));
 }
 
 /**
@@ -1032,8 +1456,19 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     input.historyIndex ??
     buildHistoryIndex(input.messages, input.messageIndexOffset, input.isHidden, input.noticeKindOf);
   const live = input.liveItems ?? buildLiveItems(input.liveGroups);
-  const claims = runClaims(input.liveGroups, live);
-  const { claimedAssistant, claimedUserByRun } = claimMessages(claims, history);
+  // 认领结论：装配面（`useChatTranscript`）用 `ClaimLedger` 一次性判定并粘住，挂在
+  // `historyIndex.claims` 上（见 `HistoryIndex.claims` 的说明）；没有账本的一次性路径
+  // （门禁 / 子 agent 详情）现算一遍同一段判据 —— 两条路径只有「粘不粘」的区别。
+  const decision =
+    input.claims ??
+    history.claims ??
+    oneShotClaims(history, claimRunFactsOf(input.liveGroups));
+  const { claimedUserByRun } = decision;
+  /** run → 是否仍在跑（弱下限的 ts 夹取用；内容项本身不再参与认领计算）。 */
+  const runState = new Map<string, { running: boolean }>();
+  for (const group of input.liveGroups) {
+    runState.set(group.runId, { running: group.status === 'running' });
+  }
 
   // 弱下限的锚点：**人说的最后一句**的 ts。runtime 上下文（`vessel:*`）也是 role 'user'，
   // 但它是模型侧上下文、不是 turn 锚点 —— 算进去会把「运行中且自己没有 ts」的 run 拖到
@@ -1055,34 +1490,15 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
   const items: TranscriptItem[] = [];
   for (const item of history.items) {
     // 被认领的 assistant 消息**照常保留**（位置 / key / 操作按钮都以历史为准）；
-    // 让位的是 live 侧的同文段（见下面的 claimedTexts），这样两边顺序一致。
+    // 让位的是 live 侧的同文段（见认领账本的 `yieldedAnchors` / `yieldedTexts`），
+    // 这样两边顺序一致。
     // 思考同理：历史消息的 reasoning_content 由 Transcript.tsx 的 TranscriptMessage 渲染，
-    // live 侧同一份思考按内容让位（claimedReasoning），所以不会双出。
+    // live 侧同一份思考按内容让位，所以不会双出。
     // 历史已落盘的调用**照常保留**：位置与 ts 由历史决定，live 只补充执行态
     // （key 相同，`mergeByKey` 会合并）。丢掉历史这一条会让顺序与「只有 history」不一致。
     items.push(item);
   }
 
-  const claimByRun = new Map(claims.map((claim) => [claim.runId, claim]));
-  // 已落盘的 assistant 参考（reasoning_content）：live 的同文思考段让位，避免重复。
-  const claimedReasoning = new Set<string>();
-  for (const message of history.messageByIndex.values()) {
-    const reasoning = (message as { reasoning_content?: string }).reasoning_content;
-    if (typeof reasoning === 'string' && reasoning.trim().length > 0) {
-      claimedReasoning.add(normalizeText(reasoning));
-    }
-  }
-  // 已落盘的 assistant 正文：live 的同文段不再单独成 item（它就是那条消息）。
-  const claimedTexts = new Set<string>();
-  for (const absIndex of claimedAssistant) {
-    const content = history.contentByIndex.get(absIndex);
-    if (content !== undefined && content.length > 0) claimedTexts.add(normalizeText(content));
-  }
-  // 每个 run 的最后一段正文（streaming 的尾巴算最后一段）。
-  const lastTextKeyByRun = new Map<string, string>();
-  for (const item of live) {
-    if (item.kind === 'run-text') lastTextKeyByRun.set(item.runId, item.key);
-  }
   for (const item of live) {
     const runId = 'runId' in item ? item.runId : undefined;
     // 输入已被历史消息认领：历史那条负责渲染，run 侧那份丢弃（绝不两个气泡 / 两张卡）。
@@ -1093,17 +1509,24 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
       if (item.kind === 'runtime-notice') continue;
       if (item.kind === 'ask-answer') continue;
     }
-    const claim = runId === undefined ? undefined : claimByRun.get(runId);
-    if (claim === undefined) {
+    const state = runId === undefined ? undefined : runState.get(runId);
+    if (state === undefined) {
       items.push(item);
       continue;
     }
     // 这段正文对应的 assistant 消息已经落盘 → 由历史消息负责渲染（位置、key、操作按钮
     // 都是历史的），live 只在前者不存在时出现。**不改 key、不合并**，所以
     // order(live+history) 的 key 序列与 order(history only) 一致。
-    if (item.kind === 'run-text' && claimedTexts.has(normalizeText(item.text))) continue;
-    if (item.kind === 'run-reasoning' && claimedReasoning.has(normalizeText(item.text))) continue;
-    const claimedUser = claimedUserByRun.get(claim.runId);
+    //
+    // 判据是**账本里的让位集合**（按段锚点），不是「这一帧的内容相等」：正文继续增长
+    // 不会让已成立的让位失效（DESIGN.md §4.2 规则 1，消除抖动型重复）。
+    if (
+      (item.kind === 'run-text' || item.kind === 'run-reasoning') &&
+      isYielded(decision, item)
+    ) {
+      continue;
+    }
+    const claimedUser = claimedUserByRun.get(runId);
     const claimedUserTs =
       claimedUser === undefined ? undefined : history.messageByIndex.get(claimedUser)?.timestamp;
     // 强下限（认领到的用户消息）总是生效：run.started 比用户消息落盘早几毫秒。
@@ -1111,7 +1534,7 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     // 旧 run 卡片」会被拽到新卡片后面，屏幕上时间看起来倒序（F9 守这一条）。
     const strong = claimedUserTs !== undefined ? claimedUserTs + 1 : undefined;
     const weak =
-      claim.running && item.ts === undefined && lastUserTs !== undefined
+      state.running && item.ts === undefined && lastUserTs !== undefined
         ? lastUserTs + 1
         : undefined;
     const floor = strong ?? weak;
