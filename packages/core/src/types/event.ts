@@ -52,6 +52,15 @@ export interface LlmRequestPayload extends BaseEventPayload {
   tools_count?: number;
   /** 上下文窗口的 token 估算（增量缓存里现成的值，不重扫历史） */
   estimated_tokens?: number;
+  /**
+   * 上下文窗口（context window）上限：`workingContext.maxTokens` 的**运行时真值**
+   * （与 `context.pressure.max` 同一个分母），随事件落盘。
+   *
+   * 落盘 = 历史会话自足：读侧（`sessions.get.context_usage.max`）优先用它，不再
+   * 回推「当时的 `config.context.maxTokens`」。旧日志没有该字段 ⇒ 仍回退配置值。
+   * 实现不提供窗口时缺省（不写 0、不猜）。
+   */
+  context_max?: number;
   /** 本次请求在重试链（传输层 / overflow）里的第几次（1 起；>1 = 重试） */
   attempt?: number;
   temperature?: number;

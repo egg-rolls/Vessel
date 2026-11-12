@@ -38,15 +38,17 @@ export interface SessionRunLookup {
 /**
  * 会话级上下文用量（`sessions.get.context_usage`，additive）。
  *
- * `used` = 该会话最近一次真实用量；`max` 缺省 = 上下文窗口未知（客户端据此不画
- * 比例）；`at` = 那条事件的 `ts`；`source` = 这个数字是谁给的（自查用）。
+ * `used` = 该会话最近一次真实用量；`max` = 上下文窗口上限（优先取事件里随
+ * `llm.request` 落盘的真值，旧日志才回退配置值）；`at` = 那条事件的 `ts`；
+ * `source` = 这个数字是谁给的（自查用；`request` = `used`/`max` 同源于那条
+ * `llm.request` 的落盘元信息）。
  * **整字段缺省 = 没有可用数据**，不写 0、不写 null。
  */
 export interface SessionContextUsage {
   used: number;
   max?: number;
   at?: number;
-  source?: 'pressure' | 'changed' | 'estimated' | 'prompt';
+  source?: 'pressure' | 'changed' | 'estimated' | 'prompt' | 'request';
 }
 
 /**
@@ -497,7 +499,8 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       ...(source === 'pressure' ||
       source === 'changed' ||
       source === 'estimated' ||
-      source === 'prompt'
+      source === 'prompt' ||
+      source === 'request'
         ? { source }
         : {}),
     };

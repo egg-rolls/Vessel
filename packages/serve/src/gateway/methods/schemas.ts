@@ -143,7 +143,9 @@ export const runStatusSchema = {
  *
  * **整字段缺省 = 没有可用数据**（新会话还没跑过 / 尾部没有用量事件），不是 0、不是 null。
  * `max` 缺省表示上下文窗口未知 —— 客户端据此不画比例（不假造）。
- * `source` 只是自查字段（这个数字来自哪条事件的哪个字段），UI 不消费。
+ * `source` 只是自查字段（这个数字来自哪条事件的哪个字段），UI 不消费；
+ * `request` = `used` / `max` 同源于那条 `llm.request` 的落盘元信息
+ * （`estimated_tokens` + `context_max`）。
  */
 export const contextUsageSchema = {
   type: 'object',
@@ -152,7 +154,7 @@ export const contextUsageSchema = {
     used: { type: 'integer', minimum: 0 },
     max: { type: 'integer', minimum: 0 },
     at: { type: 'number' },
-    source: { type: 'string', enum: ['pressure', 'changed', 'estimated', 'prompt'] },
+    source: { type: 'string', enum: ['pressure', 'changed', 'estimated', 'prompt', 'request'] },
   },
 };
 

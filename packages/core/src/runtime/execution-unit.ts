@@ -1689,6 +1689,15 @@ export class ExecutionUnit {
         tool_names: args.tools.map((tool) => tool.function.name),
       });
 
+      // 上下文窗口（context window）的**运行时真值**：与 `context.pressure.max`、
+      // 自动压缩阈值用的是同一个分母（`workingContext.maxTokens`）。实现不提供时
+      // （缺省 `undefined`）就不写这个字段 —— 读侧退回配置兜底，不在这里编一个数。
+      const rawContextMax = execution.workingContext.maxTokens;
+      const contextMax =
+        typeof rawContextMax === 'number' && Number.isFinite(rawContextMax) && rawContextMax > 0
+          ? Math.floor(rawContextMax)
+          : undefined;
+
       // 发布 LLM 请求事件（事件里剔除 reasoning_content，避免思维链泄漏到 TUI/观测）。
       //
       // 落盘副本（`persistData`）只留元信息：`messages` / `tools` 正文永远不落。
@@ -1716,6 +1725,11 @@ export class ExecutionUnit {
             tools_count: args.tools.length,
             // 增量缓存的现成值（有真实锚点就返回锚点），不在这里重扫整段历史。
             estimated_tokens: execution.workingContext.tokenCount,
+            // 上下文窗口上限随事件落盘（与 `estimated_tokens` 并列的一个整数）：
+            // 历史会话因此自足 —— 读侧（`sessions.get.context_usage.max`）不必再
+            // 回推「当时的配置值」，按 agent / 模型配不同窗口时也不会串。
+            // 只加这一个整数：`messages` / `tools` 正文照旧不落盘。
+            ...(contextMax !== undefined ? { context_max: contextMax } : {}),
             attempt,
             stream: true,
             ...(this.includeReasoning ? { include_reasoning: true } : {}),
