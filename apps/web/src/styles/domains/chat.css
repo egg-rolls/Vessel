@@ -401,19 +401,6 @@
   flex: 1 1 100%;
 }
 
-.stream-notice-input {
-  min-width: 0;
-  flex: 1 1 240px;
-  color: var(--ink);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.stream-notice-action {
-  flex: none;
-  margin-left: auto;
-}
-
 /* 运行中但还没有任何可见内容时的低干扰占位（0.17）。 */
 
 .run-waiting {
@@ -769,6 +756,24 @@
   min-width: 0;
   flex: 1 1 auto;
   overflow-wrap: anywhere;
+}
+
+/* 排队卡（StreamCard + notice 家族卡面，domains/chat/StreamItems.tsx 的 `QueuedNotice`）：
+   时间线与待处理条带是同一张卡，所以这里改一处两边一起变。
+
+   **卡头左侧只留一个状态标记**：`StatusChip` 的字形（○ 排队 / – 已取消）已经在卡头里，
+   家族的身份圆点再点一个就是并排两个圆点（用户报过「圆点重复」）。作用域只到这张卡
+   （`.stream-card-queued`），失败卡 / 环境卡 / 运行时提示卡的圆点数量与位置都不变。
+
+   宽度不在这里写：卡是块级卡面（`.notice-block`），卡头 / 取消 / 展开体天生按列宽排，
+   短输入与多行输入卡宽一致。别再给这张卡挂 `.stream-notice` —— 那是「一行 notice」的行
+   flex，套在卡上会让卡头和展开体各自贴着内容宽度，看着就是「卡宽随内容变」。原来给那条
+   行 flex 定位的 `.stream-notice-input` / `.stream-notice-action` 随之删除（没有使用点的
+   class 不留在样式表里）。 */
+
+.notice-block.stream-card-queued > summary::before,
+.notice-block.stream-card-queued > .event-block-summary::before {
+  content: none;
 }
 
 /* ask_user：与 permission-card 一样渲染在 Composer 槽位。 */
