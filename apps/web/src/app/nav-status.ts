@@ -2,8 +2,9 @@
  * Status 导航组的状态点推导（纯函数，便于单测）。
  *
  * - Gateway 的「live」状态来自 WebSocket 连接状态；
- * - Hub 状态来自 Hub 页直连的快照（`gateway/platform/hub-storage`），不再从
- *   `config.get.hub` 推导；未配置时 muted，未访问过 Hub 页时按「未知」处理；
+ * - Hub 状态来自浏览器 → Hub 的直连快照（`gateway/platform/hub-storage`），不再从
+ *   `config.get.hub` 推导：启动探测（`useNavStatus` 的 `probeHubNavStatus`）与 Hub 页
+ *   共写同一份 store；未配置时 muted，还没探到时按「未知」处理；
  * - 版本来自 `config.get` 的 additive `version` 字段，旧 gateway 缺失时显示 `—`。
  *
  * 需要 React 绑定时用 `useNavStatus.ts`，本文件不 import provider。
@@ -13,7 +14,15 @@ import type { ConnectionState } from '../gateway/client';
 import type { HubNavStatus } from '../gateway/platform/hub-storage';
 import type { PluginListItem } from '../gateway/types';
 
-export type NavStatusTone = 'ok' | 'warn' | 'danger' | 'muted';
+/**
+ * 导航状态点色档：`ok`（成功）/ `warn`（中性灰提醒）/ `danger`（错误）/
+ * `muted`（无 / 未知）/ `accent`（主题色，Hub 连上了）/ `amber`（真琥珀，进行中）。
+ *
+ * 后两档是给 Hub 状态点单独加的：用户要的四档是「主题色 = 连接成功、错误色 = 出错、
+ * 灰 = 没配置、黄 = 正在连接」。`ok` 与 `warn` 的既有含义（网关连接点用）不变——
+ * `gatewayNavStatus` 仍然只吐 `ok` / `warn` / `danger` / `muted`。
+ */
+export type NavStatusTone = 'ok' | 'warn' | 'danger' | 'muted' | 'accent' | 'amber';
 
 export interface NavStatusMeta {
   tone: NavStatusTone;
@@ -38,22 +47,28 @@ export function gatewayNavStatus(
   return { tone: 'muted', labelKey: 'nav.status.unknown' };
 }
 
-/** Hub 状态点：只反映浏览器 → Hub 的直连状态，不借用 gateway 连接。 */
+/**
+ * Hub 状态点：只反映浏览器 → Hub 的直连状态，不借用 gateway 连接。
+ *
+ * 四档语义（用户口径）：没配置 = 灰（muted）、探测中 = 黄（amber，本仓 `--warn` 是
+ * 中性灰、`--amber` 才是真黄）、连上 = 主题色（accent）、出错 = 错误色（danger，
+ * `unauthorized` / `incompatible` / `network` 三类共用红色，靠文案区分）。
+ */
 export function hubNavStatus(status: HubNavStatus): NavStatusMeta {
   switch (status) {
     case 'unconfigured':
       return { tone: 'muted', labelKey: 'nav.status.hubNotConfigured' };
     case 'loading':
-      return { tone: 'warn', labelKey: 'nav.status.connecting' };
+      return { tone: 'amber', labelKey: 'nav.status.connecting' };
     case 'connected':
     case 'empty':
-      return { tone: 'ok', labelKey: 'nav.status.hubConnected' };
+      return { tone: 'accent', labelKey: 'nav.status.hubConnected' };
     case 'unauthorized':
       return { tone: 'danger', labelKey: 'nav.status.hubUnauthorized' };
     case 'incompatible':
       return { tone: 'danger', labelKey: 'nav.status.hubIncompatible' };
     case 'network':
-      return { tone: 'warn', labelKey: 'nav.status.hubNetwork' };
+      return { tone: 'danger', labelKey: 'nav.status.hubNetwork' };
     default:
       return { tone: 'muted', labelKey: 'nav.status.unknown' };
   }

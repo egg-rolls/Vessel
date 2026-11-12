@@ -57,7 +57,7 @@ export function NavItem({
       {!collapsed && status && (
         <>
           <span
-            className="size-1.5 flex-none rounded-full bg-faint data-[tone=ok]:bg-success data-[tone=warn]:bg-warn data-[tone=warn]:pulse-soft data-[tone=danger]:bg-danger"
+            className="size-1.5 flex-none rounded-full bg-faint data-[tone=ok]:bg-success data-[tone=warn]:bg-warn data-[tone=warn]:pulse-soft data-[tone=accent]:bg-accent data-[tone=amber]:bg-amber data-[tone=amber]:pulse-soft data-[tone=danger]:bg-danger"
             data-tone={status.tone}
             role="img"
             aria-label={statusText}

@@ -127,7 +127,9 @@ export function clearHubConnection(): void {
 
 /**
  * 导航状态点：Hub 页直连 Hub，与 gateway 轮询无关。
- * 页面 hook 写入；未被访问过时，仅凭已存 URL 报 `unknown`（不谎报绿色）。
+ * 两个写入者共用这一份 store：启动探测（`app/useNavStatus` 的 `probeHubNavStatus`，
+ * 打开 WebUI / gateway 会话重建时各一次）与 Hub 页 hook；都没探过时按「未知」报，
+ * 未配置时 `unconfigured`（不谎报主题色）。
  * `version` 来自 Hub directory（0.50 additive）；离开 Hub 页后保留最近已知版本。
  */
 export type HubNavStatus =
