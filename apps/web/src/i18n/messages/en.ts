@@ -1393,27 +1393,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'integrations.tools.policyChecking': 'Checking gateway capabilities…',
   'integrations.tools.policyUnsupported': 'Requires a newer gateway.',
   'integrations.tools.policyLoadFailed': 'Could not read the permission config: {detail}',
-  'integrations.tools.scopeLabel': 'Tool surface',
-  'integrations.tools.scopeNode': 'Node plugin surface',
-  'integrations.tools.scopeNodeHint':
-    'Node plugin surface: what the node registered as plugins. It is not narrowed per member and does not include member built-ins such as inbox.',
-  'integrations.tools.scopeMemberLiveHint':
-    'Tool surface of {agent} read from its live body ({count} tools). Tools marked "member built-in" are not in the node plugin surface.',
-  'integrations.tools.scopeMemberDerivedHint':
-    '{agent} has no live body right now; these {count} tools are derived from the same rules a new body would spawn with (nothing was started).',
-  'integrations.tools.scopeMemberUnknownHint':
-    'This gateway did not answer with a member tool surface, so the list below is the node plugin surface, not what {agent} can call.',
-  'integrations.tools.surfaceLive': 'Live body',
-  'integrations.tools.surfaceDerived': 'Derived (no body)',
-  'integrations.tools.surfaceUnavailable': 'Surface unknown',
-  'integrations.tools.sourceMember': 'Member built-in',
-  'integrations.tools.emptyMember': '{agent} has no tools right now.',
-  'integrations.tools.unavailableTitle': 'Node tools {agent} cannot use:',
-  'integrations.tools.unavailableHint':
-    'A member can use every node tool; these are blocked by a rule (not missing from the node, and not a gap in this panel).',
-  'integrations.tools.unavailableParentAnswered': 'Needs a human reply: no bridge on this body',
-  'integrations.tools.unavailableReadonlyMode': 'Dropped in read-only mode',
-  'integrations.tools.unavailableUnknown': 'Not on this body yet (pending tool refresh)',
   'integrations.mcp.globalDesc': 'The MCP control plane is gateway-global.',
   'integrations.mcp.counts': '{total} servers · {failed} failed',
   'integrations.mcp.reconnectAll': 'Reconnect all failed ({count})',

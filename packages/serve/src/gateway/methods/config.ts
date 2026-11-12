@@ -94,10 +94,10 @@ export interface ConfigMethodsDeps {
   pluginsReload?: () => Promise<PluginReloadResult>;
   pluginHost(): PluginHost | undefined;
   /**
-   * 0.51（additive）：成员工具面的解析口（app 注入 `AgentControlLike`）。
-   * 缺省 / 适配器没实现 `toolSurface` ⇒ `tools.list{agent_id}` **退化成今天的节点插件面**
-   * （响应没有 `surface` / `source`，客户端据此不当成员快照）；不传 `agent_id` 的口径
-   * 在任何情况下都不受影响。
+   * 0.51（additive）：按身体读工具清单的解析口（app 注入 `AgentControlLike`）。
+   * 缺省 / 适配器没实现 `toolSurface` ⇒ `tools.list{agent_id}` 退化成节点口径（同一个
+   * `{ tools }` 形状，客户端分辨不出也不需要分辨）；不传 `agent_id` 的口径在任何情况下
+   * 都不受影响。
    */
   agent?: AgentControlLike;
   /** health.get 的实时状态。 */
@@ -359,7 +359,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
 export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[] {
   const { pluginHost } = deps;
 
-  /** 节点口径：节点插件宿主注册了什么（不传 `agent_id` 的旧行为，字段一个不动）。 */
+  /** 节点口径：节点插件宿主注册了什么（`tools.list` 的唯一资源形状）。 */
   function toolsPayload(): { tools: ToolInfo[] } {
     const tools = pluginHost()?.listTools() ?? [];
     return {
@@ -379,7 +379,9 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
       params_schema: {
         type: 'object',
         properties: {
-          // additive 0.51：给了就答「这个成员的身体实际注册了什么」，不传完全是旧行为。
+          // 0.51（deprecated，仅诊断）：只决定「按哪具成员身体去读」，不改变资源形状。
+          // 成员用的就是节点那一份工具面；这个参数留着是因为成员身体上还有运行期
+          // 注入的工具（`inbox`，待插件化后归位），排查时需要能按身体读一次。
           agent_id: { type: 'string', minLength: 1 },
         },
       },
@@ -387,6 +389,7 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
         type: 'object',
         required: ['tools'],
         properties: {
+          // 只有一份工具清单：传不传 `agent_id` 都是这个形状。
           tools: {
             type: 'array',
             items: {
@@ -397,29 +400,6 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
                 description: { type: 'string' },
                 input_schema: { type: 'object' },
                 has_permission_check: { type: 'boolean' },
-                // 只在 `agent_id` 分支出现：`plugin` = 节点插件面，`member` = 成员运行期注入
-                // （`inbox`）。节点口径不带它，旧响应逐字段不变。
-                source: { type: 'string', enum: ['plugin', 'member'] },
-              },
-            },
-          },
-          // 以下两个字段同样只在 `agent_id` 分支出现。
-          agent_id: { type: 'string' },
-          // `live` = 该成员活身体宿主里实取；`derived` = 当前没有活身体，
-          // 按「一具新身体会拿到什么」推导（同一套 selectTools + inbox 判定，不 spawn）。
-          surface: { type: 'string', enum: ['live', 'derived'] },
-          // 节点有、这具成员身体拿不到的工具 + 原因（0.51 additive，执行内核算，serve
-          // 只透传）。成员工具面 = 节点全量，剩下能挡的只有 deny 只读档与「要人类应答
-          // 但没 bridge」两条，所以这条清单是口径的一部分，不是调试信息：界面要能说清
-          // 「不是漏了，是被规则挡的」。
-          unavailable: {
-            type: 'array',
-            items: {
-              type: 'object',
-              required: ['name', 'reason'],
-              properties: {
-                name: { type: 'string' },
-                reason: { type: 'string', enum: ['parent_answered', 'readonly_mode', 'unknown'] },
               },
             },
           },
@@ -432,21 +412,15 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
         // 不自己拼工具清单，否则就成了第二份会腐烂的规格。
         const agent = deps.agent;
         const resolve = agent?.toolSurface;
-        // 没有这个透传（老装配 / agent 关闭）⇒ **退化成今天的节点口径**：响应里没有
-        // `surface` / `source` / `unavailable`，客户端据此知道「这不是成员快照」，
-        // 既不 500，也不假装答得出。
+        // 没有这个透传（老装配 / agent 关闭）⇒ 退化成节点口径：形状本来就一样，
+        // 既不 500，也不假装答出了那具身体上的运行期工具。
         if (agent === undefined || resolve === undefined) return toolsPayload();
-        const surface = await resolve.call(agent, agentId);
-        // 有透传但这个 id 答不出工具面（未知成员 / 老执行内核）：not_found，绝不静默返回空列表。
-        if (surface === undefined) {
+        const tools = await resolve.call(agent, agentId);
+        // 有透传但这个 id 答不出（未知成员 / 老执行内核）：not_found，绝不静默返回空列表。
+        if (tools === undefined) {
           throw new RpcError('not_found', `Agent not found: ${agentId}`, { agent_id: agentId });
         }
-        return {
-          agent_id: agentId,
-          surface: surface.surface,
-          tools: surface.tools,
-          unavailable: surface.unavailable,
-        };
+        return { tools };
       },
     },
   ];

@@ -32,7 +32,7 @@ paths: [apps/web/**, packages/serve/src/gateway/**]
 - **平台 URL**：`localStorage['vessel.gateway-url']` 语义 = 平台 origin；空串 = 页面同源。仅接受 `http(s)://host[:port]` origin；非回环必须 https。node URL 来自 registry，不由用户输入拼装。
 - **独立前端**：可把 `apps/web/dist` 部署到任意静态站点；服务端配置 `serve.allowed_origins` 允许该 Origin（CORS + WS upgrade），浏览器需信任 gateway 证书。同源部署仍由 gateway 托管 `dist`。
 - 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask 表单。
-- **工具面板的两种口径（0.51）**：默认「节点插件面」（`tools.list` 不传参数，与今天一致）；在面板里选一个成员即切到该成员**真实**的工具面（`tools.list{agent_id}`），并标出 `surface`（活身体实取 / 无活身体推导）与 `source: 'member'`（`inbox` 这类成员内置、不在节点插件面里的工具）。成员工具面是「节点全量」，所以面板把「节点有、这个成员拿不到」的工具单列成一段并标原因（`unavailable`：需人类应答 / 只读档收掉 / 这具身体还没刷新到）—— 目的是一眼看出被规则挡住，而不是面板漏了。旧 gateway 忽略该参数、或装配层没有这个透传时都照旧返回插件面（响应无 `surface`），界面按「工具面未知」展示，不冒充成员口径，也不渲染那段 blocked 清单。
+- **工具面板只有一份清单（0.51）**：`tools.list` 不传参数，把节点那一份工具平铺列出来 —— 插件工具与其它工具不分组、不徽标，也不再有成员选择器 / `surface` / `source` / 「被规则挡住」清单（用户裁定：成员用的就是节点有的那一份，不要区分）。可选 `agent_id` 只在诊断时按某具成员身体读同一份清单，响应形状不变；`inbox` 仍是成员运行期注入、暂时不在清单里，待 inbox 插件化后自然归位。
 - **工具卡的描述目录**：`ToolCatalogProvider` 在知道当前会话的成员 id 时（chat 的 `activeAgent`）带 `agent_id` 拉一次，`inbox` 这类卡片的描述不再显示「描述不可用」；拿不到 id 时保持原行为（拉节点插件面）。
 - 按 `hello.features` 显示 **MCP server 面板**（`mcp-status`）与 **interrupted run 面板**（`durable-resume`），可触发 durable resume；未启用的 feature 不显示面板。面板 10s 刷新。
 - 按 `hello.features` 显示 **metrics 快照**与 **飞书状态**（`metrics` / `feishu`）；evals 只做 `GET /v1/evals/latest`，不做面板。

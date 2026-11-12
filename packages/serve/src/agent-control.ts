@@ -367,17 +367,16 @@ export interface AgentControlLike {
    */
   recall?(input: AgentRecallLikeInput): AgentRecallLikeResult | Promise<AgentRecallLikeResult>;
   /**
-   * 0.51（可选）：该成员的**真实**工具面（`tools.list{agent_id}` 的唯一数据源）。
+   * 0.51（可选）：按某具成员身体读那一份工具清单（`tools.list{agent_id}` 的唯一数据源）。
    *
-   * **可选**是硬口径：老适配器 / 老注入没有它时，`tools.list{agent_id}` 退化成今天的
-   * 节点插件面（响应没有 `surface` / `source`），谁都不会因此炸；不传 `agent_id` 的口径
-   * 在任何情况下不受影响。有透传但答不出（未知成员 / 老执行内核）返回 `undefined`
-   * ⇒ RPC 报 `not_found`，不静默给空列表。
-   * 数据来自执行内核的真实注册路径 —— 这里只透传，不自己拼工具清单。
+   * **可选**是硬口径：老适配器 / 老注入没有它时，`tools.list{agent_id}` 退化成节点口径
+   * （同一个 `{ tools }` 形状），谁都不会因此炸；不传 `agent_id` 的口径在任何情况下不受
+   * 影响。有透传但答不出（未知成员 / 老执行内核）返回 `undefined` ⇒ RPC 报 `not_found`，
+   * 不静默给空列表。数据来自执行内核的真实注册路径 —— 这里只透传，不自己拼工具清单。
    */
   toolSurface?(
     agentId: string,
-  ): AgentToolSurfaceLike | undefined | Promise<AgentToolSurfaceLike | undefined>;
+  ): AgentToolEntryLike[] | undefined | Promise<AgentToolEntryLike[] | undefined>;
   /**
    * `sessions.create`（CREATE-0.39）：同 agent 新 session，成为唯一 primary。
    * 失败以 AgentError 形状（`code` + `message`）reject，RPC 层统一映射。
@@ -395,36 +394,16 @@ export interface AgentControlLike {
 }
 
 /**
- * 成员工具面条目（`tools.list{agent_id}` 的 `tools[]`）：与节点口径同形状，多一个来源。
+ * 工具条目（`tools.list` 的 `tools[]`）：节点与成员是同一种形状。
  *
- * - `plugin`：来自父宿主（节点插件面，即不传 `agent_id` 时看到的那一层）；
- * - `member`：成员运行期注入、**不在节点插件面里**（当前只有 `inbox`）。
+ * 没有 `source` / `surface` 之类第二层字段 —— 0.51 用户裁定「成员用的就是节点有的那一份，
+ * 不要区分成员工具面和节点工具面」，那一层连同 `unavailable` 一起删掉了。
  */
-export interface AgentToolSurfaceEntryLike {
+export interface AgentToolEntryLike {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
   has_permission_check: boolean;
-  source: 'plugin' | 'member';
-}
-
-/** 成员工具面快照：`live` = 活身体实取，`derived` = 无身体时按 spawn 规则推导。 */
-export interface AgentToolSurfaceLike {
-  surface: 'live' | 'derived';
-  tools: AgentToolSurfaceEntryLike[];
-  /**
-   * 节点有、这具成员身体拿不到的工具 + 原因（0.51 additive）。
-   *
-   * 判据由执行内核算（只有它知道「为什么没给」），serve 只透传，不在这一层重新解释。
-   * reason 的含义见 `MemberToolUnavailableReason`。
-   */
-  unavailable: AgentToolSurfaceUnavailableLike[];
-}
-
-/** 被挡在成员工具面外的一条工具：只给名字与原因（键面与 `tools[]` 不同）。 */
-export interface AgentToolSurfaceUnavailableLike {
-  name: string;
-  reason: 'parent_answered' | 'readonly_mode' | 'unknown';
 }
 
 /** `agents.inbox` 入参（只读）。 */

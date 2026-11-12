@@ -33,10 +33,12 @@
     enum 读真实动作（`readMediaSurface`），三档语义不变（有真动作 / 无工具 / 读不到⇒中性）。
   - **设计实验室两缺口**：`CHIP_TONES` / `COMPOSER_ICON_TONES` 补 preview；`EntityHeader`
     尺寸档进运行时表（`ENTITY_HEADER_SIZES` + `satisfies Record<...>` 双向钉住）。
-  - **`tools.list { agent_id }`**：按成员看真实工具面（含 `inbox` 这类成员运行期注入的工具，
-    `source` 标明来源；`surface: live|derived` 区分实取与推导）。数据唯一来源是
-    `MemberExecutionHost.toolSurface()`，spawn / 热刷新 / 推导共用一份 `buildSurface`。
-    Web 侧工具面板加成员选择，工具卡描述目录按「会话 → 成员」派生自动带上 `agent_id`。
+  - **`tools.list { agent_id }`**：成员用的就是节点那一份工具面（0.51 用户裁定「不要区分
+    成员工具面和节点工具面，插件也是」），所以响应只有一个形状 `{ tools }`，没有
+    `surface` / `source` / `unavailable`；`agent_id` 降级为仅诊断（决定按哪具身体读同一份
+    清单，`inbox` 仍是成员运行期注入、待插件化后归位）。数据唯一来源仍是
+    `MemberExecutionHost.toolSurface()`，spawn / 热刷新 / 按身体读共用一份 `buildSurface`。
+    Web 侧工具面板删掉成员选择器与全部来源/取值徽标，只留一份平铺清单。
 
 - **Platform Gateway / Node API 已拆分**：Gateway 8642（平台入口、UI 宿主、`platform.*`
   只读 RPC），Node API 8644（公司 runtime/数据）；平台 token 与 per-node token 分离；

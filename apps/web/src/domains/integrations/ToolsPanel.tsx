@@ -10,16 +10,9 @@ import {
   NotEnabledState,
   StaleNotice,
 } from '../../components/States';
-import { Badge, Button, SearchInput, Select } from '../../components/ui';
+import { Badge, Button, SearchInput } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
-import type {
-  AgentSummary,
-  ToolInfo,
-  ToolListResponse,
-  ToolSurface,
-  ToolUnavailable,
-  ToolUnavailableReason,
-} from '../../gateway/types';
+import type { ToolInfo } from '../../gateway/types';
 import { t } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
@@ -32,17 +25,6 @@ import {
   readPermissionLists,
   toolPolicyOf,
 } from './tool-policy';
-
-/** `agents.list` 条目的稳定 id（旧 gateway 只带 `agent_id`）。 */
-function memberIdOf(member: AgentSummary): string {
-  return member.id ?? member.agent_id ?? '';
-}
-
-/** 成员选择器的展示名：优先 name，其次 id（不为了好看再造一个字段）。 */
-function memberLabelOf(member: AgentSummary): string {
-  const name = member.name?.trim();
-  return name ? `${name} (${memberIdOf(member)})` : memberIdOf(member);
-}
 
 /** 从 `config.get` 的权限数组推导卡片徽章（不再使用 `has_permission_check`）。 */
 function ToolPolicyBadge({ tool, lists }: { tool: string; lists: PermissionLists }) {
@@ -57,127 +39,31 @@ function ToolPolicyBadge({ tool, lists }: { tool: string; lists: PermissionLists
   );
 }
 
-/**
- * 「来源」徽章：只在成员视图里出现。
- *
- * `member` = 成员运行期注入（`inbox`），**不在节点插件面里** —— 节点视图永远看不到它，
- * 这正是这个面板要能一眼说清的事；`plugin` 则来自父宿主（节点插件面）。
- */
-function ToolSourceBadge({ tool }: { tool: ToolInfo }) {
-  if (tool.source === undefined || tool.source === 'plugin') return null;
-  return <Badge tone="accent">{t('integrations.tools.sourceMember')}</Badge>;
-}
-
-/** 成员工具面的取值档位：`live` = 活身体实取，`derived` = 无身体时按规则推导。 */
-function SurfaceBadge({ surface }: { surface: ToolSurface | undefined }) {
-  if (surface === undefined) {
-    return <Badge tone="warn">{t('integrations.tools.surfaceUnavailable')}</Badge>;
-  }
-  return (
-    <Badge tone={surface === 'live' ? 'success' : 'neutral'}>
-      {t(
-        surface === 'live' ? 'integrations.tools.surfaceLive' : 'integrations.tools.surfaceDerived',
-      )}
-    </Badge>
-  );
-}
-
-/**
- * 「节点有、这个成员拿不到」的原因文案。
- *
- * 用 switch 而不是拼 key 字符串：这样每个 key 都是以字面量出现在 `t()` 实参位置，
- * `check-i18n` 的 I2 / I5 才看得见（helper 里拼出来的 key 会被判成孤儿）。
- */
-function unavailableReasonLabel(reason: ToolUnavailableReason): string {
-  switch (reason) {
-    case 'parent_answered':
-      return t('integrations.tools.unavailableParentAnswered');
-    case 'readonly_mode':
-      return t('integrations.tools.unavailableReadonlyMode');
-    default:
-      return t('integrations.tools.unavailableUnknown');
-  }
-}
-
-/**
- * 被规则挡住的工具清单（成员口径才渲染）。
- *
- * 为什么要在工具列表之外单列这一段：成员工具面是「节点全量」，所以「节点里搜得到、
- * 这里搜不到」这件事总有原因。不解释原因，人只会以为面板漏了；把名字 + 规则并排列出来，
- * 才看得出是被一条规则挡的，而不是一次故障。
- */
-function UnavailableTools({ agent, entries }: { agent: string; entries: ToolUnavailable[] }) {
-  return (
-    <section className="flex flex-col gap-2">
-      <h3 className="m-0 flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
-        {t('integrations.tools.unavailableTitle', { agent })}
-        <Badge tone="neutral">{entries.length}</Badge>
-      </h3>
-      <p className="m-0 text-sm text-muted">{t('integrations.tools.unavailableHint')}</p>
-      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-        {entries.map((entry) => (
-          <li className="flex flex-wrap items-center gap-2" key={entry.name}>
-            <span className="min-w-0 break-words font-mono text-sm text-muted">{entry.name}</span>
-            <Badge tone={entry.reason === 'unknown' ? 'warn' : 'neutral'}>
-              {unavailableReasonLabel(entry.reason)}
-            </Badge>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 export function ToolsPanel() {
   const { client, connectionState, hasToken, epoch } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const [query, setQuery] = useState('');
   const [onlyConfirm, setOnlyConfirm] = useState(false);
-  /** 视图口径：空串 = 节点插件面（今天的默认），否则 = 该成员的真实工具面。 */
-  const [agentId, setAgentId] = useState('');
   /** 详情弹窗展示的是点击时的工具快照；搜索 / 过滤始终基于 name + description。 */
   const [detail, setDetail] = useState<ToolInfo | null>(null);
-  // 可选成员清单。旧 gateway / 权限不足时为空：选择器只剩节点口径，行为与今天一致。
-  const membersResource = useResource({
-    load: () => client.listAgents(),
+  /**
+   * 只有一份工具清单：`tools.list` 不传参数，与 CLI / 成员用到的是同一份。
+   *
+   * 曾经这里还有个「节点 / 成员」二选一选择器，配上 `surface` / `source` / `unavailable`
+   * 三种徽标。用户 0.51 裁定「成员用的就是节点有的那一份，不要区分」，那一层整体删掉：
+   * 面板只负责把这一份清单列出来，不再解释「谁拿得到什么」—— 那种解释只在诊断时有用，
+   * 而对使用者只会把「同一个工具面」读成两套能力。
+   */
+  const resource = useResource({
+    load: () => client.listTools(),
     enabled: hasToken,
     deps: [epoch],
-  });
-  const members = useMemo<AgentSummary[]>(() => {
-    const list = resourceData(membersResource.state) ?? [];
-    return list.filter((member) => memberIdOf(member).length > 0);
-  }, [membersResource.state]);
-  // 两种口径共用一条加载路径：`agent_id` 为空 = 节点插件面（不传参数，旧行为）。
-  const resource = useResource({
-    load: async (): Promise<ToolListResponse> => {
-      if (agentId === '') return { tools: await client.listTools() };
-      return await client.listToolsForAgent(agentId);
-    },
-    enabled: hasToken,
-    deps: [epoch, agentId],
   });
   // Shared with the tool-policy dialog: no second config.get for the badges.
   const { config: configState, reloadConfig } = useConfigStoreApi();
   useRefreshSignal(resource.reload);
   useRefreshSignal(reloadConfig);
-  const catalog = resourceData(resource.state);
-  const tools = useMemo(() => catalog?.tools ?? [], [catalog]);
-  /**
-   * 成员口径的档位。`undefined` 有两种情况：节点口径（本就没有这个字段），或
-   * 旧 gateway 忽略了 `agent_id`（照旧回了插件面）—— 界面按「未知」展示，不假装是实取。
-   */
-  const surface = agentId === '' ? undefined : catalog?.surface;
-  /**
-   * 被规则挡在成员面外的工具（节点有这个工具、这个成员没有）。
-   *
-   * 节点口径恒为空；旧 gateway 不返回这个字段 ⇒ 空（不渲染那一段），因为「不知道」不能
-   * 说成「一个都没挡」。
-   */
-  const unavailable = useMemo<ToolUnavailable[]>(
-    () => (agentId === '' ? [] : (catalog?.unavailable ?? [])),
-    [agentId, catalog],
-  );
-  const selectedMember = members.find((member) => memberIdOf(member) === agentId);
+  const tools = useMemo(() => resourceData(resource.state) ?? [], [resource.state]);
   const config = resourceData(configState);
   const permissionLists = useMemo(() => readPermissionLists(config?.config), [config]);
   /** config 不可用时不给策略徽章，也不推断“需确认”。 */
@@ -203,24 +89,6 @@ export function ToolsPanel() {
   }, [tools, query, onlyConfirm, permissionLists, policyKnown]);
   const error = resource.state.status === 'error' ? resource.state.error : null;
   const detailServer = detail ? mcpServerOf(detail.name) : undefined;
-  const agentLabel = selectedMember ? memberLabelOf(selectedMember) : agentId;
-  /**
-   * 视图说明：两种口径的区别 + 成员口径这一份是实取还是推导。
-   *
-   * 旧 gateway 会忽略 `agent_id`（响应里没有 `surface`）：那时候明说「未知」，
-   * 不把插件面冒充成成员实取的快照。
-   */
-  const scopeHint =
-    agentId === ''
-      ? t('integrations.tools.scopeNodeHint')
-      : t(
-          surface === 'live'
-            ? 'integrations.tools.scopeMemberLiveHint'
-            : surface === 'derived'
-              ? 'integrations.tools.scopeMemberDerivedHint'
-              : 'integrations.tools.scopeMemberUnknownHint',
-          { agent: agentLabel, count: tools.length },
-        );
 
   if (!hasToken) {
     return (
@@ -257,23 +125,6 @@ export function ToolsPanel() {
           ariaLabel={t('integrations.tools.searchLabel')}
           className="grow basis-60 max-w-search"
         />
-        <Select
-          className="w-auto min-w-40"
-          value={agentId}
-          aria-label={t('integrations.tools.scopeLabel')}
-          onChange={(event) => {
-            setAgentId(event.target.value);
-            setDetail(null);
-          }}
-        >
-          <option value="">{t('integrations.tools.scopeNode')}</option>
-          {members.map((member) => (
-            <option key={memberIdOf(member)} value={memberIdOf(member)}>
-              {memberLabelOf(member)}
-            </option>
-          ))}
-        </Select>
-        {agentId !== '' && <SurfaceBadge surface={surface} />}
         {policyKnown && (
           <Button
             variant="chip"
@@ -288,17 +139,8 @@ export function ToolsPanel() {
           {filtered.length}/{tools.length}
         </span>
       </TableToolbar>
-      {/* 两种视图必须一眼分得开：节点口径不按成员权限收窄、也不含成员内置工具；
-          成员口径是「这具身体实际能调什么」，`derived` 还额外说明是推导值。 */}
-      <p className="m-0 -mt-3 text-sm text-muted">{scopeHint}</p>
       {tools.length === 0 ? (
-        <EmptyState
-          title={
-            agentId === ''
-              ? t('integrations.tools.empty')
-              : t('integrations.tools.emptyMember', { agent: agentLabel })
-          }
-        />
+        <EmptyState title={t('integrations.tools.empty')} />
       ) : filtered.length === 0 ? (
         <EmptyState
           title={t('integrations.tools.noMatch')}
@@ -330,7 +172,6 @@ export function ToolsPanel() {
                     <span className="min-w-0 break-words font-mono text-sm font-medium text-ink">
                       {tool.name}
                     </span>
-                    {agentId !== '' && <ToolSourceBadge tool={tool} />}
                     {policyKnown && <ToolPolicyBadge tool={tool.name} lists={permissionLists} />}
                     {server && <Badge>MCP · {server}</Badge>}
                   </span>
@@ -349,7 +190,6 @@ export function ToolsPanel() {
           })}
         </div>
       )}
-      {unavailable.length > 0 && <UnavailableTools agent={agentLabel} entries={unavailable} />}
       {detail && (
         <ModalShell
           label={t('integrations.tools.dialogLabel', { name: detail.name })}
@@ -362,7 +202,6 @@ export function ToolsPanel() {
               {detail.name}
             </h2>
             {policyKnown && <ToolPolicyBadge tool={detail.name} lists={permissionLists} />}
-            {agentId !== '' && <ToolSourceBadge tool={detail} />}
             {detailServer && <Badge>MCP · {detailServer}</Badge>}
           </div>
           <div className="flex flex-col gap-1">

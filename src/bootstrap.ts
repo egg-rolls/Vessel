@@ -1090,7 +1090,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
    * 所以「注册」不再等于「进程内有应答者」。
    *
    * 0.51：成员拿不拿 `ask` 已不由这里决定（不再传 `extraTools`）：判据是「父宿主注册了
-   * + 这具身体能 bridge」，缺哪条都由执行内核记进 `tools.list{agent_id}.unavailable`。
+   * + 这具身体能 bridge」，由执行内核在 `selectTools` 一处判定（不再对外解释原因）。
    * 这个标志只剩一个用途 —— `humanApproval`：没有进程内应答者时，模型发起的 rotate
    * 直接走 `rotate_not_needed`，不去等一个不会到来的确认。
    */
@@ -1279,8 +1279,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 0.51：成员工具面 = 节点全量（只剩 deny 只读档与 bridge 两条闸），`ask` 不再由
       // 装配层点名放行。它的可用性现在完全由两条真实事实决定：父宿主真的注册了 `ask`
       // （按入口 + `ui.askUser` 决定），且这具身体能 bridge（`permissionMode: 'bridge'`
-      // + 父事件流）。缺任何一条都进 `unavailable`（reason `parent_answered`），而不是靠
-      // 这里传一个名字。详见 `packages/agent/src/runtime.ts` 的 `toolBlockReason`。
+      // + 父事件流）；缺任何一条就不进工具面，而不是靠这里传一个名字。详见
+      // `packages/agent/src/runtime.ts` 的 `toolBlocked`。
       ...(config.context?.maxTokens !== undefined
         ? { contextMaxTokens: config.context.maxTokens }
         : {}),

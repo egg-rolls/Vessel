@@ -3,7 +3,7 @@
  *
  * 每个成员独占一个 ExecutionUnit / Context / EventStream；工具从父 PluginHost
  * **全量复制**（0.51：节点有什么就给什么，只减 deny 档的只读集合与「需要人类应答但没有
- * bridge」这一条，见 `toolBlockReason`），hooks / guardrails 一并继承。
+ * bridge」这一条，见 `toolBlocked`），hooks / guardrails 一并继承。
  * `permissionMode: 'bridge'` 时
  * 成员的权限/提问请求转发到 `parentEvents`，父级应答原样回灌成员事件流；
  * 没有 `parentEvents` 时退化为 ask → deny（A3a 行为），避免 run 永久等待。
@@ -50,10 +50,7 @@ import type {
   MemberExecutionMember,
   MemberExecutionPort,
   MemberPermissionState,
-  MemberToolSurface,
-  MemberToolSurfaceEntry,
-  MemberToolUnavailableEntry,
-  MemberToolUnavailableReason,
+  MemberToolEntry,
   MemberTurnResult,
 } from './types.js';
 
@@ -454,25 +451,13 @@ interface MemberExecutionEntry {
    * hook 在 spawn 时注册、之后才建 entry，故开关由这个可变对象承载。
    */
   inboxState?: { enabled: boolean };
-  /**
-   * 0.51：这具 body 上「不来自父宿主」的工具名（当前只有运行期注入的 `inbox`）。
-   * 工具热刷新会重建整个宿主，名字集合随注册来源记录在 entry 上，`tools.list{agent_id}`
-   * 才能给每条工具标 `source`，而不是靠工具名去猜。
-   */
-  injectedTools: ReadonlySet<string>;
 }
 
-/** `buildSurface` 的结果：成员应有的工具 + 其中哪些是运行期注入的。 */
+/** `buildSurface` 的结果：成员应有的工具（spawn / 热刷新 / 推导共用这一份规格）。 */
 interface MemberSurfaceBuild {
   mode: MemberExecutionPermissionMode;
   /** 已按 mode / bridge 收窄，按注册顺序排列（父宿主工具 → 注入工具） */
   tools: ToolDefinition[];
-  injected: ReadonlySet<string>;
-  /**
-   * 父宿主有、但被规则挡在成员面外的工具 + 原因（`tools.list{agent_id}.unavailable`）。
-   * 由 `selectTools` 顺手产出：判据只能有一份，不能在这里按名字再猜一遍。
-   */
-  unavailable: MemberToolUnavailableEntry[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -822,21 +807,18 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
 }
 
 /**
- * 0.51：`ToolDefinition` → `tools.list{agent_id}` 的条目。
+ * 0.51：`ToolDefinition` → `tools.list` 的条目。
  *
- * `source` 由注册来源决定而不是按名字猜：`injected` 是运行期注入的那几个
- * （当前只有 `inbox`），其余都来自父宿主的插件面。
+ * 没有来源维度：运行期注入的 `inbox` 与父宿主工具在这里是同一种条目。要恢复「哪些是
+ * 注入的」这种信息，只能走「inbox 自己也变成插件」这条路（把注入点搬到节点插件面），
+ * 不要在这里重新长出 `source` 标记 —— 那是被用户明确删掉的一层区分。
  */
-function describeToolSurface(
-  tools: readonly ToolDefinition[],
-  injected: ReadonlySet<string>,
-): MemberToolSurfaceEntry[] {
+function describeTools(tools: readonly ToolDefinition[]): MemberToolEntry[] {
   return tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
     input_schema: tool.inputSchema,
     has_permission_check: typeof tool.checkPermission === 'function',
-    source: injected.has(tool.name) ? 'member' : 'plugin',
   }));
 }
 
@@ -1030,7 +1012,6 @@ export class MemberExecutionHost implements MemberExecutionPort {
       mode,
       running: false,
       toolsRefreshPending: false,
-      injectedTools: surface.injected,
       ...(inboxState !== undefined ? { inboxState } : {}),
     };
     this.entries.set(member.session_id, entry);
@@ -1400,62 +1381,26 @@ export class MemberExecutionHost implements MemberExecutionPort {
   }
 
   /**
-   * 0.51：该成员的工具面（canonical `tools.list{agent_id}` 的唯一数据源）。
+   * 0.51：该成员这一份工具清单（canonical `tools.list{agent_id}` 的唯一数据源）。
    *
    * 两条路径，都是真实注册路径的结果：
-   * - **live**（有活身体）：直接读那具 body 自己的 `MemoryPluginHost`。工具热刷新、
-   *   `disableInbox`、`inboxState` 之类只在运行期发生的事都会被如实反映 —— 这是**实取值**，
-   *   不是按配置重新算一遍。
-   * - **derived**（当前没有活身体）：**推导值** —— 调用 `buildSurface`，也就是 `spawn`
-   *   注册进新宿主用的**同一个函数**（同一个 `effectivePermissionMode` 判定、同一份
-   *   `selectTools(mode)` + `restrictPermissions`、同一个 inbox 工具判定）。所以它答出
-   *   的就是「一具新身体此刻会拿到什么」；唯一差别是这里不建 body —— 不 spawn、不占
-   *   `maxLiveBodies` 名额、不留任何副作用。想让推导值与实取值保持一致，唯一的办法就是
-   *   两边共用 `buildSurface`：谁都不许另写一份工具清单/筛选规则。
+   * - **有活身体**：直接读那具 body 自己的 `MemoryPluginHost`。工具热刷新、`disableInbox`、
+   *   `inboxState` 之类只在运行期发生的事都会被如实反映 —— 这是实读，不是按配置重算。
+   * - **当前没有活身体**：调用 `buildSurface`，也就是 `spawn` 注册进新宿主用的**同一个
+   *   函数**（同一个 `effectivePermissionMode` 判定、同一份 `selectTools(mode)` +
+   *   `restrictPermissions`、同一个 inbox 工具判定）。所以它答出的就是「一具新身体此刻
+   *   会拿到什么」；唯一差别是这里不建 body —— 不 spawn、不占 `maxLiveBodies` 名额、
+   *   不留任何副作用。想让两条路径保持一致，唯一的办法就是共用 `buildSurface`。
    *
-   * `unavailable`（节点有、这具身体没有 + 原因）同样出自 `selectTools`：界面要能说清
-   * 「这个工具不是漏了，是被某条规则挡的」，而不是让人对着两份清单自己猜。
-   *
-   * 调用方（serve）把 `surface` 字段原样透出；不传 `agent_id` 的节点口径不受影响。
+   * 为什么不再报 `surface: 'live' | 'derived'`：那是「两个工具面」的残留口径。成员用的
+   * 就是节点那一份清单，实读与推导只是取数路径的差别，调用方不需要知道。
    */
-  toolSurface(member: MemberExecutionMember): MemberToolSurface {
+  toolSurface(member: MemberExecutionMember): MemberToolEntry[] {
     const entry = this.entries.get(member.session_id);
     if (entry !== undefined && entry.memberId === member.id) {
-      const live = entry.pluginHost.listTools();
-      return {
-        surface: 'live',
-        tools: describeToolSurface(live, entry.injectedTools),
-        unavailable: this.liveUnavailable(entry.mode, live),
-      };
+      return describeTools(entry.pluginHost.listTools());
     }
-    const derived = this.buildSurface(member);
-    return {
-      surface: 'derived',
-      tools: describeToolSurface(derived.tools, derived.injected),
-      unavailable: derived.unavailable,
-    };
-  }
-
-  /**
-   * 活身体的 `unavailable`：**同一个 `selectTools` 的结果**减去这具身体实际注册的。
-   *
-   * 分两半，都不能靠名字猜：
-   * - 被规则挡的，直接用 `selectTools(mode).unavailable`（判据与工具面同源）；
-   * - 规则放行、但这具 body 上没有的 —— 那是**工具热刷新还没轮到它**（新工具在轮边界
-   *   才应用；单 run + prompt prefix 冻结）或它的来源快照更旧。静态规则解释不了，
-   *   所以诚实地给 `unknown`，不编一个原因。
-   */
-  private liveUnavailable(
-    mode: MemberExecutionPermissionMode,
-    live: readonly ToolDefinition[],
-  ): MemberToolUnavailableEntry[] {
-    const selection = this.selectTools(mode);
-    const present = new Set(live.map((tool) => tool.name));
-    const unavailable = selection.unavailable.filter((entry) => !present.has(entry.name));
-    for (const tool of selection.tools) {
-      if (!present.has(tool.name)) unavailable.push({ name: tool.name, reason: 'unknown' });
-    }
-    return unavailable;
+    return describeTools(this.buildSurface(member).tools);
   }
 
   /** 轮结束：清 running；若期间收到过工具刷新，在轮边界应用。 */
@@ -1474,12 +1419,11 @@ export class MemberExecutionHost implements MemberExecutionPort {
    * 成员应有的工具面（**唯一一份规格**）。
    *
    * spawn、工具热刷新、`tools.list{agent_id}` 的推导路径都调这里：谁都不许再写一份
-   * 「成员有哪些工具」——推导值（无身体）之所以能代表「新身体会拿到的」，靠的就是
-   * 这里与 spawn 是同一个函数，不是两段长得像的代码。
+   * 「成员有哪些工具」——无身体时答出的「新身体会拿到的」，靠的就是这里与 spawn 是
+   * 同一个函数，不是两段长得像的代码。
    *
    * 内容 = `effectivePermissionMode`（或调用方钉死的 mode）+ `selectTools(mode)` +
-   * `restrictPermissions` + inbox 工具判定；`injected` 记录其中不来自父宿主的名字
-   * （当前只有 `inbox`），用来给 wire 条目标 `source`，不靠工具名去猜。
+   * `restrictPermissions` + inbox 工具判定。
    *
    * `injectInbox` 缺省按「这台内核此刻是否 attach 了收件箱」；工具热刷新要沿用**该 body
    * 建成时**的判定（`entry.inboxState`），所以可以显式覆盖。
@@ -1494,8 +1438,9 @@ export class MemberExecutionHost implements MemberExecutionPort {
     } = {},
   ): MemberSurfaceBuild {
     const mode = options.mode ?? this.effectivePermissionMode(member);
-    const { tools: selected, unavailable } = this.selectTools(mode, options.source);
-    const tools = selected.map((tool) => this.restrictPermissions(tool, member.id, mode));
+    const tools = this.selectTools(mode, options.source).map((tool) =>
+      this.restrictPermissions(tool, member.id, mode),
+    );
     const inboxTool =
       (options.injectInbox ?? this.inbox !== undefined)
         ? this.inboxTool(member.id, mode)
@@ -1505,8 +1450,6 @@ export class MemberExecutionHost implements MemberExecutionPort {
     return {
       mode,
       tools: inboxTool === undefined ? tools : [...tools, inboxTool],
-      injected: new Set(inboxTool === undefined ? [] : [inboxTool.name]),
-      unavailable,
     };
   }
 
@@ -1545,7 +1488,6 @@ export class MemberExecutionHost implements MemberExecutionPort {
     try {
       for (const existing of previous) entry.pluginHost.unregisterTool(existing.name);
       for (const tool of tools) entry.pluginHost.registerTool(tool);
-      entry.injectedTools = surface.injected;
       return true;
     } catch (error) {
       try {
@@ -1785,50 +1727,35 @@ export class MemberExecutionHost implements MemberExecutionPort {
   }
 
   /**
-   * 单个工具被挡在成员面外的原因；`undefined` = 放行。
+   * 该工具在这具成员身体上是否被规则挡住（0.51 只剩两条真实闸）。
    *
-   * 这是成员侧筛选规则的**唯一**实现：`selectTools` 用它决定选不选，
-   * `tools.list{agent_id}.unavailable` 用它解释为什么没选。两处不能各写一遍 ——
-   * 分开写就会出现「工具确实不在面上，但界面给的原因是另一条规则」这种既难查又难信的状态。
-   *
-   * 判据顺序有语义：
-   * - `readonly_mode` 先判：deny 档只留只读集合，所以 `ask` 在这一档的诚实原因是「档位不给」
-   *   而不是「缺 bridge」（就算有 bridge，deny 也不会放它）；
-   * - `parent_answered` 其次：allow / bridge 档下 `ask` 只在真能 bridge 时才进面 —— 成员只会把
+   * 这是成员侧筛选规则的**唯一**实现：`selectTools` 只问它一个问题。判据顺序有语义 —
+   * - `read`/`media`/`subscribe` 之外的 deny（只读）档：先判，所以 `ask` 在这一档的
+   *   原因是「档位不给」（就算有 bridge，deny 也不会放它）；
+   * - 需要父级转发人类应答的 `ask` / `ask_user`：只在真能 bridge 时才进面 —— 成员只会把
    *   请求发到自己的事件流，没人转发就没人应答，注册进来只会让 run 永久等待。
    */
-  private toolBlockReason(
-    name: string,
-    mode: MemberExecutionPermissionMode,
-  ): MemberToolUnavailableReason | undefined {
-    if (mode === 'deny' && !this.readOnlyTools.has(name)) return 'readonly_mode';
-    if (PARENT_ANSWERED_TOOL_NAMES.has(name) && !this.bridgeAvailable(mode)) {
-      return 'parent_answered';
-    }
-    return undefined;
+  private toolBlocked(name: string, mode: MemberExecutionPermissionMode): boolean {
+    if (mode === 'deny' && !this.readOnlyTools.has(name)) return true;
+    return PARENT_ANSWERED_TOOL_NAMES.has(name) && !this.bridgeAvailable(mode);
   }
 
   /**
    * 从父宿主挑工具：**父宿主有什么就给什么**，只减上面那两条闸（0.51）。
    *
-   * `unavailable` 是这次筛选的副产物，与 `tools` 出自同一次遍历：谁被挡、为什么被挡，
-   * 与最终工具面永远不会说两套话。
+   * 0.51 起不再产出「谁被挡 / 为什么被挡」：那层解释只服务于「两个工具面」的展示，
+   * 用户已裁定删掉。判据没有删 —— 它仍然决定这具身体能调什么。
    */
   private selectTools(
     mode: MemberExecutionPermissionMode,
     source: readonly ToolDefinition[] = this.pluginHost?.listTools() ?? [],
-  ): { tools: ToolDefinition[]; unavailable: MemberToolUnavailableEntry[] } {
+  ): ToolDefinition[] {
     const tools: ToolDefinition[] = [];
-    const unavailable: MemberToolUnavailableEntry[] = [];
     for (const tool of source) {
-      const reason = this.toolBlockReason(tool.name, mode);
-      if (reason !== undefined) {
-        unavailable.push({ name: tool.name, reason });
-        continue;
-      }
+      if (this.toolBlocked(tool.name, mode)) continue;
       tools.push(tool.name === 'agent' ? restrictAgentTool(tool) : tool);
     }
-    return { tools, unavailable };
+    return tools;
   }
 
   /**
