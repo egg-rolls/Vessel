@@ -1,9 +1,10 @@
 /**
- * 菜单按钮（app/NavGroup + app/NavItem）：分组头 + 六种状态点（四档语义 + 网关的 ok / warn）
- * + 折叠态（只有图标，靠 Tooltip 带出文案）。
+ * 菜单按钮（app/NavGroup + app/NavItem）：分组头 + 四档状态点 + 折叠态 + 无状态项。
  *
+ * 四档语义见 app/nav-status.ts 文件头：accent = 已连接 / 正常、amber = 进行中、
+ * danger = 出错、muted = 未配置 / 未知。曾经的 ok / warn 两档已删除，这里不出现。
  * 状态文案全部来自 NavStatusMeta.labelKey，颜色由 NavItem 自己的 data-tone 决定 ——
- * 这里不复制任何一份状态表。
+ * 本样例不复制任何一份状态表。
  */
 import { NavGroup } from '../../../../app/NavGroup';
 import { NavItem } from '../../../../app/NavItem';
@@ -20,10 +21,9 @@ export const preview: PreviewMeta = {
 };
 
 const HUBS: Route = { domain: 'hub' };
-const GATEWAY: Route = { domain: 'gateway' };
 const TOOLS: Route = { domain: 'tools' };
 
-/** 四档语义里的「已连接」（accent）+ 计数徽标。 */
+/** 四档里的「已连接」：accent + 计数徽标 + 版本号。 */
 const CONNECTED: NavItemModel = {
   id: 'demo:hub-connected',
   title: 'hub (connected)',
@@ -59,22 +59,6 @@ const ITEMS: readonly NavItemModel[] = [
     route: HUBS,
     active: false,
     status: { tone: 'muted', labelKey: 'nav.status.hubNotConfigured' },
-  },
-  {
-    id: 'demo:gateway-online',
-    title: 'gateway (online)',
-    icon: 'gateway',
-    route: GATEWAY,
-    active: false,
-    status: { tone: 'ok', labelKey: 'nav.status.online', version: '0.50.0' },
-  },
-  {
-    id: 'demo:gateway-connecting',
-    title: 'gateway (connecting)',
-    icon: 'gateway',
-    route: GATEWAY,
-    active: false,
-    status: { tone: 'warn', labelKey: 'nav.status.connecting' },
   },
 ];
 

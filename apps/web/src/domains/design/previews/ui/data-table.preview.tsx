@@ -5,10 +5,10 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'DataTable',
-  titleKey: 'designLab.sample.dataTable.name',
-  descriptionKey: 'designLab.sample.dataTable.desc',
+  titleKey: 'designLab.preview.dataTable.title',
+  descriptionKey: 'designLab.preview.dataTable.desc',
   group: 'ui',
-  order: 30,
+  order: 50,
 };
 
 interface SampleRow {
@@ -28,18 +28,18 @@ export default function DataTablePreview() {
   const columns: DataTableColumn<SampleRow>[] = [
     {
       key: 'name',
-      header: t('designLab.demo.table.name'),
+      header: t('designLab.preview.dataTable.colName'),
       cell: (row) => row.name,
       cellClassName: 'font-mono text-sm',
     },
     {
       key: 'status',
-      header: t('designLab.demo.table.status'),
+      header: t('designLab.preview.dataTable.colStatus'),
       cell: (row) => <Badge tone={row.tone}>{row.tone}</Badge>,
     },
     {
       key: 'owner',
-      header: t('designLab.demo.table.owner'),
+      header: t('designLab.preview.dataTable.colOwner'),
       cell: (row) => row.owner,
       hide: 'compact',
     },

@@ -4,28 +4,33 @@
  * 契约（新增一个样例 = 新增一个文件，**不改本目录任何代码**）：
  *
  *   文件名： apps/web/src/**\/*.preview.tsx      ← 位置随组件走，放在组件旁边最好
- *   导出：   export default 渲染用的 React 组件
+ *   导出：   export default 渲染用的 React 组件（只读：不发 RPC、不改全局状态）
  *            export const preview: PreviewMeta = { title, titleKey?, descriptionKey?, group?, order? }
+ *
+ * 文案约定：样例的可见文案全部走 i18n，键名统一在 `designLab.preview.<样例 id>.*`
+ * 下（`titleKey` / `descriptionKey` 与样例内的说明文字都是），本目录不再有
+ * `designLab.sample.*` / `designLab.demo.*` 这两种历史写法。
  *
  * 发现手段是 Vite 的 `import.meta.glob('/src/**\/*.preview.tsx', { eager: false })`：
  * 编译期把匹配到的文件列成「路径 → 动态 import 函数」的表，样例代码因此**不进首屏
- * chunk**，只有打开设计实验室时才按需拉取。
+ * chunk**，只有打开设计实验室时才按需拉取；meta 与组件在同一个模块里，加载一次就同时
+ * 拿到标题 / 说明 / 分组。
  *
  * 分组规则：
  *   1. `preview.group` 优先（值就是分组的 id，如 'chat' / 'nav' / 'overlays' / 'ui'）；
  *   2. 缺省用**所在目录名**（`.../previews/chat/queued.preview.tsx` → 'chat'）；
- *   3. 组名的中文标题来自 `PREVIEW_GROUP_RULES` 的映射表；表里没有的组直接显示 id
- *      （语言无关的目录名），所以新目录里的样例也不会被丢掉。
+ *   3. 组名的中文标题来自 `PREVIEW_GROUP_RULES` 的映射表（同一张表也决定组的先后）；
+ *      表里没有的组直接显示 id（语言无关的目录名），所以新目录里的样例也不会被丢掉。
  */
 import type { ComponentType } from 'react';
 import { useEffect, useState } from 'react';
 
 export interface PreviewMeta {
-  /** 组件名（语言无关，如 'QueuedNotice'）；有任何一种标题都必须能显示。 */
+  /** 组件名（语言无关，如 'QueuedNotice'）；没有 i18n key 时它就是标题。 */
   title: string;
-  /** 可选的中文/本地化标题 key（`designLab.*`），存在时优先于 title。 */
+  /** 可选本地化标题 key（`designLab.preview.*`），存在时优先于 title。 */
   titleKey?: string;
-  /** 说明的 i18n key（`designLab.*`）。 */
+  /** 说明的 i18n key（`designLab.preview.*`）。 */
   descriptionKey?: string;
   /** 分组 id；缺省 = 所在目录名。 */
   group?: string;

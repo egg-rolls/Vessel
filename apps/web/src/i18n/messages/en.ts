@@ -1651,184 +1651,183 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.error.mcp_disabled': 'MCP is not enabled.',
   'gateway.error.evals_disabled': 'Evals are not enabled.',
 
-  // Design Lab (0.46 §10.5): static living reference for tokens / components.
+  // Design Lab：token / 组件 / 弹窗的自动发现展览馆（本页不手写清单）
   'designLab.title': 'Design Lab',
   'designLab.subtitle':
-    'Living samples of host tokens and standard components; all values are read at runtime.',
-  'designLab.tokens.title': 'Tokens',
-  'designLab.tokens.subtitle':
-    'Colors, type, spacing, radii, shadows and fonts come straight from the active theme.',
-  'designLab.tokens.runtimeNote':
-    'Values are read from getComputedStyle(document.documentElement) under the active theme and refresh when you switch light/dark.',
-  'designLab.tokens.colors': 'Colors',
-  'designLab.tokens.typography': 'Type scale',
-  'designLab.tokens.spacing': 'Spacing',
-  'designLab.tokens.radii': 'Radii',
-  'designLab.tokens.shadows': 'Shadows',
-  'designLab.tokens.fonts': 'Fonts',
-  'designLab.components.title': 'Components',
-  'designLab.components.subtitle':
-    'Standard page skeleton and host components; every sample maps directly to a page.',
-  'designLab.demo.typeSample': 'Type Aa 123',
-  'designLab.sample.pageScaffold.name': 'PageScaffold',
-  'designLab.sample.pageScaffold.desc':
-    'Title, subtitle and content; the page header holds only those two lines.',
-  'designLab.sample.toolbar.name': 'TableToolbar',
-  'designLab.sample.toolbar.desc':
-    'Control strip directly above a table or Section: filters, search and batch actions.',
-  'designLab.sample.dataTable.name': 'DataTable',
-  'designLab.sample.dataTable.desc':
-    'A 1px gap between rows lets the page background through; the table keeps a small outer radius.',
-  'designLab.sample.buttons.name': 'Button',
-  'designLab.sample.buttons.desc':
-    'Every variant: plain, primary, danger, dangerGhost, link and chip.',
-  'designLab.sample.badges.name': 'Badge',
-  'designLab.sample.badges.desc': 'Every tone: neutral, accent, info, warn, danger and success.',
-  'designLab.sample.statusIcons.name': 'Status icons',
-  'designLab.sample.statusIcons.desc':
-    'Status cross-reference: every StatusKind as glyph, localized label and the raw status literal the API and config use. Session lists only use five of them; the rest come from runs, nodes and plugins. Color is only an enhancement, so glyph and text always carry the meaning.',
-  'designLab.sample.section.name': 'Section',
-  'designLab.sample.section.desc': 'Raised panel with a title, description and optional actions.',
-  'designLab.sample.form.name': 'Field / Input / Select',
-  'designLab.sample.form.desc':
-    'Field labels, input wells and selects; focus uses the focus ring, never a border.',
-  'designLab.sample.stat.name': 'Stat',
-  'designLab.sample.stat.desc': 'Metric block: a mono value with a muted label.',
-  'designLab.sample.keyValue.name': 'KeyValueList',
-  'designLab.sample.keyValue.desc': 'Two-column definition list with wrapping values.',
-  'designLab.sample.tabs.name': 'SegmentedTabs',
-  'designLab.sample.tabs.desc': 'In-domain tabs with arrow-key navigation.',
-  'designLab.sample.states.name': 'States',
-  'designLab.sample.states.desc': 'Unified empty, loading and error states.',
-  'designLab.demo.pageScaffold.title': 'Sample page',
-  'designLab.demo.pageScaffold.subtitle': 'The header holds only a title and subtitle.',
-  'designLab.demo.pageScaffold.body':
-    'Content starts below the header; PageScaffold owns the spacing.',
-  'designLab.demo.toolbar.label': 'Sample table toolbar',
-  'designLab.demo.toolbar.placeholder': 'Filter rows',
-  'designLab.demo.toolbar.refresh': 'Refresh',
-  'designLab.demo.table.name': 'Name',
-  'designLab.demo.table.status': 'Status',
-  'designLab.demo.table.owner': 'Owner',
-  'designLab.demo.statusIcons.chips':
-    'Full form (StatusChip: glyph, text, tone background) for the five states a session can be in',
-  'designLab.demo.statusIcons.list':
-    'Every status: glyph, label, raw value (the literal the API and config use)',
-  'designLab.demo.section.title': 'Section title',
-  'designLab.demo.section.description':
-    'Description: one surface per region, never a card inside a card.',
-  'designLab.demo.section.body':
-    'Spacing groups content under the header; there are no divider lines.',
-  'designLab.demo.form.name': 'Name',
-  'designLab.demo.form.namePlaceholder': 'e.g. nightly-report',
-  'designLab.demo.form.nameHint': 'The control well uses --surface-sunken.',
-  'designLab.demo.form.mode': 'Mode',
-  'designLab.demo.form.fast': 'Fast',
-  'designLab.demo.form.thorough': 'Thorough',
-  'designLab.demo.stat.runs': 'Active runs',
-  'designLab.demo.stat.runsHint': 'Last 5 minutes',
-  'designLab.demo.stat.agents': 'Online agents',
-  'designLab.demo.stat.agentsHint': 'Current node',
-  'designLab.demo.keyValue.gateway': 'Gateway',
-  'designLab.demo.keyValue.tenant': 'Identity',
-  'designLab.demo.keyValue.protocol': 'Protocol',
-  'designLab.demo.tabs.label': 'Sample tabs',
-  'designLab.demo.tabs.overview': 'Overview',
-  'designLab.demo.tabs.details': 'Details',
-  'designLab.demo.tabs.history': 'History',
-  'designLab.demo.states.emptyTitle': 'No runs yet',
-  'designLab.demo.states.emptyDesc': 'Start a conversation and runs will appear here.',
-  'designLab.demo.states.loading': 'Loading samples…',
-  'designLab.demo.states.error': 'Request failed; check the gateway connection.',
-
-  // Design Lab auto-discovery (0.51): tokens grouped by prefix + *.preview.tsx samples
+    'Tokens and reusable components are discovered at runtime: add a token or a *.preview.tsx and it appears here; nothing is listed by hand.',
   'designLab.tokens.autoNote':
     'The list is enumerated from the custom properties that actually exist on :root and grouped by prefix, so a new token needs no change here.',
-  'designLab.tokens.motion': 'Motion',
-  'designLab.tokens.sizes': 'Sizes',
-  'designLab.tokens.layers': 'Layers',
-  'designLab.tokens.other': 'Other',
+  'designLab.tokens.colors': 'Colors',
   'designLab.tokens.count': '{count} tokens',
   'designLab.tokens.filter': 'Filter tokens',
-  'designLab.tokens.filterPlaceholder': 'Filter by name or value, e.g. amber',
   'designLab.tokens.filterEmpty': 'No token matches.',
+  'designLab.tokens.filterPlaceholder': 'Filter by name or value, e.g. amber',
+  'designLab.tokens.fonts': 'Fonts',
+  'designLab.tokens.layers': 'Layers',
   'designLab.tokens.legend': 'Swatches: left = active theme, right = sampled forced-dark value.',
-  'designLab.components.autoNote':
-    'Every *.preview.tsx under apps/web/src is collected automatically (lazy import.meta.glob); drop in a file and it shows up in its group.',
-  'designLab.components.count': '{count} samples',
-  'designLab.components.filter': 'Filter samples',
-  'designLab.components.filterPlaceholder': 'Filter by title, description or source path',
-  'designLab.components.empty': 'No sample matches.',
-  'designLab.components.loading': 'Loading samples…',
-  'designLab.components.none': 'No *.preview.tsx sample files were found.',
-  'designLab.components.sourcePath': 'source',
-  'designLab.components.renderError': 'This sample failed to render; the others are unaffected.',
+  'designLab.tokens.motion': 'Motion',
+  'designLab.tokens.other': 'Other',
+  'designLab.tokens.radii': 'Radii',
+  'designLab.tokens.runtimeNote':
+    'Values are read from getComputedStyle(document.documentElement) under the active theme and refresh when you switch light/dark.',
+  'designLab.tokens.shadows': 'Shadows',
+  'designLab.tokens.sizes': 'Sizes',
+  'designLab.tokens.spacing': 'Spacing',
+  'designLab.tokens.subtitle':
+    'Every custom property comes from the active theme, grouped by prefix into colors, type, spacing, radii, shadows, fonts, motion, sizes and layers.',
+  'designLab.tokens.title': 'Tokens',
+  'designLab.tokens.typeSample': 'Type Aa 123',
+  'designLab.tokens.typography': 'Type scale',
+  'designLab.gallery.autoNote':
+    'Every *.preview.tsx under apps/web/src is collected automatically (lazy import.meta.glob); drop in a file and it shows up in its group (preview.group, else the directory name).',
+  'designLab.gallery.count': '{count} samples',
+  'designLab.gallery.empty': 'No sample matches.',
+  'designLab.gallery.filter': 'Filter samples',
+  'designLab.gallery.filterPlaceholder': 'Filter by title, description or source path',
+  'designLab.gallery.loading': 'Loading samples…',
+  'designLab.gallery.none': 'No *.preview.tsx sample files were found.',
+  'designLab.gallery.renderError': 'This sample failed to render; the others are unaffected.',
+  'designLab.gallery.sourcePath': 'source',
+  'designLab.gallery.subtitle':
+    'Living samples of components, cards and dialogs: one per *.preview.tsx, static data only, no requests.',
+  'designLab.gallery.title': 'Components & dialogs',
   'designLab.groups.chat': 'Chat stream cards',
   'designLab.groups.nav': 'Navigation and status',
   'designLab.groups.overlays': 'Dialogs and overlays',
   'designLab.groups.ui': 'Primitives',
-  'designLab.preview.queued.desc':
-    'Queued card: amber band plus a waiting chip; cancel stays available while collapsed.',
-  'designLab.preview.userBubble.desc':
-    'User bubble: bubble plus attachment chips, with the timestamp in the hover meta slot.',
-  'designLab.preview.assistant.desc':
-    'Assistant body: Markdown plus a left-aligned copy action under the text.',
-  'designLab.preview.reasoning.desc':
-    'Reasoning card: title, copy button and the time at the far right; more than 12 lines expand.',
-  'designLab.preview.tool.desc':
-    'Tool card: the header holds only the tool name and duration; expand for description, input and output.',
-  'designLab.preview.env.desc':
-    'Environment card: scope label plus line count; expand for the raw context lines.',
+  'designLab.preview.actionMenu.archive': 'Archive (unavailable)',
+  'designLab.preview.actionMenu.delete': 'Delete',
+  'designLab.preview.actionMenu.desc':
+    'Row action menu: arrow keys / Home / End / Esc; clicking outside closes it and restores focus.',
+  'designLab.preview.actionMenu.duplicate': 'Duplicate',
+  'designLab.preview.actionMenu.rename': 'Rename',
   'designLab.preview.agentMessage.desc':
-    'Agent delivery card: header says which agent sent it; the expanded body starts with the source address.',
-  'designLab.preview.failure.desc':
-    'Failure cards: collapsed shows only the red dot and one-line error, expanded shows status and the raw error (both states shown).',
-  'designLab.preview.navItem.desc':
-    'Menu buttons: group header, six status dots (the four-tone scale plus gateway ok/warn) and the collapsed form.',
-  'designLab.preview.navItem.collapsed':
-    'Collapsed shows only the icon; hover for 300 ms to see the tooltip (title, status, count, version).',
-  'designLab.preview.navItem.plain':
-    'An item with no status signal: no dot, and no placeholder version.',
-  'designLab.preview.navStatus.desc':
-    'Four-tone scale against color tokens: labels come from nav-status.ts and the dots are rendered by NavItem.',
-  'designLab.preview.navStatus.colStatus': 'Status',
-  'designLab.preview.navStatus.colValue': 'Value in the active theme',
-  'designLab.preview.navStatus.note':
-    'Unconfigured and unknown fall back to muted (--faint, the default NavItem dot); gateway status still emits only ok / warn / danger / muted.',
-  'designLab.preview.confirm.desc':
-    'Confirm dialog: initial focus sits on Cancel so Enter cannot trigger the dangerous action.',
-  'designLab.preview.confirm.openPlain': 'Open confirm dialog',
-  'designLab.preview.confirm.openDanger': 'Open danger confirm',
-  'designLab.preview.confirm.title': 'Save these changes?',
+    'Agent delivery card: the header says which agent sent it; the expanded body starts with the source address and time; collapsed is one summary line.',
+  'designLab.preview.assistant.desc':
+    'Assistant body: Markdown text with a left-aligned copy action below it that appears on hover or focus.',
+  'designLab.preview.badge.desc': 'Every tone: neutral, accent, info, warn, danger and success.',
+  'designLab.preview.badge.title': 'Badge',
+  'designLab.preview.button.desc':
+    'Every variant: plain, primary, danger, dangerGhost, link and chip.',
+  'designLab.preview.button.title': 'Button',
   'designLab.preview.confirm.body': 'Sample copy: confirming only closes the dialog.',
-  'designLab.preview.confirm.dangerTitle': 'Delete this session?',
   'designLab.preview.confirm.dangerBody':
     'Sample copy: a danger primary button that needs an explicit confirmation.',
   'designLab.preview.confirm.dangerConfirm': 'Delete',
+  'designLab.preview.confirm.dangerTitle': 'Delete this session?',
+  'designLab.preview.confirm.desc':
+    'Confirm dialog: initial focus sits on Cancel so Enter cannot trigger the dangerous action.',
+  'designLab.preview.confirm.openDanger': 'Open danger confirm',
+  'designLab.preview.confirm.openPlain': 'Open confirm dialog',
+  'designLab.preview.confirm.title': 'Save these changes?',
+  'designLab.preview.dataTable.colName': 'Name',
+  'designLab.preview.dataTable.colOwner': 'Owner',
+  'designLab.preview.dataTable.colStatus': 'Status',
+  'designLab.preview.dataTable.desc':
+    'A 1px gap between rows lets the page background through; the table keeps a small outer radius.',
+  'designLab.preview.dataTable.title': 'DataTable',
+  'designLab.preview.env.desc':
+    'Environment card: the header carries the scope label (plus a danger note when not applied) and the line count; expand for the raw context lines.',
+  'designLab.preview.failure.desc':
+    'Failure cards: collapsed keeps only the dot and a one-line error; status and run id live in the expanded body, never in the header. Both states are shown.',
+  'designLab.preview.form.desc':
+    'Field labels, input wells and selects; focus uses the focus ring, never a border.',
+  'designLab.preview.form.fast': 'Fast',
+  'designLab.preview.form.mode': 'Mode',
+  'designLab.preview.form.name': 'Name',
+  'designLab.preview.form.nameHint': 'The control well uses --surface-sunken.',
+  'designLab.preview.form.namePlaceholder': 'e.g. nightly-report',
+  'designLab.preview.form.thorough': 'Thorough',
+  'designLab.preview.form.title': 'Field / Input / Select',
+  'designLab.preview.keyValue.desc': 'Two-column definition list with wrapping values.',
+  'designLab.preview.keyValue.gateway': 'Gateway',
+  'designLab.preview.keyValue.protocol': 'Protocol',
+  'designLab.preview.keyValue.tenant': 'Identity',
+  'designLab.preview.keyValue.title': 'KeyValueList',
+  'designLab.preview.mention.desc':
+    'Mention list: the listbox half of the combobox; arrow keys move aria-activedescendant.',
+  'designLab.preview.mention.hint':
+    'Sample members: hover highlights; picking only moves the highlight and sends nothing.',
+  'designLab.preview.modal.body':
+    'Sample body: the panel scrolls on its own and the scrim also closes it.',
   'designLab.preview.modal.desc':
     'Dialog shell: scrim, centered panel, Esc to close and a focus ring; sm / md / lg widths.',
   'designLab.preview.modal.hint': 'Pick a width, then open it.',
   'designLab.preview.modal.open': 'Open dialog',
   'designLab.preview.modal.title': 'Dialog title',
-  'designLab.preview.modal.body':
-    'Sample body: the panel scrolls on its own and the scrim also closes it.',
-  'designLab.preview.tooltip.desc':
-    'Tooltip: shows after 300 ms of hover or focus, closes on Esc and flips below when space runs out.',
-  'designLab.preview.tooltip.label': 'Tooltip placed above',
-  'designLab.preview.tooltip.trigger': 'Hover for the tooltip',
+  'designLab.preview.navItem.collapsed':
+    'Collapsed shows only the icon; hover for 300 ms to see the tooltip (title, status, count, version).',
+  'designLab.preview.navItem.desc':
+    'Menu buttons: group header, the four status dots (accent / amber / danger / muted) and the collapsed form.',
+  'designLab.preview.navItem.plain':
+    'An item with no status signal: no dot, and no placeholder version.',
+  'designLab.preview.navStatus.colStatus': 'Status',
+  'designLab.preview.navStatus.colValue': 'Value in the active theme',
+  'designLab.preview.navStatus.desc':
+    'The four-tone scale against color tokens: labels come from the nav-status.ts helpers, and the dots are rendered by NavItem itself.',
+  'designLab.preview.navStatus.note':
+    'The hub is probed as soon as the WebUI opens; unconfigured and unknown both fall back to muted (--faint is the default dot). hub, gateway and pluginHost all share this same four-tone scale.',
+  'designLab.preview.pageScaffold.desc':
+    'Title, subtitle and content; the page header holds only those two lines.',
+  'designLab.preview.pageScaffold.sampleBody':
+    'Content starts below the header; PageScaffold owns the spacing.',
+  'designLab.preview.pageScaffold.sampleSubtitle': 'The header holds only a title and subtitle.',
+  'designLab.preview.pageScaffold.sampleTitle': 'Sample page',
+  'designLab.preview.pageScaffold.title': 'PageScaffold',
+  'designLab.preview.queued.desc':
+    'Queued card: amber band with a waiting chip; cancel stays visible even when the card is collapsed.',
+  'designLab.preview.reasoning.desc':
+    'Reasoning card: title, a copy button on its left, and the time at the far right; more than 12 lines expand, and it collapses when streaming ends.',
+  'designLab.preview.section.desc': 'Raised panel with a title, description and optional actions.',
+  'designLab.preview.section.sampleBody':
+    'Spacing groups content under the header; there are no divider lines.',
+  'designLab.preview.section.sampleDesc':
+    'Description: one surface per region, never a card inside a card.',
+  'designLab.preview.section.sampleTitle': 'Section title',
+  'designLab.preview.section.title': 'Section',
+  'designLab.preview.stat.agents': 'Online agents',
+  'designLab.preview.stat.agentsHint': 'Current node',
+  'designLab.preview.stat.desc': 'Metric block: a mono value with a muted label.',
+  'designLab.preview.stat.runs': 'Active runs',
+  'designLab.preview.stat.runsHint': 'Last 5 minutes',
+  'designLab.preview.stat.title': 'Stat',
+  'designLab.preview.states.action': 'Create',
+  'designLab.preview.states.desc': 'Unified empty, loading and error states.',
+  'designLab.preview.states.emptyDesc': 'Sample data: the first record will show up here.',
+  'designLab.preview.states.emptyTitle': 'Nothing here yet',
+  'designLab.preview.states.error': 'Sample: the request failed; check the gateway connection.',
+  'designLab.preview.states.loading': 'Loading samples…',
+  'designLab.preview.states.title': 'States',
+  'designLab.preview.statusIcons.chips':
+    'Full form (StatusChip: glyph, text, tone background) for the five states a session can be in',
+  'designLab.preview.statusIcons.desc':
+    'Status cross-reference: every StatusKind as glyph, localized label and the raw status literal the API and config use. Session lists only use five of them; the rest come from runs, nodes and plugins. Color is only an enhancement, so glyph and text always carry the meaning.',
+  'designLab.preview.statusIcons.list':
+    'Every status: glyph, label, raw value (the literal the API and config use)',
+  'designLab.preview.statusIcons.title': 'StatusChip / StatusGlyph',
+  'designLab.preview.tabs.desc': 'In-domain tabs with arrow-key navigation.',
+  'designLab.preview.tabs.details': 'Details',
+  'designLab.preview.tabs.history': 'History',
+  'designLab.preview.tabs.label': 'Sample tabs',
+  'designLab.preview.tabs.overview': 'Overview',
+  'designLab.preview.tabs.title': 'SegmentedTabs',
+  'designLab.preview.tool.desc':
+    'Tool card: the header holds only the name and duration; expand for description, input and output. Errors stay visible while collapsed.',
+  'designLab.preview.toolbar.desc':
+    'Control strip directly above a table or Section: filters, search and batch actions.',
+  'designLab.preview.toolbar.label': 'Sample table toolbar',
+  'designLab.preview.toolbar.placeholder': 'Filter rows',
+  'designLab.preview.toolbar.refresh': 'Refresh',
+  'designLab.preview.toolbar.title': 'TableToolbar',
   'designLab.preview.tooltip.bottom': 'Tooltip placed below',
   'designLab.preview.tooltip.bottomTrigger': 'Hover for the one below',
+  'designLab.preview.tooltip.desc':
+    'Tooltip: shows after 300 ms of hover or focus, closes on Esc and flips below when space runs out.',
   'designLab.preview.tooltip.icon': 'Icon button tooltip',
-  'designLab.preview.actionMenu.desc':
-    'Row action menu: arrow keys / Home / End / Esc; clicking outside closes it and restores focus.',
-  'designLab.preview.actionMenu.rename': 'Rename',
-  'designLab.preview.actionMenu.duplicate': 'Duplicate',
-  'designLab.preview.actionMenu.archive': 'Archive (unavailable)',
-  'designLab.preview.actionMenu.delete': 'Delete',
-  'designLab.preview.mention.desc':
-    'Mention list: the listbox half of the combobox; arrow keys move aria-activedescendant.',
-  'designLab.preview.mention.hint':
-    'Sample members: hover highlights; picking only moves the highlight and sends nothing.',
+  'designLab.preview.tooltip.label': 'Tooltip placed above',
+  'designLab.preview.tooltip.trigger': 'Hover for the tooltip',
+  'designLab.preview.userBubble.desc':
+    'User bubble: bubble plus attachment chips, with the time in the hover meta slot (always visible on touch).',
 
   // 0.46 top-level page subtitles (the header holds only title and subtitle)
   'gateway.subtitle':

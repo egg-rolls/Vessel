@@ -6,22 +6,22 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'States',
-  titleKey: 'designLab.sample.states.name',
-  descriptionKey: 'designLab.sample.states.desc',
+  titleKey: 'designLab.preview.states.title',
+  descriptionKey: 'designLab.preview.states.desc',
   group: 'ui',
-  order: 120,
+  order: 100,
 };
 
 export default function StatesPreview() {
   return (
     <div className="flex flex-col gap-2.5">
       <EmptyState
-        title={t('designLab.demo.states.emptyTitle')}
-        description={t('designLab.demo.states.emptyDesc')}
-        action={<Button variant="primary">{t('designLab.demo.toolbar.refresh')}</Button>}
+        title={t('designLab.preview.states.emptyTitle')}
+        description={t('designLab.preview.states.emptyDesc')}
+        action={<Button variant="primary">{t('designLab.preview.states.action')}</Button>}
       />
-      <LoadingState label={t('designLab.demo.states.loading')} />
-      <ErrorState message={t('designLab.demo.states.error')} />
+      <LoadingState label={t('designLab.preview.states.loading')} />
+      <ErrorState message={t('designLab.preview.states.error')} />
     </div>
   );
 }

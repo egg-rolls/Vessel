@@ -5,10 +5,10 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'KeyValueList',
-  titleKey: 'designLab.sample.keyValue.name',
-  descriptionKey: 'designLab.sample.keyValue.desc',
+  titleKey: 'designLab.preview.keyValue.title',
+  descriptionKey: 'designLab.preview.keyValue.desc',
   group: 'ui',
-  order: 100,
+  order: 90,
 };
 
 export default function KeyValueListPreview() {
@@ -17,13 +17,13 @@ export default function KeyValueListPreview() {
       items={[
         {
           key: 'gateway',
-          label: t('designLab.demo.keyValue.gateway'),
+          label: t('designLab.preview.keyValue.gateway'),
           value: 'ws://127.0.0.1:8642',
         },
-        { key: 'tenant', label: t('designLab.demo.keyValue.tenant'), value: 'local' },
+        { key: 'tenant', label: t('designLab.preview.keyValue.tenant'), value: 'local' },
         {
           key: 'protocol',
-          label: t('designLab.demo.keyValue.protocol'),
+          label: t('designLab.preview.keyValue.protocol'),
           value: 'vessel.gateway/1',
         },
       ]}

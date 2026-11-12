@@ -6,16 +6,16 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'SegmentedTabs',
-  titleKey: 'designLab.sample.tabs.name',
-  descriptionKey: 'designLab.sample.tabs.desc',
+  titleKey: 'designLab.preview.tabs.title',
+  descriptionKey: 'designLab.preview.tabs.desc',
   group: 'ui',
-  order: 110,
+  order: 70,
 };
 
 const TABS = [
-  { id: 'overview', labelKey: 'designLab.demo.tabs.overview' },
-  { id: 'details', labelKey: 'designLab.demo.tabs.details' },
-  { id: 'history', labelKey: 'designLab.demo.tabs.history' },
+  { id: 'overview', labelKey: 'designLab.preview.tabs.overview' },
+  { id: 'details', labelKey: 'designLab.preview.tabs.details' },
+  { id: 'history', labelKey: 'designLab.preview.tabs.history' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -24,7 +24,7 @@ export default function SegmentedTabsPreview() {
   const [tab, setTab] = useState<TabId>('overview');
   return (
     <SegmentedTabs
-      label={t('designLab.demo.tabs.label')}
+      label={t('designLab.preview.tabs.label')}
       tabs={TABS.map((item) => ({ id: item.id, label: t(item.labelKey) }))}
       value={tab}
       onChange={setTab}

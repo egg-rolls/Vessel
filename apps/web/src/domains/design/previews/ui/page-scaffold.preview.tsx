@@ -5,21 +5,21 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'PageScaffold',
-  titleKey: 'designLab.sample.pageScaffold.name',
-  descriptionKey: 'designLab.sample.pageScaffold.desc',
+  titleKey: 'designLab.preview.pageScaffold.title',
+  descriptionKey: 'designLab.preview.pageScaffold.desc',
   group: 'ui',
-  order: 10,
+  order: 120,
 };
 
 export default function PageScaffoldPreview() {
   return (
     <div className="rounded-md bg-bg">
       <PageScaffold
-        title={t('designLab.demo.pageScaffold.title')}
-        subtitle={t('designLab.demo.pageScaffold.subtitle')}
+        title={t('designLab.preview.pageScaffold.sampleTitle')}
+        subtitle={t('designLab.preview.pageScaffold.sampleSubtitle')}
         className="p-4 pb-4"
       >
-        <p className="text-md text-muted">{t('designLab.demo.pageScaffold.body')}</p>
+        <p className="text-md text-muted">{t('designLab.preview.pageScaffold.sampleBody')}</p>
       </PageScaffold>
     </div>
   );

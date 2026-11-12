@@ -5,20 +5,20 @@ import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
   title: 'Section',
-  titleKey: 'designLab.sample.section.name',
-  descriptionKey: 'designLab.sample.section.desc',
+  titleKey: 'designLab.preview.section.title',
+  descriptionKey: 'designLab.preview.section.desc',
   group: 'ui',
-  order: 70,
+  order: 60,
 };
 
 export default function SectionPreview() {
   return (
     <Section
-      title={t('designLab.demo.section.title')}
-      description={t('designLab.demo.section.description')}
+      title={t('designLab.preview.section.sampleTitle')}
+      description={t('designLab.preview.section.sampleDesc')}
       actions={<Badge tone="accent">section</Badge>}
     >
-      <p className="text-md text-muted">{t('designLab.demo.section.body')}</p>
+      <p className="text-md text-muted">{t('designLab.preview.section.sampleBody')}</p>
     </Section>
   );
 }

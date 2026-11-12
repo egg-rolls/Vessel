@@ -2,13 +2,13 @@
  * 圆点 / 状态语义图例：四档语义（已连接 / 进行中 / 出错 / 未配置）与颜色 token 的对照表。
  *
  * 一致性靠「不复制事实」保证：
- * - 文案来自 hubNavStatus(...) 的 labelKey（app/nav-status.ts 第 57–75 行是唯一事实源）；
- * - 圆点由 NavItem 自己渲染（data-tone 决定颜色，见 app/NavItem.tsx 第 60 行）；
+ * - 文案来自 hubNavStatus(...) 的 labelKey（app/nav-status.ts 是唯一事实源）；
+ * - 圆点由 NavItem 自己渲染（data-tone 决定颜色），所以图例与导航栏不可能不同色；
  * - 这里只维护「tone → token 名」这一张表，值仍从 tokens.ts 的运行时快照读。
  */
 import type { NavItemModel } from '../../../../app/nav-model';
 import { NavItem } from '../../../../app/NavItem';
-import { hubNavStatus, type NavStatusTone } from '../../../../app/nav-status';
+import { hubNavStatus } from '../../../../app/nav-status';
 import type { HubNavStatus } from '../../../../gateway/platform/hub-storage';
 import { t } from '../../../../i18n';
 import type { PreviewMeta } from '../../preview-registry';
@@ -29,15 +29,18 @@ const FOUR_TONES: readonly HubNavStatus[] = [
   'unconfigured',
 ];
 
-/** tone → 颜色 token（唯一一张对照表；值本身仍从 :root 运行时读取）。 */
-const TONE_TOKENS: Readonly<Record<NavStatusTone, string>> = {
+/** 四档 tone → 颜色 token（唯一一张对照表；值本身仍从 :root 运行时读取）。 */
+const TONE_TOKENS: Readonly<Record<string, string>> = {
   accent: '--accent',
   amber: '--amber',
   danger: '--danger',
   muted: '--faint',
-  ok: '--ok',
-  warn: '--warn',
 };
+
+/** 未知 tone 按 muted 处理（与 NavItem 的默认 bg-faint 同一口径）。 */
+function toneToken(tone: string): string {
+  return TONE_TOKENS[tone] ?? '--faint';
+}
 
 const ROUTE: NavItemModel['route'] = { domain: 'hub' };
 const NOOP_NAVIGATE = (_route: NavItemModel['route']): void => undefined;
@@ -55,7 +58,7 @@ export default function NavStatusLegendPreview() {
       <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {FOUR_TONES.map((status) => {
           const meta = hubNavStatus(status);
-          const token = TONE_TOKENS[meta.tone];
+          const token = toneToken(meta.tone);
           const item: NavItemModel = {
             id: 'legend:' + status,
             title: t(meta.labelKey),
