@@ -1319,6 +1319,25 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。
     const owner = await wiring.startOwner();
 
+    // 0.53：**启动即扫**。gateway / 本地 dispatcher 开始收 RPC 之前，把「进程死亡时还没
+    // 变成 run input 的 human 输入」重新投递一次（判据、幂等、上限 8 会话见
+    // `AgentService.recoverPendingInputs`：unread + 未 held + 有 session_id + human 源）。
+    // 放在 `startOwner()` 之后：成员 EU spawn 时快照父宿主工具列表，恢复出来的 run 要用同一批。
+    // headless（`--run` / 管道）是一次性进程：不替别的会话恢复队列，退出时会留半截 run。
+    if (!headless) {
+      try {
+        const recovered = await wiring.service.recoverPendingInputs();
+        if (recovered.recovered > 0 || recovered.deferred > 0 || recovered.failed > 0) {
+          logger.info('agent.inbox.recover_done', { ...recovered });
+        }
+      } catch (error) {
+        // 恢复失败不阻断启动：条目仍是 unread，下次启动再试。
+        logger.warn('agent.inbox.recover_failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     // S5：hub 目录投影（node → hub 出站快照）。
     const hubRuntime = await createHubRuntime({
       service: wiring.service,
