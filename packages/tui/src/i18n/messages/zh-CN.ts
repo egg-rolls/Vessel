@@ -365,7 +365,7 @@ export const zhCN = {
   // ── agents / status / errors（0.14） ──
   'agents.title': '子 agent（{count}）',
   'agents.empty': '本次会话暂无子 agent。',
-  'agents.emptyHint': '运行 delegate_task 后，子 agent 会显示在这里。',
+  'agents.emptyHint': '成员 / 子 agent 运行后会显示在这里。',
   'agents.more': '…另有 {count} 个；用 /agents <id> 查看。',
   'agents.notFound': '没有匹配 "{query}" 的子 agent。',
   'agents.ambiguous': '"{query}" 匹配 {count} 个子 agent：',

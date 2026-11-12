@@ -375,7 +375,7 @@ export const en: Record<MessageKey, string> = {
   // ── agents / status / errors（0.14） ──
   'agents.title': 'Subagents ({count})',
   'agents.empty': 'No subagents in this session.',
-  'agents.emptyHint': 'Delegate tasks (delegate_task) appear here while they run.',
+  'agents.emptyHint': 'Members / subagents appear here while they run.',
   'agents.more': '…and {count} more; use /agents <id> to inspect.',
   'agents.notFound': 'No subagent matches "{query}".',
   'agents.ambiguous': '"{query}" matches {count} subagents:',

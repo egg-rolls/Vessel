@@ -51,10 +51,6 @@ export function summarizeToolInput(toolName: string, input: unknown): string[] {
       if (record.replace_all === true) lines.push('replace_all: true');
       return lines;
     }
-    case 'delegate_task': {
-      const task = readString(record, 'task');
-      return task ? [`task: ${truncate(task, 200)}`] : [];
-    }
     // 双认工具名：`ask` 是现行名，`ask_user` 是历史名（旧事件 / 旧日志）。
     case 'ask':
     case 'ask_user': {
