@@ -101,16 +101,18 @@ class 与同一个阈值，不要给某一页复制第二份。
 - **发言人名只有一个实现**：`AssistantSpeaker`（`domains/chat/ReasoningBlock.tsx` 导出，
   live 与历史共用）。判据是「该 run 的第一个正文/思考项」，一个 run 只出现一次；
   成员投递的 `AgentMessageCard` **不叠**这个名字。
-- **消息工具栏在正文下方一行、右对齐**（`MessageActions` + `mt-1 ml-auto`）：它是正文末尾的
-  兄弟节点，显隐规则全部在 `components/ui/MessageActions.tsx`（hover / `focus-within` /
-  触屏常显），**不要在业务侧另写 hover-only**。代价要认：那一行即使透明也占高度，hover
-  出现/消失会改变内容高度——换来的是**永不遮字**。
+- **消息工具栏在正文下方一行、左对齐**（`MessageActions` + `mt-1`；它是 `w-fit`，
+  不加 `ml-auto` 就是左对齐）：它是正文末尾的兄弟节点，显隐规则全部在
+  `components/ui/MessageActions.tsx`（hover / `focus-within` / 触屏常显），**不要在业务侧
+  另写 hover-only**。代价要认：那一行即使透明也占高度，hover 出现/消失会改变内容高度
+  ——换来的是**永不遮字**。
   **右侧覆盖层方案已废弃**（`.msg-actions` / `.reasoning-actions` / `.reasoning-wrap`，
-  2026-11 用户裁决：贴正文/贴思考卡右侧都试过，都不要）：那套是 `position: absolute`，
+  2026-11 用户裁决：贴正文右侧、贴思考卡右侧都试过，都不要）：那套是 `position: absolute`，
   出现时不位移但会盖住第一行末尾，用户判定不如「多一行高度」。**不要照着旧记录改回去**。
-- **思考卡上只有一个按钮**：卡头 `<summary>` 右侧的「复制思考」（`ReasoningBlock`，
-  复制该卡思考原文，`preventDefault` + `stopPropagation` 防误开合，常显 + 键盘可达）。
-  **不要**给思考卡挂消息工具栏（复制正文 / 重试 / 时间那一组归正文）。
+- **思考卡上只有一个按钮、且不显示时间**：卡头 `<summary>` 里「复制思考」小按钮
+  （复制该卡思考原文，`preventDefault` + `stopPropagation` 防误开合，常显 + 键盘可达，
+  靠左紧跟标题）；**思考卡不显示任何时间/耗时**，时间只出现在正文块的
+  `MessageActions.meta`。**不要**给思考卡挂消息工具栏（复制正文 / 重试 / 时间那一组归正文）。
 
 ```css
 @layer theme, base, legacy, utilities;
