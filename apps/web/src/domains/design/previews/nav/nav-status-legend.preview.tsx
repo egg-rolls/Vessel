@@ -6,8 +6,9 @@
  * - 圆点由 NavItem 自己渲染（data-tone 决定颜色），所以图例与导航栏不可能不同色；
  * - 这里只维护「tone → token 名」这一张表，值仍从 tokens.ts 的运行时快照读。
  */
-import type { NavItemModel } from '../../../../app/nav-model';
+
 import { NavItem } from '../../../../app/NavItem';
+import type { NavItemModel } from '../../../../app/nav-model';
 import { hubNavStatus, NAV_STATUS_TONES, type NavStatusTone } from '../../../../app/nav-status';
 import type { HubNavStatus } from '../../../../gateway/platform/hub-storage';
 import { t } from '../../../../i18n';
@@ -61,7 +62,7 @@ export default function NavStatusLegendPreview() {
           const meta = hubNavStatus(TONE_SAMPLE_STATUS[tone]);
           const token = TONE_TOKENS[meta.tone];
           const item: NavItemModel = {
-            id: 'legend:' + tone,
+            id: `legend:${tone}`,
             title: t(meta.labelKey),
             icon: 'hub',
             route: ROUTE,
