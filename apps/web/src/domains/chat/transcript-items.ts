@@ -15,7 +15,6 @@
  * - notice:<item.key>         上下文 / 原始事件行
  * - run:<runId>:input         run 的输入：人的输入（气泡）/ agent 投递（agent 卡）/
  *                             运行时上下文输入（`vessel:*` → 环境信息卡，落盘后让位给历史）
- * - queued:<runId>            本地排队提交
  * - run:<runId>:failure       一次 run 的失败卡（事件流优先，会话记录快照兜底）
  *
  * 段 key 为什么锚 seq 而不是段序（`text:<n>`）：段序是「第几个段」，回填把更早的一段插进来
@@ -188,16 +187,6 @@ export interface NoticeItem extends ItemMeta {
   event: RunEvent;
 }
 
-export interface QueuedItem extends ItemMeta {
-  kind: 'queued';
-  runId: string;
-  input: string;
-  submittedAt: number;
-  queuePosition?: number;
-  cancelling: boolean;
-  cancelled: boolean;
-}
-
 /** 失败卡的数据来源：事件流（`run.failed` 还在缓冲里）或会话记录快照（`sessions.get`）。 */
 export type RunFailureSource = 'event' | 'session';
 
@@ -240,7 +229,6 @@ export type TranscriptItem =
   | RunReasoningItem
   | ToolItem
   | NoticeItem
-  | QueuedItem
   | RunFailureItem;
 
 /**
@@ -299,8 +287,6 @@ export interface TranscriptBuildInput {
   messageIndexOffset: number;
   /** 事件缓冲里的 run 分组（可含未落盘的）。 */
   liveGroups: readonly RunGroup[];
-  /** 本地排队提交（乐观）。 */
-  queued: readonly QueuedInput[];
   /** 可见窗口首条消息的 ts：更早的 live item 落到末尾。 */
   windowStartTs?: number;
   /** 历史消息是否应被隐藏（runtime 上下文可见性开关）；隐藏的仍参与下标与认领。 */
@@ -325,16 +311,6 @@ export interface TranscriptBuildInput {
    * `TranscriptWindow` 的签名）。本字段留给门禁与一次性调用直传。
    */
   claims?: ClaimDecision;
-}
-
-/** 排队提交的最小形状（与 StreamItems 的 QueuedSubmission 对齐，避免循环依赖）。 */
-export interface QueuedInput {
-  runId: string;
-  input: string;
-  submittedAt: number;
-  queuePosition?: number;
-  cancelling: boolean;
-  cancelled: boolean;
 }
 
 /** 历史侧索引：item 与「认领」用的反查表。 */
@@ -1551,21 +1527,6 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     });
   }
 
-  for (const queued of input.queued) {
-    const base = queued.submittedAt;
-    items.push({
-      kind: 'queued',
-      key: `queued:${queued.runId}`,
-      runId: queued.runId,
-      input: queued.input,
-      submittedAt: queued.submittedAt,
-      ...(queued.queuePosition !== undefined ? { queuePosition: queued.queuePosition } : {}),
-      cancelling: queued.cancelling,
-      cancelled: queued.cancelled,
-      ts: base,
-    });
-  }
-
   const historyKeys = new Set(history.items.map((item) => item.key));
   const ordered = mergeByKey(items, historyKeys)
     .map((item, index) => ({ item, index }))
@@ -1607,7 +1568,7 @@ function foldAdjacentEnvNotices(items: readonly TranscriptItem[]): TranscriptIte
 
 /**
  * 连续同发言人分组：只由消息类 item 决定（历史消息 / run 正文），
- * tool / notice / reasoning / queued 既不参与也不打断（扫描时跳过）。
+ * tool / notice / reasoning 既不参与也不打断（扫描时跳过）。
  */
 export function withSpeakerRuns(items: readonly TranscriptItem[]): TranscriptItem[] {
   let previous: string | undefined;

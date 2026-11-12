@@ -28,7 +28,6 @@ import {
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { windowTail } from '../../transcript';
 import { pendingForSession, pendingQueue } from './pending-permissions';
-import type { QueuedSubmission } from './StreamItems';
 import { browserSessionStorage, clearLastSession, readLastSession } from './session-selection';
 import {
   buildHistoryIndex,
@@ -69,7 +68,6 @@ export interface UseChatTranscriptOptions {
   ) => Promise<void>;
   sessionDetailLoading: boolean;
   sessionDetailError: string | null;
-  queuedRuns: readonly QueuedSubmission[];
   cancelling: ReadonlySet<string>;
   cancelledJobs: ReadonlySet<string>;
   pendingNewSessions: { current: Set<string> };
@@ -106,7 +104,6 @@ export function useChatTranscript({
   loadEarlierDetail,
   sessionDetailLoading,
   sessionDetailError,
-  queuedRuns,
   cancelling,
   cancelledJobs,
   pendingNewSessions,
@@ -267,10 +264,6 @@ export function useChatTranscript({
    */
   const sessionFailure = useMemo(() => sessionFailureOfDetail(sessionDetail), [sessionDetail]);
 
-  const visibleQueued = useMemo(
-    () => (selectedId ? queuedRuns.filter((item) => item.sessionId === selectedId) : []),
-    [queuedRuns, selectedId],
-  );
   // 单会话实时组上限：长会话只渲染最近 `MAX_LIVE_GROUPS` 个 run（更早的轮次仍可由历史 /
   // 运行详情查看）。这里**不再算** `hiddenLiveGroups`：以前算了却没有渲染入口 = 静默隐藏。
   // 真正的提示行需要新 i18n 文案与样式（本单不动 `i18n/**`），留给阶段 4；在那之前
@@ -500,7 +493,6 @@ export function useChatTranscript({
     visibleGroups,
     sessionFailure,
     renderedGroups,
-    visibleQueued,
     runningGroup,
     stopBusy,
     pendingItems,

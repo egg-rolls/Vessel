@@ -1,4 +1,4 @@
-import { type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type SetStateAction, useCallback, useState } from 'react';
 import type { Route } from '../../app/router';
 import { useToast } from '../../components/ToastProvider';
 import type { GatewayClient } from '../../gateway/client';
@@ -6,8 +6,6 @@ import type { NodeView } from '../../gateway/NodeProvider';
 import type { TeamControl } from '../../gateway/team-control';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
-import type { EventStoreSnapshot } from '../../state/event-store';
-import { startedRunIds } from '../../state/events';
 import {
   chatDraftKey,
   MAX_COMPOSER_REFS,
@@ -20,9 +18,6 @@ import { ATTACH_PATH_MAX } from './attach-paths';
 import { errorMessage } from './errors';
 import { type StartInNewAgentResult, startInNewAgent } from './new-session';
 import { refsErrorText } from './refs-error';
-import type { QueuedSubmission } from './StreamItems';
-
-const QUEUE_POLL_MS = 2000;
 
 /** 两组引用是否同序同内容（只有 `path` / `kind` 参与比较，展示值不参与）。 */
 function sameRefs(left: readonly MessageRef[], right: readonly MessageRef[]): boolean {
@@ -39,7 +34,6 @@ export interface UseChatSubmitOptions {
   selectedId: string | null;
   epoch: number;
   navigate: (route: Route) => void;
-  snapshot: EventStoreSnapshot;
   loadSessions: (client: GatewayClient, options?: SessionLoadOptions) => Promise<void>;
   loadRoster: (
     nodes: readonly NodeView[],
@@ -51,8 +45,12 @@ export interface UseChatSubmitOptions {
 }
 
 /**
- * 提交 / 中断 / 排队：输入框状态、queued 占位卡片轮询、取消与终态清理。
- * 事件流接管后移除占位卡片；轮询节奏与取消语义与原 ChatView 一致。
+ * 提交 / 中断：输入框状态、发送受理、取消与终态清理。
+ *
+ * **排队态不在这里**（0.53）：待处理条带直接读 `agents.inbox`（服务端持久真相），
+ * 客户端内存里不再有 `queuedRuns`、不再轮询 `runs.get` 拿队列位置 —— 刷新 / 切会话
+ * 都不会丢，也不需要「事件流接管后移除占位卡片」这类对账。这里只保留一个受理序号
+ * （`sendTick`，发送即贴底用）与「已排队」toast。
  */
 export function useChatSubmit({
   client,
@@ -60,7 +58,6 @@ export function useChatSubmit({
   selectedId,
   epoch,
   navigate,
-  snapshot,
   loadSessions,
   loadRoster,
   nodes,
@@ -97,75 +94,8 @@ export function useChatSubmit({
    * 只是一个计数器，不参与提交语义。
    */
   const [sendTick, setSendTick] = useState(0);
-  const [queuedRuns, setQueuedRuns] = useState<QueuedSubmission[]>([]);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [cancelledJobs, setCancelledJobs] = useState<Set<string>>(new Set());
-  const queuedRef = useRef(queuedRuns);
-  queuedRef.current = queuedRuns;
-
-  // 只有 `run.started` 表示事件流已接管；`agent.queue.entered` 在排队时就会到，
-  // 把它当成接管信号会让占位卡片只闪一下（0.30 回归 F3）。
-  const startedRuns = useMemo(() => startedRunIds(snapshot.entries), [snapshot.entries]);
-
-  // 排队位置没有推送事件：只轮询未取消的排队卡片。
-  useEffect(() => {
-    if (!queuedRuns.some((item) => !item.cancelled)) return;
-    const id = window.setInterval(() => {
-      for (const item of queuedRef.current) {
-        if (item.cancelled) continue;
-        client
-          .getRunStatus(item.runId)
-          .then((runStatus) => {
-            setQueuedRuns((prev) => {
-              const current = prev.find((entry) => entry.runId === item.runId);
-              if (!current || current.cancelled) return prev;
-              if (runStatus.status === 'queued') {
-                const sessionId = current.sessionId ?? runStatus.session_id;
-                if (
-                  current.queuePosition === runStatus.queue_position &&
-                  current.sessionId === sessionId
-                ) {
-                  return prev;
-                }
-                return prev.map((entry) =>
-                  entry.runId === item.runId
-                    ? {
-                        ...entry,
-                        ...(runStatus.queue_position !== undefined
-                          ? { queuePosition: runStatus.queue_position }
-                          : {}),
-                        ...(sessionId ? { sessionId } : {}),
-                      }
-                    : entry,
-                );
-              }
-              if (runStatus.status === 'cancelled') {
-                return prev.map((entry) =>
-                  entry.runId === item.runId
-                    ? { ...entry, cancelling: false, cancelled: true }
-                    : entry,
-                );
-              }
-              return prev.filter((entry) => entry.runId !== item.runId);
-            });
-          })
-          .catch(() => {
-            // 位置未知时保留卡片，不把轮询失败升级成全局错误。
-          });
-      }
-    }, QUEUE_POLL_MS);
-    return () => window.clearInterval(id);
-  }, [queuedRuns, client]);
-
-  // 事件流接管（run 真正开始）后移除排队占位卡片。
-  // 快照每 50ms 变一次，但队列通常是空的：没有要移除的卡片时返回同一个引用，
-  // 避免每帧都提交一次渲染（流式时聊天子树会因此 20–40 次/秒重渲）。
-  useEffect(() => {
-    setQueuedRuns((prev) => {
-      const next = prev.filter((item) => !startedRuns.has(item.runId));
-      return next.length === prev.length ? prev : next;
-    });
-  }, [startedRuns]);
 
   /**
    * 提交一段文本（发送与重试共用）：草稿态建新 agent，已有会话按 session 投递。
@@ -230,22 +160,8 @@ export function useChatSubmit({
         if (sameRefs(current, submittedRefs)) setRefs(sourceKey, []);
       }
       if (!targetSessionId) navigate({ domain: 'chat', sessionId: nextSessionId });
-      if (run.status === 'queued' && !startedRuns.has(run.run_id)) {
-        const queuedSessionId = run.session_id ?? nextSessionId;
-        setQueuedRuns((prev) => [
-          ...prev.filter((item) => item.runId !== run.run_id),
-          {
-            runId: run.run_id,
-            ...(queuedSessionId ? { sessionId: queuedSessionId } : {}),
-            input: text,
-            ...(run.queue_position !== undefined ? { queuePosition: run.queue_position } : {}),
-            submittedAt: Date.now(),
-            cancelling: false,
-            cancelled: false,
-          },
-        ]);
-        toast.info(t('chat.toast.queued'));
-      }
+      // 排队态不在客户端记账：条带读 `agents.inbox`（按 session_id 过滤），这里只给反馈。
+      if (run.status === 'queued') toast.info(t('chat.toast.queued'));
       void loadSessions(client, { epoch, force: true });
       // 新会话建了新 agent：roster（会话行的 agent 地址）要立刻反映它。
       if (!targetSessionId) void loadRoster(nodes, teamControl);
@@ -332,36 +248,6 @@ export function useChatSubmit({
     [client, toast],
   );
 
-  const handleCancelQueued = async (runId: string) => {
-    setQueuedRuns((prev) =>
-      prev.map((item) => (item.runId === runId ? { ...item, cancelling: true } : item)),
-    );
-    try {
-      const result = await client.cancelRun(runId);
-      if (result.cancelled) {
-        setQueuedRuns((prev) =>
-          prev.map((item) =>
-            item.runId === runId ? { ...item, cancelling: false, cancelled: true } : item,
-          ),
-        );
-        toast.success(t('chat.toast.queueCancelled'));
-        window.setTimeout(() => {
-          setQueuedRuns((prev) => prev.filter((item) => item.runId !== runId));
-        }, 4000);
-      } else {
-        setQueuedRuns((prev) =>
-          prev.map((item) => (item.runId === runId ? { ...item, cancelling: false } : item)),
-        );
-        toast.error(t('chat.toast.cancelNotAccepted'));
-      }
-    } catch (error) {
-      setQueuedRuns((prev) =>
-        prev.map((item) => (item.runId === runId ? { ...item, cancelling: false } : item)),
-      );
-      toast.error(errorMessage(error));
-    }
-  };
-
   return {
     input,
     setInput,
@@ -375,12 +261,10 @@ export function useChatSubmit({
     removeRef,
     /** 发送受理序号（每次受理自增）：交给 `useStickyBottom({ sendTick })` 做发送即贴底。 */
     sendTick,
-    queuedRuns,
     cancelling,
     cancelledJobs,
     handleSend,
     handleRetry,
     handleCancel,
-    handleCancelQueued,
   };
 }

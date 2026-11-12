@@ -16,14 +16,7 @@ import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
-import {
-  AssistantText,
-  QueuedNotice,
-  type QueuedSubmission,
-  RunFailureCard,
-  ThinkingHint,
-  UserBubble,
-} from './StreamItems';
+import { AssistantText, RunFailureCard, ThinkingHint, UserBubble } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
 import { ToolCard } from './ToolCard';
 import { Transcript } from './Transcript';
@@ -139,7 +132,6 @@ export function TranscriptWindow({
   hasEarlier,
   visibleGroups,
   renderedGroups,
-  visibleQueued,
   transcriptWindow,
   transcriptMessages,
   historyIndex,
@@ -161,7 +153,6 @@ export function TranscriptWindow({
   sendTick,
   onRetryDetail,
   onLoadEarlier,
-  onCancelQueued,
   onConfigureConnection,
   onGoChat,
   onEditMessage,
@@ -180,7 +171,6 @@ export function TranscriptWindow({
   hasEarlier: boolean;
   visibleGroups: readonly RunGroup[];
   renderedGroups: readonly RunGroup[];
-  visibleQueued: readonly QueuedSubmission[];
   transcriptWindow: { shown: Message[]; hiddenCount: number };
   transcriptMessages: readonly Message[];
   /** 历史侧 item / 反查表（调用侧按 messages 引用 memo，见 useChatTranscript）。 */
@@ -216,7 +206,6 @@ export function TranscriptWindow({
   sendTick: number;
   onRetryDetail: () => void;
   onLoadEarlier: () => void;
-  onCancelQueued: (runId: string) => void;
   onConfigureConnection: () => void;
   onGoChat: () => void;
   onEditMessage: (keepMessages: number, text: string) => void;
@@ -225,7 +214,7 @@ export function TranscriptWindow({
   // 打开 / 切换会话的 reset key：detail 到达（hydrate）会再触发一次稳定贴底；
   // 加载更早历史不改变这两个字段，因此不会跳底。
   const resetKey = selectedId ? `${selectedId}:${detailSessionId ?? ''}` : null;
-  const followKey = `${snapshotVersion}:${renderedGroups.length}:${visibleQueued.length}`;
+  const followKey = `${snapshotVersion}:${renderedGroups.length}`;
   const { scrollRef, getElement, pinned, onScroll, scrollToBottom, userIntentProps } =
     useStickyBottom({
       resetKey,
@@ -290,7 +279,6 @@ export function TranscriptWindow({
         messages: transcriptMessages,
         messageIndexOffset,
         liveGroups: activeAgent ? [] : renderedGroups,
-        queued: visibleQueued,
         windowStartTs,
         historyIndex,
         isHidden: isHiddenMessage,
@@ -303,7 +291,6 @@ export function TranscriptWindow({
       messageIndexOffset,
       activeAgent,
       renderedGroups,
-      visibleQueued,
       windowStartTs,
       historyIndex,
       isHiddenMessage,
@@ -490,21 +477,6 @@ export function TranscriptWindow({
           </StreamCard>
         );
       }
-      case 'queued':
-        return (
-          <QueuedNotice
-            item={{
-              runId: item.runId,
-              input: item.input,
-              ...(item.queuePosition !== undefined ? { queuePosition: item.queuePosition } : {}),
-              submittedAt: item.submittedAt,
-              cancelling: item.cancelling,
-              cancelled: item.cancelled,
-            }}
-            onCancel={onCancelQueued}
-            defaultOpen={cardsDefaultOpen}
-          />
-        );
       default:
         return null;
     }
@@ -553,10 +525,7 @@ export function TranscriptWindow({
             // 只有「什么都没有」时才换成 LoadingState：重连 / 重订阅时实时内容还在，
             // 换屏本身就是一次闪烁。
             <LoadingState label={t('chat.loadingHistory')} />
-          ) : !hasTranscript &&
-            visibleGroups.length === 0 &&
-            visibleQueued.length === 0 &&
-            !activeAgent ? (
+          ) : !hasTranscript && visibleGroups.length === 0 && !activeAgent ? (
             <EmptyState
               title={t('chat.empty.noHistoryTitle')}
               description={t('chat.empty.noHistoryDesc')}

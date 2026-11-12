@@ -200,7 +200,6 @@ function screenItems(
     messages,
     messageIndexOffset: 0,
     liveGroups: groups,
-    queued: [],
     historyIndex: { ...history, claims: decision },
     ...(sessionFailure !== undefined ? { sessionFailure } : {}),
   });
@@ -675,7 +674,6 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       }).map((item) => item.key);
       const mismatch = sameJson('key 序列（live + history vs 只有 history）', merged, historyOnly);
       if (mismatch !== null) return mismatch;
@@ -731,7 +729,6 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       }).map((item) => item.key);
       const mismatch = sameJson('粘住之后的 key 序列（vs 只有 history）', sticky, historyOnly);
       if (mismatch !== null) return mismatch;
@@ -740,7 +737,6 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 0,
         liveGroups: [grown],
-        queued: [],
       });
       if (!withoutLedger.some((item) => item.kind === 'run-text')) {
         return '对照失败：一次性判定本该在改写后失去认领（说明这条 fixture 没有测到粘性）';
@@ -1095,7 +1091,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [],
         messageIndexOffset: 0,
         liveGroups: groupsFromStore(store),
-        queued: [],
       });
       const cards = items.filter((item) => item.kind === 'run-failure');
       const card = cards[0];
@@ -1136,7 +1131,6 @@ const FIXTURES: readonly Fixture[] = [
         ],
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
         sessionFailure: snapshot,
       });
       // (b) 事件流里已有同 runId 的分组 → 事件流优先，只出一张。
@@ -1154,7 +1148,6 @@ const FIXTURES: readonly Fixture[] = [
             error: 'live error',
           },
         ],
-        queued: [],
         sessionFailure: snapshot,
       });
       // (c) failed 之后又 completed（session-liveness 误判）：终态以最后一次为准，不出卡。

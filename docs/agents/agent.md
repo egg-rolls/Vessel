@@ -62,7 +62,8 @@ applies_to: [N, M]
 ## 待处理条带的单一持久真相（0.53 addendum）
 
 - **inbox 条目两个 additive 字段**：`session_id`（= 这条消息是哪个会话的下一条输入）+ `refs`（附件引用，只有路径+元信息）。**只有 `input` 投递写 `session_id`**（唯一写入点 `trackInbox`，值 = 接管它的 `bindingId`），`wake` / `quiet` **不写** —— 带归属的条目会被启动恢复扫到并重投成 run input，给「只留档」的消息写归属等于让它再执行一遍。老文件缺字段 = 归属未知，读侧不回填、不猜归属。
-- **`agents.inbox` 入参二选一**（`agent_id` 或 `session_id`；后者服务端 `control.resolve()` 反查 agent，因为 rotate 窗口与退役 body 会让前端 roster 过期），服务端等值过滤、缺 `session_id` 的老条目永不命中；结果带可选 `session_id` 与顶层可选 `agent_id`（供 `agents.recall`）。**淘汰两级**：硬上界仍 200，腾位置先裁非 human 源最旧、再裁 human 源（人写的待处理输入不该被成员间投递挤掉），被裁的记 `agent.inbox.evicted` warn。
+- **`agents.inbox` 入参二选一**（`agent_id` 或 `session_id`；后者服务端 `control.resolve()` 反查 agent，因为 rotate 窗口与退役 body 会让前端 roster 过期），服务端等值过滤、缺 `session_id` 的老条目永不命中；结果带可选 `session_id` 与顶层可选 `agent_id`。**淘汰两级**：硬上界仍 200，腾位置先裁非 human 源最旧、再裁 human 源（人写的待处理输入不该被成员间投递挤掉），被裁的记 `agent.inbox.evicted` warn。**取消 / 撤回走 `agents.recall`（write）**，不是 `runs.cancel`：条目没有也不该有 run id，服务端按 message id 反查对应 queued run 一并取消，再按 source 分档 —— **human 源真删**（discard，不留墓碑）/ **agent 源 unhold 留档**（回可读 unread），正在跑的那条 `skipped: active`（撤回不是打断）。`runs.cancel` 成功后也会回调同一段收口（`releaseCancelledRun`）：否则 scheduler 摘了队列项而 `entry.queuedRuns` 永不清 ⇒ 该 agent 再也不会被 wake、消息永远 pending+held（D-a 僵尸）。
+- **Web 条带只读盘**：数据源是 `agents.inbox{ session_id = 当前会话 }`（服务端过滤 + 客户端只留 `from === 'human'`，**缺 `session_id` 的老条目一律不显示**，宁可隐藏也不串台），刷新 / 切会话都不丢；事件只当触发器，非空时 2s 兜底轮询（空态零流量）、取数前 250ms debounce。**时间线里的排队卡已删除**（`queued` item / `queued:<runId>` key 家族整个消失）：它从来不由事件派生，删掉不回改任何已落盘事件。卡头文案「等待中」（`chat.pending.waiting`），**不编队列序号** —— 落盘后没有权威顺序；取消成功即从条带消失，没有「已取消」残留态。
 ## 指针
 
 - RPC 形状：[gateway-rpc.md](../architecture/gateway-rpc.md#agent-lifecycle)；配置字段：[CONFIG.md](../operations/CONFIG.md)；决策：[ADR-095](../adr/ADR-095-agent-spawn-and-contractors.md) · [ADR-097](../adr/ADR-097-unified-agent-body-model.md)。

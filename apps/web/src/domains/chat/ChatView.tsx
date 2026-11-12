@@ -138,7 +138,6 @@ export function ChatView({
     selectedId,
     epoch,
     navigate,
-    snapshot,
     loadSessions: sessionsApi.loadSessions,
     loadRoster,
     nodes,
@@ -165,7 +164,6 @@ export function ChatView({
     loadEarlierDetail: sessionsApi.loadEarlierDetail,
     sessionDetailLoading: sessionsApi.sessionDetailLoading,
     sessionDetailError: sessionsApi.sessionDetailError,
-    queuedRuns: submitApi.queuedRuns,
     cancelling: submitApi.cancelling,
     cancelledJobs: submitApi.cancelledJobs,
     pendingNewSessions,
@@ -376,7 +374,6 @@ export function ChatView({
             hasEarlier={transcriptApi.hasEarlier}
             visibleGroups={transcriptApi.visibleGroups}
             renderedGroups={transcriptApi.renderedGroups}
-            visibleQueued={transcriptApi.visibleQueued}
             transcriptWindow={transcriptApi.transcriptWindow}
             transcriptMessages={transcriptApi.transcriptMessages}
             historyIndex={transcriptApi.historyIndex}
@@ -403,7 +400,6 @@ export function ChatView({
             sendTick={submitApi.sendTick}
             onRetryDetail={transcriptApi.reloadDetail}
             onLoadEarlier={transcriptApi.loadEarlier}
-            onCancelQueued={(runId) => void submitApi.handleCancelQueued(runId)}
             onConfigureConnection={() => navigate({ domain: 'gateway' })}
             onGoChat={() => navigate({ domain: 'chat' })}
             onEditMessage={handleEditMessage}
@@ -412,10 +408,14 @@ export function ChatView({
 
           {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：
               条带只负责「还有几条在等」，跟着输入区一起常驻。宽度 / 内边距由它自己
-              对齐消息列（见 PendingStrip.tsx）。 */}
+              对齐消息列（见 PendingStrip.tsx）。数据源是服务端持久真相
+              （`agents.inbox{ sessionId }`），刷新 / 切会话都不丢；`refreshKey` 只是
+              「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化）。 */}
           <PendingStrip
-            queued={transcriptApi.visibleQueued}
-            onCancel={(runId) => void submitApi.handleCancelQueued(runId)}
+            sessionId={selectedId}
+            client={client}
+            epoch={epoch}
+            refreshKey={submitApi.sendTick + transcriptApi.visibleGroups.length}
           />
         </div>
 

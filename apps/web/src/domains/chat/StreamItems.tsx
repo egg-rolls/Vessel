@@ -45,15 +45,14 @@ export function runDetailHref(group: Pick<RunGroup, 'runId' | 'sessionId'>): str
   });
 }
 
-/** 已受理但尚未开始执行的 run（服务端 queued 阶段不发事件）。 */
+/** 条带里的一条待处理输入（= inbox 条目；**没有 run id** —— 它还没变成一次执行）。 */
 export interface QueuedSubmission {
-  runId: string;
-  sessionId?: string;
+  /** 条目 id（inbox 的 message_id）：取消 / 展开 / 折叠的稳定 key。 */
+  id: string;
   input: string;
-  queuePosition?: number;
   submittedAt: number;
+  /** 取消请求在途（按钮禁用 + 文案换「取消中」）；只是本地的在途标记。 */
   cancelling: boolean;
-  cancelled: boolean;
 }
 
 /** 实时气泡没有操作项：只借 MessageActions 的时间位与 hover 显隐规则。 */
@@ -503,18 +502,18 @@ export const RunItems = memo(function RunItems({
  *
  * **色调就是这个组件要表达的东西**（用户裁决）：排队中的那条还没真正发出去，卡面用
  * 琥珀档（`--amber-soft` 底 + `--amber-ink` 文字，见 tokens.css：amber 是「未发送 / 排队中」
- * 专用语义色，不是通用 warn），把「未发送」与「正式消息」一眼分开；已取消的那条已经不是
- * 「等待中」了，退回 notice 家族的中性档（`--surface-sunken` + muted），不再警示。
+ * 专用语义色，不是通用 warn），把「未发送」与「正式消息」一眼分开。0.53 起这张卡只有一个
+ * 状态（还在等）：取消成功 ⇒ 条目从 inbox 消失 ⇒ 整张卡消失，不再有「已取消」残留档。
  *
- * 卡面两档都挂 `notice-block`：`tone` 的 neutral 档刻意不带家族类（工具卡 / 环境卡 /
+ * 卡面挂 `notice-block`：`tone` 的 neutral 档刻意不带家族类（工具卡 / 环境卡 /
  * agent 卡是裸行，不该被套上 notice 卡面），所以这里自己点家族类拿圆角 / 内衬；颜色由
  * 排队态那个修饰类（`stream-card-queued-waiting`，见 chat.css）覆盖成 amber。`tone` 保持
  * 默认 neutral —— StreamCard 的词表里没有 amber，也不该为一张卡去改卡原语。
  *
  * 卡头那颗胶囊落在琥珀底上，所以显式传 `StatusChip` 的 `onBand` 变体（不透明底 + ink
- * 文字），不再用「淡底淡字」的默认档；已取消那档在 sunken 底上，仍用默认档。
+ * 文字），不用「淡底淡字」的默认档。
  *
- * 卡头左侧只留**一个**状态标记：`StatusChip` 的字形（○ 排队 / – 已取消）已经表达了状态，
+ * 卡头左侧只留**一个**状态标记：`StatusChip` 的字形（○ 排队）已经表达了状态，
  * notice 家族的身份圆点不再叠一个（见 chat.css 的 `.stream-card-queued`）。
  *
  * 「取消排队」是**可操作控件**：放在 actions 插槽（始终可见），不进 summary，
@@ -523,20 +522,25 @@ export const RunItems = memo(function RunItems({
 export function QueuedNotice({
   item,
   onCancel,
+  label,
   defaultOpen = false,
 }: {
   item: QueuedSubmission;
-  onCancel: (runId: string) => void;
+  /** 取消：按**条目 id**（不是 run id —— 待处理条目没有 run）。 */
+  onCancel: (id: string) => void;
+  /**
+   * 卡头文案；缺省「等待中」（`chat.pending.waiting`）。
+   *
+   * 不编队列序号：条目落盘后没有权威顺序（`ts` 只保证「谁先到」），而 run 的
+   * `queue_position` 是调度器口径、对没有 run 的条目无意义。
+   */
+  label?: string;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；排队卡是纯信息卡。 */
   defaultOpen?: boolean;
 }) {
-  const status = item.cancelled ? 'cancelled' : 'queued';
-  // 排队中（还在等）才上琥珀带；已取消不加这个类，留在 notice 家族的中性档（不再警示）。
-  const stateClass = item.cancelled ? '' : 'stream-card-queued-waiting';
-  const position =
-    item.queuePosition != null
-      ? t('chat.run.queuedPosition', { position: item.queuePosition })
-      : t('chat.run.queuedUnknown');
+  // 待处理条目只有一种状态：还在等（取消成功 ⇒ 条目消失 ⇒ 整张卡消失，没有残留态）。
+  const status = 'queued';
+  const stateClass = 'stream-card-queued-waiting';
   return (
     <StreamCard
       // 卡宽跟列一致（w-full + min-w-0 + max-w-full）：短输入不缩水、长输入不撑宽。
@@ -545,20 +549,18 @@ export function QueuedNotice({
       title={
         <StatusChip
           status={status}
-          label={item.cancelled ? t('chat.run.cancelled') : position}
-          // 排队中的胶囊在琥珀底上 ⇒ onBand；已取消在 sunken 底上 ⇒ 默认档。
-          variant={item.cancelled ? 'default' : 'onBand'}
+          label={label ?? t('chat.pending.waiting')}
+          // 排队中的胶囊在琥珀底上 ⇒ onBand（不透明底 + ink 文字）。
+          variant="onBand"
         />
       }
       summary={item.input}
       actions={
-        !item.cancelled ? (
-          <div className="px-2.5 pb-1">
-            <Button variant="link" onClick={() => onCancel(item.runId)} disabled={item.cancelling}>
-              {item.cancelling ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
-            </Button>
-          </div>
-        ) : undefined
+        <div className="px-2.5 pb-1">
+          <Button variant="link" onClick={() => onCancel(item.id)} disabled={item.cancelling}>
+            {item.cancelling ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
+          </Button>
+        </div>
       }
     >
       {/* 正文是用户自己写的那条消息，压在琥珀底上也要读得清：用 ink，不用 muted。

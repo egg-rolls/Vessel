@@ -1,14 +1,15 @@
 /**
  * 待处理条带的排序与折叠（纯函数，无 React / DOM）。
  *
- * **数据来源是「本会话自己的排队提交」**（`useChatTranscript.visibleQueued`，已按
- * `item.sessionId === selectedId` 过滤），不再是 `agents.inbox`：inbox 是 agent 维度、
- * 条目里没有 session_id —— 既会把「父 agent 发给子成员的消息」串进这条带子，也没法在
- * 切会话时按会话过滤（详见 PendingStrip.tsx 头注释）。
+ * **数据来源是服务端持久真相**：`agents.inbox{ session_id }` 的条目（服务端已按会话归属
+ * 等值过滤，客户端只保留 `from === 'human'`、且**没有 `session_id` 的老条目一律不显示**）。
+ * 不再来自 `useChatTranscript.visibleQueued` 那份客户端内存 —— 那是「一份内存、两处渲染」，
+ * 刷新 / 切会话就消失；而 agent 维度的全量 inbox 会把「父 agent 发给子成员的消息」串进
+ * 这条带子。换了数据源之后，「串进子成员收件箱」和「切会话残留」两个问题一起消失。
  *
  * 口径（与 main 的裁决一致）：
  * - `held` 在前、按 ts 升序；其余（unread）按 ts 升序 —— 只做「谁在等」的稳定排序，
- *   不假装能拖拽换序（队列是内存态，拖了刷新就还原）。
+ *   不假装能拖拽换序（条目的先后只有 `ts` 是权威的，落盘后没有队列序号）。
  * - 条带只展示前 `PREVIEW_COUNT` 组，其余折叠成「还有 N 条」。
  * - **同源重复折叠**：相邻两条 `from` 相同、状态相同、且正文互为前缀或一条包含另一条
  *   时并成一组（组头显示一条摘要 + 「N 条」，可展开看全部）。这是**纯展示**折叠：
@@ -19,10 +20,9 @@
  */
 
 /**
- * 条带的一项：只带排序 / 折叠需要的字段（排队提交的 `run_id` 就是 `message_id`）。
+ * 条带的一项：只带排序 / 折叠需要的字段（结构上是 inbox 条目的子集）。
  *
- * 结构上与 `AgentInboxEntry` 同形，所以同一套纯函数既能吃 inbox 条目（F15 门禁用例），
- * 也能吃排队提交映射出来的项。
+ * 与 `AgentInboxEntry` 同形，所以同一套纯函数直接吃 RPC 读回来的条目（F15 门禁用例）。
  */
 export interface PendingStripEntry {
   message_id: string;

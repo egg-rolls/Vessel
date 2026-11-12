@@ -98,7 +98,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [msg('user', 'run tsc'), assistantCall('c1', 'bash'), toolMsg('c1', 'ok')],
         messageIndexOffset: 0,
         liveGroups: [group({ runId: 'r1', items: [toolItem('c1', 'running')], input: 'run tsc' })],
-        queued: [],
       });
       const tools = items.filter((item) => item.kind === 'tool');
       return tools.length === 1 && tools[0]?.key === 'tool:c1';
@@ -112,7 +111,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [],
         messageIndexOffset: 0,
         liveGroups: [group({ runId: 'r1', liveText: 'hello', liveTextAnchorSeq: 7 })],
-        queued: [],
       });
       const flushed = buildTranscriptItems({
         messages: [],
@@ -120,7 +118,6 @@ const FIXTURES: readonly Fixture[] = [
         liveGroups: [
           group({ runId: 'r1', items: [textItem('hello', 'text-r1-0', 7)], status: 'completed' }),
         ],
-        queued: [],
       });
       const a = streaming.find((item) => item.kind === 'run-text');
       const b = flushed.find((item) => item.kind === 'run-text');
@@ -137,7 +134,6 @@ const FIXTURES: readonly Fixture[] = [
         liveGroups: [
           group({ runId: 'r1', items: [toolItem('c1', 'running'), toolItem('c2', 'running')] }),
         ],
-        queued: [],
       });
       const ids = items.filter((item) => item.kind === 'tool').map((item) => item.key);
       return ids.length === 2 && ids.includes('tool:c1') && ids.includes('tool:c2');
@@ -158,7 +154,6 @@ const FIXTURES: readonly Fixture[] = [
           group({ runId: 'r1', status: 'completed', input: '再来一次', output: '第一次答复' }),
           group({ runId: 'r2', input: '再来一次' }),
         ],
-        queued: [],
       });
       const userItems = items.filter(
         (item) => item.kind === 'message' && item.message.role === 'user',
@@ -183,7 +178,6 @@ const FIXTURES: readonly Fixture[] = [
           group({ runId: 'r1', status: 'completed', input: '再来一次', output: '第一次答复' }),
           group({ runId: 'r2', input: '再来一次' }),
         ],
-        queued: [],
       });
       return items.some((item) => item.kind === 'run-input' && item.key === 'run:r2:input');
     },
@@ -206,7 +200,6 @@ const FIXTURES: readonly Fixture[] = [
             ],
           }),
         ],
-        queued: [],
       });
       const notices = items.filter((item) => item.kind === 'notice');
       const texts = items.filter((item) => item.kind === 'run-text');
@@ -225,13 +218,11 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 100,
         liveGroups: [],
-        queued: [],
       });
       const after = buildTranscriptItems({
         messages,
         messageIndexOffset: 50,
         liveGroups: [],
-        queued: [],
       });
       return (
         JSON.stringify(keys(before)) === JSON.stringify(['msg:100', 'msg:101']) &&
@@ -247,7 +238,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [msg('user', '原始输入'), msg('assistant', '落盘答复')],
         messageIndexOffset: 0,
         liveGroups: [group({ runId: 'r1', input: '被改写过的输入', output: '完全不同的输出' })],
-        queued: [],
       });
       const messages = items.filter((item) => item.kind === 'message');
       const input = items.some((item) => item.kind === 'run-input');
@@ -262,7 +252,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [msg('user', 'window-start', { timestamp: 5000 })],
         messageIndexOffset: 0,
         liveGroups: [group({ runId: 'r-old', input: 'old', startedAt: 1000 })],
-        queued: [],
         windowStartTs: 5000,
       });
       const keysInOrder = keys(items);
@@ -279,7 +268,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [msg('user', 'go'), assistantCall('c1', 'bash'), toolMsg('c1', 'ok')],
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       return count(items, 'message') === 1 && count(items, 'tool') === 1;
     },
@@ -339,7 +327,6 @@ const FIXTURES: readonly Fixture[] = [
             ],
           }),
         ],
-        queued: [],
       });
       const cards = items.filter((item) => item.kind === 'tool');
       const card = cards[0];
@@ -406,13 +393,11 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 0,
         liveGroups,
-        queued: [],
       });
       const historyOnly = buildTranscriptItems({
         messages,
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       const historyKeys = new Set(historyOnly.map((item) => item.key));
       const shared = merged.filter((item) => historyKeys.has(item.key)).map((item) => item.key);
@@ -498,7 +483,6 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 0,
         liveGroups,
-        queued: [],
       });
       const cards = merged.filter((item) => item.kind === 'tool');
       const first = cards[0];
@@ -555,13 +539,11 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 0,
         liveGroups,
-        queued: [],
       });
       const historyOnly = buildTranscriptItems({
         messages,
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       const historyKeys = new Set(historyOnly.map((item) => item.key));
       const shared = merged.filter((item) => historyKeys.has(item.key)).map((item) => item.key);
@@ -611,13 +593,11 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 0,
         liveGroups,
-        queued: [],
       });
       const historyOnly = buildTranscriptItems({
         messages,
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       const mergedKeys = merged.map((item) => item.key);
       const tool = merged.find((item) => item.kind === 'tool');
@@ -690,7 +670,6 @@ const FIXTURES: readonly Fixture[] = [
             ],
           }),
         ],
-        queued: [],
       });
       const cards = items.filter((item) => item.kind === 'tool');
       const card = cards[0];
@@ -749,7 +728,6 @@ const FIXTURES: readonly Fixture[] = [
             ],
           }),
         ],
-        queued: [],
       });
       const reasoning = items.find((item) => item.kind === 'run-reasoning');
       const tool = items.find((item) => item.kind === 'tool');
@@ -805,7 +783,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [],
         messageIndexOffset: 0,
         liveGroups: [liveGroup],
-        queued: [],
       });
       const liveKinds = liveOnly.map((item) => item.kind).join(',');
       // ② 落盘后回填：assistant 一条消息同时带 reasoning_content 与 tool_calls（思考与正文
@@ -825,7 +802,6 @@ const FIXTURES: readonly Fixture[] = [
         ],
         messageIndexOffset: 0,
         liveGroups: [liveGroup],
-        queued: [],
       });
       const mergedKinds = merged.map((item) => item.kind).join(',');
       const tool = merged.find((item) => item.kind === 'tool');
@@ -873,7 +849,6 @@ const FIXTURES: readonly Fixture[] = [
             ],
           }),
         ],
-        queued: [],
       });
       const keys = items.map((item) => item.key);
       const tool = items.find((item) => item.kind === 'tool');
@@ -896,14 +871,12 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
         noticeKindOf: (message) => (message.name === 'vessel:notice' ? 'notice' : undefined),
       });
       const hidden = buildTranscriptItems({
         messages,
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
         isHidden: (message) => message.name === 'vessel:notice',
         noticeKindOf: (message) => (message.name === 'vessel:notice' ? 'notice' : undefined),
       });
@@ -925,7 +898,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [msg('user', '[inbox] 这是我粘贴的日志，不是系统提示')],
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       const first = items[0];
       return items.length === 1 && first !== undefined && first.kind === 'message';
@@ -947,14 +919,12 @@ const FIXTURES: readonly Fixture[] = [
         messages,
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
         isHidden: (message) => message.name === 'vessel:source',
       });
       const visible = buildTranscriptItems({
         messages,
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       return count(hidden, 'message') === 1 && count(visible, 'message') === 2;
     },
@@ -974,7 +944,6 @@ const FIXTURES: readonly Fixture[] = [
         ],
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
         isHidden: (message) => message.name === 'vessel:source',
       });
       const messages = items.filter((item) => item.kind === 'message');
@@ -998,7 +967,6 @@ const FIXTURES: readonly Fixture[] = [
         ],
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       const messages = items.filter((item) => item.kind === 'message');
       const agent = messages.find(
@@ -1027,7 +995,6 @@ const FIXTURES: readonly Fixture[] = [
             items: [textItem('好的', 'k1')],
           }),
         ],
-        queued: [],
       });
       const text = items.find((item) => item.kind === 'run-text');
       return (
@@ -1046,7 +1013,6 @@ const FIXTURES: readonly Fixture[] = [
         ],
         messageIndexOffset: 0,
         liveGroups: [group({ runId: 'r1', input: '被改写过的输入' })],
-        queued: [],
       });
       const input = items.find((item) => item.kind === 'run-input');
       return (
@@ -1067,7 +1033,6 @@ const FIXTURES: readonly Fixture[] = [
         ],
         messageIndexOffset: 0,
         liveGroups: [group({ runId: 'r-old', input: '被改写过的输入', status: 'completed' })],
-        queued: [],
       });
       const input = items.find((item) => item.kind === 'run-input');
       return (
@@ -1096,7 +1061,6 @@ const FIXTURES: readonly Fixture[] = [
             status: 'completed',
           }),
         ],
-        queued: [],
         windowStartTs: 5000,
       });
       const input = items.find((item) => item.kind === 'run-input');
@@ -1128,7 +1092,6 @@ const FIXTURES: readonly Fixture[] = [
             items: [{ kind: 'text', text: 'a', key: 'ka', startedAt: 2000 }],
           }),
         ],
-        queued: [],
       });
       return keys(items).join(',') === 'msg:0,msg:1,run:run-a:text:0,run:run-b:text:0';
     },
@@ -1145,7 +1108,6 @@ const FIXTURES: readonly Fixture[] = [
         ],
         messageIndexOffset: 0,
         liveGroups: [group({ runId: 'run-2', input: 'q2', startedAt: 1900, firstSeq: 71 })],
-        queued: [],
       });
       const legacy = items.find((item) => item.kind === 'message' && item.absIndex === 1);
       // 没有前一条可沿用（窗口首条就缺 ts）：保持 undefined——carry 不造时间。
@@ -1153,7 +1115,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [msg('assistant', 'legacy'), msg('user', 'q1', { timestamp: 1000 })],
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       const first = headless.find((item) => item.kind === 'message' && item.absIndex === 0);
       return (
@@ -1176,7 +1137,6 @@ const FIXTURES: readonly Fixture[] = [
         ],
         messageIndexOffset: 0,
         liveGroups: [group({ runId: 'r1', input: '被改写过的输入' })],
-        queued: [],
       });
       const input = items.find((item) => item.kind === 'run-input');
       // 反向断言：普通用户消息仍然是锚点（只排除 vessel:*，不是「不再用最后一条用户消息」）。
@@ -1184,7 +1144,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [msg('user', 'q1', { timestamp: 1000 }), msg('user', 'q2', { timestamp: 3000 })],
         messageIndexOffset: 0,
         liveGroups: [group({ runId: 'r1', input: '被改写过的输入' })],
-        queued: [],
       });
       const plainInput = plain.find((item) => item.kind === 'run-input');
       return (
@@ -1209,7 +1168,6 @@ const FIXTURES: readonly Fixture[] = [
         messages: [msg('user', answer, { name: ASK_ANSWER_MESSAGE_NAME, timestamp: 2000 })],
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       const card = history.find((item) => item.kind === 'ask-answer');
       // (b) 运行态与历史同一对象：run 分组的 input_name 也是 ask:answer ⇒ live 那条被认领让位。
@@ -1224,7 +1182,6 @@ const FIXTURES: readonly Fixture[] = [
             startedAt: 1990,
           }),
         ],
-        queued: [],
       });
       // (c) 名字对但正文不可解析 ⇒ 退回普通用户消息（正文不许被吞）。
       const fallback = buildTranscriptItems({
@@ -1233,7 +1190,6 @@ const FIXTURES: readonly Fixture[] = [
         ],
         messageIndexOffset: 0,
         liveGroups: [],
-        queued: [],
       });
       const fallbackMessage = fallback.find((item) => item.kind === 'message');
       return (
