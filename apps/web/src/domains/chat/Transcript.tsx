@@ -12,26 +12,28 @@ import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { MessageRefs } from './MessageRefs';
-import { AssistantSpeaker, ReasoningBlock } from './ReasoningBlock';
+import { AssistantSpeaker, hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import type { TranscriptItem } from './transcript-items';
 
 /**
  * 这条历史消息自己要显示的思考文本（thinking 模式的 reasoning_content）。
  *
  * 历史侧的思考**挂在消息 item 内部**渲染，不单独造 item：
- * - 不双出：被 live 认领的 assistant 消息在建 item 流时就被丢弃了（transcript-items.ts
- *   的 buildTranscriptItems 里 `claimedAssistant.has(item.absIndex)` 那次 continue），
- *   那条消息的思考由 run:<runId>:reasoning:<n> 负责；能走到这里的消息一定没有 live 来源。
+ * - 不双出：被 live 认领的 assistant 消息照常保留（位置 / 操作按钮以历史为准），
+ *   让位的是 live 侧同文段的 `run-reasoning` item（transcript-items.ts 的
+ *   claimedReasoning）；能走到这里的消息一定没有同文的 live 思考项。
  * - 不另造 item 也就不碰排序/去重：思考跟着所属消息的时间戳走，位置固定在正文上方 ——
  *   与 live 里「思考 item 排在正文 item 之前」是同一个顺序语义。
  *
  * 没有正文、也没有 tool_calls 的消息同样走这里：只渲思考块（没有空正文节点、没有空气泡）。
+ *
+ * 「有没有思考卡」走 `hasReasoningCard`（唯一判据，与 live 的 `bodyToolbarKeys` 同一份）：
+ * 判据只有一处，工具栏归属才不会一边贴卡、一边贴正文。
  */
 function historyReasoning(message: Message): string | undefined {
   if (message.role !== 'assistant') return undefined;
   const text = message.reasoning_content;
-  if (typeof text !== 'string' || text.trim().length === 0) return undefined;
-  return text;
+  return hasReasoningCard(text) ? text : undefined;
 }
 
 /** 消息时钟：只作为 hover 工具栏的元信息（`<time dateTime>` 语义保留）。 */
@@ -159,10 +161,11 @@ function TranscriptMessage({
       onSelect: () => onRetry(previousUser.index, previousUser.text),
     });
   }
-  // 消息工具栏（复制 / 重试 / 时间）：位置只有一处 —— **这一段的第一块右侧**。
-  // 有思考卡就贴在卡右上角（`ReasoningBlock` 的 `actions`），没有思考卡才落在正文
-  // 右上角（`.msg-actions`）。两种情况都是绝对定位覆盖层：hover / focus-within
-  // 只切 opacity，**不给正文增加高度、出现时也不位移**（布局说明见 chat.css）。
+  // 消息工具栏（复制正文 / 重试 / 时间）：位置只有一处 —— **这一段思考卡或正文的右侧**。
+  // 有思考卡就贴卡右上角（`ReasoningBlock` 的 `actions`，卡自己还会再补一个「复制思考」），
+  // 没有思考卡才落在正文右侧（`.msg-actions`）。两种情况都是绝对定位覆盖层：
+  // hover / focus-within 只切 opacity，**不给正文增加高度、出现时也不位移**（布局说明见
+  // chat.css）。「有没有卡」的判据只有 `hasReasoningCard` 一份，与 live 侧同源。
   const toolbar =
     hasMeta || actions.length > 0 ? <MessageActions actions={actions} meta={meta} /> : undefined;
   return (

@@ -422,6 +422,13 @@ export const RunItems = memo(function RunItems({
               speaker={item.key === speakerKey}
               // 工具条是绝对定位覆盖层（`.msg-actions`，见 AssistantText 头注释）：
               // 不再带 `mt-1`，也不占正文下方的任何高度。
+              //
+              // 注意（主会话页与这里**暂不统一**，见 TranscriptWindow 的
+              // `bodyToolbarKeys`）：主时间线按 run 汇总 —— 该 run 有思考卡就不在正文上
+              // 挂工具条；子 agent 面板仍是**逐段正文**挂复制（每一段都能单独复制），
+              // 思考卡自己那个「复制思考」由 ReasoningBlock 负责，两条路径互不干扰。
+              // 统一到这里需要先决定「一整个 run 的正文」指哪一段（多段正文 / 兜底
+              // output），不在本次范围内。
               actions={
                 showActions && item.text.trim().length > 0 ? (
                   <MessageActions
