@@ -1087,9 +1087,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
    * 父宿主是否注册 ask 工具（0.27 / 0.33）。
    *
    * 0.33：headless 也注册（请求落盘后挂起，人类稍后回答并 resume），
-   * 所以「注册」不再等于「进程内有应答者」。成员 ExecutionUnit 仍只允许有**交互**
-   * 应答者的入口拿 ask：headless 成员没有 bridge 应答者，放行只会让
-   * 成员 run 永久等待。
+   * 所以「注册」不再等于「进程内有应答者」。
+   *
+   * 0.51：成员拿不拿 `ask` 已不由这里决定（不再传 `extraTools`）：判据是「父宿主注册了
+   * + 这具身体能 bridge」，缺哪条都由执行内核记进 `tools.list{agent_id}.unavailable`。
+   * 这个标志只剩一个用途 —— `humanApproval`：没有进程内应答者时，模型发起的 rotate
+   * 直接走 `rotate_not_needed`，不去等一个不会到来的确认。
    */
   const askUserAvailable = registerAskUser && config.ui?.askUser !== false;
   const interactiveHumanAvailable = askUserAvailable && !headless;
@@ -1273,10 +1276,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       limits: agentPlan.limits ?? limits,
       termination: memberTermination,
       ...(agentPlan.readOnlyTools !== undefined ? { readOnlyTools: agentPlan.readOnlyTools } : {}),
-      // 0.27：成员 ExecutionUnit 只能拿到父宿主真注册了的工具。只有**交互**入口才放行
-      // ask；headless 的父宿主会挂起（没有进程内应答者），成员放行只会
-      // 让成员 run 等一个不会到来的 bridge 应答。
-      ...(interactiveHumanAvailable ? { extraTools: ['ask'] } : {}),
+      // 0.51：成员工具面 = 节点全量（只剩 deny 只读档与 bridge 两条闸），`ask` 不再由
+      // 装配层点名放行。它的可用性现在完全由两条真实事实决定：父宿主真的注册了 `ask`
+      // （按入口 + `ui.askUser` 决定），且这具身体能 bridge（`permissionMode: 'bridge'`
+      // + 父事件流）。缺任何一条都进 `unavailable`（reason `parent_answered`），而不是靠
+      // 这里传一个名字。详见 `packages/agent/src/runtime.ts` 的 `toolBlockReason`。
       ...(config.context?.maxTokens !== undefined
         ? { contextMaxTokens: config.context.maxTokens }
         : {}),

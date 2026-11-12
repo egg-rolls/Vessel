@@ -412,6 +412,24 @@ export interface MemberExecutionPort {
 export type MemberToolSource = 'plugin' | 'member';
 
 /**
+ * 节点有、但这具成员身体没有的工具，为什么没有（`tools.list{agent_id}.unavailable[].reason`）。
+ *
+ * 三种都来自执行内核的同一套判据（`toolBlockReason`），不是按工具名猜的：
+ * - `parent_answered`：需要父级转发人类应答（`ask`）而这具身体没有 bridge，放进来只会
+ *   让 run 永久等待；
+ * - `readonly_mode`：该身体是 deny（只读）档，只留下 `read` / `media` / `subscribe`；
+ * - `unknown`：静态规则放行了，但这具活身体上确实没有 —— 工具热刷新只在轮边界应用，
+ *   所以多半是「新工具还没刷过来」。宁可用兜底值也不编一条假原因。
+ */
+export type MemberToolUnavailableReason = 'parent_answered' | 'readonly_mode' | 'unknown';
+
+/** 被挡在成员工具面外的一条工具（只给名字与原因，键面与 `tools[]` 不同）。 */
+export interface MemberToolUnavailableEntry {
+  name: string;
+  reason: MemberToolUnavailableReason;
+}
+
+/**
  * 成员工具面单项（`tools.list{agent_id}` 的 `tools[]`）。
  *
  * 与 serve 的 `ToolInfo` 同形状，只多一个 `source`：前端要能说清「这是成员内置、
@@ -433,6 +451,15 @@ export interface MemberToolSurface {
    */
   surface: 'live' | 'derived';
   tools: MemberToolSurfaceEntry[];
+  /**
+   * 父宿主有、这具成员身体拿不到的工具 + 原因。
+   *
+   * 存在的意义是「看起来不是一个漏了，而是被一条规则挡的」：成员工具面 = 节点全量
+   * （0.51），剩下能挡的只有两条规则，所以这份清单只在真有内容时非空（有 `ask` 而
+   * 这具身体没 bridge、或该身体在 deny 档），节点上没有这类工具时它就是空的，不为了
+   * 好看凑数。由执行内核算（只有它知道判据），serve 只透传。
+   */
+  unavailable: MemberToolUnavailableEntry[];
 }
 
 /** `AgentService.drain` 结果：无在跑轮 / 已中断收口 / 超时 */

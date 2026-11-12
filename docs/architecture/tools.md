@@ -51,7 +51,7 @@ interface ToolDefinition {
 | `ask` | 交互 REPL、`gateway start` / `--serve` 与 headless（`--run` / 管道）都注册；`ui.askUser: false` 可关闭。两种语义见下「ask 的 sync / async」 |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：默认 root 工具面 = 能力工具 + `agent` + `subscribe`；显式 `agent.enabled: false` 去掉 `agent`；交互 REPL 或 gateway-serve 再加 `ask`；成员 body 另有 `inbox`（**节点插件面看不到它**：要看成员身体实际拿到的那一份，用 `tools.list{agent_id}` —— 响应里的 `surface` 区分「活身体实取 `live`」与「无活身体时按 spawn 同一套规则推导 `derived`」，条目上的 `source: 'member'` 标出这类成员内置工具；见 [gateway-rpc](gateway-rpc.md)）。配置 MCP 后在基础上加 MCP 工具（数量由 server 提供）。实际清单以 `bun run src/cli.ts --tools` 输出为准，本文不写死数量。`--tools` 一次性命令按 headless 口径列出，且**不连接 MCP、不展开 `ask` 与成员侧 `inbox`**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
+口径：默认 root 工具面 = 能力工具 + `agent` + `subscribe`；显式 `agent.enabled: false` 去掉 `agent`；交互 REPL 或 gateway-serve 再加 `ask`；成员 body 另有 `inbox`（**节点插件面看不到它**：要看成员身体实际拿到的那一份，用 `tools.list{agent_id}` —— 响应里的 `surface` 区分「活身体实取 `live`」与「无活身体时按 spawn 同一套规则推导 `derived`」，条目上的 `source: 'member'` 标出这类成员内置工具，`unavailable` 列出「节点有、这具身体拿不到 + 原因」；见 [gateway-rpc](gateway-rpc.md)）。**成员的工具面 = 节点全量**（0.51 起无白名单）：deny（只读）档只留 `read` / `media` / `subscribe`，需要父级应答的 `ask` / `ask_user` 要求 bridge，其余作者注册了什么成员就用什么 —— 判据见 [agent-structure](agent-structure.md) 的「成员工具面」。配置 MCP 后在基础上加 MCP 工具（数量由 server 提供）。实际清单以 `bun run src/cli.ts --tools` 输出为准，本文不写死数量。`--tools` 一次性命令按 headless 口径列出，且**不连接 MCP、不展开 `ask` 与成员侧 `inbox`**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|

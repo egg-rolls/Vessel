@@ -36,6 +36,7 @@ export type {
   AgentStatusLike,
   AgentToolSurfaceEntryLike,
   AgentToolSurfaceLike,
+  AgentToolSurfaceUnavailableLike,
   AgentUpdateLikeInput,
   AgentVisibilityLike,
   SessionActivateLikeInput,

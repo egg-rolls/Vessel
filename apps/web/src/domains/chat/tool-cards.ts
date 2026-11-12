@@ -131,7 +131,7 @@ const KNOWN_ARG_NAMES: readonly string[] = [
   'name',
 ];
 
-/** Codex 式关键参数摘要：bash 命令行首行、路径、pattern、delegate task。 */
+/** Codex 式关键参数摘要：bash 命令行首行、路径、pattern。 */
 export function toolSummary(name: string, args: unknown, maxLength = 96): string {
   const parsed = parseToolArgs(args);
   if (parsed === undefined) return '';
@@ -146,7 +146,6 @@ export function toolSummary(name: string, args: unknown, maxLength = 96): string
       write: ['path', 'file_path'],
       grep: ['pattern', 'query', 'regex'],
       search: ['query', 'pattern'],
-      delegate_task: ['task', 'prompt'],
     };
     value =
       scalarArg(parsed, byTool[name] ?? []) ??

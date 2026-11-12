@@ -19,6 +19,21 @@ export interface ToolInfo {
  */
 export type ToolSurface = 'live' | 'derived';
 
+/**
+ * 节点有、这个成员拿不到的工具的**原因**（服务端算好，界面只负责显示）。
+ *
+ * - `parent_answered`：需要父级转发人类应答（`ask`），这具身体没有 bridge；
+ * - `readonly_mode`：该成员是 deny（只读）档，只留 `read` / `media` / `subscribe`；
+ * - `unknown`：规则放行了，但这具活身体上确实没有（多半是新工具还没热刷新过来）。
+ */
+export type ToolUnavailableReason = 'parent_answered' | 'readonly_mode' | 'unknown';
+
+/** 被挡在成员工具面外的一条工具（只有名字与原因，没有 schema / 描述）。 */
+export interface ToolUnavailable {
+  name: string;
+  reason: ToolUnavailableReason;
+}
+
 /** `tools.list` 响应：不带 `agent_id` 时只有 `tools`（旧形状）。 */
 export interface ToolListResponse {
   tools?: ToolInfo[];
@@ -26,6 +41,12 @@ export interface ToolListResponse {
   surface?: ToolSurface;
   /** 只在按成员查询时出现 */
   agent_id?: string;
+  /**
+   * 只在按成员查询时出现：节点有、这个成员拿不到的工具 + 原因。
+   *
+   * 旧 gateway 没有这个字段（也不会有 `surface`）⇒ 按「不知道」处理，不推出「没有工具被挡」。
+   */
+  unavailable?: ToolUnavailable[];
 }
 
 /**

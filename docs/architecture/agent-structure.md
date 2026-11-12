@@ -1,7 +1,7 @@
 ---
 title: Agent 结构、成员与临时
 kind: current
-triggers: [agent, member, peer, contractor, temporary, owner, team, create, hire, role, promote, demote]
+triggers: [agent, member, peer, contractor, temporary, owner, team, create, hire, role, promote, demote, tool-surface, unavailable, allowlist]
 paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/team/**, apps/web/src/stores/**]
 ---
 
@@ -88,6 +88,12 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
   temporary 绑定 Team 仍是 temporary。
 - 回收：仅 `temporary` 且 `present` 可被空闲 TTL 回收（`membership='left'` + `state='closed'`，
   body 记录保留标 `retiredAt`）；`member`（含 `main`）永不回收。复活走 `reinstate`。
+
+## 成员工具面
+
+- **成员能用节点上的全部工具**（0.51 权限模型变更，用户裁定「节点有的 agent 都可以用，不做 agent 细分，所以也不需要白名单」）：`MemberExecutionHost.selectTools` 就地全量复制父宿主工具（含插件工具与 MCP 动态注册的外部工具），只剩两道闸 —— deny（只读）档收成 `read` / `media` / `subscribe`（`subscribe` 按工具粒度给，`add` / `remove` 仍改会话订阅状态，是知情取舍）；需要父级转发人类应答的 `ask` / `ask_user` 只在 `permissionMode: 'bridge'` 且有父事件流时进面，否则注册进来只会让 run 永久等待。旧白名单（`DEFAULT_ALLOWED_TOOLS` 四件套）与 `extraTools` 已整体删除；`agent` 仍换成员版 schema（`restrictAgentTool`）。
+- **这是故意的权限变更，不是隐式默认**：成员因此能调用 MCP 等外部工具，装配侧 `withMemberAutoApprove` 还会让 `agent` 免确认（其余工具在 bridge 档仍按 `permission` 逐次确认）。用户明确接受这一取舍；要收紧就收紧**注册侧**（`tenant-tools` 的 allow/deny）或权限策略（`autoApprove` / `neverAutoApprove`），不要在成员层重新长出一份白名单。
+- `buildSurface` 仍是唯一来源：spawn、工具热刷新、`tools.list{agent_id}` 的推导三条路径共用它。`tools.list{agent_id}` 的 `unavailable: [{ name, reason }]` 由同一份 `selectTools` 产出（判据只有一处），reason 取值 `parent_answered` / `readonly_mode` / `unknown`（活身体上规则放行却还没有该工具 = 工具热刷新未到）。Web 工具面板在成员视图把这段单列，标出「被规则挡住」而不是「面板漏了」。
 
 ## Web 状态
 

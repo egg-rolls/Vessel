@@ -2,7 +2,9 @@
  * 进程内成员执行内核适配（MemberExecutionPort）。
  *
  * 每个成员独占一个 ExecutionUnit / Context / EventStream；工具从父 PluginHost
- * 按白名单复制，hooks / guardrails 一并继承。`permissionMode: 'bridge'` 时
+ * **全量复制**（0.51：节点有什么就给什么，只减 deny 档的只读集合与「需要人类应答但没有
+ * bridge」这一条，见 `toolBlockReason`），hooks / guardrails 一并继承。
+ * `permissionMode: 'bridge'` 时
  * 成员的权限/提问请求转发到 `parentEvents`，父级应答原样回灌成员事件流；
  * 没有 `parentEvents` 时退化为 ask → deny（A3a 行为），避免 run 永久等待。
  *
@@ -50,28 +52,43 @@ import type {
   MemberPermissionState,
   MemberToolSurface,
   MemberToolSurfaceEntry,
+  MemberToolUnavailableEntry,
+  MemberToolUnavailableReason,
   MemberTurnResult,
 } from './types.js';
 
-/**
- * 成员默认工具白名单（agent 支持成员换 ExecutionUnit）。
+/*
+ * 成员工具面 = **节点全量**（0.51 权限模型变更，用户裁定）。
  *
  * 工具面共有 **4 层闸门**，这里只是「成员选择」这一层。改工具面前先看清改的是哪层：
- *   1. 本文件 —— 成员能从父宿主挑哪些（默认 `bash`/`read`/`edit`/`agent`）
+ *   1. 本文件 —— 成员能从父宿主挑哪些（**父宿主注册了什么就给什么**；只剩两条真实闸：
+ *      deny 档收成只读集合、`ask` 这类需要父级应答的工具要求 bridge）
  *   2. `packages/config/src/tenant-tools.ts` —— tenant 级 allow/deny（**注册侧**）
  *   3. `packages/core/src/runtime/permission-policy.ts` —— 单次调用放行（allow/ask/deny）
  *   4. `src/permission-store.ts` —— `autoApprove` / `neverAutoApprove`（是否跳过审批）
  *
- * 给成员加工具时 **本文件与 #2 都要过**：只改 #2 会让能力静默消失（`ask` 就是这样
- * 丢过一次 —— 注册侧加了、选择侧不认，且不报错）。详见 `docs/lessons/L-011`。
+ * 为什么不再有白名单（0.51 之前是 `bash`/`read`/`edit`/`agent` 四件套）：白名单要求
+ * 「节点上每加一个工具就要记得在这里加一条」，漏加是**静默**的能力缺失（`ask` 就这样
+ * 丢过一次 —— 注册侧加了、选择侧不认、且不报错，见 `docs/lessons/L-011`）。用户裁定
+ * 「节点有的 agent 都可以用，现在不做 agent 细分，所以也不需要白名单」，判据因此变成
+ * 「父宿主有什么就给什么」：注册侧是唯一的能力声明，本层没有任何按工具名的清单，
+ * 只留两条例外规则（deny 只读档、`ask` 缺 bridge）。
+ *
+ * **安全影响是明知故犯，不是隐式默认**：成员现在能拿到节点插件面里的一切 —— 含插件
+ * 工具与 MCP 动态注册的外部工具 —— 并且装配侧的 `withMemberAutoApprove` 会给成员免确认
+ * `agent`（bridge 档的其余工具仍按 `permission` 逐次确认）。这由用户在 0.51 明确接受
+ * （「全部放开（含 MCP 动态工具），接受成员自动放行」）。要收紧就收紧**注册侧**
+ * （#2 tenant allow/deny）或权限策略（#3/#4），不要在下面重新长出一份白名单。
  */
-const DEFAULT_ALLOWED_TOOLS = ['bash', 'read', 'edit', 'agent'] as const;
 
-/** deny 模式保留的只读工具（与 delegate 语义一致） */
-const DEFAULT_READ_ONLY_TOOLS = ['read'] as const;
-
-/** 成员永远拿不到的工具：team 工具、递归分派 */
-const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set(['delegate_task']);
+/**
+ * deny（只读）档保留的工具：用户点名的这三件（`read` + `media` + `subscribe`）。
+ *
+ * 注意 `subscribe` 是按**工具**粒度给的：它的 `add` / `remove` 会改会话订阅状态，这里
+ * 给的就是整个工具。用户知情的取舍 —— 只读档要能把「订阅了什么」读出来、能订阅后再读，
+ * 代价是 deny 档下仍可增删订阅（不改工作区文件，只改本会话的订阅表）。
+ */
+const DEFAULT_READ_ONLY_TOOLS = ['read', 'media', 'subscribe'] as const;
 
 /**
  * 需要父级（有人类应答者）转发才能收口的工具。
@@ -331,9 +348,11 @@ export interface MemberExecutionHostOptions {
   model?: string;
   /** 工具 / hooks / guardrails 的来源（父宿主）；缺省时成员没有工具 */
   pluginHost?: PluginHost;
-  /** 在默认 bash/read/edit 之外显式追加的工具名 */
-  extraTools?: readonly string[];
-  /** deny 模式保留的只读工具（默认 ['read']） */
+  /**
+   * deny（只读）档保留的工具名；缺省 `read` / `media` / `subscribe`。
+   *
+   * 给了就**整体替换**缺省集合（不是追加）：这是「只读档到底给什么」的唯一开关。
+   */
   readOnlyTools?: readonly string[];
   /** 缺省 allow；deny 只保留只读工具；bridge 需配合 parentEvents */
   permissionMode?: MemberExecutionPermissionMode;
@@ -449,6 +468,11 @@ interface MemberSurfaceBuild {
   /** 已按 mode / bridge 收窄，按注册顺序排列（父宿主工具 → 注入工具） */
   tools: ToolDefinition[];
   injected: ReadonlySet<string>;
+  /**
+   * 父宿主有、但被规则挡在成员面外的工具 + 原因（`tools.list{agent_id}.unavailable`）。
+   * 由 `selectTools` 顺手产出：判据只能有一份，不能在这里按名字再猜一遍。
+   */
+  unavailable: MemberToolUnavailableEntry[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -679,11 +703,6 @@ function agentInputName(message: AgentMessage): string | undefined {
   return alias.length > 0 ? `agent:${alias}` : undefined;
 }
 
-/** 成员不可见的工具 */
-function isExcludedTool(name: string): boolean {
-  return EXCLUDED_TOOL_NAMES.has(name) || name.startsWith('team_');
-}
-
 /** 成员侧 agent 工具可用的动作（close 的审批在 checkPermission；create 需要成员自己所属 Team） */
 const MEMBER_AGENT_ACTIONS: readonly string[] = [
   'create',
@@ -825,7 +844,6 @@ function describeToolSurface(
 export class MemberExecutionHost implements MemberExecutionPort {
   private readonly model?: string;
   private readonly pluginHost?: PluginHost;
-  private readonly allowedTools: ReadonlySet<string>;
   private readonly readOnlyTools: ReadonlySet<string>;
   private readonly permissionMode: MemberExecutionPermissionMode;
   private readonly forceBridgeForTeams: boolean;
@@ -865,7 +883,6 @@ export class MemberExecutionHost implements MemberExecutionPort {
   constructor(options: MemberExecutionHostOptions) {
     this.model = options.model;
     this.pluginHost = options.pluginHost;
-    this.allowedTools = new Set([...DEFAULT_ALLOWED_TOOLS, ...(options.extraTools ?? [])]);
     this.readOnlyTools = new Set(options.readOnlyTools ?? DEFAULT_READ_ONLY_TOOLS);
     this.permissionMode = options.permissionMode ?? 'allow';
     this.forceBridgeForTeams = options.forceBridgeForTeams !== false;
@@ -1396,18 +1413,49 @@ export class MemberExecutionHost implements MemberExecutionPort {
    *   `maxLiveBodies` 名额、不留任何副作用。想让推导值与实取值保持一致，唯一的办法就是
    *   两边共用 `buildSurface`：谁都不许另写一份工具清单/筛选规则。
    *
+   * `unavailable`（节点有、这具身体没有 + 原因）同样出自 `selectTools`：界面要能说清
+   * 「这个工具不是漏了，是被某条规则挡的」，而不是让人对着两份清单自己猜。
+   *
    * 调用方（serve）把 `surface` 字段原样透出；不传 `agent_id` 的节点口径不受影响。
    */
   toolSurface(member: MemberExecutionMember): MemberToolSurface {
     const entry = this.entries.get(member.session_id);
     if (entry !== undefined && entry.memberId === member.id) {
+      const live = entry.pluginHost.listTools();
       return {
         surface: 'live',
-        tools: describeToolSurface(entry.pluginHost.listTools(), entry.injectedTools),
+        tools: describeToolSurface(live, entry.injectedTools),
+        unavailable: this.liveUnavailable(entry.mode, live),
       };
     }
     const derived = this.buildSurface(member);
-    return { surface: 'derived', tools: describeToolSurface(derived.tools, derived.injected) };
+    return {
+      surface: 'derived',
+      tools: describeToolSurface(derived.tools, derived.injected),
+      unavailable: derived.unavailable,
+    };
+  }
+
+  /**
+   * 活身体的 `unavailable`：**同一个 `selectTools` 的结果**减去这具身体实际注册的。
+   *
+   * 分两半，都不能靠名字猜：
+   * - 被规则挡的，直接用 `selectTools(mode).unavailable`（判据与工具面同源）；
+   * - 规则放行、但这具 body 上没有的 —— 那是**工具热刷新还没轮到它**（新工具在轮边界
+   *   才应用；单 run + prompt prefix 冻结）或它的来源快照更旧。静态规则解释不了，
+   *   所以诚实地给 `unknown`，不编一个原因。
+   */
+  private liveUnavailable(
+    mode: MemberExecutionPermissionMode,
+    live: readonly ToolDefinition[],
+  ): MemberToolUnavailableEntry[] {
+    const selection = this.selectTools(mode);
+    const present = new Set(live.map((tool) => tool.name));
+    const unavailable = selection.unavailable.filter((entry) => !present.has(entry.name));
+    for (const tool of selection.tools) {
+      if (!present.has(tool.name)) unavailable.push({ name: tool.name, reason: 'unknown' });
+    }
+    return unavailable;
   }
 
   /** 轮结束：清 running；若期间收到过工具刷新，在轮边界应用。 */
@@ -1446,9 +1494,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
     } = {},
   ): MemberSurfaceBuild {
     const mode = options.mode ?? this.effectivePermissionMode(member);
-    const tools = this.selectTools(mode, options.source).map((tool) =>
-      this.restrictPermissions(tool, member.id, mode),
-    );
+    const { tools: selected, unavailable } = this.selectTools(mode, options.source);
+    const tools = selected.map((tool) => this.restrictPermissions(tool, member.id, mode));
     const inboxTool =
       (options.injectInbox ?? this.inbox !== undefined)
         ? this.inboxTool(member.id, mode)
@@ -1459,6 +1506,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
       mode,
       tools: inboxTool === undefined ? tools : [...tools, inboxTool],
       injected: new Set(inboxTool === undefined ? [] : [inboxTool.name]),
+      unavailable,
     };
   }
 
@@ -1731,32 +1779,56 @@ export class MemberExecutionHost implements MemberExecutionPort {
     }
   }
 
+  /** 该身体能否把「等人类应答」的请求送到父事件流（只有 bridge 有这个订阅）。 */
+  private bridgeAvailable(mode: MemberExecutionPermissionMode): boolean {
+    return mode === 'bridge' && this.parentEvents !== undefined;
+  }
+
   /**
-   * 按模式与白名单从父宿主挑工具。
+   * 单个工具被挡在成员面外的原因；`undefined` = 放行。
    *
-   * `ask` 这类需要人类应答的工具额外要求 bridge：成员只会把请求发到自己的
-   * 事件流，没有 bridge 就没人转发、也没人应答，注册进来只会让 run 永久等待。
-   * 因此“父宿主注册了它”只是必要条件，真正的判据是本函数的结果（Self Card
-   * 的 `how to ask` 也从这里推导，不读入口层的 headless / ui 标志）。
+   * 这是成员侧筛选规则的**唯一**实现：`selectTools` 用它决定选不选，
+   * `tools.list{agent_id}.unavailable` 用它解释为什么没选。两处不能各写一遍 ——
+   * 分开写就会出现「工具确实不在面上，但界面给的原因是另一条规则」这种既难查又难信的状态。
+   *
+   * 判据顺序有语义：
+   * - `readonly_mode` 先判：deny 档只留只读集合，所以 `ask` 在这一档的诚实原因是「档位不给」
+   *   而不是「缺 bridge」（就算有 bridge，deny 也不会放它）；
+   * - `parent_answered` 其次：allow / bridge 档下 `ask` 只在真能 bridge 时才进面 —— 成员只会把
+   *   请求发到自己的事件流，没人转发就没人应答，注册进来只会让 run 永久等待。
+   */
+  private toolBlockReason(
+    name: string,
+    mode: MemberExecutionPermissionMode,
+  ): MemberToolUnavailableReason | undefined {
+    if (mode === 'deny' && !this.readOnlyTools.has(name)) return 'readonly_mode';
+    if (PARENT_ANSWERED_TOOL_NAMES.has(name) && !this.bridgeAvailable(mode)) {
+      return 'parent_answered';
+    }
+    return undefined;
+  }
+
+  /**
+   * 从父宿主挑工具：**父宿主有什么就给什么**，只减上面那两条闸（0.51）。
+   *
+   * `unavailable` 是这次筛选的副产物，与 `tools` 出自同一次遍历：谁被挡、为什么被挡，
+   * 与最终工具面永远不会说两套话。
    */
   private selectTools(
     mode: MemberExecutionPermissionMode,
     source: readonly ToolDefinition[] = this.pluginHost?.listTools() ?? [],
-  ): ToolDefinition[] {
-    const denyFilter = mode === 'deny';
-    const bridgeAvailable = mode === 'bridge' && this.parentEvents !== undefined;
-    const selected: ToolDefinition[] = [];
+  ): { tools: ToolDefinition[]; unavailable: MemberToolUnavailableEntry[] } {
+    const tools: ToolDefinition[] = [];
+    const unavailable: MemberToolUnavailableEntry[] = [];
     for (const tool of source) {
-      if (isExcludedTool(tool.name)) continue;
-      if (denyFilter) {
-        if (!this.readOnlyTools.has(tool.name)) continue;
-      } else if (!this.allowedTools.has(tool.name)) {
+      const reason = this.toolBlockReason(tool.name, mode);
+      if (reason !== undefined) {
+        unavailable.push({ name: tool.name, reason });
         continue;
       }
-      if (PARENT_ANSWERED_TOOL_NAMES.has(tool.name) && !bridgeAvailable) continue;
-      selected.push(tool.name === 'agent' ? restrictAgentTool(tool) : tool);
+      tools.push(tool.name === 'agent' ? restrictAgentTool(tool) : tool);
     }
-    return selected;
+    return { tools, unavailable };
   }
 
   /**
@@ -1796,7 +1868,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
    *
    * 判据只有一个：`ask` 是否真的在成员工具面里（即父宿主注册了 + bridge 可用）。
    * 没有它时给异步路径：`agent` 工具的 `action=send` 发到本机人类。
-   * 异步路径要同时成立才写：成员能调 `agent`（deny 模式只有 read 工具）；成员有
+   * 异步路径要同时成立才写：成员能调 `agent`（deny 档只留只读工具，没有 `agent`）；成员有
    * Team（地址路要求 caller.team_id 来补 team 段）。否则只是把阻塞写进最终文本。
    */
   private askHelpText(toolNames: readonly string[], teamId: string | undefined): string {
