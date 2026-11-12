@@ -65,13 +65,15 @@ export function DomainNav({
   const locale = useLocale();
   const {
     plugins,
+    state: pluginsState,
     pages: pluginPages,
     navGroups: pluginNavGroups,
     i18nByPlugin,
     panels: pluginPanels,
     methodsByPlugin,
   } = usePluginContributions();
-  const statuses = useNavStatus(plugins);
+  // 插件宿主的点还要「读取中 / 无条目」的区分，所以把 plugins.list 的读取态一起传下去。
+  const statuses = useNavStatus(plugins, pluginsState);
   const [collapsedGroups, setCollapsedGroups] = useState(readCollapsedGroups);
   const navPanels = panelsForSlot(pluginPanels, 'nav');
   const groups = buildNavModel({

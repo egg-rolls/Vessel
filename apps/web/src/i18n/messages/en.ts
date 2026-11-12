@@ -66,6 +66,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.status.hubNetwork': 'Hub unreachable',
   'nav.status.hubNotConfigured': 'Hub not configured',
   'nav.status.pluginHostNoMarketplace': 'Marketplace plugin not installed',
+  'nav.status.pluginHostLoading': 'Reading plugin list',
+  'nav.status.pluginHostListError': 'Failed to read plugin list',
   'nav.connStatusTitle': 'Gateway connection status; click to open connection settings',
   'nav.searchOrCommand': 'Search or type a command',
   'nav.opened': 'Opened {path}',

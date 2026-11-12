@@ -21,10 +21,10 @@
  *   （`useNavStatus` 的 `probeHubNavStatus`）与 Hub 页共写同一份 store，不从
  *   `config.get.hub` 推导；
  * - **pluginHost**：插件宿主**与 gateway 同进程**（`packages/serve/src/plugin-host`），
- *   所以「宿主在跑」的证据就是 gateway 连接是 open，而 `plugins.list` 里 marketplace
- *   条目存在且 `enabled` 说明面板确实在用；条目自带的 `status` 是**该插件**的加载状态，
- *   不是宿主连接状态，只有 `unhealthy` / `invalid` 才算失败证据（详见
- *   `pluginHostNavStatus`）。
+ *   所以「宿主在跑」的证据就是 gateway 连接是 open；`plugins.list` 的**读取态**再分一层
+ *   ——读取中 = amber（还没结论）、读取失败 = danger、读完且条目在才算「用没用」；
+ *   条目自带的 `status` 是**该插件**的加载状态，不是宿主连接状态，只有
+ *   `unhealthy` / `invalid` 才算失败证据（详见 `pluginHostNavStatus`）。
  *
  * 版本：gateway 取 `config.get.version`；hub 取 Hub directory 的 version；pluginHost 取
  * `plugins.list` 里 marketplace 条目的 `version`（即 marketplace 插件 manifest 的版本，
@@ -97,9 +97,27 @@ export function hubNavStatus(status: HubNavStatus): NavStatusMeta {
 }
 
 /**
+ * `plugins.list` 的读取态（宿主有没有给出条目集合）。
+ *
+ * 由调用方从 `usePluginContributions().state`（`ResourceState`）折算：`idle` /
+ * 首帧 `loading` → `loading`，`success`（以及带旧数据的刷新）→ `ready`，
+ * `error` → `error`。本文件不 import `state/useResource`，保持纯函数可单测。
+ */
+export type PluginListReadState = 'loading' | 'ready' | 'error';
+
+export interface PluginHostNavInput {
+  connectionState: ConnectionState;
+  hasToken: boolean;
+  /** `plugins.list` 里的 marketplace 条目；真的没有条目时 undefined。 */
+  marketplace: PluginListItem | undefined;
+  /** `plugins.list` 的读取态。 */
+  read: PluginListReadState;
+}
+
+/**
  * 插件宿主状态点。
  *
- * **灰点根因（本单要修的那个 bug）**：旧实现只看 marketplace 条目的 `status`，把
+ * **灰点根因（上一轮修的那个 bug）**：旧实现只看 marketplace 条目的 `status`，把
  * `status === 'inactive'` 映射成 muted。但 `inactive` 是**懒激活 child 插件的初始加载
  * 状态**，与「宿主是否在跑 / 是否连上」是两件事：
  *
@@ -112,30 +130,35 @@ export function hubNavStatus(status: HubNavStatus): NavStatusMeta {
  *   （`plugins/marketplace/marketplace/package.json` 的 `vessel.version`），说明宿主已经把
  *   manifest 读进来并正常应答了 `plugins.list` —— 宿主明显是连上的，点却是灰的。
  *
- * 因此把「宿主连接状态」与「该插件的运行期状态」分开取证据（按顺序判定）：
+ * 因此把「宿主连接状态」「`plugins.list` 读取态」「该插件的运行期状态」分成三层取证据
+ * （按顺序判定）：
  *
- * | 证据                                                    | tone   | 文案 key                        |
- * | ------------------------------------------------------- | ------ | ------------------------------- |
- * | 没有 gateway token（用户没连，宿主未知）                | muted  | nav.status.offline              |
- * | gateway 连不上 / 报错（宿主与 gateway 同进程 ⇒ 不可达）  | danger | nav.status.error                |
- * | 连接中 / 重连中（还没结论）                             | amber  | nav.status.connecting           |
- * | 还没开始连（idle，信息未知）                            | muted  | nav.status.unknown              |
- * | 连上了但没有 marketplace 条目（宿主没有它 ⇒ 不使用）     | muted  | nav.status.pluginHostNoMarketplace |
- * | 连上了但 marketplace 被禁用（用户没开它）                | muted  | pluginHost.enabled.off          |
- * | `status` 为 `unhealthy` / `invalid`（明确失败）          | danger | pluginHost.status.<status>      |
- * | `status` 为 `disabled` 而 `enabled` 为真（wire 矛盾，按未知） | muted | pluginHost.status.disabled   |
- * | `status` 为 `active`（已激活）                           | accent | pluginHost.status.active        |
- * | `status` 为 `inactive`（懒激活待触发，宿主正常）         | accent | pluginHost.status.lazy          |
- * | 没有 `status`（旧 gateway 无 E10 元数据，宿主仍已应答）  | accent | pluginHost.status.hostConnected |
+ * | 证据                                                       | tone   | 文案 key                            |
+ * | ---------------------------------------------------------- | ------ | ----------------------------------- |
+ * | 没有 gateway token（用户没连，宿主未知）                   | muted  | nav.status.offline                  |
+ * | gateway 连不上 / 报错（宿主与 gateway 同进程 ⇒ 不可达）     | danger | nav.status.error                    |
+ * | 连接中 / 重连中（还没结论）                                | amber  | nav.status.connecting               |
+ * | 还没开始连（idle，信息未知）                               | muted  | nav.status.unknown                  |
+ * | 连上了但 `plugins.list` 读取失败（明确失败，不信旧快照）    | danger | nav.status.pluginHostListError      |
+ * | 连上了、`plugins.list` 还没回来（进行中）                  | amber  | nav.status.pluginHostLoading        |
+ * | 读完了但没有 marketplace 条目（宿主没有它 ⇒ 不使用）       | muted  | nav.status.pluginHostNoMarketplace  |
+ * | 读完了但 marketplace 被禁用（用户没开它）                  | muted  | pluginHost.enabled.off              |
+ * | `status` 为 `unhealthy` / `invalid`（明确失败）            | danger | pluginHost.status.<status>          |
+ * | `status` 为 `disabled` 而 `enabled` 为真（wire 矛盾，按未知） | muted | pluginHost.status.disabled         |
+ * | `status` 为 `active`（已激活）                             | accent | pluginHost.status.active            |
+ * | `status` 为 `inactive`（懒激活待触发，宿主正常）           | accent | pluginHost.status.lazy              |
+ * | 没有 `status`（旧 gateway 无 E10 元数据，宿主仍已应答）    | accent | pluginHost.status.hostConnected     |
  *
- * accent 的判据是「有连接证据 + 没有失败证据」，不是「把 inactive 硬当绿」：这里只有
- * `unhealthy` / `invalid` 算失败证据，`inactive` 只说明插件还没被懒激活。
+ * accent 的判据是「有连接证据 + 读取完成 + 没有失败证据」，不是「把 inactive 硬当绿」：
+ * 这里只有 `unhealthy` / `invalid` 算失败证据，`inactive` 只说明插件还没被懒激活。
+ * 「读取中」与「真的没有条目」是两件事：前者 amber + 「正在读取插件列表」，后者 muted +
+ * 「未安装 marketplace 插件」。
+ *
+ * 读取失败判 danger 而不是 muted：四档语义里「出错」就是 danger，且我们拿不到当前
+ * 条目集合（旧快照可能是过期的），不该用灰点冒充「未配置」。
  */
-export function pluginHostNavStatus(
-  connectionState: ConnectionState,
-  hasToken: boolean,
-  marketplace: PluginListItem | undefined,
-): NavStatusMeta {
+export function pluginHostNavStatus(input: PluginHostNavInput): NavStatusMeta {
+  const { connectionState, hasToken, marketplace, read } = input;
   const base = marketplace?.version !== undefined ? { version: marketplace.version } : {};
   if (!hasToken) return { tone: 'muted', labelKey: 'nav.status.offline', ...base };
   if (connectionState === 'closed' || connectionState === 'error') {
@@ -147,7 +170,14 @@ export function pluginHostNavStatus(
   if (connectionState !== 'open') {
     return { tone: 'muted', labelKey: 'nav.status.unknown', ...base };
   }
-  // 宿主确实在应答（gateway 连接 open）：只看「用没用」与「有没有失败证据」。
+  // 宿主确实在应答（gateway 连接 open）：先看 `plugins.list` 读到了没有。
+  if (read === 'error') {
+    return { tone: 'danger', labelKey: 'nav.status.pluginHostListError', ...base };
+  }
+  if (read === 'loading') {
+    return { tone: 'amber', labelKey: 'nav.status.pluginHostLoading', ...base };
+  }
+  // 读完了：只看「用没用」与「有没有失败证据」。
   if (!marketplace) {
     return { tone: 'muted', labelKey: 'nav.status.pluginHostNoMarketplace', ...base };
   }

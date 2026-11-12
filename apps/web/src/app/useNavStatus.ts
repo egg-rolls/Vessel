@@ -10,9 +10,10 @@
  * `loading / connected / empty / unauthorized / incompatible / network` 的分类与页面
  * **完全一致**，不另写一套。
  *
- * 核心区三个点的四档语义见 `nav-status.ts` 文件头。pluginHost 点额外需要 gateway 的
- * 连接证据（宿主与 gateway 同进程）：连接状态由 `useConnection()` 提供，marketplace
- * 条目由调用方传进来的 `plugins` 里取。
+ * 核心区三个点的四档语义见 `nav-status.ts` 文件头。pluginHost 点额外需要两样证据
+ * （宿主与 gateway 同进程）：gateway 连接状态由 `useConnection()` 提供，`plugins.list`
+ * 的条目与读取态由调用方传进来的 `plugins` / `pluginsState`（`usePluginContributions()`
+ * 的 `plugins` 与 `state`）提供 —— 读取中与「真的没有条目」不是一回事。
  */
 import { useSyncExternalStore } from 'react';
 import { useConnection } from '../gateway/ConnectionProvider';
@@ -25,17 +26,39 @@ import {
   subscribeHubNavStatus,
 } from '../gateway/platform/hub-storage';
 import type { PluginListItem } from '../gateway/types';
-import { resourceData } from '../state/useResource';
+import { type ResourceState, resourceData } from '../state/useResource';
 import { useConfigStoreApi } from '../stores/useConfigStoreApi';
 import {
   gatewayNavStatus,
   hubNavStatus,
   type NavStatuses,
+  type PluginListReadState,
   pluginHostNavStatus,
 } from './nav-status';
 
-/** `plugins` 来自 `usePluginContributions()`，避免重复拉取 `plugins.list`。 */
-export function useNavStatus(plugins: readonly PluginListItem[]): NavStatuses {
+/**
+ * `plugins.list` 的 `ResourceState` → 导航用的读取态。
+ *
+ * - `success` → ready；
+ * - `error` → error（拿不到当前条目集合，旧数据可能是过期的，按四档语义报 danger）；
+ * - `idle`（没开始读）与首帧 `loading`（还没有数据）→ loading；
+ * - `loading` 但**已有旧数据**（`plugin.changed` 后的对账重取、手动 reload）→ 仍算 ready：
+ *   上次结论还有效，别让圆点每刷一次就闪一下琥珀。
+ */
+export function pluginListReadState(
+  state: ResourceState<readonly PluginListItem[]>,
+): PluginListReadState {
+  if (state.status === 'success') return 'ready';
+  if (state.status === 'error') return 'error';
+  if (state.status === 'loading' && state.data !== undefined) return 'ready';
+  return 'loading';
+}
+
+/** `plugins` / `pluginsState` 来自 `usePluginContributions()`，避免重复拉取 `plugins.list`。 */
+export function useNavStatus(
+  plugins: readonly PluginListItem[],
+  pluginsState: ResourceState<readonly PluginListItem[]>,
+): NavStatuses {
   const { connectionState, hasToken } = useConnection();
   const { config } = useConfigStoreApi({ pollMs: 60_000 });
   const hub = useSyncExternalStore(subscribeHubNavStatus, getHubNavStatus, getHubNavStatus);
@@ -48,7 +71,12 @@ export function useNavStatus(plugins: readonly PluginListItem[]): NavStatuses {
   return {
     hub: hub.version !== undefined ? { ...hubMeta, version: hub.version } : hubMeta,
     gateway: version !== undefined ? { ...gateway, version } : gateway,
-    pluginHost: pluginHostNavStatus(connectionState, hasToken, marketplace),
+    pluginHost: pluginHostNavStatus({
+      connectionState,
+      hasToken,
+      marketplace,
+      read: pluginListReadState(pluginsState),
+    }),
   };
 }
 

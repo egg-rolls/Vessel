@@ -66,6 +66,8 @@ export const messages = {
   'nav.status.hubNetwork': 'Hub 连接失败',
   'nav.status.hubNotConfigured': 'hub 未启用',
   'nav.status.pluginHostNoMarketplace': '未安装 marketplace 插件',
+  'nav.status.pluginHostLoading': '正在读取插件列表',
+  'nav.status.pluginHostListError': '读取插件列表失败',
   'nav.connStatusTitle': 'gateway 连接状态；点击打开连接设置',
   'nav.searchOrCommand': '搜索或输入命令',
   'nav.opened': '已打开 {path}',
