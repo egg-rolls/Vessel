@@ -103,6 +103,14 @@ export interface PluginDescriptor {
   mode: PluginMode;
   /** 0.43：child 模式的 `package.json.vessel` 清单 */
   manifest?: PluginManifest;
+  /**
+   * 0.51：in-process 模式解析出的清单（只在包声明了清单字段时出现）。
+   *
+   * 与 `manifest` 分开而不是复用同一个字段：既有消费者把 `manifest` 当「child 清单」
+   * 用（`plugin-host-assembly` / `serve` 的 catalog / `plugin list` 的贡献摘要），
+   * 给 in-process 描述符塞一个 manifest 会顺手改变那些输出 —— 0.51 期 0 要求行为零变化。
+   */
+  capabilityManifest?: PluginManifest;
   /** 0.43：in-process 插件覆盖同 id 内置插件时，package.json 的 `vessel.override` */
   override?: boolean;
 }
@@ -159,6 +167,40 @@ function warnManifestFailure(base: string, error: PluginManifestValidationError)
   if (warnedManifestFailures.has(key)) return;
   warnedManifestFailures.add(key);
   console.warn(`[${error.code}] ${base}: ${error.message}`);
+}
+
+/**
+ * in-process 包的清单校验（0.51 期 0.5）。
+ *
+ * 补的是这样一个洞：`readPlugin` 此前只在 `vessel.entry` 非空（child 分支）时调
+ * `validatePluginManifest`，于是 in-process 包**没有任何清单校验层** —— `vessel.scope` /
+ * `permissions.ports` 这类「声明过才给」的字段在校验层面不存在，声明错了照样装进来。
+ *
+ * 边界：只写了 `vessel.override` 的包**不校验**。那是 0.43 起的「覆盖内置插件」标记，
+ * 不是清单；要求它补全 id / name / version / engines 会把既有的覆盖式插件全部打死，
+ * 而 0.51 期 0 的硬约束是加载行为不变。校验范围因此是「声明了清单字段的包」。
+ *
+ * @returns 解析出的清单；未声明清单字段时 undefined；校验失败时 null（不加载代码）
+ */
+function readInProcessManifest(
+  vessel: Record<string, unknown> | undefined,
+  base: string,
+  source: PluginSource,
+): PluginManifest | null | undefined {
+  if (vessel === undefined) return undefined;
+  const declaresManifest = Object.keys(vessel).some((key) => key !== 'override');
+  if (!declaresManifest) return undefined;
+  const result = validatePluginManifest(vessel, {
+    baseDir: base,
+    // 外部插件（非 repo 源）走 external 口径：HTTP 面只能占自己的 /plugins/<id>/ 命名空间。
+    external: source !== 'repo',
+    mode: 'in-process',
+  });
+  if (!result.ok) {
+    warnManifestFailure(base, result.error);
+    return null;
+  }
+  return result.manifest;
 }
 
 /** 读取单个插件目录；不合格返回 null */
@@ -222,6 +264,9 @@ function readPlugin(base: string, category: string, source: PluginSource): Plugi
 
   const entry = resolveEntry(base, pkg);
   if (!entry) return null;
+  // 0.51 期 0.5：in-process 包也走清单校验（`null` = 校验失败，fail-closed 不加载代码）。
+  const capabilityManifest = readInProcessManifest(vessel, base, source);
+  if (capabilityManifest === null) return null;
   const override = vessel?.override === true;
   return {
     name: shortName,
@@ -232,6 +277,7 @@ function readPlugin(base: string, category: string, source: PluginSource): Plugi
     dir: path.resolve(base),
     source,
     mode: 'in-process',
+    ...(capabilityManifest !== undefined ? { capabilityManifest } : {}),
     ...(override ? { override: true } : {}),
   };
 }

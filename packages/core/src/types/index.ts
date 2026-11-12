@@ -11,6 +11,7 @@ export * from './hook.js';
 export * from './lease.js';
 export * from './limits.js';
 export * from './logging.js';
+export * from './member-port.js';
 export * from './plugin.js';
 export * from './provider.js';
 export * from './run.js';

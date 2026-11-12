@@ -2,7 +2,7 @@
 title: 扩展机制与插件发现
 kind: current
 triggers: [plugin, plugin host, loader, discovery, trust, external, mcp, skill, config]
-paths: [packages/core/src/types/plugin.ts, src/plugin-loader.ts, src/plugin-selection.ts, plugins/**]
+paths: [packages/core/src/types/plugin.ts, packages/core/src/types/member-port.ts, src/plugin-loader.ts, src/plugin-selection.ts, plugins/**]
 ---
 
 # 扩展机制与插件发现
@@ -61,17 +61,13 @@ interface PluginHost {
 **唯一一套：运行时目录扫描**（`src/plugin-loader.ts`）。
 
 ```
-plugins/
-├── tools/basic-tools/       package.json + src/index.ts   → bash / read / edit
-├── context/doc-subscription/→ @vessel-agent/doc-subscription（subscribe 工具 + BeforeLlm hook）
-├── mcp/client/              → MCP client（工厂式；配置 mcp_servers 才构造）
-├── evals/harness/           → @vessel-agent/evals（工厂式；asm 直接调用库，不注册工具）
-├── im/feishu/               → @vessel-agent/feishu（工厂式；--feishu 才启动）
-├── security/guardrail-pii/  → 输入输出 PII 脱敏
-├── security/redact-secrets/ → 工具结果与输出里的密钥脱敏
-├── security/tool-policy/    → ToolCall 阶段 allowlist / denylist
-├── observability/hook-logging/
-└── provider/{openai,anthropic}/
+plugins/                                 package.json + src/index.ts 存在即注册
+├── tools/basic-tools/                   → bash / read / edit
+├── context/doc-subscription/            → subscribe 工具 + BeforeLlm hook
+├── mcp/client/  evals/harness/  im/feishu/   → 工厂式（装配层自行构造）
+├── security/{guardrail-pii,redact-secrets,tool-policy}/  → PII / 密钥 / 工具策略
+├── observability/{hook-logging,usage}/  provider/{openai,anthropic}/
+└── media/media/（opt-in）  marketplace/marketplace/（child：页面 + 市场）
 ```
 
 共 **11 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `mcp-client`、`evals` 与 `feishu`。MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。
@@ -96,4 +92,15 @@ class PluginLoader {
 **默认集与信任边界**：`plugins` 配置缺省时，默认集加载全部可用插件——包括 project / user / node_modules 来源的外部插件。启动时由 `bootstrap` / `--tools` / `doctor` 向 **stderr** 打印一次外部插件告警（数量、名称、来源），告警不进入 stdout / JSON。设置 `VESSEL_NO_EXTERNAL_PLUGINS=1`（或 `true`）后，默认集只加载 `source === 'repo'` 的插件；显式 `plugins:` 列表仍可加载指定外部插件（显式即信任）。外部插件以完整进程权限运行，且早于任何工具权限判定，因此 **P0-3 只做到缓解（MITIGATED），不是已关闭的信任边界**；不可信仓库应使用 opt-out。
 
 **加能力就是放一个文件夹。** `bash` 工具在，写文件 + 跑命令本身就是模型能做的事——这就是不再需要「声明式工具」「用户目录工具扫描」「运行时注册表」的原因。
+
+<a id="plugin-ports"></a>
+
+## 插件端口面（0.51 期 0）
+
+插件可声明「装在成员身体上」并申请宿主端口。本期只建面、不搬能力：内置 `inbox` 贡献是空壳（`tools()` 返回空数组），工具面 / hook 面 / 事件流与 0.50 逐字相同，门禁为 `bun run check:plugin-ports`。
+
+- **声明**：`vessel.scope: 'node' | 'member'`（缺省 `node`）与 `permissions.ports`（闭集，当前只有 `inbox`）。端口**只对 `scope: 'member'` 的 in-process 能力插件开放**：`ports` 非空而 scope 不是 member、或 child 插件声明 `member` ⇒ `plugin_manifest_invalid`。child 没有 body 宿主，给它端口等于开一条反向 RPC 通道 —— 这是本期边界不是遗漏（要开需新 ADR）。声明面的校验对 in-process 包同样生效（0.51 期 0.5 补的洞：此前只有 child 分支校验清单）。
+- **契约在 core**（`types/member-port.ts`，纯类型；core 不 import 任何插件或存储条目类型）：`MemberInboxPort` / `MemberBodyPort<P>` / `MemberBodyContribution<P>`，端口集合 `MemberBodyPorts<P> = Pick<…, P>`。三条硬边界：agentId 绑死在端口上（方法没有 agentId 参数）；hold / releaseHeldFor / markConsumed 留在宿主（调度不变量）；未申请的端口在类型上**不存在**（越权是编译错误，不是运行期 `undefined`）。
+- **端口必须 body-bound**：同一成员可有多具 live body（rotate 窗口 / 退役中），held 按 bodyId 记、notice 只能写进那具 body 的事件流 —— 所以 `MemberBodyPort` 带 `agentId / sessionId / isActive() / publish()`，`publish` 只收 `runtime.notice`。
+- **只注册在成员身体**：`PluginHost.registerMemberBodyContribution?` / `getMemberBodyContributions?` 是可选方法（老宿主不实现 = 没有成员面）；节点侧永不消费，只有 `MemberExecutionHost.spawn` 读它，而它拿的就是 tenant 宿主，零新增透传。宿主此刻给不出声明的端口（例如没配 dataDir、没有收件箱）⇒ 整条贡献不装配，不降级成「半个端口面」。
 

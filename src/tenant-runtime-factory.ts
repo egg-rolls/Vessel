@@ -14,6 +14,7 @@
  */
 
 import { join } from 'node:path';
+import { createInboxMemberBodyContribution } from '@vessel-agent/agent';
 import { deriveSessionMeta } from '@vessel-agent/core/session';
 import type { ConfigSources, VesselConfig } from '../packages/config/src/index';
 import {
@@ -729,6 +730,11 @@ export async function buildTenantRuntime(
     publish: (event) => events.publish(event),
     logger,
   });
+  // 0.51 期 0：`inbox` 的成员面贡献（空壳，`tools()` 返回空数组 ⇒ 工具面与 0.50 逐字相同）。
+  // 注册在 tenant 宿主上而不是 body 上，是因为 `MemberExecutionHost` 握的就是这一个宿主：
+  // spawn 直接 `getMemberBodyContributions()` 读，零新增透传（报告 §3.2）。
+  // 期 1 由 `plugins/inbox/inbox` 用自己的 install() 注册同名贡献，这里那行随之删掉。
+  finalPluginHost.registerMemberBodyContribution(createInboxMemberBodyContribution());
 
   // 铁律 1：持久端口只到 Runtime 工厂层；EU 经 journal 写入。
   // 成员 run 与 tenant run 共用同一工厂 → 成员 run 同样写 RunRecord。

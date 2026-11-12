@@ -5,6 +5,7 @@
 
 import type { Guardrail } from '../types/guardrail.js';
 import type { Hook } from '../types/hook.js';
+import type { MemberBodyContribution, PluginPortName } from '../types/member-port.js';
 import type { PluginHost, PluginInstallScope } from '../types/plugin.js';
 import type { ProviderFactory } from '../types/provider.js';
 import type { ToolDefinition } from '../types/tool.js';
@@ -14,7 +15,17 @@ type PluginRegistration =
   | { kind: 'tool'; name: string; def: ToolDefinition }
   | { kind: 'provider'; name: string; factory: ProviderFactory }
   | { kind: 'guardrail'; value: Guardrail }
-  | { kind: 'hook'; value: Hook };
+  | { kind: 'hook'; value: Hook }
+  /**
+   * 0.51：成员面贡献。`previous` 是同名被覆盖的旧贡献 —— 回滚要把旧的那个放回去，
+   * 而不是留个洞（重新登记同一个名字是热应用里的正常动作，不是错误）。
+   */
+  | {
+      kind: 'memberBody';
+      name: string;
+      value: MemberBodyContribution<PluginPortName>;
+      previous?: MemberBodyContribution<PluginPortName>;
+    };
 
 /**
  * 内存 PluginHost 实现
@@ -24,6 +35,11 @@ export class MemoryPluginHost implements PluginHost {
   private providers: Map<string, ProviderFactory> = new Map();
   private guardrails: Guardrail[] = [];
   private hooks: Hook[] = [];
+  /**
+   * 0.51：成员身体贡献（name → 贡献）。用 Map 而不是数组：`name` 是去重键（重新登记
+   * = 覆盖，热应用 / 重复装配都要幂等），Map 同时保住登记顺序。
+   */
+  private memberBodies: Map<string, MemberBodyContribution<PluginPortName>> = new Map();
   /** 安装记录栈：栈顶是当前安装；每个 scope 独立回滚（0.9） */
   private installScopes: PluginRegistration[][] = [];
 
@@ -87,6 +103,33 @@ export class MemoryPluginHost implements PluginHost {
   }
 
   /**
+   * 登记一个成员身体贡献（0.51）。
+   *
+   * 同一个 `name` 再登记一次 = 覆盖（保留第一次的登记位置），并记下被覆盖的那个，
+   * 好让安装回滚把它复原。节点侧的 `listTools()` / `getHooks()` 完全不受影响：
+   * 贡献是「给成员 body 的东西」，要由 body 宿主自己实例化。
+   * @param contribution 贡献（name / ports / tools / hooks）
+   */
+  registerMemberBodyContribution(contribution: MemberBodyContribution<PluginPortName>): void {
+    const previous = this.memberBodies.get(contribution.name);
+    this.memberBodies.set(contribution.name, contribution);
+    this.record({
+      kind: 'memberBody',
+      name: contribution.name,
+      value: contribution,
+      ...(previous !== undefined ? { previous } : {}),
+    });
+  }
+
+  /**
+   * 已登记的全部成员身体贡献，按登记顺序。
+   * 返回副本：调用方遍历时不会看到登记 / 回滚的半途状态。
+   */
+  getMemberBodyContributions(): readonly MemberBodyContribution<PluginPortName>[] {
+    return [...this.memberBodies.values()];
+  }
+
+  /**
    * 开始记录一次插件安装的注册（0.9）。
    * `commit()` 丢弃记录；`rollback()` 撤销本次安装的条目，保持已存在条目不变。
    * @returns 本次安装的记录 scope
@@ -138,6 +181,14 @@ export class MemoryPluginHost implements PluginHost {
       case 'hook': {
         const index = this.hooks.indexOf(entry.value);
         if (index !== -1) this.hooks.splice(index, 1);
+        break;
+      }
+      case 'memberBody': {
+        // 只撤销「仍是当前值」的那次登记：后来者若又覆盖了同一个 name，回滚不该把
+        // 更新的那个一起拔掉（与 tool/provider 的按身份判定同一口径）。
+        if (this.memberBodies.get(entry.name) !== entry.value) break;
+        if (entry.previous === undefined) this.memberBodies.delete(entry.name);
+        else this.memberBodies.set(entry.name, entry.previous);
         break;
       }
     }

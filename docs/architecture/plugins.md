@@ -50,7 +50,8 @@ paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, app
 
 ## 信任与能力边界
 
-- 内置插件可信；外部插件默认不可信，安装时展示声明的 `permissions`（`fs` / `net` / `process` / `secrets` / `events` / `rpc`），未声明能力默认拒绝；显式 `plugins:` 条目视为信任确认。子进程只做到崩溃 / 生命周期隔离（约束 cwd / env、回收与重启、宿主 API 调用点检查权限），**不是 OS 沙箱**。
+- 内置插件可信；外部插件默认不可信，安装时展示声明的 `permissions`（`fs` / `net` / `process` / `secrets` / `events` / `rpc` / `ports`），未声明能力默认拒绝；显式 `plugins:` 条目视为信任确认。子进程只做到崩溃 / 生命周期隔离（约束 cwd / env、回收与重启、宿主 API 调用点检查权限），**不是 OS 沙箱**。
+- **宿主作用域（0.51 期 0）**：`vessel.scope: 'node' | 'member'` 决定插件装在节点宿主还是成员身体上；只有 `member` 的 in-process 能力插件能申请 `permissions.ports`（闭集，当前只有 `inbox`），child 插件本期不给端口。端口是「宿主算好、按 body 切好、声明过才给」的值，不是句柄：`agentId` 绑死在端口上，投递状态机留在宿主。契约见 [extensions](extensions.md#plugin-ports)。
 - 不做 monkey-patch / 运行时改写 core 或其它 plugin；扩展点不够时先加贡献点。
 
 ## 扩展面授权（`expose`）
@@ -81,12 +82,9 @@ user input
    │
    ▼
 Run ── BeforeLlm hooks / guardrails ──► Provider / LLM
-   │                                      │
-   │◄──── response events (redacted DTO) ─┘
-   │
+   │◄──── response events (redacted DTO) ──┘
    ▼
 tool loop ── capability tools (prompt surface = token tax)
-   │
    └──► run events ──► experience plugin child ──► iframe UI / plugin.<id>.* RPC
 ```
 
