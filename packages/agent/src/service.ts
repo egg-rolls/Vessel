@@ -43,6 +43,7 @@ import {
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import { type AgentInboxDelivery, AgentInboxStore, deliveryFromNotify } from './inbox.js';
+import { memberCwdFromTeam } from './member-cwd.js';
 import { normalizeRefs } from './refs.js';
 import {
   type BindingRecord,
@@ -132,6 +133,7 @@ import {
   type SessionRestartInput,
   type SessionRestartResult,
   type TeamBinder,
+  type TeamRecord,
 } from './types.js';
 
 const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
@@ -519,6 +521,8 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     bindingHistory: bindingHistory.slice(-MAX_BINDING_HISTORY),
     ...(status.model !== undefined ? { model: status.model } : {}),
     ...(status.system_prompt !== undefined ? { systemPrompt: status.system_prompt } : {}),
+    // 0.51：成员 cwd 快照随记录一起恢复；缺省 = 没有成员 cwd（工具退回全局默认）
+    ...(status.cwd !== undefined ? { cwd: status.cwd } : {}),
     ...(status.source_agent_id !== undefined ? { sourceAgentId: status.source_agent_id } : {}),
     ...(status.current_tool !== undefined ? { currentTool: status.current_tool } : {}),
     ...(status.last_seen !== undefined ? { lastSeen: status.last_seen } : {}),
@@ -681,6 +685,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly defaultWorkspace: string | undefined;
   private readonly teamBinder: TeamBinder | undefined;
   private readonly teamPolicy: AgentServiceOptions['teamPolicy'];
+  /** 0.51：系统锚点 workspace（不进成员 cwd；见 `member-cwd.ts` 的铁律 1） */
+  private readonly anchorWorkspaces: readonly string[];
   private readonly budgetPort: ConversationBudgetPort | undefined;
   /** 进程内 blocked 事件去重（每个 conversation 一次；release / override 清） */
   private readonly blockedBudgetEvents = new Set<string>();
@@ -713,6 +719,7 @@ export class AgentServiceImpl implements AgentService {
       : undefined;
     this.teamBinder = options.teamBinder;
     this.teamPolicy = options.teamPolicy;
+    this.anchorWorkspaces = options.anchorWorkspaces ?? [];
     this.budgetPort = options.budget;
     const ttlHours =
       typeof options.temporaryTtlHours === 'number' && options.temporaryTtlHours >= 0
@@ -957,11 +964,21 @@ export class AgentServiceImpl implements AgentService {
     }
 
     let teamId: string | undefined;
+    /**
+     * 用户在**这个成员身上**显式选中的 Team（0.51 Bug 1 的 cwd 来源）。
+     *
+     * 只有两种入口算「显式」：传了 `team_id`，或传了 `workspace`（CLI `--workspace`）。
+     * `defaultWorkspace` 不算 —— 它是配置声明 / `agent.cwd` 的产物，语义属于全局默认，
+     * 烧成成员 cwd 只会把「全局默认」伪装成「per-member 选择」。
+     */
+    let chosenTeam: TeamRecord | undefined;
     if (explicitTeamId !== undefined) {
-      if (this.teamBinder === undefined || this.teamBinder.get(explicitTeamId) === undefined) {
+      const explicitTeam = this.teamBinder?.get(explicitTeamId);
+      if (explicitTeam === undefined) {
         throw new AgentError('invalid_input', `team_not_found: ${explicitTeamId}`);
       }
       teamId = explicitTeamId;
+      chosenTeam = explicitTeam;
     } else {
       const workspace = explicitWorkspace ?? this.defaultWorkspace;
       if (workspace !== undefined && name !== undefined) {
@@ -971,6 +988,7 @@ export class AgentServiceImpl implements AgentService {
         // Team ensure 必须在名字检查 / registry.add 之前完成（F7：之后不得有 await）。
         const team = await this.teamBinder.ensureForWorkspace({ workspace, name });
         teamId = team.team_id;
+        if (explicitWorkspace !== undefined) chosenTeam = team;
       } else if (explicitWorkspace !== undefined) {
         // 默认 workspace 无名字时保持 unbound；显式 workspace 无名字则拒绝绑定。
         throw new AgentError('invalid_input', 'team binding requires a name');
@@ -1047,6 +1065,10 @@ export class AgentServiceImpl implements AgentService {
     };
     record.name = resolvedName;
     if (teamId !== undefined) record.teamId = teamId;
+    // 0.51 Bug 1（方案 C）：把「显式选中 Team 的基础路径」烧进记录，作为成员 cwd 的快照。
+    // 锚点 Team 不参与（`<dataDir>/default` 这类目录可能不存在，当 cwd 会打死 main 的工具）。
+    const memberCwd = this.createMemberCwd(chosenTeam);
+    if (memberCwd !== undefined) record.cwd = memberCwd;
     if (parentId !== undefined) record.parentId = parentId;
     // 落“有效 model”：未显式指定时用 wiring 默认值，resume 才不会回流到空
     const model = optionalString(input.model) ?? this.defaultModel;
@@ -1224,6 +1246,8 @@ export class AgentServiceImpl implements AgentService {
     if (source.parentId !== undefined) record.parentId = source.parentId;
     if (model !== undefined) record.model = model;
     if (systemPrompt !== undefined) record.systemPrompt = systemPrompt;
+    // 派生成员与源同一个 Team ⇒ 同一个成员 cwd（仍是快照，不重新判定「显式」与否）。
+    if (source.cwd !== undefined) record.cwd = source.cwd;
 
     try {
       await this.spawnRecord(record);
@@ -1517,6 +1541,36 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * create 时的成员 cwd（0.51 Bug 1 方案 C）。
+   *
+   * 只认**显式选中**的 Team（`chosenTeam`），并排除系统锚点 workspace：锚点是按路径派生的
+   * 身份（`<dataDir>/default` / `<dataDir>/headless`），目录可能不存在 —— 当 cwd 用会让
+   * `main` 的 bash / read / edit 直接硬报错（`member-cwd.ts` 的铁律 1）。
+   *
+   * 这里**不做存在性校验**：目录可能在 create 之后才建（用户先建 Team 再 clone 仓库）。
+   * 校验与降级都在 spawn 侧（那时才知道能不能用），本函数只负责「记下用户选了什么」。
+   */
+  private createMemberCwd(team: TeamRecord | undefined): string | undefined {
+    // 判据只此一处（`memberCwdFromTeam`）：装配层 `cwdFor` 与这里必须同源。
+    return memberCwdFromTeam(team?.workspace, this.anchorWorkspaces);
+  }
+
+  /**
+   * 记录换 / 绑 Team 后重算成员 cwd 快照（0.51）。
+   *
+   * 为什么必须跟着 `team_id` 走：cwd 与 `team_id` 是同一份身份的两种表达。Team 变了而快照
+   * 不跟着变，这具 body 会一直在旧 Team 的目录里跑，且**下一具 body 也照样错**（快照是
+   * spawn 的输入）。锚点 Team / unbound ⇒ 清空，工具退回 `agent.cwd` / `process.cwd()`。
+   */
+  private syncMemberCwd(record: MemberRecord, teamId: string | undefined): void {
+    const cwd = this.createMemberCwd(
+      teamId === undefined ? undefined : this.teamBinder?.get(teamId),
+    );
+    if (cwd === undefined) delete record.cwd;
+    else record.cwd = cwd;
+  }
+
+  /**
    * 同 Team present 成员里叫这个名字的那个（unbound 时 tenant 全扫）。
    * 名字是职能标签，重名即「这个职能已有人做」——create / hire 复用它而不是新建。
    */
@@ -1716,6 +1770,8 @@ export class AgentServiceImpl implements AgentService {
     if (source.parentId !== undefined) record.parentId = source.parentId;
     if (source.model !== undefined) record.model = source.model;
     else if (this.defaultModel !== undefined) record.model = this.defaultModel;
+    // 派生成员与源同一个 Team ⇒ 同一个成员 cwd（0.51 Bug 1：cwd 也是身份快照的一部分）
+    if (source.cwd !== undefined) record.cwd = source.cwd;
 
     try {
       await this.spawnRecord(record);
@@ -5358,6 +5414,8 @@ export class AgentServiceImpl implements AgentService {
       if (conversion.parentId === undefined) delete target.parentId;
       else target.parentId = conversion.parentId;
       this.registry.setTeamId(target.id, conversion.teamId);
+      // 0.51：换 Team ⇒ 重算成员 cwd 快照（否则会一直在旧 Team 的目录里跑）
+      this.syncMemberCwd(target, conversion.teamId);
       target.visibility = conversion.visibility;
 
       this.emit('agent.role.changed', target, {
@@ -5621,6 +5679,8 @@ export class AgentServiceImpl implements AgentService {
       }
     }
 
+    // 0.51：绑定 / 换 Team 后重算成员 cwd 快照（锚点 Team 不写入）
+    this.syncMemberCwd(target, teamId);
     this.emit('agent.rejoined', target, { state: target.state, presence: target.presence });
     // 0.52：加入 / 换 Team 同样是「基础信息变了」（team 行 + 权限档可能一起变），
     // 有活体时按同一条环境信息通道告知；复活路径没有活体，这里自然 no-op。

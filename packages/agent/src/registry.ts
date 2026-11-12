@@ -81,6 +81,12 @@ export interface MemberRecord {
   membership: MemberMembership;
   /** 所属 Team（0.19 S3）；unbound 时缺省，持久化 */
   teamId?: string;
+  /**
+   * 0.51：成员 cwd（工具默认工作目录）。只在 create 时**显式选中** Team 的情况下写入，
+   * 值 = 该 Team 的 workspace（`packages/agent/src/member-cwd.ts` 说明锚点为何排除）。
+   * 缺省 = 没有成员 cwd，工具退回 `agent.cwd` / `process.cwd()`。
+   */
+  cwd?: string;
   /** Binding 轮换相位；不持久化 */
   rotation: MemberRotation;
   /** 创建来源 agent（持久化；CREATE-0.39 `source_agent_id`） */
@@ -248,6 +254,8 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
     ...(record.model !== undefined ? { model: record.model } : {}),
     ...(record.systemPrompt !== undefined ? { system_prompt: record.systemPrompt } : {}),
+    // 0.51：成员 cwd 快照（additive：旧二进制会忽略未知键，本版读取时缺省即「没有」）
+    ...(record.cwd !== undefined ? { cwd: record.cwd } : {}),
     ...(primary !== undefined
       ? {
           current_body: {
@@ -282,6 +290,7 @@ export function toRuntimeMember(record: MemberRecord): MemberExecutionMember {
     ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
     ...(record.model !== undefined ? { model: record.model } : {}),
     ...(record.systemPrompt !== undefined ? { system_prompt: record.systemPrompt } : {}),
+    ...(record.cwd !== undefined ? { cwd: record.cwd } : {}),
   };
 }
 

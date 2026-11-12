@@ -87,6 +87,13 @@ export interface ExecutionUnitRequest {
       'model' | 'systemPrompt' | 'permission' | 'selfCard' | 'contextPressureHint' | 'agentId'
     >
   >;
+  /**
+   * 0.51：本 EU 的成员 cwd，原样透传到 `ExecutionUnitOptions.cwd`（→ `ToolContext.cwd`）。
+   *
+   * 不放进 `overrides`：那组字段是「覆盖 tenant profile 的同一份配置」，而 profile 里
+   * 从来没有 cwd —— cwd 是**成员**属性，不是被覆盖的 tenant 默认值。
+   */
+  cwd?: string;
 }
 
 /** 同一 (tenant, session) 已绑定到另一个 agent。 */
@@ -238,6 +245,7 @@ export class Runtime {
       ...(overrides?.contextPressureHint !== undefined
         ? { contextPressureHint: overrides.contextPressureHint }
         : {}),
+      ...(req.cwd !== undefined ? { cwd: req.cwd } : {}),
       ...(req.eventLog !== undefined ? { eventLog: req.eventLog } : {}),
       ...(req.leaseService !== undefined ? { leaseService: req.leaseService } : {}),
       ...(req.bindingLease !== undefined ? { bindingLease: req.bindingLease } : {}),

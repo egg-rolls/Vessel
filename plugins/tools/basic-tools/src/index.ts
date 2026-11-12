@@ -184,6 +184,8 @@ function isDirectory(target: string): boolean {
 /**
  * 固定 baseCwd：未配置时用进程 cwd（旧行为）；配置后即使目录暂不存在也记录解析结果，
  * 真正用到时由工具返回明确错误（不静默回退到进程 cwd）。
+ *
+ * 0.51 起它只管**配置**（`agent.cwd`）这一层；成员 cwd 那一层见 `resolveCallCwd`。
  */
 function resolveBaseCwd(config: BasicToolsConfig): BaseCwd {
   if (config.cwd === undefined) return { path: process.cwd() };
@@ -193,6 +195,32 @@ function resolveBaseCwd(config: BasicToolsConfig): BaseCwd {
     path: resolved,
     issue: `错误：配置的默认工作目录不存在或不是目录：${resolved}`,
   };
+}
+
+/**
+ * 调用期解析默认工作目录（0.51 Bug 1 的 A 方案）。
+ *
+ * 优先级：**工具参数 cwd** > `agent.cwd`（本插件的配置 cwd）> **成员 cwd**（`ctx.cwd`）
+ * > `process.cwd()`。参数 cwd 不在这里比（它在 `runBash` 里先判），本函数只决定「没写
+ * 参数时用哪个」。
+ *
+ * 为什么必须等到调用期才算：工具对象由 `installPluginsIntoHost` 装**一次**，全 tenant
+ * 的成员共用同一批闭包。0.50 及以前 baseCwd 在 install 时就算成常量，于是「成员在哪个
+ * 目录」根本无处可传 —— 这正是 Bug 1 的成因（`agent.cwd` 全局一份 ⇒ 所有成员同一个目录）。
+ *
+ * 为什么成员 cwd 失效时要**降级**而不是硬错：成员 cwd 是**派生值**（Team 基础路径的
+ * 快照），用户从没在工具配置里写过它。目录被删 / 换机器 / 快照过期都不该把这具 body 的
+ * bash / read / edit 全部打死（`main` 曾因锚点目录不存在而面临同样风险）。降级链的
+ * 终点是 `process.cwd()`；真正「降级了」这件事由 `packages/agent` 在 spawn 侧 warn 一次。
+ * **显式配置**的 `agent.cwd` 维持原有硬错：那是用户亲手写的值，静默回退只会掩盖配置错误。
+ */
+function resolveCallCwd(config: BasicToolsConfig, ctxCwd: string | undefined): BaseCwd {
+  if (config.cwd !== undefined) return resolveBaseCwd(config);
+  if (ctxCwd !== undefined && ctxCwd.trim() !== '') {
+    const resolved = path.resolve(expandHome(ctxCwd));
+    if (isDirectory(resolved)) return { path: resolved };
+  }
+  return { path: process.cwd() };
 }
 
 /** 工具路径解析：`~` 展开；相对路径按 baseCwd；绝对路径不变 */
@@ -619,7 +647,7 @@ async function runBash(
 
   const cwd = readString(args, 'cwd');
   if (cwd !== '' && !existsSync(cwd)) return `错误：cwd 不存在：${cwd}`;
-  // 显式 cwd 优先；未传时落 baseCwd（未配置即进程 cwd）。
+  // 显式 cwd 优先；未传时落调用期默认目录（配置 cwd > 成员 cwd > 进程 cwd）
   const effectiveCwd = cwd === '' ? baseCwd.path : cwd;
   // 防御性检查：即使调用方绕过 checkPermission 直接调 handler，
   // 敏感路径的 cwd 仍然拒绝；allowed_roots 的越界由 checkPermission 走 ask。
@@ -715,8 +743,8 @@ async function runBash(
   return persistNote !== undefined ? `${formatted}\n${persistNote}` : formatted;
 }
 
-/** 构造 bash 工具（路径边界与默认工作目录随配置固定） */
-function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinition {
+/** 构造 bash 工具（路径边界随配置固定；默认工作目录按调用期解析） */
+function createBashTool(boundary: PathBoundary, config: BasicToolsConfig): ToolDefinition {
   return {
     name: 'bash',
     description:
@@ -733,7 +761,7 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
         command: { type: 'string', description: 'The bash command to run' },
         cwd: {
           type: 'string',
-          description: 'Working directory (defaults to the configured agent cwd, then process cwd)',
+          description: 'Working directory (default: agent cwd, else member cwd, else process cwd)',
         },
         timeout_ms: {
           type: 'number',
@@ -742,7 +770,7 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
       },
       required: ['command'],
     },
-    checkPermission: async (input) => {
+    checkPermission: async (input, ctx) => {
       if (isRecord(input)) {
         // 命令文本命中内置 denylist：与敏感 cwd 一样直接 deny，不走用户 ask
         if (
@@ -752,15 +780,18 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
           return 'deny';
         }
         const cwd = readString(input, 'cwd');
-        // 显式 cwd 优先；未传时按 baseCwd 做边界判定（baseCwd 不放宽 denylist / allowed_roots）
-        const decision = evaluatePath(cwd === '' ? baseCwd.path : cwd, boundary);
+        // 显式 cwd 优先；未传时按调用期默认目录做边界判定
+        // （默认目录只是起点，不放宽 denylist / allowed_roots）
+        const defaultCwd = resolveCallCwd(config, ctx.cwd).path;
+        const decision = evaluatePath(cwd === '' ? defaultCwd : cwd, boundary);
         // deny 直接拒绝；配置 allowed_roots 的越界走 ask（由运行时向用户确认）
         if (decision !== 'allow') return decision;
       }
       // 统一由 core PermissionPolicy 发一次请求；autoApprove / neverAutoApprove / always 在那里生效
       return 'ask';
     },
-    handler: async (args: unknown, ctx) => runBash(args, ctx, boundary, baseCwd),
+    handler: async (args, ctx) =>
+      runBash(args, ctx, boundary, resolveCallCwd(config, ctx.cwd)),
   };
 }
 
@@ -769,14 +800,16 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
 /** 读出带行号的文本片段（行号从 1 开始，`<行号>\t<内容>`） */
 function readFileSlice(
   args: unknown,
-  signal: AbortSignal | undefined,
+  ctx: ToolContext,
   boundary: PathBoundary,
-  baseCwd: BaseCwd,
+  config: BasicToolsConfig,
 ): string {
+  const signal = ctx.signal;
   if (signal?.aborted) return CANCELLED_TEXT;
   if (!isRecord(args)) return '错误：read 需要 { path: string }';
   const inputPath = readString(args, 'path');
   if (inputPath === '') return '错误：path 不能为空';
+  const baseCwd = resolveCallCwd(config, ctx.cwd);
   const absolute = resolveToolPath(baseCwd.path, inputPath);
   // 防御性检查：即使调用方绕过 checkPermission，也绝不读取敏感路径。
   // 相对路径先按 baseCwd 解析，边界按解析后的绝对路径判定（不因 baseCwd 放宽）。
@@ -836,8 +869,8 @@ function readFileSlice(
   return numbered;
 }
 
-/** 构造 read 工具（路径边界与默认工作目录随配置固定） */
-function createReadTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinition {
+/** 构造 read 工具（路径边界随配置固定；默认工作目录按调用期解析） */
+function createReadTool(boundary: PathBoundary, config: BasicToolsConfig): ToolDefinition {
   return {
     name: 'read',
     description:
@@ -858,14 +891,17 @@ function createReadTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
     },
     // 只读操作无副作用；敏感路径 deny、配置 allowed_roots 后越界 ask
     concurrencySafe: true,
-    checkPermission: async (input) => {
+    checkPermission: async (input, ctx) => {
       if (!isRecord(input)) return 'allow';
       const inputPath = readString(input, 'path');
       if (inputPath === '') return 'allow';
-      // 与 handler 同一条解析路径：相对路径按 baseCwd，再按绝对路径判定边界
-      return evaluatePath(resolveToolPath(baseCwd.path, inputPath), boundary);
+      // 与 handler 同一条解析路径：相对路径按调用期默认目录，再按绝对路径判定边界
+      return evaluatePath(
+        resolveToolPath(resolveCallCwd(config, ctx.cwd).path, inputPath),
+        boundary,
+      );
     },
-    handler: async (args: unknown, ctx) => readFileSlice(args, ctx.signal, boundary, baseCwd),
+    handler: async (args, ctx) => readFileSlice(args, ctx, boundary, config),
   };
 }
 
@@ -893,10 +929,11 @@ function writeFileAtomic(absolutePath: string, content: string): void {
 /** 精确且唯一匹配的字符串替换；多处替换必须显式 replace_all */
 function editFile(
   args: unknown,
-  signal: AbortSignal | undefined,
+  ctx: ToolContext,
   boundary: PathBoundary,
-  baseCwd: BaseCwd,
+  config: BasicToolsConfig,
 ): string {
+  const signal = ctx.signal;
   if (signal?.aborted) return CANCELLED_TEXT;
   if (!isRecord(args)) return '错误：edit 需要 { path, old_string, new_string }';
   const inputPath = readString(args, 'path');
@@ -905,6 +942,7 @@ function editFile(
   if (inputPath === '') return '错误：path 不能为空';
   if (oldString === '') return '错误：old_string 不能为空';
 
+  const baseCwd = resolveCallCwd(config, ctx.cwd);
   const absolute = resolveToolPath(baseCwd.path, inputPath);
   // 防御性检查：与 read 同一条边界；绕过 checkPermission 也不得改敏感路径
   if (evaluatePath(absolute, boundary) === 'deny') {
@@ -959,8 +997,8 @@ function editFile(
   return `已替换 ${count} 处（${inputPath}）`;
 }
 
-/** 构造 edit 工具（相对路径按 baseCwd 解析；路径边界与 read 相同） */
-function createEditTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinition {
+/** 构造 edit 工具（相对路径按调用期默认目录解析；路径边界与 read 相同） */
+function createEditTool(boundary: PathBoundary, config: BasicToolsConfig): ToolDefinition {
   return {
     name: 'edit',
     description:
@@ -979,19 +1017,22 @@ function createEditTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
       },
       required: ['path', 'old_string', 'new_string'],
     },
-    checkPermission: async (input) => {
+    checkPermission: async (input, ctx) => {
       if (isRecord(input)) {
         const inputPath = readString(input, 'path');
         if (inputPath !== '') {
           // deny 直接拒绝；allowed_roots 越界返回 ask，由运行时确认
-          const decision = evaluatePath(resolveToolPath(baseCwd.path, inputPath), boundary);
+          const decision = evaluatePath(
+            resolveToolPath(resolveCallCwd(config, ctx.cwd).path, inputPath),
+            boundary,
+          );
           if (decision !== 'allow') return decision;
         }
       }
       // 统一由 core PermissionPolicy 发一次请求；autoApprove / neverAutoApprove / always 在那里生效
       return 'ask';
     },
-    handler: async (args: unknown, ctx) => editFile(args, ctx.signal, boundary, baseCwd),
+    handler: async (args, ctx) => editFile(args, ctx, boundary, config),
   };
 }
 
@@ -999,15 +1040,18 @@ function createEditTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
 
 /**
  * 创建三个基础工具。
- * 不传配置时只启用内置 denylist（不限制根）、baseCwd 为进程 cwd，与旧行为兼容。
+ * 不传配置时只启用内置 denylist（不限制根）、默认工作目录按调用期解析，与旧行为兼容。
+ *
+ * 0.51：三个工具都**不再**在 install 期固定工作目录 —— 那是全 tenant 一份的常量，
+ * 成员 cwd 无处可传（Bug 1）。默认目录在每次 handler / checkPermission 调用时由
+ * `resolveCallCwd` 算出（配置 cwd > `ctx.cwd` > 进程 cwd）。
  */
 export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[] {
   const boundary = buildPathBoundary(config);
-  const baseCwd = resolveBaseCwd(config);
   return [
-    createBashTool(boundary, baseCwd),
-    createReadTool(boundary, baseCwd),
-    createEditTool(boundary, baseCwd),
+    createBashTool(boundary, config),
+    createReadTool(boundary, config),
+    createEditTool(boundary, config),
   ];
 }
 

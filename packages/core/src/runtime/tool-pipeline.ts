@@ -54,6 +54,11 @@ export interface ToolPipelineOptions {
   messages?: Message[];
   /** 权限请求来源（0.13）；缺省 `runtime` */
   source?: 'runtime' | 'host';
+  /**
+   * 0.51：成员 cwd，原样注入 `ToolContext.cwd`。
+   * 管道不解释它（也不校验目录），工具自己决定怎么用。
+   */
+  cwd?: string;
   stages?: ToolPipelineStages;
 }
 
@@ -142,6 +147,8 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
         events,
         source: options.source ?? 'runtime',
         ...(options.signal ? { signal: options.signal } : {}),
+        // 0.51：成员 cwd 只做默认起点；工具级显式参数与路径边界都不受影响。
+        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       };
 
       // 1. 工具查找（唯一来源：PluginHost）
