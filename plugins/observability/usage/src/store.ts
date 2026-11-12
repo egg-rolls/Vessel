@@ -140,8 +140,9 @@ export interface RunSummary {
  * around the end of the requested interval. The record-level `[since, until)`
  * filter lives in `listLogs` (`aggregate.ts`).
  *
- * Either bound makes the call "range-bounded", which is what selects the larger
- * window budget (see `WINDOW_BUDGET_BYTES`).
+ * Either bound makes the call "range-bounded". The shipped limits no longer cap
+ * I/O at all (see `ReadLimits`), so a range is read whole and the range is the
+ * only thing that decides coverage.
  */
 export interface LoadOptions {
   cutoff?: number;
@@ -193,6 +194,8 @@ export interface LoadResult {
    * `FIRST_LINE_BYTES` per file and never come out of the read budget.
    */
   bytes_read: number;
+  /** First-line peeks performed by this call (0 unless `until` ruled files out). */
+  peeks: number;
 }
 
 /**
@@ -231,55 +234,31 @@ const EVENT_DATA_FIELDS: Record<string, readonly string[]> = {
   'run.failed': ['run_id', 'session_id', 'error', 'error_code', 'duration_ms'],
 };
 
-/**
- * One call may read this much from disk.
- *
- * On the session-log source the whole corpus is ~125 MiB / 134 files (the old
- * per-run trace was 1.09 GiB / 638 files), so the budget is set above it: reading
- * everything whole measured 526-875 ms and produced 18k request records with
- * zero truncation. The point of the number is the same as before — a total must
- * not silently cover part of the range — but the range now fits, including
- * "all time".
- *
- * The cap is still a cap. A corpus that grows past it (or a range over a far
- * busier installation) truncates honestly: `files_truncated` is set and the UI
- * says "the newest N of M files in this range".
- */
-export const WINDOW_BUDGET_BYTES = 192 * 1024 * 1024;
 
 /**
  * Read budget and retention caps.
  *
- * `maxBytesPerCall` (192 MiB) is the whole I/O a single RPC may do when no range
- * is selected ("all time", and the Logs page). It equals `WINDOW_BUDGET_BYTES`:
- * the session-log corpus fits in one call today, so "all time" is complete
- * instead of a newest-first sample, which is what the old trace source could
- * never do (1.09 GiB).
+ * Two kinds of limit live here and they exist for different reasons:
  *
- * `maxBytesPerWindowCall` (`WINDOW_BUDGET_BYTES`, 192 MiB) is used when a range
- * is selected; see that constant.
- *
- * `maxBytesPerFile` (16 MiB) is what a single session log may contribute per
- * call, so one very long session cannot eat the whole budget; a bigger file is
- * read from its newest 16 MiB (head dropped, flagged as partial). The largest
- * reference session is 6.3 MiB, so nothing is partial today; subsequent appends
- * are still read incrementally, so only pre-existing history would be lost.
- *
- * `maxFilesPerCall` (1024) bounds per-call `stat`/parse bookkeeping. One stat
- * per session is the dominant warm-call cost (~0.3 ms each on Windows), and a
- * session file is much larger than a trace file, so the cap is well above the
- * session count of the reference directory (134).
- *
- * `maxRetainedBytesPerFile` (32 MiB) and `maxRetainedBytesTotal` (192 MiB) bound
- * memory, and the total must clear the read budget or "complete" would be an
- * illusion: reading 192 MiB and retaining less would evict part of the very
- * window that was just read. Retained bytes are raw *usage-event* line bytes
- * only — every other event type and every heavy field (message bodies, tool
- * arguments, run output) is dropped at parse time (`EVENT_DATA_FIELDS`) — so a
- * full read retains appreciably less than it reads: 124.8 MiB read retained
- * 46.8 MiB across 134 sessions (28.7k events). Worst case heap is roughly 2-3x
- * the retained bytes, bounded by the total cap and not by the number of sessions
- * on disk.
+ * - **I/O gates** (`maxBytesPerCall` / `maxBytesPerWindowCall` / `maxBytesPerFile`
+ *   / `maxFilesPerCall`) existed to protect the host's event loop: reading and
+ *   parsing a corpus on the main thread blocks everything, so a call had to be
+ *   cut short and the shortfall reported. The reader now runs in a worker thread
+ *   (`worker.ts`), so a slow read no longer blocks anything and the gates are
+ *   **switched off** (`Infinity`): the totals must be complete, and "the newest N
+ *   of M files" is no longer an acceptable answer for a range the user asked for.
+ *   The mechanism is kept because it is also the honest fallback: a small
+ *   injection (probe, or an embedder that really must bound I/O) still truncates
+ *   and still says so.
+ * - **Memory gates** (`maxRetainedBytesPerFile` / `maxRetainedBytesTotal` /
+ *   `maxCachedFiles`) are a real limit that cannot be waved away. Retained bytes
+ *   are raw *usage-event* line bytes only — every other event type and every heavy
+ *   field (message bodies, tool arguments, run output) is dropped at parse time
+ *   (`EVENT_DATA_FIELDS`) — so the reference corpus reads 125 MiB but retains
+ *   46.8 MiB across 134 sessions (28.7k events). When a corpus does exceed the
+ *   total, whole files are evicted LRU-style and the ones that leave the current
+ *   result are reported as `partial_files`: the memory bound is real, and the
+ *   numbers say when it bit.
  */
 export interface ReadLimits {
   maxBytesPerCall: number;
@@ -292,10 +271,13 @@ export interface ReadLimits {
 }
 
 export const DEFAULT_LIMITS: ReadLimits = {
-  maxBytesPerCall: WINDOW_BUDGET_BYTES,
-  maxBytesPerWindowCall: WINDOW_BUDGET_BYTES,
-  maxBytesPerFile: 16 * 1024 * 1024,
-  maxFilesPerCall: 1024,
+  // No I/O gates: the reader runs off the event loop (see above).
+  maxBytesPerCall: Number.POSITIVE_INFINITY,
+  maxBytesPerWindowCall: Number.POSITIVE_INFINITY,
+  maxBytesPerFile: Number.POSITIVE_INFINITY,
+  maxFilesPerCall: Number.POSITIVE_INFINITY,
+  // Memory gates stay: 192 MiB of retained usage-event bytes (~0.4-0.6 GiB heap
+  // at 2-3x), 32 MiB per file so one runaway session cannot take the whole cap.
   maxRetainedBytesPerFile: 32 * 1024 * 1024,
   maxRetainedBytesTotal: 192 * 1024 * 1024,
   maxCachedFiles: 1024,
@@ -635,6 +617,7 @@ function emptyResult(filesTotal = 0): LoadResult {
     files_in_window: 0,
     files_covered: 0,
     bytes_read: 0,
+    peeks: 0,
   };
 }
 
@@ -752,10 +735,19 @@ export class EventStore {
     // billing above when files grew since the previous call, and that growth
     // must not become an unbounded read.
     let bytesRead = 0;
+    let peeks = this.peeks;
     for (const file of window) {
       const remaining = budget - bytesRead;
       if (remaining <= 0) break;
       bytesRead += await this.refresh(file, remaining);
+    }
+    // Files that were read and then evicted by the LRU caps are a *partial* view
+    // of a file we did read, not a file we failed to read: the memory bound is a
+    // real limit, so it must show up as `partial_files` instead of pretending the
+    // file never existed. Anything else missing from the cache was unreadable.
+    const readThisCall = new Set<string>();
+    for (const file of window) {
+      if (this.cache.has(file.path)) readThisCall.add(file.path);
     }
 
     this.evict();
@@ -766,8 +758,8 @@ export class EventStore {
     for (const file of window) {
       const entry = this.cache.get(file.path);
       if (entry === undefined) {
-        // Unreadable this call (vanished, locked): the view is incomplete.
-        unreadable += 1;
+        if (readThisCall.has(file.path)) partialFiles += 1;
+        else unreadable += 1;
         continue;
       }
       if (entry.partial) partialFiles += 1;
@@ -787,6 +779,7 @@ export class EventStore {
       files_in_window: inWindow.length,
       files_covered: window.length,
       bytes_read: bytesRead,
+      peeks: this.peeks - peeks,
     };
   }
 

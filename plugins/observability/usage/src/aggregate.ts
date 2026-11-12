@@ -15,34 +15,47 @@ import { isRecord, type RawEvent, type RunSummary, type Settings } from './store
 const COST_DIVISOR = 1_000_000;
 
 /**
- * How much of the trace a result actually covers.
+ * How much of the data a result actually covers, plus how it was produced.
  *
- * The reader is day-windowed and byte-budgeted (see `store.ts`), so a result can
- * be built from only the newest run files *inside* the requested range. Two
- * different incompletenesses are reported apart, because the honest sentence
+ * Two different incompletenesses are reported apart, because the honest sentence
  * for each is different:
  *
- * - `files_truncated` — some run file in the range was not read at all (read
- *   budget / file cap): runs are missing from these numbers;
+ * - `files_truncated` — some session log in the range was not read at all (the
+ *   reader only does that when an injected I/O cap or a read error forces it, or
+ *   when retention evicted a file that was never read): runs are missing;
  * - `partial_files` — that many counted files were only read partially: their
- *   runs are counted but their oldest requests may be missing.
+ *   runs are counted but some of their events may be missing. This is what the
+ *   *memory* bound produces (`maxRetainedBytesTotal`), and it cannot be tuned
+ *   away, only reported.
  *
  * `truncated` stays as `files_truncated || partial_files > 0`. Files outside the
- * selected range are **not** truncation: the user asked for that range. Absent
- * when a caller has no reader behind it (the probe's pure fixtures).
+ * selected range are **not** truncation: the user asked for that range.
+ *
+ * The metrics at the end are for observation, not for correctness: they say which
+ * path answered (`worker`), how much I/O it cost (`bytes_read`, `peeked`) and how
+ * long it took (`duration_ms`), so "why was that page slow" can be answered from
+ * the response instead of a profiler.
  */
 export interface SourceCoverage {
   truncated: boolean;
-  /** Run files in the range that contributed nothing. */
+  /** Session logs in the range that contributed nothing. */
   files_truncated?: boolean;
-  /** Counted run files that were only partially read. */
+  /** Counted session logs that were only partially read (memory bound). */
   partial_files?: number;
-  /** Trace files counted. */
+  /** Session logs counted (read from disk or answered by the index). */
   files_read: number;
-  /** Trace files inside the selected range (`mtime >= cutoff`). */
+  /** Session logs inside the selected range (`mtime >= cutoff`). */
   files_in_window?: number;
-  /** Trace files present in `<dataDir>/events`. */
+  /** Session logs present in `<dataDir>/sessions`. */
   files_total: number;
+  /** Event bytes this call actually read from disk (0 when cached or indexed). */
+  bytes_read?: number;
+  /** First-line peeks this call performed (`until` ranges only). */
+  peeked?: number;
+  /** Wall time spent producing this DTO. */
+  duration_ms?: number;
+  /** `true` when a worker thread produced the result, `false` on the fallback. */
+  worker?: boolean;
 }
 
 /** One request (or failed run) as shown in Logs. */

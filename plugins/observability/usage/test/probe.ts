@@ -46,6 +46,7 @@ import {
   usageIndexPath,
   writeUsageIndex,
 } from '../src/store.js';
+import { WorkerQueryClient } from '../src/worker-client.js';
 import { I18N, translator } from '../web-src/i18n';
 
 const pluginRoot = resolve(import.meta.dir, '..');
@@ -1038,14 +1039,19 @@ function runIds(events: RawEvent[]): string[] {
   );
 
   check(
-    'the shipped retention clears the shipped window budget',
-    DEFAULT_LIMITS.maxRetainedBytesTotal >= DEFAULT_LIMITS.maxBytesPerWindowCall,
-    `${DEFAULT_LIMITS.maxRetainedBytesTotal} vs ${DEFAULT_LIMITS.maxBytesPerWindowCall}`,
+    'the shipped memory cap is finite and reported as partial reads',
+    Number.isFinite(DEFAULT_LIMITS.maxRetainedBytesTotal) &&
+      DEFAULT_LIMITS.maxRetainedBytesTotal >= 64 * 1024 * 1024 &&
+      Number.isFinite(DEFAULT_LIMITS.maxRetainedBytesPerFile),
+    `${DEFAULT_LIMITS.maxRetainedBytesTotal} / ${DEFAULT_LIMITS.maxRetainedBytesPerFile}`,
   );
   check(
-    'the shipped budgets cover the whole session-log corpus in one call',
-    DEFAULT_LIMITS.maxBytesPerWindowCall === 192 * 1024 * 1024 &&
-      DEFAULT_LIMITS.maxBytesPerCall === DEFAULT_LIMITS.maxBytesPerWindowCall,
+    'the shipped I/O gates are off: the reader runs in a worker, so nothing truncates',
+    DEFAULT_LIMITS.maxBytesPerCall === Number.POSITIVE_INFINITY &&
+      DEFAULT_LIMITS.maxBytesPerWindowCall === Number.POSITIVE_INFINITY &&
+      DEFAULT_LIMITS.maxBytesPerFile === Number.POSITIVE_INFINITY &&
+      DEFAULT_LIMITS.maxFilesPerCall === Number.POSITIVE_INFINITY,
+    `${DEFAULT_LIMITS.maxBytesPerCall}, ${DEFAULT_LIMITS.maxFilesPerCall}`,
   );
 }
 
@@ -1302,7 +1308,7 @@ const rangeRecords = buildRecords(
   );
   check(
     'logs hands the resolved cutoff to the reader',
-    indexSource.includes('loadSnapshot({ cutoff: range.cutoff, until: range.until })'),
+    indexSource.includes('cutoff: range.cutoff') && indexSource.includes('until: range.until'),
   );
   check(
     'logs view sends either days or a custom interval',
@@ -1818,6 +1824,146 @@ function sourceSignatureOf(sources: IndexSources | undefined): string {
     'the range clamp happens on records, not on the file',
     boundedPage.items.length === 1 && boundedPage.items[0]?.run_id === 'run-yday',
     boundedPage.items.map((item) => item.run_id).join(','),
+  );
+}
+
+// ── worker: off the event loop, and the fallback when there is none ─────────
+
+/**
+ * The reader + aggregation runs in a worker thread (worker.ts) so a few hundred
+ * milliseconds of NDJSON parsing cannot freeze the thread that answers the
+ * plugin's protocol. The same QueryRuntime code is the fallback for embedders
+ * that cannot spawn a worker, so both paths must produce identical numbers; these
+ * fixtures drive the real worker, a worker-less environment, the request queue
+ * and the idle teardown.
+ */
+{
+  const dir = await traceDir('worker');
+  const base = dayStart(-2) + 3_600_000;
+  await writeSession(
+    dir,
+    'session-w',
+    sessionEvent('llm.request', 'run-w1', base, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-w1', base + 1_400, { usage: USAGE_1 }) +
+      sessionEvent('llm.request', 'run-w2', base + 60_000, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-w2', base + 61_400, { usage: USAGE_1 }),
+  );
+  const init = { dataDir: dir, settings: NO_PRICES };
+
+  // A worker that cannot start must not break the plugin: same answer, flagged.
+  const broken = new WorkerQueryClient({
+    spawn: () => {
+      throw new Error('worker_threads unavailable in this host');
+    },
+  });
+  const fromFallback = await broken.query({ kind: 'logs', params: { limit: 10 } }, init);
+  check(
+    'a worker that cannot start falls back to the main-thread path',
+    fromFallback.worker === false &&
+      fromFallback.outcome.result.kind === 'logs' &&
+      fromFallback.outcome.result.dto.items.length === 2,
+    JSON.stringify([fromFallback.worker, fromFallback.outcome.result.kind]),
+  );
+  const fallbackAgain = await broken.query({ kind: 'summary', now: NOW }, init);
+  check(
+    'the fallback keeps answering (it is a supported path, not an error state)',
+    fallbackAgain.worker === false &&
+      fallbackAgain.outcome.result.kind === 'summary' &&
+      fallbackAgain.outcome.result.dto.totals.requests === 2,
+    JSON.stringify(fallbackAgain.outcome.result.kind),
+  );
+  check('a broken worker factory leaves usingWorker false', broken.usingWorker === false);
+
+  // The real thing.
+  const client = new WorkerQueryClient();
+  const first = await client.query({ kind: 'logs', params: { limit: 10 } }, init);
+  check(
+    'the real worker answers the query',
+    first.worker === true &&
+      first.outcome.result.kind === 'logs' &&
+      first.outcome.result.dto.items.length === 2,
+    JSON.stringify([first.worker, first.outcome.result.kind]),
+  );
+  check(
+    'the answer carries the metrics the page needs',
+    typeof first.outcome.source.duration_ms === 'number' && first.outcome.source.worker === undefined,
+    JSON.stringify(first.outcome.source),
+  );
+  check('usingWorker reports the live thread', client.usingWorker === true);
+
+  const second = await client.query({ kind: 'logs', params: { limit: 10 } }, init);
+  check(
+    'the second query is answered from the worker cache (zero event bytes)',
+    second.worker === true && second.outcome.source.bytes_read === 0,
+    String(second.outcome.source.bytes_read),
+  );
+
+  // Concurrency: three ranges at once. They queue, and every answer must be
+  // scoped to its own range (no cache or result bleed between them).
+  const cutoff3 = base + 30_000;
+  const [all, recent, window] = await Promise.all([
+    client.query({ kind: 'logs', params: { limit: 10 } }, init),
+    client.query(
+      { kind: 'logs', params: { limit: 10, since: cutoff3 }, cutoff: cutoff3 },
+      init,
+    ),
+    client.query(
+      {
+        kind: 'logs',
+        params: { limit: 10, since: base, until: cutoff3 },
+        cutoff: base,
+        until: cutoff3,
+      },
+      init,
+    ),
+  ]);
+  const runIdsOfAnswer = (answer: typeof all): string[] => {
+    if (answer.outcome.result.kind !== 'logs') return [];
+    return answer.outcome.result.dto.items.map((item) => item.run_id).sort();
+  };
+  check(
+    'three concurrent ranges all answer from the worker',
+    all.worker && recent.worker && window.worker,
+    JSON.stringify([all.worker, recent.worker, window.worker]),
+  );
+  check(
+    'each concurrent range keeps its own rows',
+    runIdsOfAnswer(all).join(',') === 'run-w1,run-w2' &&
+      runIdsOfAnswer(recent).join(',') === 'run-w2' &&
+      runIdsOfAnswer(window).join(',') === 'run-w1',
+    JSON.stringify([runIdsOfAnswer(all), runIdsOfAnswer(recent), runIdsOfAnswer(window)]),
+  );
+
+  // Idle teardown must be invisible to the next request.
+  await client.terminate();
+  check('terminate drops the thread', client.usingWorker === false);
+  const afterTerminate = await client.query({ kind: 'summary', now: NOW }, init);
+  check(
+    'a query after the thread is gone still answers',
+    afterTerminate.outcome.result.kind === 'summary' &&
+      afterTerminate.outcome.result.dto.totals.requests === 2,
+    JSON.stringify(afterTerminate.outcome.result.kind),
+  );
+  await client.terminate();
+
+  // The worker is only wired up once, in the plugin entry.
+  const entrySource = await readFile(join(pluginRoot, 'src', 'index.ts'), 'utf8');
+  const workerSource = await readFile(join(pluginRoot, 'src', 'worker.ts'), 'utf8');
+  check(
+    'the worker entry owns the runtime',
+    workerSource.includes('new QueryRuntime()') &&
+      workerSource.includes("kind: 'query'") &&
+      workerSource.includes('parentPort'),
+  );
+  check(
+    'the plugin entry routes every RPC through the worker client',
+    entrySource.includes('WorkerQueryClient') &&
+      entrySource.includes('queries.query(') &&
+      !entrySource.includes('new EventStore('),
+  );
+  check(
+    'the answer says whether a worker produced it',
+    entrySource.includes('worker: answer.worker'),
   );
 }
 

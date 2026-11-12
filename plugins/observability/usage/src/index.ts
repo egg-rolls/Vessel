@@ -18,41 +18,27 @@
 import { dirname } from 'node:path';
 import { createInterface } from 'node:readline';
 import {
-  buildRecords,
-  buildRunSummaries,
   type LeaderboardResult,
   type LogsParams,
   type LogsRangeInput,
   type LogsResult,
-  leaderboardRuns,
-  listLogs,
-  repriceRuns,
   resolveLogsRange,
   type SourceCoverage,
   type SummaryResult,
-  summarizeRuns,
-  type UsageRecord,
 } from './aggregate.js';
-import {
-  EventStore,
-  isRecord,
-  parseSettings,
-  readSessionSources,
-  readUsageIndex,
-  type RunSummary,
-  sourceSignature,
-  type Settings,
-  writeUsageIndex,
-} from './store.js';
+import { isRecord, parseSettings, type Settings } from './store.js';
+import type { UsageQuery, UsageResult } from './query.js';
+import { WorkerQueryClient } from './worker-client.js';
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_LOG_LIMIT = 50;
 const MAX_LOG_LIMIT = 500;
 const MAX_DAYS = 3650;
 
-const store = new EventStore();
+const queries = new WorkerQueryClient();
 let settings: Settings = { prices: {} };
 let dataDir: string | undefined;
+let previousDir: string | undefined;
 let activated = false;
 let exitScheduled = false;
 
@@ -132,126 +118,30 @@ function parseStatus(value: unknown): 'ok' | 'failed' | undefined {
 }
 
 /**
- * Read the session logs and fold them into request records (the Logs page path).
+ * Ask the worker (or, when there is none, this thread) for one answer.
  *
- * `range.cutoff` is the lower bound of the selected range (`cutoffFor`); it goes
- * into the *reader* so the disk window follows the selected range instead of the
- * read budget alone. `range.until` reorders the reader and, with an `until`
- * bound, lets it drop sessions that provably start after the range (the
- * per-record `[since, until)` filter lives in `listLogs`). `undefined` = no range.
+ * Everything heavy - reading session logs, folding records, aggregating, the
+ * persistent index - happens in worker.ts; the main thread only validates the
+ * parameters and hands the request over. The fallback path exists for embedders
+ * that cannot spawn a worker and is the same QueryRuntime code, so the numbers
+ * cannot differ between the two paths, only the latency.
  */
-async function loadSnapshot(range: {
-  cutoff?: number;
-  until?: number;
-} = {}): Promise<{
-  records: UsageRecord[];
-  source: SourceCoverage;
-}> {
+async function answer(query: UsageQuery): Promise<{ result: UsageResult; source: SourceCoverage }> {
   if (dataDir === undefined) throw new RpcError(-32000, 'plugin is not activated');
-  const loaded = await store.loadEvents(dataDir, range);
-  return {
-    records: buildRecords(loaded.events, settings),
-    source: coverageOf(loaded),
-  };
-}
-
-function coverageOf(loaded: {
-  truncated: boolean;
-  files_truncated: boolean;
-  partial_files: number;
-  files_covered: number;
-  files_in_window: number;
-  files_total: number;
-}): SourceCoverage {
-  return {
-    truncated: loaded.truncated,
-    files_truncated: loaded.files_truncated,
-    partial_files: loaded.partial_files,
-    files_read: loaded.files_covered,
-    files_in_window: loaded.files_in_window,
-    files_total: loaded.files_total,
-  };
-}
-
-/**
- * How long a freshly built/read index is reused without re-fingerprinting.
- *
- * `summary` and `leaderboard` are requested together on every page render, and a
- * fingerprint costs one `stat` per session; a short memo turns two sweeps into
- * one without ever serving a stale answer for longer than a page open. New runs
- * still show up on the next render (or after this window).
- */
-const INDEX_MEMO_MS = 1_500;
-
-interface RunSnapshot {
-  runs: RunSummary[];
-  source: SourceCoverage;
-}
-
-let runsMemo: { at: number; signature: string; snapshot: RunSnapshot } | undefined;
-
-/**
- * Load run summaries for `summary` / `leaderboard`: the persisted index when it
- * is fresh, otherwise a rebuild from the session logs.
- *
- * The index is a **cache, not the truth**: it is trusted only when its format
- * version matches and its source fingerprint (file count, total bytes, newest
- * mtime) equals what is on disk right now. Anything else — missing file, older
- * version, corrupt line, a new run, a deleted session — falls back to the logs
- * and rewrites the index. A rebuild that had to truncate is **not** persisted,
- * so a partial view can never masquerade as complete later.
- */
-async function loadRuns(): Promise<RunSnapshot> {
-  if (dataDir === undefined) throw new RpcError(-32000, 'plugin is not activated');
-  const dir = dataDir;
-  const sources = await readSessionSources(dir);
-  const signature = sourceSignature(sources);
-
-  const memo = runsMemo;
-  if (memo !== undefined && memo.signature === signature && Date.now() - memo.at < INDEX_MEMO_MS) {
-    return memo.snapshot;
-  }
-
-  const indexed = await readUsageIndex(dir);
-  if (indexed !== undefined && sourceSignature(indexed.header.sources) === signature) {
-    // The index covers every session on disk by construction, so its coverage is
-    // complete: there is nothing left unread to warn about. Prices are applied
-    // now, not taken from the stored rows (see `repriceRuns`).
-    const snapshot: RunSnapshot = {
-      runs: repriceRuns(indexed.runs, settings),
-      source: {
-        truncated: false,
-        files_truncated: false,
-        partial_files: 0,
-        files_read: sources.files,
-        files_in_window: sources.files,
-        files_total: sources.files,
-      },
-    };
-    runsMemo = { at: Date.now(), signature, snapshot };
-    return snapshot;
-  }
-
-  const loaded = await store.loadEvents(dir);
-  const runs = repriceRuns(buildRunSummaries(buildRecords(loaded.events, settings)), settings);
-  const snapshot: RunSnapshot = { runs, source: coverageOf(loaded) };
-  if (!loaded.truncated && !loaded.files_truncated) {
-    try {
-      await writeUsageIndex(dir, runs, sources);
-    } catch (error) {
-      // The index is an optimisation: failing to write it must not fail the RPC.
-      log(`usage index not written: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  runsMemo = { at: Date.now(), signature, snapshot };
-  return snapshot;
+  const answer = await queries.query(query, { dataDir, settings });
+  const source: SourceCoverage = { ...answer.outcome.source, worker: answer.worker };
+  return { result: answer.outcome.result, source };
 }
 
 async function handleSummary(params: Record<string, unknown>): Promise<SummaryResult> {
   const days = parseOptionalDays(params.days);
-  const now = Date.now();
-  const snapshot = await loadRuns();
-  return { ...summarizeRuns(snapshot.runs, now, days), source: snapshot.source };
+  const { result, source } = await answer({
+    kind: 'summary',
+    now: Date.now(),
+    ...(days !== undefined ? { days } : {}),
+  });
+  if (result.kind !== 'summary') throw new RpcError(-32603, 'unexpected worker answer');
+  return { ...result.dto, source };
 }
 
 function parseOptionalEpoch(value: unknown, name: string): number | undefined {
@@ -295,15 +185,25 @@ async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> 
     ...(range.since !== undefined ? { since: range.since } : {}),
     ...(range.until !== undefined ? { until: range.until } : {}),
   };
-  const snapshot = await loadSnapshot({ cutoff: range.cutoff, until: range.until });
-  return { ...listLogs(snapshot.records, logsParams), source: snapshot.source };
+  const { result, source } = await answer({
+    kind: 'logs',
+    params: logsParams,
+    ...(range.cutoff !== undefined ? { cutoff: range.cutoff } : {}),
+    ...(range.until !== undefined ? { until: range.until } : {}),
+  });
+  if (result.kind !== 'logs') throw new RpcError(-32603, 'unexpected worker answer');
+  return { ...result.dto, source };
 }
 
 async function handleLeaderboard(params: Record<string, unknown>): Promise<LeaderboardResult> {
   const days = parseOptionalDays(params.days);
-  const now = Date.now();
-  const snapshot = await loadRuns();
-  return { ...leaderboardRuns(snapshot.runs, now, days), source: snapshot.source };
+  const { result, source } = await answer({
+    kind: 'leaderboard',
+    now: Date.now(),
+    ...(days !== undefined ? { days } : {}),
+  });
+  if (result.kind !== 'leaderboard') throw new RpcError(-32603, 'unexpected worker answer');
+  return { ...result.dto, source };
 }
 
 async function handleRpc(params: unknown): Promise<unknown> {
@@ -343,9 +243,12 @@ async function activate(params: Record<string, unknown>): Promise<Record<string,
   settings = parsed.settings;
   dataDir = dir;
   activated = true;
-  store.reset();
-  // A different data dir means a different index and a different session set.
-  runsMemo = undefined;
+  // A different data dir means different logs and a different index: drop the
+  // worker (its store and memo describe the old directory) and let the next
+  // query start a fresh one.
+  void queries.terminate();
+  if (previousDir !== dir) queries.fallback.reset();
+  previousDir = dir;
   log(`activated with ${Object.keys(settings.prices).length} price entries`);
   return { ok: true };
 }
@@ -373,7 +276,9 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       return { ok: true };
     case 'plugin.deactivate':
       activated = false;
-      store.reset();
+      // The worker (and with it every cache) goes away with the plugin.
+      await queries.terminate();
+      queries.fallback.reset();
       return { ok: true };
     case 'plugin.rpc':
       return handleRpc(params);
@@ -448,8 +353,7 @@ function main(): void {
 
   const stop = (): void => {
     activated = false;
-    store.reset();
-    process.exit(0);
+    void queries.terminate().finally(() => process.exit(0));
   };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
