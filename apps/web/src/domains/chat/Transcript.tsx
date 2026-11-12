@@ -27,8 +27,8 @@ import type { TranscriptItem } from './transcript-items';
  *
  * 没有正文、也没有 tool_calls 的消息同样走这里：只渲思考块（没有空正文节点、没有空气泡）。
  *
- * 「有没有思考卡」走 `hasReasoningCard`（唯一判据，与 live 的 `bodyToolbarKeys` 同一份）：
- * 判据只有一处，工具栏归属才不会一边贴卡、一边贴正文。
+ * 「有没有思考卡」走 `hasReasoningCard`（唯一判据，与思考卡自己那个「复制思考」按钮
+ * 同一份），所以「有思考卡」在渲染与按钮两处只有一个答案。
  */
 function historyReasoning(message: Message): string | undefined {
   if (message.role !== 'assistant') return undefined;
@@ -161,24 +161,19 @@ function TranscriptMessage({
       onSelect: () => onRetry(previousUser.index, previousUser.text),
     });
   }
-  // 消息工具栏（复制正文 / 重试 / 时间）：位置只有一处 —— **这一段思考卡或正文的右侧**。
-  // 有思考卡就贴卡右上角（`ReasoningBlock` 的 `actions`，卡自己还会再补一个「复制思考」），
-  // 没有思考卡才落在正文右侧（`.msg-actions`）。两种情况都是绝对定位覆盖层：
-  // hover / focus-within 只切 opacity，**不给正文增加高度、出现时也不位移**（布局说明见
-  // chat.css）。「有没有卡」的判据只有 `hasReasoningCard` 一份，与 live 侧同源。
-  const toolbar =
-    hasMeta || actions.length > 0 ? <MessageActions actions={actions} meta={meta} /> : undefined;
+  // 消息工具栏（复制 / 重试 / 时间）：位置只有一处 —— **正文下方一行、右对齐**。
+  // 思考卡上不挂工具栏（用户明确去掉）；卡头只有一个独立的「复制思考」小按钮
+  // （见 `ReasoningBlock.tsx`）。显隐（hover / focus-within / 触屏常显）在
+  // `MessageActions` 自己身上，这里只给 `mt-1 ml-auto`（间距 + 右对齐）。
   return (
     <div className="msg-assistant group max-w-full">
       {groupStart && <AssistantSpeaker />}
       {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。 */}
-      {reasoning !== undefined && (
-        <ReasoningBlock text={reasoning} streaming={false} actions={toolbar} />
-      )}
+      {reasoning !== undefined && <ReasoningBlock text={reasoning} streaming={false} />}
       {/* 助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
       {message.content && <Markdown className="msg-text" text={message.content} />}
-      {reasoning === undefined && toolbar !== undefined ? (
-        <div className="msg-actions">{toolbar}</div>
+      {hasMeta || actions.length > 0 ? (
+        <MessageActions className="mt-1 ml-auto" actions={actions} meta={meta} />
       ) : null}
     </div>
   );
