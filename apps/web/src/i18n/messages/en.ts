@@ -1664,20 +1664,24 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.tokens.filterPlaceholder': 'Filter by name or value, e.g. amber',
   'designLab.tokens.fonts': 'Fonts',
   'designLab.tokens.layers': 'Layers',
-  'designLab.tokens.legend': 'Swatches: left = active theme, right = sampled forced-dark value.',
+  'designLab.tokens.legend':
+    'Colors always show two columns: left = light-theme value, right = dark-theme value; neither follows the active theme.',
   'designLab.tokens.motion': 'Motion',
   'designLab.tokens.other': 'Other',
   'designLab.tokens.radii': 'Radii',
   'designLab.tokens.runtimeNote':
-    'Values are read from getComputedStyle(document.documentElement) under the active theme and refresh when you switch light/dark.',
+    'Non-color values are read from getComputedStyle(document.documentElement) under the active theme; the light and dark color columns come straight from the :root and :root[data-theme="dark"] declarations in tokens.css, independent of the active theme.',
   'designLab.tokens.shadows': 'Shadows',
   'designLab.tokens.sizes': 'Sizes',
   'designLab.tokens.spacing': 'Spacing',
   'designLab.tokens.subtitle':
     'Every custom property comes from the active theme, grouped by prefix into colors, type, spacing, radii, shadows, fonts, motion, sizes and layers.',
+  'designLab.tokens.themeDark': 'Dark',
+  'designLab.tokens.themeLight': 'Light',
   'designLab.tokens.title': 'Tokens',
   'designLab.tokens.typeSample': 'Type Aa 123',
   'designLab.tokens.typography': 'Type scale',
+  'designLab.tokens.undefined': 'Undefined',
   'designLab.gallery.autoNote':
     'Every *.preview.tsx under apps/web/src is collected automatically (lazy import.meta.glob); drop in a file and it shows up in its group (preview.group, else the directory name).',
   'designLab.gallery.count': '{count} samples',
