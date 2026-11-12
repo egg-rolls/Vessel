@@ -240,6 +240,13 @@ export type TeamCommand =
   | { kind: 'freeze'; teamId: string; json: boolean }
   | { kind: 'unfreeze'; teamId: string; json: boolean }
   | { kind: 'get'; teamId: string; limit?: number; members?: number; json: boolean }
+  /**
+   * 0.51：看一个 Team 的基础信息（名称 / workspace / policy / frozen / 成员数）。
+   * `team` 可以是 `team_id`，也可以是名字或 workspace 目录名（命令层解析）。
+   */
+  | { kind: 'show'; team: string; json: boolean }
+  /** 0.51：按当前工作目录反查所属 Team（workspace 包含关系）。 */
+  | { kind: 'mine'; json: boolean }
   | { kind: 'post'; teamId: string; content: string; mentions: string[]; json: boolean }
   | {
       kind: 'members';
@@ -2936,8 +2943,8 @@ function parseTeamBudget(tail: string[], args: CliArgs): ParseResult {
 }
 
 /**
- * `team list|get|post|members|budget|create|update|archive|freeze|unfreeze`
- * （0.19 S3 / S4；0.24；0.27）。
+ * `team list|get|show|mine|post|members|budget|create|update|archive|freeze|unfreeze`
+ * （0.19 S3 / S4；0.24；0.27；0.51 show / mine）。
  * 只做语法；workspace / roster 解析在 `src/team-command.ts`。
  */
 function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
@@ -3237,6 +3244,52 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
       ...(members !== undefined ? { members } : {}),
       json,
     };
+    return { ok: true, args };
+  }
+
+  if (sub === 'show') {
+    let json = false;
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) return { ok: false, error: `Unknown argument for team show: ${a}` };
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [team, extra] = positional;
+    if (team === undefined || team === '') {
+      return { ok: false, error: 'team show requires <team_id|slug>' };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for team show: ${extra}` };
+    }
+    args.teamCommand = { kind: 'show', team, json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'mine') {
+    let json = false;
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      // 这条命令不看 cwd 以外的输入：多给一个字面量就是打字打错了，别静默忽略。
+      return { ok: false, error: `Unknown argument for team mine: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.teamCommand = { kind: 'mine', json };
     return { ok: true, args };
   }
 

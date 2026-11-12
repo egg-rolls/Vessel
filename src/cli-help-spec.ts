@@ -511,6 +511,17 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     flags: ['--json', '--limit', '--members'],
   },
   {
+    path: ['team', 'show'],
+    summary: 'help.cmd.teamShow',
+    args: '<team_id|slug>',
+    flags: ['--json'],
+  },
+  {
+    path: ['team', 'mine'],
+    summary: 'help.cmd.teamMine',
+    flags: ['--json'],
+  },
+  {
     path: ['team', 'post'],
     summary: 'help.cmd.teamPost',
     args: '<team_id> <content...>',
