@@ -20,7 +20,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { extname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import {
   buildRecords,
   cutoffFor,
@@ -390,8 +390,21 @@ function traceLine(type: string, runId: string, pad = 0): string {
 
 async function traceDir(name: string): Promise<string> {
   const root = join(scratch, name);
-  await mkdir(join(root, 'events'), { recursive: true });
+  await mkdir(join(root, 'sessions'), { recursive: true });
   return root;
+}
+
+/** The one log file a session owns: root/sessions/(sessionId)/events.ndjson. */
+function sessionFile(dir: string, name: string): string {
+  return join(dir, 'sessions', name, 'events.ndjson');
+}
+
+/** Write one session log, creating its directory. */
+async function writeSession(dir: string, name: string, text: string): Promise<string> {
+  const path = sessionFile(dir, name);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, text);
+  return path;
 }
 
 function idsOf(events: RawEvent[]): string[] {
@@ -401,9 +414,9 @@ function idsOf(events: RawEvent[]): string[] {
 // 1. Append: one new line adds one event, and nothing is parsed twice.
 {
   const dir = await traceDir('append');
-  const file = join(dir, 'events', 'run-a.jsonl');
+  const file = sessionFile(dir, 'session-a');
   const head = traceLine('llm.request', 'run-a') + traceLine('llm.response', 'run-a');
-  await writeFile(file, head);
+  await writeSession(dir, 'session-a', head);
 
   const store = new EventStore();
   const cold = await store.loadEvents(dir);
@@ -441,11 +454,11 @@ function idsOf(events: RawEvent[]): string[] {
 // 2. Half-written line: not parsed, not lost.
 {
   const dir = await traceDir('partial');
-  const file = join(dir, 'events', 'run-b.jsonl');
+  const file = sessionFile(dir, 'session-b');
   const complete = traceLine('llm.response', 'run-b');
   const torn = traceLine('llm.response', 'run-b');
   const cut = Math.floor(torn.length / 2);
-  await writeFile(file, complete + torn.slice(0, cut));
+  await writeSession(dir, 'session-b', complete + torn.slice(0, cut));
 
   const store = new EventStore();
   const half = await store.loadEvents(dir);
@@ -469,9 +482,10 @@ function idsOf(events: RawEvent[]): string[] {
 // 3. Truncate/rotate: the offset is dropped and the file is read from the top.
 {
   const dir = await traceDir('truncate');
-  const file = join(dir, 'events', 'run-c.jsonl');
-  await writeFile(
-    file,
+  const file = sessionFile(dir, 'session-c');
+  await writeSession(
+    dir,
+    'session-c',
     traceLine('llm.response', 'run-c') +
       traceLine('llm.response', 'run-c') +
       traceLine('llm.response', 'run-c'),
@@ -480,7 +494,7 @@ function idsOf(events: RawEvent[]): string[] {
   const before = await store.loadEvents(dir);
 
   const replaced = traceLine('llm.response', 'run-c');
-  await writeFile(file, replaced);
+  await writeSession(dir, 'session-c', replaced);
   const after = await store.loadEvents(dir);
   check(
     'a shrunk file is re-read from scratch',
@@ -497,8 +511,8 @@ function idsOf(events: RawEvent[]): string[] {
 // 4. Deleted file (trace pruning): cache entry dropped, no error.
 {
   const dir = await traceDir('delete');
-  const file = join(dir, 'events', 'run-d.jsonl');
-  await writeFile(file, traceLine('llm.response', 'run-d'));
+  const file = sessionFile(dir, 'session-d');
+  await writeSession(dir, 'session-d', traceLine('llm.response', 'run-d'));
   const store = new EventStore();
   const before = await store.loadEvents(dir);
 
@@ -515,14 +529,12 @@ function idsOf(events: RawEvent[]): string[] {
 // 5. Byte budget: newest files only, unchanged cached files cost nothing.
 {
   const dir = await traceDir('budget');
-  const eventsDir = join(dir, 'events');
   const names = ['run-1', 'run-2', 'run-3', 'run-4', 'run-5'];
   let fileBytes = 0;
   for (const [index, name] of names.entries()) {
     const body = traceLine('llm.response', name, 120) + traceLine('llm.response', name, 120);
     fileBytes = Buffer.byteLength(body);
-    const path = join(eventsDir, `${name}.jsonl`);
-    await writeFile(path, body);
+    const path = await writeSession(dir, name, body);
     // Distinct mtimes so "newest first" is deterministic (run-5 is newest).
     await utimes(path, new Date(FIXTURE_MTIME), new Date(FIXTURE_MTIME + index * 1_000));
   }
@@ -555,11 +567,11 @@ function idsOf(events: RawEvent[]): string[] {
 // 6. Idempotency, plus non-usage event types staying out of the cache.
 {
   const dir = await traceDir('idempotent');
-  const file = join(dir, 'events', 'run-f.jsonl');
-  await writeFile(file, traceLine('llm.request', 'run-f') + traceLine('llm.response', 'run-f', 64));
+  const file = sessionFile(dir, 'session-f');
+  await writeSession(dir, 'session-f', traceLine('llm.request', 'run-f') + traceLine('llm.response', 'run-f', 64));
   await appendFile(file, traceLine('llm.response', 'run-f'));
   await utimes(
-    join(dir, 'events', 'run-f.jsonl'),
+    file,
     new Date(FIXTURE_MTIME),
     new Date(FIXTURE_MTIME),
   );
@@ -589,11 +601,11 @@ function idsOf(events: RawEvent[]): string[] {
 // 7. Oversized file: only its newest bytes are read, and appends stay incremental.
 {
   const dir = await traceDir('oversized');
-  const file = join(dir, 'events', 'run-g.jsonl');
+  const file = sessionFile(dir, 'session-g');
   const body: string[] = [];
   for (let index = 0; index < 40; index += 1) body.push(traceLine('llm.response', 'run-g', 200));
   const text = body.join('');
-  await writeFile(file, text);
+  await writeSession(dir, 'session-g', text);
   const size = Buffer.byteLength(text);
 
   const store = new EventStore({ ...DEFAULT_LIMITS, maxBytesPerFile: 1_024 });
@@ -645,8 +657,7 @@ function lineAt(type: string, runId: string, ts: number, pad = 0): string {
 }
 
 async function writeTrace(dir: string, name: string, text: string, mtime: number): Promise<number> {
-  const path = join(dir, 'events', `${name}.jsonl`);
-  await writeFile(path, text);
+  const path = await writeSession(dir, name, text);
   await utimes(path, new Date(mtime), new Date(mtime));
   return Buffer.byteLength(text);
 }
@@ -1013,9 +1024,9 @@ function runIds(events: RawEvent[]): string[] {
     `${DEFAULT_LIMITS.maxRetainedBytesTotal} vs ${DEFAULT_LIMITS.maxBytesPerWindowCall}`,
   );
   check(
-    'the shipped budgets are 96 MiB in a window, 16 MiB for all time',
-    DEFAULT_LIMITS.maxBytesPerWindowCall === 96 * 1024 * 1024 &&
-      DEFAULT_LIMITS.maxBytesPerCall === 16 * 1024 * 1024,
+    'the shipped budgets cover the whole session-log corpus in one call',
+    DEFAULT_LIMITS.maxBytesPerWindowCall === 192 * 1024 * 1024 &&
+      DEFAULT_LIMITS.maxBytesPerCall === DEFAULT_LIMITS.maxBytesPerWindowCall,
   );
 }
 
@@ -1391,33 +1402,33 @@ const rangeRecords = buildRecords(
 //     degrade to the old behaviour instead of dropping data.
 {
   const dir = await traceDir('peek-unknown');
-  const eventsDir = join(dir, 'events');
   const after = dayStart(0) + 3_600_000;
 
   // Empty file (no lines at all).
-  const empty = join(eventsDir, 'run-empty.jsonl');
-  await writeFile(empty, '');
+  const empty = await writeSession(dir, 'sess-empty', '');
   await utimes(empty, new Date(after), new Date(after));
 
   // First line is not JSON.
-  const torn = join(eventsDir, 'run-torn.jsonl');
-  await writeFile(torn, 'not json at all\n' + lineAt('llm.response', 'run-torn', after));
+  const torn = sessionFile(dir, 'sess-torn');
+  await writeSession(dir, 'sess-torn', `not json at all\n${lineAt('llm.response', 'run-torn', after)}`);
   await utimes(torn, new Date(after), new Date(after));
 
-  // First line carries no usable `ts`.
-  const noTs = join(eventsDir, 'run-nots.jsonl');
-  await writeFile(noTs, `${JSON.stringify({ type: 'run.start', run_id: 'run-nots' })}\n`);
+  // First line carries no usable ts.
+  const noTs = sessionFile(dir, 'sess-nots');
+  const noTsBody = `${JSON.stringify({ type: 'run.start', run_id: 'run-nots' })}\n`;
+  await writeSession(dir, 'sess-nots', noTsBody);
   await utimes(noTs, new Date(after), new Date(after));
 
   // First line is longer than the peek window (one oversized line).
-  const long = join(eventsDir, 'run-long.jsonl');
-  await writeFile(long, `${JSON.stringify({ pad: 'x'.repeat(20_000), ts: after })}\n`);
+  const long = sessionFile(dir, 'sess-long');
+  const longBody = `${JSON.stringify({ pad: 'x'.repeat(20_000), ts: after })}\n`;
+  await writeSession(dir, 'sess-long', longBody);
   await utimes(long, new Date(after), new Date(after));
 
   // A late run that *is* judgeable, to prove the unjudgeable ones were kept by
   // their own verdict and not by a blanket rule.
-  const normal = join(eventsDir, 'run-normal.jsonl');
-  await writeFile(normal, lineAt('llm.response', 'run-normal', after + 60_000));
+  const normal = sessionFile(dir, 'sess-normal');
+  await writeSession(dir, 'sess-normal', lineAt('llm.response', 'run-normal', after + 60_000));
   await utimes(normal, new Date(after), new Date(after));
 
   const until = dayStart(-5);
@@ -1446,9 +1457,9 @@ const rangeRecords = buildRecords(
 {
   const dir = await traceDir('peek-cache');
   const start = dayStart(-8) + 3_600_000;
-  const file = join(dir, 'events', 'run-grow.jsonl');
+  const file = sessionFile(dir, 'sess-grow');
   const first = lineAt('llm.request', 'run-grow', start);
-  await writeFile(file, first);
+  await writeSession(dir, 'sess-grow', first);
   // A run that started 8 days ago and is *still growing*: its mtime is recent
   // (after `until`), its first event is not — the case only a peek can judge.
   const grownOnce = dayStart(0) + 3_600_000;

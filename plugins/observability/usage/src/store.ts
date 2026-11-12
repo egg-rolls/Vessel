@@ -1,18 +1,18 @@
 /**
  * Persisted event reader for the Usage plugin.
  *
- * Source of truth is the trace written by the host in the single root layout:
- * `<dataDir>/events/<run>.jsonl`. 0.49 T5 removed the pre-migration legacy
- * layout (`<dataDir>/tenants/<tenant>/events/<run>.jsonl`); this module no
- * longer reads it. This module is read-only; it never creates, appends, or
- * deletes files.
+ * Source of truth is the **session event log** the host writes per session:
+ * `<dataDir>/sessions/<sessionId>/events.ndjson`. It replaced the per-run trace
+ * (`<dataDir>/events/<run>.jsonl`) for usage: the trace carried every prompt,
+ * tool payload and stream chunk (the reference directory was 1.09 GiB over 638
+ * runs), while the session log keeps the same `llm.request` / `llm.response` /
+ * `run.completed` / `run.failed` events for 124 MiB over 134 sessions. Usage is
+ * therefore **not** computed from the trace any more: the two sources are not
+ * merged, the trace simply stopped being a usage input.
  *
- * Reading is **incremental**. A live run appends to its trace file every turn,
- * so re-reading whole files on every RPC (the 0.50 behaviour) got slower the
- * longer the log lived: the reference events directory is past 1 GiB with
- * single files up to ~90 MB, and one page open re-read and re-parsed all of it.
- * Each cached file now remembers the byte offset just past the last *complete*
- * line it consumed, and a later call reads only `[offset, size)`:
+ * Reading is **incremental**. Both logs are append-only NDJSON: each file
+ * remembers the byte offset just past the last *complete* line it consumed, and
+ * a later call reads only `[offset, size)`:
  *
  * - every line is parsed exactly once. The offset only ever advances to the end
  *   of a complete line, so no line is parsed twice and no half line is parsed;
@@ -20,17 +20,22 @@
  *   the next call. Nothing is buffered, so nothing can be lost or duplicated;
  * - a file that shrank (`size < cached size`) was truncated or rotated: its
  *   entry is dropped and the file is read from the top again;
- * - a file that vanished (`trace.prune`) drops its entry;
+ * - a file that vanished (session deleted) drops its entry;
  * - an unchanged cached file costs **zero bytes and zero parse** — that is the
  *   steady state for a re-render, pagination, or a second tab.
  *
+ * Only the four event types usage needs are kept, and each is projected down to
+ * the handful of fields the aggregate reads (`projectEventData`): a session log
+ * stores message bodies, tool arguments and run output, none of which belong in
+ * a usage record, and keeping them would re-inflate memory for nothing.
+ *
  * The **day window** decides which files matter; the byte/file budgets are only
  * a safety valve *inside* it. `loadEvents(dir, { cutoff })` considers only the
- * trace files whose mtime is at or after `cutoff` (a run file's mtime is its
- * last append, i.e. the end of the run, so every event in it is older than that
- * instant), and then filters the events themselves by `ts >= cutoff`. Without a
- * cutoff the whole directory is considered — that is the pre-window behaviour,
- * where the budget alone decides coverage.
+ * session logs whose mtime is at or after `cutoff`, and then filters the events
+ * themselves by `ts >= cutoff`. A session file is not a run file: a long session
+ * spans days, so the file-level mtime test is only a coarse sieve — the
+ * event-level filter (and, for `until`, `peekFirstTs`) is what makes the range
+ * correct.
  *
  * Inside the window, files are visited newest-mtime first and one call is
  * bounded by a byte budget and a file budget (constants below). A call that runs
@@ -50,7 +55,7 @@
  * @module @vessel-agent/plugin-usage
  */
 
-import { open, readdir, stat } from 'node:fs/promises';
+import { type Dirent, open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveSingleTenantPaths } from '@vessel-agent/core';
 
@@ -157,77 +162,90 @@ export interface LoadResult {
 }
 
 /**
- * Event types this plugin folds into usage records (`buildRecords` reads no
- * other type). Everything else on the trace — `context.changed`, `hook.*`,
- * `tool.call.*`, `run.checkpoint` — is dropped while parsing: those lines are
- * the bulk of a trace (one `context.changed` can carry a whole prompt, and
- * lines up to ~180 KB were measured), and keeping them only inflates memory.
- * The set mirrors `vessel.contributes.events` in this plugin's package.json.
+ * Event types this plugin folds into usage records (`buildRecords`) plus the two
+ * run-level events the index/validation needs. Everything else in a session log
+ * — `tool.call.*`, `llm.stream.*`, `message.injected`, `user.message`,
+ * `run.started`, … — is dropped while parsing: tool calls alone are ~19k lines
+ * per reference directory and carry arguments/output we never bill for.
+ *
+ * `run.completed` is **not** turned into a request record (that would double
+ * count retries against the `llm.request`/`llm.response` pairing); it is kept so
+ * the reader can validate a run's paired total against the host's own
+ * `run.completed.usage` and so the index can record a run that never produced a
+ * response.
  */
 export const USAGE_EVENT_TYPES: ReadonlySet<string> = new Set([
   'llm.request',
   'llm.response',
+  'run.completed',
   'run.failed',
 ]);
 
 /**
- * One call may read this much from disk **when a day window is selected**.
+ * Per-type whitelist of `data` fields kept in memory.
  *
- * A selected range means "the real total for these N days", so the budget must
- * be large enough to hold that range instead of silently shrinking the numbers
- * (a total that quietly covers 43 of 176 runs of the last day is a lie the user
- * cannot see). The reference directory's last day is 180 files / 75 MiB on disk,
- * which bills 65.1 MiB at the 2 MiB per-file cap and reads complete in 270 ms —
- * a first estimate of 64 MiB was 1 MiB short of that, so the budget is the same
- * 96 MiB as the retention cap (`maxRetainedBytesTotal`): read at most 96 MiB,
- * retain at most 96 MiB, one number for both.
- *
- * The cap is still a cap: a range that does not fit (7 days there is 1093 MiB,
- * and a *today* window is open-ended — it grows until midnight) stays an honest
- * truncation, `files_truncated` is set, and the UI says "the newest N of M run
- * files in this range".
- *
- * The no-window path (`days` absent = "all time") keeps `maxBytesPerCall`
- * (16 MiB) instead: that is the whole history, which is unbounded by nature and
- * is expected to be a newest-first sample.
+ * A session log stores what the model said, which tools ran and each run's final
+ * output; none of that belongs to a usage record. Projecting the payload down to
+ * these keys is what keeps ~124 MiB of session logs from becoming ~124 MiB of
+ * heap (the aggregate reads exactly these fields, and the index adds nothing).
+ * Anything not listed is dropped at parse time and never retained.
  */
-export const WINDOW_BUDGET_BYTES = 96 * 1024 * 1024;
+const EVENT_DATA_FIELDS: Record<string, readonly string[]> = {
+  'llm.request': ['run_id', 'session_id', 'model', 'estimated_tokens', 'context_max', 'attempt'],
+  'llm.response': ['run_id', 'session_id', 'usage'],
+  'run.completed': ['run_id', 'session_id', 'usage', 'duration_ms', 'iterations'],
+  'run.failed': ['run_id', 'session_id', 'error', 'error_code', 'duration_ms'],
+};
+
+/**
+ * One call may read this much from disk.
+ *
+ * On the session-log source the whole corpus is ~125 MiB / 134 files (the old
+ * per-run trace was 1.09 GiB / 638 files), so the budget is set above it: reading
+ * everything whole measured 526-875 ms and produced 18k request records with
+ * zero truncation. The point of the number is the same as before — a total must
+ * not silently cover part of the range — but the range now fits, including
+ * "all time".
+ *
+ * The cap is still a cap. A corpus that grows past it (or a range over a far
+ * busier installation) truncates honestly: `files_truncated` is set and the UI
+ * says "the newest N of M files in this range".
+ */
+export const WINDOW_BUDGET_BYTES = 192 * 1024 * 1024;
 
 /**
  * Read budget and retention caps.
  *
- * `maxBytesPerCall` (16 MiB) is the whole I/O a single RPC may do when no day
- * window is selected ("all time", and the Logs page). The reference directory is
- * ~1.09 GiB / 210k lines; reading it whole measured 6.3 s (and 14.9 s once the
- * file cache was cold), while a 16 MiB first call measured ~0.37 s and covered
- * 49 of 614 run files (1.7k events). 16 MiB is the top of the 8–16 MiB range
- * because trace lines are large in practice — `llm.request` averages ~7.7 KB and
- * one `context.changed` can be 180 KB.
+ * `maxBytesPerCall` (192 MiB) is the whole I/O a single RPC may do when no range
+ * is selected ("all time", and the Logs page). It equals `WINDOW_BUDGET_BYTES`:
+ * the session-log corpus fits in one call today, so "all time" is complete
+ * instead of a newest-first sample, which is what the old trace source could
+ * never do (1.09 GiB).
  *
- * `maxBytesPerWindowCall` (`WINDOW_BUDGET_BYTES`, 96 MiB) replaces it when a day
- * window is selected; see that constant for why.
+ * `maxBytesPerWindowCall` (`WINDOW_BUDGET_BYTES`, 192 MiB) is used when a range
+ * is selected; see that constant.
  *
- * `maxBytesPerFile` (2 MiB) is what a single trace file may contribute per
- * call, so one outsized run cannot eat the whole window; a bigger file is read
- * from its newest 2 MiB (head dropped, flagged as partial). Subsequent appends
- * to it are still read incrementally, so only pre-existing history is lost. On
- * the reference directory 11 of last day's 180 run files exceeded 2 MiB and are
- * reported through `partial_files`.
+ * `maxBytesPerFile` (16 MiB) is what a single session log may contribute per
+ * call, so one very long session cannot eat the whole budget; a bigger file is
+ * read from its newest 16 MiB (head dropped, flagged as partial). The largest
+ * reference session is 6.3 MiB, so nothing is partial today; subsequent appends
+ * are still read incrementally, so only pre-existing history would be lost.
  *
- * `maxFilesPerCall` (256) bounds per-call `stat`/parse bookkeeping for
- * directories made of thousands of tiny traces.
+ * `maxFilesPerCall` (1024) bounds per-call `stat`/parse bookkeeping. One stat
+ * per session is the dominant warm-call cost (~0.3 ms each on Windows), and a
+ * session file is much larger than a trace file, so the cap is well above the
+ * session count of the reference directory (134).
  *
- * `maxRetainedBytesPerFile` (4 MiB) and `maxRetainedBytesTotal` (96 MiB) bound
- * memory, and they must clear the read budget or "complete" would be an
- * illusion: reading 96 MiB and retaining only 32 MiB would evict part of the
- * very window that was just read, and the next render would re-read it (or
- * report fewer runs). Retained bytes are *usage* trace bytes only (non-usage
- * types are never retained — see `USAGE_EVENT_TYPES`), so a full window retains
- * appreciably less than it reads: last day's 65.1 MiB read retained 29.9 MiB
- * across 180 files and cost +50 MiB of heap. Worst case heap is ~0.2–0.3 GiB
- * (parsed objects are roughly 2–3× the retained bytes), bounded by the total cap
- * rather than by the number of runs on disk; before the window work it was
- * ~64–96 MiB with a 32 MiB cap.
+ * `maxRetainedBytesPerFile` (32 MiB) and `maxRetainedBytesTotal` (192 MiB) bound
+ * memory, and the total must clear the read budget or "complete" would be an
+ * illusion: reading 192 MiB and retaining less would evict part of the very
+ * window that was just read. Retained bytes are raw *usage-event* line bytes
+ * only — every other event type and every heavy field (message bodies, tool
+ * arguments, run output) is dropped at parse time (`EVENT_DATA_FIELDS`) — so a
+ * full read retains appreciably less than it reads: 124.8 MiB read retained
+ * 46.8 MiB across 134 sessions (28.7k events). Worst case heap is roughly 2-3x
+ * the retained bytes, bounded by the total cap and not by the number of sessions
+ * on disk.
  */
 export interface ReadLimits {
   maxBytesPerCall: number;
@@ -240,13 +258,13 @@ export interface ReadLimits {
 }
 
 export const DEFAULT_LIMITS: ReadLimits = {
-  maxBytesPerCall: 16 * 1024 * 1024,
+  maxBytesPerCall: WINDOW_BUDGET_BYTES,
   maxBytesPerWindowCall: WINDOW_BUDGET_BYTES,
-  maxBytesPerFile: 2 * 1024 * 1024,
-  maxFilesPerCall: 256,
-  maxRetainedBytesPerFile: 4 * 1024 * 1024,
-  maxRetainedBytesTotal: 96 * 1024 * 1024,
-  maxCachedFiles: 256,
+  maxBytesPerFile: 16 * 1024 * 1024,
+  maxFilesPerCall: 1024,
+  maxRetainedBytesPerFile: 32 * 1024 * 1024,
+  maxRetainedBytesTotal: 192 * 1024 * 1024,
+  maxCachedFiles: 1024,
 };
 
 /** One trace file as listed on disk in a single call. */
@@ -391,6 +409,22 @@ export function parseSettings(raw: unknown): ParsedSettings {
   };
 }
 
+/**
+ * Project an event's `data` down to the fields usage reads (see
+ * `EVENT_DATA_FIELDS`). Unknown types are dropped by the caller before this runs,
+ * so a missing entry means "keep nothing".
+ */
+function projectEventData(type: string, data: Record<string, unknown>): Record<string, unknown> {
+  const fields = EVENT_DATA_FIELDS[type];
+  if (fields === undefined) return {};
+  const kept: Record<string, unknown> = {};
+  for (const field of fields) {
+    const value = data[field];
+    if (value !== undefined) kept[field] = value;
+  }
+  return kept;
+}
+
 function parseLine(line: string, lineNumber: number): RawEvent | undefined {
   if (line.trim() === '') return undefined;
   let parsed: unknown;
@@ -420,11 +454,15 @@ function parseLine(line: string, lineNumber: number): RawEvent | undefined {
     run_id: runId,
     line: lineNumber,
     ...(seq !== undefined ? { seq } : {}),
-    data,
+    data: projectEventData(parsed.type, data),
   };
 }
 
 const NEWLINE = 0x0a;
+
+/** The per-session log file inside `<dataDir>/sessions/<sessionId>/`. */
+const SESSION_LOG = 'events.ndjson';
+
 
 /** How many bytes of a file's top are read to find its first event. */
 const FIRST_LINE_BYTES = 8 * 1024;
@@ -615,7 +653,7 @@ export class EventStore {
     // Either bound means the caller asked for a *range*, which is what selects
     // the larger window budget (a range is a "real total", not a sample).
     const bounded = cutoff !== undefined || until !== undefined;
-    const dir = resolveSingleTenantPaths(dataDir).events_dir;
+    const dir = resolveSingleTenantPaths(dataDir).sessions_dir;
     const files = await this.list(dir);
     if (files.length === 0) {
       this.cache.clear();
@@ -921,25 +959,34 @@ export class EventStore {
     }
   }
 
-  /** List `<dir>/*.jsonl`, newest mtime first (name as a stable tie-break). */
+  /**
+   * List `<dir>/<sessionId>/events.ndjson`, newest mtime first (name as a stable
+   * tie-break).
+   *
+   * One level deeper than the old trace directory: a session owns one file, not
+   * a run. `<sessionId>.json` (the session index) and any other entry are
+   * ignored — usage never reads the session metadata.
+   */
   private async list(dir: string): Promise<FileInfo[]> {
-    let names: string[];
+    let entries: Dirent[];
     try {
-      names = await readdir(dir);
+      entries = await readdir(dir, { withFileTypes: true });
     } catch {
       return [];
     }
 
-    const candidates = names.filter((name) => name.endsWith('.jsonl') && !name.startsWith('.'));
+    const names = entries
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name);
     const files: FileInfo[] = [];
-    // One `stat` per file is the dominant cost of a warm call on Windows
-    // (~0.3 ms each over 600 files), so walk the list in small parallel batches
-    // instead of awaiting one file at a time.
-    for (let index = 0; index < candidates.length; index += STAT_BATCH) {
-      const batch = candidates.slice(index, index + STAT_BATCH);
+    // One `stat` per session is the dominant cost of a warm call on Windows
+    // (~0.3 ms each), so walk the list in small parallel batches instead of
+    // awaiting one file at a time.
+    for (let index = 0; index < names.length; index += STAT_BATCH) {
+      const batch = names.slice(index, index + STAT_BATCH);
       const infos = await Promise.all(
         batch.map(async (name): Promise<FileInfo | undefined> => {
-          const path = join(dir, name);
+          const path = join(dir, name, SESSION_LOG);
           try {
             const info = await stat(path);
             if (!info.isFile()) return undefined;
@@ -947,6 +994,7 @@ export class EventStore {
           } catch {
             // Deleted between readdir and stat: forget it.
             this.cache.delete(path);
+            this.firstTs.delete(path);
             return undefined;
           }
         }),
