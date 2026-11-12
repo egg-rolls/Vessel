@@ -56,8 +56,12 @@ export function NavItem({
       )}
       {!collapsed && status && (
         <>
+          {/*
+            四档语义 → 既有颜色 token（见 nav-status.ts 文件头）：accent=已连接/正常、
+            amber=进行中、danger=出错、muted=未配置/未知（默认 bg-faint）。
+          */}
           <span
-            className="size-1.5 flex-none rounded-full bg-faint data-[tone=ok]:bg-success data-[tone=warn]:bg-warn data-[tone=warn]:pulse-soft data-[tone=accent]:bg-accent data-[tone=amber]:bg-amber data-[tone=amber]:pulse-soft data-[tone=danger]:bg-danger"
+            className="size-1.5 flex-none rounded-full bg-faint data-[tone=accent]:bg-accent data-[tone=amber]:bg-amber data-[tone=amber]:pulse-soft data-[tone=danger]:bg-danger"
             data-tone={status.tone}
             role="img"
             aria-label={statusText}

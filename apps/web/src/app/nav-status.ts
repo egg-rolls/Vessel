@@ -1,11 +1,34 @@
 /**
- * Status 导航组的状态点推导（纯函数，便于单测）。
+ * 核心区三个导航点（hub / gateway / pluginHost）的状态色推导（纯函数，便于单测）。
  *
- * - Gateway 的「live」状态来自 WebSocket 连接状态；
- * - Hub 状态来自浏览器 → Hub 的直连快照（`gateway/platform/hub-storage`），不再从
- *   `config.get.hub` 推导：启动探测（`useNavStatus` 的 `probeHubNavStatus`）与 Hub 页
- *   共写同一份 store；未配置时 muted，还没探到时按「未知」处理；
- * - 版本来自 `config.get` 的 additive `version` 字段，旧 gateway 缺失时显示 `—`。
+ * ## 四档语义（唯一判据；三个来源都必须对齐，不许出现第五档）
+ *
+ * | 语义              | tone     | 含义                                                          |
+ * | ----------------- | -------- | ------------------------------------------------------------- |
+ * | 已连接 / 正常     | `accent` | 有证据表明当前是通的、正常的                                   |
+ * | 正在连接 / 未就绪 | `amber`  | 进行中，尚未有结论                                             |
+ * | 出错              | `danger` | 明确失败（token 错 / 协议不兼容 / 不可达 / unhealthy / invalid） |
+ * | 未配置 / 不使用   | `muted`  | 用户没开它，或信息未知                                         |
+ *
+ * 曾经的 `ok` / `warn` 两档已删除：它们与 `accent` / `amber` 表达同一件事，两套并行
+ * 只会让「同一个已连接」在三个点上不同色。颜色的实际取值见 `NavItem`，只用既有 token
+ * （`--accent` / `--amber` / `--danger` / `--faint`），不新增颜色。
+ *
+ * ## 三个来源的证据是什么（点色只看证据，不看「想让它变绿」）
+ *
+ * - **gateway**：浏览器 ↔ gateway 的 WebSocket 连接状态（`ConnectionState`）；
+ * - **hub**：浏览器 → Hub 的直连快照（`gateway/platform/hub-storage`），启动探测
+ *   （`useNavStatus` 的 `probeHubNavStatus`）与 Hub 页共写同一份 store，不从
+ *   `config.get.hub` 推导；
+ * - **pluginHost**：插件宿主**与 gateway 同进程**（`packages/serve/src/plugin-host`），
+ *   所以「宿主在跑」的证据就是 gateway 连接是 open，而 `plugins.list` 里 marketplace
+ *   条目存在且 `enabled` 说明面板确实在用；条目自带的 `status` 是**该插件**的加载状态，
+ *   不是宿主连接状态，只有 `unhealthy` / `invalid` 才算失败证据（详见
+ *   `pluginHostNavStatus`）。
+ *
+ * 版本：gateway 取 `config.get.version`；hub 取 Hub directory 的 version；pluginHost 取
+ * `plugins.list` 里 marketplace 条目的 `version`（即 marketplace 插件 manifest 的版本，
+ * 不是 gateway 版本）。缺失时调用方显示 `—`。
  *
  * 需要 React 绑定时用 `useNavStatus.ts`，本文件不 import provider。
  */
@@ -14,32 +37,32 @@ import type { ConnectionState } from '../gateway/client';
 import type { HubNavStatus } from '../gateway/platform/hub-storage';
 import type { PluginListItem } from '../gateway/types';
 
-/**
- * 导航状态点色档：`ok`（成功）/ `warn`（中性灰提醒）/ `danger`（错误）/
- * `muted`（无 / 未知）/ `accent`（主题色，Hub 连上了）/ `amber`（真琥珀，进行中）。
- *
- * 后两档是给 Hub 状态点单独加的：用户要的四档是「主题色 = 连接成功、错误色 = 出错、
- * 灰 = 没配置、黄 = 正在连接」。`ok` 与 `warn` 的既有含义（网关连接点用）不变——
- * `gatewayNavStatus` 仍然只吐 `ok` / `warn` / `danger` / `muted`。
- */
-export type NavStatusTone = 'ok' | 'warn' | 'danger' | 'muted' | 'accent' | 'amber';
+/** 四档语义；见文件头表格。 */
+export type NavStatusTone = 'accent' | 'amber' | 'danger' | 'muted';
 
 export interface NavStatusMeta {
   tone: NavStatusTone;
   /** 状态文案的 i18n key；导航点使用它作为 aria-label / tooltip。 */
   labelKey: string;
-  /** 进程版本；缺失时由调用方显示 `—`。 */
+  /** 版本：gateway / hub 是进程版本，pluginHost 是 marketplace 插件 manifest 的版本。 */
   version?: string;
 }
 
+/**
+ * gateway 状态点：证据是浏览器 ↔ gateway 的 WebSocket 连接。
+ *
+ * - 没 token（用户没配置）→ muted；还没开始连（idle）→ muted（信息未知）；
+ * - open → accent；connecting / reconnecting → amber（进行中，不下结论）；
+ * - closed / error → danger（明确连不上，含 token 被拒）。
+ */
 export function gatewayNavStatus(
   connectionState: ConnectionState,
   hasToken: boolean,
 ): NavStatusMeta {
   if (!hasToken) return { tone: 'muted', labelKey: 'nav.status.offline' };
-  if (connectionState === 'open') return { tone: 'ok', labelKey: 'nav.status.online' };
+  if (connectionState === 'open') return { tone: 'accent', labelKey: 'nav.status.online' };
   if (connectionState === 'connecting' || connectionState === 'reconnecting') {
-    return { tone: 'warn', labelKey: 'nav.status.connecting' };
+    return { tone: 'amber', labelKey: 'nav.status.connecting' };
   }
   if (connectionState === 'closed' || connectionState === 'error') {
     return { tone: 'danger', labelKey: 'nav.status.error' };
@@ -50,9 +73,8 @@ export function gatewayNavStatus(
 /**
  * Hub 状态点：只反映浏览器 → Hub 的直连状态，不借用 gateway 连接。
  *
- * 四档语义（用户口径）：没配置 = 灰（muted）、探测中 = 黄（amber，本仓 `--warn` 是
- * 中性灰、`--amber` 才是真黄）、连上 = 主题色（accent）、出错 = 错误色（danger，
- * `unauthorized` / `incompatible` / `network` 三类共用红色，靠文案区分）。
+ * 四档（同上表）：没配置 = muted、探测中 = amber、连上（含空目录）= accent、
+ * 出错 = danger（`unauthorized` / `incompatible` / `network` 三类共用红色，靠文案区分）。
  */
 export function hubNavStatus(status: HubNavStatus): NavStatusMeta {
   switch (status) {
@@ -75,29 +97,75 @@ export function hubNavStatus(status: HubNavStatus): NavStatusMeta {
 }
 
 /**
- * 插件宿主状态点：版本取 `plugins.list` 里 marketplace 条目的 `version`。
- * 缺失条目 / 未启用 / 未知状态一律 muted；unhealthy / invalid 才算 danger。
+ * 插件宿主状态点。
+ *
+ * **灰点根因（本单要修的那个 bug）**：旧实现只看 marketplace 条目的 `status`，把
+ * `status === 'inactive'` 映射成 muted。但 `inactive` 是**懒激活 child 插件的初始加载
+ * 状态**，与「宿主是否在跑 / 是否连上」是两件事：
+ *
+ * - `PluginHostManager.makeEntry`：`status = enabled ? 'inactive' : 'disabled'`
+ *   （`packages/serve/src/plugin-host/manager.ts`）——宿主启动后 marketplace 条目一律
+ *   先是 `inactive`，直到 `plugin.activate` 才变 `active`；
+ * - marketplace manifest 的 `activationEvents` 是 `["onPage:marketplace"]`：只有真的打开
+ *   marketplace 页面 / 调它的 RPC 才会被激活；
+ * - 导航上显示的 `v0.1.0` 正是这条目 manifest 的 `version`
+ *   （`plugins/marketplace/marketplace/package.json` 的 `vessel.version`），说明宿主已经把
+ *   manifest 读进来并正常应答了 `plugins.list` —— 宿主明显是连上的，点却是灰的。
+ *
+ * 因此把「宿主连接状态」与「该插件的运行期状态」分开取证据（按顺序判定）：
+ *
+ * | 证据                                                    | tone   | 文案 key                        |
+ * | ------------------------------------------------------- | ------ | ------------------------------- |
+ * | 没有 gateway token（用户没连，宿主未知）                | muted  | nav.status.offline              |
+ * | gateway 连不上 / 报错（宿主与 gateway 同进程 ⇒ 不可达）  | danger | nav.status.error                |
+ * | 连接中 / 重连中（还没结论）                             | amber  | nav.status.connecting           |
+ * | 还没开始连（idle，信息未知）                            | muted  | nav.status.unknown              |
+ * | 连上了但没有 marketplace 条目（宿主没有它 ⇒ 不使用）     | muted  | nav.status.pluginHostNoMarketplace |
+ * | 连上了但 marketplace 被禁用（用户没开它）                | muted  | pluginHost.enabled.off          |
+ * | `status` 为 `unhealthy` / `invalid`（明确失败）          | danger | pluginHost.status.<status>      |
+ * | `status` 为 `disabled` 而 `enabled` 为真（wire 矛盾，按未知） | muted | pluginHost.status.disabled   |
+ * | `status` 为 `active`（已激活）                           | accent | pluginHost.status.active        |
+ * | `status` 为 `inactive`（懒激活待触发，宿主正常）         | accent | pluginHost.status.lazy          |
+ * | 没有 `status`（旧 gateway 无 E10 元数据，宿主仍已应答）  | accent | pluginHost.status.hostConnected |
+ *
+ * accent 的判据是「有连接证据 + 没有失败证据」，不是「把 inactive 硬当绿」：这里只有
+ * `unhealthy` / `invalid` 算失败证据，`inactive` 只说明插件还没被懒激活。
  */
-export function pluginHostNavStatus(marketplace: PluginListItem | undefined): NavStatusMeta {
+export function pluginHostNavStatus(
+  connectionState: ConnectionState,
+  hasToken: boolean,
+  marketplace: PluginListItem | undefined,
+): NavStatusMeta {
   const base = marketplace?.version !== undefined ? { version: marketplace.version } : {};
-  if (!marketplace) {
+  if (!hasToken) return { tone: 'muted', labelKey: 'nav.status.offline', ...base };
+  if (connectionState === 'closed' || connectionState === 'error') {
+    return { tone: 'danger', labelKey: 'nav.status.error', ...base };
+  }
+  if (connectionState === 'connecting' || connectionState === 'reconnecting') {
+    return { tone: 'amber', labelKey: 'nav.status.connecting', ...base };
+  }
+  if (connectionState !== 'open') {
     return { tone: 'muted', labelKey: 'nav.status.unknown', ...base };
+  }
+  // 宿主确实在应答（gateway 连接 open）：只看「用没用」与「有没有失败证据」。
+  if (!marketplace) {
+    return { tone: 'muted', labelKey: 'nav.status.pluginHostNoMarketplace', ...base };
   }
   if (!marketplace.enabled) {
     return { tone: 'muted', labelKey: 'pluginHost.enabled.off', ...base };
   }
   switch (marketplace.status) {
-    case 'active':
-      return { tone: 'ok', labelKey: 'pluginHost.status.active', ...base };
     case 'unhealthy':
     case 'invalid':
       return { tone: 'danger', labelKey: `pluginHost.status.${marketplace.status}`, ...base };
     case 'disabled':
       return { tone: 'muted', labelKey: 'pluginHost.status.disabled', ...base };
+    case 'active':
+      return { tone: 'accent', labelKey: 'pluginHost.status.active', ...base };
     case 'inactive':
-      return { tone: 'muted', labelKey: 'pluginHost.status.inactive', ...base };
+      return { tone: 'accent', labelKey: 'pluginHost.status.lazy', ...base };
     default:
-      return { tone: 'muted', labelKey: 'nav.status.unknown', ...base };
+      return { tone: 'accent', labelKey: 'pluginHost.status.hostConnected', ...base };
   }
 }
 

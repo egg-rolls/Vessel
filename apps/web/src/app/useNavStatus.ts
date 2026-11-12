@@ -9,6 +9,10 @@
  * 探测体就是 Hub 页同一个 `HubSession`（health → directory → WS 首帧），所以
  * `loading / connected / empty / unauthorized / incompatible / network` 的分类与页面
  * **完全一致**，不另写一套。
+ *
+ * 核心区三个点的四档语义见 `nav-status.ts` 文件头。pluginHost 点额外需要 gateway 的
+ * 连接证据（宿主与 gateway 同进程）：连接状态由 `useConnection()` 提供，marketplace
+ * 条目由调用方传进来的 `plugins` 里取。
  */
 import { useSyncExternalStore } from 'react';
 import { useConnection } from '../gateway/ConnectionProvider';
@@ -44,7 +48,7 @@ export function useNavStatus(plugins: readonly PluginListItem[]): NavStatuses {
   return {
     hub: hub.version !== undefined ? { ...hubMeta, version: hub.version } : hubMeta,
     gateway: version !== undefined ? { ...gateway, version } : gateway,
-    pluginHost: pluginHostNavStatus(marketplace),
+    pluginHost: pluginHostNavStatus(connectionState, hasToken, marketplace),
   };
 }
 
