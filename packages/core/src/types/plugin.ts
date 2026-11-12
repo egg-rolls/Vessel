@@ -196,6 +196,15 @@ export interface ExecutionUnitOptions {
   /** 0.15 E9：Self Card；缺省不注入，行为不变 */
   selfCard?: SelfCardOptions;
   /**
+   * 0.51：本 EU 的默认工作目录（成员 cwd），每次工具调用注入 `ToolContext.cwd`。
+   *
+   * 与 `pluginConfigs['basic-tools'].cwd`（`agent.cwd`，全 tenant 一份）的分工：这里是
+   * **per-成员** 的具体起点，那边是**全局默认**。工具侧的优先级由工具自己决定
+   * （basic-tools：参数 cwd > 配置 cwd > 本字段 > `process.cwd()`）。
+   * 缺省不注入 → 工具行为与 0.50 完全一致。
+   */
+  cwd?: string;
+  /**
    * 0.28：上下文压力提示的尾句文案；缺省保持 `agent(rotate)` 原文案。
    * 供不能靠 rotate 自愈的入口（如 temporary 成员）换成自己的行动建议。
    * 运行期可用 `ExecutionUnit.applyContextPolicy` 热替换（身份转换后下一轮生效）。

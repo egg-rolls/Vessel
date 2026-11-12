@@ -395,6 +395,13 @@ export class ExecutionUnit {
   private readonly selfCard?: SelfCardOptions;
   /** 0.28：上下文压力提示的尾句文案；缺省用 `agent(rotate)` 原文案。可经 `applyContextPolicy` 热替换 */
   private contextPressureHint?: string;
+  /**
+   * 0.51：成员 cwd（每次工具调用注入 `ToolContext.cwd`）。
+   *
+   * 存成字段而不是只在构造时塞进闭包：工具面可以热刷新，但 cwd 与 EU 一起活到 dispose，
+   * 没有热改路径（Team.workspace 创建后不可改），所以这里只读。
+   */
+  private readonly toolCwd?: string;
   /** 0.15 E9：本次 run 的 systemPrompt（含 Self Card）；run 结束后清空 */
   private runSystemPrompt?: string;
   /**
@@ -513,6 +520,7 @@ export class ExecutionUnit {
     this.systemPrompt = opts.systemPrompt;
     this.selfCard = opts.selfCard;
     this.contextPressureHint = opts.contextPressureHint;
+    this.toolCwd = opts.cwd;
     this.boundAgentId = opts.agentId;
     this.includeReasoning = opts.includeReasoning === true;
     this.retryPolicy = normalizeRetryPolicy(opts.retry);
@@ -2490,6 +2498,9 @@ export class ExecutionUnit {
         toolCall,
         args: entry.args,
         messages: execution.workingContext.messages,
+        // 0.51：成员 cwd 随每次调用下发 —— 工具是 tenant 级共享对象（install 只做一次），
+        // 唯一能区分「哪个成员在哪跑」的通道就是 ctx。
+        ...(this.toolCwd !== undefined ? { cwd: this.toolCwd } : {}),
         // F10：把当前 run 的 signal 交给工具，便于 handler 响应取消
         ...(signal ? { signal } : {}),
         stages: {

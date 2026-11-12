@@ -25,6 +25,17 @@ export interface ToolContext {
    * 仅用于事件关联，不参与权限判定。
    */
   source?: 'runtime' | 'host';
+  /**
+   * 成员默认工作目录（0.51）：工具解析**相对路径**时的起点，缺省退回工具自己的配置。
+   *
+   * 为什么放在 ctx 而不是装配期常量：cwd 是**成员**属性，而工具对同一 tenant 只安装
+   * 一次（`installPluginsIntoHost` 的闭包被全 tenant 复用）。放在 ctx 才能让同一批工具
+   * 对象给不同成员算出不同的起点（见 `plugins/tools/basic-tools` 的调用期解析）。
+   *
+   * 语义边界：**只是默认起点，不是允许范围**。deny 目录 / `allowed_roots` 仍由工具自己的
+   * 路径边界判定，本字段不放宽任何一条（工具级显式 `cwd` 参数优先于它）。
+   */
+  cwd?: string;
 }
 
 /** 工具处理函数 */
