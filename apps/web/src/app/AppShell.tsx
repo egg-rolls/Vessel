@@ -26,6 +26,7 @@ import { shellNoticeItems } from './shellNoticeItems';
 import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
+import { probeHubNavStatus } from './useNavStatus';
 import { useOutdatedBuild } from './useOutdatedBuild';
 import { paneCssVars, type SidePaneKey, usePaneResize } from './usePaneResize';
 import { useRouteSubscription } from './useRouteSubscription';
@@ -182,6 +183,15 @@ export function AppShell() {
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  // Hub 状态点：打开 WebUI 就探一次（有已存 URL / 回环默认 Hub 才真发请求），之后只随
+  // gateway 会话重建（epoch 变化）再探一次 —— 不轮询，失败也不自己重试。Hub 页自己会连
+  // （`useHubDirectory`），停在 Hub 页上不重复探；探测复用的是同一个 `HubSession`。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch / 当前路由只是「再探一次」的触发器
+  useEffect(() => {
+    if (route.domain === 'hub') return;
+    void probeHubNavStatus();
+  }, [epoch]);
 
   // 无显式偏好时，跨 1200 边界自动切换默认展开/折叠。
   useEffect(() => {

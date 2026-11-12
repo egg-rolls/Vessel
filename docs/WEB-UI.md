@@ -183,7 +183,8 @@ class 与同一个阈值，不要给某一页复制第二份。
 | `border-line` / `border-line-strong`                 | 细线 / 强分隔线               |
 | `bg-accent` / `text-accent-ink` / `bg-accent-soft`   | 强调色 / 强调文本 / 强调底    |
 | `text-success` / `bg-success-soft`                   | 成功（token 原值 `--ok`）     |
-| `text-warn` / `bg-warn-soft`                         | 警告                          |
+| `text-warn` / `bg-warn-soft`                         | 警告（token 原值 `--warn`：**中性灰，不是黄**） |
+| `text-amber` / `bg-amber`                            | 还没完成：排队中 / 正在连接（token 原值 `--amber`：真琥珀，三个主题块齐全） |
 | `text-danger` / `bg-danger-soft`                     | 错误 / 破坏性动作             |
 | `text-info` / `bg-info-soft`                         | 信息                          |
 | `bg-hover` / `bg-press`                              | hover / press 的半透明叠色    |
@@ -321,6 +322,20 @@ export function ToolCard({ tone, className, ...props }: ToolCardProps) {
 
 错误给 Retry；未启用不提供 Retry；陈旧数据用 `StaleNotice` 且不阻塞内容。
 状态必须同时有字形或文本，不能只靠颜色。
+
+导航状态点（`app/NavItem.tsx` 的小圆点，`app/nav-status.ts` 推导色档 `tone`）的语义色：
+
+| `tone`   | 颜色                            | 用于                                    |
+| -------- | ------------------------------- | --------------------------------------- |
+| `accent` | 主题色 `bg-accent`              | Hub 已连上（`connected` / `empty`）     |
+| `amber`  | 琥珀 `bg-amber`（脉冲）         | Hub 正在连接 / 正在探测（`loading`）    |
+| `danger` | 错误色 `bg-danger`              | Hub 出错（token / 协议 / 不可达）       |
+| `muted`  | 灰 `bg-faint`                   | 没配置 / 未知                           |
+| `ok`     | 成功色 `bg-success`             | 网关 WebSocket 在线（既有，语义不变）   |
+| `warn`   | 中性灰 `bg-warn`（脉冲）        | 网关连接中（既有，语义不变）            |
+
+Hub 这四档与网关连接点分开：新增的 `accent` / `amber` 只给 Hub 用，
+`gatewayNavStatus()` 仍只吐 `ok` / `warn` / `danger` / `muted`。
 
 ### MessageBar / Toast API
 

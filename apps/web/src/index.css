@@ -89,6 +89,8 @@
   --color-success-soft: var(--ok-soft);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
+  /* amber：真琥珀那支（`--warn` 在本仓是中性灰，不黄）；导航状态点用 `bg-amber`。 */
+  --color-amber: var(--amber);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
   --color-info: var(--info);
