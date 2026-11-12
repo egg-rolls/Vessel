@@ -125,26 +125,26 @@ function optionalString(value: unknown): string | undefined {
 }
 
 /**
- * Parse `model: <id>` from the Self Card that Vessel injects into the system
- * message. Only messages that actually contain `[Self Card]` are considered,
- * so an unrelated `model:` line in a user message cannot hijack attribution.
+ * Attribution of one `llm.request`, most trustworthy source first:
+ *
+ * 1. `data.model` — the model the request actually used (published by the
+ *    runtime, kept by the trace summary). A configured default must never
+ *    relabel this: otherwise setting `default_model` once makes every row show
+ *    the setting instead of reality.
+ * 2. `settings.default_model` — explicit operator configuration.
+ * 3. `'unknown'` — never invent a model id.
+ *
+ * `model` used to be scraped out of the injected Self Card with a regex over
+ * `data.messages`. That is gone, and must not come back: the Self Card is only
+ * concatenated into the system prompt while the request is assembled
+ * (`composeRunSystemPrompt`), it never becomes a message and never rides an
+ * event, and the trace stores `llm.request` as its summary with `messages`
+ * dropped. So `data.messages` never exists on a persisted event and that parse
+ * could not succeed even on old traces. The model name is written into
+ * `data.model` by the producer instead.
  */
-function selfCardModel(data: Record<string, unknown>): string | undefined {
-  const messages = data.messages;
-  if (!Array.isArray(messages)) return undefined;
-  for (const message of messages) {
-    if (!isRecord(message)) continue;
-    const content = message.content;
-    if (typeof content !== 'string' || !content.includes('[Self Card]')) continue;
-    const match = /^model:\s*(.+)$/m.exec(content);
-    const model = match?.[1]?.trim();
-    if (model !== undefined && model.length > 0) return model;
-  }
-  return undefined;
-}
-
 function modelFor(settings: Settings, hint: string | undefined): string {
-  return settings.default_model ?? hint ?? 'unknown';
+  return hint ?? settings.default_model ?? 'unknown';
 }
 
 interface CostResult {
@@ -189,7 +189,7 @@ function recordId(event: RawEvent): string {
 /**
  * Fold raw events into one record per `llm.response`, plus one failed record
  * per `run.failed`. `llm.request` supplies the duration of the following
- * response and the Self Card model hint.
+ * response and the model attribution (its `model` field).
  *
  * A failed run is run-level, not an LLM request. It is counted in summary but
  * only appears in Logs when it left an `llm.request` unanswered (`in_flight`);
@@ -204,7 +204,10 @@ export function buildRecords(events: RawEvent[], settings: Settings): UsageRecor
     const key = event.run_id;
 
     if (event.type === 'llm.request') {
-      const hint = selfCardModel(event.data);
+      // `data.model` is the only place a persisted event carries the model:
+      // the summary keeps it (`{...data}` passthrough) while `messages` — the
+      // old Self Card source — is dropped before the trace is written.
+      const hint = optionalString(event.data.model);
       pending.set(key, { ts: event.ts, ...(hint !== undefined ? { model: hint } : {}) });
       lastHint.set(key, hint);
       continue;

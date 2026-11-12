@@ -55,6 +55,13 @@ paths: [packages/core/src/runtime/run-journal.ts, packages/core/src/runtime/exec
 / `stream`（+ 显式开启时的 `include_reasoning`）。`messages` / `tools` 正文由写盘侧
 `stripRequestContent` 兜底裁掉，所以即使 producer 误传完整 payload 也写不进 `events.ndjson`。
 
+`model`（本次请求实际使用的模型 id）**不只在日志副本里**：发布副本同样带这一个短字符串，
+摘要按 `{...data}` 透传，因此 trace 落盘的 `llm.request` 也有 `model`。读侧（usage 插件）
+因此只读事件字段——不去猜：Self Card 是 `composeRunSystemPrompt()` 在请求组装时拼进
+system prompt 的，从不成为消息、也不进事件，而 `summarizeLlmRequest` 又会丢掉 `messages`，
+所以「从 `messages` 的 Self Card 里正则抠 model」在任何 trace 上都取不到值（已删除）。
+老 trace（发布副本没有 `model`）只能归成 `unknown`，或用用户显式配置的默认值兜底。
+
 目的：从落盘日志看出「这一轮发了几次请求、每次多大、带几个工具、是不是重试」，
 而不必为每轮 prompt 付一份全量副本。不记 `prefix_hash`：core 没有现成前缀哈希
 （`PromptPrefixGuard` 是逐条字符串比较），新造一套等于再加一份派生真相；

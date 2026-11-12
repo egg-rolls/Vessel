@@ -1703,6 +1703,11 @@ export class ExecutionUnit {
       // 落盘副本（`persistData`）只留元信息：`messages` / `tools` 正文永远不落。
       // 发布出去的这份保持完整 —— trace 的全文策略与 WS 的 summarize 都不在此处改
       // （F2 另单）；写盘侧还另有 RunJournal 的兜底裁剪。
+      //
+      // `model` 在**发布副本**里也写一份（不只是 `persistData`）：trace 落的是
+      // `summarizeLlmRequest` 的 `{...data}` 透传（去掉 messages 正文），发布副本
+      // 不带 model 时观测侧（usage 插件）无从得知真实模型，只能退回用户配置的
+      // 默认值。一个短字符串（~36 B），不违背「发布副本不带正文」的约束。
       this.publishEvent(
         {
           type: 'llm.request',
@@ -1710,6 +1715,7 @@ export class ExecutionUnit {
           data: {
             run_id: runId,
             session_id: args.sessionId,
+            model: this.model,
             messages: this.stripReasoning(messages),
             tools: args.tools,
           },

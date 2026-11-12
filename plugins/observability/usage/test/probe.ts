@@ -10,6 +10,8 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
+import { buildRecords } from '../src/aggregate.js';
+import type { RawEvent, Settings } from '../src/store.js';
 import { translator } from '../web-src/i18n';
 
 const pluginRoot = resolve(import.meta.dir, '..');
@@ -217,6 +219,100 @@ check(
   'components contain no hardcoded Chinese',
   !componentTexts.some((text) => cjkPattern.test(text)),
 );
+
+// ── model attribution ───────────────────────────────────────────────────────
+
+/**
+ * Fixtures mirror what the trace actually stores: `llm.request` is persisted as
+ * the broadcast summary (`summarizeLlmRequest`), which drops `messages` and
+ * spreads the rest of `data` verbatim. So `data.model` is the only place the
+ * model can come from — the Self Card only ever exists inside the assembled
+ * system prompt, never as a message and never in an event.
+ */
+const MODEL = 'volcengine/deepseek-flash';
+const NO_PRICES: Settings = { prices: {} };
+const BASE_TS = Date.UTC(2026, 0, 15, 9, 0, 0);
+
+let rawLine = 0;
+
+function rawEvent(
+  type: string,
+  runId: string,
+  ts: number,
+  data: Record<string, unknown>,
+): RawEvent {
+  rawLine += 1;
+  return {
+    type,
+    ts,
+    run_id: runId,
+    line: rawLine,
+    data: { run_id: runId, session_id: 'sess-1', ...data },
+  };
+}
+
+/** One `llm.request` and the `llm.response` that answers it. */
+function exchange(runId: string, request: Record<string, unknown>): RawEvent[] {
+  return [
+    rawEvent('llm.request', runId, BASE_TS, request),
+    rawEvent('llm.response', runId, BASE_TS + 1_400, {
+      usage: { prompt_tokens: 1_200, completion_tokens: 240 },
+    }),
+  ];
+}
+
+function modelOf(events: RawEvent[], settings: Settings = NO_PRICES): string | undefined {
+  return buildRecords(events, settings)[0]?.model;
+}
+
+// 1. The shape the trace really writes: `model` present, `messages` gone.
+const newTrace = modelOf(exchange('run-new', { model: MODEL, message_count: 4, tools: [] }));
+check('llm.request: model comes from data.model', newTrace === MODEL, newTrace);
+
+// 2. No `model` and no configured default: `unknown`, never a guess.
+const bare = modelOf(exchange('run-bare', { message_count: 2 }));
+check('no data.model and no default_model: unknown', bare === 'unknown', bare);
+
+// 3. The model a request actually used must not be relabelled by a setting.
+const withDefault: Settings = { prices: {}, default_model: 'configured/default' };
+const newTraceWithDefault = modelOf(exchange('run-new-default', { model: MODEL }), withDefault);
+check(
+  'data.model outranks settings.default_model',
+  newTraceWithDefault === MODEL,
+  newTraceWithDefault,
+);
+
+// 4. Only `default_model` left: use it instead of `unknown`.
+const bareWithDefault = modelOf(exchange('run-bare-default', { message_count: 2 }), withDefault);
+check(
+  'settings.default_model is the fallback before unknown',
+  bareWithDefault === 'configured/default',
+  bareWithDefault,
+);
+
+// 5. A failed run before any response reuses the pending request's model.
+const failedRun = buildRecords(
+  [
+    rawEvent('llm.request', 'run-failed', BASE_TS, { model: MODEL, message_count: 3 }),
+    rawEvent('run.failed', 'run-failed', BASE_TS + 800, { error: 'provider exploded' }),
+  ],
+  NO_PRICES,
+);
+check(
+  'run.failed reuses the pending llm.request model',
+  failedRun[0]?.model === MODEL,
+  failedRun[0]?.model,
+);
+
+// 6. Regression guard for the removed Self Card scrape: even when a payload
+//    smuggles `messages` through, a `model:` line in them is not attributed
+//    (the parse could never fire on a real trace anyway, and it was a guess).
+const smuggled = modelOf(
+  exchange('run-smuggled', {
+    messages: [{ role: 'system', content: '[Self Card]\nrole: main\nmodel: claude-sonnet-4-5' }],
+  }),
+);
+check('readable Self Card is no longer parsed', smuggled === 'unknown', smuggled);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exitCode = 1;
