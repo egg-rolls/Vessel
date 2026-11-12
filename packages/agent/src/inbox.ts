@@ -866,14 +866,36 @@ export function createInboxNoticeHook(options: {
 
 /** `inbox` 工具的 description（模型按需读取收件箱）。 */
 const INBOX_TOOL_DESCRIPTION =
-  'inspect messages queued while this agent was busy/rotating; ' +
-  'list returns unread/pending counts + summaries (held included); ' +
-  'unread = yours to read, pending = already queued as your next input(s), ' +
-  'they arrive on their own (do not resend or redo); ' +
-  'read returns full text and marks it consumed; read includeHeld:true also returns pending ' +
-  'messages — that does NOT cancel their delivery, so never act twice on one message; ' +
+  'inspect messages queued while this agent was busy/rotating. ' +
+  'every reply carries three counts: unread = yours to read now, pending = unread messages ' +
+  'already held as your next run input(s) (they arrive on their own — do not resend or redo them), ' +
+  'held = every message currently held (pending is its unread part; today the two numbers are equal). ' +
+  'list returns the three counts + a one-line summary of every unread message, held ones included ' +
+  '(summary only, no text). ' +
+  'read returns full text and marks what it returns as consumed. it only sees readable messages by ' +
+  'default: held (pending) ones are excluded, so read can legitimately return 0 messages while pending ' +
+  'is above 0 — pass includeHeld:true to also get their text. reading held messages does NOT cancel ' +
+  'their delivery and does NOT mark them consumed, so never act twice on one message. ' +
   'delete removes unread, non-held messages by id (held/consumed are skipped); ' +
   'insert appends a message to your own inbox; it does not start a run or wake you.';
+
+/**
+ * read 里有消息在队列上等着（unread 0 / pending > 0）时的那句提示。
+ *
+ * 为什么要有这句话：`read` 缺省只看可读（不吐 held 正文，那是调度的不变量 —— held 的正文
+ * 已经排进某次 run，再吐一遍就成了「读一次 + 到一次」两次执行）。于是「3 条在等我」与
+ * 「read 返回 0 条」可以同时成立，模型看到的 `{"read":0,"messages":[]}` 会被读成「什么都没有」。
+ * 计数与提示都是**报告层**，不放松可见范围：要正文仍然得显式给 `includeHeld:true`。
+ *
+ * 措辞跟工具面其它文案一致（英文、单复数用 `message(s)`、只引模型看得见的字段名）。
+ */
+function heldOnlyHint(pending: number): string {
+  return (
+    `${pending} message(s) are already queued as your next input(s) (held), so their text is not in this read. ` +
+    'Use read with includeHeld:true to see it. ' +
+    'Reading them does not cancel delivery and does not mark them consumed — never act twice on one message.'
+  );
+}
 
 function invalidInput(message: string): string {
   return JSON.stringify({ error: `invalid_input: ${message}` });
@@ -887,6 +909,11 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
  * 成员可见的 `inbox` 工具：`list` 看摘要与 pending，`read` 取原文并消费，
  * `delete` 删除未持有的未读，`insert` 给自己追加一条消息。
  *
+ * **每个动作都报 `unread` / `pending` / `held` 三个计数**（口径见 `snapshot`）：只报一个数字
+ * 会让「3 条在队列里等我」和「read 返回 0 条」看起来互相矛盾 —— 那是同一件事的两面
+ * （held 的正文不进 read 的缺省可见范围）。read 报出「0 条可读、held 非空」时再补一句
+ * `hint` 说明正文从哪里读；三个计数只改报告，不改可见范围。
+ *
  * 只读本地队列，不触达工作区；`checkPermission` 恒 `allow`（deny 模式也注册）。
  * 返回 JSON 字符串；非法参数返回 `{ error: 'invalid_input: ...' }`，不抛错。
  */
@@ -894,6 +921,25 @@ export function createInboxTool(options: {
   inbox: AgentInboxPort;
   agentId: string;
 }): ToolDefinition {
+  /**
+   * 三个计数 + 摘要列表的**唯一读取口**（read / list / insert 共用一份，免得三个动作各报
+   * 一套数）。一次读盘同时给出计数与列表，不想用列表的动作解构掉即可。
+   *
+   * `unread` / `pending` 直接取 `inbox.list` 的 `counts()` 口径（与 notice 那条计数行同源）；
+   * `held` 在工具层由同一份 `includeHeld:true` 的列表数出来 —— 它多出来的信息只有一个：
+   * 「held 里有多少条不是 unread」。今天恒等于 `pending`（`hold` 只作用于未消费消息，
+   * 消费即解 hold），但这两个数字在**报告**里分开摆，才会在口径哪天变了时自己露馅，
+   * 而不是让模型以为 `pending` 就是全部 held。
+   */
+  const snapshot = () => {
+    const { unread, pending, messages } = options.inbox.list(options.agentId, {
+      includeHeld: true,
+    });
+    let held = 0;
+    for (const message of messages) if (message.held) held += 1;
+    return { unread, pending, held, messages };
+  };
+
   return {
     name: 'inbox',
     description: INBOX_TOOL_DESCRIPTION,
@@ -914,8 +960,10 @@ export function createInboxTool(options: {
         includeHeld: {
           type: 'boolean',
           description:
-            'read: also return held messages (already queued as your next input); ' +
-            'reading them does not cancel delivery and does not mark them consumed',
+            'read only: by default read skips held messages (unread, but already queued as your next ' +
+            'input), so it can return 0 messages while pending > 0; set true to also get their text. ' +
+            'reading them does not cancel delivery and does not mark them consumed — never act twice ' +
+            'on one message. list always includes held entries (summary only) and rejects this flag',
         },
         content: {
           type: 'string',
@@ -943,12 +991,11 @@ export function createInboxTool(options: {
         if (includeHeldDefined) {
           return invalidInput('list always includes held; includeHeld is a read-only option');
         }
-        const { unread, pending, messages } = options.inbox.list(options.agentId, {
-          includeHeld: true,
-        });
+        const { unread, pending, held, messages } = snapshot();
         return JSON.stringify({
           unread,
           pending,
+          held,
           messages: messages.map((message) => ({
             id: message.id,
             ts: message.ts,
@@ -984,8 +1031,8 @@ export function createInboxTool(options: {
             error: appended.reason === 'unavailable' ? 'inbox_unavailable' : 'inbox_full',
           });
         }
-        const { unread, pending } = options.inbox.list(options.agentId, { includeHeld: true });
-        return JSON.stringify({ inserted: true, id, ts, unread, pending });
+        const { unread, pending, held } = snapshot();
+        return JSON.stringify({ inserted: true, id, ts, unread, pending, held });
       }
 
       let ids: readonly string[] | undefined;
@@ -1036,8 +1083,18 @@ export function createInboxTool(options: {
         },
         ctx.session_id,
       );
+      // 计数必须在 read **之后**读：read 会把它返回的条目标 consumed，先数再读就会把刚读掉
+      // 的那些还算在 unread / pending 里，模型看到的是上一秒的世界。
+      const { unread, pending, held } = snapshot();
+      // 一句话解释「为什么 read 是 0 条」：只有在这次没要 held 正文（没给 includeHeld:true）
+      // 而队列里确实有东西在等时才提示 —— 要了正文还提示「去要正文」就是纯噪音。
+      const hint =
+        unread === 0 && pending > 0 && includeHeld !== true ? heldOnlyHint(pending) : undefined;
       return JSON.stringify({
         read: messages.length,
+        unread,
+        pending,
+        held,
         messages: messages.map((message) => ({
           id: message.id,
           ts: message.ts,
@@ -1046,6 +1103,7 @@ export function createInboxTool(options: {
           // held:true = 还没成为 run input，稍后会自动到达；read 没有取消投递，别重复执行。
           ...(message.held ? { held: true } : {}),
         })),
+        ...(hint !== undefined ? { hint } : {}),
       });
     },
     async checkPermission(): Promise<'allow'> {

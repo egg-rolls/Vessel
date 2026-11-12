@@ -607,6 +607,19 @@ export const RunItems = memo(function RunItems({
 });
 
 /**
+ * 排队卡里那两颗圆键的**底色层**：纯白 10% 半透明（`bg-white/10`），当成压在琥珀带上的一层
+ * 玻璃 —— 用户要的是「透出下层颜色」，而不是形状层那个不透明灰（`bg-sunken`）。
+ *
+ * 为什么用「白色 + 透明度」而不是给三套主题各配一个色值：`--amber-soft` 在浅色档是暖白、
+ * 在暗色两档（`prefers-color-scheme: dark` / `[data-theme="dark"]`）是暖黑，白 10% 叠在两种
+ * 底上都读成「同一块底被提亮一点」，不用再维护一套随主题翻转的变量。hover 再加一档白
+ * （`enabled:hover:bg-white/20`）：Button 的 `--hover-tint` 叠在**半透明**底上会被下层的琥珀
+ * 带偏，白档给的是确定的「亮一档」，三个主题一致。禁用态两档都不生效（`enabled:` 挡住
+ * hover），只剩这层白纱 + 形状层的 `disabled:opacity-100`，圆的形状不会塌。
+ */
+const QUEUED_ICON_VEIL = 'bg-white/10 enabled:hover:bg-white/20';
+
+/**
  * 排队：与运行态工具卡同一张 StreamCard（单行摘要折叠，长输入不撑高）。
  *
  * 卡面走 **notice 家族**（`notice-block`：圆角 + 弱底色 + 统一内衬，与失败卡 / 运行时
@@ -631,12 +644,15 @@ export const RunItems = memo(function RunItems({
  * 卡头左侧只留**一个**状态标记：`StatusChip` 的字形（○ 排队）已经表达了状态，
  * notice 家族的身份圆点不再叠一个（见 chat.css 的 `.stream-card-queued`）。
  *
- * 写操作是**可操作控件**：放在 actions 插槽（始终可见），不进 summary，这样折叠状态下
- * 也能操作，且 summary 里没有可点元素。两颗都是**圆形图标键**（`composerIconControlClass`
- * 的 32px 正圆 + `Icon`）—— 与输入框的发送键 / 回形针同一套形状与三态，只是色调走次要档
- * （`composerQuietIconTone`）：卡面是琥珀底，主色调的 accent 圆在暖底上会读成「主操作」，
- * 而这两颗都是次要动作。名字只走 `aria-label` + `title`（同一句 i18n），不再用可见文字：
- * 卡宽要跟列一致，两个中文标签会把卡头那行挤到换行。
+ * 写操作是**可操作控件**，落在**正文下面一行**（用户裁决）：不进 `summary`（那里不放
+ * 可点元素），也不用 StreamCard 的 `actions` 槽 —— 那个槽在卡头之后、展开体之前渲染，
+ * 键就落在消息正文**上方**（用户报过）。这里把它们放进展开体、跟在正文段落之后。
+ *
+ * 两颗都是**圆形图标键**（`composerIconControlClass` 的 32px 正圆 + `Icon`）—— 与输入框的
+ * 发送键 / 回形针同一套形状与三态，只是色调走次要档（`composerQuietIconTone`）：卡面是
+ * 琥珀底，主色调的 accent 圆在暖底上会读成「主操作」，而这两颗都是次要动作。名字只走
+ * `aria-label` + `title`（同一句 i18n），不再用可见文字：卡宽要跟列一致，两个中文标签会把
+ * 那一行挤到换行。底色不用形状层的不透明灰，见 `QUEUED_ICON_VEIL`。
  *
  * **谁有写操作由调用方决定**（本组件只负责「给了就画」）：human 源给两颗（收回编辑 +
  * 取消排队），agent 源一颗都不给 —— 它的回收语义是 unhold 留档（消息回到可读 unread，
@@ -695,17 +711,20 @@ export function QueuedNotice({
   // 待处理条目只有一种状态：还在等（取消成功 ⇒ 条目消失 ⇒ 整张卡消失，没有残留态）。
   const status = 'queued';
   const stateClass = 'stream-card-queued-waiting';
-  // 两颗键的公共形：形状层只取一次（与输入框的发送键 / 回形针同一份），色调走次要档。
-  const controlClass = cn(composerIconControlClass, composerQuietIconTone);
+  // 两颗键的公共形：形状层只取一次（与输入框的发送键 / 回形针同一份），色调走次要档，
+  // 底色换成这层白纱（`QUEUED_ICON_VEIL`；twMerge 会把形状层的 `bg-sunken` 让掉）。
+  const controlClass = cn(composerIconControlClass, composerQuietIconTone, QUEUED_ICON_VEIL);
   // 取消在途：两颗都禁用 —— 同一条消息不能同时被「收回来」和「撤掉」，那是两条写操作的竞争。
   const busy = item.cancelling;
   // 写操作行：一颗键都没给（agent 源）就整个不出现 —— 不留「有槽无键」的空行。
   // 一行两颗 32px 正圆：卡片本身就是满宽块（`.notice-block`），这一行按列宽排，
   // 小屏也不会把卡撑宽（`flex-none` + 定尺寸盒子）。
-  let actions: ReactNode = null;
+  // 只有**上方**间距（`pt-1.5`）：横向内衬由展开体那条 `.notice-block > .event-block-body`
+  // 统一给（10px），这里再补 px 就是双重内衬，键会比正文多缩 10px。
+  let controls: ReactNode = null;
   if (onCancel !== undefined || onEdit !== undefined) {
-    actions = (
-      <div className="flex items-center gap-1.5 px-2.5 pb-1.5">
+    controls = (
+      <div className="flex items-center gap-1.5 pt-1.5">
         {onEdit !== undefined && (
           <Button
             variant="plain"
@@ -754,13 +773,17 @@ export function QueuedNotice({
       //（tokens.css 里 amber 档的「前景 / 图标」角色，展开 chevron 同色）：meta 槽默认的
       // `text-faint` 压在 `--amber-soft` 上只有约 3.8:1，2xs 小字读不清。
       meta={identity === undefined ? undefined : <span className="text-amber">{identity}:</span>}
-      actions={actions}
     >
       {/* 正文是用户自己写的那条消息，压在琥珀底上也要读得清：用 ink，不用 muted。
           内衬由 `.notice-block > .event-block-body` 给，这里不再补 px。 */}
       <p className="m-0 min-w-0 break-words whitespace-pre-wrap wrap-anywhere text-sm text-ink">
         {item.input}
       </p>
+      {/* 两颗键**在正文之后**（用户裁决：工具栏属于「对这条消息的操作」，读它的人先看字
+          再动手）。不进卡头、也不走 StreamCard 的 `actions` 槽 —— 那个槽渲染在卡头与展开体
+          之间，键就跑到正文上方去了。折叠态 `<details>` 只渲染 `<summary>`，`actions` 槽与
+          这段展开体同样不可见，所以换到这里没有拿走任何「折叠时也能点」的能力。 */}
+      {controls}
     </StreamCard>
   );
 }

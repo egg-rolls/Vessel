@@ -4,6 +4,10 @@
  *
  * 三张卡把「有没有写入口」的三态都摆出来：两颗图标键（human 源）/ 只有取消 /
  * 一颗都不给（agent 源 —— 它的 recall 只是 unhold 留档，不画成删除）。
+ *
+ * **三张都默认展开**：写操作在卡片展开体里、正文**下面**一行，折叠态只能看到卡头 ——
+ * 这类样例要看的就是「键有哪几颗 + 落在哪 + 什么底色」，收起来就什么都验不到。
+ * 底色是纯白 10% 半透明（`QUEUED_ICON_VEIL`），压在琥珀带上透出下层那条带色。
  */
 import { t } from '../../../../i18n';
 import { QueuedNotice } from '../../../chat/StreamItems';
@@ -47,11 +51,12 @@ export default function QueuedNoticePreview() {
       <QueuedNotice
         item={WAITING}
         identity={human}
+        defaultOpen
         onEdit={() => undefined}
         onCancel={() => undefined}
       />
-      <QueuedNotice item={CANCELLING} identity={human} onCancel={() => undefined} />
-      <QueuedNotice item={AGENT_SOURCE} identity="agent:helper" />
+      <QueuedNotice item={CANCELLING} identity={human} defaultOpen onCancel={() => undefined} />
+      <QueuedNotice item={AGENT_SOURCE} identity="agent:helper" defaultOpen />
     </div>
   );
 }
