@@ -59,7 +59,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `mcp.tool.called` / `mcp.tool.failed` | MCP 插件 → 观测 | MCP 工具调用 |
 | `channel.feishu.connected` / `channel.feishu.disconnected` / `channel.feishu.message.received` / `channel.feishu.reply.sent` / `channel.feishu.error` | 飞书插件 → 观测 | 渠道生命周期与消息 |
 | `session.saved` / `session.deleted` / `session.titled` | core / 装配层 → 观测 | 会话持久化（0.5）；`session.titled` payload `{ session_id, title }`，写前重读保留人工标题 |
-| `agent.rotating` / `agent.rotated` / `agent.restarting` / `agent.restarted` / `agent.retired`；`agent.spawned`（带来源）/ `session.created` / `session.activated` / `agent.session.activated` / `agent.create.failed` | AgentService → 观测 | binding 生命周期（rotate 0.32；restart 0.34；有来源 create 0.39）；payload 带 agent / session / epoch；`agent.retired` payload `{ body_id, epoch, reason }`（rotate / restart / close / 回收共用）；旧 `agent.forked` / `agent.compact_forked` / `session.forked` 只读渲染 |
+| `agent.restarting` / `agent.restarted` / `agent.retired`；`agent.spawned`（带来源）/ `session.created` / `session.activated` / `agent.session.activated` / `agent.create.failed` | AgentService → 观测 | binding 生命周期（restart 0.34；有来源 create 0.39）；payload 带 agent / session / epoch；`agent.retired` payload `{ body_id, epoch, reason }`（rotate / restart / close / 回收共用）。**rotate 只发两条**：旧 body 退役的 `agent.retired`（在 rotate 工具内、旧 run 未结束时即发）与新 primary 的 `agent.session.activated`（切换与快照之后发），启动嘱托在其后 admit；ADR-092 设想的 `agent.rotating` / `agent.rotated` / `agent.rotate.failed` 从未实现，0.51 删除（见该 ADR 的 Errata）。旧 `agent.forked` / `agent.compact_forked` / `session.forked` 只读渲染 |
 | `agent.message.queued` | AgentService → 观测 | 收件箱投递，一条事件三种模式：payload `{ delivery, message_id, from, state?, to?, wake?, conversation_id? }`；`delivery: 'input'` 会进 run 队列，也只有它带 `state`；`'wake'` 只排一次摘要唤醒（带 `to` / `wake`，`wake=false` 表示没排上唤醒）；`'quiet'` 只落 inbox。唤醒 / 只落盘都不写 `state`，观测面不得把这两类当成入队。旧 `agent.message.notified` 不再发布，落盘历史只读 |
 | `config.loaded` | asm → 观测 | 只记来源与键名，不记密钥值（0.5） |
 | `plugin.loaded` / `plugin.failed` | asm / core → 观测 | 插件加载（0.5） |
@@ -172,13 +172,10 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `agent.session.activated` | observe | — | none | live |
 | `agent.queue.entered` | observe | — | none | live |
 | `agent.queue.left` | observe | — | none | live |
-| `agent.rotating` | internal | notice | none | legacy |
-| `agent.rotated` | internal | notice | system | legacy |
 | `agent.compact_forked` | internal | notice | none | legacy |
 | `agent.restarting` | internal | notice | none | live |
 | `agent.restarted` | internal | notice | none | live |
 | `agent.create.failed` | internal | — | none | live |
-| `agent.rotate.failed` | internal | — | none | legacy |
 | `agent.forked` | observe | team-log | system | legacy |
 | `session.created` | observe | — | none | live |
 | `session.activated` | observe | — | none | legacy |
@@ -222,6 +219,13 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 
 > `delegate.*` / `delegate_task.*` 是 TUI 侧去掉 `subagent.` 前缀后的消费形态（线上名是
 > `subagent.delegate.*`，由家族覆盖），本仓没有独立生产者。
+
+> 0.51 删掉三条**死类型**：`agent.rotating` / `agent.rotated` / `agent.rotate.failed`。
+> ADR-092 第 18 条要求过它们，实现从未发出（无生产者，Web 的 notice 分支与团队日志
+> `rotate` 行都是永远走不到的路径）。rotate 的实际时序只有两条事件：旧 body 退役的
+> `agent.retired` **在 rotate 工具内就发**（此时旧 run 可能还没结束，迟到轮随后由
+> `agent.reply.stale` 解释），新 primary 的 `agent.session.activated` 在切换 + 快照之后发，
+> 启动嘱托在其后 admit。详见 [ADR-092](../adr/ADR-092-agent-rotate-and-epoch-fencing.md) 文末的 0.51 Errata。
 
 **思维链不进入事件流**：`llm.request` 的 messages 与 `context.changed` 的 message 在发布前剔除 `reasoning_content`（ADR-038）；`WorkingContext` 的持久化记录仍保留该字段，供下一轮请求回传。
 

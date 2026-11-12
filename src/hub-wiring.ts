@@ -34,7 +34,8 @@ const AGENT_STATE_EVENTS = new Set([
   // 0.25：改名会改变 roster / 目录展示名；meta 刷新只读 service.list。
   'agent.updated',
   'agent.closed',
-  'agent.rotated',
+  // 0.51：`agent.rotated` 从未发出过，删掉（rotate 若需刷新目录，`agent.retired`
+  // 已经在下面的集合里覆盖了同一次更换身体）。
   'agent.rejoined',
   'agent.retired',
 ]);

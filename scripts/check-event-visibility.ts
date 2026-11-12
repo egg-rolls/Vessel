@@ -119,7 +119,6 @@ const EXPECTED_NEWLY_HIDDEN: readonly string[] = [
   'agent.retired',
   'agent.rotate.approved',
   'agent.rotate.denied',
-  'agent.rotate.failed',
   'agent.updated',
   'agent.role.changed',
   'agent.rejoined',
@@ -193,8 +192,6 @@ const LEGACY_INTERNAL: readonly string[] = [
   'replay.completed',
   'context.pressure',
   'context.compacted',
-  'agent.rotating',
-  'agent.rotated',
   'agent.restarting',
   'agent.restarted',
   'agent.compact_forked',
@@ -238,7 +235,6 @@ const SERVER_TEAM_LOG: readonly string[] = [
   'agent.spawned',
   'agent.rejoined',
   'agent.closed',
-  'agent.rotated',
   'agent.forked',
   'run.completed',
   'run.failed',
@@ -541,13 +537,15 @@ function checkShadow(): void {
       );
     }
   }
-  // 分档计数（回归时一眼看出哪一档漏了）：115 条 = 15 content + 51 internal + 49 observe。
+  // 分档计数（回归时一眼看出哪一档漏了）：112 条 = 15 content + 48 internal + 49 observe。
   // （114 → 115：新增 `prompt.system_context`（content，模型上下文卡），见 event-visibility.ts。）
+  // （115 → 112：0.51 删掉三条死类型 `agent.rotating` / `agent.rotated` / `agent.rotate.failed`，
+  //   都是 internal —— 它们没有生产者，见 ADR-092 的 Errata。）
   const counts = { content: 0, internal: 0, observe: 0 };
   for (const spec of Object.values(EVENT_TIERS)) counts[spec.tier] += 1;
   const total = counts.content + counts.internal + counts.observe;
-  if (total !== 115) {
-    fail('EVENT_TIERS', `[A4 影子] 表里应有 115 条，实际 ${total} 条`);
+  if (total !== 112) {
+    fail('EVENT_TIERS', `[A4 影子] 表里应有 112 条，实际 ${total} 条`);
   }
   note(
     `[shadow] 影子对拍：今天可见→新表隐藏 ${actual.size} 条（期望 ${expected.size}）；` +

@@ -29,7 +29,6 @@ const SYSTEM_KEYS: Record<string, string> = {
   join: 'team.system.join',
   leave: 'team.system.leave',
   archive: 'team.system.archive',
-  rotate: 'team.system.rotate',
   create: 'team.system.create',
   // 旧日志只读：0.39 起新写 `create`，不再写 `fork`。
   fork: 'team.system.fork',

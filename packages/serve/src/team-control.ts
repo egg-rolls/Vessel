@@ -71,7 +71,6 @@ export interface TeamMessageLike {
   system_event?:
     | 'join'
     | 'leave'
-    | 'rotate'
     | 'archive'
     | 'budget_override'
     | 'create'

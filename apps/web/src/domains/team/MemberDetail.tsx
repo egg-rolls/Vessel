@@ -5,7 +5,7 @@
  * `EntityHeader`）负责，这里只负责 Detail 槽与 Body 历史。
  *
  * Body 历史优先服务端 `member.body_history`；只有字段缺失时才使用
- * `agent.rotated / agent.retired` 的本次页面观察值，并明确标注。
+ * `agent.retired` 的本次页面观察值，并明确标注。
  * 提供需确认的新建 session（`sessions.create` 无来源）；不提供配置 / close 操作。
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -89,7 +89,7 @@ export function MemberDetail({
   );
 
   // 回退历史只读事件；页面内同步派生，刷新后自然丢弃。
-  // `agent.rotated` / `agent.retired` 是 agent 域生命周期事件，仍带 `team_id`。
+  // `agent.retired` 是 agent 域生命周期事件，仍带 `team_id`。
   const observedState = useMemo(() => {
     let state = createTeamEventState();
     for (const entry of events) {

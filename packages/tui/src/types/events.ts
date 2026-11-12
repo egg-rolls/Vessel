@@ -102,15 +102,6 @@ export interface ContextPressureEventData extends Record<string, unknown> {
   hint?: string;
 }
 
-/** agent.rotating / agent.rotated 载荷（body 切换） */
-export interface RotateEventData extends Record<string, unknown> {
-  agent_id?: string;
-  session_id?: string;
-  from_session_id?: string;
-  to_session_id?: string;
-  epoch?: number;
-}
-
 /** agent.restarting / agent.restarted 载荷（同一 Session，epoch 递增） */
 export interface RestartEventData extends Record<string, unknown> {
   agent_id?: string;
@@ -216,9 +207,7 @@ export type TuiEvent =
   | { type: 'agent.queue.entered'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.queue.left'; run_id: string; data: AgentEventData; ts: number }
   | { type: 'agent.limit.warning'; run_id: string; data: LimitEventData; ts: number }
-  // ── 上下文生命周期（0.32：pressure → compacted → rotating/rotated 因果链） ──
-  | { type: 'agent.rotating'; run_id: string; data: RotateEventData; ts: number }
-  | { type: 'agent.rotated'; run_id: string; data: RotateEventData; ts: number }
+  // ── 上下文生命周期（0.32：pressure → compacted → restarting/restarted 因果链） ──
   | { type: 'agent.restarting'; run_id: string; data: RestartEventData; ts: number }
   | { type: 'agent.restarted'; run_id: string; data: RestartEventData; ts: number }
   | { type: 'agent.compact_forked'; run_id: string; data: CompactForkEventData; ts: number }
@@ -259,8 +248,6 @@ export const KNOWN_TUI_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent.queue.entered',
   'agent.queue.left',
   'agent.limit.warning',
-  'agent.rotating',
-  'agent.rotated',
   'agent.restarting',
   'agent.restarted',
   'agent.compact_forked',

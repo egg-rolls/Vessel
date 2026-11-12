@@ -36,7 +36,6 @@ export function TeamChat(props: TeamChatProps) {
     detail,
     error,
     firstLoading,
-    rotateFailure,
     rows,
     resolveMember,
     agentLabel,
@@ -108,7 +107,6 @@ export function TeamChat(props: TeamChatProps) {
           hasToken={hasToken}
           firstLoading={firstLoading}
           rows={rows}
-          rotateFailure={rotateFailure}
           resolveMember={resolveMember}
           agentLabel={agentLabel}
           onOpenSession={onOpenSession}

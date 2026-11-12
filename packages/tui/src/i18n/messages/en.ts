@@ -166,8 +166,6 @@ export const en: Record<MessageKey, string> = {
   'item.budgetUnlimited': 'unlimited',
   'item.compacted': 'context compacted · removed {removed} · remaining {remaining} · {reason}',
   'item.contextPressure': 'context at {percent}% · {used}/{max}',
-  'item.rotating': 'context rotating · {from} → {to}',
-  'item.rotated': 'context rotated · {from} → {to} · epoch {epoch}',
   'item.restarting': 'context restarting · {session} · epoch {from} → {epoch}',
   'item.restarted': 'context restarted · {session} · epoch {from} → {epoch}',
   'item.compactForked': 'context compact-forked · {from} → {to} · epoch {epoch}',

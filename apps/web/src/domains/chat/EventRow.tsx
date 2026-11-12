@@ -241,25 +241,6 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
         }),
       };
     }
-    case 'agent.rotating': {
-      return {
-        tone: 'info',
-        text: t('chat.notice.rotating', {
-          from: shortId(data.from_session_id),
-          to: shortId(data.to_session_id),
-        }),
-      };
-    }
-    case 'agent.rotated': {
-      return {
-        tone: 'info',
-        text: t('chat.notice.rotated', {
-          from: shortId(data.from_session_id),
-          to: shortId(data.to_session_id),
-          epoch: numberOf(data.epoch) ?? '?',
-        }),
-      };
-    }
     case 'agent.restarting': {
       return {
         tone: 'info',

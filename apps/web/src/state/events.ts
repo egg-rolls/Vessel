@@ -390,13 +390,11 @@ export function createFold(runId: string): RunFold {
         }
         return;
       }
-      // 上下文生命周期：percent → pressure → compacted → rotating/rotated 的因果链，
+      // 上下文生命周期：percent → pressure → compacted → restarting/restarted 的因果链，
       // 由 NoticeRow 按类型渲染，避免默认分支的原始 JSON 卡。
       case 'context.pressure':
       case 'context.compacted':
       case 'agent.limit.warning':
-      case 'agent.rotating':
-      case 'agent.rotated':
       case 'agent.restarting':
       case 'agent.restarted':
       case 'agent.compact_forked':

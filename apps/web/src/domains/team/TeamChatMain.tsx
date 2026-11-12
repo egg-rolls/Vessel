@@ -7,7 +7,6 @@ import {
   NotEnabledState,
   StaleNotice,
 } from '../../components/States';
-import { cn } from '../../components/ui';
 import type {
   AskUserRequest,
   MessageRef,
@@ -17,7 +16,6 @@ import type {
   TeamMessage,
 } from '../../gateway/types';
 import { t } from '../../i18n';
-import type { RotateFailureView } from '../../state/teams';
 import { useStickyBottom } from '../chat/useStickyBottom';
 import type { MentionChip } from './mention';
 import { TeamComposer } from './TeamComposer';
@@ -152,7 +150,6 @@ export interface TeamChatMainProps {
   hasToken: boolean;
   firstLoading: boolean;
   rows: readonly TeamMessageView[];
-  rotateFailure: RotateFailureView | null;
   resolveMember: (agentId: string) => TeamMember | undefined;
   agentLabel: (agentId: string) => string;
   onOpenSession: (sessionId: string) => void;
@@ -209,7 +206,6 @@ export function TeamChatMain({
   hasToken,
   firstLoading,
   rows,
-  rotateFailure,
   resolveMember,
   agentLabel,
   onOpenSession,
@@ -320,29 +316,6 @@ export function TeamChatMain({
           onScroll={handleScroll}
           {...userIntentProps}
         >
-          {rotateFailure && (
-            <div
-              className={cn(
-                'team-notice-danger mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted',
-                'border-l-danger bg-danger-soft text-ink',
-              )}
-              role="alert"
-            >
-              <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
-                {t('team.message.systemTag')}
-              </span>
-              <span>
-                {t('team.system.rotateFailed', {
-                  name: rotateFailure.agent_id
-                    ? agentLabel(rotateFailure.agent_id)
-                    : t('team.system.unknown'),
-                })}
-              </span>
-              {(rotateFailure.reason ?? rotateFailure.code) && (
-                <span className="font-mono"> {rotateFailure.reason ?? rotateFailure.code}</span>
-              )}
-            </div>
-          )}
           {!hasToken ? (
             <NotEnabledState
               title={t('team.error.noToken')}
