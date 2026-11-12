@@ -732,7 +732,11 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   },
   startup_prompt: {
     type: 'string',
-    description: 'rotate: required first message for the new body',
+    // 正常路径沿用父级（tool.ts）那份描述，这里只是父级 schema 缺失时的兜底；
+    // 两份措辞保持一致，避免成员侧又说回「必填即可」。
+    description:
+      'rotate: required; the new body first message and the only handoff channel — ' +
+      'it does not inherit this conversation, so write everything the next body needs',
   },
   state: { type: 'string', description: 'list: filter by member state' },
   visibility: {
@@ -759,12 +763,16 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
   }
   return {
     ...tool,
+    // 与 owner 侧同一句不变量：交接只有 startup_prompt 一条通道（成员没有别的
+    // 手段把信息带给下一个身体）；「必填」不足以表达这一点。
     description:
       'Member actions: create (create peer member(s) in your team), ' +
       'hire (create contractor member(s) owned by you), ' +
       'close (release member(s); closing a peer requires human approval, while closing ' +
       'your own contractor or yourself needs no approval), ' +
-      'rotate (rotate your own body; startup_prompt is required), ' +
+      'rotate (rotate your own body; startup_prompt is the only handoff — the new body ' +
+      'starts at once and does not inherit this conversation, so it must carry everything ' +
+      'the next body needs to know), ' +
       'post (append to your team log only; nobody is notified), ' +
       'send (dispatch a message to a member; interrupt:true for urgent, notify:true to ' +
       'append to the target inbox plus a summary wake), ' +
