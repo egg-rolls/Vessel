@@ -54,7 +54,8 @@
     "check:history-tools": "bun run scripts/check-history-tools.ts",
     "check:live-items": "bun run scripts/check-live-items.ts",
     "check:transcript-items": "bun run scripts/check-transcript-items.ts",
-    "check:replay-budget": "bun run scripts/check-replay-budget.ts"
+    "check:replay-budget": "bun run scripts/check-replay-budget.ts",
+    "gates": "bunx @biomejs/biome ci . && bun run typecheck && bun run build && cd apps/web && bun run build && bun run scripts/check-deps.ts && bun run scripts/check-docs.ts && bun run scripts/check-i18n.ts && bun run scripts/check-rpc-methods.ts && bun run scripts/smoke-subpaths.ts && bun run scripts/check-config-sources.ts && bun run scripts/check-trace.ts && bun run check:prompt-prefix && bun run check:web-styles && bun run check:chat-visibility && bun run check:event-visibility && bun run check:history-tools && bun run check:live-items && bun run check:transcript-items && bun run check:replay-budget"
   },
   "workspaces": [
     "packages/*",

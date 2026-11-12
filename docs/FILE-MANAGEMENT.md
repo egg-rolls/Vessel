@@ -284,26 +284,12 @@ N 在自己的分支提交（只含共享侧成品）
 
 ## 9. CI / CD 与发布
 
-### 9.1 CI（`.github/workflows/ci.yml`）
+### 9.1 CI：已移除（2026-11）
 
-触发：`pull_request` / `push` 到 `main`、`release/**`，以及 `workflow_dispatch`。
-
-| Job                                                  | 内容                                                                                                                                                                                                                                                                                                                            |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `quality`（ubuntu）                                  | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → Node 22 + `apps/web` `npm ci` → `bun run lint` → `bun run typecheck` → `bun run build`（无 Test step）                                                                                                                                                        |
-| `architecture`（ubuntu）                             | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-web-styles.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check`                                                                                                                                                 |
-| `offline-integration`（ubuntu）                      | `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；使用 mock 或临时目录，不依赖外网                                                                                                                                                                                                                                 |
-| `release-dry-run`（ubuntu）                          | 仅 PR + `release/**` push：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，不上传、不 publish、不 tag                                                                                                                                                                                                                 |
-| `install-smoke`（ubuntu）                            | 仅 PR + `release/**` push：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；全部可发布子包 + 根 tarball 的 `npm pack` 与 `file:` overrides 安装解析，运行 `vessel --version` / `--tools`（mock），并断言根 tarball 含 `apps/web/dist/index.html`；不上传、不 publish、不 tag；Windows 跳过 |
-| `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck`；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵                                                                                                                                                                                                                                                             |
-| `web`                                                | `apps/web`：`npm ci` → `npm run build`                                                                                                                                                                                                                                                                                          |
-| `examples`                                           | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（`examples/tsconfig.json` 随仓库提供）                                                                                                                                                                                                                           |
-| `smoke`                                              | 仅 `main` / `release/**` push：headless 文本、stdin、`@file`、`/help`、`/exit`（mock）                                                                                                                                                                                                                                          |
-- 同一 ref 的旧 run 自动取消；缓存 Bun / npm。
-- `tls-ca` / `frontend-cors` 只做依赖安装，保留 job 结构以免改动 branch protection 语义。
-- 仓库没有自动化测试套件；门禁是 typecheck + biome + `check-*.ts` 脚本，运行时正确性靠 `smoke` job 的 CLI 端到端路径（仅 `main` / `release/**` push）与人工验收。
-- 门禁任何一项红，禁止合并。
-
+`.github/workflows/ci.yml` 已删除（原因与替代方案见 [operations/CI-CD.md](operations/CI-CD.md) §1）。
+现在只有两个 workflow：`release.yml`（tag → CD）与 `sync-labels.yml`（PR 标签同步）。
+本地门禁是唯一权威：`bun run gates`（biome → typecheck → build → `scripts/check-*` → 离线集成）。
+`.github/actions/quality` 仍被 `release.yml` 使用，**不要删**。
 ### 9.2 Release（`.github/workflows/release.yml`）
 
 触发：push tag `v*`（含预发布）。**1.0 前不触发本流程。**

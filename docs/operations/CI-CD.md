@@ -5,9 +5,56 @@
 > 1.0 前只做发布干跑；**不发布独立二进制**（ADR-006 继续有效）。
 > **仓库没有自动化测试套件**：CI 只跑 `bun run lint` / `bun run typecheck` / `bun run build`、`scripts/check-*.ts` 静态断言与 `main` / `release/**` push 后的 CLI 端到端烟测。测试运行命令与 `"test"` script 已从仓库和 workflow 中移除，不要再按旧口径查找或调用。
 
-## 1. CI（`.github/workflows/ci.yml`）
+## 1. CI：**已移除**（2026-11）
 
-### 触发
+`.github/workflows/ci.yml` 已删除；`.github/actions/quality` **保留** —— `release.yml` 的发布前校验仍在用它。
+
+### 1.1 为什么移除
+
+在「agent 直接提交」的开发范式下，CI 的失败噪声远大于收益：它按 PR / 推送触发、每次失败都发邮件，
+而真正拦住问题的从来是**本地门禁**（0.50 收口期间 CI 报的错没有一条影响功能或产物）。
+**发布链路不依赖 CI**：`release.yml` 在 tag 时自己跑一遍 `quality`，所以「发布前一定验过」这条保证没有丢。
+
+保留的两个 workflow：`release.yml`（tag → CD）、`sync-labels.yml`（PR 标签同步）。
+
+### 1.2 本地门禁：`bun run gates`（唯一权威）
+
+| 步骤 | 命令 | 拦什么 |
+|---|---|---|
+| 格式 | `bunx @biomejs/biome ci .` | 格式 / import 顺序 / lint |
+| 类型 | `bun run typecheck`（含 `typecheck:examples`） | 跨包类型 |
+| 构建 | `bun run build` + `cd apps/web && bun run build` | 产物可构建；**`apps/web` 的跨包类型错误只有它报**（根 typecheck 不覆盖它） |
+| 静态契约 | `scripts/check-*.ts`（下段清单） | 依赖方向、文档、i18n、样式契约、RPC 方法表、事件可见性、时间线不变量、回放预算 |
+| 离线集成 | `check-config-sources`、`check-trace` | 配置来源与 trace 口径（不依赖外网） |
+
+静态契约清单：`check-deps` / `check-docs` / `check-web-styles` / `check-i18n` / `check-rpc-methods` /
+`check-event-visibility` / `check-chat-visibility` / `check-transcript-items` / `check-live-items` /
+`check-replay-budget` / `check-history-tools` / `check-prompt-prefix` / `check-config-sources` / `check-trace`。
+
+**新增门禁的纪律**：加 `check:<name>` script 的同时**必须**让它进 `bun run gates` —— 没有 CI 之后，
+`gates` 是唯一会让它真的被跑到的地方。
+
+### 1.3 提交纪律（替代 required checks）
+
+`main` 是发布基线：**禁止**把没跑过 `bun run gates` 的改动 push 到 `main`。分支上的提交可以随便推（不触发任何 CI）。
+PR 不再有 required checks，把关靠人 + 本地门禁输出。
+
+### 1.4 提示词前缀静态审计
+
+- 命令：`bun run check:prompt-prefix`（已含在 `bun run gates` 里）。
+- 规则：报告 HookResult 构造/返回 `additionalContext:`（system 注入）与 `ctx.systemPrompt =` 赋值。前者只允许 `packages/core/src/types/hook.ts`、`packages/core/src/runtime/hook-runner.ts`、`packages/core/src/runtime/execution-unit.ts` 的旧字段兼容层；后者不允许任何例外。
+- 过去这里写「属于手动门禁、尚未接入 CI」；现在整个 CI 都没了，口径统一为 `bun run gates`。
+
+### 1.5 历史记录（2026-11 移除前的 ci.yml，仅供追溯）
+
+被删掉的 job：`quality`（复用 `./.github/actions/quality`）、`cross-platform`（ubuntu / windows / macos 矩阵）、
+`web`、`architecture`、`offline-integration`、`tls-ca` / `frontend-cors`（**占位 job**，只做 install、不含断言）、
+`release-dry-run`、`install-smoke`。要恢复时从 git 历史取：
+`git log --all -- .github/workflows/ci.yml`；但请先算清「噪声 vs 收益」这笔账。
+
+以下为移除前的原文，保留以便追溯：
+
+#### 触发（历史，已不运行）
 
 - `pull_request` → `main`、`release/**`
 - `push` → `main`、`release/**`
@@ -15,7 +62,7 @@
 
 同一 ref 的旧 run 自动取消：`concurrency.group = ci-<workflow>-<ref>`，`cancel-in-progress: true`。
 
-### Job
+#### Job（历史，已不运行）
 
 | Job | Runner | 内容 |
 |---|---|---|
@@ -97,7 +144,7 @@
 
 结构门禁本身仍有自动断言：`check-docs`（ADR 索引 / 链接 / 文档一致性）、`check-web-styles`、`check-deps`（依赖方向）、`smoke-subpaths`（子路径导出）、`version --check`（版本与 CHANGELOG 一致）。
 
-### 1.4 提示词前缀静态审计（收口手动门禁）
+#### 提示词前缀静态审计（历史条目；口径已并入 §1.4）
 
 - 命令：`bun run check:prompt-prefix`（`scripts/check-prompt-prefix.ts`）。
 - 范围：`packages/`、`plugins/`、`src/` 下的非测试 `.ts` / `.tsx` 源码；跳过 `__tests__`、`*.test.ts`、`node_modules`、`dist`。
