@@ -208,8 +208,12 @@ export function UserBubble({
 /**
  * 一张 run 失败卡（时间线里「失败」的唯一形态）。
  *
- * 形态：状态 chip + 短 run id（meta）+ 240 字截断的错误摘要（折叠态）+ 展开后的完整
- * 错误原文 / 人话提示 + 「查看运行详情」深链（actions 插槽，始终可见，折叠不影响）。
+ * 信息层级（用户口径「折叠只留红点 + 错误，状态卡和 run id 放进展开体」）：
+ * - 折叠态：语义圆点 + 单行错误摘要。卡头的 title / meta 槽**故意空着** —— 状态 chip 与
+ *   run id 都在展开体里，卡头再放一次就是同一事实看两遍；
+ * - 展开体（自上而下）：第一行运行失败状态 chip、第二行短 run id（hover 有完整 id），
+ *   之后才是完整错误原文 / 人话提示，会话记录来源行垫底；
+ * - `actions` 插槽（error-meta 含可重试标记 + 「查看运行详情」深链）在卡头外，折叠不影响。
  * 与工具卡 / 通知卡同一张 `StreamCard`（tone=danger），不再是一段 `<details>` 裸文本，
  * 也不是原始 JSON。
  *
@@ -235,29 +239,36 @@ export function RunFailureCard({
   const hint = describeGatewayErrorText(failure.error);
   const error =
     failure.error !== undefined && failure.error.trim().length > 0 ? failure.error : undefined;
-  // 没有错误原文就不给展开体 ⇒ StreamCard 渲染成纯行头（无 chevron，不响应点击）。
-  const body =
-    error !== undefined || hint !== null || failure.source === 'session' ? (
-      <>
-        <pre className="run-error-body">{error ?? t('chat.run.noError')}</pre>
-        {hint !== null && <p className="run-error-hint">{hint}</p>}
-        {failure.source === 'session' && (
-          <p className="run-error-hint">{t('chat.run.failure.fromRecord')}</p>
-        )}
-      </>
-    ) : undefined;
+  // 「能不能展开」仍然只由**可展示内容**决定（错误原文 / 人话提示 / 来源行）：状态 chip 与
+  // run id 只是展开体里的排头两行，不能因为它们把没有错误原文的纯行头变成可展开卡。
+  const expanded = error !== undefined || hint !== null || failure.source === 'session';
+  const body = expanded ? (
+    <>
+      {/* 展开体顶部两行（顺序固定，各占一行）：运行失败状态 → 运行 ID。
+          两者都用既有排版类，不再进卡头。 */}
+      <div className="flex flex-col items-start gap-1 pt-1">
+        <StatusChip status="failed" label={t('chat.run.failed')} />
+        <span className="text-2xs text-muted font-mono tabular-nums" title={failure.runId}>
+          {t('chat.run.failure.run', { id: truncate(failure.runId, 12) })}
+        </span>
+      </div>
+      <pre className="run-error-body">{error ?? t('chat.run.noError')}</pre>
+      {hint !== null && <p className="run-error-hint">{hint}</p>}
+      {failure.source === 'session' && (
+        <p className="run-error-hint">{t('chat.run.failure.fromRecord')}</p>
+      )}
+    </>
+  ) : undefined;
+  // `title` 是 StreamCard 的必填 prop，`null` 是合法 ReactNode（渲染成一个空 span，空占位
+  // 的间距由 chat.css 里 `.run-failure-card ... .stream-card-title:empty` 收掉）。
+  // `meta` 不传；折叠态的整行宽度都留给下面这行错误摘要。
   return (
     <StreamCard
       className="run-failure-card w-full min-w-0 max-w-full"
       tone="danger"
       defaultOpen={defaultOpen}
       ariaLabel={t('chat.run.failure.aria')}
-      title={<StatusChip status="failed" label={t('chat.run.failed')} />}
-      meta={
-        <span title={failure.runId}>
-          {t('chat.run.failure.run', { id: truncate(failure.runId, 12) })}
-        </span>
-      }
+      title={null}
       summary={
         error === undefined ? (
           t('chat.run.noError')
