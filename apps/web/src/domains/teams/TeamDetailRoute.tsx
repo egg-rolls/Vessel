@@ -43,7 +43,7 @@ export function TeamDetailRoute({
   useLocale();
   const { connectionState, epoch, permissions, asks, responding, respondPermission, respondAsk } =
     useConnection();
-  const { teamControl, hasTokenFor } = useNodes();
+  const { teamControl, hasTokenFor, nodes } = useNodes();
   const snapshot = useEventSnapshot();
   const control = teamControl(node);
   const hasToken = hasTokenFor(node);
@@ -57,8 +57,17 @@ export function TeamDetailRoute({
     (state) => state.details[teamDetailKey(nodeKey, route.teamId, 'summary')],
   );
   const loadDetail = useTeamStore((state) => state.loadDetail);
+  const loadAllLists = useTeamStore((state) => state.loadAllLists);
   const reloadSummary = () => {
     void loadDetail(nodeKey, route.teamId, control, { limit: 1, members_limit: 1 }, 'summary');
+  };
+  /**
+   * 保存后卡片与左栏也要跟着走：名称来自 `teams.list`（与详情是两个数据源），
+   * 只重拉详情会让列表停在旧名字上最多一个轮询周期。
+   */
+  const reloadAfterSave = () => {
+    reloadSummary();
+    void loadAllLists(nodes, teamControl);
   };
   usePolledAction(
     () => {
@@ -102,7 +111,7 @@ export function TeamDetailRoute({
         node={node}
         teamId={route.teamId}
         onBack={backToDetail}
-        onSaved={reloadSummary}
+        onSaved={reloadAfterSave}
       />
     );
   }

@@ -1,13 +1,14 @@
 /**
- * Team 编辑页（canonical `teams.update`）。
+ * Team 编辑页（canonical `teams.update`），同时是 Team 的「基础信息」页。
  *
- * 独立整页而不是弹窗；workspace 创建后不可改。归档 Team 只读。
+ * 独立整页而不是弹窗；workspace 创建后不可改（只读展示），冻结状态同样只读
+ * （切换入口在卡片菜单，避免页面里出现第二条写路径）。归档 Team 只读。
  */
 import { type FormEvent, type ReactNode, useRef, useState } from 'react';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
-import { Button, Field, Input, Section, Textarea } from '../../components/ui';
+import { Badge, Button, Field, Input, Section, Textarea } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
@@ -182,6 +183,18 @@ function TeamEditForm({
               readOnly
               placeholder="—"
             />
+          </Field>
+
+          {/* 冻结状态只读：切换入口在卡片菜单的「冻结创建成员」，页面里不另开一条写路径。
+              用 Badge 而不是只读 Input —— 状态不是可填字段，不伪装成输入框。 */}
+          <Field label={t('team.form.status')} hint={t('team.form.statusHint')}>
+            <div className="flex min-h-9 items-center">
+              <Badge tone={team.spawn_frozen === true ? 'warn' : 'neutral'}>
+                {team.spawn_frozen === true
+                  ? t('team.form.statusFrozen')
+                  : t('team.form.statusActive')}
+              </Badge>
+            </div>
           </Field>
 
           <Field label={t('team.form.name')} htmlFor="team-edit-name">
