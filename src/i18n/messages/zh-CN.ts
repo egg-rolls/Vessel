@@ -83,6 +83,8 @@ export const zhCN = {
   'help.cmd.team': '团队消息与成员（owner）',
   'help.cmd.teamList': '列出 Team',
   'help.cmd.teamGet': '查看 Team 成员与最近消息',
+  'help.cmd.teamShow': '查看 Team 基础信息（workspace 绝对路径 / policy / 冻结 / 成员数）',
+  'help.cmd.teamMine': '按当前目录反查所属 Team（判定依据一并输出）',
   'help.cmd.teamPost': '发一条团队消息（无 @ 时只记日志，不唤醒 Agent）',
   'help.cmd.teamMembers': '添加 / 移除 Team 成员',
   'help.cmd.teamBudget': '查看 conversation 预算与阻塞状态',

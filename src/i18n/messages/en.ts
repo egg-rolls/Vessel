@@ -88,6 +88,9 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.team': 'team messages and members (owner)',
   'help.cmd.teamList': 'list teams',
   'help.cmd.teamGet': 'show team members and recent messages',
+  'help.cmd.teamShow':
+    'show team basics (absolute workspace path / policy / frozen / member count)',
+  'help.cmd.teamMine': 'find the team that contains the current directory (with the basis)',
   'help.cmd.teamPost': 'post a team message (without mentions it is logged only)',
   'help.cmd.teamMembers': 'add or remove a team member',
   'help.cmd.teamBudget': 'show conversation budget and blocked state',

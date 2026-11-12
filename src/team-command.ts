@@ -1,6 +1,6 @@
 /**
- * `vessel team list|get|post|members|budget|create|update|archive|freeze|unfreeze`
- * （0.19 S3 / S4；S10.3；0.27）。
+ * `vessel team list|get|show|mine|post|members|budget|create|update|archive|freeze|unfreeze`
+ * （0.19 S3 / S4；S10.3；0.27；0.51 `show` / `mine`）。
  *
  * 只做参数映射、roster 名字解析、渲染与 exit code；
  * Team 数据与投递全部在 REPL owner 的 TeamService。
@@ -10,10 +10,13 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { normalizeWorkspace } from '@vessel-agent/agent';
 import type { CommandResult } from './agent-command';
 import {
   AgentOwnerRequestError,
   AgentOwnerUnavailableError,
+  type CallAgentOwnerOptions,
   callAgentOwner,
   resolveAgentOwner,
 } from './agent-owner-client';
@@ -49,7 +52,7 @@ interface TeamMessageView {
   kind?: string;
 }
 
-/** list 返回的 Team 摘要（只读子集） */
+/** list / get 返回的 Team 摘要（只读子集；`show` 还要 policy / frozen） */
 interface TeamSummaryView {
   team_id?: string;
   name?: string;
@@ -57,6 +60,10 @@ interface TeamSummaryView {
   online_count?: number;
   workspace?: string;
   description?: string;
+  policy?: Record<string, unknown>;
+  created_at?: number;
+  archived_at?: number;
+  spawn_frozen?: boolean;
 }
 
 /** post 返回的逐条投递结果（只读子集） */
@@ -184,6 +191,106 @@ function formatTeamGet(result: unknown): string {
   return lines.join('\n');
 }
 
+/**
+ * `team show`：一个 Team 的基础信息（名称 / workspace / policy / frozen / 成员数）。
+ *
+ * workspace 在这里是服务端归一化过的绝对路径 —— 与 `team mine` 的判定口径一致，
+ * 两个命令对着看就能确认「成员 cwd 应等于 Team.workspace」这条不变式。
+ */
+function formatTeamShow(result: unknown): string {
+  const team = isRecord(result) && isRecord(result.team) ? result.team : undefined;
+  if (team === undefined) return JSON.stringify(result, null, 2);
+  const created = asNumber(team.created_at);
+  const archived = asNumber(team.archived_at);
+  const members = `${String(team.member_count ?? 0)} (${String(team.online_count ?? 0)} online)`;
+  const lines: string[] = [
+    ui.section(`Team ${asString(team.team_id)}`),
+    ui.kv('name', asString(team.name)),
+    ui.kv('description', asString(team.description, '')),
+    ui.kv('workspace', asString(team.workspace)),
+    ui.kv('policy', policySummary(team.policy)),
+    // 冻结只拦「新建成员」，与归档不同：这里分开显示，避免被读成整组停摆。
+    ui.kv('frozen', team.spawn_frozen === true ? 'yes' : 'no'),
+    ui.kv('archived', archived !== undefined ? new Date(archived).toISOString() : 'no'),
+    ui.kv('members', members),
+    ui.kv('created', created !== undefined ? new Date(created).toISOString() : '-'),
+  ];
+  return lines.join('\n');
+}
+
+/** policy 压成单行 JSON：详情是扫读界面，多行策略树留给 `--json`。 */
+function policySummary(policy: unknown): string {
+  if (!isRecord(policy)) return '-';
+  return Object.keys(policy).length === 0 ? '{}' : JSON.stringify(policy);
+}
+
+/** workspace 包含关系的判定依据；`exact` = cwd 就是 workspace 本身。 */
+type MineMatch = 'exact' | 'ancestor';
+
+interface TeamMineHit {
+  team: TeamSummaryView;
+  /** 归一化后的命中 workspace（判定依据，同时也是输出字段）。 */
+  workspace: string;
+  match: MineMatch;
+}
+
+/** 比较键：Windows 路径大小写不敏感（与 team-slug 的 `workspaceKey` 同口径）。 */
+function comparePath(value: string): string {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
+/** cwd 落在 workspace 内时返回判定依据；`..` 前缀与跨盘符都算不命中。 */
+function ancestryOf(workspace: string, cwd: string): MineMatch | undefined {
+  const from = comparePath(workspace);
+  const to = comparePath(cwd);
+  if (from === to) return 'exact';
+  const rel = path.relative(from, to);
+  if (rel === '') return 'exact';
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+  return 'ancestor';
+}
+
+/**
+ * 候选 Team 里取**最深**的命中 workspace：workspace 允许嵌套（monorepo 里一个包
+ * 也可能是一个 Team），近的祖先才是用户在问的那个。
+ */
+function resolveMine(teams: readonly TeamSummaryView[], cwd: string): TeamMineHit | undefined {
+  let best: TeamMineHit | undefined;
+  for (const team of teams) {
+    const raw = team.workspace;
+    if (raw === undefined || raw === '') continue;
+    let workspace: string;
+    try {
+      workspace = normalizeWorkspace(raw);
+    } catch {
+      // 旧数据的 workspace 可能已不可解析（盘符变了 / 非法字符）：跳过，别让一条脏记录毁掉整次查询。
+      continue;
+    }
+    const match = ancestryOf(workspace, cwd);
+    if (match === undefined) continue;
+    if (best === undefined || workspace.length > best.workspace.length) {
+      best = { team, workspace, match };
+    }
+  }
+  return best;
+}
+
+function formatTeamMine(hit: TeamMineHit, cwd: string): string {
+  const basis =
+    hit.match === 'exact'
+      ? 'exact: cwd 就是这个 Team 的 workspace'
+      : 'ancestor: cwd 落在该 Team workspace 之内';
+  return [
+    `${ui.symbol('ok')} team ${asString(hit.team.team_id)}`,
+    ui.kv('name', asString(hit.team.name)),
+    ui.kv('workspace', hit.workspace),
+    ui.kv('members', String(hit.team.member_count ?? 0)),
+    ui.kv('cwd', cwd),
+    // 判定依据单列一行：另一个 bug（成员 cwd 应等于 Team.workspace）靠它对账。
+    ui.kv('basis', basis),
+  ].join('\n');
+}
+
 function deliveriesOf(result: unknown): TeamDeliveryView[] {
   if (!isRecord(result) || !Array.isArray(result.delivered)) return [];
   return result.delivered.filter(isRecord).map((entry) => entry as TeamDeliveryView);
@@ -270,6 +377,71 @@ function formatMembersResult(result: unknown): string {
     ui.kv('agent_id', asString(result.agent_id)),
     ui.kv('membership', asString(result.membership)),
   ].join('\n');
+}
+
+/**
+ * `teams.get` 的 team 摘要；`not_found` 归一成 undefined 交给调用方决定是否回退。
+ *
+ * 窗口固定成 1 / 1：`show` 只读基础信息，成员与日志列表由 `team get` 负责。
+ */
+async function getTeamDetail(
+  record: AgentOwnerRecord,
+  teamId: string,
+  options: CallAgentOwnerOptions,
+): Promise<unknown | undefined> {
+  try {
+    return await callAgentOwner(
+      record,
+      'teams.get',
+      { team_id: teamId, limit: 1, members_limit: 1 },
+      options,
+    );
+  } catch (error) {
+    if (error instanceof AgentOwnerRequestError && error.code === 'not_found') return undefined;
+    throw error;
+  }
+}
+
+/** 名字 / workspace 目录名的候选判定（`team_id` 本身就是目录名 slug）。 */
+function matchesTeamAlias(team: TeamSummaryView, ref: string): boolean {
+  if (team.name !== undefined && team.name === ref) return true;
+  const workspace = team.workspace;
+  if (workspace === undefined || workspace === '') return false;
+  const segments = workspace.split(/[\\/]+/).filter(Boolean);
+  return segments[segments.length - 1] === ref;
+}
+
+/**
+ * `team show <team_id|slug>`：先按 id 问 `teams.get`，`not_found` 再在 `teams.list`
+ * 里按名字 / workspace 目录名找**唯一**命中。
+ *
+ * 为什么要回退：用户手里常常只有目录名或中文显示名，而 `team_id` 是 basename 的
+ * ASCII slug；`teams.list` 已经在手，不必为此新增 RPC。多命中一律报错 —— 猜错的
+ * team 比不猜更糟（改错对象）。
+ */
+async function resolveTeamDetail(
+  record: AgentOwnerRecord,
+  ref: string,
+  options: CallAgentOwnerOptions,
+): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
+  const direct = await getTeamDetail(record, ref, options);
+  if (direct !== undefined) return { ok: true, value: direct };
+
+  const listed = teamList(await callAgentOwner(record, 'teams.list', {}, options));
+  const hits = listed.filter((team) => matchesTeamAlias(team, ref));
+  if (hits.length > 1) {
+    const ids = hits.map((team) => asString(team.team_id)).join(', ');
+    return { ok: false, error: `ambiguous team: "${ref}" matches ${ids}` };
+  }
+  const id = hits[0]?.team_id;
+  if (id !== undefined) {
+    const found = await getTeamDetail(record, id, options);
+    if (found !== undefined) return { ok: true, value: found };
+  }
+  return {
+    ok: false,
+    error: `unknown team: "${ref}" (not an id, name, or workspace directory)`,
+  };
 }
 
 function numeric(value: unknown): string {
@@ -496,6 +668,43 @@ async function execute(
       fetchOptions,
     );
     return { ok: true, value, text: formatMembersResult(value) };
+  }
+
+  if (command.kind === 'show') {
+    const resolved = await resolveTeamDetail(record, command.team, fetchOptions);
+    if (!resolved.ok) return resolved;
+    return { ok: true, value: resolved.value, text: formatTeamShow(resolved.value) };
+  }
+
+  if (command.kind === 'mine') {
+    const listed = await callAgentOwner(record, 'teams.list', {}, fetchOptions);
+    const teams = teamList(listed);
+    // team-scoped token 的 `teams.list` 会脱敏 workspace（防泄漏主机路径）：
+    // 没有路径就没有包含关系可算，明说原因，别把它报成「不属于任何 Team」。
+    if (
+      teams.length > 0 &&
+      teams.every((team) => team.workspace === undefined || team.workspace === '')
+    ) {
+      return {
+        ok: false,
+        error: 'team_workspace_unavailable: 端点未返回 workspace，无法按目录反查',
+      };
+    }
+    let cwd: string;
+    try {
+      cwd = normalizeWorkspace(process.cwd());
+    } catch {
+      cwd = path.resolve(process.cwd());
+    }
+    const hit = resolveMine(teams, cwd);
+    if (hit === undefined) {
+      return { ok: false, error: `no_team_for_cwd: 当前目录不属于任何 Team (cwd: ${cwd})` };
+    }
+    return {
+      ok: true,
+      value: { cwd, match: hit.match, matched_workspace: hit.workspace, team: hit.team },
+      text: formatTeamMine(hit, cwd),
+    };
   }
 
   if (command.kind === 'budget-status') {

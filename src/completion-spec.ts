@@ -377,6 +377,8 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       { name: 'list', flags: ['--json', '--help'] },
       { name: 'get', flags: ['--json', '--limit', '--members', '--help'] },
+      { name: 'show', flags: ['--json', '--help'] },
+      { name: 'mine', flags: ['--json', '--help'] },
       { name: 'post', flags: ['--json', '--mention', '--help'] },
       { name: 'members', flags: ['--json', '--help'] },
       { name: 'freeze', flags: ['--json', '--help'] },

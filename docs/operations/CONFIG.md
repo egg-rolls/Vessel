@@ -450,6 +450,8 @@ vessel agent close <member...> [--json]
 vessel agent list [--state <state>] [--visibility private|team|tenant] [--json]
 vessel team list [--json]
 vessel team get <team_id> [--limit N] [--json]
+vessel team show <team_id|slug> [--json]
+vessel team mine [--json]
 vessel team create <workspace> [--name N] [--description D] [--policy JSON | --policy-file FILE] [--json]
 vessel team update <team_id> [--name N] [--description D | --clear-description] [--policy JSON | --policy-file FILE] [--json]
 vessel team archive <team_id> [--json]
@@ -468,6 +470,7 @@ vessel prune [--older-than <dur>] [--dry-run] [--json] [--yes]
 ```
 
 - `vessel team ...` 经 owner 端点（`from = ownerId`、viewer 可见 private）；`team post` 的 `--mention` 先在同 Team roster 内解析为 agent id，日志写成功但任一投递失败时退出 1。
+- `team show <team_id|slug>` 只读 `teams.get`（窗口 1/1），输出名称 / workspace 绝对路径 / policy / frozen / 成员数；参数不是 id 时回退到 `teams.list` 按名字或 workspace 目录名做**唯一**匹配，多命中直接报错。`team mine` 取 `process.cwd()`，在 `teams.list` 的 workspace 里按包含关系反查（命中多个取最深的一层，`exact` = cwd 就是 workspace），命中输出里带 `basis` 判定依据；没命中报 `no_team_for_cwd: 当前目录不属于任何 Team` 并退 1，`teams.list` 脱敏掉 workspace 时单独报 `team_workspace_unavailable`。
 - `team create|update` 的 `--policy` / `--policy-file` 互斥；文件内容必须是 JSON 对象，整体替换 policy（不做 merge）。`team archive` 有 present 成员时退出 1（`team_not_empty`）。
 - `vessel hub ...`：`hub start` 启动独立 hub 进程；`hub join-code` 在 hub 侧生成一次性 code，`hub join` 在节点侧消费（node → hub）；`hub directory` / `hub watch` / `hub node list|remove` 只读或吊销。token 明文只在 `hub join` 响中出现一次，不写日志。
 

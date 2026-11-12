@@ -303,6 +303,8 @@ export function renderGlobalHelp(): string {
     ],
     ['vessel team list [--json]', t('help.cmd.teamList')],
     ['vessel team get <team_id> [--limit N]', t('help.cmd.teamGet')],
+    ['vessel team show <team_id|slug> [--json]', t('help.cmd.teamShow')],
+    ['vessel team mine [--json]', t('help.cmd.teamMine')],
     ['vessel team post <team_id> <content...> [--mention <name|id>]', t('help.cmd.teamPost')],
     ['vessel team members <team_id> add|remove <member>', t('help.cmd.teamMembers')],
     ['vessel team budget <team_id> [--conversation <id>] [--json]', t('help.cmd.teamBudget')],

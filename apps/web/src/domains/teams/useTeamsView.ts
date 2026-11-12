@@ -342,21 +342,22 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     const membersShown = isActiveTeam(node, team) && membersOpen;
     return [
       {
-        // 打开 / 收起右侧成员栏（原页头「查看成员列表」按钮的入口）。
-        id: 'members',
-        label: membersShown ? t('team.members.close') : t('team.members.open'),
-        disabled: !hasTokenFor(node),
-        onSelect: () => {
-          toggleMembers(node, team);
-        },
-      },
-      {
+        // 编辑整页是这张卡片的主要入口（信息查看 + 修改），排第一；打开成员栏次之。
         id: 'edit',
         label: t('common.edit'),
         disabled: !canWrite,
         onSelect: () => {
           window.location.hash = teamEditHash(nodeKeyOf(node), team.team_id);
           if (compact) setDrawerOpen(false);
+        },
+      },
+      {
+        // 打开 / 收起右侧成员栏（原页头「查看成员列表」按钮的入口）。
+        id: 'members',
+        label: membersShown ? t('team.members.close') : t('team.members.open'),
+        disabled: !hasTokenFor(node),
+        onSelect: () => {
+          toggleMembers(node, team);
         },
       },
       {
