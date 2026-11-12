@@ -650,13 +650,13 @@ const QUEUED_ICON_VEIL = 'bg-white/10 enabled:hover:bg-white/20';
  *
  * 两颗都是**圆形图标键**（`composerIconControlClass` 的 32px 正圆 + `Icon`）—— 与输入框的
  * 发送键 / 回形针同一套形状与三态，只是色调走次要档（`composerQuietIconTone`）：卡面是
- * 琥珀底，主色调的 accent 圆在暖底上会读成「主操作」，而这两颗都是次要动作。名字只走
- * `aria-label` + `title`（同一句 i18n），不再用可见文字：卡宽要跟列一致，两个中文标签会把
+ * 琥珀底，主色调的 accent 圆在暖底上会读成「主操作」，而这几颗都是次要动作。名字只走
+ * `aria-label` + `title`（同一句 i18n），不再用可见文字：卡宽要跟列一致，几个中文标签会把
  * 那一行挤到换行。底色不用形状层的不透明灰，见 `QUEUED_ICON_VEIL`。
  *
- * **谁有写操作由调用方决定**（本组件只负责「给了就画」）：human 源给两颗（收回编辑 +
- * 取消排队），agent 源一颗都不给 —— 它的回收语义是 unhold 留档（消息回到可读 unread，
- * 模型仍能 read），把它画成一个「撤掉」的按钮就是在伪装删除。
+ * **谁有写操作由调用方决定**（本组件只负责「给了就画」）：human 源给三颗（收回编辑 +
+ * 取消排队 + 我已处理），agent 源一颗都不给 —— 它的回收语义是 unhold 留档（消息回到可读
+ * unread，模型仍能 read），把它画成一个「撤掉」的按钮就是在伪装删除。
  *
  * **身份在卡内**：卡头 `meta` 槽写「这条是谁给的」（`human:` / `<agent 名>:`），
  * 正文 `summary` 仍只放那句话 —— 读起来是「等待中　human: 说的话」。以前身份是卡外左侧
@@ -672,6 +672,7 @@ export function QueuedNotice({
   item,
   onCancel,
   onEdit,
+  onClaim,
   label,
   identity,
   defaultOpen = false,
@@ -690,6 +691,14 @@ export function QueuedNotice({
    * 也不该知道。
    */
   onEdit?: (id: string) => void;
+  /**
+   * 我已处理（claim）：按**条目 id**。缺省 = 不给这颗键。
+   *
+   * 语义是「这条我自己处理了，别再送给模型」，**不可逆**（拿走的条目再也回不来），所以
+   * 名字必须走 `aria-label` / `title`，不能只画一个图形 —— 没有字的图标键读不出「不可逆」。
+   * 只有 human 源给：agent 源的条目是别人发给这具 body 的输入，人没有「代它处理」的立场。
+   */
+  onClaim?: (id: string) => void;
   /**
    * 卡头文案；缺省「等待中」（`chat.pending.waiting`）。
    *
@@ -714,15 +723,16 @@ export function QueuedNotice({
   // 两颗键的公共形：形状层只取一次（与输入框的发送键 / 回形针同一份），色调走次要档，
   // 底色换成这层白纱（`QUEUED_ICON_VEIL`；twMerge 会把形状层的 `bg-sunken` 让掉）。
   const controlClass = cn(composerIconControlClass, composerQuietIconTone, QUEUED_ICON_VEIL);
-  // 取消在途：两颗都禁用 —— 同一条消息不能同时被「收回来」和「撤掉」，那是两条写操作的竞争。
+  // 取消在途：三颗都禁用 —— 同一条消息不能同时被「收回来」「撤掉」「标记已处理」，
+  // 那是三条写操作的竞争（claim 还不可逆，抢在前面最糟）。
   const busy = item.cancelling;
   // 写操作行：一颗键都没给（agent 源）就整个不出现 —— 不留「有槽无键」的空行。
-  // 一行两颗 32px 正圆：卡片本身就是满宽块（`.notice-block`），这一行按列宽排，
+  // 一行最多三颗 32px 正圆：卡片本身就是满宽块（`.notice-block`），这一行按列宽排，
   // 小屏也不会把卡撑宽（`flex-none` + 定尺寸盒子）。
   // 只有**上方**间距（`pt-1.5`）：横向内衬由展开体那条 `.notice-block > .event-block-body`
   // 统一给（10px），这里再补 px 就是双重内衬，键会比正文多缩 10px。
   let controls: ReactNode = null;
-  if (onCancel !== undefined || onEdit !== undefined) {
+  if (onCancel !== undefined || onEdit !== undefined || onClaim !== undefined) {
     controls = (
       <div className="flex items-center gap-1.5 pt-1.5">
         {onEdit !== undefined && (
@@ -749,6 +759,23 @@ export function QueuedNotice({
             onClick={() => onCancel(item.id)}
           >
             <Icon name="retract" size={14} />
+          </Button>
+        )}
+        {onClaim !== undefined && (
+          <Button
+            variant="plain"
+            className={controlClass}
+            // 不可逆动作，名字必须完整说出来（图标键没有文字态）。
+            aria-label={busy ? t('chat.pending.claimInFlight') : t('chat.pending.claim')}
+            title={busy ? t('chat.pending.claimInFlight') : t('chat.pending.claim')}
+            disabled={busy}
+            onClick={() => onClaim(item.id)}
+          >
+            {/* `Icon` 里没有 check（现有集只有 copy/edit/retry/send/resend/transcript/
+                reply/retract/chevron/attach），而这条带子不新增图形 ⇒ 取语义最近的
+                `chevron`（通过 / 往下走），不取 `transcript`：文档图标会被读成「看正文」，
+                对不可逆动作是假承诺。 */}
+            <Icon name="chevron" size={14} />
           </Button>
         )}
       </div>

@@ -15,6 +15,8 @@
 import { execFile } from 'node:child_process';
 import type { AgentService, BatchItemResult, MemberStatus } from '@vessel-agent/agent';
 import {
+  type AgentClaimLikeInput,
+  type AgentClaimLikeResult,
   type AgentCloseBatchResultLike,
   type AgentControlLike,
   type AgentCreateLikeInput,
@@ -299,6 +301,10 @@ export function createAgentControl(
     recall(input: AgentRecallLikeInput): Promise<AgentRecallLikeResult> {
       // 撤回 = 取消那一条待处理输入的「将执行」意图（human 真删 / agent 留档）。
       return service.recall({ agent_id: input.agent_id, message_ids: [...input.message_ids] });
+    },
+    claim(input: AgentClaimLikeInput): Promise<AgentClaimLikeResult> {
+      // 认领 = 拿走这次投递（标 consumed，不可逆）；适配器只透传，语义在 service。
+      return service.claim({ agent_id: input.agent_id, message_ids: [...input.message_ids] });
     },
     toolSurface(agentId: string): AgentToolSurfaceLike | undefined {
       // `tools.list{agent_id}` 的唯一数据源：service 查成员、执行内核给工具面。

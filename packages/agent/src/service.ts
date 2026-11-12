@@ -67,6 +67,9 @@ import {
 import {
   type AdmitInput,
   type AdmitResult,
+  type AgentClaimInput,
+  type AgentClaimResult,
+  type AgentClaimSkip,
   type AgentDrainOptions,
   type AgentDrainOutcome,
   AgentError,
@@ -745,6 +748,10 @@ export class AgentServiceImpl implements AgentService {
             ...(options.inboxMaxMessages !== undefined
               ? { maxMessages: options.inboxMaxMessages }
               : {}),
+            // claim 的执行侧前置收口：只有这里知道 scheduler / body mailbox。store 在标
+            // consumed 之前调这一步，`inbox{action:'claim'}`（模型侧工具）与 `agents.claim`
+            // 才会真的「拿走就再也不投」。
+            beforeClaim: (agentId, ids) => this.withdrawQueuedRuns(agentId, ids),
           })
         : undefined;
     if (this.inbox !== undefined) this.runtime.attachInbox?.(this.inbox);
@@ -2785,6 +2792,64 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 认领待处理输入（`agents.claim`，0.51）：「这几条我已经拿到正文了，从队列里拿走」。
+   *
+   * 与 `recall` 共用**前置收口**（取消该消息的 queued run + 从 body mailbox 出队），差别
+   * 只在出口：recall 按 source 真删 / 留档，`claim` 一律**消费**（inbox `consumed` +
+   * 解 hold）。也就是说 claim 之后这条消息不再投递、不再出现在 list / read 里。
+   *
+   * 为什么前置收口不是可选项：held 的条目**已经**排进了 scheduler 的一次 run，光把它标
+   * consumed 拦不住那次投递（执行侧不看 inbox 状态）。少了 `cancelQueuedRunsFor`，claim
+   * 一条 pending 之后它仍会被投一次，这个动作就假了。
+   *
+   * 跳过口径只有两种：库里的确没有这条（`not_found`）、它早就是 consumed（`consumed`，
+   * 正在跑的那条也落在这一档 —— 开跑即消费）。认领「不了的」不报错，按条回 skipped。
+   */
+  async claim(input: AgentClaimInput): Promise<AgentClaimResult> {
+    await this.ready;
+    const agentId = input.agent_id;
+    const ids = [...new Set(input.message_ids)];
+    const claimed: string[] = [];
+    const skipped: AgentClaimSkip[] = [];
+    if (ids.length === 0) return { claimed, skipped };
+    const store = this.inbox;
+    if (store === undefined) {
+      for (const id of ids) skipped.push({ message_id: id, reason: 'not_found' });
+      return { claimed, skipped };
+    }
+    // 判定 + 落状态都在 store.claim 一处（与模型侧工具同一个实现）；执行侧的前置收口由
+    // 构造时注入的 `beforeClaim` 完成（见 `withdrawQueuedRuns`）。
+    const result = await store.claim(agentId, ids);
+    claimed.push(...result.claimed);
+    for (const skip of result.skipped) {
+      skipped.push({ message_id: skip.id, reason: skip.reason });
+    }
+    return { claimed, skipped };
+  }
+
+  /**
+   * `claim` 的执行侧前置收口：把这几条「已经排进 scheduler、还没开跑」的消息撤下来。
+   *
+   * 与 `recall` 共用同一段实现（`cancelQueuedRunsFor` + `dropFromQueue`），差别只在
+   * inbox 出口 —— recall 按 source 真删 / 留档，claim 交给 store 标 consumed。
+   *
+   * **为什么必须在消费之前**：held 的条目已经排进了一次 run，执行侧不看 inbox 状态 ⇒
+   * 只标 consumed 拦不住那次投递，claim 一条 pending 之后它照样会被投一次。
+   */
+  private withdrawQueuedRuns(agentId: string, ids: readonly string[]): void {
+    const store = this.inbox;
+    if (store === undefined) return;
+    for (const messageId of ids) {
+      const entry = store.findByIds(agentId, [messageId])[0];
+      if (entry === undefined) continue;
+      const holder =
+        entry.session_id !== undefined ? this.findEntry(agentId, entry.session_id) : undefined;
+      this.cancelQueuedRunsFor(holder, messageId, 'claim');
+      this.dropFromQueue(holder, messageId);
+    }
+  }
+
+  /**
    * 外部取消 queued run 的收口（D-a）：`runs.cancel` 只动 scheduler，不经过 executor，
    * 所以 `entry.queuedRuns` / `entry.pending` / inbox 的 held 全都留在原地。不在这里收口，
    * 这个 agent 就再也不会被 wake（`canScheduleWake` 恒 false）、peer 停止通知与 TTL 回收
@@ -2982,16 +3047,25 @@ export class AgentServiceImpl implements AgentService {
     messageId: string,
     source: string | undefined,
   ): void {
+    this.dropFromQueue(entry, messageId);
+    const store = this.inbox;
+    if (store === undefined) return;
+    if (source === HUMAN_PRINCIPAL) store.discard(agentId, [messageId]);
+    else store.unhold(agentId, [messageId]);
+  }
+
+  /**
+   * 「这条消息不再属于任何一次执行」的执行侧收口：从 body mailbox 出队 + 清掉 urgent
+   * 记账。**只动内存里的执行队列，不碰 inbox 状态** —— inbox 的出口（discard / unhold /
+   * consumed）由调用方按语义决定：recall 分档、claim 消费。
+   */
+  private dropFromQueue(entry: ExecutionUnitEntry | undefined, messageId: string): void {
     if (entry !== undefined) {
       const index = entry.pending.findIndex((message) => message.id === messageId);
       if (index >= 0) entry.pending.splice(index, 1);
     }
     this.urgentMessageIds.delete(messageId);
     this.urgentMessages.delete(messageId);
-    const store = this.inbox;
-    if (store === undefined) return;
-    if (source === HUMAN_PRINCIPAL) store.discard(agentId, [messageId]);
-    else store.unhold(agentId, [messageId]);
   }
 
   async resumeRun(runId: string, opts?: RunOptions): Promise<string> {

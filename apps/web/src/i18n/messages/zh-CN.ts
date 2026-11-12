@@ -1031,6 +1031,12 @@ export const messages = {
   'chat.pending.editPeekFailed': '没能读到这条的原文，条带保持原样',
   'chat.pending.editRecallRejected': '已放回输入框，但这条仍留在条带：它可能已经开始执行',
   'chat.pending.editRecallFailed': '已放回输入框，但撤下这条失败：{detail}',
+  'chat.pending.claim': '我已处理',
+  'chat.pending.claimInFlight': '标记中…',
+  'chat.pending.claimTaken': '已标记为处理：这条不会再发送',
+  'chat.pending.claimSkipped': '没能拿走这一条（{reason}），条带已重读对齐',
+  'chat.pending.claimSkipped.notFound': '它已经不在收件箱里了',
+  'chat.pending.claimSkipped.consumed': '它早就被拿走了',
   'chat.toast.queued': '已排队',
   'chat.toast.cancelRequested': '已请求取消 run',
   'chat.toast.queueCancelled': '已取消排队',
@@ -1767,7 +1773,7 @@ export const messages = {
   'designLab.preview.pageScaffold.sampleTitle': '样例页面',
   'designLab.preview.pageScaffold.title': 'PageScaffold',
   'designLab.preview.queued.desc':
-    '排队卡：琥珀语义带 +「等待中」胶囊；圆形图标键（收回编辑 / 取消排队）在正文下面一行、纯白 10% 半透明底；agent 源那张一颗键都不给。',
+    '排队卡：琥珀语义带 +「等待中」胶囊；圆形图标键（收回编辑 / 取消排队 / 我已处理）在正文下面一行、纯白 10% 半透明底；agent 源那张一颗键都不给。',
   'designLab.preview.reasoning.desc':
     '思考卡：卡头是「思考过程」+ 左侧复制按钮 + 最右时刻；超过 12 行可展开，收字结束自动折叠。',
   'designLab.preview.section.desc': '带标题、说明与可选动作的抬升面板。',

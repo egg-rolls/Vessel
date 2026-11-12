@@ -1070,6 +1070,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Put back into the input box, but the queue entry stayed: it may have started running',
   'chat.pending.editRecallFailed':
     'Put back into the input box, but removing the entry failed: {detail}',
+  'chat.pending.claim': 'Mark as handled',
+  'chat.pending.claimInFlight': 'Marking as handled…',
+  'chat.pending.claimTaken': 'Marked as handled — it will not be sent',
+  'chat.pending.claimSkipped': 'That item could not be claimed ({reason}); the strip was reloaded',
+  'chat.pending.claimSkipped.notFound': 'it is no longer in the inbox',
+  'chat.pending.claimSkipped.consumed': 'it was already taken',
   'chat.toast.queued': 'Queued',
   'chat.toast.cancelRequested': 'Requested cancellation of the run',
   'chat.toast.queueCancelled': 'Removed from the queue',
@@ -1847,7 +1853,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.pageScaffold.sampleTitle': 'Sample page',
   'designLab.preview.pageScaffold.title': 'PageScaffold',
   'designLab.preview.queued.desc':
-    'Queued card: amber band with a waiting chip; the round icon keys (take back to edit, cancel) sit on the line below the message text, on a translucent white 10% fill; an agent-source card has no keys at all.',
+    'Queued card: amber band with a waiting chip; the round icon keys (take back to edit, cancel, mark as handled) sit on the line below the message text, on a translucent white 10% fill; an agent-source card has no keys at all.',
   'designLab.preview.reasoning.desc':
     'Reasoning card: title, a copy button on its left, and the time at the far right; more than 12 lines expand, and it collapses when streaming ends.',
   'designLab.preview.section.desc': 'Raised panel with a title, description and optional actions.',

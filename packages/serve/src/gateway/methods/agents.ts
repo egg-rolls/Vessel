@@ -72,6 +72,9 @@ const ADMIN_VIEWER = '*';
 /** `agents.recall` 一次最多撤回的条数（条带一次撤一条；批量只是便利，不放开成无界写）。 */
 const RECALL_MAX_IDS = 20;
 
+/** `agents.claim` 一次最多认领的条数（与 recall 同一档上限；不可逆动作不放开成无界写）。 */
+const CLAIM_MAX_IDS = 20;
+
 /**
  * 人类管理面 principal：静态 gateway token / admin token。合成 owner 传输带
  * `agent_id`，属于 agent 身份，不算人类管理面。
@@ -830,6 +833,78 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           throw new RpcError('not_supported', 'agent control does not expose recall');
         }
         return await control.recall({ agent_id: agentId, message_ids: ids });
+      },
+    },
+    {
+      /**
+       * `agents.claim`（0.51，write）：认领一条待处理输入（「我已经拿到正文了，别再投给我」）。
+       *
+       * 与 `agents.recall` 的关系：同一个「从队列里拿走」的入口，差别是出口 —— recall
+       * 按 source 真删 / 留档，claim 一律**消费**（标 consumed + 解 hold）。**不可逆**：
+       * 拿走的条目不再投递、不再出现在 `agents.inbox`，下一次 append 裁剪时清掉。
+       *
+       * 为什么不是复用 `agents.recall`：那条路对 human 源是**删除**（连正文一起没了），
+       * 而 claim 要的是「消掉这次投递、别把它再送进模型上下文」；对 held（已排进队列的）
+       * 条目更是只有 claim 能表达。实现上它仍然先撤掉该消息的 queued run 再消费 ——
+       * 少这一步，claim 一条 pending 之后它照样会被那次已排程的 run 投一遍。
+       *
+       * `skipped` 的两种原因：未知 id（`not_found`）、早就被拿走（`consumed`）。
+       */
+      name: 'agents.claim',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['agent_id', 'message_ids'],
+        properties: {
+          agent_id: { type: 'string', minLength: 1 },
+          message_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['claimed'],
+        properties: {
+          claimed: stringListSchema,
+          skipped: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['message_id', 'reason'],
+              properties: {
+                message_id: { type: 'string' },
+                reason: { type: 'string', enum: ['not_found', 'consumed'] },
+              },
+            },
+          },
+        },
+      },
+      handler: async (params, ctx) => {
+        const agentId = stringParam(params, 'agent_id');
+        const ids = Array.isArray(params.message_ids)
+          ? params.message_ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+          : [];
+        if (ids.length === 0) {
+          throw new RpcError('invalid_params', 'agents.claim requires non-empty message_ids');
+        }
+        if (ids.length > CLAIM_MAX_IDS) {
+          throw new RpcError(
+            'invalid_params',
+            `message_ids accepts at most ${CLAIM_MAX_IDS} ids`,
+            {
+              count: ids.length,
+            },
+          );
+        }
+        // 可见性口径与 agents.list / agents.get / agents.inbox / agents.recall 完全一致。
+        const agents = await visibleAgents(deps, ctx);
+        if (!agents.some((entry) => entry.id === agentId)) {
+          throw new RpcError('not_found', `agent not found: ${agentId}`, { agent_id: agentId });
+        }
+        const control = requireAgentControl(deps.agent);
+        if (control.claim === undefined) {
+          throw new RpcError('not_supported', 'agent control does not expose claim');
+        }
+        return await control.claim({ agent_id: agentId, message_ids: ids });
       },
     },
     {

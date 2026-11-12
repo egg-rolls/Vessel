@@ -2,7 +2,7 @@
  * 排队卡（chat/StreamItems 的 `QueuedNotice`）：琥珀档卡面 + 「等待中」胶囊。
  * 只读样例：两个写操作给空回调，不接触 inbox / gateway。
  *
- * 三张卡把「有没有写入口」的三态都摆出来：两颗图标键（human 源）/ 只有取消 /
+ * 三张卡把「有没有写入口」的三态都摆出来：三颗图标键（human 源）/ 只有取消 + 已处理 /
  * 一颗都不给（agent 源 —— 它的 recall 只是 unhold 留档，不画成删除）。
  *
  * **三张都默认展开**：写操作在卡片展开体里、正文**下面**一行，折叠态只能看到卡头 ——
@@ -54,8 +54,15 @@ export default function QueuedNoticePreview() {
         defaultOpen
         onEdit={() => undefined}
         onCancel={() => undefined}
+        onClaim={() => undefined}
       />
-      <QueuedNotice item={CANCELLING} identity={human} defaultOpen onCancel={() => undefined} />
+      <QueuedNotice
+        item={CANCELLING}
+        identity={human}
+        defaultOpen
+        onCancel={() => undefined}
+        onClaim={() => undefined}
+      />
       <QueuedNotice item={AGENT_SOURCE} identity="agent:helper" defaultOpen />
     </div>
   );
