@@ -715,6 +715,27 @@ export interface AdmitInput {
    * 标成 `ask:answer`（Web 渲染成「待批答复」卡，而不是用户气泡）。
    */
   origin?: 'ask_answer';
+  /**
+   * 0.53（仅内部装配，不暴露为 RPC）：**复用这条消息的 id**（启动恢复用）。
+   *
+   * 恢复要做的不是「再发一条」，而是「把磁盘上那条重新交给 body」：同一个 id 让
+   * `inbox.append` 幂等（不会多出一条）、`markConsumed` 天然指向同一条。与
+   * `interrupt` 复用 `message_id` 同族，区别是这里由条目自己的 id 决定。
+   */
+  reuse_message_id?: string;
+}
+
+/**
+ * 启动恢复的结果（只用于日志 / 自检，不上 wire）。
+ *
+ * `sessions` = 本次真正动手的会话数；`deferred` = 因为超出 `maxSessions` 而顺延到下次
+ * 启动的会话数（条目保持 unread，不丢）；`failed` = 逐条投递失败的消息数（同样保持 unread）。
+ */
+export interface AgentRecoverResult {
+  recovered: number;
+  sessions: number;
+  deferred: number;
+  failed: number;
 }
 
 /** `agents.recall` 的单条跳过原因（与 inbox 的 discard 口径同族）。 */
@@ -1291,6 +1312,20 @@ export interface AgentService {
    * 与 `recall` 共用同一段收口（清记账 / 出队 / 按 source 分档）。
    */
   releaseCancelledRun(runId: string, reason?: string): void;
+  /**
+   * 启动恢复（0.53）：把**进程死亡时还没变成 run input** 的 human 输入重新投递一次。
+   *
+   * 判据（一句话）：`status === 'unread'` 且**未被 held** 且 `session_id` 存在且
+   * `source === 'human'` 且该 session 还有可重建的 binding。`held` 只存内存 ⇒ 进程死后
+   * 全部失效 ⇒ 磁盘上「没被任何 body 接管的输入」恰好就是这一批，不需要额外状态位。
+   *
+   * 走同一个 `admitInternal`（不新开旁路），并带 `reuse_message_id`（同 id 幂等）。
+   * **重启后那条消息最终会不会被执行？会** —— 触发点就是下一次进程启动的这次扫描；
+   * 失败（预算 / spawn / 会话退役）保持 unread、留到下次启动再试，绝不 discard（用户没取消）。
+   * 上限 `maxSessions`（缺省 8）个会话，其余顺延（避免「崩溃恢复」变成「一开机所有 agent
+   * 一起跑」）。每进程只扫一次。
+   */
+  recoverPendingInputs(options?: { maxSessions?: number }): Promise<AgentRecoverResult>;
   /**
    * 更新名字 / model / systemPrompt；名字立即生效且保持同 Team（unbound 为 tenant）
    * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 ExecutionUnit。

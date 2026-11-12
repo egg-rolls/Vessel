@@ -76,6 +76,7 @@ import {
   type AgentRecallInput,
   type AgentRecallResult,
   type AgentRecallSkip,
+  type AgentRecoverResult,
   type AgentRole,
   type AgentService,
   type AgentServiceOptions,
@@ -231,6 +232,14 @@ function assertExplicitId(id: string): void {
  * 由 turn_start 检查后留在 mailbox，override / release 后重新准入。
  */
 const TURN_DIMENSIONS: ReadonlySet<string> = new Set(['turns', 'tokens']);
+
+/**
+ * 启动恢复一次最多动手的会话数（0.53）。
+ *
+ * 启动时 spawn 是真实成本（runtime 构建 + 一次 LLM turn）：不能让「崩溃恢复」变成
+ * 「一开机所有 agent 一起跑」。超出的会话条目保持 unread，下次启动顺延。
+ */
+const RECOVER_MAX_SESSIONS = 8;
 
 /**
  * 临时 agent 空闲回收 TTL 缺省值（小时，D5）；0 = 关闭。
@@ -576,6 +585,12 @@ export class AgentServiceImpl implements AgentService {
   private readonly executionUnitRegistry = new Map<string, Map<string, ExecutionUnitEntry>>();
   /** run_id → 准入消息 id（send / dispatch 复用） */
   private readonly runMessageIds = new Map<string, string>();
+  /**
+   * 0.53：启动恢复每进程只扫一次（同一进程里本地 dispatcher 与 `--serve` gateway 共存，
+   * 各自都会调一次 `recoverPendingInputs`；第二次扫到的是已被 hold 的条目，本可自然跳过，
+   * 但这个位让「扫过一次」这件事显式，而不是靠副作用）。
+   */
+  private startupRecoveryDone = false;
   /** body 级串行操作（0.32-D 打断重排）；按 bindingId 排队，避免两次打断交错。 */
   private readonly executionUnitOps = new Map<string, Promise<unknown>>();
   /**
@@ -2087,7 +2102,7 @@ export class AgentServiceImpl implements AgentService {
    */
   private async admitInternal(
     input: AdmitInput,
-    internal?: { startup?: boolean },
+    internal?: { startup?: boolean; recovery?: boolean },
   ): Promise<AdmitOutcome> {
     await this.ready;
     // 0.28：不再在 admit 里顺带 sweep —— 那会回收调用方正要投递的目标（竞态）。
@@ -2203,8 +2218,11 @@ export class AgentServiceImpl implements AgentService {
 
     // 5. 入该 body mailbox，满足条件时 submit
     const senderName = this.senderName(from);
+    // 启动恢复复用条目自己的 id（见 `recoverPendingInputs`）：append 同 id 幂等，
+    // `markConsumed` 天然指向同一条，磁盘上不会因为重投而多出一条。
+    const reuseMessageId = input.reuse_message_id;
     const message: AgentMessage = {
-      id: this.newId(),
+      id: reuseMessageId !== undefined && reuseMessageId !== '' ? reuseMessageId : this.newId(),
       from,
       to: record.id,
       content,
@@ -2273,7 +2291,8 @@ export class AgentServiceImpl implements AgentService {
       submitted = await this.submitMessage(record, entry, message, resume);
     } catch (error) {
       if (inboxed) {
-        if (entry.retired || entry.closing || this.draining) {
+        if (entry.retired || entry.closing || this.draining || internal?.recovery === true) {
+          // 恢复路径的失败也要保留未读（用户没取消那条消息，下次启动再试）。
           // rotate / close 竞争：投递还没提交，body 已收口。保留未读，交给新 body 注入。
           this.inbox?.unhold(record.id, [message.id]);
         } else {
@@ -2741,6 +2760,137 @@ export class AgentServiceImpl implements AgentService {
     // 消息按「未消费」留在库里，重启恢复或用户再次投递都会重新接管它。
     this.runMessageIds.delete(runId);
     this.interruptReasons.delete(runId);
+  }
+
+  /**
+   * 启动恢复（0.53）：把**进程死亡时还没变成 run input** 的 human 输入重新投递一次。
+   *
+   * 判据（唯一）：`status === 'unread'` 且**未被 held** 且 `session_id` 存在且
+   * `source === 'human'` 且该 session 还有一个可重建的 binding。
+   *
+   * 为什么这条判据干净：`held` 只存内存（见 `AgentInboxStore`），进程死亡后全部失效 ⇒
+   * 磁盘上「没被任何 body 接管的输入」恰好就是孤儿集合，不需要任何幂等标记位。
+   *
+   * **这条消息最终会不会被执行？会。** 触发点就是下一次进程启动的这次扫描（不是「立刻」，
+   * 也不是「等用户打开会话」）：扫描按 `ts` 升序把条目逐条交给同一个 `admitInternal`
+   * （带 `reuse_message_id`）→ body mailbox → scheduler → 真正开跑时 `markConsumed`。
+   *
+   * 唯一消费者规则：live 路径 append 后**立刻** hold，这里只碰**未被 held** 的条目 ⇒
+   * 两条路互斥。**禁止**再给「带 `session_id` 的 input 条目」加第二条自动注入路径
+   * （那会让同一条消息被投两次）。
+   *
+   * 失败（预算 / spawn / 会话退役）保持 unread（`internal.recovery` 让它 unhold 而不是
+   * discard），记 `agent.inbox.recover_failed`，下次启动再试；**绝不 discard**（用户没取消）。
+   *
+   * 上限 `maxSessions`（缺省 8）个会话：启动时 spawn 是真实成本（runtime 构建 + 一次 LLM
+   * turn），不能让「崩溃恢复」变成「一开机所有 agent 一起跑」；其余记
+   * `agent.inbox.recover_deferred`，条目仍是 unread，下次启动顺延。
+   */
+  async recoverPendingInputs(options: { maxSessions?: number } = {}): Promise<AgentRecoverResult> {
+    await this.ready;
+    const empty: AgentRecoverResult = { recovered: 0, sessions: 0, deferred: 0, failed: 0 };
+    const store = this.inbox;
+    if (store === undefined) return empty;
+    if (this.startupRecoveryDone) return empty;
+    this.startupRecoveryDone = true;
+    const maxSessions =
+      typeof options.maxSessions === 'number' &&
+      Number.isInteger(options.maxSessions) &&
+      options.maxSessions > 0
+        ? options.maxSessions
+        : RECOVER_MAX_SESSIONS;
+
+    // 1. 候选：枚举 registry 的成员（**不扫 inbox/ 目录**：不给不在册的 agent 起 body），
+    //    每个成员 `inbox.list()` 是纯读盘、不 spawn。`includeHeld: false` 已经满足
+    //    「未 held」这一条；剩下两条（有 session_id / human 源）在这里判。
+    const bySession = new Map<
+      string,
+      { record: MemberRecord; entries: { id: string; ts: number }[] }
+    >();
+    for (const record of this.registry.all()) {
+      if (record.membership === 'left' || record.state === 'closed') continue;
+      const listed = store.list(record.id, { includeHeld: false });
+      for (const entry of listed.messages) {
+        const sessionId = entry.session_id;
+        if (sessionId === undefined) continue;
+        if (entry.source !== HUMAN_PRINCIPAL) continue;
+        const bucket = bySession.get(sessionId) ?? { record, entries: [] };
+        bucket.entries.push({ id: entry.id, ts: entry.ts });
+        bySession.set(sessionId, bucket);
+      }
+    }
+    if (bySession.size === 0) return empty;
+
+    // 2. 会话按「最早一条候选的 ts」升序：先恢复等得最久的；超出上限的顺延到下次启动。
+    const ordered = [...bySession.entries()]
+      .map(([sessionId, bucket]) => ({
+        sessionId,
+        record: bucket.record,
+        entries: bucket.entries,
+        first: Math.min(...bucket.entries.map((entry) => entry.ts)),
+      }))
+      .sort((left, right) => left.first - right.first);
+
+    const result: AgentRecoverResult = { ...empty };
+    for (const [index, session] of ordered.entries()) {
+      if (index >= maxSessions) {
+        result.deferred += 1;
+        this.logger.warn('agent.inbox.recover_deferred', {
+          agent_id: session.record.id,
+          session_id: session.sessionId,
+          pending: session.entries.length,
+        });
+        continue;
+      }
+      // 归属必须还有一个可重建的 binding：退役 / 未知会话不可投递，与 `session_not_runnable`
+      // 同一套语义。条目保持 unread（不删），下次启动若 binding 回来还能恢复。
+      if (!liveBindings(session.record).some((body) => body.bindingId === session.sessionId)) {
+        result.failed += session.entries.length;
+        this.logger.warn('agent.inbox.recover_failed', {
+          agent_id: session.record.id,
+          session_id: session.sessionId,
+          reason: 'session_not_runnable',
+        });
+        continue;
+      }
+      const ids = session.entries
+        .sort((left, right) => left.ts - right.ts)
+        .map((entry) => entry.id);
+      // 正文与附件只在这里读（list 只给 160 字摘要）。
+      for (const body of store.findByIds(session.record.id, ids)) {
+        try {
+          const outcome = await this.admitInternal(
+            {
+              content: body.text,
+              session_id: session.sessionId,
+              // 发送者沿用条目里落的 principal（判据已经只收 human 源）。
+              from: body.source,
+              ...(body.refs !== undefined ? { refs: body.refs } : {}),
+              reuse_message_id: body.id,
+            },
+            { recovery: true },
+          );
+          result.recovered += 1;
+          this.logger.info('agent.inbox.recovered', {
+            agent_id: session.record.id,
+            session_id: session.sessionId,
+            message_id: body.id,
+            run_id: outcome.result.run_id,
+            status: outcome.result.status,
+          });
+        } catch (error) {
+          result.failed += 1;
+          this.logger.warn('agent.inbox.recover_failed', {
+            agent_id: session.record.id,
+            session_id: session.sessionId,
+            message_id: body.id,
+            error: errorText(error),
+          });
+        }
+      }
+      result.sessions += 1;
+    }
+    return result;
   }
 
   /**
