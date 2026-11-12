@@ -24,11 +24,25 @@
  * - an unchanged cached file costs **zero bytes and zero parse** — that is the
  *   steady state for a re-render, pagination, or a second tab.
  *
- * One call is bounded by a byte budget and a file budget (constants below):
- * files are visited newest-mtime first so the budget lands on the runs a user
- * is looking at, and a call that runs out reports `truncated: true` together
- * with how many run files it did cover. Visit order never changes an aggregate
- * (they are summed per `ts`); it only decides which runs fit the window.
+ * The **day window** decides which files matter; the byte/file budgets are only
+ * a safety valve *inside* it. `loadEvents(dir, { cutoff })` considers only the
+ * trace files whose mtime is at or after `cutoff` (a run file's mtime is its
+ * last append, i.e. the end of the run, so every event in it is older than that
+ * instant), and then filters the events themselves by `ts >= cutoff`. Without a
+ * cutoff the whole directory is considered — that is the pre-window behaviour,
+ * where the budget alone decides coverage.
+ *
+ * Inside the window, files are visited newest-mtime first and one call is
+ * bounded by a byte budget and a file budget (constants below). A call that runs
+ * out of budget *within* the window reports `files_truncated: true` together
+ * with how many files it did cover; a file that could only be read partially
+ * (head dropped, oldest lines trimmed) is counted in `partial_files`. Visit
+ * order never changes an aggregate (they are summed per `ts`); it only decides
+ * which runs fit the window.
+ *
+ * The per-file cache is keyed by path and is therefore independent of the day
+ * window: switching 7d -> 30d -> 7d re-reads an unchanged file **zero** times,
+ * and cache entries are only dropped when the file disappears from disk.
  *
  * Corrupt lines and unreadable files are skipped, matching `readTraceEvents` in
  * core.
@@ -71,22 +85,50 @@ export interface RawEvent {
 }
 
 /**
+ * Which slice of the trace a call should look at.
+ *
+ * `cutoff` is the start of the day window (`daysCutoff(now, days)` in
+ * `aggregate.ts`). Files older than it are not opened, and events older than it
+ * are not returned, so "the last N days" is enforced on event time rather than
+ * on the read budget. Omitted means "the whole directory", which keeps the
+ * pre-window behaviour: the budget alone decides coverage, and the numbers can
+ * be partial — `files_truncated` says so.
+ */
+export interface LoadOptions {
+  cutoff?: number;
+}
+
+/**
  * Outcome of one `loadEvents()` call.
  *
- * `truncated` means the events are an *incomplete* view of `<dataDir>/events`:
- * older run files fell outside the read window, or a covered file could only be
- * read partially (its head dropped, its tail not reached, or its oldest events
- * trimmed). Callers must surface it — a total that silently covers 3 of 600
- * runs is a lie otherwise.
+ * Two different kinds of incompleteness used to share one `truncated` bool; they
+ * are now reported apart, because they mean different things to a reader:
+ *
+ * - `files_truncated`: some trace file *inside* the window was not read at all
+ *   (byte budget, file cap, or it vanished mid-call). Runs on disk are missing
+ *   from the totals;
+ * - `partial_files`: this many covered files were only partially read (head
+ *   dropped for an outsized file, or its oldest events trimmed from the cache).
+ *   Those runs are counted, but their numbers can be short.
+ *
+ * `truncated` is kept as `files_truncated || partial_files > 0` for callers that
+ * only want "is this view complete". A file outside the *day* window is **not**
+ * a truncation — the user asked for that range.
  */
 export interface LoadResult {
   /** Parsed usage events, newest file first. */
   events: RawEvent[];
-  /** The events do not cover every trace file on disk. */
+  /** The events do not cover every trace file in the window (compat shorthand). */
   truncated: boolean;
-  /** Trace files present in `<dataDir>/events`. */
+  /** In-window trace files that contributed nothing to this result. */
+  files_truncated: boolean;
+  /** Covered files that were only partially read. */
+  partial_files: number;
+  /** Trace files present in `<dataDir>/events` (regardless of the window). */
   files_total: number;
-  /** Trace files this call covered (a newest-first prefix). */
+  /** Trace files inside the day window (`mtime >= cutoff`); `files_total` without one. */
+  files_in_window: number;
+  /** Trace files this call covered (a newest-first prefix of the window). */
   files_covered: number;
   /** Bytes actually read from disk by this call. */
   bytes_read: number;
@@ -310,6 +352,58 @@ function parseLine(line: string, lineNumber: number): RawEvent | undefined {
 
 const NEWLINE = 0x0a;
 
+/**
+ * How far before `cutoff` a file's mtime may sit and still be opened.
+ *
+ * The file-level window is only an I/O filter; the authoritative filter is the
+ * per-event `ts >= cutoff` pass (`collectWindowEvents`). Some file systems store
+ * mtime with a granularity coarser than the millisecond the trace uses (and
+ * Windows can round down), so a run whose last event is a moment *after* the
+ * cutoff may have an mtime a hair *before* it. Reading such a file costs a few
+ * KiB and its pre-cutoff events are dropped anyway; not reading it would lose
+ * real data.
+ */
+const MTIME_SLACK_MS = 2_000;
+
+/**
+ * Events of `entry` at or after `cutoff`.
+ *
+ * A request that started before the window and was answered inside it is kept
+ * as attribution context: `buildRecords` folds a `llm.request` into the
+ * `llm.response` that answers it, so dropping the request would strip the
+ * in-window row of its model (and its duration). The carried request never
+ * becomes a record of its own — records are minted from the response /
+ * `run.failed` event — so every row in the result is still within the window.
+ *
+ * Carrying is per file: one run writes one trace file, so a request and its
+ * response always live together.
+ */
+function collectWindowEvents(events: CachedEvent[], cutoff: number, into: RawEvent[]): void {
+  const pending = new Map<string, RawEvent>();
+  for (const cached of events) {
+    const event = cached.event;
+    if (event.ts >= cutoff) {
+      if (event.type === 'llm.request') {
+        // A newer in-window request supersedes any pre-window one still
+        // unanswered: carrying the older one would hand the answer the wrong
+        // model and a duration measured from the wrong request.
+        pending.delete(event.run_id);
+      } else {
+        const carried = pending.get(event.run_id);
+        if (carried !== undefined) {
+          pending.delete(event.run_id);
+          into.push(carried);
+        }
+      }
+      into.push(event);
+      continue;
+    }
+    // Before the window: only useful as the context of an in-window answer.
+    if (event.type === 'llm.request') pending.set(event.run_id, event);
+    else pending.delete(event.run_id);
+  }
+}
+
 /** How many trace files one `loadEvents()` stats at a time. */
 const STAT_BATCH = 32;
 
@@ -331,7 +425,16 @@ async function readRange(path: string, start: number, length: number): Promise<B
 }
 
 function emptyResult(filesTotal = 0): LoadResult {
-  return { events: [], truncated: false, files_total: filesTotal, files_covered: 0, bytes_read: 0 };
+  return {
+    events: [],
+    truncated: false,
+    files_truncated: false,
+    partial_files: 0,
+    files_total: filesTotal,
+    files_in_window: 0,
+    files_covered: 0,
+    bytes_read: 0,
+  };
 }
 
 /**
@@ -355,8 +458,15 @@ export class EventStore {
     this.cache.clear();
   }
 
-  /** Load events from the root `<dataDir>/events/*.jsonl` files (read-only). */
-  async loadEvents(dataDir: string): Promise<LoadResult> {
+  /**
+   * Load events from the root `<dataDir>/events/*.jsonl` files (read-only).
+   *
+   * `options.cutoff` narrows the view to one day window; see `LoadOptions`,
+   * `LoadResult` and the module docs for how the window, the budgets and the
+   * per-file cache interact.
+   */
+  async loadEvents(dataDir: string, options: LoadOptions = {}): Promise<LoadResult> {
+    const cutoff = options.cutoff;
     const dir = resolveSingleTenantPaths(dataDir).events_dir;
     const files = await this.list(dir);
     if (files.length === 0) {
@@ -364,14 +474,25 @@ export class EventStore {
       return emptyResult();
     }
 
-    // Newest first: the budget must land on the runs the user is looking at.
-    // A file is billed by `min(size, maxBytesPerFile)` — the part of it any call
+    // Day window. A trace file's mtime is its last append, so it is at or after
+    // every event `ts` inside it: a file older than the cut-off cannot hold an
+    // in-window event (modulo `MTIME_SLACK_MS`). Without a cutoff the whole
+    // directory is the window — the pre-window behaviour.
+    const inWindow =
+      cutoff === undefined
+        ? files
+        : files.filter((file) => file.mtimeMs >= cutoff - MTIME_SLACK_MS);
+
+    // Inside the window, newest first: the budget must land on the runs the user
+    // is looking at. In-window files are normally far smaller than the budget,
+    // so this loop is the exception (a busy last N days) rather than the rule. A
+    // file is billed by `min(size, maxBytesPerFile)` — the part of it any call
     // can ever read — so the window is a function of what is on disk rather than
     // of what happens to be cached. That keeps two calls on an unchanged
     // directory identical instead of each one silently widening the window.
     const window: FileInfo[] = [];
     let billed = 0;
-    for (const file of files) {
+    for (const file of inWindow) {
       if (window.length >= this.limits.maxFilesPerCall) break;
       const cost = Math.min(file.size, this.limits.maxBytesPerFile);
       if (billed + cost > this.limits.maxBytesPerCall) break;
@@ -379,11 +500,13 @@ export class EventStore {
       billed += cost;
     }
 
-    // Anything not in the window leaves the cache: a pruned file is gone, and an
-    // out-of-window file would only sit in memory until LRU drops it.
-    const covered = new Set(window.map((file) => file.path));
+    // Cache retention follows the *directory*, not the window: switching the day
+    // range must not throw away bytes that are still on disk, or 7d -> 30d -> 7d
+    // would re-read the same files twice more. Only a file that vanished (trace
+    // pruning) drops its entry; `evict()` bounds the rest by LRU.
+    const onDisk = new Set(files.map((file) => file.path));
     for (const path of [...this.cache.keys()]) {
-      if (!covered.has(path)) this.cache.delete(path);
+      if (!onDisk.has(path)) this.cache.delete(path);
     }
 
     // Second budget, on bytes actually read: a window can only exceed the
@@ -398,22 +521,31 @@ export class EventStore {
 
     this.evict();
 
-    let truncated = window.length < files.length;
     const events: RawEvent[] = [];
+    let partialFiles = 0;
+    let unreadable = 0;
     for (const file of window) {
       const entry = this.cache.get(file.path);
       if (entry === undefined) {
         // Unreadable this call (vanished, locked): the view is incomplete.
-        truncated = true;
+        unreadable += 1;
         continue;
       }
-      if (entry.partial) truncated = true;
-      for (const cached of entry.events) events.push(cached.event);
+      if (entry.partial) partialFiles += 1;
+      if (cutoff === undefined) {
+        for (const cached of entry.events) events.push(cached.event);
+      } else {
+        collectWindowEvents(entry.events, cutoff, events);
+      }
     }
+    const filesTruncated = window.length < inWindow.length || unreadable > 0;
     return {
       events,
-      truncated,
+      truncated: filesTruncated || partialFiles > 0,
+      files_truncated: filesTruncated,
+      partial_files: partialFiles,
       files_total: files.length,
+      files_in_window: inWindow.length,
       files_covered: window.length,
       bytes_read: bytesRead,
     };

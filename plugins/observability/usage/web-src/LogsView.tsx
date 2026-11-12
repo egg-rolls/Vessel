@@ -48,6 +48,31 @@ function toStatus(value: string): StatusFilter {
   return value === 'ok' || value === 'failed' ? value : '';
 }
 
+/**
+ * Two notices, because the reader reports two kinds of incompleteness and only
+ * one of them hides *runs*: `files_truncated` means some run files inside the
+ * range were never read (read-budget cap), `partial_files` means counted files
+ * whose oldest lines were dropped. Both must be visible — a count that silently
+ * covers 47 of 175 runs in the range must not look like the total.
+ */
+function CoverageNotice({ source, t }: { source: SourceCoverage; t: Translator }) {
+  // A payload from before the split only carried `truncated`; read it as "some
+  // run files were not counted".
+  const legacy = source.files_truncated === undefined && source.partial_files === undefined;
+  const filesTruncated = source.files_truncated ?? (legacy ? source.truncated : false);
+  const partial = source.partial_files ?? 0;
+  if (!filesTruncated && partial === 0) return null;
+  const total = source.files_in_window ?? source.files_total;
+  return (
+    <div className="flex flex-col gap-1 text-sm text-muted">
+      {filesTruncated ? (
+        <p>{t('logs.truncated.files', { files: source.files_read, total })}</p>
+      ) : null}
+      {partial > 0 ? <p>{t('logs.truncated.partial', { files: partial })}</p> : null}
+    </div>
+  );
+}
+
 function logColumns(t: Translator): readonly DataTableColumn<LogItem>[] {
   return [
     {
@@ -206,11 +231,7 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
         <Button onClick={reload}>{t('common.refresh')}</Button>
       </TableToolbar>
 
-      {source?.truncated === true ? (
-        <p className="text-sm text-muted">
-          {t('logs.truncated', { files: source.files_read, total: source.files_total })}
-        </p>
-      ) : null}
+      {source !== null ? <CoverageNotice source={source} t={t} /> : null}
 
       {loading && items.length === 0 ? <LoadingState label={t('common.loading')} /> : null}
       {error !== null && items.length === 0 ? (

@@ -17,16 +17,30 @@ const COST_DIVISOR = 1_000_000;
 /**
  * How much of the trace a result actually covers.
  *
- * The reader is byte-budgeted (see `store.ts`), so a result can be built from
- * only the newest run files. `truncated` is the honest flag: the numbers are a
- * partial view, and the UI must say so instead of presenting them as the whole
- * history. Absent when a caller has no reader behind it (the probe's pure
- * fixtures).
+ * The reader is day-windowed and byte-budgeted (see `store.ts`), so a result can
+ * be built from only the newest run files *inside* the requested range. Two
+ * different incompletenesses are reported apart, because the honest sentence
+ * for each is different:
+ *
+ * - `files_truncated` — some run file in the range was not read at all (read
+ *   budget / file cap): runs are missing from these numbers;
+ * - `partial_files` — that many counted files were only read partially: their
+ *   runs are counted but their oldest requests may be missing.
+ *
+ * `truncated` stays as `files_truncated || partial_files > 0`. Files outside the
+ * selected range are **not** truncation: the user asked for that range. Absent
+ * when a caller has no reader behind it (the probe's pure fixtures).
  */
 export interface SourceCoverage {
   truncated: boolean;
+  /** Run files in the range that contributed nothing. */
+  files_truncated?: boolean;
+  /** Counted run files that were only partially read. */
+  partial_files?: number;
   /** Trace files counted. */
   files_read: number;
+  /** Trace files inside the selected range (`mtime >= cutoff`). */
+  files_in_window?: number;
   /** Trace files present in `<dataDir>/events`. */
   files_total: number;
 }
@@ -308,6 +322,12 @@ export function dayKey(ts: number): string {
 /**
  * Start of the oldest included calendar day. `days: 1` means "today",
  * `days: 3` means today plus the previous two days.
+ *
+ * This is the single definition of "the selected range": `index.ts` hands it to
+ * `EventStore.loadEvents({ cutoff })` so the *reader* only opens files inside
+ * the range, and `filterByDays` applies the same instant to the records it
+ * produced. Both sides must use the same number or a run that ends just after
+ * midnight would be read but dropped, or kept but never read.
  */
 export function daysCutoff(now: number, days: number): number {
   const start = new Date(now);

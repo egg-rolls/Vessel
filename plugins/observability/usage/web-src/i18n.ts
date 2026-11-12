@@ -86,8 +86,10 @@ const EN = {
   'logs.empty.title': 'No request logs yet',
   'logs.empty.filtered': 'No matching requests',
   'logs.empty.description': 'Logs are read from the persisted tenant event files.',
-  'logs.truncated':
-    'Counted {files} of {total} run files, newest first; older runs are outside the read window.',
+  'logs.truncated.files':
+    'Read cap reached: only the newest {files} of {total} run files in this range were counted. Older runs in the same range are missing, so this is a partial count, not the total.',
+  'logs.truncated.partial':
+    'Partial read: {files} run file(s) in this range were only counted partially (their oldest lines were dropped), so those runs may be missing requests.',
 
   'leaderboard.th.model': 'Model',
   'leaderboard.th.requests': 'Requests',
@@ -180,7 +182,10 @@ const ZH: Record<MessageKey, string> = {
   'logs.empty.title': '暂无请求日志',
   'logs.empty.filtered': '没有匹配的请求',
   'logs.empty.description': '日志来自已持久化的租户事件文件。',
-  'logs.truncated': '按最新优先只统计了 {files}/{total} 个运行文件，更早的运行在读取窗口之外。',
+  'logs.truncated.files':
+    '已触及读取上限：该范围内只统计了最新的 {files}/{total} 个运行文件，同一范围内更早的运行没有被计入 —— 这是真实截断后的部分合计，不是总量。',
+  'logs.truncated.partial':
+    '部分读取：该范围内有 {files} 个运行文件只统计了尾部（更早的行被丢弃），这些运行可能缺少请求记录。',
 
   'leaderboard.th.model': '模型',
   'leaderboard.th.requests': '请求数',
