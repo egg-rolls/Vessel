@@ -32,6 +32,7 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
 | `primary_body_id` | 缺省投递目标（primary body 的 body_id） |
 | `current_body` / `body_history` | 兼容视图：旧 primary 指针 / 已退役 primary（≤20）；只读、不回写 |
 | `model` / `system_prompt` | 下一个 Body 生效 |
+| `cwd`（0.51） | 成员默认工作目录：create 时**显式选中** Team 的基础路径快照（锚点 Team 与 `defaultWorkspace` 不写入）；下一个 Body 生效；缺省 = 工具退回 `agent.cwd` / `process.cwd()` |
 
 - `AGENT_SNAPSHOT_VERSION = 4`；v1 / v2 / v3 可读，不回写旧版本。
 - v3 → v4：`current_body` 迁成唯一 live body + primary，旧 `body_history` 迁入 `bodies[]`；
