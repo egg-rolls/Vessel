@@ -608,6 +608,15 @@ export class AgentServiceImpl implements AgentService {
    * 只覆盖两者之间极短的窗口；entry 建立后凭据保存在 `ExecutionUnitEntry.leaseId`。
    */
   private readonly pendingBindingLeases = new Map<string, LeaseGrant>();
+  /**
+   * 成员 → 父**会话** id（agentId → session id）；bridge 补 `parent_session_id` 时用。
+   *
+   * 为什么不放在 `MemberRecord` 上：归属必须在**雇佣那一刻**定下来（用户裁定：
+   * 取发起方的当前 primary body），而记录 / 快照的持久化形状属于 registry / snapshot 层，
+   * 本单不动。所以它只活在本进程，`entryFor` 对缺失（重启后的老记录、克隆出来的
+   * contractor）用「父 agent 的当前 primary body」兑底 —— 与 Web 侧 roster 上溯同一口径。
+   */
+  private readonly parentSessions = new Map<string, string>();
   /** seeded create：来源 transcript 读取 / 新 session 种子写入 */
   private readonly eventLog: SessionEventLogPort | undefined;
   /** 内部 create 失败后清理新 session 事件日志（可缺省） */
@@ -1048,6 +1057,14 @@ export class AgentServiceImpl implements AgentService {
     record.name = resolvedName;
     if (teamId !== undefined) record.teamId = teamId;
     if (parentId !== undefined) record.parentId = parentId;
+    // 父会话归属：这一行就是「hire / create 时取发起方的当前 primary 会话 id」。
+    // 0.28 的不变量（一个 agent 恰一具 live body）让「发起方的当前会话」等于父 agent 的
+    // primary body，所以这里能从 parentId 反解出来，不需要调用方额外传 session。
+    // 绝不写 `parentId` 本身：agent id 不是会话 id（0.19 的那个混用把卡片关在门外）。
+    if (parentId !== undefined) {
+      const parent = this.registry.get(parentId);
+      if (parent !== undefined) this.parentSessions.set(id, currentBindingSession(parent));
+    }
     // 落“有效 model”：未显式指定时用 wiring 默认值，resume 才不会回流到空
     const model = optionalString(input.model) ?? this.defaultModel;
     if (model !== undefined) record.model = model;
@@ -1778,6 +1795,22 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 成员的父**会话** id（bridge 补 `parent_session_id` 用）。
+   *
+   * 两级：雇佣时记下的那次会话（`parentSessions`）优先；缺失（进程重启后的老记录、
+   * 从来源克隆出来的 contractor）用父 agent 的当前 primary body 兑底 —— 后者正是
+   * `PeerStopChange.parent_session_id` 一直在用的口径，也是 Web 侧 roster 上溯的答案。
+   * 两处都给不出就返回 undefined：**宁可不写，也不写 agent id**。
+   */
+  private parentSessionFor(record: MemberRecord): string | undefined {
+    if (record.parentId === undefined) return undefined;
+    const captured = this.parentSessions.get(record.id);
+    if (captured !== undefined) return captured;
+    const parent = this.registry.get(record.parentId);
+    return parent !== undefined ? currentBindingSession(parent) : undefined;
+  }
+
+  /**
    * 从记录构造 ExecutionUnitEntry。
    * binding 租约优先消费 `createBinding` 预获取的 grant；否则此处获取
    * （首次 create 的初始 binding 走的正是后者）。
@@ -1794,9 +1827,11 @@ export class AgentServiceImpl implements AgentService {
         throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
       }
     }
+    const parentSessionId = this.parentSessionFor(record);
     const runtimeMember: MemberExecutionMember = {
       ...toRuntimeMember(record),
       session_id: body.bindingId,
+      ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
       ...(grant !== undefined ? { binding_lease: grant } : {}),
     };
     const entry: ExecutionUnitEntry = {
@@ -5234,6 +5269,9 @@ export class AgentServiceImpl implements AgentService {
     this.registry.setState(member.id, 'closed');
     member.membership = 'left';
     this.registry.setPresence(member.id, 'gone');
+    // 归属只服务「活着的成员发交互请求」；记录本身保留（close 后仍可读），但这张
+    // 进程内缓存跟着人走，避免按 agent id 无限增长。
+    this.parentSessions.delete(member.id);
     this.emit('agent.closed', member, { state: 'closed', presence: 'gone' });
     // close 是确定性的「停了」：不用窗口判定，但必须先掉尚未发出的终态通知（否则
     // 同一成员会先报 stopped 再报 closed）。

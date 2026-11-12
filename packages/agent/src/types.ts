@@ -258,6 +258,18 @@ export interface MemberExecutionMember {
   name?: string;
   parent_id?: string;
   /**
+   * 父**会话** id（0.51 additive）：与 `parent_id`（父 agent id）**不是一回事**。
+   *
+   * 为什么必须分成两个字段：成员 bridge 转发交互请求时要补「父 chat」，而 0.19 起
+   * 那个字段（事件里的 `parent_session_id`）一直直接填 `parent_id`。agent id 与
+   * session id 只在「该 agent 的第一具 body」上偶然相等，`main` 第一次 rotate 之后
+   * 就再没有会话 id 等于它，于是「父 chat」永远匹配不上任何会话页 / 待批归属。
+   *
+   * 取值口径（用户裁定）：雇佣那一刻发起方的当前 primary body。只活在本进程
+   * （记录层 / 快照层的持久化形状不在本单范围）；缺失时读侧按 roster 上溯兑底。
+   */
+  parent_session_id?: string;
+  /**
    * 成员角色（0.28）。执行内核据此决定上下文策略；core 不知道这个字段，
    * 策略参数由本层翻译成裸参数（见 `packages/agent/src/runtime.ts` 的 spawn）。
    */
