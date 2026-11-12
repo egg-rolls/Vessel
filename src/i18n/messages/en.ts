@@ -499,4 +499,26 @@ export const en: Record<MessageKey, string> = {
   'dev.reset.partialFailure': 'Some entries could not be removed from {path}:',
   'dev.reset.notEmpty': '{path} is still not empty after the wipe ({count} entries remain).',
   'dev.reset.removed': 'Wiped {path} (removed {count} top-level entries, {bytes}).',
+
+  // ── prune (0.51) ──
+  'help.cmd.prune': 'data cleanup: trace / terminal runs / stale sessions (dry-run unless --yes)',
+  'flag.olderThan':
+    'only prune items older than this (e.g. 30d / 12h; bare number = days, default 30d)',
+  'prune.head.dryRun': 'dry-run: nothing deleted (re-run with --yes to delete)',
+  'prune.head.applied': 'pruned',
+  'prune.scope': 'data dir: {path} · tenant: {tenant} · threshold: older than {age}',
+  'prune.bucket.trace': '  trace:    {count} files, {bytes}',
+  'prune.bucket.runs': '  runs:     {count} terminal records, {bytes}',
+  'prune.bucket.sessions':
+    '  sessions: {count} sessions, {bytes} (cascade: {runs} runs, {events} session traces)',
+  'prune.skipped.active': '  kept: {count} sessions still active (lock / lease / resumable run)',
+  'prune.skipped.refused':
+    '  refused: {count} sessions blocked by the delete guard (active run or unreadable data)',
+  'prune.totals': 'total: {count} items, {bytes}',
+  'prune.note.sessionsBackendNotReadonly':
+    'note: dry-run skipped sessions (session.backend=sqlite cannot be enumerated read-only); use --yes to prune them.',
+  'prune.note.durableDisabled':
+    'note: durable runs are disabled (durable.enabled=false); there are no run records to prune.',
+  'prune.locked':
+    'Nothing deleted; stop the gateway/node (`vessel gateway stop`), then re-run with --yes.',
 };

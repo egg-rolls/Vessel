@@ -87,6 +87,7 @@ export const CLI_FLAG_VALUE = {
   '--host': '<H>',
   '--log': '<path>',
   '--timeout': '<dur>',
+  '--older-than': '<dur>',
   '--scope': '<config,plugins>',
   '--config': '<path>',
   '--lines': '<n>',
@@ -169,6 +170,7 @@ export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--host': 'flag.host',
   '--log': 'flag.log',
   '--timeout': 'flag.timeout',
+  '--older-than': 'flag.olderThan',
   '--scope': 'flag.scope',
   '--config': 'flag.config',
   '--lines': 'flag.lines',
@@ -326,6 +328,11 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     flagValue: { '--from': '<sqlite|file-v1>', '--to': '<file-v2>' },
   },
   { path: ['trace', 'prune'], summary: 'help.cmd.tracePrune', flags: ['--dry-run', '--json'] },
+  {
+    path: ['prune'],
+    summary: 'help.cmd.prune',
+    flags: ['--older-than', '--dry-run', '--json', '--yes', '--data-dir'],
+  },
 
   // ── 插件 ──
   { path: ['plugin', 'list'], summary: 'help.cmd.pluginList', flags: ['--json'] },

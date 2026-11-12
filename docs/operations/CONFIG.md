@@ -464,6 +464,7 @@ vessel hub join-code [--data-dir <dir>] [--ttl <s>] [--json]
 vessel hub join [<hub-url>] --code <CODE> [--public-url <url>] [--ca <file>] [--json]
 vessel hub node list [--json]
 vessel hub node remove <pairing_id>
+vessel prune [--older-than <dur>] [--dry-run] [--json] [--yes]
 ```
 
 - `vessel team ...` 经 owner 端点（`from = ownerId`、viewer 可见 private）；`team post` 的 `--mention` 先在同 Team roster 内解析为 agent id，日志写成功但任一投递失败时退出 1。
@@ -475,6 +476,15 @@ vessel hub node remove <pairing_id>
 - `vessel --data-dir <path> ...`（全局）覆盖 `data_dir`；同样适用于一次性命令。
 - `vessel doctor --deep`：在原有本地检查之外，只读查询本地 gateway 的 `health.get` / `mcp.list`，报告 attach / runtime / MCP 实际状态；不启动 gateway、不改配置。没有本地 gateway 时记为 info，不算失败。
 - `vessel logs tail`：只读 `<dataDir>/logs/gateway.log`（default）与 `gateway-<instance>.log`（命名实例），默认 50 行，`--lines` 上限 10,000；不跟随、不轮转，日志不存在时退出 1。
+- `vessel prune`：按类别清理 data 目录，三类且互斥 —— `trace`（`events/*.jsonl`，按
+  `trace.retention_days` / `max_runs` / `max_bytes` 的既有留存策略）、`runs`（`status` 已是
+  终态 `completed|failed|cancelled` 且 `updated_at` 早于阈值的 run 记录）、`sessions`
+  （`updated_at` 早于阈值、且没有活着写者 —— 会话写锁 / 会话租约 live、或还有 `running` /
+  `interrupted` 可 resume 的 run —— 的会话，连带删掉它的会话壳、`sessions/<id>/` 事件日志
+  与 run 记录）。**缺省 dry-run**，只报告条数与体积，一条都不删；必须 `--yes` 才真删，且真删
+  先取 `data-dir` 写意图锁（gateway / node 在跑时直接拒绝，不重试、不降级、不做部分删除）。
+  `--older-than` 取 `<n><ms|s|m|h|d>`（裸数字按天），缺省 `30d`（与 trace 缺省 30 天同口径）。
+  `--archived` 这一维本版不做：sessions 目前没有归档标记，定义不出「该删哪些」。
 
 - `config path`：打印用户配置、项目配置与 `data_dir` 的实际路径和是否存在。
 - `config init`：把内嵌模板写到用户配置；默认不覆盖已有文件，`--force` 才覆盖。

@@ -377,6 +377,7 @@ export function renderGlobalHelp(): string {
     ['vessel migrate --from sqlite --to file-v2', t('help.cmd.migrate')],
     ['vessel migrate --from file-v1 --to file-v2 --apply', t('help.cmd.migrateApply')],
     ['vessel trace prune --dry-run', t('help.cmd.tracePrune')],
+    ['vessel prune [--older-than <dur>] [--yes]', t('help.cmd.prune')],
   ];
   const debug: Array<[string, string]> = [
     ['VESSEL_MOCK=1 vessel --run "x"', t('help.cmd.mock')],
