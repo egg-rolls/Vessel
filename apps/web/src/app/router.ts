@@ -7,7 +7,7 @@
 
 export type Route =
   | { domain: 'chat'; sessionId?: string; agent?: string }
-  /** 待批（ask_user 汇集）：`#/pending[?session=<id>]`，session 只用于默认展开。 */
+  /** 待批（ask 汇集）：`#/pending[?session=<id>]`，session 只用于默认展开。 */
   | { domain: 'pending'; sessionId?: string }
   /**
    * 运行列表与运行详情页。

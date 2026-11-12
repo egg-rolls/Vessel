@@ -11,7 +11,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 
 ## 事件系统
 
-事件流是**跨组件的唯一异步沟通总线**：runtime → 观测（TUI / 日志 / 审计 / 回放）、工具 ↔ TUI（权限确认、ask_user 交互暂停）。
+事件流是**跨组件的唯一异步沟通总线**：runtime → 观测（TUI / 日志 / 审计 / 回放）、工具 ↔ TUI（权限确认、ask 交互暂停）。
 
 ### 命名约定
 
@@ -54,7 +54,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | 事件名 | 方向 | 用途 |
 |---|---|---|
 | `tool.permission.request` / `tool.permission.response` | 工具 → TUI → 工具 | 执行期权限确认（0.13 起默认不超时） |
-| `ask.user.requested` / `ask.user.answered` | 工具 → TUI → 工具 | ask_user 交互暂停 |
+| `ask.user.requested` / `ask.user.answered` | 工具 → TUI → 工具 | ask 交互暂停 |
 | `mcp.server.connected` / `mcp.server.failed` / `mcp.server.disconnected` | MCP 插件 → 观测 | server 生命周期（失败隔离） |
 | `mcp.tool.called` / `mcp.tool.failed` | MCP 插件 → 观测 | MCP 工具调用 |
 | `channel.feishu.connected` / `channel.feishu.disconnected` / `channel.feishu.message.received` / `channel.feishu.reply.sent` / `channel.feishu.error` | 飞书插件 → 观测 | 渠道生命周期与消息 |

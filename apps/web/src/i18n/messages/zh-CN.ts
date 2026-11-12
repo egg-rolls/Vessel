@@ -290,10 +290,10 @@ export const messages = {
   'ask.submit': '提交',
   'ask.customPlaceholder.options': '或输入自定义回答',
   'ask.customPlaceholder.open': '输入回答',
-  // 待批（ask_user 汇集页）：来源 / 聚类 / 逐题回复
+  // 待批（ask 汇集页）：来源 / 聚类 / 逐题回复
   'pending.title': '待批',
   'pending.subtitle':
-    '所有待回答的 ask_user 提问汇集在这里；同一个 Agent 的提问聚在一起，每题独立作答，可以只回复其中几题。',
+    '所有待回答的 ask 提问汇集在这里；同一个 Agent 的提问聚在一起，每题独立作答，可以只回复其中几题。',
   'pending.empty': '没有待批的提问',
   'pending.empty.hint': 'Agent 一提问，这里就会出现。',
   'pending.entry': '待批',
@@ -485,7 +485,7 @@ export const messages = {
     '关闭时只保留正文、工具调用、错误与权限/ask 卡片；打开后额外显示运行提示、hook / LLM 上下文等系统消息（会话里的 vessel:* 上下文消息同受此键控制）；verbosity=debug 也会显示这些系统消息。',
   'settings.display.field.errorLevel': '错误层级',
   'settings.display.field.showProcessErrors': '显示 process 错误',
-  'settings.display.field.askUser': '允许 ask_user',
+  'settings.display.field.askUser': '允许 ask',
   'settings.display.field.askUser.hint': '注册类设置：保存后需新连接或重启 gateway 才生效。',
   'settings.display.booleanOn': '启用',
   'settings.display.field.showReasoning': '显示思考流',

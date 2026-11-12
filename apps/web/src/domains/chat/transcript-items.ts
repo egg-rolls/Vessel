@@ -127,7 +127,7 @@ export interface RunInputItem extends ItemMeta {
 }
 
 /**
- * 「待批答复」item：async `ask_user` 的答案（0.52）。
+ * 「待批答复」item：async `ask` 的答案（0.52）。
  *
  * 身份来自 `Message.name === 'ask:answer'`（历史侧）与 `run.started.input_name`
  * （运行态）；解析失败时调用方**不产出这个 kind**，退回普通用户气泡 —— 宁可少一张卡，

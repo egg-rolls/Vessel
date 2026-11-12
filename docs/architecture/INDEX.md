@@ -32,7 +32,7 @@ paths: [docs/architecture/**]
 | [assembly](assembly.md) | `src/` 装配层、CLI/TUI 入口与职责边界 | bootstrap, cli, args, wiring, repl, headless | `src/**` |
 | [gateway](gateway.md) | 帧/端点、静态托管与安全、TLS、远程控制面 | gateway, websocket, sse, tls, origin, csp, remote | `packages/serve/src/**`, `src/rpc/**` |
 | [gateway-rpc](gateway-rpc.md) | 统一 RPC 方法表与 canonical agent 生命周期契约 | rpc, method, canonical, envelope, agents.create, sessions.create, sessions.restart, sessions.activate, plugins.catalog | `packages/serve/src/gateway/methods/**` |
-| [gateway-web](gateway-web.md) | 权限/ask 桥、会话切换与 Web 控制台 | web, apps/web, permission bridge, ask_user, session switch | `apps/web/**`, `packages/serve/src/gateway/**` |
+| [gateway-web](gateway-web.md) | 权限/ask 桥、会话切换与 Web 控制台 | web, apps/web, permission bridge, ask, session switch | `apps/web/**`, `packages/serve/src/gateway/**` |
 | [host](host.md) | 每 node 一个 Scheduler、per-node `Runtime` 无状态工厂、per-session EU、per-body 串行、resume 排队与快照 | host, scheduler, runtime, execution unit, concurrency, serial, resume, snapshot, checkpoint, cancel, queue | `packages/core/src/kernel/**`, `packages/core/src/runtime/**` |
 | [member-team](member-team.md) | AgentService、单 Body、admit/dispatch/rotate、peer/contractor、Team 与预算 | agent, member, team, body, admit, dispatch, rotate, spawn, peer, contractor, freeze, presence, roster, budget | `packages/agent/**`, `src/agent-service-wiring.ts` |
 | [agent-structure](agent-structure.md) | 成员/临时的定义、数据模型、创建路径与转换设计 | agent, member, peer, contractor, temporary, owner, create, hire, promote, demote, from_session_id, seed | `packages/agent/**`, `apps/web/src/domains/agents/**`, `apps/web/src/domains/team/**` |

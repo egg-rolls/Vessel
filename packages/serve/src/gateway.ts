@@ -3236,7 +3236,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
       }
 
-      // ask_user 应答（answers=[] 表示取消）
+      // ask（旧名 ask_user）应答（answers=[] 表示取消）
       const askMatch = path.match(/^\/v1\/ask\/([^/]+)$/);
       if (askMatch && req.method === 'POST') {
         const requestId = decodeURIComponent(askMatch[1] ?? '');

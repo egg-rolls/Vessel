@@ -17,7 +17,7 @@ export function knownOwnerToolNames(
 ): string[] {
   const names = ['bash', 'read', 'edit'];
   if (config.agent?.enabled !== false) names.push('agent');
-  if (options.askUser === true && config.ui?.askUser !== false) names.push('ask_user');
+  if (options.askUser === true && config.ui?.askUser !== false) names.push('ask');
   return names;
 }
 
@@ -44,7 +44,7 @@ export function ownerSelfCard(
     },
     context: { max: config.context?.maxTokens ?? 1_000_000 },
     how_to_ask: askUser
-      ? 'Use the ask_user tool when a decision or missing information blocks progress.'
+      ? 'Use the ask tool whenever a human must speak: confirmation, choice, missing facts, or intent you cannot infer.'
       : 'This entry cannot ask the user; state assumptions or fail with a clear reason.',
   };
 }

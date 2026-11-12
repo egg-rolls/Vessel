@@ -123,9 +123,9 @@ class 与同一个阈值，不要给某一页复制第二份。
 
 不要改成 `@import "tailwindcss"`——那会引入 preflight 并改变既有视觉。
 
-## 待批（ask_user 汇集）
+## 待批（ask 汇集）
 
-`ask_user` 的待答请求有三条展示面，数据同源（`useInteractionStore` 的 pending ask），
+`ask` 的待答请求有三条展示面，数据同源（`useInteractionStore` 的 pending ask），
 互不替代，不要在某一面里重复实现另一面的职责：
 
 1. **会话**：Composer 槽位的 `AskCard`（原同步等待语义不变），会话栏头部「待批」按钮带当前会话计数；
@@ -137,7 +137,7 @@ class 与同一个阈值，不要给某一页复制第二份。
    （见 `domains/pending/usePendingBatch.ts` 与 `docs/architecture/tools.md`）。
    ⚠️ 服务端语义：**一条 ask 一经应答即整体落定**，因此「只答其中几题」= 其余题随该请求一起收口、
    不能事后再单独回答（按钮旁的 `pending.submit.note` 已写明）。
-   应答不新建 run：等待中的 `ask_user` 拿到结果后原 run 继续（见 `domains/pending/usePendingBatch.ts`）。
+   应答不新建 run：等待中的 `ask` 拿到结果后原 run 继续（见 `domains/pending/usePendingBatch.ts`）。
    挂起的 ask（headless / 超时挂起，记录带 `suspended`）没有原地等待者：那一轮 run 已以
    `interrupted` 收口，网关在应答落定后自己发起一次 resume（**同一 run id，不新建 run**）；
    续跑没成立时只记录答案，恢复走 `runs.resume` / `vessel --resume-run`（ADR-082 Errata）。

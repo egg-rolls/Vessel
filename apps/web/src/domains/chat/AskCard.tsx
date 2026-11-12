@@ -28,7 +28,7 @@ function isAnswered(draft: AskDraft): boolean {
 }
 
 /**
- * ask_user 卡片：由 AskPrompt 渲染在 Composer 槽位（替换输入框）。
+ * ask 卡片：由 AskPrompt 渲染在 Composer 槽位（替换输入框）。
  *
  * - 提交中禁用全部按钮，防止双击；
  * - 其他端应答 / run 终态由 ConnectionProvider 移除请求，卡片随之收起；

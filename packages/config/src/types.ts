@@ -599,7 +599,8 @@ export interface ConfigSnapshot {
 export interface PermissionConfig {
   /**
    * 免确认工具名列表（精确匹配）。交互 REPL 的 "always" 也会写回这里，
-   * 重启后继续生效。`ask_user` 由运行时始终免确认。
+   * 重启后继续生效。`ask` 由运行时始终免确认（历史配置里的旧名 `ask_user` 会被
+   * 换算成 `ask`，老规则不失效）。
    */
   autoApprove?: string[];
   /**
@@ -661,7 +662,7 @@ export interface UiConfig {
    */
   expandCards?: boolean;
   /**
-   * 是否注册 `ask_user` 工具（0.15；YAML 键 `ask_user`）。
+   * 是否注册 `ask` 工具（0.15；YAML 键 `ui.ask_user`，键名未随工具改名而变）。
    *
    * 默认由入口决定：交互 REPL（TTY）与 `gateway start` / `--serve` 为 true，
    * `--run` / headless / 管道为 false。显式 `false` 关闭；显式 `true` 也不会在

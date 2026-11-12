@@ -90,7 +90,8 @@ export async function persistAskRequest(options: {
     run_id: options.runId,
     kind: 'ask',
     ...(options.sessionId !== undefined ? { session_id: options.sessionId } : {}),
-    tool: 'ask_user',
+    // 工具名写新名；历史记录里同字段仍可能是 `ask_user`（读侧按记录用，不做等值比较）。
+    tool: 'ask',
     input: options.questions,
     created_at: options.createdAt ?? Date.now(),
     status: 'pending',
@@ -155,7 +156,7 @@ export function formatAnswersForModel(
   options?: { requestCount?: number },
 ): string {
   if (answers.length === 0) {
-    return 'The human declined to answer your pending ask_user request.';
+    return 'The human declined to answer your pending ask request.';
   }
   const lines = answers.map((answer, index) => {
     if (typeof answer === 'string') return `${index + 1}. ${answer}`;
@@ -179,8 +180,8 @@ export function formatAnswersForModel(
   const requestCount = options?.requestCount;
   const intro =
     requestCount !== undefined && requestCount > 1
-      ? `Answers from the human to your ${requestCount} pending ask_user requests:`
-      : 'Answers from the human to your pending ask_user request:';
+      ? `Answers from the human to your ${requestCount} pending ask requests:`
+      : 'Answers from the human to your pending ask request:';
   return [intro, ...lines].join('\n');
 }
 

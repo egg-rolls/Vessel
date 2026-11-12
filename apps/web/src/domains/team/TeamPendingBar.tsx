@@ -1,5 +1,5 @@
 /**
- * Team 待处理条：在 Team 输入框上方集中处理成员会话里的权限 / ask_user。
+ * Team 待处理条：在 Team 输入框上方集中处理成员会话里的权限 / ask。
  *
  * - 归属口径与成员侧栏 attention 一致：只收 `sessionId` 属于当前 Team 成员的请求；
  * - 权限复用 `PermissionCard`（四个动作），ask 复用 `AskCard`；

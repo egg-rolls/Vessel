@@ -23,7 +23,7 @@ function emptyDraft(): AskDraft {
 /**
  * Composer 槽位的三个互斥状态（0.18）：Composer / PermissionPrompt / AskPrompt。
  *
- * 权限与 ask_user 都会阻塞对话，所以 pending 期间用同尺寸提示卡替换输入框；
+ * 权限与 ask 都会阻塞对话，所以 pending 期间用同尺寸提示卡替换输入框；
  * 多个 pending 由 `pendingQueue` 排序，槽位只渲染第一项，其余作为队列摘要。
  * 卡出现（或 ask 切题）时焦点移到卡容器；读屏播报用预先存在的 sr-only region。
  */
@@ -144,7 +144,7 @@ export function PermissionPrompt({
 }
 
 /**
- * ask_user：替换输入框（0.18 S2/S3）。
+ * ask：替换输入框（0.18 S2/S3）。
  *
  * 同一 request 的多题拆成多张单卡：只渲染当前 `questionIndex`，草稿本地累计；
  * “下一题”推进，“上一题”回看；最后一题所有答案非空时才调用一次 `onSubmit(answers)`。

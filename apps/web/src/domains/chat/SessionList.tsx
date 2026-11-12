@@ -69,7 +69,7 @@ export function SessionList({
   draftActive: boolean;
   /** 每个会话的待处理权限/提问数量；其他会话只显示徽标，不渲染卡片。 */
   pendingBySession?: ReadonlyMap<string, number>;
-  /** 当前会话待回答的 ask_user 条数（会话分区「待批」按钮的计数）。 */
+  /** 当前会话待回答的 ask 条数（会话分区「待批」按钮的计数）。 */
   pendingAskCount?: number;
   /** 打开待批汇集页（带当前会话作为默认展开项）。 */
   onOpenPending?: () => void;

@@ -14,7 +14,7 @@ export const en: Record<MessageKey, string> = {
   'help.section.session': 'Sessions',
   'help.section.headless': 'Headless',
   'help.note.askSuspended':
-    '--run exits 3 when the model calls ask_user and suspends the run; answer with ' +
+    '--run exits 3 when the model calls ask and suspends the run; answer with ' +
     '`vessel attention respond <id> --answers <json>` (offline when no gateway), then ' +
     '`vessel --resume-run <runId>`.',
   'help.section.gateway': 'Gateway lifecycle (0.12)',

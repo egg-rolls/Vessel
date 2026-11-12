@@ -1,5 +1,5 @@
 /**
- * 「待批答复」：async `ask_user` 的答案在时间线上的身份与解析（纯函数）。
+ * 「待批答复」：async `ask` 的答案在时间线上的身份与解析（纯函数）。
  *
  * 答案必须是**一条真正的 user 消息**（协议要求：只有 user 消息才能开新一轮 run），
  * 但人不是在那个输入框里打的 —— 他是在待批页回答的。所以数据照旧是 user 消息，
@@ -8,7 +8,7 @@
  *   （`packages/agent/src/runtime.ts` 的 `ASK_ANSWER_INPUT_NAME`，字面量必须一致）；
  *   它不是 `vessel:*` —— 那是模型侧上下文、不算 turn 锚点，这条**就是**该轮的用户输入。
  * - 正文：`src/ask-answer-delivery.ts` 的 `formatAskAnswerContent` 写
- *   `[ask_user answer <requestId>] Answers from the human …` + `N. header（原问题摘要）: answer`
+ *   `[ask answer <requestId>] Answers from the human …` + `N. header（原问题摘要）: answer`
  *   行；同一次「一起提交」的多条答案合并成一条消息时，前缀里是逗号分隔的多个
  *   requestId（0.52 additive）。
  *   解析失败（旧数据 / 别人手改）时**回退普通用户气泡**，绝不吞正文；旧格式
@@ -26,7 +26,21 @@ import type { Message } from '../../gateway/types';
 export const ASK_ANSWER_MESSAGE_NAME = 'ask:answer';
 
 /** 正文前缀（`src/ask-answer-delivery.ts` 的 `ASK_ANSWER_TAG_PREFIX` 同一字面量）。 */
-export const ASK_ANSWER_TAG_PREFIX = '[ask_user answer ';
+export const ASK_ANSWER_TAG_PREFIX = '[ask answer ';
+
+/**
+ * 历史正文前缀：0.52 前工具名是 `ask_user`，那时写出的答案正文以此开头。
+ *
+ * 只读兼容 —— 写侧（`src/ask-answer-delivery.ts`）只产生新前缀；老会话 / 老日志里
+ * 的答案卡必须仍然解得出来，否则会静默退回用户气泡（没有报错，只有观感错）。
+ */
+export const LEGACY_ASK_ANSWER_TAG_PREFIX = '[ask_user answer ';
+
+/** 识别答案正文时可接受的前缀（新名在前）。 */
+const ASK_ANSWER_TAG_PREFIXES: readonly string[] = [
+  ASK_ANSWER_TAG_PREFIX,
+  LEGACY_ASK_ANSWER_TAG_PREFIX,
+];
 
 /** 卡片里的一条答案。 */
 export interface AskAnswerRow {
@@ -91,9 +105,11 @@ export function askAnswerCard(content: string): AskAnswerCard | undefined {
   let requestId: string | undefined;
   let extraRequestIds: number | undefined;
   const header = lines[0] ?? '';
-  if (header.startsWith(ASK_ANSWER_TAG_PREFIX)) {
-    const end = header.indexOf(']', ASK_ANSWER_TAG_PREFIX.length);
-    const raw = end === -1 ? undefined : header.slice(ASK_ANSWER_TAG_PREFIX.length, end);
+  // 双认前缀：新名 `[ask answer ` 与历史名 `[ask_user answer `（旧消息仍要解出 requestId）。
+  const tag = ASK_ANSWER_TAG_PREFIXES.find((prefix) => header.startsWith(prefix));
+  if (tag !== undefined) {
+    const end = header.indexOf(']', tag.length);
+    const raw = end === -1 ? undefined : header.slice(tag.length, end);
     const trimmed = raw?.trim();
     if (trimmed !== undefined && trimmed.length > 0) {
       // 同批合并的答案消息把整批 requestId 逗号分隔写在前缀里（additive）。

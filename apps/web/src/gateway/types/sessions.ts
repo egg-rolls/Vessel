@@ -149,7 +149,7 @@ export interface SessionDetail {
   };
 }
 
-/** ask_user 单个问题 */
+/** ask 单个问题 */
 export interface AskUserQuestion {
   header: string;
   question: string;
@@ -157,14 +157,14 @@ export interface AskUserQuestion {
   multi_select?: boolean;
 }
 
-/** ask_user 单个回答 */
+/** ask 单个回答 */
 export interface AskUserAnswer {
   header: string;
   question: string;
   answer: string;
 }
 
-/** ask_user 请求（ask.user.requested） */
+/** ask 请求（ask.user.requested） */
 export interface AskUserRequest {
   requestId: string;
   questions: AskUserQuestion[];

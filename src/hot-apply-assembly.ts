@@ -8,7 +8,7 @@
  * - tools applier 必须能在**旁路 host** 上算出目标集合（不能一边算一边改真实宿主），
  *   这条路径与 `--tools` 口径一致（同一套插件选择 / 配置合并 / tenant 工具策略）；
  * - permission applier 的规则解析与 bootstrap 的启动语义必须一致
- *   （交互 `ask`、headless `allow`，加上 `ask_user` 与 `agent.close` 的既有约定）。
+ *   （交互 `ask`、headless `allow`，加上 `ask` 工具与 `agent.close` 的既有约定）。
  *
  * @module vessel/hot-apply-assembly
  */
@@ -32,7 +32,7 @@ import { resolveRuntimePermission } from './tenant-runtime-factory';
 /**
  * 权限规则解析：直接复用 bootstrap 的 `resolveRuntimePermission`，不另写一份，
  * 保证「启动时的规则」与「热应用的规则」永远同源（交互 `ask` / headless `allow`，
- * 加上 `ask_user` 与 `agent.close` 的既有约定）。
+ * 加上 `ask` 工具与 `agent.close` 的既有约定）。
  */
 export function permissionConfigFor(
   config: VesselConfig,

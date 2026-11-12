@@ -60,7 +60,7 @@ import type {
  *   3. `packages/core/src/runtime/permission-policy.ts` —— 单次调用放行（allow/ask/deny）
  *   4. `src/permission-store.ts` —— `autoApprove` / `neverAutoApprove`（是否跳过审批）
  *
- * 给成员加工具时 **本文件与 #2 都要过**：只改 #2 会让能力静默消失（`ask_user` 就是这样
+ * 给成员加工具时 **本文件与 #2 都要过**：只改 #2 会让能力静默消失（`ask` 就是这样
  * 丢过一次 —— 注册侧加了、选择侧不认，且不报错）。详见 `docs/lessons/L-011`。
  */
 const DEFAULT_ALLOWED_TOOLS = ['bash', 'read', 'edit', 'agent'] as const;
@@ -76,8 +76,11 @@ const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set(['delegate_task']);
  *
  * 这些工具通过事件流发布请求并等待应答；成员 ExecutionUnit 只有 bridge 才能把请求送到
  * 父事件流。没有 bridge / 父流时注册进来只会让 run 永久等待，因此不放行。
+ *
+ * `ask` 是现行工具名；`ask_user` 是它的历史名（0.52 前）—— 双认，免得旧装配 / 旧插件
+ * 注册的旧名工具绕过闸门、让成员 run 永久等待。
  */
-const PARENT_ANSWERED_TOOL_NAMES: ReadonlySet<string> = new Set(['ask_user']);
+const PARENT_ANSWERED_TOOL_NAMES: ReadonlySet<string> = new Set(['ask', 'ask_user']);
 
 /** 缺省终止策略：不设累计上限（交互 run 靠自动压缩、模型自然停止与用户中断收口） */
 const DEFAULT_TERMINATION: TerminationPolicy = {};
@@ -465,7 +468,8 @@ function bridgeRequestData(
       member.parent_id !== undefined ? [member.parent_id, member.id] : [member.id];
   }
   if (typeof data.tool !== 'string' && event.type === 'ask.user.requested') {
-    data.tool = 'ask_user';
+    // 工具名兜底（生产侧）：新名是 `ask`；历史事件里这个字段仍是 `ask_user`。
+    data.tool = 'ask';
   }
   if (data.input === undefined && event.type === 'ask.user.requested') {
     data.input = data.questions;
@@ -603,7 +607,7 @@ function formatMessageSource(
 }
 
 /**
- * async `ask_user` 答案投递的消息名（`Message.name`，随 `user.message` 持久化）。
+ * async `ask` 答案投递的消息名（`Message.name`，随 `user.message` 持久化）。
  *
  * 它不是 `vessel:*`（那是**模型侧上下文**、不算 turn 锚点）：这条消息就是该轮真实的
  * 用户输入，只是人来路不同 —— Web 据此渲染「待批答复」卡而不是用户气泡。
@@ -1616,7 +1620,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
   /**
    * 按模式与白名单从父宿主挑工具。
    *
-   * `ask_user` 这类需要人类应答的工具额外要求 bridge：成员只会把请求发到自己的
+   * `ask` 这类需要人类应答的工具额外要求 bridge：成员只会把请求发到自己的
    * 事件流，没有 bridge 就没人转发、也没人应答，注册进来只会让 run 永久等待。
    * 因此“父宿主注册了它”只是必要条件，真正的判据是本函数的结果（Self Card
    * 的 `how to ask` 也从这里推导，不读入口层的 headless / ui 标志）。
@@ -1676,16 +1680,19 @@ export class MemberExecutionHost implements MemberExecutionPort {
   /**
    * `how to ask for help` 文案。
    *
-   * 判据只有一个：`ask_user` 是否真的在成员工具面里（即父宿主注册了 + bridge 可用）。
+   * 判据只有一个：`ask` 是否真的在成员工具面里（即父宿主注册了 + bridge 可用）。
    * 没有它时给异步路径：`agent` 工具的 `action=send` 发到本机人类。
    * 异步路径要同时成立才写：成员能调 `agent`（deny 模式只有 read 工具）；成员有
    * Team（地址路要求 caller.team_id 来补 team 段）。否则只是把阻塞写进最终文本。
    */
   private askHelpText(toolNames: readonly string[], teamId: string | undefined): string {
-    if (toolNames.includes('ask_user')) return 'Use the ask_user tool to request human input.';
+    // 双认工具名：新名 `ask`，旧名 `ask_user`（0.52 前注册的成员工具面仍可能带旧名）。
+    if (toolNames.includes('ask') || toolNames.includes('ask_user')) {
+      return 'Use the ask tool to request human input.';
+    }
     if (toolNames.includes('agent') && typeof teamId === 'string' && teamId.length > 0) {
       return (
-        'No human is watching this run, so ask_user is unavailable. To reach a human, ' +
+        'No human is watching this run, so ask is unavailable. To reach a human, ' +
         'call the agent tool with action=send and to="human", then end your turn ' +
         'with the blocker in your final text.'
       );

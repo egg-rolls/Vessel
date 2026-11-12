@@ -219,7 +219,7 @@ export interface AgentMessage {
   /**
    * 0.52：这条投递的来路（内存内元数据，不落 snapshot、不进 wire）。
    *
-   * `ask_answer` = 人类在待批页回答了本成员发的 async `ask_user`；执行内核据此把
+   * `ask_answer` = 人类在待批页回答了本成员发的 async `ask`；执行内核据此把
    * core `Message.name` 写成 `ask:answer`，Web 渲染成「待批答复」卡而不是用户气泡。
    */
   origin?: 'ask_answer';
@@ -709,7 +709,7 @@ export interface AdmitInput {
   /**
    * 0.52（仅内部装配，不暴露为 RPC）：这条投递的来路，决定它在会话里的身份。
    *
-   * `ask_answer` = 人类在待批页回答的 async `ask_user`：答案必须能投进**提问的成员**
+   * `ask_answer` = 人类在待批页回答的 async `ask`：答案必须能投进**提问的成员**
    * （成员自己发的请求 + 人给的答案），因此跳过 `canView` 的可见性闸门（那里判定的是
    * 「谁可以驱动这个成员」，不是「它自己提的问题能不能被回答」）；并让执行内核把它
    * 标成 `ask:answer`（Web 渲染成「待批答复」卡，而不是用户气泡）。

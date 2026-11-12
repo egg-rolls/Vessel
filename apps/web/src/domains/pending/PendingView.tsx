@@ -1,5 +1,5 @@
 /**
- * 「待批」汇集页：所有待回答的 ask_user 提问按 agent / 会话聚簇。
+ * 「待批」汇集页：所有待回答的 ask 提问按 agent / 会话聚簇。
  *
  * 数据源：useConnection().asks（interactionStore 的 pending ask，实时事件 +
  * 既有 interactions.list(status=pending) 补回）。不新开 store、不新增 RPC。

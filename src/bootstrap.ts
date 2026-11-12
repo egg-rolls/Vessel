@@ -121,7 +121,11 @@ import {
   type LocalHumanTarget,
   type LocalMemberTarget,
 } from './team-human-delivery';
-import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
+import {
+  buildTenantRuntime,
+  normalizeLegacyAskToolName,
+  type TenantRuntimeBundle,
+} from './tenant-runtime-factory';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
@@ -168,7 +172,7 @@ export interface BootstrapOptions {
    */
   interactive?: boolean;
   /**
-   * 是否注册 ask_user（默认 = interactive）。
+   * 是否注册 ask 工具（默认 = interactive）。
    * 0.33：headless 也注册（请求落盘后中断 run，可 resume），不再靠「不注册」避免等待。
    * 最终还会被 `ui.askUser: false` 关闭；CLI 在 gateway/serve 模式下显式传 true。
    */
@@ -1080,11 +1084,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const agentPlan = resolveAgentWiring(config, { headless });
   const agentServiceEnabled = agentPlan.agentEnabled;
   /**
-   * 父宿主是否注册 ask_user（0.27 / 0.33）。
+   * 父宿主是否注册 ask 工具（0.27 / 0.33）。
    *
    * 0.33：headless 也注册（请求落盘后挂起，人类稍后回答并 resume），
    * 所以「注册」不再等于「进程内有应答者」。成员 ExecutionUnit 仍只允许有**交互**
-   * 应答者的入口拿 ask_user：headless 成员没有 bridge 应答者，放行只会让
+   * 应答者的入口拿 ask：headless 成员没有 bridge 应答者，放行只会让
    * 成员 run 永久等待。
    */
   const askUserAvailable = registerAskUser && config.ui?.askUser !== false;
@@ -1169,10 +1173,19 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   };
   const permission = {
     default: headless ? ('allow' as const) : ('ask' as const),
-    // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
-    autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
+    // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask。
+    // 老配置里可能仍写着旧工具名（换算见 `normalizeLegacyAskToolName`），不换算
+    // 就等于让用户当年选的「always」静默失效。
+    autoApprove: [
+      ...new Set([
+        ...(config.permission?.autoApprove ?? []).map(normalizeLegacyAskToolName),
+        'ask',
+      ]),
+    ],
     // 0.27：配置级保险；用户显式配置时以其值为准（与 autoApprove 语义一致，不合并默认）。
-    neverAutoApprove: config.permission?.neverAutoApprove ?? ['agent.close'],
+    neverAutoApprove: (config.permission?.neverAutoApprove ?? ['agent.close']).map(
+      normalizeLegacyAskToolName,
+    ),
   };
 
   // ── AgentService + REPL owner 端点（0.17 Phase A）──
@@ -1261,9 +1274,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       termination: memberTermination,
       ...(agentPlan.readOnlyTools !== undefined ? { readOnlyTools: agentPlan.readOnlyTools } : {}),
       // 0.27：成员 ExecutionUnit 只能拿到父宿主真注册了的工具。只有**交互**入口才放行
-      // ask_user；headless 的父宿主会挂起（没有进程内应答者），成员放行只会
+      // ask；headless 的父宿主会挂起（没有进程内应答者），成员放行只会
       // 让成员 run 等一个不会到来的 bridge 应答。
-      ...(interactiveHumanAvailable ? { extraTools: ['ask_user'] } : {}),
+      ...(interactiveHumanAvailable ? { extraTools: ['ask'] } : {}),
       ...(config.context?.maxTokens !== undefined
         ? { contextMaxTokens: config.context.maxTokens }
         : {}),
@@ -1274,7 +1287,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       permissionMode: memberPermissionMode,
       // 0.31：按**入口是否真有进程内应答者**判定，而不是 `!headless`：feishu 非 TTY
       // （headless=false）既没有 TUI 也没有 gateway 权限卡片，用 !headless 会让
-      // rotate 请求永远等不到人。0.33 起 headless 注册 ask_user 但不等于有应答者，
+      // rotate 请求永远等不到人。0.33 起 headless 注册 ask 但不等于有应答者，
       // 所以这里用 interactiveHumanAvailable（排除 headless）。
       humanApproval: interactiveHumanAvailable,
       // 成员 bridge 请求 / 应答与 TUI 订阅的是同一条父事件流。

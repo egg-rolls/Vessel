@@ -67,7 +67,7 @@ export interface TeamChatProps {
   responding?: ReadonlySet<string>;
   /** 直接应答成员会话里的权限请求（不切换会话）。 */
   onDecidePermission?: TeamChatDecidePermission;
-  /** 直接应答成员会话里的 ask_user。 */
+  /** 直接应答成员会话里的 ask。 */
   onRespondAsk?: TeamChatRespondAsk;
   onOpenMember: (agentId: string) => void;
   onOpenSession: (sessionId: string) => void;

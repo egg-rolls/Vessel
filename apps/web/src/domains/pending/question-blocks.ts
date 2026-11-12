@@ -1,7 +1,7 @@
 /**
  * 问题正文的切块（纯函数）。
  *
- * ask_user 的 `question` 就是一段文本，用户可以写 markdown 图片语法或裸链接。
+ * ask 的 `question` 就是一段文本，用户可以写 markdown 图片语法或裸链接。
  * Gateway 的 CSP 是 `img-src 'self' data:`，所以只有同源路径与 `data:image/...`
  * 才能真的显示成图片；其余一律降级成链接，不静默丢内容、也不谎称渲染成功。
  */

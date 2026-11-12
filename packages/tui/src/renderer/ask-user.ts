@@ -1,11 +1,16 @@
 /**
- * ask-user 交互能力 — Agent 向用户提问
+ * ask 交互能力 — Agent 向用户提问
  * @module @vessel-agent/tui
  *
- * ADR-029：暂停型工具事件流化——ask-user 回归普通工具对象，
+ * ADR-029：暂停型工具事件流化——ask 回归普通工具对象，
  * handler 发 `ask.user.requested` 事件 → 事件流等 `ask.user.answered` →
  * 返回回答。TUI 订阅请求事件展示弹窗，用户作答后发布回答事件。
  * 不同组件交流全走事件流，无直接回调（AskUserBridge 已退役）。
+ *
+ * **工具名**：0.52 起工具名是 `ask`（原名 `ask_user`）。事件名 `ask.user.*`、
+ * 消息名 `ask:answer`、配置键 `ui.askUser` 与工具名无关，字面量未变；
+ * 历史事件 / 历史记录里的 `data.tool` 仍是旧名，所以**读侧双认两个名字**
+ * （见 `docs/lessons/L-011`）。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -167,7 +172,7 @@ function deliverAsync(
   const requestId = publishAskRequest(events, runId, questions, sessionId, 'async');
   const count = questions.length === 1 ? '1 question' : `${questions.length} questions`;
   return [
-    `ask_user accepted (async): ${count} delivered to the human for approval (request ${requestId}).`,
+    `ask accepted (async): ${count} delivered to the human for approval (request ${requestId}).`,
     'No answer yet — do not wait for one. The answer will arrive as a new user message and start a new run.',
   ].join('\n');
 }
@@ -197,13 +202,13 @@ async function promptFromEvents(
     })) as AskUserAnsweredData | undefined;
     const answers = data?.answers ?? [];
     if (answers.length === 0) {
-      return 'Error: ask_user was cancelled or received no answers.';
+      return 'Error: ask was cancelled or received no answers.';
     }
     return formatAnswers(answers);
   } catch (error) {
     // run 被取消 / abort：明确说明，不要伪装成超时（ADR-079 语义）。
     if (wait.signal?.aborted === true || (error instanceof Error && error.name === 'AbortError')) {
-      return 'Error: ask_user was cancelled.';
+      return 'Error: ask was cancelled.';
     }
     return `Error: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -217,18 +222,25 @@ export interface CreateAskUserToolOptions {
 }
 
 /**
- * 创建 ask_user 工具定义（普通工具对象，ADR-029）
+ * 创建 ask 工具定义（普通工具对象，ADR-029）
  *
  * handler 通过事件流交互：发布 `ask.user.requested` → 等 `ask.user.answered` →
  * 返回回答。默认一直等待，由应答 / abort（run 取消）/ run 终态收口。
  */
 export function createAskUserTool(opts: CreateAskUserToolOptions = {}): ToolDefinition {
   return {
-    name: 'ask_user',
-    description: `Ask the user questions. Two delivery modes (default: sync).
-- mode "sync" (default): blocks this run until the human answers; the answers come back as this tool's result.
-- mode "async": hands the questions to the human for approval and returns immediately. The answer is NOT in the result: it arrives later as a new user message and starts a new run, so end your turn after calling it.
-Use for clarification, confirmation, or information only the user has. Not for things you can resolve yourself.`,
+    // 0.52：工具名 `ask`（原名 ask_user）。注册侧 / 生产侧只用新名。
+    name: 'ask',
+    description: `Ask the human when only they can decide or supply the missing fact: confirmation,
+a choice between options, missing information, authorization, or intent you cannot
+safely infer. Anything that needs a human to say one line belongs here.
+
+Ask everything you need in one call — put multiple questions in the same request
+instead of a multi-turn back-and-forth. Prefer asking over guessing: one question is
+cheaper than redoing the work.
+
+If nothing blocks you, keep working and let the human answer when they can; if the
+answer decides the next step, wait for it.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -236,7 +248,7 @@ Use for clarification, confirmation, or information only the user has. Not for t
           type: 'string',
           enum: ['sync', 'async'],
           description:
-            'sync (default) = wait for the answer here. async = return immediately; the answer arrives later as a new user message and starts a new run.',
+            'sync (default) = wait for the answer here. async = return immediately; the answer arrives later as a new user message and starts a new run, so end your turn after calling it.',
           default: 'sync',
         },
         questions: {
@@ -248,7 +260,8 @@ Use for clarification, confirmation, or information only the user has. Not for t
             properties: {
               header: {
                 type: 'string',
-                description: 'Short label (≤ 12 chars) shown as a tab.',
+                description:
+                  'Short tab label, at most 12 characters (longer labels are truncated; a default is filled in when omitted).',
                 maxLength: 12,
               },
               question: {
@@ -261,11 +274,12 @@ Use for clarification, confirmation, or information only the user has. Not for t
                 maxItems: 4,
                 items: { type: 'string' },
                 description:
-                  'Multiple-choice options (2-4). Omit for open-ended input. An "input your own answer" option is always appended automatically.',
+                  'Give 2-4 options to ask a multiple-choice question; omit them to ask for free-form text. An "input your own answer" option is always appended automatically.',
               },
               multi_select: {
                 type: 'boolean',
-                description: 'Allow selecting multiple options. Default: false.',
+                description:
+                  'Allow selecting multiple options. Default: false. Only applies when options are given.',
                 default: false,
               },
             },

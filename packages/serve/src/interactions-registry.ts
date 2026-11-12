@@ -441,7 +441,9 @@ export function createInteractionsRegistry(
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           // 0.52：投递语义跟着请求走；缺省不写该键 = sync（旧事件逐字节不变）。
           ...(data.mode === 'async' ? { mode: 'async' as const } : {}),
-          tool: typeof data.tool === 'string' && data.tool.length > 0 ? data.tool : 'ask_user',
+          // 读侧兜底：事件没带 tool 时按现行工具名写；历史事件里该字段是 `ask_user`，
+          // 原样保留（记录只被读、不被比较）。
+          tool: typeof data.tool === 'string' && data.tool.length > 0 ? data.tool : 'ask',
           input: data.questions,
           created_at: eventTs(event),
           status: 'pending',
@@ -627,7 +629,7 @@ export function createInteractionsRegistry(
     if (record.status === 'pending') {
       const now = Date.now();
       const latency = Math.max(0, now - record.created_at);
-      // 直接投递到单运行时流（ask_user 工具在那里等待）。
+      // 直接投递到单运行时流（ask 工具在那里等待）。
       //
       // 注意（0.52）：这次 publish 是**同步**扇出的 —— 原始订阅者
       // （hub → gateway → 本注册表）会立刻走 `recordStreamResponse` →

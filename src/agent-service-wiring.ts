@@ -103,7 +103,7 @@ export interface AgentServiceWiringOptions {
    * `MemberExecutionHostOptions.extraTools`。
    *
    * 唯一用途是让「父宿主真的注册了某工具」这件事传到成员 ExecutionUnit（当前只有
-   * `ask_user`：serve / 交互 REPL 有应答者，headless 没有）。可选 = 不传则维持旧工具面。
+   * `ask`：serve / 交互 REPL 有应答者，headless 没有）。可选 = 不传则维持旧工具面。
    */
   extraTools?: readonly string[];
   /** tenant SessionStore；成员 ExecutionUnit 用同一份存储按 session_id 续接历史 */
@@ -237,7 +237,7 @@ export function buildMemberExecutionOptions(
     forceBridgeForTeams: true,
     ...(teamPolicy !== undefined ? { permissionPolicy: teamPolicy } : {}),
     ...(options.readOnlyTools !== undefined ? { readOnlyTools: options.readOnlyTools } : {}),
-    // 父宿主已注册的工具（当前只有 ask_user）白名单放行；不传时成员工具面不变。
+    // 父宿主已注册的工具（当前只有 ask）白名单放行；不传时成员工具面不变。
     ...(options.extraTools !== undefined ? { extraTools: options.extraTools } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     // A3c：bridge 权限事件与父入口同源；未提供时成员保持无父流。

@@ -184,7 +184,7 @@ vessel node stop
 
 - **权限等待默认不超时**：远程客户端不点击时权限请求会一直保留，直到应答、取消或 run abort；不要用固定超时清理 pending。`expired` 只在请求确已过期时返回，`run_ended` 表示 run 已结束或记录已 `orphaned`。
 - **持久化**：gateway 在 `<dataDir>/interactions-<id>.json` 记录 `pending` / `answered` / `orphaned`（`0600` 原子写，`<id>` 为持久化单 id）。命名实例写 `<dataDir>/instances/<instance>/interactions-<id>.json`。重启后旧 `pending` 转 `orphaned`，迟到应答返回 `run_ended`；重复应答幂等，不同决定返回 `conflict`。多端连接同一 gateway 时共享这份状态。
-- **独立前端**：权限卡片内联在所属 run，跨 session 的待处理请求在顶部条提示；其他端应答 / 过期 / run 终态会自动收起卡片。`ask_user` 同样内联在所属 run，默认无限等待，由应答 / abort / run 终态收口。
+- **独立前端**：权限卡片内联在所属 run，跨 session 的待处理请求在顶部条提示；其他端应答 / 过期 / run 终态会自动收起卡片。`ask` 同样内联在所属 run，默认无限等待，由应答 / abort / run 终态收口。
 - **TUI 状态栏**：`Ctrl+T` / `Ctrl+G` 切换上 / 下栏，`Ctrl+R` 打开 `/resume`；显隐写回用户配置 `ui.statusBars`（YAML `status_bars`）。`VESSEL_STATUS_BARS` 只作启动初值，不随远程连接或手动切换改变。终端 `<40` 列不渲染下栏，`<18` 行默认隐藏。
 
 ### 3.5.1 人类控制 token 词表（0.22）

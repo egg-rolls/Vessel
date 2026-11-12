@@ -793,7 +793,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
   /**
    * Ctrl+C 的统一语义：
    * - idle → 退出；
-   * - 运行中 → 先解除可能阻塞 run 的交互（权限 waitFor / ask_user waitFor），
+   * - 运行中 → 先解除可能阻塞 run 的交互（权限 waitFor / ask waitFor），
    *   再 abort；否则权限 waitFor 会让 run 一直挂起。
    */
   const cancelOrExit = useCallback(() => {
@@ -1173,12 +1173,14 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
   // 子 agent 活动与下栏 sub N 共用同一份 agent-registry 派生（0.17 agent.* 事件）。
   const agentNodes = useAgentRegistry(ctx.events);
   const runtimeCounters = useRuntimeCounters(ctx.events, agentNodes, state.currentSessionId);
-  // auto 数 = 启动配置的 auto_approve + 本次会话 "always"；ask_user 由运行时永远免确认，不计入。
+  // auto 数 = 启动配置的 auto_approve + 本次会话 "always"；ask 由运行时永远免确认，不计入。
   const autoApproveCount = useMemo(() => {
     const names = new Set<string>([
       ...(ctx.config.permission?.autoApprove ?? []),
       ...sessionAlways,
     ]);
+    // 双认（两个名字都不是用户显式选择的结果）：`ask` 是现行名，`ask_user` 是旧名。
+    names.delete('ask');
     names.delete('ask_user');
     return names.size;
   }, [ctx.config.permission, sessionAlways]);

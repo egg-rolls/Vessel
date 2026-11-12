@@ -1,5 +1,5 @@
 /**
- * async `ask_user` 的答案投放（0.52 切片）。
+ * async `ask` 的答案投放（0.52 切片）。
  *
  * 语义（用户裁决）：async 提问**投放即成功**，本次 run 不等待；答案到达后作为一条
  * **user 角色**消息进入提问成员的 inbox（`delivery: 'input'` —— resume / 起新 run 都
@@ -29,8 +29,11 @@ import { formatAnswersForModel } from './ask-channel';
  * 机器可读的一半是 requestId（Web 用它把卡片和待批记录对上），人类可读的一半就是
  * `formatAnswersForModel` 那段原文 —— 同一个 formatter，注入 resume 与「投放新 run」
  * 两条路不产生第二套答案文本格式。
+ *
+ * 0.52 起工具名是 `ask`（原名 `ask_user`）：写侧只用新前缀，但**历史消息**的正文
+ * 仍以旧前缀开头，所以读侧（`apps/web/src/domains/chat/ask-answer.ts`）双认两个。
  */
-export const ASK_ANSWER_TAG_PREFIX = '[ask_user answer ';
+export const ASK_ANSWER_TAG_PREFIX = '[ask answer ';
 
 /** 答案正文（模型看到的 user 消息原文）。 */
 export function formatAskAnswerContent(answers: unknown[], requestId: string): string {
@@ -41,7 +44,7 @@ export function formatAskAnswerContent(answers: unknown[], requestId: string): s
  * 同批答案的正文：一条消息里带整批（同一次提交）的答案，requestId 逗号分隔。
  *
  * 每题一行、行内自带原问题摘要（见 `formatAnswersForModel`），所以模型一次读到的
- * N 条答案仍能各自对上是哪个 `ask_user` 请求。只有一道题时退回单条格式（字节不变）。
+ * N 条答案仍能各自对上是哪个 `ask` 请求。只有一道题时退回单条格式（字节不变）。
  */
 export function formatAskAnswerBatchContent(
   items: ReadonlyArray<{ requestId: string; answers: unknown[] }>,

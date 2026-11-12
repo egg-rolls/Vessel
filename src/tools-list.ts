@@ -3,7 +3,7 @@
  *
  * 输出口径固定为 headless 口径：默认 4 个（bash / edit / read / agent）；
  * 显式 `agent.enabled: false` 时只列出 3 个能力工具。
- * `ask_user` 在交互 REPL（TTY）、gateway / serve 与 headless（落盘后挂起）都注册
+ * `ask` 在交互 REPL（TTY）、gateway / serve 与 headless（落盘后挂起）都注册
  * （见 cli.ts / bootstrap.ts），但一次性命令里不展开它的 schema，由调用方在末尾注明。
  */
 

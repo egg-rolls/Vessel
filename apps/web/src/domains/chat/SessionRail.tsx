@@ -47,7 +47,7 @@ export function SessionRail({
   selectedId: string | null;
   draftActive: boolean;
   pendingBySession: ReadonlyMap<string, number>;
-  /** 当前会话待回答的 ask_user 条数；0 时不渲染「待批」入口。 */
+  /** 当前会话待回答的 ask 条数；0 时不渲染「待批」入口。 */
   pendingAskCount?: number;
   onOpenPending?: () => void;
   agentAddresses: ReadonlyMap<string, string>;

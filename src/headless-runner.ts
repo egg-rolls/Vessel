@@ -113,7 +113,7 @@ export function installHeadlessAskSuspend(
       // run 继续跑完；也没有 run 可续跑（答案靠 gateway 起新 run）。
       if (request.mode === 'async') {
         console.error(
-          `[vessel] ask_user (async) request ${request.requestId} is waiting for a human; ` +
+          `[vessel] ask (async) request ${request.requestId} is waiting for a human; ` +
             'the run continues. Answer it from a running gateway (`vessel attention`) to deliver it.',
         );
         return;
@@ -150,7 +150,7 @@ export function installHeadlessAskSuspend(
 
 /** ask 挂起后的 stderr 指引（stdout 留结果）。 */
 export function printSuspendedAsk(ask: SuspendedAsk, dir: string): void {
-  console.error(`[vessel] ask_user request ${ask.requestId} is waiting for a human.`);
+  console.error(`[vessel] ask request ${ask.requestId} is waiting for a human.`);
   console.error(`[vessel] run ${ask.runId} is suspended (checkpoint: interrupted).`);
   console.error(
     `[vessel] answer: vessel attention respond ${ask.requestId} ` +
@@ -233,7 +233,7 @@ export async function runHeadless(
       if (suspendedAsk !== undefined && options.askChannel !== undefined) {
         if (!askControl.persisted()) {
           console.error(
-            `[vessel] ask_user request ${suspendedAsk.requestId} could not be persisted; ` +
+            `[vessel] ask request ${suspendedAsk.requestId} could not be persisted; ` +
               'the run is interrupted but there is no answerable record.',
           );
           return 1;

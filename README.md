@@ -116,11 +116,11 @@ bun run dev:web                     # 开发：http://127.0.0.1:5173
 VESSEL_MOCK=1 vessel --serve 8642   # legacy 单监听（保留至 G5）
 ```
 
-打开控制台后把平台 token 粘到 URL fragment（`#token=...`），它只进 `sessionStorage`；本地 node 的生效凭据由 `platform.nodes.credentials` 自动交付（回环匿名时为空）。支持运行提交 / 取消、事件时间线、会话列表、工具列表、run 内联权限卡片、`ask_user` 表单、Team 列表 / 群聊 / 成员侧栏 / `@` 补全 / Body 历史。
+打开控制台后把平台 token 粘到 URL fragment（`#token=...`），它只进 `sessionStorage`；本地 node 的生效凭据由 `platform.nodes.credentials` 自动交付（回环匿名时为空）。支持运行提交 / 取消、事件时间线、会话列表、工具列表、run 内联权限卡片、`ask` 表单、Team 列表 / 群聊 / 成员侧栏 / `@` 补全 / Body 历史。
 
 ### Headless 提问（退出码 3）
 
-`vessel --run` 中模型调用 `ask_user` 时，进程不等待人类：请求写入
+`vessel --run` 中模型调用 `ask` 时，进程不等待人类：请求写入
 `<data_dir>/interactions-<id>.json`（`suspended: true`；`<id>` 是内部持久单 id，不是 wire 字段），run 的 checkpoint 落 `interrupted`，
 退出码为 **3**。
 
@@ -271,7 +271,7 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 
 ### headless 命令为什么返回 exit 3？
 
-模型调用了 `ask_user`，run 已挂起等待人类回答。按 [Headless 提问](#headless-提问退出码-3) 的步骤回答后 `--resume-run`。
+模型调用了 `ask`，run 已挂起等待人类回答。按 [Headless 提问](#headless-提问退出码-3) 的步骤回答后 `--resume-run`。
 
 ### Web 页面还是旧界面？
 

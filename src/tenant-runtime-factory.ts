@@ -107,7 +107,7 @@ export interface BuildTenantRuntimeOptions {
   mockScenario?: MockScenarioName;
   headless?: boolean;
   /**
-   * ask_user：交互 REPL、serve/gateway 与 headless（落盘后挂起）都注册。
+   * ask：交互 REPL、serve/gateway 与 headless（落盘后挂起）都注册。
    * `ui.askUser: false` 可关闭（0.15）。
    */
   registerAskUser?: boolean;
@@ -445,6 +445,17 @@ function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer | 
   };
 }
 
+/**
+ * 老配置兼容：0.52 前工具名是 `ask_user`，用户 YAML 的 `auto_approve` / `never_auto_approve`
+ * 里可能仍写着旧名 —— 统一换算成现行名 `ask`。
+ *
+ * 不换算的后果正是 L-011 那类事故的另一面：注册侧改了、选择侧不认，而且没有报错，
+ * 用户当年选的「always / never」静默失效。
+ */
+export function normalizeLegacyAskToolName(name: string): string {
+  return name === 'ask_user' ? 'ask' : name;
+}
+
 /** 0.8.2 Wave 2B1：runtime 共用的 resolved 权限配置。 */
 export function resolveRuntimePermission(
   config: VesselConfig,
@@ -452,10 +463,17 @@ export function resolveRuntimePermission(
 ): RuntimePermissionConfig {
   return {
     default: headless ? 'allow' : 'ask',
-    // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
-    autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
+    // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask。
+    autoApprove: [
+      ...new Set([
+        ...(config.permission?.autoApprove ?? []).map(normalizeLegacyAskToolName),
+        'ask',
+      ]),
+    ],
     // 0.27：配置级保险；用户显式配置时以其值为准（与 autoApprove 语义一致，不合并默认）。
-    neverAutoApprove: config.permission?.neverAutoApprove ?? ['agent.close'],
+    neverAutoApprove: (config.permission?.neverAutoApprove ?? ['agent.close']).map(
+      normalizeLegacyAskToolName,
+    ),
   };
 }
 

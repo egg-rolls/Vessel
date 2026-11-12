@@ -501,7 +501,7 @@ const headless =
 const serveRequested = servePort !== null;
 const entersRepl = !headless && !serveRequested;
 const interactive = entersRepl && process.stdin.isTTY === true;
-// 0.15 / 0.33：交互 REPL、gateway/serve、headless 都注册 ask_user。
+// 0.15 / 0.33：交互 REPL、gateway/serve、headless 都注册 ask。
 // headless 没有进程内应答者：由 headless runner 落盘后中断 run（可 resume），
 // 不再用「不注册」把它藏起来。`ui.askUser: false` 仍在 bootstrap / tenant
 // factory 内按配置关闭。
@@ -930,7 +930,7 @@ async function runWithConfig(result: BootstrapResult) {
       current: permissionConfigFor(config, headless),
     };
     // 启动时**插件装配实际产出**：tools applier 只管辖「插件工具 ∪ 热装配过的插件工具」。
-    // 入口注册的 agent / ask_user 与 MCP 工具（toolSource 非 null）不在管辖域内，
+    // 入口注册的 agent / ask 与 MCP 工具（toolSource 非 null）不在管辖域内，
     // 否则一次 reload 会把它们判成 removed（D1）。
     const managedPluginTools = new Set(pluginManagedToolNames(ctx.pluginHost, result.mcp));
     // 插件安装配置基线（用于识别「定义没变但行为配置变了」）：
@@ -989,7 +989,7 @@ async function runWithConfig(result: BootstrapResult) {
         });
         // 成员 ExecutionUnit 的工具面是 spawn 时快照：owner 宿主更新后在同一具 body 上刷新，
         // 不重建 session / context（有 active run 时由执行内核延迟到轮边界）。
-        // 传入应用后的全量工具面（含 agent / ask_user / MCP），成员侧再按白名单过滤。
+        // 传入应用后的全量工具面（含 agent / ask / MCP），成员侧再按白名单过滤。
         await result.agent?.service.refreshTools?.(ctx.pluginHost.listTools());
         return outcome.summaries;
       },

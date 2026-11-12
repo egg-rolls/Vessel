@@ -30,7 +30,7 @@ export interface PendingCluster {
  * 聚类键：**优先 agent id**。
  *
  * 只按 session id 聚类会在主会话切换 / 复用同一会话时把不同 agent 的问题混在一起，
- * 而同一个 agent 连续多次 ask_user 又恰恰是最需要合并提交的情形。
+ * 而同一个 agent 连续多次 ask 又恰恰是最需要合并提交的情形。
  */
 export function pendingClusterKey(request: AskUserRequest): string {
   if (request.agentId !== undefined && request.agentId !== '') {

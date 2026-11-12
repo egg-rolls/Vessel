@@ -261,7 +261,7 @@ export function AskUserDialog({ events, maxRows, onActiveChange }: AskUserDialog
     return unsubscribe;
   }, [events]);
 
-  // run 结束 / ask_user 工具失败时清空弹窗，避免 run 已结束但界面残留
+  // run 结束 / ask 工具失败时清空弹窗，避免 run 已结束但界面残留
   useEffect(() => {
     const unsubscribe = events.subscribe((rawEvent) => {
       const event = asTuiEvent(rawEvent);
@@ -269,7 +269,11 @@ export function AskUserDialog({ events, maxRows, onActiveChange }: AskUserDialog
         setPrompt((current) => (current && current.run_id === event.run_id ? null : current));
         return;
       }
-      if (event.type === 'tool.call.failed' && event.data.tool_name === 'ask_user') {
+      // 双认工具名：新名 `ask`，历史事件里是 `ask_user`（0.52 前的日志）。
+      if (
+        event.type === 'tool.call.failed' &&
+        (event.data.tool_name === 'ask' || event.data.tool_name === 'ask_user')
+      ) {
         setPrompt((current) => (current && current.run_id === event.run_id ? null : current));
       }
     });

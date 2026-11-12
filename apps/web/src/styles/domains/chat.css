@@ -816,7 +816,7 @@
   color: var(--amber);
 }
 
-/* ask_user：与 permission-card 一样渲染在 Composer 槽位。 */
+/* ask：与 permission-card 一样渲染在 Composer 槽位。 */
 
 .ask-card {
   margin: 0;

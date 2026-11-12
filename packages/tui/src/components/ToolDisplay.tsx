@@ -115,7 +115,7 @@ export class ToolDisplayRegistry {
 /** 默认单例：内置工具/第三方插件经它注册自定义显示 */
 export const toolDisplayRegistry = new ToolDisplayRegistry();
 
-// ── 内置工具显示（bash / read / edit / ask_user）──────────────
+// ── 内置工具显示（bash / read / edit / ask）──────────────
 
 toolDisplayRegistry.register('bash', {
   toView: (input, result, status) =>
@@ -221,7 +221,14 @@ toolDisplayRegistry.register('edit', {
   },
 });
 
-toolDisplayRegistry.register('ask_user', {
+/**
+ * ask 的显示定义（0.52 起工具名是 `ask`，原名 `ask_user`）。
+ *
+ * 注册两个名字：历史会话里的工具卡 `name` 仍是旧名，按名查表才不会退化成默认渲染。
+ * `makeToolCallView` 里的 name 只是占位 —— 注册表 `view()` 用调用点的名字覆盖
+ * （identity 字段以调用点为准，见 `ToolDisplayRegistry.view`）。
+ */
+const askDisplay: ToolDisplayDefinition = {
   toView: (input, result, status) => {
     const questions = asRecord(input).questions;
     const first =
@@ -229,9 +236,13 @@ toolDisplayRegistry.register('ask_user', {
         ? (questions[0] as { question?: unknown }).question
         : undefined;
     const subtitle = typeof first === 'string' ? compact(first, 120) : '';
-    return makeToolCallView('ask_user', input, result, status, {
+    return makeToolCallView('ask', input, result, status, {
       ...(subtitle ? { subtitle } : {}),
     });
   },
   getActivityDescription: () => t('tool.activity.askingUser'),
-});
+};
+
+toolDisplayRegistry.register('ask', askDisplay);
+/** 历史工具名（0.52 前的会话 / 日志）：同一份显示定义。 */
+toolDisplayRegistry.register('ask_user', askDisplay);

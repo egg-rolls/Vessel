@@ -63,7 +63,7 @@ applies_to: [N, M]
 ## 节点与 attention
 
 - `node_id` 唯一来源是 `resolveNodeId()`：`config.host.nodeId` > `<dataDir>/node.json` > 首次生成并 `0600` 原子写；不得由 hostname / IP 派生；损坏抛 `node_identity_corrupt`（ADR-091）。
-- 远程 attention：permission / ask 必须在运行 agent 的节点本地应答；`vessel attention` 用 gateway / team token 直连，peer token 不能用于 attention；`answered_by` 仍只 `human | policy`；roster 排序只由 `TeamService` 产生。`ask_user` 在 gateway / serve 入口注册（默认无限等待）；headless / `--run` / 管道也注册，但无人可问时挂起 run（`ask.user.timeout`，checkpoint `interrupted`，退出码 3）而不是永久等待（ADR-082 Errata）。
+- 远程 attention：permission / ask 必须在运行 agent 的节点本地应答；`vessel attention` 用 gateway / team token 直连，peer token 不能用于 attention；`answered_by` 仍只 `human | policy`；roster 排序只由 `TeamService` 产生。`ask` 在 gateway / serve 入口注册（默认无限等待）；headless / `--run` / 管道也注册，但无人可问时挂起 run（`ask.user.timeout`，checkpoint `interrupted`，退出码 3）而不是永久等待（ADR-082 Errata）。
 
 ## 指针
 

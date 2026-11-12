@@ -1,7 +1,7 @@
 ---
 title: TUI 与 CLI 终端面约定
 kind: advisory
-triggers: [tui, cli, repl, terminal, i18n, sanitize, ansi, command, help, ask_user]
+triggers: [tui, cli, repl, terminal, i18n, sanitize, ansi, command, help, ask]
 paths: [packages/tui/**, src/i18n/**, src/ui-style.ts, src/commands/**, src/cli.ts]
 applies_to: [N, M]
 ---
@@ -24,7 +24,7 @@ applies_to: [N, M]
 - 启动横幅只在人类终端画 box（`wantsBoxBanner`：stdout 是 TTY 且允许 ANSI 且非 `--json`）；管道 / 重定向 / daemon 与平台 spawn 的子进程（stdout 指向 `<dataDir>/logs/*.log`）降级成一行 `Vessel Gateway <version> · <url>`，框线不进日志文件。
 - 新一次性 CLI 子命令进 `src/commands/registry.ts` 的 `cliCommands`，不要在 `cli.ts` 加 `if` 链（ADR-060）；同时在 `src/completion-spec.ts`（补全）与 `src/cli-help-spec.ts`（帮助）各加一条。
 
-## ask_user 入口
+## ask 入口
 
 - 只在交互 REPL（TTY）注册；`--run` / headless / 管道不注册。
 - `ui.askUser: false` 必须能按入口关闭；gateway / serve 的注册见 [serve.md](serve.md)。

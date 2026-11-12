@@ -385,7 +385,7 @@ export function planStatusPath(
 // ── 下栏 ────────────────────────────────────────────
 
 export interface BottomBarData {
-  /** 启动配置 + 本次会话 "always" 实际生效数（不含 ask_user） */
+  /** 启动配置 + 本次会话 "always" 实际生效数（不含 ask） */
   autoApproveCount: number;
   /** 权限弹窗等待中的工具名 */
   waitingTool?: string;

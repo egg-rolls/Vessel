@@ -61,7 +61,7 @@ serve:
 
 ```yaml
 permission:
-  auto_approve: [bash, edit]    # 工具名精确匹配；替代 bootstrap 里硬编码的 ['ask_user']
+  auto_approve: [bash, edit]    # 工具名精确匹配；替代 bootstrap 里硬编码的 ['ask']
   never_auto_approve: [agent.close]  # 自动放行的例外键（工具名或 tool.action）；未配置时有效值为 ['agent.close']
 
 plugins:
@@ -80,7 +80,8 @@ session:
 ```
 
 - `permission.auto_approve`（TS 字段 `autoApprove`）：`string[]`，按工具名精确匹配；TUI 权限弹窗选 `always`
-  时写回用户 YAML。缺省值为空（交互仍逐个询问）；`ask_user` 由装配层始终放行。
+  时写回用户 YAML。缺省值为空（交互仍逐个询问）；`ask` 由装配层始终放行（历史配置里的
+  旧工具名 `ask_user` 会被归一化成 `ask`，不失效）。
 - `permission.never_auto_approve`（TS 字段 `neverAutoApprove`）：自动放行的例外键，条目为工具名或
   `tool.action`（如 `agent.close`）。命中时只把来自 `autoApprove` / 默认放行的 allow 降级为 ask；
   工具 `checkPermission` 的显式 allow / ask / deny 不受影响。未配置时装配层默认有效值为
@@ -156,7 +157,7 @@ agent:
 - **`agent.cwd`**：`bash` 未显式传 `cwd` 时使用该目录；`read` / `edit` 的相对路径按它解析。支持 `~`，相对路径按进程 cwd 解析为绝对路径；未配置 / 空串等价于不设置。优先级固定为 **工具参数 `cwd` > `agent.cwd` > `process.cwd()`**。
 - **边界不变**：`agent.cwd` 只提供默认目录，不放宽内置 denylist 或 `allowed_roots`；越界仍按原有 `deny` / `ask` 语义处理。配置的目录不存在时，工具在调用时返回明确错误，不静默回退到进程 cwd。0.14.2 起 `bash` 还会在命令文本中匹配内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`），命中直接拒绝（`path_denied`）；该检查只做字符串匹配、不是沙箱，任何配置都不能放宽或替换它。
 - **CLI 写配置**：`vessel config set agent.cwd <path>`；空值被拒绝。与 `ui.language` 一样只改用户配置、保留其它键、`0600` 原子写。
-- **权限时效**（0.13 修订，ADR-079）：权限等待默认不超时，直到应答、取消或 abort；只有 core 显式配置正数 `RuntimePermissionConfig.timeoutMs` 才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。abort 抛 `PermissionAbortedError`（`permission_cancelled`）。`ask_user` 与权限请求一样默认无限等待，由应答 / abort / run 终态收口，提问卡片不再倒计时。详见 §2.6。
+- **权限时效**（0.13 修订，ADR-079）：权限等待默认不超时，直到应答、取消或 abort；只有 core 显式配置正数 `RuntimePermissionConfig.timeoutMs` 才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。abort 抛 `PermissionAbortedError`（`permission_cancelled`）。`ask` 与权限请求一样默认无限等待，由应答 / abort / run 终态收口，提问卡片不再倒计时。详见 §2.6。
 
 ### 2.5 状态栏与显隐（0.13，ADR-078）
 
@@ -178,16 +179,16 @@ ui:
 - **终态与幂等**：run 进入 `completed` / `failed` / `cancelled` 时，同 run 的 pending 清出并持久化为 `orphaned`。重复应答返回首次结果（`duplicate: true`）；不同决定返回 `conflict`；`orphaned` 返回 `run_ended`；不存在返回 `not_found`。有界清理只淘汰最旧的 `answered` / `orphaned`，pending 不淘汰。
 - **关联字段**：`tool.permission.request` 带 `session_id` / `tool_call_id` / `source`；只有显式超时才带 `deadline_at`。
 - **自动放行例外**：`permission.never_auto_approve`（`neverAutoApprove`）把命中的 auto 来源 allow 降级为 ask；未配置时有效值为 `['agent.close']`，使成员关闭 peer 仍走人类审批。显式 allow / deny 的工具判定不受影响；headless 无审批通道时仍 fail closed。
-- **已知限制**：core 只读取 `remember`（等价 `always`），`allow session` 目前等同 `once`；`interactions.list` 可只读查询 pending / answered / orphaned 权限与内存 pending ask，但 pending ask 仍只在内存；`ask_user` 默认无限等待，不按时间过期。
+- **已知限制**：core 只读取 `remember`（等价 `always`），`allow session` 目前等同 `once`；`interactions.list` 可只读查询 pending / answered / orphaned 权限与内存 pending ask，但 pending ask 仍只在内存；`ask` 默认无限等待，不按时间过期。
 
-### 2.7 可见性与 ask_user（0.14 / 0.14.1，ADR-080 / ADR-082）
+### 2.7 可见性与 ask（0.14 / 0.14.1，ADR-080 / ADR-082）
 
 ```yaml
 ui:
   verbosity: normal            # minimal | normal | debug；Web 信息层级
   show_internal_events: false  # TUI /errors 与 Web 的 L3 内部事件
   error_level: user            # user | all；TUI /errors 与 vessel errors
-  ask_user: true               # 入口默认；显式 false 关闭 ask_user
+  ask_user: true               # 键名不变；入口默认，显式 false 关闭 ask 工具
 observability:
   show_process_errors: false   # process/shutdown 错误进入 vessel errors
 ```
@@ -197,7 +198,7 @@ observability:
 - **`ui.errorLevel`**（默认 `user`）：`all` 时 `/errors` 与 `vessel errors` 追加 internal / process 级错误。
 - **`observability.showProcessErrors`**（默认 `false`）：让 `process.error` / `shutdown.failed` 等进入 `vessel errors`。
 - **`ui.expandCards`**（默认 `false`）：Web 时间线卡片（工具 / 系统消息 / 排队）是否默认展开；带可操作控件（权限 / ask / 确认）的卡片始终展开，`verbosity: debug` 等同 `true`；用户手动开合某张卡片后以手动状态为准。
-- **`ui.ask_user`**（入口默认）：交互 REPL（TTY）或 gateway/serve 才注册；`--run` / headless / 管道不注册；显式 `false` 按入口关闭，显式 `true` 也不能让无客户端入口注册。提问卡内联在 Web `RunCard`，默认无限等待，由应答 / abort / run 终态收口。
+- **`ui.ask_user`**（入口默认；键名未随工具改名而变，工具现名 `ask`）：交互 REPL（TTY）或 gateway/serve 才注册；`--run` / headless / 管道不注册；显式 `false` 按入口关闭，显式 `true` 也不能让无客户端入口注册。提问卡内联在 Web `RunCard`，默认无限等待，由应答 / abort / run 终态收口。
 - **校验**：枚举与布尔值非法时由 validator 拒绝，不做静默回退；四个键都支持 `vessel config set`。
 - **CLI 写配置**：`vessel config set ui.verbosity <minimal|normal|debug>`、`ui.showInternalEvents <true|false>`、`ui.errorLevel <user|all>`、`ui.askUser <true|false>`、`ui.expandCards <true|false>`、`observability.showProcessErrors <true|false>`；与其它键一样只改用户配置、保留其它键、`0600` 原子写。
 
@@ -283,7 +284,7 @@ agent:
 - **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；配置不再接受 `team` / `delegate` 块。
 - **`agent.inbox_max_messages`**（0.32，默认 `200`）：每个成员持久化收件箱的消息条数上限，超出时按最旧裁剪；只影响成员收件箱（`agent` 工具投递给 busy / rotating 成员的消息），不影响会话历史。缺省不写入配置即用 200；必须是正整数。
 - **`agent.temporary_ttl_hours`**（默认 `2`，`0` = 关闭）：temporary 成员的空闲回收 TTL。只回收 `role === 'temporary'` 且仍在册的成员，`member`（含 `main`）永不回收；有在跑轮 / 排队消息 / 权限等待时跳过。回收复用 `membership='left'` + `state='closed'`，body 记录保留，可经 `reinstate` 原地复活。
-- **工具面（组成，不写死数量）**：root 默认 = 能力工具（`bash` / `read` / `edit`）+ `agent` + `subscribe`；真交互 REPL（TTY）或 gateway/serve 另加 `ask_user`；成员 body 另有收件箱工具 `inbox`（`list` / `read` / `delete` / `insert`）。显式 `agent.enabled: false` 时不启用成员 runtime，root 剩能力工具 + `subscribe`。实际清单以 `bun run src/cli.ts --tools` 输出为准（该命令不连接 MCP，也不展开 `ask_user` / `inbox`）。
+- **工具面（组成，不写死数量）**：root 默认 = 能力工具（`bash` / `read` / `edit`）+ `agent` + `subscribe`；真交互 REPL（TTY）或 gateway/serve 另加 `ask`；成员 body 另有收件箱工具 `inbox`（`list` / `read` / `delete` / `insert`）。显式 `agent.enabled: false` 时不启用成员 runtime，root 剩能力工具 + `subscribe`。实际清单以 `bun run src/cli.ts --tools` 输出为准（该命令不连接 MCP，也不展开 `ask` / `inbox`）。
 - **owner 端点**：只由交互 REPL / serve 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` 与内部持久 id）；只接受 loopback 与 Bearer token。`--run` / headless / 管道不监听 owner 端口、不写记录，但 AgentService / TeamService 仍在进程内可用。`vessel agent create|send|dispatch|close|list [--json]` 经该记录 attach。
 - **rotate（0.19，ADR-092；0.39 改道）**：成员可调用 `agent` 工具的 `rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 `sessions.create`（空 session + `startup_prompt`）或 `sessions.restart`。原 owner 端点 `agents.rotate` 与 CLI `vessel agent rotate` 已删除。失败保持旧身体，不自动重试；`rotating` 期间消息排队。
 - **已知限制**：排队消息写入 per-agent inbox（上限 `agent.inbox_max_messages`），重启后可由模型经 `inbox` 工具读取；已开始执行的一轮仍需显式 resume；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 清单以 [gateway-rpc.md](../architecture/gateway-rpc.md) 方法表为准。

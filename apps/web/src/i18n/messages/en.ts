@@ -294,12 +294,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'ask.submit': 'Submit',
   'ask.customPlaceholder.options': 'Or type a custom answer',
   'ask.customPlaceholder.open': 'Type an answer',
-  // 待批（ask_user 汇集页）：来源 / 聚类 / 逐题回复
+  // 待批（ask 汇集页）：来源 / 聚类 / 逐题回复
   'pending.title': 'Awaiting approval',
   'pending.subtitle':
-    'Every pending ask_user question in one place. Questions from the same agent are grouped, and each question is answered on its own — reply to just the ones you mean.',
+    'Every pending ask question in one place. Questions from the same agent are grouped, and each question is answered on its own — reply to just the ones you mean.',
   'pending.empty': 'No pending questions',
-  'pending.empty.hint': 'New ask_user questions show up here as soon as an agent asks.',
+  'pending.empty.hint': 'New ask questions show up here as soon as an agent asks.',
   'pending.entry': 'Pending',
   'pending.entry.label': '{count} pending question(s) in this session',
   'pending.cluster.agent': 'Agent {id}',
@@ -499,7 +499,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Off keeps only replies, tool calls, errors and permission/ask cards. On adds runtime notices, hook / LLM context and other system messages; the vessel:* transcript messages follow this key too, and verbosity=debug shows them as well.',
   'settings.display.field.errorLevel': 'Error level',
   'settings.display.field.showProcessErrors': 'Show process errors',
-  'settings.display.field.askUser': 'Allow ask_user',
+  'settings.display.field.askUser': 'Allow ask',
   'settings.display.field.askUser.hint':
     'Registration setting: takes effect on a new connection or after a gateway restart.',
   'settings.display.booleanOn': 'Enabled',

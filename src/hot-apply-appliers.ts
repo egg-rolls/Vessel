@@ -147,7 +147,7 @@ export interface ToolsApplyResult {
  * 本 applier 实际管辖的插件工具名（启动装配产出）。
  *
  * 宿主上还有非插件来源的工具，必须排除：
- * - `agent` / `ask_user` 由入口按能力注册，不属于插件配置；
+ * - `agent` / `ask` 由入口按能力注册，不属于插件配置；
  * - MCP 工具由 `mcp` applier 管理（`toolSource` 非 null）。
  *
  * 用它们初始化管辖域，之后的 tools reload 才不会把自己的工具判成 `removed`。
@@ -160,7 +160,13 @@ export function pluginManagedToolNames(
     .listTools()
     .map((tool) => tool.name)
     .filter(
-      (name) => name !== 'agent' && name !== 'ask_user' && (mcp?.toolSource(name) ?? null) === null,
+      (name) =>
+        name !== 'agent' &&
+        // `ask` 是入口注册的内置工具；`ask_user` 是它的历史名（0.52 前），
+        // 外部插件或旧装配仍可能带着旧名，一并排除，免得被当成插件工具管理。
+        name !== 'ask' &&
+        name !== 'ask_user' &&
+        (mcp?.toolSource(name) ?? null) === null,
     );
 }
 

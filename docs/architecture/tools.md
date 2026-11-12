@@ -1,7 +1,7 @@
 ---
 title: 工具与权限边界
 kind: current
-triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask_user, mcp tool]
+triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool]
 paths: [packages/core/src/types/tool.ts, plugins/tools/**, packages/agent/**]
 ---
 
@@ -41,17 +41,17 @@ interface ToolDefinition {
 
 ## 工具集：能力工具为什么这么少
 
-默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit`**；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；变更只发短通知，按需 `inspect`；未 add 不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask_user` 按入口注册。`team_*` / `delegate_task` 已删除。
+默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit`**；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；变更只发短通知，按需 `inspect`；未 add 不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。`team_*` / `delegate_task` 已删除。
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
 | `subscribe` | 默认注册（`doc-subscription` 插件）；agent 显式 add 文件后，变更只在下个 run 的系统提示里发一条短通知（path / id / rev / bytes），模型调用 `subscribe inspect` 才取 diff（首次全文）；正文不自动进历史。只接受具体文件，无 glob / 目录 / 自动发现 |
 | `agent` | 默认注册；显式 `agent.enabled: false` 关闭。root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `read`（root 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `send` / `list` / `read`。写 Team 日志不是本工具的职责：`agent post` 已移除（只追加日志、不投递、不唤醒，0.50 实测导致成员报告静默丢失），需要时走 CLI `vessel team post`。`create` 建同 Team peer，`hire` 建调用者拥有的 contractor；close 审批在权限层（成员关 peer 需人类批准），每 Team present 上限与冻结见 ADR-095；权限模式与成员配置见 `agent.*`。`read` 是只读会话读取（`to` + `limit` 默认 20 / 封顶 50，返回最近 N 条消息的 role + 截断正文），数据源与 `sessions.get` 同一个 `SessionStore`，不新增 RPC；收口不再自动回传正文之后，父级要成员原文用它或 `inbox` |
 | `inbox` | 成员 body 由装配层 attach 收件箱后注册（`deny` 模式也注册，只读本地队列）：`list` 返回 unread / pending 计数与摘要（含 held）；`read` 取原文并消费，`includeHeld: true` 时连 held 一并返回正文但**不消费、不取消投递**（结果里带 `held: true`）；`delete` 删除未读且非 held 的消息；`insert` 给自己追加一条消息，不启动 run、不唤醒自己。`unread` = 该自己读，`pending` = 已排程、会自动作为下一轮输入送达（同一口径由 `counts()` 派生）。返回 JSON；非法参数返回 `{ error: 'invalid_input: ...' }`，不抛错 |
-| `ask_user` | 交互 REPL、`gateway start` / `--serve` 与 headless（`--run` / 管道）都注册；`ui.askUser: false` 可关闭。两种语义见下「ask 的 sync / async」 |
+| `ask` | 交互 REPL、`gateway start` / `--serve` 与 headless（`--run` / 管道）都注册；`ui.askUser: false` 可关闭。两种语义见下「ask 的 sync / async」 |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：默认 root 工具面 = 能力工具 + `agent` + `subscribe`；显式 `agent.enabled: false` 去掉 `agent`；交互 REPL 或 gateway-serve 再加 `ask_user`；成员 body 另有 `inbox`。配置 MCP 后在基础上加 MCP 工具（数量由 server 提供）。实际清单以 `bun run src/cli.ts --tools` 输出为准，本文不写死数量。`--tools` 一次性命令按 headless 口径列出，且**不连接 MCP、不展开 `ask_user` 与成员侧 `inbox`**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
+口径：默认 root 工具面 = 能力工具 + `agent` + `subscribe`；显式 `agent.enabled: false` 去掉 `agent`；交互 REPL 或 gateway-serve 再加 `ask`；成员 body 另有 `inbox`。配置 MCP 后在基础上加 MCP 工具（数量由 server 提供）。实际清单以 `bun run src/cli.ts --tools` 输出为准，本文不写死数量。`--tools` 一次性命令按 headless 口径列出，且**不连接 MCP、不展开 `ask` 与成员侧 `inbox`**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -63,7 +63,7 @@ interface ToolDefinition {
 
 ### ask 的 sync / async
 
-`ask_user` 有 `mode: 'sync' | 'async'`（缺省 `sync`）。
+`ask` 有 `mode: 'sync' | 'async'`（缺省 `sync`）。
 
 | | sync（缺省，旧行为一字不改） | async |
 |---|---|---|
@@ -101,7 +101,7 @@ interface ToolDefinition {
 
 > MCP 不是「能力工具」，而是把外部工具接进 `PluginHost` 的插件（ADR-039）；它不占基础工具名额，也不改变能力工具的判据。
 
-**evals / feishu 不注册模型工具**；工具口径：默认 = 能力工具 + `agent` + `subscribe`；交互模式再加 `ask_user`；另有 N 个 MCP 工具。
+**evals / feishu 不注册模型工具**；工具口径：默认 = 能力工具 + `agent` + `subscribe`；交互模式再加 `ask`；另有 N 个 MCP 工具。
 
 判据只有一条：**能被其他工具替代的工具，就不该存在**。工具越多，模型的选错空间越大；真正的通用原语只有"执行一条命令"，其余都是它的特化。
 

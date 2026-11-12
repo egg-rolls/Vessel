@@ -84,7 +84,7 @@ export function AppShell() {
     [permissions, route],
   );
   const otherAsks = useMemo(() => pendingPermissionsOutsideView(asks, route), [asks, route]);
-  // 侧栏「待批」计数：只数 ask_user（权限通道仍独立走自己的入口）。
+  // 侧栏「待批」计数：只数 ask（权限通道仍独立走自己的入口）。
   const navCounts = useMemo<Partial<Record<PrimaryDomain, number>>>(
     () => ({ pending: asks.length }),
     [asks],

@@ -179,7 +179,7 @@ export abstract class SessionsClient extends RpcClient {
     });
   }
 
-  /** 回答 ask_user；answers=[] 表示取消 */
+  /** 回答 ask；answers=[] 表示取消 */
   async respondAsk(requestId: string, answers: AskUserAnswer[], batchId?: string): Promise<void> {
     await this.request('ask.respond', {
       request_id: requestId,

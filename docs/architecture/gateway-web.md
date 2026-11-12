@@ -1,7 +1,7 @@
 ---
 title: 权限桥与会话切换
 kind: current
-triggers: [web, apps/web, permission bridge, ask_user, session switch, frontend]
+triggers: [web, apps/web, permission bridge, ask, session switch, frontend]
 paths: [apps/web/**, packages/serve/src/gateway/**]
 ---
 
@@ -9,7 +9,7 @@ paths: [apps/web/**, packages/serve/src/gateway/**]
 
 <a id="permission-bridge"></a>
 
-### 权限与 ask_user 桥
+### 权限与 ask 桥
 
 - gateway 订阅 `tool.permission.request` 建立待答表；`POST /v1/permissions/:id` 或 WS `permission.respond` 发布 `tool.permission.response`。Web 弹窗支持 allow / deny / always（remember）。
 - `ask.user.requested` 同理：`POST /v1/ask/:id` 或 `ask.respond` 发布 `ask.user.answered`。
@@ -31,7 +31,7 @@ paths: [apps/web/**, packages/serve/src/gateway/**]
 - **legacy 回退**：页面由 legacy `--serve` 托管、`/platform/rpc` 不存在时，回退到同源 node 连接与旧 `vessel.token` 槽；401 鉴权错误不静默回退。
 - **平台 URL**：`localStorage['vessel.gateway-url']` 语义 = 平台 origin；空串 = 页面同源。仅接受 `http(s)://host[:port]` origin；非回环必须 https。node URL 来自 registry，不由用户输入拼装。
 - **独立前端**：可把 `apps/web/dist` 部署到任意静态站点；服务端配置 `serve.allowed_origins` 允许该 Origin（CORS + WS upgrade），浏览器需信任 gateway 证书。同源部署仍由 gateway 托管 `dist`。
-- 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask_user 表单。
+- 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask 表单。
 - 按 `hello.features` 显示 **MCP server 面板**（`mcp-status`）与 **interrupted run 面板**（`durable-resume`），可触发 durable resume；未启用的 feature 不显示面板。面板 10s 刷新。
 - 按 `hello.features` 显示 **metrics 快照**与 **飞书状态**（`metrics` / `feishu`）；evals 只做 `GET /v1/evals/latest`，不做面板。
 - 开发：`cd apps/web && npm run dev`（Vite 代理 `/platform` 到平台 `127.0.0.1:8642`、`/v1` 与 `/health` 到 node `127.0.0.1:8644`，`changeOrigin:false` 保持同源）；生产：Platform Gateway 托管 `dist`，node 不再宿主 UI。

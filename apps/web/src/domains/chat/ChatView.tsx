@@ -82,7 +82,7 @@ export function ChatView({
 
   const selectedId = route.sessionId && route.sessionId !== 'new' ? route.sessionId : null;
   const draftActive = route.sessionId === 'new';
-  // 会话分区的「待批」计数：只数本会话（含成员 bridge 的父会话归属）的 ask_user。
+  // 会话分区的「待批」计数：只数本会话（含成员 bridge 的父会话归属）的 ask。
   const sessionAskCount = useMemo(
     () => asksForSession(asks, selectedId).length,
     [asks, selectedId],
