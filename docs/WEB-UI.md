@@ -101,12 +101,16 @@ class 与同一个阈值，不要给某一页复制第二份。
 - **发言人名只有一个实现**：`AssistantSpeaker`（`domains/chat/ReasoningBlock.tsx` 导出，
   live 与历史共用）。判据是「该 run 的第一个正文/思考项」，一个 run 只出现一次；
   成员投递的 `AgentMessageCard` **不叠**这个名字。
-- **消息工具栏是覆盖层，不占高度**：`.msg-actions`（纯正文：`.msg-assistant` 右上角）与
-  `.reasoning-actions`（有思考卡：锚在 `.reasoning-wrap` 右上角，卡头留白处）都是
-  `position: absolute`，显隐只切 opacity（规则在 `components/ui/MessageActions.tsx`：
-  hover / `focus-within` / 触屏常显，不要在业务侧另写 hover-only）。**不要**改回
-  「正文下方一行 + `mt-1`」：那一行即使透明也占高度，hover 出现/消失会让内容位移。
-  窄屏（≤1023px）退化成下方一行（该行高度恒定，仍不位移、不压字）。
+- **消息工具栏在正文下方一行、右对齐**（`MessageActions` + `mt-1 ml-auto`）：它是正文末尾的
+  兄弟节点，显隐规则全部在 `components/ui/MessageActions.tsx`（hover / `focus-within` /
+  触屏常显），**不要在业务侧另写 hover-only**。代价要认：那一行即使透明也占高度，hover
+  出现/消失会改变内容高度——换来的是**永不遮字**。
+  **右侧覆盖层方案已废弃**（`.msg-actions` / `.reasoning-actions` / `.reasoning-wrap`，
+  2026-11 用户裁决：贴正文/贴思考卡右侧都试过，都不要）：那套是 `position: absolute`，
+  出现时不位移但会盖住第一行末尾，用户判定不如「多一行高度」。**不要照着旧记录改回去**。
+- **思考卡上只有一个按钮**：卡头 `<summary>` 右侧的「复制思考」（`ReasoningBlock`，
+  复制该卡思考原文，`preventDefault` + `stopPropagation` 防误开合，常显 + 键盘可达）。
+  **不要**给思考卡挂消息工具栏（复制正文 / 重试 / 时间那一组归正文）。
 
 ```css
 @layer theme, base, legacy, utilities;
