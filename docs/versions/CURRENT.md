@@ -5,8 +5,9 @@
 
 ## 版本
 
-**0.50 开发线（2026-11-09，merged）** — 已并入 `main @ c3113dcc`；manifest 已 bump 到
-`0.50.0`；未 tag、未 publish。版本号以根 `package.json` 为唯一来源。
+**0.51 开发线（2026-11-12，进行中）** — 基线 `main @ 8f9940ee`；manifest `0.51.0`；
+未 tag、未 publish（tag 等 1.0.0）；版本号以根 `package.json` 为唯一来源。**0.50.0 已收口**，
+变更见 [0.50.0](0.50.0.md)。
 
 ## 已合入（现态）
 
@@ -56,9 +57,42 @@
 - **开发期清库**：`vessel dev reset [--yes] [--dry-run] [--json]`。
 - **0.48 插件扩展面同线合入**：manifest HTTP/CLI/WS 扩展点、外部 `expose`、catalog
   declared/effective 两视图；插件面只注册在 Node API，平台 `/plugins/*` 404。
+- **0.50 收口（事件可见性）**：两张黑名单 → 三档白名单（`content`/`internal`/`observe`，
+  114 条），未登记类型折叠成 notice；门禁 `check:event-visibility`（含影子对拍）。
+- **0.50 收口（时间线）**：`LiveItemStore` 物化 item（渲染不再读事件缓冲）+ `ClaimLedger`
+  认领账本 + 交棒释放；删 `coalesceDelta` / `truncatedSince` / `group-cache.ts`；缓冲裁剪
+  不再让屏上内容消失（顺便根治「结尾正文重复」）。
+- **0.50 收口（回放）**：固定 1 MiB → 按「最新一轮地板」动态（实测 4 个真实会话覆盖率
+  47%→100%），门禁 `check:replay-budget`。
+- **0.50 收口（等待消息）**：inbox 条目加 `session_id`/`refs`；待处理条带改读盘（删时间线
+  排队卡）；`agents.recall`；启动即扫恢复孤儿输入（重启不再丢排队消息）；修 `runs.cancel`
+  后 `queuedRuns` 永不清导致 agent 不被 wake 的僵尸 bug。
+- **0.50 收口（上下文用量）**：`sessions.get.context_usage`（尾窗派生 + 水位缓存）；
+  `llm.request` 落盘 `context_max`；用量环随比例连续变色（60–80 转琥珀、80–90 转危险），
+  `plugin-ui` 补 `--amber` 三主题档。
+- **0.50 收口（模型可见性）**：`prompt.system_context` 事件（hash 去重）+ 会话页「模型上下文」
+  可展开卡 + `sessions.get.system_context`（刷新/重启后仍可见）；`llm.request` 发布副本带
+  `model`，删掉「从 Self Card 抠 model」的死代码。
+- **0.50 收口（`ask` 工具）**：`ask_user` → `ask` + 重写描述（任何需要人说一句的场景），
+  读侧双认旧名；`ui.askUser` / `ask:answer` / `ask.user.*` 未动。
+- **0.50 收口（用量插件）**：数据源从 trace 增量追读换到会话日志 + 持久化索引 + worker 线程
+  聚合 + 取消硬截断（「全部时间」不再采样）；`logs` 加 `days`/`since-until` 半开区间 +
+  游标分页 + 默认 7 天。
+- **0.50 收口（设计实验室）**：token 运行时枚举 + `*.preview.tsx` 自动发现 + 变体表运行时化
+  （加 token/组件/变体都只改一处）；颜色 token 固定左亮右暗。
+- **0.50 收口（导航）**：四档状态色统一（accent/amber/danger/muted，删 ok/warn）；插件宿主
+  `inactive` 不再误判为断开；Hub 打开即自动探测。
+- **0.50 收口（构建/DX）**：`gateway start` 就地自修复 dist；拆 react-vendor/plugin-ui chunk
+  （无 500kB 警告）；种子 `appendMany`（0.81s→0.008s）；`listRich` mtime 缓存（19.3ms→1.95ms）；
+  移除 GitHub CI（`bun run gates` 成唯一门禁，`release.yml` 的 CD 保留）；输入框整块
+  `cursor: text`；思考卡复制/时间改 hover+键盘聚焦显示。
 
 ## 未实现 / 下一步
 
+- **0.51 待办**：`vessel prune`（默认 dry-run、`--yes`、走 data-lock exclusive、有 running
+  run 拒绝）；TUI 答 async ask；设计实验室两个缺口（`CHIP_TONES` / `COMPOSER_ICON_TONES` 的
+  preview、`EntityHeader` 运行时表）；工具卡交棒（需 `duration_ms`）；位置认领；
+  `sessions.search` 读侧投影缓存；`[refs]` 尾注 action 收窄；用量 43% unpriced。
 - **G4 分布式 Node / G5 清理**未排期；`gateway reload` 不重载 registry。
 - **Workspace 插件独立包未实现**；Workspace = 公司数据目录仍是 target；当前 workspace 仍是 Team 目录键。
 - **T5 残留 71 行**（`tenant_id`=60 / text=11；keep=34 / defer-2=15 / defer-3=22），

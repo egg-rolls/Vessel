@@ -9,42 +9,10 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
-## [0.50.0] - 2026-11-09
+## [0.51.0] - unreleased
 
-> 0.50.0（基于 0.49.0，未发布）：文档/技术债清理、默认提示词交给用户、本地 Node CORS
-> 自动放行、Team/Web UI 批次。完整记录见 [`docs/versions/0.50.0.md`](docs/versions/0.50.0.md)。
-
-### Added
-
-- **DataTable 可排序列**：受控 `sortable` / `sort` / `onSortChange`；透明表头、激活方向箭头主题色。
-- **Team 页**：成员列表改为「查看成员列表」弹层 + 搜索；Team 列表宽度可拖拽（220–420，持久化）。
-- **Hub 自动启动/连接**：`gateway start` 默认拉起本地 Hub（`hub.auto_start`），Web Hub 页回环自动连接 8643。
-- **本地 Node CORS**：平台 spawn 的本地 Node 自动放行平台 Origin。
-
-### Changed
-
-- **长消息折叠只给有底色的气泡**：会话页助手正文（`AssistantText`，无底色）与
-  `AgentMessageCard` 展开体不再折叠；用户气泡与团队页气泡（有底色包裹）行为不变。
-- **默认系统提示词**：未配置 `agent.systemPrompt` 时不再注入内置文本（Self Card 保留）。
-- **Team 默认锚点**：TUI/gateway 共用 `<dataDir>/default`，不再按各自 cwd 建多个默认 Team。
-- **Web 外壳**：去掉 AppBar 的 Vessel 字标，路由改用字标样式；暗色表头/内容底色互换。
-- **文档/清理**：CLAUDE.md 59 行、HANDOFF-main 106 行、plans INDEX 137 行；81 计划 /
-  21 handoff / 7 notes 归档；tmp 2.2GB→126MB；ADR-098 accepted；DECISION-052/053/054/055。
-- **trace 写入 `llm.request` 摘要化**：完整 prompt 副本不落盘（实测占 `events/` 字节的
-  98.6%），改用与 WS 广播同一份摘要；`events.list` 不再为 99% 会被丢弃的副本付费。
-- **历史工具输出与实时统一 8 KiB 口径**：`sessions.get` 出站按 `capToolPayload` 裁剪
-  `role:'tool'` 的 content 与 assistant 工具入参；分页游标仍按裁剪前长度校验。
-- **会话列表/搜索只 parse 一遍**：搜索改 `list()` + 单次 `load()`；liveness 包装不再
-  整表二次 `listRich()`；Web 会话列表轮询 15s→60s（终态 / `session.saved` 已事件驱动）。
-
-### Fixed
-
-- `gateway reload` 不带 `--scope` 失败；本地 Node 对平台 Origin 的 `forbidden_origin`。
-- Usage token 表头的 chip 底色。
-
-### 验证
-
-- 各切片静态门禁（typecheck / biome / check-* / build）exit 0；行为测试由用户手测。
+> 开发线已开启（2026-11-12）。条目随实现累积；0.50.0 的完整变更见
+> [docs/versions/0.50.0.md](docs/versions/0.50.0.md)。
 
 ## [0.32.0] - 2026-10-31
 
