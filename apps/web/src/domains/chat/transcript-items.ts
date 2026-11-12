@@ -225,8 +225,13 @@ export interface PromptContextData {
 /** 「模型上下文」卡 item：`prompt:<事件 key>`（key 稳定锚在事件 seq 上）。 */
 export interface PromptContextItem extends ItemMeta, PromptContextData {
   kind: 'prompt-context';
-  /** live 侧来自哪个 run（这张卡按 run 归属；历史没有它，因为它不是消息）。 */
-  runId: string;
+  /**
+   * live 侧来自哪个 run（这张卡按 run 归属）。
+   *
+   * detail 派生那条（刷新 / 重启后补出来的）只在服务端给了 `run_id` 时才有 —— 缺省表示
+   * 「知道内容、但不知道是哪一轮」（那种情况下按 ts 落位就够，卡本身仍然可读）。
+   */
+  runId?: string;
 }
 
 /**
@@ -363,6 +368,70 @@ export function sessionFailureOfDetail(
   };
 }
 
+/**
+ * 会话详情里的系统消息（`sessions.get.system_context`）→ 卡片数据。
+ *
+ * 比 `PromptContextData` 多两件只在 detail 路径上出现的东西：
+ * - `runId`：服务端给了 `run_id` 时带上（客户端据此可以挂在那一轮上）；
+ * - `at`：那条事件的时刻（detail 派生的 item 用它当排序 ts，否则只能沉到会话末尾）。
+ */
+export type SessionPromptContext = PromptContextData & { runId?: string; at?: number };
+
+/**
+ * 会话详情（`sessions.get.system_context`）→ 卡片数据（`undefined` = 没有可用数据）。
+ *
+ * 为什么需要：`prompt.system_context` 是**事件**，不是消息（`messages` 里永远没有它）。
+ * 会话页正常运行靠 live 事件流（gateway 的内存环形缓冲回放），刷新 / 切会话 / 重连
+ * 没问题；但**回放窗口淘汰 / 进程重启**之后，事件流里就没有它了 —— 那时只剩服务端从
+ * 会话事件日志尾窗派生的这一个字段（`sessions.get`，见 `src/system-context.ts`）。
+ *
+ * 粒度：服务端只回**最近一条**（与失败卡的「最近一次 run 快照」对齐），所以这里补出来的
+ * 也只有最新那一轮。**已知限制（不是 bug）**：更早轮次的卡刷新后不会回来。
+ *
+ * 与失败卡同一套去重规则：事件流里已经有**同 hash** 的卡就不再补 —— 两路同时存在时
+ * 只出一张（hash 就是「同一份系统消息」的稳定身份，比 run id 更准：同一轮可能因为
+ * 配置热应用换过一次）。
+ */
+export function sessionSystemContextOfDetail(
+  detail: SessionDetail | null | undefined,
+): SessionPromptContext | undefined {
+  if (detail === null || detail === undefined) return undefined;
+  const raw = detail.system_context;
+  if (raw === null || raw === undefined || typeof raw !== 'object') return undefined;
+  if (typeof raw.hash !== 'string' || raw.hash.length === 0) return undefined;
+  const systemPrompt =
+    typeof raw.system_prompt === 'string' && raw.system_prompt.length > 0
+      ? raw.system_prompt
+      : undefined;
+  const selfCard =
+    typeof raw.self_card === 'string' && raw.self_card.length > 0 ? raw.self_card : undefined;
+  // 两段原文都没有 = 空壳卡（服务端也会把这种当「没有数据」，这里再兜一层）。
+  if (systemPrompt === undefined && selfCard === undefined) return undefined;
+  const num = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? Math.floor(value)
+      : undefined;
+  const model = raw.model;
+  const runId = raw.run_id;
+  const messageCount = num(raw.message_count);
+  const toolsCount = num(raw.tools_count);
+  const estimatedTokens = num(raw.estimated_tokens);
+  const contextMax = num(raw.context_max);
+  const at = typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : undefined;
+  return {
+    hash: raw.hash,
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    ...(selfCard !== undefined ? { selfCard } : {}),
+    ...(typeof model === 'string' && model.length > 0 ? { model } : {}),
+    ...(messageCount !== undefined ? { messageCount } : {}),
+    ...(toolsCount !== undefined ? { toolsCount } : {}),
+    ...(estimatedTokens !== undefined ? { estimatedTokens } : {}),
+    ...(contextMax !== undefined ? { contextMax } : {}),
+    ...(typeof runId === 'string' && runId.length > 0 ? { runId } : {}),
+    ...(at !== undefined ? { at } : {}),
+  };
+}
+
 /** 一次 build 的输入。historyIndex / liveItems 由调用侧 memo 后传入（见文件头性能说明）。 */
 export interface TranscriptBuildInput {
   /** 已加载的历史窗口（按消息顺序）。 */
@@ -388,6 +457,14 @@ export interface TranscriptBuildInput {
    * 快照可能比它旧（同 run 只出一张卡，事件流优先）。
    */
   sessionFailure?: RunFailure;
+  /**
+   * 会话记录快照里的「模型这一轮看到了什么系统消息」（`sessions.get.system_context`，
+   * 见 `sessionSystemContextOfDetail`）。
+   *
+   * 补的是**刷新 / 进程重启**这条路径：事件流里有同 hash 的卡时不再补（同 hash 只出一张）。
+   * 服务端只回最近一条 ⇒ 更早轮次的卡不回补（已知限制）。
+   */
+  sessionSystemContext?: SessionPromptContext;
   /**
    * 认领结论（见 `HistoryIndex.claims`；两者给一个即可，`claims` 优先）。
    *
@@ -1629,6 +1706,28 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
       // 排序依据是落盘的终态时刻：它一定晚于该轮自己的消息，因此落在末尾而不是
       // 「缺 ts 沉底」的巧合位置。没有终态时刻时保持 undefined（= 会话末尾，正确）。
       ...(sessionFailure.completedAt !== undefined ? { ts: sessionFailure.completedAt } : {}),
+    });
+  }
+
+  // 会话记录快照里的「模型这一轮看到了什么系统消息」：事件流里已经出了同一份（同 hash）
+  // 就不再补 —— **同 hash 只出一张卡**（hash 是「同一份系统消息」的稳定身份）。
+  // 触发场景只有刷新 / 进程重启之后（事件回放窗口里没有这条事件了）。
+  const sessionSystemContext = input.sessionSystemContext;
+  if (
+    sessionSystemContext !== undefined &&
+    !live.some((item) => item.kind === 'prompt-context' && item.hash === sessionSystemContext.hash)
+  ) {
+    const { runId, at, ...data } = sessionSystemContext;
+    items.push({
+      kind: 'prompt-context',
+      // key 用 hash：detail 派生这条在多次 build 之间必须同一个身份（不随事件 seq 变），
+      // 而且它天然唯一（同 hash 不会出第二张）。
+      key: `prompt:session:${sessionSystemContext.hash}`,
+      ...data,
+      ...(runId !== undefined ? { runId } : {}),
+      // 排序用它自己那条事件的时刻；缺省（旧 gateway 没给 at）时才沉到会话末尾 ——
+      // 那时它本来就是「最近一轮」的系统消息，落在末尾是正确的。
+      ...(at !== undefined ? { ts: at } : {}),
     });
   }
 

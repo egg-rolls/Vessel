@@ -124,6 +124,29 @@ export interface SessionDetail {
     at?: number;
     source?: 'pressure' | 'changed' | 'estimated' | 'prompt' | 'request';
   };
+  /**
+   * 「模型这一轮看到了什么系统消息」（additive `sessions.get.system_context`）。
+   *
+   * 服务端从**该会话的事件日志尾窗**派生（`prompt.system_context` 事件，见
+   * `src/system-context.ts`），所以刷新 / 重连 / 进程重启之后仍然能拿回来 —— 它不是
+   * message（`messages` 里永远没有它），事件回放窗口一淘汰就只剩这一条读路径。
+   *
+   * **整字段缺省 = 没有可用数据**（没跑过 / 尾部没有该事件 / 旧 gateway 未注入端口）。
+   * `system_prompt` 与 `self_card` 至少有一个；`hash` 用来与事件流里那张卡去重
+   * （两路都在时只出一张）。只返回**最近一条**：更早轮次的卡在刷新后不会回来。
+   */
+  system_context?: {
+    hash: string;
+    system_prompt?: string;
+    self_card?: string;
+    model?: string;
+    message_count?: number;
+    tools_count?: number;
+    estimated_tokens?: number;
+    context_max?: number;
+    at?: number;
+    run_id?: string;
+  };
 }
 
 /** ask_user 单个问题 */

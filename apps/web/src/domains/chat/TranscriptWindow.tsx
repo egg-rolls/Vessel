@@ -30,6 +30,7 @@ import {
   buildTranscriptItems,
   type HistoryIndex,
   type RunFailure,
+  type SessionPromptContext,
   type TranscriptItem,
 } from './transcript-items';
 import { useStickyBottom } from './useStickyBottom';
@@ -145,6 +146,7 @@ export function TranscriptWindow({
   noticeKindOf,
   messageIndexOffset,
   sessionFailure,
+  sessionSystemContext,
   detailNotice,
   onDismissDetailNotice,
   earlierError,
@@ -194,6 +196,13 @@ export function TranscriptWindow({
    * 留在时间线上；与事件流里的失败卡按 runId 去重（见 transcript-items.ts）。
    */
   sessionFailure?: RunFailure;
+  /**
+   * 会话记录里的「模型这一轮看到了什么系统消息」（`sessions.get.system_context`）。
+   *
+   * 只在事件流里**没有同 hash 的卡**时才补（刷新 / 进程重启后事件回放窗口里没它了）。
+   * 与 `sessionFailure` 同一取舍：粒度是最近一条，更早轮次不回补。
+   */
+  sessionSystemContext?: SessionPromptContext;
   /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
   detailNotice: string | null;
   onDismissDetailNotice: () => void;
@@ -289,8 +298,9 @@ export function TranscriptWindow({
         historyIndex,
         isHidden: isHiddenMessage,
         noticeKindOf,
-        // 子 agent 详情占位时（liveGroups 被清空）不补主会话的失败卡：那一屏讲的是另一个 run。
-        ...(activeAgent ? {} : { sessionFailure }),
+        // 子 agent 详情占位时（liveGroups 被清空）不补主会话的失败卡 / 系统消息卡：
+        // 那一屏讲的是另一个 run。两路补的都按自己的身份去重（见 transcript-items.ts）。
+        ...(activeAgent ? {} : { sessionFailure, sessionSystemContext }),
       }),
     [
       transcriptMessages,
@@ -302,6 +312,7 @@ export function TranscriptWindow({
       isHiddenMessage,
       noticeKindOf,
       sessionFailure,
+      sessionSystemContext,
     ],
   );
 

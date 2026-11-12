@@ -158,6 +158,31 @@ export const contextUsageSchema = {
   },
 };
 
+/**
+ * 会话级「模型这一轮看到了什么系统消息」（`sessions.get.system_context`，additive）。
+ *
+ * 载荷就是 core `prompt.system_context` 事件里能展示的那几项：**模型真正看到的那份系统
+ * 消息**（基底 system prompt + Self Card 原文）与它对应哪一轮。
+ * **整字段缺省 = 没有可用数据**（没跑过 / 尾部没有该事件 / 端口未注入），不是空串、不是 0；
+ * `system_prompt` 与 `self_card` 至少有一个（只有 hash 的空壳不作为数据出现）。
+ */
+export const systemContextSchema = {
+  type: 'object',
+  required: ['hash'],
+  properties: {
+    hash: { type: 'string' },
+    system_prompt: { type: 'string' },
+    self_card: { type: 'string' },
+    model: { type: 'string' },
+    message_count: { type: 'integer', minimum: 0 },
+    tools_count: { type: 'integer', minimum: 0 },
+    estimated_tokens: { type: 'integer', minimum: 0 },
+    context_max: { type: 'integer', minimum: 0 },
+    at: { type: 'number' },
+    run_id: { type: 'string' },
+  },
+};
+
 export const runStateSchema = {
   type: 'object',
   required: ['run_id', 'session_id', 'messages', 'started_at', 'status'],
@@ -182,6 +207,8 @@ export const runStateSchema = {
     branch: { type: 'string' },
     // Additive（会话级上下文用量，从事件日志尾窗派生）：缺省 = 没有可用数据。
     context_usage: contextUsageSchema,
+    // Additive（模型这一轮看到的系统消息，从事件日志尾窗派生）：缺省 = 没有可用数据。
+    system_context: systemContextSchema,
   },
 };
 

@@ -381,6 +381,7 @@ export function ChatView({
             noticeKindOf={transcriptApi.noticeKindOf}
             messageIndexOffset={transcriptApi.messageIndexOffset}
             sessionFailure={transcriptApi.sessionFailure}
+            sessionSystemContext={transcriptApi.sessionSystemContext}
             detailNotice={transcriptApi.detailNotice}
             onDismissDetailNotice={transcriptApi.dismissDetailNotice}
             earlierError={transcriptApi.earlierError}

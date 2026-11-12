@@ -16,6 +16,7 @@ import {
   buildTranscriptItems,
   type TranscriptItem,
 } from '../apps/web/src/domains/chat/transcript-items';
+import type { RunEvent } from '../apps/web/src/gateway/types';
 import type { Message } from '../apps/web/src/gateway/types/sessions';
 import type { RunGroup, TimelineItem } from '../apps/web/src/state/events';
 import { ASK_ANSWER_INPUT_NAME } from '../packages/agent/src/runtime';
@@ -969,6 +970,69 @@ const FIXTURES: readonly Fixture[] = [
         ],
       });
       return count(items, 'prompt-context') === 0 && count(items, 'notice') === 1;
+    },
+  },
+  {
+    name: 'F-P3 事件流 + sessions.get 两路都在（同 hash）→ 只出一张卡',
+    why: '刷新后 detail 派生会补一张；事件流里同一份系统消息还在时再补一张就是双出（hash 是同一份的身份）',
+    check: () => {
+      const event: RunEvent = {
+        type: 'prompt.system_context',
+        run_id: 'r1',
+        ts: 1500,
+        data: {
+          hash: 'deadbeefdeadbeef',
+          system_prompt: 'BASE SYSTEM',
+          self_card: '[Self Card]\nrole: r1',
+        },
+      } as RunEvent;
+      const liveGroups = [
+        group({
+          runId: 'r1',
+          items: [{ kind: 'event', key: 'ev-7', event }],
+        }),
+      ];
+      // 同一份（同 hash）从 detail 再补一次：必须被去重掉。
+      const both = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups,
+        sessionSystemContext: {
+          hash: 'deadbeefdeadbeef',
+          systemPrompt: 'BASE SYSTEM',
+          selfCard: '[Self Card]\nrole: r1',
+        },
+      });
+      // 只有 detail（事件回放窗口里已经没有它了，例如进程重启后）→ 补出**同一张卡**。
+      const detailOnly = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        sessionSystemContext: {
+          hash: 'deadbeefdeadbeef',
+          systemPrompt: 'BASE SYSTEM',
+          selfCard: '[Self Card]\nrole: r1',
+          runId: 'r1',
+          at: 1500,
+        },
+      });
+      const detailCard = detailOnly.find((item) => item.kind === 'prompt-context');
+      // 不同 hash（配置热应用后换过一份）→ 两路各自成立，两张卡都要在。
+      const different = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups,
+        sessionSystemContext: { hash: 'ffffffffffffffff', selfCard: 'NEW CARD' },
+      });
+      return (
+        count(both, 'prompt-context') === 1 &&
+        both[0]?.key === 'prompt:ev-7' &&
+        count(detailOnly, 'prompt-context') === 1 &&
+        detailCard?.key === 'prompt:session:deadbeefdeadbeef' &&
+        detailCard.runId === 'r1' &&
+        detailCard.ts === 1500 &&
+        count(different, 'prompt-context') === 2
+      );
     },
   },
   {

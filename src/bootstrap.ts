@@ -114,6 +114,7 @@ import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
 import { reportShutdownFailure } from './shutdown-report';
+import { createSystemContextSource } from './system-context';
 import {
   createTeamHumanDelivery,
   createTeamLocalMemberDelivery,
@@ -1609,6 +1610,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             ...(config.context?.maxTokens !== undefined
               ? { contextWindowTokens: config.context.maxTokens }
               : {}),
+          }),
+          // 「模型这一轮看到了什么系统消息」（additive `sessions.get.system_context`）：
+          // 同一个事件日志、同一个 sessions_dir，取的是另一类事件（`prompt.system_context`）。
+          // 事件不是 message ⇒ 回放窗口淘汰 / 进程重启后只有重新派生才能把卡找回来。
+          systemContext: createSystemContextSource({
+            tail: eventLog,
+            eventsFile: (sessionId: string) =>
+              sessionEventsFilePath(tenantPaths.sessions_dir, sessionId),
           }),
         }
       : {}),

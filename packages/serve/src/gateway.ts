@@ -84,7 +84,11 @@ import {
   type PermissionsControl,
 } from './gateway/methods/permissions.js';
 import { createRunMethods } from './gateway/methods/runs.js';
-import { createSessionMethods, type SessionContextUsagePort } from './gateway/methods/sessions.js';
+import {
+  createSessionMethods,
+  type SessionContextUsagePort,
+  type SessionSystemContextPort,
+} from './gateway/methods/sessions.js';
 import { createTeamMethods } from './gateway/methods/teams.js';
 import {
   flushSseGap,
@@ -327,6 +331,17 @@ export interface GatewayOptions {
    * 缺省 = `sessions.get` 不带该字段（旧行为一字不改）。
    */
   contextUsage?: SessionContextUsagePort;
+  /**
+   * 「模型这一轮看到了什么系统消息」（additive `sessions.get.system_context`，asm 注入）。
+   *
+   * 与 `contextUsage` 同一范式、同一个 `SessionEventLog`：装配层用 `src/system-context.ts`
+   * 做尾窗回扫，serve 只负责按「session + 事件日志尾水位」缓存并透出。
+   * **为什么不是 message**：`prompt.system_context` 是事件，`messages` 里永远没有它 ——
+   * 回放窗口淘汰 / 进程重启之后，只有从事件日志重新派生才能把会话页那张卡找回来。
+   *
+   * 缺省 = `sessions.get` 不带该字段（旧行为一字不改、不抛错）。
+   */
+  systemContext?: SessionSystemContextPort;
   /**
    * 方法层（`events.list` 等）脱敏；缺省 core 默认 redactor。
    * 实时广播的脱敏由 hub 的 `map` 决定——自定义时应把同一实例传给
@@ -1533,6 +1548,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       compactRuntime: () => runtime,
       // 会话级用量（additive）：缺省不带该字段，旧装配行为不变。
       ...(opts.contextUsage !== undefined ? { contextUsage: opts.contextUsage } : {}),
+      // 「模型这一轮看到的系统消息」（additive）：缺省不带该字段，旧装配行为不变。
+      ...(opts.systemContext !== undefined ? { systemContext: opts.systemContext } : {}),
       // CREATE-0.39：sessions.create|restart|activate 与 agents.* 共用同一注入面。
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     }),
