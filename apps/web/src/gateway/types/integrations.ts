@@ -1,9 +1,31 @@
+/** 工具来源（0.51 additive）：`plugin` = 节点插件面；`member` = 成员运行期注入（`inbox`）。 */
+export type ToolSource = 'plugin' | 'member';
+
 /** 工具公开信息（/v1/tools） */
 export interface ToolInfo {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
   has_permission_check: boolean;
+  /** 只在按成员查询时出现：旧 gateway 不带 ⇒ 未知来源（按节点口径展示）。 */
+  source?: ToolSource;
+}
+
+/**
+ * 成员工具面的来源档位（`tools.list{agent_id}`）。
+ *
+ * `live` = 该成员活身体宿主里实取；`derived` = 当前没有活身体，服务端按「一具新身体
+ * 会拿到什么」推导。两者都是真实注册路径，区别只在有没有身体可读。
+ */
+export type ToolSurface = 'live' | 'derived';
+
+/** `tools.list` 响应：不带 `agent_id` 时只有 `tools`（旧形状）。 */
+export interface ToolListResponse {
+  tools?: ToolInfo[];
+  /** 只在按成员查询时出现 */
+  surface?: ToolSurface;
+  /** 只在按成员查询时出现 */
+  agent_id?: string;
 }
 
 /**

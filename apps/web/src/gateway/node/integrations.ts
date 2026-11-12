@@ -21,6 +21,7 @@ import type {
   MetricsSnapshot,
   PluginListItem,
   ToolInfo,
+  ToolListResponse,
   ToolPolicy,
   ToolPolicyResult,
 } from '../types';
@@ -30,13 +31,32 @@ import { TeamsClient } from './teams';
 export abstract class IntegrationsClient extends TeamsClient {
   /** 工具目录：canonical RPC 优先，旧 gateway 回退 WS legacy `tools.list`。 */
   async listTools(): Promise<ToolInfo[]> {
+    const body = await this.listToolsRaw();
+    return body.tools ?? [];
+  }
+
+  /**
+   * 0.51：某个成员的**真实**工具面（`tools.list{agent_id}`，含 `inbox` 这类成员内置工具）。
+   *
+   * 旧 gateway 会忽略不认识的参数、照旧回节点插件面（响应里没有 `surface`），
+   * 所以调用方按「有没有 `surface`」判断这次是不是真拿到了成员口径 —— 这里不猜、不报错。
+   */
+  async listToolsForAgent(agentId: string): Promise<ToolListResponse> {
+    const body = await this.listToolsRaw({ agent_id: agentId });
+    return {
+      tools: body.tools ?? [],
+      ...(body.surface !== undefined ? { surface: body.surface } : {}),
+      ...(body.agent_id !== undefined ? { agent_id: body.agent_id } : {}),
+    };
+  }
+
+  /** 两种口径共用一条传输：参数为 undefined = 节点插件面（与 0.50 的请求逐字节一致）。 */
+  private async listToolsRaw(params?: { agent_id: string }): Promise<ToolListResponse> {
     try {
-      const body = await this.rpc<{ tools?: ToolInfo[] }>('tools.list');
-      return body.tools ?? [];
+      return await this.rpc<ToolListResponse>('tools.list', params);
     } catch (error) {
       if (!canFallbackToRest(error)) throw error;
-      const body = await this.request<{ tools?: ToolInfo[] }>('tools.list');
-      return body.tools ?? [];
+      return await this.request<ToolListResponse>('tools.list', params);
     }
   }
 

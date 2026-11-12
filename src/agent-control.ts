@@ -32,6 +32,7 @@ import {
   type AgentSendBatchResultLike,
   type AgentSendLikeInput,
   type AgentStatusLike,
+  type AgentToolSurfaceLike,
   type AgentUpdateLikeInput,
   RpcError,
   type SessionActivateLikeInput,
@@ -298,6 +299,11 @@ export function createAgentControl(
     recall(input: AgentRecallLikeInput): Promise<AgentRecallLikeResult> {
       // 撤回 = 取消那一条待处理输入的「将执行」意图（human 真删 / agent 留档）。
       return service.recall({ agent_id: input.agent_id, message_ids: [...input.message_ids] });
+    },
+    toolSurface(agentId: string): AgentToolSurfaceLike | undefined {
+      // `tools.list{agent_id}` 的唯一数据源：service 查成员、执行内核给工具面。
+      // 这里只做形状透传 —— 适配器不许自己拼工具清单（第二份规格会腐烂）。
+      return service.toolSurface(agentId);
     },
     async dispatch(inputs: AgentDispatchLikeInput[]): Promise<AgentDispatchBatchResultLike> {
       const settledResults = await Promise.allSettled(

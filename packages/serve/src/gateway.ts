@@ -1523,6 +1523,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
       : {}),
     pluginHost,
+    ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     clientCount: () => sseClients.size + wsClients.size,
     latestSeq: () => hub.latestSeq,
     protocolInfo,

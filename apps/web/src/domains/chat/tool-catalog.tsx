@@ -16,12 +16,21 @@ export function ToolCatalogProvider({
   client,
   enabled,
   epoch,
+  agentId,
   children,
 }: {
-  client: Pick<GatewayClient, 'listTools'>;
+  client: Pick<GatewayClient, 'listTools' | 'listToolsForAgent'>;
   enabled: boolean;
   /** 每次 hello 递增：重启 / 重连后重新拉目录。 */
   epoch: number;
+  /**
+   * 当前会话的成员 id（已知时带 `agent_id` 拉一次）。
+   *
+   * 为什么按成员拉：`inbox` 这类工具只注册在成员身体自己的宿主里，节点插件面永远
+   * 看不到它们 —— 不带 `agent_id` 时这些卡片只能显示“描述不可用”。拿不到 id
+   * （无选中会话 / 旧 gateway）就保持原行为，不猜、不另建 RPC。
+   */
+  agentId?: string;
   children: ReactNode;
 }) {
   const [descriptions, setDescriptions] = useState<ReadonlyMap<string, string>>(() => new Map());
@@ -30,8 +39,11 @@ export function ToolCatalogProvider({
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    void client
-      .listTools()
+    void (
+      agentId !== undefined
+        ? client.listToolsForAgent(agentId).then((body) => body.tools ?? [])
+        : client.listTools()
+    )
       .then((tools) => {
         if (cancelled) return;
         setDescriptions(
@@ -48,7 +60,7 @@ export function ToolCatalogProvider({
     return () => {
       cancelled = true;
     };
-  }, [client, enabled, epoch]);
+  }, [client, enabled, epoch, agentId]);
 
   const value = useMemo(() => descriptions, [descriptions]);
   return <ToolCatalogContext.Provider value={value}>{children}</ToolCatalogContext.Provider>;

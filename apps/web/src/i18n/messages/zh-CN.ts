@@ -1334,6 +1334,21 @@ export const messages = {
   'integrations.tools.policyChecking': '正在检查 gateway 能力…',
   'integrations.tools.policyUnsupported': '需要更新的 gateway。',
   'integrations.tools.policyLoadFailed': '读取权限配置失败：{detail}',
+  'integrations.tools.scopeLabel': '工具面',
+  'integrations.tools.scopeNode': '节点插件面',
+  'integrations.tools.scopeNodeHint':
+    '节点插件面：节点注册的插件工具。不按成员权限收窄，也不含 inbox 这类成员内置工具。',
+  'integrations.tools.scopeMemberLiveHint':
+    '{agent} 活身体实际注册的工具面（{count} 个）。标「成员内置」的工具不在节点插件面里。',
+  'integrations.tools.scopeMemberDerivedHint':
+    '{agent} 当前没有活身体；这 {count} 个工具是按「新身体会拿到什么」的同一套规则推导的（没有真的启动身体）。',
+  'integrations.tools.scopeMemberUnknownHint':
+    '这个 gateway 没有返回成员工具面，下面列出的是节点插件面，不是 {agent} 实际能调的工具。',
+  'integrations.tools.surfaceLive': '活身体实取',
+  'integrations.tools.surfaceDerived': '无身体推导',
+  'integrations.tools.surfaceUnavailable': '工具面未知',
+  'integrations.tools.sourceMember': '成员内置',
+  'integrations.tools.emptyMember': '{agent} 当前没有任何工具。',
   'integrations.mcp.globalDesc': 'MCP 控制面为 gateway 全局状态。',
   'integrations.mcp.counts': '{total} 个服务 · {failed} 个失败',
   'integrations.mcp.reconnectAll': '重连全部失败（{count}）',

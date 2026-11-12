@@ -110,6 +110,7 @@ import {
   type MemberPermissionState,
   type MemberState,
   type MemberStatus,
+  type MemberToolSurface,
   type MemberTurnResult,
   type MemberVisibility,
   type PeerStopChange,
@@ -2718,6 +2719,21 @@ export class AgentServiceImpl implements AgentService {
       });
     // `unread` / `pending` 保持 **agent 维度**（过滤前），它们是收件箱口径，不是会话口径。
     return { agent_id: agentId, unread: listed.unread, pending: listed.pending, entries };
+  }
+
+  /**
+   * 0.51：该成员的工具面（`tools.list{agent_id}` 的唯一数据源）。
+   *
+   * 服务层只做「成员是否认识 + 把记录翻成运行期视图」这一件事；工具判据全部在
+   * `MemberExecutionHost.toolSurface`（活身体实取 / 无身体按 spawn 同一套推导）。
+   * 注册表里没有这个 id 时返回 `undefined`：RPC 层据此报 `not_found`，不静默给空列表。
+   */
+  toolSurface(agentId: string): MemberToolSurface | undefined {
+    const record = this.registry.get(agentId);
+    if (record === undefined) return undefined;
+    // 老执行内核（port 没实现 toolSurface）同样返回 undefined：那就真的没有工具面可答，
+    // 由 RPC 层给 not_found，而不是让调用方以为「这个成员一个工具都没有」。
+    return this.runtime.toolSurface?.(toRuntimeMember(record));
   }
 
   /**

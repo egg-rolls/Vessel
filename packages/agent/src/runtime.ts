@@ -48,6 +48,8 @@ import type {
   MemberExecutionMember,
   MemberExecutionPort,
   MemberPermissionState,
+  MemberToolSurface,
+  MemberToolSurfaceEntry,
   MemberTurnResult,
 } from './types.js';
 
@@ -433,6 +435,20 @@ interface MemberExecutionEntry {
    * hook 在 spawn 时注册、之后才建 entry，故开关由这个可变对象承载。
    */
   inboxState?: { enabled: boolean };
+  /**
+   * 0.51：这具 body 上「不来自父宿主」的工具名（当前只有运行期注入的 `inbox`）。
+   * 工具热刷新会重建整个宿主，名字集合随注册来源记录在 entry 上，`tools.list{agent_id}`
+   * 才能给每条工具标 `source`，而不是靠工具名去猜。
+   */
+  injectedTools: ReadonlySet<string>;
+}
+
+/** `buildSurface` 的结果：成员应有的工具 + 其中哪些是运行期注入的。 */
+interface MemberSurfaceBuild {
+  mode: MemberExecutionPermissionMode;
+  /** 已按 mode / bridge 收窄，按注册顺序排列（父宿主工具 → 注入工具） */
+  tools: ToolDefinition[];
+  injected: ReadonlySet<string>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -786,6 +802,25 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
   };
 }
 
+/**
+ * 0.51：`ToolDefinition` → `tools.list{agent_id}` 的条目。
+ *
+ * `source` 由注册来源决定而不是按名字猜：`injected` 是运行期注入的那几个
+ * （当前只有 `inbox`），其余都来自父宿主的插件面。
+ */
+function describeToolSurface(
+  tools: readonly ToolDefinition[],
+  injected: ReadonlySet<string>,
+): MemberToolSurfaceEntry[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+    has_permission_check: typeof tool.checkPermission === 'function',
+    source: injected.has(tool.name) ? 'member' : 'plugin',
+  }));
+}
+
 /** 进程内成员执行内核 */
 export class MemberExecutionHost implements MemberExecutionPort {
   private readonly model?: string;
@@ -871,32 +906,20 @@ export class MemberExecutionHost implements MemberExecutionPort {
       throw new Error(`member runtime model is required: ${member.id}`);
     }
 
-    const mode = this.effectivePermissionMode(member);
-    const tools = this.selectTools(mode).map((tool) =>
-      this.restrictPermissions(tool, member.id, mode),
-    );
+    const surface = this.buildSurface(member);
+    const mode = surface.mode;
     // 0.32：只有 spawn 时已 attach 收件箱的 ExecutionUnit 才注册 notice hook 与 inbox 工具；
     // 开关放在可变对象里，`disableInbox` 之后（rotate / retire 的旧 ExecutionUnit）hook 直接返回。
     const inbox = this.inbox;
     const inboxState = inbox !== undefined ? { enabled: true } : undefined;
-    const inboxTool =
-      inbox !== undefined
-        ? this.restrictPermissions(createInboxTool({ inbox, agentId: member.id }), member.id, mode)
-        : undefined;
     const pluginHost = new MemoryPluginHost();
     for (const hook of this.pluginHost?.getHooks() ?? []) pluginHost.registerHook(hook);
     for (const guardrail of this.pluginHost?.getGuardrails() ?? []) {
       pluginHost.registerGuardrail(guardrail);
     }
-    for (const tool of tools) pluginHost.registerTool(tool);
-    // inbox 工具只读本地队列，不是工作区能力：deny 模式也注册。
-    if (inboxTool !== undefined) pluginHost.registerTool(inboxTool);
+    for (const tool of surface.tools) pluginHost.registerTool(tool);
 
-    const selfCard = this.buildSelfCard(
-      member,
-      model,
-      inboxTool !== undefined ? [...tools, inboxTool] : tools,
-    );
+    const selfCard = this.buildSelfCard(member, model, surface.tools);
     const events = new MemoryEventStream();
     if (inbox !== undefined && inboxState !== undefined) {
       pluginHost.registerHook(
@@ -990,6 +1013,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
       mode,
       running: false,
       toolsRefreshPending: false,
+      injectedTools: surface.injected,
       ...(inboxState !== undefined ? { inboxState } : {}),
     };
     this.entries.set(member.session_id, entry);
@@ -1358,6 +1382,30 @@ export class MemberExecutionHost implements MemberExecutionPort {
     return applied;
   }
 
+  /**
+   * 0.51：该成员的工具面（canonical `tools.list{agent_id}` 的唯一数据源）。
+   *
+   * 两条路径，都是真实注册路径的结果：
+   * - **live**（有活身体）：直接读那具 body 自己的 `MemoryPluginHost`。工具热刷新、
+   *   `disableInbox`、`inboxState` 之类只在运行期发生的事都会被如实反映 —— **实取值**。
+   * - **derived**（当前没有活身体）：调 `buildSurface` —— 与 `spawn` 里注册进新宿主
+   *   的是**同一个函数**，所以返回的就是「一具新身体此刻会拿到什么」。不 spawn、不占
+   *   单 body 名额、不留任何副作用 —— **推导值**。
+   *
+   * 调用方（serve）把 `surface` 字段原样透出；不传 `agent_id` 的节点口径不受影响。
+   */
+  toolSurface(member: MemberExecutionMember): MemberToolSurface {
+    const entry = this.entries.get(member.session_id);
+    if (entry !== undefined && entry.memberId === member.id) {
+      return {
+        surface: 'live',
+        tools: describeToolSurface(entry.pluginHost.listTools(), entry.injectedTools),
+      };
+    }
+    const derived = this.buildSurface(member);
+    return { surface: 'derived', tools: describeToolSurface(derived.tools, derived.injected) };
+  }
+
   /** 轮结束：清 running；若期间收到过工具刷新，在轮边界应用。 */
   private finishRun(member: MemberExecutionMember, entry: MemberExecutionEntry): void {
     entry.running = false;
@@ -1371,6 +1419,52 @@ export class MemberExecutionHost implements MemberExecutionPort {
   }
 
   /**
+   * 成员应有的工具面（**唯一一份规格**）。
+   *
+   * spawn、工具热刷新、`tools.list{agent_id}` 的推导路径都调这里：谁都不许再写一份
+   * 「成员有哪些工具」。`injected` 是其中不来自父宿主的名字（当前只有 `inbox`），
+   * 用来给 wire 条目标 `source`，不靠工具名去猜。
+   *
+   * `injectInbox` 缺省按「这台内核此刻是否 attach 了收件箱」；工具热刷新要沿用**该 body
+   * 建成时**的判定（`entry.inboxState`），所以可以显式覆盖。
+   */
+  private buildSurface(
+    member: Pick<MemberExecutionMember, 'id'> & { team_id?: string },
+    options: {
+      mode?: MemberExecutionPermissionMode;
+      /** 显式工具来源快照；缺省读父宿主当前工具面 */
+      source?: readonly ToolDefinition[];
+      injectInbox?: boolean;
+    } = {},
+  ): MemberSurfaceBuild {
+    const mode = options.mode ?? this.effectivePermissionMode(member);
+    const tools = this.selectTools(mode, options.source).map((tool) =>
+      this.restrictPermissions(tool, member.id, mode),
+    );
+    const inboxTool =
+      (options.injectInbox ?? this.inbox !== undefined)
+        ? this.inboxTool(member.id, mode)
+        : undefined;
+    // inbox 工具只读本地队列，不是工作区能力：deny 模式也注册；顺序恒定在父宿主工具之后，
+    // 与 spawn 注册进宿主、`--tools` / 卡片展示的顺序一致。
+    return {
+      mode,
+      tools: inboxTool === undefined ? tools : [...tools, inboxTool],
+      injected: new Set(inboxTool === undefined ? [] : [inboxTool.name]),
+    };
+  }
+
+  /** 运行期注入的收件箱工具；内核没 attach 收件箱时没有这个工具。 */
+  private inboxTool(
+    memberId: string,
+    mode: MemberExecutionPermissionMode,
+  ): ToolDefinition | undefined {
+    const inbox = this.inbox;
+    if (inbox === undefined) return undefined;
+    return this.restrictPermissions(createInboxTool({ inbox, agentId: memberId }), memberId, mode);
+  }
+
+  /**
    * 把目标工具面替换进 body 自己的宿主。
    *
    * `MemoryPluginHost.registerTool` 对同名重复注册抛错，因此先清空旧工具再注册新集合；
@@ -1381,23 +1475,21 @@ export class MemberExecutionHost implements MemberExecutionPort {
     source: readonly ToolDefinition[],
   ): boolean {
     const previous = entry.pluginHost.listTools();
-    const tools = this.selectTools(entry.mode, source).map((tool) =>
-      this.restrictPermissions(tool, entry.memberId, entry.mode),
+    // 与 spawn 同一套判定（`buildSurface`）；只有「来源快照 / 该 body 的 mode /
+    // 它建成时是否已 attach 收件箱」这三项按 entry 走。
+    const surface = this.buildSurface(
+      { id: entry.memberId },
+      {
+        mode: entry.mode,
+        source,
+        injectInbox: this.inbox !== undefined && entry.inboxState !== undefined,
+      },
     );
-    // 工具热刷新会清空并重注册整个宿主；inbox 工具不在父宿主里，必须一起补回。
-    const inbox = this.inbox;
-    if (inbox !== undefined && entry.inboxState !== undefined) {
-      tools.push(
-        this.restrictPermissions(
-          createInboxTool({ inbox, agentId: entry.memberId }),
-          entry.memberId,
-          entry.mode,
-        ),
-      );
-    }
+    const tools = surface.tools;
     try {
       for (const existing of previous) entry.pluginHost.unregisterTool(existing.name);
       for (const tool of tools) entry.pluginHost.registerTool(tool);
+      entry.injectedTools = surface.injected;
       return true;
     } catch (error) {
       try {
@@ -1520,8 +1612,11 @@ export class MemberExecutionHost implements MemberExecutionPort {
   /**
    * 非空 team_id 的成员把全局 allow 提升为 bridge；显式 deny 保持只读工具，
    * 不因 Team 绑定放宽。缺 parentEvents 时仍由 ask → deny 收口。
+   *
+   * 只读 `team_id`：`tools.list{agent_id}` 的推导路径只有一份成员视图，不必拼整条
+   * `MemberExecutionMember`（推导不 spawn，用不到 session / binding）。
    */
-  private effectivePermissionMode(member: MemberExecutionMember): MemberExecutionPermissionMode {
+  private effectivePermissionMode(member: { team_id?: string }): MemberExecutionPermissionMode {
     if (
       this.forceBridgeForTeams &&
       this.permissionMode === 'allow' &&

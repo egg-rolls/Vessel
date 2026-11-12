@@ -24,11 +24,33 @@ import { errorMessage } from './errors';
 import { PendingStrip } from './PendingStrip';
 import { SessionRail } from './SessionRail';
 import { TranscriptWindow } from './TranscriptWindow';
+import { ToolCatalogProvider } from './tool-catalog';
 import { useChatSessions } from './useChatSessions';
 import { useChatSubmit } from './useChatSubmit';
 import { useChatTranscript } from './useChatTranscript';
 
 type ChatRoute = Extract<Route, { domain: 'chat' }>;
+
+/**
+ * 当前会话 body 的成员 id（工具描述目录按它拉 `tools.list{agent_id}`）。
+ *
+ * 判据来自**已有的事件派生 agent 树**（`agentsForSession` 的同一份数据），不新增 RPC：
+ * 显式选中的子 agent 优先；否则取「`sessionId` 恰好是本会话」且深度最小的节点 ——
+ * 那正是拥有这具 body 的成员。历史会话 / 进程重启后事件树可能为空，此时返回
+ * `undefined`，目录退回节点插件面（与今天一致）。
+ */
+function catalogAgentOfSession(
+  activeAgentId: string | undefined,
+  nodes: readonly { id: string; depth: number; sessionId?: string }[],
+  sessionId: string | null,
+): string | undefined {
+  if (activeAgentId !== undefined) return activeAgentId;
+  if (sessionId === null) return undefined;
+  const owners = nodes
+    .filter((node) => node.sessionId === sessionId)
+    .sort((a, b) => a.depth - b.depth);
+  return owners[0]?.id;
+}
 
 /** 待确认的历史消息分支操作：keepMessages 是 `sessions.get` 的 session.messages 下标。 */
 interface CreateTarget {
@@ -301,212 +323,226 @@ export function ChatView({
     }
   };
 
+  // 工具描述目录：知道属于哪个成员就按成员拉（`inbox` 这类成员内置工具才有描述）。
+  const catalogAgentId = catalogAgentOfSession(
+    transcriptApi.activeAgent?.id,
+    transcriptApi.sessionAgents,
+    selectedId,
+  );
+
   return (
-    <div className="chat-workspace">
-      <SessionRail
-        sessions={sessionsApi.sessionWindow.shown}
-        hiddenCount={sessionsApi.sessionWindow.hiddenCount}
-        selectedId={selectedId}
-        draftActive={draftActive}
-        pendingBySession={sessionsApi.pendingBySession}
-        pendingAskCount={sessionAskCount}
-        onOpenPending={() =>
-          navigate({ domain: 'pending', ...(selectedId ? { sessionId: selectedId } : {}) })
-        }
-        agentAddresses={sessionsApi.agentAddresses}
-        defaultSession={sessionsApi.defaultSessionEntry}
-        primarySessionIds={sessionsApi.primarySessionIds}
-        query={sessionsApi.query}
-        onQueryChange={sessionsApi.setQuery}
-        searchSnippets={sessionsApi.activeServerSearch?.snippets}
-        loading={sessionsApi.sessionsLoading}
-        error={sessionsApi.sessionsError}
-        onRetry={sessionsApi.retryLoad}
-        hasToken={hasToken}
-        onSelect={selectSession}
-        onNew={startNewSession}
-        onRename={sessionsApi.handleRename}
-        onDelete={sessionsApi.openDelete}
-        onViewRuns={(sessionId) => navigate({ domain: 'runs', tab: 'live', sessionId })}
-        onShowMore={sessionsApi.showMore}
-        compact={compact}
-        onCloseDrawer={onCloseSessions}
-        onOpenConnection={() => navigate({ domain: 'gateway' })}
-        writesDisabled={!connected}
-        renameSignal={sessionsApi.renameSignal}
-        sessionsOpen={sessionsOpen}
-        drawerRef={drawerRef}
-        panes={panes}
-      />
+    <ToolCatalogProvider
+      client={client}
+      enabled={connected}
+      epoch={epoch}
+      {...(catalogAgentId !== undefined ? { agentId: catalogAgentId } : {})}
+    >
+      <div className="chat-workspace">
+        <SessionRail
+          sessions={sessionsApi.sessionWindow.shown}
+          hiddenCount={sessionsApi.sessionWindow.hiddenCount}
+          selectedId={selectedId}
+          draftActive={draftActive}
+          pendingBySession={sessionsApi.pendingBySession}
+          pendingAskCount={sessionAskCount}
+          onOpenPending={() =>
+            navigate({ domain: 'pending', ...(selectedId ? { sessionId: selectedId } : {}) })
+          }
+          agentAddresses={sessionsApi.agentAddresses}
+          defaultSession={sessionsApi.defaultSessionEntry}
+          primarySessionIds={sessionsApi.primarySessionIds}
+          query={sessionsApi.query}
+          onQueryChange={sessionsApi.setQuery}
+          searchSnippets={sessionsApi.activeServerSearch?.snippets}
+          loading={sessionsApi.sessionsLoading}
+          error={sessionsApi.sessionsError}
+          onRetry={sessionsApi.retryLoad}
+          hasToken={hasToken}
+          onSelect={selectSession}
+          onNew={startNewSession}
+          onRename={sessionsApi.handleRename}
+          onDelete={sessionsApi.openDelete}
+          onViewRuns={(sessionId) => navigate({ domain: 'runs', tab: 'live', sessionId })}
+          onShowMore={sessionsApi.showMore}
+          compact={compact}
+          onCloseDrawer={onCloseSessions}
+          onOpenConnection={() => navigate({ domain: 'gateway' })}
+          writesDisabled={!connected}
+          renameSignal={sessionsApi.renameSignal}
+          sessionsOpen={sessionsOpen}
+          drawerRef={drawerRef}
+          panes={panes}
+        />
 
-      <section
-        className="conversation"
-        aria-label={t('chat.main.conversationLabel')}
-        inert={compact && sessionsOpen ? true : undefined}
-      >
-        <h1 className="sr-only">{t('chat.main.heading')}</h1>
+        <section
+          className="conversation"
+          aria-label={t('chat.main.conversationLabel')}
+          inert={compact && sessionsOpen ? true : undefined}
+        >
+          <h1 className="sr-only">{t('chat.main.heading')}</h1>
 
-        {/* 手柄与页头 / 转录区同属 content-stage：纵范围到转录区底部为止，
+          {/* 手柄与页头 / 转录区同属 content-stage：纵范围到转录区底部为止，
             不再纵跨整列压到输入区上（拖输入框右缘不会再被手柄抢走）。 */}
-        <div className="content-stage">
-          {!panes.disabled('chat') && (
-            <ResizeHandle
-              pane="chat"
-              api={panes}
-              label={t('resize.chat')}
-              className="resize-handle resize-handle-content"
+          <div className="content-stage">
+            {!panes.disabled('chat') && (
+              <ResizeHandle
+                pane="chat"
+                api={panes}
+                label={t('resize.chat')}
+                className="resize-handle resize-handle-content"
+              />
+            )}
+
+            <ChatHeader
+              selectedId={selectedId}
+              selectedSession={sessionsApi.selectedSession}
+              sessionDetail={sessionsApi.sessionDetail}
+              agents={transcriptApi.sessionAgents}
+              activeAgentId={transcriptApi.activeAgent?.id}
+              draftActive={draftActive}
+              onSelectAgent={(agentId) => {
+                if (!selectedId) return;
+                navigate({
+                  domain: 'chat',
+                  sessionId: selectedId,
+                  ...(agentId ? { agent: agentId } : {}),
+                });
+              }}
             />
-          )}
 
-          <ChatHeader
-            selectedId={selectedId}
-            selectedSession={sessionsApi.selectedSession}
-            sessionDetail={sessionsApi.sessionDetail}
-            agents={transcriptApi.sessionAgents}
-            activeAgentId={transcriptApi.activeAgent?.id}
-            draftActive={draftActive}
-            onSelectAgent={(agentId) => {
-              if (!selectedId) return;
-              navigate({
-                domain: 'chat',
-                sessionId: selectedId,
-                ...(agentId ? { agent: agentId } : {}),
-              });
-            }}
-          />
+            {selectedId && (
+              <PluginPanels
+                slot="session-detail"
+                context={{ session: selectedId }}
+                className="flex-none px-4 pb-2"
+              />
+            )}
 
-          {selectedId && (
-            <PluginPanels
-              slot="session-detail"
-              context={{ session: selectedId }}
-              className="flex-none px-4 pb-2"
+            <TranscriptWindow
+              hasToken={hasToken}
+              selectedId={selectedId}
+              activeAgent={transcriptApi.activeAgent}
+              draftActive={draftActive}
+              restorePending={sessionsApi.restorePending}
+              hydrateError={transcriptApi.hydrateError}
+              hydrating={transcriptApi.hydrating}
+              hydrateStale={transcriptApi.hydrateStale}
+              hasTranscript={transcriptApi.hasTranscript}
+              hasEarlier={transcriptApi.hasEarlier}
+              visibleGroups={transcriptApi.visibleGroups}
+              renderedGroups={transcriptApi.renderedGroups}
+              transcriptWindow={transcriptApi.transcriptWindow}
+              transcriptMessages={transcriptApi.transcriptMessages}
+              historyIndex={transcriptApi.historyIndex}
+              isHiddenMessage={transcriptApi.isHiddenMessage}
+              noticeKindOf={transcriptApi.noticeKindOf}
+              messageIndexOffset={transcriptApi.messageIndexOffset}
+              sessionFailure={transcriptApi.sessionFailure}
+              sessionSystemContext={transcriptApi.sessionSystemContext}
+              detailNotice={transcriptApi.detailNotice}
+              onDismissDetailNotice={transcriptApi.dismissDetailNotice}
+              earlierError={transcriptApi.earlierError}
+              onDismissEarlierError={transcriptApi.dismissEarlierError}
+              onRetryEarlier={() => {
+                // 重试只重取「上一页」：服务端游标由窗口首条决定，失败后窗口没动，
+                // 因此直接重发同一个 before 请求（不经本地扩窗，避免白扩一页）。
+                if (!selectedId) return;
+                void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
+              }}
+              verbosity={transcriptApi.visibility.verbosity}
+              cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
+              errorLevel={transcriptApi.errorLevel}
+              entries={snapshot.entries}
+              snapshotVersion={snapshot.version}
+              detailSessionId={sessionsApi.sessionDetail?.session_id}
+              sendTick={submitApi.sendTick}
+              onRetryDetail={transcriptApi.reloadDetail}
+              onLoadEarlier={transcriptApi.loadEarlier}
+              onConfigureConnection={() => navigate({ domain: 'gateway' })}
+              onGoChat={() => navigate({ domain: 'chat' })}
+              onEditMessage={handleEditMessage}
+              onRetryMessage={handleRetryMessage}
             />
-          )}
 
-          <TranscriptWindow
-            hasToken={hasToken}
-            selectedId={selectedId}
-            activeAgent={transcriptApi.activeAgent}
-            draftActive={draftActive}
-            restorePending={sessionsApi.restorePending}
-            hydrateError={transcriptApi.hydrateError}
-            hydrating={transcriptApi.hydrating}
-            hydrateStale={transcriptApi.hydrateStale}
-            hasTranscript={transcriptApi.hasTranscript}
-            hasEarlier={transcriptApi.hasEarlier}
-            visibleGroups={transcriptApi.visibleGroups}
-            renderedGroups={transcriptApi.renderedGroups}
-            transcriptWindow={transcriptApi.transcriptWindow}
-            transcriptMessages={transcriptApi.transcriptMessages}
-            historyIndex={transcriptApi.historyIndex}
-            isHiddenMessage={transcriptApi.isHiddenMessage}
-            noticeKindOf={transcriptApi.noticeKindOf}
-            messageIndexOffset={transcriptApi.messageIndexOffset}
-            sessionFailure={transcriptApi.sessionFailure}
-            sessionSystemContext={transcriptApi.sessionSystemContext}
-            detailNotice={transcriptApi.detailNotice}
-            onDismissDetailNotice={transcriptApi.dismissDetailNotice}
-            earlierError={transcriptApi.earlierError}
-            onDismissEarlierError={transcriptApi.dismissEarlierError}
-            onRetryEarlier={() => {
-              // 重试只重取「上一页」：服务端游标由窗口首条决定，失败后窗口没动，
-              // 因此直接重发同一个 before 请求（不经本地扩窗，避免白扩一页）。
-              if (!selectedId) return;
-              void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
-            }}
-            verbosity={transcriptApi.visibility.verbosity}
-            cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
-            errorLevel={transcriptApi.errorLevel}
-            entries={snapshot.entries}
-            snapshotVersion={snapshot.version}
-            detailSessionId={sessionsApi.sessionDetail?.session_id}
-            sendTick={submitApi.sendTick}
-            onRetryDetail={transcriptApi.reloadDetail}
-            onLoadEarlier={transcriptApi.loadEarlier}
-            onConfigureConnection={() => navigate({ domain: 'gateway' })}
-            onGoChat={() => navigate({ domain: 'chat' })}
-            onEditMessage={handleEditMessage}
-            onRetryMessage={handleRetryMessage}
-          />
-
-          {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：
+            {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：
               条带只负责「还有几条在等」，跟着输入区一起常驻。宽度 / 内边距由它自己
               对齐消息列（见 PendingStrip.tsx）。数据源是服务端持久真相
               （`agents.inbox{ sessionId }`），刷新 / 切会话都不丢；`refreshKey` 只是
               「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化）。 */}
-          <PendingStrip
-            sessionId={selectedId}
+            <PendingStrip
+              sessionId={selectedId}
+              client={client}
+              epoch={epoch}
+              refreshKey={submitApi.sendTick + transcriptApi.visibleGroups.length}
+              onRefillDraft={refillDraftFromStrip}
+            />
+          </div>
+
+          <ComposerSlot
+            pendingItem={transcriptApi.pendingItem}
+            pendingItems={transcriptApi.pendingItems}
+            queueChips={transcriptApi.queueChips}
+            responding={responding}
+            connected={connected}
+            onStop={stopHandler}
+            stopping={transcriptApi.stopBusy}
+            onDecide={handleDecidePermission}
+            onRespondAsk={handleRespondAsk}
+            value={submitApi.input}
+            onChange={submitApi.setInput}
+            onSubmit={() => void submitApi.handleSend()}
+            submitting={submitApi.submitting}
+            targetLabel={targetLabel}
+            hasToken={hasToken}
+            onOpenConnection={() => navigate({ domain: 'gateway' })}
+            focusSignal={composerFocus}
+            refs={submitApi.refs}
+            onRemoveRef={submitApi.removeRef}
+            onAddRef={submitApi.addRef}
             client={client}
-            epoch={epoch}
-            refreshKey={submitApi.sendTick + transcriptApi.visibleGroups.length}
-            onRefillDraft={refillDraftFromStrip}
+            contextUsage={transcriptApi.contextUsage}
           />
-        </div>
+        </section>
 
-        <ComposerSlot
-          pendingItem={transcriptApi.pendingItem}
-          pendingItems={transcriptApi.pendingItems}
-          queueChips={transcriptApi.queueChips}
-          responding={responding}
-          connected={connected}
-          onStop={stopHandler}
-          stopping={transcriptApi.stopBusy}
-          onDecide={handleDecidePermission}
-          onRespondAsk={handleRespondAsk}
-          value={submitApi.input}
-          onChange={submitApi.setInput}
-          onSubmit={() => void submitApi.handleSend()}
-          submitting={submitApi.submitting}
-          targetLabel={targetLabel}
-          hasToken={hasToken}
-          onOpenConnection={() => navigate({ domain: 'gateway' })}
-          focusSignal={composerFocus}
-          refs={submitApi.refs}
-          onRemoveRef={submitApi.removeRef}
-          onAddRef={submitApi.addRef}
-          client={client}
-          contextUsage={transcriptApi.contextUsage}
-        />
-      </section>
+        {createTarget && (
+          <ConfirmDialog
+            title={
+              createTarget.kind === 'edit'
+                ? t('chat.message.create.editTitle')
+                : t('chat.message.create.retryTitle')
+            }
+            body={
+              createTarget.kind === 'edit'
+                ? t('chat.message.create.editBody')
+                : t('chat.message.create.retryBody')
+            }
+            confirmLabel={t('chat.message.create.confirm')}
+            busy={creating}
+            onConfirm={() => void handleConfirmCreate()}
+            onCancel={() => {
+              if (!creating) setCreateTarget(null);
+            }}
+          />
+        )}
 
-      {createTarget && (
-        <ConfirmDialog
-          title={
-            createTarget.kind === 'edit'
-              ? t('chat.message.create.editTitle')
-              : t('chat.message.create.retryTitle')
-          }
-          body={
-            createTarget.kind === 'edit'
-              ? t('chat.message.create.editBody')
-              : t('chat.message.create.retryBody')
-          }
-          confirmLabel={t('chat.message.create.confirm')}
-          busy={creating}
-          onConfirm={() => void handleConfirmCreate()}
-          onCancel={() => {
-            if (!creating) setCreateTarget(null);
-          }}
-        />
-      )}
-
-      {sessionsApi.deleteTarget && (
-        <DeleteSessionDialog
-          target={sessionsApi.deleteTarget}
-          counts={sessionsApi.deleteCounts}
-          error={sessionsApi.deleteError}
-          connected={connected}
-          busy={sessionsApi.deleteBusy}
-          onConfirm={() => void sessionsApi.handleDelete()}
-          onCancel={sessionsApi.closeDelete}
-          onViewRuns={() => {
-            const target = sessionsApi.deleteTarget;
-            if (!target) return;
-            sessionsApi.closeDelete();
-            navigate({ domain: 'runs', tab: 'durable', sessionId: target.session_id });
-          }}
-        />
-      )}
-    </div>
+        {sessionsApi.deleteTarget && (
+          <DeleteSessionDialog
+            target={sessionsApi.deleteTarget}
+            counts={sessionsApi.deleteCounts}
+            error={sessionsApi.deleteError}
+            connected={connected}
+            busy={sessionsApi.deleteBusy}
+            onConfirm={() => void sessionsApi.handleDelete()}
+            onCancel={sessionsApi.closeDelete}
+            onViewRuns={() => {
+              const target = sessionsApi.deleteTarget;
+              if (!target) return;
+              sessionsApi.closeDelete();
+              navigate({ domain: 'runs', tab: 'durable', sessionId: target.session_id });
+            }}
+          />
+        )}
+      </div>
+    </ToolCatalogProvider>
   );
 }
