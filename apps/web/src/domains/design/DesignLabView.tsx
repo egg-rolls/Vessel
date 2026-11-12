@@ -1,23 +1,26 @@
 import { PageScaffold } from '@vessel-agent/plugin-ui';
 import { t, useLocale } from '../../i18n';
-import { ComponentSection } from './ComponentSection';
+import { PreviewSection } from './PreviewSection';
 import { TokenSection } from './TokenSection';
-import { TOKEN_GROUPS, useTokenValues } from './tokens';
+import { useTokenCatalog } from './tokens';
 
 /**
- * `#/designLab` — static living reference for host tokens and standard
- * components. It talks to no gateway; all token values are read at runtime.
+ * #/designLab —— token 与可复用组件的**自动发现**展览馆。
+ *
+ * - token：运行时枚举 :root 上实际存在的自定义属性（前缀分组），不手写清单；
+ * - 组件 / 弹窗：import.meta.glob('/src/**/*.preview.tsx') 自动收集，加文件即出现；
+ * - 页面不连 gateway：所有样例都是静态数据，没有 fetch / rpc 调用点。
  */
 export function DesignLabView() {
   // Subscribing here re-renders every sample when the locale changes.
   useLocale();
-  const values = useTokenValues();
+  const catalog = useTokenCatalog();
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
       <PageScaffold title={t('designLab.title')} subtitle={t('designLab.subtitle')}>
-        <TokenSection groups={TOKEN_GROUPS} values={values} />
-        <ComponentSection />
+        <TokenSection catalog={catalog} />
+        <PreviewSection />
       </PageScaffold>
     </div>
   );

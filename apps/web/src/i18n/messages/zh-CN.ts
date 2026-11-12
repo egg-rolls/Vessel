@@ -1668,6 +1668,84 @@ export const messages = {
   'designLab.demo.states.loading': '正在加载样例…',
   'designLab.demo.states.error': '请求失败，请检查网关连接。',
 
+  // Design Lab 自动发现（0.51）：token 前缀规则分组 + *.preview.tsx 组件样例
+  'designLab.tokens.autoNote':
+    '清单由 :root 上实际存在的自定义属性自动枚举（按前缀分组）：新增一个 token 不需要改本页代码。',
+  'designLab.tokens.motion': '动效',
+  'designLab.tokens.sizes': '尺寸',
+  'designLab.tokens.layers': '层级',
+  'designLab.tokens.other': '其它',
+  'designLab.tokens.count': '{count} 个',
+  'designLab.tokens.filter': '过滤 token',
+  'designLab.tokens.filterPlaceholder': '按名称或值过滤，如 amber',
+  'designLab.tokens.filterEmpty': '没有匹配的 token。',
+  'designLab.tokens.legend': '颜色色块：左 = 当前主题，右 = 强制暗色的采样值。',
+  'designLab.components.autoNote':
+    '页面自动收集 apps/web/src 下所有 *.preview.tsx（import.meta.glob 懒加载）；新增一个文件即出现在对应分组。',
+  'designLab.components.count': '{count} 个',
+  'designLab.components.filter': '过滤样例',
+  'designLab.components.filterPlaceholder': '按标题、说明或源码路径过滤',
+  'designLab.components.empty': '没有匹配的样例。',
+  'designLab.components.loading': '正在加载样例…',
+  'designLab.components.none': '没有发现 *.preview.tsx 样例文件。',
+  'designLab.components.sourcePath': '源码',
+  'designLab.components.renderError': '这个样例渲染失败；其它样例不受影响。',
+  'designLab.groups.chat': '会话流卡片',
+  'designLab.groups.nav': '导航与状态',
+  'designLab.groups.overlays': '弹窗与浮层',
+  'designLab.groups.ui': '基础组件',
+  'designLab.preview.queued.desc': '排队卡：琥珀档卡面 +「等待中」胶囊，折叠时也能取消。',
+  'designLab.preview.userBubble.desc': '用户气泡：气泡 + 附件 chip，时间在 hover 元信息位。',
+  'designLab.preview.assistant.desc': '助手正文：Markdown 正文 + 下方左对齐的复制按钮。',
+  'designLab.preview.reasoning.desc': '思考卡：标题 + 复制思考 + 最右时刻，超过 12 行可展开。',
+  'designLab.preview.tool.desc': '工具卡：卡头只有工具名与耗时，点开看描述 / 输入 / 输出。',
+  'designLab.preview.env.desc': '环境信息卡：scope 标签 + 条数，展开看上下文原文。',
+  'designLab.preview.agentMessage.desc':
+    'agent 投递卡：卡头是「来自 agent」，展开体首行是来源地址与时刻。',
+  'designLab.preview.failure.desc':
+    '失败卡：折叠态只留红点 + 一行错误摘要，展开体才有状态与错误原文（两张卡各演示一态）。',
+  'designLab.preview.navItem.desc':
+    '菜单按钮：分组头 + 六种状态点（四档语义 + 网关的 ok / warn）+ 折叠态。',
+  'designLab.preview.navItem.collapsed':
+    '折叠态只留图标；悬停 300ms 出 Tooltip（标题 + 状态 + 计数 + 版本）。',
+  'designLab.preview.navItem.plain': '没有状态信号的项：不渲染状态点，也不留占位版本号。',
+  'designLab.preview.navStatus.desc':
+    '四档语义与颜色 token 对照：文案来自 nav-status.ts，圆点由 NavItem 自己渲染。',
+  'designLab.preview.navStatus.colStatus': '状态',
+  'designLab.preview.navStatus.colValue': '当前主题下的值',
+  'designLab.preview.navStatus.note':
+    '未配置 / 未知落 muted（--faint，NavItem 的默认底色）；网关连接点仍只吐 ok / warn / danger / muted。',
+  'designLab.preview.confirm.desc': '确认弹窗：初始焦点在「取消」，Enter 不会误触发危险动作。',
+  'designLab.preview.confirm.openPlain': '打开确认框',
+  'designLab.preview.confirm.openDanger': '打开危险确认框',
+  'designLab.preview.confirm.title': '保存这次修改？',
+  'designLab.preview.confirm.body': '样例文案：确认后只关掉弹窗，不发起任何请求。',
+  'designLab.preview.confirm.dangerTitle': '删除这个会话？',
+  'designLab.preview.confirm.dangerBody': '样例文案：危险色主按钮，需要用户明确确认。',
+  'designLab.preview.confirm.dangerConfirm': '删除',
+  'designLab.preview.modal.desc':
+    '对话框壳：遮罩 + 居中面板 + Esc 关闭 + 焦点圈；sm / md / lg 三种宽度。',
+  'designLab.preview.modal.hint': '先选宽度，再打开。',
+  'designLab.preview.modal.open': '打开对话框',
+  'designLab.preview.modal.title': '对话框标题',
+  'designLab.preview.modal.body': '样例正文：面板内部自己滚动，点遮罩也能关。',
+  'designLab.preview.tooltip.desc':
+    '轻提示：hover / 聚焦 300ms 后出现，Esc 关闭，空间不足自动翻到下方。',
+  'designLab.preview.tooltip.label': '这是上方 Tooltip',
+  'designLab.preview.tooltip.trigger': '悬停看 Tooltip',
+  'designLab.preview.tooltip.bottom': '这是下方 Tooltip',
+  'designLab.preview.tooltip.bottomTrigger': '悬停看下方 Tooltip',
+  'designLab.preview.tooltip.icon': '图标按钮的 Tooltip',
+  'designLab.preview.actionMenu.desc':
+    '行级菜单：方向键 / Home / End / Esc，点外部关闭并把焦点还给触发按钮。',
+  'designLab.preview.actionMenu.rename': '重命名',
+  'designLab.preview.actionMenu.duplicate': '复制一份',
+  'designLab.preview.actionMenu.archive': '归档（不可用）',
+  'designLab.preview.actionMenu.delete': '删除',
+  'designLab.preview.mention.desc':
+    '@ 补全列表：combobox 的 listbox，方向键移动 aria-activedescendant。',
+  'designLab.preview.mention.hint': '样例成员：悬停高亮；选中回调只改高亮，不发消息。',
+
   // 0.46 顶层页 subtitle（标题只放标题与说明）
   'gateway.subtitle': '本浏览器当前连接的 gateway：端点、节点身份、版本与运行时长。',
   'pluginHost.subtitle': 'Marketplace 运行状态，以及本宿主加载插件所用的 registry。',
