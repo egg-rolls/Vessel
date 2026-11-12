@@ -59,6 +59,13 @@ export interface StoredInteraction {
   session_id?: string;
   /** 成员 bridge 请求的父会话（additive；旧文件缺失时继续可读）。 */
   parent_session_id?: string;
+  /**
+   * 成员 bridge 请求的父 **agent** id（0.51 additive）。
+   *
+   * 与 `parent_session_id` 是两个键：旧文件里 `parent_session_id` 可能装的是 agent id
+   * （0.19 的混用），新记录把「父 agent」写在这里，读侧才好甄别旧脏数据。
+   */
+  parent_agent_id?: string;
   tool_call_id?: string;
   tool: string;
   input: unknown;
@@ -139,6 +146,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
     team_id,
     session_id,
     parent_session_id,
+    parent_agent_id,
     tool_call_id,
     tool,
     input,
@@ -161,6 +169,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
   const teamId = nonEmptyString(team_id);
   const sessionId = nonEmptyString(session_id);
   const parentSessionId = nonEmptyString(parent_session_id);
+  const parentAgentId = nonEmptyString(parent_agent_id);
   const toolCallId = nonEmptyString(tool_call_id);
   return {
     requestId,
@@ -170,6 +179,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
     ...(teamId !== undefined ? { team_id: teamId } : {}),
     ...(sessionId !== undefined ? { session_id: sessionId } : {}),
     ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
+    ...(parentAgentId !== undefined ? { parent_agent_id: parentAgentId } : {}),
     ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
     tool,
     input,

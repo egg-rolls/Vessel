@@ -78,6 +78,14 @@ export interface AgentSummary {
   owner?: string;
   /** 0.27 additive：live body 列表；`session_id` 仍是 primary body。 */
   bodies?: ExecutionUnitStatus[];
+  /**
+   * 父 agent id（canonical `agents.list` 一直返回；0.51 起 Web 才用它）。
+   *
+   * 用途只有一个：历史脏数据（`parent_session_id` 里装的是 agent id）的甄别 ——
+   * 用 roster 上溯到父 agent 的当前 primary body，见
+   * `domains/pending/attribution.ts`。
+   */
+  parent_id?: string;
 }
 
 export interface AgentCreateInput {

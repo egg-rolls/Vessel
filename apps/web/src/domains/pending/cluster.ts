@@ -6,6 +6,7 @@
  * 只把同一份 pending 集合投影成「按 agent 聚在一起的审批组」。
  */
 import type { AskUserRequest } from '../../gateway/types';
+import { type AttributionIndex, attributedSessionId, EMPTY_ATTRIBUTION_INDEX } from './attribution';
 
 /** 请求的来源面：成员 bridge（团队）还是普通会话。 */
 export type PendingSource = 'session' | 'team';
@@ -19,6 +20,13 @@ export interface PendingCluster {
   scope: PendingScope;
   agentId?: string;
   sessionId?: string;
+  /**
+   * 归属会话（0.51）：成员 bridge 的请求 = 父会话；普通请求 = 自己的会话。
+   *
+   * `sessionId` 仍是「发起请求的那个会话」（成员自己的）—— 两个都留着，展示面才能
+   * 同时说清「谁问的」与「算谁的」。历史脏数据靠 roster 上溯兑底（见 attribution.ts）。
+   */
+  homeSessionId?: string;
   teamId?: string;
   source: PendingSource;
   /** 簇内最新一条的请求时间，用于列表排序。 */
@@ -57,12 +65,19 @@ export function pendingSource(request: AskUserRequest): PendingSource {
  * 把 pending ask 分簇。
  *
  * 簇内按请求时间升序（先问的排前面），簇之间按最新一条降序（最需要处理的在前）。
+ *
+ * `index` 是归属兑底用的 roster 索引：给不出时（roster 没加载 / 旧 gateway）
+ * 归属退化成「`parentSessionId` 就是会话 id」的旧行为，绝不会因此丢卡片。
  */
-export function groupPendingAsks(asks: readonly AskUserRequest[]): PendingCluster[] {
+export function groupPendingAsks(
+  asks: readonly AskUserRequest[],
+  index: AttributionIndex = EMPTY_ATTRIBUTION_INDEX,
+): PendingCluster[] {
   const byKey = new Map<string, PendingCluster>();
 
   for (const request of asks) {
     const key = pendingClusterKey(request);
+    const homeSessionId = attributedSessionId(request, index);
     const existing = byKey.get(key);
     if (existing === undefined) {
       byKey.set(key, {
@@ -70,6 +85,7 @@ export function groupPendingAsks(asks: readonly AskUserRequest[]): PendingCluste
         scope: clusterScope(request),
         ...(request.agentId !== undefined ? { agentId: request.agentId } : {}),
         ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+        ...(homeSessionId !== undefined ? { homeSessionId } : {}),
         ...(request.teamId !== undefined ? { teamId: request.teamId } : {}),
         source: pendingSource(request),
         latestAt: request.requestedAt,
@@ -85,6 +101,9 @@ export function groupPendingAsks(asks: readonly AskUserRequest[]): PendingCluste
     }
     if (existing.sessionId === undefined && request.sessionId !== undefined) {
       existing.sessionId = request.sessionId;
+    }
+    if (existing.homeSessionId === undefined && homeSessionId !== undefined) {
+      existing.homeSessionId = homeSessionId;
     }
     if (existing.teamId === undefined && request.teamId !== undefined) {
       existing.teamId = request.teamId;
@@ -103,17 +122,20 @@ export function groupPendingAsks(asks: readonly AskUserRequest[]): PendingCluste
 }
 
 /**
- * 某个会话要显示的待批提问。
+ * 某个会话的「待批」入口要数的提问（0.51 口径）。
  *
- * 成员 bridge 的请求 `sessionId` 是成员会话、`parentSessionId` 是父 chat；
- * 两个都算「属于这个会话」，否则侧栏按钮会漏掉代理提问。
+ * 归到**这个会话**的请求都算：普通请求 = 自己的会话；成员 bridge 的请求 = 父会话
+ * （历史脏数据靠 roster 上溯兑底）。注意它与会话页 Composer 槽位的守卫**不是**同一条
+ * 判据 —— 这里数的是「去待批页能看到几条」，不是「能在这个会话里渲出几张卡」。
  */
 export function asksForSession(
   asks: readonly AskUserRequest[],
   sessionId: string | null | undefined,
+  index: AttributionIndex = EMPTY_ATTRIBUTION_INDEX,
 ): AskUserRequest[] {
   if (sessionId === null || sessionId === undefined || sessionId === '') return [];
   return asks.filter(
-    (request) => request.sessionId === sessionId || request.parentSessionId === sessionId,
+    (request) =>
+      request.sessionId === sessionId || attributedSessionId(request, index) === sessionId,
   );
 }

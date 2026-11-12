@@ -7,10 +7,14 @@ import {
   pendingBarTarget,
   pendingPermissionsOutsideView,
 } from '../domains/chat/pending-permissions';
+import { rosterAttributionIndex } from '../domains/pending/attribution';
 import { useConnection } from '../gateway/ConnectionProvider';
+import { useNodes } from '../gateway/NodeProvider';
 import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
 import { applyTheme, useTheme } from '../state/theme';
+import { resourceData } from '../state/useResource';
+import { useAgentStore } from '../stores/agentStore';
 import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
 import { DomainNav } from './DomainNav';
@@ -78,6 +82,19 @@ export function AppShell() {
 
   // 当前会话的权限/提问在 ChatView 的 Composer 槽位处理；其他会话只保留顶部提示条。
   const modalOpen = Boolean(pendingAction || helpOpen);
+  // 归属解析要 roster（历史脏数据的上溯兑底）：外壳拿一次，顶部条 / 待批页共用同一份
+  // store（`useAgentStore`），不为这条提示多开一路 RPC。
+  const rosterState = useAgentStore((state) => state.roster);
+  const loadRoster = useAgentStore((state) => state.loadRoster);
+  const { nodes, teamControl } = useNodes();
+  const rosters = useMemo(() => resourceData(rosterState) ?? [], [rosterState]);
+  const attribution = useMemo(() => rosterAttributionIndex(rosters), [rosters]);
+  // roster 只在 idle 时补一次：各域视图（chat / teams / agents / runs）自己也会加载，
+  // 外壳这一步只为「待批页 / 非 chat 页」兜住归属解析所需的名单。
+  useEffect(() => {
+    if (rosterState.status !== 'idle' || nodes.length === 0) return;
+    void loadRoster(nodes, teamControl);
+  }, [rosterState.status, nodes, teamControl, loadRoster]);
   const otherPending = useMemo(
     () => pendingPermissionsOutsideView(permissions, route),
     [permissions, route],
@@ -93,6 +110,12 @@ export function AppShell() {
     (sessionId: string) => navigate({ domain: 'chat', sessionId }),
     [navigate],
   );
+  // 成员 bridge 的请求跳待批页（它们在会话页有守卫，进不去）。
+  const openPendingPage = useCallback(
+    (sessionId?: string) =>
+      navigate({ domain: 'pending', ...(sessionId !== undefined ? { sessionId } : {}) }),
+    [navigate],
+  );
 
   // 0.37：外壳只把持久提示与 toast feed 组合成 items，渲染固定在 AppBar 中心。
   const shellItems = shellNoticeItems({
@@ -106,25 +129,32 @@ export function AppShell() {
     onOpenConnection: () => navigate({ domain: 'gateway' }),
   });
 
-  const pendingSummary = pendingBarSummary(otherPending, otherAsks);
-  // compact bar 只跳会话；应答仍在目标会话的 Composer 槽位完成。
-  const pendingTarget = pendingBarTarget(pendingSummary);
+  const pendingSummary = pendingBarSummary(otherPending, otherAsks, attribution);
+  // 跳转落点由归属解析给出：普通请求 → 会话页；成员 bridge → 待批页；解析不出 → 不给跳转。
+  // 落点先算成 {label, run}：闭包里不再依赖 `pendingTarget` 的类型收窄（会话 id 也一并定下来，
+  // 免得上面那条「agent 落点可以没有 sessionId」的差异漏到 onClick 里）。
+  const pendingJump = ((): { label: string; run: () => void } | null => {
+    const target = pendingBarTarget(pendingSummary);
+    if (target === null) return null;
+    if (target.domain === 'pending') {
+      const sessionId = target.sessionId;
+      return {
+        label: t('pending.bar.goPending'),
+        run: () => openPendingPage(sessionId),
+      };
+    }
+    const sessionId = target.sessionId;
+    return { label: t('permission.goTo'), run: () => openPendingSession(sessionId) };
+  })();
   const pendingItem: MessageBarItem | null = pendingSummary.earliest
     ? {
         id: 'pending-requests',
         tone: 'info',
-        text: pendingTarget
+        text: pendingJump
           ? t('pending.bar.summary', { count: pendingSummary.count })
           : `${t('pending.bar.summary', { count: pendingSummary.count })} · ${t('pending.bar.unresolved')}`,
-        ...(pendingTarget
-          ? {
-              actions: [
-                {
-                  label: t('permission.goTo'),
-                  onClick: () => openPendingSession(pendingTarget.sessionId),
-                },
-              ],
-            }
+        ...(pendingJump
+          ? { actions: [{ label: pendingJump.label, onClick: pendingJump.run }] }
           : {}),
       }
     : null;

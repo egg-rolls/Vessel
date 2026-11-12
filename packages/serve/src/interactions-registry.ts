@@ -34,6 +34,14 @@ export interface PendingPermission {
   session_id?: string;
   /** bridge 请求的父会话（事件携带时记录，additive）。 */
   parent_session_id?: string;
+  /**
+   * bridge 请求的父 **agent**（0.51 additive；事件 `parent_agent_id`）。
+   *
+   * 与 `parent_session_id` 分开记：0.19 起 `parent_session_id` 里装的是 agent id，
+   * 同一条老记录的两种语义只能靠 agent id 甄别，所以新写的记录两个键都给全
+   * （会话给归属，agent 给「谁是父」），读侧不必再猜。
+   */
+  parent_agent_id?: string;
   tool_call_id?: string;
   source?: string;
 }
@@ -84,6 +92,8 @@ export interface PendingAsk {
   ts: number;
   session_id?: string;
   parent_session_id?: string;
+  /** 父 agent id（0.51 additive；与 `parent_session_id` 分开，语义不同）。 */
+  parent_agent_id?: string;
   /** 原始 questions；只用于 `interactions.list` 展示，不持久化。 */
   questions?: unknown;
 }
@@ -382,6 +392,7 @@ export function createInteractionsRegistry(
         const sessionId = nonEmptyString(data.session_id);
         const toolCallId = nonEmptyString(data.tool_call_id);
         const parentSessionId = nonEmptyString(data.parent_session_id);
+        const parentAgentId = nonEmptyString(data.parent_agent_id);
         const agentId = nonEmptyString(data.agent_id);
         const teamId = nonEmptyString(data.team_id);
         const deadlineAt =
@@ -398,6 +409,7 @@ export function createInteractionsRegistry(
           ...(deadlineAt !== undefined ? { deadline_at: deadlineAt } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
           ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
+          ...(parentAgentId !== undefined ? { parent_agent_id: parentAgentId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           ...(typeof data.source === 'string' && data.source.length > 0
             ? { source: data.source }
@@ -411,6 +423,7 @@ export function createInteractionsRegistry(
           ...(teamId !== undefined ? { team_id: teamId } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
           ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
+          ...(parentAgentId !== undefined ? { parent_agent_id: parentAgentId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           tool,
           input: data.input,
@@ -427,6 +440,7 @@ export function createInteractionsRegistry(
       if (requestId !== undefined) {
         const sessionId = nonEmptyString(data.session_id);
         const parentSessionId = nonEmptyString(data.parent_session_id);
+        const parentAgentId = nonEmptyString(data.parent_agent_id);
         const agentId = nonEmptyString(data.agent_id);
         const teamId = nonEmptyString(data.team_id);
         const toolCallId = nonEmptyString(data.tool_call_id);
@@ -438,6 +452,7 @@ export function createInteractionsRegistry(
           ...(teamId !== undefined ? { team_id: teamId } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
           ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
+          ...(parentAgentId !== undefined ? { parent_agent_id: parentAgentId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           // 0.52：投递语义跟着请求走；缺省不写该键 = sync（旧事件逐字节不变）。
           ...(data.mode === 'async' ? { mode: 'async' as const } : {}),
@@ -756,6 +771,9 @@ export function createInteractionsRegistry(
         ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
         ...(record.parent_session_id !== undefined
           ? { parent_session_id: record.parent_session_id }
+          : {}),
+        ...(record.parent_agent_id !== undefined
+          ? { parent_agent_id: record.parent_agent_id }
           : {}),
         ...(record.input !== undefined ? { questions: record.input } : {}),
       });

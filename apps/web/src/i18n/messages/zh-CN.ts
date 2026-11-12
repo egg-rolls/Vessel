@@ -193,6 +193,8 @@ export const messages = {
   // 0.18：跨会话待处理收敛为一条 compact bar。
   'pending.bar.summary': '其他会话有 {count} 个待处理请求',
   'pending.bar.unresolved': '无法定位所属会话',
+  // 0.51：成员 bridge 的请求只在待批页应答（会话页有守卫），所以落点是待批页。
+  'pending.bar.goPending': '去待批页',
   // 0.17：AppShell 里其他会话 / 未归属请求的操作面
   // 0.18：Composer 槽位的三种互斥状态；多个 pending 串行处理。
   'chat.prompt.label': '对话输入槽位',
@@ -301,6 +303,7 @@ export const messages = {
   'pending.cluster.agent': 'Agent {id}',
   'pending.cluster.session': '会话 {id}',
   'pending.cluster.run': 'Run {id}',
+  'pending.cluster.home': '归属 {id}',
   'pending.cluster.count': '{count} 个提问',
   'pending.cluster.expand': '展开详情',
   'pending.cluster.collapse': '收起',

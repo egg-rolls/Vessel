@@ -190,8 +190,16 @@ export interface AskUserRequest {
   requestedAt: number;
   /** 0.15 additive：由 run.started 反查的归属会话；旧流缺失时不参与跨 session 归类。 */
   sessionId?: string;
-  /** 成员 bridge 的父 chat（事件 `parent_session_id`）；旧事件缺失，缺失时回退 `sessionId`。 */
+  /**
+   * 成员 bridge 的父**会话**（事件 `parent_session_id`）；旧事件缺失。
+   *
+   * 0.51 前这里可能装的是父 **agent** id（0.19 的混用），所以读它之前必须过
+   * `resolveParentSession`：能靠 roster 认出它是 agent id 就按 agent 上溯，
+   * 见 `domains/pending/attribution.ts`。
+   */
   parentSessionId?: string;
+  /** 成员 bridge 的父 **agent** id（事件 `parent_agent_id` / `interactions.list`）；0.51 additive。 */
+  parentAgentId?: string;
   /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */
   agentId?: string;
   /**
@@ -224,8 +232,15 @@ export interface PermissionRequest {
   runId: string;
   /** run 归属会话；旧 gateway 缺失时不参与跨 session 归类。 */
   sessionId?: string;
-  /** 成员 bridge 的父 chat（事件 `parent_session_id`）；旧事件缺失，缺失时回退 `sessionId`。 */
+  /**
+   * 成员 bridge 的父**会话**（事件 `parent_session_id`）；旧事件缺失。
+   *
+   * 与 ask 同一口径：旧记录里可能是父 agent id，读侧一律先过
+   * `resolveParentSession`（`domains/pending/attribution.ts`）。
+   */
   parentSessionId?: string;
+  /** 成员 bridge 的父 **agent** id（事件 `parent_agent_id`）；0.51 additive。 */
+  parentAgentId?: string;
   toolCallId?: string;
   source?: string;
   /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */

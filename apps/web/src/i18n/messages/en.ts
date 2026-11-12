@@ -194,6 +194,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // 0.18: cross-session pending collapses into one compact bar.
   'pending.bar.summary': '{count} pending request(s) in other sessions',
   'pending.bar.unresolved': 'Owning session not found',
+  // 0.51: member-bridge requests are answered on the pending page only (session pages
+  // are guarded), so the bar links there instead of a chat session.
+  'pending.bar.goPending': 'Open pending',
   // 0.17: AppShell panel for other-session / unattributed requests
   // 0.18: the Composer slot has three mutually exclusive states; pending requests are serial.
   'chat.prompt.label': 'Conversation input slot',
@@ -305,6 +308,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.cluster.agent': 'Agent {id}',
   'pending.cluster.session': 'Session {id}',
   'pending.cluster.run': 'Run {id}',
+  'pending.cluster.home': 'Home {id}',
   'pending.cluster.count': '{count} question(s)',
   'pending.cluster.expand': 'Show details',
   'pending.cluster.collapse': 'Collapse',
