@@ -362,7 +362,10 @@ try {
   const withShellHost = withParentTool(new MemoryPluginHost());
   withShellHost.registerMemberBodyContribution(shell);
 
-  const derivedSurface = (pluginHost: MemoryPluginHost, withInbox: boolean): string => {
+  const derivedSurface = (
+    pluginHost: MemoryPluginHost,
+    withInbox: boolean,
+  ): readonly { name: string }[] => {
     const memberHost = new MemberExecutionHost({
       runtime: new Runtime(),
       pluginHost,
@@ -370,17 +373,16 @@ try {
     });
     // 收件箱是「运行期注入」那一半：两条路径都要比，否则「没 attach 收件箱」没人测。
     if (withInbox) memberHost.attachInbox?.(shareStore);
-    return JSON.stringify(
-      memberHost.toolSurface({
-        id: 'member-1',
-        session_id: 'sess-1',
-        role: 'member',
-        visibility: 'private',
-      }),
-    );
+    // 0.51：`toolSurface` 与 `tools.list` 同形 —— 直接是条目数组，不再包一层对象。
+    return memberHost.toolSurface({
+      id: 'member-1',
+      session_id: 'sess-1',
+      role: 'member',
+      visibility: 'private',
+    });
   };
-  const toolNames = (surfaceJson: string): string[] =>
-    JSON.parse(surfaceJson).tools.map((entry: { name: string }) => entry.name);
+  const toolNames = (surface: readonly { name: string }[]): string[] =>
+    surface.map((entry) => entry.name);
 
   for (const withInbox of [false, true]) {
     const label = withInbox ? '（attach 收件箱）' : '（无收件箱）';
@@ -388,7 +390,7 @@ try {
     const after = derivedSurface(withShellHost, withInbox);
     // 无收件箱时端口给不出来 ⇒ 贡献整条不装配；attach 之后它才真的参与合并。
     // 两种情形都必须与不登记贡献时逐字相同。
-    check(`S1 推导工具面逐字相同${label}`, before === after, {
+    check(`S1 推导工具面逐字相同${label}`, JSON.stringify(before) === JSON.stringify(after), {
       bare: toolNames(before),
       withShell: toolNames(after),
     });

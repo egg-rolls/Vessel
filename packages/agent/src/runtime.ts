@@ -1483,10 +1483,6 @@ export class MemberExecutionHost implements MemberExecutionPort {
     // inbox 工具只读本地队列，不是工作区能力：deny 模式也注册；顺序恒定在父宿主工具之后，
     // 与 spawn 注册进宿主、`--tools` / 卡片展示的顺序一致。贡献工具排在它后面（0.51 期 0
     // 的空壳贡献不产出工具，输出因此与 0.50 逐字相同）。
-    const injected = [
-      ...(inboxTool === undefined ? [] : [inboxTool.name]),
-      ...contributed.map((tool) => tool.name),
-    ];
     return {
       mode,
       tools: [...tools, ...(inboxTool === undefined ? [] : [inboxTool]), ...contributed],
