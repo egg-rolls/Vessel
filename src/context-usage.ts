@@ -35,20 +35,23 @@
  *   命中），比本地估算略大几个 %，所以只作兜底。
  *
  * 命中的来源写进 `context_usage.source`（`pressure` / `changed` / `estimated` /
- * `prompt`），以后自查「这个数字是谁给的」不用再猜。
+ * `request` / `prompt`），以后自查「这个数字是谁给的」不用再猜。
  *
- * ## `max` 从哪来（不是伪造，也不是预算）
- * 事实链：`config.context.maxTokens`（缺省 `DEFAULT_CONFIG.context.maxTokens`）
- * → `workingContext.maxTokens`（runtime 算百分比的**分母**）
- * → `context.pressure.max`（同一份值的 live 镜像）。所以：
- * 1. 命中 `context.pressure` 时用**事件里的真实 max**；
- * 2. 否则用装配层注入的**上下文窗口**（同一个 `config.context.maxTokens`，缺省走
- *    `DEFAULT_CONFIG`，不在本模块复刻常量）；
- * 3. 都拿不到 → 不给 `max`（客户端不画比例）。绝不为「让环好看」编一个数。
+ * ## `max` 从哪来（不是伪造，是随事件落盘的上下文窗口真值）
+ * 事件优先，配置只做兜底（三级，见 {@link resolveContextWindow}）：
+ * 1. 命中事件里的 `max`（`context.pressure` 的**真值**；≥90% 水位才发，多数会话没有）；
+ * 2. `llm.request.data.context_max` —— **本模块的主力**：`workingContext.maxTokens`
+ *    随事件落盘，历史会话因此自足（不再回推「当时的配置值」，将来按 agent / 模型
+ *    配不同窗口也不会串）；
+ * 3. 装配层注入的上下文窗口（`config.context.maxTokens`，缺省走 `DEFAULT_CONFIG`，
+ *    不在本模块复刻常量）—— **只为旧日志兼容**：那些事件没有 `context_max`，
+ *    行为与本轮之前完全一致；
+ * 4. 都拿不到 → 不给 `max`（客户端不画比例）。绝不为「让环好看」编一个数。
  *
- * 已知边界：provider 侧拿不到每个模型的真实上下文窗口，所以 runtime 用配置值当分母
- * ——本模块与 `context.pressure.max` 是同一份值；配置是**全局一个值**，将来若按
- * agent / 模型配置不同窗口，历史会话的 `max` 可能落到全局值。
+ * 窗口上限取自第 2 档时 `source` 记成 `request`（`used` 与 `max` 同源于那条
+ * `llm.request`），一眼能看出「这个窗口不是回推配置来的」；旧日志仍是
+ * `estimated` + 第 3 档，两者 `max` 数值相同（同一份 `config.context.maxTokens`）。
+ * 不回填旧数据：`context_max` 只在会写它的新日志里存在。
  *
  * ## 读数成本
  * 尾窗回扫（`SessionEventLog.readTailMatches`）：首窗 64 KiB，命中即停；一次 miss
@@ -82,9 +85,23 @@ export interface SessionContextUsage {
   used: number;
   max?: number;
   at?: number;
-  /** 这个 `used` 是谁给的：自查 / 排障用，UI 不消费。 */
-  source?: 'pressure' | 'changed' | 'estimated' | 'prompt';
+  /**
+   * 这个 `used` 是谁给的：自查 / 排障用，UI 不消费。
+   *
+   * `request` = `used` 与 `max` 同源于那条 `llm.request` 的落盘元信息
+   * （`estimated_tokens` + `context_max`），即「窗口上限是事件给的真值，不是回推配置」。
+   * 其余档位只描述 `used`：`pressure` / `changed` / `estimated` / `prompt`。
+   */
+  source?: 'pressure' | 'changed' | 'estimated' | 'prompt' | 'request';
 }
+
+/**
+ * `max`（上下文窗口上限）的来源档位：
+ * - `pressure`：命中 `context.pressure.max`（事件里的真值）；
+ * - `request`：命中 `llm.request.data.context_max`（随事件落盘的真值，历史会话主力）；
+ * - `config`：装配层注入的 `config.context.maxTokens`（**只做旧日志兜底**）。
+ */
+export type ContextUsageMaxSource = 'pressure' | 'request' | 'config';
 
 /** 取值 + 失效判定用的两个入口（`sessions.get` 的 `contextUsage` 端口）。 */
 export interface ContextUsageSource {
@@ -135,6 +152,8 @@ const SOURCES: readonly {
   },
   {
     type: 'llm.request',
+    // `used` 来自 `estimated_tokens`；若同一条事件还带了 `context_max`（窗口上限随事件
+    // 落盘），`source` 会覆写成 `request`（见 `resolveContextWindow` / lookup 的收口）。
     source: 'estimated',
     tier: 1,
     read: (data) => numberField(data, 'estimated_tokens'),
@@ -146,6 +165,55 @@ const SOURCES: readonly {
     read: (data) => numberField(isRecord(data) ? data.usage : undefined, 'prompt_tokens'),
   },
 ];
+
+/**
+ * 窗口上限（`max`）的三级取值：事件真值优先，配置只兜底。
+ *
+ * 顺序（见模块头「`max` 从哪来」）：
+ * 1. 命中事件自身的 `max`（`context.pressure`）—— 与 live 注册表同源的真值；
+ * 2. `llm.request.data.context_max` —— 尾窗里**最新**一条带该字段的请求事件
+ *    （通常就是命中事件本身；下一档的存在让「`used` 来自 `llm.response`，窗口仍然
+ *    有真值」这种情况也能拿到窗口，而不是退回配置）；
+ * 3. `fallbackWindowTokens` = 装配层注入的 `config.context.maxTokens`（旧日志兼容）。
+ *
+ * 都不成立 → `undefined`（客户端不画比例），不猜、不补 0。
+ */
+function resolveContextWindow(args: {
+  hit: { record: SessionEventRecord; source: { type: string } };
+  candidates: readonly { record: SessionEventRecord }[];
+  fallbackWindowTokens: number | undefined;
+}): { max: number; from: ContextUsageMaxSource; sameRecord: boolean } | undefined {
+  const { hit, candidates, fallbackWindowTokens } = args;
+
+  // 1. 命中 `context.pressure`：事件里的真实 max 最权威。
+  if (hit.source.type === 'context.pressure') {
+    const observedMax = numberField(hit.record.data, 'max');
+    if (observedMax !== undefined && observedMax > 0) {
+      return { max: Math.floor(observedMax), from: 'pressure', sameRecord: true };
+    }
+  }
+
+  // 2. `llm.request.data.context_max`：先看命中事件，再按新 → 旧扫尾窗里的其它请求。
+  //    `candidates` 已按新 → 旧排序（与 `used` 的取值顺序同一份 records）。
+  const requestMaxOf = (record: SessionEventRecord): number | undefined => {
+    if (record.type !== 'llm.request') return undefined;
+    const value = numberField(record.data, 'context_max');
+    return value !== undefined && value > 0 ? Math.floor(value) : undefined;
+  };
+  const fromHit = requestMaxOf(hit.record);
+  if (fromHit !== undefined) return { max: fromHit, from: 'request', sameRecord: true };
+  for (const candidate of candidates) {
+    if (candidate.record === hit.record) continue;
+    const value = requestMaxOf(candidate.record);
+    if (value !== undefined) return { max: value, from: 'request', sameRecord: false };
+  }
+
+  // 3. 旧日志兜底：装配层注入的上下文窗口（同一个 `config.context.maxTokens`）。
+  if (fallbackWindowTokens !== undefined) {
+    return { max: fallbackWindowTokens, from: 'config', sameRecord: false };
+  }
+  return undefined;
+}
 
 /**
  * 尾窗里最多看这么多个候选事件。
@@ -176,7 +244,7 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS = DEFAULT_CONFIG.context?.maxTokens;
  * 构造 `sessions.get.context_usage` 的取值面。
  *
  * `lookup` 返回 `undefined` 的三种情况都表示「不知道」，调用方与客户端都按
- * 「不显示环」处理：会话没有事件日志 / 尾窗回扫预算内没有用量事件 /
+ * 「不显示环」处理：会话没有事件日志 / 尾窗回扫字节上限内没有用量事件 /
  * 命中事件的字段不成形。
  */
 export function createContextUsageSource(options: ContextUsageSourceOptions): ContextUsageSource {
@@ -215,15 +283,21 @@ export function createContextUsageSource(options: ContextUsageSourceOptions): Co
       for (const { record, source } of ordered) {
         const used = source.read(record.data);
         if (used === undefined) continue;
-        // 事件里的真实 max 优先（只有 `context.pressure` 带）；否则用同一份上下文窗口。
-        const observedMax =
-          source.type === 'context.pressure' ? numberField(record.data, 'max') : undefined;
-        const max = observedMax !== undefined && observedMax > 0 ? observedMax : windowTokens;
+        // 窗口上限：事件真值（pressure.max → llm.request.context_max）优先，
+        // 配置值只给旧日志兜底。`source` 记 `request` 表示「used 与 max 同源于这条
+        // llm.request」，方便自查这个窗口是不是回推配置来的。
+        const window = resolveContextWindow({
+          hit: { record, source },
+          candidates,
+          fallbackWindowTokens: windowTokens,
+        });
+        const reportedSource: NonNullable<SessionContextUsage['source']> =
+          window?.sameRecord === true && source.type === 'llm.request' ? 'request' : source.source;
         return {
           used: Math.floor(used),
-          ...(max !== undefined ? { max: Math.floor(max) } : {}),
+          ...(window !== undefined ? { max: window.max } : {}),
           ...(typeof record.ts === 'number' && Number.isFinite(record.ts) ? { at: record.ts } : {}),
-          source: source.source,
+          source: reportedSource,
         };
       }
       return undefined;
