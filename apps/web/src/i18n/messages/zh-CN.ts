@@ -1145,7 +1145,6 @@ export const messages = {
   'chat.askAnswer.source': '来自待批页',
   'chat.agentMessage.from': '来自 agent {name}',
   'chat.agentMessage.group': '来自 agent {name} 的消息',
-  'chat.role.assistant': '助手',
   // 0.36: 消息气泡操作组
   'chat.message.actions': '消息操作',
   // 长消息折叠（会话页与团队页共用同一个按钮组件）

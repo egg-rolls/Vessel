@@ -12,7 +12,7 @@ import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { MessageRefs } from './MessageRefs';
-import { AssistantSpeaker, hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
+import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import type { TranscriptItem } from './transcript-items';
 
 /**
@@ -35,8 +35,6 @@ function historyReasoning(message: Message): string | undefined {
   const text = message.reasoning_content;
   return hasReasoningCard(text) ? text : undefined;
 }
-
-/** 消息时钟：只作为 hover 工具栏的元信息（`<time dateTime>` 语义保留）。 */
 
 /**
  * 该助手消息之前最近的一条真实用户输入（重试要用它的绝对下标）。
@@ -73,7 +71,6 @@ function TranscriptMessage({
   previousUser,
   source,
   cardsDefaultOpen,
-  groupStart,
   onCopy,
   onEdit,
   onRetry,
@@ -86,8 +83,6 @@ function TranscriptMessage({
   /** A2A 消息的回信地址（由被吸收的 vessel:source 行提供）。 */
   source?: string;
   cardsDefaultOpen: boolean;
-  /** 连续同发言人的后续条目不再重复发言人头。 */
-  groupStart: boolean;
   onCopy: (text: string) => void;
   onEdit: (keepMessages: number, text: string) => void;
   onRetry: (keepMessages: number, text: string) => void;
@@ -95,12 +90,13 @@ function TranscriptMessage({
   if (message.role === 'system') return null;
   if (message.role === 'tool') return null;
 
-  // 时间只出现在 hover 工具栏里（与 live 一致）：气泡内与发言人头都不放。
+  // 时间只出现在 hover 工具栏里（与 live 一致）：气泡内不放。助手消息的例外见下
+  // （有思考卡 ⇒ 时间上移到卡头，工具栏不再重复）。
   const clock = formatClock(message.timestamp);
-  const meta = clock !== '' ? clock : undefined;
-  const hasMeta = meta !== undefined;
 
   if (message.role === 'user') {
+    const meta = clock !== '' ? clock : undefined;
+    const hasMeta = meta !== undefined;
     // A2A 投递：runtime 给这条输入写了 ，渲染成 agent 卡而不是用户气泡。
     const agentSender = agentMessageSender(message);
     if (agentSender !== undefined) {
@@ -146,6 +142,10 @@ function TranscriptMessage({
   const calls = message.tool_calls ?? [];
   // 思考块就在这个 item 里渲：被 live 认领的消息走不到这里（见 historyReasoning）。
   const reasoning = historyReasoning(message);
+  // 时间归属：这一条**有**思考卡 ⇒ 时间在卡头（`ReasoningBlock` 的 `time`），正文下方
+  // 的工具栏不再重复渲染。判据与 live 同源（`hasReasoningCard`；live 侧先在
+  // `TranscriptWindow` 里按 run 汇总，再落到同一道门槛）。
+  const meta = reasoning === undefined && clock !== '' ? clock : undefined;
   const actions: MessageAction[] = [];
   if (message.content.trim().length > 0) {
     actions.push({
@@ -165,14 +165,17 @@ function TranscriptMessage({
   // 思考卡上不挂工具栏（用户明确去掉）；卡头只有一个独立的「复制思考」小按钮
   // （见 `ReasoningBlock.tsx`）。显隐（hover / focus-within / 触屏常显）在
   // `MessageActions` 自己身上，这里只给 `mt-1`（`MessageActions` 是 `w-fit`，左起）。
+  // 时间不在这里的例外只有一个：上面那条 `meta`（有思考卡时为空，时间已上移卡头）。
   return (
     <div className="msg-assistant group max-w-full">
-      {groupStart && <AssistantSpeaker />}
-      {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。 */}
-      {reasoning !== undefined && <ReasoningBlock text={reasoning} streaming={false} />}
+      {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。
+          `time` = 这条消息的时刻：有思考卡时，这一轮的时间只出现在卡头最右。 */}
+      {reasoning !== undefined && (
+        <ReasoningBlock text={reasoning} streaming={false} time={message.timestamp} />
+      )}
       {/* 助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
       {message.content && <Markdown className="msg-text" text={message.content} />}
-      {hasMeta || actions.length > 0 ? (
+      {meta !== undefined || actions.length > 0 ? (
         <MessageActions className="mt-1" actions={actions} meta={meta} />
       ) : null}
     </div>
@@ -256,7 +259,6 @@ export function Transcript({
           previousUser={previousUserMessage(message, allMessages, messageIndexOffset, indexOf)}
           {...(item.sourceText !== undefined ? { source: item.sourceText } : {})}
           cardsDefaultOpen={cardsDefaultOpen}
-          groupStart={item.groupStart !== false}
           onCopy={copy}
           onEdit={onEditMessage}
           onRetry={onRetryMessage}

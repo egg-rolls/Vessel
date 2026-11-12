@@ -549,6 +549,19 @@
   color: var(--info);
 }
 
+/* 思考卡头最右的时钟（`ReasoningBlock` 的 `time`）。
+   为什么是 float 而不是 `ml-auto` / flex：卡头是**原生 `<summary>`**，展开三角靠的是
+   它的 `display: list-item`。一旦把 summary 改成 flex 容器，Chromium / WebKit 会把
+   `::marker` 整个丢掉（三角消失）—— 而这里必须保留原生三角（不许拆成 div +
+   `aria-expanded`）。float 不改变 summary 的 display，又能把时钟贴到卡头右侧，
+   是这两条约束下唯一同时成立的排法。
+   `line-height: inherit` 让浮动盒与标题那一行等高，字不会顶在行首显得偏高；
+   `font-variant-numeric` 由 class `tabular-nums` 给，颜色由 `text-faint` 给。 */
+.reasoning-block > summary > .reasoning-clock {
+  float: right;
+  line-height: inherit;
+}
+
 /* 原始事件 / lifecycle notice：默认折叠，summary 一行，展开后看完整载荷。 */
 
 .event-block {
