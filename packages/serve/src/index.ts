@@ -17,19 +17,22 @@ export type {
   AgentDispatchItemLike,
   AgentDispatchLikeInput,
   AgentDispatchOkLike,
+  AgentInboxLikeEntry,
+  AgentInboxLikeOptions,
+  AgentInboxLikeResult,
   AgentLifecycleBatchResultLike,
   AgentLifecycleFailLike,
   AgentLifecycleItemLike,
   AgentLifecycleOkLike,
   AgentListLikeInput,
+  AgentRecallLikeInput,
+  AgentRecallLikeResult,
+  AgentRecallLikeSkip,
   AgentSendBatchResultLike,
   AgentSendItemLike,
   AgentSendLikeInput,
   AgentSendOkLike,
   AgentStateLike,
-  AgentInboxLikeEntry,
-  AgentInboxLikeOptions,
-  AgentInboxLikeResult,
   AgentStatusLike,
   AgentUpdateLikeInput,
   AgentVisibilityLike,
@@ -119,6 +122,17 @@ export {
   createAgentMethods,
 } from './gateway/methods/agents.js';
 export {
+  ATTACHMENT_LIST_DEFAULT_LIMIT,
+  ATTACHMENT_LIST_MAX_LIMIT,
+  type AttachmentListEntry,
+  type AttachmentLister,
+  type AttachmentListReason,
+  type AttachmentListRequest,
+  type AttachmentListResult,
+  type AttachmentMethodsDeps,
+  createAttachmentMethods,
+} from './gateway/methods/attachments.js';
+export {
   createInteractionMethods,
   type InteractionMethodsDeps,
   type InteractionSources,
@@ -132,17 +146,6 @@ export {
   type ToolPolicy,
   type ToolPolicyWriteResult,
 } from './gateway/methods/permissions.js';
-export {
-  ATTACHMENT_LIST_DEFAULT_LIMIT,
-  ATTACHMENT_LIST_MAX_LIMIT,
-  type AttachmentLister,
-  type AttachmentListEntry,
-  type AttachmentListReason,
-  type AttachmentListRequest,
-  type AttachmentListResult,
-  type AttachmentMethodsDeps,
-  createAttachmentMethods,
-} from './gateway/methods/attachments.js';
 export { createTeamMethods, type TeamMethodsDeps } from './gateway/methods/teams.js';
 export type { Gateway, GatewayOptions, GatewayReconfigureOptions } from './gateway.js';
 export { isLoopbackHostname, startGateway } from './gateway.js';
